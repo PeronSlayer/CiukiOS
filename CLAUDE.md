@@ -14,9 +14,10 @@ Primary roadmap:
 ## Current Runtime Snapshot
 1. UEFI loader boots Stage2 reliably.
 2. Stage2 has shell, FAT read/write-on-cache primitives, COM catalog support.
-3. Splashscreen is integrated and rendered at boot.
-4. Symbiotic FreeDOS pipeline exists (`scripts/sync_freecom_repo.sh`, `scripts/build_freecom.sh`, `scripts/import_freedos.sh`, `third_party/freedos/runtime/`).
-5. Fallback path to `kernel.elf` remains tested.
+3. M1 DOS-like COM runtime contract is active: PSP-style layout at `+0x100`, command tail propagation, and explicit terminate semantics (`INT 20h` / `INT 21h AH=4Ch` via services ABI).
+4. Splashscreen is integrated and rendered at boot.
+5. Symbiotic FreeDOS pipeline exists (`scripts/sync_freecom_repo.sh`, `scripts/build_freecom.sh`, `scripts/import_freedos.sh`, `third_party/freedos/runtime/`).
+6. Fallback path to `kernel.elf` remains tested.
 
 ## Source of Truth Documents
 1. High-level roadmap: `docs/roadmap-ciukios-doom.md`
