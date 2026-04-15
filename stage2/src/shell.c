@@ -6,6 +6,7 @@
 #include "fat.h"
 #include "dos_mz.h"
 #include "splash.h"
+#include "version.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
@@ -347,7 +348,7 @@ static void shell_cls(void) {
 }
 
 static void shell_ver(void) {
-    video_write("CiukiOS Stage2 v0.4 (M2 graphic splash + framebuffer handoff)\n");
+    video_write(CIUKIOS_STAGE2_VERSION_LINE "\n");
 }
 
 static void shell_echo(const char *args) {

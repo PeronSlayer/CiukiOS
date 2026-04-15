@@ -10,6 +10,10 @@
 #include "fat.h"
 #include "bootinfo.h"
 #include "handoff.h"
+#include "version.h"
+
+#define SPLASH_FOOTER_MIN_PX 64U
+#define SPLASH_FOOTER_MAX_PX 120U
 
 static void halt_forever(void) {
     for (;;) {
@@ -23,6 +27,95 @@ static u32 local_strlen(const char *s) {
         n++;
     }
     return n;
+}
+
+static u32 splash_footer_height_px(void) {
+    u32 h = video_height_px() / 7U;
+    if (h < SPLASH_FOOTER_MIN_PX) {
+        h = SPLASH_FOOTER_MIN_PX;
+    }
+    if (h > SPLASH_FOOTER_MAX_PX) {
+        h = SPLASH_FOOTER_MAX_PX;
+    }
+    if (h >= video_height_px()) {
+        h = video_height_px() / 4U;
+    }
+    return h;
+}
+
+static void video_write_centered_row(u32 row, const char *text) {
+    u32 cols = video_columns();
+    u32 len = local_strlen(text);
+    u32 start_col = 0;
+
+    if (cols > len) {
+        start_col = (cols - len) / 2U;
+    }
+
+    video_set_cursor(start_col, row);
+    video_write(text);
+}
+
+static void draw_splash_footer(u32 footer_px, u32 progress_percent) {
+    u32 fb_w = video_width_px();
+    u32 fb_h = video_height_px();
+    u32 y0;
+    u32 bar_margin;
+    u32 bar_x;
+    u32 bar_y;
+    u32 bar_w;
+    u32 bar_h;
+    u32 inner_w;
+    u32 fill_w;
+    u32 text_row;
+    u32 loading_row;
+
+    if (!video_ready() || footer_px == 0U || fb_w == 0U || fb_h == 0U) {
+        return;
+    }
+
+    if (progress_percent > 100U) {
+        progress_percent = 100U;
+    }
+
+    y0 = (footer_px >= fb_h) ? 0U : (fb_h - footer_px);
+    video_fill_rect(0U, y0, fb_w, footer_px, 0x00000000U);
+    video_fill_rect(0U, y0, fb_w, 1U, 0x00505050U);
+
+    text_row = (y0 / 8U) + 1U;
+    loading_row = text_row + 2U;
+    video_set_colors(0x00FFFFFFU, 0x00000000U);
+    video_write_centered_row(text_row, "CiukiOS Stage2 " CIUKIOS_STAGE2_VERSION);
+    video_write_centered_row(loading_row, "Loading...");
+
+    bar_margin = fb_w / 8U;
+    if (bar_margin < 24U) {
+        bar_margin = 24U;
+    }
+    if ((bar_margin * 2U) >= fb_w) {
+        bar_margin = 8U;
+    }
+
+    bar_x = bar_margin;
+    bar_w = fb_w - (bar_margin * 2U);
+    bar_h = (footer_px >= 92U) ? 14U : 10U;
+    if (bar_h >= footer_px) {
+        bar_h = footer_px > 4U ? footer_px - 4U : 1U;
+    }
+    bar_y = y0 + footer_px - bar_h - 10U;
+    if (bar_y < y0 + 4U) {
+        bar_y = y0 + 4U;
+    }
+
+    video_fill_rect(bar_x, bar_y, bar_w, bar_h, 0x00A0A0A0U);
+    if (bar_w > 2U && bar_h > 2U) {
+        inner_w = bar_w - 2U;
+        video_fill_rect(bar_x + 1U, bar_y + 1U, inner_w, bar_h - 2U, 0x00101010U);
+        fill_w = (inner_w * progress_percent) / 100U;
+        if (fill_w > 0U) {
+            video_fill_rect(bar_x + 1U, bar_y + 1U, fill_w, bar_h - 2U, 0x00E8E8E8U);
+        }
+    }
 }
 
 static void draw_title_bar(void) {
@@ -50,14 +143,20 @@ static void draw_title_bar(void) {
 static void show_boot_splash(void) {
     u64 start_ticks;
     const u64 max_wait_ticks = 200ULL; /* 2s @ 100Hz */
+    u64 elapsed_ticks = 0ULL;
+    u32 progress = 0U;
+    u32 last_progress = 101U;
+    u32 footer_px = 0U;
     int used_graphic = 0;
 
+    video_set_font_scale(1U, 1U);
     video_set_text_window(0);
-    used_graphic = stage2_splash_show_graphic();
+    footer_px = splash_footer_height_px();
+    used_graphic = stage2_splash_show_graphic_layout(footer_px);
     if (!used_graphic) {
-        video_set_font_scale(1U, 1U);
-        video_set_text_window(0);
         stage2_splash_show();
+    } else {
+        draw_splash_footer(footer_px, 0U);
     }
     serial_write("[ ok ] splashscreen rendered src=0x");
     serial_write_hex64((u64)stage2_splash_source_cols());
@@ -71,10 +170,24 @@ static void show_boot_splash(void) {
 
     start_ticks = stage2_timer_ticks();
     while ((stage2_timer_ticks() - start_ticks) < max_wait_ticks) {
+        elapsed_ticks = stage2_timer_ticks() - start_ticks;
+        progress = (u32)((elapsed_ticks * 100ULL) / max_wait_ticks);
+        if (progress > 100U) {
+            progress = 100U;
+        }
+        if (used_graphic && progress != last_progress) {
+            draw_splash_footer(footer_px, progress);
+            last_progress = progress;
+        }
+
         if (stage2_keyboard_getc_nonblocking() >= 0) {
             break;
         }
         __asm__ volatile ("hlt");
+    }
+
+    if (used_graphic) {
+        draw_splash_footer(footer_px, 100U);
     }
 
     video_set_font_scale(2U, 2U);

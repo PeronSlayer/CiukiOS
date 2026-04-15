@@ -178,7 +178,7 @@ static u8 splash_char_luma(char ch) {
     return g_luma_table[uch];
 }
 
-static void splash_render_ascii_luma_scaled(u32 fb_w, u32 fb_h) {
+static void splash_render_ascii_luma_scaled(u32 fb_w, u32 area_y, u32 area_h) {
     u32 src_w;
     u32 src_h;
     u32 draw_w;
@@ -191,9 +191,10 @@ static void splash_render_ascii_luma_scaled(u32 fb_w, u32 fb_h) {
 
     src_w = g_max_line_len;
     src_h = g_line_count;
-    if (!splash_compute_fit(src_w, src_h, fb_w, fb_h, &draw_w, &draw_h, &off_x, &off_y)) {
+    if (!splash_compute_fit(src_w, src_h, fb_w, area_h, &draw_w, &draw_h, &off_x, &off_y)) {
         return;
     }
+    off_y += area_y;
 
     for (u32 y = 0; y < draw_h; y++) {
         u32 src_y = (u32)(((u64)y * (u64)src_h) / (u64)draw_h);
@@ -219,15 +220,16 @@ static void splash_render_ascii_luma_scaled(u32 fb_w, u32 fb_h) {
     }
 }
 
-static void splash_render_rgba_scaled(const u8 *pixels, u32 src_w, u32 src_h, u32 fb_w, u32 fb_h) {
+static void splash_render_rgba_scaled(const u8 *pixels, u32 src_w, u32 src_h, u32 fb_w, u32 area_y, u32 area_h) {
     u32 draw_w;
     u32 draw_h;
     u32 off_x;
     u32 off_y;
 
-    if (!splash_compute_fit(src_w, src_h, fb_w, fb_h, &draw_w, &draw_h, &off_x, &off_y)) {
+    if (!splash_compute_fit(src_w, src_h, fb_w, area_h, &draw_w, &draw_h, &off_x, &off_y)) {
         return;
     }
+    off_y += area_y;
 
     for (u32 y = 0; y < draw_h; y++) {
         u32 src_y = (u32)(((u64)y * (u64)src_h) / (u64)draw_h);
@@ -276,9 +278,10 @@ unsigned int stage2_splash_source_rows(void) {
     return (unsigned int)g_line_count;
 }
 
-int stage2_splash_show_graphic(void) {
+int stage2_splash_show_graphic_layout(u32 reserved_bottom_px) {
     u32 fb_w;
     u32 fb_h;
+    u32 render_h;
     u32 src_w;
     u32 src_h;
     const u8 *pixels;
@@ -293,15 +296,28 @@ int stage2_splash_show_graphic(void) {
         return 0;
     }
 
+    if (reserved_bottom_px >= fb_h) {
+        render_h = fb_h;
+    } else {
+        render_h = fb_h - reserved_bottom_px;
+    }
+    if (render_h == 0U) {
+        render_h = fb_h;
+    }
+
     video_fill(0x00000000U);
 
     if (splash_image_available(&src_w, &src_h, &pixels)) {
-        splash_render_rgba_scaled(pixels, src_w, src_h, fb_w, fb_h);
+        splash_render_rgba_scaled(pixels, src_w, src_h, fb_w, 0U, render_h);
         return 1;
     }
 
-    splash_render_ascii_luma_scaled(fb_w, fb_h);
+    splash_render_ascii_luma_scaled(fb_w, 0U, render_h);
     return 1;
+}
+
+int stage2_splash_show_graphic(void) {
+    return stage2_splash_show_graphic_layout(0U);
 }
 
 void stage2_splash_show(void) {
