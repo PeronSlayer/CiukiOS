@@ -890,6 +890,415 @@ int fat_read_file(const char *path, void *out, u32 out_capacity, u32 *out_size) 
     return 1;
 }
 
+/* -----------------------------------------------------------------------
+ * Write-path helpers
+ * --------------------------------------------------------------------- */
+
+/*
+ * Validate a single character for use in a DOS 8.3 filename.
+ * Accepts A-Z, 0-9 and a subset of printable specials. Spaces and
+ * path-separator characters are rejected.
+ */
+static int is_valid_83_char(u8 ch) {
+    if (ch < 0x20U || ch == 0x7FU) {
+        return 0;
+    }
+    /* Chars explicitly forbidden in FAT 8.3 names */
+    static const u8 forbidden[] = {
+        ' ', '"', '*', '+', ',', '/', ':', ';',
+        '<', '=', '>', '?', '[', '\\', ']', '|', 0
+    };
+    for (u32 i = 0; forbidden[i] != 0; i++) {
+        if (ch == forbidden[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Convert a display-form "NAME.EXT" (already upper-cased) into the
+ * on-disk 11-byte space-padded 8.3 representation.
+ * Returns 1 on success, 0 if the name is invalid or too long.
+ */
+static int fat_normalize_83_name(const char *name, u8 out11[11]) {
+    u32 i;
+    const char *dot = (const char *)0;
+    const char *p;
+
+    if (!name || !out11) {
+        return 0;
+    }
+
+    /* Find last dot */
+    for (p = name; *p; p++) {
+        if (*p == '.') {
+            dot = p;
+        }
+    }
+
+    /* Fill with spaces */
+    for (i = 0; i < 11U; i++) {
+        out11[i] = ' ';
+    }
+
+    /* Name part (max 8 chars before the dot, or whole string if no dot) */
+    p = name;
+    i = 0;
+    while (*p && *p != '.' && i < 8U) {
+        u8 ch = (u8)*p;
+        if (!is_valid_83_char(ch)) {
+            return 0;
+        }
+        out11[i++] = ch;
+        p++;
+    }
+    if (i == 0U) {
+        return 0; /* empty name part */
+    }
+    if (*p && *p != '.') {
+        return 0; /* name part > 8 chars */
+    }
+
+    /* Extension part (max 3 chars after the last dot, if any) */
+    if (dot && dot[1] != '\0') {
+        p = dot + 1;
+        i = 8U;
+        while (*p && i < 11U) {
+            u8 ch = (u8)*p;
+            if (!is_valid_83_char(ch)) {
+                return 0;
+            }
+            out11[i++] = ch;
+            p++;
+        }
+        if (*p != '\0') {
+            return 0; /* extension > 3 chars */
+        }
+    }
+
+    return 1;
+}
+
+/*
+ * Walk the FAT looking for the first free cluster (entry == 0).
+ * Returns the cluster number or 0 if the volume is full.
+ */
+static u32 fat_find_free_cluster(void) {
+    u32 limit = g_fs.total_clusters + 2U;
+    for (u32 c = 2U; c < limit; c++) {
+        if (fat_next_cluster(c) == 0U) {
+            return c;
+        }
+    }
+    return 0U;
+}
+
+/*
+ * Allocate a chain of `count` free clusters and link them together.
+ * The last cluster is marked EOC.  Sets *first_out to the head cluster.
+ * Returns 1 on success, 0 on failure (e.g. disk full).
+ * On failure, any partially-allocated clusters are freed.
+ */
+static int fat_alloc_chain(u32 count, u32 *first_out) {
+    u32 eoc;
+    u32 prev = 0U;
+    u32 first = 0U;
+
+    if (count == 0U || !first_out) {
+        return 0;
+    }
+
+    if (g_fs.fat_type == FAT_TYPE_12) {
+        eoc = 0x0FFFU;
+    } else if (g_fs.fat_type == FAT_TYPE_16) {
+        eoc = 0xFFFFU;
+    } else {
+        eoc = 0x0FFFFFFFU;
+    }
+
+    for (u32 i = 0U; i < count; i++) {
+        u32 c = fat_find_free_cluster();
+        if (c == 0U) {
+            /* Disk full — release what we have so far */
+            if (first != 0U) {
+                fat_free_chain(first);
+            }
+            return 0;
+        }
+
+        /* Mark new cluster as EOC immediately so the next search skips it */
+        if (!fat_set_cluster_value(c, eoc)) {
+            if (first != 0U) {
+                fat_free_chain(first);
+            }
+            return 0;
+        }
+
+        if (prev != 0U) {
+            /* Link previous → current */
+            if (!fat_set_cluster_value(prev, c)) {
+                fat_free_chain(first);
+                return 0;
+            }
+        } else {
+            first = c;
+        }
+        prev = c;
+    }
+
+    *first_out = first;
+    return 1;
+}
+
+/*
+ * Write `size` bytes from `data` into the cluster chain starting at
+ * `start_cluster`.  The last (partial) sector is zero-padded to the
+ * sector boundary.
+ * Returns 1 on success, 0 on I/O error or chain-too-short.
+ */
+static int fat_write_cluster_data(u32 start_cluster, const u8 *data, u32 size) {
+    u32 cluster = start_cluster;
+    const u8 *src = data;
+    u32 remaining = size;
+    u32 guard = g_fs.total_clusters + 4U;
+
+    while (remaining > 0U && guard-- > 0U) {
+        u32 first_sector = cluster_first_sector(cluster);
+        for (u32 s = 0U; s < g_fs.sectors_per_cluster && remaining > 0U; s++) {
+            u8 *sector = stage2_disk_lba_ptr_rw((u64)first_sector + s);
+            u32 to_write;
+            u32 i;
+
+            if (!sector) {
+                return 0;
+            }
+
+            to_write = remaining;
+            if (to_write > g_fs.bytes_per_sector) {
+                to_write = g_fs.bytes_per_sector;
+            }
+
+            for (i = 0U; i < to_write; i++) {
+                sector[i] = src[i];
+            }
+            /* Zero-pad the remainder of the last sector */
+            for (i = to_write; i < g_fs.bytes_per_sector; i++) {
+                sector[i] = 0U;
+            }
+
+            src += to_write;
+            remaining -= to_write;
+        }
+
+        if (remaining == 0U) {
+            break;
+        }
+
+        if (cluster_is_eoc(cluster)) {
+            return 0; /* chain too short */
+        }
+        cluster = fat_next_cluster(cluster);
+        if (cluster < 2U || cluster_is_eoc(cluster)) {
+            break;
+        }
+    }
+
+    return remaining == 0U;
+}
+
+/*
+ * Find a free (0x00 or 0xE5) directory entry slot in `dir`.
+ * Returns 1 and fills *slot_out on success, 0 if directory is full.
+ */
+static int fat_find_free_dir_slot(const fat_dir_ref_t *dir, fat_dir_slot_t *slot_out) {
+    u32 entries_per_sector;
+
+    if (!dir || !slot_out || !g_fs.mounted) {
+        return 0;
+    }
+
+    entries_per_sector = g_fs.bytes_per_sector / 32U;
+    if (entries_per_sector == 0U) {
+        return 0;
+    }
+
+    if (dir->fixed_root) {
+        for (u32 s = 0U; s < dir->sector_count; s++) {
+            u64 lba = (u64)dir->start_sector + s;
+            const u8 *sector = stage2_disk_lba_ptr(lba);
+            if (!sector) {
+                return 0;
+            }
+            for (u32 i = 0U; i < entries_per_sector; i++) {
+                u8 b0 = sector[i * 32U];
+                if (b0 == 0x00U || b0 == 0xE5U) {
+                    slot_out->lba    = lba;
+                    slot_out->offset = i * 32U;
+                    return 1;
+                }
+            }
+        }
+        return 0; /* root directory full */
+    }
+
+    {
+        u32 cluster = dir->start_cluster;
+        u32 guard   = g_fs.total_clusters + 4U;
+
+        while (cluster >= 2U && guard-- > 0U) {
+            u32 first_sector = cluster_first_sector(cluster);
+            for (u32 s = 0U; s < g_fs.sectors_per_cluster; s++) {
+                u64 lba = (u64)first_sector + s;
+                const u8 *sector = stage2_disk_lba_ptr(lba);
+                if (!sector) {
+                    return 0;
+                }
+                for (u32 i = 0U; i < entries_per_sector; i++) {
+                    u8 b0 = sector[i * 32U];
+                    if (b0 == 0x00U || b0 == 0xE5U) {
+                        slot_out->lba    = lba;
+                        slot_out->offset = i * 32U;
+                        return 1;
+                    }
+                }
+            }
+            if (cluster_is_eoc(cluster)) {
+                break;
+            }
+            cluster = fat_next_cluster(cluster);
+            if (cluster < 2U || cluster_is_eoc(cluster)) {
+                break;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * Write a new 32-byte directory entry into the slot described by *slot.
+ * name83 must be the 11-byte space-padded 8.3 name (no dot, uppercase).
+ */
+static int fat_write_dir_entry_slot(
+    const fat_dir_slot_t *slot,
+    const u8 name83[11],
+    u8 attr,
+    u32 start_cluster,
+    u32 size
+) {
+    u8 *sector;
+    u8 *entry;
+    u32 i;
+
+    if (!slot || !name83) {
+        return 0;
+    }
+
+    sector = stage2_disk_lba_ptr_rw(slot->lba);
+    if (!sector) {
+        return 0;
+    }
+
+    entry = sector + slot->offset;
+
+    /* Zero the entire 32-byte entry first */
+    for (i = 0U; i < 32U; i++) {
+        entry[i] = 0U;
+    }
+
+    /* Name field (bytes 0-10) */
+    for (i = 0U; i < 11U; i++) {
+        entry[i] = name83[i];
+    }
+
+    /* Attributes (byte 11) */
+    entry[11] = attr;
+
+    /* First cluster high word (bytes 20-21, FAT32 only; 0 on FAT12/16) */
+    wr16(entry + 20, (u16)((start_cluster >> 16) & 0xFFFFU));
+
+    /* First cluster low word (bytes 26-27) */
+    wr16(entry + 26, (u16)(start_cluster & 0xFFFFU));
+
+    /* File size (bytes 28-31) */
+    wr32(entry + 28, size);
+
+    return 1;
+}
+
+int fat_write_file(const char *path, const void *data, u32 size) {
+    char tokens[FAT_PATH_MAX_TOKENS][FAT_TOKEN_MAX];
+    u32 token_count = 0;
+    fat_dir_ref_t parent_dir;
+    fat_dir_slot_t slot;
+    u8 name83[11];
+    u32 start_cluster = 0U;
+    fat_dir_entry_t existing;
+
+    if (!g_fs.mounted || !path || (!data && size > 0U)) {
+        return 0;
+    }
+    if (!parse_path_tokens(path, tokens, &token_count)) {
+        return 0;
+    }
+    if (token_count == 0U) {
+        return 0;
+    }
+
+    /* Validate and produce the 11-byte 8.3 name from the last token */
+    if (!fat_normalize_83_name(tokens[token_count - 1U], name83)) {
+        return 0;
+    }
+
+    /* Locate parent directory */
+    if (token_count == 1U) {
+        fat_root_dir(&parent_dir);
+    } else {
+        if (!fat_open_dir_path(tokens, token_count - 1U, &parent_dir)) {
+            return 0;
+        }
+    }
+
+    /* Fail if an entry with this name already exists */
+    if (fat_find_in_dir(&parent_dir, tokens[token_count - 1U], &existing)) {
+        return 0;
+    }
+
+    /* Allocate cluster chain for the data (skip if size == 0) */
+    if (size > 0U) {
+        u32 cluster_bytes = g_fs.sectors_per_cluster * g_fs.bytes_per_sector;
+        u32 cluster_count = (size + cluster_bytes - 1U) / cluster_bytes;
+
+        if (!fat_alloc_chain(cluster_count, &start_cluster)) {
+            return 0;
+        }
+
+        if (!fat_write_cluster_data(start_cluster, (const u8 *)data, size)) {
+            fat_free_chain(start_cluster);
+            return 0;
+        }
+    }
+
+    /* Find a free slot in the parent directory */
+    if (!fat_find_free_dir_slot(&parent_dir, &slot)) {
+        if (size > 0U) {
+            fat_free_chain(start_cluster);
+        }
+        return 0;
+    }
+
+    /* Write the directory entry */
+    if (!fat_write_dir_entry_slot(&slot, name83, FAT_ATTR_ARCHIVE, start_cluster, size)) {
+        if (size > 0U) {
+            fat_free_chain(start_cluster);
+        }
+        return 0;
+    }
+
+    return 1;
+}
+
 int fat_delete_file(const char *path) {
     fat_dir_entry_t entry;
     fat_dir_slot_t slot;
