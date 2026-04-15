@@ -28,6 +28,10 @@ COM_HELLO_BIN := build/INIT.COM
 SPLASH_ASCII_SRC := misc/splashscreen.txt
 SPLASH_GEN_C := build/generated/splash_data.c
 SPLASH_GEN_OBJ := build/obj/stage2/splash_data.o
+SPLASH_IMAGE_SRC ?= misc/CiukiOS_SplashScreen.png
+SPLASH_IMAGE_GEN_C := build/generated/splash_image_data.c
+SPLASH_IMAGE_GEN_OBJ := build/obj/stage2/splash_image_data.o
+SPLASH_IMAGE_GEN_SCRIPT := scripts/generate_splash_image_c.sh
 
 KERNEL_C_SRCS := $(shell find kernel/src -type f -name '*.c')
 KERNEL_S_SRCS := $(shell find kernel/src -type f -name '*.S')
@@ -40,7 +44,7 @@ STAGE2_C_OBJS := $(patsubst stage2/src/%.c,build/obj/stage2/%.o,$(STAGE2_C_SRCS)
 STAGE2_S_OBJS := $(patsubst stage2/src/%.S,build/obj/stage2/%.o,$(STAGE2_S_SRCS))
 
 KERNEL_OBJS := $(KERNEL_C_OBJS) $(KERNEL_S_OBJS)
-STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ)
+STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAGE_GEN_OBJ)
 
 .DEFAULT_GOAL := all
 
@@ -73,6 +77,23 @@ $(SPLASH_GEN_C): $(SPLASH_ASCII_SRC) | build
 	xxd -i -n stage2_splash_ascii $< > $@
 
 $(SPLASH_GEN_OBJ): $(SPLASH_GEN_C) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(STAGE2_CFLAGS) -c $< -o $@
+
+$(SPLASH_IMAGE_GEN_C): $(SPLASH_IMAGE_GEN_SCRIPT) | build
+	@mkdir -p $(dir $@)
+	@if [ -f "$(SPLASH_IMAGE_SRC)" ]; then \
+		"$(SPLASH_IMAGE_GEN_SCRIPT)" --input "$(SPLASH_IMAGE_SRC)" --output "$@"; \
+	else \
+		echo "[warn] splash image not found at $(SPLASH_IMAGE_SRC), generating empty asset"; \
+		printf '%s\n' \
+			'unsigned int stage2_splash_image_width = 0U;' \
+			'unsigned int stage2_splash_image_height = 0U;' \
+			'unsigned char stage2_splash_image_rgba[] = { 0x00 };' \
+			'unsigned int stage2_splash_image_rgba_len = 0U;' > "$@"; \
+	fi
+
+$(SPLASH_IMAGE_GEN_OBJ): $(SPLASH_IMAGE_GEN_C) | build
 	@mkdir -p $(dir $@)
 	$(CC) $(STAGE2_CFLAGS) -c $< -o $@
 
