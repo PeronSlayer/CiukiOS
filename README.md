@@ -2,6 +2,17 @@
 
 Educational operating system project built from scratch with a DOS-compatibility direction.
 
+## Current Version
+`CiukiOS Stage2 v0.4`  
+Focus: graphic splash pipeline and framebuffer handoff stabilization.
+
+## Changelog (Latest)
+### v0.4
+1. Added graphic splash renderer (framebuffer, centered scaling, ASCII-to-grayscale mapping).
+2. Added explicit framebuffer metadata in stage handoff ABI.
+3. Added shell preview command: `gsplash` (alias `splash`).
+4. Kept ASCII splash as automatic fallback path.
+
 ## Current Direction
 The active north star is:
 1. Run real DOS executables on CiukiOS.

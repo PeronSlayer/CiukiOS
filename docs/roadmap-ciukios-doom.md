@@ -6,6 +6,12 @@ Build a DOS-compatible environment inside CiukiOS capable of running real DOS ex
 ## North Star (Current Cap)
 Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, timer/audio interrupts, and stable file I/O.
 
+## Current Snapshot (v0.4)
+1. Stage2 shell is active with DOS-like command surface (`dir/type/copy/ren/move/mkdir/rmdir/attrib/del/run`).
+2. COM runtime contract is in place; EXE MZ loader MVP path exists with current dispatch limits documented.
+3. FAT read/write cache path is integrated and covered by regression tests.
+4. Boot UX includes graphical splash (with ASCII fallback) and framebuffer metadata handoff.
+
 ## Compatibility Definition for This Goal
 1. Execute real `.COM` and `.EXE MZ` binaries.
 2. Support enough DOS API (`INT 21h`) for DOOM installer/runtime path.
