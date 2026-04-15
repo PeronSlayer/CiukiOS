@@ -4,6 +4,7 @@
 #include "timer.h"
 #include "services.h"
 #include "fat.h"
+#include "dos_mz.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
@@ -325,7 +326,7 @@ static void shell_print_help(void) {
     video_write("  shutdown - power off the machine\n");
     video_write("  reboot   - reboot the machine\n");
     video_write("  run      - execute default COM (or INIT.COM)\n");
-    video_write("  run X A  - execute COM with optional args (e.g. run init demo)\n");
+    video_write("  run X A  - run COM or load EXE with optional args\n");
 }
 
 static void shell_cls(void) {
@@ -333,7 +334,7 @@ static void shell_cls(void) {
 }
 
 static void shell_ver(void) {
-    video_write("CiukiOS Stage2 v0.2 (M1 DOS-like COM runtime)\n");
+    video_write("CiukiOS Stage2 v0.3 (M1 COM runtime + EXE MZ loader MVP)\n");
 }
 
 static void shell_echo(const char *args) {
@@ -719,17 +720,34 @@ static void shell_run_staged_image(
 ) {
     ciuki_services_t svc;
     ciuki_dos_context_t ctx;
-    const u8 *image = (const u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
     com_entry_t entry = (com_entry_t)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
+    dos_mz_info_t mz_info;
+    u32 reloc_applied = 0U;
+    u16 load_segment = (u16)(((SHELL_RUNTIME_COM_ADDR >> 4) + 0x10ULL) & 0xFFFFULL);
+    int is_mz = 0;
 
     if (image_size == 0U || image_size > SHELL_RUNTIME_COM_MAX_PAYLOAD) {
         video_write("Invalid COM size.\n");
         return;
     }
 
-    if (image_size >= 2U && image[0] == 'M' && image[1] == 'Z') {
-        video_write("MZ executable detected. .EXE loader not implemented yet.\n");
-        return;
+    if (image_size >= 2U) {
+        const u8 *image = (const u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
+        is_mz = (image[0] == 'M' && image[1] == 'Z');
+    }
+
+    if (is_mz) {
+        if (!dos_mz_build_loaded_image(
+                (u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR,
+                image_size,
+                load_segment,
+                &mz_info,
+                &image_size,
+                &reloc_applied
+            )) {
+            video_write("Invalid MZ executable.\n");
+            return;
+        }
     }
 
     local_memset(&ctx, 0U, (u32)sizeof(ctx));
@@ -738,6 +756,9 @@ static void shell_run_staged_image(
     ctx.exit_reason = (u8)CIUKI_COM_EXIT_RETURN;
     ctx.exit_code = 0U;
     shell_prepare_psp(&ctx, image_size, tail);
+    if (is_mz) {
+        ctx.image_linear = SHELL_RUNTIME_COM_ENTRY_ADDR + (u64)mz_info.entry_offset;
+    }
 
     svc.print = video_write;
     svc.print_hex64 = video_write_hex64;
@@ -757,6 +778,18 @@ static void shell_run_staged_image(
     video_write(" entry=0x");
     video_write_hex64(ctx.image_linear);
     video_write("\n");
+
+    if (is_mz) {
+        video_write("MZ loaded: bytes=0x");
+        video_write_hex64((u64)image_size);
+        video_write(" reloc=0x");
+        video_write_hex64((u64)reloc_applied);
+        video_write(" load_seg=0x");
+        video_write_hex64((u64)load_segment);
+        video_write("\n");
+        video_write("MZ runtime dispatch pending (16-bit execution path).\n");
+        return;
+    }
 
     entry(&ctx, &svc);
     shell_print_com_exit(&ctx);
