@@ -22,6 +22,12 @@ typedef struct handoff_v0 {
     uint64_t stage2_load_addr;
     uint64_t stage2_size;
     uint64_t flags;
+    uint64_t framebuffer_base; /* GOP framebuffer base at handoff time */
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_bpp;
+    uint32_t framebuffer_reserved0;
     uint64_t com_phys_base;   /* physical address of loaded COM binary, 0 if none */
     uint64_t com_phys_size;   /* size in bytes of loaded COM binary, 0 if none */
     uint64_t com_count;       /* number of valid entries in com_entries */

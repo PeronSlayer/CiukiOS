@@ -5,6 +5,7 @@
 #include "services.h"
 #include "fat.h"
 #include "dos_mz.h"
+#include "splash.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
@@ -329,6 +330,7 @@ static void shell_print_help(void) {
     video_write("  attrib +r|-r|+a|-a X - set/clear attribute\n");
     video_write("  del X    - delete file from FAT cache\n");
     video_write("  ascii    - show custom ASCII art\n");
+    video_write("  gsplash  - show graphical splash preview\n");
     video_write("  cls      - clear screen\n");
     video_write("  ver      - show OS version\n");
     video_write("  echo     - print text to screen\n");
@@ -1646,6 +1648,53 @@ static void shell_ascii(void) {
     video_write("\n");
 }
 
+static void shell_draw_title_bar(void) {
+    const char *title = "CiukiOS";
+    u32 cols = video_columns();
+    u32 title_len = str_len(title);
+    u32 start_col = 0;
+
+    video_set_colors(0x00000000U, 0x00FFFFFFU); /* black on white */
+    video_set_cursor(0, 0);
+    for (u32 i = 0; i < cols; i++) {
+        video_putchar(' ');
+    }
+
+    if (cols > title_len) {
+        start_col = (cols - title_len) / 2U;
+    }
+
+    video_set_cursor(start_col, 0);
+    video_write(title);
+
+    video_set_colors(0x00C0C0C0U, 0x00000000U); /* restore shell colors */
+    video_set_text_window(1);
+}
+
+static void shell_graphic_splash_preview(void) {
+    u64 start_ticks;
+    const u64 max_wait_ticks = 150ULL; /* 1.5s @ 100Hz */
+
+    video_set_text_window(0);
+    if (!stage2_splash_show_graphic()) {
+        video_set_font_scale(1U, 1U);
+        video_set_text_window(0);
+        stage2_splash_show();
+    }
+
+    start_ticks = stage2_timer_ticks();
+    while ((stage2_timer_ticks() - start_ticks) < max_wait_ticks) {
+        if (stage2_keyboard_getc_nonblocking() >= 0) {
+            break;
+        }
+        __asm__ volatile ("hlt");
+    }
+
+    video_set_font_scale(2U, 2U);
+    video_set_text_window(0);
+    shell_draw_title_bar();
+}
+
 static void shell_shutdown(void) {
     video_write("Shutting down...\n");
     /* ACPI S5 soft-off: QEMU PIIX4 PM1a_CNT at 0x604, SLP_EN (bit 13) */
@@ -1671,6 +1720,30 @@ static void shell_print_ticks(void) {
 }
 
 static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
+    video_write("fb_boot=0x");
+    video_write_hex64(boot_info->framebuffer_base);
+    video_write(" ");
+    write_decimal((u32)boot_info->framebuffer_width);
+    video_write("x");
+    write_decimal((u32)boot_info->framebuffer_height);
+    video_write(" pitch=0x");
+    video_write_hex64((u64)boot_info->framebuffer_pitch);
+    video_write(" bpp=0x");
+    video_write_hex64((u64)boot_info->framebuffer_bpp);
+    video_write("\n");
+
+    video_write("fb_handoff=0x");
+    video_write_hex64(handoff->framebuffer_base);
+    video_write(" ");
+    write_decimal((u32)handoff->framebuffer_width);
+    video_write("x");
+    write_decimal((u32)handoff->framebuffer_height);
+    video_write(" pitch=0x");
+    video_write_hex64((u64)handoff->framebuffer_pitch);
+    video_write(" bpp=0x");
+    video_write_hex64((u64)handoff->framebuffer_bpp);
+    video_write("\n");
+
     video_write("memory_map_ptr=0x");
     video_write_hex64(boot_info->memory_map_ptr);
     video_write(" size=0x");
@@ -1722,6 +1795,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "ascii")) {
         shell_ascii();
+        return;
+    }
+
+    if (str_eq(cmd, "gsplash") || str_eq(cmd, "splash")) {
+        shell_graphic_splash_preview();
         return;
     }
 

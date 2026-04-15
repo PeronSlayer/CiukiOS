@@ -72,6 +72,50 @@ static VOID dump_kernel_entry_bytes(stage_entry_t entry) {
     Print(L"\r\n");
 }
 
+static UINT32 highest_set_bit_plus_one(UINT32 value) {
+    UINT32 bits = 0;
+    while (value != 0) {
+        bits++;
+        value >>= 1;
+    }
+    return bits;
+}
+
+static UINT32 gop_detect_bpp(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info) {
+    UINT32 max_bits = 0;
+
+    if (!info) {
+        return 32;
+    }
+
+    if (info->PixelFormat == PixelRedGreenBlueReserved8BitPerColor ||
+        info->PixelFormat == PixelBlueGreenRedReserved8BitPerColor) {
+        return 32;
+    }
+
+    if (info->PixelFormat == PixelBitMask) {
+        UINT32 r = highest_set_bit_plus_one(info->PixelInformation.RedMask);
+        UINT32 g = highest_set_bit_plus_one(info->PixelInformation.GreenMask);
+        UINT32 b = highest_set_bit_plus_one(info->PixelInformation.BlueMask);
+        UINT32 x = highest_set_bit_plus_one(info->PixelInformation.ReservedMask);
+
+        if (r > max_bits) { max_bits = r; }
+        if (g > max_bits) { max_bits = g; }
+        if (b > max_bits) { max_bits = b; }
+        if (x > max_bits) { max_bits = x; }
+
+        if (max_bits <= 16U && max_bits != 0U) {
+            return 16;
+        }
+        if (max_bits <= 24U && max_bits != 0U) {
+            return 24;
+        }
+        return 32;
+    }
+
+    return 32;
+}
+
 static CHAR16 ascii_upper_char16(CHAR16 ch) {
     if (ch >= L'a' && ch <= L'z') {
         return (CHAR16)(ch - (L'a' - L'A'));
@@ -821,6 +865,11 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
         handoff->stage2_load_addr = image_phys_base;
         handoff->stage2_size = image_phys_size;
         handoff->flags = 0;
+        handoff->framebuffer_base = 0;
+        handoff->framebuffer_width = 0;
+        handoff->framebuffer_height = 0;
+        handoff->framebuffer_pitch = 0;
+        handoff->framebuffer_bpp = 0;
 
     } else if (status == EFI_NOT_FOUND) {
         Print(L"stage2.elf not found, falling back to kernel.elf\r\n");
@@ -912,15 +961,33 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
             BS->LocateProtocol, 3, &gop_guid, NULL, (VOID **)&gop
         );
         if (!EFI_ERROR(gop_status) && gop && gop->Mode && gop->Mode->Info) {
+            UINT32 bpp = gop_detect_bpp(gop->Mode->Info);
+            UINT32 bytes_per_pixel = (bpp + 7U) / 8U;
+
+            if (bytes_per_pixel == 0U) {
+                bytes_per_pixel = 4U;
+                bpp = 32U;
+            }
+
             boot_info->framebuffer_base   = (UINT64)gop->Mode->FrameBufferBase;
             boot_info->framebuffer_width  = gop->Mode->Info->HorizontalResolution;
             boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
-            boot_info->framebuffer_pitch  = gop->Mode->Info->PixelsPerScanLine * 4;
-            boot_info->framebuffer_bpp    = 32;
-            Print(L"Framebuffer: %dx%d pitch=%d @ 0x%lx\r\n",
+            boot_info->framebuffer_pitch  = gop->Mode->Info->PixelsPerScanLine * bytes_per_pixel;
+            boot_info->framebuffer_bpp    = bpp;
+
+            if (using_stage2) {
+                handoff->framebuffer_base = boot_info->framebuffer_base;
+                handoff->framebuffer_width = boot_info->framebuffer_width;
+                handoff->framebuffer_height = boot_info->framebuffer_height;
+                handoff->framebuffer_pitch = boot_info->framebuffer_pitch;
+                handoff->framebuffer_bpp = boot_info->framebuffer_bpp;
+            }
+
+            Print(L"Framebuffer: %dx%d pitch=%d bpp=%d @ 0x%lx\r\n",
                   boot_info->framebuffer_width,
                   boot_info->framebuffer_height,
                   boot_info->framebuffer_pitch,
+                  boot_info->framebuffer_bpp,
                   boot_info->framebuffer_base);
         } else {
             Print(L"Warning: GOP not found, no framebuffer\r\n");

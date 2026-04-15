@@ -117,6 +117,7 @@ static u64  g_fb_base;
 static u32  g_width;
 static u32  g_height;
 static u32  g_pitch;   /* bytes per scanline */
+static u32  g_bpp;     /* framebuffer bits-per-pixel (16 or 32) */
 static u32  g_cols;    /* text columns */
 static u32  g_rows;    /* text rows */
 static u32  g_text_start_row; /* reserved top rows (e.g. title bar) */
@@ -182,19 +183,72 @@ static void recompute_text_metrics(void) {
     }
 }
 
-static void fb_clear(void) {
-    u32 *px = (u32 *)g_fb_base;
-    u32  total = (g_pitch / 4) * g_height;
-    for (u32 i = 0; i < total; i++) {
-        px[i] = g_color_bg;
+static u16 rgb_to_rgb565(u32 rgb) {
+    u16 r = (u16)((rgb >> 19) & 0x1FU);
+    u16 g = (u16)((rgb >> 10) & 0x3FU);
+    u16 b = (u16)((rgb >> 3) & 0x1FU);
+    return (u16)((r << 11) | (g << 5) | b);
+}
+
+static void framebuffer_store_pixel(u32 x, u32 y, u32 rgb) {
+    u8 *p;
+
+    if (!g_fb_base || x >= g_width || y >= g_height) {
+        return;
     }
+
+    p = (u8 *)(u64)(g_fb_base + (u64)y * g_pitch);
+    if (g_bpp == 16U) {
+        u16 *px16 = (u16 *)p;
+        px16[x] = rgb_to_rgb565(rgb);
+    } else {
+        u32 *px32 = (u32 *)p;
+        px32[x] = rgb;
+    }
+}
+
+static void framebuffer_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
+    u32 x1;
+    u32 y1;
+
+    if (!g_fb_base || w == 0U || h == 0U || x >= g_width || y >= g_height) {
+        return;
+    }
+
+    x1 = x + w;
+    y1 = y + h;
+    if (x1 > g_width || x1 < x) {
+        x1 = g_width;
+    }
+    if (y1 > g_height || y1 < y) {
+        y1 = g_height;
+    }
+
+    if (g_bpp == 16U) {
+        u16 c = rgb_to_rgb565(rgb);
+        for (u32 yy = y; yy < y1; yy++) {
+            u16 *row = (u16 *)(u64)(g_fb_base + (u64)yy * g_pitch);
+            for (u32 xx = x; xx < x1; xx++) {
+                row[xx] = c;
+            }
+        }
+    } else {
+        for (u32 yy = y; yy < y1; yy++) {
+            u32 *row = (u32 *)(u64)(g_fb_base + (u64)yy * g_pitch);
+            for (u32 xx = x; xx < x1; xx++) {
+                row[xx] = rgb;
+            }
+        }
+    }
+}
+
+static void fb_clear(void) {
+    framebuffer_fill_rect(0U, 0U, g_width, g_height, g_color_bg);
 }
 
 static void clear_text_area(void) {
     u32 y0;
     u32 rows_px;
-    u32 clear_px;
-    u32 *px;
 
     if (!g_fb_base) {
         return;
@@ -202,12 +256,7 @@ static void clear_text_area(void) {
 
     y0 = g_text_start_row * font_h();
     rows_px = g_height - y0;
-    clear_px = (g_pitch / 4) * rows_px;
-    px = (u32 *)((u8 *)g_fb_base + (u64)y0 * g_pitch);
-
-    for (u32 i = 0; i < clear_px; i++) {
-        px[i] = g_color_bg;
-    }
+    framebuffer_fill_rect(0U, y0, g_width, rows_px, g_color_bg);
 }
 
 static void draw_char(u32 col, u32 row, char c) {
@@ -227,15 +276,15 @@ static void draw_char(u32 col, u32 row, char c) {
         u8 row_bits = glyph[gy];
 
         for (sy = 0; sy < g_font_scale_y; sy++) {
-            u32 *scanline = (u32 *)((u8 *)g_fb_base +
-                                    (y0 + gy * g_font_scale_y + sy) * g_pitch);
+            u32 py = y0 + gy * g_font_scale_y + sy;
 
             for (gx = 0; gx < GLYPH_W; gx++) {
                 u32 bit = (row_bits >> (GLYPH_W - 1 - gx)) & 1u;
                 u32 color = bit ? g_color_fg : g_color_bg;
 
                 for (sx = 0; sx < g_font_scale_x; sx++) {
-                    scanline[x0 + gx * g_font_scale_x + sx] = color;
+                    u32 px = x0 + gx * g_font_scale_x + sx;
+                    framebuffer_store_pixel(px, py, color);
                 }
             }
         }
@@ -246,9 +295,8 @@ static void scroll_up(void) {
     u32 text_px_h;
     u8 *dst;
     u8 *src;
-    u8 *last;
     u32 copy_bytes;
-    u32 clear_bytes;
+    u32 clear_y;
 
     if (g_text_rows <= 1) {
         return;
@@ -263,15 +311,8 @@ static void scroll_up(void) {
         dst[i] = src[i];
     }
 
-    last = dst + (u64)(text_px_h - font_h()) * g_pitch;
-    clear_bytes = font_h() * g_pitch;
-    {
-        u32 *last_px = (u32 *)last;
-        u32 total_px = clear_bytes / 4;
-        for (u32 i = 0; i < total_px; i++) {
-            last_px[i] = g_color_bg;
-        }
-    }
+    clear_y = g_text_start_row * font_h() + (text_px_h - font_h());
+    framebuffer_fill_rect(0U, clear_y, g_width, font_h(), g_color_bg);
 }
 
 void video_cls(void) {
@@ -292,6 +333,13 @@ void video_init(boot_info_t *bi) {
     g_width      = bi->framebuffer_width;
     g_height     = bi->framebuffer_height;
     g_pitch      = bi->framebuffer_pitch;
+    g_bpp        = bi->framebuffer_bpp;
+    if (g_bpp != 16U && g_bpp != 32U) {
+        g_bpp = 32U;
+    }
+    if (g_pitch == 0U) {
+        g_pitch = g_width * (g_bpp / 8U);
+    }
     g_font_scale_x = DEFAULT_FONT_SCALE_X;
     g_font_scale_y = DEFAULT_FONT_SCALE_Y;
     g_cols       = 0;
@@ -441,4 +489,36 @@ u32 video_columns(void) {
 
 u32 video_text_rows(void) {
     return g_text_rows;
+}
+
+int video_ready(void) {
+    return g_fb_base != 0ULL;
+}
+
+u32 video_width_px(void) {
+    return g_width;
+}
+
+u32 video_height_px(void) {
+    return g_height;
+}
+
+u32 video_pitch_bytes(void) {
+    return g_pitch;
+}
+
+u32 video_bpp(void) {
+    return g_bpp;
+}
+
+void video_fill(u32 rgb) {
+    framebuffer_fill_rect(0U, 0U, g_width, g_height, rgb);
+}
+
+void video_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
+    framebuffer_fill_rect(x, y, w, h, rgb);
+}
+
+void video_put_pixel(u32 x, u32 y, u32 rgb) {
+    framebuffer_store_pixel(x, y, rgb);
 }

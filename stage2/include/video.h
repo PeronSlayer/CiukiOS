@@ -16,5 +16,13 @@ void video_set_text_window(u32 start_row);
 void video_set_font_scale(u32 scale_x, u32 scale_y);
 u32 video_columns(void);
 u32 video_text_rows(void);
+int video_ready(void);
+u32 video_width_px(void);
+u32 video_height_px(void);
+u32 video_pitch_bytes(void);
+u32 video_bpp(void);
+void video_fill(u32 rgb);
+void video_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb);
+void video_put_pixel(u32 x, u32 y, u32 rgb);
 
 #endif

@@ -50,14 +50,23 @@ static void draw_title_bar(void) {
 static void show_boot_splash(void) {
     u64 start_ticks;
     const u64 max_wait_ticks = 200ULL; /* 2s @ 100Hz */
+    int used_graphic = 0;
 
-    video_set_font_scale(1U, 1U);
     video_set_text_window(0);
-    stage2_splash_show();
+    used_graphic = stage2_splash_show_graphic();
+    if (!used_graphic) {
+        video_set_font_scale(1U, 1U);
+        video_set_text_window(0);
+        stage2_splash_show();
+    }
     serial_write("[ ok ] splashscreen rendered src=0x");
     serial_write_hex64((u64)stage2_splash_source_cols());
     serial_write("x0x");
     serial_write_hex64((u64)stage2_splash_source_rows());
+    serial_write(" mode=");
+    serial_write(used_graphic ? "gfx" : "ascii");
+    serial_write(" bpp=0x");
+    serial_write_hex64((u64)video_bpp());
     serial_write("\n");
 
     start_ticks = stage2_timer_ticks();
@@ -118,6 +127,13 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("\n");
     serial_write("[ info ] stage2_size: 0x");
     serial_write_hex64(handoff->stage2_size);
+    serial_write("\n");
+    serial_write("[ info ] handoff framebuffer: base=0x");
+    serial_write_hex64(handoff->framebuffer_base);
+    serial_write(" pitch=0x");
+    serial_write_hex64((u64)handoff->framebuffer_pitch);
+    serial_write(" bpp=0x");
+    serial_write_hex64((u64)handoff->framebuffer_bpp);
     serial_write("\n");
 
     stage2_init_gdt_tss();
