@@ -798,6 +798,123 @@ static void shell_com_terminate(ciuki_dos_context_t *ctx, u8 code) {
     ctx->exit_code = code;
 }
 
+int stage2_shell_selftest_int21_baseline(void) {
+    ciuki_dos_context_t ctx;
+    ciuki_int21_regs_t regs;
+    static const char test_image[] = "ABC$";
+
+    local_memset(&ctx, 0U, (u32)sizeof(ctx));
+    ctx.image_linear = (u64)(const void *)test_image;
+    ctx.image_size = (u32)(sizeof(test_image) - 1U);
+
+    /* AH=30h: DOS version */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x1606U) {
+        return 0;
+    }
+
+    /* AH=19h: current drive */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x1900U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != 0x00U) {
+        return 0;
+    }
+
+    /* AH=25h / AH=35h: set/get vector */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x2521U;
+    regs.ds = 0x1234U;
+    regs.dx = 0x5678U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3521U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.es != 0x1234U || regs.bx != 0x5678U) {
+        return 0;
+    }
+
+    /* AH=48h/49h/4Ah deterministic stubs */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4800U;
+    regs.bx = 0x0010U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0008U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4900U;
+    regs.es = 0x2222U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0009U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4A00U;
+    regs.bx = 0x0040U;
+    regs.es = 0x1111U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0008U) {
+        return 0;
+    }
+
+    /* AH=09h */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0900U;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != 0x24U) {
+        return 0;
+    }
+
+    /* AH=02h */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0200U;
+    regs.dx = (u16)'Z';
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != (u16)'Z') {
+        return 0;
+    }
+
+    /* AH=00h -> INT20 path */
+    ctx.exit_reason = (u8)CIUKI_COM_EXIT_RETURN;
+    ctx.exit_code = 0xA5U;
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (ctx.exit_reason != (u8)CIUKI_COM_EXIT_INT20 || ctx.exit_code != 0U) {
+        return 0;
+    }
+
+    /* AH=4Ch -> terminate with code */
+    ctx.exit_reason = (u8)CIUKI_COM_EXIT_RETURN;
+    ctx.exit_code = 0U;
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4C7BU;
+    shell_com_int21(&ctx, &regs);
+    if (ctx.exit_reason != (u8)CIUKI_COM_EXIT_INT21_4C || ctx.exit_code != 0x7BU) {
+        return 0;
+    }
+
+    /* Unsupported AH must be deterministic */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0xFE00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0001U) {
+        return 0;
+    }
+
+    return 1;
+}
+
 static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const char *tail) {
     u8 *psp = (u8 *)(u64)SHELL_RUNTIME_COM_ADDR;
     u32 len = 0;
