@@ -32,6 +32,11 @@ typedef struct fat_dir_ref {
     u32 start_cluster;
 } fat_dir_ref_t;
 
+typedef struct fat_dir_slot {
+    u64 lba;
+    u32 offset;
+} fat_dir_slot_t;
+
 typedef int (*fat_raw_entry_cb_t)(const u8 *entry, void *ctx);
 
 static fat_fs_t g_fs;
@@ -45,6 +50,18 @@ static u32 rd32(const u8 *p) {
                  ((u32)p[1] << 8) |
                  ((u32)p[2] << 16) |
                  ((u32)p[3] << 24));
+}
+
+static void wr16(u8 *p, u16 v) {
+    p[0] = (u8)(v & 0x00FFU);
+    p[1] = (u8)((v >> 8) & 0x00FFU);
+}
+
+static void wr32(u8 *p, u32 v) {
+    p[0] = (u8)(v & 0x000000FFU);
+    p[1] = (u8)((v >> 8) & 0x000000FFU);
+    p[2] = (u8)((v >> 16) & 0x000000FFU);
+    p[3] = (u8)((v >> 24) & 0x000000FFU);
 }
 
 static u8 to_upper_ascii(u8 ch) {
@@ -157,6 +174,24 @@ static const u8 *disk_byte_ptr(u64 absolute_byte_offset) {
     return sector + off;
 }
 
+static u8 *disk_byte_ptr_rw(u64 absolute_byte_offset) {
+    u64 lba;
+    u32 off;
+    u8 *sector;
+
+    if (!g_fs.mounted) {
+        return (u8 *)0;
+    }
+
+    lba = absolute_byte_offset / (u64)g_fs.bytes_per_sector;
+    off = (u32)(absolute_byte_offset % (u64)g_fs.bytes_per_sector);
+    sector = stage2_disk_lba_ptr_rw(lba);
+    if (!sector) {
+        return (u8 *)0;
+    }
+    return sector + off;
+}
+
 static int disk_read_bytes(u64 absolute_byte_offset, u8 *out, u32 len) {
     for (u32 i = 0; i < len; i++) {
         const u8 *p = disk_byte_ptr(absolute_byte_offset + i);
@@ -164,6 +199,17 @@ static int disk_read_bytes(u64 absolute_byte_offset, u8 *out, u32 len) {
             return 0;
         }
         out[i] = *p;
+    }
+    return 1;
+}
+
+static int disk_write_bytes(u64 absolute_byte_offset, const u8 *src, u32 len) {
+    for (u32 i = 0; i < len; i++) {
+        u8 *p = disk_byte_ptr_rw(absolute_byte_offset + i);
+        if (!p) {
+            return 0;
+        }
+        *p = src[i];
     }
     return 1;
 }
@@ -211,6 +257,81 @@ static u32 fat_next_cluster(u32 cluster) {
         }
         return rd32(b) & 0x0FFFFFFFU;
     }
+}
+
+static int fat_set_cluster_value_one(u32 fat_index, u32 cluster, u32 value) {
+    u64 fat_base =
+        (u64)(g_fs.first_fat_sector + (fat_index * g_fs.fat_size_sectors)) *
+        (u64)g_fs.bytes_per_sector;
+    u8 b[4];
+
+    if (g_fs.fat_type == FAT_TYPE_12) {
+        u64 offset = (u64)cluster + ((u64)cluster / 2ULL);
+        if (!disk_read_bytes(fat_base + offset, b, 2)) {
+            return 0;
+        }
+        {
+            u16 v = rd16(b);
+            u16 nv;
+            if (cluster & 1U) {
+                nv = (u16)((v & 0x000FU) | ((u16)(value & 0x0FFFU) << 4));
+            } else {
+                nv = (u16)((v & 0xF000U) | ((u16)(value & 0x0FFFU)));
+            }
+            wr16(b, nv);
+        }
+        return disk_write_bytes(fat_base + offset, b, 2);
+    }
+
+    if (g_fs.fat_type == FAT_TYPE_16) {
+        u64 offset = (u64)cluster * 2ULL;
+        wr16(b, (u16)(value & 0xFFFFU));
+        return disk_write_bytes(fat_base + offset, b, 2);
+    }
+
+    {
+        u64 offset = (u64)cluster * 4ULL;
+        u32 cur;
+        if (!disk_read_bytes(fat_base + offset, b, 4)) {
+            return 0;
+        }
+        cur = rd32(b);
+        cur = (cur & 0xF0000000U) | (value & 0x0FFFFFFFU);
+        wr32(b, cur);
+        return disk_write_bytes(fat_base + offset, b, 4);
+    }
+}
+
+static int fat_set_cluster_value(u32 cluster, u32 value) {
+    for (u32 fat_i = 0; fat_i < g_fs.num_fats; fat_i++) {
+        if (!fat_set_cluster_value_one(fat_i, cluster, value)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int fat_free_chain(u32 start_cluster) {
+    u32 cluster = start_cluster;
+    u32 guard = g_fs.total_clusters + 4U;
+
+    if (cluster < 2U) {
+        return 1;
+    }
+
+    while (cluster >= 2U && guard-- > 0U) {
+        u32 next = fat_next_cluster(cluster);
+        if (!fat_set_cluster_value(cluster, 0U)) {
+            return 0;
+        }
+
+        if (next == 0U || next == 1U || cluster_is_eoc(next)) {
+            break;
+        }
+        cluster = next;
+    }
+
+    return 1;
 }
 
 static u32 cluster_first_sector(u32 cluster) {
@@ -342,6 +463,111 @@ static int fat_find_in_dir(const fat_dir_ref_t *dir, const char *name, fat_dir_e
     return 1;
 }
 
+static int fat_find_in_dir_with_slot(
+    const fat_dir_ref_t *dir,
+    const char *name,
+    fat_dir_entry_t *out,
+    fat_dir_slot_t *slot
+) {
+    u32 entries_per_sector;
+
+    if (!dir || !name) {
+        return 0;
+    }
+
+    entries_per_sector = g_fs.bytes_per_sector / 32U;
+    if (entries_per_sector == 0U) {
+        return 0;
+    }
+
+    if (dir->fixed_root) {
+        for (u32 s = 0; s < dir->sector_count; s++) {
+            u64 lba = (u64)dir->start_sector + s;
+            const u8 *sector = stage2_disk_lba_ptr(lba);
+            if (!sector) {
+                return 0;
+            }
+            for (u32 i = 0; i < entries_per_sector; i++) {
+                const u8 *entry = sector + (i * 32U);
+                char short_name[13];
+                if (entry[0] == 0x00U) {
+                    return 0;
+                }
+                if (entry[0] == 0xE5U || entry[11] == FAT_ATTR_LONG_NAME) {
+                    continue;
+                }
+                if ((entry[11] & FAT_ATTR_VOLUME_ID) != 0U) {
+                    continue;
+                }
+                short_name_from_entry(entry, short_name);
+                if (!str_eq_casefold(short_name, name)) {
+                    continue;
+                }
+                if (out) {
+                    fat_public_from_raw(entry, out);
+                }
+                if (slot) {
+                    slot->lba = lba;
+                    slot->offset = i * 32U;
+                }
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    {
+        u32 cluster = dir->start_cluster;
+        u32 guard = g_fs.total_clusters + 4U;
+
+        while (cluster >= 2U && guard-- > 0U) {
+            u32 first_sector = cluster_first_sector(cluster);
+            for (u32 s = 0; s < g_fs.sectors_per_cluster; s++) {
+                u64 lba = (u64)first_sector + s;
+                const u8 *sector = stage2_disk_lba_ptr(lba);
+                if (!sector) {
+                    return 0;
+                }
+                for (u32 i = 0; i < entries_per_sector; i++) {
+                    const u8 *entry = sector + (i * 32U);
+                    char short_name[13];
+                    if (entry[0] == 0x00U) {
+                        return 0;
+                    }
+                    if (entry[0] == 0xE5U || entry[11] == FAT_ATTR_LONG_NAME) {
+                        continue;
+                    }
+                    if ((entry[11] & FAT_ATTR_VOLUME_ID) != 0U) {
+                        continue;
+                    }
+                    short_name_from_entry(entry, short_name);
+                    if (!str_eq_casefold(short_name, name)) {
+                        continue;
+                    }
+                    if (out) {
+                        fat_public_from_raw(entry, out);
+                    }
+                    if (slot) {
+                        slot->lba = lba;
+                        slot->offset = i * 32U;
+                    }
+                    return 1;
+                }
+            }
+
+            if (cluster_is_eoc(cluster)) {
+                break;
+            }
+            cluster = fat_next_cluster(cluster);
+            if (cluster == 0U || cluster == 1U || cluster_is_eoc(cluster)) {
+                break;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static void fat_root_dir(fat_dir_ref_t *out) {
     if (g_fs.fat_type == FAT_TYPE_32) {
         out->fixed_root = 0;
@@ -385,6 +611,40 @@ static int fat_open_dir_path(
     }
 
     *out = dir;
+    return 1;
+}
+
+static int fat_locate_path_entry(
+    const char *path,
+    fat_dir_entry_t *entry_out,
+    fat_dir_slot_t *slot_out
+) {
+    char tokens[FAT_PATH_MAX_TOKENS][FAT_TOKEN_MAX];
+    u32 token_count = 0;
+    fat_dir_ref_t dir;
+
+    if (!path || !entry_out || !slot_out) {
+        return 0;
+    }
+    if (!parse_path_tokens(path, tokens, &token_count)) {
+        return 0;
+    }
+    if (token_count == 0U) {
+        return 0;
+    }
+
+    if (token_count == 1U) {
+        fat_root_dir(&dir);
+    } else {
+        if (!fat_open_dir_path(tokens, token_count - 1U, &dir)) {
+            return 0;
+        }
+    }
+
+    if (!fat_find_in_dir_with_slot(&dir, tokens[token_count - 1U], entry_out, slot_out)) {
+        return 0;
+    }
+
     return 1;
 }
 
@@ -627,5 +887,46 @@ int fat_read_file(const char *path, void *out, u32 out_capacity, u32 *out_size) 
     if (out_size) {
         *out_size = entry.size;
     }
+    return 1;
+}
+
+int fat_delete_file(const char *path) {
+    fat_dir_entry_t entry;
+    fat_dir_slot_t slot;
+    u8 *sector;
+    u8 *raw;
+
+    if (!g_fs.mounted || !path) {
+        return 0;
+    }
+
+    if (!fat_locate_path_entry(path, &entry, &slot)) {
+        return 0;
+    }
+    if ((entry.attr & FAT_ATTR_DIRECTORY) != 0U) {
+        return 0;
+    }
+    if ((entry.attr & FAT_ATTR_READ_ONLY) != 0U) {
+        return 0;
+    }
+
+    if (!fat_free_chain(entry.first_cluster)) {
+        return 0;
+    }
+
+    sector = stage2_disk_lba_ptr_rw(slot.lba);
+    if (!sector) {
+        return 0;
+    }
+    raw = sector + slot.offset;
+    raw[0] = 0xE5U;
+    raw[20] = 0U;
+    raw[21] = 0U;
+    raw[26] = 0U;
+    raw[27] = 0U;
+    raw[28] = 0U;
+    raw[29] = 0U;
+    raw[30] = 0U;
+    raw[31] = 0U;
     return 1;
 }

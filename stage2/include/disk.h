@@ -9,6 +9,8 @@ int stage2_disk_ready(void);
 u32 stage2_disk_block_size(void);
 u64 stage2_disk_block_count(void);
 const u8 *stage2_disk_lba_ptr(u64 lba);
+u8 *stage2_disk_lba_ptr_rw(u64 lba);
 int stage2_disk_read_blocks(u64 lba, u32 count, void *out);
+int stage2_disk_write_blocks(u64 lba, u32 count, const void *in);
 
 #endif

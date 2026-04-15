@@ -2,8 +2,12 @@
 #include "types.h"
 #include "bootinfo.h"
 
-#define FONT_W  8
-#define FONT_H  8
+#define GLYPH_W 8
+#define GLYPH_H 8
+#define DEFAULT_FONT_SCALE_X 2U
+#define DEFAULT_FONT_SCALE_Y 2U
+#define MIN_FONT_SCALE 1U
+#define MAX_FONT_SCALE 4U
 
 /* BGRA 32bpp pixel values (little-endian u32: 0x00RRGGBB -> bytes B,G,R,X) */
 #define DEFAULT_COLOR_FG  0x00C0C0C0U   /* light gray */
@@ -121,6 +125,62 @@ static u32  g_cursor_col;
 static u32  g_cursor_row;
 static u32  g_color_fg;
 static u32  g_color_bg;
+static u32  g_font_scale_x;
+static u32  g_font_scale_y;
+
+static u32 font_w(void) {
+    return GLYPH_W * g_font_scale_x;
+}
+
+static u32 font_h(void) {
+    return GLYPH_H * g_font_scale_y;
+}
+
+static u32 clamp_font_scale(u32 v) {
+    if (v < MIN_FONT_SCALE) {
+        return MIN_FONT_SCALE;
+    }
+    if (v > MAX_FONT_SCALE) {
+        return MAX_FONT_SCALE;
+    }
+    return v;
+}
+
+static void recompute_text_metrics(void) {
+    u32 fw = font_w();
+    u32 fh = font_h();
+
+    if (fw == 0U || fh == 0U) {
+        g_cols = 1U;
+        g_rows = 1U;
+    } else {
+        g_cols = g_width / fw;
+        g_rows = g_height / fh;
+        if (g_cols == 0U) {
+            g_cols = 1U;
+        }
+        if (g_rows == 0U) {
+            g_rows = 1U;
+        }
+    }
+
+    if (g_text_start_row >= g_rows) {
+        g_text_start_row = g_rows - 1U;
+        g_text_rows = 1U;
+    } else {
+        g_text_rows = g_rows - g_text_start_row;
+        if (g_text_rows == 0U) {
+            g_text_rows = 1U;
+        }
+    }
+
+    if (g_cursor_col >= g_cols) {
+        g_cursor_col = g_cols - 1U;
+    }
+    if (g_cursor_row >= g_text_rows) {
+        g_cursor_row = g_text_rows - 1U;
+    }
+}
 
 static void fb_clear(void) {
     u32 *px = (u32 *)g_fb_base;
@@ -140,7 +200,7 @@ static void clear_text_area(void) {
         return;
     }
 
-    y0 = g_text_start_row * FONT_H;
+    y0 = g_text_start_row * font_h();
     rows_px = g_height - y0;
     clear_px = (g_pitch / 4) * rows_px;
     px = (u32 *)((u8 *)g_fb_base + (u64)y0 * g_pitch);
@@ -152,7 +212,7 @@ static void clear_text_area(void) {
 
 static void draw_char(u32 col, u32 row, char c) {
     const u8 *glyph;
-    u32 px, py;
+    u32 gx, gy, sx, sy;
 
     if ((u8)c < 0x20 || (u8)c > 0x7E) {
         glyph = g_font[0]; /* space for non-printable */
@@ -160,15 +220,24 @@ static void draw_char(u32 col, u32 row, char c) {
         glyph = g_font[(u8)c - 0x20];
     }
 
-    u32 x0 = col * FONT_W;
-    u32 y0 = row * FONT_H;
+    u32 x0 = col * font_w();
+    u32 y0 = row * font_h();
 
-    for (py = 0; py < FONT_H; py++) {
-        u8  row_bits = glyph[py];
-        u32 *scanline = (u32 *)((u8 *)g_fb_base + (y0 + py) * g_pitch);
-        for (px = 0; px < FONT_W; px++) {
-            u32 bit = (row_bits >> (FONT_W - 1 - px)) & 1u;
-            scanline[x0 + px] = bit ? g_color_fg : g_color_bg;
+    for (gy = 0; gy < GLYPH_H; gy++) {
+        u8 row_bits = glyph[gy];
+
+        for (sy = 0; sy < g_font_scale_y; sy++) {
+            u32 *scanline = (u32 *)((u8 *)g_fb_base +
+                                    (y0 + gy * g_font_scale_y + sy) * g_pitch);
+
+            for (gx = 0; gx < GLYPH_W; gx++) {
+                u32 bit = (row_bits >> (GLYPH_W - 1 - gx)) & 1u;
+                u32 color = bit ? g_color_fg : g_color_bg;
+
+                for (sx = 0; sx < g_font_scale_x; sx++) {
+                    scanline[x0 + gx * g_font_scale_x + sx] = color;
+                }
+            }
         }
     }
 }
@@ -185,17 +254,17 @@ static void scroll_up(void) {
         return;
     }
 
-    text_px_h = g_text_rows * FONT_H;
-    dst = (u8 *)g_fb_base + (u64)g_text_start_row * FONT_H * g_pitch;
-    src = dst + (u64)FONT_H * g_pitch;
-    copy_bytes = (text_px_h - FONT_H) * g_pitch;
+    text_px_h = g_text_rows * font_h();
+    dst = (u8 *)g_fb_base + (u64)g_text_start_row * font_h() * g_pitch;
+    src = dst + (u64)font_h() * g_pitch;
+    copy_bytes = (text_px_h - font_h()) * g_pitch;
 
     for (u32 i = 0; i < copy_bytes; i++) {
         dst[i] = src[i];
     }
 
-    last = dst + (u64)(text_px_h - FONT_H) * g_pitch;
-    clear_bytes = FONT_H * g_pitch;
+    last = dst + (u64)(text_px_h - font_h()) * g_pitch;
+    clear_bytes = font_h() * g_pitch;
     {
         u32 *last_px = (u32 *)last;
         u32 total_px = clear_bytes / 4;
@@ -223,14 +292,17 @@ void video_init(boot_info_t *bi) {
     g_width      = bi->framebuffer_width;
     g_height     = bi->framebuffer_height;
     g_pitch      = bi->framebuffer_pitch;
-    g_cols       = g_width  / FONT_W;
-    g_rows       = g_height / FONT_H;
+    g_font_scale_x = DEFAULT_FONT_SCALE_X;
+    g_font_scale_y = DEFAULT_FONT_SCALE_Y;
+    g_cols       = 0;
+    g_rows       = 0;
     g_text_start_row = 0;
-    g_text_rows = g_rows;
+    g_text_rows = 1U;
     g_cursor_col = 0;
     g_cursor_row = 0;
     g_color_fg = DEFAULT_COLOR_FG;
     g_color_bg = DEFAULT_COLOR_BG;
+    recompute_text_metrics();
 
     fb_clear();
 }
@@ -349,6 +421,24 @@ void video_set_text_window(u32 start_row) {
     video_cls();
 }
 
+void video_set_font_scale(u32 scale_x, u32 scale_y) {
+    if (!g_fb_base) {
+        return;
+    }
+
+    g_font_scale_x = clamp_font_scale(scale_x);
+    g_font_scale_y = clamp_font_scale(scale_y);
+    g_text_start_row = 0;
+    g_cursor_col = 0;
+    g_cursor_row = 0;
+    recompute_text_metrics();
+    fb_clear();
+}
+
 u32 video_columns(void) {
     return g_cols;
+}
+
+u32 video_text_rows(void) {
+    return g_text_rows;
 }

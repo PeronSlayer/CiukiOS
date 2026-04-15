@@ -1,0 +1,71 @@
+# CLAUDE.md - CiukiOS Collaboration Readme
+
+## Purpose
+Shared operating context for Codex and Claude Code.
+Use this file to stay aligned between sessions, beyond detailed handoff files.
+
+## Project North Star
+Current top objective: run real DOS DOOM binaries from CiukiOS.
+
+Primary roadmap:
+1. `docs/roadmap-ciukios-doom.md`
+2. `docs/roadmap-dos62-compat.md`
+
+## Current Runtime Snapshot
+1. UEFI loader boots Stage2 reliably.
+2. Stage2 has shell, FAT read/write-on-cache primitives, COM catalog support.
+3. Splashscreen is integrated and rendered at boot.
+4. Fallback path to `kernel.elf` remains tested.
+
+## Source of Truth Documents
+1. High-level roadmap: `docs/roadmap-ciukios-doom.md`
+2. Compatibility baseline: `docs/int21-priority-a.md`
+3. Phase history/kickoff: `docs/phase-0-kickoff.md`, `docs/phase-1.md`
+4. FreeDOS licensing/integration policy: `docs/freedos-integration-policy.md`
+5. Handoff index: `docs/handoffs/README.md`
+
+## Session Workflow (Required)
+1. Read this file first.
+2. Read the latest relevant handoff(s) in `docs/handoffs/`.
+3. Execute scoped change.
+4. Run relevant tests.
+5. Write a new handoff for major multi-file or architectural changes.
+6. Update this file only if global direction/state changed.
+
+## Handoff Rule
+For major changes, always add one file:
+`docs/handoffs/YYYY-MM-DD-<topic>.md`
+
+Minimum handoff content:
+1. Context and goal.
+2. Files touched.
+3. Decisions made.
+4. Validation performed.
+5. Risks and next step.
+
+## Compatibility Execution Priorities
+1. Real DOS binary loading (`.COM`, `.EXE MZ`).
+2. Accurate `INT 21h` behavior and error flags.
+3. BIOS interrupt compatibility used by real software.
+4. Protected-mode path for DOS extender workflows.
+5. DOOM graphics/input/audio milestone.
+
+## Build/Test Guardrails
+1. Keep `make test-stage2` green.
+2. Keep `make test-fallback` green.
+3. Do not silently break loader/stage2 ABI.
+4. Preserve reproducibility of generated artifacts.
+
+## Asset and Licensing Rules
+1. Prefer FreeDOS components with verified licenses for distributable images.
+2. Keep Microsoft DOS files user-supplied and out of public redistribution by default.
+3. Maintain provenance and licenses for all imported third-party DOS files.
+
+## Quick Resume Checklist
+1. `git status --short`
+2. Read newest handoff in `docs/handoffs/`
+3. Open `docs/roadmap-ciukios-doom.md`
+4. Pick next milestone item and implement with tests
+
+## Last Updated
+2026-04-15

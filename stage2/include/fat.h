@@ -25,5 +25,6 @@ int fat_ready(void);
 int fat_list_dir(const char *path, fat_dir_enum_cb_t cb, void *ctx);
 int fat_find_file(const char *path, fat_dir_entry_t *out);
 int fat_read_file(const char *path, void *out, u32 out_capacity, u32 *out_size);
+int fat_delete_file(const char *path);
 
 #endif

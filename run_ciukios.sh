@@ -21,6 +21,7 @@ require_cmd() {
 
 echo "[CiukiOS] Checking dependencies..."
 require_cmd make
+require_cmd xxd
 require_cmd truncate
 require_cmd mkfs.vfat
 require_cmd mmd

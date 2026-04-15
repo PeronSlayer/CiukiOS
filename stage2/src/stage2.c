@@ -5,6 +5,7 @@
 #include "timer.h"
 #include "keyboard.h"
 #include "shell.h"
+#include "splash.h"
 #include "disk.h"
 #include "fat.h"
 #include "bootinfo.h"
@@ -44,6 +45,31 @@ static void draw_title_bar(void) {
 
     video_set_colors(0x00C0C0C0U, 0x00000000U); /* restore shell colors */
     video_set_text_window(1);                   /* reserve top row for title bar */
+}
+
+static void show_boot_splash(void) {
+    u64 start_ticks;
+    const u64 max_wait_ticks = 200ULL; /* 2s @ 100Hz */
+
+    video_set_font_scale(1U, 1U);
+    video_set_text_window(0);
+    stage2_splash_show();
+    serial_write("[ ok ] splashscreen rendered src=0x");
+    serial_write_hex64((u64)stage2_splash_source_cols());
+    serial_write("x0x");
+    serial_write_hex64((u64)stage2_splash_source_rows());
+    serial_write("\n");
+
+    start_ticks = stage2_timer_ticks();
+    while ((stage2_timer_ticks() - start_ticks) < max_wait_ticks) {
+        if (stage2_keyboard_getc_nonblocking() >= 0) {
+            break;
+        }
+        __asm__ volatile ("hlt");
+    }
+
+    video_set_font_scale(2U, 2U);
+    video_set_text_window(0);
 }
 
 void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
@@ -108,9 +134,10 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
     stage2_enable_interrupts();
     serial_write("[ ok ] interrupts enabled (timer irq0 + keyboard irq1)\n");
-    serial_write("[ ok ] stage2 mini shell ready (help/dir/type/ascii/cls/ver/echo/ticks/mem/run/shutdown/reboot)\n");
+    serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/del/ascii/cls/ver/echo/ticks/mem/run/shutdown/reboot)\n");
 
     video_init(boot_info);
+    show_boot_splash();
     draw_title_bar();
 
     stage2_disk_init(handoff);
@@ -121,9 +148,9 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     }
 
     if (fat_init()) {
-        serial_write("[ ok ] FAT readonly layer mounted\n");
+        serial_write("[ ok ] FAT layer mounted (rw cache)\n");
     } else {
-        serial_write("[ warn ] FAT readonly layer not mounted\n");
+        serial_write("[ warn ] FAT layer not mounted\n");
     }
 
     serial_write("[ shell ] mini command loop active\n");

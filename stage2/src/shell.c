@@ -9,8 +9,19 @@
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
 #define SHELL_RUNTIME_COM_ADDR 0x0000000000600000ULL
 #define SHELL_RUNTIME_COM_MAX_SIZE (512U * 1024U)
+#define SHELL_PATH_MAX 128
+#define SHELL_PATH_MAX_TOKENS 16
+#define SHELL_PATH_TOKEN_MAX 13
 
 static u8 g_shell_file_buffer[SHELL_FILE_BUFFER_SIZE];
+static char g_shell_cwd[SHELL_PATH_MAX] = "/EFI/CIUKIOS";
+
+static int shell_dir_fat_cb(const fat_dir_entry_t *entry, void *ctx_void);
+static int shell_dir_exists_cb(const fat_dir_entry_t *entry, void *ctx_void) {
+    (void)entry;
+    (void)ctx_void;
+    return 1;
+}
 
 static int is_space(u8 ch) {
     return ch == ' ' || ch == '\t';
@@ -53,6 +64,18 @@ static int str_eq(const char *a, const char *b) {
     return *a == '\0' && *b == '\0';
 }
 
+static void str_copy(char *dst, const char *src, u32 dst_size) {
+    u32 i = 0;
+    if (dst_size == 0) {
+        return;
+    }
+    while (src[i] != '\0' && (i + 1) < dst_size) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
 static u32 str_len(const char *s) {
     u32 n = 0;
     while (s[n] != '\0') {
@@ -72,8 +95,152 @@ static int str_eq_nocase(const char *a, const char *b) {
     return *a == '\0' && *b == '\0';
 }
 
+static void write_dos_path(const char *path) {
+    u32 i = 0;
+
+    video_write("A:");
+    if (!path || path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
+        video_write("\\");
+        return;
+    }
+
+    while (path[i] != '\0') {
+        char ch = path[i++];
+        if (ch == '/') {
+            video_putchar('\\');
+        } else {
+            video_putchar((char)to_upper_ascii((u8)ch));
+        }
+    }
+}
+
+static int split_path_tokens(
+    const char *path,
+    char tokens[SHELL_PATH_MAX_TOKENS][SHELL_PATH_TOKEN_MAX],
+    u32 *count_out
+) {
+    const char *p = path;
+    u32 count = 0;
+
+    if (!path || !count_out) {
+        return 0;
+    }
+
+    while (*p) {
+        u32 n = 0;
+
+        while (*p == '/' || *p == '\\') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+
+        if (count >= SHELL_PATH_MAX_TOKENS) {
+            return 0;
+        }
+
+        while (*p && *p != '/' && *p != '\\') {
+            if ((n + 1) >= SHELL_PATH_TOKEN_MAX) {
+                return 0;
+            }
+            tokens[count][n++] = (char)to_upper_ascii((u8)*p);
+            p++;
+        }
+        tokens[count][n] = '\0';
+        count++;
+    }
+
+    *count_out = count;
+    return 1;
+}
+
+static int build_canonical_path(const char *input, char *out, u32 out_size) {
+    char stack[SHELL_PATH_MAX_TOKENS][SHELL_PATH_TOKEN_MAX];
+    char parts[SHELL_PATH_MAX_TOKENS][SHELL_PATH_TOKEN_MAX];
+    u32 stack_count = 0;
+    u32 part_count = 0;
+    u32 j = 0;
+    int absolute = 0;
+
+    if (!input || !out || out_size == 0) {
+        return 0;
+    }
+
+    while (*input && is_space((u8)*input)) {
+        input++;
+    }
+    if (*input == '\0') {
+        str_copy(out, g_shell_cwd, out_size);
+        return 1;
+    }
+
+    if (*input == '/' || *input == '\\') {
+        absolute = 1;
+    }
+
+    if (!absolute) {
+        if (!split_path_tokens(g_shell_cwd, stack, &stack_count)) {
+            return 0;
+        }
+    }
+
+    if (!split_path_tokens(input, parts, &part_count)) {
+        return 0;
+    }
+
+    for (u32 i = 0; i < part_count; i++) {
+        if (str_eq(parts[i], ".")) {
+            continue;
+        }
+        if (str_eq(parts[i], "..")) {
+            if (stack_count > 0) {
+                stack_count--;
+            }
+            continue;
+        }
+        if (stack_count >= SHELL_PATH_MAX_TOKENS) {
+            return 0;
+        }
+        str_copy(stack[stack_count], parts[i], SHELL_PATH_TOKEN_MAX);
+        stack_count++;
+    }
+
+    if (stack_count == 0) {
+        if (out_size < 2) {
+            return 0;
+        }
+        out[0] = '/';
+        out[1] = '\0';
+        return 1;
+    }
+
+    for (u32 i = 0; i < stack_count; i++) {
+        if ((j + 1) >= out_size) {
+            return 0;
+        }
+        out[j++] = '/';
+        for (u32 k = 0; stack[i][k] != '\0'; k++) {
+            if ((j + 1) >= out_size) {
+                return 0;
+            }
+            out[j++] = stack[i][k];
+        }
+    }
+    out[j] = '\0';
+    return 1;
+}
+
+static int shell_dir_exists(const char *path) {
+    if (!fat_ready()) {
+        return 0;
+    }
+    return fat_list_dir(path, shell_dir_exists_cb, (void *)0) ? 1 : 0;
+}
+
 static void write_prompt(void) {
-    video_write("A:\\> ");
+    write_dos_path(g_shell_cwd);
+    video_write("> ");
 }
 
 static const char *get_arg_ptr(const char *line) {
@@ -107,8 +274,11 @@ static void normalize_first_token(const char *line, char *out, u32 out_size) {
 static void shell_print_help(void) {
     video_write("Commands:\n");
     video_write("  help     - show this help\n");
-    video_write("  dir      - list files in A:\\EFI\\CIUKIOS\n");
+    video_write("  pwd      - show current directory\n");
+    video_write("  cd X     - change current directory\n");
+    video_write("  dir      - list files in current directory\n");
     video_write("  type X   - show text file from FAT\n");
+    video_write("  del X    - delete file from FAT cache\n");
     video_write("  ascii    - show custom ASCII art\n");
     video_write("  cls      - clear screen\n");
     video_write("  ver      - show OS version\n");
@@ -196,61 +366,17 @@ static int extract_first_arg(const char *args, char *out, u32 out_size) {
     return 1;
 }
 
-static int build_ciukios_path(const char *name, char *out, u32 out_size) {
-    static const char prefix[] = "/EFI/CIUKIOS/";
-    u32 i = 0;
-    u32 j = 0;
-
-    while (prefix[i] != '\0') {
-        if ((j + 1) >= out_size) {
-            return 0;
-        }
-        out[j++] = prefix[i++];
-    }
-
-    i = 0;
-    while (name[i] != '\0') {
-        char ch = (char)to_upper_ascii((u8)name[i]);
-        if (ch == '\\') {
-            ch = '/';
-        }
-        if ((j + 1) >= out_size) {
-            return 0;
-        }
-        out[j++] = ch;
-        i++;
-    }
-
-    out[j] = '\0';
-    return 1;
-}
-
-static int build_type_path(const char *args, char *out, u32 out_size) {
+static int build_arg_path(const char *args, char *out, u32 out_size) {
     char token[96];
-    u32 i = 0;
-    u32 j = 0;
 
     if (!extract_first_arg(args, token, (u32)sizeof(token))) {
         return 0;
     }
+    return build_canonical_path(token, out, out_size);
+}
 
-    if (token[0] == '/' || token[0] == '\\') {
-        while (token[i] != '\0') {
-            char ch = token[i++];
-            if (ch == '\\') {
-                ch = '/';
-            }
-            ch = (char)to_upper_ascii((u8)ch);
-            if ((j + 1) >= out_size) {
-                return 0;
-            }
-            out[j++] = ch;
-        }
-        out[j] = '\0';
-        return 1;
-    }
-
-    return build_ciukios_path(token, out, out_size);
+static int build_run_path(const char *com_name, char *out, u32 out_size) {
+    return build_canonical_path(com_name, out, out_size);
 }
 
 static handoff_com_entry_t *shell_find_com(handoff_v0_t *handoff, const char *name) {
@@ -297,7 +423,7 @@ static int shell_dir_fat_cb(const fat_dir_entry_t *entry, void *ctx_void) {
     return 1;
 }
 
-static int shell_dir_from_fat(void) {
+static int shell_dir_from_fat(const char *path) {
     shell_dir_ctx_t ctx;
     ctx.entries = 0;
 
@@ -305,8 +431,11 @@ static int shell_dir_from_fat(void) {
         return 0;
     }
 
-    video_write("Directory of A:\\EFI\\CIUKIOS\n");
-    if (!fat_list_dir("/EFI/CIUKIOS", shell_dir_fat_cb, &ctx)) {
+    video_write("Directory of ");
+    write_dos_path(path);
+    video_write("\n");
+
+    if (!fat_list_dir(path, shell_dir_fat_cb, &ctx)) {
         return 0;
     }
 
@@ -347,8 +476,47 @@ static void shell_dir_from_catalog(handoff_v0_t *handoff) {
     }
 }
 
-static void shell_dir(handoff_v0_t *handoff) {
-    if (!shell_dir_from_fat()) {
+static void shell_pwd(void) {
+    write_dos_path(g_shell_cwd);
+    video_write("\n");
+}
+
+static void shell_cd(const char *args) {
+    char path[SHELL_PATH_MAX];
+
+    if (!args || args[0] == '\0') {
+        shell_pwd();
+        return;
+    }
+    if (!build_arg_path(args, path, (u32)sizeof(path))) {
+        video_write("Usage: cd <path>\n");
+        return;
+    }
+    if (!shell_dir_exists(path)) {
+        video_write("Directory not found: ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    str_copy(g_shell_cwd, path, (u32)sizeof(g_shell_cwd));
+}
+
+static void shell_dir(handoff_v0_t *handoff, const char *args) {
+    char path[SHELL_PATH_MAX];
+    int use_fat = 0;
+
+    if (args && args[0] != '\0') {
+        if (!build_arg_path(args, path, (u32)sizeof(path))) {
+            video_write("Usage: dir [path]\n");
+            return;
+        }
+    } else {
+        str_copy(path, g_shell_cwd, (u32)sizeof(path));
+    }
+
+    use_fat = shell_dir_from_fat(path);
+    if (!use_fat) {
         shell_dir_from_catalog(handoff);
     }
 }
@@ -380,16 +548,43 @@ static void shell_run_entry(boot_info_t *boot_info, handoff_v0_t *handoff, u64 p
 
 static int shell_run_from_fat(boot_info_t *boot_info, handoff_v0_t *handoff, const char *com_name) {
     char path[128];
+    char fallback_path[128];
     u32 com_size = 0;
+    int has_fallback = 0;
 
     if (!fat_ready()) {
         return 0;
     }
-    if (!build_ciukios_path(com_name, path, (u32)sizeof(path))) {
+    if (!build_run_path(com_name, path, (u32)sizeof(path))) {
         return 0;
     }
+
     if (!fat_read_file(path, (void *)(u64)SHELL_RUNTIME_COM_ADDR, SHELL_RUNTIME_COM_MAX_SIZE, &com_size)) {
-        return 0;
+        if (!str_eq_nocase(g_shell_cwd, "/EFI/CIUKIOS")) {
+            has_fallback = build_canonical_path("/EFI/CIUKIOS", fallback_path, (u32)sizeof(fallback_path));
+            if (has_fallback) {
+                u32 n = str_len(fallback_path);
+                if (n > 0 && n < (u32)sizeof(fallback_path) - 1U && fallback_path[n - 1] != '/') {
+                    fallback_path[n++] = '/';
+                    fallback_path[n] = '\0';
+                }
+                {
+                    u32 i = 0;
+                    while (com_name[i] != '\0' && n < (u32)sizeof(fallback_path) - 1U) {
+                        fallback_path[n++] = (char)to_upper_ascii((u8)com_name[i++]);
+                    }
+                    fallback_path[n] = '\0';
+                }
+
+                if (!fat_read_file(fallback_path, (void *)(u64)SHELL_RUNTIME_COM_ADDR, SHELL_RUNTIME_COM_MAX_SIZE, &com_size)) {
+                    return 0;
+                }
+            } else {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
     }
     if (com_size == 0U) {
         return 0;
@@ -439,7 +634,7 @@ static void shell_type(const char *args) {
         video_write("FAT layer not ready.\n");
         return;
     }
-    if (!build_type_path(args, path, (u32)sizeof(path))) {
+    if (!build_arg_path(args, path, (u32)sizeof(path))) {
         video_write("Usage: type <file>\n");
         return;
     }
@@ -476,6 +671,29 @@ static void shell_type(const char *args) {
     if (file_size == 0 || g_shell_file_buffer[file_size - 1] != '\n') {
         video_write("\n");
     }
+}
+
+static void shell_del(const char *args) {
+    char path[128];
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, path, (u32)sizeof(path))) {
+        video_write("Usage: del <file>\n");
+        return;
+    }
+    if (!fat_delete_file(path)) {
+        video_write("Delete failed: ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Deleted: ");
+    write_dos_path(path);
+    video_write("\n");
 }
 
 static void shell_ascii(void) {
@@ -564,8 +782,18 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
+    if (str_eq(cmd, "pwd")) {
+        shell_pwd();
+        return;
+    }
+
+    if (str_eq(cmd, "cd")) {
+        shell_cd(get_arg_ptr(line));
+        return;
+    }
+
     if (str_eq(cmd, "dir")) {
-        shell_dir(handoff);
+        shell_dir(handoff, get_arg_ptr(line));
         return;
     }
 
@@ -591,6 +819,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "type")) {
         shell_type(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "del") || str_eq(cmd, "erase")) {
+        shell_del(get_arg_ptr(line));
         return;
     }
 

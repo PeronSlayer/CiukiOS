@@ -25,6 +25,9 @@ COM_CFLAGS := $(COMMON_CFLAGS) -Iboot/proto
 COM_HELLO_SRC := com/hello/hello.c
 COM_HELLO_ELF := build/INIT.COM.elf
 COM_HELLO_BIN := build/INIT.COM
+SPLASH_ASCII_SRC := misc/splashscreen.txt
+SPLASH_GEN_C := build/generated/splash_data.c
+SPLASH_GEN_OBJ := build/obj/stage2/splash_data.o
 
 KERNEL_C_SRCS := $(shell find kernel/src -type f -name '*.c')
 KERNEL_S_SRCS := $(shell find kernel/src -type f -name '*.S')
@@ -37,7 +40,7 @@ STAGE2_C_OBJS := $(patsubst stage2/src/%.c,build/obj/stage2/%.o,$(STAGE2_C_SRCS)
 STAGE2_S_OBJS := $(patsubst stage2/src/%.S,build/obj/stage2/%.o,$(STAGE2_S_SRCS))
 
 KERNEL_OBJS := $(KERNEL_C_OBJS) $(KERNEL_S_OBJS)
-STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS)
+STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ)
 
 .DEFAULT_GOAL := all
 
@@ -64,6 +67,14 @@ build/obj/stage2/%.o: stage2/src/%.c | build
 build/obj/stage2/%.o: stage2/src/%.S | build
 	@mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) $< -o $@
+
+$(SPLASH_GEN_C): $(SPLASH_ASCII_SRC) | build
+	@mkdir -p $(dir $@)
+	xxd -i -n stage2_splash_ascii $< > $@
+
+$(SPLASH_GEN_OBJ): $(SPLASH_GEN_C) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(STAGE2_CFLAGS) -c $< -o $@
 
 $(COM_HELLO_BIN): $(COM_HELLO_SRC) com/hello/linker.ld boot/proto/services.h | build
 	@mkdir -p build/obj/com
