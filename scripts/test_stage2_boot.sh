@@ -42,6 +42,10 @@ required_patterns=(
     "[ ok ] pic remapped and pit started"
     "[ ok ] keyboard ring buffer + set1 decoder ready"
     "[ ok ] interrupts enabled (timer irq0 + keyboard irq1)"
+    "[ compat ] INT10h baseline path ready (stage2 video text/gfx)"
+    "[ compat ] INT16h baseline path ready (irq1 + key buffer)"
+    "[ compat ] INT1Ah baseline path ready (pit tick source)"
+    "[ test ] int21 priority-a selftest: PASS"
     "[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/shutdown/reboot)"
     "[ tick ] irq0 #0000000000000001"
     "[ ok ] splashscreen rendered src=0x"
@@ -56,6 +60,7 @@ forbidden_patterns=(
     "#UD"
     "Can't find image information"
     "[ tick ] irq0 #0000000000000064"
+    "[ test ] int21 priority-a selftest: FAIL"
     "[ panic ]"
 )
 

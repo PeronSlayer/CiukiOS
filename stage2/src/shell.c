@@ -641,12 +641,21 @@ static void shell_com_int20(ciuki_dos_context_t *ctx) {
 }
 
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
+static u32 g_int21_vectors[256];
 
 static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
     if (!ctx || off >= ctx->image_size) {
         return (void *)0;
     }
     return (void *)(ctx->image_linear + (u64)off);
+}
+
+static u8 shell_int21_read_char_blocking(void) {
+    u8 ch = stage2_keyboard_getc_blocking();
+    if (ch == '\n') {
+        return '\r';
+    }
+    return ch;
 }
 
 static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
@@ -663,6 +672,7 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
 
     if (ah == 0x02U) {
         video_putchar((char)(regs->dx & 0x00FFU));
+        regs->ax = (u16)((regs->ax & 0xFF00U) | (regs->dx & 0x00FFU));
         return;
     }
 
@@ -684,6 +694,46 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
             }
             video_putchar(ch);
         }
+        regs->ax = (u16)((regs->ax & 0xFF00U) | 0x24U);
+        return;
+    }
+
+    if (ah == 0x01U) {
+        u8 ch = shell_int21_read_char_blocking();
+        if (ch == '\r') {
+            video_putchar('\n');
+        } else {
+            video_putchar((char)ch);
+        }
+        regs->ax = (u16)((regs->ax & 0xFF00U) | ch);
+        return;
+    }
+
+    if (ah == 0x08U) {
+        u8 ch = shell_int21_read_char_blocking();
+        regs->ax = (u16)((regs->ax & 0xFF00U) | ch);
+        return;
+    }
+
+    if (ah == 0x19U) {
+        /* A: = 0 */
+        regs->ax = (u16)((regs->ax & 0xFF00U) | 0x00U);
+        return;
+    }
+
+    if (ah == 0x25U) {
+        /* Set interrupt vector: AL=index, DS:DX=far ptr */
+        u8 vec = (u8)(regs->ax & 0x00FFU);
+        g_int21_vectors[vec] = ((u32)regs->ds << 16) | (u32)regs->dx;
+        return;
+    }
+
+    if (ah == 0x35U) {
+        /* Get interrupt vector: AL=index -> ES:BX */
+        u8 vec = (u8)(regs->ax & 0x00FFU);
+        u32 far_ptr = g_int21_vectors[vec];
+        regs->bx = (u16)(far_ptr & 0xFFFFU);
+        regs->es = (u16)((far_ptr >> 16) & 0xFFFFU);
         return;
     }
 
@@ -692,6 +742,34 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         regs->ax = 0x1606U;
         regs->bx = 0x0000U;
         regs->cx = 0x0000U;
+        return;
+    }
+
+    if (ah == 0x48U) {
+        /* Allocate memory block (paras) - deterministic stub until MCB allocator exists. */
+        regs->carry = 1U;
+        regs->ax = 0x0008U; /* insufficient memory */
+        regs->bx = 0x0000U; /* max available paragraphs unknown */
+        return;
+    }
+
+    if (ah == 0x49U) {
+        /* Free memory block - deterministic stub. */
+        regs->carry = 1U;
+        regs->ax = 0x0009U; /* invalid memory block address */
+        return;
+    }
+
+    if (ah == 0x4AU) {
+        /* Resize memory block - deterministic stub until allocator exists. */
+        regs->carry = 1U;
+        regs->ax = 0x0008U; /* insufficient memory */
+        regs->bx = 0x0000U;
+        return;
+    }
+
+    if (ah == 0x00U) {
+        shell_com_int20(ctx);
         return;
     }
 
@@ -718,6 +796,123 @@ static void shell_com_terminate(ciuki_dos_context_t *ctx, u8 code) {
     }
     ctx->exit_reason = (u8)CIUKI_COM_EXIT_API;
     ctx->exit_code = code;
+}
+
+int stage2_shell_selftest_int21_baseline(void) {
+    ciuki_dos_context_t ctx;
+    ciuki_int21_regs_t regs;
+    static const char test_image[] = "ABC$";
+
+    local_memset(&ctx, 0U, (u32)sizeof(ctx));
+    ctx.image_linear = (u64)(const void *)test_image;
+    ctx.image_size = (u32)(sizeof(test_image) - 1U);
+
+    /* AH=30h: DOS version */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x1606U) {
+        return 0;
+    }
+
+    /* AH=19h: current drive */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x1900U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != 0x00U) {
+        return 0;
+    }
+
+    /* AH=25h / AH=35h: set/get vector */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x2521U;
+    regs.ds = 0x1234U;
+    regs.dx = 0x5678U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3521U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.es != 0x1234U || regs.bx != 0x5678U) {
+        return 0;
+    }
+
+    /* AH=48h/49h/4Ah deterministic stubs */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4800U;
+    regs.bx = 0x0010U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0008U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4900U;
+    regs.es = 0x2222U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0009U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4A00U;
+    regs.bx = 0x0040U;
+    regs.es = 0x1111U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0008U) {
+        return 0;
+    }
+
+    /* AH=09h */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0900U;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != 0x24U) {
+        return 0;
+    }
+
+    /* AH=02h */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0200U;
+    regs.dx = (u16)'Z';
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != (u16)'Z') {
+        return 0;
+    }
+
+    /* AH=00h -> INT20 path */
+    ctx.exit_reason = (u8)CIUKI_COM_EXIT_RETURN;
+    ctx.exit_code = 0xA5U;
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (ctx.exit_reason != (u8)CIUKI_COM_EXIT_INT20 || ctx.exit_code != 0U) {
+        return 0;
+    }
+
+    /* AH=4Ch -> terminate with code */
+    ctx.exit_reason = (u8)CIUKI_COM_EXIT_RETURN;
+    ctx.exit_code = 0U;
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4C7BU;
+    shell_com_int21(&ctx, &regs);
+    if (ctx.exit_reason != (u8)CIUKI_COM_EXIT_INT21_4C || ctx.exit_code != 0x7BU) {
+        return 0;
+    }
+
+    /* Unsupported AH must be deterministic */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0xFE00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0001U) {
+        return 0;
+    }
+
+    return 1;
 }
 
 static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const char *tail) {
