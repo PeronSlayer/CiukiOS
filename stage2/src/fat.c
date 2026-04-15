@@ -750,6 +750,10 @@ static int fat_list_cb(const u8 *entry, void *ctx_void) {
     if ((entry[11] & FAT_ATTR_VOLUME_ID) != 0) {
         return 1;
     }
+    /* Skip '.' and '..' entries — not shown in directory listings */
+    if (entry[0] == '.' && (entry[1] == ' ' || entry[1] == '.')) {
+        return 1;
+    }
 
     fat_public_from_raw(entry, &out);
     return ctx->user_cb(&out, ctx->user_ctx);
@@ -1295,6 +1299,257 @@ int fat_write_file(const char *path, const void *data, u32 size) {
         }
         return 0;
     }
+
+    return 1;
+}
+
+/* -----------------------------------------------------------------------
+ * Rename, mkdir, rmdir
+ * --------------------------------------------------------------------- */
+
+/*
+ * Rename an existing file or directory entry within the same parent directory.
+ * new_name is a display-form 8.3 name (e.g. "FILE.TXT"); path separators are
+ * not allowed.  Cross-directory rename is not supported.
+ * Returns 1 on success, 0 on failure.
+ */
+int fat_rename_entry(const char *old_path, const char *new_name) {
+    char tokens[FAT_PATH_MAX_TOKENS][FAT_TOKEN_MAX];
+    u32 token_count = 0;
+    fat_dir_entry_t old_entry;
+    fat_dir_slot_t  old_slot;
+    fat_dir_ref_t   parent_dir;
+    fat_dir_entry_t existing;
+    char new_upper[FAT_TOKEN_MAX];
+    u8   new_name83[11];
+    u8  *sector;
+    u32  i;
+
+    if (!g_fs.mounted || !old_path || !new_name || new_name[0] == '\0') {
+        return 0;
+    }
+
+    /* Parse old path */
+    if (!parse_path_tokens(old_path, tokens, &token_count) || token_count == 0U) {
+        return 0;
+    }
+
+    /* Locate old entry + its directory slot */
+    if (!fat_locate_path_entry(old_path, &old_entry, &old_slot)) {
+        return 0;
+    }
+
+    /* Upper-case the new name (parse_path_tokens already uppercases tokens;
+     * new_name comes from the shell and may be mixed case). */
+    for (i = 0U; new_name[i] && i < FAT_TOKEN_MAX - 1U; i++) {
+        new_upper[i] = (char)to_upper_ascii((u8)new_name[i]);
+    }
+    new_upper[i] = '\0';
+
+    /* Validate and produce the 11-byte padded 8.3 representation */
+    if (!fat_normalize_83_name(new_upper, new_name83)) {
+        return 0;
+    }
+
+    /* Resolve the parent directory */
+    if (token_count == 1U) {
+        fat_root_dir(&parent_dir);
+    } else {
+        if (!fat_open_dir_path(tokens, token_count - 1U, &parent_dir)) {
+            return 0;
+        }
+    }
+
+    /* Reject if a different entry with the new name already exists */
+    if (fat_find_in_dir(&parent_dir, new_upper, &existing)) {
+        return 0;
+    }
+
+    /* Overwrite the name bytes in the existing directory entry */
+    sector = stage2_disk_lba_ptr_rw(old_slot.lba);
+    if (!sector) {
+        return 0;
+    }
+    for (i = 0U; i < 11U; i++) {
+        sector[old_slot.offset + i] = new_name83[i];
+    }
+
+    return 1;
+}
+
+/*
+ * Create a new empty directory at path.
+ * The parent directory must already exist; the name must not.
+ * Initializes the new directory cluster with '.' and '..' entries.
+ * Returns 1 on success, 0 on failure.
+ */
+int fat_create_dir(const char *path) {
+    char tokens[FAT_PATH_MAX_TOKENS][FAT_TOKEN_MAX];
+    u32 token_count = 0;
+    fat_dir_ref_t parent_dir;
+    fat_dir_slot_t slot;
+    fat_dir_entry_t existing;
+    u8  name83[11];
+    u32 new_cluster;
+    u32 parent_cluster;
+    u8 *sector;
+    u8 *entry;
+    u32 i;
+
+    if (!g_fs.mounted || !path) {
+        return 0;
+    }
+    if (!parse_path_tokens(path, tokens, &token_count) || token_count == 0U) {
+        return 0;
+    }
+
+    /* Validate the 8.3 name for the new directory */
+    if (!fat_normalize_83_name(tokens[token_count - 1U], name83)) {
+        return 0;
+    }
+
+    /* Resolve parent */
+    if (token_count == 1U) {
+        fat_root_dir(&parent_dir);
+    } else {
+        if (!fat_open_dir_path(tokens, token_count - 1U, &parent_dir)) {
+            return 0;
+        }
+    }
+
+    /* Fail if the name already exists */
+    if (fat_find_in_dir(&parent_dir, tokens[token_count - 1U], &existing)) {
+        return 0;
+    }
+
+    /* Allocate one cluster for the new directory */
+    if (!fat_alloc_chain(1U, &new_cluster)) {
+        return 0;
+    }
+
+    /* Determine the parent cluster for the '..' entry.
+     * Fixed root directories are referenced by cluster 0 in DOS convention. */
+    parent_cluster = parent_dir.fixed_root ? 0U : parent_dir.start_cluster;
+
+    /* Zero all sectors in the new cluster */
+    {
+        u32 first_sector = cluster_first_sector(new_cluster);
+        for (u32 s = 0U; s < g_fs.sectors_per_cluster; s++) {
+            sector = stage2_disk_lba_ptr_rw((u64)first_sector + s);
+            if (!sector) {
+                fat_free_chain(new_cluster);
+                return 0;
+            }
+            for (i = 0U; i < g_fs.bytes_per_sector; i++) {
+                sector[i] = 0U;
+            }
+        }
+
+        /* Write '.' entry at offset 0 of the first sector */
+        sector = stage2_disk_lba_ptr_rw((u64)first_sector);
+        if (!sector) {
+            fat_free_chain(new_cluster);
+            return 0;
+        }
+
+        entry = sector + 0U;
+        entry[0] = '.';
+        for (i = 1U; i < 11U; i++) { entry[i] = ' '; }
+        entry[11] = FAT_ATTR_DIRECTORY;
+        wr16(entry + 20, (u16)((new_cluster >> 16) & 0xFFFFU));
+        wr16(entry + 26, (u16)(new_cluster & 0xFFFFU));
+        wr32(entry + 28, 0U);
+
+        /* Write '..' entry at offset 32 */
+        entry = sector + 32U;
+        entry[0] = '.';
+        entry[1] = '.';
+        for (i = 2U; i < 11U; i++) { entry[i] = ' '; }
+        entry[11] = FAT_ATTR_DIRECTORY;
+        wr16(entry + 20, (u16)((parent_cluster >> 16) & 0xFFFFU));
+        wr16(entry + 26, (u16)(parent_cluster & 0xFFFFU));
+        wr32(entry + 28, 0U);
+    }
+
+    /* Find a free slot in the parent directory */
+    if (!fat_find_free_dir_slot(&parent_dir, &slot)) {
+        fat_free_chain(new_cluster);
+        return 0;
+    }
+
+    /* Write the new directory's entry in the parent */
+    if (!fat_write_dir_entry_slot(&slot, name83, FAT_ATTR_DIRECTORY, new_cluster, 0U)) {
+        fat_free_chain(new_cluster);
+        return 0;
+    }
+
+    return 1;
+}
+
+/* Callback for fat_remove_dir: sets *result=0 if any real entry is found */
+static int fat_is_not_empty_cb(const u8 *entry, void *ctx_void) {
+    int *result = (int *)ctx_void;
+    /* Skip '.' and '..' — they do not make a directory non-empty */
+    if (entry[0] == '.' && (entry[1] == ' ' || entry[1] == '.')) {
+        return 1;
+    }
+    *result = 0; /* found a real entry */
+    return 0;    /* stop iteration */
+}
+
+/*
+ * Remove an empty directory at path.
+ * Fails if the directory contains any entries other than '.' and '..'.
+ * Returns 1 on success, 0 on failure.
+ */
+int fat_remove_dir(const char *path) {
+    fat_dir_entry_t entry;
+    fat_dir_slot_t  slot;
+    fat_dir_ref_t   dir;
+    int is_empty = 1;
+    u8 *sector;
+    u8 *raw;
+
+    if (!g_fs.mounted || !path) {
+        return 0;
+    }
+
+    if (!fat_locate_path_entry(path, &entry, &slot)) {
+        return 0;
+    }
+    if ((entry.attr & FAT_ATTR_DIRECTORY) == 0U) {
+        return 0; /* not a directory */
+    }
+    if (entry.first_cluster < 2U) {
+        return 0; /* root or cluster-0 — cannot delete */
+    }
+
+    /* Open as a dir_ref for the emptiness check */
+    dir.fixed_root   = 0;
+    dir.start_sector = 0;
+    dir.sector_count = 0;
+    dir.start_cluster = entry.first_cluster;
+
+    fat_iter_dir(&dir, fat_is_not_empty_cb, &is_empty);
+    if (!is_empty) {
+        return 0; /* directory not empty */
+    }
+
+    /* Release the cluster chain */
+    if (!fat_free_chain(entry.first_cluster)) {
+        return 0;
+    }
+
+    /* Mark the directory entry as deleted */
+    sector = stage2_disk_lba_ptr_rw(slot.lba);
+    if (!sector) {
+        return 0;
+    }
+    raw = sector + slot.offset;
+    raw[0]  = 0xE5U;
+    raw[20] = 0U; raw[21] = 0U;
+    raw[26] = 0U; raw[27] = 0U;
+    raw[28] = 0U; raw[29] = 0U; raw[30] = 0U; raw[31] = 0U;
 
     return 1;
 }

@@ -316,6 +316,10 @@ static void shell_print_help(void) {
     video_write("  dir      - list files in current directory\n");
     video_write("  type X   - show text file from FAT\n");
     video_write("  copy X Y - copy file X to Y on FAT\n");
+    video_write("  ren X Y  - rename file/dir X to Y (same dir)\n");
+    video_write("  move X Y - move file X to Y or into dir Y\n");
+    video_write("  mkdir X  - create directory X\n");
+    video_write("  rmdir X  - remove empty directory X\n");
     video_write("  del X    - delete file from FAT cache\n");
     video_write("  ascii    - show custom ASCII art\n");
     video_write("  cls      - clear screen\n");
@@ -1146,6 +1150,244 @@ static void shell_copy(const char *args) {
     video_write(" bytes)\n");
 }
 
+static void shell_rename(const char *args) {
+    char old_path[128];
+    char new_name_buf[SHELL_PATH_TOKEN_MAX];
+    fat_dir_entry_t info;
+    const char *second;
+    u32 i;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, old_path, (u32)sizeof(old_path))) {
+        video_write("Usage: ren <old> <new>\n");
+        return;
+    }
+    second = get_second_arg_ptr(args);
+    if (second[0] == '\0') {
+        video_write("Usage: ren <old> <new>\n");
+        return;
+    }
+
+    i = 0;
+    while (second[i] && !is_space((u8)second[i]) && (i + 1U) < (u32)sizeof(new_name_buf)) {
+        new_name_buf[i] = second[i];
+        i++;
+    }
+    new_name_buf[i] = '\0';
+
+    if (i == 0U) {
+        video_write("Usage: ren <old> <new>\n");
+        return;
+    }
+
+    if (!fat_find_file(old_path, &info)) {
+        video_write("File not found: ");
+        write_dos_path(old_path);
+        video_write("\n");
+        return;
+    }
+
+    if (!fat_rename_entry(old_path, new_name_buf)) {
+        video_write("Invalid name or already exists: ");
+        video_write(new_name_buf);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Renamed: ");
+    write_dos_path(old_path);
+    video_write(" -> ");
+    video_write(new_name_buf);
+    video_write("\n");
+}
+
+static void shell_mkdir(const char *args) {
+    char path[SHELL_PATH_MAX];
+    fat_dir_entry_t info;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, path, (u32)sizeof(path))) {
+        video_write("Usage: mkdir <name>\n");
+        return;
+    }
+
+    if (fat_find_file(path, &info)) {
+        if (info.attr & FAT_ATTR_DIRECTORY) {
+            video_write("Already exists: ");
+        } else {
+            video_write("File exists with same name: ");
+        }
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    if (!fat_create_dir(path)) {
+        video_write("Failed (invalid name or disk full): ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Created: ");
+    write_dos_path(path);
+    video_write("\n");
+}
+
+static void shell_rmdir(const char *args) {
+    char path[SHELL_PATH_MAX];
+    fat_dir_entry_t info;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, path, (u32)sizeof(path))) {
+        video_write("Usage: rmdir <name>\n");
+        return;
+    }
+
+    if (!fat_find_file(path, &info)) {
+        video_write("Directory not found: ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+    if ((info.attr & FAT_ATTR_DIRECTORY) == 0U) {
+        video_write("Not a directory: ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    if (!fat_remove_dir(path)) {
+        video_write("Directory not empty: ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Removed: ");
+    write_dos_path(path);
+    video_write("\n");
+}
+
+static void shell_move(const char *args) {
+    char src_path[128];
+    char dst_path[128];
+    fat_dir_entry_t src_info;
+    fat_dir_entry_t dst_info;
+    u32 file_size = 0;
+    const char *second;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, src_path, (u32)sizeof(src_path))) {
+        video_write("Usage: move <src> <dst>\n");
+        return;
+    }
+    second = get_second_arg_ptr(args);
+    if (second[0] == '\0' || !build_arg_path(second, dst_path, (u32)sizeof(dst_path))) {
+        video_write("Usage: move <src> <dst>\n");
+        return;
+    }
+
+    if (!fat_find_file(src_path, &src_info)) {
+        video_write("Source not found: ");
+        write_dos_path(src_path);
+        video_write("\n");
+        return;
+    }
+    if (src_info.attr & FAT_ATTR_DIRECTORY) {
+        video_write("Cannot move directories.\n");
+        return;
+    }
+
+    /* If dst is an existing directory, append source filename into it */
+    if (fat_find_file(dst_path, &dst_info) && (dst_info.attr & FAT_ATTR_DIRECTORY)) {
+        u32 src_len = str_len(src_path);
+        u32 name_start = 0;
+        u32 dlen;
+
+        for (u32 i = src_len; i > 0U; i--) {
+            if (src_path[i - 1U] == '/') {
+                name_start = i;
+                break;
+            }
+        }
+        dlen = str_len(dst_path);
+        if (dlen > 0U && dlen < (u32)sizeof(dst_path) - 1U && dst_path[dlen - 1U] != '/') {
+            dst_path[dlen++] = '/';
+            dst_path[dlen]   = '\0';
+        }
+        for (u32 i = name_start; src_path[i] && dlen < (u32)sizeof(dst_path) - 1U; i++) {
+            dst_path[dlen++] = src_path[i];
+        }
+        dst_path[dlen] = '\0';
+    }
+
+    if (src_info.size > SHELL_FILE_BUFFER_SIZE) {
+        video_write("Source too large.\n");
+        return;
+    }
+    if (!fat_read_file(src_path, g_shell_file_buffer, SHELL_FILE_BUFFER_SIZE, &file_size)) {
+        video_write("Read error: ");
+        write_dos_path(src_path);
+        video_write("\n");
+        return;
+    }
+
+    /* Overwrite destination if it already exists */
+    if (fat_find_file(dst_path, &dst_info)) {
+        if (dst_info.attr & FAT_ATTR_DIRECTORY) {
+            video_write("Destination is a directory: ");
+            write_dos_path(dst_path);
+            video_write("\n");
+            return;
+        }
+        if (dst_info.attr & FAT_ATTR_READ_ONLY) {
+            video_write("Destination is read-only: ");
+            write_dos_path(dst_path);
+            video_write("\n");
+            return;
+        }
+        if (!fat_delete_file(dst_path)) {
+            video_write("Cannot overwrite: ");
+            write_dos_path(dst_path);
+            video_write("\n");
+            return;
+        }
+    }
+
+    if (!fat_write_file(dst_path, g_shell_file_buffer, file_size)) {
+        video_write("Write failed: ");
+        write_dos_path(dst_path);
+        video_write("\n");
+        return;
+    }
+
+    if (!fat_delete_file(src_path)) {
+        video_write("Warning: destination written but source not deleted: ");
+        write_dos_path(src_path);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Moved: ");
+    write_dos_path(src_path);
+    video_write(" -> ");
+    write_dos_path(dst_path);
+    video_write("\n");
+}
+
 static void shell_ascii(void) {
     static const char *g_ascii_art_lines[] = {
         "      _____ _       _ _    _  ___  ____  ",
@@ -1274,6 +1516,26 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "copy")) {
         shell_copy(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "ren") || str_eq(cmd, "rename")) {
+        shell_rename(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "move")) {
+        shell_move(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "mkdir") || str_eq(cmd, "md")) {
+        shell_mkdir(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "rmdir") || str_eq(cmd, "rd")) {
+        shell_rmdir(get_arg_ptr(line));
         return;
     }
 
