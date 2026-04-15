@@ -10,6 +10,7 @@ OVMF_VARS_SRC="/usr/share/edk2/x64/OVMF_VARS.4m.fd"
 OVMF_VARS_DST="$BUILD_DIR/OVMF_VARS.4m.fd"
 IMAGE="$BUILD_DIR/ciukios.img"
 SKIP_STAGE2="${CIUKIOS_SKIP_STAGE2:-0}"
+TRACE_INT="${CIUKIOS_TRACE_INT:-0}"
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -68,15 +69,23 @@ echo "[CiukiOS] Preparing OVMF_VARS..."
 cp "$OVMF_VARS_SRC" "$OVMF_VARS_DST"
 
 echo "[CiukiOS] Starting QEMU..."
+QEMU_ARGS=(
+  -machine q35
+  -m 512M
+  -serial stdio
+  -debugcon file:"$BUILD_DIR/debugcon.log"
+  -global isa-debugcon.iobase=0xe9
+  -no-reboot
+  -no-shutdown
+)
+
+if [[ "$TRACE_INT" == "1" ]]; then
+  echo "[CiukiOS] QEMU interrupt trace enabled (CIUKIOS_TRACE_INT=1)"
+  QEMU_ARGS+=(-d int)
+fi
+
 exec qemu-system-x86_64 \
-  -machine q35 \
-  -m 512M \
-  -serial stdio \
-  -debugcon file:"$BUILD_DIR/debugcon.log" \
-  -global isa-debugcon.iobase=0xe9 \
-  -no-reboot \
-  -no-shutdown \
-  -d int \
+  "${QEMU_ARGS[@]}" \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,file="$OVMF_VARS_DST" \
   -drive format=raw,file="$IMAGE"

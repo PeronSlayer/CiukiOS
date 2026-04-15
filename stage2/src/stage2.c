@@ -3,18 +3,13 @@
 #include "interrupts.h"
 #include "timer.h"
 #include "keyboard.h"
+#include "shell.h"
 #include "bootinfo.h"
 #include "handoff.h"
 
 static void halt_forever(void) {
     for (;;) {
         __asm__ volatile ("cli; hlt");
-    }
-}
-
-static void idle_forever(void) {
-    for (;;) {
-        __asm__ volatile ("hlt");
     }
 }
 
@@ -76,11 +71,12 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ ok ] pic remapped and pit started\n");
 
     stage2_keyboard_init();
-    serial_write("[ ok ] keyboard irq1 logger is ready\n");
+    serial_write("[ ok ] keyboard ring buffer + set1 decoder ready\n");
 
     stage2_enable_interrupts();
     serial_write("[ ok ] interrupts enabled (timer irq0 + keyboard irq1)\n");
+    serial_write("[ ok ] stage2 mini shell ready (help/ticks/mem)\n");
 
     serial_write("[ stage2 ] next step: handoff to DOS-like runtime\n");
-    idle_forever();
+    stage2_shell_run(boot_info, handoff);
 }

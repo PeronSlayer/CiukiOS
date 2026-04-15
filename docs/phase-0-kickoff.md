@@ -54,3 +54,13 @@ Iteration 6 completed:
 1. IRQ1 keyboard path enabled (IDT vector `0x21`) with scancode logger.
 2. PIC master mask updated to unmask both IRQ0 and IRQ1.
 3. Stage2 boot test updated with keyboard-ready checkpoint.
+
+Iteration 7 completed:
+1. Keyboard ring buffer introduced for IRQ1 producer / runtime consumer path.
+2. Minimal Set1 decoder added (make/break + shift + basic extended handling).
+3. `getc` primitives added (non-blocking + blocking) and wired into stage2 runtime loop.
+
+Iteration 8 completed:
+1. Stage2 mini shell loop added (`A:\\>` prompt) on top of keyboard `getc`.
+2. Basic line editing enabled (`backspace`, `enter`, bounded line buffer).
+3. First internal shell commands implemented: `help`, `ticks`, `mem`.

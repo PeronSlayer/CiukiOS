@@ -39,9 +39,11 @@ required_patterns=(
     "[ ok ] stage2 local gdt+tss is active"
     "[ ok ] stage2 local idt is active"
     "[ ok ] pic remapped and pit started"
-    "[ ok ] keyboard irq1 logger is ready"
+    "[ ok ] keyboard ring buffer + set1 decoder ready"
     "[ ok ] interrupts enabled (timer irq0 + keyboard irq1)"
+    "[ ok ] stage2 mini shell ready (help/ticks/mem)"
     "[ tick ] irq0 #0000000000000001"
+    "[ shell ] mini command loop active"
     "[ stage2 ] next step: handoff to DOS-like runtime"
 )
 
