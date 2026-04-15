@@ -1,0 +1,9 @@
+build/
+boot/uefi-loader/build/
+.ciukios-testlogs/
+.claude/
+.vscode/
+
+*.log
+*.img
+*.fd
