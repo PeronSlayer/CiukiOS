@@ -36,6 +36,12 @@ required_patterns=(
     "[ stage2 ] scaffolding started"
     "[ ok ] boot_info is valid"
     "[ ok ] handoff v0 is valid"
+    "[ ok ] stage2 local gdt+tss is active"
+    "[ ok ] stage2 local idt is active"
+    "[ ok ] pic remapped and pit started"
+    "[ ok ] keyboard irq1 logger is ready"
+    "[ ok ] interrupts enabled (timer irq0 + keyboard irq1)"
+    "[ tick ] irq0 #0000000000000001"
     "[ stage2 ] next step: handoff to DOS-like runtime"
 )
 

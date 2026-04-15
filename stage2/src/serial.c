@@ -40,6 +40,12 @@ void serial_write(const char *s) {
     }
 }
 
+void serial_write_hex8(u8 value) {
+    static const char *hex = "0123456789ABCDEF";
+    serial_write_char(hex[(value >> 4) & 0xF]);
+    serial_write_char(hex[value & 0xF]);
+}
+
 void serial_write_hex64(u64 value) {
     static const char *hex = "0123456789ABCDEF";
     for (unsigned int i = 15; i < 16; --i) {
@@ -47,4 +53,3 @@ void serial_write_hex64(u64 value) {
         serial_write_char(hex[nibble]);
     }
 }
-

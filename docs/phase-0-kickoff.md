@@ -40,3 +40,17 @@ Iteration 2 completed:
 Iteration 3 completed:
 1. Automated fallback test (`stage2` missing -> `kernel.elf`).
 2. `make test-fallback` and aggregate `make test-boot` targets.
+
+Iteration 4 completed:
+1. Stage2 local IDT scaffolding with dedicated default interrupt stub.
+2. Stage2 boot test now validates IDT activation checkpoint.
+
+Iteration 5 completed:
+1. Stage2 local GDT/TSS ownership enabled (`lgdt + ltr` + segment reload).
+2. Dedicated exception stubs for `#UD/#GP/#PF` with deterministic serial markers.
+3. PIC remap + PIT setup + IRQ0 tick path validated by automated boot test.
+
+Iteration 6 completed:
+1. IRQ1 keyboard path enabled (IDT vector `0x21`) with scancode logger.
+2. PIC master mask updated to unmask both IRQ0 and IRQ1.
+3. Stage2 boot test updated with keyboard-ready checkpoint.
