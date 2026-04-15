@@ -1,5 +1,5 @@
 #include "shell.h"
-#include "serial.h"
+#include "video.h"
 #include "keyboard.h"
 #include "timer.h"
 
@@ -32,7 +32,7 @@ static int str_eq(const char *a, const char *b) {
 }
 
 static void write_prompt(void) {
-    serial_write("A:\\> ");
+    video_write("A:\\> ");
 }
 
 static void normalize_first_token(const char *line, char *out, u32 out_size) {
@@ -51,38 +51,38 @@ static void normalize_first_token(const char *line, char *out, u32 out_size) {
 }
 
 static void shell_print_help(void) {
-    serial_write("Commands:\n");
-    serial_write("  help  - show this help\n");
-    serial_write("  ticks - show PIT tick counter\n");
-    serial_write("  mem   - show boot memory info\n");
+    video_write("Commands:\n");
+    video_write("  help  - show this help\n");
+    video_write("  ticks - show PIT tick counter\n");
+    video_write("  mem   - show boot memory info\n");
 }
 
 static void shell_print_ticks(void) {
-    serial_write("ticks=0x");
-    serial_write_hex64(stage2_timer_ticks());
-    serial_write("\n");
+    video_write("ticks=0x");
+    video_write_hex64(stage2_timer_ticks());
+    video_write("\n");
 }
 
 static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
-    serial_write("memory_map_ptr=0x");
-    serial_write_hex64(boot_info->memory_map_ptr);
-    serial_write(" size=0x");
-    serial_write_hex64(boot_info->memory_map_size);
-    serial_write(" desc_size=0x");
-    serial_write_hex64(boot_info->memory_map_descriptor_size);
-    serial_write("\n");
+    video_write("memory_map_ptr=0x");
+    video_write_hex64(boot_info->memory_map_ptr);
+    video_write(" size=0x");
+    video_write_hex64(boot_info->memory_map_size);
+    video_write(" desc_size=0x");
+    video_write_hex64(boot_info->memory_map_descriptor_size);
+    video_write("\n");
 
-    serial_write("kernel_phys_base=0x");
-    serial_write_hex64(boot_info->kernel_phys_base);
-    serial_write(" kernel_phys_size=0x");
-    serial_write_hex64(boot_info->kernel_phys_size);
-    serial_write("\n");
+    video_write("kernel_phys_base=0x");
+    video_write_hex64(boot_info->kernel_phys_base);
+    video_write(" kernel_phys_size=0x");
+    video_write_hex64(boot_info->kernel_phys_size);
+    video_write("\n");
 
-    serial_write("stage2_load_addr=0x");
-    serial_write_hex64(handoff->stage2_load_addr);
-    serial_write(" stage2_size=0x");
-    serial_write_hex64(handoff->stage2_size);
-    serial_write("\n");
+    video_write("stage2_load_addr=0x");
+    video_write_hex64(handoff->stage2_load_addr);
+    video_write(" stage2_size=0x");
+    video_write_hex64(handoff->stage2_size);
+    video_write("\n");
 }
 
 static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff) {
@@ -108,14 +108,13 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
-    serial_write("Unknown command. Type 'help'.\n");
+    video_write("Unknown command. Type 'help'.\n");
 }
 
 void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     char line[SHELL_LINE_MAX];
     u32 line_len = 0;
 
-    serial_write("[ shell ] mini command loop active\n");
     write_prompt();
 
     for (;;) {
@@ -132,7 +131,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
         }
 
         if (ascii == '\n') {
-            serial_write("\n");
+            video_putchar('\n');
             line[line_len] = '\0';
             shell_execute_line(line, boot_info, handoff);
             line_len = 0;
@@ -143,7 +142,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
         if (ascii == '\b' || ascii == 0x7F) {
             if (line_len > 0) {
                 line_len--;
-                serial_write("\b \b");
+                video_write("\b \b");
             }
             continue;
         }
@@ -157,13 +156,13 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
         }
 
         if ((line_len + 1) >= SHELL_LINE_MAX) {
-            serial_write("\n[ shell ] input too long\n");
+            video_write("\n[ shell ] input too long\n");
             line_len = 0;
             write_prompt();
             continue;
         }
 
         line[line_len++] = (char)ascii;
-        serial_write_char((char)ascii);
+        video_putchar((char)ascii);
     }
 }

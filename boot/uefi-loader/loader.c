@@ -537,6 +537,28 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     boot_info->kernel_phys_base = kernel_phys_base;
     boot_info->kernel_phys_size = kernel_phys_size;
 
+    {
+        EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
+        EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+        EFI_STATUS gop_status = uefi_call_wrapper(
+            BS->LocateProtocol, 3, &gop_guid, NULL, (VOID **)&gop
+        );
+        if (!EFI_ERROR(gop_status) && gop && gop->Mode && gop->Mode->Info) {
+            boot_info->framebuffer_base   = (UINT64)gop->Mode->FrameBufferBase;
+            boot_info->framebuffer_width  = gop->Mode->Info->HorizontalResolution;
+            boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
+            boot_info->framebuffer_pitch  = gop->Mode->Info->PixelsPerScanLine * 4;
+            boot_info->framebuffer_bpp    = 32;
+            Print(L"Framebuffer: %dx%d pitch=%d @ 0x%lx\r\n",
+                  boot_info->framebuffer_width,
+                  boot_info->framebuffer_height,
+                  boot_info->framebuffer_pitch,
+                  boot_info->framebuffer_base);
+        } else {
+            Print(L"Warning: GOP not found, no framebuffer\r\n");
+        }
+    }
+
     Print(L"entry_point = 0x%lx\r\n", (UINT64)(UINTN)entry_point);
     Print(L"image_phys_base = 0x%lx\r\n", image_phys_base);
     Print(L"image_phys_size = 0x%lx\r\n", image_phys_size);

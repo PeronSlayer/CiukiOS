@@ -1,4 +1,5 @@
 #include "serial.h"
+#include "video.h"
 #include "cpu_tables.h"
 #include "interrupts.h"
 #include "timer.h"
@@ -77,6 +78,9 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ ok ] interrupts enabled (timer irq0 + keyboard irq1)\n");
     serial_write("[ ok ] stage2 mini shell ready (help/ticks/mem)\n");
 
+    video_init(boot_info);
+
+    serial_write("[ shell ] mini command loop active\n");
     serial_write("[ stage2 ] next step: handoff to DOS-like runtime\n");
     stage2_shell_run(boot_info, handoff);
 }
