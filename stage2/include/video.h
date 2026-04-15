@@ -5,6 +5,7 @@
 #include "bootinfo.h"
 
 void video_init(boot_info_t *bi);
+void video_cls(void);
 void video_putchar(char c);
 void video_write(const char *s);
 void video_write_hex64(u64 v);

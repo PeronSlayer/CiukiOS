@@ -76,7 +76,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
     stage2_enable_interrupts();
     serial_write("[ ok ] interrupts enabled (timer irq0 + keyboard irq1)\n");
-    serial_write("[ ok ] stage2 mini shell ready (help/ticks/mem)\n");
+    serial_write("[ ok ] stage2 mini shell ready (help/cls/ver/echo/ticks/mem/shutdown/reboot)\n");
 
     video_init(boot_info);
 

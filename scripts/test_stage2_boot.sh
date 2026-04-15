@@ -41,7 +41,7 @@ required_patterns=(
     "[ ok ] pic remapped and pit started"
     "[ ok ] keyboard ring buffer + set1 decoder ready"
     "[ ok ] interrupts enabled (timer irq0 + keyboard irq1)"
-    "[ ok ] stage2 mini shell ready (help/ticks/mem)"
+    "[ ok ] stage2 mini shell ready (help/cls/ver/echo/ticks/mem/shutdown/reboot)"
     "[ tick ] irq0 #0000000000000001"
     "[ shell ] mini command loop active"
     "[ stage2 ] next step: handoff to DOS-like runtime"

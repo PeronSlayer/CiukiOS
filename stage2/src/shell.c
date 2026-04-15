@@ -20,6 +20,14 @@ static u8 to_lower_ascii(u8 ch) {
     return ch;
 }
 
+static inline void outb_port(u16 port, u8 val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline void outw_port(u16 port, u16 val) {
+    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
 static int str_eq(const char *a, const char *b) {
     while (*a && *b) {
         if (*a != *b) {
@@ -33,6 +41,19 @@ static int str_eq(const char *a, const char *b) {
 
 static void write_prompt(void) {
     video_write("A:\\> ");
+}
+
+static const char *get_arg_ptr(const char *line) {
+    while (*line && is_space((u8)*line)) {
+        line++;
+    }
+    while (*line && !is_space((u8)*line)) {
+        line++;
+    }
+    while (*line && is_space((u8)*line)) {
+        line++;
+    }
+    return line;
 }
 
 static void normalize_first_token(const char *line, char *out, u32 out_size) {
@@ -52,9 +73,45 @@ static void normalize_first_token(const char *line, char *out, u32 out_size) {
 
 static void shell_print_help(void) {
     video_write("Commands:\n");
-    video_write("  help  - show this help\n");
-    video_write("  ticks - show PIT tick counter\n");
-    video_write("  mem   - show boot memory info\n");
+    video_write("  help     - show this help\n");
+    video_write("  cls      - clear screen\n");
+    video_write("  ver      - show OS version\n");
+    video_write("  echo     - print text to screen\n");
+    video_write("  ticks    - show PIT tick counter\n");
+    video_write("  mem      - show boot memory info\n");
+    video_write("  shutdown - power off the machine\n");
+    video_write("  reboot   - reboot the machine\n");
+}
+
+static void shell_cls(void) {
+    video_cls();
+}
+
+static void shell_ver(void) {
+    video_write("CiukiOS Stage2 v0.1 (Phase 0 / DOS bootstrap)\n");
+}
+
+static void shell_echo(const char *args) {
+    video_write(args);
+    video_write("\n");
+}
+
+static void shell_shutdown(void) {
+    video_write("Shutting down...\n");
+    /* ACPI S5 soft-off: QEMU PIIX4 PM1a_CNT at 0x604, SLP_EN (bit 13) */
+    outw_port(0x604, 0x2000);
+    for (;;) {
+        __asm__ volatile ("hlt");
+    }
+}
+
+static void shell_reboot(void) {
+    video_write("Rebooting...\n");
+    /* Keyboard controller system reset pulse via bit 0 of port 0x64 */
+    outb_port(0x64, 0xFE);
+    for (;;) {
+        __asm__ volatile ("hlt");
+    }
 }
 
 static void shell_print_ticks(void) {
@@ -98,6 +155,21 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
+    if (str_eq(cmd, "cls")) {
+        shell_cls();
+        return;
+    }
+
+    if (str_eq(cmd, "ver")) {
+        shell_ver();
+        return;
+    }
+
+    if (str_eq(cmd, "echo")) {
+        shell_echo(get_arg_ptr(line));
+        return;
+    }
+
     if (str_eq(cmd, "ticks")) {
         shell_print_ticks();
         return;
@@ -105,6 +177,16 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "mem")) {
         shell_print_mem(boot_info, handoff);
+        return;
+    }
+
+    if (str_eq(cmd, "shutdown")) {
+        shell_shutdown();
+        return;
+    }
+
+    if (str_eq(cmd, "reboot")) {
+        shell_reboot();
         return;
     }
 

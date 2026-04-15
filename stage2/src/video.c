@@ -167,6 +167,15 @@ static void scroll_up(void) {
     }
 }
 
+void video_cls(void) {
+    if (!g_fb_base) {
+        return;
+    }
+    fb_clear();
+    g_cursor_col = 0;
+    g_cursor_row = 0;
+}
+
 void video_init(boot_info_t *bi) {
     if (!bi || !bi->framebuffer_base) {
         return;
