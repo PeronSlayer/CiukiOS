@@ -10,6 +10,19 @@ typedef enum ciuki_com_exit_reason {
     CIUKI_COM_EXIT_API      = 3
 } ciuki_com_exit_reason_t;
 
+typedef struct ciuki_int21_regs {
+    uint16_t ax;
+    uint16_t bx;
+    uint16_t cx;
+    uint16_t dx;
+    uint16_t si;
+    uint16_t di;
+    uint16_t ds;
+    uint16_t es;
+    uint8_t carry;
+    uint8_t reserved[3];
+} ciuki_int21_regs_t;
+
 typedef struct ciuki_dos_context {
     void *boot_info;
     void *handoff;
@@ -37,6 +50,7 @@ typedef struct ciuki_services {
     void     (*print)(const char *s);
     void     (*print_hex64)(unsigned long long v);
     void     (*cls)(void);
+    void     (*int21)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
     void     (*int20)(ciuki_dos_context_t *ctx);
     void     (*int21_4c)(ciuki_dos_context_t *ctx, uint8_t code);
     void     (*terminate)(ciuki_dos_context_t *ctx, uint8_t code);
