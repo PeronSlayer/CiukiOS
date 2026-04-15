@@ -52,8 +52,8 @@ required_patterns=(
     # FAT layer must mount
     "[ ok ] FAT layer mounted"
 
-    # 'copy' command must appear in the shell-ready banner
-    "type/copy/del"
+    # directory and file management commands must appear in the shell-ready banner
+    "type/copy/ren/move/mkdir/rmdir/del"
 
     # Decimal output from 'dir' is validated structurally by the banner
     # (no hex "0x" in the shell-ready line confirms we haven't regressed)

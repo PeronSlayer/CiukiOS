@@ -4,6 +4,7 @@
 #include "timer.h"
 #include "services.h"
 #include "fat.h"
+#include "dos_mz.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
@@ -315,6 +316,10 @@ static void shell_print_help(void) {
     video_write("  dir      - list files in current directory\n");
     video_write("  type X   - show text file from FAT\n");
     video_write("  copy X Y - copy file X to Y on FAT\n");
+    video_write("  ren X Y  - rename file/dir X to Y (same dir)\n");
+    video_write("  move X Y - move file X to Y or into dir Y\n");
+    video_write("  mkdir X  - create directory X\n");
+    video_write("  rmdir X  - remove empty directory X\n");
     video_write("  del X    - delete file from FAT cache\n");
     video_write("  ascii    - show custom ASCII art\n");
     video_write("  cls      - clear screen\n");
@@ -325,7 +330,7 @@ static void shell_print_help(void) {
     video_write("  shutdown - power off the machine\n");
     video_write("  reboot   - reboot the machine\n");
     video_write("  run      - execute default COM (or INIT.COM)\n");
-    video_write("  run X A  - execute COM with optional args (e.g. run init demo)\n");
+    video_write("  run X A  - run COM or load EXE with optional args\n");
 }
 
 static void shell_cls(void) {
@@ -333,7 +338,7 @@ static void shell_cls(void) {
 }
 
 static void shell_ver(void) {
-    video_write("CiukiOS Stage2 v0.2 (M1 DOS-like COM runtime)\n");
+    video_write("CiukiOS Stage2 v0.3 (M1 COM runtime + EXE MZ loader MVP)\n");
 }
 
 static void shell_echo(const char *args) {
@@ -719,17 +724,34 @@ static void shell_run_staged_image(
 ) {
     ciuki_services_t svc;
     ciuki_dos_context_t ctx;
-    const u8 *image = (const u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
     com_entry_t entry = (com_entry_t)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
+    dos_mz_info_t mz_info;
+    u32 reloc_applied = 0U;
+    u16 load_segment = (u16)(((SHELL_RUNTIME_COM_ADDR >> 4) + 0x10ULL) & 0xFFFFULL);
+    int is_mz = 0;
 
     if (image_size == 0U || image_size > SHELL_RUNTIME_COM_MAX_PAYLOAD) {
         video_write("Invalid COM size.\n");
         return;
     }
 
-    if (image_size >= 2U && image[0] == 'M' && image[1] == 'Z') {
-        video_write("MZ executable detected. .EXE loader not implemented yet.\n");
-        return;
+    if (image_size >= 2U) {
+        const u8 *image = (const u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
+        is_mz = (image[0] == 'M' && image[1] == 'Z');
+    }
+
+    if (is_mz) {
+        if (!dos_mz_build_loaded_image(
+                (u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR,
+                image_size,
+                load_segment,
+                &mz_info,
+                &image_size,
+                &reloc_applied
+            )) {
+            video_write("Invalid MZ executable.\n");
+            return;
+        }
     }
 
     local_memset(&ctx, 0U, (u32)sizeof(ctx));
@@ -738,6 +760,9 @@ static void shell_run_staged_image(
     ctx.exit_reason = (u8)CIUKI_COM_EXIT_RETURN;
     ctx.exit_code = 0U;
     shell_prepare_psp(&ctx, image_size, tail);
+    if (is_mz) {
+        ctx.image_linear = SHELL_RUNTIME_COM_ENTRY_ADDR + (u64)mz_info.entry_offset;
+    }
 
     svc.print = video_write;
     svc.print_hex64 = video_write_hex64;
@@ -757,6 +782,18 @@ static void shell_run_staged_image(
     video_write(" entry=0x");
     video_write_hex64(ctx.image_linear);
     video_write("\n");
+
+    if (is_mz) {
+        video_write("MZ loaded: bytes=0x");
+        video_write_hex64((u64)image_size);
+        video_write(" reloc=0x");
+        video_write_hex64((u64)reloc_applied);
+        video_write(" load_seg=0x");
+        video_write_hex64((u64)load_segment);
+        video_write("\n");
+        video_write("MZ runtime dispatch pending (16-bit execution path).\n");
+        return;
+    }
 
     entry(&ctx, &svc);
     shell_print_com_exit(&ctx);
@@ -1113,6 +1150,244 @@ static void shell_copy(const char *args) {
     video_write(" bytes)\n");
 }
 
+static void shell_rename(const char *args) {
+    char old_path[128];
+    char new_name_buf[SHELL_PATH_TOKEN_MAX];
+    fat_dir_entry_t info;
+    const char *second;
+    u32 i;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, old_path, (u32)sizeof(old_path))) {
+        video_write("Usage: ren <old> <new>\n");
+        return;
+    }
+    second = get_second_arg_ptr(args);
+    if (second[0] == '\0') {
+        video_write("Usage: ren <old> <new>\n");
+        return;
+    }
+
+    i = 0;
+    while (second[i] && !is_space((u8)second[i]) && (i + 1U) < (u32)sizeof(new_name_buf)) {
+        new_name_buf[i] = second[i];
+        i++;
+    }
+    new_name_buf[i] = '\0';
+
+    if (i == 0U) {
+        video_write("Usage: ren <old> <new>\n");
+        return;
+    }
+
+    if (!fat_find_file(old_path, &info)) {
+        video_write("File not found: ");
+        write_dos_path(old_path);
+        video_write("\n");
+        return;
+    }
+
+    if (!fat_rename_entry(old_path, new_name_buf)) {
+        video_write("Invalid name or already exists: ");
+        video_write(new_name_buf);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Renamed: ");
+    write_dos_path(old_path);
+    video_write(" -> ");
+    video_write(new_name_buf);
+    video_write("\n");
+}
+
+static void shell_mkdir(const char *args) {
+    char path[SHELL_PATH_MAX];
+    fat_dir_entry_t info;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, path, (u32)sizeof(path))) {
+        video_write("Usage: mkdir <name>\n");
+        return;
+    }
+
+    if (fat_find_file(path, &info)) {
+        if (info.attr & FAT_ATTR_DIRECTORY) {
+            video_write("Already exists: ");
+        } else {
+            video_write("File exists with same name: ");
+        }
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    if (!fat_create_dir(path)) {
+        video_write("Failed (invalid name or disk full): ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Created: ");
+    write_dos_path(path);
+    video_write("\n");
+}
+
+static void shell_rmdir(const char *args) {
+    char path[SHELL_PATH_MAX];
+    fat_dir_entry_t info;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, path, (u32)sizeof(path))) {
+        video_write("Usage: rmdir <name>\n");
+        return;
+    }
+
+    if (!fat_find_file(path, &info)) {
+        video_write("Directory not found: ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+    if ((info.attr & FAT_ATTR_DIRECTORY) == 0U) {
+        video_write("Not a directory: ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    if (!fat_remove_dir(path)) {
+        video_write("Directory not empty: ");
+        write_dos_path(path);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Removed: ");
+    write_dos_path(path);
+    video_write("\n");
+}
+
+static void shell_move(const char *args) {
+    char src_path[128];
+    char dst_path[128];
+    fat_dir_entry_t src_info;
+    fat_dir_entry_t dst_info;
+    u32 file_size = 0;
+    const char *second;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+    if (!build_arg_path(args, src_path, (u32)sizeof(src_path))) {
+        video_write("Usage: move <src> <dst>\n");
+        return;
+    }
+    second = get_second_arg_ptr(args);
+    if (second[0] == '\0' || !build_arg_path(second, dst_path, (u32)sizeof(dst_path))) {
+        video_write("Usage: move <src> <dst>\n");
+        return;
+    }
+
+    if (!fat_find_file(src_path, &src_info)) {
+        video_write("Source not found: ");
+        write_dos_path(src_path);
+        video_write("\n");
+        return;
+    }
+    if (src_info.attr & FAT_ATTR_DIRECTORY) {
+        video_write("Cannot move directories.\n");
+        return;
+    }
+
+    /* If dst is an existing directory, append source filename into it */
+    if (fat_find_file(dst_path, &dst_info) && (dst_info.attr & FAT_ATTR_DIRECTORY)) {
+        u32 src_len = str_len(src_path);
+        u32 name_start = 0;
+        u32 dlen;
+
+        for (u32 i = src_len; i > 0U; i--) {
+            if (src_path[i - 1U] == '/') {
+                name_start = i;
+                break;
+            }
+        }
+        dlen = str_len(dst_path);
+        if (dlen > 0U && dlen < (u32)sizeof(dst_path) - 1U && dst_path[dlen - 1U] != '/') {
+            dst_path[dlen++] = '/';
+            dst_path[dlen]   = '\0';
+        }
+        for (u32 i = name_start; src_path[i] && dlen < (u32)sizeof(dst_path) - 1U; i++) {
+            dst_path[dlen++] = src_path[i];
+        }
+        dst_path[dlen] = '\0';
+    }
+
+    if (src_info.size > SHELL_FILE_BUFFER_SIZE) {
+        video_write("Source too large.\n");
+        return;
+    }
+    if (!fat_read_file(src_path, g_shell_file_buffer, SHELL_FILE_BUFFER_SIZE, &file_size)) {
+        video_write("Read error: ");
+        write_dos_path(src_path);
+        video_write("\n");
+        return;
+    }
+
+    /* Overwrite destination if it already exists */
+    if (fat_find_file(dst_path, &dst_info)) {
+        if (dst_info.attr & FAT_ATTR_DIRECTORY) {
+            video_write("Destination is a directory: ");
+            write_dos_path(dst_path);
+            video_write("\n");
+            return;
+        }
+        if (dst_info.attr & FAT_ATTR_READ_ONLY) {
+            video_write("Destination is read-only: ");
+            write_dos_path(dst_path);
+            video_write("\n");
+            return;
+        }
+        if (!fat_delete_file(dst_path)) {
+            video_write("Cannot overwrite: ");
+            write_dos_path(dst_path);
+            video_write("\n");
+            return;
+        }
+    }
+
+    if (!fat_write_file(dst_path, g_shell_file_buffer, file_size)) {
+        video_write("Write failed: ");
+        write_dos_path(dst_path);
+        video_write("\n");
+        return;
+    }
+
+    if (!fat_delete_file(src_path)) {
+        video_write("Warning: destination written but source not deleted: ");
+        write_dos_path(src_path);
+        video_write("\n");
+        return;
+    }
+
+    video_write("Moved: ");
+    write_dos_path(src_path);
+    video_write(" -> ");
+    write_dos_path(dst_path);
+    video_write("\n");
+}
+
 static void shell_ascii(void) {
     static const char *g_ascii_art_lines[] = {
         "      _____ _       _ _    _  ___  ____  ",
@@ -1241,6 +1516,26 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "copy")) {
         shell_copy(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "ren") || str_eq(cmd, "rename")) {
+        shell_rename(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "move")) {
+        shell_move(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "mkdir") || str_eq(cmd, "md")) {
+        shell_mkdir(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "rmdir") || str_eq(cmd, "rd")) {
+        shell_rmdir(get_arg_ptr(line));
         return;
     }
 
