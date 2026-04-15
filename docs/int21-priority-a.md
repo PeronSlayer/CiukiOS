@@ -1,37 +1,38 @@
 # INT 21h - Priority A (Compatibility Bootstrap)
 
 ## Goal
-Implement first the functions that unlock basic shell and program execution.
+Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compatibility work.
 
-## Minimum Priority-A Set
-1. `AH=09h` - print `$`-terminated string.
-2. `AH=02h` - output character in `DL`.
-3. `AH=01h` - input character with echo.
-4. `AH=08h` - input character without echo.
-5. `AH=4Ch` - terminate process with return code.
-6. `AH=25h` - set interrupt vector.
-7. `AH=35h` - get interrupt vector.
-8. `AH=48h` - allocate memory block.
-9. `AH=49h` - free memory block.
-10. `AH=4Ah` - resize memory block.
+## Implemented in Stage2 (Current)
+1. `AH=00h` - terminate program (`INT 20h` equivalent path).
+2. `AH=01h` - blocking char input with echo (returns char in `AL`).
+3. `AH=02h` - output character in `DL` (returns char in `AL`).
+4. `AH=08h` - blocking char input without echo.
+5. `AH=09h` - print `$`-terminated string.
+6. `AH=19h` - get current default drive (`AL=0`, drive `A:`).
+7. `AH=25h` - set interrupt vector (stores far pointer from `DS:DX`).
+8. `AH=30h` - get DOS version (`6.22`).
+9. `AH=35h` - get interrupt vector (returns far pointer in `ES:BX`).
+10. `AH=4Ch` - terminate process with return code.
 
-## Minimal File I/O Subset (A2)
-1. `AH=3Ch` - create file.
-2. `AH=3Dh` - open file.
-3. `AH=3Eh` - close file.
-4. `AH=3Fh` - read file/device.
-5. `AH=40h` - write file/device.
-6. `AH=41h` - delete file.
-7. `AH=42h` - lseek.
+## Deterministic Stubs (Not Fully Implemented Yet)
+1. `AH=48h` - allocate memory block: returns `CF=1`, `AX=0008h`.
+2. `AH=49h` - free memory block: returns `CF=1`, `AX=0009h`.
+3. `AH=4Ah` - resize memory block: returns `CF=1`, `AX=0008h`.
+
+These stubs are intentional until MCB-style allocator work is completed in roadmap M2.
+
+## Unsupported Function Behavior
+1. Any non-implemented `AH` returns deterministic error:
+2. `CF=1`, `AX=0001h` (invalid function number).
+
+## Next Priority-A Extensions
+1. Formal memory allocator backend for `48h/49h/4Ah`.
+2. Handle-based file APIs (`3Ch-42h`) behind INT 21h.
+3. Additional DOS error code mapping consistency checks.
 
 ## Test Criteria per Function
 1. Nominal case.
 2. Error case.
 3. Correct flags/return code (`CF`, `AX`).
-
-## Recommended Implementation Order
-1. Console (`01h/02h/08h/09h`).
-2. Process exit (`4Ch`).
-3. Memory (`48h/49h/4Ah`).
-4. Vectors (`25h/35h`).
-5. File I/O (`3Ch-42h`).
+4. Stable behavior across repeated calls (idempotent errors where expected).

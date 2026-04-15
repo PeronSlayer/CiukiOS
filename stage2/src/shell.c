@@ -641,12 +641,21 @@ static void shell_com_int20(ciuki_dos_context_t *ctx) {
 }
 
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
+static u32 g_int21_vectors[256];
 
 static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
     if (!ctx || off >= ctx->image_size) {
         return (void *)0;
     }
     return (void *)(ctx->image_linear + (u64)off);
+}
+
+static u8 shell_int21_read_char_blocking(void) {
+    u8 ch = stage2_keyboard_getc_blocking();
+    if (ch == '\n') {
+        return '\r';
+    }
+    return ch;
 }
 
 static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
@@ -663,6 +672,7 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
 
     if (ah == 0x02U) {
         video_putchar((char)(regs->dx & 0x00FFU));
+        regs->ax = (u16)((regs->ax & 0xFF00U) | (regs->dx & 0x00FFU));
         return;
     }
 
@@ -684,6 +694,46 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
             }
             video_putchar(ch);
         }
+        regs->ax = (u16)((regs->ax & 0xFF00U) | 0x24U);
+        return;
+    }
+
+    if (ah == 0x01U) {
+        u8 ch = shell_int21_read_char_blocking();
+        if (ch == '\r') {
+            video_putchar('\n');
+        } else {
+            video_putchar((char)ch);
+        }
+        regs->ax = (u16)((regs->ax & 0xFF00U) | ch);
+        return;
+    }
+
+    if (ah == 0x08U) {
+        u8 ch = shell_int21_read_char_blocking();
+        regs->ax = (u16)((regs->ax & 0xFF00U) | ch);
+        return;
+    }
+
+    if (ah == 0x19U) {
+        /* A: = 0 */
+        regs->ax = (u16)((regs->ax & 0xFF00U) | 0x00U);
+        return;
+    }
+
+    if (ah == 0x25U) {
+        /* Set interrupt vector: AL=index, DS:DX=far ptr */
+        u8 vec = (u8)(regs->ax & 0x00FFU);
+        g_int21_vectors[vec] = ((u32)regs->ds << 16) | (u32)regs->dx;
+        return;
+    }
+
+    if (ah == 0x35U) {
+        /* Get interrupt vector: AL=index -> ES:BX */
+        u8 vec = (u8)(regs->ax & 0x00FFU);
+        u32 far_ptr = g_int21_vectors[vec];
+        regs->bx = (u16)(far_ptr & 0xFFFFU);
+        regs->es = (u16)((far_ptr >> 16) & 0xFFFFU);
         return;
     }
 
@@ -692,6 +742,34 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         regs->ax = 0x1606U;
         regs->bx = 0x0000U;
         regs->cx = 0x0000U;
+        return;
+    }
+
+    if (ah == 0x48U) {
+        /* Allocate memory block (paras) - deterministic stub until MCB allocator exists. */
+        regs->carry = 1U;
+        regs->ax = 0x0008U; /* insufficient memory */
+        regs->bx = 0x0000U; /* max available paragraphs unknown */
+        return;
+    }
+
+    if (ah == 0x49U) {
+        /* Free memory block - deterministic stub. */
+        regs->carry = 1U;
+        regs->ax = 0x0009U; /* invalid memory block address */
+        return;
+    }
+
+    if (ah == 0x4AU) {
+        /* Resize memory block - deterministic stub until allocator exists. */
+        regs->carry = 1U;
+        regs->ax = 0x0008U; /* insufficient memory */
+        regs->bx = 0x0000U;
+        return;
+    }
+
+    if (ah == 0x00U) {
+        shell_com_int20(ctx);
         return;
     }
 
