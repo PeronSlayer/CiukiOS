@@ -899,6 +899,36 @@ int fat_read_file(const char *path, void *out, u32 out_capacity, u32 *out_size) 
  * --------------------------------------------------------------------- */
 
 /*
+ * Returns 1 if `token` is the special dot (".") or dot-dot ("..") name.
+ * These names must never be used as targets of write/rename/delete operations.
+ */
+static int fat_is_dot_or_dotdot(const char *token) {
+    if (!token) {
+        return 0;
+    }
+    if (token[0] == '.' && token[1] == '\0') {
+        return 1; /* "." */
+    }
+    if (token[0] == '.' && token[1] == '.' && token[2] == '\0') {
+        return 1; /* ".." */
+    }
+    return 0;
+}
+
+/*
+ * Returns 1 if the last component of `path` is "." or "..".
+ * Used to guard write-path functions from operating on special entries.
+ */
+static int fat_path_ends_in_dot(const char *path) {
+    char tokens[FAT_PATH_MAX_TOKENS][FAT_TOKEN_MAX];
+    u32 count = 0U;
+    if (!parse_path_tokens(path, tokens, &count) || count == 0U) {
+        return 0;
+    }
+    return fat_is_dot_or_dotdot(tokens[count - 1U]);
+}
+
+/*
  * Validate a single character for use in a DOS 8.3 filename.
  * Accepts A-Z, 0-9 and a subset of printable specials. Spaces and
  * path-separator characters are rejected.
@@ -1066,6 +1096,11 @@ static int fat_write_cluster_data(u32 start_cluster, const u8 *data, u32 size) {
     const u8 *src = data;
     u32 remaining = size;
     u32 guard = g_fs.total_clusters + 4U;
+
+    /* C3: reject obviously invalid chain head — cluster 0 and 1 are reserved */
+    if (start_cluster < 2U) {
+        return 0;
+    }
 
     while (remaining > 0U && guard-- > 0U) {
         u32 first_sector = cluster_first_sector(cluster);
@@ -1250,6 +1285,11 @@ int fat_write_file(const char *path, const void *data, u32 size) {
         return 0;
     }
 
+    /* C4: reject '.' and '..' as target name */
+    if (fat_is_dot_or_dotdot(tokens[token_count - 1U])) {
+        return 0;
+    }
+
     /* Validate and produce the 11-byte 8.3 name from the last token */
     if (!fat_normalize_83_name(tokens[token_count - 1U], name83)) {
         return 0;
@@ -1272,7 +1312,19 @@ int fat_write_file(const char *path, const void *data, u32 size) {
     /* Allocate cluster chain for the data (skip if size == 0) */
     if (size > 0U) {
         u32 cluster_bytes = g_fs.sectors_per_cluster * g_fs.bytes_per_sector;
-        u32 cluster_count = (size + cluster_bytes - 1U) / cluster_bytes;
+        u32 cluster_count;
+
+        /* C3: guard against zero cluster size (corrupt geometry) */
+        if (cluster_bytes == 0U) {
+            return 0;
+        }
+
+        cluster_count = (size + cluster_bytes - 1U) / cluster_bytes;
+
+        /* C3: guard against file too large for volume */
+        if (cluster_count > g_fs.total_clusters) {
+            return 0;
+        }
 
         if (!fat_alloc_chain(cluster_count, &start_cluster)) {
             return 0;
@@ -1334,6 +1386,11 @@ int fat_rename_entry(const char *old_path, const char *new_name) {
         return 0;
     }
 
+    /* C4: reject '.' and '..' as old-path target */
+    if (fat_is_dot_or_dotdot(tokens[token_count - 1U])) {
+        return 0;
+    }
+
     /* Locate old entry + its directory slot */
     if (!fat_locate_path_entry(old_path, &old_entry, &old_slot)) {
         return 0;
@@ -1345,6 +1402,11 @@ int fat_rename_entry(const char *old_path, const char *new_name) {
         new_upper[i] = (char)to_upper_ascii((u8)new_name[i]);
     }
     new_upper[i] = '\0';
+
+    /* C4: reject '.' and '..' as new name */
+    if (fat_is_dot_or_dotdot(new_upper)) {
+        return 0;
+    }
 
     /* Validate and produce the 11-byte padded 8.3 representation */
     if (!fat_normalize_83_name(new_upper, new_name83)) {
@@ -1400,6 +1462,11 @@ int fat_create_dir(const char *path) {
         return 0;
     }
     if (!parse_path_tokens(path, tokens, &token_count) || token_count == 0U) {
+        return 0;
+    }
+
+    /* C4: reject '.' and '..' as target name */
+    if (fat_is_dot_or_dotdot(tokens[token_count - 1U])) {
         return 0;
     }
 
@@ -1514,6 +1581,11 @@ int fat_remove_dir(const char *path) {
         return 0;
     }
 
+    /* C4: explicit rejection of '.' and '..' */
+    if (fat_path_ends_in_dot(path)) {
+        return 0;
+    }
+
     if (!fat_locate_path_entry(path, &entry, &slot)) {
         return 0;
     }
@@ -1568,6 +1640,12 @@ int fat_set_attr(const char *path, u8 attr) {
     if (!g_fs.mounted || !path) {
         return 0;
     }
+
+    /* C4: explicit rejection of '.' and '..' */
+    if (fat_path_ends_in_dot(path)) {
+        return 0;
+    }
+
     if (!fat_locate_path_entry(path, &entry, &slot)) {
         return 0;
     }
@@ -1591,6 +1669,11 @@ int fat_delete_file(const char *path) {
     u8 *raw;
 
     if (!g_fs.mounted || !path) {
+        return 0;
+    }
+
+    /* C4: explicit rejection of '.' and '..' */
+    if (fat_path_ends_in_dot(path)) {
         return 0;
     }
 

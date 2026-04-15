@@ -47,27 +47,51 @@ fi
 # ---------------------------------------------------------------------------
 # Pattern checks
 # ---------------------------------------------------------------------------
+#
+# Required patterns — assert the FAT layer and shell reached a clean state.
+# These cover:
+#   - disk cache availability (prerequisite for FAT rw)
+#   - FAT mount with rw-cache mode confirmed
+#   - shell-ready banner lists all M3 file management commands
+#   - mini command loop activated (shell entered successfully)
+#   - stage2 reached the DOS-runtime handoff point without panic
+#
+# Forbidden patterns — guard against regressions in FAT walk and CPU state:
+#   - panic and invalid-opcode catch any hard faults
+#   - fat: bad cluster / fat: chain error catch walk-path corruption
+#   - tick #100 catchs runaway loops that skip the FAT/shell init
+# ---------------------------------------------------------------------------
 
 required_patterns=(
-    # FAT layer must mount
-    "[ ok ] FAT layer mounted"
-
-    # directory and file management commands must appear in the shell-ready banner
-    "type/copy/ren/move/mkdir/rmdir/attrib/del"
-
-    # Decimal output from 'dir' is validated structurally by the banner
-    # (no hex "0x" in the shell-ready line confirms we haven't regressed)
+    # Disk cache must be available before FAT can mount
     "[ ok ] disk cache layer is available"
 
-    # Shell must reach command loop
+    # FAT layer must mount in rw-cache mode (exact string — catches mode downgrade)
+    "[ ok ] FAT layer mounted (rw cache)"
+
+    # Shell-ready banner must list all M3 file management commands
+    "type/copy/ren/move/mkdir/rmdir/attrib/del"
+
+    # Shell must enter command loop
     "[ shell ] mini command loop active"
+
+    # stage2 must reach DOS-runtime handoff without aborting
+    "[ stage2 ] next step: handoff to DOS-like runtime"
 )
 
 forbidden_patterns=(
-    # Guard against regressions in FAT walk
+    # Hard CPU faults
     "[ panic ]"
-    "fat: bad cluster"
     "Invalid Opcode"
+    "#UD"
+
+    # FAT walk / chain corruption
+    "fat: bad cluster"
+    "fat: chain error"
+    "fat: corrupt entry"
+
+    # Runaway timer — tick 100 means init loop never completed
+    "[ tick ] irq0 #0000000000000064"
 )
 
 PASS=0
@@ -93,12 +117,19 @@ for pattern in "${forbidden_patterns[@]}"; do
     fi
 done
 
+EXPECTED_PASS=$(( ${#required_patterns[@]} + ${#forbidden_patterns[@]} ))
+
 echo ""
-echo "[test-fat-compat] results: $PASS passed, $FAIL failed"
+echo "[test-fat-compat] results: $PASS passed, $FAIL failed (expected $EXPECTED_PASS total checks)"
 
 if [[ $FAIL -gt 0 ]]; then
     echo "[FAIL] FAT compatibility test FAILED" >&2
     exit 1
 fi
 
-echo "[PASS] FAT compatibility test completed"
+if [[ $PASS -lt $EXPECTED_PASS ]]; then
+    echo "[FAIL] fewer checks passed than expected ($PASS < $EXPECTED_PASS)" >&2
+    exit 1
+fi
+
+echo "[PASS] FAT compatibility test completed ($PASS/$EXPECTED_PASS)"
