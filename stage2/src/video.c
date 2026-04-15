@@ -6,8 +6,8 @@
 #define FONT_H  8
 
 /* BGRA 32bpp pixel values (little-endian u32: 0x00RRGGBB -> bytes B,G,R,X) */
-#define COLOR_FG  0x00C0C0C0U   /* light gray */
-#define COLOR_BG  0x00000000U   /* black */
+#define DEFAULT_COLOR_FG  0x00C0C0C0U   /* light gray */
+#define DEFAULT_COLOR_BG  0x00000000U   /* black */
 
 /* 8x8 bitmap font, printable ASCII 0x20..0x7E (95 glyphs).
    Each glyph is 8 bytes; each byte is one scanline, bit 7 = leftmost pixel. */
@@ -115,14 +115,38 @@ static u32  g_height;
 static u32  g_pitch;   /* bytes per scanline */
 static u32  g_cols;    /* text columns */
 static u32  g_rows;    /* text rows */
+static u32  g_text_start_row; /* reserved top rows (e.g. title bar) */
+static u32  g_text_rows;      /* writable text rows from text window */
 static u32  g_cursor_col;
 static u32  g_cursor_row;
+static u32  g_color_fg;
+static u32  g_color_bg;
 
 static void fb_clear(void) {
     u32 *px = (u32 *)g_fb_base;
     u32  total = (g_pitch / 4) * g_height;
     for (u32 i = 0; i < total; i++) {
-        px[i] = COLOR_BG;
+        px[i] = g_color_bg;
+    }
+}
+
+static void clear_text_area(void) {
+    u32 y0;
+    u32 rows_px;
+    u32 clear_px;
+    u32 *px;
+
+    if (!g_fb_base) {
+        return;
+    }
+
+    y0 = g_text_start_row * FONT_H;
+    rows_px = g_height - y0;
+    clear_px = (g_pitch / 4) * rows_px;
+    px = (u32 *)((u8 *)g_fb_base + (u64)y0 * g_pitch);
+
+    for (u32 i = 0; i < clear_px; i++) {
+        px[i] = g_color_bg;
     }
 }
 
@@ -144,26 +168,40 @@ static void draw_char(u32 col, u32 row, char c) {
         u32 *scanline = (u32 *)((u8 *)g_fb_base + (y0 + py) * g_pitch);
         for (px = 0; px < FONT_W; px++) {
             u32 bit = (row_bits >> (FONT_W - 1 - px)) & 1u;
-            scanline[x0 + px] = bit ? COLOR_FG : COLOR_BG;
+            scanline[x0 + px] = bit ? g_color_fg : g_color_bg;
         }
     }
 }
 
 static void scroll_up(void) {
-    /* Copy rows 1..g_rows-1 to rows 0..g_rows-2 */
-    u8 *dst = (u8 *)g_fb_base;
-    u8 *src = (u8 *)g_fb_base + (u64)FONT_H * g_pitch;
-    u32 copy_bytes = (g_rows - 1) * FONT_H * g_pitch;
+    u32 text_px_h;
+    u8 *dst;
+    u8 *src;
+    u8 *last;
+    u32 copy_bytes;
+    u32 clear_bytes;
+
+    if (g_text_rows <= 1) {
+        return;
+    }
+
+    text_px_h = g_text_rows * FONT_H;
+    dst = (u8 *)g_fb_base + (u64)g_text_start_row * FONT_H * g_pitch;
+    src = dst + (u64)FONT_H * g_pitch;
+    copy_bytes = (text_px_h - FONT_H) * g_pitch;
 
     for (u32 i = 0; i < copy_bytes; i++) {
         dst[i] = src[i];
     }
 
-    /* Clear last text row */
-    u8 *last = (u8 *)g_fb_base + (u64)(g_rows - 1) * FONT_H * g_pitch;
-    u32 clear_bytes = FONT_H * g_pitch;
-    for (u32 i = 0; i < clear_bytes; i++) {
-        last[i] = 0;
+    last = dst + (u64)(text_px_h - FONT_H) * g_pitch;
+    clear_bytes = FONT_H * g_pitch;
+    {
+        u32 *last_px = (u32 *)last;
+        u32 total_px = clear_bytes / 4;
+        for (u32 i = 0; i < total_px; i++) {
+            last_px[i] = g_color_bg;
+        }
     }
 }
 
@@ -171,7 +209,7 @@ void video_cls(void) {
     if (!g_fb_base) {
         return;
     }
-    fb_clear();
+    clear_text_area();
     g_cursor_col = 0;
     g_cursor_row = 0;
 }
@@ -187,8 +225,12 @@ void video_init(boot_info_t *bi) {
     g_pitch      = bi->framebuffer_pitch;
     g_cols       = g_width  / FONT_W;
     g_rows       = g_height / FONT_H;
+    g_text_start_row = 0;
+    g_text_rows = g_rows;
     g_cursor_col = 0;
     g_cursor_row = 0;
+    g_color_fg = DEFAULT_COLOR_FG;
+    g_color_bg = DEFAULT_COLOR_BG;
 
     fb_clear();
 }
@@ -201,9 +243,9 @@ void video_putchar(char c) {
     if (c == '\n') {
         g_cursor_col = 0;
         g_cursor_row++;
-        if (g_cursor_row >= g_rows) {
+        if (g_cursor_row >= g_text_rows) {
             scroll_up();
-            g_cursor_row = g_rows - 1;
+            g_cursor_row = g_text_rows - 1;
         }
         return;
     }
@@ -220,15 +262,15 @@ void video_putchar(char c) {
         return;
     }
 
-    draw_char(g_cursor_col, g_cursor_row, c);
+    draw_char(g_cursor_col, g_text_start_row + g_cursor_row, c);
     g_cursor_col++;
 
     if (g_cursor_col >= g_cols) {
         g_cursor_col = 0;
         g_cursor_row++;
-        if (g_cursor_row >= g_rows) {
+        if (g_cursor_row >= g_text_rows) {
             scroll_up();
-            g_cursor_row = g_rows - 1;
+            g_cursor_row = g_text_rows - 1;
         }
     }
 }
@@ -259,4 +301,54 @@ void video_write_hex8(u8 v) {
     buf[1] = hex[v & 0xFu];
     buf[2] = '\0';
     video_write(buf);
+}
+
+void video_set_cursor(u32 col, u32 row) {
+    if (!g_fb_base) {
+        return;
+    }
+
+    if (g_cols == 0) {
+        g_cursor_col = 0;
+    } else if (col >= g_cols) {
+        g_cursor_col = g_cols - 1;
+    } else {
+        g_cursor_col = col;
+    }
+
+    if (g_text_rows == 0) {
+        g_cursor_row = 0;
+    } else if (row >= g_text_rows) {
+        g_cursor_row = g_text_rows - 1;
+    } else {
+        g_cursor_row = row;
+    }
+}
+
+void video_set_colors(u32 fg, u32 bg) {
+    g_color_fg = fg;
+    g_color_bg = bg;
+}
+
+void video_set_text_window(u32 start_row) {
+    if (!g_fb_base) {
+        return;
+    }
+
+    if (g_rows == 0) {
+        g_text_start_row = 0;
+        g_text_rows = 1;
+    } else if (start_row >= g_rows) {
+        g_text_start_row = g_rows - 1;
+        g_text_rows = 1;
+    } else {
+        g_text_start_row = start_row;
+        g_text_rows = g_rows - g_text_start_row;
+    }
+
+    video_cls();
+}
+
+u32 video_columns(void) {
+    return g_cols;
 }

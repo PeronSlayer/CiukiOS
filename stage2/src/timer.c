@@ -83,7 +83,7 @@ void stage2_timer_init(void) {
 void stage2_timer_on_irq0(void) {
     g_timer_ticks++;
 
-    if (g_timer_ticks == 1 || (g_timer_ticks % 100ULL) == 0) {
+    if (g_timer_ticks == 1) {
         serial_write("[ tick ] irq0 #");
         serial_write_hex64(g_timer_ticks);
         serial_write("\n");

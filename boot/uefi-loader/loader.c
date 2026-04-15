@@ -72,6 +72,88 @@ static VOID dump_kernel_entry_bytes(stage_entry_t entry) {
     Print(L"\r\n");
 }
 
+static CHAR16 ascii_upper_char16(CHAR16 ch) {
+    if (ch >= L'a' && ch <= L'z') {
+        return (CHAR16)(ch - (L'a' - L'A'));
+    }
+    return ch;
+}
+
+static BOOLEAN char16_ends_with_com(const CHAR16 *name) {
+    UINTN len = 0;
+    while (name[len] != 0) {
+        len++;
+    }
+
+    if (len < 4) {
+        return FALSE;
+    }
+
+    return ascii_upper_char16(name[len - 4]) == L'.' &&
+           ascii_upper_char16(name[len - 3]) == L'C' &&
+           ascii_upper_char16(name[len - 2]) == L'O' &&
+           ascii_upper_char16(name[len - 1]) == L'M';
+}
+
+static BOOLEAN char16_to_ascii_upper(const CHAR16 *src, CHAR8 *dst, UINTN dst_size) {
+    UINTN i = 0;
+
+    if (!src || !dst || dst_size == 0) {
+        return FALSE;
+    }
+
+    while (src[i] != 0) {
+        CHAR16 ch = ascii_upper_char16(src[i]);
+        if (ch > 0x7F || (i + 1) >= dst_size) {
+            return FALSE;
+        }
+        dst[i] = (CHAR8)ch;
+        i++;
+    }
+
+    dst[i] = '\0';
+    return i > 0;
+}
+
+static BOOLEAN ascii_eq(const CHAR8 *a, const CHAR8 *b) {
+    UINTN i = 0;
+    while (a[i] != '\0' && b[i] != '\0') {
+        if (a[i] != b[i]) {
+            return FALSE;
+        }
+        i++;
+    }
+    return a[i] == '\0' && b[i] == '\0';
+}
+
+static BOOLEAN build_ciukios_path(const CHAR16 *file_name, CHAR16 *out_path, UINTN out_cap) {
+    static const CHAR16 prefix[] = L"\\EFI\\CiukiOS\\";
+    UINTN i = 0;
+    UINTN j = 0;
+
+    if (!file_name || !out_path || out_cap == 0) {
+        return FALSE;
+    }
+
+    while (prefix[i] != 0) {
+        if ((j + 1) >= out_cap) {
+            return FALSE;
+        }
+        out_path[j++] = prefix[i++];
+    }
+
+    i = 0;
+    while (file_name[i] != 0) {
+        if ((j + 1) >= out_cap) {
+            return FALSE;
+        }
+        out_path[j++] = file_name[i++];
+    }
+
+    out_path[j] = 0;
+    return TRUE;
+}
+
 static EFI_STATUS alloc_pages_below_4g(
     UINTN pages,
     EFI_MEMORY_TYPE type,
@@ -171,6 +253,54 @@ static EFI_STATUS open_root_dir(EFI_HANDLE image, EFI_FILE_PROTOCOL **root) {
     return uefi_call_wrapper(fs->OpenVolume, 2, fs, root);
 }
 
+static EFI_STATUS open_ciukios_dir(EFI_HANDLE image, EFI_FILE_PROTOCOL **dir) {
+    EFI_STATUS status;
+    EFI_FILE_PROTOCOL *root = NULL;
+
+    status = open_root_dir(image, &root);
+    if (EFI_ERROR(status)) {
+        return status;
+    }
+
+    status = uefi_call_wrapper(
+        root->Open,
+        5,
+        root,
+        dir,
+        L"\\EFI\\CiukiOS",
+        EFI_FILE_MODE_READ,
+        0
+    );
+
+    uefi_call_wrapper(root->Close, 1, root);
+    return status;
+}
+
+static EFI_STATUS open_boot_block_io(EFI_HANDLE image, EFI_BLOCK_IO_PROTOCOL **block_io) {
+    EFI_STATUS status;
+    EFI_LOADED_IMAGE_PROTOCOL *loaded_image = NULL;
+
+    status = uefi_call_wrapper(
+        BS->HandleProtocol,
+        3,
+        image,
+        &LoadedImageProtocol,
+        (void **)&loaded_image
+    );
+    if (EFI_ERROR(status)) {
+        return status;
+    }
+
+    status = uefi_call_wrapper(
+        BS->HandleProtocol,
+        3,
+        loaded_image->DeviceHandle,
+        &BlockIoProtocol,
+        (void **)block_io
+    );
+    return status;
+}
+
 static EFI_STATUS read_file(
     EFI_HANDLE image,
     CHAR16 *path,
@@ -227,6 +357,222 @@ static EFI_STATUS read_file(
     uefi_call_wrapper(file->Close, 1, file);
 
     return status;
+}
+
+static BOOLEAN handoff_add_com_entry(
+    handoff_v0_t *handoff,
+    const CHAR8 *name,
+    EFI_PHYSICAL_ADDRESS base,
+    UINTN size
+) {
+    UINTN idx = (UINTN)handoff->com_count;
+    handoff_com_entry_t *entry;
+    UINTN i = 0;
+
+    if (idx >= HANDOFF_COM_MAX) {
+        return FALSE;
+    }
+
+    entry = &handoff->com_entries[idx];
+    mem_zero(entry, sizeof(*entry));
+
+    while (name[i] != '\0' && i < HANDOFF_COM_NAME_MAX) {
+        entry->name[i] = (char)name[i];
+        i++;
+    }
+    entry->name[i] = '\0';
+    entry->phys_base = (UINT64)base;
+    entry->size = (UINT64)size;
+
+    handoff->com_count = (UINT64)(idx + 1);
+
+    if (handoff->com_phys_base == 0 || ascii_eq(name, (const CHAR8 *)"INIT.COM")) {
+        handoff->com_phys_base = (UINT64)base;
+        handoff->com_phys_size = (UINT64)size;
+    }
+
+    return TRUE;
+}
+
+static EFI_STATUS load_com_catalog(EFI_HANDLE image, handoff_v0_t *handoff) {
+    EFI_STATUS status;
+    EFI_FILE_PROTOCOL *dir = NULL;
+    UINT8 info_buffer[SIZE_OF_EFI_FILE_INFO + 512 * sizeof(CHAR16)];
+
+    handoff->com_phys_base = 0;
+    handoff->com_phys_size = 0;
+    handoff->com_count = 0;
+    mem_zero(handoff->com_entries, sizeof(handoff->com_entries));
+
+    status = open_ciukios_dir(image, &dir);
+    if (EFI_ERROR(status)) {
+        Print(L"Warning: cannot open \\EFI\\CiukiOS (%r)\r\n", status);
+        return EFI_SUCCESS;
+    }
+
+    for (;;) {
+        UINTN info_size = sizeof(info_buffer);
+        EFI_FILE_INFO *info;
+
+        status = uefi_call_wrapper(dir->Read, 3, dir, &info_size, info_buffer);
+        if (EFI_ERROR(status)) {
+            Print(L"Warning: directory read failed (%r)\r\n", status);
+            break;
+        }
+        if (info_size == 0) {
+            break;
+        }
+
+        info = (EFI_FILE_INFO *)(VOID *)info_buffer;
+        if ((info->Attribute & EFI_FILE_DIRECTORY) != 0) {
+            continue;
+        }
+        if (!char16_ends_with_com(info->FileName)) {
+            continue;
+        }
+
+        if (handoff->com_count >= HANDOFF_COM_MAX) {
+            Print(L"Warning: COM catalog full (max %d entries)\r\n", HANDOFF_COM_MAX);
+            break;
+        }
+
+        {
+            CHAR8 com_name[HANDOFF_COM_NAME_MAX + 1];
+            CHAR16 path[260];
+            VOID *com_buffer = NULL;
+            UINTN com_size = 0;
+            EFI_PHYSICAL_ADDRESS com_addr = 0;
+            EFI_STATUS load_status;
+
+            if (!char16_to_ascii_upper(info->FileName, com_name, sizeof(com_name))) {
+                Print(L"Warning: skip COM with unsupported name\r\n");
+                continue;
+            }
+
+            if (!build_ciukios_path(info->FileName, path, sizeof(path) / sizeof(path[0]))) {
+                Print(L"Warning: COM path too long, skipping\r\n");
+                continue;
+            }
+
+            load_status = read_file(image, path, &com_buffer, &com_size);
+            if (EFI_ERROR(load_status) || com_size == 0) {
+                Print(L"Warning: cannot load COM %a (%r)\r\n", com_name, load_status);
+                continue;
+            }
+
+            load_status = alloc_pages_below_4g(bytes_to_pages(com_size), EfiLoaderCode, &com_addr);
+            if (EFI_ERROR(load_status)) {
+                Print(L"Warning: cannot allocate COM memory for %a (%r)\r\n", com_name, load_status);
+                uefi_call_wrapper(BS->FreePool, 1, com_buffer);
+                continue;
+            }
+
+            mem_copy((VOID *)(UINTN)com_addr, com_buffer, com_size);
+            uefi_call_wrapper(BS->FreePool, 1, com_buffer);
+
+            if (!handoff_add_com_entry(handoff, com_name, com_addr, com_size)) {
+                Print(L"Warning: failed to register COM %a\r\n", com_name);
+                continue;
+            }
+
+            Print(L"COM loaded: %a (%d bytes) @ 0x%lx\r\n", com_name, com_size, com_addr);
+        }
+    }
+
+    uefi_call_wrapper(dir->Close, 1, dir);
+
+    if (handoff->com_count == 0) {
+        Print(L"No COM programs found in \\EFI\\CiukiOS\r\n");
+    } else {
+        Print(L"COM catalog ready: %d entries\r\n", (UINTN)handoff->com_count);
+    }
+
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS load_disk_cache(EFI_HANDLE image, handoff_v0_t *handoff) {
+    EFI_STATUS status;
+    EFI_BLOCK_IO_PROTOCOL *block_io = NULL;
+    EFI_BLOCK_IO_MEDIA *media;
+    UINT64 total_lbas;
+    UINT64 chosen_lbas;
+    UINT64 cache_bytes_u64;
+    UINTN cache_bytes;
+    EFI_PHYSICAL_ADDRESS cache_addr;
+
+    handoff->disk_cache_phys_base = 0;
+    handoff->disk_cache_byte_size = 0;
+    handoff->disk_cache_lba_start = 0;
+    handoff->disk_cache_lba_count = 0;
+    handoff->disk_cache_block_size = 0;
+    handoff->disk_cache_flags = 0;
+
+    status = open_boot_block_io(image, &block_io);
+    if (EFI_ERROR(status) || !block_io || !block_io->Media) {
+        Print(L"Warning: BlockIO not available (%r)\r\n", status);
+        return EFI_SUCCESS;
+    }
+
+    media = block_io->Media;
+    if (!media->MediaPresent || media->BlockSize == 0) {
+        Print(L"Warning: boot media not present for disk cache\r\n");
+        return EFI_SUCCESS;
+    }
+
+    total_lbas = media->LastBlock + 1ULL;
+    chosen_lbas = total_lbas;
+
+    if (chosen_lbas > (HANDOFF_DISK_CACHE_MAX_BYTES / media->BlockSize)) {
+        chosen_lbas = (HANDOFF_DISK_CACHE_MAX_BYTES / media->BlockSize);
+    }
+    if (chosen_lbas == 0) {
+        Print(L"Warning: disk cache computed as zero blocks\r\n");
+        return EFI_SUCCESS;
+    }
+
+    cache_bytes_u64 = chosen_lbas * (UINT64)media->BlockSize;
+    if (cache_bytes_u64 > 0xFFFFFFFFULL) {
+        Print(L"Warning: disk cache too large for current build\r\n");
+        return EFI_SUCCESS;
+    }
+
+    cache_bytes = (UINTN)cache_bytes_u64;
+    status = alloc_pages_below_4g(bytes_to_pages(cache_bytes), EfiLoaderData, &cache_addr);
+    if (EFI_ERROR(status)) {
+        Print(L"Warning: cannot allocate disk cache (%r)\r\n", status);
+        return EFI_SUCCESS;
+    }
+
+    mem_zero((VOID *)(UINTN)cache_addr, bytes_to_pages(cache_bytes) * PAGE_SIZE);
+
+    status = uefi_call_wrapper(
+        block_io->ReadBlocks,
+        5,
+        block_io,
+        media->MediaId,
+        0,
+        cache_bytes,
+        (VOID *)(UINTN)cache_addr
+    );
+    if (EFI_ERROR(status)) {
+        Print(L"Warning: ReadBlocks failed for disk cache (%r)\r\n", status);
+        return EFI_SUCCESS;
+    }
+
+    handoff->disk_cache_phys_base = (UINT64)cache_addr;
+    handoff->disk_cache_byte_size = (UINT64)cache_bytes;
+    handoff->disk_cache_lba_start = 0;
+    handoff->disk_cache_lba_count = chosen_lbas;
+    handoff->disk_cache_block_size = media->BlockSize;
+    handoff->disk_cache_flags = 1;
+
+    Print(L"Disk cache ready: lba_count=%ld block=%d bytes=0x%lx @ 0x%lx\r\n",
+          chosen_lbas,
+          media->BlockSize,
+          cache_bytes,
+          cache_addr);
+
+    return EFI_SUCCESS;
 }
 
 static EFI_STATUS load_elf_image(
@@ -511,35 +857,25 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     kernel_phys_base = image_phys_base;
     kernel_phys_size = image_phys_size;
 
-    /* Try to load INIT.COM at fixed physical address 0x600000 (6 MB) */
-    {
-        VOID *com_buffer = NULL;
-        UINTN com_size = 0;
-        EFI_STATUS com_status = read_file(
-            image, L"\\EFI\\CiukiOS\\INIT.COM", &com_buffer, &com_size
-        );
-        if (!EFI_ERROR(com_status) && com_size > 0) {
-            EFI_PHYSICAL_ADDRESS com_addr = 0x600000ULL;
-            UINTN com_pages = bytes_to_pages(com_size);
-            EFI_STATUS alloc_status = uefi_call_wrapper(
-                BS->AllocatePages, 4,
-                AllocateAddress, EfiLoaderCode, com_pages, &com_addr
-            );
-            if (!EFI_ERROR(alloc_status)) {
-                mem_copy((VOID *)(UINTN)com_addr, com_buffer, com_size);
-                handoff->com_phys_base = (UINT64)com_addr;
-                handoff->com_phys_size = (UINT64)com_size;
-                Print(L"INIT.COM loaded: %d bytes @ 0x%lx\r\n", com_size, com_addr);
-            } else {
-                Print(L"Warning: could not allocate memory for INIT.COM\r\n");
-                handoff->com_phys_base = 0;
-                handoff->com_phys_size = 0;
-            }
-            uefi_call_wrapper(BS->FreePool, 1, com_buffer);
-        } else {
-            Print(L"INIT.COM not found (optional)\r\n");
+    if (using_stage2) {
+        status = load_com_catalog(image, handoff);
+        if (EFI_ERROR(status)) {
+            Print(L"Warning: COM catalog load failed (%r)\r\n", status);
             handoff->com_phys_base = 0;
             handoff->com_phys_size = 0;
+            handoff->com_count = 0;
+            mem_zero(handoff->com_entries, sizeof(handoff->com_entries));
+        }
+
+        status = load_disk_cache(image, handoff);
+        if (EFI_ERROR(status)) {
+            Print(L"Warning: disk cache load failed (%r)\r\n", status);
+            handoff->disk_cache_phys_base = 0;
+            handoff->disk_cache_byte_size = 0;
+            handoff->disk_cache_lba_start = 0;
+            handoff->disk_cache_lba_count = 0;
+            handoff->disk_cache_block_size = 0;
+            handoff->disk_cache_flags = 0;
         }
     }
 

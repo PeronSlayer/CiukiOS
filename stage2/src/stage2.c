@@ -5,6 +5,8 @@
 #include "timer.h"
 #include "keyboard.h"
 #include "shell.h"
+#include "disk.h"
+#include "fat.h"
 #include "bootinfo.h"
 #include "handoff.h"
 
@@ -12,6 +14,36 @@ static void halt_forever(void) {
     for (;;) {
         __asm__ volatile ("cli; hlt");
     }
+}
+
+static u32 local_strlen(const char *s) {
+    u32 n = 0;
+    while (s[n] != '\0') {
+        n++;
+    }
+    return n;
+}
+
+static void draw_title_bar(void) {
+    const char *title = "CiukiOS";
+    u32 cols = video_columns();
+    u32 title_len = local_strlen(title);
+    u32 start_col = 0;
+
+    video_set_colors(0x00000000U, 0x00FFFFFFU); /* black on white */
+    video_set_cursor(0, 0);
+    for (u32 i = 0; i < cols; i++) {
+        video_putchar(' ');
+    }
+
+    if (cols > title_len) {
+        start_col = (cols - title_len) / 2;
+    }
+    video_set_cursor(start_col, 0);
+    video_write(title);
+
+    video_set_colors(0x00C0C0C0U, 0x00000000U); /* restore shell colors */
+    video_set_text_window(1);                   /* reserve top row for title bar */
 }
 
 void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
@@ -76,9 +108,23 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
     stage2_enable_interrupts();
     serial_write("[ ok ] interrupts enabled (timer irq0 + keyboard irq1)\n");
-    serial_write("[ ok ] stage2 mini shell ready (help/cls/ver/echo/ticks/mem/shutdown/reboot)\n");
+    serial_write("[ ok ] stage2 mini shell ready (help/dir/type/ascii/cls/ver/echo/ticks/mem/run/shutdown/reboot)\n");
 
     video_init(boot_info);
+    draw_title_bar();
+
+    stage2_disk_init(handoff);
+    if (stage2_disk_ready()) {
+        serial_write("[ ok ] disk cache layer is available\n");
+    } else {
+        serial_write("[ warn ] disk cache layer unavailable\n");
+    }
+
+    if (fat_init()) {
+        serial_write("[ ok ] FAT readonly layer mounted\n");
+    } else {
+        serial_write("[ warn ] FAT readonly layer not mounted\n");
+    }
 
     serial_write("[ shell ] mini command loop active\n");
     serial_write("[ stage2 ] next step: handoff to DOS-like runtime\n");

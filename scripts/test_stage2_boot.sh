@@ -32,6 +32,7 @@ fi
 
 required_patterns=(
     "stage2.elf loaded into memory"
+    "COM catalog ready:"
     "Stage2 ELF loaded, leaving Boot Services"
     "[ stage2 ] scaffolding started"
     "[ ok ] boot_info is valid"
@@ -41,8 +42,10 @@ required_patterns=(
     "[ ok ] pic remapped and pit started"
     "[ ok ] keyboard ring buffer + set1 decoder ready"
     "[ ok ] interrupts enabled (timer irq0 + keyboard irq1)"
-    "[ ok ] stage2 mini shell ready (help/cls/ver/echo/ticks/mem/shutdown/reboot)"
+    "[ ok ] stage2 mini shell ready (help/dir/type/ascii/cls/ver/echo/ticks/mem/run/shutdown/reboot)"
     "[ tick ] irq0 #0000000000000001"
+    "[ ok ] disk cache layer is available"
+    "[ ok ] FAT readonly layer mounted"
     "[ shell ] mini command loop active"
     "[ stage2 ] next step: handoff to DOS-like runtime"
 )
@@ -51,6 +54,7 @@ forbidden_patterns=(
     "Invalid Opcode"
     "#UD"
     "Can't find image information"
+    "[ tick ] irq0 #0000000000000064"
     "[ panic ]"
 )
 
