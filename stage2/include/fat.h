@@ -26,6 +26,7 @@ int fat_list_dir(const char *path, fat_dir_enum_cb_t cb, void *ctx);
 int fat_find_file(const char *path, fat_dir_entry_t *out);
 int fat_read_file(const char *path, void *out, u32 out_capacity, u32 *out_size);
 int fat_write_file(const char *path, const void *data, u32 size);
+int fat_set_attr(const char *path, u8 attr);
 int fat_rename_entry(const char *old_path, const char *new_name);
 int fat_create_dir(const char *path);
 int fat_remove_dir(const char *path);

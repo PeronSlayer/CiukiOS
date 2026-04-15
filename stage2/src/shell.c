@@ -14,9 +14,14 @@
 #define SHELL_RUNTIME_COM_ENTRY_ADDR (SHELL_RUNTIME_COM_ADDR + SHELL_RUNTIME_PSP_SIZE)
 #define SHELL_RUNTIME_COM_MAX_PAYLOAD (SHELL_RUNTIME_COM_MAX_SIZE - SHELL_RUNTIME_PSP_SIZE)
 #define SHELL_RUNTIME_TAIL_MAX 126U
+#define SHELL_EXE32_MARKER_SIZE 8U
 #define SHELL_PATH_MAX 128
 #define SHELL_PATH_MAX_TOKENS 16
 #define SHELL_PATH_TOKEN_MAX 13
+
+static const u8 g_exe32_marker[SHELL_EXE32_MARKER_SIZE] = {
+    'C', 'I', 'U', 'K', 'E', 'X', '6', '4'
+};
 
 static u8 g_shell_file_buffer[SHELL_FILE_BUFFER_SIZE];
 static char g_shell_cwd[SHELL_PATH_MAX] = "/EFI/CIUKIOS";
@@ -320,6 +325,8 @@ static void shell_print_help(void) {
     video_write("  move X Y - move file X to Y or into dir Y\n");
     video_write("  mkdir X  - create directory X\n");
     video_write("  rmdir X  - remove empty directory X\n");
+    video_write("  attrib X - show file attributes\n");
+    video_write("  attrib +r|-r|+a|-a X - set/clear attribute\n");
     video_write("  del X    - delete file from FAT cache\n");
     video_write("  ascii    - show custom ASCII art\n");
     video_write("  cls      - clear screen\n");
@@ -630,6 +637,70 @@ static void shell_com_int20(ciuki_dos_context_t *ctx) {
     ctx->exit_code = 0U;
 }
 
+static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
+
+static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
+    if (!ctx || off >= ctx->image_size) {
+        return (void *)0;
+    }
+    return (void *)(ctx->image_linear + (u64)off);
+}
+
+static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
+    u8 ah;
+    u8 al;
+
+    if (!ctx || !regs) {
+        return;
+    }
+
+    ah = (u8)((regs->ax >> 8) & 0xFFU);
+    al = (u8)(regs->ax & 0xFFU);
+    regs->carry = 0U;
+
+    if (ah == 0x02U) {
+        video_putchar((char)(regs->dx & 0x00FFU));
+        return;
+    }
+
+    if (ah == 0x09U) {
+        const char *s = (const char *)shell_ctx_ptr_from_offset(ctx, regs->dx);
+        u32 guard = 0;
+        if (!s) {
+            regs->carry = 1U;
+            regs->ax = 0x0006U;
+            return;
+        }
+        while (guard++ < ctx->image_size) {
+            char ch = *s++;
+            if (ch == '$') {
+                break;
+            }
+            if (ch == '\0') {
+                break;
+            }
+            video_putchar(ch);
+        }
+        return;
+    }
+
+    if (ah == 0x30U) {
+        /* DOS version 6.22 -> AL=6, AH=22 (0x16) */
+        regs->ax = 0x1606U;
+        regs->bx = 0x0000U;
+        regs->cx = 0x0000U;
+        return;
+    }
+
+    if (ah == 0x4CU) {
+        shell_com_int21_4c(ctx, al);
+        return;
+    }
+
+    regs->carry = 1U;
+    regs->ax = 0x0001U;
+}
+
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code) {
     if (!ctx) {
         return;
@@ -767,6 +838,7 @@ static void shell_run_staged_image(
     svc.print = video_write;
     svc.print_hex64 = video_write_hex64;
     svc.cls = video_cls;
+    svc.int21 = shell_com_int21;
     svc.int20 = shell_com_int20;
     svc.int21_4c = shell_com_int21_4c;
     svc.terminate = shell_com_terminate;
@@ -784,6 +856,17 @@ static void shell_run_staged_image(
     video_write("\n");
 
     if (is_mz) {
+        const u8 *module = (const u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
+        int marker_ok = 1;
+        u32 stub_entry_off;
+
+        for (u32 i = 0; i < SHELL_EXE32_MARKER_SIZE; i++) {
+            if (i >= image_size || module[i] != g_exe32_marker[i]) {
+                marker_ok = 0;
+                break;
+            }
+        }
+
         video_write("MZ loaded: bytes=0x");
         video_write_hex64((u64)image_size);
         video_write(" reloc=0x");
@@ -791,7 +874,30 @@ static void shell_run_staged_image(
         video_write(" load_seg=0x");
         video_write_hex64((u64)load_segment);
         video_write("\n");
-        video_write("MZ runtime dispatch pending (16-bit execution path).\n");
+
+        if (!marker_ok || image_size < 12U) {
+            video_write("MZ runtime dispatch pending (16-bit execution path).\n");
+            return;
+        }
+
+        stub_entry_off = (u32)module[8]
+                       | ((u32)module[9] << 8)
+                       | ((u32)module[10] << 16)
+                       | ((u32)module[11] << 24);
+
+        if (stub_entry_off >= image_size) {
+            video_write("MZ dispatch marker invalid entry offset.\n");
+            return;
+        }
+
+        ctx.image_linear = SHELL_RUNTIME_COM_ENTRY_ADDR + (u64)stub_entry_off;
+        entry = (com_entry_t)ctx.image_linear;
+        video_write("MZ dispatch (CIUKEX64): entry=0x");
+        video_write_hex64(ctx.image_linear);
+        video_write("\n");
+
+        entry(&ctx, &svc);
+        shell_print_com_exit(&ctx);
         return;
     }
 
@@ -1085,6 +1191,12 @@ static void shell_copy(const char *args) {
         return;
     }
 
+    /* Same-file detection */
+    if (str_eq_nocase(src_path, dst_path)) {
+        video_write("Source and destination are the same.\n");
+        return;
+    }
+
     /* Validate source */
     if (!fat_find_file(src_path, &src_info)) {
         video_write("Source not found: ");
@@ -1181,6 +1293,14 @@ static void shell_rename(const char *args) {
     if (i == 0U) {
         video_write("Usage: ren <old> <new>\n");
         return;
+    }
+
+    /* Reject cross-directory rename (path separators in new name) */
+    for (u32 j = 0; new_name_buf[j]; j++) {
+        if (new_name_buf[j] == '/' || new_name_buf[j] == '\\') {
+            video_write("Cross-directory rename not supported.\n");
+            return;
+        }
     }
 
     if (!fat_find_file(old_path, &info)) {
@@ -1300,6 +1420,12 @@ static void shell_move(const char *args) {
         return;
     }
 
+    /* Same-file detection (before directory expansion) */
+    if (str_eq_nocase(src_path, dst_path)) {
+        video_write("Source and destination are the same.\n");
+        return;
+    }
+
     if (!fat_find_file(src_path, &src_info)) {
         video_write("Source not found: ");
         write_dos_path(src_path);
@@ -1386,6 +1512,111 @@ static void shell_move(const char *args) {
     video_write(" -> ");
     write_dos_path(dst_path);
     video_write("\n");
+}
+
+/*
+ * attrib [+r|-r] [+a|-a] <path>
+ * With no modifier: displays attributes.  With modifier: toggles R/A bits.
+ * Format: RHSA flags (R=read-only, H=hidden, S=system, A=archive).
+ */
+static void shell_attrib(const char *args) {
+    char first[16];
+    char path[SHELL_PATH_MAX];
+    fat_dir_entry_t info;
+    u8 attr;
+    u8 bit;
+    char sign;
+    char flag;
+    const char *p = args;
+    u32 i = 0;
+
+    if (!fat_ready()) {
+        video_write("FAT layer not ready.\n");
+        return;
+    }
+
+    /* Skip leading spaces */
+    while (*p && is_space((u8)*p)) { p++; }
+
+    /* Extract first token */
+    i = 0;
+    while (*p && !is_space((u8)*p) && (i + 1U) < (u32)sizeof(first)) {
+        first[i++] = *p++;
+    }
+    first[i] = '\0';
+
+    if (i == 0U) {
+        video_write("Usage: attrib [+r|-r|+a|-a] <path>\n");
+        return;
+    }
+
+    if (first[0] == '+' || first[0] == '-') {
+        /* Modifier mode: first token is flag, rest is path */
+        sign = first[0];
+        flag = (char)to_lower_ascii((u8)(i > 1U ? first[1] : 0));
+
+        while (*p && is_space((u8)*p)) { p++; }
+        if (*p == '\0') {
+            video_write("Usage: attrib [+r|-r|+a|-a] <path>\n");
+            return;
+        }
+        if (!build_canonical_path(p, path, (u32)sizeof(path))) {
+            video_write("Usage: attrib [+r|-r|+a|-a] <path>\n");
+            return;
+        }
+
+        if (!fat_find_file(path, &info)) {
+            video_write("Not found: ");
+            write_dos_path(path);
+            video_write("\n");
+            return;
+        }
+
+        bit = 0U;
+        if (flag == 'r') { bit = FAT_ATTR_READ_ONLY; }
+        else if (flag == 'a') { bit = FAT_ATTR_ARCHIVE; }
+        else if (flag == 'h') { bit = FAT_ATTR_HIDDEN; }
+        else if (flag == 's') { bit = FAT_ATTR_SYSTEM; }
+        else {
+            video_write("Unknown flag (use r, a, h, s).\n");
+            return;
+        }
+
+        attr = info.attr;
+        if (sign == '+') { attr = (u8)(attr | bit); }
+        else             { attr = (u8)(attr & ~bit); }
+
+        if (!fat_set_attr(path, attr)) {
+            video_write("Failed to set attribute.\n");
+            return;
+        }
+
+        video_write("Updated: ");
+        write_dos_path(path);
+        video_write("\n");
+    } else {
+        /* Display mode: first token is the path */
+        if (!build_canonical_path(first, path, (u32)sizeof(path))) {
+            video_write("Usage: attrib [+r|-r|+a|-a] <path>\n");
+            return;
+        }
+
+        if (!fat_find_file(path, &info)) {
+            video_write("Not found: ");
+            write_dos_path(path);
+            video_write("\n");
+            return;
+        }
+
+        attr = info.attr;
+        video_write(attr & FAT_ATTR_READ_ONLY ? "R" : " ");
+        video_write(attr & FAT_ATTR_HIDDEN    ? "H" : " ");
+        video_write(attr & FAT_ATTR_SYSTEM    ? "S" : " ");
+        video_write(attr & FAT_ATTR_ARCHIVE   ? "A" : " ");
+        video_write("  ");
+        write_dos_path(path);
+        video_write("\n");
+    }
 }
 
 static void shell_ascii(void) {
@@ -1536,6 +1767,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "rmdir") || str_eq(cmd, "rd")) {
         shell_rmdir(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "attrib")) {
+        shell_attrib(get_arg_ptr(line));
         return;
     }
 

@@ -1554,6 +1554,36 @@ int fat_remove_dir(const char *path) {
     return 1;
 }
 
+/*
+ * Update the attribute byte of an existing file or directory entry.
+ * DIRECTORY and VOLUME_ID bits in attr are silently cleared to protect
+ * the directory tree structure.
+ * Returns 1 on success, 0 on failure.
+ */
+int fat_set_attr(const char *path, u8 attr) {
+    fat_dir_entry_t entry;
+    fat_dir_slot_t slot;
+    u8 *sector;
+
+    if (!g_fs.mounted || !path) {
+        return 0;
+    }
+    if (!fat_locate_path_entry(path, &entry, &slot)) {
+        return 0;
+    }
+
+    /* Preserve DIRECTORY and VOLUME_ID bits from the on-disk entry */
+    attr = (u8)((attr & ~(FAT_ATTR_DIRECTORY | FAT_ATTR_VOLUME_ID)) |
+                (entry.attr & (FAT_ATTR_DIRECTORY | FAT_ATTR_VOLUME_ID)));
+
+    sector = stage2_disk_lba_ptr_rw(slot.lba);
+    if (!sector) {
+        return 0;
+    }
+    sector[slot.offset + 11U] = attr;
+    return 1;
+}
+
 int fat_delete_file(const char *path) {
     fat_dir_entry_t entry;
     fat_dir_slot_t slot;
