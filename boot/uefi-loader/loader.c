@@ -511,6 +511,38 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     kernel_phys_base = image_phys_base;
     kernel_phys_size = image_phys_size;
 
+    /* Try to load INIT.COM at fixed physical address 0x600000 (6 MB) */
+    {
+        VOID *com_buffer = NULL;
+        UINTN com_size = 0;
+        EFI_STATUS com_status = read_file(
+            image, L"\\EFI\\CiukiOS\\INIT.COM", &com_buffer, &com_size
+        );
+        if (!EFI_ERROR(com_status) && com_size > 0) {
+            EFI_PHYSICAL_ADDRESS com_addr = 0x600000ULL;
+            UINTN com_pages = bytes_to_pages(com_size);
+            EFI_STATUS alloc_status = uefi_call_wrapper(
+                BS->AllocatePages, 4,
+                AllocateAddress, EfiLoaderCode, com_pages, &com_addr
+            );
+            if (!EFI_ERROR(alloc_status)) {
+                mem_copy((VOID *)(UINTN)com_addr, com_buffer, com_size);
+                handoff->com_phys_base = (UINT64)com_addr;
+                handoff->com_phys_size = (UINT64)com_size;
+                Print(L"INIT.COM loaded: %d bytes @ 0x%lx\r\n", com_size, com_addr);
+            } else {
+                Print(L"Warning: could not allocate memory for INIT.COM\r\n");
+                handoff->com_phys_base = 0;
+                handoff->com_phys_size = 0;
+            }
+            uefi_call_wrapper(BS->FreePool, 1, com_buffer);
+        } else {
+            Print(L"INIT.COM not found (optional)\r\n");
+            handoff->com_phys_base = 0;
+            handoff->com_phys_size = 0;
+        }
+    }
+
     status = build_bootstrap_paging(&new_cr3);
     if (EFI_ERROR(status)) {
         Print(L"Error building bootstrap paging: %r\r\n", status);

@@ -65,6 +65,11 @@ else
     mcopy -i "$IMAGE" "$BUILD_DIR/stage2.elf" ::EFI/CiukiOS/stage2.elf
 fi
 
+if [[ -f "$BUILD_DIR/INIT.COM" ]]; then
+    mcopy -i "$IMAGE" "$BUILD_DIR/INIT.COM" ::EFI/CiukiOS/INIT.COM
+    echo "[CiukiOS] INIT.COM copied to image"
+fi
+
 echo "[CiukiOS] Preparing OVMF_VARS..."
 cp "$OVMF_VARS_SRC" "$OVMF_VARS_DST"
 

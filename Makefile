@@ -21,6 +21,11 @@ STAGE2_CFLAGS := $(COMMON_CFLAGS) -Istage2/include -Iboot/proto
 KERNEL_LDFLAGS := -nostdlib -z max-page-size=0x1000 -T kernel/linker.ld
 STAGE2_LDFLAGS := -nostdlib -z max-page-size=0x1000 -T stage2/linker.ld
 
+COM_CFLAGS := $(COMMON_CFLAGS) -Iboot/proto
+COM_HELLO_SRC := com/hello/hello.c
+COM_HELLO_ELF := build/INIT.COM.elf
+COM_HELLO_BIN := build/INIT.COM
+
 KERNEL_C_SRCS := $(shell find kernel/src -type f -name '*.c')
 KERNEL_S_SRCS := $(shell find kernel/src -type f -name '*.S')
 STAGE2_C_SRCS := $(shell find stage2/src -type f -name '*.c')
@@ -36,7 +41,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS)
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -59,6 +64,12 @@ build/obj/stage2/%.o: stage2/src/%.c | build
 build/obj/stage2/%.o: stage2/src/%.S | build
 	@mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) $< -o $@
+
+$(COM_HELLO_BIN): $(COM_HELLO_SRC) com/hello/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_HELLO_SRC) -o build/obj/com/hello.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/hello/linker.ld -o $(COM_HELLO_ELF) build/obj/com/hello.o
+	llvm-objcopy -O binary $(COM_HELLO_ELF) $(COM_HELLO_BIN)
 
 build:
 	@mkdir -p build

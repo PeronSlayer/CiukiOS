@@ -2,6 +2,7 @@
 #include "video.h"
 #include "keyboard.h"
 #include "timer.h"
+#include "services.h"
 
 #define SHELL_LINE_MAX 128
 
@@ -81,6 +82,7 @@ static void shell_print_help(void) {
     video_write("  mem      - show boot memory info\n");
     video_write("  shutdown - power off the machine\n");
     video_write("  reboot   - reboot the machine\n");
+    video_write("  run      - execute loaded INIT.COM\n");
 }
 
 static void shell_cls(void) {
@@ -94,6 +96,25 @@ static void shell_ver(void) {
 static void shell_echo(const char *args) {
     video_write(args);
     video_write("\n");
+}
+
+static void shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
+    if (handoff->com_phys_base == 0) {
+        video_write("No COM loaded.\n");
+        return;
+    }
+
+    ciuki_services_t svc;
+    svc.print       = video_write;
+    svc.print_hex64 = video_write_hex64;
+    svc.cls         = video_cls;
+
+    video_write("Executing COM @ 0x");
+    video_write_hex64(handoff->com_phys_base);
+    video_write("\n");
+
+    com_entry_t entry = (com_entry_t)(u64)handoff->com_phys_base;
+    entry(boot_info, handoff, &svc);
 }
 
 static void shell_shutdown(void) {
@@ -187,6 +208,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "reboot")) {
         shell_reboot();
+        return;
+    }
+
+    if (str_eq(cmd, "run")) {
+        shell_run(boot_info, handoff);
         return;
     }
 
