@@ -347,7 +347,7 @@ static void shell_cls(void) {
 }
 
 static void shell_ver(void) {
-    video_write("CiukiOS Stage2 v0.3 (M1 COM runtime + EXE MZ loader MVP)\n");
+    video_write("CiukiOS Stage2 v0.4 (M2 graphic splash + framebuffer handoff)\n");
 }
 
 static void shell_echo(const char *args) {
