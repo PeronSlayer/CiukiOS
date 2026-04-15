@@ -11,6 +11,8 @@ OVMF_VARS_DST="$BUILD_DIR/OVMF_VARS.4m.fd"
 IMAGE="$BUILD_DIR/ciukios.img"
 SKIP_STAGE2="${CIUKIOS_SKIP_STAGE2:-0}"
 TRACE_INT="${CIUKIOS_TRACE_INT:-0}"
+INCLUDE_FREEDOS="${CIUKIOS_INCLUDE_FREEDOS:-1}"
+FREEDOS_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -69,6 +71,37 @@ fi
 if [[ -f "$BUILD_DIR/INIT.COM" ]]; then
     mcopy -i "$IMAGE" "$BUILD_DIR/INIT.COM" ::EFI/CiukiOS/INIT.COM
     echo "[CiukiOS] INIT.COM copied to image"
+fi
+
+copy_freedos_file_if_present() {
+    local src="$1"
+    local dst="$2"
+    if [[ -f "$src" ]]; then
+        mcopy -o -i "$IMAGE" "$src" "$dst"
+        return 0
+    fi
+    return 1
+}
+
+if [[ "$INCLUDE_FREEDOS" == "1" ]]; then
+    echo "[CiukiOS] FreeDOS symbiotic integration enabled (CIUKIOS_INCLUDE_FREEDOS=1)"
+    if [[ -d "$FREEDOS_RUNTIME_DIR" ]] && find "$FREEDOS_RUNTIME_DIR" -maxdepth 1 -type f | grep -q .; then
+        mmd -i "$IMAGE" ::FREEDOS || true
+        while IFS= read -r -d '' file; do
+            mcopy -o -i "$IMAGE" "$file" ::FREEDOS/
+        done < <(find "$FREEDOS_RUNTIME_DIR" -maxdepth 1 -type f -print0 | sort -z)
+
+        copy_freedos_file_if_present "$FREEDOS_RUNTIME_DIR/COMMAND.COM" ::COMMAND.COM || true
+        copy_freedos_file_if_present "$FREEDOS_RUNTIME_DIR/KERNEL.SYS" ::KERNEL.SYS || true
+        copy_freedos_file_if_present "$FREEDOS_RUNTIME_DIR/FDCONFIG.SYS" ::FDCONFIG.SYS || true
+        copy_freedos_file_if_present "$FREEDOS_RUNTIME_DIR/FDAUTO.BAT" ::AUTOEXEC.BAT || true
+
+        echo "[CiukiOS] FreeDOS bundle copied from: $FREEDOS_RUNTIME_DIR"
+    else
+        echo "[CiukiOS] FreeDOS runtime not found (optional): $FREEDOS_RUNTIME_DIR"
+    fi
+else
+    echo "[CiukiOS] FreeDOS symbiotic integration disabled (CIUKIOS_INCLUDE_FREEDOS=0)"
 fi
 
 echo "[CiukiOS] Preparing OVMF_VARS..."

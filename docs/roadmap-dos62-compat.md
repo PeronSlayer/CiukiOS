@@ -3,6 +3,8 @@
 Note:
 For the current execution-oriented target (running DOS DOOM), see:
 `docs/roadmap-ciukios-doom.md`
+For FreeDOS symbiotic integration approach, see:
+`docs/freedos-symbiotic-architecture.md`
 
 ## Goal
 Recreate DOS 6.2 behavior with high compatibility at binary level (`.COM`, `.EXE MZ`) and API level (`INT 21h`), built from scratch.

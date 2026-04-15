@@ -101,4 +101,23 @@ test-boot: test-stage2 test-fallback
 
 ci: test-boot
 
-.PHONY: all clean re test-stage2 test-fallback test-boot ci
+run:
+	./run_ciukios.sh
+
+run-nofreedos:
+	CIUKIOS_INCLUDE_FREEDOS=0 ./run_ciukios.sh
+
+freedos-import:
+	@if [ -z "$(FREEDOS_SRC)" ]; then \
+		echo "Usage: make freedos-import FREEDOS_SRC=/path/to/freedos/files"; \
+		exit 1; \
+	fi
+	./scripts/import_freedos.sh --source "$(FREEDOS_SRC)"
+
+freecom-sync:
+	./scripts/sync_freecom_repo.sh
+
+freecom-build:
+	./scripts/build_freecom.sh
+
+.PHONY: all clean re test-stage2 test-fallback test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build

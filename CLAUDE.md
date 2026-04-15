@@ -15,14 +15,16 @@ Primary roadmap:
 1. UEFI loader boots Stage2 reliably.
 2. Stage2 has shell, FAT read/write-on-cache primitives, COM catalog support.
 3. Splashscreen is integrated and rendered at boot.
-4. Fallback path to `kernel.elf` remains tested.
+4. Symbiotic FreeDOS pipeline exists (`scripts/sync_freecom_repo.sh`, `scripts/build_freecom.sh`, `scripts/import_freedos.sh`, `third_party/freedos/runtime/`).
+5. Fallback path to `kernel.elf` remains tested.
 
 ## Source of Truth Documents
 1. High-level roadmap: `docs/roadmap-ciukios-doom.md`
 2. Compatibility baseline: `docs/int21-priority-a.md`
 3. Phase history/kickoff: `docs/phase-0-kickoff.md`, `docs/phase-1.md`
 4. FreeDOS licensing/integration policy: `docs/freedos-integration-policy.md`
-5. Handoff index: `docs/handoffs/README.md`
+5. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
+6. Handoff index: `docs/handoffs/README.md`
 
 ## Session Workflow (Required)
 1. Read this file first.
@@ -60,6 +62,7 @@ Minimum handoff content:
 1. Prefer FreeDOS components with verified licenses for distributable images.
 2. Keep Microsoft DOS files user-supplied and out of public redistribution by default.
 3. Maintain provenance and licenses for all imported third-party DOS files.
+4. Keep `third_party/freedos/manifest.csv` updated via `scripts/import_freedos.sh`.
 
 ## Quick Resume Checklist
 1. `git status --short`

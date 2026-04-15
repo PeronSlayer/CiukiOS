@@ -16,8 +16,9 @@ Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, 
 ## Architectural Strategy
 1. Keep UEFI loader and current Stage2 as modern bootstrap/debug shell.
 2. Add a dedicated DOS runtime core (real-mode compatible semantics).
-3. Add a protected-mode game path for DOS extenders and 32-bit code.
-4. Build compatibility first, then optimize performance.
+3. Integrate FreeDOS components symbiotically as compatibility userland (where legally and technically suitable).
+4. Add a protected-mode game path for DOS extenders and 32-bit code.
+5. Build compatibility first, then optimize performance.
 
 ## Milestones
 

@@ -33,6 +33,24 @@ Yes, integrating FreeDOS files is possible and can be very useful.
 3. `scripts/import_freedos.sh` to reproduce import process.
 4. `docs/legal/freedos-licenses/` for copied license texts.
 
+## Implemented Pipeline (Current)
+1. Import command:
+   - `./scripts/import_freedos.sh --source /path/to/freedos/files`
+2. Runtime bundle location:
+   - `third_party/freedos/runtime/`
+3. FreeCOM upstream sync:
+   - `./scripts/sync_freecom_repo.sh`
+   - source repo: `https://github.com/FDOS/freecom`
+4. FreeCOM COMMAND.COM build/import:
+   - `./scripts/build_freecom.sh`
+   - tries source build from `third_party/freedos/sources/freecom`
+   - falls back to official `freecom.zip` if local ia16 runtime headers/libraries are missing
+5. Image integration toggle:
+   - `CIUKIOS_INCLUDE_FREEDOS=1 ./run_ciukios.sh`
+6. Image copy behavior:
+   - all files copied to `A:\\FREEDOS\\`
+   - selected files mirrored to root when present (`COMMAND.COM`, `KERNEL.SYS`, `FDCONFIG.SYS`, `FDAUTO.BAT -> AUTOEXEC.BAT`)
+
 ## Image Build Policy
 1. Default public image should include only components with verified redistribution clarity.
 2. Optional local-only image profile may include user-supplied DOS assets.

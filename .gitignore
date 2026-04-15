@@ -7,3 +7,9 @@ boot/uefi-loader/build/
 *.log
 *.img
 *.fd
+
+third_party/freedos/runtime/*
+!third_party/freedos/runtime/.gitkeep
+
+third_party/freedos/sources/*
+!third_party/freedos/sources/.gitkeep

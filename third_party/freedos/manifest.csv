@@ -1,0 +1,11 @@
+component,file_name,required,imported,sha256,source_path,license,notes
+core,COMMAND.COM,yes,yes,93ed257d3aa2454821aa305b731544550dcccff898865b590deb972c47b48610,https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/base/freecom.zip,GPL-2.0-or-later,fallback-from-freecom-zip:ec6c63f13be0b254151c76cbbbec3c80ae33741b
+core,KERNEL.SYS,yes,no,,,GPL-2.0-or-later?,missing
+core,FDCONFIG.SYS,yes,no,,,GPL-2.0-or-later?,missing
+core,FDAUTO.BAT,yes,no,,,GPL-2.0-or-later?,missing
+memory,HIMEMX.EXE,no,no,,,GPL-2.0-or-later?,missing
+memory,JEMM386.EXE,no,no,,,GPL-2.0-or-later?,missing
+utils,MEM.EXE,no,no,,,GPL-2.0-or-later?,missing
+utils,MODE.COM,no,no,,,GPL-2.0-or-later?,missing
+utils,XCOPY.EXE,no,no,,,GPL-2.0-or-later?,missing
+source,freecom.git,no,yes,ec6c63f13be0b254151c76cbbbec3c80ae33741b,https://github.com/FDOS/freecom.git,GPL-2.0-or-later?,repo-synced
