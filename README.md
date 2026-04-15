@@ -1,3 +1,5 @@
+![Splashscreen CiukiOS](misc/CiukiOS_SplashScreen.png)
+
 # CiukiOS
 
 Educational operating system project built from scratch with a DOS-compatibility direction.
