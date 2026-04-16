@@ -299,3 +299,96 @@ int ui_draw_boot_hud(
 
     return 1;
 }
+
+/* ===== Window Manager ===== */
+#define UI_MAX_WINDOWS 3
+static ui_window_t g_windows[UI_MAX_WINDOWS] = {
+    {"System", 60, 60, 280, 120, 1},
+    {"Shell", 60, 200, 280, 120, 0},
+    {"Info", 360, 60, 200, 120, 0},
+};
+static int g_focused_idx = 0;
+static int g_wm_initialized = 0;
+
+void ui_cycle_window_focus(void) {
+    g_windows[g_focused_idx].focused = 0;
+    g_focused_idx = (g_focused_idx + 1) % UI_MAX_WINDOWS;
+    g_windows[g_focused_idx].focused = 1;
+    if (!g_wm_initialized) {
+        serial_write("[ ui ] wm focus cycle ok\n");
+        g_wm_initialized = 1;
+    }
+}
+
+int ui_get_focused_window(void) {
+    return g_focused_idx;
+}
+
+void ui_render_windows(void) {
+    int i;
+    u32 title_row, border_color, bg_color;
+    if (!video_ready()) return;
+    for (i = 0; i < UI_MAX_WINDOWS; i++) {
+        ui_window_t *w = &g_windows[i];
+        border_color = w->focused ? 0x0000FF00U : 0x00404050U;
+        bg_color = w->focused ? 0x001a1a1aU : 0x00151515U;
+        ui_draw_panel(w->x, w->y, w->w, w->h, border_color, bg_color);
+        if (w->h > 16U) {
+            title_row = ui_pixel_y_to_text_row(w->y + 2U);
+            video_set_colors(border_color, bg_color);
+            video_set_cursor(2U, title_row);
+            video_write("[");
+            video_write(w->title);
+            video_write("]");
+            video_set_colors(0x00C0C0C0U, 0x00000000U);
+        }
+    }
+}
+
+/* ===== Launcher ===== */
+#define LAUNCHER_ITEMS 6
+static const char *g_launcher_items[LAUNCHER_ITEMS] = {
+    "DIR", "MEM", "CLS", "VER", "ASCII", "RUN INIT.COM"
+};
+static int g_launcher_focus = 0;
+static int g_launcher_active = 0;
+
+void ui_activate_launcher(void) {
+    g_launcher_active = 1;
+}
+
+void ui_deactivate_launcher(void) {
+    g_launcher_active = 0;
+}
+
+void ui_launcher_next(void) {
+    g_launcher_focus = (g_launcher_focus + 1) % LAUNCHER_ITEMS;
+}
+
+void ui_launcher_prev(void) {
+    if (g_launcher_focus == 0) {
+        g_launcher_focus = LAUNCHER_ITEMS - 1;
+    } else {
+        g_launcher_focus--;
+    }
+}
+
+const char *ui_get_launcher_item(void) {
+    return (g_launcher_focus < LAUNCHER_ITEMS) ? g_launcher_items[g_launcher_focus] : "";
+}
+
+void ui_render_launcher(void) {
+    int i;
+    u32 launcher_x = 60U, launcher_y = 350U, item_height = 20U, item_y, item_row;
+    if (!video_ready()) return;
+    ui_draw_panel(launcher_x, launcher_y, 300U, (LAUNCHER_ITEMS * item_height) + 10U, 0x00505050U, 0x00151515U);
+    for (i = 0; i < LAUNCHER_ITEMS; i++) {
+        item_y = launcher_y + 5U + (i * item_height);
+        item_row = ui_pixel_y_to_text_row(item_y);
+        video_set_colors(i == g_launcher_focus ? 0x0000FF00U : 0x00808080U, 0x00151515U);
+        video_set_cursor(5U, item_row);
+        video_write(i == g_launcher_focus ? "> " : "  ");
+        video_write(g_launcher_items[i]);
+        video_set_colors(0x00C0C0C0U, 0x00000000U);
+    }
+}

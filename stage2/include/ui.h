@@ -123,4 +123,23 @@ int ui_draw_boot_hud(
     u32 progress_percent
 );
 
+/* Window Manager */
+typedef struct {
+    const char *title;
+    u32 x, y, w, h;
+    int focused;
+} ui_window_t;
+
+void ui_cycle_window_focus(void);
+int ui_get_focused_window(void);
+void ui_render_windows(void);
+
+/* Launcher */
+void ui_activate_launcher(void);
+void ui_deactivate_launcher(void);
+void ui_launcher_next(void);
+void ui_launcher_prev(void);
+const char *ui_get_launcher_item(void);
+void ui_render_launcher(void);
+
 #endif /* STAGE2_UI_H */
