@@ -522,3 +522,11 @@ void video_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
 void video_put_pixel(u32 x, u32 y, u32 rgb) {
     framebuffer_store_pixel(x, y, rgb);
 }
+
+u32 video_cell_width_px(void) {
+    return font_w();
+}
+
+u32 video_cell_height_px(void) {
+    return font_h();
+}

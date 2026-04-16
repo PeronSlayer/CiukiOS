@@ -23,6 +23,18 @@ static void serial_write_u32(u32 v) {
     serial_write(&buf[i]);
 }
 
+static u32 ui_text_col_from_px(u32 x_px) {
+    u32 cell_w = video_cell_width_px();
+    if (cell_w == 0U) cell_w = UI_GRID;
+    return x_px / cell_w;
+}
+
+static u32 ui_text_row_from_px(u32 y_px) {
+    u32 cell_h = video_cell_height_px();
+    if (cell_h == 0U) cell_h = UI_GRID;
+    return y_px / cell_h;
+}
+
 /* ===== Layout Engine ===== */
 
 static ui_layout_t g_layout;
@@ -162,7 +174,10 @@ static void ui_render_desktop_scene(void) {
     row = ui_pixel_y_to_text_row(g_layout.status_y + 4U);
     video_set_colors(COL_TEXT_DIM, COL_PANEL_BG);
     video_set_cursor(2U, row);
-    video_write("TAB: Focus | UP/DOWN J/K | ENTER: Select | ESC: shell");
+    if (video_columns() >= 64U)
+        video_write("TAB: Focus | UP/DOWN J/K | ENTER: Select | ESC: shell");
+    else
+        video_write("TAB focus | ENTER select | ESC shell");
     video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
 
     if (first_render) {
@@ -245,7 +260,7 @@ void ui_draw_separator_line(u32 y_pos, u32 color) {
 }
 
 u32 ui_pixel_y_to_text_row(u32 y_pixel) {
-    return y_pixel / UI_GRID;
+    return ui_text_row_from_px(y_pixel);
 }
 
 int ui_draw_boot_hud(const char *version_string, const char *mode_string,
@@ -360,7 +375,7 @@ void ui_render_windows(void) {
                 w->w - 2U, 1U, border_color);
             title_row = ui_pixel_y_to_text_row(w->y + UI_GRID / 2U);
             video_set_colors(text_color, COL_TITLEBAR_BG);
-            video_set_cursor((w->x + UI_GRID) / UI_GRID, title_row);
+            video_set_cursor(ui_text_col_from_px(w->x + UI_GRID), title_row);
             video_write("[");
             video_write(w->title);
             video_write("]");
@@ -370,7 +385,7 @@ void ui_render_windows(void) {
         if (w->h > title_bar_h + UI_GRID * 4U) {
             content_row = ui_pixel_y_to_text_row(w->y + title_bar_h + UI_GRID);
             video_set_colors(text_color, bg_color);
-            video_set_cursor((w->x + UI_GRID) / UI_GRID, content_row);
+            video_set_cursor(ui_text_col_from_px(w->x + UI_GRID), content_row);
             if (w->focused) {
                 if (i == 0) video_write("Status: Ready");
                 else if (i == 1) video_write("Buffer: Empty");
@@ -429,7 +444,7 @@ void ui_render_launcher(void) {
     /* Dock header */
     header_row = ui_pixel_y_to_text_row(g_layout.dock_y + UI_GRID);
     video_set_colors(COL_TEXT_GREEN, COL_DOCK_BG);
-    video_set_cursor((g_layout.dock_x + UI_GRID) / UI_GRID, header_row);
+    video_set_cursor(ui_text_col_from_px(g_layout.dock_x + UI_GRID), header_row);
     video_write("[ Dock ]");
 
     /* Separator */
@@ -453,7 +468,7 @@ void ui_render_launcher(void) {
         }
 
         item_row = ui_pixel_y_to_text_row(item_y + UI_GRID / 2U);
-        video_set_cursor((g_layout.dock_x + UI_GRID) / UI_GRID, item_row);
+        video_set_cursor(ui_text_col_from_px(g_layout.dock_x + UI_GRID), item_row);
         video_write(i == g_launcher_focus ? "> " : "  ");
         video_write(g_launcher_items[i]);
         video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
