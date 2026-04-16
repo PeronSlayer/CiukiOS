@@ -28,13 +28,14 @@ Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compat
 22. `AH=51h` - get current PSP segment (`BX`).
 23. `AH=62h` - get current PSP segment (`BX`) (DOS 3+ style alias).
 24. `AH=4Ch` - terminate process with return code.
+25. `AH=48h` - allocate memory block (paragraph allocator baseline).
+26. `AH=49h` - free memory block by segment (`ES`).
+27. `AH=4Ah` - resize memory block by segment (`ES`) to `BX` paragraphs.
 
-## Deterministic Stubs (Not Fully Implemented Yet)
-1. `AH=48h` - allocate memory block: returns `CF=1`, `AX=0008h`.
-2. `AH=49h` - free memory block: returns `CF=1`, `AX=0009h`.
-3. `AH=4Ah` - resize memory block: returns `CF=1`, `AX=0008h`.
-
-These stubs are intentional until MCB-style allocator work is completed in roadmap M2.
+## Partial Compatibility Notes
+1. `AH=48h/49h/4Ah` currently use an internal paragraph heap allocator baseline (no full MCB chain yet).
+2. Error conventions are DOS-like (`AX=0008h` for insufficient memory, `AX=0009h` for invalid block).
+3. Full MCB-compatible metadata and ownership semantics remain roadmap M2 hardening work.
 
 ## Unsupported Function Behavior
 1. Any non-implemented `AH` returns deterministic error:
@@ -75,14 +76,14 @@ FN  | Status               | Implementation Details
 4Dh | IMPLEMENTED          | Get last process return code + type
 51h | IMPLEMENTED          | Get current PSP segment to BX
 62h | IMPLEMENTED          | Get current PSP segment to BX (DOS 3+ alias)
-48h | DETERMINISTIC_STUB   | Memory alloc (returns CF=1, AX=0008h, blocked until M2)
-49h | DETERMINISTIC_STUB   | Memory free (returns CF=1, AX=0009h, blocked until M2)
-4Ah | DETERMINISTIC_STUB   | Memory resize (returns CF=1, AX=0008h, blocked until M2)
+48h | IMPLEMENTED          | Paragraph allocator baseline; returns AX=segment on success, AX=0008h/BX=max on failure
+49h | IMPLEMENTED          | Free allocated paragraph block by ES segment; AX=0009h on invalid segment
+4Ah | IMPLEMENTED          | Resize allocated block in place when possible; AX=0008h/BX=max on failure
 *   | UNSUPPORTED          | Invalid function (returns CF=1, AX=0001h)
 ```
 
 ## Next Priority-A Extensions
-1. Formal memory allocator backend for `48h/49h/4Ah`.
+1. Upgrade `48h/49h/4Ah` allocator from baseline heap model to stronger MCB-compatible semantics.
 2. Expand FAT-backed handle table limits and add multi-chunk file buffering beyond current in-memory cap.
 3. Improve DOS-like line editor behavior for `0Ah` (editing keys/history/overflow signaling).
 4. Additional DOS error code mapping consistency checks.
