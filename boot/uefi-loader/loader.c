@@ -221,6 +221,40 @@ static EFI_STATUS alloc_pages_below_4g(
     return EFI_SUCCESS;
 }
 
+static EFI_STATUS alloc_staging_pages_preferred(
+    UINTN bytes,
+    EFI_MEMORY_TYPE type,
+    EFI_PHYSICAL_ADDRESS *addr_out
+) {
+    static const UINT64 preferred_bases[] = {
+        384ULL * 1024ULL * 1024ULL,
+        320ULL * 1024ULL * 1024ULL,
+        256ULL * 1024ULL * 1024ULL,
+        192ULL * 1024ULL * 1024ULL,
+        128ULL * 1024ULL * 1024ULL,
+        64ULL  * 1024ULL * 1024ULL,
+    };
+    UINTN pages = bytes_to_pages(bytes);
+
+    for (UINTN i = 0; i < sizeof(preferred_bases) / sizeof(preferred_bases[0]); i++) {
+        EFI_PHYSICAL_ADDRESS addr = align_down(preferred_bases[i], PAGE_SIZE);
+        EFI_STATUS status = uefi_call_wrapper(
+            BS->AllocatePages,
+            4,
+            AllocateAddress,
+            type,
+            pages,
+            &addr
+        );
+        if (!EFI_ERROR(status)) {
+            *addr_out = addr;
+            return EFI_SUCCESS;
+        }
+    }
+
+    return EFI_NOT_FOUND;
+}
+
 static EFI_STATUS build_bootstrap_paging(UINT64 *cr3_out) {
     EFI_STATUS status;
     EFI_PHYSICAL_ADDRESS tables_base = 0;
@@ -690,6 +724,120 @@ static EFI_STATUS load_disk_cache(EFI_HANDLE image, handoff_v0_t *handoff) {
     return EFI_SUCCESS;
 }
 
+static EFI_STATUS elf_compute_load_range(
+    VOID *elf_file,
+    UINTN elf_size,
+    UINT64 *image_min_out,
+    UINT64 *image_max_out
+) {
+    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf_file;
+    Elf64_Phdr *phdrs;
+    UINT64 image_min = ~0ULL;
+    UINT64 image_max = 0ULL;
+
+    if (!elf_file || !image_min_out || !image_max_out || elf_size < sizeof(Elf64_Ehdr)) {
+        return EFI_LOAD_ERROR;
+    }
+
+    if (ehdr->e_ident[0] != 0x7F ||
+        ehdr->e_ident[1] != 'E' ||
+        ehdr->e_ident[2] != 'L' ||
+        ehdr->e_ident[3] != 'F') {
+        return EFI_LOAD_ERROR;
+    }
+
+    if (ehdr->e_ident[4] != ELFCLASS64 ||
+        ehdr->e_ident[5] != ELFDATA2LSB ||
+        ehdr->e_type != ET_EXEC ||
+        ehdr->e_machine != EM_X86_64) {
+        return EFI_LOAD_ERROR;
+    }
+
+    if (ehdr->e_phoff < sizeof(Elf64_Ehdr) ||
+        ehdr->e_phoff >= elf_size ||
+        ehdr->e_phoff + (UINT64)ehdr->e_phnum * sizeof(Elf64_Phdr) > elf_size) {
+        return EFI_LOAD_ERROR;
+    }
+
+    phdrs = (Elf64_Phdr *)((UINT8 *)elf_file + ehdr->e_phoff);
+    for (UINT16 i = 0; i < ehdr->e_phnum; i++) {
+        Elf64_Phdr *ph = &phdrs[i];
+        UINT64 seg_base;
+        UINT64 alloc_base;
+        UINT64 alloc_end;
+
+        if (ph->p_type != PT_LOAD) {
+            continue;
+        }
+
+        seg_base = ph->p_paddr ? ph->p_paddr : ph->p_vaddr;
+        alloc_base = align_down(seg_base, PAGE_SIZE);
+        alloc_end = align_up(seg_base + ph->p_memsz, PAGE_SIZE);
+
+        if (alloc_base < image_min) {
+            image_min = alloc_base;
+        }
+        if (alloc_end > image_max) {
+            image_max = alloc_end;
+        }
+    }
+
+    if (image_min == ~0ULL || image_max == 0ULL || image_max <= image_min) {
+        return EFI_LOAD_ERROR;
+    }
+
+    *image_min_out = image_min;
+    *image_max_out = image_max;
+    return EFI_SUCCESS;
+}
+
+static BOOLEAN buffer_overlaps_image_range(
+    const VOID *buffer,
+    UINTN size,
+    UINT64 image_min,
+    UINT64 image_max
+) {
+    UINT64 buf_start;
+    UINT64 buf_end;
+
+    if (!buffer || size == 0 || image_max <= image_min) {
+        return FALSE;
+    }
+
+    buf_start = (UINT64)(UINTN)buffer;
+    buf_end = buf_start + (UINT64)size;
+
+    return (buf_start < image_max) && (buf_end > image_min);
+}
+
+static EFI_STATUS relocate_elf_buffer_if_overlapping(
+    VOID **buffer,
+    UINTN size,
+    UINT64 image_min,
+    UINT64 image_max
+) {
+    EFI_STATUS status;
+    VOID *new_buffer;
+
+    if (!buffer || !*buffer || size == 0) {
+        return EFI_INVALID_PARAMETER;
+    }
+
+    if (!buffer_overlaps_image_range(*buffer, size, image_min, image_max)) {
+        return EFI_SUCCESS;
+    }
+
+    status = uefi_call_wrapper(BS->AllocatePool, 3, EfiLoaderData, size, &new_buffer);
+    if (EFI_ERROR(status)) {
+        return status;
+    }
+
+    mem_copy(new_buffer, *buffer, size);
+    uefi_call_wrapper(BS->FreePool, 1, *buffer);
+    *buffer = new_buffer;
+    return EFI_SUCCESS;
+}
+
 static EFI_STATUS load_elf_image(
     VOID *elf_file,
     UINTN elf_size,
@@ -761,6 +909,11 @@ static EFI_STATUS load_elf_image(
                 &addr
             );
             if (EFI_ERROR(status)) {
+                Print(L"Error: PT_LOAD alloc failed idx=%d base=0x%lx pages=0x%lx status=%r\r\n",
+                      i,
+                      alloc_base,
+                      pages,
+                      status);
                 return status;
             }
 
@@ -885,6 +1038,8 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     UINT64 new_cr3 = 0;
     EFI_PHYSICAL_ADDRESS boot_info_addr = 0;
     EFI_PHYSICAL_ADDRESS handoff_addr = 0;
+    EFI_PHYSICAL_ADDRESS stage2_file_addr = 0;
+    EFI_PHYSICAL_ADDRESS kernel_file_addr = 0;
     BOOLEAN using_stage2 = FALSE;
 
     InitializeLib(image, system_table);
@@ -916,6 +1071,43 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
         &stage2_size
     );
     if (!EFI_ERROR(status)) {
+        UINT64 stage2_image_min = 0;
+        UINT64 stage2_image_max = 0;
+
+        if (stage2_size == 0) {
+            Print(L"Error: stage2.elf is empty\r\n");
+            return EFI_LOAD_ERROR;
+        }
+
+        status = elf_compute_load_range(
+            stage2_buffer,
+            stage2_size,
+            &stage2_image_min,
+            &stage2_image_max
+        );
+        if (EFI_ERROR(status)) {
+            Print(L"Error validating stage2.elf load range: %r\r\n", status);
+            return status;
+        }
+
+        status = relocate_elf_buffer_if_overlapping(
+            &stage2_buffer,
+            stage2_size,
+            stage2_image_min,
+            stage2_image_max
+        );
+        if (EFI_ERROR(status)) {
+            Print(L"Error relocating stage2.elf staging buffer: %r\r\n", status);
+            return status;
+        }
+
+        status = alloc_staging_pages_preferred(stage2_size, EfiLoaderData, &stage2_file_addr);
+        if (!EFI_ERROR(status)) {
+            mem_copy((VOID *)(UINTN)stage2_file_addr, stage2_buffer, stage2_size);
+            uefi_call_wrapper(BS->FreePool, 1, stage2_buffer);
+            stage2_buffer = (VOID *)(UINTN)stage2_file_addr;
+        }
+
         Print(L"stage2.elf loaded into memory\r\n");
 
         status = load_elf_image(
@@ -954,6 +1146,45 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
         if (EFI_ERROR(status)) {
             Print(L"Error opening kernel.elf: %r\r\n", status);
             return status;
+        }
+
+        {
+            UINT64 kernel_image_min = 0;
+            UINT64 kernel_image_max = 0;
+
+            if (kernel_size == 0) {
+                Print(L"Error: kernel.elf is empty\r\n");
+                return EFI_LOAD_ERROR;
+            }
+
+            status = elf_compute_load_range(
+                kernel_buffer,
+                kernel_size,
+                &kernel_image_min,
+                &kernel_image_max
+            );
+            if (EFI_ERROR(status)) {
+                Print(L"Error validating kernel.elf load range: %r\r\n", status);
+                return status;
+            }
+
+            status = relocate_elf_buffer_if_overlapping(
+                &kernel_buffer,
+                kernel_size,
+                kernel_image_min,
+                kernel_image_max
+            );
+            if (EFI_ERROR(status)) {
+                Print(L"Error relocating kernel.elf staging buffer: %r\r\n", status);
+                return status;
+            }
+
+            status = alloc_staging_pages_preferred(kernel_size, EfiLoaderData, &kernel_file_addr);
+            if (!EFI_ERROR(status)) {
+                mem_copy((VOID *)(UINTN)kernel_file_addr, kernel_buffer, kernel_size);
+                uefi_call_wrapper(BS->FreePool, 1, kernel_buffer);
+                kernel_buffer = (VOID *)(UINTN)kernel_file_addr;
+            }
         }
 
         Print(L"kernel.elf loaded into memory\r\n");

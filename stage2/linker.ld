@@ -2,7 +2,7 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 3M;
+    . = 128M;
 
     .text ALIGN(4K) : {
         *(.text*)
