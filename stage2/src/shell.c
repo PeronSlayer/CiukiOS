@@ -375,6 +375,7 @@ static void shell_print_help(void) {
     video_write("  run      - execute default COM (or INIT.COM)\n");
     video_write("  run X A  - run COM or load EXE with optional args\n");
     video_write("  ozone    - launch oZone GUI (preflight + run)\n");
+    video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
 }
 
 static void shell_cls(void) {
@@ -3740,6 +3741,69 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
                 serial_write("[ app ] ozone preflight passed\n");
                 shell_run(boot_info, handoff, found_path);
                 serial_write("[ app ] ozone launch completed\n");
+            }
+        }
+        return;
+    }
+
+    if (str_eq(cmd, "opengem")) {
+        serial_write("[ app ] opengem launch requested\n");
+        /* Preflight probe — search candidate entries under FREEDOS/OPENGEM */
+        {
+            fat_dir_entry_t probe;
+            static const char *paths[] = {
+                "/FREEDOS/OPENGEM/GEM.BAT",
+                "/FREEDOS/OPENGEM/GEM.EXE",
+                "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/DESKTOP.APP",
+                "/FREEDOS/OPENGEM/OPENGEM.BAT",
+                "/FREEDOS/OPENGEM/OPENGEM.EXE",
+            };
+            const char *found_path = (const char *)0;
+            int pi;
+            int preflight_ok = 1;
+
+            serial_write("[ app ] opengem preflight started\n");
+
+            /* Check 1: find a runnable entry */
+            for (pi = 0; pi < 5; pi++) {
+                if (fat_find_file(paths[pi], &probe)) {
+                    found_path = paths[pi];
+                    break;
+                }
+            }
+
+            if (found_path) {
+                video_write("[preflight] OpenGEM entry: found (");
+                video_write(found_path);
+                video_write(")\n");
+                serial_write("[ app ] opengem preflight entry: ok\n");
+            } else {
+                video_write("[preflight] OpenGEM entry: NOT FOUND\n");
+                serial_write("[ app ] opengem preflight entry: missing\n");
+                preflight_ok = 0;
+            }
+
+            /* Check 2: FAT filesystem ready */
+            if (fat_ready()) {
+                video_write("[preflight] FAT layer: ready\n");
+                serial_write("[ app ] opengem preflight fat: ok\n");
+            } else {
+                video_write("[preflight] FAT layer: NOT READY\n");
+                serial_write("[ app ] opengem preflight fat: fail\n");
+                preflight_ok = 0;
+            }
+
+            serial_write("[ app ] opengem preflight complete\n");
+
+            if (!preflight_ok) {
+                video_write("[preflight] FAILED - cannot launch OpenGEM\n");
+                video_write("Install: scripts/import_opengem.sh\n");
+                serial_write("[ app ] opengem preflight failed\n");
+            } else {
+                video_write("[preflight] PASSED - launching OpenGEM\n");
+                serial_write("[ app ] opengem preflight passed\n");
+                shell_run(boot_info, handoff, found_path);
+                serial_write("[ app ] opengem launch completed\n");
             }
         }
         return;
