@@ -54,7 +54,7 @@ else
 fi
 
 # ===== Check 3: Validate required functions are present =====
-required_functions="00h 01h 02h 06h 07h 08h 09h 0Ah 0Bh 0Ch 0Eh 19h 1Ah 25h 2Fh 30h 35h 3Ch 3Dh 3Eh 3Fh 40h 41h 42h 43h 4Ch 4Dh 48h 49h 4Ah 4Eh 4Fh 51h 62h"
+required_functions="00h 01h 02h 06h 07h 08h 09h 0Ah 0Bh 0Ch 0Eh 19h 1Ah 25h 2Fh 30h 35h 3Ch 3Dh 3Eh 3Fh 40h 41h 42h 43h 56h 4Ch 4Dh 48h 49h 4Ah 4Eh 4Fh 51h 62h"
 
 missing_in_matrix=0
 for fn in $required_functions; do

@@ -973,6 +973,16 @@ static int shell_int21_read_asciiz(ciuki_dos_context_t *ctx, u16 off, char *out,
     return 1;
 }
 
+static int shell_int21_read_asciiz_seg(ciuki_dos_context_t *ctx, u16 seg, u16 off, char *out, u32 out_size) {
+    if (!ctx) {
+        return 0;
+    }
+    if (seg != ctx->psp_segment) {
+        return 0;
+    }
+    return shell_int21_read_asciiz(ctx, off, out, out_size);
+}
+
 static int shell_int21_dos_path_to_canonical(const char *in, char *out, u32 out_size) {
     char tmp[SHELL_PATH_MAX];
     u32 i = 0U;
@@ -2068,6 +2078,84 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    if (ah == 0x56U) {
+        char dos_old[SHELL_PATH_MAX];
+        char dos_new[SHELL_PATH_MAX];
+        char old_path[SHELL_PATH_MAX];
+        char new_path[SHELL_PATH_MAX];
+        char old_dir[SHELL_PATH_MAX];
+        char old_name[SHELL_PATH_MAX];
+        char new_dir[SHELL_PATH_MAX];
+        char new_name[SHELL_PATH_MAX];
+        fat_dir_entry_t old_info;
+        fat_dir_entry_t dst_info;
+
+        if (!fat_ready()) {
+            regs->carry = 1U;
+            regs->ax = 0x0002U; /* file not found */
+            return;
+        }
+
+        if (!shell_int21_read_asciiz_seg(ctx, regs->ds, regs->dx, dos_old, (u32)sizeof(dos_old)) ||
+            !shell_int21_read_asciiz_seg(ctx, regs->es, regs->di, dos_new, (u32)sizeof(dos_new)) ||
+            !shell_int21_dos_path_to_canonical(dos_old, old_path, (u32)sizeof(old_path)) ||
+            !shell_int21_dos_path_to_canonical(dos_new, new_path, (u32)sizeof(new_path)) ||
+            !shell_int21_split_find_path(old_path, old_dir, (u32)sizeof(old_dir), old_name, (u32)sizeof(old_name)) ||
+            !shell_int21_split_find_path(new_path, new_dir, (u32)sizeof(new_dir), new_name, (u32)sizeof(new_name))) {
+            regs->carry = 1U;
+            regs->ax = 0x0003U; /* path not found */
+            return;
+        }
+
+        for (u32 i = 0U; old_name[i] != '\0'; i++) {
+            if (old_name[i] == '*' || old_name[i] == '?') {
+                regs->carry = 1U;
+                regs->ax = 0x0002U; /* wildcard source unsupported in this subset */
+                return;
+            }
+        }
+
+        for (u32 i = 0U; new_name[i] != '\0'; i++) {
+            if (new_name[i] == '*' || new_name[i] == '?') {
+                regs->carry = 1U;
+                regs->ax = 0x0005U; /* invalid target name */
+                return;
+            }
+        }
+
+        if (!str_eq(old_dir, new_dir)) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* cross-directory rename unsupported */
+            return;
+        }
+
+        if (!fat_find_file(old_path, &old_info)) {
+            regs->carry = 1U;
+            regs->ax = 0x0002U; /* source file not found */
+            return;
+        }
+
+        if (str_eq(old_path, new_path)) {
+            regs->ax = 0x0000U;
+            return;
+        }
+
+        if (fat_find_file(new_path, &dst_info)) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* destination already exists */
+            return;
+        }
+
+        if (!fat_rename_entry(old_path, new_name)) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U;
+            return;
+        }
+
+        regs->ax = 0x0000U;
+        return;
+    }
+
     if (ah == 0x48U) {
         u16 seg = 0U;
         u16 max_free = 0U;
@@ -2530,7 +2618,10 @@ int stage2_shell_selftest_int21_baseline(void) {
 
 int stage2_shell_selftest_int21_fat_handles(void) {
     static const char dos_path[] = "A:\\EFI\\CIUKIOS\\I21E2E.TXT";
+    static const char dos_ren_path[] = "A:\\EFI\\CIUKIOS\\I21E2R.TXT";
     static const char payload[] = "CIUKIOS_INT21_FAT_E2E";
+    static const char canon_path[] = "/EFI/CIUKIOS/I21E2E.TXT";
+    static const char canon_ren_path[] = "/EFI/CIUKIOS/I21E2R.TXT";
     static u8 runtime_mem[512];
     ciuki_dos_context_t ctx;
     ciuki_int21_regs_t regs;
@@ -2541,6 +2632,7 @@ int stage2_shell_selftest_int21_fat_handles(void) {
     u16 read_off = 0x0080U;
     u16 path_off = 0x0010U;
     u16 data_off = 0x0040U;
+    u16 ren_path_off = 0x00C0U;
 
     if (!fat_ready()) {
         return 0;
@@ -2556,10 +2648,12 @@ int stage2_shell_selftest_int21_fat_handles(void) {
 
     /* Place DOS path and payload in runtime memory for DS:DX access. */
     local_memcpy(runtime_mem + path_off, dos_path, (u32)sizeof(dos_path));
+    local_memcpy(runtime_mem + ren_path_off, dos_ren_path, (u32)sizeof(dos_ren_path));
     local_memcpy(runtime_mem + data_off, payload, (u32)payload_len);
 
     /* Best-effort cleanup from previous runs. */
-    (void)fat_delete_file("/EFI/CIUKIOS/I21E2E.TXT");
+    (void)fat_delete_file(canon_path);
+    (void)fat_delete_file(canon_ren_path);
 
     /* AH=3Ch create/truncate */
     local_memset(&regs, 0U, (u32)sizeof(regs));
@@ -2680,17 +2774,36 @@ int stage2_shell_selftest_int21_fat_handles(void) {
         }
     }
 
+    /* AH=56h rename (source DS:DX, destination ES:DI) */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x5600U;
+    regs.ds = ctx.psp_segment;
+    regs.dx = path_off;
+    regs.es = ctx.psp_segment;
+    regs.di = ren_path_off;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+
+    if (fat_find_file(canon_path, &info)) {
+        goto fail;
+    }
+    if (!fat_find_file(canon_ren_path, &info)) {
+        goto fail;
+    }
+
     /* AH=41h delete */
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x4100U;
-    regs.dx = path_off;
+    regs.dx = ren_path_off;
     shell_com_int21(&ctx, &regs);
     if (regs.carry != 0U) {
         goto fail;
     }
 
     /* Verify deletion at FAT layer. */
-    if (fat_find_file("/EFI/CIUKIOS/I21E2E.TXT", &info)) {
+    if (fat_find_file(canon_path, &info) || fat_find_file(canon_ren_path, &info)) {
         return 0;
     }
 
@@ -2709,7 +2822,8 @@ fail:
         regs.bx = h_open;
         shell_com_int21(&ctx, &regs);
     }
-    (void)fat_delete_file("/EFI/CIUKIOS/I21E2E.TXT");
+    (void)fat_delete_file(canon_path);
+    (void)fat_delete_file(canon_ren_path);
     return 0;
 }
 

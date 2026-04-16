@@ -55,7 +55,7 @@ required_patterns=(
     "[ tick ] irq0 #0000000000000001"
     "[ ok ] splashscreen rendered src=0x"
     "[ ui ] boot hud active"
-    "[ compat ] INT21h FAT-backed file handles ready (AH=3Ch/3Dh/3Eh/3Fh/40h/41h/42h/43h)"
+    "[ compat ] INT21h FAT-backed file handles ready (AH=3Ch/3Dh/3Eh/3Fh/40h/41h/42h/43h/56h)"
     "[ test ] int21 fat-handle e2e selftest: PASS"
     "[ compat ] INT21h file search ready (AH=4Eh/4Fh)"
     "[ test ] int21 findfirst/findnext selftest: PASS"
