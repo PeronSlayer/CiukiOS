@@ -84,5 +84,17 @@ Yes, integrating FreeDOS files is possible and can be very useful.
 8. The oZone integration does NOT replace the CiukiOS native GUI roadmap.
 9. Provenance details: `docs/ozone-integration-notes.md`
 
+## Optional GUI App Policy (OpenGEM)
+1. OpenGEM (FreeGEM distribution) is treated as an optional runtime payload within the FreeDOS ecosystem.
+2. It is NOT a core dependency — CiukiOS must boot and function without it.
+3. Import flow: `./scripts/import_opengem.sh` (uses default zip at `third_party/freedos/sources/opengem/opengem.zip`)
+4. Runtime location: `third_party/freedos/runtime/OPENGEM/`
+5. Disk image path: `A:\FREEDOS\OPENGEM\`
+6. Feature toggle: `CIUKIOS_INCLUDE_OPENGEM=1` (default: auto-detect from file presence)
+7. License: GPL-2.0-or-later; tracking: `docs/legal/freedos-licenses/opengem-license.txt`
+8. The OpenGEM integration does NOT replace the CiukiOS native GUI roadmap.
+9. Provenance details: `docs/opengem-integration-notes.md`
+10. Source code included in archive as `SOURCE/OPENGEM/SOURCES.ZIP`.
+
 ## Disclaimer
 This is an engineering policy, not legal advice. For public distribution decisions, verify licenses with a legal review.

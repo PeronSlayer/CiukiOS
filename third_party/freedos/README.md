@@ -42,3 +42,13 @@ oZone is an optional DOS GUI application from the FreeDOS 1.3 GUI package set.
 - Provenance: `docs/ozone-integration-notes.md`
 - License: `docs/legal/freedos-licenses/ozonegui-license.txt`
 - oZone is NOT redistributed by default — user must supply the archive.
+
+## Optional: OpenGEM GUI
+OpenGEM (FreeGEM distribution) is an optional DOS GUI application from the FreeDOS 1.3 GUI package set.
+- Import: `./scripts/import_opengem.sh` (default zip: `sources/opengem/opengem.zip`)
+- Runtime location: `runtime/OPENGEM/`
+- Image placement: `A:\FREEDOS\OPENGEM\`
+- Launch entry: `GEM.BAT`
+- Provenance: `docs/opengem-integration-notes.md`
+- License: GPL-2.0-or-later (`docs/legal/freedos-licenses/opengem-license.txt`)
+- OpenGEM is NOT redistributed by default — user must supply the archive.
