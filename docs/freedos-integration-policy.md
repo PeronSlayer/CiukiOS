@@ -73,5 +73,16 @@ Yes, integrating FreeDOS files is possible and can be very useful.
 1. Keep Microsoft DOS files out of public redistribution unless rights are explicit.
 2. For personal testing, use local user-supplied files only.
 
+## Optional GUI App Policy (oZone)
+1. oZone GUI is treated as an optional runtime payload within the FreeDOS ecosystem.
+2. It is NOT a core dependency — CiukiOS must boot and function without it.
+3. Import flow: `./scripts/import_ozonegui.sh --source /path/to/extracted/ozone`
+4. Runtime location: `third_party/freedos/runtime/OZONE/`
+5. Disk image path: `A:\FREEDOS\OZONE\`
+6. Feature toggle: `CIUKIOS_INCLUDE_OZONE=1` (default: auto-detect from file presence)
+7. License tracking: `docs/legal/freedos-licenses/ozonegui-license.txt`
+8. The oZone integration does NOT replace the CiukiOS native GUI roadmap.
+9. Provenance details: `docs/ozone-integration-notes.md`
+
 ## Disclaimer
 This is an engineering policy, not legal advice. For public distribution decisions, verify licenses with a legal review.
