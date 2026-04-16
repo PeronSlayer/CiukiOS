@@ -58,6 +58,17 @@ Yes, integrating FreeDOS files is possible and can be very useful.
    - `make image-freedos` for verified FreeDOS bundle.
    - `make image-local-assets` for user-private additions.
 
+## Validation and Testing
+1. **Automated Pipeline Validation**:
+   - `make test-freedos-pipeline`: runs deterministic checks to ensure FreeDOS import/build artifacts are present and consistent.
+   - Validates that `third_party/freedos/manifest.csv` is well-formed.
+   - Checks that all required files (marked `required=yes`) are present in `third_party/freedos/runtime/`.
+   - Returns non-zero exit code on missing essentials; zero on all checks passing.
+2. **Integration with CI**:
+   - Called before boot and compatibility tests to ensure sanity of FreeDOS dependencies.
+   - Recommend adding to pre-commit checks or CI gates for public images.
+
+
 ## Notes on Microsoft DOS Files
 1. Keep Microsoft DOS files out of public redistribution unless rights are explicit.
 2. For personal testing, use local user-supplied files only.
