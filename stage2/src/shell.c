@@ -2557,7 +2557,7 @@ static void shell_run_desktop_session(void) {
                 ui_launcher_next();
             } else if (ch == '\n' || ch == '\r') {
                 const char *selected = ui_get_launcher_item();
-                serial_write("[ ui ] launcher select: ");
+                serial_write("[ ui ] launcher dispatch v2: ");
                 serial_write(selected);
                 serial_write("\n");
             } else {
