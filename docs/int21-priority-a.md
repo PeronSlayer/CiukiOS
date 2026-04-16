@@ -24,7 +24,7 @@ Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compat
 18. `AH=3Eh` - close handle (supports std handles `0/1/2`, validates others).
 19. `AH=3Fh` - read handle (stdin baseline on handle `0`, deterministic errors for others).
 20. `AH=40h` - write handle (stdout/stderr baseline on handles `1/2`, deterministic errors for others).
-21. `AH=4Dh` - get last process return code (`AL`) + termination type (`AH`).
+21. `AH=4Dh` - get last process return code (`AL`) + termination type (`AH`) with DOS-like one-shot consume-on-read behavior.
 22. `AH=51h` - get current PSP segment (`BX`).
 23. `AH=62h` - get current PSP segment (`BX`) (DOS 3+ style alias).
 24. `AH=4Ch` - terminate process with return code.
@@ -79,7 +79,7 @@ FN  | Status               | Implementation Details
 43h | IMPLEMENTED          | Get/set FAT-backed file attributes by DOS path
 56h | IMPLEMENTED          | Rename file/dir entry (same-directory subset, DS:DX old + ES:DI new)
 4Ch | IMPLEMENTED          | Terminate with return code
-4Dh | IMPLEMENTED          | Get last process return code + type
+4Dh | IMPLEMENTED          | Get last process return code + type (one-shot consume-on-read)
 51h | IMPLEMENTED          | Get current PSP segment to BX
 62h | IMPLEMENTED          | Get current PSP segment to BX (DOS 3+ alias)
 48h | IMPLEMENTED          | Paragraph allocator baseline; returns AX=segment on success, AX=0008h/BX=max on failure
