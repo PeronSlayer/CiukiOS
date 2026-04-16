@@ -35,6 +35,16 @@ Primary roadmap:
 5. Write a new handoff for major multi-file or architectural changes.
 6. Update this file only if global direction/state changed.
 
+## Versioning Cadence Rule (Required)
+1. Current baseline version: `CiukiOS Alpha v0.6.0`.
+2. Every 3-4 completed roadmap tasks, bump patch version by `+0.0.1`.
+3. Example progression: `v0.6.0 -> v0.6.1 -> v0.6.2`.
+4. On each version bump, update all of:
+	- `README.md` (Current Version + Changelog)
+	- `stage2/include/version.h`
+	- relevant roadmap/status docs if user-visible scope changed
+5. Keep bump cadence deterministic: do not skip changelog updates after a bump.
+
 ## Handoff Rule
 For major changes, always add one file:
 `docs/handoffs/YYYY-MM-DD-<topic>.md`

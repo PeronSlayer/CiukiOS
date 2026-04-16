@@ -9,6 +9,15 @@ Mission: become a progressively more complete environment capable of running DOS
 `CiukiOS Alpha v0.6.0`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
+## Versioning Cadence
+1. Baseline currently starts from `v0.6.0`.
+2. Every 3-4 completed roadmap tasks, increment patch version by `+0.0.1`.
+3. Example: `v0.6.0 -> v0.6.1 -> v0.6.2`.
+4. At each bump, update all of:
+   - `README.md` (Current Version + Changelog)
+   - `stage2/include/version.h`
+   - user-visible roadmap/status notes when scope changes are externally relevant
+
 ## Changelog (Latest)
 ### v0.6.0
 1. Merged INT21 compatibility expansion with `AH=56h` rename (same-directory DOS-like subset).
