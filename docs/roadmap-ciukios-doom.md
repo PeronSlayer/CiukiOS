@@ -8,7 +8,7 @@ Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, 
 
 ## Current Snapshot (v0.6.0, updated 2026-04-17)
 1. Stage2 shell is active with DOS-like command surface (`dir/type/copy/ren/move/mkdir/rmdir/attrib/del/run`).
-2. COM runtime contract is active; EXE MZ path has relocation and edge-case hardening with deterministic host-side regression tests.
+2. COM runtime contract is active; EXE MZ path has relocation and edge-case hardening with deterministic host-side regression tests plus real EXE corpus validation gate.
 3. INT21 priority-A path includes FAT-backed file handles, file search (`4Eh/4Fh`), rename subset (`56h`), and DOS-like one-shot `AH=4Dh` semantics with matrix gating.
 4. Low-level runtime (IDT/PIT/IRQ1 path) now exposes deterministic startup selftests for timer progress and keyboard decode/capture.
 5. Video stack includes double-buffering path, mode catalog handoff, `vmode` utility, dedicated non-interactive video mode regression tests, and explicit runtime `1024x768` policy marker validation.

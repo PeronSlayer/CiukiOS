@@ -83,6 +83,10 @@ Completion evidence:
 	- `[ test ] phase2 keyboard decode/capture: PASS`
 	- `[ test ] phase2 low-level core selftest: PASS`
 - Boot gate validation checks now require those markers in `scripts/test_stage2_boot.sh`.
+- Phase-2 closure gate exists and is reproducible via `make test-phase2`, combining:
+	- `check_int21_matrix`
+	- deterministic MZ regression (`test_mz_regression`)
+	- real EXE corpus harness from FreeDOS/OpenGEM runtime (`test_mz_runtime_corpus`)
 
 ### Phase 3 - `.COM` Loader
 Outputs:

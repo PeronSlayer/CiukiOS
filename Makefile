@@ -133,6 +133,12 @@ test-int21:
 test-mz-regression:
 	bash ./scripts/test_mz_regression.sh
 
+test-mz-corpus:
+	bash ./scripts/test_mz_runtime_corpus.sh
+
+test-phase2:
+	bash ./scripts/test_phase2_closure.sh
+
 test-freedos-pipeline:
 	./scripts/validate_freedos_pipeline.sh
 
@@ -168,4 +174,4 @@ freecom-sync:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-fat-compat test-int21 test-mz-regression test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-fat-compat test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build

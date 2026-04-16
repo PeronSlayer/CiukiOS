@@ -24,8 +24,8 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 - `DONE` FAT-backed file handle baseline
 - `DONE` INT21h file search + rename subset (`AH=4Eh/4Fh/56h`) with matrix/test coverage
 - `DONE` COM runtime and shell command surface
-- `IN PROGRESS` EXE/MZ runtime compatibility depth
-- `PLANNED` compatibility harness expansion against real DOS apps
+- `DONE` EXE/MZ runtime compatibility depth (deterministic parser/relocation hardening + regression suite)
+- `DONE` compatibility harness expansion against real DOS app corpus (`make test-mz-corpus`, included in `make test-phase2`)
 
 ### Phase 3 - Symbiotic FreeDOS Integration
 - `DONE` FreeDOS runtime import + pipeline validation
@@ -82,6 +82,6 @@ References: `docs/handoffs/2026-04-16-copilot-gui-v8-heavy-cycle.md`, related GU
 - `BACKLOG` richer desktop app model
 
 ## Current Execution Focus
-1. Expand EXE/MZ compatibility depth and process/runtime semantics for real DOS binaries.
-2. Improve DOS/FreeDOS app runtime coverage (beyond synthetic selftests) with deterministic harnesses.
-3. Advance milestone path toward first DOS DOOM boot and run.
+1. Advance milestone path toward first DOS DOOM boot and run.
+2. Expand protected-mode and DOS-extender execution path.
+3. Evolve video subsystem beyond current 1024x768 baseline (dynamic/larger backbuffer policy).
