@@ -26,11 +26,7 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 4. Integrated video mode stack: GOP mode catalog handoff, `VMODE.CFG` persistence, and shell command surface `vmode`/`vres`.
 5. Added dedicated regression gate `make test-video-mode` and hardened execution with QEMU lock serialization.
 6. Updated stage2 runtime version string to match current alpha.
-7. Hardened DOS `.EXE MZ` parser semantics using declared image size from header fields (pages + last-page bytes), with overlay-safe handling.
-8. Added stricter MZ relocation bounds checks against declared loadable image and fixed-header overlap rejection for malformed relocation tables.
-9. Added runtime contract metadata for MZ path (`entry_offset`, stack offsets, required runtime span) and shell-side contract validation before dispatch.
-10. Added deterministic MZ regression suite (`make test-mz-regression`) with coverage for page-math errors, relocation edge cases, entry/stack boundary stress, multi-reloc carry behavior, and runtime span zero-fill stability.
-11. Improved stage2 gate diagnostics to distinguish infrastructure serial-capture failures from functional runtime regressions.
+7. Improved EXE/MZ runtime compatibility and strengthened deterministic regression coverage.
 
 ### v0.5.5
 1. Integrated the first minimal video driver pass with double buffering and explicit `video_present()` flow.
