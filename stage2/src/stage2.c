@@ -250,7 +250,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     } else {
         serial_write("[ test ] int21 priority-a selftest: FAIL\n");
     }
-    serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/ozone/opengem/shutdown/reboot)\n");
+    serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/opengem/shutdown/reboot)\n");
     serial_write("[ ok ] desktop ui command available (type: desktop)\n");
 
     video_init(boot_info);

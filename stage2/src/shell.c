@@ -374,7 +374,6 @@ static void shell_print_help(void) {
     video_write("  reboot   - reboot the machine\n");
     video_write("  run      - execute default COM (or INIT.COM)\n");
     video_write("  run X A  - run COM or load EXE with optional args\n");
-    video_write("  ozone    - launch oZone GUI (preflight + run)\n");
     video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
 }
 
@@ -3670,79 +3669,6 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "run")) {
         shell_run(boot_info, handoff, get_arg_ptr(line));
-        return;
-    }
-
-    if (str_eq(cmd, "ozone")) {
-        serial_write("[ app ] ozone launch requested\n");
-        /* Preflight probe */
-        {
-            fat_dir_entry_t probe;
-            const char *paths[] = {
-                "/FREEDOS/OZONE/OZONE.EXE",
-                "/EFI/CIUKIOS/OZONE.EXE",
-                "/OZONE.EXE",
-            };
-            const char *found_path = (const char *)0;
-            int pi;
-            int preflight_ok = 1;
-
-            serial_write("[ app ] ozone preflight started\n");
-
-            /* Check 1: executable present */
-            for (pi = 0; pi < 3; pi++) {
-                if (fat_find_file(paths[pi], &probe)) {
-                    found_path = paths[pi];
-                    break;
-                }
-            }
-
-            if (found_path) {
-                video_write("[preflight] OZONE.EXE: found (");
-                video_write(found_path);
-                video_write(")\n");
-                serial_write("[ app ] ozone preflight exe: ok\n");
-            } else {
-                video_write("[preflight] OZONE.EXE: NOT FOUND\n");
-                serial_write("[ app ] ozone preflight exe: missing\n");
-                preflight_ok = 0;
-            }
-
-            /* Check 2: FAT filesystem ready */
-            if (fat_ready()) {
-                video_write("[preflight] FAT layer: ready\n");
-                serial_write("[ app ] ozone preflight fat: ok\n");
-            } else {
-                video_write("[preflight] FAT layer: NOT READY\n");
-                serial_write("[ app ] ozone preflight fat: fail\n");
-                preflight_ok = 0;
-            }
-
-            /* Check 3: MZ loader capability (informational) */
-            if (found_path) {
-                if (probe.size >= 2U) {
-                    video_write("[preflight] EXE size: ");
-                    video_write_hex64((u64)probe.size);
-                    video_write(" bytes\n");
-                } else {
-                    video_write("[preflight] EXE size: too small\n");
-                    preflight_ok = 0;
-                }
-            }
-
-            serial_write("[ app ] ozone preflight complete\n");
-
-            if (!preflight_ok) {
-                video_write("[preflight] FAILED - cannot launch oZone\n");
-                video_write("Install: scripts/import_ozonegui.sh --source <dir>\n");
-                serial_write("[ app ] ozone preflight failed\n");
-            } else {
-                video_write("[preflight] PASSED - launching oZone\n");
-                serial_write("[ app ] ozone preflight passed\n");
-                shell_run(boot_info, handoff, found_path);
-                serial_write("[ app ] ozone launch completed\n");
-            }
-        }
         return;
     }
 

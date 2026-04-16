@@ -9,8 +9,6 @@ utils,MEM.EXE,no,no,,,GPL-2.0-or-later?,missing
 utils,MODE.COM,no,no,,,GPL-2.0-or-later?,missing
 utils,XCOPY.EXE,no,no,,,GPL-2.0-or-later?,missing
 source,freecom.git,no,yes,ec6c63f13be0b254151c76cbbbec3c80ae33741b,https://github.com/FDOS/freecom.git,GPL-2.0-or-later?,repo-synced
-ozonegui,OZONE.EXE,no,no,,https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/gui/ozonegui.zip,GPL-2.0-or-later?,pending-import
-ozonegui,OZONE.INI,no,no,,https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/gui/ozonegui.zip,GPL-2.0-or-later?,pending-import-config
 opengem,GEM.BAT,no,yes,13ec0a22d4a8c62fcfc826ec38329a374e4dc2347bf826f4696909be67b83a85,https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/gui/opengem.zip,GPL-2.0,launch-entry
 opengem,GEMAPPS/2048.APP,no,yes,4173762277d8eb25c24b42d9c405a65030720a4be51692104d74496dc835ecb3,https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/gui/opengem.zip,GPL-2.0,imported
 opengem,GEMAPPS/EDICON.APP,no,yes,46a15b3151267784843d46b2a3aae4d08d41eac994df7e525abd6a9d39eccf6b,https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/gui/opengem.zip,GPL-2.0,imported
