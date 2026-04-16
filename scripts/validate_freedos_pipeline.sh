@@ -121,6 +121,64 @@ else
     fi
 fi
 
+# ===== Check 7: OpenGEM GUI payload (optional) =====
+OPENGEM_RUNTIME="${FREEDOS_RUNTIME}/OPENGEM"
+OPENGEM_REQUIRED="${CIUKIOS_REQUIRE_OPENGEM:-0}"
+
+# OpenGEM launch candidates in priority order
+opengem_find_entry() {
+    local dir="$1"
+    for cand in GEM.BAT GEM.EXE DESKTOP.APP OPENGEM.BAT OPENGEM.EXE; do
+        hit=$(find "$dir" -maxdepth 3 -iname "$cand" -type f 2>/dev/null | head -n1)
+        if [ -n "$hit" ]; then
+            echo "$hit"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ "$OPENGEM_REQUIRED" = "1" ]; then
+    # Strict mode: OpenGEM payload and entry must be present
+    if [ -d "$OPENGEM_RUNTIME" ]; then
+        print_check "OpenGEM payload directory present (required)" "PASS"
+    else
+        print_check "OpenGEM payload directory present (required)" "FAIL"
+        FAILED=$((FAILED + 1))
+    fi
+
+    entry=$(opengem_find_entry "$OPENGEM_RUNTIME" 2>/dev/null || true)
+    if [ -n "$entry" ]; then
+        print_check "OpenGEM runnable entry present (required)" "PASS ($(basename "$entry"))"
+    else
+        print_check "OpenGEM runnable entry present (required)" "FAIL"
+        FAILED=$((FAILED + 1))
+    fi
+
+    # Verify manifest entries for opengem are imported
+    if [ -f "$FREEDOS_MANIFEST" ]; then
+        opengem_imported=$(grep "^opengem,GEM.BAT," "$FREEDOS_MANIFEST" 2>/dev/null | cut -d',' -f4)
+        if [ "$opengem_imported" = "yes" ]; then
+            print_check "OpenGEM manifest entry imported" "PASS"
+        else
+            print_check "OpenGEM manifest entry imported" "FAIL"
+            FAILED=$((FAILED + 1))
+        fi
+    fi
+else
+    # Info mode: report presence without failing
+    if [ -d "$OPENGEM_RUNTIME" ]; then
+        entry=$(opengem_find_entry "$OPENGEM_RUNTIME" 2>/dev/null || true)
+        if [ -n "$entry" ]; then
+            print_check "OpenGEM GUI payload" "PASS (present, entry: $(basename "$entry"))"
+        else
+            print_check "OpenGEM GUI payload" "PASS (present, no runnable entry)"
+        fi
+    else
+        print_check "OpenGEM GUI payload" "INFO (absent, optional)"
+    fi
+fi
+
 # ===== Summary =====
 echo ""
 if [ "$FAILED" -gt 0 ]; then
