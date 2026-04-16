@@ -202,6 +202,7 @@ static void splash_render_ascii_luma_scaled(u32 fb_w, u32 area_y, u32 area_h) {
 
     if (draw_w > SPLASH_SCANLINE_MAX) {
         draw_w = SPLASH_SCANLINE_MAX;
+        off_x = (fb_w > draw_w) ? ((fb_w - draw_w) / 2U) : 0U;
     }
 
     for (u32 y = 0; y < draw_h; y++) {
@@ -241,6 +242,7 @@ static void splash_render_rgba_scaled(const u8 *pixels, u32 src_w, u32 src_h, u3
 
     if (draw_w > SPLASH_SCANLINE_MAX) {
         draw_w = SPLASH_SCANLINE_MAX;
+        off_x = (fb_w > draw_w) ? ((fb_w - draw_w) / 2U) : 0U;
     }
 
     for (u32 y = 0; y < draw_h; y++) {

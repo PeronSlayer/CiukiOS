@@ -965,9 +965,9 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
             /* Try to pick a preferred resolution (32bpp only). Non-fatal. */
             {
                 static const struct { UINT32 w; UINT32 h; } preferred[] = {
+                    {800,  600},
                     {1024, 768},
                     {1280, 720},
-                    {800,  600},
                     {1280, 1024},
                     {1920, 1080},
                 };
@@ -997,6 +997,8 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                             break;
                         }
                     }
+
+                    uefi_call_wrapper(BS->FreePool, 1, mode_info);
                 }
 
                 if (best_mode != gop->Mode->Mode) {
