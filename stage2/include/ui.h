@@ -24,6 +24,16 @@
 #define UI_GAP              (UI_GAP_GRIDS        * UI_GRID)  /*  8 */
 #define UI_DOCK_W           (UI_DOCK_W_GRIDS     * UI_GRID)  /* 160 */
 
+/* Design tokens for consistent spacing (in pixels, grid-aligned) */
+#define UI_OUTER_MARGIN     UI_GAP                            /*  8 */
+#define UI_ZONE_GAP         UI_GAP                            /*  8 */
+#define UI_PANEL_BORDER     1U                                /*  1px border */
+#define UI_PANEL_PAD_X      UI_GRID                           /*  8px inner horizontal pad */
+#define UI_PANEL_PAD_Y      UI_GRID                           /*  8px inner vertical pad */
+#define UI_TITLEBAR_H       (UI_GRID * 3U)                    /* 24px title bar */
+#define UI_DOCK_ITEM_H      (UI_GRID * 3U)                    /* 24px per dock item */
+#define UI_DOCK_HEADER_H    (UI_GRID * 3U)                    /* 24px dock header */
+
 /* Minimum supported resolution */
 #define UI_MIN_FB_W         800U
 #define UI_MIN_FB_H         600U
