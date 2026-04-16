@@ -242,6 +242,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ compat ] INT16h baseline path ready (irq1 + key buffer)\n");
     serial_write("[ compat ] INT1Ah baseline path ready (pit tick source)\n");
     serial_write("[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)\n");
+    serial_write("[ compat ] INT21h console/dta/drive ready (AH=06h/07h/0Ah/0Eh/1Ah/2Fh)\n");
     serial_write("[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..42h)\n");
     if (stage2_shell_selftest_int21_baseline()) {
         serial_write("[ test ] int21 priority-a selftest: PASS\n");
