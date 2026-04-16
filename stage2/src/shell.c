@@ -695,6 +695,7 @@ static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
 static u32 g_int21_vectors[256];
 static u8 g_int21_last_return_code = 0U;
 static u8 g_int21_last_termination_type = 0U;
+static u8 g_int21_last_status_pending = 0U;
 static i32 g_int21_pending_stdin_char = -1;
 static u8 g_int21_default_drive = 0U;
 static u16 g_int21_dta_segment = 0U;
@@ -1683,8 +1684,15 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     }
 
     if (ah == 0x4DU) {
-        /* Get return code (DOS-compatible subset). AH=termination type, AL=code. */
-        regs->ax = (u16)(((u16)g_int21_last_termination_type << 8) | (u16)g_int21_last_return_code);
+        /* DOS one-shot semantics: consume stored status on first read. */
+        if (g_int21_last_status_pending) {
+            regs->ax = (u16)(((u16)g_int21_last_termination_type << 8) | (u16)g_int21_last_return_code);
+        } else {
+            regs->ax = 0x0000U;
+        }
+        g_int21_last_return_code = 0U;
+        g_int21_last_termination_type = 0U;
+        g_int21_last_status_pending = 0U;
         return;
     }
 
@@ -2238,6 +2246,7 @@ static void shell_publish_last_exit_status(const ciuki_dos_context_t *ctx) {
      * We can differentiate abort/TSR causes once those paths exist.
      */
     g_int21_last_termination_type = 0U;
+    g_int21_last_status_pending = 1U;
 }
 
 int stage2_shell_selftest_int21_baseline(void) {
@@ -2562,10 +2571,17 @@ int stage2_shell_selftest_int21_baseline(void) {
     /* AH=4Dh: get return code + termination type */
     g_int21_last_return_code = 0x5AU;
     g_int21_last_termination_type = 0x01U;
+    g_int21_last_status_pending = 1U;
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x4D00U;
     shell_com_int21(&ctx, &regs);
     if (regs.carry != 0U || regs.ax != 0x015AU) {
+        return 0;
+    }
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4D00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0000U) {
         return 0;
     }
 
