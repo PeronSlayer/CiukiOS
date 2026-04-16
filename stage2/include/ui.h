@@ -62,6 +62,28 @@ typedef enum {
     SCENE_DESKTOP = 1,
 } ui_scene_t;
 
+/* ===== Desktop Session State Machine ===== */
+typedef enum {
+    DESKTOP_STATE_ENTERING    = 0,
+    DESKTOP_STATE_ACTIVE      = 1,
+    DESKTOP_STATE_RUNNING_ACTION = 2,
+    DESKTOP_STATE_EXITING     = 3,
+} desktop_state_t;
+
+/* ===== Console Ring Buffer ===== */
+#define UI_CONSOLE_LINES     16U
+#define UI_CONSOLE_LINE_LEN  64U
+
+typedef struct {
+    char lines[UI_CONSOLE_LINES][UI_CONSOLE_LINE_LEN];
+    u32 head;   /* next slot to write (ring) */
+    u32 count;  /* total lines stored */
+} ui_console_t;
+
+void ui_console_init(ui_console_t *con);
+void ui_console_push(ui_console_t *con, const char *text);
+void ui_console_clear(ui_console_t *con);
+
 ui_scene_t ui_get_scene(void);
 int ui_set_scene(ui_scene_t scene);
 int ui_render_scene(void);
@@ -89,6 +111,8 @@ typedef struct {
 void ui_cycle_window_focus(void);
 int  ui_get_focused_window(void);
 void ui_render_windows(void);
+void ui_set_window_status(int win_idx, const char *status);
+void ui_set_console_source(ui_console_t *con);
 
 /* ===== Launcher ===== */
 void        ui_activate_launcher(void);
