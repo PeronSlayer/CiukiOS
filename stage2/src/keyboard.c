@@ -300,3 +300,10 @@ u8 stage2_keyboard_getc_blocking(void) {
         __asm__ volatile ("hlt");
     }
 }
+
+void stage2_keyboard_flush_buffer(void) {
+    u64 flags = irq_save();
+    g_keybuf_head = 0;
+    g_keybuf_tail = 0;
+    irq_restore(flags);
+}

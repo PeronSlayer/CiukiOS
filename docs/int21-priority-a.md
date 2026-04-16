@@ -8,20 +8,29 @@ Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compat
 2. `AH=01h` - blocking char input with echo (returns char in `AL`).
 3. `AH=02h` - output character in `DL` (returns char in `AL`).
 4. `AH=08h` - blocking char input without echo.
-5. `AH=09h` - print `$`-terminated string.
-6. `AH=19h` - get current default drive (`AL=0`, drive `A:`).
-7. `AH=25h` - set interrupt vector (stores far pointer from `DS:DX`).
-8. `AH=30h` - get DOS version (`6.22`).
-9. `AH=35h` - get interrupt vector (returns far pointer in `ES:BX`).
-10. `AH=4Dh` - get last process return code (`AL`) + termination type (`AH`).
-11. `AH=51h` - get current PSP segment (`BX`).
-12. `AH=62h` - get current PSP segment (`BX`) (DOS 3+ style alias).
-13. `AH=4Ch` - terminate process with return code.
+5. `AH=0Bh` - keyboard status (`AL=00h` empty, `AL=FFh` ready).
+6. `AH=0Ch` - keyboard flush + deterministic follow-up input dispatch subset.
+7. `AH=09h` - print `$`-terminated string.
+8. `AH=19h` - get current default drive (`AL=0`, drive `A:`).
+9. `AH=25h` - set interrupt vector (stores far pointer from `DS:DX`).
+10. `AH=30h` - get DOS version (`6.22`).
+11. `AH=35h` - get interrupt vector (returns far pointer in `ES:BX`).
+12. `AH=3Eh` - close handle (supports std handles `0/1/2`, validates others).
+13. `AH=3Fh` - read handle (stdin baseline on handle `0`, deterministic errors for others).
+14. `AH=40h` - write handle (stdout/stderr baseline on handles `1/2`, deterministic errors for others).
+15. `AH=4Dh` - get last process return code (`AL`) + termination type (`AH`).
+16. `AH=51h` - get current PSP segment (`BX`).
+17. `AH=62h` - get current PSP segment (`BX`) (DOS 3+ style alias).
+18. `AH=4Ch` - terminate process with return code.
 
 ## Deterministic Stubs (Not Fully Implemented Yet)
-1. `AH=48h` - allocate memory block: returns `CF=1`, `AX=0008h`.
-2. `AH=49h` - free memory block: returns `CF=1`, `AX=0009h`.
-3. `AH=4Ah` - resize memory block: returns `CF=1`, `AX=0008h`.
+1. `AH=3Ch` - create/truncate file: returns `CF=1`, `AX=0005h`.
+2. `AH=3Dh` - open file: returns `CF=1`, `AX=0002h`.
+3. `AH=41h` - delete file: returns `CF=1`, `AX=0002h`.
+4. `AH=42h` - seek: deterministic baseline (std handles return `DX:AX=0`, others `CF=1`, `AX=0006h`).
+5. `AH=48h` - allocate memory block: returns `CF=1`, `AX=0008h`.
+6. `AH=49h` - free memory block: returns `CF=1`, `AX=0009h`.
+7. `AH=4Ah` - resize memory block: returns `CF=1`, `AX=0008h`.
 
 These stubs are intentional until MCB-style allocator work is completed in roadmap M2.
 
@@ -40,11 +49,20 @@ FN  | Status               | Implementation Details
 01h | IMPLEMENTED          | Blocking char input with echo
 02h | IMPLEMENTED          | Blocking char output
 08h | IMPLEMENTED          | Blocking char input without echo
+0Bh | IMPLEMENTED          | Keyboard status (AL=00h/FFh)
+0Ch | IMPLEMENTED          | Flush keyboard buffer + deterministic follow-up subset
 09h | IMPLEMENTED          | Print $-terminated string
 19h | IMPLEMENTED          | Get current default drive (fixed to A:)
 25h | IMPLEMENTED          | Set interrupt vector (stores pointer DS:DX)
 30h | IMPLEMENTED          | Get DOS version (returns 6.22)
 35h | IMPLEMENTED          | Get interrupt vector (returns pointer ES:BX)
+3Ch | DETERMINISTIC_STUB   | Create/truncate returns access denied (AX=0005h)
+3Dh | DETERMINISTIC_STUB   | Open returns file not found (AX=0002h)
+3Eh | IMPLEMENTED          | Close supports std handles 0/1/2, validates others
+3Fh | IMPLEMENTED          | Read supports stdin handle 0 baseline, deterministic errors otherwise
+40h | IMPLEMENTED          | Write supports stdout/stderr handles 1/2 baseline
+41h | DETERMINISTIC_STUB   | Delete returns file not found (AX=0002h)
+42h | DETERMINISTIC_STUB   | Seek baseline (std handles deterministic zero, others invalid handle)
 4Ch | IMPLEMENTED          | Terminate with return code
 4Dh | IMPLEMENTED          | Get last process return code + type
 51h | IMPLEMENTED          | Get current PSP segment to BX
@@ -57,7 +75,7 @@ FN  | Status               | Implementation Details
 
 ## Next Priority-A Extensions
 1. Formal memory allocator backend for `48h/49h/4Ah`.
-2. Handle-based file APIs (`3Ch-42h`) behind INT 21h.
+2. Real FAT-backed handle table for `3Ch-42h` (replace current deterministic stubs/baseline).
 3. Additional DOS error code mapping consistency checks.
 
 ## Test Criteria per Function
@@ -78,4 +96,3 @@ FN  | Status               | Implementation Details
 3. **Gate enforcement**:
    - If adding new INT21h functions, update matrix row in this document.
    - If changing function status, update matrix and re-run check.
-
