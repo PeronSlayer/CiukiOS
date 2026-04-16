@@ -127,3 +127,86 @@ u32 ui_pixel_y_to_text_row(u32 y_pixel) {
     /* Assume 8-pixel character height in graphical mode */
     return y_pixel / 8U;
 }
+
+int ui_draw_boot_hud(
+    const char *version_string,
+    const char *mode_string,
+    u32 progress_percent)
+{
+    u32 fb_w;
+    u32 fb_h;
+    u32 hud_h = 60U;
+    u32 hud_margin = 12U;
+    u32 text_row;
+    u32 label_col;
+    u32 i;
+    u32 len;
+
+    if (!video_ready()) {
+        return 0;
+    }
+
+    fb_w = video_width_px();
+    fb_h = video_height_px();
+
+    if (fb_w < 320U || fb_h < 240U) {
+        /* Screen too small for HUD */
+        return 0;
+    }
+
+    /* Draw HUD panel in top-left corner */
+    ui_draw_panel(
+        hud_margin,
+        hud_margin,
+        fb_w - (hud_margin * 2U),
+        hud_h,
+        0x00505050U,    /* border gray */
+        0x00101010U     /* bg dark */
+    );
+
+    /* Position text inside HUD panel */
+    text_row = ui_pixel_y_to_text_row(hud_margin + 4U);
+    label_col = 2U;
+
+    /* Set colors for HUD text */
+    video_set_colors(0x0000FF00U, 0x00101010U); /* bright green on dark */
+
+    /* Line 1: CiukiOS Version */
+    video_set_cursor(label_col, text_row);
+    video_write("CiukiOS ");
+    if (version_string) {
+        video_write(version_string);
+    }
+
+    /* Line 2: Mode and Progress */
+    text_row++;
+    video_set_cursor(label_col, text_row);
+    video_write("Mode: ");
+    if (mode_string) {
+        video_write(mode_string);
+    }
+
+    /* Line 3: Progress bar in text form */
+    text_row++;
+    video_set_cursor(label_col, text_row);
+    video_write("Progress: ");
+
+    if (progress_percent > 100U) {
+        progress_percent = 100U;
+    }
+
+    /* Draw simple text progress indicator */
+    len = (progress_percent / 5U); /* 0-20 characters */
+    for (i = 0; i < 20U; i++) {
+        if (i < len) {
+            video_putchar('#');
+        } else {
+            video_putchar('-');
+        }
+    }
+
+    /* Restore normal colors */
+    video_set_colors(0x00C0C0C0U, 0x00000000U);
+
+    return 1;
+}

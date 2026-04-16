@@ -106,6 +106,7 @@ static void show_boot_splash(void) {
     u32 last_progress = 101U;
     u32 footer_px = 0U;
     int used_graphic = 0;
+    int hud_drawn = 0;
 
     video_set_font_scale(1U, 1U);
     video_set_text_window(0);
@@ -126,6 +127,14 @@ static void show_boot_splash(void) {
     serial_write_hex64((u64)video_bpp());
     serial_write("\n");
 
+    /* Draw boot HUD overlay if graphics available */
+    if (used_graphic) {
+        if (ui_draw_boot_hud(CIUKIOS_STAGE2_VERSION, "gfx", 0U)) {
+            hud_drawn = 1;
+            serial_write("[ ui ] boot hud active\n");
+        }
+    }
+
     start_ticks = stage2_timer_ticks();
     while ((stage2_timer_ticks() - start_ticks) < max_wait_ticks) {
         elapsed_ticks = stage2_timer_ticks() - start_ticks;
@@ -135,6 +144,10 @@ static void show_boot_splash(void) {
         }
         if (used_graphic && progress != last_progress) {
             draw_splash_footer(footer_px, progress);
+            /* Update HUD progress if it was drawn */
+            if (hud_drawn) {
+                ui_draw_boot_hud(CIUKIOS_STAGE2_VERSION, "gfx", progress);
+            }
             last_progress = progress;
         }
 
@@ -146,6 +159,10 @@ static void show_boot_splash(void) {
 
     if (used_graphic) {
         draw_splash_footer(footer_px, 100U);
+        /* Final HUD update */
+        if (hud_drawn) {
+            ui_draw_boot_hud(CIUKIOS_STAGE2_VERSION, "gfx", 100U);
+        }
     }
 
     video_set_font_scale(2U, 2U);

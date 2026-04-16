@@ -78,4 +78,18 @@ void ui_draw_separator_line(u32 y_pos, u32 color);
  */
 u32 ui_pixel_y_to_text_row(u32 y_pixel);
 
+/**
+ * Draw boot HUD (Heads-Up Display) in graphical mode
+ * Shows system status during boot sequence
+ * @param version_string Version string to display (e.g., "v1.0")
+ * @param mode_string Boot mode string (e.g., "gfx" or "ascii")
+ * @param progress_percent Current progress 0-100
+ * @return 1 if HUD was drawn (graphics available), 0 otherwise
+ */
+int ui_draw_boot_hud(
+    const char *version_string,
+    const char *mode_string,
+    u32 progress_percent
+);
+
 #endif /* STAGE2_UI_H */
