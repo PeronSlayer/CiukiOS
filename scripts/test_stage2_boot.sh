@@ -55,6 +55,7 @@ required_patterns=(
     "[ ok ] splashscreen rendered src=0x"
     "[ ui ] boot hud active"
     "[ compat ] INT21h FAT-backed file handles ready (AH=3Ch/3Dh/3Eh/3Fh/40h/41h/42h)"
+    "[ test ] int21 fat-handle e2e selftest: PASS"
 )
 
 forbidden_patterns=(
@@ -63,6 +64,7 @@ forbidden_patterns=(
     "Can't find image information"
     "[ tick ] irq0 #0000000000000064"
     "[ test ] int21 priority-a selftest: FAIL"
+    "[ test ] int21 fat-handle e2e selftest: FAIL"
     "[ panic ]"
 )
 

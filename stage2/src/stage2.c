@@ -266,6 +266,11 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     if (fat_init()) {
         serial_write("[ ok ] FAT layer mounted (rw cache)\n");
         serial_write("[ compat ] INT21h FAT-backed file handles ready (AH=3Ch/3Dh/3Eh/3Fh/40h/41h/42h)\n");
+        if (stage2_shell_selftest_int21_fat_handles()) {
+            serial_write("[ test ] int21 fat-handle e2e selftest: PASS\n");
+        } else {
+            serial_write("[ test ] int21 fat-handle e2e selftest: FAIL\n");
+        }
     } else {
         serial_write("[ warn ] FAT layer not mounted\n");
     }

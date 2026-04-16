@@ -1420,7 +1420,7 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
 
         {
             u8 origin = (u8)(al & 0x03U);
-            u32 off_u = ((u32)regs->dx << 16) | (u32)regs->ax;
+            u32 off_u = ((u32)regs->cx << 16) | (u32)regs->dx;
             i32 off_s = (i32)off_u;
             i64 base = 0;
             i64 new_pos = 0;
@@ -1843,6 +1843,151 @@ int stage2_shell_selftest_int21_baseline(void) {
     }
 
     return 1;
+}
+
+int stage2_shell_selftest_int21_fat_handles(void) {
+    static const char dos_path[] = "A:\\EFI\\CIUKIOS\\I21E2E.TXT";
+    static const char payload[] = "CIUKIOS_INT21_FAT_E2E";
+    static u8 runtime_mem[512];
+    ciuki_dos_context_t ctx;
+    ciuki_int21_regs_t regs;
+    fat_dir_entry_t info;
+    u16 h_create = 0U;
+    u16 h_open = 0U;
+    u16 payload_len = (u16)(sizeof(payload) - 1U);
+    u16 read_off = 0x0080U;
+    u16 path_off = 0x0010U;
+    u16 data_off = 0x0040U;
+
+    if (!fat_ready()) {
+        return 0;
+    }
+
+    local_memset(runtime_mem, 0U, (u32)sizeof(runtime_mem));
+    local_memset(&ctx, 0U, (u32)sizeof(ctx));
+    shell_int21_reset_handle_table();
+
+    ctx.image_linear = (u64)(void *)runtime_mem;
+    ctx.image_size = (u32)sizeof(runtime_mem);
+    ctx.psp_segment = 0x4321U;
+
+    /* Place DOS path and payload in runtime memory for DS:DX access. */
+    local_memcpy(runtime_mem + path_off, dos_path, (u32)sizeof(dos_path));
+    local_memcpy(runtime_mem + data_off, payload, (u32)payload_len);
+
+    /* Best-effort cleanup from previous runs. */
+    (void)fat_delete_file("/EFI/CIUKIOS/I21E2E.TXT");
+
+    /* AH=3Ch create/truncate */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3C00U;
+    regs.cx = 0x0000U;
+    regs.dx = path_off;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+    h_create = regs.ax;
+
+    /* AH=40h write payload */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4000U;
+    regs.bx = h_create;
+    regs.cx = payload_len;
+    regs.dx = data_off;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != payload_len) {
+        goto fail;
+    }
+
+    /* AH=42h seek to start (AL=0, absolute) */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4200U;
+    regs.bx = h_create;
+    regs.cx = 0x0000U;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0000U || regs.dx != 0x0000U) {
+        goto fail;
+    }
+
+    /* AH=3Fh read back */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3F00U;
+    regs.bx = h_create;
+    regs.cx = payload_len;
+    regs.dx = read_off;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != payload_len) {
+        goto fail;
+    }
+    for (u16 i = 0U; i < payload_len; i++) {
+        if (runtime_mem[read_off + i] != (u8)payload[i]) {
+            goto fail;
+        }
+    }
+
+    /* AH=3Eh close (flush to FAT) */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3E00U;
+    regs.bx = h_create;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+    h_create = 0U;
+
+    /* AH=3Dh reopen */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3D00U; /* read-only */
+    regs.dx = path_off;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+    h_open = regs.ax;
+
+    /* AH=3Eh close reopened handle */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3E00U;
+    regs.bx = h_open;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+    h_open = 0U;
+
+    /* AH=41h delete */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4100U;
+    regs.dx = path_off;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+
+    /* Verify deletion at FAT layer. */
+    if (fat_find_file("/EFI/CIUKIOS/I21E2E.TXT", &info)) {
+        return 0;
+    }
+
+    return 1;
+
+fail:
+    if (h_create != 0U) {
+        local_memset(&regs, 0U, (u32)sizeof(regs));
+        regs.ax = 0x3E00U;
+        regs.bx = h_create;
+        shell_com_int21(&ctx, &regs);
+    }
+    if (h_open != 0U) {
+        local_memset(&regs, 0U, (u32)sizeof(regs));
+        regs.ax = 0x3E00U;
+        regs.bx = h_open;
+        shell_com_int21(&ctx, &regs);
+    }
+    (void)fat_delete_file("/EFI/CIUKIOS/I21E2E.TXT");
+    return 0;
 }
 
 static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const char *tail) {
