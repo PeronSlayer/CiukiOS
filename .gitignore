@@ -13,3 +13,7 @@ third_party/freedos/runtime/*
 
 third_party/freedos/sources/*
 !third_party/freedos/sources/.gitkeep
+
+# Local-only internal collaboration notes (not published)
+docs/collab/
+docs/handoffs/

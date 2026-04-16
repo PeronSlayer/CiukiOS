@@ -6,8 +6,8 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Stage2 v0.5`  
-Focus: INT21 compatibility expansion + testable desktop session entry.
+`CiukiOS Alpha v0.5.2`  
+Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
 ### v0.5.2
@@ -15,6 +15,8 @@ Focus: INT21 compatibility expansion + testable desktop session entry.
 2. Added collaboration and contribution direction in README.
 3. Added explicit development pace note (spare-time project).
 4. Added donation/support section and dedicated donation file.
+5. Moved internal LLM collaboration/handoff docs to local-only workflow.
+6. Introduced pre-1.0 alpha policy for releases and build instructions.
 
 ### v0.5.1
 1. Improved desktop readability with layout grid v2 and clearer window chrome.
@@ -53,31 +55,18 @@ If you want to help, please open an issue with:
 This is a spare-time project.
 Updates are continuous but not on a fixed schedule: progress depends on available free time and mood.
 
+## Alpha Policy (Pre-1.0)
+Until `CiukiOS Alpha v1.0`, this project follows these rules:
+1. No official prebuilt release artifacts are provided.
+2. No public step-by-step build instructions are provided in this README.
+3. Development is currently heavily assisted by LLM tooling (OpenAI, Claude, Copilot) while core engineering skills and architecture mature.
+
 ## Key Docs
 1. DOS-to-DOOM roadmap: `docs/roadmap-ciukios-doom.md`
 2. DOS 6.2 compatibility roadmap: `docs/roadmap-dos62-compat.md`
 3. FreeDOS integration and licensing policy: `docs/freedos-integration-policy.md`
 4. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
-5. Handoff workflow: `docs/handoffs/README.md`
-6. Claude/Codex shared session readme: `CLAUDE.md`
-
-## Build and Run
-1. `./run_ciukios.sh`
-2. Boot regression tests:
-   - `make test-stage2`
-   - `make test-fallback`
-
-## FreeDOS Symbiotic Mode (Optional)
-1. Sync FreeCOM source:
-   - `make freecom-sync`
-2. Build/import `COMMAND.COM` from FreeCOM:
-   - `make freecom-build`
-   - Note: if local `ia16-elf` libc headers are missing, this target falls back to the official FreeDOS `freecom.zip` package.
-3. Import FreeDOS files:
-   - `./scripts/import_freedos.sh --source /path/to/freedos/files`
-4. Run with integration enabled (default):
-   - `CIUKIOS_INCLUDE_FREEDOS=1 ./run_ciukios.sh`
-5. Runtime files are copied inside image under `A:\\FREEDOS\\` and selected files are mirrored to DOS-style root.
+5. Shared contributor/session notes: `CLAUDE.md`
 
 ## Third-Party and Licensing (FreeDOS Notice)
 1. This repository can include and use third-party FreeDOS components in `third_party/freedos/`.
