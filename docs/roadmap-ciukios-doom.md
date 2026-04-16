@@ -6,11 +6,12 @@ Build a DOS-compatible environment inside CiukiOS capable of running real DOS ex
 ## North Star (Current Cap)
 Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, timer/audio interrupts, and stable file I/O.
 
-## Current Snapshot (v0.6.0)
+## Current Snapshot (v0.6.0, updated 2026-04-17)
 1. Stage2 shell is active with DOS-like command surface (`dir/type/copy/ren/move/mkdir/rmdir/attrib/del/run`).
-2. COM runtime contract is in place; EXE MZ loader MVP path exists with current dispatch limits documented.
-3. INT21 priority-A path includes FAT-backed file handles, file search (`4Eh/4Fh`), and rename subset (`56h`) with automated matrix gating.
-4. Video stack includes double-buffering path, mode catalog handoff, `vmode` utility, and dedicated non-interactive video mode regression tests.
+2. COM runtime contract is active; EXE MZ path has relocation and edge-case hardening with deterministic host-side regression tests.
+3. INT21 priority-A path includes FAT-backed file handles, file search (`4Eh/4Fh`), rename subset (`56h`), and DOS-like one-shot `AH=4Dh` semantics with matrix gating.
+4. Low-level runtime (IDT/PIT/IRQ1 path) now exposes deterministic startup selftests for timer progress and keyboard decode/capture.
+5. Video stack includes double-buffering path, mode catalog handoff, `vmode` utility, and dedicated non-interactive video mode regression tests.
 
 ## Compatibility Definition for This Goal
 1. Execute real `.COM` and `.EXE MZ` binaries.
@@ -122,12 +123,12 @@ Exit criteria:
 1. Repeatable release profile with compatibility report.
 
 ## Immediate Execution Queue (Next 6 Technical Steps)
-1. Promote current custom COM path to true DOS `.COM` loader (PSP + segment model).
-2. Build `.EXE MZ` loader MVP with relocation support.
-3. Complete `INT 21h` priority-A with strict flag/error behavior tests.
-4. Finalize FAT write semantics and path edge cases.
-5. Add BIOS interrupt compatibility tests (`10h`, `16h`, `1Ah`).
-6. Define protected-mode transition contract for DOS extender support.
+1. Close remaining `INT 21h` parity gaps: strict CF/AX edge behavior and memory ownership metadata hardening.
+2. Add dedicated compatibility tests for BIOS interrupt behaviors used by real DOS tools (`10h`, `16h`, `1Ah`).
+3. Start `COMMAND.COM`-compatible startup chain baseline (`CONFIG.SYS` + `AUTOEXEC.BAT`).
+4. Implement `.BAT` parser MVP with core control flow and environment expansion subset.
+5. Define and implement protected-mode transition contract for DOS extender support (DOS/4GW path).
+6. Build first DOOM-focused compatibility harness (boot-to-launch checks before full playability).
 
 ## Test Strategy
 1. Unit-style runtime tests for APIs and flags.

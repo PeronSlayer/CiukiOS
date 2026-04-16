@@ -9,12 +9,13 @@ For FreeDOS symbiotic integration approach, see:
 ## Goal
 Recreate DOS 6.2 behavior with high compatibility at binary level (`.COM`, `.EXE MZ`) and API level (`INT 21h`), built from scratch.
 
-## Current Snapshot (v0.6.0)
+## Current Snapshot (v0.6.0, updated 2026-04-17)
 1. Stage2 baseline is stable with automated boot/fallback/FAT compatibility checks.
 2. DOS-like shell commands for core file workflow are available.
-3. COM execution path is active; EXE MZ loading path is available as MVP.
-4. INT21 core now includes file search and rename subset coverage (`4Eh/4Fh/56h`) with matrix validation.
-5. Phase 2 low-level core now exposes deterministic startup selftests for timer tick progress and keyboard decode/capture.
+3. COM execution path is active with PSP and termination lifecycle wiring.
+4. EXE MZ path moved beyond MVP with relocation/edge-case hardening plus deterministic host-side regression suite.
+5. INT21 priority-A subset includes file search and rename coverage (`4Eh/4Fh/56h`) and one-shot `AH=4Dh` status semantics.
+6. Phase 2 low-level core exposes deterministic startup selftests for timer tick progress and keyboard decode/capture.
 
 ## Architecture Choice
 1. Keep `UEFI x64` as modern bootstrap only.
@@ -92,6 +93,13 @@ Outputs:
 Exit criteria:
 - At least 3 test `.COM` programs run successfully.
 
+Status:
+- Substantially completed.
+
+Completion evidence:
+- PSP-oriented COM runtime contract is active in stage2 shell runtime path.
+- Lifecycle termination path (`INT 20h`, `INT 21h AH=4Ch`, `AH=4Dh`) has dedicated deterministic selftest coverage.
+
 ### Phase 4 - FAT12/16
 Outputs:
 - File and directory read/write.
@@ -100,12 +108,29 @@ Outputs:
 Exit criteria:
 - `DIR/TYPE/COPY/DEL` works on real files in disk image.
 
+Status:
+- Substantially completed (core subset).
+
+Completion evidence:
+- FAT-backed read/write and handle flows are active.
+- E2E selftests cover handle create/open/read/write/seek/close/delete/rename and findfirst/findnext flows.
+
 ### Phase 5 - `INT 21h` Core
 Outputs:
 - Fundamental DOS APIs for console, files, memory, process management.
 
 Exit criteria:
 - API tests pass for priority-A subset.
+
+Status:
+- In progress (Priority-A baseline complete, hardening continues).
+
+Completion evidence:
+- Priority-A matrix gate exists and is green via `make check-int21-matrix`.
+- Baseline, FAT-handle, and findfirst/findnext selftests are wired in startup flow.
+
+Open work for closure:
+- Deep DOS parity hardening (error-flag corner cases, memory ownership metadata, and broader compatibility traces).
 
 ### Phase 6 - `COMMAND.COM`
 Outputs:
@@ -123,6 +148,15 @@ Outputs:
 Exit criteria:
 - Simple MZ program runs correctly.
 - Real batch script executes.
+
+Status:
+- In progress (MZ advanced, batch pending).
+
+Completion evidence:
+- MZ parser/loader now includes relocation and boundary hardening with deterministic regression coverage.
+
+Open work for closure:
+- Real `.BAT` parser/control-flow pipeline and env expansion behavior.
 
 ### Phase 8 - DOS Config
 Outputs:
