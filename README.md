@@ -5,10 +5,17 @@
 Educational operating system project built from scratch with a DOS-compatibility direction.
 
 ## Current Version
-`CiukiOS Stage2 v0.4`  
-Focus: graphic splash pipeline and framebuffer handoff stabilization.
+`CiukiOS Stage2 v0.5`  
+Focus: INT21 compatibility expansion + testable desktop session entry.
 
 ## Changelog (Latest)
+### v0.5
+1. Added INT21 compatibility set for console/drive/DTA paths (`AH=06h/07h/0Ah/0Eh/1Ah/2Fh`) with deterministic tests.
+2. Extended boot/test gates for INT21 matrix and compatibility markers.
+3. Added interactive desktop session from shell (`desktop` command).
+4. Added desktop controls (`TAB`, `UP/DOWN`, `J/K`, `ENTER`, `ESC`) and startup hint for GUI testing.
+5. Kept boot/fallback/FAT/INT21 automated regression flow green.
+
 ### v0.4
 1. Added graphic splash renderer (framebuffer, centered scaling, ASCII-to-grayscale mapping).
 2. Added explicit framebuffer metadata in stage handoff ABI.
@@ -45,6 +52,14 @@ The active north star is:
 4. Run with integration enabled (default):
    - `CIUKIOS_INCLUDE_FREEDOS=1 ./run_ciukios.sh`
 5. Runtime files are copied inside image under `A:\\FREEDOS\\` and selected files are mirrored to DOS-style root.
+
+## Third-Party and Licensing (FreeDOS Notice)
+1. This repository can include and use third-party FreeDOS components in `third_party/freedos/`.
+2. FreeDOS packages are distributed under their own licenses (often GPL-family, but not a single license for all files).
+3. Keep license/provenance files with imported components and validate redistribution rights per package.
+4. See:
+   - `docs/freedos-integration-policy.md`
+   - `docs/legal/freedos-licenses/`
 
 ## Credits
 Developed collaboratively with Claude Code and Codex.
