@@ -11,6 +11,7 @@
 #include "bootinfo.h"
 #include "handoff.h"
 #include "version.h"
+#include "ui.h"
 
 #define SPLASH_FOOTER_MIN_PX 64U
 #define SPLASH_FOOTER_MAX_PX 120U
@@ -19,14 +20,6 @@ static void halt_forever(void) {
     for (;;) {
         __asm__ volatile ("cli; hlt");
     }
-}
-
-static u32 local_strlen(const char *s) {
-    u32 n = 0;
-    while (s[n] != '\0') {
-        n++;
-    }
-    return n;
 }
 
 static u32 splash_footer_height_px(void) {
@@ -43,19 +36,6 @@ static u32 splash_footer_height_px(void) {
     return h;
 }
 
-static void video_write_centered_row(u32 row, const char *text) {
-    u32 cols = video_columns();
-    u32 len = local_strlen(text);
-    u32 start_col = 0;
-
-    if (cols > len) {
-        start_col = (cols - len) / 2U;
-    }
-
-    video_set_cursor(start_col, row);
-    video_write(text);
-}
-
 static void draw_splash_footer(u32 footer_px, u32 progress_percent) {
     u32 fb_w = video_width_px();
     u32 fb_h = video_height_px();
@@ -65,8 +45,6 @@ static void draw_splash_footer(u32 footer_px, u32 progress_percent) {
     u32 bar_y;
     u32 bar_w;
     u32 bar_h;
-    u32 inner_w;
-    u32 fill_w;
     u32 text_row;
     u32 loading_row;
 
@@ -79,14 +57,13 @@ static void draw_splash_footer(u32 footer_px, u32 progress_percent) {
     }
 
     y0 = (footer_px >= fb_h) ? 0U : (fb_h - footer_px);
-    video_fill_rect(0U, y0, fb_w, footer_px, 0x00000000U);
-    video_fill_rect(0U, y0, fb_w, 1U, 0x00505050U);
+    ui_draw_panel(0U, y0, fb_w, footer_px, 0x00505050U, 0x00000000U);
 
     text_row = (y0 / 8U) + 1U;
     loading_row = text_row + 2U;
     video_set_colors(0x00FFFFFFU, 0x00000000U);
-    video_write_centered_row(text_row, "CiukiOS Stage2 " CIUKIOS_STAGE2_VERSION);
-    video_write_centered_row(loading_row, "Loading...");
+    ui_write_centered_row(text_row, "CiukiOS Stage2 " CIUKIOS_STAGE2_VERSION);
+    ui_write_centered_row(loading_row, "Loading...");
 
     bar_margin = fb_w / 8U;
     if (bar_margin < 24U) {
@@ -107,36 +84,17 @@ static void draw_splash_footer(u32 footer_px, u32 progress_percent) {
         bar_y = y0 + 4U;
     }
 
-    video_fill_rect(bar_x, bar_y, bar_w, bar_h, 0x00A0A0A0U);
-    if (bar_w > 2U && bar_h > 2U) {
-        inner_w = bar_w - 2U;
-        video_fill_rect(bar_x + 1U, bar_y + 1U, inner_w, bar_h - 2U, 0x00101010U);
-        fill_w = (inner_w * progress_percent) / 100U;
-        if (fill_w > 0U) {
-            video_fill_rect(bar_x + 1U, bar_y + 1U, fill_w, bar_h - 2U, 0x00E8E8E8U);
-        }
-    }
+    ui_draw_progress_bar(
+        bar_x, bar_y, bar_w, bar_h,
+        progress_percent,
+        0x00A0A0A0U,    /* border */
+        0x00101010U,    /* bg */
+        0x00E8E8E8U     /* fill */
+    );
 }
 
 static void draw_title_bar(void) {
-    const char *title = "CiukiOS";
-    u32 cols = video_columns();
-    u32 title_len = local_strlen(title);
-    u32 start_col = 0;
-
-    video_set_colors(0x00000000U, 0x00FFFFFFU); /* black on white */
-    video_set_cursor(0, 0);
-    for (u32 i = 0; i < cols; i++) {
-        video_putchar(' ');
-    }
-
-    if (cols > title_len) {
-        start_col = (cols - title_len) / 2;
-    }
-    video_set_cursor(start_col, 0);
-    video_write(title);
-
-    video_set_colors(0x00C0C0C0U, 0x00000000U); /* restore shell colors */
+    ui_draw_top_bar("CiukiOS", 0x00FFFFFFU, 0x00000000U); /* white bar, black text */
     video_set_text_window(1);                   /* reserve top row for title bar */
 }
 
@@ -267,6 +225,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ compat ] INT16h baseline path ready (irq1 + key buffer)\n");
     serial_write("[ compat ] INT1Ah baseline path ready (pit tick source)\n");
     serial_write("[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)\n");
+    serial_write("[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..42h)\n");
     if (stage2_shell_selftest_int21_baseline()) {
         serial_write("[ test ] int21 priority-a selftest: PASS\n");
     } else {
