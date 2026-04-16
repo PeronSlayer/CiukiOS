@@ -642,6 +642,8 @@ static void shell_com_int20(ciuki_dos_context_t *ctx) {
 
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
 static u32 g_int21_vectors[256];
+static u8 g_int21_last_return_code = 0U;
+static u8 g_int21_last_termination_type = 0U;
 
 static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
     if (!ctx || off >= ctx->image_size) {
@@ -745,6 +747,18 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    if (ah == 0x51U || ah == 0x62U) {
+        /* Get PSP address (DOS-compatible subset): return current PSP segment in BX. */
+        regs->bx = ctx->psp_segment;
+        return;
+    }
+
+    if (ah == 0x4DU) {
+        /* Get return code (DOS-compatible subset). AH=termination type, AL=code. */
+        regs->ax = (u16)(((u16)g_int21_last_termination_type << 8) | (u16)g_int21_last_return_code);
+        return;
+    }
+
     if (ah == 0x48U) {
         /* Allocate memory block (paras) - deterministic stub until MCB allocator exists. */
         regs->carry = 1U;
@@ -798,6 +812,18 @@ static void shell_com_terminate(ciuki_dos_context_t *ctx, u8 code) {
     ctx->exit_code = code;
 }
 
+static void shell_publish_last_exit_status(const ciuki_dos_context_t *ctx) {
+    if (!ctx) {
+        return;
+    }
+    g_int21_last_return_code = ctx->exit_code;
+    /*
+     * For now all exits map to DOS "normal termination" type 0.
+     * We can differentiate abort/TSR causes once those paths exist.
+     */
+    g_int21_last_termination_type = 0U;
+}
+
 int stage2_shell_selftest_int21_baseline(void) {
     ciuki_dos_context_t ctx;
     ciuki_int21_regs_t regs;
@@ -806,12 +832,28 @@ int stage2_shell_selftest_int21_baseline(void) {
     local_memset(&ctx, 0U, (u32)sizeof(ctx));
     ctx.image_linear = (u64)(const void *)test_image;
     ctx.image_size = (u32)(sizeof(test_image) - 1U);
+    ctx.psp_segment = 0x4321U;
 
     /* AH=30h: DOS version */
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x3000U;
     shell_com_int21(&ctx, &regs);
     if (regs.carry != 0U || regs.ax != 0x1606U) {
+        return 0;
+    }
+
+    /* AH=51h / AH=62h: get PSP address */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x5100U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.bx != 0x4321U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x6200U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.bx != 0x4321U) {
         return 0;
     }
 
@@ -846,6 +888,16 @@ int stage2_shell_selftest_int21_baseline(void) {
     regs.bx = 0x0010U;
     shell_com_int21(&ctx, &regs);
     if (regs.carry != 1U || regs.ax != 0x0008U) {
+        return 0;
+    }
+
+    /* AH=4Dh: get return code + termination type */
+    g_int21_last_return_code = 0x5AU;
+    g_int21_last_termination_type = 0x01U;
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4D00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x015AU) {
         return 0;
     }
 
@@ -1095,11 +1147,13 @@ static void shell_run_staged_image(
         video_write("\n");
 
         entry(&ctx, &svc);
+        shell_publish_last_exit_status(&ctx);
         shell_print_com_exit(&ctx);
         return;
     }
 
     entry(&ctx, &svc);
+    shell_publish_last_exit_status(&ctx);
     shell_print_com_exit(&ctx);
 }
 

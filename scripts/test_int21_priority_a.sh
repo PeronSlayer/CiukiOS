@@ -20,6 +20,7 @@ required_patterns=(
     "[ compat ] INT10h baseline path ready (stage2 video text/gfx)"
     "[ compat ] INT16h baseline path ready (irq1 + key buffer)"
     "[ compat ] INT1Ah baseline path ready (pit tick source)"
+    "[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)"
 )
 
 forbidden_patterns=(
