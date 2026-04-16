@@ -127,6 +127,9 @@ test-int21:
 test-freedos-pipeline:
 	./scripts/validate_freedos_pipeline.sh
 
+check-int21-matrix:
+	./scripts/check_int21_matrix.sh
+
 test-boot: test-stage2 test-fallback
 
 ci: test-boot
@@ -150,4 +153,4 @@ freecom-sync:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-fat-compat test-int21 test-freedos-pipeline test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build
+.PHONY: all clean re test-stage2 test-fallback test-fat-compat test-int21 test-freedos-pipeline check-int21-matrix test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build
