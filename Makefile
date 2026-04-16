@@ -133,6 +133,9 @@ check-int21-matrix:
 test-gui-desktop:
 	./scripts/test_gui_desktop.sh
 
+test-opengem:
+	./scripts/test_opengem_integration.sh
+
 test-boot: test-stage2 test-fallback
 
 ci: test-boot
@@ -156,4 +159,4 @@ freecom-sync:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-fat-compat test-int21 test-freedos-pipeline check-int21-matrix test-gui-desktop test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build
+.PHONY: all clean re test-stage2 test-fallback test-fat-compat test-int21 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build
