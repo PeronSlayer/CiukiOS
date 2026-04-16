@@ -9,6 +9,13 @@ Educational operating system project built from scratch with a DOS-compatibility
 Focus: INT21 compatibility expansion + testable desktop session entry.
 
 ## Changelog (Latest)
+### v0.5.1
+1. Improved desktop readability with layout grid v2 and clearer window chrome.
+2. Upgraded desktop interaction flow (focus/navigation feedback and launcher clarity).
+3. Added launcher/dock visual pass v2 with better selection visibility.
+4. Added GUI regression helper script: `make test-gui-desktop`.
+5. Added Copilot handoffs for desktop polish tasks D1-D5.
+
 ### v0.5
 1. Added INT21 compatibility set for console/drive/DTA paths (`AH=06h/07h/0Ah/0Eh/1Ah/2Fh`) with deterministic tests.
 2. Extended boot/test gates for INT21 matrix and compatibility markers.
