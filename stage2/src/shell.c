@@ -26,6 +26,10 @@
 #define SHELL_INT21_HANDLE_BASE 5U
 #define SHELL_INT21_FILE_BUF_CAP (64U * 1024U)
 #define SHELL_INT21_MEM_MAX_BLOCKS 32U
+#define SHELL_INT21_DTA_SIZE 43U
+#define SHELL_INT21_DTA_NAME_OFFSET 0x1EU
+#define SHELL_INT21_DTA_ATTR_OFFSET 0x15U
+#define SHELL_INT21_DTA_SIZE_OFFSET 0x1AU
 
 static const u8 g_exe32_marker[SHELL_EXE32_MARKER_SIZE] = {
     'C', 'I', 'U', 'K', 'E', 'X', '6', '4'
@@ -52,9 +56,20 @@ typedef struct shell_int21_mem_block {
     u8 reserved[3];
 } shell_int21_mem_block_t;
 
+typedef struct shell_int21_find_state {
+    int active;
+    u8 attr_mask;
+    u16 next_index;
+    u16 dta_segment;
+    u16 dta_offset;
+    char dir[SHELL_PATH_MAX];
+    char pattern[SHELL_PATH_MAX];
+} shell_int21_find_state_t;
+
 static shell_int21_file_handle_t g_int21_file_handles[SHELL_INT21_MAX_FILE_HANDLES];
 
 static int shell_dir_fat_cb(const fat_dir_entry_t *entry, void *ctx_void);
+static int shell_int21_resolve_rw_buffer(ciuki_dos_context_t *ctx, u16 off, u16 count, u8 **buf_out);
 static int shell_dir_exists_cb(const fat_dir_entry_t *entry, void *ctx_void) {
     (void)entry;
     (void)ctx_void;
@@ -684,6 +699,7 @@ static u16 g_int21_dta_segment = 0U;
 static u16 g_int21_dta_offset = 0x0080U;
 static shell_int21_mem_block_t g_int21_mem_blocks[SHELL_INT21_MEM_MAX_BLOCKS];
 static u16 g_int21_mem_block_count = 0U;
+static shell_int21_find_state_t g_int21_find_state;
 
 static void shell_int21_reset_handle_table(void) {
     local_memset(g_int21_file_handles, 0U, (u32)sizeof(g_int21_file_handles));
@@ -993,6 +1009,219 @@ static int shell_int21_dos_path_to_canonical(const char *in, char *out, u32 out_
     return build_canonical_path(tmp, out, out_size);
 }
 
+static int shell_int21_get_dta_ptr(ciuki_dos_context_t *ctx, u8 **dta_out) {
+    if (!ctx || !dta_out) {
+        return 0;
+    }
+
+    /*
+     * Current DOS runtime maps DS/ES to COM runtime linear memory.
+     * Keep DTA access constrained to active PSP segment for deterministic behavior.
+     */
+    if (g_int21_dta_segment != ctx->psp_segment) {
+        return 0;
+    }
+
+    return shell_int21_resolve_rw_buffer(ctx, g_int21_dta_offset, SHELL_INT21_DTA_SIZE, dta_out);
+}
+
+static int shell_int21_wild_match_ci(const char *pattern, const char *name) {
+    const char *p = pattern ? pattern : "";
+    const char *n = name ? name : "";
+    const char *star = (const char *)0;
+    const char *backtrack = (const char *)0;
+
+    while (*n != '\0') {
+        if (*p == '*') {
+            star = p++;
+            backtrack = n;
+            continue;
+        }
+
+        if (*p == '?' || to_upper_ascii((u8)*p) == to_upper_ascii((u8)*n)) {
+            p++;
+            n++;
+            continue;
+        }
+
+        if (star) {
+            p = star + 1;
+            n = ++backtrack;
+            continue;
+        }
+
+        return 0;
+    }
+
+    while (*p == '*') {
+        p++;
+    }
+
+    return *p == '\0';
+}
+
+static int shell_int21_split_find_path(
+    const char *canonical,
+    char *dir_out,
+    u32 dir_out_size,
+    char *pattern_out,
+    u32 pattern_out_size
+) {
+    const char *last_slash = (const char *)0;
+    u32 i;
+
+    if (!canonical || !dir_out || !pattern_out || dir_out_size == 0U || pattern_out_size == 0U) {
+        return 0;
+    }
+
+    for (i = 0U; canonical[i] != '\0'; i++) {
+        if (canonical[i] == '/') {
+            last_slash = canonical + i;
+        }
+    }
+
+    if (!last_slash) {
+        str_copy(dir_out, "/", dir_out_size);
+        str_copy(pattern_out, canonical, pattern_out_size);
+    } else if (last_slash == canonical) {
+        str_copy(dir_out, "/", dir_out_size);
+        if (last_slash[1] == '\0') {
+            str_copy(pattern_out, "*", pattern_out_size);
+        } else {
+            str_copy(pattern_out, last_slash + 1, pattern_out_size);
+        }
+    } else {
+        u32 dir_len = (u32)(last_slash - canonical);
+        if ((dir_len + 1U) > dir_out_size) {
+            return 0;
+        }
+        for (u32 j = 0U; j < dir_len; j++) {
+            dir_out[j] = canonical[j];
+        }
+        dir_out[dir_len] = '\0';
+        if (last_slash[1] == '\0') {
+            str_copy(pattern_out, "*", pattern_out_size);
+        } else {
+            str_copy(pattern_out, last_slash + 1, pattern_out_size);
+        }
+    }
+
+    if (pattern_out[0] == '\0') {
+        str_copy(pattern_out, "*", pattern_out_size);
+    }
+    return 1;
+}
+
+static int shell_int21_find_attr_match(u8 entry_attr, u8 search_attr) {
+    if ((entry_attr & FAT_ATTR_VOLUME_ID) != 0U) {
+        return 0;
+    }
+    if ((entry_attr & FAT_ATTR_HIDDEN) != 0U && (search_attr & FAT_ATTR_HIDDEN) == 0U) {
+        return 0;
+    }
+    if ((entry_attr & FAT_ATTR_SYSTEM) != 0U && (search_attr & FAT_ATTR_SYSTEM) == 0U) {
+        return 0;
+    }
+    if ((entry_attr & FAT_ATTR_DIRECTORY) != 0U && (search_attr & FAT_ATTR_DIRECTORY) == 0U) {
+        return 0;
+    }
+    return 1;
+}
+
+typedef struct shell_int21_find_match_ctx {
+    const char *pattern;
+    u8 attr_mask;
+    u16 target_index;
+    u16 seen_index;
+    int found;
+    fat_dir_entry_t match;
+} shell_int21_find_match_ctx_t;
+
+static int shell_int21_find_match_cb(const fat_dir_entry_t *entry, void *ctx_void) {
+    shell_int21_find_match_ctx_t *ctx = (shell_int21_find_match_ctx_t *)ctx_void;
+
+    if (!entry || !ctx) {
+        return 0;
+    }
+
+    if (!shell_int21_find_attr_match(entry->attr, ctx->attr_mask)) {
+        return 1;
+    }
+    if (!shell_int21_wild_match_ci(ctx->pattern, entry->name)) {
+        return 1;
+    }
+
+    if (ctx->seen_index == ctx->target_index) {
+        ctx->match = *entry;
+        ctx->found = 1;
+        return 0;
+    }
+
+    ctx->seen_index++;
+    return 1;
+}
+
+static int shell_int21_find_match_in_dir(
+    const char *dir_path,
+    const char *pattern,
+    u8 attr_mask,
+    u16 target_index,
+    fat_dir_entry_t *out_entry,
+    int *dir_ok_out
+) {
+    shell_int21_find_match_ctx_t ctx;
+
+    local_memset(&ctx, 0U, (u32)sizeof(ctx));
+    ctx.pattern = pattern;
+    ctx.attr_mask = attr_mask;
+    ctx.target_index = target_index;
+
+    if (!fat_list_dir(dir_path, shell_int21_find_match_cb, &ctx)) {
+        if (dir_ok_out) {
+            *dir_ok_out = 0;
+        }
+        return 0;
+    }
+
+    if (dir_ok_out) {
+        *dir_ok_out = 1;
+    }
+    if (!ctx.found) {
+        return 0;
+    }
+
+    if (out_entry) {
+        *out_entry = ctx.match;
+    }
+    return 1;
+}
+
+static void shell_int21_fill_find_dta(u8 *dta, const fat_dir_entry_t *entry, u8 attr_mask, u16 next_index) {
+    if (!dta || !entry) {
+        return;
+    }
+
+    local_memset(dta, 0U, SHELL_INT21_DTA_SIZE);
+
+    /* Internal deterministic state marker (reserved bytes 0..3). */
+    dta[0] = (u8)'C';
+    dta[1] = (u8)'K';
+    dta[2] = (u8)(next_index & 0x00FFU);
+    dta[3] = (u8)((next_index >> 8) & 0x00FFU);
+    dta[4] = attr_mask;
+
+    dta[SHELL_INT21_DTA_ATTR_OFFSET] = entry->attr;
+    dta[SHELL_INT21_DTA_SIZE_OFFSET + 0U] = (u8)(entry->size & 0x000000FFU);
+    dta[SHELL_INT21_DTA_SIZE_OFFSET + 1U] = (u8)((entry->size >> 8) & 0x000000FFU);
+    dta[SHELL_INT21_DTA_SIZE_OFFSET + 2U] = (u8)((entry->size >> 16) & 0x000000FFU);
+    dta[SHELL_INT21_DTA_SIZE_OFFSET + 3U] = (u8)((entry->size >> 24) & 0x000000FFU);
+
+    for (u32 i = 0U; i < 12U && entry->name[i] != '\0'; i++) {
+        dta[SHELL_INT21_DTA_NAME_OFFSET + i] = (u8)entry->name[i];
+    }
+    dta[SHELL_INT21_DTA_NAME_OFFSET + 12U] = '\0';
+}
+
 static int shell_int21_flush_file_handle(shell_int21_file_handle_t *h) {
     if (!h || !h->used || !h->dirty) {
         return 1;
@@ -1297,6 +1526,7 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     if (ah == 0x1AU) {
         g_int21_dta_segment = regs->ds;
         g_int21_dta_offset = regs->dx;
+        g_int21_find_state.active = 0;
         return;
     }
 
@@ -1327,6 +1557,110 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     if (ah == 0x2FU) {
         regs->es = g_int21_dta_segment;
         regs->bx = g_int21_dta_offset;
+        return;
+    }
+
+    if (ah == 0x4EU) {
+        char dos_path[SHELL_PATH_MAX];
+        char canonical_path[SHELL_PATH_MAX];
+        char dir_path[SHELL_PATH_MAX];
+        char pattern[SHELL_PATH_MAX];
+        fat_dir_entry_t match;
+        u8 *dta;
+        u8 search_attr = (u8)(regs->cx & 0x00FFU);
+        int dir_ok = 0;
+
+        if (!fat_ready()) {
+            g_int21_find_state.active = 0;
+            regs->carry = 1U;
+            regs->ax = 0x0002U; /* file not found */
+            return;
+        }
+
+        if (!shell_int21_get_dta_ptr(ctx, &dta)) {
+            g_int21_find_state.active = 0;
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* access denied (invalid DTA) */
+            return;
+        }
+
+        if (!shell_int21_read_asciiz(ctx, regs->dx, dos_path, (u32)sizeof(dos_path)) ||
+            !shell_int21_dos_path_to_canonical(dos_path, canonical_path, (u32)sizeof(canonical_path)) ||
+            !shell_int21_split_find_path(canonical_path, dir_path, (u32)sizeof(dir_path), pattern, (u32)sizeof(pattern))) {
+            g_int21_find_state.active = 0;
+            regs->carry = 1U;
+            regs->ax = 0x0003U; /* path not found */
+            return;
+        }
+
+        if (!shell_int21_find_match_in_dir(dir_path, pattern, search_attr, 0U, &match, &dir_ok)) {
+            g_int21_find_state.active = 0;
+            regs->carry = 1U;
+            regs->ax = dir_ok ? 0x0002U : 0x0003U;
+            return;
+        }
+
+        shell_int21_fill_find_dta(dta, &match, search_attr, 1U);
+        g_int21_find_state.active = 1;
+        g_int21_find_state.attr_mask = search_attr;
+        g_int21_find_state.next_index = 1U;
+        g_int21_find_state.dta_segment = g_int21_dta_segment;
+        g_int21_find_state.dta_offset = g_int21_dta_offset;
+        str_copy(g_int21_find_state.dir, dir_path, (u32)sizeof(g_int21_find_state.dir));
+        str_copy(g_int21_find_state.pattern, pattern, (u32)sizeof(g_int21_find_state.pattern));
+        regs->ax = 0x0000U;
+        return;
+    }
+
+    if (ah == 0x4FU) {
+        fat_dir_entry_t match;
+        u8 *dta;
+        int dir_ok = 0;
+
+        if (!fat_ready()) {
+            regs->carry = 1U;
+            regs->ax = 0x0012U; /* no more files */
+            return;
+        }
+
+        if (!g_int21_find_state.active) {
+            regs->carry = 1U;
+            regs->ax = 0x0012U;
+            return;
+        }
+
+        if (!shell_int21_get_dta_ptr(ctx, &dta)) {
+            g_int21_find_state.active = 0;
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* access denied (invalid DTA) */
+            return;
+        }
+
+        if (g_int21_find_state.dta_segment != g_int21_dta_segment ||
+            g_int21_find_state.dta_offset != g_int21_dta_offset) {
+            g_int21_find_state.active = 0;
+            regs->carry = 1U;
+            regs->ax = 0x0012U;
+            return;
+        }
+
+        if (!shell_int21_find_match_in_dir(
+                g_int21_find_state.dir,
+                g_int21_find_state.pattern,
+                g_int21_find_state.attr_mask,
+                g_int21_find_state.next_index,
+                &match,
+                &dir_ok
+            )) {
+            g_int21_find_state.active = 0;
+            regs->carry = 1U;
+            regs->ax = dir_ok ? 0x0012U : 0x0003U;
+            return;
+        }
+
+        g_int21_find_state.next_index++;
+        shell_int21_fill_find_dta(dta, &match, g_int21_find_state.attr_mask, g_int21_find_state.next_index);
+        regs->ax = 0x0000U;
         return;
     }
 
@@ -2286,6 +2620,110 @@ fail:
     return 0;
 }
 
+int stage2_shell_selftest_int21_findfirst_next(void) {
+    static u8 runtime_mem[512];
+    static const char dos_pattern[] = "A:\\EFI\\CIUKIOS\\FFN?.TXT";
+    static const char payload1[] = "1";
+    static const char payload2[] = "2";
+    static const char canon1[] = "/EFI/CIUKIOS/FFN1.TXT";
+    static const char canon2[] = "/EFI/CIUKIOS/FFN2.TXT";
+    ciuki_dos_context_t ctx;
+    ciuki_int21_regs_t regs;
+    u16 path_off = 0x0020U;
+    u16 dta_off = 0x0080U;
+    char name1[13];
+    char name2[13];
+    int ok1;
+    int ok2;
+
+    if (!fat_ready()) {
+        return 0;
+    }
+
+    (void)fat_delete_file(canon1);
+    (void)fat_delete_file(canon2);
+    if (!fat_write_file(canon1, payload1, 1U)) {
+        return 0;
+    }
+    if (!fat_write_file(canon2, payload2, 1U)) {
+        (void)fat_delete_file(canon1);
+        return 0;
+    }
+
+    local_memset(runtime_mem, 0U, (u32)sizeof(runtime_mem));
+    local_memset(&ctx, 0U, (u32)sizeof(ctx));
+    shell_int21_reset_handle_table();
+
+    ctx.image_linear = (u64)(void *)runtime_mem;
+    ctx.image_size = (u32)sizeof(runtime_mem);
+    ctx.psp_segment = 0x4321U;
+    local_memcpy(runtime_mem + path_off, dos_pattern, (u32)sizeof(dos_pattern));
+
+    /* Set DTA pointer to runtime buffer at 0x80. */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x1A00U;
+    regs.ds = ctx.psp_segment;
+    regs.dx = dta_off;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+
+    /* Find first match. */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4E00U;
+    regs.cx = 0x0000U;
+    regs.ds = ctx.psp_segment;
+    regs.dx = path_off;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+
+    local_memset(name1, 0U, (u32)sizeof(name1));
+    local_memcpy(name1, runtime_mem + dta_off + SHELL_INT21_DTA_NAME_OFFSET, 12U);
+    name1[12] = '\0';
+
+    /* Find next match. */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4F00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        goto fail;
+    }
+
+    local_memset(name2, 0U, (u32)sizeof(name2));
+    local_memcpy(name2, runtime_mem + dta_off + SHELL_INT21_DTA_NAME_OFFSET, 12U);
+    name2[12] = '\0';
+
+    if (str_eq(name1, name2)) {
+        goto fail;
+    }
+
+    ok1 = str_eq(name1, "FFN1.TXT") || str_eq(name1, "FFN2.TXT");
+    ok2 = str_eq(name2, "FFN1.TXT") || str_eq(name2, "FFN2.TXT");
+    if (!ok1 || !ok2) {
+        goto fail;
+    }
+
+    /* Third find-next must fail with no more files. */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4F00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0012U) {
+        goto fail;
+    }
+
+    (void)fat_delete_file(canon1);
+    (void)fat_delete_file(canon2);
+    return 1;
+
+fail:
+    (void)fat_delete_file(canon1);
+    (void)fat_delete_file(canon2);
+    return 0;
+}
+
 static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const char *tail) {
     u8 *psp = (u8 *)(u64)SHELL_RUNTIME_COM_ADDR;
     u32 len = 0;
@@ -2341,6 +2779,7 @@ static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const ch
 
     g_int21_dta_segment = ctx->psp_segment;
     g_int21_dta_offset = 0x0080U;
+    local_memset(&g_int21_find_state, 0U, (u32)sizeof(g_int21_find_state));
     shell_int21_reset_handle_table();
     shell_int21_mem_reset(heap_base_seg, heap_paras);
 }

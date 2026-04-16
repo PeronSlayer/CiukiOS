@@ -31,6 +31,8 @@ Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compat
 25. `AH=48h` - allocate memory block (paragraph allocator baseline).
 26. `AH=49h` - free memory block by segment (`ES`).
 27. `AH=4Ah` - resize memory block by segment (`ES`) to `BX` paragraphs.
+28. `AH=4Eh` - find first matching file entry (wildcard search via DTA).
+29. `AH=4Fh` - find next matching file entry (continues active DTA search).
 
 ## Partial Compatibility Notes
 1. `AH=48h/49h/4Ah` currently use an internal paragraph heap allocator baseline (no full MCB chain yet).
@@ -79,6 +81,8 @@ FN  | Status               | Implementation Details
 48h | IMPLEMENTED          | Paragraph allocator baseline; returns AX=segment on success, AX=0008h/BX=max on failure
 49h | IMPLEMENTED          | Free allocated paragraph block by ES segment; AX=0009h on invalid segment
 4Ah | IMPLEMENTED          | Resize allocated block in place when possible; AX=0008h/BX=max on failure
+4Eh | IMPLEMENTED          | Find first wildcard match in FAT directory, writes DOS-like DTA result
+4Fh | IMPLEMENTED          | Find next wildcard match using active find state + DTA
 *   | UNSUPPORTED          | Invalid function (returns CF=1, AX=0001h)
 ```
 

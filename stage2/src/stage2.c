@@ -276,6 +276,12 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
         } else {
             serial_write("[ test ] int21 fat-handle e2e selftest: FAIL\n");
         }
+        serial_write("[ compat ] INT21h file search ready (AH=4Eh/4Fh)\n");
+        if (stage2_shell_selftest_int21_findfirst_next()) {
+            serial_write("[ test ] int21 findfirst/findnext selftest: PASS\n");
+        } else {
+            serial_write("[ test ] int21 findfirst/findnext selftest: FAIL\n");
+        }
     } else {
         serial_write("[ warn ] FAT layer not mounted\n");
     }
