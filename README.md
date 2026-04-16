@@ -6,10 +6,16 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.5.2`  
+`CiukiOS Alpha v0.5.3`  
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.5.3
+1. Added optional oZone integration flow (`import`, runtime composition hook, pipeline gate and smoke test).
+2. Added shell `ozone` command with preflight checks and deterministic launch path handling.
+3. Added oZone provenance, ops and licensing notes in project docs.
+4. Kept FreeDOS pipeline compatibility and automated validation green.
+
 ### v0.5.2
 1. Updated project purpose and public positioning as Open Source RetroOS.
 2. Added collaboration and contribution direction in README.
@@ -66,14 +72,18 @@ Until `CiukiOS Alpha v1.0`, this project follows these rules:
 2. DOS 6.2 compatibility roadmap: `docs/roadmap-dos62-compat.md`
 3. FreeDOS integration and licensing policy: `docs/freedos-integration-policy.md`
 4. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
-5. Shared contributor/session notes: `CLAUDE.md`
+5. oZone integration notes and operations: `docs/ozone-integration-notes.md`, `docs/ozone-ops.md`
+6. Shared contributor/session notes: `CLAUDE.md`
 
-## Third-Party and Licensing (FreeDOS Notice)
+## Third-Party and Licensing (FreeDOS + oZone Notice)
 1. This repository can include and use third-party FreeDOS components in `third_party/freedos/`.
 2. FreeDOS packages are distributed under their own licenses (often GPL-family, but not a single license for all files).
-3. Keep license/provenance files with imported components and validate redistribution rights per package.
-4. See:
+3. oZone is integrated as an optional GUI payload in the FreeDOS runtime path (`third_party/freedos/runtime/OZONE/`) and follows the same provenance/license workflow.
+4. Keep license/provenance files with imported components and validate redistribution rights per package.
+5. See:
    - `docs/freedos-integration-policy.md`
+   - `docs/ozone-integration-notes.md`
+   - `docs/ozone-ops.md`
    - `docs/legal/freedos-licenses/`
 
 ## Donations and Support
