@@ -44,6 +44,7 @@ required_patterns=(
     "[video] mode=double-buffer"
     "[ video ] gop modes=0x"
     "[ video ] active mode=0x"
+    "GOP: policy1024 available="
     "[ ok ] stage2 mini shell ready"
     "vmode"
 )
@@ -71,6 +72,20 @@ for pattern in "${forbidden_patterns[@]}"; do
     fi
     echo "[OK] absent: $pattern"
 done
+
+policy_line="$(grep -F "GOP: policy1024" "$LOG_FILE" | tail -n 1 || true)"
+if [[ -z "$policy_line" ]]; then
+    echo "[FAIL] missing GOP runtime policy line" >&2
+    tail -n 160 "$LOG_FILE" >&2 || true
+    exit 1
+fi
+
+if [[ "$policy_line" != *"result=PASS"* ]]; then
+    echo "[FAIL] GOP runtime policy reported failure: $policy_line" >&2
+    tail -n 160 "$LOG_FILE" >&2 || true
+    exit 1
+fi
+echo "[OK] runtime 1024 policy: $policy_line"
 
 echo "[PASS] video mode pipeline test completed"
 echo "[INFO] log: $LOG_FILE"

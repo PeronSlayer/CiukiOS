@@ -1049,6 +1049,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                 UINT32 catalog_count = 0;
                 vmode_config_t vmode_cfg;
                 BOOLEAN cfg_resolved = FALSE;
+                BOOLEAN has_1024_candidate = FALSE;
 
                 load_vmode_config(image, &vmode_cfg);
 
@@ -1073,6 +1074,12 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                     fits_backbuf = (mode_info->HorizontalResolution <= VIDEO_DRIVER_MAX_W &&
                                    mode_info->VerticalResolution   <= VIDEO_DRIVER_MAX_H &&
                                    bytes_pp <= VIDEO_DRIVER_MAX_BPP) ? 1U : 0U;
+
+                    if (bpp_val == 32 && fits_backbuf &&
+                        mode_info->HorizontalResolution >= 1024U &&
+                        mode_info->VerticalResolution >= 768U) {
+                        has_1024_candidate = TRUE;
+                    }
 
                     /* Populate GOP catalog entry */
                     if (using_stage2 && catalog_count < VIDEO_GOP_CATALOG_MAX) {
@@ -1135,6 +1142,23 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                     } else {
                         Print(L"GOP: SetMode %d failed (%r), using default\r\n", best_mode, sm);
                     }
+                }
+
+                {
+                    UINT32 selected_w = gop->Mode->Info->HorizontalResolution;
+                    UINT32 selected_h = gop->Mode->Info->VerticalResolution;
+                    BOOLEAN policy_pass = TRUE;
+
+                    if (has_1024_candidate &&
+                        (selected_w < 1024U || selected_h < 768U)) {
+                        policy_pass = FALSE;
+                    }
+
+                    Print(L"GOP: policy1024 available=%d selected=%dx%d result=%s\r\n",
+                          has_1024_candidate ? 1 : 0,
+                          selected_w,
+                          selected_h,
+                          policy_pass ? L"PASS" : L"FAIL");
                 }
 
                 if (using_stage2) {

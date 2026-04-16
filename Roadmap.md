@@ -59,6 +59,7 @@ Reference: `docs/handoffs/2026-04-16-video-driver-minimal.md`
 - `DONE` dedicated non-interactive regression gate (`make test-video-mode`)
 - `DONE` minimum compatibility target raised to at least `1024x768` (shared driver limits + loader mode policy)
 - `DONE` deterministic compatibility gate for `1024x768` (`make test-video-1024`)
+- `DONE` runtime loader marker for `1024x768` policy result (`GOP: policy1024 ... result=PASS/FAIL`) validated by video pipeline gate
 - `PLANNED` larger/dynamic backbuffer allocation policy
 - `PLANNED` compatibility expansion above `1024x768` without direct-render fallback
 
