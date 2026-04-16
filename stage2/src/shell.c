@@ -3448,6 +3448,7 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
     ui_render_scene();
     ui_render_windows();
     ui_render_launcher();
+    video_present();
 
     dstate = DESKTOP_STATE_ACTIVE;
     serial_write("[ ui ] state transition -> ACTIVE\n");
@@ -3530,6 +3531,7 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
         ui_render_scene();
         ui_render_windows();
         ui_render_launcher();
+        video_present();
     }
 
     /* --- EXITING --- */
@@ -3538,6 +3540,7 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
     shell_cls();
     shell_draw_title_bar();
     video_write("Desktop session closed. Type 'desktop' to reopen.\n");
+    video_present();
     serial_write("[ ui ] desktop session ended\n");
 }
 
@@ -3744,6 +3747,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
     video_write("Tip: type 'desktop' to test GUI mode (ALT+G+Q to return).\n");
     write_prompt();
+    video_present();
 
     for (;;) {
         i32 ch = stage2_keyboard_getc_nonblocking();
@@ -3764,6 +3768,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             shell_execute_line(line, boot_info, handoff);
             line_len = 0;
             write_prompt();
+            video_present();
             continue;
         }
 

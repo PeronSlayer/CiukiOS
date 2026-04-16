@@ -302,6 +302,7 @@ int ui_enter_desktop_scene(void) {
     if (!ui_set_scene(SCENE_DESKTOP)) return 0;
     serial_write("[ ui ] scene=desktop\n");
     ui_render_scene();
+    video_present();
     return 1;
 }
 

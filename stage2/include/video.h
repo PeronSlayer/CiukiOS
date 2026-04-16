@@ -26,5 +26,7 @@ u32 video_cell_height_px(void);
 void video_fill(u32 rgb);
 void video_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb);
 void video_put_pixel(u32 x, u32 y, u32 rgb);
+void video_present(void);
+void video_blit_row(u32 dst_x, u32 dst_y, const u32 *pixels_rgb, u32 count);
 
 #endif

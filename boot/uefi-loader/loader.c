@@ -961,34 +961,87 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
             BS->LocateProtocol, 3, &gop_guid, NULL, (VOID **)&gop
         );
         if (!EFI_ERROR(gop_status) && gop && gop->Mode && gop->Mode->Info) {
-            UINT32 bpp = gop_detect_bpp(gop->Mode->Info);
-            UINT32 bytes_per_pixel = (bpp + 7U) / 8U;
+            /* --- GOP mode selection --- */
+            /* Try to pick a preferred resolution (32bpp only). Non-fatal. */
+            {
+                static const struct { UINT32 w; UINT32 h; } preferred[] = {
+                    {1024, 768},
+                    {1280, 720},
+                    {800,  600},
+                    {1280, 1024},
+                    {1920, 1080},
+                };
+                UINT32 pref_count = sizeof(preferred) / sizeof(preferred[0]);
+                UINT32 best_mode = gop->Mode->Mode; /* default: keep current */
+                UINT32 best_pref = pref_count;       /* lower = better */
+                UINT32 mode_count = gop->Mode->MaxMode;
+                UINT32 mi;
 
-            if (bytes_per_pixel == 0U) {
-                bytes_per_pixel = 4U;
-                bpp = 32U;
+                for (mi = 0; mi < mode_count; mi++) {
+                    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode_info = NULL;
+                    UINTN mode_info_size = 0;
+                    EFI_STATUS qi = uefi_call_wrapper(
+                        gop->QueryMode, 4, gop, mi, &mode_info_size, &mode_info
+                    );
+                    if (EFI_ERROR(qi) || !mode_info) continue;
+
+                    /* Only consider 32bpp modes */
+                    if (gop_detect_bpp(mode_info) != 32) continue;
+
+                    for (UINT32 pi = 0; pi < pref_count; pi++) {
+                        if (mode_info->HorizontalResolution == preferred[pi].w &&
+                            mode_info->VerticalResolution   == preferred[pi].h &&
+                            pi < best_pref) {
+                            best_mode = mi;
+                            best_pref = pi;
+                            break;
+                        }
+                    }
+                }
+
+                if (best_mode != gop->Mode->Mode) {
+                    EFI_STATUS sm = uefi_call_wrapper(gop->SetMode, 2, gop, best_mode);
+                    if (!EFI_ERROR(sm)) {
+                        Print(L"GOP: switched to mode %d (%dx%d)\r\n",
+                              best_mode,
+                              gop->Mode->Info->HorizontalResolution,
+                              gop->Mode->Info->VerticalResolution);
+                    } else {
+                        Print(L"GOP: SetMode %d failed (%r), using default\r\n", best_mode, sm);
+                    }
+                }
             }
 
-            boot_info->framebuffer_base   = (UINT64)gop->Mode->FrameBufferBase;
-            boot_info->framebuffer_width  = gop->Mode->Info->HorizontalResolution;
-            boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
-            boot_info->framebuffer_pitch  = gop->Mode->Info->PixelsPerScanLine * bytes_per_pixel;
-            boot_info->framebuffer_bpp    = bpp;
+            {
+                UINT32 bpp = gop_detect_bpp(gop->Mode->Info);
+                UINT32 bytes_per_pixel = (bpp + 7U) / 8U;
 
-            if (using_stage2) {
-                handoff->framebuffer_base = boot_info->framebuffer_base;
-                handoff->framebuffer_width = boot_info->framebuffer_width;
-                handoff->framebuffer_height = boot_info->framebuffer_height;
-                handoff->framebuffer_pitch = boot_info->framebuffer_pitch;
-                handoff->framebuffer_bpp = boot_info->framebuffer_bpp;
+                if (bytes_per_pixel == 0U) {
+                    bytes_per_pixel = 4U;
+                    bpp = 32U;
+                }
+
+                boot_info->framebuffer_base   = (UINT64)gop->Mode->FrameBufferBase;
+                boot_info->framebuffer_width  = gop->Mode->Info->HorizontalResolution;
+                boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
+                boot_info->framebuffer_pitch  = gop->Mode->Info->PixelsPerScanLine * bytes_per_pixel;
+                boot_info->framebuffer_bpp    = bpp;
+
+                if (using_stage2) {
+                    handoff->framebuffer_base = boot_info->framebuffer_base;
+                    handoff->framebuffer_width = boot_info->framebuffer_width;
+                    handoff->framebuffer_height = boot_info->framebuffer_height;
+                    handoff->framebuffer_pitch = boot_info->framebuffer_pitch;
+                    handoff->framebuffer_bpp = boot_info->framebuffer_bpp;
+                }
+
+                Print(L"Framebuffer: %dx%d pitch=%d bpp=%d @ 0x%lx\r\n",
+                      boot_info->framebuffer_width,
+                      boot_info->framebuffer_height,
+                      boot_info->framebuffer_pitch,
+                      boot_info->framebuffer_bpp,
+                      boot_info->framebuffer_base);
             }
-
-            Print(L"Framebuffer: %dx%d pitch=%d bpp=%d @ 0x%lx\r\n",
-                  boot_info->framebuffer_width,
-                  boot_info->framebuffer_height,
-                  boot_info->framebuffer_pitch,
-                  boot_info->framebuffer_bpp,
-                  boot_info->framebuffer_base);
         } else {
             Print(L"Warning: GOP not found, no framebuffer\r\n");
         }
