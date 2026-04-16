@@ -247,7 +247,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ compat ] INT1Ah baseline path ready (pit tick source)\n");
     serial_write("[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)\n");
     serial_write("[ compat ] INT21h console/dta/drive ready (AH=06h/07h/0Ah/0Eh/1Ah/2Fh)\n");
-    serial_write("[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..42h)\n");
+    serial_write("[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..43h)\n");
     serial_write("[ compat ] INT21h memory api ready (AH=48h/49h/4Ah)\n");
     if (stage2_shell_selftest_int21_baseline()) {
         serial_write("[ test ] int21 priority-a selftest: PASS\n");
@@ -270,11 +270,17 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
     if (fat_init()) {
         serial_write("[ ok ] FAT layer mounted (rw cache)\n");
-        serial_write("[ compat ] INT21h FAT-backed file handles ready (AH=3Ch/3Dh/3Eh/3Fh/40h/41h/42h)\n");
+        serial_write("[ compat ] INT21h FAT-backed file handles ready (AH=3Ch/3Dh/3Eh/3Fh/40h/41h/42h/43h/56h)\n");
         if (stage2_shell_selftest_int21_fat_handles()) {
             serial_write("[ test ] int21 fat-handle e2e selftest: PASS\n");
         } else {
             serial_write("[ test ] int21 fat-handle e2e selftest: FAIL\n");
+        }
+        serial_write("[ compat ] INT21h file search ready (AH=4Eh/4Fh)\n");
+        if (stage2_shell_selftest_int21_findfirst_next()) {
+            serial_write("[ test ] int21 findfirst/findnext selftest: PASS\n");
+        } else {
+            serial_write("[ test ] int21 findfirst/findnext selftest: FAIL\n");
         }
     } else {
         serial_write("[ warn ] FAT layer not mounted\n");
