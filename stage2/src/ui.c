@@ -339,22 +339,72 @@ int ui_get_focused_window(void) {
 
 void ui_render_windows(void) {
     int i;
-    u32 title_row, border_color, bg_color;
+    u32 title_row, content_row;
+    u32 border_color, bg_color, text_color;
+    static int window_chrome_v2_printed = 0;
+
     if (!video_ready()) return;
+
     for (i = 0; i < UI_MAX_WINDOWS; i++) {
         ui_window_t *w = &g_windows[i];
-        border_color = w->focused ? 0x0000FF00U : 0x00404050U;
-        bg_color = w->focused ? 0x001a1a1aU : 0x00151515U;
+
+        /* Window chrome v2: improved visual hierarchy */
+        border_color = w->focused ?
+            0x00FFFFFF :  /* white border for focused */
+            0x00505050 ;  /* dim gray for unfocused */
+        bg_color = w->focused ?
+            0x00202020 :  /* dark gray for focused */
+            0x00151515 ;  /* darker for unfocused */
+        text_color = w->focused ?
+            0x0000FF00 :  /* bright green for focused */
+            0x00808080 ;  /* dim gray for unfocused */
+
+        /* Draw window panel */
         ui_draw_panel(w->x, w->y, w->w, w->h, border_color, bg_color);
-        if (w->h > 16U) {
-            title_row = ui_pixel_y_to_text_row(w->y + 2U);
-            video_set_colors(border_color, bg_color);
-            video_set_cursor(2U, title_row);
+
+        /* Draw title bar with border */
+        if (w->h > 20U) {
+            /* Title bar background (darker than window) */
+            video_fill_rect(w->x + 1U, w->y + 1U, w->w - 2U, 16U, 0x00101010U);
+
+            /* Title bar separator line */
+            video_fill_rect(w->x + 1U, w->y + 17U, w->w - 2U, 1U, border_color);
+
+            /* Title text */
+            title_row = ui_pixel_y_to_text_row(w->y + 3U);
+            video_set_colors(text_color, 0x00101010U);
+            video_set_cursor(2U + (w->x / 8U), title_row);
             video_write("[");
             video_write(w->title);
             video_write("]");
-            video_set_colors(0x00C0C0C0U, 0x00000000U);
         }
+
+        /* Content placeholder (focused window shows more detail) */
+        if (w->h > 35U) {
+            content_row = ui_pixel_y_to_text_row(w->y + 22U);
+            video_set_colors(text_color, bg_color);
+
+            if (w->focused) {
+                video_set_cursor(2U + (w->x / 8U), content_row);
+                if (i == 0) {
+                    video_write("Status: Ready");
+                } else if (i == 1) {
+                    video_write("Buffer: Empty");
+                } else {
+                    video_write("Info: Active");
+                }
+            } else {
+                video_set_cursor(2U + (w->x / 8U), content_row);
+                video_write("...");
+            }
+        }
+
+        video_set_colors(0x00C0C0C0U, 0x00000000U);
+    }
+
+    if (!window_chrome_v2_printed) {
+        serial_write("[ ui ] window chrome v2 ready\n");
+        window_chrome_v2_printed = 1;
     }
 }
 

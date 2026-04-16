@@ -55,6 +55,7 @@ required_patterns=(
     "[ ok ] splashscreen rendered src=0x"
     "[ ui ] boot hud active"
     "[ ui ] desktop layout v2 active"
+    "[ ui ] window chrome v2 ready"
 )
 
 forbidden_patterns=(
