@@ -37,6 +37,24 @@ static int stage2_phase2_lowlevel_selftest(void) {
     return 1;
 }
 
+static int stage2_bios_compat_selftest_int10(void) {
+    if (!video_ready()) {
+        return 0;
+    }
+    if (video_width_px() == 0U || video_height_px() == 0U) {
+        return 0;
+    }
+    return 1;
+}
+
+static int stage2_bios_compat_selftest_int16(void) {
+    return stage2_keyboard_selftest_decode_capture();
+}
+
+static int stage2_bios_compat_selftest_int1a(void) {
+    return stage2_phase2_timer_ticks_progress();
+}
+
 static void halt_forever(void) {
     for (;;) {
         __asm__ volatile ("cli; hlt");
@@ -300,10 +318,26 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     } else {
         serial_write("[ test ] int21 priority-a selftest: FAIL\n");
     }
-    serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/opengem/vmode/shutdown/reboot)\n");
+    serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/set/ticks/mem/run/pmode/opengem/vmode/shutdown/reboot)\n");
+    serial_write("[ compat ] PMODE contract v1 ready (CIUKEX64 marker + stub offset)\n");
     serial_write("[ ok ] desktop ui command available (type: desktop)\n");
 
     video_init(boot_info);
+    if (stage2_bios_compat_selftest_int10()) {
+        serial_write("[ test ] bios int10 baseline selftest: PASS\n");
+    } else {
+        serial_write("[ test ] bios int10 baseline selftest: FAIL\n");
+    }
+    if (stage2_bios_compat_selftest_int16()) {
+        serial_write("[ test ] bios int16 baseline selftest: PASS\n");
+    } else {
+        serial_write("[ test ] bios int16 baseline selftest: FAIL\n");
+    }
+    if (stage2_bios_compat_selftest_int1a()) {
+        serial_write("[ test ] bios int1a baseline selftest: PASS\n");
+    } else {
+        serial_write("[ test ] bios int1a baseline selftest: FAIL\n");
+    }
     show_boot_splash();
     draw_title_bar();
 

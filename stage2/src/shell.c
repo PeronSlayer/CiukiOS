@@ -30,6 +30,13 @@
 #define SHELL_INT21_DTA_NAME_OFFSET 0x1EU
 #define SHELL_INT21_DTA_ATTR_OFFSET 0x15U
 #define SHELL_INT21_DTA_SIZE_OFFSET 0x1AU
+#define SHELL_ENV_MAX 32U
+#define SHELL_ENV_NAME_MAX 16U
+#define SHELL_ENV_VALUE_MAX 96U
+#define SHELL_BATCH_MAX_LINES 256U
+#define SHELL_BATCH_MAX_LABELS 128U
+#define SHELL_BATCH_MAX_STEPS 2048U
+#define SHELL_BATCH_MAX_DEPTH 4U
 
 static const u8 g_exe32_marker[SHELL_EXE32_MARKER_SIZE] = {
     'C', 'I', 'U', 'K', 'E', 'X', '6', '4'
@@ -37,6 +44,21 @@ static const u8 g_exe32_marker[SHELL_EXE32_MARKER_SIZE] = {
 
 static u8 g_shell_file_buffer[SHELL_FILE_BUFFER_SIZE];
 static char g_shell_cwd[SHELL_PATH_MAX] = "/EFI/CIUKIOS";
+static u8 g_shell_errorlevel = 0U;
+static u8 g_shell_batch_depth = 0U;
+
+typedef struct shell_env_var {
+    u8 used;
+    char name[SHELL_ENV_NAME_MAX];
+    char value[SHELL_ENV_VALUE_MAX];
+} shell_env_var_t;
+
+typedef struct shell_batch_label {
+    char name[32];
+    u16 line_index;
+} shell_batch_label_t;
+
+static shell_env_var_t g_shell_env_vars[SHELL_ENV_MAX];
 
 typedef struct shell_int21_file_handle {
     int used;
@@ -53,7 +75,8 @@ typedef struct shell_int21_mem_block {
     u16 seg;
     u16 paras;
     u8 used;
-    u8 reserved[3];
+    u16 owner_psp;
+    u8 reserved;
 } shell_int21_mem_block_t;
 
 typedef struct shell_int21_find_state {
@@ -70,6 +93,9 @@ static shell_int21_file_handle_t g_int21_file_handles[SHELL_INT21_MAX_FILE_HANDL
 
 static int shell_dir_fat_cb(const fat_dir_entry_t *entry, void *ctx_void);
 static int shell_int21_resolve_rw_buffer(ciuki_dos_context_t *ctx, u16 off, u16 count, u8 **buf_out);
+static void shell_run_batch_file(boot_info_t *boot_info, handoff_v0_t *handoff, const char *path);
+static void shell_startup_chain(boot_info_t *boot_info, handoff_v0_t *handoff);
+static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff);
 static int shell_dir_exists_cb(const fat_dir_entry_t *entry, void *ctx_void) {
     (void)entry;
     (void)ctx_void;
@@ -169,6 +195,223 @@ static int str_eq_nocase(const char *a, const char *b) {
         b++;
     }
     return *a == '\0' && *b == '\0';
+}
+
+static int str_starts_with_nocase(const char *s, const char *prefix) {
+    while (*prefix) {
+        if (*s == '\0') {
+            return 0;
+        }
+        if (to_lower_ascii((u8)*s) != to_lower_ascii((u8)*prefix)) {
+            return 0;
+        }
+        s++;
+        prefix++;
+    }
+    return 1;
+}
+
+static int str_ends_with_nocase(const char *s, const char *suffix) {
+    u32 slen = str_len(s);
+    u32 tlen = str_len(suffix);
+    if (tlen > slen) {
+        return 0;
+    }
+    return str_eq_nocase(s + (slen - tlen), suffix);
+}
+
+static void trim_ascii_inplace(char *s) {
+    u32 len;
+    u32 i = 0U;
+
+    if (!s) {
+        return;
+    }
+
+    while (s[i] != '\0' && is_space((u8)s[i])) {
+        i++;
+    }
+    if (i > 0U) {
+        u32 j = 0U;
+        while (s[i] != '\0') {
+            s[j++] = s[i++];
+        }
+        s[j] = '\0';
+    }
+
+    len = str_len(s);
+    while (len > 0U && is_space((u8)s[len - 1U])) {
+        s[len - 1U] = '\0';
+        len--;
+    }
+}
+
+static void shell_set_errorlevel(u8 code) {
+    g_shell_errorlevel = code;
+}
+
+static u8 shell_get_errorlevel(void) {
+    return g_shell_errorlevel;
+}
+
+static void shell_env_clear_all(void) {
+    for (u32 i = 0U; i < SHELL_ENV_MAX; i++) {
+        g_shell_env_vars[i].used = 0U;
+        g_shell_env_vars[i].name[0] = '\0';
+        g_shell_env_vars[i].value[0] = '\0';
+    }
+}
+
+static void shell_env_normalize_name(const char *in, char *out, u32 out_size) {
+    u32 i = 0U;
+
+    if (!out || out_size == 0U) {
+        return;
+    }
+    out[0] = '\0';
+    if (!in) {
+        return;
+    }
+
+    while (*in && is_space((u8)*in)) {
+        in++;
+    }
+    while (*in && !is_space((u8)*in) && *in != '=' && (i + 1U) < out_size) {
+        out[i++] = (char)to_upper_ascii((u8)*in);
+        in++;
+    }
+    out[i] = '\0';
+}
+
+static shell_env_var_t *shell_env_find_slot(const char *name, int create) {
+    u32 free_idx = SHELL_ENV_MAX;
+
+    for (u32 i = 0U; i < SHELL_ENV_MAX; i++) {
+        if (g_shell_env_vars[i].used) {
+            if (str_eq(g_shell_env_vars[i].name, name)) {
+                return &g_shell_env_vars[i];
+            }
+        } else if (free_idx == SHELL_ENV_MAX) {
+            free_idx = i;
+        }
+    }
+
+    if (!create || free_idx == SHELL_ENV_MAX) {
+        return (shell_env_var_t *)0;
+    }
+
+    g_shell_env_vars[free_idx].used = 1U;
+    str_copy(g_shell_env_vars[free_idx].name, name, (u32)sizeof(g_shell_env_vars[free_idx].name));
+    g_shell_env_vars[free_idx].value[0] = '\0';
+    return &g_shell_env_vars[free_idx];
+}
+
+static const char *shell_env_get(const char *name) {
+    shell_env_var_t *slot = shell_env_find_slot(name, 0);
+    if (!slot) {
+        return "";
+    }
+    return slot->value;
+}
+
+static int shell_env_set(const char *name_in, const char *value_in) {
+    char name[SHELL_ENV_NAME_MAX];
+    shell_env_var_t *slot;
+
+    shell_env_normalize_name(name_in, name, (u32)sizeof(name));
+    if (name[0] == '\0') {
+        return 0;
+    }
+
+    slot = shell_env_find_slot(name, 1);
+    if (!slot) {
+        return 0;
+    }
+
+    str_copy(slot->value, value_in ? value_in : "", (u32)sizeof(slot->value));
+    return 1;
+}
+
+static void shell_env_expand_line(const char *in, char *out, u32 out_size) {
+    u32 oi = 0U;
+    u32 i = 0U;
+
+    if (!out || out_size == 0U) {
+        return;
+    }
+    out[0] = '\0';
+    if (!in) {
+        return;
+    }
+
+    while (in[i] != '\0' && (oi + 1U) < out_size) {
+        if (in[i] == '%') {
+            u32 j = i + 1U;
+            char name[SHELL_ENV_NAME_MAX];
+            u32 ni = 0U;
+
+            while (in[j] != '\0' && in[j] != '%' && (ni + 1U) < (u32)sizeof(name)) {
+                name[ni++] = (char)to_upper_ascii((u8)in[j]);
+                j++;
+            }
+
+            if (in[j] == '%' && ni > 0U) {
+                const char *val;
+                name[ni] = '\0';
+                val = shell_env_get(name);
+                for (u32 k = 0U; val[k] != '\0' && (oi + 1U) < out_size; k++) {
+                    out[oi++] = val[k];
+                }
+                i = j + 1U;
+                continue;
+            }
+        }
+
+        out[oi++] = in[i++];
+    }
+
+    out[oi] = '\0';
+}
+
+static int shell_parse_set_assignment(const char *args, char *name_out, u32 name_size, char *value_out, u32 value_size) {
+    const char *eq;
+    u32 ni = 0U;
+    u32 vi = 0U;
+
+    if (!args || !name_out || !value_out || name_size == 0U || value_size == 0U) {
+        return 0;
+    }
+
+    while (*args && is_space((u8)*args)) {
+        args++;
+    }
+
+    eq = args;
+    while (*eq && *eq != '=') {
+        eq++;
+    }
+    if (*eq != '=') {
+        return 0;
+    }
+
+    while (args < eq && ni + 1U < name_size) {
+        if (!is_space((u8)*args)) {
+            name_out[ni++] = (char)to_upper_ascii((u8)*args);
+        }
+        args++;
+    }
+    name_out[ni] = '\0';
+    if (name_out[0] == '\0') {
+        return 0;
+    }
+
+    args = eq + 1;
+    while (*args && vi + 1U < value_size) {
+        value_out[vi++] = *args++;
+    }
+    value_out[vi] = '\0';
+    trim_ascii_inplace(value_out);
+    return 1;
 }
 
 static void local_memset(void *dst_void, u8 value, u32 count) {
@@ -383,12 +626,14 @@ static void shell_print_help(void) {
     video_write("  cls      - clear screen\n");
     video_write("  ver      - show OS version\n");
     video_write("  echo     - print text to screen\n");
+    video_write("  set      - show or set environment variables (set K=V)\n");
     video_write("  ticks    - show PIT tick counter\n");
     video_write("  mem      - show boot memory info\n");
     video_write("  shutdown - power off the machine\n");
     video_write("  reboot   - reboot the machine\n");
     video_write("  run      - execute default COM (or INIT.COM)\n");
-    video_write("  run X A  - run COM or load EXE with optional args\n");
+    video_write("  run X A  - run COM/EXE/BAT with optional args\n");
+    video_write("  pmode    - show protected-mode transition contract status\n");
     video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
     video_write("  vmode    - video mode management (vmode help for details)\n");
     video_write("  vres     - alias for vmode\n");
@@ -407,7 +652,7 @@ static void shell_echo(const char *args) {
     video_write("\n");
 }
 
-static int normalize_com_name(const char *args, char *out, u32 out_size) {
+static int normalize_run_name(const char *args, char *out, u32 out_size) {
     u32 i = 0;
     int has_dot = 0;
 
@@ -730,7 +975,7 @@ static u16 shell_int21_mem_largest_free_block(void) {
     return best;
 }
 
-static int shell_int21_mem_insert_block(u16 index, u16 seg, u16 paras, u8 used) {
+static int shell_int21_mem_insert_block(u16 index, u16 seg, u16 paras, u8 used, u16 owner_psp) {
     if (g_int21_mem_block_count >= SHELL_INT21_MEM_MAX_BLOCKS) {
         return 0;
     }
@@ -743,6 +988,7 @@ static int shell_int21_mem_insert_block(u16 index, u16 seg, u16 paras, u8 used) 
     g_int21_mem_blocks[index].seg = seg;
     g_int21_mem_blocks[index].paras = paras;
     g_int21_mem_blocks[index].used = used;
+    g_int21_mem_blocks[index].owner_psp = owner_psp;
     g_int21_mem_block_count++;
     return 1;
 }
@@ -788,7 +1034,7 @@ static int shell_int21_mem_find_used_block(u16 seg, u16 *idx_out) {
     return 0;
 }
 
-static int shell_int21_mem_alloc(u16 paras, u16 *seg_out, u16 *max_avail_out) {
+static int shell_int21_mem_alloc(u16 owner_psp, u16 paras, u16 *seg_out, u16 *max_avail_out) {
     u16 max_free = shell_int21_mem_largest_free_block();
     if (max_avail_out) {
         *max_avail_out = max_free;
@@ -805,6 +1051,7 @@ static int shell_int21_mem_alloc(u16 paras, u16 *seg_out, u16 *max_avail_out) {
 
         if (b->paras == paras) {
             b->used = 1U;
+            b->owner_psp = owner_psp;
             if (seg_out) {
                 *seg_out = b->seg;
             }
@@ -815,11 +1062,13 @@ static int shell_int21_mem_alloc(u16 paras, u16 *seg_out, u16 *max_avail_out) {
                 (u16)(i + 1U),
                 (u16)(b->seg + paras),
                 (u16)(b->paras - paras),
+                0U,
                 0U)) {
             return 0;
         }
         b->paras = paras;
         b->used = 1U;
+        b->owner_psp = owner_psp;
         if (seg_out) {
             *seg_out = b->seg;
         }
@@ -829,17 +1078,21 @@ static int shell_int21_mem_alloc(u16 paras, u16 *seg_out, u16 *max_avail_out) {
     return 0;
 }
 
-static int shell_int21_mem_free(u16 seg) {
+static int shell_int21_mem_free(u16 owner_psp, u16 seg) {
     u16 idx = 0U;
     if (!shell_int21_mem_find_used_block(seg, &idx)) {
         return 0;
     }
+    if (g_int21_mem_blocks[idx].owner_psp != owner_psp) {
+        return 0;
+    }
     g_int21_mem_blocks[idx].used = 0U;
+    g_int21_mem_blocks[idx].owner_psp = 0U;
     shell_int21_mem_merge_around(idx);
     return 1;
 }
 
-static int shell_int21_mem_resize(u16 seg, u16 new_paras, u16 *max_out) {
+static int shell_int21_mem_resize(u16 owner_psp, u16 seg, u16 new_paras, u16 *max_out) {
     u16 idx = 0U;
     shell_int21_mem_block_t *blk;
     u16 old_paras;
@@ -852,6 +1105,12 @@ static int shell_int21_mem_resize(u16 seg, u16 new_paras, u16 *max_out) {
     }
 
     blk = &g_int21_mem_blocks[idx];
+    if (blk->owner_psp != owner_psp) {
+        if (max_out) {
+            *max_out = 0U;
+        }
+        return 0;
+    }
     old_paras = blk->paras;
     if (new_paras == old_paras) {
         if (max_out) {
@@ -874,6 +1133,7 @@ static int shell_int21_mem_resize(u16 seg, u16 new_paras, u16 *max_out) {
                 (u16)(idx + 1U),
                 (u16)(blk->seg + new_paras),
                 freed,
+                0U,
                 0U)) {
             blk->paras = old_paras;
             if (max_out) {
@@ -2170,7 +2430,7 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         u16 seg = 0U;
         u16 max_free = 0U;
 
-        if (shell_int21_mem_alloc(regs->bx, &seg, &max_free)) {
+        if (shell_int21_mem_alloc(ctx->psp_segment, regs->bx, &seg, &max_free)) {
             regs->ax = seg;
             return;
         }
@@ -2182,7 +2442,7 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     }
 
     if (ah == 0x49U) {
-        if (shell_int21_mem_free(regs->es)) {
+        if (shell_int21_mem_free(ctx->psp_segment, regs->es)) {
             regs->ax = 0x0000U;
             return;
         }
@@ -2195,7 +2455,7 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     if (ah == 0x4AU) {
         u16 max_for_block = 0U;
 
-        if (shell_int21_mem_resize(regs->es, regs->bx, &max_for_block)) {
+        if (shell_int21_mem_resize(ctx->psp_segment, regs->es, regs->bx, &max_for_block)) {
             regs->ax = 0x0000U;
             return;
         }
@@ -2428,6 +2688,17 @@ int stage2_shell_selftest_int21_baseline(void) {
         return 0;
     }
 
+    /* Ownership check: foreign PSP cannot free the block. */
+    ctx.psp_segment = 0x2222U;
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4900U;
+    regs.es = 0x5000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0009U) {
+        return 0;
+    }
+    ctx.psp_segment = 0x4321U;
+
     /* AH=4Ah resize block */
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x4A00U;
@@ -2437,6 +2708,18 @@ int stage2_shell_selftest_int21_baseline(void) {
     if (regs.carry != 0U || regs.ax != 0x0000U) {
         return 0;
     }
+
+    /* Ownership check: foreign PSP cannot resize the block. */
+    ctx.psp_segment = 0x2222U;
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4A00U;
+    regs.bx = 0x0012U;
+    regs.es = 0x5000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0008U || regs.bx != 0x0000U) {
+        return 0;
+    }
+    ctx.psp_segment = 0x4321U;
 
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x4A00U;
@@ -3101,6 +3384,7 @@ static void shell_run_staged_image(
 
     if (image_size == 0U || image_size > SHELL_RUNTIME_COM_MAX_PAYLOAD) {
         video_write("Invalid COM size.\n");
+        shell_set_errorlevel(1U);
         return;
     }
 
@@ -3119,16 +3403,19 @@ static void shell_run_staged_image(
                 &reloc_applied
             )) {
             video_write("Invalid MZ executable.\n");
+            shell_set_errorlevel(1U);
             return;
         }
 
         if (mz_info.entry_offset >= image_size) {
             video_write("Invalid MZ entry contract.\n");
+            shell_set_errorlevel(1U);
             return;
         }
 
         if (mz_info.runtime_required_bytes > SHELL_RUNTIME_COM_MAX_PAYLOAD) {
             video_write("MZ runtime span exceeds payload window.\n");
+            shell_set_errorlevel(1U);
             return;
         }
     }
@@ -3191,6 +3478,7 @@ static void shell_run_staged_image(
 
         if (!marker_ok || image_size < 12U) {
             video_write("MZ runtime dispatch pending (16-bit execution path).\n");
+            shell_set_errorlevel(1U);
             return;
         }
 
@@ -3201,6 +3489,7 @@ static void shell_run_staged_image(
 
         if (stub_entry_off >= image_size) {
             video_write("MZ dispatch marker invalid entry offset.\n");
+            shell_set_errorlevel(1U);
             return;
         }
 
@@ -3214,6 +3503,7 @@ static void shell_run_staged_image(
         shell_int21_close_all_handles();
         shell_publish_last_exit_status(&ctx);
         shell_print_com_exit(&ctx);
+        shell_set_errorlevel(ctx.exit_code);
         return;
     }
 
@@ -3221,6 +3511,7 @@ static void shell_run_staged_image(
     shell_int21_close_all_handles();
     shell_publish_last_exit_status(&ctx);
     shell_print_com_exit(&ctx);
+    shell_set_errorlevel(ctx.exit_code);
 }
 
 static int shell_run_from_catalog(
@@ -3310,12 +3601,13 @@ static int shell_run_from_fat(
 
 static void shell_run(boot_info_t *boot_info, handoff_v0_t *handoff, const char *args) {
     char target[HANDOFF_COM_NAME_MAX + 1];
+    char target_path[SHELL_PATH_MAX];
     char tail[128];
     handoff_com_entry_t *entry;
 
     extract_run_tail(args, tail, (u32)sizeof(tail));
 
-    if (!normalize_com_name(args, target, (u32)sizeof(target))) {
+    if (!normalize_run_name(args, target, (u32)sizeof(target))) {
         if (handoff->com_phys_base != 0 && handoff->com_phys_size != 0U) {
             if (shell_run_from_catalog(
                     boot_info,
@@ -3328,12 +3620,24 @@ static void shell_run(boot_info_t *boot_info, handoff_v0_t *handoff, const char 
                 return;
             }
             video_write("Default COM metadata is invalid.\n");
+            shell_set_errorlevel(1U);
             return;
         }
         if (shell_run_from_fat(boot_info, handoff, "INIT.COM", "")) {
             return;
         }
         video_write("Usage: run <name>\n");
+        shell_set_errorlevel(1U);
+        return;
+    }
+
+    if (str_ends_with_nocase(target, ".BAT")) {
+        if (!build_run_path(target, target_path, (u32)sizeof(target_path))) {
+            video_write("Invalid batch path.\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        shell_run_batch_file(boot_info, handoff, target_path);
         return;
     }
 
@@ -3358,9 +3662,10 @@ static void shell_run(boot_info_t *boot_info, handoff_v0_t *handoff, const char 
         return;
     }
 
-    video_write("COM not found: ");
+    video_write("Program not found: ");
     video_write(target);
     video_write("\n");
+    shell_set_errorlevel(1U);
 }
 
 static void shell_type(const char *args) {
@@ -4486,8 +4791,304 @@ static void shell_vmode(const char *args, const handoff_v0_t *handoff) {
     video_write("Unknown subcommand. Type 'vmode help'.\n");
 }
 
+static void shell_env_print_all(void) {
+    for (u32 i = 0U; i < SHELL_ENV_MAX; i++) {
+        if (!g_shell_env_vars[i].used) {
+            continue;
+        }
+        video_write(g_shell_env_vars[i].name);
+        video_write("=");
+        video_write(g_shell_env_vars[i].value);
+        video_write("\n");
+    }
+}
+
+static void shell_cmd_set(const char *args) {
+    char name[SHELL_ENV_NAME_MAX];
+    char value[SHELL_ENV_VALUE_MAX];
+
+    if (!args) {
+        shell_env_print_all();
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    while (*args && is_space((u8)*args)) {
+        args++;
+    }
+    if (*args == '\0') {
+        shell_env_print_all();
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    if (!shell_parse_set_assignment(args, name, (u32)sizeof(name), value, (u32)sizeof(value))) {
+        video_write("Usage: set NAME=VALUE\n");
+        shell_set_errorlevel(1U);
+        return;
+    }
+
+    if (!shell_env_set(name, value)) {
+        video_write("SET failed (env table full or invalid name).\n");
+        shell_set_errorlevel(1U);
+        return;
+    }
+
+    shell_set_errorlevel(0U);
+}
+
+static int shell_batch_find_label(
+    const shell_batch_label_t *labels,
+    u32 label_count,
+    const char *name,
+    u16 *line_out
+) {
+    char norm[32];
+    shell_env_normalize_name(name, norm, (u32)sizeof(norm));
+    if (norm[0] == '\0') {
+        return 0;
+    }
+
+    for (u32 i = 0U; i < label_count; i++) {
+        if (str_eq(labels[i].name, norm)) {
+            if (line_out) {
+                *line_out = labels[i].line_index;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int shell_load_text_file(const char *path, u32 *size_out) {
+    u32 file_size = 0U;
+    if (!fat_read_file(path, g_shell_file_buffer, SHELL_FILE_BUFFER_SIZE - 1U, &file_size)) {
+        return 0;
+    }
+    g_shell_file_buffer[file_size] = '\0';
+    if (size_out) {
+        *size_out = file_size;
+    }
+    return 1;
+}
+
+static void shell_run_batch_file(
+    boot_info_t *boot_info,
+    handoff_v0_t *handoff,
+    const char *path
+) {
+    char *lines[SHELL_BATCH_MAX_LINES];
+    shell_batch_label_t labels[SHELL_BATCH_MAX_LABELS];
+    u32 line_count = 0U;
+    u32 label_count = 0U;
+    u32 pc = 0U;
+    u32 steps = 0U;
+    u32 file_size = 0U;
+    u8 *buf = g_shell_file_buffer;
+
+    if (g_shell_batch_depth >= SHELL_BATCH_MAX_DEPTH) {
+        video_write("Batch recursion limit reached.\n");
+        shell_set_errorlevel(1U);
+        return;
+    }
+
+    if (!shell_load_text_file(path, &file_size)) {
+        video_write("Batch file not found: ");
+        write_dos_path(path);
+        video_write("\n");
+        shell_set_errorlevel(1U);
+        return;
+    }
+
+    for (u32 i = 0U; i <= file_size && line_count < SHELL_BATCH_MAX_LINES; i++) {
+        if (i == 0U) {
+            lines[line_count++] = (char *)&buf[0];
+        }
+        if (buf[i] == '\r') {
+            buf[i] = '\0';
+            continue;
+        }
+        if (buf[i] == '\n' || buf[i] == '\0') {
+            buf[i] = '\0';
+            if ((i + 1U) < file_size && line_count < SHELL_BATCH_MAX_LINES) {
+                lines[line_count++] = (char *)&buf[i + 1U];
+            }
+        }
+    }
+
+    for (u32 i = 0U; i < line_count && label_count < SHELL_BATCH_MAX_LABELS; i++) {
+        char tmp[SHELL_LINE_MAX];
+        str_copy(tmp, lines[i], (u32)sizeof(tmp));
+        trim_ascii_inplace(tmp);
+        if (tmp[0] == ':') {
+            char norm[32];
+            shell_env_normalize_name(&tmp[1], norm, (u32)sizeof(norm));
+            if (norm[0] != '\0') {
+                str_copy(labels[label_count].name, norm, (u32)sizeof(labels[label_count].name));
+                labels[label_count].line_index = (u16)i;
+                label_count++;
+            }
+        }
+    }
+
+    g_shell_batch_depth++;
+    while (pc < line_count && steps < SHELL_BATCH_MAX_STEPS) {
+        char line[SHELL_LINE_MAX];
+        char expanded[SHELL_LINE_MAX];
+        steps++;
+
+        str_copy(line, lines[pc], (u32)sizeof(line));
+        trim_ascii_inplace(line);
+        pc++;
+
+        if (line[0] == '\0' || line[0] == ':') {
+            continue;
+        }
+        if (str_starts_with_nocase(line, "rem ") || str_eq_nocase(line, "rem")) {
+            continue;
+        }
+
+        shell_env_expand_line(line, expanded, (u32)sizeof(expanded));
+
+        if (str_starts_with_nocase(expanded, "goto ")) {
+            u16 target_line = 0U;
+            const char *label = expanded + 5;
+            while (*label && is_space((u8)*label)) {
+                label++;
+            }
+            if (shell_batch_find_label(labels, label_count, label, &target_line)) {
+                pc = (u32)target_line + 1U;
+                continue;
+            }
+            video_write("GOTO label not found: ");
+            video_write(label);
+            video_write("\n");
+            shell_set_errorlevel(1U);
+            break;
+        }
+
+        if (str_starts_with_nocase(expanded, "if errorlevel ")) {
+            const char *p = expanded + 14;
+            u32 threshold = 0U;
+            while (*p && is_space((u8)*p)) {
+                p++;
+            }
+            while (*p >= '0' && *p <= '9') {
+                threshold = (threshold * 10U) + (u32)(*p - '0');
+                p++;
+            }
+            while (*p && is_space((u8)*p)) {
+                p++;
+            }
+            if (str_starts_with_nocase(p, "goto ")) {
+                if ((u32)shell_get_errorlevel() >= threshold) {
+                    u16 target_line = 0U;
+                    const char *label = p + 5;
+                    while (*label && is_space((u8)*label)) {
+                        label++;
+                    }
+                    if (shell_batch_find_label(labels, label_count, label, &target_line)) {
+                        pc = (u32)target_line + 1U;
+                    } else {
+                        video_write("IF ERRORLEVEL target missing: ");
+                        video_write(label);
+                        video_write("\n");
+                        shell_set_errorlevel(1U);
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+
+        if (str_starts_with_nocase(expanded, "set ")) {
+            shell_cmd_set(expanded + 4);
+            continue;
+        }
+
+        if (str_starts_with_nocase(expanded, "echo ")) {
+            shell_echo(expanded + 5);
+            shell_set_errorlevel(0U);
+            continue;
+        }
+
+        shell_execute_line(expanded, boot_info, handoff);
+    }
+    g_shell_batch_depth--;
+
+    if (steps >= SHELL_BATCH_MAX_STEPS) {
+        video_write("Batch aborted: too many steps.\n");
+        shell_set_errorlevel(1U);
+    }
+}
+
+static void shell_process_config_sys(void) {
+    u32 file_size = 0U;
+    char *line;
+
+    if (!shell_load_text_file("/CONFIG.SYS", &file_size)) {
+        return;
+    }
+
+    video_write("[startup] CONFIG.SYS\n");
+    line = (char *)g_shell_file_buffer;
+    for (u32 i = 0U; i <= file_size; i++) {
+        if (g_shell_file_buffer[i] == '\r') {
+            g_shell_file_buffer[i] = '\0';
+            continue;
+        }
+        if (g_shell_file_buffer[i] == '\n' || g_shell_file_buffer[i] == '\0') {
+            g_shell_file_buffer[i] = '\0';
+            trim_ascii_inplace(line);
+            if (line[0] != '\0' && line[0] != ';' && !str_starts_with_nocase(line, "rem ")) {
+                if (str_starts_with_nocase(line, "shell=")) {
+                    const char *v = line + 6;
+                    shell_env_set("COMSPEC", v);
+                } else if (str_starts_with_nocase(line, "set ")) {
+                    shell_cmd_set(line + 4);
+                }
+            }
+            line = (char *)&g_shell_file_buffer[i + 1U];
+        }
+    }
+}
+
+static void shell_startup_chain(boot_info_t *boot_info, handoff_v0_t *handoff) {
+    fat_dir_entry_t info;
+
+    shell_env_clear_all();
+    shell_env_set("COMSPEC", "COMMAND.COM");
+    shell_env_set("PATH", "\\;\\FREEDOS");
+    shell_set_errorlevel(0U);
+
+    if (!fat_ready()) {
+        return;
+    }
+
+    shell_process_config_sys();
+
+    if (fat_find_file("/AUTOEXEC.BAT", &info) && !(info.attr & FAT_ATTR_DIRECTORY)) {
+        video_write("[startup] AUTOEXEC.BAT\n");
+        shell_run_batch_file(boot_info, handoff, "/AUTOEXEC.BAT");
+    }
+}
+
+static void shell_pmode_contract(void) {
+    video_write("PMODE contract v1:\n");
+    video_write("  marker: CIUKEX64\n");
+    video_write("  dispatch: MZ stub entry offset at module[8..11]\n");
+    video_write("  runtime: stage2 validates marker/entry before handoff\n");
+    video_write("  status: 16-bit/32-bit transition scaffold active, full extender path pending\n");
+    shell_set_errorlevel(0U);
+}
+
 static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff) {
     char cmd[16];
+    char expanded[SHELL_LINE_MAX];
+
+    shell_env_expand_line(line, expanded, (u32)sizeof(expanded));
+    line = expanded;
+    shell_set_errorlevel(0U);
 
     normalize_first_token(line, cmd, (u32)sizeof(cmd));
     if (cmd[0] == '\0') {
@@ -4549,6 +5150,17 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "echo")) {
         shell_echo(get_arg_ptr(line));
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    if (str_eq(cmd, "set")) {
+        shell_cmd_set(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "pmode")) {
+        shell_pmode_contract();
         return;
     }
 
@@ -4686,12 +5298,14 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
     }
 
     video_write("Unknown command. Type 'help'.\n");
+    shell_set_errorlevel(1U);
 }
 
 void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     char line[SHELL_LINE_MAX];
     u32 line_len = 0;
 
+    shell_startup_chain(boot_info, handoff);
     video_write("Tip: type 'desktop' to test GUI mode (ALT+G+Q to return).\n");
     write_prompt();
     video_present();
