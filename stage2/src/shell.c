@@ -644,6 +644,7 @@ static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
 static u32 g_int21_vectors[256];
 static u8 g_int21_last_return_code = 0U;
 static u8 g_int21_last_termination_type = 0U;
+static i32 g_int21_pending_stdin_char = -1;
 
 static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
     if (!ctx || off >= ctx->image_size) {
@@ -653,11 +654,43 @@ static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
 }
 
 static u8 shell_int21_read_char_blocking(void) {
+    if (g_int21_pending_stdin_char >= 0) {
+        u8 ch = (u8)g_int21_pending_stdin_char;
+        g_int21_pending_stdin_char = -1;
+        return ch;
+    }
+
     u8 ch = stage2_keyboard_getc_blocking();
     if (ch == '\n') {
         return '\r';
     }
     return ch;
+}
+
+static void shell_int21_flush_input(void) {
+    g_int21_pending_stdin_char = -1;
+    stage2_keyboard_flush_buffer();
+}
+
+static int shell_int21_resolve_rw_buffer(ciuki_dos_context_t *ctx, u16 off, u16 count, u8 **buf_out) {
+    u32 n = (u32)count;
+
+    if (!ctx || !buf_out) {
+        return 0;
+    }
+    if (n == 0U) {
+        *buf_out = (u8 *)shell_ctx_ptr_from_offset(ctx, off);
+        return 1;
+    }
+    if ((u32)off >= ctx->image_size) {
+        return 0;
+    }
+    if ((u32)off + n > ctx->image_size || (u32)off + n < (u32)off) {
+        return 0;
+    }
+
+    *buf_out = (u8 *)(ctx->image_linear + (u64)off);
+    return 1;
 }
 
 static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
@@ -717,6 +750,48 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    if (ah == 0x0BU) {
+        if (g_int21_pending_stdin_char >= 0) {
+            regs->ax = (u16)((regs->ax & 0xFF00U) | 0x00FFU);
+            return;
+        }
+
+        {
+            i32 ch = stage2_keyboard_getc_nonblocking();
+            if (ch >= 0) {
+                g_int21_pending_stdin_char = ch;
+                regs->ax = (u16)((regs->ax & 0xFF00U) | 0x00FFU);
+            } else {
+                regs->ax = (u16)(regs->ax & 0xFF00U);
+            }
+        }
+        return;
+    }
+
+    if (ah == 0x0CU) {
+        shell_int21_flush_input();
+
+        if (al == 0x01U) {
+            u8 ch = shell_int21_read_char_blocking();
+            if (ch == '\r') {
+                video_putchar('\n');
+            } else {
+                video_putchar((char)ch);
+            }
+            regs->ax = (u16)((regs->ax & 0xFF00U) | ch);
+            return;
+        }
+
+        if (al == 0x08U) {
+            u8 ch = shell_int21_read_char_blocking();
+            regs->ax = (u16)((regs->ax & 0xFF00U) | ch);
+            return;
+        }
+
+        /* Flush-only deterministic path for unimplemented follow-up input functions. */
+        return;
+    }
+
     if (ah == 0x19U) {
         /* A: = 0 */
         regs->ax = (u16)((regs->ax & 0xFF00U) | 0x00U);
@@ -756,6 +831,114 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     if (ah == 0x4DU) {
         /* Get return code (DOS-compatible subset). AH=termination type, AL=code. */
         regs->ax = (u16)(((u16)g_int21_last_termination_type << 8) | (u16)g_int21_last_return_code);
+        return;
+    }
+
+    if (ah == 0x3CU) {
+        /* Create/truncate file: deterministic stub until handle table backend exists. */
+        regs->carry = 1U;
+        regs->ax = 0x0005U; /* access denied */
+        return;
+    }
+
+    if (ah == 0x3DU) {
+        /* Open file: deterministic stub until handle table backend exists. */
+        regs->carry = 1U;
+        regs->ax = 0x0002U; /* file not found */
+        return;
+    }
+
+    if (ah == 0x3EU) {
+        if (regs->bx <= 2U) {
+            regs->ax = 0x0000U;
+            return;
+        }
+        regs->carry = 1U;
+        regs->ax = 0x0006U; /* invalid handle */
+        return;
+    }
+
+    if (ah == 0x3FU) {
+        if (regs->bx == 0U) {
+            u8 *dst;
+            u16 count = regs->cx;
+            u16 done = 0U;
+
+            if (!shell_int21_resolve_rw_buffer(ctx, regs->dx, count, &dst)) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U; /* access denied (invalid buffer range) */
+                return;
+            }
+
+            while (done < count) {
+                u8 ch = shell_int21_read_char_blocking();
+                dst[done++] = ch;
+                if (ch == '\r') {
+                    break;
+                }
+            }
+            regs->ax = done;
+            return;
+        }
+
+        if (regs->bx <= 2U) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* access denied (can't read stdout/stderr) */
+            return;
+        }
+
+        regs->carry = 1U;
+        regs->ax = 0x0006U; /* invalid handle */
+        return;
+    }
+
+    if (ah == 0x40U) {
+        if (regs->bx == 1U || regs->bx == 2U) {
+            u8 *src;
+            u16 count = regs->cx;
+            u16 i;
+
+            if (!shell_int21_resolve_rw_buffer(ctx, regs->dx, count, &src)) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U; /* access denied (invalid buffer range) */
+                return;
+            }
+
+            for (i = 0U; i < count; i++) {
+                video_putchar((char)src[i]);
+            }
+
+            regs->ax = count;
+            return;
+        }
+
+        if (regs->bx == 0U) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* access denied (can't write stdin) */
+            return;
+        }
+
+        regs->carry = 1U;
+        regs->ax = 0x0006U; /* invalid handle */
+        return;
+    }
+
+    if (ah == 0x41U) {
+        /* Delete file: deterministic stub until handle API is backed by FAT layer. */
+        regs->carry = 1U;
+        regs->ax = 0x0002U; /* file not found */
+        return;
+    }
+
+    if (ah == 0x42U) {
+        if (regs->bx <= 2U) {
+            regs->ax = 0x0000U;
+            regs->dx = 0x0000U;
+            return;
+        }
+
+        regs->carry = 1U;
+        regs->ax = 0x0006U; /* invalid handle */
         return;
     }
 
@@ -888,6 +1071,104 @@ int stage2_shell_selftest_int21_baseline(void) {
     regs.bx = 0x0010U;
     shell_com_int21(&ctx, &regs);
     if (regs.carry != 1U || regs.ax != 0x0008U) {
+        return 0;
+    }
+
+    /* AH=0Bh keyboard status is deterministic (AL=00 or AL=FF) */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0B00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (((regs.ax & 0x00FFU) != 0x0000U) && ((regs.ax & 0x00FFU) != 0x00FFU))) {
+        return 0;
+    }
+
+    /* AH=0Ch flush-only deterministic path (AL=00) */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0C00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        return 0;
+    }
+
+    /* AH=3Ch/3Dh/41h deterministic stubs */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3C00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0005U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3D00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0002U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4100U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0002U) {
+        return 0;
+    }
+
+    /* AH=3Eh close: std handles allowed, invalid handles rejected */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3E00U;
+    regs.bx = 0x0001U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3E00U;
+    regs.bx = 0x0003U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0006U) {
+        return 0;
+    }
+
+    /* AH=40h write to stdout/stderr for deterministic console output */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4000U;
+    regs.bx = 0x0001U;
+    regs.cx = 0x0003U;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0003U) {
+        return 0;
+    }
+
+    /* AH=3Fh read invalid handle path and stdout read deny path */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3F00U;
+    regs.bx = 0x0004U;
+    regs.cx = 0x0001U;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0006U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x3F00U;
+    regs.bx = 0x0001U;
+    regs.cx = 0x0001U;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0005U) {
+        return 0;
+    }
+
+    /* AH=42h lseek deterministic baseline */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4200U;
+    regs.bx = 0x0001U;
+    regs.cx = 0x0000U;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0000U || regs.dx != 0x0000U) {
         return 0;
     }
 

@@ -21,6 +21,7 @@ required_patterns=(
     "[ compat ] INT16h baseline path ready (irq1 + key buffer)"
     "[ compat ] INT1Ah baseline path ready (pit tick source)"
     "[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)"
+    "[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..42h)"
 )
 
 forbidden_patterns=(
