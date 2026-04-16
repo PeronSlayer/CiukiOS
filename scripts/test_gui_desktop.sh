@@ -25,6 +25,7 @@ gui_markers=(
     "[ ui ] desktop layout v2 active"
     "[ ui ] window chrome v2 ready"
     "[ ui ] desktop shell surface active"
+    "[ ui ] alignment surgical v6 active"
 )
 
 gui_interactive_markers=(
