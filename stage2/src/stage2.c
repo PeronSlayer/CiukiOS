@@ -206,11 +206,12 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
         halt_forever();
     }
 
-    if (handoff->version != HANDOFF_V0_VERSION) {
-        serial_write("[ panic ] invalid handoff version: 0x");
+    if (handoff->version < HANDOFF_V0_VERSION) {
+        serial_write("[ warn ] handoff version older than expected: 0x");
         serial_write_hex64(handoff->version);
-        serial_write("\n");
-        halt_forever();
+        serial_write(" (expected >= 0x");
+        serial_write_hex64(HANDOFF_V0_VERSION);
+        serial_write(")\n");
     }
 
     serial_write("[ ok ] handoff v0 is valid\n");
@@ -227,6 +228,15 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write(" bpp=0x");
     serial_write_hex64((u64)handoff->framebuffer_bpp);
     serial_write("\n");
+
+    if (handoff->version >= 1ULL) {
+        serial_write("[ video ] gop modes=0x");
+        serial_write_hex64((u64)handoff->gop_mode_count);
+        serial_write("\n");
+        serial_write("[ video ] active mode=0x");
+        serial_write_hex64((u64)handoff->gop_active_mode_id);
+        serial_write("\n");
+    }
 
     stage2_init_gdt_tss();
     serial_write("[ ok ] stage2 local gdt+tss is active\n");
@@ -254,7 +264,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     } else {
         serial_write("[ test ] int21 priority-a selftest: FAIL\n");
     }
-    serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/opengem/shutdown/reboot)\n");
+    serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/opengem/vmode/shutdown/reboot)\n");
     serial_write("[ ok ] desktop ui command available (type: desktop)\n");
 
     video_init(boot_info);

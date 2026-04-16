@@ -2,9 +2,19 @@
 #define HANDOFF_H
 
 #include <stdint.h>
+#include "video_limits.h"
 
 #define HANDOFF_V0_MAGIC 0x30464F484B554943ULL /* "CIUKHOF0" */
-#define HANDOFF_V0_VERSION 0ULL
+#define HANDOFF_V0_VERSION 1ULL
+
+typedef struct handoff_gop_mode_entry {
+    uint32_t mode_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t pixels_per_scanline;
+    uint32_t flags;  /* bit 0: compatible with driver backbuffer limits */
+} handoff_gop_mode_entry_t;
 
 #define HANDOFF_COM_MAX 16U
 #define HANDOFF_COM_NAME_MAX 12U /* 8.3 name with dot, e.g. "INIT.COM" */
@@ -38,6 +48,9 @@ typedef struct handoff_v0 {
     uint64_t disk_cache_lba_count; /* number of cached LBAs */
     uint32_t disk_cache_block_size; /* bytes per LBA */
     uint32_t disk_cache_flags;
+    uint32_t gop_mode_count;       /* number of valid entries in gop_modes */
+    uint32_t gop_active_mode_id;   /* active GOP mode id at handoff time */
+    handoff_gop_mode_entry_t gop_modes[VIDEO_GOP_CATALOG_MAX];
 } handoff_v0_t;
 
 #endif

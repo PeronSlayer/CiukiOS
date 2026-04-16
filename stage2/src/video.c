@@ -2,6 +2,7 @@
 #include "types.h"
 #include "bootinfo.h"
 #include "mem.h"
+#include "serial.h"
 
 #define GLYPH_W 8
 #define GLYPH_H 8
@@ -130,15 +131,20 @@ static u32  g_color_bg;
 static u32  g_font_scale_x;
 static u32  g_font_scale_y;
 
-/* Double-buffer: max 2048x1080x4 = 8,847,360 bytes (supports pitch-padded resolutions) */
-#define VIDEO_BACKBUF_MAX_W    800U
-#define VIDEO_BACKBUF_MAX_H    600U
-#define VIDEO_BACKBUF_MAX_BPP  4U
-#define VIDEO_BACKBUF_MAX_BYTES (VIDEO_BACKBUF_MAX_W * VIDEO_BACKBUF_MAX_H * VIDEO_BACKBUF_MAX_BPP)
+/* Double-buffer: VIDEO_DRIVER_MAX_W * VIDEO_DRIVER_MAX_H * VIDEO_DRIVER_MAX_BPP bytes */
+#include "video_limits.h"
+#define VIDEO_BACKBUF_MAX_BYTES (VIDEO_DRIVER_MAX_W * VIDEO_DRIVER_MAX_H * VIDEO_DRIVER_MAX_BPP)
 
 static u8   g_backbuf[VIDEO_BACKBUF_MAX_BYTES] __attribute__((aligned(64)));
 static u8  *g_render_target;   /* points to g_backbuf or (u8*)g_fb_base */
 static u32  g_backbuf_active;  /* 1 if rendering to back buffer */
+
+/* Dirty-rect tracking: single bounding box covering all changes since last present */
+static u32  g_dirty_x0;       /* left edge (inclusive, pixels) */
+static u32  g_dirty_y0;       /* top edge (inclusive, pixels) */
+static u32  g_dirty_x1;       /* right edge (exclusive, pixels) */
+static u32  g_dirty_y1;       /* bottom edge (exclusive, pixels) */
+static u32  g_dirty_valid;    /* nonzero if dirty region exists */
 
 static u32 font_w(void) {
     return GLYPH_W * g_font_scale_x;
@@ -216,6 +222,7 @@ static void framebuffer_store_pixel(u32 x, u32 y, u32 rgb) {
         u32 *px32 = (u32 *)p;
         px32[x] = rgb;
     }
+    video_mark_dirty(x, y, 1U, 1U);
 }
 
 static void framebuffer_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
@@ -250,6 +257,7 @@ static void framebuffer_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
             mem_set32(row + x, rgb, (u64)fill_w);
         }
     }
+    video_mark_dirty(x, y, x1 - x, y1 - y);
 }
 
 static void fb_clear(void) {
@@ -321,6 +329,7 @@ static void scroll_up(void) {
 
     clear_y = g_text_start_row * font_h() + (text_px_h - font_h());
     framebuffer_fill_rect(0U, clear_y, g_width, font_h(), g_color_bg);
+    video_mark_dirty(0U, g_text_start_row * font_h(), g_width, text_px_h);
 }
 
 void video_cls(void) {
@@ -377,6 +386,9 @@ void video_init(boot_info_t *bi) {
     if (g_backbuf_active) {
         video_present();
     }
+    serial_write("[video] mode=");
+    serial_write(g_backbuf_active ? "double-buffer" : "direct");
+    serial_write("\n");
 }
 
 void video_putchar(char c) {
@@ -588,4 +600,54 @@ void video_blit_row(u32 dst_x, u32 dst_y, const u32 *pixels_rgb, u32 count) {
             row[dst_x + i] = rgb_to_rgb565(pixels_rgb[i]);
         }
     }
+    video_mark_dirty(dst_x, dst_y, count, 1U);
+}
+
+void video_mark_dirty(u32 x, u32 y, u32 w, u32 h) {
+    u32 x1, y1;
+    if (w == 0U || h == 0U) return;
+    x1 = x + w;
+    y1 = y + h;
+    if (x1 > g_width) x1 = g_width;
+    if (y1 > g_height) y1 = g_height;
+
+    if (!g_dirty_valid) {
+        g_dirty_x0 = x;
+        g_dirty_y0 = y;
+        g_dirty_x1 = x1;
+        g_dirty_y1 = y1;
+        g_dirty_valid = 1;
+    } else {
+        if (x  < g_dirty_x0) g_dirty_x0 = x;
+        if (y  < g_dirty_y0) g_dirty_y0 = y;
+        if (x1 > g_dirty_x1) g_dirty_x1 = x1;
+        if (y1 > g_dirty_y1) g_dirty_y1 = y1;
+    }
+}
+
+void video_present_dirty(void) {
+    u8 *fb;
+    u8 *bb;
+    u32 bpp_bytes, x0_bytes, copy_bytes;
+
+    if (!g_backbuf_active || !g_fb_base || !g_dirty_valid) {
+        g_dirty_valid = 0;
+        return;
+    }
+
+    fb = (u8 *)(u64)g_fb_base;
+    bb = g_backbuf;
+    bpp_bytes = g_bpp / 8U;
+    x0_bytes  = g_dirty_x0 * bpp_bytes;
+    copy_bytes = (g_dirty_x1 - g_dirty_x0) * bpp_bytes;
+
+    for (u32 y = g_dirty_y0; y < g_dirty_y1; y++) {
+        u64 row_off = (u64)y * g_pitch + x0_bytes;
+        mem_copy(fb + row_off, bb + row_off, (u64)copy_bytes);
+    }
+    g_dirty_valid = 0;
+}
+
+int video_is_double_buffered(void) {
+    return g_backbuf_active != 0;
 }

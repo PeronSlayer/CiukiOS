@@ -3,6 +3,7 @@
 #include "elf64.h"
 #include "../proto/bootinfo.h"
 #include "../proto/handoff.h"
+#include "../proto/video_limits.h"
 
 #define PAGE_SIZE           4096ULL
 #define LARGE_PAGE_SIZE     0x200000ULL
@@ -534,6 +535,76 @@ static EFI_STATUS load_com_catalog(EFI_HANDLE image, handoff_v0_t *handoff) {
     return EFI_SUCCESS;
 }
 
+typedef struct vmode_config {
+    UINT32 mode_id;     /* from "mode=N", 0xFFFFFFFF if absent */
+    UINT32 width;       /* from "width=N", 0 if absent */
+    UINT32 height;      /* from "height=N", 0 if absent */
+} vmode_config_t;
+
+static UINT32 parse_decimal(const UINT8 *p, UINTN len) {
+    UINT32 val = 0;
+    for (UINTN i = 0; i < len; i++) {
+        if (p[i] < '0' || p[i] > '9') break;
+        val = val * 10 + (p[i] - '0');
+    }
+    return val;
+}
+
+static void load_vmode_config(EFI_HANDLE image, vmode_config_t *cfg) {
+    VOID *buf = NULL;
+    UINTN size = 0;
+    EFI_STATUS st;
+    const UINT8 *data;
+    UINTN i;
+
+    cfg->mode_id = 0xFFFFFFFFU;
+    cfg->width = 0;
+    cfg->height = 0;
+
+    st = read_file(image, L"\\EFI\\CiukiOS\\VMODE.CFG", &buf, &size);
+    if (EFI_ERROR(st) || !buf || size == 0) {
+        return; /* file absent or empty — use defaults */
+    }
+
+    data = (const UINT8 *)buf;
+    i = 0;
+    while (i < size) {
+        /* skip whitespace/newlines */
+        while (i < size && (data[i] == ' ' || data[i] == '\t' ||
+               data[i] == '\r' || data[i] == '\n')) {
+            i++;
+        }
+        if (i >= size) break;
+
+        /* find end of line */
+        UINTN line_start = i;
+        while (i < size && data[i] != '\r' && data[i] != '\n') {
+            i++;
+        }
+        UINTN line_len = i - line_start;
+        const UINT8 *line = &data[line_start];
+
+        /* parse "key=value" */
+        if (line_len > 5 && line[0] == 'm' && line[1] == 'o' &&
+            line[2] == 'd' && line[3] == 'e' && line[4] == '=') {
+            cfg->mode_id = parse_decimal(line + 5, line_len - 5);
+        } else if (line_len > 6 && line[0] == 'w' && line[1] == 'i' &&
+                   line[2] == 'd' && line[3] == 't' && line[4] == 'h' &&
+                   line[5] == '=') {
+            cfg->width = parse_decimal(line + 6, line_len - 6);
+        } else if (line_len > 7 && line[0] == 'h' && line[1] == 'e' &&
+                   line[2] == 'i' && line[3] == 'g' && line[4] == 'h' &&
+                   line[5] == 't' && line[6] == '=') {
+            cfg->height = parse_decimal(line + 7, line_len - 7);
+        }
+    }
+
+    uefi_call_wrapper(BS->FreePool, 1, buf);
+
+    Print(L"VMODE.CFG: mode=%d width=%d height=%d\r\n",
+          cfg->mode_id, cfg->width, cfg->height);
+}
+
 static EFI_STATUS load_disk_cache(EFI_HANDLE image, handoff_v0_t *handoff) {
     EFI_STATUS status;
     EFI_BLOCK_IO_PROTOCOL *block_io = NULL;
@@ -961,8 +1032,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
             BS->LocateProtocol, 3, &gop_guid, NULL, (VOID **)&gop
         );
         if (!EFI_ERROR(gop_status) && gop && gop->Mode && gop->Mode->Info) {
-            /* --- GOP mode selection --- */
-            /* Try to pick a preferred resolution (32bpp only). Non-fatal. */
+            /* --- GOP mode catalog + selection --- */
             {
                 static const struct { UINT32 w; UINT32 h; } preferred[] = {
                     {800,  600},
@@ -976,41 +1046,99 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                 UINT32 best_pref = pref_count;       /* lower = better */
                 UINT32 mode_count = gop->Mode->MaxMode;
                 UINT32 mi;
+                UINT32 catalog_count = 0;
+                vmode_config_t vmode_cfg;
+                BOOLEAN cfg_resolved = FALSE;
+
+                load_vmode_config(image, &vmode_cfg);
+
+                if (using_stage2) {
+                    handoff->gop_mode_count = 0;
+                    handoff->gop_active_mode_id = gop->Mode->Mode;
+                }
 
                 for (mi = 0; mi < mode_count; mi++) {
                     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode_info = NULL;
                     UINTN mode_info_size = 0;
+                    UINT32 bpp_val;
+                    UINT32 bytes_pp;
+                    UINT32 fits_backbuf;
                     EFI_STATUS qi = uefi_call_wrapper(
                         gop->QueryMode, 4, gop, mi, &mode_info_size, &mode_info
                     );
                     if (EFI_ERROR(qi) || !mode_info) continue;
 
-                    /* Only consider 32bpp modes */
-                    if (gop_detect_bpp(mode_info) != 32) continue;
+                    bpp_val = gop_detect_bpp(mode_info);
+                    bytes_pp = (bpp_val + 7U) / 8U;
+                    fits_backbuf = (mode_info->HorizontalResolution <= VIDEO_DRIVER_MAX_W &&
+                                   mode_info->VerticalResolution   <= VIDEO_DRIVER_MAX_H &&
+                                   bytes_pp <= VIDEO_DRIVER_MAX_BPP) ? 1U : 0U;
 
-                    for (UINT32 pi = 0; pi < pref_count; pi++) {
-                        if (mode_info->HorizontalResolution == preferred[pi].w &&
-                            mode_info->VerticalResolution   == preferred[pi].h &&
-                            pi < best_pref) {
+                    /* Populate GOP catalog entry */
+                    if (using_stage2 && catalog_count < VIDEO_GOP_CATALOG_MAX) {
+                        handoff_gop_mode_entry_t *entry = &handoff->gop_modes[catalog_count];
+                        entry->mode_id = mi;
+                        entry->width = mode_info->HorizontalResolution;
+                        entry->height = mode_info->VerticalResolution;
+                        entry->bpp = bpp_val;
+                        entry->pixels_per_scanline = mode_info->PixelsPerScanLine;
+                        entry->flags = fits_backbuf; /* bit 0: fits in driver backbuffer */
+                        catalog_count++;
+                    }
+
+                    /* --- VMODE.CFG priority check --- */
+                    if (!cfg_resolved && bpp_val == 32 && fits_backbuf) {
+                        /* Priority 1: exact mode id match */
+                        if (vmode_cfg.mode_id != 0xFFFFFFFFU &&
+                            mi == vmode_cfg.mode_id) {
                             best_mode = mi;
-                            best_pref = pi;
-                            break;
+                            cfg_resolved = TRUE;
+                        }
+                        /* Priority 2: width x height match */
+                        if (!cfg_resolved &&
+                            vmode_cfg.width != 0 && vmode_cfg.height != 0 &&
+                            mode_info->HorizontalResolution == vmode_cfg.width &&
+                            mode_info->VerticalResolution   == vmode_cfg.height) {
+                            best_mode = mi;
+                            cfg_resolved = TRUE;
+                        }
+                    }
+
+                    /* Priority 3: fallback preference table */
+                    if (!cfg_resolved && bpp_val == 32 && fits_backbuf) {
+                        for (UINT32 pi = 0; pi < pref_count; pi++) {
+                            if (mode_info->HorizontalResolution == preferred[pi].w &&
+                                mode_info->VerticalResolution   == preferred[pi].h &&
+                                pi < best_pref) {
+                                best_mode = mi;
+                                best_pref = pi;
+                                break;
+                            }
                         }
                     }
 
                     uefi_call_wrapper(BS->FreePool, 1, mode_info);
                 }
 
+                if (using_stage2) {
+                    handoff->gop_mode_count = catalog_count;
+                }
+
                 if (best_mode != gop->Mode->Mode) {
                     EFI_STATUS sm = uefi_call_wrapper(gop->SetMode, 2, gop, best_mode);
                     if (!EFI_ERROR(sm)) {
-                        Print(L"GOP: switched to mode %d (%dx%d)\r\n",
+                        Print(L"GOP: switched to mode %d (%dx%d)%s\r\n",
                               best_mode,
                               gop->Mode->Info->HorizontalResolution,
-                              gop->Mode->Info->VerticalResolution);
+                              gop->Mode->Info->VerticalResolution,
+                              cfg_resolved ? L" (from VMODE.CFG)" : L"");
                     } else {
                         Print(L"GOP: SetMode %d failed (%r), using default\r\n", best_mode, sm);
                     }
+                }
+
+                if (using_stage2) {
+                    handoff->gop_active_mode_id = gop->Mode->Mode;
                 }
             }
 
