@@ -417,12 +417,31 @@ static void ui_reflow_windows(const ui_layout_t *L) {
     u32 cw = L->content_w;
     u32 ch = L->content_h;
     u32 left_w, right_w, top_h, bot_h;
+    static int layout_v3_printed = 0;
 
-    /* Two-column layout: left column has System+Shell, right has Info */
-    left_w  = UI_SNAP((cw - UI_GAP) * 3U / 5U);
+    /* Ratio-based two-column layout using design tokens */
+    left_w  = UI_SNAP((cw - UI_GAP) * UI_LEFT_COL_NUM / UI_LEFT_COL_DEN);
     right_w = cw - left_w - UI_GAP;
-    top_h   = UI_SNAP((ch - UI_GAP) / 2U);
+    top_h   = UI_SNAP((ch - UI_GAP) * UI_TOP_ROW_NUM / UI_TOP_ROW_DEN);
     bot_h   = ch - top_h - UI_GAP;
+
+    /* Enforce minimum window sizes; clamp to available space */
+    if (left_w < UI_WIN_MIN_W && cw > UI_WIN_MIN_W + UI_GAP + UI_WIN_MIN_W) {
+        left_w = UI_WIN_MIN_W;
+        right_w = cw - left_w - UI_GAP;
+    }
+    if (right_w < UI_WIN_MIN_W && cw > UI_WIN_MIN_W + UI_GAP + UI_WIN_MIN_W) {
+        right_w = UI_WIN_MIN_W;
+        left_w = cw - right_w - UI_GAP;
+    }
+    if (top_h < UI_WIN_MIN_H && ch > UI_WIN_MIN_H + UI_GAP + UI_WIN_MIN_H) {
+        top_h = UI_WIN_MIN_H;
+        bot_h = ch - top_h - UI_GAP;
+    }
+    if (bot_h < UI_WIN_MIN_H && ch > UI_WIN_MIN_H + UI_GAP + UI_WIN_MIN_H) {
+        bot_h = UI_WIN_MIN_H;
+        top_h = ch - bot_h - UI_GAP;
+    }
 
     g_windows[0].x = cx;
     g_windows[0].y = cy;
@@ -438,6 +457,11 @@ static void ui_reflow_windows(const ui_layout_t *L) {
     g_windows[2].y = cy;
     g_windows[2].w = right_w;
     g_windows[2].h = ch;
+
+    if (!layout_v3_printed) {
+        serial_write("[ ui ] desktop layout manager v3 active\n");
+        layout_v3_printed = 1;
+    }
 }
 
 void ui_cycle_window_focus(void) {

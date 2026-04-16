@@ -34,6 +34,16 @@
 #define UI_DOCK_ITEM_H      (UI_GRID * 3U)                    /* 24px per dock item */
 #define UI_DOCK_HEADER_H    (UI_GRID * 3U)                    /* 24px dock header */
 
+/* Layout ratio tokens (numerator / denominator) */
+#define UI_LEFT_COL_NUM     3U   /* left column gets 3/5 of content width */
+#define UI_LEFT_COL_DEN     5U
+#define UI_TOP_ROW_NUM      1U   /* top row gets 1/2 of content height */
+#define UI_TOP_ROW_DEN      2U
+
+/* Minimum window dimensions (pixels) to keep content readable */
+#define UI_WIN_MIN_W        (UI_GRID * 12U)  /* 96px */
+#define UI_WIN_MIN_H        (UI_GRID * 8U)   /* 64px */
+
 /* Minimum supported resolution */
 #define UI_MIN_FB_W         800U
 #define UI_MIN_FB_H         600U
