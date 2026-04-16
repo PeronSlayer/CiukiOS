@@ -31,8 +31,9 @@ Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compat
 25. `AH=48h` - allocate memory block (paragraph allocator baseline).
 26. `AH=49h` - free memory block by segment (`ES`).
 27. `AH=4Ah` - resize memory block by segment (`ES`) to `BX` paragraphs.
-28. `AH=4Eh` - find first matching file entry (wildcard search via DTA).
-29. `AH=4Fh` - find next matching file entry (continues active DTA search).
+28. `AH=43h` - get/set file attributes (FAT-backed path).
+29. `AH=4Eh` - find first matching file entry (wildcard search via DTA).
+30. `AH=4Fh` - find next matching file entry (continues active DTA search).
 
 ## Partial Compatibility Notes
 1. `AH=48h/49h/4Ah` currently use an internal paragraph heap allocator baseline (no full MCB chain yet).
@@ -74,6 +75,7 @@ FN  | Status               | Implementation Details
 40h | IMPLEMENTED          | Write supports stdout/stderr handles 1/2 baseline
 41h | IMPLEMENTED          | FAT-backed delete by DOS path (fallback stub when FAT unavailable)
 42h | IMPLEMENTED          | Seek on opened file handles + std-handle deterministic baseline
+43h | IMPLEMENTED          | Get/set FAT-backed file attributes by DOS path
 4Ch | IMPLEMENTED          | Terminate with return code
 4Dh | IMPLEMENTED          | Get last process return code + type
 51h | IMPLEMENTED          | Get current PSP segment to BX

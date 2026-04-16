@@ -2022,6 +2022,52 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    if (ah == 0x43U) {
+        char dos_path[SHELL_PATH_MAX];
+        char path[SHELL_PATH_MAX];
+        u8 subfn = al;
+
+        if (!fat_ready()) {
+            regs->carry = 1U;
+            regs->ax = 0x0002U; /* file not found */
+            return;
+        }
+
+        if (!shell_int21_read_asciiz(ctx, regs->dx, dos_path, (u32)sizeof(dos_path)) ||
+            !shell_int21_dos_path_to_canonical(dos_path, path, (u32)sizeof(path))) {
+            regs->carry = 1U;
+            regs->ax = 0x0003U; /* path not found */
+            return;
+        }
+
+        if (subfn == 0x00U) {
+            fat_dir_entry_t info;
+            if (!fat_find_file(path, &info)) {
+                regs->carry = 1U;
+                regs->ax = 0x0002U; /* file not found */
+                return;
+            }
+            regs->cx = (u16)info.attr;
+            regs->ax = (u16)(regs->ax & 0xFF00U);
+            return;
+        }
+
+        if (subfn == 0x01U) {
+            u8 new_attr = (u8)(regs->cx & 0x00FFU);
+            if (!fat_set_attr(path, new_attr)) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U; /* access denied */
+                return;
+            }
+            regs->ax = (u16)(regs->ax & 0xFF00U);
+            return;
+        }
+
+        regs->carry = 1U;
+        regs->ax = 0x0001U; /* invalid function */
+        return;
+    }
+
     if (ah == 0x48U) {
         u16 seg = 0U;
         u16 max_free = 0U;
@@ -2356,6 +2402,13 @@ int stage2_shell_selftest_int21_baseline(void) {
         return 0;
     }
 
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4300U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0002U) {
+        return 0;
+    }
+
     /* AH=3Eh close: std handles allowed, invalid handles rejected */
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x3E00U;
@@ -2586,6 +2639,46 @@ int stage2_shell_selftest_int21_fat_handles(void) {
         goto fail;
     }
     h_open = 0U;
+
+    /* AH=43h get/set attribute */
+    {
+        u16 base_attr = 0U;
+
+        local_memset(&regs, 0U, (u32)sizeof(regs));
+        regs.ax = 0x4300U;
+        regs.dx = path_off;
+        shell_com_int21(&ctx, &regs);
+        if (regs.carry != 0U) {
+            goto fail;
+        }
+        base_attr = regs.cx;
+
+        local_memset(&regs, 0U, (u32)sizeof(regs));
+        regs.ax = 0x4301U;
+        regs.cx = (u16)(base_attr | FAT_ATTR_HIDDEN);
+        regs.dx = path_off;
+        shell_com_int21(&ctx, &regs);
+        if (regs.carry != 0U) {
+            goto fail;
+        }
+
+        local_memset(&regs, 0U, (u32)sizeof(regs));
+        regs.ax = 0x4300U;
+        regs.dx = path_off;
+        shell_com_int21(&ctx, &regs);
+        if (regs.carry != 0U || (regs.cx & FAT_ATTR_HIDDEN) == 0U) {
+            goto fail;
+        }
+
+        local_memset(&regs, 0U, (u32)sizeof(regs));
+        regs.ax = 0x4301U;
+        regs.cx = base_attr;
+        regs.dx = path_off;
+        shell_com_int21(&ctx, &regs);
+        if (regs.carry != 0U) {
+            goto fail;
+        }
+    }
 
     /* AH=41h delete */
     local_memset(&regs, 0U, (u32)sizeof(regs));
