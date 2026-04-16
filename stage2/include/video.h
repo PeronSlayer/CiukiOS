@@ -21,6 +21,8 @@ u32 video_width_px(void);
 u32 video_height_px(void);
 u32 video_pitch_bytes(void);
 u32 video_bpp(void);
+u32 video_cell_width_px(void);
+u32 video_cell_height_px(void);
 void video_fill(u32 rgb);
 void video_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb);
 void video_put_pixel(u32 x, u32 y, u32 rgb);

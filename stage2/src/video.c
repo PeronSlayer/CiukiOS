@@ -511,6 +511,14 @@ u32 video_bpp(void) {
     return g_bpp;
 }
 
+u32 video_cell_width_px(void) {
+    return font_w();
+}
+
+u32 video_cell_height_px(void) {
+    return font_h();
+}
+
 void video_fill(u32 rgb) {
     framebuffer_fill_rect(0U, 0U, g_width, g_height, rgb);
 }
