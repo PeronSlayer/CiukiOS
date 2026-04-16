@@ -1,5 +1,8 @@
 #include "ui.h"
 #include "video.h"
+#include "serial.h"
+
+static ui_scene_t current_scene = SCENE_BOOT_SPLASH;
 
 static u32 local_strlen(const char *s) {
     u32 n = 0;
@@ -7,6 +10,92 @@ static u32 local_strlen(const char *s) {
         n++;
     }
     return n;
+}
+
+/* ===== Scene Management ===== */
+
+ui_scene_t ui_get_scene(void) {
+    return current_scene;
+}
+
+int ui_set_scene(ui_scene_t scene) {
+    if (scene == current_scene) {
+        return 0;
+    }
+    current_scene = scene;
+    return 1;
+}
+
+static void ui_render_desktop_scene(void) {
+    /* Desktop scene renderer */
+    u32 fb_w, fb_h;
+    u32 row;
+    static int desktop_rendered = 0;
+
+    if (!video_ready()) {
+        return;
+    }
+
+    fb_w = video_width_px();
+    fb_h = video_height_px();
+
+    /* Draw desktop background - simple dark gradient/pattern */
+    if (fb_w > 0 && fb_h > 0) {
+        video_fill_rect(0U, 0U, fb_w, fb_h, 0x00101015U); /* very dark blue-gray */
+    }
+
+    /* Draw top bar */
+    if (fb_h > 32U) {
+        ui_draw_panel(0U, 0U, fb_w, 32U, 0x00404050U, 0x00202025U);
+
+        /* Top bar text: "CiukiOS" centered */
+        row = 1U;
+        video_set_colors(0x0000FF00U, 0x00202025U); /* bright green on dark */
+        ui_write_centered_row(row, "CiukiOS");
+        video_set_colors(0x00C0C0C0U, 0x00000000U);
+    }
+
+    /* Draw bottom status bar */
+    if (fb_h > 64U) {
+        u32 status_y = fb_h - 24U;
+        ui_draw_panel(0U, status_y, fb_w, 24U, 0x00404050U, 0x00202025U);
+
+        /* Status text */
+        row = ui_pixel_y_to_text_row(status_y + 2U);
+        video_set_colors(0x00808080U, 0x00202025U); /* dim gray */
+        video_set_cursor(2U, row);
+        video_write("TAB: Focus | ENTER: Select | ESC: shell");
+        video_set_colors(0x00C0C0C0U, 0x00000000U);
+    }
+
+    if (!desktop_rendered) {
+        serial_write("[ ui ] desktop shell surface active\n");
+        desktop_rendered = 1;
+    }
+}
+
+int ui_render_scene(void) {
+    if (!video_ready()) {
+        return 0;
+    }
+    switch (current_scene) {
+        case SCENE_BOOT_SPLASH:
+            return 1;
+        case SCENE_DESKTOP:
+            ui_render_desktop_scene();
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+int ui_enter_desktop_scene(void) {
+    if (!ui_set_scene(SCENE_DESKTOP)) {
+        return 0;
+    }
+    serial_write("[ ui ] scene=desktop\n");
+    ui_render_scene();
+    return 1;
 }
 
 void ui_write_centered_row(u32 row, const char *text) {
@@ -209,4 +298,97 @@ int ui_draw_boot_hud(
     video_set_colors(0x00C0C0C0U, 0x00000000U);
 
     return 1;
+}
+
+/* ===== Window Manager ===== */
+#define UI_MAX_WINDOWS 3
+static ui_window_t g_windows[UI_MAX_WINDOWS] = {
+    {"System", 60, 60, 280, 120, 1},
+    {"Shell", 60, 200, 280, 120, 0},
+    {"Info", 360, 60, 200, 120, 0},
+};
+static int g_focused_idx = 0;
+static int g_wm_initialized = 0;
+
+void ui_cycle_window_focus(void) {
+    g_windows[g_focused_idx].focused = 0;
+    g_focused_idx = (g_focused_idx + 1) % UI_MAX_WINDOWS;
+    g_windows[g_focused_idx].focused = 1;
+    if (!g_wm_initialized) {
+        serial_write("[ ui ] wm focus cycle ok\n");
+        g_wm_initialized = 1;
+    }
+}
+
+int ui_get_focused_window(void) {
+    return g_focused_idx;
+}
+
+void ui_render_windows(void) {
+    int i;
+    u32 title_row, border_color, bg_color;
+    if (!video_ready()) return;
+    for (i = 0; i < UI_MAX_WINDOWS; i++) {
+        ui_window_t *w = &g_windows[i];
+        border_color = w->focused ? 0x0000FF00U : 0x00404050U;
+        bg_color = w->focused ? 0x001a1a1aU : 0x00151515U;
+        ui_draw_panel(w->x, w->y, w->w, w->h, border_color, bg_color);
+        if (w->h > 16U) {
+            title_row = ui_pixel_y_to_text_row(w->y + 2U);
+            video_set_colors(border_color, bg_color);
+            video_set_cursor(2U, title_row);
+            video_write("[");
+            video_write(w->title);
+            video_write("]");
+            video_set_colors(0x00C0C0C0U, 0x00000000U);
+        }
+    }
+}
+
+/* ===== Launcher ===== */
+#define LAUNCHER_ITEMS 6
+static const char *g_launcher_items[LAUNCHER_ITEMS] = {
+    "DIR", "MEM", "CLS", "VER", "ASCII", "RUN INIT.COM"
+};
+static int g_launcher_focus = 0;
+static int g_launcher_active = 0;
+
+void ui_activate_launcher(void) {
+    g_launcher_active = 1;
+}
+
+void ui_deactivate_launcher(void) {
+    g_launcher_active = 0;
+}
+
+void ui_launcher_next(void) {
+    g_launcher_focus = (g_launcher_focus + 1) % LAUNCHER_ITEMS;
+}
+
+void ui_launcher_prev(void) {
+    if (g_launcher_focus == 0) {
+        g_launcher_focus = LAUNCHER_ITEMS - 1;
+    } else {
+        g_launcher_focus--;
+    }
+}
+
+const char *ui_get_launcher_item(void) {
+    return (g_launcher_focus < LAUNCHER_ITEMS) ? g_launcher_items[g_launcher_focus] : "";
+}
+
+void ui_render_launcher(void) {
+    int i;
+    u32 launcher_x = 60U, launcher_y = 350U, item_height = 20U, item_y, item_row;
+    if (!video_ready()) return;
+    ui_draw_panel(launcher_x, launcher_y, 300U, (LAUNCHER_ITEMS * item_height) + 10U, 0x00505050U, 0x00151515U);
+    for (i = 0; i < LAUNCHER_ITEMS; i++) {
+        item_y = launcher_y + 5U + (i * item_height);
+        item_row = ui_pixel_y_to_text_row(item_y);
+        video_set_colors(i == g_launcher_focus ? 0x0000FF00U : 0x00808080U, 0x00151515U);
+        video_set_cursor(5U, item_row);
+        video_write(i == g_launcher_focus ? "> " : "  ");
+        video_write(g_launcher_items[i]);
+        video_set_colors(0x00C0C0C0U, 0x00000000U);
+    }
 }

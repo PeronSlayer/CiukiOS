@@ -4,9 +4,40 @@
 #include "types.h"
 
 /*
- * UI Primitives Module for Stage2
- * Reusable graphics/text rendering helpers
+ * UI Module for Stage2
+ * Reusable graphics/text rendering helpers and scene management
  */
+
+/* Scene enumeration */
+typedef enum {
+    SCENE_BOOT_SPLASH = 0,
+    SCENE_DESKTOP = 1,
+} ui_scene_t;
+
+/**
+ * Get current active scene
+ * @return Current scene enum value
+ */
+ui_scene_t ui_get_scene(void);
+
+/**
+ * Switch to a new scene
+ * @param scene New scene to activate
+ * @return 1 if scene switched, 0 if scene not available/already active
+ */
+int ui_set_scene(ui_scene_t scene);
+
+/**
+ * Render the current scene (dispatch to appropriate renderer)
+ * @return 1 if rendered successfully, 0 if renderer unavailable
+ */
+int ui_render_scene(void);
+
+/**
+ * Early desktop scene activation (called from shell or command)
+ * @return 1 if desktop scene activated, 0 otherwise
+ */
+int ui_enter_desktop_scene(void);
 
 /**
  * Draw a horizontal top bar with centered text
@@ -91,5 +122,24 @@ int ui_draw_boot_hud(
     const char *mode_string,
     u32 progress_percent
 );
+
+/* Window Manager */
+typedef struct {
+    const char *title;
+    u32 x, y, w, h;
+    int focused;
+} ui_window_t;
+
+void ui_cycle_window_focus(void);
+int ui_get_focused_window(void);
+void ui_render_windows(void);
+
+/* Launcher */
+void ui_activate_launcher(void);
+void ui_deactivate_launcher(void);
+void ui_launcher_next(void);
+void ui_launcher_prev(void);
+const char *ui_get_launcher_item(void);
+void ui_render_launcher(void);
 
 #endif /* STAGE2_UI_H */

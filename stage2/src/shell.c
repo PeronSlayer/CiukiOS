@@ -7,6 +7,7 @@
 #include "dos_mz.h"
 #include "splash.h"
 #include "version.h"
+#include "ui.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
@@ -2564,6 +2565,15 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "ver")) {
         shell_ver();
+        return;
+    }
+
+    if (str_eq(cmd, "desktop")) {
+        if (ui_enter_desktop_scene()) {
+            video_write("Desktop scene entered.\n");
+        } else {
+            video_write("Failed to enter desktop scene.\n");
+        }
         return;
     }
 
