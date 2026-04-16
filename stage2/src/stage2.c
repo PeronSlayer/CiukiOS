@@ -96,6 +96,7 @@ static void draw_splash_footer(u32 footer_px, u32 progress_percent) {
 static void draw_title_bar(void) {
     ui_draw_top_bar("CiukiOS", 0x00FFFFFFU, 0x00000000U); /* white bar, black text */
     video_set_text_window(1);                   /* reserve top row for title bar */
+    video_present();
 }
 
 static void show_boot_splash(void) {
@@ -117,6 +118,7 @@ static void show_boot_splash(void) {
     } else {
         draw_splash_footer(footer_px, 0U);
     }
+    video_present();
     serial_write("[ ok ] splashscreen rendered src=0x");
     serial_write_hex64((u64)stage2_splash_source_cols());
     serial_write("x0x");
@@ -148,6 +150,7 @@ static void show_boot_splash(void) {
             if (hud_drawn) {
                 ui_draw_boot_hud(CIUKIOS_STAGE2_VERSION, "gfx", progress);
             }
+            video_present();
             last_progress = progress;
         }
 
@@ -163,6 +166,7 @@ static void show_boot_splash(void) {
         if (hud_drawn) {
             ui_draw_boot_hud(CIUKIOS_STAGE2_VERSION, "gfx", 100U);
         }
+        video_present();
     }
 
     video_set_font_scale(2U, 2U);

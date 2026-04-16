@@ -1,6 +1,7 @@
 #include "video.h"
 #include "types.h"
 #include "bootinfo.h"
+#include "mem.h"
 
 #define GLYPH_W 8
 #define GLYPH_H 8
@@ -129,6 +130,16 @@ static u32  g_color_bg;
 static u32  g_font_scale_x;
 static u32  g_font_scale_y;
 
+/* Double-buffer: max 2048x1080x4 = 8,847,360 bytes (supports pitch-padded resolutions) */
+#define VIDEO_BACKBUF_MAX_W    800U
+#define VIDEO_BACKBUF_MAX_H    600U
+#define VIDEO_BACKBUF_MAX_BPP  4U
+#define VIDEO_BACKBUF_MAX_BYTES (VIDEO_BACKBUF_MAX_W * VIDEO_BACKBUF_MAX_H * VIDEO_BACKBUF_MAX_BPP)
+
+static u8   g_backbuf[VIDEO_BACKBUF_MAX_BYTES] __attribute__((aligned(64)));
+static u8  *g_render_target;   /* points to g_backbuf or (u8*)g_fb_base */
+static u32  g_backbuf_active;  /* 1 if rendering to back buffer */
+
 static u32 font_w(void) {
     return GLYPH_W * g_font_scale_x;
 }
@@ -197,7 +208,7 @@ static void framebuffer_store_pixel(u32 x, u32 y, u32 rgb) {
         return;
     }
 
-    p = (u8 *)(u64)(g_fb_base + (u64)y * g_pitch);
+    p = g_render_target + (u64)y * g_pitch;
     if (g_bpp == 16U) {
         u16 *px16 = (u16 *)p;
         px16[x] = rgb_to_rgb565(rgb);
@@ -227,17 +238,16 @@ static void framebuffer_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
     if (g_bpp == 16U) {
         u16 c = rgb_to_rgb565(rgb);
         for (u32 yy = y; yy < y1; yy++) {
-            u16 *row = (u16 *)(u64)(g_fb_base + (u64)yy * g_pitch);
+            u16 *row = (u16 *)(g_render_target + (u64)yy * g_pitch);
             for (u32 xx = x; xx < x1; xx++) {
                 row[xx] = c;
             }
         }
     } else {
+        u32 fill_w = x1 - x;
         for (u32 yy = y; yy < y1; yy++) {
-            u32 *row = (u32 *)(u64)(g_fb_base + (u64)yy * g_pitch);
-            for (u32 xx = x; xx < x1; xx++) {
-                row[xx] = rgb;
-            }
+            u32 *row = (u32 *)(g_render_target + (u64)yy * g_pitch);
+            mem_set32(row + x, rgb, (u64)fill_w);
         }
     }
 }
@@ -303,13 +313,11 @@ static void scroll_up(void) {
     }
 
     text_px_h = g_text_rows * font_h();
-    dst = (u8 *)g_fb_base + (u64)g_text_start_row * font_h() * g_pitch;
+    dst = g_render_target + (u64)g_text_start_row * font_h() * g_pitch;
     src = dst + (u64)font_h() * g_pitch;
     copy_bytes = (text_px_h - font_h()) * g_pitch;
 
-    for (u32 i = 0; i < copy_bytes; i++) {
-        dst[i] = src[i];
-    }
+    mem_copy(dst, src, (u64)copy_bytes);
 
     clear_y = g_text_start_row * font_h() + (text_px_h - font_h());
     framebuffer_fill_rect(0U, clear_y, g_width, font_h(), g_color_bg);
@@ -340,6 +348,19 @@ void video_init(boot_info_t *bi) {
     if (g_pitch == 0U) {
         g_pitch = g_width * (g_bpp / 8U);
     }
+
+    /* Set up double buffer if resolution fits */
+    {
+        u64 needed = (u64)g_height * (u64)g_pitch;
+        if (needed <= VIDEO_BACKBUF_MAX_BYTES) {
+            g_render_target = g_backbuf;
+            g_backbuf_active = 1;
+        } else {
+            g_render_target = (u8 *)(u64)g_fb_base;
+            g_backbuf_active = 0;
+        }
+    }
+
     g_font_scale_x = DEFAULT_FONT_SCALE_X;
     g_font_scale_y = DEFAULT_FONT_SCALE_Y;
     g_cols       = 0;
@@ -353,6 +374,9 @@ void video_init(boot_info_t *bi) {
     recompute_text_metrics();
 
     fb_clear();
+    if (g_backbuf_active) {
+        video_present();
+    }
 }
 
 void video_putchar(char c) {
@@ -529,4 +553,39 @@ void video_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
 
 void video_put_pixel(u32 x, u32 y, u32 rgb) {
     framebuffer_store_pixel(x, y, rgb);
+}
+
+void video_present(void) {
+    if (!g_backbuf_active || !g_fb_base) {
+        return;
+    }
+
+    u8 *fb = (u8 *)(u64)g_fb_base;
+    u8 *bb = g_backbuf;
+    u32 row_bytes = g_width * (g_bpp / 8U);
+
+    for (u32 y = 0; y < g_height; y++) {
+        mem_copy(fb + (u64)y * g_pitch,
+                 bb + (u64)y * g_pitch,
+                 (u64)row_bytes);
+    }
+}
+
+void video_blit_row(u32 dst_x, u32 dst_y, const u32 *pixels_rgb, u32 count) {
+    if (!g_fb_base || dst_y >= g_height || dst_x >= g_width) {
+        return;
+    }
+    if (dst_x + count > g_width) {
+        count = g_width - dst_x;
+    }
+
+    if (g_bpp == 32U) {
+        u32 *row = (u32 *)(g_render_target + (u64)dst_y * g_pitch);
+        mem_copy32(row + dst_x, pixels_rgb, (u64)count);
+    } else {
+        u16 *row = (u16 *)(g_render_target + (u64)dst_y * g_pitch);
+        for (u32 i = 0; i < count; i++) {
+            row[dst_x + i] = rgb_to_rgb565(pixels_rgb[i]);
+        }
+    }
 }

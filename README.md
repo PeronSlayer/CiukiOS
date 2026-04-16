@@ -6,10 +6,17 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.5.4`
+`CiukiOS Alpha v0.5.5`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.5.5
+1. Integrated the first minimal video driver pass with double buffering and explicit `video_present()` flow.
+2. Added scanline blitting path for splash rendering to reduce per-pixel overhead.
+3. Added GOP mode selection hardening in loader (preferred mode order + `QueryMode` cleanup).
+4. Added central roadmap file with main milestones and sub-roadmap tracking.
+5. Synced stage2 runtime version string with README version.
+
 ### v0.5.4
 1. Added optional OpenGEM (FreeGEM) integration flow (`import`, runtime composition, pipeline gate, smoke test, image probe).
 2. Added shell `opengem` command with preflight checks and multi-entry launch path detection.
@@ -68,12 +75,13 @@ Until `CiukiOS Alpha v1.0`, this project follows these rules:
 3. Development is currently heavily assisted by LLM tooling (OpenAI, Claude, Copilot) while core engineering skills and architecture mature.
 
 ## Key Docs
-1. DOS-to-DOOM roadmap: `docs/roadmap-ciukios-doom.md`
-2. DOS 6.2 compatibility roadmap: `docs/roadmap-dos62-compat.md`
-3. FreeDOS integration and licensing policy: `docs/freedos-integration-policy.md`
-4. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
-5. OpenGEM integration notes and operations: `docs/opengem-integration-notes.md`, `docs/opengem-ops.md`
-6. Shared contributor/session notes: `CLAUDE.md`
+1. Unified roadmap and sub-roadmaps: `Roadmap.md`
+2. DOS-to-DOOM roadmap: `docs/roadmap-ciukios-doom.md`
+3. DOS 6.2 compatibility roadmap: `docs/roadmap-dos62-compat.md`
+4. FreeDOS integration and licensing policy: `docs/freedos-integration-policy.md`
+5. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
+6. OpenGEM integration notes and operations: `docs/opengem-integration-notes.md`, `docs/opengem-ops.md`
+7. Shared contributor/session notes: `CLAUDE.md`
 
 ## Third-Party and Licensing (FreeDOS + OpenGEM Notice)
 1. This repository can include and use third-party FreeDOS components in `third_party/freedos/`.

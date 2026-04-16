@@ -178,6 +178,10 @@ static u8 splash_char_luma(char ch) {
     return g_luma_table[uch];
 }
 
+#define SPLASH_SCANLINE_MAX 800U
+
+static u32 g_scanline_buf[SPLASH_SCANLINE_MAX];
+
 static void splash_render_ascii_luma_scaled(u32 fb_w, u32 area_y, u32 area_h) {
     u32 src_w;
     u32 src_h;
@@ -196,6 +200,11 @@ static void splash_render_ascii_luma_scaled(u32 fb_w, u32 area_y, u32 area_h) {
     }
     off_y += area_y;
 
+    if (draw_w > SPLASH_SCANLINE_MAX) {
+        draw_w = SPLASH_SCANLINE_MAX;
+        off_x = (fb_w > draw_w) ? ((fb_w - draw_w) / 2U) : 0U;
+    }
+
     for (u32 y = 0; y < draw_h; y++) {
         u32 src_y = (u32)(((u64)y * (u64)src_h) / (u64)draw_h);
         const splash_line_t *line = &g_lines[src_y];
@@ -204,7 +213,6 @@ static void splash_render_ascii_luma_scaled(u32 fb_w, u32 area_y, u32 area_h) {
             u32 src_x = (u32)(((u64)x * (u64)src_w) / (u64)draw_w);
             char ch = ' ';
             u8 luma;
-            u32 rgb;
 
             if (src_x < line->len) {
                 ch = line->ptr[src_x];
@@ -214,9 +222,10 @@ static void splash_render_ascii_luma_scaled(u32 fb_w, u32 area_y, u32 area_h) {
             }
 
             luma = splash_char_luma(ch);
-            rgb = ((u32)luma << 16) | ((u32)luma << 8) | (u32)luma;
-            video_put_pixel(off_x + x, off_y + y, rgb);
+            g_scanline_buf[x] = ((u32)luma << 16) | ((u32)luma << 8) | (u32)luma;
         }
+
+        video_blit_row(off_x, off_y + y, g_scanline_buf, draw_w);
     }
 }
 
@@ -231,6 +240,11 @@ static void splash_render_rgba_scaled(const u8 *pixels, u32 src_w, u32 src_h, u3
     }
     off_y += area_y;
 
+    if (draw_w > SPLASH_SCANLINE_MAX) {
+        draw_w = SPLASH_SCANLINE_MAX;
+        off_x = (fb_w > draw_w) ? ((fb_w - draw_w) / 2U) : 0U;
+    }
+
     for (u32 y = 0; y < draw_h; y++) {
         u32 src_y = (u32)(((u64)y * (u64)src_h) / (u64)draw_h);
         const u8 *row = pixels + ((u64)src_y * (u64)src_w * 4ULL);
@@ -242,7 +256,6 @@ static void splash_render_rgba_scaled(const u8 *pixels, u32 src_w, u32 src_h, u3
             u32 g = (u32)px[1];
             u32 b = (u32)px[2];
             u32 a = (u32)px[3];
-            u32 rgb;
 
             if (a < 255U) {
                 r = (r * a) / 255U;
@@ -250,9 +263,10 @@ static void splash_render_rgba_scaled(const u8 *pixels, u32 src_w, u32 src_h, u3
                 b = (b * a) / 255U;
             }
 
-            rgb = (r << 16) | (g << 8) | b;
-            video_put_pixel(off_x + x, off_y + y, rgb);
+            g_scanline_buf[x] = (r << 16) | (g << 8) | b;
         }
+
+        video_blit_row(off_x, off_y + y, g_scanline_buf, draw_w);
     }
 }
 
