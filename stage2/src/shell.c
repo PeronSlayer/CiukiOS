@@ -3531,7 +3531,7 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
         ui_render_scene();
         ui_render_windows();
         ui_render_launcher();
-        video_present();
+        video_present_dirty();
     }
 
     /* --- EXITING --- */
@@ -3776,7 +3776,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             if (line_len > 0) {
                 line_len--;
                 video_write("\b \b");
-                video_present();
+                video_present_dirty();
             }
             continue;
         }
@@ -3798,6 +3798,6 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
         line[line_len++] = (char)ascii;
         video_putchar((char)ascii);
-        video_present();
+        video_present_dirty();
     }
 }
