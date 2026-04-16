@@ -57,7 +57,10 @@ Reference: `docs/handoffs/2026-04-16-video-driver-minimal.md`
 - `DONE` dirty-rect tracking + incremental present
 - `DONE` persisted mode configuration (`VMODE.CFG`) and shell utility (`vmode`/`vres`)
 - `DONE` dedicated non-interactive regression gate (`make test-video-mode`)
+- `DONE` minimum compatibility target raised to at least `1024x768` (shared driver limits + loader mode policy)
+- `DONE` deterministic compatibility gate for `1024x768` (`make test-video-1024`)
 - `PLANNED` larger/dynamic backbuffer allocation policy
+- `PLANNED` compatibility expansion above `1024x768` without direct-render fallback
 
 ### SR-OPENGEM-001 - OpenGEM Runtime Path
 Reference: `docs/handoffs/2026-04-16-copilot-opengem-integration.md`

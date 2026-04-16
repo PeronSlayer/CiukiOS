@@ -1035,8 +1035,8 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
             /* --- GOP mode catalog + selection --- */
             {
                 static const struct { UINT32 w; UINT32 h; } preferred[] = {
-                    {800,  600},
                     {1024, 768},
+                    {800,  600},
                     {1280, 720},
                     {1280, 1024},
                     {1920, 1080},
