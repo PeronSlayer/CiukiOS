@@ -15,5 +15,6 @@ u64 stage2_keyboard_irq_count(void);
 i32 stage2_keyboard_getc_nonblocking(void);
 u8 stage2_keyboard_getc_blocking(void);
 void stage2_keyboard_flush_buffer(void);
+int stage2_keyboard_alt_held(void);
 
 #endif

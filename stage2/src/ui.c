@@ -23,20 +23,58 @@ static void serial_write_u32(u32 v) {
     serial_write(&buf[i]);
 }
 
-static u32 ui_text_col_from_px(u32 x_px) {
-    u32 cell_w = video_cell_width_px();
-    if (cell_w == 0U) {
-        cell_w = UI_GRID;
-    }
-    return x_px / cell_w;
-}
-
 static u32 ui_text_row_from_px(u32 y_px) {
     u32 cell_h = video_cell_height_px();
     if (cell_h == 0U) {
         cell_h = UI_GRID;
     }
     return y_px / cell_h;
+}
+
+/*
+ * Draw text clipped to a pixel rect. Text that would extend past
+ * (rx + rw) is truncated; if truncation happens the last visible
+ * char is replaced with '~' as an ellipsis indicator.
+ * The text is placed at the text-grid cell that contains (text_x_px, text_y_px).
+ */
+static void ui_draw_text_clipped(u32 rx, u32 ry, u32 rw, u32 rh,
+                                  u32 text_x_px, u32 text_y_px,
+                                  const char *text, u32 fg, u32 bg) {
+    u32 cell_w = video_cell_width_px();
+    u32 cell_h = video_cell_height_px();
+    u32 col, row, len, max_chars, i;
+
+    if (cell_w == 0U) cell_w = UI_GRID;
+    if (cell_h == 0U) cell_h = UI_GRID;
+
+    /* Reject if text origin is outside rect vertically */
+    if (text_y_px < ry || text_y_px + cell_h > ry + rh) return;
+    /* Clamp text_x to rect left edge */
+    if (text_x_px < rx) text_x_px = rx;
+    if (text_x_px >= rx + rw) return;
+
+    col = text_x_px / cell_w;
+    row = text_y_px / cell_h;
+    len = local_strlen(text);
+
+    /* How many chars fit from text_x_px to right edge of rect */
+    max_chars = (rx + rw - text_x_px) / cell_w;
+    if (max_chars == 0U) return;
+
+    video_set_colors(fg, bg);
+    video_set_cursor(col, row);
+
+    if (len <= max_chars) {
+        video_write(text);
+    } else {
+        /* Truncate with ellipsis */
+        for (i = 0; i < max_chars; i++) {
+            if (i == max_chars - 1U)
+                video_putchar('~');
+            else
+                video_putchar(text[i]);
+        }
+    }
 }
 
 /* ===== Layout Engine ===== */
@@ -86,6 +124,10 @@ void ui_compute_layout(ui_layout_t *L, u32 fb_w, u32 fb_h) {
 static void ui_layout_debug_serial(const ui_layout_t *L) {
     serial_write("[ ui ] layout grid=");
     serial_write_u32(UI_GRID);
+    serial_write(" cell=");
+    serial_write_u32(video_cell_width_px());
+    serial_write("x");
+    serial_write_u32(video_cell_height_px());
     serial_write(" fb=");
     serial_write_u32(L->fb_w);
     serial_write("x");
@@ -147,7 +189,8 @@ int ui_set_scene(ui_scene_t scene) {
 #define COL_DOCK_SEL_FG  0x0000FFFFU
 
 static void ui_render_desktop_scene(void) {
-    u32 fb_w, fb_h, row;
+    u32 fb_w, fb_h;
+    u32 bar_inner_x, bar_inner_y, bar_inner_h;
     static int first_render = 1;
 
     if (!video_ready()) return;
@@ -166,22 +209,37 @@ static void ui_render_desktop_scene(void) {
     ui_draw_panel(g_layout.top_x, g_layout.top_y,
                   g_layout.top_w, g_layout.top_h,
                   COL_PANEL_BORDER, COL_PANEL_BG);
-    row = ui_pixel_y_to_text_row(g_layout.top_y + UI_GRID);
-    video_set_colors(COL_TEXT_GREEN, COL_PANEL_BG);
-    ui_write_centered_row(row, "CiukiOS");
-    video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
+    /* Content rect inside top bar: border + padding */
+    bar_inner_y = g_layout.top_y + UI_PANEL_BORDER + UI_PANEL_PAD_Y;
+    bar_inner_h = g_layout.top_h - 2U * (UI_PANEL_BORDER + UI_PANEL_PAD_Y);
+    /* Center "CiukiOS" in top bar using centered row helper */
+    {
+        u32 row = ui_text_row_from_px(bar_inner_y);
+        video_set_colors(COL_TEXT_GREEN, COL_PANEL_BG);
+        ui_write_centered_row(row, "CiukiOS");
+        video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
+    }
 
     /* Status bar */
     ui_draw_panel(g_layout.status_x, g_layout.status_y,
                   g_layout.status_w, g_layout.status_h,
                   COL_PANEL_BORDER, COL_PANEL_BG);
-    row = ui_pixel_y_to_text_row(g_layout.status_y + 4U);
-    video_set_colors(COL_TEXT_DIM, COL_PANEL_BG);
-    video_set_cursor(2U, row);
-    if (video_columns() >= 64U) {
-        video_write("TAB: Focus | UP/DOWN J/K | ENTER: Select | ESC: shell");
-    } else {
-        video_write("TAB focus | ENTER select | ESC shell");
+    /* Content rect inside status bar */
+    bar_inner_x = g_layout.status_x + UI_PANEL_BORDER + UI_PANEL_PAD_X;
+    bar_inner_y = g_layout.status_y + UI_PANEL_BORDER;
+    bar_inner_h = g_layout.status_h - 2U * UI_PANEL_BORDER;
+    {
+        const char *msg;
+        if (video_columns() >= 64U)
+            msg = "TAB: Focus | J/K: Navigate | ENTER: Select | ALT+G+Q: Exit";
+        else if (video_columns() >= 40U)
+            msg = "TAB focus | ENTER select | ALT+GQ exit";
+        else
+            msg = "TAB|ENTER|AGQ";
+        ui_draw_text_clipped(g_layout.status_x + UI_PANEL_BORDER, bar_inner_y,
+                             g_layout.status_w - 2U * UI_PANEL_BORDER, bar_inner_h,
+                             bar_inner_x, bar_inner_y,
+                             msg, COL_TEXT_DIM, COL_PANEL_BG);
     }
     video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
 
@@ -189,6 +247,7 @@ static void ui_render_desktop_scene(void) {
         serial_write("[ ui ] desktop shell surface active\n");
         serial_write("[ ui ] desktop layout v2 active\n");
         serial_write("[ ui ] desktop interaction active\n");
+        serial_write("[ ui ] alignment surgical v6 active\n");
         ui_layout_debug_serial(&g_layout);
         first_render = 0;
     }
@@ -355,14 +414,15 @@ int ui_get_focused_window(void) { return g_focused_idx; }
 
 void ui_render_windows(void) {
     int i;
-    u32 title_row, content_row, title_bar_h;
     u32 border_color, bg_color, text_color;
+    u32 inner_x, inner_y, inner_w, inner_h;
+    u32 title_text_x, title_text_y;
+    u32 content_text_x, content_text_y, content_rect_y, content_rect_h;
     static int chrome_printed = 0;
 
     if (!video_ready() || !g_layout.valid) return;
 
     ui_reflow_windows(&g_layout);
-    title_bar_h = UI_GRID * 2U; /* 16px */
 
     for (i = 0; i < UI_MAX_WINDOWS; i++) {
         ui_window_t *w = &g_windows[i];
@@ -372,31 +432,58 @@ void ui_render_windows(void) {
 
         ui_draw_panel(w->x, w->y, w->w, w->h, border_color, bg_color);
 
-        /* Title bar */
-        if (w->h > title_bar_h + UI_GRID) {
-            video_fill_rect(w->x + 1U, w->y + 1U,
-                w->w - 2U, title_bar_h, COL_TITLEBAR_BG);
-            video_fill_rect(w->x + 1U, w->y + title_bar_h + 1U,
-                w->w - 2U, 1U, border_color);
-            title_row = ui_pixel_y_to_text_row(w->y + UI_GRID / 2U);
-            video_set_colors(text_color, COL_TITLEBAR_BG);
-            video_set_cursor(ui_text_col_from_px(w->x + UI_GRID), title_row);
-            video_write("[");
-            video_write(w->title);
-            video_write("]");
-        }
+        /* Inner rect (inside border) */
+        inner_x = w->x + UI_PANEL_BORDER;
+        inner_y = w->y + UI_PANEL_BORDER;
+        inner_w = (w->w > 2U * UI_PANEL_BORDER) ? w->w - 2U * UI_PANEL_BORDER : 0U;
+        inner_h = (w->h > 2U * UI_PANEL_BORDER) ? w->h - 2U * UI_PANEL_BORDER : 0U;
 
-        /* Content */
-        if (w->h > title_bar_h + UI_GRID * 4U) {
-            content_row = ui_pixel_y_to_text_row(w->y + title_bar_h + UI_GRID);
-            video_set_colors(text_color, bg_color);
-            video_set_cursor(ui_text_col_from_px(w->x + UI_GRID), content_row);
-            if (w->focused) {
-                if (i == 0) video_write("Status: Ready");
-                else if (i == 1) video_write("Buffer: Empty");
-                else video_write("Info: Active");
-            } else {
-                video_write("...");
+        /* Title bar: inside border, UI_TITLEBAR_H tall */
+        if (inner_h > UI_TITLEBAR_H + UI_GRID) {
+            video_fill_rect(inner_x, inner_y, inner_w, UI_TITLEBAR_H, COL_TITLEBAR_BG);
+            /* Separator line below title bar */
+            video_fill_rect(inner_x, inner_y + UI_TITLEBAR_H, inner_w, 1U, border_color);
+
+            /* Title text: padded inside title bar area */
+            title_text_x = inner_x + UI_PANEL_PAD_X;
+            title_text_y = inner_y + (UI_TITLEBAR_H - video_cell_height_px()) / 2U;
+            {
+                /* Build "[Title]" and clip to title bar */
+                char tbuf[32];
+                u32 ti = 0;
+                const char *t = w->title;
+                tbuf[ti++] = '[';
+                while (*t && ti < 30U) tbuf[ti++] = *t++;
+                tbuf[ti++] = ']';
+                tbuf[ti] = '\0';
+                ui_draw_text_clipped(inner_x, inner_y, inner_w, UI_TITLEBAR_H,
+                                     title_text_x, title_text_y,
+                                     tbuf, text_color, COL_TITLEBAR_BG);
+            }
+
+            /* Content area: below title bar + separator + padding */
+            content_rect_y = inner_y + UI_TITLEBAR_H + 1U + UI_PANEL_PAD_Y;
+            content_rect_h = (inner_y + inner_h > content_rect_y)
+                             ? inner_y + inner_h - content_rect_y - UI_PANEL_PAD_Y
+                             : 0U;
+            if (content_rect_h > 0U) {
+                content_text_x = inner_x + UI_PANEL_PAD_X;
+                content_text_y = content_rect_y;
+                if (w->focused) {
+                    const char *cmsg;
+                    if (i == 0) cmsg = "Status: Ready";
+                    else if (i == 1) cmsg = "Buffer: Empty";
+                    else cmsg = "Info: Active";
+                    ui_draw_text_clipped(inner_x, content_rect_y,
+                                         inner_w, content_rect_h,
+                                         content_text_x, content_text_y,
+                                         cmsg, text_color, bg_color);
+                } else {
+                    ui_draw_text_clipped(inner_x, content_rect_y,
+                                         inner_w, content_rect_h,
+                                         content_text_x, content_text_y,
+                                         "...", text_color, bg_color);
+                }
             }
         }
         video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
@@ -434,48 +521,81 @@ const char *ui_get_launcher_item(void) {
 
 void ui_render_launcher(void) {
     int i;
-    u32 item_h, item_y, item_row, header_row, dock_header_h, sep_y;
+    u32 item_y, sep_y;
+    u32 dock_inner_x, dock_inner_y, dock_inner_w, dock_inner_h;
+    u32 items_start_y, item_text_x, item_text_y;
+    u32 cell_h = video_cell_height_px();
 
     if (!video_ready() || !g_launcher_active || !g_layout.valid) return;
-
-    item_h = UI_GRID * 3U; /* 24px per item */
-    dock_header_h = UI_GRID * 3U; /* 24px header */
+    if (cell_h == 0U) cell_h = UI_GRID;
 
     /* Draw dock panel background */
     ui_draw_panel(g_layout.dock_x, g_layout.dock_y,
                   g_layout.dock_w, g_layout.dock_h,
                   COL_WIN_UNFOC_BD, COL_DOCK_BG);
 
-    /* Dock header */
-    header_row = ui_pixel_y_to_text_row(g_layout.dock_y + UI_GRID);
-    video_set_colors(COL_TEXT_GREEN, COL_DOCK_BG);
-    video_set_cursor(ui_text_col_from_px(g_layout.dock_x + UI_GRID), header_row);
-    video_write("[ Dock ]");
+    /* Dock content rect (inside border) */
+    dock_inner_x = g_layout.dock_x + UI_PANEL_BORDER;
+    dock_inner_y = g_layout.dock_y + UI_PANEL_BORDER;
+    dock_inner_w = g_layout.dock_w - 2U * UI_PANEL_BORDER;
+    dock_inner_h = g_layout.dock_h - 2U * UI_PANEL_BORDER;
 
-    /* Separator */
-    sep_y = g_layout.dock_y + dock_header_h;
-    video_fill_rect(g_layout.dock_x + 1U, sep_y,
-                    g_layout.dock_w - 2U, 1U, COL_WIN_UNFOC_BD);
+    /* Dock header: "[ Dock ]" centered vertically in header area */
+    {
+        u32 header_text_y = dock_inner_y + (UI_DOCK_HEADER_H - cell_h) / 2U;
+        u32 header_text_x = dock_inner_x + UI_PANEL_PAD_X;
+        ui_draw_text_clipped(dock_inner_x, dock_inner_y,
+                             dock_inner_w, UI_DOCK_HEADER_H,
+                             header_text_x, header_text_y,
+                             "[ Dock ]", COL_TEXT_GREEN, COL_DOCK_BG);
+    }
 
-    /* Items */
+    /* Separator below header */
+    sep_y = dock_inner_y + UI_DOCK_HEADER_H;
+    video_fill_rect(dock_inner_x, sep_y, dock_inner_w, 1U, COL_WIN_UNFOC_BD);
+
+    /* Items start after separator + gap */
+    items_start_y = sep_y + 1U + UI_ZONE_GAP;
+
     for (i = 0; i < LAUNCHER_ITEMS; i++) {
-        item_y = sep_y + UI_GAP + (u32)i * item_h;
+        item_y = items_start_y + (u32)i * UI_DOCK_ITEM_H;
 
-        /* Bounds check: don't render past dock bottom */
-        if (item_y + item_h > g_layout.dock_y + g_layout.dock_h) break;
+        /* Bounds check: don't render past dock content rect bottom */
+        if (item_y + UI_DOCK_ITEM_H > dock_inner_y + dock_inner_h) break;
 
+        /* Selection highlight (inside dock content, with small margin) */
         if (i == g_launcher_focus) {
-            video_fill_rect(g_layout.dock_x + 2U, item_y,
-                g_layout.dock_w - 4U, item_h - 2U, COL_DOCK_SEL_BG);
-            video_set_colors(COL_DOCK_SEL_FG, COL_DOCK_SEL_BG);
-        } else {
-            video_set_colors(COL_TEXT_DIM, COL_DOCK_BG);
+            video_fill_rect(dock_inner_x + 1U, item_y,
+                dock_inner_w - 2U, UI_DOCK_ITEM_H - 1U, COL_DOCK_SEL_BG);
         }
 
-        item_row = ui_pixel_y_to_text_row(item_y + UI_GRID / 2U);
-        video_set_cursor(ui_text_col_from_px(g_layout.dock_x + UI_GRID), item_row);
-        video_write(i == g_launcher_focus ? "> " : "  ");
-        video_write(g_launcher_items[i]);
-        video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
+        /* Item text: vertically centered in item_h, with padding */
+        item_text_x = dock_inner_x + UI_PANEL_PAD_X;
+        item_text_y = item_y + (UI_DOCK_ITEM_H - cell_h) / 2U;
+
+        {
+            /* Build prefix + label, then clip to dock content rect */
+            char lbuf[32];
+            u32 li = 0;
+            const char *src;
+            if (i == g_launcher_focus) {
+                lbuf[li++] = '>';
+                lbuf[li++] = ' ';
+            } else {
+                lbuf[li++] = ' ';
+                lbuf[li++] = ' ';
+            }
+            src = g_launcher_items[i];
+            while (*src && li < 30U) lbuf[li++] = *src++;
+            lbuf[li] = '\0';
+
+            ui_draw_text_clipped(dock_inner_x, item_y,
+                                 dock_inner_w, UI_DOCK_ITEM_H,
+                                 item_text_x, item_text_y,
+                                 lbuf,
+                                 i == g_launcher_focus ? COL_DOCK_SEL_FG : COL_TEXT_DIM,
+                                 i == g_launcher_focus ? COL_DOCK_SEL_BG : COL_DOCK_BG);
+        }
     }
+    video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
 }
