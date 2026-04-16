@@ -27,11 +27,51 @@ int ui_set_scene(ui_scene_t scene) {
 }
 
 static void ui_render_desktop_scene(void) {
-    /* Placeholder desktop scene renderer */
+    /* Desktop scene renderer */
+    u32 fb_w, fb_h;
+    u32 row;
+    static int desktop_rendered = 0;
+
     if (!video_ready()) {
         return;
     }
-    /* Desktop rendering will be implemented in Task 2 */
+
+    fb_w = video_width_px();
+    fb_h = video_height_px();
+
+    /* Draw desktop background - simple dark gradient/pattern */
+    if (fb_w > 0 && fb_h > 0) {
+        video_fill_rect(0U, 0U, fb_w, fb_h, 0x00101015U); /* very dark blue-gray */
+    }
+
+    /* Draw top bar */
+    if (fb_h > 32U) {
+        ui_draw_panel(0U, 0U, fb_w, 32U, 0x00404050U, 0x00202025U);
+
+        /* Top bar text: "CiukiOS" centered */
+        row = 1U;
+        video_set_colors(0x0000FF00U, 0x00202025U); /* bright green on dark */
+        ui_write_centered_row(row, "CiukiOS");
+        video_set_colors(0x00C0C0C0U, 0x00000000U);
+    }
+
+    /* Draw bottom status bar */
+    if (fb_h > 64U) {
+        u32 status_y = fb_h - 24U;
+        ui_draw_panel(0U, status_y, fb_w, 24U, 0x00404050U, 0x00202025U);
+
+        /* Status text */
+        row = ui_pixel_y_to_text_row(status_y + 2U);
+        video_set_colors(0x00808080U, 0x00202025U); /* dim gray */
+        video_set_cursor(2U, row);
+        video_write("TAB: Focus | ENTER: Select | ESC: shell");
+        video_set_colors(0x00C0C0C0U, 0x00000000U);
+    }
+
+    if (!desktop_rendered) {
+        serial_write("[ ui ] desktop shell surface active\n");
+        desktop_rendered = 1;
+    }
 }
 
 int ui_render_scene(void) {
