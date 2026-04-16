@@ -22,6 +22,9 @@
 #define SHELL_PATH_MAX 128
 #define SHELL_PATH_MAX_TOKENS 16
 #define SHELL_PATH_TOKEN_MAX 13
+#define SHELL_INT21_MAX_FILE_HANDLES 8U
+#define SHELL_INT21_HANDLE_BASE 5U
+#define SHELL_INT21_FILE_BUF_CAP (64U * 1024U)
 
 static const u8 g_exe32_marker[SHELL_EXE32_MARKER_SIZE] = {
     'C', 'I', 'U', 'K', 'E', 'X', '6', '4'
@@ -29,6 +32,19 @@ static const u8 g_exe32_marker[SHELL_EXE32_MARKER_SIZE] = {
 
 static u8 g_shell_file_buffer[SHELL_FILE_BUFFER_SIZE];
 static char g_shell_cwd[SHELL_PATH_MAX] = "/EFI/CIUKIOS";
+
+typedef struct shell_int21_file_handle {
+    int used;
+    u16 handle_id;
+    u8 mode;   /* 0=read,1=write,2=read/write */
+    u8 dirty;
+    u32 size;
+    u32 pos;
+    char path[SHELL_PATH_MAX];
+    u8 data[SHELL_INT21_FILE_BUF_CAP];
+} shell_int21_file_handle_t;
+
+static shell_int21_file_handle_t g_int21_file_handles[SHELL_INT21_MAX_FILE_HANDLES];
 
 static int shell_dir_fat_cb(const fat_dir_entry_t *entry, void *ctx_void);
 static int shell_dir_exists_cb(const fat_dir_entry_t *entry, void *ctx_void) {
@@ -334,7 +350,7 @@ static void shell_print_help(void) {
     video_write("  del X    - delete file from FAT cache\n");
     video_write("  ascii    - show custom ASCII art\n");
     video_write("  gsplash  - show graphical splash preview\n");
-    video_write("  desktop  - open interactive desktop scene (ESC to return)\n");
+    video_write("  desktop  - open interactive desktop scene (ALT+G+Q to return)\n");
     video_write("  cls      - clear screen\n");
     video_write("  ver      - show OS version\n");
     video_write("  echo     - print text to screen\n");
@@ -651,6 +667,125 @@ static i32 g_int21_pending_stdin_char = -1;
 static u8 g_int21_default_drive = 0U;
 static u16 g_int21_dta_segment = 0U;
 static u16 g_int21_dta_offset = 0x0080U;
+
+static void shell_int21_reset_handle_table(void) {
+    local_memset(g_int21_file_handles, 0U, (u32)sizeof(g_int21_file_handles));
+}
+
+static shell_int21_file_handle_t *shell_int21_find_file_handle(u16 handle) {
+    for (u32 i = 0; i < SHELL_INT21_MAX_FILE_HANDLES; i++) {
+        if (g_int21_file_handles[i].used && g_int21_file_handles[i].handle_id == handle) {
+            return &g_int21_file_handles[i];
+        }
+    }
+    return (shell_int21_file_handle_t *)0;
+}
+
+static shell_int21_file_handle_t *shell_int21_alloc_file_handle(u8 mode, const char *path) {
+    for (u32 i = 0; i < SHELL_INT21_MAX_FILE_HANDLES; i++) {
+        if (!g_int21_file_handles[i].used) {
+            shell_int21_file_handle_t *h = &g_int21_file_handles[i];
+            h->used = 1;
+            h->handle_id = (u16)(SHELL_INT21_HANDLE_BASE + i);
+            h->mode = mode;
+            h->dirty = 0U;
+            h->size = 0U;
+            h->pos = 0U;
+            str_copy(h->path, path ? path : "", (u32)sizeof(h->path));
+            return h;
+        }
+    }
+    return (shell_int21_file_handle_t *)0;
+}
+
+static int shell_int21_read_asciiz(ciuki_dos_context_t *ctx, u16 off, char *out, u32 out_size) {
+    u32 i;
+    if (!ctx || !out || out_size == 0U) {
+        return 0;
+    }
+    if ((u32)off >= ctx->image_size) {
+        return 0;
+    }
+    for (i = 0; i + 1U < out_size; i++) {
+        u32 idx = (u32)off + i;
+        char ch;
+        if (idx >= ctx->image_size) {
+            return 0;
+        }
+        ch = *((char *)(ctx->image_linear + (u64)idx));
+        out[i] = ch;
+        if (ch == '\0') {
+            return 1;
+        }
+    }
+    out[out_size - 1U] = '\0';
+    return 1;
+}
+
+static int shell_int21_dos_path_to_canonical(const char *in, char *out, u32 out_size) {
+    char tmp[SHELL_PATH_MAX];
+    u32 i = 0U;
+    u32 j = 0U;
+    const char *p;
+
+    if (!in || !out || out_size == 0U) {
+        return 0;
+    }
+
+    while (in[i] != '\0' && is_space((u8)in[i])) {
+        i++;
+    }
+    p = &in[i];
+
+    /* Optional drive prefix (e.g. A:) */
+    if (((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':') {
+        p += 2;
+    }
+
+    while (*p != '\0' && j + 1U < (u32)sizeof(tmp)) {
+        char ch = *p++;
+        if (ch == '\\') {
+            ch = '/';
+        }
+        tmp[j++] = (char)to_upper_ascii((u8)ch);
+    }
+    tmp[j] = '\0';
+
+    if (tmp[0] == '\0') {
+        return 0;
+    }
+
+    return build_canonical_path(tmp, out, out_size);
+}
+
+static int shell_int21_flush_file_handle(shell_int21_file_handle_t *h) {
+    if (!h || !h->used || !h->dirty) {
+        return 1;
+    }
+
+    /*
+     * fat_write_file() fails if destination already exists.
+     * Replace semantics: best-effort delete old path, then write new content.
+     */
+    (void)fat_delete_file(h->path);
+
+    if (!fat_write_file(h->path, (const void *)h->data, h->size)) {
+        return 0;
+    }
+
+    h->dirty = 0U;
+    return 1;
+}
+
+static void shell_int21_close_all_handles(void) {
+    for (u32 i = 0; i < SHELL_INT21_MAX_FILE_HANDLES; i++) {
+        if (!g_int21_file_handles[i].used) {
+            continue;
+        }
+        (void)shell_int21_flush_file_handle(&g_int21_file_handles[i]);
+        g_int21_file_handles[i].used = 0;
+    }
+}
 
 static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
     if (!ctx || off >= ctx->image_size) {
@@ -973,16 +1108,112 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     }
 
     if (ah == 0x3CU) {
-        /* Create/truncate file: deterministic stub until handle table backend exists. */
-        regs->carry = 1U;
-        regs->ax = 0x0005U; /* access denied */
+        char dos_path[SHELL_PATH_MAX];
+        char path[SHELL_PATH_MAX];
+        fat_dir_entry_t existing;
+        shell_int21_file_handle_t *h;
+
+        if (!fat_ready()) {
+            /* Pre-FAT boot phase: deterministic fallback */
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* access denied */
+            return;
+        }
+
+        if (!shell_int21_read_asciiz(ctx, regs->dx, dos_path, (u32)sizeof(dos_path)) ||
+            !shell_int21_dos_path_to_canonical(dos_path, path, (u32)sizeof(path))) {
+            regs->carry = 1U;
+            regs->ax = 0x0003U; /* path not found */
+            return;
+        }
+
+        if (fat_find_file(path, &existing)) {
+            if ((existing.attr & FAT_ATTR_DIRECTORY) != 0U) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U; /* access denied */
+                return;
+            }
+            if (!fat_delete_file(path)) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U;
+                return;
+            }
+        }
+
+        if (!fat_write_file(path, (const void *)0, 0U)) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U;
+            return;
+        }
+
+        h = shell_int21_alloc_file_handle(2U, path);
+        if (!h) {
+            regs->carry = 1U;
+            regs->ax = 0x0004U; /* too many open files */
+            return;
+        }
+
+        regs->ax = h->handle_id;
         return;
     }
 
     if (ah == 0x3DU) {
-        /* Open file: deterministic stub until handle table backend exists. */
-        regs->carry = 1U;
-        regs->ax = 0x0002U; /* file not found */
+        char dos_path[SHELL_PATH_MAX];
+        char path[SHELL_PATH_MAX];
+        fat_dir_entry_t info;
+        shell_int21_file_handle_t *h;
+        u32 file_size = 0U;
+        u8 access = (u8)(al & 0x03U);
+
+        if (!fat_ready()) {
+            regs->carry = 1U;
+            regs->ax = 0x0002U; /* file not found */
+            return;
+        }
+
+        if (!shell_int21_read_asciiz(ctx, regs->dx, dos_path, (u32)sizeof(dos_path)) ||
+            !shell_int21_dos_path_to_canonical(dos_path, path, (u32)sizeof(path))) {
+            regs->carry = 1U;
+            regs->ax = 0x0003U; /* path not found */
+            return;
+        }
+
+        if (!fat_find_file(path, &info)) {
+            regs->carry = 1U;
+            regs->ax = 0x0002U; /* file not found */
+            return;
+        }
+        if ((info.attr & FAT_ATTR_DIRECTORY) != 0U) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* access denied */
+            return;
+        }
+        if (info.size > SHELL_INT21_FILE_BUF_CAP) {
+            regs->carry = 1U;
+            regs->ax = 0x0008U; /* insufficient memory */
+            return;
+        }
+
+        h = shell_int21_alloc_file_handle(access, path);
+        if (!h) {
+            regs->carry = 1U;
+            regs->ax = 0x0004U; /* too many open files */
+            return;
+        }
+
+        if (info.size > 0U) {
+            if (!fat_read_file(path, (void *)h->data, SHELL_INT21_FILE_BUF_CAP, &file_size)) {
+                h->used = 0;
+                regs->carry = 1U;
+                regs->ax = 0x0005U;
+                return;
+            }
+        }
+
+        h->size = file_size;
+        h->pos = 0U;
+        h->dirty = 0U;
+        regs->ax = h->handle_id;
         return;
     }
 
@@ -991,12 +1222,28 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
             regs->ax = 0x0000U;
             return;
         }
-        regs->carry = 1U;
-        regs->ax = 0x0006U; /* invalid handle */
+
+        {
+            shell_int21_file_handle_t *h = shell_int21_find_file_handle(regs->bx);
+            if (!h) {
+                regs->carry = 1U;
+                regs->ax = 0x0006U; /* invalid handle */
+                return;
+            }
+            if (!shell_int21_flush_file_handle(h)) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U;
+                return;
+            }
+            h->used = 0;
+            regs->ax = 0x0000U;
+        }
         return;
     }
 
     if (ah == 0x3FU) {
+        shell_int21_file_handle_t *h;
+
         if (regs->bx == 0U) {
             u8 *dst;
             u16 count = regs->cx;
@@ -1025,12 +1272,42 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
             return;
         }
 
-        regs->carry = 1U;
-        regs->ax = 0x0006U; /* invalid handle */
+        h = shell_int21_find_file_handle(regs->bx);
+        if (!h) {
+            regs->carry = 1U;
+            regs->ax = 0x0006U; /* invalid handle */
+            return;
+        }
+
+        {
+            u8 *dst;
+            u32 available;
+            u32 to_read;
+            u32 count = (u32)regs->cx;
+
+            if (!shell_int21_resolve_rw_buffer(ctx, regs->dx, regs->cx, &dst)) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U;
+                return;
+            }
+
+            if (h->pos >= h->size) {
+                regs->ax = 0x0000U;
+                return;
+            }
+
+            available = h->size - h->pos;
+            to_read = (count < available) ? count : available;
+            local_memcpy(dst, h->data + h->pos, to_read);
+            h->pos += to_read;
+            regs->ax = (u16)to_read;
+        }
         return;
     }
 
     if (ah == 0x40U) {
+        shell_int21_file_handle_t *h;
+
         if (regs->bx == 1U || regs->bx == 2U) {
             u8 *src;
             u16 count = regs->cx;
@@ -1056,27 +1333,123 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
             return;
         }
 
-        regs->carry = 1U;
-        regs->ax = 0x0006U; /* invalid handle */
+        h = shell_int21_find_file_handle(regs->bx);
+        if (!h) {
+            regs->carry = 1U;
+            regs->ax = 0x0006U; /* invalid handle */
+            return;
+        }
+        if (h->mode == 0U) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* access denied (read-only handle) */
+            return;
+        }
+
+        {
+            u8 *src;
+            u32 count = (u32)regs->cx;
+            u32 room = 0U;
+            u32 to_write = 0U;
+
+            if (!shell_int21_resolve_rw_buffer(ctx, regs->dx, regs->cx, &src)) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U;
+                return;
+            }
+
+            if (h->pos < SHELL_INT21_FILE_BUF_CAP) {
+                room = SHELL_INT21_FILE_BUF_CAP - h->pos;
+            }
+            to_write = (count < room) ? count : room;
+
+            if (to_write > 0U) {
+                local_memcpy(h->data + h->pos, src, to_write);
+                h->pos += to_write;
+                if (h->pos > h->size) {
+                    h->size = h->pos;
+                }
+                h->dirty = 1U;
+            }
+
+            regs->ax = (u16)to_write;
+        }
         return;
     }
 
     if (ah == 0x41U) {
-        /* Delete file: deterministic stub until handle API is backed by FAT layer. */
-        regs->carry = 1U;
-        regs->ax = 0x0002U; /* file not found */
+        char dos_path[SHELL_PATH_MAX];
+        char path[SHELL_PATH_MAX];
+
+        if (!fat_ready()) {
+            regs->carry = 1U;
+            regs->ax = 0x0002U; /* file not found */
+            return;
+        }
+
+        if (!shell_int21_read_asciiz(ctx, regs->dx, dos_path, (u32)sizeof(dos_path)) ||
+            !shell_int21_dos_path_to_canonical(dos_path, path, (u32)sizeof(path))) {
+            regs->carry = 1U;
+            regs->ax = 0x0003U;
+            return;
+        }
+
+        if (!fat_delete_file(path)) {
+            regs->carry = 1U;
+            regs->ax = 0x0002U;
+            return;
+        }
+        regs->ax = 0x0000U;
         return;
     }
 
     if (ah == 0x42U) {
+        shell_int21_file_handle_t *h;
+
         if (regs->bx <= 2U) {
             regs->ax = 0x0000U;
             regs->dx = 0x0000U;
             return;
         }
 
-        regs->carry = 1U;
-        regs->ax = 0x0006U; /* invalid handle */
+        h = shell_int21_find_file_handle(regs->bx);
+        if (!h) {
+            regs->carry = 1U;
+            regs->ax = 0x0006U; /* invalid handle */
+            return;
+        }
+
+        {
+            u8 origin = (u8)(al & 0x03U);
+            u32 off_u = ((u32)regs->dx << 16) | (u32)regs->ax;
+            i32 off_s = (i32)off_u;
+            i64 base = 0;
+            i64 new_pos = 0;
+
+            if (origin == 0U) {
+                new_pos = (i64)off_u;
+            } else {
+                if (origin == 1U) {
+                    base = (i64)h->pos;
+                } else if (origin == 2U) {
+                    base = (i64)h->size;
+                } else {
+                    regs->carry = 1U;
+                    regs->ax = 0x0001U;
+                    return;
+                }
+                new_pos = base + (i64)off_s;
+            }
+
+            if (new_pos < 0 || new_pos > (i64)SHELL_INT21_FILE_BUF_CAP) {
+                regs->carry = 1U;
+                regs->ax = 0x0019U; /* seek error */
+                return;
+            }
+
+            h->pos = (u32)new_pos;
+            regs->ax = (u16)(h->pos & 0xFFFFU);
+            regs->dx = (u16)((h->pos >> 16) & 0xFFFFU);
+        }
         return;
     }
 
@@ -1152,6 +1525,7 @@ int stage2_shell_selftest_int21_baseline(void) {
     static u8 linebuf[8];
 
     local_memset(&ctx, 0U, (u32)sizeof(ctx));
+    shell_int21_reset_handle_table();
     ctx.image_linear = (u64)(const void *)test_image;
     ctx.image_size = (u32)(sizeof(test_image) - 1U);
     ctx.psp_segment = 0x4321U;
@@ -1508,6 +1882,7 @@ static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const ch
 
     g_int21_dta_segment = ctx->psp_segment;
     g_int21_dta_offset = 0x0080U;
+    shell_int21_reset_handle_table();
 }
 
 static void shell_print_com_exit(const ciuki_dos_context_t *ctx) {
@@ -1654,12 +2029,14 @@ static void shell_run_staged_image(
         video_write("\n");
 
         entry(&ctx, &svc);
+        shell_int21_close_all_handles();
         shell_publish_last_exit_status(&ctx);
         shell_print_com_exit(&ctx);
         return;
     }
 
     entry(&ctx, &svc);
+    shell_int21_close_all_handles();
     shell_publish_last_exit_status(&ctx);
     shell_print_com_exit(&ctx);
 }
@@ -2524,6 +2901,8 @@ static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
 static void shell_run_desktop_session(void) {
     int chord_stage = 0; /* 0=idle, 1=ALT+G seen, waiting for Q */
+    u64 chord_deadline = 0ULL;
+    const u64 chord_window_ticks = 200ULL; /* 2s @ 100Hz */
     serial_write("[ ui ] desktop session started\n");
     serial_write("[ ui ] desktop exit chord alt+g+q active\n");
 
@@ -2546,20 +2925,36 @@ static void shell_run_desktop_session(void) {
 
         {
             u8 ch = (u8)key;
+            u64 now = stage2_timer_ticks();
+            int alt_held = stage2_keyboard_alt_held();
 
-            /* ALT+G+Q exit chord: ALT held + G sets stage 1, then Q exits */
-            if (stage2_keyboard_alt_held()) {
-                if (ch == 'g' && chord_stage == 0) {
+            if (chord_stage == 1 && now > chord_deadline) {
+                chord_stage = 0;
+            }
+
+            /*
+             * ALT+G+Q exit chord:
+             * 1) ALT held + G => arm exit stage for a short window.
+             * 2) Q within window exits; ALT is preferred but not strictly required
+             *    in step 2 to tolerate host/QEMU modifier state drops.
+             */
+            if (alt_held) {
+                if ((ch == 'g' || ch == 'G') && chord_stage == 0) {
                     chord_stage = 1;
+                    chord_deadline = now + chord_window_ticks;
                     continue;
                 }
-                if (ch == 'q' && chord_stage == 1) {
+            }
+
+            if (chord_stage == 1 && (ch == 'q' || ch == 'Q')) {
+                if (alt_held || now <= chord_deadline) {
                     serial_write("[ ui ] exit chord alt+g+q triggered\n");
                     break;
                 }
-                /* Any other key while ALT held resets chord */
                 chord_stage = 0;
-            } else {
+            }
+
+            if (alt_held && ch != 'g' && ch != 'G' && ch != 'q' && ch != 'Q') {
                 chord_stage = 0;
             }
 
@@ -2729,7 +3124,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     char line[SHELL_LINE_MAX];
     u32 line_len = 0;
 
-    video_write("Tip: type 'desktop' to test GUI mode (ESC to return).\n");
+    video_write("Tip: type 'desktop' to test GUI mode (ALT+G+Q to return).\n");
     write_prompt();
 
     for (;;) {

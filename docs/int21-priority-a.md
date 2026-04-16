@@ -30,13 +30,9 @@ Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compat
 24. `AH=4Ch` - terminate process with return code.
 
 ## Deterministic Stubs (Not Fully Implemented Yet)
-1. `AH=3Ch` - create/truncate file: returns `CF=1`, `AX=0005h`.
-2. `AH=3Dh` - open file: returns `CF=1`, `AX=0002h`.
-3. `AH=41h` - delete file: returns `CF=1`, `AX=0002h`.
-4. `AH=42h` - seek: deterministic baseline (std handles return `DX:AX=0`, others `CF=1`, `AX=0006h`).
-5. `AH=48h` - allocate memory block: returns `CF=1`, `AX=0008h`.
-6. `AH=49h` - free memory block: returns `CF=1`, `AX=0009h`.
-7. `AH=4Ah` - resize memory block: returns `CF=1`, `AX=0008h`.
+1. `AH=48h` - allocate memory block: returns `CF=1`, `AX=0008h`.
+2. `AH=49h` - free memory block: returns `CF=1`, `AX=0009h`.
+3. `AH=4Ah` - resize memory block: returns `CF=1`, `AX=0008h`.
 
 These stubs are intentional until MCB-style allocator work is completed in roadmap M2.
 
@@ -68,13 +64,13 @@ FN  | Status               | Implementation Details
 2Fh | IMPLEMENTED          | Get DTA pointer in ES:BX
 30h | IMPLEMENTED          | Get DOS version (returns 6.22)
 35h | IMPLEMENTED          | Get interrupt vector (returns pointer ES:BX)
-3Ch | DETERMINISTIC_STUB   | Create/truncate returns access denied (AX=0005h)
-3Dh | DETERMINISTIC_STUB   | Open returns file not found (AX=0002h)
+3Ch | IMPLEMENTED          | FAT-backed create/truncate + handle return (fallback stub when FAT unavailable)
+3Dh | IMPLEMENTED          | FAT-backed open + in-memory file handle (fallback stub when FAT unavailable)
 3Eh | IMPLEMENTED          | Close supports std handles 0/1/2, validates others
 3Fh | IMPLEMENTED          | Read supports stdin handle 0 baseline, deterministic errors otherwise
 40h | IMPLEMENTED          | Write supports stdout/stderr handles 1/2 baseline
-41h | DETERMINISTIC_STUB   | Delete returns file not found (AX=0002h)
-42h | DETERMINISTIC_STUB   | Seek baseline (std handles deterministic zero, others invalid handle)
+41h | IMPLEMENTED          | FAT-backed delete by DOS path (fallback stub when FAT unavailable)
+42h | IMPLEMENTED          | Seek on opened file handles + std-handle deterministic baseline
 4Ch | IMPLEMENTED          | Terminate with return code
 4Dh | IMPLEMENTED          | Get last process return code + type
 51h | IMPLEMENTED          | Get current PSP segment to BX
@@ -87,7 +83,7 @@ FN  | Status               | Implementation Details
 
 ## Next Priority-A Extensions
 1. Formal memory allocator backend for `48h/49h/4Ah`.
-2. Real FAT-backed handle table for `3Ch-42h` (replace current deterministic stubs/baseline).
+2. Expand FAT-backed handle table limits and add multi-chunk file buffering beyond current in-memory cap.
 3. Improve DOS-like line editor behavior for `0Ah` (editing keys/history/overflow signaling).
 4. Additional DOS error code mapping consistency checks.
 
