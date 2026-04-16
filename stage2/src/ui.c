@@ -190,6 +190,7 @@ int ui_set_scene(ui_scene_t scene) {
 #define COL_WIN_FOCUS_BG 0x00202020U
 #define COL_WIN_UNFOC_BG 0x00151515U
 #define COL_TITLEBAR_BG  0x00101010U
+#define COL_TITLEBAR_FOCUS_BG 0x00182838U
 #define COL_DOCK_BG      0x00151515U
 #define COL_DOCK_SEL_BG  0x00003333U
 #define COL_DOCK_SEL_FG  0x0000FFFFU
@@ -233,6 +234,7 @@ static void ui_render_desktop_scene(void) {
     /* Content rect inside status bar */
     bar_inner_x = g_layout.status_x + UI_PANEL_BORDER + UI_PANEL_PAD_X;
     bar_inner_y = g_layout.status_y + UI_PANEL_BORDER;
+    bar_inner_y = g_layout.status_y + UI_PANEL_BORDER;
     bar_inner_h = g_layout.status_h - 2U * UI_PANEL_BORDER;
     {
         const char *msg;
@@ -246,6 +248,33 @@ static void ui_render_desktop_scene(void) {
                              g_layout.status_w - 2U * UI_PANEL_BORDER, bar_inner_h,
                              bar_inner_x, bar_inner_y,
                              msg, COL_TEXT_DIM, COL_PANEL_BG);
+
+        /* Focus legend on right side of status bar */
+        {
+            static const char *win_names[3] = {"System", "Shell", "Info"};
+            char fbuf[24];
+            u32 fi = 0;
+            const char *fn;
+            u32 legend_w_px, legend_x;
+            u32 cell_w = video_cell_width_px();
+            int fidx = ui_get_focused_window();
+            if (cell_w == 0U) cell_w = UI_GRID;
+
+            fbuf[fi++] = 'F'; fbuf[fi++] = ':';
+            fn = (fidx >= 0 && fidx < 3) ? win_names[fidx] : "?";
+            while (*fn && fi < 22U) fbuf[fi++] = *fn++;
+            fbuf[fi] = '\0';
+
+            legend_w_px = fi * cell_w;
+            legend_x = g_layout.status_x + g_layout.status_w
+                        - UI_PANEL_BORDER - UI_PANEL_PAD_X - legend_w_px;
+            if (legend_x > bar_inner_x + local_strlen(msg) * cell_w + cell_w) {
+                ui_draw_text_clipped(g_layout.status_x + UI_PANEL_BORDER, bar_inner_y,
+                                     g_layout.status_w - 2U * UI_PANEL_BORDER, bar_inner_h,
+                                     legend_x, bar_inner_y,
+                                     fbuf, COL_TEXT_GREEN, COL_PANEL_BG);
+            }
+        }
     }
     video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
 
@@ -254,6 +283,7 @@ static void ui_render_desktop_scene(void) {
         serial_write("[ ui ] desktop layout v2 active\n");
         serial_write("[ ui ] desktop interaction active\n");
         serial_write("[ ui ] alignment surgical v6 active\n");
+        serial_write("[ ui ] desktop focus ux v8 active\n");
         ui_layout_debug_serial(&g_layout);
         first_render = 0;
     }
@@ -509,7 +539,8 @@ void ui_render_windows(void) {
 
         /* Title bar: inside border, UI_TITLEBAR_H tall */
         if (inner_h > UI_TITLEBAR_H + UI_GRID) {
-            video_fill_rect(inner_x, inner_y, inner_w, UI_TITLEBAR_H, COL_TITLEBAR_BG);
+            u32 tbar_bg = w->focused ? COL_TITLEBAR_FOCUS_BG : COL_TITLEBAR_BG;
+            video_fill_rect(inner_x, inner_y, inner_w, UI_TITLEBAR_H, tbar_bg);
             /* Separator line below title bar */
             video_fill_rect(inner_x, inner_y + UI_TITLEBAR_H, inner_w, 1U, border_color);
 
@@ -517,17 +548,18 @@ void ui_render_windows(void) {
             title_text_x = inner_x + UI_PANEL_PAD_X;
             title_text_y = inner_y + (UI_TITLEBAR_H - video_cell_height_px()) / 2U;
             {
-                /* Build "[Title]" and clip to title bar */
+                /* Build "[*Title]" (focused) or "[ Title]" (unfocused) and clip */
                 char tbuf[32];
                 u32 ti = 0;
                 const char *t = w->title;
                 tbuf[ti++] = '[';
-                while (*t && ti < 30U) tbuf[ti++] = *t++;
+                tbuf[ti++] = w->focused ? '*' : ' ';
+                while (*t && ti < 29U) tbuf[ti++] = *t++;
                 tbuf[ti++] = ']';
                 tbuf[ti] = '\0';
                 ui_draw_text_clipped(inner_x, inner_y, inner_w, UI_TITLEBAR_H,
                                      title_text_x, title_text_y,
-                                     tbuf, text_color, COL_TITLEBAR_BG);
+                                     tbuf, text_color, tbar_bg);
             }
 
             /* Content area: below title bar + separator + padding */
