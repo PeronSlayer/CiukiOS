@@ -108,6 +108,12 @@ static inline void outw_port(u16 port, u16 val) {
     __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
 }
 
+static inline u8 inb_port(u16 port) {
+    u8 value;
+    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
 static int str_eq(const char *a, const char *b) {
     while (*a && *b) {
         if (*a != *b) {
@@ -3285,17 +3291,34 @@ static void shell_graphic_splash_preview(void) {
 
 static void shell_shutdown(void) {
     video_write("Shutting down...\n");
-    /* ACPI S5 soft-off: QEMU PIIX4 PM1a_CNT at 0x604, SLP_EN (bit 13) */
+    /*
+     * Power-off fallbacks commonly supported by QEMU/Bochs chipsets.
+     * If QEMU is started with -no-shutdown, the VM will pause by design.
+     */
     outw_port(0x604, 0x2000);
+    outw_port(0xB004, 0x2000);
+    outw_port(0x4004, 0x3400);
     for (;;) {
         __asm__ volatile ("hlt");
     }
 }
 
 static void shell_reboot(void) {
+    u32 spin = 0;
     video_write("Rebooting...\n");
-    /* Keyboard controller system reset pulse via bit 0 of port 0x64 */
+    /*
+     * Try keyboard controller reset first, then chipset reset control.
+     * If QEMU is started with -no-reboot, the VM will pause by design.
+     */
+    while (spin < 1000000U) {
+        if ((inb_port(0x64) & 0x02U) == 0U) {
+            break;
+        }
+        spin++;
+    }
     outb_port(0x64, 0xFE);
+    outb_port(0xCF9, 0x02);
+    outb_port(0xCF9, 0x06);
     for (;;) {
         __asm__ volatile ("hlt");
     }

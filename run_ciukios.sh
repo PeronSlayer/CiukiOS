@@ -13,6 +13,8 @@ SKIP_STAGE2="${CIUKIOS_SKIP_STAGE2:-0}"
 TRACE_INT="${CIUKIOS_TRACE_INT:-0}"
 INCLUDE_FREEDOS="${CIUKIOS_INCLUDE_FREEDOS:-1}"
 INCLUDE_OZONE="${CIUKIOS_INCLUDE_OZONE:-auto}"
+QEMU_NO_REBOOT="${CIUKIOS_QEMU_NO_REBOOT:-1}"
+QEMU_NO_SHUTDOWN="${CIUKIOS_QEMU_NO_SHUTDOWN:-1}"
 FREEDOS_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 OZONE_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime/OZONE"
 
@@ -143,9 +145,14 @@ QEMU_ARGS=(
   -serial stdio
   -debugcon file:"$BUILD_DIR/debugcon.log"
   -global isa-debugcon.iobase=0xe9
-  -no-reboot
-  -no-shutdown
 )
+
+if [[ "$QEMU_NO_REBOOT" == "1" ]]; then
+  QEMU_ARGS+=(-no-reboot)
+fi
+if [[ "$QEMU_NO_SHUTDOWN" == "1" ]]; then
+  QEMU_ARGS+=(-no-shutdown)
+fi
 
 if [[ "$TRACE_INT" == "1" ]]; then
   echo "[CiukiOS] QEMU interrupt trace enabled (CIUKIOS_TRACE_INT=1)"
