@@ -8,6 +8,13 @@
  * Reusable graphics/text rendering helpers and scene management
  */
 
+/* Desktop Layout v2 Grid Constants */
+#define UI_LAYOUT_TOP_BAR_H      32U
+#define UI_LAYOUT_STATUS_BAR_H   24U
+#define UI_LAYOUT_MARGIN_H       10U
+#define UI_LAYOUT_WORK_TOP       (UI_LAYOUT_TOP_BAR_H + UI_LAYOUT_MARGIN_H)
+#define UI_LAYOUT_WORK_BOTTOM    UI_LAYOUT_STATUS_BAR_H
+
 /* Scene enumeration */
 typedef enum {
     SCENE_BOOT_SPLASH = 0,

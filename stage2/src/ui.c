@@ -27,10 +27,11 @@ int ui_set_scene(ui_scene_t scene) {
 }
 
 static void ui_render_desktop_scene(void) {
-    /* Desktop scene renderer */
+    /* Desktop scene renderer with layout v2 grid */
     u32 fb_w, fb_h;
     u32 row;
     static int desktop_rendered = 0;
+    static int layout_v2_marker_printed = 0;
 
     if (!video_ready()) {
         return;
@@ -44,9 +45,9 @@ static void ui_render_desktop_scene(void) {
         video_fill_rect(0U, 0U, fb_w, fb_h, 0x00101015U); /* very dark blue-gray */
     }
 
-    /* Draw top bar */
-    if (fb_h > 32U) {
-        ui_draw_panel(0U, 0U, fb_w, 32U, 0x00404050U, 0x00202025U);
+    /* Draw top bar (layout v2: UI_LAYOUT_TOP_BAR_H = 32px) */
+    if (fb_h > UI_LAYOUT_TOP_BAR_H) {
+        ui_draw_panel(0U, 0U, fb_w, UI_LAYOUT_TOP_BAR_H, 0x00404050U, 0x00202025U);
 
         /* Top bar text: "CiukiOS" centered */
         row = 1U;
@@ -55,10 +56,10 @@ static void ui_render_desktop_scene(void) {
         video_set_colors(0x00C0C0C0U, 0x00000000U);
     }
 
-    /* Draw bottom status bar */
-    if (fb_h > 64U) {
-        u32 status_y = fb_h - 24U;
-        ui_draw_panel(0U, status_y, fb_w, 24U, 0x00404050U, 0x00202025U);
+    /* Draw bottom status bar (layout v2: UI_LAYOUT_STATUS_BAR_H = 24px) */
+    if (fb_h > (UI_LAYOUT_TOP_BAR_H + UI_LAYOUT_STATUS_BAR_H)) {
+        u32 status_y = fb_h - UI_LAYOUT_STATUS_BAR_H;
+        ui_draw_panel(0U, status_y, fb_w, UI_LAYOUT_STATUS_BAR_H, 0x00404050U, 0x00202025U);
 
         /* Status text */
         row = ui_pixel_y_to_text_row(status_y + 2U);
@@ -71,6 +72,11 @@ static void ui_render_desktop_scene(void) {
     if (!desktop_rendered) {
         serial_write("[ ui ] desktop shell surface active\n");
         desktop_rendered = 1;
+    }
+
+    if (!layout_v2_marker_printed) {
+        serial_write("[ ui ] desktop layout v2 active\n");
+        layout_v2_marker_printed = 1;
     }
 }
 
@@ -302,10 +308,17 @@ int ui_draw_boot_hud(
 
 /* ===== Window Manager ===== */
 #define UI_MAX_WINDOWS 3
+/* Window layout grid constants (layout v2) */
+#define UI_WINDOW_MARGIN_X      10U
+#define UI_WINDOW_MARGIN_Y      (UI_LAYOUT_TOP_BAR_H + UI_LAYOUT_MARGIN_H)
+#define UI_WINDOW_W             280U
+#define UI_WINDOW_H             120U
+#define UI_WINDOW_H_SMALL       100U
+
 static ui_window_t g_windows[UI_MAX_WINDOWS] = {
-    {"System", 60, 60, 280, 120, 1},
-    {"Shell", 60, 200, 280, 120, 0},
-    {"Info", 360, 60, 200, 120, 0},
+    {"System", UI_WINDOW_MARGIN_X, UI_WINDOW_MARGIN_Y, UI_WINDOW_W, UI_WINDOW_H, 1},
+    {"Shell", UI_WINDOW_MARGIN_X, UI_WINDOW_MARGIN_Y + UI_WINDOW_H + 10U, UI_WINDOW_W, UI_WINDOW_H, 0},
+    {"Info", UI_WINDOW_MARGIN_X + UI_WINDOW_W + 10U, UI_WINDOW_MARGIN_Y, 200U, UI_WINDOW_H_SMALL, 0},
 };
 static int g_focused_idx = 0;
 static int g_wm_initialized = 0;
@@ -379,7 +392,10 @@ const char *ui_get_launcher_item(void) {
 
 void ui_render_launcher(void) {
     int i;
-    u32 launcher_x = 60U, launcher_y = 350U, item_height = 20U, item_y, item_row;
+    u32 launcher_x = UI_WINDOW_MARGIN_X;
+    u32 launcher_y = UI_LAYOUT_WORK_TOP + (UI_WINDOW_H * 2U) + 30U;
+    u32 item_height = 20U;
+    u32 item_y, item_row;
     if (!video_ready() || !g_launcher_active) return;
     ui_draw_panel(launcher_x, launcher_y, 300U, (LAUNCHER_ITEMS * item_height) + 10U, 0x00505050U, 0x00151515U);
     for (i = 0; i < LAUNCHER_ITEMS; i++) {
