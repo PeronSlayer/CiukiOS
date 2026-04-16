@@ -14,6 +14,7 @@ Recreate DOS 6.2 behavior with high compatibility at binary level (`.COM`, `.EXE
 2. DOS-like shell commands for core file workflow are available.
 3. COM execution path is active; EXE MZ loading path is available as MVP.
 4. INT21 core now includes file search and rename subset coverage (`4Eh/4Fh/56h`) with matrix validation.
+5. Phase 2 low-level core now exposes deterministic startup selftests for timer tick progress and keyboard decode/capture.
 
 ## Architecture Choice
 1. Keep `UEFI x64` as modern bootstrap only.
@@ -70,6 +71,17 @@ Outputs:
 Exit criteria:
 - Visible timer ticks.
 - Stable keyboard input capture.
+
+Status:
+- Completed.
+
+Completion evidence:
+- Startup wiring initializes IDT, PIT/IRQ0, keyboard IRQ1 path, and enables interrupts in sequence.
+- Boot serial log emits deterministic PASS markers:
+	- `[ test ] phase2 timer tick progress: PASS`
+	- `[ test ] phase2 keyboard decode/capture: PASS`
+	- `[ test ] phase2 low-level core selftest: PASS`
+- Boot gate validation checks now require those markers in `scripts/test_stage2_boot.sh`.
 
 ### Phase 3 - `.COM` Loader
 Outputs:

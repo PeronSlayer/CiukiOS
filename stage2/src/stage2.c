@@ -16,6 +16,27 @@
 #define SPLASH_FOOTER_MIN_PX 64U
 #define SPLASH_FOOTER_MAX_PX 120U
 
+static int stage2_phase2_timer_ticks_progress(void) {
+    u64 start = stage2_timer_ticks();
+    u64 guard_ticks = 200ULL; /* 2s @ 100Hz */
+
+    while ((stage2_timer_ticks() - start) < 2ULL && (stage2_timer_ticks() - start) < guard_ticks) {
+        __asm__ volatile ("hlt");
+    }
+
+    return (stage2_timer_ticks() - start) >= 2ULL;
+}
+
+static int stage2_phase2_lowlevel_selftest(void) {
+    if (!stage2_phase2_timer_ticks_progress()) {
+        return 0;
+    }
+    if (!stage2_keyboard_selftest_decode_capture()) {
+        return 0;
+    }
+    return 1;
+}
+
 static void halt_forever(void) {
     for (;;) {
         __asm__ volatile ("cli; hlt");
@@ -259,6 +280,21 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ compat ] INT21h console/dta/drive ready (AH=06h/07h/0Ah/0Eh/1Ah/2Fh)\n");
     serial_write("[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..43h)\n");
     serial_write("[ compat ] INT21h memory api ready (AH=48h/49h/4Ah)\n");
+    if (stage2_phase2_timer_ticks_progress()) {
+        serial_write("[ test ] phase2 timer tick progress: PASS\n");
+    } else {
+        serial_write("[ test ] phase2 timer tick progress: FAIL\n");
+    }
+    if (stage2_keyboard_selftest_decode_capture()) {
+        serial_write("[ test ] phase2 keyboard decode/capture: PASS\n");
+    } else {
+        serial_write("[ test ] phase2 keyboard decode/capture: FAIL\n");
+    }
+    if (stage2_phase2_lowlevel_selftest()) {
+        serial_write("[ test ] phase2 low-level core selftest: PASS\n");
+    } else {
+        serial_write("[ test ] phase2 low-level core selftest: FAIL\n");
+    }
     if (stage2_shell_selftest_int21_baseline()) {
         serial_write("[ test ] int21 priority-a selftest: PASS\n");
     } else {

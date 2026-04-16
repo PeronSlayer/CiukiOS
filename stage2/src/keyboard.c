@@ -22,6 +22,8 @@ static volatile u8 g_keybuf[KEYBUF_SIZE];
 static volatile u16 g_keybuf_head = 0;
 static volatile u16 g_keybuf_tail = 0;
 
+static u8 set1_decode_to_ascii(u8 scancode);
+
 static const u8 k_set1_ascii[128] = {
     [0x01] = 0x1B,
     [0x02] = '1',
@@ -181,6 +183,14 @@ static i32 keybuf_pop(void) {
     return (i32)ch;
 }
 
+static u8 keyboard_decode_and_queue(u8 scancode) {
+    u8 ascii = set1_decode_to_ascii(scancode);
+    if (ascii != 0) {
+        keybuf_push(ascii);
+    }
+    return ascii;
+}
+
 static u8 set1_decode_to_ascii(u8 scancode) {
     u8 code = 0;
     u8 is_break = 0;
@@ -299,10 +309,7 @@ void stage2_keyboard_on_irq1(void) {
     u8 ascii = 0;
 
     g_keyboard_irq_count++;
-    ascii = set1_decode_to_ascii(scancode);
-    if (ascii != 0) {
-        keybuf_push(ascii);
-    }
+    ascii = keyboard_decode_and_queue(scancode);
 
     if (g_keyboard_irq_count <= 4 || (g_keyboard_irq_count % 32ULL) == 0) {
         serial_write("[ key ] scancode=0x");
@@ -349,4 +356,38 @@ void stage2_keyboard_flush_buffer(void) {
 
 int stage2_keyboard_alt_held(void) {
     return (g_shift_state & (ALT_LEFT_BIT | ALT_RIGHT_BIT)) != 0U;
+}
+
+int stage2_keyboard_selftest_decode_capture(void) {
+    u64 flags = irq_save();
+    i32 ch0;
+    i32 ch1;
+
+    g_shift_state = 0;
+    g_extended_prefix = 0;
+    g_keybuf_head = 0;
+    g_keybuf_tail = 0;
+
+    (void)keyboard_decode_and_queue(0x1EU); /* 'a' make */
+    (void)keyboard_decode_and_queue(0x9EU); /* 'a' break */
+    ch0 = keybuf_pop();
+    ch1 = keybuf_pop();
+    if (ch0 != (i32)'a' || ch1 >= 0) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    (void)keyboard_decode_and_queue(0x2AU); /* LSHIFT make */
+    (void)keyboard_decode_and_queue(0x1EU); /* 'a' make */
+    (void)keyboard_decode_and_queue(0x9EU); /* 'a' break */
+    (void)keyboard_decode_and_queue(0xAAU); /* LSHIFT break */
+    ch0 = keybuf_pop();
+    ch1 = keybuf_pop();
+    if (ch0 != (i32)'A' || ch1 >= 0) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    irq_restore(flags);
+    return 1;
 }
