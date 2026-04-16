@@ -368,7 +368,7 @@ static void shell_print_help(void) {
     video_write("  reboot   - reboot the machine\n");
     video_write("  run      - execute default COM (or INIT.COM)\n");
     video_write("  run X A  - run COM or load EXE with optional args\n");
-    video_write("  ozone    - launch oZone GUI (if installed)\n");
+    video_write("  ozone    - launch oZone GUI (preflight + run)\n");
 }
 
 static void shell_cls(void) {
@@ -3651,8 +3651,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "ozone")) {
         serial_write("[ app ] ozone launch requested\n");
-
-        /* Try known locations for OZONE.EXE */
+        /* Preflight probe */
         {
             fat_dir_entry_t probe;
             const char *paths[] = {
@@ -3662,7 +3661,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             };
             const char *found_path = (const char *)0;
             int pi;
+            int preflight_ok = 1;
 
+            serial_write("[ app ] ozone preflight started\n");
+
+            /* Check 1: executable present */
             for (pi = 0; pi < 3; pi++) {
                 if (fat_find_file(paths[pi], &probe)) {
                     found_path = paths[pi];
@@ -3671,18 +3674,49 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             }
 
             if (found_path) {
-                video_write("Launching oZone GUI: ");
+                video_write("[preflight] OZONE.EXE: found (");
                 video_write(found_path);
-                video_write("\n");
-                serial_write("[ app ] ozone found: ");
-                serial_write(found_path);
-                serial_write("\n");
-                shell_run(boot_info, handoff, "OZONE.EXE");
-                serial_write("[ app ] ozone launch completed\n");
+                video_write(")\n");
+                serial_write("[ app ] ozone preflight exe: ok\n");
             } else {
-                video_write("oZone GUI not found.\n");
+                video_write("[preflight] OZONE.EXE: NOT FOUND\n");
+                serial_write("[ app ] ozone preflight exe: missing\n");
+                preflight_ok = 0;
+            }
+
+            /* Check 2: FAT filesystem ready */
+            if (fat_ready()) {
+                video_write("[preflight] FAT layer: ready\n");
+                serial_write("[ app ] ozone preflight fat: ok\n");
+            } else {
+                video_write("[preflight] FAT layer: NOT READY\n");
+                serial_write("[ app ] ozone preflight fat: fail\n");
+                preflight_ok = 0;
+            }
+
+            /* Check 3: MZ loader capability (informational) */
+            if (found_path) {
+                if (probe.size >= 2U) {
+                    video_write("[preflight] EXE size: ");
+                    video_write_hex64((u64)probe.size);
+                    video_write(" bytes\n");
+                } else {
+                    video_write("[preflight] EXE size: too small\n");
+                    preflight_ok = 0;
+                }
+            }
+
+            serial_write("[ app ] ozone preflight complete\n");
+
+            if (!preflight_ok) {
+                video_write("[preflight] FAILED - cannot launch oZone\n");
                 video_write("Install: scripts/import_ozonegui.sh --source <dir>\n");
-                serial_write("[ app ] ozone not found on disk\n");
+                serial_write("[ app ] ozone preflight failed\n");
+            } else {
+                video_write("[preflight] PASSED - launching oZone\n");
+                serial_write("[ app ] ozone preflight passed\n");
+                shell_run(boot_info, handoff, found_path);
+                serial_write("[ app ] ozone launch completed\n");
             }
         }
         return;
