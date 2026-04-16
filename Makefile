@@ -118,6 +118,9 @@ test-stage2:
 test-fallback:
 	./scripts/test_kernel_fallback_boot.sh
 
+test-video-mode:
+	./scripts/test_video_mode_pipeline.sh
+
 test-fat-compat:
 	./scripts/test_fat_compat.sh
 
@@ -159,4 +162,4 @@ freecom-sync:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-fat-compat test-int21 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-fat-compat test-int21 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build
