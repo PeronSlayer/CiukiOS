@@ -368,6 +368,7 @@ static void shell_print_help(void) {
     video_write("  reboot   - reboot the machine\n");
     video_write("  run      - execute default COM (or INIT.COM)\n");
     video_write("  run X A  - run COM or load EXE with optional args\n");
+    video_write("  ozone    - launch oZone GUI (if installed)\n");
 }
 
 static void shell_cls(void) {
@@ -3645,6 +3646,45 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "run")) {
         shell_run(boot_info, handoff, get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "ozone")) {
+        serial_write("[ app ] ozone launch requested\n");
+
+        /* Try known locations for OZONE.EXE */
+        {
+            fat_dir_entry_t probe;
+            const char *paths[] = {
+                "/FREEDOS/OZONE/OZONE.EXE",
+                "/EFI/CIUKIOS/OZONE.EXE",
+                "/OZONE.EXE",
+            };
+            const char *found_path = (const char *)0;
+            int pi;
+
+            for (pi = 0; pi < 3; pi++) {
+                if (fat_find_file(paths[pi], &probe)) {
+                    found_path = paths[pi];
+                    break;
+                }
+            }
+
+            if (found_path) {
+                video_write("Launching oZone GUI: ");
+                video_write(found_path);
+                video_write("\n");
+                serial_write("[ app ] ozone found: ");
+                serial_write(found_path);
+                serial_write("\n");
+                shell_run(boot_info, handoff, "OZONE.EXE");
+                serial_write("[ app ] ozone launch completed\n");
+            } else {
+                video_write("oZone GUI not found.\n");
+                video_write("Install: scripts/import_ozonegui.sh --source <dir>\n");
+                serial_write("[ app ] ozone not found on disk\n");
+            }
+        }
         return;
     }
 
