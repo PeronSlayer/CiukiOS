@@ -2,13 +2,20 @@
 
 # CiukiOS
 
-Educational operating system project built from scratch with a DOS-compatibility direction.
+Open Source RetroOS project built from scratch.
+Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
 `CiukiOS Stage2 v0.5`  
 Focus: INT21 compatibility expansion + testable desktop session entry.
 
 ## Changelog (Latest)
+### v0.5.2
+1. Updated project purpose and public positioning as Open Source RetroOS.
+2. Added collaboration and contribution direction in README.
+3. Added explicit development pace note (spare-time project).
+4. Added donation/support section and dedicated donation file.
+
 ### v0.5.1
 1. Improved desktop readability with layout grid v2 and clearer window chrome.
 2. Upgraded desktop interaction flow (focus/navigation feedback and launcher clarity).
@@ -33,6 +40,18 @@ Focus: INT21 compatibility expansion + testable desktop session entry.
 The active north star is:
 1. Run real DOS executables on CiukiOS.
 2. Reach the first major game milestone: run DOS DOOM from CiukiOS.
+3. Extend compatibility toward DOS, FreeDOS and pre-NT Windows software in incremental phases.
+
+## Open Source Collaboration
+CiukiOS is open to collaborative proposals, issue reports, technical discussion and PR contributions.
+If you want to help, please open an issue with:
+1. clear problem/idea description
+2. expected behavior
+3. reproducible steps or technical context
+
+## Development Pace
+This is a spare-time project.
+Updates are continuous but not on a fixed schedule: progress depends on available free time and mood.
 
 ## Key Docs
 1. DOS-to-DOOM roadmap: `docs/roadmap-ciukios-doom.md`
@@ -67,6 +86,12 @@ The active north star is:
 4. See:
    - `docs/freedos-integration-policy.md`
    - `docs/legal/freedos-licenses/`
+
+## Donations and Support
+If you want to support CiukiOS development (including recurring LLM/tooling costs such as OpenAI, Claude and Copilot subscriptions), see:
+- `DONATIONS.md`
+
+Provider selection is currently in progress to choose the most convenient and transparent option for contributors.
 
 ## Credits
 Developed collaboratively with Claude Code and Codex.
