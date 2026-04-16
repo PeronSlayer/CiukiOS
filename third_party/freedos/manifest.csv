@@ -9,3 +9,5 @@ utils,MEM.EXE,no,no,,,GPL-2.0-or-later?,missing
 utils,MODE.COM,no,no,,,GPL-2.0-or-later?,missing
 utils,XCOPY.EXE,no,no,,,GPL-2.0-or-later?,missing
 source,freecom.git,no,yes,ec6c63f13be0b254151c76cbbbec3c80ae33741b,https://github.com/FDOS/freecom.git,GPL-2.0-or-later?,repo-synced
+ozonegui,OZONE.EXE,no,no,,https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/gui/ozonegui.zip,GPL-2.0-or-later?,pending-import
+ozonegui,OZONE.INI,no,no,,https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/gui/ozonegui.zip,GPL-2.0-or-later?,pending-import-config

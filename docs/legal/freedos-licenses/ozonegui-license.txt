@@ -1,0 +1,24 @@
+oZone GUI - License Notice
+==========================
+
+Package: ozonegui (oZone GUI for FreeDOS)
+Source:   https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/gui/ozonegui.zip
+Version:  FreeDOS 1.3 repository release (2022-02-17)
+
+License:  GPL-2.0-or-later (assumed, pending confirmation from archive contents)
+
+oZone GUI is distributed as part of the FreeDOS project's GUI package
+collection. It is expected to be licensed under the GNU General Public
+License version 2 or later, consistent with most FreeDOS components.
+
+IMPORTANT: The exact license text should be confirmed by examining the
+LICENSE, COPYING, or README files within the ozonegui.zip archive after
+extraction. If the archive contains a different license, this file must
+be updated accordingly.
+
+For the full GPL-2.0 text, see: freecom-license.txt in this directory.
+
+CiukiOS Integration Note:
+- oZone is an OPTIONAL runtime payload, not a core dependency.
+- Binary redistribution requires GPL compliance (source availability).
+- See docs/freedos-integration-policy.md for redistribution rules.

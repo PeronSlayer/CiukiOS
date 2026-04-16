@@ -33,3 +33,12 @@ When enabled, `run_ciukios.sh` copies:
 ## Notes
 1. This is a compatibility asset layer; CiukiOS remains the host OS/runtime.
 2. Check `docs/freedos-integration-policy.md` for licensing/process rules.
+
+## Optional: oZone GUI
+oZone is an optional DOS GUI application from the FreeDOS 1.3 GUI package set.
+- Import: `./scripts/import_ozonegui.sh --source /path/to/extracted/ozone`
+- Runtime location: `runtime/OZONE/`
+- Image placement: `A:\FREEDOS\OZONE\`
+- Provenance: `docs/ozone-integration-notes.md`
+- License: `docs/legal/freedos-licenses/ozonegui-license.txt`
+- oZone is NOT redistributed by default — user must supply the archive.

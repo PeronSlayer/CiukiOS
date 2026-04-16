@@ -12,7 +12,9 @@ IMAGE="$BUILD_DIR/ciukios.img"
 SKIP_STAGE2="${CIUKIOS_SKIP_STAGE2:-0}"
 TRACE_INT="${CIUKIOS_TRACE_INT:-0}"
 INCLUDE_FREEDOS="${CIUKIOS_INCLUDE_FREEDOS:-1}"
+INCLUDE_OZONE="${CIUKIOS_INCLUDE_OZONE:-auto}"
 FREEDOS_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
+OZONE_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime/OZONE"
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -103,6 +105,33 @@ if [[ "$INCLUDE_FREEDOS" == "1" ]]; then
 else
     echo "[CiukiOS] FreeDOS symbiotic integration disabled (CIUKIOS_INCLUDE_FREEDOS=0)"
 fi
+
+# === oZone GUI optional payload ===
+OZONE_INCLUDED=0
+if [[ "$INCLUDE_OZONE" == "auto" ]]; then
+    # Auto-detect: include only if files exist
+    if [[ -d "$OZONE_RUNTIME_DIR" ]] && find "$OZONE_RUNTIME_DIR" -maxdepth 1 -type f | grep -q .; then
+        INCLUDE_OZONE=1
+    else
+        INCLUDE_OZONE=0
+    fi
+fi
+
+if [[ "$INCLUDE_OZONE" == "1" ]]; then
+    if [[ -d "$OZONE_RUNTIME_DIR" ]] && find "$OZONE_RUNTIME_DIR" -maxdepth 1 -type f | grep -q .; then
+        mmd -i "$IMAGE" ::FREEDOS/OZONE 2>/dev/null || true
+        while IFS= read -r -d '' file; do
+            mcopy -o -i "$IMAGE" "$file" ::FREEDOS/OZONE/
+        done < <(find "$OZONE_RUNTIME_DIR" -maxdepth 1 -type f -print0 | sort -z)
+        OZONE_INCLUDED=1
+        echo "[CiukiOS] oZone GUI payload copied from: $OZONE_RUNTIME_DIR"
+    else
+        echo "[CiukiOS] oZone GUI files not found (optional): $OZONE_RUNTIME_DIR"
+    fi
+else
+    echo "[CiukiOS] oZone GUI integration disabled (CIUKIOS_INCLUDE_OZONE=0)"
+fi
+echo "[CiukiOS] oZone inclusion status: $( [[ $OZONE_INCLUDED -eq 1 ]] && echo INCLUDED || echo SKIPPED )"
 
 echo "[CiukiOS] Preparing OVMF_VARS..."
 cp "$OVMF_VARS_SRC" "$OVMF_VARS_DST"
