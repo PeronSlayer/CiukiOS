@@ -2607,6 +2607,25 @@ int stage2_shell_selftest_int21_baseline(void) {
         return 0;
     }
 
+    /* Lifecycle check: publish INT 21h/AH=4Ch exit -> AH=4Dh reports latest code/type. */
+    shell_publish_last_exit_status(&ctx);
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4D00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x007BU) {
+        return 0;
+    }
+
+    /* Lifecycle check: API terminate publishes latest code and remains DOS normal type. */
+    shell_com_terminate(&ctx, 0x33U);
+    shell_publish_last_exit_status(&ctx);
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4D00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0033U) {
+        return 0;
+    }
+
     /* Unsupported AH must be deterministic */
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0xFE00U;
