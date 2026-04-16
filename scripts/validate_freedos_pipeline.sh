@@ -90,6 +90,37 @@ else
     print_check "freecom git repo available" "SKIP (optional)"
 fi
 
+# ===== Check 6: oZone GUI payload (optional) =====
+OZONE_RUNTIME="${FREEDOS_RUNTIME}/OZONE"
+OZONE_REQUIRED="${CIUKIOS_REQUIRE_OZONE:-0}"
+
+if [ "$OZONE_REQUIRED" = "1" ]; then
+    # Strict mode: oZone files must be present
+    if [ -d "$OZONE_RUNTIME" ] && [ -f "$OZONE_RUNTIME/OZONE.EXE" ]; then
+        print_check "oZone OZONE.EXE present (required)" "PASS"
+    else
+        print_check "oZone OZONE.EXE present (required)" "FAIL"
+        FAILED=$((FAILED + 1))
+    fi
+    # Verify manifest entries for ozonegui are imported
+    if [ -f "$FREEDOS_MANIFEST" ]; then
+        ozone_imported=$(grep "^ozonegui,OZONE.EXE" "$FREEDOS_MANIFEST" 2>/dev/null | cut -d',' -f4)
+        if [ "$ozone_imported" = "yes" ]; then
+            print_check "oZone manifest entry imported" "PASS"
+        else
+            print_check "oZone manifest entry imported" "FAIL"
+            FAILED=$((FAILED + 1))
+        fi
+    fi
+else
+    # Info mode: report presence without failing
+    if [ -d "$OZONE_RUNTIME" ] && [ -f "$OZONE_RUNTIME/OZONE.EXE" ]; then
+        print_check "oZone GUI payload" "PASS (present, optional)"
+    else
+        print_check "oZone GUI payload" "INFO (absent, optional)"
+    fi
+fi
+
 # ===== Summary =====
 echo ""
 if [ "$FAILED" -gt 0 ]; then
