@@ -535,6 +535,76 @@ static EFI_STATUS load_com_catalog(EFI_HANDLE image, handoff_v0_t *handoff) {
     return EFI_SUCCESS;
 }
 
+typedef struct vmode_config {
+    UINT32 mode_id;     /* from "mode=N", 0xFFFFFFFF if absent */
+    UINT32 width;       /* from "width=N", 0 if absent */
+    UINT32 height;      /* from "height=N", 0 if absent */
+} vmode_config_t;
+
+static UINT32 parse_decimal(const UINT8 *p, UINTN len) {
+    UINT32 val = 0;
+    for (UINTN i = 0; i < len; i++) {
+        if (p[i] < '0' || p[i] > '9') break;
+        val = val * 10 + (p[i] - '0');
+    }
+    return val;
+}
+
+static void load_vmode_config(EFI_HANDLE image, vmode_config_t *cfg) {
+    VOID *buf = NULL;
+    UINTN size = 0;
+    EFI_STATUS st;
+    const UINT8 *data;
+    UINTN i;
+
+    cfg->mode_id = 0xFFFFFFFFU;
+    cfg->width = 0;
+    cfg->height = 0;
+
+    st = read_file(image, L"\\EFI\\CiukiOS\\VMODE.CFG", &buf, &size);
+    if (EFI_ERROR(st) || !buf || size == 0) {
+        return; /* file absent or empty — use defaults */
+    }
+
+    data = (const UINT8 *)buf;
+    i = 0;
+    while (i < size) {
+        /* skip whitespace/newlines */
+        while (i < size && (data[i] == ' ' || data[i] == '\t' ||
+               data[i] == '\r' || data[i] == '\n')) {
+            i++;
+        }
+        if (i >= size) break;
+
+        /* find end of line */
+        UINTN line_start = i;
+        while (i < size && data[i] != '\r' && data[i] != '\n') {
+            i++;
+        }
+        UINTN line_len = i - line_start;
+        const UINT8 *line = &data[line_start];
+
+        /* parse "key=value" */
+        if (line_len > 5 && line[0] == 'm' && line[1] == 'o' &&
+            line[2] == 'd' && line[3] == 'e' && line[4] == '=') {
+            cfg->mode_id = parse_decimal(line + 5, line_len - 5);
+        } else if (line_len > 6 && line[0] == 'w' && line[1] == 'i' &&
+                   line[2] == 'd' && line[3] == 't' && line[4] == 'h' &&
+                   line[5] == '=') {
+            cfg->width = parse_decimal(line + 6, line_len - 6);
+        } else if (line_len > 7 && line[0] == 'h' && line[1] == 'e' &&
+                   line[2] == 'i' && line[3] == 'g' && line[4] == 'h' &&
+                   line[5] == 't' && line[6] == '=') {
+            cfg->height = parse_decimal(line + 7, line_len - 7);
+        }
+    }
+
+    uefi_call_wrapper(BS->FreePool, 1, buf);
+
+    Print(L"VMODE.CFG: mode=%d width=%d height=%d\r\n",
+          cfg->mode_id, cfg->width, cfg->height);
+}
+
 static EFI_STATUS load_disk_cache(EFI_HANDLE image, handoff_v0_t *handoff) {
     EFI_STATUS status;
     EFI_BLOCK_IO_PROTOCOL *block_io = NULL;
@@ -977,6 +1047,10 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                 UINT32 mode_count = gop->Mode->MaxMode;
                 UINT32 mi;
                 UINT32 catalog_count = 0;
+                vmode_config_t vmode_cfg;
+                BOOLEAN cfg_resolved = FALSE;
+
+                load_vmode_config(image, &vmode_cfg);
 
                 if (using_stage2) {
                     handoff->gop_mode_count = 0;
@@ -1012,8 +1086,26 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                         catalog_count++;
                     }
 
-                    /* Only consider 32bpp modes that fit driver limits for preference */
-                    if (bpp_val == 32 && fits_backbuf) {
+                    /* --- VMODE.CFG priority check --- */
+                    if (!cfg_resolved && bpp_val == 32 && fits_backbuf) {
+                        /* Priority 1: exact mode id match */
+                        if (vmode_cfg.mode_id != 0xFFFFFFFFU &&
+                            mi == vmode_cfg.mode_id) {
+                            best_mode = mi;
+                            cfg_resolved = TRUE;
+                        }
+                        /* Priority 2: width x height match */
+                        if (!cfg_resolved &&
+                            vmode_cfg.width != 0 && vmode_cfg.height != 0 &&
+                            mode_info->HorizontalResolution == vmode_cfg.width &&
+                            mode_info->VerticalResolution   == vmode_cfg.height) {
+                            best_mode = mi;
+                            cfg_resolved = TRUE;
+                        }
+                    }
+
+                    /* Priority 3: fallback preference table */
+                    if (!cfg_resolved && bpp_val == 32 && fits_backbuf) {
                         for (UINT32 pi = 0; pi < pref_count; pi++) {
                             if (mode_info->HorizontalResolution == preferred[pi].w &&
                                 mode_info->VerticalResolution   == preferred[pi].h &&
@@ -1035,10 +1127,11 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                 if (best_mode != gop->Mode->Mode) {
                     EFI_STATUS sm = uefi_call_wrapper(gop->SetMode, 2, gop, best_mode);
                     if (!EFI_ERROR(sm)) {
-                        Print(L"GOP: switched to mode %d (%dx%d)\r\n",
+                        Print(L"GOP: switched to mode %d (%dx%d)%s\r\n",
                               best_mode,
                               gop->Mode->Info->HorizontalResolution,
-                              gop->Mode->Info->VerticalResolution);
+                              gop->Mode->Info->VerticalResolution,
+                              cfg_resolved ? L" (from VMODE.CFG)" : L"");
                     } else {
                         Print(L"GOP: SetMode %d failed (%r), using default\r\n", best_mode, sm);
                     }
