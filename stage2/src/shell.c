@@ -375,6 +375,8 @@ static void shell_print_help(void) {
     video_write("  run      - execute default COM (or INIT.COM)\n");
     video_write("  run X A  - run COM or load EXE with optional args\n");
     video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
+    video_write("  vmode    - video mode management (vmode help for details)\n");
+    video_write("  vres     - alias for vmode\n");
 }
 
 static void shell_cls(void) {
@@ -3544,6 +3546,226 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
     serial_write("[ ui ] desktop session ended\n");
 }
 
+/* ------------------------------------------------------------------ */
+/* vmode / vres command                                               */
+/* ------------------------------------------------------------------ */
+
+static u32 parse_u32(const char *s) {
+    u32 val = 0;
+    while (*s >= '0' && *s <= '9') {
+        val = val * 10U + (u32)(*s - '0');
+        s++;
+    }
+    return val;
+}
+
+static void vmode_write_cfg(u32 mode_id, u32 w, u32 h) {
+    char buf[64];
+    u32 pos = 0;
+    char tmp[12];
+    u32 ti;
+    u32 val;
+
+    /* "mode=N\nwidth=W\nheight=H\n" */
+    /* mode= */
+    buf[pos++] = 'm'; buf[pos++] = 'o'; buf[pos++] = 'd';
+    buf[pos++] = 'e'; buf[pos++] = '=';
+    val = mode_id; ti = 0;
+    if (val == 0) { tmp[ti++] = '0'; }
+    else { while (val) { tmp[ti++] = (char)('0' + val % 10); val /= 10; } }
+    while (ti > 0) { buf[pos++] = tmp[--ti]; }
+    buf[pos++] = '\n';
+
+    /* width= */
+    buf[pos++] = 'w'; buf[pos++] = 'i'; buf[pos++] = 'd';
+    buf[pos++] = 't'; buf[pos++] = 'h'; buf[pos++] = '=';
+    val = w; ti = 0;
+    if (val == 0) { tmp[ti++] = '0'; }
+    else { while (val) { tmp[ti++] = (char)('0' + val % 10); val /= 10; } }
+    while (ti > 0) { buf[pos++] = tmp[--ti]; }
+    buf[pos++] = '\n';
+
+    /* height= */
+    buf[pos++] = 'h'; buf[pos++] = 'e'; buf[pos++] = 'i';
+    buf[pos++] = 'g'; buf[pos++] = 'h'; buf[pos++] = 't';
+    buf[pos++] = '=';
+    val = h; ti = 0;
+    if (val == 0) { tmp[ti++] = '0'; }
+    else { while (val) { tmp[ti++] = (char)('0' + val % 10); val /= 10; } }
+    while (ti > 0) { buf[pos++] = tmp[--ti]; }
+    buf[pos++] = '\n';
+
+    if (fat_write_file("/EFI/CIUKIOS/VMODE.CFG", buf, pos)) {
+        video_write("Config written. Resolution change applies after reboot.\n");
+        video_write("Note: FAT writes are in-memory only.\n");
+    } else {
+        video_write("Error: could not write VMODE.CFG.\n");
+    }
+}
+
+static void shell_vmode(const char *args, const handoff_v0_t *handoff) {
+    char sub[16];
+    u32 si = 0;
+
+    /* parse subcommand */
+    while (*args && is_space((u8)*args)) args++;
+    while (*args && !is_space((u8)*args) && si < 15) {
+        sub[si++] = *args++;
+    }
+    sub[si] = '\0';
+    while (*args && is_space((u8)*args)) args++;
+
+    if (sub[0] == '\0' || str_eq(sub, "help")) {
+        video_write("Usage: vmode <subcommand>\n");
+        video_write("  help    - show this help\n");
+        video_write("  current - show current resolution\n");
+        video_write("  list    - list available GOP modes\n");
+        video_write("  max     - select highest compatible mode\n");
+        video_write("  set <id|WxH> - set preferred mode\n");
+        video_write("  clear   - remove VMODE.CFG\n");
+        return;
+    }
+
+    if (str_eq(sub, "current")) {
+        video_write("Resolution: ");
+        write_decimal(video_width_px());
+        video_write("x");
+        write_decimal(video_height_px());
+        video_write("  BPP: ");
+        write_decimal(video_bpp());
+        video_write("  Pitch: ");
+        write_decimal(video_pitch_bytes());
+        video_write("\n");
+        video_write("Double-buffered: ");
+        video_write(video_is_double_buffered() ? "yes" : "no");
+        video_write("\n");
+        if (handoff && handoff->version >= 1ULL) {
+            video_write("Active GOP mode: ");
+            write_decimal(handoff->gop_active_mode_id);
+            video_write("\n");
+        }
+        return;
+    }
+
+    if (str_eq(sub, "list")) {
+        if (!handoff || handoff->version < 1ULL || handoff->gop_mode_count == 0) {
+            video_write("No GOP mode catalog available.\n");
+            return;
+        }
+        video_write("ID   Resolution   BPP  Compat\n");
+        for (u32 i = 0; i < handoff->gop_mode_count; i++) {
+            const handoff_gop_mode_entry_t *m = &handoff->gop_modes[i];
+            write_decimal(m->mode_id);
+            video_write("    ");
+            write_decimal(m->width);
+            video_write("x");
+            write_decimal(m->height);
+            video_write("    ");
+            write_decimal(m->bpp);
+            video_write("   ");
+            video_write((m->flags & 1U) ? "yes" : "no");
+            video_write("\n");
+        }
+        return;
+    }
+
+    if (str_eq(sub, "max")) {
+        if (!handoff || handoff->version < 1ULL || handoff->gop_mode_count == 0) {
+            video_write("No GOP catalog.\n");
+            return;
+        }
+        u32 best_area = 0;
+        u32 best_idx = 0;
+        int found = 0;
+        for (u32 i = 0; i < handoff->gop_mode_count; i++) {
+            const handoff_gop_mode_entry_t *m = &handoff->gop_modes[i];
+            if ((m->flags & 1U) && m->bpp == 32) {
+                u32 area = m->width * m->height;
+                if (area > best_area) {
+                    best_area = area;
+                    best_idx = i;
+                    found = 1;
+                }
+            }
+        }
+        if (!found) {
+            video_write("No compatible 32bpp mode found.\n");
+            return;
+        }
+        const handoff_gop_mode_entry_t *best = &handoff->gop_modes[best_idx];
+        video_write("Max compatible: mode ");
+        write_decimal(best->mode_id);
+        video_write(" (");
+        write_decimal(best->width);
+        video_write("x");
+        write_decimal(best->height);
+        video_write(")\n");
+        vmode_write_cfg(best->mode_id, best->width, best->height);
+        return;
+    }
+
+    if (str_eq(sub, "set")) {
+        if (!handoff || handoff->version < 1ULL || handoff->gop_mode_count == 0) {
+            video_write("No GOP catalog.\n");
+            return;
+        }
+        if (*args == '\0') {
+            video_write("Usage: vmode set <id|WxH>\n");
+            return;
+        }
+        /* Check if arg contains 'x' -> parse as WxH */
+        {
+            const char *xp = args;
+            int has_x = 0;
+            while (*xp) { if (*xp == 'x' || *xp == 'X') { has_x = 1; break; } xp++; }
+
+            if (has_x) {
+                u32 w = parse_u32(args);
+                while (*args && *args != 'x' && *args != 'X') args++;
+                if (*args) args++;
+                u32 h = parse_u32(args);
+                /* find matching mode */
+                for (u32 i = 0; i < handoff->gop_mode_count; i++) {
+                    const handoff_gop_mode_entry_t *m = &handoff->gop_modes[i];
+                    if (m->width == w && m->height == h && m->bpp == 32 && (m->flags & 1U)) {
+                        vmode_write_cfg(m->mode_id, w, h);
+                        return;
+                    }
+                }
+                video_write("No compatible mode ");
+                write_decimal(w);
+                video_write("x");
+                write_decimal(h);
+                video_write(" found.\n");
+            } else {
+                u32 id = parse_u32(args);
+                for (u32 i = 0; i < handoff->gop_mode_count; i++) {
+                    const handoff_gop_mode_entry_t *m = &handoff->gop_modes[i];
+                    if (m->mode_id == id && m->bpp == 32 && (m->flags & 1U)) {
+                        vmode_write_cfg(id, m->width, m->height);
+                        return;
+                    }
+                }
+                video_write("Mode ");
+                write_decimal(id);
+                video_write(" not found or incompatible.\n");
+            }
+        }
+        return;
+    }
+
+    if (str_eq(sub, "clear")) {
+        if (fat_delete_file("/EFI/CIUKIOS/VMODE.CFG")) {
+            video_write("VMODE.CFG removed.\n");
+        } else {
+            video_write("VMODE.CFG not found or could not be removed.\n");
+        }
+        return;
+    }
+
+    video_write("Unknown subcommand. Type 'vmode help'.\n");
+}
+
 static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff) {
     char cmd[16];
 
@@ -3735,6 +3957,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
                 serial_write("[ app ] opengem launch completed\n");
             }
         }
+        return;
+    }
+
+    if (str_eq(cmd, "vmode") || str_eq(cmd, "vres")) {
+        shell_vmode(get_arg_ptr(line), handoff);
         return;
     }
 

@@ -51,7 +51,7 @@ required_patterns=(
     "[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..42h)"
     "[ compat ] INT21h memory api ready (AH=48h/49h/4Ah)"
     "[ test ] int21 priority-a selftest: PASS"
-    "[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/opengem/shutdown/reboot)"
+    "[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/opengem/vmode/shutdown/reboot)"
     "[ tick ] irq0 #0000000000000001"
     "[ ok ] splashscreen rendered src=0x"
     "[ ui ] boot hud active"
