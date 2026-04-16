@@ -8,6 +8,7 @@
 #include "splash.h"
 #include "version.h"
 #include "ui.h"
+#include "serial.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
@@ -333,6 +334,7 @@ static void shell_print_help(void) {
     video_write("  del X    - delete file from FAT cache\n");
     video_write("  ascii    - show custom ASCII art\n");
     video_write("  gsplash  - show graphical splash preview\n");
+    video_write("  desktop  - open interactive desktop scene (ESC to return)\n");
     video_write("  cls      - clear screen\n");
     video_write("  ver      - show OS version\n");
     video_write("  echo     - print text to screen\n");
@@ -2520,6 +2522,61 @@ static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
     video_write("\n");
 }
 
+static void shell_run_desktop_session(void) {
+    serial_write("[ ui ] desktop session started\n");
+
+    if (ui_get_scene() != SCENE_DESKTOP) {
+        (void)ui_set_scene(SCENE_DESKTOP);
+    }
+
+    ui_activate_launcher();
+    video_set_text_window(0);
+    ui_render_scene();
+    ui_render_windows();
+    ui_render_launcher();
+
+    for (;;) {
+        i32 key = stage2_keyboard_getc_nonblocking();
+        if (key < 0) {
+            __asm__ volatile ("hlt");
+            continue;
+        }
+
+        {
+            u8 ch = (u8)key;
+
+            if (ch == 0x1BU) {
+                break;
+            }
+
+            if (ch == '\t') {
+                ui_cycle_window_focus();
+            } else if (ch == STAGE2_KEY_UP || ch == 'k' || ch == 'w') {
+                ui_launcher_prev();
+            } else if (ch == STAGE2_KEY_DOWN || ch == 'j' || ch == 's') {
+                ui_launcher_next();
+            } else if (ch == '\n' || ch == '\r') {
+                const char *selected = ui_get_launcher_item();
+                serial_write("[ ui ] launcher select: ");
+                serial_write(selected);
+                serial_write("\n");
+            } else {
+                continue;
+            }
+        }
+
+        ui_render_scene();
+        ui_render_windows();
+        ui_render_launcher();
+    }
+
+    ui_deactivate_launcher();
+    shell_cls();
+    shell_draw_title_bar();
+    video_write("Desktop session closed. Type 'desktop' to reopen.\n");
+    serial_write("[ ui ] desktop session ended\n");
+}
+
 static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff) {
     char cmd[16];
 
@@ -2570,9 +2627,13 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "desktop")) {
         if (ui_enter_desktop_scene()) {
-            video_write("Desktop scene entered.\n");
+            shell_run_desktop_session();
         } else {
-            video_write("Failed to enter desktop scene.\n");
+            if (ui_get_scene() == SCENE_DESKTOP) {
+                shell_run_desktop_session();
+            } else {
+                video_write("Failed to enter desktop scene.\n");
+            }
         }
         return;
     }
@@ -2654,6 +2715,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     char line[SHELL_LINE_MAX];
     u32 line_len = 0;
 
+    video_write("Tip: type 'desktop' to test GUI mode (ESC to return).\n");
     write_prompt();
 
     for (;;) {

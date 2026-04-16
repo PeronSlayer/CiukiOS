@@ -64,7 +64,7 @@ static void ui_render_desktop_scene(void) {
         row = ui_pixel_y_to_text_row(status_y + 2U);
         video_set_colors(0x00808080U, 0x00202025U); /* dim gray */
         video_set_cursor(2U, row);
-        video_write("TAB: Focus | ENTER: Select | ESC: shell");
+        video_write("TAB: Focus | UP/DOWN or J/K | ENTER: Select | ESC: shell");
         video_set_colors(0x00C0C0C0U, 0x00000000U);
     }
 
@@ -380,7 +380,7 @@ const char *ui_get_launcher_item(void) {
 void ui_render_launcher(void) {
     int i;
     u32 launcher_x = 60U, launcher_y = 350U, item_height = 20U, item_y, item_row;
-    if (!video_ready()) return;
+    if (!video_ready() || !g_launcher_active) return;
     ui_draw_panel(launcher_x, launcher_y, 300U, (LAUNCHER_ITEMS * item_height) + 10U, 0x00505050U, 0x00151515U);
     for (i = 0; i < LAUNCHER_ITEMS; i++) {
         item_y = launcher_y + 5U + (i * item_height);

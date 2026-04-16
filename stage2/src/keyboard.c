@@ -220,6 +220,22 @@ static u8 set1_decode_to_ascii(u8 scancode) {
     if (g_extended_prefix) {
         g_extended_prefix = 0;
 
+        if (code == 0x48) {
+            return STAGE2_KEY_UP;
+        }
+
+        if (code == 0x50) {
+            return STAGE2_KEY_DOWN;
+        }
+
+        if (code == 0x4B) {
+            return STAGE2_KEY_LEFT;
+        }
+
+        if (code == 0x4D) {
+            return STAGE2_KEY_RIGHT;
+        }
+
         if (code == 0x1C) {
             return '\n';
         }
