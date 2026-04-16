@@ -56,6 +56,11 @@ static int test_parse_and_relocate(void) {
         return 0;
     }
 
+    if (info.stack_offset != 0x0010U || info.stack_top_offset != 0x0012U || info.runtime_required_bytes != 0x20U) {
+        fprintf(stderr, "[FAIL] runtime contract info mismatch\n");
+        return 0;
+    }
+
     if (!dos_mz_build_loaded_image(mz, (u32)sizeof(mz), 0x0200U, &info, &loaded_size, &reloc_applied)) {
         fprintf(stderr, "[FAIL] build loaded image failed\n");
         return 0;
@@ -115,6 +120,210 @@ static int test_reloc_outside_module_rejected(void) {
     return 1;
 }
 
+static int test_stack_outside_module_contract(void) {
+    u8 mz[96];
+    dos_mz_info_t info;
+
+    fill_valid_mz(mz, (u32)sizeof(mz));
+
+    /* Stack base at offset 0x30, outside 0x20-byte module. */
+    write_le16(mz + 0x0E, 0x0003); /* ss */
+    write_le16(mz + 0x10, 0x0000); /* sp */
+
+    if (!dos_mz_parse(mz, (u32)sizeof(mz), &info)) {
+        fprintf(stderr, "[FAIL] parse stack outside module contract\n");
+        return 0;
+    }
+
+    if (info.stack_offset != 0x30U || info.stack_top_offset != 0x32U || info.runtime_required_bytes != 0x32U) {
+        fprintf(stderr, "[FAIL] runtime required bytes mismatch for stack contract\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_invalid_page_math_rejected(void) {
+    u8 mz[64];
+    dos_mz_info_t info;
+
+    fill_valid_mz(mz, (u32)sizeof(mz));
+
+    /* Declared file size becomes 0x10 (< header 0x20): invalid page math. */
+    write_le16(mz + 0x02, 0x0010); /* bytes in last page */
+    write_le16(mz + 0x04, 0x0001); /* total pages */
+
+    if (dos_mz_parse(mz, (u32)sizeof(mz), &info)) {
+        fprintf(stderr, "[FAIL] accepted invalid declared page math\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_reloc_table_overlap_fixed_header_rejected(void) {
+    u8 mz[64];
+    dos_mz_info_t info;
+
+    fill_valid_mz(mz, (u32)sizeof(mz));
+
+    /* Relocation table offset overlaps fixed header bytes [0x00..0x1B]. */
+    write_le16(mz + 0x18, 0x0018);
+
+    if (dos_mz_parse(mz, (u32)sizeof(mz), &info)) {
+        fprintf(stderr, "[FAIL] accepted relocation table overlapping fixed header\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_entry_last_byte_allowed(void) {
+    u8 mz[64];
+    dos_mz_info_t info;
+
+    fill_valid_mz(mz, (u32)sizeof(mz));
+
+    /* Entry exactly at last byte of 0x20-byte module is valid. */
+    write_le16(mz + 0x14, 0x001F); /* ip */
+    write_le16(mz + 0x16, 0x0000); /* cs */
+
+    if (!dos_mz_parse(mz, (u32)sizeof(mz), &info)) {
+        fprintf(stderr, "[FAIL] rejected valid last-byte entry\n");
+        return 0;
+    }
+
+    if (info.entry_offset != 0x1FU) {
+        fprintf(stderr, "[FAIL] last-byte entry offset mismatch\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_entry_equal_module_size_rejected(void) {
+    u8 mz[64];
+    dos_mz_info_t info;
+
+    fill_valid_mz(mz, (u32)sizeof(mz));
+
+    /* Entry at module_size (0x20) is out-of-bounds. */
+    write_le16(mz + 0x14, 0x0020); /* ip */
+    write_le16(mz + 0x16, 0x0000); /* cs */
+
+    if (dos_mz_parse(mz, (u32)sizeof(mz), &info)) {
+        fprintf(stderr, "[FAIL] accepted out-of-bounds entry offset\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_stack_top_exact_module_end_contract(void) {
+    u8 mz[64];
+    dos_mz_info_t info;
+
+    fill_valid_mz(mz, (u32)sizeof(mz));
+
+    /* stack_offset=0x1E -> stack_top=0x20 exactly at module end boundary. */
+    write_le16(mz + 0x0E, 0x0000); /* ss */
+    write_le16(mz + 0x10, 0x001E); /* sp */
+
+    if (!dos_mz_parse(mz, (u32)sizeof(mz), &info)) {
+        fprintf(stderr, "[FAIL] rejected stack exact-end contract\n");
+        return 0;
+    }
+
+    if (info.stack_offset != 0x1EU || info.stack_top_offset != 0x20U || info.runtime_required_bytes != 0x20U) {
+        fprintf(stderr, "[FAIL] stack exact-end contract mismatch\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_multi_reloc_and_carry_wrap(void) {
+    u8 mz[128];
+    dos_mz_info_t info;
+    u32 loaded_size = 0;
+    u32 reloc_applied = 0;
+
+    fill_valid_mz(mz, (u32)sizeof(mz));
+
+    /* Enlarge header to 0x30 so relocation table can host 2 entries. */
+    write_le16(mz + 0x08, 0x0003); /* header paragraphs */
+    write_le16(mz + 0x02, 0x0080); /* bytes in last page */
+    write_le16(mz + 0x04, 0x0001); /* total pages */
+
+    /* Two relocation entries at module offsets 0x0004 and 0x0006. */
+    write_le16(mz + 0x06, 0x0002); /* relocation count */
+    write_le16(mz + 0x1C, 0x0004);
+    write_le16(mz + 0x1E, 0x0000);
+    write_le16(mz + 0x20, 0x0006);
+    write_le16(mz + 0x22, 0x0000);
+
+    /* First value normal add, second value exercises 16-bit carry wrap. */
+    write_le16(mz + 0x30 + 0x04, 0x1000);
+    write_le16(mz + 0x30 + 0x06, 0xFFFE);
+
+    if (!dos_mz_build_loaded_image(mz, (u32)sizeof(mz), 0x0200U, &info, &loaded_size, &reloc_applied)) {
+        fprintf(stderr, "[FAIL] multi-reloc build failed\n");
+        return 0;
+    }
+
+    if (reloc_applied != 2U) {
+        fprintf(stderr, "[FAIL] multi-reloc applied count mismatch\n");
+        return 0;
+    }
+
+    if (read_le16(mz + 0x04) != 0x1200U) {
+        fprintf(stderr, "[FAIL] first relocation value mismatch\n");
+        return 0;
+    }
+
+    if (read_le16(mz + 0x06) != 0x01FEU) {
+        fprintf(stderr, "[FAIL] relocation carry-wrap mismatch\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_runtime_span_zero_filled(void) {
+    u8 mz[96];
+    dos_mz_info_t info;
+    u32 loaded_size = 0;
+    u32 reloc_applied = 0;
+
+    fill_valid_mz(mz, (u32)sizeof(mz));
+
+    /* stack_offset=0x30, stack_top=0x32 so runtime span extends beyond module_size=0x20. */
+    write_le16(mz + 0x0E, 0x0003); /* ss */
+    write_le16(mz + 0x10, 0x0000); /* sp */
+
+    /* Fill overlay with non-zero noise to verify deterministic clearing. */
+    memset(mz + 64, 0xA5, 32);
+
+    if (!dos_mz_build_loaded_image(mz, (u32)sizeof(mz), 0x0100U, &info, &loaded_size, &reloc_applied)) {
+        fprintf(stderr, "[FAIL] runtime span build failed\n");
+        return 0;
+    }
+
+    if (info.runtime_required_bytes != 0x32U || loaded_size != 0x20U) {
+        fprintf(stderr, "[FAIL] runtime span metadata mismatch\n");
+        return 0;
+    }
+
+    for (u32 i = loaded_size; i < info.runtime_required_bytes; i++) {
+        if (mz[i] != 0U) {
+            fprintf(stderr, "[FAIL] runtime span not zero-filled\n");
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 int main(void) {
     if (!test_parse_and_relocate()) {
         return 1;
@@ -123,6 +332,30 @@ int main(void) {
         return 1;
     }
     if (!test_reloc_outside_module_rejected()) {
+        return 1;
+    }
+    if (!test_stack_outside_module_contract()) {
+        return 1;
+    }
+    if (!test_invalid_page_math_rejected()) {
+        return 1;
+    }
+    if (!test_reloc_table_overlap_fixed_header_rejected()) {
+        return 1;
+    }
+    if (!test_entry_last_byte_allowed()) {
+        return 1;
+    }
+    if (!test_entry_equal_module_size_rejected()) {
+        return 1;
+    }
+    if (!test_stack_top_exact_module_end_contract()) {
+        return 1;
+    }
+    if (!test_multi_reloc_and_carry_wrap()) {
+        return 1;
+    }
+    if (!test_runtime_span_zero_filled()) {
         return 1;
     }
 

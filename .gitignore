@@ -17,3 +17,6 @@ third_party/freedos/sources/*
 # Local-only internal collaboration notes (not published)
 docs/collab/
 docs/handoffs/
+
+# Local takeover handoff (keep untracked)
+COPILOT_HANDOFF_TOTAL_2026-04-16.md

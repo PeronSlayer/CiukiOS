@@ -15,6 +15,8 @@ int dos_mz_parse(const u8 *file, u32 file_size, dos_mz_info_t *out) {
     u32 module_size;
     u32 entry_offset;
     u32 stack_offset;
+    u32 stack_top_offset;
+    u32 runtime_required;
     u32 reloc_end;
 
     if (!file || !out || file_size < 0x1CU) {
@@ -69,6 +71,10 @@ int dos_mz_parse(const u8 *file, u32 file_size, dos_mz_info_t *out) {
         return 0;
     }
 
+    if ((u32)out->relocation_table_offset < 0x1CU) {
+        return 0;
+    }
+
     reloc_end = (u32)out->relocation_table_offset + ((u32)out->relocation_count * 4U);
     if (reloc_end > header_size || reloc_end > file_size) {
         return 0;
@@ -80,11 +86,18 @@ int dos_mz_parse(const u8 *file, u32 file_size, dos_mz_info_t *out) {
     }
 
     stack_offset = ((u32)out->ss * 16U) + (u32)out->sp;
+    stack_top_offset = stack_offset + 2U;
+    runtime_required = module_size;
+    if (stack_top_offset > runtime_required) {
+        runtime_required = stack_top_offset;
+    }
 
     out->header_size_bytes = header_size;
     out->module_size_bytes = module_size;
     out->entry_offset = entry_offset;
     out->stack_offset = stack_offset;
+    out->stack_top_offset = stack_top_offset;
+    out->runtime_required_bytes = runtime_required;
 
     return 1;
 }
@@ -133,6 +146,14 @@ int dos_mz_build_loaded_image(
         file_buf[i] = file_buf[info.header_size_bytes + i];
     }
 
+    /*
+     * Keep runtime deterministic when SS:SP points beyond the module bytes:
+     * clear the additional runtime span so stack-adjacent memory is stable.
+     */
+    for (u32 i = info.module_size_bytes; i < info.runtime_required_bytes; i++) {
+        file_buf[i] = 0U;
+    }
+
     info_out->bytes_in_last_page = info.bytes_in_last_page;
     info_out->total_pages = info.total_pages;
     info_out->relocation_count = info.relocation_count;
@@ -148,6 +169,8 @@ int dos_mz_build_loaded_image(
     info_out->module_size_bytes = info.module_size_bytes;
     info_out->entry_offset = info.entry_offset;
     info_out->stack_offset = info.stack_offset;
+    info_out->stack_top_offset = info.stack_top_offset;
+    info_out->runtime_required_bytes = info.runtime_required_bytes;
     *loaded_size_out = info.module_size_bytes;
     *reloc_applied_out = reloc_applied;
     return 1;

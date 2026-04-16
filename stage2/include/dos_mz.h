@@ -20,6 +20,8 @@ typedef struct dos_mz_info {
     u32 module_size_bytes;
     u32 entry_offset;
     u32 stack_offset;
+    u32 stack_top_offset;
+    u32 runtime_required_bytes;
 } dos_mz_info_t;
 
 /* Parse DOS MZ executable header from file buffer. */

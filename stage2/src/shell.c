@@ -3063,6 +3063,16 @@ static void shell_run_staged_image(
             video_write("Invalid MZ executable.\n");
             return;
         }
+
+        if (mz_info.entry_offset >= image_size) {
+            video_write("Invalid MZ entry contract.\n");
+            return;
+        }
+
+        if (mz_info.runtime_required_bytes > SHELL_RUNTIME_COM_MAX_PAYLOAD) {
+            video_write("MZ runtime span exceeds payload window.\n");
+            return;
+        }
     }
 
     local_memset(&ctx, 0U, (u32)sizeof(ctx));
@@ -3113,6 +3123,12 @@ static void shell_run_staged_image(
         video_write_hex64((u64)reloc_applied);
         video_write(" load_seg=0x");
         video_write_hex64((u64)load_segment);
+        video_write(" entry_off=0x");
+        video_write_hex64((u64)mz_info.entry_offset);
+        video_write(" stack_off=0x");
+        video_write_hex64((u64)mz_info.stack_offset);
+        video_write(" span=0x");
+        video_write_hex64((u64)mz_info.runtime_required_bytes);
         video_write("\n");
 
         if (!marker_ok || image_size < 12U) {
