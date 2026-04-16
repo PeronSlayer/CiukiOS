@@ -1,5 +1,8 @@
 #include "ui.h"
 #include "video.h"
+#include "serial.h"
+
+static ui_scene_t current_scene = SCENE_BOOT_SPLASH;
 
 static u32 local_strlen(const char *s) {
     u32 n = 0;
@@ -7,6 +10,52 @@ static u32 local_strlen(const char *s) {
         n++;
     }
     return n;
+}
+
+/* ===== Scene Management ===== */
+
+ui_scene_t ui_get_scene(void) {
+    return current_scene;
+}
+
+int ui_set_scene(ui_scene_t scene) {
+    if (scene == current_scene) {
+        return 0;
+    }
+    current_scene = scene;
+    return 1;
+}
+
+static void ui_render_desktop_scene(void) {
+    /* Placeholder desktop scene renderer */
+    if (!video_ready()) {
+        return;
+    }
+    /* Desktop rendering will be implemented in Task 2 */
+}
+
+int ui_render_scene(void) {
+    if (!video_ready()) {
+        return 0;
+    }
+    switch (current_scene) {
+        case SCENE_BOOT_SPLASH:
+            return 1;
+        case SCENE_DESKTOP:
+            ui_render_desktop_scene();
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+int ui_enter_desktop_scene(void) {
+    if (!ui_set_scene(SCENE_DESKTOP)) {
+        return 0;
+    }
+    serial_write("[ ui ] scene=desktop\n");
+    ui_render_scene();
+    return 1;
 }
 
 void ui_write_centered_row(u32 row, const char *text) {
