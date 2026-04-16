@@ -10,6 +10,12 @@ static u32 local_strlen(const char *s) {
     return n;
 }
 
+static void local_strncpy(char *dst, const char *src, u32 max) {
+    u32 i = 0;
+    while (i + 1U < max && src[i] != '\0') { dst[i] = src[i]; i++; }
+    if (max > 0U) dst[i] = '\0';
+}
+
 static void serial_write_u32(u32 v) {
     char buf[12];
     int i = 11;
@@ -360,8 +366,42 @@ int ui_draw_boot_hud(const char *version_string, const char *mode_string,
     return 1;
 }
 
+/* ===== Console Ring Buffer ===== */
+
+void ui_console_init(ui_console_t *con) {
+    u32 i, j;
+    for (i = 0; i < UI_CONSOLE_LINES; i++)
+        for (j = 0; j < UI_CONSOLE_LINE_LEN; j++)
+            con->lines[i][j] = '\0';
+    con->head = 0;
+    con->count = 0;
+}
+
+void ui_console_push(ui_console_t *con, const char *text) {
+    local_strncpy(con->lines[con->head], text, UI_CONSOLE_LINE_LEN);
+    con->head = (con->head + 1U) % UI_CONSOLE_LINES;
+    if (con->count < UI_CONSOLE_LINES) con->count++;
+}
+
+void ui_console_clear(ui_console_t *con) {
+    ui_console_init(con);
+}
+
+static ui_console_t *g_console_source = (ui_console_t *)0;
+
+void ui_set_console_source(ui_console_t *con) {
+    g_console_source = con;
+}
+
 /* ===== Window Manager ===== */
 #define UI_MAX_WINDOWS 3
+
+#define UI_WIN_STATUS_LEN 32U
+static char g_window_status[UI_MAX_WINDOWS][UI_WIN_STATUS_LEN] = {
+    "Status: Ready",
+    "Buffer: Empty",
+    "Info: Active",
+};
 
 static ui_window_t g_windows[UI_MAX_WINDOWS] = {
     {"System", 0, 0, 0, 0, 1},
@@ -411,6 +451,11 @@ void ui_cycle_window_focus(void) {
 }
 
 int ui_get_focused_window(void) { return g_focused_idx; }
+
+void ui_set_window_status(int win_idx, const char *status) {
+    if (win_idx < 0 || win_idx >= UI_MAX_WINDOWS) return;
+    local_strncpy(g_window_status[win_idx], status, UI_WIN_STATUS_LEN);
+}
 
 void ui_render_windows(void) {
     int i;
@@ -469,20 +514,35 @@ void ui_render_windows(void) {
             if (content_rect_h > 0U) {
                 content_text_x = inner_x + UI_PANEL_PAD_X;
                 content_text_y = content_rect_y;
-                if (w->focused) {
-                    const char *cmsg;
-                    if (i == 0) cmsg = "Status: Ready";
-                    else if (i == 1) cmsg = "Buffer: Empty";
-                    else cmsg = "Info: Active";
-                    ui_draw_text_clipped(inner_x, content_rect_y,
-                                         inner_w, content_rect_h,
-                                         content_text_x, content_text_y,
-                                         cmsg, text_color, bg_color);
+
+                /* Shell window (index 1): render console ring buffer */
+                if (i == 1 && g_console_source != (ui_console_t *)0 &&
+                    g_console_source->count > 0U) {
+                    u32 cell_h_px = video_cell_height_px();
+                    u32 max_vis, start_idx, line_idx, cy_px;
+                    if (cell_h_px == 0U) cell_h_px = UI_GRID;
+                    max_vis = content_rect_h / cell_h_px;
+                    if (max_vis > g_console_source->count)
+                        max_vis = g_console_source->count;
+                    /* start from oldest visible line */
+                    start_idx = (g_console_source->head + UI_CONSOLE_LINES - max_vis)
+                                % UI_CONSOLE_LINES;
+                    for (line_idx = 0; line_idx < max_vis; line_idx++) {
+                        u32 ri = (start_idx + line_idx) % UI_CONSOLE_LINES;
+                        cy_px = content_text_y + line_idx * cell_h_px;
+                        if (cy_px + cell_h_px > content_rect_y + content_rect_h) break;
+                        ui_draw_text_clipped(inner_x, content_rect_y,
+                                             inner_w, content_rect_h,
+                                             content_text_x, cy_px,
+                                             g_console_source->lines[ri],
+                                             text_color, bg_color);
+                    }
                 } else {
+                    /* System/Info or empty Shell: show status text */
                     ui_draw_text_clipped(inner_x, content_rect_y,
                                          inner_w, content_rect_h,
                                          content_text_x, content_text_y,
-                                         "...", text_color, bg_color);
+                                         g_window_status[i], text_color, bg_color);
                 }
             }
         }

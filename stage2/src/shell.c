@@ -827,7 +827,6 @@ static int shell_int21_mem_resize(u16 seg, u16 new_paras, u16 *max_out) {
 
     blk = &g_int21_mem_blocks[idx];
     old_paras = blk->paras;
-
     if (new_paras == old_paras) {
         if (max_out) {
             *max_out = old_paras;
@@ -3353,12 +3352,68 @@ static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
     video_write("\n");
 }
 
-static void shell_run_desktop_session(void) {
+static void desktop_dispatch_action(const char *action,
+                                    boot_info_t *boot_info,
+                                    handoff_v0_t *handoff,
+                                    ui_console_t *con) {
+    serial_write("[ ui ] launcher action: ");
+    serial_write(action);
+    serial_write("\n");
+
+    ui_set_window_status(0, "Running...");
+    ui_console_push(con, action);
+
+    if (str_eq_nocase(action, "DIR")) {
+        ui_console_push(con, "--- DIR output ---");
+        shell_dir(handoff, "");
+        ui_console_push(con, "(dir done)");
+        ui_set_window_status(0, "DIR: ok");
+    } else if (str_eq_nocase(action, "MEM")) {
+        ui_console_push(con, "--- MEM output ---");
+        shell_print_mem(boot_info, handoff);
+        ui_console_push(con, "(mem done)");
+        ui_set_window_status(0, "MEM: ok");
+    } else if (str_eq_nocase(action, "CLS")) {
+        ui_console_clear(con);
+        ui_console_push(con, "(cleared)");
+        ui_set_window_status(0, "CLS: ok");
+    } else if (str_eq_nocase(action, "VER")) {
+        ui_console_push(con, CIUKIOS_STAGE2_VERSION_LINE);
+        ui_set_window_status(0, "VER: ok");
+    } else if (str_eq_nocase(action, "ASCII")) {
+        ui_console_push(con, "--- ASCII output ---");
+        shell_ascii();
+        ui_console_push(con, "(ascii done)");
+        ui_set_window_status(0, "ASCII: ok");
+    } else if (str_eq_nocase(action, "RUN INIT.COM")) {
+        ui_console_push(con, "RUN INIT.COM");
+        shell_run(boot_info, handoff, "INIT.COM");
+        ui_console_push(con, "(run done)");
+        ui_set_window_status(0, "RUN: ok");
+    } else {
+        ui_console_push(con, "unknown action");
+        ui_set_window_status(0, "Error: unknown");
+    }
+
+    serial_write("[ ui ] launcher action dispatch active\n");
+}
+
+static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *handoff) {
     int chord_stage = 0; /* 0=idle, 1=ALT+G seen, waiting for Q */
     u64 chord_deadline = 0ULL;
     const u64 chord_window_ticks = 200ULL; /* 2s @ 100Hz */
+    desktop_state_t dstate = DESKTOP_STATE_ENTERING;
+    ui_console_t console;
+
     serial_write("[ ui ] desktop session started\n");
     serial_write("[ ui ] desktop exit chord alt+g+q active\n");
+    serial_write("[ ui ] desktop session state-machine v8 active\n");
+    serial_write("[ ui ] desktop console panel active\n");
+
+    /* --- ENTERING --- */
+    ui_console_init(&console);
+    ui_set_console_source(&console);
+    ui_console_push(&console, "Desktop session ready.");
 
     if (ui_get_scene() != SCENE_DESKTOP) {
         (void)ui_set_scene(SCENE_DESKTOP);
@@ -3370,10 +3425,22 @@ static void shell_run_desktop_session(void) {
     ui_render_windows();
     ui_render_launcher();
 
+    dstate = DESKTOP_STATE_ACTIVE;
+    serial_write("[ ui ] state transition -> ACTIVE\n");
+
     for (;;) {
-        i32 key = stage2_keyboard_getc_nonblocking();
+        i32 key;
+
+        if (dstate == DESKTOP_STATE_EXITING) break;
+
+        key = stage2_keyboard_getc_nonblocking();
         if (key < 0) {
             __asm__ volatile ("hlt");
+            continue;
+        }
+
+        /* Block input while action is running */
+        if (dstate == DESKTOP_STATE_RUNNING_ACTION) {
             continue;
         }
 
@@ -3386,12 +3453,6 @@ static void shell_run_desktop_session(void) {
                 chord_stage = 0;
             }
 
-            /*
-             * ALT+G+Q exit chord:
-             * 1) ALT held + G => arm exit stage for a short window.
-             * 2) Q within window exits; ALT is preferred but not strictly required
-             *    in step 2 to tolerate host/QEMU modifier state drops.
-             */
             if (alt_held) {
                 if ((ch == 'g' || ch == 'G') && chord_stage == 0) {
                     chord_stage = 1;
@@ -3403,6 +3464,8 @@ static void shell_run_desktop_session(void) {
             if (chord_stage == 1 && (ch == 'q' || ch == 'Q')) {
                 if (alt_held || now <= chord_deadline) {
                     serial_write("[ ui ] exit chord alt+g+q triggered\n");
+                    dstate = DESKTOP_STATE_EXITING;
+                    serial_write("[ ui ] state transition -> EXITING\n");
                     break;
                 }
                 chord_stage = 0;
@@ -3412,7 +3475,11 @@ static void shell_run_desktop_session(void) {
                 chord_stage = 0;
             }
 
-            if (ch == '\t') {
+            /* Ctrl+L: clear console */
+            if (ch == 0x0C) {
+                ui_console_clear(&console);
+                ui_console_push(&console, "(cleared)");
+            } else if (ch == '\t') {
                 ui_cycle_window_focus();
             } else if (ch == STAGE2_KEY_UP || ch == 'k' || ch == 'w') {
                 ui_launcher_prev();
@@ -3423,6 +3490,14 @@ static void shell_run_desktop_session(void) {
                 serial_write("[ ui ] launcher dispatch v2: ");
                 serial_write(selected);
                 serial_write("\n");
+
+                dstate = DESKTOP_STATE_RUNNING_ACTION;
+                serial_write("[ ui ] state transition -> RUNNING_ACTION\n");
+
+                desktop_dispatch_action(selected, boot_info, handoff, &console);
+
+                dstate = DESKTOP_STATE_ACTIVE;
+                serial_write("[ ui ] state transition -> ACTIVE\n");
             } else {
                 continue;
             }
@@ -3433,6 +3508,8 @@ static void shell_run_desktop_session(void) {
         ui_render_launcher();
     }
 
+    /* --- EXITING --- */
+    ui_set_console_source((ui_console_t *)0);
     ui_deactivate_launcher();
     shell_cls();
     shell_draw_title_bar();
@@ -3490,10 +3567,10 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "desktop")) {
         if (ui_enter_desktop_scene()) {
-            shell_run_desktop_session();
+            shell_run_desktop_session(boot_info, handoff);
         } else {
             if (ui_get_scene() == SCENE_DESKTOP) {
-                shell_run_desktop_session();
+                shell_run_desktop_session(boot_info, handoff);
             } else {
                 video_write("Failed to enter desktop scene.\n");
             }
