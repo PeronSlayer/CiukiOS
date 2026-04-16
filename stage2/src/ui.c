@@ -32,6 +32,7 @@ static void ui_render_desktop_scene(void) {
     u32 row;
     static int desktop_rendered = 0;
     static int layout_v2_marker_printed = 0;
+    static int interaction_marker_printed = 0;
 
     if (!video_ready()) {
         return;
@@ -77,6 +78,11 @@ static void ui_render_desktop_scene(void) {
     if (!layout_v2_marker_printed) {
         serial_write("[ ui ] desktop layout v2 active\n");
         layout_v2_marker_printed = 1;
+    }
+
+    if (!interaction_marker_printed) {
+        serial_write("[ ui ] desktop interaction active\n");
+        interaction_marker_printed = 1;
     }
 }
 
