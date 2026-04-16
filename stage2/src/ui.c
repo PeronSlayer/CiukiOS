@@ -10,6 +10,12 @@ static u32 local_strlen(const char *s) {
     return n;
 }
 
+static void local_strncpy(char *dst, const char *src, u32 max) {
+    u32 i = 0;
+    while (i + 1U < max && src[i] != '\0') { dst[i] = src[i]; i++; }
+    if (max > 0U) dst[i] = '\0';
+}
+
 static void serial_write_u32(u32 v) {
     char buf[12];
     int i = 11;
@@ -184,6 +190,7 @@ int ui_set_scene(ui_scene_t scene) {
 #define COL_WIN_FOCUS_BG 0x00202020U
 #define COL_WIN_UNFOC_BG 0x00151515U
 #define COL_TITLEBAR_BG  0x00101010U
+#define COL_TITLEBAR_FOCUS_BG 0x00182838U
 #define COL_DOCK_BG      0x00151515U
 #define COL_DOCK_SEL_BG  0x00003333U
 #define COL_DOCK_SEL_FG  0x0000FFFFU
@@ -227,6 +234,7 @@ static void ui_render_desktop_scene(void) {
     /* Content rect inside status bar */
     bar_inner_x = g_layout.status_x + UI_PANEL_BORDER + UI_PANEL_PAD_X;
     bar_inner_y = g_layout.status_y + UI_PANEL_BORDER;
+    bar_inner_y = g_layout.status_y + UI_PANEL_BORDER;
     bar_inner_h = g_layout.status_h - 2U * UI_PANEL_BORDER;
     {
         const char *msg;
@@ -240,6 +248,33 @@ static void ui_render_desktop_scene(void) {
                              g_layout.status_w - 2U * UI_PANEL_BORDER, bar_inner_h,
                              bar_inner_x, bar_inner_y,
                              msg, COL_TEXT_DIM, COL_PANEL_BG);
+
+        /* Focus legend on right side of status bar */
+        {
+            static const char *win_names[3] = {"System", "Shell", "Info"};
+            char fbuf[24];
+            u32 fi = 0;
+            const char *fn;
+            u32 legend_w_px, legend_x;
+            u32 cell_w = video_cell_width_px();
+            int fidx = ui_get_focused_window();
+            if (cell_w == 0U) cell_w = UI_GRID;
+
+            fbuf[fi++] = 'F'; fbuf[fi++] = ':';
+            fn = (fidx >= 0 && fidx < 3) ? win_names[fidx] : "?";
+            while (*fn && fi < 22U) fbuf[fi++] = *fn++;
+            fbuf[fi] = '\0';
+
+            legend_w_px = fi * cell_w;
+            legend_x = g_layout.status_x + g_layout.status_w
+                        - UI_PANEL_BORDER - UI_PANEL_PAD_X - legend_w_px;
+            if (legend_x > bar_inner_x + local_strlen(msg) * cell_w + cell_w) {
+                ui_draw_text_clipped(g_layout.status_x + UI_PANEL_BORDER, bar_inner_y,
+                                     g_layout.status_w - 2U * UI_PANEL_BORDER, bar_inner_h,
+                                     legend_x, bar_inner_y,
+                                     fbuf, COL_TEXT_GREEN, COL_PANEL_BG);
+            }
+        }
     }
     video_set_colors(COL_TEXT_DEFAULT, COL_BG_DEFAULT);
 
@@ -248,6 +283,7 @@ static void ui_render_desktop_scene(void) {
         serial_write("[ ui ] desktop layout v2 active\n");
         serial_write("[ ui ] desktop interaction active\n");
         serial_write("[ ui ] alignment surgical v6 active\n");
+        serial_write("[ ui ] desktop focus ux v8 active\n");
         ui_layout_debug_serial(&g_layout);
         first_render = 0;
     }
@@ -360,8 +396,42 @@ int ui_draw_boot_hud(const char *version_string, const char *mode_string,
     return 1;
 }
 
+/* ===== Console Ring Buffer ===== */
+
+void ui_console_init(ui_console_t *con) {
+    u32 i, j;
+    for (i = 0; i < UI_CONSOLE_LINES; i++)
+        for (j = 0; j < UI_CONSOLE_LINE_LEN; j++)
+            con->lines[i][j] = '\0';
+    con->head = 0;
+    con->count = 0;
+}
+
+void ui_console_push(ui_console_t *con, const char *text) {
+    local_strncpy(con->lines[con->head], text, UI_CONSOLE_LINE_LEN);
+    con->head = (con->head + 1U) % UI_CONSOLE_LINES;
+    if (con->count < UI_CONSOLE_LINES) con->count++;
+}
+
+void ui_console_clear(ui_console_t *con) {
+    ui_console_init(con);
+}
+
+static ui_console_t *g_console_source = (ui_console_t *)0;
+
+void ui_set_console_source(ui_console_t *con) {
+    g_console_source = con;
+}
+
 /* ===== Window Manager ===== */
 #define UI_MAX_WINDOWS 3
+
+#define UI_WIN_STATUS_LEN 32U
+static char g_window_status[UI_MAX_WINDOWS][UI_WIN_STATUS_LEN] = {
+    "Status: Ready",
+    "Buffer: Empty",
+    "Info: Active",
+};
 
 static ui_window_t g_windows[UI_MAX_WINDOWS] = {
     {"System", 0, 0, 0, 0, 1},
@@ -377,12 +447,31 @@ static void ui_reflow_windows(const ui_layout_t *L) {
     u32 cw = L->content_w;
     u32 ch = L->content_h;
     u32 left_w, right_w, top_h, bot_h;
+    static int layout_v3_printed = 0;
 
-    /* Two-column layout: left column has System+Shell, right has Info */
-    left_w  = UI_SNAP((cw - UI_GAP) * 3U / 5U);
+    /* Ratio-based two-column layout using design tokens */
+    left_w  = UI_SNAP((cw - UI_GAP) * UI_LEFT_COL_NUM / UI_LEFT_COL_DEN);
     right_w = cw - left_w - UI_GAP;
-    top_h   = UI_SNAP((ch - UI_GAP) / 2U);
+    top_h   = UI_SNAP((ch - UI_GAP) * UI_TOP_ROW_NUM / UI_TOP_ROW_DEN);
     bot_h   = ch - top_h - UI_GAP;
+
+    /* Enforce minimum window sizes; clamp to available space */
+    if (left_w < UI_WIN_MIN_W && cw > UI_WIN_MIN_W + UI_GAP + UI_WIN_MIN_W) {
+        left_w = UI_WIN_MIN_W;
+        right_w = cw - left_w - UI_GAP;
+    }
+    if (right_w < UI_WIN_MIN_W && cw > UI_WIN_MIN_W + UI_GAP + UI_WIN_MIN_W) {
+        right_w = UI_WIN_MIN_W;
+        left_w = cw - right_w - UI_GAP;
+    }
+    if (top_h < UI_WIN_MIN_H && ch > UI_WIN_MIN_H + UI_GAP + UI_WIN_MIN_H) {
+        top_h = UI_WIN_MIN_H;
+        bot_h = ch - top_h - UI_GAP;
+    }
+    if (bot_h < UI_WIN_MIN_H && ch > UI_WIN_MIN_H + UI_GAP + UI_WIN_MIN_H) {
+        bot_h = UI_WIN_MIN_H;
+        top_h = ch - bot_h - UI_GAP;
+    }
 
     g_windows[0].x = cx;
     g_windows[0].y = cy;
@@ -398,6 +487,11 @@ static void ui_reflow_windows(const ui_layout_t *L) {
     g_windows[2].y = cy;
     g_windows[2].w = right_w;
     g_windows[2].h = ch;
+
+    if (!layout_v3_printed) {
+        serial_write("[ ui ] desktop layout manager v3 active\n");
+        layout_v3_printed = 1;
+    }
 }
 
 void ui_cycle_window_focus(void) {
@@ -411,6 +505,11 @@ void ui_cycle_window_focus(void) {
 }
 
 int ui_get_focused_window(void) { return g_focused_idx; }
+
+void ui_set_window_status(int win_idx, const char *status) {
+    if (win_idx < 0 || win_idx >= UI_MAX_WINDOWS) return;
+    local_strncpy(g_window_status[win_idx], status, UI_WIN_STATUS_LEN);
+}
 
 void ui_render_windows(void) {
     int i;
@@ -440,7 +539,8 @@ void ui_render_windows(void) {
 
         /* Title bar: inside border, UI_TITLEBAR_H tall */
         if (inner_h > UI_TITLEBAR_H + UI_GRID) {
-            video_fill_rect(inner_x, inner_y, inner_w, UI_TITLEBAR_H, COL_TITLEBAR_BG);
+            u32 tbar_bg = w->focused ? COL_TITLEBAR_FOCUS_BG : COL_TITLEBAR_BG;
+            video_fill_rect(inner_x, inner_y, inner_w, UI_TITLEBAR_H, tbar_bg);
             /* Separator line below title bar */
             video_fill_rect(inner_x, inner_y + UI_TITLEBAR_H, inner_w, 1U, border_color);
 
@@ -448,17 +548,18 @@ void ui_render_windows(void) {
             title_text_x = inner_x + UI_PANEL_PAD_X;
             title_text_y = inner_y + (UI_TITLEBAR_H - video_cell_height_px()) / 2U;
             {
-                /* Build "[Title]" and clip to title bar */
+                /* Build "[*Title]" (focused) or "[ Title]" (unfocused) and clip */
                 char tbuf[32];
                 u32 ti = 0;
                 const char *t = w->title;
                 tbuf[ti++] = '[';
-                while (*t && ti < 30U) tbuf[ti++] = *t++;
+                tbuf[ti++] = w->focused ? '*' : ' ';
+                while (*t && ti < 29U) tbuf[ti++] = *t++;
                 tbuf[ti++] = ']';
                 tbuf[ti] = '\0';
                 ui_draw_text_clipped(inner_x, inner_y, inner_w, UI_TITLEBAR_H,
                                      title_text_x, title_text_y,
-                                     tbuf, text_color, COL_TITLEBAR_BG);
+                                     tbuf, text_color, tbar_bg);
             }
 
             /* Content area: below title bar + separator + padding */
@@ -469,20 +570,35 @@ void ui_render_windows(void) {
             if (content_rect_h > 0U) {
                 content_text_x = inner_x + UI_PANEL_PAD_X;
                 content_text_y = content_rect_y;
-                if (w->focused) {
-                    const char *cmsg;
-                    if (i == 0) cmsg = "Status: Ready";
-                    else if (i == 1) cmsg = "Buffer: Empty";
-                    else cmsg = "Info: Active";
-                    ui_draw_text_clipped(inner_x, content_rect_y,
-                                         inner_w, content_rect_h,
-                                         content_text_x, content_text_y,
-                                         cmsg, text_color, bg_color);
+
+                /* Shell window (index 1): render console ring buffer */
+                if (i == 1 && g_console_source != (ui_console_t *)0 &&
+                    g_console_source->count > 0U) {
+                    u32 cell_h_px = video_cell_height_px();
+                    u32 max_vis, start_idx, line_idx, cy_px;
+                    if (cell_h_px == 0U) cell_h_px = UI_GRID;
+                    max_vis = content_rect_h / cell_h_px;
+                    if (max_vis > g_console_source->count)
+                        max_vis = g_console_source->count;
+                    /* start from oldest visible line */
+                    start_idx = (g_console_source->head + UI_CONSOLE_LINES - max_vis)
+                                % UI_CONSOLE_LINES;
+                    for (line_idx = 0; line_idx < max_vis; line_idx++) {
+                        u32 ri = (start_idx + line_idx) % UI_CONSOLE_LINES;
+                        cy_px = content_text_y + line_idx * cell_h_px;
+                        if (cy_px + cell_h_px > content_rect_y + content_rect_h) break;
+                        ui_draw_text_clipped(inner_x, content_rect_y,
+                                             inner_w, content_rect_h,
+                                             content_text_x, cy_px,
+                                             g_console_source->lines[ri],
+                                             text_color, bg_color);
+                    }
                 } else {
+                    /* System/Info or empty Shell: show status text */
                     ui_draw_text_clipped(inner_x, content_rect_y,
                                          inner_w, content_rect_h,
                                          content_text_x, content_text_y,
-                                         "...", text_color, bg_color);
+                                         g_window_status[i], text_color, bg_color);
                 }
             }
         }

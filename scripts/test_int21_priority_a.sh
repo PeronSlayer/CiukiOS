@@ -23,6 +23,7 @@ required_patterns=(
     "[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)"
     "[ compat ] INT21h console/dta/drive ready (AH=06h/07h/0Ah/0Eh/1Ah/2Fh)"
     "[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..42h)"
+    "[ compat ] INT21h memory api ready (AH=48h/49h/4Ah)"
 )
 
 forbidden_patterns=(

@@ -25,6 +25,7 @@
 #define SHELL_INT21_MAX_FILE_HANDLES 8U
 #define SHELL_INT21_HANDLE_BASE 5U
 #define SHELL_INT21_FILE_BUF_CAP (64U * 1024U)
+#define SHELL_INT21_MEM_MAX_BLOCKS 32U
 
 static const u8 g_exe32_marker[SHELL_EXE32_MARKER_SIZE] = {
     'C', 'I', 'U', 'K', 'E', 'X', '6', '4'
@@ -43,6 +44,13 @@ typedef struct shell_int21_file_handle {
     char path[SHELL_PATH_MAX];
     u8 data[SHELL_INT21_FILE_BUF_CAP];
 } shell_int21_file_handle_t;
+
+typedef struct shell_int21_mem_block {
+    u16 seg;
+    u16 paras;
+    u8 used;
+    u8 reserved[3];
+} shell_int21_mem_block_t;
 
 static shell_int21_file_handle_t g_int21_file_handles[SHELL_INT21_MAX_FILE_HANDLES];
 
@@ -667,9 +675,229 @@ static i32 g_int21_pending_stdin_char = -1;
 static u8 g_int21_default_drive = 0U;
 static u16 g_int21_dta_segment = 0U;
 static u16 g_int21_dta_offset = 0x0080U;
+static shell_int21_mem_block_t g_int21_mem_blocks[SHELL_INT21_MEM_MAX_BLOCKS];
+static u16 g_int21_mem_block_count = 0U;
 
 static void shell_int21_reset_handle_table(void) {
     local_memset(g_int21_file_handles, 0U, (u32)sizeof(g_int21_file_handles));
+}
+
+static void shell_int21_mem_reset(u16 base_seg, u16 paras) {
+    local_memset(g_int21_mem_blocks, 0U, (u32)sizeof(g_int21_mem_blocks));
+    g_int21_mem_block_count = 0U;
+    if (paras == 0U) {
+        return;
+    }
+    g_int21_mem_blocks[0].seg = base_seg;
+    g_int21_mem_blocks[0].paras = paras;
+    g_int21_mem_blocks[0].used = 0U;
+    g_int21_mem_block_count = 1U;
+}
+
+static u16 shell_int21_mem_largest_free_block(void) {
+    u16 best = 0U;
+    for (u16 i = 0U; i < g_int21_mem_block_count; i++) {
+        if (!g_int21_mem_blocks[i].used && g_int21_mem_blocks[i].paras > best) {
+            best = g_int21_mem_blocks[i].paras;
+        }
+    }
+    return best;
+}
+
+static int shell_int21_mem_insert_block(u16 index, u16 seg, u16 paras, u8 used) {
+    if (g_int21_mem_block_count >= SHELL_INT21_MEM_MAX_BLOCKS) {
+        return 0;
+    }
+    if (index > g_int21_mem_block_count) {
+        return 0;
+    }
+    for (u16 i = g_int21_mem_block_count; i > index; i--) {
+        g_int21_mem_blocks[i] = g_int21_mem_blocks[i - 1U];
+    }
+    g_int21_mem_blocks[index].seg = seg;
+    g_int21_mem_blocks[index].paras = paras;
+    g_int21_mem_blocks[index].used = used;
+    g_int21_mem_block_count++;
+    return 1;
+}
+
+static void shell_int21_mem_merge_around(u16 idx) {
+    if (idx >= g_int21_mem_block_count) {
+        return;
+    }
+
+    if (idx > 0U &&
+        !g_int21_mem_blocks[idx].used &&
+        !g_int21_mem_blocks[idx - 1U].used) {
+        g_int21_mem_blocks[idx - 1U].paras =
+            (u16)(g_int21_mem_blocks[idx - 1U].paras + g_int21_mem_blocks[idx].paras);
+        for (u16 i = idx; i + 1U < g_int21_mem_block_count; i++) {
+            g_int21_mem_blocks[i] = g_int21_mem_blocks[i + 1U];
+        }
+        g_int21_mem_block_count--;
+        idx--;
+    }
+
+    if ((idx + 1U) < g_int21_mem_block_count &&
+        !g_int21_mem_blocks[idx].used &&
+        !g_int21_mem_blocks[idx + 1U].used) {
+        g_int21_mem_blocks[idx].paras =
+            (u16)(g_int21_mem_blocks[idx].paras + g_int21_mem_blocks[idx + 1U].paras);
+        for (u16 i = idx + 1U; i + 1U < g_int21_mem_block_count; i++) {
+            g_int21_mem_blocks[i] = g_int21_mem_blocks[i + 1U];
+        }
+        g_int21_mem_block_count--;
+    }
+}
+
+static int shell_int21_mem_find_used_block(u16 seg, u16 *idx_out) {
+    for (u16 i = 0U; i < g_int21_mem_block_count; i++) {
+        if (g_int21_mem_blocks[i].used && g_int21_mem_blocks[i].seg == seg) {
+            if (idx_out) {
+                *idx_out = i;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int shell_int21_mem_alloc(u16 paras, u16 *seg_out, u16 *max_avail_out) {
+    u16 max_free = shell_int21_mem_largest_free_block();
+    if (max_avail_out) {
+        *max_avail_out = max_free;
+    }
+    if (paras == 0U || paras > max_free) {
+        return 0;
+    }
+
+    for (u16 i = 0U; i < g_int21_mem_block_count; i++) {
+        shell_int21_mem_block_t *b = &g_int21_mem_blocks[i];
+        if (b->used || b->paras < paras) {
+            continue;
+        }
+
+        if (b->paras == paras) {
+            b->used = 1U;
+            if (seg_out) {
+                *seg_out = b->seg;
+            }
+            return 1;
+        }
+
+        if (!shell_int21_mem_insert_block(
+                (u16)(i + 1U),
+                (u16)(b->seg + paras),
+                (u16)(b->paras - paras),
+                0U)) {
+            return 0;
+        }
+        b->paras = paras;
+        b->used = 1U;
+        if (seg_out) {
+            *seg_out = b->seg;
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+static int shell_int21_mem_free(u16 seg) {
+    u16 idx = 0U;
+    if (!shell_int21_mem_find_used_block(seg, &idx)) {
+        return 0;
+    }
+    g_int21_mem_blocks[idx].used = 0U;
+    shell_int21_mem_merge_around(idx);
+    return 1;
+}
+
+static int shell_int21_mem_resize(u16 seg, u16 new_paras, u16 *max_out) {
+    u16 idx = 0U;
+    shell_int21_mem_block_t *blk;
+    u16 old_paras;
+
+    if (!shell_int21_mem_find_used_block(seg, &idx)) {
+        if (max_out) {
+            *max_out = 0U;
+        }
+        return 0;
+    }
+
+    blk = &g_int21_mem_blocks[idx];
+    old_paras = blk->paras;
+    if (new_paras == old_paras) {
+        if (max_out) {
+            *max_out = old_paras;
+        }
+        return 1;
+    }
+
+    if (new_paras == 0U) {
+        if (max_out) {
+            *max_out = old_paras;
+        }
+        return 0;
+    }
+
+    if (new_paras < old_paras) {
+        u16 freed = (u16)(old_paras - new_paras);
+        blk->paras = new_paras;
+        if (!shell_int21_mem_insert_block(
+                (u16)(idx + 1U),
+                (u16)(blk->seg + new_paras),
+                freed,
+                0U)) {
+            blk->paras = old_paras;
+            if (max_out) {
+                *max_out = old_paras;
+            }
+            return 0;
+        }
+        shell_int21_mem_merge_around((u16)(idx + 1U));
+        if (max_out) {
+            *max_out = new_paras;
+        }
+        return 1;
+    }
+
+    {
+        u16 extra = (u16)(new_paras - old_paras);
+        u16 grow_cap = old_paras;
+        if ((idx + 1U) < g_int21_mem_block_count && !g_int21_mem_blocks[idx + 1U].used) {
+            grow_cap = (u16)(grow_cap + g_int21_mem_blocks[idx + 1U].paras);
+        }
+        if (max_out) {
+            *max_out = grow_cap;
+        }
+        if (new_paras > grow_cap) {
+            return 0;
+        }
+
+        if ((idx + 1U) < g_int21_mem_block_count &&
+            !g_int21_mem_blocks[idx + 1U].used &&
+            g_int21_mem_blocks[idx + 1U].paras >= extra) {
+            g_int21_mem_blocks[idx + 1U].seg =
+                (u16)(g_int21_mem_blocks[idx + 1U].seg + extra);
+            g_int21_mem_blocks[idx + 1U].paras =
+                (u16)(g_int21_mem_blocks[idx + 1U].paras - extra);
+            blk->paras = new_paras;
+
+            if (g_int21_mem_blocks[idx + 1U].paras == 0U) {
+                for (u16 i = idx + 1U; i + 1U < g_int21_mem_block_count; i++) {
+                    g_int21_mem_blocks[i] = g_int21_mem_blocks[i + 1U];
+                }
+                g_int21_mem_block_count--;
+            }
+            return 1;
+        }
+    }
+
+    if (max_out) {
+        *max_out = old_paras;
+    }
+    return 0;
 }
 
 static shell_int21_file_handle_t *shell_int21_find_file_handle(u16 handle) {
@@ -1454,25 +1682,42 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     }
 
     if (ah == 0x48U) {
-        /* Allocate memory block (paras) - deterministic stub until MCB allocator exists. */
+        u16 seg = 0U;
+        u16 max_free = 0U;
+
+        if (shell_int21_mem_alloc(regs->bx, &seg, &max_free)) {
+            regs->ax = seg;
+            return;
+        }
+
         regs->carry = 1U;
         regs->ax = 0x0008U; /* insufficient memory */
-        regs->bx = 0x0000U; /* max available paragraphs unknown */
+        regs->bx = max_free;
         return;
     }
 
     if (ah == 0x49U) {
-        /* Free memory block - deterministic stub. */
+        if (shell_int21_mem_free(regs->es)) {
+            regs->ax = 0x0000U;
+            return;
+        }
+
         regs->carry = 1U;
         regs->ax = 0x0009U; /* invalid memory block address */
         return;
     }
 
     if (ah == 0x4AU) {
-        /* Resize memory block - deterministic stub until allocator exists. */
+        u16 max_for_block = 0U;
+
+        if (shell_int21_mem_resize(regs->es, regs->bx, &max_for_block)) {
+            regs->ax = 0x0000U;
+            return;
+        }
+
         regs->carry = 1U;
         regs->ax = 0x0008U; /* insufficient memory */
-        regs->bx = 0x0000U;
+        regs->bx = max_for_block;
         return;
     }
 
@@ -1662,12 +1907,73 @@ int stage2_shell_selftest_int21_baseline(void) {
         return 0;
     }
 
-    /* AH=48h/49h/4Ah deterministic stubs */
+    /* AH=48h allocate paragraphs */
+    shell_int21_mem_reset(0x5000U, 0x0020U);
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x4800U;
-    regs.bx = 0x0010U;
+    regs.bx = 0x0004U;
     shell_com_int21(&ctx, &regs);
-    if (regs.carry != 1U || regs.ax != 0x0008U) {
+    if (regs.carry != 0U || regs.ax != 0x5000U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4800U;
+    regs.bx = 0x0008U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x5004U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4800U;
+    regs.bx = 0x0018U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0008U || regs.bx != 0x0014U) {
+        return 0;
+    }
+
+    /* AH=49h free block */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4900U;
+    regs.es = 0x5004U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0000U) {
+        return 0;
+    }
+
+    /* AH=4Ah resize block */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4A00U;
+    regs.bx = 0x0010U;
+    regs.es = 0x5000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0000U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4A00U;
+    regs.bx = 0x0030U;
+    regs.es = 0x5000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0008U || regs.bx != 0x0020U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4900U;
+    regs.es = 0x5000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0000U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4900U;
+    regs.es = 0x5000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 1U || regs.ax != 0x0009U) {
         return 0;
     }
 
@@ -1776,23 +2082,6 @@ int stage2_shell_selftest_int21_baseline(void) {
     regs.ax = 0x4D00U;
     shell_com_int21(&ctx, &regs);
     if (regs.carry != 0U || regs.ax != 0x015AU) {
-        return 0;
-    }
-
-    local_memset(&regs, 0U, (u32)sizeof(regs));
-    regs.ax = 0x4900U;
-    regs.es = 0x2222U;
-    shell_com_int21(&ctx, &regs);
-    if (regs.carry != 1U || regs.ax != 0x0009U) {
-        return 0;
-    }
-
-    local_memset(&regs, 0U, (u32)sizeof(regs));
-    regs.ax = 0x4A00U;
-    regs.bx = 0x0040U;
-    regs.es = 0x1111U;
-    shell_com_int21(&ctx, &regs);
-    if (regs.carry != 1U || regs.ax != 0x0008U) {
         return 0;
     }
 
@@ -1993,17 +2282,35 @@ fail:
 static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const char *tail) {
     u8 *psp = (u8 *)(u64)SHELL_RUNTIME_COM_ADDR;
     u32 len = 0;
-    u64 end_paragraph;
+    u32 image_paras;
+    u32 reserved_paras;
+    u32 total_paras;
+    u32 free_paras;
+    u16 psp_segment;
+    u16 heap_base_seg;
+    u16 heap_paras;
+    u16 end_paragraph;
 
     local_memset(psp, 0U, SHELL_RUNTIME_PSP_SIZE);
+
+    psp_segment = (u16)((SHELL_RUNTIME_COM_ADDR >> 4) & 0xFFFFU);
+    image_paras = (image_size + 15U) >> 4;
+    reserved_paras = 0x10U + image_paras;
+    total_paras = (u32)(SHELL_RUNTIME_COM_MAX_SIZE >> 4);
+    free_paras = (total_paras > reserved_paras) ? (total_paras - reserved_paras) : 0U;
+    if (free_paras > 0xFFFFU) {
+        free_paras = 0xFFFFU;
+    }
+    heap_base_seg = (u16)(psp_segment + (u16)reserved_paras);
+    heap_paras = (u16)free_paras;
+    end_paragraph = (u16)(heap_base_seg + heap_paras);
 
     /* PSP:0000h = INT 20h */
     psp[0x00] = 0xCD;
     psp[0x01] = 0x20;
 
-    end_paragraph = (SHELL_RUNTIME_COM_ENTRY_ADDR + (u64)image_size + 15ULL) >> 4;
-    psp[0x02] = (u8)(end_paragraph & 0xFFU);
-    psp[0x03] = (u8)((end_paragraph >> 8) & 0xFFU);
+    psp[0x02] = (u8)(end_paragraph & 0x00FFU);
+    psp[0x03] = (u8)((end_paragraph >> 8) & 0x00FFU);
 
     if (tail) {
         while (tail[len] != '\0' && len < SHELL_RUNTIME_TAIL_MAX) {
@@ -2014,7 +2321,7 @@ static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const ch
     psp[0x80] = (u8)len;
     psp[0x81U + len] = 0x0D;
 
-    ctx->psp_segment = (u16)((SHELL_RUNTIME_COM_ADDR >> 4) & 0xFFFFU);
+    ctx->psp_segment = psp_segment;
     ctx->psp_linear = SHELL_RUNTIME_COM_ADDR;
     ctx->image_linear = SHELL_RUNTIME_COM_ENTRY_ADDR;
     ctx->image_size = image_size;
@@ -2028,6 +2335,7 @@ static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const ch
     g_int21_dta_segment = ctx->psp_segment;
     g_int21_dta_offset = 0x0080U;
     shell_int21_reset_handle_table();
+    shell_int21_mem_reset(heap_base_seg, heap_paras);
 }
 
 static void shell_print_com_exit(const ciuki_dos_context_t *ctx) {
@@ -3044,12 +3352,68 @@ static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
     video_write("\n");
 }
 
-static void shell_run_desktop_session(void) {
+static void desktop_dispatch_action(const char *action,
+                                    boot_info_t *boot_info,
+                                    handoff_v0_t *handoff,
+                                    ui_console_t *con) {
+    serial_write("[ ui ] launcher action: ");
+    serial_write(action);
+    serial_write("\n");
+
+    ui_set_window_status(0, "Running...");
+    ui_console_push(con, action);
+
+    if (str_eq_nocase(action, "DIR")) {
+        ui_console_push(con, "--- DIR output ---");
+        shell_dir(handoff, "");
+        ui_console_push(con, "(dir done)");
+        ui_set_window_status(0, "DIR: ok");
+    } else if (str_eq_nocase(action, "MEM")) {
+        ui_console_push(con, "--- MEM output ---");
+        shell_print_mem(boot_info, handoff);
+        ui_console_push(con, "(mem done)");
+        ui_set_window_status(0, "MEM: ok");
+    } else if (str_eq_nocase(action, "CLS")) {
+        ui_console_clear(con);
+        ui_console_push(con, "(cleared)");
+        ui_set_window_status(0, "CLS: ok");
+    } else if (str_eq_nocase(action, "VER")) {
+        ui_console_push(con, CIUKIOS_STAGE2_VERSION_LINE);
+        ui_set_window_status(0, "VER: ok");
+    } else if (str_eq_nocase(action, "ASCII")) {
+        ui_console_push(con, "--- ASCII output ---");
+        shell_ascii();
+        ui_console_push(con, "(ascii done)");
+        ui_set_window_status(0, "ASCII: ok");
+    } else if (str_eq_nocase(action, "RUN INIT.COM")) {
+        ui_console_push(con, "RUN INIT.COM");
+        shell_run(boot_info, handoff, "INIT.COM");
+        ui_console_push(con, "(run done)");
+        ui_set_window_status(0, "RUN: ok");
+    } else {
+        ui_console_push(con, "unknown action");
+        ui_set_window_status(0, "Error: unknown");
+    }
+
+    serial_write("[ ui ] launcher action dispatch active\n");
+}
+
+static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *handoff) {
     int chord_stage = 0; /* 0=idle, 1=ALT+G seen, waiting for Q */
     u64 chord_deadline = 0ULL;
     const u64 chord_window_ticks = 200ULL; /* 2s @ 100Hz */
+    desktop_state_t dstate = DESKTOP_STATE_ENTERING;
+    ui_console_t console;
+
     serial_write("[ ui ] desktop session started\n");
     serial_write("[ ui ] desktop exit chord alt+g+q active\n");
+    serial_write("[ ui ] desktop session state-machine v8 active\n");
+    serial_write("[ ui ] desktop console panel active\n");
+
+    /* --- ENTERING --- */
+    ui_console_init(&console);
+    ui_set_console_source(&console);
+    ui_console_push(&console, "Desktop session ready.");
 
     if (ui_get_scene() != SCENE_DESKTOP) {
         (void)ui_set_scene(SCENE_DESKTOP);
@@ -3061,10 +3425,22 @@ static void shell_run_desktop_session(void) {
     ui_render_windows();
     ui_render_launcher();
 
+    dstate = DESKTOP_STATE_ACTIVE;
+    serial_write("[ ui ] state transition -> ACTIVE\n");
+
     for (;;) {
-        i32 key = stage2_keyboard_getc_nonblocking();
+        i32 key;
+
+        if (dstate == DESKTOP_STATE_EXITING) break;
+
+        key = stage2_keyboard_getc_nonblocking();
         if (key < 0) {
             __asm__ volatile ("hlt");
+            continue;
+        }
+
+        /* Block input while action is running */
+        if (dstate == DESKTOP_STATE_RUNNING_ACTION) {
             continue;
         }
 
@@ -3077,12 +3453,6 @@ static void shell_run_desktop_session(void) {
                 chord_stage = 0;
             }
 
-            /*
-             * ALT+G+Q exit chord:
-             * 1) ALT held + G => arm exit stage for a short window.
-             * 2) Q within window exits; ALT is preferred but not strictly required
-             *    in step 2 to tolerate host/QEMU modifier state drops.
-             */
             if (alt_held) {
                 if ((ch == 'g' || ch == 'G') && chord_stage == 0) {
                     chord_stage = 1;
@@ -3094,6 +3464,8 @@ static void shell_run_desktop_session(void) {
             if (chord_stage == 1 && (ch == 'q' || ch == 'Q')) {
                 if (alt_held || now <= chord_deadline) {
                     serial_write("[ ui ] exit chord alt+g+q triggered\n");
+                    dstate = DESKTOP_STATE_EXITING;
+                    serial_write("[ ui ] state transition -> EXITING\n");
                     break;
                 }
                 chord_stage = 0;
@@ -3103,7 +3475,11 @@ static void shell_run_desktop_session(void) {
                 chord_stage = 0;
             }
 
-            if (ch == '\t') {
+            /* Ctrl+L: clear console */
+            if (ch == 0x0C) {
+                ui_console_clear(&console);
+                ui_console_push(&console, "(cleared)");
+            } else if (ch == '\t') {
                 ui_cycle_window_focus();
             } else if (ch == STAGE2_KEY_UP || ch == 'k' || ch == 'w') {
                 ui_launcher_prev();
@@ -3114,6 +3490,14 @@ static void shell_run_desktop_session(void) {
                 serial_write("[ ui ] launcher dispatch v2: ");
                 serial_write(selected);
                 serial_write("\n");
+
+                dstate = DESKTOP_STATE_RUNNING_ACTION;
+                serial_write("[ ui ] state transition -> RUNNING_ACTION\n");
+
+                desktop_dispatch_action(selected, boot_info, handoff, &console);
+
+                dstate = DESKTOP_STATE_ACTIVE;
+                serial_write("[ ui ] state transition -> ACTIVE\n");
             } else {
                 continue;
             }
@@ -3124,6 +3508,8 @@ static void shell_run_desktop_session(void) {
         ui_render_launcher();
     }
 
+    /* --- EXITING --- */
+    ui_set_console_source((ui_console_t *)0);
     ui_deactivate_launcher();
     shell_cls();
     shell_draw_title_bar();
@@ -3181,10 +3567,10 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "desktop")) {
         if (ui_enter_desktop_scene()) {
-            shell_run_desktop_session();
+            shell_run_desktop_session(boot_info, handoff);
         } else {
             if (ui_get_scene() == SCENE_DESKTOP) {
-                shell_run_desktop_session();
+                shell_run_desktop_session(boot_info, handoff);
             } else {
                 video_write("Failed to enter desktop scene.\n");
             }

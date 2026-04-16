@@ -49,6 +49,7 @@ required_patterns=(
     "[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)"
     "[ compat ] INT21h console/dta/drive ready (AH=06h/07h/0Ah/0Eh/1Ah/2Fh)"
     "[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..42h)"
+    "[ compat ] INT21h memory api ready (AH=48h/49h/4Ah)"
     "[ test ] int21 priority-a selftest: PASS"
     "[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/shutdown/reboot)"
     "[ tick ] irq0 #0000000000000001"
