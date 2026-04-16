@@ -3,6 +3,7 @@
 #include "elf64.h"
 #include "../proto/bootinfo.h"
 #include "../proto/handoff.h"
+#include "../proto/video_limits.h"
 
 #define PAGE_SIZE           4096ULL
 #define LARGE_PAGE_SIZE     0x200000ULL
@@ -961,8 +962,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
             BS->LocateProtocol, 3, &gop_guid, NULL, (VOID **)&gop
         );
         if (!EFI_ERROR(gop_status) && gop && gop->Mode && gop->Mode->Info) {
-            /* --- GOP mode selection --- */
-            /* Try to pick a preferred resolution (32bpp only). Non-fatal. */
+            /* --- GOP mode catalog + selection --- */
             {
                 static const struct { UINT32 w; UINT32 h; } preferred[] = {
                     {800,  600},
@@ -976,29 +976,60 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                 UINT32 best_pref = pref_count;       /* lower = better */
                 UINT32 mode_count = gop->Mode->MaxMode;
                 UINT32 mi;
+                UINT32 catalog_count = 0;
+
+                if (using_stage2) {
+                    handoff->gop_mode_count = 0;
+                    handoff->gop_active_mode_id = gop->Mode->Mode;
+                }
 
                 for (mi = 0; mi < mode_count; mi++) {
                     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode_info = NULL;
                     UINTN mode_info_size = 0;
+                    UINT32 bpp_val;
+                    UINT32 bytes_pp;
+                    UINT32 fits_backbuf;
                     EFI_STATUS qi = uefi_call_wrapper(
                         gop->QueryMode, 4, gop, mi, &mode_info_size, &mode_info
                     );
                     if (EFI_ERROR(qi) || !mode_info) continue;
 
-                    /* Only consider 32bpp modes */
-                    if (gop_detect_bpp(mode_info) != 32) continue;
+                    bpp_val = gop_detect_bpp(mode_info);
+                    bytes_pp = (bpp_val + 7U) / 8U;
+                    fits_backbuf = (mode_info->HorizontalResolution <= VIDEO_DRIVER_MAX_W &&
+                                   mode_info->VerticalResolution   <= VIDEO_DRIVER_MAX_H &&
+                                   bytes_pp <= VIDEO_DRIVER_MAX_BPP) ? 1U : 0U;
 
-                    for (UINT32 pi = 0; pi < pref_count; pi++) {
-                        if (mode_info->HorizontalResolution == preferred[pi].w &&
-                            mode_info->VerticalResolution   == preferred[pi].h &&
-                            pi < best_pref) {
-                            best_mode = mi;
-                            best_pref = pi;
-                            break;
+                    /* Populate GOP catalog entry */
+                    if (using_stage2 && catalog_count < VIDEO_GOP_CATALOG_MAX) {
+                        handoff_gop_mode_entry_t *entry = &handoff->gop_modes[catalog_count];
+                        entry->mode_id = mi;
+                        entry->width = mode_info->HorizontalResolution;
+                        entry->height = mode_info->VerticalResolution;
+                        entry->bpp = bpp_val;
+                        entry->pixels_per_scanline = mode_info->PixelsPerScanLine;
+                        entry->flags = fits_backbuf; /* bit 0: fits in driver backbuffer */
+                        catalog_count++;
+                    }
+
+                    /* Only consider 32bpp modes that fit driver limits for preference */
+                    if (bpp_val == 32 && fits_backbuf) {
+                        for (UINT32 pi = 0; pi < pref_count; pi++) {
+                            if (mode_info->HorizontalResolution == preferred[pi].w &&
+                                mode_info->VerticalResolution   == preferred[pi].h &&
+                                pi < best_pref) {
+                                best_mode = mi;
+                                best_pref = pi;
+                                break;
+                            }
                         }
                     }
 
                     uefi_call_wrapper(BS->FreePool, 1, mode_info);
+                }
+
+                if (using_stage2) {
+                    handoff->gop_mode_count = catalog_count;
                 }
 
                 if (best_mode != gop->Mode->Mode) {
@@ -1011,6 +1042,10 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                     } else {
                         Print(L"GOP: SetMode %d failed (%r), using default\r\n", best_mode, sm);
                     }
+                }
+
+                if (using_stage2) {
+                    handoff->gop_active_mode_id = gop->Mode->Mode;
                 }
             }
 

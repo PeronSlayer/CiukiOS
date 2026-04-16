@@ -131,11 +131,9 @@ static u32  g_color_bg;
 static u32  g_font_scale_x;
 static u32  g_font_scale_y;
 
-/* Double-buffer: max 2048x1080x4 = 8,847,360 bytes (supports pitch-padded resolutions) */
-#define VIDEO_BACKBUF_MAX_W    800U
-#define VIDEO_BACKBUF_MAX_H    600U
-#define VIDEO_BACKBUF_MAX_BPP  4U
-#define VIDEO_BACKBUF_MAX_BYTES (VIDEO_BACKBUF_MAX_W * VIDEO_BACKBUF_MAX_H * VIDEO_BACKBUF_MAX_BPP)
+/* Double-buffer: VIDEO_DRIVER_MAX_W * VIDEO_DRIVER_MAX_H * VIDEO_DRIVER_MAX_BPP bytes */
+#include "video_limits.h"
+#define VIDEO_BACKBUF_MAX_BYTES (VIDEO_DRIVER_MAX_W * VIDEO_DRIVER_MAX_H * VIDEO_DRIVER_MAX_BPP)
 
 static u8   g_backbuf[VIDEO_BACKBUF_MAX_BYTES] __attribute__((aligned(64)));
 static u8  *g_render_target;   /* points to g_backbuf or (u8*)g_fb_base */
