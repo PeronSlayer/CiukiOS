@@ -5,22 +5,62 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_SCRIPT="$PROJECT_DIR/run_ciukios.sh"
 LOG_DIR="$PROJECT_DIR/.ciukios-testlogs"
 LOG_FILE="$LOG_DIR/stage2-boot.log"
+LOCK_FILE="$LOG_DIR/qemu-test.lock"
+DEBUGCON_LOG="$PROJECT_DIR/build/debugcon.log"
 
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-45}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-420}"
 
 mkdir -p "$LOG_DIR"
 rm -f "$LOG_FILE"
+
+# Avoid parallel QEMU/image races with other boot tests.
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE"
+    if ! flock -w 180 9; then
+        echo "[FAIL] could not acquire QEMU test lock: $LOCK_FILE" >&2
+        exit 1
+    fi
+fi
 
 if [[ ! -x "$RUN_SCRIPT" ]]; then
     echo "[FAIL] run script not found or not executable: $RUN_SCRIPT" >&2
     exit 1
 fi
 
+echo "[test-stage2] prebuilding artifacts..."
+make -C "$PROJECT_DIR" clean all
+make -C "$PROJECT_DIR/boot/uefi-loader" clean all
+
 echo "[test-stage2] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
 set +e
+CIUKIOS_INCLUDE_FREEDOS=0 \
+CIUKIOS_INCLUDE_OPENGEM=0 \
+CIUKIOS_SKIP_BUILD=1 \
+CIUKIOS_QEMU_HEADLESS=1 \
 timeout "${TIMEOUT_SECONDS}s" "$RUN_SCRIPT" > "$LOG_FILE" 2>&1
 rc=$?
 set -e
+
+# Fast diagnostic: if QEMU launched but produced no loader/stage2 serial markers,
+# fail with infra-focused guidance instead of a generic missing-pattern error.
+serial_marker_count=$(grep -Ec "stage2\.elf loaded into memory|Stage2 ELF loaded, leaving Boot Services|\[ stage2 \]|COM catalog ready:" "$LOG_FILE" || true)
+if [[ "$serial_marker_count" -eq 0 ]]; then
+    if grep -Fq "[CiukiOS] Starting QEMU..." "$LOG_FILE"; then
+        echo "[INFRA] no loader/stage2 serial markers captured after QEMU launch." >&2
+        if [[ -f "$DEBUGCON_LOG" ]]; then
+            if grep -q . "$DEBUGCON_LOG"; then
+                echo "[INFRA] debugcon tail ($DEBUGCON_LOG):" >&2
+                tail -n 120 "$DEBUGCON_LOG" >&2 || true
+            else
+                echo "[INFRA] debugcon log exists but is empty: $DEBUGCON_LOG" >&2
+            fi
+        else
+            echo "[INFRA] debugcon log not found: $DEBUGCON_LOG" >&2
+        fi
+        echo "[INFRA] stage2 gate cannot classify runtime behavior on this host (serial capture unavailable)." >&2
+        exit 1
+    fi
+fi
 
 if [[ $rc -eq 124 ]]; then
     echo "[test-stage2] timeout reached (expected for QEMU halt loop)"

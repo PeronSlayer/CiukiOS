@@ -11,6 +11,7 @@ static void write_le16(u8 *p, u16 v) {
 
 int dos_mz_parse(const u8 *file, u32 file_size, dos_mz_info_t *out) {
     u32 header_size;
+    u32 declared_file_size;
     u32 module_size;
     u32 entry_offset;
     u32 stack_offset;
@@ -36,6 +37,14 @@ int dos_mz_parse(const u8 *file, u32 file_size, dos_mz_info_t *out) {
     out->cs = read_le16(file + 0x16);
     out->relocation_table_offset = read_le16(file + 0x18);
 
+    if (out->total_pages == 0U) {
+        return 0;
+    }
+
+    if (out->bytes_in_last_page > 512U) {
+        return 0;
+    }
+
     if (out->header_paragraphs == 0U) {
         return 0;
     }
@@ -45,7 +54,17 @@ int dos_mz_parse(const u8 *file, u32 file_size, dos_mz_info_t *out) {
         return 0;
     }
 
-    module_size = file_size - header_size;
+    if (out->bytes_in_last_page == 0U) {
+        declared_file_size = (u32)out->total_pages * 512U;
+    } else {
+        declared_file_size = ((u32)(out->total_pages - 1U) * 512U) + (u32)out->bytes_in_last_page;
+    }
+
+    if (declared_file_size < header_size || declared_file_size > file_size) {
+        return 0;
+    }
+
+    module_size = declared_file_size - header_size;
     if (module_size == 0U) {
         return 0;
     }
@@ -80,6 +99,7 @@ int dos_mz_build_loaded_image(
 ) {
     dos_mz_info_t info;
     u32 reloc_applied = 0;
+    u32 image_end;
 
     if (!file_buf || !info_out || !loaded_size_out || !reloc_applied_out) {
         return 0;
@@ -89,6 +109,8 @@ int dos_mz_build_loaded_image(
         return 0;
     }
 
+    image_end = info.header_size_bytes + info.module_size_bytes;
+
     for (u32 i = 0; i < (u32)info.relocation_count; i++) {
         u32 reloc_off = (u32)info.relocation_table_offset + (i * 4U);
         u16 fixup_off = read_le16(file_buf + reloc_off);
@@ -97,7 +119,7 @@ int dos_mz_build_loaded_image(
         u16 original;
         u16 patched;
 
-        if ((target_in_file + 1U) >= file_size) {
+        if ((target_in_file + 1U) >= image_end) {
             return 0;
         }
 

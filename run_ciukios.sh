@@ -10,11 +10,14 @@ OVMF_VARS_SRC="/usr/share/edk2/x64/OVMF_VARS.4m.fd"
 OVMF_VARS_DST="$BUILD_DIR/OVMF_VARS.4m.fd"
 IMAGE="$BUILD_DIR/ciukios.img"
 SKIP_STAGE2="${CIUKIOS_SKIP_STAGE2:-0}"
+SKIP_BUILD="${CIUKIOS_SKIP_BUILD:-0}"
 TRACE_INT="${CIUKIOS_TRACE_INT:-0}"
 INCLUDE_FREEDOS="${CIUKIOS_INCLUDE_FREEDOS:-1}"
 INCLUDE_OPENGEM="${CIUKIOS_INCLUDE_OPENGEM:-auto}"
 QEMU_NO_REBOOT="${CIUKIOS_QEMU_NO_REBOOT:-1}"
 QEMU_NO_SHUTDOWN="${CIUKIOS_QEMU_NO_SHUTDOWN:-1}"
+QEMU_HEADLESS="${CIUKIOS_QEMU_HEADLESS:-0}"
+QEMU_BOOT_ORDER="${CIUKIOS_QEMU_BOOT_ORDER:-c}"
 FREEDOS_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 OPENGEM_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime/OPENGEM"
 
@@ -44,15 +47,19 @@ if [[ ! -f "$OVMF_VARS_SRC" ]]; then
     exit 1
 fi
 
-echo "[CiukiOS] Build kernel + stage2..."
-cd "$PROJECT_DIR"
-make clean
-make
+if [[ "$SKIP_BUILD" == "1" ]]; then
+    echo "[CiukiOS] Build steps skipped (CIUKIOS_SKIP_BUILD=1)"
+else
+    echo "[CiukiOS] Build kernel + stage2..."
+    cd "$PROJECT_DIR"
+    make clean
+    make
 
-echo "[CiukiOS] Build loader UEFI..."
-cd "$LOADER_DIR"
-make clean
-make
+    echo "[CiukiOS] Build loader UEFI..."
+    cd "$LOADER_DIR"
+    make clean
+    make
+fi
 
 echo "[CiukiOS] Preparing FAT image..."
 mkdir -p "$BUILD_DIR"
@@ -150,6 +157,14 @@ if [[ "$QEMU_NO_REBOOT" == "1" ]]; then
 fi
 if [[ "$QEMU_NO_SHUTDOWN" == "1" ]]; then
   QEMU_ARGS+=(-no-shutdown)
+fi
+
+if [[ "$QEMU_HEADLESS" == "1" ]]; then
+    QEMU_ARGS+=(-nographic)
+fi
+
+if [[ -n "$QEMU_BOOT_ORDER" ]]; then
+    QEMU_ARGS+=(-boot "order=${QEMU_BOOT_ORDER}")
 fi
 
 if [[ "$TRACE_INT" == "1" ]]; then
