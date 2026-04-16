@@ -41,13 +41,18 @@ Yes, integrating FreeDOS files is possible and can be very useful.
 3. FreeCOM upstream sync:
    - `./scripts/sync_freecom_repo.sh`
    - source repo: `https://github.com/FDOS/freecom`
+   - orchestration + lock update: `./scripts/sync_freedos_upstreams.sh`
+   - lock file: `third_party/freedos/upstreams.lock`
 4. FreeCOM COMMAND.COM build/import:
    - `./scripts/build_freecom.sh`
    - tries source build from `third_party/freedos/sources/freecom`
    - falls back to official `freecom.zip` if local ia16 runtime headers/libraries are missing
-5. Image integration toggle:
+5. Reproducible runtime package index:
+   - `./scripts/generate_freedos_runtime_manifest.sh`
+   - output: `third_party/freedos/runtime-manifest.csv`
+6. Image integration toggle:
    - `CIUKIOS_INCLUDE_FREEDOS=1 ./run_ciukios.sh`
-6. Image copy behavior:
+7. Image copy behavior:
    - all files copied to `A:\\FREEDOS\\`
    - selected files mirrored to root when present (`COMMAND.COM`, `KERNEL.SYS`, `FDCONFIG.SYS`, `FDAUTO.BAT -> AUTOEXEC.BAT`)
 
@@ -62,6 +67,8 @@ Yes, integrating FreeDOS files is possible and can be very useful.
 1. **Automated Pipeline Validation**:
    - `make test-freedos-pipeline`: runs deterministic checks to ensure FreeDOS import/build artifacts are present and consistent.
    - Validates that `third_party/freedos/manifest.csv` is well-formed.
+   - Validates that `third_party/freedos/runtime-manifest.csv` is reproducible for the current runtime tree.
+   - Validates that `third_party/freedos/upstreams.lock` contains upstream sync metadata.
    - Checks that all required files (marked `required=yes`) are present in `third_party/freedos/runtime/`.
    - Returns non-zero exit code on missing essentials; zero on all checks passing.
 2. **Integration with CI**:

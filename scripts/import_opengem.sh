@@ -227,6 +227,8 @@ for exe_file in "${KEY_EXES[@]}"; do
     echo "[OK] manifest: $rel"
 done
 
+"$PROJECT_DIR/scripts/generate_freedos_runtime_manifest.sh"
+
 echo ""
 echo "========================================"
 echo "[PASS] OpenGEM import successful"

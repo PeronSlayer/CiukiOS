@@ -18,8 +18,10 @@ Integrate FreeDOS as a compatibility partner inside CiukiOS, not as a replacemen
 1. Import pipeline available: `scripts/import_freedos.sh`.
 2. FreeCOM source sync available: `scripts/sync_freecom_repo.sh`.
 3. FreeCOM build/import pipeline available: `scripts/build_freecom.sh` (source build with package fallback).
-4. Asset bundle directory: `third_party/freedos/runtime/`.
-5. Build/run integration: `run_ciukios.sh` copies bundle into image (`A:\FREEDOS\` + selected root mirrors).
+4. Upstream orchestration + lock available: `scripts/sync_freedos_upstreams.sh` -> `third_party/freedos/upstreams.lock`.
+5. Reproducible runtime package index: `third_party/freedos/runtime-manifest.csv`.
+6. Asset bundle directory: `third_party/freedos/runtime/`.
+7. Build/run integration: `run_ciukios.sh` copies bundle into image (`A:\FREEDOS\` + selected root mirrors).
 
 ## Runtime Contract (Near Term)
 1. FreeDOS `COMMAND.COM` should be launchable from CiukiOS DOS execution path.
@@ -37,4 +39,4 @@ Integrate FreeDOS as a compatibility partner inside CiukiOS, not as a replacemen
 3. Licensing/provenance tracking is mandatory for distributable bundles.
 
 ## Immediate Next Technical Step
-1. Implement true DOS `.COM`/`.EXE` loader path and execute imported `COMMAND.COM` as first real symbiotic runtime validation.
+1. Expand runtime behavioral coverage using imported FreeDOS/OpenGEM tools as compatibility stress workloads.

@@ -30,8 +30,8 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 ### Phase 3 - Symbiotic FreeDOS Integration
 - `DONE` FreeDOS runtime import + pipeline validation
 - `DONE` OpenGEM optional integration flow
-- `IN PROGRESS` richer runtime bundle composition and packaging reliability
-- `PLANNED` upstream sync automation and reproducible import manifests
+- `DONE` richer runtime bundle composition and packaging reliability (deterministic runtime manifest + pipeline reproducibility check)
+- `DONE` upstream sync automation and reproducible import manifests (`freedos-sync-upstreams`, `third_party/freedos/upstreams.lock`)
 
 ### Phase 4 - UX and Desktop Layer
 - `DONE` desktop scene baseline and interaction shell

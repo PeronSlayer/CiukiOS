@@ -221,6 +221,8 @@ if [[ -f "$MANIFEST" ]]; then
     trap - EXIT
 fi
 
+"$PROJECT_DIR/scripts/generate_freedos_runtime_manifest.sh"
+
 echo "[DONE] FreeCOM integration complete"
 echo "- command:  $RUNTIME_DIR/COMMAND.COM"
 echo "- sha256:   $sha"

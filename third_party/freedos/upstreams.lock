@@ -1,0 +1,4 @@
+freecom.repo=https://github.com/FDOS/freecom.git
+freecom.commit=ec6c63f13be0b254151c76cbbbec3c80ae33741b
+opengem.zip.path=third_party/freedos/sources/opengem/opengem.zip
+opengem.zip.sha256=

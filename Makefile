@@ -171,7 +171,13 @@ freedos-import:
 freecom-sync:
 	./scripts/sync_freecom_repo.sh
 
+freedos-sync-upstreams:
+	bash ./scripts/sync_freedos_upstreams.sh
+
+freedos-runtime-manifest:
+	bash ./scripts/generate_freedos_runtime_manifest.sh
+
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-fat-compat test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-fat-compat test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest

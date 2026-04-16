@@ -112,6 +112,8 @@ mv "$tmp_manifest" "$MANIFEST"
 trap - EXIT
 touch "$DEST_DIR/.gitkeep"
 
+"$PROJECT_DIR/scripts/generate_freedos_runtime_manifest.sh"
+
 echo "[DONE] FreeDOS import complete"
 echo "- runtime dir: $DEST_DIR"
 echo "- manifest:    $MANIFEST"

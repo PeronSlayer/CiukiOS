@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 FREEDOS_RUNTIME="${PROJECT_ROOT}/third_party/freedos/runtime"
 FREEDOS_MANIFEST="${PROJECT_ROOT}/third_party/freedos/manifest.csv"
+RUNTIME_MANIFEST="${PROJECT_ROOT}/third_party/freedos/runtime-manifest.csv"
+UPSTREAM_LOCK="${PROJECT_ROOT}/third_party/freedos/upstreams.lock"
 
 FAILED=0
 
@@ -90,7 +92,41 @@ else
     print_check "freecom git repo available" "SKIP (optional)"
 fi
 
-# ===== Check 6: OpenGEM GUI payload (optional) =====
+# ===== Check 6: Runtime manifest reproducibility =====
+if [ -f "$RUNTIME_MANIFEST" ]; then
+    tmp_runtime_manifest="$(mktemp)"
+    trap 'rm -f "$tmp_runtime_manifest"' EXIT
+
+    bash "${PROJECT_ROOT}/scripts/generate_freedos_runtime_manifest.sh" "$tmp_runtime_manifest" >/dev/null
+
+    if cmp -s "$RUNTIME_MANIFEST" "$tmp_runtime_manifest"; then
+        print_check "runtime manifest reproducible" "PASS"
+    else
+        print_check "runtime manifest reproducible" "FAIL"
+        FAILED=$((FAILED + 1))
+    fi
+
+    rm -f "$tmp_runtime_manifest"
+    trap - EXIT
+else
+    print_check "runtime manifest present" "FAIL"
+    FAILED=$((FAILED + 1))
+fi
+
+# ===== Check 7: Upstream lock presence =====
+if [ -f "$UPSTREAM_LOCK" ]; then
+    if grep -q '^freecom.repo=' "$UPSTREAM_LOCK" && grep -q '^freecom.commit=' "$UPSTREAM_LOCK"; then
+        print_check "upstream lock file" "PASS"
+    else
+        print_check "upstream lock file" "FAIL"
+        FAILED=$((FAILED + 1))
+    fi
+else
+    print_check "upstream lock file" "FAIL"
+    FAILED=$((FAILED + 1))
+fi
+
+# ===== Check 8: OpenGEM GUI payload (optional) =====
 OPENGEM_RUNTIME="${FREEDOS_RUNTIME}/OPENGEM"
 OPENGEM_REQUIRED="${CIUKIOS_REQUIRE_OPENGEM:-0}"
 
