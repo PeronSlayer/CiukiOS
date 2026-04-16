@@ -5,132 +5,71 @@
 
 /*
  * UI Module for Stage2
- * Reusable graphics/text rendering helpers and scene management
+ * Deterministic pixel-aligned layout engine with 8px grid
  */
 
-/* Desktop Layout v2 Grid Constants */
-#define UI_LAYOUT_TOP_BAR_H      32U
-#define UI_LAYOUT_STATUS_BAR_H   24U
-#define UI_LAYOUT_MARGIN_H       10U
-#define UI_LAYOUT_WORK_TOP       (UI_LAYOUT_TOP_BAR_H + UI_LAYOUT_MARGIN_H)
-#define UI_LAYOUT_WORK_BOTTOM    UI_LAYOUT_STATUS_BAR_H
+/* ===== Grid System ===== */
+#define UI_GRID              8U
+#define UI_SNAP(v)           (((v) / UI_GRID) * UI_GRID)
 
-/* Scene enumeration */
+/* Zone height tokens (in grid units) */
+#define UI_TOP_BAR_GRIDS     4U   /* 32px */
+#define UI_STATUS_BAR_GRIDS  3U   /* 24px */
+#define UI_GAP_GRIDS         1U   /*  8px */
+#define UI_DOCK_W_GRIDS     20U   /* 160px */
+
+/* Derived pixel constants */
+#define UI_TOP_BAR_H        (UI_TOP_BAR_GRIDS   * UI_GRID)  /* 32 */
+#define UI_STATUS_BAR_H     (UI_STATUS_BAR_GRIDS * UI_GRID)  /* 24 */
+#define UI_GAP              (UI_GAP_GRIDS        * UI_GRID)  /*  8 */
+#define UI_DOCK_W           (UI_DOCK_W_GRIDS     * UI_GRID)  /* 160 */
+
+/* Minimum supported resolution */
+#define UI_MIN_FB_W         800U
+#define UI_MIN_FB_H         600U
+
+/* ===== Computed Layout Zones ===== */
+typedef struct {
+    u32 fb_w, fb_h;
+    /* top bar: full width, top edge */
+    u32 top_x, top_y, top_w, top_h;
+    /* status bar: full width, bottom edge */
+    u32 status_x, status_y, status_w, status_h;
+    /* workspace: full area between top and status bars */
+    u32 work_x, work_y, work_w, work_h;
+    /* dock panel: left column of workspace */
+    u32 dock_x, dock_y, dock_w, dock_h;
+    /* content area: right of dock, holds windows */
+    u32 content_x, content_y, content_w, content_h;
+    int valid;
+} ui_layout_t;
+
+void ui_compute_layout(ui_layout_t *L, u32 fb_w, u32 fb_h);
+
+/* ===== Scene Management ===== */
 typedef enum {
     SCENE_BOOT_SPLASH = 0,
     SCENE_DESKTOP = 1,
 } ui_scene_t;
 
-/**
- * Get current active scene
- * @return Current scene enum value
- */
 ui_scene_t ui_get_scene(void);
-
-/**
- * Switch to a new scene
- * @param scene New scene to activate
- * @return 1 if scene switched, 0 if scene not available/already active
- */
 int ui_set_scene(ui_scene_t scene);
-
-/**
- * Render the current scene (dispatch to appropriate renderer)
- * @return 1 if rendered successfully, 0 if renderer unavailable
- */
 int ui_render_scene(void);
-
-/**
- * Early desktop scene activation (called from shell or command)
- * @return 1 if desktop scene activated, 0 otherwise
- */
 int ui_enter_desktop_scene(void);
 
-/**
- * Draw a horizontal top bar with centered text
- * @param text Text to display centered in the bar
- * @param bg_color Background color (ARGB32)
- * @param fg_color Foreground text color (ARGB32)
- */
+/* ===== Primitives ===== */
 void ui_draw_top_bar(const char *text, u32 bg_color, u32 fg_color);
-
-/**
- * Draw centered text at specified row (text mode)
- * @param row Text row (0-based from viewport top)
- * @param text Text to center
- */
 void ui_write_centered_row(u32 row, const char *text);
-
-/**
- * Draw a progress bar in graphical mode
- * @param x_start Left edge pixel coordinate
- * @param y_start Top edge pixel coordinate
- * @param width Bar width in pixels
- * @param height Bar height in pixels
- * @param progress_percent Progress 0-100
- * @param border_color Border color (ARGB32)
- * @param bg_color Background fill color (ARGB32)
- * @param fill_color Fill color for progress (ARGB32)
- */
-void ui_draw_progress_bar(
-    u32 x_start,
-    u32 y_start,
-    u32 width,
-    u32 height,
-    u32 progress_percent,
-    u32 border_color,
-    u32 bg_color,
-    u32 fill_color
-);
-
-/**
- * Draw a rectangular panel/frame
- * @param x_start Left edge pixel coordinate
- * @param y_start Top edge pixel coordinate
- * @param width Panel width in pixels
- * @param height Panel height in pixels
- * @param border_color Border color (ARGB32)
- * @param bg_color Fill color (ARGB32)
- */
-void ui_draw_panel(
-    u32 x_start,
-    u32 y_start,
-    u32 width,
-    u32 height,
-    u32 border_color,
-    u32 bg_color
-);
-
-/**
- * Draw a horizontal separator line (footer-style)
- * @param y_pos Y coordinate of the line
- * @param color Line color (ARGB32)
- */
+void ui_draw_progress_bar(u32 x_start, u32 y_start, u32 width, u32 height,
+    u32 progress_percent, u32 border_color, u32 bg_color, u32 fill_color);
+void ui_draw_panel(u32 x_start, u32 y_start, u32 width, u32 height,
+    u32 border_color, u32 bg_color);
 void ui_draw_separator_line(u32 y_pos, u32 color);
+u32  ui_pixel_y_to_text_row(u32 y_pixel);
+int  ui_draw_boot_hud(const char *version_string, const char *mode_string,
+    u32 progress_percent);
 
-/**
- * Get appropriate text row position for a given pixel Y coordinate
- * (useful for placing text in graphical regions)
- * @param y_pixel Pixel Y coordinate
- * @return Text row number (character-based)
- */
-u32 ui_pixel_y_to_text_row(u32 y_pixel);
-
-/**
- * Draw boot HUD (Heads-Up Display) in graphical mode
- * Shows system status during boot sequence
- * @param version_string Version string to display (e.g., "v1.0")
- * @param mode_string Boot mode string (e.g., "gfx" or "ascii")
- * @param progress_percent Current progress 0-100
- * @return 1 if HUD was drawn (graphics available), 0 otherwise
- */
-int ui_draw_boot_hud(
-    const char *version_string,
-    const char *mode_string,
-    u32 progress_percent
-);
-
-/* Window Manager */
+/* ===== Window Manager ===== */
 typedef struct {
     const char *title;
     u32 x, y, w, h;
@@ -138,15 +77,15 @@ typedef struct {
 } ui_window_t;
 
 void ui_cycle_window_focus(void);
-int ui_get_focused_window(void);
+int  ui_get_focused_window(void);
 void ui_render_windows(void);
 
-/* Launcher */
-void ui_activate_launcher(void);
-void ui_deactivate_launcher(void);
-void ui_launcher_next(void);
-void ui_launcher_prev(void);
+/* ===== Launcher ===== */
+void        ui_activate_launcher(void);
+void        ui_deactivate_launcher(void);
+void        ui_launcher_next(void);
+void        ui_launcher_prev(void);
 const char *ui_get_launcher_item(void);
-void ui_render_launcher(void);
+void        ui_render_launcher(void);
 
 #endif /* STAGE2_UI_H */
