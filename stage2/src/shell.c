@@ -3776,6 +3776,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             if (line_len > 0) {
                 line_len--;
                 video_write("\b \b");
+                video_present();
             }
             continue;
         }
@@ -3797,5 +3798,6 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
         line[line_len++] = (char)ascii;
         video_putchar((char)ascii);
+        video_present();
     }
 }
