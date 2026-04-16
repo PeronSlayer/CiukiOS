@@ -452,13 +452,37 @@ void ui_render_launcher(void) {
     u32 launcher_y = UI_LAYOUT_WORK_TOP + (UI_WINDOW_H * 2U) + 30U;
     u32 item_height = 20U;
     u32 item_y, item_row;
+    u32 panel_h = (LAUNCHER_ITEMS * item_height) + 28U; /* header + items + padding */
+    u32 header_row;
+
     if (!video_ready() || !g_launcher_active) return;
-    ui_draw_panel(launcher_x, launcher_y, 300U, (LAUNCHER_ITEMS * item_height) + 10U, 0x00505050U, 0x00151515U);
+
+    /* Draw launcher dock panel */
+    ui_draw_panel(launcher_x, launcher_y, 300U, panel_h, 0x00505050U, 0x00151515U);
+
+    /* Draw dock header */
+    header_row = ui_pixel_y_to_text_row(launcher_y + 4U);
+    video_set_colors(0x0000FF00U, 0x00151515U); /* bright green */
+    video_set_cursor(8U + (launcher_x / 8U), header_row);
+    video_write("[ Dock ]");
+
+    /* Draw separator */
+    video_fill_rect(launcher_x + 1U, launcher_y + 18U, 300U - 2U, 1U, 0x00505050U);
+
+    /* Draw launcher items with selection highlight */
     for (i = 0; i < LAUNCHER_ITEMS; i++) {
-        item_y = launcher_y + 5U + (i * item_height);
+        item_y = launcher_y + 22U + (i * item_height);
         item_row = ui_pixel_y_to_text_row(item_y);
-        video_set_colors(i == g_launcher_focus ? 0x0000FF00U : 0x00808080U, 0x00151515U);
-        video_set_cursor(5U, item_row);
+
+        if (i == g_launcher_focus) {
+            /* Selected item: bright background highlight */
+            video_fill_rect(launcher_x + 2U, item_y, 296U, item_height - 2U, 0x00003333U);
+            video_set_colors(0x00FFFFU, 0x00003333U); /* bright yellow on dark blue */
+        } else {
+            video_set_colors(0x00808080U, 0x00151515U); /* dim gray */
+        }
+
+        video_set_cursor(5U + (launcher_x / 8U), item_row);
         video_write(i == g_launcher_focus ? "> " : "  ");
         video_write(g_launcher_items[i]);
         video_set_colors(0x00C0C0C0U, 0x00000000U);
