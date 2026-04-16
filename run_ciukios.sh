@@ -13,10 +13,12 @@ SKIP_STAGE2="${CIUKIOS_SKIP_STAGE2:-0}"
 TRACE_INT="${CIUKIOS_TRACE_INT:-0}"
 INCLUDE_FREEDOS="${CIUKIOS_INCLUDE_FREEDOS:-1}"
 INCLUDE_OZONE="${CIUKIOS_INCLUDE_OZONE:-auto}"
+INCLUDE_OPENGEM="${CIUKIOS_INCLUDE_OPENGEM:-auto}"
 QEMU_NO_REBOOT="${CIUKIOS_QEMU_NO_REBOOT:-1}"
 QEMU_NO_SHUTDOWN="${CIUKIOS_QEMU_NO_SHUTDOWN:-1}"
 FREEDOS_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 OZONE_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime/OZONE"
+OPENGEM_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime/OPENGEM"
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -134,6 +136,31 @@ else
     echo "[CiukiOS] oZone GUI integration disabled (CIUKIOS_INCLUDE_OZONE=0)"
 fi
 echo "[CiukiOS] oZone inclusion status: $( [[ $OZONE_INCLUDED -eq 1 ]] && echo INCLUDED || echo SKIPPED )"
+
+# === OpenGEM GUI optional payload ===
+OPENGEM_INCLUDED=0
+if [[ "$INCLUDE_OPENGEM" == "auto" ]]; then
+    if [[ -d "$OPENGEM_RUNTIME_DIR" ]] && find "$OPENGEM_RUNTIME_DIR" -maxdepth 1 -type f | grep -q .; then
+        INCLUDE_OPENGEM=1
+    else
+        INCLUDE_OPENGEM=0
+    fi
+fi
+
+if [[ "$INCLUDE_OPENGEM" == "1" ]]; then
+    if [[ -d "$OPENGEM_RUNTIME_DIR" ]]; then
+        # OpenGEM has a deep directory tree — use recursive mcopy
+        mmd -i "$IMAGE" ::FREEDOS/OPENGEM 2>/dev/null || true
+        mcopy -s -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR"/* ::FREEDOS/OPENGEM/ 2>/dev/null || true
+        OPENGEM_INCLUDED=1
+        echo "[CiukiOS] OpenGEM GUI payload copied from: $OPENGEM_RUNTIME_DIR"
+    else
+        echo "[CiukiOS] OpenGEM GUI files not found (optional): $OPENGEM_RUNTIME_DIR"
+    fi
+else
+    echo "[CiukiOS] OpenGEM GUI integration disabled (CIUKIOS_INCLUDE_OPENGEM=0)"
+fi
+echo "[CiukiOS] OpenGEM inclusion status: $( [[ $OPENGEM_INCLUDED -eq 1 ]] && echo INCLUDED || echo SKIPPED )"
 
 echo "[CiukiOS] Preparing OVMF_VARS..."
 cp "$OVMF_VARS_SRC" "$OVMF_VARS_DST"
