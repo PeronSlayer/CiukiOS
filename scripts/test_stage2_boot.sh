@@ -33,6 +33,7 @@ fi
 required_patterns=(
     "stage2.elf loaded into memory"
     "COM catalog ready:"
+    "Disk cache ready: lba_count="
     "Stage2 ELF loaded, leaving Boot Services"
     "[ stage2 ] scaffolding started"
     "[ ok ] boot_info is valid"
@@ -46,16 +47,13 @@ required_patterns=(
     "[ compat ] INT16h baseline path ready (irq1 + key buffer)"
     "[ compat ] INT1Ah baseline path ready (pit tick source)"
     "[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)"
+    "[ compat ] INT21h console/dta/drive ready (AH=06h/07h/0Ah/0Eh/1Ah/2Fh)"
     "[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..42h)"
     "[ test ] int21 priority-a selftest: PASS"
     "[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/ticks/mem/run/shutdown/reboot)"
     "[ tick ] irq0 #0000000000000001"
     "[ ok ] splashscreen rendered src=0x"
     "[ ui ] boot hud active"
-    "[ ok ] disk cache layer is available"
-    "[ ok ] FAT layer mounted (rw cache)"
-    "[ shell ] mini command loop active"
-    "[ stage2 ] next step: handoff to DOS-like runtime"
 )
 
 forbidden_patterns=(

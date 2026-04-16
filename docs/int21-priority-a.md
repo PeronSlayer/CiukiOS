@@ -7,21 +7,27 @@ Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compat
 1. `AH=00h` - terminate program (`INT 20h` equivalent path).
 2. `AH=01h` - blocking char input with echo (returns char in `AL`).
 3. `AH=02h` - output character in `DL` (returns char in `AL`).
-4. `AH=08h` - blocking char input without echo.
-5. `AH=0Bh` - keyboard status (`AL=00h` empty, `AL=FFh` ready).
-6. `AH=0Ch` - keyboard flush + deterministic follow-up input dispatch subset.
+4. `AH=06h` - direct console I/O (output char, or non-blocking input when `DL=FFh`).
+5. `AH=07h` - blocking char input without echo.
+6. `AH=08h` - blocking char input without echo.
 7. `AH=09h` - print `$`-terminated string.
-8. `AH=19h` - get current default drive (`AL=0`, drive `A:`).
-9. `AH=25h` - set interrupt vector (stores far pointer from `DS:DX`).
-10. `AH=30h` - get DOS version (`6.22`).
-11. `AH=35h` - get interrupt vector (returns far pointer in `ES:BX`).
-12. `AH=3Eh` - close handle (supports std handles `0/1/2`, validates others).
-13. `AH=3Fh` - read handle (stdin baseline on handle `0`, deterministic errors for others).
-14. `AH=40h` - write handle (stdout/stderr baseline on handles `1/2`, deterministic errors for others).
-15. `AH=4Dh` - get last process return code (`AL`) + termination type (`AH`).
-16. `AH=51h` - get current PSP segment (`BX`).
-17. `AH=62h` - get current PSP segment (`BX`) (DOS 3+ style alias).
-18. `AH=4Ch` - terminate process with return code.
+8. `AH=0Ah` - buffered line input (`DS:DX` DOS line-buffer format).
+9. `AH=0Bh` - keyboard status (`AL=00h` empty, `AL=FFh` ready).
+10. `AH=0Ch` - keyboard flush + deterministic follow-up input dispatch subset (`01h`, `08h`, `0Ah`).
+11. `AH=0Eh` - set default drive (`DL=0..25`, deterministic return `AL=01h`).
+12. `AH=19h` - get current default drive.
+13. `AH=1Ah` - set DTA pointer (`DS:DX`).
+14. `AH=25h` - set interrupt vector (stores far pointer from `DS:DX`).
+15. `AH=2Fh` - get DTA pointer (`ES:BX`).
+16. `AH=30h` - get DOS version (`6.22`).
+17. `AH=35h` - get interrupt vector (returns far pointer in `ES:BX`).
+18. `AH=3Eh` - close handle (supports std handles `0/1/2`, validates others).
+19. `AH=3Fh` - read handle (stdin baseline on handle `0`, deterministic errors for others).
+20. `AH=40h` - write handle (stdout/stderr baseline on handles `1/2`, deterministic errors for others).
+21. `AH=4Dh` - get last process return code (`AL`) + termination type (`AH`).
+22. `AH=51h` - get current PSP segment (`BX`).
+23. `AH=62h` - get current PSP segment (`BX`) (DOS 3+ style alias).
+24. `AH=4Ch` - terminate process with return code.
 
 ## Deterministic Stubs (Not Fully Implemented Yet)
 1. `AH=3Ch` - create/truncate file: returns `CF=1`, `AX=0005h`.
@@ -48,12 +54,18 @@ FN  | Status               | Implementation Details
 00h | IMPLEMENTED          | Program termination via exit code register
 01h | IMPLEMENTED          | Blocking char input with echo
 02h | IMPLEMENTED          | Blocking char output
+06h | IMPLEMENTED          | Direct console I/O (DL!=FFh output, DL=FFh non-blocking input)
+07h | IMPLEMENTED          | Blocking char input without echo
 08h | IMPLEMENTED          | Blocking char input without echo
+09h | IMPLEMENTED          | Print $-terminated string
+0Ah | IMPLEMENTED          | Buffered line input via DOS-compatible input buffer
 0Bh | IMPLEMENTED          | Keyboard status (AL=00h/FFh)
 0Ch | IMPLEMENTED          | Flush keyboard buffer + deterministic follow-up subset
-09h | IMPLEMENTED          | Print $-terminated string
-19h | IMPLEMENTED          | Get current default drive (fixed to A:)
+0Eh | IMPLEMENTED          | Set current default drive (returns AL=01h)
+19h | IMPLEMENTED          | Get current default drive (runtime state)
+1Ah | IMPLEMENTED          | Set DTA pointer from DS:DX
 25h | IMPLEMENTED          | Set interrupt vector (stores pointer DS:DX)
+2Fh | IMPLEMENTED          | Get DTA pointer in ES:BX
 30h | IMPLEMENTED          | Get DOS version (returns 6.22)
 35h | IMPLEMENTED          | Get interrupt vector (returns pointer ES:BX)
 3Ch | DETERMINISTIC_STUB   | Create/truncate returns access denied (AX=0005h)
@@ -76,7 +88,8 @@ FN  | Status               | Implementation Details
 ## Next Priority-A Extensions
 1. Formal memory allocator backend for `48h/49h/4Ah`.
 2. Real FAT-backed handle table for `3Ch-42h` (replace current deterministic stubs/baseline).
-3. Additional DOS error code mapping consistency checks.
+3. Improve DOS-like line editor behavior for `0Ah` (editing keys/history/overflow signaling).
+4. Additional DOS error code mapping consistency checks.
 
 ## Test Criteria per Function
 1. Nominal case.

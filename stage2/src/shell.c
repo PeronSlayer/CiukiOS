@@ -645,6 +645,9 @@ static u32 g_int21_vectors[256];
 static u8 g_int21_last_return_code = 0U;
 static u8 g_int21_last_termination_type = 0U;
 static i32 g_int21_pending_stdin_char = -1;
+static u8 g_int21_default_drive = 0U;
+static u16 g_int21_dta_segment = 0U;
+static u16 g_int21_dta_offset = 0x0080U;
 
 static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
     if (!ctx || off >= ctx->image_size) {
@@ -657,6 +660,9 @@ static u8 shell_int21_read_char_blocking(void) {
     if (g_int21_pending_stdin_char >= 0) {
         u8 ch = (u8)g_int21_pending_stdin_char;
         g_int21_pending_stdin_char = -1;
+        if (ch == '\n') {
+            return '\r';
+        }
         return ch;
     }
 
@@ -670,6 +676,25 @@ static u8 shell_int21_read_char_blocking(void) {
 static void shell_int21_flush_input(void) {
     g_int21_pending_stdin_char = -1;
     stage2_keyboard_flush_buffer();
+}
+
+static i32 shell_int21_read_char_nonblocking(void) {
+    if (g_int21_pending_stdin_char >= 0) {
+        i32 ch = g_int21_pending_stdin_char;
+        g_int21_pending_stdin_char = -1;
+        if (ch == '\n') {
+            return '\r';
+        }
+        return ch;
+    }
+
+    {
+        i32 ch = stage2_keyboard_getc_nonblocking();
+        if (ch == '\n') {
+            return '\r';
+        }
+        return ch;
+    }
 }
 
 static int shell_int21_resolve_rw_buffer(ciuki_dos_context_t *ctx, u16 off, u16 count, u8 **buf_out) {
@@ -693,6 +718,54 @@ static int shell_int21_resolve_rw_buffer(ciuki_dos_context_t *ctx, u16 off, u16 
     return 1;
 }
 
+static int shell_int21_buffered_line_input(ciuki_dos_context_t *ctx, u16 off) {
+    u8 *buf;
+    u8 max_len;
+    u8 count = 0;
+
+    if (!shell_int21_resolve_rw_buffer(ctx, off, 3U, &buf)) {
+        return 0;
+    }
+
+    max_len = buf[0];
+    if (max_len == 0U) {
+        buf[1] = 0U;
+        buf[2] = '\r';
+        return 1;
+    }
+
+    if ((u32)off + 2U + (u32)max_len >= ctx->image_size) {
+        return 0;
+    }
+
+    for (;;) {
+        u8 ch = shell_int21_read_char_blocking();
+
+        if (ch == '\b') {
+            if (count > 0U) {
+                count--;
+                video_putchar('\b');
+            }
+            continue;
+        }
+
+        if (ch == '\r') {
+            break;
+        }
+
+        if (count < max_len) {
+            buf[2U + count] = ch;
+            count++;
+            video_putchar((char)ch);
+        }
+    }
+
+    buf[1] = count;
+    buf[2U + count] = '\r';
+    video_putchar('\n');
+    return 1;
+}
+
 static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
     u8 ah;
     u8 al;
@@ -708,6 +781,31 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     if (ah == 0x02U) {
         video_putchar((char)(regs->dx & 0x00FFU));
         regs->ax = (u16)((regs->ax & 0xFF00U) | (regs->dx & 0x00FFU));
+        return;
+    }
+
+    if (ah == 0x06U) {
+        u8 dl = (u8)(regs->dx & 0x00FFU);
+        if (dl != 0xFFU) {
+            video_putchar((char)dl);
+            regs->ax = (u16)((regs->ax & 0xFF00U) | dl);
+            return;
+        }
+
+        {
+            i32 ch = shell_int21_read_char_nonblocking();
+            if (ch < 0) {
+                regs->ax = (u16)(regs->ax & 0xFF00U);
+            } else {
+                regs->ax = (u16)((regs->ax & 0xFF00U) | (u16)((u8)ch));
+            }
+        }
+        return;
+    }
+
+    if (ah == 0x07U) {
+        u8 ch = shell_int21_read_char_blocking();
+        regs->ax = (u16)((regs->ax & 0xFF00U) | ch);
         return;
     }
 
@@ -750,6 +848,14 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    if (ah == 0x0AU) {
+        if (!shell_int21_buffered_line_input(ctx, regs->dx)) {
+            regs->carry = 1U;
+            regs->ax = 0x0005U; /* access denied (invalid buffer range) */
+        }
+        return;
+    }
+
     if (ah == 0x0BU) {
         if (g_int21_pending_stdin_char >= 0) {
             regs->ax = (u16)((regs->ax & 0xFF00U) | 0x00FFU);
@@ -788,13 +894,36 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
             return;
         }
 
+        if (al == 0x0AU) {
+            if (!shell_int21_buffered_line_input(ctx, regs->dx)) {
+                regs->carry = 1U;
+                regs->ax = 0x0005U;
+            }
+            return;
+        }
+
         /* Flush-only deterministic path for unimplemented follow-up input functions. */
         return;
     }
 
+    if (ah == 0x0EU) {
+        u8 drive = (u8)(regs->dx & 0x00FFU);
+        if (drive <= 25U) {
+            g_int21_default_drive = drive;
+        }
+        /* Deterministic single-drive environment for now. */
+        regs->ax = (u16)((regs->ax & 0xFF00U) | 0x0001U);
+        return;
+    }
+
     if (ah == 0x19U) {
-        /* A: = 0 */
-        regs->ax = (u16)((regs->ax & 0xFF00U) | 0x00U);
+        regs->ax = (u16)((regs->ax & 0xFF00U) | (u16)g_int21_default_drive);
+        return;
+    }
+
+    if (ah == 0x1AU) {
+        g_int21_dta_segment = regs->ds;
+        g_int21_dta_offset = regs->dx;
         return;
     }
 
@@ -819,6 +948,12 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         regs->ax = 0x1606U;
         regs->bx = 0x0000U;
         regs->cx = 0x0000U;
+        return;
+    }
+
+    if (ah == 0x2FU) {
+        regs->es = g_int21_dta_segment;
+        regs->bx = g_int21_dta_offset;
         return;
     }
 
@@ -1011,6 +1146,7 @@ int stage2_shell_selftest_int21_baseline(void) {
     ciuki_dos_context_t ctx;
     ciuki_int21_regs_t regs;
     static const char test_image[] = "ABC$";
+    static u8 linebuf[8];
 
     local_memset(&ctx, 0U, (u32)sizeof(ctx));
     ctx.image_linear = (u64)(const void *)test_image;
@@ -1022,6 +1158,33 @@ int stage2_shell_selftest_int21_baseline(void) {
     regs.ax = 0x3000U;
     shell_com_int21(&ctx, &regs);
     if (regs.carry != 0U || regs.ax != 0x1606U) {
+        return 0;
+    }
+
+    /* AH=06h direct console output */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0600U;
+    regs.dx = (u16)'Q';
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != (u16)'Q') {
+        return 0;
+    }
+
+    /* AH=06h non-blocking input path: no char available -> AL=00 */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0600U;
+    regs.dx = 0x00FFU;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != 0x0000U) {
+        return 0;
+    }
+
+    /* AH=07h: blocking char input without echo using pending-char injection */
+    g_int21_pending_stdin_char = (i32)'R';
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0700U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != (u16)'R') {
         return 0;
     }
 
@@ -1040,11 +1203,37 @@ int stage2_shell_selftest_int21_baseline(void) {
         return 0;
     }
 
+    /* AH=1Ah / AH=2Fh: set/get DTA pointer */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x1A00U;
+    regs.ds = 0xCAFEU;
+    regs.dx = 0x0040U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x2F00U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || regs.es != 0xCAFEU || regs.bx != 0x0040U) {
+        return 0;
+    }
+
+    /* AH=0Eh + AH=19h: set/get default drive */
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0E00U;
+    regs.dx = 0x0002U; /* C: */
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != 0x0001U) {
+        return 0;
+    }
+
     /* AH=19h: current drive */
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x1900U;
     shell_com_int21(&ctx, &regs);
-    if (regs.carry != 0U || (regs.ax & 0x00FFU) != 0x00U) {
+    if (regs.carry != 0U || (regs.ax & 0x00FFU) != 0x0002U) {
         return 0;
     }
 
@@ -1057,6 +1246,37 @@ int stage2_shell_selftest_int21_baseline(void) {
     if (regs.carry != 0U) {
         return 0;
     }
+
+    /* AH=0Ah buffered line input: max=0 must return immediately without blocking */
+    local_memset(linebuf, 0U, (u32)sizeof(linebuf));
+    linebuf[0] = 0U;
+    linebuf[1] = 0x7FU;
+    ctx.image_linear = (u64)(void *)linebuf;
+    ctx.image_size = (u32)sizeof(linebuf);
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0A00U;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || linebuf[1] != 0U || linebuf[2] != '\r') {
+        return 0;
+    }
+
+    /* AH=0Ch with AL=0Ah flush+buffered line path, still non-blocking for max=0 */
+    local_memset(linebuf, 0U, (u32)sizeof(linebuf));
+    linebuf[0] = 0U;
+    ctx.image_linear = (u64)(void *)linebuf;
+    ctx.image_size = (u32)sizeof(linebuf);
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x0C0AU;
+    regs.dx = 0x0000U;
+    shell_com_int21(&ctx, &regs);
+    if (regs.carry != 0U || linebuf[1] != 0U || linebuf[2] != '\r') {
+        return 0;
+    }
+
+    /* Restore baseline test image for remaining checks */
+    ctx.image_linear = (u64)(const void *)test_image;
+    ctx.image_size = (u32)(sizeof(test_image) - 1U);
 
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x3521U;
@@ -1282,6 +1502,9 @@ static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const ch
         ctx->command_tail[i] = (char)psp[0x81U + i];
         ctx->command_tail[i + 1U] = '\0';
     }
+
+    g_int21_dta_segment = ctx->psp_segment;
+    g_int21_dta_offset = 0x0080U;
 }
 
 static void shell_print_com_exit(const ciuki_dos_context_t *ctx) {
