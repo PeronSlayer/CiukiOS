@@ -5,6 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_SCRIPT="$PROJECT_DIR/run_ciukios.sh"
 LOG_DIR="$PROJECT_DIR/.ciukios-testlogs"
 LOG_FILE="$LOG_DIR/stage2-boot.log"
+SERIAL_LOG="$LOG_DIR/stage2-boot-serial.log"
 LOCK_FILE="$LOG_DIR/qemu-test.lock"
 DEBUGCON_LOG="$PROJECT_DIR/build/debugcon.log"
 
@@ -12,6 +13,7 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-420}"
 
 mkdir -p "$LOG_DIR"
 rm -f "$LOG_FILE"
+rm -f "$SERIAL_LOG"
 
 # Avoid parallel QEMU/image races with other boot tests.
 if command -v flock >/dev/null 2>&1; then
@@ -37,9 +39,18 @@ CIUKIOS_INCLUDE_FREEDOS=0 \
 CIUKIOS_INCLUDE_OPENGEM=0 \
 CIUKIOS_SKIP_BUILD=1 \
 CIUKIOS_QEMU_HEADLESS=1 \
+CIUKIOS_QEMU_SERIAL_FILE="$SERIAL_LOG" \
 timeout "${TIMEOUT_SECONDS}s" "$RUN_SCRIPT" > "$LOG_FILE" 2>&1
 rc=$?
 set -e
+
+if [[ -f "$SERIAL_LOG" ]]; then
+    {
+        echo
+        echo "[test-stage2] ---- qemu serial log ----"
+        cat "$SERIAL_LOG"
+    } >> "$LOG_FILE"
+fi
 
 # Fast diagnostic: if QEMU launched but produced no loader/stage2 serial markers,
 # fail with infra-focused guidance instead of a generic missing-pattern error.
@@ -56,6 +67,16 @@ if [[ "$serial_marker_count" -eq 0 ]]; then
             fi
         else
             echo "[INFRA] debugcon log not found: $DEBUGCON_LOG" >&2
+        fi
+        if [[ -f "$SERIAL_LOG" ]]; then
+            if grep -q . "$SERIAL_LOG"; then
+                echo "[INFRA] serial log tail ($SERIAL_LOG):" >&2
+                tail -n 120 "$SERIAL_LOG" >&2 || true
+            else
+                echo "[INFRA] serial log exists but is empty: $SERIAL_LOG" >&2
+            fi
+        else
+            echo "[INFRA] serial log not found: $SERIAL_LOG" >&2
         fi
         echo "[INFRA] stage2 gate cannot classify runtime behavior on this host (serial capture unavailable)." >&2
         exit 1

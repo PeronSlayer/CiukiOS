@@ -18,6 +18,7 @@ QEMU_NO_REBOOT="${CIUKIOS_QEMU_NO_REBOOT:-1}"
 QEMU_NO_SHUTDOWN="${CIUKIOS_QEMU_NO_SHUTDOWN:-1}"
 QEMU_HEADLESS="${CIUKIOS_QEMU_HEADLESS:-0}"
 QEMU_BOOT_ORDER="${CIUKIOS_QEMU_BOOT_ORDER:-c}"
+QEMU_SERIAL_FILE="${CIUKIOS_QEMU_SERIAL_FILE:-}"
 FREEDOS_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 OPENGEM_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime/OPENGEM"
 
@@ -147,10 +148,17 @@ echo "[CiukiOS] Starting QEMU..."
 QEMU_ARGS=(
   -machine q35
   -m 512M
-  -serial stdio
   -debugcon file:"$BUILD_DIR/debugcon.log"
   -global isa-debugcon.iobase=0xe9
 )
+
+if [[ -n "$QEMU_SERIAL_FILE" ]]; then
+    rm -f "$QEMU_SERIAL_FILE"
+    echo "[CiukiOS] QEMU serial sink: file:$QEMU_SERIAL_FILE"
+    QEMU_ARGS+=( -serial "file:$QEMU_SERIAL_FILE" )
+else
+    QEMU_ARGS+=( -serial stdio )
+fi
 
 if [[ "$QEMU_NO_REBOOT" == "1" ]]; then
   QEMU_ARGS+=(-no-reboot)
