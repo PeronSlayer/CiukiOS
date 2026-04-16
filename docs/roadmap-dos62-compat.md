@@ -9,11 +9,11 @@ For FreeDOS symbiotic integration approach, see:
 ## Goal
 Recreate DOS 6.2 behavior with high compatibility at binary level (`.COM`, `.EXE MZ`) and API level (`INT 21h`), built from scratch.
 
-## Current Snapshot (v0.4)
+## Current Snapshot (v0.6.0)
 1. Stage2 baseline is stable with automated boot/fallback/FAT compatibility checks.
 2. DOS-like shell commands for core file workflow are available.
 3. COM execution path is active; EXE MZ loading path is available as MVP.
-4. Boot visual pipeline now includes framebuffer-aware graphical splash with ASCII fallback.
+4. INT21 core now includes file search and rename subset coverage (`4Eh/4Fh/56h`) with matrix validation.
 
 ## Architecture Choice
 1. Keep `UEFI x64` as modern bootstrap only.

@@ -16,11 +16,13 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 - `DONE` stable fallback boot path and stage2 scaffolding tests
 - `DONE` timer/keyboard/interrupt baseline
 - `DONE` framebuffer text+gfx baseline
-- `IN PROGRESS` video driver evolution (double buffer, blitting, mode strategy)
+- `DONE` first video driver vmode stack (`double buffer`, blitting, mode catalog + `vmode` command + pipeline gate)
+- `IN PROGRESS` dynamic mode scaling and backbuffer policy across higher resolutions
 
 ### Phase 2 - DOS Core Compatibility
 - `DONE` INT21h baseline set (priority-A matrix path)
 - `DONE` FAT-backed file handle baseline
+- `DONE` INT21h file search + rename subset (`AH=4Eh/4Fh/56h`) with matrix/test coverage
 - `DONE` COM runtime and shell command surface
 - `IN PROGRESS` EXE/MZ runtime compatibility depth
 - `PLANNED` compatibility harness expansion against real DOS apps
@@ -52,7 +54,9 @@ Reference: `docs/handoffs/2026-04-16-video-driver-minimal.md`
 - `DONE` scanline blit API (`video_blit_row()`)
 - `DONE` splash rendering converted to scanline writes
 - `DONE` GOP mode selection baseline in UEFI loader
-- `IN PROGRESS` dirty-rect strategy
+- `DONE` dirty-rect tracking + incremental present
+- `DONE` persisted mode configuration (`VMODE.CFG`) and shell utility (`vmode`/`vres`)
+- `DONE` dedicated non-interactive regression gate (`make test-video-mode`)
 - `PLANNED` larger/dynamic backbuffer allocation policy
 
 ### SR-OPENGEM-001 - OpenGEM Runtime Path
@@ -74,6 +78,6 @@ References: `docs/handoffs/2026-04-16-copilot-gui-v8-heavy-cycle.md`, related GU
 - `BACKLOG` richer desktop app model
 
 ## Current Execution Focus
-1. Stabilize video driver v1 behavior across framebuffer modes.
-2. Improve DOS/FreeDOS app runtime coverage for real workloads.
+1. Expand EXE/MZ compatibility depth and process/runtime semantics for real DOS binaries.
+2. Improve DOS/FreeDOS app runtime coverage (beyond synthetic selftests) with deterministic harnesses.
 3. Advance milestone path toward first DOS DOOM boot and run.

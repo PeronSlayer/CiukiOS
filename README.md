@@ -6,10 +6,18 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.5.5`
+`CiukiOS Alpha v0.6.0`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.6.0
+1. Merged INT21 compatibility expansion with `AH=56h` rename (same-directory DOS-like subset).
+2. Extended INT21 FAT end-to-end selftest coverage to include rename path validation.
+3. Synced INT21 compatibility matrix and matrix gate with function `56h`.
+4. Integrated video mode stack: GOP mode catalog handoff, `VMODE.CFG` persistence, and shell command surface `vmode`/`vres`.
+5. Added dedicated regression gate `make test-video-mode` and hardened execution with QEMU lock serialization.
+6. Updated stage2 runtime version string to match current alpha.
+
 ### v0.5.5
 1. Integrated the first minimal video driver pass with double buffering and explicit `video_present()` flow.
 2. Added scanline blitting path for splash rendering to reduce per-pixel overhead.
