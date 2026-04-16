@@ -9,6 +9,7 @@
 
 #define SHIFT_LEFT_BIT   0x01
 #define SHIFT_RIGHT_BIT  0x02
+#define ALT_LEFT_BIT     0x04
 
 #define KEYBUF_SIZE 128
 #define KEYBUF_MASK (KEYBUF_SIZE - 1)
@@ -212,6 +213,16 @@ static u8 set1_decode_to_ascii(u8 scancode) {
         return 0;
     }
 
+    /* Left ALT (scancode 0x38) */
+    if (code == 0x38 && !g_extended_prefix) {
+        if (is_break) {
+            g_shift_state = (u8)(g_shift_state & ~ALT_LEFT_BIT);
+        } else {
+            g_shift_state = (u8)(g_shift_state | ALT_LEFT_BIT);
+        }
+        return 0;
+    }
+
     if (is_break) {
         g_extended_prefix = 0;
         return 0;
@@ -322,4 +333,8 @@ void stage2_keyboard_flush_buffer(void) {
     g_keybuf_head = 0;
     g_keybuf_tail = 0;
     irq_restore(flags);
+}
+
+int stage2_keyboard_alt_held(void) {
+    return (g_shift_state & ALT_LEFT_BIT) != 0;
 }

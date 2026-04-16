@@ -2523,7 +2523,9 @@ static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
 }
 
 static void shell_run_desktop_session(void) {
+    int chord_stage = 0; /* 0=idle, 1=ALT+G seen, waiting for Q */
     serial_write("[ ui ] desktop session started\n");
+    serial_write("[ ui ] desktop exit chord alt+g+q active\n");
 
     if (ui_get_scene() != SCENE_DESKTOP) {
         (void)ui_set_scene(SCENE_DESKTOP);
@@ -2545,8 +2547,20 @@ static void shell_run_desktop_session(void) {
         {
             u8 ch = (u8)key;
 
-            if (ch == 0x1BU) {
-                break;
+            /* ALT+G+Q exit chord: ALT held + G sets stage 1, then Q exits */
+            if (stage2_keyboard_alt_held()) {
+                if (ch == 'g' && chord_stage == 0) {
+                    chord_stage = 1;
+                    continue;
+                }
+                if (ch == 'q' && chord_stage == 1) {
+                    serial_write("[ ui ] exit chord alt+g+q triggered\n");
+                    break;
+                }
+                /* Any other key while ALT held resets chord */
+                chord_stage = 0;
+            } else {
+                chord_stage = 0;
             }
 
             if (ch == '\t') {

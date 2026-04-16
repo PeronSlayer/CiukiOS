@@ -231,11 +231,11 @@ static void ui_render_desktop_scene(void) {
     {
         const char *msg;
         if (video_columns() >= 64U)
-            msg = "TAB: Focus | UP/DOWN J/K | ENTER: Select | ESC: shell";
+            msg = "TAB: Focus | J/K: Navigate | ENTER: Select | ALT+G+Q: Exit";
         else if (video_columns() >= 40U)
-            msg = "TAB focus | ENTER select | ESC shell";
+            msg = "TAB focus | ENTER select | ALT+GQ exit";
         else
-            msg = "TAB|ENTER|ESC";
+            msg = "TAB|ENTER|AGQ";
         ui_draw_text_clipped(g_layout.status_x + UI_PANEL_BORDER, bar_inner_y,
                              g_layout.status_w - 2U * UI_PANEL_BORDER, bar_inner_h,
                              bar_inner_x, bar_inner_y,
