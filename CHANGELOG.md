@@ -2,6 +2,14 @@
 
 All notable changes to CiukiOS are tracked here.
 
+## v0.8.0
+1. Completed SR-VIDEO-002 milestones M-V2.0..M-V2.3 (flicker-free video baseline, 2D rasterizer, BMP decoder, stable 2D graphics services ABI).
+2. M-V2.0: `video_begin_frame` / `video_end_frame` frame-scope compositor plus non-temporal `mem_copy_nt` (x86-64 `movnti` + `sfence`) present path; splash / HUD / title bar / desktop / shell input migrated to atomic frame commits.
+3. M-V2.1: `stage2/src/gfx2d.c` + `stage2/include/gfx2d.h` — pixel, hline/vline, Bresenham line, rect outline/fill, midpoint circle outline/fill, flat-top/flat-bottom triangle fill, raw blit, masked blit, clipping. New shell command `gfx test-pattern` / `gfx info`.
+4. M-V2.2: `stage2/src/image.c` + `stage2/include/image.h` — BMP decoder (BI_RGB 24/32bpp top-down + bottom-up, ≤1920×1080). New shell command `image show <path>`.
+5. M-V2.3: extended `boot/proto/services.h` with `ciuki_gfx_services_t`; populated in shell.c. New `GFXSMK.COM` (`com/gfxsmoke/`) exercises the ABI and emits `[gfxsmoke] OK`.
+6. Bumped baseline to `CiukiOS Alpha v0.8.0`.
+
 ## v0.7.1
 1. Extended the M6 DPMI smoke chain with a new allocate-memory-block callable slice (`CIUKMEM.EXE` -> `0x54`) exercising `INT 31h AX=0501h` and returning a synthetic linear address + memory handle; validated by the new gate `make test-m6-dpmi-mem-smoke`.
 2. Added `[compat] bios int2f baseline ready` startup marker so `INT 2Fh` multiplex readiness (already used by DPMI detect) has an explicit greppable signal alongside the `INT 10h/16h/1Ah` markers.

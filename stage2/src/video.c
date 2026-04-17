@@ -167,6 +167,15 @@ static u32  g_present_dirty_count;
 static u32  g_present_coalesced;
 static u32  g_pacing_initialized;
 
+/* ===== Compositor Frame Scope (V5) =====
+ * When nonzero, all implicit presents (from video_putchar '\n',
+ * video_write, etc.) are suppressed. The compositor commits once
+ * via video_end_frame(). This eliminates mid-frame tearing caused
+ * by nested draw helpers that would otherwise trigger their own
+ * present calls.
+ */
+static u32  g_frame_scope_depth;
+
 /* ===== Font Profile (V4) ===== */
 #define FONT_PROFILE_SMALL   0
 #define FONT_PROFILE_NORMAL  1
@@ -306,34 +315,96 @@ static void clear_text_area(void) {
 
 static void draw_char(u32 col, u32 row, char c) {
     const u8 *glyph;
-    u32 gx, gy, sx, sy;
+    u32 x0, y0, gx, gy, sx, sy;
+    u32 glyph_w, glyph_h;
+    u32 scale_x, scale_y;
+    u32 bpp_bytes;
+
+    if (!g_fb_base) return;
 
     if ((u8)c < 0x20 || (u8)c > 0x7E) {
-        glyph = g_font[0]; /* space for non-printable */
+        glyph = g_font[0];
     } else {
         glyph = g_font[(u8)c - 0x20];
     }
 
-    u32 x0 = col * font_w();
-    u32 y0 = row * font_h();
+    scale_x = g_font_scale_x;
+    scale_y = g_font_scale_y;
+    glyph_w = GLYPH_W * scale_x;
+    glyph_h = GLYPH_H * scale_y;
+    x0 = col * glyph_w;
+    y0 = row * glyph_h;
 
-    for (gy = 0; gy < GLYPH_H; gy++) {
-        u8 row_bits = glyph[gy];
+    /* Clip — but the caller always passes in-range values. Still, defend
+     * against bad callers without paying the cost of per-pixel checks. */
+    if (x0 >= g_width || y0 >= g_height) return;
+    if (x0 + glyph_w > g_width || y0 + glyph_h > g_height) {
+        /* Fall back to per-pixel slow path for clipped glyphs */
+        for (gy = 0; gy < GLYPH_H; gy++) {
+            u8 row_bits = glyph[gy];
+            for (sy = 0; sy < scale_y; sy++) {
+                u32 py = y0 + gy * scale_y + sy;
+                for (gx = 0; gx < GLYPH_W; gx++) {
+                    u32 bit = (row_bits >> (GLYPH_W - 1 - gx)) & 1u;
+                    u32 color = bit ? g_color_fg : g_color_bg;
+                    for (sx = 0; sx < scale_x; sx++) {
+                        u32 px = x0 + gx * scale_x + sx;
+                        framebuffer_store_pixel(px, py, color);
+                    }
+                }
+            }
+        }
+        return;
+    }
 
-        for (sy = 0; sy < g_font_scale_y; sy++) {
-            u32 py = y0 + gy * g_font_scale_y + sy;
+    bpp_bytes = g_bpp / 8U;
 
+    /* Fast path: write directly into the render target row-by-row and
+     * mark the whole glyph dirty in ONE call. This is ~256x fewer dirty
+     * tracking updates per glyph and allows rep-stos style writes. */
+    if (g_bpp == 32U) {
+        u32 fg = g_color_fg;
+        u32 bg = g_color_bg;
+        for (gy = 0; gy < GLYPH_H; gy++) {
+            u8 row_bits = glyph[gy];
+            /* Expand 8 bits into a local 16-wide row (max scale 4 → 32 wide). */
+            u32 line[GLYPH_W * MAX_FONT_SCALE]; /* 8*4 = 32 */
+            u32 li = 0;
             for (gx = 0; gx < GLYPH_W; gx++) {
                 u32 bit = (row_bits >> (GLYPH_W - 1 - gx)) & 1u;
-                u32 color = bit ? g_color_fg : g_color_bg;
-
-                for (sx = 0; sx < g_font_scale_x; sx++) {
-                    u32 px = x0 + gx * g_font_scale_x + sx;
-                    framebuffer_store_pixel(px, py, color);
+                u32 color = bit ? fg : bg;
+                for (sx = 0; sx < scale_x; sx++) {
+                    line[li++] = color;
+                }
+            }
+            for (sy = 0; sy < scale_y; sy++) {
+                u32 py = y0 + gy * scale_y + sy;
+                u32 *row = (u32 *)(g_render_target + (u64)py * g_pitch);
+                /* mem_copy with u32*count would use rep movsq via mem_copy32 */
+                mem_copy32(row + x0, line, (u64)(GLYPH_W * scale_x));
+            }
+        }
+    } else {
+        /* 16bpp slow path */
+        for (gy = 0; gy < GLYPH_H; gy++) {
+            u8 row_bits = glyph[gy];
+            for (sy = 0; sy < scale_y; sy++) {
+                u32 py = y0 + gy * scale_y + sy;
+                u16 *row = (u16 *)(g_render_target + (u64)py * g_pitch);
+                for (gx = 0; gx < GLYPH_W; gx++) {
+                    u32 bit = (row_bits >> (GLYPH_W - 1 - gx)) & 1u;
+                    u16 color = rgb_to_rgb565(bit ? g_color_fg : g_color_bg);
+                    for (sx = 0; sx < scale_x; sx++) {
+                        row[x0 + gx * scale_x + sx] = color;
+                    }
                 }
             }
         }
     }
+
+    /* Single dirty-rect update per glyph */
+    video_mark_dirty(x0, y0, glyph_w, glyph_h);
+    (void)bpp_bytes;
 }
 
 static void scroll_up(void) {
@@ -508,6 +579,12 @@ void video_putchar(char c) {
             scroll_up();
             g_cursor_row = g_text_rows - 1;
         }
+        /* If we're inside a compositor frame scope, do NOT present now.
+         * The caller is building a full frame and will commit via
+         * video_end_frame(). Otherwise pacing-gated present. */
+        if (g_frame_scope_depth == 0U) {
+            video_present_dirty();
+        }
         return;
     }
 
@@ -519,6 +596,14 @@ void video_putchar(char c) {
     if (c == '\b') {
         if (g_cursor_col > 0) {
             g_cursor_col--;
+            /* Erase the glyph at the new cursor position so the deleted
+             * character visibly disappears (required for interactive
+             * line-editing, e.g. INT 21h AH=0Ah). */
+            {
+                u32 px_x = g_cursor_col * font_w();
+                u32 px_y = (g_text_start_row + g_cursor_row) * font_h();
+                framebuffer_fill_rect(px_x, px_y, font_w(), font_h(), g_color_bg);
+            }
         }
         return;
     }
@@ -539,6 +624,10 @@ void video_putchar(char c) {
 void video_write(const char *s) {
     while (*s) {
         video_putchar(*s++);
+    }
+    /* Suppress present when inside compositor frame scope */
+    if (g_frame_scope_depth == 0U) {
+        video_present_dirty_immediate();
     }
 }
 
@@ -685,10 +774,19 @@ void video_present(void) {
     u8 *bb = g_backbuf;
     u32 row_bytes = g_width * (g_bpp / 8U);
 
-    for (u32 y = 0; y < g_height; y++) {
-        mem_copy(fb + (u64)y * g_pitch,
-                 bb + (u64)y * g_pitch,
-                 (u64)row_bytes);
+    /* Fast path: when pitch matches the row width, copy the entire frame
+     * as ONE contiguous streaming copy via mem_copy_nt. Non-temporal
+     * stores bypass the cache and are drained by sfence, which keeps
+     * the GOP scan-out visually consistent (no torn cache-coherence
+     * state) and avoids polluting L1/L2 with pixel data. */
+    if (g_pitch == row_bytes) {
+        mem_copy_nt(fb, bb, (u64)g_height * (u64)row_bytes);
+    } else {
+        for (u32 y = 0; y < g_height; y++) {
+            mem_copy_nt(fb + (u64)y * g_pitch,
+                        bb + (u64)y * g_pitch,
+                        (u64)row_bytes);
+        }
     }
     g_present_full_count++;
     if (g_pacing_initialized) {
@@ -758,15 +856,81 @@ void video_present_dirty(void) {
     x0_bytes  = g_dirty_x0 * bpp_bytes;
     copy_bytes = (g_dirty_x1 - g_dirty_x0) * bpp_bytes;
 
-    for (u32 y = g_dirty_y0; y < g_dirty_y1; y++) {
-        u64 row_off = (u64)y * g_pitch + x0_bytes;
-        mem_copy(fb + row_off, bb + row_off, (u64)copy_bytes);
+    /* Contiguous fast path with streaming stores to fb */
+    if (copy_bytes == g_pitch && x0_bytes == 0U) {
+        u64 total = (u64)(g_dirty_y1 - g_dirty_y0) * (u64)g_pitch;
+        u64 row_off = (u64)g_dirty_y0 * g_pitch;
+        mem_copy_nt(fb + row_off, bb + row_off, total);
+    } else {
+        for (u32 y = g_dirty_y0; y < g_dirty_y1; y++) {
+            u64 row_off = (u64)y * g_pitch + x0_bytes;
+            mem_copy_nt(fb + row_off, bb + row_off, (u64)copy_bytes);
+        }
     }
     g_dirty_valid = 0;
     g_present_dirty_count++;
     if (g_pacing_initialized) {
         g_pacing_last_present = stage2_timer_ticks();
     }
+}
+
+/* Bypass pacing: always flush dirty region NOW (for text UI realtime feedback) */
+void video_present_dirty_immediate(void) {
+    u8 *fb;
+    u8 *bb;
+    u32 bpp_bytes, x0_bytes, copy_bytes;
+
+    if (!g_backbuf_active || !g_fb_base || !g_dirty_valid) {
+        g_dirty_valid = 0;
+        return;
+    }
+
+    fb = (u8 *)(u64)g_fb_base;
+    bb = g_backbuf;
+    bpp_bytes = g_bpp / 8U;
+    x0_bytes  = g_dirty_x0 * bpp_bytes;
+    copy_bytes = (g_dirty_x1 - g_dirty_x0) * bpp_bytes;
+
+    /* Contiguous fast path with streaming stores to fb. A single
+     * dense movnti sequence + sfence ensures the fb sees a consistent
+     * frame in one drain, eliminating cache-coherence-induced tearing. */
+    if (copy_bytes == g_pitch && x0_bytes == 0U) {
+        u64 total = (u64)(g_dirty_y1 - g_dirty_y0) * (u64)g_pitch;
+        u64 row_off = (u64)g_dirty_y0 * g_pitch;
+        mem_copy_nt(fb + row_off, bb + row_off, total);
+    } else {
+        for (u32 y = g_dirty_y0; y < g_dirty_y1; y++) {
+            u64 row_off = (u64)y * g_pitch + x0_bytes;
+            mem_copy_nt(fb + row_off, bb + row_off, (u64)copy_bytes);
+        }
+    }
+    g_dirty_valid = 0;
+    g_present_dirty_count++;
+    if (g_pacing_initialized) {
+        g_pacing_last_present = stage2_timer_ticks();
+    }
+}
+
+/* ===== Compositor API (V5) ===== */
+
+void video_begin_frame(void) {
+    /* Reset dirty tracking. The app should redraw its scene into the
+     * backbuffer and then call video_end_frame() to atomically commit. */
+    g_dirty_valid = 0;
+    g_frame_scope_depth++;
+    if (g_pacing_initialized) {
+        video_pacing_begin_frame();
+    }
+}
+
+void video_end_frame(void) {
+    /* Atomic commit: always present the full dirty region NOW using
+     * the fastest contiguous path. Bypass pacing because the caller
+     * explicitly signalled end-of-frame. */
+    if (g_frame_scope_depth > 0U) {
+        g_frame_scope_depth--;
+    }
+    video_present_dirty_immediate();
 }
 
 /* ===== Overlay Plane (V1) ===== */

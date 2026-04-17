@@ -46,6 +46,36 @@ typedef struct ciuki_dos_context {
  * COM binaries must not call stage2 functions directly (no stable ABI);
  * they must only use these pointers.
  */
+typedef struct ciuki_fb_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t pitch;
+} ciuki_fb_info_t;
+
+/*
+ * ciuki_gfx_services_t — stable 2D graphics ABI exposed to COM programs.
+ * All callbacks write into the stage2 backbuffer and clip to fb bounds.
+ * Caller must wrap batches in begin_frame / end_frame for atomic commits.
+ * Color format: 0x00RRGGBB.
+ */
+typedef struct ciuki_gfx_services {
+    void (*begin_frame)(void);
+    void (*end_frame)(void);
+    void (*put_pixel)(uint32_t x, uint32_t y, uint32_t rgb);
+    void (*fill_rect)(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb);
+    void (*rect)(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb);
+    void (*line)(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t rgb);
+    void (*circle)(int32_t cx, int32_t cy, uint32_t r, uint32_t rgb);
+    void (*fill_circle)(int32_t cx, int32_t cy, uint32_t r, uint32_t rgb);
+    void (*fill_tri)(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+                     int32_t x2, int32_t y2, uint32_t rgb);
+    void (*blit)(const uint32_t *src, uint32_t sw, uint32_t sh,
+                 uint32_t stride, uint32_t dx, uint32_t dy);
+    void (*get_fb_info)(ciuki_fb_info_t *out);
+    uint8_t reserved[32];
+} ciuki_gfx_services_t;
+
 typedef struct ciuki_services {
     void     (*print)(const char *s);
     void     (*print_hex64)(unsigned long long v);
@@ -56,6 +86,7 @@ typedef struct ciuki_services {
     void     (*int20)(ciuki_dos_context_t *ctx);
     void     (*int21_4c)(ciuki_dos_context_t *ctx, uint8_t code);
     void     (*terminate)(ciuki_dos_context_t *ctx, uint8_t code);
+    const ciuki_gfx_services_t *gfx;    /* M-V2.3: 2D graphics ABI */
 } ciuki_services_t;
 
 /* COM entry point convention */

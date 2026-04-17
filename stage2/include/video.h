@@ -28,9 +28,23 @@ void video_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb);
 void video_put_pixel(u32 x, u32 y, u32 rgb);
 void video_present(void);
 void video_present_dirty(void);
+void video_present_dirty_immediate(void);
 void video_mark_dirty(u32 x, u32 y, u32 w, u32 h);
 int  video_is_double_buffered(void);
 void video_blit_row(u32 dst_x, u32 dst_y, const u32 *pixels_rgb, u32 count);
+
+/* ===== Compositor API (V5) - atomic frame commit =====
+ * Usage:
+ *   video_begin_frame();         // optional: reset dirty region before redraw
+ *   ... draw into backbuffer ... // via video_fill_rect / video_blit_row / video_putchar etc.
+ *   video_end_frame();           // commit: flush the whole dirty region to fb
+ *
+ * video_end_frame() performs a fast contiguous copy (rep movsq) of the
+ * entire dirty bounding box in one shot, reducing visible tearing.
+ * It bypasses pacing to always commit when explicitly called.
+ */
+void video_begin_frame(void);
+void video_end_frame(void);
 
 /* ===== Overlay Plane (V1) ===== */
 void video_overlay_init(void);

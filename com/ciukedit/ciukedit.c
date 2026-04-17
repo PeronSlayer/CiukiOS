@@ -839,6 +839,10 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
 
         if (line[0] == ':') {
             handle_command(ctx, svc, line, line_len);
+            /* If the command called svc->terminate, exit_reason is no longer 0. */
+            if (ctx->exit_reason != (u8)CIUKI_COM_EXIT_RETURN) {
+                return;
+            }
             continue;
         }
 

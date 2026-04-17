@@ -6,7 +6,7 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.7.1`
+`CiukiOS Alpha v0.8.0`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Index
@@ -17,6 +17,14 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 5. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Changelog (Latest)
+### v0.8.0
+1. Completed subroadmap **SR-VIDEO-002** milestones M-V2.0..M-V2.3 — flicker-free video baseline, 2D rasterizer, BMP decoder and stable 2D graphics services ABI for COM programs.
+2. M-V2.0 (video compositor hardening): introduced frame-scope depth counter (`video_begin_frame` / `video_end_frame`) so nested `video_write` / `video_putchar('\n')` no longer trigger multi-commit tearing; added `mem_copy_nt` (x86-64 `movnti` + `sfence`) non-temporal framebuffer store path used by full-frame and per-row present; wrapped splash, HUD, title bar, desktop session and shell input paths so every UI scene commits atomically.
+3. M-V2.1 (2D software rasterizer): new `stage2/src/gfx2d.c` + `stage2/include/gfx2d.h` with clipping state, pixel / hline / vline / Bresenham line / rect (outline + filled) / midpoint circle (outline + filled) / top-flat + bottom-flat filled triangle / raw-blit / color-key masked blit. Each primitive marks a single dirty rect and clips to framebuffer + active clip. New shell command `gfx test-pattern` draws a visual regression pattern and emits `[gfx] test pattern v1 OK` on serial; `gfx info` prints fb size.
+4. M-V2.2 (BMP image pipeline): new `stage2/src/image.c` + `stage2/include/image.h` decoding Windows BMP BITMAPINFOHEADER BI_RGB at 24bpp and 32bpp, top-down and bottom-up, into a 32bpp `0x00RRGGBB` scratch buffer (max 1920×1080). New shell command `image show <path>` reads the file via FAT and centers it on-screen using `gfx2d_blit`.
+5. M-V2.3 (stable graphics ABI for COM programs): extended `boot/proto/services.h` with `ciuki_gfx_services_t` (begin/end frame, put_pixel, fill_rect, rect, line, circle, fill_circle, fill_tri, blit, get_fb_info) and added `const ciuki_gfx_services_t *gfx` to `ciuki_services_t`. Populated in stage2 shell. New `GFXSMK.COM` (com/gfxsmoke/) exercises the full ABI from a loaded COM binary, emits `[gfxsmoke] OK`, returns via `INT 21h AH=4Ch`.
+6. Bumped baseline version to `CiukiOS Alpha v0.8.0`.
+
 ### v0.7.1
 1. Extended the M6 DPMI smoke chain with a new allocate-memory-block callable slice (`CIUKMEM.EXE` -> `0x54`) exercising `INT 31h AX=0501h` and returning a synthetic linear address + memory handle; validated by the new gate `make test-m6-dpmi-mem-smoke`.
 2. Added `[compat] bios int2f baseline ready` startup marker so `INT 2Fh` multiplex readiness (already used by DPMI detect) has an explicit greppable signal alongside the `INT 10h/16h/1Ah` markers.

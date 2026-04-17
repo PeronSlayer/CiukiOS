@@ -28,6 +28,9 @@ COM_HELLO_BIN := build/INIT.COM
 COM_CIUKEDIT_SRC := com/ciukedit/ciukedit.c
 COM_CIUKEDIT_ELF := build/CIUKEDIT.COM.elf
 COM_CIUKEDIT_BIN := build/CIUKEDIT.COM
+COM_GFXSMOKE_SRC := com/gfxsmoke/gfxsmoke.c
+COM_GFXSMOKE_ELF := build/GFXSMK.COM.elf
+COM_GFXSMOKE_BIN := build/GFXSMK.COM
 COM_DOSRUN_SMOKE_SRC := com/dosrun_smoke/ciuksmk.c
 COM_DOSRUN_SMOKE_ELF := build/CIUKSMK.COM.elf
 COM_DOSRUN_SMOKE_BIN := build/CIUKSMK.COM
@@ -88,7 +91,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAG
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_CIUKEDIT_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN)
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_CIUKEDIT_BIN) $(COM_GFXSMOKE_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -147,7 +150,13 @@ $(COM_CIUKEDIT_BIN): $(COM_CIUKEDIT_SRC) com/ciukedit/linker.ld boot/proto/servi
 	@mkdir -p build/obj/com
 	$(CC) $(COM_CFLAGS) -c $(COM_CIUKEDIT_SRC) -o build/obj/com/ciukedit.o
 	$(LD) -nostdlib -z max-page-size=0x1000 -T com/ciukedit/linker.ld -o $(COM_CIUKEDIT_ELF) build/obj/com/ciukedit.o
-	llvm-objcopy -O binary $(COM_CIUKEDIT_ELF) $(COM_CIUKEDIT_BIN)
+	llvm-objcopy --set-section-flags .data=alloc,load,contents,data -O binary $(COM_CIUKEDIT_ELF) $(COM_CIUKEDIT_BIN)
+
+$(COM_GFXSMOKE_BIN): $(COM_GFXSMOKE_SRC) com/gfxsmoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_GFXSMOKE_SRC) -o build/obj/com/gfxsmoke.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/gfxsmoke/linker.ld -o $(COM_GFXSMOKE_ELF) build/obj/com/gfxsmoke.o
+	llvm-objcopy --set-section-flags .data=alloc,load,contents,data -O binary $(COM_GFXSMOKE_ELF) $(COM_GFXSMOKE_BIN)
 
 $(COM_DOSRUN_SMOKE_BIN): $(COM_DOSRUN_SMOKE_SRC) com/dosrun_smoke/linker.ld boot/proto/services.h | build
 	@mkdir -p build/obj/com

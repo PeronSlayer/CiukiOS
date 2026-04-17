@@ -10,6 +10,8 @@
 #include "version.h"
 #include "ui.h"
 #include "serial.h"
+#include "gfx2d.h"
+#include "image.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
@@ -18,6 +20,9 @@
 #define SHELL_RUNTIME_PSP_SIZE 0x100U
 #define SHELL_RUNTIME_COM_ENTRY_ADDR (SHELL_RUNTIME_COM_ADDR + SHELL_RUNTIME_PSP_SIZE)
 #define SHELL_RUNTIME_COM_MAX_PAYLOAD (SHELL_RUNTIME_COM_MAX_SIZE - SHELL_RUNTIME_PSP_SIZE)
+
+/* Forward decl of gfx services table (defined later with shell_gfx command). */
+static const ciuki_gfx_services_t g_gfx_services;
 #define SHELL_RUNTIME_TAIL_MAX 126U
 #define SHELL_EXE32_MARKER_SIZE 8U
 #define SHELL_PATH_MAX 128
@@ -1699,6 +1704,9 @@ static void *shell_ctx_ptr_from_offset(ciuki_dos_context_t *ctx, u16 off) {
 }
 
 static u8 shell_int21_read_char_blocking(void) {
+    /* Flush any pending video output before blocking on keyboard so user sees prompt.
+     * Use pacing-gated dirty present to avoid redundant full-screen commits. */
+    video_present_dirty_immediate();
     if (g_int21_pending_stdin_char >= 0) {
         u8 ch = (u8)g_int21_pending_stdin_char;
         g_int21_pending_stdin_char = -1;
@@ -1787,6 +1795,7 @@ static int shell_int21_buffered_line_input(ciuki_dos_context_t *ctx, u16 off) {
             if (count > 0U) {
                 count--;
                 video_putchar('\b');
+                video_present_dirty_immediate();
             }
             continue;
         }
@@ -1799,6 +1808,7 @@ static int shell_int21_buffered_line_input(ciuki_dos_context_t *ctx, u16 off) {
             buf[2U + count] = ch;
             count++;
             video_putchar((char)ch);
+            video_present_dirty_immediate();
         }
     }
 
@@ -3747,6 +3757,7 @@ static void shell_run_staged_image(
     svc.int20 = shell_com_int20;
     svc.int21_4c = shell_com_int21_4c;
     svc.terminate = shell_com_terminate;
+    svc.gfx = &g_gfx_services;
 
     video_write("Executing ");
     if (name && name[0] != '\0') {
@@ -4881,10 +4892,11 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
 
     ui_activate_launcher();
     video_set_text_window(0);
+    video_begin_frame();
     ui_render_scene();
     ui_render_windows();
     ui_render_launcher();
-    video_present();
+    video_end_frame();
 
     dstate = DESKTOP_STATE_ACTIVE;
     serial_write("[ ui ] state transition -> ACTIVE\n");
@@ -4967,16 +4979,17 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
         ui_render_scene();
         ui_render_windows();
         ui_render_launcher();
-        video_present_dirty();
+        video_end_frame();
     }
 
     /* --- EXITING --- */
     ui_set_console_source((ui_console_t *)0);
     ui_deactivate_launcher();
+    video_begin_frame();
     shell_cls();
     shell_draw_title_bar();
     video_write("Desktop session closed. Type 'desktop' to reopen.\n");
-    video_present();
+    video_end_frame();
     video_pacing_report();
     serial_write("[ ui ] desktop session ended\n");
 }
@@ -5537,6 +5550,162 @@ static void shell_vga13_baseline(void) {
     shell_set_errorlevel(0U);
 }
 
+/* ------------------------------------------------------------------ */
+/* gfx command  —  M-V2.1 / M-V2.3                                    */
+/* ------------------------------------------------------------------ */
+
+static void shell_gfx_get_fb_info(ciuki_fb_info_t *out) {
+    if (!out) return;
+    out->width = video_width_px();
+    out->height = video_height_px();
+    out->bpp = 32U;
+    out->pitch = out->width * 4U;
+}
+
+static const ciuki_gfx_services_t g_gfx_services = {
+    .begin_frame = video_begin_frame,
+    .end_frame = video_end_frame,
+    .put_pixel = gfx2d_pixel,
+    .fill_rect = gfx2d_fill_rect,
+    .rect = gfx2d_rect,
+    .line = gfx2d_line,
+    .circle = gfx2d_circle,
+    .fill_circle = gfx2d_fill_circle,
+    .fill_tri = gfx2d_fill_tri,
+    .blit = gfx2d_blit,
+    .get_fb_info = shell_gfx_get_fb_info,
+    .reserved = {0},
+};
+
+static void shell_gfx(const char *args) {
+    if (!args || args[0] == '\0' || str_eq(args, "help")) {
+        video_write("usage: gfx <subcommand>\n");
+        video_write("  test-pattern   draw rasterizer regression pattern\n");
+        video_write("  info           print framebuffer info\n");
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    if (str_eq(args, "test-pattern")) {
+        video_begin_frame();
+        gfx2d_test_pattern();
+        video_end_frame();
+        serial_write("[gfx] test pattern v1 OK\n");
+        video_write("[gfx] test pattern drawn (press a key to return)\n");
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    if (str_eq(args, "info")) {
+        char line[96];
+        u32 w = video_width_px();
+        u32 h = video_height_px();
+        u32 i = 0;
+        const char *p = "gfx: width=";
+        while (*p && i < sizeof(line) - 1) line[i++] = *p++;
+        /* quick decimal print */
+        char buf[12]; int bi = 0;
+        if (w == 0U) buf[bi++] = '0';
+        else { u32 v = w; char tmp[12]; int ti = 0; while (v) { tmp[ti++] = (char)('0' + v % 10); v /= 10; } while (ti) buf[bi++] = tmp[--ti]; }
+        for (int k = 0; k < bi && i < sizeof(line) - 1; k++) line[i++] = buf[k];
+        p = " height=";
+        while (*p && i < sizeof(line) - 1) line[i++] = *p++;
+        bi = 0;
+        if (h == 0U) buf[bi++] = '0';
+        else { u32 v = h; char tmp[12]; int ti = 0; while (v) { tmp[ti++] = (char)('0' + v % 10); v /= 10; } while (ti) buf[bi++] = tmp[--ti]; }
+        for (int k = 0; k < bi && i < sizeof(line) - 1; k++) line[i++] = buf[k];
+        line[i++] = '\n'; line[i] = '\0';
+        video_write(line);
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    video_write("gfx: unknown subcommand\n");
+    shell_set_errorlevel(1U);
+}
+
+/* ------------------------------------------------------------------ */
+/* image command  —  M-V2.2 (BMP decoder + render)                    */
+/* ------------------------------------------------------------------ */
+
+static void shell_image(const char *args) {
+    if (!args || args[0] == '\0') {
+        video_write("usage: image show <path.bmp>\n");
+        shell_set_errorlevel(1U);
+        return;
+    }
+
+    /* parse: "show <path>" */
+    const char *p = args;
+    while (*p == ' ') p++;
+    const char *sub = p;
+    while (*p && *p != ' ') p++;
+    u32 sub_len = (u32)(p - sub);
+    while (*p == ' ') p++;
+    const char *path = p;
+
+    if (sub_len == 4 && sub[0] == 's' && sub[1] == 'h' && sub[2] == 'o' && sub[3] == 'w') {
+        if (!path || path[0] == '\0') {
+            video_write("image: missing path\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        char fpath[128];
+        fat_dir_entry_t dinfo;
+        u32 sz = 0;
+        if (!fat_ready()) {
+            video_write("image: FAT not ready\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        if (!build_arg_path(path, fpath, (u32)sizeof(fpath))) {
+            video_write("image: bad path\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        if (!fat_find_file(fpath, &dinfo)) {
+            video_write("image: file not found\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        if (dinfo.size > SHELL_FILE_BUFFER_SIZE) {
+            video_write("image: file too large\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        if (!fat_read_file(fpath, g_shell_file_buffer,
+                           SHELL_FILE_BUFFER_SIZE, &sz)) {
+            video_write("image: read error\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        image_info_t info;
+        /* Decode in-place; decoder writes 32bpp pixels into a static
+         * scratch buffer it manages. */
+        const u32 *pixels = image_bmp_decode(g_shell_file_buffer, sz, &info);
+        if (!pixels) {
+            video_write("image: unsupported or invalid BMP\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        video_begin_frame();
+        u32 dx = (video_width_px() > info.width)
+                     ? (video_width_px() - info.width) / 2U
+                     : 0U;
+        u32 dy = (video_height_px() > info.height)
+                     ? (video_height_px() - info.height) / 2U
+                     : 0U;
+        gfx2d_blit(pixels, info.width, info.height, info.width, dx, dy);
+        video_end_frame();
+        serial_write("[image] bmp rendered\n");
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    video_write("image: unknown subcommand\n");
+    shell_set_errorlevel(1U);
+}
+
 static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff) {
     char cmd[16];
     char expanded[SHELL_LINE_MAX];
@@ -5621,6 +5790,16 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "vga13")) {
         shell_vga13_baseline();
+        return;
+    }
+
+    if (str_eq(cmd, "gfx")) {
+        shell_gfx(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "image")) {
+        shell_image(get_arg_ptr(line));
         return;
     }
 
@@ -5768,7 +5947,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     shell_startup_chain(boot_info, handoff);
     video_write("Tip: type 'desktop' to test GUI mode (ALT+G+Q to return).\n");
     write_prompt();
-    video_present();
+    video_present_dirty_immediate();
 
     for (;;) {
         i32 ch = stage2_keyboard_getc_nonblocking();
@@ -5789,7 +5968,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             shell_execute_line(line, boot_info, handoff);
             line_len = 0;
             write_prompt();
-            video_present();
+            video_present_dirty_immediate();
             continue;
         }
 
@@ -5797,7 +5976,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             if (line_len > 0) {
                 line_len--;
                 video_write("\b \b");
-                video_present_dirty();
+                video_present_dirty_immediate();
             }
             continue;
         }
@@ -5819,6 +5998,6 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
         line[line_len++] = (char)ascii;
         video_putchar((char)ascii);
-        video_present_dirty();
+        video_present_dirty_immediate();
     }
 }
