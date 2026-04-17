@@ -15,6 +15,7 @@
 #include "gfx_modes.h"
 
 #define SHELL_LINE_MAX 128
+#define SHELL_HISTORY_MAX 32U
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
 #define SHELL_RUNTIME_COM_ADDR 0x0000000000600000ULL
 #define SHELL_RUNTIME_COM_MAX_SIZE (512U * 1024U)
@@ -808,6 +809,10 @@ static void shell_print_help(void) {
     video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
     video_write("  vmode    - video mode management (vmode help for details)\n");
     video_write("  vres     - alias for vmode\n");
+    video_write("\n");
+    video_write("Programs can also be launched by name directly:\n");
+    video_write("  CIUKEDIT  or  CIUKEDIT.COM  or  DOOM.EXE\n");
+    video_write("Use UP/DOWN arrows to navigate command history.\n");
 }
 
 static void shell_cls(void) {
@@ -5821,6 +5826,136 @@ static void shell_mode(const char *args) {
     shell_set_errorlevel(1U);
 }
 
+/* ===== Command History Ring Buffer ===== */
+static char g_shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
+static u32 g_shell_history_count = 0U;
+static u32 g_shell_history_head  = 0U;   /* next write slot */
+
+static void shell_history_push(const char *line) {
+    u32 len = str_len(line);
+    u32 prev_idx;
+
+    /* Skip empty / whitespace-only lines */
+    if (len == 0U) return;
+    {
+        u32 k = 0U;
+        int all_space = 1;
+        while (line[k] != '\0') {
+            if (!is_space((u8)line[k])) { all_space = 0; break; }
+            k++;
+        }
+        if (all_space) return;
+    }
+
+    /* Coalesce consecutive duplicates */
+    if (g_shell_history_count > 0U) {
+        prev_idx = (g_shell_history_head + SHELL_HISTORY_MAX - 1U) % SHELL_HISTORY_MAX;
+        if (str_eq(g_shell_history[prev_idx], line)) return;
+    }
+
+    str_copy(g_shell_history[g_shell_history_head], line, SHELL_LINE_MAX);
+    g_shell_history_head = (g_shell_history_head + 1U) % SHELL_HISTORY_MAX;
+    if (g_shell_history_count < SHELL_HISTORY_MAX)
+        g_shell_history_count++;
+}
+
+/* ===== Direct-Exec Resolution ===== */
+static int shell_try_direct_exec(
+    const char *line,
+    boot_info_t *boot_info,
+    handoff_v0_t *handoff
+) {
+    char name[SHELL_LINE_MAX];
+    char probe_name[SHELL_LINE_MAX];
+    char probe_path[SHELL_PATH_MAX];
+    char synth_args[SHELL_LINE_MAX];
+    fat_dir_entry_t probe_entry;
+    const char *tail_ptr;
+    u32 name_len;
+
+    /* Extract first token (uppercased, raw — no lowercase normalisation) */
+    {
+        const char *p = line;
+        u32 i = 0U;
+        while (*p && is_space((u8)*p)) p++;
+        while (*p && !is_space((u8)*p) && (i + 1U) < (u32)sizeof(name)) {
+            name[i++] = (char)to_upper_ascii((u8)*p);
+            p++;
+        }
+        name[i] = '\0';
+        name_len = i;
+    }
+    if (name_len == 0U) return 0;
+
+    /* Tail = everything after the first token */
+    tail_ptr = get_arg_ptr(line);
+
+    /* Helper: build synthetic args "NAME TAIL" for shell_run */
+    #define DIRECT_EXEC_TRY(suffix) do {                                      \
+        u32 _n = 0U;                                                          \
+        str_copy(probe_name, name, (u32)sizeof(probe_name));                  \
+        {                                                                     \
+            u32 _pn = str_len(probe_name);                                    \
+            const char *_s = suffix;                                          \
+            while (*_s && (_pn + 1U) < (u32)sizeof(probe_name)) {             \
+                probe_name[_pn++] = *_s++;                                    \
+            }                                                                 \
+            probe_name[_pn] = '\0';                                           \
+        }                                                                     \
+        /* Build full synth_args = "PROBENAME TAIL" */                        \
+        str_copy(synth_args, probe_name, (u32)sizeof(synth_args));            \
+        _n = str_len(synth_args);                                             \
+        if (tail_ptr[0] != '\0' && (_n + 2U) < (u32)sizeof(synth_args)) {    \
+            synth_args[_n++] = ' ';                                           \
+            str_copy(synth_args + _n, tail_ptr,                               \
+                     (u32)sizeof(synth_args) - _n);                           \
+        }                                                                     \
+        /* Check catalog first, then FAT */                                   \
+        if (shell_find_com(handoff, probe_name) ||                            \
+            (build_run_path(probe_name, probe_path,                           \
+                            (u32)sizeof(probe_path)) &&                       \
+             fat_find_file(probe_path, &probe_entry))) {                      \
+            serial_write("[shell] direct-exec resolved=");                    \
+            serial_write(probe_name);                                         \
+            serial_write("\n");                                                \
+            shell_run(boot_info, handoff, synth_args);                        \
+            return 1;                                                         \
+        }                                                                     \
+    } while (0)
+
+    /* If the user already typed a supported extension, try that first */
+    if (shell_run_target_is_supported(name)) {
+        serial_write("[shell] direct-exec attempt exact=");
+        serial_write(name);
+        serial_write("\n");
+        str_copy(synth_args, name, (u32)sizeof(synth_args));
+        {
+            u32 _n = str_len(synth_args);
+            if (tail_ptr[0] != '\0' && (_n + 2U) < (u32)sizeof(synth_args)) {
+                synth_args[_n++] = ' ';
+                str_copy(synth_args + _n, tail_ptr,
+                         (u32)sizeof(synth_args) - _n);
+            }
+        }
+        /* Try directly via shell_run; it will print its own error if not found */
+        shell_run(boot_info, handoff, synth_args);
+        return 1;
+    }
+
+    /* Probe suffixes in DOS-like order: .COM  .EXE  .BAT */
+    DIRECT_EXEC_TRY(".COM");
+    DIRECT_EXEC_TRY(".EXE");
+    DIRECT_EXEC_TRY(".BAT");
+
+    #undef DIRECT_EXEC_TRY
+
+    /* Not found at all */
+    serial_write("[shell] direct-exec notfound name=");
+    serial_write(name);
+    serial_write("\n");
+    return 0;
+}
+
 static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff) {
     char cmd[16];
     char expanded[SHELL_LINE_MAX];
@@ -6056,16 +6191,26 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
-    video_write("Unknown command. Type 'help'.\n");
+    /* Direct-exec fallback: try to resolve as executable */
+    if (shell_try_direct_exec(line, boot_info, handoff)) {
+        return;
+    }
+
+    video_write("Bad command or file name\n");
     shell_set_errorlevel(1U);
 }
 
 void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     char line[SHELL_LINE_MAX];
     u32 line_len = 0;
+    /* History navigation index: history_count means "current / new line" */
+    u32 hist_nav = 0U;
+    /* Saved in-progress line when navigating history */
+    char hist_saved[SHELL_LINE_MAX];
+    int hist_saved_valid = 0;
 
     shell_startup_chain(boot_info, handoff);
-    video_write("Tip: type 'desktop' to test GUI mode (ALT+G+Q to return).\n");
+    video_write("Tip: type 'desktop' to test GUI mode (ALT+G+Q to return).\n\n");
     write_prompt();
     video_present_dirty_immediate();
 
@@ -6078,6 +6223,75 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
         u8 ascii = (u8)ch;
 
+        /* ---- Arrow key history navigation ---- */
+        if (ascii == STAGE2_KEY_UP) {
+            if (g_shell_history_count == 0U) continue;
+            if (hist_nav == g_shell_history_count) {
+                /* Save current in-progress line */
+                line[line_len] = '\0';
+                str_copy(hist_saved, line, SHELL_LINE_MAX);
+                hist_saved_valid = 1;
+            }
+            if (hist_nav > 0U) {
+                u32 idx;
+                hist_nav--;
+                /* Map hist_nav (0=oldest .. count-1=newest) to ring slot */
+                if (g_shell_history_count < SHELL_HISTORY_MAX) {
+                    idx = hist_nav;
+                } else {
+                    idx = (g_shell_history_head + hist_nav) % SHELL_HISTORY_MAX;
+                }
+                /* Clear current line on screen */
+                while (line_len > 0U) {
+                    video_write("\b \b");
+                    line_len--;
+                }
+                /* Copy recalled entry */
+                str_copy(line, g_shell_history[idx], SHELL_LINE_MAX);
+                line_len = str_len(line);
+                video_write(line);
+                video_present_dirty_immediate();
+            }
+            continue;
+        }
+
+        if (ascii == STAGE2_KEY_DOWN) {
+            if (g_shell_history_count == 0U) continue;
+            if (hist_nav < g_shell_history_count) {
+                hist_nav++;
+                /* Clear current line on screen */
+                while (line_len > 0U) {
+                    video_write("\b \b");
+                    line_len--;
+                }
+                if (hist_nav == g_shell_history_count) {
+                    /* Restore saved in-progress line */
+                    if (hist_saved_valid) {
+                        str_copy(line, hist_saved, SHELL_LINE_MAX);
+                        line_len = str_len(line);
+                        video_write(line);
+                    }
+                } else {
+                    u32 idx;
+                    if (g_shell_history_count < SHELL_HISTORY_MAX) {
+                        idx = hist_nav;
+                    } else {
+                        idx = (g_shell_history_head + hist_nav) % SHELL_HISTORY_MAX;
+                    }
+                    str_copy(line, g_shell_history[idx], SHELL_LINE_MAX);
+                    line_len = str_len(line);
+                    video_write(line);
+                }
+                video_present_dirty_immediate();
+            }
+            continue;
+        }
+
+        /* Ignore LEFT/RIGHT for now */
+        if (ascii == STAGE2_KEY_LEFT || ascii == STAGE2_KEY_RIGHT) {
+            continue;
+        }
+
         if (ascii == '\r') {
             ascii = '\n';
         }
@@ -6085,8 +6299,15 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
         if (ascii == '\n') {
             video_putchar('\n');
             line[line_len] = '\0';
+            /* Push non-empty commands to history */
+            shell_history_push(line);
             shell_execute_line(line, boot_info, handoff);
             line_len = 0;
+            /* Reset history navigation */
+            hist_nav = g_shell_history_count;
+            hist_saved_valid = 0;
+            /* Blank line before prompt for visual separation */
+            video_putchar('\n');
             write_prompt();
             video_present_dirty_immediate();
             continue;
