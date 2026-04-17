@@ -799,6 +799,8 @@ static void shell_print_help(void) {
     video_write("  ver      - show OS version\n");
     video_write("  echo     - print text to screen\n");
     video_write("  set      - show or set environment variables (set K=V)\n");
+    video_write("  history  - show command history\n");
+    video_write("  which X  - show where command X is found\n");
     video_write("  ticks    - show PIT tick counter\n");
     video_write("  mem      - show boot memory info\n");
     video_write("  shutdown - power off the machine\n");
@@ -812,7 +814,14 @@ static void shell_print_help(void) {
     video_write("\n");
     video_write("Programs can also be launched by name directly:\n");
     video_write("  CIUKEDIT  or  CIUKEDIT.COM  or  DOOM.EXE\n");
-    video_write("Use UP/DOWN arrows to navigate command history.\n");
+    video_write("\n");
+    video_write("Editing keys:\n");
+    video_write("  Left/Right  - move cursor within line\n");
+    video_write("  Home/End    - jump to start/end of line\n");
+    video_write("  Delete      - remove character at cursor\n");
+    video_write("  Backspace   - remove character before cursor\n");
+    video_write("  Tab         - auto-complete command or filename\n");
+    video_write("  Up/Down     - navigate command history\n");
 }
 
 static void shell_cls(void) {
@@ -5859,6 +5868,384 @@ static void shell_history_push(const char *line) {
         g_shell_history_count++;
 }
 
+/* ===== Inline Line Editing Helpers ===== */
+
+/* Redraw line contents from position `from` to end, then erase any trailing
+   stale characters and reposition the cursor.  `cursor` is the logical cursor
+   position within the buffer.  `line_len` is the total length. */
+static void shell_line_redraw_tail(const char *line, u32 from, u32 line_len,
+                                   u32 cursor, u32 old_len) {
+    u32 i;
+    /* Print characters from `from` to `line_len` */
+    for (i = from; i < line_len; i++) {
+        video_putchar(line[i]);
+    }
+    /* Erase stale characters if line got shorter */
+    if (old_len > line_len) {
+        u32 extra = old_len - line_len;
+        for (i = 0; i < extra; i++) {
+            video_putchar(' ');
+        }
+        /* Back up over the erased chars */
+        for (i = 0; i < extra; i++) {
+            video_putchar('\b');
+        }
+    }
+    /* Reposition cursor: we are at line_len, move back to cursor */
+    for (i = line_len; i > cursor; i--) {
+        video_putchar('\b');
+    }
+}
+
+/* Clear the entire line on screen (from column 0 of the input area)
+   and reprint prompt + line, positioning cursor at `cursor`. */
+static void shell_line_full_redraw(const char *line, u32 line_len, u32 cursor,
+                                   u32 prompt_len) {
+    u32 i;
+    /* Move to start of input */
+    u32 total_on_screen = prompt_len + line_len;
+    (void)total_on_screen;
+    /* CR to beginning of line, reprint prompt */
+    video_putchar('\r');
+    write_prompt();
+    for (i = 0; i < line_len; i++) {
+        video_putchar(line[i]);
+    }
+    /* Position cursor */
+    for (i = line_len; i > cursor; i--) {
+        video_putchar('\b');
+    }
+}
+
+/* Write a u32 in decimal to video */
+static void shell_video_write_dec32(u32 value) {
+    char buf[11];
+    u32 i = 0U;
+    if (value == 0U) {
+        video_putchar('0');
+        return;
+    }
+    while (value > 0U && i < sizeof(buf)) {
+        buf[i++] = (char)('0' + (value % 10U));
+        value /= 10U;
+    }
+    while (i > 0U) {
+        video_putchar(buf[--i]);
+    }
+}
+
+/* ===== history command ===== */
+static void shell_cmd_history(void) {
+    u32 i;
+    if (g_shell_history_count == 0U) {
+        video_write("(no history)\n");
+        return;
+    }
+    for (i = 0U; i < g_shell_history_count; i++) {
+        u32 idx;
+        if (g_shell_history_count < SHELL_HISTORY_MAX) {
+            idx = i;
+        } else {
+            idx = (g_shell_history_head + i) % SHELL_HISTORY_MAX;
+        }
+        video_write("  ");
+        shell_video_write_dec32(i + 1U);
+        video_write("  ");
+        video_write(g_shell_history[idx]);
+        video_putchar('\n');
+    }
+}
+
+/* ===== which/where command ===== */
+static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
+    char name[SHELL_LINE_MAX];
+    char probe_name[SHELL_LINE_MAX];
+    char probe_path[SHELL_PATH_MAX];
+    fat_dir_entry_t probe_entry;
+    u32 i = 0U;
+
+    while (*args && is_space((u8)*args)) args++;
+    while (*args && !is_space((u8)*args) && (i + 1U) < (u32)sizeof(name)) {
+        name[i++] = (char)to_upper_ascii((u8)*args);
+        args++;
+    }
+    name[i] = '\0';
+    if (i == 0U) {
+        video_write("Usage: which <command>\n");
+        return;
+    }
+
+    /* Check builtins */
+    {
+        static const char *builtins[] = {
+            "help", "pwd", "cd", "dir", "type", "copy", "ren", "rename",
+            "move", "mkdir", "md", "rmdir", "rd", "attrib", "del", "erase",
+            "ascii", "gsplash", "splash", "desktop", "cls", "ver", "echo",
+            "set", "pmode", "vga13", "gfx", "image", "mode", "ticks", "mem",
+            "shutdown", "reboot", "run", "opengem", "vmode", "vres",
+            "history", "which", "where",
+            (const char *)0
+        };
+        char lower_name[SHELL_LINE_MAX];
+        u32 j;
+        for (j = 0U; j < i; j++) {
+            lower_name[j] = (char)to_lower_ascii((u8)name[j]);
+        }
+        lower_name[i] = '\0';
+        for (j = 0U; builtins[j]; j++) {
+            if (str_eq(lower_name, builtins[j])) {
+                video_write(name);
+                video_write(": shell builtin\n");
+                return;
+            }
+        }
+    }
+
+    /* Check COM catalog */
+    {
+        static const char *suffixes[] = { "", ".COM", ".EXE", (const char *)0 };
+        u32 si;
+        for (si = 0U; suffixes[si]; si++) {
+            str_copy(probe_name, name, (u32)sizeof(probe_name));
+            {
+                u32 pn = str_len(probe_name);
+                const char *s = suffixes[si];
+                while (*s && (pn + 1U) < (u32)sizeof(probe_name)) {
+                    probe_name[pn++] = *s++;
+                }
+                probe_name[pn] = '\0';
+            }
+            if (shell_find_com(handoff, probe_name)) {
+                video_write(probe_name);
+                video_write(": COM catalog (memory-resident)\n");
+                return;
+            }
+        }
+    }
+
+    /* Check FAT */
+    {
+        static const char *suffixes[] = { ".COM", ".EXE", ".BAT", (const char *)0 };
+        u32 si;
+        for (si = 0U; suffixes[si]; si++) {
+            str_copy(probe_name, name, (u32)sizeof(probe_name));
+            {
+                u32 pn = str_len(probe_name);
+                const char *s = suffixes[si];
+                while (*s && (pn + 1U) < (u32)sizeof(probe_name)) {
+                    probe_name[pn++] = *s++;
+                }
+                probe_name[pn] = '\0';
+            }
+            if (build_run_path(probe_name, probe_path, (u32)sizeof(probe_path)) &&
+                fat_find_file(probe_path, &probe_entry)) {
+                video_write(probe_name);
+                video_write(": FAT file (");
+                video_write(probe_path);
+                video_write(")\n");
+                return;
+            }
+        }
+    }
+
+    video_write(name);
+    video_write(": not found\n");
+    shell_set_errorlevel(1U);
+}
+
+/* ===== Tab Completion Engine ===== */
+
+#define SHELL_COMPLETE_MAX 64U
+
+typedef struct {
+    char candidates[SHELL_COMPLETE_MAX][SHELL_LINE_MAX];
+    u32 count;
+} shell_complete_ctx_t;
+
+static shell_complete_ctx_t g_complete_ctx;
+
+static void shell_complete_add(shell_complete_ctx_t *ctx, const char *s) {
+    if (ctx->count >= SHELL_COMPLETE_MAX) return;
+    str_copy(ctx->candidates[ctx->count], s, SHELL_LINE_MAX);
+    ctx->count++;
+}
+
+/* Gather builtin completions matching prefix */
+static void shell_complete_builtins(shell_complete_ctx_t *ctx, const char *prefix, u32 plen) {
+    static const char *builtins[] = {
+        "help", "pwd", "cd", "dir", "type", "copy", "ren",
+        "move", "mkdir", "rmdir", "attrib", "del",
+        "ascii", "gsplash", "desktop", "cls", "ver", "echo",
+        "set", "pmode", "ticks", "mem",
+        "shutdown", "reboot", "run", "opengem", "vmode",
+        "history", "which",
+        (const char *)0
+    };
+    u32 i;
+    for (i = 0U; builtins[i]; i++) {
+        if (str_starts_with_nocase(builtins[i], prefix) && str_len(builtins[i]) > plen) {
+            shell_complete_add(ctx, builtins[i]);
+        }
+    }
+}
+
+/* Gather program names from COM catalog */
+static void shell_complete_catalog(shell_complete_ctx_t *ctx,
+                                   handoff_v0_t *handoff,
+                                   const char *prefix, u32 plen) {
+    u64 i;
+    u64 count = handoff->com_count;
+    if (count > HANDOFF_COM_MAX) count = HANDOFF_COM_MAX;
+    for (i = 0; i < count; i++) {
+        handoff_com_entry_t *e = &handoff->com_entries[i];
+        if (e->phys_base == 0 || e->name[0] == '\0') continue;
+        if (str_starts_with_nocase(e->name, prefix) && str_len(e->name) > plen) {
+            shell_complete_add(ctx, e->name);
+        }
+    }
+}
+
+/* Callback for fat_list_dir to gather matching file names */
+typedef struct {
+    shell_complete_ctx_t *ctx;
+    const char *prefix;
+    u32 plen;
+} shell_fat_complete_ctx_t;
+
+static int shell_fat_complete_cb(const fat_dir_entry_t *entry, void *raw_ctx) {
+    shell_fat_complete_ctx_t *fctx = (shell_fat_complete_ctx_t *)raw_ctx;
+    if (entry->attr & FAT_ATTR_VOLUME_ID) return 1;
+    if (entry->name[0] == '.') return 1;
+    if (str_starts_with_nocase(entry->name, fctx->prefix) &&
+        str_len(entry->name) > fctx->plen) {
+        shell_complete_add(fctx->ctx, entry->name);
+    }
+    return 1; /* continue enumeration */
+}
+
+static void shell_complete_fat_cwd(shell_complete_ctx_t *ctx,
+                                   const char *prefix, u32 plen) {
+    shell_fat_complete_ctx_t fctx;
+    if (!fat_ready()) return;
+    fctx.ctx = ctx;
+    fctx.prefix = prefix;
+    fctx.plen = plen;
+    fat_list_dir(g_shell_cwd, shell_fat_complete_cb, &fctx);
+}
+
+/* Compute longest common prefix among all candidates */
+static u32 shell_complete_common_prefix(shell_complete_ctx_t *ctx) {
+    u32 i, cp;
+    if (ctx->count == 0U) return 0U;
+    cp = str_len(ctx->candidates[0]);
+    for (i = 1U; i < ctx->count; i++) {
+        u32 j = 0U;
+        while (j < cp &&
+               to_lower_ascii((u8)ctx->candidates[0][j]) ==
+               to_lower_ascii((u8)ctx->candidates[i][j])) {
+            j++;
+        }
+        cp = j;
+    }
+    return cp;
+}
+
+/* Perform tab completion on the current line buffer.
+   Returns 1 if the line was modified, 0 otherwise. */
+static int shell_do_tab_complete(char *line, u32 *line_len, u32 *cursor,
+                                 handoff_v0_t *handoff) {
+    char prefix[SHELL_LINE_MAX];
+    u32 plen = 0U;
+    u32 tok_start = 0U;
+    u32 common;
+    u32 i;
+
+    /* Extract the current token (word being typed) */
+    {
+        /* Find start of current token: scan backward from cursor */
+        u32 pos = *cursor;
+        while (pos > 0U && !is_space((u8)line[pos - 1U])) {
+            pos--;
+        }
+        tok_start = pos;
+        plen = *cursor - tok_start;
+        if (plen == 0U) return 0;
+        for (i = 0U; i < plen && (i + 1U) < (u32)sizeof(prefix); i++) {
+            prefix[i] = line[tok_start + i];
+        }
+        prefix[plen] = '\0';
+    }
+
+    g_complete_ctx.count = 0U;
+
+    /* Whether this is the first token (command position) or an argument */
+    if (tok_start == 0U || (tok_start > 0U && line[0] != '\0')) {
+        /* Check if only spaces before tok_start => command position */
+        int cmd_pos = 1;
+        for (i = 0U; i < tok_start; i++) {
+            if (!is_space((u8)line[i])) { cmd_pos = 0; break; }
+        }
+        if (cmd_pos) {
+            shell_complete_builtins(&g_complete_ctx, prefix, plen);
+            shell_complete_catalog(&g_complete_ctx, handoff, prefix, plen);
+        }
+    }
+
+    /* Always add FAT cwd matches for any position */
+    shell_complete_fat_cwd(&g_complete_ctx, prefix, plen);
+
+    if (g_complete_ctx.count == 0U) return 0;
+
+    common = shell_complete_common_prefix(&g_complete_ctx);
+
+    if (common > plen) {
+        /* Extend the token to the common prefix */
+        u32 add = common - plen;
+        u32 tail_len = *line_len - *cursor;
+        if ((*line_len + add) >= SHELL_LINE_MAX) return 0;
+
+        /* Make room: shift tail right by `add` */
+        if (tail_len > 0U) {
+            u32 j;
+            for (j = tail_len; j > 0U; j--) {
+                line[*cursor + add + j - 1U] = line[*cursor + j - 1U];
+            }
+        }
+        /* Copy the new characters from candidate[0] */
+        for (i = 0U; i < add; i++) {
+            line[tok_start + plen + i] = g_complete_ctx.candidates[0][plen + i];
+        }
+        *line_len += add;
+        *cursor += add;
+        line[*line_len] = '\0';
+        return 1;
+    }
+
+    /* Ambiguous: list candidates */
+    if (g_complete_ctx.count > 1U) {
+        video_putchar('\n');
+        for (i = 0U; i < g_complete_ctx.count; i++) {
+            video_write("  ");
+            video_write(g_complete_ctx.candidates[i]);
+            video_putchar('\n');
+        }
+        /* Redraw prompt + line */
+        write_prompt();
+        {
+            u32 j;
+            for (j = 0U; j < *line_len; j++) {
+                video_putchar(line[j]);
+            }
+            /* Reposition cursor */
+            for (j = *line_len; j > *cursor; j--) {
+                video_putchar('\b');
+            }
+        }
+    }
+
+    return 0;
+}
+
 /* ===== Direct-Exec Resolution ===== */
 static int shell_try_direct_exec(
     const char *line,
@@ -6108,6 +6495,16 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
+    if (str_eq(cmd, "history")) {
+        shell_cmd_history();
+        return;
+    }
+
+    if (str_eq(cmd, "which") || str_eq(cmd, "where")) {
+        shell_cmd_which(get_arg_ptr(line), handoff);
+        return;
+    }
+
     if (str_eq(cmd, "shutdown")) {
         shell_shutdown();
         return;
@@ -6203,6 +6600,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     char line[SHELL_LINE_MAX];
     u32 line_len = 0;
+    u32 cursor = 0;         /* cursor position within line (0..line_len) */
     /* History navigation index: history_count means "current / new line" */
     u32 hist_nav = 0U;
     /* Saved in-progress line when navigating history */
@@ -6223,7 +6621,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
         u8 ascii = (u8)ch;
 
-        /* ---- Arrow key history navigation ---- */
+        /* ---- History navigation (UP/DOWN) ---- */
         if (ascii == STAGE2_KEY_UP) {
             if (g_shell_history_count == 0U) continue;
             if (hist_nav == g_shell_history_count) {
@@ -6234,22 +6632,28 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             }
             if (hist_nav > 0U) {
                 u32 idx;
+                u32 old_len = line_len;
                 hist_nav--;
-                /* Map hist_nav (0=oldest .. count-1=newest) to ring slot */
                 if (g_shell_history_count < SHELL_HISTORY_MAX) {
                     idx = hist_nav;
                 } else {
                     idx = (g_shell_history_head + hist_nav) % SHELL_HISTORY_MAX;
                 }
-                /* Clear current line on screen */
+                /* Move cursor to end, then erase */
+                while (cursor < line_len) {
+                    video_putchar(line[cursor]);
+                    cursor++;
+                }
                 while (line_len > 0U) {
                     video_write("\b \b");
                     line_len--;
                 }
-                /* Copy recalled entry */
+                cursor = 0;
                 str_copy(line, g_shell_history[idx], SHELL_LINE_MAX);
                 line_len = str_len(line);
+                cursor = line_len;
                 video_write(line);
+                (void)old_len;
                 video_present_dirty_immediate();
             }
             continue;
@@ -6259,16 +6663,21 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             if (g_shell_history_count == 0U) continue;
             if (hist_nav < g_shell_history_count) {
                 hist_nav++;
-                /* Clear current line on screen */
+                /* Move cursor to end, then erase */
+                while (cursor < line_len) {
+                    video_putchar(line[cursor]);
+                    cursor++;
+                }
                 while (line_len > 0U) {
                     video_write("\b \b");
                     line_len--;
                 }
+                cursor = 0;
                 if (hist_nav == g_shell_history_count) {
-                    /* Restore saved in-progress line */
                     if (hist_saved_valid) {
                         str_copy(line, hist_saved, SHELL_LINE_MAX);
                         line_len = str_len(line);
+                        cursor = line_len;
                         video_write(line);
                     }
                 } else {
@@ -6280,6 +6689,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
                     }
                     str_copy(line, g_shell_history[idx], SHELL_LINE_MAX);
                     line_len = str_len(line);
+                    cursor = line_len;
                     video_write(line);
                 }
                 video_present_dirty_immediate();
@@ -6287,8 +6697,56 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             continue;
         }
 
-        /* Ignore LEFT/RIGHT for now */
-        if (ascii == STAGE2_KEY_LEFT || ascii == STAGE2_KEY_RIGHT) {
+        /* ---- Cursor movement keys ---- */
+        if (ascii == STAGE2_KEY_LEFT) {
+            if (cursor > 0U) {
+                cursor--;
+                video_putchar('\b');
+                video_present_dirty_immediate();
+            }
+            continue;
+        }
+
+        if (ascii == STAGE2_KEY_RIGHT) {
+            if (cursor < line_len) {
+                video_putchar(line[cursor]);
+                cursor++;
+                video_present_dirty_immediate();
+            }
+            continue;
+        }
+
+        if (ascii == STAGE2_KEY_HOME) {
+            while (cursor > 0U) {
+                cursor--;
+                video_putchar('\b');
+            }
+            video_present_dirty_immediate();
+            continue;
+        }
+
+        if (ascii == STAGE2_KEY_END) {
+            while (cursor < line_len) {
+                video_putchar(line[cursor]);
+                cursor++;
+            }
+            video_present_dirty_immediate();
+            continue;
+        }
+
+        /* ---- Delete key: remove char at cursor ---- */
+        if (ascii == STAGE2_KEY_DEL) {
+            if (cursor < line_len) {
+                u32 old_len = line_len;
+                u32 j;
+                for (j = cursor; j + 1U < line_len; j++) {
+                    line[j] = line[j + 1U];
+                }
+                line_len--;
+                line[line_len] = '\0';
+                shell_line_redraw_tail(line, cursor, line_len, cursor, old_len);
+                video_present_dirty_immediate();
+            }
             continue;
         }
 
@@ -6296,34 +6754,53 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             ascii = '\n';
         }
 
+        /* ---- Enter ---- */
         if (ascii == '\n') {
+            /* Move cursor to end before newline */
+            while (cursor < line_len) {
+                video_putchar(line[cursor]);
+                cursor++;
+            }
             video_putchar('\n');
             line[line_len] = '\0';
-            /* Push non-empty commands to history */
             shell_history_push(line);
             shell_execute_line(line, boot_info, handoff);
             line_len = 0;
-            /* Reset history navigation */
+            cursor = 0;
             hist_nav = g_shell_history_count;
             hist_saved_valid = 0;
-            /* Blank line before prompt for visual separation */
             video_putchar('\n');
             write_prompt();
             video_present_dirty_immediate();
             continue;
         }
 
+        /* ---- Backspace: remove char before cursor ---- */
         if (ascii == '\b' || ascii == 0x7F) {
-            if (line_len > 0) {
+            if (cursor > 0U) {
+                u32 old_len = line_len;
+                u32 j;
+                cursor--;
+                for (j = cursor; j + 1U < line_len; j++) {
+                    line[j] = line[j + 1U];
+                }
                 line_len--;
-                video_write("\b \b");
+                line[line_len] = '\0';
+                video_putchar('\b');
+                shell_line_redraw_tail(line, cursor, line_len, cursor, old_len);
                 video_present_dirty_immediate();
             }
             continue;
         }
 
+        /* ---- Tab completion ---- */
         if (ascii == '\t') {
-            ascii = ' ';
+            if (shell_do_tab_complete(line, &line_len, &cursor, handoff)) {
+                /* Line was modified — redraw from prompt */
+                shell_line_full_redraw(line, line_len, cursor, 0U);
+            }
+            video_present_dirty_immediate();
+            continue;
         }
 
         if (!is_printable_ascii(ascii)) {
@@ -6333,12 +6810,30 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
         if ((line_len + 1) >= SHELL_LINE_MAX) {
             video_write("\n[ shell ] input too long\n");
             line_len = 0;
+            cursor = 0;
             write_prompt();
             continue;
         }
 
-        line[line_len++] = (char)ascii;
-        video_putchar((char)ascii);
+        /* ---- Insert printable character at cursor ---- */
+        if (cursor < line_len) {
+            u32 j;
+            /* Shift tail right */
+            for (j = line_len; j > cursor; j--) {
+                line[j] = line[j - 1U];
+            }
+        }
+        line[cursor] = (char)ascii;
+        line_len++;
+        cursor++;
+        line[line_len] = '\0';
+        if (cursor == line_len) {
+            /* Appending at end — simple putchar */
+            video_putchar((char)ascii);
+        } else {
+            /* Inserted in middle — redraw tail */
+            shell_line_redraw_tail(line, cursor - 1U, line_len, cursor, line_len);
+        }
         video_present_dirty_immediate();
     }
 }
