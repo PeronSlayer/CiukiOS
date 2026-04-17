@@ -269,6 +269,18 @@ static u8 set1_decode_to_ascii(u8 scancode) {
             return STAGE2_KEY_RIGHT;
         }
 
+        if (code == 0x47) {
+            return STAGE2_KEY_HOME;
+        }
+
+        if (code == 0x4F) {
+            return STAGE2_KEY_END;
+        }
+
+        if (code == 0x53) {
+            return STAGE2_KEY_DEL;
+        }
+
         if (code == 0x1C) {
             return '\n';
         }

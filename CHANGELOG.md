@@ -2,6 +2,12 @@
 
 All notable changes to CiukiOS are tracked here.
 
+## Unreleased
+1. Extended shell line editing with inline cursor movement and editing keys (`Left`, `Right`, `Home`, `End`, `Delete`) while preserving the existing DOS-like command flow.
+2. Added deterministic shell tab completion for builtins, runnable programs, and current-directory FAT entries, including common-prefix expansion and ambiguous-match listing with prompt redraw.
+3. Added `history` plus `which`/`where` shell commands to improve discoverability of command recall and direct-exec resolution.
+4. Updated shell help and interaction model so the newer execution, editing, and completion behavior is documented without bumping the current public version.
+
 ## v0.8.5
 1. Added `gfx_mode13_blit_indexed_clip(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` for signed/clipped indexed patch blits and `gfx_mode13_blit_scaled_clip(...)` for signed/clipped nearest-neighbor scaled blits.
 2. Added `gfx_mode13_draw_column_sampled_masked(x, y, h, src, src_h, frac_16_16, frac_step_16_16, transparent_idx)` for DOOM-style sampled masked columns with 16.16 stepping.

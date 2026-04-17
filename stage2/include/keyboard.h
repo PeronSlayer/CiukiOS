@@ -8,6 +8,9 @@
 #define STAGE2_KEY_DOWN  0x81U
 #define STAGE2_KEY_LEFT  0x82U
 #define STAGE2_KEY_RIGHT 0x83U
+#define STAGE2_KEY_HOME  0x84U
+#define STAGE2_KEY_END   0x85U
+#define STAGE2_KEY_DEL   0x86U
 
 void stage2_keyboard_init(void);
 void stage2_keyboard_on_irq1(void);
