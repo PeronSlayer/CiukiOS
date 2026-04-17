@@ -26,5 +26,6 @@ run_gate "test-freedos-pipeline" make test-freedos-pipeline
 run_gate "test-video-1024" make test-video-1024
 run_gate "test-video-backbuf-policy" bash ./scripts/test_video_backbuf_policy.sh
 run_gate "test-m6-pmode" make test-m6-pmode
+run_gate "test-m6-transition-v2" bash ./scripts/test_m6_transition_contract_v2.sh
 
 echo "[PASS] M6 readiness gate passed"
