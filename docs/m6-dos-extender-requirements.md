@@ -45,11 +45,13 @@
 
 1. **Runtime baseline:** `make test-m6-pmode` validates M6 contract + skeleton markers
 2. **Transition v2 runtime:** `bash scripts/test_m6_transition_contract_v2.sh`
-3. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
+3. **Smoke executable:** `make test-m6-smoke` validates a reproducible MZ smoke binary (`CIUKPM.EXE` -> `0x36`) included in the OS image
+4. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
 
 ## Acceptance Criteria
 
 - `test_doom_readiness_m6.sh` PASS
+- `test-m6-smoke` PASS
 - No regressions to existing INT21h, MZ runtime, or shell flow
 - Real DOS/4GW execution remains next increment beyond skeleton baseline
 

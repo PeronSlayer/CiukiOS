@@ -6,10 +6,16 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.6.6`
+`CiukiOS Alpha v0.6.7`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.6.7
+1. Closed SR-M6-001 readiness baseline with a reproducible smoke executable `CIUKPM.EXE` included in the OS image and returning deterministic code `0x36`.
+2. Added dedicated gate `make test-m6-smoke` to validate M6 smoke-program wiring and runtime launch markers.
+3. Restored static-fallback validation in `make test-m6-pmode` and `make test-m6-transition-v2` for hosts where QEMU serial capture is unavailable.
+4. Updated aggregate M6 readiness gate so FreeDOS pipeline drift is non-blocking for the protected-mode readiness baseline while core M6 gates remain blocking.
+
 ### v0.6.6
 1. Closed SR-DOSRUN-001 with deterministic `.EXE MZ` single-program smoke path (`CIUKMZ.EXE` -> `0x2B`) reproducible from source via `tools/mkciukmz_exe`.
 2. Added dedicated MZ gate `make test-dosrun-mz` (`scripts/test_dosrun_mz_simple.sh`) validating `[dosrun] launch path=CIUKMZ.EXE type=MZ` + success return marker.
