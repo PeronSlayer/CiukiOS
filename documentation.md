@@ -29,7 +29,7 @@ The current direction is:
 7. Detailed handoff log: [docs/handoffs/README.md](docs/handoffs/README.md)
 
 ## Current Version
-Current public version in README: `CiukiOS Alpha v0.6.9`
+Current public version in README: `CiukiOS Alpha v0.7.0`
 
 ## Current Project State
 
@@ -68,10 +68,12 @@ Current public version in README: `CiukiOS Alpha v0.6.9`
    - `CIUKDPM.EXE`
    - `CIUK31.EXE`
    - `CIUK306.EXE`
+   - `CIUKLDT.EXE`
 4. Current shallow DPMI coverage includes:
    - `INT 2Fh AX=1687h` host detection plus descriptor metadata
    - `INT 31h AX=0400h` get-version callable slice
    - `INT 31h AX=0306h` raw mode-switch bootstrap slice
+   - `INT 31h AX=0000h` allocate-LDT-descriptors callable slice
 
 ### DOOM milestone baseline
 1. The frozen first target is user-supplied shareware `DOOM.EXE` v1.9.
@@ -81,6 +83,9 @@ Current public version in README: `CiukiOS Alpha v0.6.9`
 5. Expected first video path is `VGA mode 13h`.
 6. First milestone success checkpoint is main menu reachable.
 7. Deterministic packaging/discovery baseline exists for `DOOM.EXE`, `DOOM1.WAD`, optional `DEFAULT.CFG`, and generated `DOOM.BAT` under `/EFI/CiukiOS`.
+8. A staged boot-to-DOOM failure-taxonomy harness (`make test-doom-boot-harness`) classifies progress into `binary_found`, `wad_found`, `extender_init`, `video_init`, and `menu_reached` stages.
+9. A VGA mode 13h compatibility scaffold is in place (shell `vga13` command + deterministic startup marker + `make test-vga13-baseline`) as the first step toward the real mode-13h draw path.
+10. BIOS compatibility surface markers are emitted at boot for `INT 10h`, `INT 16h`, and `INT 1Ah` to make DOOM-startup dependencies greppable.
 
 ## Important Repository Files
 
@@ -116,8 +121,11 @@ Important gates include:
 4. `make test-video-mode`
 5. `make test-video-1024`
 6. `make test-video-ui-v2`
-7. `make test-m6-pmode`
-8. `make test-m6-dos4gw-smoke`
+7. `make test-mm6-dpmi-ldt-smoke`
+13. `make test-vga13-baseline`
+14. `make test-doom-target-packaging`
+15. `make test-doom-boot-harness`
+16 `make test-m6-dos4gw-smoke`
 9. `make test-m6-dpmi-smoke`
 10. `make test-m6-dpmi-call-smoke`
 11. `make test-m6-dpmi-bootstrap-smoke`

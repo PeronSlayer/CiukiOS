@@ -43,6 +43,9 @@ run_gate "test-m6-dos4gw-smoke" make test-m6-dos4gw-smoke
 run_gate "test-m6-dpmi-smoke" make test-m6-dpmi-smoke
 run_gate "test-m6-dpmi-call-smoke" make test-m6-dpmi-call-smoke
 run_gate "test-m6-dpmi-bootstrap-smoke" make test-m6-dpmi-bootstrap-smoke
+run_gate "test-m6-dpmi-ldt-smoke" make test-m6-dpmi-ldt-smoke
 run_gate "test-doom-target-packaging" make test-doom-target-packaging
+run_gate "test-vga13-baseline" make test-vga13-baseline
+run_gate "test-doom-boot-harness" make test-doom-boot-harness
 
 echo "[PASS] M6 readiness gate passed"

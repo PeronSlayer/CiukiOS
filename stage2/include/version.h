@@ -1,7 +1,7 @@
 #ifndef STAGE2_VERSION_H
 #define STAGE2_VERSION_H
 
-#define CIUKIOS_STAGE2_VERSION "Alpha v0.6.9"
-#define CIUKIOS_STAGE2_VERSION_LINE "CiukiOS Alpha v0.6.9 (pre-1.0, no public release builds)"
+#define CIUKIOS_STAGE2_VERSION "Alpha v0.7.0"
+#define CIUKIOS_STAGE2_VERSION_LINE "CiukiOS Alpha v0.7.0 (pre-1.0, no public release builds)"
 
 #endif

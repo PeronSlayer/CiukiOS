@@ -61,7 +61,11 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 - `DONE` descriptor-return DPMI smoke (`CIUKDPM.EXE` -> `0x49`) validating non-zero `AX=1687h` host metadata
 - `DONE` callable DPMI version smoke (`CIUK31.EXE` -> `0x4B`) validating `INT 31h AX=0400h`
 - `DONE` bootstrap-facing DPMI smoke (`CIUK306.EXE` -> `0x4E`) validating `INT 31h AX=0306h`
+- `DONE` allocate-LDT-descriptors DPMI smoke (`CIUKLDT.EXE` -> `0x52`) validating `INT 31h AX=0000h`
+- `DONE` VGA mode 13h compatibility scaffold with deterministic startup marker, `vga13` shell command and dedicated gate (`make test-vga13-baseline`)
+- `DONE` BIOS compatibility surface markers (`INT 10h`, `INT 16h`, `INT 1Ah`) emitted at boot
 - `DONE` deterministic DOOM asset packaging/discovery harness (`make test-doom-target-packaging`)
+- `DONE` staged boot-to-DOOM failure-taxonomy harness (`make test-doom-boot-harness`)
 - Gate: `scripts/test_doom_readiness_m6.sh` PASS + no regressions to INT21h/MZ/shell/video
 - Ref: `docs/m6-dos-extender-requirements.md`
 
@@ -127,6 +131,7 @@ References: `docs/m6-dos-extender-requirements.md`, M6 section above
 - `DONE` descriptor-return DPMI smoke (`CIUKDPM.EXE` -> `0x49`)
 - `DONE` callable DPMI version smoke (`CIUK31.EXE` -> `0x4B`)
 - `DONE` bootstrap-facing DPMI smoke (`CIUK306.EXE` -> `0x4E`)
+- `DONE` allocate-LDT-descriptors DPMI smoke (`CIUKLDT.EXE` -> `0x52`)
 
 ### SR-OPENGEM-001 - OpenGEM Runtime Path
 Reference: `docs/handoffs/2026-04-16-copilot-opengem-integration.md`
@@ -150,13 +155,14 @@ References: `docs/handoffs/2026-04-16-copilot-gui-v8-heavy-cycle.md`, related GU
 Reference: `docs/roadmap-ciukios-doom.md`
 
 - `DONE` freeze the first target binary/runtime pair as user-supplied shareware `DOOM.EXE` v1.9 + `DOOM1.WAD` (`DOOM.WAD` alias allowed only if mapped to the same shareware dataset), `DOS/4GW` class runtime, `mode 13h` video path, first success checkpoint = main menu reachable
-- `IN PROGRESS` extend M6 from the current shallow DPMI baseline to a non-trivial DOS extender initialization path (`AX=1687h` descriptor-return slice + `CIUKDPM.EXE`, `INT 31h AX=0400h` callable smoke, and `INT 31h AX=0306h` bootstrap smoke are done; real extender execution is still pending)
+- `IN PROGRESS` extend M6 from the current shallow DPMI baseline to a non-trivial DOS extender initialization path (`AX=1687h` descriptor-return slice + `CIUKDPM.EXE`, `INT 31h AX=0400h` callable smoke, `INT 31h AX=0306h` bootstrap smoke, and `INT 31h AX=0000h` allocate-LDT smoke are done; real extender execution is still pending)
 - `PLANNED` validate protected-mode memory contracts for the chosen extender (`>1MB` allocation model, ownership, overlap safety, return path)
 - `PLANNED` add a non-trivial DOS extender regression target beyond smoke markers and require it to reach interactive or near-interactive state
 - `PLANNED` broaden BIOS/runtime compatibility tests against real traces used by installer/game startup (`INT 10h`, `16h`, `1Ah`, `2Fh`, remaining `INT 21h` subset)
 - `PLANNED` add `VGA mode 13h` compatibility and framebuffer semantics for the first DOOM video path
+- `IN PROGRESS` VGA mode 13h compatibility scaffold wired (shell `vga13`, startup marker, dedicated gate); real draw/render path still pending
 - `PLANNED` add `VBE` subset only if the selected binary requires it
-- `DONE` package executable, WAD/config files and launch scripts into the image with deterministic discovery rules
+- `DONE` package executable, WAD/config files and launch scripts into the image with deterministic discovery rules (staged harness `make test-doom-boot-harness` active with `menu_reached` deferred until real runtime)
 - `IN PROGRESS` add a dedicated boot-to-DOOM harness validating executable discovery, asset discovery, first frame or menu reachability, and failure taxonomy
 - `PLANNED` tune keyboard path for gameplay expectations (latency, repeat, scan-code behavior, pause/resume stability)
 - `PLANNED` add first audio baseline suitable for DOOM runtime expectations (likely Sound Blaster/QEMU-compatible path)

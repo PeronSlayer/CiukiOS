@@ -2738,6 +2738,23 @@ static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    if (regs->ax == 0x0000U) {
+        /*
+         * DPMI 0.9 Allocate LDT Descriptors callable slice.
+         * Returns a synthetic base selector whose low 3 bits encode
+         * RPL=3 + TI=1 (LDT), which is the shape real DOS extenders
+         * expect from an LDT descriptor allocation.
+         */
+        if (regs->cx == 0U) {
+            regs->carry = 1U;
+            regs->ax = 0x8021U; /* DPMI error: invalid value */
+            return;
+        }
+        regs->ax = 0x0087U;
+        regs->carry = 0U;
+        return;
+    }
+
     regs->carry = 1U;
     regs->ax = 0x8001U;
 }
@@ -5490,6 +5507,15 @@ static void shell_pmode_contract(void) {
     shell_set_errorlevel(0U);
 }
 
+static void shell_vga13_baseline(void) {
+    video_write("VGA mode 13h baseline v0 (compatibility scaffold):\n");
+    video_write("  width=320 height=200 bpp=8 palette=256\n");
+    video_write("  framebuffer: GOP-backed virtual linear buffer (no real ISA VGA yet)\n");
+    video_write("  palette: default DOS 256-color table pending\n");
+    video_write("  status: readiness marker active, draw path deferred to DOOM graphics step\n");
+    shell_set_errorlevel(0U);
+}
+
 static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff) {
     char cmd[16];
     char expanded[SHELL_LINE_MAX];
@@ -5569,6 +5595,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "pmode")) {
         shell_pmode_contract();
+        return;
+    }
+
+    if (str_eq(cmd, "vga13")) {
+        shell_vga13_baseline();
         return;
     }
 

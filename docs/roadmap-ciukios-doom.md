@@ -6,18 +6,21 @@ Build a DOS-compatible environment inside CiukiOS capable of running real DOS ex
 ## North Star (Current Cap)
 Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, timer/audio interrupts, and stable file I/O.
 
-## Current Snapshot (v0.6.9, updated 2026-04-17)
+## Current Snapshot (v0.7.0, updated 2026-04-17)
 1. Stage2 shell is active with DOS-like command surface (`dir/type/copy/ren/move/mkdir/rmdir/attrib/del/run`).
 2. COM runtime contract is active; EXE MZ path has relocation and edge-case hardening with deterministic host-side regression tests plus real EXE corpus validation gate.
 3. INT21 priority-A path includes FAT-backed file handles, file search (`4Eh/4Fh`), rename subset (`56h`), and DOS-like one-shot `AH=4Dh` semantics with matrix gating.
 4. Low-level runtime (IDT/PIT/IRQ1 path) now exposes deterministic startup selftests for timer progress and keyboard decode/capture.
 5. Video stack includes double-buffering path with dynamic backbuffer budget (up to 1920x1080 Full HD), mode catalog handoff, `vmode` utility, dedicated non-interactive video mode regression tests, backbuffer policy validation, and explicit runtime `1024x768` baseline policy marker.
 6. FreeDOS symbiotic pipeline now includes upstream sync orchestration and reproducible runtime-manifest validation for packaging reliability.
-7. M6 kickoff artifacts are now active (`docs/m6-dos-extender-requirements.md`, `make test-m6-pmode`, `scripts/test_doom_readiness_m6.sh`).
-8. FAT layer advanced toward FAT32-first behavior: mount metadata marker (`type/fsinfo/next_free_hint`), hint-based allocation, and dynamic growth for non-fixed directory chains.
-9. SR-VIDEO-001 reached v2 baseline with overlay plane, pacing telemetry, layout metrics and font profiles, covered by `make test-video-ui-v2`, while GUI discoverability/alignment closure is now enforced by stricter `make test-gui-desktop` checks.
-10. SR-DOSRUN-001 now has deterministic COM smoke execution (`CIUKSMK.COM`) with explicit run outcome markers and dedicated gate `make test-dosrun-simple`.
-11. DOS startup-chain baseline is active: `CONFIG.SYS`, `AUTOEXEC.BAT` and `.BAT` execution (`goto`, `if errorlevel`, env expansion, `set`, `echo`) are wired in stage2 and validated by `make test-startup-chain`.
+7. M6 DPMI smoke chain now includes host-detect + version + raw-mode-bootstrap + allocate-LDT slices, each covered by a dedicated gate.
+8. A VGA mode 13h compatibility scaffold is wired (shell `vga13` + startup marker + `make test-vga13-baseline`); the real draw/render path is pending.
+9. BIOS compatibility surface markers for `INT 10h`, `INT 16h`, and `INT 1Ah` are emitted at boot so DOOM-startup dependencies are greppable.
+10. A staged boot-to-DOOM failure-taxonomy harness (`make test-doom-boot-harness`) classifies progress into `binary_found`, `wad_found`, `extender_init`, `video_init`, and `menu_reached` stages; the last stage is deferred until a real DOOM runtime is wired.
+11. FAT layer advanced toward FAT32-first behavior: mount metadata marker (`type/fsinfo/next_free_hint`), hint-based allocation, and dynamic growth for non-fixed directory chains.
+12. SR-VIDEO-001 reached v2 baseline with overlay plane, pacing telemetry, layout metrics and font profiles, covered by `make test-video-ui-v2`, while GUI discoverability/alignment closure is now enforced by stricter `make test-gui-desktop` checks.
+13. SR-DOSRUN-001 now has deterministic COM smoke execution (`CIUKSMK.COM`) with explicit run outcome markers and dedicated gate `make test-dosrun-simple`.
+14. DOS startup-chain baseline is active: `CONFIG.SYS`, `AUTOEXEC.BAT` and `.BAT` execution (`goto`, `if errorlevel`, env expansion, `set`, `echo`) are wired in stage2 and validated by `make test-startup-chain`.
 
 ## Compatibility Definition for This Goal
 1. Execute real `.COM` and `.EXE MZ` binaries.
@@ -129,7 +132,7 @@ Exit criteria:
 1. Repeatable release profile with compatibility report.
 
 ## Immediate Execution Queue (Next 6 Technical Steps)
-1. Replace the current bootstrap smoke ceiling (`CIUK306.EXE`) with a first real DOS-extender regression target that must progress farther than host queries and raw mode-switch address discovery.
+1. Replace the current bootstrap smoke ceiling (`CIUKLDT.EXE`) with a first real DOS-extender regression target that must progress farther than host queries, raw mode-switch address discovery, and shallow LDT allocate-descriptor slice.
 2. Validate protected-mode memory handoff above conventional memory (`>1MB` expectations, ownership, overlap safety, return-path integrity).
 3. Add dedicated compatibility tests for BIOS interrupt behaviors used by real DOS tools and startup paths (`10h`, `16h`, `1Ah`, `2Fh`) against broader real-binary traces.
 4. Close the most likely remaining `INT 21h` runtime gaps surfaced by installer/game startup traces instead of by generic parity guessing.
@@ -156,7 +159,8 @@ Exit criteria:
 2. Keep `CIUKDPM.EXE` as the second shallow smoke validating descriptor metadata (`ES:DI`, host-data size) beyond simple presence.
 3. Keep `CIUK31.EXE` as the third shallow smoke validating a real callable DPMI host slice (`INT 31h AX=0400h`) after descriptor discovery.
 4. Keep `CIUK306.EXE` as the fourth shallow smoke validating the first bootstrap-facing DPMI slice (`INT 31h AX=0306h`) after version discovery.
-5. Add the next DOS extender regression binary only when it exercises more than host detection, descriptor parsing, version query, and raw mode-switch address discovery.
+5. Keep `CIUKLDT.EXE` as the fifth shallow smoke validating the first allocate-LDT-descriptors callable slice (`INT 31h AX=0000h`) after the raw-mode bootstrap slice.
+6. Add the next DOS extender regression binary only when it exercises more than host detection, descriptor parsing, version query, raw mode-switch address discovery, and shallow LDT allocate slice.
 6. Implement the minimum callable `DPMI` host behavior required by that binary, not a speculative large surface.
 7. Validate real-mode callback and interrupt-reflection behavior against what the chosen extender actually uses.
 8. Harden protected-mode memory allocation/ownership rules for the extender load path.
@@ -195,7 +199,7 @@ Exit criteria:
 3. Only then mark the DOOM milestone as complete.
 
 ## Critical Path
-1. Freeze the target binary/runtime pair.
+1. Freeze the target binary/runtime pair.+ allocate-LDT 
 2. Finish the first usable `DPMI` slice beyond the current version + raw-mode bootstrap callable baseline and validate it with a non-trivial extender binary.
 3. Add the exact graphics path required by that target (`mode 13h` first).
 4. Build the boot-to-DOOM harness on top of the new deterministic image-packaging baseline.
