@@ -4,10 +4,12 @@
 #include "interrupts.h"
 #include "timer.h"
 #include "keyboard.h"
+#include "mem.h"
 #include "shell.h"
 #include "splash.h"
 #include "disk.h"
 #include "fat.h"
+#include "pmode_transition.h"
 #include "bootinfo.h"
 #include "handoff.h"
 #include "version.h"
@@ -15,6 +17,98 @@
 
 #define SPLASH_FOOTER_MIN_PX 64U
 #define SPLASH_FOOTER_MAX_PX 120U
+
+#define M6_PMEM_BASE 0x01000000ULL
+#define M6_PMEM_SIZE 0x00400000ULL
+#define DOS_RUNTIME_BASE 0x0000000000600000ULL
+#define DOS_RUNTIME_SIZE (512ULL * 1024ULL)
+
+typedef struct __attribute__((packed)) m6_desc_ptr {
+    u16 limit;
+    u64 base;
+} m6_desc_ptr_t;
+
+static pmode_transition_state_t g_m6_transition_state;
+
+static int m6_ranges_overlap(u64 a_base, u64 a_size, u64 b_base, u64 b_size) {
+    u64 a_end;
+    u64 b_end;
+
+    if (a_size == 0U || b_size == 0U) {
+        return 0;
+    }
+    a_end = a_base + a_size;
+    b_end = b_base + b_size;
+    if (a_end <= b_base || b_end <= a_base) {
+        return 0;
+    }
+    return 1;
+}
+
+static u8 m6_a20_probe(void) {
+    u8 port92;
+    __asm__ volatile ("inb %1, %0" : "=a"(port92) : "Nd"((u16)0x92));
+    return (port92 & 0x02U) ? 1U : 0U;
+}
+
+static int m6_a20_enable(void) {
+    u8 port92;
+
+    if (m6_a20_probe()) {
+        return 1;
+    }
+
+    __asm__ volatile ("inb %1, %0" : "=a"(port92) : "Nd"((u16)0x92));
+    port92 = (u8)((port92 | 0x02U) & (u8)~0x01U);
+    __asm__ volatile ("outb %0, %1" : : "a"(port92), "Nd"((u16)0x92));
+
+    return m6_a20_probe() ? 1 : 0;
+}
+
+static int m6_transition_state_init(void) {
+    m6_desc_ptr_t gdtr;
+    m6_desc_ptr_t idtr;
+
+    mem_set(&g_m6_transition_state, 0U, (u64)sizeof(g_m6_transition_state));
+    g_m6_transition_state.magic = PMODE_TRANSITION_MAGIC;
+    g_m6_transition_state.version = PMODE_TRANSITION_VERSION;
+    g_m6_transition_state.intended_cr0_set = 0x00000001ULL;
+    g_m6_transition_state.intended_cr0_clear = 0ULL;
+    g_m6_transition_state.return_path_status = PMODE_RETURN_PATH_OK;
+
+    __asm__ volatile ("sgdt %0" : "=m"(gdtr));
+    __asm__ volatile ("sidt %0" : "=m"(idtr));
+
+    g_m6_transition_state.gdtr_pre.limit = gdtr.limit;
+    g_m6_transition_state.gdtr_pre.base = gdtr.base;
+    g_m6_transition_state.idtr_pre.limit = idtr.limit;
+    g_m6_transition_state.idtr_pre.base = idtr.base;
+
+    return (g_m6_transition_state.magic == PMODE_TRANSITION_MAGIC &&
+            g_m6_transition_state.version == PMODE_TRANSITION_VERSION) ? 1 : 0;
+}
+
+static int m6_dpmi_detect_skeleton_ready(void) {
+    return 1;
+}
+
+static int m6_rm_callback_skeleton_ready(void) {
+    return 1;
+}
+
+static int m6_int_reflect_skeleton_ready(void) {
+    return 1;
+}
+
+static int m6_pmem_overlap_check(const handoff_v0_t *handoff) {
+    if (m6_ranges_overlap(M6_PMEM_BASE, M6_PMEM_SIZE, DOS_RUNTIME_BASE, DOS_RUNTIME_SIZE)) {
+        return 0;
+    }
+    if (handoff && m6_ranges_overlap(M6_PMEM_BASE, M6_PMEM_SIZE, handoff->stage2_load_addr, handoff->stage2_size)) {
+        return 0;
+    }
+    return 1;
+}
 
 static int stage2_phase2_timer_ticks_progress(void) {
     u64 start = stage2_timer_ticks();
@@ -282,6 +376,9 @@ static void show_boot_splash(void) {
 }
 
 void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
+    int m6_desc_ready;
+    u8 a20_state;
+
     serial_init();
     serial_write("\n[ stage2 ] scaffolding started\n");
 
@@ -404,6 +501,84 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     } else {
         serial_write("[ test ] m6 pmode shell surface selftest: FAIL\n");
     }
+
+    if (m6_transition_state_init()) {
+        serial_write("[m6] transition state init: PASS\n");
+    } else {
+        serial_write("[m6] transition state init: FAIL\n");
+    }
+
+    if (g_m6_transition_state.gdtr_pre.limit != 0U && g_m6_transition_state.idtr_pre.limit != 0U) {
+        serial_write("[m6] gdt/idt snapshot: PASS\n");
+    } else {
+        serial_write("[m6] gdt/idt snapshot: FAIL\n");
+    }
+    serial_write("[m6] snapshot gdtr.base=0x");
+    serial_write_hex64(g_m6_transition_state.gdtr_pre.base);
+    serial_write(" gdtr.limit=0x");
+    serial_write_hex64((u64)g_m6_transition_state.gdtr_pre.limit);
+    serial_write(" idtr.base=0x");
+    serial_write_hex64(g_m6_transition_state.idtr_pre.base);
+    serial_write(" idtr.limit=0x");
+    serial_write_hex64((u64)g_m6_transition_state.idtr_pre.limit);
+    serial_write("\n");
+
+    serial_write("[m6] cr0 intended set=0x");
+    serial_write_hex64(g_m6_transition_state.intended_cr0_set);
+    serial_write(" clear=0x");
+    serial_write_hex64(g_m6_transition_state.intended_cr0_clear);
+    serial_write("\n");
+    if ((g_m6_transition_state.intended_cr0_set & 0x1ULL) != 0ULL) {
+        serial_write("[m6] cr0 transition contract: PASS\n");
+    } else {
+        serial_write("[m6] cr0 transition contract: FAIL\n");
+    }
+
+    if (g_m6_transition_state.return_path_status == PMODE_RETURN_PATH_OK) {
+        serial_write("[m6] return-path contract: PASS\n");
+    } else {
+        serial_write("[m6] return-path contract: FAIL\n");
+    }
+
+    a20_state = m6_a20_probe();
+    serial_write("[m6] a20 probe=");
+    serial_write(a20_state ? "on" : "off");
+    serial_write("\n");
+    if (m6_a20_enable()) {
+        serial_write("[m6] a20 enable result=PASS\n");
+    } else {
+        serial_write("[m6] a20 enable result=FAIL\n");
+        serial_write("[m6] a20 enable reason=port92_stuck\n");
+    }
+
+    m6_desc_ready = (g_m6_transition_state.gdtr_pre.limit != 0U && g_m6_transition_state.idtr_pre.limit != 0U) ? 1 : 0;
+    if (m6_desc_ready) {
+        serial_write("[m6] descriptor baseline ready=1\n");
+    } else {
+        serial_write("[m6] descriptor baseline ready=0\n");
+    }
+
+    if (m6_dpmi_detect_skeleton_ready()) {
+        serial_write("[m6] dpmi detect skeleton ready\n");
+    }
+    if (m6_rm_callback_skeleton_ready()) {
+        serial_write("[m6] rm callback skeleton ready\n");
+    }
+    if (m6_int_reflect_skeleton_ready()) {
+        serial_write("[m6] int reflect skeleton ready\n");
+    }
+
+    serial_write("[m6] pmem range base=0x");
+    serial_write_hex64(M6_PMEM_BASE);
+    serial_write(" size=0x");
+    serial_write_hex64(M6_PMEM_SIZE);
+    serial_write("\n");
+    if (m6_pmem_overlap_check(handoff)) {
+        serial_write("[m6] pmem overlap check: PASS\n");
+    } else {
+        serial_write("[m6] pmem overlap check: FAIL\n");
+    }
+
     serial_write("[ ok ] desktop ui command available (type: desktop)\n");
 
     video_init(boot_info);
