@@ -9,6 +9,8 @@ All notable changes to CiukiOS are tracked here.
 4. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed`, `mode13_draw_column`, `palette_get_raw` (append-only before `reserved[32]`). Backwards-compatible.
 5. Bumped baseline to `CiukiOS Alpha v0.8.3`.
 
+![DOSMD13.COM — mode 0x13 6×6×6 color cube gradient validated on QEMU (v0.8.3)](misc/screenshots/v0.8.3-dosmd13-mode13-colorcube.png)
+
 ## v0.8.2
 1. DOOM-prep palette + fill primitives: `gfx_palette_fade(target_rgb, step, total)` (captured-baseline linear blend of the full 256-entry palette toward a 24-bit target color — blood flashes, intermissions, title wipes), `gfx_mode13_fill(color)` and `gfx_mode13_fill_rect(x,y,w,h,color)`.
 2. Extended `ciuki_gfx_services_t` with `palette_fade`, `mode13_fill`, `mode13_fill_rect` (append-only before the `reserved[32]` tail). Wired in stage2 shell.

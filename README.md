@@ -24,6 +24,8 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 4. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed`, `mode13_draw_column`, `palette_get_raw` (appended before `reserved[32]`). Backwards-compatible: existing consumers keep reading up to the previous last slot.
 5. Bumped baseline version to `CiukiOS Alpha v0.8.3`.
 
+![DOSMD13.COM — mode 0x13 6×6×6 color cube gradient validated on QEMU (v0.8.3)](misc/screenshots/v0.8.3-dosmd13-mode13-colorcube.png)
+
 ### v0.8.2
 1. DOOM-prep palette + fill primitives on top of the SR-VIDEO-002 stack: `gfx_palette_fade(target_rgb, step, total)` performs a captured-baseline linear blend of the full 256-entry palette toward a target 24-bit color (usable for blood flashes, intermissions, title-wipe fades); `gfx_mode13_fill(color_index)` and `gfx_mode13_fill_rect(x,y,w,h,color_index)` give a fast DOS-style fill path on the mode 0x13 plane.
 2. Extended `ciuki_gfx_services_t` with `palette_fade`, `mode13_fill`, `mode13_fill_rect` (appended before `reserved[32]`). Wired in stage2 shell.
