@@ -62,8 +62,9 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 - `DONE` callable DPMI version smoke (`CIUK31.EXE` -> `0x4B`) validating `INT 31h AX=0400h`
 - `DONE` bootstrap-facing DPMI smoke (`CIUK306.EXE` -> `0x4E`) validating `INT 31h AX=0306h`
 - `DONE` allocate-LDT-descriptors DPMI smoke (`CIUKLDT.EXE` -> `0x52`) validating `INT 31h AX=0000h`
+- `DONE` allocate-memory-block DPMI smoke (`CIUKMEM.EXE` -> `0x54`) validating `INT 31h AX=0501h`
 - `DONE` VGA mode 13h compatibility scaffold with deterministic startup marker, `vga13` shell command and dedicated gate (`make test-vga13-baseline`)
-- `DONE` BIOS compatibility surface markers (`INT 10h`, `INT 16h`, `INT 1Ah`) emitted at boot
+- `DONE` BIOS compatibility surface markers (`INT 10h`, `INT 16h`, `INT 1Ah`, `INT 2Fh`) emitted at boot
 - `DONE` deterministic DOOM asset packaging/discovery harness (`make test-doom-target-packaging`)
 - `DONE` staged boot-to-DOOM failure-taxonomy harness (`make test-doom-boot-harness`)
 - Gate: `scripts/test_doom_readiness_m6.sh` PASS + no regressions to INT21h/MZ/shell/video
@@ -132,6 +133,7 @@ References: `docs/m6-dos-extender-requirements.md`, M6 section above
 - `DONE` callable DPMI version smoke (`CIUK31.EXE` -> `0x4B`)
 - `DONE` bootstrap-facing DPMI smoke (`CIUK306.EXE` -> `0x4E`)
 - `DONE` allocate-LDT-descriptors DPMI smoke (`CIUKLDT.EXE` -> `0x52`)
+- `DONE` allocate-memory-block DPMI smoke (`CIUKMEM.EXE` -> `0x54`)
 
 ### SR-OPENGEM-001 - OpenGEM Runtime Path
 Reference: `docs/handoffs/2026-04-16-copilot-opengem-integration.md`

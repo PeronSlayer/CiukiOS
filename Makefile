@@ -56,6 +56,10 @@ COM_M6_DPMI_LDT_SMOKE_SRC := com/m6_dpmi_ldt_smoke/ciukldt.c
 COM_M6_DPMI_LDT_SMOKE_ELF := build/CIUKLDT.EXE.elf
 COM_M6_DPMI_LDT_SMOKE_PAYLOAD := build/CIUKLDT.EXE.payload.bin
 COM_M6_DPMI_LDT_SMOKE_BIN := build/CIUKLDT.EXE
+COM_M6_DPMI_MEM_SMOKE_SRC := com/m6_dpmi_mem_smoke/ciukmem.c
+COM_M6_DPMI_MEM_SMOKE_ELF := build/CIUKMEM.EXE.elf
+COM_M6_DPMI_MEM_SMOKE_PAYLOAD := build/CIUKMEM.EXE.payload.bin
+COM_M6_DPMI_MEM_SMOKE_BIN := build/CIUKMEM.EXE
 MKCIUKMZ_TOOL_SRC := tools/mkciukmz_exe.c
 MKCIUKMZ_TOOL := build/tools/mkciukmz_exe
 SPLASH_ASCII_SRC := misc/splashscreen.txt
@@ -81,7 +85,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAG
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN)
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -209,6 +213,15 @@ $(COM_M6_DPMI_LDT_SMOKE_PAYLOAD): $(COM_M6_DPMI_LDT_SMOKE_SRC) com/m6_dpmi_ldt_s
 $(COM_M6_DPMI_LDT_SMOKE_BIN): $(COM_M6_DPMI_LDT_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
 	$(MKCIUKMZ_TOOL) $(COM_M6_DPMI_LDT_SMOKE_PAYLOAD) $@
 
+$(COM_M6_DPMI_MEM_SMOKE_PAYLOAD): $(COM_M6_DPMI_MEM_SMOKE_SRC) com/m6_dpmi_mem_smoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_M6_DPMI_MEM_SMOKE_SRC) -o build/obj/com/ciukmem.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/m6_dpmi_mem_smoke/linker.ld -o $(COM_M6_DPMI_MEM_SMOKE_ELF) build/obj/com/ciukmem.o
+	llvm-objcopy -O binary $(COM_M6_DPMI_MEM_SMOKE_ELF) $(COM_M6_DPMI_MEM_SMOKE_PAYLOAD)
+
+$(COM_M6_DPMI_MEM_SMOKE_BIN): $(COM_M6_DPMI_MEM_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
+	$(MKCIUKMZ_TOOL) $(COM_M6_DPMI_MEM_SMOKE_PAYLOAD) $@
+
 build:
 	@mkdir -p build
 	@mkdir -p build/obj
@@ -250,6 +263,9 @@ test-m6-dos4gw-smoke:
 
 test-m6-dpmi-ldt-smoke:
 	bash ./scripts/test_m6_dpmi_ldt_smoke.sh
+
+test-m6-dpmi-mem-smoke:
+	bash ./scripts/test_m6_dpmi_mem_smoke.sh
 
 test-m6-dpmi-smoke:
 	bash ./scripts/test_m6_dpmi_smoke.sh
@@ -334,7 +350,7 @@ freedos-import:
 	fi
 	./scripts/import_freedos.sh --source "$(FREEDOS_SRC)"
 
-freecom-sync: test-m6-dpmi-ldt-smoke test-vga13-baseline test-doom-boot-harness
+freecom-sync:
 	./scripts/sync_freecom_repo.sh
 
 freedos-sync-upstreams:
@@ -346,4 +362,4 @@ freedos-runtime-manifest:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-m6-dpmi-smoke test-m6-dpmi-call-smoke test-m6-dpmi-bootstrap-smoke test-dosrun-simple test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-doom-target-packaging test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-m6-dpmi-smoke test-m6-dpmi-call-smoke test-m6-dpmi-bootstrap-smoke test-m6-dpmi-ldt-smoke test-m6-dpmi-mem-smoke test-vga13-baseline test-doom-boot-harness test-dosrun-simple test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-doom-target-packaging test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest

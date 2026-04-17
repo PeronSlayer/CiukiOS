@@ -6,16 +6,16 @@ Build a DOS-compatible environment inside CiukiOS capable of running real DOS ex
 ## North Star (Current Cap)
 Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, timer/audio interrupts, and stable file I/O.
 
-## Current Snapshot (v0.7.0, updated 2026-04-17)
+## Current Snapshot (v0.7.1, updated 2026-04-17)
 1. Stage2 shell is active with DOS-like command surface (`dir/type/copy/ren/move/mkdir/rmdir/attrib/del/run`).
 2. COM runtime contract is active; EXE MZ path has relocation and edge-case hardening with deterministic host-side regression tests plus real EXE corpus validation gate.
 3. INT21 priority-A path includes FAT-backed file handles, file search (`4Eh/4Fh`), rename subset (`56h`), and DOS-like one-shot `AH=4Dh` semantics with matrix gating.
 4. Low-level runtime (IDT/PIT/IRQ1 path) now exposes deterministic startup selftests for timer progress and keyboard decode/capture.
 5. Video stack includes double-buffering path with dynamic backbuffer budget (up to 1920x1080 Full HD), mode catalog handoff, `vmode` utility, dedicated non-interactive video mode regression tests, backbuffer policy validation, and explicit runtime `1024x768` baseline policy marker.
 6. FreeDOS symbiotic pipeline now includes upstream sync orchestration and reproducible runtime-manifest validation for packaging reliability.
-7. M6 DPMI smoke chain now includes host-detect + version + raw-mode-bootstrap + allocate-LDT slices, each covered by a dedicated gate.
+7. M6 DPMI smoke chain now includes host-detect + version + raw-mode-bootstrap + allocate-LDT + allocate-memory slices, each covered by a dedicated gate.
 8. A VGA mode 13h compatibility scaffold is wired (shell `vga13` + startup marker + `make test-vga13-baseline`); the real draw/render path is pending.
-9. BIOS compatibility surface markers for `INT 10h`, `INT 16h`, and `INT 1Ah` are emitted at boot so DOOM-startup dependencies are greppable.
+9. BIOS compatibility surface markers for `INT 10h`, `INT 16h`, `INT 1Ah`, and `INT 2Fh` are emitted at boot so DOOM-startup dependencies are greppable.
 10. A staged boot-to-DOOM failure-taxonomy harness (`make test-doom-boot-harness`) classifies progress into `binary_found`, `wad_found`, `extender_init`, `video_init`, and `menu_reached` stages; the last stage is deferred until a real DOOM runtime is wired.
 11. FAT layer advanced toward FAT32-first behavior: mount metadata marker (`type/fsinfo/next_free_hint`), hint-based allocation, and dynamic growth for non-fixed directory chains.
 12. SR-VIDEO-001 reached v2 baseline with overlay plane, pacing telemetry, layout metrics and font profiles, covered by `make test-video-ui-v2`, while GUI discoverability/alignment closure is now enforced by stricter `make test-gui-desktop` checks.

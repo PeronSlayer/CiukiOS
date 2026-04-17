@@ -2755,6 +2755,27 @@ static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    if (regs->ax == 0x0501U) {
+        /*
+         * DPMI 0.9 Allocate Memory Block callable slice.
+         * Requested size is BX:CX; we return a synthetic non-zero
+         * linear address in BX:CX and a non-zero memory handle in SI:DI
+         * so real extenders can observe the shape of a successful alloc.
+         * A zero-size request surfaces as DPMI error 8021h with carry set.
+         */
+        if (regs->bx == 0U && regs->cx == 0U) {
+            regs->carry = 1U;
+            regs->ax = 0x8021U; /* DPMI error: invalid value */
+            return;
+        }
+        regs->bx = 0x0010U; /* linear address high word (synthetic) */
+        regs->cx = 0x0000U; /* linear address low word (synthetic) */
+        regs->si = 0x0010U; /* memory handle high word (synthetic) */
+        regs->di = 0x0000U; /* memory handle low word (synthetic) */
+        regs->carry = 0U;
+        return;
+    }
+
     regs->carry = 1U;
     regs->ax = 0x8001U;
 }

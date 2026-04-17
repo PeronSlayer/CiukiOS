@@ -116,6 +116,10 @@ static int m6_dpmi_ldt_slice_ready(void) {
 	return 1;
 }
 
+static int m6_dpmi_mem_slice_ready(void) {
+	return 1;
+}
+
 static int m6_vga13_baseline_ready(void) {
 	return 1;
 }
@@ -592,11 +596,15 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     if (m6_dpmi_ldt_slice_ready()) {
 		serial_write("[m6] dpmi allocate-ldt slice ready\n");
 	}
+    if (m6_dpmi_mem_slice_ready()) {
+		serial_write("[m6] dpmi allocate-memory slice ready\n");
+	}
     if (m6_vga13_baseline_ready()) {
 		serial_write("[compat] vga13 baseline ready (320x200x8 scaffold)\n");
 		serial_write("[compat] bios int10 baseline ready\n");
 		serial_write("[compat] bios int16 baseline ready\n");
 		serial_write("[compat] bios int1a baseline ready\n");
+		serial_write("[compat] bios int2f baseline ready\n");
 	}
     if (m6_rm_callback_skeleton_ready()) {
         serial_write("[m6] rm callback skeleton ready\n");
