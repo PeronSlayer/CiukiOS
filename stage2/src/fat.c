@@ -26,6 +26,8 @@ typedef struct fat_fs {
     u32 next_free_hint;
     u32 fsinfo_sector;
     u32 fsinfo_valid;
+    u32 free_count_known;
+    u32 free_cluster_count;
 } fat_fs_t;
 
 typedef struct fat_dir_ref {
@@ -47,6 +49,7 @@ static fat_fs_t g_fs;
 #define FAT32_FSINFO_LEAD_SIG   0x41615252U
 #define FAT32_FSINFO_STRUCT_SIG 0x61417272U
 #define FAT32_FSINFO_TRAIL_SIG  0xAA550000U
+#define FAT32_FSINFO_UNKNOWN    0xFFFFFFFFU
 
 static u16 rd16(const u8 *p) {
     return (u16)((u16)p[0] | ((u16)p[1] << 8));
@@ -239,8 +242,9 @@ static int fat_fsinfo_sector_valid(void) {
            g_fs.fsinfo_sector > 0U;
 }
 
-static int fat_fsinfo_update_next_free(u32 hint) {
+static int fat_fsinfo_sync(u32 hint) {
     u8 *sector;
+    u32 free_count = FAT32_FSINFO_UNKNOWN;
 
     if (!fat_fsinfo_sector_valid()) {
         return 1;
@@ -259,6 +263,10 @@ static int fat_fsinfo_update_next_free(u32 hint) {
     }
 
     wr32(sector + 0x1ECU, fat_sanitize_cluster_hint(hint));
+    if (g_fs.free_count_known && g_fs.free_cluster_count <= g_fs.total_clusters) {
+        free_count = g_fs.free_cluster_count;
+    }
+    wr32(sector + 0x1E8U, free_count);
     return 1;
 }
 
@@ -373,6 +381,7 @@ static int fat_free_chain(u32 start_cluster) {
     u32 cluster = start_cluster;
     u32 guard = g_fs.total_clusters + 4U;
     u32 min_freed = 0U;
+    u32 freed_count = 0U;
 
     if (cluster < 2U) {
         return 1;
@@ -386,6 +395,7 @@ static int fat_free_chain(u32 start_cluster) {
         if (min_freed == 0U || cluster < min_freed) {
             min_freed = cluster;
         }
+        freed_count++;
 
         if (next == 0U || next == 1U || cluster_is_eoc(next)) {
             break;
@@ -397,9 +407,14 @@ static int fat_free_chain(u32 start_cluster) {
         if (g_fs.next_free_hint < 2U || min_freed < g_fs.next_free_hint) {
             g_fs.next_free_hint = min_freed;
         }
-        if (!fat_fsinfo_update_next_free(g_fs.next_free_hint)) {
-            return 0;
+        if (g_fs.free_count_known) {
+            u32 sum = g_fs.free_cluster_count + freed_count;
+            if (sum > g_fs.total_clusters) {
+                sum = g_fs.total_clusters;
+            }
+            g_fs.free_cluster_count = sum;
         }
+        (void)fat_fsinfo_sync(g_fs.next_free_hint);
     }
 
     return 1;
@@ -729,11 +744,14 @@ int fat_init(void) {
     u32 cluster_count;
     u32 disk_block_size;
     u32 fsinfo_sector;
+    u32 free_count;
 
     g_fs.mounted = 0;
     g_fs.next_free_hint = 2U;
     g_fs.fsinfo_sector = 0U;
     g_fs.fsinfo_valid = 0U;
+    g_fs.free_count_known = 0U;
+    g_fs.free_cluster_count = 0U;
 
     if (!stage2_disk_ready()) {
         return 0;
@@ -815,6 +833,11 @@ int fat_init(void) {
                 g_fs.fsinfo_sector = fsinfo_sector;
                 g_fs.fsinfo_valid = 1U;
                 g_fs.next_free_hint = fat_sanitize_cluster_hint(rd32(fsinfo + 0x1ECU));
+                free_count = rd32(fsinfo + 0x1E8U);
+                if (free_count != FAT32_FSINFO_UNKNOWN && free_count <= g_fs.total_clusters) {
+                    g_fs.free_count_known = 1U;
+                    g_fs.free_cluster_count = free_count;
+                }
             }
         }
     }
@@ -842,6 +865,8 @@ int fat_get_mount_info(fat_mount_info_t *out) {
     out->fsinfo_sector = g_fs.fsinfo_sector;
     out->fsinfo_valid = g_fs.fsinfo_valid;
     out->next_free_hint = fat_sanitize_cluster_hint(g_fs.next_free_hint);
+    out->free_count_known = g_fs.free_count_known;
+    out->free_cluster_count = g_fs.free_cluster_count;
     return 1;
 }
 
@@ -1196,10 +1221,14 @@ static int fat_alloc_chain(u32 count, u32 *first_out) {
     if (last_alloc >= 2U) {
         u32 limit = fat_cluster_limit();
         g_fs.next_free_hint = (last_alloc + 1U < limit) ? (last_alloc + 1U) : 2U;
-        if (!fat_fsinfo_update_next_free(g_fs.next_free_hint)) {
-            fat_free_chain(first);
-            return 0;
+        if (g_fs.free_count_known) {
+            if (count > g_fs.free_cluster_count) {
+                g_fs.free_cluster_count = 0U;
+            } else {
+                g_fs.free_cluster_count -= count;
+            }
         }
+        (void)fat_fsinfo_sync(g_fs.next_free_hint);
     }
 
     *first_out = first;

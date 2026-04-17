@@ -96,8 +96,9 @@ Reference: `stage2/src/fat.c`
 - `DONE` FAT mount diagnostics now expose filesystem type and FAT32 metadata marker (`fsinfo`, `next_free_hint`)
 - `DONE` allocator now uses `next_free_hint` strategy (mount-time + runtime updates) instead of fixed linear scan from cluster 2
 - `DONE` dynamic directory growth for non-fixed directories (including FAT32 root directory chain extension)
+- `DONE` FSInfo `free cluster count` synchronization on allocation/free path (when FSInfo is valid and count is known)
 - `DONE` new gate `test-fat32-progress` to validate FAT mount/FAT32 metadata markers
-- `IN PROGRESS` parity hardening for FAT32 edge semantics (FSInfo free-count maintenance, broader stress scenarios)
+- `IN PROGRESS` parity hardening for FAT32 edge semantics (broader stress scenarios and corruption fallback behavior)
 
 ### SR-M6-001 - Protected Mode / DOS Extender Readiness
 References: `docs/m6-dos-extender-requirements.md`, M6 section above

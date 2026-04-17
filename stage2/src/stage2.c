@@ -112,6 +112,13 @@ static void stage2_log_fat_mount_info(void) {
         serial_write(info.fsinfo_valid ? "valid" : "absent");
         serial_write(" next_free_hint=0x");
         serial_write_hex64((u64)info.next_free_hint);
+        serial_write(" free_clusters=");
+        if (info.free_count_known) {
+            serial_write("0x");
+            serial_write_hex64((u64)info.free_cluster_count);
+        } else {
+            serial_write("unknown");
+        }
     }
 
     serial_write("\n");

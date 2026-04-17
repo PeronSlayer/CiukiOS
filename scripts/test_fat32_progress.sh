@@ -38,7 +38,11 @@ if grep -Fq "[ fat ] mounted type=FAT32" "$LOG_FILE"; then
         echo "[FAIL] FAT32 marker missing next_free_hint" >&2
         exit 1
     fi
-    echo "[OK] FAT32 marker includes FSInfo + next_free_hint"
+    if ! grep -Fq "free_clusters=" "$LOG_FILE"; then
+        echo "[FAIL] FAT32 marker missing free_clusters field" >&2
+        exit 1
+    fi
+    echo "[OK] FAT32 marker includes FSInfo + next_free_hint + free_clusters"
 else
     echo "[OK] FAT marker found (non-FAT32 media in current run)"
 fi

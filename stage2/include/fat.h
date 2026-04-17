@@ -27,6 +27,8 @@ typedef struct fat_mount_info {
     u32 fsinfo_sector;
     u32 fsinfo_valid;
     u32 next_free_hint;
+    u32 free_count_known;
+    u32 free_cluster_count;
 } fat_mount_info_t;
 
 typedef int (*fat_dir_enum_cb_t)(const fat_dir_entry_t *entry, void *ctx);
