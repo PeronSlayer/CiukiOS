@@ -801,6 +801,7 @@ static void shell_print_help(void) {
     video_write("  set      - show or set environment variables (set K=V)\n");
     video_write("  history  - show command history\n");
     video_write("  which X  - show where command X is found\n");
+    video_write("  resolve X - alias for which\n");
     video_write("  ticks    - show PIT tick counter\n");
     video_write("  mem      - show boot memory info\n");
     video_write("  shutdown - power off the machine\n");
@@ -814,6 +815,7 @@ static void shell_print_help(void) {
     video_write("\n");
     video_write("Programs can also be launched by name directly:\n");
     video_write("  CIUKEDIT  or  CIUKEDIT.COM  or  DOOM.EXE\n");
+    video_write("  SUBDIR\\APP  or  .\\APP  (path-aware execution)\n");
     video_write("\n");
     video_write("Editing keys:\n");
     video_write("  Left/Right  - move cursor within line\n");
@@ -822,6 +824,12 @@ static void shell_print_help(void) {
     video_write("  Backspace   - remove character before cursor\n");
     video_write("  Tab         - auto-complete command or filename\n");
     video_write("  Up/Down     - navigate command history\n");
+    video_write("  Esc         - clear current input line\n");
+    video_write("  Ctrl+A      - move cursor to start of line\n");
+    video_write("  Ctrl+E      - move cursor to end of line\n");
+    video_write("  Ctrl+U      - clear from cursor to start\n");
+    video_write("  Ctrl+K      - clear from cursor to end\n");
+    video_write("  Ctrl+L      - clear screen and redraw\n");
 }
 
 static void shell_cls(void) {
@@ -4103,6 +4111,76 @@ int stage2_shell_selftest_dosrun_status_path(void) {
     return 1;
 }
 
+int stage2_shell_selftest_resolver(void) {
+    char out[SHELL_PATH_MAX];
+
+    /* Test 1: bare name resolves relative to CWD (/EFI/CIUKIOS at boot) */
+    if (!build_canonical_path("HELLO.COM", out, (u32)sizeof(out))) return 0;
+    if (!str_eq(out, "/EFI/CIUKIOS/HELLO.COM")) {
+        serial_write("[selftest] resolver t1 fail got=");
+        serial_write(out);
+        serial_write("\n");
+        return 0;
+    }
+
+    /* Test 2: relative path with backslash */
+    if (!build_canonical_path("SUBDIR\\APP.COM", out, (u32)sizeof(out))) return 0;
+    if (!str_eq(out, "/EFI/CIUKIOS/SUBDIR/APP.COM")) {
+        serial_write("[selftest] resolver t2 fail got=");
+        serial_write(out);
+        serial_write("\n");
+        return 0;
+    }
+
+    /* Test 3: dot-slash current directory */
+    if (!build_canonical_path(".\\APP.COM", out, (u32)sizeof(out))) return 0;
+    if (!str_eq(out, "/EFI/CIUKIOS/APP.COM")) {
+        serial_write("[selftest] resolver t3 fail got=");
+        serial_write(out);
+        serial_write("\n");
+        return 0;
+    }
+
+    /* Test 4: parent traversal */
+    if (!build_canonical_path("..\\APP.COM", out, (u32)sizeof(out))) return 0;
+    if (!str_eq(out, "/EFI/APP.COM")) {
+        serial_write("[selftest] resolver t4 fail got=");
+        serial_write(out);
+        serial_write("\n");
+        return 0;
+    }
+
+    /* Test 5: absolute path (forward slash) */
+    if (!build_canonical_path("/EFI/TEST.COM", out, (u32)sizeof(out))) return 0;
+    if (!str_eq(out, "/EFI/TEST.COM")) {
+        serial_write("[selftest] resolver t5 fail got=");
+        serial_write(out);
+        serial_write("\n");
+        return 0;
+    }
+
+    /* Test 6: empty input returns CWD */
+    if (!build_canonical_path("", out, (u32)sizeof(out))) return 0;
+    if (!str_eq(out, g_shell_cwd)) {
+        serial_write("[selftest] resolver t6 fail got=");
+        serial_write(out);
+        serial_write("\n");
+        return 0;
+    }
+
+    /* Test 7: forward slash in relative path */
+    if (!build_canonical_path("SUB/FILE.EXE", out, (u32)sizeof(out))) return 0;
+    if (!str_eq(out, "/EFI/CIUKIOS/SUB/FILE.EXE")) {
+        serial_write("[selftest] resolver t7 fail got=");
+        serial_write(out);
+        serial_write("\n");
+        return 0;
+    }
+
+    serial_write("[selftest] resolver: all 7 cases passed\n");
+    return 1;
+}
+
 static void shell_type(const char *args) {
     char path[128];
     fat_dir_entry_t info;
@@ -5963,6 +6041,7 @@ static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
     char probe_path[SHELL_PATH_MAX];
     fat_dir_entry_t probe_entry;
     u32 i = 0U;
+    int has_path = 0;
 
     while (*args && is_space((u8)*args)) args++;
     while (*args && !is_space((u8)*args) && (i + 1U) < (u32)sizeof(name)) {
@@ -5975,15 +6054,27 @@ static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
         return;
     }
 
-    /* Check builtins */
+    /* Detect path component */
     {
+        u32 pi;
+        for (pi = 0U; pi < i; pi++) {
+            if (name[pi] == '/' || name[pi] == '\\') { has_path = 1; break; }
+        }
+    }
+
+    serial_write("[which] probe name=");
+    serial_write(name);
+    serial_write(has_path ? " mode=path-aware\n" : " mode=bare-name\n");
+
+    /* Check builtins (only for bare names) */
+    if (!has_path) {
         static const char *builtins[] = {
             "help", "pwd", "cd", "dir", "type", "copy", "ren", "rename",
             "move", "mkdir", "md", "rmdir", "rd", "attrib", "del", "erase",
             "ascii", "gsplash", "splash", "desktop", "cls", "ver", "echo",
             "set", "pmode", "vga13", "gfx", "image", "mode", "ticks", "mem",
             "shutdown", "reboot", "run", "opengem", "vmode", "vres",
-            "history", "which", "where",
+            "history", "which", "where", "resolve",
             (const char *)0
         };
         char lower_name[SHELL_LINE_MAX];
@@ -5996,13 +6087,16 @@ static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
             if (str_eq(lower_name, builtins[j])) {
                 video_write(name);
                 video_write(": shell builtin\n");
+                serial_write("[which] resolved class=builtin name=");
+                serial_write(name);
+                serial_write("\n");
                 return;
             }
         }
     }
 
-    /* Check COM catalog */
-    {
+    /* Check COM catalog (only meaningful for bare names) */
+    if (!has_path) {
         static const char *suffixes[] = { "", ".COM", ".EXE", (const char *)0 };
         u32 si;
         for (si = 0U; suffixes[si]; si++) {
@@ -6017,15 +6111,27 @@ static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
             }
             if (shell_find_com(handoff, probe_name)) {
                 video_write(probe_name);
-                video_write(": COM catalog (memory-resident)\n");
+                video_write(": COM catalog (memory-resident)");
+                if (suffixes[si][0] != '\0') {
+                    video_write(" [suffix=");
+                    video_write(suffixes[si]);
+                    video_write("]");
+                }
+                video_putchar('\n');
+                serial_write("[which] resolved class=catalog target=");
+                serial_write(probe_name);
+                serial_write("\n");
                 return;
             }
         }
     }
 
-    /* Check FAT */
+    /* Check FAT — works for both bare and path-containing names */
     {
-        static const char *suffixes[] = { ".COM", ".EXE", ".BAT", (const char *)0 };
+        static const char *suffixes_bare[] = { ".COM", ".EXE", ".BAT", (const char *)0 };
+        /* For path-containing names, also try exact match first */
+        static const char *suffixes_path[] = { "", ".COM", ".EXE", ".BAT", (const char *)0 };
+        const char **suffixes = has_path ? suffixes_path : suffixes_bare;
         u32 si;
         for (si = 0U; suffixes[si]; si++) {
             str_copy(probe_name, name, (u32)sizeof(probe_name));
@@ -6042,7 +6148,18 @@ static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
                 video_write(probe_name);
                 video_write(": FAT file (");
                 video_write(probe_path);
-                video_write(")\n");
+                video_write(")");
+                if (suffixes[si][0] != '\0') {
+                    video_write(" [suffix=");
+                    video_write(suffixes[si]);
+                    video_write("]");
+                }
+                video_putchar('\n');
+                serial_write("[which] resolved class=fat target=");
+                serial_write(probe_name);
+                serial_write(" path=");
+                serial_write(probe_path);
+                serial_write("\n");
                 return;
             }
         }
@@ -6050,6 +6167,9 @@ static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
 
     video_write(name);
     video_write(": not found\n");
+    serial_write("[which] not-found name=");
+    serial_write(name);
+    serial_write("\n");
     shell_set_errorlevel(1U);
 }
 
@@ -6078,7 +6198,7 @@ static void shell_complete_builtins(shell_complete_ctx_t *ctx, const char *prefi
         "ascii", "gsplash", "desktop", "cls", "ver", "echo",
         "set", "pmode", "ticks", "mem",
         "shutdown", "reboot", "run", "opengem", "vmode",
-        "history", "which",
+        "history", "which", "resolve",
         (const char *)0
     };
     u32 i;
@@ -6110,6 +6230,7 @@ typedef struct {
     shell_complete_ctx_t *ctx;
     const char *prefix;
     u32 plen;
+    const char *dir_prefix;  /* prepended to each candidate (empty for CWD) */
 } shell_fat_complete_ctx_t;
 
 static int shell_fat_complete_cb(const fat_dir_entry_t *entry, void *raw_ctx) {
@@ -6118,7 +6239,19 @@ static int shell_fat_complete_cb(const fat_dir_entry_t *entry, void *raw_ctx) {
     if (entry->name[0] == '.') return 1;
     if (str_starts_with_nocase(entry->name, fctx->prefix) &&
         str_len(entry->name) > fctx->plen) {
-        shell_complete_add(fctx->ctx, entry->name);
+        char full[SHELL_LINE_MAX];
+        u32 pos = 0U;
+        if (fctx->dir_prefix && fctx->dir_prefix[0] != '\0') {
+            str_copy(full, fctx->dir_prefix, (u32)sizeof(full));
+            pos = str_len(full);
+        }
+        str_copy(full + pos, entry->name, (u32)sizeof(full) - pos);
+        pos = str_len(full);
+        if ((entry->attr & FAT_ATTR_DIRECTORY) && (pos + 2U) < (u32)sizeof(full)) {
+            full[pos] = '\\';
+            full[pos + 1U] = '\0';
+        }
+        shell_complete_add(fctx->ctx, full);
     }
     return 1; /* continue enumeration */
 }
@@ -6130,6 +6263,7 @@ static void shell_complete_fat_cwd(shell_complete_ctx_t *ctx,
     fctx.ctx = ctx;
     fctx.prefix = prefix;
     fctx.plen = plen;
+    fctx.dir_prefix = "";
     fat_list_dir(g_shell_cwd, shell_fat_complete_cb, &fctx);
 }
 
@@ -6159,6 +6293,7 @@ static int shell_do_tab_complete(char *line, u32 *line_len, u32 *cursor,
     u32 tok_start = 0U;
     u32 common;
     u32 i;
+    int has_path_sep = 0;
 
     /* Extract the current token (word being typed) */
     {
@@ -6176,23 +6311,82 @@ static int shell_do_tab_complete(char *line, u32 *line_len, u32 *cursor,
         prefix[plen] = '\0';
     }
 
-    g_complete_ctx.count = 0U;
-
-    /* Whether this is the first token (command position) or an argument */
-    if (tok_start == 0U || (tok_start > 0U && line[0] != '\0')) {
-        /* Check if only spaces before tok_start => command position */
-        int cmd_pos = 1;
-        for (i = 0U; i < tok_start; i++) {
-            if (!is_space((u8)line[i])) { cmd_pos = 0; break; }
-        }
-        if (cmd_pos) {
-            shell_complete_builtins(&g_complete_ctx, prefix, plen);
-            shell_complete_catalog(&g_complete_ctx, handoff, prefix, plen);
+    /* Check if prefix contains a path separator */
+    for (i = 0U; i < plen; i++) {
+        if (prefix[i] == '/' || prefix[i] == '\\') {
+            has_path_sep = 1;
         }
     }
 
-    /* Always add FAT cwd matches for any position */
-    shell_complete_fat_cwd(&g_complete_ctx, prefix, plen);
+    g_complete_ctx.count = 0U;
+
+    if (has_path_sep) {
+        /* Path-aware completion: split into dir_part and name_part */
+        char dir_input[SHELL_PATH_MAX];
+        char dir_resolved[SHELL_PATH_MAX];
+        char user_dir_prefix[SHELL_LINE_MAX];
+        char name_part[SHELL_LINE_MAX];
+        u32 last_sep = 0U;
+        u32 nplen;
+
+        for (i = 0U; i < plen; i++) {
+            if (prefix[i] == '/' || prefix[i] == '\\') {
+                last_sep = i;
+            }
+        }
+
+        /* user_dir_prefix = everything up to and including last separator */
+        for (i = 0U; i <= last_sep && (i + 1U) < (u32)sizeof(user_dir_prefix); i++) {
+            user_dir_prefix[i] = prefix[i];
+        }
+        user_dir_prefix[i] = '\0';
+
+        /* dir_input = directory part for resolution (same as user_dir_prefix) */
+        str_copy(dir_input, user_dir_prefix, (u32)sizeof(dir_input));
+
+        /* name_part = everything after last separator */
+        nplen = plen - last_sep - 1U;
+        for (i = 0U; i < nplen && (i + 1U) < (u32)sizeof(name_part); i++) {
+            name_part[i] = prefix[last_sep + 1U + i];
+        }
+        name_part[nplen] = '\0';
+
+        /* Resolve the directory path */
+        if (build_canonical_path(dir_input, dir_resolved, (u32)sizeof(dir_resolved)) &&
+            fat_ready()) {
+            shell_fat_complete_ctx_t fctx;
+            fctx.ctx = &g_complete_ctx;
+            fctx.prefix = name_part;
+            fctx.plen = nplen;
+            fctx.dir_prefix = user_dir_prefix;
+            fat_list_dir(dir_resolved, shell_fat_complete_cb, &fctx);
+            serial_write("[complete] path-aware dir=");
+            serial_write(dir_resolved);
+            serial_write(" name_part=");
+            serial_write(name_part);
+            serial_write(" hits=");
+            serial_write_hex8((u8)g_complete_ctx.count);
+            serial_write("\n");
+        }
+    } else {
+        /* No path separator — standard flat completion */
+
+        /* Whether this is the first token (command position) or an argument */
+        if (tok_start == 0U || (tok_start > 0U && line[0] != '\0')) {
+            /* Check if only spaces before tok_start => command position */
+            int cmd_pos = 1;
+            for (i = 0U; i < tok_start; i++) {
+                if (!is_space((u8)line[i])) { cmd_pos = 0; break; }
+            }
+            if (cmd_pos) {
+                shell_complete_builtins(&g_complete_ctx, prefix, plen);
+                shell_complete_catalog(&g_complete_ctx, handoff, prefix, plen);
+            }
+        }
+
+        /* Always add FAT cwd matches for any position */
+        shell_complete_fat_cwd(&g_complete_ctx, prefix, plen);
+    }
 
     if (g_complete_ctx.count == 0U) return 0;
 
@@ -6218,6 +6412,9 @@ static int shell_do_tab_complete(char *line, u32 *line_len, u32 *cursor,
         *line_len += add;
         *cursor += add;
         line[*line_len] = '\0';
+        serial_write("[complete] extended=");
+        serial_write(g_complete_ctx.candidates[0]);
+        serial_write("\n");
         return 1;
     }
 
@@ -6274,6 +6471,18 @@ static int shell_try_direct_exec(
     }
     if (name_len == 0U) return 0;
 
+    /* Detect path-aware vs bare-name resolution */
+    {
+        u32 pi;
+        int path_mode = 0;
+        for (pi = 0U; pi < name_len; pi++) {
+            if (name[pi] == '/' || name[pi] == '\\') { path_mode = 1; break; }
+        }
+        serial_write("[shell] direct-exec name=");
+        serial_write(name);
+        serial_write(path_mode ? " resolve=path-aware\n" : " resolve=bare-name\n");
+    }
+
     /* Tail = everything after the first token */
     tail_ptr = get_arg_ptr(line);
 
@@ -6298,13 +6507,21 @@ static int shell_try_direct_exec(
                      (u32)sizeof(synth_args) - _n);                           \
         }                                                                     \
         /* Check catalog first, then FAT */                                   \
-        if (shell_find_com(handoff, probe_name) ||                            \
-            (build_run_path(probe_name, probe_path,                           \
-                            (u32)sizeof(probe_path)) &&                       \
-             fat_find_file(probe_path, &probe_entry))) {                      \
+        if (shell_find_com(handoff, probe_name)) {                            \
             serial_write("[shell] direct-exec resolved=");                    \
             serial_write(probe_name);                                         \
-            serial_write("\n");                                                \
+            serial_write(" class=catalog suffix=" suffix "\n");               \
+            shell_run(boot_info, handoff, synth_args);                        \
+            return 1;                                                         \
+        }                                                                     \
+        if (build_run_path(probe_name, probe_path,                            \
+                           (u32)sizeof(probe_path)) &&                        \
+            fat_find_file(probe_path, &probe_entry)) {                        \
+            serial_write("[shell] direct-exec resolved=");                    \
+            serial_write(probe_name);                                         \
+            serial_write(" class=fat path=");                                 \
+            serial_write(probe_path);                                         \
+            serial_write(" suffix=" suffix "\n");                             \
             shell_run(boot_info, handoff, synth_args);                        \
             return 1;                                                         \
         }                                                                     \
@@ -6500,7 +6717,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
-    if (str_eq(cmd, "which") || str_eq(cmd, "where")) {
+    if (str_eq(cmd, "which") || str_eq(cmd, "where") || str_eq(cmd, "resolve")) {
         shell_cmd_which(get_arg_ptr(line), handoff);
         return;
     }
@@ -6798,6 +7015,96 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             if (shell_do_tab_complete(line, &line_len, &cursor, handoff)) {
                 /* Line was modified — redraw from prompt */
                 shell_line_full_redraw(line, line_len, cursor, 0U);
+            }
+            video_present_dirty_immediate();
+            continue;
+        }
+
+        /* ---- Esc: clear entire input line ---- */
+        if (ascii == 0x1BU) {
+            if (line_len > 0U) {
+                while (cursor < line_len) {
+                    video_putchar(line[cursor]);
+                    cursor++;
+                }
+                while (line_len > 0U) {
+                    video_write("\b \b");
+                    line_len--;
+                }
+                cursor = 0;
+            }
+            video_present_dirty_immediate();
+            continue;
+        }
+
+        /* ---- Ctrl+A: cursor to start of line ---- */
+        if (ascii == 0x01U) {
+            while (cursor > 0U) {
+                cursor--;
+                video_putchar('\b');
+            }
+            video_present_dirty_immediate();
+            continue;
+        }
+
+        /* ---- Ctrl+E: cursor to end of line ---- */
+        if (ascii == 0x05U) {
+            while (cursor < line_len) {
+                video_putchar(line[cursor]);
+                cursor++;
+            }
+            video_present_dirty_immediate();
+            continue;
+        }
+
+        /* ---- Ctrl+U: clear from cursor back to start ---- */
+        if (ascii == 0x15U) {
+            if (cursor > 0U) {
+                u32 old_len = line_len;
+                u32 cut = cursor;
+                u32 j;
+                for (j = 0U; j + cut < line_len; j++) {
+                    line[j] = line[j + cut];
+                }
+                line_len -= cut;
+                cursor = 0;
+                line[line_len] = '\0';
+                {
+                    u32 k;
+                    for (k = 0U; k < cut; k++) {
+                        video_putchar('\b');
+                    }
+                }
+                shell_line_redraw_tail(line, 0U, line_len, 0U, old_len);
+            }
+            video_present_dirty_immediate();
+            continue;
+        }
+
+        /* ---- Ctrl+K: clear from cursor to end of line ---- */
+        if (ascii == 0x0BU) {
+            if (cursor < line_len) {
+                u32 old_len = line_len;
+                line_len = cursor;
+                line[line_len] = '\0';
+                shell_line_redraw_tail(line, cursor, line_len, cursor, old_len);
+            }
+            video_present_dirty_immediate();
+            continue;
+        }
+
+        /* ---- Ctrl+L: clear screen and redraw prompt + line ---- */
+        if (ascii == 0x0CU) {
+            shell_cls();
+            write_prompt();
+            {
+                u32 j;
+                for (j = 0U; j < line_len; j++) {
+                    video_putchar(line[j]);
+                }
+                for (j = line_len; j > cursor; j--) {
+                    video_putchar('\b');
+                }
             }
             video_present_dirty_immediate();
             continue;
