@@ -85,9 +85,10 @@ Reference: `docs/handoffs/2026-04-16-video-driver-minimal.md`
 Reference: `docs/subroadmap-sr-dosrun-001.md`
 
 - `DONE` COM runtime baseline and shell `run` command are active
-- `IN PROGRESS` deterministic end-to-end smoke path for launching a simple DOS program and validating return status
-- `PLANNED` compact non-interactive gate for `run` outcome classes (`ok/not_found/bad_format/runtime`)
-- `PLANNED` minimal `.EXE MZ` single-program smoke integrated with existing MZ regression path
+- `DONE` deterministic end-to-end smoke path for launching a simple DOS program (`CIUKSMK.COM`) and validating return status (`0x2A`)
+- `DONE` compact non-interactive gate for `run` outcome classes (`ok/not_found/bad_format/runtime`) via deterministic serial markers
+- `DONE` launch-path parity mini-gate for `AH=4Ch` -> one-shot `AH=4Dh` behavior (`[ test ] dosrun status path selftest: PASS`)
+- `IN PROGRESS` minimal `.EXE MZ` single-program smoke integrated with existing MZ regression path
 
 ### SR-FS-002 - FAT32 Capability Track
 Reference: `stage2/src/fat.c`

@@ -5,14 +5,15 @@ Reach a deterministic sub-milestone where CiukiOS can run a simple DOS user prog
 
 ## Scope (short roadmap)
 1. `DONE` COM runtime baseline exists.
-2. `IN PROGRESS` deterministic smoke path: launch known simple DOS program from shell + verify return code.
-3. `PLANNED` minimal EXE/MZ single-program smoke alongside COM smoke.
-4. `PLANNED` errorlevel/return-code parity checks (`AH=4Ch` -> `AH=4Dh` one-shot behavior).
-5. `PLANNED` small command-level compatibility matrix for `run` UX (`success/not found/bad format`).
+2. `DONE` deterministic smoke path: launch known simple DOS program from shell + verify return code (`CIUKSMK.COM` -> `0x2A`).
+3. `IN PROGRESS` minimal EXE/MZ single-program smoke alongside COM smoke.
+4. `DONE` errorlevel/return-code parity checks (`AH=4Ch` -> `AH=4Dh` one-shot behavior) with launch-path integrated selftest marker.
+5. `DONE` small command-level compatibility matrix for `run` UX (`success/not found/bad format/runtime`) with deterministic serial markers.
 
 ## Exit Criteria
 1. Non-interactive gate passes on clean boot and validates:
 - program launch marker
 - success return marker
 - no panic/#UD
-2. Shell remains usable after program return.
+2. Dedicated gate available as `make test-dosrun-simple`.
+3. Shell remains usable after program return.
