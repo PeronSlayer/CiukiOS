@@ -189,6 +189,40 @@ void ui_compute_layout(ui_layout_t *L, u32 fb_w, u32 fb_h) {
     L->valid = 1;
 }
 
+/* P1-V4: Layout matrix validation for wide-mode hardening */
+static void ui_validate_layout_matrix(void) {
+    static const struct { u32 w; u32 h; } matrix_res[] = {
+        {1024,  768},
+        {1280,  800},
+        {1920, 1080},
+        {2560, 1440},
+    };
+    u32 i;
+    for (i = 0; i < sizeof(matrix_res) / sizeof(matrix_res[0]); i++) {
+        ui_layout_t test_layout;
+        ui_compute_layout(&test_layout, matrix_res[i].w, matrix_res[i].h);
+        if (test_layout.valid &&
+            test_layout.top_w <= matrix_res[i].w &&
+            test_layout.status_w <= matrix_res[i].w &&
+            test_layout.content_w > 0U &&
+            test_layout.content_w <= matrix_res[i].w &&
+            test_layout.dock_w > 0U &&
+            test_layout.dock_w <= matrix_res[i].w) {
+            serial_write("[ui] layout matrix pass ");
+            serial_write_u32(matrix_res[i].w);
+            serial_write("x");
+            serial_write_u32(matrix_res[i].h);
+            serial_write("\n");
+        } else {
+            serial_write("[ui] layout matrix FAIL ");
+            serial_write_u32(matrix_res[i].w);
+            serial_write("x");
+            serial_write_u32(matrix_res[i].h);
+            serial_write("\n");
+        }
+    }
+}
+
 static void ui_layout_debug_serial(const ui_layout_t *L) {
     serial_write("[ ui ] layout grid=");
     serial_write_u32(UI_GRID);
@@ -361,8 +395,14 @@ int ui_render_scene(void) {
 }
 
 int ui_enter_desktop_scene(void) {
+    static int matrix_validated = 0;
     if (!ui_set_scene(SCENE_DESKTOP)) return 0;
     serial_write("[ ui ] scene=desktop\n");
+    /* P1-V4: Run layout matrix validation once */
+    if (!matrix_validated) {
+        ui_validate_layout_matrix();
+        matrix_validated = 1;
+    }
     ui_render_scene();
     video_present();
     return 1;

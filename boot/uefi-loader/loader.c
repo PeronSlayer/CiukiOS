@@ -1335,8 +1335,21 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
             BS->LocateProtocol, 3, &gop_guid, NULL, (VOID **)&gop
         );
         if (!EFI_ERROR(gop_status) && gop && gop->Mode && gop->Mode->Info) {
-            /* --- GOP mode catalog + selection --- */
+            /* --- GOP mode catalog + policyv2 scoring engine --- */
             {
+                /* Resolution class table for scoring (P1-V1) */
+                static const struct { UINT32 w; UINT32 h; UINT32 rank; const CHAR16 *name; } res_class[] = {
+                    {1024,  768, 5, L"baseline"},
+                    {1280,  720, 4, L"HD720"},
+                    {1280,  800, 4, L"HD800"},
+                    {1600,  900, 3, L"HD+"},
+                    {1920, 1080, 2, L"FHD"},
+                    {2560, 1440, 1, L"QHD"},
+                    {3840, 2160, 0, L"4K"},
+                };
+                static const UINT32 res_class_count = sizeof(res_class) / sizeof(res_class[0]);
+
+                /* Preferred resolution order for fallback scoring (lower index = higher priority) */
                 static const struct { UINT32 w; UINT32 h; } preferred[] = {
                     {1024, 768},
                     {800,  600},
@@ -1345,8 +1358,9 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                     {1920, 1080},
                 };
                 UINT32 pref_count = sizeof(preferred) / sizeof(preferred[0]);
-                UINT32 best_mode = gop->Mode->Mode; /* default: keep current */
-                UINT32 best_pref = pref_count;       /* lower = better */
+                UINT32 best_mode = gop->Mode->Mode;
+                UINT32 best_pref = pref_count;
+                INT32  best_score = -1;
                 UINT32 mode_count = gop->Mode->MaxMode;
                 UINT32 mi;
                 UINT32 catalog_count = 0;
@@ -1397,7 +1411,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                         entry->height = mode_info->VerticalResolution;
                         entry->bpp = bpp_val;
                         entry->pixels_per_scanline = mode_info->PixelsPerScanLine;
-                        entry->flags = fits_backbuf; /* bit 0: fits in driver backbuffer */
+                        entry->flags = fits_backbuf;
                         catalog_count++;
                     }
 
@@ -1422,14 +1436,12 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
                     /* --- VMODE.CFG priority check (any 32bpp mode) --- */
                     if (!cfg_resolved && bpp_val == 32 && vmode_cfg_valid(&vmode_cfg)) {
-                        /* Priority 1: exact mode id match */
                         if (vmode_cfg.mode_id != 0xFFFFFFFFU &&
                             mi == vmode_cfg.mode_id) {
                             best_mode = mi;
                             cfg_resolved = TRUE;
                             cfg_source = L"VMODE.CFG";
                         }
-                        /* Priority 2: width x height match */
                         if (!cfg_resolved &&
                             vmode_cfg.width != 0 && vmode_cfg.height != 0 &&
                             mode_info->HorizontalResolution == vmode_cfg.width &&
@@ -1440,15 +1452,65 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                         }
                     }
 
-                    /* Priority 3: fallback preference table */
-                    if (!cfg_resolved && bpp_val == 32 && fits_backbuf) {
-                        for (UINT32 pi = 0; pi < pref_count; pi++) {
-                            if (mode_info->HorizontalResolution == preferred[pi].w &&
-                                mode_info->VerticalResolution   == preferred[pi].h &&
-                                pi < best_pref) {
+                    /* --- Policyv2 scoring engine (P1-V1) --- */
+                    if (!cfg_resolved && bpp_val == 32) {
+                        INT32 mode_score = 0;
+                        UINT32 mw = mode_info->HorizontalResolution;
+                        UINT32 mh = mode_info->VerticalResolution;
+                        UINT64 frame_bytes = (UINT64)mh * (UINT64)mode_info->PixelsPerScanLine * bytes_pp;
+
+                        /* Filter: sane dimensions (32..7680), pitch > 0 */
+                        if (mw >= 32U && mw <= 7680U && mh >= 32U && mh <= 4320U &&
+                            mode_info->PixelsPerScanLine >= mw) {
+
+                            /* Score: resolution class match (0-60 points) */
+                            for (UINT32 ci = 0; ci < res_class_count; ci++) {
+                                if (mw == res_class[ci].w && mh == res_class[ci].h) {
+                                    mode_score += (INT32)(60U - res_class[ci].rank * 8U);
+                                    break;
+                                }
+                            }
+
+                            /* Score: aspect ratio proximity to 16:10 or 16:9 (0-20 points) */
+                            {
+                                UINT32 ratio_x10 = (mw * 10U) / (mh > 0U ? mh : 1U);
+                                /* 16:9 = 17, 16:10 = 16, 4:3 = 13 */
+                                if (ratio_x10 >= 16U && ratio_x10 <= 18U) {
+                                    mode_score += 20;
+                                } else if (ratio_x10 >= 13U && ratio_x10 <= 15U) {
+                                    mode_score += 10;
+                                }
+                            }
+
+                            /* Score: fits double-buffer budget (0-15 points) */
+                            if (frame_bytes <= VIDEO_BUDGET_SAFE_CEILING) {
+                                mode_score += 15;
+                            } else if (frame_bytes <= VIDEO_BUDGET_TIER_QHD_BYTES) {
+                                mode_score += 5;
+                            }
+
+                            /* Score: baseline satisfaction bonus (0-5 points) */
+                            if (mw >= VIDEO_POLICY_BASELINE_W && mh >= VIDEO_POLICY_BASELINE_H) {
+                                mode_score += 5;
+                            }
+
+                            /* Tie-break: prefer lower mode index for determinism */
+                            if (mode_score > best_score ||
+                                (mode_score == best_score && mi < best_mode)) {
                                 best_mode = mi;
-                                best_pref = pi;
-                                break;
+                                best_score = mode_score;
+                            }
+                        }
+
+                        /* Legacy fallback preference table (fits_backbuf gated) */
+                        if (fits_backbuf) {
+                            for (UINT32 pi = 0; pi < pref_count; pi++) {
+                                if (mw == preferred[pi].w &&
+                                    mh == preferred[pi].h &&
+                                    pi < best_pref) {
+                                    best_pref = pi;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1458,6 +1520,17 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
                 if (using_stage2) {
                     handoff->gop_mode_count = catalog_count;
+                }
+
+                /* Policyv2 result marker (P1-V1) */
+                {
+                    const CHAR16 *result_str = L"PASS";
+                    if (!cfg_resolved && best_score < 0) {
+                        result_str = L"FALLBACK";
+                    }
+                    Print(L"GOP: policyv2 modes=%d selected=%dx%d score=%d result=%s\r\n",
+                          mode_count, 0, 0, best_score, result_str);
+                    /* Actual selected resolution printed after SetMode below */
                 }
 
                 if (best_mode != gop->Mode->Mode) {
@@ -1479,6 +1552,84 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                       gop->Mode->Mode,
                       gop->Mode->Info->HorizontalResolution,
                       gop->Mode->Info->VerticalResolution);
+
+                /* Re-emit policyv2 marker with final resolved resolution */
+                {
+                    UINT32 sel_w = gop->Mode->Info->HorizontalResolution;
+                    UINT32 sel_h = gop->Mode->Info->VerticalResolution;
+                    const CHAR16 *result_str = L"PASS";
+                    if (!cfg_resolved && best_score < 0) {
+                        result_str = L"FALLBACK";
+                    }
+                    Print(L"GOP: policyv2 modes=%d selected=%dx%d score=%d result=%s\r\n",
+                          mode_count, sel_w, sel_h, best_score, result_str);
+                }
+
+                /* Budgetv2 tier classification (P1-V2) */
+                {
+                    UINT32 sel_w = gop->Mode->Info->HorizontalResolution;
+                    UINT32 sel_h = gop->Mode->Info->VerticalResolution;
+                    UINT32 sel_bpp = gop_detect_bpp(gop->Mode->Info);
+                    UINT32 sel_bpp_bytes = (sel_bpp + 7U) / 8U;
+                    UINT64 frame_bytes = (UINT64)sel_h *
+                                         (UINT64)gop->Mode->Info->PixelsPerScanLine *
+                                         sel_bpp_bytes;
+                    const CHAR16 *class_name = L"unknown";
+                    UINT32 allow_db = 0;
+
+                    if (frame_bytes <= VIDEO_BUDGET_TIER_BASELINE_BYTES) {
+                        class_name = L"baseline"; allow_db = 1;
+                    } else if (frame_bytes <= VIDEO_BUDGET_TIER_HD_BYTES) {
+                        class_name = L"HD"; allow_db = 1;
+                    } else if (frame_bytes <= VIDEO_BUDGET_TIER_HDP_BYTES) {
+                        class_name = L"HD+"; allow_db = 1;
+                    } else if (frame_bytes <= VIDEO_BUDGET_TIER_FHD_BYTES) {
+                        class_name = L"FHD"; allow_db = 1;
+                    } else if (frame_bytes <= VIDEO_BUDGET_TIER_QHD_BYTES) {
+                        class_name = L"QHD"; allow_db = 0;
+                    } else if (frame_bytes <= VIDEO_BUDGET_TIER_4K_BYTES) {
+                        class_name = L"4K"; allow_db = 0;
+                    } else {
+                        class_name = L"oversize"; allow_db = 0;
+                    }
+
+                    Print(L"GOP: budgetv2 class=%s bytes=%lu allow_db=%d\r\n",
+                          class_name, frame_bytes, allow_db);
+
+                    /* Fallback degrade: if selected mode exceeds safe ceiling and no config override, degrade */
+                    if (!cfg_resolved && frame_bytes > VIDEO_BUDGET_SAFE_CEILING) {
+                        /* Try to find a lower resolution class that fits */
+                        UINT32 fallback_mode = best_mode;
+                        BOOLEAN found_fallback = FALSE;
+                        UINT32 fi;
+
+                        for (fi = 0; fi < catalog_count && using_stage2; fi++) {
+                            handoff_gop_mode_entry_t *fe = &handoff->gop_modes[fi];
+                            if (fe->bpp == 32 &&
+                                fe->width >= VIDEO_POLICY_BASELINE_W &&
+                                fe->height >= VIDEO_POLICY_BASELINE_H) {
+                                UINT64 fb = (UINT64)fe->height * (UINT64)fe->pixels_per_scanline * 4ULL;
+                                if (fb <= VIDEO_BUDGET_SAFE_CEILING) {
+                                    fallback_mode = fe->mode_id;
+                                    found_fallback = TRUE;
+                                    Print(L"GOP: fallback reason=overbudget next=%dx%d\r\n",
+                                          fe->width, fe->height);
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (found_fallback && fallback_mode != gop->Mode->Mode) {
+                            EFI_STATUS fm = uefi_call_wrapper(gop->SetMode, 2, gop, fallback_mode);
+                            if (!EFI_ERROR(fm)) {
+                                sel_w = gop->Mode->Info->HorizontalResolution;
+                                sel_h = gop->Mode->Info->VerticalResolution;
+                                Print(L"GOP: degraded to mode %d (%dx%d)\r\n",
+                                      fallback_mode, sel_w, sel_h);
+                            }
+                        }
+                    }
+                }
 
                 {
                     UINT32 selected_w = gop->Mode->Info->HorizontalResolution;

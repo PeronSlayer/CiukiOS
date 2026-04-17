@@ -18,7 +18,7 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 - `DONE` framebuffer text+gfx baseline
 - `DONE` first video driver vmode stack (`double buffer`, blitting, mode catalog + `vmode` command + pipeline gate)
 - `DONE` dynamic backbuffer policy up to `1920x1080` with dedicated policy gate
-- `IN PROGRESS` scaling strategy beyond Full HD and mode-policy hardening across wider GOP catalogs
+- `DONE` scaling strategy beyond Full HD and mode-policy hardening across wider GOP catalogs
 
 ### Phase 2 - DOS Core Compatibility
 - `DONE` INT21h baseline set (priority-A matrix path)
@@ -49,11 +49,11 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 ### M6 - Protected Mode and DOS Extender Path
 - `DONE` PMODE contract v1 baseline marker path + shell surface (`pmode`) with deterministic startup selftests
 - `DONE` dedicated PMODE contract gate (`make test-m6-pmode`)
-- `DONE` aggregate M6 readiness gate (`scripts/test_doom_readiness_m6.sh`)
-- `IN PROGRESS` real-mode entry point infrastructure (A20 gate, GDT/IDT baseline)
-- `IN PROGRESS` protected-mode transition contract (CS:IP preservation, CR0, return path)
-- `PLANNED` DOS/4GW host interface (DPMI query, real-mode callbacks, interrupt reflection)
-- `PLANNED` memory accounting for pmode allocations (no overlap with stage2)
+- `DONE` aggregate M6 readiness gate (`scripts/test_doom_readiness_m6.sh`) with transition-v2 check
+- `DONE` real-mode entry point baseline (A20 probe/enable contract + descriptor baseline marker)
+- `DONE` protected-mode transition contract v2 baseline (transition state block + descriptor snapshots + CR0 + return-path markers)
+- `DONE` DOS/4GW host-interface skeleton baseline (DPMI detect, real-mode callback, interrupt reflection markers)
+- `DONE` pmode memory accounting baseline domain with deterministic overlap guard
 - Gate: `scripts/test_doom_readiness_m6.sh` PASS + no regressions to INT21h/MZ/shell/video
 - Ref: `docs/m6-dos-extender-requirements.md`
 
@@ -77,7 +77,7 @@ Reference: `docs/handoffs/2026-04-16-video-driver-minimal.md`
 - `DONE` deterministic compatibility gate for `1024x768` (`make test-video-1024`)
 - `DONE` runtime loader marker for `1024x768` policy result (`GOP: policy1024 ... result=PASS/FAIL`) validated by video pipeline gate
 - `DONE` dynamic/larger backbuffer policy up to `1920x1080` (`scripts/test_video_backbuf_policy.sh`)
-- `IN PROGRESS` compatibility expansion above Full HD without direct-render fallback
+- `DONE` compatibility expansion above Full HD without direct-render fallback
 - `DONE` deterministic frame pacing / present scheduler baseline to reduce jitter under GUI workloads
 - `DONE` overlay text plane baseline so shell/UI text remains readable during gfx redraw cycles
 - `DONE` resolution-independent layout metrics baseline for desktop widgets/panels (800x600 -> 1920x1080)
@@ -108,9 +108,11 @@ References: `docs/m6-dos-extender-requirements.md`, M6 section above
 
 - `DONE` PMODE contract startup marker + deterministic selftests
 - `DONE` PMODE contract dedicated gate (`make test-m6-pmode`)
-- `DONE` aggregate readiness orchestration gate (`scripts/test_doom_readiness_m6.sh`)
-- `IN PROGRESS` transition path implementation (real -> protected -> return baseline)
-- `PLANNED` DOS/4GW host-path compatibility harness with real extender binaries
+- `DONE` aggregate readiness orchestration gate (`scripts/test_doom_readiness_m6.sh`) including transition-v2 gate
+- `DONE` transition path baseline contract (state block + snapshots + CR0/return-path markers)
+- `DONE` DOS/4GW host-interface skeleton baseline (non-crashing deterministic markers)
+- `DONE` pmode memory accounting baseline (isolated range + overlap guard)
+- `IN PROGRESS` real DOS/4GW compatibility beyond skeleton baseline
 
 ### SR-OPENGEM-001 - OpenGEM Runtime Path
 Reference: `docs/handoffs/2026-04-16-copilot-opengem-integration.md`

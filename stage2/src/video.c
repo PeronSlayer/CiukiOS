@@ -457,6 +457,42 @@ void video_init(boot_info_t *bi) {
         serial_write(" fits=");
         serial_write((needed <= budget) ? "YES" : "NO");
         serial_write("\n");
+
+        /* P1-V2: Budget tier classification */
+        {
+            const char *class_name = "unknown";
+            u32 allow_db = 0;
+            if (needed <= VIDEO_BUDGET_TIER_BASELINE_BYTES) {
+                class_name = "baseline"; allow_db = 1;
+            } else if (needed <= VIDEO_BUDGET_TIER_HD_BYTES) {
+                class_name = "HD"; allow_db = 1;
+            } else if (needed <= VIDEO_BUDGET_TIER_HDP_BYTES) {
+                class_name = "HD+"; allow_db = 1;
+            } else if (needed <= VIDEO_BUDGET_TIER_FHD_BYTES) {
+                class_name = "FHD"; allow_db = 1;
+            } else if (needed <= VIDEO_BUDGET_TIER_QHD_BYTES) {
+                class_name = "QHD"; allow_db = 0;
+            } else if (needed <= VIDEO_BUDGET_TIER_4K_BYTES) {
+                class_name = "4K"; allow_db = 0;
+            } else {
+                class_name = "oversize"; allow_db = 0;
+            }
+            serial_write("[video] budgetv2 class=");
+            serial_write(class_name);
+            serial_write(" bytes=");
+            ni = 0; tmp = needed;
+            if (tmp == 0) { numbuf[ni++] = '0'; }
+            else {
+                char rev2[20]; u32 ri2 = 0;
+                while (tmp) { rev2[ri2++] = '0' + (char)(tmp % 10); tmp /= 10; }
+                while (ri2) numbuf[ni++] = rev2[--ri2];
+            }
+            numbuf[ni] = '\0';
+            serial_write(numbuf);
+            serial_write(" allow_db=");
+            serial_write(allow_db ? "1" : "0");
+            serial_write("\n");
+        }
     }
 }
 
