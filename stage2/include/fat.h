@@ -18,10 +18,22 @@ typedef struct fat_dir_entry {
     u32 size;
 } fat_dir_entry_t;
 
+typedef struct fat_mount_info {
+    u32 fat_type;
+    u32 bytes_per_sector;
+    u32 sectors_per_cluster;
+    u32 total_clusters;
+    u32 root_cluster;
+    u32 fsinfo_sector;
+    u32 fsinfo_valid;
+    u32 next_free_hint;
+} fat_mount_info_t;
+
 typedef int (*fat_dir_enum_cb_t)(const fat_dir_entry_t *entry, void *ctx);
 
 int fat_init(void);
 int fat_ready(void);
+int fat_get_mount_info(fat_mount_info_t *out);
 int fat_list_dir(const char *path, fat_dir_enum_cb_t cb, void *ctx);
 int fat_find_file(const char *path, fat_dir_entry_t *out);
 int fat_read_file(const char *path, void *out, u32 out_capacity, u32 *out_size);

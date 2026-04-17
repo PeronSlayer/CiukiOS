@@ -23,6 +23,7 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 ### Phase 2 - DOS Core Compatibility
 - `DONE` INT21h baseline set (priority-A matrix path)
 - `DONE` FAT-backed file handle baseline
+- `DONE` FAT32 capability step-up (FSInfo-backed allocation hint + dynamic directory growth for non-fixed directories)
 - `DONE` INT21h file search + rename subset (`AH=4Eh/4Fh/56h`) with matrix/test coverage
 - `DONE` COM runtime and shell command surface
 - `DONE` EXE/MZ runtime compatibility depth (deterministic parser/relocation hardening + regression suite)
@@ -74,6 +75,28 @@ Reference: `docs/handoffs/2026-04-16-video-driver-minimal.md`
 - `DONE` runtime loader marker for `1024x768` policy result (`GOP: policy1024 ... result=PASS/FAIL`) validated by video pipeline gate
 - `DONE` dynamic/larger backbuffer policy up to `1920x1080` (`scripts/test_video_backbuf_policy.sh`)
 - `IN PROGRESS` compatibility expansion above Full HD without direct-render fallback
+- `IN PROGRESS` deterministic frame pacing / present scheduler to reduce jitter under GUI workloads
+- `IN PROGRESS` overlay text plane hardening so shell/UI text remains readable during gfx redraw cycles
+- `PLANNED` resolution-independent layout metrics for desktop widgets/panels (800x600 -> 1920x1080)
+- `PLANNED` upgraded glyph/font profile selection by resolution class
+- `PLANNED` dedicated regression gate for advanced video+UI path (`test-video-ui-v2`)
+
+### SR-DOSRUN-001 - First Simple DOS Program Execution
+Reference: `docs/subroadmap-sr-dosrun-001.md`
+
+- `DONE` COM runtime baseline and shell `run` command are active
+- `IN PROGRESS` deterministic end-to-end smoke path for launching a simple DOS program and validating return status
+- `PLANNED` compact non-interactive gate for `run` outcome classes (`ok/not_found/bad_format/runtime`)
+- `PLANNED` minimal `.EXE MZ` single-program smoke integrated with existing MZ regression path
+
+### SR-FS-002 - FAT32 Capability Track
+Reference: `stage2/src/fat.c`
+
+- `DONE` FAT mount diagnostics now expose filesystem type and FAT32 metadata marker (`fsinfo`, `next_free_hint`)
+- `DONE` allocator now uses `next_free_hint` strategy (mount-time + runtime updates) instead of fixed linear scan from cluster 2
+- `DONE` dynamic directory growth for non-fixed directories (including FAT32 root directory chain extension)
+- `DONE` new gate `test-fat32-progress` to validate FAT mount/FAT32 metadata markers
+- `IN PROGRESS` parity hardening for FAT32 edge semantics (FSInfo free-count maintenance, broader stress scenarios)
 
 ### SR-M6-001 - Protected Mode / DOS Extender Readiness
 References: `docs/m6-dos-extender-requirements.md`, M6 section above
@@ -106,3 +129,4 @@ References: `docs/handoffs/2026-04-16-copilot-gui-v8-heavy-cycle.md`, related GU
 1. Advance milestone path toward first DOS DOOM boot and run.
 2. Expand protected-mode and DOS-extender execution path (M6 core implementation).
 3. Evolve video subsystem beyond Full HD baseline while preserving current deterministic gates.
+4. Stabilize FAT32 behavior as default filesystem baseline for upcoming DOS runtime steps.

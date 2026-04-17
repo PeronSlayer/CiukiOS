@@ -80,6 +80,43 @@ static int stage2_m6_pmode_shell_surface_selftest(void) {
            sizeof(cmd) == 6U;
 }
 
+static void stage2_log_fat_mount_info(void) {
+    fat_mount_info_t info;
+
+    if (!fat_get_mount_info(&info)) {
+        return;
+    }
+
+    serial_write("[ fat ] mounted type=");
+    if (info.fat_type == 12U) {
+        serial_write("FAT12");
+    } else if (info.fat_type == 16U) {
+        serial_write("FAT16");
+    } else if (info.fat_type == 32U) {
+        serial_write("FAT32");
+    } else {
+        serial_write("UNKNOWN");
+    }
+
+    serial_write(" bps=0x");
+    serial_write_hex64((u64)info.bytes_per_sector);
+    serial_write(" spc=0x");
+    serial_write_hex64((u64)info.sectors_per_cluster);
+    serial_write(" clusters=0x");
+    serial_write_hex64((u64)info.total_clusters);
+
+    if (info.fat_type == 32U) {
+        serial_write(" root_cluster=0x");
+        serial_write_hex64((u64)info.root_cluster);
+        serial_write(" fsinfo=");
+        serial_write(info.fsinfo_valid ? "valid" : "absent");
+        serial_write(" next_free_hint=0x");
+        serial_write_hex64((u64)info.next_free_hint);
+    }
+
+    serial_write("\n");
+}
+
 static void halt_forever(void) {
     for (;;) {
         __asm__ volatile ("cli; hlt");
@@ -385,6 +422,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
     if (fat_init()) {
         serial_write("[ ok ] FAT layer mounted (rw cache)\n");
+        stage2_log_fat_mount_info();
         serial_write("[ compat ] INT21h FAT-backed file handles ready (AH=3Ch/3Dh/3Eh/3Fh/40h/41h/42h/43h/56h)\n");
         if (stage2_shell_selftest_int21_fat_handles()) {
             serial_write("[ test ] int21 fat-handle e2e selftest: PASS\n");

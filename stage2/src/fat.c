@@ -23,6 +23,9 @@ typedef struct fat_fs {
     u32 root_cluster;
     u32 total_sectors;
     u32 total_clusters;
+    u32 next_free_hint;
+    u32 fsinfo_sector;
+    u32 fsinfo_valid;
 } fat_fs_t;
 
 typedef struct fat_dir_ref {
@@ -40,6 +43,10 @@ typedef struct fat_dir_slot {
 typedef int (*fat_raw_entry_cb_t)(const u8 *entry, void *ctx);
 
 static fat_fs_t g_fs;
+
+#define FAT32_FSINFO_LEAD_SIG   0x41615252U
+#define FAT32_FSINFO_STRUCT_SIG 0x61417272U
+#define FAT32_FSINFO_TRAIL_SIG  0xAA550000U
 
 static u16 rd16(const u8 *p) {
     return (u16)((u16)p[0] | ((u16)p[1] << 8));
@@ -214,6 +221,47 @@ static int disk_write_bytes(u64 absolute_byte_offset, const u8 *src, u32 len) {
     return 1;
 }
 
+static u32 fat_cluster_limit(void) {
+    return g_fs.total_clusters + 2U;
+}
+
+static u32 fat_sanitize_cluster_hint(u32 hint) {
+    u32 limit = fat_cluster_limit();
+    if (hint < 2U || hint >= limit) {
+        return 2U;
+    }
+    return hint;
+}
+
+static int fat_fsinfo_sector_valid(void) {
+    return g_fs.fat_type == FAT_TYPE_32 &&
+           g_fs.fsinfo_valid != 0U &&
+           g_fs.fsinfo_sector > 0U;
+}
+
+static int fat_fsinfo_update_next_free(u32 hint) {
+    u8 *sector;
+
+    if (!fat_fsinfo_sector_valid()) {
+        return 1;
+    }
+
+    sector = stage2_disk_lba_ptr_rw((u64)g_fs.fsinfo_sector);
+    if (!sector) {
+        g_fs.fsinfo_valid = 0U;
+        return 1;
+    }
+    if (rd32(sector + 0x000U) != FAT32_FSINFO_LEAD_SIG ||
+        rd32(sector + 0x1E4U) != FAT32_FSINFO_STRUCT_SIG ||
+        rd32(sector + 0x1FCU) != FAT32_FSINFO_TRAIL_SIG) {
+        g_fs.fsinfo_valid = 0U;
+        return 1;
+    }
+
+    wr32(sector + 0x1ECU, fat_sanitize_cluster_hint(hint));
+    return 1;
+}
+
 static int cluster_is_eoc(u32 cluster) {
     if (g_fs.fat_type == FAT_TYPE_12) {
         return cluster >= 0x0FF8U;
@@ -222,6 +270,16 @@ static int cluster_is_eoc(u32 cluster) {
         return cluster >= 0xFFF8U;
     }
     return cluster >= 0x0FFFFFF8U;
+}
+
+static u32 fat_eoc_value(void) {
+    if (g_fs.fat_type == FAT_TYPE_12) {
+        return 0x0FFFU;
+    }
+    if (g_fs.fat_type == FAT_TYPE_16) {
+        return 0xFFFFU;
+    }
+    return 0x0FFFFFFFU;
 }
 
 static u32 fat_next_cluster(u32 cluster) {
@@ -314,6 +372,7 @@ static int fat_set_cluster_value(u32 cluster, u32 value) {
 static int fat_free_chain(u32 start_cluster) {
     u32 cluster = start_cluster;
     u32 guard = g_fs.total_clusters + 4U;
+    u32 min_freed = 0U;
 
     if (cluster < 2U) {
         return 1;
@@ -324,11 +383,23 @@ static int fat_free_chain(u32 start_cluster) {
         if (!fat_set_cluster_value(cluster, 0U)) {
             return 0;
         }
+        if (min_freed == 0U || cluster < min_freed) {
+            min_freed = cluster;
+        }
 
         if (next == 0U || next == 1U || cluster_is_eoc(next)) {
             break;
         }
         cluster = next;
+    }
+
+    if (min_freed >= 2U) {
+        if (g_fs.next_free_hint < 2U || min_freed < g_fs.next_free_hint) {
+            g_fs.next_free_hint = min_freed;
+        }
+        if (!fat_fsinfo_update_next_free(g_fs.next_free_hint)) {
+            return 0;
+        }
     }
 
     return 1;
@@ -650,14 +721,19 @@ static int fat_locate_path_entry(
 
 int fat_init(void) {
     const u8 *bs;
+    const u8 *fsinfo;
     u32 root_entries;
     u32 total_sectors;
     u32 fat_size;
     u32 data_sectors;
     u32 cluster_count;
     u32 disk_block_size;
+    u32 fsinfo_sector;
 
     g_fs.mounted = 0;
+    g_fs.next_free_hint = 2U;
+    g_fs.fsinfo_sector = 0U;
+    g_fs.fsinfo_valid = 0U;
 
     if (!stage2_disk_ready()) {
         return 0;
@@ -728,7 +804,22 @@ int fat_init(void) {
         if (g_fs.root_cluster < 2U) {
             g_fs.root_cluster = 2U;
         }
+
+        fsinfo_sector = (u32)rd16(bs + 48);
+        if (fsinfo_sector > 0U && fsinfo_sector < g_fs.reserved_sectors) {
+            fsinfo = stage2_disk_lba_ptr((u64)fsinfo_sector);
+            if (fsinfo &&
+                rd32(fsinfo + 0x000U) == FAT32_FSINFO_LEAD_SIG &&
+                rd32(fsinfo + 0x1E4U) == FAT32_FSINFO_STRUCT_SIG &&
+                rd32(fsinfo + 0x1FCU) == FAT32_FSINFO_TRAIL_SIG) {
+                g_fs.fsinfo_sector = fsinfo_sector;
+                g_fs.fsinfo_valid = 1U;
+                g_fs.next_free_hint = fat_sanitize_cluster_hint(rd32(fsinfo + 0x1ECU));
+            }
+        }
     }
+
+    g_fs.next_free_hint = fat_sanitize_cluster_hint(g_fs.next_free_hint);
 
     g_fs.mounted = 1;
     return 1;
@@ -736,6 +827,22 @@ int fat_init(void) {
 
 int fat_ready(void) {
     return g_fs.mounted;
+}
+
+int fat_get_mount_info(fat_mount_info_t *out) {
+    if (!out || !g_fs.mounted) {
+        return 0;
+    }
+
+    out->fat_type = g_fs.fat_type;
+    out->bytes_per_sector = g_fs.bytes_per_sector;
+    out->sectors_per_cluster = g_fs.sectors_per_cluster;
+    out->total_clusters = g_fs.total_clusters;
+    out->root_cluster = g_fs.root_cluster;
+    out->fsinfo_sector = g_fs.fsinfo_sector;
+    out->fsinfo_valid = g_fs.fsinfo_valid;
+    out->next_free_hint = fat_sanitize_cluster_hint(g_fs.next_free_hint);
+    return 1;
 }
 
 typedef struct list_ctx {
@@ -1019,12 +1126,21 @@ static int fat_normalize_83_name(const char *name, u8 out11[11]) {
  * Returns the cluster number or 0 if the volume is full.
  */
 static u32 fat_find_free_cluster(void) {
-    u32 limit = g_fs.total_clusters + 2U;
-    for (u32 c = 2U; c < limit; c++) {
+    u32 limit = fat_cluster_limit();
+    u32 start = fat_sanitize_cluster_hint(g_fs.next_free_hint);
+
+    for (u32 c = start; c < limit; c++) {
         if (fat_next_cluster(c) == 0U) {
             return c;
         }
     }
+
+    for (u32 c = 2U; c < start; c++) {
+        if (fat_next_cluster(c) == 0U) {
+            return c;
+        }
+    }
+
     return 0U;
 }
 
@@ -1038,18 +1154,13 @@ static int fat_alloc_chain(u32 count, u32 *first_out) {
     u32 eoc;
     u32 prev = 0U;
     u32 first = 0U;
+    u32 last_alloc = 0U;
 
     if (count == 0U || !first_out) {
         return 0;
     }
 
-    if (g_fs.fat_type == FAT_TYPE_12) {
-        eoc = 0x0FFFU;
-    } else if (g_fs.fat_type == FAT_TYPE_16) {
-        eoc = 0xFFFFU;
-    } else {
-        eoc = 0x0FFFFFFFU;
-    }
+    eoc = fat_eoc_value();
 
     for (u32 i = 0U; i < count; i++) {
         u32 c = fat_find_free_cluster();
@@ -1079,6 +1190,16 @@ static int fat_alloc_chain(u32 count, u32 *first_out) {
             first = c;
         }
         prev = c;
+        last_alloc = c;
+    }
+
+    if (last_alloc >= 2U) {
+        u32 limit = fat_cluster_limit();
+        g_fs.next_free_hint = (last_alloc + 1U < limit) ? (last_alloc + 1U) : 2U;
+        if (!fat_fsinfo_update_next_free(g_fs.next_free_hint)) {
+            fat_free_chain(first);
+            return 0;
+        }
     }
 
     *first_out = first;
@@ -1146,6 +1267,73 @@ static int fat_write_cluster_data(u32 start_cluster, const u8 *data, u32 size) {
     return remaining == 0U;
 }
 
+static int fat_zero_cluster(u32 cluster) {
+    u32 first_sector;
+
+    if (cluster < 2U) {
+        return 0;
+    }
+
+    first_sector = cluster_first_sector(cluster);
+    for (u32 s = 0U; s < g_fs.sectors_per_cluster; s++) {
+        u8 *sector = stage2_disk_lba_ptr_rw((u64)first_sector + s);
+        if (!sector) {
+            return 0;
+        }
+        for (u32 i = 0U; i < g_fs.bytes_per_sector; i++) {
+            sector[i] = 0U;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Extend a non-fixed directory by one cluster and return the first free slot
+ * in the newly allocated cluster.
+ */
+static int fat_extend_dir_chain(const fat_dir_ref_t *dir, fat_dir_slot_t *slot_out) {
+    u32 cluster;
+    u32 last_cluster;
+    u32 new_cluster;
+    u32 guard;
+    u32 first_sector;
+
+    if (!dir || !slot_out || dir->fixed_root || dir->start_cluster < 2U) {
+        return 0;
+    }
+
+    cluster = dir->start_cluster;
+    last_cluster = cluster;
+    guard = g_fs.total_clusters + 4U;
+
+    while (cluster >= 2U && guard-- > 0U) {
+        u32 next = fat_next_cluster(cluster);
+        last_cluster = cluster;
+        if (next < 2U || cluster_is_eoc(next)) {
+            break;
+        }
+        cluster = next;
+    }
+
+    if (!fat_alloc_chain(1U, &new_cluster)) {
+        return 0;
+    }
+    if (!fat_set_cluster_value(last_cluster, new_cluster)) {
+        fat_free_chain(new_cluster);
+        return 0;
+    }
+    if (!fat_zero_cluster(new_cluster)) {
+        (void)fat_set_cluster_value(last_cluster, fat_eoc_value());
+        fat_free_chain(new_cluster);
+        return 0;
+    }
+
+    first_sector = cluster_first_sector(new_cluster);
+    slot_out->lba = (u64)first_sector;
+    slot_out->offset = 0U;
+    return 1;
+}
+
 /*
  * Find a free (0x00 or 0xE5) directory entry slot in `dir`.
  * Returns 1 and fills *slot_out on success, 0 if directory is full.
@@ -1210,6 +1398,10 @@ static int fat_find_free_dir_slot(const fat_dir_ref_t *dir, fat_dir_slot_t *slot
                 break;
             }
         }
+    }
+
+    if (!dir->fixed_root) {
+        return fat_extend_dir_chain(dir, slot_out);
     }
 
     return 0;

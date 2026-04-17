@@ -6,7 +6,7 @@ Build a DOS-compatible environment inside CiukiOS capable of running real DOS ex
 ## North Star (Current Cap)
 Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, timer/audio interrupts, and stable file I/O.
 
-## Current Snapshot (v0.6.1, updated 2026-04-17)
+## Current Snapshot (v0.6.2, updated 2026-04-17)
 1. Stage2 shell is active with DOS-like command surface (`dir/type/copy/ren/move/mkdir/rmdir/attrib/del/run`).
 2. COM runtime contract is active; EXE MZ path has relocation and edge-case hardening with deterministic host-side regression tests plus real EXE corpus validation gate.
 3. INT21 priority-A path includes FAT-backed file handles, file search (`4Eh/4Fh`), rename subset (`56h`), and DOS-like one-shot `AH=4Dh` semantics with matrix gating.
@@ -14,6 +14,7 @@ Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, 
 5. Video stack includes double-buffering path with dynamic backbuffer budget (up to 1920x1080 Full HD), mode catalog handoff, `vmode` utility, dedicated non-interactive video mode regression tests, backbuffer policy validation, and explicit runtime `1024x768` baseline policy marker.
 6. FreeDOS symbiotic pipeline now includes upstream sync orchestration and reproducible runtime-manifest validation for packaging reliability.
 7. M6 kickoff artifacts are now active (`docs/m6-dos-extender-requirements.md`, `make test-m6-pmode`, `scripts/test_doom_readiness_m6.sh`).
+8. FAT layer advanced toward FAT32-first behavior: mount metadata marker (`type/fsinfo/next_free_hint`), hint-based allocation, and dynamic growth for non-fixed directory chains.
 
 ## Compatibility Definition for This Goal
 1. Execute real `.COM` and `.EXE MZ` binaries.
