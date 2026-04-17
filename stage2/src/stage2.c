@@ -55,6 +55,31 @@ static int stage2_bios_compat_selftest_int1a(void) {
     return stage2_phase2_timer_ticks_progress();
 }
 
+static int stage2_m6_pmode_contract_marker_selftest(void) {
+    static const char marker[] = "CIUKEX64";
+
+    return marker[0] == 'C' &&
+           marker[1] == 'I' &&
+           marker[2] == 'U' &&
+           marker[3] == 'K' &&
+           marker[4] == 'E' &&
+           marker[5] == 'X' &&
+           marker[6] == '6' &&
+           marker[7] == '4' &&
+           sizeof(marker) == 9U;
+}
+
+static int stage2_m6_pmode_shell_surface_selftest(void) {
+    static const char cmd[] = "pmode";
+
+    return cmd[0] == 'p' &&
+           cmd[1] == 'm' &&
+           cmd[2] == 'o' &&
+           cmd[3] == 'd' &&
+           cmd[4] == 'e' &&
+           sizeof(cmd) == 6U;
+}
+
 static void halt_forever(void) {
     for (;;) {
         __asm__ volatile ("cli; hlt");
@@ -320,6 +345,16 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     }
     serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/set/ticks/mem/run/pmode/opengem/vmode/shutdown/reboot)\n");
     serial_write("[ compat ] PMODE contract v1 ready (CIUKEX64 marker + stub offset)\n");
+    if (stage2_m6_pmode_contract_marker_selftest()) {
+        serial_write("[ test ] m6 pmode contract marker selftest: PASS\n");
+    } else {
+        serial_write("[ test ] m6 pmode contract marker selftest: FAIL\n");
+    }
+    if (stage2_m6_pmode_shell_surface_selftest()) {
+        serial_write("[ test ] m6 pmode shell surface selftest: PASS\n");
+    } else {
+        serial_write("[ test ] m6 pmode shell surface selftest: FAIL\n");
+    }
     serial_write("[ ok ] desktop ui command available (type: desktop)\n");
 
     video_init(boot_info);

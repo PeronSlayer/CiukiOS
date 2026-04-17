@@ -127,6 +127,9 @@ test-video-1024:
 test-video-backbuf:
 	bash ./scripts/test_video_backbuf_policy.sh
 
+test-m6-pmode:
+	bash ./scripts/test_m6_pmode_contract.sh
+
 test-fat-compat:
 	./scripts/test_fat_compat.sh
 
@@ -183,4 +186,4 @@ freedos-runtime-manifest:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-fat-compat test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-m6-pmode test-fat-compat test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
