@@ -85,6 +85,11 @@ typedef struct ciuki_gfx_services {
     void (*mode13_put_pixel)(uint32_t x, uint32_t y, uint8_t color_index);
     /* INT 10h dispatcher (for DOS binaries that explicitly trap). */
     void (*int10)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+    /* M-V2.6 — DOOM-prep palette fade + mode13 bulk fills. */
+    void (*palette_fade)(uint32_t target_rgb, uint32_t step, uint32_t total);
+    void (*mode13_fill)(uint8_t color_index);
+    void (*mode13_fill_rect)(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                             uint8_t color_index);
     uint8_t reserved[32];
 } ciuki_gfx_services_t;
 

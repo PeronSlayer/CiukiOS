@@ -2,6 +2,13 @@
 
 All notable changes to CiukiOS are tracked here.
 
+## v0.8.2
+1. DOOM-prep palette + fill primitives: `gfx_palette_fade(target_rgb, step, total)` (captured-baseline linear blend of the full 256-entry palette toward a 24-bit target color — blood flashes, intermissions, title wipes), `gfx_mode13_fill(color)` and `gfx_mode13_fill_rect(x,y,w,h,color)`.
+2. Extended `ciuki_gfx_services_t` with `palette_fade`, `mode13_fill`, `mode13_fill_rect` (append-only before the `reserved[32]` tail). Wired in stage2 shell.
+3. New `FADEDMO.COM` sample (`com/fadedemo/`): mode 0x13 + 10 concentric color-cube bands + fade-to-red + fade-to-black + `[fadedmo] OK`.
+4. External palette mutations now invalidate the fade baseline for fresh re-capture.
+5. Bumped baseline to `CiukiOS Alpha v0.8.2`.
+
 ## v0.8.1
 1. Completed SR-VIDEO-002 milestones M-V2.4 and M-V2.5 (DOS/VGA mode compatibility + palette + cached present).
 2. M-V2.4: new `stage2/src/gfx_modes.c` + `stage2/include/gfx_modes.h`. Mode 0x13 (320×200×8) planar surface upscaled (nearest-neighbor, integer scale up to 6×) and letterboxed into the 32bpp GOP backbuffer. `gfx_int10_dispatch` implements BIOS INT 10h AH=00h/0Ch/0Dh/0Fh and VBE AH=4Fh AL=00/01/02/03 with VBE mode IDs 0x0013 / 0x0100 / 0x0101 / 0x0003 mapped onto the internal planes. New shell command `mode` (`info`, `set <hex>`, `test13`, `text`).

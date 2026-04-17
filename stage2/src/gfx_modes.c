@@ -30,6 +30,10 @@ static u32 g_palette[256];
 static u8  g_plane_dirty   = 1;
 static u8  g_palette_dirty = 1;
 
+/* Fade state (definitions later; forward-declared here for gfx_palette_set). */
+static u32 g_palette_fade_base[256];
+static u8  g_palette_fade_base_valid;
+
 /* --------------------------------------------------------------- */
 /* Default VGA 256 palette (compact 6-bit triples).                */
 /* --------------------------------------------------------------- */
@@ -93,6 +97,8 @@ void gfx_palette_set(u32 first, u32 count, const u8 *rgb_triples_6bit) {
                                 (u32)expand6(b);
     }
     g_palette_dirty = 1;
+    /* External palette mutation invalidates any in-progress fade baseline. */
+    g_palette_fade_base_valid = 0;
 }
 
 u32 gfx_palette_get_rgb(u8 index) {
@@ -121,6 +127,54 @@ void gfx_mode13_clear(u8 color_index) {
         g_plane13[i] = color_index;
     }
     g_plane_dirty = 1;
+}
+
+void gfx_mode13_fill(u8 color_index) {
+    gfx_mode13_clear(color_index);
+}
+
+void gfx_mode13_fill_rect(u32 x, u32 y, u32 w, u32 h, u8 color_index) {
+    if (x >= GFX_MODE13_W || y >= GFX_MODE13_H) return;
+    u32 x1 = x + w; if (x1 > GFX_MODE13_W) x1 = GFX_MODE13_W;
+    u32 y1 = y + h; if (y1 > GFX_MODE13_H) y1 = GFX_MODE13_H;
+    for (u32 yy = y; yy < y1; yy++) {
+        u8 *row = &g_plane13[yy * GFX_MODE13_W + x];
+        for (u32 xx = x; xx < x1; xx++) *row++ = color_index;
+    }
+    g_plane_dirty = 1;
+}
+
+/* Cached baseline for palette_fade: captured on step=0 or when absent. */
+
+void gfx_palette_fade(u32 target_rgb, u32 step, u32 total) {
+    if (total == 0U) return;
+    if (step > total) step = total;
+    if (step == 0U || !g_palette_fade_base_valid) {
+        for (u32 i = 0; i < 256U; i++) g_palette_fade_base[i] = g_palette[i];
+        g_palette_fade_base_valid = 1;
+        if (step == 0U) {
+            g_palette_dirty = 1;
+            return;
+        }
+    }
+    u32 tr = (target_rgb >> 16) & 0xFFU;
+    u32 tg = (target_rgb >> 8)  & 0xFFU;
+    u32 tb = (target_rgb)       & 0xFFU;
+    for (u32 i = 0; i < 256U; i++) {
+        u32 base = g_palette_fade_base[i];
+        u32 br = (base >> 16) & 0xFFU;
+        u32 bg = (base >> 8)  & 0xFFU;
+        u32 bb = (base)       & 0xFFU;
+        u32 r = (br * (total - step) + tr * step) / total;
+        u32 g = (bg * (total - step) + tg * step) / total;
+        u32 b = (bb * (total - step) + tb * step) / total;
+        g_palette[i] = (r << 16) | (g << 8) | b;
+    }
+    g_palette_dirty = 1;
+    if (step == total) {
+        /* Completed fade — next call with step=0 will re-capture baseline. */
+        g_palette_fade_base_valid = 0;
+    }
 }
 
 /* --------------------------------------------------------------- */

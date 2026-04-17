@@ -5582,6 +5582,9 @@ static const ciuki_gfx_services_t g_gfx_services = {
     .mode13_plane = gfx_mode13_plane,
     .mode13_put_pixel = gfx_mode13_put_pixel,
     .int10 = gfx_int10_dispatch,
+    .palette_fade = gfx_palette_fade,
+    .mode13_fill = gfx_mode13_fill,
+    .mode13_fill_rect = gfx_mode13_fill_rect,
     .reserved = {0},
 };
 

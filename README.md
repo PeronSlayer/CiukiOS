@@ -6,7 +6,7 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.8.1`
+`CiukiOS Alpha v0.8.2`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Index
@@ -17,6 +17,13 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 5. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Changelog (Latest)
+### v0.8.2
+1. DOOM-prep palette + fill primitives on top of the SR-VIDEO-002 stack: `gfx_palette_fade(target_rgb, step, total)` performs a captured-baseline linear blend of the full 256-entry palette toward a target 24-bit color (usable for blood flashes, intermissions, title-wipe fades); `gfx_mode13_fill(color_index)` and `gfx_mode13_fill_rect(x,y,w,h,color_index)` give a fast DOS-style fill path on the mode 0x13 plane.
+2. Extended `ciuki_gfx_services_t` with `palette_fade`, `mode13_fill`, `mode13_fill_rect` (appended before `reserved[32]`). Wired in stage2 shell.
+3. New sample `FADEDMO.COM` (`com/fadedemo/`): enters mode 0x13, draws 10 concentric color-cube bands via `mode13_fill_rect`, then performs a 16-step fade-to-red followed by a 16-step fade-to-black, committing each frame via `gfx->present()`. Emits `[fadedmo] OK` on serial.
+4. External `palette_set` now invalidates the fade baseline so any mid-fade caller-driven palette change restarts from a fresh capture on the next `palette_fade(step=0,...)`.
+5. Bumped baseline version to `CiukiOS Alpha v0.8.2`.
+
 ### v0.8.1
 1. Completed subroadmap **SR-VIDEO-002** milestones M-V2.4 and M-V2.5 — DOS / VGA mode compatibility surface and palette / present-cache layer on top of the flicker-free baseline shipped in v0.8.0.
 2. M-V2.4 (INT 10h + VGA mode 0x13 emulation): new `stage2/src/gfx_modes.c` + `stage2/include/gfx_modes.h`. Mode 0x13 keeps a 320×200×8 planar surface that is nearest-neighbor-upscaled (integer scale up to 6×) and letterboxed into the real 32bpp GOP backbuffer on `gfx_mode_present`. `gfx_int10_dispatch` routes BIOS INT 10h sub-functions AH=00h (set mode 0x03 / 0x13), AH=0Ch (write pixel), AH=0Dh (read pixel), AH=0Fh (get mode), AH=4Fh VBE AL=00/01/02/03 (info / mode info / set mode / get mode) with VBE mode IDs 0x0013 / 0x0100 / 0x0101 / 0x0003 mapped onto the internal planes. New shell command `mode` (`mode info`, `mode set <hex>`, `mode test13`, `mode text`).

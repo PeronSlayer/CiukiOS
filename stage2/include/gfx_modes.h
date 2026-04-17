@@ -43,6 +43,17 @@ void gfx_palette_set(u32 first, u32 count, const u8 *rgb_triples_6bit);
 void gfx_palette_set_default_vga(void);
 u32  gfx_palette_get_rgb(u8 index); /* returns 0x00RRGGBB */
 
+/* Palette fade — blend the whole palette `step`/`total` toward a target 24-bit
+ * RGB color. step=0 leaves the current palette; step=total snaps to target.
+ * Useful for DOOM-style screen fades (blood flash, intermission, title wipes).
+ * Marks palette dirty for the next `gfx_mode_present`.
+ */
+void gfx_palette_fade(u32 target_rgb, u32 step, u32 total);
+
+/* Mode 0x13 bulk fills (fast path DOOM-style). */
+void gfx_mode13_fill(u8 color_index);
+void gfx_mode13_fill_rect(u32 x, u32 y, u32 w, u32 h, u8 color_index);
+
 /* Present the active non-text plane into the backbuffer + commit frame.
  * For text mode this is a no-op (console drives its own redraw).
  * Returns 1 if a plane was presented, 0 otherwise.
