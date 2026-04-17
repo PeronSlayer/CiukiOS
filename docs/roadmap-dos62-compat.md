@@ -9,13 +9,14 @@ For FreeDOS symbiotic integration approach, see:
 ## Goal
 Recreate DOS 6.2 behavior with high compatibility at binary level (`.COM`, `.EXE MZ`) and API level (`INT 21h`), built from scratch.
 
-## Current Snapshot (v0.6.0, updated 2026-04-17)
+## Current Snapshot (v0.6.1, updated 2026-04-17)
 1. Stage2 baseline is stable with automated boot/fallback/FAT compatibility checks.
 2. DOS-like shell commands for core file workflow are available.
 3. COM execution path is active with PSP and termination lifecycle wiring.
 4. EXE MZ path moved beyond MVP with relocation/edge-case hardening plus deterministic host-side regression suite.
 5. INT21 priority-A subset includes file search and rename coverage (`4Eh/4Fh/56h`) and one-shot `AH=4Dh` status semantics.
 6. Phase 2 low-level core exposes deterministic startup selftests for timer tick progress and keyboard decode/capture.
+7. M6 planning and first execution gates are active (`docs/m6-dos-extender-requirements.md`, `make test-m6-pmode`, `scripts/test_doom_readiness_m6.sh`).
 
 ## Architecture Choice
 1. Keep `UEFI x64` as modern bootstrap only.

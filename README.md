@@ -6,10 +6,18 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.6.0`
+`CiukiOS Alpha v0.6.1`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.6.1
+1. Added M6 protected-mode contract baseline selftests at startup with explicit PASS/FAIL markers.
+2. Added dedicated gate `make test-m6-pmode` (`scripts/test_m6_pmode_contract.sh`).
+3. Added M6 requirements document: `docs/m6-dos-extender-requirements.md`.
+4. Added aggregate M6 readiness gate: `scripts/test_doom_readiness_m6.sh` (phase2 + freedos + video + m6 gates).
+5. Refreshed `third_party/freedos/runtime-manifest.csv` to restore reproducibility checks in pipeline validation.
+6. Updated roadmap and sub-roadmaps to reflect M6 activation and current video/backbuffer status.
+
 ### v0.6.0
 1. Merged INT21 compatibility expansion with `AH=56h` rename (same-directory DOS-like subset).
 2. Extended INT21 FAT end-to-end selftest coverage to include rename path validation.
@@ -82,6 +90,7 @@ Until `CiukiOS Alpha v1.0`, this project follows these rules:
 1. No official prebuilt release artifacts are provided.
 2. No public step-by-step build instructions are provided in this README.
 3. Development is currently heavily assisted by LLM tooling (OpenAI, Claude, Copilot) while core engineering skills and architecture mature.
+4. Versioning cadence: every 2/3 integrated updates bump patch version automatically (`x.y.z -> x.y.(z+1)`); milestone-sized integrations may bump minor version.
 
 ## Key Docs
 1. Unified roadmap and sub-roadmaps: `Roadmap.md`
