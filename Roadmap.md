@@ -51,6 +51,7 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 - `DONE` dedicated PMODE contract gate (`make test-m6-pmode`)
 - `DONE` aggregate M6 readiness gate (`scripts/test_doom_readiness_m6.sh`) with transition-v2 check
 - `DONE` reproducible M6 smoke executable (`CIUKPM.EXE` -> `0x36`) included in the OS image and validated by `make test-m6-smoke`
+- `DONE` first DOS/4GW-like smoke executable (`CIUK4GW.EXE` -> `0x47`) using minimal DPMI host query `INT 2Fh AX=1687h`
 - `DONE` real-mode entry point baseline (A20 probe/enable contract + descriptor baseline marker)
 - `DONE` protected-mode transition contract v2 baseline (transition state block + descriptor snapshots + CR0 + return-path markers)
 - `DONE` DOS/4GW host-interface skeleton baseline (DPMI detect, real-mode callback, interrupt reflection markers)
@@ -116,6 +117,7 @@ References: `docs/m6-dos-extender-requirements.md`, M6 section above
 - `DONE` DOS/4GW host-interface skeleton baseline (non-crashing deterministic markers)
 - `DONE` pmode memory accounting baseline (isolated range + overlap guard)
 - `DONE` reproducible M6 smoke executable (`CIUKPM.EXE` -> `0x36`) included in the OS image and covered by `make test-m6-smoke`
+- `DONE` first callable DOS/4GW-like host-query smoke (`CIUK4GW.EXE` -> `0x47`) over minimal `INT 2Fh AX=1687h`
 
 ### SR-OPENGEM-001 - OpenGEM Runtime Path
 Reference: `docs/handoffs/2026-04-16-copilot-opengem-integration.md`

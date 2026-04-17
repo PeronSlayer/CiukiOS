@@ -36,6 +36,10 @@ COM_M6_SMOKE_SRC := com/m6_smoke/ciukpm.c
 COM_M6_SMOKE_ELF := build/CIUKPM.EXE.elf
 COM_M6_SMOKE_PAYLOAD := build/CIUKPM.EXE.payload.bin
 COM_M6_SMOKE_BIN := build/CIUKPM.EXE
+COM_M6_DOS4GW_SMOKE_SRC := com/m6_dos4gw_smoke/ciuk4gw.c
+COM_M6_DOS4GW_SMOKE_ELF := build/CIUK4GW.EXE.elf
+COM_M6_DOS4GW_SMOKE_PAYLOAD := build/CIUK4GW.EXE.payload.bin
+COM_M6_DOS4GW_SMOKE_BIN := build/CIUK4GW.EXE
 MKCIUKMZ_TOOL_SRC := tools/mkciukmz_exe.c
 MKCIUKMZ_TOOL := build/tools/mkciukmz_exe
 SPLASH_ASCII_SRC := misc/splashscreen.txt
@@ -61,7 +65,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAG
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN)
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -144,6 +148,15 @@ $(COM_M6_SMOKE_PAYLOAD): $(COM_M6_SMOKE_SRC) com/m6_smoke/linker.ld boot/proto/s
 $(COM_M6_SMOKE_BIN): $(COM_M6_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
 	$(MKCIUKMZ_TOOL) $(COM_M6_SMOKE_PAYLOAD) $@
 
+$(COM_M6_DOS4GW_SMOKE_PAYLOAD): $(COM_M6_DOS4GW_SMOKE_SRC) com/m6_dos4gw_smoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_M6_DOS4GW_SMOKE_SRC) -o build/obj/com/ciuk4gw.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/m6_dos4gw_smoke/linker.ld -o $(COM_M6_DOS4GW_SMOKE_ELF) build/obj/com/ciuk4gw.o
+	llvm-objcopy -O binary $(COM_M6_DOS4GW_SMOKE_ELF) $(COM_M6_DOS4GW_SMOKE_PAYLOAD)
+
+$(COM_M6_DOS4GW_SMOKE_BIN): $(COM_M6_DOS4GW_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
+	$(MKCIUKMZ_TOOL) $(COM_M6_DOS4GW_SMOKE_PAYLOAD) $@
+
 build:
 	@mkdir -p build
 	@mkdir -p build/obj
@@ -179,6 +192,9 @@ test-m6-transition-v2:
 
 test-m6-smoke:
 	bash ./scripts/test_m6_dos_program.sh
+
+test-m6-dos4gw-smoke:
+	bash ./scripts/test_m6_dos4gw_smoke.sh
 
 test-dosrun-simple:
 	bash ./scripts/test_dosrun_simple_program.sh
@@ -251,4 +267,4 @@ freedos-runtime-manifest:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-dosrun-simple test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-dosrun-simple test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest

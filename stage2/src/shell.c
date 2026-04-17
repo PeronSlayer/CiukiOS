@@ -1101,6 +1101,7 @@ static void shell_com_int20(ciuki_dos_context_t *ctx) {
     ctx->exit_code = 0U;
 }
 
+static void shell_com_int2f(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
 static u32 g_int21_vectors[256];
 static u8 g_int21_last_return_code = 0U;
@@ -2678,6 +2679,30 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     regs->ax = 0x0001U;
 }
 
+static void shell_com_int2f(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
+    (void)ctx;
+
+    if (!regs) {
+        return;
+    }
+
+    if (regs->ax == 0x1687U) {
+        /* Minimal DPMI installation-check slice for DOS/4GW-style smoke. */
+        regs->ax = 0x0000U;
+        regs->bx = 0x0001U;
+        regs->cx = 0x0090U;
+        regs->dx = 0x0000U;
+        regs->si = 0x0000U;
+        regs->di = 0x0000U;
+        regs->es = 0x0000U;
+        regs->carry = 0U;
+        return;
+    }
+
+    regs->carry = 1U;
+    regs->ax = 0x0001U;
+}
+
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code) {
     if (!ctx) {
         return;
@@ -3640,6 +3665,7 @@ static void shell_run_staged_image(
     svc.print_hex64 = video_write_hex64;
     svc.cls = video_cls;
     svc.int21 = shell_com_int21;
+    svc.int2f = shell_com_int2f;
     svc.int20 = shell_com_int20;
     svc.int21_4c = shell_com_int21_4c;
     svc.terminate = shell_com_terminate;

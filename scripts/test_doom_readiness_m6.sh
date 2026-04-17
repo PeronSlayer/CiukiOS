@@ -39,5 +39,6 @@ run_gate "test-video-backbuf-policy" bash ./scripts/test_video_backbuf_policy.sh
 run_gate "test-m6-pmode" make test-m6-pmode
 run_gate "test-m6-transition-v2" bash ./scripts/test_m6_transition_contract_v2.sh
 run_gate "test-m6-smoke" make test-m6-smoke
+run_gate "test-m6-dos4gw-smoke" make test-m6-dos4gw-smoke
 
 echo "[PASS] M6 readiness gate passed"

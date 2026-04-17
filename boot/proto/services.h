@@ -51,6 +51,7 @@ typedef struct ciuki_services {
     void     (*print_hex64)(unsigned long long v);
     void     (*cls)(void);
     void     (*int21)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+    void     (*int2f)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
     void     (*int20)(ciuki_dos_context_t *ctx);
     void     (*int21_4c)(ciuki_dos_context_t *ctx, uint8_t code);
     void     (*terminate)(ciuki_dos_context_t *ctx, uint8_t code);

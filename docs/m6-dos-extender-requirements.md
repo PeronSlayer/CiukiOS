@@ -32,6 +32,7 @@
 	- `[m6] dpmi detect skeleton ready`
 	- `[m6] rm callback skeleton ready`
 	- `[m6] int reflect skeleton ready`
+- Runtime slice now exposed through the services ABI with minimal `INT 2Fh AX=1687h` host-query support for smoke validation.
 
 ### 4. Memory Accounting
 - Track allocated pmode memory (separate from DOS conventional/HMA)
@@ -46,12 +47,14 @@
 1. **Runtime baseline:** `make test-m6-pmode` validates M6 contract + skeleton markers
 2. **Transition v2 runtime:** `bash scripts/test_m6_transition_contract_v2.sh`
 3. **Smoke executable:** `make test-m6-smoke` validates a reproducible MZ smoke binary (`CIUKPM.EXE` -> `0x36`) included in the OS image
-4. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
+4. **DOS/4GW-like smoke:** `make test-m6-dos4gw-smoke` validates a reproducible MZ smoke binary (`CIUK4GW.EXE` -> `0x47`) calling the minimal DPMI host query path
+5. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
 
 ## Acceptance Criteria
 
 - `test_doom_readiness_m6.sh` PASS
 - `test-m6-smoke` PASS
+- `test-m6-dos4gw-smoke` PASS
 - No regressions to existing INT21h, MZ runtime, or shell flow
 - Real DOS/4GW execution remains next increment beyond skeleton baseline
 
