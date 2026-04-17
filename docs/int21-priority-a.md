@@ -35,6 +35,9 @@ Provide a deterministic DOS-like syscall baseline for early `.COM`/`.EXE` compat
 29. `AH=56h` - rename file/directory entry (same-directory DOS-like subset).
 30. `AH=4Eh` - find first matching file entry (wildcard search via DTA).
 31. `AH=4Fh` - find next matching file entry (continues active DTA search).
+32. `AH=2Ah` - get system date (deterministic baseline: CX=2026, DH=04, DL=17, AL=Fri).
+33. `AH=2Ch` - get system time (deterministic baseline: CH=CL=DH=DL=00).
+34. `AH=44h AL=00h` - IOCTL get device info (stdin 0x0081, stdout/stderr 0x0082, file 0x0000).
 
 ## Partial Compatibility Notes
 1. `AH=48h/49h/4Ah` currently use an internal paragraph heap allocator baseline (no full MCB chain yet).
@@ -87,6 +90,9 @@ FN  | Status               | Implementation Details
 4Ah | IMPLEMENTED          | Resize allocated block in place when possible; AX=0008h/BX=max on failure
 4Eh | IMPLEMENTED          | Find first wildcard match in FAT directory, writes DOS-like DTA result
 4Fh | IMPLEMENTED          | Find next wildcard match using active find state + DTA
+2Ah | DETERMINISTIC_STUB   | Get system date (deterministic: CX=2026, DH=04, DL=17, AL=Fri)
+2Ch | DETERMINISTIC_STUB   | Get system time (deterministic: CH=CL=DH=DL=00)
+44h | IMPLEMENTED          | IOCTL subfunction AL=00 (get device info: 0x0081/0x0082/0x0000)
 *   | UNSUPPORTED          | Invalid function (returns CF=1, AX=0001h)
 ```
 

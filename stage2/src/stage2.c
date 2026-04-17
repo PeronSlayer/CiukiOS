@@ -464,6 +464,8 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ compat ] INT21h console/dta/drive ready (AH=06h/07h/0Ah/0Eh/1Ah/2Fh)\n");
     serial_write("[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..43h)\n");
     serial_write("[ compat ] INT21h memory api ready (AH=48h/49h/4Ah)\n");
+    serial_write("[compat] INT21h date/time ready (AH=2Ah/2Ch)\n");
+    serial_write("[compat] INT21h ioctl baseline ready (AH=44h/AL=00h)\n");
     if (stage2_phase2_timer_ticks_progress()) {
         serial_write("[ test ] phase2 timer tick progress: PASS\n");
     } else {
