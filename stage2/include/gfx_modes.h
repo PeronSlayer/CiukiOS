@@ -101,6 +101,13 @@ void gfx_mode13_draw_column_sampled_masked(i32 x, i32 y, u32 h,
                                            u32 frac_step_16_16,
                                            u8 transparent_idx);
 
+/* Draw a classic DOOM patch-format lump (column directory + post lists).
+ * `x,y` are the logical patch anchor coordinates; the patch's internal
+ * left/top offsets are applied automatically. Silently ignores malformed
+ * patch data beyond `patch_size`. */
+void gfx_mode13_draw_doom_patch(const u8 *patch, u32 patch_size,
+                                i32 x, i32 y);
+
 /* Return the frame counter (monotonically incremented on each successful
  * `gfx_mode_present`). Useful for pacing + FPS measurement. */
 u32  gfx_frame_counter(void);

@@ -37,6 +37,17 @@ static u8  g_palette_fade_base_valid;
 /* Frame counter — bumped on every successful gfx_mode_present. */
 static u32 g_frame_counter;
 
+static u16 read_le16(const u8 *p) {
+    return (u16)((u16)p[0] | ((u16)p[1] << 8));
+}
+
+static u32 read_le32(const u8 *p) {
+    return (u32)p[0] |
+           ((u32)p[1] << 8) |
+           ((u32)p[2] << 16) |
+           ((u32)p[3] << 24);
+}
+
 /* --------------------------------------------------------------- */
 /* Default VGA 256 palette (compact 6-bit triples).                */
 /* --------------------------------------------------------------- */
@@ -340,6 +351,68 @@ void gfx_mode13_draw_column_sampled_masked(i32 x, i32 y, u32 h,
         frac += frac_step_16_16;
         d += GFX_MODE13_W;
     }
+    g_plane_dirty = 1;
+}
+
+void gfx_mode13_draw_doom_patch(const u8 *patch, u32 patch_size,
+                                i32 x, i32 y) {
+    if (!patch || patch_size < 8U) return;
+
+    u16 width = read_le16(patch + 0);
+    u16 height = read_le16(patch + 2);
+    i16 leftoffset = (i16)read_le16(patch + 4);
+    i16 topoffset = (i16)read_le16(patch + 6);
+    u32 column_dir = 8U;
+    u32 column_dir_size = (u32)width * 4U;
+    i32 base_x = x - (i32)leftoffset;
+    i32 base_y = y - (i32)topoffset;
+    u8 touched = 0;
+
+    if (width == 0U || height == 0U) return;
+    if (patch_size < column_dir + column_dir_size) return;
+
+    for (u32 col = 0; col < (u32)width; col++) {
+        i32 dst_x = base_x + (i32)col;
+        if (dst_x < 0 || dst_x >= (i32)GFX_MODE13_W) continue;
+
+        u32 post_off = read_le32(patch + column_dir + col * 4U);
+        if (post_off >= patch_size) continue;
+
+        while (post_off < patch_size) {
+            u8 topdelta = patch[post_off++];
+            if (topdelta == 0xFFU) break;
+            if (post_off + 2U > patch_size) break;
+
+            u8 len = patch[post_off++];
+            post_off++; /* unused padding byte */
+            if (post_off + (u32)len + 1U > patch_size) break;
+
+            i32 dst_y = base_y + (i32)topdelta;
+            i32 y0 = dst_y;
+            i32 y1 = dst_y + (i32)len;
+            u32 src_skip = 0U;
+
+            if (y0 < 0) {
+                src_skip = (u32)(-y0);
+                y0 = 0;
+            }
+            if (y1 > (i32)GFX_MODE13_H) y1 = (i32)GFX_MODE13_H;
+            if (y0 < y1) {
+                const u8 *src_col = patch + post_off + src_skip;
+                u8 *dst = &g_plane13[(u32)y0 * GFX_MODE13_W + (u32)dst_x];
+                for (i32 yy = y0; yy < y1; yy++) {
+                    *dst = *src_col++;
+                    dst += GFX_MODE13_W;
+                }
+                touched = 1;
+            }
+
+            post_off += (u32)len;
+            post_off++; /* trailing unused byte */
+        }
+    }
+
+    if (!touched) return;
     g_plane_dirty = 1;
 }
 

@@ -127,6 +127,10 @@ typedef struct ciuki_gfx_services {
                                               uint32_t frac_16_16,
                                               uint32_t frac_step_16_16,
                                               uint8_t transparent_idx);
+    void (*mode13_draw_doom_patch)(const uint8_t *patch,
+                                   uint32_t patch_size,
+                                   int32_t x,
+                                   int32_t y);
     uint32_t (*frame_counter)(void);
     uint8_t reserved[32];
 } ciuki_gfx_services_t;

@@ -5593,6 +5593,7 @@ static const ciuki_gfx_services_t g_gfx_services = {
     .mode13_blit_scaled_clip = gfx_mode13_blit_scaled_clip,
     .mode13_draw_column_masked = gfx_mode13_draw_column_masked,
     .mode13_draw_column_sampled_masked = gfx_mode13_draw_column_sampled_masked,
+    .mode13_draw_doom_patch = gfx_mode13_draw_doom_patch,
     .frame_counter = gfx_frame_counter,
     .reserved = {0},
 };
