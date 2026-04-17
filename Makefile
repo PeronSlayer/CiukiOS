@@ -135,7 +135,7 @@ $(SPLASH_GEN_OBJ): $(SPLASH_GEN_C) | build
 	@mkdir -p $(dir $@)
 	$(CC) $(STAGE2_CFLAGS) -c $< -o $@
 
-$(SPLASH_IMAGE_GEN_C): $(SPLASH_IMAGE_GEN_SCRIPT) | build
+$(SPLASH_IMAGE_GEN_C): $(SPLASH_IMAGE_GEN_SCRIPT) $(SPLASH_IMAGE_SRC) | build
 	@mkdir -p $(dir $@)
 	@if [ -f "$(SPLASH_IMAGE_SRC)" ]; then \
 		"$(SPLASH_IMAGE_GEN_SCRIPT)" --input "$(SPLASH_IMAGE_SRC)" --output "$@"; \

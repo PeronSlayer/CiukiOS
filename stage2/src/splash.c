@@ -178,7 +178,7 @@ static u8 splash_char_luma(char ch) {
     return g_luma_table[uch];
 }
 
-#define SPLASH_SCANLINE_MAX 800U
+#define SPLASH_SCANLINE_MAX 1920U
 
 static u32 g_scanline_buf[SPLASH_SCANLINE_MAX];
 
