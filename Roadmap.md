@@ -108,6 +108,11 @@ Reference: `docs/subroadmap-sr-dosrun-001.md`
 - `DONE` argv tail bridge with deterministic serial markers (`[dosrun] argv tail len=...`, `[dosrun] argv parse=PASS|FAIL`)
 - `DONE` INT21h coverage extended to date/time (`AH=2Ah`, `AH=2Ch`) and IOCTL get-device-info (`AH=44h`/`AL=00h`) with boot-time `[compat]` markers
 
+### SR-USER-TOOLING-001 - DOS User Tooling
+Reference: `docs/sr-edit-001.md`
+
+- `DONE` native CiukiOS line editor `CIUKEDIT.COM` for create/open/save `.TXT` files via INT 21h (`:w`, `:q`, `:wq`, `:l`, `:d N`, `:h`)
+
 ### SR-FS-002 - FAT32 Capability Track
 Reference: `stage2/src/fat.c`
 
