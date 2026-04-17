@@ -20,13 +20,13 @@ The current direction is:
 5. Extend compatibility over time toward FreeDOS and pre-NT Windows software.
 
 ## Primary Index
-1. Full changelog: `CHANGELOG.md`
-2. High-level roadmap: `Roadmap.md`
-3. Detailed DOOM roadmap: `docs/roadmap-ciukios-doom.md`
-4. DOS 6.2 compatibility roadmap: `docs/roadmap-dos62-compat.md`
-5. Donation/support info: `DONATIONS.md`
-6. Collaboration/session context: `CLAUDE.md`
-7. Detailed handoff log: `docs/handoffs/README.md`
+1. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+2. High-level roadmap: [Roadmap.md](Roadmap.md)
+3. Detailed DOOM roadmap: [docs/roadmap-ciukios-doom.md](docs/roadmap-ciukios-doom.md)
+4. DOS 6.2 compatibility roadmap: [docs/roadmap-dos62-compat.md](docs/roadmap-dos62-compat.md)
+5. Donation/support info: [DONATIONS.md](DONATIONS.md)
+6. Collaboration/session context: [CLAUDE.md](CLAUDE.md)
+7. Detailed handoff log: [docs/handoffs/README.md](docs/handoffs/README.md)
 
 ## Current Version
 Current public version in README: `CiukiOS Alpha v0.6.9`

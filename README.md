@@ -10,11 +10,11 @@ Mission: become a progressively more complete environment capable of running DOS
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Index
-1. Full documentation: `documentation.md`
-2. Full changelog: `CHANGELOG.md`
-3. High-level roadmap: `Roadmap.md`
-4. Detailed DOOM roadmap: `docs/roadmap-ciukios-doom.md`
-5. Donations and support: `DONATIONS.md`
+1. Full documentation: [documentation.md](documentation.md)
+2. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+3. High-level roadmap: [Roadmap.md](Roadmap.md)
+4. Detailed DOOM roadmap: [docs/roadmap-ciukios-doom.md](docs/roadmap-ciukios-doom.md)
+5. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Changelog (Latest)
 ### v0.6.9
@@ -29,7 +29,7 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 3. Added dedicated gate `make test-m6-dos4gw-smoke` and wired it into the aggregate M6 readiness orchestration.
 4. M6 now validates both a generic protected-mode readiness smoke (`CIUKPM.EXE`) and a first DOS/4GW-like host-query smoke (`CIUK4GW.EXE`).
 
-Full changelog: `CHANGELOG.md`
+Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
 The active north star is:
@@ -56,15 +56,15 @@ Until `CiukiOS Alpha v1.0`, this project follows these rules:
 4. Versioning cadence: every 2/3 integrated updates bump patch version automatically (`x.y.z -> x.y.(z+1)`); milestone-sized integrations may bump minor version.
 
 ## Key Docs
-1. Central project documentation: `documentation.md`
-2. Full changelog: `CHANGELOG.md`
-3. Unified roadmap and sub-roadmaps: `Roadmap.md`
-4. DOS-to-DOOM roadmap: `docs/roadmap-ciukios-doom.md`
-5. DOS 6.2 compatibility roadmap: `docs/roadmap-dos62-compat.md`
-6. FreeDOS integration and licensing policy: `docs/freedos-integration-policy.md`
-7. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
-8. OpenGEM integration notes and operations: `docs/opengem-integration-notes.md`, `docs/opengem-ops.md`
-9. Shared contributor/session notes: `CLAUDE.md`
+1. Central project documentation: [documentation.md](documentation.md)
+2. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+3. Unified roadmap and sub-roadmaps: [Roadmap.md](Roadmap.md)
+4. DOS-to-DOOM roadmap: [docs/roadmap-ciukios-doom.md](docs/roadmap-ciukios-doom.md)
+5. DOS 6.2 compatibility roadmap: [docs/roadmap-dos62-compat.md](docs/roadmap-dos62-compat.md)
+6. FreeDOS integration and licensing policy: [docs/freedos-integration-policy.md](docs/freedos-integration-policy.md)
+7. FreeDOS symbiotic architecture: [docs/freedos-symbiotic-architecture.md](docs/freedos-symbiotic-architecture.md)
+8. OpenGEM integration notes and operations: [docs/opengem-integration-notes.md](docs/opengem-integration-notes.md), [docs/opengem-ops.md](docs/opengem-ops.md)
+9. Shared contributor/session notes: [CLAUDE.md](CLAUDE.md)
 
 ## Third-Party and Licensing (FreeDOS + OpenGEM Notice)
 1. This repository can include and use third-party FreeDOS components in `third_party/freedos/`.
@@ -79,7 +79,7 @@ Until `CiukiOS Alpha v1.0`, this project follows these rules:
 
 ## Donations and Support
 If you want to support CiukiOS development (including recurring LLM/tooling costs such as OpenAI, Claude and Copilot subscriptions), see:
-- `DONATIONS.md`
+- [DONATIONS.md](DONATIONS.md)
 
 Provider selection is currently in progress to choose the most convenient and transparent option for contributors.
 
