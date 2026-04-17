@@ -380,6 +380,11 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     } else {
         serial_write("[ test ] int21 priority-a selftest: FAIL\n");
     }
+    if (stage2_shell_selftest_dosrun_status_path()) {
+        serial_write("[ test ] dosrun status path selftest: PASS\n");
+    } else {
+        serial_write("[ test ] dosrun status path selftest: FAIL\n");
+    }
     serial_write("[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/set/ticks/mem/run/pmode/opengem/vmode/shutdown/reboot)\n");
     serial_write("[ compat ] PMODE contract v1 ready (CIUKEX64 marker + stub offset)\n");
     if (stage2_m6_pmode_contract_marker_selftest()) {

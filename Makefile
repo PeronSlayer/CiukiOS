@@ -25,6 +25,9 @@ COM_CFLAGS := $(COMMON_CFLAGS) -Iboot/proto
 COM_HELLO_SRC := com/hello/hello.c
 COM_HELLO_ELF := build/INIT.COM.elf
 COM_HELLO_BIN := build/INIT.COM
+COM_DOSRUN_SMOKE_SRC := com/dosrun_smoke/ciuksmk.c
+COM_DOSRUN_SMOKE_ELF := build/CIUKSMK.COM.elf
+COM_DOSRUN_SMOKE_BIN := build/CIUKSMK.COM
 SPLASH_ASCII_SRC := misc/splashscreen.txt
 SPLASH_GEN_C := build/generated/splash_data.c
 SPLASH_GEN_OBJ := build/obj/stage2/splash_data.o
@@ -48,7 +51,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAG
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN)
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_DOSRUN_SMOKE_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -103,6 +106,12 @@ $(COM_HELLO_BIN): $(COM_HELLO_SRC) com/hello/linker.ld boot/proto/services.h | b
 	$(LD) -nostdlib -z max-page-size=0x1000 -T com/hello/linker.ld -o $(COM_HELLO_ELF) build/obj/com/hello.o
 	llvm-objcopy -O binary $(COM_HELLO_ELF) $(COM_HELLO_BIN)
 
+$(COM_DOSRUN_SMOKE_BIN): $(COM_DOSRUN_SMOKE_SRC) com/dosrun_smoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_DOSRUN_SMOKE_SRC) -o build/obj/com/ciuksmk.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/dosrun_smoke/linker.ld -o $(COM_DOSRUN_SMOKE_ELF) build/obj/com/ciuksmk.o
+	llvm-objcopy -O binary $(COM_DOSRUN_SMOKE_ELF) $(COM_DOSRUN_SMOKE_BIN)
+
 build:
 	@mkdir -p build
 	@mkdir -p build/obj
@@ -130,6 +139,9 @@ test-video-backbuf:
 test-m6-pmode:
 	bash ./scripts/test_m6_pmode_contract.sh
 
+test-dosrun-simple:
+	bash ./scripts/test_dosrun_simple_program.sh
+
 test-fat-compat:
 	./scripts/test_fat_compat.sh
 
@@ -156,6 +168,9 @@ check-int21-matrix:
 
 test-gui-desktop:
 	./scripts/test_gui_desktop.sh
+
+test-video-ui-v2:
+	bash ./scripts/test_video_ui_regression_v2.sh
 
 test-opengem:
 	./scripts/test_opengem_integration.sh
@@ -189,4 +204,4 @@ freedos-runtime-manifest:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-m6-pmode test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-m6-pmode test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest

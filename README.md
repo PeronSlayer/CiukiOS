@@ -19,6 +19,7 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 6. Added new Copilot task packs for branch-isolated parallel work:
    - `docs/copilot-task-claude-sr-video-001-v2.md`
    - `docs/copilot-task-codex-sr-dosrun-001.md`
+7. Closed `SR-DOSRUN-001` baseline: deterministic smoke payload `CIUKSMK.COM`, explicit `run` outcome markers (`ok/not_found/bad_format/runtime`), launch-path `4Ch/4Dh` parity selftest, and gate `make test-dosrun-simple`.
 
 ### v0.6.1
 1. Added M6 protected-mode contract baseline selftests at startup with explicit PASS/FAIL markers.

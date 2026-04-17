@@ -47,6 +47,15 @@ static char g_shell_cwd[SHELL_PATH_MAX] = "/EFI/CIUKIOS";
 static u8 g_shell_errorlevel = 0U;
 static u8 g_shell_batch_depth = 0U;
 
+typedef enum shell_dosrun_error_class {
+    SHELL_DOSRUN_ERROR_NONE = 0,
+    SHELL_DOSRUN_ERROR_NOT_FOUND,
+    SHELL_DOSRUN_ERROR_BAD_FORMAT,
+    SHELL_DOSRUN_ERROR_RUNTIME
+} shell_dosrun_error_class_t;
+
+static shell_dosrun_error_class_t g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
+
 typedef struct shell_env_var {
     u8 used;
     char name[SHELL_ENV_NAME_MAX];
@@ -252,6 +261,48 @@ static void shell_set_errorlevel(u8 code) {
 
 static u8 shell_get_errorlevel(void) {
     return g_shell_errorlevel;
+}
+
+static int shell_run_target_is_supported(const char *target) {
+    if (!target || target[0] == '\0') {
+        return 0;
+    }
+    return str_ends_with_nocase(target, ".COM")
+        || str_ends_with_nocase(target, ".EXE")
+        || str_ends_with_nocase(target, ".BAT");
+}
+
+static const char *shell_dosrun_error_class_name(shell_dosrun_error_class_t cls) {
+    if (cls == SHELL_DOSRUN_ERROR_NOT_FOUND) {
+        return "not_found";
+    }
+    if (cls == SHELL_DOSRUN_ERROR_BAD_FORMAT) {
+        return "bad_format";
+    }
+    if (cls == SHELL_DOSRUN_ERROR_RUNTIME) {
+        return "runtime";
+    }
+    return "runtime";
+}
+
+static void shell_dosrun_emit_launch_marker(const char *path, const char *type) {
+    serial_write("[dosrun] launch path=");
+    serial_write(path ? path : "<unknown>");
+    serial_write(" type=");
+    serial_write(type ? type : "COM");
+    serial_write("\n");
+}
+
+static void shell_dosrun_emit_ok_marker(u8 code) {
+    serial_write("[dosrun] result=ok code=0x");
+    serial_write_hex8(code);
+    serial_write("\n");
+}
+
+static void shell_dosrun_emit_error_marker(shell_dosrun_error_class_t cls) {
+    serial_write("[dosrun] result=error class=");
+    serial_write(shell_dosrun_error_class_name(cls));
+    serial_write("\n");
 }
 
 static void shell_env_clear_all(void) {
@@ -3381,10 +3432,12 @@ static void shell_run_staged_image(
     u32 reloc_applied = 0U;
     u16 load_segment = (u16)(((SHELL_RUNTIME_COM_ADDR >> 4) + 0x10ULL) & 0xFFFFULL);
     int is_mz = 0;
+    const char *run_type = "COM";
 
     if (image_size == 0U || image_size > SHELL_RUNTIME_COM_MAX_PAYLOAD) {
         video_write("Invalid COM size.\n");
         shell_set_errorlevel(1U);
+        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
         return;
     }
 
@@ -3394,6 +3447,7 @@ static void shell_run_staged_image(
     }
 
     if (is_mz) {
+        run_type = "EXE";
         if (!dos_mz_build_loaded_image(
                 (u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR,
                 image_size,
@@ -3404,21 +3458,26 @@ static void shell_run_staged_image(
             )) {
             video_write("Invalid MZ executable.\n");
             shell_set_errorlevel(1U);
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
             return;
         }
 
         if (mz_info.entry_offset >= image_size) {
             video_write("Invalid MZ entry contract.\n");
             shell_set_errorlevel(1U);
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
             return;
         }
 
         if (mz_info.runtime_required_bytes > SHELL_RUNTIME_COM_MAX_PAYLOAD) {
             video_write("MZ runtime span exceeds payload window.\n");
             shell_set_errorlevel(1U);
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
             return;
         }
     }
+
+    shell_dosrun_emit_launch_marker(name && name[0] != '\0' ? name : "default", run_type);
 
     local_memset(&ctx, 0U, (u32)sizeof(ctx));
     ctx.boot_info = boot_info;
@@ -3479,6 +3538,7 @@ static void shell_run_staged_image(
         if (!marker_ok || image_size < 12U) {
             video_write("MZ runtime dispatch pending (16-bit execution path).\n");
             shell_set_errorlevel(1U);
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_RUNTIME;
             return;
         }
 
@@ -3490,6 +3550,7 @@ static void shell_run_staged_image(
         if (stub_entry_off >= image_size) {
             video_write("MZ dispatch marker invalid entry offset.\n");
             shell_set_errorlevel(1U);
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_RUNTIME;
             return;
         }
 
@@ -3504,6 +3565,7 @@ static void shell_run_staged_image(
         shell_publish_last_exit_status(&ctx);
         shell_print_com_exit(&ctx);
         shell_set_errorlevel(ctx.exit_code);
+        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
         return;
     }
 
@@ -3512,6 +3574,7 @@ static void shell_run_staged_image(
     shell_publish_last_exit_status(&ctx);
     shell_print_com_exit(&ctx);
     shell_set_errorlevel(ctx.exit_code);
+    g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
 }
 
 static int shell_run_from_catalog(
@@ -3604,8 +3667,10 @@ static void shell_run(boot_info_t *boot_info, handoff_v0_t *handoff, const char 
     char target_path[SHELL_PATH_MAX];
     char tail[128];
     handoff_com_entry_t *entry;
+    int launched = 0;
 
     extract_run_tail(args, tail, (u32)sizeof(tail));
+    g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
 
     if (!normalize_run_name(args, target, (u32)sizeof(target))) {
         if (handoff->com_phys_base != 0 && handoff->com_phys_size != 0U) {
@@ -3617,28 +3682,45 @@ static void shell_run(boot_info_t *boot_info, handoff_v0_t *handoff, const char 
                     "default",
                     ""
                 )) {
-                return;
+                launched = 1;
+            } else {
+                video_write("Default COM metadata is invalid.\n");
+                shell_set_errorlevel(1U);
+                g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
             }
-            video_write("Default COM metadata is invalid.\n");
+        } else if (shell_run_from_fat(boot_info, handoff, "INIT.COM", "")) {
+            launched = 1;
+        } else {
+            video_write("Usage: run <name>\n");
             shell_set_errorlevel(1U);
-            return;
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NOT_FOUND;
         }
-        if (shell_run_from_fat(boot_info, handoff, "INIT.COM", "")) {
-            return;
-        }
-        video_write("Usage: run <name>\n");
+        goto finalize;
+    }
+
+    if (!shell_run_target_is_supported(target)) {
+        video_write("Unsupported program format: ");
+        video_write(target);
+        video_write("\n");
         shell_set_errorlevel(1U);
-        return;
+        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
+        goto finalize;
     }
 
     if (str_ends_with_nocase(target, ".BAT")) {
+        shell_dosrun_emit_launch_marker(target, "BAT");
         if (!build_run_path(target, target_path, (u32)sizeof(target_path))) {
             video_write("Invalid batch path.\n");
             shell_set_errorlevel(1U);
-            return;
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
+            goto finalize;
         }
         shell_run_batch_file(boot_info, handoff, target_path);
-        return;
+        launched = 1;
+        if (shell_get_errorlevel() != 0U) {
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_RUNTIME;
+        }
+        goto finalize;
     }
 
     entry = shell_find_com(handoff, target);
@@ -3651,21 +3733,76 @@ static void shell_run(boot_info_t *boot_info, handoff_v0_t *handoff, const char 
                 entry->name,
                 tail
             )) {
-            return;
+            launched = 1;
+            goto finalize;
         }
         video_write("COM entry metadata is invalid: ");
         video_write(entry->name);
         video_write("\n");
+        shell_set_errorlevel(1U);
+        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
+        goto finalize;
     }
 
     if (shell_run_from_fat(boot_info, handoff, target, tail)) {
-        return;
+        launched = 1;
+        goto finalize;
     }
 
     video_write("Program not found: ");
     video_write(target);
     video_write("\n");
     shell_set_errorlevel(1U);
+    g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NOT_FOUND;
+
+finalize:
+    if (launched && g_shell_dosrun_error_class == SHELL_DOSRUN_ERROR_NONE) {
+        shell_dosrun_emit_ok_marker(shell_get_errorlevel());
+        return;
+    }
+
+    if (g_shell_dosrun_error_class == SHELL_DOSRUN_ERROR_NONE) {
+        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_RUNTIME;
+    }
+    shell_dosrun_emit_error_marker(g_shell_dosrun_error_class);
+}
+
+int stage2_shell_selftest_dosrun_status_path(void) {
+    ciuki_dos_context_t run_ctx;
+    ciuki_int21_regs_t regs;
+    /*
+     * Validate the launch-status contract using the runtime-native terminate
+     * path: INT 21h/AH=4Ch publishes exit code, and AH=4Dh returns it once.
+     */
+    local_memset(&run_ctx, 0U, (u32)sizeof(run_ctx));
+    run_ctx.psp_segment = (u16)((SHELL_RUNTIME_COM_ADDR >> 4) & 0xFFFFU);
+    shell_com_int21_4c(&run_ctx, 0x2AU);
+    if (run_ctx.exit_reason != (u8)CIUKI_COM_EXIT_INT21_4C || run_ctx.exit_code != 0x2AU) {
+        return 0;
+    }
+
+    shell_publish_last_exit_status(&run_ctx);
+    shell_set_errorlevel(run_ctx.exit_code);
+    g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
+    if (shell_get_errorlevel() != 0x2AU) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4D00U;
+    shell_com_int21(&run_ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x002AU) {
+        return 0;
+    }
+
+    local_memset(&regs, 0U, (u32)sizeof(regs));
+    regs.ax = 0x4D00U;
+    shell_com_int21(&run_ctx, &regs);
+    if (regs.carry != 0U || regs.ax != 0x0000U) {
+        return 0;
+    }
+
+    return 1;
 }
 
 static void shell_type(const char *args) {
@@ -4568,6 +4705,7 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
     shell_draw_title_bar();
     video_write("Desktop session closed. Type 'desktop' to reopen.\n");
     video_present();
+    video_pacing_report();
     serial_write("[ ui ] desktop session ended\n");
 }
 
