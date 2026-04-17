@@ -29,7 +29,7 @@ The current direction is:
 7. Detailed handoff log: [docs/handoffs/README.md](docs/handoffs/README.md)
 
 ## Current Version
-Current public version in README: `CiukiOS Alpha v0.8.0`
+Current public version in README: `CiukiOS Alpha v0.8.1`
 
 ## Current Project State
 

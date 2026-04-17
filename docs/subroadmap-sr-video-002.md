@@ -268,9 +268,10 @@ scripts/
 
 ## Versioning Plan
 - Complete M-V2.0 → bump to `v0.7.2` (flicker-free baseline).
-- Complete M-V2.1 + M-V2.2 → bump to `v0.8.0` (2D + images).
-- Complete M-V2.3 + M-V2.4 → bump to `v0.9.0` (DOS-era graphics ready).
-- Complete M-V2.5 → bump to `v0.9.1` (DOOM-ready).
+- Complete M-V2.1 + M-V2.2 → bump to `v0.8.0` (2D + images). **DONE**
+- Complete M-V2.3 → folded into v0.8.0 (2D + ABI). **DONE**
+- Complete M-V2.4 + M-V2.5 → bump to `v0.8.1` (DOS-era graphics ready, palette + cached present). **DONE** (staying inside 0.8.x per current directive)
+- Complete M-V2.6 → `v0.8.2` (optional WM polish).
 - DOOM title screen visible on CiukiOS in QEMU → `v1.0.0-rc1`.
 
 ## Next Action (Sprint 1)

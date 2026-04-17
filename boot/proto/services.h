@@ -73,6 +73,18 @@ typedef struct ciuki_gfx_services {
     void (*blit)(const uint32_t *src, uint32_t sw, uint32_t sh,
                  uint32_t stride, uint32_t dx, uint32_t dy);
     void (*get_fb_info)(ciuki_fb_info_t *out);
+    /* M-V2.4 — BIOS INT 10h + mode switch. */
+    uint8_t (*set_mode)(uint8_t mode);       /* 0x03 text, 0x13 320x200x8 */
+    uint8_t (*get_mode)(void);
+    int     (*present)(void);                /* commit current plane -> fb */
+    /* M-V2.5 — palette (256 x 6-bit RGB triples, VGA-compatible). */
+    void (*set_palette)(uint32_t first, uint32_t count,
+                        const uint8_t *rgb_triples_6bit);
+    /* Mode 0x13 plane fast path (for DOOM-style linear fb writes). */
+    uint8_t *(*mode13_plane)(void);
+    void (*mode13_put_pixel)(uint32_t x, uint32_t y, uint8_t color_index);
+    /* INT 10h dispatcher (for DOS binaries that explicitly trap). */
+    void (*int10)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
     uint8_t reserved[32];
 } ciuki_gfx_services_t;
 

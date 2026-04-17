@@ -12,6 +12,7 @@
 #include "serial.h"
 #include "gfx2d.h"
 #include "image.h"
+#include "gfx_modes.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_FILE_BUFFER_SIZE (128U * 1024U)
@@ -5574,6 +5575,13 @@ static const ciuki_gfx_services_t g_gfx_services = {
     .fill_tri = gfx2d_fill_tri,
     .blit = gfx2d_blit,
     .get_fb_info = shell_gfx_get_fb_info,
+    .set_mode = gfx_mode_set,
+    .get_mode = gfx_mode_current,
+    .present = gfx_mode_present,
+    .set_palette = gfx_palette_set,
+    .mode13_plane = gfx_mode13_plane,
+    .mode13_put_pixel = gfx_mode13_put_pixel,
+    .int10 = gfx_int10_dispatch,
     .reserved = {0},
 };
 
@@ -5706,6 +5714,100 @@ static void shell_image(const char *args) {
     shell_set_errorlevel(1U);
 }
 
+/* ------------------------------------------------------------------ */
+/* mode command  —  M-V2.4 / M-V2.5 (INT 10h + palette + present)     */
+/* ------------------------------------------------------------------ */
+
+static u8 shell_mode_parse_hex_byte(const char *s) {
+    u8 v = 0;
+    for (u32 i = 0; i < 2U && s[i]; i++) {
+        char c = s[i];
+        u8 d = 0;
+        if (c >= '0' && c <= '9') d = (u8)(c - '0');
+        else if (c >= 'a' && c <= 'f') d = (u8)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') d = (u8)(c - 'A' + 10);
+        else break;
+        v = (u8)((v << 4) | d);
+    }
+    return v;
+}
+
+static void shell_mode_test_gradient(void) {
+    /* Fill mode 0x13 plane with an 8x2 gradient (horizontal index ramp). */
+    for (u32 y = 0; y < GFX_MODE13_H; y++) {
+        for (u32 x = 0; x < GFX_MODE13_W; x++) {
+            /* Map (x,y) -> palette index using the color cube region 32..255 */
+            u8 c = (u8)(32U + ((x * 6U) / GFX_MODE13_W) * 36U
+                          + ((y * 6U) / GFX_MODE13_H) * 6U
+                          + ((x + y) & 0x05U));
+            gfx_mode13_put_pixel(x, y, c);
+        }
+    }
+}
+
+static void shell_mode(const char *args) {
+    if (!args || args[0] == '\0' || str_eq(args, "help")) {
+        video_write("usage: mode <subcommand>\n");
+        video_write("  info               print current mode / palette\n");
+        video_write("  set <hex>          set mode (03=text, 13=320x200x8)\n");
+        video_write("  test13             enter mode 13 + draw gradient\n");
+        video_write("  text               return to text mode 03\n");
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    if (str_eq(args, "info")) {
+        u8 m = gfx_mode_current();
+        video_write("mode: current=0x");
+        video_write_hex8(m);
+        video_write("\n");
+        if (m == GFX_MODE_VGA_320x200) {
+            video_write("plane: 320x200 8bpp (palette 256 entries)\n");
+        } else {
+            video_write("plane: text 80x25\n");
+        }
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    if (args[0] == 's' && args[1] == 'e' && args[2] == 't' && args[3] == ' ') {
+        const char *p = args + 4;
+        while (*p == ' ') p++;
+        if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+        u8 m = shell_mode_parse_hex_byte(p);
+        if (!gfx_mode_set(m)) {
+            video_write("mode: unsupported\n");
+            shell_set_errorlevel(1U);
+            return;
+        }
+        video_write("mode: set OK\n");
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    if (str_eq(args, "test13")) {
+        gfx_mode_set(GFX_MODE_VGA_320x200);
+        shell_mode_test_gradient();
+        gfx_mode_present();
+        serial_write("[mode] test13 gradient OK\n");
+        video_write("[mode] test13 gradient drawn (palette cube)\n");
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    if (str_eq(args, "text")) {
+        gfx_mode_set(GFX_MODE_TEXT_80x25);
+        /* force one console redraw via end_frame on text path */
+        video_begin_frame();
+        video_end_frame();
+        shell_set_errorlevel(0U);
+        return;
+    }
+
+    video_write("mode: unknown subcommand\n");
+    shell_set_errorlevel(1U);
+}
+
 static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff_v0_t *handoff) {
     char cmd[16];
     char expanded[SHELL_LINE_MAX];
@@ -5800,6 +5902,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "image")) {
         shell_image(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "mode")) {
+        shell_mode(get_arg_ptr(line));
         return;
     }
 

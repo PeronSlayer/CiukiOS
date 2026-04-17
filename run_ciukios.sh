@@ -100,6 +100,11 @@ if [[ -f "$BUILD_DIR/GFXSMK.COM" ]]; then
     echo "[CiukiOS] GFXSMK.COM copied to image"
 fi
 
+if [[ -f "$BUILD_DIR/DOSMD13.COM" ]]; then
+    mcopy -i "$IMAGE" "$BUILD_DIR/DOSMD13.COM" ::EFI/CiukiOS/DOSMD13.COM
+    echo "[CiukiOS] DOSMD13.COM copied to image"
+fi
+
 if [[ -f "$BUILD_DIR/CIUKSMK.COM" ]]; then
     mcopy -i "$IMAGE" "$BUILD_DIR/CIUKSMK.COM" ::EFI/CiukiOS/CIUKSMK.COM
     echo "[CiukiOS] CIUKSMK.COM copied to image"

@@ -2,6 +2,14 @@
 
 All notable changes to CiukiOS are tracked here.
 
+## v0.8.1
+1. Completed SR-VIDEO-002 milestones M-V2.4 and M-V2.5 (DOS/VGA mode compatibility + palette + cached present).
+2. M-V2.4: new `stage2/src/gfx_modes.c` + `stage2/include/gfx_modes.h`. Mode 0x13 (320×200×8) planar surface upscaled (nearest-neighbor, integer scale up to 6×) and letterboxed into the 32bpp GOP backbuffer. `gfx_int10_dispatch` implements BIOS INT 10h AH=00h/0Ch/0Dh/0Fh and VBE AH=4Fh AL=00/01/02/03 with VBE mode IDs 0x0013 / 0x0100 / 0x0101 / 0x0003 mapped onto the internal planes. New shell command `mode` (`info`, `set <hex>`, `test13`, `text`).
+3. M-V2.5: 256-entry palette (VGA-compatible default: CGA/EGA 16 + greyscale ramp + 6×6×6 color cube). `gfx_palette_set(first,count,rgb6bit)` exposed via services. Present path skips the upscale pass when neither plane nor palette changed since the last commit (cached present / 60 fps cap baseline).
+4. Extended `ciuki_gfx_services_t` (`boot/proto/services.h`) with `set_mode` / `get_mode` / `present` / `set_palette` / `mode13_plane` / `mode13_put_pixel` / `int10`; wired in stage2. New sample `DOSMD13.COM` (`com/dosmode13/`) sets mode 0x13, fills a gradient via the ABI, tweaks one palette entry, calls `present()`, and emits `[dosmode13] OK`.
+5. `gfx_mode_init()` called right after `video_init()` so mode/palette state is live before any COM runs.
+6. Bumped baseline to `CiukiOS Alpha v0.8.1`.
+
 ## v0.8.0
 1. Completed SR-VIDEO-002 milestones M-V2.0..M-V2.3 (flicker-free video baseline, 2D rasterizer, BMP decoder, stable 2D graphics services ABI).
 2. M-V2.0: `video_begin_frame` / `video_end_frame` frame-scope compositor plus non-temporal `mem_copy_nt` (x86-64 `movnti` + `sfence`) present path; splash / HUD / title bar / desktop / shell input migrated to atomic frame commits.

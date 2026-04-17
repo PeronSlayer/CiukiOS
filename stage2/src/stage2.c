@@ -1,5 +1,6 @@
 #include "serial.h"
 #include "video.h"
+#include "gfx_modes.h"
 #include "cpu_tables.h"
 #include "interrupts.h"
 #include "timer.h"
@@ -636,6 +637,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ ok ] desktop ui command available (type: desktop)\n");
 
     video_init(boot_info);
+    gfx_mode_init();
     if (stage2_bios_compat_selftest_int10()) {
         serial_write("[ test ] bios int10 baseline selftest: PASS\n");
     } else {
