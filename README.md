@@ -6,10 +6,16 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.6.4`
+`CiukiOS Alpha v0.6.5`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.6.5
+1. Closed M6 baseline contract with deterministic protected-mode transition markers (`transition state`, `GDT/IDT snapshot`, `CR0`, `return-path`).
+2. Added M6 baseline entry infrastructure markers (`A20 probe/enable`, descriptor baseline) and DOS extender host-interface skeleton markers.
+3. Added pmode memory-domain overlap guard markers and integrated transition-v2 gate (`make test-m6-transition-v2`) into M6 readiness orchestration.
+4. Updated protected-mode requirements/contract docs for v2 baseline scope and current residual gap (real DOS/4GW compatibility beyond skeleton).
+
 ### v0.6.4
 1. Replaced simple first-fit GOP mode selection with deterministic scoring engine (resolution class, aspect ratio, memory budget) supporting 1024x768 through 3840x2160.
 2. Added explicit budget tiers by resolution class with safe double-buffer ceiling and deterministic fallback degrade policy.
@@ -24,7 +30,6 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 4. Added deterministic DOS smoke payload `CIUKSMK.COM` and integrated `run` outcome markers (`ok/not_found/bad_format/runtime`).
 5. Added end-to-end DOS run gate `make test-dosrun-simple` (`scripts/test_dosrun_simple_program.sh`) validating launch + return code path.
 6. Fixed DOS run selftest contract to validate runtime-native `AH=4Ch -> AH=4Dh` one-shot status semantics.
-7. Closed M6 baseline contract with deterministic transition-state markers, A20/descriptor baseline markers, DOS extender host-interface skeleton markers, pmode memory overlap guard, and expanded M6 readiness gates.
 7. Added CMOS-backed persistent boot video configuration with integrity checks and loader source precedence (`CMOS` -> `VMODE.CFG` -> policy), including reboot persistence gate `make test-vmode-persistence`.
 
 ### v0.6.2

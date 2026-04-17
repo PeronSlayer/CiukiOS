@@ -4,8 +4,8 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_SCRIPT="$PROJECT_DIR/run_ciukios.sh"
 LOG_DIR="$PROJECT_DIR/.ciukios-testlogs"
-LOG_FILE="$LOG_DIR/m6-pmode-contract.log"
-SERIAL_LOG="$LOG_DIR/m6-pmode-contract-serial.log"
+LOG_FILE="$LOG_DIR/m6-transition-v2.log"
+SERIAL_LOG="$LOG_DIR/m6-transition-v2-serial.log"
 LOCK_FILE="$LOG_DIR/qemu-test.lock"
 
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-90}"
@@ -26,7 +26,7 @@ if [[ ! -x "$RUN_SCRIPT" ]]; then
     exit 1
 fi
 
-echo "[test-m6-pmode] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
+echo "[test-m6-transition-v2] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
 set +e
 CIUKIOS_INCLUDE_FREEDOS=0 \
 CIUKIOS_INCLUDE_OPENGEM=0 \
@@ -40,13 +40,13 @@ set -e
 if [[ -f "$SERIAL_LOG" ]]; then
     {
         echo
-        echo "[test-m6-pmode] ---- qemu serial log ----"
+        echo "[test-m6-transition-v2] ---- qemu serial log ----"
         cat "$SERIAL_LOG"
     } >> "$LOG_FILE"
 fi
 
 if [[ $rc -eq 124 ]]; then
-    echo "[test-m6-pmode] timeout reached (expected for QEMU halt loop)"
+    echo "[test-m6-transition-v2] timeout reached (expected for QEMU halt loop)"
 elif [[ $rc -ne 0 ]]; then
     echo "[FAIL] run_ciukios.sh exited with error (exit=$rc)" >&2
     tail -n 120 "$LOG_FILE" >&2 || true
@@ -54,46 +54,32 @@ elif [[ $rc -ne 0 ]]; then
 fi
 
 if ! grep -Fq "[ stage2 ] scaffolding started" "$LOG_FILE"; then
-    echo "[FAIL] runtime markers unavailable in log; cannot validate M6 contract" >&2
+    echo "[FAIL] runtime markers unavailable in log; cannot validate M6 transition v2" >&2
     tail -n 120 "$LOG_FILE" >&2 || true
     exit 1
 fi
 
 required_patterns=(
-    "[ compat ] PMODE contract v1 ready (CIUKEX64 marker + stub offset)"
-    "[ test ] m6 pmode contract marker selftest: PASS"
-    "[ test ] m6 pmode shell surface selftest: PASS"
     "[m6] transition state init: PASS"
     "[m6] gdt/idt snapshot: PASS"
+    "[m6] snapshot gdtr.base=0x"
+    "[m6] cr0 intended set=0x"
     "[m6] cr0 transition contract: PASS"
     "[m6] return-path contract: PASS"
-    "[m6] a20 probe="
-    "[m6] a20 enable result=PASS"
-    "[m6] descriptor baseline ready=1"
-    "[m6] dpmi detect skeleton ready"
-    "[m6] rm callback skeleton ready"
-    "[m6] int reflect skeleton ready"
-    "[m6] pmem range base=0x"
-    "[m6] pmem overlap check: PASS"
 )
 
 forbidden_patterns=(
-    "[ test ] m6 pmode contract marker selftest: FAIL"
-    "[ test ] m6 pmode shell surface selftest: FAIL"
     "[m6] transition state init: FAIL"
     "[m6] gdt/idt snapshot: FAIL"
     "[m6] cr0 transition contract: FAIL"
     "[m6] return-path contract: FAIL"
-    "[m6] a20 enable result=FAIL"
-    "[m6] descriptor baseline ready=0"
-    "[m6] pmem overlap check: FAIL"
     "[ panic ]"
 )
 
 for pattern in "${required_patterns[@]}"; do
     if ! grep -Fq "$pattern" "$LOG_FILE"; then
         echo "[FAIL] missing required pattern: $pattern" >&2
-        tail -n 160 "$LOG_FILE" >&2 || true
+        tail -n 180 "$LOG_FILE" >&2 || true
         exit 1
     fi
     echo "[OK] found: $pattern"
@@ -102,11 +88,11 @@ done
 for pattern in "${forbidden_patterns[@]}"; do
     if grep -Fq "$pattern" "$LOG_FILE"; then
         echo "[FAIL] forbidden pattern found: $pattern" >&2
-        tail -n 160 "$LOG_FILE" >&2 || true
+        tail -n 180 "$LOG_FILE" >&2 || true
         exit 1
     fi
     echo "[OK] absent: $pattern"
 done
 
-echo "[PASS] m6 pmode contract test completed"
+echo "[PASS] m6 transition contract v2 test completed"
 echo "[INFO] log: $LOG_FILE"

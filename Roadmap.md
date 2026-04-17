@@ -134,6 +134,6 @@ References: `docs/handoffs/2026-04-16-copilot-gui-v8-heavy-cycle.md`, related GU
 
 ## Current Execution Focus
 1. Advance milestone path toward first DOS DOOM boot and run.
-2. Expand protected-mode and DOS-extender execution path (M6 core implementation).
+2. Expand protected-mode and DOS-extender execution path beyond M6 baseline skeleton (real DOS/4GW compatibility path).
 3. Evolve video subsystem beyond Full HD baseline while preserving current deterministic gates.
 4. Stabilize FAT32 behavior as default filesystem baseline for upcoming DOS runtime steps.
