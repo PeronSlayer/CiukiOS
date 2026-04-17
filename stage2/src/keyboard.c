@@ -11,6 +11,7 @@
 #define SHIFT_RIGHT_BIT  0x02
 #define ALT_LEFT_BIT     0x04
 #define ALT_RIGHT_BIT    0x08
+#define CTRL_LEFT_BIT    0x10
 
 #define KEYBUF_SIZE 128
 #define KEYBUF_MASK (KEYBUF_SIZE - 1)
@@ -245,6 +246,27 @@ static u8 set1_decode_to_ascii(u8 scancode) {
         return 0;
     }
 
+    /* Left Ctrl (scancode 0x1D, non-extended) */
+    if (code == 0x1D && !g_extended_prefix) {
+        if (is_break) {
+            g_shift_state = (u8)(g_shift_state & ~CTRL_LEFT_BIT);
+        } else {
+            g_shift_state = (u8)(g_shift_state | CTRL_LEFT_BIT);
+        }
+        return 0;
+    }
+
+    /* Right Ctrl (extended 0xE0 0x1D) — treat same as left Ctrl */
+    if (code == 0x1D && g_extended_prefix) {
+        if (is_break) {
+            g_shift_state = (u8)(g_shift_state & ~CTRL_LEFT_BIT);
+        } else {
+            g_shift_state = (u8)(g_shift_state | CTRL_LEFT_BIT);
+        }
+        g_extended_prefix = 0;
+        return 0;
+    }
+
     if (is_break) {
         g_extended_prefix = 0;
         return 0;
@@ -290,6 +312,14 @@ static u8 set1_decode_to_ascii(u8 scancode) {
         }
 
         return 0;
+    }
+
+    /* Ctrl produces control codes for letter keys (Ctrl+A=0x01 .. Ctrl+Z=0x1A) */
+    if (g_shift_state & CTRL_LEFT_BIT) {
+        u8 base = k_set1_ascii[code];
+        if (base >= 'a' && base <= 'z') {
+            return (u8)(base & 0x1FU);
+        }
     }
 
     shift_active = (u8)((g_shift_state & (SHIFT_LEFT_BIT | SHIFT_RIGHT_BIT)) != 0U);
