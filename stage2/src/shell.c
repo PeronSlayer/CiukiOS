@@ -52,10 +52,13 @@ typedef enum shell_dosrun_error_class {
     SHELL_DOSRUN_ERROR_NONE = 0,
     SHELL_DOSRUN_ERROR_NOT_FOUND,
     SHELL_DOSRUN_ERROR_BAD_FORMAT,
-    SHELL_DOSRUN_ERROR_RUNTIME
+    SHELL_DOSRUN_ERROR_RUNTIME,
+    SHELL_DOSRUN_ERROR_UNSUPPORTED_INT21,
+    SHELL_DOSRUN_ERROR_ARGS_PARSE
 } shell_dosrun_error_class_t;
 
 static shell_dosrun_error_class_t g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
+static u32 g_shell_dosrun_int21_unsupported_calls = 0U;
 
 typedef struct shell_env_var {
     u8 used;
@@ -330,6 +333,12 @@ static const char *shell_dosrun_error_class_name(shell_dosrun_error_class_t cls)
     if (cls == SHELL_DOSRUN_ERROR_RUNTIME) {
         return "runtime";
     }
+    if (cls == SHELL_DOSRUN_ERROR_UNSUPPORTED_INT21) {
+        return "unsupported_int21";
+    }
+    if (cls == SHELL_DOSRUN_ERROR_ARGS_PARSE) {
+        return "args_parse";
+    }
     return "runtime";
 }
 
@@ -350,6 +359,63 @@ static void shell_dosrun_emit_ok_marker(u8 code) {
 static void shell_dosrun_emit_error_marker(shell_dosrun_error_class_t cls) {
     serial_write("[dosrun] result=error class=");
     serial_write(shell_dosrun_error_class_name(cls));
+    serial_write("\n");
+}
+
+static void shell_serial_write_dec32(u32 value) {
+    char buf[11];
+    u32 i = 0U;
+    if (value == 0U) {
+        serial_write("0");
+        return;
+    }
+    while (value > 0U && i < sizeof(buf)) {
+        buf[i++] = (char)('0' + (value % 10U));
+        value /= 10U;
+    }
+    while (i > 0U) {
+        char tmp[2];
+        tmp[0] = buf[--i];
+        tmp[1] = '\0';
+        serial_write(tmp);
+    }
+}
+
+static u32 shell_count_tail_chars(const char *args) {
+    const char *p;
+    const char *start;
+    const char *end;
+
+    if (!args) {
+        return 0U;
+    }
+    p = args;
+    while (*p && is_space((u8)*p)) {
+        p++;
+    }
+    while (*p && !is_space((u8)*p)) {
+        p++;
+    }
+    while (*p && is_space((u8)*p)) {
+        p++;
+    }
+    start = p;
+    end = p;
+    while (*p) {
+        if (!is_space((u8)*p)) {
+            end = p + 1;
+        }
+        p++;
+    }
+    return (u32)(end - start);
+}
+
+static void shell_dosrun_emit_argv_markers(u32 raw_tail_len, int overflow) {
+    serial_write("[dosrun] argv tail len=");
+    shell_serial_write_dec32(raw_tail_len);
+    serial_write("\n");
+    serial_write("[dosrun] argv parse=");
+    serial_write(overflow ? "FAIL" : "PASS");
     serial_write("\n");
 }
 
@@ -1926,6 +1992,38 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    if (ah == 0x2AU) {
+        /* Get system date — deterministic baseline (Fri 2026-04-17). */
+        regs->ax = (u16)((regs->ax & 0xFF00U) | 0x0005U); /* AL = day-of-week (Fri) */
+        regs->cx = 0x07EAU;                               /* CX = 2026 */
+        regs->dx = (u16)((0x04U << 8) | 0x11U);           /* DH=month(4), DL=day(17) */
+        return;
+    }
+
+    if (ah == 0x2CU) {
+        /* Get system time — deterministic baseline (00:00:00.00). */
+        regs->cx = 0x0000U;  /* CH=hour, CL=minute */
+        regs->dx = 0x0000U;  /* DH=seconds, DL=hundredths */
+        return;
+    }
+
+    if (ah == 0x44U && al == 0x00U) {
+        /* IOCTL — get device info for handle in BX. */
+        u16 handle = regs->bx;
+        u16 info;
+        if (handle == 0U) {
+            info = 0x0081U; /* stdin: char device, is stdin */
+        } else if (handle == 1U || handle == 2U) {
+            info = 0x0082U; /* stdout/stderr: char device, is stdout */
+        } else {
+            info = 0x0000U; /* file handle: disk file, not a device */
+        }
+        regs->dx = info;
+        regs->ax = info;
+        regs->carry = 0U;
+        return;
+    }
+
     if (ah == 0x2FU) {
         regs->es = g_int21_dta_segment;
         regs->bx = g_int21_dta_offset;
@@ -2575,6 +2673,7 @@ static void shell_com_int21(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         return;
     }
 
+    g_shell_dosrun_int21_unsupported_calls++;
     regs->carry = 1U;
     regs->ax = 0x0001U;
 }
@@ -3495,7 +3594,7 @@ static void shell_run_staged_image(
     }
 
     if (is_mz) {
-        run_type = "EXE";
+        run_type = "MZ";
         if (!dos_mz_build_loaded_image(
                 (u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR,
                 image_size,
@@ -3613,7 +3712,11 @@ static void shell_run_staged_image(
         shell_publish_last_exit_status(&ctx);
         shell_print_com_exit(&ctx);
         shell_set_errorlevel(ctx.exit_code);
-        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
+        if (ctx.exit_code != 0U && g_shell_dosrun_int21_unsupported_calls > 0U) {
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_UNSUPPORTED_INT21;
+        } else {
+            g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
+        }
         return;
     }
 
@@ -3622,7 +3725,11 @@ static void shell_run_staged_image(
     shell_publish_last_exit_status(&ctx);
     shell_print_com_exit(&ctx);
     shell_set_errorlevel(ctx.exit_code);
-    g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
+    if (ctx.exit_code != 0U && g_shell_dosrun_int21_unsupported_calls > 0U) {
+        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_UNSUPPORTED_INT21;
+    } else {
+        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
+    }
 }
 
 static int shell_run_from_catalog(
@@ -3716,9 +3823,22 @@ static void shell_run(boot_info_t *boot_info, handoff_v0_t *handoff, const char 
     char tail[128];
     handoff_com_entry_t *entry;
     int launched = 0;
+    u32 raw_tail_len;
+    int tail_overflow;
 
     extract_run_tail(args, tail, (u32)sizeof(tail));
+    raw_tail_len = shell_count_tail_chars(args);
+    tail_overflow = (raw_tail_len > SHELL_RUNTIME_TAIL_MAX) ? 1 : 0;
     g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
+    g_shell_dosrun_int21_unsupported_calls = 0U;
+    shell_dosrun_emit_argv_markers(raw_tail_len, tail_overflow);
+
+    if (tail_overflow) {
+        video_write("Argument tail exceeds 126 chars.\n");
+        shell_set_errorlevel(1U);
+        g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_ARGS_PARSE;
+        goto finalize;
+    }
 
     if (!normalize_run_name(args, target, (u32)sizeof(target))) {
         if (handoff->com_phys_base != 0 && handoff->com_phys_size != 0U) {

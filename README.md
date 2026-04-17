@@ -6,10 +6,17 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.6.5`
+`CiukiOS Alpha v0.6.6`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.6.6
+1. Closed SR-DOSRUN-001 with deterministic `.EXE MZ` single-program smoke path (`CIUKMZ.EXE` -> `0x2B`) reproducible from source via `tools/mkciukmz_exe`.
+2. Added dedicated MZ gate `make test-dosrun-mz` (`scripts/test_dosrun_mz_simple.sh`) validating `[dosrun] launch path=CIUKMZ.EXE type=MZ` + success return marker.
+3. Added DOS command-tail / argv bridge markers (`[dosrun] argv tail len=...`, `[dosrun] argv parse=PASS|FAIL`) and extended run-path error classes (`unsupported_int21`, `args_parse`).
+4. Extended INT21h coverage with deterministic date/time (`AH=2Ah`, `AH=2Ch`) and IOCTL get-device-info (`AH=44h`/`AL=00h`) plus boot-time `[compat]` markers.
+5. Expanded compatibility matrix gate (`make check-int21-matrix`) with 2Ah/2Ch/44h rows in `docs/int21-priority-a.md`.
+
 ### v0.6.5
 1. Closed M6 baseline contract with deterministic protected-mode transition markers (`transition state`, `GDT/IDT snapshot`, `CR0`, `return-path`).
 2. Added M6 baseline entry infrastructure markers (`A20 probe/enable`, descriptor baseline) and DOS extender host-interface skeleton markers.

@@ -4,8 +4,8 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_SCRIPT="$PROJECT_DIR/run_ciukios.sh"
 LOG_DIR="$PROJECT_DIR/.ciukios-testlogs"
-LOG_FILE="$LOG_DIR/dosrun-simple.log"
-SERIAL_LOG="$LOG_DIR/dosrun-simple-serial.log"
+LOG_FILE="$LOG_DIR/dosrun-mz.log"
+SERIAL_LOG="$LOG_DIR/dosrun-mz-serial.log"
 LOCK_FILE="$LOG_DIR/qemu-test.lock"
 RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 FDAUTO_PATH="$RUNTIME_DIR/FDAUTO.BAT"
@@ -43,18 +43,16 @@ if [[ -f "$FDAUTO_PATH" ]]; then
 fi
 
 cat > "$FDAUTO_PATH" <<'EOF'
-echo [dosrun-e2e] begin
-run CIUKSMK.COM
-echo [dosrun-e2e] end
+echo [dosrun-mz-e2e] begin
+run CIUKMZ.EXE
+echo [dosrun-mz-e2e] end
 EOF
 
-echo "[test-dosrun-simple] prebuilding artifacts..."
-make -C "$PROJECT_DIR" clean
-make -C "$PROJECT_DIR" all
-make -C "$PROJECT_DIR/boot/uefi-loader" clean
-make -C "$PROJECT_DIR/boot/uefi-loader" all
+echo "[test-dosrun-mz] prebuilding artifacts..."
+make -C "$PROJECT_DIR" clean all
+make -C "$PROJECT_DIR/boot/uefi-loader" clean all
 
-echo "[test-dosrun-simple] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
+echo "[test-dosrun-mz] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
 set +e
 CIUKIOS_INCLUDE_FREEDOS=1 \
 CIUKIOS_INCLUDE_OPENGEM=0 \
@@ -68,13 +66,13 @@ set -e
 if [[ -f "$SERIAL_LOG" ]]; then
     {
         echo
-        echo "[test-dosrun-simple] ---- qemu serial log ----"
+        echo "[test-dosrun-mz] ---- qemu serial log ----"
         cat "$SERIAL_LOG"
     } >> "$LOG_FILE"
 fi
 
 if [[ $rc -eq 124 ]]; then
-    echo "[test-dosrun-simple] timeout reached (expected for QEMU halt loop)"
+    echo "[test-dosrun-mz] timeout reached (expected for QEMU halt loop)"
 elif [[ $rc -ne 0 ]]; then
     echo "[FAIL] run_ciukios.sh exited with error (exit=$rc)" >&2
     tail -n 120 "$LOG_FILE" >&2 || true
@@ -82,10 +80,8 @@ elif [[ $rc -ne 0 ]]; then
 fi
 
 required_patterns=(
-    "[ ok ] stage2 mini shell ready (help/pwd/cd/dir/type/copy/ren/move/mkdir/rmdir/attrib/del/ascii/cls/ver/echo/set/ticks/mem/run/pmode/opengem/vmode/shutdown/reboot)"
-    "[ test ] dosrun status path selftest: PASS"
-    "[dosrun] launch path=CIUKSMK.COM type=COM"
-    "[dosrun] result=ok code=0x2A"
+    "[dosrun] launch path=CIUKMZ.EXE type=MZ"
+    "[dosrun] result=ok code=0x2B"
     "[dosrun] argv tail len="
     "[dosrun] argv parse=PASS"
     "[compat] INT21h date/time ready (AH=2Ah/2Ch)"
@@ -93,7 +89,7 @@ required_patterns=(
 )
 
 forbidden_patterns=(
-    "[ test ] dosrun status path selftest: FAIL"
+    "[dosrun] result=error class=bad_format"
     "[dosrun] result=error class=runtime"
     "[dosrun] result=error class=args_parse"
     "[dosrun] result=error class=unsupported_int21"
@@ -120,5 +116,5 @@ for pattern in "${forbidden_patterns[@]}"; do
     echo "[OK] absent: $pattern"
 done
 
-echo "[PASS] dosrun simple-program test completed"
+echo "[PASS] dosrun MZ simple-program test completed"
 echo "[INFO] log: $LOG_FILE"

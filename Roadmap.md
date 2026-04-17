@@ -89,9 +89,11 @@ Reference: `docs/subroadmap-sr-dosrun-001.md`
 
 - `DONE` COM runtime baseline and shell `run` command are active
 - `DONE` deterministic end-to-end smoke path for launching a simple DOS program (`CIUKSMK.COM`) and validating return status (`0x2A`)
-- `DONE` compact non-interactive gate for `run` outcome classes (`ok/not_found/bad_format/runtime`) via deterministic serial markers
+- `DONE` extended non-interactive gate for `run` outcome classes (`ok/not_found/bad_format/runtime/unsupported_int21/args_parse`) via deterministic serial markers
 - `DONE` launch-path parity mini-gate for `AH=4Ch` -> one-shot `AH=4Dh` behavior (`[ test ] dosrun status path selftest: PASS`)
-- `IN PROGRESS` minimal `.EXE MZ` single-program smoke integrated with existing MZ regression path
+- `DONE` minimal `.EXE MZ` single-program smoke (`CIUKMZ.EXE` -> `0x2B`) with reproducible host-side generator (`tools/mkciukmz_exe`) and dedicated gate (`make test-dosrun-mz`)
+- `DONE` argv tail bridge with deterministic serial markers (`[dosrun] argv tail len=...`, `[dosrun] argv parse=PASS|FAIL`)
+- `DONE` INT21h coverage extended to date/time (`AH=2Ah`, `AH=2Ch`) and IOCTL get-device-info (`AH=44h`/`AL=00h`) with boot-time `[compat]` markers
 
 ### SR-FS-002 - FAT32 Capability Track
 Reference: `stage2/src/fat.c`
