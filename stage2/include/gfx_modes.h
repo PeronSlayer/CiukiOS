@@ -68,6 +68,22 @@ void gfx_mode13_draw_column(u32 x, u32 y, u32 h, const u8 *src);
 /* Read back N palette entries as 6-bit VGA triples (out[3*i + {0..2}]). */
 void gfx_palette_get_raw(u32 first, u32 count, u8 *rgb_triples_6bit_out);
 
+/* Nearest-neighbor scaled blit of an 8-bit indexed source onto the mode 0x13
+ * plane. Produces a dw*dh rectangle at (dx,dy) from a sw*sh source with
+ * optional chroma-key. Used for HUD patch / title-screen scaling. Clips. */
+void gfx_mode13_blit_scaled(const u8 *src, u32 sw, u32 sh, u32 stride,
+                            u32 dx, u32 dy, u32 dw, u32 dh,
+                            u8 use_transparent, u8 transparent_idx);
+
+/* Masked single-column draw: same as `gfx_mode13_draw_column` but skips
+ * pixels equal to `transparent_idx` (DOOM R_DrawMaskedColumn path). */
+void gfx_mode13_draw_column_masked(u32 x, u32 y, u32 h, const u8 *src,
+                                   u8 transparent_idx);
+
+/* Return the frame counter (monotonically incremented on each successful
+ * `gfx_mode_present`). Useful for pacing + FPS measurement. */
+u32  gfx_frame_counter(void);
+
 /* Present the active non-text plane into the backbuffer + commit frame.
  * For text mode this is a no-op (console drives its own redraw).
  * Returns 1 if a plane was presented, 0 otherwise.

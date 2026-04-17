@@ -6,7 +6,7 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.8.3`
+`CiukiOS Alpha v0.8.4`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Index
@@ -17,6 +17,13 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 5. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Changelog (Latest)
+### v0.8.4
+1. Added the next DOOM-facing mode 0x13 helpers: `gfx_mode13_blit_scaled(...)` for nearest-neighbor scaled indexed blits (HUD/title patch style), `gfx_mode13_draw_column_masked(...)` for transparent single-column draws, and `gfx_frame_counter()` for present-count pacing / instrumentation.
+2. Extended `ciuki_gfx_services_t` with `mode13_blit_scaled`, `mode13_draw_column_masked`, and `frame_counter`, keeping the ABI append-only before `reserved[32]`.
+3. New sample `GFXDOOM.COM` (`com/gfxdoom/`): fills a mode 0x13 background, scales a 16x16 indexed patch to 160x100, overlays masked columns, presents after each stage, and prints `[gfxdoom] frames=<n>` + `[gfxdoom] OK`.
+4. `run_ciukios.sh` now copies `GFXDOOM.COM` into the FAT image so the demo is runnable directly from the shell.
+5. Bumped baseline version to `CiukiOS Alpha v0.8.4`.
+
 ### v0.8.3
 1. Broadened DOS universality on the video ABI: new `gfx_mode13_blit_indexed(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` 8-bit masked/opaque bitmap blit onto the mode 0x13 plane, new `gfx_mode13_draw_column(x, y, h, src)` single-column fast path (DOOM `R_DrawColumn`-style), and new `gfx_palette_get_raw(first, count, out6bit)` palette read-back (inverse of `gfx_palette_set`).
 2. `gfx_int10_dispatch` extended with AH=01h (set cursor shape), AH=02h (set cursor pos), AH=03h (get cursor pos + shape), AH=06h/07h (scroll up/down — soft stub: homes cursor on clear), AH=08h (read char+attr — returns space), AH=09h / 0Ah (write char+attr at cursor × CX), AH=0Bh (set bg/palette color), AH=0Eh (teletype output), AH=11h/12h (stub accept), AH=1Ah (get display combination code → VGA color 0x0808).

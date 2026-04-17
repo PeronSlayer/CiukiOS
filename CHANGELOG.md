@@ -2,6 +2,13 @@
 
 All notable changes to CiukiOS are tracked here.
 
+## v0.8.4
+1. Added `gfx_mode13_blit_scaled(src, sw, sh, stride, dx, dy, dw, dh, use_transparent, transparent_idx)` for nearest-neighbor scaled indexed blits on the mode 0x13 plane.
+2. Added `gfx_mode13_draw_column_masked(x, y, h, src, transparent_idx)` for transparent single-column draws and `gfx_frame_counter()` to count successful presents.
+3. Extended `ciuki_gfx_services_t` with `mode13_blit_scaled`, `mode13_draw_column_masked`, and `frame_counter` (append-only ABI growth).
+4. Added `GFXDOOM.COM` as a DOOM-style validation demo and wired it into `Makefile` + `run_ciukios.sh`.
+5. Bumped baseline to `CiukiOS Alpha v0.8.4`.
+
 ## v0.8.3
 1. DOS universality expansion on the video ABI: `gfx_mode13_blit_indexed(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` 8-bit masked/opaque bitmap blit, `gfx_mode13_draw_column(x, y, h, src)` single-column fast path (DOOM R_DrawColumn-style), `gfx_palette_get_raw(first, count, out6bit)` palette read-back.
 2. `gfx_int10_dispatch` extended with AH=01/02/03/06/07/08/09/0A/0B/0E/11/12/1A (cursor shape/set/get, scroll, read char, write char×CX with and without attr, teletype, get DCC, stub-accepts for character generator / alternate select).

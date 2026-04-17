@@ -99,6 +99,17 @@ typedef struct ciuki_gfx_services {
                                const uint8_t *src);
     void (*palette_get_raw)(uint32_t first, uint32_t count,
                             uint8_t *rgb_triples_6bit_out);
+    /* M-V2.8 — scaled blit + masked column + frame counter. */
+    void (*mode13_blit_scaled)(const uint8_t *src, uint32_t sw, uint32_t sh,
+                               uint32_t stride,
+                               uint32_t dx, uint32_t dy,
+                               uint32_t dw, uint32_t dh,
+                               uint8_t use_transparent,
+                               uint8_t transparent_idx);
+    void (*mode13_draw_column_masked)(uint32_t x, uint32_t y, uint32_t h,
+                                      const uint8_t *src,
+                                      uint8_t transparent_idx);
+    uint32_t (*frame_counter)(void);
     uint8_t reserved[32];
 } ciuki_gfx_services_t;
 

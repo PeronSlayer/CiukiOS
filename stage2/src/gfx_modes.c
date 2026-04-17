@@ -34,6 +34,9 @@ static u8  g_palette_dirty = 1;
 static u32 g_palette_fade_base[256];
 static u8  g_palette_fade_base_valid;
 
+/* Frame counter — bumped on every successful gfx_mode_present. */
+static u32 g_frame_counter;
+
 /* --------------------------------------------------------------- */
 /* Default VGA 256 palette (compact 6-bit triples).                */
 /* --------------------------------------------------------------- */
@@ -235,6 +238,51 @@ void gfx_palette_get_raw(u32 first, u32 count, u8 *out) {
     }
 }
 
+/* Nearest-neighbor scaled blit. Source walks dw×dh destination pixels;
+ * each output pixel samples src[(sy*stride) + sx] with integer mapping. */
+void gfx_mode13_blit_scaled(const u8 *src, u32 sw, u32 sh, u32 stride,
+                            u32 dx, u32 dy, u32 dw, u32 dh,
+                            u8 use_transparent, u8 transparent_idx) {
+    if (!src || sw == 0U || sh == 0U || dw == 0U || dh == 0U) return;
+    if (dx >= GFX_MODE13_W || dy >= GFX_MODE13_H) return;
+    if (stride == 0U) stride = sw;
+
+    u32 x1 = dx + dw; if (x1 > GFX_MODE13_W) x1 = GFX_MODE13_W;
+    u32 y1 = dy + dh; if (y1 > GFX_MODE13_H) y1 = GFX_MODE13_H;
+
+    for (u32 oy = dy; oy < y1; oy++) {
+        u32 sy = ((oy - dy) * sh) / dh;
+        const u8 *srow = src + sy * stride;
+        u8 *d = &g_plane13[oy * GFX_MODE13_W + dx];
+        for (u32 ox = dx; ox < x1; ox++) {
+            u32 sx = ((ox - dx) * sw) / dw;
+            u8 px = srow[sx];
+            if (use_transparent && px == transparent_idx) {
+                d++;
+                continue;
+            }
+            *d++ = px;
+        }
+    }
+    g_plane_dirty = 1;
+}
+
+/* Masked column draw — skips `transparent_idx` pixels. */
+void gfx_mode13_draw_column_masked(u32 x, u32 y, u32 h, const u8 *src,
+                                   u8 transparent_idx) {
+    if (!src || h == 0U) return;
+    if (x >= GFX_MODE13_W || y >= GFX_MODE13_H) return;
+    u32 y1 = y + h; if (y1 > GFX_MODE13_H) y1 = GFX_MODE13_H;
+    u32 n = y1 - y;
+    u8 *d = &g_plane13[y * GFX_MODE13_W + x];
+    for (u32 i = 0; i < n; i++) {
+        u8 px = src[i];
+        if (px != transparent_idx) *d = px;
+        d += GFX_MODE13_W;
+    }
+    g_plane_dirty = 1;
+}
+
 /* --------------------------------------------------------------- */
 /* Core mode management                                            */
 /* --------------------------------------------------------------- */
@@ -322,12 +370,17 @@ int gfx_mode_present(void) {
     if (g_current_mode == GFX_MODE_VGA_320x200) {
         if (!g_plane_dirty && !g_palette_dirty) {
             /* nothing changed — skip full upscale, keep last frame */
+            g_frame_counter++;
             return 1;
         }
-        return gfx_mode13_present_plane();
+        int r = gfx_mode13_present_plane();
+        if (r) g_frame_counter++;
+        return r;
     }
     return 0;
 }
+
+u32 gfx_frame_counter(void) { return g_frame_counter; }
 
 /* --------------------------------------------------------------- */
 /* INT 10h dispatcher                                              */

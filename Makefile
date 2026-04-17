@@ -37,6 +37,9 @@ COM_DOSMODE13_BIN := build/DOSMD13.COM
 COM_FADEDEMO_SRC := com/fadedemo/fadedemo.c
 COM_FADEDEMO_ELF := build/FADEDMO.COM.elf
 COM_FADEDEMO_BIN := build/FADEDMO.COM
+COM_GFXDOOM_SRC := com/gfxdoom/gfxdoom.c
+COM_GFXDOOM_ELF := build/GFXDOOM.COM.elf
+COM_GFXDOOM_BIN := build/GFXDOOM.COM
 COM_DOSRUN_SMOKE_SRC := com/dosrun_smoke/ciuksmk.c
 COM_DOSRUN_SMOKE_ELF := build/CIUKSMK.COM.elf
 COM_DOSRUN_SMOKE_BIN := build/CIUKSMK.COM
@@ -97,7 +100,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAG
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_CIUKEDIT_BIN) $(COM_GFXSMOKE_BIN) $(COM_DOSMODE13_BIN) $(COM_FADEDEMO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN)
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_CIUKEDIT_BIN) $(COM_GFXSMOKE_BIN) $(COM_DOSMODE13_BIN) $(COM_FADEDEMO_BIN) $(COM_GFXDOOM_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -175,6 +178,12 @@ $(COM_FADEDEMO_BIN): $(COM_FADEDEMO_SRC) com/fadedemo/linker.ld boot/proto/servi
 	$(CC) $(COM_CFLAGS) -c $(COM_FADEDEMO_SRC) -o build/obj/com/fadedemo.o
 	$(LD) -nostdlib -z max-page-size=0x1000 -T com/fadedemo/linker.ld -o $(COM_FADEDEMO_ELF) build/obj/com/fadedemo.o
 	llvm-objcopy --set-section-flags .data=alloc,load,contents,data -O binary $(COM_FADEDEMO_ELF) $(COM_FADEDEMO_BIN)
+
+$(COM_GFXDOOM_BIN): $(COM_GFXDOOM_SRC) com/gfxdoom/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_GFXDOOM_SRC) -o build/obj/com/gfxdoom.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/gfxdoom/linker.ld -o $(COM_GFXDOOM_ELF) build/obj/com/gfxdoom.o
+	llvm-objcopy --set-section-flags .data=alloc,load,contents,data -O binary $(COM_GFXDOOM_ELF) $(COM_GFXDOOM_BIN)
 
 $(COM_DOSRUN_SMOKE_BIN): $(COM_DOSRUN_SMOKE_SRC) com/dosrun_smoke/linker.ld boot/proto/services.h | build
 	@mkdir -p build/obj/com
