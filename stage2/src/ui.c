@@ -87,12 +87,63 @@ static void ui_draw_text_clipped(u32 rx, u32 ry, u32 rw, u32 rh,
 
 static ui_layout_t g_layout;
 
+/* ===== Resolution-Independent Layout Metrics (V3) ===== */
+
+static ui_metrics_t g_metrics;
+static int g_metrics_initialized = 0;
+
+void ui_metrics_init(ui_metrics_t *m, u32 fb_w, u32 fb_h) {
+    /*
+     * Scale metrics based on resolution class:
+     *   800x600   -> base grid 8, compact spacing
+     *   1024x768  -> base grid 8, standard spacing
+     *   1280x800+ -> base grid 8, wider margins
+     *   1920x1080 -> base grid 8, generous spacing
+     */
+    u32 base_grid = UI_GRID;
+    u32 scale = 1U;
+
+    if (fb_w >= 1920U && fb_h >= 1080U) {
+        scale = 3U;
+    } else if (fb_w >= 1280U && fb_h >= 800U) {
+        scale = 2U;
+    } else {
+        scale = 1U;
+    }
+
+    m->grid         = base_grid;
+    m->outer_margin = base_grid * scale;
+    m->zone_gap     = base_grid;
+    m->panel_pad_x  = base_grid * scale;
+    m->panel_pad_y  = base_grid;
+    m->titlebar_h   = UI_SNAP(base_grid * 3U * scale);
+    m->dock_item_h  = UI_SNAP(base_grid * 3U);
+    m->dock_w       = UI_SNAP(base_grid * (16U + 4U * scale));
+    m->line_height  = video_cell_height_px();
+    if (m->line_height == 0U) m->line_height = base_grid;
+}
+
+const ui_metrics_t *ui_get_metrics(void) {
+    return &g_metrics;
+}
+
+void ui_metrics_apply(u32 fb_w, u32 fb_h) {
+    ui_metrics_init(&g_metrics, fb_w, fb_h);
+    if (!g_metrics_initialized) {
+        g_metrics_initialized = 1;
+        serial_write("[ui] layout metrics v3 active\n");
+    }
+}
+
 void ui_compute_layout(ui_layout_t *L, u32 fb_w, u32 fb_h) {
     L->fb_w = fb_w;
     L->fb_h = fb_h;
     L->valid = 0;
 
     if (fb_w < UI_MIN_FB_W || fb_h < UI_MIN_FB_H) return;
+
+    /* V3: Apply resolution-independent metrics */
+    ui_metrics_apply(fb_w, fb_h);
 
     /* Top bar: full width, snapped */
     L->top_x = 0;
@@ -112,6 +163,11 @@ void ui_compute_layout(ui_layout_t *L, u32 fb_w, u32 fb_h) {
     L->work_w = UI_SNAP(fb_w);
     L->work_h = L->status_y - L->work_y - UI_GAP;
 
+    /* Clipping guard: workspace must be positive */
+    if (L->work_h == 0U || L->work_h > fb_h) {
+        return;
+    }
+
     /* Dock panel: left column of workspace */
     L->dock_x = UI_GAP;
     L->dock_y = L->work_y;
@@ -123,6 +179,12 @@ void ui_compute_layout(ui_layout_t *L, u32 fb_w, u32 fb_h) {
     L->content_y = L->work_y;
     L->content_w = UI_SNAP(fb_w) - L->content_x - UI_GAP;
     L->content_h = L->work_h;
+
+    /* Clipping guard: content area must have positive dimensions */
+    if (L->content_w == 0U || L->content_w > fb_w ||
+        L->content_h == 0U || L->content_h > fb_h) {
+        return;
+    }
 
     L->valid = 1;
 }

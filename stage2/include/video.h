@@ -32,4 +32,24 @@ void video_mark_dirty(u32 x, u32 y, u32 w, u32 h);
 int  video_is_double_buffered(void);
 void video_blit_row(u32 dst_x, u32 dst_y, const u32 *pixels_rgb, u32 count);
 
+/* ===== Overlay Plane (V1) ===== */
+void video_overlay_init(void);
+void video_overlay_mark_dirty(u32 x, u32 y, u32 w, u32 h);
+void video_overlay_present_dirty(void);
+void video_overlay_clear_region(u32 x, u32 y, u32 w, u32 h);
+int  video_overlay_active(void);
+
+/* ===== Present Scheduler (V2) ===== */
+void video_pacing_init(u32 target_fps);
+void video_pacing_begin_frame(void);
+int  video_pacing_should_present(void);
+void video_pacing_report(void);
+u32  video_pacing_get_present_full(void);
+u32  video_pacing_get_present_dirty(void);
+u32  video_pacing_get_coalesced(void);
+
+/* ===== Font Profile (V4) ===== */
+void        video_select_font_profile(u32 fb_w, u32 fb_h);
+const char *video_get_font_profile_name(void);
+
 #endif

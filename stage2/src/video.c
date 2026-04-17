@@ -4,6 +4,9 @@
 #include "mem.h"
 #include "serial.h"
 
+/* External timer tick (from timer.c / shell.c) */
+extern u64 stage2_timer_ticks(void);
+
 #define GLYPH_W 8
 #define GLYPH_H 8
 #define DEFAULT_FONT_SCALE_X 2U
@@ -145,6 +148,30 @@ static u32  g_dirty_y0;       /* top edge (inclusive, pixels) */
 static u32  g_dirty_x1;       /* right edge (exclusive, pixels) */
 static u32  g_dirty_y1;       /* bottom edge (exclusive, pixels) */
 static u32  g_dirty_valid;    /* nonzero if dirty region exists */
+
+/* ===== Overlay Plane (V1) ===== */
+/*
+ * A secondary dirty-rect region for text/UI compositing.
+ * The overlay shares the main backbuffer but tracks its own dirty
+ * bounds so that text updates can be flushed independently of gfx.
+ */
+static u32  g_overlay_x0, g_overlay_y0, g_overlay_x1, g_overlay_y1;
+static u32  g_overlay_valid;
+static u32  g_overlay_initialized;
+
+/* ===== Present Scheduler / Frame Pacing (V2) ===== */
+static u32  g_pacing_interval;      /* min ticks between presents */
+static u64  g_pacing_last_present;  /* last present tick */
+static u32  g_present_full_count;
+static u32  g_present_dirty_count;
+static u32  g_present_coalesced;
+static u32  g_pacing_initialized;
+
+/* ===== Font Profile (V4) ===== */
+#define FONT_PROFILE_SMALL   0
+#define FONT_PROFILE_NORMAL  1
+static u32  g_font_profile = FONT_PROFILE_NORMAL;
+static const char *g_font_profile_names[] = { "small", "normal" };
 
 static u32 font_w(void) {
     return GLYPH_W * g_font_scale_x;
@@ -386,6 +413,16 @@ void video_init(boot_info_t *bi) {
     if (g_backbuf_active) {
         video_present();
     }
+
+    /* V1: Initialize overlay plane */
+    video_overlay_init();
+
+    /* V2: Initialize frame pacing (30 fps default) */
+    video_pacing_init(30U);
+
+    /* V4: Auto-select font profile by resolution */
+    video_select_font_profile(g_width, g_height);
+
     serial_write("[video] mode=");
     serial_write(g_backbuf_active ? "double-buffer" : "direct");
     serial_write("\n");
@@ -604,6 +641,10 @@ void video_present(void) {
         return;
     }
 
+    if (g_pacing_initialized && !video_pacing_should_present()) {
+        return;
+    }
+
     u8 *fb = (u8 *)(u64)g_fb_base;
     u8 *bb = g_backbuf;
     u32 row_bytes = g_width * (g_bpp / 8U);
@@ -612,6 +653,10 @@ void video_present(void) {
         mem_copy(fb + (u64)y * g_pitch,
                  bb + (u64)y * g_pitch,
                  (u64)row_bytes);
+    }
+    g_present_full_count++;
+    if (g_pacing_initialized) {
+        g_pacing_last_present = stage2_timer_ticks();
     }
 }
 
@@ -667,6 +712,10 @@ void video_present_dirty(void) {
         return;
     }
 
+    if (g_pacing_initialized && !video_pacing_should_present()) {
+        return; /* keep dirty region for next frame */
+    }
+
     fb = (u8 *)(u64)g_fb_base;
     bb = g_backbuf;
     bpp_bytes = g_bpp / 8U;
@@ -678,6 +727,183 @@ void video_present_dirty(void) {
         mem_copy(fb + row_off, bb + row_off, (u64)copy_bytes);
     }
     g_dirty_valid = 0;
+    g_present_dirty_count++;
+    if (g_pacing_initialized) {
+        g_pacing_last_present = stage2_timer_ticks();
+    }
+}
+
+/* ===== Overlay Plane (V1) ===== */
+
+void video_overlay_init(void) {
+    g_overlay_x0 = 0;
+    g_overlay_y0 = 0;
+    g_overlay_x1 = 0;
+    g_overlay_y1 = 0;
+    g_overlay_valid = 0;
+    if (!g_overlay_initialized) {
+        g_overlay_initialized = 1;
+        serial_write("[video] overlay plane active\n");
+    }
+}
+
+void video_overlay_mark_dirty(u32 x, u32 y, u32 w, u32 h) {
+    u32 x1, y1;
+    if (w == 0U || h == 0U) return;
+    x1 = x + w;
+    y1 = y + h;
+    if (x1 > g_width) x1 = g_width;
+    if (y1 > g_height) y1 = g_height;
+
+    if (!g_overlay_valid) {
+        g_overlay_x0 = x;
+        g_overlay_y0 = y;
+        g_overlay_x1 = x1;
+        g_overlay_y1 = y1;
+        g_overlay_valid = 1;
+    } else {
+        if (x  < g_overlay_x0) g_overlay_x0 = x;
+        if (y  < g_overlay_y0) g_overlay_y0 = y;
+        if (x1 > g_overlay_x1) g_overlay_x1 = x1;
+        if (y1 > g_overlay_y1) g_overlay_y1 = y1;
+    }
+    /* Also mark the main dirty region so present_dirty picks it up */
+    video_mark_dirty(x, y, w, h);
+}
+
+void video_overlay_present_dirty(void) {
+    if (!g_backbuf_active || !g_fb_base || !g_overlay_valid) {
+        g_overlay_valid = 0;
+        return;
+    }
+    /* Flush only the overlay region from backbuffer to framebuffer */
+    {
+        u8 *fb = (u8 *)(u64)g_fb_base;
+        u8 *bb = g_backbuf;
+        u32 bpp_bytes = g_bpp / 8U;
+        u32 x0_bytes  = g_overlay_x0 * bpp_bytes;
+        u32 copy_bytes = (g_overlay_x1 - g_overlay_x0) * bpp_bytes;
+
+        for (u32 y = g_overlay_y0; y < g_overlay_y1; y++) {
+            u64 row_off = (u64)y * g_pitch + x0_bytes;
+            mem_copy(fb + row_off, bb + row_off, (u64)copy_bytes);
+        }
+    }
+    g_overlay_valid = 0;
+    g_present_dirty_count++;
+}
+
+void video_overlay_clear_region(u32 x, u32 y, u32 w, u32 h) {
+    if (!g_fb_base || w == 0U || h == 0U) return;
+    framebuffer_fill_rect(x, y, w, h, g_color_bg);
+    video_overlay_mark_dirty(x, y, w, h);
+}
+
+int video_overlay_active(void) {
+    return g_overlay_initialized != 0;
+}
+
+/* ===== Present Scheduler / Frame Pacing (V2) ===== */
+
+void video_pacing_init(u32 target_fps) {
+    if (target_fps == 0U) target_fps = 30U;
+    /* PIT runs at 100Hz typically; interval = 100 / fps */
+    g_pacing_interval = 100U / target_fps;
+    if (g_pacing_interval == 0U) g_pacing_interval = 1U;
+    g_pacing_last_present = 0ULL;
+    g_present_full_count = 0U;
+    g_present_dirty_count = 0U;
+    g_present_coalesced = 0U;
+    g_pacing_initialized = 1;
+}
+
+void video_pacing_begin_frame(void) {
+    /* No-op placeholder for frame start bookkeeping */
+}
+
+int video_pacing_should_present(void) {
+    u64 now;
+    if (!g_pacing_initialized) return 1; /* no pacing = always present */
+    now = stage2_timer_ticks();
+    if (now - g_pacing_last_present >= (u64)g_pacing_interval) {
+        return 1;
+    }
+    g_present_coalesced++;
+    return 0;
+}
+
+void video_pacing_report(void) {
+    char buf[16];
+    u32 v, ni;
+
+    serial_write("[video] pacing stable present_full=");
+    v = g_present_full_count; ni = 0;
+    if (v == 0U) { buf[ni++] = '0'; }
+    else { char rev[12]; u32 ri = 0; while (v) { rev[ri++] = '0' + (char)(v % 10U); v /= 10U; } while (ri) buf[ni++] = rev[--ri]; }
+    buf[ni] = '\0'; serial_write(buf);
+
+    serial_write(" present_dirty=");
+    v = g_present_dirty_count; ni = 0;
+    if (v == 0U) { buf[ni++] = '0'; }
+    else { char rev[12]; u32 ri = 0; while (v) { rev[ri++] = '0' + (char)(v % 10U); v /= 10U; } while (ri) buf[ni++] = rev[--ri]; }
+    buf[ni] = '\0'; serial_write(buf);
+
+    serial_write(" coalesced=");
+    v = g_present_coalesced; ni = 0;
+    if (v == 0U) { buf[ni++] = '0'; }
+    else { char rev[12]; u32 ri = 0; while (v) { rev[ri++] = '0' + (char)(v % 10U); v /= 10U; } while (ri) buf[ni++] = rev[--ri]; }
+    buf[ni] = '\0'; serial_write(buf);
+
+    serial_write("\n");
+}
+
+u32 video_pacing_get_present_full(void) { return g_present_full_count; }
+u32 video_pacing_get_present_dirty(void) { return g_present_dirty_count; }
+u32 video_pacing_get_coalesced(void) { return g_present_coalesced; }
+
+/* ===== Font Profile (V4) ===== */
+
+void video_select_font_profile(u32 fb_w, u32 fb_h) {
+    /* Resolution class thresholds:
+     *   small:  <= 800x600  -> scale 1x1
+     *   normal: > 800x600   -> scale 2x2
+     */
+    if (fb_w <= 800U && fb_h <= 600U) {
+        g_font_profile = FONT_PROFILE_SMALL;
+        g_font_scale_x = 1U;
+        g_font_scale_y = 1U;
+    } else {
+        g_font_profile = FONT_PROFILE_NORMAL;
+        g_font_scale_x = 2U;
+        g_font_scale_y = 2U;
+    }
+    recompute_text_metrics();
+
+    serial_write("[video] font profile=");
+    serial_write(g_font_profile_names[g_font_profile]);
+    serial_write(" cell=");
+    {
+        char buf[8];
+        u32 v, ni;
+        v = font_w(); ni = 0;
+        if (v == 0U) { buf[ni++] = '0'; }
+        else { char rev[8]; u32 ri = 0; while (v) { rev[ri++] = '0' + (char)(v % 10U); v /= 10U; } while (ri) buf[ni++] = rev[--ri]; }
+        buf[ni] = '\0'; serial_write(buf);
+    }
+    serial_write("x");
+    {
+        char buf[8];
+        u32 v, ni;
+        v = font_h(); ni = 0;
+        if (v == 0U) { buf[ni++] = '0'; }
+        else { char rev[8]; u32 ri = 0; while (v) { rev[ri++] = '0' + (char)(v % 10U); v /= 10U; } while (ri) buf[ni++] = rev[--ri]; }
+        buf[ni] = '\0'; serial_write(buf);
+    }
+    serial_write("\n");
+}
+
+const char *video_get_font_profile_name(void) {
+    return g_font_profile_names[g_font_profile];
 }
 
 int video_is_double_buffered(void) {

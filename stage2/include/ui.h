@@ -66,6 +66,23 @@ typedef struct {
 
 void ui_compute_layout(ui_layout_t *L, u32 fb_w, u32 fb_h);
 
+/* ===== Resolution-Independent Layout Metrics (V3) ===== */
+typedef struct {
+    u32 outer_margin;
+    u32 zone_gap;
+    u32 panel_pad_x;
+    u32 panel_pad_y;
+    u32 titlebar_h;
+    u32 dock_item_h;
+    u32 dock_w;
+    u32 line_height;    /* text line height in pixels */
+    u32 grid;           /* effective grid unit */
+} ui_metrics_t;
+
+void            ui_metrics_init(ui_metrics_t *m, u32 fb_w, u32 fb_h);
+const ui_metrics_t *ui_get_metrics(void);
+void            ui_metrics_apply(u32 fb_w, u32 fb_h);
+
 /* ===== Scene Management ===== */
 typedef enum {
     SCENE_BOOT_SPLASH = 0,
