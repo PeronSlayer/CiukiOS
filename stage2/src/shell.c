@@ -1102,6 +1102,7 @@ static void shell_com_int20(ciuki_dos_context_t *ctx) {
 }
 
 static void shell_com_int2f(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
 static u32 g_int21_vectors[256];
 static u8 g_int21_last_return_code = 0U;
@@ -2687,20 +2688,58 @@ static void shell_com_int2f(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     }
 
     if (regs->ax == 0x1687U) {
-        /* Minimal DPMI installation-check slice for DOS/4GW-style smoke. */
+        /*
+         * DPMI installation-check descriptor slice for DOS/4GW-style smoke.
+         * This is still not a full DPMI host, but now returns a non-zero
+         * descriptor-like entry pointer and host-data size so clients can
+         * validate more than simple presence.
+         */
         regs->ax = 0x0000U;
         regs->bx = 0x0001U;
         regs->cx = 0x0090U;
         regs->dx = 0x0000U;
-        regs->si = 0x0000U;
-        regs->di = 0x0000U;
-        regs->es = 0x0000U;
+        regs->si = 0x0001U;
+        regs->di = 0x0001U;
+        regs->es = 0xF000U;
         regs->carry = 0U;
         return;
     }
 
     regs->carry = 1U;
     regs->ax = 0x0001U;
+}
+
+static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
+    (void)ctx;
+
+    if (!regs) {
+        return;
+    }
+
+    if (regs->ax == 0x0400U) {
+        /* DPMI 0.9 Get Version callable slice for the next M6 bootstrap step. */
+        regs->ax = 0x005AU;
+        regs->bx = 0x0003U;
+        regs->cx = 0x0004U;
+        regs->dx = 0x0870U;
+        regs->si = 0x0000U;
+        regs->di = 0x0000U;
+        regs->carry = 0U;
+        return;
+    }
+
+    if (regs->ax == 0x0306U) {
+        /* Raw mode-switch address query for bootstrap-facing DOS extender flow. */
+        regs->bx = 0xF000U;
+        regs->cx = 0x0200U;
+        regs->si = 0xF000U;
+        regs->di = 0x0300U;
+        regs->carry = 0U;
+        return;
+    }
+
+    regs->carry = 1U;
+    regs->ax = 0x8001U;
 }
 
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code) {
@@ -3666,6 +3705,7 @@ static void shell_run_staged_image(
     svc.cls = video_cls;
     svc.int21 = shell_com_int21;
     svc.int2f = shell_com_int2f;
+    svc.int31 = shell_com_int31;
     svc.int20 = shell_com_int20;
     svc.int21_4c = shell_com_int21_4c;
     svc.terminate = shell_com_terminate;

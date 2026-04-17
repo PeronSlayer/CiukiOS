@@ -30,9 +30,14 @@
 - Interrupt reflection (from pmode to real-mode handler) baseline
 - Skeleton markers implemented:
 	- `[m6] dpmi detect skeleton ready`
+	- `[m6] dpmi get-version callable slice ready`
+	- `[m6] dpmi raw-mode bootstrap slice ready`
 	- `[m6] rm callback skeleton ready`
 	- `[m6] int reflect skeleton ready`
 - Runtime slice now exposed through the services ABI with minimal `INT 2Fh AX=1687h` host-query support for smoke validation.
+- Descriptor slice step-up now returns a non-zero host entry pointer (`ES:DI`) and host-data size (`SI`) so regressions can validate more than simple presence.
+- First callable host slice is now exposed through the services ABI as `INT 31h AX=0400h` (Get Version), returning a DPMI 0.9-style host profile for client-side regression.
+- First bootstrap-facing host slice is now exposed through the services ABI as `INT 31h AX=0306h` (Get Raw Mode Switch Addresses), returning non-zero entry points for the current smoke baseline.
 
 ### 4. Memory Accounting
 - Track allocated pmode memory (separate from DOS conventional/HMA)
@@ -48,15 +53,23 @@
 2. **Transition v2 runtime:** `bash scripts/test_m6_transition_contract_v2.sh`
 3. **Smoke executable:** `make test-m6-smoke` validates a reproducible MZ smoke binary (`CIUKPM.EXE` -> `0x36`) included in the OS image
 4. **DOS/4GW-like smoke:** `make test-m6-dos4gw-smoke` validates a reproducible MZ smoke binary (`CIUK4GW.EXE` -> `0x47`) calling the minimal DPMI host query path
-5. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
+5. **DPMI descriptor smoke:** `make test-m6-dpmi-smoke` validates a reproducible MZ smoke binary (`CIUKDPM.EXE` -> `0x49`) requiring non-zero descriptor metadata from `AX=1687h`
+6. **DPMI callable smoke:** `make test-m6-dpmi-call-smoke` validates a reproducible MZ smoke binary (`CIUK31.EXE` -> `0x4B`) requiring `AX=1687h` descriptor metadata plus `INT 31h AX=0400h` success
+7. **DPMI bootstrap smoke:** `make test-m6-dpmi-bootstrap-smoke` validates a reproducible MZ smoke binary (`CIUK306.EXE` -> `0x4E`) requiring `AX=1687h` descriptor metadata plus `INT 31h AX=0306h` success
+8. **DOOM packaging harness:** `make test-doom-target-packaging` validates deterministic image packaging/discovery for `DOOM.EXE`, `DOOM1.WAD`, `DEFAULT.CFG`, and `DOOM.BAT`
+9. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
 
 ## Acceptance Criteria
 
 - `test_doom_readiness_m6.sh` PASS
 - `test-m6-smoke` PASS
 - `test-m6-dos4gw-smoke` PASS
+- `test-m6-dpmi-smoke` PASS
+- `test-m6-dpmi-call-smoke` PASS
+- `test-m6-dpmi-bootstrap-smoke` PASS
+- `test-doom-target-packaging` PASS
 - No regressions to existing INT21h, MZ runtime, or shell flow
-- Real DOS/4GW execution remains next increment beyond skeleton baseline
+- Real DOS/4GW execution remains next increment beyond the current descriptor + version + bootstrap callable baseline
 
 ## Reference
 

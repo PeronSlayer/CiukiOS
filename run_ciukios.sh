@@ -14,6 +14,11 @@ SKIP_BUILD="${CIUKIOS_SKIP_BUILD:-0}"
 TRACE_INT="${CIUKIOS_TRACE_INT:-0}"
 INCLUDE_FREEDOS="${CIUKIOS_INCLUDE_FREEDOS:-1}"
 INCLUDE_OPENGEM="${CIUKIOS_INCLUDE_OPENGEM:-auto}"
+INCLUDE_DOOM="${CIUKIOS_INCLUDE_DOOM:-0}"
+DOOM_EXE_PATH="${CIUKIOS_DOOM_EXE_PATH:-}"
+DOOM_WAD_PATH="${CIUKIOS_DOOM_WAD_PATH:-}"
+DOOM_CFG_PATH="${CIUKIOS_DOOM_CFG_PATH:-}"
+QEMU_SKIP_RUN="${CIUKIOS_QEMU_SKIP_RUN:-0}"
 QEMU_NO_REBOOT="${CIUKIOS_QEMU_NO_REBOOT:-1}"
 QEMU_NO_SHUTDOWN="${CIUKIOS_QEMU_NO_SHUTDOWN:-1}"
 QEMU_HEADLESS="${CIUKIOS_QEMU_HEADLESS:-0}"
@@ -105,7 +110,32 @@ if [[ -f "$BUILD_DIR/CIUK4GW.EXE" ]]; then
     echo "[CiukiOS] CIUK4GW.EXE copied to image"
 fi
 
+if [[ -f "$BUILD_DIR/CIUKDPM.EXE" ]]; then
+    mcopy -i "$IMAGE" "$BUILD_DIR/CIUKDPM.EXE" ::EFI/CiukiOS/CIUKDPM.EXE
+    echo "[CiukiOS] CIUKDPM.EXE copied to image"
+fi
+
+if [[ -f "$BUILD_DIR/CIUK31.EXE" ]]; then
+    mcopy -i "$IMAGE" "$BUILD_DIR/CIUK31.EXE" ::EFI/CiukiOS/CIUK31.EXE
+    echo "[CiukiOS] CIUK31.EXE copied to image"
+fi
+
+if [[ -f "$BUILD_DIR/CIUK306.EXE" ]]; then
+    mcopy -i "$IMAGE" "$BUILD_DIR/CIUK306.EXE" ::EFI/CiukiOS/CIUK306.EXE
+    echo "[CiukiOS] CIUK306.EXE copied to image"
+fi
+
 copy_freedos_file_if_present() {
+    local src="$1"
+    local dst="$2"
+    if [[ -f "$src" ]]; then
+        mcopy -o -i "$IMAGE" "$src" "$dst"
+        return 0
+    fi
+    return 1
+}
+
+copy_optional_file() {
     local src="$1"
     local dst="$2"
     if [[ -f "$src" ]]; then
@@ -136,6 +166,39 @@ else
     echo "[CiukiOS] FreeDOS symbiotic integration disabled (CIUKIOS_INCLUDE_FREEDOS=0)"
 fi
 
+if [[ "$INCLUDE_DOOM" == "1" ]]; then
+    if [[ ! -f "$DOOM_EXE_PATH" ]]; then
+        echo "Error: DOOM packaging enabled but executable not found: $DOOM_EXE_PATH" >&2
+        exit 1
+    fi
+    if [[ ! -f "$DOOM_WAD_PATH" ]]; then
+        echo "Error: DOOM packaging enabled but WAD not found: $DOOM_WAD_PATH" >&2
+        exit 1
+    fi
+
+    mcopy -o -i "$IMAGE" "$DOOM_EXE_PATH" ::EFI/CiukiOS/DOOM.EXE
+    echo "[CiukiOS] DOOM.EXE copied to image"
+
+    DOOM_WAD_NAME="$(basename "$DOOM_WAD_PATH" | tr '[:lower:]' '[:upper:]')"
+    if [[ "$DOOM_WAD_NAME" == "DOOM.WAD" ]]; then
+        echo "[CiukiOS] DOOM.WAD alias mapped to DOOM1.WAD"
+    fi
+    mcopy -o -i "$IMAGE" "$DOOM_WAD_PATH" ::EFI/CiukiOS/DOOM1.WAD
+    echo "[CiukiOS] DOOM1.WAD copied to image"
+
+    if [[ -n "$DOOM_CFG_PATH" ]]; then
+        if copy_optional_file "$DOOM_CFG_PATH" ::EFI/CiukiOS/DEFAULT.CFG; then
+            echo "[CiukiOS] DEFAULT.CFG copied to image"
+        fi
+    fi
+
+    cat > "$BUILD_DIR/DOOM.BAT" <<'EOF'
+run DOOM.EXE
+EOF
+    mcopy -o -i "$IMAGE" "$BUILD_DIR/DOOM.BAT" ::EFI/CiukiOS/DOOM.BAT
+    echo "[CiukiOS] DOOM.BAT generated in image"
+fi
+
 # === OpenGEM GUI optional payload ===
 OPENGEM_INCLUDED=0
 if [[ "$INCLUDE_OPENGEM" == "auto" ]]; then
@@ -163,6 +226,11 @@ echo "[CiukiOS] OpenGEM inclusion status: $( [[ $OPENGEM_INCLUDED -eq 1 ]] && ec
 
 echo "[CiukiOS] Preparing OVMF_VARS..."
 cp "$OVMF_VARS_SRC" "$OVMF_VARS_DST"
+
+if [[ "$QEMU_SKIP_RUN" == "1" ]]; then
+    echo "[CiukiOS] QEMU launch skipped (CIUKIOS_QEMU_SKIP_RUN=1)"
+    exit 0
+fi
 
 echo "[CiukiOS] Starting QEMU..."
 QEMU_ARGS=(

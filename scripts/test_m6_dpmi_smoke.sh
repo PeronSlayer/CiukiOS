@@ -4,12 +4,12 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_SCRIPT="$PROJECT_DIR/run_ciukios.sh"
 LOG_DIR="$PROJECT_DIR/.ciukios-testlogs"
-LOG_FILE="$LOG_DIR/m6-dos4gw-smoke.log"
-SERIAL_LOG="$LOG_DIR/m6-dos4gw-smoke-serial.log"
+LOG_FILE="$LOG_DIR/m6-dpmi-smoke.log"
+SERIAL_LOG="$LOG_DIR/m6-dpmi-smoke-serial.log"
 LOCK_FILE="$LOG_DIR/qemu-test.lock"
 RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 FDAUTO_PATH="$RUNTIME_DIR/FDAUTO.BAT"
-BACKUP_PATH="$LOG_DIR/FDAUTO.BAT.m6dos4gw.backup"
+BACKUP_PATH="$LOG_DIR/FDAUTO.BAT.m6dpmi.backup"
 
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-120}"
 
@@ -26,32 +26,36 @@ restore_autoexec() {
 trap restore_autoexec EXIT
 
 static_fallback() {
-	echo "[test-m6-dos4gw-smoke] runtime markers unavailable; using static fallback"
-	[[ -f "$PROJECT_DIR/build/CIUK4GW.EXE" ]] || {
-		echo "[FAIL] missing built artifact: build/CIUK4GW.EXE" >&2
+	echo "[test-m6-dpmi-smoke] runtime markers unavailable; using static fallback"
+	[[ -f "$PROJECT_DIR/build/CIUKDPM.EXE" ]] || {
+		echo "[FAIL] missing built artifact: build/CIUKDPM.EXE" >&2
 		exit 1
 	}
-	grep -Fq 'COM_M6_DOS4GW_SMOKE_BIN := build/CIUK4GW.EXE' "$PROJECT_DIR/Makefile" || {
-		echo "[FAIL] Makefile missing CIUK4GW.EXE wiring" >&2
+	grep -Fq 'COM_M6_DPMI_SMOKE_BIN := build/CIUKDPM.EXE' "$PROJECT_DIR/Makefile" || {
+		echo "[FAIL] Makefile missing CIUKDPM.EXE wiring" >&2
 		exit 1
 	}
-	grep -Fq 'CIUK4GW.EXE copied to image' "$PROJECT_DIR/run_ciukios.sh" || {
-		echo "[FAIL] run_ciukios.sh missing CIUK4GW.EXE image copy" >&2
+	grep -Fq 'CIUKDPM.EXE copied to image' "$PROJECT_DIR/run_ciukios.sh" || {
+		echo "[FAIL] run_ciukios.sh missing CIUKDPM.EXE image copy" >&2
 		exit 1
 	}
-	grep -Fq 'svc->int2f' "$PROJECT_DIR/com/m6_dos4gw_smoke/ciuk4gw.c" || {
-		echo "[FAIL] missing DOS/4GW smoke host query call" >&2
+	grep -Fq 'regs.carry == 0U' "$PROJECT_DIR/com/m6_dpmi_smoke/ciukdpm.c" || {
+		echo "[FAIL] missing DPMI descriptor smoke validation logic" >&2
 		exit 1
 	}
-	grep -Fq 'regs->ax == 0x1687U' "$PROJECT_DIR/stage2/src/shell.c" || {
-		echo "[FAIL] missing DPMI host query handler" >&2
+	grep -Fq 'regs->si = 0x0001U;' "$PROJECT_DIR/stage2/src/shell.c" || {
+		echo "[FAIL] missing DPMI descriptor host-data size wiring" >&2
 		exit 1
 	}
 	grep -Fq 'regs->es = 0xF000U;' "$PROJECT_DIR/stage2/src/shell.c" || {
-		echo "[FAIL] missing DPMI descriptor entrypoint wiring" >&2
+		echo "[FAIL] missing DPMI descriptor entry segment wiring" >&2
 		exit 1
 	}
-	echo "[PASS] m6 DOS/4GW smoke test completed (static fallback)"
+	grep -Fq 'regs->di = 0x0001U;' "$PROJECT_DIR/stage2/src/shell.c" || {
+		echo "[FAIL] missing DPMI descriptor entry offset wiring" >&2
+		exit 1
+	}
+	echo "[PASS] m6 DPMI descriptor smoke test completed (static fallback)"
 	exit 0
 }
 
@@ -73,16 +77,16 @@ if [[ -f "$FDAUTO_PATH" ]]; then
 fi
 
 cat > "$FDAUTO_PATH" <<'EOF'
-echo [m6-dos4gw-e2e] begin
-run CIUK4GW.EXE
-echo [m6-dos4gw-e2e] end
+echo [m6-dpmi-e2e] begin
+run CIUKDPM.EXE
+echo [m6-dpmi-e2e] end
 EOF
 
-echo "[test-m6-dos4gw-smoke] prebuilding artifacts..."
+echo "[test-m6-dpmi-smoke] prebuilding artifacts..."
 make -C "$PROJECT_DIR" clean all
 make -C "$PROJECT_DIR/boot/uefi-loader" clean all
 
-echo "[test-m6-dos4gw-smoke] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
+echo "[test-m6-dpmi-smoke] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
 set +e
 CIUKIOS_INCLUDE_FREEDOS=1 \
 CIUKIOS_INCLUDE_OPENGEM=0 \
@@ -96,26 +100,26 @@ set -e
 if [[ -f "$SERIAL_LOG" ]]; then
 	{
 		echo
-		echo "[test-m6-dos4gw-smoke] ---- qemu serial log ----"
+		echo "[test-m6-dpmi-smoke] ---- qemu serial log ----"
 		cat "$SERIAL_LOG"
 	} >> "$LOG_FILE"
 fi
 
 if [[ $rc -eq 124 ]]; then
-	echo "[test-m6-dos4gw-smoke] timeout reached (expected for QEMU halt loop)"
+	echo "[test-m6-dpmi-smoke] timeout reached (expected for QEMU halt loop)"
 elif [[ $rc -ne 0 ]]; then
 	echo "[FAIL] run_ciukios.sh exited with error (exit=$rc)" >&2
 	tail -n 120 "$LOG_FILE" >&2 || true
 	exit 1
 fi
 
-if ! grep -Fq "[dosrun] launch path=CIUK4GW.EXE type=MZ" "$LOG_FILE"; then
+if ! grep -Fq "[dosrun] launch path=CIUKDPM.EXE type=MZ" "$LOG_FILE"; then
 	static_fallback
 fi
 
 required_patterns=(
-	"[dosrun] launch path=CIUK4GW.EXE type=MZ"
-	"[dosrun] result=ok code=0x47"
+	"[dosrun] launch path=CIUKDPM.EXE type=MZ"
+	"[dosrun] result=ok code=0x49"
 )
 
 forbidden_patterns=(
@@ -143,5 +147,5 @@ for pattern in "${forbidden_patterns[@]}"; do
 	echo "[OK] absent: $pattern"
 done
 
-echo "[PASS] m6 DOS/4GW smoke test completed"
+echo "[PASS] m6 DPMI descriptor smoke test completed"
 echo "[INFO] log: $LOG_FILE"

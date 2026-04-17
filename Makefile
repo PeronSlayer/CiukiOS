@@ -40,6 +40,18 @@ COM_M6_DOS4GW_SMOKE_SRC := com/m6_dos4gw_smoke/ciuk4gw.c
 COM_M6_DOS4GW_SMOKE_ELF := build/CIUK4GW.EXE.elf
 COM_M6_DOS4GW_SMOKE_PAYLOAD := build/CIUK4GW.EXE.payload.bin
 COM_M6_DOS4GW_SMOKE_BIN := build/CIUK4GW.EXE
+COM_M6_DPMI_SMOKE_SRC := com/m6_dpmi_smoke/ciukdpm.c
+COM_M6_DPMI_SMOKE_ELF := build/CIUKDPM.EXE.elf
+COM_M6_DPMI_SMOKE_PAYLOAD := build/CIUKDPM.EXE.payload.bin
+COM_M6_DPMI_SMOKE_BIN := build/CIUKDPM.EXE
+COM_M6_DPMI_CALL_SMOKE_SRC := com/m6_dpmi_call_smoke/ciuk31.c
+COM_M6_DPMI_CALL_SMOKE_ELF := build/CIUK31.EXE.elf
+COM_M6_DPMI_CALL_SMOKE_PAYLOAD := build/CIUK31.EXE.payload.bin
+COM_M6_DPMI_CALL_SMOKE_BIN := build/CIUK31.EXE
+COM_M6_DPMI_BOOTSTRAP_SMOKE_SRC := com/m6_dpmi_bootstrap_smoke/ciuk306.c
+COM_M6_DPMI_BOOTSTRAP_SMOKE_ELF := build/CIUK306.EXE.elf
+COM_M6_DPMI_BOOTSTRAP_SMOKE_PAYLOAD := build/CIUK306.EXE.payload.bin
+COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN := build/CIUK306.EXE
 MKCIUKMZ_TOOL_SRC := tools/mkciukmz_exe.c
 MKCIUKMZ_TOOL := build/tools/mkciukmz_exe
 SPLASH_ASCII_SRC := misc/splashscreen.txt
@@ -65,7 +77,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAG
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN)
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -157,6 +169,33 @@ $(COM_M6_DOS4GW_SMOKE_PAYLOAD): $(COM_M6_DOS4GW_SMOKE_SRC) com/m6_dos4gw_smoke/l
 $(COM_M6_DOS4GW_SMOKE_BIN): $(COM_M6_DOS4GW_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
 	$(MKCIUKMZ_TOOL) $(COM_M6_DOS4GW_SMOKE_PAYLOAD) $@
 
+$(COM_M6_DPMI_SMOKE_PAYLOAD): $(COM_M6_DPMI_SMOKE_SRC) com/m6_dpmi_smoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_M6_DPMI_SMOKE_SRC) -o build/obj/com/ciukdpm.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/m6_dpmi_smoke/linker.ld -o $(COM_M6_DPMI_SMOKE_ELF) build/obj/com/ciukdpm.o
+	llvm-objcopy -O binary $(COM_M6_DPMI_SMOKE_ELF) $(COM_M6_DPMI_SMOKE_PAYLOAD)
+
+$(COM_M6_DPMI_SMOKE_BIN): $(COM_M6_DPMI_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
+	$(MKCIUKMZ_TOOL) $(COM_M6_DPMI_SMOKE_PAYLOAD) $@
+
+$(COM_M6_DPMI_CALL_SMOKE_PAYLOAD): $(COM_M6_DPMI_CALL_SMOKE_SRC) com/m6_dpmi_call_smoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_M6_DPMI_CALL_SMOKE_SRC) -o build/obj/com/ciuk31.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/m6_dpmi_call_smoke/linker.ld -o $(COM_M6_DPMI_CALL_SMOKE_ELF) build/obj/com/ciuk31.o
+	llvm-objcopy -O binary $(COM_M6_DPMI_CALL_SMOKE_ELF) $(COM_M6_DPMI_CALL_SMOKE_PAYLOAD)
+
+$(COM_M6_DPMI_CALL_SMOKE_BIN): $(COM_M6_DPMI_CALL_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
+	$(MKCIUKMZ_TOOL) $(COM_M6_DPMI_CALL_SMOKE_PAYLOAD) $@
+
+$(COM_M6_DPMI_BOOTSTRAP_SMOKE_PAYLOAD): $(COM_M6_DPMI_BOOTSTRAP_SMOKE_SRC) com/m6_dpmi_bootstrap_smoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_M6_DPMI_BOOTSTRAP_SMOKE_SRC) -o build/obj/com/ciuk306.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/m6_dpmi_bootstrap_smoke/linker.ld -o $(COM_M6_DPMI_BOOTSTRAP_SMOKE_ELF) build/obj/com/ciuk306.o
+	llvm-objcopy -O binary $(COM_M6_DPMI_BOOTSTRAP_SMOKE_ELF) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_PAYLOAD)
+
+$(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN): $(COM_M6_DPMI_BOOTSTRAP_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
+	$(MKCIUKMZ_TOOL) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_PAYLOAD) $@
+
 build:
 	@mkdir -p build
 	@mkdir -p build/obj
@@ -195,6 +234,15 @@ test-m6-smoke:
 
 test-m6-dos4gw-smoke:
 	bash ./scripts/test_m6_dos4gw_smoke.sh
+
+test-m6-dpmi-smoke:
+	bash ./scripts/test_m6_dpmi_smoke.sh
+
+test-m6-dpmi-call-smoke:
+	bash ./scripts/test_m6_dpmi_call_smoke.sh
+
+test-m6-dpmi-bootstrap-smoke:
+	bash ./scripts/test_m6_dpmi_bootstrap_smoke.sh
 
 test-dosrun-simple:
 	bash ./scripts/test_dosrun_simple_program.sh
@@ -244,6 +292,9 @@ test-video-policy-matrix:
 test-opengem:
 	./scripts/test_opengem_integration.sh
 
+test-doom-target-packaging:
+	bash ./scripts/test_doom_target_packaging.sh
+
 test-boot: test-stage2 test-fallback
 
 ci: test-boot
@@ -273,4 +324,4 @@ freedos-runtime-manifest:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-dosrun-simple test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-m6-dpmi-smoke test-m6-dpmi-call-smoke test-m6-dpmi-bootstrap-smoke test-dosrun-simple test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-doom-target-packaging test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest

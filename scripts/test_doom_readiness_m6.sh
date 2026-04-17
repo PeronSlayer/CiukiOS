@@ -40,5 +40,9 @@ run_gate "test-m6-pmode" make test-m6-pmode
 run_gate "test-m6-transition-v2" bash ./scripts/test_m6_transition_contract_v2.sh
 run_gate "test-m6-smoke" make test-m6-smoke
 run_gate "test-m6-dos4gw-smoke" make test-m6-dos4gw-smoke
+run_gate "test-m6-dpmi-smoke" make test-m6-dpmi-smoke
+run_gate "test-m6-dpmi-call-smoke" make test-m6-dpmi-call-smoke
+run_gate "test-m6-dpmi-bootstrap-smoke" make test-m6-dpmi-bootstrap-smoke
+run_gate "test-doom-target-packaging" make test-doom-target-packaging
 
 echo "[PASS] M6 readiness gate passed"

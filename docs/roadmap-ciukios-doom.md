@@ -129,27 +129,38 @@ Exit criteria:
 1. Repeatable release profile with compatibility report.
 
 ## Immediate Execution Queue (Next 6 Technical Steps)
-1. Freeze the first milestone target precisely: selected `DOOM` binary, selected WAD set, expected DOS extender (`DOS/4GW` class or variant), and the minimum success checkpoint for the first milestone attempt.
-2. Add a first real DOS-extender regression target beyond `CIUK4GW.EXE` and require it to pass farther than pure startup markers.
-3. Extend the DPMI host path from `INT 2Fh AX=1687h` into the first usable service slice required by that target extender binary.
-4. Validate protected-mode memory handoff above conventional memory (`>1MB` expectations, ownership, overlap safety, return-path integrity).
-5. Add dedicated compatibility tests for BIOS interrupt behaviors used by real DOS tools and startup paths (`10h`, `16h`, `1Ah`, `2Fh`) against broader real-binary traces.
-6. Close the most likely remaining `INT 21h` runtime gaps surfaced by installer/game startup traces instead of by generic parity guessing.
+1. Replace the current bootstrap smoke ceiling (`CIUK306.EXE`) with a first real DOS-extender regression target that must progress farther than host queries and raw mode-switch address discovery.
+2. Validate protected-mode memory handoff above conventional memory (`>1MB` expectations, ownership, overlap safety, return-path integrity).
+3. Add dedicated compatibility tests for BIOS interrupt behaviors used by real DOS tools and startup paths (`10h`, `16h`, `1Ah`, `2Fh`) against broader real-binary traces.
+4. Close the most likely remaining `INT 21h` runtime gaps surfaced by installer/game startup traces instead of by generic parity guessing.
+5. Start the first `mode 13h` graphics checkpoint for the frozen target so success is measured as a real menu/frame milestone rather than API presence.
+6. Extend the new DOOM image-packaging harness into a staged boot-to-game failure taxonomy (`binary found`, `WAD found`, `extender init`, `video init`, `menu reached`).
+
+## Frozen First Target
+1. Executable: user-supplied DOS shareware `DOOM.EXE` v1.9.
+2. Assets: user-supplied shareware `DOOM1.WAD` as the primary expected IWAD; `DOOM.WAD` may be accepted only as an alias when mapped to the same shareware dataset by the harness/package rules.
+3. DOS extender expectation: `DOS/4GW` class runtime behavior.
+4. Expected first video path: `VGA mode 13h`.
+5. First required milestone checkpoint: main menu reachable.
+6. Packaging rule: no public redistribution of `DOOM.EXE`/IWAD assets; the user must supply them locally.
 
 ## Remaining Steps To The Milestone
 
 ### A. Freeze the target and its constraints
-1. Choose the exact first binary to target (`DOOM.EXE` vs `DOOM2.EXE`, exact package/build, exact DOS extender expectations).
-2. Freeze the minimal asset set needed for milestone validation (`DOOM.WAD` or alternative, config defaults, optional launch BAT).
-3. Define the first success criterion in order: `binary discovered` -> `extender init passes` -> `video init passes` -> `first frame` -> `main menu` -> `level load`.
+1. First target is fixed to user-supplied shareware `DOOM.EXE` v1.9.
+2. Minimal asset set is fixed to user-supplied shareware `DOOM1.WAD` with controlled `DOOM.WAD` alias handling only when the dataset matches.
+3. First success criterion is fixed to `main menu reachable`; earlier checkpoints (`binary discovered` -> `extender init passes` -> `video init passes` -> `first frame`) remain failure-taxonomy stages, not the milestone itself.
 
 ### B. Finish the DOS extender path
 1. Keep the current `CIUK4GW.EXE` smoke as the shallowest contract test.
-2. Add a second-stage DOS extender regression binary that exercises more than host detection.
-3. Implement the minimum `DPMI` host behavior required by that binary, not a speculative large surface.
-4. Validate real-mode callback and interrupt-reflection behavior against what the chosen extender actually uses.
-5. Harden protected-mode memory allocation/ownership rules for the extender load path.
-6. Require a regression state stronger than startup markers: the binary must reach an interactive or near-interactive checkpoint.
+2. Keep `CIUKDPM.EXE` as the second shallow smoke validating descriptor metadata (`ES:DI`, host-data size) beyond simple presence.
+3. Keep `CIUK31.EXE` as the third shallow smoke validating a real callable DPMI host slice (`INT 31h AX=0400h`) after descriptor discovery.
+4. Keep `CIUK306.EXE` as the fourth shallow smoke validating the first bootstrap-facing DPMI slice (`INT 31h AX=0306h`) after version discovery.
+5. Add the next DOS extender regression binary only when it exercises more than host detection, descriptor parsing, version query, and raw mode-switch address discovery.
+6. Implement the minimum callable `DPMI` host behavior required by that binary, not a speculative large surface.
+7. Validate real-mode callback and interrupt-reflection behavior against what the chosen extender actually uses.
+8. Harden protected-mode memory allocation/ownership rules for the extender load path.
+9. Require a regression state stronger than startup markers: the binary must reach an interactive or near-interactive checkpoint.
 
 ### C. Close BIOS and DOS runtime gaps used by DOOM startup
 1. Capture or infer the startup interrupt/API footprint of the chosen target binary.
@@ -167,10 +178,10 @@ Exit criteria:
 5. Define the first graphics success checkpoint as "DOOM draws a real frame/menu" rather than "video API returns success".
 
 ### E. Package the game path end-to-end
-1. Define deterministic image layout for executable, WAD files, config files and launch scripts.
-2. Add launch-path rules so the shell/runtime can discover the game and its assets predictably.
-3. Add a boot-to-DOOM harness that checks each stage of startup and classifies the failure point precisely.
-4. Document the required files, naming and launch command so the milestone can be reproduced.
+1. Deterministic image layout for executable, WAD files, config files and launch scripts is now defined and regression-tested.
+2. Launch-path rules now package `DOOM.EXE`, `DOOM1.WAD`, optional `DEFAULT.CFG`, and generated `DOOM.BAT` under `/EFI/CiukiOS` so the shell/runtime can discover the game predictably.
+3. Extend the current packaging/discovery harness into a boot-to-DOOM harness that checks each stage of startup and classifies the failure point precisely.
+4. Keep the required files, naming and launch command documented so the milestone can be reproduced without redistributing assets.
 
 ### F. Reach playability
 1. Tune keyboard path for gameplay latency, repeat behavior and extended keys.
@@ -185,9 +196,9 @@ Exit criteria:
 
 ## Critical Path
 1. Freeze the target binary/runtime pair.
-2. Finish the first usable `DPMI` slice and validate it with a non-trivial extender binary.
+2. Finish the first usable `DPMI` slice beyond the current version + raw-mode bootstrap callable baseline and validate it with a non-trivial extender binary.
 3. Add the exact graphics path required by that target (`mode 13h` first).
-4. Build the boot-to-DOOM harness.
+4. Build the boot-to-DOOM harness on top of the new deterministic image-packaging baseline.
 5. Finish input/audio/playability gates.
 
 ## Test Strategy

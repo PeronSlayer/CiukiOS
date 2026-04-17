@@ -58,6 +58,10 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 - `DONE` protected-mode transition contract v2 baseline (transition state block + descriptor snapshots + CR0 + return-path markers)
 - `DONE` DOS/4GW host-interface skeleton baseline (DPMI detect, real-mode callback, interrupt reflection markers)
 - `DONE` pmode memory accounting baseline domain with deterministic overlap guard
+- `DONE` descriptor-return DPMI smoke (`CIUKDPM.EXE` -> `0x49`) validating non-zero `AX=1687h` host metadata
+- `DONE` callable DPMI version smoke (`CIUK31.EXE` -> `0x4B`) validating `INT 31h AX=0400h`
+- `DONE` bootstrap-facing DPMI smoke (`CIUK306.EXE` -> `0x4E`) validating `INT 31h AX=0306h`
+- `DONE` deterministic DOOM asset packaging/discovery harness (`make test-doom-target-packaging`)
 - Gate: `scripts/test_doom_readiness_m6.sh` PASS + no regressions to INT21h/MZ/shell/video
 - Ref: `docs/m6-dos-extender-requirements.md`
 
@@ -120,6 +124,9 @@ References: `docs/m6-dos-extender-requirements.md`, M6 section above
 - `DONE` pmode memory accounting baseline (isolated range + overlap guard)
 - `DONE` reproducible M6 smoke executable (`CIUKPM.EXE` -> `0x36`) included in the OS image and covered by `make test-m6-smoke`
 - `DONE` first callable DOS/4GW-like host-query smoke (`CIUK4GW.EXE` -> `0x47`) over minimal `INT 2Fh AX=1687h`
+- `DONE` descriptor-return DPMI smoke (`CIUKDPM.EXE` -> `0x49`)
+- `DONE` callable DPMI version smoke (`CIUK31.EXE` -> `0x4B`)
+- `DONE` bootstrap-facing DPMI smoke (`CIUK306.EXE` -> `0x4E`)
 
 ### SR-OPENGEM-001 - OpenGEM Runtime Path
 Reference: `docs/handoffs/2026-04-16-copilot-opengem-integration.md`
@@ -142,28 +149,27 @@ References: `docs/handoffs/2026-04-16-copilot-gui-v8-heavy-cycle.md`, related GU
 ### SR-DOOM-001 - First DOOM Milestone Path
 Reference: `docs/roadmap-ciukios-doom.md`
 
-- `PLANNED` select and freeze the first target binary/runtime pair (`DOOM.EXE` or `DOOM2.EXE`, exact DOS extender expectation, required assets, expected video path)
-- `PLANNED` extend M6 from host-query smoke to first usable `DPMI` service slice sufficient for a non-trivial DOS extender binary to initialize
+- `DONE` freeze the first target binary/runtime pair as user-supplied shareware `DOOM.EXE` v1.9 + `DOOM1.WAD` (`DOOM.WAD` alias allowed only if mapped to the same shareware dataset), `DOS/4GW` class runtime, `mode 13h` video path, first success checkpoint = main menu reachable
+- `IN PROGRESS` extend M6 from the current shallow DPMI baseline to a non-trivial DOS extender initialization path (`AX=1687h` descriptor-return slice + `CIUKDPM.EXE`, `INT 31h AX=0400h` callable smoke, and `INT 31h AX=0306h` bootstrap smoke are done; real extender execution is still pending)
 - `PLANNED` validate protected-mode memory contracts for the chosen extender (`>1MB` allocation model, ownership, overlap safety, return path)
 - `PLANNED` add a non-trivial DOS extender regression target beyond smoke markers and require it to reach interactive or near-interactive state
 - `PLANNED` broaden BIOS/runtime compatibility tests against real traces used by installer/game startup (`INT 10h`, `16h`, `1Ah`, `2Fh`, remaining `INT 21h` subset)
 - `PLANNED` add `VGA mode 13h` compatibility and framebuffer semantics for the first DOOM video path
 - `PLANNED` add `VBE` subset only if the selected binary requires it
-- `PLANNED` package executable, WAD/config files and launch scripts into the image with deterministic discovery rules
-- `PLANNED` add a dedicated boot-to-DOOM harness validating executable discovery, asset discovery, first frame or menu reachability, and failure taxonomy
+- `DONE` package executable, WAD/config files and launch scripts into the image with deterministic discovery rules
+- `IN PROGRESS` add a dedicated boot-to-DOOM harness validating executable discovery, asset discovery, first frame or menu reachability, and failure taxonomy
 - `PLANNED` tune keyboard path for gameplay expectations (latency, repeat, scan-code behavior, pause/resume stability)
 - `PLANNED` add first audio baseline suitable for DOOM runtime expectations (likely Sound Blaster/QEMU-compatible path)
 - `PLANNED` add milestone validation gates: main menu reachable, level load reachable, 10-minute gameplay smoke, documented known gaps
 
 ## Remaining Path To Milestone
-1. Freeze the exact first milestone target: executable, required WAD set, DOS extender flavor, expected video mode, and minimum success condition (`first frame`, `main menu`, or `level load`).
-2. Move M6 from skeleton to usable runtime by implementing the first `DPMI` service slice beyond `INT 2Fh AX=1687h` and validating it with a non-trivial extender binary.
-3. Broaden protected-mode memory handling so the chosen extender can allocate and use high memory safely without overlapping stage2/runtime state.
-4. Expand BIOS/runtime compatibility coverage used by real startup paths, especially `INT 10h`, `INT 16h`, `INT 1Ah`, `INT 2Fh`, and the remaining `INT 21h` functions exposed during installer/game boot.
-5. Decide whether the first target uses pure `VGA mode 13h` or needs a `VBE` path, then implement the minimum graphics compatibility required to reach a real rendered frame.
-6. Package the game executable, WAD/config files and launch scripts into the FAT image with deterministic lookup rules and regression checks.
-7. Build a dedicated DOOM harness that classifies failure stages (`not found`, extender init fail, video init fail, asset fail, menu reached, level entered).
-8. Tune keyboard semantics for gameplay and add the first audio-compatible baseline so the milestone is not just "boots" but "playable".
+1. Move M6 from the current descriptor-return plus version-query plus raw-mode bootstrap callable baseline to a real extender execution path and validate it against the frozen first target: user-supplied shareware `DOOM.EXE` v1.9 + `DOOM1.WAD`, `DOS/4GW` class runtime, `mode 13h`, minimum success = main menu reachable.
+2. Broaden protected-mode memory handling so the chosen extender can allocate and use high memory safely without overlapping stage2/runtime state.
+3. Expand BIOS/runtime compatibility coverage used by real startup paths, especially `INT 10h`, `INT 16h`, `INT 1Ah`, `INT 2Fh`, and the remaining `INT 21h` functions exposed during installer/game boot.
+4. Implement the minimum `VGA mode 13h` graphics compatibility required to reach a real rendered frame for the frozen target.
+5. Extend the existing deterministic FAT-image packaging/discovery baseline into a staged runtime harness.
+6. Build a dedicated DOOM harness that classifies failure stages (`not found`, extender init fail, video init fail, asset fail, menu reached, level entered).
+7. Tune keyboard semantics for gameplay and add the first audio-compatible baseline so the milestone is not just "boots" but "playable".
 9. Add milestone gates for `main menu reachable`, `level load reachable`, and `10-minute gameplay smoke` before calling the milestone closed.
 
 ## Current Execution Focus
