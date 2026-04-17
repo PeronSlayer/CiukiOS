@@ -6,7 +6,7 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.8.2`
+`CiukiOS Alpha v0.8.3`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Index
@@ -17,6 +17,13 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 5. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Changelog (Latest)
+### v0.8.3
+1. Broadened DOS universality on the video ABI: new `gfx_mode13_blit_indexed(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` 8-bit masked/opaque bitmap blit onto the mode 0x13 plane, new `gfx_mode13_draw_column(x, y, h, src)` single-column fast path (DOOM `R_DrawColumn`-style), and new `gfx_palette_get_raw(first, count, out6bit)` palette read-back (inverse of `gfx_palette_set`).
+2. `gfx_int10_dispatch` extended with AH=01h (set cursor shape), AH=02h (set cursor pos), AH=03h (get cursor pos + shape), AH=06h/07h (scroll up/down — soft stub: homes cursor on clear), AH=08h (read char+attr — returns space), AH=09h / 0Ah (write char+attr at cursor × CX), AH=0Bh (set bg/palette color), AH=0Eh (teletype output), AH=11h/12h (stub accept), AH=1Ah (get display combination code → VGA color 0x0808).
+3. `video_get_cursor(u32* col, u32* row)` exposed so BIOS AH=03h can report the live framebuffer console cursor.
+4. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed`, `mode13_draw_column`, `palette_get_raw` (appended before `reserved[32]`). Backwards-compatible: existing consumers keep reading up to the previous last slot.
+5. Bumped baseline version to `CiukiOS Alpha v0.8.3`.
+
 ### v0.8.2
 1. DOOM-prep palette + fill primitives on top of the SR-VIDEO-002 stack: `gfx_palette_fade(target_rgb, step, total)` performs a captured-baseline linear blend of the full 256-entry palette toward a target 24-bit color (usable for blood flashes, intermissions, title-wipe fades); `gfx_mode13_fill(color_index)` and `gfx_mode13_fill_rect(x,y,w,h,color_index)` give a fast DOS-style fill path on the mode 0x13 plane.
 2. Extended `ciuki_gfx_services_t` with `palette_fade`, `mode13_fill`, `mode13_fill_rect` (appended before `reserved[32]`). Wired in stage2 shell.

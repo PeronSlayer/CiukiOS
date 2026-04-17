@@ -675,6 +675,11 @@ void video_set_cursor(u32 col, u32 row) {
     }
 }
 
+void video_get_cursor(u32 *col, u32 *row) {
+    if (col) *col = g_cursor_col;
+    if (row) *row = g_cursor_row;
+}
+
 void video_set_colors(u32 fg, u32 bg) {
     g_color_fg = fg;
     g_color_bg = bg;

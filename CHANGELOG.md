@@ -2,6 +2,13 @@
 
 All notable changes to CiukiOS are tracked here.
 
+## v0.8.3
+1. DOS universality expansion on the video ABI: `gfx_mode13_blit_indexed(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` 8-bit masked/opaque bitmap blit, `gfx_mode13_draw_column(x, y, h, src)` single-column fast path (DOOM R_DrawColumn-style), `gfx_palette_get_raw(first, count, out6bit)` palette read-back.
+2. `gfx_int10_dispatch` extended with AH=01/02/03/06/07/08/09/0A/0B/0E/11/12/1A (cursor shape/set/get, scroll, read char, write char×CX with and without attr, teletype, get DCC, stub-accepts for character generator / alternate select).
+3. Added `video_get_cursor(*col, *row)` to back AH=03h with the live console cursor.
+4. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed`, `mode13_draw_column`, `palette_get_raw` (append-only before `reserved[32]`). Backwards-compatible.
+5. Bumped baseline to `CiukiOS Alpha v0.8.3`.
+
 ## v0.8.2
 1. DOOM-prep palette + fill primitives: `gfx_palette_fade(target_rgb, step, total)` (captured-baseline linear blend of the full 256-entry palette toward a 24-bit target color — blood flashes, intermissions, title wipes), `gfx_mode13_fill(color)` and `gfx_mode13_fill_rect(x,y,w,h,color)`.
 2. Extended `ciuki_gfx_services_t` with `palette_fade`, `mode13_fill`, `mode13_fill_rect` (append-only before the `reserved[32]` tail). Wired in stage2 shell.

@@ -5585,6 +5585,9 @@ static const ciuki_gfx_services_t g_gfx_services = {
     .palette_fade = gfx_palette_fade,
     .mode13_fill = gfx_mode13_fill,
     .mode13_fill_rect = gfx_mode13_fill_rect,
+    .mode13_blit_indexed = gfx_mode13_blit_indexed,
+    .mode13_draw_column = gfx_mode13_draw_column,
+    .palette_get_raw = gfx_palette_get_raw,
     .reserved = {0},
 };
 

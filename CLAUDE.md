@@ -38,7 +38,7 @@ Primary roadmap:
 7. Update this file only if global direction/state changed.
 
 ## Versioning Cadence Rule (Required)
-1. Current baseline version: `CiukiOS Alpha v0.8.2`.
+1. Current baseline version: `CiukiOS Alpha v0.8.3`.
 2. Every 3-4 completed roadmap tasks, bump patch version by `+0.0.1`.
 3. Example progression: `v0.6.0 -> v0.6.1 -> v0.6.2`.
 4. On each version bump, update all of:

@@ -177,6 +177,64 @@ void gfx_palette_fade(u32 target_rgb, u32 step, u32 total) {
     }
 }
 
+/* 8-bit indexed bitmap blit onto mode 0x13 plane. */
+void gfx_mode13_blit_indexed(const u8 *src, u32 sw, u32 sh, u32 stride,
+                             u32 dx, u32 dy,
+                             u8 use_transparent, u8 transparent_idx) {
+    if (!src || sw == 0U || sh == 0U) return;
+    if (dx >= GFX_MODE13_W || dy >= GFX_MODE13_H) return;
+    if (stride == 0U) stride = sw;
+
+    u32 x1 = dx + sw; if (x1 > GFX_MODE13_W) x1 = GFX_MODE13_W;
+    u32 y1 = dy + sh; if (y1 > GFX_MODE13_H) y1 = GFX_MODE13_H;
+    u32 copy_w = x1 - dx;
+    u32 copy_h = y1 - dy;
+
+    for (u32 yy = 0; yy < copy_h; yy++) {
+        const u8 *s = src + yy * stride;
+        u8       *d = &g_plane13[(dy + yy) * GFX_MODE13_W + dx];
+        if (use_transparent) {
+            for (u32 xx = 0; xx < copy_w; xx++) {
+                u8 px = s[xx];
+                if (px != transparent_idx) d[xx] = px;
+            }
+        } else {
+            for (u32 xx = 0; xx < copy_w; xx++) d[xx] = s[xx];
+        }
+    }
+    g_plane_dirty = 1;
+}
+
+/* Single-column draw (DOOM R_DrawColumn fast path). */
+void gfx_mode13_draw_column(u32 x, u32 y, u32 h, const u8 *src) {
+    if (!src || h == 0U) return;
+    if (x >= GFX_MODE13_W || y >= GFX_MODE13_H) return;
+    u32 y1 = y + h; if (y1 > GFX_MODE13_H) y1 = GFX_MODE13_H;
+    u32 n = y1 - y;
+    u8 *d = &g_plane13[y * GFX_MODE13_W + x];
+    for (u32 i = 0; i < n; i++) {
+        *d = src[i];
+        d += GFX_MODE13_W;
+    }
+    g_plane_dirty = 1;
+}
+
+/* Read back palette as 6-bit VGA triples (inverse of gfx_palette_set). */
+void gfx_palette_get_raw(u32 first, u32 count, u8 *out) {
+    if (!out) return;
+    if (first >= 256U) return;
+    if (first + count > 256U) count = 256U - first;
+    for (u32 i = 0; i < count; i++) {
+        u32 rgb = g_palette[first + i];
+        u8 r = (u8)((rgb >> 16) & 0xFFU);
+        u8 g = (u8)((rgb >> 8)  & 0xFFU);
+        u8 b = (u8)( rgb        & 0xFFU);
+        out[3U * i + 0U] = (u8)(r >> 2);
+        out[3U * i + 1U] = (u8)(g >> 2);
+        out[3U * i + 2U] = (u8)(b >> 2);
+    }
+}
+
 /* --------------------------------------------------------------- */
 /* Core mode management                                            */
 /* --------------------------------------------------------------- */
@@ -293,6 +351,48 @@ void gfx_int10_dispatch(struct ciuki_dos_context *ctx,
             regs->carry = 1;
         }
         return;
+    case 0x01: /* set cursor shape: CH=start line, CL=end line. Accept. */
+        regs->carry = 0;
+        return;
+    case 0x02: { /* set cursor position: BH=page, DH=row, DL=col */
+        u8 row = (u8)((regs->dx >> 8) & 0xFFU);
+        u8 col = (u8)( regs->dx       & 0xFFU);
+        video_set_cursor(col, row);
+        regs->carry = 0;
+        return;
+    }
+    case 0x03: { /* get cursor position: DH/DL=row/col, CX=shape */
+        u32 col = 0, row = 0;
+        video_get_cursor(&col, &row);
+        regs->dx = (u16)(((u16)(row & 0xFFU) << 8) | (u16)(col & 0xFFU));
+        regs->cx = 0x0607U; /* typical shape: start=6, end=7 */
+        regs->carry = 0;
+        return;
+    }
+    case 0x06: /* scroll up window. AL=lines (0=clear). Soft stub: reset cursor. */
+    case 0x07: /* scroll down window. Same treatment. */
+        if (al == 0) {
+            /* Most compatible cheap action: home the cursor. Full scroll
+             * support requires a text buffer the framebuffer console
+             * doesn't retain yet. */
+            video_set_cursor(0, 0);
+        }
+        regs->carry = 0;
+        return;
+    case 0x08: /* read char+attr at cursor. Return space + gray attr. */
+        regs->ax = 0x0720U;
+        regs->carry = 0;
+        return;
+    case 0x09:   /* write char+attr at cursor, CX times. AL=char, BL=attr */
+    case 0x0A: { /* write char at cursor, CX times. AL=char */
+        u16 n = regs->cx ? regs->cx : 1U;
+        for (u16 i = 0; i < n; i++) video_putchar((char)al);
+        regs->carry = 0;
+        return;
+    }
+    case 0x0B: /* set background/palette color. Noop accept. */
+        regs->carry = 0;
+        return;
     case 0x0C: { /* write pixel: AL=color, BH=page, CX=x, DX=y */
         gfx_mode13_put_pixel(regs->cx, regs->dx, al);
         regs->carry = 0;
@@ -304,9 +404,22 @@ void gfx_int10_dispatch(struct ciuki_dos_context *ctx,
         regs->carry = 0;
         return;
     }
+    case 0x0E: /* teletype output: AL=char, BH=page (ignored) */
+        video_putchar((char)al);
+        regs->carry = 0;
+        return;
     case 0x0F: /* get current mode: AL=mode, AH=cols */
         regs->ax = (u16)(((u16)80U << 8) | (u16)g_current_mode);
         regs->bx = (u16)((regs->bx & 0x00FFU) | 0x0000U); /* BH=0 page */
+        regs->carry = 0;
+        return;
+    case 0x11: /* character generator. Accept with carry clear (no-op). */
+    case 0x12: /* alternate select.   Accept with carry clear (no-op). */
+    case 0x1A: /* get display combination code. AL=1A, BX=0808 (VGA color). */
+        if (ah == 0x1A) {
+            regs->ax = 0x001AU;
+            regs->bx = 0x0808U;
+        }
         regs->carry = 0;
         return;
     case 0x4F: /* VESA VBE */

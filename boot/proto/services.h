@@ -90,6 +90,15 @@ typedef struct ciuki_gfx_services {
     void (*mode13_fill)(uint8_t color_index);
     void (*mode13_fill_rect)(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                              uint8_t color_index);
+    /* M-V2.7 — DOS universality: blit + column-draw + palette readback. */
+    void (*mode13_blit_indexed)(const uint8_t *src, uint32_t sw, uint32_t sh,
+                                uint32_t stride, uint32_t dx, uint32_t dy,
+                                uint8_t use_transparent,
+                                uint8_t transparent_idx);
+    void (*mode13_draw_column)(uint32_t x, uint32_t y, uint32_t h,
+                               const uint8_t *src);
+    void (*palette_get_raw)(uint32_t first, uint32_t count,
+                            uint8_t *rgb_triples_6bit_out);
     uint8_t reserved[32];
 } ciuki_gfx_services_t;
 

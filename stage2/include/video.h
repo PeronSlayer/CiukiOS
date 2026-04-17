@@ -11,6 +11,7 @@ void video_write(const char *s);
 void video_write_hex64(u64 v);
 void video_write_hex8(u8 v);
 void video_set_cursor(u32 col, u32 row);
+void video_get_cursor(u32 *col, u32 *row);
 void video_set_colors(u32 fg, u32 bg);
 void video_set_text_window(u32 start_row);
 void video_set_font_scale(u32 scale_x, u32 scale_y);
