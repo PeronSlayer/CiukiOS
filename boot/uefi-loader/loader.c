@@ -1307,8 +1307,8 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                                    bytes_pp <= VIDEO_DRIVER_MAX_BPP) ? 1U : 0U;
 
                     if (bpp_val == 32 && fits_backbuf &&
-                        mode_info->HorizontalResolution >= 1024U &&
-                        mode_info->VerticalResolution >= 768U) {
+                        mode_info->HorizontalResolution >= VIDEO_POLICY_BASELINE_W &&
+                        mode_info->VerticalResolution >= VIDEO_POLICY_BASELINE_H) {
                         has_1024_candidate = TRUE;
                     }
 
@@ -1324,8 +1324,8 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                         catalog_count++;
                     }
 
-                    /* --- VMODE.CFG priority check --- */
-                    if (!cfg_resolved && bpp_val == 32 && fits_backbuf) {
+                    /* --- VMODE.CFG priority check (any 32bpp mode) --- */
+                    if (!cfg_resolved && bpp_val == 32) {
                         /* Priority 1: exact mode id match */
                         if (vmode_cfg.mode_id != 0xFFFFFFFFU &&
                             mi == vmode_cfg.mode_id) {
@@ -1381,7 +1381,8 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                     BOOLEAN policy_pass = TRUE;
 
                     if (has_1024_candidate &&
-                        (selected_w < 1024U || selected_h < 768U)) {
+                        (selected_w < VIDEO_POLICY_BASELINE_W ||
+                         selected_h < VIDEO_POLICY_BASELINE_H)) {
                         policy_pass = FALSE;
                     }
 
@@ -1390,6 +1391,20 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                           selected_w,
                           selected_h,
                           policy_pass ? L"PASS" : L"FAIL");
+
+                    {
+                        UINT32 sel_bpp = gop_detect_bpp(gop->Mode->Info);
+                        UINT32 sel_bpp_bytes = (sel_bpp + 7U) / 8U;
+                        UINT64 needed = (UINT64)selected_h *
+                                        (UINT64)gop->Mode->Info->PixelsPerScanLine *
+                                        sel_bpp_bytes;
+                        UINT64 budget = (UINT64)VIDEO_DRIVER_MAX_W *
+                                        VIDEO_DRIVER_MAX_H *
+                                        VIDEO_DRIVER_MAX_BPP;
+                        Print(L"GOP: backbuf budget=%lu needed=%lu fits=%s\r\n",
+                              budget, needed,
+                              (needed <= budget) ? L"YES" : L"NO");
+                    }
                 }
 
                 if (using_stage2) {

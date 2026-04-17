@@ -45,6 +45,8 @@ required_patterns=(
     "[ video ] gop modes=0x"
     "[ video ] active mode=0x"
     "GOP: policy1024 available="
+    "GOP: backbuf budget="
+    "[video] backbuf_budget="
     "[ ok ] stage2 mini shell ready"
     "vmode"
 )

@@ -389,6 +389,38 @@ void video_init(boot_info_t *bi) {
     serial_write("[video] mode=");
     serial_write(g_backbuf_active ? "double-buffer" : "direct");
     serial_write("\n");
+    serial_write("[video] backbuf_budget=");
+    {
+        u64 budget = (u64)VIDEO_BACKBUF_MAX_BYTES;
+        u64 needed = (u64)g_height * (u64)g_pitch;
+        char numbuf[24];
+        u32 ni = 0;
+        u64 tmp;
+        /* budget */
+        tmp = budget;
+        if (tmp == 0) { numbuf[ni++] = '0'; }
+        else {
+            char rev[20]; u32 ri = 0;
+            while (tmp) { rev[ri++] = '0' + (char)(tmp % 10); tmp /= 10; }
+            while (ri) numbuf[ni++] = rev[--ri];
+        }
+        numbuf[ni] = '\0';
+        serial_write(numbuf);
+        serial_write(" needed=");
+        /* needed */
+        ni = 0; tmp = needed;
+        if (tmp == 0) { numbuf[ni++] = '0'; }
+        else {
+            char rev[20]; u32 ri = 0;
+            while (tmp) { rev[ri++] = '0' + (char)(tmp % 10); tmp /= 10; }
+            while (ri) numbuf[ni++] = rev[--ri];
+        }
+        numbuf[ni] = '\0';
+        serial_write(numbuf);
+        serial_write(" fits=");
+        serial_write((needed <= budget) ? "YES" : "NO");
+        serial_write("\n");
+    }
 }
 
 void video_putchar(char c) {
