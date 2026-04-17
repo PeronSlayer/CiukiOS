@@ -9,6 +9,13 @@ Mission: become a progressively more complete environment capable of running DOS
 `CiukiOS Alpha v0.6.9`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
+## Index
+1. Full documentation: `documentation.md`
+2. Full changelog: `CHANGELOG.md`
+3. High-level roadmap: `Roadmap.md`
+4. Detailed DOOM roadmap: `docs/roadmap-ciukios-doom.md`
+5. Donations and support: `DONATIONS.md`
+
 ## Changelog (Latest)
 ### v0.6.9
 1. Added deterministic startup-chain gate `make test-startup-chain`, covering `CONFIG.SYS`, `AUTOEXEC.BAT`, `.BAT` labels/`goto`/`if errorlevel`, env expansion and FreeDOS startup-file image wiring.
@@ -22,105 +29,7 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 3. Added dedicated gate `make test-m6-dos4gw-smoke` and wired it into the aggregate M6 readiness orchestration.
 4. M6 now validates both a generic protected-mode readiness smoke (`CIUKPM.EXE`) and a first DOS/4GW-like host-query smoke (`CIUK4GW.EXE`).
 
-### v0.6.7
-1. Closed SR-M6-001 readiness baseline with a reproducible smoke executable `CIUKPM.EXE` included in the OS image and returning deterministic code `0x36`.
-2. Added dedicated gate `make test-m6-smoke` to validate M6 smoke-program wiring and runtime launch markers.
-3. Restored static-fallback validation in `make test-m6-pmode` and `make test-m6-transition-v2` for hosts where QEMU serial capture is unavailable.
-4. Updated aggregate M6 readiness gate so FreeDOS pipeline drift is non-blocking for the protected-mode readiness baseline while core M6 gates remain blocking.
-
-### v0.6.6
-1. Closed SR-DOSRUN-001 with deterministic `.EXE MZ` single-program smoke path (`CIUKMZ.EXE` -> `0x2B`) reproducible from source via `tools/mkciukmz_exe`.
-2. Added dedicated MZ gate `make test-dosrun-mz` (`scripts/test_dosrun_mz_simple.sh`) validating `[dosrun] launch path=CIUKMZ.EXE type=MZ` + success return marker.
-3. Added DOS command-tail / argv bridge markers (`[dosrun] argv tail len=...`, `[dosrun] argv parse=PASS|FAIL`) and extended run-path error classes (`unsupported_int21`, `args_parse`).
-4. Extended INT21h coverage with deterministic date/time (`AH=2Ah`, `AH=2Ch`) and IOCTL get-device-info (`AH=44h`/`AL=00h`) plus boot-time `[compat]` markers.
-5. Expanded compatibility matrix gate (`make check-int21-matrix`) with 2Ah/2Ch/44h rows in `docs/int21-priority-a.md`.
-
-### v0.6.5
-1. Closed M6 baseline contract with deterministic protected-mode transition markers (`transition state`, `GDT/IDT snapshot`, `CR0`, `return-path`).
-2. Added M6 baseline entry infrastructure markers (`A20 probe/enable`, descriptor baseline) and DOS extender host-interface skeleton markers.
-3. Added pmode memory-domain overlap guard markers and integrated transition-v2 gate (`make test-m6-transition-v2`) into M6 readiness orchestration.
-4. Updated protected-mode requirements/contract docs for v2 baseline scope and current residual gap (real DOS/4GW compatibility beyond skeleton).
-
-### v0.6.4
-1. Replaced simple first-fit GOP mode selection with deterministic scoring engine (resolution class, aspect ratio, memory budget) supporting 1024x768 through 3840x2160.
-2. Added explicit budget tiers by resolution class with safe double-buffer ceiling and deterministic fallback degrade policy.
-3. Added wide-mode compatibility matrix gate `make test-video-policy-matrix` validating policyv2/budgetv2 markers across loader and stage2.
-4. Hardened desktop/UI layout engine for wide resolutions (1024x768, 1280x800, 1920x1080, 2560x1440) with clipping validation markers.
-5. Closed Phase 1 video scaling/policy roadmap item.
-
-### v0.6.3
-1. Expanded video subsystem with overlay plane support, frame pacing counters, and deterministic present-mode telemetry.
-2. Added layout metrics v3 and adaptive font profiles (`small`/`normal`) to improve UI readability across multiple resolutions.
-3. Added video/UI regression gate `make test-video-ui-v2` (`scripts/test_video_ui_regression_v2.sh`).
-4. Added deterministic DOS smoke payload `CIUKSMK.COM` and integrated `run` outcome markers (`ok/not_found/bad_format/runtime`).
-5. Added end-to-end DOS run gate `make test-dosrun-simple` (`scripts/test_dosrun_simple_program.sh`) validating launch + return code path.
-6. Fixed DOS run selftest contract to validate runtime-native `AH=4Ch -> AH=4Dh` one-shot status semantics.
-7. Added CMOS-backed persistent boot video configuration with integrity checks and loader source precedence (`CMOS` -> `VMODE.CFG` -> policy), including reboot persistence gate `make test-vmode-persistence`.
-
-### v0.6.2
-1. Improved FAT layer toward FAT32 baseline with mount metadata marker (`type/fsinfo/next_free_hint`) in stage2 boot logs.
-2. Added hint-based free-cluster allocation strategy (`next_free_hint`) instead of fixed scan from cluster 2.
-3. Added dynamic directory-chain expansion for non-fixed directories (important for FAT32 root/subdirectory growth).
-4. Added regression gate `make test-fat32-progress` (`scripts/test_fat32_progress.sh`).
-5. Expanded main roadmap with new sub-roadmaps: `SR-DOSRUN-001` (simple DOS program milestone) and `SR-FS-002` (FAT32 capability track).
-
-### v0.6.1
-1. Added M6 protected-mode contract baseline selftests at startup with explicit PASS/FAIL markers.
-2. Added dedicated gate `make test-m6-pmode` (`scripts/test_m6_pmode_contract.sh`).
-3. Added M6 requirements document: `docs/m6-dos-extender-requirements.md`.
-4. Added aggregate M6 readiness gate: `scripts/test_doom_readiness_m6.sh` (phase2 + freedos + video + m6 gates).
-5. Refreshed `third_party/freedos/runtime-manifest.csv` to restore reproducibility checks in pipeline validation.
-6. Updated roadmap and sub-roadmaps to reflect M6 activation and current video/backbuffer status.
-
-### v0.6.0
-1. Merged INT21 compatibility expansion with `AH=56h` rename (same-directory DOS-like subset).
-2. Extended INT21 FAT end-to-end selftest coverage to include rename path validation.
-3. Synced INT21 compatibility matrix and matrix gate with function `56h`.
-4. Integrated video mode stack: GOP mode catalog handoff, `VMODE.CFG` persistence, and shell command surface `vmode`/`vres`.
-5. Added dedicated regression gate `make test-video-mode` and hardened execution with QEMU lock serialization.
-6. Updated stage2 runtime version string to match current alpha.
-7. Improved EXE/MZ runtime compatibility and strengthened deterministic regression coverage.
-
-### v0.5.5
-1. Integrated the first minimal video driver pass with double buffering and explicit `video_present()` flow.
-2. Added scanline blitting path for splash rendering to reduce per-pixel overhead.
-3. Added GOP mode selection hardening in loader (preferred mode order + `QueryMode` cleanup).
-4. Added central roadmap file with main milestones and sub-roadmap tracking.
-5. Synced stage2 runtime version string with README version.
-
-### v0.5.4
-1. Added optional OpenGEM (FreeGEM) integration flow (`import`, runtime composition, pipeline gate, smoke test, image probe).
-2. Added shell `opengem` command with preflight checks and multi-entry launch path detection.
-3. Added OpenGEM provenance, ops and licensing notes in project docs.
-4. Kept FreeDOS pipeline compatibility and automated validation green.
-
-### v0.5.2
-1. Updated project purpose and public positioning as Open Source RetroOS.
-2. Added collaboration and contribution direction in README.
-3. Added explicit development pace note (spare-time project).
-4. Added donation/support section and dedicated donation file.
-5. Moved internal LLM collaboration/handoff docs to local-only workflow.
-6. Introduced pre-1.0 alpha policy for releases and build instructions.
-
-### v0.5.1
-1. Improved desktop readability with layout grid v2 and clearer window chrome.
-2. Upgraded desktop interaction flow (focus/navigation feedback and launcher clarity).
-3. Added launcher/dock visual pass v2 with better selection visibility.
-4. Added GUI regression helper script: `make test-gui-desktop`.
-5. Added Copilot handoffs for desktop polish tasks D1-D5.
-
-### v0.5
-1. Added INT21 compatibility set for console/drive/DTA paths (`AH=06h/07h/0Ah/0Eh/1Ah/2Fh`) with deterministic tests.
-2. Extended boot/test gates for INT21 matrix and compatibility markers.
-3. Added interactive desktop session from shell (`desktop` command).
-4. Added desktop controls (`TAB`, `UP/DOWN`, `J/K`, `ENTER`, `ESC`) and startup hint for GUI testing.
-5. Kept boot/fallback/FAT/INT21 automated regression flow green.
-
-### v0.4
-1. Added graphic splash renderer (framebuffer, centered scaling, ASCII-to-grayscale mapping).
-2. Added explicit framebuffer metadata in stage handoff ABI.
-3. Added shell preview command: `gsplash` (alias `splash`).
-4. Kept ASCII splash as automatic fallback path.
+Full changelog: `CHANGELOG.md`
 
 ## Current Direction
 The active north star is:
@@ -147,13 +56,15 @@ Until `CiukiOS Alpha v1.0`, this project follows these rules:
 4. Versioning cadence: every 2/3 integrated updates bump patch version automatically (`x.y.z -> x.y.(z+1)`); milestone-sized integrations may bump minor version.
 
 ## Key Docs
-1. Unified roadmap and sub-roadmaps: `Roadmap.md`
-2. DOS-to-DOOM roadmap: `docs/roadmap-ciukios-doom.md`
-3. DOS 6.2 compatibility roadmap: `docs/roadmap-dos62-compat.md`
-4. FreeDOS integration and licensing policy: `docs/freedos-integration-policy.md`
-5. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
-6. OpenGEM integration notes and operations: `docs/opengem-integration-notes.md`, `docs/opengem-ops.md`
-7. Shared contributor/session notes: `CLAUDE.md`
+1. Central project documentation: `documentation.md`
+2. Full changelog: `CHANGELOG.md`
+3. Unified roadmap and sub-roadmaps: `Roadmap.md`
+4. DOS-to-DOOM roadmap: `docs/roadmap-ciukios-doom.md`
+5. DOS 6.2 compatibility roadmap: `docs/roadmap-dos62-compat.md`
+6. FreeDOS integration and licensing policy: `docs/freedos-integration-policy.md`
+7. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
+8. OpenGEM integration notes and operations: `docs/opengem-integration-notes.md`, `docs/opengem-ops.md`
+9. Shared contributor/session notes: `CLAUDE.md`
 
 ## Third-Party and Licensing (FreeDOS + OpenGEM Notice)
 1. This repository can include and use third-party FreeDOS components in `third_party/freedos/`.

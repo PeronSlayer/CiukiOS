@@ -25,7 +25,8 @@ Primary roadmap:
 3. Phase history/kickoff: `docs/phase-0-kickoff.md`, `docs/phase-1.md`
 4. FreeDOS licensing/integration policy: `docs/freedos-integration-policy.md`
 5. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
-6. Handoff index: `docs/handoffs/README.md`
+6. Central durable documentation: `documentation.md`
+7. Handoff index: `docs/handoffs/README.md`
 
 ## Session Workflow (Required)
 1. Read this file first.
@@ -33,7 +34,8 @@ Primary roadmap:
 3. Execute scoped change.
 4. Run relevant tests.
 5. Write a new handoff for major multi-file or architectural changes.
-6. Update this file only if global direction/state changed.
+6. Update `documentation.md` whenever the completed task changes stable project state, architecture, validation flow, or milestone status.
+7. Update this file only if global direction/state changed.
 
 ## Versioning Cadence Rule (Required)
 1. Current baseline version: `CiukiOS Alpha v0.6.0`.
