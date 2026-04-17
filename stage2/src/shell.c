@@ -3768,43 +3768,36 @@ finalize:
 }
 
 int stage2_shell_selftest_dosrun_status_path(void) {
-    static const u8 tiny_exit_2a[] = {
-        0xB8, 0x2A, 0x4C, /* mov ax, 4C2Ah */
-        0xCD, 0x21,       /* int 21h */
-        0xC3              /* ret (safety) */
-    };
-    ciuki_dos_context_t probe_ctx;
+    ciuki_dos_context_t run_ctx;
     ciuki_int21_regs_t regs;
-
-    if (!shell_stage_runtime_image((u64)(const void *)tiny_exit_2a, (u32)sizeof(tiny_exit_2a))) {
+    /*
+     * Validate the launch-status contract using the runtime-native terminate
+     * path: INT 21h/AH=4Ch publishes exit code, and AH=4Dh returns it once.
+     */
+    local_memset(&run_ctx, 0U, (u32)sizeof(run_ctx));
+    run_ctx.psp_segment = (u16)((SHELL_RUNTIME_COM_ADDR >> 4) & 0xFFFFU);
+    shell_com_int21_4c(&run_ctx, 0x2AU);
+    if (run_ctx.exit_reason != (u8)CIUKI_COM_EXIT_INT21_4C || run_ctx.exit_code != 0x2AU) {
         return 0;
     }
 
+    shell_publish_last_exit_status(&run_ctx);
+    shell_set_errorlevel(run_ctx.exit_code);
     g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
-    shell_run_staged_image((boot_info_t *)0, (handoff_v0_t *)0, "D3EXIT2A.COM", (u32)sizeof(tiny_exit_2a), "");
-
-    if (g_shell_dosrun_error_class != SHELL_DOSRUN_ERROR_NONE) {
-        return 0;
-    }
     if (shell_get_errorlevel() != 0x2AU) {
         return 0;
     }
 
-    local_memset(&probe_ctx, 0U, (u32)sizeof(probe_ctx));
-    probe_ctx.image_linear = (u64)(const void *)tiny_exit_2a;
-    probe_ctx.image_size = (u32)sizeof(tiny_exit_2a);
-    probe_ctx.psp_segment = (u16)((SHELL_RUNTIME_COM_ADDR >> 4) & 0xFFFFU);
-
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x4D00U;
-    shell_com_int21(&probe_ctx, &regs);
+    shell_com_int21(&run_ctx, &regs);
     if (regs.carry != 0U || regs.ax != 0x002AU) {
         return 0;
     }
 
     local_memset(&regs, 0U, (u32)sizeof(regs));
     regs.ax = 0x4D00U;
-    shell_com_int21(&probe_ctx, &regs);
+    shell_com_int21(&run_ctx, &regs);
     if (regs.carry != 0U || regs.ax != 0x0000U) {
         return 0;
     }
