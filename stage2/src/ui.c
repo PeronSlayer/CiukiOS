@@ -404,7 +404,7 @@ int ui_enter_desktop_scene(void) {
         matrix_validated = 1;
     }
     ui_render_scene();
-    video_present();
+    video_end_frame();
     return 1;
 }
 

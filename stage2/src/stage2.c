@@ -1,5 +1,6 @@
 #include "serial.h"
 #include "video.h"
+#include "gfx_modes.h"
 #include "cpu_tables.h"
 #include "interrupts.h"
 #include "timer.h"
@@ -320,9 +321,10 @@ static void draw_splash_footer(u32 footer_px, u32 progress_percent) {
 }
 
 static void draw_title_bar(void) {
+    video_begin_frame();
     ui_draw_top_bar("CiukiOS", 0x00FFFFFFU, 0x00000000U); /* white bar, black text */
     video_set_text_window(1);                   /* reserve top row for title bar */
-    video_present();
+    video_end_frame();
 }
 
 static void show_boot_splash(void) {
@@ -338,13 +340,14 @@ static void show_boot_splash(void) {
     video_set_font_scale(1U, 1U);
     video_set_text_window(0);
     footer_px = splash_footer_height_px();
+    video_begin_frame();
     used_graphic = stage2_splash_show_graphic_layout(footer_px);
     if (!used_graphic) {
         stage2_splash_show();
     } else {
         draw_splash_footer(footer_px, 0U);
     }
-    video_present();
+    video_end_frame();
     serial_write("[ ok ] splashscreen rendered src=0x");
     serial_write_hex64((u64)stage2_splash_source_cols());
     serial_write("x0x");
@@ -357,10 +360,12 @@ static void show_boot_splash(void) {
 
     /* Draw boot HUD overlay if graphics available */
     if (used_graphic) {
+        video_begin_frame();
         if (ui_draw_boot_hud(CIUKIOS_STAGE2_VERSION, "gfx", 0U)) {
             hud_drawn = 1;
             serial_write("[ ui ] boot hud active\n");
         }
+        video_end_frame();
     }
 
     start_ticks = stage2_timer_ticks();
@@ -371,12 +376,13 @@ static void show_boot_splash(void) {
             progress = 100U;
         }
         if (used_graphic && progress != last_progress) {
+            video_begin_frame();
             draw_splash_footer(footer_px, progress);
             /* Update HUD progress if it was drawn */
             if (hud_drawn) {
                 ui_draw_boot_hud(CIUKIOS_STAGE2_VERSION, "gfx", progress);
             }
-            video_present();
+            video_end_frame();
             last_progress = progress;
         }
 
@@ -387,12 +393,13 @@ static void show_boot_splash(void) {
     }
 
     if (used_graphic) {
+        video_begin_frame();
         draw_splash_footer(footer_px, 100U);
         /* Final HUD update */
         if (hud_drawn) {
             ui_draw_boot_hud(CIUKIOS_STAGE2_VERSION, "gfx", 100U);
         }
-        video_present();
+        video_end_frame();
     }
 
     video_set_font_scale(2U, 2U);
@@ -630,6 +637,7 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     serial_write("[ ok ] desktop ui command available (type: desktop)\n");
 
     video_init(boot_info);
+    gfx_mode_init();
     if (stage2_bios_compat_selftest_int10()) {
         serial_write("[ test ] bios int10 baseline selftest: PASS\n");
     } else {

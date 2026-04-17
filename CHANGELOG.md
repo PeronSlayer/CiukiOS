@@ -2,6 +2,38 @@
 
 All notable changes to CiukiOS are tracked here.
 
+## v0.8.3
+1. DOS universality expansion on the video ABI: `gfx_mode13_blit_indexed(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` 8-bit masked/opaque bitmap blit, `gfx_mode13_draw_column(x, y, h, src)` single-column fast path (DOOM R_DrawColumn-style), `gfx_palette_get_raw(first, count, out6bit)` palette read-back.
+2. `gfx_int10_dispatch` extended with AH=01/02/03/06/07/08/09/0A/0B/0E/11/12/1A (cursor shape/set/get, scroll, read char, write char×CX with and without attr, teletype, get DCC, stub-accepts for character generator / alternate select).
+3. Added `video_get_cursor(*col, *row)` to back AH=03h with the live console cursor.
+4. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed`, `mode13_draw_column`, `palette_get_raw` (append-only before `reserved[32]`). Backwards-compatible.
+5. Bumped baseline to `CiukiOS Alpha v0.8.3`.
+
+![DOSMD13.COM — mode 0x13 6×6×6 color cube gradient validated on QEMU (v0.8.3)](misc/screenshots/v0.8.3-dosmd13-mode13-colorcube.png)
+
+## v0.8.2
+1. DOOM-prep palette + fill primitives: `gfx_palette_fade(target_rgb, step, total)` (captured-baseline linear blend of the full 256-entry palette toward a 24-bit target color — blood flashes, intermissions, title wipes), `gfx_mode13_fill(color)` and `gfx_mode13_fill_rect(x,y,w,h,color)`.
+2. Extended `ciuki_gfx_services_t` with `palette_fade`, `mode13_fill`, `mode13_fill_rect` (append-only before the `reserved[32]` tail). Wired in stage2 shell.
+3. New `FADEDMO.COM` sample (`com/fadedemo/`): mode 0x13 + 10 concentric color-cube bands + fade-to-red + fade-to-black + `[fadedmo] OK`.
+4. External palette mutations now invalidate the fade baseline for fresh re-capture.
+5. Bumped baseline to `CiukiOS Alpha v0.8.2`.
+
+## v0.8.1
+1. Completed SR-VIDEO-002 milestones M-V2.4 and M-V2.5 (DOS/VGA mode compatibility + palette + cached present).
+2. M-V2.4: new `stage2/src/gfx_modes.c` + `stage2/include/gfx_modes.h`. Mode 0x13 (320×200×8) planar surface upscaled (nearest-neighbor, integer scale up to 6×) and letterboxed into the 32bpp GOP backbuffer. `gfx_int10_dispatch` implements BIOS INT 10h AH=00h/0Ch/0Dh/0Fh and VBE AH=4Fh AL=00/01/02/03 with VBE mode IDs 0x0013 / 0x0100 / 0x0101 / 0x0003 mapped onto the internal planes. New shell command `mode` (`info`, `set <hex>`, `test13`, `text`).
+3. M-V2.5: 256-entry palette (VGA-compatible default: CGA/EGA 16 + greyscale ramp + 6×6×6 color cube). `gfx_palette_set(first,count,rgb6bit)` exposed via services. Present path skips the upscale pass when neither plane nor palette changed since the last commit (cached present / 60 fps cap baseline).
+4. Extended `ciuki_gfx_services_t` (`boot/proto/services.h`) with `set_mode` / `get_mode` / `present` / `set_palette` / `mode13_plane` / `mode13_put_pixel` / `int10`; wired in stage2. New sample `DOSMD13.COM` (`com/dosmode13/`) sets mode 0x13, fills a gradient via the ABI, tweaks one palette entry, calls `present()`, and emits `[dosmode13] OK`.
+5. `gfx_mode_init()` called right after `video_init()` so mode/palette state is live before any COM runs.
+6. Bumped baseline to `CiukiOS Alpha v0.8.1`.
+
+## v0.8.0
+1. Completed SR-VIDEO-002 milestones M-V2.0..M-V2.3 (flicker-free video baseline, 2D rasterizer, BMP decoder, stable 2D graphics services ABI).
+2. M-V2.0: `video_begin_frame` / `video_end_frame` frame-scope compositor plus non-temporal `mem_copy_nt` (x86-64 `movnti` + `sfence`) present path; splash / HUD / title bar / desktop / shell input migrated to atomic frame commits.
+3. M-V2.1: `stage2/src/gfx2d.c` + `stage2/include/gfx2d.h` — pixel, hline/vline, Bresenham line, rect outline/fill, midpoint circle outline/fill, flat-top/flat-bottom triangle fill, raw blit, masked blit, clipping. New shell command `gfx test-pattern` / `gfx info`.
+4. M-V2.2: `stage2/src/image.c` + `stage2/include/image.h` — BMP decoder (BI_RGB 24/32bpp top-down + bottom-up, ≤1920×1080). New shell command `image show <path>`.
+5. M-V2.3: extended `boot/proto/services.h` with `ciuki_gfx_services_t`; populated in shell.c. New `GFXSMK.COM` (`com/gfxsmoke/`) exercises the ABI and emits `[gfxsmoke] OK`.
+6. Bumped baseline to `CiukiOS Alpha v0.8.0`.
+
 ## v0.7.1
 1. Extended the M6 DPMI smoke chain with a new allocate-memory-block callable slice (`CIUKMEM.EXE` -> `0x54`) exercising `INT 31h AX=0501h` and returning a synthetic linear address + memory handle; validated by the new gate `make test-m6-dpmi-mem-smoke`.
 2. Added `[compat] bios int2f baseline ready` startup marker so `INT 2Fh` multiplex readiness (already used by DPMI detect) has an explicit greppable signal alongside the `INT 10h/16h/1Ah` markers.

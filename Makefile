@@ -25,6 +25,18 @@ COM_CFLAGS := $(COMMON_CFLAGS) -Iboot/proto
 COM_HELLO_SRC := com/hello/hello.c
 COM_HELLO_ELF := build/INIT.COM.elf
 COM_HELLO_BIN := build/INIT.COM
+COM_CIUKEDIT_SRC := com/ciukedit/ciukedit.c
+COM_CIUKEDIT_ELF := build/CIUKEDIT.COM.elf
+COM_CIUKEDIT_BIN := build/CIUKEDIT.COM
+COM_GFXSMOKE_SRC := com/gfxsmoke/gfxsmoke.c
+COM_GFXSMOKE_ELF := build/GFXSMK.COM.elf
+COM_GFXSMOKE_BIN := build/GFXSMK.COM
+COM_DOSMODE13_SRC := com/dosmode13/dosmode13.c
+COM_DOSMODE13_ELF := build/DOSMD13.COM.elf
+COM_DOSMODE13_BIN := build/DOSMD13.COM
+COM_FADEDEMO_SRC := com/fadedemo/fadedemo.c
+COM_FADEDEMO_ELF := build/FADEDMO.COM.elf
+COM_FADEDEMO_BIN := build/FADEDMO.COM
 COM_DOSRUN_SMOKE_SRC := com/dosrun_smoke/ciuksmk.c
 COM_DOSRUN_SMOKE_ELF := build/CIUKSMK.COM.elf
 COM_DOSRUN_SMOKE_BIN := build/CIUKSMK.COM
@@ -85,7 +97,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAG
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN)
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_CIUKEDIT_BIN) $(COM_GFXSMOKE_BIN) $(COM_DOSMODE13_BIN) $(COM_FADEDEMO_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -139,6 +151,30 @@ $(COM_HELLO_BIN): $(COM_HELLO_SRC) com/hello/linker.ld boot/proto/services.h | b
 	$(CC) $(COM_CFLAGS) -c $(COM_HELLO_SRC) -o build/obj/com/hello.o
 	$(LD) -nostdlib -z max-page-size=0x1000 -T com/hello/linker.ld -o $(COM_HELLO_ELF) build/obj/com/hello.o
 	llvm-objcopy -O binary $(COM_HELLO_ELF) $(COM_HELLO_BIN)
+
+$(COM_CIUKEDIT_BIN): $(COM_CIUKEDIT_SRC) com/ciukedit/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_CIUKEDIT_SRC) -o build/obj/com/ciukedit.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/ciukedit/linker.ld -o $(COM_CIUKEDIT_ELF) build/obj/com/ciukedit.o
+	llvm-objcopy --set-section-flags .data=alloc,load,contents,data -O binary $(COM_CIUKEDIT_ELF) $(COM_CIUKEDIT_BIN)
+
+$(COM_GFXSMOKE_BIN): $(COM_GFXSMOKE_SRC) com/gfxsmoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_GFXSMOKE_SRC) -o build/obj/com/gfxsmoke.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/gfxsmoke/linker.ld -o $(COM_GFXSMOKE_ELF) build/obj/com/gfxsmoke.o
+	llvm-objcopy --set-section-flags .data=alloc,load,contents,data -O binary $(COM_GFXSMOKE_ELF) $(COM_GFXSMOKE_BIN)
+
+$(COM_DOSMODE13_BIN): $(COM_DOSMODE13_SRC) com/dosmode13/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_DOSMODE13_SRC) -o build/obj/com/dosmode13.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/dosmode13/linker.ld -o $(COM_DOSMODE13_ELF) build/obj/com/dosmode13.o
+	llvm-objcopy --set-section-flags .data=alloc,load,contents,data -O binary $(COM_DOSMODE13_ELF) $(COM_DOSMODE13_BIN)
+
+$(COM_FADEDEMO_BIN): $(COM_FADEDEMO_SRC) com/fadedemo/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_FADEDEMO_SRC) -o build/obj/com/fadedemo.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/fadedemo/linker.ld -o $(COM_FADEDEMO_ELF) build/obj/com/fadedemo.o
+	llvm-objcopy --set-section-flags .data=alloc,load,contents,data -O binary $(COM_FADEDEMO_ELF) $(COM_FADEDEMO_BIN)
 
 $(COM_DOSRUN_SMOKE_BIN): $(COM_DOSRUN_SMOKE_SRC) com/dosrun_smoke/linker.ld boot/proto/services.h | build
 	@mkdir -p build/obj/com
@@ -279,6 +315,9 @@ test-m6-dpmi-bootstrap-smoke:
 test-dosrun-simple:
 	bash ./scripts/test_dosrun_simple_program.sh
 
+test-ciukedit-smoke:
+	bash ./scripts/test_ciukedit_smoke.sh
+
 test-dosrun-mz:
 	bash ./scripts/test_dosrun_mz_simple.sh
 
@@ -362,4 +401,4 @@ freedos-runtime-manifest:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-m6-dpmi-smoke test-m6-dpmi-call-smoke test-m6-dpmi-bootstrap-smoke test-m6-dpmi-ldt-smoke test-m6-dpmi-mem-smoke test-vga13-baseline test-doom-boot-harness test-dosrun-simple test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-doom-target-packaging test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-m6-dpmi-smoke test-m6-dpmi-call-smoke test-m6-dpmi-bootstrap-smoke test-m6-dpmi-ldt-smoke test-m6-dpmi-mem-smoke test-vga13-baseline test-doom-boot-harness test-dosrun-simple test-ciukedit-smoke test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-doom-target-packaging test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest

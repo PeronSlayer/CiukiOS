@@ -46,6 +46,62 @@ typedef struct ciuki_dos_context {
  * COM binaries must not call stage2 functions directly (no stable ABI);
  * they must only use these pointers.
  */
+typedef struct ciuki_fb_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t pitch;
+} ciuki_fb_info_t;
+
+/*
+ * ciuki_gfx_services_t — stable 2D graphics ABI exposed to COM programs.
+ * All callbacks write into the stage2 backbuffer and clip to fb bounds.
+ * Caller must wrap batches in begin_frame / end_frame for atomic commits.
+ * Color format: 0x00RRGGBB.
+ */
+typedef struct ciuki_gfx_services {
+    void (*begin_frame)(void);
+    void (*end_frame)(void);
+    void (*put_pixel)(uint32_t x, uint32_t y, uint32_t rgb);
+    void (*fill_rect)(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb);
+    void (*rect)(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb);
+    void (*line)(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t rgb);
+    void (*circle)(int32_t cx, int32_t cy, uint32_t r, uint32_t rgb);
+    void (*fill_circle)(int32_t cx, int32_t cy, uint32_t r, uint32_t rgb);
+    void (*fill_tri)(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+                     int32_t x2, int32_t y2, uint32_t rgb);
+    void (*blit)(const uint32_t *src, uint32_t sw, uint32_t sh,
+                 uint32_t stride, uint32_t dx, uint32_t dy);
+    void (*get_fb_info)(ciuki_fb_info_t *out);
+    /* M-V2.4 — BIOS INT 10h + mode switch. */
+    uint8_t (*set_mode)(uint8_t mode);       /* 0x03 text, 0x13 320x200x8 */
+    uint8_t (*get_mode)(void);
+    int     (*present)(void);                /* commit current plane -> fb */
+    /* M-V2.5 — palette (256 x 6-bit RGB triples, VGA-compatible). */
+    void (*set_palette)(uint32_t first, uint32_t count,
+                        const uint8_t *rgb_triples_6bit);
+    /* Mode 0x13 plane fast path (for DOOM-style linear fb writes). */
+    uint8_t *(*mode13_plane)(void);
+    void (*mode13_put_pixel)(uint32_t x, uint32_t y, uint8_t color_index);
+    /* INT 10h dispatcher (for DOS binaries that explicitly trap). */
+    void (*int10)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+    /* M-V2.6 — DOOM-prep palette fade + mode13 bulk fills. */
+    void (*palette_fade)(uint32_t target_rgb, uint32_t step, uint32_t total);
+    void (*mode13_fill)(uint8_t color_index);
+    void (*mode13_fill_rect)(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                             uint8_t color_index);
+    /* M-V2.7 — DOS universality: blit + column-draw + palette readback. */
+    void (*mode13_blit_indexed)(const uint8_t *src, uint32_t sw, uint32_t sh,
+                                uint32_t stride, uint32_t dx, uint32_t dy,
+                                uint8_t use_transparent,
+                                uint8_t transparent_idx);
+    void (*mode13_draw_column)(uint32_t x, uint32_t y, uint32_t h,
+                               const uint8_t *src);
+    void (*palette_get_raw)(uint32_t first, uint32_t count,
+                            uint8_t *rgb_triples_6bit_out);
+    uint8_t reserved[32];
+} ciuki_gfx_services_t;
+
 typedef struct ciuki_services {
     void     (*print)(const char *s);
     void     (*print_hex64)(unsigned long long v);
@@ -56,6 +112,7 @@ typedef struct ciuki_services {
     void     (*int20)(ciuki_dos_context_t *ctx);
     void     (*int21_4c)(ciuki_dos_context_t *ctx, uint8_t code);
     void     (*terminate)(ciuki_dos_context_t *ctx, uint8_t code);
+    const ciuki_gfx_services_t *gfx;    /* M-V2.3: 2D graphics ABI */
 } ciuki_services_t;
 
 /* COM entry point convention */
