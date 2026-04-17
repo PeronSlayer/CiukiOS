@@ -44,6 +44,14 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 - `PLANNED` filesystem/runtime configuration for assets and launch scripts
 - `PLANNED` performance + input/audio expectations for playable session
 
+### M6 - Protected Mode and DOS Extender Path
+- `PLANNED` real-mode entry point infrastructure (A20 gate, GDT/IDT baseline)
+- `PLANNED` protected-mode transition contract (CSS:IP preservation, CR0, return path)
+- `PLANNED` DOS/4GW host interface (DPMI query, real-mode callbacks, interrupt reflection)
+- `PLANNED` memory accounting for pmode allocations (no overlap with stage2)
+- Gate: `test_doom_readiness_m6.sh` PASS + no regressions to INT21h/MZ/shell
+- Ref: `docs/m6-dos-extender-requirements.md`
+
 ## Sub-Roadmaps
 
 ### SR-VIDEO-001 - First Video Driver Pass
