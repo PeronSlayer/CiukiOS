@@ -75,11 +75,11 @@ Reference: `docs/handoffs/2026-04-16-video-driver-minimal.md`
 - `DONE` runtime loader marker for `1024x768` policy result (`GOP: policy1024 ... result=PASS/FAIL`) validated by video pipeline gate
 - `DONE` dynamic/larger backbuffer policy up to `1920x1080` (`scripts/test_video_backbuf_policy.sh`)
 - `IN PROGRESS` compatibility expansion above Full HD without direct-render fallback
-- `IN PROGRESS` deterministic frame pacing / present scheduler to reduce jitter under GUI workloads
-- `IN PROGRESS` overlay text plane hardening so shell/UI text remains readable during gfx redraw cycles
-- `PLANNED` resolution-independent layout metrics for desktop widgets/panels (800x600 -> 1920x1080)
-- `PLANNED` upgraded glyph/font profile selection by resolution class
-- `PLANNED` dedicated regression gate for advanced video+UI path (`test-video-ui-v2`)
+- `DONE` deterministic frame pacing / present scheduler baseline to reduce jitter under GUI workloads
+- `DONE` overlay text plane baseline so shell/UI text remains readable during gfx redraw cycles
+- `DONE` resolution-independent layout metrics baseline for desktop widgets/panels (800x600 -> 1920x1080)
+- `DONE` font profile support by resolution class (`small`/`normal`)
+- `DONE` dedicated regression gate for advanced video+UI path (`make test-video-ui-v2`)
 
 ### SR-DOSRUN-001 - First Simple DOS Program Execution
 Reference: `docs/subroadmap-sr-dosrun-001.md`

@@ -6,20 +6,24 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.6.2`
+`CiukiOS Alpha v0.6.3`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.6.3
+1. Expanded video subsystem with overlay plane support, frame pacing counters, and deterministic present-mode telemetry.
+2. Added layout metrics v3 and adaptive font profiles (`small`/`normal`) to improve UI readability across multiple resolutions.
+3. Added video/UI regression gate `make test-video-ui-v2` (`scripts/test_video_ui_regression_v2.sh`).
+4. Added deterministic DOS smoke payload `CIUKSMK.COM` and integrated `run` outcome markers (`ok/not_found/bad_format/runtime`).
+5. Added end-to-end DOS run gate `make test-dosrun-simple` (`scripts/test_dosrun_simple_program.sh`) validating launch + return code path.
+6. Fixed DOS run selftest contract to validate runtime-native `AH=4Ch -> AH=4Dh` one-shot status semantics.
+
 ### v0.6.2
 1. Improved FAT layer toward FAT32 baseline with mount metadata marker (`type/fsinfo/next_free_hint`) in stage2 boot logs.
 2. Added hint-based free-cluster allocation strategy (`next_free_hint`) instead of fixed scan from cluster 2.
 3. Added dynamic directory-chain expansion for non-fixed directories (important for FAT32 root/subdirectory growth).
 4. Added regression gate `make test-fat32-progress` (`scripts/test_fat32_progress.sh`).
 5. Expanded main roadmap with new sub-roadmaps: `SR-DOSRUN-001` (simple DOS program milestone) and `SR-FS-002` (FAT32 capability track).
-6. Added new Copilot task packs for branch-isolated parallel work:
-   - `docs/copilot-task-claude-sr-video-001-v2.md`
-   - `docs/copilot-task-codex-sr-dosrun-001.md`
-7. Closed `SR-DOSRUN-001` baseline: deterministic smoke payload `CIUKSMK.COM`, explicit `run` outcome markers (`ok/not_found/bad_format/runtime`), launch-path `4Ch/4Dh` parity selftest, and gate `make test-dosrun-simple`.
 
 ### v0.6.1
 1. Added M6 protected-mode contract baseline selftests at startup with explicit PASS/FAIL markers.
