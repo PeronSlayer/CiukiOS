@@ -108,9 +108,11 @@ References: `docs/m6-dos-extender-requirements.md`, M6 section above
 
 - `DONE` PMODE contract startup marker + deterministic selftests
 - `DONE` PMODE contract dedicated gate (`make test-m6-pmode`)
-- `DONE` aggregate readiness orchestration gate (`scripts/test_doom_readiness_m6.sh`)
-- `IN PROGRESS` transition path implementation (real -> protected -> return baseline)
-- `PLANNED` DOS/4GW host-path compatibility harness with real extender binaries
+- `DONE` aggregate readiness orchestration gate (`scripts/test_doom_readiness_m6.sh`) including transition-v2 gate
+- `DONE` transition path baseline contract (state block + snapshots + CR0/return-path markers)
+- `DONE` DOS/4GW host-interface skeleton baseline (non-crashing deterministic markers)
+- `DONE` pmode memory accounting baseline (isolated range + overlap guard)
+- `IN PROGRESS` real DOS/4GW compatibility beyond skeleton baseline
 
 ### SR-OPENGEM-001 - OpenGEM Runtime Path
 Reference: `docs/handoffs/2026-04-16-copilot-opengem-integration.md`
