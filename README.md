@@ -6,10 +6,16 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.6.8`
+`CiukiOS Alpha v0.6.9`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.6.9
+1. Added deterministic startup-chain gate `make test-startup-chain`, covering `CONFIG.SYS`, `AUTOEXEC.BAT`, `.BAT` labels/`goto`/`if errorlevel`, env expansion and FreeDOS startup-file image wiring.
+2. Added FAT32 edge-semantics gate `make test-fat32-edge`, covering FSInfo corruption fallback, hint sanitization, alloc/free sync and fixed-root overflow guards.
+3. Strengthened GUI and OpenGEM regression coverage so layout/discoverability contracts and OpenGEM preflight/launch wiring are validated explicitly instead of relying on documentation drift.
+4. Closed the remaining roadmap items that were still marked `IN PROGRESS` for the current UI/FAT/startup baseline and synchronized roadmap docs to the validated implementation state.
+
 ### v0.6.8
 1. Added the first DOS/4GW-like smoke executable `CIUK4GW.EXE`, included in the OS image and returning deterministic code `0x47` after a minimal DPMI host query.
 2. Extended the services ABI and stage2 DOS runtime with a minimal callable `INT 2Fh AX=1687h` host-query slice for DOS extender smoke validation.

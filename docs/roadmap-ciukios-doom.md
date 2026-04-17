@@ -6,7 +6,7 @@ Build a DOS-compatible environment inside CiukiOS capable of running real DOS ex
 ## North Star (Current Cap)
 Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, timer/audio interrupts, and stable file I/O.
 
-## Current Snapshot (v0.6.3, updated 2026-04-17)
+## Current Snapshot (v0.6.9, updated 2026-04-17)
 1. Stage2 shell is active with DOS-like command surface (`dir/type/copy/ren/move/mkdir/rmdir/attrib/del/run`).
 2. COM runtime contract is active; EXE MZ path has relocation and edge-case hardening with deterministic host-side regression tests plus real EXE corpus validation gate.
 3. INT21 priority-A path includes FAT-backed file handles, file search (`4Eh/4Fh`), rename subset (`56h`), and DOS-like one-shot `AH=4Dh` semantics with matrix gating.
@@ -15,8 +15,9 @@ Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, 
 6. FreeDOS symbiotic pipeline now includes upstream sync orchestration and reproducible runtime-manifest validation for packaging reliability.
 7. M6 kickoff artifacts are now active (`docs/m6-dos-extender-requirements.md`, `make test-m6-pmode`, `scripts/test_doom_readiness_m6.sh`).
 8. FAT layer advanced toward FAT32-first behavior: mount metadata marker (`type/fsinfo/next_free_hint`), hint-based allocation, and dynamic growth for non-fixed directory chains.
-9. SR-VIDEO-001 reached v2 baseline with overlay plane, pacing telemetry, layout metrics and font profiles, covered by `make test-video-ui-v2`.
+9. SR-VIDEO-001 reached v2 baseline with overlay plane, pacing telemetry, layout metrics and font profiles, covered by `make test-video-ui-v2`, while GUI discoverability/alignment closure is now enforced by stricter `make test-gui-desktop` checks.
 10. SR-DOSRUN-001 now has deterministic COM smoke execution (`CIUKSMK.COM`) with explicit run outcome markers and dedicated gate `make test-dosrun-simple`.
+11. DOS startup-chain baseline is active: `CONFIG.SYS`, `AUTOEXEC.BAT` and `.BAT` execution (`goto`, `if errorlevel`, env expansion, `set`, `echo`) are wired in stage2 and validated by `make test-startup-chain`.
 
 ## Compatibility Definition for This Goal
 1. Execute real `.COM` and `.EXE MZ` binaries.
@@ -128,12 +129,66 @@ Exit criteria:
 1. Repeatable release profile with compatibility report.
 
 ## Immediate Execution Queue (Next 6 Technical Steps)
-1. Close remaining `INT 21h` parity gaps: strict CF/AX edge behavior and memory ownership metadata hardening.
-2. Add dedicated compatibility tests for BIOS interrupt behaviors used by real DOS tools (`10h`, `16h`, `1Ah`).
-3. Start `COMMAND.COM`-compatible startup chain baseline (`CONFIG.SYS` + `AUTOEXEC.BAT`).
-4. Implement `.BAT` parser MVP with core control flow and environment expansion subset.
-5. Define and implement protected-mode transition contract for DOS extender support (DOS/4GW path).
-6. Build first DOOM-focused compatibility harness (boot-to-launch checks before full playability).
+1. Freeze the first milestone target precisely: selected `DOOM` binary, selected WAD set, expected DOS extender (`DOS/4GW` class or variant), and the minimum success checkpoint for the first milestone attempt.
+2. Add a first real DOS-extender regression target beyond `CIUK4GW.EXE` and require it to pass farther than pure startup markers.
+3. Extend the DPMI host path from `INT 2Fh AX=1687h` into the first usable service slice required by that target extender binary.
+4. Validate protected-mode memory handoff above conventional memory (`>1MB` expectations, ownership, overlap safety, return-path integrity).
+5. Add dedicated compatibility tests for BIOS interrupt behaviors used by real DOS tools and startup paths (`10h`, `16h`, `1Ah`, `2Fh`) against broader real-binary traces.
+6. Close the most likely remaining `INT 21h` runtime gaps surfaced by installer/game startup traces instead of by generic parity guessing.
+
+## Remaining Steps To The Milestone
+
+### A. Freeze the target and its constraints
+1. Choose the exact first binary to target (`DOOM.EXE` vs `DOOM2.EXE`, exact package/build, exact DOS extender expectations).
+2. Freeze the minimal asset set needed for milestone validation (`DOOM.WAD` or alternative, config defaults, optional launch BAT).
+3. Define the first success criterion in order: `binary discovered` -> `extender init passes` -> `video init passes` -> `first frame` -> `main menu` -> `level load`.
+
+### B. Finish the DOS extender path
+1. Keep the current `CIUK4GW.EXE` smoke as the shallowest contract test.
+2. Add a second-stage DOS extender regression binary that exercises more than host detection.
+3. Implement the minimum `DPMI` host behavior required by that binary, not a speculative large surface.
+4. Validate real-mode callback and interrupt-reflection behavior against what the chosen extender actually uses.
+5. Harden protected-mode memory allocation/ownership rules for the extender load path.
+6. Require a regression state stronger than startup markers: the binary must reach an interactive or near-interactive checkpoint.
+
+### C. Close BIOS and DOS runtime gaps used by DOOM startup
+1. Capture or infer the startup interrupt/API footprint of the chosen target binary.
+2. Expand `INT 10h` compatibility from current baseline to the exact text/video operations used before graphics handoff.
+3. Expand `INT 16h` semantics for gameplay-relevant key handling and extended scan-code behavior.
+4. Expand `INT 1Ah` timer behavior where startup/runtime depends on BIOS tick semantics.
+5. Extend `INT 2Fh` beyond the current minimal smoke path where the target DOS extender/runtime expects it.
+6. Fill only the remaining `INT 21h` gaps actually exercised by the target boot/install/runtime path.
+
+### D. Add the graphics path required by DOOM
+1. Implement `VGA mode 13h` compatibility as the first graphics milestone.
+2. Validate framebuffer layout, palette handling and page semantics required by the target binary.
+3. Add deterministic tests that prove mode switch, draw path and return path work without breaking existing GUI/video gates.
+4. Add a `VBE` subset only if the selected binary/runtime demonstrably requires it.
+5. Define the first graphics success checkpoint as "DOOM draws a real frame/menu" rather than "video API returns success".
+
+### E. Package the game path end-to-end
+1. Define deterministic image layout for executable, WAD files, config files and launch scripts.
+2. Add launch-path rules so the shell/runtime can discover the game and its assets predictably.
+3. Add a boot-to-DOOM harness that checks each stage of startup and classifies the failure point precisely.
+4. Document the required files, naming and launch command so the milestone can be reproduced.
+
+### F. Reach playability
+1. Tune keyboard path for gameplay latency, repeat behavior and extended keys.
+2. Add the first audio-compatible baseline, most likely a Sound Blaster/QEMU-oriented path.
+3. Validate that input and audio do not regress the already-stable DOS/video runtime.
+4. Require main menu reachability, in-level reachability and a non-trivial gameplay smoke test.
+
+### G. Close the milestone formally
+1. Add milestone gates for `main menu reachable`, `level entered`, and `10-minute gameplay smoke`.
+2. Publish a playability checklist and a known-gap list.
+3. Only then mark the DOOM milestone as complete.
+
+## Critical Path
+1. Freeze the target binary/runtime pair.
+2. Finish the first usable `DPMI` slice and validate it with a non-trivial extender binary.
+3. Add the exact graphics path required by that target (`mode 13h` first).
+4. Build the boot-to-DOOM harness.
+5. Finish input/audio/playability gates.
 
 ## Test Strategy
 1. Unit-style runtime tests for APIs and flags.

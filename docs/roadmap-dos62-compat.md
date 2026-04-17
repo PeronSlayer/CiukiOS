@@ -9,7 +9,7 @@ For FreeDOS symbiotic integration approach, see:
 ## Goal
 Recreate DOS 6.2 behavior with high compatibility at binary level (`.COM`, `.EXE MZ`) and API level (`INT 21h`), built from scratch.
 
-## Current Snapshot (v0.6.3, updated 2026-04-17)
+## Current Snapshot (v0.6.9, updated 2026-04-17)
 1. Stage2 baseline is stable with automated boot/fallback/FAT compatibility checks.
 2. DOS-like shell commands for core file workflow are available.
 3. COM execution path is active with PSP and termination lifecycle wiring.
@@ -17,9 +17,10 @@ Recreate DOS 6.2 behavior with high compatibility at binary level (`.COM`, `.EXE
 5. INT21 priority-A subset includes file search and rename coverage (`4Eh/4Fh/56h`) and one-shot `AH=4Dh` status semantics.
 6. Phase 2 low-level core exposes deterministic startup selftests for timer tick progress and keyboard decode/capture.
 7. M6 planning and first execution gates are active (`docs/m6-dos-extender-requirements.md`, `make test-m6-pmode`, `scripts/test_doom_readiness_m6.sh`).
-8. FAT path moved closer to FAT32 baseline with mount metadata visibility, next-free hint allocation strategy, and dynamic directory-chain extension for non-fixed directories.
+8. FAT path now includes dedicated FAT32 edge hardening coverage (`make test-fat32-edge`) for FSInfo corruption fallback, hint sanitization and fixed-root guard semantics.
 9. Simple DOS execution sub-milestone now has deterministic COM smoke validation (`CIUKSMK.COM`) plus non-interactive gate `make test-dosrun-simple`.
-10. Video/runtime UI baseline advanced with overlay+pacing+layout metrics hardening, helping shell readability during graphics updates.
+10. Video/runtime UI baseline advanced with overlay+pacing+layout metrics hardening, and GUI closure is now enforced by stricter desktop/discoverability regression checks.
+11. DOS startup-chain baseline is active: `CONFIG.SYS`, `AUTOEXEC.BAT` and `.BAT` execution wiring are implemented and validated by `make test-startup-chain`.
 
 ## Architecture Choice
 1. Keep `UEFI x64` as modern bootstrap only.
@@ -131,14 +132,12 @@ Exit criteria:
 - API tests pass for priority-A subset.
 
 Status:
-- In progress (Priority-A baseline complete, hardening continues).
+- Completed for the current roadmap scope.
 
 Completion evidence:
 - Priority-A matrix gate exists and is green via `make check-int21-matrix`.
 - Baseline, FAT-handle, and findfirst/findnext selftests are wired in startup flow.
-
-Open work for closure:
-- Deep DOS parity hardening (error-flag corner cases, memory ownership metadata, and broader compatibility traces).
+- Baseline selftests already cover strict CF/AX behavior, one-shot `AH=4Dh` lifecycle semantics, and PSP ownership checks for `AH=49h`/`AH=4Ah`.
 
 ### Phase 6 - `COMMAND.COM`
 Outputs:
@@ -158,13 +157,11 @@ Exit criteria:
 - Real batch script executes.
 
 Status:
-- In progress (MZ advanced, batch pending).
+- Completed for the current roadmap scope.
 
 Completion evidence:
 - MZ parser/loader now includes relocation and boundary hardening with deterministic regression coverage.
-
-Open work for closure:
-- Real `.BAT` parser/control-flow pipeline and env expansion behavior.
+- Stage2 batch runtime supports labels, `goto`, `if errorlevel`, env expansion, `set`, `echo`, recursion guard and `run *.BAT` dispatch.
 
 ### Phase 8 - DOS Config
 Outputs:
@@ -173,6 +170,13 @@ Outputs:
 
 Exit criteria:
 - Automatic startup sequence works.
+
+Status:
+- Completed for the current roadmap scope.
+
+Completion evidence:
+- Startup chain seeds `COMSPEC`/`PATH`, parses `CONFIG.SYS`, runs `AUTOEXEC.BAT`, and FreeDOS runtime composition maps startup files into the DOS root image.
+- Deterministic validation exists via `make test-startup-chain`.
 
 ### Phase 9 - Advanced Memory
 Outputs:

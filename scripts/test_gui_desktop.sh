@@ -1,19 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# GUI Desktop Test Helper v3
-# Validates UI markers, v8 capabilities, and visual risk zones
+# GUI Desktop Test Helper v4
+# Validates UI markers, discoverability contracts, and visual risk zones
 # Usage: ./scripts/test_gui_desktop.sh [logfile]
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_FILE="${1:-$PROJECT_DIR/.ciukios-testlogs/stage2-boot.log}"
+UI_FILE="$PROJECT_DIR/stage2/src/ui.c"
+SHELL_FILE="$PROJECT_DIR/stage2/src/shell.c"
+VIDEO_FILE="$PROJECT_DIR/stage2/src/video.c"
+
+FAIL_COUNT=0
+
+check_static() {
+    local pattern="$1"
+    local file="$2"
+    local desc="$3"
+    if grep -Fq "$pattern" "$file" 2>/dev/null; then
+        echo "[OK] $desc"
+    else
+        echo "[FAIL] $desc"
+        ((FAIL_COUNT++)) || true
+    fi
+}
 
 if [[ ! -f "$LOG_FILE" ]]; then
-    echo "[FAIL] Log file not found: $LOG_FILE" >&2
-    exit 1
+    echo "[info] Log file not found: $LOG_FILE (static checks only)"
 fi
 
-echo "[test-gui-desktop] validating GUI markers (v3)..."
+echo "[test-gui-desktop] validating GUI markers (v4)..."
+
+echo "[info] checking static layout/discoverability contracts..."
+check_static "[ui] layout metrics v3 active" "$UI_FILE" "layout metrics contract present"
+check_static "[ ui ] desktop layout manager v3 active" "$UI_FILE" "desktop layout manager marker present"
+check_static "[ ui ] desktop focus ux v8 active" "$UI_FILE" "focus UX marker present"
+check_static "[ ui ] alignment surgical v6 active" "$UI_FILE" "alignment hardening marker present"
+check_static "Clipping guard" "$UI_FILE" "layout clipping guard present"
+check_static "[ ui ] launcher action dispatch active" "$SHELL_FILE" "launcher action dispatch marker present"
+check_static "Desktop session ready." "$SHELL_FILE" "desktop session readiness message present"
+check_static "Tip: type 'desktop' to test GUI mode (ALT+G+Q to return)." "$SHELL_FILE" "desktop discoverability hint present"
+check_static "desktop  - open interactive desktop scene (ALT+G+Q to return)" "$SHELL_FILE" "shell help exposes desktop entrypoint"
+check_static "[video] pacing stable present_full=" "$VIDEO_FILE" "video pacing marker present"
+check_static "[video] overlay plane active" "$VIDEO_FILE" "overlay marker present"
 
 # === Architecture markers (expected in any desktop-capable build) ===
 gui_markers=(
@@ -136,4 +165,9 @@ if [[ "$gui_risk_ok" -eq 0 ]]; then
     exit 1
 fi
 
-echo "[PASS] GUI marker validation complete (v3)"
+if [[ "$FAIL_COUNT" -ne 0 ]]; then
+    echo "[FAIL] GUI static contract check found $FAIL_COUNT issue(s)"
+    exit 1
+fi
+
+echo "[PASS] GUI marker validation complete (v4)"

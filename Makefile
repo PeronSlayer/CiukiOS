@@ -208,6 +208,9 @@ test-fat-compat:
 test-fat32-progress:
 	bash ./scripts/test_fat32_progress.sh
 
+test-fat32-edge:
+	bash ./scripts/test_fat32_edge_semantics.sh
+
 test-int21:
 	./scripts/test_int21_priority_a.sh
 
@@ -228,6 +231,9 @@ check-int21-matrix:
 
 test-gui-desktop:
 	./scripts/test_gui_desktop.sh
+
+test-startup-chain:
+	bash ./scripts/test_startup_chain.sh
 
 test-video-ui-v2:
 	bash ./scripts/test_video_ui_regression_v2.sh

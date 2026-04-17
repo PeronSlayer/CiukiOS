@@ -37,13 +37,15 @@ It complements detailed docs in `docs/` and handoffs in `docs/handoffs/`.
 
 ### Phase 4 - UX and Desktop Layer
 - `DONE` desktop scene baseline and interaction shell
-- `IN PROGRESS` layout/alignment/readability hardening
-- `IN PROGRESS` render path performance and flicker reduction
+- `DONE` layout/alignment/readability hardening with resolution-aware layout metrics, clipping guards, font profiles and stricter GUI regression checks
+- `DONE` render path performance and flicker reduction with overlay plane, dirty-present path and frame-pacing telemetry
 - `PLANNED` windowing and app-launch UX that supports DOS app workflows
 
 ### Phase 5 - Milestone Target: Run DOOM
-- `PLANNED` executable/runtime compatibility needed by DOS DOOM
-- `PLANNED` filesystem/runtime configuration for assets and launch scripts
+- `PLANNED` DOS extender runtime closure beyond M6 smoke skeleton (`DPMI` host services, protected-mode memory handoff, non-trivial extender validation)
+- `PLANNED` BIOS/game runtime compatibility layer needed by the selected DOOM binary (`INT 10h`, `INT 16h`, `INT 1Ah`, `INT 2Fh`, remaining `INT 21h` subset)
+- `PLANNED` filesystem/runtime configuration for assets, startup scripts and reproducible boot-to-game flow
+- `PLANNED` graphics compatibility for the DOOM path (`VGA mode 13h` first, `VBE` subset only if required by chosen binary)
 - `PLANNED` performance + input/audio expectations for playable session
 
 ### M6 - Protected Mode and DOS Extender Path
@@ -105,7 +107,7 @@ Reference: `stage2/src/fat.c`
 - `DONE` dynamic directory growth for non-fixed directories (including FAT32 root directory chain extension)
 - `DONE` FSInfo `free cluster count` synchronization on allocation/free path (when FSInfo is valid and count is known)
 - `DONE` new gate `test-fat32-progress` to validate FAT mount/FAT32 metadata markers
-- `IN PROGRESS` parity hardening for FAT32 edge semantics (broader stress scenarios and corruption fallback behavior)
+- `DONE` parity hardening for FAT32 edge semantics (FSInfo corruption fallback, hint sanitization, alloc/free sync and fixed-root guards) with `make test-fat32-edge`
 
 ### SR-M6-001 - Protected Mode / DOS Extender Readiness
 References: `docs/m6-dos-extender-requirements.md`, M6 section above
@@ -126,19 +128,46 @@ Reference: `docs/handoffs/2026-04-16-copilot-opengem-integration.md`
 - `DONE` image composition gate (`CIUKIOS_INCLUDE_OPENGEM`)
 - `DONE` shell command `opengem` preflight path
 - `DONE` smoke test and image probe scripts
-- `IN PROGRESS` stricter behavioral tests in interactive flow
+- `DONE` stricter behavioral tests for preflight/launch wiring and image composition via `make test-opengem`
 
 ### SR-GUI-001 - Desktop Usability and Stability
 References: `docs/handoffs/2026-04-16-copilot-gui-v8-heavy-cycle.md`, related GUI handoffs
 
 - `DONE` desktop scene + launcher baseline
 - `DONE` regression marker harness (non-interactive)
-- `IN PROGRESS` alignment consistency across resolutions
-- `IN PROGRESS` discoverability and interaction clarity
+- `DONE` alignment consistency across resolutions with layout metrics, clipping guards and stricter GUI regression checks
+- `DONE` discoverability and interaction clarity with desktop help/hints, launcher dispatch markers and desktop-session readiness messaging
 - `BACKLOG` richer desktop app model
+
+### SR-DOOM-001 - First DOOM Milestone Path
+Reference: `docs/roadmap-ciukios-doom.md`
+
+- `PLANNED` select and freeze the first target binary/runtime pair (`DOOM.EXE` or `DOOM2.EXE`, exact DOS extender expectation, required assets, expected video path)
+- `PLANNED` extend M6 from host-query smoke to first usable `DPMI` service slice sufficient for a non-trivial DOS extender binary to initialize
+- `PLANNED` validate protected-mode memory contracts for the chosen extender (`>1MB` allocation model, ownership, overlap safety, return path)
+- `PLANNED` add a non-trivial DOS extender regression target beyond smoke markers and require it to reach interactive or near-interactive state
+- `PLANNED` broaden BIOS/runtime compatibility tests against real traces used by installer/game startup (`INT 10h`, `16h`, `1Ah`, `2Fh`, remaining `INT 21h` subset)
+- `PLANNED` add `VGA mode 13h` compatibility and framebuffer semantics for the first DOOM video path
+- `PLANNED` add `VBE` subset only if the selected binary requires it
+- `PLANNED` package executable, WAD/config files and launch scripts into the image with deterministic discovery rules
+- `PLANNED` add a dedicated boot-to-DOOM harness validating executable discovery, asset discovery, first frame or menu reachability, and failure taxonomy
+- `PLANNED` tune keyboard path for gameplay expectations (latency, repeat, scan-code behavior, pause/resume stability)
+- `PLANNED` add first audio baseline suitable for DOOM runtime expectations (likely Sound Blaster/QEMU-compatible path)
+- `PLANNED` add milestone validation gates: main menu reachable, level load reachable, 10-minute gameplay smoke, documented known gaps
+
+## Remaining Path To Milestone
+1. Freeze the exact first milestone target: executable, required WAD set, DOS extender flavor, expected video mode, and minimum success condition (`first frame`, `main menu`, or `level load`).
+2. Move M6 from skeleton to usable runtime by implementing the first `DPMI` service slice beyond `INT 2Fh AX=1687h` and validating it with a non-trivial extender binary.
+3. Broaden protected-mode memory handling so the chosen extender can allocate and use high memory safely without overlapping stage2/runtime state.
+4. Expand BIOS/runtime compatibility coverage used by real startup paths, especially `INT 10h`, `INT 16h`, `INT 1Ah`, `INT 2Fh`, and the remaining `INT 21h` functions exposed during installer/game boot.
+5. Decide whether the first target uses pure `VGA mode 13h` or needs a `VBE` path, then implement the minimum graphics compatibility required to reach a real rendered frame.
+6. Package the game executable, WAD/config files and launch scripts into the FAT image with deterministic lookup rules and regression checks.
+7. Build a dedicated DOOM harness that classifies failure stages (`not found`, extender init fail, video init fail, asset fail, menu reached, level entered).
+8. Tune keyboard semantics for gameplay and add the first audio-compatible baseline so the milestone is not just "boots" but "playable".
+9. Add milestone gates for `main menu reachable`, `level load reachable`, and `10-minute gameplay smoke` before calling the milestone closed.
 
 ## Current Execution Focus
 1. Advance milestone path toward first DOS DOOM boot and run.
 2. Expand protected-mode and DOS-extender execution path beyond M6 baseline skeleton (real DOS/4GW compatibility path).
-3. Evolve video subsystem beyond Full HD baseline while preserving current deterministic gates.
-4. Stabilize FAT32 behavior as default filesystem baseline for upcoming DOS runtime steps.
+3. Build the first real DOOM-path harness around the selected executable/runtime pair instead of isolated smoke binaries.
+4. Add the graphics, input and audio compatibility still missing for a playable milestone.
