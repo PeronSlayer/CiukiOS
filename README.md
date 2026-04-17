@@ -6,7 +6,7 @@ Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
 ## Current Version
-`CiukiOS Alpha v0.8.4`
+`CiukiOS Alpha v0.8.5`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Index
@@ -17,6 +17,13 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 5. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Changelog (Latest)
+### v0.8.5
+1. Added signed/clipped mode 0x13 patch placement helpers: `gfx_mode13_blit_indexed_clip(...)` for opaque/masked indexed blits with automatic off-screen crop and `gfx_mode13_blit_scaled_clip(...)` for stable nearest-neighbor scaled patches with signed destination coordinates.
+2. Added `gfx_mode13_draw_column_sampled_masked(...)`, a DOOM-leaning sampled masked column primitive that uses 16.16 source stepping and clips signed destination Y.
+3. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed_clip`, `mode13_blit_scaled_clip`, and `mode13_draw_column_sampled_masked`, preserving append-only ABI growth.
+4. Updated `GFXDOOM.COM` to validate real patch placement cases: one clipped top-left scaled patch, one centered patch, and stretched sampled masked columns across the lower half of the screen.
+5. Bumped baseline version to `CiukiOS Alpha v0.8.5`.
+
 ### v0.8.4
 1. Added the next DOOM-facing mode 0x13 helpers: `gfx_mode13_blit_scaled(...)` for nearest-neighbor scaled indexed blits (HUD/title patch style), `gfx_mode13_draw_column_masked(...)` for transparent single-column draws, and `gfx_frame_counter()` for present-count pacing / instrumentation.
 2. Extended `ciuki_gfx_services_t` with `mode13_blit_scaled`, `mode13_draw_column_masked`, and `frame_counter`, keeping the ABI append-only before `reserved[32]`.

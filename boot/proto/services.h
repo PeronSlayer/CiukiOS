@@ -95,6 +95,11 @@ typedef struct ciuki_gfx_services {
                                 uint32_t stride, uint32_t dx, uint32_t dy,
                                 uint8_t use_transparent,
                                 uint8_t transparent_idx);
+    void (*mode13_blit_indexed_clip)(const uint8_t *src, uint32_t sw,
+                                     uint32_t sh, uint32_t stride,
+                                     int32_t dx, int32_t dy,
+                                     uint8_t use_transparent,
+                                     uint8_t transparent_idx);
     void (*mode13_draw_column)(uint32_t x, uint32_t y, uint32_t h,
                                const uint8_t *src);
     void (*palette_get_raw)(uint32_t first, uint32_t count,
@@ -106,9 +111,22 @@ typedef struct ciuki_gfx_services {
                                uint32_t dw, uint32_t dh,
                                uint8_t use_transparent,
                                uint8_t transparent_idx);
+    void (*mode13_blit_scaled_clip)(const uint8_t *src, uint32_t sw,
+                                    uint32_t sh, uint32_t stride,
+                                    int32_t dx, int32_t dy,
+                                    uint32_t dw, uint32_t dh,
+                                    uint8_t use_transparent,
+                                    uint8_t transparent_idx);
     void (*mode13_draw_column_masked)(uint32_t x, uint32_t y, uint32_t h,
                                       const uint8_t *src,
                                       uint8_t transparent_idx);
+    void (*mode13_draw_column_sampled_masked)(int32_t x, int32_t y,
+                                              uint32_t h,
+                                              const uint8_t *src,
+                                              uint32_t src_h,
+                                              uint32_t frac_16_16,
+                                              uint32_t frac_step_16_16,
+                                              uint8_t transparent_idx);
     uint32_t (*frame_counter)(void);
     uint8_t reserved[32];
 } ciuki_gfx_services_t;

@@ -61,6 +61,12 @@ void gfx_mode13_blit_indexed(const u8 *src, u32 sw, u32 sh, u32 stride,
                              u32 dx, u32 dy,
                              u8 use_transparent, u8 transparent_idx);
 
+/* Signed/clipped indexed blit for real patch/sprite placement: destination
+ * may be partially off-screen and source cropping is derived automatically. */
+void gfx_mode13_blit_indexed_clip(const u8 *src, u32 sw, u32 sh, u32 stride,
+                                  i32 dx, i32 dy,
+                                  u8 use_transparent, u8 transparent_idx);
+
 /* Single-column draw (R_DrawColumn style). Writes `h` indices starting at
  * (x, y), taking one byte per row from `src` (stride = 1 default). Clips. */
 void gfx_mode13_draw_column(u32 x, u32 y, u32 h, const u8 *src);
@@ -75,10 +81,25 @@ void gfx_mode13_blit_scaled(const u8 *src, u32 sw, u32 sh, u32 stride,
                             u32 dx, u32 dy, u32 dw, u32 dh,
                             u8 use_transparent, u8 transparent_idx);
 
+/* Signed/clipped variant of the scaled blit. Allows partially off-screen HUD,
+ * title, or sprite patches while keeping nearest-neighbor sampling stable. */
+void gfx_mode13_blit_scaled_clip(const u8 *src, u32 sw, u32 sh, u32 stride,
+                                 i32 dx, i32 dy, u32 dw, u32 dh,
+                                 u8 use_transparent, u8 transparent_idx);
+
 /* Masked single-column draw: same as `gfx_mode13_draw_column` but skips
  * pixels equal to `transparent_idx` (DOOM R_DrawMaskedColumn path). */
 void gfx_mode13_draw_column_masked(u32 x, u32 y, u32 h, const u8 *src,
                                    u8 transparent_idx);
+
+/* Sampled masked column draw: destination height is independent from source
+ * height and texels are fetched from src[(frac >> 16)] with frac advancing by
+ * frac_step_16_16 per output pixel. Clips signed destination Y. */
+void gfx_mode13_draw_column_sampled_masked(i32 x, i32 y, u32 h,
+                                           const u8 *src, u32 src_h,
+                                           u32 frac_16_16,
+                                           u32 frac_step_16_16,
+                                           u8 transparent_idx);
 
 /* Return the frame counter (monotonically incremented on each successful
  * `gfx_mode_present`). Useful for pacing + FPS measurement. */

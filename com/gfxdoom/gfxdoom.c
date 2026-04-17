@@ -1,13 +1,13 @@
 /*
- * gfxdoom.COM — CiukiOS scaled-blit + masked-column demo (SR-VIDEO-002 v0.8.4).
+ * gfxdoom.COM — CiukiOS clipped patch + sampled column demo (SR-VIDEO-002).
  *
  * Validates the DOS-universality additions:
- *   - gfx->mode13_blit_scaled  (nearest-neighbor HUD/title-style upscale)
- *   - gfx->mode13_draw_column_masked (DOOM-style masked column, chroma-key)
+ *   - gfx->mode13_blit_scaled_clip      (signed/clipped patch placement)
+ *   - gfx->mode13_draw_column_sampled_masked (sampled masked columns)
  *   - gfx->frame_counter       (monotonic counter bumped by present)
  *
- * Scene: a 16x16 checkerboard source is scaled to 160x100 centered, then
- * 40 masked columns are drawn on top with alternating transparent holes.
+ * Scene: one off-screen scaled patch clipped at the top-left, one centered
+ * patch, then sampled masked columns across the bottom half.
  * Emits [gfxdoom] OK + frame count on serial. Exits via INT 21h AH=4Ch.
  */
 
@@ -57,7 +57,8 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     char num[16];
 
     if (!gfx || !gfx->set_mode || !gfx->mode13_fill ||
-        !gfx->mode13_blit_scaled || !gfx->mode13_draw_column_masked ||
+        !gfx->mode13_blit_scaled_clip ||
+        !gfx->mode13_draw_column_sampled_masked ||
         !gfx->frame_counter || !gfx->present) {
         svc->print("[gfxdoom] FAIL: gfx services incomplete\n");
         goto exit;
@@ -76,15 +77,23 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     gfx->mode13_fill(16U); /* dark blue-ish */
     gfx->present();
 
-    /* Scaled blit: 16x16 -> 160x100 centered at (80, 50). */
-    gfx->mode13_blit_scaled(g_src, 16U, 16U, 16U,
-                            80U, 50U, 160U, 100U, 0U, 0U);
+    /* Off-screen patch: validates signed clipping at top-left. */
+    gfx->mode13_blit_scaled_clip(g_src, 16U, 16U, 16U,
+                                 -24, -12, 112U, 84U, 0U, 0U);
+    /* Center patch: stable reference. */
+    gfx->mode13_blit_scaled_clip(g_src, 16U, 16U, 16U,
+                                 104, 40, 112U, 112U, 0U, 0U);
     gfx->present();
 
-    /* 40 masked columns at y=130, h=64, x stride of 8 starting at x=0.
-     * Transparent index 0 means background shows through. */
-    for (unsigned i = 0; i < 40U; i++) {
-        gfx->mode13_draw_column_masked(i * 8U, 130U, 64U, g_col, 0U);
+    /* Sampled columns: stretch a 64-row source to 96 rows, including a few
+     * partially off-screen left columns to validate signed X clipping. */
+    for (unsigned i = 0; i < 42U; i++) {
+        int x = -8 + (int)i * 8;
+        gfx->mode13_draw_column_sampled_masked(x, 104, 96U,
+                                               g_col, 64U,
+                                               0U,
+                                               (64U << 16) / 96U,
+                                               0U);
     }
     gfx->present();
 

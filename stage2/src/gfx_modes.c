@@ -181,31 +181,55 @@ void gfx_palette_fade(u32 target_rgb, u32 step, u32 total) {
 }
 
 /* 8-bit indexed bitmap blit onto mode 0x13 plane. */
-void gfx_mode13_blit_indexed(const u8 *src, u32 sw, u32 sh, u32 stride,
-                             u32 dx, u32 dy,
-                             u8 use_transparent, u8 transparent_idx) {
+void gfx_mode13_blit_indexed_clip(const u8 *src, u32 sw, u32 sh, u32 stride,
+                                  i32 dx, i32 dy,
+                                  u8 use_transparent, u8 transparent_idx) {
     if (!src || sw == 0U || sh == 0U) return;
-    if (dx >= GFX_MODE13_W || dy >= GFX_MODE13_H) return;
     if (stride == 0U) stride = sw;
 
-    u32 x1 = dx + sw; if (x1 > GFX_MODE13_W) x1 = GFX_MODE13_W;
-    u32 y1 = dy + sh; if (y1 > GFX_MODE13_H) y1 = GFX_MODE13_H;
-    u32 copy_w = x1 - dx;
-    u32 copy_h = y1 - dy;
+    i32 src_x0 = 0;
+    i32 src_y0 = 0;
+    i32 dst_x0 = dx;
+    i32 dst_y0 = dy;
 
-    for (u32 yy = 0; yy < copy_h; yy++) {
-        const u8 *s = src + yy * stride;
-        u8       *d = &g_plane13[(dy + yy) * GFX_MODE13_W + dx];
+    if (dst_x0 < 0) {
+        src_x0 = -dst_x0;
+        dst_x0 = 0;
+    }
+    if (dst_y0 < 0) {
+        src_y0 = -dst_y0;
+        dst_y0 = 0;
+    }
+
+    i32 copy_w = (i32)sw - src_x0;
+    i32 copy_h = (i32)sh - src_y0;
+    if (copy_w <= 0 || copy_h <= 0) return;
+    if (dst_x0 >= (i32)GFX_MODE13_W || dst_y0 >= (i32)GFX_MODE13_H) return;
+    if (dst_x0 + copy_w > (i32)GFX_MODE13_W) copy_w = (i32)GFX_MODE13_W - dst_x0;
+    if (dst_y0 + copy_h > (i32)GFX_MODE13_H) copy_h = (i32)GFX_MODE13_H - dst_y0;
+    if (copy_w <= 0 || copy_h <= 0) return;
+
+    for (i32 yy = 0; yy < copy_h; yy++) {
+        const u8 *s = src + (u32)(src_y0 + yy) * stride + (u32)src_x0;
+        u8 *d = &g_plane13[(u32)(dst_y0 + yy) * GFX_MODE13_W + (u32)dst_x0];
         if (use_transparent) {
-            for (u32 xx = 0; xx < copy_w; xx++) {
+            for (i32 xx = 0; xx < copy_w; xx++) {
                 u8 px = s[xx];
                 if (px != transparent_idx) d[xx] = px;
             }
         } else {
-            for (u32 xx = 0; xx < copy_w; xx++) d[xx] = s[xx];
+            for (i32 xx = 0; xx < copy_w; xx++) d[xx] = s[xx];
         }
     }
     g_plane_dirty = 1;
+}
+
+void gfx_mode13_blit_indexed(const u8 *src, u32 sw, u32 sh, u32 stride,
+                             u32 dx, u32 dy,
+                             u8 use_transparent, u8 transparent_idx) {
+    gfx_mode13_blit_indexed_clip(src, sw, sh, stride,
+                                 (i32)dx, (i32)dy,
+                                 use_transparent, transparent_idx);
 }
 
 /* Single-column draw (DOOM R_DrawColumn fast path). */
@@ -240,22 +264,28 @@ void gfx_palette_get_raw(u32 first, u32 count, u8 *out) {
 
 /* Nearest-neighbor scaled blit. Source walks dw×dh destination pixels;
  * each output pixel samples src[(sy*stride) + sx] with integer mapping. */
-void gfx_mode13_blit_scaled(const u8 *src, u32 sw, u32 sh, u32 stride,
-                            u32 dx, u32 dy, u32 dw, u32 dh,
-                            u8 use_transparent, u8 transparent_idx) {
+void gfx_mode13_blit_scaled_clip(const u8 *src, u32 sw, u32 sh, u32 stride,
+                                 i32 dx, i32 dy, u32 dw, u32 dh,
+                                 u8 use_transparent, u8 transparent_idx) {
     if (!src || sw == 0U || sh == 0U || dw == 0U || dh == 0U) return;
-    if (dx >= GFX_MODE13_W || dy >= GFX_MODE13_H) return;
     if (stride == 0U) stride = sw;
 
-    u32 x1 = dx + dw; if (x1 > GFX_MODE13_W) x1 = GFX_MODE13_W;
-    u32 y1 = dy + dh; if (y1 > GFX_MODE13_H) y1 = GFX_MODE13_H;
+    i32 x0 = dx;
+    i32 y0 = dy;
+    i32 x1 = dx + (i32)dw;
+    i32 y1 = dy + (i32)dh;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (i32)GFX_MODE13_W) x1 = (i32)GFX_MODE13_W;
+    if (y1 > (i32)GFX_MODE13_H) y1 = (i32)GFX_MODE13_H;
+    if (x0 >= x1 || y0 >= y1) return;
 
-    for (u32 oy = dy; oy < y1; oy++) {
-        u32 sy = ((oy - dy) * sh) / dh;
+    for (i32 oy = y0; oy < y1; oy++) {
+        u32 sy = (u32)(oy - dy) * sh / dh;
         const u8 *srow = src + sy * stride;
-        u8 *d = &g_plane13[oy * GFX_MODE13_W + dx];
-        for (u32 ox = dx; ox < x1; ox++) {
-            u32 sx = ((ox - dx) * sw) / dw;
+        u8 *d = &g_plane13[(u32)oy * GFX_MODE13_W + (u32)x0];
+        for (i32 ox = x0; ox < x1; ox++) {
+            u32 sx = (u32)(ox - dx) * sw / dw;
             u8 px = srow[sx];
             if (use_transparent && px == transparent_idx) {
                 d++;
@@ -267,17 +297,47 @@ void gfx_mode13_blit_scaled(const u8 *src, u32 sw, u32 sh, u32 stride,
     g_plane_dirty = 1;
 }
 
+void gfx_mode13_blit_scaled(const u8 *src, u32 sw, u32 sh, u32 stride,
+                            u32 dx, u32 dy, u32 dw, u32 dh,
+                            u8 use_transparent, u8 transparent_idx) {
+    gfx_mode13_blit_scaled_clip(src, sw, sh, stride,
+                                (i32)dx, (i32)dy, dw, dh,
+                                use_transparent, transparent_idx);
+}
+
 /* Masked column draw — skips `transparent_idx` pixels. */
 void gfx_mode13_draw_column_masked(u32 x, u32 y, u32 h, const u8 *src,
                                    u8 transparent_idx) {
-    if (!src || h == 0U) return;
-    if (x >= GFX_MODE13_W || y >= GFX_MODE13_H) return;
-    u32 y1 = y + h; if (y1 > GFX_MODE13_H) y1 = GFX_MODE13_H;
-    u32 n = y1 - y;
-    u8 *d = &g_plane13[y * GFX_MODE13_W + x];
-    for (u32 i = 0; i < n; i++) {
-        u8 px = src[i];
+    gfx_mode13_draw_column_sampled_masked((i32)x, (i32)y, h, src, h,
+                                          0U, 1U << 16, transparent_idx);
+}
+
+void gfx_mode13_draw_column_sampled_masked(i32 x, i32 y, u32 h,
+                                           const u8 *src, u32 src_h,
+                                           u32 frac_16_16,
+                                           u32 frac_step_16_16,
+                                           u8 transparent_idx) {
+    if (!src || h == 0U || src_h == 0U) return;
+    if (x < 0 || x >= (i32)GFX_MODE13_W) return;
+
+    i32 dst_y0 = y;
+    i32 dst_y1 = y + (i32)h;
+    u32 skip = 0U;
+    if (dst_y0 < 0) {
+        skip = (u32)(-dst_y0);
+        dst_y0 = 0;
+    }
+    if (dst_y1 > (i32)GFX_MODE13_H) dst_y1 = (i32)GFX_MODE13_H;
+    if (dst_y0 >= dst_y1) return;
+
+    u32 frac = frac_16_16 + skip * frac_step_16_16;
+    u8 *d = &g_plane13[(u32)dst_y0 * GFX_MODE13_W + (u32)x];
+    for (i32 oy = dst_y0; oy < dst_y1; oy++) {
+        u32 src_y = frac >> 16;
+        if (src_y >= src_h) src_y = src_h - 1U;
+        u8 px = src[src_y];
         if (px != transparent_idx) *d = px;
+        frac += frac_step_16_16;
         d += GFX_MODE13_W;
     }
     g_plane_dirty = 1;

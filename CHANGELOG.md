@@ -2,6 +2,13 @@
 
 All notable changes to CiukiOS are tracked here.
 
+## v0.8.5
+1. Added `gfx_mode13_blit_indexed_clip(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` for signed/clipped indexed patch blits and `gfx_mode13_blit_scaled_clip(...)` for signed/clipped nearest-neighbor scaled blits.
+2. Added `gfx_mode13_draw_column_sampled_masked(x, y, h, src, src_h, frac_16_16, frac_step_16_16, transparent_idx)` for DOOM-style sampled masked columns with 16.16 stepping.
+3. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed_clip`, `mode13_blit_scaled_clip`, and `mode13_draw_column_sampled_masked`.
+4. Updated `GFXDOOM.COM` to validate clipped patch placement and sampled stretched columns, making the demo materially closer to real sprite/patch rendering paths.
+5. Bumped baseline to `CiukiOS Alpha v0.8.5`.
+
 ## v0.8.4
 1. Added `gfx_mode13_blit_scaled(src, sw, sh, stride, dx, dy, dw, dh, use_transparent, transparent_idx)` for nearest-neighbor scaled indexed blits on the mode 0x13 plane.
 2. Added `gfx_mode13_draw_column_masked(x, y, h, src, transparent_idx)` for transparent single-column draws and `gfx_frame_counter()` to count successful presents.

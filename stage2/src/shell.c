@@ -5586,10 +5586,13 @@ static const ciuki_gfx_services_t g_gfx_services = {
     .mode13_fill = gfx_mode13_fill,
     .mode13_fill_rect = gfx_mode13_fill_rect,
     .mode13_blit_indexed = gfx_mode13_blit_indexed,
+    .mode13_blit_indexed_clip = gfx_mode13_blit_indexed_clip,
     .mode13_draw_column = gfx_mode13_draw_column,
     .palette_get_raw = gfx_palette_get_raw,
     .mode13_blit_scaled = gfx_mode13_blit_scaled,
+    .mode13_blit_scaled_clip = gfx_mode13_blit_scaled_clip,
     .mode13_draw_column_masked = gfx_mode13_draw_column_masked,
+    .mode13_draw_column_sampled_masked = gfx_mode13_draw_column_sampled_masked,
     .frame_counter = gfx_frame_counter,
     .reserved = {0},
 };
