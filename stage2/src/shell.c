@@ -5,6 +5,7 @@
 #include "services.h"
 #include "fat.h"
 #include "dos_mz.h"
+#include "bootcfg.h"
 #include "splash.h"
 #include "version.h"
 #include "ui.h"
@@ -162,6 +163,53 @@ static inline u8 inb_port(u16 port) {
     u8 value;
     __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
     return value;
+}
+
+static u8 cmos_read_byte(u8 idx) {
+    outb_port(0x70U, (u8)(0x80U | (idx & 0x7FU)));
+    return inb_port(0x71U);
+}
+
+static void cmos_write_byte(u8 idx, u8 value) {
+    outb_port(0x70U, (u8)(0x80U | (idx & 0x7FU)));
+    outb_port(0x71U, value);
+}
+
+static int bootcfg_load(bootcfg_data_t *cfg) {
+    if (!cfg) {
+        return 0;
+    }
+
+    for (u32 i = 0U; i < BOOTCFG_CMOS_SIZE; i++) {
+        ((u8 *)cfg)[i] = cmos_read_byte((u8)(BOOTCFG_CMOS_BASE + i));
+    }
+
+    return bootcfg_valid(cfg) ? 1 : 0;
+}
+
+static int bootcfg_store(const bootcfg_data_t *cfg) {
+    bootcfg_data_t tmp;
+
+    if (!cfg) {
+        return 0;
+    }
+
+    for (u32 i = 0U; i < BOOTCFG_CMOS_SIZE; i++) {
+        ((u8 *)&tmp)[i] = ((const u8 *)cfg)[i];
+    }
+    bootcfg_finalize(&tmp);
+
+    for (u32 i = 0U; i < BOOTCFG_CMOS_SIZE; i++) {
+        cmos_write_byte((u8)(BOOTCFG_CMOS_BASE + i), ((const u8 *)&tmp)[i]);
+    }
+
+    return 1;
+}
+
+static void bootcfg_clear(void) {
+    for (u32 i = 0U; i < BOOTCFG_CMOS_SIZE; i++) {
+        cmos_write_byte((u8)(BOOTCFG_CMOS_BASE + i), 0U);
+    }
 }
 
 static int str_eq(const char *a, const char *b) {
@@ -4722,12 +4770,15 @@ static u32 parse_u32(const char *s) {
     return val;
 }
 
-static void vmode_write_cfg(u32 mode_id, u32 w, u32 h) {
+static void vmode_write_cfg(u32 mode_id, u32 w, u32 h, u8 flags) {
     char buf[64];
     u32 pos = 0;
     char tmp[12];
     u32 ti;
     u32 val;
+    bootcfg_data_t cfg;
+    int cmos_ok;
+    int mirror_ok;
 
     /* "mode=N\nwidth=W\nheight=H\n" */
     /* mode= */
@@ -4758,11 +4809,26 @@ static void vmode_write_cfg(u32 mode_id, u32 w, u32 h) {
     while (ti > 0) { buf[pos++] = tmp[--ti]; }
     buf[pos++] = '\n';
 
-    if (fat_write_file("/EFI/CIUKIOS/VMODE.CFG", buf, pos)) {
-        video_write("Config written. Resolution change applies after reboot.\n");
-        video_write("Note: FAT writes are in-memory only.\n");
+    bootcfg_set_defaults(&cfg);
+    cfg.flags = (u8)(BOOTCFG_FLAG_ENABLED | flags);
+    cfg.mode_id = mode_id;
+    cfg.width = w;
+    cfg.height = h;
+    bootcfg_finalize(&cfg);
+
+    cmos_ok = bootcfg_store(&cfg);
+    mirror_ok = fat_write_file("/EFI/CIUKIOS/VMODE.CFG", buf, pos) ? 1 : 0;
+
+    if (cmos_ok) {
+        video_write("Boot config persisted to CMOS.\n");
+        if (mirror_ok) {
+            video_write("VMODE.CFG mirror updated.\n");
+        } else {
+            video_write("VMODE.CFG mirror update failed (non-fatal).\n");
+        }
+        video_write("Resolution change applies after reboot. Source priority: CMOS > VMODE.CFG > policy.\n");
     } else {
-        video_write("Error: could not write VMODE.CFG.\n");
+        video_write("Error: could not persist boot config to CMOS.\n");
     }
 }
 
@@ -4785,11 +4851,13 @@ static void shell_vmode(const char *args, const handoff_v0_t *handoff) {
         video_write("  list    - list available GOP modes\n");
         video_write("  max     - select highest compatible mode\n");
         video_write("  set <id|WxH> - set preferred mode\n");
-        video_write("  clear   - remove VMODE.CFG\n");
+        video_write("  clear   - clear persistent boot config (CMOS + mirror)\n");
         return;
     }
 
     if (str_eq(sub, "current")) {
+        bootcfg_data_t cfg;
+
         video_write("Resolution: ");
         write_decimal(video_width_px());
         video_write("x");
@@ -4806,6 +4874,19 @@ static void shell_vmode(const char *args, const handoff_v0_t *handoff) {
             video_write("Active GOP mode: ");
             write_decimal(handoff->gop_active_mode_id);
             video_write("\n");
+        }
+        if (bootcfg_load(&cfg)) {
+            video_write("Boot config (CMOS): mode=");
+            write_decimal(cfg.mode_id);
+            video_write(" size=");
+            write_decimal(cfg.width);
+            video_write("x");
+            write_decimal(cfg.height);
+            video_write(" flags=0x");
+            video_write_hex64((u64)cfg.flags);
+            video_write("\n");
+        } else {
+            video_write("Boot config (CMOS): absent/invalid\n");
         }
         return;
     }
@@ -4863,7 +4944,7 @@ static void shell_vmode(const char *args, const handoff_v0_t *handoff) {
         video_write("x");
         write_decimal(best->height);
         video_write(")\n");
-        vmode_write_cfg(best->mode_id, best->width, best->height);
+        vmode_write_cfg(best->mode_id, best->width, best->height, BOOTCFG_FLAG_MAX_HINT);
         return;
     }
 
@@ -4891,7 +4972,7 @@ static void shell_vmode(const char *args, const handoff_v0_t *handoff) {
                 for (u32 i = 0; i < handoff->gop_mode_count; i++) {
                     const handoff_gop_mode_entry_t *m = &handoff->gop_modes[i];
                     if (m->width == w && m->height == h && m->bpp == 32 && (m->flags & 1U)) {
-                        vmode_write_cfg(m->mode_id, w, h);
+                        vmode_write_cfg(m->mode_id, w, h, 0U);
                         return;
                     }
                 }
@@ -4905,7 +4986,7 @@ static void shell_vmode(const char *args, const handoff_v0_t *handoff) {
                 for (u32 i = 0; i < handoff->gop_mode_count; i++) {
                     const handoff_gop_mode_entry_t *m = &handoff->gop_modes[i];
                     if (m->mode_id == id && m->bpp == 32 && (m->flags & 1U)) {
-                        vmode_write_cfg(id, m->width, m->height);
+                        vmode_write_cfg(id, m->width, m->height, 0U);
                         return;
                     }
                 }
@@ -4918,11 +4999,14 @@ static void shell_vmode(const char *args, const handoff_v0_t *handoff) {
     }
 
     if (str_eq(sub, "clear")) {
+        bootcfg_clear();
+        video_write("Boot config cleared from CMOS.\n");
         if (fat_delete_file("/EFI/CIUKIOS/VMODE.CFG")) {
-            video_write("VMODE.CFG removed.\n");
+            video_write("VMODE.CFG mirror removed.\n");
         } else {
-            video_write("VMODE.CFG not found or could not be removed.\n");
+            video_write("VMODE.CFG mirror not found or could not be removed.\n");
         }
+        video_write("Next boot uses VMODE.CFG if present, otherwise policy defaults.\n");
         return;
     }
 

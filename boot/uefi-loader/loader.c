@@ -3,6 +3,7 @@
 #include "elf64.h"
 #include "../proto/bootinfo.h"
 #include "../proto/handoff.h"
+#include "../proto/bootcfg.h"
 #include "../proto/video_limits.h"
 
 #define PAGE_SIZE           4096ULL
@@ -582,6 +583,77 @@ static UINT32 parse_decimal(const UINT8 *p, UINTN len) {
         val = val * 10 + (p[i] - '0');
     }
     return val;
+}
+
+static VOID loader_memset(VOID *dst, UINT8 value, UINTN size) {
+    UINT8 *p = (UINT8 *)dst;
+    for (UINTN i = 0; i < size; i++) {
+        p[i] = value;
+    }
+}
+
+static VOID loader_memcpy(VOID *dst, const VOID *src, UINTN size) {
+    UINT8 *d = (UINT8 *)dst;
+    const UINT8 *s = (const UINT8 *)src;
+    for (UINTN i = 0; i < size; i++) {
+        d[i] = s[i];
+    }
+}
+
+static UINT8 cmos_read_byte(UINT8 idx) {
+    UINT8 value;
+    __asm__ volatile ("outb %0, %1" : : "a"((UINT8)(0x80U | (idx & 0x7FU))), "Nd"((UINT16)0x70));
+    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"((UINT16)0x71));
+    return value;
+}
+
+static VOID cmos_write_byte(UINT8 idx, UINT8 value) {
+    __asm__ volatile ("outb %0, %1" : : "a"((UINT8)(0x80U | (idx & 0x7FU))), "Nd"((UINT16)0x70));
+    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"((UINT16)0x71));
+}
+
+static BOOLEAN bootcfg_load(bootcfg_data_t *cfg) {
+    if (!cfg) {
+        return FALSE;
+    }
+
+    for (UINTN i = 0; i < BOOTCFG_CMOS_SIZE; i++) {
+        ((UINT8 *)cfg)[i] = cmos_read_byte((UINT8)(BOOTCFG_CMOS_BASE + i));
+    }
+
+    return bootcfg_valid(cfg) ? TRUE : FALSE;
+}
+
+static __attribute__((unused)) BOOLEAN bootcfg_store(const bootcfg_data_t *cfg) {
+    bootcfg_data_t tmp;
+
+    if (!cfg) {
+        return FALSE;
+    }
+
+    loader_memcpy(&tmp, cfg, BOOTCFG_CMOS_SIZE);
+    bootcfg_finalize(&tmp);
+    for (UINTN i = 0; i < BOOTCFG_CMOS_SIZE; i++) {
+        cmos_write_byte((UINT8)(BOOTCFG_CMOS_BASE + i), ((UINT8 *)&tmp)[i]);
+    }
+
+    return TRUE;
+}
+
+static __attribute__((unused)) VOID bootcfg_clear(VOID) {
+    for (UINTN i = 0; i < BOOTCFG_CMOS_SIZE; i++) {
+        cmos_write_byte((UINT8)(BOOTCFG_CMOS_BASE + i), 0U);
+    }
+}
+
+static BOOLEAN vmode_cfg_valid(const vmode_config_t *cfg) {
+    if (!cfg) {
+        return FALSE;
+    }
+    if (cfg->mode_id != BOOTCFG_MODE_ID_NONE) {
+        return TRUE;
+    }
+    return (cfg->width != 0U && cfg->height != 0U) ? TRUE : FALSE;
 }
 
 static void load_vmode_config(EFI_HANDLE image, vmode_config_t *cfg) {
@@ -1279,9 +1351,14 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                 UINT32 mi;
                 UINT32 catalog_count = 0;
                 vmode_config_t vmode_cfg;
+                bootcfg_data_t cmos_cfg;
                 BOOLEAN cfg_resolved = FALSE;
+                BOOLEAN cmos_cfg_valid = FALSE;
                 BOOLEAN has_1024_candidate = FALSE;
+                const CHAR16 *cfg_source = L"POLICY";
 
+                loader_memset(&cmos_cfg, 0U, sizeof(cmos_cfg));
+                cmos_cfg_valid = bootcfg_load(&cmos_cfg);
                 load_vmode_config(image, &vmode_cfg);
 
                 if (using_stage2) {
@@ -1324,13 +1401,33 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                         catalog_count++;
                     }
 
-                    /* --- VMODE.CFG priority check (any 32bpp mode) --- */
+                    /* --- CMOS priority check (any 32bpp mode) --- */
                     if (!cfg_resolved && bpp_val == 32) {
+                        if (cmos_cfg_valid &&
+                            cmos_cfg.mode_id != BOOTCFG_MODE_ID_NONE &&
+                            mi == cmos_cfg.mode_id) {
+                            best_mode = mi;
+                            cfg_resolved = TRUE;
+                            cfg_source = L"CMOS";
+                        }
+                        if (!cfg_resolved && cmos_cfg_valid &&
+                            cmos_cfg.width != 0U && cmos_cfg.height != 0U &&
+                            mode_info->HorizontalResolution == cmos_cfg.width &&
+                            mode_info->VerticalResolution == cmos_cfg.height) {
+                            best_mode = mi;
+                            cfg_resolved = TRUE;
+                            cfg_source = L"CMOS";
+                        }
+                    }
+
+                    /* --- VMODE.CFG priority check (any 32bpp mode) --- */
+                    if (!cfg_resolved && bpp_val == 32 && vmode_cfg_valid(&vmode_cfg)) {
                         /* Priority 1: exact mode id match */
                         if (vmode_cfg.mode_id != 0xFFFFFFFFU &&
                             mi == vmode_cfg.mode_id) {
                             best_mode = mi;
                             cfg_resolved = TRUE;
+                            cfg_source = L"VMODE.CFG";
                         }
                         /* Priority 2: width x height match */
                         if (!cfg_resolved &&
@@ -1339,6 +1436,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                             mode_info->VerticalResolution   == vmode_cfg.height) {
                             best_mode = mi;
                             cfg_resolved = TRUE;
+                            cfg_source = L"VMODE.CFG";
                         }
                     }
 
@@ -1369,11 +1467,18 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
                               best_mode,
                               gop->Mode->Info->HorizontalResolution,
                               gop->Mode->Info->VerticalResolution,
-                              cfg_resolved ? L" (from VMODE.CFG)" : L"");
+                              cfg_resolved ? L" (from config)" : L"");
                     } else {
                         Print(L"GOP: SetMode %d failed (%r), using default\r\n", best_mode, sm);
+                        cfg_source = L"POLICY";
                     }
                 }
+
+                Print(L"GOP: config source=%s mode=%d selected=%dx%d\r\n",
+                      cfg_source,
+                      gop->Mode->Mode,
+                      gop->Mode->Info->HorizontalResolution,
+                      gop->Mode->Info->VerticalResolution);
 
                 {
                     UINT32 selected_w = gop->Mode->Info->HorizontalResolution;
