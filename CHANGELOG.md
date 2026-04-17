@@ -3,6 +3,10 @@
 All notable changes to CiukiOS are tracked here.
 
 ## Unreleased
+1. Extended shell direct execution and tab completion with deterministic path-aware handling for directory-prefixed targets such as `SUBDIR\\APP` and `.\\APP`, including resolver markers and directory continuation semantics.
+2. Added higher-value shell editing shortcuts: `Esc` clear-line, `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, and `Ctrl+L`, while preserving the existing DOS-like line editor and history behavior.
+3. Expanded shell resolver introspection with `resolve` as an alias alongside richer `which` / `where` reporting for builtins, catalog programs, FAT targets, and appended suffix decisions.
+4. Added a deterministic resolver selftest in the stage2 boot path so path canonicalization cases emit explicit PASS/FAIL serial markers even when host-side QEMU capture is limited.
 1. Extended shell line editing with inline cursor movement and editing keys (`Left`, `Right`, `Home`, `End`, `Delete`) while preserving the existing DOS-like command flow.
 2. Added deterministic shell tab completion for builtins, runnable programs, and current-directory FAT entries, including common-prefix expansion and ambiguous-match listing with prompt redraw.
 3. Added `history` plus `which`/`where` shell commands to improve discoverability of command recall and direct-exec resolution.
