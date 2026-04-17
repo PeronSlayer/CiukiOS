@@ -69,6 +69,9 @@ Reference: `docs/handoffs/2026-04-16-video-driver-minimal.md`
 - `DONE` GOP mode selection baseline in UEFI loader
 - `DONE` dirty-rect tracking + incremental present
 - `DONE` persisted mode configuration (`VMODE.CFG`) and shell utility (`vmode`/`vres`)
+- `DONE` persistent boot config runtime store in CMOS with checksum validation (`magic/version/flags/mode/width/height/crc32`)
+- `DONE` loader precedence for mode selection: `CMOS` -> `VMODE.CFG` -> policy/default with deterministic source marker
+- `DONE` reboot persistence gate for mode selection (`make test-vmode-persistence`)
 - `DONE` dedicated non-interactive regression gate (`make test-video-mode`)
 - `DONE` minimum compatibility target raised to at least `1024x768` (shared driver limits + loader mode policy)
 - `DONE` deterministic compatibility gate for `1024x768` (`make test-video-1024`)

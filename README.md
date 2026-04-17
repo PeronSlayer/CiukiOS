@@ -17,6 +17,7 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 4. Added deterministic DOS smoke payload `CIUKSMK.COM` and integrated `run` outcome markers (`ok/not_found/bad_format/runtime`).
 5. Added end-to-end DOS run gate `make test-dosrun-simple` (`scripts/test_dosrun_simple_program.sh`) validating launch + return code path.
 6. Fixed DOS run selftest contract to validate runtime-native `AH=4Ch -> AH=4Dh` one-shot status semantics.
+7. Added CMOS-backed persistent boot video configuration with integrity checks and loader source precedence (`CMOS` -> `VMODE.CFG` -> policy), including reboot persistence gate `make test-vmode-persistence`.
 
 ### v0.6.2
 1. Improved FAT layer toward FAT32 baseline with mount metadata marker (`type/fsinfo/next_free_hint`) in stage2 boot logs.
