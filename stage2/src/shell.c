@@ -1241,6 +1241,8 @@ static void shell_com_int20(ciuki_dos_context_t *ctx) {
 
 static void shell_com_int2f(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+static void shell_com_int16(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+static void shell_com_int1a(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
 static u32 g_int21_vectors[256];
 static u8 g_int21_last_return_code = 0U;
@@ -2852,6 +2854,81 @@ static void shell_com_int2f(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     regs->ax = 0x0001U;
 }
 
+static void shell_com_int16(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
+    u8 ah;
+    u8 scancode = 0;
+    u8 ascii = 0;
+
+    (void)ctx;
+
+    if (!regs) {
+        return;
+    }
+
+    ah = (u8)((regs->ax >> 8) & 0xFFU);
+
+    if (ah == 0x00U || ah == 0x10U) {
+        /* AH=00h / 10h: blocking read — wait for key, return scancode:ascii. */
+        stage2_keyboard_read_key(&scancode, &ascii);
+        regs->ax = (u16)((u16)scancode << 8) | (u16)ascii;
+        regs->carry = 0U;
+        return;
+    }
+
+    if (ah == 0x01U || ah == 0x11U) {
+        /* AH=01h / 11h: peek — check buffer, ZF via carry convention. */
+        if (stage2_keyboard_peek_key(&scancode, &ascii)) {
+            regs->ax = (u16)((u16)scancode << 8) | (u16)ascii;
+            regs->carry = 0U;  /* ZF=0 — key available */
+        } else {
+            regs->carry = 1U;  /* ZF=1 — no key (carry encodes ZF here) */
+        }
+        return;
+    }
+
+    if (ah == 0x02U || ah == 0x12U) {
+        /* AH=02h / 12h: return shift flags in AL. */
+        regs->ax = (u16)((regs->ax & 0xFF00U) | (u16)stage2_keyboard_shift_flags());
+        regs->carry = 0U;
+        return;
+    }
+
+    /* Unsupported subfunction — ignore silently. */
+    regs->carry = 0U;
+}
+
+static void shell_com_int1a(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
+    u8 ah;
+    u64 ticks;
+
+    (void)ctx;
+
+    if (!regs) {
+        return;
+    }
+
+    ah = (u8)((regs->ax >> 8) & 0xFFU);
+
+    if (ah == 0x00U) {
+        /*
+         * AH=00h: Read system-timer tick counter.
+         * Returns CX:DX = 32-bit tick count, AL = midnight flag (always 0).
+         * Our PIT runs at ~100 Hz; real BIOS ticks at ~18.2 Hz.
+         * Scale: ticks_bios ≈ ticks_100hz * 18 / 100.
+         */
+        ticks = stage2_timer_ticks();
+        ticks = ticks * 18U / 100U;
+        regs->cx = (u16)((ticks >> 16) & 0xFFFFU);
+        regs->dx = (u16)(ticks & 0xFFFFU);
+        regs->ax = (u16)(regs->ax & 0xFF00U);  /* AL=0 midnight flag */
+        regs->carry = 0U;
+        return;
+    }
+
+    /* Unsupported subfunction — ignore silently. */
+    regs->carry = 0U;
+}
+
 static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
     (void)ctx;
 
@@ -3916,6 +3993,8 @@ static void shell_run_staged_image(
     svc.int21 = shell_com_int21;
     svc.int2f = shell_com_int2f;
     svc.int31 = shell_com_int31;
+    svc.int16 = shell_com_int16;
+    svc.int1a = shell_com_int1a;
     svc.int20 = shell_com_int20;
     svc.int21_4c = shell_com_int21_4c;
     svc.terminate = shell_com_terminate;

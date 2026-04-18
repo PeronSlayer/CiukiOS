@@ -146,6 +146,8 @@ typedef struct ciuki_services {
     void     (*int21_4c)(ciuki_dos_context_t *ctx, uint8_t code);
     void     (*terminate)(ciuki_dos_context_t *ctx, uint8_t code);
     const ciuki_gfx_services_t *gfx;    /* M-V2.3: 2D graphics ABI */
+    void     (*int16)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+    void     (*int1a)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 } ciuki_services_t;
 
 /* COM entry point convention */
