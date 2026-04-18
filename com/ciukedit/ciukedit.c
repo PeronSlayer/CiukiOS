@@ -27,6 +27,14 @@ static const char k_banner_0[] = "CiukiOS EDIT v1 - line editor$";
 static const char k_help_0[] = "Commands: :w save   :q quit   :wq save+quit   :l list   :d N delete line N   :h help$";
 static const char k_prompt[] = "edit> ";
 static const char k_help_hint[] = "Type :h for help.\n";
+/*
+ * Top header bar content. Kept short and command-oriented so it stays
+ * readable on the default text-mode width. The final '$' of the banner
+ * strings is required by AH=09h and not suitable here — this string is
+ * rendered directly via ui_top_bar.
+ */
+static const char k_header_bar[] =
+    "CiukiOS EDIT  |  :w save  :q quit  :wq save+quit  :l list  :d N del  :h help";
 
 static void mem_copy(void *dst, const void *src, u32 n) {
     u8 *d = (u8 *)dst;
@@ -219,6 +227,32 @@ static void terminate(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u8 code) 
 
 static void emit_simple(ciuki_dos_context_t *ctx, ciuki_services_t *svc, const char *s) {
     (void)write_cstr(ctx, svc, s);
+}
+
+/*
+ * Prepare the editor display surface:
+ *   1. clear the screen so no shell clutter remains;
+ *   2. render a white top bar with the core editor commands in black;
+ *   3. reserve the first text row so user input/output lands below the bar.
+ * The function is null-safe on every optional ABI pointer so older stage2
+ * builds without ui_top_bar/ui_reserve_top_row still run CIUKEDIT (just
+ * without the decorated header).
+ */
+static void editor_setup_surface(ciuki_services_t *svc) {
+    if (!svc) {
+        return;
+    }
+    if (svc->cls) {
+        svc->cls();
+    }
+    if (svc->ui_top_bar) {
+        svc->ui_top_bar(k_header_bar,
+                        0x00FFFFFFU /* white bar */,
+                        0x00000000U /* black text */);
+    }
+    if (svc->ui_reserve_top_row) {
+        svc->ui_reserve_top_row(1U);
+    }
 }
 
 static void emit_error_rc(ciuki_dos_context_t *ctx, ciuki_services_t *svc, const char *class_name, u8 rc) {
@@ -657,14 +691,16 @@ static int save_file(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
 }
 
 static void print_header(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
-    emit_simple(ctx, svc, "\n");
-    (void)write_ah09(ctx, svc, k_banner_0);
-    emit_simple(ctx, svc, "\nFile: ");
+    /*
+     * Top command bar is rendered by editor_setup_surface via the UI ABI.
+     * Keep this in-console header minimal: just show the current file
+     * and a one-line hint so the typing area feels clean.
+     */
+    emit_simple(ctx, svc, "File: ");
     emit_simple(ctx, svc, g_filename);
     emit_simple(ctx, svc, "\n");
-    (void)write_ah09(ctx, svc, k_help_0);
-    emit_simple(ctx, svc, "\n");
     emit_simple(ctx, svc, k_help_hint);
+    emit_simple(ctx, svc, "\n");
 }
 
 static void print_help(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
@@ -811,6 +847,13 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     g_line_count = 0U;
     g_dirty = 0U;
     mem_zero(g_filename, (u32)sizeof(g_filename));
+
+    /*
+     * Set up the clean editor surface first so any warning from
+     * parse_filename lands on the decorated layout rather than on
+     * leftover shell output.
+     */
+    editor_setup_surface(svc);
 
     if (!parse_filename(ctx, svc)) {
         terminate(ctx, svc, 0x02U);

@@ -439,7 +439,11 @@ void ui_draw_top_bar(const char *text, u32 bg_color, u32 fg_color) {
     if (!video_ready()) return;
     cols = video_columns();
     text_len = local_strlen(text);
-    video_set_colors(bg_color, fg_color);
+    /*
+     * video_set_colors takes (fg, bg). The params here are bar background
+     * and text color, so pass fg_color as fg and bg_color as bg.
+     */
+    video_set_colors(fg_color, bg_color);
     video_set_cursor(0, 0);
     for (u32 i = 0; i < cols; i++) video_putchar(' ');
     start_col = (cols > text_len) ? (cols - text_len) / 2U : 0;

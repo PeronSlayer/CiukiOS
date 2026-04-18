@@ -148,6 +148,16 @@ typedef struct ciuki_services {
     const ciuki_gfx_services_t *gfx;    /* M-V2.3: 2D graphics ABI */
     void     (*int16)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
     void     (*int1a)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+    /*
+     * M-UI1 — minimal text-mode UI helpers for polished COM surfaces.
+     * ui_top_bar renders a full-width colored bar with centered `text`
+     * at physical row 0. ui_reserve_top_row(n) makes the text console
+     * skip the first `n` rows (so subsequent AH=40h/AH=09h output lands
+     * below the bar). Both are null-safe at the ABI level: callers must
+     * check the pointer before invoking.
+     */
+    void     (*ui_top_bar)(const char *text, uint32_t bg_rgb, uint32_t fg_rgb);
+    void     (*ui_reserve_top_row)(uint32_t rows);
 } ciuki_services_t;
 
 /* COM entry point convention */

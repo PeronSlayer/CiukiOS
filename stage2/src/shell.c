@@ -4072,6 +4072,8 @@ static void shell_run_staged_image(
     svc.int21_4c = shell_com_int21_4c;
     svc.terminate = shell_com_terminate;
     svc.gfx = &g_shell_runtime_gfx_services;
+    svc.ui_top_bar = ui_draw_top_bar;
+    svc.ui_reserve_top_row = video_set_text_window;
 
     video_write("Executing ");
     if (name && name[0] != '\0') {
