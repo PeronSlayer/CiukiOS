@@ -27,63 +27,19 @@ Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ![DOSMODE13.COM — first real mode 0x13 runtime checkpoint validated on QEMU (v0.8.6)](misc/screenshots/v0.8.6-dosmode13-runtime-checkpoint.png)
 
+### v0.8.5
+1. Added signed/clipped mode 0x13 patch placement helpers: `gfx_mode13_blit_indexed_clip(...)` for opaque/masked indexed blits with automatic off-screen crop and `gfx_mode13_blit_scaled_clip(...)` for stable nearest-neighbor scaled patches with signed destination coordinates.
+2. Added `gfx_mode13_draw_column_sampled_masked(...)`, a DOOM-leaning sampled masked column primitive that uses 16.16 source stepping and clips signed destination Y.
+3. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed_clip`, `mode13_blit_scaled_clip`, and `mode13_draw_column_sampled_masked`, preserving append-only ABI growth.
+4. Updated `GFXDOOM.COM` to validate real patch placement cases: one clipped top-left scaled patch, one centered patch, and stretched sampled masked columns across the lower half of the screen.
+5. Bumped baseline version to `CiukiOS Alpha v0.8.5`.
+
 ### v0.8.4
 1. Added the next DOOM-facing mode 0x13 helpers: `gfx_mode13_blit_scaled(...)` for nearest-neighbor scaled indexed blits (HUD/title patch style), `gfx_mode13_draw_column_masked(...)` for transparent single-column draws, and `gfx_frame_counter()` for present-count pacing / instrumentation.
 2. Extended `ciuki_gfx_services_t` with `mode13_blit_scaled`, `mode13_draw_column_masked`, and `frame_counter`, keeping the ABI append-only before `reserved[32]`.
 3. New sample `GFXDOOM.COM` (`com/gfxdoom/`): fills a mode 0x13 background, scales a 16x16 indexed patch to 160x100, overlays masked columns, presents after each stage, and prints `[gfxdoom] frames=<n>` + `[gfxdoom] OK`.
 4. `run_ciukios.sh` now copies `GFXDOOM.COM` into the FAT image so the demo is runnable directly from the shell.
 5. Bumped baseline version to `CiukiOS Alpha v0.8.4`.
-
-### v0.8.3
-1. Broadened DOS universality on the video ABI: new `gfx_mode13_blit_indexed(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` 8-bit masked/opaque bitmap blit onto the mode 0x13 plane, new `gfx_mode13_draw_column(x, y, h, src)` single-column fast path (DOOM `R_DrawColumn`-style), and new `gfx_palette_get_raw(first, count, out6bit)` palette read-back (inverse of `gfx_palette_set`).
-2. `gfx_int10_dispatch` extended with AH=01h (set cursor shape), AH=02h (set cursor pos), AH=03h (get cursor pos + shape), AH=06h/07h (scroll up/down — soft stub: homes cursor on clear), AH=08h (read char+attr — returns space), AH=09h / 0Ah (write char+attr at cursor × CX), AH=0Bh (set bg/palette color), AH=0Eh (teletype output), AH=11h/12h (stub accept), AH=1Ah (get display combination code → VGA color 0x0808).
-3. `video_get_cursor(u32* col, u32* row)` exposed so BIOS AH=03h can report the live framebuffer console cursor.
-4. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed`, `mode13_draw_column`, `palette_get_raw` (appended before `reserved[32]`). Backwards-compatible: existing consumers keep reading up to the previous last slot.
-5. Bumped baseline version to `CiukiOS Alpha v0.8.3`.
-
-![DOSMD13.COM — mode 0x13 6×6×6 color cube gradient validated on QEMU (v0.8.3)](misc/screenshots/v0.8.3-dosmd13-mode13-colorcube.png)
-
-### v0.8.2
-1. DOOM-prep palette + fill primitives on top of the SR-VIDEO-002 stack: `gfx_palette_fade(target_rgb, step, total)` performs a captured-baseline linear blend of the full 256-entry palette toward a target 24-bit color (usable for blood flashes, intermissions, title-wipe fades); `gfx_mode13_fill(color_index)` and `gfx_mode13_fill_rect(x,y,w,h,color_index)` give a fast DOS-style fill path on the mode 0x13 plane.
-2. Extended `ciuki_gfx_services_t` with `palette_fade`, `mode13_fill`, `mode13_fill_rect` (appended before `reserved[32]`). Wired in stage2 shell.
-3. New sample `FADEDMO.COM` (`com/fadedemo/`): enters mode 0x13, draws 10 concentric color-cube bands via `mode13_fill_rect`, then performs a 16-step fade-to-red followed by a 16-step fade-to-black, committing each frame via `gfx->present()`. Emits `[fadedmo] OK` on serial.
-4. External `palette_set` now invalidates the fade baseline so any mid-fade caller-driven palette change restarts from a fresh capture on the next `palette_fade(step=0,...)`.
-5. Bumped baseline version to `CiukiOS Alpha v0.8.2`.
-
-### v0.8.1
-1. Completed subroadmap **SR-VIDEO-002** milestones M-V2.4 and M-V2.5 — DOS / VGA mode compatibility surface and palette / present-cache layer on top of the flicker-free baseline shipped in v0.8.0.
-2. M-V2.4 (INT 10h + VGA mode 0x13 emulation): new `stage2/src/gfx_modes.c` + `stage2/include/gfx_modes.h`. Mode 0x13 keeps a 320×200×8 planar surface that is nearest-neighbor-upscaled (integer scale up to 6×) and letterboxed into the real 32bpp GOP backbuffer on `gfx_mode_present`. `gfx_int10_dispatch` routes BIOS INT 10h sub-functions AH=00h (set mode 0x03 / 0x13), AH=0Ch (write pixel), AH=0Dh (read pixel), AH=0Fh (get mode), AH=4Fh VBE AL=00/01/02/03 (info / mode info / set mode / get mode) with VBE mode IDs 0x0013 / 0x0100 / 0x0101 / 0x0003 mapped onto the internal planes. New shell command `mode` (`mode info`, `mode set <hex>`, `mode test13`, `mode text`).
-3. M-V2.5 (palette + present cache): 256-entry palette initialized with a VGA-compatible default (CGA/EGA 16 + greyscale ramp + 6×6×6 color cube); `gfx_palette_set(first,count,rgb6bit)` exposed via services. Present path marks plane and palette dirty flags and skips the full upscale pass when neither changed since the last commit (M-V2.5 cached present + trivial 60 fps cap).
-4. Extended `ciuki_gfx_services_t` (`boot/proto/services.h`) with `set_mode`, `get_mode`, `present`, `set_palette`, `mode13_plane`, `mode13_put_pixel`, `int10`. Wired all of them into the stage2 services table. New sample `DOSMD13.COM` (com/dosmode13/) sets mode 0x13, writes a palette-indexed gradient via the ABI, tweaks one palette entry, commits via `present()`, and emits `[dosmode13] OK` on serial.
-5. `gfx_mode_init()` called right after `video_init()` so the plane and default palette are live before any COM runs.
-6. Bumped baseline version to `CiukiOS Alpha v0.8.1`.
-
-### v0.8.0
-1. Completed subroadmap **SR-VIDEO-002** milestones M-V2.0..M-V2.3 — flicker-free video baseline, 2D rasterizer, BMP decoder and stable 2D graphics services ABI for COM programs.
-2. M-V2.0 (video compositor hardening): introduced frame-scope depth counter (`video_begin_frame` / `video_end_frame`) so nested `video_write` / `video_putchar('\n')` no longer trigger multi-commit tearing; added `mem_copy_nt` (x86-64 `movnti` + `sfence`) non-temporal framebuffer store path used by full-frame and per-row present; wrapped splash, HUD, title bar, desktop session and shell input paths so every UI scene commits atomically.
-3. M-V2.1 (2D software rasterizer): new `stage2/src/gfx2d.c` + `stage2/include/gfx2d.h` with clipping state, pixel / hline / vline / Bresenham line / rect (outline + filled) / midpoint circle (outline + filled) / top-flat + bottom-flat filled triangle / raw-blit / color-key masked blit. Each primitive marks a single dirty rect and clips to framebuffer + active clip. New shell command `gfx test-pattern` draws a visual regression pattern and emits `[gfx] test pattern v1 OK` on serial; `gfx info` prints fb size.
-4. M-V2.2 (BMP image pipeline): new `stage2/src/image.c` + `stage2/include/image.h` decoding Windows BMP BITMAPINFOHEADER BI_RGB at 24bpp and 32bpp, top-down and bottom-up, into a 32bpp `0x00RRGGBB` scratch buffer (max 1920×1080). New shell command `image show <path>` reads the file via FAT and centers it on-screen using `gfx2d_blit`.
-5. M-V2.3 (stable graphics ABI for COM programs): extended `boot/proto/services.h` with `ciuki_gfx_services_t` (begin/end frame, put_pixel, fill_rect, rect, line, circle, fill_circle, fill_tri, blit, get_fb_info) and added `const ciuki_gfx_services_t *gfx` to `ciuki_services_t`. Populated in stage2 shell. New `GFXSMK.COM` (com/gfxsmoke/) exercises the full ABI from a loaded COM binary, emits `[gfxsmoke] OK`, returns via `INT 21h AH=4Ch`.
-6. Bumped baseline version to `CiukiOS Alpha v0.8.0`.
-
-### v0.7.1
-1. Extended the M6 DPMI smoke chain with a new allocate-memory-block callable slice (`CIUKMEM.EXE` -> `0x54`) exercising `INT 31h AX=0501h` and returning a synthetic linear address + memory handle; validated by the new gate `make test-m6-dpmi-mem-smoke`.
-2. Added `[compat] bios int2f baseline ready` startup marker so `INT 2Fh` multiplex readiness (already used by DPMI detect) has an explicit greppable signal alongside the `INT 10h/16h/1Ah` markers.
-3. Integrated the new gate into the aggregate M6 readiness orchestration (`scripts/test_doom_readiness_m6.sh`) and restored the correct dependency graph for `freecom-sync` (accidentally pinned to the v0.7.0 DOOM gates).
-4. Added the missing DPMI-LDT / VGA13 / DOOM-boot-harness / DPMI-memory targets to the `Makefile` `.PHONY` list for cleaner `make` dispatch.
-
-### v0.7.0
-1. Advanced the M6 DPMI smoke chain with a new allocate-LDT-descriptors callable slice (`CIUKLDT.EXE` -> `0x52`) exercising `INT 31h AX=0000h` after the existing host + version + bootstrap baseline, validated by the new gate `make test-m6-dpmi-ldt-smoke`.
-2. Introduced the first VGA mode 13h compatibility scaffold: new `vga13` shell command, deterministic startup marker `[compat] vga13 baseline ready (320x200x8 scaffold)`, and new gate `make test-vga13-baseline`.
-3. Added BIOS compatibility surface markers for `INT 10h`, `INT 16h`, and `INT 1Ah` so DOOM-path startup dependencies have explicit, greppable readiness signals.
-4. Added a staged boot-to-DOOM failure-taxonomy harness (`make test-doom-boot-harness`) that classifies progress into `binary_found`, `wad_found`, `extender_init`, `video_init`, and `menu_reached` (last stage deferred until real DOOM runtime is wired).
-5. Integrated the four new gates into the aggregate M6 readiness orchestration (`scripts/test_doom_readiness_m6.sh`).
-
-### v0.6.9
-1. Added deterministic startup-chain gate `make test-startup-chain`, covering `CONFIG.SYS`, `AUTOEXEC.BAT`, `.BAT` labels/`goto`/`if errorlevel`, env expansion and FreeDOS startup-file image wiring.
-2. Added FAT32 edge-semantics gate `make test-fat32-edge`, covering FSInfo corruption fallback, hint sanitization, alloc/free sync and fixed-root overflow guards.
-3. Strengthened GUI and OpenGEM regression coverage so layout/discoverability contracts and OpenGEM preflight/launch wiring are validated explicitly instead of relying on documentation drift.
-4. Closed the remaining roadmap items that were still marked `IN PROGRESS` for the current UI/FAT/startup baseline and synchronized roadmap docs to the validated implementation state.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
