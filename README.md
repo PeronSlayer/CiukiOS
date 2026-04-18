@@ -13,10 +13,18 @@ Mission: become a progressively more complete environment capable of running DOS
 5. Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Version
-`CiukiOS Alpha v0.8.6`
+`CiukiOS Alpha v0.8.7`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.8.7
+1. Added the OT-DEMO-001 polish wave: curated shell help for demo-facing commands, a dedicated `demo` launcher, and the new deterministic `CIUKDEMO.COM` graphics showcase for short capture sessions.
+2. Hardened graphical-app replay behavior by resetting the VGA palette baseline on every mode `0x13` entry, fixing the black-screen-on-second-run failure after fade-heavy demos.
+3. Changed the DOS runtime so graphical programs stop drawing shell/debug text over the framebuffer once they enter graphics, while serial markers still remain available for validation.
+4. Deferred shell prompt redraw after graphical apps until the next user input, so the final rendered frame stays visible instead of being immediately overwritten by the console.
+5. Updated `run_ciukios.sh` defaults to launch QEMU in a Full HD `1920x1080` GOP configuration with a centered graphical window and reboot/shutdown enabled by default.
+6. Bumped baseline version to `CiukiOS Alpha v0.8.7`.
+
 ### v0.8.6
 1. Released the latest shell UX set: path-aware direct execution, richer `which` / `where` / `resolve`, stronger completion flow, and extended DOS-like editing shortcuts.
 2. Turned VGA mode `0x13` from a scaffold into a first real runtime checkpoint with deterministic markers in the gfx path and a richer `DOSMODE13.COM` validation frame.

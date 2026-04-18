@@ -23,8 +23,8 @@
 #define SHELL_RUNTIME_COM_ENTRY_ADDR (SHELL_RUNTIME_COM_ADDR + SHELL_RUNTIME_PSP_SIZE)
 #define SHELL_RUNTIME_COM_MAX_PAYLOAD (SHELL_RUNTIME_COM_MAX_SIZE - SHELL_RUNTIME_PSP_SIZE)
 
-/* Forward decl of gfx services table (defined later with shell_gfx command). */
-static const ciuki_gfx_services_t g_gfx_services;
+/* Forward decl of runtime gfx services table (defined later with shell_gfx command). */
+static const ciuki_gfx_services_t g_shell_runtime_gfx_services;
 #define SHELL_RUNTIME_TAIL_MAX 126U
 #define SHELL_EXE32_MARKER_SIZE 8U
 #define SHELL_PATH_MAX 128
@@ -69,6 +69,9 @@ typedef enum shell_dosrun_error_class {
 
 static shell_dosrun_error_class_t g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
 static u32 g_shell_dosrun_int21_unsupported_calls = 0U;
+static u8 g_shell_runtime_graphics_used = 0U;
+static u8 g_shell_runtime_video_print_suppressed = 0U;
+static u8 g_shell_prompt_deferred = 0U;
 
 typedef struct shell_env_var {
     u8 used;
@@ -3924,6 +3927,9 @@ static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const ch
 }
 
 static void shell_print_com_exit(const ciuki_dos_context_t *ctx) {
+    if (g_shell_runtime_graphics_used) {
+        return;
+    }
     video_write("COM exit: ");
     if (ctx->exit_reason == (u8)CIUKI_COM_EXIT_INT20) {
         video_write("INT 20h");
@@ -3937,6 +3943,31 @@ static void shell_print_com_exit(const ciuki_dos_context_t *ctx) {
     video_write(" code=0x");
     video_write_hex64((u64)ctx->exit_code);
     video_write("\n");
+}
+
+static void shell_runtime_note_graphics_use(void) {
+    if (g_shell_runtime_graphics_used) {
+        return;
+    }
+
+    g_shell_runtime_graphics_used = 1U;
+    g_shell_runtime_video_print_suppressed = 1U;
+
+    if (gfx_mode_current() == GFX_MODE_TEXT_80x25) {
+        video_fill(0x000000U);
+        video_present_dirty_immediate();
+    }
+}
+
+static void shell_runtime_print(const char *s) {
+    if (!s) {
+        return;
+    }
+
+    serial_write(s);
+    if (!g_shell_runtime_video_print_suppressed) {
+        video_write(s);
+    }
 }
 
 static int shell_stage_runtime_image(u64 src_phys, u32 src_size) {
@@ -4022,12 +4053,14 @@ static void shell_run_staged_image(
     ctx.handoff = handoff;
     ctx.exit_reason = (u8)CIUKI_COM_EXIT_RETURN;
     ctx.exit_code = 0U;
+    g_shell_runtime_graphics_used = 0U;
+    g_shell_runtime_video_print_suppressed = 0U;
     shell_prepare_psp(&ctx, image_size, tail);
     if (is_mz) {
         ctx.image_linear = SHELL_RUNTIME_COM_ENTRY_ADDR + (u64)mz_info.entry_offset;
     }
 
-    svc.print = video_write;
+    svc.print = shell_runtime_print;
     svc.print_hex64 = video_write_hex64;
     svc.cls = video_cls;
     svc.int21 = shell_com_int21;
@@ -4038,7 +4071,7 @@ static void shell_run_staged_image(
     svc.int20 = shell_com_int20;
     svc.int21_4c = shell_com_int21_4c;
     svc.terminate = shell_com_terminate;
-    svc.gfx = &g_gfx_services;
+    svc.gfx = &g_shell_runtime_gfx_services;
 
     video_write("Executing ");
     if (name && name[0] != '\0') {
@@ -4108,6 +4141,9 @@ static void shell_run_staged_image(
         shell_publish_last_exit_status(&ctx);
         shell_print_com_exit(&ctx);
         shell_set_errorlevel(ctx.exit_code);
+        if (g_shell_runtime_graphics_used) {
+            g_shell_prompt_deferred = 1U;
+        }
         if (ctx.exit_code != 0U && g_shell_dosrun_int21_unsupported_calls > 0U) {
             g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_UNSUPPORTED_INT21;
         } else {
@@ -4121,6 +4157,9 @@ static void shell_run_staged_image(
     shell_publish_last_exit_status(&ctx);
     shell_print_com_exit(&ctx);
     shell_set_errorlevel(ctx.exit_code);
+    if (g_shell_runtime_graphics_used) {
+        g_shell_prompt_deferred = 1U;
+    }
     if (ctx.exit_code != 0U && g_shell_dosrun_int21_unsupported_calls > 0U) {
         g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_UNSUPPORTED_INT21;
     } else {
@@ -5914,37 +5953,218 @@ static void shell_gfx_get_fb_info(ciuki_fb_info_t *out) {
     out->pitch = out->width * 4U;
 }
 
-static const ciuki_gfx_services_t g_gfx_services = {
-    .begin_frame = video_begin_frame,
-    .end_frame = video_end_frame,
-    .put_pixel = gfx2d_pixel,
-    .fill_rect = gfx2d_fill_rect,
-    .rect = gfx2d_rect,
-    .line = gfx2d_line,
-    .circle = gfx2d_circle,
-    .fill_circle = gfx2d_fill_circle,
-    .fill_tri = gfx2d_fill_tri,
-    .blit = gfx2d_blit,
+static void shell_runtime_gfx_begin_frame(void) {
+    shell_runtime_note_graphics_use();
+    video_begin_frame();
+}
+
+static void shell_runtime_gfx_end_frame(void) {
+    shell_runtime_note_graphics_use();
+    video_end_frame();
+}
+
+static void shell_runtime_gfx_put_pixel(u32 x, u32 y, u32 rgb) {
+    shell_runtime_note_graphics_use();
+    gfx2d_pixel(x, y, rgb);
+}
+
+static void shell_runtime_gfx_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
+    shell_runtime_note_graphics_use();
+    gfx2d_fill_rect(x, y, w, h, rgb);
+}
+
+static void shell_runtime_gfx_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
+    shell_runtime_note_graphics_use();
+    gfx2d_rect(x, y, w, h, rgb);
+}
+
+static void shell_runtime_gfx_line(i32 x0, i32 y0, i32 x1, i32 y1, u32 rgb) {
+    shell_runtime_note_graphics_use();
+    gfx2d_line(x0, y0, x1, y1, rgb);
+}
+
+static void shell_runtime_gfx_circle(i32 cx, i32 cy, u32 r, u32 rgb) {
+    shell_runtime_note_graphics_use();
+    gfx2d_circle(cx, cy, r, rgb);
+}
+
+static void shell_runtime_gfx_fill_circle(i32 cx, i32 cy, u32 r, u32 rgb) {
+    shell_runtime_note_graphics_use();
+    gfx2d_fill_circle(cx, cy, r, rgb);
+}
+
+static void shell_runtime_gfx_fill_tri(i32 x0, i32 y0, i32 x1, i32 y1,
+                                       i32 x2, i32 y2, u32 rgb) {
+    shell_runtime_note_graphics_use();
+    gfx2d_fill_tri(x0, y0, x1, y1, x2, y2, rgb);
+}
+
+static void shell_runtime_gfx_blit(const u32 *src, u32 sw, u32 sh,
+                                   u32 stride, u32 dx, u32 dy) {
+    shell_runtime_note_graphics_use();
+    gfx2d_blit(src, sw, sh, stride, dx, dy);
+}
+
+static u8 shell_runtime_gfx_set_mode(u8 mode) {
+    if (mode != GFX_MODE_TEXT_80x25) {
+        shell_runtime_note_graphics_use();
+    }
+    return gfx_mode_set(mode);
+}
+
+static int shell_runtime_gfx_present(void) {
+    shell_runtime_note_graphics_use();
+    return gfx_mode_present();
+}
+
+static void shell_runtime_gfx_set_palette(u32 first, u32 count, const u8 *rgb_triples_6bit) {
+    shell_runtime_note_graphics_use();
+    gfx_palette_set(first, count, rgb_triples_6bit);
+}
+
+static u8 *shell_runtime_gfx_mode13_plane(void) {
+    shell_runtime_note_graphics_use();
+    return gfx_mode13_plane();
+}
+
+static void shell_runtime_gfx_mode13_put_pixel(u32 x, u32 y, u8 color_index) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_put_pixel(x, y, color_index);
+}
+
+static void shell_runtime_gfx_int10(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
+    u8 ah = 0U;
+    u8 al = 0U;
+
+    if (regs) {
+        ah = (u8)((regs->ax >> 8) & 0xFFU);
+        al = (u8)(regs->ax & 0xFFU);
+    }
+    if ((ah == 0x00U && al != GFX_MODE_TEXT_80x25) ||
+        ah == 0x0CU || ah == 0x0DU || ah == 0x4FU) {
+        shell_runtime_note_graphics_use();
+    }
+    gfx_int10_dispatch(ctx, regs);
+}
+
+static void shell_runtime_gfx_palette_fade(u32 target_rgb, u32 step, u32 total) {
+    shell_runtime_note_graphics_use();
+    gfx_palette_fade(target_rgb, step, total);
+}
+
+static void shell_runtime_gfx_mode13_fill(u8 color_index) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_fill(color_index);
+}
+
+static void shell_runtime_gfx_mode13_fill_rect(u32 x, u32 y, u32 w, u32 h,
+                                               u8 color_index) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_fill_rect(x, y, w, h, color_index);
+}
+
+static void shell_runtime_gfx_mode13_blit_indexed(const u8 *src, u32 sw, u32 sh,
+                                                  u32 stride, u32 dx, u32 dy,
+                                                  u8 use_transparent,
+                                                  u8 transparent_idx) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_blit_indexed(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx);
+}
+
+static void shell_runtime_gfx_mode13_blit_indexed_clip(const u8 *src, u32 sw,
+                                                       u32 sh, u32 stride,
+                                                       i32 dx, i32 dy,
+                                                       u8 use_transparent,
+                                                       u8 transparent_idx) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_blit_indexed_clip(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx);
+}
+
+static void shell_runtime_gfx_mode13_draw_column(u32 x, u32 y, u32 h, const u8 *src) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_draw_column(x, y, h, src);
+}
+
+static void shell_runtime_gfx_mode13_blit_scaled(const u8 *src, u32 sw, u32 sh,
+                                                 u32 stride, u32 dx, u32 dy,
+                                                 u32 dw, u32 dh,
+                                                 u8 use_transparent,
+                                                 u8 transparent_idx) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_blit_scaled(src, sw, sh, stride, dx, dy, dw, dh,
+                           use_transparent, transparent_idx);
+}
+
+static void shell_runtime_gfx_mode13_blit_scaled_clip(const u8 *src, u32 sw,
+                                                      u32 sh, u32 stride,
+                                                      i32 dx, i32 dy,
+                                                      u32 dw, u32 dh,
+                                                      u8 use_transparent,
+                                                      u8 transparent_idx) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_blit_scaled_clip(src, sw, sh, stride, dx, dy, dw, dh,
+                                use_transparent, transparent_idx);
+}
+
+static void shell_runtime_gfx_mode13_draw_column_masked(u32 x, u32 y, u32 h,
+                                                        const u8 *src,
+                                                        u8 transparent_idx) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_draw_column_masked(x, y, h, src, transparent_idx);
+}
+
+static void shell_runtime_gfx_mode13_draw_column_sampled_masked(i32 x, i32 y,
+                                                                u32 h,
+                                                                const u8 *src,
+                                                                u32 src_h,
+                                                                u32 frac_16_16,
+                                                                u32 frac_step_16_16,
+                                                                u8 transparent_idx) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_draw_column_sampled_masked(x, y, h, src, src_h,
+                                          frac_16_16, frac_step_16_16,
+                                          transparent_idx);
+}
+
+static void shell_runtime_gfx_mode13_draw_doom_patch(const u8 *patch,
+                                                     u32 patch_size,
+                                                     i32 x,
+                                                     i32 y) {
+    shell_runtime_note_graphics_use();
+    gfx_mode13_draw_doom_patch(patch, patch_size, x, y);
+}
+
+static const ciuki_gfx_services_t g_shell_runtime_gfx_services = {
+    .begin_frame = shell_runtime_gfx_begin_frame,
+    .end_frame = shell_runtime_gfx_end_frame,
+    .put_pixel = shell_runtime_gfx_put_pixel,
+    .fill_rect = shell_runtime_gfx_fill_rect,
+    .rect = shell_runtime_gfx_rect,
+    .line = shell_runtime_gfx_line,
+    .circle = shell_runtime_gfx_circle,
+    .fill_circle = shell_runtime_gfx_fill_circle,
+    .fill_tri = shell_runtime_gfx_fill_tri,
+    .blit = shell_runtime_gfx_blit,
     .get_fb_info = shell_gfx_get_fb_info,
-    .set_mode = gfx_mode_set,
+    .set_mode = shell_runtime_gfx_set_mode,
     .get_mode = gfx_mode_current,
-    .present = gfx_mode_present,
-    .set_palette = gfx_palette_set,
-    .mode13_plane = gfx_mode13_plane,
-    .mode13_put_pixel = gfx_mode13_put_pixel,
-    .int10 = gfx_int10_dispatch,
-    .palette_fade = gfx_palette_fade,
-    .mode13_fill = gfx_mode13_fill,
-    .mode13_fill_rect = gfx_mode13_fill_rect,
-    .mode13_blit_indexed = gfx_mode13_blit_indexed,
-    .mode13_blit_indexed_clip = gfx_mode13_blit_indexed_clip,
-    .mode13_draw_column = gfx_mode13_draw_column,
+    .present = shell_runtime_gfx_present,
+    .set_palette = shell_runtime_gfx_set_palette,
+    .mode13_plane = shell_runtime_gfx_mode13_plane,
+    .mode13_put_pixel = shell_runtime_gfx_mode13_put_pixel,
+    .int10 = shell_runtime_gfx_int10,
+    .palette_fade = shell_runtime_gfx_palette_fade,
+    .mode13_fill = shell_runtime_gfx_mode13_fill,
+    .mode13_fill_rect = shell_runtime_gfx_mode13_fill_rect,
+    .mode13_blit_indexed = shell_runtime_gfx_mode13_blit_indexed,
+    .mode13_blit_indexed_clip = shell_runtime_gfx_mode13_blit_indexed_clip,
+    .mode13_draw_column = shell_runtime_gfx_mode13_draw_column,
     .palette_get_raw = gfx_palette_get_raw,
-    .mode13_blit_scaled = gfx_mode13_blit_scaled,
-    .mode13_blit_scaled_clip = gfx_mode13_blit_scaled_clip,
-    .mode13_draw_column_masked = gfx_mode13_draw_column_masked,
-    .mode13_draw_column_sampled_masked = gfx_mode13_draw_column_sampled_masked,
-    .mode13_draw_doom_patch = gfx_mode13_draw_doom_patch,
+    .mode13_blit_scaled = shell_runtime_gfx_mode13_blit_scaled,
+    .mode13_blit_scaled_clip = shell_runtime_gfx_mode13_blit_scaled_clip,
+    .mode13_draw_column_masked = shell_runtime_gfx_mode13_draw_column_masked,
+    .mode13_draw_column_sampled_masked = shell_runtime_gfx_mode13_draw_column_sampled_masked,
+    .mode13_draw_doom_patch = shell_runtime_gfx_mode13_draw_doom_patch,
     .frame_counter = gfx_frame_counter,
     .reserved = {0},
 };
@@ -7104,6 +7324,16 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
         u8 ascii = (u8)ch;
 
+        if (g_shell_prompt_deferred) {
+            g_shell_prompt_deferred = 0U;
+            if (gfx_mode_current() != GFX_MODE_TEXT_80x25) {
+                gfx_mode_set(GFX_MODE_TEXT_80x25);
+            }
+            shell_cls();
+            write_prompt();
+            video_present_dirty_immediate();
+        }
+
         /* ---- History navigation (UP/DOWN) ---- */
         if (ascii == STAGE2_KEY_UP) {
             if (g_shell_history_count == 0U) continue;
@@ -7252,9 +7482,11 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
             cursor = 0;
             hist_nav = g_shell_history_count;
             hist_saved_valid = 0;
-            video_putchar('\n');
-            write_prompt();
-            video_present_dirty_immediate();
+            if (!g_shell_prompt_deferred) {
+                video_putchar('\n');
+                write_prompt();
+                video_present_dirty_immediate();
+            }
             continue;
         }
 

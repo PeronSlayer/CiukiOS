@@ -437,6 +437,8 @@ u8 gfx_mode_set(u8 mode) {
     }
     if (mode == GFX_MODE_VGA_320x200) {
         g_current_mode = mode;
+        gfx_palette_set_default_vga();
+        g_palette_fade_base_valid = 0;
         gfx_mode13_clear(0);
         g_plane_dirty = 1;
         g_palette_dirty = 1;

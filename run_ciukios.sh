@@ -19,11 +19,15 @@ DOOM_EXE_PATH="${CIUKIOS_DOOM_EXE_PATH:-}"
 DOOM_WAD_PATH="${CIUKIOS_DOOM_WAD_PATH:-}"
 DOOM_CFG_PATH="${CIUKIOS_DOOM_CFG_PATH:-}"
 QEMU_SKIP_RUN="${CIUKIOS_QEMU_SKIP_RUN:-0}"
-QEMU_NO_REBOOT="${CIUKIOS_QEMU_NO_REBOOT:-1}"
-QEMU_NO_SHUTDOWN="${CIUKIOS_QEMU_NO_SHUTDOWN:-1}"
+QEMU_NO_REBOOT="${CIUKIOS_QEMU_NO_REBOOT:-0}"
+QEMU_NO_SHUTDOWN="${CIUKIOS_QEMU_NO_SHUTDOWN:-0}"
 QEMU_HEADLESS="${CIUKIOS_QEMU_HEADLESS:-0}"
 QEMU_BOOT_ORDER="${CIUKIOS_QEMU_BOOT_ORDER:-c}"
 QEMU_SERIAL_FILE="${CIUKIOS_QEMU_SERIAL_FILE:-}"
+QEMU_DISPLAY_BACKEND="${CIUKIOS_QEMU_DISPLAY_BACKEND:-sdl}"
+QEMU_GOP_XRES="${CIUKIOS_QEMU_GOP_XRES:-1920}"
+QEMU_GOP_YRES="${CIUKIOS_QEMU_GOP_YRES:-1080}"
+QEMU_WINDOW_CENTERED="${CIUKIOS_QEMU_WINDOW_CENTERED:-1}"
 FREEDOS_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 OPENGEM_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime/OPENGEM"
 
@@ -289,6 +293,7 @@ echo "[CiukiOS] Starting QEMU..."
 QEMU_ARGS=(
   -machine q35
   -m 512M
+    -device "virtio-vga,xres=${QEMU_GOP_XRES},yres=${QEMU_GOP_YRES},edid=on"
   -debugcon file:"$BUILD_DIR/debugcon.log"
   -global isa-debugcon.iobase=0xe9
 )
@@ -319,6 +324,30 @@ fi
 
 if [[ "$QEMU_HEADLESS" == "1" ]]; then
     QEMU_ARGS+=(-display none -monitor none)
+else
+    case "$QEMU_DISPLAY_BACKEND" in
+        gtk)
+            QEMU_ARGS+=(-display gtk,gl=on,show-tabs=off,show-menubar=off,zoom-to-fit=off,window-close=on)
+            ;;
+        sdl)
+            if [[ "$QEMU_WINDOW_CENTERED" == "1" ]]; then
+                export SDL_VIDEO_CENTERED=1
+            fi
+            QEMU_ARGS+=(-display sdl,gl=on,window-close=on,show-cursor=on)
+            ;;
+        *)
+            echo "Error: unsupported QEMU display backend: $QEMU_DISPLAY_BACKEND" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+if [[ "$QEMU_HEADLESS" != "1" ]]; then
+    echo "[CiukiOS] QEMU display backend: $QEMU_DISPLAY_BACKEND"
+    echo "[CiukiOS] QEMU GOP target: ${QEMU_GOP_XRES}x${QEMU_GOP_YRES}"
+    if [[ "$QEMU_DISPLAY_BACKEND" == "sdl" && "$QEMU_WINDOW_CENTERED" == "1" ]]; then
+        echo "[CiukiOS] QEMU window centering: enabled"
+    fi
 fi
 
 if [[ -n "$QEMU_BOOT_ORDER" ]]; then

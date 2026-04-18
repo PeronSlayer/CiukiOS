@@ -53,7 +53,7 @@ Primary roadmap:
 5. Complete the final merge into `main` only after the conflict resolution is coherent.
 
 ## Versioning Cadence Rule (Required)
-1. Current baseline version: `CiukiOS Alpha v0.8.5`.
+1. Current baseline version: `CiukiOS Alpha v0.8.7`.
 2. Version bumps are user-controlled and must not happen unless the user explicitly requests one.
 3. When a version bump is explicitly requested, update all of:
 	- `README.md` (Current Version + Changelog)

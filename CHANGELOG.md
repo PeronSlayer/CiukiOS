@@ -4,6 +4,15 @@ All notable changes to CiukiOS are tracked here.
 
 ## Unreleased
 
+## v0.8.7
+1. Added the OT-DEMO-001 polish pass: curated shell help output, visible `demo` command wiring, and the new deterministic `CIUKDEMO.COM` graphics showcase for short recorded demos.
+2. Hardened `CIUKDEMO.COM` review follow-up so graphical demos restore text mode cleanly, return non-zero on failure, and keep explicit phase markers for serial validation.
+3. Fixed the graphics replay regression by resetting the default VGA palette whenever mode `0x13` is entered, preventing fade-to-black state from leaking into the next graphical run.
+4. Changed the DOS runtime graphics path so shell/debug text no longer overlays graphical applications once they start using the graphics ABI; serial markers are preserved for tests and captures.
+5. Deferred shell prompt redraw after a graphical app exits until the next user input, keeping the final rendered frame visible instead of immediately repainting the console.
+6. Updated `run_ciukios.sh` defaults to boot QEMU in Full HD (`1920x1080`) with a centered graphical window and reboot/shutdown enabled by default, while keeping the headless test path unchanged.
+7. Bumped baseline to `CiukiOS Alpha v0.8.7`.
+
 ## v0.8.6
 1. Promoted the recent shell UX wave into the released baseline: direct execution by bare name and path-aware targets, richer `which` / `where` / `resolve` introspection, and deterministic resolver markers/selftests.
 2. Expanded the DOS-like line editor with inline cursor movement plus higher-value shortcuts (`Esc`, `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, `Ctrl+L`) while preserving the existing command flow and history behavior.
