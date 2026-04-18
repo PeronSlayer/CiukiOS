@@ -7,6 +7,12 @@
 #define EDIT_INPUT_MAX 128U
 #define EDIT_RW_CHUNK 256U
 #define EDIT_PATH_MAX 96U
+/*
+ * Visible viewport height (number of buffer lines drawn per redraw).
+ * Chosen so the status line + separators + viewport + prompt hint fit
+ * comfortably inside the default 80x25 text surface minus the top bar.
+ */
+#define EDIT_VIEWPORT_ROWS 18U
 
 typedef unsigned long long u64;
 typedef unsigned int u32;
@@ -18,6 +24,15 @@ static char g_lines[EDIT_MAX_LINES][EDIT_MAX_COLS + 1U];
 static u16 g_line_len[EDIT_MAX_LINES];
 static u16 g_line_count;
 static u8 g_dirty;
+/*
+ * Viewport + cursor state. `g_cursor_line` is a 0-based index into
+ * g_lines (clamped to [0, g_line_count-1] or 0 when the buffer is
+ * empty). `g_viewport_top` is the 0-based index of the first line
+ * currently drawn on screen; the redraw keeps the cursor inside the
+ * viewport by shifting this value when needed.
+ */
+static u16 g_cursor_line;
+static u16 g_viewport_top;
 static u8 g_input_buf[2U + EDIT_INPUT_MAX + 2U];
 static u8 g_rw_buf[EDIT_RW_CHUNK];
 static char g_work_buf[320];
@@ -778,9 +793,11 @@ static void print_help(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     emit_simple(ctx, svc, "  :q        quit (discards unsaved changes)\n");
     emit_simple(ctx, svc, "  :wq       save and quit\n");
     emit_simple(ctx, svc, "  :l        redraw buffer\n");
+    emit_simple(ctx, svc, "  :v        scroll/view mode (arrows=move, PgUp/PgDn, Home/End, Esc/q=exit)\n");
     emit_simple(ctx, svc, "  :d N      delete line N (1-based)\n");
     emit_simple(ctx, svc, "  :i N TEXT insert TEXT as new line before N\n");
     emit_simple(ctx, svc, "  :s N TEXT replace line N with TEXT\n");
+    emit_simple(ctx, svc, "  :g N      go to line N (move cursor)\n");
     emit_simple(ctx, svc, "  :c        clear buffer\n");
     emit_simple(ctx, svc, "  :r        reload file from disk\n");
     emit_simple(ctx, svc, "  :h        show this help\n");
@@ -794,16 +811,51 @@ static void print_help(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
  * internal buffer. Also emits the `[edit] render lines=N` serial marker
  * so external validation can confirm post-load visibility.
  */
+/*
+ * Keep the cursor inside [viewport_top, viewport_top + ROWS). Also
+ * clamp values against the current buffer size so deletions or
+ * reloads can never leave the state pointing past the end.
+ */
+static void clamp_viewport(void) {
+    if (g_line_count == 0U) {
+        g_cursor_line = 0U;
+        g_viewport_top = 0U;
+        return;
+    }
+    if (g_cursor_line >= g_line_count) {
+        g_cursor_line = (u16)(g_line_count - 1U);
+    }
+    if (g_cursor_line < g_viewport_top) {
+        g_viewport_top = g_cursor_line;
+    }
+    if (g_cursor_line >= (u16)(g_viewport_top + EDIT_VIEWPORT_ROWS)) {
+        g_viewport_top = (u16)(g_cursor_line - EDIT_VIEWPORT_ROWS + 1U);
+    }
+    if (g_viewport_top >= g_line_count) {
+        g_viewport_top = (u16)(g_line_count - 1U);
+    }
+}
+
 static void print_buffer_lines(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     u16 i;
+    u16 end;
 
     if (g_line_count == 0U) {
         emit_simple(ctx, svc, "(empty buffer - type text to add lines)\n");
         return;
     }
 
-    for (i = 0U; i < g_line_count; i++) {
+    end = (u16)(g_viewport_top + EDIT_VIEWPORT_ROWS);
+    if (end > g_line_count) {
+        end = g_line_count;
+    }
+
+    for (i = g_viewport_top; i < end; i++) {
         char nbuf[12];
+        /* Cursor indicator in the gutter: `>` on the cursor line,
+         * space otherwise. Visible, simple, works in pure text mode. */
+        emit_simple(ctx, svc, (i == g_cursor_line) ? ">" : " ");
+
         to_dec(nbuf, (u32)sizeof(nbuf), (u32)(i + 1U));
         /* Right-pad the number column to 3 for a consistent gutter. */
         if (str_len(nbuf) < 3U) {
@@ -842,14 +894,20 @@ static void emit_render_marker(ciuki_services_t *svc, u32 lines) {
 static void editor_redraw(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     char nbuf[12];
 
+    clamp_viewport();
+
     /* Full surface reset so nothing from previous output leaks in. */
     editor_setup_surface(svc);
 
-    /* Status line. */
+    /* Status line — filename, total lines, cursor position, dirty. */
     emit_simple(ctx, svc, "File: ");
     emit_simple(ctx, svc, g_filename);
     emit_simple(ctx, svc, "   Lines: ");
     to_dec(nbuf, (u32)sizeof(nbuf), (u32)g_line_count);
+    emit_simple(ctx, svc, nbuf);
+    emit_simple(ctx, svc, "   Cur: ");
+    to_dec(nbuf, (u32)sizeof(nbuf),
+           (u32)((g_line_count == 0U) ? 0U : (u32)(g_cursor_line + 1U)));
     emit_simple(ctx, svc, nbuf);
     emit_simple(ctx, svc, g_dirty ? "   [modified]\n" : "   [clean]\n");
 
@@ -857,17 +915,128 @@ static void editor_redraw(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     emit_simple(ctx, svc,
                 "-------------------------------------------------\n");
 
-    /* Visible buffer. */
+    /* Visible buffer (viewport slice, cursor-marked). */
     print_buffer_lines(ctx, svc);
 
     /* Bottom separator + compact action hint. */
     emit_simple(ctx, svc,
                 "-------------------------------------------------\n");
     emit_simple(ctx, svc,
-                ":w save  :q quit  :wq save+quit  :l redraw  :h help\n\n");
+                ":w save  :q quit  :v scroll (up/dn)  :i/:s/:d edit  :h help\n\n");
 
     /* Telemetry: lets validation verify that a loaded file was rendered. */
     emit_render_marker(svc, (u32)g_line_count);
+}
+
+/*
+ * Interactive view/scroll mode.
+ * Uses svc->int16 (AH=00h — blocking read, returns scan in AH / ASCII
+ * in AL) to drive arrow-based navigation. The viewport and cursor
+ * state are global so when the mode exits the next editor_redraw from
+ * prompt-mode stays consistent with where the user left off.
+ *
+ * Keys:
+ *   Up   / 'k'  — cursor -1 line
+ *   Down / 'j'  — cursor +1 line
+ *   PgUp        — cursor - viewport rows
+ *   PgDn        — cursor + viewport rows
+ *   Home        — cursor to first line
+ *   End         — cursor to last line
+ *   Esc / 'q'   — leave view mode
+ *   Enter       — leave view mode and return to command prompt
+ *
+ * No-op (and safely returns) when svc->int16 is NULL or the buffer
+ * is empty.
+ */
+static void view_mode(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
+    ciuki_int21_regs_t regs;
+    u8 scan;
+    u8 ascii;
+
+    if (!svc || !svc->int16) {
+        emit_simple(ctx, svc, "View mode requires int16 keyboard ABI.\n");
+        return;
+    }
+
+    emit_marker(svc, "[edit] view enter\n");
+    editor_redraw(ctx, svc);
+
+    if (g_line_count == 0U) {
+        emit_simple(ctx, svc, "(empty buffer - nothing to scroll)\n");
+        emit_marker(svc, "[edit] view exit\n");
+        return;
+    }
+
+    for (;;) {
+        regs_zero(&regs);
+        regs.ax = 0x0000U;  /* AH=00h blocking read */
+        svc->int16(ctx, &regs);
+        scan = (u8)((regs.ax >> 8) & 0xFFU);
+        ascii = (u8)(regs.ax & 0xFFU);
+
+        /* Exit keys. */
+        if (ascii == 0x1BU /* Esc */
+            || ascii == 0x0DU /* Enter */
+            || ascii == 'q' || ascii == 'Q') {
+            break;
+        }
+
+        /* Arrow/navigation extended keys: ASCII==0, scan identifies. */
+        if (ascii == 0x00U) {
+            if (scan == 0x48U) {
+                /* Up */
+                if (g_cursor_line > 0U) {
+                    g_cursor_line--;
+                }
+            } else if (scan == 0x50U) {
+                /* Down */
+                if ((u16)(g_cursor_line + 1U) < g_line_count) {
+                    g_cursor_line++;
+                }
+            } else if (scan == 0x49U) {
+                /* PgUp */
+                if (g_cursor_line > EDIT_VIEWPORT_ROWS) {
+                    g_cursor_line = (u16)(g_cursor_line - EDIT_VIEWPORT_ROWS);
+                } else {
+                    g_cursor_line = 0U;
+                }
+            } else if (scan == 0x51U) {
+                /* PgDn */
+                {
+                    u32 next = (u32)g_cursor_line + EDIT_VIEWPORT_ROWS;
+                    if (next >= (u32)g_line_count) {
+                        next = (u32)(g_line_count - 1U);
+                    }
+                    g_cursor_line = (u16)next;
+                }
+            } else if (scan == 0x47U) {
+                /* Home */
+                g_cursor_line = 0U;
+            } else if (scan == 0x4FU) {
+                /* End */
+                g_cursor_line = (u16)(g_line_count - 1U);
+            } else {
+                /* Unknown extended key — ignore. */
+                continue;
+            }
+        } else if (ascii == 'j') {
+            if ((u16)(g_cursor_line + 1U) < g_line_count) {
+                g_cursor_line++;
+            }
+        } else if (ascii == 'k') {
+            if (g_cursor_line > 0U) {
+                g_cursor_line--;
+            }
+        } else {
+            /* Unknown ASCII — ignore. */
+            continue;
+        }
+
+        editor_redraw(ctx, svc);
+    }
+
+    emit_marker(svc, "[edit] view exit\n");
+    editor_redraw(ctx, svc);
 }
 
 static int parse_u16(const char *s, u16 *out) {
@@ -946,6 +1115,11 @@ static void handle_command(ciuki_dos_context_t *ctx, ciuki_services_t *svc, char
         return;
     }
 
+    if (str_eq(cmd, ":v")) {
+        view_mode(ctx, svc);
+        return;
+    }
+
     if (str_eq(cmd, ":h")) {
         print_help(ctx, svc);
         return;
@@ -995,6 +1169,31 @@ static void handle_command(ciuki_dos_context_t *ctx, ciuki_services_t *svc, char
 
         delete_line_at((u16)(idx - 1U));
         g_dirty = 1U;
+        editor_redraw(ctx, svc);
+        return;
+    }
+
+    if (str_starts_with(cmd, ":g")) {
+        char arg[16];
+        u32 i = 2U;
+        u32 j = 0U;
+        u16 idx = 0U;
+
+        while (cmd[i] == ' ' || cmd[i] == '\t') {
+            i++;
+        }
+        while (cmd[i] != '\0' && j + 1U < (u32)sizeof(arg)) {
+            arg[j++] = cmd[i++];
+        }
+        arg[j] = '\0';
+
+        if (!parse_u16(arg, &idx) || idx == 0U || idx > g_line_count) {
+            emit_marker(svc, "[edit] error class=bad_index\n");
+            emit_simple(ctx, svc, "Error: invalid line number.\n");
+            return;
+        }
+
+        g_cursor_line = (u16)(idx - 1U);
         editor_redraw(ctx, svc);
         return;
     }
@@ -1093,6 +1292,8 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
 
     g_line_count = 0U;
     g_dirty = 0U;
+    g_cursor_line = 0U;
+    g_viewport_top = 0U;
     mem_zero(g_filename, (u32)sizeof(g_filename));
 
     /*
@@ -1150,5 +1351,28 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
             continue;
         }
         g_dirty = 1U;
+        /* Keep the cursor glued to the most recently appended line so
+         * the viewport auto-scrolls and the user sees what they typed. */
+        if (g_line_count > 0U) {
+            g_cursor_line = (u16)(g_line_count - 1U);
+        }
+        /* Incremental echo with gutter so the numbered layout stays
+         * coherent without a full redraw on every keystroke. */
+        {
+            char nbuf[12];
+            to_dec(nbuf, (u32)sizeof(nbuf), (u32)g_line_count);
+            if (str_len(nbuf) < 3U) {
+                u32 pad = 3U - str_len(nbuf);
+                u32 k;
+                for (k = 0U; k < pad; k++) {
+                    emit_simple(ctx, svc, " ");
+                }
+            }
+            emit_simple(ctx, svc, " ");
+            emit_simple(ctx, svc, nbuf);
+            emit_simple(ctx, svc, " | ");
+            emit_simple(ctx, svc, line);
+            emit_simple(ctx, svc, "\n");
+        }
     }
 }
