@@ -23,10 +23,9 @@ static u8 g_rw_buf[EDIT_RW_CHUNK];
 static char g_work_buf[320];
 
 static const char k_default_name[] = "UNTITLED.TXT";
-static const char k_banner_0[] = "CiukiOS EDIT v1 - line editor$";
-static const char k_help_0[] = "Commands: :w save   :q quit   :wq save+quit   :l list   :d N delete line N   :h help$";
+static const char k_banner_0[] = "CiukiOS EDIT  -  line editor$";
 static const char k_prompt[] = "edit> ";
-static const char k_help_hint[] = "Type :h for help.\n";
+static const char k_help_hint[] = "Type :h for help, :l to list, :q to quit.";
 
 static void mem_copy(void *dst, const void *src, u32 n) {
     u8 *d = (u8 *)dst;
@@ -221,11 +220,24 @@ static void emit_simple(ciuki_dos_context_t *ctx, ciuki_services_t *svc, const c
     (void)write_cstr(ctx, svc, s);
 }
 
+/*
+ * Serial-only telemetry marker. Used for deterministic `[edit] ...` evidence
+ * that the smoke harness greps without cluttering the user-facing editor
+ * surface on the framebuffer. Falls back to a silent no-op on legacy stage2
+ * builds that do not provide serial_print.
+ */
+static void emit_marker(ciuki_services_t *svc, const char *s) {
+    if (svc && svc->serial_print && s) {
+        svc->serial_print(s);
+    }
+}
+
 static void emit_error_rc(ciuki_dos_context_t *ctx, ciuki_services_t *svc, const char *class_name, u8 rc) {
     char hx[3];
     mem_zero(g_work_buf, (u32)sizeof(g_work_buf));
     to_hex2(hx, (u32)sizeof(hx), rc);
 
+    /* Serial-only telemetry marker. */
     mem_copy(g_work_buf, "[edit] error class=", 19U);
     mem_copy(g_work_buf + 19U, class_name, str_len(class_name));
     {
@@ -237,7 +249,21 @@ static void emit_error_rc(ciuki_dos_context_t *ctx, ciuki_services_t *svc, const
         g_work_buf[n++] = '\n';
         g_work_buf[n] = '\0';
     }
-    emit_simple(ctx, svc, g_work_buf);
+    emit_marker(svc, g_work_buf);
+
+    /* User-visible friendly message. */
+    emit_simple(ctx, svc, "Error: ");
+    emit_simple(ctx, svc, class_name);
+    emit_simple(ctx, svc, " failed (rc=0x");
+    {
+        char line[4];
+        line[0] = hx[0];
+        line[1] = hx[1];
+        line[2] = ')';
+        line[3] = '\0';
+        emit_simple(ctx, svc, line);
+    }
+    emit_simple(ctx, svc, "\n");
 }
 
 static void emit_open_new(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
@@ -248,7 +274,11 @@ static void emit_open_new(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     mem_copy(g_work_buf + n, g_filename, str_len(g_filename));
     n += str_len(g_filename);
     mem_copy(g_work_buf + n, " new=1\n", 7U);
-    emit_simple(ctx, svc, g_work_buf);
+    emit_marker(svc, g_work_buf);
+
+    emit_simple(ctx, svc, "New file: ");
+    emit_simple(ctx, svc, g_filename);
+    emit_simple(ctx, svc, "\n");
 }
 
 static void emit_open_stats(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u32 lines, u32 bytes) {
@@ -273,7 +303,15 @@ static void emit_open_stats(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u32
     n += str_len(b);
     g_work_buf[n++] = '\n';
     g_work_buf[n] = '\0';
-    emit_simple(ctx, svc, g_work_buf);
+    emit_marker(svc, g_work_buf);
+
+    emit_simple(ctx, svc, "Opened ");
+    emit_simple(ctx, svc, g_filename);
+    emit_simple(ctx, svc, " (");
+    emit_simple(ctx, svc, a);
+    emit_simple(ctx, svc, lines == 1U ? " line, " : " lines, ");
+    emit_simple(ctx, svc, b);
+    emit_simple(ctx, svc, " bytes)\n");
 }
 
 static void emit_save_stats(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u32 lines, u32 bytes) {
@@ -298,7 +336,15 @@ static void emit_save_stats(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u32
     n += str_len(b);
     g_work_buf[n++] = '\n';
     g_work_buf[n] = '\0';
-    emit_simple(ctx, svc, g_work_buf);
+    emit_marker(svc, g_work_buf);
+
+    emit_simple(ctx, svc, "Saved ");
+    emit_simple(ctx, svc, g_filename);
+    emit_simple(ctx, svc, " (");
+    emit_simple(ctx, svc, a);
+    emit_simple(ctx, svc, lines == 1U ? " line, " : " lines, ");
+    emit_simple(ctx, svc, b);
+    emit_simple(ctx, svc, " bytes)\n");
 }
 
 static void emit_quit(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u8 dirty) {
@@ -307,7 +353,10 @@ static void emit_quit(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u8 dirty)
     g_work_buf[17] = dirty ? '1' : '0';
     g_work_buf[18] = '\n';
     g_work_buf[19] = '\0';
-    emit_simple(ctx, svc, g_work_buf);
+    emit_marker(svc, g_work_buf);
+
+    emit_simple(ctx, svc, dirty ? "Exiting (unsaved changes discarded).\n"
+                                : "Exiting.\n");
 }
 
 static int parse_filename(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
@@ -324,7 +373,8 @@ static int parse_filename(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
 
     if (i >= (u32)ctx->command_tail_len) {
         mem_copy(g_filename, k_default_name, (u32)sizeof(k_default_name));
-        emit_simple(ctx, svc, "[edit] warn class=no_filename default=UNTITLED.TXT\n");
+        emit_marker(svc, "[edit] warn class=no_filename default=UNTITLED.TXT\n");
+        emit_simple(ctx, svc, "No file name given; using UNTITLED.TXT.\n");
         return 1;
     }
 
@@ -334,7 +384,8 @@ static int parse_filename(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
             break;
         }
         if (out + 1U >= (u32)sizeof(g_filename)) {
-            emit_simple(ctx, svc, "[edit] error class=parse\n");
+            emit_marker(svc, "[edit] error class=parse\n");
+            emit_simple(ctx, svc, "Error: file name too long.\n");
             return 0;
         }
         g_filename[out++] = ch;
@@ -344,7 +395,8 @@ static int parse_filename(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
 
     if (g_filename[0] == '\0') {
         mem_copy(g_filename, k_default_name, (u32)sizeof(k_default_name));
-        emit_simple(ctx, svc, "[edit] warn class=no_filename default=UNTITLED.TXT\n");
+        emit_marker(svc, "[edit] warn class=no_filename default=UNTITLED.TXT\n");
+        emit_simple(ctx, svc, "No file name given; using UNTITLED.TXT.\n");
     }
 
     return 1;
@@ -659,17 +711,23 @@ static int save_file(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
 static void print_header(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     emit_simple(ctx, svc, "\n");
     (void)write_ah09(ctx, svc, k_banner_0);
-    emit_simple(ctx, svc, "\nFile: ");
+    emit_simple(ctx, svc, "\n");
+    emit_simple(ctx, svc, "File: ");
     emit_simple(ctx, svc, g_filename);
-    emit_simple(ctx, svc, "\n");
-    (void)write_ah09(ctx, svc, k_help_0);
-    emit_simple(ctx, svc, "\n");
+    emit_simple(ctx, svc, "\n\n");
     emit_simple(ctx, svc, k_help_hint);
+    emit_simple(ctx, svc, "\n\n");
 }
 
 static void print_help(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
-    (void)write_ah09(ctx, svc, k_help_0);
-    emit_simple(ctx, svc, "\n");
+    emit_simple(ctx, svc, "Available commands:\n");
+    emit_simple(ctx, svc, "  :w        save current file\n");
+    emit_simple(ctx, svc, "  :q        quit (discards unsaved changes)\n");
+    emit_simple(ctx, svc, "  :wq       save and quit\n");
+    emit_simple(ctx, svc, "  :l        list all lines\n");
+    emit_simple(ctx, svc, "  :d N      delete line N (1-based)\n");
+    emit_simple(ctx, svc, "  :h        show this help\n");
+    emit_simple(ctx, svc, "Any other input is appended as a new line.\n");
 }
 
 static void print_lines(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
@@ -787,7 +845,8 @@ static void handle_command(ciuki_dos_context_t *ctx, ciuki_services_t *svc, char
         arg[j] = '\0';
 
         if (!parse_u16(arg, &idx) || idx == 0U || idx > g_line_count) {
-            emit_simple(ctx, svc, "[edit] error class=bad_index\n");
+            emit_marker(svc, "[edit] error class=bad_index\n");
+            emit_simple(ctx, svc, "Error: invalid line number.\n");
             return;
         }
 
@@ -796,7 +855,8 @@ static void handle_command(ciuki_dos_context_t *ctx, ciuki_services_t *svc, char
         return;
     }
 
-    emit_simple(ctx, svc, "[edit] error class=bad_command\n");
+    emit_marker(svc, "[edit] error class=bad_command\n");
+    emit_simple(ctx, svc, "Unknown command. ");
     print_help(ctx, svc);
 }
 
@@ -827,7 +887,8 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     for (;;) {
         emit_simple(ctx, svc, k_prompt);
         if (!read_line_input(ctx, svc, line, (u32)sizeof(line), &line_len)) {
-            emit_simple(ctx, svc, "[edit] error class=parse\n");
+            emit_marker(svc, "[edit] error class=parse\n");
+            emit_simple(ctx, svc, "Input error.\n");
             terminate(ctx, svc, 0x02U);
             return;
         }
@@ -847,7 +908,8 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
         }
 
         if (!append_line_raw(line, (u16)str_len(line))) {
-            emit_simple(ctx, svc, "[edit] error class=buffer_full\n");
+            emit_marker(svc, "[edit] error class=buffer_full\n");
+            emit_simple(ctx, svc, "Buffer full (max 200 lines).\n");
             continue;
         }
         g_dirty = 1U;

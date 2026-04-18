@@ -330,7 +330,9 @@ static void draw_splash_footer(u32 footer_px, u32 progress_percent) {
 
 static void draw_title_bar(void) {
     video_begin_frame();
-    ui_draw_top_bar("CiukiOS", 0x00FFFFFFU, 0x00000000U); /* white bar, black text */
+    ui_draw_top_bar("CiukiOS " CIUKIOS_STAGE2_VERSION,
+                    0x00FFFFFFU,  /* white bar background */
+                    0x00000000U); /* black title text */
     video_set_text_window(1);                   /* reserve top row for title bar */
     video_end_frame();
 }

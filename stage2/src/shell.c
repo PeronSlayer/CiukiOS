@@ -3927,22 +3927,38 @@ static void shell_prepare_psp(ciuki_dos_context_t *ctx, u32 image_size, const ch
 }
 
 static void shell_print_com_exit(const ciuki_dos_context_t *ctx) {
+    const char *reason;
+    if (ctx->exit_reason == (u8)CIUKI_COM_EXIT_INT20) {
+        reason = "INT 20h";
+    } else if (ctx->exit_reason == (u8)CIUKI_COM_EXIT_INT21_4C) {
+        reason = "INT 21h/AH=4Ch";
+    } else if (ctx->exit_reason == (u8)CIUKI_COM_EXIT_API) {
+        reason = "terminate()";
+    } else {
+        reason = "RET";
+    }
+
+    /* Always emit deterministic exit evidence to serial for tests. */
+    serial_write("[dosrun] exit reason=");
+    serial_write(reason);
+    serial_write(" code=0x");
+    serial_write_hex64((u64)ctx->exit_code);
+    serial_write("\n");
+
+    /*
+     * User-visible feedback: only surface a short message on non-zero
+     * exit codes. Successful launches stay silent on the framebuffer
+     * so ordinary program launches don't clutter the shell.
+     */
     if (g_shell_runtime_graphics_used) {
         return;
     }
-    video_write("COM exit: ");
-    if (ctx->exit_reason == (u8)CIUKI_COM_EXIT_INT20) {
-        video_write("INT 20h");
-    } else if (ctx->exit_reason == (u8)CIUKI_COM_EXIT_INT21_4C) {
-        video_write("INT 21h/AH=4Ch");
-    } else if (ctx->exit_reason == (u8)CIUKI_COM_EXIT_API) {
-        video_write("terminate()");
-    } else {
-        video_write("RET");
+    if (ctx->exit_code == 0U) {
+        return;
     }
-    video_write(" code=0x");
+    video_write("Program exited with code 0x");
     video_write_hex64((u64)ctx->exit_code);
-    video_write("\n");
+    video_write(".\n");
 }
 
 static void shell_runtime_note_graphics_use(void) {
@@ -4072,18 +4088,15 @@ static void shell_run_staged_image(
     svc.int21_4c = shell_com_int21_4c;
     svc.terminate = shell_com_terminate;
     svc.gfx = &g_shell_runtime_gfx_services;
+    svc.serial_print = serial_write;
 
-    video_write("Executing ");
-    if (name && name[0] != '\0') {
-        video_write(name);
-    } else {
-        video_write("COM");
-    }
-    video_write(" PSP=0x");
-    video_write_hex64((u64)ctx.psp_segment);
-    video_write(" entry=0x");
-    video_write_hex64(ctx.image_linear);
-    video_write("\n");
+    serial_write("[dosrun] executing name=");
+    serial_write(name && name[0] != '\0' ? name : "COM");
+    serial_write(" psp=0x");
+    serial_write_hex64((u64)ctx.psp_segment);
+    serial_write(" entry=0x");
+    serial_write_hex64(ctx.image_linear);
+    serial_write("\n");
 
     if (is_mz) {
         const u8 *module = (const u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
@@ -4097,22 +4110,23 @@ static void shell_run_staged_image(
             }
         }
 
-        video_write("MZ loaded: bytes=0x");
-        video_write_hex64((u64)image_size);
-        video_write(" reloc=0x");
-        video_write_hex64((u64)reloc_applied);
-        video_write(" load_seg=0x");
-        video_write_hex64((u64)load_segment);
-        video_write(" entry_off=0x");
-        video_write_hex64((u64)mz_info.entry_offset);
-        video_write(" stack_off=0x");
-        video_write_hex64((u64)mz_info.stack_offset);
-        video_write(" span=0x");
-        video_write_hex64((u64)mz_info.runtime_required_bytes);
-        video_write("\n");
+        serial_write("[dosrun] mz loaded bytes=0x");
+        serial_write_hex64((u64)image_size);
+        serial_write(" reloc=0x");
+        serial_write_hex64((u64)reloc_applied);
+        serial_write(" load_seg=0x");
+        serial_write_hex64((u64)load_segment);
+        serial_write(" entry_off=0x");
+        serial_write_hex64((u64)mz_info.entry_offset);
+        serial_write(" stack_off=0x");
+        serial_write_hex64((u64)mz_info.stack_offset);
+        serial_write(" span=0x");
+        serial_write_hex64((u64)mz_info.runtime_required_bytes);
+        serial_write("\n");
 
         if (!marker_ok || image_size < 12U) {
-            video_write("MZ runtime dispatch pending (16-bit execution path).\n");
+            video_write("Unsupported 16-bit MZ executable.\n");
+            serial_write("[dosrun] mz dispatch=pending reason=16bit\n");
             shell_set_errorlevel(1U);
             g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_RUNTIME;
             return;
@@ -4124,7 +4138,8 @@ static void shell_run_staged_image(
                        | ((u32)module[11] << 24);
 
         if (stub_entry_off >= image_size) {
-            video_write("MZ dispatch marker invalid entry offset.\n");
+            video_write("Invalid MZ entry contract.\n");
+            serial_write("[dosrun] mz dispatch=invalid reason=entry_offset\n");
             shell_set_errorlevel(1U);
             g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_RUNTIME;
             return;
@@ -4132,9 +4147,9 @@ static void shell_run_staged_image(
 
         ctx.image_linear = SHELL_RUNTIME_COM_ENTRY_ADDR + (u64)stub_entry_off;
         entry = (com_entry_t)ctx.image_linear;
-        video_write("MZ dispatch (CIUKEX64): entry=0x");
-        video_write_hex64(ctx.image_linear);
-        video_write("\n");
+        serial_write("[dosrun] mz dispatch=CIUKEX64 entry=0x");
+        serial_write_hex64(ctx.image_linear);
+        serial_write("\n");
 
         entry(&ctx, &svc);
         shell_int21_close_all_handles();
@@ -5080,7 +5095,7 @@ static void shell_ascii(void) {
 }
 
 static void shell_draw_title_bar(void) {
-    const char *title = "CiukiOS";
+    const char *title = "CiukiOS " CIUKIOS_STAGE2_VERSION;
     u32 cols = video_columns();
     u32 title_len = str_len(title);
     u32 start_col = 0;

@@ -148,6 +148,13 @@ typedef struct ciuki_services {
     const ciuki_gfx_services_t *gfx;    /* M-V2.3: 2D graphics ABI */
     void     (*int16)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
     void     (*int1a)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+    /*
+     * M-V2.9 — serial-only telemetry output. COMs that want to emit
+     * deterministic markers for test harnesses without cluttering the
+     * user-visible shell/framebuffer surface must call serial_print.
+     * May be NULL on legacy stage2 builds; callers must null-check.
+     */
+    void     (*serial_print)(const char *s);
 } ciuki_services_t;
 
 /* COM entry point convention */
