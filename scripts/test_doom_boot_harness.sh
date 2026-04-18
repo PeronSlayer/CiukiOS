@@ -92,7 +92,7 @@ emit_stage "extender_init" "PASS"
 # Stage 4: video_init (VGA13h baseline)
 required_video=(
 	'm6_vga13_baseline_ready'
-	'[compat] vga13 baseline ready (320x200x8 scaffold)'
+	'[compat] vga13 baseline ready (320x200x8 checkpoint v1)'
 )
 for pat in "${required_video[@]}"; do
 	if ! grep -Fq "$pat" "$PROJECT_DIR/stage2/src/stage2.c"; then

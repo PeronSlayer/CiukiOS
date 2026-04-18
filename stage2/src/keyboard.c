@@ -20,6 +20,7 @@ static volatile u64 g_keyboard_irq_count = 0;
 static volatile u8 g_shift_state = 0;
 static volatile u8 g_extended_prefix = 0;
 static volatile u8 g_keybuf[KEYBUF_SIZE];
+static volatile u8 g_scanbuf[KEYBUF_SIZE];   /* paired scancode for INT 16h */
 static volatile u16 g_keybuf_head = 0;
 static volatile u16 g_keybuf_tail = 0;
 
@@ -157,7 +158,7 @@ static inline void irq_restore(u64 flags) {
     }
 }
 
-static void keybuf_push(u8 ch) {
+static void keybuf_push(u8 ch, u8 scancode) {
     u16 head = g_keybuf_head;
     u16 tail = g_keybuf_tail;
     u16 next = (u16)((head + 1) & KEYBUF_MASK);
@@ -168,6 +169,7 @@ static void keybuf_push(u8 ch) {
     }
 
     g_keybuf[head] = ch;
+    g_scanbuf[head] = scancode;
     g_keybuf_head = next;
 }
 
@@ -187,7 +189,7 @@ static i32 keybuf_pop(void) {
 static u8 keyboard_decode_and_queue(u8 scancode) {
     u8 ascii = set1_decode_to_ascii(scancode);
     if (ascii != 0) {
-        keybuf_push(ascii);
+        keybuf_push(ascii, (u8)(scancode & 0x7FU));
     }
     return ascii;
 }
@@ -398,6 +400,51 @@ void stage2_keyboard_flush_buffer(void) {
 
 int stage2_keyboard_alt_held(void) {
     return (g_shift_state & (ALT_LEFT_BIT | ALT_RIGHT_BIT)) != 0U;
+}
+
+int stage2_keyboard_read_key(u8 *out_scancode, u8 *out_ascii) {
+    for (;;) {
+        u64 flags = irq_save();
+        u16 head = g_keybuf_head;
+        u16 tail = g_keybuf_tail;
+        if (head != tail) {
+            if (out_ascii)    *out_ascii    = g_keybuf[tail];
+            if (out_scancode) *out_scancode = g_scanbuf[tail];
+            g_keybuf_tail = (u16)((tail + 1) & KEYBUF_MASK);
+            irq_restore(flags);
+            return 1;
+        }
+        irq_restore(flags);
+        __asm__ volatile ("hlt");
+    }
+}
+
+int stage2_keyboard_peek_key(u8 *out_scancode, u8 *out_ascii) {
+    u64 flags = irq_save();
+    u16 head = g_keybuf_head;
+    u16 tail = g_keybuf_tail;
+    if (head != tail) {
+        if (out_ascii)    *out_ascii    = g_keybuf[tail];
+        if (out_scancode) *out_scancode = g_scanbuf[tail];
+        irq_restore(flags);
+        return 1;
+    }
+    irq_restore(flags);
+    return 0;
+}
+
+u8 stage2_keyboard_shift_flags(void) {
+    /*
+     * Return a BIOS-compatible shift flags byte (INT 16h AH=02h layout):
+     * bit 0 = Right Shift, bit 1 = Left Shift, bit 2 = Ctrl, bit 3 = Alt.
+     */
+    u8 bios_flags = 0;
+    u8 raw = g_shift_state;
+    if (raw & SHIFT_RIGHT_BIT) bios_flags |= 0x01U;
+    if (raw & SHIFT_LEFT_BIT)  bios_flags |= 0x02U;
+    if (raw & CTRL_LEFT_BIT)   bios_flags |= 0x04U;
+    if (raw & (ALT_LEFT_BIT | ALT_RIGHT_BIT)) bios_flags |= 0x08U;
+    return bios_flags;
 }
 
 int stage2_keyboard_selftest_decode_capture(void) {

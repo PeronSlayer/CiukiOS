@@ -21,4 +21,9 @@ void stage2_keyboard_flush_buffer(void);
 int stage2_keyboard_alt_held(void);
 int stage2_keyboard_selftest_decode_capture(void);
 
+/* INT 16h-compatible key access (scancode + ASCII pair). */
+int stage2_keyboard_read_key(u8 *out_scancode, u8 *out_ascii);
+int stage2_keyboard_peek_key(u8 *out_scancode, u8 *out_ascii);
+u8  stage2_keyboard_shift_flags(void);
+
 #endif

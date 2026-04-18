@@ -622,7 +622,9 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
 		serial_write("[compat] vga13 baseline ready (320x200x8 checkpoint v1)\n");
 		serial_write("[compat] bios int10 baseline ready\n");
 		serial_write("[compat] bios int16 baseline ready\n");
+		serial_write("[compat] bios int16 dispatch wired (AH=00/01/02)\n");
 		serial_write("[compat] bios int1a baseline ready\n");
+		serial_write("[compat] bios int1a dispatch wired (AH=00 tick read)\n");
 		serial_write("[compat] bios int2f baseline ready\n");
 	}
     if (m6_rm_callback_skeleton_ready()) {
