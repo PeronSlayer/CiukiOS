@@ -11,15 +11,28 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_SCRIPT="$PROJECT_DIR/run_ciukios.sh"
 LOG_DIR="$PROJECT_DIR/.ciukios-testlogs"
+LOG_FILE="$LOG_DIR/ciukdemo-smoke.log"
 SERIAL_LOG="$LOG_DIR/ciukdemo-serial.log"
-ATTEMPT_LOG="$LOG_DIR/ciukdemo-attempt.log"
 LOCK_FILE="$LOG_DIR/qemu-test.lock"
+RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
+FDAUTO_PATH="$RUNTIME_DIR/FDAUTO.BAT"
+BACKUP_PATH="$LOG_DIR/FDAUTO.BAT.ciukdemo.backup"
 
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-60}"
 STATIC_PASS=0
 RUNTIME_PASS=0
 
 mkdir -p "$LOG_DIR"
+rm -f "$LOG_FILE" "$SERIAL_LOG" "$BACKUP_PATH"
+
+restore_autoexec() {
+	if [[ -f "$BACKUP_PATH" ]]; then
+		mv -f "$BACKUP_PATH" "$FDAUTO_PATH"
+	else
+		rm -f "$FDAUTO_PATH"
+	fi
+}
+trap restore_autoexec EXIT
 
 fail() {
 	echo "[FAIL] $1" >&2
@@ -67,8 +80,18 @@ if [[ ! -x "$RUN_SCRIPT" ]]; then
 	exit 0
 fi
 
+if [[ -f "$FDAUTO_PATH" ]]; then
+	cp "$FDAUTO_PATH" "$BACKUP_PATH"
+fi
+
+cat > "$FDAUTO_PATH" <<'EOF'
+echo [ciukdemo-e2e] begin
+demo
+echo [ciukdemo-e2e] end
+EOF
+
 echo "[ciukdemo-gate] Tier 2: runtime QEMU capture (best-effort)..."
-rm -f "$ATTEMPT_LOG" "$SERIAL_LOG"
+rm -f "$LOG_FILE" "$SERIAL_LOG"
 
 if command -v flock >/dev/null 2>&1; then
 	exec 9>"$LOCK_FILE"
@@ -80,24 +103,43 @@ if command -v flock >/dev/null 2>&1; then
 fi
 
 set +e
-CIUKIOS_INCLUDE_FREEDOS=0 \
+CIUKIOS_INCLUDE_FREEDOS=1 \
 CIUKIOS_INCLUDE_OPENGEM=0 \
 CIUKIOS_SKIP_BUILD=1 \
 CIUKIOS_QEMU_HEADLESS=1 \
 CIUKIOS_QEMU_SERIAL_FILE="$SERIAL_LOG" \
-timeout "${TIMEOUT_SECONDS}s" "$RUN_SCRIPT" > "$ATTEMPT_LOG" 2>&1
+timeout "${TIMEOUT_SECONDS}s" "$RUN_SCRIPT" > "$LOG_FILE" 2>&1
+rc=$?
 set -e
+
+if [[ -f "$SERIAL_LOG" ]]; then
+	{
+		echo
+		echo "[ciukdemo-gate] ---- qemu serial log ----"
+		cat "$SERIAL_LOG"
+	} >> "$LOG_FILE"
+fi
+
+if [[ $rc -eq 124 ]]; then
+	echo "[ciukdemo-gate] timeout reached (expected for QEMU halt loop)"
+elif [[ $rc -ne 0 ]]; then
+	echo "[FAIL] run_ciukios.sh exited with error (exit=$rc)" >&2
+	tail -n 120 "$LOG_FILE" >&2 || true
+	exit 1
+fi
 
 runtime_markers=0
 if [[ -f "$SERIAL_LOG" ]] && [[ -s "$SERIAL_LOG" ]]; then
 	for marker in \
+		'[ app ] demo launch requested' \
 		'[ciukdemo] start' \
 		'[ciukdemo] phase 1 title' \
 		'[ciukdemo] phase 2 plasma' \
 		'[ciukdemo] phase 3 orbits' \
 		'[ciukdemo] phase 4 rings' \
 		'[ciukdemo] phase 5 fadeout' \
-		'[ciukdemo] OK'; do
+		'[ciukdemo] OK' \
+		'[ app ] demo launch completed'; do
 		if grep -Fq "$marker" "$SERIAL_LOG"; then
 			runtime_markers=$((runtime_markers + 1))
 			echo "[runtime] captured: $marker"

@@ -261,6 +261,8 @@ static void phase_fadeout(ciuki_services_t *svc,
 void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     const ciuki_gfx_services_t *gfx = svc->gfx;
     ciuki_int21_regs_t regs;
+    unsigned char exit_code = 0U;
+    int mode13_active = 0;
 
     print_line(svc, "[ciukdemo] start\n");
 
@@ -268,13 +270,16 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
         !gfx->mode13_fill_rect || !gfx->present ||
         !gfx->palette_fade || !gfx->mode13_plane) {
         print_line(svc, "[ciukdemo] FAIL: gfx services incomplete\n");
+        exit_code = 1U;
         goto exit;
     }
 
     if (!gfx->set_mode(0x13U)) {
         print_line(svc, "[ciukdemo] FAIL: set_mode 0x13\n");
+        exit_code = 2U;
         goto exit;
     }
+    mode13_active = 1;
 
     phase_title(svc, gfx);
     phase_plasma(svc, gfx);
@@ -285,7 +290,11 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     print_line(svc, "[ciukdemo] OK\n");
 
 exit:
-    regs.ax = 0x4C00U;
+    if (mode13_active && gfx && gfx->set_mode && gfx->set_mode(0x03U)) {
+        print_line(svc, "[ciukdemo] restored text mode 0x03\n");
+    }
+
+    regs.ax = (uint16_t)(0x4C00U | exit_code);
     regs.bx = 0U;
     regs.cx = 0U;
     regs.dx = 0U;
@@ -300,8 +309,8 @@ exit:
     if (svc->int21) {
         svc->int21(ctx, &regs);
     } else if (svc->int21_4c) {
-        svc->int21_4c(ctx, 0x00);
+        svc->int21_4c(ctx, exit_code);
     } else {
-        svc->terminate(ctx, 0x00);
+        svc->terminate(ctx, exit_code);
     }
 }

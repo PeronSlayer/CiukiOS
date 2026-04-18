@@ -6330,7 +6330,7 @@ static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
         static const char *builtins[] = {
             "help", "pwd", "cd", "dir", "type", "copy", "ren", "rename",
             "move", "mkdir", "md", "rmdir", "rd", "attrib", "del", "erase",
-            "ascii", "gsplash", "splash", "desktop", "cls", "ver", "echo",
+            "ascii", "gsplash", "splash", "desktop", "demo", "cls", "ver", "echo",
             "set", "pmode", "vga13", "gfx", "image", "mode", "ticks", "mem",
             "shutdown", "reboot", "run", "opengem", "vmode", "vres",
             "history", "which", "where", "resolve",
@@ -6454,7 +6454,7 @@ static void shell_complete_builtins(shell_complete_ctx_t *ctx, const char *prefi
     static const char *builtins[] = {
         "help", "pwd", "cd", "dir", "type", "copy", "ren",
         "move", "mkdir", "rmdir", "attrib", "del",
-        "ascii", "gsplash", "desktop", "cls", "ver", "echo",
+        "ascii", "gsplash", "desktop", "demo", "cls", "ver", "echo",
         "set", "pmode", "ticks", "mem",
         "shutdown", "reboot", "run", "opengem", "vmode",
         "history", "which", "resolve",
