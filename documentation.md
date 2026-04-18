@@ -122,6 +122,11 @@ fallback while keeping serial capture enabled. This preserves a deterministic lo
 result on hosts where `CIUKIOS_QEMU_HEADLESS=1` is silent, instead of failing with an
 unclassified infrastructure-only outcome.
 
+The M6 DOS-extender readiness chain now also covers a stateful DPMI memory-release
+slice: `CIUKMEM.EXE` validates `INT 31h AX=0501h` allocation shape, while
+`CIUKREL.EXE` validates a successful `AX=0502h` free against a real prior handle and
+an invalid-handle rejection on duplicate free.
+
 Important gates include:
 1. `make test-stage2`
 2. `make test-fallback`

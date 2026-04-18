@@ -13,7 +13,7 @@ Run `DOOM.EXE` (or `DOOM2.EXE`) from CiukiOS with keyboard input, VGA graphics, 
 4. Low-level runtime (IDT/PIT/IRQ1 path) now exposes deterministic startup selftests for timer progress and keyboard decode/capture.
 5. Video stack includes double-buffering path with dynamic backbuffer budget (up to 1920x1080 Full HD), mode catalog handoff, `vmode` utility, dedicated non-interactive video mode regression tests, backbuffer policy validation, and explicit runtime `1024x768` baseline policy marker.
 6. FreeDOS symbiotic pipeline now includes upstream sync orchestration and reproducible runtime-manifest validation for packaging reliability.
-7. M6 DPMI smoke chain now includes host-detect + version + raw-mode-bootstrap + allocate-LDT + allocate-memory slices, each covered by a dedicated gate.
+7. M6 DPMI smoke chain now includes host-detect + version + raw-mode-bootstrap + allocate-LDT + allocate-memory + free-memory slices, each covered by a dedicated gate.
 8. A VGA mode 13h compatibility scaffold is wired (shell `vga13` + startup marker + `make test-vga13-baseline`); the real draw/render path is pending.
 9. BIOS compatibility surface markers for `INT 10h`, `INT 16h`, `INT 1Ah`, and `INT 2Fh` are emitted at boot so DOOM-startup dependencies are greppable.
 10. A staged boot-to-DOOM failure-taxonomy harness (`make test-doom-boot-harness`) classifies progress into `binary_found`, `wad_found`, `extender_init`, `video_init`, and `menu_reached` stages; the last stage is deferred until a real DOOM runtime is wired.

@@ -56,8 +56,10 @@
 5. **DPMI descriptor smoke:** `make test-m6-dpmi-smoke` validates a reproducible MZ smoke binary (`CIUKDPM.EXE` -> `0x49`) requiring non-zero descriptor metadata from `AX=1687h`
 6. **DPMI callable smoke:** `make test-m6-dpmi-call-smoke` validates a reproducible MZ smoke binary (`CIUK31.EXE` -> `0x4B`) requiring `AX=1687h` descriptor metadata plus `INT 31h AX=0400h` success
 7. **DPMI bootstrap smoke:** `make test-m6-dpmi-bootstrap-smoke` validates a reproducible MZ smoke binary (`CIUK306.EXE` -> `0x4E`) requiring `AX=1687h` descriptor metadata plus `INT 31h AX=0306h` success
-8. **DOOM packaging harness:** `make test-doom-target-packaging` validates deterministic image packaging/discovery for `DOOM.EXE`, `DOOM1.WAD`, `DEFAULT.CFG`, and `DOOM.BAT`
-9. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
+8. **DPMI allocate-memory smoke:** `make test-m6-dpmi-mem-smoke` validates a reproducible MZ smoke binary (`CIUKMEM.EXE` -> `0x54`) requiring `AX=0501h` success with non-zero linear address and handle
+9. **DPMI free-memory smoke:** `make test-m6-dpmi-free-smoke` validates a reproducible MZ smoke binary (`CIUKREL.EXE` -> `0x56`) requiring a stateful `AX=0501h` allocation followed by `AX=0502h` success and duplicate-free rejection
+10. **DOOM packaging harness:** `make test-doom-target-packaging` validates deterministic image packaging/discovery for `DOOM.EXE`, `DOOM1.WAD`, `DEFAULT.CFG`, and `DOOM.BAT`
+11. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
 
 ## Acceptance Criteria
 
@@ -67,9 +69,11 @@
 - `test-m6-dpmi-smoke` PASS
 - `test-m6-dpmi-call-smoke` PASS
 - `test-m6-dpmi-bootstrap-smoke` PASS
+- `test-m6-dpmi-mem-smoke` PASS
+- `test-m6-dpmi-free-smoke` PASS
 - `test-doom-target-packaging` PASS
 - No regressions to existing INT21h, MZ runtime, or shell flow
-- Real DOS/4GW execution remains next increment beyond the current descriptor + version + bootstrap callable baseline
+- Real DOS/4GW execution remains next increment beyond the current descriptor + version + bootstrap + stateful memory callable baseline
 
 ## Reference
 
