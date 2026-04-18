@@ -280,10 +280,19 @@ QEMU_ARGS=(
   -global isa-debugcon.iobase=0xe9
 )
 
+QEMU_SERIAL_CAPTURE_VIA_STDIO=0
+
 if [[ -n "$QEMU_SERIAL_FILE" ]]; then
     rm -f "$QEMU_SERIAL_FILE"
     echo "[CiukiOS] QEMU serial sink: file:$QEMU_SERIAL_FILE"
-    QEMU_ARGS+=( -serial "file:$QEMU_SERIAL_FILE" )
+    if [[ "$QEMU_HEADLESS" == "1" ]]; then
+        # Keep GOP/VGA available in headless test runs while still capturing
+        # serial deterministically through stdout and a tee'd file sink.
+        QEMU_SERIAL_CAPTURE_VIA_STDIO=1
+        QEMU_ARGS+=( -serial stdio )
+    else
+        QEMU_ARGS+=( -serial "file:$QEMU_SERIAL_FILE" )
+    fi
 else
     QEMU_ARGS+=( -serial stdio )
 fi
@@ -296,7 +305,7 @@ if [[ "$QEMU_NO_SHUTDOWN" == "1" ]]; then
 fi
 
 if [[ "$QEMU_HEADLESS" == "1" ]]; then
-    QEMU_ARGS+=(-nographic)
+    QEMU_ARGS+=(-display none -monitor none)
 fi
 
 if [[ -n "$QEMU_BOOT_ORDER" ]]; then
@@ -308,8 +317,17 @@ if [[ "$TRACE_INT" == "1" ]]; then
   QEMU_ARGS+=(-d int)
 fi
 
-exec qemu-system-x86_64 \
-  "${QEMU_ARGS[@]}" \
-  -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-  -drive if=pflash,format=raw,file="$OVMF_VARS_DST" \
-  -drive format=raw,file="$IMAGE"
+QEMU_CMD=(
+    qemu-system-x86_64
+    "${QEMU_ARGS[@]}"
+    -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE"
+    -drive if=pflash,format=raw,file="$OVMF_VARS_DST"
+    -drive format=raw,file="$IMAGE"
+)
+
+if [[ "$QEMU_SERIAL_CAPTURE_VIA_STDIO" == "1" ]]; then
+        "${QEMU_CMD[@]}" | tee "$QEMU_SERIAL_FILE"
+    exit ${PIPESTATUS[0]}
+fi
+
+exec "${QEMU_CMD[@]}"

@@ -116,6 +116,12 @@ Current public version in README: `CiukiOS Alpha v0.8.5`
 ## Test and Validation Overview
 The project emphasizes deterministic, scriptable validation.
 
+On graphical Linux hosts where headless QEMU boots do not emit usable serial markers,
+the stage2 and dosrun runtime gates now retry automatically with a graphical QEMU
+fallback while keeping serial capture enabled. This preserves a deterministic log-based
+result on hosts where `CIUKIOS_QEMU_HEADLESS=1` is silent, instead of failing with an
+unclassified infrastructure-only outcome.
+
 Important gates include:
 1. `make test-stage2`
 2. `make test-fallback`

@@ -5,6 +5,13 @@
 Open Source RetroOS project built from scratch.
 Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
 
+## Quick Links
+1. Project roadmap: [Roadmap.md](Roadmap.md)
+2. Detailed DOOM roadmap: [docs/roadmap-ciukios-doom.md](docs/roadmap-ciukios-doom.md)
+3. Donations and support: [DONATIONS.md](DONATIONS.md)
+4. Full documentation: [documentation.md](documentation.md)
+5. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+
 ## Current Version
 `CiukiOS Alpha v0.8.5`
 Focus: compatibility foundation + progressive desktop/runtime improvements.

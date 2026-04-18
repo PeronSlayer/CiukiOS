@@ -29,35 +29,74 @@ if [[ ! -x "$RUN_SCRIPT" ]]; then
     exit 1
 fi
 
+run_boot_attempt() {
+    local label="$1"
+    local headless="$2"
+    local attempt_log="$LOG_DIR/stage2-boot-${label}.attempt.log"
+    local attempt_serial="$LOG_DIR/stage2-boot-${label}.serial.log"
+    local rc
+
+    rm -f "$attempt_log" "$attempt_serial" "$DEBUGCON_LOG"
+
+    echo "[test-stage2] starting boot (${label}, timeout ${TIMEOUT_SECONDS}s)..."
+    set +e
+    CIUKIOS_INCLUDE_FREEDOS=0 \
+    CIUKIOS_INCLUDE_OPENGEM=0 \
+    CIUKIOS_SKIP_BUILD=1 \
+    CIUKIOS_QEMU_HEADLESS="$headless" \
+    CIUKIOS_QEMU_SERIAL_FILE="$attempt_serial" \
+    timeout "${TIMEOUT_SECONDS}s" "$RUN_SCRIPT" > "$attempt_log" 2>&1
+    rc=$?
+
+    {
+        echo
+        echo "[test-stage2] ---- attempt ${label} log ----"
+        cat "$attempt_log"
+        if [[ -f "$attempt_serial" ]]; then
+            echo
+            echo "[test-stage2] ---- attempt ${label} qemu serial log ----"
+            cat "$attempt_serial"
+        fi
+    } >> "$LOG_FILE"
+
+    STAGE2_ATTEMPT_LABEL="$label"
+    STAGE2_ATTEMPT_LOG="$attempt_log"
+    STAGE2_ATTEMPT_SERIAL="$attempt_serial"
+    return "$rc"
+}
+
 echo "[test-stage2] prebuilding artifacts..."
 make -C "$PROJECT_DIR" clean all
 make -C "$PROJECT_DIR/boot/uefi-loader" clean all
 
-echo "[test-stage2] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
+rm -f "$LOG_FILE"
 set +e
-CIUKIOS_INCLUDE_FREEDOS=0 \
-CIUKIOS_INCLUDE_OPENGEM=0 \
-CIUKIOS_SKIP_BUILD=1 \
-CIUKIOS_QEMU_HEADLESS=1 \
-CIUKIOS_QEMU_SERIAL_FILE="$SERIAL_LOG" \
-timeout "${TIMEOUT_SECONDS}s" "$RUN_SCRIPT" > "$LOG_FILE" 2>&1
+run_boot_attempt headless 1
 rc=$?
 set -e
+ACTIVE_LOG="$STAGE2_ATTEMPT_LOG"
+ACTIVE_SERIAL="$STAGE2_ATTEMPT_SERIAL"
+ACTIVE_LABEL="$STAGE2_ATTEMPT_LABEL"
+EVIDENCE_LOG="$LOG_FILE"
 
-if [[ -f "$SERIAL_LOG" ]]; then
-    {
-        echo
-        echo "[test-stage2] ---- qemu serial log ----"
-        cat "$SERIAL_LOG"
-    } >> "$LOG_FILE"
+serial_marker_count=$(grep -Ec "stage2\.elf loaded into memory|Stage2 ELF loaded, leaving Boot Services|\[ stage2 \]|COM catalog ready:" "$EVIDENCE_LOG" || true)
+if [[ "$serial_marker_count" -eq 0 ]] && grep -Fq "[CiukiOS] Starting QEMU..." "$ACTIVE_LOG"; then
+    echo "[test-stage2] headless capture produced no runtime markers; retrying with graphical QEMU fallback" | tee -a "$LOG_FILE"
+    set +e
+    run_boot_attempt gui-fallback 0
+    rc=$?
+    set -e
+    ACTIVE_LOG="$STAGE2_ATTEMPT_LOG"
+    ACTIVE_SERIAL="$STAGE2_ATTEMPT_SERIAL"
+    ACTIVE_LABEL="$STAGE2_ATTEMPT_LABEL"
 fi
 
 # Fast diagnostic: if QEMU launched but produced no loader/stage2 serial markers,
 # fail with infra-focused guidance instead of a generic missing-pattern error.
-serial_marker_count=$(grep -Ec "stage2\.elf loaded into memory|Stage2 ELF loaded, leaving Boot Services|\[ stage2 \]|COM catalog ready:" "$LOG_FILE" || true)
+serial_marker_count=$(grep -Ec "stage2\.elf loaded into memory|Stage2 ELF loaded, leaving Boot Services|\[ stage2 \]|COM catalog ready:" "$EVIDENCE_LOG" || true)
 if [[ "$serial_marker_count" -eq 0 ]]; then
-    if grep -Fq "[CiukiOS] Starting QEMU..." "$LOG_FILE"; then
-        echo "[INFRA] no loader/stage2 serial markers captured after QEMU launch." >&2
+    if grep -Fq "[CiukiOS] Starting QEMU..." "$EVIDENCE_LOG"; then
+        echo "[INFRA] no loader/stage2 serial markers captured after QEMU launch (attempt=${ACTIVE_LABEL})." >&2
         if [[ -f "$DEBUGCON_LOG" ]]; then
             if grep -q . "$DEBUGCON_LOG"; then
                 echo "[INFRA] debugcon tail ($DEBUGCON_LOG):" >&2
@@ -68,15 +107,15 @@ if [[ "$serial_marker_count" -eq 0 ]]; then
         else
             echo "[INFRA] debugcon log not found: $DEBUGCON_LOG" >&2
         fi
-        if [[ -f "$SERIAL_LOG" ]]; then
-            if grep -q . "$SERIAL_LOG"; then
-                echo "[INFRA] serial log tail ($SERIAL_LOG):" >&2
-                tail -n 120 "$SERIAL_LOG" >&2 || true
+        if [[ -f "$ACTIVE_SERIAL" ]]; then
+            if grep -q . "$ACTIVE_SERIAL"; then
+                echo "[INFRA] serial log tail ($ACTIVE_SERIAL):" >&2
+                tail -n 120 "$ACTIVE_SERIAL" >&2 || true
             else
-                echo "[INFRA] serial log exists but is empty: $SERIAL_LOG" >&2
+                echo "[INFRA] serial log exists but is empty: $ACTIVE_SERIAL" >&2
             fi
         else
-            echo "[INFRA] serial log not found: $SERIAL_LOG" >&2
+            echo "[INFRA] serial log not found: $ACTIVE_SERIAL" >&2
         fi
         echo "[INFRA] stage2 gate cannot classify runtime behavior on this host (serial capture unavailable)." >&2
         exit 1
@@ -87,7 +126,7 @@ if [[ $rc -eq 124 ]]; then
     echo "[test-stage2] timeout reached (expected for QEMU halt loop)"
 elif [[ $rc -ne 0 ]]; then
     echo "[FAIL] run_ciukios.sh exited with error (exit=$rc)" >&2
-    tail -n 120 "$LOG_FILE" >&2 || true
+    tail -n 120 "$EVIDENCE_LOG" >&2 || true
     exit 1
 fi
 
@@ -146,18 +185,18 @@ forbidden_patterns=(
 )
 
 for pattern in "${required_patterns[@]}"; do
-    if ! grep -Fq "$pattern" "$LOG_FILE"; then
+    if ! grep -Fq "$pattern" "$EVIDENCE_LOG"; then
         echo "[FAIL] missing required pattern: $pattern" >&2
-        tail -n 160 "$LOG_FILE" >&2 || true
+        tail -n 160 "$EVIDENCE_LOG" >&2 || true
         exit 1
     fi
     echo "[OK] found: $pattern"
 done
 
 for pattern in "${forbidden_patterns[@]}"; do
-    if grep -Fq "$pattern" "$LOG_FILE"; then
+    if grep -Fq "$pattern" "$EVIDENCE_LOG"; then
         echo "[FAIL] forbidden pattern found: $pattern" >&2
-        tail -n 160 "$LOG_FILE" >&2 || true
+        tail -n 160 "$EVIDENCE_LOG" >&2 || true
         exit 1
     fi
     echo "[OK] absent: $pattern"

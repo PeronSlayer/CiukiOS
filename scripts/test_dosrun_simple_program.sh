@@ -42,6 +42,42 @@ if [[ -f "$FDAUTO_PATH" ]]; then
     cp "$FDAUTO_PATH" "$BACKUP_PATH"
 fi
 
+run_dosrun_attempt() {
+    local label="$1"
+    local headless="$2"
+    local attempt_log="$LOG_DIR/dosrun-simple-${label}.attempt.log"
+    local attempt_serial="$LOG_DIR/dosrun-simple-${label}.serial.log"
+    local rc
+
+    rm -f "$attempt_log" "$attempt_serial"
+
+    echo "[test-dosrun-simple] starting boot (${label}, timeout ${TIMEOUT_SECONDS}s)..."
+    set +e
+    CIUKIOS_INCLUDE_FREEDOS=1 \
+    CIUKIOS_INCLUDE_OPENGEM=0 \
+    CIUKIOS_SKIP_BUILD=1 \
+    CIUKIOS_QEMU_HEADLESS="$headless" \
+    CIUKIOS_QEMU_SERIAL_FILE="$attempt_serial" \
+    timeout "${TIMEOUT_SECONDS}s" "$RUN_SCRIPT" > "$attempt_log" 2>&1
+    rc=$?
+
+    {
+        echo
+        echo "[test-dosrun-simple] ---- attempt ${label} log ----"
+        cat "$attempt_log"
+        if [[ -f "$attempt_serial" ]]; then
+            echo
+            echo "[test-dosrun-simple] ---- attempt ${label} qemu serial log ----"
+            cat "$attempt_serial"
+        fi
+    } >> "$LOG_FILE"
+
+    DOSRUN_ATTEMPT_LABEL="$label"
+    DOSRUN_ATTEMPT_LOG="$attempt_log"
+    DOSRUN_ATTEMPT_SERIAL="$attempt_serial"
+    return "$rc"
+}
+
 cat > "$FDAUTO_PATH" <<'EOF'
 echo [dosrun-e2e] begin
 run CIUKSMK.COM
@@ -54,30 +90,34 @@ make -C "$PROJECT_DIR" all
 make -C "$PROJECT_DIR/boot/uefi-loader" clean
 make -C "$PROJECT_DIR/boot/uefi-loader" all
 
-echo "[test-dosrun-simple] starting boot (timeout ${TIMEOUT_SECONDS}s)..."
+rm -f "$LOG_FILE"
 set +e
-CIUKIOS_INCLUDE_FREEDOS=1 \
-CIUKIOS_INCLUDE_OPENGEM=0 \
-CIUKIOS_SKIP_BUILD=1 \
-CIUKIOS_QEMU_HEADLESS=1 \
-CIUKIOS_QEMU_SERIAL_FILE="$SERIAL_LOG" \
-timeout "${TIMEOUT_SECONDS}s" "$RUN_SCRIPT" > "$LOG_FILE" 2>&1
+run_dosrun_attempt headless 1
 rc=$?
 set -e
+ACTIVE_LOG="$DOSRUN_ATTEMPT_LOG"
+ACTIVE_SERIAL="$DOSRUN_ATTEMPT_SERIAL"
+ACTIVE_LABEL="$DOSRUN_ATTEMPT_LABEL"
+EVIDENCE_LOG="$LOG_FILE"
 
-if [[ -f "$SERIAL_LOG" ]]; then
-    {
-        echo
-        echo "[test-dosrun-simple] ---- qemu serial log ----"
-        cat "$SERIAL_LOG"
-    } >> "$LOG_FILE"
+if ! grep -Fq "[ ok ] stage2 mini shell ready" "$EVIDENCE_LOG"; then
+    if grep -Fq "[CiukiOS] Starting QEMU..." "$EVIDENCE_LOG"; then
+        echo "[test-dosrun-simple] headless capture produced no shell markers; retrying with graphical QEMU fallback" | tee -a "$LOG_FILE"
+        set +e
+        run_dosrun_attempt gui-fallback 0
+        rc=$?
+        set -e
+        ACTIVE_LOG="$DOSRUN_ATTEMPT_LOG"
+        ACTIVE_SERIAL="$DOSRUN_ATTEMPT_SERIAL"
+        ACTIVE_LABEL="$DOSRUN_ATTEMPT_LABEL"
+    fi
 fi
 
 if [[ $rc -eq 124 ]]; then
     echo "[test-dosrun-simple] timeout reached (expected for QEMU halt loop)"
 elif [[ $rc -ne 0 ]]; then
     echo "[FAIL] run_ciukios.sh exited with error (exit=$rc)" >&2
-    tail -n 120 "$LOG_FILE" >&2 || true
+    tail -n 120 "$EVIDENCE_LOG" >&2 || true
     exit 1
 fi
 
@@ -103,18 +143,18 @@ forbidden_patterns=(
 )
 
 for pattern in "${required_patterns[@]}"; do
-    if ! grep -Fq "$pattern" "$LOG_FILE"; then
+    if ! grep -Fq "$pattern" "$EVIDENCE_LOG"; then
         echo "[FAIL] missing required pattern: $pattern" >&2
-        tail -n 200 "$LOG_FILE" >&2 || true
+        tail -n 200 "$EVIDENCE_LOG" >&2 || true
         exit 1
     fi
     echo "[OK] found: $pattern"
 done
 
 for pattern in "${forbidden_patterns[@]}"; do
-    if grep -Fq "$pattern" "$LOG_FILE"; then
+    if grep -Fq "$pattern" "$EVIDENCE_LOG"; then
         echo "[FAIL] forbidden pattern found: $pattern" >&2
-        tail -n 200 "$LOG_FILE" >&2 || true
+        tail -n 200 "$EVIDENCE_LOG" >&2 || true
         exit 1
     fi
     echo "[OK] absent: $pattern"
