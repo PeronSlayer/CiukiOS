@@ -11,10 +11,14 @@ You are implementing a second wave of shell UX improvements for the CiukiOS stag
 
 Read first:
 1. `CLAUDE.md`
-2. `docs/copilot-task-codex-shell-ux-002.md`
-3. `docs/handoffs/2026-04-18-copilot-codex-shell-ux-001.md`
-4. `stage2/src/shell.c`
-5. relevant keyboard/video headers and implementation files
+2. `docs/agent-directives.md`
+3. `docs/collab/diario-di-bordo.md`
+4. `docs/copilot-task-codex-shell-ux-002.md`
+5. `docs/handoffs/2026-04-18-copilot-codex-shell-ux-001.md`
+6. `stage2/src/shell.c`
+7. relevant keyboard/video headers and implementation files
+
+Before starting implementation, confirm in `docs/collab/diario-di-bordo.md` that no other agent is already working on the same project area. If it is already occupied, stop and choose a different section instead of overlapping work.
 
 Context:
 SHELL-UX-001 already introduced direct execution by program name, command history on up/down arrows, and basic readability cleanup. Do not reimplement those features; build on them.
@@ -39,6 +43,7 @@ Hard requirements:
 3. Do not bump project version.
 4. Do not commit on `main`.
 5. Reuse the SHELL-UX-001 behavior as the baseline rather than bypassing it.
+6. Update `docs/collab/diario-di-bordo.md` at the end of the task, and do not add that file to Git.
 
 Implementation guidance:
 1. Use `stage2/src/shell.c` as the main integration point.
