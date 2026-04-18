@@ -16,13 +16,6 @@ Mission: become a progressively more complete environment capable of running DOS
 `CiukiOS Alpha v0.8.5`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
-## Index
-1. Full documentation: [documentation.md](documentation.md)
-2. Full changelog: [CHANGELOG.md](CHANGELOG.md)
-3. High-level roadmap: [Roadmap.md](Roadmap.md)
-4. Detailed DOOM roadmap: [docs/roadmap-ciukios-doom.md](docs/roadmap-ciukios-doom.md)
-5. Donations and support: [DONATIONS.md](DONATIONS.md)
-
 ## Changelog (Latest)
 ### v0.8.5
 1. Added signed/clipped mode 0x13 patch placement helpers: `gfx_mode13_blit_indexed_clip(...)` for opaque/masked indexed blits with automatic off-screen crop and `gfx_mode13_blit_scaled_clip(...)` for stable nearest-neighbor scaled patches with signed destination coordinates.
