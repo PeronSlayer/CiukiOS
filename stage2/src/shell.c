@@ -149,6 +149,26 @@ static shell_dpmi_mem_block_t *shell_dpmi_find_free_block_slot(void) {
     return 0;
 }
 
+static ciuki_int21_regs_t *shell_dpmi_real_mode_regs_ptr(ciuki_dos_context_t *ctx, u16 seg, u16 off) {
+    if (!ctx) {
+        return 0;
+    }
+
+    if (seg != ctx->psp_segment) {
+        return 0;
+    }
+
+    if ((u32)off >= ctx->image_size) {
+        return 0;
+    }
+
+    if ((u32)off + (u32)sizeof(ciuki_int21_regs_t) > ctx->image_size) {
+        return 0;
+    }
+
+    return (ciuki_int21_regs_t *)(ctx->image_linear + (u64)off);
+}
+
 static int shell_dpmi_alloc_mem_block(u32 size, u32 *linear_out, u32 *handle_out) {
     shell_dpmi_mem_block_t *slot;
     u32 cursor;
@@ -2930,8 +2950,6 @@ static void shell_com_int1a(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
 }
 
 static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
-    (void)ctx;
-
     if (!regs) {
         return;
     }
@@ -2954,6 +2972,40 @@ static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         regs->cx = 0x0200U;
         regs->si = 0xF000U;
         regs->di = 0x0300U;
+        regs->carry = 0U;
+        return;
+    }
+
+    if (regs->ax == 0x0300U) {
+        /*
+         * Minimal DPMI 0.9 Simulate Real Mode Interrupt slice.
+         * Current callable baseline supports only BL=0x21 (INT 21h) and uses
+         * ES:DI to point at a ciuki_int21_regs_t frame inside the active DOS image.
+         */
+        ciuki_int21_regs_t *rm_regs;
+        u8 int_no = (u8)(regs->bx & 0x00FFU);
+
+        if (!ctx || (regs->bx & 0xFF00U) != 0U || regs->cx != 0U) {
+            regs->carry = 1U;
+            regs->ax = 0x8021U; /* invalid value */
+            return;
+        }
+
+        rm_regs = shell_dpmi_real_mode_regs_ptr(ctx, regs->es, regs->di);
+        if (!rm_regs) {
+            regs->carry = 1U;
+            regs->ax = 0x8021U; /* invalid register frame */
+            return;
+        }
+
+        if (int_no != 0x21U) {
+            regs->carry = 1U;
+            regs->ax = 0x8001U; /* unsupported function */
+            return;
+        }
+
+        shell_com_int21(ctx, rm_regs);
+        regs->ax = 0x0000U;
         regs->carry = 0U;
         return;
     }
