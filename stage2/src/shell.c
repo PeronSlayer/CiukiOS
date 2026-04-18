@@ -4089,6 +4089,8 @@ static void shell_run_staged_image(
     svc.terminate = shell_com_terminate;
     svc.gfx = &g_shell_runtime_gfx_services;
     svc.serial_print = serial_write;
+    svc.ui_top_bar = ui_draw_top_bar;
+    svc.ui_reserve_top_row = video_set_text_window;
 
     serial_write("[dosrun] executing name=");
     serial_write(name && name[0] != '\0' ? name : "COM");
