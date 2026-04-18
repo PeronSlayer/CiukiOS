@@ -38,6 +38,9 @@ static const ciuki_gfx_services_t g_gfx_services;
 #define SHELL_INT21_DTA_NAME_OFFSET 0x1EU
 #define SHELL_INT21_DTA_ATTR_OFFSET 0x15U
 #define SHELL_INT21_DTA_SIZE_OFFSET 0x1AU
+#define SHELL_DPMI_MEM_MAX_BLOCKS 16U
+#define SHELL_DPMI_MEM_BASE 0x00100000U
+#define SHELL_DPMI_MEM_LIMIT 0x02100000U
 #define SHELL_ENV_MAX 32U
 #define SHELL_ENV_NAME_MAX 16U
 #define SHELL_ENV_VALUE_MAX 96U
@@ -109,7 +112,114 @@ typedef struct shell_int21_find_state {
     char pattern[SHELL_PATH_MAX];
 } shell_int21_find_state_t;
 
+typedef struct shell_dpmi_mem_block {
+    u8 used;
+    u8 reserved[3];
+    u32 handle;
+    u32 linear_base;
+    u32 size;
+} shell_dpmi_mem_block_t;
+
 static shell_int21_file_handle_t g_int21_file_handles[SHELL_INT21_MAX_FILE_HANDLES];
+static shell_dpmi_mem_block_t g_shell_dpmi_mem_blocks[SHELL_DPMI_MEM_MAX_BLOCKS];
+static u32 g_shell_dpmi_next_handle = 1U;
+
+static shell_dpmi_mem_block_t *shell_dpmi_find_block_by_handle(u32 handle) {
+    if (handle == 0U) {
+        return 0;
+    }
+
+    for (u32 i = 0U; i < SHELL_DPMI_MEM_MAX_BLOCKS; i++) {
+        if (g_shell_dpmi_mem_blocks[i].used &&
+            g_shell_dpmi_mem_blocks[i].handle == handle) {
+            return &g_shell_dpmi_mem_blocks[i];
+        }
+    }
+
+    return 0;
+}
+
+static shell_dpmi_mem_block_t *shell_dpmi_find_free_block_slot(void) {
+    for (u32 i = 0U; i < SHELL_DPMI_MEM_MAX_BLOCKS; i++) {
+        if (!g_shell_dpmi_mem_blocks[i].used) {
+            return &g_shell_dpmi_mem_blocks[i];
+        }
+    }
+
+    return 0;
+}
+
+static int shell_dpmi_alloc_mem_block(u32 size, u32 *linear_out, u32 *handle_out) {
+    shell_dpmi_mem_block_t *slot;
+    u32 cursor;
+
+    if (size == 0U || !linear_out || !handle_out) {
+        return 0;
+    }
+
+    slot = shell_dpmi_find_free_block_slot();
+    if (!slot) {
+        return 0;
+    }
+
+    cursor = SHELL_DPMI_MEM_BASE;
+    while (1) {
+        int overlapped = 0;
+        u64 candidate_end = (u64)cursor + (u64)size;
+        if (candidate_end > (u64)SHELL_DPMI_MEM_LIMIT) {
+            return 0;
+        }
+
+        for (u32 i = 0U; i < SHELL_DPMI_MEM_MAX_BLOCKS; i++) {
+            shell_dpmi_mem_block_t *block = &g_shell_dpmi_mem_blocks[i];
+            u64 block_start;
+            u64 block_end;
+
+            if (!block->used) {
+                continue;
+            }
+
+            block_start = (u64)block->linear_base;
+            block_end = block_start + (u64)block->size;
+            if (candidate_end <= block_start || (u64)cursor >= block_end) {
+                continue;
+            }
+
+            cursor = (u32)((block_end + 0xFFFULL) & ~0xFFFULL);
+            overlapped = 1;
+            break;
+        }
+
+        if (!overlapped) {
+            break;
+        }
+    }
+
+    slot->used = 1U;
+    slot->handle = g_shell_dpmi_next_handle++;
+    if (g_shell_dpmi_next_handle == 0U) {
+        g_shell_dpmi_next_handle = 1U;
+    }
+    slot->linear_base = cursor;
+    slot->size = size;
+
+    *linear_out = slot->linear_base;
+    *handle_out = slot->handle;
+    return 1;
+}
+
+static int shell_dpmi_free_mem_block(u32 handle) {
+    shell_dpmi_mem_block_t *block = shell_dpmi_find_block_by_handle(handle);
+    if (!block) {
+        return 0;
+    }
+
+    block->used = 0U;
+    block->handle = 0U;
+    block->linear_base = 0U;
+    block->size = 0U;
+    return 1;
+}
 
 static int shell_dir_fat_cb(const fat_dir_entry_t *entry, void *ctx_void);
 static int shell_int21_resolve_rw_buffer(ciuki_dos_context_t *ctx, u16 off, u16 count, u8 **buf_out);
@@ -2791,20 +2901,49 @@ static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     if (regs->ax == 0x0501U) {
         /*
          * DPMI 0.9 Allocate Memory Block callable slice.
-         * Requested size is BX:CX; we return a synthetic non-zero
-         * linear address in BX:CX and a non-zero memory handle in SI:DI
-         * so real extenders can observe the shape of a successful alloc.
-         * A zero-size request surfaces as DPMI error 8021h with carry set.
+         * Requested size is BX:CX; we now track a synthetic stateful block
+         * so a later AX=0502 free call can validate handle ownership.
          */
+        u32 request_size;
+        u32 linear_addr;
+        u32 handle;
+
+        request_size = ((u32)regs->bx << 16) | (u32)regs->cx;
         if (regs->bx == 0U && regs->cx == 0U) {
             regs->carry = 1U;
             regs->ax = 0x8021U; /* DPMI error: invalid value */
             return;
         }
-        regs->bx = 0x0010U; /* linear address high word (synthetic) */
-        regs->cx = 0x0000U; /* linear address low word (synthetic) */
-        regs->si = 0x0010U; /* memory handle high word (synthetic) */
-        regs->di = 0x0000U; /* memory handle low word (synthetic) */
+
+        if (!shell_dpmi_alloc_mem_block(request_size, &linear_addr, &handle)) {
+            regs->carry = 1U;
+            regs->ax = 0x8013U; /* DPMI error: insufficient memory */
+            return;
+        }
+
+        regs->ax = 0x0000U;
+        regs->bx = (u16)(linear_addr >> 16);
+        regs->cx = (u16)(linear_addr & 0xFFFFU);
+        regs->si = (u16)(handle >> 16);
+        regs->di = (u16)(handle & 0xFFFFU);
+        regs->carry = 0U;
+        return;
+    }
+
+    if (regs->ax == 0x0502U) {
+        /*
+         * DPMI 0.9 Free Memory Block callable slice.
+         * Handle is passed in SI:DI. Success now depends on a previous
+         * stateful AX=0501 allocation, so duplicate frees are detectable.
+         */
+        u32 handle = ((u32)regs->si << 16) | (u32)regs->di;
+        if (handle == 0U || !shell_dpmi_free_mem_block(handle)) {
+            regs->carry = 1U;
+            regs->ax = 0x8023U; /* DPMI error: invalid handle */
+            return;
+        }
+
+        regs->ax = 0x0000U;
         regs->carry = 0U;
         return;
     }

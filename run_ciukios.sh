@@ -164,6 +164,10 @@ if [[ -f "$BUILD_DIR/CIUKMEM.EXE" ]]; then
     mcopy -i "$IMAGE" "$BUILD_DIR/CIUKMEM.EXE" ::EFI/CiukiOS/CIUKMEM.EXE
     echo "[CiukiOS] CIUKMEM.EXE copied to image"
 fi
+if [[ -f "$BUILD_DIR/CIUKREL.EXE" ]]; then
+    mcopy -i "$IMAGE" "$BUILD_DIR/CIUKREL.EXE" ::EFI/CiukiOS/CIUKREL.EXE
+    echo "[CiukiOS] CIUKREL.EXE copied to image"
+fi
 
 copy_freedos_file_if_present() {
     local src="$1"
