@@ -38,6 +38,7 @@
 - Descriptor slice step-up now returns a non-zero host entry pointer (`ES:DI`) and host-data size (`SI`) so regressions can validate more than simple presence.
 - First callable host slice is now exposed through the services ABI as `INT 31h AX=0400h` (Get Version), returning a DPMI 0.9-style host profile for client-side regression.
 - First bootstrap-facing host slice is now exposed through the services ABI as `INT 31h AX=0306h` (Get Raw Mode Switch Addresses), returning non-zero entry points for the current smoke baseline.
+- First interrupt-reflection slice is now exposed through the services ABI as `INT 31h AX=0300h` for `BL=0x21` only, reflecting a minimal real-mode `INT 21h` frame stored at `ES:DI` back through the existing DOS runtime handler.
 
 ### 4. Memory Accounting
 - Track allocated pmode memory (separate from DOS conventional/HMA)
@@ -58,8 +59,9 @@
 7. **DPMI bootstrap smoke:** `make test-m6-dpmi-bootstrap-smoke` validates a reproducible MZ smoke binary (`CIUK306.EXE` -> `0x4E`) requiring `AX=1687h` descriptor metadata plus `INT 31h AX=0306h` success
 8. **DPMI allocate-memory smoke:** `make test-m6-dpmi-mem-smoke` validates a reproducible MZ smoke binary (`CIUKMEM.EXE` -> `0x54`) requiring `AX=0501h` success with non-zero linear address and handle
 9. **DPMI free-memory smoke:** `make test-m6-dpmi-free-smoke` validates a reproducible MZ smoke binary (`CIUKREL.EXE` -> `0x56`) requiring a stateful `AX=0501h` allocation followed by `AX=0502h` success and duplicate-free rejection
-10. **DOOM packaging harness:** `make test-doom-target-packaging` validates deterministic image packaging/discovery for `DOOM.EXE`, `DOOM1.WAD`, `DEFAULT.CFG`, and `DOOM.BAT`
-11. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
+10. **DPMI reflect smoke:** `make test-m6-dpmi-reflect-smoke` validates a reproducible MZ smoke binary (`CIUKRMI.EXE` -> `0x59`) requiring `AX=0300h` success with a reflected real-mode `INT 21h AH=30h` DOS-version query frame
+11. **DOOM packaging harness:** `make test-doom-target-packaging` validates deterministic image packaging/discovery for `DOOM.EXE`, `DOOM1.WAD`, `DEFAULT.CFG`, and `DOOM.BAT`
+12. **Aggregate:** `bash scripts/test_doom_readiness_m6.sh`
 
 ## Acceptance Criteria
 
@@ -71,9 +73,10 @@
 - `test-m6-dpmi-bootstrap-smoke` PASS
 - `test-m6-dpmi-mem-smoke` PASS
 - `test-m6-dpmi-free-smoke` PASS
+- `test-m6-dpmi-reflect-smoke` PASS
 - `test-doom-target-packaging` PASS
 - No regressions to existing INT21h, MZ runtime, or shell flow
-- Real DOS/4GW execution remains next increment beyond the current descriptor + version + bootstrap + stateful memory callable baseline
+- Real DOS/4GW execution remains next increment beyond the current descriptor + version + bootstrap + stateful memory + interrupt-reflection callable baseline
 
 ## Reference
 

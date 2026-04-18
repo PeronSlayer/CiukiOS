@@ -101,6 +101,10 @@ static int m6_int_reflect_skeleton_ready(void) {
     return 1;
 }
 
+static int m6_int_reflect_slice_ready(void) {
+    return 1;
+}
+
 static int m6_dpmi_descriptor_slice_ready(void) {
 	return 1;
 }
@@ -630,6 +634,9 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     }
     if (m6_int_reflect_skeleton_ready()) {
         serial_write("[m6] int reflect skeleton ready\n");
+    }
+    if (m6_int_reflect_slice_ready()) {
+        serial_write("[m6] int reflect callable slice ready\n");
     }
     if (m6_dpmi_descriptor_slice_ready()) {
 		serial_write("[m6] dpmi host descriptor slice ready\n");
