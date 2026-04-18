@@ -24,7 +24,6 @@ static char g_work_buf[320];
 
 static const char k_default_name[] = "UNTITLED.TXT";
 static const char k_prompt[] = "edit> ";
-static const char k_help_hint[] = "Type :h for help, :l to list, :q to quit.";
 /*
  * Top header bar content. Kept short and command-oriented so it stays
  * readable on the default text-mode width. The final '$' of the banner
@@ -32,7 +31,7 @@ static const char k_help_hint[] = "Type :h for help, :l to list, :q to quit.";
  * rendered directly via ui_top_bar.
  */
 static const char k_header_bar[] =
-    "CiukiOS EDIT  |  :w save  :q quit  :wq save+quit  :l list  :d N del  :h help";
+    "CiukiOS EDIT  :w save  :q quit  :wq save+quit  :i ins  :s sub  :d del  :c clr  :r reload  :h help";
 
 static void mem_copy(void *dst, const void *src, u32 n) {
     u8 *d = (u8 *)dst;
@@ -284,6 +283,7 @@ static void emit_error_rc(ciuki_dos_context_t *ctx, ciuki_services_t *svc, const
 
 static void emit_open_new(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     u32 n = 0U;
+    (void)ctx;
     mem_zero(g_work_buf, (u32)sizeof(g_work_buf));
     mem_copy(g_work_buf + n, "[edit] open path=", 17U);
     n += 17U;
@@ -291,16 +291,18 @@ static void emit_open_new(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     n += str_len(g_filename);
     mem_copy(g_work_buf + n, " new=1\n", 7U);
     emit_marker(svc, g_work_buf);
-
-    emit_simple(ctx, svc, "New file: ");
-    emit_simple(ctx, svc, g_filename);
-    emit_simple(ctx, svc, "\n");
+    /*
+     * No visible print here: the editor redraw renders a status line
+     * after the load phase. Keeping this serial-only avoids polluting
+     * the decorated surface that redraw builds immediately after.
+     */
 }
 
 static void emit_open_stats(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u32 lines, u32 bytes) {
     char a[12];
     char b[12];
     u32 n = 0U;
+    (void)ctx;
     to_dec(a, (u32)sizeof(a), lines);
     to_dec(b, (u32)sizeof(b), bytes);
 
@@ -320,14 +322,7 @@ static void emit_open_stats(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u32
     g_work_buf[n++] = '\n';
     g_work_buf[n] = '\0';
     emit_marker(svc, g_work_buf);
-
-    emit_simple(ctx, svc, "Opened ");
-    emit_simple(ctx, svc, g_filename);
-    emit_simple(ctx, svc, " (");
-    emit_simple(ctx, svc, a);
-    emit_simple(ctx, svc, lines == 1U ? " line, " : " lines, ");
-    emit_simple(ctx, svc, b);
-    emit_simple(ctx, svc, " bytes)\n");
+    /* Visible "Opened … (N lines, M bytes)" is produced by the redraw. */
 }
 
 static void emit_save_stats(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u32 lines, u32 bytes) {
@@ -482,6 +477,59 @@ static void delete_line_at(u16 idx) {
         g_line_len[i] = g_line_len[i + 1U];
     }
     g_line_count--;
+}
+
+/* Insert `text` as a brand-new line before `idx` (0-based). Shifts the
+ * existing tail down by one slot. No-op with return 0 if the buffer is
+ * already full or idx is past end+1. */
+static int insert_line_at(u16 idx, const char *text, u16 len) {
+    u16 i;
+    u16 n = len;
+
+    if (g_line_count >= EDIT_MAX_LINES) {
+        return 0;
+    }
+    if (idx > g_line_count) {
+        return 0;
+    }
+    if (n > EDIT_MAX_COLS) {
+        n = EDIT_MAX_COLS;
+    }
+
+    for (i = g_line_count; i > idx; i--) {
+        mem_copy(g_lines[i], g_lines[i - 1U], EDIT_MAX_COLS + 1U);
+        g_line_len[i] = g_line_len[i - 1U];
+    }
+
+    if (n > 0U) {
+        mem_copy(g_lines[idx], text, n);
+    }
+    g_lines[idx][n] = '\0';
+    g_line_len[idx] = n;
+    g_line_count++;
+    return 1;
+}
+
+/* Replace the content of the existing line `idx` with `text`. Returns 0
+ * if idx is out of range. */
+static int replace_line_at(u16 idx, const char *text, u16 len) {
+    u16 n = len;
+    if (idx >= g_line_count) {
+        return 0;
+    }
+    if (n > EDIT_MAX_COLS) {
+        n = EDIT_MAX_COLS;
+    }
+    if (n > 0U) {
+        mem_copy(g_lines[idx], text, n);
+    }
+    g_lines[idx][n] = '\0';
+    g_line_len[idx] = n;
+    return 1;
+}
+
+static void clear_buffer(void) {
+    g_line_count = 0U;
 }
 
 static int close_handle(ciuki_dos_context_t *ctx, ciuki_services_t *svc, u16 h) {
@@ -724,49 +772,102 @@ static int save_file(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     return 1;
 }
 
-static void print_header(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
-    /*
-     * Top command bar is rendered by editor_setup_surface via the UI ABI.
-     * Keep this in-console header minimal: just show the current file
-     * and a one-line hint so the typing area feels clean.
-     */
-    emit_simple(ctx, svc, "File: ");
-    emit_simple(ctx, svc, g_filename);
-    emit_simple(ctx, svc, "\n");
-    emit_simple(ctx, svc, k_help_hint);
-    emit_simple(ctx, svc, "\n");
-    emit_simple(ctx, svc, "\n");
-}
-
 static void print_help(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     emit_simple(ctx, svc, "Available commands:\n");
     emit_simple(ctx, svc, "  :w        save current file\n");
     emit_simple(ctx, svc, "  :q        quit (discards unsaved changes)\n");
     emit_simple(ctx, svc, "  :wq       save and quit\n");
-    emit_simple(ctx, svc, "  :l        list all lines\n");
+    emit_simple(ctx, svc, "  :l        redraw buffer\n");
     emit_simple(ctx, svc, "  :d N      delete line N (1-based)\n");
+    emit_simple(ctx, svc, "  :i N TEXT insert TEXT as new line before N\n");
+    emit_simple(ctx, svc, "  :s N TEXT replace line N with TEXT\n");
+    emit_simple(ctx, svc, "  :c        clear buffer\n");
+    emit_simple(ctx, svc, "  :r        reload file from disk\n");
     emit_simple(ctx, svc, "  :h        show this help\n");
-    emit_simple(ctx, svc, "Any other input is appended as a new line.\n");
+    emit_simple(ctx, svc, "Any plain input is appended as a new line.\n");
 }
 
-static void print_lines(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
+/*
+ * Render the full editor surface (cls + top bar + status line + visible
+ * buffer). Called after every operation that changes what the user
+ * needs to see, so the on-screen view is always consistent with the
+ * internal buffer. Also emits the `[edit] render lines=N` serial marker
+ * so external validation can confirm post-load visibility.
+ */
+static void print_buffer_lines(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     u16 i;
 
     if (g_line_count == 0U) {
-        emit_simple(ctx, svc, "(empty)\n");
+        emit_simple(ctx, svc, "(empty buffer - type text to add lines)\n");
         return;
     }
 
     for (i = 0U; i < g_line_count; i++) {
         char nbuf[12];
         to_dec(nbuf, (u32)sizeof(nbuf), (u32)(i + 1U));
+        /* Right-pad the number column to 3 for a consistent gutter. */
+        if (str_len(nbuf) < 3U) {
+            u32 pad = 3U - str_len(nbuf);
+            u32 k;
+            for (k = 0U; k < pad; k++) {
+                emit_simple(ctx, svc, " ");
+            }
+        }
         emit_simple(ctx, svc, nbuf);
-        emit_simple(ctx, svc, ": ");
+        emit_simple(ctx, svc, " | ");
         if (g_line_len[i] > 0U) {
-            write_buf(ctx, svc, g_lines[i], g_line_len[i]);
+            (void)write_buf(ctx, svc, g_lines[i], g_line_len[i]);
         }
         emit_simple(ctx, svc, "\n");
     }
+}
+
+static void emit_render_marker(ciuki_services_t *svc, u32 lines) {
+    char nbuf[12];
+    u32 n;
+
+    to_dec(nbuf, (u32)sizeof(nbuf), lines);
+
+    mem_zero(g_work_buf, (u32)sizeof(g_work_buf));
+    n = 0U;
+    mem_copy(g_work_buf + n, "[edit] render lines=", 20U);
+    n += 20U;
+    mem_copy(g_work_buf + n, nbuf, str_len(nbuf));
+    n += str_len(nbuf);
+    g_work_buf[n++] = '\n';
+    g_work_buf[n] = '\0';
+    emit_marker(svc, g_work_buf);
+}
+
+static void editor_redraw(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
+    char nbuf[12];
+
+    /* Full surface reset so nothing from previous output leaks in. */
+    editor_setup_surface(svc);
+
+    /* Status line. */
+    emit_simple(ctx, svc, "File: ");
+    emit_simple(ctx, svc, g_filename);
+    emit_simple(ctx, svc, "   Lines: ");
+    to_dec(nbuf, (u32)sizeof(nbuf), (u32)g_line_count);
+    emit_simple(ctx, svc, nbuf);
+    emit_simple(ctx, svc, g_dirty ? "   [modified]\n" : "   [clean]\n");
+
+    /* Visual separator. */
+    emit_simple(ctx, svc,
+                "-------------------------------------------------\n");
+
+    /* Visible buffer. */
+    print_buffer_lines(ctx, svc);
+
+    /* Bottom separator + compact action hint. */
+    emit_simple(ctx, svc,
+                "-------------------------------------------------\n");
+    emit_simple(ctx, svc,
+                ":w save  :q quit  :wq save+quit  :l redraw  :h help\n\n");
+
+    /* Telemetry: lets validation verify that a loaded file was rendered. */
+    emit_render_marker(svc, (u32)g_line_count);
 }
 
 static int parse_u16(const char *s, u16 *out) {
@@ -820,6 +921,7 @@ static void handle_command(ciuki_dos_context_t *ctx, ciuki_services_t *svc, char
             terminate(ctx, svc, 0x01U);
             return;
         }
+        editor_redraw(ctx, svc);
         return;
     }
 
@@ -840,12 +942,34 @@ static void handle_command(ciuki_dos_context_t *ctx, ciuki_services_t *svc, char
     }
 
     if (str_eq(cmd, ":l")) {
-        print_lines(ctx, svc);
+        editor_redraw(ctx, svc);
         return;
     }
 
     if (str_eq(cmd, ":h")) {
         print_help(ctx, svc);
+        return;
+    }
+
+    if (str_eq(cmd, ":c")) {
+        if (g_line_count > 0U) {
+            g_dirty = 1U;
+        }
+        clear_buffer();
+        emit_marker(svc, "[edit] clear\n");
+        editor_redraw(ctx, svc);
+        return;
+    }
+
+    if (str_eq(cmd, ":r")) {
+        clear_buffer();
+        g_dirty = 0U;
+        emit_marker(svc, "[edit] reload\n");
+        if (!load_file(ctx, svc)) {
+            terminate(ctx, svc, 0x01U);
+            return;
+        }
+        editor_redraw(ctx, svc);
         return;
     }
 
@@ -871,6 +995,86 @@ static void handle_command(ciuki_dos_context_t *ctx, ciuki_services_t *svc, char
 
         delete_line_at((u16)(idx - 1U));
         g_dirty = 1U;
+        editor_redraw(ctx, svc);
+        return;
+    }
+
+    if (str_starts_with(cmd, ":i") && (cmd[2] == ' ' || cmd[2] == '\t')) {
+        char arg[16];
+        u32 i = 2U;
+        u32 j = 0U;
+        u16 idx = 0U;
+        const char *text;
+        u16 text_len;
+
+        while (cmd[i] == ' ' || cmd[i] == '\t') {
+            i++;
+        }
+        while (cmd[i] != '\0' && cmd[i] != ' ' && cmd[i] != '\t'
+               && j + 1U < (u32)sizeof(arg)) {
+            arg[j++] = cmd[i++];
+        }
+        arg[j] = '\0';
+
+        if (!parse_u16(arg, &idx) || idx == 0U
+            || idx > (u16)(g_line_count + 1U)) {
+            emit_marker(svc, "[edit] error class=bad_index\n");
+            emit_simple(ctx, svc, "Error: invalid line number.\n");
+            return;
+        }
+
+        while (cmd[i] == ' ' || cmd[i] == '\t') {
+            i++;
+        }
+        text = cmd + i;
+        text_len = (u16)str_len(text);
+
+        if (!insert_line_at((u16)(idx - 1U), text, text_len)) {
+            emit_marker(svc, "[edit] error class=buffer_full\n");
+            emit_simple(ctx, svc, "Buffer full (max 200 lines).\n");
+            return;
+        }
+        g_dirty = 1U;
+        editor_redraw(ctx, svc);
+        return;
+    }
+
+    if (str_starts_with(cmd, ":s") && (cmd[2] == ' ' || cmd[2] == '\t')) {
+        char arg[16];
+        u32 i = 2U;
+        u32 j = 0U;
+        u16 idx = 0U;
+        const char *text;
+        u16 text_len;
+
+        while (cmd[i] == ' ' || cmd[i] == '\t') {
+            i++;
+        }
+        while (cmd[i] != '\0' && cmd[i] != ' ' && cmd[i] != '\t'
+               && j + 1U < (u32)sizeof(arg)) {
+            arg[j++] = cmd[i++];
+        }
+        arg[j] = '\0';
+
+        if (!parse_u16(arg, &idx) || idx == 0U || idx > g_line_count) {
+            emit_marker(svc, "[edit] error class=bad_index\n");
+            emit_simple(ctx, svc, "Error: invalid line number.\n");
+            return;
+        }
+
+        while (cmd[i] == ' ' || cmd[i] == '\t') {
+            i++;
+        }
+        text = cmd + i;
+        text_len = (u16)str_len(text);
+
+        if (!replace_line_at((u16)(idx - 1U), text, text_len)) {
+            emit_marker(svc, "[edit] error class=bad_index\n");
+            emit_simple(ctx, svc, "Error: invalid line number.\n");
+            return;
+        }
+        g_dirty = 1U;
+        editor_redraw(ctx, svc);
         return;
     }
 
@@ -903,12 +1107,19 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
         return;
     }
 
-    print_header(ctx, svc);
-
     if (!load_file(ctx, svc)) {
         terminate(ctx, svc, 0x01U);
         return;
     }
+
+    /*
+     * Root-cause fix for the "reopened file looks empty" bug:
+     * load_file() only populates g_lines[] — previously the user
+     * saw nothing on screen until `:l` was typed. Render the full
+     * decorated editor surface (status + buffer) immediately so the
+     * loaded content is actually visible after open.
+     */
+    editor_redraw(ctx, svc);
 
     for (;;) {
         emit_simple(ctx, svc, k_prompt);
