@@ -30,9 +30,17 @@ static u8 g_dirty;
  * empty). `g_viewport_top` is the 0-based index of the first line
  * currently drawn on screen; the redraw keeps the cursor inside the
  * viewport by shifting this value when needed.
+ *
+ * `g_view_active` is non-zero only while the interactive `:v` scroll
+ * mode is running. Outside of view mode the in-buffer `>` cursor
+ * indicator is suppressed and the writing/editing cursor is rendered
+ * on a synthetic "insertion line" below the buffer — this matches
+ * the user's mental model: the cursor lives where new text will land,
+ * not on an arbitrary navigation slot.
  */
 static u16 g_cursor_line;
 static u16 g_viewport_top;
+static u8 g_view_active;
 static u8 g_input_buf[2U + EDIT_INPUT_MAX + 2U];
 static u8 g_rw_buf[EDIT_RW_CHUNK];
 static char g_work_buf[320];
@@ -852,9 +860,13 @@ static void print_buffer_lines(ciuki_dos_context_t *ctx, ciuki_services_t *svc) 
 
     for (i = g_viewport_top; i < end; i++) {
         char nbuf[12];
-        /* Cursor indicator in the gutter: `>` on the cursor line,
-         * space otherwise. Visible, simple, works in pure text mode. */
-        emit_simple(ctx, svc, (i == g_cursor_line) ? ">" : " ");
+        /*
+         * Cursor indicator in the gutter: `>` only while interactive
+         * view mode is active. In normal edit mode the cursor lives
+         * on the synthetic insertion line drawn below the buffer.
+         */
+        emit_simple(ctx, svc,
+                    (g_view_active && i == g_cursor_line) ? ">" : " ");
 
         to_dec(nbuf, (u32)sizeof(nbuf), (u32)(i + 1U));
         /* Right-pad the number column to 3 for a consistent gutter. */
@@ -899,17 +911,23 @@ static void editor_redraw(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     /* Full surface reset so nothing from previous output leaks in. */
     editor_setup_surface(svc);
 
-    /* Status line — filename, total lines, cursor position, dirty. */
+    /* Status line — filename, total lines, cursor (in view mode), dirty. */
     emit_simple(ctx, svc, "File: ");
     emit_simple(ctx, svc, g_filename);
     emit_simple(ctx, svc, "   Lines: ");
     to_dec(nbuf, (u32)sizeof(nbuf), (u32)g_line_count);
     emit_simple(ctx, svc, nbuf);
-    emit_simple(ctx, svc, "   Cur: ");
-    to_dec(nbuf, (u32)sizeof(nbuf),
-           (u32)((g_line_count == 0U) ? 0U : (u32)(g_cursor_line + 1U)));
-    emit_simple(ctx, svc, nbuf);
+    if (g_view_active && g_line_count > 0U) {
+        emit_simple(ctx, svc, "   Cur: ");
+        to_dec(nbuf, (u32)sizeof(nbuf), (u32)(g_cursor_line + 1U));
+        emit_simple(ctx, svc, nbuf);
+    }
     emit_simple(ctx, svc, g_dirty ? "   [modified]\n" : "   [clean]\n");
+
+    if (g_view_active) {
+        emit_simple(ctx, svc,
+                    "[VIEW MODE] arrows/PgUp/PgDn/Home/End to scroll, Esc/q/Enter to exit\n");
+    }
 
     /* Visual separator. */
     emit_simple(ctx, svc,
@@ -917,6 +935,27 @@ static void editor_redraw(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
 
     /* Visible buffer (viewport slice, cursor-marked). */
     print_buffer_lines(ctx, svc);
+
+    /*
+     * Synthetic insertion line (only outside view mode). Marks where
+     * the next plain-input append will land — this is the "writing
+     * cursor" the user expects to see in edit mode.
+     */
+    if (!g_view_active) {
+        char nbuf[12];
+        u32 next = (u32)g_line_count + 1U;
+        to_dec(nbuf, (u32)sizeof(nbuf), next);
+        emit_simple(ctx, svc, ">");
+        if (str_len(nbuf) < 3U) {
+            u32 pad = 3U - str_len(nbuf);
+            u32 k;
+            for (k = 0U; k < pad; k++) {
+                emit_simple(ctx, svc, " ");
+            }
+        }
+        emit_simple(ctx, svc, nbuf);
+        emit_simple(ctx, svc, " | _\n");
+    }
 
     /* Bottom separator + compact action hint. */
     emit_simple(ctx, svc,
@@ -935,37 +974,41 @@ static void editor_redraw(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
  * state are global so when the mode exits the next editor_redraw from
  * prompt-mode stays consistent with where the user left off.
  *
- * Keys:
- *   Up   / 'k'  — cursor -1 line
- *   Down / 'j'  — cursor +1 line
- *   PgUp        — cursor - viewport rows
- *   PgDn        — cursor + viewport rows
- *   Home        — cursor to first line
- *   End         — cursor to last line
- *   Esc / 'q'   — leave view mode
- *   Enter       — leave view mode and return to command prompt
+ * Stage2's keyboard layer encodes extended keys as cooked ASCII bytes
+ * (STAGE2_KEY_UP=0x80, STAGE2_KEY_DOWN=0x81, LEFT=0x82, RIGHT=0x83,
+ * HOME=0x84, END=0x85, DEL=0x86). The legacy BIOS scancode (0x48 etc.)
+ * is also exposed in AH for compatibility, so we accept either.
  *
- * No-op (and safely returns) when svc->int16 is NULL or the buffer
- * is empty.
+ * Keys:
+ *   Up   / 'k' / 'w'  — cursor -1 line
+ *   Down / 'j' / 's'  — cursor +1 line
+ *   PgUp              — cursor - viewport rows
+ *   PgDn              — cursor + viewport rows
+ *   Home              — cursor to first line
+ *   End               — cursor to last line
+ *   Esc / 'q' / Enter — leave view mode
+ *
+ * No-op (and safely returns) when svc->int16 is NULL.
  */
 static void view_mode(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     ciuki_int21_regs_t regs;
     u8 scan;
     u8 ascii;
+    int moved;
 
     if (!svc || !svc->int16) {
         emit_simple(ctx, svc, "View mode requires int16 keyboard ABI.\n");
         return;
     }
 
-    emit_marker(svc, "[edit] view enter\n");
-    editor_redraw(ctx, svc);
-
     if (g_line_count == 0U) {
         emit_simple(ctx, svc, "(empty buffer - nothing to scroll)\n");
-        emit_marker(svc, "[edit] view exit\n");
         return;
     }
+
+    g_view_active = 1U;
+    emit_marker(svc, "[edit] view enter\n");
+    editor_redraw(ctx, svc);
 
     for (;;) {
         regs_zero(&regs);
@@ -973,68 +1016,65 @@ static void view_mode(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
         svc->int16(ctx, &regs);
         scan = (u8)((regs.ax >> 8) & 0xFFU);
         ascii = (u8)(regs.ax & 0xFFU);
+        moved = 0;
 
         /* Exit keys. */
         if (ascii == 0x1BU /* Esc */
-            || ascii == 0x0DU /* Enter */
+            || ascii == 0x0DU /* Enter / CR */
+            || ascii == 0x0AU /* LF */
             || ascii == 'q' || ascii == 'Q') {
             break;
         }
 
-        /* Arrow/navigation extended keys: ASCII==0, scan identifies. */
-        if (ascii == 0x00U) {
-            if (scan == 0x48U) {
-                /* Up */
-                if (g_cursor_line > 0U) {
-                    g_cursor_line--;
-                }
-            } else if (scan == 0x50U) {
-                /* Down */
-                if ((u16)(g_cursor_line + 1U) < g_line_count) {
-                    g_cursor_line++;
-                }
-            } else if (scan == 0x49U) {
-                /* PgUp */
-                if (g_cursor_line > EDIT_VIEWPORT_ROWS) {
-                    g_cursor_line = (u16)(g_cursor_line - EDIT_VIEWPORT_ROWS);
-                } else {
-                    g_cursor_line = 0U;
-                }
-            } else if (scan == 0x51U) {
-                /* PgDn */
-                {
-                    u32 next = (u32)g_cursor_line + EDIT_VIEWPORT_ROWS;
-                    if (next >= (u32)g_line_count) {
-                        next = (u32)(g_line_count - 1U);
-                    }
-                    g_cursor_line = (u16)next;
-                }
-            } else if (scan == 0x47U) {
-                /* Home */
-                g_cursor_line = 0U;
-            } else if (scan == 0x4FU) {
-                /* End */
-                g_cursor_line = (u16)(g_line_count - 1U);
-            } else {
-                /* Unknown extended key — ignore. */
-                continue;
-            }
-        } else if (ascii == 'j') {
-            if ((u16)(g_cursor_line + 1U) < g_line_count) {
-                g_cursor_line++;
-            }
-        } else if (ascii == 'k') {
+        /*
+         * Recognize navigation by both encodings: the cooked ASCII
+         * byte produced by stage2 (0x80..0x86) AND the legacy BIOS
+         * scancode (0x48..0x51), so the editor keeps working if the
+         * shell ever switches to a closer-to-BIOS encoding.
+         */
+        if (ascii == 0x80U /* STAGE2_KEY_UP */ || scan == 0x48U
+            || ascii == 'k' || ascii == 'w') {
             if (g_cursor_line > 0U) {
                 g_cursor_line--;
+                moved = 1;
             }
+        } else if (ascii == 0x81U /* STAGE2_KEY_DOWN */ || scan == 0x50U
+                   || ascii == 'j' || ascii == 's') {
+            if ((u16)(g_cursor_line + 1U) < g_line_count) {
+                g_cursor_line++;
+                moved = 1;
+            }
+        } else if (scan == 0x49U /* PgUp */) {
+            if (g_cursor_line > EDIT_VIEWPORT_ROWS) {
+                g_cursor_line = (u16)(g_cursor_line - EDIT_VIEWPORT_ROWS);
+            } else {
+                g_cursor_line = 0U;
+            }
+            moved = 1;
+        } else if (scan == 0x51U /* PgDn */) {
+            u32 next = (u32)g_cursor_line + EDIT_VIEWPORT_ROWS;
+            if (next >= (u32)g_line_count) {
+                next = (u32)(g_line_count - 1U);
+            }
+            g_cursor_line = (u16)next;
+            moved = 1;
+        } else if (ascii == 0x84U /* STAGE2_KEY_HOME */ || scan == 0x47U) {
+            g_cursor_line = 0U;
+            moved = 1;
+        } else if (ascii == 0x85U /* STAGE2_KEY_END */ || scan == 0x4FU) {
+            g_cursor_line = (u16)(g_line_count - 1U);
+            moved = 1;
         } else {
-            /* Unknown ASCII — ignore. */
+            /* Unknown key — ignore silently. */
             continue;
         }
 
-        editor_redraw(ctx, svc);
+        if (moved) {
+            editor_redraw(ctx, svc);
+        }
     }
 
+    g_view_active = 0U;
     emit_marker(svc, "[edit] view exit\n");
     editor_redraw(ctx, svc);
 }
@@ -1294,6 +1334,7 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     g_dirty = 0U;
     g_cursor_line = 0U;
     g_viewport_top = 0U;
+    g_view_active = 0U;
     mem_zero(g_filename, (u32)sizeof(g_filename));
 
     /*
@@ -1356,23 +1397,11 @@ void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
         if (g_line_count > 0U) {
             g_cursor_line = (u16)(g_line_count - 1U);
         }
-        /* Incremental echo with gutter so the numbered layout stays
-         * coherent without a full redraw on every keystroke. */
-        {
-            char nbuf[12];
-            to_dec(nbuf, (u32)sizeof(nbuf), (u32)g_line_count);
-            if (str_len(nbuf) < 3U) {
-                u32 pad = 3U - str_len(nbuf);
-                u32 k;
-                for (k = 0U; k < pad; k++) {
-                    emit_simple(ctx, svc, " ");
-                }
-            }
-            emit_simple(ctx, svc, " ");
-            emit_simple(ctx, svc, nbuf);
-            emit_simple(ctx, svc, " | ");
-            emit_simple(ctx, svc, line);
-            emit_simple(ctx, svc, "\n");
-        }
+        /*
+         * Full redraw after every appended line: this refreshes the
+         * status line (Lines:/[modified]) and the synthetic insertion
+         * line so the writing cursor stays right under the new text.
+         */
+        editor_redraw(ctx, svc);
     }
 }
