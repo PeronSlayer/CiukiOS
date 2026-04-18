@@ -99,11 +99,14 @@ if [[ -f "$BUILD_DIR/CIUKEDIT.COM" ]]; then
     echo "[CiukiOS] CIUKEDIT.COM copied to image"
 fi
 
-# Demo text file for CIUKEDIT (Dante, Inferno Canto I). Placed at the
-# FAT root so it is reachable as DANTE.TXT from the shell / FreeDOS.
+# Demo text file for CIUKEDIT (Dante, Inferno Canto I). Copied to both
+# the FAT root (::DANTE.TXT) and next to the COM binaries
+# (::EFI/CiukiOS/DANTE.TXT) so it is reachable regardless of the
+# current working directory when CIUKEDIT is launched.
 if [[ -f "$PROJECT_DIR/assets/DANTE.TXT" ]]; then
     mcopy -o -i "$IMAGE" "$PROJECT_DIR/assets/DANTE.TXT" ::DANTE.TXT
-    echo "[CiukiOS] DANTE.TXT demo copied to image"
+    mcopy -o -i "$IMAGE" "$PROJECT_DIR/assets/DANTE.TXT" ::EFI/CiukiOS/DANTE.TXT
+    echo "[CiukiOS] DANTE.TXT demo copied to image (root + EFI/CiukiOS)"
 fi
 
 if [[ -f "$BUILD_DIR/GFXSMK.COM" ]]; then
