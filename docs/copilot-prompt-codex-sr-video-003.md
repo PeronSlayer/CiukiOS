@@ -11,15 +11,19 @@ You are implementing the first real VGA mode `0x13` graphics checkpoint for Ciuk
 
 Read first:
 1. `CLAUDE.md`
-2. `docs/copilot-task-codex-sr-video-003.md`
-3. `docs/roadmap-ciukios-doom.md`
-4. `docs/subroadmap-sr-video-002.md`
-5. `stage2/include/gfx_modes.h`
-6. `stage2/src/gfx_modes.c`
-7. `stage2/src/stage2.c`
-8. `stage2/src/shell.c`
-9. `com/dosmode13/dosmode13.c`
-10. `scripts/test_vga13_baseline.sh`
+2. `docs/agent-directives.md`
+3. `docs/collab/diario-di-bordo.md`
+4. `docs/copilot-task-codex-sr-video-003.md`
+5. `docs/roadmap-ciukios-doom.md`
+6. `docs/subroadmap-sr-video-002.md`
+7. `stage2/include/gfx_modes.h`
+8. `stage2/src/gfx_modes.c`
+9. `stage2/src/stage2.c`
+10. `stage2/src/shell.c`
+11. `com/dosmode13/dosmode13.c`
+12. `scripts/test_vga13_baseline.sh`
+
+Before starting implementation, confirm in `docs/collab/diario-di-bordo.md` that no other agent is already working on the same project area. If it is already occupied, stop and choose a different section instead of overlapping work.
 
 Context:
 CiukiOS already has a VGA mode `0x13` compatibility scaffold, an indexed 320x200 plane, palette helpers, a present path, and a sample COM program (`DOSMODE13.COM`). But the current gate is still mostly static and the roadmap still treats the real draw/render checkpoint as pending.
@@ -38,6 +42,7 @@ Hard requirements:
 3. Keep the work narrowly focused on the first real mode `0x13` checkpoint.
 4. Do not broaden into WAD parsing, audio, or generic DOS extender redesign.
 5. Preserve deterministic logs and current shell/runtime behavior.
+6. Update `docs/collab/diario-di-bordo.md` at the end of the task, and do not add that file to Git.
 
 Implementation guidance:
 1. Reuse the existing `gfx_modes` plane/palette/present path instead of inventing a second graphics subsystem.

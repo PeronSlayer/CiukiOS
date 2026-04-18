@@ -11,9 +11,13 @@ You are implementing a user-visible CiukiOS shell UX upgrade in the stage2 shell
 
 Read first:
 1. `CLAUDE.md`
-2. `docs/copilot-task-codex-shell-ux-001.md`
-3. `stage2/src/shell.c`
-4. relevant keyboard/video headers and implementation files
+2. `docs/agent-directives.md`
+3. `docs/collab/diario-di-bordo.md`
+4. `docs/copilot-task-codex-shell-ux-001.md`
+5. `stage2/src/shell.c`
+6. relevant keyboard/video headers and implementation files
+
+Before starting implementation, confirm in `docs/collab/diario-di-bordo.md` that no other agent is already working on the same project area. If it is already occupied, stop and choose a different section instead of overlapping work.
 
 Your mission is to improve the shell in three concrete ways:
 
@@ -32,6 +36,7 @@ Hard requirements:
 3. Add deterministic markers/logging when useful for direct-exec debugging.
 4. Do not bump project version.
 5. Do not commit on `main`.
+6. Update `docs/collab/diario-di-bordo.md` at the end of the task, and do not add that file to Git.
 
 Implementation guidance:
 1. Use `stage2/src/shell.c` as the main integration point.

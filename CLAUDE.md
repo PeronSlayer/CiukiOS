@@ -4,6 +4,9 @@
 Shared operating context for Codex and Claude Code.
 Use this file to stay aligned between sessions, beyond detailed handoff files.
 
+Collaboration directives that override generic agent defaults live in `docs/agent-directives.md`.
+The shared local coordination diary is `docs/collab/diario-di-bordo.md` and must remain untracked.
+
 ## Project North Star
 Current top objective: run real DOS DOOM binaries from CiukiOS.
 
@@ -27,25 +30,29 @@ Primary roadmap:
 5. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
 6. Central durable documentation: `documentation.md`
 7. Handoff index: `docs/handoffs/README.md`
+8. Agent directives: `docs/agent-directives.md`
 
 ## Session Workflow (Required)
 1. Read this file first.
-2. Read the latest relevant handoff(s) in `docs/handoffs/`.
-3. Execute scoped change.
-4. Run relevant tests.
-5. Write a new handoff for major multi-file or architectural changes.
-6. Update `documentation.md` whenever the completed task changes stable project state, architecture, validation flow, or milestone status.
-7. Update this file only if global direction/state changed.
+2. Read `docs/agent-directives.md`.
+3. Read `docs/collab/diario-di-bordo.md` before starting to avoid overlapping work.
+4. Read the latest relevant handoff(s) in `docs/handoffs/`.
+5. Create or switch to a dedicated task branch. Do not execute implementation work on `main`.
+6. Execute scoped change.
+7. Run relevant tests.
+8. Write a new handoff for major multi-file or architectural changes.
+9. Update `documentation.md` whenever the completed task changes stable project state, architecture, validation flow, or milestone status.
+10. Update `docs/collab/diario-di-bordo.md` for every completed task; keep it local-only and untracked.
+11. Update this file only if global direction/state changed.
 
 ## Versioning Cadence Rule (Required)
 1. Current baseline version: `CiukiOS Alpha v0.8.5`.
-2. Every 3-4 completed roadmap tasks, bump patch version by `+0.0.1`.
-3. Example progression: `v0.6.0 -> v0.6.1 -> v0.6.2`.
-4. On each version bump, update all of:
+2. Version bumps are user-controlled and must not happen unless the user explicitly requests one.
+3. When a version bump is explicitly requested, update all of:
 	- `README.md` (Current Version + Changelog)
 	- `stage2/include/version.h`
 	- relevant roadmap/status docs if user-visible scope changed
-5. Keep bump cadence deterministic: do not skip changelog updates after a bump.
+4. Keep changelog updates aligned with the user-requested version bump scope.
 
 ## Handoff Rule
 For major changes, always add one file:
