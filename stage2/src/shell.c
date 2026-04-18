@@ -908,58 +908,46 @@ static void normalize_first_token(const char *line, char *out, u32 out_size) {
 }
 
 static void shell_print_help(void) {
-    video_write("Commands:\n");
-    video_write("  help     - show this help\n");
-    video_write("  pwd      - show current directory\n");
-    video_write("  cd X     - change current directory\n");
-    video_write("  dir      - list files in current directory\n");
-    video_write("  type X   - show text file from FAT\n");
-    video_write("  copy X Y - copy file X to Y on FAT\n");
-    video_write("  ren X Y  - rename file/dir X to Y (same dir)\n");
-    video_write("  move X Y - move file X to Y or into dir Y\n");
-    video_write("  mkdir X  - create directory X\n");
-    video_write("  rmdir X  - remove empty directory X\n");
-    video_write("  attrib X - show file attributes\n");
-    video_write("  attrib +r|-r|+a|-a X - set/clear attribute\n");
-    video_write("  del X    - delete file from FAT cache\n");
-    video_write("  ascii    - show custom ASCII art\n");
-    video_write("  gsplash  - show graphical splash preview\n");
-    video_write("  desktop  - open interactive desktop scene (ALT+G+Q to return)\n");
-    video_write("  cls      - clear screen\n");
-    video_write("  ver      - show OS version\n");
-    video_write("  echo     - print text to screen\n");
-    video_write("  set      - show or set environment variables (set K=V)\n");
-    video_write("  history  - show command history\n");
-    video_write("  which X  - show where command X is found\n");
-    video_write("  resolve X - alias for which\n");
-    video_write("  ticks    - show PIT tick counter\n");
-    video_write("  mem      - show boot memory info\n");
-    video_write("  shutdown - power off the machine\n");
-    video_write("  reboot   - reboot the machine\n");
-    video_write("  run      - execute default COM (or INIT.COM)\n");
-    video_write("  run X A  - run COM/EXE/BAT with optional args\n");
-    video_write("  pmode    - show protected-mode transition contract status\n");
-    video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
-    video_write("  vmode    - video mode management (vmode help for details)\n");
-    video_write("  vres     - alias for vmode\n");
+    video_write("CiukiOS shell\n");
     video_write("\n");
-    video_write("Programs can also be launched by name directly:\n");
-    video_write("  CIUKEDIT  or  CIUKEDIT.COM  or  DOOM.EXE\n");
-    video_write("  SUBDIR\\APP  or  .\\APP  (path-aware execution)\n");
+    video_write("File system:\n");
+    video_write("  dir [X]        list directory contents\n");
+    video_write("  cd X           change current directory\n");
+    video_write("  pwd            show current directory\n");
+    video_write("  type X         display text file\n");
+    video_write("  copy X Y       copy file X to Y\n");
+    video_write("  move X Y       move / rename file X\n");
+    video_write("  ren X Y        rename file or directory\n");
+    video_write("  del X          delete file\n");
+    video_write("  mkdir X        create directory\n");
+    video_write("  rmdir X        remove empty directory\n");
+    video_write("  attrib X       show or set file attributes\n");
     video_write("\n");
-    video_write("Editing keys:\n");
-    video_write("  Left/Right  - move cursor within line\n");
-    video_write("  Home/End    - jump to start/end of line\n");
-    video_write("  Delete      - remove character at cursor\n");
-    video_write("  Backspace   - remove character before cursor\n");
-    video_write("  Tab         - auto-complete command or filename\n");
-    video_write("  Up/Down     - navigate command history\n");
-    video_write("  Esc         - clear current input line\n");
-    video_write("  Ctrl+A      - move cursor to start of line\n");
-    video_write("  Ctrl+E      - move cursor to end of line\n");
-    video_write("  Ctrl+U      - clear from cursor to start\n");
-    video_write("  Ctrl+K      - clear from cursor to end\n");
-    video_write("  Ctrl+L      - clear screen and redraw\n");
+    video_write("Programs:\n");
+    video_write("  run X [args]   launch a COM, EXE or BAT program\n");
+    video_write("  which X        show where command X is found\n");
+    video_write("  vmode          inspect or change video mode\n");
+    video_write("  opengem        launch the OpenGEM GUI\n");
+    video_write("\n");
+    video_write("Visuals:\n");
+    video_write("  demo           run the real-time graphics showcase\n");
+    video_write("  desktop        enter the interactive desktop scene\n");
+    video_write("  gsplash        preview the splash screen\n");
+    video_write("  ascii          display the ASCII art banner\n");
+    video_write("\n");
+    video_write("Session:\n");
+    video_write("  echo X         print text\n");
+    video_write("  set [K=V]      show or set environment variables\n");
+    video_write("  history        show command history\n");
+    video_write("  cls            clear screen\n");
+    video_write("  ver            show OS version\n");
+    video_write("\n");
+    video_write("Power:\n");
+    video_write("  reboot         restart the machine\n");
+    video_write("  shutdown       power off the machine\n");
+    video_write("\n");
+    video_write("Tab completes commands and filenames. Up/Down browse history.\n");
+    video_write("Type a program name directly to launch it (e.g. CIUKEDIT, DOOM.EXE).\n");
 }
 
 static void shell_cls(void) {
@@ -6897,6 +6885,13 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
+    if (str_eq(cmd, "demo")) {
+        serial_write("[ app ] demo launch requested\n");
+        shell_run(boot_info, handoff, "CIUKDEMO.COM");
+        serial_write("[ app ] demo launch completed\n");
+        return;
+    }
+
     if (str_eq(cmd, "echo")) {
         shell_echo(get_arg_ptr(line));
         shell_set_errorlevel(0U);
@@ -7096,7 +7091,7 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     int hist_saved_valid = 0;
 
     shell_startup_chain(boot_info, handoff);
-    video_write("Tip: type 'desktop' to test GUI mode (ALT+G+Q to return).\n\n");
+    video_write("Type 'help' for the command list, 'demo' for the graphics showcase.\n\n");
     write_prompt();
     video_present_dirty_immediate();
 
