@@ -3,14 +3,20 @@
 All notable changes to CiukiOS are tracked here.
 
 ## Unreleased
-1. Extended shell direct execution and tab completion with deterministic path-aware handling for directory-prefixed targets such as `SUBDIR\\APP` and `.\\APP`, including resolver markers and directory continuation semantics.
-2. Added higher-value shell editing shortcuts: `Esc` clear-line, `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, and `Ctrl+L`, while preserving the existing DOS-like line editor and history behavior.
-3. Expanded shell resolver introspection with `resolve` as an alias alongside richer `which` / `where` reporting for builtins, catalog programs, FAT targets, and appended suffix decisions.
-4. Added a deterministic resolver selftest in the stage2 boot path so path canonicalization cases emit explicit PASS/FAIL serial markers even when host-side QEMU capture is limited.
-1. Extended shell line editing with inline cursor movement and editing keys (`Left`, `Right`, `Home`, `End`, `Delete`) while preserving the existing DOS-like command flow.
-2. Added deterministic shell tab completion for builtins, runnable programs, and current-directory FAT entries, including common-prefix expansion and ambiguous-match listing with prompt redraw.
-3. Added `history` plus `which`/`where` shell commands to improve discoverability of command recall and direct-exec resolution.
-4. Updated shell help and interaction model so the newer execution, editing, and completion behavior is documented without bumping the current public version.
+
+## v0.8.6
+1. Promoted the recent shell UX wave into the released baseline: direct execution by bare name and path-aware targets, richer `which` / `where` / `resolve` introspection, and deterministic resolver markers/selftests.
+2. Expanded the DOS-like line editor with inline cursor movement plus higher-value shortcuts (`Esc`, `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, `Ctrl+L`) while preserving the existing command flow and history behavior.
+3. Strengthened shell tab completion for builtins, runnable programs, and FAT current-directory entries, including common-prefix expansion, ambiguous-match listing, and directory-prefixed continuation semantics.
+4. Upgraded the VGA mode `0x13` path from a compatibility scaffold to a first real runtime checkpoint with explicit mode-set and present markers in the graphics path.
+5. Reworked `DOSMODE13.COM` into a deterministic multi-region frame sample that enters mode `0x13`, renders a richer validation frame, restores text mode cleanly, and now has a real QEMU screenshot reference.
+6. Replaced the old static-only VGA baseline gate with a stronger runtime-aware `test-vga13-baseline` flow that attempts marker-driven QEMU validation and falls back to static checks only when host capture is incomplete.
+7. Extended the M6 DPMI smoke chain with a new stateful free-memory slice: `CIUKREL.EXE` validates `INT 31h AX=0502h` after a real `AX=0501h` allocation, including duplicate-free rejection.
+8. Upgraded the synthetic DPMI memory allocator from one-shot shape-only success to tracked handle ownership so allocation/free semantics are now meaningful to smoke binaries.
+9. Wired the new M6 free-memory smoke into `Makefile`, image packaging, the aggregate DOOM-readiness gate, and supporting roadmap/documentation files.
+10. Bumped baseline to `CiukiOS Alpha v0.8.6`.
+
+![DOSMODE13.COM — first real mode 0x13 runtime checkpoint validated on QEMU (v0.8.6)](misc/screenshots/v0.8.6-dosmode13-runtime-checkpoint.png)
 
 ## v0.8.5
 1. Added `gfx_mode13_blit_indexed_clip(src, sw, sh, stride, dx, dy, use_transparent, transparent_idx)` for signed/clipped indexed patch blits and `gfx_mode13_blit_scaled_clip(...)` for signed/clipped nearest-neighbor scaled blits.

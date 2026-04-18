@@ -13,16 +13,19 @@ Mission: become a progressively more complete environment capable of running DOS
 5. Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Version
-`CiukiOS Alpha v0.8.5`
+`CiukiOS Alpha v0.8.6`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
-### v0.8.5
-1. Added signed/clipped mode 0x13 patch placement helpers: `gfx_mode13_blit_indexed_clip(...)` for opaque/masked indexed blits with automatic off-screen crop and `gfx_mode13_blit_scaled_clip(...)` for stable nearest-neighbor scaled patches with signed destination coordinates.
-2. Added `gfx_mode13_draw_column_sampled_masked(...)`, a DOOM-leaning sampled masked column primitive that uses 16.16 source stepping and clips signed destination Y.
-3. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed_clip`, `mode13_blit_scaled_clip`, and `mode13_draw_column_sampled_masked`, preserving append-only ABI growth.
-4. Updated `GFXDOOM.COM` to validate real patch placement cases: one clipped top-left scaled patch, one centered patch, and stretched sampled masked columns across the lower half of the screen.
-5. Bumped baseline version to `CiukiOS Alpha v0.8.5`.
+### v0.8.6
+1. Released the latest shell UX set: path-aware direct execution, richer `which` / `where` / `resolve`, stronger completion flow, and extended DOS-like editing shortcuts.
+2. Turned VGA mode `0x13` from a scaffold into a first real runtime checkpoint with deterministic markers in the gfx path and a richer `DOSMODE13.COM` validation frame.
+3. Upgraded `test-vga13-baseline` into a runtime-aware gate with static fallback only when host capture is incomplete.
+4. Added the next M6 DPMI step: stateful memory allocation/free tracking plus new `CIUKREL.EXE` smoke coverage for `INT 31h AX=0502h`.
+5. Wired the new M6 smoke through image packaging, aggregate readiness gating, and supporting roadmap/documentation updates.
+6. Bumped baseline version to `CiukiOS Alpha v0.8.6`.
+
+![DOSMODE13.COM — first real mode 0x13 runtime checkpoint validated on QEMU (v0.8.6)](misc/screenshots/v0.8.6-dosmode13-runtime-checkpoint.png)
 
 ### v0.8.4
 1. Added the next DOOM-facing mode 0x13 helpers: `gfx_mode13_blit_scaled(...)` for nearest-neighbor scaled indexed blits (HUD/title patch style), `gfx_mode13_draw_column_masked(...)` for transparent single-column draws, and `gfx_frame_counter()` for present-count pacing / instrumentation.
