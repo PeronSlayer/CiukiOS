@@ -1,10 +1,17 @@
 /*
- * dosmode13.COM — CiukiOS M-V2.4 sample: VGA mode 0x13 via services ABI.
+ * dosmode13.COM — CiukiOS SR-VIDEO-003: VGA mode 0x13 frame checkpoint.
  *
- * Sets mode 0x13 (320x200x8), writes a palette-indexed gradient into the
- * mode 0x13 plane through gfx->mode13_put_pixel, calls gfx->present to
- * commit (upscale + letterbox onto the real GOP fb), logs a marker to
- * serial, then returns via INT 21h AH=4Ch.
+ * Sets mode 0x13 (320x200x8), draws a deterministic multi-region test
+ * frame into the indexed plane, presents it through the GOP-backed
+ * upscale path, emits serial markers proving the full pipeline, and
+ * returns via INT 21h AH=4Ch.
+ *
+ * Frame layout (320x200):
+ *   Row   0- 39: sky gradient (palette indices 32..67, horizontal sweep)
+ *   Row  40- 79: four colored rectangles (red/green/blue/yellow bands)
+ *   Row  80-139: 6x6x6 color-cube palette sweep (full indexed spectrum)
+ *   Row 140-179: vertical gradient bar (greyscale ramp indices 16..31)
+ *   Row 180-199: bottom border with checkerboard marker pattern
  */
 
 #include "services.h"
@@ -13,40 +20,97 @@ static void print_line(ciuki_services_t *svc, const char *s) {
     svc->print(s);
 }
 
+/* Draw a filled rectangle using mode13_fill_rect if available, else
+ * fall back to per-pixel writes. */
+static void draw_rect(const ciuki_gfx_services_t *gfx,
+                       unsigned x, unsigned y, unsigned w, unsigned h,
+                       unsigned char idx) {
+    if (gfx->mode13_fill_rect) {
+        gfx->mode13_fill_rect(x, y, w, h, idx);
+        return;
+    }
+    for (unsigned row = y; row < y + h && row < 200U; row++)
+        for (unsigned col = x; col < x + w && col < 320U; col++)
+            gfx->mode13_put_pixel(col, row, idx);
+}
+
 void com_main(ciuki_dos_context_t *ctx, ciuki_services_t *svc) {
     const ciuki_gfx_services_t *gfx = svc->gfx;
     ciuki_int21_regs_t regs;
 
     if (!gfx || !gfx->set_mode || !gfx->mode13_put_pixel || !gfx->present) {
-        print_line(svc, "[dosmode13] FAIL: gfx mode services unavailable\n");
+        print_line(svc, "[dosmode13] FAIL: gfx services unavailable\n");
         goto exit;
     }
 
+    /* ---- 1. Switch to mode 0x13 ---- */
     if (!gfx->set_mode(0x13U)) {
         print_line(svc, "[dosmode13] FAIL: set_mode 0x13\n");
         goto exit;
     }
+    print_line(svc, "[dosmode13] mode 0x13 active\n");
 
-    /* Gradient: x drives hue through the color-cube region, y shifts band. */
-    for (unsigned y = 0; y < 200U; y++) {
+    /* ---- 2. Region A: sky gradient (rows 0-39) ---- */
+    for (unsigned y = 0; y < 40U; y++) {
         for (unsigned x = 0; x < 320U; x++) {
-            unsigned r = (x * 6U) / 320U;
-            unsigned g = (y * 6U) / 200U;
-            unsigned b = ((x + y) * 6U) / 520U;
-            unsigned idx = 32U + r * 36U + g * 6U + (b % 6U);
-            if (idx > 255U) idx = 255U;
+            /* Smooth horizontal sweep through color-cube blue range */
+            unsigned idx = 32U + (x * 36U) / 320U;
+            if (idx > 67U) idx = 67U;
             gfx->mode13_put_pixel(x, y, (unsigned char)idx);
         }
     }
+    print_line(svc, "[dosmode13] region A drawn (sky gradient)\n");
 
-    /* Optional: custom palette entry 255 → bright white. */
-    if (gfx->set_palette) {
-        unsigned char white[3] = { 0x3F, 0x3F, 0x3F };
-        gfx->set_palette(255U, 1U, white);
+    /* ---- 3. Region B: four colored rectangles (rows 40-79) ---- */
+    /* Red band   */ draw_rect(gfx,   0, 40, 80, 40, 32U + 5*36U);       /* bright red */
+    /* Green band */ draw_rect(gfx,  80, 40, 80, 40, 32U + 5*6U);        /* bright green */
+    /* Blue band  */ draw_rect(gfx, 160, 40, 80, 40, 32U + 5U);          /* bright blue */
+    /* Yellow band*/ draw_rect(gfx, 240, 40, 80, 40, 32U + 5*36U + 5*6U);/* yellow */
+    print_line(svc, "[dosmode13] region B drawn (color bands)\n");
+
+    /* ---- 4. Region C: color-cube palette sweep (rows 80-139) ---- */
+    for (unsigned y = 80; y < 140U; y++) {
+        for (unsigned x = 0; x < 320U; x++) {
+            /* Walk linearly through the 216 color-cube entries */
+            unsigned linear = ((y - 80U) * 320U + x);
+            unsigned idx = 32U + (linear % 216U);
+            gfx->mode13_put_pixel(x, y, (unsigned char)idx);
+        }
+    }
+    print_line(svc, "[dosmode13] region C drawn (palette sweep)\n");
+
+    /* ---- 5. Region D: greyscale ramp (rows 140-179) ---- */
+    for (unsigned y = 140; y < 180U; y++) {
+        for (unsigned x = 0; x < 320U; x++) {
+            /* Greyscale palette indices 16..31 */
+            unsigned idx = 16U + (x * 16U) / 320U;
+            if (idx > 31U) idx = 31U;
+            gfx->mode13_put_pixel(x, y, (unsigned char)idx);
+        }
+    }
+    print_line(svc, "[dosmode13] region D drawn (greyscale ramp)\n");
+
+    /* ---- 6. Region E: checkerboard marker (rows 180-199) ---- */
+    for (unsigned y = 180; y < 200U; y++) {
+        for (unsigned x = 0; x < 320U; x++) {
+            unsigned char idx = ((x / 8U + y / 8U) & 1U) ? 15U : 0U;
+            gfx->mode13_put_pixel(x, y, idx);
+        }
+    }
+    print_line(svc, "[dosmode13] region E drawn (checkerboard)\n");
+
+    /* ---- 7. Present the completed frame ---- */
+    int ok = gfx->present();
+    if (ok) {
+        print_line(svc, "[dosmode13] frame checkpoint PASS\n");
+    } else {
+        print_line(svc, "[dosmode13] frame checkpoint FAIL (present error)\n");
     }
 
-    gfx->present();
-    print_line(svc, "[dosmode13] OK\n");
+    /* ---- 8. Return to text mode if supported ---- */
+    if (gfx->set_mode(0x03U)) {
+        print_line(svc, "[dosmode13] restored text mode 0x03\n");
+    }
 
 exit:
     regs.ax = 0x4C00U;
