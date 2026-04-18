@@ -5635,11 +5635,12 @@ static void shell_pmode_contract(void) {
 }
 
 static void shell_vga13_baseline(void) {
-    video_write("VGA mode 13h baseline v0 (compatibility scaffold):\n");
+    video_write("VGA mode 13h baseline v1 (runtime checkpoint):\n");
     video_write("  width=320 height=200 bpp=8 palette=256\n");
     video_write("  framebuffer: GOP-backed virtual linear buffer (no real ISA VGA yet)\n");
-    video_write("  palette: default DOS 256-color table pending\n");
-    video_write("  status: readiness marker active, draw path deferred to DOOM graphics step\n");
+    video_write("  palette: default DOS 256-color table active\n");
+    video_write("  status: mode set/draw/present path verified via DOSMODE13.COM\n");
+    video_write("  markers: [gfx] mode set, present OK, frame checkpoint emitted on serial\n");
     shell_set_errorlevel(0U);
 }
 

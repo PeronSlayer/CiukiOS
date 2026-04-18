@@ -424,6 +424,7 @@ void gfx_mode_init(void) {
     g_current_mode = GFX_MODE_TEXT_80x25;
     gfx_palette_set_default_vga();
     gfx_mode13_clear(0);
+    serial_write("[gfx] mode subsystem init (text 80x25)\n");
 }
 
 u8 gfx_mode_current(void) { return g_current_mode; }
@@ -431,6 +432,7 @@ u8 gfx_mode_current(void) { return g_current_mode; }
 u8 gfx_mode_set(u8 mode) {
     if (mode == GFX_MODE_TEXT_80x25) {
         g_current_mode = mode;
+        serial_write("[gfx] mode set: 0x03 (text 80x25)\n");
         return 1;
     }
     if (mode == GFX_MODE_VGA_320x200) {
@@ -438,8 +440,10 @@ u8 gfx_mode_set(u8 mode) {
         gfx_mode13_clear(0);
         g_plane_dirty = 1;
         g_palette_dirty = 1;
+        serial_write("[gfx] mode set: 0x13 (320x200x8 indexed)\n");
         return 1;
     }
+    serial_write("[gfx] mode set FAIL: unsupported mode\n");
     return 0;
 }
 
@@ -507,7 +511,12 @@ int gfx_mode_present(void) {
             return 1;
         }
         int r = gfx_mode13_present_plane();
-        if (r) g_frame_counter++;
+        if (r) {
+            g_frame_counter++;
+            serial_write("[gfx] present OK (mode 0x13)\n");
+        } else {
+            serial_write("[gfx] present FAIL (mode 0x13)\n");
+        }
         return r;
     }
     return 0;
