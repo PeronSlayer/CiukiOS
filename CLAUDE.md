@@ -45,6 +45,13 @@ Primary roadmap:
 10. Update `docs/collab/diario-di-bordo.md` for every completed task; keep it local-only and untracked.
 11. Update this file only if global direction/state changed.
 
+## Merge Behavior (Required)
+1. Implementation work must stay on a dedicated task branch.
+2. If the user explicitly says `fai il merge`, treat that as approval to merge into `main`.
+3. Before merging, verify whether conflicts exist.
+4. If conflicts exist, inspect them, identify whether they come from other agents' work, and integrate all necessary changes instead of discarding one side.
+5. Complete the final merge into `main` only after the conflict resolution is coherent.
+
 ## Versioning Cadence Rule (Required)
 1. Current baseline version: `CiukiOS Alpha v0.8.5`.
 2. Version bumps are user-controlled and must not happen unless the user explicitly requests one.

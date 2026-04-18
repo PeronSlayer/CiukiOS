@@ -34,6 +34,7 @@ Hard requirements:
 3. Keep the work scoped to `<scope>`.
 4. Preserve deterministic logs and current runtime behavior unless the task explicitly requires otherwise.
 5. Update `docs/collab/diario-di-bordo.md` at the end of the task, and do not add that file to Git.
+6. If the user later says `fai il merge`, treat that as authorization to merge into `main`, but only after checking for conflicts and integrating all required changes from any conflicting side.
 
 Implementation guidance:
 1. `<guidance 1>`
