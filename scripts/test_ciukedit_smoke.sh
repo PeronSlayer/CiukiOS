@@ -62,6 +62,14 @@ static_fallback() {
         echo "[FAIL] editor source missing quit marker" >&2
         exit 1
     }
+    grep -Fq '[edit] render lines=' "$PROJECT_DIR/com/ciukedit/ciukedit.c" || {
+        echo "[FAIL] editor source missing render marker (post-load visibility fix)" >&2
+        exit 1
+    }
+    grep -Fq 'editor_redraw(ctx, svc);' "$PROJECT_DIR/com/ciukedit/ciukedit.c" || {
+        echo "[FAIL] editor source missing editor_redraw call (post-load visibility fix)" >&2
+        exit 1
+    }
 
     grep -Fq '[dosrun] launch path=CIUKEDIT.COM type=COM' "$PROJECT_DIR/scripts/test_ciukedit_smoke.sh" || {
         echo "[FAIL] smoke script missing launch marker assertion" >&2
