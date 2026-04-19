@@ -165,6 +165,16 @@ typedef struct ciuki_services {
      */
     void     (*ui_top_bar)(const char *text, uint32_t bg_rgb, uint32_t fg_rgb);
     void     (*ui_reserve_top_row)(uint32_t rows);
+    /*
+     * SR-MOUSE-001 — DOS-style INT 33h mouse driver dispatcher.
+     * Subset implemented: AX=0000h reset+status, AX=0001h show cursor,
+     * AX=0002h hide cursor, AX=0003h get pos+buttons, AX=0004h set pos,
+     * AX=0007h set horizontal range, AX=0008h set vertical range. State
+     * is maintained per-session by stage2. Safe fallback when no host
+     * mouse is wired: buttons always 0, position only moves on AX=0004h.
+     * Null-safe at the ABI level: callers must check the pointer.
+     */
+    void     (*int33)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 } ciuki_services_t;
 
 /* COM entry point convention */

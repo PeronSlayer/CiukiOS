@@ -144,6 +144,11 @@ if [[ -f "$BUILD_DIR/CIUKSMK.COM" ]]; then
     echo "[CiukiOS] CIUKSMK.COM copied to image"
 fi
 
+if [[ -f "$BUILD_DIR/CIUKMSE.COM" ]]; then
+    mcopy -i "$IMAGE" "$BUILD_DIR/CIUKMSE.COM" ::EFI/CiukiOS/CIUKMSE.COM
+    echo "[CiukiOS] CIUKMSE.COM copied to image"
+fi
+
 if [[ -f "$BUILD_DIR/CIUKMZ.EXE" ]]; then
     mcopy -i "$IMAGE" "$BUILD_DIR/CIUKMZ.EXE" ::EFI/CiukiOS/CIUKMZ.EXE
     echo "[CiukiOS] CIUKMZ.EXE copied to image"

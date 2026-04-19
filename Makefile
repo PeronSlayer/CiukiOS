@@ -90,6 +90,9 @@ COM_M6_DPMI_REFLECT_SMOKE_SRC := com/m6_dpmi_reflect_smoke/ciukrmi.c
 COM_M6_DPMI_REFLECT_SMOKE_ELF := build/CIUKRMI.EXE.elf
 COM_M6_DPMI_REFLECT_SMOKE_PAYLOAD := build/CIUKRMI.EXE.payload.bin
 COM_M6_DPMI_REFLECT_SMOKE_BIN := build/CIUKRMI.EXE
+COM_MOUSE_SMOKE_SRC := com/mouse_smoke/ciukmse.c
+COM_MOUSE_SMOKE_ELF := build/CIUKMSE.COM.elf
+COM_MOUSE_SMOKE_BIN := build/CIUKMSE.COM
 MKCIUKMZ_TOOL_SRC := tools/mkciukmz_exe.c
 MKCIUKMZ_TOOL := build/tools/mkciukmz_exe
 SPLASH_ASCII_SRC := misc/splashscreen.txt
@@ -115,7 +118,7 @@ STAGE2_OBJS := $(STAGE2_C_OBJS) $(STAGE2_S_OBJS) $(SPLASH_GEN_OBJ) $(SPLASH_IMAG
 
 .DEFAULT_GOAL := all
 
-all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_CIUKEDIT_BIN) $(COM_GFXSMOKE_BIN) $(COM_DOSMODE13_BIN) $(COM_FADEDEMO_BIN) $(COM_CIUKDEMO_BIN) $(COM_GFXDOOM_BIN) $(COM_WADVIEW_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN) $(COM_M6_DPMI_FREE_SMOKE_BIN) $(COM_M6_DPMI_REFLECT_SMOKE_BIN)
+all: build/kernel.elf build/stage2.elf $(COM_HELLO_BIN) $(COM_CIUKEDIT_BIN) $(COM_GFXSMOKE_BIN) $(COM_DOSMODE13_BIN) $(COM_FADEDEMO_BIN) $(COM_CIUKDEMO_BIN) $(COM_GFXDOOM_BIN) $(COM_WADVIEW_BIN) $(COM_DOSRUN_SMOKE_BIN) $(COM_DOSRUN_MZ_BIN) $(COM_M6_SMOKE_BIN) $(COM_M6_DOS4GW_SMOKE_BIN) $(COM_M6_DPMI_SMOKE_BIN) $(COM_M6_DPMI_CALL_SMOKE_BIN) $(COM_M6_DPMI_BOOTSTRAP_SMOKE_BIN) $(COM_M6_DPMI_LDT_SMOKE_BIN) $(COM_M6_DPMI_MEM_SMOKE_BIN) $(COM_M6_DPMI_FREE_SMOKE_BIN) $(COM_M6_DPMI_REFLECT_SMOKE_BIN) $(COM_MOUSE_SMOKE_BIN)
 
 build/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld | build
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -312,6 +315,12 @@ $(COM_M6_DPMI_REFLECT_SMOKE_PAYLOAD): $(COM_M6_DPMI_REFLECT_SMOKE_SRC) com/m6_dp
 $(COM_M6_DPMI_REFLECT_SMOKE_BIN): $(COM_M6_DPMI_REFLECT_SMOKE_PAYLOAD) $(MKCIUKMZ_TOOL)
 	$(MKCIUKMZ_TOOL) $(COM_M6_DPMI_REFLECT_SMOKE_PAYLOAD) $@
 
+$(COM_MOUSE_SMOKE_BIN): $(COM_MOUSE_SMOKE_SRC) com/mouse_smoke/linker.ld boot/proto/services.h | build
+	@mkdir -p build/obj/com
+	$(CC) $(COM_CFLAGS) -c $(COM_MOUSE_SMOKE_SRC) -o build/obj/com/ciukmse.o
+	$(LD) -nostdlib -z max-page-size=0x1000 -T com/mouse_smoke/linker.ld -o $(COM_MOUSE_SMOKE_ELF) build/obj/com/ciukmse.o
+	llvm-objcopy -O binary $(COM_MOUSE_SMOKE_ELF) $(COM_MOUSE_SMOKE_BIN)
+
 build:
 	@mkdir -p build
 	@mkdir -p build/obj
@@ -425,6 +434,9 @@ test-opengem:
 
 test-doom-target-packaging:
 	bash ./scripts/test_doom_target_packaging.sh
+
+test-mouse-smoke:
+	bash ./scripts/test_mouse_smoke.sh
 
 test-vga13-baseline:
 	bash ./scripts/test_vga13_baseline.sh

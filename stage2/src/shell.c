@@ -1255,6 +1255,7 @@ static void shell_com_int2f(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 static void shell_com_int16(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 static void shell_com_int1a(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+static void shell_com_int33(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
 static void shell_com_int21_4c(ciuki_dos_context_t *ctx, u8 code);
 static u32 g_int21_vectors[256];
 static u8 g_int21_last_return_code = 0U;
@@ -2941,6 +2942,177 @@ static void shell_com_int1a(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     regs->carry = 0U;
 }
 
+/*
+ * SR-MOUSE-001 — DOS-like INT 33h mouse driver state.
+ *
+ * Coordinates are in "mickey-less" pixel units. The default DOS
+ * convention on install is "screen-like 640x200" (mode 0x13 emulated
+ * range is 0..639 / 0..199); real drivers adjust automatically when
+ * the video mode changes, but for a minimal stage2 driver we keep the
+ * range static unless the program sets it explicitly via AX=0007h /
+ * AX=0008h. show_count starts at -1 (hidden) per the DOS contract.
+ *
+ * No physical mouse input is currently wired through to stage2, so the
+ * button mask is always 0 and the position only moves when a DOS
+ * program calls AX=0004h (set pos). This keeps the ABI honest for
+ * programs that drive the cursor themselves (e.g. menu/demo code) and
+ * provides a deterministic, testable surface.
+ */
+#define SHELL_MOUSE_X_MIN_DEFAULT 0
+#define SHELL_MOUSE_X_MAX_DEFAULT 639
+#define SHELL_MOUSE_Y_MIN_DEFAULT 0
+#define SHELL_MOUSE_Y_MAX_DEFAULT 199
+
+typedef struct shell_mouse_state {
+    i32 x;
+    i32 y;
+    u16 buttons;       /* bitmask: bit0=left, bit1=right, bit2=middle */
+    i32 show_count;    /* -1 = hidden; >= 0 = visible */
+    i32 x_min;
+    i32 x_max;
+    i32 y_min;
+    i32 y_max;
+    u8  installed;     /* set on first reset; stage2 session lifetime */
+    u8  reserved[3];
+} shell_mouse_state_t;
+
+static shell_mouse_state_t g_mouse_state;
+
+static inline i32 shell_mouse_clamp_i32(i32 v, i32 lo, i32 hi) {
+    if (lo > hi) {
+        /* defensive: normalize swapped range */
+        i32 tmp = lo;
+        lo = hi;
+        hi = tmp;
+    }
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static void shell_mouse_reset_state(void) {
+    g_mouse_state.x_min = SHELL_MOUSE_X_MIN_DEFAULT;
+    g_mouse_state.x_max = SHELL_MOUSE_X_MAX_DEFAULT;
+    g_mouse_state.y_min = SHELL_MOUSE_Y_MIN_DEFAULT;
+    g_mouse_state.y_max = SHELL_MOUSE_Y_MAX_DEFAULT;
+    /* Park cursor at center of the default range. */
+    g_mouse_state.x = (g_mouse_state.x_min + g_mouse_state.x_max) / 2;
+    g_mouse_state.y = (g_mouse_state.y_min + g_mouse_state.y_max) / 2;
+    g_mouse_state.buttons = 0U;
+    g_mouse_state.show_count = -1; /* hidden on reset — DOS contract */
+    g_mouse_state.installed = 1U;
+}
+
+static void shell_com_int33(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
+    u16 ax;
+
+    (void)ctx;
+
+    if (!regs) {
+        return;
+    }
+
+    if (!g_mouse_state.installed) {
+        /* First-ever call in the session: ensure defaults are sane even
+         * if the program skipped AX=0000h (very unusual but tolerated). */
+        shell_mouse_reset_state();
+        /* The installed flag stays set; the caller's function is still
+         * dispatched below with the freshly initialized state. */
+    }
+
+    ax = regs->ax;
+
+    switch (ax) {
+    case 0x0000U: {
+        /* AX=0000h — Reset driver and get status.
+         * Return: AX=0xFFFF if installed, BX=number of buttons. */
+        shell_mouse_reset_state();
+        regs->ax = 0xFFFFU;
+        regs->bx = 0x0002U; /* 2-button mouse baseline */
+        regs->carry = 0U;
+        serial_write("[int33] reset ax=0xFFFF bx=0x0002\n");
+        return;
+    }
+    case 0x0001U: {
+        /* AX=0001h — Show cursor (increment show counter). */
+        if (g_mouse_state.show_count < 0x7FFFFFFF) {
+            g_mouse_state.show_count++;
+        }
+        regs->carry = 0U;
+        serial_write("[int33] show\n");
+        return;
+    }
+    case 0x0002U: {
+        /* AX=0002h — Hide cursor (decrement show counter). */
+        if (g_mouse_state.show_count > -0x7FFFFFFF) {
+            g_mouse_state.show_count--;
+        }
+        regs->carry = 0U;
+        serial_write("[int33] hide\n");
+        return;
+    }
+    case 0x0003U: {
+        /* AX=0003h — Get position and button status.
+         * Return: BX=buttons, CX=x, DX=y. */
+        regs->bx = g_mouse_state.buttons;
+        regs->cx = (u16)(g_mouse_state.x & 0xFFFFU);
+        regs->dx = (u16)(g_mouse_state.y & 0xFFFFU);
+        regs->carry = 0U;
+        return;
+    }
+    case 0x0004U: {
+        /* AX=0004h — Set cursor position.
+         * Input: CX=x, DX=y. Clip to active range. */
+        i32 nx = (i32)(i16)regs->cx;
+        i32 ny = (i32)(i16)regs->dx;
+        g_mouse_state.x = shell_mouse_clamp_i32(nx, g_mouse_state.x_min, g_mouse_state.x_max);
+        g_mouse_state.y = shell_mouse_clamp_i32(ny, g_mouse_state.y_min, g_mouse_state.y_max);
+        regs->carry = 0U;
+        return;
+    }
+    case 0x0007U: {
+        /* AX=0007h — Set horizontal range (CX=min, DX=max). */
+        i32 lo = (i32)(i16)regs->cx;
+        i32 hi = (i32)(i16)regs->dx;
+        if (lo > hi) {
+            i32 tmp = lo;
+            lo = hi;
+            hi = tmp;
+        }
+        g_mouse_state.x_min = lo;
+        g_mouse_state.x_max = hi;
+        /* Re-clip current position to the new range. */
+        g_mouse_state.x = shell_mouse_clamp_i32(g_mouse_state.x, lo, hi);
+        regs->carry = 0U;
+        return;
+    }
+    case 0x0008U: {
+        /* AX=0008h — Set vertical range (CX=min, DX=max). */
+        i32 lo = (i32)(i16)regs->cx;
+        i32 hi = (i32)(i16)regs->dx;
+        if (lo > hi) {
+            i32 tmp = lo;
+            lo = hi;
+            hi = tmp;
+        }
+        g_mouse_state.y_min = lo;
+        g_mouse_state.y_max = hi;
+        g_mouse_state.y = shell_mouse_clamp_i32(g_mouse_state.y, lo, hi);
+        regs->carry = 0U;
+        return;
+    }
+    default:
+        /* Unsupported subfunction — log once per call and signal no-op.
+         * We keep CF=0 to match the "silently ignore" behavior used by
+         * our other interrupt dispatchers for unimplemented subsets. */
+        serial_write("[int33] unsupported ax=0x");
+        serial_write_hex64((u64)ax);
+        serial_write("\n");
+        regs->carry = 0U;
+        return;
+    }
+}
+
 static void shell_com_int31(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) {
     if (!regs) {
         return;
@@ -4092,6 +4264,7 @@ static void shell_run_staged_image(
     svc.serial_print = serial_write;
     svc.ui_top_bar = ui_draw_top_bar;
     svc.ui_reserve_top_row = video_set_text_window;
+    svc.int33 = shell_com_int33;
 
     serial_write("[dosrun] executing name=");
     serial_write(name && name[0] != '\0' ? name : "COM");

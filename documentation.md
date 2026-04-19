@@ -88,6 +88,7 @@ Current public version in README: `CiukiOS Alpha v0.8.7`
 8. A staged boot-to-DOOM failure-taxonomy harness (`make test-doom-boot-harness`) classifies progress into `binary_found`, `wad_found`, `extender_init`, `video_init`, and `menu_reached` stages.
 9. A VGA mode 13h compatibility scaffold is in place (shell `vga13` command + deterministic startup marker + `make test-vga13-baseline`) as the first step toward the real mode-13h draw path.
 10. BIOS compatibility surface markers are emitted at boot for `INT 10h`, `INT 16h`, `INT 1Ah`, and `INT 2Fh` to make DOOM-startup dependencies greppable.
+11. Minimal DOS-like mouse driver exposed via `INT 33h` through the stable `ciuki_services_t` ABI (`int33` pointer); mandatory subset covers `AX=0000h/0001h/0002h/0003h/0004h/0007h/0008h` with stage2-owned state, clipping, and a safe fallback when no host mouse input is wired. Smoke gate: `make test-mouse-smoke`.
 
 ## Important Repository Files
 
