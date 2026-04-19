@@ -10,9 +10,23 @@ The shared local coordination diary is `docs/collab/diario-di-bordo.md` and must
 ## Project North Star
 Current top objective: run real DOS DOOM binaries from CiukiOS.
 
+Long-term objective (formalized 2026-04-19): support the Windows DOS-based family
+(Windows 1.x / 2.x / 3.x / 9x / ME) on top of the shared 16-bit execution
+layer designed in `docs/opengem-016-design.md`.
+
+Permanent non-goal: Windows NT / 2000 / XP / Vista / 7 / 8 / 10 / 11 and
+ReactOS. These are independent OS kernels and will never be supported by
+this project. Any request in that direction is out of scope.
+
 Primary roadmap:
 1. `docs/roadmap-ciukios-doom.md`
-2. `docs/roadmap-dos62-compat.md`
+2. `docs/roadmap-windows-dosbased.md`
+3. `docs/roadmap-dos62-compat.md`
+
+Architectural design (prerequisite for both roadmap 1 and roadmap 2 beyond
+DOS-only software): `docs/opengem-016-design.md` — v8086 monitor hosted
+via 32-bit protected-mode compatibility task from long mode. Implementation
+is gated on explicit user approval of that design document.
 
 ## Current Runtime Snapshot
 1. UEFI loader boots Stage2 reliably.
@@ -23,14 +37,16 @@ Primary roadmap:
 6. Fallback path to `kernel.elf` remains tested.
 
 ## Source of Truth Documents
-1. High-level roadmap: `docs/roadmap-ciukios-doom.md`
-2. Compatibility baseline: `docs/int21-priority-a.md`
-3. Phase history/kickoff: `docs/phase-0-kickoff.md`, `docs/phase-1.md`
-4. FreeDOS licensing/integration policy: `docs/freedos-integration-policy.md`
-5. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
-6. Central durable documentation: `documentation.md`
-7. Handoff index: `docs/handoffs/README.md`
-8. Agent directives: `docs/agent-directives.md`
+1. High-level roadmap (DOOM): `docs/roadmap-ciukios-doom.md`
+2. High-level roadmap (Windows DOS-based): `docs/roadmap-windows-dosbased.md`
+3. 16-bit execution layer design: `docs/opengem-016-design.md`
+4. Compatibility baseline: `docs/int21-priority-a.md`
+5. Phase history/kickoff: `docs/phase-0-kickoff.md`, `docs/phase-1.md`
+6. FreeDOS licensing/integration policy: `docs/freedos-integration-policy.md`
+7. FreeDOS symbiotic architecture: `docs/freedos-symbiotic-architecture.md`
+8. Central durable documentation: `documentation.md`
+9. Handoff index: `docs/handoffs/README.md`
+10. Agent directives: `docs/agent-directives.md`
 
 ## Session Workflow (Required)
 1. Read this file first.
@@ -96,6 +112,6 @@ Minimum handoff content:
 2. Read newest handoff in `docs/handoffs/`
 3. Open `docs/roadmap-ciukios-doom.md`
 4. Pick next milestone item and implement with tests
-
+9
 ## Last Updated
 2026-04-15
