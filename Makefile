@@ -438,6 +438,9 @@ test-doom-target-packaging:
 test-mouse-smoke:
 	bash ./scripts/test_mouse_smoke.sh
 
+test-opengem-smoke:
+	bash ./scripts/test_opengem_smoke.sh
+
 test-vga13-baseline:
 	bash ./scripts/test_vga13_baseline.sh
 

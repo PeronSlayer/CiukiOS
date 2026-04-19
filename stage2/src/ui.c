@@ -717,10 +717,10 @@ void ui_render_windows(void) {
 }
 
 /* ===== Launcher ===== */
-#define LAUNCHER_ITEMS 6
+#define LAUNCHER_ITEMS 7
 
 static const char *g_launcher_items[LAUNCHER_ITEMS] = {
-    "DIR", "MEM", "CLS", "VER", "ASCII", "RUN INIT.COM"
+    "DIR", "MEM", "CLS", "VER", "ASCII", "RUN INIT.COM", "OPENGEM"
 };
 static int g_launcher_focus = 0;
 static int g_launcher_active = 0;

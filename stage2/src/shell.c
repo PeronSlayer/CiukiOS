@@ -5476,6 +5476,89 @@ static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
     video_write("\n");
 }
 
+/*
+ * OPENGEM-001 — Launch OpenGEM via the standard shell_run path.
+ *
+ * Shared entry point used by both the `opengem` shell command and the
+ * desktop launcher (OPENGEM item + ALT+O). Performs the same preflight
+ * probe as the command variant (runnable entry + FAT readiness), emits
+ * boot/launch/exit markers usable by the smoke gate, and falls back
+ * gracefully when the payload is absent (no panic, CF-clean return).
+ *
+ * Returns 1 when OpenGEM was actually launched (preflight passed),
+ * 0 on any fallback path (missing runtime, FAT not ready).
+ */
+static int shell_run_opengem_interactive(boot_info_t *boot_info,
+                                         handoff_v0_t *handoff) {
+    static const char *paths[] = {
+        "/FREEDOS/OPENGEM/GEM.BAT",
+        "/FREEDOS/OPENGEM/GEM.EXE",
+        "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/DESKTOP.APP",
+        "/FREEDOS/OPENGEM/OPENGEM.BAT",
+        "/FREEDOS/OPENGEM/OPENGEM.EXE",
+    };
+    fat_dir_entry_t probe;
+    const char *found_path = (const char *)0;
+    int pi;
+    int preflight_ok = 1;
+
+    serial_write("[ app ] opengem launch requested\n");
+    serial_write("OpenGEM: boot sequence starting\n");
+    serial_write("[ app ] opengem preflight started\n");
+
+    /* Check 1: find a runnable entry. */
+    for (pi = 0; pi < 5; pi++) {
+        if (fat_find_file(paths[pi], &probe)) {
+            found_path = paths[pi];
+            break;
+        }
+    }
+
+    if (found_path) {
+        video_write("[preflight] OpenGEM entry: found (");
+        video_write(found_path);
+        video_write(")\n");
+        serial_write("[ app ] opengem preflight entry: ok\n");
+    } else {
+        video_write("[preflight] OpenGEM entry: NOT FOUND\n");
+        serial_write("[ app ] opengem preflight entry: missing\n");
+        serial_write("OpenGEM: runtime not found in FAT, fallback to shell\n");
+        preflight_ok = 0;
+    }
+
+    /* Check 2: FAT filesystem ready. */
+    if (fat_ready()) {
+        video_write("[preflight] FAT layer: ready\n");
+        serial_write("[ app ] opengem preflight fat: ok\n");
+    } else {
+        video_write("[preflight] FAT layer: NOT READY\n");
+        serial_write("[ app ] opengem preflight fat: fail\n");
+        serial_write("OpenGEM: runtime not found in FAT, fallback to shell\n");
+        preflight_ok = 0;
+    }
+
+    serial_write("[ app ] opengem preflight complete\n");
+
+    if (!preflight_ok) {
+        video_write("[preflight] FAILED - cannot launch OpenGEM\n");
+        video_write("Install: scripts/import_opengem.sh\n");
+        serial_write("[ app ] opengem preflight failed\n");
+        return 0;
+    }
+
+    video_write("[preflight] PASSED - launching OpenGEM\n");
+    serial_write("[ app ] opengem preflight passed\n");
+    serial_write("OpenGEM: launcher window initialized\n");
+
+    /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
+     * and the standard errorlevel capture on exit. */
+    shell_run(boot_info, handoff, found_path);
+
+    serial_write("OpenGEM: exit detected, returning to shell\n");
+    serial_write("[ app ] opengem launch completed\n");
+    return 1;
+}
+
 static void desktop_dispatch_action(const char *action,
                                     boot_info_t *boot_info,
                                     handoff_v0_t *handoff,
@@ -5514,6 +5597,15 @@ static void desktop_dispatch_action(const char *action,
         shell_run(boot_info, handoff, "INIT.COM");
         ui_console_push(con, "(run done)");
         ui_set_window_status(0, "RUN: ok");
+    } else if (str_eq_nocase(action, "OPENGEM")) {
+        ui_console_push(con, "--- OpenGEM launch ---");
+        if (shell_run_opengem_interactive(boot_info, handoff)) {
+            ui_console_push(con, "(opengem returned)");
+            ui_set_window_status(0, "OPENGEM: ok");
+        } else {
+            ui_console_push(con, "(opengem unavailable)");
+            ui_set_window_status(0, "OPENGEM: n/a");
+        }
     } else {
         ui_console_push(con, "unknown action");
         ui_set_window_status(0, "Error: unknown");
@@ -5583,6 +5675,23 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
                 if ((ch == 'g' || ch == 'G') && chord_stage == 0) {
                     chord_stage = 1;
                     chord_deadline = now + chord_window_ticks;
+                    continue;
+                }
+                if (ch == 'o' || ch == 'O') {
+                    /* ALT+O — desktop shortcut to launch OpenGEM. Treated
+                     * identically to selecting the OPENGEM launcher item:
+                     * block input during the run, dispatch through the
+                     * same interactive helper, then redraw on return. */
+                    serial_write("[ ui ] alt+o shortcut: opengem\n");
+                    dstate = DESKTOP_STATE_RUNNING_ACTION;
+                    serial_write("[ ui ] state transition -> RUNNING_ACTION\n");
+                    desktop_dispatch_action("OPENGEM", boot_info, handoff, &console);
+                    dstate = DESKTOP_STATE_ACTIVE;
+                    serial_write("[ ui ] state transition -> ACTIVE\n");
+                    ui_render_scene();
+                    ui_render_windows();
+                    ui_render_launcher();
+                    video_end_frame();
                     continue;
                 }
             }
@@ -7492,65 +7601,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
     }
 
     if (str_eq(cmd, "opengem")) {
-        serial_write("[ app ] opengem launch requested\n");
-        /* Preflight probe — search candidate entries under FREEDOS/OPENGEM */
-        {
-            fat_dir_entry_t probe;
-            static const char *paths[] = {
-                "/FREEDOS/OPENGEM/GEM.BAT",
-                "/FREEDOS/OPENGEM/GEM.EXE",
-                "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/DESKTOP.APP",
-                "/FREEDOS/OPENGEM/OPENGEM.BAT",
-                "/FREEDOS/OPENGEM/OPENGEM.EXE",
-            };
-            const char *found_path = (const char *)0;
-            int pi;
-            int preflight_ok = 1;
-
-            serial_write("[ app ] opengem preflight started\n");
-
-            /* Check 1: find a runnable entry */
-            for (pi = 0; pi < 5; pi++) {
-                if (fat_find_file(paths[pi], &probe)) {
-                    found_path = paths[pi];
-                    break;
-                }
-            }
-
-            if (found_path) {
-                video_write("[preflight] OpenGEM entry: found (");
-                video_write(found_path);
-                video_write(")\n");
-                serial_write("[ app ] opengem preflight entry: ok\n");
-            } else {
-                video_write("[preflight] OpenGEM entry: NOT FOUND\n");
-                serial_write("[ app ] opengem preflight entry: missing\n");
-                preflight_ok = 0;
-            }
-
-            /* Check 2: FAT filesystem ready */
-            if (fat_ready()) {
-                video_write("[preflight] FAT layer: ready\n");
-                serial_write("[ app ] opengem preflight fat: ok\n");
-            } else {
-                video_write("[preflight] FAT layer: NOT READY\n");
-                serial_write("[ app ] opengem preflight fat: fail\n");
-                preflight_ok = 0;
-            }
-
-            serial_write("[ app ] opengem preflight complete\n");
-
-            if (!preflight_ok) {
-                video_write("[preflight] FAILED - cannot launch OpenGEM\n");
-                video_write("Install: scripts/import_opengem.sh\n");
-                serial_write("[ app ] opengem preflight failed\n");
-            } else {
-                video_write("[preflight] PASSED - launching OpenGEM\n");
-                serial_write("[ app ] opengem preflight passed\n");
-                shell_run(boot_info, handoff, found_path);
-                serial_write("[ app ] opengem launch completed\n");
-            }
-        }
+        (void)shell_run_opengem_interactive(boot_info, handoff);
         return;
     }
 
