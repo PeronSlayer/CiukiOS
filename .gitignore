@@ -18,6 +18,10 @@ third_party/freedos/sources/*
 docs/collab/
 docs/handoffs/
 
+# Copilot task and prompt files (ephemeral, not published)
+docs/copilot-prompt-*.md
+docs/copilot-task-*.md
+
 # Local takeover handoff (keep untracked)
 COPILOT_HANDOFF_TOTAL_2026-04-16.md
 copilot-task-codex-config-persistence-v1.md
