@@ -5546,13 +5546,23 @@ static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
  */
 static int shell_run_opengem_interactive(boot_info_t *boot_info,
                                          handoff_v0_t *handoff) {
+    /* OPENGEM-010 — Probe order: prefer the real GEM.EXE binary at
+     * its canonical OpenGEM nested location before falling back to
+     * GEM.BAT (which, in the bundled FreeDOS payload, only prints
+     * an install-instructions stub when the payload is not at the
+     * drive root). The nested GEM.EXE gives shell_run() a real
+     * MZ entry point to dispatch, which is what the mode-13
+     * first-frame hook (OPENGEM-008) and the ms duration
+     * (OPENGEM-009) actually measure. */
     static const char *paths[] = {
+        "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/GEM.EXE",
         "/FREEDOS/OPENGEM/GEM.BAT",
         "/FREEDOS/OPENGEM/GEM.EXE",
         "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/DESKTOP.APP",
         "/FREEDOS/OPENGEM/OPENGEM.BAT",
         "/FREEDOS/OPENGEM/OPENGEM.EXE",
     };
+    static const u32 paths_count = 6U;
     fat_dir_entry_t probe;
     const char *found_path = (const char *)0;
     int pi;
@@ -5591,7 +5601,7 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
     serial_write("[ app ] opengem preflight started\n");
 
     /* Check 1: find a runnable entry. */
-    for (pi = 0; pi < 5; pi++) {
+    for (pi = 0; (u32)pi < paths_count; pi++) {
         if (fat_find_file(paths[pi], &probe)) {
             found_path = paths[pi];
             break;
@@ -5674,6 +5684,34 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
      * alongside the frame counter check from OPENGEM-008. */
     u64 opengem_session_tick_base = stage2_timer_ticks();
     (void)opengem_session_frame_base;
+
+    /* OPENGEM-010 — Dispatch-target telemetry. Emits the exact
+     * path and kind that shell_run() is about to dispatch so a
+     * runtime gate can correlate the ms duration with the actual
+     * binary selected by the probe order. Kind inferred from the
+     * trailing 3 characters of the resolved path. */
+    if (found_path) {
+        const char *p = found_path;
+        const char *ext = p;
+        while (*ext) ext++;
+        const char *kind = "unk";
+        if (ext - p >= 4) {
+            char c3 = ext[-3], c2 = ext[-2], c1 = ext[-1];
+            /* ASCII fold to lowercase */
+            if (c3 >= 'A' && c3 <= 'Z') c3 = (char)(c3 + 32);
+            if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+            if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+            if (c3 == 'b' && c2 == 'a' && c1 == 't') kind = "bat";
+            else if (c3 == 'e' && c2 == 'x' && c1 == 'e') kind = "exe";
+            else if (c3 == 'c' && c2 == 'o' && c1 == 'm') kind = "com";
+            else if (c3 == 'a' && c2 == 'p' && c1 == 'p') kind = "app";
+        }
+        serial_write("OpenGEM: dispatch target=");
+        serial_write(found_path);
+        serial_write(" kind=");
+        serial_write(kind);
+        serial_write("\n");
+    }
 
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */
