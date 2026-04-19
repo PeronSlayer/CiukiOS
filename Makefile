@@ -477,6 +477,9 @@ test-opengem-native-dispatch:
 test-opengem-mz-probe:
 	bash ./scripts/test_opengem_mz_probe.sh
 
+test-vm86-scaffold:
+	bash ./scripts/test_vm86_scaffold.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
