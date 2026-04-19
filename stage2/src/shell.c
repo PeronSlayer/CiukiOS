@@ -4518,6 +4518,14 @@ static int shell_run_from_fat(
         return 0;
     }
 
+    /* OPENGEM-006 — DOOM launch telemetry. When the target is
+     * DOOM.EXE (case-insensitive), surface a boot-log marker so
+     * the test-doom-via-opengem harness can correlate launches.
+     * Always safe: pure serial emit, no behavioral change. */
+    if (str_eq_nocase(com_name, "DOOM.EXE")) {
+        serial_write("[ doom ] opengem launch DOOM.EXE\n");
+    }
+
     if (!fat_read_file(
             path,
             (void *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR,

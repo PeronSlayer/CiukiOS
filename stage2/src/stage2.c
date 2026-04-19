@@ -720,6 +720,25 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
      * only). Idempotent; safe to call on both boot paths. */
     (void)app_catalog_init(handoff);
 
+    /* OPENGEM-006 — DOOM readiness probe. Emits a boot-log marker
+     * when a user-supplied DOOM.EXE / DOOM1.WAD is discovered by
+     * the catalog. No-op when fixtures are absent (normal CI case
+     * under CiukiOS licensing policy). */
+    {
+        const app_catalog_entry_t *doom_exe = app_catalog_find("DOOM.EXE");
+        if (doom_exe) {
+            serial_write("[ doom ] catalog discovered DOOM.EXE at ");
+            serial_write(doom_exe->path);
+            serial_write("\n");
+        }
+        const app_catalog_entry_t *doom_wad = app_catalog_find("DOOM1.WAD");
+        if (doom_wad) {
+            serial_write("[ doom ] catalog discovered DOOM1.WAD at ");
+            serial_write(doom_wad->path);
+            serial_write("\n");
+        }
+    }
+
     serial_write("[ shell ] mini command loop active\n");
     serial_write("[ stage2 ] next step: handoff to DOS-like runtime\n");
     stage2_shell_run(boot_info, handoff);

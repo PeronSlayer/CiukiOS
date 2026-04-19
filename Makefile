@@ -453,6 +453,9 @@ test-opengem-file-browser:
 test-opengem-input:
 	bash ./scripts/test_opengem_input.sh
 
+test-doom-via-opengem:
+	bash ./scripts/test_doom_via_opengem.sh
+
 test-vga13-baseline:
 	bash ./scripts/test_vga13_baseline.sh
 

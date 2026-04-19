@@ -23,7 +23,7 @@ CiukiOS.
 | 3 | OPENGEM-003 | Desktop Scene Integration (windowing) | DONE | `make test-opengem-launch` |
 | 4 | OPENGEM-004 | App Discovery and File Catalog | DONE | `make test-opengem-file-browser` |
 | 5 | OPENGEM-005 | Input and Mouse Hardening in OpenGEM | DONE | `make test-opengem-input` |
-| 6 | OPENGEM-006 | DOOM Path Readiness | PLANNED | `scripts/test_doom_via_opengem.sh` |
+| 6 | OPENGEM-006 | DOOM Path Readiness | DONE | `scripts/test_doom_via_opengem.sh` |
 
 ---
 
@@ -368,7 +368,7 @@ OpenGEM is a historically mouse-heavy GUI.
 
 ---
 
-## Phase 6 — DOOM Path Readiness (OPENGEM-006) · PLANNED
+## Phase 6 — DOOM Path Readiness (OPENGEM-006) · DONE
 **Goal:** End-to-end demonstration that a user-supplied, shareware
 DOOM binary can be placed on the FAT image, discovered by the Phase 4
 catalog, and launched from OpenGEM (or from the shell via the same
