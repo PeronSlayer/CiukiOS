@@ -5746,6 +5746,217 @@ static int stage2_opengem_classify_absolute(const char *path, u32 size) {
 }
 
 /*
+ * OPENGEM-013 — Absolute-path preload probe.
+ *
+ * First phase of the CiukiOS side actually reading GEM.EXE bytes
+ * from the absolute path resolved by OPENGEM-010. Uses
+ * `fat_read_file()` to stage the file into the runtime payload
+ * buffer (`SHELL_RUNTIME_COM_ENTRY_ADDR`) and inspects the first
+ * few bytes to confirm the on-disk signature matches the lexical
+ * classification from OPENGEM-012. Publishes a verdict that a
+ * real loader (OPENGEM-014+) will consume; today the historical
+ * `shell_run()` path still owns execution.
+ *
+ * Markers (stable, append-only):
+ *   OpenGEM: preload begin path=<p> expect_size=0x<hex32>
+ *   OpenGEM: preload read bytes=0x<hex32> status=<ok|too-large|io-error|no-path>
+ *   OpenGEM: preload signature=<MZ|ZM|text|empty|unknown> match=<0|1>
+ *   OpenGEM: preload verdict=<dispatch-native|defer-to-shell-run> reason=<token>
+ *   OpenGEM: preload complete
+ *
+ * Verdict reason tokens (stable, disjoint from OPENGEM-012):
+ *   preload-empty       — zero-byte file
+ *   preload-too-large   — file exceeds payload window
+ *   preload-io-error    — fat_read_file failed
+ *   preload-no-path     — no resolved path from preflight
+ *   signature-mismatch  — classify expected MZ but signature is not
+ *   mz-16bit-pending    — MZ confirmed but no extender (OPENGEM-014)
+ *   bat-interp-ready    — BAT confirmed, interp will run it
+ *   com-runtime-ready   — COM confirmed, runtime will run it
+ *   unsupported-app     — .APP — no loader
+ *   unsupported-unknown — fell through classify ladder
+ */
+static int stage2_opengem_preload_absolute(const char *path,
+                                           u32 expect_size,
+                                           const char *classify) {
+    const char *status    = "no-path";
+    const char *signature = "unknown";
+    int match             = 0;
+    const char *verdict   = "defer-to-shell-run";
+    const char *reason    = "preload-no-path";
+    u32 read_bytes = 0U;
+
+    /* Begin marker: path + expected size. */
+    serial_write("OpenGEM: preload begin path=");
+    if (path) serial_write(path);
+    else      serial_write("(none)");
+    {
+        char line[32];
+        char hex[9];
+        const char *p = " expect_size=0x";
+        u32 n = 0U;
+        while (p[n] != '\0' && n < (u32)sizeof(line) - 10U) {
+            line[n] = p[n]; n++;
+        }
+        shell_write_u32_hex(expect_size, hex, (u32)sizeof(hex));
+        {
+            u32 j = 0U;
+            while (hex[j] != '\0' && n < (u32)sizeof(line) - 2U) {
+                line[n++] = hex[j++];
+            }
+        }
+        line[n++] = '\n';
+        line[n]   = '\0';
+        serial_write(line);
+    }
+
+    if (!path || !path[0]) {
+        status  = "no-path";
+        verdict = "defer-to-shell-run";
+        reason  = "preload-no-path";
+        goto emit_read_line;
+    }
+
+    if (expect_size == 0U) {
+        status  = "io-error";
+        verdict = "defer-to-shell-run";
+        reason  = "preload-empty";
+        goto emit_read_line;
+    }
+
+    if (expect_size > SHELL_RUNTIME_COM_MAX_PAYLOAD) {
+        status  = "too-large";
+        verdict = "defer-to-shell-run";
+        reason  = "preload-too-large";
+        goto emit_read_line;
+    }
+
+    if (!fat_read_file(
+            path,
+            (void *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR,
+            SHELL_RUNTIME_COM_MAX_PAYLOAD,
+            &read_bytes
+        )) {
+        status  = "io-error";
+        verdict = "defer-to-shell-run";
+        reason  = "preload-io-error";
+        goto emit_read_line;
+    }
+
+    status = "ok";
+
+    if (read_bytes == 0U) {
+        signature = "empty";
+    } else if (read_bytes >= 2U) {
+        const u8 *image = (const u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
+        if (image[0] == 'M' && image[1] == 'Z') {
+            signature = "MZ";
+        } else if (image[0] == 'Z' && image[1] == 'M') {
+            signature = "ZM";
+        } else if (image[0] == '@' || image[0] == ':' ||
+                   (image[0] >= 0x20 && image[0] <= 0x7EU)) {
+            /* BAT files are 7-bit text. Coarse heuristic: first
+             * byte is printable ASCII. */
+            signature = "text";
+        } else {
+            signature = "unknown";
+        }
+    } else {
+        signature = "unknown";
+    }
+
+    /* Cross-check with the OPENGEM-012 lexical classification. */
+    if (classify) {
+        if (classify[0] == 'm' && classify[1] == 'z') {
+            match = (signature[0] == 'M' && signature[1] == 'Z') ? 1 : 0;
+            if (match) {
+                verdict = "defer-to-shell-run";
+                reason  = "mz-16bit-pending";
+            } else {
+                verdict = "defer-to-shell-run";
+                reason  = "signature-mismatch";
+            }
+        } else if (classify[0] == 'b' && classify[1] == 'a' &&
+                   classify[2] == 't') {
+            match = (signature[0] == 't') ? 1 : 0;
+            verdict = "defer-to-shell-run";
+            reason  = "bat-interp-ready";
+        } else if (classify[0] == 'c' && classify[1] == 'o' &&
+                   classify[2] == 'm') {
+            /* COM has no signature; accept. */
+            match = 1;
+            verdict = "defer-to-shell-run";
+            reason  = "com-runtime-ready";
+        } else if (classify[0] == 'a' && classify[1] == 'p' &&
+                   classify[2] == 'p') {
+            match = 0;
+            verdict = "defer-to-shell-run";
+            reason  = "unsupported-app";
+        } else {
+            match = 0;
+            verdict = "defer-to-shell-run";
+            reason  = "unsupported-unknown";
+        }
+    } else {
+        match = 0;
+        verdict = "defer-to-shell-run";
+        reason  = "unsupported-unknown";
+    }
+
+emit_read_line:
+    {
+        char line[48];
+        char hex[9];
+        const char *p = "OpenGEM: preload read bytes=0x";
+        u32 n = 0U;
+        while (p[n] != '\0' && n < (u32)sizeof(line) - 12U) {
+            line[n] = p[n]; n++;
+        }
+        shell_write_u32_hex(read_bytes, hex, (u32)sizeof(hex));
+        {
+            u32 j = 0U;
+            while (hex[j] != '\0' && n < (u32)sizeof(line) - 12U) {
+                line[n++] = hex[j++];
+            }
+        }
+        {
+            const char *q = " status=";
+            u32 j = 0U;
+            while (q[j] != '\0' && n < (u32)sizeof(line) - 2U) {
+                line[n++] = q[j++];
+            }
+        }
+        {
+            u32 j = 0U;
+            while (status[j] != '\0' && n < (u32)sizeof(line) - 2U) {
+                line[n++] = status[j++];
+            }
+        }
+        line[n++] = '\n';
+        line[n]   = '\0';
+        serial_write(line);
+    }
+
+    serial_write("OpenGEM: preload signature=");
+    serial_write(signature);
+    serial_write(" match=");
+    serial_write(match ? "1" : "0");
+    serial_write("\n");
+
+    serial_write("OpenGEM: preload verdict=");
+    serial_write(verdict);
+    serial_write(" reason=");
+    serial_write(reason);
+    serial_write("\n");
+
+    serial_write("OpenGEM: preload complete\n");
+
+    /* Advisory return: 1 when the preload actually landed ok;
+     * OPENGEM-014 will use it to gate a real native dispatch. */
+    return (status[0] == 'o' && status[1] == 'k') ? 1 : 0;
+}
+
+/*
  * OPENGEM-001 — Launch OpenGEM via the standard shell_run path.
  *
  * Shared entry point used by both the `opengem` shell command and the
@@ -5940,6 +6151,32 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
      * advisory; OPENGEM-013+ will consume it to decide between a
      * real absolute loader and the historical shell_run() path. */
     (void)stage2_opengem_classify_absolute(found_path, found_size);
+
+    /* OPENGEM-013 — Preload probe. Actually reads the resolved
+     * absolute path into the runtime payload buffer, inspects the
+     * on-disk signature, and publishes a verdict. Execution still
+     * defers to shell_run() below; native dispatch lands in
+     * OPENGEM-014+. Classify label is passed by lexical form
+     * (trailing 3 chars of the path). */
+    {
+        const char *classify_label = "unknown";
+        if (found_path) {
+            const char *end = found_path;
+            while (*end) end++;
+            if (end - found_path >= 4) {
+                char c3 = end[-3], c2 = end[-2], c1 = end[-1];
+                if (c3 >= 'A' && c3 <= 'Z') c3 = (char)(c3 + 32);
+                if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+                if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+                if (c3 == 'e' && c2 == 'x' && c1 == 'e') classify_label = "mz";
+                else if (c3 == 'b' && c2 == 'a' && c1 == 't') classify_label = "bat";
+                else if (c3 == 'c' && c2 == 'o' && c1 == 'm') classify_label = "com";
+                else if (c3 == 'a' && c2 == 'p' && c1 == 'p') classify_label = "app";
+            }
+        }
+        (void)stage2_opengem_preload_absolute(found_path, found_size,
+                                              classify_label);
+    }
 
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */

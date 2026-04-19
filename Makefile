@@ -468,6 +468,9 @@ test-opengem-extender:
 test-opengem-absolute-dispatch:
 	bash ./scripts/test_opengem_absolute_dispatch.sh
 
+test-opengem-preload:
+	bash ./scripts/test_opengem_preload.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
