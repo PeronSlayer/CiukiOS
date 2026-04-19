@@ -932,11 +932,11 @@ static void shell_print_help(void) {
     video_write("  run X [args]   launch a COM, EXE or BAT program\n");
     video_write("  which X        show where command X is found\n");
     video_write("  vmode          inspect or change video mode\n");
-    video_write("  opengem        launch the OpenGEM GUI\n");
+    video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
     video_write("\n");
     video_write("Visuals:\n");
     video_write("  demo           run the real-time graphics showcase\n");
-    video_write("  desktop        enter the interactive desktop scene\n");
+    video_write("  desktop  - open interactive desktop scene (ALT+G+Q to return)\n");
     video_write("  gsplash        preview the splash screen\n");
     video_write("  ascii          display the ASCII art banner\n");
     video_write("\n");
@@ -7630,7 +7630,8 @@ void stage2_shell_run(boot_info_t *boot_info, handoff_v0_t *handoff) {
     int hist_saved_valid = 0;
 
     shell_startup_chain(boot_info, handoff);
-    video_write("Type 'help' for the command list, 'demo' for the graphics showcase.\n\n");
+    video_write("Type 'help' for the command list, 'demo' for the graphics showcase.\n");
+    video_write("Tip: type 'desktop' to test GUI mode (ALT+G+Q to return).\n\n");
     write_prompt();
     video_present_dirty_immediate();
 
