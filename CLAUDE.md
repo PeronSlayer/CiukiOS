@@ -69,7 +69,7 @@ is gated on explicit user approval of that design document.
 5. Complete the final merge into `main` only after the conflict resolution is coherent.
 
 ## Versioning Cadence Rule (Required)
-1. Current baseline version: `CiukiOS Alpha v0.8.7`.
+1. Current baseline version: `CiukiOS Alpha v0.8.9`.
 2. Version bumps are user-controlled and must not happen unless the user explicitly requests one.
 3. When a version bump is explicitly requested, update all of:
 	- `README.md` (Current Version + Changelog)
@@ -114,4 +114,4 @@ Minimum handoff content:
 4. Pick next milestone item and implement with tests
 9
 ## Last Updated
-2026-04-15
+2026-04-19

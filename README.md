@@ -13,10 +13,25 @@ Mission: become a progressively more complete environment capable of running DOS
 5. Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Version
-`CiukiOS Alpha v0.8.7`
+`CiukiOS Alpha v0.8.9`
 Focus: compatibility foundation + progressive desktop/runtime improvements.
 
 ## Changelog (Latest)
+### v0.8.9
+1. Added the GDT byte-layout encoder (`vm86_gdt_encode` + read-back helpers) that lays the 7-slot CPU-visible descriptor set (NULL, PE_CODE32, PE_DATA32, V86_STACK, V86_TSS, RETURN_CODE64, RETURN_DATA64) into a host-owned buffer bit-exact, with no `LGDT` load.
+2. Added the IDT gate encoder and v8086 IRET stack-frame encoder (`vm86_idt_encode`, `vm86_iret_encode_frame`) that produce the 256-entry IDT with dedicated #GP (0x0D), SW20 (INT 20h), and SW21 (INT 21h) vectors plus the 36-byte v86 entry frame, forcing `VM=1 | IOPL=3 | reserved1` unconditionally into EFLAGS as a safety invariant.
+3. Added two static gates: `scripts/test_vm86_gdt_encode.sh` (59 OK / 0 FAIL) and `scripts/test_vm86_idt_iret.sh` (77 OK / 0 FAIL), both wired into `Makefile` as `test-vm86-gdt-encode` and `test-vm86-idt-iret`.
+4. Expanded the v86 regression stack from 8 gates to 10 gates (017..026), all PASS post-merge; encoders remain observability-only with no live call site and no inline-assembly `lgdt`/`lidt`/`iret` introduced.
+5. Bumped baseline version to `CiukiOS Alpha v0.8.9`.
+
+### v0.8.8
+1. Added the INT 21h AH=4Ch clean-exit handler (OPENGEM-021) with task-state transition to `EXITED`, `exit_reason=INT21_4C`, and byte-width `errorlevel` capture from AL; observability-only via `vm86_int21_4c_probe`.
+2. Added the console handler set (OPENGEM-022): INT 20h (program terminate), INT 21h AH=02h (character out via DL), INT 21h AH=09h (DOS `$`-terminated string via DS:DX), plus a host-side `vm86_console_sink` (256-byte ring with overflow counter) so serial-less gate runs can audit guest writes.
+3. Added the INT 10h AH=0Eh BIOS teletype handler (OPENGEM-023) routed through the same console sink, isolating BIOS-vs-DOS output paths while keeping a single byte stream for gates.
+4. Added the INT 21h AH=30h DOS-version query handler + `gem.exe` T0 readiness simulation (OPENGEM-024) that drives the full startup INT sequence (`AH=30h → AH=09h banner → INT 10h AH=0Eh → AH=4Ch`) with AH-keyed slot rotation on vector 0x21 and explicit ready/pending-surface manifests.
+5. Added five new static gates (`test-vm86-int21-4c`, `test-vm86-console`, `test-vm86-int10-0e`, `test-vm86-gem-t0`) driven by bit-level probe assertions; v86 regression stack grew to 8 PASS.
+6. Bumped baseline version to `CiukiOS Alpha v0.8.8`.
+
 ### v0.8.7
 1. Added the OT-DEMO-001 polish wave: curated shell help for demo-facing commands, a dedicated `demo` launcher, and the new deterministic `CIUKDEMO.COM` graphics showcase for short capture sessions.
 2. Hardened graphical-app replay behavior by resetting the VGA palette baseline on every mode `0x13` entry, fixing the black-screen-on-second-run failure after fade-heavy demos.
