@@ -916,6 +916,7 @@ static void shell_print_help(void) {
     video_write("File system:\n");
     video_write("  dir [X]        list directory contents\n");
     video_write("  cd X           change current directory\n");
+    video_write("  cd..           go to parent directory\n");
     video_write("  pwd            show current directory\n");
     video_write("  type X         display text file\n");
     video_write("  copy X Y       copy file X to Y\n");
@@ -6565,7 +6566,7 @@ static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
     /* Check builtins (only for bare names) */
     if (!has_path) {
         static const char *builtins[] = {
-            "help", "pwd", "cd", "dir", "type", "copy", "ren", "rename",
+            "help", "pwd", "cd", "cd..", "dir", "type", "copy", "ren", "rename",
             "move", "mkdir", "md", "rmdir", "rd", "attrib", "del", "erase",
             "ascii", "gsplash", "splash", "desktop", "demo", "cls", "ver", "echo",
             "set", "pmode", "vga13", "gfx", "image", "mode", "ticks", "mem",
@@ -6689,7 +6690,7 @@ static void shell_complete_add(shell_complete_ctx_t *ctx, const char *s) {
 /* Gather builtin completions matching prefix */
 static void shell_complete_builtins(shell_complete_ctx_t *ctx, const char *prefix, u32 plen) {
     static const char *builtins[] = {
-        "help", "pwd", "cd", "dir", "type", "copy", "ren",
+        "help", "pwd", "cd", "cd..", "dir", "type", "copy", "ren",
         "move", "mkdir", "rmdir", "attrib", "del",
         "ascii", "gsplash", "desktop", "demo", "cls", "ver", "echo",
         "set", "pmode", "ticks", "mem",
@@ -7081,6 +7082,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "cd")) {
         shell_cd(get_arg_ptr(line));
+        return;
+    }
+
+    if (str_eq(cmd, "cd..")) {
+        shell_cd("..");
         return;
     }
 
