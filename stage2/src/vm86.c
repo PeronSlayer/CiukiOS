@@ -1753,3 +1753,173 @@ int vm86_live_switch_arm_probe(void) {
     }
     return ok ? 1 : 0;
 }
+
+/* ========================================================================
+ * OPENGEM-031 — CPU state snapshot + identity-map verification.
+ *
+ * Read-only prerequisites for any future phase that will mutate
+ * CR0/CR3/EFER or reload GDTR/IDTR. Nothing here writes control
+ * registers or page tables.
+ * ========================================================================
+ */
+
+extern int vm86_snapshot_capture_asm(vm86_cpu_snapshot *out);
+
+__attribute__((used))
+static const char vm86_pe32_ident_sentinel[] = "OPENGEM-031";
+
+int vm86_cpu_snapshot_capture(vm86_cpu_snapshot *out) {
+    if (!out) return 0;
+    return vm86_snapshot_capture_asm(out);
+}
+
+/*
+ * Walk the long-mode 4-level page tables rooted at `cr3_phys` and
+ * verify every 4 KiB page in [range_start, range_end) is present
+ * and identity-mapped. Returns 1 on full success, 0 otherwise.
+ *
+ * Assumes that the caller's current paging already identity-maps
+ * the physical region containing `cr3_phys` (true for stage2 on
+ * UEFI). All table accesses are through the identity region.
+ *
+ * Entry bits we care about:
+ *   bit 0  P   present
+ *   bit 7  PS  (at PDPT or PD) huge page (1 GiB / 2 MiB)
+ *   bits 51:12 of the entry are the phys addr (mask = 0x000FFFFFFFFFF000)
+ */
+int vm86_pe32_identity_verify(u64 cr3_phys,
+                              u64 range_start,
+                              u64 range_end,
+                              u64 *failing_va_out) {
+    const u64 ADDR_MASK = 0x000FFFFFFFFFF000ULL;
+    const u64 PAGE_4K   = 0x1000ULL;
+    const u64 PAGE_2M   = 0x200000ULL;
+    const u64 PAGE_1G   = 0x40000000ULL;
+
+    if (range_end <= range_start) {
+        if (failing_va_out) *failing_va_out = range_start;
+        return 0;
+    }
+
+    u64 *pml4 = (u64 *)(cr3_phys & ADDR_MASK);
+
+    for (u64 va = range_start; va < range_end; ) {
+        u32 i4 = (u32)((va >> 39) & 0x1FFU);
+        u32 i3 = (u32)((va >> 30) & 0x1FFU);
+        u32 i2 = (u32)((va >> 21) & 0x1FFU);
+        u32 i1 = (u32)((va >> 12) & 0x1FFU);
+
+        u64 e4 = pml4[i4];
+        if (!(e4 & 1ULL)) { if (failing_va_out) *failing_va_out = va; return 0; }
+        u64 *pdpt = (u64 *)(e4 & ADDR_MASK);
+
+        u64 e3 = pdpt[i3];
+        if (!(e3 & 1ULL)) { if (failing_va_out) *failing_va_out = va; return 0; }
+        if (e3 & (1ULL << 7)) {
+            /* 1 GiB page. phys = (e3 & ADDR_MASK_1G) | (va & offset_mask) */
+            u64 phys_base = e3 & 0xFFFFFFC0000000ULL;
+            u64 phys      = phys_base | (va & (PAGE_1G - 1));
+            if (phys != va) { if (failing_va_out) *failing_va_out = va; return 0; }
+            va = (va + PAGE_1G) & ~(PAGE_1G - 1);
+            continue;
+        }
+        u64 *pd = (u64 *)(e3 & ADDR_MASK);
+
+        u64 e2 = pd[i2];
+        if (!(e2 & 1ULL)) { if (failing_va_out) *failing_va_out = va; return 0; }
+        if (e2 & (1ULL << 7)) {
+            /* 2 MiB page. */
+            u64 phys_base = e2 & 0xFFFFFFFFFFE00000ULL;
+            u64 phys      = phys_base | (va & (PAGE_2M - 1));
+            if (phys != va) { if (failing_va_out) *failing_va_out = va; return 0; }
+            va = (va + PAGE_2M) & ~(PAGE_2M - 1);
+            continue;
+        }
+        u64 *pt = (u64 *)(e2 & ADDR_MASK);
+
+        u64 e1 = pt[i1];
+        if (!(e1 & 1ULL)) { if (failing_va_out) *failing_va_out = va; return 0; }
+        u64 phys_base = e1 & ADDR_MASK;
+        if (phys_base != (va & ~(PAGE_4K - 1))) {
+            if (failing_va_out) *failing_va_out = va;
+            return 0;
+        }
+        va = (va + PAGE_4K) & ~(PAGE_4K - 1);
+    }
+
+    if (failing_va_out) *failing_va_out = 0;
+    return 1;
+}
+
+int vm86_pe32_identity_probe(void) {
+    serial_write("vm86: pe32-ident probe begin OPENGEM-031\n");
+
+    vm86_cpu_snapshot snap;
+    for (u32 i = 0; i < (u32)sizeof(snap); i++) ((u8 *)&snap)[i] = 0;
+
+    if (!vm86_cpu_snapshot_capture(&snap)) {
+        serial_write("vm86: pe32-ident snapshot capture=failed\n");
+        return 0;
+    }
+    if (snap.sentinel != VM86_CPU_SNAPSHOT_SENTINEL) {
+        serial_write("vm86: pe32-ident sentinel=bad\n");
+        return 0;
+    }
+
+    serial_write("vm86: pe32-ident cr0=0x");
+    serial_write_hex64(snap.cr0);
+    serial_write(" cr3=0x");
+    serial_write_hex64(snap.cr3);
+    serial_write(" cr4=0x");
+    serial_write_hex64(snap.cr4);
+    serial_write("\n");
+    serial_write("vm86: pe32-ident efer=0x");
+    serial_write_hex64(snap.efer);
+    serial_write(" gdtr.limit=0x");
+    serial_write_hex64((u64)snap.gdtr_limit);
+    serial_write(" gdtr.base=0x");
+    serial_write_hex64(snap.gdtr_base);
+    serial_write("\n");
+    serial_write("vm86: pe32-ident idtr.limit=0x");
+    serial_write_hex64((u64)snap.idtr_limit);
+    serial_write(" idtr.base=0x");
+    serial_write_hex64(snap.idtr_base);
+    serial_write("\n");
+
+    int ok = 1;
+
+    /* EFER.LME (bit 8), EFER.LMA (bit 10). Both set means long mode active. */
+    if (!(snap.efer & (1ULL << 8)))  { serial_write("vm86: pe32-ident efer.LME=0 FAIL\n"); ok = 0; }
+    if (!(snap.efer & (1ULL << 10))) { serial_write("vm86: pe32-ident efer.LMA=0 FAIL\n"); ok = 0; }
+    /* CR0.PE (bit 0), CR0.PG (bit 31). */
+    if (!(snap.cr0 & (1ULL << 0)))  { serial_write("vm86: pe32-ident cr0.PE=0 FAIL\n"); ok = 0; }
+    if (!(snap.cr0 & (1ULL << 31))) { serial_write("vm86: pe32-ident cr0.PG=0 FAIL\n"); ok = 0; }
+    /* CR4.PAE (bit 5) required in long mode. */
+    if (!(snap.cr4 & (1ULL << 5)))  { serial_write("vm86: pe32-ident cr4.PAE=0 FAIL\n"); ok = 0; }
+
+    /* Identity-map verification for the v8086 window [0, 1 MiB). */
+    u64 fail_va = 0;
+    int ident_ok = vm86_pe32_identity_verify(snap.cr3, 0x0ULL, 0x00100000ULL, &fail_va);
+    if (ident_ok) {
+        serial_write("vm86: pe32-ident window=[0x0,0x100000) identity=OK\n");
+    } else {
+        serial_write("vm86: pe32-ident window identity=FAIL first-bad-va=0x");
+        serial_write_hex64(fail_va);
+        serial_write("\n");
+        ok = 0;
+    }
+
+    /* NULL-guards on the verify helper. */
+    u64 scratch = 0;
+    if (vm86_pe32_identity_verify(0, 0, 0, &scratch) != 0) ok = 0;   /* empty range */
+    if (vm86_pe32_identity_verify(snap.cr3, 0, 0, &scratch) != 0) ok = 0;
+
+    if (ok) {
+        serial_write("vm86: pe32-ident ready-surface=snapshot,identity-window\n");
+        serial_write("vm86: pe32-ident pending-surface=cr3-mutation,lgdt,lidt,iretd\n");
+        serial_write("vm86: pe32-ident probe complete\n");
+    } else {
+        serial_write("vm86: pe32-ident probe failed\n");
+    }
+    return ok ? 1 : 0;
+}

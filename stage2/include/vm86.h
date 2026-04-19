@@ -773,4 +773,97 @@ vm86_live_exec_status vm86_live_switch_execute(void);
  */
 int vm86_live_switch_arm_probe(void);
 
+/*
+ * ============================================================
+ * OPENGEM-031 — CPU state snapshot + identity-map verification.
+ *
+ * Observability-only prerequisite for every phase that will
+ * mutate CR0/CR3/EFER or reload GDTR/IDTR.
+ *
+ * Nothing in this block touches CPU control state. The snapshot
+ * reads the current values via SGDT/SIDT/MOV-from-CR*; the probe
+ * walks the page tables in read-only mode through the current
+ * CR3 value. No CR3 write, no invalidation, no LGDT, no LIDT.
+ *
+ * Until the v8086 guest's 1 MiB window is confirmed
+ * identity-mapped by the host paging, no live entry can be
+ * attempted without risking a #PF from the guest's very first
+ * fetch. This phase proves the invariant.
+ * ============================================================
+ */
+
+#define VM86_CPU_SNAPSHOT_SENTINEL  0x0310u
+#define VM86_PE32_IDENTITY_SENTINEL 0x0311u
+
+/*
+ * Structural snapshot of the long-mode host CPU control state.
+ * All fields are populated by vm86_cpu_snapshot_capture().
+ * Layout is ABI-frozen for test-tool consumption.
+ */
+typedef struct vm86_cpu_snapshot {
+    u32  sentinel;    /* VM86_CPU_SNAPSHOT_SENTINEL on success */
+    u32  reserved0;
+    u64  cr0;
+    u64  cr3;
+    u64  cr4;
+    u64  efer;
+    u16  gdtr_limit;
+    u16  reserved1;
+    u32  reserved2;
+    u64  gdtr_base;
+    u16  idtr_limit;
+    u16  reserved3;
+    u32  reserved4;
+    u64  idtr_base;
+} vm86_cpu_snapshot;
+
+/*
+ * Capture the current host CPU control state into `out`.
+ * Returns 1 on success, 0 if `out` is NULL.
+ *
+ * Reads CR0/CR3/CR4 via MOV-from-CR, EFER via RDMSR(0xC0000080),
+ * GDTR/IDTR via SGDT/SIDT. Does not modify any register.
+ */
+int vm86_cpu_snapshot_capture(vm86_cpu_snapshot *out);
+
+/*
+ * Read-only walk of the long-mode page tables starting from the
+ * supplied `cr3_phys` value. Verifies that every 4 KiB page in
+ * [range_start, range_end) is identity-mapped (virtual == physical)
+ * and present. On failure `failing_va_out` (if non-NULL) receives
+ * the first virtual address that does not satisfy the invariant.
+ *
+ * NOTE: requires that the host's current paging has `cr3_phys`
+ * reachable via the identity region it already maps. Stage2's
+ * UEFI-installed page tables satisfy this for the physical range
+ * below 1 GiB.
+ *
+ * Returns 1 if the whole range is identity-mapped and present,
+ * 0 otherwise. Does NOT write to CR3 or any page-table entry.
+ */
+int vm86_pe32_identity_verify(u64 cr3_phys,
+                              u64 range_start,
+                              u64 range_end,
+                              u64 *failing_va_out);
+
+/*
+ * OPENGEM-031 integrated probe.
+ *
+ * Steps (all observable on serial):
+ *   1. Capture the CPU snapshot.
+ *   2. Assert EFER.LMA=1, EFER.LME=1 (long mode active).
+ *   3. Assert CR0.PE=1, CR0.PG=1 (protected mode + paging).
+ *   4. Invoke vm86_pe32_identity_verify on the v8086 window
+ *      [0x00000000, 0x00100000) using the captured CR3.
+ *   5. Emit a marker summarizing readiness for the forthcoming
+ *      OPENGEM-032 live switch.
+ *
+ * Emits markers prefixed `vm86: pe32-ident ...`. Returns 1 on
+ * full readiness, 0 if any invariant fails.
+ *
+ * SAFETY: does NOT modify control registers or page tables.
+ * Safe to invoke from any long-mode host context.
+ */
+int vm86_pe32_identity_probe(void);
+
 #endif /* STAGE2_VM86_H */

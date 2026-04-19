@@ -519,6 +519,9 @@ test-vm86-arm-gate:
 test-vm86-gem-wire:
 	bash ./scripts/test_vm86_gem_wire.sh
 
+test-vm86-pe32-ident:
+	bash ./scripts/test_vm86_pe32_ident.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
