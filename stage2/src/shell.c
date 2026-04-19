@@ -3206,6 +3206,12 @@ static void shell_mouse_draw_cursor_mode13(u8 color_index) {
     if (g_mouse_state.show_count < 0) {
         return;
     }
+    /* OPENGEM-005 — Do not paint the fallback cursor while an
+     * OpenGEM session owns the screen; GEMVDI renders its own
+     * pointer. */
+    if (stage2_mouse_opengem_cursor_quiesced()) {
+        return;
+    }
     i32 x0 = g_mouse_state.x;
     i32 y0 = g_mouse_state.y;
     if (x0 >= (i32)GFX_MODE13_W || y0 >= (i32)GFX_MODE13_H) {
@@ -5630,11 +5636,19 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
      * "OpenGEM running" state with the boot log. */
     serial_write("[ ui ] opengem overlay active\n");
     video_write("OpenGEM running - press ALT+G+Q inside OpenGEM to exit\n");
+    /* OPENGEM-005 — Bracket the mouse session: quiesce the
+     * fallback mode-13 cursor and notify any installed INT 33h
+     * hook so a DOS-native OpenGEM build can take over pointer
+     * rendering. */
+    stage2_mouse_opengem_session_enter();
 
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */
     shell_run(boot_info, handoff, found_path);
 
+    /* OPENGEM-005 — Unbracket the mouse session; restore the
+     * fallback cursor and notify the hook. */
+    stage2_mouse_opengem_session_exit();
     serial_write("OpenGEM: exit detected, returning to shell\n");
     serial_write("[ app ] opengem launch completed\n");
     /* OPENGEM-003 — Restore launcher focus so the dock selection
@@ -5786,6 +5800,11 @@ static void shell_run_desktop_session(boot_info_t *boot_info, handoff_v0_t *hand
             if (chord_stage == 1 && (ch == 'q' || ch == 'Q')) {
                 if (alt_held || now <= chord_deadline) {
                     serial_write("[ ui ] exit chord alt+g+q triggered\n");
+                    /* OPENGEM-005 — Escape-chord telemetry:
+                     * classifies the chord as the OpenGEM-aware
+                     * escape so correlation with an OpenGEM
+                     * session is unambiguous in the boot log. */
+                    serial_write("[ kbd ] opengem escape chord: alt+g+q detected\n");
                     dstate = DESKTOP_STATE_EXITING;
                     serial_write("[ ui ] state transition -> EXITING\n");
                     break;

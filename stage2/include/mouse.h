@@ -50,4 +50,52 @@ void stage2_mouse_consume_deltas(i32 *out_dx, i32 *out_dy, u16 *out_buttons);
 u64 stage2_mouse_irq_count(void);
 int stage2_mouse_is_present(void);
 
+/*
+ * OPENGEM-005 — Guarded OpenGEM session bridge.
+ *
+ * `int33_hooks_t` is an append-only surface that lets a DOS-native
+ * OpenGEM build install its own INT 33h event callback(s) without
+ * disturbing the stage2 fallback path. All fields are nullable.
+ * Stage2 only calls non-null hooks; the fallback CiukiOS cursor
+ * is quiesced automatically while an OpenGEM session is active.
+ *
+ * Append-only: new callback slots only at the tail of the struct;
+ * never reorder existing ones. `version` lets future consumers
+ * gate against minimum field count.
+ */
+typedef struct int33_hooks {
+    u32  version;                       /* must be >= 1 */
+    void (*on_session_enter)(void);     /* called before shell_run (OPENGEM-005) */
+    void (*on_session_exit)(void);      /* called after shell_run returns     */
+    void (*on_mouse_event)(u16 buttons, /* optional per-event tap; OpenGEM    */
+                           i32 dx, i32 dy); /* implementers may synthesize INT 33h state */
+} int33_hooks_t;
+
+#define STAGE2_INT33_HOOKS_VERSION 1U
+
+/*
+ * Install or clear the hook table. Passing NULL clears hooks and
+ * reactivates the default fallback cursor in mode 13h. The
+ * function is idempotent and null-safe.
+ *
+ * Emits `[ mouse ] opengem hook installed` on a non-null install.
+ */
+void stage2_mouse_set_opengem_hooks(const int33_hooks_t *hooks);
+
+/*
+ * Called by the OpenGEM launcher helper to bracket the session.
+ * Idempotent; safe to re-enter. Emits the frozen markers
+ * `[ mouse ] opengem session: cursor disabled` and
+ * `[ mouse ] opengem session: cursor restored`.
+ */
+void stage2_mouse_opengem_session_enter(void);
+void stage2_mouse_opengem_session_exit(void);
+
+/*
+ * Read the "cursor quiesced" flag — 1 while an OpenGEM session owns
+ * the screen, 0 otherwise. The mode-13h cursor blitter consults
+ * this flag before painting. Always safe to call.
+ */
+int  stage2_mouse_opengem_cursor_quiesced(void);
+
 #endif

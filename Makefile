@@ -450,6 +450,9 @@ test-opengem-launch:
 test-opengem-file-browser:
 	bash ./scripts/test_opengem_file_browser.sh
 
+test-opengem-input:
+	bash ./scripts/test_opengem_input.sh
+
 test-vga13-baseline:
 	bash ./scripts/test_vga13_baseline.sh
 

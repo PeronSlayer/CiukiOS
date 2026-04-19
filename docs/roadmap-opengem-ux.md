@@ -22,7 +22,7 @@ CiukiOS.
 | 2 | OPENGEM-002-BAT | BAT Interpretation Hardening | DONE | `make test-bat-interp` |
 | 3 | OPENGEM-003 | Desktop Scene Integration (windowing) | DONE | `make test-opengem-launch` |
 | 4 | OPENGEM-004 | App Discovery and File Catalog | DONE | `make test-opengem-file-browser` |
-| 5 | OPENGEM-005 | Input and Mouse Hardening in OpenGEM | PLANNED | `make test-opengem-input` |
+| 5 | OPENGEM-005 | Input and Mouse Hardening in OpenGEM | DONE | `make test-opengem-input` |
 | 6 | OPENGEM-006 | DOOM Path Readiness | PLANNED | `scripts/test_doom_via_opengem.sh` |
 
 ---
@@ -320,7 +320,7 @@ bundled demo apps.
 
 ---
 
-## Phase 5 — Input and Mouse Hardening in OpenGEM (OPENGEM-005) · PLANNED
+## Phase 5 — Input and Mouse Hardening in OpenGEM (OPENGEM-005) · DONE
 **Goal:** Ensure INT 33h mouse and INT 16h keyboard already delivered
 by SR-MOUSE-001 behave correctly once OpenGEM/GEMVDI owns the screen;
 OpenGEM is a historically mouse-heavy GUI.

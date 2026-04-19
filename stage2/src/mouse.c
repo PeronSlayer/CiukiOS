@@ -285,3 +285,39 @@ u64 stage2_mouse_irq_count(void) {
 int stage2_mouse_is_present(void) {
     return g_mouse_present ? 1 : 0;
 }
+
+/* ===== OPENGEM-005 — guarded OpenGEM session bridge ===== */
+
+static const int33_hooks_t *g_opengem_hooks;
+static u8                   g_opengem_cursor_quiesced;
+
+void stage2_mouse_set_opengem_hooks(const int33_hooks_t *hooks) {
+    if (hooks && hooks->version >= STAGE2_INT33_HOOKS_VERSION) {
+        g_opengem_hooks = hooks;
+        serial_write("[ mouse ] opengem hook installed\n");
+    } else {
+        g_opengem_hooks = (const int33_hooks_t *)0;
+    }
+}
+
+void stage2_mouse_opengem_session_enter(void) {
+    if (g_opengem_cursor_quiesced) return;
+    g_opengem_cursor_quiesced = 1U;
+    serial_write("[ mouse ] opengem session: cursor disabled\n");
+    if (g_opengem_hooks && g_opengem_hooks->on_session_enter) {
+        g_opengem_hooks->on_session_enter();
+    }
+}
+
+void stage2_mouse_opengem_session_exit(void) {
+    if (!g_opengem_cursor_quiesced) return;
+    g_opengem_cursor_quiesced = 0U;
+    if (g_opengem_hooks && g_opengem_hooks->on_session_exit) {
+        g_opengem_hooks->on_session_exit();
+    }
+    serial_write("[ mouse ] opengem session: cursor restored\n");
+}
+
+int stage2_mouse_opengem_cursor_quiesced(void) {
+    return g_opengem_cursor_quiesced ? 1 : 0;
+}
