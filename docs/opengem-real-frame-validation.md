@@ -14,13 +14,18 @@ Baseline: Alpha v0.8.7. No version bump.
 | Marker                                                     | When                                                    |
 | ---------------------------------------------------------- | ------------------------------------------------------- |
 | `OpenGEM: desktop frame blitted`                           | Once, on the first successful `gfx_mode13_present_plane()` after arming during an OpenGEM session. Auto-disarms. |
-| `OpenGEM: runtime session duration=<n> frames`             | Always, between `runtime session ended` and `stage2_mouse_opengem_session_exit()`. Counted in presented frames. |
+| `OpenGEM: runtime session duration=<n> ms`                 | Always, between `runtime session ended` and `stage2_mouse_opengem_session_exit()`. Counted in PIT ticks × 10 ms (100 Hz baseline). |
 
-The duration is measured in **presented frames** (delta of
-`gfx_frame_counter()` across `shell_run()`), not in milliseconds: stage2
-has no PIT/RDTSC time helper yet, and a frame-count surrogate is
-deterministic, host-independent, and sufficient for regression
-budgeting.
+Duration source history:
+
+- OPENGEM-008: counted in presented frames (`gfx_frame_counter()`
+  delta) because stage2 had no ms helper.
+- OPENGEM-009: promoted to wall-clock milliseconds via
+  `stage2_timer_ticks()` delta × 10 (PIT programmed at 100 Hz in
+  `stage2/src/timer.c: pit_set_rate_hz(100)`). Marker **prefix** is
+  unchanged (`OpenGEM: runtime session duration=`); only the suffix
+  moved from ` frames` to ` ms`. Runtime gates must match the
+  current suffix.
 
 ## Emission order (extended OPENGEM-007 sequence)
 
@@ -33,7 +38,7 @@ OpenGEM: interactive session active
   <-- first real mode-13 blit during shell_run -->
   OpenGEM: desktop frame blitted            (at most once per session)
 OpenGEM: runtime session ended
-OpenGEM: runtime session duration=<n> frames
+  OpenGEM: runtime session duration=<n> ms
 OpenGEM: exit detected, returning to shell
 ```
 

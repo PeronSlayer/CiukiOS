@@ -5667,33 +5667,42 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
     u32 opengem_session_frame_base = gfx_frame_counter();
     gfx_mode_opengem_arm_first_frame();
 
+    /* OPENGEM-009 — Capture PIT tick baseline for a real
+     * wall-clock session duration. PIT runs at 100 Hz
+     * (see stage2/src/timer.c: pit_set_rate_hz(100)), so each
+     * tick equals 10 ms. The ms delta is emitted on exit
+     * alongside the frame counter check from OPENGEM-008. */
+    u64 opengem_session_tick_base = stage2_timer_ticks();
+    (void)opengem_session_frame_base;
+
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */
     shell_run(boot_info, handoff, found_path);
 
     /* OPENGEM-008 — Disarm unconditionally (no-op if the marker
-     * already fired) and emit the session duration. Counted in
-     * presented frames; host-independent, deterministic, no PIT
-     * or RDTSC dependency. */
+     * already fired) and emit the session duration. OPENGEM-009
+     * promoted the suffix from `frames` to `ms` using the PIT
+     * tick counter; prefix stable for backward compatibility. */
     gfx_mode_opengem_disarm_first_frame();
     {
-        u32 dur = gfx_frame_counter() - opengem_session_frame_base;
+        u64 tick_delta = stage2_timer_ticks() - opengem_session_tick_base;
+        u64 ms = tick_delta * 10ULL; /* PIT at 100 Hz */
         char buf[64];
         u32 n = 0;
         const char *prefix = "OpenGEM: runtime session duration=";
         while (prefix[n] != '\0' && n < sizeof(buf) - 16) {
             buf[n] = prefix[n]; n++;
         }
-        /* u32 -> decimal, minimal helper */
-        char tmp[12];
+        /* u64 -> decimal, minimal helper */
+        char tmp[24];
         u32 ti = 0;
-        if (dur == 0) { tmp[ti++] = '0'; }
+        if (ms == 0) { tmp[ti++] = '0'; }
         else {
-            u32 d = dur;
-            while (d > 0 && ti < sizeof(tmp)) { tmp[ti++] = (char)('0' + (d % 10U)); d /= 10U; }
+            u64 d = ms;
+            while (d > 0 && ti < sizeof(tmp)) { tmp[ti++] = (char)('0' + (u32)(d % 10ULL)); d /= 10ULL; }
         }
         while (ti > 0 && n < sizeof(buf) - 8) { buf[n++] = tmp[--ti]; }
-        const char *suffix = " frames\n";
+        const char *suffix = " ms\n";
         u32 si = 0;
         while (suffix[si] != '\0' && n < sizeof(buf) - 1) {
             buf[n++] = suffix[si++];

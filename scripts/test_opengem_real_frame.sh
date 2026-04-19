@@ -70,14 +70,20 @@ fi
 
 # --- shell.c: wiring + duration line ---
 check_contains 'OPENGEM-008' "$SHELL_C" "shell.c: OPENGEM-008 marker"
+check_contains 'OPENGEM-009' "$SHELL_C" "shell.c: OPENGEM-009 marker"
 check_contains 'gfx_mode_opengem_arm_first_frame()' "$SHELL_C" \
     "shell.c: arm call before shell_run"
 check_contains 'gfx_mode_opengem_disarm_first_frame()' "$SHELL_C" \
     "shell.c: disarm call after shell_run"
 check_contains 'OpenGEM: runtime session duration=' "$SHELL_C" \
     "shell.c: duration line prefix"
-check_contains 'gfx_frame_counter()' "$SHELL_C" \
-    "shell.c: uses frame counter as duration source"
+check_contains 'stage2_timer_ticks()' "$SHELL_C" \
+    "shell.c: uses PIT ticks as duration source (OPENGEM-009)"
+if grep -qF 'suffix = " ms\n"' "$SHELL_C"; then
+    ok "shell.c: duration suffix is ms (OPENGEM-009)"
+else
+    ko "shell.c: duration suffix is not ms"
+fi
 
 # Ordering: arm must appear after session_enter and before shell_run.
 if awk '
@@ -121,10 +127,10 @@ if [ -f "$BOOT_LOG" ]; then
     else
         echo "[info] 'OpenGEM: desktop frame blitted' not in log (expected if no OpenGEM session ran)"
     fi
-    if grep -qE 'OpenGEM: runtime session duration=[0-9]+ frames' "$BOOT_LOG"; then
-        ok "boot-log: session-duration line observed"
+    if grep -qE 'OpenGEM: runtime session duration=[0-9]+ ms' "$BOOT_LOG"; then
+        ok "boot-log: session-duration line observed (ms, OPENGEM-009)"
     else
-        echo "[info] session-duration line not in log (expected if no OpenGEM session ran)"
+        echo "[info] session-duration (ms) not in log (expected if no OpenGEM session ran)"
     fi
 else
     echo "[info] no boot log at $BOOT_LOG — runtime markers checked statically only"
