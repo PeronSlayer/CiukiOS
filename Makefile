@@ -522,6 +522,9 @@ test-vm86-gem-wire:
 test-vm86-pe32-ident:
 	bash ./scripts/test_vm86_pe32_ident.sh
 
+test-vm86-idt-shim:
+	bash ./scripts/test_vm86_idt_shim.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

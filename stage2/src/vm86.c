@@ -1923,3 +1923,202 @@ int vm86_pe32_identity_probe(void) {
     }
     return ok ? 1 : 0;
 }
+
+/* ================================================================== */
+/* OPENGEM-032 - v8086 IDT shim builder (observability only).         */
+/*                                                                    */
+/* Builds the 256-entry IDT image that the compat PE host will load   */
+/* via LIDT in OPENGEM-033. No LIDT is issued from this phase; the    */
+/* image is kept in a static buffer and verified by read-back.       */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_idt_shim_sentinel[] = "OPENGEM-032";
+
+/* Trap stub symbols provided by stage2/src/vm86_trap_stubs.S. Their
+ * addresses are taken, never called from C. */
+extern char vm86_trap_stub_de;
+extern char vm86_trap_stub_ud;
+extern char vm86_trap_stub_nm;
+extern char vm86_trap_stub_ts;
+extern char vm86_trap_stub_np;
+extern char vm86_trap_stub_ss;
+extern char vm86_trap_stub_gp;
+extern char vm86_trap_stub_pf;
+extern char vm86_trap_stub_sw20;
+extern char vm86_trap_stub_sw21;
+extern char vm86_trap_stub_unexpected;
+
+/* 8-byte-aligned, BSS-resident image. 256 * 8 = 2048 bytes. */
+static u8 s_vm86_idt_shim_bytes[VM86_IDT_BYTES] __attribute__((aligned(8)));
+static int s_vm86_idt_shim_built = 0;
+
+static inline u32 vm86_shim_stub_u32(const char *sym) {
+    u64 addr = (u64)(unsigned long)sym;
+    return (u32)(addr & 0xFFFFFFFFu);
+}
+
+int vm86_idt_shim_build(void) {
+    const char *stubs[VM86_IDT_SHIM_STUB_COUNT];
+    stubs[0]  = &vm86_trap_stub_de;
+    stubs[1]  = &vm86_trap_stub_ud;
+    stubs[2]  = &vm86_trap_stub_nm;
+    stubs[3]  = &vm86_trap_stub_ts;
+    stubs[4]  = &vm86_trap_stub_np;
+    stubs[5]  = &vm86_trap_stub_ss;
+    stubs[6]  = &vm86_trap_stub_gp;
+    stubs[7]  = &vm86_trap_stub_pf;
+    stubs[8]  = &vm86_trap_stub_sw20;
+    stubs[9]  = &vm86_trap_stub_sw21;
+    stubs[10] = &vm86_trap_stub_unexpected;
+    for (u32 i = 0; i < VM86_IDT_SHIM_STUB_COUNT; i++) {
+        u64 addr = (u64)(unsigned long)stubs[i];
+        if (addr > 0xFFFFFFFFu) {
+            return 0;
+        }
+    }
+
+    u32 handlers[VM86_IDT_VEC_SLOT_COUNT];
+    handlers[0] = vm86_shim_stub_u32(stubs[0]);
+    handlers[1] = vm86_shim_stub_u32(stubs[1]);
+    handlers[2] = vm86_shim_stub_u32(stubs[2]);
+    handlers[3] = vm86_shim_stub_u32(stubs[3]);
+    handlers[4] = vm86_shim_stub_u32(stubs[4]);
+    handlers[5] = vm86_shim_stub_u32(stubs[5]);
+    handlers[6] = vm86_shim_stub_u32(stubs[6]);
+    handlers[7] = vm86_shim_stub_u32(stubs[7]);
+    handlers[8] = vm86_shim_stub_u32(stubs[8]);
+    handlers[9] = vm86_shim_stub_u32(stubs[9]);
+
+    u32 spurious = vm86_shim_stub_u32(stubs[10]);
+    u16 cs_sel   = (u16)(VM86_GDT_PE_CODE32 << 3);
+
+    u32 n = vm86_idt_encode(s_vm86_idt_shim_bytes, cs_sel, spurious, handlers);
+    if (n != (u32)VM86_IDT_ENTRY_COUNT) {
+        return 0;
+    }
+    s_vm86_idt_shim_built = 1;
+    return 1;
+}
+
+int vm86_idt_shim_idtr_image(u16 *limit_out, u64 *base_out) {
+    if (!limit_out || !base_out) return 0;
+    if (!s_vm86_idt_shim_built)  return 0;
+    *limit_out = (u16)(VM86_IDT_BYTES - 1);
+    *base_out  = (u64)(unsigned long)&s_vm86_idt_shim_bytes[0];
+    return 1;
+}
+
+int vm86_idt_shim_verify(void) {
+    if (!s_vm86_idt_shim_built) return 0;
+
+    const u16 cs_sel = (u16)(VM86_GDT_PE_CODE32 << 3);
+    const u32 unexp  = vm86_shim_stub_u32(&vm86_trap_stub_unexpected);
+
+    u32 known_vectors[VM86_IDT_VEC_SLOT_COUNT];
+    u32 known_offsets[VM86_IDT_VEC_SLOT_COUNT];
+    known_vectors[0] = VM86_IDT_VEC_DE;   known_offsets[0] = vm86_shim_stub_u32(&vm86_trap_stub_de);
+    known_vectors[1] = VM86_IDT_VEC_UD;   known_offsets[1] = vm86_shim_stub_u32(&vm86_trap_stub_ud);
+    known_vectors[2] = VM86_IDT_VEC_NM;   known_offsets[2] = vm86_shim_stub_u32(&vm86_trap_stub_nm);
+    known_vectors[3] = VM86_IDT_VEC_TS;   known_offsets[3] = vm86_shim_stub_u32(&vm86_trap_stub_ts);
+    known_vectors[4] = VM86_IDT_VEC_NP;   known_offsets[4] = vm86_shim_stub_u32(&vm86_trap_stub_np);
+    known_vectors[5] = VM86_IDT_VEC_SS;   known_offsets[5] = vm86_shim_stub_u32(&vm86_trap_stub_ss);
+    known_vectors[6] = VM86_IDT_VEC_GP;   known_offsets[6] = vm86_shim_stub_u32(&vm86_trap_stub_gp);
+    known_vectors[7] = VM86_IDT_VEC_PF;   known_offsets[7] = vm86_shim_stub_u32(&vm86_trap_stub_pf);
+    known_vectors[8] = VM86_IDT_VEC_SW20; known_offsets[8] = vm86_shim_stub_u32(&vm86_trap_stub_sw20);
+    known_vectors[9] = VM86_IDT_VEC_SW21; known_offsets[9] = vm86_shim_stub_u32(&vm86_trap_stub_sw21);
+
+    for (u32 i = 0; i < VM86_IDT_VEC_SLOT_COUNT; i++) {
+        if (known_offsets[i] == unexp) return 0;
+        for (u32 j = i + 1; j < VM86_IDT_VEC_SLOT_COUNT; j++) {
+            if (known_offsets[i] == known_offsets[j]) return 0;
+        }
+    }
+
+    for (u32 v = 0; v < (u32)VM86_IDT_ENTRY_COUNT; v++) {
+        const u8 *g = s_vm86_idt_shim_bytes + v * 8;
+        u16 sel  = (u16)g[2] | ((u16)g[3] << 8);
+        u8  type = g[5];
+        u32 off  = (u32)g[0]
+                 | ((u32)g[1] << 8)
+                 | ((u32)g[6] << 16)
+                 | ((u32)g[7] << 24);
+        if (sel != cs_sel)               return 0;
+        if (type != VM86_IDT_TYPE_INT32) return 0;
+
+        int is_known = 0;
+        u32 expected = 0;
+        for (u32 k = 0; k < VM86_IDT_VEC_SLOT_COUNT; k++) {
+            if (known_vectors[k] == v) { is_known = 1; expected = known_offsets[k]; break; }
+        }
+        if (is_known) {
+            if (off != expected) return 0;
+        } else {
+            if (off != unexp)    return 0;
+        }
+    }
+    return 1;
+}
+
+int vm86_idt_shim_probe(void) {
+    serial_write("vm86: idt-shim sentinel=0x");
+    serial_write_hex64((u64)VM86_IDT_SHIM_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_idt_shim_sentinel);
+    serial_write("\n");
+
+    if (!vm86_idt_shim_build()) {
+        serial_write("vm86: idt-shim build=FAIL\n");
+        return 0;
+    }
+
+    u16 lim = 0;
+    u64 base = 0;
+    if (!vm86_idt_shim_idtr_image(&lim, &base)) {
+        serial_write("vm86: idt-shim idtr-image=FAIL\n");
+        return 0;
+    }
+
+    serial_write("vm86: idt-shim image.base=0x");
+    serial_write_hex64(base);
+    serial_write(" image.limit=0x");
+    serial_write_hex64((u64)lim);
+    serial_write(" entries=0x");
+    serial_write_hex64((u64)VM86_IDT_ENTRY_COUNT);
+    serial_write("\n");
+
+    const char *kv_tag[VM86_IDT_VEC_SLOT_COUNT];
+    u32 kv_vec[VM86_IDT_VEC_SLOT_COUNT];
+    char *kv_sym[VM86_IDT_VEC_SLOT_COUNT];
+    kv_tag[0] = "DE";   kv_vec[0] = VM86_IDT_VEC_DE;   kv_sym[0] = &vm86_trap_stub_de;
+    kv_tag[1] = "UD";   kv_vec[1] = VM86_IDT_VEC_UD;   kv_sym[1] = &vm86_trap_stub_ud;
+    kv_tag[2] = "NM";   kv_vec[2] = VM86_IDT_VEC_NM;   kv_sym[2] = &vm86_trap_stub_nm;
+    kv_tag[3] = "TS";   kv_vec[3] = VM86_IDT_VEC_TS;   kv_sym[3] = &vm86_trap_stub_ts;
+    kv_tag[4] = "NP";   kv_vec[4] = VM86_IDT_VEC_NP;   kv_sym[4] = &vm86_trap_stub_np;
+    kv_tag[5] = "SS";   kv_vec[5] = VM86_IDT_VEC_SS;   kv_sym[5] = &vm86_trap_stub_ss;
+    kv_tag[6] = "GP";   kv_vec[6] = VM86_IDT_VEC_GP;   kv_sym[6] = &vm86_trap_stub_gp;
+    kv_tag[7] = "PF";   kv_vec[7] = VM86_IDT_VEC_PF;   kv_sym[7] = &vm86_trap_stub_pf;
+    kv_tag[8] = "SW20"; kv_vec[8] = VM86_IDT_VEC_SW20; kv_sym[8] = &vm86_trap_stub_sw20;
+    kv_tag[9] = "SW21"; kv_vec[9] = VM86_IDT_VEC_SW21; kv_sym[9] = &vm86_trap_stub_sw21;
+    for (u32 i = 0; i < VM86_IDT_VEC_SLOT_COUNT; i++) {
+        serial_write("vm86: idt-shim vec=0x");
+        serial_write_hex64((u64)kv_vec[i]);
+        serial_write(" tag=");
+        serial_write(kv_tag[i]);
+        serial_write(" stub=0x");
+        serial_write_hex64((u64)(unsigned long)kv_sym[i]);
+        serial_write("\n");
+    }
+    serial_write("vm86: idt-shim unexpected.stub=0x");
+    serial_write_hex64((u64)(unsigned long)&vm86_trap_stub_unexpected);
+    serial_write("\n");
+
+    if (!vm86_idt_shim_verify()) {
+        serial_write("vm86: idt-shim verify=FAIL\n");
+        return 0;
+    }
+
+    serial_write("vm86: idt-shim ready-surface=build,verify\n");
+    serial_write("vm86: idt-shim pending-surface=lidt,iretd\n");
+    serial_write("vm86: idt-shim probe complete\n");
+    return 1;
+}

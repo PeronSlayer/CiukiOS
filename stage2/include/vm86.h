@@ -866,4 +866,78 @@ int vm86_pe32_identity_verify(u64 cr3_phys,
  */
 int vm86_pe32_identity_probe(void);
 
+/* ------------------------------------------------------------------ */
+/* OPENGEM-032 - v8086 IDT shim builder (observability only).          */
+/* ------------------------------------------------------------------ */
+
+#define VM86_IDT_SHIM_SENTINEL      0x0320u
+#define VM86_IDT_SHIM_STUB_COUNT    11u   /* 10 well-known + unexpected */
+
+/*
+ * Packed 10-byte IDTR pseudo-descriptor, exactly as LIDT/SIDT
+ * consume it. Produced by vm86_idt_shim_idtr_image(); never
+ * loaded by this phase.
+ */
+typedef struct __attribute__((packed)) vm86_idtr_image {
+    u16 limit;
+    u64 base;
+} vm86_idtr_image;
+
+/*
+ * Build the static 256-entry IDT shim image backing the v8086
+ * host. All slots are filled using vm86_idt_encode(); the ten
+ * well-known vectors defined by the VM86_IDT_VEC_* enum receive
+ * dedicated trap stub handlers, every other vector is routed to
+ * the "unexpected" stub. The CS selector is VM86_GDT_PE_CODE32
+ * (see design §5.1).
+ *
+ * Returns 1 on success, 0 if a stub address does not fit in the
+ * 32-bit IDT offset field (the shim cannot be loaded).
+ *
+ * Idempotent; may be invoked multiple times. Does not mutate any
+ * host CPU register.
+ */
+int vm86_idt_shim_build(void);
+
+/*
+ * Populate a pseudo-descriptor matching the shim image. Both
+ * `limit_out` and `base_out` must be non-NULL. Returns 1 if the
+ * image has been built via vm86_idt_shim_build(), 0 otherwise.
+ *
+ * Does NOT issue LIDT. The caller is responsible for deciding
+ * when the actual CPU mutation happens (OPENGEM-033).
+ */
+int vm86_idt_shim_idtr_image(u16 *limit_out, u64 *base_out);
+
+/*
+ * Read-back verifier. Decodes every gate in the shim image and
+ * confirms:
+ *   - limit == 0x7FF (256 * 8 - 1);
+ *   - selector is VM86_GDT_PE_CODE32;
+ *   - type/attr is VM86_IDT_TYPE_INT32 for all 256 slots;
+ *   - the 10 well-known vectors point to the dedicated stub
+ *     addresses, all distinct and distinct from the unexpected
+ *     stub;
+ *   - every other vector points to the unexpected stub.
+ *
+ * Returns 1 on pass, 0 on any mismatch. Does not mutate host
+ * CPU state or the image.
+ */
+int vm86_idt_shim_verify(void);
+
+/*
+ * Integrated probe. Builds + verifies + emits
+ * `vm86: idt-shim ...` markers summarizing:
+ *   - sentinel
+ *   - image base (virt)
+ *   - limit
+ *   - each well-known vector with its offset and CS
+ *   - readiness surface (build,verify)
+ *   - pending surface (lidt,iretd) — deferred to OPENGEM-033
+ *
+ * Returns 1 on full success, 0 otherwise. Safe to invoke from
+ * any long-mode host context; NO LIDT, NO IRETD.
+ */
+int vm86_idt_shim_probe(void);
+
 #endif /* STAGE2_VM86_H */
