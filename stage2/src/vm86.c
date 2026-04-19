@@ -42,3 +42,38 @@ int vm86_scaffold_probe(void) {
     serial_write("vm86: scaffold complete\n");
     return 1;
 }
+
+/* OPENGEM-018 sentinel — static gates grep for this exact token. */
+static const char vm86_descriptors_sentinel[] = "OPENGEM-018";
+
+int vm86_descriptors_probe(void) {
+    const u32 gdt_entry_bytes = (u32)sizeof(vm86_gdt_entry);
+    const u32 tss32_bytes     = (u32)sizeof(vm86_tss32);
+    const u32 idt_gate_bytes  = (u32)sizeof(vm86_idt_gate);
+    const u32 gdt_slots       = (u32)VM86_GDT_SLOT_COUNT;
+    const u32 idt_slots       = (u32)VM86_IDT_VEC_SLOT_COUNT;
+
+    (void)vm86_descriptors_sentinel;
+
+    serial_write("vm86: descriptors phase=018 status=planned\n");
+
+    serial_write("vm86: descriptors gdt-slots=0x");
+    serial_write_hex64((u64)gdt_slots);
+    serial_write(" idt-slots=0x");
+    serial_write_hex64((u64)idt_slots);
+    serial_write("\n");
+
+    serial_write("vm86: descriptors gdt-entry-bytes=0x");
+    serial_write_hex64((u64)gdt_entry_bytes);
+    serial_write(" tss32-bytes=0x");
+    serial_write_hex64((u64)tss32_bytes);
+    serial_write(" idt-gate-bytes=0x");
+    serial_write_hex64((u64)idt_gate_bytes);
+    serial_write("\n");
+
+    serial_write("vm86: descriptors gdt-layout=pe-code32,pe-data32,v86-stack,v86-tss,ret-code64,ret-data64\n");
+    serial_write("vm86: descriptors idt-layout=de,ud,nm,ts,np,ss,gp,pf,sw20,sw21\n");
+
+    serial_write("vm86: descriptors complete\n");
+    return 1;
+}

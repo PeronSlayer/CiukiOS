@@ -64,4 +64,100 @@ typedef struct vm86_trap_frame {
  */
 int vm86_scaffold_probe(void);
 
+/*
+ * OPENGEM-018 — descriptor table shim.
+ *
+ * These types describe the GDT / 32-bit TSS / IDT shim entries that
+ * the mode-switch subsystem will populate. Data structures only; no
+ * descriptor is installed into the live GDT yet.
+ */
+
+/* 8-byte GDT entry (legacy 32-bit segment descriptor layout). */
+typedef struct vm86_gdt_entry {
+    u16 limit_lo;
+    u16 base_lo;
+    u8  base_mid;
+    u8  access;        /* P, DPL, S, type                */
+    u8  limit_hi_flags;/* G, D/B, L, AVL, limit[19:16]   */
+    u8  base_hi;
+} vm86_gdt_entry;
+
+/* 32-bit TSS layout used for the v8086 host task. */
+typedef struct vm86_tss32 {
+    u32 link;        /* prev TSS selector (16-bit in low word) */
+    u32 esp0;
+    u32 ss0;
+    u32 esp1;
+    u32 ss1;
+    u32 esp2;
+    u32 ss2;
+    u32 cr3;
+    u32 eip;
+    u32 eflags;
+    u32 eax;
+    u32 ecx;
+    u32 edx;
+    u32 ebx;
+    u32 esp;
+    u32 ebp;
+    u32 esi;
+    u32 edi;
+    u32 es;
+    u32 cs;
+    u32 ss;
+    u32 ds;
+    u32 fs;
+    u32 gs;
+    u32 ldt;
+    u32 iopb_trap;   /* T bit in low word, IOPB offset in high word */
+} vm86_tss32;
+
+/* 8-byte IDT gate (interrupt / trap gate, 32-bit). */
+typedef struct vm86_idt_gate {
+    u16 offset_lo;
+    u16 selector;
+    u8  reserved;
+    u8  type_attr;
+    u16 offset_hi;
+} vm86_idt_gate;
+
+/*
+ * GDT slot plan. These indices are the contract consumed by the
+ * mode-switch routine (OPENGEM-019+). The live long-mode GDT is
+ * untouched; this table describes a SEPARATE descriptor set that
+ * the compat PE host will load via LGDT during the transition.
+ */
+enum {
+    VM86_GDT_NULL           = 0,
+    VM86_GDT_PE_CODE32      = 1,  /* compat-mode ring 0 code (32-bit PE) */
+    VM86_GDT_PE_DATA32      = 2,  /* compat-mode ring 0 data             */
+    VM86_GDT_V86_STACK      = 3,  /* host stack segment                  */
+    VM86_GDT_V86_TSS        = 4,  /* TSS descriptor for v86 task         */
+    VM86_GDT_RETURN_CODE64  = 5,  /* long-mode code for return           */
+    VM86_GDT_RETURN_DATA64  = 6,
+    VM86_GDT_SLOT_COUNT     = 7
+};
+
+/* IDT slot plan — only the vectors the dispatcher cares about. */
+enum {
+    VM86_IDT_VEC_DE   = 0x00,   /* divide error                   */
+    VM86_IDT_VEC_UD   = 0x06,   /* invalid opcode                 */
+    VM86_IDT_VEC_NM   = 0x07,   /* device not available           */
+    VM86_IDT_VEC_TS   = 0x0A,   /* invalid TSS                    */
+    VM86_IDT_VEC_NP   = 0x0B,   /* segment not present            */
+    VM86_IDT_VEC_SS   = 0x0C,   /* stack-segment fault            */
+    VM86_IDT_VEC_GP   = 0x0D,   /* #GP — primary v8086 trap       */
+    VM86_IDT_VEC_PF   = 0x0E,   /* #PF                            */
+    VM86_IDT_VEC_SW20 = 0x20,   /* INT 20h — DOS program terminate*/
+    VM86_IDT_VEC_SW21 = 0x21,   /* INT 21h — DOS services         */
+    VM86_IDT_VEC_SLOT_COUNT = 10
+};
+
+/*
+ * OPENGEM-018 descriptor shim probe. Emits the descriptor-layout
+ * markers defined for this phase. Returns 1 on success, 0 on
+ * failure.
+ */
+int vm86_descriptors_probe(void);
+
 #endif /* STAGE2_VM86_H */
