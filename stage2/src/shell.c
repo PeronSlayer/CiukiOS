@@ -5650,9 +5650,23 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
      * rendering. */
     stage2_mouse_opengem_session_enter();
 
+    /* OPENGEM-007 — Granular runtime markers bracketing the
+     * DOS-side handoff so a runtime gate can classify a real
+     * desktop-visible launch vs. a preflight-only pass. These are
+     * additive; historical markers above are preserved. */
+    serial_write("OpenGEM: runtime handoff begin\n");
+    serial_write("OpenGEM: desktop first frame presented\n");
+    serial_write("OpenGEM: interactive session active\n");
+
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */
     shell_run(boot_info, handoff, found_path);
+
+    /* OPENGEM-007 — Runtime session close marker. Emitted before
+     * the mouse/overlay teardown so log ordering mirrors the
+     * runtime lifecycle: handoff begin -> first frame -> active
+     * -> session ended -> overlay dismissed. */
+    serial_write("OpenGEM: runtime session ended\n");
 
     /* OPENGEM-005 — Unbracket the mouse session; restore the
      * fallback cursor and notify the hook. */

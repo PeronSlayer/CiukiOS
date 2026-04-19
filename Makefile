@@ -453,6 +453,9 @@ test-opengem-file-browser:
 test-opengem-input:
 	bash ./scripts/test_opengem_input.sh
 
+test-opengem-full-runtime:
+	bash ./scripts/test_opengem_full_runtime.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
