@@ -8,6 +8,7 @@
 #include "bootcfg.h"
 #include "splash.h"
 #include "version.h"
+#include "mouse.h"
 #include "ui.h"
 #include "serial.h"
 #include "gfx2d.h"
@@ -3027,6 +3028,14 @@ static void shell_com_int33(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         /* AX=0000h — Reset driver and get status.
          * Return: AX=0xFFFF if installed, BX=number of buttons. */
         shell_mouse_reset_state();
+        /* Drain any pending hardware deltas so AX=0003h post-reset
+         * starts from a clean slate. */
+        {
+            i32 dx = 0, dy = 0;
+            u16 btn = 0;
+            stage2_mouse_consume_deltas(&dx, &dy, &btn);
+            (void)dx; (void)dy; (void)btn;
+        }
         regs->ax = 0xFFFFU;
         regs->bx = 0x0002U; /* 2-button mouse baseline */
         regs->carry = 0U;
@@ -3053,7 +3062,22 @@ static void shell_com_int33(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
     }
     case 0x0003U: {
         /* AX=0003h — Get position and button status.
-         * Return: BX=buttons, CX=x, DX=y. */
+         * Return: BX=buttons, CX=x, DX=y.
+         * Drain hardware-accumulated deltas, apply to the DOS-owned
+         * absolute position (clipped to the active range), and snap
+         * the live button mask. If no hardware input is available,
+         * the deltas are zero and the position is whatever the
+         * program has set via AX=0004h. */
+        i32 dx = 0, dy = 0;
+        u16 hw_buttons = 0;
+        stage2_mouse_consume_deltas(&dx, &dy, &hw_buttons);
+        g_mouse_state.x = shell_mouse_clamp_i32(
+            g_mouse_state.x + dx,
+            g_mouse_state.x_min, g_mouse_state.x_max);
+        g_mouse_state.y = shell_mouse_clamp_i32(
+            g_mouse_state.y + dy,
+            g_mouse_state.y_min, g_mouse_state.y_max);
+        g_mouse_state.buttons = hw_buttons;
         regs->bx = g_mouse_state.buttons;
         regs->cx = (u16)(g_mouse_state.x & 0xFFFFU);
         regs->dx = (u16)(g_mouse_state.y & 0xFFFFU);
@@ -3110,6 +3134,53 @@ static void shell_com_int33(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs) 
         serial_write("\n");
         regs->carry = 0U;
         return;
+    }
+}
+
+/*
+ * SR-MOUSE-001 follow-up — minimal software cursor for mode 13h.
+ *
+ * Draws a 6x6 arrow pattern anchored at the hotspot (top-left corner
+ * of the arrow) at the current INT 33h position, clipped to the mode
+ * bounds. No-op when show_count < 0 (cursor hidden) or when the
+ * active position is entirely off-screen. Uses gfx_mode13_put_pixel
+ * so it works regardless of whether the caller keeps its backbuffer
+ * in the stage2 plane or elsewhere — the caller just needs to invoke
+ * present() after this.
+ */
+static const u8 k_mouse_cursor_bitmap[6][6] = {
+    {1, 0, 0, 0, 0, 0},
+    {1, 1, 0, 0, 0, 0},
+    {1, 1, 1, 0, 0, 0},
+    {1, 1, 1, 1, 0, 0},
+    {1, 1, 1, 0, 0, 0},
+    {1, 0, 1, 1, 0, 0},
+};
+
+static void shell_mouse_draw_cursor_mode13(u8 color_index) {
+    if (!g_mouse_state.installed) {
+        return;
+    }
+    if (g_mouse_state.show_count < 0) {
+        return;
+    }
+    i32 x0 = g_mouse_state.x;
+    i32 y0 = g_mouse_state.y;
+    if (x0 >= (i32)GFX_MODE13_W || y0 >= (i32)GFX_MODE13_H) {
+        return;
+    }
+    if (x0 + 6 < 0 || y0 + 6 < 0) {
+        return;
+    }
+    for (i32 dy = 0; dy < 6; dy++) {
+        i32 py = y0 + dy;
+        if (py < 0 || py >= (i32)GFX_MODE13_H) continue;
+        for (i32 dx = 0; dx < 6; dx++) {
+            if (!k_mouse_cursor_bitmap[dy][dx]) continue;
+            i32 px = x0 + dx;
+            if (px < 0 || px >= (i32)GFX_MODE13_W) continue;
+            gfx_mode13_put_pixel((u32)px, (u32)py, color_index);
+        }
     }
 }
 
@@ -4265,6 +4336,7 @@ static void shell_run_staged_image(
     svc.ui_top_bar = ui_draw_top_bar;
     svc.ui_reserve_top_row = video_set_text_window;
     svc.int33 = shell_com_int33;
+    svc.mouse_draw_cursor_mode13 = shell_mouse_draw_cursor_mode13;
 
     serial_write("[dosrun] executing name=");
     serial_write(name && name[0] != '\0' ? name : "COM");

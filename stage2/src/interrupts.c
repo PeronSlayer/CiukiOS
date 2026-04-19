@@ -25,6 +25,7 @@ extern void stage2_exception_gp_stub(void);
 extern void stage2_exception_pf_stub(void);
 extern void stage2_irq0_stub(void);
 extern void stage2_irq1_stub(void);
+extern void stage2_irq12_stub(void);
 
 static idt_entry_t g_idt[IDT_ENTRIES] __attribute__((aligned(16)));
 
@@ -64,6 +65,7 @@ void stage2_init_idt(void) {
     set_idt_entry(14, stage2_exception_pf_stub, cs_selector, 1);
     set_idt_entry(32, stage2_irq0_stub, cs_selector, 0);
     set_idt_entry(33, stage2_irq1_stub, cs_selector, 0);
+    set_idt_entry(44, stage2_irq12_stub, cs_selector, 0);
 
     idtr.limit = (u16)(sizeof(g_idt) - 1);
     idtr.base = (u64)(unsigned long long)&g_idt[0];

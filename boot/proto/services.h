@@ -175,6 +175,17 @@ typedef struct ciuki_services {
      * Null-safe at the ABI level: callers must check the pointer.
      */
     void     (*int33)(ciuki_dos_context_t *ctx, ciuki_int21_regs_t *regs);
+    /*
+     * SR-MOUSE-001 follow-up — minimal mode 13h software cursor.
+     * When the INT 33h driver's show_count >= 0, draws a small arrow
+     * at the current mouse position using palette index `color_index`
+     * through gfx_mode13_put_pixel. No-op in text mode or when the
+     * cursor is hidden. Callers typically invoke this right before
+     * `present()` to overlay the cursor on top of their frame. The
+     * function is idempotent on identical state but non-atomic with
+     * respect to IRQ12, so drawing more than once per frame is fine.
+     */
+    void     (*mouse_draw_cursor_mode13)(uint8_t color_index);
 } ciuki_services_t;
 
 /* COM entry point convention */

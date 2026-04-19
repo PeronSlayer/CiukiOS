@@ -4,10 +4,12 @@
 .global stage2_exception_pf_stub
 .global stage2_irq0_stub
 .global stage2_irq1_stub
+.global stage2_irq12_stub
 
 .extern stage2_exception_panic
 .extern stage2_timer_on_irq0
 .extern stage2_keyboard_on_irq1
+.extern stage2_mouse_on_irq12
 
 .section .text
 
@@ -92,5 +94,12 @@ stage2_irq1_stub:
     PUSH_GPRS
     cld
     call stage2_keyboard_on_irq1
+    POP_GPRS
+    iretq
+
+stage2_irq12_stub:
+    PUSH_GPRS
+    cld
+    call stage2_mouse_on_irq12
     POP_GPRS
     iretq

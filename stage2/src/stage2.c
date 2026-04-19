@@ -14,6 +14,8 @@
 #include "bootinfo.h"
 #include "handoff.h"
 #include "version.h"
+#include "mouse.h"
+
 #include "ui.h"
 
 #define SPLASH_FOOTER_MIN_PX 64U
@@ -496,11 +498,18 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     stage2_keyboard_init();
     serial_write("[ ok ] keyboard ring buffer + set1 decoder ready\n");
 
+    if (stage2_mouse_init()) {
+        serial_write("[ ok ] ps/2 mouse driver ready (irq12)\n");
+    } else {
+        serial_write("[ warn ] ps/2 mouse init skipped (no aux device)\n");
+    }
+
     stage2_enable_interrupts();
     serial_write("[ ok ] interrupts enabled (timer irq0 + keyboard irq1)\n");
     serial_write("[ compat ] INT10h baseline path ready (stage2 video text/gfx)\n");
     serial_write("[ compat ] INT16h baseline path ready (irq1 + key buffer)\n");
     serial_write("[ compat ] INT1Ah baseline path ready (pit tick source)\n");
+    serial_write("[ compat ] INT33h mouse driver ready (ax=0-4,7,8)\n");
     serial_write("[ compat ] INT21h PSP/status path ready (AH=51h/62h/4Dh)\n");
     serial_write("[ compat ] INT21h console/dta/drive ready (AH=06h/07h/0Ah/0Eh/1Ah/2Fh)\n");
     serial_write("[ compat ] INT21h io/handle baseline ready (AH=0Bh/0Ch/3Ch..43h)\n");
