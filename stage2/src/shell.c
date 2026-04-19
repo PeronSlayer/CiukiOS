@@ -5533,6 +5533,103 @@ static void shell_print_mem(boot_info_t *boot_info, handoff_v0_t *handoff) {
 }
 
 /*
+ * OPENGEM-011 — DOS extender readiness probe.
+ *
+ * Establishes the observable baseline for a real DPMI / DOS4GW path
+ * under OpenGEM. The probe exercises the in-process INT 2Fh AX=1687h
+ * DPMI installation-check handler (see `shell_com_int2f`) without
+ * dispatching a real interrupt, captures the returned descriptor
+ * skeleton (carry / BX flags / CX host-data size / ES:DI entry), and
+ * emits a frozen set of serial markers that downstream phases will
+ * layer on.
+ *
+ * Markers (stable, append-only):
+ *   OpenGEM: extender probe begin
+ *   OpenGEM: extender dpmi installed=<0|1> flags=<hex16>
+ *   OpenGEM: extender mode=<dpmi-stub|none>
+ *   OpenGEM: extender probe complete
+ *
+ * Returns 1 when the DPMI-stub responded cleanly (carry=0), 0 when
+ * no extender surface is available. The return value is advisory —
+ * actual GEM.EXE dispatch (OPENGEM-012+) will consume it.
+ */
+static int shell_write_u16_hex(u16 v, char *out, u32 out_size) {
+    static const char hex_digits[] = "0123456789abcdef";
+    if (!out || out_size < 5U) return 0;
+    out[0] = hex_digits[(v >> 12) & 0xFU];
+    out[1] = hex_digits[(v >> 8)  & 0xFU];
+    out[2] = hex_digits[(v >> 4)  & 0xFU];
+    out[3] = hex_digits[ v        & 0xFU];
+    out[4] = '\0';
+    return 1;
+}
+
+static int stage2_opengem_probe_extender(void) {
+    ciuki_int21_regs_t regs;
+    u16 flags = 0U;
+    int installed = 0;
+
+    serial_write("OpenGEM: extender probe begin\n");
+
+    /* Synthesize the DPMI installation-check register file exactly
+     * the way DOS/4GW-style clients issue it: AX=1687h, carry
+     * cleared, other regs don't-care. The in-process handler fills
+     * the descriptor skeleton. Zero the struct so any residual
+     * fields reflect only what the handler set. */
+    {
+        u8 *p = (u8 *)&regs;
+        u32 i;
+        for (i = 0U; i < (u32)sizeof(regs); i++) p[i] = 0U;
+    }
+    regs.ax = 0x1687U;
+    regs.carry = 1U; /* set so handler must explicitly clear on success */
+
+    shell_com_int2f((ciuki_dos_context_t *)0, &regs);
+
+    if (regs.carry == 0U) {
+        installed = 1;
+        /* Pack a compact flags word: low bit = installed, next bit
+         * = nonzero host-data size (CX), next = nonzero entry seg
+         * (ES). Sufficient for the gate to assert the stub surface
+         * without leaking internal register layout. */
+        flags = (u16)0x0001U;
+        if (regs.cx != 0U) flags |= (u16)0x0002U;
+        if (regs.es != 0U) flags |= (u16)0x0004U;
+        if (regs.di != 0U) flags |= (u16)0x0008U;
+    }
+
+    {
+        char line[64];
+        char hex[5];
+        const char *p0 = "OpenGEM: extender dpmi installed=";
+        u32 n = 0U;
+        while (p0[n] != '\0' && n < (u32)sizeof(line) - 16U) {
+            line[n] = p0[n]; n++;
+        }
+        line[n++] = installed ? '1' : '0';
+        { const char *p1 = " flags=0x"; u32 j = 0U;
+          while (p1[j] != '\0' && n < (u32)sizeof(line) - 8U) {
+              line[n++] = p1[j++]; } }
+        shell_write_u16_hex(flags, hex, (u32)sizeof(hex));
+        { u32 j = 0U;
+          while (hex[j] != '\0' && n < (u32)sizeof(line) - 2U) {
+              line[n++] = hex[j++]; } }
+        line[n++] = '\n';
+        line[n]   = '\0';
+        serial_write(line);
+    }
+
+    if (installed) {
+        serial_write("OpenGEM: extender mode=dpmi-stub\n");
+    } else {
+        serial_write("OpenGEM: extender mode=none\n");
+    }
+
+    serial_write("OpenGEM: extender probe complete\n");
+    return installed;
+}
+
+/*
  * OPENGEM-001 — Launch OpenGEM via the standard shell_run path.
  *
  * Shared entry point used by both the `opengem` shell command and the
@@ -5712,6 +5809,12 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
         serial_write(kind);
         serial_write("\n");
     }
+
+    /* OPENGEM-011 — Extender readiness probe. Establishes the
+     * DPMI/DOS4GW baseline that GEM.EXE (MZ 16-bit) will need in
+     * later phases. The probe only emits observability markers
+     * today; actual protected-mode dispatch lands in OPENGEM-012+. */
+    (void)stage2_opengem_probe_extender();
 
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */

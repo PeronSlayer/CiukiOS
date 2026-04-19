@@ -462,6 +462,9 @@ test-opengem-real-frame:
 test-opengem-dispatch:
 	bash ./scripts/test_opengem_dispatch.sh
 
+test-opengem-extender:
+	bash ./scripts/test_opengem_extender.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
