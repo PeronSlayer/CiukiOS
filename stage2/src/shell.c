@@ -59,6 +59,26 @@ static char g_shell_cwd[SHELL_PATH_MAX] = "/EFI/CIUKIOS";
 static u8 g_shell_errorlevel = 0U;
 static u8 g_shell_batch_depth = 0U;
 
+/* OPENGEM-002-BAT — per-frame batch state.
+ *
+ * g_batch_echo      : 1=echo on, 0=echo off (ECHO OFF/ON + leading `@`).
+ * g_batch_argc/argv : positional args for %0..%9 expansion. argv[0] is
+ *                     the current batch file path; argv[1..] come from
+ *                     CALL or from the .BAT dispatch tail.
+ * g_batch_cur_path  : path of the batch currently executing (for
+ *                     serial markers).
+ *
+ * Saved and restored across nested batch frames (`CALL`) inside
+ * shell_run_batch_file() itself.
+ */
+#define SHELL_BATCH_ARGV_MAX 10U
+static u8 g_batch_echo = 1U;
+static u8 g_batch_argc = 0U;
+static const char *g_batch_argv[SHELL_BATCH_ARGV_MAX] = {
+    "", "", "", "", "", "", "", "", "", ""
+};
+static const char *g_batch_cur_path = "";
+
 typedef enum shell_dosrun_error_class {
     SHELL_DOSRUN_ERROR_NONE = 0,
     SHELL_DOSRUN_ERROR_NOT_FOUND,
@@ -652,6 +672,26 @@ static void shell_env_expand_line(const char *in, char *out, u32 out_size) {
 
     while (in[i] != '\0' && (oi + 1U) < out_size) {
         if (in[i] == '%') {
+            /* OPENGEM-002-BAT: %% -> literal '%'. */
+            if (in[i + 1U] == '%') {
+                out[oi++] = '%';
+                i += 2U;
+                continue;
+            }
+            /* OPENGEM-002-BAT: %0..%9 -> batch positional arg. */
+            if (in[i + 1U] >= '0' && in[i + 1U] <= '9') {
+                u8 idx = (u8)(in[i + 1U] - '0');
+                const char *pv = "";
+                if (idx < g_batch_argc && g_batch_argv[idx]) {
+                    pv = g_batch_argv[idx];
+                }
+                for (u32 k = 0U; pv[k] != '\0' && (oi + 1U) < out_size; k++) {
+                    out[oi++] = pv[k];
+                }
+                i += 2U;
+                continue;
+            }
+
             u32 j = i + 1U;
             char name[SHELL_ENV_NAME_MAX];
             u32 ni = 0U;
@@ -6152,32 +6192,158 @@ static void shell_run_batch_file(
         }
     }
 
+    /* OPENGEM-002-BAT: save the caller's batch frame (argv + echo +
+     * current path) before installing this frame's; restored on exit.
+     * %0 is the current batch path. */
+    u8 saved_argc = g_batch_argc;
+    const char *saved_argv[SHELL_BATCH_ARGV_MAX];
+    u8 saved_echo = g_batch_echo;
+    const char *saved_cur_path = g_batch_cur_path;
+    for (u8 si = 0U; si < SHELL_BATCH_ARGV_MAX; si++) {
+        saved_argv[si] = g_batch_argv[si];
+    }
+    g_batch_argv[0] = path;
+    if (g_batch_argc < 1U) {
+        for (u8 si = 1U; si < SHELL_BATCH_ARGV_MAX; si++) {
+            g_batch_argv[si] = "";
+        }
+        g_batch_argc = 1U;
+    } else {
+        g_batch_argc = (u8)(saved_argc < 1U ? 1U : saved_argc);
+    }
+    g_batch_echo = 1U;
+    g_batch_cur_path = path;
+    serial_write("[ bat ] enter ");
+    serial_write(path);
+    serial_write("\n");
+
     g_shell_batch_depth++;
     while (pc < line_count && steps < SHELL_BATCH_MAX_STEPS) {
         char line[SHELL_LINE_MAX];
         char expanded[SHELL_LINE_MAX];
+        u8 per_line_echo;
+        u8 reentered = 0U;
         steps++;
 
         str_copy(line, lines[pc], (u32)sizeof(line));
         trim_ascii_inplace(line);
         pc++;
 
+        /* Blank lines, label lines, and `::` comments (which start with
+         * `:` and are therefore label-shaped). */
         if (line[0] == '\0' || line[0] == ':') {
             continue;
         }
+
+        per_line_echo = g_batch_echo;
+
+        /* OPENGEM-002-BAT: strip leading `@` — suppresses echo for
+         * this one line only. */
+        if (line[0] == '@') {
+            per_line_echo = 0U;
+            u32 k = 0U;
+            while (line[k + 1U] != '\0') {
+                line[k] = line[k + 1U];
+                k++;
+            }
+            line[k] = '\0';
+            trim_ascii_inplace(line);
+            if (line[0] == '\0') {
+                continue;
+            }
+        }
+
         if (str_starts_with_nocase(line, "rem ") || str_eq_nocase(line, "rem")) {
             continue;
         }
 
         shell_env_expand_line(line, expanded, (u32)sizeof(expanded));
 
+    reprocess:
+        (void)reentered;
+
+        if (per_line_echo) {
+            serial_write("[ bat ] line: ");
+            serial_write(expanded);
+            serial_write("\n");
+        }
+
+        /* OPENGEM-002-BAT: ECHO OFF/ON/. */
+        if (str_eq_nocase(expanded, "echo off")) {
+            g_batch_echo = 0U;
+            continue;
+        }
+        if (str_eq_nocase(expanded, "echo on")) {
+            g_batch_echo = 1U;
+            continue;
+        }
+        if (str_eq_nocase(expanded, "echo.")) {
+            video_write("\n");
+            continue;
+        }
+
+        /* OPENGEM-002-BAT: SHIFT — shifts %1..%9 down, %0 stays. */
+        if (str_eq_nocase(expanded, "shift")
+            || str_starts_with_nocase(expanded, "shift ")) {
+            if (g_batch_argc > 1U) {
+                for (u8 k = 1U; k + 1U < g_batch_argc; k++) {
+                    g_batch_argv[k] = g_batch_argv[k + 1U];
+                }
+                g_batch_argv[g_batch_argc - 1U] = "";
+                g_batch_argc--;
+            }
+            serial_write("[ bat ] shift\n");
+            continue;
+        }
+
+        /* OPENGEM-002-BAT: PAUSE — wait for a keypress. */
+        if (str_eq_nocase(expanded, "pause")
+            || str_starts_with_nocase(expanded, "pause ")) {
+            video_write("Press any key to continue . . .\n");
+            serial_write("[ bat ] pause\n");
+            (void)stage2_keyboard_getc_blocking();
+            shell_set_errorlevel(0U);
+            continue;
+        }
+
+        /* OPENGEM-002-BAT: CALL <target> [args] — run in the current
+         * shell frame. Nested BAT CALLs recurse into
+         * shell_run_batch_file() via shell_execute_line()'s .BAT
+         * dispatch, which preserves/restores our frame. */
+        if (str_starts_with_nocase(expanded, "call ")) {
+            const char *sub = expanded + 5;
+            while (*sub && is_space((u8)*sub)) {
+                sub++;
+            }
+            serial_write("[ bat ] call ");
+            serial_write(sub);
+            serial_write("\n");
+            shell_execute_line(sub, boot_info, handoff);
+            serial_write("[ bat ] return\n");
+            continue;
+        }
+
         if (str_starts_with_nocase(expanded, "goto ")) {
-            u16 target_line = 0U;
             const char *label = expanded + 5;
             while (*label && is_space((u8)*label)) {
                 label++;
             }
-            if (shell_batch_find_label(labels, label_count, label, &target_line)) {
+            /* OPENGEM-002-BAT: `GOTO :EOF` (or `GOTO EOF`) ends the
+             * current batch cleanly. */
+            {
+                const char *probe = (*label == ':') ? label + 1 : label;
+                if (str_eq_nocase(probe, "eof")) {
+                    serial_write("[ bat ] goto :eof\n");
+                    pc = line_count;
+                    continue;
+                }
+            }
+            u16 target_line = 0U;
+            const char *lookup = (*label == ':') ? label + 1 : label;
+            if (shell_batch_find_label(labels, label_count, lookup, &target_line)) {
+                serial_write("[ bat ] goto ");
+                serial_write(lookup);
+                serial_write("\n");
                 pc = (u32)target_line + 1U;
                 continue;
             }
@@ -6188,38 +6354,143 @@ static void shell_run_batch_file(
             break;
         }
 
-        if (str_starts_with_nocase(expanded, "if errorlevel ")) {
-            const char *p = expanded + 14;
-            u32 threshold = 0U;
+        /* OPENGEM-002-BAT: IF [NOT] { EXIST <path> | "A"=="B" |
+         * ERRORLEVEL N } <cmd> */
+        if (str_starts_with_nocase(expanded, "if ")) {
+            const char *p = expanded + 3;
+            int negate = 0;
             while (*p && is_space((u8)*p)) {
                 p++;
             }
-            while (*p >= '0' && *p <= '9') {
-                threshold = (threshold * 10U) + (u32)(*p - '0');
-                p++;
+            if (str_starts_with_nocase(p, "not ")) {
+                negate = 1;
+                p += 4;
+                while (*p && is_space((u8)*p)) {
+                    p++;
+                }
             }
-            while (*p && is_space((u8)*p)) {
-                p++;
-            }
-            if (str_starts_with_nocase(p, "goto ")) {
-                if ((u32)shell_get_errorlevel() >= threshold) {
-                    u16 target_line = 0U;
-                    const char *label = p + 5;
-                    while (*label && is_space((u8)*label)) {
-                        label++;
-                    }
-                    if (shell_batch_find_label(labels, label_count, label, &target_line)) {
-                        pc = (u32)target_line + 1U;
-                    } else {
-                        video_write("IF ERRORLEVEL target missing: ");
-                        video_write(label);
-                        video_write("\n");
-                        shell_set_errorlevel(1U);
-                        break;
-                    }
+
+            if (str_starts_with_nocase(p, "exist ")) {
+                const char *path_start = p + 6;
+                while (*path_start && is_space((u8)*path_start)) {
+                    path_start++;
+                }
+                char path_arg[128];
+                u32 pi_ = 0U;
+                while (path_start[pi_] != '\0'
+                       && !is_space((u8)path_start[pi_])
+                       && pi_ < (u32)sizeof(path_arg) - 1U) {
+                    path_arg[pi_] = path_start[pi_];
+                    pi_++;
+                }
+                path_arg[pi_] = '\0';
+                const char *rest = path_start + pi_;
+                while (*rest && is_space((u8)*rest)) {
+                    rest++;
+                }
+                fat_dir_entry_t ifi;
+                int exists = fat_find_file(path_arg, &ifi) ? 1 : 0;
+                if (negate) {
+                    exists = !exists;
+                }
+                if (exists && *rest) {
+                    char tmp_cmd[SHELL_LINE_MAX];
+                    str_copy(tmp_cmd, rest, (u32)sizeof(tmp_cmd));
+                    str_copy(expanded, tmp_cmd, (u32)sizeof(expanded));
+                    reentered = 1U;
+                    goto reprocess;
                 }
                 continue;
             }
+
+            if (*p == '"') {
+                const char *a = p + 1;
+                const char *aend = a;
+                while (*aend && *aend != '"') {
+                    aend++;
+                }
+                if (*aend != '"') {
+                    continue;
+                }
+                const char *eq = aend + 1;
+                while (*eq && is_space((u8)*eq)) {
+                    eq++;
+                }
+                if (eq[0] != '=' || eq[1] != '=') {
+                    continue;
+                }
+                const char *b = eq + 2;
+                while (*b && is_space((u8)*b)) {
+                    b++;
+                }
+                if (*b != '"') {
+                    continue;
+                }
+                b++;
+                const char *bend = b;
+                while (*bend && *bend != '"') {
+                    bend++;
+                }
+                if (*bend != '"') {
+                    continue;
+                }
+                u32 alen = (u32)(aend - a);
+                u32 blen = (u32)(bend - b);
+                int equal = (alen == blen);
+                if (equal) {
+                    for (u32 k = 0U; k < alen; k++) {
+                        if (a[k] != b[k]) {
+                            equal = 0;
+                            break;
+                        }
+                    }
+                }
+                if (negate) {
+                    equal = !equal;
+                }
+                const char *rest = bend + 1;
+                while (*rest && is_space((u8)*rest)) {
+                    rest++;
+                }
+                if (equal && *rest) {
+                    char tmp_cmd[SHELL_LINE_MAX];
+                    str_copy(tmp_cmd, rest, (u32)sizeof(tmp_cmd));
+                    str_copy(expanded, tmp_cmd, (u32)sizeof(expanded));
+                    reentered = 1U;
+                    goto reprocess;
+                }
+                continue;
+            }
+
+            if (str_starts_with_nocase(p, "errorlevel ")) {
+                const char *q = p + 11;
+                u32 threshold = 0U;
+                while (*q && is_space((u8)*q)) {
+                    q++;
+                }
+                while (*q >= '0' && *q <= '9') {
+                    threshold = (threshold * 10U) + (u32)(*q - '0');
+                    q++;
+                }
+                while (*q && is_space((u8)*q)) {
+                    q++;
+                }
+                int cond = ((u32)shell_get_errorlevel() >= threshold);
+                if (negate) {
+                    cond = !cond;
+                }
+                if (cond && *q) {
+                    char tmp_cmd[SHELL_LINE_MAX];
+                    str_copy(tmp_cmd, q, (u32)sizeof(tmp_cmd));
+                    str_copy(expanded, tmp_cmd, (u32)sizeof(expanded));
+                    reentered = 1U;
+                    goto reprocess;
+                }
+                continue;
+            }
+
+            /* Unknown IF form — skip defensively. */
+            continue;
         }
 
         if (str_starts_with_nocase(expanded, "set ")) {
@@ -6239,8 +6510,36 @@ static void shell_run_batch_file(
 
     if (steps >= SHELL_BATCH_MAX_STEPS) {
         video_write("Batch aborted: too many steps.\n");
+        serial_write("[ bat ] aborted max-steps\n");
         shell_set_errorlevel(1U);
     }
+
+    /* OPENGEM-002-BAT: emit a dedicated marker when we finished a
+     * GEM.BAT-named script without early abort, to satisfy the
+     * Phase 2 integration contract. */
+    {
+        const char *basename = path;
+        for (const char *cc = path; *cc; cc++) {
+            if (*cc == '/' || *cc == '\\') {
+                basename = cc + 1;
+            }
+        }
+        if (str_eq_nocase(basename, "GEM.BAT") && steps < SHELL_BATCH_MAX_STEPS) {
+            serial_write("[ bat ] gem.bat reached gemvdi invocation\n");
+        }
+    }
+
+    serial_write("[ bat ] exit ");
+    serial_write(path);
+    serial_write("\n");
+
+    /* OPENGEM-002-BAT: restore caller frame. */
+    for (u8 si = 0U; si < SHELL_BATCH_ARGV_MAX; si++) {
+        g_batch_argv[si] = saved_argv[si];
+    }
+    g_batch_argc = saved_argc;
+    g_batch_echo = saved_echo;
+    g_batch_cur_path = saved_cur_path;
 }
 
 static void shell_process_config_sys(void) {

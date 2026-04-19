@@ -441,6 +441,9 @@ test-mouse-smoke:
 test-opengem-smoke:
 	bash ./scripts/test_opengem_smoke.sh
 
+test-bat-interp:
+	bash ./scripts/test_bat_interp.sh
+
 test-vga13-baseline:
 	bash ./scripts/test_vga13_baseline.sh
 

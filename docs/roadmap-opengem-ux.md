@@ -19,7 +19,7 @@ CiukiOS.
 | # | ID | Title | Status | Gate |
 |---|----|-------|--------|------|
 | 1 | OPENGEM-001 | Runtime Validation & Launcher Integration | DONE | `make test-opengem-smoke` |
-| 2 | OPENGEM-002-BAT | BAT Interpretation Hardening | PLANNED | `make test-bat-interp` |
+| 2 | OPENGEM-002-BAT | BAT Interpretation Hardening | DONE | `make test-bat-interp` |
 | 3 | OPENGEM-003 | Desktop Scene Integration (windowing) | PARTIAL | `make test-opengem-launch` |
 | 4 | OPENGEM-004 | App Discovery and File Catalog | PLANNED | `make test-opengem-file-browser` |
 | 5 | OPENGEM-005 | Input and Mouse Hardening in OpenGEM | PLANNED | `make test-opengem-input` |
@@ -71,7 +71,7 @@ OpenGEM: runtime not found in FAT, fallback to shell
 
 ---
 
-## Phase 2 — BAT Interpretation Hardening (OPENGEM-002-BAT) · PLANNED
+## Phase 2 — BAT Interpretation Hardening (OPENGEM-002-BAT) · DONE
 **Goal:** Promote the existing in-tree BAT interpreter
 (`shell_run_batch_file` in `stage2/src/shell.c`) from
 "good enough for `AUTOEXEC.BAT` / our own demos" to a contract surface
