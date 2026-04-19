@@ -525,6 +525,9 @@ test-vm86-pe32-ident:
 test-vm86-idt-shim:
 	bash ./scripts/test_vm86_idt_shim.sh
 
+test-vm86-lidt-ping:
+	bash ./scripts/test_vm86_lidt_ping.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

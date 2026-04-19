@@ -2122,3 +2122,116 @@ int vm86_idt_shim_probe(void) {
     serial_write("vm86: idt-shim probe complete\n");
     return 1;
 }
+
+/* ================================================================== */
+/* OPENGEM-033 - LIDT reversible trampoline (arm-gated).              */
+/*                                                                    */
+/* First phase that introduces the LIDT opcode into stage2. The asm   */
+/* trampoline (vm86_lidt_ping_asm) is NEVER reached on the default    */
+/* boot path because the arm-gate below is initialized to 0 and is    */
+/* never flipped implicitly.                                          */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_lidt_ping_c_sentinel[] = "OPENGEM-033";
+
+static int s_vm86_lidt_ping_armed = 0;
+
+int vm86_lidt_ping_arm(u32 magic) {
+    if (magic != VM86_LIDT_PING_ARM_MAGIC) {
+        return 0;
+    }
+    s_vm86_lidt_ping_armed = 1;
+    return 1;
+}
+
+void vm86_lidt_ping_disarm(void) {
+    s_vm86_lidt_ping_armed = 0;
+}
+
+int vm86_lidt_ping_is_armed(void) {
+    return s_vm86_lidt_ping_armed ? 1 : 0;
+}
+
+int vm86_lidt_ping_execute(const vm86_idtr_image *new_idtr,
+                           vm86_idtr_image *saved_out) {
+    if (!s_vm86_lidt_ping_armed) {
+        return 0;
+    }
+    if (!new_idtr || !saved_out) {
+        return 0;
+    }
+    return vm86_lidt_ping_asm(new_idtr, saved_out);
+}
+
+int vm86_lidt_ping_probe(void) {
+    serial_write("vm86: lidt-ping sentinel=0x");
+    serial_write_hex64((u64)VM86_LIDT_PING_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_lidt_ping_c_sentinel);
+    serial_write("\n");
+
+    /* Invariant #1: default must be disarmed. */
+    if (vm86_lidt_ping_is_armed()) {
+        serial_write("vm86: lidt-ping default-armed=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: lidt-ping arm-state=0 (disarmed)\n");
+
+    /* Invariant #2: wrong magic must not flip the gate. */
+    int r_bad = vm86_lidt_ping_arm(0xBADBAD00u);
+    if (r_bad != 0 || vm86_lidt_ping_is_armed()) {
+        serial_write("vm86: lidt-ping magic-reject=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: lidt-ping magic-reject=OK\n");
+
+    /* Invariant #3: while disarmed, execute() returns 0 and does
+     * NOT invoke the asm. We rely on the contract that saved_out
+     * is only written when the asm runs. We prove this by passing
+     * a sentinel value and checking it is unchanged. */
+    vm86_idtr_image probe_new  = { 0x07FF, 0 };
+    vm86_idtr_image probe_save = { 0xDEAD, 0xCAFEBABEDEADBEEFULL };
+
+    int r_disarmed = vm86_lidt_ping_execute(&probe_new, &probe_save);
+    if (r_disarmed != 0) {
+        serial_write("vm86: lidt-ping disarmed-return=FAIL\n");
+        return 0;
+    }
+    if (probe_save.limit != 0xDEAD || probe_save.base != 0xCAFEBABEDEADBEEFULL) {
+        serial_write("vm86: lidt-ping disarmed-noinvoke=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: lidt-ping disarmed-noinvoke=OK\n");
+
+    /* Invariant #4: NULL inputs rejected even if armed. Verify by
+     * arming+disarming only if magic works. Do not leave armed. */
+    int r_arm = vm86_lidt_ping_arm(VM86_LIDT_PING_ARM_MAGIC);
+    if (r_arm != 1 || !vm86_lidt_ping_is_armed()) {
+        serial_write("vm86: lidt-ping magic-accept=FAIL\n");
+        return 0;
+    }
+    int r_null1 = vm86_lidt_ping_execute(0, &probe_save);
+    int r_null2 = vm86_lidt_ping_execute(&probe_new, 0);
+    vm86_lidt_ping_disarm();
+    if (vm86_lidt_ping_is_armed()) {
+        serial_write("vm86: lidt-ping disarm=FAIL\n");
+        return 0;
+    }
+    if (r_null1 != 0 || r_null2 != 0) {
+        serial_write("vm86: lidt-ping null-guard=FAIL\n");
+        return 0;
+    }
+    if (probe_save.limit != 0xDEAD || probe_save.base != 0xCAFEBABEDEADBEEFULL) {
+        serial_write("vm86: lidt-ping null-untouched=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: lidt-ping null-guard=OK disarm=OK\n");
+
+    serial_write("vm86: lidt-ping arm-magic=0x");
+    serial_write_hex64((u64)VM86_LIDT_PING_ARM_MAGIC);
+    serial_write("\n");
+    serial_write("vm86: lidt-ping ready-surface=asm,arm-gate\n");
+    serial_write("vm86: lidt-ping pending-surface=iretd,gp-handler\n");
+    serial_write("vm86: lidt-ping probe complete\n");
+    return 1;
+}

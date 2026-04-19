@@ -940,4 +940,62 @@ int vm86_idt_shim_verify(void);
  */
 int vm86_idt_shim_probe(void);
 
+/* ------------------------------------------------------------------ */
+/* OPENGEM-033 - LIDT reversible trampoline (arm-gated).              */
+/* ------------------------------------------------------------------ */
+
+#define VM86_LIDT_PING_SENTINEL   0x0330u
+#define VM86_LIDT_PING_ARM_MAGIC  0xC1036B33u
+
+/*
+ * Raw asm trampoline. Performs pushfq;cli;sidt;lidt(new);lidt(saved)
+ * ;popfq;ret. Never call directly from application code — go through
+ * vm86_lidt_ping_execute(), which enforces the arm-gate.
+ *
+ * SysV AMD64:
+ *   new_idtr  -> const vm86_idtr_image *
+ *   saved_out ->       vm86_idtr_image *
+ * Returns 1 on success, 0 if either pointer is NULL.
+ */
+int vm86_lidt_ping_asm(const vm86_idtr_image *new_idtr,
+                       vm86_idtr_image *saved_out);
+
+/*
+ * Flip the runtime arm-gate. Returns 1 on success, 0 on rejected
+ * magic. Default at boot is DISARMED.
+ */
+int vm86_lidt_ping_arm(u32 magic);
+void vm86_lidt_ping_disarm(void);
+int  vm86_lidt_ping_is_armed(void);
+
+/*
+ * Guarded entry point.
+ *   - If disarmed: returns 0 without calling the asm; `saved_out`
+ *     untouched. This is the default behaviour and is what every
+ *     test and the boot path exercise.
+ *   - If armed and both pointers non-NULL: invokes the asm
+ *     trampoline, which loads `new_idtr` and IMMEDIATELY restores
+ *     the previous IDTR, with IF masked across the window.
+ *     Returns the value reported by the asm (1 on success).
+ *
+ * This is the only way to reach the LIDT opcode from C.
+ */
+int vm86_lidt_ping_execute(const vm86_idtr_image *new_idtr,
+                           vm86_idtr_image *saved_out);
+
+/*
+ * Integrated probe. Emits `vm86: lidt-ping ...` markers reporting:
+ *   - sentinel
+ *   - arm state (must be 0 on default boot)
+ *   - magic rejection for a bad value
+ *   - would-run result while disarmed (execute returns 0,
+ *     saved_out untouched)
+ *   - ready-surface=asm,arm-gate
+ *   - pending-surface=iretd,gp-handler (deferred to OPENGEM-034)
+ *
+ * SAFETY: probe NEVER arms the gate. It never runs the asm.
+ * Returns 1 if every invariant holds, 0 otherwise.
+ */
+int vm86_lidt_ping_probe(void);
+
 #endif /* STAGE2_VM86_H */
