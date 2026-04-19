@@ -528,6 +528,9 @@ test-vm86-idt-shim:
 test-vm86-lidt-ping:
 	bash ./scripts/test_vm86_lidt_ping.sh
 
+test-vm86-gp-decode:
+	bash ./scripts/test_vm86_gp_decode.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

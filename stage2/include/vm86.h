@@ -998,4 +998,84 @@ int vm86_lidt_ping_execute(const vm86_idtr_image *new_idtr,
  */
 int vm86_lidt_ping_probe(void);
 
+/* ------------------------------------------------------------------ */
+/* OPENGEM-034 - Synthetic #GP opcode decoder (no CPU dispatch).       */
+/* ------------------------------------------------------------------ */
+/*
+ * Decodes the instruction at guest CS:EIP as it would appear after
+ * a real v8086 #GP trap. The decoder is tested against a SYNTHETIC
+ * trap frame + a caller-supplied 1 MiB conventional-memory buffer;
+ * there is no IDT, no LIDT, no IRETD involved. This is the final
+ * observability phase before any CPU mutation is wired to a guest.
+ *
+ * Design reference: docs/opengem-016-design.md §5.2 (INT N → #GP
+ * → host dispatcher → handler → IRET path).
+ */
+
+#define VM86_GP_DECODE_SENTINEL      0x0340u
+
+/*
+ * Decode outcome. Describes which opcode family was recognized
+ * at guest CS:EIP.
+ *
+ * UNHANDLED_OPCODE = opcode seen but not yet implemented by the
+ * minimal subset. The caller is free to ignore.
+ */
+typedef enum {
+    VM86_GP_RESULT_NONE          = 0, /* pre-dispatch sentinel     */
+    VM86_GP_RESULT_INT           = 1, /* INT N (CD ib) dispatched  */
+    VM86_GP_RESULT_INTO          = 2, /* INTO (CE) — dispatched #4 */
+    VM86_GP_RESULT_INT3          = 3, /* INT3 (CC) — dispatched #3 */
+    VM86_GP_RESULT_IRET          = 4, /* IRET (CF)                 */
+    VM86_GP_RESULT_PUSHF         = 5, /* PUSHF (9C)                */
+    VM86_GP_RESULT_POPF          = 6, /* POPF  (9D)                */
+    VM86_GP_RESULT_IN_IMM        = 7, /* IN AL/AX, imm8            */
+    VM86_GP_RESULT_OUT_IMM       = 8, /* OUT imm8, AL/AX           */
+    VM86_GP_RESULT_IN_DX         = 9, /* IN AL/AX, DX              */
+    VM86_GP_RESULT_OUT_DX        = 10,/* OUT DX, AL/AX             */
+    VM86_GP_RESULT_CLI           = 11,
+    VM86_GP_RESULT_STI           = 12,
+    VM86_GP_RESULT_HLT           = 13,
+    VM86_GP_RESULT_UNHANDLED     = 14,
+    VM86_GP_RESULT_NULL_ARG      = 15,
+    VM86_GP_RESULT_OOB           = 16  /* CS:EIP outside guest mem  */
+} vm86_gp_decode_result;
+
+/*
+ * The decoder consumes the guest memory window as a flat 1 MiB
+ * byte buffer laid out at physical 0. It never touches CiukiOS
+ * kernel memory. Callers pass the host-side pointer covering
+ * that buffer; real-mode CS:EIP is translated linearly as
+ * (cs << 4) + eip and bounds-checked against `guest_bytes`.
+ *
+ * On VM86_GP_RESULT_INT / INTO / INT3 the decoder also dispatches
+ * the vector into the supplied `vm86_dispatcher`, increments
+ * frame->eip past the INT instruction, and propagates the
+ * dispatcher status via `dispatch_status_out` (non-NULL required
+ * only when one of those three results can occur).
+ *
+ * The decoder does NOT mutate the guest memory buffer and does
+ * NOT rewrite CPU state outside of frame->eip (and the dispatcher
+ * side effects on handler-observable fields).
+ */
+vm86_gp_decode_result vm86_gp_decode(const u8             *guest_bytes,
+                                     u32                   guest_size,
+                                     vm86_trap_frame      *frame,
+                                     vm86_dispatcher      *disp,
+                                     vm86_task            *task,
+                                     vm86_dispatch_status *dispatch_status_out);
+
+/*
+ * OPENGEM-034 integrated probe.
+ *
+ * Builds a 256 KiB synthetic conventional buffer, writes a handful
+ * of canned instruction encodings at known CS:EIP pairs, runs
+ * vm86_gp_decode() against each, and asserts both the classified
+ * result and (for INT N) the dispatcher side-effects.
+ *
+ * Emits `vm86: gp-decode ...` markers on serial. Returns 1 on
+ * full success, 0 otherwise. Does NOT alter any host CPU state.
+ */
+int vm86_gp_decode_probe(void);
+
 #endif /* STAGE2_VM86_H */

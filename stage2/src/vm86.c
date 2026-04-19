@@ -2235,3 +2235,287 @@ int vm86_lidt_ping_probe(void) {
     serial_write("vm86: lidt-ping probe complete\n");
     return 1;
 }
+
+/* ================================================================== */
+/* OPENGEM-034 - Synthetic #GP opcode decoder (no CPU dispatch).      */
+/*                                                                    */
+/* Reads the guest instruction at CS:EIP as bytes from a host-side    */
+/* 1 MiB buffer and classifies it. For INT N variants it also calls   */
+/* the supplied vm86_dispatcher to route the vector into whatever    */
+/* handler table the caller has prepared.                             */
+/*                                                                    */
+/* No LIDT, no IRETD, no IDT. The decoder is called directly from C   */
+/* test code against synthetic frames.                                */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_gp_decode_sentinel_id[] = "OPENGEM-034";
+
+static inline u32 vm86_gp_linear(u16 cs, u32 eip) {
+    /* Real-mode segment arithmetic: wraps at 1 MiB + 64 KiB — 16.
+     * The caller enforces the actual bounds via guest_size. */
+    return ((u32)cs << 4) + eip;
+}
+
+vm86_gp_decode_result vm86_gp_decode(const u8             *guest_bytes,
+                                     u32                   guest_size,
+                                     vm86_trap_frame      *frame,
+                                     vm86_dispatcher      *disp,
+                                     vm86_task            *task,
+                                     vm86_dispatch_status *dispatch_status_out) {
+    if (!guest_bytes || !frame) {
+        return VM86_GP_RESULT_NULL_ARG;
+    }
+
+    u32 lin = vm86_gp_linear(frame->cs, frame->eip);
+    if (lin >= guest_size) {
+        return VM86_GP_RESULT_OOB;
+    }
+
+    u8 op0 = guest_bytes[lin];
+
+    switch (op0) {
+    case 0xCD: { /* INT ib */
+        if (lin + 1 >= guest_size) return VM86_GP_RESULT_OOB;
+        u8 vec = guest_bytes[lin + 1];
+        frame->eip += 2;
+        if (disp && dispatch_status_out) {
+            *dispatch_status_out = vm86_dispatch_int(disp, task, frame, vec);
+        }
+        return VM86_GP_RESULT_INT;
+    }
+    case 0xCC: /* INT3 */
+        frame->eip += 1;
+        if (disp && dispatch_status_out) {
+            *dispatch_status_out = vm86_dispatch_int(disp, task, frame, 3);
+        }
+        return VM86_GP_RESULT_INT3;
+    case 0xCE: /* INTO */
+        frame->eip += 1;
+        if (disp && dispatch_status_out) {
+            *dispatch_status_out = vm86_dispatch_int(disp, task, frame, 4);
+        }
+        return VM86_GP_RESULT_INTO;
+    case 0xCF: /* IRET */
+        frame->eip += 1;
+        return VM86_GP_RESULT_IRET;
+    case 0x9C: /* PUSHF */
+        frame->eip += 1;
+        return VM86_GP_RESULT_PUSHF;
+    case 0x9D: /* POPF */
+        frame->eip += 1;
+        return VM86_GP_RESULT_POPF;
+    case 0xE4: /* IN AL, imm8 */
+    case 0xE5: /* IN AX, imm8 (or EAX, imm8 with 66 prefix not supported) */
+        if (lin + 1 >= guest_size) return VM86_GP_RESULT_OOB;
+        frame->eip += 2;
+        return VM86_GP_RESULT_IN_IMM;
+    case 0xE6: /* OUT imm8, AL */
+    case 0xE7: /* OUT imm8, AX */
+        if (lin + 1 >= guest_size) return VM86_GP_RESULT_OOB;
+        frame->eip += 2;
+        return VM86_GP_RESULT_OUT_IMM;
+    case 0xEC: /* IN AL, DX */
+    case 0xED: /* IN AX, DX */
+        frame->eip += 1;
+        return VM86_GP_RESULT_IN_DX;
+    case 0xEE: /* OUT DX, AL */
+    case 0xEF: /* OUT DX, AX */
+        frame->eip += 1;
+        return VM86_GP_RESULT_OUT_DX;
+    case 0xFA: /* CLI */
+        frame->eip += 1;
+        return VM86_GP_RESULT_CLI;
+    case 0xFB: /* STI */
+        frame->eip += 1;
+        return VM86_GP_RESULT_STI;
+    case 0xF4: /* HLT */
+        frame->eip += 1;
+        return VM86_GP_RESULT_HLT;
+    default:
+        return VM86_GP_RESULT_UNHANDLED;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Probe: synthetic guest memory + frames exercise the decoder.       */
+/* ------------------------------------------------------------------ */
+
+/* Host counters bumped by the synthetic INT handlers below so the
+ * probe can assert dispatch actually fired. */
+static u32 s_gp_hit_21;
+static u32 s_gp_hit_3;
+static u32 s_gp_hit_4;
+
+static void vm86_gp_probe_int21(vm86_task *task, vm86_trap_frame *frame) {
+    (void)task; (void)frame;
+    s_gp_hit_21++;
+}
+static void vm86_gp_probe_int3(vm86_task *task, vm86_trap_frame *frame) {
+    (void)task; (void)frame;
+    s_gp_hit_3++;
+}
+static void vm86_gp_probe_int4(vm86_task *task, vm86_trap_frame *frame) {
+    (void)task; (void)frame;
+    s_gp_hit_4++;
+}
+
+/* 4 KiB scratch guest buffer (enough for this probe). BSS, zero init. */
+#define VM86_GP_PROBE_BUF_BYTES  4096u
+static u8 s_vm86_gp_probe_buf[VM86_GP_PROBE_BUF_BYTES] __attribute__((aligned(16)));
+
+int vm86_gp_decode_probe(void) {
+    serial_write("vm86: gp-decode sentinel=0x");
+    serial_write_hex64((u64)VM86_GP_DECODE_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_gp_decode_sentinel_id);
+    serial_write("\n");
+
+    /* Reset host state. */
+    s_gp_hit_21 = 0;
+    s_gp_hit_3  = 0;
+    s_gp_hit_4  = 0;
+    for (u32 i = 0; i < VM86_GP_PROBE_BUF_BYTES; i++) {
+        s_vm86_gp_probe_buf[i] = 0;
+    }
+
+    /* Canned opcodes at known offsets.
+     *   0x000: CD 21        INT 21h
+     *   0x100: CC            INT3
+     *   0x200: CE            INTO
+     *   0x300: CF            IRET
+     *   0x400: 9C            PUSHF
+     *   0x500: 9D            POPF
+     *   0x600: E4 40         IN AL, 0x40
+     *   0x700: E6 60         OUT 0x60, AL
+     *   0x800: EC            IN AL, DX
+     *   0x900: EE            OUT DX, AL
+     *   0xA00: FA            CLI
+     *   0xB00: FB            STI
+     *   0xC00: F4            HLT
+     *   0xD00: 62            (BOUND — unhandled by 034)
+     *   0xE00: CD             (INT with no second byte — OOB at EOF path)
+     */
+    s_vm86_gp_probe_buf[0x000] = 0xCD; s_vm86_gp_probe_buf[0x001] = 0x21;
+    s_vm86_gp_probe_buf[0x100] = 0xCC;
+    s_vm86_gp_probe_buf[0x200] = 0xCE;
+    s_vm86_gp_probe_buf[0x300] = 0xCF;
+    s_vm86_gp_probe_buf[0x400] = 0x9C;
+    s_vm86_gp_probe_buf[0x500] = 0x9D;
+    s_vm86_gp_probe_buf[0x600] = 0xE4; s_vm86_gp_probe_buf[0x601] = 0x40;
+    s_vm86_gp_probe_buf[0x700] = 0xE6; s_vm86_gp_probe_buf[0x701] = 0x60;
+    s_vm86_gp_probe_buf[0x800] = 0xEC;
+    s_vm86_gp_probe_buf[0x900] = 0xEE;
+    s_vm86_gp_probe_buf[0xA00] = 0xFA;
+    s_vm86_gp_probe_buf[0xB00] = 0xFB;
+    s_vm86_gp_probe_buf[0xC00] = 0xF4;
+    s_vm86_gp_probe_buf[0xD00] = 0x62;
+
+    vm86_dispatcher disp;
+    for (u32 i = 0; i < VM86_INT_VECTOR_COUNT; i++) disp.handler[i] = 0;
+    disp.registered_count = 0;
+    disp.handled_count    = 0;
+    disp.unhandled_count  = 0;
+    vm86_register_int_handler(&disp, 0x21, vm86_gp_probe_int21);
+    vm86_register_int_handler(&disp, 0x03, vm86_gp_probe_int3);
+    vm86_register_int_handler(&disp, 0x04, vm86_gp_probe_int4);
+
+    vm86_trap_frame tf;
+    vm86_dispatch_status st = VM86_DISPATCH_UNHANDLED;
+    int ok = 1;
+
+    /* Helper macro — evaluates a single case and bumps ok. */
+    #define GP_CASE(off, expected)                                         \
+        do {                                                               \
+            for (u32 _i = 0; _i < sizeof(tf); _i++) ((u8*)&tf)[_i] = 0;    \
+            tf.cs  = 0;                                                    \
+            tf.eip = (u32)(off);                                           \
+            vm86_gp_decode_result _r = vm86_gp_decode(                     \
+                s_vm86_gp_probe_buf, VM86_GP_PROBE_BUF_BYTES,              \
+                &tf, &disp, 0, &st);                                       \
+            if (_r != (expected)) {                                        \
+                serial_write("vm86: gp-decode case=");                     \
+                serial_write(#off);                                        \
+                serial_write(" result-mismatch\n");                        \
+                ok = 0;                                                    \
+            }                                                              \
+        } while (0)
+
+    GP_CASE(0x000, VM86_GP_RESULT_INT);
+    if (tf.eip != 0x002 || s_gp_hit_21 != 1) {
+        serial_write("vm86: gp-decode int21 side-effect FAIL\n");
+        ok = 0;
+    }
+
+    GP_CASE(0x100, VM86_GP_RESULT_INT3);
+    if (tf.eip != 0x101 || s_gp_hit_3 != 1) {
+        serial_write("vm86: gp-decode int3 side-effect FAIL\n");
+        ok = 0;
+    }
+
+    GP_CASE(0x200, VM86_GP_RESULT_INTO);
+    if (tf.eip != 0x201 || s_gp_hit_4 != 1) {
+        serial_write("vm86: gp-decode into side-effect FAIL\n");
+        ok = 0;
+    }
+
+    GP_CASE(0x300, VM86_GP_RESULT_IRET);
+    if (tf.eip != 0x301) { ok = 0; }
+    GP_CASE(0x400, VM86_GP_RESULT_PUSHF);
+    if (tf.eip != 0x401) { ok = 0; }
+    GP_CASE(0x500, VM86_GP_RESULT_POPF);
+    if (tf.eip != 0x501) { ok = 0; }
+    GP_CASE(0x600, VM86_GP_RESULT_IN_IMM);
+    if (tf.eip != 0x602) { ok = 0; }
+    GP_CASE(0x700, VM86_GP_RESULT_OUT_IMM);
+    if (tf.eip != 0x702) { ok = 0; }
+    GP_CASE(0x800, VM86_GP_RESULT_IN_DX);
+    if (tf.eip != 0x801) { ok = 0; }
+    GP_CASE(0x900, VM86_GP_RESULT_OUT_DX);
+    if (tf.eip != 0x901) { ok = 0; }
+    GP_CASE(0xA00, VM86_GP_RESULT_CLI);
+    if (tf.eip != 0xA01) { ok = 0; }
+    GP_CASE(0xB00, VM86_GP_RESULT_STI);
+    if (tf.eip != 0xB01) { ok = 0; }
+    GP_CASE(0xC00, VM86_GP_RESULT_HLT);
+    if (tf.eip != 0xC01) { ok = 0; }
+    GP_CASE(0xD00, VM86_GP_RESULT_UNHANDLED);
+    if (tf.eip != 0xD00) { ok = 0; }  /* unhandled must not advance */
+
+    /* NULL / OOB guards. */
+    for (u32 i = 0; i < sizeof(tf); i++) ((u8*)&tf)[i] = 0;
+    if (vm86_gp_decode(0, 0, &tf, &disp, 0, &st) != VM86_GP_RESULT_NULL_ARG) ok = 0;
+    if (vm86_gp_decode(s_vm86_gp_probe_buf, VM86_GP_PROBE_BUF_BYTES, 0, &disp, 0, &st)
+        != VM86_GP_RESULT_NULL_ARG) ok = 0;
+
+    /* CS:EIP just past the buffer end = OOB. */
+    tf.cs  = 0;
+    tf.eip = VM86_GP_PROBE_BUF_BYTES;
+    if (vm86_gp_decode(s_vm86_gp_probe_buf, VM86_GP_PROBE_BUF_BYTES,
+                       &tf, &disp, 0, &st) != VM86_GP_RESULT_OOB) ok = 0;
+
+    /* CS wraparound: cs=0x1000 eip=0 → linear 0x10000, past 4 KiB buf. */
+    tf.cs  = 0x1000;
+    tf.eip = 0;
+    if (vm86_gp_decode(s_vm86_gp_probe_buf, VM86_GP_PROBE_BUF_BYTES,
+                       &tf, &disp, 0, &st) != VM86_GP_RESULT_OOB) ok = 0;
+
+    serial_write("vm86: gp-decode hits int21=0x");
+    serial_write_hex64((u64)s_gp_hit_21);
+    serial_write(" int3=0x");
+    serial_write_hex64((u64)s_gp_hit_3);
+    serial_write(" into=0x");
+    serial_write_hex64((u64)s_gp_hit_4);
+    serial_write("\n");
+
+    if (!ok) {
+        serial_write("vm86: gp-decode probe failed\n");
+        return 0;
+    }
+
+    serial_write("vm86: gp-decode ready-surface=int-n,int3,into,iret,pushf,popf,in,out,cli,sti,hlt\n");
+    serial_write("vm86: gp-decode pending-surface=handler-frame-apply,guest-stack-iret\n");
+    serial_write("vm86: gp-decode probe complete\n");
+    return 1;
+
+    #undef GP_CASE
+}
