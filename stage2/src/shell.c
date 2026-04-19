@@ -5658,9 +5658,49 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
     serial_write("OpenGEM: desktop first frame presented\n");
     serial_write("OpenGEM: interactive session active\n");
 
+    /* OPENGEM-008 — Arm the real first-frame hook and capture the
+     * session frame counter baseline. The hook emits
+     * `OpenGEM: desktop frame blitted` on the first genuine
+     * mode-13 upscale into the backbuffer during `shell_run()`;
+     * the baseline lets us report a deterministic session
+     * duration in frames on exit. */
+    u32 opengem_session_frame_base = gfx_frame_counter();
+    gfx_mode_opengem_arm_first_frame();
+
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */
     shell_run(boot_info, handoff, found_path);
+
+    /* OPENGEM-008 — Disarm unconditionally (no-op if the marker
+     * already fired) and emit the session duration. Counted in
+     * presented frames; host-independent, deterministic, no PIT
+     * or RDTSC dependency. */
+    gfx_mode_opengem_disarm_first_frame();
+    {
+        u32 dur = gfx_frame_counter() - opengem_session_frame_base;
+        char buf[64];
+        u32 n = 0;
+        const char *prefix = "OpenGEM: runtime session duration=";
+        while (prefix[n] != '\0' && n < sizeof(buf) - 16) {
+            buf[n] = prefix[n]; n++;
+        }
+        /* u32 -> decimal, minimal helper */
+        char tmp[12];
+        u32 ti = 0;
+        if (dur == 0) { tmp[ti++] = '0'; }
+        else {
+            u32 d = dur;
+            while (d > 0 && ti < sizeof(tmp)) { tmp[ti++] = (char)('0' + (d % 10U)); d /= 10U; }
+        }
+        while (ti > 0 && n < sizeof(buf) - 8) { buf[n++] = tmp[--ti]; }
+        const char *suffix = " frames\n";
+        u32 si = 0;
+        while (suffix[si] != '\0' && n < sizeof(buf) - 1) {
+            buf[n++] = suffix[si++];
+        }
+        buf[n] = '\0';
+        serial_write(buf);
+    }
 
     /* OPENGEM-007 — Runtime session close marker. Emitted before
      * the mouse/overlay teardown so log ordering mirrors the

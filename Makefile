@@ -456,6 +456,9 @@ test-opengem-input:
 test-opengem-full-runtime:
 	bash ./scripts/test_opengem_full_runtime.sh
 
+test-opengem-real-frame:
+	bash ./scripts/test_opengem_real_frame.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

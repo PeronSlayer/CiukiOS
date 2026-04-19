@@ -37,6 +37,11 @@ static u8  g_palette_fade_base_valid;
 /* Frame counter — bumped on every successful gfx_mode_present. */
 static u32 g_frame_counter;
 
+/* OPENGEM-008 — real first-frame hook state.
+ * Armed by shell_run_opengem_interactive() before `shell_run()` dispatch;
+ * auto-disarms after the first real mode-13 present emits the marker. */
+static u8  g_opengem_first_frame_armed;
+
 static u16 read_le16(const u8 *p) {
     return (u16)((u16)p[0] | ((u16)p[1] << 8));
 }
@@ -516,6 +521,15 @@ int gfx_mode_present(void) {
         if (r) {
             g_frame_counter++;
             serial_write("[gfx] present OK (mode 0x13)\n");
+            /* OPENGEM-008 — Emit the real first-frame correlation
+             * marker exactly once when armed. Fires only on the
+             * real-blit path (not the cached-noop branch above) so
+             * the marker is tied to a genuine mode-13 upscale into
+             * the backbuffer. */
+            if (g_opengem_first_frame_armed) {
+                g_opengem_first_frame_armed = 0;
+                serial_write("OpenGEM: desktop frame blitted\n");
+            }
         } else {
             serial_write("[gfx] present FAIL (mode 0x13)\n");
         }
@@ -525,6 +539,22 @@ int gfx_mode_present(void) {
 }
 
 u32 gfx_frame_counter(void) { return g_frame_counter; }
+
+/* --------------------------------------------------------------- */
+/* OPENGEM-008 — real first-frame hook                             */
+/* --------------------------------------------------------------- */
+
+void gfx_mode_opengem_arm_first_frame(void) {
+    g_opengem_first_frame_armed = 1U;
+}
+
+void gfx_mode_opengem_disarm_first_frame(void) {
+    g_opengem_first_frame_armed = 0U;
+}
+
+int gfx_mode_opengem_first_frame_armed(void) {
+    return g_opengem_first_frame_armed ? 1 : 0;
+}
 
 /* --------------------------------------------------------------- */
 /* INT 10h dispatcher                                              */

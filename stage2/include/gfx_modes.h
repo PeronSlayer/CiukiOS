@@ -118,6 +118,24 @@ u32  gfx_frame_counter(void);
  */
 int  gfx_mode_present(void);
 
+/*
+ * OPENGEM-008 — Real-frame first-blit hook.
+ *
+ * When armed, the next successful mode-13 present emits the frozen
+ * serial marker `OpenGEM: desktop frame blitted` exactly once and
+ * auto-disarms. Idempotent: arm/disarm are safe to re-enter.
+ *
+ * The arm is a **correlation hook**, not a blocking primitive: it
+ * does not change present-path timing, palette, or dirty-tracking.
+ * Purpose: give a runtime gate a boot-log signal that a real mode-13
+ * frame reached the backbuffer during an OpenGEM session (as opposed
+ * to the semantic "desktop first frame presented" marker from
+ * OPENGEM-007 which fires before `shell_run()` dispatch).
+ */
+void gfx_mode_opengem_arm_first_frame(void);
+void gfx_mode_opengem_disarm_first_frame(void);
+int  gfx_mode_opengem_first_frame_armed(void);
+
 /* INT 10h dispatcher (BIOS-level). Declared in services.h form. */
 struct ciuki_int21_regs;
 struct ciuki_dos_context;
