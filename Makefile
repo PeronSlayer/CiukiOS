@@ -465,6 +465,9 @@ test-opengem-dispatch:
 test-opengem-extender:
 	bash ./scripts/test_opengem_extender.sh
 
+test-opengem-absolute-dispatch:
+	bash ./scripts/test_opengem_absolute_dispatch.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

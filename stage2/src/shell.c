@@ -5564,6 +5564,23 @@ static int shell_write_u16_hex(u16 v, char *out, u32 out_size) {
     return 1;
 }
 
+/* OPENGEM-012 — 8-digit lowercase-hex u32 formatter. Shares the
+ * digit table convention with shell_write_u16_hex. */
+static int shell_write_u32_hex(u32 v, char *out, u32 out_size) {
+    static const char hex_digits[] = "0123456789abcdef";
+    if (!out || out_size < 9U) return 0;
+    out[0] = hex_digits[(v >> 28) & 0xFU];
+    out[1] = hex_digits[(v >> 24) & 0xFU];
+    out[2] = hex_digits[(v >> 20) & 0xFU];
+    out[3] = hex_digits[(v >> 16) & 0xFU];
+    out[4] = hex_digits[(v >> 12) & 0xFU];
+    out[5] = hex_digits[(v >> 8)  & 0xFU];
+    out[6] = hex_digits[(v >> 4)  & 0xFU];
+    out[7] = hex_digits[ v        & 0xFU];
+    out[8] = '\0';
+    return 1;
+}
+
 static int stage2_opengem_probe_extender(void) {
     ciuki_int21_regs_t regs;
     u16 flags = 0U;
@@ -5630,6 +5647,105 @@ static int stage2_opengem_probe_extender(void) {
 }
 
 /*
+ * OPENGEM-012 — Absolute-dispatch classification probe.
+ *
+ * Establishes the observability surface for dispatching OpenGEM via
+ * the absolute path resolved by OPENGEM-010, in advance of a real
+ * protected-mode loader. Uses the FAT directory-entry size from the
+ * preflight probe (no file bytes are read here — classification is
+ * by path extension) and publishes a capability verdict so a gate
+ * can assert whether the current build is expected to actually run
+ * the binary or defer to the historical `shell_run()` fallback.
+ *
+ * Markers (stable, append-only):
+ *   OpenGEM: absolute dispatch begin path=<p> size=0x<hex32>
+ *   OpenGEM: absolute dispatch classify=<mz|bat|com|app|unknown> by=path
+ *   OpenGEM: absolute dispatch capable=<0|1> reason=<token>
+ *   OpenGEM: absolute dispatch complete
+ *
+ * Reason tokens (stable):
+ *   16bit-mz-extender-pending  — MZ file, extender layer not yet
+ *                                implemented (OPENGEM-013+).
+ *   bat-interp-available       — BAT, delegated to BAT interpreter.
+ *   com-runtime-available      — COM, delegated to COM runtime.
+ *   no-loader-for-app          — .APP files not yet supported.
+ *   unknown-extension          — fell through the kind ladder.
+ *   no-path                    — preflight did not resolve a path.
+ */
+static int stage2_opengem_classify_absolute(const char *path, u32 size) {
+    const char *classify = "unknown";
+    const char *reason   = "unknown-extension";
+    int capable = 0;
+
+    serial_write("OpenGEM: absolute dispatch begin path=");
+    if (path) serial_write(path);
+    else      serial_write("(none)");
+    {
+        char line[32];
+        char hex[9];
+        const char *p = " size=0x";
+        u32 n = 0U;
+        while (p[n] != '\0' && n < (u32)sizeof(line) - 10U) {
+            line[n] = p[n]; n++;
+        }
+        shell_write_u32_hex(size, hex, (u32)sizeof(hex));
+        {
+            u32 j = 0U;
+            while (hex[j] != '\0' && n < (u32)sizeof(line) - 2U) {
+                line[n++] = hex[j++];
+            }
+        }
+        line[n++] = '\n';
+        line[n]   = '\0';
+        serial_write(line);
+    }
+
+    if (!path || !path[0]) {
+        classify = "unknown";
+        reason   = "no-path";
+    } else {
+        const char *end = path;
+        while (*end) end++;
+        if (end - path >= 4) {
+            char c3 = end[-3], c2 = end[-2], c1 = end[-1];
+            if (c3 >= 'A' && c3 <= 'Z') c3 = (char)(c3 + 32);
+            if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+            if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+            if (c3 == 'e' && c2 == 'x' && c1 == 'e') {
+                classify = "mz";
+                reason   = "16bit-mz-extender-pending";
+                capable  = 0;
+            } else if (c3 == 'b' && c2 == 'a' && c1 == 't') {
+                classify = "bat";
+                reason   = "bat-interp-available";
+                capable  = 1;
+            } else if (c3 == 'c' && c2 == 'o' && c1 == 'm') {
+                classify = "com";
+                reason   = "com-runtime-available";
+                capable  = 1;
+            } else if (c3 == 'a' && c2 == 'p' && c1 == 'p') {
+                classify = "app";
+                reason   = "no-loader-for-app";
+                capable  = 0;
+            }
+        }
+    }
+
+    serial_write("OpenGEM: absolute dispatch classify=");
+    serial_write(classify);
+    serial_write(" by=path\n");
+
+    serial_write("OpenGEM: absolute dispatch capable=");
+    serial_write(capable ? "1" : "0");
+    serial_write(" reason=");
+    serial_write(reason);
+    serial_write("\n");
+
+    serial_write("OpenGEM: absolute dispatch complete\n");
+    return capable;
+}
+
+/*
  * OPENGEM-001 — Launch OpenGEM via the standard shell_run path.
  *
  * Shared entry point used by both the `opengem` shell command and the
@@ -5662,6 +5778,7 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
     static const u32 paths_count = 6U;
     fat_dir_entry_t probe;
     const char *found_path = (const char *)0;
+    u32 found_size = 0U;
     int pi;
     int preflight_ok = 1;
     /* OPENGEM-003 — Desktop scene integration: per-launch desktop
@@ -5701,6 +5818,7 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
     for (pi = 0; (u32)pi < paths_count; pi++) {
         if (fat_find_file(paths[pi], &probe)) {
             found_path = paths[pi];
+            found_size = probe.size;
             break;
         }
     }
@@ -5815,6 +5933,13 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
      * later phases. The probe only emits observability markers
      * today; actual protected-mode dispatch lands in OPENGEM-012+. */
     (void)stage2_opengem_probe_extender();
+
+    /* OPENGEM-012 — Absolute-dispatch classification. Publishes a
+     * capability verdict for the resolved path using the preflight
+     * directory-entry size (no file bytes read). Return value is
+     * advisory; OPENGEM-013+ will consume it to decide between a
+     * real absolute loader and the historical shell_run() path. */
+    (void)stage2_opengem_classify_absolute(found_path, found_size);
 
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */
