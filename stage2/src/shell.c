@@ -5982,6 +5982,286 @@ emit_read_line:
 }
 
 /*
+ * OPENGEM-015 — Deep MZ header probe.
+ *
+ * Parses the 28-byte MZ header already staged at
+ * SHELL_RUNTIME_COM_ENTRY_ADDR by the OPENGEM-013 preload. Emits
+ * every real header field that the 16-bit execution layer will
+ * eventually need (entry CS:IP, stack SS:SP, allocation
+ * requirements, relocation table offset, computed load size) and
+ * publishes a viability verdict — gem.exe's DPMI/v8086
+ * requirement becomes a first-class observable instead of a
+ * shell_run-side rejection string.
+ *
+ * This is pure observability — no execution change. The caller
+ * still routes MZ through shell_run() where the existing
+ * "[dosrun] mz dispatch=pending reason=16bit" rejection happens.
+ *
+ * Markers (stable, append-only; disjoint from preload and
+ * native-dispatch):
+ *   OpenGEM: mz-probe begin path=<p> size=0x<hex32>
+ *   OpenGEM: mz-probe signature=<MZ|ZM|none> status=<ok|too-small|not-mz>
+ *   OpenGEM: mz-probe header e_cblp=0x<h16> e_cp=0x<h16> e_crlc=0x<h16> e_cparhdr=0x<h16>
+ *   OpenGEM: mz-probe alloc e_minalloc=0x<h16> e_maxalloc=0x<h16>
+ *   OpenGEM: mz-probe stack e_ss=0x<h16> e_sp=0x<h16>
+ *   OpenGEM: mz-probe entry e_cs=0x<h16> e_ip=0x<h16>
+ *   OpenGEM: mz-probe reloc e_lfarlc=0x<h16> e_ovno=0x<h16>
+ *   OpenGEM: mz-probe layout load_bytes=0x<h32> header_bytes=0x<h32>
+ *   OpenGEM: mz-probe viability=<runnable-real-mode|requires-extender|malformed|skipped-non-mz> reason=<token>
+ *   OpenGEM: mz-probe complete
+ *
+ * Viability tokens (stable):
+ *   runnable-real-mode   — small MZ, fits in real-mode window
+ *   requires-extender    — needs DPMI / DOS4GW (load > 640K or
+ *                          e_maxalloc == 0xFFFF and load > 64K)
+ *   malformed            — header inconsistent
+ *   skipped-non-mz       — buffer doesn't start with MZ/ZM
+ *
+ * Reason tokens (stable, disjoint from OPENGEM-012/013/014):
+ *   mz-v8086-candidate        — viability=runnable-real-mode
+ *   mz-load-exceeds-real-mode — load_bytes > 0xA0000
+ *   mz-max-alloc-64k          — e_maxalloc == 0xFFFF
+ *   mz-header-too-small       — file < 0x1C bytes
+ *   mz-header-malformed       — e_cparhdr == 0 or e_cp == 0
+ *   mz-non-mz-skipped         — signature mismatch
+ *   mz-no-buffer              — no path / no preload
+ */
+static void stage2_opengem_mz_probe(const char *path, u32 preload_size) {
+    const char *status    = "ok";
+    const char *signature = "none";
+    const char *viability = "skipped-non-mz";
+    const char *reason    = "mz-non-mz-skipped";
+    u32 header_bytes = 0U;
+    u32 load_bytes   = 0U;
+    u16 e_cblp=0, e_cp=0, e_crlc=0, e_cparhdr=0;
+    u16 e_minalloc=0, e_maxalloc=0;
+    u16 e_ss=0, e_sp=0;
+    u16 e_cs=0, e_ip=0;
+    u16 e_lfarlc=0, e_ovno=0;
+
+    serial_write("OpenGEM: mz-probe begin path=");
+    if (path) serial_write(path);
+    else      serial_write("(none)");
+    {
+        char line[32];
+        char hex[9];
+        const char *p = " size=0x";
+        u32 n = 0U;
+        while (p[n] != '\0' && n < (u32)sizeof(line) - 10U) {
+            line[n] = p[n]; n++;
+        }
+        shell_write_u32_hex(preload_size, hex, (u32)sizeof(hex));
+        {
+            u32 j = 0U;
+            while (hex[j] != '\0' && n < (u32)sizeof(line) - 2U) {
+                line[n++] = hex[j++];
+            }
+        }
+        line[n++] = '\n';
+        line[n]   = '\0';
+        serial_write(line);
+    }
+
+    if (!path || !path[0] || preload_size == 0U) {
+        status    = "too-small";
+        viability = "malformed";
+        reason    = "mz-no-buffer";
+        goto emit_header;
+    }
+
+    if (preload_size < 0x1CU) {
+        status    = "too-small";
+        viability = "malformed";
+        reason    = "mz-header-too-small";
+        goto emit_signature;
+    }
+
+    {
+        const u8 *h = (const u8 *)(u64)SHELL_RUNTIME_COM_ENTRY_ADDR;
+        if (h[0] == 'M' && h[1] == 'Z')      signature = "MZ";
+        else if (h[0] == 'Z' && h[1] == 'M') signature = "ZM";
+        else {
+            signature = "none";
+            status    = "not-mz";
+            viability = "skipped-non-mz";
+            reason    = "mz-non-mz-skipped";
+            goto emit_signature;
+        }
+
+        e_cblp     = (u16)h[0x02] | ((u16)h[0x03] << 8);
+        e_cp       = (u16)h[0x04] | ((u16)h[0x05] << 8);
+        e_crlc     = (u16)h[0x06] | ((u16)h[0x07] << 8);
+        e_cparhdr  = (u16)h[0x08] | ((u16)h[0x09] << 8);
+        e_minalloc = (u16)h[0x0A] | ((u16)h[0x0B] << 8);
+        e_maxalloc = (u16)h[0x0C] | ((u16)h[0x0D] << 8);
+        e_ss       = (u16)h[0x0E] | ((u16)h[0x0F] << 8);
+        e_sp       = (u16)h[0x10] | ((u16)h[0x11] << 8);
+        e_ip       = (u16)h[0x14] | ((u16)h[0x15] << 8);
+        e_cs       = (u16)h[0x16] | ((u16)h[0x17] << 8);
+        e_lfarlc   = (u16)h[0x18] | ((u16)h[0x19] << 8);
+        e_ovno     = (u16)h[0x1A] | ((u16)h[0x1B] << 8);
+    }
+
+    if (e_cparhdr == 0U || e_cp == 0U) {
+        status    = "ok";
+        viability = "malformed";
+        reason    = "mz-header-malformed";
+        header_bytes = (u32)e_cparhdr * 16U;
+        goto emit_signature;
+    }
+
+    header_bytes = (u32)e_cparhdr * 16U;
+    /* Canonical MZ load size: total file bytes minus header, where
+     * file bytes = e_cp * 512, minus (512 - e_cblp) when e_cblp != 0. */
+    {
+        u32 file_bytes = (u32)e_cp * 512U;
+        if (e_cblp != 0U) {
+            if (file_bytes >= (512U - (u32)e_cblp)) {
+                file_bytes -= (512U - (u32)e_cblp);
+            }
+        }
+        if (file_bytes > header_bytes) {
+            load_bytes = file_bytes - header_bytes;
+        } else {
+            load_bytes = 0U;
+        }
+    }
+
+    /* Viability verdict. */
+    if (load_bytes > 0xA0000U) {
+        viability = "requires-extender";
+        reason    = "mz-load-exceeds-real-mode";
+    } else if (e_maxalloc == 0xFFFFU && load_bytes > 0x10000U) {
+        viability = "requires-extender";
+        reason    = "mz-max-alloc-64k";
+    } else {
+        viability = "runnable-real-mode";
+        reason    = "mz-v8086-candidate";
+    }
+
+emit_signature:
+    serial_write("OpenGEM: mz-probe signature=");
+    serial_write(signature);
+    serial_write(" status=");
+    serial_write(status);
+    serial_write("\n");
+
+emit_header:
+    {
+        char line[128];
+        char hex[5];
+        u32 n = 0U;
+        const char *parts[4] = {
+            "OpenGEM: mz-probe header e_cblp=0x",
+            " e_cp=0x",
+            " e_crlc=0x",
+            " e_cparhdr=0x"
+        };
+        u16 vals[4] = { e_cblp, e_cp, e_crlc, e_cparhdr };
+        for (u32 k = 0U; k < 4U; k++) {
+            const char *p = parts[k];
+            u32 j = 0U;
+            while (p[j] != '\0' && n < (u32)sizeof(line) - 8U) {
+                line[n++] = p[j++];
+            }
+            shell_write_u16_hex(vals[k], hex, (u32)sizeof(hex));
+            j = 0U;
+            while (hex[j] != '\0' && n < (u32)sizeof(line) - 4U) {
+                line[n++] = hex[j++];
+            }
+        }
+        line[n++] = '\n';
+        line[n]   = '\0';
+        serial_write(line);
+    }
+
+    /* alloc */
+    serial_write("OpenGEM: mz-probe alloc e_minalloc=0x");
+    {
+        char hex[5];
+        shell_write_u16_hex(e_minalloc, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write(" e_maxalloc=0x");
+    {
+        char hex[5];
+        shell_write_u16_hex(e_maxalloc, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write("\n");
+
+    /* stack */
+    serial_write("OpenGEM: mz-probe stack e_ss=0x");
+    {
+        char hex[5];
+        shell_write_u16_hex(e_ss, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write(" e_sp=0x");
+    {
+        char hex[5];
+        shell_write_u16_hex(e_sp, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write("\n");
+
+    /* entry */
+    serial_write("OpenGEM: mz-probe entry e_cs=0x");
+    {
+        char hex[5];
+        shell_write_u16_hex(e_cs, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write(" e_ip=0x");
+    {
+        char hex[5];
+        shell_write_u16_hex(e_ip, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write("\n");
+
+    /* reloc */
+    serial_write("OpenGEM: mz-probe reloc e_lfarlc=0x");
+    {
+        char hex[5];
+        shell_write_u16_hex(e_lfarlc, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write(" e_ovno=0x");
+    {
+        char hex[5];
+        shell_write_u16_hex(e_ovno, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write("\n");
+
+    /* layout */
+    serial_write("OpenGEM: mz-probe layout load_bytes=0x");
+    {
+        char hex[9];
+        shell_write_u32_hex(load_bytes, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write(" header_bytes=0x");
+    {
+        char hex[9];
+        shell_write_u32_hex(header_bytes, hex, (u32)sizeof(hex));
+        serial_write(hex);
+    }
+    serial_write("\n");
+
+    /* viability */
+    serial_write("OpenGEM: mz-probe viability=");
+    serial_write(viability);
+    serial_write(" reason=");
+    serial_write(reason);
+    serial_write("\n");
+
+    serial_write("OpenGEM: mz-probe complete\n");
+    (void)status;
+}
+
+/*
  * OPENGEM-014 — Native absolute-path dispatcher.
  *
  * Consumes the verdict/reason emitted by the OPENGEM-013 preload
@@ -6326,6 +6606,14 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
                                               &preload_verdict,
                                               &preload_reason,
                                               &preload_read_bytes);
+
+        /* OPENGEM-015 — Deep MZ header probe. Only emitted when
+         * the lexical classify is "mz" so the marker stream stays
+         * focused on the 16-bit path where gem.exe lives. Pure
+         * observability — still goes through shell_run(). */
+        if (classify_label[0] == 'm' && classify_label[1] == 'z') {
+            stage2_opengem_mz_probe(found_path, preload_read_bytes);
+        }
     }
 
     /* OPENGEM-014 — Honor the preload verdict. For bat/com

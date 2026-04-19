@@ -474,6 +474,9 @@ test-opengem-preload:
 test-opengem-native-dispatch:
 	bash ./scripts/test_opengem_native_dispatch.sh
 
+test-opengem-mz-probe:
+	bash ./scripts/test_opengem_mz_probe.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
