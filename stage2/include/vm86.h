@@ -697,4 +697,80 @@ u32 vm86_live_switch_plan_idtr_base (const vm86_live_switch_plan *plan);
  */
 int vm86_live_switch_plan_probe(void);
 
+/*
+ * OPENGEM-029 — armed-but-gated live-switch execute path.
+ *
+ * The live-switch trampolines declared in stage2/include/vm86_switch.h
+ * (long->PE32->v86->PE32->long) now have a single C call site:
+ *   vm86_live_switch_execute()
+ * That call site is itself guarded by a runtime arm flag. The flag is:
+ *   - 0 at boot (default);
+ *   - flipped to 1 ONLY by vm86_live_switch_arm() with the correct
+ *     magic value AND a plan that is VM86_LIVE_PLAN_F_READY;
+ *   - reset to 0 by vm86_live_switch_disarm().
+ *
+ * vm86_live_switch_execute() refuses to invoke the trampolines unless
+ * armed. When armed, it currently invokes the OPENGEM-027 stub bodies
+ * (which are all `retq`), so running it is still a no-op at the CPU
+ * level. This phase is therefore observability-only: it proves the
+ * gating contract without yet running guest code. OPENGEM-030 wires
+ * gem.exe to consult the gate; later phases will flesh out the stubs.
+ *
+ * Design contract:
+ *   - The magic value is stable for this phase and becomes the caller's
+ *     acknowledgement that it understands live CPU-mutation is possible.
+ *   - The gate is never flipped implicitly. No boot path arms it.
+ */
+#define VM86_LIVE_ARM_MAGIC 0x12860029u
+
+/* Status / reason codes for vm86_live_switch_execute() return + probe. */
+typedef enum vm86_live_exec_status {
+    VM86_LIVE_EXEC_BLOCKED_NOT_ARMED  = 0,
+    VM86_LIVE_EXEC_BLOCKED_NO_PLAN    = 1,
+    VM86_LIVE_EXEC_BLOCKED_BAD_PLAN   = 2,
+    VM86_LIVE_EXEC_INVOKED_STUBS      = 3   /* executed the retq stubs */
+} vm86_live_exec_status;
+
+/*
+ * Arm the gate. `magic` must equal VM86_LIVE_ARM_MAGIC; `plan` must be
+ * non-NULL and must have VM86_LIVE_PLAN_F_READY set. Returns 1 on
+ * success, 0 on rejection (leaves the gate disarmed).
+ */
+int  vm86_live_switch_arm(u32 magic, const vm86_live_switch_plan *plan);
+
+/* Clear the arm flag unconditionally. Safe to call at any time. */
+void vm86_live_switch_disarm(void);
+
+/* Read-back. */
+int  vm86_live_switch_is_armed(void);
+
+/*
+ * Read-back for the currently armed plan. NULL while disarmed. The
+ * returned pointer aliases the plan passed to vm86_live_switch_arm();
+ * callers must not free it.
+ */
+const vm86_live_switch_plan *vm86_live_switch_get_plan(void);
+
+/*
+ * Execute the live switch IF the gate is armed. Returns one of the
+ * vm86_live_exec_status values. Never executes the trampolines while
+ * disarmed; when armed, invokes the OPENGEM-027 stub bodies (retq),
+ * which leaves the CPU state unchanged at this phase.
+ */
+vm86_live_exec_status vm86_live_switch_execute(void);
+
+/*
+ * OPENGEM-029 probe. Drives arm / disarm / execute transitions:
+ *   1. disarmed default -> execute returns BLOCKED_NOT_ARMED
+ *   2. arm with wrong magic -> rejected, still disarmed
+ *   3. arm with NULL plan   -> rejected, still disarmed
+ *   4. arm with non-ready plan -> rejected, still disarmed
+ *   5. arm with ready plan + correct magic -> armed
+ *   6. execute while armed -> INVOKED_STUBS
+ *   7. disarm -> execute blocked again
+ * Returns 1 on full pass, 0 otherwise. Does NOT execute LGDT / LIDT /
+ * IRET (the trampoline bodies are still stubs).
+ */
+int vm86_live_switch_arm_probe(void);
+
 #endif /* STAGE2_VM86_H */

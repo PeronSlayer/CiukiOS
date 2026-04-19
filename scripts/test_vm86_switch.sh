@@ -101,20 +101,22 @@ for sym in vm86_switch_long_to_pe32 vm86_switch_pe32_to_long \
     fi
 done
 
-# -------- no call site anywhere else in stage2/src (only this file or header declares) --------
+# -------- armed-path call sites:
+# OPENGEM-027 required zero references. OPENGEM-029 adds a single C
+# call site in stage2/src/vm86.c (the armed-but-gated execute path).
+# Any references outside {vm86_switch.S, vm86_switch.h, vm86.c} remain
+# forbidden.
 for sym in vm86_switch_long_to_pe32 vm86_switch_pe32_to_long \
            vm86_switch_enter_v86_via_iret vm86_switch_gp_trampoline; do
-    # Exclude the asm definition (which literally uses the symbol name
-    # on a label line like "sym:") and the header prototype line. Count
-    # any other references — there must be none at this phase.
     hits=$(grep -RnE --include='*.c' --include='*.h' --include='*.S' -w "$sym" stage2/ 2>/dev/null \
          | grep -v "^stage2/src/vm86_switch.S:" \
          | grep -v "^stage2/include/vm86_switch.h:" \
+         | grep -v "^stage2/src/vm86.c:" \
          | wc -l | tr -d ' ')
     if [ "$hits" = "0" ]; then
         pass
     else
-        fail "forbidden reference to $sym outside stub/header ($hits hits)"
+        fail "forbidden reference to $sym outside stub/header/vm86.c ($hits hits)"
     fi
 done
 

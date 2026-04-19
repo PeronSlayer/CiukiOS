@@ -16,6 +16,7 @@
  */
 
 #include "vm86.h"
+#include "vm86_switch.h"
 #include "serial.h"
 #include "types.h"
 
@@ -1595,6 +1596,160 @@ int vm86_live_switch_plan_probe(void) {
         serial_write("vm86: live-plan probe complete\n");
     } else {
         serial_write("vm86: live-plan probe failed\n");
+    }
+    return ok ? 1 : 0;
+}
+
+/* ========================================================================
+ * OPENGEM-029 — armed-but-gated live-switch execute path.
+ *
+ * A single module-private flag guards the only C call site that
+ * invokes the vm86_switch.S trampolines. Default = 0 (disarmed).
+ * Default is never flipped implicitly — only vm86_live_switch_arm()
+ * with the magic value AND a ready plan flips it.
+ *
+ * While the trampoline bodies remain OPENGEM-027 stubs (retq), invoking
+ * them is a CPU-level no-op. This phase proves the gating contract
+ * without yet running any guest code.
+ * ========================================================================
+ */
+
+static int                            vm86_live_switch_armed_flag = 0;
+static const vm86_live_switch_plan   *vm86_live_switch_armed_plan = 0;
+
+int vm86_live_switch_arm(u32 magic, const vm86_live_switch_plan *plan) {
+    if (magic != VM86_LIVE_ARM_MAGIC) {
+        serial_write("vm86: live-switch arm rejected reason=bad-magic\n");
+        return 0;
+    }
+    if (!plan) {
+        serial_write("vm86: live-switch arm rejected reason=null-plan\n");
+        return 0;
+    }
+    if (!(plan->flags & VM86_LIVE_PLAN_F_READY)) {
+        serial_write("vm86: live-switch arm rejected reason=plan-not-ready\n");
+        return 0;
+    }
+    vm86_live_switch_armed_plan = plan;
+    vm86_live_switch_armed_flag = 1;
+    serial_write("vm86: live-switch armed magic=ok plan-ready=1\n");
+    return 1;
+}
+
+void vm86_live_switch_disarm(void) {
+    vm86_live_switch_armed_flag = 0;
+    vm86_live_switch_armed_plan = 0;
+    serial_write("vm86: live-switch disarmed\n");
+}
+
+int vm86_live_switch_is_armed(void) {
+    return vm86_live_switch_armed_flag ? 1 : 0;
+}
+
+const vm86_live_switch_plan *vm86_live_switch_get_plan(void) {
+    return vm86_live_switch_armed_plan;
+}
+
+vm86_live_exec_status vm86_live_switch_execute(void) {
+    if (!vm86_live_switch_armed_flag) {
+        serial_write("vm86: live-switch execute blocked reason=not-armed\n");
+        return VM86_LIVE_EXEC_BLOCKED_NOT_ARMED;
+    }
+    if (!vm86_live_switch_armed_plan) {
+        serial_write("vm86: live-switch execute blocked reason=no-plan\n");
+        return VM86_LIVE_EXEC_BLOCKED_NO_PLAN;
+    }
+    if (!(vm86_live_switch_armed_plan->flags & VM86_LIVE_PLAN_F_READY)) {
+        serial_write("vm86: live-switch execute blocked reason=bad-plan\n");
+        return VM86_LIVE_EXEC_BLOCKED_BAD_PLAN;
+    }
+
+    /*
+     * Armed-but-stubbed path. Each call below is still a retq at
+     * OPENGEM-027; no CPU state changes. When the trampolines gain
+     * real bodies in a later phase, this site will already be wired.
+     */
+    serial_write("vm86: live-switch execute begin mode=stub\n");
+    serial_write("vm86: live-switch execute long-to-pe32\n");
+    vm86_switch_long_to_pe32();
+    serial_write("vm86: live-switch execute enter-v86\n");
+    vm86_switch_enter_v86_via_iret();
+    serial_write("vm86: live-switch execute pe32-to-long\n");
+    vm86_switch_pe32_to_long();
+    serial_write("vm86: live-switch execute complete mode=stub stubs=3\n");
+    return VM86_LIVE_EXEC_INVOKED_STUBS;
+}
+
+int vm86_live_switch_arm_probe(void) {
+    serial_write("vm86: live-switch arm-probe begin OPENGEM-029\n");
+
+    vm86_live_switch_disarm();
+    if (vm86_live_switch_is_armed()) return 0;
+    if (vm86_live_switch_get_plan()) return 0;
+
+    int ok = 1;
+
+    vm86_live_exec_status s1 = vm86_live_switch_execute();
+    if (s1 != VM86_LIVE_EXEC_BLOCKED_NOT_ARMED) ok = 0;
+
+    vm86_live_switch_plan plan;
+    plan.sentinel = 0;
+    plan.flags    = 0;
+    int r2 = vm86_live_switch_arm(0xDEADBEEFu, &plan);
+    if (r2) ok = 0;
+    if (vm86_live_switch_is_armed()) ok = 0;
+
+    int r3 = vm86_live_switch_arm(VM86_LIVE_ARM_MAGIC, 0);
+    if (r3) ok = 0;
+    if (vm86_live_switch_is_armed()) ok = 0;
+
+    int r4 = vm86_live_switch_arm(VM86_LIVE_ARM_MAGIC, &plan);
+    if (r4) ok = 0;
+    if (vm86_live_switch_is_armed()) ok = 0;
+
+    static u8 gdt_p29[VM86_GDT_BYTES];
+    static u8 idt_p29[VM86_IDT_BYTES];
+    static u8 iret_p29[VM86_IRET_FRAME_BYTES];
+    for (u32 i = 0; i < VM86_GDT_BYTES; i++)        gdt_p29[i]  = 0;
+    for (u32 i = 0; i < VM86_IDT_BYTES; i++)        idt_p29[i]  = 0;
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) iret_p29[i] = 0;
+    vm86_gdt_encode(gdt_p29, 0x00200000u, (u16)(104u - 1u));
+    u32 vh[VM86_IDT_VEC_SLOT_COUNT];
+    for (u32 i = 0; i < VM86_IDT_VEC_SLOT_COUNT; i++) vh[i] = 0x00100000u + (i * 0x20u);
+    vm86_idt_encode(idt_p29, 0x0008u, 0x00100800u, vh);
+    vm86_iret_encode_frame(iret_p29, 0x1000u, 0x0100u, 0x1000u, 0xFFFEu, 0u, 0u, 0u, 0u, 0u);
+
+    vm86_live_switch_plan ready;
+    ready.sentinel = 0;
+    int built = vm86_live_switch_plan_build(&ready, gdt_p29, idt_p29, iret_p29,
+                                            0x00200000u, (u16)(104u - 1u),
+                                            0x0008u, 0x0010u, 0x0020u,
+                                            0x1000u, 0x0100u);
+    if (!built) ok = 0;
+    if (!(ready.flags & VM86_LIVE_PLAN_F_READY)) ok = 0;
+
+    int r5 = vm86_live_switch_arm(VM86_LIVE_ARM_MAGIC, &ready);
+    if (!r5) ok = 0;
+    if (!vm86_live_switch_is_armed()) ok = 0;
+    if (vm86_live_switch_get_plan() != &ready) ok = 0;
+
+    vm86_live_exec_status s6 = vm86_live_switch_execute();
+    if (s6 != VM86_LIVE_EXEC_INVOKED_STUBS) ok = 0;
+
+    vm86_live_switch_disarm();
+    if (vm86_live_switch_is_armed()) ok = 0;
+    if (vm86_live_switch_get_plan()) ok = 0;
+    vm86_live_exec_status s7 = vm86_live_switch_execute();
+    if (s7 != VM86_LIVE_EXEC_BLOCKED_NOT_ARMED) ok = 0;
+
+    if (vm86_switch_stub_sentinel != VM86_SWITCH_SENTINEL) ok = 0;
+
+    serial_write("vm86: live-switch arm-probe ready-surface=arm,disarm,execute-gate\n");
+    serial_write("vm86: live-switch arm-probe pending-surface=trampoline-bodies,real-lgdt,real-iret\n");
+    if (ok) {
+        serial_write("vm86: live-switch arm-probe complete\n");
+    } else {
+        serial_write("vm86: live-switch arm-probe failed\n");
     }
     return ok ? 1 : 0;
 }
