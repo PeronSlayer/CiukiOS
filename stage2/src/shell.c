@@ -5770,15 +5770,29 @@ static int stage2_opengem_classify_absolute(const char *path, u32 size) {
  *   preload-io-error    — fat_read_file failed
  *   preload-no-path     — no resolved path from preflight
  *   signature-mismatch  — classify expected MZ but signature is not
- *   mz-16bit-pending    — MZ confirmed but no extender (OPENGEM-014)
+ *   mz-16bit-pending    — MZ confirmed but no extender (OPENGEM-015+)
  *   bat-interp-ready    — BAT confirmed, interp will run it
  *   com-runtime-ready   — COM confirmed, runtime will run it
  *   unsupported-app     — .APP — no loader
  *   unsupported-unknown — fell through classify ladder
+ *
+ * OPENGEM-014 note: bat-interp-ready and com-runtime-ready now
+ * emit verdict=dispatch-native because the caller actually
+ * dispatches via shell_run_batch_file() / shell_run_staged_image()
+ * on the already-staged buffer. The other reasons keep
+ * verdict=defer-to-shell-run (MZ requires an extender that is
+ * OPENGEM-015+ territory). The reason tokens are frozen; the
+ * verdict field is the selector the caller uses.
+ *
+ * Out-params expose the emitted verdict/reason/read-bytes so the
+ * caller can branch on them without re-parsing the serial stream.
  */
 static int stage2_opengem_preload_absolute(const char *path,
                                            u32 expect_size,
-                                           const char *classify) {
+                                           const char *classify,
+                                           const char **out_verdict,
+                                           const char **out_reason,
+                                           u32 *out_read_bytes) {
     const char *status    = "no-path";
     const char *signature = "unknown";
     int match             = 0;
@@ -5879,13 +5893,17 @@ static int stage2_opengem_preload_absolute(const char *path,
         } else if (classify[0] == 'b' && classify[1] == 'a' &&
                    classify[2] == 't') {
             match = (signature[0] == 't') ? 1 : 0;
-            verdict = "defer-to-shell-run";
+            /* OPENGEM-014 — caller will invoke shell_run_batch_file
+             * directly on the absolute path, skipping shell_run(). */
+            verdict = "dispatch-native";
             reason  = "bat-interp-ready";
         } else if (classify[0] == 'c' && classify[1] == 'o' &&
                    classify[2] == 'm') {
             /* COM has no signature; accept. */
             match = 1;
-            verdict = "defer-to-shell-run";
+            /* OPENGEM-014 — caller will invoke shell_run_staged_image
+             * directly on the already-preloaded buffer. */
+            verdict = "dispatch-native";
             reason  = "com-runtime-ready";
         } else if (classify[0] == 'a' && classify[1] == 'p' &&
                    classify[2] == 'p') {
@@ -5951,9 +5969,134 @@ emit_read_line:
 
     serial_write("OpenGEM: preload complete\n");
 
+    /* Expose the emitted verdict/reason/read-bytes so the caller
+     * can branch on them without re-parsing the serial stream. */
+    if (out_verdict) *out_verdict = verdict;
+    if (out_reason)  *out_reason  = reason;
+    if (out_read_bytes) *out_read_bytes = read_bytes;
+
     /* Advisory return: 1 when the preload actually landed ok;
-     * OPENGEM-014 will use it to gate a real native dispatch. */
+     * OPENGEM-014 uses it (alongside the verdict) to gate a real
+     * native dispatch. */
     return (status[0] == 'o' && status[1] == 'k') ? 1 : 0;
+}
+
+/*
+ * OPENGEM-014 — Native absolute-path dispatcher.
+ *
+ * Consumes the verdict/reason emitted by the OPENGEM-013 preload
+ * probe. When the preload landed cleanly on a BAT or COM target,
+ * bypasses the historical shell_run()/normalize_run_name() path
+ * (which strips absolute paths down to a basename and searches
+ * CWD + fallback roots) and invokes the interpreter/runtime
+ * directly on the resolved absolute path:
+ *
+ *   bat-interp-ready  -> shell_run_batch_file(boot_info, handoff, path)
+ *   com-runtime-ready -> shell_run_staged_image(boot_info, handoff,
+ *                            basename, read_bytes, "")  (buffer
+ *                            already populated by the preload)
+ *
+ * MZ / signature-mismatch / unsupported-* / preload-* paths
+ * return 0 unchanged and let the caller fall through to the
+ * historical shell_run() dispatcher.
+ *
+ * Markers (stable, append-only; disjoint from preload):
+ *   OpenGEM: native-dispatch begin path=<p> kind=<bat|com> reason=<r>
+ *   OpenGEM: native-dispatch <kind>=<invoked|failed>
+ *   OpenGEM: native-dispatch complete errorlevel=<n>
+ *
+ * Returns 1 when a native dispatch was attempted (regardless of
+ * the program's errorlevel); 0 when the caller must still invoke
+ * shell_run().
+ */
+static int stage2_opengem_dispatch_native(boot_info_t *boot_info,
+                                          handoff_v0_t *handoff,
+                                          const char *path,
+                                          u32 read_bytes,
+                                          const char *verdict,
+                                          const char *reason) {
+    const char *kind = 0;
+
+    if (!verdict || verdict[0] != 'd' || verdict[1] != 'i') {
+        /* Not "dispatch-native". */
+        return 0;
+    }
+    if (!path || !path[0] || !reason) {
+        return 0;
+    }
+
+    if (reason[0] == 'b' && reason[1] == 'a' && reason[2] == 't') {
+        kind = "bat";
+    } else if (reason[0] == 'c' && reason[1] == 'o' && reason[2] == 'm') {
+        kind = "com";
+    } else {
+        /* Reserved dispatch-native reason we don't yet honor. */
+        return 0;
+    }
+
+    serial_write("OpenGEM: native-dispatch begin path=");
+    serial_write(path);
+    serial_write(" kind=");
+    serial_write(kind);
+    serial_write(" reason=");
+    serial_write(reason);
+    serial_write("\n");
+
+    if (kind[0] == 'b') {
+        /* BAT: shell_run_batch_file reads via fat_read_file on the
+         * path itself. The preload's buffer is harmless — BAT
+         * never executes from SHELL_RUNTIME_COM_ENTRY_ADDR. */
+        shell_run_batch_file(boot_info, handoff, path);
+        serial_write("OpenGEM: native-dispatch bat=invoked\n");
+    } else {
+        /* COM: the preload already staged the bytes at
+         * SHELL_RUNTIME_COM_ENTRY_ADDR. Pass the basename (for
+         * launch markers) and the actual read size. No argv. */
+        const char *basename = path;
+        {
+            const char *q = path;
+            while (*q) {
+                if (*q == '/' || *q == '\\') basename = q + 1;
+                q++;
+            }
+        }
+        if (read_bytes == 0U) {
+            /* Defensive: treat zero as a dispatch failure. */
+            serial_write("OpenGEM: native-dispatch com=failed\n");
+            serial_write("OpenGEM: native-dispatch complete errorlevel=1\n");
+            return 1;
+        }
+        shell_run_staged_image(boot_info, handoff, basename, read_bytes, "");
+        serial_write("OpenGEM: native-dispatch com=invoked\n");
+    }
+
+    {
+        u32 el = shell_get_errorlevel();
+        char buf[64];
+        u32 n = 0U;
+        const char *prefix = "OpenGEM: native-dispatch complete errorlevel=";
+        while (prefix[n] != '\0' && n < (u32)sizeof(buf) - 16U) {
+            buf[n] = prefix[n]; n++;
+        }
+        /* u32 -> decimal */
+        char tmp[16];
+        u32 ti = 0U;
+        if (el == 0U) { tmp[ti++] = '0'; }
+        else {
+            u32 d = el;
+            while (d > 0U && ti < (u32)sizeof(tmp)) {
+                tmp[ti++] = (char)('0' + (u32)(d % 10U)); d /= 10U;
+            }
+        }
+        while (ti > 0U && n < (u32)sizeof(buf) - 2U) {
+            buf[n++] = tmp[--ti];
+        }
+        buf[n++] = '\n';
+        buf[n]   = '\0';
+        serial_write(buf);
+    }
+
+    return 1;
 }
 
 /*
@@ -6154,10 +6297,14 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
 
     /* OPENGEM-013 — Preload probe. Actually reads the resolved
      * absolute path into the runtime payload buffer, inspects the
-     * on-disk signature, and publishes a verdict. Execution still
-     * defers to shell_run() below; native dispatch lands in
-     * OPENGEM-014+. Classify label is passed by lexical form
-     * (trailing 3 chars of the path). */
+     * on-disk signature, and publishes a verdict. OPENGEM-014
+     * consumes the verdict below: bat/com go through a native
+     * dispatcher that bypasses shell_run()'s name normalization.
+     * Classify label is passed by lexical form (trailing 3 chars
+     * of the path). */
+    const char *preload_verdict = "defer-to-shell-run";
+    const char *preload_reason  = "preload-no-path";
+    u32 preload_read_bytes = 0U;
     {
         const char *classify_label = "unknown";
         if (found_path) {
@@ -6175,12 +6322,27 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
             }
         }
         (void)stage2_opengem_preload_absolute(found_path, found_size,
-                                              classify_label);
+                                              classify_label,
+                                              &preload_verdict,
+                                              &preload_reason,
+                                              &preload_read_bytes);
     }
 
-    /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
-     * and the standard errorlevel capture on exit. */
-    shell_run(boot_info, handoff, found_path);
+    /* OPENGEM-014 — Honor the preload verdict. For bat/com
+     * dispatch-native, invoke the interpreter/runtime directly on
+     * the resolved absolute path (and for COM, on the
+     * already-staged buffer). Skip shell_run() in that case.
+     * Everything else (MZ, mismatch, errors) falls through to the
+     * historical dispatcher below. */
+    if (stage2_opengem_dispatch_native(boot_info, handoff,
+                                       found_path, preload_read_bytes,
+                                       preload_verdict, preload_reason)) {
+        /* Native dispatch happened; skip shell_run(). */
+    } else {
+        /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
+         * and the standard errorlevel capture on exit. */
+        shell_run(boot_info, handoff, found_path);
+    }
 
     /* OPENGEM-008 — Disarm unconditionally (no-op if the marker
      * already fired) and emit the session duration. OPENGEM-009

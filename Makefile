@@ -471,6 +471,9 @@ test-opengem-absolute-dispatch:
 test-opengem-preload:
 	bash ./scripts/test_opengem_preload.sh
 
+test-opengem-native-dispatch:
+	bash ./scripts/test_opengem_native_dispatch.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
