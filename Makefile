@@ -447,6 +447,9 @@ test-bat-interp:
 test-opengem-launch:
 	bash ./scripts/test_opengem_launch.sh
 
+test-opengem-file-browser:
+	bash ./scripts/test_opengem_file_browser.sh
+
 test-vga13-baseline:
 	bash ./scripts/test_vga13_baseline.sh
 

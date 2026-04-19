@@ -14,6 +14,7 @@
 #include "gfx2d.h"
 #include "image.h"
 #include "gfx_modes.h"
+#include "app_catalog.h"
 
 #define SHELL_LINE_MAX 128
 #define SHELL_HISTORY_MAX 32U
@@ -973,6 +974,7 @@ static void shell_print_help(void) {
     video_write("  which X        show where command X is found\n");
     video_write("  vmode          inspect or change video mode\n");
     video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
+    video_write("  catalog  - list discovered apps (FAT + handoff COM catalog)\n");
     video_write("\n");
     video_write("Visuals:\n");
     video_write("  demo           run the real-time graphics showcase\n");
@@ -7229,6 +7231,30 @@ static void shell_cmd_history(void) {
     }
 }
 
+/* ===== OPENGEM-004 — catalog command ===== */
+static void shell_cmd_catalog(void) {
+    u32 i;
+    u32 n = app_catalog_count();
+    video_write("App catalog (FAT + handoff):\n");
+    if (n == 0U) {
+        video_write("  <empty>\n");
+        serial_write("[ catalog ] command: empty\n");
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        const app_catalog_entry_t *e = app_catalog_get(i);
+        if (!e) continue;
+        video_write("  ");
+        video_write(e->name);
+        video_write("  [");
+        video_write(app_catalog_kind_label(e->kind));
+        video_write("]  ");
+        video_write(e->path);
+        video_write("\n");
+    }
+    serial_write("[ catalog ] command: listed entries\n");
+}
+
 /* ===== which/where command ===== */
 static void shell_cmd_which(const char *args, handoff_v0_t *handoff) {
     char name[SHELL_LINE_MAX];
@@ -7946,6 +7972,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "opengem")) {
         (void)shell_run_opengem_interactive(boot_info, handoff);
+        return;
+    }
+
+    if (str_eq(cmd, "catalog")) {
+        shell_cmd_catalog();
         return;
     }
 

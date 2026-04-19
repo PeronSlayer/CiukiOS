@@ -21,7 +21,7 @@ CiukiOS.
 | 1 | OPENGEM-001 | Runtime Validation & Launcher Integration | DONE | `make test-opengem-smoke` |
 | 2 | OPENGEM-002-BAT | BAT Interpretation Hardening | DONE | `make test-bat-interp` |
 | 3 | OPENGEM-003 | Desktop Scene Integration (windowing) | DONE | `make test-opengem-launch` |
-| 4 | OPENGEM-004 | App Discovery and File Catalog | PLANNED | `make test-opengem-file-browser` |
+| 4 | OPENGEM-004 | App Discovery and File Catalog | DONE | `make test-opengem-file-browser` |
 | 5 | OPENGEM-005 | Input and Mouse Hardening in OpenGEM | PLANNED | `make test-opengem-input` |
 | 6 | OPENGEM-006 | DOOM Path Readiness | PLANNED | `scripts/test_doom_via_opengem.sh` |
 
@@ -269,7 +269,7 @@ screen, and restores the dock on return.
 
 ---
 
-## Phase 4 — App Discovery and File Catalog (OPENGEM-004) · PLANNED
+## Phase 4 — App Discovery and File Catalog (OPENGEM-004) · DONE
 **Goal:** Populate OpenGEM with discoverable DOS applications sourced
 from the existing COM catalog and from the FAT image, so the GUI can
 launch real `.COM` / `.EXE` / `.BAT` targets rather than its four

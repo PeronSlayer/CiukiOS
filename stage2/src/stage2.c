@@ -10,6 +10,7 @@
 #include "splash.h"
 #include "disk.h"
 #include "fat.h"
+#include "app_catalog.h"
 #include "pmode_transition.h"
 #include "bootinfo.h"
 #include "handoff.h"
@@ -713,6 +714,11 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
     } else {
         serial_write("[ warn ] FAT layer not mounted\n");
     }
+
+    /* OPENGEM-004 — Initialize app catalog after FAT is ready (or not,
+     * in which case the module falls back to the handoff COM lane
+     * only). Idempotent; safe to call on both boot paths. */
+    (void)app_catalog_init(handoff);
 
     serial_write("[ shell ] mini command loop active\n");
     serial_write("[ stage2 ] next step: handoff to DOS-like runtime\n");
