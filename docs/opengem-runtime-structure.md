@@ -73,6 +73,33 @@ All three converge on `shell_run_opengem_interactive()` in
 | `OpenGEM: runtime not found in FAT, fallback to shell`    | fallback (missing payload) |
 | `OpenGEM: exit detected, returning to shell`              | runtime return             |
 | `[ app ] opengem launch completed`                        | exit                       |
+| `[ ui ] opengem dock state saved: sel=<n>`                | Phase 3 — entry snapshot   |
+| `[ ui ] opengem overlay active`                           | Phase 3 — runtime handoff  |
+| `[ ui ] opengem overlay dismissed, state restored`        | Phase 3 — exit / fallback  |
+
+## Desktop state save/restore contract (OPENGEM-003)
+On every invocation of `shell_run_opengem_interactive()` the helper
+captures a stack-allocated snapshot of the desktop state before any
+preflight probe:
+
+```
+struct {
+    int  launcher_focus;   /* ui_get_launcher_focus() at entry */
+    char status0[64];      /* reserved for future status restore */
+    u8   valid;            /* 1 when the snapshot is populated    */
+} desktop_snapshot;
+```
+
+The snapshot is restored via `ui_set_launcher_focus()` on every
+return path — both the graceful fallback (preflight failure, missing
+payload, FAT not ready) and the normal return after `shell_run()`.
+`ui_set_launcher_focus()` clamps out-of-range indices defensively so
+a hypothetical dock-item-count change cannot wedge the launcher.
+
+The `OPENGEM` entry is rendered with a `[G]` text-mode facsimile
+glyph via `ui_launcher_display_for()`. The canonical action key in
+`g_launcher_items[]` remains `"OPENGEM"` — dispatch, help strings,
+and existing smoke gates keep matching the canonical form.
 
 ## Fallback behavior
 When any preflight check fails the helper returns 0 without invoking

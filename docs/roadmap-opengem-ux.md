@@ -20,7 +20,7 @@ CiukiOS.
 |---|----|-------|--------|------|
 | 1 | OPENGEM-001 | Runtime Validation & Launcher Integration | DONE | `make test-opengem-smoke` |
 | 2 | OPENGEM-002-BAT | BAT Interpretation Hardening | DONE | `make test-bat-interp` |
-| 3 | OPENGEM-003 | Desktop Scene Integration (windowing) | PARTIAL | `make test-opengem-launch` |
+| 3 | OPENGEM-003 | Desktop Scene Integration (windowing) | DONE | `make test-opengem-launch` |
 | 4 | OPENGEM-004 | App Discovery and File Catalog | PLANNED | `make test-opengem-file-browser` |
 | 5 | OPENGEM-005 | Input and Mouse Hardening in OpenGEM | PLANNED | `make test-opengem-input` |
 | 6 | OPENGEM-006 | DOOM Path Readiness | PLANNED | `scripts/test_doom_via_opengem.sh` |
@@ -208,7 +208,7 @@ opengem/desktop/stage2 gates.
 
 ---
 
-## Phase 3 — Desktop Scene Integration (OPENGEM-003) · PARTIAL
+## Phase 3 — Desktop Scene Integration (OPENGEM-003) · DONE
 **Goal:** Promote the current text-mode dock entry from
 "label + launcher-dispatch" to a real OpenGEM-aware window management
 story: the desktop knows it just handed control to a GEM session, can

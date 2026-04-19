@@ -5541,6 +5541,34 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
     const char *found_path = (const char *)0;
     int pi;
     int preflight_ok = 1;
+    /* OPENGEM-003 — Desktop scene integration: per-launch desktop
+     * state snapshot on the stack so nested shell_run / BAT / EXE
+     * cannot corrupt the launcher selection index. */
+    struct {
+        int  launcher_focus;
+        char status0[64];
+        u8   valid;
+    } desktop_snapshot;
+
+    desktop_snapshot.launcher_focus = ui_get_launcher_focus();
+    desktop_snapshot.status0[0] = '\0';
+    desktop_snapshot.valid = 1U;
+    {
+        char marker[48];
+        u32 mi = 0;
+        const char *prefix = "[ ui ] opengem dock state saved: sel=";
+        while (prefix[mi]) { marker[mi] = prefix[mi]; mi++; }
+        /* single-digit focus is sufficient: LAUNCHER_ITEMS=7. */
+        if (desktop_snapshot.launcher_focus >= 0 &&
+            desktop_snapshot.launcher_focus < 10) {
+            marker[mi++] = (char)('0' + desktop_snapshot.launcher_focus);
+        } else {
+            marker[mi++] = '?';
+        }
+        marker[mi++] = '\n';
+        marker[mi]   = '\0';
+        serial_write(marker);
+    }
 
     serial_write("[ app ] opengem launch requested\n");
     serial_write("OpenGEM: boot sequence starting\n");
@@ -5582,13 +5610,24 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
     if (!preflight_ok) {
         video_write("[preflight] FAILED - cannot launch OpenGEM\n");
         video_write("Install: scripts/import_opengem.sh\n");
+        /* OPENGEM-003 — Modal-style fallback line that keeps the
+         * user on the previous launcher selection. */
+        video_write("OPENGEM: n/a - payload not installed\n");
+        serial_write("[ ui ] opengem overlay dismissed, state restored\n");
         serial_write("[ app ] opengem preflight failed\n");
+        if (desktop_snapshot.valid) {
+            ui_set_launcher_focus(desktop_snapshot.launcher_focus);
+        }
         return 0;
     }
 
     video_write("[preflight] PASSED - launching OpenGEM\n");
     serial_write("[ app ] opengem preflight passed\n");
     serial_write("OpenGEM: launcher window initialized\n");
+    /* OPENGEM-003 — Overlay marker: telemetry can correlate UI
+     * "OpenGEM running" state with the boot log. */
+    serial_write("[ ui ] opengem overlay active\n");
+    video_write("OpenGEM running - press ALT+G+Q inside OpenGEM to exit\n");
 
     /* Hand off to shell_run — it owns MZ/EXE/BAT dispatch, argv tail,
      * and the standard errorlevel capture on exit. */
@@ -5596,6 +5635,12 @@ static int shell_run_opengem_interactive(boot_info_t *boot_info,
 
     serial_write("OpenGEM: exit detected, returning to shell\n");
     serial_write("[ app ] opengem launch completed\n");
+    /* OPENGEM-003 — Restore launcher focus so the dock selection
+     * survives the OpenGEM session. */
+    if (desktop_snapshot.valid) {
+        ui_set_launcher_focus(desktop_snapshot.launcher_focus);
+    }
+    serial_write("[ ui ] opengem overlay dismissed, state restored\n");
     return 1;
 }
 

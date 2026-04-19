@@ -149,4 +149,11 @@ void        ui_launcher_prev(void);
 const char *ui_get_launcher_item(void);
 void        ui_render_launcher(void);
 
+/* OPENGEM-003 — Desktop scene integration: launcher focus save/restore
+ * across OpenGEM sessions. Append-only; do not reorder existing
+ * launcher entry points above. */
+int         ui_get_launcher_focus(void);
+void        ui_set_launcher_focus(int index);
+int         ui_launcher_item_count(void);
+
 #endif /* STAGE2_UI_H */

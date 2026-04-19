@@ -719,9 +719,27 @@ void ui_render_windows(void) {
 /* ===== Launcher ===== */
 #define LAUNCHER_ITEMS 7
 
+/* OPENGEM-003 — Desktop scene integration: the OPENGEM entry is
+ * rendered with a `[G]` facsimile glyph prefix as a minimal
+ * text-mode visual distinction vs. the other dock items (placeholder
+ * for a proper 24x24 palette tile when a planar video mode is
+ * active). The action key `OPENGEM` is kept intact in
+ * g_launcher_items[] so dispatch / tests / help strings keep
+ * matching; the glyph is only applied at render time via
+ * ui_launcher_display_for(). */
 static const char *g_launcher_items[LAUNCHER_ITEMS] = {
     "DIR", "MEM", "CLS", "VER", "ASCII", "RUN INIT.COM", "OPENGEM"
 };
+
+static const char *ui_launcher_display_for(const char *action) {
+    if (action && action[0] == 'O' && action[1] == 'P' &&
+        action[2] == 'E' && action[3] == 'N' &&
+        action[4] == 'G' && action[5] == 'E' &&
+        action[6] == 'M' && action[7] == '\0') {
+        return "[G] OPENGEM";
+    }
+    return action;
+}
 static int g_launcher_focus = 0;
 static int g_launcher_active = 0;
 
@@ -738,6 +756,24 @@ void ui_launcher_prev(void) {
 
 const char *ui_get_launcher_item(void) {
     return (g_launcher_focus < LAUNCHER_ITEMS) ? g_launcher_items[g_launcher_focus] : "";
+}
+
+/* OPENGEM-003 — Desktop scene integration: focus save/restore API.
+ * Clamp out-of-range indices defensively: a caller that saved a
+ * focus value before a hypothetical list shrink must not wedge the
+ * dock into an invalid state. */
+int ui_get_launcher_focus(void) {
+    return g_launcher_focus;
+}
+
+void ui_set_launcher_focus(int index) {
+    if (index < 0) index = 0;
+    if (index >= LAUNCHER_ITEMS) index = LAUNCHER_ITEMS - 1;
+    g_launcher_focus = index;
+}
+
+int ui_launcher_item_count(void) {
+    return LAUNCHER_ITEMS;
 }
 
 void ui_render_launcher(void) {
@@ -806,7 +842,7 @@ void ui_render_launcher(void) {
                 lbuf[li++] = ' ';
                 lbuf[li++] = ' ';
             }
-            src = g_launcher_items[i];
+            src = ui_launcher_display_for(g_launcher_items[i]);
             while (*src && li < 30U) lbuf[li++] = *src++;
             lbuf[li] = '\0';
 

@@ -444,6 +444,9 @@ test-opengem-smoke:
 test-bat-interp:
 	bash ./scripts/test_bat_interp.sh
 
+test-opengem-launch:
+	bash ./scripts/test_opengem_launch.sh
+
 test-vga13-baseline:
 	bash ./scripts/test_vga13_baseline.sh
 
