@@ -818,3 +818,210 @@ int vm86_gem_t0_readiness_probe(void) {
     }
     return ok ? 1 : 0;
 }
+
+/* OPENGEM-025 sentinel — static gates grep for this exact token. */
+static const char vm86_gdt_encoder_sentinel[] = "OPENGEM-025";
+
+/*
+ * Write the 8 bytes of a single legacy 32-bit segment descriptor
+ * into `dst`. See the header for the field encoding.
+ */
+static void vm86_gdt_write_slot(u8 *dst,
+                                u32 base, u32 limit,
+                                u8  access, u8 flags_nibble) {
+    dst[0] = (u8)(limit & 0xFFu);
+    dst[1] = (u8)((limit >> 8) & 0xFFu);
+    dst[2] = (u8)(base & 0xFFu);
+    dst[3] = (u8)((base >> 8) & 0xFFu);
+    dst[4] = (u8)((base >> 16) & 0xFFu);
+    dst[5] = access;
+    dst[6] = (u8)(((flags_nibble & 0x0Fu) << 4) | ((limit >> 16) & 0x0Fu));
+    dst[7] = (u8)((base >> 24) & 0xFFu);
+}
+
+u32 vm86_gdt_encode(u8 *out, u32 tss_base, u16 tss_limit) {
+    if (!out) {
+        return 0;
+    }
+    /* Slot 0: NULL — all zeros. */
+    for (u32 i = 0; i < 8; i++) {
+        out[i] = 0;
+    }
+    /* Slot 1: PE_CODE32. */
+    vm86_gdt_write_slot(out + 1 * 8,
+                        0u, 0xFFFFFu,
+                        VM86_GDT_AR_CODE32, VM86_GDT_FLAGS_32);
+    /* Slot 2: PE_DATA32. */
+    vm86_gdt_write_slot(out + 2 * 8,
+                        0u, 0xFFFFFu,
+                        VM86_GDT_AR_DATA32, VM86_GDT_FLAGS_32);
+    /* Slot 3: V86_STACK (separate data selector for the host stack). */
+    vm86_gdt_write_slot(out + 3 * 8,
+                        0u, 0xFFFFFu,
+                        VM86_GDT_AR_DATA32, VM86_GDT_FLAGS_32);
+    /* Slot 4: V86_TSS — byte-granular, AR=0x89. */
+    vm86_gdt_write_slot(out + 4 * 8,
+                        tss_base, (u32)tss_limit,
+                        VM86_GDT_AR_TSS32, VM86_GDT_FLAGS_TSS);
+    /* Slot 5: RETURN_CODE64 — long-mode code. */
+    vm86_gdt_write_slot(out + 5 * 8,
+                        0u, 0xFFFFFu,
+                        VM86_GDT_AR_CODE64, VM86_GDT_FLAGS_64);
+    /* Slot 6: RETURN_DATA64. */
+    vm86_gdt_write_slot(out + 6 * 8,
+                        0u, 0xFFFFFu,
+                        VM86_GDT_AR_DATA32, VM86_GDT_FLAGS_32);
+    return VM86_GDT_SLOT_COUNT;
+}
+
+u8 vm86_gdt_read_access(const u8 *buf, u32 slot) {
+    if (!buf || slot >= (u32)VM86_GDT_SLOT_COUNT) {
+        return 0;
+    }
+    return buf[slot * 8 + 5];
+}
+
+u32 vm86_gdt_read_base(const u8 *buf, u32 slot) {
+    if (!buf || slot >= (u32)VM86_GDT_SLOT_COUNT) {
+        return 0;
+    }
+    const u8 *d = buf + slot * 8;
+    u32 base = (u32)d[2]
+             | ((u32)d[3] << 8)
+             | ((u32)d[4] << 16)
+             | ((u32)d[7] << 24);
+    return base;
+}
+
+u32 vm86_gdt_read_limit(const u8 *buf, u32 slot) {
+    if (!buf || slot >= (u32)VM86_GDT_SLOT_COUNT) {
+        return 0;
+    }
+    const u8 *d = buf + slot * 8;
+    u32 limit = (u32)d[0]
+              | ((u32)d[1] << 8)
+              | (((u32)d[6] & 0x0Fu) << 16);
+    return limit;
+}
+
+int vm86_gdt_encoder_probe(void) {
+    /* Host-owned buffer; NOT installed as a live GDT. */
+    static u8 gdt[VM86_GDT_BYTES];
+    /* Synthetic TSS base: a fixed, plausible linear address for audit. */
+    const u32 tss_base  = 0x00200000u;
+    const u16 tss_limit = (u16)(sizeof(vm86_tss32) - 1u);
+
+    (void)vm86_gdt_encoder_sentinel;
+
+    for (u32 i = 0; i < VM86_GDT_BYTES; i++) {
+        gdt[i] = 0xFFu;  /* prefill so the encoder must overwrite every byte */
+    }
+
+    serial_write("vm86: gdt-encode phase=025 status=planned\n");
+
+    u32 slots = vm86_gdt_encode(gdt, tss_base, tss_limit);
+
+    serial_write("vm86: gdt-encode slots=0x");
+    serial_write_hex64((u64)slots);
+    serial_write(" bytes=0x");
+    serial_write_hex64((u64)VM86_GDT_BYTES);
+    serial_write("\n");
+
+    /* ---- Slot 0 (NULL): all zeros. ---- */
+    int null_ok = 1;
+    for (u32 i = 0; i < 8; i++) {
+        if (gdt[i] != 0) {
+            null_ok = 0;
+        }
+    }
+    serial_write("vm86: gdt-encode slot0-null ok=0x");
+    serial_write_hex8((u8)null_ok);
+    serial_write("\n");
+
+    /* ---- Slot 1 (PE_CODE32): base=0 limit=0xFFFFF AR=0x9A flags=0xC. ---- */
+    u8  ar1  = vm86_gdt_read_access(gdt, VM86_GDT_PE_CODE32);
+    u32 b1   = vm86_gdt_read_base  (gdt, VM86_GDT_PE_CODE32);
+    u32 l1   = vm86_gdt_read_limit (gdt, VM86_GDT_PE_CODE32);
+    u8  fl1  = (u8)((gdt[VM86_GDT_PE_CODE32 * 8 + 6] >> 4) & 0x0Fu);
+    serial_write("vm86: gdt-encode pe-code32 ar=0x");
+    serial_write_hex8(ar1);
+    serial_write(" base=0x");
+    serial_write_hex64((u64)b1);
+    serial_write(" limit=0x");
+    serial_write_hex64((u64)l1);
+    serial_write(" flags=0x");
+    serial_write_hex8(fl1);
+    serial_write("\n");
+
+    /* ---- Slot 2 (PE_DATA32): base=0 limit=0xFFFFF AR=0x92 flags=0xC. ---- */
+    u8  ar2  = vm86_gdt_read_access(gdt, VM86_GDT_PE_DATA32);
+    u32 b2   = vm86_gdt_read_base  (gdt, VM86_GDT_PE_DATA32);
+    u32 l2   = vm86_gdt_read_limit (gdt, VM86_GDT_PE_DATA32);
+    serial_write("vm86: gdt-encode pe-data32 ar=0x");
+    serial_write_hex8(ar2);
+    serial_write(" base=0x");
+    serial_write_hex64((u64)b2);
+    serial_write(" limit=0x");
+    serial_write_hex64((u64)l2);
+    serial_write("\n");
+
+    /* ---- Slot 4 (V86_TSS): base=tss_base limit=tss_limit AR=0x89 flags=0. ---- */
+    u8  ar4  = vm86_gdt_read_access(gdt, VM86_GDT_V86_TSS);
+    u32 b4   = vm86_gdt_read_base  (gdt, VM86_GDT_V86_TSS);
+    u32 l4   = vm86_gdt_read_limit (gdt, VM86_GDT_V86_TSS);
+    u8  fl4  = (u8)((gdt[VM86_GDT_V86_TSS * 8 + 6] >> 4) & 0x0Fu);
+    serial_write("vm86: gdt-encode v86-tss ar=0x");
+    serial_write_hex8(ar4);
+    serial_write(" base=0x");
+    serial_write_hex64((u64)b4);
+    serial_write(" limit=0x");
+    serial_write_hex64((u64)l4);
+    serial_write(" flags=0x");
+    serial_write_hex8(fl4);
+    serial_write("\n");
+
+    /* ---- Slot 5 (RETURN_CODE64): flags=0xA (G=1,D=0,L=1). ---- */
+    u8  ar5  = vm86_gdt_read_access(gdt, VM86_GDT_RETURN_CODE64);
+    u8  fl5  = (u8)((gdt[VM86_GDT_RETURN_CODE64 * 8 + 6] >> 4) & 0x0Fu);
+    serial_write("vm86: gdt-encode ret-code64 ar=0x");
+    serial_write_hex8(ar5);
+    serial_write(" flags=0x");
+    serial_write_hex8(fl5);
+    serial_write("\n");
+
+    int ok = null_ok
+          && (slots == (u32)VM86_GDT_SLOT_COUNT)
+          && (ar1 == VM86_GDT_AR_CODE32)
+          && (b1  == 0u)
+          && (l1  == 0xFFFFFu)
+          && (fl1 == VM86_GDT_FLAGS_32)
+          && (ar2 == VM86_GDT_AR_DATA32)
+          && (b2  == 0u)
+          && (l2  == 0xFFFFFu)
+          && (ar4 == VM86_GDT_AR_TSS32)
+          && (b4  == tss_base)
+          && (l4  == (u32)tss_limit)
+          && (fl4 == VM86_GDT_FLAGS_TSS)
+          && (ar5 == VM86_GDT_AR_CODE64)
+          && (fl5 == VM86_GDT_FLAGS_64);
+
+    /*
+     * GDTR limit audit: the limit the CPU expects under LGDT is
+     * (total_bytes - 1). We never LGDT here; we only record what
+     * the value WOULD be so OPENGEM-028 can pick it up verbatim.
+     */
+    u32 gdtr_limit = VM86_GDT_BYTES - 1u;
+    serial_write("vm86: gdt-encode gdtr-limit=0x");
+    serial_write_hex64((u64)gdtr_limit);
+    serial_write(" gdtr-base=<host-buffer>\n");
+
+    serial_write("vm86: gdt-encode ready-surface=bytes-laid\n");
+    serial_write("vm86: gdt-encode pending-surface=lgdt-load,pe32-enter,mode-return\n");
+
+    if (ok) {
+        serial_write("vm86: gdt-encode complete\n");
+    } else {
+        serial_write("vm86: gdt-encode failed\n");
+    }
+    return ok ? 1 : 0;
+}

@@ -501,6 +501,9 @@ test-vm86-int10-0e:
 test-vm86-gem-t0:
 	bash ./scripts/test_vm86_gem_t0.sh
 
+test-vm86-gdt-encode:
+	bash ./scripts/test_vm86_gdt_encode.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

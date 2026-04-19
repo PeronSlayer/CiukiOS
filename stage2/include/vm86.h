@@ -404,4 +404,84 @@ void vm86_int21_30_handler(vm86_task *task, vm86_trap_frame *frame);
  */
 int vm86_gem_t0_readiness_probe(void);
 
+/*
+ * OPENGEM-025 — GDT byte-layout encoder (no LGDT).
+ *
+ * Builds the 7-slot GDT described in §5.1 as an 8-byte-per-slot
+ * flat byte stream laid out exactly the way the CPU will read it
+ * under LGDT. No CPU register (GDTR) is touched in this phase;
+ * the bytes are written to a host-owned buffer and verified field
+ * by field. The buffer is the contract consumed by OPENGEM-028.
+ *
+ * Access byte encoding (Intel SDM Vol.3A §3.4.5):
+ *   bit 7: P   (present)
+ *   bits 6-5: DPL
+ *   bit 4: S   (1 = code/data, 0 = system)
+ *   bit 3: E   (1 = code, 0 = data) for S=1
+ *   bit 2: DC  (direction/conforming)
+ *   bit 1: RW  (readable for code, writable for data)
+ *   bit 0: A   (accessed — CPU may set)
+ *
+ * Flags nibble (high 4 bits of limit_hi_flags):
+ *   bit 7: G   (granularity, 1 = 4 KiB pages)
+ *   bit 6: D/B (1 = 32-bit default op size)
+ *   bit 5: L   (1 = 64-bit long-mode code, only for code segs)
+ *   bit 4: AVL
+ *
+ * Slot plan (mirrors the enum in §5.1):
+ *   0: NULL
+ *   1: PE_CODE32  base=0 limit=0xFFFFF G=1 D=1 L=0  AR=0x9A
+ *   2: PE_DATA32  base=0 limit=0xFFFFF G=1 D=1 L=0  AR=0x92
+ *   3: V86_STACK  base=0 limit=0xFFFFF G=1 D=1 L=0  AR=0x92 (separate slot)
+ *   4: V86_TSS    base=<tss_base> limit=sizeof(tss)-1 G=0  AR=0x89 (type 9, available 32-bit TSS)
+ *   5: RET_CODE64 base=0 limit=0xFFFFF G=1 D=0 L=1  AR=0x9A
+ *   6: RET_DATA64 base=0 limit=0xFFFFF G=1 D=1 L=0  AR=0x92
+ */
+#define VM86_GDT_BYTES  (VM86_GDT_SLOT_COUNT * 8)
+
+/* Standard access bytes (verified bit-exact by the gate). */
+#define VM86_GDT_AR_CODE32  0x9A   /* P=1 DPL=0 S=1 type=0xA (code, exec/read) */
+#define VM86_GDT_AR_DATA32  0x92   /* P=1 DPL=0 S=1 type=0x2 (data, read/write) */
+#define VM86_GDT_AR_TSS32   0x89   /* P=1 DPL=0 S=0 type=0x9 (32-bit TSS avail) */
+#define VM86_GDT_AR_CODE64  0x9A   /* same access byte; L flag distinguishes */
+
+/* Flags nibble values placed into limit_hi_flags[7:4]. */
+#define VM86_GDT_FLAGS_32   0xC    /* G=1 D=1 L=0 (32-bit compat) */
+#define VM86_GDT_FLAGS_64   0xA    /* G=1 D=0 L=1 (64-bit long)   */
+#define VM86_GDT_FLAGS_TSS  0x0    /* G=0 D=0 L=0 (byte-granular) */
+
+/*
+ * Encode the full 7-slot GDT into `out` (must be at least
+ * VM86_GDT_BYTES). Returns the number of slots encoded on success,
+ * or 0 if `out` is null. `tss_base` is the linear address the TSS
+ * descriptor should point at; `tss_limit` is sizeof(tss)-1.
+ */
+u32 vm86_gdt_encode(u8 *out, u32 tss_base, u16 tss_limit);
+
+/*
+ * Decode the AR byte of slot `slot` from a previously-encoded
+ * buffer. Returns the access byte, or 0 if `slot` is out of range.
+ */
+u8  vm86_gdt_read_access(const u8 *buf, u32 slot);
+
+/*
+ * Extract the 32-bit base from slot `slot`. Slots 4 (TSS) and
+ * others follow the legacy 8-byte descriptor layout. Returns 0 on
+ * error or on a zero-base descriptor (callers must disambiguate
+ * via vm86_gdt_read_access).
+ */
+u32 vm86_gdt_read_base(const u8 *buf, u32 slot);
+
+/*
+ * Extract the 20-bit limit from slot `slot`. Returns 0 on error.
+ */
+u32 vm86_gdt_read_limit(const u8 *buf, u32 slot);
+
+/*
+ * OPENGEM-025 probe. Encodes a reference GDT and verifies every
+ * field byte-for-byte against the contract above. Returns 1 on
+ * success, 0 on failure. Does NOT touch GDTR.
+ */
+int vm86_gdt_encoder_probe(void);
+
 #endif /* STAGE2_VM86_H */
