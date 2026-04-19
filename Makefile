@@ -492,6 +492,9 @@ test-vm86-dispatcher:
 test-vm86-int21-4c:
 	bash ./scripts/test_vm86_int21_4c.sh
 
+test-vm86-console:
+	bash ./scripts/test_vm86_console.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

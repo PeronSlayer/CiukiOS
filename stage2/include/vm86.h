@@ -301,4 +301,48 @@ void vm86_int21_4c_handler(vm86_task *task, vm86_trap_frame *frame);
  */
 int vm86_int21_4c_probe(void);
 
+/*
+ * OPENGEM-022 — INT 20h terminate + INT 21h AH=02h putchar +
+ * INT 21h AH=09h $-terminated string write.
+ *
+ * Handlers are invoked via the dispatcher. For AH=02h/09h the
+ * output is captured into a host-side console sink so the probe can
+ * assert byte-level correctness without needing a running TTY.
+ * AH=09h walks the guest's conventional memory starting at DS:DX
+ * until it finds a '$' terminator (DOS convention) or the sink
+ * fills up.
+ *
+ * The sink is a host-only observability object; real console
+ * routing to the CiukiOS services bridge lands in a later phase.
+ */
+
+#define VM86_CONSOLE_SINK_BYTES 0x100
+
+typedef struct vm86_console_sink {
+    u8  buf[VM86_CONSOLE_SINK_BYTES];
+    u32 count;
+    u32 overflow;
+} vm86_console_sink;
+
+/* Install / clear the process-wide console sink pointer. */
+void vm86_console_sink_attach(vm86_console_sink *sink);
+void vm86_console_sink_reset(vm86_console_sink *sink);
+
+/* INT 20h terminate (errorlevel = 0, reason = INT20). */
+void vm86_int20_handler(vm86_task *task, vm86_trap_frame *frame);
+
+/* INT 21h AH=02h: write DL to stdout. */
+void vm86_int21_02_handler(vm86_task *task, vm86_trap_frame *frame);
+
+/* INT 21h AH=09h: write $-terminated string at DS:DX to stdout. */
+void vm86_int21_09_handler(vm86_task *task, vm86_trap_frame *frame);
+
+/*
+ * OPENGEM-022 probe. Drives all three handlers end-to-end with a
+ * host-side conventional memory window and console sink, verifying
+ * byte-accurate output plus INT 20h exit semantics. Returns 1 on
+ * success.
+ */
+int vm86_console_probe(void);
+
 #endif /* STAGE2_VM86_H */

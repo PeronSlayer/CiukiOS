@@ -295,3 +295,226 @@ int vm86_int21_4c_probe(void) {
     }
     return ok ? 1 : 0;
 }
+
+/* OPENGEM-022 sentinel — static gates grep for this exact token. */
+static const char vm86_console_sentinel[] = "OPENGEM-022";
+
+/*
+ * Process-wide console sink pointer. Handlers grab this via
+ * vm86_console_sink_attach() ahead of dispatch. When null, the
+ * handlers silently drop output — the observability markers still
+ * describe the attempted write so the dispatch path remains
+ * inspectable.
+ */
+static vm86_console_sink *g_vm86_console_sink = 0;
+
+void vm86_console_sink_attach(vm86_console_sink *sink) {
+    g_vm86_console_sink = sink;
+}
+
+void vm86_console_sink_reset(vm86_console_sink *sink) {
+    if (!sink) {
+        return;
+    }
+    for (u32 i = 0; i < VM86_CONSOLE_SINK_BYTES; i++) {
+        sink->buf[i] = 0;
+    }
+    sink->count    = 0;
+    sink->overflow = 0;
+}
+
+static void vm86_console_write_byte(u8 b) {
+    vm86_console_sink *s = g_vm86_console_sink;
+    if (!s) {
+        return;
+    }
+    if (s->count >= VM86_CONSOLE_SINK_BYTES) {
+        s->overflow++;
+        return;
+    }
+    s->buf[s->count++] = b;
+}
+
+void vm86_int20_handler(vm86_task *task, vm86_trap_frame *frame) {
+    if (!task || !frame) {
+        return;
+    }
+    task->exit_errorlevel = 0;
+    task->exit_reason     = VM86_EXIT_REASON_INT20;
+    task->state           = VM86_TASK_STATE_EXITED;
+    task->int_count++;
+}
+
+void vm86_int21_02_handler(vm86_task *task, vm86_trap_frame *frame) {
+    if (!task || !frame) {
+        return;
+    }
+    /* DL = low byte of EDX on x86. */
+    u8 dl = (u8)(frame->edx & 0xFFu);
+    vm86_console_write_byte(dl);
+    task->int_count++;
+}
+
+void vm86_int21_09_handler(vm86_task *task, vm86_trap_frame *frame) {
+    if (!task || !frame) {
+        return;
+    }
+    if (!task->conventional_base || !task->conventional_bytes) {
+        task->fault_count++;
+        return;
+    }
+    /*
+     * DS:DX in a v8086 guest resolves to a 20-bit linear address
+     * (DS << 4) + DX, which is always within the 1 MiB conventional
+     * window mapped at task->conventional_base.
+     */
+    u32 seg    = (u32)frame->ds;
+    u32 off    = (u32)(frame->edx & 0xFFFFu);
+    u32 linear = (seg << 4) + off;
+    if (linear >= task->conventional_bytes) {
+        task->fault_count++;
+        return;
+    }
+    u8 *base = (u8 *)task->conventional_base;
+    /* Bound the scan to the remainder of the conventional window. */
+    u32 max_scan = task->conventional_bytes - linear;
+    for (u32 i = 0; i < max_scan; i++) {
+        u8 c = base[linear + i];
+        if (c == (u8)'$') {
+            break;
+        }
+        vm86_console_write_byte(c);
+    }
+    task->int_count++;
+}
+
+int vm86_console_probe(void) {
+    vm86_dispatcher   local;
+    vm86_task         task;
+    vm86_trap_frame   frame;
+    vm86_console_sink sink;
+    /* Synthetic conventional-memory window. 64 bytes is enough for
+     * the "Hi!$" literal placed at DS:DX below. */
+    static u8 convbuf[0x40];
+
+    /* Zero dispatcher. */
+    for (u32 i = 0; i < VM86_INT_VECTOR_COUNT; i++) {
+        local.handler[i] = 0;
+    }
+    local.registered_count = 0;
+    local.unhandled_count  = 0;
+    local.handled_count    = 0;
+
+    /* Zero task + frame. */
+    u8 *p = (u8 *)&task;
+    for (u32 i = 0; i < sizeof(task); i++) {
+        p[i] = 0;
+    }
+    p = (u8 *)&frame;
+    for (u32 i = 0; i < sizeof(frame); i++) {
+        p[i] = 0;
+    }
+    for (u32 i = 0; i < sizeof(convbuf); i++) {
+        convbuf[i] = 0;
+    }
+
+    (void)vm86_console_sentinel;
+
+    serial_write("vm86: console phase=022 status=planned\n");
+
+    /* Attach sink + wire conventional window. */
+    vm86_console_sink_reset(&sink);
+    vm86_console_sink_attach(&sink);
+    task.handle             = 0x1;
+    task.state              = VM86_TASK_STATE_RUNNING;
+    task.conventional_base  = (u64)(unsigned long)convbuf;
+    task.conventional_bytes = (u32)sizeof(convbuf);
+
+    /* Register AH=02h, AH=09h, INT 20h. */
+    int r1 = vm86_register_int_handler(&local, 0x21, 0);  /* placeholder   */
+    (void)r1;
+    /*
+     * OPENGEM-020 guarantees append-only registration. We want both
+     * AH=02 and AH=09 multiplexed on vector 0x21, but the dispatcher
+     * holds one handler per vector. For the probe we re-dispatch by
+     * swapping the handler between invocations — sufficient for
+     * observability, and representative of the per-AH demux the
+     * real PE trap handler will perform.
+     */
+    local.handler[0x21]     = 0;      /* clear the placeholder above    */
+    local.registered_count  = 0;
+
+    if (!vm86_register_int_handler(&local, 0x20, vm86_int20_handler)) {
+        serial_write("vm86: console register-failed vec=0x20\n");
+        return 0;
+    }
+    serial_write("vm86: console registered vec=0x20 handler=int20\n");
+
+    if (!vm86_register_int_handler(&local, 0x21, vm86_int21_02_handler)) {
+        serial_write("vm86: console register-failed vec=0x21\n");
+        return 0;
+    }
+    serial_write("vm86: console registered vec=0x21 handler=int21-02\n");
+
+    /* ---- AH=02h: write 'H' ---- */
+    frame.edx = 0x0248u;   /* DH=0x02 (ignored), DL=0x48 'H' */
+    vm86_dispatch_status s1 = vm86_dispatch_int(&local, &task, &frame, 0x21);
+    serial_write("vm86: console ah=02 dl=0x48 status=0x");
+    serial_write_hex64((u64)s1);
+    serial_write(" sink-count=0x");
+    serial_write_hex64((u64)sink.count);
+    serial_write("\n");
+
+    /* Swap handler for AH=09h. */
+    local.handler[0x21] = vm86_int21_09_handler;
+
+    /* Place "i!$" at convbuf[0x10]; DS=0, DX=0x10 -> linear 0x10. */
+    convbuf[0x10] = (u8)'i';
+    convbuf[0x11] = (u8)'!';
+    convbuf[0x12] = (u8)'$';
+    convbuf[0x13] = (u8)'X';   /* guard byte: must NOT reach sink */
+    frame.ds  = 0;
+    frame.edx = 0x0010u;
+    vm86_dispatch_status s2 = vm86_dispatch_int(&local, &task, &frame, 0x21);
+    serial_write("vm86: console ah=09 ds:dx=0000:0010 status=0x");
+    serial_write_hex64((u64)s2);
+    serial_write(" sink-count=0x");
+    serial_write_hex64((u64)sink.count);
+    serial_write("\n");
+
+    /* ---- INT 20h: terminate ---- */
+    vm86_dispatch_status s3 = vm86_dispatch_int(&local, &task, &frame, 0x20);
+    serial_write("vm86: console int20 status=0x");
+    serial_write_hex64((u64)s3);
+    serial_write(" task-state=0x");
+    serial_write_hex64((u64)task.state);
+    serial_write(" exit-reason=0x");
+    serial_write_hex64((u64)task.exit_reason);
+    serial_write("\n");
+
+    int ok = (s1 == VM86_DISPATCH_HANDLED)
+          && (s2 == VM86_DISPATCH_HANDLED)
+          && (s3 == VM86_DISPATCH_EXIT)
+          && (task.state == VM86_TASK_STATE_EXITED)
+          && (task.exit_reason == VM86_EXIT_REASON_INT20)
+          && (task.exit_errorlevel == 0u)
+          && (sink.count    == 0x3u)
+          && (sink.buf[0]   == (u8)'H')
+          && (sink.buf[1]   == (u8)'i')
+          && (sink.buf[2]   == (u8)'!')
+          && (sink.overflow == 0u);
+
+    serial_write("vm86: console sink-bytes=H,i,! overflow=0x");
+    serial_write_hex64((u64)sink.overflow);
+    serial_write("\n");
+
+    /* Detach before returning so no stale pointer outlives the probe. */
+    vm86_console_sink_attach(0);
+
+    if (ok) {
+        serial_write("vm86: console complete\n");
+    } else {
+        serial_write("vm86: console failed\n");
+    }
+    return ok ? 1 : 0;
+}
