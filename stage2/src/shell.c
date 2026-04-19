@@ -13,6 +13,7 @@
 #include "serial.h"
 #include "gfx2d.h"
 #include "image.h"
+#include "vm86.h"
 #include "gfx_modes.h"
 #include "app_catalog.h"
 
@@ -4351,6 +4352,30 @@ static void shell_run_staged_image(
             shell_set_errorlevel(1U);
             g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_BAD_FORMAT;
             return;
+        }
+    }
+
+    /*
+     * OPENGEM-030 — MZ live-switch gate wire-up.
+     *
+     * Default boot never flips the armed flag, so the live-gate path
+     * is observability-only: we emit a marker indicating whether the
+     * armed path would fire for this MZ, then fall through to the
+     * existing stage2-native dosrun. When the gate IS armed (only via
+     * explicit test code arming the live-switch with the magic),
+     * we additionally invoke vm86_live_switch_execute() which today
+     * only runs the OPENGEM-027 retq stubs — no CPU mutation.
+     *
+     * This keeps default boot behavior byte-identical to pre-030
+     * while proving the wire-up exists.
+     */
+    if (is_mz) {
+        if (vm86_live_switch_is_armed()) {
+            serial_write("OpenGEM: mz-live-gate armed=1 action=execute-stubs\n");
+            (void)vm86_live_switch_execute();
+            serial_write("OpenGEM: mz-live-gate fallthrough=stage2-dosrun\n");
+        } else {
+            serial_write("OpenGEM: mz-live-gate armed=0 fallback=defer-to-shell-run\n");
         }
     }
 

@@ -64,7 +64,10 @@ gf "$C" "vm86: live-switch arm-probe complete" "probe complete"
 # No boot-path invocation of the armed execute or arm: shell.c /
 # stage2.c / any other stage2 source may NOT call these symbols yet.
 # OPENGEM-030 will add exactly one gated call site in shell.c.
-for sym in vm86_live_switch_execute vm86_live_switch_arm; do
+# Only vm86_live_switch_arm remains boot-path-forbidden: only test code
+# may arm the live-switch. vm86_live_switch_execute is wired from
+# shell.c at OPENGEM-030 (gated by is_armed, so a no-op on default boot).
+for sym in vm86_live_switch_arm; do
     hits=$(grep -RnE --include='*.c' --include='*.S' -w "$sym" stage2/ 2>/dev/null \
          | grep -v "^stage2/src/vm86.c:" \
          | grep -v "^stage2/include/vm86.h:" \

@@ -516,6 +516,9 @@ test-vm86-live-plan:
 test-vm86-arm-gate:
 	bash ./scripts/test_vm86_arm_gate.sh
 
+test-vm86-gem-wire:
+	bash ./scripts/test_vm86_gem_wire.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
