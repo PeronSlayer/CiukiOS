@@ -345,4 +345,25 @@ void vm86_int21_09_handler(vm86_task *task, vm86_trap_frame *frame);
  */
 int vm86_console_probe(void);
 
+/*
+ * OPENGEM-023 — INT 10h AH=0Eh teletype (video BIOS write-char).
+ *
+ * Legacy BIOS teletype output. Writes AL as a character at the
+ * current cursor, auto-advances, and wraps at the end of the line.
+ * BH (page number) and BL (foreground colour for graphics modes)
+ * are ignored by this observability stub; the byte is routed to
+ * the same host-side console sink used by INT 21h.
+ *
+ * This is the third and final write-path handler required before
+ * OPENGEM-024 can attempt gem.exe first-INT observability.
+ */
+void vm86_int10_0e_handler(vm86_task *task, vm86_trap_frame *frame);
+
+/*
+ * OPENGEM-023 probe. Streams a short string via repeated INT 10h
+ * AH=0Eh invocations and asserts byte-accurate capture in the
+ * console sink. Returns 1 on success.
+ */
+int vm86_int10_0e_probe(void);
+
 #endif /* STAGE2_VM86_H */

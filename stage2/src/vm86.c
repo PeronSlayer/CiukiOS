@@ -518,3 +518,100 @@ int vm86_console_probe(void) {
     }
     return ok ? 1 : 0;
 }
+
+/* OPENGEM-023 sentinel — static gates grep for this exact token. */
+static const char vm86_int10_0e_sentinel[] = "OPENGEM-023";
+
+void vm86_int10_0e_handler(vm86_task *task, vm86_trap_frame *frame) {
+    if (!task || !frame) {
+        return;
+    }
+    /* AL = low byte of EAX. BH (page), BL (fg colour) ignored. */
+    u8 al = (u8)(frame->eax & 0xFFu);
+    vm86_console_write_byte(al);
+    task->int_count++;
+}
+
+int vm86_int10_0e_probe(void) {
+    vm86_dispatcher   local;
+    vm86_task         task;
+    vm86_trap_frame   frame;
+    vm86_console_sink sink;
+
+    for (u32 i = 0; i < VM86_INT_VECTOR_COUNT; i++) {
+        local.handler[i] = 0;
+    }
+    local.registered_count = 0;
+    local.unhandled_count  = 0;
+    local.handled_count    = 0;
+
+    u8 *p = (u8 *)&task;
+    for (u32 i = 0; i < sizeof(task); i++) {
+        p[i] = 0;
+    }
+    p = (u8 *)&frame;
+    for (u32 i = 0; i < sizeof(frame); i++) {
+        p[i] = 0;
+    }
+
+    (void)vm86_int10_0e_sentinel;
+
+    serial_write("vm86: int10-0e phase=023 status=planned\n");
+
+    vm86_console_sink_reset(&sink);
+    vm86_console_sink_attach(&sink);
+    task.handle = 0x1;
+    task.state  = VM86_TASK_STATE_RUNNING;
+
+    if (!vm86_register_int_handler(&local, 0x10, vm86_int10_0e_handler)) {
+        serial_write("vm86: int10-0e register-failed vec=0x10\n");
+        vm86_console_sink_attach(0);
+        return 0;
+    }
+
+    serial_write("vm86: int10-0e registered vec=0x10 handler=teletype\n");
+
+    /* Stream "OK" via two INT 10h AH=0Eh calls. */
+    static const u8 payload[] = { (u8)'O', (u8)'K' };
+    vm86_dispatch_status s0 = VM86_DISPATCH_UNHANDLED;
+    vm86_dispatch_status s1 = VM86_DISPATCH_UNHANDLED;
+
+    /* i=0 */
+    frame.eax = (u32)0x0E00u | (u32)payload[0];
+    s0 = vm86_dispatch_int(&local, &task, &frame, 0x10);
+    /* i=1 */
+    frame.eax = (u32)0x0E00u | (u32)payload[1];
+    s1 = vm86_dispatch_int(&local, &task, &frame, 0x10);
+
+    serial_write("vm86: int10-0e stream len=0x");
+    serial_write_hex64((u64)sizeof(payload));
+    serial_write(" sink-count=0x");
+    serial_write_hex64((u64)sink.count);
+    serial_write(" last-status=0x");
+    serial_write_hex64((u64)s1);
+    serial_write("\n");
+
+    int ok = (s0 == VM86_DISPATCH_HANDLED)
+          && (s1 == VM86_DISPATCH_HANDLED)
+          && (sink.count == 0x2u)
+          && (sink.buf[0] == (u8)'O')
+          && (sink.buf[1] == (u8)'K')
+          && (sink.overflow == 0u)
+          && (local.handled_count == 0x2u)
+          && (task.int_count == 0x2u);
+
+    serial_write("vm86: int10-0e sink-bytes=O,K handled-count=0x");
+    serial_write_hex64((u64)local.handled_count);
+    serial_write(" int-count=0x");
+    serial_write_hex64((u64)task.int_count);
+    serial_write("\n");
+
+    vm86_console_sink_attach(0);
+
+    if (ok) {
+        serial_write("vm86: int10-0e complete\n");
+    } else {
+        serial_write("vm86: int10-0e failed\n");
+    }
+    return ok ? 1 : 0;
+}
