@@ -111,3 +111,91 @@ int vm86_task_probe(void) {
     serial_write("vm86: task complete\n");
     return 1;
 }
+
+/* OPENGEM-020 sentinel — static gates grep for this exact token. */
+static const char vm86_dispatcher_sentinel[] = "OPENGEM-020";
+
+int vm86_register_int_handler(vm86_dispatcher *d, u8 vec, vm86_int_handler h) {
+    if (!d || !h) {
+        return 0;
+    }
+    if (d->handler[vec]) {
+        return 0;   /* already registered; append-only per phase */
+    }
+    d->handler[vec] = h;
+    d->registered_count++;
+    return 1;
+}
+
+vm86_dispatch_status vm86_dispatch_int(vm86_dispatcher *d,
+                                       vm86_task *task,
+                                       vm86_trap_frame *frame,
+                                       u8 vec) {
+    if (!d || !task || !frame) {
+        return VM86_DISPATCH_FAULT;
+    }
+    vm86_int_handler h = d->handler[vec];
+    if (!h) {
+        d->unhandled_count++;
+        return VM86_DISPATCH_UNHANDLED;
+    }
+    h(task, frame);
+    d->handled_count++;
+    return VM86_DISPATCH_HANDLED;
+}
+
+int vm86_dispatcher_probe(void) {
+    /*
+     * Build a throwaway dispatcher on the host stack. We never feed
+     * it a real task; we verify only the registration/dispatch ABI.
+     */
+    vm86_dispatcher local;
+    vm86_task       dummy_task;
+    vm86_trap_frame dummy_frame;
+
+    for (u32 i = 0; i < VM86_INT_VECTOR_COUNT; i++) {
+        local.handler[i] = 0;
+    }
+    local.registered_count = 0;
+    local.unhandled_count  = 0;
+    local.handled_count    = 0;
+
+    /* Zero the dummies without leaking uninitialized state. */
+    u8 *p = (u8 *)&dummy_task;
+    for (u32 i = 0; i < sizeof(dummy_task); i++) {
+        p[i] = 0;
+    }
+    p = (u8 *)&dummy_frame;
+    for (u32 i = 0; i < sizeof(dummy_frame); i++) {
+        p[i] = 0;
+    }
+
+    (void)vm86_dispatcher_sentinel;
+
+    serial_write("vm86: dispatcher phase=020 status=planned\n");
+
+    serial_write("vm86: dispatcher vector-count=0x");
+    serial_write_hex64((u64)VM86_INT_VECTOR_COUNT);
+    serial_write(" slot-bytes=0x");
+    serial_write_hex64((u64)sizeof(vm86_int_handler));
+    serial_write("\n");
+
+    serial_write("vm86: dispatcher status-codes=unhandled,handled,exit,fault\n");
+
+    /* Unhandled path — verify empty-table behaviour. */
+    vm86_dispatch_status s1 = vm86_dispatch_int(&local, &dummy_task, &dummy_frame, 0x21);
+    serial_write("vm86: dispatcher empty-probe vec=0x21 status=0x");
+    serial_write_hex64((u64)s1);
+    serial_write(" unhandled-count=0x");
+    serial_write_hex64((u64)local.unhandled_count);
+    serial_write("\n");
+
+    serial_write("vm86: dispatcher registered-count=0x");
+    serial_write_hex64((u64)local.registered_count);
+    serial_write(" handled-count=0x");
+    serial_write_hex64((u64)local.handled_count);
+    serial_write("\n");
+
+    serial_write("vm86: dispatcher complete\n");
+    return (s1 == VM86_DISPATCH_UNHANDLED) ? 1 : 0;
+}

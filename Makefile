@@ -486,6 +486,9 @@ test-vm86-descriptors:
 test-vm86-task:
 	bash ./scripts/test_vm86_task.sh
 
+test-vm86-dispatcher:
+	bash ./scripts/test_vm86_dispatcher.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

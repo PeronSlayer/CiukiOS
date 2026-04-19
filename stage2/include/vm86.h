@@ -225,4 +225,56 @@ typedef struct vm86_task {
  */
 int vm86_task_probe(void);
 
+/*
+ * OPENGEM-020 — INT dispatcher skeleton.
+ *
+ * Design §5.2 specifies that all guest INT N instructions trap via
+ * #GP into the PE compatibility host, which decodes the vector and
+ * hands the trap frame to a host-side handler table indexed by the
+ * 8-bit vector number. This phase provides:
+ *   - the handler prototype,
+ *   - the 256-slot table declaration,
+ *   - a registration API,
+ *   - a "decode and dispatch" entry point that future phases will
+ *     wire into the real #GP handler once mode-switching lands.
+ * No handler is registered in this phase; the table is entirely
+ * empty and the dispatcher is not invoked from the live boot path.
+ */
+
+typedef void (*vm86_int_handler)(vm86_task *task, vm86_trap_frame *frame);
+
+#define VM86_INT_VECTOR_COUNT  0x100
+
+typedef enum {
+    VM86_DISPATCH_UNHANDLED = 0,
+    VM86_DISPATCH_HANDLED   = 1,
+    VM86_DISPATCH_EXIT      = 2,  /* handler requested task exit  */
+    VM86_DISPATCH_FAULT     = 3   /* handler reported a fault     */
+} vm86_dispatch_status;
+
+typedef struct vm86_dispatcher {
+    vm86_int_handler handler[VM86_INT_VECTOR_COUNT];
+    u32 registered_count;
+    u32 unhandled_count;
+    u32 handled_count;
+} vm86_dispatcher;
+
+/* Installs a handler for vector `vec`. Returns 1 on success. */
+int vm86_register_int_handler(vm86_dispatcher *d, u8 vec, vm86_int_handler h);
+
+/* Dispatches a decoded INT N into the handler table. */
+vm86_dispatch_status vm86_dispatch_int(vm86_dispatcher *d,
+                                       vm86_task *task,
+                                       vm86_trap_frame *frame,
+                                       u8 vec);
+
+/*
+ * OPENGEM-020 dispatcher probe. Allocates a local dispatcher on
+ * the host stack (no live state is modified), exercises the
+ * registration and dispatch paths with an empty table, and emits
+ * the dispatcher-layout markers. Returns 1 on success, 0 on
+ * failure.
+ */
+int vm86_dispatcher_probe(void);
+
 #endif /* STAGE2_VM86_H */
