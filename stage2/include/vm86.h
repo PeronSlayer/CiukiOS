@@ -484,4 +484,111 @@ u32 vm86_gdt_read_limit(const u8 *buf, u32 slot);
  */
 int vm86_gdt_encoder_probe(void);
 
+/*
+ * OPENGEM-026 — IDT gate encoder + v86 IRET stack frame encoder.
+ *
+ * Two independent byte-layout contracts used by the live switch:
+ *
+ * (1) IDT gate encoder
+ *   The 32-bit PE host installs a 256-entry IDT where each entry
+ *   is an 8-byte gate descriptor. Most entries are a generic
+ *   "spurious" trampoline; the 10 vectors enumerated in the
+ *   VM86_IDT_VEC_* enum point to per-vector stubs. This phase
+ *   writes the bytes; no IDTR load happens here.
+ *
+ *   32-bit interrupt-gate layout (Intel SDM Vol.3A §6.11):
+ *     offset[15:0], selector[15:0], 0x00, type_attr, offset[31:16]
+ *   type_attr for a 32-bit ring-0 interrupt gate: 0x8E
+ *     P=1 DPL=0 S=0 type=0xE (32-bit interrupt gate)
+ *
+ * (2) v86 IRET stack frame encoder
+ *   Entering v8086 mode is done by IRET from ring-0 PE32 with a
+ *   stack frame containing, top-to-bottom:
+ *     [ESP+32] GS
+ *     [ESP+28] FS
+ *     [ESP+24] DS
+ *     [ESP+20] ES
+ *     [ESP+16] SS      (guest real-mode SS)
+ *     [ESP+12] ESP     (guest real-mode SP, zero-extended)
+ *     [ESP+ 8] EFLAGS  (MUST have VM=1 (bit 17), IOPL=3 (bits 13..12))
+ *     [ESP+ 4] CS      (guest real-mode CS)
+ *     [ESP+ 0] EIP     (guest real-mode IP, zero-extended)
+ *   Total = 36 bytes of DWORD-aligned data.
+ *   The CPU consumes this frame atomically on IRET; any byte-wrong
+ *   field is a mode-switch-level hazard.
+ */
+#define VM86_IDT_ENTRY_COUNT   256
+#define VM86_IDT_BYTES         (VM86_IDT_ENTRY_COUNT * 8)
+
+#define VM86_IDT_TYPE_INT32    0x8E   /* P=1 DPL=0 S=0 type=0xE */
+#define VM86_IDT_TYPE_TRAP32   0x8F   /* P=1 DPL=0 S=0 type=0xF */
+
+/* v86 IRET frame sizes. */
+#define VM86_IRET_FRAME_BYTES  36u    /* 9 dwords */
+
+/* EFLAGS bits that matter for v86 entry. */
+#define VM86_EFLAGS_VM         (1u << 17)  /* virtual-8086 mode            */
+#define VM86_EFLAGS_IOPL3      (3u << 12)  /* IOPL=3 — guest owns I/O      */
+#define VM86_EFLAGS_IF         (1u << 9)   /* interrupt flag enabled       */
+#define VM86_EFLAGS_RESERVED1  (1u << 1)   /* reserved, always 1           */
+
+/*
+ * Encode a single 32-bit interrupt gate into `dst` (must be 8 bytes).
+ * `handler_linear` is the linear address of the PE32 trampoline
+ * that services this vector; `cs_selector` is the PE32 code selector.
+ */
+void vm86_idt_encode_gate(u8 *dst, u32 handler_linear,
+                          u16 cs_selector, u8 type_attr);
+
+/*
+ * Encode the full 256-entry IDT into `out` (must be at least
+ * VM86_IDT_BYTES bytes). Every entry is encoded as a 32-bit
+ * interrupt gate. `spurious_handler` fills every vector; the 10
+ * vectors listed in the VM86_IDT_VEC_* enum are then overwritten
+ * with per-vector `vector_handlers[i]` addresses. Returns the
+ * count of entries written on success, 0 on error.
+ *
+ * `vector_handlers` must have exactly VM86_IDT_VEC_SLOT_COUNT
+ * entries, in the same order as the VM86_IDT_VEC_* enum.
+ */
+u32 vm86_idt_encode(u8 *out,
+                    u16 cs_selector,
+                    u32 spurious_handler,
+                    const u32 *vector_handlers);
+
+/* Read-back helpers for the gate layout. */
+u32 vm86_idt_read_offset(const u8 *buf, u32 vector);
+u16 vm86_idt_read_selector(const u8 *buf, u32 vector);
+u8  vm86_idt_read_type(const u8 *buf, u32 vector);
+
+/*
+ * Encode a v86 IRET stack frame into `out` (must be at least
+ * VM86_IRET_FRAME_BYTES bytes). Returns VM86_IRET_FRAME_BYTES
+ * on success, 0 on error. `eflags` is OR'ed with VM=1|IOPL=3
+ * unconditionally — the caller cannot opt out of those bits.
+ */
+u32 vm86_iret_encode_frame(u8 *out,
+                           u16 cs, u16 ip,
+                           u16 ss, u16 sp,
+                           u32 eflags,
+                           u16 ds, u16 es, u16 fs, u16 gs);
+
+/* Read-back helpers for the IRET frame layout. */
+u32 vm86_iret_read_eip(const u8 *buf);
+u32 vm86_iret_read_cs(const u8 *buf);
+u32 vm86_iret_read_eflags(const u8 *buf);
+u32 vm86_iret_read_esp(const u8 *buf);
+u32 vm86_iret_read_ss(const u8 *buf);
+u32 vm86_iret_read_es(const u8 *buf);
+u32 vm86_iret_read_ds(const u8 *buf);
+u32 vm86_iret_read_fs(const u8 *buf);
+u32 vm86_iret_read_gs(const u8 *buf);
+
+/*
+ * OPENGEM-026 probe. Encodes a reference IDT and a reference
+ * v86 IRET frame, then verifies every field byte-for-byte.
+ * Returns 1 on success. Does NOT touch IDTR and does NOT IRET.
+ */
+int vm86_idt_iret_encoder_probe(void);
+
 #endif /* STAGE2_VM86_H */

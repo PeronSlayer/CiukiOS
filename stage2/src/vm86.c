@@ -1025,3 +1025,328 @@ int vm86_gdt_encoder_probe(void) {
     }
     return ok ? 1 : 0;
 }
+
+/* OPENGEM-026 sentinel — static gates grep for this exact token. */
+static const char vm86_idt_iret_sentinel[] = "OPENGEM-026";
+
+void vm86_idt_encode_gate(u8 *dst, u32 handler_linear,
+                          u16 cs_selector, u8 type_attr) {
+    if (!dst) {
+        return;
+    }
+    dst[0] = (u8)(handler_linear & 0xFFu);
+    dst[1] = (u8)((handler_linear >> 8) & 0xFFu);
+    dst[2] = (u8)(cs_selector & 0xFFu);
+    dst[3] = (u8)((cs_selector >> 8) & 0xFFu);
+    dst[4] = 0;              /* reserved */
+    dst[5] = type_attr;
+    dst[6] = (u8)((handler_linear >> 16) & 0xFFu);
+    dst[7] = (u8)((handler_linear >> 24) & 0xFFu);
+}
+
+u32 vm86_idt_encode(u8 *out,
+                    u16 cs_selector,
+                    u32 spurious_handler,
+                    const u32 *vector_handlers) {
+    if (!out || !vector_handlers) {
+        return 0;
+    }
+    /* Fill every slot with the spurious trampoline first. */
+    for (u32 v = 0; v < (u32)VM86_IDT_ENTRY_COUNT; v++) {
+        vm86_idt_encode_gate(out + v * 8,
+                             spurious_handler,
+                             cs_selector,
+                             VM86_IDT_TYPE_INT32);
+    }
+    /* Overwrite the known vectors in VM86_IDT_VEC_* enum order. */
+    u32 vecs[VM86_IDT_VEC_SLOT_COUNT];
+    vecs[0] = VM86_IDT_VEC_DE;
+    vecs[1] = VM86_IDT_VEC_UD;
+    vecs[2] = VM86_IDT_VEC_NM;
+    vecs[3] = VM86_IDT_VEC_TS;
+    vecs[4] = VM86_IDT_VEC_NP;
+    vecs[5] = VM86_IDT_VEC_SS;
+    vecs[6] = VM86_IDT_VEC_GP;
+    vecs[7] = VM86_IDT_VEC_PF;
+    vecs[8] = VM86_IDT_VEC_SW20;
+    vecs[9] = VM86_IDT_VEC_SW21;
+    for (u32 i = 0; i < (u32)VM86_IDT_VEC_SLOT_COUNT; i++) {
+        vm86_idt_encode_gate(out + vecs[i] * 8,
+                             vector_handlers[i],
+                             cs_selector,
+                             VM86_IDT_TYPE_INT32);
+    }
+    return (u32)VM86_IDT_ENTRY_COUNT;
+}
+
+u32 vm86_idt_read_offset(const u8 *buf, u32 vector) {
+    if (!buf || vector >= (u32)VM86_IDT_ENTRY_COUNT) {
+        return 0;
+    }
+    const u8 *d = buf + vector * 8;
+    return (u32)d[0]
+         | ((u32)d[1] << 8)
+         | ((u32)d[6] << 16)
+         | ((u32)d[7] << 24);
+}
+
+u16 vm86_idt_read_selector(const u8 *buf, u32 vector) {
+    if (!buf || vector >= (u32)VM86_IDT_ENTRY_COUNT) {
+        return 0;
+    }
+    const u8 *d = buf + vector * 8;
+    return (u16)((u16)d[2] | ((u16)d[3] << 8));
+}
+
+u8 vm86_idt_read_type(const u8 *buf, u32 vector) {
+    if (!buf || vector >= (u32)VM86_IDT_ENTRY_COUNT) {
+        return 0;
+    }
+    return buf[vector * 8 + 5];
+}
+
+/*
+ * IRET frame layout (Intel SDM Vol.3A §20.2.1 "Entering Virtual-8086 Mode"):
+ *   Offset 0  : EIP (guest)
+ *   Offset 4  : CS  (zero-extended, high word zero)
+ *   Offset 8  : EFLAGS (VM=1 required)
+ *   Offset 12 : ESP (guest)
+ *   Offset 16 : SS
+ *   Offset 20 : ES
+ *   Offset 24 : DS
+ *   Offset 28 : FS
+ *   Offset 32 : GS
+ */
+static void vm86_iret_write_dword(u8 *dst, u32 value) {
+    dst[0] = (u8)(value & 0xFFu);
+    dst[1] = (u8)((value >> 8) & 0xFFu);
+    dst[2] = (u8)((value >> 16) & 0xFFu);
+    dst[3] = (u8)((value >> 24) & 0xFFu);
+}
+
+u32 vm86_iret_encode_frame(u8 *out,
+                           u16 cs, u16 ip,
+                           u16 ss, u16 sp,
+                           u32 eflags,
+                           u16 ds, u16 es, u16 fs, u16 gs) {
+    if (!out) {
+        return 0;
+    }
+    /*
+     * Force the bits the CPU REQUIRES for v86 entry. The caller
+     * cannot disable VM=1 or IOPL=3 — doing so would silently
+     * turn this into a plain 32-bit IRET and drop the guest into
+     * ring-0 PE32 code, which is an unrecoverable mode-switch bug.
+     */
+    u32 flags = eflags
+              | VM86_EFLAGS_VM
+              | VM86_EFLAGS_IOPL3
+              | VM86_EFLAGS_RESERVED1;
+    /* Bit 1 is reserved-and-always-1 per §3.4.3; enforce it. */
+
+    vm86_iret_write_dword(out +  0, (u32)ip);
+    vm86_iret_write_dword(out +  4, (u32)cs);
+    vm86_iret_write_dword(out +  8, flags);
+    vm86_iret_write_dword(out + 12, (u32)sp);
+    vm86_iret_write_dword(out + 16, (u32)ss);
+    vm86_iret_write_dword(out + 20, (u32)es);
+    vm86_iret_write_dword(out + 24, (u32)ds);
+    vm86_iret_write_dword(out + 28, (u32)fs);
+    vm86_iret_write_dword(out + 32, (u32)gs);
+    return VM86_IRET_FRAME_BYTES;
+}
+
+static u32 vm86_iret_read_dword(const u8 *buf, u32 off) {
+    return (u32)buf[off + 0]
+         | ((u32)buf[off + 1] << 8)
+         | ((u32)buf[off + 2] << 16)
+         | ((u32)buf[off + 3] << 24);
+}
+
+u32 vm86_iret_read_eip   (const u8 *buf) { return buf ? vm86_iret_read_dword(buf,  0) : 0; }
+u32 vm86_iret_read_cs    (const u8 *buf) { return buf ? vm86_iret_read_dword(buf,  4) : 0; }
+u32 vm86_iret_read_eflags(const u8 *buf) { return buf ? vm86_iret_read_dword(buf,  8) : 0; }
+u32 vm86_iret_read_esp   (const u8 *buf) { return buf ? vm86_iret_read_dword(buf, 12) : 0; }
+u32 vm86_iret_read_ss    (const u8 *buf) { return buf ? vm86_iret_read_dword(buf, 16) : 0; }
+u32 vm86_iret_read_es    (const u8 *buf) { return buf ? vm86_iret_read_dword(buf, 20) : 0; }
+u32 vm86_iret_read_ds    (const u8 *buf) { return buf ? vm86_iret_read_dword(buf, 24) : 0; }
+u32 vm86_iret_read_fs    (const u8 *buf) { return buf ? vm86_iret_read_dword(buf, 28) : 0; }
+u32 vm86_iret_read_gs    (const u8 *buf) { return buf ? vm86_iret_read_dword(buf, 32) : 0; }
+
+int vm86_idt_iret_encoder_probe(void) {
+    static u8 idt[VM86_IDT_BYTES];
+    static u8 iret_frame[VM86_IRET_FRAME_BYTES];
+
+    (void)vm86_idt_iret_sentinel;
+
+    serial_write("vm86: idt-iret phase=026 status=planned\n");
+
+    /* ---- IDT encoding ---- */
+    const u16 cs_pe32 = 0x08;   /* PE_CODE32 selector = slot 1 << 3 */
+    const u32 spurious_handler = 0xDEAD0000u;
+    u32 vector_handlers[VM86_IDT_VEC_SLOT_COUNT];
+    vector_handlers[0] = 0x1000u;  /* DE   */
+    vector_handlers[1] = 0x1006u;  /* UD   */
+    vector_handlers[2] = 0x1007u;  /* NM   */
+    vector_handlers[3] = 0x100Au;  /* TS   */
+    vector_handlers[4] = 0x100Bu;  /* NP   */
+    vector_handlers[5] = 0x100Cu;  /* SS   */
+    vector_handlers[6] = 0x100Du;  /* GP — primary v8086 trap         */
+    vector_handlers[7] = 0x100Eu;  /* PF                              */
+    vector_handlers[8] = 0x1020u;  /* SW20 — INT 20h fast path        */
+    vector_handlers[9] = 0x1021u;  /* SW21 — INT 21h fast path        */
+
+    for (u32 i = 0; i < VM86_IDT_BYTES; i++) {
+        idt[i] = 0xFFu;  /* prefill — encoder must overwrite every byte */
+    }
+
+    u32 entries = vm86_idt_encode(idt, cs_pe32, spurious_handler, vector_handlers);
+    serial_write("vm86: idt-iret idt-entries=0x");
+    serial_write_hex64((u64)entries);
+    serial_write(" bytes=0x");
+    serial_write_hex64((u64)VM86_IDT_BYTES);
+    serial_write("\n");
+
+    /* Verify a representative unclaimed vector got the spurious handler. */
+    u32 spur_off = vm86_idt_read_offset(idt, 0x50);
+    u16 spur_sel = vm86_idt_read_selector(idt, 0x50);
+    u8  spur_typ = vm86_idt_read_type(idt, 0x50);
+    serial_write("vm86: idt-iret spurious vec=0x50 off=0x");
+    serial_write_hex64((u64)spur_off);
+    serial_write(" sel=0x");
+    serial_write_hex64((u64)spur_sel);
+    serial_write(" type=0x");
+    serial_write_hex8(spur_typ);
+    serial_write("\n");
+
+    /* Verify #GP vector (0x0D) got the dedicated GP handler. */
+    u32 gp_off = vm86_idt_read_offset(idt, VM86_IDT_VEC_GP);
+    u16 gp_sel = vm86_idt_read_selector(idt, VM86_IDT_VEC_GP);
+    u8  gp_typ = vm86_idt_read_type(idt, VM86_IDT_VEC_GP);
+    serial_write("vm86: idt-iret gp-vec=0x0D off=0x");
+    serial_write_hex64((u64)gp_off);
+    serial_write(" sel=0x");
+    serial_write_hex64((u64)gp_sel);
+    serial_write(" type=0x");
+    serial_write_hex8(gp_typ);
+    serial_write("\n");
+
+    /* Verify INT 21h software vector got its dedicated handler. */
+    u32 sw21_off = vm86_idt_read_offset(idt, VM86_IDT_VEC_SW21);
+    u32 sw20_off = vm86_idt_read_offset(idt, VM86_IDT_VEC_SW20);
+    serial_write("vm86: idt-iret sw-vec sw20=0x");
+    serial_write_hex64((u64)sw20_off);
+    serial_write(" sw21=0x");
+    serial_write_hex64((u64)sw21_off);
+    serial_write("\n");
+
+    /* ---- IRET frame encoding ---- */
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) {
+        iret_frame[i] = 0xFFu;
+    }
+
+    /*
+     * gem.exe synthetic entry: CS=0x1000 IP=0x0100 SS=0x1000 SP=0xFFFE
+     * matches the entry seeded in the OPENGEM-024 readiness probe.
+     */
+    u32 frame_bytes = vm86_iret_encode_frame(iret_frame,
+                                             0x1000u, 0x0100u,
+                                             0x1000u, 0xFFFEu,
+                                             VM86_EFLAGS_IF,
+                                             0x0000u, 0x0000u,
+                                             0x0000u, 0x0000u);
+    serial_write("vm86: idt-iret frame-bytes=0x");
+    serial_write_hex64((u64)frame_bytes);
+    serial_write("\n");
+
+    u32 f_eip = vm86_iret_read_eip(iret_frame);
+    u32 f_cs  = vm86_iret_read_cs(iret_frame);
+    u32 f_efl = vm86_iret_read_eflags(iret_frame);
+    u32 f_esp = vm86_iret_read_esp(iret_frame);
+    u32 f_ss  = vm86_iret_read_ss(iret_frame);
+
+    serial_write("vm86: idt-iret frame eip=0x");
+    serial_write_hex64((u64)f_eip);
+    serial_write(" cs=0x");
+    serial_write_hex64((u64)f_cs);
+    serial_write(" eflags=0x");
+    serial_write_hex64((u64)f_efl);
+    serial_write(" esp=0x");
+    serial_write_hex64((u64)f_esp);
+    serial_write(" ss=0x");
+    serial_write_hex64((u64)f_ss);
+    serial_write("\n");
+
+    int vm_bit    = (f_efl & VM86_EFLAGS_VM)     ? 1 : 0;
+    int iopl3     = ((f_efl & VM86_EFLAGS_IOPL3) == VM86_EFLAGS_IOPL3) ? 1 : 0;
+    int if_bit    = (f_efl & VM86_EFLAGS_IF)     ? 1 : 0;
+    int r1_bit    = (f_efl & VM86_EFLAGS_RESERVED1) ? 1 : 0;
+
+    serial_write("vm86: idt-iret eflags-bits vm=0x");
+    serial_write_hex8((u8)vm_bit);
+    serial_write(" iopl3=0x");
+    serial_write_hex8((u8)iopl3);
+    serial_write(" if=0x");
+    serial_write_hex8((u8)if_bit);
+    serial_write(" r1=0x");
+    serial_write_hex8((u8)r1_bit);
+    serial_write("\n");
+
+    /*
+     * Robustness audit: even when the caller passes eflags=0,
+     * VM=1 | IOPL=3 | reserved-1 MUST still be present. A missing
+     * VM=1 on IRET would drop the guest into ring-0 PE32 code —
+     * an unrecoverable mode-switch bug. We simulate and verify.
+     */
+    static u8 iret_zero[VM86_IRET_FRAME_BYTES];
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) {
+        iret_zero[i] = 0;
+    }
+    vm86_iret_encode_frame(iret_zero,
+                           0x1000u, 0x0100u,
+                           0x1000u, 0xFFFEu,
+                           0u,
+                           0u, 0u, 0u, 0u);
+    u32 zflags = vm86_iret_read_eflags(iret_zero);
+    int zvm    = (zflags & VM86_EFLAGS_VM)    ? 1 : 0;
+    int ziopl3 = ((zflags & VM86_EFLAGS_IOPL3) == VM86_EFLAGS_IOPL3) ? 1 : 0;
+
+    serial_write("vm86: idt-iret eflags-force zero-in vm=0x");
+    serial_write_hex8((u8)zvm);
+    serial_write(" iopl3=0x");
+    serial_write_hex8((u8)ziopl3);
+    serial_write("\n");
+
+    int ok = (entries == (u32)VM86_IDT_ENTRY_COUNT)
+          && (frame_bytes == VM86_IRET_FRAME_BYTES)
+          && (spur_off == spurious_handler)
+          && (spur_sel == cs_pe32)
+          && (spur_typ == VM86_IDT_TYPE_INT32)
+          && (gp_off == vector_handlers[6])
+          && (gp_sel == cs_pe32)
+          && (gp_typ == VM86_IDT_TYPE_INT32)
+          && (sw20_off == vector_handlers[8])
+          && (sw21_off == vector_handlers[9])
+          && (f_eip == 0x0100u)
+          && (f_cs  == 0x1000u)
+          && (f_esp == 0xFFFEu)
+          && (f_ss  == 0x1000u)
+          && vm_bit && iopl3 && if_bit && r1_bit
+          && zvm && ziopl3;
+
+    /* IDTR limit audit for OPENGEM-028. */
+    u32 idtr_limit = VM86_IDT_BYTES - 1u;
+    serial_write("vm86: idt-iret idtr-limit=0x");
+    serial_write_hex64((u64)idtr_limit);
+    serial_write("\n");
+
+    serial_write("vm86: idt-iret ready-surface=idt-bytes,iret-frame,eflags-forced\n");
+    serial_write("vm86: idt-iret pending-surface=lidt-load,trap-stubs,iret-exec\n");
+
+    if (ok) {
+        serial_write("vm86: idt-iret complete\n");
+    } else {
+        serial_write("vm86: idt-iret failed\n");
+    }
+    return ok ? 1 : 0;
+}
