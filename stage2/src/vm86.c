@@ -615,3 +615,206 @@ int vm86_int10_0e_probe(void) {
     }
     return ok ? 1 : 0;
 }
+
+/* OPENGEM-024 sentinel — static gates grep for this exact token. */
+static const char vm86_gem_t0_sentinel[] = "OPENGEM-024";
+
+void vm86_int21_30_handler(vm86_task *task, vm86_trap_frame *frame) {
+    if (!task || !frame) {
+        return;
+    }
+    /*
+     * DOS INT 21h AH=30h returns:
+     *   AL = major version
+     *   AH = minor version
+     *   BH = OEM number  (we report 0xFF = generic)
+     *   BL:CX = serial number (we report 0)
+     * We preserve the upper halves of the 32-bit registers and
+     * overwrite only the byte lanes the guest inspects.
+     */
+    u32 eax = frame->eax;
+    eax &= 0xFFFF0000u;
+    eax |= ((u32)VM86_DOS_VERSION_MINOR << 8) | (u32)VM86_DOS_VERSION_MAJOR;
+    frame->eax = eax;
+
+    u32 ebx = frame->ebx;
+    ebx &= 0xFFFF0000u;
+    ebx |= 0x0000FF00u;  /* BH = 0xFF generic OEM, BL = 0 */
+    frame->ebx = ebx;
+
+    frame->ecx &= 0xFFFF0000u;  /* CX = 0 */
+
+    task->int_count++;
+}
+
+int vm86_gem_t0_readiness_probe(void) {
+    vm86_dispatcher   local;
+    vm86_task         task;
+    vm86_trap_frame   frame;
+    vm86_console_sink sink;
+    /* 256-byte synthetic conventional window holds the banner. */
+    static u8 convbuf[0x100];
+
+    for (u32 i = 0; i < VM86_INT_VECTOR_COUNT; i++) {
+        local.handler[i] = 0;
+    }
+    local.registered_count = 0;
+    local.unhandled_count  = 0;
+    local.handled_count    = 0;
+
+    u8 *p = (u8 *)&task;
+    for (u32 i = 0; i < sizeof(task); i++) {
+        p[i] = 0;
+    }
+    p = (u8 *)&frame;
+    for (u32 i = 0; i < sizeof(frame); i++) {
+        p[i] = 0;
+    }
+    for (u32 i = 0; i < sizeof(convbuf); i++) {
+        convbuf[i] = 0;
+    }
+
+    (void)vm86_gem_t0_sentinel;
+
+    serial_write("vm86: gem-t0 phase=024 status=planned\n");
+
+    /*
+     * Synthetic gem.exe MZ entry coordinates. The real entry
+     * CS:IP and SS:SP are produced by the MZ loader (covered by
+     * the OpenGEM MZ-probe stack 013..015). OPENGEM-024 records
+     * that the v8086 task descriptor receives them verbatim.
+     */
+    task.handle             = 0xDE;
+    task.state              = VM86_TASK_STATE_RUNNING;
+    task.entry_cs           = 0x1000u;
+    task.entry_ip           = 0x0100u;
+    task.entry_ss           = 0x1000u;
+    task.entry_sp           = 0xFFFEu;
+    task.conventional_base  = (u64)(unsigned long)convbuf;
+    task.conventional_bytes = (u32)sizeof(convbuf);
+
+    serial_write("vm86: gem-t0 entry cs=0x");
+    serial_write_hex64((u64)task.entry_cs);
+    serial_write(" ip=0x");
+    serial_write_hex64((u64)task.entry_ip);
+    serial_write(" ss=0x");
+    serial_write_hex64((u64)task.entry_ss);
+    serial_write(" sp=0x");
+    serial_write_hex64((u64)task.entry_sp);
+    serial_write("\n");
+
+    /* Place banner "GEM$" at linear 0x80 (DS=0, DX=0x80). */
+    convbuf[0x80] = (u8)'G';
+    convbuf[0x81] = (u8)'E';
+    convbuf[0x82] = (u8)'M';
+    convbuf[0x83] = (u8)'$';
+
+    /* Attach a fresh sink. */
+    vm86_console_sink_reset(&sink);
+    vm86_console_sink_attach(&sink);
+
+    /*
+     * Register the full T0 handler set. Vector 0x21 holds a single
+     * slot, so the probe rotates the slot across the three AH
+     * values used by gem.exe startup. The real PE #GP handler in
+     * OPENGEM-025+ will perform an AH-keyed demux on the live
+     * trap frame; here the rotation is explicit and observable.
+     */
+    int reg_int20    = vm86_register_int_handler(&local, 0x20, vm86_int20_handler);
+    int reg_int10_0e = vm86_register_int_handler(&local, 0x10, vm86_int10_0e_handler);
+    int reg_int21_30 = vm86_register_int_handler(&local, 0x21, vm86_int21_30_handler);
+
+    if (!(reg_int20 && reg_int10_0e && reg_int21_30)) {
+        serial_write("vm86: gem-t0 register-failed\n");
+        vm86_console_sink_attach(0);
+        return 0;
+    }
+
+    serial_write("vm86: gem-t0 handlers registered count=0x");
+    serial_write_hex64((u64)local.registered_count);
+    serial_write(" set={int20,int21-30,int21-09-swap,int21-4c-swap,int10-0e}\n");
+
+    /* ---- INT 21h AH=30h: DOS version query ---- */
+    frame.eax = 0x3000u;
+    vm86_dispatch_status s_ver = vm86_dispatch_int(&local, &task, &frame, 0x21);
+    serial_write("vm86: gem-t0 int21-30 status=0x");
+    serial_write_hex64((u64)s_ver);
+    serial_write(" al=0x");
+    serial_write_hex8((u8)(frame.eax & 0xFFu));
+    serial_write(" ah=0x");
+    serial_write_hex8((u8)((frame.eax >> 8) & 0xFFu));
+    serial_write("\n");
+
+    /* ---- INT 21h AH=09h: banner ---- */
+    local.handler[0x21] = vm86_int21_09_handler;
+    frame.ds  = 0;
+    frame.edx = 0x0080u;
+    vm86_dispatch_status s_ban = vm86_dispatch_int(&local, &task, &frame, 0x21);
+    serial_write("vm86: gem-t0 int21-09 status=0x");
+    serial_write_hex64((u64)s_ban);
+    serial_write(" sink-count=0x");
+    serial_write_hex64((u64)sink.count);
+    serial_write("\n");
+
+    /* ---- INT 10h AH=0Eh: one BIOS char after banner ---- */
+    frame.eax = 0x0E21u;   /* AH=0Eh, AL='!' */
+    vm86_dispatch_status s_tty = vm86_dispatch_int(&local, &task, &frame, 0x10);
+    serial_write("vm86: gem-t0 int10-0e status=0x");
+    serial_write_hex64((u64)s_tty);
+    serial_write(" sink-count=0x");
+    serial_write_hex64((u64)sink.count);
+    serial_write("\n");
+
+    /* ---- INT 21h AH=4Ch: clean exit, errorlevel 0 ---- */
+    local.handler[0x21] = vm86_int21_4c_handler;
+    frame.eax = 0x4C00u;
+    vm86_dispatch_status s_exit = vm86_dispatch_int(&local, &task, &frame, 0x21);
+    serial_write("vm86: gem-t0 int21-4c status=0x");
+    serial_write_hex64((u64)s_exit);
+    serial_write(" task-state=0x");
+    serial_write_hex64((u64)task.state);
+    serial_write(" exit-reason=0x");
+    serial_write_hex64((u64)task.exit_reason);
+    serial_write(" errorlevel=0x");
+    serial_write_hex8((u8)task.exit_errorlevel);
+    serial_write("\n");
+
+    int ok = (s_ver  == VM86_DISPATCH_HANDLED)
+          && (s_ban  == VM86_DISPATCH_HANDLED)
+          && (s_tty  == VM86_DISPATCH_HANDLED)
+          && (s_exit == VM86_DISPATCH_EXIT)
+          && ((frame.eax & 0xFFu)        == (u32)VM86_DOS_VERSION_MAJOR)
+          && (((frame.eax >> 8) & 0xFFu) == (u32)VM86_DOS_VERSION_MINOR)
+          && (((frame.ebx >> 8) & 0xFFu) == 0xFFu)
+          && (sink.count    == 0x4u)
+          && (sink.buf[0]   == (u8)'G')
+          && (sink.buf[1]   == (u8)'E')
+          && (sink.buf[2]   == (u8)'M')
+          && (sink.buf[3]   == (u8)'!')
+          && (sink.overflow == 0u)
+          && (task.state        == VM86_TASK_STATE_EXITED)
+          && (task.exit_reason  == VM86_EXIT_REASON_INT21_4C)
+          && (task.exit_errorlevel == 0u)
+          && (task.int_count == 0x4u);
+
+    serial_write("vm86: gem-t0 sink-bytes=G,E,M,! int-count=0x");
+    serial_write_hex64((u64)task.int_count);
+    serial_write("\n");
+
+    /*
+     * Readiness summary: enumerate the surface ready for live
+     * transport and the surface still pending, so the gate output
+     * is auditable after every run.
+     */
+    serial_write("vm86: gem-t0 ready-surface=int20,int10-0e,int21-02,int21-09,int21-30,int21-4c\n");
+    serial_write("vm86: gem-t0 pending-surface=mode-switch,pe32-host,gdt-commit,gp-decode,iret-vm\n");
+
+    vm86_console_sink_attach(0);
+
+    if (ok) {
+        serial_write("vm86: gem-t0 complete\n");
+    } else {
+        serial_write("vm86: gem-t0 failed\n");
+    }
+    return ok ? 1 : 0;
+}

@@ -498,6 +498,9 @@ test-vm86-console:
 test-vm86-int10-0e:
 	bash ./scripts/test_vm86_int10_0e.sh
 
+test-vm86-gem-t0:
+	bash ./scripts/test_vm86_gem_t0.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

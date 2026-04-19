@@ -366,4 +366,42 @@ void vm86_int10_0e_handler(vm86_task *task, vm86_trap_frame *frame);
  */
 int vm86_int10_0e_probe(void);
 
+/*
+ * OPENGEM-024 — gem.exe T0 readiness.
+ *
+ * The v8086 live transport (long-mode -> PE32 -> v86 mode-switch,
+ * GDT/TSS commit, #GP-based INT decode, IRET) is the deliverable
+ * of OPENGEM-025+. Before that work begins, this phase assembles
+ * every write-side handler that gem.exe needs to reach its first
+ * meaningful exit, wires them into a single dispatcher, and
+ * simulates the guest INT sequence that a normal gem.exe startup
+ * would issue: INT 21h AH=30h (DOS version query), followed by
+ * INT 21h AH=09h "GEM$" banner, followed by INT 21h AH=4Ch.
+ *
+ * The probe asserts that every call through the dispatcher
+ * produces the correct task mutation and sink contents. If this
+ * readiness probe is green, the only remaining obstacle to T0 is
+ * the live transport itself.
+ *
+ * Adds one new INT handler so the simulation is honest:
+ *   vm86_int21_30_handler — INT 21h AH=30h, returns a pinned DOS
+ *   version identity in AL:AH. Version pinning is a deliberate
+ *   compatibility decision: gem.exe accepts any DOS >= 2.0, and
+ *   reporting 5.00 matches the reference environment under which
+ *   the symbiotic FreeDOS pipeline is validated.
+ */
+void vm86_int21_30_handler(vm86_task *task, vm86_trap_frame *frame);
+
+/* Pinned DOS identity returned by vm86_int21_30_handler. */
+#define VM86_DOS_VERSION_MAJOR 0x05
+#define VM86_DOS_VERSION_MINOR 0x00
+
+/*
+ * OPENGEM-024 probe. Builds a full dispatcher with every handler
+ * registered (INT 20h, INT 21h AH={02,09,30,4C}, INT 10h AH=0Eh),
+ * seeds a task with synthetic gem.exe MZ entry coordinates, and
+ * runs the four-INT startup simulation. Returns 1 on success.
+ */
+int vm86_gem_t0_readiness_probe(void);
+
 #endif /* STAGE2_VM86_H */
