@@ -1350,3 +1350,251 @@ int vm86_idt_iret_encoder_probe(void) {
     }
     return ok ? 1 : 0;
 }
+
+/* ========================================================================
+ * OPENGEM-028 — live-switch plan builder (no LGDT / LIDT / IRET).
+ *
+ * The plan aggregates caller-owned staged buffers and produces the
+ * GDTR / IDTR pseudo-descriptors the compat-mode trampoline will load
+ * in OPENGEM-029. It is pure host-side arithmetic with read-only
+ * cross-checks on the IRET frame's VM/IOPL bits.
+ * ========================================================================
+ */
+
+int vm86_live_switch_plan_build(vm86_live_switch_plan *plan,
+                                u8 *gdt_buf, u8 *idt_buf,
+                                u8 *iret_frame,
+                                u32 tss_base, u16 tss_limit,
+                                u16 cs_pe32_selector,
+                                u16 ss_pe32_selector,
+                                u16 tss_selector,
+                                u32 guest_entry_cs,
+                                u32 guest_entry_ip) {
+    if (!plan) return 0;
+    plan->sentinel         = VM86_LIVE_PLAN_SENTINEL;
+    plan->gdt_buf          = gdt_buf;
+    plan->gdt_bytes        = VM86_GDT_BYTES;
+    plan->idt_buf          = idt_buf;
+    plan->idt_bytes        = VM86_IDT_BYTES;
+    plan->iret_frame       = iret_frame;
+    plan->iret_frame_bytes = VM86_IRET_FRAME_BYTES;
+    plan->tss_base         = tss_base;
+    plan->tss_limit        = tss_limit;
+    plan->cs_pe32_selector = cs_pe32_selector;
+    plan->ss_pe32_selector = ss_pe32_selector;
+    plan->tss_selector     = tss_selector;
+    plan->guest_entry_cs   = guest_entry_cs;
+    plan->guest_entry_ip   = guest_entry_ip;
+    plan->flags            = 0;
+    plan->gdtr.limit       = 0;
+    plan->gdtr.base        = 0;
+    plan->idtr.limit       = 0;
+    plan->idtr.base        = 0;
+
+    if (!gdt_buf || !idt_buf || !iret_frame) {
+        serial_write("vm86: live-plan buffers missing\n");
+        return 0;
+    }
+    plan->flags |= VM86_LIVE_PLAN_F_BUFFERS_PRESENT;
+
+    /*
+     * GDTR / IDTR pseudo-descriptors: limit = bytes - 1; base is the
+     * linear address of the caller-owned buffer, truncated to 32 bits
+     * because the compat-mode LGDT/LIDT expects a 32-bit base.
+     */
+    plan->gdtr.limit = (u16)(VM86_GDT_BYTES - 1u);
+    plan->gdtr.base  = (u32)(u64)(unsigned long)gdt_buf;
+    plan->flags |= VM86_LIVE_PLAN_F_GDTR_COMPUTED;
+
+    plan->idtr.limit = (u16)(VM86_IDT_BYTES - 1u);
+    plan->idtr.base  = (u32)(u64)(unsigned long)idt_buf;
+    plan->flags |= VM86_LIVE_PLAN_F_IDTR_COMPUTED;
+
+    plan->flags |= VM86_LIVE_PLAN_F_IRET_STAGED;
+
+    /*
+     * Cross-check the staged IRET frame forces VM=1 and IOPL=3. This is
+     * the single safety invariant on which the whole live entry depends:
+     * an IRET with VM=0 would silently drop into ring-0 PE32 code
+     * instead of the 16-bit guest.
+     */
+    u32 frame_eflags = vm86_iret_read_eflags(iret_frame);
+    int has_vm    = (frame_eflags & VM86_EFLAGS_VM) ? 1 : 0;
+    int has_iopl3 = ((frame_eflags & VM86_EFLAGS_IOPL3) == VM86_EFLAGS_IOPL3) ? 1 : 0;
+    if (has_vm && has_iopl3) {
+        plan->flags |= VM86_LIVE_PLAN_F_VM_BIT_VERIFIED;
+    }
+
+    u32 required = VM86_LIVE_PLAN_F_BUFFERS_PRESENT
+                 | VM86_LIVE_PLAN_F_GDTR_COMPUTED
+                 | VM86_LIVE_PLAN_F_IDTR_COMPUTED
+                 | VM86_LIVE_PLAN_F_IRET_STAGED
+                 | VM86_LIVE_PLAN_F_VM_BIT_VERIFIED;
+    if ((plan->flags & required) == required) {
+        plan->flags |= VM86_LIVE_PLAN_F_READY;
+    }
+
+    serial_write("vm86: live-plan begin sentinel=0x");
+    serial_write_hex64((u64)plan->sentinel);
+    serial_write("\n");
+    serial_write("vm86: live-plan gdtr limit=0x");
+    serial_write_hex64((u64)plan->gdtr.limit);
+    serial_write(" base=0x");
+    serial_write_hex64((u64)plan->gdtr.base);
+    serial_write("\n");
+    serial_write("vm86: live-plan idtr limit=0x");
+    serial_write_hex64((u64)plan->idtr.limit);
+    serial_write(" base=0x");
+    serial_write_hex64((u64)plan->idtr.base);
+    serial_write("\n");
+    serial_write("vm86: live-plan tss base=0x");
+    serial_write_hex64((u64)plan->tss_base);
+    serial_write(" limit=0x");
+    serial_write_hex64((u64)plan->tss_limit);
+    serial_write(" sel=0x");
+    serial_write_hex64((u64)plan->tss_selector);
+    serial_write("\n");
+    serial_write("vm86: live-plan selectors cs=0x");
+    serial_write_hex64((u64)plan->cs_pe32_selector);
+    serial_write(" ss=0x");
+    serial_write_hex64((u64)plan->ss_pe32_selector);
+    serial_write("\n");
+    serial_write("vm86: live-plan guest cs=0x");
+    serial_write_hex64((u64)plan->guest_entry_cs);
+    serial_write(" ip=0x");
+    serial_write_hex64((u64)plan->guest_entry_ip);
+    serial_write("\n");
+    serial_write("vm86: live-plan flags=0x");
+    serial_write_hex64((u64)plan->flags);
+    serial_write((plan->flags & VM86_LIVE_PLAN_F_READY) ? " ready=1\n" : " ready=0\n");
+
+    return (plan->flags & VM86_LIVE_PLAN_F_READY) ? 1 : 0;
+}
+
+u32 vm86_live_switch_plan_flags(const vm86_live_switch_plan *plan) {
+    return plan ? plan->flags : 0u;
+}
+u16 vm86_live_switch_plan_gdtr_limit(const vm86_live_switch_plan *plan) {
+    return plan ? plan->gdtr.limit : (u16)0;
+}
+u32 vm86_live_switch_plan_gdtr_base(const vm86_live_switch_plan *plan) {
+    return plan ? plan->gdtr.base : 0u;
+}
+u16 vm86_live_switch_plan_idtr_limit(const vm86_live_switch_plan *plan) {
+    return plan ? plan->idtr.limit : (u16)0;
+}
+u32 vm86_live_switch_plan_idtr_base(const vm86_live_switch_plan *plan) {
+    return plan ? plan->idtr.base : 0u;
+}
+
+int vm86_live_switch_plan_probe(void) {
+    serial_write("vm86: live-plan probe begin OPENGEM-028\n");
+
+    /* Static host buffers (zeroed explicitly, no array initializer). */
+    static u8 gdt[VM86_GDT_BYTES];
+    static u8 idt[VM86_IDT_BYTES];
+    static u8 iret[VM86_IRET_FRAME_BYTES];
+    for (u32 i = 0; i < VM86_GDT_BYTES; i++)       gdt[i]  = 0;
+    for (u32 i = 0; i < VM86_IDT_BYTES; i++)       idt[i]  = 0;
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) iret[i] = 0;
+
+    /* Stage descriptors using 025/026 encoders. */
+    u32 tss_base  = 0x00200000u;
+    u16 tss_limit = (u16)(104u - 1u);
+    u32 gdt_bytes_written = vm86_gdt_encode(gdt, tss_base, tss_limit);
+    if (gdt_bytes_written != VM86_GDT_BYTES) {
+        serial_write("vm86: live-plan probe gdt-encode-failed\n");
+        return 0;
+    }
+
+    u16 cs_pe32   = 0x0008u; /* GDT index 1 */
+    u16 ss_pe32   = 0x0010u; /* GDT index 2 */
+    u16 tss_sel   = 0x0020u; /* GDT index 4 */
+
+    /* Dummy handler addresses; live switch replaces them in 029. */
+    u32 vector_handlers[VM86_IDT_VEC_SLOT_COUNT];
+    for (u32 i = 0; i < VM86_IDT_VEC_SLOT_COUNT; i++) {
+        vector_handlers[i] = 0x00100000u + (i * 0x20u);
+    }
+    u32 spurious = 0x00100800u;
+    u32 idt_entries = vm86_idt_encode(idt, cs_pe32, spurious, vector_handlers);
+    if (idt_entries != (u32)VM86_IDT_ENTRY_COUNT) {
+        serial_write("vm86: live-plan probe idt-encode-failed\n");
+        return 0;
+    }
+
+    u32 iret_bytes = vm86_iret_encode_frame(iret,
+                                            0x1000u, 0x0100u,
+                                            0x1000u, 0xFFFEu,
+                                            0u,
+                                            0u, 0u, 0u, 0u);
+    if (iret_bytes != VM86_IRET_FRAME_BYTES) {
+        serial_write("vm86: live-plan probe iret-encode-failed\n");
+        return 0;
+    }
+
+    /* Build the plan. */
+    vm86_live_switch_plan plan;
+    plan.sentinel = 0;
+    int built = vm86_live_switch_plan_build(&plan,
+                                            gdt, idt, iret,
+                                            tss_base, tss_limit,
+                                            cs_pe32, ss_pe32, tss_sel,
+                                            0x1000u, 0x0100u);
+    if (!built) {
+        serial_write("vm86: live-plan probe build-failed\n");
+        return 0;
+    }
+
+    int ok = 1;
+    if (plan.sentinel != VM86_LIVE_PLAN_SENTINEL) ok = 0;
+    if (plan.gdt_bytes != VM86_GDT_BYTES) ok = 0;
+    if (plan.idt_bytes != VM86_IDT_BYTES) ok = 0;
+    if (plan.iret_frame_bytes != VM86_IRET_FRAME_BYTES) ok = 0;
+    if (plan.gdtr.limit != (u16)(VM86_GDT_BYTES - 1u)) ok = 0;
+    if (plan.idtr.limit != (u16)(VM86_IDT_BYTES - 1u)) ok = 0;
+    if (plan.gdtr.base != (u32)(u64)(unsigned long)gdt) ok = 0;
+    if (plan.idtr.base != (u32)(u64)(unsigned long)idt) ok = 0;
+    if (plan.cs_pe32_selector != cs_pe32) ok = 0;
+    if (plan.ss_pe32_selector != ss_pe32) ok = 0;
+    if (plan.tss_selector     != tss_sel) ok = 0;
+    if (plan.tss_base         != tss_base) ok = 0;
+    if (plan.tss_limit        != tss_limit) ok = 0;
+    if (plan.guest_entry_cs   != 0x1000u) ok = 0;
+    if (plan.guest_entry_ip   != 0x0100u) ok = 0;
+    if (!(plan.flags & VM86_LIVE_PLAN_F_READY)) ok = 0;
+    if (!(plan.flags & VM86_LIVE_PLAN_F_VM_BIT_VERIFIED)) ok = 0;
+
+    /* Verify read-back helpers agree with the direct field reads. */
+    if (vm86_live_switch_plan_flags(&plan)      != plan.flags)      ok = 0;
+    if (vm86_live_switch_plan_gdtr_limit(&plan) != plan.gdtr.limit) ok = 0;
+    if (vm86_live_switch_plan_gdtr_base(&plan)  != plan.gdtr.base)  ok = 0;
+    if (vm86_live_switch_plan_idtr_limit(&plan) != plan.idtr.limit) ok = 0;
+    if (vm86_live_switch_plan_idtr_base(&plan)  != plan.idtr.base)  ok = 0;
+
+    /* Null-guard sanity. */
+    if (vm86_live_switch_plan_flags(0)      != 0u) ok = 0;
+    if (vm86_live_switch_plan_gdtr_limit(0) != 0)  ok = 0;
+    if (vm86_live_switch_plan_gdtr_base(0)  != 0u) ok = 0;
+    if (vm86_live_switch_plan_idtr_limit(0) != 0)  ok = 0;
+    if (vm86_live_switch_plan_idtr_base(0)  != 0u) ok = 0;
+
+    /* Contract: a plan built with NULL buffers must fail. */
+    vm86_live_switch_plan bad;
+    bad.sentinel = 0;
+    int bad_built = vm86_live_switch_plan_build(&bad, 0, idt, iret,
+                                                tss_base, tss_limit,
+                                                cs_pe32, ss_pe32, tss_sel,
+                                                0x1000u, 0x0100u);
+    if (bad_built) ok = 0;
+    if (bad.flags & VM86_LIVE_PLAN_F_READY) ok = 0;
+
+    serial_write("vm86: live-plan probe ready-surface=buffers,gdtr,idtr,iret,vm-bit\n");
+    serial_write("vm86: live-plan probe pending-surface=lgdt-exec,lidt-exec,iret-exec,gp-decode\n");
+    if (ok) {
+        serial_write("vm86: live-plan probe complete\n");
+    } else {
+        serial_write("vm86: live-plan probe failed\n");
+    }
+    return ok ? 1 : 0;
+}

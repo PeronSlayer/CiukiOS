@@ -591,4 +591,110 @@ u32 vm86_iret_read_gs(const u8 *buf);
  */
 int vm86_idt_iret_encoder_probe(void);
 
+/*
+ * OPENGEM-028 — live-switch plan.
+ *
+ * A plan captures all the state the live mode-switch trampoline will
+ * eventually consume. Building the plan is pure host-side arithmetic:
+ *   - descriptor buffers are staged via vm86_gdt_encode() and
+ *     vm86_idt_encode() (OPENGEM-025 / 026)
+ *   - the v86 IRET frame is staged via vm86_iret_encode_frame() (026)
+ *   - the GDTR / IDTR pseudo-descriptors are computed but NOT loaded
+ *
+ * The plan is an append-only view over caller-owned buffers. No buffer
+ * allocation, no global state, no CPU register touched.
+ *
+ * Future phases:
+ *   OPENGEM-029: vm86_live_switch_arm()/disarm(): flip a runtime gate
+ *                that the trampoline consults before executing LGDT,
+ *                LIDT, IRET. Default disarmed.
+ *   OPENGEM-030: shell.c consumes the plan for gem.exe MZ dispatch
+ *                when (and only when) the gate is armed.
+ */
+#define VM86_LIVE_PLAN_SENTINEL 0x0280u
+
+/*
+ * 6-byte / 10-byte pseudo-descriptor used by LGDT / LIDT.
+ * We keep the 32-bit form here (6 bytes: limit[15:0] then base[31:0])
+ * because the compat-mode trampoline will issue the 32-bit LGDT/LIDT.
+ * In long mode the same 10-byte form is used; the trampoline takes
+ * care of picking the right operand-size prefix at execution time.
+ * For the plan, only limit and base matter.
+ */
+typedef struct vm86_dtr {
+    u16 limit;
+    u32 base;
+} vm86_dtr;
+
+typedef struct vm86_live_switch_plan {
+    u32        sentinel;         /* VM86_LIVE_PLAN_SENTINEL                 */
+    u8        *gdt_buf;          /* staged GDT, at least VM86_GDT_BYTES     */
+    u32        gdt_bytes;        /* == VM86_GDT_BYTES                       */
+    u8        *idt_buf;          /* staged IDT, at least VM86_IDT_BYTES     */
+    u32        idt_bytes;        /* == VM86_IDT_BYTES                       */
+    u8        *iret_frame;       /* staged v86 IRET frame (36 bytes)        */
+    u32        iret_frame_bytes; /* == VM86_IRET_FRAME_BYTES                */
+    u32        tss_base;         /* linear address of 32-bit TSS            */
+    u16        tss_limit;        /* byte size - 1                           */
+    vm86_dtr   gdtr;             /* pseudo-descriptor for LGDT              */
+    vm86_dtr   idtr;             /* pseudo-descriptor for LIDT              */
+    u16        cs_pe32_selector; /* GDT selector for the PE32 code segment  */
+    u16        ss_pe32_selector; /* GDT selector for the PE32 data segment  */
+    u16        tss_selector;     /* GDT selector for the 32-bit TSS         */
+    u32        guest_entry_cs;   /* v86 guest CS (zero-extended)            */
+    u32        guest_entry_ip;   /* v86 guest IP (zero-extended)            */
+    u32        flags;            /* bitfield — see VM86_LIVE_PLAN_F_*       */
+} vm86_live_switch_plan;
+
+/* Plan status flags (observability). */
+#define VM86_LIVE_PLAN_F_BUFFERS_PRESENT   (1u << 0)
+#define VM86_LIVE_PLAN_F_GDTR_COMPUTED     (1u << 1)
+#define VM86_LIVE_PLAN_F_IDTR_COMPUTED     (1u << 2)
+#define VM86_LIVE_PLAN_F_IRET_STAGED       (1u << 3)
+#define VM86_LIVE_PLAN_F_VM_BIT_VERIFIED   (1u << 4)  /* EFLAGS.VM=1 in frame */
+#define VM86_LIVE_PLAN_F_READY             (1u << 7)  /* all of the above    */
+
+/*
+ * Build a live-switch plan over caller-owned buffers. Every pointer
+ * must be non-NULL; gdt_buf must be at least VM86_GDT_BYTES; idt_buf
+ * at least VM86_IDT_BYTES; iret_frame at least VM86_IRET_FRAME_BYTES.
+ *
+ * The three buffers MUST already have been populated by the OPENGEM-025
+ * / 026 encoders. This function does not touch their contents; it only
+ * reads them to cross-check the VM=1 bit in the staged IRET frame.
+ *
+ * Linear addresses for gdt/idt are taken as (u32)(uintptr_t)buf, which
+ * is correct because the live switch runs with a flat identity-mapped
+ * PE32 CS. The trampoline (OPENGEM-029) may translate further.
+ *
+ * Returns 1 on success (plan->flags has F_READY set); 0 on error. Does
+ * NOT execute LGDT, LIDT, IRET, or any CPU-state-modifying instruction.
+ */
+int vm86_live_switch_plan_build(vm86_live_switch_plan *plan,
+                                u8 *gdt_buf, u8 *idt_buf,
+                                u8 *iret_frame,
+                                u32 tss_base, u16 tss_limit,
+                                u16 cs_pe32_selector,
+                                u16 ss_pe32_selector,
+                                u16 tss_selector,
+                                u32 guest_entry_cs,
+                                u32 guest_entry_ip);
+
+/*
+ * Read-back helpers (observability). Stable tokens for gate scripts.
+ */
+u32 vm86_live_switch_plan_flags(const vm86_live_switch_plan *plan);
+u16 vm86_live_switch_plan_gdtr_limit(const vm86_live_switch_plan *plan);
+u32 vm86_live_switch_plan_gdtr_base (const vm86_live_switch_plan *plan);
+u16 vm86_live_switch_plan_idtr_limit(const vm86_live_switch_plan *plan);
+u32 vm86_live_switch_plan_idtr_base (const vm86_live_switch_plan *plan);
+
+/*
+ * OPENGEM-028 probe. Stages a full plan end-to-end (encodes GDT, IDT,
+ * and a v86 IRET frame into three static host buffers, then builds the
+ * plan on top), and cross-checks every computed field. Returns 1 on
+ * success. Does NOT execute LGDT / LIDT / IRET.
+ */
+int vm86_live_switch_plan_probe(void);
+
 #endif /* STAGE2_VM86_H */

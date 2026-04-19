@@ -510,6 +510,9 @@ test-vm86-idt-iret:
 test-vm86-switch:
 	bash ./scripts/test_vm86_switch.sh
 
+test-vm86-live-plan:
+	bash ./scripts/test_vm86_live_plan.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
