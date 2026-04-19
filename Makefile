@@ -489,6 +489,9 @@ test-vm86-task:
 test-vm86-dispatcher:
 	bash ./scripts/test_vm86_dispatcher.sh
 
+test-vm86-int21-4c:
+	bash ./scripts/test_vm86_int21_4c.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

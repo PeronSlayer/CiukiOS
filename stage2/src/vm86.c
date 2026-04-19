@@ -141,6 +141,17 @@ vm86_dispatch_status vm86_dispatch_int(vm86_dispatcher *d,
     }
     h(task, frame);
     d->handled_count++;
+    /*
+     * OPENGEM-021 extension: inspect post-handler task state so a
+     * handler can promote a plain HANDLED outcome to EXIT (terminate)
+     * or FAULT (host abort) without changing its own signature.
+     */
+    if (task->state == VM86_TASK_STATE_EXITED) {
+        return VM86_DISPATCH_EXIT;
+    }
+    if (task->state == VM86_TASK_STATE_FAULTED) {
+        return VM86_DISPATCH_FAULT;
+    }
     return VM86_DISPATCH_HANDLED;
 }
 
@@ -198,4 +209,89 @@ int vm86_dispatcher_probe(void) {
 
     serial_write("vm86: dispatcher complete\n");
     return (s1 == VM86_DISPATCH_UNHANDLED) ? 1 : 0;
+}
+
+/* OPENGEM-021 sentinel — static gates grep for this exact token. */
+static const char vm86_int21_4c_sentinel[] = "OPENGEM-021";
+
+void vm86_int21_4c_handler(vm86_task *task, vm86_trap_frame *frame) {
+    if (!task || !frame) {
+        return;
+    }
+    /* AL occupies the low byte of EAX on x86. */
+    u8 errorlevel = (u8)(frame->eax & 0xFFu);
+    task->exit_errorlevel = (u32)errorlevel;
+    task->exit_reason     = VM86_EXIT_REASON_INT21_4C;
+    task->state           = VM86_TASK_STATE_EXITED;
+    task->int_count++;
+}
+
+int vm86_int21_4c_probe(void) {
+    vm86_dispatcher local;
+    vm86_task       task;
+    vm86_trap_frame frame;
+
+    /* Zero state. */
+    for (u32 i = 0; i < VM86_INT_VECTOR_COUNT; i++) {
+        local.handler[i] = 0;
+    }
+    local.registered_count = 0;
+    local.unhandled_count  = 0;
+    local.handled_count    = 0;
+
+    u8 *p = (u8 *)&task;
+    for (u32 i = 0; i < sizeof(task); i++) {
+        p[i] = 0;
+    }
+    p = (u8 *)&frame;
+    for (u32 i = 0; i < sizeof(frame); i++) {
+        p[i] = 0;
+    }
+
+    (void)vm86_int21_4c_sentinel;
+
+    serial_write("vm86: int21-4c phase=021 status=planned\n");
+
+    /* Simulate the guest state produced by `MOV AH,4Ch; MOV AL,0x42; INT 21h`. */
+    task.handle = 0x1;
+    task.state  = VM86_TASK_STATE_RUNNING;
+    frame.eax   = 0x4C42u;    /* AH=4Ch, AL=42h */
+
+    if (!vm86_register_int_handler(&local, 0x21, vm86_int21_4c_handler)) {
+        serial_write("vm86: int21-4c register-failed\n");
+        return 0;
+    }
+
+    serial_write("vm86: int21-4c registered vec=0x21 registered-count=0x");
+    serial_write_hex64((u64)local.registered_count);
+    serial_write("\n");
+
+    serial_write("vm86: int21-4c invoke ah=0x4c al=0x");
+    serial_write_hex8((u8)(frame.eax & 0xFFu));
+    serial_write("\n");
+
+    vm86_dispatch_status s = vm86_dispatch_int(&local, &task, &frame, 0x21);
+
+    serial_write("vm86: int21-4c post-dispatch status=0x");
+    serial_write_hex64((u64)s);
+    serial_write(" task-state=0x");
+    serial_write_hex64((u64)task.state);
+    serial_write(" exit-reason=0x");
+    serial_write_hex64((u64)task.exit_reason);
+    serial_write(" errorlevel=0x");
+    serial_write_hex8((u8)task.exit_errorlevel);
+    serial_write("\n");
+
+    int ok = (s == VM86_DISPATCH_EXIT)
+          && (task.state == VM86_TASK_STATE_EXITED)
+          && (task.exit_reason == VM86_EXIT_REASON_INT21_4C)
+          && (task.exit_errorlevel == 0x42u)
+          && (local.handled_count == 0x1u);
+
+    if (ok) {
+        serial_write("vm86: int21-4c complete\n");
+    } else {
+        serial_write("vm86: int21-4c failed\n");
+    }
+    return ok ? 1 : 0;
 }

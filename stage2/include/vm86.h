@@ -277,4 +277,28 @@ vm86_dispatch_status vm86_dispatch_int(vm86_dispatcher *d,
  */
 int vm86_dispatcher_probe(void);
 
+/*
+ * OPENGEM-021 — INT 21h AH=4Ch terminate handler.
+ *
+ * First real INT handler. When the guest issues `MOV AH,4Ch; MOV
+ * AL,errorlevel; INT 21h`, the v8086 monitor must:
+ *   1. read AL from the trap frame;
+ *   2. write it into task->exit_errorlevel;
+ *   3. set task->exit_reason = VM86_EXIT_REASON_INT21_4C;
+ *   4. set task->state = VM86_TASK_STATE_EXITED.
+ *
+ * The dispatcher inspects task->state after handler invocation and
+ * reports VM86_DISPATCH_EXIT / VM86_DISPATCH_FAULT accordingly (see
+ * extension documented in vm86.c). No live task is entered yet; this
+ * phase wires only the handler and its tests.
+ */
+void vm86_int21_4c_handler(vm86_task *task, vm86_trap_frame *frame);
+
+/*
+ * OPENGEM-021 probe. Builds a local dispatcher + task, registers
+ * the INT 21h AH=4Ch handler, simulates the guest INT and verifies
+ * the post-handler state transition. Returns 1 on success.
+ */
+int vm86_int21_4c_probe(void);
+
 #endif /* STAGE2_VM86_H */
