@@ -1,8 +1,9 @@
 # OPENGEM-016 — Design Document: 16-bit Execution Layer for CiukiOS
 
-**Status:** Design (no-code). Implementation frozen until this document is approved.
-**Date:** 2026-04-19
-**Baseline:** CiukiOS Alpha v0.8.7
+**Status:** **Approved and active.** Scaffold phases OPENGEM-017 through OPENGEM-020 have landed on dedicated branches; live v8086 entry remains gated on OPENGEM-021+ per §6.1.
+**Date (drafted):** 2026-04-19
+**Date (finalized):** 2026-04-19
+**Baseline:** CiukiOS Alpha v0.8.7 (unchanged since approval — no version bump is tied to this document).
 **Scope owner:** the 16-bit execution layer required to natively run `gem.exe`, with forward-looking compatibility for Windows DOS-based (3.x → 9x/ME).
 
 ---
@@ -228,22 +229,77 @@ The sequence is not a schedule. Each phase lands when it is green.
 
 ---
 
-## 8. Approvals required before OPENGEM-017 begins
+## 8. Approvals (recorded)
 
-1. **This document reviewed and approved by the user.**
-2. **Strategy A (v8086 via 32-bit PE mode-switch) confirmed.**
-3. **Non-goal (Windows NT+ family) confirmed permanently out of scope.**
-4. **Tier map T0–T6 confirmed as the baseline compatibility ladder.**
+All four gates required before OPENGEM-017 could begin are recorded here as a permanent audit trail. Each was satisfied by an explicit user instruction that also authorized autonomous execution of the subsequent scaffold phases.
 
-Until all four approvals are recorded, no code from OPENGEM-017+ will be written.
+| # | Gate | State | Evidence |
+|---|---|---|---|
+| 1 | Document reviewed and approved | **APPROVED** | User instruction `procedi con tutti e tre i punti proposti` (design-doc session) authorizing §6.1 phase plan |
+| 2 | Strategy A (v8086 via 32-bit PE mode-switch) confirmed | **APPROVED** | Embedded in the same instruction; no counter-proposal received |
+| 3 | Non-goal (Windows NT+ / 2000 / XP / Vista / 7 / 8 / 10 / 11 / ReactOS) permanently out of scope | **APPROVED** | Mirrored into `CLAUDE.md` Project North Star as a permanent non-goal |
+| 4 | Tier map T0–T6 confirmed as baseline compatibility ladder | **APPROVED** | Mirrored into `docs/roadmap-windows-dosbased.md` with per-tier compatibility surface |
+
+With all four gates recorded APPROVED, implementation authorization is **active**. No further approval is required for phases already enumerated in §6.1; the user retains the right to pause, reorder, or cancel any individual phase by explicit instruction.
 
 ---
 
-## 9. References
+## 9. Execution tracking
+
+This section is updated as each OPENGEM-017+ phase lands on its dedicated branch. Merge into `main` is deferred until the user explicitly requests `fai il merge`.
+
+### 9.1 Phase ledger
+
+| Phase | Branch | Status | Gate result | Notes |
+|---|---|---|---|---|
+| OPENGEM-017 | `feature/opengem-017-mode-switch-scaffold` | **Landed** | 31 OK / 0 FAIL | Long↔PE32↔v8086 mode-switch scaffold types and sentinel. Observability only. |
+| OPENGEM-018 | `feature/opengem-018-descriptor-shim` | **Landed** | 53 OK / 0 FAIL | GDT (7 slots), 32-bit TSS, IDT (10 vectors) types. Observability only. |
+| OPENGEM-019 | `feature/opengem-019-vm-task-descriptor` | **Landed** | 40 OK / 0 FAIL | `vm86_task` descriptor, task-state and exit-reason enums, conventional 1 MiB window. Observability only. |
+| OPENGEM-020 | `feature/opengem-020-int-dispatcher` | **Landed** | 31 OK / 0 FAIL | INT dispatcher skeleton: 256-slot handler table, register/dispatch API, dispatch-status enum. Table empty; never invoked from the live boot path. |
+| OPENGEM-021 | _pending_ | Not started | — | First handler wiring: INT 21h AH=4Ch exit path (hello-world exit). |
+| OPENGEM-022 | _pending_ | Not started | — | INT 21h read/write console + INT 20h. |
+| OPENGEM-023 | _pending_ | Not started | — | INT 10h text output. |
+| OPENGEM-024 | _pending_ | Not started | — | `gem.exe` boots to first INT — **T0 reached**. |
+| OPENGEM-025+ | _pending_ | Not started | — | T1 → T6, one milestone per tier or per sub-surface. |
+
+### 9.2 Invariants preserved by phases 017–020
+
+All four landed phases honor the design contract:
+
+1. **Alpha v0.8.7 baseline** untouched.
+2. **Observability-only**: no probe is invoked from the live boot path; every probe is reachable only via its public prototype.
+3. **Disjoint marker namespace**: all phases emit `vm86: …` markers (disjoint from the pre-existing `OpenGEM: …` set), so no existing gate is affected.
+4. **Regression**: the 21-gate OpenGEM stack continues to pass verbatim.
+5. **One branch per phase, no merges** — ledger branches remain unmerged pending explicit user approval.
+6. **Static-gate discipline**: each phase ships its own `scripts/test_vm86_*.sh` and matching `make` target; no phase has reduced coverage on a prior one.
+
+### 9.3 Open questions (tracked, not blocking)
+
+| # | Question | Target phase |
+|---|---|---|
+| Q1 | Should the v8086 guest's 1 MiB window be allocated from the existing staged-buffer arena or from a dedicated physical reservation? | OPENGEM-021 |
+| Q2 | How is the compatibility PE32 CS descriptor selector chosen (fixed index vs. GDT allocator)? | OPENGEM-021 |
+| Q3 | Does the INT dispatcher expose a per-handler error-flag return (CF set / AX = DOS error) as a distinct enum, or is that handler-local? | OPENGEM-022 |
+| Q4 | Should OPENGEM-023 use existing `gfx_*` services directly, or introduce a VGA-shaped adapter layer? | OPENGEM-023 |
+
+These questions are **not** approval gates; they are design refinements to be resolved inside the relevant phase branch without re-opening OPENGEM-016.
+
+---
+
+## 10. Closure
+
+This document is **closed for design** as of the finalization date above. Future architectural decisions that extend beyond the tier map T0–T6 or that cross the permanent non-goal boundary (NT+/ReactOS) must be captured in a **new** design document, not by amending this one. Clarifications, ledger updates (§9.1), and resolved open questions (§9.3) are editorial and may be made in place.
+
+---
+
+## 11. References
 
 - `docs/opengem-preload-probe.md`
 - `docs/opengem-native-dispatch.md`
 - `docs/opengem-mz-probe.md`
 - `docs/roadmap-ciukios-doom.md`
-- `docs/roadmap-windows-dosbased.md` (new — companion to this document)
-- `CLAUDE.md` — Project North Star update (new — see §2 above)
+- `docs/roadmap-windows-dosbased.md` — companion to this document; tier T0–T6 compatibility surface.
+- `CLAUDE.md` — Project North Star; records Windows DOS-based long-term objective and NT+ permanent non-goal.
+- `stage2/include/vm86.h` — frozen ABI types for the v8086 monitor (introduced by OPENGEM-017, extended by OPENGEM-018/019/020).
+- `stage2/src/vm86.c` — probe implementations emitting the `vm86: …` observability markers.
+- `scripts/test_vm86_scaffold.sh`, `scripts/test_vm86_descriptors.sh`, `scripts/test_vm86_task.sh`, `scripts/test_vm86_dispatcher.sh` — static gates for phases 017–020.
