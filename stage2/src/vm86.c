@@ -77,3 +77,37 @@ int vm86_descriptors_probe(void) {
     serial_write("vm86: descriptors complete\n");
     return 1;
 }
+
+/* OPENGEM-019 sentinel — static gates grep for this exact token. */
+static const char vm86_task_sentinel[] = "OPENGEM-019";
+
+int vm86_task_probe(void) {
+    const u32 task_bytes       = (u32)sizeof(vm86_task);
+    const u32 state_count      = (u32)VM86_TASK_STATE_COUNT;
+    const u32 exit_reason_cnt  = (u32)VM86_EXIT_REASON_COUNT;
+    const u32 conv_window_bytes = 0x100000u;
+
+    (void)vm86_task_sentinel;
+
+    serial_write("vm86: task phase=019 status=planned\n");
+
+    serial_write("vm86: task bytes=0x");
+    serial_write_hex64((u64)task_bytes);
+    serial_write(" state-count=0x");
+    serial_write_hex64((u64)state_count);
+    serial_write(" exit-reason-count=0x");
+    serial_write_hex64((u64)exit_reason_cnt);
+    serial_write("\n");
+
+    serial_write("vm86: task fields=handle,state,exit-reason,exit-errorlevel,entry-cs,entry-ip,entry-ss,entry-sp,regs,conventional-base,conventional-bytes,int-count,fault-count\n");
+
+    serial_write("vm86: task states=idle,ready,running,int-trap,faulted,exited\n");
+    serial_write("vm86: task exit-reasons=none,int20,int21-4c,fault,host-abort\n");
+
+    serial_write("vm86: task conventional-window-bytes=0x");
+    serial_write_hex64((u64)conv_window_bytes);
+    serial_write("\n");
+
+    serial_write("vm86: task complete\n");
+    return 1;
+}

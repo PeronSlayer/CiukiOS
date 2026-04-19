@@ -483,6 +483,9 @@ test-vm86-scaffold:
 test-vm86-descriptors:
 	bash ./scripts/test_vm86_descriptors.sh
 
+test-vm86-task:
+	bash ./scripts/test_vm86_task.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

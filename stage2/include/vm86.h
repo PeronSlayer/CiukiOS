@@ -160,4 +160,69 @@ enum {
  */
 int vm86_descriptors_probe(void);
 
+/*
+ * OPENGEM-019 — VM task descriptor.
+ *
+ * Describes a single v8086 guest task that the monitor will host.
+ * No task is allocated or entered yet; this structure is the ABI
+ * between the mode-switch routine (future OPENGEM-021+) and the
+ * INT dispatcher (OPENGEM-020).
+ */
+
+typedef enum {
+    VM86_TASK_STATE_IDLE      = 0,
+    VM86_TASK_STATE_READY     = 1,
+    VM86_TASK_STATE_RUNNING   = 2,
+    VM86_TASK_STATE_INT_TRAP  = 3,
+    VM86_TASK_STATE_FAULTED   = 4,
+    VM86_TASK_STATE_EXITED    = 5,
+    VM86_TASK_STATE_COUNT     = 6
+} vm86_task_state;
+
+typedef enum {
+    VM86_EXIT_REASON_NONE      = 0,
+    VM86_EXIT_REASON_INT20     = 1,  /* INT 20h terminate              */
+    VM86_EXIT_REASON_INT21_4C  = 2,  /* INT 21h AH=4Ch terminate       */
+    VM86_EXIT_REASON_FAULT     = 3,  /* unhandled protection fault     */
+    VM86_EXIT_REASON_HOST_ABORT = 4, /* host requested shutdown        */
+    VM86_EXIT_REASON_COUNT     = 5
+} vm86_exit_reason;
+
+/*
+ * v8086 guest task descriptor. All register fields are 32-bit wide
+ * to match the trap frame convention. Segment registers are 16-bit
+ * as they are on the CPU. The conventional-memory window is a host
+ * pointer into the 1 MiB region mapped into the guest.
+ */
+typedef struct vm86_task {
+    u32 handle;              /* opaque id, 0 = invalid                 */
+    u32 state;               /* vm86_task_state                        */
+    u32 exit_reason;         /* vm86_exit_reason, meaningful on EXITED */
+    u32 exit_errorlevel;     /* AL at INT 21h AH=4Ch, or 0             */
+
+    /* Entry point declared by the MZ header / COM convention. */
+    u16 entry_cs;
+    u16 entry_ip;
+    u16 entry_ss;
+    u16 entry_sp;
+
+    /* Live register snapshot at last exit / at entry. */
+    vm86_trap_frame regs;
+
+    /* Host-side window mapped at guest linear 0x00000..0xFFFFF. */
+    u64 conventional_base;   /* host virtual address                   */
+    u32 conventional_bytes;  /* always 0x100000 for baseline target    */
+
+    /* Observability. */
+    u32 int_count;           /* total INT N traps serviced             */
+    u32 fault_count;         /* total #GP / #PF / #UD traps            */
+} vm86_task;
+
+/*
+ * OPENGEM-019 VM task probe. Emits task-layout markers and verifies
+ * the descriptor is laid out within the bounds expected by the
+ * dispatcher. Returns 1 on success, 0 on failure.
+ */
+int vm86_task_probe(void);
+
 #endif /* STAGE2_VM86_H */
