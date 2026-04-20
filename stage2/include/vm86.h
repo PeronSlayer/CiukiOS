@@ -1374,4 +1374,77 @@ int  vm86_gp_isr_is_installed(void);
  */
 int vm86_gp_isr_install_probe(void);
 
+/* ================================================================== */
+/* OPENGEM-039 - PE32 compat-task scaffold (TSS32 + GDTR + IDTR image).*/
+/*                                                                    */
+/* Stages every data structure the future live v86 entry needs:       */
+/*   - a fully-populated 32-bit TSS with ESP0 pointing into a static  */
+/*     kernel stack, CR3 = host CR3 (identity-mapped window is a      */
+/*     pre-existing OPENGEM-031 invariant);                           */
+/*   - the 7-slot GDT image (reusing OPENGEM-025 encoder) with its    */
+/*     TSS descriptor pointing at the staged TSS;                     */
+/*   - the IDTR image (built via vm86_idt_shim_idtr_image) with the  */
+/*     OPENGEM-038 install already applied.                           */
+/*                                                                    */
+/* Safety contract:                                                   */
+/*   - NO LIDT / LGDT / LTR is emitted here;                          */
+/*   - NO far-jmp / IRETQ / task-gate is emitted here;                */
+/*   - the compat task is never entered in 039; the scaffold is       */
+/*     observability + a "ready-to-switch" payload inspectable by    */
+/*     the host.                                                      */
+/* ================================================================== */
+
+#define VM86_COMPAT_TASK_SENTINEL   0x0390u
+#define VM86_COMPAT_TASK_ARM_MAGIC  0xC1D39390u
+
+/* Size (in bytes) of the static kernel stack reserved for ESP0. */
+#define VM86_COMPAT_ESP0_STACK_BYTES 4096u
+
+/*
+ * Fully-staged compat-task image. Every field is data-only and must
+ * survive a round-trip through vm86_compat_task_build / _verify.
+ */
+typedef struct vm86_compat_task_image {
+    vm86_tss32 tss;           /* staged TSS32                         */
+    u32        esp0_base;     /* linear base of the ESP0 stack buffer */
+    u32        tss_base;      /* linear base of the staged TSS        */
+    u16        tss_limit;     /* 103 (sizeof(vm86_tss32) - 1)         */
+    u16        idtr_limit;    /* VM86_IDT_BYTES - 1                   */
+    u64        idtr_base;     /* linear base of s_vm86_idt_shim_bytes */
+    u16        gdtr_limit;    /* VM86_GDT_BYTES - 1                   */
+    u64        gdtr_base;     /* linear base of the staged GDT        */
+    u16        cs_sel;        /* VM86_GDT_PE_CODE32 << 3              */
+    u16        ds_sel;        /* VM86_GDT_PE_DATA32 << 3              */
+    u16        ss_sel;        /* VM86_GDT_V86_STACK  << 3             */
+    u16        tss_sel;       /* VM86_GDT_V86_TSS    << 3             */
+    u8         gdt_bytes[VM86_GDT_BYTES];
+} vm86_compat_task_image;
+
+int  vm86_compat_task_arm(u32 magic);
+void vm86_compat_task_disarm(void);
+int  vm86_compat_task_is_armed(void);
+
+/*
+ * Stage the compat-task image. Requires the 038 install to have
+ * already run (so s_vm86_idt_shim_bytes has vector 0x0D wired). On
+ * success populates *out and returns 1; 0 otherwise.
+ */
+int vm86_compat_task_build(vm86_compat_task_image *out, u32 magic);
+
+/*
+ * Read-only verifier for a staged image: all selector arithmetic,
+ * TSS descriptor base/limit, IDTR/GDTR base/limit. Returns 1 on
+ * success, 0 if ANY field is malformed.
+ */
+int vm86_compat_task_verify(const vm86_compat_task_image *img);
+
+/*
+ * Host-driven probe. Builds + verifies + disassembles a staged
+ * image, confirming it is ready for the OPENGEM-040 live switch.
+ * Does NOT perform any privileged CPU operation.
+ *
+ * Returns 1 on success, 0 otherwise.
+ */
+int vm86_compat_task_probe(void);
+
 #endif /* STAGE2_VM86_H */

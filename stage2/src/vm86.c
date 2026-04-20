@@ -3527,3 +3527,235 @@ int vm86_gp_isr_install_probe(void) {
     serial_write("vm86: gp-isr-install probe complete\n");
     return 1;
 }
+
+/* ================================================================== */
+/* OPENGEM-039 - PE32 compat-task scaffold (TSS32 + GDTR + IDTR image).*/
+/*                                                                    */
+/* Stages every data structure the future live v86 entry needs. No   */
+/* LIDT/LGDT/LTR is executed. No transition is performed. The task   */
+/* image is purely observability-inspectable in 039.                 */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_compat_task_c_sentinel[] = "OPENGEM-039";
+
+static int s_vm86_compat_task_armed = 0;
+
+/* Static ESP0 stack for the staged TSS. Never used in 039 (no entry). */
+static u8 s_vm86_compat_esp0_stack[VM86_COMPAT_ESP0_STACK_BYTES]
+    __attribute__((aligned(16)));
+
+/* Static host-side staged TSS. */
+static vm86_tss32 s_vm86_compat_tss __attribute__((aligned(16)));
+
+/* Static staged GDT image (7 slots * 8 bytes). */
+static u8 s_vm86_compat_gdt[VM86_GDT_BYTES] __attribute__((aligned(8)));
+
+int vm86_compat_task_arm(u32 magic) {
+    if (magic != VM86_COMPAT_TASK_ARM_MAGIC) return 0;
+    s_vm86_compat_task_armed = 1;
+    return 1;
+}
+
+void vm86_compat_task_disarm(void) {
+    s_vm86_compat_task_armed = 0;
+}
+
+int vm86_compat_task_is_armed(void) {
+    return s_vm86_compat_task_armed ? 1 : 0;
+}
+
+static void vm86_compat_task_zero(vm86_compat_task_image *img) {
+    u8 *p = (u8*)img;
+    for (u32 i = 0; i < sizeof(*img); i++) p[i] = 0;
+}
+
+int vm86_compat_task_build(vm86_compat_task_image *out, u32 magic) {
+    if (!out) return 0;
+    if (magic != VM86_COMPAT_TASK_ARM_MAGIC) return 0;
+    if (!s_vm86_compat_task_armed) return 0;
+
+    /* Prereq: 038 install must have run (vector 0x0D wired). */
+    if (!s_vm86_idt_shim_built || !s_vm86_gp_isr_installed) return 0;
+
+    vm86_compat_task_zero(out);
+
+    /* --- 1. Populate the host-side TSS32. ------------------------- */
+    /* SysV invariants we need:
+     *   - ESP0 points at the TOP of the ESP0 stack (stacks grow down)
+     *   - SS0 is the 32-bit compat data selector
+     *   - CR3 copied from the current long-mode CR3 so the compat
+     *     task sees the same identity mapping (pre-existing 031
+     *     invariant)
+     *   - IOPB trap offset points PAST the TSS end so the CPU reads
+     *     "all allowed" (conservative; narrowed at OPENGEM-040+).
+     */
+    u8 *p_tss = (u8*)&s_vm86_compat_tss;
+    for (u32 i = 0; i < sizeof(vm86_tss32); i++) p_tss[i] = 0;
+
+    u32 esp0_base = (u32)(u64)(unsigned long)&s_vm86_compat_esp0_stack[0];
+    if ((u64)(unsigned long)&s_vm86_compat_esp0_stack[0] > 0xFFFFFFFFu) {
+        /* ESP0 stack must be addressable as a 32-bit linear address. */
+        return 0;
+    }
+    s_vm86_compat_tss.esp0      = esp0_base + VM86_COMPAT_ESP0_STACK_BYTES;
+    s_vm86_compat_tss.ss0       = (u16)(VM86_GDT_PE_DATA32 << 3);
+
+    /* NOTE: TSS.cr3 is deliberately left 0 in OPENGEM-039. The live
+     * entry path (OPENGEM-040) must snapshot the host CR3 and patch
+     * this field immediately before LTR + far-jmp to the compat task.
+     * Keeping that privileged read out of the 039 block lets the 034
+     * gate scan (which runs to EOF from the 034 sentinel) stay clean
+     * of CPU-state accessors. */
+    s_vm86_compat_tss.cr3       = 0;
+    s_vm86_compat_tss.iopb_trap = ((u32)sizeof(vm86_tss32)) << 16;
+
+    u32 tss_base  = (u32)(u64)(unsigned long)&s_vm86_compat_tss;
+    u16 tss_limit = (u16)(sizeof(vm86_tss32) - 1);
+
+    /* --- 2. Encode the 7-slot GDT with the TSS pointing at s_tss -- */
+    for (u32 i = 0; i < VM86_GDT_BYTES; i++) s_vm86_compat_gdt[i] = 0;
+    u32 slots = vm86_gdt_encode(s_vm86_compat_gdt, tss_base, tss_limit);
+    if (slots != (u32)VM86_GDT_SLOT_COUNT) return 0;
+
+    /* --- 3. Harvest the IDTR image from the 038-installed shim. --- */
+    u16 idtr_limit = 0; u64 idtr_base = 0;
+    if (!vm86_idt_shim_idtr_image(&idtr_limit, &idtr_base)) return 0;
+
+    /* --- 4. Populate the caller-visible task image. --------------- */
+    out->esp0_base  = esp0_base;
+    out->tss_base   = tss_base;
+    out->tss_limit  = tss_limit;
+    out->idtr_limit = idtr_limit;
+    out->idtr_base  = idtr_base;
+    out->gdtr_limit = (u16)(VM86_GDT_BYTES - 1);
+    out->gdtr_base  = (u64)(unsigned long)&s_vm86_compat_gdt[0];
+    out->cs_sel     = (u16)(VM86_GDT_PE_CODE32 << 3);
+    out->ds_sel     = (u16)(VM86_GDT_PE_DATA32 << 3);
+    out->ss_sel     = (u16)(VM86_GDT_V86_STACK  << 3);
+    out->tss_sel    = (u16)(VM86_GDT_V86_TSS    << 3);
+    for (u32 i = 0; i < sizeof(vm86_tss32); i++) {
+        ((u8*)&out->tss)[i] = p_tss[i];
+    }
+    for (u32 i = 0; i < VM86_GDT_BYTES; i++) {
+        out->gdt_bytes[i] = s_vm86_compat_gdt[i];
+    }
+    return 1;
+}
+
+int vm86_compat_task_verify(const vm86_compat_task_image *img) {
+    if (!img) return 0;
+
+    /* Selector arithmetic must match the enum layout. */
+    if (img->cs_sel  != (u16)(VM86_GDT_PE_CODE32 << 3)) return 0;
+    if (img->ds_sel  != (u16)(VM86_GDT_PE_DATA32 << 3)) return 0;
+    if (img->ss_sel  != (u16)(VM86_GDT_V86_STACK  << 3)) return 0;
+    if (img->tss_sel != (u16)(VM86_GDT_V86_TSS    << 3)) return 0;
+
+    /* TSS limit is exactly sizeof(tss) - 1. */
+    if (img->tss_limit != (u16)(sizeof(vm86_tss32) - 1)) return 0;
+
+    /* GDTR limit is exactly VM86_GDT_BYTES - 1. */
+    if (img->gdtr_limit != (u16)(VM86_GDT_BYTES - 1)) return 0;
+
+    /* IDTR limit is exactly VM86_IDT_BYTES - 1. */
+    if (img->idtr_limit != (u16)(VM86_IDT_BYTES - 1)) return 0;
+
+    /* TSS descriptor in GDT must encode the same base/limit the
+     * image claims. The TSS slot is VM86_GDT_V86_TSS. */
+    const u8 *d = &img->gdt_bytes[VM86_GDT_V86_TSS * 8];
+    u16 d_limit_lo = (u16)(d[0] | (d[1] << 8));
+    u32 d_base_lo  = (u32)(d[2]) | ((u32)d[3] << 8) | ((u32)d[4] << 16);
+    u32 d_base_hi  = (u32)d[7];
+    u32 d_base     = d_base_lo | (d_base_hi << 24);
+    u8  d_type     = (u8)(d[5] & 0x1F); /* low 5 bits of access = S|type */
+    if (d_limit_lo != img->tss_limit) return 0;
+    if (d_base     != img->tss_base)  return 0;
+    if (d_type     != 0x09)           return 0; /* 32-bit TSS avail */
+
+    /* ESP0 points into the staged ESP0 stack. */
+    if (img->tss.esp0 != img->esp0_base + VM86_COMPAT_ESP0_STACK_BYTES) return 0;
+    if (img->tss.ss0  != img->ds_sel) return 0;
+
+    return 1;
+}
+
+int vm86_compat_task_probe(void) {
+    serial_write("vm86: compat-task sentinel=0x");
+    serial_write_hex64((u64)VM86_COMPAT_TASK_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_compat_task_c_sentinel);
+    serial_write("\n");
+
+    /* Default disarmed; wrong magic rejected. */
+    if (vm86_compat_task_is_armed()) {
+        serial_write("vm86: compat-task default-armed=FAIL\n"); return 0;
+    }
+    if (vm86_compat_task_arm(0xDEADBEEFu) != 0 || vm86_compat_task_is_armed()) {
+        serial_write("vm86: compat-task magic-reject=FAIL\n"); return 0;
+    }
+
+    /* Prereq arming chain: 038 install must have happened. */
+    if (vm86_gp_isr_install_arm(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-task prereq-038-arm=FAIL\n"); return 0;
+    }
+    if (vm86_gp_isr_install(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-task prereq-038-install=FAIL\n"); return 0;
+    }
+
+    /* Build from disarmed state must refuse. */
+    vm86_compat_task_image img;
+    if (vm86_compat_task_build(&img, VM86_COMPAT_TASK_ARM_MAGIC) != 0) {
+        serial_write("vm86: compat-task disarmed-build=FAIL\n"); return 0;
+    }
+
+    /* Arm 039, build + verify. */
+    if (vm86_compat_task_arm(VM86_COMPAT_TASK_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-task magic-accept=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_task_build(&img, VM86_COMPAT_TASK_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-task build=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_task_verify(&img) != 1) {
+        serial_write("vm86: compat-task verify=FAIL\n"); goto cleanup;
+    }
+
+    /* Mutation must be rejected by verify. */
+    vm86_compat_task_image bad;
+    for (u32 i = 0; i < sizeof(bad); i++) {
+        ((u8*)&bad)[i] = ((const u8*)&img)[i];
+    }
+    bad.cs_sel ^= 1u;
+    if (vm86_compat_task_verify(&bad) != 0) {
+        serial_write("vm86: compat-task verify-mutation=FAIL\n"); goto cleanup;
+    }
+
+    /* Final disarm. */
+    vm86_compat_task_disarm();
+    if (vm86_compat_task_is_armed()) {
+        serial_write("vm86: compat-task final-disarm=FAIL\n"); goto cleanup;
+    }
+    /* Leave 038 in a reversible state for the caller. */
+    vm86_gp_isr_uninstall();
+    vm86_gp_isr_install_disarm();
+
+    serial_write("vm86: compat-task arm-magic=0x");
+    serial_write_hex64((u64)VM86_COMPAT_TASK_ARM_MAGIC);
+    serial_write("\n");
+    serial_write("vm86: compat-task tss-limit=0x");
+    serial_write_hex64((u64)img.tss_limit);
+    serial_write(" gdtr-limit=0x");
+    serial_write_hex64((u64)img.gdtr_limit);
+    serial_write(" idtr-limit=0x");
+    serial_write_hex64((u64)img.idtr_limit);
+    serial_write("\n");
+    serial_write("vm86: compat-task ready-surface=tss32,gdtr-image,idtr-image,verify\n");
+    serial_write("vm86: compat-task pending-surface=lidt-live,ltr-live,compat-entry,iretd-to-v86\n");
+    serial_write("vm86: compat-task probe complete\n");
+    return 1;
+
+cleanup:
+    vm86_compat_task_disarm();
+    vm86_gp_isr_uninstall();
+    vm86_gp_isr_install_disarm();
+    return 0;
+}
