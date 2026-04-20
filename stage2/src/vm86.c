@@ -2920,3 +2920,349 @@ int vm86_gp_dispatch_probe(void) {
 
     #undef GPD_CASE
 }
+
+/* ================================================================== */
+/* OPENGEM-036 - PE32 #GP ISR C-side entry (arm-gated, observability).*/
+/*                                                                    */
+/* Adds the C function a future real PE32 #GP handler will call. The */
+/* asm stub remains the halt-loop from OPENGEM-035; no CPU control   */
+/* state is touched here. Own arm-gate, own magic, own sentinel.     */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_gp_isr_c_sentinel[] = "OPENGEM-036";
+
+static int s_vm86_gp_isr_c_armed = 0;
+
+int vm86_gp_isr_c_arm(u32 magic) {
+    if (magic != VM86_GP_ISR_ARM_MAGIC) {
+        return 0;
+    }
+    s_vm86_gp_isr_c_armed = 1;
+    return 1;
+}
+
+void vm86_gp_isr_c_disarm(void) {
+    s_vm86_gp_isr_c_armed = 0;
+}
+
+int vm86_gp_isr_c_is_armed(void) {
+    return s_vm86_gp_isr_c_armed ? 1 : 0;
+}
+
+vm86_gp_dispatch_action vm86_gp_isr_c_entry(
+    const vm86_trap_frame *in_frame,
+    const u8              *guest_base,
+    u32                    guest_size,
+    vm86_dispatcher       *disp,
+    vm86_task             *task,
+    u8                    *guest_iret_slot,
+    vm86_trap_frame       *out_frame,
+    vm86_gp_decode_result *decode_out) {
+    /* Arm-gate: disarmed path must NEVER invoke the decoder and
+     * must NEVER populate out_frame or the IRET slot. */
+    if (!s_vm86_gp_isr_c_armed) {
+        if (decode_out) *decode_out = VM86_GP_RESULT_NONE;
+        return VM86_GP_DISPATCH_ACTION_BLOCKED_NOT_ARMED;
+    }
+
+    /* Input validation. Any failure is BAD_INPUT with no side
+     * effects on out_frame / slot. */
+    if (!in_frame || !guest_base || guest_size == 0) {
+        if (decode_out) *decode_out = VM86_GP_RESULT_NULL_ARG;
+        return VM86_GP_DISPATCH_ACTION_BAD_INPUT;
+    }
+
+    /* Copy the captured frame into a local working frame. This
+     * mirrors what the PE32 asm stub (OPENGEM-037) will do: the
+     * hardware-pushed frame lives on the trap stack; it must not
+     * be mutated in place until the dispatch action is known. */
+    vm86_trap_frame work;
+    for (u32 i = 0; i < sizeof(work); i++) {
+        ((u8*)&work)[i] = ((const u8*)in_frame)[i];
+    }
+
+    /* Route through the OPENGEM-035 host dispatcher. That call
+     * enforces ITS OWN arm-gate too; the 036 gate and the 035
+     * gate are independent by design, so the caller must arm
+     * both to reach the decoder. */
+    vm86_gp_decode_result local_dec = VM86_GP_RESULT_NONE;
+    vm86_gp_dispatch_action action =
+        vm86_gp_dispatch_handle(guest_base, guest_size,
+                                &work, disp, task,
+                                guest_iret_slot, &local_dec);
+
+    if (decode_out) *decode_out = local_dec;
+
+    /* Propagate the post-decode working frame back to the caller.
+     * Only on non-BLOCKED paths: BLOCKED_NOT_ARMED from 035 means
+     * the decoder was skipped, and we keep out_frame untouched to
+     * match the documented contract. */
+    if (out_frame && action != VM86_GP_DISPATCH_ACTION_BLOCKED_NOT_ARMED) {
+        for (u32 i = 0; i < sizeof(work); i++) {
+            ((u8*)out_frame)[i] = ((const u8*)&work)[i];
+        }
+    }
+
+    return action;
+}
+
+/* ------------------------------------------------------------------ */
+/* Probe: host-driven exercise of the C ISR entry. Never invoked     */
+/* from boot; reachable only via its public prototype.               */
+/* ------------------------------------------------------------------ */
+
+#define VM86_GPI_PROBE_BUF_BYTES 4096u
+static u8 s_vm86_gpi_probe_buf[VM86_GPI_PROBE_BUF_BYTES] __attribute__((aligned(16)));
+static u8 s_vm86_gpi_iret_slot[VM86_IRET_FRAME_BYTES] __attribute__((aligned(4)));
+
+int vm86_gp_isr_c_probe(void) {
+    serial_write("vm86: gp-isr-c sentinel=0x");
+    serial_write_hex64((u64)VM86_GP_ISR_C_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_gp_isr_c_sentinel);
+    serial_write("\n");
+
+    /* Invariant: default disarmed. */
+    if (vm86_gp_isr_c_is_armed()) {
+        serial_write("vm86: gp-isr-c default-armed=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: gp-isr-c arm-state=0 (disarmed)\n");
+
+    /* Invariant: wrong magic rejected. */
+    if (vm86_gp_isr_c_arm(0xDEADBEEFu) != 0 || vm86_gp_isr_c_is_armed()) {
+        serial_write("vm86: gp-isr-c magic-reject=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: gp-isr-c magic-reject=OK\n");
+
+    /* Seed the synthetic guest buffer. */
+    for (u32 i = 0; i < VM86_GPI_PROBE_BUF_BYTES; i++) s_vm86_gpi_probe_buf[i] = 0;
+    s_vm86_gpi_probe_buf[0x000] = 0xCD; s_vm86_gpi_probe_buf[0x001] = 0x21;
+    s_vm86_gpi_probe_buf[0x100] = 0xF4;  /* HLT */
+
+    /* Disarmed handle: must return BLOCKED, NOT touch out_frame or slot. */
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) s_vm86_gpi_iret_slot[i] = 0xA5;
+    vm86_trap_frame in_blk, out_blk;
+    for (u32 i = 0; i < sizeof(in_blk);  i++) ((u8*)&in_blk)[i]  = 0;
+    for (u32 i = 0; i < sizeof(out_blk); i++) ((u8*)&out_blk)[i] = 0xDE;
+    in_blk.cs  = 0;
+    in_blk.eip = 0;
+    vm86_gp_decode_result dec_blk = VM86_GP_RESULT_INT;
+    vm86_gp_dispatch_action a_blk =
+        vm86_gp_isr_c_entry(&in_blk, s_vm86_gpi_probe_buf,
+                            VM86_GPI_PROBE_BUF_BYTES,
+                            0, 0,
+                            s_vm86_gpi_iret_slot, &out_blk, &dec_blk);
+    if (a_blk != VM86_GP_DISPATCH_ACTION_BLOCKED_NOT_ARMED ||
+        dec_blk != VM86_GP_RESULT_NONE) {
+        serial_write("vm86: gp-isr-c disarmed-return=FAIL\n");
+        return 0;
+    }
+    for (u32 i = 0; i < sizeof(out_blk); i++) {
+        if (((u8*)&out_blk)[i] != 0xDE) {
+            serial_write("vm86: gp-isr-c disarmed-out-touched=FAIL\n");
+            return 0;
+        }
+    }
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) {
+        if (s_vm86_gpi_iret_slot[i] != 0xA5) {
+            serial_write("vm86: gp-isr-c disarmed-slot-touched=FAIL\n");
+            return 0;
+        }
+    }
+    serial_write("vm86: gp-isr-c disarmed-block=OK\n");
+
+    /* Arm both 036 and 035 — they are independent. */
+    if (vm86_gp_isr_c_arm(VM86_GP_ISR_ARM_MAGIC) != 1 || !vm86_gp_isr_c_is_armed()) {
+        serial_write("vm86: gp-isr-c magic-accept=FAIL\n");
+        return 0;
+    }
+    if (vm86_gp_dispatch_arm(VM86_GP_DISPATCH_ARM_MAGIC) != 1 ||
+        !vm86_gp_dispatch_is_armed()) {
+        serial_write("vm86: gp-isr-c stage35-arm=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: gp-isr-c arm-state=1 (armed)\n");
+
+    int ok = 1;
+
+    /* Case A: INT 21h at 0x000 -> IRETD. out_frame must contain the
+     * advanced EIP; iret_slot must hold a valid v86 IRETD image. */
+    {
+        for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) s_vm86_gpi_iret_slot[i] = 0xA5;
+        vm86_trap_frame in_a, out_a;
+        for (u32 i = 0; i < sizeof(in_a);  i++) ((u8*)&in_a)[i]  = 0;
+        for (u32 i = 0; i < sizeof(out_a); i++) ((u8*)&out_a)[i] = 0xBB;
+        in_a.cs  = 0x0000;
+        in_a.eip = 0x0000;
+        in_a.ss  = 0x1000;
+        in_a.esp = 0x0FF0;
+        in_a.ds  = 0x2000;
+        in_a.es  = 0x3000;
+        in_a.fs  = 0x4000;
+        in_a.gs  = 0x5000;
+        in_a.eflags = 0;
+        vm86_gp_decode_result dec_a = VM86_GP_RESULT_NONE;
+        vm86_gp_dispatch_action a_a =
+            vm86_gp_isr_c_entry(&in_a, s_vm86_gpi_probe_buf,
+                                VM86_GPI_PROBE_BUF_BYTES,
+                                0, 0,
+                                s_vm86_gpi_iret_slot, &out_a, &dec_a);
+        if (a_a != VM86_GP_DISPATCH_ACTION_IRETD) {
+            serial_write("vm86: gp-isr-c case-int21-action=FAIL\n"); ok = 0;
+        }
+        if (dec_a != VM86_GP_RESULT_INT) {
+            serial_write("vm86: gp-isr-c case-int21-decode=FAIL\n"); ok = 0;
+        }
+        if (out_a.eip != 0x0002u) {
+            serial_write("vm86: gp-isr-c case-int21-eip=FAIL\n"); ok = 0;
+        }
+        if (out_a.ss != 0x1000u || out_a.esp != 0x0FF0u) {
+            serial_write("vm86: gp-isr-c case-int21-ss-esp=FAIL\n"); ok = 0;
+        }
+        if (in_a.eip != 0x0000u) {
+            /* Input must not be mutated. */
+            serial_write("vm86: gp-isr-c case-int21-in-mutated=FAIL\n"); ok = 0;
+        }
+        if (vm86_iret_read_eip(s_vm86_gpi_iret_slot) != 0x0002u) {
+            serial_write("vm86: gp-isr-c case-int21-slot-eip=FAIL\n"); ok = 0;
+        }
+        u32 ef_a = vm86_iret_read_eflags(s_vm86_gpi_iret_slot);
+        if (!(ef_a & VM86_EFLAGS_VM) || !(ef_a & VM86_EFLAGS_IOPL3)) {
+            serial_write("vm86: gp-isr-c case-int21-slot-vm-iopl=FAIL\n"); ok = 0;
+        }
+    }
+
+    /* Case B: HLT at 0x100 -> ACTION_HLT. out_frame receives the
+     * post-decode working frame (EIP advanced by 1); slot NOT
+     * written on non-IRETD actions. */
+    {
+        for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) s_vm86_gpi_iret_slot[i] = 0xA5;
+        vm86_trap_frame in_b, out_b;
+        for (u32 i = 0; i < sizeof(in_b);  i++) ((u8*)&in_b)[i]  = 0;
+        for (u32 i = 0; i < sizeof(out_b); i++) ((u8*)&out_b)[i] = 0xCC;
+        in_b.cs  = 0x0000;
+        in_b.eip = 0x0100;
+        in_b.ss  = 0x2000;
+        in_b.esp = 0x0800;
+        vm86_gp_decode_result dec_b = VM86_GP_RESULT_NONE;
+        vm86_gp_dispatch_action a_b =
+            vm86_gp_isr_c_entry(&in_b, s_vm86_gpi_probe_buf,
+                                VM86_GPI_PROBE_BUF_BYTES,
+                                0, 0,
+                                s_vm86_gpi_iret_slot, &out_b, &dec_b);
+        if (a_b != VM86_GP_DISPATCH_ACTION_HLT) {
+            serial_write("vm86: gp-isr-c case-hlt-action=FAIL\n"); ok = 0;
+        }
+        if (dec_b != VM86_GP_RESULT_HLT) {
+            serial_write("vm86: gp-isr-c case-hlt-decode=FAIL\n"); ok = 0;
+        }
+        if (out_b.eip != 0x0101u) {
+            serial_write("vm86: gp-isr-c case-hlt-eip=FAIL\n"); ok = 0;
+        }
+        for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) {
+            if (s_vm86_gpi_iret_slot[i] != 0xA5) {
+                serial_write("vm86: gp-isr-c case-hlt-slot-touched=FAIL\n");
+                ok = 0;
+                break;
+            }
+        }
+    }
+
+    /* Case C: NULL in_frame -> BAD_INPUT, out_frame/slot untouched. */
+    {
+        for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) s_vm86_gpi_iret_slot[i] = 0xA5;
+        vm86_trap_frame out_c;
+        for (u32 i = 0; i < sizeof(out_c); i++) ((u8*)&out_c)[i] = 0xEE;
+        vm86_gp_decode_result dec_c = VM86_GP_RESULT_NONE;
+        vm86_gp_dispatch_action a_c =
+            vm86_gp_isr_c_entry(0, s_vm86_gpi_probe_buf,
+                                VM86_GPI_PROBE_BUF_BYTES,
+                                0, 0,
+                                s_vm86_gpi_iret_slot, &out_c, &dec_c);
+        if (a_c != VM86_GP_DISPATCH_ACTION_BAD_INPUT) {
+            serial_write("vm86: gp-isr-c case-null-in=FAIL\n"); ok = 0;
+        }
+        if (dec_c != VM86_GP_RESULT_NULL_ARG) {
+            serial_write("vm86: gp-isr-c case-null-in-decode=FAIL\n"); ok = 0;
+        }
+        for (u32 i = 0; i < sizeof(out_c); i++) {
+            if (((u8*)&out_c)[i] != 0xEE) {
+                serial_write("vm86: gp-isr-c case-null-in-out-touched=FAIL\n");
+                ok = 0;
+                break;
+            }
+        }
+    }
+
+    /* Case D: NULL guest_base -> BAD_INPUT. */
+    {
+        vm86_trap_frame in_d;
+        for (u32 i = 0; i < sizeof(in_d); i++) ((u8*)&in_d)[i] = 0;
+        vm86_gp_dispatch_action a_d =
+            vm86_gp_isr_c_entry(&in_d, 0, VM86_GPI_PROBE_BUF_BYTES,
+                                0, 0, 0, 0, 0);
+        if (a_d != VM86_GP_DISPATCH_ACTION_BAD_INPUT) {
+            serial_write("vm86: gp-isr-c case-null-guest=FAIL\n"); ok = 0;
+        }
+    }
+
+    /* Case E: zero guest_size -> BAD_INPUT. */
+    {
+        vm86_trap_frame in_e;
+        for (u32 i = 0; i < sizeof(in_e); i++) ((u8*)&in_e)[i] = 0;
+        vm86_gp_dispatch_action a_e =
+            vm86_gp_isr_c_entry(&in_e, s_vm86_gpi_probe_buf, 0,
+                                0, 0, 0, 0, 0);
+        if (a_e != VM86_GP_DISPATCH_ACTION_BAD_INPUT) {
+            serial_write("vm86: gp-isr-c case-zero-size=FAIL\n"); ok = 0;
+        }
+    }
+
+    /* Case F: gate independence -- disarm 036 only, leave 035 armed.
+     * Must return BLOCKED_NOT_ARMED from 036 without touching 035. */
+    {
+        vm86_gp_isr_c_disarm();
+        if (!vm86_gp_dispatch_is_armed()) {
+            serial_write("vm86: gp-isr-c stage35-still-armed=FAIL\n"); ok = 0;
+        }
+        vm86_trap_frame in_f;
+        for (u32 i = 0; i < sizeof(in_f); i++) ((u8*)&in_f)[i] = 0;
+        in_f.cs = 0; in_f.eip = 0;
+        vm86_gp_decode_result dec_f = VM86_GP_RESULT_INT;
+        vm86_gp_dispatch_action a_f =
+            vm86_gp_isr_c_entry(&in_f, s_vm86_gpi_probe_buf,
+                                VM86_GPI_PROBE_BUF_BYTES,
+                                0, 0, 0, 0, &dec_f);
+        if (a_f != VM86_GP_DISPATCH_ACTION_BLOCKED_NOT_ARMED) {
+            serial_write("vm86: gp-isr-c independent-disarm=FAIL\n"); ok = 0;
+        }
+        if (dec_f != VM86_GP_RESULT_NONE) {
+            serial_write("vm86: gp-isr-c independent-disarm-decode=FAIL\n"); ok = 0;
+        }
+    }
+
+    /* Leave both gates disarmed before returning. */
+    vm86_gp_isr_c_disarm();
+    vm86_gp_dispatch_disarm();
+    if (vm86_gp_isr_c_is_armed() || vm86_gp_dispatch_is_armed()) {
+        serial_write("vm86: gp-isr-c final-disarm=FAIL\n");
+        return 0;
+    }
+
+    if (!ok) {
+        serial_write("vm86: gp-isr-c probe failed\n");
+        return 0;
+    }
+
+    serial_write("vm86: gp-isr-c arm-magic=0x");
+    serial_write_hex64((u64)VM86_GP_ISR_ARM_MAGIC);
+    serial_write("\n");
+    serial_write("vm86: gp-isr-c out-frame-apply=OK\n");
+    serial_write("vm86: gp-isr-c gate-independence=OK\n");
+    serial_write("vm86: gp-isr-c ready-surface=arm-gate,c-entry,out-frame-apply,bad-input\n");
+    serial_write("vm86: gp-isr-c pending-surface=asm-isr-body,live-idt-install,live-v86-entry\n");
+    serial_write("vm86: gp-isr-c probe complete\n");
+    return 1;
+}
