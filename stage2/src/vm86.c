@@ -3759,3 +3759,212 @@ cleanup:
     vm86_gp_isr_install_disarm();
     return 0;
 }
+
+/* ================================================================== */
+/* OPENGEM-040 - compat-mode entry wrapper (staged, arm-gated).       */
+/*                                                                    */
+/* Binds the asm trampoline in vm86_compat_entry.S to a C surface    */
+/* that the 041 shell command will eventually call. In 040 nothing   */
+/* calls enter_v86 (it is not even declared in the header) and the   */
+/* arm flag defaults to 0.                                            */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_compat_entry_c_sentinel[] = "OPENGEM-040";
+
+extern const char vm86_compat_entry_sentinel[];
+
+/* Asm-side scratch block layout mirror. Must match the .data layout
+ * in vm86_compat_entry.S exactly. */
+typedef struct vm86_compat_entry_scratch_image {
+    u64 img_ptr;      /* 0x00 */
+    u64 host_cr3;     /* 0x08 */
+    u32 cs_ip;        /* 0x10 */
+    u32 ss_sp;        /* 0x14 */
+    u16 gdtr_limit;   /* 0x18 */
+    u16 pad0;         /* 0x1A */
+    u32 gdtr_base_lo; /* 0x1C */
+    u32 gdtr_base_hi; /* 0x20 */
+    u32 pad1;         /* 0x24 */
+    u16 idtr_limit;   /* 0x28 */
+    u16 pad2;         /* 0x2A */
+    u32 idtr_base_lo; /* 0x2C */
+    u32 idtr_base_hi; /* 0x30 */
+    u32 pad3;         /* 0x34 */
+    u16 tss_sel;      /* 0x38 */
+    u16 cs32_sel;     /* 0x3A */
+    u16 ds32_sel;     /* 0x3C */
+    u16 pad4;         /* 0x3E */
+} vm86_compat_entry_scratch_image;
+
+extern vm86_compat_entry_scratch_image vm86_compat_entry_scratch;
+
+static int s_vm86_compat_entry_armed = 0;
+
+int vm86_compat_entry_arm(u32 magic) {
+    if (magic != VM86_COMPAT_ENTRY_ARM_MAGIC) return 0;
+    s_vm86_compat_entry_armed = 1;
+    return 1;
+}
+
+void vm86_compat_entry_disarm(void) {
+    s_vm86_compat_entry_armed = 0;
+}
+
+int vm86_compat_entry_is_armed(void) {
+    return s_vm86_compat_entry_armed ? 1 : 0;
+}
+
+int vm86_compat_entry_prepare(const vm86_compat_task_image *img,
+                              u32 host_cr3, u32 magic) {
+    if (!img) return 0;
+    if (magic != VM86_COMPAT_ENTRY_ARM_MAGIC) return 0;
+    if (!s_vm86_compat_entry_armed) return 0;
+
+    /* Zero the scratch. */
+    u8 *s = (u8*)&vm86_compat_entry_scratch;
+    for (u32 i = 0; i < sizeof(vm86_compat_entry_scratch); i++) s[i] = 0;
+
+    vm86_compat_entry_scratch.img_ptr  = (u64)(unsigned long)img;
+    vm86_compat_entry_scratch.host_cr3 = (u64)host_cr3;
+    /* cs:ip / ss:sp are populated per-call by the 041 caller; leave 0. */
+    vm86_compat_entry_scratch.cs_ip = 0;
+    vm86_compat_entry_scratch.ss_sp = 0;
+
+    vm86_compat_entry_scratch.gdtr_limit   = img->gdtr_limit;
+    vm86_compat_entry_scratch.gdtr_base_lo = (u32)(img->gdtr_base & 0xFFFFFFFFu);
+    vm86_compat_entry_scratch.gdtr_base_hi = (u32)(img->gdtr_base >> 32);
+
+    vm86_compat_entry_scratch.idtr_limit   = img->idtr_limit;
+    vm86_compat_entry_scratch.idtr_base_lo = (u32)(img->idtr_base & 0xFFFFFFFFu);
+    vm86_compat_entry_scratch.idtr_base_hi = (u32)(img->idtr_base >> 32);
+
+    vm86_compat_entry_scratch.tss_sel  = img->tss_sel;
+    vm86_compat_entry_scratch.cs32_sel = img->cs_sel;
+    vm86_compat_entry_scratch.ds32_sel = img->ds_sel;
+
+    return 1;
+}
+
+int vm86_compat_entry_verify(const vm86_compat_task_image *img, u32 host_cr3) {
+    if (!img) return 0;
+    if (vm86_compat_entry_scratch.img_ptr  != (u64)(unsigned long)img) return 0;
+    if (vm86_compat_entry_scratch.host_cr3 != (u64)host_cr3)           return 0;
+    if (vm86_compat_entry_scratch.gdtr_limit != img->gdtr_limit)       return 0;
+    if (vm86_compat_entry_scratch.idtr_limit != img->idtr_limit)       return 0;
+    if (vm86_compat_entry_scratch.tss_sel    != img->tss_sel)          return 0;
+    if (vm86_compat_entry_scratch.cs32_sel   != img->cs_sel)           return 0;
+    if (vm86_compat_entry_scratch.ds32_sel   != img->ds_sel)           return 0;
+    u64 gb = ((u64)vm86_compat_entry_scratch.gdtr_base_hi << 32) |
+             (u64)vm86_compat_entry_scratch.gdtr_base_lo;
+    if (gb != img->gdtr_base) return 0;
+    u64 ib = ((u64)vm86_compat_entry_scratch.idtr_base_hi << 32) |
+             (u64)vm86_compat_entry_scratch.idtr_base_lo;
+    if (ib != img->idtr_base) return 0;
+    return 1;
+}
+
+/* Forward-declare the asm entry symbols to prove the link succeeded.
+ * We only take their address — we never call them in 040. */
+extern void vm86_compat_entry_trampoline(void);
+extern void vm86_compat_entry_body_live(void);
+extern void vm86_compat_entry_compat32(void);
+
+int vm86_compat_entry_probe(void) {
+    serial_write("vm86: compat-entry sentinel=0x");
+    serial_write_hex64((u64)VM86_COMPAT_ENTRY_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_compat_entry_c_sentinel);
+    serial_write(" asm=");
+    serial_write(vm86_compat_entry_sentinel);
+    serial_write("\n");
+
+    if (vm86_compat_entry_is_armed()) {
+        serial_write("vm86: compat-entry default-armed=FAIL\n"); return 0;
+    }
+    if (vm86_compat_entry_arm(0xDEADBEEFu) != 0 || vm86_compat_entry_is_armed()) {
+        serial_write("vm86: compat-entry magic-reject=FAIL\n"); return 0;
+    }
+
+    /* Prereq arming chain: 038 install and 039 compat-task. */
+    if (vm86_gp_isr_install_arm(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry prereq-038-arm=FAIL\n"); return 0;
+    }
+    if (vm86_gp_isr_install(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry prereq-038-install=FAIL\n"); return 0;
+    }
+    if (vm86_compat_task_arm(VM86_COMPAT_TASK_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry prereq-039-arm=FAIL\n"); return 0;
+    }
+
+    vm86_compat_task_image img;
+    if (vm86_compat_task_build(&img, VM86_COMPAT_TASK_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry prereq-039-build=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_task_verify(&img) != 1) {
+        serial_write("vm86: compat-entry prereq-039-verify=FAIL\n"); goto cleanup;
+    }
+
+    /* prepare() must refuse while disarmed. */
+    u32 fake_cr3 = 0x1000u;  /* placeholder; never loaded in 040 */
+    if (vm86_compat_entry_prepare(&img, fake_cr3, VM86_COMPAT_ENTRY_ARM_MAGIC) != 0) {
+        serial_write("vm86: compat-entry disarmed-prepare=FAIL\n"); goto cleanup;
+    }
+
+    /* Arm 040, prepare, verify. */
+    if (vm86_compat_entry_arm(VM86_COMPAT_ENTRY_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry magic-accept=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_entry_prepare(&img, fake_cr3, VM86_COMPAT_ENTRY_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry prepare=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_entry_verify(&img, fake_cr3) != 1) {
+        serial_write("vm86: compat-entry verify=FAIL\n"); goto cleanup;
+    }
+
+    /* Mutation on the staged scratch must break verify. */
+    u16 save_cs32 = vm86_compat_entry_scratch.cs32_sel;
+    vm86_compat_entry_scratch.cs32_sel ^= 1u;
+    if (vm86_compat_entry_verify(&img, fake_cr3) != 0) {
+        serial_write("vm86: compat-entry verify-mutation=FAIL\n"); goto cleanup;
+    }
+    vm86_compat_entry_scratch.cs32_sel = save_cs32;
+
+    /* Asm symbols must resolve to non-NULL addresses. */
+    if ((u64)(unsigned long)&vm86_compat_entry_trampoline == 0 ||
+        (u64)(unsigned long)&vm86_compat_entry_body_live  == 0 ||
+        (u64)(unsigned long)&vm86_compat_entry_compat32   == 0) {
+        serial_write("vm86: compat-entry asm-symbol=FAIL\n"); goto cleanup;
+    }
+
+    vm86_compat_entry_disarm();
+    if (vm86_compat_entry_is_armed()) {
+        serial_write("vm86: compat-entry final-disarm=FAIL\n"); goto cleanup;
+    }
+
+    /* Cleanup prereqs. */
+    vm86_compat_task_disarm();
+    vm86_gp_isr_uninstall();
+    vm86_gp_isr_install_disarm();
+
+    serial_write("vm86: compat-entry arm-magic=0x");
+    serial_write_hex64((u64)VM86_COMPAT_ENTRY_ARM_MAGIC);
+    serial_write("\n");
+    serial_write("vm86: compat-entry scratch gdtr-limit=0x");
+    serial_write_hex64((u64)vm86_compat_entry_scratch.gdtr_limit);
+    serial_write(" idtr-limit=0x");
+    serial_write_hex64((u64)vm86_compat_entry_scratch.idtr_limit);
+    serial_write(" tss-sel=0x");
+    serial_write_hex64((u64)vm86_compat_entry_scratch.tss_sel);
+    serial_write("\n");
+    serial_write("vm86: compat-entry ready-surface=arm-gate,prepare,verify,asm-staged\n");
+    serial_write("vm86: compat-entry pending-surface=live-enter-v86,int10-mode13,gem-dispatch\n");
+    serial_write("vm86: compat-entry probe complete\n");
+    return 1;
+
+cleanup:
+    vm86_compat_entry_disarm();
+    vm86_compat_task_disarm();
+    vm86_gp_isr_uninstall();
+    vm86_gp_isr_install_disarm();
+    return 0;
+}

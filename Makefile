@@ -546,6 +546,9 @@ test-vm86-gp-isr-install:
 test-vm86-compat-task:
 	bash ./scripts/test_vm86_compat_task.sh
 
+test-vm86-compat-entry:
+	bash ./scripts/test_vm86_compat_entry.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

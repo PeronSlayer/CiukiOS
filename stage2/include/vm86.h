@@ -1447,4 +1447,56 @@ int vm86_compat_task_verify(const vm86_compat_task_image *img);
  */
 int vm86_compat_task_probe(void);
 
+/* ================================================================== */
+/* OPENGEM-040 — compat-mode entry trampoline (staged, arm-gated).    */
+/*                                                                    */
+/* The asm trampoline in stage2/src/vm86_compat_entry.S performs the  */
+/* live LGDT/far-jmp/LIDT/LTR/IRETD sequence that finally drops the  */
+/* CPU into v8086. In OPENGEM-040 the trampoline is reachable only   */
+/* through vm86_compat_entry_enter (041-declared helper) which requires */
+/* the 040 arm magic; no caller in the boot path supplies it. Shell    */
+/* deferred to OPENGEM-041.                                          */
+/* ================================================================== */
+
+#define VM86_COMPAT_ENTRY_SENTINEL  0x0400u
+#define VM86_COMPAT_ENTRY_ARM_MAGIC 0xC1D39400u
+
+int  vm86_compat_entry_arm(u32 magic);
+void vm86_compat_entry_disarm(void);
+int  vm86_compat_entry_is_armed(void);
+
+/*
+ * Stage the entry scratch block from a verified compat-task image.
+ * Writes the 10-byte GDTR/IDTR pseudo-descriptors into the asm-side
+ * scratch and saves CS32/DS32/TSS selectors. Does NOT execute any
+ * privileged instruction. Requires the 040 arm flag to be set.
+ *
+ * Returns 1 on success, 0 otherwise.
+ */
+int vm86_compat_entry_prepare(const vm86_compat_task_image *img,
+                              u32 host_cr3, u32 magic);
+
+/*
+ * Verify the asm-side scratch block matches a freshly-prepared
+ * image. Read-only. Returns 1 on success.
+ */
+int vm86_compat_entry_verify(const vm86_compat_task_image *img,
+                             u32 host_cr3);
+
+/*
+ * Host-driven probe. Exercises arm/disarm, prepare(), verify() and
+ * confirms the asm entry-point symbols resolve to non-NULL. Does
+ * NOT invoke the live trampoline.
+ *
+ * Returns 1 on success.
+ */
+int vm86_compat_entry_probe(void);
+
+/*
+ * LIVE entry — drops the CPU into v8086. Irreversible in the current
+ * boot. Deliberately NOT declared here in OPENGEM-040 to prevent
+ * accidental callers. The declaration is published by OPENGEM-041
+ * after runtime validation.
+ */
+
 #endif /* STAGE2_VM86_H */
