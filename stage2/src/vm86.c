@@ -3968,3 +3968,196 @@ cleanup:
     vm86_gp_isr_install_disarm();
     return 0;
 }
+
+/* ================================================================== */
+/* OPENGEM-041 - live v86 entry API (double arm-gated).               */
+/*                                                                    */
+/* Publishes vm86_compat_entry_enter_v86(). No boot-path caller in   */
+/* 041 — shell wiring ships separately once a runtime QEMU validation*/
+/* is on record.                                                      */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_compat_entry_live_c_sentinel[] = "OPENGEM-041";
+
+extern const char vm86_compat_entry_live_sentinel[];
+extern void vm86_compat_entry_enter_asm(void);
+extern void vm86_compat_entry_live_compat32(void);
+
+static int s_vm86_compat_entry_live_armed = 0;
+
+int vm86_compat_entry_live_arm(u32 magic) {
+    if (magic != VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) return 0;
+    s_vm86_compat_entry_live_armed = 1;
+    return 1;
+}
+
+void vm86_compat_entry_live_disarm(void) {
+    s_vm86_compat_entry_live_armed = 0;
+}
+
+int vm86_compat_entry_live_is_armed(void) {
+    return s_vm86_compat_entry_live_armed ? 1 : 0;
+}
+
+int vm86_compat_entry_live_fill_frame(vm86_compat_task_image *img,
+                                      u32 host_cr3,
+                                      u16 v86_cs, u16 v86_ip,
+                                      u16 v86_ss, u16 v86_sp,
+                                      u32 magic040, u32 magic041) {
+    if (!img) return 0;
+    if (magic040 != VM86_COMPAT_ENTRY_ARM_MAGIC)      return 0;
+    if (magic041 != VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) return 0;
+    if (!vm86_compat_entry_is_armed())       return 0;
+    if (!s_vm86_compat_entry_live_armed)     return 0;
+
+    /* Patch TSS.cr3 in the caller's image (040 scaffold left it 0). */
+    img->tss.cr3 = host_cr3;
+
+    /* Mirror into the GDT's TSS descriptor? No — the TSS bytes aren't
+     * reflected in gdt_bytes; they live in the static TSS buffer whose
+     * address is encoded in the GDT. The live trampoline reads the
+     * staged TSS via LTR → CPU loads CR3 from there. So we only need
+     * the canonical TSS (the one whose base is in the GDT) to have
+     * cr3 patched. That is s_vm86_compat_tss inside vm86.c. The
+     * caller's img->tss is just a snapshot; patching it is harmless
+     * but we must ALSO patch the real TSS that LTR will load. */
+    s_vm86_compat_tss.cr3 = host_cr3;
+
+    /* Pack cs:ip and ss:sp into the asm scratch. */
+    vm86_compat_entry_scratch.cs_ip = ((u32)v86_cs << 16) | (u32)v86_ip;
+    vm86_compat_entry_scratch.ss_sp = ((u32)v86_ss << 16) | (u32)v86_sp;
+    vm86_compat_entry_scratch.host_cr3 = (u64)host_cr3;
+
+    return 1;
+}
+
+int vm86_compat_entry_enter_v86(u32 magic040, u32 magic041) {
+    if (magic040 != VM86_COMPAT_ENTRY_ARM_MAGIC) {
+        serial_write("vm86: enter-v86 magic040=FAIL\n"); return 0;
+    }
+    if (magic041 != VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) {
+        serial_write("vm86: enter-v86 magic041=FAIL\n"); return 0;
+    }
+    if (!vm86_compat_entry_is_armed()) {
+        serial_write("vm86: enter-v86 arm040=FAIL\n"); return 0;
+    }
+    if (!s_vm86_compat_entry_live_armed) {
+        serial_write("vm86: enter-v86 arm041=FAIL\n"); return 0;
+    }
+    if (!s_vm86_idt_shim_built || !s_vm86_gp_isr_installed) {
+        serial_write("vm86: enter-v86 prereq=FAIL\n"); return 0;
+    }
+
+    serial_write("vm86: enter-v86 handoff (no return)\n");
+    vm86_compat_entry_enter_asm();
+    /* Unreachable: the asm trampoline does not return. */
+    serial_write("vm86: enter-v86 POST-IRETL=FAIL (unexpected return)\n");
+    return 0;
+}
+
+int vm86_compat_entry_live_probe(void) {
+    serial_write("vm86: compat-entry-live sentinel=0x");
+    serial_write_hex64((u64)VM86_COMPAT_ENTRY_LIVE_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_compat_entry_live_c_sentinel);
+    serial_write(" asm=");
+    serial_write(vm86_compat_entry_live_sentinel);
+    serial_write("\n");
+
+    if (vm86_compat_entry_live_is_armed()) {
+        serial_write("vm86: compat-entry-live default-armed=FAIL\n"); return 0;
+    }
+    if (vm86_compat_entry_live_arm(0xDEADBEEFu) != 0 ||
+        vm86_compat_entry_live_is_armed()) {
+        serial_write("vm86: compat-entry-live magic-reject=FAIL\n"); return 0;
+    }
+
+    /* Full prereq stack: 038 install, 039 compat-task, 040 prepare. */
+    if (vm86_gp_isr_install_arm(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1 ||
+        vm86_gp_isr_install(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry-live prereq-038=FAIL\n"); return 0;
+    }
+    if (vm86_compat_task_arm(VM86_COMPAT_TASK_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry-live prereq-039-arm=FAIL\n"); goto cleanup;
+    }
+    vm86_compat_task_image img;
+    if (vm86_compat_task_build(&img, VM86_COMPAT_TASK_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry-live prereq-039-build=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_entry_arm(VM86_COMPAT_ENTRY_ARM_MAGIC) != 1 ||
+        vm86_compat_entry_prepare(&img, 0x1000u, VM86_COMPAT_ENTRY_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry-live prereq-040=FAIL\n"); goto cleanup;
+    }
+
+    /* fill_frame must refuse while 041-disarmed. */
+    if (vm86_compat_entry_live_fill_frame(&img, 0x2000u,
+                                          0x0000u, 0x0100u,
+                                          0x0000u, 0xFFFEu,
+                                          VM86_COMPAT_ENTRY_ARM_MAGIC,
+                                          VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) != 0) {
+        serial_write("vm86: compat-entry-live disarmed-fill=FAIL\n"); goto cleanup;
+    }
+
+    /* Arm 041, fill frame, confirm scratch contents. */
+    if (vm86_compat_entry_live_arm(VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry-live magic-accept=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_entry_live_fill_frame(&img, 0x3000u,
+                                          0x1234u, 0x5678u,
+                                          0x9ABCu, 0xDEFEu,
+                                          VM86_COMPAT_ENTRY_ARM_MAGIC,
+                                          VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) != 1) {
+        serial_write("vm86: compat-entry-live fill=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_entry_scratch.cs_ip != (((u32)0x1234u << 16) | 0x5678u) ||
+        vm86_compat_entry_scratch.ss_sp != (((u32)0x9ABCu << 16) | 0xDEFEu) ||
+        vm86_compat_entry_scratch.host_cr3 != 0x3000u ||
+        s_vm86_compat_tss.cr3 != 0x3000u) {
+        serial_write("vm86: compat-entry-live scratch-check=FAIL\n"); goto cleanup;
+    }
+
+    /* Wrong-magic guard on enter_v86 (must not execute trampoline). */
+    if (vm86_compat_entry_enter_v86(0xDEADBEEFu,
+                                    VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) != 0) {
+        serial_write("vm86: compat-entry-live enter-guard040=FAIL\n"); goto cleanup;
+    }
+    if (vm86_compat_entry_enter_v86(VM86_COMPAT_ENTRY_ARM_MAGIC,
+                                    0xDEADBEEFu) != 0) {
+        serial_write("vm86: compat-entry-live enter-guard041=FAIL\n"); goto cleanup;
+    }
+
+    /* Asm symbol resolves. */
+    if ((u64)(unsigned long)&vm86_compat_entry_enter_asm == 0 ||
+        (u64)(unsigned long)&vm86_compat_entry_live_compat32 == 0) {
+        serial_write("vm86: compat-entry-live asm-symbol=FAIL\n"); goto cleanup;
+    }
+
+    vm86_compat_entry_live_disarm();
+    if (vm86_compat_entry_live_is_armed()) {
+        serial_write("vm86: compat-entry-live final-disarm=FAIL\n"); goto cleanup;
+    }
+
+    /* Cleanup prereqs. */
+    vm86_compat_entry_disarm();
+    vm86_compat_task_disarm();
+    vm86_gp_isr_uninstall();
+    vm86_gp_isr_install_disarm();
+
+    serial_write("vm86: compat-entry-live arm-magic040=0x");
+    serial_write_hex64((u64)VM86_COMPAT_ENTRY_ARM_MAGIC);
+    serial_write(" arm-magic041=0x");
+    serial_write_hex64((u64)VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC);
+    serial_write("\n");
+    serial_write("vm86: compat-entry-live ready-surface=double-arm,fill-frame,enter-guard,asm-live\n");
+    serial_write("vm86: compat-entry-live pending-surface=shell-gem-loader,int10h-mode13,gp-callback-reenter\n");
+    serial_write("vm86: compat-entry-live probe complete\n");
+    return 1;
+
+cleanup:
+    vm86_compat_entry_live_disarm();
+    vm86_compat_entry_disarm();
+    vm86_compat_task_disarm();
+    vm86_gp_isr_uninstall();
+    vm86_gp_isr_install_disarm();
+    return 0;
+}

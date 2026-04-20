@@ -549,6 +549,9 @@ test-vm86-compat-task:
 test-vm86-compat-entry:
 	bash ./scripts/test_vm86_compat_entry.sh
 
+test-vm86-compat-entry-live:
+	bash ./scripts/test_vm86_compat_entry_live.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

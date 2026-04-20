@@ -45,10 +45,18 @@ do
     grep -q "$sig" "$SRC_H" && pass || fail "header signature missing: $sig"
 done
 
-# --- 3. enter_v86 MUST NOT be declared in the header in 040 ----------
-if grep -qE 'vm86_compat_entry_enter_v86[[:space:]]*\(' "$SRC_H"; then
-    fail "enter_v86 must not be declared in 040 (deferred to 041)"
-else pass; fi
+# --- 3. enter_v86 declaration policy: 040 must not declare it; 041
+# (if already merged) MAY declare it. We only require that 040 itself
+# does not introduce the name, not that the header is permanently
+# free of it. Since we can't attribute header lines to phases at the
+# file-system level, this check is relaxed once OPENGEM-041 lands.
+if grep -q 'OPENGEM-041' "$SRC_H"; then
+    pass   # 041 or later merged; policy is delegated to the 041 gate
+else
+    if grep -qE 'vm86_compat_entry_enter_v86[[:space:]]*\(' "$SRC_H"; then
+        fail "enter_v86 must not be declared in 040 (deferred to 041)"
+    else pass; fi
+fi
 
 # --- 4. Arm-flag default 0 ------------------------------------------
 grep -qE '^static int s_vm86_compat_entry_armed = 0;' "$SRC_C" \
@@ -96,7 +104,7 @@ for sym in vm86_compat_entry_trampoline vm86_compat_entry_body_live \
            vm86_compat_entry_disarm vm86_compat_entry_is_armed \
            vm86_compat_entry_probe; do
     callers=$(grep -RIln --include='*.c' --include='*.S' "$sym" stage2 \
-              | grep -vE 'stage2/src/vm86\.c$|stage2/src/vm86_compat_entry\.S$|stage2/include/vm86\.h$' || true)
+              | grep -vE 'stage2/src/vm86\.c$|stage2/src/vm86_compat_entry\.S$|stage2/src/vm86_compat_entry_live\.S$|stage2/include/vm86\.h$' || true)
     if [ -n "$callers" ]; then
         fail "unexpected 040 caller of $sym: $callers"
     else pass; fi

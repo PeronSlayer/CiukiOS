@@ -1492,11 +1492,53 @@ int vm86_compat_entry_verify(const vm86_compat_task_image *img,
  */
 int vm86_compat_entry_probe(void);
 
+/* ================================================================== */
+/* OPENGEM-041 — live v86 entry API (double arm-gated).                */
+/*                                                                    */
+/* Publishes vm86_compat_entry_enter_v86(): the unguarded path into   */
+/* v8086. Requires BOTH the 040 arm AND the 041 live arm to be held. */
+/* No shell command wires this in 041; the caller is responsible for */
+/* the full prepare + CR3 patch + cs:ip / ss:sp fill prior to entry. */
+/* ================================================================== */
+
+#define VM86_COMPAT_ENTRY_LIVE_SENTINEL  0x0410u
+#define VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC 0xC1D39410u
+
+int  vm86_compat_entry_live_arm(u32 magic);
+void vm86_compat_entry_live_disarm(void);
+int  vm86_compat_entry_live_is_armed(void);
+
 /*
- * LIVE entry — drops the CPU into v8086. Irreversible in the current
- * boot. Deliberately NOT declared here in OPENGEM-040 to prevent
- * accidental callers. The declaration is published by OPENGEM-041
- * after runtime validation.
+ * Populate scratch cs_ip / ss_sp and the TSS.cr3 field in the caller's
+ * staged image. Read-only to everything else. Requires 040 arm + 041
+ * live arm + valid magics. Returns 1 on success.
  */
+int vm86_compat_entry_live_fill_frame(vm86_compat_task_image *img,
+                                      u32 host_cr3,
+                                      u16 v86_cs, u16 v86_ip,
+                                      u16 v86_ss, u16 v86_sp,
+                                      u32 magic040, u32 magic041);
+
+/*
+ * LIVE entry. Irreversible. Never returns to the caller.
+ *
+ * Requires:
+ *   - vm86_compat_task_build / _verify succeeded;
+ *   - vm86_compat_entry_prepare succeeded;
+ *   - vm86_compat_entry_live_fill_frame succeeded;
+ *   - vm86_compat_entry_is_armed() && vm86_compat_entry_live_is_armed();
+ *   - caller supplies both arm magics.
+ *
+ * Returns 0 and serial-logs a fault reason if any precondition fails.
+ * Does NOT return on success.
+ */
+int vm86_compat_entry_enter_v86(u32 magic040, u32 magic041);
+
+/*
+ * Host-driven probe. Exercises double-arm, fill_frame, and confirms
+ * the asm entry symbol resolves to non-NULL. Does NOT invoke the live
+ * trampoline.
+ */
+int vm86_compat_entry_live_probe(void);
 
 #endif /* STAGE2_VM86_H */
