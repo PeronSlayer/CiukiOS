@@ -2519,3 +2519,404 @@ int vm86_gp_decode_probe(void) {
 
     #undef GP_CASE
 }
+
+/* ================================================================== */
+/* OPENGEM-035 - #GP dispatcher host path (arm-gated, observability). */
+/*                                                                    */
+/* Closes the handler-frame-apply / guest-stack-iret pending surface  */
+/* of OPENGEM-034 without ever touching CPU control state. The asm    */
+/* ISR stub in stage2/src/vm86_gp_dispatch.S is defined but NEVER     */
+/* installed in a live IDT by this phase; only the C entry point is   */
+/* exercised, and only by host-driven test code via the arm-gate.    */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_gp_dispatch_c_sentinel[] = "OPENGEM-035";
+
+static int s_vm86_gp_dispatch_armed = 0;
+
+int vm86_gp_dispatch_arm(u32 magic) {
+    if (magic != VM86_GP_DISPATCH_ARM_MAGIC) {
+        return 0;
+    }
+    s_vm86_gp_dispatch_armed = 1;
+    return 1;
+}
+
+void vm86_gp_dispatch_disarm(void) {
+    s_vm86_gp_dispatch_armed = 0;
+}
+
+int vm86_gp_dispatch_is_armed(void) {
+    return s_vm86_gp_dispatch_armed ? 1 : 0;
+}
+
+vm86_gp_dispatch_action vm86_gp_dispatch_handle(
+    const u8              *guest_bytes,
+    u32                    guest_size,
+    vm86_trap_frame       *frame,
+    vm86_dispatcher       *disp,
+    vm86_task             *task,
+    u8                    *guest_iret_slot,
+    vm86_gp_decode_result *decode_out) {
+    /* Arm-gate: disarmed path must NEVER invoke the decoder. */
+    if (!s_vm86_gp_dispatch_armed) {
+        if (decode_out) *decode_out = VM86_GP_RESULT_NONE;
+        return VM86_GP_DISPATCH_ACTION_BLOCKED_NOT_ARMED;
+    }
+
+    vm86_dispatch_status ds = VM86_DISPATCH_UNHANDLED;
+    vm86_gp_decode_result r = vm86_gp_decode(guest_bytes, guest_size,
+                                             frame, disp, task, &ds);
+    if (decode_out) *decode_out = r;
+
+    vm86_gp_dispatch_action action;
+    switch (r) {
+    case VM86_GP_RESULT_INT:
+    case VM86_GP_RESULT_INT3:
+    case VM86_GP_RESULT_INTO:
+    case VM86_GP_RESULT_IRET:
+    case VM86_GP_RESULT_PUSHF:
+    case VM86_GP_RESULT_POPF:
+    case VM86_GP_RESULT_IN_IMM:
+    case VM86_GP_RESULT_OUT_IMM:
+    case VM86_GP_RESULT_IN_DX:
+    case VM86_GP_RESULT_OUT_DX:
+    case VM86_GP_RESULT_CLI:
+    case VM86_GP_RESULT_STI:
+        action = VM86_GP_DISPATCH_ACTION_IRETD;
+        break;
+    case VM86_GP_RESULT_HLT:
+    case VM86_GP_RESULT_UNHANDLED:
+        action = VM86_GP_DISPATCH_ACTION_HLT;
+        break;
+    case VM86_GP_RESULT_NULL_ARG:
+    case VM86_GP_RESULT_OOB:
+    default:
+        action = VM86_GP_DISPATCH_ACTION_BAD_INPUT;
+        break;
+    }
+
+    if (action == VM86_GP_DISPATCH_ACTION_IRETD && guest_iret_slot && frame) {
+        /* Apply the post-decode frame into a v86 IRETD stack image.
+         * The encoder enforces VM=1|IOPL=3 unconditionally, so even
+         * if the caller passes zero EFLAGS the frame is still valid
+         * for an IRETD back into virtual-8086. */
+        (void)vm86_iret_encode_frame(guest_iret_slot,
+                                     frame->cs, (u16)frame->eip,
+                                     frame->ss, (u16)frame->esp,
+                                     frame->eflags,
+                                     frame->ds, frame->es,
+                                     frame->fs, frame->gs);
+    }
+
+    return action;
+}
+
+/* ------------------------------------------------------------------ */
+/* Probe: host-driven exercise of every action class. Never invoked  */
+/* from boot; reachable only via its public prototype.               */
+/* ------------------------------------------------------------------ */
+
+/* Host hit counters for the synthetic dispatcher handlers. */
+static u32 s_gpd_hit_21;
+static u32 s_gpd_hit_3;
+static u32 s_gpd_hit_4;
+
+static void vm86_gpd_probe_int21(vm86_task *task, vm86_trap_frame *frame) {
+    (void)task; (void)frame;
+    s_gpd_hit_21++;
+}
+static void vm86_gpd_probe_int3(vm86_task *task, vm86_trap_frame *frame) {
+    (void)task; (void)frame;
+    s_gpd_hit_3++;
+}
+static void vm86_gpd_probe_int4(vm86_task *task, vm86_trap_frame *frame) {
+    (void)task; (void)frame;
+    s_gpd_hit_4++;
+}
+
+/* 4 KiB synthetic conventional window; static BSS. */
+#define VM86_GPD_PROBE_BUF_BYTES 4096u
+static u8 s_vm86_gpd_probe_buf[VM86_GPD_PROBE_BUF_BYTES] __attribute__((aligned(16)));
+
+/* 36-byte IRETD slot that the handler writes into on IRETD actions. */
+static u8 s_vm86_gpd_iret_slot[VM86_IRET_FRAME_BYTES] __attribute__((aligned(4)));
+
+int vm86_gp_dispatch_probe(void) {
+    serial_write("vm86: gp-dispatch sentinel=0x");
+    serial_write_hex64((u64)VM86_GP_DISPATCH_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_gp_dispatch_c_sentinel);
+    serial_write("\n");
+
+    /* Invariant #1: default must be disarmed. */
+    if (vm86_gp_dispatch_is_armed()) {
+        serial_write("vm86: gp-dispatch default-armed=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: gp-dispatch arm-state=0 (disarmed)\n");
+
+    /* Invariant #2: wrong magic must not flip the gate. */
+    int r_bad = vm86_gp_dispatch_arm(0xBADBAD00u);
+    if (r_bad != 0 || vm86_gp_dispatch_is_armed()) {
+        serial_write("vm86: gp-dispatch magic-reject=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: gp-dispatch magic-reject=OK\n");
+
+    /* Invariant #3: while disarmed, handle() returns BLOCKED and
+     * neither the decoder nor the IRET slot is touched. Seed the
+     * slot with a sentinel pattern and verify it is unchanged. */
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) {
+        s_vm86_gpd_iret_slot[i] = 0xA5;
+    }
+    vm86_trap_frame tf_block;
+    for (u32 i = 0; i < sizeof(tf_block); i++) ((u8*)&tf_block)[i] = 0;
+    tf_block.cs = 0;
+    tf_block.eip = 0;
+    vm86_gp_decode_result dec_block = VM86_GP_RESULT_INT;
+    vm86_gp_dispatch_action a_block =
+        vm86_gp_dispatch_handle(s_vm86_gpd_probe_buf,
+                                VM86_GPD_PROBE_BUF_BYTES,
+                                &tf_block, 0, 0,
+                                s_vm86_gpd_iret_slot, &dec_block);
+    if (a_block != VM86_GP_DISPATCH_ACTION_BLOCKED_NOT_ARMED ||
+        dec_block != VM86_GP_RESULT_NONE) {
+        serial_write("vm86: gp-dispatch disarmed-return=FAIL\n");
+        return 0;
+    }
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) {
+        if (s_vm86_gpd_iret_slot[i] != 0xA5) {
+            serial_write("vm86: gp-dispatch disarmed-slot-touched=FAIL\n");
+            return 0;
+        }
+    }
+    /* The decoder must also have been skipped: tf.eip stays at 0. */
+    if (tf_block.eip != 0) {
+        serial_write("vm86: gp-dispatch disarmed-frame-touched=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: gp-dispatch disarmed-block=OK\n");
+
+    /* Arm the gate for the remainder of the probe. */
+    int r_arm = vm86_gp_dispatch_arm(VM86_GP_DISPATCH_ARM_MAGIC);
+    if (r_arm != 1 || !vm86_gp_dispatch_is_armed()) {
+        serial_write("vm86: gp-dispatch magic-accept=FAIL\n");
+        return 0;
+    }
+    serial_write("vm86: gp-dispatch arm-state=1 (armed)\n");
+
+    /* Prepare the synthetic guest buffer with canned opcodes at
+     * known offsets. Layout matches OPENGEM-034 so the two probes
+     * can be read as a continuous narrative. */
+    for (u32 i = 0; i < VM86_GPD_PROBE_BUF_BYTES; i++) s_vm86_gpd_probe_buf[i] = 0;
+    s_vm86_gpd_probe_buf[0x000] = 0xCD; s_vm86_gpd_probe_buf[0x001] = 0x21;
+    s_vm86_gpd_probe_buf[0x100] = 0xCC;
+    s_vm86_gpd_probe_buf[0x200] = 0xCE;
+    s_vm86_gpd_probe_buf[0x300] = 0xCF;
+    s_vm86_gpd_probe_buf[0x400] = 0x9C;
+    s_vm86_gpd_probe_buf[0x500] = 0x9D;
+    s_vm86_gpd_probe_buf[0x600] = 0xE4; s_vm86_gpd_probe_buf[0x601] = 0x40;
+    s_vm86_gpd_probe_buf[0x700] = 0xE6; s_vm86_gpd_probe_buf[0x701] = 0x60;
+    s_vm86_gpd_probe_buf[0x800] = 0xEC;
+    s_vm86_gpd_probe_buf[0x900] = 0xEE;
+    s_vm86_gpd_probe_buf[0xA00] = 0xFA;
+    s_vm86_gpd_probe_buf[0xB00] = 0xFB;
+    s_vm86_gpd_probe_buf[0xC00] = 0xF4;  /* HLT                 */
+    s_vm86_gpd_probe_buf[0xD00] = 0x62;  /* BOUND  (unhandled)  */
+
+    vm86_dispatcher disp;
+    for (u32 i = 0; i < VM86_INT_VECTOR_COUNT; i++) disp.handler[i] = 0;
+    disp.registered_count = 0;
+    disp.handled_count = 0;
+    disp.unhandled_count = 0;
+    vm86_register_int_handler(&disp, 0x21, vm86_gpd_probe_int21);
+    vm86_register_int_handler(&disp, 0x03, vm86_gpd_probe_int3);
+    vm86_register_int_handler(&disp, 0x04, vm86_gpd_probe_int4);
+
+    s_gpd_hit_21 = 0;
+    s_gpd_hit_3  = 0;
+    s_gpd_hit_4  = 0;
+
+    int ok = 1;
+
+    /* Reusable helper: drive one case through handle(), verify the
+     * action, the advanced EIP, and (for IRETD) the IRET-slot
+     * contents. Seeds tf with non-zero CS/SS/SP/segments so the
+     * encoder writes observable data. */
+    #define GPD_CASE(off, adv, expected_action, write_iret)                 \
+        do {                                                                \
+            for (u32 _i = 0; _i < VM86_IRET_FRAME_BYTES; _i++)              \
+                s_vm86_gpd_iret_slot[_i] = 0xA5;                            \
+            vm86_trap_frame _tf;                                            \
+            for (u32 _i = 0; _i < sizeof(_tf); _i++) ((u8*)&_tf)[_i] = 0;   \
+            _tf.cs  = 0x0000;                                               \
+            _tf.eip = (u32)(off);                                           \
+            _tf.ss  = 0x1000;                                               \
+            _tf.esp = 0x0FF0;                                               \
+            _tf.ds  = 0x2000;                                               \
+            _tf.es  = 0x3000;                                               \
+            _tf.fs  = 0x4000;                                               \
+            _tf.gs  = 0x5000;                                               \
+            _tf.eflags = 0;                                                 \
+            vm86_gp_decode_result _d = VM86_GP_RESULT_NONE;                 \
+            vm86_gp_dispatch_action _a =                                    \
+                vm86_gp_dispatch_handle(s_vm86_gpd_probe_buf,               \
+                                        VM86_GPD_PROBE_BUF_BYTES,           \
+                                        &_tf, &disp, 0,                     \
+                                        (write_iret) ?                      \
+                                            s_vm86_gpd_iret_slot : 0,       \
+                                        &_d);                               \
+            if (_a != (expected_action)) {                                  \
+                serial_write("vm86: gp-dispatch case=");                    \
+                serial_write(#off);                                         \
+                serial_write(" action-mismatch\n");                         \
+                ok = 0;                                                     \
+            }                                                               \
+            if (_tf.eip != (u32)((off) + (adv))) {                          \
+                serial_write("vm86: gp-dispatch case=");                    \
+                serial_write(#off);                                         \
+                serial_write(" eip-advance-mismatch\n");                    \
+                ok = 0;                                                     \
+            }                                                               \
+            if ((write_iret) &&                                             \
+                (expected_action) == VM86_GP_DISPATCH_ACTION_IRETD) {       \
+                if (vm86_iret_read_eip(s_vm86_gpd_iret_slot) !=             \
+                    (u32)((off) + (adv))) {                                 \
+                    serial_write("vm86: gp-dispatch case=");                \
+                    serial_write(#off);                                     \
+                    serial_write(" slot-eip-mismatch\n");                   \
+                    ok = 0;                                                 \
+                }                                                           \
+                u32 _ef = vm86_iret_read_eflags(s_vm86_gpd_iret_slot);      \
+                if (!(_ef & VM86_EFLAGS_VM) || !(_ef & VM86_EFLAGS_IOPL3)) {\
+                    serial_write("vm86: gp-dispatch case=");                \
+                    serial_write(#off);                                     \
+                    serial_write(" slot-vm-iopl-missing\n");                \
+                    ok = 0;                                                 \
+                }                                                           \
+                if (vm86_iret_read_cs(s_vm86_gpd_iret_slot) != 0x0000 ||    \
+                    vm86_iret_read_ss(s_vm86_gpd_iret_slot) != 0x1000 ||    \
+                    vm86_iret_read_esp(s_vm86_gpd_iret_slot) != 0x0FF0) {   \
+                    serial_write("vm86: gp-dispatch case=");                \
+                    serial_write(#off);                                     \
+                    serial_write(" slot-segs-mismatch\n");                  \
+                    ok = 0;                                                 \
+                }                                                           \
+            } else if (!(write_iret)) {                                     \
+                /* slot must remain the 0xA5 sentinel pattern. */           \
+                for (u32 _i = 0; _i < VM86_IRET_FRAME_BYTES; _i++) {        \
+                    if (s_vm86_gpd_iret_slot[_i] != 0xA5) {                 \
+                        serial_write("vm86: gp-dispatch case=");            \
+                        serial_write(#off);                                 \
+                        serial_write(" null-slot-touched\n");               \
+                        ok = 0;                                             \
+                        break;                                              \
+                    }                                                       \
+                }                                                           \
+            }                                                               \
+        } while (0)
+
+    GPD_CASE(0x000, 2, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x100, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x200, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x300, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x400, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x500, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x600, 2, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x700, 2, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x800, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0x900, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0xA00, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    GPD_CASE(0xB00, 1, VM86_GP_DISPATCH_ACTION_IRETD, 1);
+    /* HLT and UNHANDLED must not write the slot. */
+    GPD_CASE(0xC00, 1, VM86_GP_DISPATCH_ACTION_HLT,   0);
+    GPD_CASE(0xD00, 0, VM86_GP_DISPATCH_ACTION_HLT,   0);
+
+    /* Dispatcher side-effects: INT 21h / INT3 / INTO must each
+     * have fired exactly once. */
+    if (s_gpd_hit_21 != 1 || s_gpd_hit_3 != 1 || s_gpd_hit_4 != 1) {
+        serial_write("vm86: gp-dispatch dispatcher-hits=FAIL\n");
+        ok = 0;
+    }
+
+    /* BAD_INPUT: NULL guest buffer and NULL frame. Slot must not
+     * be touched on either path. */
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) s_vm86_gpd_iret_slot[i] = 0xA5;
+    vm86_trap_frame tf_bad;
+    for (u32 i = 0; i < sizeof(tf_bad); i++) ((u8*)&tf_bad)[i] = 0;
+    vm86_gp_decode_result d_bad = VM86_GP_RESULT_NONE;
+    if (vm86_gp_dispatch_handle(0, 0, &tf_bad, 0, 0,
+                                s_vm86_gpd_iret_slot, &d_bad)
+        != VM86_GP_DISPATCH_ACTION_BAD_INPUT) {
+        serial_write("vm86: gp-dispatch bad-null-buf=FAIL\n");
+        ok = 0;
+    }
+    if (d_bad != VM86_GP_RESULT_NULL_ARG) {
+        serial_write("vm86: gp-dispatch bad-null-buf-decode=FAIL\n");
+        ok = 0;
+    }
+    if (vm86_gp_dispatch_handle(s_vm86_gpd_probe_buf,
+                                VM86_GPD_PROBE_BUF_BYTES,
+                                0, 0, 0,
+                                s_vm86_gpd_iret_slot, &d_bad)
+        != VM86_GP_DISPATCH_ACTION_BAD_INPUT) {
+        serial_write("vm86: gp-dispatch bad-null-frame=FAIL\n");
+        ok = 0;
+    }
+    /* OOB: CS:EIP just past the buffer. */
+    for (u32 i = 0; i < sizeof(tf_bad); i++) ((u8*)&tf_bad)[i] = 0;
+    tf_bad.cs  = 0;
+    tf_bad.eip = VM86_GPD_PROBE_BUF_BYTES;
+    if (vm86_gp_dispatch_handle(s_vm86_gpd_probe_buf,
+                                VM86_GPD_PROBE_BUF_BYTES,
+                                &tf_bad, 0, 0,
+                                s_vm86_gpd_iret_slot, &d_bad)
+        != VM86_GP_DISPATCH_ACTION_BAD_INPUT) {
+        serial_write("vm86: gp-dispatch bad-oob=FAIL\n");
+        ok = 0;
+    }
+    if (d_bad != VM86_GP_RESULT_OOB) {
+        serial_write("vm86: gp-dispatch bad-oob-decode=FAIL\n");
+        ok = 0;
+    }
+    /* Slot must still be the 0xA5 sentinel after the bad-input runs. */
+    for (u32 i = 0; i < VM86_IRET_FRAME_BYTES; i++) {
+        if (s_vm86_gpd_iret_slot[i] != 0xA5) {
+            serial_write("vm86: gp-dispatch bad-slot-touched=FAIL\n");
+            ok = 0;
+            break;
+        }
+    }
+
+    /* Leave the gate disarmed before returning. */
+    vm86_gp_dispatch_disarm();
+    if (vm86_gp_dispatch_is_armed()) {
+        serial_write("vm86: gp-dispatch disarm=FAIL\n");
+        return 0;
+    }
+
+    serial_write("vm86: gp-dispatch hits int21=0x");
+    serial_write_hex64((u64)s_gpd_hit_21);
+    serial_write(" int3=0x");
+    serial_write_hex64((u64)s_gpd_hit_3);
+    serial_write(" into=0x");
+    serial_write_hex64((u64)s_gpd_hit_4);
+    serial_write("\n");
+
+    if (!ok) {
+        serial_write("vm86: gp-dispatch probe failed\n");
+        return 0;
+    }
+
+    serial_write("vm86: gp-dispatch arm-magic=0x");
+    serial_write_hex64((u64)VM86_GP_DISPATCH_ARM_MAGIC);
+    serial_write("\n");
+    serial_write("vm86: gp-dispatch iretd-frame-apply=OK\n");
+    serial_write("vm86: gp-dispatch ready-surface=arm-gate,decode,iretd-frame-apply\n");
+    serial_write("vm86: gp-dispatch pending-surface=pe32-isr-wire,live-v86-entry\n");
+    serial_write("vm86: gp-dispatch probe complete\n");
+    return 1;
+
+    #undef GPD_CASE
+}
