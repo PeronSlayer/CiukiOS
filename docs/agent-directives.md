@@ -42,3 +42,12 @@ Each logbook entry should record:
 3. Area of the project being changed
 4. Status (`planned`, `in progress`, `blocked`, `done`)
 5. Short summary of what changed or what remains
+
+## Multi-Agent Parallel Task Rule (added 2026-04-20)
+When a task is split across multiple agents working in parallel (e.g. OPENGEM-044 mode-switch split into Task A/B/C):
+1. Each agent operates on its own dedicated branch. No agent touches `main` under any circumstance.
+2. Merges into `main` happen only when the user explicitly requests `fai il merge` per task. The user controls ordering of merges.
+3. Before starting work, each agent must read `docs/collab/diario-di-bordo.md` to detect whether another agent has claimed the same sub-task area.
+4. Each sub-task publishes a small **interface contract** (exported symbols, ABI, arm-gate magic, sentinel) in its spec document so dependent sub-tasks can stub against it without merging.
+5. Interface contract changes after the split is declared require coordination via the logbook, not silent modification.
+6. No sub-task may modify files owned by a sibling sub-task's contract surface except via a stub under its own branch.

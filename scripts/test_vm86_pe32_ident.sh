@@ -86,7 +86,9 @@ for sym in vm86_cpu_snapshot_capture vm86_pe32_identity_verify vm86_pe32_identit
 done
 
 # No CR3 write anywhere introduced in this phase.
-if grep -RnE --include='*.c' --include='*.S' 'mov[^,]*,[ \t]+%cr3' stage2/ >/dev/null; then
+# Exception: mode_switch_asm.S is the sanctioned OPENGEM-044 mode-switch
+# trampoline that legitimately restores CR3 when re-entering IA-32e.
+if grep -RnE --include='*.c' --include='*.S' --exclude='mode_switch_asm.S' 'mov[^,]*,[ \t]+%cr3' stage2/ >/dev/null; then
     fail "phase introduces a CR3 write"
 else
     pass

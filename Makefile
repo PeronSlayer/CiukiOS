@@ -552,6 +552,9 @@ test-vm86-compat-entry:
 test-vm86-compat-entry-live:
 	bash ./scripts/test_vm86_compat_entry_live.sh
 
+test-mode-switch:
+	bash ./scripts/test_mode_switch.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
