@@ -9282,7 +9282,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         }
         serial_write("[gem] 044A armed\n");
 
-        if (legacy_v86_arm(LEGACY_V86_ARM_MAGIC) != 1) {
+        if (legacy_v86_arm(LEGACY_V86_ARM_MAGIC) != LEGACY_V86_OK) {
             video_write("[gem] pending task B\n");
             serial_write("[gem] pending task B arm-044B\n");
             shell_gem_disarm_path();
@@ -9320,7 +9320,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         serial_write("[gem] enter legacy_v86 loop\n");
 
         for (;;) {
-            if (legacy_v86_enter(&frame, &exit_state) != 1) {
+            if (legacy_v86_enter(&frame, &exit_state) != LEGACY_V86_OK) {
                 video_write("[gem] pending task B\n");
                 serial_write("[gem] pending task B enter-044B\n");
                 shell_gem_disarm_path();
