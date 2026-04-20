@@ -16,6 +16,10 @@ legacy_v86_pm32_sentinel:
     .global legacy_v86_pm32_body
     .type legacy_v86_pm32_body, @function
 legacy_v86_pm32_body:
+    /* entry marker: lowercase 'b' on 0xE9 */
+    movb    $'b', %al
+    outb    %al, $0xE9
+
     movw    $0x00E9, %dx
 
     movb    $'O', %al
@@ -44,6 +48,10 @@ legacy_v86_pm32_body:
     outb    %al, %dx
     movb    $'B', %al
     outb    %al, %dx
+
+    /* exit marker: lowercase 'r' on 0xE9 just before retl */
+    movb    $'r', %al
+    outb    %al, $0xE9
 
     retl
 
