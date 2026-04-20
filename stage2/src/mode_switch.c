@@ -45,6 +45,7 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint64_t body_user;        /* 0x98 */
     uint64_t result;           /* 0xA0 */
     uint64_t saved_rflags;     /* 0xA8 */
+    uint64_t saved_host_ss;    /* 0xB0 (low 16 bits = host SS selector) */
 } mode_switch_scratch_t;
 
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_rbx)       == 0x00, "SCR_RBX");
@@ -59,6 +60,7 @@ _Static_assert(__builtin_offsetof(mode_switch_scratch_t, body_fn)         == 0x9
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, body_user)       == 0x98, "SCR_BODY_USER");
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, result)          == 0xA0, "SCR_RESULT");
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_rflags)    == 0xA8, "SCR_RFLAGS");
+_Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_host_ss)   == 0xB0, "SCR_HOST_SS");
 
 static mode_switch_scratch_t s_mode_switch_scratch;
 static uint64_t s_legacy_gdt[4] __attribute__((aligned(16)));

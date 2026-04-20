@@ -47,6 +47,7 @@
 .set SCR_BODY_USER,   0x98
 .set SCR_RESULT,      0xA0
 .set SCR_RFLAGS,      0xA8
+.set SCR_HOST_SS,     0xB0
 
 .section .rodata
 .globl mode_switch_asm_sentinel
@@ -77,6 +78,12 @@ mode_switch_asm_enter:
     movq %rsp, SCR_RSP(%rdi)
     popq %rax
     movq %rax, SCR_RFLAGS(%rdi)
+
+    /* Save host SS selector; we zero DS/ES/FS/GS on resume but SS must
+     * be re-established with a valid descriptor under the host GDT. */
+    xorq %rax, %rax
+    movw %ss, %ax
+    movq %rax, SCR_HOST_SS(%rdi)
 
     movq %cr0, %rax
     movq %rax, SCR_CR0(%rdi)
@@ -225,6 +232,13 @@ mode_switch_asm_enter:
 
     lgdt SCR_HOST_GDTR(%r15)
     TRACE 'R'
+    /* Re-load SS with host selector BEFORE anything that touches the
+     * stack via SS. After lgdt, SS still carries the legacy 0x18
+     * selector whose descriptor is absent in the new host GDT; the
+     * next push/pop would raise #GP(error=0x18). */
+    movw SCR_HOST_SS(%r15), %ax
+    movw %ax, %ss
+    TRACE 't'
     lidt SCR_HOST_IDTR(%r15)
     TRACE 'S'
 
