@@ -3378,3 +3378,147 @@ int vm86_gp_isr_real_probe(void) {
     serial_write("vm86: gp-isr-real probe complete\n");
     return 1;
 }
+
+/* ================================================================== */
+/* OPENGEM-038 - PE32 IDT install + live-arm shell gate.              */
+/*                                                                    */
+/* Rewrites vector 0x0D of s_vm86_idt_shim_bytes to point at the 037 */
+/* real ISR, under explicit arm. Caches the prior 8-byte slot for a  */
+/* lossless uninstall. Does NOT execute LIDT -- that is OPENGEM-039. */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_gp_isr_install_c_sentinel[] = "OPENGEM-038";
+
+static int s_vm86_gp_isr_install_armed = 0;
+static int s_vm86_gp_isr_installed = 0;
+static u8  s_vm86_gp_isr_install_cache[8] = {0};
+
+int vm86_gp_isr_install_arm(u32 magic) {
+    if (magic != VM86_GP_ISR_INSTALL_ARM_MAGIC) {
+        return 0;
+    }
+    s_vm86_gp_isr_install_armed = 1;
+    return 1;
+}
+
+void vm86_gp_isr_install_disarm(void) {
+    s_vm86_gp_isr_install_armed = 0;
+}
+
+int vm86_gp_isr_install_is_armed(void) {
+    return s_vm86_gp_isr_install_armed ? 1 : 0;
+}
+
+int vm86_gp_isr_is_installed(void) {
+    return s_vm86_gp_isr_installed ? 1 : 0;
+}
+
+int vm86_gp_isr_install(u32 magic) {
+    if (magic != VM86_GP_ISR_INSTALL_ARM_MAGIC) return 0;
+    if (!s_vm86_gp_isr_install_armed)          return 0;
+    if (!s_vm86_idt_shim_built)                return 0;
+    if (s_vm86_gp_isr_installed)               return 1; /* idempotent */
+
+    /* Cache the prior 8-byte entry to permit a lossless uninstall. */
+    u8 *slot = s_vm86_idt_shim_bytes + (VM86_IDT_VEC_GP * 8);
+    for (u32 i = 0; i < 8; i++) s_vm86_gp_isr_install_cache[i] = slot[i];
+
+    u64 handler_addr = (u64)(unsigned long)&vm86_gp_isr_real_entry;
+    if (handler_addr > 0xFFFFFFFFu) {
+        /* .code32 entry must live below 4 GiB. Fail loud. */
+        return 0;
+    }
+    u16 cs_sel = (u16)(VM86_GDT_PE_CODE32 << 3);
+    /* 32-bit interrupt gate, DPL=0, Present: type_attr = 0x8E. */
+    vm86_idt_encode_gate(slot, (u32)handler_addr, cs_sel, 0x8E);
+
+    s_vm86_gp_isr_installed = 1;
+    return 1;
+}
+
+int vm86_gp_isr_uninstall(void) {
+    if (!s_vm86_gp_isr_installed) return 1;
+    u8 *slot = s_vm86_idt_shim_bytes + (VM86_IDT_VEC_GP * 8);
+    for (u32 i = 0; i < 8; i++) slot[i] = s_vm86_gp_isr_install_cache[i];
+    s_vm86_gp_isr_installed = 0;
+    return 1;
+}
+
+int vm86_gp_isr_install_probe(void) {
+    serial_write("vm86: gp-isr-install sentinel=0x");
+    serial_write_hex64((u64)VM86_GP_ISR_INSTALL_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_gp_isr_install_c_sentinel);
+    serial_write("\n");
+
+    if (vm86_gp_isr_install_is_armed()) {
+        serial_write("vm86: gp-isr-install default-armed=FAIL\n"); return 0;
+    }
+    if (vm86_gp_isr_install_arm(0xCAFEBABEu) != 0 || vm86_gp_isr_install_is_armed()) {
+        serial_write("vm86: gp-isr-install magic-reject=FAIL\n"); return 0;
+    }
+
+    /* Shim IDT must be built before install works. */
+    if (!vm86_idt_shim_build()) {
+        serial_write("vm86: gp-isr-install shim-build=FAIL\n"); return 0;
+    }
+
+    /* Capture baseline bytes of vector 0x0D. */
+    u8 baseline[8];
+    const u8 *slot_ro = s_vm86_idt_shim_bytes + (VM86_IDT_VEC_GP * 8);
+    for (u32 i = 0; i < 8; i++) baseline[i] = slot_ro[i];
+
+    /* Disarmed install must be refused and must not mutate the slot. */
+    if (vm86_gp_isr_install(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 0) {
+        serial_write("vm86: gp-isr-install disarmed-install=FAIL\n"); return 0;
+    }
+    for (u32 i = 0; i < 8; i++) {
+        if (slot_ro[i] != baseline[i]) {
+            serial_write("vm86: gp-isr-install disarmed-mutated=FAIL\n"); return 0;
+        }
+    }
+
+    /* Arm + install. */
+    if (vm86_gp_isr_install_arm(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1) {
+        serial_write("vm86: gp-isr-install magic-accept=FAIL\n"); return 0;
+    }
+    if (vm86_gp_isr_install(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1 ||
+        !vm86_gp_isr_is_installed()) {
+        serial_write("vm86: gp-isr-install armed-install=FAIL\n"); return 0;
+    }
+
+    /* Vector 0x0D must now target vm86_gp_isr_real_entry. */
+    u32 installed_off = vm86_idt_read_offset(s_vm86_idt_shim_bytes, VM86_IDT_VEC_GP);
+    u32 expected_off  = (u32)((u64)(unsigned long)&vm86_gp_isr_real_entry);
+    if (installed_off != expected_off) {
+        serial_write("vm86: gp-isr-install vector-offset=FAIL\n"); return 0;
+    }
+    if (vm86_idt_read_type(s_vm86_idt_shim_bytes, VM86_IDT_VEC_GP) != 0x8E) {
+        serial_write("vm86: gp-isr-install vector-type=FAIL\n"); return 0;
+    }
+
+    /* Uninstall must restore baseline byte-for-byte. */
+    if (vm86_gp_isr_uninstall() != 1 || vm86_gp_isr_is_installed()) {
+        serial_write("vm86: gp-isr-install uninstall=FAIL\n"); return 0;
+    }
+    for (u32 i = 0; i < 8; i++) {
+        if (slot_ro[i] != baseline[i]) {
+            serial_write("vm86: gp-isr-install roundtrip-byte=FAIL\n"); return 0;
+        }
+    }
+
+    /* Final disarm leaves the installer clean. */
+    vm86_gp_isr_install_disarm();
+    if (vm86_gp_isr_install_is_armed()) {
+        serial_write("vm86: gp-isr-install final-disarm=FAIL\n"); return 0;
+    }
+
+    serial_write("vm86: gp-isr-install arm-magic=0x");
+    serial_write_hex64((u64)VM86_GP_ISR_INSTALL_ARM_MAGIC);
+    serial_write("\n");
+    serial_write("vm86: gp-isr-install roundtrip=OK\n");
+    serial_write("vm86: gp-isr-install ready-surface=arm-gate,install,uninstall,roundtrip\n");
+    serial_write("vm86: gp-isr-install pending-surface=live-lidt,v86-entry,iretd-return\n");
+    serial_write("vm86: gp-isr-install probe complete\n");
+    return 1;
+}

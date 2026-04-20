@@ -540,6 +540,9 @@ test-vm86-gp-isr-c:
 test-vm86-gp-isr-real:
 	bash ./scripts/test_vm86_gp_isr_real.sh
 
+test-vm86-gp-isr-install:
+	bash ./scripts/test_vm86_gp_isr_install.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

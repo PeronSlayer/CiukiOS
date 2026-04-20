@@ -8867,6 +8867,36 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
+    if (str_eq(cmd, "vm86-arm-live")) {
+        /* OPENGEM-038: explicit, user-typed arm of the live v86 path.
+         * Installs the real #GP ISR into the PE32 shim IDT at vector
+         * 0x0D. Does NOT execute LIDT and does NOT enter v8086 mode --
+         * those are OPENGEM-039+. Reverse with `vm86-disarm-live`. */
+        video_write("[vm86] arming live path (038)...\n");
+        serial_write("[vm86] arming live path (038)\n");
+        int a38 = vm86_gp_isr_install_arm(VM86_GP_ISR_INSTALL_ARM_MAGIC);
+        int built = vm86_idt_shim_build();
+        int inst = vm86_gp_isr_install(VM86_GP_ISR_INSTALL_ARM_MAGIC);
+        if (a38 && built && inst) {
+            video_write("[vm86] installed at IDT vector 0x0D\n");
+            serial_write("[vm86] installed=1\n");
+        } else {
+            video_write("[vm86] install FAILED\n");
+            serial_write("[vm86] install FAILED\n");
+        }
+        return;
+    }
+
+    if (str_eq(cmd, "vm86-disarm-live")) {
+        /* OPENGEM-038: reverse the arm. Restores vector 0x0D to its
+         * 032 default trap stub and clears the 038 arm flag. */
+        vm86_gp_isr_uninstall();
+        vm86_gp_isr_install_disarm();
+        video_write("[vm86] disarmed + uninstalled\n");
+        serial_write("[vm86] disarmed + uninstalled\n");
+        return;
+    }
+
     if (str_eq(cmd, "pwd")) {
         shell_pwd();
         return;

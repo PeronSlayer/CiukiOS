@@ -1326,4 +1326,52 @@ int  vm86_gp_isr_real_is_armed(void);
  */
 int vm86_gp_isr_real_probe(void);
 
+/* ================================================================== */
+/* OPENGEM-038 - PE32 IDT install + live-arm shell gate.              */
+/*                                                                    */
+/* This phase wires the INSTALL operation: on explicit arm, rewrite   */
+/* vector 0x0D in the PE32 shim IDT image to point at the 037 real    */
+/* ISR. It does NOT execute LIDT (that is 039 pending) and does NOT   */
+/* enter v8086 mode. The install is reversible via uninstall().       */
+/*                                                                    */
+/* Arming the 038 gate is done ONLY via the shell command             */
+/* `vm86-arm-live` -- the default boot path never invokes it.         */
+/* ================================================================== */
+
+#define VM86_GP_ISR_INSTALL_SENTINEL  0x0380u
+#define VM86_GP_ISR_INSTALL_ARM_MAGIC 0xC1D39380u
+
+int  vm86_gp_isr_install_arm(u32 magic);
+void vm86_gp_isr_install_disarm(void);
+int  vm86_gp_isr_install_is_armed(void);
+
+/*
+ * Install / uninstall the real ISR into the PE32 shim IDT at vector
+ * 0x0D. Returns 1 on success, 0 if the gate is disarmed or the shim
+ * IDT is not yet built.
+ *
+ *   install()    -- writes vector 0x0D of s_vm86_idt_shim_bytes to
+ *                   point at vm86_gp_isr_real_entry with the PE32
+ *                   code32 selector; caches the prior bytes so that
+ *                   uninstall() can restore the 032 default.
+ *   uninstall()  -- restores the cached bytes unconditionally (does
+ *                   not require the gate to be armed).
+ *   is_installed() -- 1 iff the last operation was install() without
+ *                   a subsequent uninstall().
+ */
+int  vm86_gp_isr_install(u32 magic);
+int  vm86_gp_isr_uninstall(void);
+int  vm86_gp_isr_is_installed(void);
+
+/*
+ * OPENGEM-038 probe. Host-driven; verifies the install/uninstall
+ * round-trip leaves the shim IDT byte-identical to the pre-install
+ * state, that install is refused when the gate is disarmed, and
+ * that vector 0x0D correctly targets vm86_gp_isr_real_entry after
+ * install.
+ *
+ * Returns 1 on success, 0 otherwise. Never executes LIDT.
+ */
+int vm86_gp_isr_install_probe(void);
+
 #endif /* STAGE2_VM86_H */
