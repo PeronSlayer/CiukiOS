@@ -97,10 +97,15 @@ legacy_v86_pm32_idtr:
     .global legacy_v86_pm32_body
     .type legacy_v86_pm32_body, @function
 legacy_v86_pm32_body:
+    call    .L_body_base
+.L_body_base:
+    popl    %ebp
+    subl    $(.L_body_base - legacy_v86_pm32_body), %ebp
+
     /* cdecl arg: [esp+4] = legacy_v86_context_t* */
     movl    4(%esp), %esi
-    movl    %esi, legacy_v86_pm32_saved_ctx
-    movl    %esp, legacy_v86_pm32_saved_esp
+    movl    %esi, legacy_v86_pm32_saved_ctx - legacy_v86_pm32_body(%ebp)
+    movl    %esp, legacy_v86_pm32_saved_esp - legacy_v86_pm32_body(%ebp)
 
     /* entry marker: lowercase 'b' on 0xE9 */
     movb    $'b', %al
@@ -138,10 +143,10 @@ legacy_v86_pm32_body:
     outb    %al, $0xE9
 
     /* Minimal IDT: fill all vectors with spurious, then overwrite #GP. */
-    leal    legacy_v86_pm32_idt, %edi
+    leal    legacy_v86_pm32_idt - legacy_v86_pm32_body(%ebp), %edi
     movl    $256, %ecx
 .L_idt_fill:
-    movl    $legacy_v86_pm32_spurious, %eax
+    leal    legacy_v86_pm32_spurious - legacy_v86_pm32_body(%ebp), %eax
     movw    %ax, (%edi)
     movw    $0x10, 2(%edi)
     movb    $0x00, 4(%edi)
@@ -151,18 +156,19 @@ legacy_v86_pm32_body:
     addl    $8, %edi
     loop    .L_idt_fill
 
-    leal    legacy_v86_pm32_idt, %edi
+    leal    legacy_v86_pm32_idt - legacy_v86_pm32_body(%ebp), %edi
     addl    $(0x0D * 8), %edi
-    movl    $legacy_v86_pm32_gp_handler, %eax
+    leal    legacy_v86_pm32_gp_handler - legacy_v86_pm32_body(%ebp), %eax
     movw    %ax, (%edi)
     shrl    $16, %eax
     movw    %ax, 6(%edi)
 
     movw    $(256 * 8 - 1), %ax
-    movw    %ax, legacy_v86_pm32_idtr
-    movl    $legacy_v86_pm32_idt, %eax
-    movl    %eax, legacy_v86_pm32_idtr + 2
-    lidt    legacy_v86_pm32_idtr
+    movw    %ax, legacy_v86_pm32_idtr - legacy_v86_pm32_body(%ebp)
+    leal    legacy_v86_pm32_idt - legacy_v86_pm32_body(%ebp), %eax
+    movl    %eax, legacy_v86_pm32_idtr + 2 - legacy_v86_pm32_body(%ebp)
+    leal    legacy_v86_pm32_idtr - legacy_v86_pm32_body(%ebp), %eax
+    lidt    (%eax)
     movb    $'d', %al
     outb    %al, $0xE9
 
@@ -201,14 +207,14 @@ legacy_v86_pm32_body:
     /* Build/load a real TSS32 so v86 faults can switch back to ring0 on
      * a known stack. Without this, the first guest trap triple-faults
      * before our PM32 handler runs. %ebx still holds Task A scratch. */
-    leal    legacy_v86_pm32_tss, %edi
+    leal    legacy_v86_pm32_tss - legacy_v86_pm32_body(%ebp), %edi
     xorl    %eax, %eax
     movl    $(104 / 4), %ecx
     rep stosl
     movl    SCR_PM32_STACK(%ebx), %eax
-    movl    %eax, legacy_v86_pm32_tss + TSS_ESP0
-    movw    $0x18, legacy_v86_pm32_tss + TSS_SS0
-    movw    $104, legacy_v86_pm32_tss + TSS_IOMAP
+    movl    %eax, legacy_v86_pm32_tss + TSS_ESP0 - legacy_v86_pm32_body(%ebp)
+    movw    $0x18, legacy_v86_pm32_tss + TSS_SS0 - legacy_v86_pm32_body(%ebp)
+    movw    $104, legacy_v86_pm32_tss + TSS_IOMAP - legacy_v86_pm32_body(%ebp)
     movw    $TSS32_SEL, %ax
     ltr     %ax
     movb    $'h', %al
@@ -217,7 +223,7 @@ legacy_v86_pm32_body:
     /* CRITICAL: Save ESP BEFORE building v86 frame.
      * The body stack has [esp+0]=return_address and [esp+4]=body_user.
      * When v86 traps, handler needs to restore this ESP to access the return address. */
-    movl    %esp, legacy_v86_pm32_saved_esp
+    movl    %esp, legacy_v86_pm32_saved_esp - legacy_v86_pm32_body(%ebp)
 
     /* Build v86 IRET frame from caller entry state. */
     movl    CTX_ENTRY(%esi), %edi
@@ -277,7 +283,7 @@ legacy_v86_pm32_gp_handler:
      */
     /* Snapshot guest GPRs before we repurpose them in the handler.
      * reserved[0..3] are the agreed runtime ABI slots for EAX..EDX. */
-    movl    legacy_v86_pm32_saved_ctx, %esi
+    movl    legacy_v86_pm32_saved_ctx - legacy_v86_pm32_body(%ebp), %esi
     movl    CTX_OUT(%esi), %edi
     movl    %eax, EXIT_FRAME + FRAME_R0(%edi)
     movl    %ebx, EXIT_FRAME + FRAME_R1(%edi)
@@ -508,7 +514,7 @@ legacy_v86_pm32_gp_handler:
     outb    %al, $0xE9
     movb    $'D', %al
     outb    %al, $0xE9
-    movl    legacy_v86_pm32_saved_esp, %esp
+    movl    legacy_v86_pm32_saved_esp - legacy_v86_pm32_body(%ebp), %esp
     movb    $'P', %al
     outb    %al, $0xE9
     movb    $'S', %al
@@ -516,7 +522,8 @@ legacy_v86_pm32_gp_handler:
     movb    $'H', %al
     outb    %al, $0xE9
     /* Now push the exit label address so retl jumps back to body exit. */
-    pushl   $.L_v86_exit
+    leal    .L_v86_exit - legacy_v86_pm32_body(%ebp), %ecx
+    pushl   %ecx
     movb    $'J', %al
     outb    %al, $0xE9
     movb    $'M', %al

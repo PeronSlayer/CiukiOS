@@ -17,6 +17,8 @@
 #include "version.h"
 #include "mouse.h"
 
+#include "mode_switch.h"
+
 #include "ui.h"
 
 #define SPLASH_FOOTER_MIN_PX 64U
@@ -489,6 +491,8 @@ void stage2_main(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
     stage2_init_gdt_tss();
     serial_write("[ ok ] stage2 local gdt+tss is active\n");
+
+    mode_switch_set_stage2_load_addr(handoff->stage2_load_addr);
 
     stage2_init_idt();
     serial_write("[ ok ] stage2 local idt is active\n");

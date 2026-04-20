@@ -195,12 +195,14 @@ mode_switch_asm_enter:
     jnz   ._ms_dump_eax
     /* Restore pristine body_fn and call it. */
     popl  %eax
+    pushl %eax
     movb  $'C', %al
     outb  %al, $0xE9
     movb  $'A', %al
     outb  %al, $0xE9
     movb  $'L', %al
     outb  %al, $0xE9
+    popl  %eax
     call  *%eax
     movb  $'R', %al
     outb  %al, $0xE9

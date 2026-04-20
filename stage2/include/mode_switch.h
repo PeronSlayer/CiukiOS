@@ -45,6 +45,12 @@ int  mode_switch_trampoline_arm(uint32_t magic);
 void mode_switch_trampoline_disarm(void);
 int  mode_switch_trampoline_is_live(void);
 
+/* The loader links stage2 at a high virtual base but may place it at a
+ * different physical address. The mode-switch trampoline disables paging,
+ * so legacy PM must use physical addresses. Stage2 initializes this once
+ * from handoff->stage2_load_addr before any legacy-PM entry. */
+void mode_switch_set_stage2_load_addr(uint64_t stage2_load_addr);
+
 /* Host-driven probe — no v86, no guest.
  * Returns 0 when all disarmed-path cases pass.
  * Does NOT execute the engine while the asm trampoline is still pending. */

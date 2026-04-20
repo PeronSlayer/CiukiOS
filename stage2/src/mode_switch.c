@@ -11,6 +11,8 @@
 
 #include "mode_switch.h"
 
+#define STAGE2_LINK_BASE 0x08000000ULL
+
 static const char opengem_044_a_sentinel[] = "OPENGEM-044-A";
 
 /* Stage-1 arm state (API arm). */
@@ -69,33 +71,26 @@ static uint64_t s_legacy_gdt[5] __attribute__((aligned(16)));
 static uint8_t  s_pm32_stack[64 * 1024] __attribute__((aligned(16)));
 
 /* Relocation offset: physical load address - virtual link address.
- * This is calculated once using _start symbol to determine where stage2
- * was actually loaded by UEFI vs. where the linker linked it (0x80000000). */
+ * Initialized explicitly from handoff->stage2_load_addr. */
 static int64_t s_relocation_offset = 0;
 static int s_relocation_initialized = 0;
+
+static uint64_t stage2_phys_addr(uint64_t linked_addr)
+{
+    if (!s_relocation_initialized) {
+        return linked_addr;
+    }
+    return (uint64_t)((int64_t)linked_addr + s_relocation_offset);
+}
 
 extern uint8_t legacy_v86_pm32_tss[];
 
 extern int mode_switch_asm_enter(mode_switch_scratch_t *scratch);
 extern const char mode_switch_asm_sentinel[];
 
-static void calculate_relocation_offset_once(void)
+void mode_switch_set_stage2_load_addr(uint64_t stage2_load_addr)
 {
-    if (s_relocation_initialized) {
-        return;
-    }
-
-    /* Get current RIP (reveals physical load address during execution). */
-    uint64_t rip = 0;
-    __asm__ __volatile__ ("lea 0(%%rip), %0" : "=r"(rip));
-
-    /* Get address of _start symbol (virtual address from linker). */
-    extern uint8_t _start;
-    uint64_t start_virt = (uint64_t)(uintptr_t)&_start;
-
-    /* Calculate offset: if _start is at virtual 0x80000000 but RIP shows
-     * we're executing at 0x100000 (physical), then offset = 0x100000 - 0x80000000. */
-    s_relocation_offset = (int64_t)rip - (int64_t)start_virt;
+    s_relocation_offset = (int64_t)stage2_load_addr - (int64_t)STAGE2_LINK_BASE;
     s_relocation_initialized = 1;
 }
 
@@ -123,7 +118,7 @@ static void build_legacy_gdt(void)
     /* DATA32 flat: access=0x92 (P|S|type=data rw), flags=0xC (G|D) */
     s_legacy_gdt[3] = encode_gdt_entry(0, 0xFFFFFu, 0x92, 0xC);
     /* TSS32 available: access=0x89 (P|system|available TSS), flags=0 */
-    s_legacy_gdt[4] = encode_gdt_entry((uint32_t)(uintptr_t)legacy_v86_pm32_tss,
+    s_legacy_gdt[4] = encode_gdt_entry((uint32_t)stage2_phys_addr((uint64_t)(uintptr_t)legacy_v86_pm32_tss),
                                        0x67u,
                                        0x89,
                                        0x0);
@@ -194,9 +189,6 @@ int mode_switch_run_legacy_pm(mode_switch_legacy_pm_body_fn body, void *user)
         return MODE_SWITCH_ERR_NOT_IMPLEMENTED;
     }
 
-    /* Calculate relocation offset once (lazy initialization). */
-    calculate_relocation_offset_once();
-
     mode_switch_scratch_t *scr = &s_mode_switch_scratch;
     for (uint64_t i = 0; i < sizeof(*scr); ++i) {
         ((volatile uint8_t *)scr)[i] = 0;
@@ -204,16 +196,17 @@ int mode_switch_run_legacy_pm(mode_switch_legacy_pm_body_fn body, void *user)
 
     build_legacy_gdt();
     build_gdtr(scr->legacy_gdtr,
-               (uint64_t)(uintptr_t)s_legacy_gdt,
+               stage2_phys_addr((uint64_t)(uintptr_t)s_legacy_gdt),
                (uint16_t)(sizeof(s_legacy_gdt) - 1));
 
-    scr->pm32_stack_top = (uint64_t)(uintptr_t)(s_pm32_stack + sizeof(s_pm32_stack));
+    scr->pm32_stack_top = stage2_phys_addr((uint64_t)(uintptr_t)(s_pm32_stack + sizeof(s_pm32_stack)));
     scr->pm32_stack_top &= ~(uint64_t)0xFu;
 
-    /* Apply relocation offset: convert virtual address to physical address
-     * so body_fn is valid when paging is disabled in legacy PM. */
+    /* If stage2 load address was provided by the loader, convert the linked
+     * virtual body address into the physical address needed once paging is off.
+     * Otherwise preserve historical behavior. */
     uint64_t body_virt = (uint64_t)(uintptr_t)body;
-    uint64_t body_phys = (uint64_t)((int64_t)body_virt + s_relocation_offset);
+    uint64_t body_phys = stage2_phys_addr(body_virt);
     scr->body_fn = body_phys;
     scr->body_user = (uint64_t)(uintptr_t)user;
 
