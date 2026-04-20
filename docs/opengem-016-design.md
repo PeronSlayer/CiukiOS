@@ -1,10 +1,32 @@
 # OPENGEM-016 — Design Document: 16-bit Execution Layer for CiukiOS
 
-**Status:** **Approved and active.** Scaffold phases OPENGEM-017 through OPENGEM-020 have landed on dedicated branches; live v8086 entry remains gated on OPENGEM-021+ per §6.1.
+**Status:** **Approved and active.** Scaffold phases OPENGEM-017 through OPENGEM-043 have landed on main. **Live v8086 entry is currently blocked by a confirmed architectural constraint — see §0 Errata (2026-04-20).**
 **Date (drafted):** 2026-04-19
 **Date (finalized):** 2026-04-19
-**Baseline:** CiukiOS Alpha v0.8.7 (unchanged since approval — no version bump is tied to this document).
+**Baseline:** CiukiOS Alpha v0.8.9.
 **Scope owner:** the 16-bit execution layer required to natively run `gem.exe`, with forward-looking compatibility for Windows DOS-based (3.x → 9x/ME).
+
+---
+
+## 0. Errata — Runtime finding 2026-04-20 (OPENGEM-043)
+
+**Symptom.** The first real `enter_v86` invocation, issued by the `gem` shell command (OPENGEM-043) after a fully valid preflight (cr3 identity-map 0..1 MiB, MZ parse, PSP build, relocations applied, 038→039→040→041 arm cascade, frame fill), produces a triple-fault immediately after the C handoff message `vm86: enter-v86 handoff (no return)`. Zero bytes are emitted from the asm trampoline.
+
+**Root cause.** The implemented trampoline (`vm86_compat_entry_enter_asm` → 32-bit **compat-mode** code segment → `IRETL` with EFLAGS.VM=1) remains inside **IA-32e mode** (EFER.LMA=1, CR0.PG=1). Per Intel SDM Vol. 3A §20.1, *"Virtual-8086 mode is not available in IA-32e mode."* A 32-bit compatibility code segment is still IA-32e; the VM bit is reserved there. The `IRETL` therefore faults (#GP), the re-entered IDT is the long-mode IDT (16-byte gates) accessed from compat mode, and the cascade becomes a triple-fault.
+
+**Implication.** The "compat-mode host task" shortcut is insufficient. The middle tier of the three-level model described in §3.3 / §5.1 must be a **true legacy 32-bit protected-mode host** with EFER.LMA=0 and CR0.PG flushed and re-established with a 32-bit page structure (or identity physical addressing), not a long-mode compat task. Reaching v86 therefore requires a full mode-exit / mode-reentry subsystem (long ↔ legacy PM) that the current scaffolding does not provide.
+
+**Correct paths forward (any one; decision deferred).**
+
+1. **Full legacy mode-switch.** Build a trampoline that exits long mode (clear CR0.PG, clear EFER.LME, load legacy CR3, set CR0.PG) before entering v86, and restores long mode on return. Matches §3.3 intent literally.
+2. **VMX-hosted v86.** Keep stage2 in long mode. Use a VT-x guest VMCS with `GUEST_RFLAGS.VM=1` so the CPU emulates v86 inside a VMX non-root guest. Requires VT-x availability and a VMX monitor.
+3. **Software 8086 emulator.** Replace hardware v86 with an interpreter/JIT inside stage2. Guarantees portability but scales poorly to Win 3.1 Enhanced / Win9x.
+
+**What is preserved.** The OPENGEM-017..043 scaffolding (IDT live, TSS32, GDT compat, PSP+MZ+reloc loader, arm-cascade discipline, gates) remains correct and reusable: only the inner transition `compat-32 → v86` is invalid. The GDT/TSS/frame layout applies unchanged to path (1). Path (2) reuses the loader, PSP, reloc, and INT-dispatcher design; it replaces the mode-switch. Path (3) reuses the loader only.
+
+**Status change.** Subsection §3.3 "Long mode constraint" is amended by this Errata: the words *"32-bit protected mode (v8086 host task)"* must be read as *"32-bit **legacy** protected mode (v8086 host task), i.e. outside IA-32e"*. Tiers T0..T6 in §4 are unaffected structurally but all gated on the mode-switch path chosen above.
+
+---
 
 ---
 
