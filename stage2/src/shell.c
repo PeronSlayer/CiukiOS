@@ -4533,6 +4533,7 @@ static void shell_run_staged_image(
 static void shell_gem_disarm_path(void) {
     v86_dispatch_disarm();
     legacy_v86_disarm();
+    SHELL_MODE_SWITCH_TRAMP_CALL(disarm)();
     SHELL_MODE_SWITCH_CALL(disarm)();
     vm86_gp_isr_uninstall();
     vm86_gp_isr_install_disarm();
@@ -9281,6 +9282,14 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             return;
         }
         serial_write("[gem] 044A armed\n");
+
+        if (SHELL_MODE_SWITCH_TRAMP_CALL(arm)(MODE_SWITCH_TRAMPOLINE_ARM_MAGIC) != MODE_SWITCH_OK) {
+            video_write("[gem] FAIL: 044A trampoline arm\n");
+            serial_write("[gem] FAIL arm-044A-tramp\n");
+            shell_gem_disarm_path();
+            return;
+        }
+        serial_write("[gem] 044A trampoline armed\n");
 
         if (legacy_v86_arm(LEGACY_V86_ARM_MAGIC) != LEGACY_V86_OK) {
             video_write("[gem] pending task B\n");
