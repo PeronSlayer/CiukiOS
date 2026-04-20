@@ -118,6 +118,9 @@ LEAKS=$(grep -RIlE '\bmode_switch_(arm|disarm|is_armed|run_legacy_pm|probe|tramp
     | grep -vE '^stage2/src/mode_switch_asm\.S$' \
     | grep -vE '^stage2/include/mode_switch\.h$' \
     | grep -vE '^stage2/src/legacy_v86\.c$' \
+    | grep -vE '^stage2/src/legacy_v86_live\.c$' \
+    | grep -vE '^stage2/include/legacy_v86_live\.h$' \
+    | grep -vE '^stage2/src/legacy_v86_v86_body\.S$' \
     || true)
 if [ -z "$LEAKS" ]; then
     pass
