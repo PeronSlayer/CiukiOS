@@ -59,6 +59,7 @@ mode_switch_asm_sentinel:
     .asciz "OPENGEM-044-A-ASM"
 
 .extern g_mode_switch_resume_target
+.extern g_mode_switch_scratch_ptr
 
 /* Debug trace: emit a single ASCII byte on port 0xE9 (debugcon).
  * Clobbers %al only. Safe in code32 and code64. */
@@ -217,6 +218,13 @@ mode_switch_asm_enter:
     outb  %al, $0xE9
     TRACE 'L'
     addl  $4, %esp
+    /* Reload %ebx with the scratch ptr. The PM32 #GP handler clobbers
+     * %ebx with guest state (see legacy_v86_pm32_gp_handler), so every
+     * SCR_*(%ebx) access below would otherwise read from a garbage
+     * address. g_mode_switch_scratch_ptr is a 64-bit global in .bss but
+     * the low 32 bits are sufficient because stage2 .bss sits below 4 GiB
+     * and paging is currently OFF (linear == physical). */
+    movl  g_mode_switch_scratch_ptr, %ebx
     movl  %eax, SCR_RESULT(%ebx)
 
     /* Re-enter IA-32e.
@@ -257,6 +265,11 @@ mode_switch_asm_enter:
 .code64
 ._ms_long_resume:
     TRACE 'Q'
+    /* Per Intel SDM: a 32-bit task switch (used by the PM32↔v86 round-trip)
+     * leaves R8..R15 "undefined". QEMU poisons them with 0xCC.... Reload
+     * the scratch pointer from a memory global before touching any
+     * SCR_* field via (%r15). */
+    movq g_mode_switch_scratch_ptr(%rip), %r15
     xorl %eax, %eax
     movw %ax, %ds
     movw %ax, %es
@@ -306,14 +319,6 @@ mode_switch_asm_enter:
      * A plain `ret` transfers control back to the C continuation without
      * relying on the resume-target global. */
     TRACE 'z'
-    /* The host RSP memory and g_mode_switch_resume_target are both
-     * corrupted (filled with 0xCC) by the v86 round-trip — the C
-     * continuation cannot be reached yet. Halt cleanly here so the
-     * serial/debugcon log survives for inspection rather than letting
-     * `ret` or `jmp *%r10` triple-fault on a garbage target.
-     * TODO(opengem-044): locate v86-path memory corruption culprit. */
-1:  hlt
-    jmp 1b
     ret
 
 .size mode_switch_asm_enter, . - mode_switch_asm_enter
