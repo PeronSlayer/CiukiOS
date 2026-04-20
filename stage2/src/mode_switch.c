@@ -68,10 +68,36 @@ static mode_switch_scratch_t s_mode_switch_scratch;
 static uint64_t s_legacy_gdt[5] __attribute__((aligned(16)));
 static uint8_t  s_pm32_stack[64 * 1024] __attribute__((aligned(16)));
 
+/* Relocation offset: physical load address - virtual link address.
+ * This is calculated once using _start symbol to determine where stage2
+ * was actually loaded by UEFI vs. where the linker linked it (0x80000000). */
+static int64_t s_relocation_offset = 0;
+static int s_relocation_initialized = 0;
+
 extern uint8_t legacy_v86_pm32_tss[];
 
 extern int mode_switch_asm_enter(mode_switch_scratch_t *scratch);
 extern const char mode_switch_asm_sentinel[];
+
+static void calculate_relocation_offset_once(void)
+{
+    if (s_relocation_initialized) {
+        return;
+    }
+
+    /* Get current RIP (reveals physical load address during execution). */
+    uint64_t rip = 0;
+    __asm__ __volatile__ ("lea 0(%%rip), %0" : "=r"(rip));
+
+    /* Get address of _start symbol (virtual address from linker). */
+    extern uint8_t _start;
+    uint64_t start_virt = (uint64_t)(uintptr_t)&_start;
+
+    /* Calculate offset: if _start is at virtual 0x80000000 but RIP shows
+     * we're executing at 0x100000 (physical), then offset = 0x100000 - 0x80000000. */
+    s_relocation_offset = (int64_t)rip - (int64_t)start_virt;
+    s_relocation_initialized = 1;
+}
 
 static uint64_t encode_gdt_entry(uint32_t base, uint32_t limit,
                                  uint8_t access, uint8_t flags)
@@ -168,6 +194,9 @@ int mode_switch_run_legacy_pm(mode_switch_legacy_pm_body_fn body, void *user)
         return MODE_SWITCH_ERR_NOT_IMPLEMENTED;
     }
 
+    /* Calculate relocation offset once (lazy initialization). */
+    calculate_relocation_offset_once();
+
     mode_switch_scratch_t *scr = &s_mode_switch_scratch;
     for (uint64_t i = 0; i < sizeof(*scr); ++i) {
         ((volatile uint8_t *)scr)[i] = 0;
@@ -181,7 +210,11 @@ int mode_switch_run_legacy_pm(mode_switch_legacy_pm_body_fn body, void *user)
     scr->pm32_stack_top = (uint64_t)(uintptr_t)(s_pm32_stack + sizeof(s_pm32_stack));
     scr->pm32_stack_top &= ~(uint64_t)0xFu;
 
-    scr->body_fn   = (uint64_t)(uintptr_t)body;
+    /* Apply relocation offset: convert virtual address to physical address
+     * so body_fn is valid when paging is disabled in legacy PM. */
+    uint64_t body_virt = (uint64_t)(uintptr_t)body;
+    uint64_t body_phys = (uint64_t)((int64_t)body_virt + s_relocation_offset);
+    scr->body_fn = body_phys;
     scr->body_user = (uint64_t)(uintptr_t)user;
 
     (void)mode_switch_asm_enter(scr);
