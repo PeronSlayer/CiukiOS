@@ -8896,6 +8896,25 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         return;
     }
 
+    if (str_eq(cmd, "vm86-probe-041")) {
+        /* OPENGEM-042: runtime validation of the 039/040/041 scaffolding.
+         * Calls vm86_compat_entry_live_probe(), which exercises all arm
+         * gates, fill_frame, scratch layout, wrong-magic guards on
+         * enter_v86, and asm symbol resolution. Does NOT enter v8086
+         * mode. All prereqs are disarmed by the probe itself on exit. */
+        video_write("[vm86] probe-041 begin (038+039+040+041 runtime check)\n");
+        serial_write("[vm86] probe-041 begin\n");
+        int rc = vm86_compat_entry_live_probe();
+        if (rc == 1) {
+            video_write("[vm86] probe-041 result=PASS (scaffolding runtime-sane)\n");
+            serial_write("[vm86] probe-041 result=PASS\n");
+        } else {
+            video_write("[vm86] probe-041 result=FAIL (see serial log for reason)\n");
+            serial_write("[vm86] probe-041 result=FAIL\n");
+        }
+        return;
+    }
+
     if (str_eq(cmd, "pwd")) {
         shell_pwd();
         return;
