@@ -9327,14 +9327,17 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
         video_write("[gem] entering legacy_v86 loop\n");
         serial_write("[gem] enter legacy_v86 loop\n");
+        serial_write("[ms-trace] ");
 
         for (;;) {
             if (legacy_v86_enter(&frame, &exit_state) != LEGACY_V86_OK) {
+                serial_write(" <end>\n");
                 video_write("[gem] pending task B\n");
                 serial_write("[gem] pending task B enter-044B\n");
                 shell_gem_disarm_path();
                 return;
             }
+            serial_write(" <end>\n");
 
             frame.cs = exit_state.frame.cs;
             frame.ip = exit_state.frame.ip;
