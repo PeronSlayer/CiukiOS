@@ -72,6 +72,13 @@ static mode_switch_scratch_t s_mode_switch_scratch;
 static uint64_t s_legacy_gdt[5] __attribute__((aligned(16)));
 static uint8_t  s_pm32_stack[64 * 1024] __attribute__((aligned(16)));
 uint64_t g_mode_switch_resume_target = 0;
+/* Pointer to the live scratch buffer, stored in a global so the long-mode
+ * resume tail can reload %r15 after the PM32↔v86 task switches. Per Intel
+ * SDM vol.3, a 32-bit task switch leaves the upper 32 bits of the extended
+ * GPRs (R8..R15) undefined; QEMU clobbers the full 64-bit register. We
+ * therefore cannot trust %r15 to preserve the scratch pointer across the
+ * round-trip. */
+void *g_mode_switch_scratch_ptr = 0;
 
 /* Relocation offset: physical load address - virtual link address.
  * Initialized explicitly from handoff->stage2_load_addr. */
@@ -219,6 +226,7 @@ int mode_switch_run_legacy_pm(mode_switch_legacy_pm_body_fn body, void *user)
     scr->body_user = (uint64_t)(uintptr_t)user;
     scr->saved_ret_addr = (uint64_t)(uintptr_t)&&after_mode_switch;
     g_mode_switch_resume_target = scr->saved_ret_addr;
+    g_mode_switch_scratch_ptr = scr;
 
     mode_switch_debugcon('1');
     (void)mode_switch_asm_enter(scr);
