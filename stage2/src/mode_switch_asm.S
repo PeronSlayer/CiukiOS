@@ -118,6 +118,7 @@ mode_switch_asm_enter:
     movw %ax, %fs
     movw %ax, %gs
     TRACE 'E'
+    movw $DATA32_SEL, %ax   /* reload: TRACE clobbered %al */
     movw %ax, %ss
     TRACE 'F'
 
