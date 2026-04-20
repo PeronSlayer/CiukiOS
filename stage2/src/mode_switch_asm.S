@@ -153,6 +153,33 @@ mode_switch_asm_enter:
     pushl %eax
     movl  SCR_BODY_FN(%ebx), %eax
     TRACE 'K'
+    /* Sanity: relative call to a local micro-body. If 'm' appears the
+     * CALL instruction and stack work in legacy PM. */
+    call  ._ms_micro_body
+    TRACE 'l'
+    /* Dump %eax (body_fn) as 8 hex chars on 0xE9 so we can verify the
+     * indirect target is sane before using it. Preserves %eax. */
+    pushl %eax
+    pushl %ecx
+    movl  %eax, %ecx
+    movl  $8, %edx
+._ms_dump_eax:
+    roll  $4, %ecx
+    movl  %ecx, %eax
+    andl  $0xF, %eax
+    cmpl  $10, %eax
+    jb    ._ms_dump_dec
+    addl  $('a' - 10), %eax
+    jmp   ._ms_dump_emit
+._ms_dump_dec:
+    addl  $'0', %eax
+._ms_dump_emit:
+    outb  %al, $0xE9
+    decl  %edx
+    jnz   ._ms_dump_eax
+    popl  %ecx
+    popl  %eax
+    /* Real indirect call to body. */
     call  *%eax
     TRACE 'L'
     addl  $4, %esp
@@ -183,6 +210,12 @@ mode_switch_asm_enter:
     pushl $CODE64_SEL
     pushl $._ms_long_resume
     lretl
+
+    /* .code32 local sanity routine for pre-call diagnostics. */
+._ms_micro_body:
+    movb $'m', %al
+    outb %al, $0xE9
+    retl
 
 .code64
 ._ms_long_resume:
