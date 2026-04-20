@@ -259,7 +259,7 @@ legacy_v86_pm32_spurious:
 
 legacy_v86_pm32_gp_handler:
     /* Trap frame on entry from v86 for #GP with error code:
-     * [esp+00] error
+     * [esp+00] error code
      * [esp+04] eip
      * [esp+08] cs
      * [esp+12] eflags
@@ -488,9 +488,13 @@ legacy_v86_pm32_gp_handler:
     movb    $'r', %al
     outb    %al, $0xE9
 
+    /* CRITICAL FIX: Extract old EIP from trap frame BEFORE changing ESP.
+     * The trap frame is at [esp+0..40], and old EIP is at [esp+4].
+     * We must preserve this EIP to use with retl below. */
+    movl    4(%esp), %eax       /* Save old EIP from trap frame */
     movl    legacy_v86_pm32_saved_esp, %esp
-    /* Clean trap frame from stack: trap frame is 44 bytes (11 * 4) */
-    addl    $44, %esp
+    /* Now push the old EIP so retl can jump back to the guest. */
+    pushl   %eax
     xorl    %eax, %eax
     retl
 
