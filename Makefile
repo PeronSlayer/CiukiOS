@@ -537,6 +537,9 @@ test-vm86-gp-dispatch:
 test-vm86-gp-isr-c:
 	bash ./scripts/test_vm86_gp_isr_c.sh
 
+test-vm86-gp-isr-real:
+	bash ./scripts/test_vm86_gp_isr_real.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

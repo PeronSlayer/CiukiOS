@@ -3266,3 +3266,115 @@ int vm86_gp_isr_c_probe(void) {
     serial_write("vm86: gp-isr-c probe complete\n");
     return 1;
 }
+
+/* ================================================================== */
+/* OPENGEM-037 - PE32 #GP ISR real asm body (arm-gated, never-installed). */
+/*                                                                    */
+/* Adds the C-side arm-gate and host-probe for the real 32-bit asm    */
+/* ISR defined in stage2/src/vm86_gp_isr_body.S. The ISR itself is   */
+/* not called from anywhere in 037; this block only verifies static  */
+/* invariants on the capture area and exposes the independent gate.  */
+/* ================================================================== */
+
+__attribute__((used)) static const char vm86_gp_isr_real_c_sentinel[] = "OPENGEM-037";
+
+static int s_vm86_gp_isr_real_armed = 0;
+
+/* Forward reference to the asm ISR entry; taking its address in C is
+ * safe (observability only) but calling it would execute .code32
+ * opcodes from long mode -- NEVER do that. */
+extern void vm86_gp_isr_real_entry(void);
+extern const char vm86_gp_isr_real_sentinel[];
+
+int vm86_gp_isr_real_arm(u32 magic) {
+    if (magic != VM86_GP_ISR_REAL_ARM_MAGIC) {
+        return 0;
+    }
+    s_vm86_gp_isr_real_armed = 1;
+    return 1;
+}
+
+void vm86_gp_isr_real_disarm(void) {
+    s_vm86_gp_isr_real_armed = 0;
+}
+
+int vm86_gp_isr_real_is_armed(void) {
+    return s_vm86_gp_isr_real_armed ? 1 : 0;
+}
+
+int vm86_gp_isr_real_probe(void) {
+    serial_write("vm86: gp-isr-real sentinel=0x");
+    serial_write_hex64((u64)VM86_GP_ISR_REAL_SENTINEL);
+    serial_write(" id=");
+    serial_write(vm86_gp_isr_real_c_sentinel);
+    serial_write("\n");
+
+    /* Default disarmed. */
+    if (vm86_gp_isr_real_is_armed()) {
+        serial_write("vm86: gp-isr-real default-armed=FAIL\n");
+        return 0;
+    }
+    /* Wrong magic rejected. */
+    if (vm86_gp_isr_real_arm(0xBAADF00Du) != 0 || vm86_gp_isr_real_is_armed()) {
+        serial_write("vm86: gp-isr-real magic-reject=FAIL\n");
+        return 0;
+    }
+    /* Correct magic accepted. */
+    if (vm86_gp_isr_real_arm(VM86_GP_ISR_REAL_ARM_MAGIC) != 1 ||
+        !vm86_gp_isr_real_is_armed()) {
+        serial_write("vm86: gp-isr-real magic-accept=FAIL\n");
+        return 0;
+    }
+
+    /* Asm sentinel must match. */
+    const char *sent = vm86_gp_isr_real_sentinel;
+    if (!(sent[0]=='O' && sent[1]=='P' && sent[2]=='E' && sent[3]=='N' &&
+          sent[4]=='G' && sent[5]=='E' && sent[6]=='M' && sent[7]=='-' &&
+          sent[8]=='0' && sent[9]=='3' && sent[10]=='7' && sent[11]==0)) {
+        serial_write("vm86: gp-isr-real asm-sentinel=FAIL\n");
+        return 0;
+    }
+
+    /* Capture area must be zero-initialised (BSS). */
+    for (u32 i = 0; i < 64; i++) {
+        if (vm86_gp_isr_capture_area[i] != 0) {
+            serial_write("vm86: gp-isr-real capture-area-nonzero=FAIL\n");
+            return 0;
+        }
+    }
+    if (vm86_gp_isr_capture_flag != 0) {
+        serial_write("vm86: gp-isr-real capture-flag-nonzero=FAIL\n");
+        return 0;
+    }
+    if (vm86_gp_isr_capture_seq != 0) {
+        serial_write("vm86: gp-isr-real capture-seq-nonzero=FAIL\n");
+        return 0;
+    }
+
+    /* ISR entry symbol must resolve (linker wires .code32 bytes). */
+    if ((void*)&vm86_gp_isr_real_entry == 0) {
+        serial_write("vm86: gp-isr-real isr-addr-null=FAIL\n");
+        return 0;
+    }
+
+    /* Independence: arming 037 alone must leave 035/036 disarmed. */
+    if (vm86_gp_dispatch_is_armed() || vm86_gp_isr_c_is_armed()) {
+        serial_write("vm86: gp-isr-real independence=FAIL\n");
+        return 0;
+    }
+
+    vm86_gp_isr_real_disarm();
+    if (vm86_gp_isr_real_is_armed()) {
+        serial_write("vm86: gp-isr-real final-disarm=FAIL\n");
+        return 0;
+    }
+
+    serial_write("vm86: gp-isr-real arm-magic=0x");
+    serial_write_hex64((u64)VM86_GP_ISR_REAL_ARM_MAGIC);
+    serial_write("\n");
+    serial_write("vm86: gp-isr-real capture-area-bytes=64\n");
+    serial_write("vm86: gp-isr-real ready-surface=arm-gate,asm-capture-body,halt-terminal\n");
+    serial_write("vm86: gp-isr-real pending-surface=live-idt-install,iretd-return,v86-entry\n");
+    serial_write("vm86: gp-isr-real probe complete\n");
+    return 1;
+}

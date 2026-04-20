@@ -1278,4 +1278,52 @@ vm86_gp_dispatch_action vm86_gp_isr_c_entry(
  */
 int vm86_gp_isr_c_probe(void);
 
+/* ================================================================== */
+/* OPENGEM-037 - PE32 #GP ISR real asm body (arm-gated, never-installed). */
+/*                                                                    */
+/* This phase adds the REAL 32-bit asm ISR that captures the HW trap */
+/* frame into a static area and halts. It is declared in its own     */
+/* file (stage2/src/vm86_gp_isr_body.S) and never installed in any   */
+/* IDT in 037: no caller exists outside that file. Own arm-gate,     */
+/* own magic, own sentinel constant. The vm86_gp_dispatch.S halt    */
+/* stub from OPENGEM-035 is NOT modified.                            */
+/*                                                                    */
+/* Observability only:                                                */
+/*   - no LIDT / LGDT is issued;                                      */
+/*   - no IRETD / IRETQ is emitted (yet);                             */
+/*   - no CR-write is introduced;                                     */
+/*   - the new symbols are reachable only via their prototypes.       */
+/* ================================================================== */
+
+#define VM86_GP_ISR_REAL_SENTINEL 0x0370u
+#define VM86_GP_ISR_REAL_ARM_MAGIC 0xC1D39370u
+
+/* Capture area written by vm86_gp_isr_real_entry on #GP entry. */
+extern u8  vm86_gp_isr_capture_area[64];
+extern u8  vm86_gp_isr_capture_flag;
+extern u32 vm86_gp_isr_capture_seq;
+
+/*
+ * Arm-gate for OPENGEM-037. Independent from 029/033/035/036. Arming
+ * this gate alone does NOT install the ISR in any IDT -- installation
+ * is the OPENGEM-038 pending surface.
+ */
+int  vm86_gp_isr_real_arm(u32 magic);
+void vm86_gp_isr_real_disarm(void);
+int  vm86_gp_isr_real_is_armed(void);
+
+/*
+ * OPENGEM-037 host-side probe. Exercises static invariants only:
+ *   - default-disarmed;
+ *   - wrong magic rejected;
+ *   - capture flag default 0, sequence default 0;
+ *   - capture area initialised to zero;
+ *   - sentinel string is "OPENGEM-037";
+ *   - vm86_gp_isr_real_entry symbol address is non-NULL.
+ *
+ * Returns 1 on success, 0 otherwise. Never invokes the ISR (it is
+ * unreachable in 037 by design).
+ */
+int vm86_gp_isr_real_probe(void);
+
 #endif /* STAGE2_VM86_H */
