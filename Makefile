@@ -558,6 +558,9 @@ test-mode-switch:
 test-legacy-v86:
 	bash ./scripts/test_legacy_v86.sh
 
+test-v86-dispatch:
+	bash ./scripts/test_v86_dispatch.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

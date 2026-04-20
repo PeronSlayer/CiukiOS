@@ -14,8 +14,14 @@
 #include "gfx2d.h"
 #include "image.h"
 #include "vm86.h"
+#include "mode_switch.h"
+#include "v86_dispatch.h"
 #include "gfx_modes.h"
 #include "app_catalog.h"
+
+#define SHELL_JOIN2(a, b) a##b
+#define SHELL_JOIN(a, b) SHELL_JOIN2(a, b)
+#define SHELL_MODE_SWITCH_CALL(name) SHELL_JOIN(mode_switch_, name)
 
 #define SHELL_LINE_MAX 128
 #define SHELL_HISTORY_MAX 32U
@@ -4446,8 +4452,8 @@ static void shell_run_staged_image(
         serial_write("\n");
 
         if (!marker_ok || image_size < 12U) {
-            video_write("Unsupported 16-bit MZ executable.\n");
-            serial_write("[dosrun] mz dispatch=pending reason=16bit\n");
+            video_write("16-bit MZ executable requires legacy_v86 host.\n");
+            serial_write("[dosrun] mz dispatch=pending reason=task-b\n");
             shell_set_errorlevel(1U);
             g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_RUNTIME;
             return;
@@ -4501,6 +4507,31 @@ static void shell_run_staged_image(
     } else {
         g_shell_dosrun_error_class = SHELL_DOSRUN_ERROR_NONE;
     }
+}
+
+static void shell_gem_disarm_path(void) {
+    v86_dispatch_disarm();
+    legacy_v86_disarm();
+    SHELL_MODE_SWITCH_CALL(disarm)();
+    vm86_gp_isr_uninstall();
+    vm86_gp_isr_install_disarm();
+}
+
+static void shell_gem_write_exit_reason(legacy_v86_exit_reason_t reason, u32 fault_code) {
+    serial_write("[gem] exit reason=");
+    if (reason == LEGACY_V86_EXIT_NORMAL) {
+        serial_write("normal");
+    } else if (reason == LEGACY_V86_EXIT_HALT) {
+        serial_write("halt");
+    } else if (reason == LEGACY_V86_EXIT_FAULT) {
+        serial_write("fault code=0x");
+        serial_write_hex64((u64)fault_code);
+    } else if (reason == LEGACY_V86_EXIT_GP_INT) {
+        serial_write("gp-int");
+    } else {
+        serial_write("unknown");
+    }
+    serial_write("\n");
 }
 
 static int shell_run_from_catalog(
@@ -9053,7 +9084,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         serial_write(" sp=0x"); serial_write_hex64((u64)stack_sp);
         serial_write("\n");
 
-        /* Step 7: arm cascade 038..041. */
+        /* Step 7: arm cascade 038 -> 044A -> 044B -> 044C. */
         if (vm86_gp_isr_install_arm(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1 ||
             vm86_gp_isr_install(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1) {
             video_write("[gem] FAIL: 038 arm/install\n");
@@ -9062,55 +9093,106 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         }
         serial_write("[gem] 038 installed\n");
 
-        if (vm86_compat_task_arm(VM86_COMPAT_TASK_ARM_MAGIC) != 1) {
-            video_write("[gem] FAIL: 039 arm\n");
-            serial_write("[gem] FAIL arm-039\n");
+        if (SHELL_MODE_SWITCH_CALL(arm)(MODE_SWITCH_ARM_MAGIC) != MODE_SWITCH_OK) {
+            video_write("[gem] FAIL: 044A arm\n");
+            serial_write("[gem] FAIL arm-044A\n");
+            shell_gem_disarm_path();
             return;
         }
-        vm86_compat_task_image img;
-        if (vm86_compat_task_build(&img, VM86_COMPAT_TASK_ARM_MAGIC) != 1) {
-            video_write("[gem] FAIL: 039 build\n");
-            serial_write("[gem] FAIL build-039\n");
+        serial_write("[gem] 044A armed\n");
+
+        if (legacy_v86_arm(LEGACY_V86_ARM_MAGIC) != 1) {
+            video_write("[gem] pending task B\n");
+            serial_write("[gem] pending task B arm-044B\n");
+            shell_gem_disarm_path();
             return;
         }
-        serial_write("[gem] 039 built\n");
+        serial_write("[gem] 044B armed\n");
 
-        if (vm86_compat_entry_arm(VM86_COMPAT_ENTRY_ARM_MAGIC) != 1 ||
-            vm86_compat_entry_prepare(&img, (u32)snap.cr3,
-                                      VM86_COMPAT_ENTRY_ARM_MAGIC) != 1) {
-            video_write("[gem] FAIL: 040 prepare\n");
-            serial_write("[gem] FAIL prep-040\n");
+        if (v86_dispatch_arm(V86_DISPATCH_ARM_MAGIC) != 1) {
+            video_write("[gem] FAIL: 044C arm\n");
+            serial_write("[gem] FAIL arm-044C\n");
+            shell_gem_disarm_path();
             return;
         }
-        serial_write("[gem] 040 prepared\n");
+        serial_write("[gem] 044C armed\n");
 
-        if (vm86_compat_entry_live_arm(VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) != 1 ||
-            vm86_compat_entry_live_fill_frame(&img, (u32)snap.cr3,
-                                              entry_cs, entry_ip,
-                                              stack_ss, stack_sp,
-                                              VM86_COMPAT_ENTRY_ARM_MAGIC,
-                                              VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC) != 1) {
-            video_write("[gem] FAIL: 041 fill\n");
-            serial_write("[gem] FAIL fill-041\n");
-            return;
+        legacy_v86_frame_t frame;
+        legacy_v86_exit_t exit_state;
+        v86_dispatch_result_t dispatch_result;
+
+        frame.cs = entry_cs;
+        frame.ip = entry_ip;
+        frame.ss = stack_ss;
+        frame.sp = stack_sp;
+        frame.ds = psp_seg;
+        frame.es = psp_seg;
+        frame.fs = 0U;
+        frame.gs = 0U;
+        frame.eflags = 0x00000202u;
+        frame.reserved[0] = 0U;
+        frame.reserved[1] = 0U;
+        frame.reserved[2] = 0U;
+        frame.reserved[3] = 0U;
+
+        video_write("[gem] entering legacy_v86 loop\n");
+        serial_write("[gem] enter legacy_v86 loop\n");
+
+        for (;;) {
+            if (legacy_v86_enter(&frame, &exit_state) != 1) {
+                video_write("[gem] pending task B\n");
+                serial_write("[gem] pending task B enter-044B\n");
+                shell_gem_disarm_path();
+                return;
+            }
+
+            frame.cs = exit_state.frame.cs;
+            frame.ip = exit_state.frame.ip;
+            frame.ss = exit_state.frame.ss;
+            frame.sp = exit_state.frame.sp;
+            frame.ds = exit_state.frame.ds;
+            frame.es = exit_state.frame.es;
+            frame.fs = exit_state.frame.fs;
+            frame.gs = exit_state.frame.gs;
+            frame.eflags = exit_state.frame.eflags;
+            frame.reserved[0] = exit_state.frame.reserved[0];
+            frame.reserved[1] = exit_state.frame.reserved[1];
+            frame.reserved[2] = exit_state.frame.reserved[2];
+            frame.reserved[3] = exit_state.frame.reserved[3];
+            if (exit_state.reason == LEGACY_V86_EXIT_GP_INT) {
+                serial_write("[gem] dispatch int=0x");
+                serial_write_hex64((u64)exit_state.int_vector);
+                serial_write(" cs:ip=0x");
+                serial_write_hex64(((u64)frame.cs << 16) | frame.ip);
+                serial_write("\n");
+                dispatch_result = v86_dispatch_int(exit_state.int_vector, &frame);
+                if (dispatch_result == V86_DISPATCH_CONT) {
+                    continue;
+                }
+                if (dispatch_result == V86_DISPATCH_EXIT_OK) {
+                    video_write("[gem] dispatch requested exit\n");
+                    serial_write("[gem] dispatch exit=ok\n");
+                    break;
+                }
+                video_write("[gem] dispatch abort\n");
+                serial_write("[gem] dispatch exit=err\n");
+                break;
+            }
+
+            shell_gem_write_exit_reason(exit_state.reason, exit_state.fault_code);
+            if (exit_state.reason == LEGACY_V86_EXIT_NORMAL) {
+                video_write("[gem] guest terminated normally\n");
+            } else if (exit_state.reason == LEGACY_V86_EXIT_HALT) {
+                video_write("[gem] guest halted\n");
+            } else if (exit_state.reason == LEGACY_V86_EXIT_FAULT) {
+                video_write("[gem] guest faulted\n");
+            } else {
+                video_write("[gem] guest exited\n");
+            }
+            break;
         }
-        serial_write("[gem] 041 filled\n");
 
-        video_write("[gem] entering v86 mode (no return path)\n");
-        serial_write("[gem] ENTER v86 -- point of no return\n");
-
-        /* Step 8: no-return entry. */
-        (void)vm86_compat_entry_enter_v86(VM86_COMPAT_ENTRY_ARM_MAGIC,
-                                          VM86_COMPAT_ENTRY_LIVE_ARM_MAGIC);
-
-        /* If we somehow get here, the entry refused. */
-        video_write("[gem] enter_v86 refused -- see serial\n");
-        serial_write("[gem] enter_v86 refused\n");
-        vm86_compat_entry_live_disarm();
-        vm86_compat_entry_disarm();
-        vm86_compat_task_disarm();
-        vm86_gp_isr_uninstall();
-        vm86_gp_isr_install_disarm();
+        shell_gem_disarm_path();
         return;
     }
 
