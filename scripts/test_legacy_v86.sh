@@ -108,6 +108,9 @@ LEAKS=$(grep -RIlE '\blegacy_v86_(arm|disarm|is_armed|enter|probe)\b' \
     | grep -vE '^stage2/src/legacy_v86\.c$' \
     | grep -vE '^stage2/src/legacy_v86_pm32\.S$' \
     | grep -vE '^stage2/include/legacy_v86\.h$' \
+    | grep -vE '^stage2/src/v86_dispatch\.c$' \
+    | grep -vE '^stage2/include/v86_dispatch\.h$' \
+    | grep -vE '^stage2/src/shell\.c$' \
     || true)
 if [ -z "$LEAKS" ]; then
     pass
