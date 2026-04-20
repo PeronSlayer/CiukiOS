@@ -214,6 +214,11 @@ legacy_v86_pm32_body:
     movb    $'h', %al
     outb    %al, $0xE9
 
+    /* CRITICAL: Save ESP BEFORE building v86 frame.
+     * The body stack has [esp+0]=return_address and [esp+4]=body_user.
+     * When v86 traps, handler needs to restore this ESP to access the return address. */
+    movl    %esp, legacy_v86_pm32_saved_esp
+
     /* Build v86 IRET frame from caller entry state. */
     movl    CTX_ENTRY(%esi), %edi
     pushl   FRAME_GS(%edi)
@@ -488,16 +493,56 @@ legacy_v86_pm32_gp_handler:
     movb    $'r', %al
     outb    %al, $0xE9
 
+    /* Debug: about to restore ESP and jump to exit label */
+    movb    $'E', %al
+    outb    %al, $0xE9
+    movb    $'S', %al
+    outb    %al, $0xE9
+    movb    $'P', %al
+    outb    %al, $0xE9
     /* CRITICAL FIX: Extract old EIP from trap frame BEFORE changing ESP.
      * The trap frame is at [esp+0..40], and old EIP is at [esp+4].
      * We must preserve this EIP to use with retl below. */
     movl    4(%esp), %eax       /* Save old EIP from trap frame */
+    movb    $'L', %al
+    outb    %al, $0xE9
+    movb    $'D', %al
+    outb    %al, $0xE9
     movl    legacy_v86_pm32_saved_esp, %esp
-    /* Now push the old EIP so retl can jump back to the guest. */
-    pushl   %eax
+    movb    $'P', %al
+    outb    %al, $0xE9
+    movb    $'S', %al
+    outb    %al, $0xE9
+    movb    $'H', %al
+    outb    %al, $0xE9
+    /* Now push the exit label address so retl jumps back to body exit. */
+    pushl   $.L_v86_exit
+    movb    $'J', %al
+    outb    %al, $0xE9
+    movb    $'M', %al
+    outb    %al, $0xE9
+    movb    $'P', %al
+    outb    %al, $0xE9
     xorl    %eax, %eax
     retl
 
+.L_v86_exit:
+    /* Handler returns here after trap. Exit state is in legacy_v86_exit_t. */
+    movb    $'X', %al
+    outb    %al, $0xE9
+    movb    $'!', %al
+    outb    %al, $0xE9
+    /* Body now returns to mode_switch_asm. */
+    xorl    %eax, %eax
+    movb    $'E', %al
+    outb    %al, $0xE9
+    movb    $'X', %al
+    outb    %al, $0xE9
+    movb    $'I', %al
+    outb    %al, $0xE9
+    movb    $'T', %al
+    outb    %al, $0xE9
+    retl
     .code64
     .size legacy_v86_pm32_body, .-legacy_v86_pm32_body
 
