@@ -32,6 +32,40 @@ typedef struct v86_find_state {
 static v86_find_state_t s_v86_find_state;
 static char s_v86_cwd[V86_PATH_MAX] = "/";
 static uint8_t s_v86_default_drive = 2u;
+static uint32_t s_v86_int_vectors[256];
+static int s_v86_exec_pending = 0;
+static char s_v86_exec_path[V86_PATH_MAX] = "";
+static char s_v86_exec_tail[127] = "";
+static uint16_t s_v86_exec_env_seg = 0u;
+
+#define V86_MEM_MAX_BLOCKS 32U
+#define V86_MEM_FIRST_SEG  0x8000u
+#define V86_MEM_TOP_SEG    0xFF00u
+#define V86_FILE_MAX_HANDLES 4U
+#define V86_FILE_BUF_CAP 65536U
+#define V86_FILE_HANDLE_BASE 5u
+
+typedef struct v86_mem_block {
+    uint16_t seg;
+    uint16_t paras;
+    uint8_t used;
+} v86_mem_block_t;
+
+typedef struct v86_file_handle {
+    uint8_t used;
+    uint8_t mode;
+    uint8_t dirty;
+    uint16_t handle_id;
+    uint32_t size;
+    uint32_t pos;
+    char path[V86_PATH_MAX];
+    uint8_t data[V86_FILE_BUF_CAP];
+} v86_file_handle_t;
+
+static v86_mem_block_t s_v86_mem_blocks[V86_MEM_MAX_BLOCKS];
+static uint16_t s_v86_mem_next_seg = V86_MEM_FIRST_SEG;
+static uint8_t s_v86_time_second = 0u;
+static v86_file_handle_t s_v86_file_handles[V86_FILE_MAX_HANDLES];
 
 static uint8_t v86_to_upper_ascii(uint8_t ch)
 {
@@ -48,6 +82,21 @@ static void v86_memset(void *dst_void, uint8_t value, uint32_t count)
 
     for (i = 0u; i < count; ++i) {
         dst[i] = value;
+    }
+}
+
+static void v86_memcpy(void *dst_void, const void *src_void, uint32_t count)
+{
+    uint8_t *dst = (uint8_t *)dst_void;
+    const uint8_t *src = (const uint8_t *)src_void;
+    uint32_t i;
+
+    if (!dst || !src || count == 0u) {
+        return;
+    }
+
+    for (i = 0u; i < count; ++i) {
+        dst[i] = src[i];
     }
 }
 
@@ -144,6 +193,13 @@ static int v86_split_tokens(
             p++;
         }
         tokens[count][n] = '\0';
+
+        /* FAT short-name compatibility for OpenGEM resources staged as
+         * long-name directory `.RSC` (short alias `RSC~1`). */
+        if (v86_str_eq(tokens[count], ".RSC")) {
+            v86_str_copy(tokens[count], "RSC~1", V86_PATH_TOKEN_MAX);
+        }
+
         count++;
     }
 
@@ -551,6 +607,185 @@ static void v86_find_state_reset(void)
     v86_memset(&s_v86_find_state, 0u, (uint32_t)sizeof(s_v86_find_state));
 }
 
+static void v86_vectors_reset(void)
+{
+    v86_memset(s_v86_int_vectors, 0u, (uint32_t)sizeof(s_v86_int_vectors));
+}
+
+static void v86_exec_request_clear(void)
+{
+    s_v86_exec_pending = 0;
+    s_v86_exec_path[0] = '\0';
+    s_v86_exec_tail[0] = '\0';
+    s_v86_exec_env_seg = 0u;
+}
+
+static void v86_exec_request_set(const char *canonical_path)
+{
+    if (!canonical_path || canonical_path[0] == '\0') {
+        v86_exec_request_clear();
+        return;
+    }
+
+    v86_str_copy(s_v86_exec_path, canonical_path, (uint32_t)sizeof(s_v86_exec_path));
+    s_v86_exec_pending = (s_v86_exec_path[0] != '\0') ? 1 : 0;
+}
+
+static void v86_exec_tail_set_from_pb(uint32_t pb_linear)
+{
+    const volatile uint8_t *pb = (const volatile uint8_t *)(uint64_t)pb_linear;
+    uint16_t env_seg;
+    uint16_t cmd_off;
+    uint16_t cmd_seg;
+    uint32_t cmd_linear;
+    const volatile uint8_t *cmd;
+    uint8_t len;
+
+    s_v86_exec_tail[0] = '\0';
+
+    env_seg = (uint16_t)((uint16_t)pb[0] | ((uint16_t)pb[1] << 8));
+    s_v86_exec_env_seg = env_seg;
+
+    cmd_off = (uint16_t)((uint16_t)pb[2] | ((uint16_t)pb[3] << 8));
+    cmd_seg = (uint16_t)((uint16_t)pb[4] | ((uint16_t)pb[5] << 8));
+
+    serial_write("[v86] int21/4B param env=0x");
+    serial_write_hex64((uint64_t)env_seg);
+    serial_write("\n");
+
+    serial_write("[v86] int21/4B param cmd=");
+    serial_write_hex64((uint64_t)cmd_seg);
+    serial_write(":");
+    serial_write_hex64((uint64_t)cmd_off);
+    serial_write("\n");
+
+    if (cmd_seg == 0u && cmd_off == 0u) {
+        return;
+    }
+
+    cmd_linear = ((uint32_t)cmd_seg << 4) + (uint32_t)cmd_off;
+    cmd = (const volatile uint8_t *)(uint64_t)cmd_linear;
+    len = cmd[0];
+    if (len > 126u) {
+        len = 126u;
+    }
+
+    for (uint32_t i = 0u; i < (uint32_t)len; ++i) {
+        s_v86_exec_tail[i] = (char)cmd[1u + i];
+    }
+    s_v86_exec_tail[(uint32_t)len] = '\0';
+
+    serial_write("[v86] int21/4B param tail=\"");
+    serial_write(s_v86_exec_tail);
+    serial_write("\"\n");
+}
+
+static void v86_mem_reset(void)
+{
+    v86_memset(s_v86_mem_blocks, 0u, (uint32_t)sizeof(s_v86_mem_blocks));
+    s_v86_mem_next_seg = V86_MEM_FIRST_SEG;
+}
+
+static int v86_mem_alloc(uint16_t paras, uint16_t *seg_out, uint16_t *max_out)
+{
+    uint32_t avail;
+
+    if (!seg_out || !max_out) {
+        return 0;
+    }
+
+    if (s_v86_mem_next_seg >= V86_MEM_TOP_SEG) {
+        *max_out = 0u;
+        return 0;
+    }
+
+    avail = (uint32_t)V86_MEM_TOP_SEG - (uint32_t)s_v86_mem_next_seg;
+    if (avail > 0xFFFFu) {
+        avail = 0xFFFFu;
+    }
+    *max_out = (uint16_t)avail;
+
+    if (paras == 0u || paras > *max_out) {
+        return 0;
+    }
+
+    for (uint32_t i = 0u; i < V86_MEM_MAX_BLOCKS; ++i) {
+        if (!s_v86_mem_blocks[i].used) {
+            s_v86_mem_blocks[i].used = 1u;
+            s_v86_mem_blocks[i].seg = s_v86_mem_next_seg;
+            s_v86_mem_blocks[i].paras = paras;
+            *seg_out = s_v86_mem_next_seg;
+            s_v86_mem_next_seg = (uint16_t)(s_v86_mem_next_seg + paras);
+            return 1;
+        }
+    }
+
+    *max_out = 0u;
+    return 0;
+}
+
+static void v86_file_handles_reset(void)
+{
+    v86_memset(s_v86_file_handles, 0u, (uint32_t)sizeof(s_v86_file_handles));
+}
+
+static v86_file_handle_t *v86_file_find_handle(uint16_t handle)
+{
+    for (uint32_t i = 0u; i < V86_FILE_MAX_HANDLES; ++i) {
+        if (s_v86_file_handles[i].used && s_v86_file_handles[i].handle_id == handle) {
+            return &s_v86_file_handles[i];
+        }
+    }
+    return (v86_file_handle_t *)0;
+}
+
+static v86_file_handle_t *v86_file_alloc_handle(uint8_t mode, const char *path)
+{
+    for (uint32_t i = 0u; i < V86_FILE_MAX_HANDLES; ++i) {
+        if (!s_v86_file_handles[i].used) {
+            v86_file_handle_t *h = &s_v86_file_handles[i];
+            h->used = 1u;
+            h->mode = mode;
+            h->dirty = 0u;
+            h->handle_id = (uint16_t)(V86_FILE_HANDLE_BASE + i);
+            h->size = 0u;
+            h->pos = 0u;
+            v86_str_copy(h->path, path ? path : "", (uint32_t)sizeof(h->path));
+            return h;
+        }
+    }
+
+    return (v86_file_handle_t *)0;
+}
+
+static int v86_file_flush_handle(v86_file_handle_t *h)
+{
+    if (!h || !h->used || !h->dirty) {
+        return 1;
+    }
+
+    /* Replace semantics: remove old file entry and rewrite full buffer. */
+    (void)fat_delete_file(h->path);
+    if (!fat_write_file(h->path, (const void *)h->data, h->size)) {
+        return 0;
+    }
+
+    h->dirty = 0u;
+    return 1;
+}
+
+static void v86_file_close_all(void)
+{
+    for (uint32_t i = 0u; i < V86_FILE_MAX_HANDLES; ++i) {
+        if (!s_v86_file_handles[i].used) {
+            continue;
+        }
+
+        (void)v86_file_flush_handle(&s_v86_file_handles[i]);
+        s_v86_file_handles[i].used = 0u;
+    }
+}
+
 /* Historical scaffold token retained for scripts/test_v86_dispatch.sh:
  * return V86_DISPATCH_CONT;
  */
@@ -629,6 +864,14 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     }
 
     if (vector != 0x21u) {
+        if (s_v86_int_vectors[vector] != 0u) {
+            serial_write("[v86] dispatch soft-int passthrough vec=0x");
+            serial_write_hex64((uint64_t)vector);
+            serial_write(" far=0x");
+            serial_write_hex64((uint64_t)s_v86_int_vectors[vector]);
+            serial_write("\n");
+            return V86_DISPATCH_CONT;
+        }
         return V86_DISPATCH_EXIT_ERR;
     }
 
@@ -700,22 +943,79 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
 
-    case 0x25u: /* Set interrupt vector: ignore for now */
+    case 0x25u: { /* Set interrupt vector: AL=index, DS:DX=far ptr */
+        uint8_t vec = (uint8_t)(eax & 0x00FFu);
+        uint16_t off = (uint16_t)(frame->reserved[3] & 0xFFFFu);
+        uint16_t seg = frame->ds;
+        s_v86_int_vectors[vec] = ((uint32_t)seg << 16) | (uint32_t)off;
         V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
+    }
 
-    case 0x35u: /* Get interrupt vector: return ES:BX=0:0 */
-        /* ES returned by caller via frame->es; set to 0 and BX=0. */
-        frame->es = 0u;
-        frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u);
+    case 0x35u: { /* Get interrupt vector: AL=index -> ES:BX */
+        uint8_t vec = (uint8_t)(eax & 0x00FFu);
+        uint32_t far_ptr = s_v86_int_vectors[vec];
+        frame->es = (uint16_t)((far_ptr >> 16) & 0xFFFFu);
+        frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | (far_ptr & 0xFFFFu);
         V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
+    }
 
-    case 0x48u: /* Allocate memory: for now report out-of-memory */
-        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0008u;  /* AX=error 8 */
-        frame->reserved[1] = 0u;                              /* BX=largest */
-        V86_CF_SET();
+    case 0x2Au: { /* Get date: AL=weekday, CX=year, DH=month, DL=day */
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0001u; /* Monday */
+        frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) | 2026u;
+        frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) | 0x0414u; /* 20 Apr */
+        V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
+    }
+
+    case 0x2Cu: { /* Get time: CH=hour, CL=min, DH=sec, DL=1/100 sec */
+        uint16_t cx_time = (uint16_t)((12u << 8) | 0x22u); /* 12:34 */
+        uint16_t dx_time = (uint16_t)(((uint16_t)(s_v86_time_second % 60u) << 8) | 0u);
+        s_v86_time_second = (uint8_t)((s_v86_time_second + 1u) % 60u);
+
+        frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) | (uint32_t)cx_time;
+        frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) | (uint32_t)dx_time;
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x48u: { /* Allocate memory paragraphs: BX=request -> AX=segment */
+        uint16_t req = (uint16_t)(frame->reserved[1] & 0xFFFFu);
+        uint16_t seg = 0u;
+        uint16_t max_avail = 0u;
+
+        /* Some legacy GEM binaries in this path appear to provide the
+         * paragraph request in CX when BX is zero; accept both forms. */
+        if (req == 0u) {
+            req = (uint16_t)(frame->reserved[2] & 0xFFFFu);
+        }
+
+        serial_write("[v86] int21/48 req=0x");
+        serial_write_hex64((uint64_t)req);
+        serial_write("\n");
+
+        if (!v86_mem_alloc(req, &seg, &max_avail)) {
+            serial_write("[v86] int21/48 fail max=0x");
+            serial_write_hex64((uint64_t)max_avail);
+            serial_write("\n");
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0008u; /* AX=error 8 */
+            frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | (uint32_t)max_avail;
+            frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) | (uint32_t)max_avail;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        serial_write("[v86] int21/48 ok seg=0x");
+        serial_write_hex64((uint64_t)seg);
+        serial_write("\n");
+
+        frame->reserved[0] = (eax & 0xFFFF0000u) | (uint32_t)seg;
+        frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | (uint32_t)seg;
+        frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) | (uint32_t)seg;
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
 
     case 0x49u: /* Free memory: succeed silently */
         V86_CF_CLEAR();
@@ -726,9 +1026,21 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         return V86_DISPATCH_CONT;
 
     case 0x4Bu: { /* EXEC: DS:DX path, ES:BX parameter block */
+        uint8_t al = (uint8_t)(eax & 0x00FFu);
         char dos_path[V86_PATH_MAX];
         char canonical_path[V86_PATH_MAX];
+        fat_dir_entry_t entry;
         uint32_t plin = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+        uint32_t pb_linear = ((uint32_t)frame->es << 4) + (frame->reserved[1] & 0xFFFFu);
+
+        if (al != 0u) {
+            serial_write("[v86] int21/4B unsupported AL=0x");
+            serial_write_hex64((uint64_t)al);
+            serial_write("\n");
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0001u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
 
         if (!v86_read_guest_asciiz(plin, dos_path, (uint32_t)sizeof(dos_path))) {
             dos_path[0] = '\0';
@@ -738,15 +1050,24 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         serial_write(dos_path);
         serial_write("\"\n");
 
-        if (v86_dos_path_to_canonical(dos_path, canonical_path, (uint32_t)sizeof(canonical_path))) {
-            serial_write("[v86] int21/4B canonical=");
-            serial_write(canonical_path);
-            serial_write("\n");
+        v86_exec_tail_set_from_pb(pb_linear);
+
+        if (!v86_dos_path_to_canonical(dos_path, canonical_path, (uint32_t)sizeof(canonical_path)) ||
+            !fat_find_file(canonical_path, &entry) ||
+            (entry.attr & FAT_ATTR_DIRECTORY) != 0u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0002u; /* file not found */
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
         }
 
+        serial_write("[v86] int21/4B canonical=");
+        serial_write(canonical_path);
+        serial_write("\n");
+
+        v86_exec_request_set(canonical_path);
         frame->reserved[0] = (eax & 0xFFFF0000u); /* AX=0 success */
         V86_CF_CLEAR();
-        return V86_DISPATCH_CONT;
+        return V86_DISPATCH_EXEC_REQUEST;
     }
 
     case 0x0Eu: /* Select default drive: DL=drive, return AL=number of drives. */
@@ -803,6 +1124,262 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         serial_write("[v86] int21/3B chdir -> ");
         serial_write(s_v86_cwd);
         serial_write("\n");
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x3Du: { /* Open file: DS:DX path, AL access mode */
+        char dos_path[V86_PATH_MAX];
+        char canonical_path[V86_PATH_MAX];
+        fat_dir_entry_t info;
+        v86_file_handle_t *h;
+        uint32_t file_size = 0u;
+        uint8_t access = (uint8_t)(eax & 0x03u);
+        uint32_t plin = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+
+        if (!fat_ready()) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0002u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (!v86_read_guest_asciiz(plin, dos_path, (uint32_t)sizeof(dos_path))) {
+            dos_path[0] = '\0';
+        }
+
+        serial_write("[v86] int21/3D open path=\"");
+        serial_write(dos_path);
+        serial_write("\"\n");
+
+        if (!v86_dos_path_to_canonical(dos_path, canonical_path, (uint32_t)sizeof(canonical_path))) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0003u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        serial_write("[v86] int21/3D canonical=");
+        serial_write(canonical_path);
+        serial_write("\n");
+
+        if (!fat_find_file(canonical_path, &info)) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0002u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if ((info.attr & FAT_ATTR_DIRECTORY) != 0u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0005u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (info.size > V86_FILE_BUF_CAP) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0008u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        h = v86_file_alloc_handle(access, canonical_path);
+        if (!h) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0004u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (info.size > 0u) {
+            if (!fat_read_file(canonical_path, (void *)h->data, V86_FILE_BUF_CAP, &file_size)) {
+                h->used = 0u;
+                frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0005u;
+                V86_CF_SET();
+                return V86_DISPATCH_CONT;
+            }
+        }
+
+        h->size = file_size;
+        h->pos = 0u;
+        h->dirty = 0u;
+        frame->reserved[0] = (eax & 0xFFFF0000u) | (uint32_t)h->handle_id;
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x3Eu: { /* Close file: BX handle */
+        uint16_t handle = (uint16_t)(frame->reserved[1] & 0xFFFFu);
+        v86_file_handle_t *h;
+
+        if (handle <= 2u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u);
+            V86_CF_CLEAR();
+            return V86_DISPATCH_CONT;
+        }
+
+        h = v86_file_find_handle(handle);
+        if (!h) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0006u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (!v86_file_flush_handle(h)) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0005u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        h->used = 0u;
+        frame->reserved[0] = (eax & 0xFFFF0000u);
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x3Fu: { /* Read file/device: BX handle, CX count, DS:DX buffer */
+        uint16_t handle = (uint16_t)(frame->reserved[1] & 0xFFFFu);
+        uint16_t count = (uint16_t)(frame->reserved[2] & 0xFFFFu);
+        uint32_t buf_lin = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+        volatile uint8_t *dst = (volatile uint8_t *)(uint64_t)buf_lin;
+        v86_file_handle_t *h;
+        uint32_t available;
+        uint32_t to_read;
+
+        if (handle == 0u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u);
+            V86_CF_CLEAR();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (handle == 1u || handle == 2u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0005u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        h = v86_file_find_handle(handle);
+        if (!h) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0006u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (h->pos >= h->size || count == 0u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u);
+            V86_CF_CLEAR();
+            return V86_DISPATCH_CONT;
+        }
+
+        available = h->size - h->pos;
+        to_read = ((uint32_t)count < available) ? (uint32_t)count : available;
+
+        for (uint32_t i = 0u; i < to_read; ++i) {
+            dst[i] = h->data[h->pos + i];
+        }
+
+        h->pos += to_read;
+        frame->reserved[0] = (eax & 0xFFFF0000u) | (to_read & 0xFFFFu);
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x40u: { /* Write file/device: BX handle, CX count, DS:DX buffer */
+        uint16_t handle = (uint16_t)(frame->reserved[1] & 0xFFFFu);
+        uint16_t count = (uint16_t)(frame->reserved[2] & 0xFFFFu);
+        uint32_t buf_lin = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+        const volatile uint8_t *src = (const volatile uint8_t *)(uint64_t)buf_lin;
+        v86_file_handle_t *h;
+        uint32_t room;
+        uint32_t to_write;
+
+        if (handle == 1u || handle == 2u) {
+            for (uint32_t i = 0u; i < (uint32_t)count; ++i) {
+                video_putchar((char)src[i]);
+            }
+            frame->reserved[0] = (eax & 0xFFFF0000u) | (uint32_t)count;
+            V86_CF_CLEAR();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (handle == 0u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0005u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        h = v86_file_find_handle(handle);
+        if (!h) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0006u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (h->mode == 0u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0005u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        room = (h->pos < V86_FILE_BUF_CAP) ? (V86_FILE_BUF_CAP - h->pos) : 0u;
+        to_write = ((uint32_t)count < room) ? (uint32_t)count : room;
+
+        if (to_write > 0u) {
+            v86_memcpy(h->data + h->pos, (const void *)src, to_write);
+            h->pos += to_write;
+            if (h->pos > h->size) {
+                h->size = h->pos;
+            }
+            h->dirty = 1u;
+        }
+
+        frame->reserved[0] = (eax & 0xFFFF0000u) | (to_write & 0xFFFFu);
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x42u: { /* Seek: BX handle, AL origin, CX:DX offset -> DX:AX pos */
+        uint16_t handle = (uint16_t)(frame->reserved[1] & 0xFFFFu);
+        uint8_t origin = (uint8_t)(eax & 0x00FFu);
+        uint32_t off_u = ((frame->reserved[2] & 0xFFFFu) << 16) | (frame->reserved[3] & 0xFFFFu);
+        int32_t off_s = (int32_t)off_u;
+        int64_t base = 0;
+        int64_t new_pos;
+        v86_file_handle_t *h;
+
+        if (handle <= 2u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u);
+            frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u);
+            V86_CF_CLEAR();
+            return V86_DISPATCH_CONT;
+        }
+
+        h = v86_file_find_handle(handle);
+        if (!h) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0006u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (origin == 0u) {
+            new_pos = (int64_t)off_u;
+        } else {
+            if (origin == 1u) {
+                base = (int64_t)h->pos;
+            } else if (origin == 2u) {
+                base = (int64_t)h->size;
+            } else {
+                frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0001u;
+                V86_CF_SET();
+                return V86_DISPATCH_CONT;
+            }
+            new_pos = base + (int64_t)off_s;
+        }
+
+        if (new_pos < 0 || new_pos > (int64_t)V86_FILE_BUF_CAP) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0019u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        h->pos = (uint32_t)new_pos;
+        frame->reserved[0] = (eax & 0xFFFF0000u) | (h->pos & 0xFFFFu);
+        frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) | ((h->pos >> 16) & 0xFFFFu);
         V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
     }
@@ -951,6 +1528,10 @@ int v86_dispatch_arm(uint32_t magic)
     if (magic != V86_DISPATCH_ARM_MAGIC) {
         return 0;
     }
+    v86_vectors_reset();
+    v86_mem_reset();
+    v86_file_handles_reset();
+    v86_exec_request_clear();
     s_v86_dispatch_armed = 1;
     return 1;
 }
@@ -958,11 +1539,49 @@ int v86_dispatch_arm(uint32_t magic)
 void v86_dispatch_disarm(void)
 {
     s_v86_dispatch_armed = 0;
+    v86_vectors_reset();
+    v86_mem_reset();
+    v86_file_close_all();
+    v86_file_handles_reset();
+    v86_exec_request_clear();
 }
 
 int v86_dispatch_is_armed(void)
 {
     return s_v86_dispatch_armed;
+}
+
+int v86_dispatch_get_exec_path(char *out, uint32_t out_size)
+{
+    if (!out || out_size == 0u || !s_v86_exec_pending || s_v86_exec_path[0] == '\0') {
+        if (out && out_size > 0u) {
+            out[0] = '\0';
+        }
+        return 0;
+    }
+
+    v86_str_copy(out, s_v86_exec_path, out_size);
+    return 1;
+}
+
+int v86_dispatch_get_exec_tail(char *out, uint32_t out_size)
+{
+    if (!out || out_size == 0u) {
+        return 0;
+    }
+
+    v86_str_copy(out, s_v86_exec_tail, out_size);
+    return s_v86_exec_tail[0] != '\0';
+}
+
+uint16_t v86_dispatch_get_exec_env_seg(void)
+{
+    return s_v86_exec_env_seg;
+}
+
+void v86_dispatch_clear_exec_path(void)
+{
+    v86_exec_request_clear();
 }
 
 int v86_dispatch_probe(void)
