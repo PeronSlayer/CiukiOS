@@ -69,6 +69,14 @@ mode_switch_asm_enter:
     pushfq
     cli
     TRACE 'A'
+    /* Drain the pushfq result FIRST so SCR_RSP, saved next, reflects
+     * the caller's actual stack pointer (pointing at the return
+     * address). Saving RSP before this popq would leave 8 stale bytes
+     * of rflags between SCR_RFLAGS-pushed-at-resume and the return
+     * address, causing 'ret' to jump to that stale rflags value
+     * (observed as #GP with RIP=old-rflags, e.g. 0x2010). */
+    popq %rax
+    movq %rax, SCR_RFLAGS(%rdi)
     movq %rbx, SCR_RBX(%rdi)
     movq %rbp, SCR_RBP(%rdi)
     movq %r12, SCR_R12(%rdi)
@@ -76,8 +84,6 @@ mode_switch_asm_enter:
     movq %r14, SCR_R14(%rdi)
     movq %r15, SCR_R15(%rdi)
     movq %rsp, SCR_RSP(%rdi)
-    popq %rax
-    movq %rax, SCR_RFLAGS(%rdi)
 
     /* Save host SS selector; we zero DS/ES/FS/GS on resume but SS must
      * be re-established with a valid descriptor under the host GDT. */
