@@ -561,6 +561,9 @@ test-legacy-v86:
 test-v86-dispatch:
 	bash ./scripts/test_v86_dispatch.sh
 
+test-mstest-shell:
+	bash ./scripts/test_mstest_shell.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
@@ -602,4 +605,4 @@ freedos-runtime-manifest:
 freecom-build:
 	./scripts/build_freecom.sh
 
-.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-m6-dpmi-smoke test-m6-dpmi-call-smoke test-m6-dpmi-bootstrap-smoke test-m6-dpmi-ldt-smoke test-m6-dpmi-mem-smoke test-m6-dpmi-free-smoke test-m6-dpmi-reflect-smoke test-vga13-baseline test-ciukdemo-smoke test-doom-boot-harness test-dosrun-simple test-ciukedit-smoke test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-doom-target-packaging test-mode-switch test-legacy-v86 test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
+.PHONY: all clean re test-stage2 test-fallback test-video-mode test-video-1024 test-video-backbuf test-vmode-persistence test-m6-pmode test-m6-transition-v2 test-m6-smoke test-m6-dos4gw-smoke test-m6-dpmi-smoke test-m6-dpmi-call-smoke test-m6-dpmi-bootstrap-smoke test-m6-dpmi-ldt-smoke test-m6-dpmi-mem-smoke test-m6-dpmi-free-smoke test-m6-dpmi-reflect-smoke test-vga13-baseline test-ciukdemo-smoke test-doom-boot-harness test-dosrun-simple test-ciukedit-smoke test-dosrun-mz test-fat-compat test-fat32-progress test-int21 test-mz-regression test-mz-corpus test-phase2 test-freedos-pipeline check-int21-matrix test-gui-desktop test-video-ui-v2 test-video-policy-matrix test-opengem test-doom-target-packaging test-mode-switch test-legacy-v86 test-v86-dispatch test-mstest-shell test-boot ci run run-nofreedos freedos-import freecom-sync freecom-build freedos-sync-upstreams freedos-runtime-manifest
