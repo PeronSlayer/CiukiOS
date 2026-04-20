@@ -76,6 +76,10 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     serial_write_hex64((uint64_t)frame->reserved[2]);
     serial_write(" edx=0x");
     serial_write_hex64((uint64_t)frame->reserved[3]);
+    serial_write(" ds=0x");
+    serial_write_hex64((uint64_t)frame->ds);
+    serial_write(" es=0x");
+    serial_write_hex64((uint64_t)frame->es);
     serial_write("\n");
 
     if (vector == 0x20u) {
@@ -203,8 +207,20 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     }
 
     case 0x3Bu: /* CHDIR DS:DX -> path. Accept silently. */
+    {
+        uint32_t plin = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+        const volatile char *pp = (const volatile char *)(uint64_t)plin;
+        serial_write("[v86] int21/3B chdir \"");
+        for (int i = 0; i < 128; ++i) {
+            char c = pp[i];
+            if (c == 0) break;
+            char b[2]; b[0] = c; b[1] = 0;
+            serial_write(b);
+        }
+        serial_write("\"\n");
         V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
+    }
 
     case 0x47u: { /* GETCWD: DL=drive (0=default), DS:SI -> 64-byte buffer.
                    * Return empty root ("" => "\" implicit). */
@@ -224,6 +240,23 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     }
 
     case 0x4Eu: /* Find first: no match (AX=0x12 "no more files"). */
+    {
+        uint32_t plin = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+        const volatile char *pp = (const volatile char *)(uint64_t)plin;
+        serial_write("[v86] int21/4E findfirst attr=0x");
+        serial_write_hex64((uint64_t)(frame->reserved[2] & 0xFFFFu));
+        serial_write(" pattern=\"");
+        for (int i = 0; i < 128; ++i) {
+            char c = pp[i];
+            if (c == 0) break;
+            char b[2]; b[0] = c; b[1] = 0;
+            serial_write(b);
+        }
+        serial_write("\"\n");
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0012u;
+        V86_CF_SET();
+        return V86_DISPATCH_CONT;
+    }
     case 0x4Fu: /* Find next: no match. */
         frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0012u;
         V86_CF_SET();
