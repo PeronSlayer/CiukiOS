@@ -21,7 +21,9 @@
 
 #define SHELL_JOIN2(a, b) a##b
 #define SHELL_JOIN(a, b) SHELL_JOIN2(a, b)
+#define SHELL_JOIN3(a, b, c) SHELL_JOIN(a, SHELL_JOIN(b, c))
 #define SHELL_MODE_SWITCH_CALL(name) SHELL_JOIN(mode_switch_, name)
+#define SHELL_MODE_SWITCH_TRAMP_CALL(name) SHELL_JOIN3(mode_switch_, trampoline_, name)
 
 #define SHELL_LINE_MAX 128
 #define SHELL_HISTORY_MAX 32U
@@ -101,6 +103,15 @@ static u32 g_shell_dosrun_int21_unsupported_calls = 0U;
 static u8 g_shell_runtime_graphics_used = 0U;
 static u8 g_shell_runtime_video_print_suppressed = 0U;
 static u8 g_shell_prompt_deferred = 0U;
+
+typedef struct shell_mstest_trampoline_user {
+    u32 sentinel;
+    u32 reserved;
+    u64 body_addr;
+} shell_mstest_trampoline_user_t;
+
+extern void mstest_pm32_body(void *user);
+extern const char mstest_pm32_sentinel[];
 
 typedef struct shell_env_var {
     u8 used;
@@ -548,6 +559,15 @@ static void shell_serial_write_dec32(u32 value) {
         tmp[1] = '\0';
         serial_write(tmp);
     }
+}
+
+static void shell_serial_write_i32(int value) {
+    if (value < 0) {
+        serial_write("-");
+        shell_serial_write_dec32((u32)(0 - value));
+        return;
+    }
+    shell_serial_write_dec32((u32)value);
 }
 
 static u32 shell_count_tail_chars(const char *args) {
@@ -4532,6 +4552,43 @@ static void shell_gem_write_exit_reason(legacy_v86_exit_reason_t reason, u32 fau
         serial_write("unknown");
     }
     serial_write("\n");
+}
+
+static void shell_mstest_trampoline_smoke(void) {
+    shell_mstest_trampoline_user_t user;
+    int rc;
+
+    user.sentinel = MODE_SWITCH_SENTINEL;
+    user.reserved = 0U;
+    user.body_addr = (u64)(uintptr_t)&mstest_pm32_body;
+
+    rc = SHELL_MODE_SWITCH_CALL(arm)(MODE_SWITCH_ARM_MAGIC);
+    if (rc == MODE_SWITCH_OK) {
+        rc = SHELL_MODE_SWITCH_TRAMP_CALL(arm)(MODE_SWITCH_TRAMPOLINE_ARM_MAGIC);
+        if (rc == MODE_SWITCH_OK) {
+            rc = SHELL_MODE_SWITCH_CALL(run_legacy_pm)(mstest_pm32_body, &user);
+        }
+    }
+
+    SHELL_MODE_SWITCH_TRAMP_CALL(disarm)();
+    SHELL_MODE_SWITCH_CALL(disarm)();
+
+    serial_write("[ mstest ] trampoline-smoke rc=");
+    shell_serial_write_i32(rc);
+    serial_write("\n");
+
+    video_write("[ mstest ] trampoline-smoke rc=");
+    if (rc < 0) {
+        video_write("-");
+        write_decimal((u32)(0 - rc));
+    } else {
+        write_decimal((u32)rc);
+    }
+    video_write("\n");
+
+    if (mstest_pm32_sentinel[0] == '\0') {
+        serial_write("[ mstest ] trampoline sentinel missing\n");
+    }
 }
 
 static int shell_run_from_catalog(
@@ -8943,6 +9000,17 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             video_write("[vm86] probe-041 result=FAIL (see serial log for reason)\n");
             serial_write("[vm86] probe-041 result=FAIL\n");
         }
+        return;
+    }
+
+    if (str_eq(cmd, "mstest")) {
+        const char *sub = get_arg_ptr(line);
+        if (str_eq(sub, "trampoline-smoke")) {
+            shell_mstest_trampoline_smoke();
+            return;
+        }
+        video_write("Usage: mstest trampoline-smoke\n");
+        serial_write("[ mstest ] unknown subcommand\n");
         return;
     }
 

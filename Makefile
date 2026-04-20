@@ -561,6 +561,9 @@ test-legacy-v86:
 test-v86-dispatch:
 	bash ./scripts/test_v86_dispatch.sh
 
+test-mstest-trampoline:
+	bash ./scripts/test_mstest_trampoline.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
