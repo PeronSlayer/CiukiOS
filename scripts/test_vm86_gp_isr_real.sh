@@ -165,4 +165,4 @@ grep -q 'vm86: gp-isr-real pending-surface=live-idt-install,iretd-return,v86-ent
     && pass || fail "pending-surface marker missing"
 
 echo "[test-vm86-gp-isr-real] OK=$OK FAIL=$FAIL"
-[ "$FAIL" = "0" ]
+[ "$FAIL" = "0" ] && { echo "[PASS] OPENGEM-037 vm86 gp-isr-real gate"; exit 0; } || { echo "[FAIL] OPENGEM-037 vm86 gp-isr-real gate"; exit 1; }
