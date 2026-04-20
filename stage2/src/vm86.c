@@ -3416,7 +3416,12 @@ int vm86_gp_isr_is_installed(void) {
 int vm86_gp_isr_install(u32 magic) {
     if (magic != VM86_GP_ISR_INSTALL_ARM_MAGIC) return 0;
     if (!s_vm86_gp_isr_install_armed)          return 0;
-    if (!s_vm86_idt_shim_built)                return 0;
+    /* Ensure the shim IDT image exists. Building it here keeps the
+     * shell wiring a single-call surface (no external vm86_idt_shim_build
+     * caller required outside vm86.c itself). */
+    if (!s_vm86_idt_shim_built) {
+        if (!vm86_idt_shim_build()) return 0;
+    }
     if (s_vm86_gp_isr_installed)               return 1; /* idempotent */
 
     /* Cache the prior 8-byte entry to permit a lossless uninstall. */

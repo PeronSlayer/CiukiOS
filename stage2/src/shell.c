@@ -8875,9 +8875,8 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         video_write("[vm86] arming live path (038)...\n");
         serial_write("[vm86] arming live path (038)\n");
         int a38 = vm86_gp_isr_install_arm(VM86_GP_ISR_INSTALL_ARM_MAGIC);
-        int built = vm86_idt_shim_build();
         int inst = vm86_gp_isr_install(VM86_GP_ISR_INSTALL_ARM_MAGIC);
-        if (a38 && built && inst) {
+        if (a38 && inst) {
             video_write("[vm86] installed at IDT vector 0x0D\n");
             serial_write("[vm86] installed=1\n");
         } else {
