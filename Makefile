@@ -531,6 +531,9 @@ test-vm86-lidt-ping:
 test-vm86-gp-decode:
 	bash ./scripts/test_vm86_gp_decode.sh
 
+test-vm86-gp-dispatch:
+	bash ./scripts/test_vm86_gp_dispatch.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 

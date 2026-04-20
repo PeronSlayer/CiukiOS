@@ -1078,4 +1078,120 @@ vm86_gp_decode_result vm86_gp_decode(const u8             *guest_bytes,
  */
 int vm86_gp_decode_probe(void);
 
+/* ------------------------------------------------------------------ */
+/* OPENGEM-035 - #GP dispatcher host path (arm-gated, observability). */
+/* ------------------------------------------------------------------ */
+/*
+ * Closes the `pending-surface=handler-frame-apply,guest-stack-iret`
+ * declared by OPENGEM-034. The host-side C entry point is
+ * vm86_gp_dispatch_handle(): given a trap frame and a guest-memory
+ * window, it invokes the OPENGEM-034 decoder, classifies the result
+ * into an action, and (on IRETD) writes an IRETD-shaped v86 stack
+ * frame into a caller-supplied slot via vm86_iret_encode_frame().
+ *
+ * The ISR symbol `vm86_gp_dispatch_isr_stub` (defined in
+ * stage2/src/vm86_gp_dispatch.S) is the future PE32 #GP landing
+ * pad. It is NEVER installed into any live IDT by this phase; the
+ * body is a deterministic halt loop so even an accidental entry is
+ * a contained failure. The arm-gate below guards the C path from
+ * ever running on the default boot path.
+ *
+ * Safety invariants (gate-enforced):
+ *   - arm flag defaults to 0 and is not flipped implicitly;
+ *   - magic constant is required to flip the gate;
+ *   - vm86_gp_dispatch_handle() returns BLOCKED_NOT_ARMED while
+ *     disarmed, without invoking the decoder;
+ *   - no file below vm86.c references the new C symbols;
+ *   - no file below vm86_gp_dispatch.S references the new asm
+ *     symbols;
+ *   - no LIDT / LGDT / IRETD / IRETQ / CR-write is introduced by
+ *     this phase.
+ */
+
+#define VM86_GP_DISPATCH_SENTINEL   0x0350u
+#define VM86_GP_DISPATCH_ARM_MAGIC  0xC1D39350u
+
+typedef enum vm86_gp_dispatch_action {
+    VM86_GP_DISPATCH_ACTION_BLOCKED_NOT_ARMED = 0,
+    VM86_GP_DISPATCH_ACTION_IRETD             = 1,
+    VM86_GP_DISPATCH_ACTION_HLT               = 2,
+    VM86_GP_DISPATCH_ACTION_BAD_INPUT         = 3
+} vm86_gp_dispatch_action;
+
+/*
+ * Flip the arm-gate. `magic` must equal VM86_GP_DISPATCH_ARM_MAGIC;
+ * any other value leaves the gate disarmed. Returns 1 on success,
+ * 0 on rejection.
+ */
+int  vm86_gp_dispatch_arm(u32 magic);
+
+/* Clear the arm flag unconditionally. */
+void vm86_gp_dispatch_disarm(void);
+
+/* Read-back. */
+int  vm86_gp_dispatch_is_armed(void);
+
+/*
+ * Host-side #GP dispatch entry point.
+ *
+ * Preconditions (all enforced, failures map to BAD_INPUT):
+ *   - guest_bytes non-NULL and guest_size > 0
+ *   - frame non-NULL
+ *
+ * Behaviour:
+ *   - If the arm flag is 0, returns BLOCKED_NOT_ARMED immediately.
+ *     The decoder is NOT invoked, `guest_iret_slot` is NOT written,
+ *     `decode_out` (if non-NULL) receives VM86_GP_RESULT_NONE.
+ *   - If armed, invokes vm86_gp_decode() on the frame. The decoder
+ *     advances frame->eip past the recognised instruction and
+ *     (for INT/INT3/INTO) routes the vector into `disp`/`task`.
+ *   - The decode result is classified:
+ *       INT, INT3, INTO, IRET, PUSHF, POPF,
+ *       IN_IMM, OUT_IMM, IN_DX, OUT_DX, CLI, STI
+ *           => ACTION_IRETD
+ *       HLT, UNHANDLED
+ *           => ACTION_HLT
+ *       NULL_ARG, OOB
+ *           => ACTION_BAD_INPUT
+ *   - When the action is IRETD and `guest_iret_slot` is non-NULL,
+ *     a 36-byte v86 IRETD stack frame is written at that address
+ *     via vm86_iret_encode_frame() using the post-decode
+ *     frame->eip / cs / eflags / esp / ss / ds / es / fs / gs.
+ *     EFLAGS is OR'ed with VM=1 | IOPL=3 | reserved-bit-1 by the
+ *     encoder. The slot is untouched on any other action.
+ *
+ * Returns the action. `decode_out` (optional) receives the raw
+ * decoder result.
+ */
+vm86_gp_dispatch_action vm86_gp_dispatch_handle(
+    const u8              *guest_bytes,
+    u32                    guest_size,
+    vm86_trap_frame       *frame,
+    vm86_dispatcher       *disp,
+    vm86_task             *task,
+    u8                    *guest_iret_slot,
+    vm86_gp_decode_result *decode_out);
+
+/*
+ * OPENGEM-035 integrated probe. Host-driven; NEVER invoked from the
+ * live boot path.
+ *
+ * Drives all dispatch-action classes through a synthetic guest
+ * buffer and a 36-byte IRETD slot, verifying:
+ *   - disarmed default -> BLOCKED_NOT_ARMED, slot untouched;
+ *   - wrong magic rejected, still disarmed;
+ *   - INT 21h -> IRETD, dispatcher hit, slot EIP advanced, VM+IOPL3
+ *     bits set in slot EFLAGS;
+ *   - INT3, INTO -> IRETD, per-vector hit counters;
+ *   - IRET, PUSHF, POPF, IN_*, OUT_*, CLI, STI -> IRETD;
+ *   - HLT -> ACTION_HLT;
+ *   - BOUND (unhandled) -> ACTION_HLT;
+ *   - NULL / OOB inputs -> ACTION_BAD_INPUT;
+ *   - disarm cleanly after the probe (leaves gate disarmed).
+ *
+ * Emits `vm86: gp-dispatch ...` markers. Returns 1 on full
+ * success, 0 otherwise. Does NOT touch any CPU control state.
+ */
+int vm86_gp_dispatch_probe(void);
+
 #endif /* STAGE2_VM86_H */
