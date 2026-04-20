@@ -152,16 +152,14 @@ mode_switch_asm_enter:
     movl SCR_BODY_USER(%ebx), %eax
     pushl %eax
     movl  SCR_BODY_FN(%ebx), %eax
+    pushl %eax                     /* preserve pristine body_fn */
     TRACE 'K'
     /* Sanity: relative call to a local micro-body. If 'm' appears the
      * CALL instruction and stack work in legacy PM. */
     call  ._ms_micro_body
-    TRACE 'l'
-    /* Dump %eax (body_fn) as 8 hex chars on 0xE9 so we can verify the
-     * indirect target is sane before using it. Preserves %eax. */
-    pushl %eax
-    pushl %ecx
-    movl  %eax, %ecx
+    /* Dump preserved body_fn (0(%esp)) as 8 hex chars on 0xE9.
+     * Clobbers %eax/%ecx/%edx but leaves the stacked copy intact. */
+    movl  0(%esp), %ecx
     movl  $8, %edx
 ._ms_dump_eax:
     roll  $4, %ecx
@@ -177,9 +175,8 @@ mode_switch_asm_enter:
     outb  %al, $0xE9
     decl  %edx
     jnz   ._ms_dump_eax
-    popl  %ecx
+    /* Restore pristine body_fn and call it. */
     popl  %eax
-    /* Real indirect call to body. */
     call  *%eax
     TRACE 'L'
     addl  $4, %esp
