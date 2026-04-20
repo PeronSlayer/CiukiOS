@@ -53,6 +53,13 @@
 mode_switch_asm_sentinel:
     .asciz "OPENGEM-044-A-ASM"
 
+/* Debug trace: emit a single ASCII byte on port 0xE9 (debugcon).
+ * Clobbers %al only. Safe in code32 and code64. */
+.macro TRACE ch
+    movb $\ch, %al
+    outb %al, $0xE9
+.endm
+
 .section .text
 .code64
 .globl mode_switch_asm_enter
@@ -60,6 +67,7 @@ mode_switch_asm_sentinel:
 mode_switch_asm_enter:
     pushfq
     cli
+    TRACE 'A'
     movq %rbx, SCR_RBX(%rdi)
     movq %rbp, SCR_RBP(%rdi)
     movq %r12, SCR_R12(%rdi)
@@ -84,8 +92,10 @@ mode_switch_asm_enter:
 
     sgdt SCR_HOST_GDTR(%rdi)
     sidt SCR_HOST_IDTR(%rdi)
+    TRACE 'B'
 
     lgdt SCR_LEGACY_GDTR(%rdi)
+    TRACE 'C'
 
     /* %r15 will survive the legacy-mode visit because R8-R15 values are
      * preserved across IA-32e exit (even if not addressable in legacy
@@ -101,28 +111,35 @@ mode_switch_asm_enter:
 
 .code32
 ._ms_compat_hop:
+    TRACE 'D'
     movw $DATA32_SEL, %ax
     movw %ax, %ds
     movw %ax, %es
     movw %ax, %fs
     movw %ax, %gs
+    TRACE 'E'
     movw %ax, %ss
+    TRACE 'F'
 
     movl SCR_PM32_STACK(%ebx), %esp
+    TRACE 'G'
 
     /* Leave IA-32e: CR0.PG=0 → clears EFER.LMA. */
     movl %cr0, %eax
     andl $0x7FFFFFFF, %eax
     movl %eax, %cr0
+    TRACE 'H'
 
     movl $0xC0000080, %ecx
     rdmsr
     andl $0xFFFFFEFF, %eax        /* EFER.LME=0 */
     wrmsr
+    TRACE 'I'
 
     movl %cr4, %eax
     andl $0xFFFFFFDF, %eax        /* CR4.PAE=0 */
     movl %eax, %cr4
+    TRACE 'J'
 
     /* Legacy 32-bit PM, paging off. Call body(user).
      * NOTE: body is called with the SysV ABI for 32-bit, where the
@@ -134,7 +151,9 @@ mode_switch_asm_enter:
     movl SCR_BODY_USER(%ebx), %eax
     pushl %eax
     movl  SCR_BODY_FN(%ebx), %eax
+    TRACE 'K'
     call  *%eax
+    TRACE 'L'
     addl  $4, %esp
     movl  %eax, SCR_RESULT(%ebx)
 
@@ -142,18 +161,22 @@ mode_switch_asm_enter:
     movl %cr4, %eax
     orl  $0x00000020, %eax        /* CR4.PAE=1 */
     movl %eax, %cr4
+    TRACE 'M'
 
     movl SCR_CR3(%ebx), %eax
     movl %eax, %cr3
+    TRACE 'N'
 
     movl $0xC0000080, %ecx
     rdmsr
     orl  $0x00000100, %eax        /* EFER.LME=1 */
     wrmsr
+    TRACE 'O'
 
     movl %cr0, %eax
     orl  $0x80000000, %eax        /* CR0.PG=1 → IA-32e active */
     movl %eax, %cr0
+    TRACE 'P'
 
     /* Compat mode active again. Far-return to CODE64_SEL target. */
     pushl $CODE64_SEL
@@ -162,6 +185,7 @@ mode_switch_asm_enter:
 
 .code64
 ._ms_long_resume:
+    TRACE 'Q'
     xorl %eax, %eax
     movw %ax, %ds
     movw %ax, %es
@@ -169,7 +193,9 @@ mode_switch_asm_enter:
     movw %ax, %gs
 
     lgdt SCR_HOST_GDTR(%r15)
+    TRACE 'R'
     lidt SCR_HOST_IDTR(%r15)
+    TRACE 'S'
 
     movq SCR_RSP(%r15), %rsp
 
