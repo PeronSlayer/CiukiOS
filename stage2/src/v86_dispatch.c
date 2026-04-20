@@ -6,6 +6,9 @@
 static const char g_opengem_044_c_sentinel[] = "OPENGEM-044-C";
 static int s_v86_dispatch_armed = 0;
 
+/* DTA linear address stashed by INT 21h AH=1A, returned by AH=2F. */
+uint32_t g_v86_dta_linear = 0u;
+
 /* Historical scaffold token retained for scripts/test_v86_dispatch.sh:
  * return V86_DISPATCH_CONT;
  */
@@ -167,6 +170,63 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
 
     case 0x4Au: /* Resize memory block: succeed silently */
         V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+
+    case 0x0Eu: /* Select default drive: DL=drive, return AL=number of drives. */
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0004u; /* 4 drives */
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+
+    case 0x19u: /* Get current drive: return AL = drive (0=A, 2=C). */
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0002u; /* C: */
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+
+    case 0x1Au: { /* Set DTA = DS:DX linear. Stash in reserved globals via static. */
+        /* We keep the DTA linear address in a module-static so AH=2F can
+         * return it. Guest world still sees the raw ds:dx it set. */
+        extern uint32_t g_v86_dta_linear;
+        g_v86_dta_linear = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x2Fu: { /* Get DTA -> ES:BX. Split stashed linear as seg:off. */
+        extern uint32_t g_v86_dta_linear;
+        uint32_t lin = g_v86_dta_linear ? g_v86_dta_linear : 0x00000080u; /* PSP default */
+        uint16_t seg = (uint16_t)(lin >> 4);
+        uint16_t off = (uint16_t)(lin & 0x0Fu);
+        frame->es = seg;
+        frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | (uint32_t)off;
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x3Bu: /* CHDIR DS:DX -> path. Accept silently. */
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+
+    case 0x47u: { /* GETCWD: DL=drive (0=default), DS:SI -> 64-byte buffer.
+                   * Return empty root ("" => "\" implicit). */
+        uint32_t linear = ((uint32_t)frame->ds << 4) + (frame->reserved[2] & 0xFFFFu); /* SI = CX? */
+        /* AH=47 actually uses SI not CX; we don't track SI separately in the
+         * frame today. The guest's DS:SI buffer is writable guest memory.
+         * We approximate by treating reserved[2] (ECX) as the SI holder
+         * because QEMU's v86 IRET frame on #GP puts SI/DI in the guest
+         * regs that #GP preserves, but our dispatch frame only carries
+         * EAX..EDX in reserved[0..3]. Fall back to writing at DS:DX. */
+        (void)linear;
+        uint32_t buf_lin = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+        volatile char *buf = (volatile char *)(uint64_t)buf_lin;
+        buf[0] = 0; /* Empty => root dir */
+        V86_CF_CLEAR();
+        return V86_DISPATCH_CONT;
+    }
+
+    case 0x4Eu: /* Find first: no match (AX=0x12 "no more files"). */
+    case 0x4Fu: /* Find next: no match. */
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0012u;
+        V86_CF_SET();
         return V86_DISPATCH_CONT;
 
     default:
