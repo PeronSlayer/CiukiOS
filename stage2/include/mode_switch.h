@@ -22,6 +22,7 @@
 
 #define MODE_SWITCH_ARM_MAGIC   0xC1D39440u
 #define MODE_SWITCH_SENTINEL    0x0440u
+#define MODE_SWITCH_TRAMPOLINE_ARM_MAGIC 0xC1D3944Au
 
 /* Body function executed in legacy 32-bit PM.
  * Must return cleanly. If it faults, engine halts deterministically;
@@ -40,6 +41,9 @@ int  mode_switch_run_legacy_pm(mode_switch_legacy_pm_body_fn body, void *user);
 int  mode_switch_arm(uint32_t magic);
 void mode_switch_disarm(void);
 int  mode_switch_is_armed(void);
+int  mode_switch_trampoline_arm(uint32_t magic);
+void mode_switch_trampoline_disarm(void);
+int  mode_switch_trampoline_is_live(void);
 
 /* Host-driven probe — no v86, no guest.
  * Returns 0 when all disarmed-path cases pass.
