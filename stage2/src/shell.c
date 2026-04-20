@@ -980,6 +980,7 @@ static void shell_print_help(void) {
     video_write("  run X [args]   launch a COM, EXE or BAT program\n");
     video_write("  which X        show where command X is found\n");
     video_write("  vmode          inspect or change video mode\n");
+    video_write("  mstest X       arm/disarm/probe mode-switch api gates\n");
     video_write("  opengem  - launch OpenGEM GUI (preflight + run)\n");
     video_write("  catalog  - list discovered apps (FAT + handoff COM catalog)\n");
     video_write("\n");
@@ -8330,6 +8331,113 @@ static void shell_cmd_history(void) {
     }
 }
 
+static void shell_serial_write_int(int value) {
+    char buf[16];
+    u32 len = 0U;
+    u32 magnitude;
+
+    if (value == 0) {
+        serial_write("0");
+        return;
+    }
+
+    if (value < 0) {
+        serial_write("-");
+        magnitude = (u32)(-(value + 1)) + 1U;
+    } else {
+        magnitude = (u32)value;
+    }
+
+    while (magnitude != 0U && len < (u32)sizeof(buf)) {
+        buf[len++] = (char)('0' + (magnitude % 10U));
+        magnitude /= 10U;
+    }
+
+    while (len > 0U) {
+        char out[2];
+        len--;
+        out[0] = buf[len];
+        out[1] = '\0';
+        serial_write(out);
+    }
+}
+
+static void shell_cmd_mstest_probe(void) {
+    int mode_switch_rc = SHELL_MODE_SWITCH_CALL(probe)();
+    int legacy_v86_rc = legacy_v86_probe();
+    int v86_dispatch_rc = v86_dispatch_probe();
+
+    serial_write("[ mstest ] probe mode_switch=");
+    shell_serial_write_int(mode_switch_rc);
+    serial_write("\n");
+    serial_write("[ mstest ] probe legacy_v86=");
+    shell_serial_write_int(legacy_v86_rc);
+    serial_write("\n");
+    serial_write("[ mstest ] probe v86_dispatch=");
+    shell_serial_write_int(v86_dispatch_rc);
+    serial_write("\n");
+
+    video_write("[mstest] probe complete\n");
+}
+
+static void shell_cmd_mstest_arm(void) {
+    int mode_switch_rc = SHELL_MODE_SWITCH_CALL(arm)(MODE_SWITCH_ARM_MAGIC);
+    int legacy_v86_rc = legacy_v86_arm(LEGACY_V86_ARM_MAGIC);
+    int v86_dispatch_rc = v86_dispatch_arm(V86_DISPATCH_ARM_MAGIC);
+
+    if (mode_switch_rc == MODE_SWITCH_OK &&
+        legacy_v86_rc == LEGACY_V86_OK &&
+        v86_dispatch_rc == 1) {
+        serial_write("[ mstest ] arm api=all ok\n");
+        video_write("[mstest] api gates armed\n");
+        return;
+    }
+
+    serial_write("[ mstest ] arm api=all fail mode_switch=");
+    shell_serial_write_int(mode_switch_rc);
+    serial_write(" legacy_v86=");
+    shell_serial_write_int(legacy_v86_rc);
+    serial_write(" v86_dispatch=");
+    shell_serial_write_int(v86_dispatch_rc);
+    serial_write("\n");
+    video_write("[mstest] arm failed\n");
+}
+
+static void shell_cmd_mstest_disarm(void) {
+    v86_dispatch_disarm();
+    legacy_v86_disarm();
+    SHELL_MODE_SWITCH_CALL(disarm)();
+    serial_write("[ mstest ] disarm api=all ok\n");
+    video_write("[mstest] api gates disarmed\n");
+}
+
+static void shell_cmd_mstest(const char *args) {
+    char subcmd[16];
+
+    normalize_first_token(args, subcmd, (u32)sizeof(subcmd));
+    if (subcmd[0] == '\0') {
+        video_write("Usage: mstest <probe|arm|disarm>\n");
+        return;
+    }
+
+    if (str_eq(subcmd, "probe")) {
+        shell_cmd_mstest_probe();
+        return;
+    }
+
+    if (str_eq(subcmd, "arm")) {
+        shell_cmd_mstest_arm();
+        return;
+    }
+
+    if (str_eq(subcmd, "disarm")) {
+        shell_cmd_mstest_disarm();
+        return;
+    }
+
+    video_write("Usage: mstest <probe|arm|disarm>\n");
+}
+
 /* ===== OPENGEM-004 — catalog command ===== */
 static void shell_cmd_catalog(void) {
     u32 i;
@@ -8895,6 +9003,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
     if (str_eq(cmd, "help")) {
         shell_print_help();
+        return;
+    }
+
+    if (str_eq(cmd, "mstest")) {
+        shell_cmd_mstest(get_arg_ptr(line));
         return;
     }
 
