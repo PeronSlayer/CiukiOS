@@ -9142,9 +9142,31 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
          * Layout: PSP at linear 0x10000, image body at linear 0x11000.
          * Assumes host CR3 identity-maps 0x00000..0x100000 writable.
          *
+         * Optional arg: `gem vdi` (or `gem gemvdi`) launches GEMVDI.EXE
+         * instead of GEM.EXE so we can observe the VDI-first entry
+         * point used by GEM.BAT. This is diagnostic: real chaining
+         * (GEMVDI -> TSR -> GEM.EXE) is future work.
+         *
          * This command NEVER RETURNS on success. On failure (validation)
          * all arm gates are cleaned up. */
+        const char *gem_arg = get_arg_ptr(line);
+        while (*gem_arg == ' ' || *gem_arg == '\t') gem_arg++;
+        /* Trim trailing whitespace/CR/LF into a local buffer so str_eq
+         * comparisons are robust against BAT-sourced lines. */
+        char gem_arg_buf[16];
+        u32 ai = 0U;
+        while (gem_arg[ai] != '\0' && gem_arg[ai] != ' ' && gem_arg[ai] != '\t'
+               && gem_arg[ai] != '\r' && gem_arg[ai] != '\n'
+               && ai < (u32)(sizeof(gem_arg_buf) - 1U)) {
+            gem_arg_buf[ai] = gem_arg[ai];
+            ai++;
+        }
+        gem_arg_buf[ai] = '\0';
         const char *gem_path = "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/GEM.EXE";
+        if (str_eq_nocase(gem_arg_buf, "vdi") ||
+            str_eq_nocase(gem_arg_buf, "gemvdi")) {
+            gem_path = "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/GEMVDI.EXE";
+        }
         video_write("[gem] loader begin (high-risk experiment)\n");
         serial_write("[gem] loader begin path=");
         serial_write(gem_path);
