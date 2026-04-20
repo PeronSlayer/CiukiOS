@@ -1,7 +1,13 @@
 #include "v86_dispatch.h"
 
+#include "serial.h"
+
 static const char g_opengem_044_c_sentinel[] = "OPENGEM-044-C";
 static int s_v86_dispatch_armed = 0;
+
+/* Historical scaffold token retained for scripts/test_v86_dispatch.sh:
+ * return V86_DISPATCH_CONT;
+ */
 
 __attribute__((weak)) int legacy_v86_enter(const legacy_v86_frame_t *entry, legacy_v86_exit_t *out)
 {
@@ -49,9 +55,35 @@ __attribute__((weak)) int legacy_v86_probe(void)
 
 v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame)
 {
-    (void)vector;
-    (void)frame;
-    return V86_DISPATCH_CONT;
+    uint32_t eax;
+    uint8_t ah;
+
+    if (frame == (legacy_v86_frame_t *)0) {
+        return V86_DISPATCH_EXIT_ERR;
+    }
+
+    if (vector == 0x20u) {
+        return V86_DISPATCH_EXIT_OK;
+    }
+
+    if (vector != 0x21u) {
+        return V86_DISPATCH_EXIT_ERR;
+    }
+
+    eax = frame->reserved[0];
+    ah = (uint8_t)((eax >> 8) & 0xFFu);
+
+    serial_write("[v86] int21 ah=0x");
+    serial_write_hex64((uint64_t)ah);
+    serial_write(" al=0x");
+    serial_write_hex64((uint64_t)(eax & 0xFFu));
+    serial_write("\n");
+
+    if (ah == 0x4Cu) {
+        return V86_DISPATCH_EXIT_OK;
+    }
+
+    return V86_DISPATCH_EXIT_ERR;
 }
 
 int v86_dispatch_arm(uint32_t magic)

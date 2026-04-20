@@ -1,9 +1,9 @@
 /*
- * OPENGEM-044 Task B — Legacy-PM v86 host scaffold.
+ * OPENGEM-044 Task B — Legacy-PM v86 host.
  *
- * Stage 1 intentionally does not enter v86. It only publishes the
- * arm-gated host wrapper around Task A's mode-switch engine so Task B
- * can be built and validated before the legacy PM trampoline lands.
+ * The PM32 body now executes a one-shot v86 entry using the caller's
+ * frame, traps back on the first sensitive instruction / software INT,
+ * marshals legacy_v86_exit_t, and returns through Task A's trampoline.
  */
 
 #include "legacy_v86.h"
@@ -13,6 +13,41 @@ typedef struct {
     const legacy_v86_frame_t *entry;
     legacy_v86_exit_t *out;
 } legacy_v86_context_t;
+
+_Static_assert(__builtin_offsetof(legacy_v86_context_t, entry) == 0x00,
+               "legacy_v86_context_t.entry");
+_Static_assert(__builtin_offsetof(legacy_v86_context_t, out) == 0x08,
+               "legacy_v86_context_t.out");
+
+_Static_assert(__builtin_offsetof(legacy_v86_exit_t, reason) == 0x00,
+               "legacy_v86_exit_t.reason");
+_Static_assert(__builtin_offsetof(legacy_v86_exit_t, int_vector) == 0x04,
+               "legacy_v86_exit_t.int_vector");
+_Static_assert(__builtin_offsetof(legacy_v86_exit_t, frame) == 0x08,
+               "legacy_v86_exit_t.frame");
+_Static_assert(__builtin_offsetof(legacy_v86_exit_t, fault_code) == 0x2C,
+               "legacy_v86_exit_t.fault_code");
+
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, cs) == 0x00,
+               "legacy_v86_frame_t.cs");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, ip) == 0x02,
+               "legacy_v86_frame_t.ip");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, ss) == 0x04,
+               "legacy_v86_frame_t.ss");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, sp) == 0x06,
+               "legacy_v86_frame_t.sp");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, ds) == 0x08,
+               "legacy_v86_frame_t.ds");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, es) == 0x0A,
+               "legacy_v86_frame_t.es");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, fs) == 0x0C,
+               "legacy_v86_frame_t.fs");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, gs) == 0x0E,
+               "legacy_v86_frame_t.gs");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, eflags) == 0x10,
+               "legacy_v86_frame_t.eflags");
+_Static_assert(__builtin_offsetof(legacy_v86_frame_t, reserved) == 0x14,
+               "legacy_v86_frame_t.reserved");
 
 extern void legacy_v86_pm32_body(void *user);
 
@@ -117,9 +152,13 @@ int legacy_v86_enter(const legacy_v86_frame_t *entry, legacy_v86_exit_t *out)
     context.entry = entry;
     context.out = out;
 
+    /* If the PM32 body unexpectedly returns without filling an exit
+     * record, preserve the historical explicit fault code. The real
+     * PM32/v86 path overwrites this structure before returning. */
+    legacy_v86_fill_fault(out, entry, LEGACY_V86_FAULT_PM32_BODY_RETURNED);
+
     rc = mode_switch_run_legacy_pm(legacy_v86_pm32_body, &context);
     if (rc == MODE_SWITCH_OK) {
-        legacy_v86_fill_fault(out, entry, LEGACY_V86_FAULT_PM32_BODY_RETURNED);
         return LEGACY_V86_OK;
     }
     if (rc == MODE_SWITCH_ERR_NOT_ARMED) {
