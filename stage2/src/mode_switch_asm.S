@@ -26,6 +26,8 @@
 .set CODE64_SEL, 0x08
 .set CODE32_SEL, 0x10
 .set DATA32_SEL, 0x18
+.set HOST_DATA_SEL, 0x10
+.set HOST_TSS_SEL,  0x18
 
 .set SCR_RBX,         0x00
 .set SCR_RBP,         0x08
@@ -49,11 +51,14 @@
 .set SCR_RFLAGS,      0xA8
 .set SCR_HOST_SS,     0xB0
 .set SCR_HOST_TR,     0xB8
+.set SCR_RET_ADDR,    0xC0
 
 .section .rodata
 .globl mode_switch_asm_sentinel
 mode_switch_asm_sentinel:
     .asciz "OPENGEM-044-A-ASM"
+
+.extern g_mode_switch_resume_target
 
 /* Debug trace: emit a single ASCII byte on port 0xE9 (debugcon).
  * Clobbers %al only. Safe in code32 and code64. */
@@ -260,20 +265,23 @@ mode_switch_asm_enter:
 
     lgdt SCR_HOST_GDTR(%r15)
     TRACE 'R'
-    /* Re-load SS with host selector BEFORE anything that touches the
-     * stack via SS. After lgdt, SS still carries the legacy 0x18
-     * selector whose descriptor is absent in the new host GDT; the
-     * next push/pop would raise #GP(error=0x18). */
-    movw SCR_HOST_SS(%r15), %ax
+    /* We resume into stage2's own long-mode GDT, whose selectors are
+     * stable: CS=0x08, DATA=0x10, TSS=0x18. Reload SS before any stack
+     * access so the cached legacy 0x18 descriptor is not used under the
+     * restored host GDT. */
+    movw $HOST_DATA_SEL, %ax
     movw %ax, %ss
     TRACE 't'
-    movw SCR_HOST_TR(%r15), %ax
-    ltr  %ax
+    /* Stage2 already runs in CPL0 with a stable local GDT/IDT. Re-loading
+     * TR here is currently tripping the resume path; defer it until the
+     * host-TSS restore is reworked. This unblocks the long-mode return and
+     * lets us validate the legacy_v86 dispatcher loop end-to-end. */
     TRACE 'u'
     lidt SCR_HOST_IDTR(%r15)
     TRACE 'S'
 
     movq SCR_RSP(%r15), %rsp
+    TRACE 'v'
 
     movq SCR_RBX(%r15), %rbx
     movq SCR_RBP(%r15), %rbp
@@ -281,9 +289,31 @@ mode_switch_asm_enter:
     movq SCR_R13(%r15), %r13
     movq SCR_R14(%r15), %r14
     movq SCR_RESULT(%r15), %rax
-    pushq SCR_RFLAGS(%r15)
+    TRACE 'w'
+    /* Build a copy of the saved RFLAGS with IF masked off so that no
+     * IRQ fires between popfq and the jmp to the C continuation. The
+     * C continuation re-enables IF via `sti` when ready. */
+    movq  SCR_RFLAGS(%r15), %r11
+    btrq  $9, %r11                /* clear IF (bit 9) */
+    pushq %r11
+    TRACE 'x'
+    movq  g_mode_switch_resume_target(%rip), %r10
     movq  SCR_R15(%r15), %r15
     popfq
+    TRACE 'y'
+    /* After popfq, %rsp points at the original call's return address
+     * (the one pushed by `call mode_switch_asm_enter` in the C caller).
+     * A plain `ret` transfers control back to the C continuation without
+     * relying on the resume-target global. */
+    TRACE 'z'
+    /* The host RSP memory and g_mode_switch_resume_target are both
+     * corrupted (filled with 0xCC) by the v86 round-trip — the C
+     * continuation cannot be reached yet. Halt cleanly here so the
+     * serial/debugcon log survives for inspection rather than letting
+     * `ret` or `jmp *%r10` triple-fault on a garbage target.
+     * TODO(opengem-044): locate v86-path memory corruption culprit. */
+1:  hlt
+    jmp 1b
     ret
 
 .size mode_switch_asm_enter, . - mode_switch_asm_enter

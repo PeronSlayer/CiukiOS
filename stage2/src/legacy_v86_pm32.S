@@ -72,6 +72,11 @@ legacy_v86_pm32_v86_code:
 legacy_v86_pm32_idt:
     .skip 256 * 8
 
+        .align 4
+        .global legacy_v86_pm32_saved_ret
+    legacy_v86_pm32_saved_ret:
+        .long 0
+
     .align 4
     .global legacy_v86_pm32_saved_esp
 legacy_v86_pm32_saved_esp:
@@ -105,6 +110,8 @@ legacy_v86_pm32_body:
     /* cdecl arg: [esp+4] = legacy_v86_context_t* */
     movl    4(%esp), %esi
     movl    %esi, legacy_v86_pm32_saved_ctx - legacy_v86_pm32_body(%ebp)
+    movl    0(%esp), %eax
+    movl    %eax, legacy_v86_pm32_saved_ret - legacy_v86_pm32_body(%ebp)
     movl    %esp, legacy_v86_pm32_saved_esp - legacy_v86_pm32_body(%ebp)
 
     /* entry marker: lowercase 'b' on 0xE9 */
@@ -549,7 +556,9 @@ legacy_v86_pm32_gp_handler:
     outb    %al, $0xE9
     movb    $'T', %al
     outb    %al, $0xE9
-    retl
+    addl    $4, %esp
+    movl    legacy_v86_pm32_saved_ret - legacy_v86_pm32_body(%ebp), %ecx
+    jmp     *%ecx
     .code64
     .size legacy_v86_pm32_body, .-legacy_v86_pm32_body
 

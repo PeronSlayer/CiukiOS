@@ -55,6 +55,11 @@ static const char opengem_044_b_sentinel[] = "OPENGEM-044-B";
 
 static int s_legacy_v86_armed = 0;
 
+static inline void legacy_v86_debugcon(char ch)
+{
+    __asm__ volatile ("outb %0, $0xE9" : : "a"(ch));
+}
+
 static void legacy_v86_copy_frame(legacy_v86_frame_t *dst, const legacy_v86_frame_t *src)
 {
     int index;
@@ -158,7 +163,11 @@ int legacy_v86_enter(const legacy_v86_frame_t *entry, legacy_v86_exit_t *out)
     legacy_v86_fill_fault(out, entry, LEGACY_V86_FAULT_PM32_BODY_RETURNED);
 
     rc = mode_switch_run_legacy_pm(legacy_v86_pm32_body, &context);
+    __asm__ volatile ("outb %0, $0xE9" : : "a"((unsigned char)'3'));
+    legacy_v86_debugcon('3');
     if (rc == MODE_SWITCH_OK) {
+        __asm__ volatile ("outb %0, $0xE9" : : "a"((unsigned char)'4'));
+        legacy_v86_debugcon('4');
         return LEGACY_V86_OK;
     }
     if (rc == MODE_SWITCH_ERR_NOT_ARMED) {

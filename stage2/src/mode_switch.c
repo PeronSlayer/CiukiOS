@@ -49,6 +49,7 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint64_t saved_rflags;     /* 0xA8 */
     uint64_t saved_host_ss;    /* 0xB0 (low 16 bits = host SS selector) */
     uint64_t saved_host_tr;    /* 0xB8 (low 16 bits = host TR selector) */
+    uint64_t saved_ret_addr;   /* 0xC0 */
 } mode_switch_scratch_t;
 
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_rbx)       == 0x00, "SCR_RBX");
@@ -65,15 +66,22 @@ _Static_assert(__builtin_offsetof(mode_switch_scratch_t, result)          == 0xA
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_rflags)    == 0xA8, "SCR_RFLAGS");
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_host_ss)   == 0xB0, "SCR_HOST_SS");
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_host_tr)   == 0xB8, "SCR_HOST_TR");
+_Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_ret_addr)  == 0xC0, "SCR_RET_ADDR");
 
 static mode_switch_scratch_t s_mode_switch_scratch;
 static uint64_t s_legacy_gdt[5] __attribute__((aligned(16)));
 static uint8_t  s_pm32_stack[64 * 1024] __attribute__((aligned(16)));
+uint64_t g_mode_switch_resume_target = 0;
 
 /* Relocation offset: physical load address - virtual link address.
  * Initialized explicitly from handoff->stage2_load_addr. */
 static int64_t s_relocation_offset = 0;
 static int s_relocation_initialized = 0;
+
+static inline void mode_switch_debugcon(char ch)
+{
+    __asm__ volatile ("outb %0, $0xE9" : : "a"(ch));
+}
 
 static uint64_t stage2_phys_addr(uint64_t linked_addr)
 {
@@ -209,8 +217,17 @@ int mode_switch_run_legacy_pm(mode_switch_legacy_pm_body_fn body, void *user)
     uint64_t body_phys = stage2_phys_addr(body_virt);
     scr->body_fn = body_phys;
     scr->body_user = (uint64_t)(uintptr_t)user;
+    scr->saved_ret_addr = (uint64_t)(uintptr_t)&&after_mode_switch;
+    g_mode_switch_resume_target = scr->saved_ret_addr;
 
+    mode_switch_debugcon('1');
     (void)mode_switch_asm_enter(scr);
+after_mode_switch:
+    __asm__ volatile ("outb %0, $0xE9" : : "a"((unsigned char)'2'));
+    /* Trampoline returned with IF masked; re-enable interrupts now that
+     * the C context has been restored so the shell loop can proceed. */
+    __asm__ volatile ("sti");
+    mode_switch_debugcon('2');
     return MODE_SWITCH_OK;
 }
 
