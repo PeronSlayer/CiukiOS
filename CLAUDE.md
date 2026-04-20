@@ -18,6 +18,20 @@ Permanent non-goal: Windows NT / 2000 / XP / Vista / 7 / 8 / 10 / 11 and
 ReactOS. These are independent OS kernels and will never be supported by
 this project. Any request in that direction is out of scope.
 
+Permanent target architecture (formalized 2026-04-20): CiukiOS is a
+**32-bit (IA-32 / i686) operating system**. 64-bit / long-mode / x86_64
+is NOT a project goal. The current long-mode stage2 is a historical
+artefact of early bring-up and will be phased out in favour of a pure
+32-bit protected-mode kernel. New architectural work must target IA-32
+and must not introduce new long-mode-only dependencies.
+
+Permanent firmware target (formalized 2026-04-20): the long-term boot
+path is **legacy BIOS + MBR**, not UEFI. UEFI-only assumptions (e.g.
+Boot Services, GOP-only framebuffer acquisition, long-mode handoff ABI)
+must not be baked into new code. A legacy BIOS/MBR bootloader is on the
+roadmap; until it lands, the current UEFI loader is kept as a transitional
+bring-up vehicle only.
+
 Primary roadmap:
 1. `docs/roadmap-ciukios-doom.md`
 2. `docs/roadmap-windows-dosbased.md`
