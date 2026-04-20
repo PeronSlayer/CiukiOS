@@ -96,15 +96,15 @@ awk '/^vm86_compat_entry_trampoline:/{flag=1} flag' "$SRC_S" \
     && pass || fail "trampoline prologue missing defensive hlt"
 
 # --- 9. No boot-path caller of the 040 asm symbols or enter APIs -----
-# The only legitimate caller is vm86.c (which takes their address in
-# the probe but never executes them). Shell must NOT wire them.
+# The only legitimate callers are vm86.c (probe address-takes only) and
+# shell.c (OPENGEM-043 gem loader, explicit user-typed command).
 for sym in vm86_compat_entry_trampoline vm86_compat_entry_body_live \
            vm86_compat_entry_compat32 vm86_compat_entry_prepare \
            vm86_compat_entry_verify vm86_compat_entry_arm \
            vm86_compat_entry_disarm vm86_compat_entry_is_armed \
            vm86_compat_entry_probe; do
     callers=$(grep -RIln --include='*.c' --include='*.S' "$sym" stage2 \
-              | grep -vE 'stage2/src/vm86\.c$|stage2/src/vm86_compat_entry\.S$|stage2/src/vm86_compat_entry_live\.S$|stage2/include/vm86\.h$' || true)
+              | grep -vE 'stage2/src/vm86\.c$|stage2/src/vm86_compat_entry\.S$|stage2/src/vm86_compat_entry_live\.S$|stage2/src/shell\.c$|stage2/include/vm86\.h$' || true)
     if [ -n "$callers" ]; then
         fail "unexpected 040 caller of $sym: $callers"
     else pass; fi

@@ -84,11 +84,12 @@ done
 rm -f /tmp/vm86_039_block.c
 
 # --- 8. No external caller of 039 APIs ------------------------------
+# OPENGEM-043 whitelists shell.c for explicit user-typed gem loader.
 for fn in vm86_compat_task_arm vm86_compat_task_disarm \
           vm86_compat_task_is_armed vm86_compat_task_build \
           vm86_compat_task_verify vm86_compat_task_probe; do
     callers=$(grep -RIln --include='*.c' --include='*.S' "$fn" stage2 \
-              | grep -vE 'stage2/src/vm86\.c' || true)
+              | grep -vE 'stage2/src/vm86\.c|stage2/src/shell\.c' || true)
     if [ -n "$callers" ]; then
         fail "unexpected caller of $fn: $callers"
     else pass; fi

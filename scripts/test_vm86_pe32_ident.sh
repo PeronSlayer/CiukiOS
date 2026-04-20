@@ -71,9 +71,11 @@ gf "$C" "cr4.PAE" "cr4 PAE check"
 gf "$C" "ADDR_MASK = 0x000FFFFFFFFFF000ULL" "4K phys mask"
 
 # No new boot-path call sites for the probe (observability only).
+# OPENGEM-043 whitelists shell.c for explicit user-typed gem loader.
 for sym in vm86_cpu_snapshot_capture vm86_pe32_identity_verify vm86_pe32_identity_probe; do
     hits=$(grep -RnE --include='*.c' -w "$sym" stage2/ 2>/dev/null \
          | grep -v "^stage2/src/vm86.c:" \
+         | grep -v "^stage2/src/shell.c:" \
          | grep -v "^stage2/include/vm86.h:" \
          | wc -l | tr -d ' ')
     if [ "$hits" = "0" ]; then
