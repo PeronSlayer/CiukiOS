@@ -46,6 +46,7 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint64_t result;           /* 0xA0 */
     uint64_t saved_rflags;     /* 0xA8 */
     uint64_t saved_host_ss;    /* 0xB0 (low 16 bits = host SS selector) */
+    uint64_t saved_host_tr;    /* 0xB8 (low 16 bits = host TR selector) */
 } mode_switch_scratch_t;
 
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_rbx)       == 0x00, "SCR_RBX");
@@ -61,10 +62,13 @@ _Static_assert(__builtin_offsetof(mode_switch_scratch_t, body_user)       == 0x9
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, result)          == 0xA0, "SCR_RESULT");
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_rflags)    == 0xA8, "SCR_RFLAGS");
 _Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_host_ss)   == 0xB0, "SCR_HOST_SS");
+_Static_assert(__builtin_offsetof(mode_switch_scratch_t, saved_host_tr)   == 0xB8, "SCR_HOST_TR");
 
 static mode_switch_scratch_t s_mode_switch_scratch;
-static uint64_t s_legacy_gdt[4] __attribute__((aligned(16)));
+static uint64_t s_legacy_gdt[5] __attribute__((aligned(16)));
 static uint8_t  s_pm32_stack[64 * 1024] __attribute__((aligned(16)));
+
+extern uint8_t legacy_v86_pm32_tss[];
 
 extern int mode_switch_asm_enter(mode_switch_scratch_t *scratch);
 extern const char mode_switch_asm_sentinel[];
@@ -92,6 +96,11 @@ static void build_legacy_gdt(void)
     s_legacy_gdt[2] = encode_gdt_entry(0, 0xFFFFFu, 0x9A, 0xC);
     /* DATA32 flat: access=0x92 (P|S|type=data rw), flags=0xC (G|D) */
     s_legacy_gdt[3] = encode_gdt_entry(0, 0xFFFFFu, 0x92, 0xC);
+    /* TSS32 available: access=0x89 (P|system|available TSS), flags=0 */
+    s_legacy_gdt[4] = encode_gdt_entry((uint32_t)(uintptr_t)legacy_v86_pm32_tss,
+                                       0x67u,
+                                       0x89,
+                                       0x0);
 }
 
 static void build_gdtr(uint8_t *dst, uint64_t base, uint16_t limit)

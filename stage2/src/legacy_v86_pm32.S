@@ -47,6 +47,11 @@
     .set STUB_INT20_SEG,     (STUB_INT20_LINEAR >> 4)
     .set STUB_INT21_SEG,     (STUB_INT21_LINEAR >> 4)
     .set STUB_INT03_SEG,     (STUB_INT03_LINEAR >> 4)
+    .set SCR_PM32_STACK,     0x88
+    .set TSS32_SEL,          0x20
+    .set TSS_ESP0,           0x04
+    .set TSS_SS0,            0x08
+    .set TSS_IOMAP,          0x66
 
     .section .rodata
     .global legacy_v86_pm32_sentinel
@@ -76,6 +81,11 @@ legacy_v86_pm32_saved_esp:
     .global legacy_v86_pm32_saved_ctx
 legacy_v86_pm32_saved_ctx:
     .skip 4
+
+    .align 16
+    .global legacy_v86_pm32_tss
+legacy_v86_pm32_tss:
+    .skip 104
 
     .align 2
     .global legacy_v86_pm32_idtr
@@ -157,26 +167,24 @@ legacy_v86_pm32_body:
     outb    %al, $0xE9
 
     /* Install low-memory real-mode interrupt stubs. Each stub executes
-     * OUT imm8,AL, which is privileged in v86 and reliably returns to
-     * the host #GP path. The handler recognizes the stub CS and
-     * reconstructs the pre-INT guest return frame from the v86 stack.
-     * This turns the guest's first INT 03h/20h/21h into a typed host-side
-     * exit without needing the full DOS IVT surface yet. */
+     * HLT. With VM=1 and IOPL=3 this remains privileged and returns to
+     * the host #GP path, while ordinary guest CLI/STI can execute per the
+     * Task-B contract. The handler recognizes the stub CS and reconstructs
+     * the pre-INT guest return frame from the v86 stack. This turns the
+     * guest's first INT 03h/20h/21h into a typed host-side exit without
+     * needing the full DOS IVT surface yet. */
     movl    $STUB_INT20_LINEAR, %edi
-    movb    $0xE6, 0(%edi)              /* out 0x80, al */
-    movb    $0x80, 1(%edi)
-    movb    $0xEB, 2(%edi)
-    movb    $0xFC, 3(%edi)
+    movb    $0xF4, 0(%edi)              /* hlt */
+    movb    $0xEB, 1(%edi)
+    movb    $0xFD, 2(%edi)
     movl    $STUB_INT21_LINEAR, %edi
-    movb    $0xE6, 0(%edi)
-    movb    $0x80, 1(%edi)
-    movb    $0xEB, 2(%edi)
-    movb    $0xFC, 3(%edi)
+    movb    $0xF4, 0(%edi)
+    movb    $0xEB, 1(%edi)
+    movb    $0xFD, 2(%edi)
     movl    $STUB_INT03_LINEAR, %edi
-    movb    $0xE6, 0(%edi)
-    movb    $0x80, 1(%edi)
-    movb    $0xEB, 2(%edi)
-    movb    $0xFC, 3(%edi)
+    movb    $0xF4, 0(%edi)
+    movb    $0xEB, 1(%edi)
+    movb    $0xFD, 2(%edi)
 
     movl    $0x0000000C, %edi          /* IVT[03h] */
     movw    $0x0000, 0(%edi)
@@ -190,6 +198,22 @@ legacy_v86_pm32_body:
     movb    $'e', %al
     outb    %al, $0xE9
 
+    /* Build/load a real TSS32 so v86 faults can switch back to ring0 on
+     * a known stack. Without this, the first guest trap triple-faults
+     * before our PM32 handler runs. %ebx still holds Task A scratch. */
+    leal    legacy_v86_pm32_tss, %edi
+    xorl    %eax, %eax
+    movl    $(104 / 4), %ecx
+    rep stosl
+    movl    SCR_PM32_STACK(%ebx), %eax
+    movl    %eax, legacy_v86_pm32_tss + TSS_ESP0
+    movw    $0x18, legacy_v86_pm32_tss + TSS_SS0
+    movw    $104, legacy_v86_pm32_tss + TSS_IOMAP
+    movw    $TSS32_SEL, %ax
+    ltr     %ax
+    movb    $'h', %al
+    outb    %al, $0xE9
+
     /* Build v86 IRET frame from caller entry state. */
     movl    CTX_ENTRY(%esi), %edi
     pushl   FRAME_GS(%edi)
@@ -197,18 +221,27 @@ legacy_v86_pm32_body:
     pushl   FRAME_DS(%edi)
     pushl   FRAME_ES(%edi)
     movzwl  FRAME_SS(%edi), %eax
+    /* SS in v86 mode: use CODE32_SEL (0x10) which has base=0.
+     * In v86 mode, segment registers use real-mode addressing: (SELECTOR<<4)+OFFSET.
+     * So (0x10<<4)+OFFSET = 0x100+OFFSET. This is a temporary workaround;
+     * the proper fix requires setting up the image at an address that maps
+     * correctly via the flat model. */
+    movl    $0x10, %eax
     pushl   %eax
     movzwl  FRAME_SP(%edi), %eax
     pushl   %eax
     movl    FRAME_EFLAGS(%edi), %eax
-    orl     $0x00020000, %eax     /* VM=1 */
-    andl    $~0x00003000, %eax    /* IOPL=0 */
-    orl     $0x00000002, %eax     /* bit1 reserved */
+    orl     $0x00023000, %eax     /* VM=1, IOPL=3, bit1 reserved */
     pushl   %eax
-    movzwl  FRAME_CS(%edi), %eax
+    /* CS in v86 mode: use CODE32_SEL (0x10). */
+    movl    $0x10, %eax
     pushl   %eax
     movzwl  FRAME_IP(%edi), %eax
     pushl   %eax
+    /* Keep the contract explicit in trace: we are entering v86 with
+     * VM=1 and IOPL=3 as specified by OPENGEM-044 Task B. */
+    movb    $'g', %al
+    outb    %al, $0xE9
     movb    $'f', %al
     outb    %al, $0xE9
     iretl
@@ -255,6 +288,59 @@ legacy_v86_pm32_gp_handler:
     movb    $'!', %al
     outb    %al, %dx
 
+    /* Emit CS:IP at trap point (hex debug). */
+    movw    8(%esp), %ax
+    movb    $'[', %al
+    outb    %al, $0xE9
+    movw    8(%esp), %ax
+    movb    %ah, %al
+    shr     $4, %al
+    cmp     $9, %al
+    jbe     .L_hex_cs_h_dec2
+    add     $('A' - 10), %al
+    jmp     .L_hex_cs_h_out2
+.L_hex_cs_h_dec2:
+    add     $'0', %al
+.L_hex_cs_h_out2:
+    outb    %al, $0xE9
+    movw    8(%esp), %ax
+    movb    %al, %al
+    and     $0x0F, %al
+    cmp     $9, %al
+    jbe     .L_hex_cs_l_dec2
+    add     $('A' - 10), %al
+    jmp     .L_hex_cs_l_out2
+.L_hex_cs_l_dec2:
+    add     $'0', %al
+.L_hex_cs_l_out2:
+    outb    %al, $0xE9
+    movb    $':', %al
+    outb    %al, $0xE9
+    movw    4(%esp), %ax
+    movb    %ah, %al
+    shr     $4, %al
+    cmp     $9, %al
+    jbe     .L_hex_ip_h_dec2
+    add     $('A' - 10), %al
+    jmp     .L_hex_ip_h_out2
+.L_hex_ip_h_dec2:
+    add     $'0', %al
+.L_hex_ip_h_out2:
+    outb    %al, $0xE9
+    movw    4(%esp), %ax
+    movb    %al, %al
+    and     $0x0F, %al
+    cmp     $9, %al
+    jbe     .L_hex_ip_l_dec2
+    add     $('A' - 10), %al
+    jmp     .L_hex_ip_l_out2
+.L_hex_ip_l_dec2:
+    add     $'0', %al
+.L_hex_ip_l_out2:
+    outb    %al, $0xE9
+    movb    $']', %al
+    outb    %al, $0xE9
+
     /* Default classification if opcode decode below does not match a
      * supported first-trap pattern. */
     movl    $EXIT_REASON_FAULT, EXIT_REASON(%edi)
@@ -297,18 +383,34 @@ legacy_v86_pm32_gp_handler:
     jmp     .L_decode_opcode
 
 .L_stub_int03:
+    movb    $'I', %al
+    outb    %al, $0xE9
+    movb    $'3', %al
+    outb    %al, $0xE9
     movb    $0x03, EXIT_INTVEC(%edi)
     movl    $EXIT_REASON_GP_INT, EXIT_REASON(%edi)
     movl    $0, EXIT_FAULT(%edi)
     jmp     .L_unwind_softint_frame
 
 .L_stub_int20:
+    movb    $'I', %al
+    outb    %al, $0xE9
+    movb    $'2', %al
+    outb    %al, $0xE9
+    movb    $'0', %al
+    outb    %al, $0xE9
     movb    $0x20, EXIT_INTVEC(%edi)
     movl    $EXIT_REASON_NORMAL, EXIT_REASON(%edi)
     movl    $0, EXIT_FAULT(%edi)
     jmp     .L_unwind_softint_frame
 
 .L_stub_int21:
+    movb    $'I', %al
+    outb    %al, $0xE9
+    movb    $'2', %al
+    outb    %al, $0xE9
+    movb    $'1', %al
+    outb    %al, $0xE9
     movb    $0x21, EXIT_INTVEC(%edi)
     movl    $EXIT_REASON_GP_INT, EXIT_REASON(%edi)
     movl    $0, EXIT_FAULT(%edi)

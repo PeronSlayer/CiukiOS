@@ -48,6 +48,7 @@
 .set SCR_RESULT,      0xA0
 .set SCR_RFLAGS,      0xA8
 .set SCR_HOST_SS,     0xB0
+.set SCR_HOST_TR,     0xB8
 
 .section .rodata
 .globl mode_switch_asm_sentinel
@@ -90,6 +91,10 @@ mode_switch_asm_enter:
     xorq %rax, %rax
     movw %ss, %ax
     movq %rax, SCR_HOST_SS(%rdi)
+
+    xorq %rax, %rax
+    str %ax
+    movq %rax, SCR_HOST_TR(%rdi)
 
     movq %cr0, %rax
     movq %rax, SCR_CR0(%rdi)
@@ -195,9 +200,12 @@ mode_switch_asm_enter:
     addl  $4, %esp
     movl  %eax, SCR_RESULT(%ebx)
 
-    /* Re-enter IA-32e. */
-    movl %cr4, %eax
-    orl  $0x00000020, %eax        /* CR4.PAE=1 */
+    /* Re-enter IA-32e.
+     * Restore the full host CR4 image rather than mutating the current
+     * legacy-PM value. Task B may legitimately clear bits such as VME/PVI
+     * before entering v86; carrying those changes back into the host would
+     * make the round-trip non-transparent. */
+    movl SCR_CR4(%ebx), %eax
     movl %eax, %cr4
     TRACE 'M'
 
@@ -245,6 +253,9 @@ mode_switch_asm_enter:
     movw SCR_HOST_SS(%r15), %ax
     movw %ax, %ss
     TRACE 't'
+    movw SCR_HOST_TR(%r15), %ax
+    ltr  %ax
+    TRACE 'u'
     lidt SCR_HOST_IDTR(%r15)
     TRACE 'S'
 
