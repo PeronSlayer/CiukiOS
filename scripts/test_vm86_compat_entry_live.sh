@@ -91,17 +91,28 @@ done
 
 # --- 8. No boot-path caller of 041 live API --------------------------
 # enter_asm has exactly ONE C caller: vm86_compat_entry_enter_v86 in
-# vm86.c. No shell integration yet.
+# vm86.c. Shell integration is allowed ONLY for the probe (042), which
+# never invokes the live trampoline. All other 041 symbols must remain
+# confined to vm86.c / vm86_compat_entry_live.S / vm86.h.
 for sym in vm86_compat_entry_enter_asm vm86_compat_entry_live_compat32 \
            vm86_compat_entry_live_arm vm86_compat_entry_live_disarm \
            vm86_compat_entry_live_is_armed vm86_compat_entry_live_fill_frame \
-           vm86_compat_entry_enter_v86 vm86_compat_entry_live_probe; do
+           vm86_compat_entry_enter_v86; do
     callers=$(grep -RIln --include='*.c' --include='*.S' "$sym" stage2 \
               | grep -vE 'stage2/src/vm86\.c$|stage2/src/vm86_compat_entry_live\.S$|stage2/include/vm86\.h$' || true)
     if [ -n "$callers" ]; then
         fail "unexpected 041 caller of $sym: $callers"
     else pass; fi
 done
+
+# Probe is whitelisted for shell.c (OPENGEM-042 runtime validation
+# command). Any OTHER caller is still forbidden.
+probe_callers=$(grep -RIln --include='*.c' --include='*.S' \
+                'vm86_compat_entry_live_probe' stage2 \
+                | grep -vE 'stage2/src/vm86\.c$|stage2/src/vm86_compat_entry_live\.S$|stage2/include/vm86\.h$|stage2/src/shell\.c$' || true)
+if [ -n "$probe_callers" ]; then
+    fail "unexpected 041 caller of vm86_compat_entry_live_probe: $probe_callers"
+else pass; fi
 
 # --- 9. Prior-phase asm files untouched by 041 ----------------------
 # Strip /* ... */ comments before scanning so that forward-looking
