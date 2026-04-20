@@ -1194,4 +1194,88 @@ vm86_gp_dispatch_action vm86_gp_dispatch_handle(
  */
 int vm86_gp_dispatch_probe(void);
 
+/* ================================================================== */
+/* OPENGEM-036 - PE32 #GP ISR C-side entry (arm-gated, observability). */
+/*                                                                    */
+/* This phase adds the C function that a future real PE32 #GP handler */
+/* will call after capturing the hardware-pushed trap frame. The asm  */
+/* ISR stub defined by OPENGEM-035 remains a halt-loop; the wiring    */
+/* of the asm body is the OPENGEM-037 pending surface. This phase is  */
+/* therefore still strictly observability-only:                       */
+/*   - no LIDT / LGDT is issued;                                      */
+/*   - no IRETD / IRETQ is emitted in C or asm;                       */
+/*   - the new C entry is reachable only via its public prototype;    */
+/*   - the new arm-gate is default-disarmed and requires a dedicated  */
+/*     magic constant disjoint from the 029 / 033 / 035 magics.       */
+/* ================================================================== */
+
+#define VM86_GP_ISR_C_SENTINEL   0x0360u
+#define VM86_GP_ISR_ARM_MAGIC    0xC1D39360u
+
+/*
+ * Flip / read / clear the OPENGEM-036 arm-gate. The gate is
+ * completely independent of every earlier arm-gate: arming 029 /
+ * 033 / 035 does NOT arm 036, and vice-versa.
+ */
+int  vm86_gp_isr_c_arm(u32 magic);
+void vm86_gp_isr_c_disarm(void);
+int  vm86_gp_isr_c_is_armed(void);
+
+/*
+ * Host-side PE32 #GP ISR C entry.
+ *
+ * This is the function a real PE32 #GP handler (OPENGEM-037+) will
+ * invoke once it has captured the hardware-pushed trap frame into a
+ * `vm86_trap_frame`. The entry:
+ *   - validates its inputs (NULL/OOB -> ACTION_BAD_INPUT);
+ *   - enforces the dedicated arm-gate (disarmed -> BLOCKED_NOT_ARMED,
+ *     decoder NOT invoked, slot/out_frame untouched);
+ *   - copies `in_frame` into a local working frame, routes it through
+ *     vm86_gp_dispatch_handle(), and on return:
+ *       * writes the post-decode working frame into `out_frame`
+ *         (register-for-register), provided `out_frame` is non-NULL;
+ *       * the 36-byte IRETD slot handling is delegated to
+ *         vm86_gp_dispatch_handle()'s existing contract.
+ *
+ * Parameters:
+ *   in_frame      -- non-NULL; hardware-captured trap frame.
+ *   guest_base    -- non-NULL; base of the v8086 guest's visible
+ *                    memory window (host-linear).
+ *   guest_size    -- bytes in the guest window; must be > 0.
+ *   disp / task   -- optional; passed through to
+ *                    vm86_gp_dispatch_handle().
+ *   guest_iret_slot -- optional 36-byte slot for the post-decode
+ *                      IRETD stack image. May be NULL.
+ *   out_frame     -- optional; if non-NULL, receives the post-decode
+ *                    working frame (same layout as in_frame).
+ *   decode_out    -- optional; receives the raw decoder result.
+ *
+ * Returns the dispatch action.
+ */
+vm86_gp_dispatch_action vm86_gp_isr_c_entry(
+    const vm86_trap_frame *in_frame,
+    const u8              *guest_base,
+    u32                    guest_size,
+    vm86_dispatcher       *disp,
+    vm86_task             *task,
+    u8                    *guest_iret_slot,
+    vm86_trap_frame       *out_frame,
+    vm86_gp_decode_result *decode_out);
+
+/*
+ * OPENGEM-036 integrated probe. Host-driven; never invoked from the
+ * live boot path. Exercises:
+ *   - default-disarmed: handle returns BLOCKED_NOT_ARMED, out_frame
+ *     is not populated, iret slot is not touched;
+ *   - wrong magic rejected;
+ *   - armed path over the same synthetic guest buffer as 034/035:
+ *     INT21h -> IRETD, HLT -> ACTION_HLT;
+ *   - NULL input_frame / NULL guest_base / zero guest_size all map
+ *     to ACTION_BAD_INPUT with out_frame/slot untouched;
+ *   - disarms cleanly on exit.
+ *
+ * Returns 1 on success, 0 otherwise.
+ */
+int vm86_gp_isr_c_probe(void);
+
 #endif /* STAGE2_VM86_H */

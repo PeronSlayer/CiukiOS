@@ -534,6 +534,9 @@ test-vm86-gp-decode:
 test-vm86-gp-dispatch:
 	bash ./scripts/test_vm86_gp_dispatch.sh
 
+test-vm86-gp-isr-c:
+	bash ./scripts/test_vm86_gp_isr_c.sh
+
 test-doom-via-opengem:
 	bash ./scripts/test_doom_via_opengem.sh
 
