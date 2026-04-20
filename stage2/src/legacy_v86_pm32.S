@@ -226,15 +226,16 @@ legacy_v86_pm32_body:
      * So (0x10<<4)+OFFSET = 0x100+OFFSET. This is a temporary workaround;
      * the proper fix requires setting up the image at an address that maps
      * correctly via the flat model. */
-    movl    $0x10, %eax
+    /* SS: Use actual segment value from frame, not selector */
+    movzwl  FRAME_SS(%edi), %eax
     pushl   %eax
     movzwl  FRAME_SP(%edi), %eax
     pushl   %eax
     movl    FRAME_EFLAGS(%edi), %eax
     orl     $0x00023000, %eax     /* VM=1, IOPL=3, bit1 reserved */
     pushl   %eax
-    /* CS in v86 mode: use CODE32_SEL (0x10). */
-    movl    $0x10, %eax
+    /* CS: Use actual segment value from frame, not selector */
+    movzwl  FRAME_CS(%edi), %eax
     pushl   %eax
     movzwl  FRAME_IP(%edi), %eax
     pushl   %eax
@@ -488,6 +489,8 @@ legacy_v86_pm32_gp_handler:
     outb    %al, $0xE9
 
     movl    legacy_v86_pm32_saved_esp, %esp
+    /* Clean trap frame from stack: trap frame is 44 bytes (11 * 4) */
+    addl    $44, %esp
     xorl    %eax, %eax
     retl
 

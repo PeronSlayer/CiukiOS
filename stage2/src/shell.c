@@ -9332,12 +9332,15 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         for (;;) {
             if (legacy_v86_enter(&frame, &exit_state) != LEGACY_V86_OK) {
                 serial_write(" <end>\n");
+                serial_write("[gem] ERROR: v86_enter failed\n");
                 video_write("[gem] pending task B\n");
                 serial_write("[gem] pending task B enter-044B\n");
                 shell_gem_disarm_path();
                 return;
             }
-            serial_write(" <end>\n");
+            serial_write(" <end> reason=0x");
+            serial_write_hex64((u64)exit_state.reason);
+            serial_write("\n");
 
             frame.cs = exit_state.frame.cs;
             frame.ip = exit_state.frame.ip;
