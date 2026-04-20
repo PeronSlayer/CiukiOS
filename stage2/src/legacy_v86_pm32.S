@@ -263,6 +263,12 @@ legacy_v86_pm32_body:
     outb    %al, $0xE9
     movb    $'f', %al
     outb    %al, $0xE9
+    /* Restore guest GPRs from frame.reserved[0..3] = EAX/EBX/ECX/EDX so
+     * the host can return syscall results to the v86 guest. */
+    movl    FRAME_R1(%edi), %ebx
+    movl    FRAME_R2(%edi), %ecx
+    movl    FRAME_R3(%edi), %edx
+    movl    FRAME_R0(%edi), %eax
     iretl
 
 legacy_v86_pm32_spurious:
