@@ -9281,10 +9281,16 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             ai++;
         }
         gem_arg_buf[ai] = '\0';
-        const char *gem_path = "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/GEM.EXE";
+        const char *gem_path = "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/GEMVDI.EXE";
+        const char *gem_next = "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/GEM.EXE";
         if (str_eq_nocase(gem_arg_buf, "vdi") ||
             str_eq_nocase(gem_arg_buf, "gemvdi")) {
             gem_path = "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/GEMVDI.EXE";
+            gem_next = (const char *)0; /* no chain */
+        } else if (str_eq_nocase(gem_arg_buf, "desk") ||
+                   str_eq_nocase(gem_arg_buf, "gem")) {
+            gem_path = "/FREEDOS/OPENGEM/GEMAPPS/GEMSYS/GEM.EXE";
+            gem_next = (const char *)0;
         }
         video_write("[gem] loader begin (high-risk experiment)\n");
         serial_write("[gem] loader begin path=");
@@ -9440,6 +9446,20 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
                     continue;
                 }
                 if (dispatch_result == V86_DISPATCH_EXIT_OK) {
+                    if (gem_next != (const char *)0) {
+                        video_write("[gem] chain -> GEM.EXE\n");
+                        serial_write("[gem] dispatch chain path=");
+                        serial_write(gem_next);
+                        serial_write("\n");
+                        if (!shell_gem_load_mz_image(gem_next, "", 0u, 0x3000u, &frame)) {
+                            video_write("[gem] chain load failed\n");
+                            serial_write("[gem] chain load=err\n");
+                            break;
+                        }
+                        gem_path = gem_next;
+                        gem_next = (const char *)0;
+                        continue;
+                    }
                     video_write("[gem] dispatch requested exit\n");
                     serial_write("[gem] dispatch exit=ok\n");
                     break;

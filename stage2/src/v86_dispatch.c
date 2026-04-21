@@ -271,6 +271,44 @@ static int v86_try_emulate_int_1a(legacy_v86_frame_t *frame)
     }
 }
 
+/* Microsoft mouse driver API (INT 33h) minimal stub.
+ * Provides a centered, no-button mouse so GEM cursor + AES graf_mkstate
+ * have a coherent input source. Returns AX=0xFFFF for AX=0 (driver
+ * present) so callers stop probing for a mouse driver. */
+static int v86_try_emulate_int_33(legacy_v86_frame_t *frame)
+{
+    uint32_t eax;
+    uint16_t ax;
+
+    if (!frame) {
+        return 0;
+    }
+    eax = frame->reserved[0];
+    ax = (uint16_t)(eax & 0xFFFFu);
+
+    switch (ax) {
+    case 0x0000u: /* Reset / get installed flag */
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0xFFFFu; /* AX=0xFFFF */
+        frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | 2u; /* BX=2 */
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x0003u: /* Get pos+btn — center of 640x480, no buttons */
+        frame->reserved[1] = frame->reserved[1] & 0xFFFF0000u;       /* BX=0 */
+        frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) | 320u; /* CX=x */
+        frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) | 240u; /* DX=y */
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x000Bu: /* Read motion counters */
+        frame->reserved[2] = frame->reserved[2] & 0xFFFF0000u;
+        frame->reserved[3] = frame->reserved[3] & 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    default: /* Generic: clear CF, leave registers as caller set them. */
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+}
+
 /* AES (Application Environment Services) dispatch.
  * Invoked when GEM issues INT EE or INT EF with CX=0x00C8. Provides
  * minimal success responses for the handful of opcodes needed during
@@ -1868,6 +1906,12 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
             serial_write("[v86] dispatch soft-int emu vec=1A\n");
             return V86_DISPATCH_CONT;
         }
+        if (vector == 0x33u && v86_try_emulate_int_33(frame)) {
+            serial_write("[v86] dispatch soft-int emu vec=33 ax=0x");
+            serial_write_hex64((uint64_t)(frame->reserved[0] & 0xFFFFu));
+            serial_write("\n");
+            return V86_DISPATCH_CONT;
+        }
         if (vector == 0xEEu && v86_try_emulate_aes(frame)) {
             serial_write("[v86] dispatch soft-int emu vec=EE aes=0x");
             serial_write_hex64((uint64_t)s_v86_last_aes_opcode);
@@ -1948,6 +1992,12 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     }
 
     case 0x4Cu: /* Terminate process with return code */
+        return V86_DISPATCH_EXIT_OK;
+
+    case 0x31u: /* Keep Process (TSR). Treat as exit_ok for now so the
+                 * shell-level chain (gem -> gemvdi -> gem.exe) can
+                 * advance instead of hanging on a resident program. */
+        serial_write("[v86] int21/31 TSR keep -> exit\n");
         return V86_DISPATCH_EXIT_OK;
 
     case 0x00u: /* Terminate program */
