@@ -25,8 +25,8 @@ QEMU_HEADLESS="${CIUKIOS_QEMU_HEADLESS:-0}"
 QEMU_BOOT_ORDER="${CIUKIOS_QEMU_BOOT_ORDER:-c}"
 QEMU_SERIAL_FILE="${CIUKIOS_QEMU_SERIAL_FILE:-$BUILD_DIR/serial.log}"
 QEMU_DISPLAY_BACKEND="${CIUKIOS_QEMU_DISPLAY_BACKEND:-sdl}"
-QEMU_GOP_XRES="${CIUKIOS_QEMU_GOP_XRES:-1920}"
-QEMU_GOP_YRES="${CIUKIOS_QEMU_GOP_YRES:-1080}"
+QEMU_GOP_XRES="${CIUKIOS_QEMU_GOP_XRES:-800}"
+QEMU_GOP_YRES="${CIUKIOS_QEMU_GOP_YRES:-600}"
 QEMU_WINDOW_CENTERED="${CIUKIOS_QEMU_WINDOW_CENTERED:-1}"
 FREEDOS_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime"
 OPENGEM_RUNTIME_DIR="$PROJECT_DIR/third_party/freedos/runtime/OPENGEM"
@@ -342,7 +342,7 @@ echo "[CiukiOS] Starting QEMU..."
 QEMU_ARGS=(
   -machine q35
   -m 512M
-    -device "virtio-vga,xres=${QEMU_GOP_XRES},yres=${QEMU_GOP_YRES},edid=on"
+    -device "virtio-vga,xres=${QEMU_GOP_XRES},yres=${QEMU_GOP_YRES}"
   -debugcon file:"$BUILD_DIR/debugcon.log"
   -global isa-debugcon.iobase=0xe9
 )
