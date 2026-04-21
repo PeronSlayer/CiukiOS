@@ -473,24 +473,24 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     }
 
     if (opcode == 0x006Eu) {
-        /* VDI opcode 110 (vst_load_fonts - load user fonts from disk).
-         * outputs: intout[0] = number of fonts loaded.
-         * GEM.EXE calls this in a loop after bootstrap; static counter
-         * returns 1 first call then 0 on subsequent calls so the caller
-         * stops re-requesting a font load batch. */
-        static unsigned char s_vst_load_fonts_first = 1u;
-        unsigned short nfonts = s_vst_load_fonts_first ? 1u : 0u;
-        s_vst_load_fonts_first = 0u;
+        /* VDI opcode 110 = vr_trnfm (transform raster form, std<->device).
+         * Reference: OpenGEM FreeGEM bindings PPDV102.C.
+         * inputs:  contrl[7..10] = far pointer to src MFDB + dst MFDB
+         *          n_ptsin=0, n_intin=0
+         * outputs: none (transformed bitmap written to dst MFDB buffer)
+         * For bring-up we no-op: GEM.EXE invokes this per desktop icon
+         * during resource load; returning clean success lets it proceed.
+         * TODO: implement real std-form <-> device-form conversion when
+         * icons must render correctly. */
         v86_store_u16(ctrl_lin + 4u, 0u);  /* n_ptsout */
-        v86_store_u16(ctrl_lin + 8u, 1u);  /* n_intout */
-        v86_store_u16(intout_lin + 0u, nfonts);
+        v86_store_u16(ctrl_lin + 8u, 0u);  /* n_intout */
         frame->reserved[0] &= 0xFFFF0000u;
         frame->eflags &= ~0x00000001u;
         return 1;
     }
 
     if (opcode == 0x006Fu) {
-        /* VDI opcode 111 (vst_unload_fonts). No outputs. */
+        /* VDI opcode 111 = vr_recfl (fill rectangle). No outputs. */
         v86_store_u16(ctrl_lin + 4u, 0u);
         v86_store_u16(ctrl_lin + 8u, 0u);
         frame->reserved[0] &= 0xFFFF0000u;
