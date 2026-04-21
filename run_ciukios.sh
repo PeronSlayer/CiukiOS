@@ -313,15 +313,12 @@ if [[ "$INCLUDE_OPENGEM" == "1" ]]; then
         fi
 
         # GEM.EXE opens DESKTOP.INF and other GEMSYS assets using absolute DOS
-        # paths like C:\GEMAPPS\GEMSYS\DESKTOP.INF. The v86 path canonicalizer
-        # strips the drive letter and treats the result as FAT-root-relative,
-        # so the whole GEMAPPS/ subtree must be reachable at ::GEMAPPS/. Mirror
-        # the OPENGEM/GEMAPPS tree there (symmetric to the ::GEMBOOT/ mirror).
-        if [[ -d "$OPENGEM_RUNTIME_DIR/GEMAPPS" ]]; then
-            mmd -i "$IMAGE" ::GEMAPPS 2>/dev/null || true
-            mcopy -s -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS"/* ::GEMAPPS/ 2>/dev/null || true
-            echo "[CiukiOS] OpenGEM GEMAPPS tree staged: ::GEMAPPS/"
-        fi
+        # paths like C:\GEMAPPS\GEMSYS\DESKTOP.INF. These are remapped by the
+        # v86 path canonicalizer (see v86_dos_path_to_canonical) to the real
+        # staged location under /FREEDOS/OPENGEM/GEMAPPS/, so the tree is
+        # already reachable via the recursive OPENGEM copy above. No extra
+        # root-level mirror is required (and adding one regresses GEMVDI's
+        # driver-probe findfirst loop at /).
 
         OPENGEM_INCLUDED=1
         echo "[CiukiOS] OpenGEM GUI payload copied from: $OPENGEM_RUNTIME_DIR"

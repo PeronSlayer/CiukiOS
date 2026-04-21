@@ -1822,6 +1822,48 @@ static int v86_dos_path_to_canonical(const char *in, char *out, uint32_t out_siz
         return 0;
     }
 
+    /* OpenGEM DOS-side references C:\GEMAPPS\... for desktop runtime
+     * files (DESKTOP.INF etc). The actual FAT image keeps that tree
+     * under /FREEDOS/OPENGEM/GEMAPPS/ to avoid polluting the root
+     * directory. Rewrite the canonical prefix here so DOS absolute
+     * paths resolve to the real staged location without touching the
+     * FAT root layout (which the v86 guest probes via findfirst). */
+    {
+        static const char kGemappsAlias[]  = "/GEMAPPS";
+        static const char kGemappsTarget[] = "/FREEDOS/OPENGEM/GEMAPPS";
+        uint32_t alias_len  = (uint32_t)(sizeof(kGemappsAlias)  - 1u);
+        uint32_t target_len = (uint32_t)(sizeof(kGemappsTarget) - 1u);
+        int matched = 0;
+        uint32_t i;
+
+        for (i = 0u; i < alias_len; ++i) {
+            if (tmp[i] != kGemappsAlias[i]) {
+                break;
+            }
+        }
+        if (i == alias_len && (tmp[alias_len] == '\0' || tmp[alias_len] == '/')) {
+            matched = 1;
+        }
+
+        if (matched) {
+            char remapped[V86_PATH_MAX];
+            uint32_t ri = 0u;
+            uint32_t k;
+
+            for (k = 0u; k < target_len && (ri + 1u) < (uint32_t)sizeof(remapped); ++k) {
+                remapped[ri++] = kGemappsTarget[k];
+            }
+            for (k = alias_len; tmp[k] != '\0' && (ri + 1u) < (uint32_t)sizeof(remapped); ++k) {
+                remapped[ri++] = tmp[k];
+            }
+            remapped[ri] = '\0';
+
+            for (k = 0u; k < (uint32_t)sizeof(tmp) && k <= ri; ++k) {
+                tmp[k] = remapped[k];
+            }
+        }
+    }
+
     return v86_build_canonical_path(tmp, s_v86_cwd, out, out_size);
 }
 
