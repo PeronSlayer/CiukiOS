@@ -1337,8 +1337,19 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
         if (!EFI_ERROR(gop_status) && gop && gop->Mode && gop->Mode->Info) {
             /* --- GOP mode catalog + policyv2 scoring engine --- */
             {
-                /* Resolution class table for scoring (P1-V1) */
+                /* Resolution class table for scoring (P1-V1).
+                 * Lower rank = higher score (60 - rank*8 points).
+                 * 800x600 is pinned at rank 0 so it wins the default
+                 * selection: the CiukiOS v86 monitor (OpenGEM, future
+                 * Win1/2/3) is cooperative and very sensitive to
+                 * host display back-pressure (UEFI GOP present loop,
+                 * SDL/GL blit throughput); large framebuffers like
+                 * FHD have been observed to stall the guest mid-boot
+                 * on interactive runs. 800x600 keeps the present loop
+                 * cheap while remaining usable for the DOS/GEM stack.
+                 * Override via VMODE.CFG or CMOS boot config. */
                 static const struct { UINT32 w; UINT32 h; UINT32 rank; const CHAR16 *name; } res_class[] = {
+                    { 800,  600, 0, L"SVGA"},
                     {1024,  768, 5, L"baseline"},
                     {1280,  720, 4, L"HD720"},
                     {1280,  800, 4, L"HD800"},
