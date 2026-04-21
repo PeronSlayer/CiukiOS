@@ -983,7 +983,6 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         opcode == 0x0071u || /* vsf_interior */
         opcode == 0x0072u || /* vsf_style */
         opcode == 0x0073u || /* vsf_color */
-        opcode == 0x0076u || /* vsf_perimeter or vq_chcells - state */
         opcode == 0x007Au || /* vswr_mode */
         opcode == 0x007Cu || /* vsl_udsty */
         opcode == 0x007Eu) { /* vsl_ends  */
@@ -1065,8 +1064,8 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
-    if (opcode == 0x0080u) {
-        /* vex_timv — exchange timer-tick vector.
+    if (opcode == 0x0076u) {
+        /* vex_timv (VDI opcode 118 = 0x76) — exchange timer-tick vector.
          * Input:  contrl[7..8] = new handler far ptr (ctrl bytes 14..17).
          *         (0:0 means uninstall.)
          * Output: contrl[9..10] = old handler far ptr (ctrl bytes 18..21).
@@ -2133,7 +2132,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
              * timer tick into the guest so GEM's tikcod decrements its
              * wait counters and drains queued fork work. Without this,
              * GEM's desktop event loop busy-polls forever. */
-            if (s_v86_last_ef_opcode != 0x0080u) {
+            if (s_v86_last_ef_opcode != 0x0076u) {
                 if (v86_inject_timer_tick(frame)) {
                     serial_write("[v86] tick inject -> 0x");
                     serial_write_hex64((uint64_t)s_v86_timer_seg);
