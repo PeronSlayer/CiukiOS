@@ -475,12 +475,15 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     if (opcode == 0x006Eu) {
         /* VDI opcode 110 (vst_load_fonts - load user fonts from disk).
          * outputs: intout[0] = number of fonts loaded.
-         * Returning a non-zero count makes GEM loop querying per-font
-         * info (vqt_name 130) which we don't support. Return 0 so GEM
-         * proceeds with only the built-in system font. */
+         * GEM.EXE calls this in a loop after bootstrap; static counter
+         * returns 1 first call then 0 on subsequent calls so the caller
+         * stops re-requesting a font load batch. */
+        static unsigned char s_vst_load_fonts_first = 1u;
+        unsigned short nfonts = s_vst_load_fonts_first ? 1u : 0u;
+        s_vst_load_fonts_first = 0u;
         v86_store_u16(ctrl_lin + 4u, 0u);  /* n_ptsout */
         v86_store_u16(ctrl_lin + 8u, 1u);  /* n_intout */
-        v86_store_u16(intout_lin + 0u, 0u); /* 0 fonts loaded */
+        v86_store_u16(intout_lin + 0u, nfonts);
         frame->reserved[0] &= 0xFFFF0000u;
         frame->eflags &= ~0x00000001u;
         return 1;
