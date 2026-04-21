@@ -129,6 +129,12 @@ static uint32_t v86_gem_palette(uint16_t idx)
     return pal[idx & 0x0Fu];
 }
 
+static uint16_t v86_color_8_to_1000(uint32_t c8)
+{
+    if (c8 > 255u) c8 = 255u;
+    return (uint16_t)((c8 * 1000u + 127u) / 255u);
+}
+
 /* 8x8 glyph lookup sharing the console font in stage2/src/video.c.
  * Declared here as extern to avoid duplicating the glyph table. */
 extern const u8 g_font[95][8];
@@ -935,6 +941,70 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
+    if (opcode == 0x0003u) {
+        /* VDI opcode 3 = v_clrwk (clear workstation). GEM calls this
+         * whenever it wants to wipe the drawing surface before a full
+         * redraw (e.g. desktop paint, window refresh). No inputs beyond
+         * the workstation handle; no outputs. Paint the full GOP
+         * framebuffer with the classic GEM desktop light-gray, then
+         * present so the user can observe the redraw cycle. */
+        if (video_ready()) {
+            uint32_t w = video_width_px();
+            uint32_t h = video_height_px();
+            video_fill_rect(0u, 0u, w, h, 0x00C0C0C0u);
+            video_present_dirty_immediate();
+        }
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0007u) {
+        /* VDI opcode 7 = v_pmarker (polymarker). ptsin[0..2n-1] pairs,
+         * n_ptsin in ctrl[1]. Draw a small 3x3 plus-sign at each point
+         * using the current line color. */
+        uint16_t n_pts = v86_load_u16(ctrl_lin + 2u);
+        uint32_t rgb = v86_gem_palette(s_vdi_line_color);
+        uint16_t i_pt;
+        if (n_pts > 256u) n_pts = 256u;
+        for (i_pt = 0u; i_pt < n_pts; ++i_pt) {
+            int32_t px = (int16_t)v86_load_u16(ptsin_lin + (uint32_t)i_pt * 4u + 0u);
+            int32_t py = (int16_t)v86_load_u16(ptsin_lin + (uint32_t)i_pt * 4u + 2u);
+            v86_vdi_draw_pixel_clipped(px,     py,     rgb);
+            v86_vdi_draw_pixel_clipped(px - 1, py,     rgb);
+            v86_vdi_draw_pixel_clipped(px + 1, py,     rgb);
+            v86_vdi_draw_pixel_clipped(px,     py - 1, rgb);
+            v86_vdi_draw_pixel_clipped(px,     py + 1, rgb);
+        }
+        v86_vdi_tick_present();
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0071u) {
+        /* VDI opcode 113 = vqt_width (query char cell width + deltas).
+         * Input: intin[0] = character (ASCII).
+         * Output: intout[0] = width, ptsout[0] = (cell_w, left_delta),
+         *         ptsout[1] = (right_delta, 0).
+         * We report a fixed 8px cell for all chars with zero side
+         * bearing, matching our 8x16 glyph renderer. */
+        v86_store_u16(intout_lin + 0u, 8u);   /* char width */
+        v86_store_u16(ptsout_lin + 0u, 8u);   /* cell width */
+        v86_store_u16(ptsout_lin + 2u, 0u);   /* left delta */
+        v86_store_u16(ptsout_lin + 4u, 0u);   /* right delta */
+        v86_store_u16(ptsout_lin + 6u, 0u);
+        v86_store_u16(ctrl_lin + 4u, 2u);
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
     if (opcode == 0x0066u) {
         /* VDI opcode 102 = vq_extnd (extended inquire).
          * Outputs: 45 intout words mirroring v_opnwk, plus 12 extended
@@ -1145,6 +1215,23 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
+    if (opcode == 0x007Eu || opcode == 0x007Fu) {
+        /* VDI opcode 126 = vex_motv (install mouse motion handler),
+         * 127 = vex_curv (install cursor motion / redraw handler).
+         * Same ABI as vex_timv: ctrl[7..8] = new far ptr, ctrl[9..10] =
+         * returned old far ptr. If we don't return a valid IRET stub,
+         * GEM's handler chains into a null/self pointer and the guest
+         * loops or faults. Reuse the tiksav IRET stub. */
+        v86_ensure_tiksav_stub();
+        v86_store_u16(ctrl_lin + 18u, V86_TIKSAV_OFF);
+        v86_store_u16(ctrl_lin + 20u, V86_TIKSAV_SEG);
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
     if (opcode == 0x0081u) {
         /* vs_clip (VDI opcode 129). intin[0]=enable flag,
          * ptsin[0..1]=(x1,y1), ptsin[2..3]=(x2,y2). No outputs. */
@@ -1184,6 +1271,26 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
          * intin[1..3]=RGB in 0..1000. No return values; just accept. */
         v86_store_u16(ctrl_lin + 4u, 0u);
         v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x007Au) {
+        /* vq_color — query color representation.
+         * intin[0]=palette index, intin[1]=flag (ignored here).
+         * intout[0]=index, intout[1..3]=RGB in 0..1000 range. */
+        uint16_t idx = v86_load_u16(intin_lin + 0u) & 0x0Fu;
+        uint32_t rgb = v86_gem_palette(idx);
+        uint16_t r = v86_color_8_to_1000((rgb >> 16) & 0xFFu);
+        uint16_t g = v86_color_8_to_1000((rgb >> 8) & 0xFFu);
+        uint16_t b = v86_color_8_to_1000(rgb & 0xFFu);
+        v86_store_u16(intout_lin + 0u, idx);
+        v86_store_u16(intout_lin + 2u, r);
+        v86_store_u16(intout_lin + 4u, g);
+        v86_store_u16(intout_lin + 6u, b);
+        v86_store_u16(ctrl_lin + 4u, 0u); /* n_ptsout */
+        v86_store_u16(ctrl_lin + 8u, 4u); /* n_intout */
         frame->reserved[0] &= 0xFFFF0000u;
         frame->eflags &= ~0x00000001u;
         return 1;
@@ -1449,9 +1556,12 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
-    if (opcode == 0x006Du || opcode == 0x0079u || opcode == 0x007Fu) {
+    if (opcode == 0x006Du || opcode == 0x0079u) {
         /* VDI opcode 109 = vro_cpyfm (opaque raster copy), 121 = vrt_cpyfm
-         * (transparent). 0x7F kept for legacy callers. When destination
+         * (transparent). NOTE: op 127 (0x7F) is vex_curv (install cursor
+         * motion vector), NOT a raster copy — routing it here used to
+         * corrupt the MFDB read because ctrl[14..21] contain the new
+         * handler far ptr, not source/dest bitmap addresses. When destination
          * MFDB is the screen (fd_addr == 0:0) we decode the 4-plane,
          * word-interleaved 16-color source bitmap to RGB via the GEM
          * palette and push it into the GOP framebuffer. Raster→raster
@@ -2240,6 +2350,36 @@ static void v86_mem_reset(void)
     s_v86_mem_next_seg = V86_MEM_FIRST_SEG;
 }
 
+static void v86_mem_recompute_next_seg(void)
+{
+    uint32_t top = (uint32_t)V86_MEM_FIRST_SEG;
+
+    for (uint32_t i = 0u; i < V86_MEM_MAX_BLOCKS; ++i) {
+        if (s_v86_mem_blocks[i].used) {
+            uint32_t end = (uint32_t)s_v86_mem_blocks[i].seg +
+                           (uint32_t)s_v86_mem_blocks[i].paras;
+            if (end > top) {
+                top = end;
+            }
+        }
+    }
+
+    if (top > (uint32_t)V86_MEM_TOP_SEG) {
+        top = (uint32_t)V86_MEM_TOP_SEG;
+    }
+    s_v86_mem_next_seg = (uint16_t)top;
+}
+
+static v86_mem_block_t *v86_mem_find_block(uint16_t seg)
+{
+    for (uint32_t i = 0u; i < V86_MEM_MAX_BLOCKS; ++i) {
+        if (s_v86_mem_blocks[i].used && s_v86_mem_blocks[i].seg == seg) {
+            return &s_v86_mem_blocks[i];
+        }
+    }
+    return (v86_mem_block_t *)0;
+}
+
 static int v86_mem_alloc(uint16_t paras, uint16_t *seg_out, uint16_t *max_out)
 {
     uint32_t avail;
@@ -2508,15 +2648,16 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     v86_bda_init_once();
     v86_bda_tick_bump();
 
-    /* Dispatch logger is throttled to avoid saturating stdio-based
-     * serial sinks (tee to terminal) which can slow the guest to a
-     * crawl. First 32 dispatches get a full register dump for early
-     * bring-up visibility; afterwards only a compact one-liner is
-     * emitted. Set s_v86_dispatch_verbose=1 at runtime to re-enable. */
+    /* Dispatch logger. First N dispatches get a full register dump for
+     * early bring-up visibility; afterwards a compact one-liner (vec+ah)
+     * is emitted every call so we can still see the guest making progress
+     * (e.g. GEM event-loop polling) without saturating the sink. Raise
+     * VERBOSE_CAP to 0 to disable entirely. */
     {
         static uint32_t s_v86_dispatch_count = 0u;
         static uint8_t  s_v86_dispatch_verbose = 1u;
-        if (s_v86_dispatch_verbose && s_v86_dispatch_count < 32u) {
+        const uint32_t VERBOSE_CAP = 128u;
+        if (s_v86_dispatch_verbose && s_v86_dispatch_count < VERBOSE_CAP) {
             serial_write("[v86] dispatch vec=0x");
             serial_write_hex64((uint64_t)vector);
             serial_write(" eax=0x");
@@ -2536,6 +2677,20 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
             serial_write(" es=0x");
             serial_write_hex64((uint64_t)frame->es);
             serial_write("\n");
+        } else if (s_v86_dispatch_verbose) {
+            /* Terse one-liner after the verbose window so the loop
+             * remains observable. Also rate-limited every 64 calls to
+             * avoid saturating the sink on tight polling loops. */
+            if ((s_v86_dispatch_count & 0x3Fu) == 0u) {
+                uint8_t dah = (uint8_t)((frame->reserved[0] >> 8) & 0xFFu);
+                serial_write("[v86] tick vec=0x");
+                serial_write_hex64((uint64_t)vector);
+                serial_write(" ah=0x");
+                serial_write_hex64((uint64_t)dah);
+                serial_write(" count=0x");
+                serial_write_hex64((uint64_t)s_v86_dispatch_count);
+                serial_write("\n");
+            }
         }
         s_v86_dispatch_count += 1u;
     }
@@ -2546,7 +2701,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
 
     if (vector != 0x21u) {
         static uint32_t s_v86_softint_count = 0u;
-        uint8_t trace = (s_v86_softint_count < 1024u) ? 1u : 0u;
+        uint8_t trace = (s_v86_softint_count < 256u) ? 1u : 0u;
         s_v86_softint_count += 1u;
         if (vector == 0x10u && v86_try_emulate_int_10(frame)) {
             if (trace) {
@@ -2622,7 +2777,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
 
     {
         static uint32_t s_v86_int21_count = 0u;
-        if (s_v86_int21_count < 1024u) {
+        if (s_v86_int21_count < 256u) {
             serial_write("[v86] int21 ah=0x");
             serial_write_hex64((uint64_t)ah);
             serial_write(" al=0x");
@@ -2786,13 +2941,91 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         return V86_DISPATCH_CONT;
     }
 
-    case 0x49u: /* Free memory: succeed silently */
-        V86_CF_CLEAR();
-        return V86_DISPATCH_CONT;
+    case 0x49u: { /* Free memory block: ES=segment */
+        uint16_t seg = frame->es;
+        v86_mem_block_t *blk = v86_mem_find_block(seg);
 
-    case 0x4Au: /* Resize memory block: succeed silently */
+        /* DOS programs may free low-memory PSP/MCB-owned blocks that are
+         * outside our synthetic high-memory heap arena. Treat as success. */
+        if (seg < V86_MEM_FIRST_SEG) {
+            V86_CF_CLEAR();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (!blk) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0009u; /* invalid MCB */
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        blk->used = 0u;
+        blk->seg = 0u;
+        blk->paras = 0u;
+        v86_mem_recompute_next_seg();
         V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
+    }
+
+    case 0x4Au: { /* Resize memory block: ES=segment, BX=new size paras */
+        uint16_t seg = frame->es;
+        uint16_t req = (uint16_t)(frame->reserved[1] & 0xFFFFu);
+        v86_mem_block_t *blk = v86_mem_find_block(seg);
+        uint32_t max_paras = 0u;
+
+        /* Some GEM paths arrive here with BX=0 and request in CX due the
+         * same register propagation issue seen in AH=48. */
+        if (req == 0u) {
+            req = (uint16_t)(frame->reserved[2] & 0xFFFFu);
+        }
+
+        /* Low-memory PSP/MCB resize requests are outside our synthetic
+         * heap arena; accept to match DOS startup expectations. */
+        if (seg < V86_MEM_FIRST_SEG) {
+            V86_CF_CLEAR();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (!blk) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0009u;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (req == 0u) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0008u;
+            frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | (uint32_t)blk->paras;
+            V86_CF_SET();
+            return V86_DISPATCH_CONT;
+        }
+
+        if (req <= blk->paras) {
+            blk->paras = req;
+            v86_mem_recompute_next_seg();
+            V86_CF_CLEAR();
+            return V86_DISPATCH_CONT;
+        }
+
+        /* Grow only when this block touches the heap top. */
+        if ((uint32_t)blk->seg + (uint32_t)blk->paras == (uint32_t)s_v86_mem_next_seg) {
+            max_paras = (uint32_t)V86_MEM_TOP_SEG - (uint32_t)blk->seg;
+            if (max_paras > 0xFFFFu) {
+                max_paras = 0xFFFFu;
+            }
+            if ((uint32_t)req <= max_paras) {
+                blk->paras = req;
+                s_v86_mem_next_seg = (uint16_t)((uint32_t)blk->seg + (uint32_t)req);
+                V86_CF_CLEAR();
+                return V86_DISPATCH_CONT;
+            }
+        } else {
+            max_paras = (uint32_t)blk->paras;
+        }
+
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0008u; /* insufficient memory */
+        frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | (uint32_t)((uint16_t)max_paras);
+        V86_CF_SET();
+        return V86_DISPATCH_CONT;
+    }
 
     case 0x4Bu: { /* EXEC: DS:DX path, ES:BX parameter block */
         uint8_t al = (uint8_t)(eax & 0x00FFu);
@@ -3028,29 +3261,30 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         v86_file_handle_t *h;
         uint32_t available;
         uint32_t to_read;
+        static uint32_t s_v86_read3f_log_count = 0u;
+        uint8_t log_read = 0u;
 
-        serial_write("[v86] int21/3F read handle=");
-        serial_write_hex64((uint64_t)handle);
-        serial_write(" count=");
-        serial_write_hex64((uint64_t)count);
-        {
-            uint32_t ip_lin = ((uint32_t)frame->cs << 4) + (uint32_t)frame->ip;
-            const volatile uint8_t *ibytes = (const volatile uint8_t *)(uint64_t)ip_lin;
-            serial_write(" bytes@ip-8..+2=");
-            for (int bi = -8; bi <= 2; ++bi) {
-                serial_write_hex64((uint64_t)ibytes[bi] & 0xFFu);
-                serial_write(" ");
-            }
+        if (s_v86_read3f_log_count < 48u || (s_v86_read3f_log_count & 0x7Fu) == 0u) {
+            log_read = 1u;
+            serial_write("[v86] int21/3F read handle=");
+            serial_write_hex64((uint64_t)handle);
+            serial_write(" count=");
+            serial_write_hex64((uint64_t)count);
+            serial_write(" ds:dx=");
+            serial_write_hex64((uint64_t)buf_lin);
+            serial_write("\n");
         }
-        serial_write("\n");
+        s_v86_read3f_log_count += 1u;
 
         /* GEM BX-propagation workaround - see v86_resolve_bx0_handle. */
         if (handle == 0u) {
             uint16_t resolved = v86_resolve_bx0_handle(0u);
             if (resolved != 0u && count != 0u) {
-                serial_write("[v86] int21/3F bx=0 redirect -> handle=");
-                serial_write_hex64((uint64_t)resolved);
-                serial_write("\n");
+                if (log_read) {
+                    serial_write("[v86] int21/3F bx=0 redirect -> handle=");
+                    serial_write_hex64((uint64_t)resolved);
+                    serial_write("\n");
+                }
                 handle = resolved;
             } else {
                 frame->reserved[0] = (eax & 0xFFFF0000u);
@@ -3075,6 +3309,13 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         if (h->pos >= h->size || count == 0u) {
             frame->reserved[0] = (eax & 0xFFFF0000u);
             V86_CF_CLEAR();
+            if (log_read) {
+                serial_write("[v86] int21/3F eof-or-zero pos=");
+                serial_write_hex64((uint64_t)h->pos);
+                serial_write(" size=");
+                serial_write_hex64((uint64_t)h->size);
+                serial_write("\n");
+            }
             return V86_DISPATCH_CONT;
         }
 
@@ -3088,6 +3329,15 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         h->pos += to_read;
         frame->reserved[0] = (eax & 0xFFFF0000u) | (to_read & 0xFFFFu);
         V86_CF_CLEAR();
+        if (log_read) {
+            serial_write("[v86] int21/3F done bytes=");
+            serial_write_hex64((uint64_t)to_read);
+            serial_write(" pos=");
+            serial_write_hex64((uint64_t)h->pos);
+            serial_write(" size=");
+            serial_write_hex64((uint64_t)h->size);
+            serial_write("\n");
+        }
         return V86_DISPATCH_CONT;
     }
 

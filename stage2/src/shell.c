@@ -9377,6 +9377,15 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
         for (;;) {
             static u32 s_gem_loop_count = 0u;
+            if (s_gem_loop_count < 128u) {
+                serial_write("[gem] v86_enter #0x");
+                serial_write_hex64((u64)s_gem_loop_count);
+                serial_write(" cs:ip=0x");
+                serial_write_hex64(((u64)frame.cs << 16) | frame.ip);
+                serial_write(" ss:sp=0x");
+                serial_write_hex64(((u64)frame.ss << 16) | frame.sp);
+                serial_write("\n");
+            }
             if (legacy_v86_enter(&frame, &exit_state) != LEGACY_V86_OK) {
                 serial_write(" <end>\n");
                 serial_write("[gem] ERROR: v86_enter failed\n");
@@ -9385,9 +9394,15 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
                 shell_gem_disarm_path();
                 return;
             }
-            if (s_gem_loop_count < 1024u) {
+            if (s_gem_loop_count < 128u) {
                 serial_write(" <end> reason=0x");
                 serial_write_hex64((u64)exit_state.reason);
+                serial_write(" vec=0x");
+                serial_write_hex64((u64)exit_state.int_vector);
+                serial_write(" fault=0x");
+                serial_write_hex64((u64)exit_state.fault_code);
+                serial_write(" cs:ip=0x");
+                serial_write_hex64(((u64)exit_state.frame.cs << 16) | exit_state.frame.ip);
                 serial_write("\n");
             }
 
@@ -9407,7 +9422,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             frame.reserved[4] = exit_state.frame.reserved[4];
             frame.reserved[5] = exit_state.frame.reserved[5];
             if (exit_state.reason == LEGACY_V86_EXIT_GP_INT) {
-                if (s_gem_loop_count < 1024u) {
+                if (s_gem_loop_count < 128u) {
                     serial_write("[gem] dispatch int=0x");
                     serial_write_hex64((u64)exit_state.int_vector);
                     serial_write(" cs:ip=0x");
