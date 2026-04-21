@@ -52,9 +52,15 @@ typedef enum {
     V86_DISPATCH_CONT,
     V86_DISPATCH_EXIT_OK,
     V86_DISPATCH_EXIT_ERR,
+    V86_DISPATCH_EXEC_REQUEST,
 } v86_dispatch_result_t;
 
 v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame);
+
+int  v86_dispatch_get_exec_path(char *out, uint32_t out_size);
+int  v86_dispatch_get_exec_tail(char *out, uint32_t out_size);
+uint16_t v86_dispatch_get_exec_env_seg(void);
+void v86_dispatch_clear_exec_path(void);
 
 int  v86_dispatch_arm(uint32_t magic);
 void v86_dispatch_disarm(void);

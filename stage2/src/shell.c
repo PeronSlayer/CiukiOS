@@ -4556,6 +4556,122 @@ static void shell_gem_write_exit_reason(legacy_v86_exit_reason_t reason, u32 fau
     serial_write("\n");
 }
 
+static int shell_gem_load_mz_image(const char *path, const char *exec_tail, u16 env_seg, u16 load_seg, legacy_v86_frame_t *out_frame) {
+    dos_mz_info_t parsed_info;
+    dos_mz_info_t mz_info;
+    u32 file_size = 0U;
+    u32 image_size = 0U;
+    u32 reloc_applied = 0U;
+    const u16 psp_seg = (u16)(load_seg - 0x0010u);
+    u8 *psp_base = (u8 *)(uintptr_t)((u32)psp_seg * 16U);
+    u8 *image_base = (u8 *)(uintptr_t)((u32)load_seg * 16U);
+
+    if (!path || !out_frame || load_seg < 0x0020u) {
+        return 0;
+    }
+
+    if (!fat_read_file(path, g_shell_file_buffer, SHELL_FILE_BUFFER_SIZE, &file_size)) {
+        video_write("[gem] FAIL: fat read\n");
+        serial_write("[gem] FAIL fat_read\n");
+        return 0;
+    }
+
+    serial_write("[gem] read size=0x");
+    serial_write_hex64((u64)file_size);
+    serial_write("\n");
+
+    if (!dos_mz_parse(g_shell_file_buffer, file_size, &parsed_info)) {
+        video_write("[gem] FAIL: not MZ\n");
+        serial_write("[gem] FAIL not-mz\n");
+        return 0;
+    }
+
+    if (parsed_info.runtime_required_bytes == 0U ||
+        parsed_info.runtime_required_bytes > 0x80000U ||
+        parsed_info.runtime_required_bytes > SHELL_FILE_BUFFER_SIZE) {
+        video_write("[gem] FAIL: body too large\n");
+        serial_write("[gem] FAIL body-size\n");
+        return 0;
+    }
+
+    if (!dos_mz_build_loaded_image(
+            g_shell_file_buffer,
+            file_size,
+            load_seg,
+            &mz_info,
+            &image_size,
+            &reloc_applied
+        )) {
+        video_write("[gem] FAIL: invalid MZ image\n");
+        serial_write("[gem] FAIL mz-build\n");
+        return 0;
+    }
+
+    serial_write("[gem] mz header=0x");
+    serial_write_hex64((u64)mz_info.header_size_bytes);
+    serial_write(" body=0x");
+    serial_write_hex64((u64)image_size);
+    serial_write(" cs:ip=0x");
+    serial_write_hex64(((u64)mz_info.cs << 16) | mz_info.ip);
+    serial_write(" ss:sp=0x");
+    serial_write_hex64(((u64)mz_info.ss << 16) | mz_info.sp);
+    serial_write("\n");
+
+    for (u32 i = 0U; i < 0x100U; i++) {
+        psp_base[i] = 0U;
+    }
+    psp_base[0x00] = 0xCDU;
+    psp_base[0x01] = 0x20U;
+    psp_base[0x2Cu] = (u8)(env_seg & 0x00FFu);
+    psp_base[0x2Du] = (u8)((env_seg >> 8) & 0x00FFu);
+
+    {
+        uint32_t tail_len = 0u;
+        if (exec_tail) {
+            while (exec_tail[tail_len] != '\0' && tail_len < SHELL_RUNTIME_TAIL_MAX) {
+                psp_base[0x81u + tail_len] = (u8)exec_tail[tail_len];
+                tail_len++;
+            }
+        }
+        psp_base[0x80u] = (u8)tail_len;
+        psp_base[0x81u + tail_len] = 0x0Du;
+    }
+
+    for (u32 i = 0U; i < mz_info.runtime_required_bytes; i++) {
+        image_base[i] = g_shell_file_buffer[i];
+    }
+
+    serial_write("[gem] reloc applied count=0x");
+    serial_write_hex64((u64)reloc_applied);
+    serial_write("\n");
+
+    out_frame->cs = (u16)(mz_info.cs + load_seg);
+    out_frame->ip = mz_info.ip;
+    out_frame->ss = (u16)(mz_info.ss + load_seg);
+    out_frame->sp = mz_info.sp;
+    out_frame->ds = psp_seg;
+    out_frame->es = psp_seg;
+    out_frame->fs = 0U;
+    out_frame->gs = 0U;
+    out_frame->eflags = 0x00000202U;
+    out_frame->reserved[0] = 0U;
+    out_frame->reserved[1] = 0U;
+    out_frame->reserved[2] = 0U;
+    out_frame->reserved[3] = 0U;
+
+    serial_write("[gem] v86 entry cs=0x");
+    serial_write_hex64((u64)out_frame->cs);
+    serial_write(" ip=0x");
+    serial_write_hex64((u64)out_frame->ip);
+    serial_write(" ss=0x");
+    serial_write_hex64((u64)out_frame->ss);
+    serial_write(" sp=0x");
+    serial_write_hex64((u64)out_frame->sp);
+    serial_write("\n");
+
+    return 1;
+}
+
 static void shell_mstest_trampoline_smoke(void) {
     shell_mstest_trampoline_user_t user;
     int rc;
@@ -9144,8 +9260,9 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
          *
          * Optional arg: `gem vdi` (or `gem gemvdi`) launches GEMVDI.EXE
          * instead of GEM.EXE so we can observe the VDI-first entry
-         * point used by GEM.BAT. This is diagnostic: real chaining
-         * (GEMVDI -> TSR -> GEM.EXE) is future work.
+         * point used by GEM.BAT. The first chain step is now live:
+         * guest INT 21h AH=4Bh/AL=00 requests are handed off to host,
+         * reloaded as a fresh MZ image, then resumed in the same loop.
          *
          * This command NEVER RETURNS on success. On failure (validation)
          * all arm gates are cleaned up. */
@@ -9192,101 +9309,14 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         }
         serial_write("[gem] identity-map 0..1MB ok\n");
 
-        /* Step 2: read GEM.EXE. */
-        u32 file_size = 0;
-        if (!fat_read_file(gem_path, g_shell_file_buffer,
-                           SHELL_FILE_BUFFER_SIZE, &file_size)) {
-            video_write("[gem] FAIL: fat read\n");
-            serial_write("[gem] FAIL fat_read\n");
+        /* Step 2: stage first MZ image into v86 memory and build entry frame. */
+        legacy_v86_frame_t frame;
+        legacy_v86_exit_t exit_state;
+        v86_dispatch_result_t dispatch_result;
+        char exec_path[SHELL_PATH_MAX];
+        if (!shell_gem_load_mz_image(gem_path, "", 0u, 0x1010u, &frame)) {
             return;
         }
-        serial_write("[gem] read size=0x");
-        serial_write_hex64((u64)file_size);
-        serial_write("\n");
-        if (file_size < 64 || g_shell_file_buffer[0] != 'M' || g_shell_file_buffer[1] != 'Z') {
-            video_write("[gem] FAIL: not MZ\n");
-            serial_write("[gem] FAIL not-mz\n");
-            return;
-        }
-
-        /* Step 3: parse MZ header (raw little-endian reads). */
-        u8 *mz = g_shell_file_buffer;
-        u16 e_cblp     = (u16)(mz[0x02] | (mz[0x03] << 8));
-        u16 e_cp       = (u16)(mz[0x04] | (mz[0x05] << 8));
-        u16 e_crlc     = (u16)(mz[0x06] | (mz[0x07] << 8));
-        u16 e_cparhdr  = (u16)(mz[0x08] | (mz[0x09] << 8));
-        u16 e_ss       = (u16)(mz[0x0E] | (mz[0x0F] << 8));
-        u16 e_sp       = (u16)(mz[0x10] | (mz[0x11] << 8));
-        u16 e_ip       = (u16)(mz[0x14] | (mz[0x15] << 8));
-        u16 e_cs       = (u16)(mz[0x16] | (mz[0x17] << 8));
-        u16 e_lfarlc   = (u16)(mz[0x18] | (mz[0x19] << 8));
-
-        u32 header_bytes = (u32)e_cparhdr * 16U;
-        u32 total_bytes  = (e_cblp == 0) ? ((u32)e_cp * 512U)
-                                         : (((u32)e_cp - 1U) * 512U + (u32)e_cblp);
-        u32 body_bytes   = (total_bytes > header_bytes) ? (total_bytes - header_bytes) : 0;
-
-        serial_write("[gem] mz header=0x"); serial_write_hex64((u64)header_bytes);
-        serial_write(" body=0x"); serial_write_hex64((u64)body_bytes);
-        serial_write(" cs:ip=0x"); serial_write_hex64(((u64)e_cs << 16) | e_ip);
-        serial_write(" ss:sp=0x"); serial_write_hex64(((u64)e_ss << 16) | e_sp);
-        serial_write("\n");
-
-        if (body_bytes == 0 || body_bytes > 0x80000U) {
-            video_write("[gem] FAIL: body too large\n");
-            serial_write("[gem] FAIL body-size\n");
-            return;
-        }
-
-        /* Step 4: layout in v86 memory.
-         *   PSP   at seg 0x1000 (linear 0x10000)
-         *   IMAGE at seg 0x1010 (linear 0x10100)
-         * PSP size = 0x100 bytes = 0x10 paragraphs. */
-        const u16 psp_seg   = 0x1000;
-        const u16 load_seg  = 0x1010;
-        u8 *psp_base   = (u8 *)(uintptr_t)((u32)psp_seg * 16U);
-        u8 *image_base = (u8 *)(uintptr_t)((u32)load_seg * 16U);
-
-        /* Clear PSP then write INT 20h terminator (CD 20). */
-        for (u32 i = 0; i < 0x100U; i++) psp_base[i] = 0;
-        psp_base[0x00] = 0xCD;
-        psp_base[0x01] = 0x20;
-
-        /* Copy image body. */
-        const u8 *body = g_shell_file_buffer + header_bytes;
-        for (u32 i = 0; i < body_bytes; i++) image_base[i] = body[i];
-
-        /* Step 5: apply relocations. Each reloc is (offset, segment):
-         * at linear (load_seg + seg)*16 + offset, add load_seg to the word. */
-        if (e_lfarlc + (u32)e_crlc * 4U > file_size) {
-            video_write("[gem] FAIL: reloc table out of file\n");
-            serial_write("[gem] FAIL reloc-oob\n");
-            return;
-        }
-        const u8 *rt = g_shell_file_buffer + e_lfarlc;
-        for (u32 r = 0; r < e_crlc; r++) {
-            u16 roff = (u16)(rt[r*4+0] | (rt[r*4+1] << 8));
-            u16 rseg = (u16)(rt[r*4+2] | (rt[r*4+3] << 8));
-            u8 *p = (u8 *)(uintptr_t)(((u32)load_seg + (u32)rseg) * 16U + (u32)roff);
-            u16 w = (u16)(p[0] | (p[1] << 8));
-            w = (u16)(w + load_seg);
-            p[0] = (u8)(w & 0xFF);
-            p[1] = (u8)((w >> 8) & 0xFF);
-        }
-        serial_write("[gem] reloc applied count=0x");
-        serial_write_hex64((u64)e_crlc);
-        serial_write("\n");
-
-        /* Step 6: compute entry CS:IP and stack SS:SP. */
-        u16 entry_cs = (u16)(e_cs + load_seg);
-        u16 entry_ip = e_ip;
-        u16 stack_ss = (u16)(e_ss + load_seg);
-        u16 stack_sp = e_sp;
-        serial_write("[gem] v86 entry cs=0x"); serial_write_hex64((u64)entry_cs);
-        serial_write(" ip=0x"); serial_write_hex64((u64)entry_ip);
-        serial_write(" ss=0x"); serial_write_hex64((u64)stack_ss);
-        serial_write(" sp=0x"); serial_write_hex64((u64)stack_sp);
-        serial_write("\n");
 
         /* Step 7: arm cascade 038 -> 044A -> 044B -> 044C. */
         if (vm86_gp_isr_install_arm(VM86_GP_ISR_INSTALL_ARM_MAGIC) != 1 ||
@@ -9329,24 +9359,6 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         }
         serial_write("[gem] 044C armed\n");
 
-        legacy_v86_frame_t frame;
-        legacy_v86_exit_t exit_state;
-        v86_dispatch_result_t dispatch_result;
-
-        frame.cs = entry_cs;
-        frame.ip = entry_ip;
-        frame.ss = stack_ss;
-        frame.sp = stack_sp;
-        frame.ds = psp_seg;
-        frame.es = psp_seg;
-        frame.fs = 0U;
-        frame.gs = 0U;
-        frame.eflags = 0x00000202u;
-        frame.reserved[0] = 0U;
-        frame.reserved[1] = 0U;
-        frame.reserved[2] = 0U;
-        frame.reserved[3] = 0U;
-
         video_write("[gem] entering legacy_v86 loop\n");
         serial_write("[gem] enter legacy_v86 loop\n");
         serial_write("[ms-trace] ");
@@ -9385,6 +9397,42 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
                 serial_write("\n");
                 dispatch_result = v86_dispatch_int(exit_state.int_vector, &frame);
                 if (dispatch_result == V86_DISPATCH_CONT) {
+                    continue;
+                }
+                if (dispatch_result == V86_DISPATCH_EXEC_REQUEST) {
+                    char exec_tail[SHELL_RUNTIME_TAIL_MAX + 1U];
+                    u16 exec_env_seg = 0u;
+
+                    if (!v86_dispatch_get_exec_path(exec_path, (u32)sizeof(exec_path))) {
+                        video_write("[gem] dispatch exec missing path\n");
+                        serial_write("[gem] dispatch exec path=missing\n");
+                        break;
+                    }
+
+                    (void)v86_dispatch_get_exec_tail(exec_tail, (u32)sizeof(exec_tail));
+                    exec_env_seg = v86_dispatch_get_exec_env_seg();
+
+                    serial_write("[gem] dispatch exec path=");
+                    serial_write(exec_path);
+                    serial_write("\n");
+
+                    serial_write("[gem] dispatch exec tail=\"");
+                    serial_write(exec_tail);
+                    serial_write("\"\n");
+
+                    serial_write("[gem] dispatch exec env=0x");
+                    serial_write_hex64((u64)exec_env_seg);
+                    serial_write("\n");
+
+                    if (!shell_gem_load_mz_image(exec_path, exec_tail, exec_env_seg, 0x3000u, &frame)) {
+                        video_write("[gem] dispatch exec failed\n");
+                        serial_write("[gem] dispatch exec handoff=err\n");
+                        v86_dispatch_clear_exec_path();
+                        break;
+                    }
+
+                    v86_dispatch_clear_exec_path();
+                    serial_write("[gem] dispatch exec handoff=ok\n");
                     continue;
                 }
                 if (dispatch_result == V86_DISPATCH_EXIT_OK) {

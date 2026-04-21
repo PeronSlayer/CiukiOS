@@ -282,6 +282,13 @@ legacy_v86_pm32_spurious:
     jmp     .L_spurious_spin
 
 legacy_v86_pm32_gp_handler:
+    /* Guest 16-bit code is free to modify BP, so EBP cannot be trusted
+     * across VM86 traps. Recompute our PIC base on every handler entry. */
+    call    .L_gp_base
+.L_gp_base:
+    popl    %ebp
+    subl    $(.L_gp_base - legacy_v86_pm32_body), %ebp
+
     /* Trap frame on entry from v86 for #GP with error code:
      * [esp+00] error code
      * [esp+04] eip

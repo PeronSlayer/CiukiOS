@@ -286,6 +286,29 @@ if [[ "$INCLUDE_OPENGEM" == "1" ]]; then
         # OpenGEM has a deep directory tree — use recursive mcopy
         mmd -i "$IMAGE" ::FREEDOS/OPENGEM 2>/dev/null || true
         mcopy -s -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR"/* ::FREEDOS/OPENGEM/ 2>/dev/null || true
+
+        # GEMVDI expects the selected SD*.* screen driver at the drive root.
+        if [[ -f "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/SDPSC9.VGA" ]]; then
+            mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/SDPSC9.VGA" ::SDPSC9.VGA
+            echo "[CiukiOS] OpenGEM root driver staged: ::SDPSC9.VGA"
+        fi
+
+        # GEMVDI also probes ..\GEMBOOT\GEM.EXE before chaining GEM proper.
+        if [[ -f "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.EXE" ]]; then
+            mmd -i "$IMAGE" ::GEMBOOT 2>/dev/null || true
+            mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.EXE" ::GEMBOOT/GEM.EXE
+            echo "[CiukiOS] OpenGEM chain target staged: ::GEMBOOT/GEM.EXE"
+        fi
+
+        # GEM.EXE probes C:\.RSC\GEM.RSC for desktop resources.
+        # Stage the GEMSYS .RSC payload under root/.RSC to satisfy that path.
+        if [[ -f "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.RSC" ]]; then
+            mmd -i "$IMAGE" ::.RSC 2>/dev/null || true
+            mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.RSC" ::.RSC/GEM.RSC 2>/dev/null || true
+            mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/DESKTOP.RSC" ::.RSC/DESKTOP.RSC 2>/dev/null || true
+            echo "[CiukiOS] OpenGEM resource staged: ::.RSC/GEM.RSC"
+        fi
+
         OPENGEM_INCLUDED=1
         echo "[CiukiOS] OpenGEM GUI payload copied from: $OPENGEM_RUNTIME_DIR"
     else
