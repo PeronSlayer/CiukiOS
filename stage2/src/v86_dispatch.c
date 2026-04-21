@@ -122,6 +122,236 @@ static uint32_t v86_far_to_linear(uint16_t seg, uint16_t off)
     return ((uint32_t)seg << 4) + (uint32_t)off;
 }
 
+/* BIOS video (INT 10h) minimal stub.
+ * Records the most recent set-mode value and returns benign success
+ * codes. No real framebuffer routing yet — goal is just to prevent
+ * GEM's VGA bring-up from stalling on unrouted INT 10h. */
+static uint8_t s_v86_bios_video_mode = 0x03u; /* default 80x25 color text */
+
+static int v86_try_emulate_int_10(legacy_v86_frame_t *frame)
+{
+    uint32_t eax;
+    uint8_t ah;
+    uint8_t al;
+
+    if (!frame) {
+        return 0;
+    }
+    eax = frame->reserved[0];
+    ah = (uint8_t)((eax >> 8) & 0xFFu);
+    al = (uint8_t)(eax & 0xFFu);
+
+    switch (ah) {
+    case 0x00u: /* Set video mode */
+        s_v86_bios_video_mode = al;
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x0030u; /* AH=0, AL=0x30 ack */
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x01u: /* Set cursor shape */
+    case 0x02u: /* Set cursor position */
+    case 0x03u: /* Get cursor position: return CH=start, CL=end, DX=0 */
+    case 0x05u: /* Select active display page */
+    case 0x06u: /* Scroll up */
+    case 0x07u: /* Scroll down */
+    case 0x08u: /* Read char+attr at cursor */
+    case 0x09u: /* Write char+attr at cursor */
+    case 0x0Au: /* Write char at cursor */
+    case 0x0Bu: /* Set palette */
+    case 0x0Cu: /* Write pixel */
+    case 0x0Du: /* Read pixel -> AL=0 */
+    case 0x0Eu: /* TTY char output */
+        frame->reserved[0] = eax & 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x0Fu: /* Get video mode: AL=mode, AH=cols, BH=page */
+        frame->reserved[0] = (eax & 0xFFFF0000u) |
+                             ((uint32_t)0x50u << 8) | (uint32_t)s_v86_bios_video_mode;
+        frame->reserved[1] &= 0xFFFF00FFu; /* BH=0 */
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x10u: /* Palette / DAC register functions */
+    case 0x11u: /* Character generator functions */
+    case 0x12u: /* Alternate select: answer BL= sub fn */
+    case 0x13u: /* Write string */
+        frame->reserved[0] = eax & 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x1Au: /* Get/Set display combination: AL=0x1A, BX=0x0808 VGA */
+        frame->reserved[0] = (eax & 0xFFFF0000u) | 0x001Au;
+        frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | 0x0808u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x1Bu: /* Video state information: signal not supported */
+        frame->reserved[0] = eax & 0xFFFF0000u;
+        frame->eflags |= 0x00000001u;
+        return 1;
+    default:
+        /* Unknown function: return CF=0 and AL unchanged to avoid loops. */
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+}
+
+/* BIOS keyboard (INT 16h) minimal stub.
+ * Reports "no key pending" for status queries and loops with ZF=1
+ * for blocking reads. This keeps AES event loops from faulting. */
+static int v86_try_emulate_int_16(legacy_v86_frame_t *frame)
+{
+    uint32_t eax;
+    uint8_t ah;
+
+    if (!frame) {
+        return 0;
+    }
+    eax = frame->reserved[0];
+    ah = (uint8_t)((eax >> 8) & 0xFFu);
+
+    switch (ah) {
+    case 0x00u: /* Wait for and read key (blocking) — return fake no-key */
+    case 0x10u:
+    case 0x20u:
+        frame->reserved[0] = eax & 0xFFFF0000u; /* AX=0 (no scancode) */
+        frame->eflags |= 0x00000040u; /* ZF=1 */
+        return 1;
+    case 0x01u: /* Check key (non-blocking): ZF=1 => no key */
+    case 0x11u:
+    case 0x21u:
+        frame->reserved[0] = eax & 0xFFFF0000u;
+        frame->eflags |= 0x00000040u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x02u: /* Shift flags */
+    case 0x12u:
+    case 0x22u:
+        frame->reserved[0] = eax & 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    default:
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+}
+
+/* BIOS timer (INT 1Ah) minimal stub.
+ * Provides a monotonically advancing tick count so GEM AES timer
+ * routines don't busy-loop forever. */
+static uint32_t s_v86_bios_timer_ticks = 0u;
+
+static int v86_try_emulate_int_1a(legacy_v86_frame_t *frame)
+{
+    uint32_t eax;
+    uint8_t ah;
+
+    if (!frame) {
+        return 0;
+    }
+    eax = frame->reserved[0];
+    ah = (uint8_t)((eax >> 8) & 0xFFu);
+
+    switch (ah) {
+    case 0x00u: /* Get tick count: CX:DX, AL=midnight flag */
+        s_v86_bios_timer_ticks += 1u;
+        frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) |
+                             ((s_v86_bios_timer_ticks >> 16) & 0xFFFFu);
+        frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) |
+                             (s_v86_bios_timer_ticks & 0xFFFFu);
+        frame->reserved[0] = eax & 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    case 0x01u: /* Set tick count */
+        s_v86_bios_timer_ticks =
+            ((uint32_t)(frame->reserved[2] & 0xFFFFu) << 16) |
+            (frame->reserved[3] & 0xFFFFu);
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    default:
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+}
+
+/* AES (Application Environment Services) dispatch.
+ * Invoked when GEM issues INT EE or INT EF with CX=0x00C8. Provides
+ * minimal success responses for the handful of opcodes needed during
+ * GEM init so the GUI loop can advance. */
+static uint16_t s_v86_last_aes_opcode = 0u;
+
+static int v86_try_emulate_aes(legacy_v86_frame_t *frame)
+{
+    uint16_t dx;
+    uint32_t pb_lin;
+    uint16_t ctrl_off;
+    uint16_t ctrl_seg;
+    uint16_t intout_off;
+    uint16_t intout_seg;
+    uint32_t ctrl_lin;
+    uint32_t intout_lin;
+    uint16_t opcode;
+
+    if (!frame) {
+        return 0;
+    }
+
+    dx = (uint16_t)(frame->reserved[3] & 0xFFFFu);
+    pb_lin = v86_far_to_linear(frame->ds, dx);
+
+    ctrl_off = v86_load_u16(pb_lin + 0u);
+    ctrl_seg = v86_load_u16(pb_lin + 2u);
+    intout_off = v86_load_u16(pb_lin + 12u);
+    intout_seg = v86_load_u16(pb_lin + 14u);
+
+    if ((ctrl_off == 0u && ctrl_seg == 0u) ||
+        (intout_off == 0u && intout_seg == 0u)) {
+        return 0;
+    }
+
+    ctrl_lin = v86_far_to_linear(ctrl_seg, ctrl_off);
+    intout_lin = v86_far_to_linear(intout_seg, intout_off);
+    opcode = v86_load_u16(ctrl_lin + 0u);
+    s_v86_last_aes_opcode = opcode;
+
+    /* Common contrl outputs: contrl[4] = n_intout, contrl[2] = n_addrout.
+     * Default layout cleared; specific opcodes override. */
+    v86_store_u16(ctrl_lin + 4u, 0u);
+    v86_store_u16(ctrl_lin + 8u, 0u);
+
+    switch (opcode) {
+    case 10u: /* appl_init: intout[0] = app id */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 25u: /* evnt_multi: intout[0] = events fired (return MU_TIMER bit) */
+        v86_store_u16(ctrl_lin + 8u, 6u);
+        v86_store_u16(intout_lin + 0u, 0x0020u); /* MU_TIMER */
+        v86_store_u16(intout_lin + 2u, 0u);
+        v86_store_u16(intout_lin + 4u, 0u);
+        v86_store_u16(intout_lin + 6u, 0u);
+        v86_store_u16(intout_lin + 8u, 0u);
+        v86_store_u16(intout_lin + 10u, 0u);
+        break;
+    case 77u: /* graf_handle: intout[0] handle,[1..4] cell sizes */
+        v86_store_u16(ctrl_lin + 8u, 5u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        v86_store_u16(intout_lin + 2u, 8u);  /* char width */
+        v86_store_u16(intout_lin + 4u, 16u); /* char height */
+        v86_store_u16(intout_lin + 6u, 8u);  /* cell width */
+        v86_store_u16(intout_lin + 8u, 16u); /* cell height */
+        break;
+    case 19u: /* appl_exit */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    default: /* Generic success */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    }
+
+    frame->reserved[0] &= 0xFFFF0000u;
+    frame->eflags &= ~0x00000001u;
+    return 1;
+}
+
 static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
 {
     uint16_t dx;
@@ -144,6 +374,14 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     }
 
     cx = (uint16_t)(frame->reserved[2] & 0xFFFFu);
+    if (cx == 0x00C8u) {
+        /* AES entry via INT EF with CX=200. */
+        if (v86_try_emulate_aes(frame)) {
+            s_v86_last_ef_opcode = s_v86_last_aes_opcode;
+            return 1;
+        }
+        return 0;
+    }
     if (cx != 0x0473u) {
         return 0;
     }
@@ -1055,6 +1293,26 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     }
 
     if (vector != 0x21u) {
+        if (vector == 0x10u && v86_try_emulate_int_10(frame)) {
+            serial_write("[v86] dispatch soft-int emu vec=10 ah=0x");
+            serial_write_hex64((uint64_t)((frame->reserved[0] >> 8) & 0xFFu));
+            serial_write("\n");
+            return V86_DISPATCH_CONT;
+        }
+        if (vector == 0x16u && v86_try_emulate_int_16(frame)) {
+            serial_write("[v86] dispatch soft-int emu vec=16\n");
+            return V86_DISPATCH_CONT;
+        }
+        if (vector == 0x1Au && v86_try_emulate_int_1a(frame)) {
+            serial_write("[v86] dispatch soft-int emu vec=1A\n");
+            return V86_DISPATCH_CONT;
+        }
+        if (vector == 0xEEu && v86_try_emulate_aes(frame)) {
+            serial_write("[v86] dispatch soft-int emu vec=EE aes=0x");
+            serial_write_hex64((uint64_t)s_v86_last_aes_opcode);
+            serial_write("\n");
+            return V86_DISPATCH_CONT;
+        }
         if (vector == 0xEFu && v86_try_emulate_int_ef(frame)) {
             serial_write("[v86] dispatch soft-int emu vec=EF op=0x");
             serial_write_hex64((uint64_t)s_v86_last_ef_opcode);
