@@ -23,7 +23,7 @@ QEMU_NO_REBOOT="${CIUKIOS_QEMU_NO_REBOOT:-0}"
 QEMU_NO_SHUTDOWN="${CIUKIOS_QEMU_NO_SHUTDOWN:-0}"
 QEMU_HEADLESS="${CIUKIOS_QEMU_HEADLESS:-0}"
 QEMU_BOOT_ORDER="${CIUKIOS_QEMU_BOOT_ORDER:-c}"
-QEMU_SERIAL_FILE="${CIUKIOS_QEMU_SERIAL_FILE:-}"
+QEMU_SERIAL_FILE="${CIUKIOS_QEMU_SERIAL_FILE:-$BUILD_DIR/serial.log}"
 QEMU_DISPLAY_BACKEND="${CIUKIOS_QEMU_DISPLAY_BACKEND:-sdl}"
 QEMU_GOP_XRES="${CIUKIOS_QEMU_GOP_XRES:-1920}"
 QEMU_GOP_YRES="${CIUKIOS_QEMU_GOP_YRES:-1080}"
@@ -343,15 +343,12 @@ QEMU_SERIAL_CAPTURE_VIA_STDIO=0
 
 if [[ -n "$QEMU_SERIAL_FILE" ]]; then
     rm -f "$QEMU_SERIAL_FILE"
-    echo "[CiukiOS] QEMU serial sink: file:$QEMU_SERIAL_FILE"
-    if [[ "$QEMU_HEADLESS" == "1" ]]; then
-        # Keep GOP/VGA available in headless test runs while still capturing
-        # serial deterministically through stdout and a tee'd file sink.
-        QEMU_SERIAL_CAPTURE_VIA_STDIO=1
-        QEMU_ARGS+=( -serial stdio )
-    else
-        QEMU_ARGS+=( -serial "file:$QEMU_SERIAL_FILE" )
-    fi
+    echo "[CiukiOS] QEMU serial sink: stdio + tee file:$QEMU_SERIAL_FILE"
+    # Always route serial through stdio so the user sees live output AND
+    # the tee captures the full log to the file (terminal scrollback can
+    # truncate large logs; the file is authoritative).
+    QEMU_SERIAL_CAPTURE_VIA_STDIO=1
+    QEMU_ARGS+=( -serial stdio )
 else
     QEMU_ARGS+=( -serial stdio )
 fi

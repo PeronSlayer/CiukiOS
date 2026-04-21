@@ -19,8 +19,10 @@ extern u64 stage2_timer_ticks(void);
 #define DEFAULT_COLOR_BG  0x00000000U   /* black */
 
 /* 8x8 bitmap font, printable ASCII 0x20..0x7E (95 glyphs).
-   Each glyph is 8 bytes; each byte is one scanline, bit 7 = leftmost pixel. */
-static const u8 g_font[95][8] = {
+   Each glyph is 8 bytes; each byte is one scanline, bit 7 = leftmost pixel.
+   Exported (non-static) so other subsystems (e.g. v86 VDI emulator in
+   v86_dispatch.c) can render text without duplicating the glyph table. */
+const u8 g_font[95][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 0x20   */
     {0x18,0x3C,0x3C,0x18,0x18,0x00,0x18,0x00}, /* 0x21 ! */
     {0x6C,0x6C,0x6C,0x00,0x00,0x00,0x00,0x00}, /* 0x22 " */
