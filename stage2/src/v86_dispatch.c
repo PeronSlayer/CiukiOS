@@ -412,7 +412,7 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     /* One-shot diagnostic for the first few non-open opcodes so we can
      * observe what GEM is really asking. Counter capped to keep log
      * size bounded. */
-    if (opcode != 0x0001u && s_v86_ef_diag_count < 8u) {
+    if (opcode != 0x0001u && s_v86_ef_diag_count < 32u) {
         uint16_t intin_off = v86_load_u16(pb_lin + 4u);
         uint16_t intin_seg = v86_load_u16(pb_lin + 6u);
         uint16_t ptsin_off = v86_load_u16(pb_lin + 8u);
@@ -467,6 +467,29 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         v86_store_u16(ctrl_lin + 4u, 0u);
         v86_store_u16(ctrl_lin + 8u, 0u);
         v86_store_u16(ctrl_lin + 12u, 0u); /* handle -> 0 */
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x006Eu) {
+        /* VDI opcode 110 (vst_load_fonts - load user fonts from disk).
+         * outputs: intout[0] = number of fonts loaded.
+         * Returning a non-zero count makes GEM loop querying per-font
+         * info (vqt_name 130) which we don't support. Return 0 so GEM
+         * proceeds with only the built-in system font. */
+        v86_store_u16(ctrl_lin + 4u, 0u);  /* n_ptsout */
+        v86_store_u16(ctrl_lin + 8u, 1u);  /* n_intout */
+        v86_store_u16(intout_lin + 0u, 0u); /* 0 fonts loaded */
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x006Fu) {
+        /* VDI opcode 111 (vst_unload_fonts). No outputs. */
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
         frame->reserved[0] &= 0xFFFF0000u;
         frame->eflags &= ~0x00000001u;
         return 1;
