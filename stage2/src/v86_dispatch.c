@@ -1901,6 +1901,36 @@ static v86_file_handle_t *v86_file_find_handle(uint16_t handle)
     return (v86_file_handle_t *)0;
 }
 
+/* BX=0 resolver workaround.
+ * Several GEM binaries (seen with GEM.EXE / GEM.RSC loader on FreeGEM)
+ * issue INT 21h AH=3F/42/3E/40 with BX=0 (nominally stdin) instead of the
+ * real file handle. In the current v86 bring-up BX propagation is lossy
+ * for that specific ISR path, so we heuristically redirect a BX=0 file
+ * call to the single active (non stdin/stdout/stderr) handle when exactly
+ * one exists. Returns the effective handle, or 0 if no unambiguous
+ * redirect is possible (in which case caller should treat BX=0 as the
+ * literal DOS stdin and respond accordingly). */
+static uint16_t v86_resolve_bx0_handle(uint16_t handle)
+{
+    if (handle != 0u) {
+        return handle;
+    }
+    {
+        v86_file_handle_t *only = (v86_file_handle_t *)0;
+        uint32_t active = 0u;
+        for (uint32_t i = 0u; i < V86_FILE_MAX_HANDLES; ++i) {
+            if (s_v86_file_handles[i].used) {
+                ++active;
+                only = &s_v86_file_handles[i];
+            }
+        }
+        if (active == 1u && only) {
+            return (uint16_t)only->handle_id;
+        }
+    }
+    return 0u;
+}
+
 static v86_file_handle_t *v86_file_alloc_handle(uint8_t mode, const char *path)
 {
     for (uint32_t i = 0u; i < V86_FILE_MAX_HANDLES; ++i) {
@@ -2530,6 +2560,16 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         uint16_t handle = (uint16_t)(frame->reserved[1] & 0xFFFFu);
         v86_file_handle_t *h;
 
+        if (handle == 0u) {
+            uint16_t resolved = v86_resolve_bx0_handle(0u);
+            if (resolved != 0u) {
+                serial_write("[v86] int21/3E bx=0 redirect -> handle=");
+                serial_write_hex64((uint64_t)resolved);
+                serial_write("\n");
+                handle = resolved;
+            }
+        }
+
         if (handle <= 2u) {
             frame->reserved[0] = (eax & 0xFFFF0000u);
             V86_CF_CLEAR();
@@ -2579,25 +2619,14 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         }
         serial_write("\n");
 
-        /* RSC-loader workaround: when GEM calls INT 21h AH=3F with BX=0
-         * (stdin) but we recently opened a real file and there is only one
-         * active non-stdio handle, redirect the read to that handle. This
-         * compensates for a BX-propagation issue observed in the current
-         * v86 bring-up. */
+        /* GEM BX-propagation workaround - see v86_resolve_bx0_handle. */
         if (handle == 0u) {
-            v86_file_handle_t *only = (v86_file_handle_t *)0;
-            uint32_t active = 0u;
-            for (uint32_t i = 0u; i < V86_FILE_MAX_HANDLES; ++i) {
-                if (s_v86_file_handles[i].used) {
-                    ++active;
-                    only = &s_v86_file_handles[i];
-                }
-            }
-            if (active == 1u && only && count != 0u) {
+            uint16_t resolved = v86_resolve_bx0_handle(0u);
+            if (resolved != 0u && count != 0u) {
                 serial_write("[v86] int21/3F bx=0 redirect -> handle=");
-                serial_write_hex64((uint64_t)only->handle_id);
+                serial_write_hex64((uint64_t)resolved);
                 serial_write("\n");
-                handle = (uint16_t)only->handle_id;
+                handle = resolved;
             } else {
                 frame->reserved[0] = (eax & 0xFFFF0000u);
                 V86_CF_CLEAR();
@@ -2699,6 +2728,20 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         int64_t base = 0;
         int64_t new_pos;
         v86_file_handle_t *h;
+
+        if (handle == 0u) {
+            uint16_t resolved = v86_resolve_bx0_handle(0u);
+            if (resolved != 0u) {
+                serial_write("[v86] int21/42 bx=0 redirect -> handle=");
+                serial_write_hex64((uint64_t)resolved);
+                serial_write(" origin=");
+                serial_write_hex64((uint64_t)origin);
+                serial_write(" off=");
+                serial_write_hex64((uint64_t)off_u);
+                serial_write("\n");
+                handle = resolved;
+            }
+        }
 
         if (handle <= 2u) {
             frame->reserved[0] = (eax & 0xFFFF0000u);
