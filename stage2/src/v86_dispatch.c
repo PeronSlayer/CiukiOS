@@ -563,6 +563,12 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
                 }
                 (void)copy_words;
             }
+            /* After vr_trnfm, the destination MFDB is in device form:
+             * clear fd_stand so callers (e.g. GEMCICON render_bmp) that
+             * gate transform-calls on `if (fdb->fd_stand)` do not loop
+             * forever. In-place transforms use src==dst so this also
+             * clears source fd_stand. */
+            v86_store_u16(d_mfdb + 10u, 0u);
         } else if (s_v86_ef_diag_count < 32u) {
             serial_write(" (null MFDB)\n");
         }
@@ -1860,6 +1866,15 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         h->dirty = 0u;
         frame->reserved[0] = (eax & 0xFFFF0000u) | (uint32_t)h->handle_id;
         V86_CF_CLEAR();
+        serial_write("[v86] int21/3D ok handle=");
+        serial_write_hex64((uint64_t)h->handle_id);
+        serial_write(" size=");
+        serial_write_hex64((uint64_t)file_size);
+        serial_write(" frame.eax=");
+        serial_write_hex64((uint64_t)frame->reserved[0]);
+        serial_write(" eflags=");
+        serial_write_hex64((uint64_t)frame->eflags);
+        serial_write("\n");
         return V86_DISPATCH_CONT;
     }
 
@@ -1901,10 +1916,45 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         uint32_t available;
         uint32_t to_read;
 
+        serial_write("[v86] int21/3F read handle=");
+        serial_write_hex64((uint64_t)handle);
+        serial_write(" count=");
+        serial_write_hex64((uint64_t)count);
+        {
+            uint32_t ip_lin = ((uint32_t)frame->cs << 4) + (uint32_t)frame->ip;
+            const volatile uint8_t *ibytes = (const volatile uint8_t *)(uint64_t)ip_lin;
+            serial_write(" bytes@ip-8..+2=");
+            for (int bi = -8; bi <= 2; ++bi) {
+                serial_write_hex64((uint64_t)ibytes[bi] & 0xFFu);
+                serial_write(" ");
+            }
+        }
+        serial_write("\n");
+
+        /* RSC-loader workaround: when GEM calls INT 21h AH=3F with BX=0
+         * (stdin) but we recently opened a real file and there is only one
+         * active non-stdio handle, redirect the read to that handle. This
+         * compensates for a BX-propagation issue observed in the current
+         * v86 bring-up. */
         if (handle == 0u) {
-            frame->reserved[0] = (eax & 0xFFFF0000u);
-            V86_CF_CLEAR();
-            return V86_DISPATCH_CONT;
+            v86_file_handle_t *only = (v86_file_handle_t *)0;
+            uint32_t active = 0u;
+            for (uint32_t i = 0u; i < V86_FILE_MAX_HANDLES; ++i) {
+                if (s_v86_file_handles[i].used) {
+                    ++active;
+                    only = &s_v86_file_handles[i];
+                }
+            }
+            if (active == 1u && only && count != 0u) {
+                serial_write("[v86] int21/3F bx=0 redirect -> handle=");
+                serial_write_hex64((uint64_t)only->handle_id);
+                serial_write("\n");
+                handle = (uint16_t)only->handle_id;
+            } else {
+                frame->reserved[0] = (eax & 0xFFFF0000u);
+                V86_CF_CLEAR();
+                return V86_DISPATCH_CONT;
+            }
         }
 
         if (handle == 1u || handle == 2u) {
