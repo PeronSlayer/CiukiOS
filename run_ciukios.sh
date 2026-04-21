@@ -340,15 +340,23 @@ QEMU_ARGS=(
 )
 
 QEMU_SERIAL_CAPTURE_VIA_STDIO=0
+# Set CIUKIOS_QEMU_SERIAL_STDIO=1 to restore the old stdio+tee behaviour
+# (useful when you want live serial mirrored to the terminal). The
+# default now routes serial to a file-only chardev, because piping the
+# high-volume v86 trace through `tee` into a terminal can throttle the
+# guest (cooperative v86 monitor) and stall programs like GEM.
+QEMU_SERIAL_STDIO="${CIUKIOS_QEMU_SERIAL_STDIO:-0}"
 
 if [[ -n "$QEMU_SERIAL_FILE" ]]; then
     rm -f "$QEMU_SERIAL_FILE"
-    echo "[CiukiOS] QEMU serial sink: stdio + tee file:$QEMU_SERIAL_FILE"
-    # Always route serial through stdio so the user sees live output AND
-    # the tee captures the full log to the file (terminal scrollback can
-    # truncate large logs; the file is authoritative).
-    QEMU_SERIAL_CAPTURE_VIA_STDIO=1
-    QEMU_ARGS+=( -serial stdio )
+    if [[ "$QEMU_SERIAL_STDIO" == "1" ]]; then
+        echo "[CiukiOS] QEMU serial sink: stdio + tee file:$QEMU_SERIAL_FILE"
+        QEMU_SERIAL_CAPTURE_VIA_STDIO=1
+        QEMU_ARGS+=( -serial stdio )
+    else
+        echo "[CiukiOS] QEMU serial sink: file:$QEMU_SERIAL_FILE (tail -f to follow live)"
+        QEMU_ARGS+=( -serial "file:$QEMU_SERIAL_FILE" )
+    fi
 else
     QEMU_ARGS+=( -serial stdio )
 fi
