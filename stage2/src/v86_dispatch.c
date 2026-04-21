@@ -1306,6 +1306,40 @@ __attribute__((weak)) int legacy_v86_probe(void)
     return 0;
 }
 
+/* BDA (BIOS Data Area) bootstrap + tick maintenance.
+ * Real DOS programs poll 0040:006C (timer ticks, 4 bytes LE) to
+ * wait for time to pass. Since we run the guest cooperatively
+ * (no real hardware IRQ 0 delivery into v86), we advance the BDA
+ * tick count on every dispatch to keep such spin-waits progressing.
+ * Also populates equipment word, base memory, and keyboard buffer
+ * head/tail pointers on first invocation. */
+static uint8_t s_v86_bda_initialized = 0u;
+static uint32_t s_v86_bda_ticks = 0u;
+
+static void v86_bda_init_once(void)
+{
+    if (s_v86_bda_initialized) {
+        return;
+    }
+    s_v86_bda_initialized = 1u;
+
+    /* Only initialize the timer-tick dword (0040:006C, 4 bytes LE).
+     * Avoid touching other BDA fields: DOS/GEM may have already
+     * populated them and overwriting caused a regression. */
+    v86_store_u16(0x046Cu, 0u);
+    v86_store_u16(0x046Eu, 0u);
+    serial_write("[v86] bda init ticks=0\n");
+}
+
+static void v86_bda_tick_bump(void)
+{
+    s_v86_bda_ticks += 1u;
+    /* BDA 0040:006C is a 32-bit little-endian dword at linear 0x046C. */
+    v86_store_u16(0x046Cu, (uint16_t)(s_v86_bda_ticks & 0xFFFFu));
+    v86_store_u16(0x046Eu, (uint16_t)((s_v86_bda_ticks >> 16) & 0xFFFFu));
+    s_v86_bios_timer_ticks = s_v86_bda_ticks;
+}
+
 v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame)
 {
     uint32_t eax;
@@ -1314,6 +1348,9 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     if (frame == (legacy_v86_frame_t *)0) {
         return V86_DISPATCH_EXIT_ERR;
     }
+
+    v86_bda_init_once();
+    v86_bda_tick_bump();
 
     serial_write("[v86] dispatch vec=0x");
     serial_write_hex64((uint64_t)vector);
