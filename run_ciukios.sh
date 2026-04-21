@@ -300,13 +300,17 @@ if [[ "$INCLUDE_OPENGEM" == "1" ]]; then
             echo "[CiukiOS] OpenGEM chain target staged: ::GEMBOOT/GEM.EXE"
         fi
 
-        # GEM.EXE probes C:\.RSC\GEM.RSC for desktop resources.
-        # Stage the GEMSYS .RSC payload under root/.RSC to satisfy that path.
+        # GEM.EXE probes C:\GEMBOOT\GEM.RSC (observed via INT21h AH=4E trace).
+        # Stage the GEMSYS .RSC payload under ::GEMBOOT to satisfy that path.
+        # Also keep a legacy ::.RSC mirror for older probes.
         if [[ -f "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.RSC" ]]; then
+            mmd -i "$IMAGE" ::GEMBOOT 2>/dev/null || true
+            mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.RSC" ::GEMBOOT/GEM.RSC 2>/dev/null || true
+            mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/DESKTOP.RSC" ::GEMBOOT/DESKTOP.RSC 2>/dev/null || true
             mmd -i "$IMAGE" ::.RSC 2>/dev/null || true
             mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.RSC" ::.RSC/GEM.RSC 2>/dev/null || true
             mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/DESKTOP.RSC" ::.RSC/DESKTOP.RSC 2>/dev/null || true
-            echo "[CiukiOS] OpenGEM resource staged: ::.RSC/GEM.RSC"
+            echo "[CiukiOS] OpenGEM resource staged: ::GEMBOOT/GEM.RSC (+ legacy ::.RSC mirror)"
         fi
 
         OPENGEM_INCLUDED=1
