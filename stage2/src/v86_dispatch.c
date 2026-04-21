@@ -74,6 +74,30 @@ static v86_file_handle_t s_v86_file_handles[V86_FILE_MAX_HANDLES];
 static uint16_t s_v86_last_ef_opcode = 0u;
 static uint8_t s_v86_ef_diag_count = 0u;
 
+/* --- GEM timer-tick injection (vex_timv) ---------------------------------
+ * GEM installs a tick handler (tikcod) via VDI opcode 128 (vex_timv) and
+ * expects it to be called on every ~50ms tick. The handler decrements
+ * internal counters that drive GEM's event loop and dispatches queued work
+ * via _forkq. Without periodic invocation, GEM stalls in its desktop event
+ * wait.
+ *
+ * We implement:
+ *   1. Store the installed handler far pointer (s_v86_timer_seg:off).
+ *   2. Plant an `IRET` stub at V86_TIKSAV_SEG:OFF so tikcod's final
+ *      `pushf; callf [_tiksav]` returns cleanly after chaining.
+ *   3. Inject a synthetic IRQ-style call to the handler on every
+ *      emulated INT EF (except the vex_timv call itself), rate-limited,
+ *      by pushing an IRET frame onto the guest stack and redirecting
+ *      guest CS:IP to the handler. tikcod's final `iret` then returns to
+ *      the original post-INT-EF instruction.
+ */
+#define V86_TIKSAV_SEG 0x0060u
+#define V86_TIKSAV_OFF 0x0000u
+static uint16_t s_v86_timer_seg = 0u;
+static uint16_t s_v86_timer_off = 0u;
+static uint32_t s_v86_timer_inject_counter = 0u;
+static uint8_t s_v86_tiksav_planted = 0u;
+
 static uint8_t v86_to_upper_ascii(uint8_t ch)
 {
     if (ch >= 'a' && ch <= 'z') {
@@ -118,6 +142,76 @@ static uint16_t v86_load_u16(uint32_t linear)
 {
     const volatile uint8_t *p = (const volatile uint8_t *)(uint64_t)linear;
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+static void v86_store_u8(uint32_t linear, uint8_t value)
+{
+    volatile uint8_t *p = (volatile uint8_t *)(uint64_t)linear;
+    *p = value;
+}
+
+/* Plant a single `IRET` opcode at V86_TIKSAV_SEG:OFF. GEM's tikcod ends
+ * with `pushf; callf [_tiksav]; pop ds; iret`, expecting _tiksav to point
+ * to a chained BIOS-style timer ISR that eventually does IRET. Our stub
+ * unwinds cleanly back to `pop ds; iret`, which then returns to the
+ * caller frame we synthesized in v86_inject_timer_tick(). */
+static void v86_ensure_tiksav_stub(void)
+{
+    uint32_t lin;
+
+    if (s_v86_tiksav_planted) {
+        return;
+    }
+    lin = ((uint32_t)V86_TIKSAV_SEG << 4) + (uint32_t)V86_TIKSAV_OFF;
+    v86_store_u8(lin, 0xCFu); /* IRET */
+    s_v86_tiksav_planted = 1u;
+}
+
+/* Inject a synthetic timer-tick interrupt into the v86 guest. Rate-limited
+ * to ~1 tick per 2 INT EF dispatches. Must NOT be called for the vex_timv
+ * install opcode itself. Returns 1 if injected. */
+static int v86_inject_timer_tick(legacy_v86_frame_t *frame)
+{
+    uint16_t sp;
+    uint32_t ss_base;
+    uint16_t flags16;
+
+    if (!frame) {
+        return 0;
+    }
+    if (s_v86_timer_seg == 0u && s_v86_timer_off == 0u) {
+        return 0;
+    }
+
+    /* One tick per 2 dispatches to avoid handler recursion pressure. */
+    s_v86_timer_inject_counter += 1u;
+    if ((s_v86_timer_inject_counter & 1u) != 0u) {
+        return 0;
+    }
+
+    /* Push IRET frame (FLAGS, CS, IP) onto guest SS:SP so when tikcod's
+     * final `iret` runs, it returns to the current guest CS:IP (which is
+     * the instruction immediately after the INT 0xEF we just emulated).
+     *
+     * tikcod itself begins with `push ds`, and `pop ds` matches before
+     * the `iret`, so the stack shape we build is exactly what it expects.
+     */
+    sp = frame->sp;
+    ss_base = ((uint32_t)frame->ss << 4);
+    flags16 = (uint16_t)((frame->eflags | 0x00000200u) & 0xFFFFu); /* IF=1 */
+
+    sp = (uint16_t)(sp - 2u);
+    v86_store_u16(ss_base + (uint32_t)sp, flags16);
+    sp = (uint16_t)(sp - 2u);
+    v86_store_u16(ss_base + (uint32_t)sp, frame->cs);
+    sp = (uint16_t)(sp - 2u);
+    v86_store_u16(ss_base + (uint32_t)sp, frame->ip);
+
+    frame->sp = sp;
+    frame->cs = s_v86_timer_seg;
+    frame->ip = s_v86_timer_off;
+    frame->eflags &= ~0x00000300u; /* clear TF + IF while handler runs */
+    return 1;
 }
 
 static uint32_t v86_far_to_linear(uint16_t seg, uint16_t off)
@@ -973,18 +1067,53 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
 
     if (opcode == 0x0080u) {
         /* vex_timv — exchange timer-tick vector.
-         * Input: contrl[7..8] = new far ptr (bytes 14..17).
-         * Output: contrl[9..10] = old far ptr (bytes 18..21),
-         *         intout[0] = tick rate in ms (we report 50ms = 20Hz). */
+         * Input:  contrl[7..8] = new handler far ptr (ctrl bytes 14..17).
+         *         (0:0 means uninstall.)
+         * Output: contrl[9..10] = old handler far ptr (ctrl bytes 18..21).
+         *         intout[0]     = tick rate in ms (we report 50 = 20 Hz).
+         *
+         * GEM stores the returned "old" far ptr as _tiksav and chains into
+         * it at the end of its tikcod handler. On first install we must
+         * return a valid IRET stub (planted by v86_ensure_tiksav_stub) so
+         * that chain doesn't crash. */
         uint16_t new_off = v86_load_u16(ctrl_lin + 14u);
         uint16_t new_seg = v86_load_u16(ctrl_lin + 16u);
-        v86_store_u16(ctrl_lin + 18u, new_off); /* echo back as previous */
-        v86_store_u16(ctrl_lin + 20u, new_seg);
+        uint16_t old_off;
+        uint16_t old_seg;
+
+        v86_ensure_tiksav_stub();
+
+        if (s_v86_timer_seg == 0u && s_v86_timer_off == 0u) {
+            /* No prior handler installed: hand back our IRET stub as the
+             * "previous" chain target. */
+            old_off = V86_TIKSAV_OFF;
+            old_seg = V86_TIKSAV_SEG;
+        } else {
+            old_off = s_v86_timer_off;
+            old_seg = s_v86_timer_seg;
+        }
+
+        v86_store_u16(ctrl_lin + 18u, old_off);
+        v86_store_u16(ctrl_lin + 20u, old_seg);
+
+        s_v86_timer_off = new_off;
+        s_v86_timer_seg = new_seg;
+
         v86_store_u16(intout_lin + 0u, 50u);
         v86_store_u16(ctrl_lin + 4u, 0u);
         v86_store_u16(ctrl_lin + 8u, 1u);
         frame->reserved[0] &= 0xFFFF0000u;
         frame->eflags &= ~0x00000001u;
+
+        serial_write("[v86] vex_timv install new=0x");
+        serial_write_hex64((uint64_t)new_seg);
+        serial_write(":0x");
+        serial_write_hex64((uint64_t)new_off);
+        serial_write(" old=0x");
+        serial_write_hex64((uint64_t)old_seg);
+        serial_write(":0x");
+        serial_write_hex64((uint64_t)old_off);
+        serial_write("\n");
         return 1;
     }
 
@@ -2000,6 +2129,19 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
             serial_write("[v86] dispatch soft-int emu vec=EF op=0x");
             serial_write_hex64((uint64_t)s_v86_last_ef_opcode);
             serial_write("\n");
+            /* After each non-timer-install VDI call, inject a synthetic
+             * timer tick into the guest so GEM's tikcod decrements its
+             * wait counters and drains queued fork work. Without this,
+             * GEM's desktop event loop busy-polls forever. */
+            if (s_v86_last_ef_opcode != 0x0080u) {
+                if (v86_inject_timer_tick(frame)) {
+                    serial_write("[v86] tick inject -> 0x");
+                    serial_write_hex64((uint64_t)s_v86_timer_seg);
+                    serial_write(":0x");
+                    serial_write_hex64((uint64_t)s_v86_timer_off);
+                    serial_write("\n");
+                }
+            }
             return V86_DISPATCH_CONT;
         }
 
