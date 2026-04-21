@@ -312,6 +312,17 @@ if [[ "$INCLUDE_OPENGEM" == "1" ]]; then
             echo "[CiukiOS] OpenGEM resource staged: ::GEMBOOT/GEM.RSC"
         fi
 
+        # GEM.EXE opens DESKTOP.INF and other GEMSYS assets using absolute DOS
+        # paths like C:\GEMAPPS\GEMSYS\DESKTOP.INF. The v86 path canonicalizer
+        # strips the drive letter and treats the result as FAT-root-relative,
+        # so the whole GEMAPPS/ subtree must be reachable at ::GEMAPPS/. Mirror
+        # the OPENGEM/GEMAPPS tree there (symmetric to the ::GEMBOOT/ mirror).
+        if [[ -d "$OPENGEM_RUNTIME_DIR/GEMAPPS" ]]; then
+            mmd -i "$IMAGE" ::GEMAPPS 2>/dev/null || true
+            mcopy -s -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS"/* ::GEMAPPS/ 2>/dev/null || true
+            echo "[CiukiOS] OpenGEM GEMAPPS tree staged: ::GEMAPPS/"
+        fi
+
         OPENGEM_INCLUDED=1
         echo "[CiukiOS] OpenGEM GUI payload copied from: $OPENGEM_RUNTIME_DIR"
     else
