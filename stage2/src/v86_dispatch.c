@@ -70,6 +70,7 @@ static uint8_t s_v86_time_second = 0u;
 static uint8_t s_v86_time_hundredth = 0u;
 static v86_file_handle_t s_v86_file_handles[V86_FILE_MAX_HANDLES];
 static uint16_t s_v86_last_ef_opcode = 0u;
+static uint8_t s_v86_ef_diag_count = 0u;
 
 static uint8_t v86_to_upper_ascii(uint8_t ch)
 {
@@ -408,12 +409,54 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     opcode = v86_load_u16(ctrl_lin + 0u);
     s_v86_last_ef_opcode = opcode;
 
+    /* One-shot diagnostic for the first few non-open opcodes so we can
+     * observe what GEM is really asking. Counter capped to keep log
+     * size bounded. */
+    if (opcode != 0x0001u && s_v86_ef_diag_count < 8u) {
+        uint16_t intin_off = v86_load_u16(pb_lin + 4u);
+        uint16_t intin_seg = v86_load_u16(pb_lin + 6u);
+        uint16_t ptsin_off = v86_load_u16(pb_lin + 8u);
+        uint16_t ptsin_seg = v86_load_u16(pb_lin + 10u);
+        uint32_t intin_lin = v86_far_to_linear(intin_seg, intin_off);
+        uint32_t ptsin_lin = v86_far_to_linear(ptsin_seg, ptsin_off);
+
+        s_v86_ef_diag_count += 1u;
+        serial_write("[v86] ef diag op=0x");
+        serial_write_hex64((uint64_t)opcode);
+        serial_write(" ctrl[1..6]=");
+        serial_write_hex64((uint64_t)v86_load_u16(ctrl_lin + 2u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(ctrl_lin + 4u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(ctrl_lin + 6u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(ctrl_lin + 8u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(ctrl_lin + 10u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(ctrl_lin + 12u));
+        serial_write(" intin[0..3]=");
+        serial_write_hex64((uint64_t)v86_load_u16(intin_lin + 0u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(intin_lin + 2u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(intin_lin + 4u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(intin_lin + 6u));
+        serial_write(" ptsin[0..3]=");
+        serial_write_hex64((uint64_t)v86_load_u16(ptsin_lin + 0u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(ptsin_lin + 2u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(ptsin_lin + 4u)); serial_write(",");
+        serial_write_hex64((uint64_t)v86_load_u16(ptsin_lin + 6u));
+        serial_write("\n");
+    }
+
     if (opcode == 0x000Cu) {
-        /* VDI opcode 12 (v_text). No outputs; just report completion.
-         * Clear n_ptsout / n_intout so GEM sees a well-formed response. */
-        v86_store_u16(ctrl_lin + 4u, 0u);  /* contrl[2] n_ptsout */
-        v86_store_u16(ctrl_lin + 8u, 0u);  /* contrl[4] n_intout */
-        /* Preserve workstation handle as-is (input). */
+        /* VDI opcode 12 (vst_height - set character height).
+         * inputs:  ptsin[0] = (width_hint, requested_height_px)
+         *          n_ptsin = 1
+         * outputs: ptsout[0] = (char_width, char_height)
+         *          ptsout[1] = (cell_width, cell_height)
+         *          n_ptsout = 2, n_intout = 0
+         * We report a fixed 8x16 cell regardless of request. */
+        v86_store_u16(ctrl_lin + 4u, 2u); /* n_ptsout */
+        v86_store_u16(ctrl_lin + 8u, 0u); /* n_intout */
+        v86_store_u16(ptsout_lin + 0u, 8u);  /* char width */
+        v86_store_u16(ptsout_lin + 2u, 16u); /* char height */
+        v86_store_u16(ptsout_lin + 4u, 8u);  /* cell width */
+        v86_store_u16(ptsout_lin + 6u, 16u); /* cell height */
         frame->reserved[0] &= 0xFFFF0000u;
         frame->eflags &= ~0x00000001u;
         return 1;
