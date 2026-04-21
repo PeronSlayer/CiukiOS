@@ -302,15 +302,14 @@ if [[ "$INCLUDE_OPENGEM" == "1" ]]; then
 
         # GEM.EXE probes C:\GEMBOOT\GEM.RSC (observed via INT21h AH=4E trace).
         # Stage the GEMSYS .RSC payload under ::GEMBOOT to satisfy that path.
-        # Also keep a legacy ::.RSC mirror for older probes.
+        # NOTE: mtools' mmd hangs when re-creating an already-existing directory
+        # (no prompt visible but blocks with stdin/stderr redirected). Since the
+        # ::GEMBOOT directory was already created in the GEM.EXE staging block
+        # above, we skip the redundant mmd here.
         if [[ -f "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.RSC" ]]; then
-            mmd -i "$IMAGE" ::GEMBOOT 2>/dev/null || true
             mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.RSC" ::GEMBOOT/GEM.RSC 2>/dev/null || true
             mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/DESKTOP.RSC" ::GEMBOOT/DESKTOP.RSC 2>/dev/null || true
-            mmd -i "$IMAGE" ::.RSC 2>/dev/null || true
-            mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/GEM.RSC" ::.RSC/GEM.RSC 2>/dev/null || true
-            mcopy -o -i "$IMAGE" "$OPENGEM_RUNTIME_DIR/GEMAPPS/GEMSYS/DESKTOP.RSC" ::.RSC/DESKTOP.RSC 2>/dev/null || true
-            echo "[CiukiOS] OpenGEM resource staged: ::GEMBOOT/GEM.RSC (+ legacy ::.RSC mirror)"
+            echo "[CiukiOS] OpenGEM resource staged: ::GEMBOOT/GEM.RSC"
         fi
 
         OPENGEM_INCLUDED=1
