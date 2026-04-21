@@ -43,6 +43,7 @@ OVMF_VARS="build/OVMF_VARS.4m.fd"
 
 echo "[1/4] Building CiukiOS..."
 make >/dev/null
+( cd boot/uefi-loader && make >/dev/null )
 
 if [[ ! -f "$OVMF_CODE" ]]; then
     echo "ERROR: OVMF firmware not found at $OVMF_CODE" >&2
@@ -50,7 +51,8 @@ if [[ ! -f "$OVMF_CODE" ]]; then
     exit 3
 fi
 
-echo "[2/4] Staging stage2.elf and AUTOEXEC.BAT (cmd: '$AUTOEXEC_CMD')..."
+echo "[2/4] Staging stage2.elf, BOOTX64.EFI and AUTOEXEC.BAT (cmd: '$AUTOEXEC_CMD')..."
+mcopy -o -i "$IMG" boot/uefi-loader/build/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
 mcopy -o -i "$IMG" build/stage2.elf ::EFI/CiukiOS/stage2.elf
 TMP_AE="$(mktemp --suffix=.bat)"
 trap 'rm -f "$TMP_AE"' EXIT

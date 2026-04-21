@@ -7904,7 +7904,9 @@ static void shell_startup_chain(boot_info_t *boot_info, handoff_v0_t *handoff) {
     shell_env_set("PATH", "\\;\\FREEDOS");
     shell_set_errorlevel(0U);
 
+    serial_write("[startup] shell_startup_chain enter\n");
     if (!fat_ready()) {
+        serial_write("[startup] fat_ready=false\n");
         return;
     }
 
@@ -7912,7 +7914,9 @@ static void shell_startup_chain(boot_info_t *boot_info, handoff_v0_t *handoff) {
 
     if (fat_find_file("/AUTOEXEC.BAT", &info) && !(info.attr & FAT_ATTR_DIRECTORY)) {
         video_write("[startup] AUTOEXEC.BAT\n");
+        serial_write("[startup] running AUTOEXEC.BAT\n");
         shell_run_batch_file(boot_info, handoff, "/AUTOEXEC.BAT");
+        serial_write("[startup] AUTOEXEC.BAT done\n");
     }
 }
 

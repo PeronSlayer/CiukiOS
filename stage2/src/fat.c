@@ -1,5 +1,6 @@
 #include "fat.h"
 #include "disk.h"
+#include "serial.h"
 
 #define FAT_TYPE_12 12U
 #define FAT_TYPE_16 16U
@@ -970,6 +971,9 @@ int fat_read_file(const char *path, void *out, u32 out_capacity, u32 *out_size) 
 
     cluster = entry.first_cluster;
     if (cluster < 2U) {
+        serial_write("[fatrd] FAIL cluster<2 path=");
+        serial_write(path);
+        serial_write("\n");
         return 0;
     }
 
@@ -984,6 +988,11 @@ int fat_read_file(const char *path, void *out, u32 out_capacity, u32 *out_size) 
             u32 to_copy;
 
             if (!sector) {
+                serial_write("[fatrd] FAIL sector_ptr null path=");
+                serial_write(path);
+                serial_write(" lba=");
+                serial_write_hex64((uint64_t)first_sector + (uint64_t)s);
+                serial_write("\n");
                 return 0;
             }
 

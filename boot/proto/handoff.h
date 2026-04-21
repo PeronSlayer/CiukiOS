@@ -18,7 +18,7 @@ typedef struct handoff_gop_mode_entry {
 
 #define HANDOFF_COM_MAX 16U
 #define HANDOFF_COM_NAME_MAX 12U /* 8.3 name with dot, e.g. "INIT.COM" */
-#define HANDOFF_DISK_CACHE_MAX_BYTES (8ULL * 1024ULL * 1024ULL)
+#define HANDOFF_DISK_CACHE_MAX_BYTES (96ULL * 1024ULL * 1024ULL)
 
 typedef struct handoff_com_entry {
     char name[HANDOFF_COM_NAME_MAX + 1];
