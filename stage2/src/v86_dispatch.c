@@ -367,6 +367,8 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     uint32_t ctrl_lin;
     uint32_t intout_lin;
     uint32_t ptsout_lin;
+    uint32_t intin_lin;
+    uint32_t ptsin_lin;
     uint16_t opcode;
     uint16_t i;
 
@@ -406,6 +408,14 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     ctrl_lin = v86_far_to_linear(ctrl_seg, ctrl_off);
     intout_lin = v86_far_to_linear(intout_seg, intout_off);
     ptsout_lin = v86_far_to_linear(ptsout_seg, ptsout_off);
+    {
+        uint16_t intin_off = v86_load_u16(pb_lin + 4u);
+        uint16_t intin_seg = v86_load_u16(pb_lin + 6u);
+        uint16_t ptsin_off = v86_load_u16(pb_lin + 8u);
+        uint16_t ptsin_seg = v86_load_u16(pb_lin + 10u);
+        intin_lin = v86_far_to_linear(intin_seg, intin_off);
+        ptsin_lin = v86_far_to_linear(ptsin_seg, ptsin_off);
+    }
     opcode = v86_load_u16(ctrl_lin + 0u);
     s_v86_last_ef_opcode = opcode;
 
@@ -413,13 +423,6 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
      * observe what GEM is really asking. Counter capped to keep log
      * size bounded. */
     if (opcode != 0x0001u && s_v86_ef_diag_count < 32u) {
-        uint16_t intin_off = v86_load_u16(pb_lin + 4u);
-        uint16_t intin_seg = v86_load_u16(pb_lin + 6u);
-        uint16_t ptsin_off = v86_load_u16(pb_lin + 8u);
-        uint16_t ptsin_seg = v86_load_u16(pb_lin + 10u);
-        uint32_t intin_lin = v86_far_to_linear(intin_seg, intin_off);
-        uint32_t ptsin_lin = v86_far_to_linear(ptsin_seg, ptsin_off);
-
         s_v86_ef_diag_count += 1u;
         serial_write("[v86] ef diag op=0x");
         serial_write_hex64((uint64_t)opcode);
@@ -637,6 +640,159 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
 
     if (opcode == 0x006Fu) {
         /* VDI opcode 111 = vr_recfl (fill rectangle). No outputs. */
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    /* VDI state-setter opcodes: echo pattern — accept request, reply
+     * with the same value so GEM caches it and proceeds. No side effect
+     * on a real display surface yet; drawing semantics are deferred. */
+    if (opcode == 0x000Fu || /* vsl_type  */
+        opcode == 0x0011u || /* vsl_color */
+        opcode == 0x0012u || /* vsm_type  */
+        opcode == 0x0014u || /* vsm_color */
+        opcode == 0x0015u || /* vst_font  */
+        opcode == 0x0016u || /* vst_color */
+        opcode == 0x0017u || /* vsf_interior - alias check */
+        opcode == 0x0019u || /* vsf_style  */
+        opcode == 0x001Au || /* vsf_color  */
+        opcode == 0x0071u || /* vsf_interior */
+        opcode == 0x0072u || /* vsf_style */
+        opcode == 0x0073u || /* vsf_color */
+        opcode == 0x0076u || /* vsf_perimeter or vq_chcells - state */
+        opcode == 0x007Au || /* vswr_mode */
+        opcode == 0x007Cu || /* vsl_udsty */
+        opcode == 0x007Eu) { /* vsl_ends  */
+        uint16_t val0 = v86_load_u16(intin_lin + 0u);
+        v86_store_u16(intout_lin + 0u, val0);
+        v86_store_u16(ctrl_lin + 4u, 0u); /* n_ptsout */
+        v86_store_u16(ctrl_lin + 8u, 1u); /* n_intout */
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0010u) {
+        /* vsl_width — input ptsin[0]=(width,0), output ptsout[0]=(actual,0). */
+        uint16_t w = v86_load_u16(ptsin_lin + 0u);
+        v86_store_u16(ptsout_lin + 0u, w);
+        v86_store_u16(ptsout_lin + 2u, 0u);
+        v86_store_u16(ctrl_lin + 4u, 1u); /* n_ptsout */
+        v86_store_u16(ctrl_lin + 8u, 0u); /* n_intout */
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x007Bu) {
+        /* vs_color — set color representation. intin[0]=index,
+         * intin[1..3]=RGB in 0..1000. No return values; just accept. */
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x007Du) {
+        /* vsf_udpat — user-defined fill pattern. intin[0..15] pattern. Accept. */
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x001Fu) {
+        /* vqt_extent — query text extent.
+         * Input: intin[0..n-1] = string chars (one char per word).
+         * Output: ptsout[0..7] = 4 corners of bounding rect (8 words).
+         * For bring-up: return a fixed 8x16 cell per char rectangle. */
+        uint16_t n_chars = v86_load_u16(ctrl_lin + 6u); /* contrl[3]=n_intin */
+        uint16_t w = (uint16_t)((uint32_t)n_chars * 8u);
+        uint16_t h = 16u;
+        v86_store_u16(ptsout_lin + 0u, 0u);   v86_store_u16(ptsout_lin + 2u, 0u);
+        v86_store_u16(ptsout_lin + 4u, w);    v86_store_u16(ptsout_lin + 6u, 0u);
+        v86_store_u16(ptsout_lin + 8u, w);    v86_store_u16(ptsout_lin + 10u, h);
+        v86_store_u16(ptsout_lin + 12u, 0u);  v86_store_u16(ptsout_lin + 14u, h);
+        v86_store_u16(ctrl_lin + 4u, 4u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0021u) {
+        /* vqt_attributes — query text attributes (font, color, mode, sizes). */
+        v86_store_u16(intout_lin + 0u, 1u);   /* font id */
+        v86_store_u16(intout_lin + 2u, 1u);   /* color */
+        v86_store_u16(intout_lin + 4u, 0u);   /* rotation */
+        v86_store_u16(intout_lin + 6u, 0u);   /* h_align */
+        v86_store_u16(intout_lin + 8u, 0u);   /* v_align */
+        v86_store_u16(intout_lin + 10u, 1u);  /* write mode */
+        v86_store_u16(ptsout_lin + 0u, 8u);   /* char width */
+        v86_store_u16(ptsout_lin + 2u, 16u);  /* char height */
+        v86_store_u16(ptsout_lin + 4u, 8u);   /* cell width */
+        v86_store_u16(ptsout_lin + 6u, 16u);  /* cell height */
+        v86_store_u16(ctrl_lin + 4u, 2u);
+        v86_store_u16(ctrl_lin + 8u, 6u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0080u) {
+        /* vex_timv — exchange timer-tick vector.
+         * Input: contrl[7..8] = new far ptr (bytes 14..17).
+         * Output: contrl[9..10] = old far ptr (bytes 18..21),
+         *         intout[0] = tick rate in ms (we report 50ms = 20Hz). */
+        uint16_t new_off = v86_load_u16(ctrl_lin + 14u);
+        uint16_t new_seg = v86_load_u16(ctrl_lin + 16u);
+        v86_store_u16(ctrl_lin + 18u, new_off); /* echo back as previous */
+        v86_store_u16(ctrl_lin + 20u, new_seg);
+        v86_store_u16(intout_lin + 0u, 50u);
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x007Fu) {
+        /* VDI opcode 127 = vro_cpyfm (copy raster, opaque).
+         * Inputs: intin[0] = writing mode
+         *         ptsin[0..1] = source rect (x1,y1,x2,y2)
+         *         ptsin[2..3] = dest   rect
+         *         contrl[7..8]  far ptr src MFDB (bytes 14..17)
+         *         contrl[9..10] far ptr dst MFDB (bytes 18..21)
+         * Output: none. Semantics: raster bit-blit between two MFDBs. */
+        uint16_t s_off = v86_load_u16(ctrl_lin + 14u);
+        uint16_t s_seg = v86_load_u16(ctrl_lin + 16u);
+        uint16_t d_off = v86_load_u16(ctrl_lin + 18u);
+        uint16_t d_seg = v86_load_u16(ctrl_lin + 20u);
+        uint32_t s_mfdb = v86_far_to_linear(s_seg, s_off);
+        uint32_t d_mfdb = v86_far_to_linear(d_seg, d_off);
+        if (s_mfdb != 0u && d_mfdb != 0u) {
+            uint16_t s_adr_off = v86_load_u16(s_mfdb + 0u);
+            uint16_t s_adr_seg = v86_load_u16(s_mfdb + 2u);
+            uint16_t s_h  = v86_load_u16(s_mfdb + 6u);
+            uint16_t s_ww = v86_load_u16(s_mfdb + 8u);
+            uint16_t s_np = v86_load_u16(s_mfdb + 12u);
+            uint16_t d_adr_off = v86_load_u16(d_mfdb + 0u);
+            uint16_t d_adr_seg = v86_load_u16(d_mfdb + 2u);
+            uint32_t src_addr = v86_far_to_linear(s_adr_seg, s_adr_off);
+            uint32_t dst_addr = v86_far_to_linear(d_adr_seg, d_adr_off);
+            uint32_t nplanes = (s_np == 0u) ? 1u : (uint32_t)s_np;
+            uint32_t bytes = (uint32_t)s_ww * 2u * (uint32_t)s_h * nplanes;
+            if (src_addr != 0u && dst_addr != 0u && bytes > 0u && bytes < 0x20000u) {
+                v86_memcpy((void *)(uint64_t)dst_addr,
+                           (const void *)(uint64_t)src_addr,
+                           bytes);
+            }
+        }
         v86_store_u16(ctrl_lin + 4u, 0u);
         v86_store_u16(ctrl_lin + 8u, 0u);
         frame->reserved[0] &= 0xFFFF0000u;
