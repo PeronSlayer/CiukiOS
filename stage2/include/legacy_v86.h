@@ -26,7 +26,7 @@ typedef struct {
     uint16_t ss, sp;
     uint16_t ds, es, fs, gs;
     uint32_t eflags;
-    uint32_t reserved[4]; /* runtime ABI: EAX, EBX, ECX, EDX snapshot */
+    uint32_t reserved[6]; /* runtime ABI: EAX, EBX, ECX, EDX, ESI, EDI snapshot */
 } legacy_v86_frame_t;
 
 typedef enum {

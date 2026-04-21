@@ -35,6 +35,8 @@
     .set FRAME_R1,       0x18
     .set FRAME_R2,       0x1C
     .set FRAME_R3,       0x20
+    .set FRAME_R4,       0x24
+    .set FRAME_R5,       0x28
 
     .set EXIT_REASON_NORMAL, 0
     .set EXIT_REASON_GP_INT, 1
@@ -263,12 +265,15 @@ legacy_v86_pm32_body:
     outb    %al, $0xE9
     movb    $'f', %al
     outb    %al, $0xE9
-    /* Restore guest GPRs from frame.reserved[0..3] = EAX/EBX/ECX/EDX so
-     * the host can return syscall results to the v86 guest. */
+    /* Restore guest GPRs from frame.reserved[0..5] = EAX/EBX/ECX/EDX/ESI/EDI so
+     * the host can return syscall results to the v86 guest. EDI is the frame
+     * pointer so it must be loaded LAST. */
     movl    FRAME_R1(%edi), %ebx
     movl    FRAME_R2(%edi), %ecx
     movl    FRAME_R3(%edi), %edx
+    movl    FRAME_R4(%edi), %esi
     movl    FRAME_R0(%edi), %eax
+    movl    FRAME_R5(%edi), %edi
     iretl
 
 legacy_v86_pm32_spurious:
@@ -282,6 +287,10 @@ legacy_v86_pm32_spurious:
     jmp     .L_spurious_spin
 
 legacy_v86_pm32_gp_handler:
+    /* Preserve guest ESI/EDI on the kernel stack BEFORE any clobber
+     * so we can snapshot them once the frame pointer is available. */
+    pushl   %esi
+    pushl   %edi
     /* Guest 16-bit code is free to modify BP, so EBP cannot be trusted
      * across VM86 traps. Recompute our PIC base on every handler entry. */
     call    .L_gp_base
@@ -289,26 +298,34 @@ legacy_v86_pm32_gp_handler:
     popl    %ebp
     subl    $(.L_gp_base - legacy_v86_pm32_body), %ebp
 
-    /* Trap frame on entry from v86 for #GP with error code:
-     * [esp+00] error code
-     * [esp+04] eip
-     * [esp+08] cs
-     * [esp+12] eflags
-     * [esp+16] esp
-     * [esp+20] ss
-     * [esp+24] es
-     * [esp+28] ds
-     * [esp+32] fs
-     * [esp+36] gs
+    /* Trap frame on entry from v86 for #GP with error code (after the
+     * two pushl above shifted everything by 8 bytes):
+     * [esp+00] saved guest edi
+     * [esp+04] saved guest esi
+     * [esp+08] error code
+     * [esp+12] eip
+     * [esp+16] cs
+     * [esp+20] eflags
+     * [esp+24] esp
+     * [esp+28] ss
+     * [esp+32] es
+     * [esp+36] ds
+     * [esp+40] fs
+     * [esp+44] gs
      */
     /* Snapshot guest GPRs before we repurpose them in the handler.
-     * reserved[0..3] are the agreed runtime ABI slots for EAX..EDX. */
+     * reserved[0..5] are the agreed runtime ABI slots for EAX..EDX,ESI,EDI. */
     movl    legacy_v86_pm32_saved_ctx - legacy_v86_pm32_body(%ebp), %esi
     movl    CTX_OUT(%esi), %edi
     movl    %eax, EXIT_FRAME + FRAME_R0(%edi)
     movl    %ebx, EXIT_FRAME + FRAME_R1(%edi)
     movl    %ecx, EXIT_FRAME + FRAME_R2(%edi)
     movl    %edx, EXIT_FRAME + FRAME_R3(%edi)
+    /* Pop stashed guest EDI then ESI into frame. Use %eax (already saved). */
+    popl    %eax                        /* guest EDI */
+    movl    %eax, EXIT_FRAME + FRAME_R5(%edi)
+    popl    %eax                        /* guest ESI */
+    movl    %eax, EXIT_FRAME + FRAME_R4(%edi)
 
     movw    $0x00E9, %dx
     movb    $'V', %al

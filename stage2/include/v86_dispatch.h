@@ -21,7 +21,7 @@ typedef struct {
     uint16_t ss, sp;
     uint16_t ds, es, fs, gs;
     uint32_t eflags;
-    uint32_t reserved[4];
+    uint32_t reserved[6];
 } legacy_v86_frame_t;
 
 typedef enum {

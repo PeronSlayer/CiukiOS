@@ -4658,6 +4658,8 @@ static int shell_gem_load_mz_image(const char *path, const char *exec_tail, u16 
     out_frame->reserved[1] = 0U;
     out_frame->reserved[2] = 0U;
     out_frame->reserved[3] = 0U;
+    out_frame->reserved[4] = 0U;
+    out_frame->reserved[5] = 0U;
 
     serial_write("[gem] v86 entry cs=0x");
     serial_write_hex64((u64)out_frame->cs);
@@ -9389,6 +9391,8 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             frame.reserved[1] = exit_state.frame.reserved[1];
             frame.reserved[2] = exit_state.frame.reserved[2];
             frame.reserved[3] = exit_state.frame.reserved[3];
+            frame.reserved[4] = exit_state.frame.reserved[4];
+            frame.reserved[5] = exit_state.frame.reserved[5];
             if (exit_state.reason == LEGACY_V86_EXIT_GP_INT) {
                 serial_write("[gem] dispatch int=0x");
                 serial_write_hex64((u64)exit_state.int_vector);
