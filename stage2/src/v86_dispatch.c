@@ -472,6 +472,62 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
+    if (opcode == 0x0066u) {
+        /* VDI opcode 102 = vq_extnd (extended inquire).
+         * Outputs: 45 intout words mirroring v_opnwk, plus 12 extended
+         * fields (intout[45..56]) describing WS extended capabilities,
+         * and 6 ptsout words (same geometry as v_opnwk). GEM's NEWVDI
+         * driver probe reads these to pick code paths. We publish a
+         * 640x480 16-color workstation matching the v_opnwk stub. */
+        uint16_t j;
+        for (j = 0u; j < 57u; ++j) {
+            v86_store_u16(intout_lin + ((uint32_t)j * 2u), 0u);
+        }
+        /* Base 45 words (subset that matters for early probes). */
+        v86_store_u16(intout_lin +  0u, 639u);  /* x max */
+        v86_store_u16(intout_lin +  2u, 479u);  /* y max */
+        v86_store_u16(intout_lin +  4u, 2u);    /* scaling flag (raster) */
+        v86_store_u16(intout_lin +  6u, 372u);  /* pixel width (microns) */
+        v86_store_u16(intout_lin +  8u, 372u);  /* pixel height (microns) */
+        v86_store_u16(intout_lin + 10u, 3u);    /* line widths */
+        v86_store_u16(intout_lin + 12u, 9u);    /* line styles */
+        v86_store_u16(intout_lin + 14u, 6u);    /* marker types */
+        v86_store_u16(intout_lin + 16u, 8u);    /* marker sizes */
+        v86_store_u16(intout_lin + 18u, 1u);    /* faces */
+        v86_store_u16(intout_lin + 20u, 11u);   /* heights */
+        v86_store_u16(intout_lin + 22u, 4u);    /* rotations */
+        v86_store_u16(intout_lin + 24u, 4u);    /* fill patterns */
+        v86_store_u16(intout_lin + 26u, 24u);   /* hatches */
+        v86_store_u16(intout_lin + 28u, 16u);   /* colors supported */
+        v86_store_u16(intout_lin + 30u, 10u);   /* GDP supported */
+        /* Extended fields (intout[45..56]). */
+        v86_store_u16(intout_lin + 90u, 16u);   /* [45] #colors available */
+        v86_store_u16(intout_lin + 92u, 4u);    /* [46] #color planes */
+        v86_store_u16(intout_lin + 94u, 1u);    /* [47] #bitmap modes */
+        v86_store_u16(intout_lin + 96u, 0u);    /* [48] lookup table flag */
+        v86_store_u16(intout_lin + 98u, 1000u); /* [49] raster perf */
+        v86_store_u16(intout_lin +100u, 0u);    /* [50] contour fill cap */
+        v86_store_u16(intout_lin +102u, 2u);    /* [51] text rot coarse */
+        v86_store_u16(intout_lin +104u, 1u);    /* [52] #writing modes */
+        v86_store_u16(intout_lin +106u, 2u);    /* [53] input mode cap */
+        v86_store_u16(intout_lin +108u, 0u);    /* [54] text effects */
+        v86_store_u16(intout_lin +110u, 1u);    /* [55] scalable fonts? */
+        v86_store_u16(intout_lin +112u, 0u);    /* [56] #bezier caps */
+        /* ptsout mirrors v_opnwk. */
+        v86_store_u16(ptsout_lin +  0u, 639u);
+        v86_store_u16(ptsout_lin +  2u, 479u);
+        v86_store_u16(ptsout_lin +  4u, 0u);
+        v86_store_u16(ptsout_lin +  6u, 0u);
+        v86_store_u16(ptsout_lin +  8u, 639u);
+        v86_store_u16(ptsout_lin + 10u, 479u);
+        v86_store_u16(ctrl_lin + 4u, 6u);   /* n_ptsout */
+        v86_store_u16(ctrl_lin + 8u, 57u);  /* n_intout */
+        /* preserve existing WS handle in ctrl[6] if any */
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
     if (opcode == 0x006Eu) {
         /* VDI opcode 110 = vr_trnfm (transform raster form, std<->device).
          * Reference: OpenGEM FreeGEM bindings PPDV102.C + ENTRY.A86.
