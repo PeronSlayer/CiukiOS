@@ -19,6 +19,8 @@ uint32_t g_v86_dta_linear = 0u;
 #define V86_FIND_DTA_DATE_OFFSET 0x18U
 #define V86_FIND_DTA_SIZE_OFFSET 0x1AU
 #define V86_FIND_DTA_NAME_OFFSET 0x1EU
+#define V86_SOFTINT_DEFAULT_OFF 0x0600u
+#define V86_SOFTINT_DEFAULT_SEG 0x0000u
 
 typedef struct v86_find_state {
     int active;
@@ -65,7 +67,9 @@ typedef struct v86_file_handle {
 static v86_mem_block_t s_v86_mem_blocks[V86_MEM_MAX_BLOCKS];
 static uint16_t s_v86_mem_next_seg = V86_MEM_FIRST_SEG;
 static uint8_t s_v86_time_second = 0u;
+static uint8_t s_v86_time_hundredth = 0u;
 static v86_file_handle_t s_v86_file_handles[V86_FILE_MAX_HANDLES];
+static uint16_t s_v86_last_ef_opcode = 0u;
 
 static uint8_t v86_to_upper_ascii(uint8_t ch)
 {
@@ -98,6 +102,149 @@ static void v86_memcpy(void *dst_void, const void *src_void, uint32_t count)
     for (i = 0u; i < count; ++i) {
         dst[i] = src[i];
     }
+}
+
+static void v86_store_u16(uint32_t linear, uint16_t value)
+{
+    volatile uint8_t *p = (volatile uint8_t *)(uint64_t)linear;
+    p[0] = (uint8_t)(value & 0x00FFu);
+    p[1] = (uint8_t)((value >> 8) & 0x00FFu);
+}
+
+static uint16_t v86_load_u16(uint32_t linear)
+{
+    const volatile uint8_t *p = (const volatile uint8_t *)(uint64_t)linear;
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+static uint32_t v86_far_to_linear(uint16_t seg, uint16_t off)
+{
+    return ((uint32_t)seg << 4) + (uint32_t)off;
+}
+
+static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
+{
+    uint16_t dx;
+    uint16_t cx;
+    uint32_t pb_lin;
+    uint16_t ctrl_off;
+    uint16_t ctrl_seg;
+    uint16_t intout_off;
+    uint16_t intout_seg;
+    uint16_t ptsout_off;
+    uint16_t ptsout_seg;
+    uint32_t ctrl_lin;
+    uint32_t intout_lin;
+    uint32_t ptsout_lin;
+    uint16_t opcode;
+    uint16_t i;
+
+    if (!frame) {
+        return 0;
+    }
+
+    cx = (uint16_t)(frame->reserved[2] & 0xFFFFu);
+    if (cx != 0x0473u) {
+        return 0;
+    }
+
+    dx = (uint16_t)(frame->reserved[3] & 0xFFFFu);
+    pb_lin = v86_far_to_linear(frame->ds, dx);
+
+    ctrl_off = v86_load_u16(pb_lin + 0u);
+    ctrl_seg = v86_load_u16(pb_lin + 2u);
+    intout_off = v86_load_u16(pb_lin + 12u);
+    intout_seg = v86_load_u16(pb_lin + 14u);
+    ptsout_off = v86_load_u16(pb_lin + 16u);
+    ptsout_seg = v86_load_u16(pb_lin + 18u);
+
+    if ((ctrl_off == 0u && ctrl_seg == 0u) ||
+        (intout_off == 0u && intout_seg == 0u) ||
+        (ptsout_off == 0u && ptsout_seg == 0u)) {
+        return 0;
+    }
+
+    ctrl_lin = v86_far_to_linear(ctrl_seg, ctrl_off);
+    intout_lin = v86_far_to_linear(intout_seg, intout_off);
+    ptsout_lin = v86_far_to_linear(ptsout_seg, ptsout_off);
+    opcode = v86_load_u16(ctrl_lin + 0u);
+    s_v86_last_ef_opcode = opcode;
+
+    if (opcode == 0x000Cu) {
+        /* VDI opcode 12 (v_text). No outputs; just report completion.
+         * Clear n_ptsout / n_intout so GEM sees a well-formed response. */
+        v86_store_u16(ctrl_lin + 4u, 0u);  /* contrl[2] n_ptsout */
+        v86_store_u16(ctrl_lin + 8u, 0u);  /* contrl[4] n_intout */
+        /* Preserve workstation handle as-is (input). */
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0002u) {
+        /* VDI opcode 2 (v_clswk). Close workstation; no outputs. */
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        v86_store_u16(ctrl_lin + 12u, 0u); /* handle -> 0 */
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode != 0x0001u) {
+        /* Generic VDI no-op completion for early GUI bring-up.
+         * Leave a non-zero workstation handle so callers can proceed. */
+        if (v86_load_u16(ctrl_lin + 12u) == 0u) {
+            v86_store_u16(ctrl_lin + 12u, 1u);
+        }
+        v86_store_u16(ctrl_lin + 4u, 0u);  /* n_ptsout = 0 */
+        v86_store_u16(ctrl_lin + 8u, 0u);  /* n_intout = 0 */
+        frame->reserved[0] &= 0xFFFF0000u; /* AX=0 success */
+        frame->eflags &= ~0x00000001u;     /* clear CF */
+        return 1;
+    }
+
+    /* Minimal VDI open-workstation success surface for early GEM bring-up. */
+    v86_store_u16(ctrl_lin + 4u, 6u);   /* contrl[2] */
+    v86_store_u16(ctrl_lin + 8u, 45u);  /* contrl[4] */
+    v86_store_u16(ctrl_lin + 12u, 1u);  /* contrl[6] workstation handle */
+
+    for (i = 0u; i < 45u; ++i) {
+        v86_store_u16(intout_lin + ((uint32_t)i * 2u), 1u);
+    }
+    v86_store_u16(intout_lin + 0u, 1u);   /* handle echo */
+    v86_store_u16(intout_lin + 2u, 16u);  /* planes/colors hint */
+    v86_store_u16(intout_lin + 4u, 640u); /* width hint */
+    v86_store_u16(intout_lin + 6u, 480u); /* height hint */
+
+    v86_store_u16(ptsout_lin + 0u, 639u);
+    v86_store_u16(ptsout_lin + 2u, 479u);
+    v86_store_u16(ptsout_lin + 4u, 0u);
+    v86_store_u16(ptsout_lin + 6u, 0u);
+    v86_store_u16(ptsout_lin + 8u, 639u);
+    v86_store_u16(ptsout_lin + 10u, 479u);
+
+    frame->reserved[0] &= 0xFFFF0000u; /* AX=0 success */
+    frame->eflags &= ~0x00000001u;     /* clear CF */
+
+    return 1;
+}
+
+static uint32_t v86_default_softint_far(uint8_t vector)
+{
+    if (vector != 0xEFu) {
+        return 0u;
+    }
+    return ((uint32_t)V86_SOFTINT_DEFAULT_SEG << 16) | (uint32_t)V86_SOFTINT_DEFAULT_OFF;
+}
+
+static void v86_install_default_softint_stub(void)
+{
+    volatile uint8_t *stub = (volatile uint8_t *)(uint64_t)V86_SOFTINT_DEFAULT_OFF;
+
+    /* Default chain target for AH=35 fallback on INT EF: IRET.
+     * GEM's EF wrapper chains with PUSHF-equivalent + CALL FAR. */
+    stub[0] = 0xCFu;
 }
 
 static void v86_str_copy(char *dst, const char *src, uint32_t dst_size)
@@ -786,6 +933,50 @@ static void v86_file_close_all(void)
     }
 }
 
+static int v86_reflect_soft_interrupt(uint8_t vector, legacy_v86_frame_t *frame)
+{
+    uint32_t far_ptr;
+    uint16_t new_ip;
+    uint16_t new_cs;
+    uint16_t sp;
+    uint16_t flags16;
+    uint32_t ss_base;
+
+    if (!frame) {
+        return 0;
+    }
+
+    far_ptr = s_v86_int_vectors[vector];
+    if (far_ptr == 0u) {
+        far_ptr = v86_default_softint_far(vector);
+        if (far_ptr == 0u) {
+            return 0;
+        }
+    }
+
+    new_ip = (uint16_t)(far_ptr & 0xFFFFu);
+    new_cs = (uint16_t)((far_ptr >> 16) & 0xFFFFu);
+    sp = frame->sp;
+    ss_base = ((uint32_t)frame->ss << 4);
+
+    /* Keep IF set in the saved image so IRET restores runnable flags. */
+    flags16 = (uint16_t)((frame->eflags | 0x00000200u) & 0xFFFFu);
+
+    /* Emulate INT n in VM86: push FLAGS, CS, IP then jump to vector. */
+    sp = (uint16_t)(sp - 2u);
+    v86_store_u16(ss_base + (uint32_t)sp, flags16);
+    sp = (uint16_t)(sp - 2u);
+    v86_store_u16(ss_base + (uint32_t)sp, frame->cs);
+    sp = (uint16_t)(sp - 2u);
+    v86_store_u16(ss_base + (uint32_t)sp, frame->ip);
+
+    frame->sp = sp;
+    frame->cs = new_cs;
+    frame->ip = new_ip;
+    frame->eflags &= ~0x00000300u; /* clear TF + IF while in handler */
+    return 1;
+}
+
 /* Historical scaffold token retained for scripts/test_v86_dispatch.sh:
  * return V86_DISPATCH_CONT;
  */
@@ -864,8 +1055,15 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     }
 
     if (vector != 0x21u) {
-        if (s_v86_int_vectors[vector] != 0u) {
-            serial_write("[v86] dispatch soft-int passthrough vec=0x");
+        if (vector == 0xEFu && v86_try_emulate_int_ef(frame)) {
+            serial_write("[v86] dispatch soft-int emu vec=EF op=0x");
+            serial_write_hex64((uint64_t)s_v86_last_ef_opcode);
+            serial_write("\n");
+            return V86_DISPATCH_CONT;
+        }
+
+        if (v86_reflect_soft_interrupt(vector, frame)) {
+            serial_write("[v86] dispatch soft-int reflect vec=0x");
             serial_write_hex64((uint64_t)vector);
             serial_write(" far=0x");
             serial_write_hex64((uint64_t)s_v86_int_vectors[vector]);
@@ -948,6 +1146,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         uint16_t off = (uint16_t)(frame->reserved[3] & 0xFFFFu);
         uint16_t seg = frame->ds;
         s_v86_int_vectors[vec] = ((uint32_t)seg << 16) | (uint32_t)off;
+
         V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
     }
@@ -955,6 +1154,9 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     case 0x35u: { /* Get interrupt vector: AL=index -> ES:BX */
         uint8_t vec = (uint8_t)(eax & 0x00FFu);
         uint32_t far_ptr = s_v86_int_vectors[vec];
+        if (far_ptr == 0u) {
+            far_ptr = v86_default_softint_far(vec);
+        }
         frame->es = (uint16_t)((far_ptr >> 16) & 0xFFFFu);
         frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | (far_ptr & 0xFFFFu);
         V86_CF_CLEAR();
@@ -970,9 +1172,19 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     }
 
     case 0x2Cu: { /* Get time: CH=hour, CL=min, DH=sec, DL=1/100 sec */
+        uint16_t sec;
+        uint16_t hund;
         uint16_t cx_time = (uint16_t)((12u << 8) | 0x22u); /* 12:34 */
-        uint16_t dx_time = (uint16_t)(((uint16_t)(s_v86_time_second % 60u) << 8) | 0u);
-        s_v86_time_second = (uint8_t)((s_v86_time_second + 1u) % 60u);
+
+        s_v86_time_hundredth = (uint8_t)(s_v86_time_hundredth + 5u);
+        if (s_v86_time_hundredth >= 100u) {
+            s_v86_time_hundredth = (uint8_t)(s_v86_time_hundredth - 100u);
+            s_v86_time_second = (uint8_t)((s_v86_time_second + 1u) % 60u);
+        }
+
+        sec = (uint16_t)(s_v86_time_second % 60u);
+        hund = (uint16_t)s_v86_time_hundredth;
+        uint16_t dx_time = (uint16_t)((sec << 8) | hund);
 
         frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) | (uint32_t)cx_time;
         frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) | (uint32_t)dx_time;
@@ -1529,6 +1741,7 @@ int v86_dispatch_arm(uint32_t magic)
         return 0;
     }
     v86_vectors_reset();
+    v86_install_default_softint_stub();
     v86_mem_reset();
     v86_file_handles_reset();
     v86_exec_request_clear();
