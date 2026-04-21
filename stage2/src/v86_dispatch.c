@@ -888,7 +888,7 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     /* One-shot diagnostic for the first few non-open opcodes so we can
      * observe what GEM is really asking. Counter capped to keep log
      * size bounded. */
-    if (opcode != 0x0001u && s_v86_ef_diag_count < 32u) {
+    if (opcode != 0x0001u && s_v86_ef_diag_count < 8u) {
         s_v86_ef_diag_count += 1u;
         serial_write("[v86] ef diag op=0x");
         serial_write_hex64((uint64_t)opcode);
@@ -1077,7 +1077,7 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         uint16_t d_seg = v86_load_u16(ctrl_lin + 20u);
         uint32_t s_mfdb = v86_far_to_linear(s_seg, s_off);
         uint32_t d_mfdb = v86_far_to_linear(d_seg, d_off);
-        if (s_v86_ef_diag_count < 32u) {
+        if (s_v86_ef_diag_count < 8u) {
             serial_write("[v86] vr_trnfm src=");
             serial_write_hex64((uint64_t)s_mfdb);
             serial_write(" dst=");
@@ -1099,7 +1099,7 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
             uint32_t dst_addr = v86_far_to_linear(d_adr_seg, d_adr_off);
             uint32_t nplanes = (s_np == 0u) ? 1u : (uint32_t)s_np;
             uint32_t bytes = (uint32_t)s_ww * 2u * (uint32_t)s_h * nplanes;
-            if (s_v86_ef_diag_count < 32u) {
+            if (s_v86_ef_diag_count < 8u) {
                 serial_write(" w=");
                 serial_write_hex64((uint64_t)s_w);
                 serial_write(" h=");
@@ -1158,7 +1158,7 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
              * forever. In-place transforms use src==dst so this also
              * clears source fd_stand. */
             v86_store_u16(d_mfdb + 10u, 0u);
-        } else if (s_v86_ef_diag_count < 32u) {
+        } else if (s_v86_ef_diag_count < 8u) {
             serial_write(" (null MFDB)\n");
         }
         v86_store_u16(ctrl_lin + 4u, 0u);  /* n_ptsout */
@@ -1215,9 +1215,10 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
-    if (opcode == 0x007Eu || opcode == 0x007Fu) {
+    if (opcode == 0x007Eu || opcode == 0x007Fu || opcode == 0x0080u) {
         /* VDI opcode 126 = vex_motv (install mouse motion handler),
          * 127 = vex_curv (install cursor motion / redraw handler).
+         * 128 = vex_butv (install mouse button handler).
          * Same ABI as vex_timv: ctrl[7..8] = new far ptr, ctrl[9..10] =
          * returned old far ptr. If we don't return a valid IRET stub,
          * GEM's handler chains into a null/self pointer and the guest
@@ -2656,7 +2657,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     {
         static uint32_t s_v86_dispatch_count = 0u;
         static uint8_t  s_v86_dispatch_verbose = 1u;
-        const uint32_t VERBOSE_CAP = 128u;
+        const uint32_t VERBOSE_CAP = 48u;
         if (s_v86_dispatch_verbose && s_v86_dispatch_count < VERBOSE_CAP) {
             serial_write("[v86] dispatch vec=0x");
             serial_write_hex64((uint64_t)vector);
@@ -2701,7 +2702,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
 
     if (vector != 0x21u) {
         static uint32_t s_v86_softint_count = 0u;
-        uint8_t trace = (s_v86_softint_count < 256u) ? 1u : 0u;
+        uint8_t trace = (s_v86_softint_count < 96u) ? 1u : 0u;
         s_v86_softint_count += 1u;
         if (vector == 0x10u && v86_try_emulate_int_10(frame)) {
             if (trace) {
@@ -2777,7 +2778,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
 
     {
         static uint32_t s_v86_int21_count = 0u;
-        if (s_v86_int21_count < 256u) {
+        if (s_v86_int21_count < 96u) {
             serial_write("[v86] int21 ah=0x");
             serial_write_hex64((uint64_t)ah);
             serial_write(" al=0x");
@@ -3264,7 +3265,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         static uint32_t s_v86_read3f_log_count = 0u;
         uint8_t log_read = 0u;
 
-        if (s_v86_read3f_log_count < 48u || (s_v86_read3f_log_count & 0x7Fu) == 0u) {
+        if (s_v86_read3f_log_count < 8u || (s_v86_read3f_log_count & 0x3FFu) == 0u) {
             log_read = 1u;
             serial_write("[v86] int21/3F read handle=");
             serial_write_hex64((uint64_t)handle);

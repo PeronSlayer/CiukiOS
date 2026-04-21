@@ -9377,7 +9377,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
 
         for (;;) {
             static u32 s_gem_loop_count = 0u;
-            if (s_gem_loop_count < 128u) {
+            if (s_gem_loop_count < 48u) {
                 serial_write("[gem] v86_enter #0x");
                 serial_write_hex64((u64)s_gem_loop_count);
                 serial_write(" cs:ip=0x");
@@ -9394,7 +9394,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
                 shell_gem_disarm_path();
                 return;
             }
-            if (s_gem_loop_count < 128u) {
+            if (s_gem_loop_count < 48u) {
                 serial_write(" <end> reason=0x");
                 serial_write_hex64((u64)exit_state.reason);
                 serial_write(" vec=0x");
@@ -9422,7 +9422,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             frame.reserved[4] = exit_state.frame.reserved[4];
             frame.reserved[5] = exit_state.frame.reserved[5];
             if (exit_state.reason == LEGACY_V86_EXIT_GP_INT) {
-                if (s_gem_loop_count < 128u) {
+                if (s_gem_loop_count < 48u) {
                     serial_write("[gem] dispatch int=0x");
                     serial_write_hex64((u64)exit_state.int_vector);
                     serial_write(" cs:ip=0x");
