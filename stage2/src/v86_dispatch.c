@@ -2474,7 +2474,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     {
         static uint32_t s_v86_dispatch_count = 0u;
         static uint8_t  s_v86_dispatch_verbose = 1u;
-        if (s_v86_dispatch_verbose && s_v86_dispatch_count < 4096u) {
+        if (s_v86_dispatch_verbose && s_v86_dispatch_count < 32u) {
             serial_write("[v86] dispatch vec=0x");
             serial_write_hex64((uint64_t)vector);
             serial_write(" eax=0x");
@@ -2504,7 +2504,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
 
     if (vector != 0x21u) {
         static uint32_t s_v86_softint_count = 0u;
-        uint8_t trace = (s_v86_softint_count < 4096u) ? 1u : 0u;
+        uint8_t trace = (s_v86_softint_count < 1024u) ? 1u : 0u;
         s_v86_softint_count += 1u;
         if (vector == 0x10u && v86_try_emulate_int_10(frame)) {
             if (trace) {
@@ -2580,7 +2580,7 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
 
     {
         static uint32_t s_v86_int21_count = 0u;
-        if (s_v86_int21_count < 4096u) {
+        if (s_v86_int21_count < 1024u) {
             serial_write("[v86] int21 ah=0x");
             serial_write_hex64((uint64_t)ah);
             serial_write(" al=0x");
