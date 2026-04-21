@@ -283,9 +283,12 @@ static int v86_try_emulate_aes(legacy_v86_frame_t *frame)
     uint32_t pb_lin;
     uint16_t ctrl_off;
     uint16_t ctrl_seg;
+    uint16_t intin_off;
+    uint16_t intin_seg;
     uint16_t intout_off;
     uint16_t intout_seg;
     uint32_t ctrl_lin;
+    uint32_t intin_lin;
     uint32_t intout_lin;
     uint16_t opcode;
 
@@ -298,6 +301,8 @@ static int v86_try_emulate_aes(legacy_v86_frame_t *frame)
 
     ctrl_off = v86_load_u16(pb_lin + 0u);
     ctrl_seg = v86_load_u16(pb_lin + 2u);
+    intin_off = v86_load_u16(pb_lin + 4u);
+    intin_seg = v86_load_u16(pb_lin + 6u);
     intout_off = v86_load_u16(pb_lin + 12u);
     intout_seg = v86_load_u16(pb_lin + 14u);
 
@@ -307,6 +312,7 @@ static int v86_try_emulate_aes(legacy_v86_frame_t *frame)
     }
 
     ctrl_lin = v86_far_to_linear(ctrl_seg, ctrl_off);
+    intin_lin = v86_far_to_linear(intin_seg, intin_off);
     intout_lin = v86_far_to_linear(intout_seg, intout_off);
     opcode = v86_load_u16(ctrl_lin + 0u);
     s_v86_last_aes_opcode = opcode;
@@ -342,6 +348,131 @@ static int v86_try_emulate_aes(legacy_v86_frame_t *frame)
         v86_store_u16(ctrl_lin + 8u, 1u);
         v86_store_u16(intout_lin + 0u, 1u);
         break;
+    case 30u:  /* menu_bar    — install/remove menu bar */
+    case 31u:  /* menu_icheck — check menu item */
+    case 32u:  /* menu_tnormal— title normal/select */
+    case 33u:  /* menu_text   — set menu item text */
+    case 34u:  /* menu_register */
+    case 35u:  /* menu_unregister */
+    case 36u:  /* menu_click  — auto click delay */
+    case 37u:  /* menu_attach */
+    case 38u:  /* menu_istart */
+    case 39u:  /* menu_settings */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 42u:  /* objc_draw   */
+    case 44u:  /* objc_find   */
+    case 45u:  /* objc_change */
+    case 46u:  /* objc_delete */
+    case 47u:  /* objc_add    */
+    case 48u:  /* objc_order  */
+    case 49u:  /* objc_edit   */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 43u: { /* objc_offset — return obj absolute origin */
+        uint16_t obj = v86_load_u16(intin_lin + 2u);
+        (void)obj;
+        v86_store_u16(ctrl_lin + 8u, 3u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        v86_store_u16(intout_lin + 2u, 0u); /* x */
+        v86_store_u16(intout_lin + 4u, 0u); /* y */
+        break;
+    }
+    case 50u:  /* form_do     — return exit object id */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 51u:  /* form_dial   — fd_reserve/fd_release/etc. */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 52u:  /* form_alert  — return clicked button (default 1) */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 53u:  /* form_error  */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 54u: { /* form_center — center rect, echo input rect back. */
+        uint16_t x = v86_load_u16(intin_lin + 0u);
+        uint16_t y = v86_load_u16(intin_lin + 2u);
+        uint16_t w = v86_load_u16(intin_lin + 4u);
+        uint16_t h = v86_load_u16(intin_lin + 6u);
+        v86_store_u16(ctrl_lin + 8u, 5u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        v86_store_u16(intout_lin + 2u, x);
+        v86_store_u16(intout_lin + 4u, y);
+        v86_store_u16(intout_lin + 6u, w);
+        v86_store_u16(intout_lin + 8u, h);
+        break;
+    }
+    case 78u: /* graf_mouse — set mouse form (M_OFF/M_ON/etc.) */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 79u:  /* graf_mkstate — return mouse state */
+        v86_store_u16(ctrl_lin + 8u, 5u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        v86_store_u16(intout_lin + 2u, 0u); /* x */
+        v86_store_u16(intout_lin + 4u, 0u); /* y */
+        v86_store_u16(intout_lin + 6u, 0u); /* btn */
+        v86_store_u16(intout_lin + 8u, 0u); /* mod */
+        break;
+    case 100u: /* wind_create — return new window handle */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 2u);
+        break;
+    case 101u: /* wind_open  */
+    case 102u: /* wind_close */
+    case 103u: /* wind_delete */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 104u: { /* wind_get   — query window field */
+        uint16_t mode = v86_load_u16(intin_lin + 2u);
+        v86_store_u16(ctrl_lin + 8u, 5u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        switch (mode) {
+        case 4u:   /* WF_WORKXYWH */
+        case 5u:   /* WF_CURRXYWH */
+        case 6u:   /* WF_PREVXYWH */
+        case 7u:   /* WF_FULLXYWH */
+            v86_store_u16(intout_lin + 2u, 0u);
+            v86_store_u16(intout_lin + 4u, 0u);
+            v86_store_u16(intout_lin + 6u, 640u);
+            v86_store_u16(intout_lin + 8u, 480u);
+            break;
+        default:
+            v86_store_u16(intout_lin + 2u, 0u);
+            v86_store_u16(intout_lin + 4u, 0u);
+            v86_store_u16(intout_lin + 6u, 0u);
+            v86_store_u16(intout_lin + 8u, 0u);
+            break;
+        }
+        break;
+    }
+    case 105u: /* wind_set   */
+    case 106u: /* wind_find  */
+    case 107u: /* wind_update */
+        v86_store_u16(ctrl_lin + 8u, 1u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        break;
+    case 108u: { /* wind_calc — echo input rect (no border deltas) */
+        uint16_t x = v86_load_u16(intin_lin + 4u);
+        uint16_t y = v86_load_u16(intin_lin + 6u);
+        uint16_t w = v86_load_u16(intin_lin + 8u);
+        uint16_t h = v86_load_u16(intin_lin + 10u);
+        v86_store_u16(ctrl_lin + 8u, 5u);
+        v86_store_u16(intout_lin + 0u, 1u);
+        v86_store_u16(intout_lin + 2u, x);
+        v86_store_u16(intout_lin + 4u, y);
+        v86_store_u16(intout_lin + 6u, w);
+        v86_store_u16(intout_lin + 8u, h);
+        break;
+    }
     default: /* Generic success */
         v86_store_u16(ctrl_lin + 8u, 1u);
         v86_store_u16(intout_lin + 0u, 1u);
@@ -761,14 +892,32 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
+    if (opcode == 0x000Bu || opcode == 0x0072u) {
+        /* VDI 11 = v_bar, 114 = vr_recfl. Filled rectangle into the
+         * screen workstation. ptsin[0..1]=(x1,y1) ptsin[2..3]=(x2,y2).
+         * For bring-up paint a fixed light-gray rectangle so the
+         * desktop background and window borders become visible. */
+        uint16_t x1 = v86_load_u16(ptsin_lin + 0u);
+        uint16_t y1 = v86_load_u16(ptsin_lin + 2u);
+        uint16_t x2 = v86_load_u16(ptsin_lin + 4u);
+        uint16_t y2 = v86_load_u16(ptsin_lin + 6u);
+        uint16_t tmp;
+        if (x1 > x2) { tmp = x1; x1 = x2; x2 = tmp; }
+        if (y1 > y2) { tmp = y1; y1 = y2; y2 = tmp; }
+        uint32_t w = (uint32_t)x2 - (uint32_t)x1 + 1u;
+        uint32_t h = (uint32_t)y2 - (uint32_t)y1 + 1u;
+        if (w > 0u && h > 0u && w <= 4096u && h <= 4096u) {
+            video_fill_rect((u32)x1, (u32)y1, w, h, 0x00C0C0C0u);
+        }
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
     if (opcode == 0x007Fu) {
-        /* VDI opcode 127 = vro_cpyfm (copy raster, opaque).
-         * Inputs: intin[0] = writing mode
-         *         ptsin[0..1] = source rect (x1,y1,x2,y2)
-         *         ptsin[2..3] = dest   rect
-         *         contrl[7..8]  far ptr src MFDB (bytes 14..17)
-         *         contrl[9..10] far ptr dst MFDB (bytes 18..21)
-         * Output: none. Semantics: raster bit-blit between two MFDBs. */
+        /* VDI opcode 127 = vro_cpyfm (copy raster, opaque). */
         uint16_t s_off = v86_load_u16(ctrl_lin + 14u);
         uint16_t s_seg = v86_load_u16(ctrl_lin + 16u);
         uint16_t d_off = v86_load_u16(ctrl_lin + 18u);
