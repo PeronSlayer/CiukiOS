@@ -2023,6 +2023,24 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     serial_write_hex64((uint64_t)(eax & 0xFFu));
     serial_write("\n");
 
+    /* Diagnostic: dump the next 16 bytes the guest is about to execute
+     * after we return from this INT 21h. This makes it possible to see
+     * what GEM.EXE is running when it stops trapping (non-privileged
+     * busy loop on BDA tick, self-modifying code, etc.). */
+    {
+        uint32_t peek_lin = ((uint32_t)frame->cs << 4) + (frame->ip & 0xFFFFu);
+        volatile const uint8_t *pk = (const uint8_t *)(uint64_t)peek_lin;
+        serial_write("[v86] int21 next16@");
+        serial_write_hex64((uint64_t)peek_lin);
+        serial_write(":");
+        for (int i = 0; i < 16; i++) {
+            serial_write(" ");
+            serial_write_hex64((uint64_t)pk[i]);
+        }
+        serial_write("\n");
+    }
+
+
     /* Helpers: clear/set CF in v86 guest EFLAGS to signal success/error. */
     #define V86_CF_CLEAR()  do { frame->eflags &= ~0x00000001u; } while (0)
     #define V86_CF_SET()    do { frame->eflags |=  0x00000001u; } while (0)
