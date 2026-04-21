@@ -9452,6 +9452,17 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
                     }
 
                     v86_dispatch_clear_exec_path();
+                    /* Once the guest issues an explicit INT21/4B exec,
+                     * it has taken over responsibility for launching the
+                     * next binary (e.g. GEMVDI.EXE loading GEM.EXE).
+                     * The pre-configured gem_next chain is now redundant:
+                     * firing it on the exec'd child's 4C would re-launch
+                     * GEM.EXE in a restart loop. Clear it so only the
+                     * child's natural termination reaches the shell. */
+                    if (gem_next != (const char *)0) {
+                        serial_write("[gem] chain superseded by exec (clearing gem_next)\n");
+                        gem_next = (const char *)0;
+                    }
                     serial_write("[gem] dispatch exec handoff=ok\n");
                     continue;
                 }
