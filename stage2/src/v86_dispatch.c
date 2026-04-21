@@ -3,6 +3,8 @@
 #include "fat.h"
 #include "serial.h"
 #include "video.h"
+#include "keyboard.h"
+#include "mouse.h"
 
 static const char g_opengem_044_c_sentinel[] = "OPENGEM-044-C";
 static int s_v86_dispatch_armed = 0;
@@ -200,6 +202,8 @@ static int v86_try_emulate_int_16(legacy_v86_frame_t *frame)
 {
     uint32_t eax;
     uint8_t ah;
+    uint8_t scan = 0u;
+    uint8_t ascii = 0u;
 
     if (!frame) {
         return 0;
@@ -208,23 +212,39 @@ static int v86_try_emulate_int_16(legacy_v86_frame_t *frame)
     ah = (uint8_t)((eax >> 8) & 0xFFu);
 
     switch (ah) {
-    case 0x00u: /* Wait for and read key (blocking) — return fake no-key */
+    case 0x00u: /* Wait for and read key (blocking). Non-blocking poll
+                 * here — if no key, return AX=0 (treated as no-key).
+                 * This matches the prior stub but feeds real chars when
+                 * the PS/2 driver has them. */
     case 0x10u:
     case 0x20u:
-        frame->reserved[0] = eax & 0xFFFF0000u; /* AX=0 (no scancode) */
-        frame->eflags |= 0x00000040u; /* ZF=1 */
+        if (stage2_keyboard_read_key(&scan, &ascii)) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) |
+                                 ((uint32_t)scan << 8) | (uint32_t)ascii;
+            frame->eflags &= ~0x00000040u; /* ZF=0, key available */
+        } else {
+            frame->reserved[0] = eax & 0xFFFF0000u;
+            frame->eflags |= 0x00000040u; /* ZF=1, no key */
+        }
         return 1;
     case 0x01u: /* Check key (non-blocking): ZF=1 => no key */
     case 0x11u:
     case 0x21u:
-        frame->reserved[0] = eax & 0xFFFF0000u;
-        frame->eflags |= 0x00000040u;
+        if (stage2_keyboard_peek_key(&scan, &ascii)) {
+            frame->reserved[0] = (eax & 0xFFFF0000u) |
+                                 ((uint32_t)scan << 8) | (uint32_t)ascii;
+            frame->eflags &= ~0x00000040u;
+        } else {
+            frame->reserved[0] = eax & 0xFFFF0000u;
+            frame->eflags |= 0x00000040u;
+        }
         frame->eflags &= ~0x00000001u;
         return 1;
     case 0x02u: /* Shift flags */
     case 0x12u:
     case 0x22u:
-        frame->reserved[0] = eax & 0xFFFF0000u;
+        frame->reserved[0] = (eax & 0xFFFF0000u) |
+                             (uint32_t)stage2_keyboard_shift_flags();
         frame->eflags &= ~0x00000001u;
         return 1;
     default:
@@ -275,6 +295,29 @@ static int v86_try_emulate_int_1a(legacy_v86_frame_t *frame)
  * Provides a centered, no-button mouse so GEM cursor + AES graf_mkstate
  * have a coherent input source. Returns AX=0xFFFF for AX=0 (driver
  * present) so callers stop probing for a mouse driver. */
+static int s_v86_mouse_x = 320;
+static int s_v86_mouse_y = 240;
+static uint16_t s_v86_mouse_btn = 0u;
+static int32_t s_v86_mouse_acc_dx = 0;
+static int32_t s_v86_mouse_acc_dy = 0;
+
+static void v86_mouse_pump(void)
+{
+    int32_t dx = 0;
+    int32_t dy = 0;
+    uint16_t btn = 0u;
+    stage2_mouse_consume_deltas(&dx, &dy, &btn);
+    s_v86_mouse_x += dx;
+    s_v86_mouse_y += dy;
+    if (s_v86_mouse_x < 0)   s_v86_mouse_x = 0;
+    if (s_v86_mouse_y < 0)   s_v86_mouse_y = 0;
+    if (s_v86_mouse_x > 639) s_v86_mouse_x = 639;
+    if (s_v86_mouse_y > 479) s_v86_mouse_y = 479;
+    s_v86_mouse_btn = btn;
+    s_v86_mouse_acc_dx += dx;
+    s_v86_mouse_acc_dy += dy;
+}
+
 static int v86_try_emulate_int_33(legacy_v86_frame_t *frame)
 {
     uint32_t eax;
@@ -286,23 +329,35 @@ static int v86_try_emulate_int_33(legacy_v86_frame_t *frame)
     eax = frame->reserved[0];
     ax = (uint16_t)(eax & 0xFFFFu);
 
+    v86_mouse_pump();
+
     switch (ax) {
     case 0x0000u: /* Reset / get installed flag */
         frame->reserved[0] = (eax & 0xFFFF0000u) | 0xFFFFu; /* AX=0xFFFF */
         frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) | 2u; /* BX=2 */
         frame->eflags &= ~0x00000001u;
         return 1;
-    case 0x0003u: /* Get pos+btn — center of 640x480, no buttons */
-        frame->reserved[1] = frame->reserved[1] & 0xFFFF0000u;       /* BX=0 */
-        frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) | 320u; /* CX=x */
-        frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) | 240u; /* DX=y */
+    case 0x0003u: /* Get pos+btn */
+        frame->reserved[1] = (frame->reserved[1] & 0xFFFF0000u) |
+                             (uint32_t)s_v86_mouse_btn;
+        frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) |
+                             ((uint32_t)s_v86_mouse_x & 0xFFFFu);
+        frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) |
+                             ((uint32_t)s_v86_mouse_y & 0xFFFFu);
         frame->eflags &= ~0x00000001u;
         return 1;
-    case 0x000Bu: /* Read motion counters */
-        frame->reserved[2] = frame->reserved[2] & 0xFFFF0000u;
-        frame->reserved[3] = frame->reserved[3] & 0xFFFF0000u;
+    case 0x000Bu: { /* Read motion counters (signed delta since last call) */
+        int32_t cx = s_v86_mouse_acc_dx;
+        int32_t dx = s_v86_mouse_acc_dy;
+        s_v86_mouse_acc_dx = 0;
+        s_v86_mouse_acc_dy = 0;
+        frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) |
+                             ((uint32_t)cx & 0xFFFFu);
+        frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) |
+                             ((uint32_t)dx & 0xFFFFu);
         frame->eflags &= ~0x00000001u;
         return 1;
+    }
     default: /* Generic: clear CF, leave registers as caller set them. */
         frame->eflags &= ~0x00000001u;
         return 1;
@@ -366,11 +421,13 @@ static int v86_try_emulate_aes(legacy_v86_frame_t *frame)
         v86_store_u16(intout_lin + 0u, 1u);
         break;
     case 25u: /* evnt_multi: intout[0] = events fired (return MU_TIMER bit) */
+        v86_mouse_pump();
         v86_store_u16(ctrl_lin + 8u, 6u);
-        v86_store_u16(intout_lin + 0u, 0x0020u); /* MU_TIMER */
-        v86_store_u16(intout_lin + 2u, 0u);
-        v86_store_u16(intout_lin + 4u, 0u);
-        v86_store_u16(intout_lin + 6u, 0u);
+        v86_store_u16(intout_lin + 0u,
+                      (uint16_t)(0x0020u | (s_v86_mouse_btn ? 0x0002u : 0u)));
+        v86_store_u16(intout_lin + 2u, (uint16_t)s_v86_mouse_x);
+        v86_store_u16(intout_lin + 4u, (uint16_t)s_v86_mouse_y);
+        v86_store_u16(intout_lin + 6u, s_v86_mouse_btn);
         v86_store_u16(intout_lin + 8u, 0u);
         v86_store_u16(intout_lin + 10u, 0u);
         break;
@@ -452,12 +509,13 @@ static int v86_try_emulate_aes(legacy_v86_frame_t *frame)
         v86_store_u16(intout_lin + 0u, 1u);
         break;
     case 79u:  /* graf_mkstate — return mouse state */
+        v86_mouse_pump();
         v86_store_u16(ctrl_lin + 8u, 5u);
         v86_store_u16(intout_lin + 0u, 1u);
-        v86_store_u16(intout_lin + 2u, 0u); /* x */
-        v86_store_u16(intout_lin + 4u, 0u); /* y */
-        v86_store_u16(intout_lin + 6u, 0u); /* btn */
-        v86_store_u16(intout_lin + 8u, 0u); /* mod */
+        v86_store_u16(intout_lin + 2u, (uint16_t)s_v86_mouse_x);
+        v86_store_u16(intout_lin + 4u, (uint16_t)s_v86_mouse_y);
+        v86_store_u16(intout_lin + 6u, s_v86_mouse_btn);
+        v86_store_u16(intout_lin + 8u, (uint16_t)stage2_keyboard_shift_flags());
         break;
     case 100u: /* wind_create — return new window handle */
         v86_store_u16(ctrl_lin + 8u, 1u);
@@ -974,7 +1032,27 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
             uint32_t dst_addr = v86_far_to_linear(d_adr_seg, d_adr_off);
             uint32_t nplanes = (s_np == 0u) ? 1u : (uint32_t)s_np;
             uint32_t bytes = (uint32_t)s_ww * 2u * (uint32_t)s_h * nplanes;
-            if (src_addr != 0u && dst_addr != 0u && bytes > 0u && bytes < 0x20000u) {
+            int dst_is_screen = (d_adr_off == 0u && d_adr_seg == 0u);
+            if (dst_is_screen && src_addr != 0u) {
+                /* Route to GOP framebuffer. ptsin[2..3]=(dx1,dy1),
+                 * ptsin[4..5]=(dx2,dy2). Convert 4-plane interleaved
+                 * 16-color GEM raster to a per-pixel light/dark gray
+                 * approximation so icons/title bars become visible. */
+                uint16_t dx1 = v86_load_u16(ptsin_lin + 8u);
+                uint16_t dy1 = v86_load_u16(ptsin_lin + 10u);
+                uint16_t dx2 = v86_load_u16(ptsin_lin + 12u);
+                uint16_t dy2 = v86_load_u16(ptsin_lin + 14u);
+                uint32_t w = (dx2 >= dx1) ? (uint32_t)(dx2 - dx1 + 1u) : 0u;
+                uint32_t h = (dy2 >= dy1) ? (uint32_t)(dy2 - dy1 + 1u) : 0u;
+                if (w > 0u && h > 0u && w <= 4096u && h <= 4096u) {
+                    /* Coarse approximation: paint as solid darker gray
+                     * to make the blit footprint visible. Per-pixel
+                     * GEM 4bpp planar -> RGB conversion is left for a
+                     * future step. */
+                    video_fill_rect((u32)dx1, (u32)dy1, w, h, 0x00808080u);
+                }
+            } else if (src_addr != 0u && dst_addr != 0u &&
+                       bytes > 0u && bytes < 0x20000u) {
                 v86_memcpy((void *)(uint64_t)dst_addr,
                            (const void *)(uint64_t)src_addr,
                            bytes);
