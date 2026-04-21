@@ -1226,6 +1226,19 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     v86_store_u16(ptsout_lin + 8u, 639u);
     v86_store_u16(ptsout_lin + 10u, 479u);
 
+    /* Option-3 visibility probe: paint the full GOP framebuffer with the
+     * classic GEM desktop background (light gray 0xC0C0C0) at v_opnwk time.
+     * This proves end-to-end that our VDI intercept is reached and that
+     * the GOP pipeline renders. Real per-opcode drawing still has to be
+     * implemented afterwards - this is a sanity-check only. */
+    if (video_ready()) {
+        uint32_t w = video_width_px();
+        uint32_t h = video_height_px();
+        video_fill_rect(0u, 0u, w, h, 0x00C0C0C0u);
+        video_present_dirty_immediate();
+        serial_write("[v86] v_opnwk: painted framebuffer gray (visibility probe)\n");
+    }
+
     frame->reserved[0] &= 0xFFFF0000u; /* AX=0 success */
     frame->eflags &= ~0x00000001u;     /* clear CF */
 
