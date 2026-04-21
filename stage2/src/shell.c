@@ -9376,6 +9376,7 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
         serial_write("[ms-trace] ");
 
         for (;;) {
+            static u32 s_gem_loop_count = 0u;
             if (legacy_v86_enter(&frame, &exit_state) != LEGACY_V86_OK) {
                 serial_write(" <end>\n");
                 serial_write("[gem] ERROR: v86_enter failed\n");
@@ -9384,9 +9385,11 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
                 shell_gem_disarm_path();
                 return;
             }
-            serial_write(" <end> reason=0x");
-            serial_write_hex64((u64)exit_state.reason);
-            serial_write("\n");
+            if (s_gem_loop_count < 4u) {
+                serial_write(" <end> reason=0x");
+                serial_write_hex64((u64)exit_state.reason);
+                serial_write("\n");
+            }
 
             frame.cs = exit_state.frame.cs;
             frame.ip = exit_state.frame.ip;
@@ -9404,11 +9407,14 @@ static void shell_execute_line(const char *line, boot_info_t *boot_info, handoff
             frame.reserved[4] = exit_state.frame.reserved[4];
             frame.reserved[5] = exit_state.frame.reserved[5];
             if (exit_state.reason == LEGACY_V86_EXIT_GP_INT) {
-                serial_write("[gem] dispatch int=0x");
-                serial_write_hex64((u64)exit_state.int_vector);
-                serial_write(" cs:ip=0x");
-                serial_write_hex64(((u64)frame.cs << 16) | frame.ip);
-                serial_write("\n");
+                if (s_gem_loop_count < 4u) {
+                    serial_write("[gem] dispatch int=0x");
+                    serial_write_hex64((u64)exit_state.int_vector);
+                    serial_write(" cs:ip=0x");
+                    serial_write_hex64(((u64)frame.cs << 16) | frame.ip);
+                    serial_write("\n");
+                }
+                s_gem_loop_count += 1u;
                 dispatch_result = v86_dispatch_int(exit_state.int_vector, &frame);
                 if (dispatch_result == V86_DISPATCH_CONT) {
                     continue;

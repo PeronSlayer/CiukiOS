@@ -2466,83 +2466,110 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     v86_bda_init_once();
     v86_bda_tick_bump();
 
-    serial_write("[v86] dispatch vec=0x");
-    serial_write_hex64((uint64_t)vector);
-    serial_write(" eax=0x");
-    serial_write_hex64((uint64_t)frame->reserved[0]);
-    serial_write(" ebx=0x");
-    serial_write_hex64((uint64_t)frame->reserved[1]);
-    serial_write(" ecx=0x");
-    serial_write_hex64((uint64_t)frame->reserved[2]);
-    serial_write(" edx=0x");
-    serial_write_hex64((uint64_t)frame->reserved[3]);
-    serial_write(" esi=0x");
-    serial_write_hex64((uint64_t)frame->reserved[4]);
-    serial_write(" edi=0x");
-    serial_write_hex64((uint64_t)frame->reserved[5]);
-    serial_write(" ds=0x");
-    serial_write_hex64((uint64_t)frame->ds);
-    serial_write(" es=0x");
-    serial_write_hex64((uint64_t)frame->es);
-    serial_write("\n");
+    /* Dispatch logger is throttled to avoid saturating stdio-based
+     * serial sinks (tee to terminal) which can slow the guest to a
+     * crawl. First 32 dispatches get a full register dump for early
+     * bring-up visibility; afterwards only a compact one-liner is
+     * emitted. Set s_v86_dispatch_verbose=1 at runtime to re-enable. */
+    {
+        static uint32_t s_v86_dispatch_count = 0u;
+        static uint8_t  s_v86_dispatch_verbose = 1u;
+        if (s_v86_dispatch_verbose && s_v86_dispatch_count < 4u) {
+            serial_write("[v86] dispatch vec=0x");
+            serial_write_hex64((uint64_t)vector);
+            serial_write(" eax=0x");
+            serial_write_hex64((uint64_t)frame->reserved[0]);
+            serial_write(" ebx=0x");
+            serial_write_hex64((uint64_t)frame->reserved[1]);
+            serial_write(" ecx=0x");
+            serial_write_hex64((uint64_t)frame->reserved[2]);
+            serial_write(" edx=0x");
+            serial_write_hex64((uint64_t)frame->reserved[3]);
+            serial_write(" esi=0x");
+            serial_write_hex64((uint64_t)frame->reserved[4]);
+            serial_write(" edi=0x");
+            serial_write_hex64((uint64_t)frame->reserved[5]);
+            serial_write(" ds=0x");
+            serial_write_hex64((uint64_t)frame->ds);
+            serial_write(" es=0x");
+            serial_write_hex64((uint64_t)frame->es);
+            serial_write("\n");
+        }
+        s_v86_dispatch_count += 1u;
+    }
 
     if (vector == 0x20u) {
         return V86_DISPATCH_EXIT_OK;
     }
 
     if (vector != 0x21u) {
+        static uint32_t s_v86_softint_count = 0u;
+        uint8_t trace = (s_v86_softint_count < 4u) ? 1u : 0u;
+        s_v86_softint_count += 1u;
         if (vector == 0x10u && v86_try_emulate_int_10(frame)) {
-            serial_write("[v86] dispatch soft-int emu vec=10 ah=0x");
-            serial_write_hex64((uint64_t)((frame->reserved[0] >> 8) & 0xFFu));
-            serial_write("\n");
+            if (trace) {
+                serial_write("[v86] dispatch soft-int emu vec=10 ah=0x");
+                serial_write_hex64((uint64_t)((frame->reserved[0] >> 8) & 0xFFu));
+                serial_write("\n");
+            }
             return V86_DISPATCH_CONT;
         }
         if (vector == 0x16u && v86_try_emulate_int_16(frame)) {
-            serial_write("[v86] dispatch soft-int emu vec=16\n");
+            if (trace) serial_write("[v86] dispatch soft-int emu vec=16\n");
             return V86_DISPATCH_CONT;
         }
         if (vector == 0x1Au && v86_try_emulate_int_1a(frame)) {
-            serial_write("[v86] dispatch soft-int emu vec=1A\n");
+            if (trace) serial_write("[v86] dispatch soft-int emu vec=1A\n");
             return V86_DISPATCH_CONT;
         }
         if (vector == 0x33u && v86_try_emulate_int_33(frame)) {
-            serial_write("[v86] dispatch soft-int emu vec=33 ax=0x");
-            serial_write_hex64((uint64_t)(frame->reserved[0] & 0xFFFFu));
-            serial_write("\n");
+            if (trace) {
+                serial_write("[v86] dispatch soft-int emu vec=33 ax=0x");
+                serial_write_hex64((uint64_t)(frame->reserved[0] & 0xFFFFu));
+                serial_write("\n");
+            }
             return V86_DISPATCH_CONT;
         }
         if (vector == 0xEEu && v86_try_emulate_aes(frame)) {
-            serial_write("[v86] dispatch soft-int emu vec=EE aes=0x");
-            serial_write_hex64((uint64_t)s_v86_last_aes_opcode);
-            serial_write("\n");
+            if (trace) {
+                serial_write("[v86] dispatch soft-int emu vec=EE aes=0x");
+                serial_write_hex64((uint64_t)s_v86_last_aes_opcode);
+                serial_write("\n");
+            }
             return V86_DISPATCH_CONT;
         }
         if (vector == 0xEFu && v86_try_emulate_int_ef(frame)) {
-            serial_write("[v86] dispatch soft-int emu vec=EF op=0x");
-            serial_write_hex64((uint64_t)s_v86_last_ef_opcode);
-            serial_write("\n");
+            if (trace) {
+                serial_write("[v86] dispatch soft-int emu vec=EF op=0x");
+                serial_write_hex64((uint64_t)s_v86_last_ef_opcode);
+                serial_write("\n");
+            }
             /* After each non-timer-install VDI call, inject a synthetic
              * timer tick into the guest so GEM's tikcod decrements its
              * wait counters and drains queued fork work. Without this,
              * GEM's desktop event loop busy-polls forever. */
             if (s_v86_last_ef_opcode != 0x0076u) {
                 if (v86_inject_timer_tick(frame)) {
-                    serial_write("[v86] tick inject -> 0x");
-                    serial_write_hex64((uint64_t)s_v86_timer_seg);
-                    serial_write(":0x");
-                    serial_write_hex64((uint64_t)s_v86_timer_off);
-                    serial_write("\n");
+                    if (trace) {
+                        serial_write("[v86] tick inject -> 0x");
+                        serial_write_hex64((uint64_t)s_v86_timer_seg);
+                        serial_write(":0x");
+                        serial_write_hex64((uint64_t)s_v86_timer_off);
+                        serial_write("\n");
+                    }
                 }
             }
             return V86_DISPATCH_CONT;
         }
 
         if (v86_reflect_soft_interrupt(vector, frame)) {
-            serial_write("[v86] dispatch soft-int reflect vec=0x");
-            serial_write_hex64((uint64_t)vector);
-            serial_write(" far=0x");
-            serial_write_hex64((uint64_t)s_v86_int_vectors[vector]);
-            serial_write("\n");
+            if (trace) {
+                serial_write("[v86] dispatch soft-int reflect vec=0x");
+                serial_write_hex64((uint64_t)vector);
+                serial_write(" far=0x");
+                serial_write_hex64((uint64_t)s_v86_int_vectors[vector]);
+                serial_write("\n");
+            }
             return V86_DISPATCH_CONT;
         }
         return V86_DISPATCH_EXIT_ERR;
@@ -2551,11 +2578,17 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     eax = frame->reserved[0];
     ah = (uint8_t)((eax >> 8) & 0xFFu);
 
-    serial_write("[v86] int21 ah=0x");
-    serial_write_hex64((uint64_t)ah);
-    serial_write(" al=0x");
-    serial_write_hex64((uint64_t)(eax & 0xFFu));
-    serial_write("\n");
+    {
+        static uint32_t s_v86_int21_count = 0u;
+        if (s_v86_int21_count < 4u) {
+            serial_write("[v86] int21 ah=0x");
+            serial_write_hex64((uint64_t)ah);
+            serial_write(" al=0x");
+            serial_write_hex64((uint64_t)(eax & 0xFFu));
+            serial_write("\n");
+        }
+        s_v86_int21_count += 1u;
+    }
 
 
     /* Helpers: clear/set CF in v86 guest EFLAGS to signal success/error. */
