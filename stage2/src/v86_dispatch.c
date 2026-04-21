@@ -74,6 +74,145 @@ static v86_file_handle_t s_v86_file_handles[V86_FILE_MAX_HANDLES];
 static uint16_t s_v86_last_ef_opcode = 0u;
 static uint8_t s_v86_ef_diag_count = 0u;
 
+/* VDI attribute state captured from GEM setters so that draw operations
+ * (v_bar, v_pline, v_gtext, v_fillarea, vro_cpyfm) can honor current
+ * colors, write mode and clip rectangle. Defaults align with GEM's
+ * documented initial workstation state for a 16-color display:
+ * line/text/fill color = 1 (black), fill style = SOLID, mode = REPLACE. */
+static uint16_t s_vdi_line_color   = 1u;
+static uint16_t s_vdi_text_color   = 1u;
+static uint16_t s_vdi_fill_color   = 1u;
+static uint16_t s_vdi_fill_style   = 1u; /* 0 hollow 1 solid 2 pattern 3 hatch */
+static uint16_t s_vdi_fill_index   = 0u;
+static uint16_t s_vdi_write_mode   = 1u; /* 1=replace 2=trans 3=xor 4=erase */
+static uint16_t s_vdi_clip_on      = 0u;
+static int16_t  s_vdi_clip_x1      = 0;
+static int16_t  s_vdi_clip_y1      = 0;
+static int16_t  s_vdi_clip_x2      = 639;
+static int16_t  s_vdi_clip_y2      = 479;
+
+/* Rate-limited framebuffer present. Called after every VDI draw op so
+ * GEM's redraws become visible without forcing a present on each pixel. */
+static uint32_t s_vdi_draw_counter = 0u;
+static void v86_vdi_tick_present(void)
+{
+    s_vdi_draw_counter += 1u;
+    if ((s_vdi_draw_counter & 0x0Fu) == 0u) {
+        if (video_ready()) {
+            video_present_dirty_immediate();
+        }
+    }
+}
+
+/* GEM 16-color palette → 0x00RRGGBB. Digital Research's standard ordering:
+ * 0=white, 1=black, then 6 bright primaries, then gray + dark primaries. */
+static uint32_t v86_gem_palette(uint16_t idx)
+{
+    static const uint32_t pal[16] = {
+        0x00FFFFFFu, /*  0 white         */
+        0x00000000u, /*  1 black         */
+        0x00FF0000u, /*  2 red           */
+        0x0000FF00u, /*  3 green         */
+        0x000000FFu, /*  4 blue          */
+        0x0000FFFFu, /*  5 cyan          */
+        0x00FFFF00u, /*  6 yellow        */
+        0x00FF00FFu, /*  7 magenta       */
+        0x00C0C0C0u, /*  8 light gray    */
+        0x00808080u, /*  9 dark gray     */
+        0x00800000u, /* 10 dark red      */
+        0x00008000u, /* 11 dark green    */
+        0x00000080u, /* 12 dark blue     */
+        0x00008080u, /* 13 dark cyan     */
+        0x00808000u, /* 14 dark yellow   */
+        0x00800080u, /* 15 dark magenta  */
+    };
+    return pal[idx & 0x0Fu];
+}
+
+/* 8x8 glyph lookup sharing the console font in stage2/src/video.c.
+ * Declared here as extern to avoid duplicating the glyph table. */
+extern const u8 g_font[95][8];
+
+static int v86_vdi_clip_apply(int32_t *x1, int32_t *y1,
+                               int32_t *x2, int32_t *y2)
+{
+    int32_t cx1, cy1, cx2, cy2;
+    if (!s_vdi_clip_on) {
+        cx1 = 0; cy1 = 0;
+        cx2 = (int32_t)(video_ready() ? video_width_px() : 640u) - 1;
+        cy2 = (int32_t)(video_ready() ? video_height_px() : 480u) - 1;
+    } else {
+        cx1 = (int32_t)s_vdi_clip_x1;
+        cy1 = (int32_t)s_vdi_clip_y1;
+        cx2 = (int32_t)s_vdi_clip_x2;
+        cy2 = (int32_t)s_vdi_clip_y2;
+    }
+    if (*x1 < cx1) *x1 = cx1;
+    if (*y1 < cy1) *y1 = cy1;
+    if (*x2 > cx2) *x2 = cx2;
+    if (*y2 > cy2) *y2 = cy2;
+    return (*x1 <= *x2 && *y1 <= *y2);
+}
+
+static void v86_vdi_draw_pixel_clipped(int32_t x, int32_t y, uint32_t rgb)
+{
+    int32_t cx1, cy1, cx2, cy2;
+    if (!s_vdi_clip_on) {
+        cx1 = 0; cy1 = 0;
+        cx2 = (int32_t)(video_ready() ? video_width_px() : 640u) - 1;
+        cy2 = (int32_t)(video_ready() ? video_height_px() : 480u) - 1;
+    } else {
+        cx1 = (int32_t)s_vdi_clip_x1;
+        cy1 = (int32_t)s_vdi_clip_y1;
+        cx2 = (int32_t)s_vdi_clip_x2;
+        cy2 = (int32_t)s_vdi_clip_y2;
+    }
+    if (x < cx1 || y < cy1 || x > cx2 || y > cy2) return;
+    video_put_pixel((u32)x, (u32)y, rgb);
+}
+
+static void v86_vdi_draw_line(int32_t x0, int32_t y0,
+                               int32_t x1, int32_t y1, uint32_t rgb)
+{
+    /* Bresenham, integer only. */
+    int32_t dx = (x1 >= x0) ? (x1 - x0) : (x0 - x1);
+    int32_t dy = (y1 >= y0) ? (y1 - y0) : (y0 - y1);
+    int32_t sx = (x0 < x1) ? 1 : -1;
+    int32_t sy = (y0 < y1) ? 1 : -1;
+    int32_t err = dx - dy;
+    int32_t guard = 4096; /* safety cap on very long segments */
+    for (;;) {
+        v86_vdi_draw_pixel_clipped(x0, y0, rgb);
+        if (x0 == x1 && y0 == y1) break;
+        int32_t e2 = err * 2;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 <  dx) { err += dx; y0 += sy; }
+        if (--guard <= 0) break;
+    }
+}
+
+static void v86_vdi_draw_glyph(int32_t x, int32_t y, char c, uint32_t rgb)
+{
+    /* Render an 8x8 glyph from the shared console font at 2x so that
+     * characters occupy an 8x16 cell (matches vst_height return). */
+    const u8 *glyph;
+    int row, col;
+    if ((unsigned char)c < 0x20u || (unsigned char)c > 0x7Eu) {
+        glyph = g_font[0];
+    } else {
+        glyph = g_font[(unsigned char)c - 0x20u];
+    }
+    for (row = 0; row < 8; ++row) {
+        uint8_t bits = glyph[row];
+        for (col = 0; col < 8; ++col) {
+            if (bits & (0x80u >> col)) {
+                v86_vdi_draw_pixel_clipped(x + col,     y + row * 2,     rgb);
+                v86_vdi_draw_pixel_clipped(x + col,     y + row * 2 + 1, rgb);
+            }
+        }
+    }
+}
+
 /* --- GEM timer-tick injection (vex_timv) ---------------------------------
  * GEM installs a tick handler (tikcod) via VDI opcode 128 (vex_timv) and
  * expects it to be called on every ~50ms tick. The handler decrements
@@ -968,28 +1107,61 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
-    /* VDI state-setter opcodes: echo pattern — accept request, reply
-     * with the same value so GEM caches it and proceeds. No side effect
-     * on a real display surface yet; drawing semantics are deferred. */
-    if (opcode == 0x000Fu || /* vsl_type  */
-        opcode == 0x0011u || /* vsl_color */
-        opcode == 0x0012u || /* vsm_type  */
-        opcode == 0x0014u || /* vsm_color */
-        opcode == 0x0015u || /* vst_font  */
-        opcode == 0x0016u || /* vst_color */
-        opcode == 0x0017u || /* vsf_interior - alias check */
-        opcode == 0x0019u || /* vsf_style  */
-        opcode == 0x001Au || /* vsf_color  */
-        opcode == 0x0071u || /* vsf_interior */
-        opcode == 0x0072u || /* vsf_style */
-        opcode == 0x0073u || /* vsf_color */
-        opcode == 0x007Au || /* vswr_mode */
-        opcode == 0x007Cu || /* vsl_udsty */
-        opcode == 0x007Eu) { /* vsl_ends  */
+    /* VDI state-setter opcodes: capture attributes into our local state
+     * so that subsequent draw calls honor the requested color, fill
+     * style and writing mode. Return the clamped/accepted value in
+     * intout[0] per VDI contract. */
+    if (opcode == 0x000Fu || /* vsl_type (line style index)      */
+        opcode == 0x0011u || /* vsl_color                        */
+        opcode == 0x0012u || /* vsm_type                         */
+        opcode == 0x0014u || /* vsm_color                        */
+        opcode == 0x0015u || /* vst_font                         */
+        opcode == 0x0016u || /* vst_color                        */
+        opcode == 0x0017u || /* vsf_interior                     */
+        opcode == 0x0018u || /* vsf_style                        */
+        opcode == 0x0019u || /* vsf_color                        */
+        opcode == 0x0020u || /* vswr_mode (writing mode)         */
+        opcode == 0x0021u || /* vsin_mode (input mode)           */
+        opcode == 0x006Cu || /* vsl_ends                         */
+        opcode == 0x007Cu || /* vsl_udsty (user line style)      */
+        opcode == 0x006Au || /* vst_effects                      */
+        opcode == 0x006Bu) { /* vst_point                        */
         uint16_t val0 = v86_load_u16(intin_lin + 0u);
+        switch (opcode) {
+        case 0x0011u: s_vdi_line_color = val0 & 0x0Fu; break;
+        case 0x0014u: /* vsm_color */ break;
+        case 0x0016u: s_vdi_text_color = val0 & 0x0Fu; break;
+        case 0x0017u: s_vdi_fill_style = val0; break;
+        case 0x0018u: s_vdi_fill_index = val0; break;
+        case 0x0019u: s_vdi_fill_color = val0 & 0x0Fu; break;
+        case 0x0020u: s_vdi_write_mode = val0; break;
+        default: break;
+        }
         v86_store_u16(intout_lin + 0u, val0);
         v86_store_u16(ctrl_lin + 4u, 0u); /* n_ptsout */
         v86_store_u16(ctrl_lin + 8u, 1u); /* n_intout */
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0081u) {
+        /* vs_clip (VDI opcode 129). intin[0]=enable flag,
+         * ptsin[0..1]=(x1,y1), ptsin[2..3]=(x2,y2). No outputs. */
+        uint16_t en = v86_load_u16(intin_lin + 0u);
+        uint16_t cx1 = v86_load_u16(ptsin_lin + 0u);
+        uint16_t cy1 = v86_load_u16(ptsin_lin + 2u);
+        uint16_t cx2 = v86_load_u16(ptsin_lin + 4u);
+        uint16_t cy2 = v86_load_u16(ptsin_lin + 6u);
+        if (cx1 > cx2) { uint16_t t = cx1; cx1 = cx2; cx2 = t; }
+        if (cy1 > cy2) { uint16_t t = cy1; cy1 = cy2; cy2 = t; }
+        s_vdi_clip_on = (en ? 1u : 0u);
+        s_vdi_clip_x1 = (int16_t)cx1;
+        s_vdi_clip_y1 = (int16_t)cy1;
+        s_vdi_clip_x2 = (int16_t)cx2;
+        s_vdi_clip_y2 = (int16_t)cy2;
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
         frame->reserved[0] &= 0xFFFF0000u;
         frame->eflags &= ~0x00000001u;
         return 1;
@@ -1117,22 +1289,28 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
     }
 
     if (opcode == 0x000Bu || opcode == 0x0072u) {
-        /* VDI 11 = v_bar, 114 = vr_recfl. Filled rectangle into the
-         * screen workstation. ptsin[0..1]=(x1,y1) ptsin[2..3]=(x2,y2).
-         * For bring-up paint a fixed light-gray rectangle so the
-         * desktop background and window borders become visible. */
-        uint16_t x1 = v86_load_u16(ptsin_lin + 0u);
-        uint16_t y1 = v86_load_u16(ptsin_lin + 2u);
-        uint16_t x2 = v86_load_u16(ptsin_lin + 4u);
-        uint16_t y2 = v86_load_u16(ptsin_lin + 6u);
-        uint16_t tmp;
-        if (x1 > x2) { tmp = x1; x1 = x2; x2 = tmp; }
-        if (y1 > y2) { tmp = y1; y1 = y2; y2 = tmp; }
-        uint32_t w = (uint32_t)x2 - (uint32_t)x1 + 1u;
-        uint32_t h = (uint32_t)y2 - (uint32_t)y1 + 1u;
-        if (w > 0u && h > 0u && w <= 4096u && h <= 4096u) {
-            video_fill_rect((u32)x1, (u32)y1, w, h, 0x00C0C0C0u);
+        /* VDI 11 = v_bar, 114 = vr_recfl (fill rectangle). Paint a
+         * rectangle into the screen workstation using the currently
+         * selected fill color. ptsin[0..1]=(x1,y1) ptsin[2..3]=(x2,y2).
+         * Honors vsf_color state. Pattern/hatch styles degrade to solid
+         * for this bring-up. */
+        int32_t x1 = (int16_t)v86_load_u16(ptsin_lin + 0u);
+        int32_t y1 = (int16_t)v86_load_u16(ptsin_lin + 2u);
+        int32_t x2 = (int16_t)v86_load_u16(ptsin_lin + 4u);
+        int32_t y2 = (int16_t)v86_load_u16(ptsin_lin + 6u);
+        if (x1 > x2) { int32_t t = x1; x1 = x2; x2 = t; }
+        if (y1 > y2) { int32_t t = y1; y1 = y2; y2 = t; }
+        if (v86_vdi_clip_apply(&x1, &y1, &x2, &y2)) {
+            uint32_t w = (uint32_t)(x2 - x1 + 1);
+            uint32_t h = (uint32_t)(y2 - y1 + 1);
+            uint32_t rgb = (s_vdi_fill_style == 0u)
+                ? v86_gem_palette(0u)             /* hollow - skip? paint white */
+                : v86_gem_palette(s_vdi_fill_color);
+            if (s_vdi_fill_style != 0u && w > 0u && h > 0u) {
+                video_fill_rect((u32)x1, (u32)y1, w, h, rgb);
+            }
         }
+        v86_vdi_tick_present();
         v86_store_u16(ctrl_lin + 4u, 0u);
         v86_store_u16(ctrl_lin + 8u, 0u);
         frame->reserved[0] &= 0xFFFF0000u;
@@ -1140,8 +1318,144 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         return 1;
     }
 
-    if (opcode == 0x007Fu) {
-        /* VDI opcode 127 = vro_cpyfm (copy raster, opaque). */
+    if (opcode == 0x0006u) {
+        /* v_pline — polyline. ptsin[0..2n-1] = pairs of (x,y) vertices,
+         * n_ptsin = number of points (in contrl[1] at byte 2).
+         * Uses current line color. */
+        uint16_t n_pts = v86_load_u16(ctrl_lin + 2u);
+        uint16_t i_pt;
+        uint32_t rgb = v86_gem_palette(s_vdi_line_color);
+        if (n_pts > 1u && n_pts <= 256u) {
+            int32_t px = (int16_t)v86_load_u16(ptsin_lin + 0u);
+            int32_t py = (int16_t)v86_load_u16(ptsin_lin + 2u);
+            for (i_pt = 1u; i_pt < n_pts; ++i_pt) {
+                int32_t nx = (int16_t)v86_load_u16(ptsin_lin + (uint32_t)i_pt * 4u + 0u);
+                int32_t ny = (int16_t)v86_load_u16(ptsin_lin + (uint32_t)i_pt * 4u + 2u);
+                v86_vdi_draw_line(px, py, nx, ny, rgb);
+                px = nx; py = ny;
+            }
+        }
+        v86_vdi_tick_present();
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0008u) {
+        /* v_gtext — draw text. ptsin[0..1] = (x,y) baseline-ish origin.
+         * intin[0..n-1] = one ASCII word per character. n_intin in
+         * contrl[3] at byte 6. Uses current text color. */
+        int32_t x = (int16_t)v86_load_u16(ptsin_lin + 0u);
+        int32_t y = (int16_t)v86_load_u16(ptsin_lin + 2u);
+        uint16_t n_chars = v86_load_u16(ctrl_lin + 6u);
+        uint32_t rgb = v86_gem_palette(s_vdi_text_color);
+        uint16_t i_ch;
+        if (n_chars > 256u) n_chars = 256u;
+        for (i_ch = 0u; i_ch < n_chars; ++i_ch) {
+            uint16_t ch = v86_load_u16(intin_lin + (uint32_t)i_ch * 2u);
+            v86_vdi_draw_glyph(x + (int32_t)i_ch * 8, y, (char)(ch & 0xFFu), rgb);
+        }
+        v86_vdi_tick_present();
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x0009u) {
+        /* v_fillarea — filled polygon. ptsin pairs list vertices,
+         * n_ptsin in contrl[1]. We implement the simple scanline
+         * algorithm honoring the current fill color. Hollow style is
+         * treated as a polyline outline. */
+        uint16_t n_pts = v86_load_u16(ctrl_lin + 2u);
+        if (n_pts >= 2u && n_pts <= 128u) {
+            int32_t xs[128];
+            int32_t ys[128];
+            int32_t min_y = 0x7FFFFFFF;
+            int32_t max_y = -0x7FFFFFFF - 1;
+            uint32_t rgb;
+            uint16_t i_pt;
+            for (i_pt = 0u; i_pt < n_pts; ++i_pt) {
+                xs[i_pt] = (int16_t)v86_load_u16(ptsin_lin + (uint32_t)i_pt * 4u + 0u);
+                ys[i_pt] = (int16_t)v86_load_u16(ptsin_lin + (uint32_t)i_pt * 4u + 2u);
+                if (ys[i_pt] < min_y) min_y = ys[i_pt];
+                if (ys[i_pt] > max_y) max_y = ys[i_pt];
+            }
+            if (s_vdi_fill_style == 0u) {
+                /* Hollow: draw edges only. */
+                rgb = v86_gem_palette(s_vdi_line_color);
+                for (i_pt = 0u; i_pt < n_pts; ++i_pt) {
+                    uint16_t j = (uint16_t)((i_pt + 1u) % n_pts);
+                    v86_vdi_draw_line(xs[i_pt], ys[i_pt],
+                                      xs[j],    ys[j],    rgb);
+                }
+            } else {
+                int32_t y;
+                int32_t inter[64];
+                rgb = v86_gem_palette(s_vdi_fill_color);
+                if (min_y < 0) min_y = 0;
+                if (max_y >= (int32_t)video_height_px())
+                    max_y = (int32_t)video_height_px() - 1;
+                for (y = min_y; y <= max_y; ++y) {
+                    int32_t n_inter = 0;
+                    int32_t a, b;
+                    for (i_pt = 0u; i_pt < n_pts; ++i_pt) {
+                        uint16_t j = (uint16_t)((i_pt + 1u) % n_pts);
+                        int32_t y1i = ys[i_pt];
+                        int32_t y2i = ys[j];
+                        int32_t x1i = xs[i_pt];
+                        int32_t x2i = xs[j];
+                        if ((y1i <= y && y2i > y) ||
+                            (y2i <= y && y1i > y)) {
+                            int32_t dy = y2i - y1i;
+                            int32_t xi;
+                            if (dy == 0) continue;
+                            xi = x1i + ((y - y1i) * (x2i - x1i)) / dy;
+                            if (n_inter < 64) inter[n_inter++] = xi;
+                        }
+                    }
+                    /* Sort intersections ascending (small n, bubble OK). */
+                    for (a = 0; a < n_inter - 1; ++a) {
+                        for (b = 0; b < n_inter - 1 - a; ++b) {
+                            if (inter[b] > inter[b + 1]) {
+                                int32_t t = inter[b];
+                                inter[b] = inter[b + 1];
+                                inter[b + 1] = t;
+                            }
+                        }
+                    }
+                    for (a = 0; a + 1 < n_inter; a += 2) {
+                        int32_t lx = inter[a];
+                        int32_t rx = inter[a + 1];
+                        int32_t ly = y;
+                        int32_t ry = y;
+                        if (v86_vdi_clip_apply(&lx, &ly, &rx, &ry) &&
+                            lx <= rx) {
+                            video_fill_rect((u32)lx, (u32)ly,
+                                            (u32)(rx - lx + 1), 1u, rgb);
+                        }
+                    }
+                }
+            }
+        }
+        v86_vdi_tick_present();
+        v86_store_u16(ctrl_lin + 4u, 0u);
+        v86_store_u16(ctrl_lin + 8u, 0u);
+        frame->reserved[0] &= 0xFFFF0000u;
+        frame->eflags &= ~0x00000001u;
+        return 1;
+    }
+
+    if (opcode == 0x006Du || opcode == 0x0079u || opcode == 0x007Fu) {
+        /* VDI opcode 109 = vro_cpyfm (opaque raster copy), 121 = vrt_cpyfm
+         * (transparent). 0x7F kept for legacy callers. When destination
+         * MFDB is the screen (fd_addr == 0:0) we decode the 4-plane,
+         * word-interleaved 16-color source bitmap to RGB via the GEM
+         * palette and push it into the GOP framebuffer. Raster→raster
+         * with non-screen destination falls back to a byte memcpy. */
         uint16_t s_off = v86_load_u16(ctrl_lin + 14u);
         uint16_t s_seg = v86_load_u16(ctrl_lin + 16u);
         uint16_t d_off = v86_load_u16(ctrl_lin + 18u);
@@ -1151,6 +1465,7 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         if (s_mfdb != 0u && d_mfdb != 0u) {
             uint16_t s_adr_off = v86_load_u16(s_mfdb + 0u);
             uint16_t s_adr_seg = v86_load_u16(s_mfdb + 2u);
+            uint16_t s_w  = v86_load_u16(s_mfdb + 4u);
             uint16_t s_h  = v86_load_u16(s_mfdb + 6u);
             uint16_t s_ww = v86_load_u16(s_mfdb + 8u);
             uint16_t s_np = v86_load_u16(s_mfdb + 12u);
@@ -1161,23 +1476,57 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
             uint32_t nplanes = (s_np == 0u) ? 1u : (uint32_t)s_np;
             uint32_t bytes = (uint32_t)s_ww * 2u * (uint32_t)s_h * nplanes;
             int dst_is_screen = (d_adr_off == 0u && d_adr_seg == 0u);
-            if (dst_is_screen && src_addr != 0u) {
-                /* Route to GOP framebuffer. ptsin[2..3]=(dx1,dy1),
-                 * ptsin[4..5]=(dx2,dy2). Convert 4-plane interleaved
-                 * 16-color GEM raster to a per-pixel light/dark gray
-                 * approximation so icons/title bars become visible. */
-                uint16_t dx1 = v86_load_u16(ptsin_lin + 8u);
-                uint16_t dy1 = v86_load_u16(ptsin_lin + 10u);
-                uint16_t dx2 = v86_load_u16(ptsin_lin + 12u);
-                uint16_t dy2 = v86_load_u16(ptsin_lin + 14u);
-                uint32_t w = (dx2 >= dx1) ? (uint32_t)(dx2 - dx1 + 1u) : 0u;
-                uint32_t h = (dy2 >= dy1) ? (uint32_t)(dy2 - dy1 + 1u) : 0u;
-                if (w > 0u && h > 0u && w <= 4096u && h <= 4096u) {
-                    /* Coarse approximation: paint as solid darker gray
-                     * to make the blit footprint visible. Per-pixel
-                     * GEM 4bpp planar -> RGB conversion is left for a
-                     * future step. */
-                    video_fill_rect((u32)dx1, (u32)dy1, w, h, 0x00808080u);
+            uint16_t sx1 = v86_load_u16(ptsin_lin + 0u);
+            uint16_t sy1 = v86_load_u16(ptsin_lin + 2u);
+            uint16_t sx2 = v86_load_u16(ptsin_lin + 4u);
+            uint16_t sy2 = v86_load_u16(ptsin_lin + 6u);
+            uint16_t dx1 = v86_load_u16(ptsin_lin + 8u);
+            uint16_t dy1 = v86_load_u16(ptsin_lin + 10u);
+            uint16_t dx2 = v86_load_u16(ptsin_lin + 12u);
+            uint16_t dy2 = v86_load_u16(ptsin_lin + 14u);
+            int transparent = (opcode == 0x0079u);
+            uint32_t fg_rgb = v86_gem_palette(s_vdi_text_color);
+            uint32_t bg_rgb = v86_gem_palette(s_vdi_fill_color);
+            (void)sx2; (void)sy2; (void)dx2; (void)dy2;
+            if (dst_is_screen && src_addr != 0u && nplanes <= 4u &&
+                s_w > 0u && s_h > 0u && s_ww > 0u && s_ww <= 256u) {
+                uint32_t row, col;
+                uint32_t copy_w = (uint32_t)(sx2 >= sx1 ? sx2 - sx1 + 1u : 0u);
+                uint32_t copy_h = (uint32_t)(sy2 >= sy1 ? sy2 - sy1 + 1u : 0u);
+                if (copy_w > s_w) copy_w = s_w;
+                if (copy_h > s_h) copy_h = s_h;
+                for (row = 0u; row < copy_h; ++row) {
+                    uint32_t gy = sy1 + row;
+                    uint32_t dy = dy1 + row;
+                    /* Row start (in bytes): row * s_ww * 2 * nplanes. */
+                    uint32_t row_base = src_addr
+                        + gy * (uint32_t)s_ww * 2u * nplanes;
+                    for (col = 0u; col < copy_w; ++col) {
+                        uint32_t gx = sx1 + col;
+                        uint32_t dx = dx1 + col;
+                        uint32_t word_idx = gx >> 4;
+                        uint32_t bit_idx  = 15u - (gx & 15u);
+                        uint32_t plane;
+                        uint32_t idx = 0u;
+                        for (plane = 0u; plane < nplanes; ++plane) {
+                            uint32_t waddr = row_base
+                                + (word_idx * nplanes + plane) * 2u;
+                            uint16_t w = v86_load_u16(waddr);
+                            if (w & (uint16_t)(1u << bit_idx)) {
+                                idx |= (1u << plane);
+                            }
+                        }
+                        if (transparent && idx == 0u) continue;
+                        if (nplanes == 1u) {
+                            v86_vdi_draw_pixel_clipped(
+                                (int32_t)dx, (int32_t)dy,
+                                idx ? fg_rgb : bg_rgb);
+                        } else {
+                            v86_vdi_draw_pixel_clipped(
+                                (int32_t)dx, (int32_t)dy,
+                                v86_gem_palette((uint16_t)idx));
+                        }
+                    }
                 }
             } else if (src_addr != 0u && dst_addr != 0u &&
                        bytes > 0u && bytes < 0x20000u) {
@@ -1186,6 +1535,7 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
                            bytes);
             }
         }
+        v86_vdi_tick_present();
         v86_store_u16(ctrl_lin + 4u, 0u);
         v86_store_u16(ctrl_lin + 8u, 0u);
         frame->reserved[0] &= 0xFFFF0000u;
