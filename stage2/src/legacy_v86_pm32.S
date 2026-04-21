@@ -495,6 +495,33 @@ legacy_v86_pm32_gp_handler:
     je      .L_decode_int3
     cmpb    $0xF4, %al                   /* HLT */
     je      .L_decode_hlt
+    /* Unknown-opcode trace: emit 'X<hex>' on debugcon so we can see
+     * which instruction generated the #GP when it's not INT/HLT.
+     * EAX still holds the faulting byte here. */
+    pushl   %eax
+    movb    $'X', %al
+    outb    %al, $0xE9
+    popl    %eax
+    pushl   %eax
+    movb    %al, %ah
+    shr     $4, %al
+    andb    $0x0F, %al
+    cmpb    $9, %al
+    jbe     1f
+    addb    $('A' - 10), %al
+    jmp     2f
+1:  addb    $'0', %al
+2:  outb    %al, $0xE9
+    popl    %eax
+    pushl   %eax
+    andb    $0x0F, %al
+    cmpb    $9, %al
+    jbe     3f
+    addb    $('A' - 10), %al
+    jmp     4f
+3:  addb    $'0', %al
+4:  outb    %al, $0xE9
+    popl    %eax
     jmp     .L_decode_done
 
 .L_decode_int_imm:
