@@ -25,7 +25,7 @@ _Static_assert(__builtin_offsetof(legacy_v86_exit_t, int_vector) == 0x04,
                "legacy_v86_exit_t.int_vector");
 _Static_assert(__builtin_offsetof(legacy_v86_exit_t, frame) == 0x08,
                "legacy_v86_exit_t.frame");
-_Static_assert(__builtin_offsetof(legacy_v86_exit_t, fault_code) == 0x2C,
+_Static_assert(__builtin_offsetof(legacy_v86_exit_t, fault_code) == 0x34,
                "legacy_v86_exit_t.fault_code");
 
 _Static_assert(__builtin_offsetof(legacy_v86_frame_t, cs) == 0x00,
@@ -48,6 +48,8 @@ _Static_assert(__builtin_offsetof(legacy_v86_frame_t, eflags) == 0x10,
                "legacy_v86_frame_t.eflags");
 _Static_assert(__builtin_offsetof(legacy_v86_frame_t, reserved) == 0x14,
                "legacy_v86_frame_t.reserved");
+_Static_assert(sizeof(((legacy_v86_frame_t *)0)->reserved) == 6u * sizeof(uint32_t),
+               "legacy_v86_frame_t.reserved size");
 
 extern void legacy_v86_pm32_body(void *user);
 
@@ -77,7 +79,7 @@ static void legacy_v86_copy_frame(legacy_v86_frame_t *dst, const legacy_v86_fram
     dst->fs = src->fs;
     dst->gs = src->gs;
     dst->eflags = src->eflags;
-    for (index = 0; index < 4; ++index) {
+    for (index = 0; index < 6; ++index) {
         dst->reserved[index] = src->reserved[index];
     }
 }
@@ -99,7 +101,7 @@ static void legacy_v86_clear_frame(legacy_v86_frame_t *frame)
     frame->fs = 0;
     frame->gs = 0;
     frame->eflags = 0;
-    for (index = 0; index < 4; ++index) {
+    for (index = 0; index < 6; ++index) {
         frame->reserved[index] = 0;
     }
 }

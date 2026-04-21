@@ -1478,6 +1478,10 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     serial_write_hex64((uint64_t)frame->reserved[2]);
     serial_write(" edx=0x");
     serial_write_hex64((uint64_t)frame->reserved[3]);
+    serial_write(" esi=0x");
+    serial_write_hex64((uint64_t)frame->reserved[4]);
+    serial_write(" edi=0x");
+    serial_write_hex64((uint64_t)frame->reserved[5]);
     serial_write(" ds=0x");
     serial_write_hex64((uint64_t)frame->ds);
     serial_write(" es=0x");
@@ -2097,11 +2101,10 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     case 0x47u: { /* GETCWD: DL=drive (0=default), DS:SI -> 64-byte buffer.
                    * Return empty root ("" => "\" implicit). */
         char dos_cwd[V86_PATH_MAX];
-        uint32_t buf_lin = ((uint32_t)frame->ds << 4) + (frame->reserved[3] & 0xFFFFu);
+        uint32_t buf_lin = ((uint32_t)frame->ds << 4) + (frame->reserved[4] & 0xFFFFu);
         volatile char *buf = (volatile char *)(uint64_t)buf_lin;
 
-        /* AH=47 uses DS:SI by DOS ABI; our current v86 frame doesn't carry SI,
-         * so we continue writing to DS:DX like the existing scaffold. */
+        /* AH=47 DOS ABI uses DS:SI as the destination buffer. */
         v86_canonical_to_dos_cwd(s_v86_cwd, dos_cwd, (uint32_t)sizeof(dos_cwd));
         for (uint32_t i = 0u; i < 64u; ++i) {
             char c = dos_cwd[i];
