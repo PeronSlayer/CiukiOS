@@ -20,7 +20,8 @@
 17. Milestone: added `.EXE` MZ runtime baseline in Stage1 with relocation handling and PSP-linked execution path.
 18. Milestone: added deterministic `mzdemo` command and serial regression markers integrated in `qemu-test-stage1`.
 19. Milestone: added Stage1 `INT 21h` handle-based file I/O baseline (`open/read/close/seek`) with deterministic `fileio` regression marker.
-20. Action: expanded Stage1 floppy slot from 6 to 12 sectors to keep Phase 2 runtime growth stable.
+20. Action: expanded Stage1 floppy slot from 6 to 14 sectors to keep Phase 2 runtime growth stable.
 21. Milestone: added Stage1 DOS execute baseline (`INT 21h AH=4Bh`) for path-driven `.COM/.EXE` launch.
 22. Milestone: switched Stage1 `comdemo` and `mzdemo` validation paths to use DOS `AH=4Bh` execution flow.
 23. Milestone: added minimal MCB-compatible header behavior to Stage1 memory services (`INT 21h AH=48h/49h/4Ah`).
+24. Milestone: added Stage1 DTA and file search baseline (`INT 21h AH=1Ah/4Eh/4Fh`) with deterministic `findtest` coverage.

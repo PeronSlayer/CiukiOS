@@ -9,7 +9,7 @@ BOOT_BIN="build/floppy/obj/floppy_boot.bin"
 STAGE1_SRC="src/boot/floppy_stage1.asm"
 STAGE1_BIN="build/floppy/obj/floppy_stage1.bin"
 STAGE1_SLOT_BIN="build/floppy/obj/floppy_stage1_slot.bin"
-STAGE1_SECTORS=12
+STAGE1_SECTORS=14
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 COMDEMO_SRC="src/com/comdemo.asm"
 COMDEMO_BIN="build/floppy/obj/comdemo.com"
@@ -173,7 +173,7 @@ CiukiOS Legacy v2 - Floppy profile
 
 Image: ciukios-floppy.img (1.44MB)
 State: BIOS stage0 -> stage1 chain-loader baseline
-Boot path: stage0 at LBA0, stage1 payload in sectors 2-13
+Boot path: stage0 at LBA0, stage1 payload in sectors 2-15
 FAT layout: reserved sectors include stage1 area, FAT/root/data follow BPB geometry
 COM demo payload: COMDEMO.COM root entry + first cluster at FAT data start
 MZ demo payload: MZDEMO.EXE root entry + first cluster at FAT data start + 1

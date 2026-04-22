@@ -14,7 +14,7 @@ org 0x0000
 %define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
 %define FAT_SPT 18
 %define FAT_HEADS 2
-%define FAT_RESERVED_SECTORS 13
+%define FAT_RESERVED_SECTORS 15
 %define FAT_SECTORS_PER_FAT 9
 %define FAT_COUNT 2
 %define FAT_ROOT_DIR_SECTORS 14
@@ -110,6 +110,10 @@ install_int21_vector:
     mov byte [int21_installed], 1
     mov byte [last_exit_code], 0
     mov byte [last_term_type], 0
+    mov byte [find_active], 0
+    mov ax, cs
+    mov [dta_seg], ax
+    mov word [dta_off], find_dta
 
     pop es
     pop bx
@@ -135,6 +139,8 @@ int21_handler:
     je .fn_02
     cmp ah, 0x09
     je .fn_09
+    cmp ah, 0x1A
+    je .fn_1a
     cmp ah, 0x3D
     je .fn_3d
     cmp ah, 0x3E
@@ -147,6 +153,10 @@ int21_handler:
     je .fn_41
     cmp ah, 0x42
     je .fn_42
+    cmp ah, 0x4E
+    je .fn_4e
+    cmp ah, 0x4F
+    je .fn_4f
     cmp ah, 0x4B
     je .fn_4b
     cmp ah, 0x48
@@ -177,6 +187,11 @@ int21_handler:
     call serial_putc
     jmp .fn_09_loop
 
+.fn_1a:
+    call int21_set_dta
+    jc .error
+    jmp .success
+
 .fn_3d:
     call int21_open
     jc .error
@@ -204,6 +219,16 @@ int21_handler:
 
 .fn_42:
     call int21_seek
+    jc .error
+    jmp .success
+
+.fn_4e:
+    call int21_find_first
+    jc .error
+    jmp .success
+
+.fn_4f:
+    call int21_find_next
     jc .error
     jmp .success
 
@@ -684,6 +709,500 @@ int21_exec_run_mz:
 
 .done:
     pop es
+    ret
+
+int21_set_dta:
+    mov ax, ds
+    mov [cs:dta_seg], ax
+    mov [cs:dta_off], dx
+    xor ax, ax
+    clc
+    ret
+
+int21_find_first:
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    push es
+
+    mov [cs:find_attr], cl
+    mov si, dx
+    call int21_path_to_fat_pattern
+    jc .path_fail
+
+    mov word [cs:find_cursor], 0
+    call int21_find_scan_from_cursor
+    jc .scan_fail
+
+    call int21_find_write_dta
+    jc .io_fail
+
+    xor ax, ax
+    clc
+    jmp .done
+
+.path_fail:
+    mov ax, 0x0003
+    stc
+    jmp .done
+
+.scan_fail:
+    stc
+    jmp .done
+
+.io_fail:
+    mov ax, 0x0005
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_find_next:
+    cmp byte [cs:find_active], 1
+    jne .no_more
+
+    call int21_find_scan_from_cursor
+    jc .scan_fail
+    call int21_find_write_dta
+    jc .io_fail
+    xor ax, ax
+    clc
+    ret
+
+.no_more:
+    mov ax, 0x0012
+    stc
+    ret
+
+.scan_fail:
+    stc
+    ret
+
+.io_fail:
+    mov ax, 0x0005
+    stc
+    ret
+
+int21_find_scan_from_cursor:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov ax, cs
+    mov ds, ax
+    mov bx, [cs:find_cursor]
+    mov word [cs:find_cached_sector], 0xFFFF
+
+.scan_loop:
+    cmp bx, 224
+    jae .not_found
+
+    mov ax, bx
+    mov cx, 16
+    xor dx, dx
+    div cx
+    ; AX = root sector index, DX = entry index in sector.
+    cmp ax, [cs:find_cached_sector]
+    je .sector_ready
+    mov [cs:find_cached_sector], ax
+    add ax, FAT_ROOT_START_LBA
+    mov [cs:tmp_lba], ax
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .io_fail
+
+.sector_ready:
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+
+    mov di, dx
+    shl di, 5
+    mov al, [es:di]
+    cmp al, 0x00
+    je .not_found
+    cmp al, 0xE5
+    je .next_entry
+
+    mov al, [es:di + 11]
+    cmp al, 0x0F
+    je .next_entry
+
+    call int21_find_attr_ok
+    jnc .next_entry
+
+    mov si, find_pattern
+    call fat_entry_matches_pattern
+    jnc .next_entry
+
+    mov ax, [cs:tmp_lba]
+    mov [cs:search_found_root_lba], ax
+    mov [cs:search_found_root_off], di
+    mov ax, [es:di + 26]
+    mov [cs:search_found_cluster], ax
+    mov ax, [es:di + 28]
+    mov [cs:search_found_size_lo], ax
+    mov ax, [es:di + 30]
+    mov [cs:search_found_size_hi], ax
+    mov al, [es:di + 11]
+    mov [cs:search_found_attr], al
+
+    push bx
+    push cx
+    mov cx, 11
+    mov si, di
+    mov di, search_found_name
+.copy_name:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .copy_name
+    pop cx
+    pop bx
+
+    mov ax, bx
+    inc ax
+    mov [cs:find_cursor], ax
+    mov byte [cs:find_active], 1
+    clc
+    jmp .done
+
+.next_entry:
+    inc bx
+    jmp .scan_loop
+
+.not_found:
+    mov byte [cs:find_active], 0
+    mov ax, 0x0012
+    stc
+    jmp .done
+
+.io_fail:
+    mov ax, 0x0005
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_find_attr_ok:
+    push bx
+
+    mov bl, al
+    and bl, 0x1E
+    cmp bl, 0
+    je .ok
+
+    mov al, [cs:find_attr]
+    not al
+    and al, bl
+    cmp al, 0
+    jne .skip
+
+.ok:
+    stc
+    jmp .done
+
+.skip:
+    clc
+
+.done:
+    pop bx
+    ret
+
+int21_find_write_dta:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov ax, [cs:dta_seg]
+    mov es, ax
+    mov di, [cs:dta_off]
+
+    xor ax, ax
+    mov cx, 21
+    rep stosw
+    mov byte [es:di], 0
+
+    mov di, [cs:dta_off]
+    mov al, [cs:search_found_attr]
+    mov [es:di + 0x15], al
+    mov word [es:di + 0x16], 0
+    mov word [es:di + 0x18], 0
+    mov ax, [cs:search_found_size_lo]
+    mov [es:di + 0x1A], ax
+    mov ax, [cs:search_found_size_hi]
+    mov [es:di + 0x1C], ax
+
+    mov di, [cs:dta_off]
+    add di, 0x1E
+
+    mov bx, 0
+.name_emit:
+    cmp bx, 8
+    jae .ext_check
+    mov al, [cs:search_found_name + bx]
+    cmp al, ' '
+    je .ext_check
+    mov [es:di], al
+    inc di
+    inc bx
+    jmp .name_emit
+
+.ext_check:
+    mov bx, 0
+    mov cx, 0
+.ext_probe:
+    cmp bx, 3
+    jae .ext_probe_done
+    mov al, [cs:search_found_name + 8 + bx]
+    cmp al, ' '
+    je .ext_probe_next
+    inc cx
+.ext_probe_next:
+    inc bx
+    jmp .ext_probe
+
+.ext_probe_done:
+    cmp cx, 0
+    je .term
+    mov byte [es:di], '.'
+    inc di
+    mov bx, 0
+.ext_emit:
+    cmp bx, 3
+    jae .term
+    mov al, [cs:search_found_name + 8 + bx]
+    cmp al, ' '
+    je .term
+    mov [es:di], al
+    inc di
+    inc bx
+    jmp .ext_emit
+
+.term:
+    mov byte [es:di], 0
+    clc
+
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_path_to_fat_pattern:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    mov ax, cs
+    mov es, ax
+    mov di, find_pattern
+    mov cx, 11
+    mov al, ' '
+    rep stosb
+
+    cmp byte [si], 0
+    je .fail
+
+    cmp byte [si + 1], ':'
+    jne .find_last
+    add si, 2
+
+.find_last:
+    mov [cs:tmp_find_comp], si
+.walk:
+    mov al, [si]
+    cmp al, 0
+    je .parse_start
+    cmp al, '\'
+    je .mark_next
+    cmp al, '/'
+    je .mark_next
+    inc si
+    jmp .walk
+
+.mark_next:
+    inc si
+    mov [cs:tmp_find_comp], si
+    jmp .walk
+
+.parse_start:
+    mov si, [cs:tmp_find_comp]
+    cmp byte [si], 0
+    je .fail
+
+    xor bx, bx
+.name_loop:
+    mov al, [si]
+    cmp al, 0
+    je .name_done
+    cmp al, '.'
+    je .ext_start
+    cmp al, '\'
+    je .name_done
+    cmp al, '/'
+    je .name_done
+    cmp al, '*'
+    je .name_star
+    cmp bx, 8
+    jae .name_advance
+    cmp al, '?'
+    je .name_qmark
+    call int21_upcase_al
+    mov [es:find_pattern + bx], al
+    inc bx
+    jmp .name_advance
+.name_qmark:
+    mov byte [es:find_pattern + bx], '?'
+    inc bx
+.name_advance:
+    inc si
+    jmp .name_loop
+
+.name_star:
+    mov cx, 8
+    sub cx, bx
+    jz .name_skip_star
+.fill_name_star:
+    mov byte [es:find_pattern + bx], '?'
+    inc bx
+    loop .fill_name_star
+.name_skip_star:
+    inc si
+.name_after_star:
+    mov al, [si]
+    cmp al, 0
+    je .success
+    cmp al, '.'
+    je .ext_start
+    cmp al, '\'
+    je .success
+    cmp al, '/'
+    je .success
+    inc si
+    jmp .name_after_star
+
+.name_done:
+    cmp bx, 0
+    je .fail
+    clc
+    jmp .done
+
+.ext_start:
+    inc si
+    xor bx, bx
+.ext_loop:
+    mov al, [si]
+    cmp al, 0
+    je .success
+    cmp al, '\'
+    je .success
+    cmp al, '/'
+    je .success
+    cmp al, '*'
+    je .ext_star
+    cmp bx, 3
+    jae .ext_advance
+    cmp al, '?'
+    je .ext_qmark
+    call int21_upcase_al
+    mov [es:find_pattern + 8 + bx], al
+    inc bx
+    jmp .ext_advance
+.ext_qmark:
+    mov byte [es:find_pattern + 8 + bx], '?'
+    inc bx
+.ext_advance:
+    inc si
+    jmp .ext_loop
+
+.ext_star:
+    mov cx, 3
+    sub cx, bx
+    jz .success
+.fill_ext_star:
+    mov byte [es:find_pattern + 8 + bx], '?'
+    inc bx
+    loop .fill_ext_star
+    jmp .success
+
+.success:
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+fat_entry_matches_pattern:
+    push ax
+    push bx
+    push cx
+
+    xor bx, bx
+    mov cx, 11
+.cmp_loop:
+    mov al, [cs:si + bx]
+    cmp al, '?'
+    je .next
+    cmp al, [es:di + bx]
+    jne .not_match
+.next:
+    inc bx
+    loop .cmp_loop
+    stc
+    jmp .done
+
+.not_match:
+    clc
+
+.done:
+    pop cx
+    pop bx
+    pop ax
     ret
 
 int21_open:
@@ -1792,6 +2311,52 @@ int21_fileio_test:
     pop ds
     ret
 
+int21_find_test:
+    push ds
+
+    mov si, msg_find_begin
+    call print_string_dual
+
+    mov ax, cs
+    mov ds, ax
+
+    mov dx, find_dta
+    mov ah, 0x1A
+    int 0x21
+
+    mov dx, path_pattern_com
+    xor cx, cx
+    mov ah, 0x4E
+    int 0x21
+    jc .fail
+    cmp byte [find_dta + 0x1E], 'C'
+    jne .fail
+
+    mov ah, 0x4F
+    int 0x21
+    jnc .fail
+    cmp ax, 0x0012
+    jne .fail
+
+    mov dx, path_pattern_mz
+    xor cx, cx
+    mov ah, 0x4E
+    int 0x21
+    jc .fail
+    cmp byte [find_dta + 0x1E], 'M'
+    jne .fail
+
+    mov si, msg_find_serial_pass
+    call print_string_serial
+    pop ds
+    ret
+
+.fail:
+    mov si, msg_find_serial_fail
+    call print_string_serial
+    pop ds
+    ret
+
 run_stage1_selftest:
     mov si, msg_stage1_selftest_begin
     call print_string_dual
@@ -1801,6 +2366,7 @@ run_stage1_selftest:
     call run_com_demo
     call run_mz_demo
     call int21_fileio_test
+    call int21_find_test
     mov si, msg_stage1_selftest_done
     call print_string_dual
     mov si, msg_stage1_selftest_serial_done
@@ -2124,6 +2690,10 @@ dispatch_command:
     call str_eq
     jc .cmd_fileio
     mov di, bx
+    mov si, str_findtest
+    call str_eq
+    jc .cmd_findtest
+    mov di, bx
     mov si, str_reboot
     call str_eq
     jc .cmd_reboot
@@ -2190,6 +2760,10 @@ dispatch_command:
 
 .cmd_fileio:
     call int21_fileio_test
+    jmp .done
+
+.cmd_findtest:
+    call int21_find_test
     jmp .done
 
 .cmd_reboot:
@@ -2454,9 +3028,20 @@ search_found_size_lo dw 0
 search_found_size_hi dw 0
 search_found_root_lba dw 0
 search_found_root_off dw 0
+search_found_attr db 0
+search_found_name times 11 db 0
+dta_seg dw 0
+dta_off dw 0
+find_attr db 0
+find_active db 0
+find_cursor dw 0
+find_cached_sector dw 0
+find_pattern times 11 db 0
+tmp_find_comp dw 0
 path_fat_name times 11 db 0
 fileio_buf times 4 db 0
 fileio_patch db 0x11, 0x22
+find_dta times 64 db 0
 cmd_buffer times CMD_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] CiukiOS stage1 running", 13, 10, 0
@@ -2476,7 +3061,7 @@ msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
 
 msg_prompt    db "ciukios> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
-msg_help      db "commands: help cls ticks drive dos21 comdemo mzdemo fileio reboot halt", 13, 10, 0
+msg_help      db "commands: help cls ticks drive dos21 comdemo mzdemo fileio findtest reboot halt", 13, 10, 0
 msg_cleared   db "screen cleared", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
@@ -2498,6 +3083,9 @@ msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
 msg_fileio_begin db "[STAGE1] INT21h file io", 13, 10, 0
 msg_fileio_serial_pass db "[FILEIO-SERIAL] PASS", 13, 10, 0
 msg_fileio_serial_fail db "[FILEIO-SERIAL] FAIL", 13, 10, 0
+msg_find_begin db "[STAGE1] INT21h findfirst/findnext", 13, 10, 0
+msg_find_serial_pass db "[FIND-SERIAL] PASS", 13, 10, 0
+msg_find_serial_fail db "[FIND-SERIAL] FAIL", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
 
@@ -2509,6 +3097,7 @@ str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_mzdemo db "mzdemo", 0
 str_fileio db "fileio", 0
+str_findtest db "findtest", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
 
@@ -2516,3 +3105,5 @@ path_comdemo_dos db "COMDEMO.COM", 0
 path_mzdemo_dos  db "MZDEMO.EXE", 0
 path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
+path_pattern_com db "*.COM", 0
+path_pattern_mz  db "MZDEMO.EXE", 0
