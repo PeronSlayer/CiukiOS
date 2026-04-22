@@ -469,7 +469,7 @@ int21_exec:
     push es
 
     cmp al, 0x00
-        mov byte [si], '\'
+    jne .bad_function
 
     mov si, dx
     call int21_path_to_fat_name
@@ -544,70 +544,132 @@ int21_exec_load_to_es:
     push ds
     push es
 
-    mov [cs:tmp_exec_limit], cx
-    mov word [cs:tmp_exec_total], 0
+    mov [cs:tmp_exec_error], cx
 
-    xor al, al
-    call int21_open
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov si, path_fat_name
+    mov bx, 0xFFFF
+    call load_root_file_first_sector
     jc .open_fail
-    mov [cs:tmp_exec_handle], ax
 
-.read_loop:
-    cmp word [cs:tmp_exec_limit], 0
-    je .too_large
+    mov ax, [cs:search_found_size_hi]
+    mov [cs:tmp_exec_total], ax
+    mov ax, [cs:search_found_size_lo]
+    mov [cs:tmp_exec_limit], ax
+
+    mov ax, [cs:tmp_exec_error]
+    cmp ax, 0
+    je .size_ok
+    cmp word [cs:tmp_exec_total], 0
+    jne .too_large
+    cmp word [cs:tmp_exec_limit], ax
+    ja .too_large
+
+.size_ok:
+    mov ax, [cs:search_found_cluster]
+    cmp ax, 2
+    jb .open_fail
+    mov [cs:tmp_cluster], ax
+
+    call int21_load_fat_cache
+    jc .open_fail
 
     mov ax, [cs:tmp_exec_limit]
-    cmp ax, 512
-    jbe .chunk_ok
-    mov ax, 512
-.chunk_ok:
-    mov cx, ax
-    mov bx, [cs:tmp_exec_handle]
-    push ds
-    mov ax, es
-    mov ds, ax
-    mov dx, di
-    call int21_read
-    pop ds
-    jc .read_fail
-    cmp ax, 0
+    or ax, [cs:tmp_exec_total]
     je .close_ok
 
-    add di, ax
-    jc .too_large_close
-    add [cs:tmp_exec_total], ax
+.read_loop:
+    mov ax, [cs:tmp_cluster]
+    cmp ax, 2
+    jb .io_fail
+    cmp ax, FAT_EOF
+    jae .io_fail
+
+    call int21_cluster_to_lba
+    mov [cs:tmp_lba], ax
+
+    mov ax, DOS_IO_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .io_fail
+
+    mov ax, [cs:tmp_exec_total]
+    cmp ax, 0
+    jne .chunk_512
+    mov ax, [cs:tmp_exec_limit]
+    cmp ax, 512
+    jbe .chunk_ready
+
+.chunk_512:
+    mov ax, 512
+
+.chunk_ready:
+    mov [cs:tmp_chunk], ax
+
+    push ds
+    push cx
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    xor si, si
+    mov cx, [cs:tmp_chunk]
+
+.copy_loop:
+    movsb
+    cmp di, 0
+    jne .copy_next
+    mov ax, es
+    add ax, 0x1000
+    cmp ax, DOS_META_BUF_SEG
+    jae .copy_too_large
+    mov es, ax
+
+.copy_next:
+    loop .copy_loop
+    pop cx
+    pop ds
+
+    mov ax, [cs:tmp_chunk]
     sub [cs:tmp_exec_limit], ax
+    sbb word [cs:tmp_exec_total], 0
+
+    mov ax, [cs:tmp_exec_limit]
+    or ax, [cs:tmp_exec_total]
+    je .close_ok
+
+    mov ax, [cs:tmp_cluster]
+    mov bx, ax
+    call fat12_get_entry_cached
+    jc .io_fail
+    mov [cs:tmp_cluster], ax
     jmp .read_loop
 
+.copy_too_large:
+    pop cx
+    pop ds
+    jmp .too_large
+
 .close_ok:
-    mov bx, [cs:tmp_exec_handle]
-    call int21_close
-    jc .close_fail
-    mov ax, [cs:tmp_exec_total]
+    xor ax, ax
     clc
     jmp .done
 
 .open_fail:
+    mov ax, 0x0002
     stc
     jmp .done
 
-.read_fail:
-    mov [cs:tmp_exec_error], ax
-    mov bx, [cs:tmp_exec_handle]
-    call int21_close
-    mov ax, [cs:tmp_exec_error]
+.io_fail:
+    mov ax, 0x0005
     stc
     jmp .done
 
-.too_large_close:
-    mov bx, [cs:tmp_exec_handle]
-    call int21_close
 .too_large:
     mov ax, 0x0008
-    stc
-    jmp .done
-
-.close_fail:
     stc
 
 .done:
@@ -698,7 +760,7 @@ int21_exec_load_mz:
     rep stosw
 
     xor di, di
-    mov cx, 0xF000
+    xor cx, cx
     call int21_exec_load_to_es
     jc .fail
     clc

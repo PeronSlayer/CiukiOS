@@ -11,7 +11,12 @@ echo "[qemu-test-full-stage1] running full profile stage1 selftest regression (F
 mkdir -p "$(dirname "$LOG_FILE")"
 rm -f "$LOG_FILE"
 
-if ! CIUKIOS_INCLUDE_OPENGEM=0 CIUKIOS_STAGE1_SELFTEST_AUTORUN=1 LOG_FILE="$LOG_FILE" QEMU_TIMEOUT_SEC="$TIMEOUT_SEC" bash scripts/qemu_run_full.sh --test; then
+export CIUKIOS_INCLUDE_OPENGEM=0
+export CIUKIOS_STAGE1_SELFTEST_AUTORUN=1
+export LOG_FILE="$LOG_FILE"
+export QEMU_TIMEOUT_SEC="$TIMEOUT_SEC"
+
+if ! bash scripts/qemu_run_full.sh --test; then
   echo "[qemu-test-full-stage1] FAIL (full test harness failed)" >&2
   tail -n 120 "$LOG_FILE" >&2 || true
   exit 1
