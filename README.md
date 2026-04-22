@@ -16,17 +16,17 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 8. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.5.0`
+`CiukiOS pre-Alpha v0.5.5`
 
 Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
 
 ## Changelog (Latest)
-### pre-Alpha v0.5.0
-1. Restarted the project on a legacy BIOS x86 architecture baseline.
-2. Archived previous project state in `OLD/archive-2026-04-22/`.
-3. Added dual build profiles (`floppy`, `full`) and QEMU smoke-test entry scripts.
-4. Added operating directives for branch workflow, approval-gated merges, and concise English documentation.
+### pre-Alpha v0.5.5
+1. Completed Stage1 bring-up with deterministic `stage0 -> stage1` chain loading and BIOS diagnostics.
+2. Added Stage1 DOS core baseline (`INT 21h` subset + `.COM` execution baseline with PSP-compatible setup).
+3. Unified QEMU run/test flows and added Stage1 selftest regression gates.
+4. Finalized legacy BIOS `floppy` milestone foundation for Phase 2 DOS runtime expansion.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
@@ -76,4 +76,3 @@ The name **CiukiOS** comes from a private joke between me and my girlfriend abou
 His nickname was **Ciuk/Ciuki**, and we used to joke that if we ever built an operating system, we would call it **CiukiOS**.
 
 So this is why is dedicated to one of the best dogs i ever met, Jack.
-
