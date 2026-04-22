@@ -3469,8 +3469,7 @@ load_root_file_first_sector:
     mov [search_found_size_hi], ax
 
     mov ax, [search_found_cluster]
-    sub ax, 2
-    add ax, FAT_DATA_START_LBA
+    call int21_cluster_to_lba
     mov bx, [search_target_off]
     cmp bx, 0xFFFF
     je .found_ok
