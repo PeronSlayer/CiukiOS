@@ -3,7 +3,14 @@ org 0x0000
 
 %define CMD_BUF_LEN 64
 %define COM_LOAD_SEG 0x2000
-%define COM_DEMO_SECTOR 6
+%define FAT_SPT 18
+%define FAT_HEADS 2
+%define FAT_RESERVED_SECTORS 7
+%define FAT_SECTORS_PER_FAT 9
+%define FAT_COUNT 2
+%define FAT_ROOT_DIR_SECTORS 14
+%define FAT_ROOT_START_LBA (FAT_RESERVED_SECTORS + (FAT_COUNT * FAT_SECTORS_PER_FAT))
+%define FAT_DATA_START_LBA (FAT_ROOT_START_LBA + FAT_ROOT_DIR_SECTORS)
 
 stage1_start:
     cli
@@ -301,14 +308,56 @@ load_com_demo_from_disk:
     mov word [es:0x0000], 0x20CD
     mov byte [es:0x0080], 0
 
-    mov ah, 0x02
-    mov al, 0x01
-    xor ch, ch
-    mov cl, COM_DEMO_SECTOR
-    xor dh, dh
-    mov dl, [boot_drive]
+    mov dx, FAT_ROOT_START_LBA
+
+.scan_next_sector:
+    cmp dx, FAT_ROOT_START_LBA + FAT_ROOT_DIR_SECTORS
+    jae .read_fail
+
+    mov ax, dx
+    mov bx, 0x0200
+    call read_sector_lba
+    jc .read_fail
+
+    mov di, 0x0200
+    mov cx, 16
+
+.scan_entries:
+    mov al, [es:di]
+    cmp al, 0x00
+    je .read_fail
+    cmp al, 0xE5
+    je .next_entry
+
+    mov al, [es:di + 11]
+    cmp al, 0x0F
+    je .next_entry
+    test al, 0x08
+    jnz .next_entry
+
+    push cx
+    push dx
+    call fat_entry_matches_comdemo
+    pop dx
+    pop cx
+    jc .found_entry
+
+.next_entry:
+    add di, 32
+    loop .scan_entries
+
+    inc dx
+    jmp .scan_next_sector
+
+.found_entry:
+    mov ax, [es:di + 26]
+    cmp ax, 2
+    jb .read_fail
+
+    sub ax, 2
+    add ax, FAT_DATA_START_LBA
     mov bx, 0x0100
-    int 0x13
+    call read_sector_lba
     jc .read_fail
 
     mov word [com_entry_off], 0x0100
@@ -329,6 +378,62 @@ load_com_demo_from_disk:
     pop cx
     pop bx
     pop ax
+    ret
+
+fat_entry_matches_comdemo:
+    push ax
+    push bx
+    push cx
+
+    mov bx, 0
+    mov cx, 11
+
+.cmp_loop:
+    mov al, [fat_comdemo_name + bx]
+    cmp al, [es:di + bx]
+    jne .not_match
+    inc bx
+    loop .cmp_loop
+
+    stc
+    jmp .done
+
+.not_match:
+    clc
+
+.done:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+read_sector_lba:
+    push bx
+    push cx
+    push dx
+
+    xor dx, dx
+    mov cx, FAT_SPT
+    div cx
+
+    mov cl, dl
+    inc cl
+
+    xor dx, dx
+    mov bx, FAT_HEADS
+    div bx
+
+    mov ch, al
+    mov dh, dl
+    mov dl, [boot_drive]
+
+    mov ah, 0x02
+    mov al, 0x01
+    int 0x13
+
+    pop dx
+    pop cx
+    pop bx
     ret
 
 dispatch_command:
@@ -676,3 +781,5 @@ str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
+
+fat_comdemo_name db "COMDEMO COM"

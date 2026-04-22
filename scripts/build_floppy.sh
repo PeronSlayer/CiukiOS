@@ -9,12 +9,21 @@ BOOT_BIN="build/floppy/obj/floppy_boot.bin"
 STAGE1_SRC="src/boot/floppy_stage1.asm"
 STAGE1_BIN="build/floppy/obj/floppy_stage1.bin"
 STAGE1_SLOT_BIN="build/floppy/obj/floppy_stage1_slot.bin"
-STAGE1_SECTORS=4
+STAGE1_SECTORS=6
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 COMDEMO_SRC="src/com/comdemo.asm"
 COMDEMO_BIN="build/floppy/obj/comdemo.com"
 COMDEMO_MAX_SIZE=512
-COMDEMO_SECTOR_LBA=5
+
+FAT_RESERVED_SECTORS=$((1 + STAGE1_SECTORS))
+FAT_SECTORS_PER_FAT=9
+FAT_COUNT=2
+ROOT_ENTRIES=224
+ROOT_DIR_SECTORS=$((ROOT_ENTRIES * 32 / 512))
+FAT1_LBA=$FAT_RESERVED_SECTORS
+FAT2_LBA=$((FAT1_LBA + FAT_SECTORS_PER_FAT))
+ROOT_LBA=$((FAT2_LBA + FAT_SECTORS_PER_FAT))
+DATA_LBA=$((ROOT_LBA + ROOT_DIR_SECTORS))
 IMG="build/floppy/ciukios-floppy.img"
 
 if [[ ! -f "$BOOT_SRC" ]]; then
@@ -61,19 +70,35 @@ if [[ "$COMDEMO_SIZE" -gt "$COMDEMO_MAX_SIZE" ]]; then
   exit 1
 fi
 
+FAT_SECTOR_BIN="build/floppy/obj/fat_sector.bin"
+ROOT_ENTRY_BIN="build/floppy/obj/root_comdemo_entry.bin"
+
+printf 'F0FFFFF00F' | xxd -r -p > "$FAT_SECTOR_BIN"
+dd if=/dev/zero bs=1 count=$((512 - 5)) status=none >> "$FAT_SECTOR_BIN"
+
+dd if=/dev/zero of="$ROOT_ENTRY_BIN" bs=1 count=32 status=none
+printf 'COMDEMO COM' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=0 conv=notrunc status=none
+printf '\x20' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=11 conv=notrunc status=none
+printf '\x02\x00' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=26 conv=notrunc status=none
+printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((COMDEMO_SIZE & 0xFF)) $(((COMDEMO_SIZE >> 8) & 0xFF)) $(((COMDEMO_SIZE >> 16) & 0xFF)) $(((COMDEMO_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_BIN" bs=1 seek=28 conv=notrunc status=none
+
 echo "[build-floppy] creating 1.44MB floppy image"
 dd if=/dev/zero of=build/floppy/ciukios-floppy.img bs=512 count=2880 status=none
 dd if="$BOOT_BIN" of="$IMG" bs=512 count=1 conv=notrunc status=none
 dd if="$STAGE1_SLOT_BIN" of="$IMG" bs=512 seek=1 count="$STAGE1_SECTORS" conv=notrunc status=none
-dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek="$COMDEMO_SECTOR_LBA" count=1 conv=notrunc status=none
+dd if="$FAT_SECTOR_BIN" of="$IMG" bs=512 seek="$FAT1_LBA" count=1 conv=notrunc status=none
+dd if="$FAT_SECTOR_BIN" of="$IMG" bs=512 seek="$FAT2_LBA" count=1 conv=notrunc status=none
+dd if="$ROOT_ENTRY_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512)) conv=notrunc status=none
+dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek="$DATA_LBA" count=1 conv=notrunc status=none
 
 cat > build/floppy/README.txt << 'TXT'
 CiukiOS Legacy v2 - Floppy profile
 
 Image: ciukios-floppy.img (1.44MB)
 State: BIOS stage0 -> stage1 chain-loader baseline
-Boot path: stage0 at LBA0, stage1 payload in sectors 2-5
-COM demo payload: raw sector-backed binary at sector 6 (LBA5)
+Boot path: stage0 at LBA0, stage1 payload in sectors 2-7
+FAT layout: reserved sectors include stage1 area, FAT/root/data follow BPB geometry
+COM demo payload: COMDEMO.COM root entry + first cluster at FAT data start
 TXT
 
 echo "[build-floppy] done: $IMG"

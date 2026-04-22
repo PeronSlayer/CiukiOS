@@ -2,7 +2,7 @@ bits 16
 org 0x7C00
 
 %define STAGE1_SEG     0x0800
-%define STAGE1_SECTORS 4
+%define STAGE1_SECTORS 6
 
 jmp short boot_start
 nop
@@ -11,7 +11,7 @@ nop
 bpb_oem_label        db "CIUKBIOS"
 bpb_bytes_per_sector dw 512
 bpb_sectors_per_clu  db 1
-bpb_reserved_secs    dw 1
+bpb_reserved_secs    dw (1 + STAGE1_SECTORS)
 bpb_fat_count        db 2
 bpb_root_entries     dw 224
 bpb_total_secs16     dw 2880
