@@ -16,23 +16,23 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 8. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.5.5`
+`CiukiOS pre-Alpha v0.5.6`
 
 Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
 
 ## Changelog (Latest)
-### pre-Alpha v0.5.5
-1. Completed Stage1 bring-up with deterministic `stage0 -> stage1` chain loading and BIOS diagnostics.
-2. Added Stage1 DOS core baseline (`INT 21h` subset + `.COM` execution baseline with PSP-compatible setup).
-3. Unified QEMU run/test flows and added Stage1 selftest regression gates.
-4. Finalized legacy BIOS `floppy` milestone foundation for Phase 2 DOS runtime expansion.
+### pre-Alpha v0.5.6
+1. Closed Phase 2 with Stage1 FAT12/FAT16 compile-time support and FAT16 cluster walker path for the full profile.
+2. Reworked full-profile image assembly to inject runtime payloads (`COMDEMO`, `MZDEMO`, `FILEIO`, `DELTEST`) into FAT16 root/data layout.
+3. Added full-profile Stage1 selftest regression gate (`scripts/qemu_test_full_stage1.sh`) and integrated it in the aggregate test suite.
+4. Stabilized QEMU serial capture in test mode using file chardev wiring for deterministic marker collection.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
-1. Build a real BIOS boot path for the `floppy` profile.
-2. Implement native DOS runtime compatibility incrementally.
+1. Keep deterministic BIOS bring-up and DOS runtime gates green on both `floppy` and `full` profiles.
+2. Expand native DOS compatibility incrementally on top of the current Stage1 FAT/file I/O foundation.
 3. Reach OpenGEM and DOOM milestones, then progress toward Windows pre-NT compatibility (up to Windows 98).
 
 ## Open Source Collaboration
