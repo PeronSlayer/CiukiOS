@@ -3915,7 +3915,7 @@ splash_hold:
     mov ah, 0x00
     int 0x1A
     mov bx, dx
-    add bx, 18
+    add bx, 91
 
 .loop:
     mov ah, 0x01
@@ -4324,7 +4324,7 @@ msg_halting   db "halting...", 13, 10, 0
 splash_title db "CiukiOS", 0
 splash_subtitle db "Legacy BIOS runtime loading...", 0
 splash_status db "initializing stage1 runtime", 0
-splash_wait_hint db "starting shell in 1s (or press any key)", 0
+splash_wait_hint db "starting shell in 5s (or press any key)", 0
 gfx_text_ciukios db "CIUKIOS", 0
 gfx_text_demo db "GFX DEMO", 0
 gfx_text_vdi db "VDI BASE", 0
