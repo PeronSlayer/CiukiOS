@@ -29,3 +29,8 @@ Run command inside CiukiOS full shell:
 ```text
 opengem
 ```
+
+Implementation note:
+
+- On full profile, `opengem` in stage1 now chainloads `STAGE2.BIN` from the FAT16 root.
+- `STAGE2.BIN` performs OpenGEM launch (`GEM.BAT` first, fallback to `GEM.EXE`).

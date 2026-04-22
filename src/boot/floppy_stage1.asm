@@ -4,6 +4,7 @@ org 0x0000
 %define CMD_BUF_LEN 64
 %define COM_LOAD_SEG 0x2000
 %define MZ_LOAD_SEG 0x3000
+%define STAGE2_LOAD_SEG 0x5000
 %define DOS_META_BUF_SEG 0x7000
 %define DOS_FAT_BUF_SEG  0x7200
 %define DOS_IO_BUF_SEG   0x7400
@@ -3627,13 +3628,17 @@ dispatch_command:
 
 %if FAT_TYPE == 16
 .cmd_opengem:
-    mov ax, cs
-    mov ds, ax
-    mov dx, path_opengem_dos
+    mov ax, STAGE2_LOAD_SEG
+    mov es, ax
     xor bx, bx
-    mov ax, 0x4B00
-    int 0x21
-    jnc .done
+    mov si, path_stage2_dos
+    call load_root_file_first_sector
+    jc .load_fail
+
+    call STAGE2_LOAD_SEG:0x0000
+    jmp .done
+
+.load_fail:
     mov si, msg_mz_load_fail
     call print_string_dual
     jmp .done
@@ -4749,7 +4754,7 @@ path_mzdemo_dos  db "MZDEMO.EXE", 0
 path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
 %if FAT_TYPE == 16
-path_opengem_dos db "GEM.EXE", 0
+path_stage2_dos db "STAGE2.BIN", 0
 %endif
 path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0

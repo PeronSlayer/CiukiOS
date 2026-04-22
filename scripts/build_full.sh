@@ -9,6 +9,9 @@ BOOT_BIN="build/full/obj/full_boot.bin"
 STAGE1_SRC="src/boot/floppy_stage1.asm"
 STAGE1_BIN="build/full/obj/full_stage1.bin"
 STAGE1_SLOT_BIN="build/full/obj/full_stage1_slot.bin"
+STAGE2_SRC="src/boot/full_stage2.asm"
+STAGE2_BIN="build/full/obj/full_stage2.bin"
+STAGE2_MAX_SIZE=512
 
 IMG="build/full/ciukios-full.img"
 TOTAL_SECTORS=262144
@@ -40,7 +43,7 @@ OPENGEM_UPSTREAM_DIR="$OPENGEM_PAYLOAD_DIR/upstream/OPENGEM7-RC3"
 INCLUDE_OPENGEM_PAYLOAD="${CIUKIOS_INCLUDE_OPENGEM:-1}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -78,10 +81,17 @@ dd if=/dev/zero of="$STAGE1_SLOT_BIN" bs=512 count="$STAGE1_SECTORS" status=none
 dd if="$STAGE1_BIN" of="$STAGE1_SLOT_BIN" conv=notrunc status=none
 
 echo "[build-full] assembling application payloads"
+nasm -f bin "$STAGE2_SRC" -o "$STAGE2_BIN"
 nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
 nasm -f bin "$MZDEMO_SRC"  -o "$MZDEMO_BIN"
 nasm -f bin "$FILEIO_SRC"  -o "$FILEIO_BIN"
 nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
+
+STAGE2_SIZE="$(stat -c%s "$STAGE2_BIN")"
+if [[ "$STAGE2_SIZE" -gt "$STAGE2_MAX_SIZE" ]]; then
+	echo "[build-full] ERROR: stage2 payload is $STAGE2_SIZE bytes (max $STAGE2_MAX_SIZE)" >&2
+	exit 1
+fi
 
 COMDEMO_SIZE="$(stat -c%s "$COMDEMO_BIN")"
 MZDEMO_SIZE="$(stat -c%s  "$MZDEMO_BIN")"
@@ -95,10 +105,10 @@ fi
 
 # FAT16 sector (little-endian 16-bit entries):
 #  [0]=0xFFF8 media+reserved, [1]=0xFFFF, [2]=EOF(COMDEMO), [3]=EOF(MZDEMO),
-#  [4]=0x0005 FILEIO chain->5, [5]=EOF(FILEIO), [6]=EOF(DELTEST)
+#  [4]=0x0005 FILEIO chain->5, [5]=EOF(FILEIO), [6]=EOF(DELTEST), [7]=EOF(STAGE2)
 FAT_SECTOR_BIN="build/full/obj/fat16_sector.bin"
-printf 'F8FFFFFFFFFFFFFF0500FFFF FFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
-dd if=/dev/zero bs=1 count=$((512 - 14)) status=none >> "$FAT_SECTOR_BIN"
+printf 'F8FFFFFFFFFFFFFF0500FFFFFFFFFFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
+dd if=/dev/zero bs=1 count=$((512 - 16)) status=none >> "$FAT_SECTOR_BIN"
 
 # Helper: write a 32-byte FAT root directory entry
 make_root_entry() {
@@ -118,10 +128,12 @@ ROOT_ENTRY_COMDEMO="build/full/obj/root_comdemo.bin"
 ROOT_ENTRY_MZDEMO="build/full/obj/root_mzdemo.bin"
 ROOT_ENTRY_FILEIO="build/full/obj/root_fileio.bin"
 ROOT_ENTRY_DELTEST="build/full/obj/root_deltest.bin"
+ROOT_ENTRY_STAGE2="build/full/obj/root_stage2.bin"
 make_root_entry "$ROOT_ENTRY_COMDEMO" 'COMDEMO COM' 2 "$COMDEMO_SIZE"
 make_root_entry "$ROOT_ENTRY_MZDEMO"  'MZDEMO  EXE' 3 "$MZDEMO_SIZE"
 make_root_entry "$ROOT_ENTRY_FILEIO"  'FILEIO  BIN' 4 "$FILEIO_SIZE"
 make_root_entry "$ROOT_ENTRY_DELTEST" 'DELTEST BIN' 6 "$DELTEST_SIZE"
+make_root_entry "$ROOT_ENTRY_STAGE2"  'STAGE2  BIN' 7 "$STAGE2_SIZE"
 
 echo "[build-full] creating 128MB FAT16 image"
 dd if=/dev/zero of="$IMG" bs=512 count="$TOTAL_SECTORS" status=none
@@ -133,10 +145,12 @@ dd if="$ROOT_ENTRY_COMDEMO" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 0))  conv=no
 dd if="$ROOT_ENTRY_MZDEMO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_FILEIO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_DELTEST" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_STAGE2"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
 dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 0)) count=1 conv=notrunc status=none
 dd if="$MZDEMO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
 dd if="$FILEIO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + 2)) count=2 conv=notrunc status=none
 dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 4)) count=1 conv=notrunc status=none
+dd if="$STAGE2_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + 5)) count=1 conv=notrunc status=none
 
 OPENGEM_STAGE_DIR="build/full/obj/opengem_stage"
 mkdir -p "$OPENGEM_STAGE_DIR"
@@ -181,9 +195,9 @@ CiukiOS Legacy v2 - Full profile (FAT16 baseline)
 
 Image: ciukios-full.img (128MB)
 State: BIOS stage0 -> stage1 with full DOS runtime and FAT16 file I/O
-Filesystem: FAT16 (SPT=63 Heads=16 128MB) with COMDEMO/MZDEMO/FILEIO/DELTEST payloads
+Filesystem: FAT16 (SPT=63 Heads=16 128MB) with COMDEMO/MZDEMO/FILEIO/DELTEST/STAGE2 payloads
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-15
-Data: cluster 2=COMDEMO, 3=MZDEMO, 4-5=FILEIO, 6=DELTEST
+Data: cluster 2=COMDEMO, 3=MZDEMO, 4-5=FILEIO, 6=DELTEST, 7=STAGE2
 TXT
 
 echo "[build-full] done: build/full/ciukios-full.img"
