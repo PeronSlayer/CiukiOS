@@ -3,6 +3,7 @@ org 0x0000
 
 %define CMD_BUF_LEN 64
 %define COM_LOAD_SEG 0x2000
+%define COM_DEMO_SECTOR 6
 
 stage1_start:
     cli
@@ -216,7 +217,8 @@ run_com_demo:
     mov si, msg_com_begin
     call print_string_dual
 
-    call build_com_demo_image
+    call load_com_demo_from_disk
+    jc .load_fail
 
     mov [saved_ss], ss
     mov [saved_sp], sp
@@ -265,14 +267,22 @@ run_com_demo:
     mov si, msg_com_serial_pass
     call print_string_serial
     ret
+.load_fail:
+    mov si, msg_com_load_fail
+    call print_string_dual
+    mov si, msg_com_serial_fail
+    call print_string_serial
+    ret
 .serial_fail:
     mov si, msg_com_serial_fail
     call print_string_serial
     ret
 
-build_com_demo_image:
+load_com_demo_from_disk:
     push ax
+    push bx
     push cx
+    push dx
     push si
     push di
     push ds
@@ -291,19 +301,33 @@ build_com_demo_image:
     mov word [es:0x0000], 0x20CD
     mov byte [es:0x0080], 0
 
-    mov si, com_demo_payload
-    mov di, 0x0100
-    mov cx, com_demo_payload_end - com_demo_payload
-    rep movsb
+    mov ah, 0x02
+    mov al, 0x01
+    xor ch, ch
+    mov cl, COM_DEMO_SECTOR
+    xor dh, dh
+    mov dl, [boot_drive]
+    mov bx, 0x0100
+    int 0x13
+    jc .read_fail
 
     mov word [com_entry_off], 0x0100
     mov word [com_entry_seg], COM_LOAD_SEG
 
+    clc
+    jmp .done
+
+.read_fail:
+    stc
+
+.done:
     pop es
     pop ds
     pop di
     pop si
+    pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -637,6 +661,7 @@ msg_dos21_ah09 db "[INT21/AH=09h] console path active", 13, 10, '$'
 msg_dos21_status db "[INT21/AH=4Dh] code/type=0x", 0
 msg_dos21_serial_pass db "[DOS21-SERIAL] PASS", 13, 10, 0
 msg_com_begin db "[STAGE1] COM demo load/exec", 13, 10, 0
+msg_com_load_fail db "[STAGE1] COM demo disk read FAIL", 13, 10, 0
 msg_com_done  db "[STAGE1] COM demo code/query=0x", 0
 msg_com_serial_pass db "[COMDEMO-SERIAL] PASS", 13, 10, 0
 msg_com_serial_fail db "[COMDEMO-SERIAL] FAIL", 13, 10, 0
@@ -651,13 +676,3 @@ str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
-
-com_demo_payload:
-    db 0xBA, 0x0C, 0x01          ; mov dx,0x010C
-    db 0xB4, 0x09                ; mov ah,0x09
-    db 0xCD, 0x21                ; int 0x21
-    db 0xB8, 0x37, 0x4C          ; mov ax,0x4C37
-    db 0xCD, 0x21                ; int 0x21
-    db 0xCB                      ; retf
-    db "COM demo via INT21h", 13, 10, '$'
-com_demo_payload_end:
