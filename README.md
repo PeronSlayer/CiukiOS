@@ -1,127 +1,30 @@
-![Splashscreen CiukiOS](misc/CiukiOS_SplashScreen.png)
+# CiukiOS (Legacy Reset)
 
-# CiukiOS
+CiukiOS riparte da zero con un obiettivo chiaro: sistema operativo x86 legacy-first, senza dipendenze UEFI, orientato all'esecuzione nativa software DOS e pre-NT.
 
-Open Source RetroOS project built from scratch.
-Mission: become a progressively more complete environment capable of running DOS, FreeDOS and pre-NT Windows software over time.
+## Obiettivi principali
+1. Boot ed esecuzione su hardware retro x86 reale (Intel/AMD) in modalita legacy BIOS.
+2. Esecuzione nativa applicativi DOS (nessun layer di emulazione): OpenGEM, DOOM e target Windows fino a 98 (pre-NT).
+3. Due profili build:
+   - `floppy`: build minimale entro 1.44MB, avviabile su PC legacy.
+   - `full`: build completa con runtime esteso e stack desktop.
 
-## Quick Links
-1. Project roadmap: [Roadmap.md](Roadmap.md)
-2. Detailed DOOM roadmap: [docs/roadmap-ciukios-doom.md](docs/roadmap-ciukios-doom.md)
-3. Donations and support: [DONATIONS.md](DONATIONS.md)
-4. Full documentation: [documentation.md](documentation.md)
-5. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+## Stato repository
+1. Codice storico archiviato in `OLD/archive-2026-04-22/`.
+2. Documentazione nuova in `docs/`.
+3. File storici mantenuti: `CHANGELOG.md` e handoff storici.
 
-## Current Version
-`CiukiOS Alpha v0.8.9`
-Focus: compatibility foundation + progressive desktop/runtime improvements.
+## Documenti chiave
+1. `docs/architecture-legacy-x86-v1.md`
+2. `Roadmap.md`
+3. `docs/diario-bordo-v2.md`
+4. `docs/ai-agent-directives.md`
 
-## Changelog (Latest)
-### v0.8.9
-1. Added the GDT byte-layout encoder (`vm86_gdt_encode` + read-back helpers) that lays the 7-slot CPU-visible descriptor set (NULL, PE_CODE32, PE_DATA32, V86_STACK, V86_TSS, RETURN_CODE64, RETURN_DATA64) into a host-owned buffer bit-exact, with no `LGDT` load.
-2. Added the IDT gate encoder and v8086 IRET stack-frame encoder (`vm86_idt_encode`, `vm86_iret_encode_frame`) that produce the 256-entry IDT with dedicated #GP (0x0D), SW20 (INT 20h), and SW21 (INT 21h) vectors plus the 36-byte v86 entry frame, forcing `VM=1 | IOPL=3 | reserved1` unconditionally into EFLAGS as a safety invariant.
-3. Added two static gates: `scripts/test_vm86_gdt_encode.sh` (59 OK / 0 FAIL) and `scripts/test_vm86_idt_iret.sh` (77 OK / 0 FAIL), both wired into `Makefile` as `test-vm86-gdt-encode` and `test-vm86-idt-iret`.
-4. Expanded the v86 regression stack from 8 gates to 10 gates (017..026), all PASS post-merge; encoders remain observability-only with no live call site and no inline-assembly `lgdt`/`lidt`/`iret` introduced.
-5. Bumped baseline version to `CiukiOS Alpha v0.8.9`.
+## Comandi base
+```bash
+make help
+make build-floppy
+make build-full
+```
 
-### v0.8.8
-1. Added the INT 21h AH=4Ch clean-exit handler (OPENGEM-021) with task-state transition to `EXITED`, `exit_reason=INT21_4C`, and byte-width `errorlevel` capture from AL; observability-only via `vm86_int21_4c_probe`.
-2. Added the console handler set (OPENGEM-022): INT 20h (program terminate), INT 21h AH=02h (character out via DL), INT 21h AH=09h (DOS `$`-terminated string via DS:DX), plus a host-side `vm86_console_sink` (256-byte ring with overflow counter) so serial-less gate runs can audit guest writes.
-3. Added the INT 10h AH=0Eh BIOS teletype handler (OPENGEM-023) routed through the same console sink, isolating BIOS-vs-DOS output paths while keeping a single byte stream for gates.
-4. Added the INT 21h AH=30h DOS-version query handler + `gem.exe` T0 readiness simulation (OPENGEM-024) that drives the full startup INT sequence (`AH=30h → AH=09h banner → INT 10h AH=0Eh → AH=4Ch`) with AH-keyed slot rotation on vector 0x21 and explicit ready/pending-surface manifests.
-5. Added five new static gates (`test-vm86-int21-4c`, `test-vm86-console`, `test-vm86-int10-0e`, `test-vm86-gem-t0`) driven by bit-level probe assertions; v86 regression stack grew to 8 PASS.
-6. Bumped baseline version to `CiukiOS Alpha v0.8.8`.
-
-### v0.8.7
-1. Added the OT-DEMO-001 polish wave: curated shell help for demo-facing commands, a dedicated `demo` launcher, and the new deterministic `CIUKDEMO.COM` graphics showcase for short capture sessions.
-2. Hardened graphical-app replay behavior by resetting the VGA palette baseline on every mode `0x13` entry, fixing the black-screen-on-second-run failure after fade-heavy demos.
-3. Changed the DOS runtime so graphical programs stop drawing shell/debug text over the framebuffer once they enter graphics, while serial markers still remain available for validation.
-4. Deferred shell prompt redraw after graphical apps until the next user input, so the final rendered frame stays visible instead of being immediately overwritten by the console.
-5. Updated `run_ciukios.sh` defaults to launch QEMU in a Full HD `1920x1080` GOP configuration with a centered graphical window and reboot/shutdown enabled by default.
-6. Bumped baseline version to `CiukiOS Alpha v0.8.7`.
-
-### v0.8.6
-1. Released the latest shell UX set: path-aware direct execution, richer `which` / `where` / `resolve`, stronger completion flow, and extended DOS-like editing shortcuts.
-2. Turned VGA mode `0x13` from a scaffold into a first real runtime checkpoint with deterministic markers in the gfx path and a richer `DOSMODE13.COM` validation frame.
-3. Upgraded `test-vga13-baseline` into a runtime-aware gate with static fallback only when host capture is incomplete.
-4. Added the next M6 DPMI step: stateful memory allocation/free tracking plus new `CIUKREL.EXE` smoke coverage for `INT 31h AX=0502h`.
-5. Wired the new M6 smoke through image packaging, aggregate readiness gating, and supporting roadmap/documentation updates.
-6. Bumped baseline version to `CiukiOS Alpha v0.8.6`.
-
-![DOSMODE13.COM — first real mode 0x13 runtime checkpoint validated on QEMU (v0.8.6)](misc/screenshots/v0.8.6-dosmode13-runtime-checkpoint.png)
-
-### v0.8.5
-1. Added signed/clipped mode 0x13 patch placement helpers: `gfx_mode13_blit_indexed_clip(...)` for opaque/masked indexed blits with automatic off-screen crop and `gfx_mode13_blit_scaled_clip(...)` for stable nearest-neighbor scaled patches with signed destination coordinates.
-2. Added `gfx_mode13_draw_column_sampled_masked(...)`, a DOOM-leaning sampled masked column primitive that uses 16.16 source stepping and clips signed destination Y.
-3. Extended `ciuki_gfx_services_t` with `mode13_blit_indexed_clip`, `mode13_blit_scaled_clip`, and `mode13_draw_column_sampled_masked`, preserving append-only ABI growth.
-4. Updated `GFXDOOM.COM` to validate real patch placement cases: one clipped top-left scaled patch, one centered patch, and stretched sampled masked columns across the lower half of the screen.
-5. Bumped baseline version to `CiukiOS Alpha v0.8.5`.
-
-### v0.8.4
-1. Added the next DOOM-facing mode 0x13 helpers: `gfx_mode13_blit_scaled(...)` for nearest-neighbor scaled indexed blits (HUD/title patch style), `gfx_mode13_draw_column_masked(...)` for transparent single-column draws, and `gfx_frame_counter()` for present-count pacing / instrumentation.
-2. Extended `ciuki_gfx_services_t` with `mode13_blit_scaled`, `mode13_draw_column_masked`, and `frame_counter`, keeping the ABI append-only before `reserved[32]`.
-3. New sample `GFXDOOM.COM` (`com/gfxdoom/`): fills a mode 0x13 background, scales a 16x16 indexed patch to 160x100, overlays masked columns, presents after each stage, and prints `[gfxdoom] frames=<n>` + `[gfxdoom] OK`.
-4. `run_ciukios.sh` now copies `GFXDOOM.COM` into the FAT image so the demo is runnable directly from the shell.
-5. Bumped baseline version to `CiukiOS Alpha v0.8.4`.
-
-Full changelog: [CHANGELOG.md](CHANGELOG.md)
-
-## Current Direction
-The active north star is:
-1. Run real DOS executables on CiukiOS.
-2. Reach the first major game milestone: run DOS DOOM from CiukiOS.
-3. Extend compatibility toward DOS, FreeDOS and pre-NT Windows software in incremental phases.
-
-## Open Source Collaboration
-CiukiOS is open to collaborative proposals, issue reports, technical discussion and PR contributions.
-If you want to help, please open an issue with:
-1. clear problem/idea description
-2. expected behavior
-3. reproducible steps or technical context
-
-## Development Pace
-This is a spare-time project.
-Updates are continuous but not on a fixed schedule: progress depends on available free time and mood.
-
-## Alpha Policy (Pre-1.0)
-Until `CiukiOS Alpha v1.0`, this project follows these rules:
-1. No official prebuilt release artifacts are provided.
-2. No public step-by-step build instructions are provided in this README.
-3. Development is currently heavily assisted by LLM tooling (OpenAI, Claude, Copilot) while core engineering skills and architecture mature.
-4. Versioning cadence: every 2/3 integrated updates bump patch version automatically (`x.y.z -> x.y.(z+1)`); milestone-sized integrations may bump minor version.
-
-## Key Docs
-1. Central project documentation: [documentation.md](documentation.md)
-2. Full changelog: [CHANGELOG.md](CHANGELOG.md)
-3. Unified roadmap and sub-roadmaps: [Roadmap.md](Roadmap.md)
-4. DOS-to-DOOM roadmap: [docs/roadmap-ciukios-doom.md](docs/roadmap-ciukios-doom.md)
-5. DOS 6.2 compatibility roadmap: [docs/roadmap-dos62-compat.md](docs/roadmap-dos62-compat.md)
-6. FreeDOS integration and licensing policy: [docs/freedos-integration-policy.md](docs/freedos-integration-policy.md)
-7. FreeDOS symbiotic architecture: [docs/freedos-symbiotic-architecture.md](docs/freedos-symbiotic-architecture.md)
-8. OpenGEM integration notes and operations: [docs/opengem-integration-notes.md](docs/opengem-integration-notes.md), [docs/opengem-ops.md](docs/opengem-ops.md)
-9. Shared contributor/session notes: [CLAUDE.md](CLAUDE.md)
-
-## Third-Party and Licensing (FreeDOS + OpenGEM Notice)
-1. This repository can include and use third-party FreeDOS components in `third_party/freedos/`.
-2. FreeDOS packages are distributed under their own licenses (often GPL-family, but not a single license for all files).
-3. OpenGEM is integrated as an optional GUI payload in the FreeDOS runtime path (`third_party/freedos/runtime/OPENGEM/`), licensed under GPL-2.0-or-later.
-4. Keep license/provenance files with imported components and validate redistribution rights per package.
-5. See:
-   - `docs/freedos-integration-policy.md`
-   - `docs/opengem-integration-notes.md`
-   - `docs/opengem-ops.md`
-   - `docs/legal/freedos-licenses/`
-
-## Donations and Support
-If you want to support CiukiOS development (including recurring LLM/tooling costs such as OpenAI, Claude and Copilot subscriptions), see:
-- [DONATIONS.md](DONATIONS.md)
-
-Provider selection is currently in progress to choose the most convenient and transparent option for contributors.
-
-## Credits
-Developed collaboratively with Claude Code,Codex(Openai) and Github Copilot.
-
-The name **CiukiOS** comes from a private joke between me and my girlfriend about our dog Jack (Jacky), who is no longer with us.
-His nickname was **Ciuk/Ciuki**, and we used to joke that if we ever built an operating system, we would call it **CiukiOS**.
-
-So this is why is dedicated to one of the best dogs i ever met, Jack.
+Nota: le build attuali sono scaffold iniziale del reset (artefatti base), non ancora immagini bootabili complete.
