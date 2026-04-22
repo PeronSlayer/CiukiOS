@@ -1,48 +1,48 @@
-# Roadmap CiukiOS Legacy v2
+# CiukiOS Legacy v2 Roadmap
 
-## Visione
-Costruire un OS semplice, nativo x86 legacy BIOS, capace di eseguire software DOS e pre-NT senza emulazione.
+## Vision
+Build a simple, native x86 BIOS operating system that runs DOS and pre-NT workloads without CPU emulation in the final runtime path.
 
-## Fase 0 - Reset e Fondamenta
-1. Archiviazione progetto precedente in `OLD/`.
-2. Nuova architettura legacy documentata.
-3. Nuove regole operative per sviluppo e agenti AI.
+## Phase 0 - Reset Foundation
+1. Archive previous project state under `OLD/`.
+2. Define and freeze legacy-first architecture.
+3. Establish new AI and development operating rules.
 
-## Fase 1 - Boot Legacy Minimo (Floppy-first)
-1. Boot sector 16-bit (512B) + loader multi-stage.
-2. Init real mode e servizi BIOS essenziali (INT 10h/13h/16h/1Ah).
-3. Kernel minimale x86 con shell basilare.
-4. Build `floppy` entro 1.44MB.
+## Phase 1 - Minimal Legacy Boot (Floppy-first)
+1. 16-bit boot sector (512B) and multi-stage loader.
+2. Real-mode initialization and core BIOS services (`INT 10h/13h/16h/1Ah`).
+3. Minimal x86 kernel and basic shell.
+4. `floppy` profile constrained to 1.44MB.
 
-## Fase 2 - Compatibilita DOS Nativa
-1. Loader `.COM/.EXE` nativo.
-2. PSP/MCB + gestione memoria convenzionale/UMB/HMA.
-3. INT 21h ad alta compatibilita.
-4. FAT12/FAT16 per profilo floppy.
+## Phase 2 - Native DOS Runtime
+1. Native `.COM/.EXE` loader.
+2. PSP/MCB and conventional memory management (with future UMB/HMA extensions).
+3. High-compatibility `INT 21h` surface.
+4. FAT12/FAT16 baseline for floppy profile.
 
-## Fase 3 - Runtime Grafico DOS + OpenGEM
-1. VGA/VBE nativi.
-2. INT 10h esteso e servizi mouse/timer/input robusti.
-3. VDI/AES compat layer nativo per OpenGEM.
-4. Milestone: desktop OpenGEM stabile su hardware reale.
+## Phase 3 - DOS Graphics Runtime + OpenGEM
+1. Native VGA/VBE path.
+2. Extended `INT 10h` plus robust timer/mouse/input services.
+3. Native VDI/AES compatibility layer for OpenGEM.
+4. Milestone: stable OpenGEM desktop on real hardware.
 
-## Fase 4 - Target DOOM
-1. Ottimizzazione path grafico mode 13h/VGA.
-2. DPMI/estender compatibility minima per binari DOS complessi.
-3. Milestone: DOOM avviabile e giocabile.
+## Phase 4 - DOOM Milestone
+1. Optimize mode 13h/VGA rendering path.
+2. Add the minimum extender compatibility needed by complex DOS binaries.
+3. Milestone: DOOM boots and is playable.
 
-## Fase 5 - Target Windows pre-NT
-1. Superficie compat DOS richiesta da Windows 3.x/95/98 bootstrap path.
-2. DPMI avanzato, gestione interrupt/timer compatibile.
-3. Device/path compatibili per setup e avvio progressivo.
-4. Milestone incrementali: Win 3.x -> Win95 -> Win98.
+## Phase 5 - Windows pre-NT Milestones
+1. Expand DOS compatibility required by Windows 3.x/95/98 bootstrap and runtime paths.
+2. Extend protected-mode services and interrupt/timer compatibility.
+3. Add required device and setup-path behavior.
+4. Milestones: Windows 3.x -> Windows 95 -> Windows 98.
 
-## Fase 6 - Build e Release
-1. Profilo `floppy`: minimale, diagnostico, portabile.
-2. Profilo `full`: runtime esteso, desktop e toolchain completa.
-3. Pipeline test regressione legacy hardware + emulatori.
+## Phase 6 - Build and Release Discipline
+1. `floppy` profile: minimal, portable, diagnostics-first.
+2. `full` profile: complete runtime and desktop stack.
+3. Regression pipeline on emulators and real legacy hardware.
 
-## Criteri di avanzamento
-1. Ogni milestone richiede test riproducibili.
-2. Nessun merge su `main` senza approvazione esplicita utente.
-3. Niente scorciatoie con emulazione software CPU come soluzione finale runtime.
+## Advancement Criteria
+1. Every milestone must have reproducible tests.
+2. No merge to `main` without explicit user approval.
+3. No CPU-emulation shortcuts as final runtime solution.

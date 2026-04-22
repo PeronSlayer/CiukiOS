@@ -10,8 +10,8 @@ cat > build/full/README.txt << 'TXT'
 CiukiOS Legacy v2 - Full profile scaffold
 
 Image: ciukios-full.img (128MB)
-State: placeholder scaffold (non-bootable in questa fase)
-Next: integrare loader legacy + runtime completo
+State: placeholder scaffold (not fully bootable yet)
+Next: integrate legacy loader + complete runtime
 TXT
 
 echo "[build-full] done: build/full/ciukios-full.img"

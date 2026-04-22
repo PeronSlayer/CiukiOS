@@ -1,7 +1,7 @@
-# Profilo Full
+# Full Profile
 
 Target:
-immagine estesa per runtime DOS completo, stack grafico e desktop.
+Extended disk image for complete DOS runtime and desktop milestones.
 
-Obiettivo:
-ambiente completo con milestone OpenGEM/DOOM/Windows pre-NT.
+Goal:
+Provide the full environment for OpenGEM, DOOM, and pre-NT compatibility progression.

@@ -1,7 +1,7 @@
-# Profilo Floppy
+# Floppy Profile
 
 Target:
-1.44MB, BIOS boot, diagnostica e runtime minimo.
+1.44MB BIOS-bootable image with minimal diagnostics-first runtime.
 
-Obiettivo:
-ambiente minimale nativo per avvio hardware reale e debug primario.
+Goal:
+Provide a native baseline for real hardware bring-up and early debugging.

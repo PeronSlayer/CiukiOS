@@ -1,21 +1,25 @@
-# Direttive Operative Agenti AI (v2)
+# AI Agent Operating Directives (v2)
 
-## Regole obbligatorie
-1. Ogni task deve essere sviluppato in branch separato dal `main`.
-2. Fine task: chiedere conferma utente prima di fare merge su `main`.
-3. Push su remote solo dopo conferma esplicita utente.
+## Mandatory Workflow Rules
+1. Every task must run on a dedicated branch, never directly on `main`.
+2. At task completion, ask for explicit approval before merging to `main`.
+3. Push to remote only after explicit user approval.
 
-## Regole anti-loop
-1. Se una soluzione non converge, interrompere il tentativo ripetitivo.
-2. Eseguire ricerca mirata su fonti tecniche affidabili per trovare soluzione definitiva.
-3. Documentare sempre ipotesi, evidenze e decisione tecnica.
+## Documentation and Changelog Rule
+1. All documentation must be written in clear, concise English.
+2. All changelog entries must be written in clear, concise English.
 
-## Regole di parallelizzazione
-1. Task grandi: massimo 3 agenti paralleli oppure massimo 3 fasi sequenziali.
-2. Ogni agente/fase deve avere scope chiaro e non sovrapposto.
-3. Integrare i risultati con verifica finale unica.
+## Anti-loop Rules
+1. If a solution does not converge, stop repeating the same attempt.
+2. Perform targeted technical research to identify a definitive solution.
+3. Document assumptions, evidence, and the final decision.
 
-## Regole di consegna
-1. Nessun merge implicito.
-2. Nessun cambiamento distruttivo senza consenso.
-3. Ogni modifica deve includere stato test o motivazione tecnica se i test non sono eseguibili.
+## Parallelization Rules
+1. Large tasks must be split into at most 3 concurrent agents or 3 sequential phases.
+2. Each agent/phase must own a clear, non-overlapping scope.
+3. Integrate and verify results in one final validation pass.
+
+## Delivery Rules
+1. No implicit merges.
+2. No destructive changes without explicit consent.
+3. Every change must include test status, or a clear reason when tests cannot run.
