@@ -17,3 +17,7 @@
 14. Milestone: introduced `qemu-test-stage1` automated regression and integrated it into `qemu-test-all`.
 15. Release: bumped project version to `CiukiOS pre-Alpha v0.5.5` after Stage1 milestone closure.
 16. Next step: move from embedded COM payload to FAT-backed `.COM` file loading and execution.
+17. Milestone: added `.EXE` MZ runtime baseline in Stage1 with relocation handling and PSP-linked execution path.
+18. Milestone: added deterministic `mzdemo` command and serial regression markers integrated in `qemu-test-stage1`.
+19. Milestone: added Stage1 `INT 21h` handle-based file I/O baseline (`open/read/close/seek`) with deterministic `fileio` regression marker.
+20. Action: expanded Stage1 floppy slot from 6 to 8 sectors to keep Phase 2 runtime growth stable.
