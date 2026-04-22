@@ -3,6 +3,7 @@ org 0x0000
 
 %define CMD_BUF_LEN 64
 %define COM_LOAD_SEG 0x2000
+%define MZ_LOAD_SEG 0x3000
 %define FAT_SPT 18
 %define FAT_HEADS 2
 %define FAT_RESERVED_SECTORS 7
@@ -218,6 +219,9 @@ run_stage1_selftest:
     mov si, cmd_selftest_comdemo
     call load_cmd_buffer
     call dispatch_command
+    mov si, cmd_selftest_mzdemo
+    call load_cmd_buffer
+    call dispatch_command
     mov si, msg_stage1_selftest_done
     call print_string_dual
     mov si, msg_stage1_selftest_serial_done
@@ -244,8 +248,9 @@ run_com_demo:
 
     mov [saved_ss], ss
     mov [saved_sp], sp
-    mov [saved_ds], ds
-    mov [saved_es], es
+    mov ax, ds
+    mov [saved_ds], ax
+    mov [saved_es], ax
 
     cli
     mov ax, COM_LOAD_SEG
@@ -300,13 +305,131 @@ run_com_demo:
     call print_string_serial
     ret
 
+run_mz_demo:
+    mov si, msg_mz_begin
+    call print_string_dual
+
+    call load_mz_demo_from_disk
+    jc .load_fail
+
+    mov ax, MZ_LOAD_SEG
+    mov es, ax
+    cmp word [es:0x0000], 0x5A4D
+    jne .header_fail
+
+    mov bx, [es:0x0008]
+    add bx, MZ_LOAD_SEG
+    mov [mz_image_seg], bx
+    mov ax, bx
+    sub ax, 0x0010
+    mov [mz_psp_seg], ax
+
+    mov ax, [es:0x0014]
+    mov [mz_entry_off], ax
+    mov ax, [es:0x0016]
+    add ax, bx
+    mov [mz_entry_seg], ax
+
+    mov ax, [es:0x000E]
+    add ax, bx
+    mov [mz_stack_seg], ax
+    mov ax, [es:0x0010]
+    mov [mz_stack_sp], ax
+
+    ; Apply EXE relocation entries: [target] += image_base_segment.
+    mov cx, [es:0x0006]
+    mov di, [es:0x0018]
+.reloc_loop:
+    jcxz .reloc_done
+    mov bx, [es:di]
+    mov dx, [es:di + 2]
+    mov ax, [mz_image_seg]
+    add dx, ax
+    push es
+    mov es, dx
+    add word [es:bx], ax
+    pop es
+    add di, 4
+    loop .reloc_loop
+.reloc_done:
+    ; Build minimal PSP segment for EXE DOS-like linkage.
+    mov ax, [mz_psp_seg]
+    mov es, ax
+    xor ax, ax
+    xor di, di
+    mov cx, 128
+    rep stosw
+    mov word [es:0x0000], 0x20CD
+    mov byte [es:0x0080], 0
+
+    mov [saved_ss], ss
+    mov [saved_sp], sp
+    mov ax, ds
+    mov [saved_ds], ax
+    mov [saved_es], ax
+
+    cli
+    mov ax, [mz_psp_seg]
+    mov ds, ax
+    mov es, ax
+    mov ax, [mz_stack_seg]
+    mov ss, ax
+    mov sp, [mz_stack_sp]
+    sti
+
+    call far [cs:mz_entry_off]
+
+    cli
+    mov ax, cs
+    mov ds, ax
+    mov ax, [saved_ss]
+    mov ss, ax
+    mov sp, [saved_sp]
+    sti
+
+    mov ax, [saved_ds]
+    mov ds, ax
+    mov ax, [saved_es]
+    mov es, ax
+
+    mov ah, 0x4D
+    int 0x21
+    mov bl, al
+
+    mov al, [last_exit_code]
+    mov si, msg_mz_done
+    call print_string_dual
+    call print_hex8_dual
+    mov al, ' '
+    call putc_dual
+    mov al, bl
+    call print_hex8_dual
+    call print_newline_dual
+
+    cmp byte [last_exit_code], 0x55
+    jne .serial_fail
+    mov si, msg_mz_serial_pass
+    call print_string_serial
+    ret
+.load_fail:
+    mov si, msg_mz_load_fail
+    call print_string_dual
+    mov si, msg_mz_serial_fail
+    call print_string_serial
+    ret
+.header_fail:
+    mov si, msg_mz_header_fail
+    call print_string_dual
+    mov si, msg_mz_serial_fail
+    call print_string_serial
+    ret
+.serial_fail:
+    mov si, msg_mz_serial_fail
+    call print_string_serial
+    ret
+
 load_com_demo_from_disk:
     push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push ds
     push es
 
@@ -323,6 +446,63 @@ load_com_demo_from_disk:
     mov word [es:0x0000], 0x20CD
     mov byte [es:0x0080], 0
 
+    mov si, fat_comdemo_name
+    mov bx, 0x0100
+    call load_root_file_first_sector
+    jc .fail
+
+    mov word [com_entry_off], 0x0100
+    mov word [com_entry_seg], COM_LOAD_SEG
+
+    clc
+    jmp .done
+.fail:
+    stc
+.done:
+    pop es
+    pop ds
+    pop ax
+    ret
+
+load_mz_demo_from_disk:
+    push ax
+    push ds
+    push es
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, MZ_LOAD_SEG
+    mov es, ax
+
+    xor ax, ax
+    xor di, di
+    mov cx, 128
+    rep stosw
+
+    mov si, fat_mzdemo_name
+    mov bx, 0x0000
+    call load_root_file_first_sector
+    jc .fail
+    clc
+    jmp .done
+.fail:
+    stc
+.done:
+    pop es
+    pop ds
+    pop ax
+    ret
+
+load_root_file_first_sector:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov [search_name_ptr], si
+    mov [search_target_off], bx
     mov dx, FAT_ROOT_START_LBA
 
 .scan_next_sector:
@@ -350,9 +530,10 @@ load_com_demo_from_disk:
     test al, 0x08
     jnz .next_entry
 
+    mov si, [search_name_ptr]
     push cx
     push dx
-    call fat_entry_matches_comdemo
+    call fat_entry_matches_name
     pop dx
     pop cx
     jc .found_entry
@@ -371,22 +552,15 @@ load_com_demo_from_disk:
 
     sub ax, 2
     add ax, FAT_DATA_START_LBA
-    mov bx, 0x0100
+    mov bx, [search_target_off]
     call read_sector_lba
     jc .read_fail
 
-    mov word [com_entry_off], 0x0100
-    mov word [com_entry_seg], COM_LOAD_SEG
-
     clc
     jmp .done
-
 .read_fail:
     stc
-
 .done:
-    pop es
-    pop ds
     pop di
     pop si
     pop dx
@@ -395,7 +569,7 @@ load_com_demo_from_disk:
     pop ax
     ret
 
-fat_entry_matches_comdemo:
+fat_entry_matches_name:
     push ax
     push bx
     push cx
@@ -404,7 +578,7 @@ fat_entry_matches_comdemo:
     mov cx, 11
 
 .cmp_loop:
-    mov al, [fat_comdemo_name + bx]
+    mov al, [si + bx]
     cmp al, [es:di + bx]
     jne .not_match
     inc bx
@@ -490,6 +664,10 @@ dispatch_command:
     call str_eq
     jc .cmd_comdemo
     mov di, bx
+    mov si, str_mzdemo
+    call str_eq
+    jc .cmd_mzdemo
+    mov di, bx
     mov si, str_reboot
     call str_eq
     jc .cmd_reboot
@@ -548,6 +726,10 @@ dispatch_command:
 
 .cmd_comdemo:
     call run_com_demo
+    jmp .done
+
+.cmd_mzdemo:
+    call run_mz_demo
     jmp .done
 
 .cmd_reboot:
@@ -767,6 +949,14 @@ saved_ds dw 0
 saved_es dw 0
 com_entry_off dw 0
 com_entry_seg dw 0
+mz_entry_off dw 0
+mz_entry_seg dw 0
+mz_image_seg dw 0
+mz_psp_seg dw 0
+mz_stack_seg dw 0
+mz_stack_sp dw 0
+search_name_ptr dw 0
+search_target_off dw 0
 cmd_buffer times CMD_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] CiukiOS stage1 running", 13, 10, 0
@@ -786,7 +976,7 @@ msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
 
 msg_prompt    db "ciukios> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
-msg_help      db "commands: help cls ticks drive dos21 comdemo reboot halt", 13, 10, 0
+msg_help      db "commands: help cls ticks drive dos21 comdemo mzdemo reboot halt", 13, 10, 0
 msg_cleared   db "screen cleared", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
@@ -799,6 +989,12 @@ msg_com_load_fail db "[STAGE1] COM demo disk read FAIL", 13, 10, 0
 msg_com_done  db "[STAGE1] COM demo code/query=0x", 0
 msg_com_serial_pass db "[COMDEMO-SERIAL] PASS", 13, 10, 0
 msg_com_serial_fail db "[COMDEMO-SERIAL] FAIL", 13, 10, 0
+msg_mz_begin db "[STAGE1] MZ demo load/exec", 13, 10, 0
+msg_mz_load_fail db "[STAGE1] MZ demo disk read FAIL", 13, 10, 0
+msg_mz_header_fail db "[STAGE1] MZ demo invalid header", 13, 10, 0
+msg_mz_done  db "[STAGE1] MZ demo code/query=0x", 0
+msg_mz_serial_pass db "[MZDEMO-SERIAL] PASS", 13, 10, 0
+msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
 
@@ -808,10 +1004,13 @@ str_ticks  db "ticks", 0
 str_drive  db "drive", 0
 str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
+str_mzdemo db "mzdemo", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
 
 cmd_selftest_dos21 db "dos21", 0
 cmd_selftest_comdemo db "comdemo", 0
+cmd_selftest_mzdemo db "mzdemo", 0
 
 fat_comdemo_name db "COMDEMO COM"
+fat_mzdemo_name  db "MZDEMO  EXE"

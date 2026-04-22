@@ -14,6 +14,9 @@ STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 COMDEMO_SRC="src/com/comdemo.asm"
 COMDEMO_BIN="build/floppy/obj/comdemo.com"
 COMDEMO_MAX_SIZE=512
+MZDEMO_SRC="src/com/mzdemo.asm"
+MZDEMO_BIN="build/floppy/obj/mzdemo.exe"
+MZDEMO_MAX_SIZE=512
 
 FAT_RESERVED_SECTORS=$((1 + STAGE1_SECTORS))
 FAT_SECTORS_PER_FAT=9
@@ -36,6 +39,10 @@ if [[ ! -f "$STAGE1_SRC" ]]; then
 fi
 if [[ ! -f "$COMDEMO_SRC" ]]; then
   echo "[build-floppy] ERROR: COM demo source not found: $COMDEMO_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$MZDEMO_SRC" ]]; then
+  echo "[build-floppy] ERROR: MZ demo source not found: $MZDEMO_SRC" >&2
   exit 1
 fi
 
@@ -70,17 +77,33 @@ if [[ "$COMDEMO_SIZE" -gt "$COMDEMO_MAX_SIZE" ]]; then
   exit 1
 fi
 
+echo "[build-floppy] assembling MZ demo payload"
+nasm -f bin "$MZDEMO_SRC" -o "$MZDEMO_BIN"
+
+MZDEMO_SIZE="$(stat -c%s "$MZDEMO_BIN")"
+if [[ "$MZDEMO_SIZE" -gt "$MZDEMO_MAX_SIZE" ]]; then
+  echo "[build-floppy] ERROR: MZ demo payload is $MZDEMO_SIZE bytes (max $MZDEMO_MAX_SIZE)" >&2
+  exit 1
+fi
+
 FAT_SECTOR_BIN="build/floppy/obj/fat_sector.bin"
 ROOT_ENTRY_BIN="build/floppy/obj/root_comdemo_entry.bin"
+ROOT_ENTRY_MZ_BIN="build/floppy/obj/root_mzdemo_entry.bin"
 
-printf 'F0FFFFF00F' | xxd -r -p > "$FAT_SECTOR_BIN"
-dd if=/dev/zero bs=1 count=$((512 - 5)) status=none >> "$FAT_SECTOR_BIN"
+printf 'F0FFFFFFFFFF' | xxd -r -p > "$FAT_SECTOR_BIN"
+dd if=/dev/zero bs=1 count=$((512 - 6)) status=none >> "$FAT_SECTOR_BIN"
 
 dd if=/dev/zero of="$ROOT_ENTRY_BIN" bs=1 count=32 status=none
 printf 'COMDEMO COM' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=0 conv=notrunc status=none
 printf '\x20' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=11 conv=notrunc status=none
 printf '\x02\x00' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=26 conv=notrunc status=none
 printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((COMDEMO_SIZE & 0xFF)) $(((COMDEMO_SIZE >> 8) & 0xFF)) $(((COMDEMO_SIZE >> 16) & 0xFF)) $(((COMDEMO_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_BIN" bs=1 seek=28 conv=notrunc status=none
+
+dd if=/dev/zero of="$ROOT_ENTRY_MZ_BIN" bs=1 count=32 status=none
+printf 'MZDEMO  EXE' | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=0 conv=notrunc status=none
+printf '\x20' | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=11 conv=notrunc status=none
+printf '\x03\x00' | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=26 conv=notrunc status=none
+printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((MZDEMO_SIZE & 0xFF)) $(((MZDEMO_SIZE >> 8) & 0xFF)) $(((MZDEMO_SIZE >> 16) & 0xFF)) $(((MZDEMO_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=28 conv=notrunc status=none
 
 echo "[build-floppy] creating 1.44MB floppy image"
 dd if=/dev/zero of=build/floppy/ciukios-floppy.img bs=512 count=2880 status=none
@@ -89,7 +112,9 @@ dd if="$STAGE1_SLOT_BIN" of="$IMG" bs=512 seek=1 count="$STAGE1_SECTORS" conv=no
 dd if="$FAT_SECTOR_BIN" of="$IMG" bs=512 seek="$FAT1_LBA" count=1 conv=notrunc status=none
 dd if="$FAT_SECTOR_BIN" of="$IMG" bs=512 seek="$FAT2_LBA" count=1 conv=notrunc status=none
 dd if="$ROOT_ENTRY_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_MZ_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
 dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek="$DATA_LBA" count=1 conv=notrunc status=none
+dd if="$MZDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
 
 cat > build/floppy/README.txt << 'TXT'
 CiukiOS Legacy v2 - Floppy profile
@@ -99,6 +124,7 @@ State: BIOS stage0 -> stage1 chain-loader baseline
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-7
 FAT layout: reserved sectors include stage1 area, FAT/root/data follow BPB geometry
 COM demo payload: COMDEMO.COM root entry + first cluster at FAT data start
+MZ demo payload: MZDEMO.EXE root entry + first cluster at FAT data start + 1
 TXT
 
 echo "[build-floppy] done: $IMG"
