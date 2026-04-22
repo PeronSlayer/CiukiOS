@@ -4259,24 +4259,24 @@ draw_shell_chrome:
     mov cl, 80
     call draw_hline_attr
 
-    mov al, '='
+    mov al, 0xC4
     mov dh, 1
     mov dl, 0
-    mov bl, 0x1F
+    mov bl, 0x17
     xor cx, cx
     mov cl, 80
     call draw_hline_attr
 
     mov si, msg_banner_title
     mov dh, 0
-    mov dl, 20
+    mov dl, 22
     mov bl, 0x70
     call video_write_string_attr
 
     mov al, ' '
     mov dh, 2
     mov dl, 0
-    mov bl, 0x17
+    mov bl, 0x70
     xor cx, cx
     mov cl, 80
     call draw_hline_attr
@@ -4284,19 +4284,25 @@ draw_shell_chrome:
     mov si, msg_shell_layout
     mov dh, 2
     mov dl, 2
-    mov bl, 0x17
+    mov bl, 0x70
     call video_write_string_attr
 
     mov si, msg_shell_hint
     mov dh, 3
     mov dl, 2
-    mov bl, 0x07
+    mov bl, 0x1E
     call video_write_string_attr
 
-    mov al, '='
+    mov si, msg_shell_quick
+    mov dh, 4
+    mov dl, 2
+    mov bl, 0x0F
+    call video_write_string_attr
+
+    mov al, 0xC4
     mov dh, 24
     mov dl, 0
-    mov bl, 0x1F
+    mov bl, 0x17
     xor cx, cx
     mov cl, 80
     call draw_hline_attr
@@ -4304,10 +4310,10 @@ draw_shell_chrome:
     mov si, msg_shell_footer
     mov dh, 24
     mov dl, 2
-    mov bl, 0x1F
+    mov bl, 0x1E
     call video_write_string_attr
 
-    mov dh, 5
+    mov dh, 6
     xor dl, dl
     call set_cursor_pos
 
@@ -4584,8 +4590,9 @@ msg_prompt    db "root:\> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
 msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
 msg_shell_layout db "layout: root", 0
-msg_shell_hint db "help/ver/tree", 13, 10, 0
-msg_shell_footer db "shell ready", 0
+msg_shell_hint db "DOS shell loaded", 0
+msg_shell_quick db "cmd: help  dir  cd  cd..  cls  ver  tree", 0
+msg_shell_footer db "ready", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
 msg_help_core db "core: help ver tree cls ticks drive dir cd cd..", 13, 10, 0
 msg_help_runtime db "dos: dos21 comdemo mzdemo fileio findtest gfxdemo", 13, 10, 0
