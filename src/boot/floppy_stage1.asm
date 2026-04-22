@@ -4589,9 +4589,8 @@ msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
 msg_prompt    db "root:\> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
 msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
-msg_shell_layout db "layout: root", 0
-msg_shell_hint db "CiukiDOS shell loaded", 0
-msg_shell_quick db "cmd: help  dir  cd  cd..  cls  ver  tree", 0
+msg_shell_hint db "CiukiDOS Shell , 0
+msg_shell_quick db "For commands write Help and press send", 0
 msg_shell_footer db "ready", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
 msg_help_core db "core: help ver tree cls ticks drive dir cd cd..", 13, 10, 0
