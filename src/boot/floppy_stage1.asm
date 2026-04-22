@@ -213,6 +213,14 @@ int21_handler:
     je .fn_1a
     cmp ah, 0x19
     je .fn_19
+    cmp ah, 0x25
+    je .fn_25
+    cmp ah, 0x2F
+    je .fn_2f
+    cmp ah, 0x30
+    je .fn_30
+    cmp ah, 0x35
+    je .fn_35
     cmp ah, 0x3B
     je .fn_3b
     cmp ah, 0x3D
@@ -227,6 +235,8 @@ int21_handler:
     je .fn_41
     cmp ah, 0x42
     je .fn_42
+    cmp ah, 0x44
+    je .fn_44
     cmp ah, 0x47
     je .fn_47
     cmp ah, 0x4E
@@ -245,6 +255,8 @@ int21_handler:
     je .fn_4c
     cmp ah, 0x4D
     je .fn_4d
+    cmp ah, 0x62
+    je .fn_62
     jmp .unsupported
 
 .fn_02:
@@ -275,6 +287,26 @@ int21_handler:
 
 .fn_19:
     call int21_get_default_drive
+    jc .error
+    jmp .success
+
+.fn_25:
+    call int21_set_vector
+    jc .error
+    jmp .success
+
+.fn_2f:
+    call int21_get_dta
+    jc .error
+    jmp .success
+
+.fn_30:
+    call int21_get_version
+    jc .error
+    jmp .success
+
+.fn_35:
+    call int21_get_vector
     jc .error
     jmp .success
 
@@ -310,6 +342,11 @@ int21_handler:
 
 .fn_42:
     call int21_seek
+    jc .error
+    jmp .success
+
+.fn_44:
+    call int21_ioctl
     jc .error
     jmp .success
 
@@ -357,6 +394,11 @@ int21_handler:
 .fn_4d:
     mov al, [cs:last_exit_code]
     mov ah, [cs:last_term_type]
+    jmp .success
+
+.fn_62:
+    call int21_get_psp
+    jc .error
     jmp .success
 
 .unsupported:
@@ -938,6 +980,79 @@ int21_set_default_drive:
 .invalid:
     mov ax, 0x000F
     stc
+    ret
+
+int21_get_version:
+    mov ax, 0x0005
+    xor bx, bx
+    xor cx, cx
+    clc
+    ret
+
+int21_set_vector:
+    push ax
+    push bx
+    push es
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1
+    xor ax, ax
+    mov es, ax
+    mov [es:bx], dx
+    mov ax, ds
+    mov [es:bx + 2], ax
+    xor ax, ax
+    clc
+    pop es
+    pop bx
+    pop ax
+    ret
+
+int21_get_vector:
+    push ax
+    push bx
+    push di
+    push es
+    xor ah, ah
+    mov di, ax
+    shl di, 1
+    shl di, 1
+    xor ax, ax
+    mov es, ax
+    mov bx, [es:di]
+    mov ax, [es:di + 2]
+    mov es, ax
+    xor ax, ax
+    clc
+    pop es
+    pop di
+    pop bx
+    pop ax
+    ret
+
+int21_get_dta:
+    mov bx, [cs:dta_off]
+    mov ax, [cs:dta_seg]
+    mov es, ax
+    xor ax, ax
+    clc
+    ret
+
+int21_ioctl:
+    xor dx, dx
+    xor ax, ax
+    clc
+    ret
+
+int21_get_psp:
+    mov bx, [cs:mz_psp_seg]
+    cmp bx, 0
+    jne .ok
+    mov bx, DOS_HEAP_USER_SEG
+.ok:
+    xor ax, ax
+    clc
     ret
 
 int21_chdir:

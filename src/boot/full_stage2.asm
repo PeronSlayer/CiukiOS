@@ -1,6 +1,10 @@
 bits 16
 org 0x0000
 
+%ifndef OPENGEM_TRY_EXEC
+%define OPENGEM_TRY_EXEC 0
+%endif
+
 stage2_entry:
     push cs
     pop ds
@@ -9,29 +13,22 @@ stage2_entry:
     mov ah, 0x09
     int 0x21
 
+%if OPENGEM_TRY_EXEC == 0
+    mov dx, msg_blocked
+    mov ah, 0x09
+    int 0x21
+    jmp .done
+%endif
+
     ; Keep startup coherent with OpenGEM layout expectations.
     mov dx, path_gemsys_dir
     mov ah, 0x3B
     int 0x21
 
-    ; Best effort mouse init.
-    mov dx, path_ctmouse_sys
-    call exec_try_ignore
-    mov dx, path_ctmouse_root
-    call exec_try_ignore
-
-    ; Primary startup path: GEMVDI.EXE.
-    mov dx, path_gemvdi_sys
-    call exec_try_wait
-    jnc .wait_done
-    mov [last_fail_ax], ax
-
-    mov dx, path_gemvdi_root
-    call exec_try_wait
-    jnc .wait_done
-    mov [last_fail_ax], ax
-
-    ; Fallbacks.
+    ; Primary startup path: GEM.EXE.
+    mov dx, msg_try_gem
+    mov ah, 0x09
+    int 0x21
     mov dx, path_gem_exe_sys
     call exec_try_wait
     jnc .wait_done
@@ -42,6 +39,9 @@ stage2_entry:
     jnc .wait_done
     mov [last_fail_ax], ax
 
+    mov dx, msg_try_bat
+    mov ah, 0x09
+    int 0x21
     mov dx, path_gem_bat_sys
     call exec_try_wait
     jnc .wait_done
@@ -142,14 +142,13 @@ print_hex_nibble:
     ret
 
 msg_begin db "[OPENGEM] launch", 13, 10, '$'
+msg_blocked db "[OPENGEM] runtime not ready, launch skipped", 13, 10, '$'
+msg_try_gem db "[OPENGEM] try GEM", 13, 10, '$'
+msg_try_bat db "[OPENGEM] try BAT", 13, 10, '$'
 msg_fail db "[OPENGEM] launch failed", 13, 10, '$'
 msg_ax db " AX=", '$'
 msg_return db "[OPENGEM] returned", 13, 10, '$'
 path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
-path_ctmouse_sys db "GEMAPPS\GEMSYS\CTMOUSE.EXE", 0
-path_ctmouse_root db "CTMOUSE.EXE", 0
-path_gemvdi_sys db "GEMAPPS\GEMSYS\GEMVDI.EXE", 0
-path_gemvdi_root db "GEMVDI.EXE", 0
 path_gem_exe_sys db "GEMAPPS\GEMSYS\GEM.EXE", 0
 path_gem_exe_root db "GEM.EXE", 0
 path_gem_bat_sys db "GEMAPPS\GEMSYS\GEM.BAT", 0
