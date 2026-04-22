@@ -9,7 +9,9 @@ This changelog is intentionally concise and includes only major milestones.
 3. Upgraded floppy QEMU smoke test to validate both stage0 and stage1 execution markers.
 4. Added a real-mode Stage1 BIOS core monitor with startup diagnostics for `INT 10h`, `INT 13h`, `INT 16h`, and `INT 1Ah`.
 5. Added a minimal interactive Stage1 command loop (`help`, `cls`, `ticks`, `drive`, `reboot`, `halt`) for BIOS bring-up checks.
-6. Defined `DOS Core Specification v0.1` and `DOS Core Implementation Plan v0.1` as the normative baseline for MS-DOS/PC DOS style core development.
+6. Added Stage1 interrupt vector initialization for `INT 21h` with baseline DOS services (`AH=02h`, `AH=09h`, `AH=4Ch`, `AH=4Dh`) and an integrated smoke command.
+7. Added a first `.COM` execution baseline in Stage1 with PSP-compatible memory setup and a deterministic `comdemo` runtime path.
+8. Defined `DOS Core Specification v0.1` and `DOS Core Implementation Plan v0.1` as the normative baseline for MS-DOS/PC DOS style core development.
 
 ## pre-Alpha v0.5.0 (2026-04-22)
 1. Restarted the project from a clean legacy BIOS x86 architecture baseline.

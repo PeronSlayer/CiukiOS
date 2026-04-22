@@ -11,4 +11,6 @@
 8. Milestone: implemented `stage0 -> stage1` chain loading with deterministic sector layout.
 9. Milestone: implemented a real-mode Stage1 BIOS monitor with diagnostics for `INT 10h/13h/16h/1Ah`.
 10. Milestone: added a minimal Stage1 command loop for runtime bring-up checks (`help`, `cls`, `ticks`, `drive`, `reboot`, `halt`).
-11. Next step: start Phase 2 DOS runtime primitives (program loader + memory model surface).
+11. Milestone: initialized `INT 21h` vector in Stage1 and implemented baseline DOS services (`AH=02h`, `AH=09h`, `AH=4Ch`, `AH=4Dh`) with smoke command `dos21`.
+12. Milestone: added first `.COM` execution baseline with PSP-compatible setup and deterministic command `comdemo`.
+13. Next step: move from embedded COM payload to FAT-backed `.COM` file loading and execution.
