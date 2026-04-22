@@ -35,7 +35,8 @@ if [[ ! -f "$IMG" ]]; then
 fi
 
 TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-8}"
-BOOT_MARKER="${BOOT_MARKER:-[BOOT] CiukiOS pre-Alpha v0.5.0}"
+STAGE0_MARKER="${STAGE0_MARKER:-[BOOT0] CiukiOS stage0 ready}"
+STAGE1_MARKER="${STAGE1_MARKER:-[STAGE1] CiukiOS stage1 running}"
 LOG_FILE="${LOG_FILE:-build/floppy/qemu-floppy.log}"
 echo "[qemu-test-floppy] running smoke test with $QEMU_CMD (timeout=${TIMEOUT_SEC}s)"
 
@@ -63,11 +64,11 @@ if [[ $RC -ne 0 && $RC -ne 124 ]]; then
   exit "$RC"
 fi
 
-if grep -Fq "$BOOT_MARKER" "$LOG_FILE"; then
-  echo "[qemu-test-floppy] PASS (boot marker detected)"
+if grep -Fq "$STAGE0_MARKER" "$LOG_FILE" && grep -Fq "$STAGE1_MARKER" "$LOG_FILE"; then
+  echo "[qemu-test-floppy] PASS (stage0 and stage1 markers detected)"
   exit 0
 fi
 
-echo "[qemu-test-floppy] FAIL (boot marker not detected)" >&2
+echo "[qemu-test-floppy] FAIL (stage0/stage1 marker not detected)" >&2
 tail -n 80 "$LOG_FILE" >&2 || true
 exit 1
