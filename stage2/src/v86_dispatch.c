@@ -68,8 +68,11 @@ typedef struct v86_file_handle {
 
 static v86_mem_block_t s_v86_mem_blocks[V86_MEM_MAX_BLOCKS];
 static uint16_t s_v86_mem_next_seg = V86_MEM_FIRST_SEG;
+static uint8_t s_v86_time_hour = 12u;
+static uint8_t s_v86_time_minute = 34u;
 static uint8_t s_v86_time_second = 0u;
 static uint8_t s_v86_time_hundredth = 0u;
+static uint32_t s_v86_time_poll_streak = 0u;
 static v86_file_handle_t s_v86_file_handles[V86_FILE_MAX_HANDLES];
 static uint16_t s_v86_last_file_handle = 0u;
 static uint16_t s_v86_last_ef_opcode = 0u;
@@ -2811,7 +2814,16 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
 
     {
         static uint32_t s_v86_int21_count = 0u;
-        if (s_v86_int21_count < 96u) {
+        uint8_t log_int21 = 0u;
+        if (ah == 0x2Cu) {
+            if (s_v86_time_poll_streak <= 1u ||
+                (s_v86_time_poll_streak & 0x3FFu) == 0u) {
+                log_int21 = 1u;
+            }
+        } else if (s_v86_int21_count < 64u) {
+            log_int21 = 1u;
+        }
+        if (log_int21) {
             serial_write("[v86] int21 ah=0x");
             serial_write_hex64((uint64_t)ah);
             serial_write(" al=0x");
@@ -2819,6 +2831,14 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
             serial_write("\n");
         }
         s_v86_int21_count += 1u;
+    }
+
+    if (ah == 0x2Cu) {
+        if (s_v86_time_poll_streak != 0xFFFFFFFFu) {
+            s_v86_time_poll_streak += 1u;
+        }
+    } else {
+        s_v86_time_poll_streak = 0u;
     }
 
 
@@ -2920,17 +2940,50 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
     case 0x2Cu: { /* Get time: CH=hour, CL=min, DH=sec, DL=1/100 sec */
         uint16_t sec;
         uint16_t hund;
-        uint16_t cx_time = (uint16_t)((12u << 8) | 0x22u); /* 12:34 */
+        uint16_t cx_time;
+        uint16_t dx_time;
+        uint16_t add_hund;
 
-        s_v86_time_hundredth = (uint8_t)(s_v86_time_hundredth + 5u);
-        if (s_v86_time_hundredth >= 100u) {
-            s_v86_time_hundredth = (uint8_t)(s_v86_time_hundredth - 100u);
-            s_v86_time_second = (uint8_t)((s_v86_time_second + 1u) % 60u);
+        /* Anti-spin acceleration:
+         * GEM occasionally polls AH=2C in tight loops before entering VDI.
+         * If we advance too slowly, boot appears random/stuck. After a
+         * short streak, accelerate the 1/100s field so wait loops clear
+         * deterministically. */
+        add_hund = 10u;
+        if (s_v86_time_poll_streak > 8u) {
+            add_hund = 25u;
+        }
+        if (s_v86_time_poll_streak > 32u) {
+            add_hund = 50u;
+        }
+        if (s_v86_time_poll_streak > 128u) {
+            add_hund = 100u;  /* +1s per call */
+        }
+        if (s_v86_time_poll_streak > 512u) {
+            add_hund = 6000u; /* +1m per call for pathological waits */
         }
 
+        {
+            uint32_t total_hund = (uint32_t)s_v86_time_hundredth + (uint32_t)add_hund;
+            while (total_hund >= 100u) {
+                total_hund -= 100u;
+                s_v86_time_second = (uint8_t)(s_v86_time_second + 1u);
+                if (s_v86_time_second >= 60u) {
+                    s_v86_time_second = 0u;
+                    s_v86_time_minute = (uint8_t)(s_v86_time_minute + 1u);
+                    if (s_v86_time_minute >= 60u) {
+                        s_v86_time_minute = 0u;
+                        s_v86_time_hour = (uint8_t)((s_v86_time_hour + 1u) % 24u);
+                    }
+                }
+            }
+            s_v86_time_hundredth = (uint8_t)total_hund;
+        }
         sec = (uint16_t)(s_v86_time_second % 60u);
         hund = (uint16_t)s_v86_time_hundredth;
-        uint16_t dx_time = (uint16_t)((sec << 8) | hund);
+        cx_time = (uint16_t)(((uint16_t)s_v86_time_hour << 8) |
+                             (uint16_t)(s_v86_time_minute % 60u));
+        dx_time = (uint16_t)((sec << 8) | hund);
 
         frame->reserved[2] = (frame->reserved[2] & 0xFFFF0000u) | (uint32_t)cx_time;
         frame->reserved[3] = (frame->reserved[3] & 0xFFFF0000u) | (uint32_t)dx_time;
@@ -3650,6 +3703,11 @@ int v86_dispatch_arm(uint32_t magic)
     v86_install_default_softint_stub();
     v86_mem_reset();
     v86_file_handles_reset();
+    s_v86_time_hour = 12u;
+    s_v86_time_minute = 34u;
+    s_v86_time_second = 0u;
+    s_v86_time_hundredth = 0u;
+    s_v86_time_poll_streak = 0u;
     v86_exec_request_clear();
     s_v86_dispatch_armed = 1;
     return 1;
@@ -3662,6 +3720,11 @@ void v86_dispatch_disarm(void)
     v86_mem_reset();
     v86_file_close_all();
     v86_file_handles_reset();
+    s_v86_time_hour = 12u;
+    s_v86_time_minute = 34u;
+    s_v86_time_second = 0u;
+    s_v86_time_hundredth = 0u;
+    s_v86_time_poll_streak = 0u;
     v86_exec_request_clear();
 }
 
