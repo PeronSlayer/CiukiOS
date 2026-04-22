@@ -1,33 +1,68 @@
-# CiukiOS (Legacy Reset)
+# CiukiOS
 
-CiukiOS is restarting from a clean baseline with a legacy-first x86 architecture.
-The goal is native BIOS boot and native DOS/pre-NT software execution, with no CPU emulation layer in the final runtime path.
+Open Source RetroOS project rebuilt from a clean baseline.
+Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT software progressively, without CPU emulation in the final runtime path.
 
-## Primary Goals
-1. Run on real legacy x86 hardware (Intel/AMD) with BIOS boot.
-2. Run DOS software natively, including OpenGEM and DOOM, and progressively support Windows pre-NT (up to Windows 98).
-3. Maintain two build profiles:
-   - `floppy`: minimal 1.44MB image for early bring-up.
-   - `full`: extended image for full runtime and desktop milestones.
+## Quick Links
+1. Project roadmap: [Roadmap.md](Roadmap.md)
+2. Architecture baseline: [docs/architecture-legacy-x86-v1.md](docs/architecture-legacy-x86-v1.md)
+3. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
+4. Engineering logbook: [docs/diario-bordo-v2.md](docs/diario-bordo-v2.md)
+5. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+6. Donations and support: [DONATIONS.md](DONATIONS.md)
 
-## Repository State
-1. Previous codebase archived in `OLD/archive-2026-04-22/`.
-2. New documentation baseline in `docs/`.
-3. Historical files preserved at root: `CHANGELOG.md`, handoff history, license files.
+## Current Version
+`CiukiOS pre-Alpha v0.5.0`
 
-## Key Documents
-1. `docs/architecture-legacy-x86-v1.md`
-2. `Roadmap.md`
-3. `docs/diario-bordo-v2.md`
-4. `docs/ai-agent-directives.md`
+Versioning policy:
+1. Baseline is reset to `pre-Alpha v0.5.0`.
+2. Version bumps are patch-only (`x.x.1`) and happen only on explicit user instruction.
 
-## Quick Commands
-```bash
-make help
-make build-floppy
-make build-full
-make qemu-test-floppy
-make qemu-test-full
-```
+## Changelog (Latest)
+### pre-Alpha v0.5.0
+1. Restarted the project on a legacy BIOS x86 architecture baseline.
+2. Archived previous project state in `OLD/archive-2026-04-22/`.
+3. Added dual build profiles (`floppy`, `full`) and QEMU smoke-test entry scripts.
+4. Added operating directives for branch workflow, approval-gated merges, and concise English documentation.
 
-Current images are scaffolds (not yet fully bootable). QEMU targets are smoke-test entry points for the new pipeline.
+Full changelog: [CHANGELOG.md](CHANGELOG.md)
+
+## Current Direction
+1. Build a real BIOS boot path for the `floppy` profile.
+2. Implement native DOS runtime compatibility incrementally.
+3. Reach OpenGEM and DOOM milestones, then progress toward Windows pre-NT compatibility (up to Windows 98).
+
+## Open Source Collaboration
+CiukiOS welcomes collaboration through issues and pull requests.
+When proposing work, include:
+1. clear problem statement
+2. expected behavior
+3. reproducible technical context
+
+## Development Pace
+This is a spare-time project.
+Progress is continuous but not tied to a fixed release calendar.
+
+## Pre-Alpha Policy
+1. `main` is protected by branch-based workflow and explicit merge approval.
+2. The project is in active architecture and runtime bring-up.
+3. Build artifacts are currently engineering scaffolds unless stated otherwise.
+
+## Key Docs
+1. Roadmap: [Roadmap.md](Roadmap.md)
+2. Architecture baseline: [docs/architecture-legacy-x86-v1.md](docs/architecture-legacy-x86-v1.md)
+3. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
+4. Migration/archive note: [docs/migration-note-old-archive.md](docs/migration-note-old-archive.md)
+
+## Legacy Archive
+Historical project content is preserved under:
+`OLD/archive-2026-04-22/`
+
+This archive includes prior implementation, docs, and build history for reference.
+
+## Donations and Support
+If you want to support CiukiOS development, see:
+- [DONATIONS.md](DONATIONS.md)
+
+## Credits
+Developed collaboratively with AI-assisted workflows and human-driven architecture decisions.
