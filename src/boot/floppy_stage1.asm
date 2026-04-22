@@ -4699,7 +4699,7 @@ msg_com_done  db "[STAGE1] COM demo code/query=0x", 0
 msg_com_serial_pass db "[COMDEMO-SERIAL] PASS", 13, 10, 0
 msg_com_serial_fail db "[COMDEMO-SERIAL] FAIL", 13, 10, 0
 msg_mz_begin db "[STAGE1] MZ demo load/exec", 13, 10, 0
-msg_mz_load_fail db "[STAGE1] MZ demo exec FAIL", 13, 10, 0
+msg_mz_load_fail db "[STAGE1] Program exec FAIL", 13, 10, 0
 msg_mz_done  db "[STAGE1] MZ demo code/query=0x", 0
 msg_mz_serial_pass db "[MZDEMO-SERIAL] PASS", 13, 10, 0
 msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
