@@ -25,3 +25,7 @@ docs/copilot-task-*.md
 # Local takeover handoff (keep untracked)
 COPILOT_HANDOFF_TOTAL_2026-04-16.md
 copilot-task-codex-config-persistence-v1.md
+
+# Local-only handoffs (do not publish)
+handoffs/
+*HANDOFF*.md

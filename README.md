@@ -16,17 +16,17 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 8. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.5.6`
+`CiukiOS pre-Alpha v0.5.7`
 
 Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
 
 ## Changelog (Latest)
-### pre-Alpha v0.5.6
-1. Closed Phase 2 with Stage1 FAT12/FAT16 compile-time support and FAT16 cluster walker path for the full profile.
-2. Reworked full-profile image assembly to inject runtime payloads (`COMDEMO`, `MZDEMO`, `FILEIO`, `DELTEST`) into FAT16 root/data layout.
-3. Added full-profile Stage1 selftest regression gate (`scripts/qemu_test_full_stage1.sh`) and integrated it in the aggregate test suite.
-4. Stabilized QEMU serial capture in test mode using file chardev wiring for deterministic marker collection.
+### pre-Alpha v0.5.7
+1. Extended Stage1 FAT16 runtime to correctly handle multi-sector clusters across DOS file paths (`open/read/write/exec`) and fixed cluster-to-LBA inconsistencies.
+2. Expanded DOS compatibility with additional `INT 21h` handlers and minimal `INT 2Fh` multiplex support for better pre-NT software behavior.
+3. Improved full-profile OpenGEM launcher flow with deterministic diagnostics and guarded-safe mode to avoid shell hangs.
+4. Increased Stage1 reserved size from 21 to 22 sectors (full and floppy) to absorb runtime growth while keeping regression gates stable.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
