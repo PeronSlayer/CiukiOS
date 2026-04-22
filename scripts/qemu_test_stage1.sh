@@ -34,4 +34,4 @@ check_marker "[MZDEMO-SERIAL] PASS"
 check_marker "[FILEIO-SERIAL] PASS"
 check_marker "[STAGE1-SELFTEST] DONE"
 
-echo "[qemu-test-stage1] PASS (stage1 selftest + INT21h + COM + MZ + file I/O)"
+echo "[qemu-test-stage1] PASS (stage1 selftest + INT21h + COM/MZ via AH=4Bh + file I/O)"

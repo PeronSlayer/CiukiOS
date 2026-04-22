@@ -10,6 +10,8 @@ org 0x0000
 %define DOS_HEAP_BASE_SEG 0x8000
 %define DOS_HEAP_LIMIT_SEG 0x9A00
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
+%define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
+%define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
 %define FAT_SPT 18
 %define FAT_HEADS 2
 %define FAT_RESERVED_SECTORS 13
@@ -145,6 +147,8 @@ int21_handler:
     je .fn_41
     cmp ah, 0x42
     je .fn_42
+    cmp ah, 0x4B
+    je .fn_4b
     cmp ah, 0x48
     je .fn_48
     cmp ah, 0x49
@@ -200,6 +204,11 @@ int21_handler:
 
 .fn_42:
     call int21_seek
+    jc .error
+    jmp .success
+
+.fn_4b:
+    call int21_exec
     jc .error
     jmp .success
 
@@ -296,7 +305,7 @@ int21_smoke_test:
     mov ah, 0x48
     int 0x21
     jc .fail
-    cmp ax, DOS_HEAP_BASE_SEG
+    cmp ax, DOS_HEAP_USER_SEG
     jne .fail
     mov [dos21_test_seg], ax
 
@@ -330,6 +339,351 @@ int21_smoke_test:
     mov si, msg_dos21_serial_fail
     call print_string_serial
     pop ds
+    ret
+
+int21_exec:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    cmp al, 0x00
+    jne .bad_function
+
+    mov si, dx
+    call int21_path_to_fat_name
+    jc .path_fail
+
+    mov al, [cs:path_fat_name + 8]
+    cmp al, 'C'
+    jne .check_exe
+    mov al, [cs:path_fat_name + 9]
+    cmp al, 'O'
+    jne .check_exe
+    mov al, [cs:path_fat_name + 10]
+    cmp al, 'M'
+    jne .check_exe
+
+    call int21_exec_load_com
+    jc .done
+    call int21_exec_run_com
+    jc .done
+    xor ax, ax
+    clc
+    jmp .done
+
+.check_exe:
+    mov al, [cs:path_fat_name + 8]
+    cmp al, 'E'
+    jne .invalid_format
+    mov al, [cs:path_fat_name + 9]
+    cmp al, 'X'
+    jne .invalid_format
+    mov al, [cs:path_fat_name + 10]
+    cmp al, 'E'
+    jne .invalid_format
+
+    call int21_exec_load_mz
+    jc .done
+    call int21_exec_run_mz
+    jc .done
+    xor ax, ax
+    clc
+    jmp .done
+
+.invalid_format:
+    mov ax, 0x000B
+    stc
+    jmp .done
+
+.bad_function:
+    mov ax, 0x0001
+    stc
+    jmp .done
+
+.path_fail:
+    mov ax, 0x0003
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_exec_load_to_es:
+    push bx
+    push cx
+    push dx
+    push di
+    push ds
+    push es
+
+    mov [cs:tmp_exec_limit], cx
+    mov word [cs:tmp_exec_total], 0
+
+    xor al, al
+    call int21_open
+    jc .open_fail
+    mov [cs:tmp_exec_handle], ax
+
+.read_loop:
+    cmp word [cs:tmp_exec_limit], 0
+    je .too_large
+
+    mov ax, [cs:tmp_exec_limit]
+    cmp ax, 512
+    jbe .chunk_ok
+    mov ax, 512
+.chunk_ok:
+    mov cx, ax
+    mov bx, [cs:tmp_exec_handle]
+    push ds
+    mov ax, es
+    mov ds, ax
+    mov dx, di
+    call int21_read
+    pop ds
+    jc .read_fail
+    cmp ax, 0
+    je .close_ok
+
+    add di, ax
+    jc .too_large_close
+    add [cs:tmp_exec_total], ax
+    sub [cs:tmp_exec_limit], ax
+    jmp .read_loop
+
+.close_ok:
+    mov bx, [cs:tmp_exec_handle]
+    call int21_close
+    jc .close_fail
+    mov ax, [cs:tmp_exec_total]
+    clc
+    jmp .done
+
+.open_fail:
+    stc
+    jmp .done
+
+.read_fail:
+    mov [cs:tmp_exec_error], ax
+    mov bx, [cs:tmp_exec_handle]
+    call int21_close
+    mov ax, [cs:tmp_exec_error]
+    stc
+    jmp .done
+
+.too_large_close:
+    mov bx, [cs:tmp_exec_handle]
+    call int21_close
+.too_large:
+    mov ax, 0x0008
+    stc
+    jmp .done
+
+.close_fail:
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_exec_load_com:
+    push cx
+    push di
+    push es
+
+    mov ax, COM_LOAD_SEG
+    mov es, ax
+
+    xor ax, ax
+    xor di, di
+    mov cx, 128
+    rep stosw
+    mov word [es:0x0000], 0x20CD
+    mov byte [es:0x0080], 0
+
+    mov di, 0x0100
+    mov cx, 0xFE00
+    call int21_exec_load_to_es
+    jc .fail
+
+    mov word [cs:com_entry_off], 0x0100
+    mov word [cs:com_entry_seg], COM_LOAD_SEG
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop es
+    pop di
+    pop cx
+    ret
+
+int21_exec_run_com:
+    mov [cs:saved_ss], ss
+    mov [cs:saved_sp], sp
+    mov ax, ds
+    mov [cs:saved_ds], ax
+    mov [cs:saved_es], ax
+
+    cli
+    mov ax, COM_LOAD_SEG
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0xFFFE
+    sti
+
+    call far [cs:com_entry_off]
+
+    cli
+    mov ax, cs
+    mov ds, ax
+    mov ax, [cs:saved_ss]
+    mov ss, ax
+    mov sp, [cs:saved_sp]
+    sti
+
+    mov ax, [cs:saved_ds]
+    mov ds, ax
+    mov ax, [cs:saved_es]
+    mov es, ax
+    clc
+    ret
+
+int21_exec_load_mz:
+    push cx
+    push di
+    push es
+
+    mov ax, MZ_LOAD_SEG
+    mov es, ax
+    xor ax, ax
+    xor di, di
+    mov cx, 128
+    rep stosw
+
+    xor di, di
+    mov cx, 0xF000
+    call int21_exec_load_to_es
+    jc .fail
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop es
+    pop di
+    pop cx
+    ret
+
+int21_exec_run_mz:
+    push es
+
+    mov ax, MZ_LOAD_SEG
+    mov es, ax
+    cmp word [es:0x0000], 0x5A4D
+    jne .invalid_header
+
+    mov bx, [es:0x0008]
+    add bx, MZ_LOAD_SEG
+    mov [cs:mz_image_seg], bx
+    mov ax, bx
+    sub ax, 0x0010
+    mov [cs:mz_psp_seg], ax
+
+    mov ax, [es:0x0014]
+    mov [cs:mz_entry_off], ax
+    mov ax, [es:0x0016]
+    add ax, bx
+    mov [cs:mz_entry_seg], ax
+
+    mov ax, [es:0x000E]
+    add ax, bx
+    mov [cs:mz_stack_seg], ax
+    mov ax, [es:0x0010]
+    mov [cs:mz_stack_sp], ax
+
+    mov cx, [es:0x0006]
+    mov di, [es:0x0018]
+.reloc_loop:
+    jcxz .reloc_done
+    mov bx, [es:di]
+    mov dx, [es:di + 2]
+    mov ax, [cs:mz_image_seg]
+    add dx, ax
+    push es
+    mov es, dx
+    add word [es:bx], ax
+    pop es
+    add di, 4
+    loop .reloc_loop
+.reloc_done:
+    mov ax, [cs:mz_psp_seg]
+    mov es, ax
+    xor ax, ax
+    xor di, di
+    mov cx, 128
+    rep stosw
+    mov word [es:0x0000], 0x20CD
+    mov byte [es:0x0080], 0
+
+    mov [cs:saved_ss], ss
+    mov [cs:saved_sp], sp
+    mov ax, ds
+    mov [cs:saved_ds], ax
+    mov [cs:saved_es], ax
+
+    cli
+    mov ax, [cs:mz_psp_seg]
+    mov ds, ax
+    mov es, ax
+    mov ax, [cs:mz_stack_seg]
+    mov ss, ax
+    mov sp, [cs:mz_stack_sp]
+    sti
+
+    call far [cs:mz_entry_off]
+
+    cli
+    mov ax, cs
+    mov ds, ax
+    mov ax, [cs:saved_ss]
+    mov ss, ax
+    mov sp, [cs:saved_sp]
+    sti
+
+    mov ax, [cs:saved_ds]
+    mov ds, ax
+    mov ax, [cs:saved_es]
+    mov es, ax
+    clc
+    jmp .done
+
+.invalid_header:
+    mov ax, 0x000B
+    stc
+
+.done:
+    pop es
     ret
 
 int21_open:
@@ -835,7 +1189,26 @@ int21_mem_init:
     mov byte [cs:dos_mem_init], 1
     mov word [cs:dos_mem_alloc_seg], 0
     mov word [cs:dos_mem_alloc_size], 0
+    mov word [cs:dos_mem_mcb_owner], 0
+    mov word [cs:dos_mem_mcb_size], DOS_HEAP_USER_MAX_PARAS
+    call int21_mem_write_mcb
 .done:
+    ret
+
+int21_mem_write_mcb:
+    push ax
+    push es
+
+    mov ax, DOS_HEAP_BASE_SEG
+    mov es, ax
+    mov byte [es:0x0000], 'Z'
+    mov ax, [cs:dos_mem_mcb_owner]
+    mov [es:0x0001], ax
+    mov ax, [cs:dos_mem_mcb_size]
+    mov [es:0x0003], ax
+
+    pop es
+    pop ax
     ret
 
 int21_alloc:
@@ -847,12 +1220,15 @@ int21_alloc:
     cmp word [cs:dos_mem_alloc_size], 0
     jne .busy
 
-    cmp bx, DOS_HEAP_MAX_PARAS
+    cmp bx, DOS_HEAP_USER_MAX_PARAS
     ja .no_memory
 
-    mov word [cs:dos_mem_alloc_seg], DOS_HEAP_BASE_SEG
+    mov word [cs:dos_mem_alloc_seg], DOS_HEAP_USER_SEG
     mov [cs:dos_mem_alloc_size], bx
-    mov ax, DOS_HEAP_BASE_SEG
+    mov word [cs:dos_mem_mcb_owner], DOS_HEAP_USER_SEG
+    mov [cs:dos_mem_mcb_size], bx
+    call int21_mem_write_mcb
+    mov ax, DOS_HEAP_USER_SEG
     clc
     ret
 
@@ -863,7 +1239,7 @@ int21_alloc:
     ret
 
 .no_memory:
-    mov bx, DOS_HEAP_MAX_PARAS
+    mov bx, DOS_HEAP_USER_MAX_PARAS
     mov ax, 0x0008
     stc
     ret
@@ -879,6 +1255,9 @@ int21_free:
 
     mov word [cs:dos_mem_alloc_seg], 0
     mov word [cs:dos_mem_alloc_size], 0
+    mov word [cs:dos_mem_mcb_owner], 0
+    mov word [cs:dos_mem_mcb_size], DOS_HEAP_USER_MAX_PARAS
+    call int21_mem_write_mcb
     xor ax, ax
     clc
     ret
@@ -898,10 +1277,12 @@ int21_resize:
     jne .invalid
     cmp bx, 0
     je .no_memory
-    cmp bx, DOS_HEAP_MAX_PARAS
+    cmp bx, DOS_HEAP_USER_MAX_PARAS
     ja .no_memory
 
     mov [cs:dos_mem_alloc_size], bx
+    mov [cs:dos_mem_mcb_size], bx
+    call int21_mem_write_mcb
     xor dx, dx
     mov ax, es
     clc
@@ -913,7 +1294,7 @@ int21_resize:
     ret
 
 .no_memory:
-    mov bx, DOS_HEAP_MAX_PARAS
+    mov bx, DOS_HEAP_USER_MAX_PARAS
     mov ax, 0x0008
     stc
     ret
@@ -1426,52 +1807,17 @@ run_stage1_selftest:
     call print_string_serial
     ret
 
-load_cmd_buffer:
-    push di
-    mov di, cmd_buffer
-.copy:
-    lodsb
-    stosb
-    test al, al
-    jnz .copy
-    pop di
-    ret
-
 run_com_demo:
     mov si, msg_com_begin
     call print_string_dual
 
-    call load_com_demo_from_disk
-    jc .load_fail
-
-    mov [saved_ss], ss
-    mov [saved_sp], sp
-    mov ax, ds
-    mov [saved_ds], ax
-    mov [saved_es], ax
-
-    cli
-    mov ax, COM_LOAD_SEG
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov sp, 0xFFFE
-    sti
-
-    call far [cs:com_entry_off]
-
-    cli
     mov ax, cs
     mov ds, ax
-    mov ax, [saved_ss]
-    mov ss, ax
-    mov sp, [saved_sp]
-    sti
-
-    mov ax, [saved_ds]
-    mov ds, ax
-    mov ax, [saved_es]
-    mov es, ax
+    mov dx, path_comdemo_dos
+    xor bx, bx
+    mov ax, 0x4B00
+    int 0x21
+    jc .load_fail
 
     mov ah, 0x4D
     int 0x21
@@ -1507,88 +1853,13 @@ run_mz_demo:
     mov si, msg_mz_begin
     call print_string_dual
 
-    call load_mz_demo_from_disk
-    jc .load_fail
-
-    mov ax, MZ_LOAD_SEG
-    mov es, ax
-    cmp word [es:0x0000], 0x5A4D
-    jne .header_fail
-
-    mov bx, [es:0x0008]
-    add bx, MZ_LOAD_SEG
-    mov [mz_image_seg], bx
-    mov ax, bx
-    sub ax, 0x0010
-    mov [mz_psp_seg], ax
-
-    mov ax, [es:0x0014]
-    mov [mz_entry_off], ax
-    mov ax, [es:0x0016]
-    add ax, bx
-    mov [mz_entry_seg], ax
-
-    mov ax, [es:0x000E]
-    add ax, bx
-    mov [mz_stack_seg], ax
-    mov ax, [es:0x0010]
-    mov [mz_stack_sp], ax
-
-    ; Apply EXE relocation entries: [target] += image_base_segment.
-    mov cx, [es:0x0006]
-    mov di, [es:0x0018]
-.reloc_loop:
-    jcxz .reloc_done
-    mov bx, [es:di]
-    mov dx, [es:di + 2]
-    mov ax, [mz_image_seg]
-    add dx, ax
-    push es
-    mov es, dx
-    add word [es:bx], ax
-    pop es
-    add di, 4
-    loop .reloc_loop
-.reloc_done:
-    ; Build minimal PSP segment for EXE DOS-like linkage.
-    mov ax, [mz_psp_seg]
-    mov es, ax
-    xor ax, ax
-    xor di, di
-    mov cx, 128
-    rep stosw
-    mov word [es:0x0000], 0x20CD
-    mov byte [es:0x0080], 0
-
-    mov [saved_ss], ss
-    mov [saved_sp], sp
-    mov ax, ds
-    mov [saved_ds], ax
-    mov [saved_es], ax
-
-    cli
-    mov ax, [mz_psp_seg]
-    mov ds, ax
-    mov es, ax
-    mov ax, [mz_stack_seg]
-    mov ss, ax
-    mov sp, [mz_stack_sp]
-    sti
-
-    call far [cs:mz_entry_off]
-
-    cli
     mov ax, cs
     mov ds, ax
-    mov ax, [saved_ss]
-    mov ss, ax
-    mov sp, [saved_sp]
-    sti
-
-    mov ax, [saved_ds]
-    mov ds, ax
-    mov ax, [saved_es]
-    mov es, ax
+    mov dx, path_mzdemo_dos
+    xor bx, bx
+    mov ax, 0x4B00
+    int 0x21
+    jc .load_fail
 
     mov ah, 0x4D
     int 0x21
@@ -1615,80 +1886,9 @@ run_mz_demo:
     mov si, msg_mz_serial_fail
     call print_string_serial
     ret
-.header_fail:
-    mov si, msg_mz_header_fail
-    call print_string_dual
-    mov si, msg_mz_serial_fail
-    call print_string_serial
-    ret
 .serial_fail:
     mov si, msg_mz_serial_fail
     call print_string_serial
-    ret
-
-load_com_demo_from_disk:
-    push ax
-    push ds
-    push es
-
-    mov ax, cs
-    mov ds, ax
-    mov ax, COM_LOAD_SEG
-    mov es, ax
-
-    xor ax, ax
-    xor di, di
-    mov cx, 128
-    rep stosw
-
-    mov word [es:0x0000], 0x20CD
-    mov byte [es:0x0080], 0
-
-    mov si, fat_comdemo_name
-    mov bx, 0x0100
-    call load_root_file_first_sector
-    jc .fail
-
-    mov word [com_entry_off], 0x0100
-    mov word [com_entry_seg], COM_LOAD_SEG
-
-    clc
-    jmp .done
-.fail:
-    stc
-.done:
-    pop es
-    pop ds
-    pop ax
-    ret
-
-load_mz_demo_from_disk:
-    push ax
-    push ds
-    push es
-
-    mov ax, cs
-    mov ds, ax
-    mov ax, MZ_LOAD_SEG
-    mov es, ax
-
-    xor ax, ax
-    xor di, di
-    mov cx, 128
-    rep stosw
-
-    mov si, fat_mzdemo_name
-    mov bx, 0x0000
-    call load_root_file_first_sector
-    jc .fail
-    clc
-    jmp .done
-.fail:
-    stc
-.done:
-    pop es
-    pop ds
-    pop ax
     ret
 
 load_root_file_first_sector:
@@ -2225,9 +2425,15 @@ tmp_cluster_off dw 0
 tmp_lba dw 0
 tmp_capacity dw 0
 tmp_next_cluster dw 0
+tmp_exec_limit dw 0
+tmp_exec_total dw 0
+tmp_exec_handle dw 0
+tmp_exec_error dw 0
 dos_mem_init db 0
 dos_mem_alloc_seg dw 0
 dos_mem_alloc_size dw 0
+dos_mem_mcb_owner dw 0
+dos_mem_mcb_size dw 0
 dos21_test_seg dw 0
 saved_ss dw 0
 saved_sp dw 0
@@ -2280,13 +2486,12 @@ msg_dos21_status db "[INT21/AH=4Dh] code/type=0x", 0
 msg_dos21_serial_pass db "[DOS21-SERIAL] PASS", 13, 10, 0
 msg_dos21_serial_fail db "[DOS21-SERIAL] FAIL", 13, 10, 0
 msg_com_begin db "[STAGE1] COM demo load/exec", 13, 10, 0
-msg_com_load_fail db "[STAGE1] COM demo disk read FAIL", 13, 10, 0
+msg_com_load_fail db "[STAGE1] COM demo exec FAIL", 13, 10, 0
 msg_com_done  db "[STAGE1] COM demo code/query=0x", 0
 msg_com_serial_pass db "[COMDEMO-SERIAL] PASS", 13, 10, 0
 msg_com_serial_fail db "[COMDEMO-SERIAL] FAIL", 13, 10, 0
 msg_mz_begin db "[STAGE1] MZ demo load/exec", 13, 10, 0
-msg_mz_load_fail db "[STAGE1] MZ demo disk read FAIL", 13, 10, 0
-msg_mz_header_fail db "[STAGE1] MZ demo invalid header", 13, 10, 0
+msg_mz_load_fail db "[STAGE1] MZ demo exec FAIL", 13, 10, 0
 msg_mz_done  db "[STAGE1] MZ demo code/query=0x", 0
 msg_mz_serial_pass db "[MZDEMO-SERIAL] PASS", 13, 10, 0
 msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
@@ -2307,14 +2512,7 @@ str_fileio db "fileio", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
 
-cmd_selftest_dos21 db "dos21", 0
-cmd_selftest_comdemo db "comdemo", 0
-cmd_selftest_mzdemo db "mzdemo", 0
-cmd_selftest_fileio db "fileio", 0
-
 path_comdemo_dos db "COMDEMO.COM", 0
+path_mzdemo_dos  db "MZDEMO.EXE", 0
 path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
-
-fat_comdemo_name db "COMDEMO COM"
-fat_mzdemo_name  db "MZDEMO  EXE"
