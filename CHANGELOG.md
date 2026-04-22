@@ -4,7 +4,9 @@ All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
 ## Unreleased
-1. No released changes yet.
+1. Delivered a BIOS-bootable `floppy` stage0 baseline with a real 16-bit boot sector.
+2. Upgraded floppy build pipeline to assemble and inject boot sector code into LBA0.
+3. Upgraded floppy QEMU smoke test to validate a real boot marker instead of timeout-only execution.
 
 ## pre-Alpha v0.5.0 (2026-04-22)
 1. Restarted the project from a clean legacy BIOS x86 architecture baseline.
