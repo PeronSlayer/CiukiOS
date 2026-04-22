@@ -37,6 +37,7 @@ DELTEST_SRC="src/com/deltest.bin.asm"
 DELTEST_BIN="build/full/obj/deltest.bin"
 OPENGEM_PAYLOAD_DIR="assets/full/opengem"
 OPENGEM_UPSTREAM_DIR="$OPENGEM_PAYLOAD_DIR/upstream/OPENGEM7-RC3"
+INCLUDE_OPENGEM_PAYLOAD="${CIUKIOS_INCLUDE_OPENGEM:-1}"
 
 for f in "$BOOT_SRC" "$STAGE1_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC"; do
 	if [[ ! -f "$f" ]]; then
@@ -140,31 +141,28 @@ OPENGEM_STAGE_DIR="build/full/obj/opengem_stage"
 mkdir -p "$OPENGEM_STAGE_DIR"
 rm -f "$OPENGEM_STAGE_DIR"/*
 
-copy_if_exists() {
-	local src="$1"
-	local dst_name="$2"
-	if [[ -f "$src" ]]; then
-		cp "$src" "$OPENGEM_STAGE_DIR/$dst_name"
+stage_regular_files() {
+	local src_dir="$1"
+	if [[ ! -d "$src_dir" ]]; then
+		return
 	fi
+	while IFS= read -r -d '' f; do
+		local base
+		base="$(basename "$f")"
+		if [[ "$base" == "README.md" || "$base" == "_DS_STOR" ]]; then
+			continue
+		fi
+		cp "$f" "$OPENGEM_STAGE_DIR/$base"
+	done < <(find "$src_dir" -maxdepth 1 -type f -print0)
 }
 
-copy_if_exists "$OPENGEM_PAYLOAD_DIR/GEM.EXE" "GEM.EXE"
-copy_if_exists "$OPENGEM_PAYLOAD_DIR/GEM.BAT" "GEM.BAT"
-copy_if_exists "$OPENGEM_PAYLOAD_DIR/GEMVDI.EXE" "GEMVDI.EXE"
-copy_if_exists "$OPENGEM_PAYLOAD_DIR/DESKTOP.APP" "DESKTOP.APP"
-copy_if_exists "$OPENGEM_PAYLOAD_DIR/OUTPUT.APP" "OUTPUT.APP"
-copy_if_exists "$OPENGEM_PAYLOAD_DIR/SETTINGS.APP" "SETTINGS.APP"
-copy_if_exists "$OPENGEM_PAYLOAD_DIR/CTMOUSE.EXE" "CTMOUSE.EXE"
+stage_regular_files "$OPENGEM_PAYLOAD_DIR"
+stage_regular_files "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS"
+stage_regular_files "$OPENGEM_UPSTREAM_DIR"
 
-copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEM.BAT" "GEM.BAT"
-copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/GEM.EXE" "GEM.EXE"
-copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/GEMVDI.EXE" "GEMVDI.EXE"
-copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/DESKTOP.APP" "DESKTOP.APP"
-copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/OUTPUT.APP" "OUTPUT.APP"
-copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/SETTINGS.APP" "SETTINGS.APP"
-copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/CTMOUSE.EXE" "CTMOUSE.EXE"
-
-if command -v mcopy >/dev/null 2>&1; then
+if [[ "$INCLUDE_OPENGEM_PAYLOAD" != "1" ]]; then
+	echo "[build-full] OpenGEM payload injection disabled (CIUKIOS_INCLUDE_OPENGEM=$INCLUDE_OPENGEM_PAYLOAD)"
+elif command -v mcopy >/dev/null 2>&1; then
 	if compgen -G "$OPENGEM_STAGE_DIR/*" >/dev/null; then
 		echo "[build-full] injecting OpenGEM payload files into FAT16 root"
 		for f in "$OPENGEM_STAGE_DIR"/*; do

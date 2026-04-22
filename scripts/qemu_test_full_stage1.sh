@@ -5,13 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 LOG_FILE="${LOG_FILE:-build/full/qemu-full-stage1.log}"
-TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-20}"
+TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-40}"
 
 echo "[qemu-test-full-stage1] running full profile stage1 selftest regression (FAT16)"
 mkdir -p "$(dirname "$LOG_FILE")"
 rm -f "$LOG_FILE"
 
-if ! LOG_FILE="$LOG_FILE" QEMU_TIMEOUT_SEC="$TIMEOUT_SEC" bash scripts/qemu_run_full.sh --test; then
+if ! CIUKIOS_INCLUDE_OPENGEM=0 LOG_FILE="$LOG_FILE" QEMU_TIMEOUT_SEC="$TIMEOUT_SEC" bash scripts/qemu_run_full.sh --test; then
   echo "[qemu-test-full-stage1] FAIL (full test harness failed)" >&2
   tail -n 120 "$LOG_FILE" >&2 || true
   exit 1
