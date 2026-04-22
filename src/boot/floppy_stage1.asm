@@ -71,6 +71,10 @@ stage1_start:
 %endif
 
 main_loop:
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+
     mov si, msg_prompt
     call print_string_dual
 
