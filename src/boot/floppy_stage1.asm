@@ -1,6 +1,8 @@
 bits 16
 org 0x0000
 
+%define CMD_BUF_LEN 64
+
 stage1_start:
     cli
     mov ax, cs
@@ -10,18 +12,289 @@ stage1_start:
     mov sp, 0xFFFE
     sti
 
+    mov [boot_drive], dl
+
     call serial_init
 
     mov si, msg_stage1
-    call print_bios_string
+    call print_string_dual
+    mov si, msg_stage1_serial
+    call print_string_serial
 
-    mov si, msg_stage1
-    call print_serial_string
+    call run_bios_diagnostics
 
-halt:
+main_loop:
+    mov si, msg_prompt
+    call print_string_dual
+
+    call read_command_line
+    call dispatch_command
+    jmp main_loop
+
+run_bios_diagnostics:
+    mov si, msg_diag_begin
+    call print_string_dual
+
+    mov si, msg_diag_int10
+    call print_string_dual
+
+    mov ah, 0x00
+    mov dl, [boot_drive]
+    int 0x13
+    jc .int13_fail
+    mov si, msg_diag_int13_ok
+    call print_string_dual
+    jmp .int13_done
+.int13_fail:
+    mov si, msg_diag_int13_fail
+    call print_string_dual
+.int13_done:
+
+    mov ah, 0x01
+    int 0x16
+    mov si, msg_diag_int16_ok
+    call print_string_dual
+
+    mov ah, 0x00
+    int 0x1A
+    mov si, msg_diag_int1a
+    call print_string_dual
+    mov ax, cx
+    call print_hex16_dual
+    mov ax, dx
+    call print_hex16_dual
+    call print_newline_dual
+
+    ret
+
+dispatch_command:
+    mov si, cmd_buffer
+    call skip_spaces
+    mov di, si
+
+    cmp byte [di], 0
+    je .done
+
+    mov si, str_help
+    call str_eq
+    jc .cmd_help
+    mov si, str_cls
+    call str_eq
+    jc .cmd_cls
+    mov si, str_ticks
+    call str_eq
+    jc .cmd_ticks
+    mov si, str_drive
+    call str_eq
+    jc .cmd_drive
+    mov si, str_reboot
+    call str_eq
+    jc .cmd_reboot
+    mov si, str_halt
+    call str_eq
+    jc .cmd_halt
+
+    mov si, msg_unknown
+    call print_string_dual
+    jmp .done
+
+.cmd_help:
+    mov si, msg_help
+    call print_string_dual
+    jmp .done
+
+.cmd_cls:
+    mov ax, 0x0003
+    int 0x10
+    mov si, msg_cleared
+    call print_string_dual
+    jmp .done
+
+.cmd_ticks:
+    mov ah, 0x00
+    int 0x1A
+    mov si, msg_ticks
+    call print_string_dual
+    mov ax, cx
+    call print_hex16_dual
+    mov ax, dx
+    call print_hex16_dual
+    call print_newline_dual
+    jmp .done
+
+.cmd_drive:
+    mov si, msg_drive
+    call print_string_dual
+    xor ah, ah
+    mov al, [boot_drive]
+    call print_hex8_dual
+    call print_newline_dual
+    jmp .done
+
+.cmd_reboot:
+    mov si, msg_rebooting
+    call print_string_dual
+    int 0x19
+    jmp .done
+
+.cmd_halt:
+    mov si, msg_halting
+    call print_string_dual
+.halt_forever:
     cli
     hlt
-    jmp halt
+    jmp .halt_forever
+
+.done:
+    ret
+
+read_command_line:
+    mov di, cmd_buffer
+    mov cx, CMD_BUF_LEN - 1
+.read_key:
+    xor ah, ah
+    int 0x16
+
+    cmp al, 0x0D
+    je .finish
+
+    cmp al, 0x08
+    je .backspace
+
+    cmp al, 0
+    je .read_key
+
+    cmp cx, 0
+    je .read_key
+
+    stosb
+    dec cx
+    call putc_dual
+    jmp .read_key
+
+.backspace:
+    cmp di, cmd_buffer
+    je .read_key
+    dec di
+    inc cx
+    mov al, 0x08
+    call putc_dual
+    mov al, ' '
+    call putc_dual
+    mov al, 0x08
+    call putc_dual
+    jmp .read_key
+
+.finish:
+    mov al, 0
+    stosb
+    call print_newline_dual
+    ret
+
+skip_spaces:
+.skip:
+    cmp byte [si], ' '
+    jne .done
+    inc si
+    jmp .skip
+.done:
+    ret
+
+; Compare DI (input command) to SI (constant command string).
+; Carry set if equal and fully terminated.
+str_eq:
+.next:
+    mov al, [di]
+    mov ah, [si]
+    cmp ah, 0
+    je .expect_end
+    cmp al, ah
+    jne .not_equal
+    inc di
+    inc si
+    jmp .next
+.expect_end:
+    cmp al, 0
+    je .equal
+    cmp al, ' '
+    je .equal
+.not_equal:
+    clc
+    ret
+.equal:
+    stc
+    ret
+
+print_string_dual:
+    lodsb
+    test al, al
+    jz .done
+    call putc_dual
+    jmp print_string_dual
+.done:
+    ret
+
+print_string_serial:
+    lodsb
+    test al, al
+    jz .done
+    call serial_putc
+    jmp print_string_serial
+.done:
+    ret
+
+print_newline_dual:
+    mov al, 13
+    call putc_dual
+    mov al, 10
+    call putc_dual
+    ret
+
+print_hex16_dual:
+    push ax
+    mov al, ah
+    call print_hex8_dual
+    pop ax
+    call print_hex8_dual
+    ret
+
+print_hex8_dual:
+    push ax
+    mov ah, al
+    shr al, 4
+    call print_hex_nibble_dual
+    mov al, ah
+    and al, 0x0F
+    call print_hex_nibble_dual
+    pop ax
+    ret
+
+print_hex_nibble_dual:
+    and al, 0x0F
+    cmp al, 9
+    jbe .digit
+    add al, 7
+.digit:
+    add al, '0'
+    call putc_dual
+    ret
+
+putc_dual:
+    push ax
+    call bios_putc
+    pop ax
+    call serial_putc
+    ret
+
+bios_putc:
+    push ax
+    push bx
+    mov ah, 0x0E
+    mov bx, 0x0007
+    int 0x10
+    pop bx
+    pop ax
+    ret
 
 serial_init:
     mov dx, 0x03F8 + 1
@@ -47,26 +320,6 @@ serial_init:
     out dx, al
     ret
 
-print_bios_string:
-    lodsb
-    test al, al
-    jz .done
-    mov ah, 0x0E
-    mov bx, 0x0007
-    int 0x10
-    jmp print_bios_string
-.done:
-    ret
-
-print_serial_string:
-    lodsb
-    test al, al
-    jz .done
-    call serial_putc
-    jmp print_serial_string
-.done:
-    ret
-
 serial_putc:
     push ax
     push dx
@@ -83,4 +336,30 @@ serial_putc:
     pop ax
     ret
 
-msg_stage1 db "[STAGE1] CiukiOS stage1 running", 13, 10, 0
+boot_drive db 0
+cmd_buffer times CMD_BUF_LEN db 0
+
+msg_stage1        db "[STAGE1] CiukiOS stage1 running", 13, 10, 0
+msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
+msg_diag_begin    db "[STAGE1] BIOS diagnostics", 13, 10, 0
+msg_diag_int10    db "[STAGE1] INT10h OK", 13, 10, 0
+msg_diag_int13_ok db "[STAGE1] INT13h OK", 13, 10, 0
+msg_diag_int13_fail db "[STAGE1] INT13h FAIL", 13, 10, 0
+msg_diag_int16_ok db "[STAGE1] INT16h OK", 13, 10, 0
+msg_diag_int1a    db "[STAGE1] INT1Ah ticks=0x", 0
+
+msg_prompt    db "ciukios> ", 0
+msg_unknown   db "unknown command. type 'help'", 13, 10, 0
+msg_help      db "commands: help cls ticks drive reboot halt", 13, 10, 0
+msg_cleared   db "screen cleared", 13, 10, 0
+msg_ticks     db "ticks=0x", 0
+msg_drive     db "boot drive=0x", 0
+msg_rebooting db "rebooting...", 13, 10, 0
+msg_halting   db "halting...", 13, 10, 0
+
+str_help   db "help", 0
+str_cls    db "cls", 0
+str_ticks  db "ticks", 0
+str_drive  db "drive", 0
+str_reboot db "reboot", 0
+str_halt   db "halt", 0
