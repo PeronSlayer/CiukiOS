@@ -1,8 +1,22 @@
 # OpenGEM payload for full image
 
-Put your launcher binary here with this exact name:
+The full build can inject OpenGEM files into the FAT16 root automatically.
 
-- `OPENGEM.COM`
+Recommended files in this folder:
+
+- `GEM.EXE` (launcher target used by `opengem` command)
+- `GEM.BAT`
+- `GEMVDI.EXE`
+- `DESKTOP.APP`
+- `OUTPUT.APP`
+- `SETTINGS.APP`
+- `CTMOUSE.EXE`
+
+The build also looks in:
+
+- `assets/full/opengem/upstream/OPENGEM7-RC3`
+
+and copies known files from there if they are not already present at top level.
 
 Build command:
 
@@ -10,10 +24,8 @@ Build command:
 bash scripts/build_full.sh
 ```
 
-If `assets/full/opengem/OPENGEM.COM` exists, it is injected into the FAT16 root of `build/full/ciukios-full.img` and can be launched from the CiukiOS shell with:
+Run command inside CiukiOS full shell:
 
 ```text
 opengem
 ```
-
-Current layout constraint for full image packaging: `OPENGEM.COM` must be <= 512 bytes.

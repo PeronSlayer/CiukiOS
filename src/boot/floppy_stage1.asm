@@ -4746,7 +4746,7 @@ path_mzdemo_dos  db "MZDEMO.EXE", 0
 path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
 %if FAT_TYPE == 16
-path_opengem_dos db "OPENGEM.COM", 0
+path_opengem_dos db "GEM.EXE", 0
 %endif
 path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0

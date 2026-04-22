@@ -36,8 +36,7 @@ FILEIO_BIN="build/full/obj/fileio.bin"
 DELTEST_SRC="src/com/deltest.bin.asm"
 DELTEST_BIN="build/full/obj/deltest.bin"
 OPENGEM_PAYLOAD_DIR="assets/full/opengem"
-OPENGEM_SRC="$OPENGEM_PAYLOAD_DIR/OPENGEM.COM"
-OPENGEM_BIN="build/full/obj/opengem.com"
+OPENGEM_UPSTREAM_DIR="$OPENGEM_PAYLOAD_DIR/upstream/OPENGEM7-RC3"
 
 for f in "$BOOT_SRC" "$STAGE1_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC"; do
 	if [[ ! -f "$f" ]]; then
@@ -86,21 +85,6 @@ COMDEMO_SIZE="$(stat -c%s "$COMDEMO_BIN")"
 MZDEMO_SIZE="$(stat -c%s  "$MZDEMO_BIN")"
 FILEIO_SIZE="$(stat -c%s  "$FILEIO_BIN")"
 DELTEST_SIZE="$(stat -c%s "$DELTEST_BIN")"
-OPENGEM_SIZE=0
-INCLUDE_OPENGEM=0
-
-if [[ -f "$OPENGEM_SRC" ]]; then
-	cp "$OPENGEM_SRC" "$OPENGEM_BIN"
-	OPENGEM_SIZE="$(stat -c%s "$OPENGEM_BIN")"
-	if [[ "$OPENGEM_SIZE" -gt 512 ]]; then
-		echo "[build-full] ERROR: OPENGEM.COM is $OPENGEM_SIZE bytes (max 512 for current full image layout)" >&2
-		exit 1
-	fi
-	INCLUDE_OPENGEM=1
-	echo "[build-full] OpenGEM payload detected: $OPENGEM_SRC ($OPENGEM_SIZE bytes)"
-else
-	echo "[build-full] OpenGEM payload not found at $OPENGEM_SRC (skipping)"
-fi
 
 if [[ "$FILEIO_SIZE" -le 512 ]]; then
 	echo "[build-full] ERROR: FILEIO payload must span >1 cluster ($FILEIO_SIZE bytes)" >&2
@@ -109,10 +93,10 @@ fi
 
 # FAT16 sector (little-endian 16-bit entries):
 #  [0]=0xFFF8 media+reserved, [1]=0xFFFF, [2]=EOF(COMDEMO), [3]=EOF(MZDEMO),
-#  [4]=0x0005 FILEIO chain->5, [5]=EOF(FILEIO), [6]=EOF(DELTEST), [7]=EOF(OPENGEM reserved)
+#  [4]=0x0005 FILEIO chain->5, [5]=EOF(FILEIO), [6]=EOF(DELTEST)
 FAT_SECTOR_BIN="build/full/obj/fat16_sector.bin"
-printf 'F8FFFFFFFFFFFFFF0500FFFFFFFFFFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
-dd if=/dev/zero bs=1 count=$((512 - 16)) status=none >> "$FAT_SECTOR_BIN"
+printf 'F8FFFFFFFFFFFFFF0500FFFF FFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
+dd if=/dev/zero bs=1 count=$((512 - 14)) status=none >> "$FAT_SECTOR_BIN"
 
 # Helper: write a 32-byte FAT root directory entry
 make_root_entry() {
@@ -132,14 +116,10 @@ ROOT_ENTRY_COMDEMO="build/full/obj/root_comdemo.bin"
 ROOT_ENTRY_MZDEMO="build/full/obj/root_mzdemo.bin"
 ROOT_ENTRY_FILEIO="build/full/obj/root_fileio.bin"
 ROOT_ENTRY_DELTEST="build/full/obj/root_deltest.bin"
-ROOT_ENTRY_OPENGEM="build/full/obj/root_opengem.bin"
 make_root_entry "$ROOT_ENTRY_COMDEMO" 'COMDEMO COM' 2 "$COMDEMO_SIZE"
 make_root_entry "$ROOT_ENTRY_MZDEMO"  'MZDEMO  EXE' 3 "$MZDEMO_SIZE"
 make_root_entry "$ROOT_ENTRY_FILEIO"  'FILEIO  BIN' 4 "$FILEIO_SIZE"
 make_root_entry "$ROOT_ENTRY_DELTEST" 'DELTEST BIN' 6 "$DELTEST_SIZE"
-if [[ "$INCLUDE_OPENGEM" -eq 1 ]]; then
-	make_root_entry "$ROOT_ENTRY_OPENGEM" 'OPENGEM COM' 7 "$OPENGEM_SIZE"
-fi
 
 echo "[build-full] creating 128MB FAT16 image"
 dd if=/dev/zero of="$IMG" bs=512 count="$TOTAL_SECTORS" status=none
@@ -151,15 +131,50 @@ dd if="$ROOT_ENTRY_COMDEMO" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 0))  conv=no
 dd if="$ROOT_ENTRY_MZDEMO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_FILEIO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_DELTEST" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
-if [[ "$INCLUDE_OPENGEM" -eq 1 ]]; then
-	dd if="$ROOT_ENTRY_OPENGEM" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
-fi
 dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 0)) count=1 conv=notrunc status=none
 dd if="$MZDEMO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
 dd if="$FILEIO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + 2)) count=2 conv=notrunc status=none
 dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 4)) count=1 conv=notrunc status=none
-if [[ "$INCLUDE_OPENGEM" -eq 1 ]]; then
-	dd if="$OPENGEM_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 5)) count=1 conv=notrunc status=none
+
+OPENGEM_STAGE_DIR="build/full/obj/opengem_stage"
+mkdir -p "$OPENGEM_STAGE_DIR"
+rm -f "$OPENGEM_STAGE_DIR"/*
+
+copy_if_exists() {
+	local src="$1"
+	local dst_name="$2"
+	if [[ -f "$src" ]]; then
+		cp "$src" "$OPENGEM_STAGE_DIR/$dst_name"
+	fi
+}
+
+copy_if_exists "$OPENGEM_PAYLOAD_DIR/GEM.EXE" "GEM.EXE"
+copy_if_exists "$OPENGEM_PAYLOAD_DIR/GEM.BAT" "GEM.BAT"
+copy_if_exists "$OPENGEM_PAYLOAD_DIR/GEMVDI.EXE" "GEMVDI.EXE"
+copy_if_exists "$OPENGEM_PAYLOAD_DIR/DESKTOP.APP" "DESKTOP.APP"
+copy_if_exists "$OPENGEM_PAYLOAD_DIR/OUTPUT.APP" "OUTPUT.APP"
+copy_if_exists "$OPENGEM_PAYLOAD_DIR/SETTINGS.APP" "SETTINGS.APP"
+copy_if_exists "$OPENGEM_PAYLOAD_DIR/CTMOUSE.EXE" "CTMOUSE.EXE"
+
+copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEM.BAT" "GEM.BAT"
+copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/GEM.EXE" "GEM.EXE"
+copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/GEMVDI.EXE" "GEMVDI.EXE"
+copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/DESKTOP.APP" "DESKTOP.APP"
+copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/OUTPUT.APP" "OUTPUT.APP"
+copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/SETTINGS.APP" "SETTINGS.APP"
+copy_if_exists "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS/CTMOUSE.EXE" "CTMOUSE.EXE"
+
+if command -v mcopy >/dev/null 2>&1; then
+	if compgen -G "$OPENGEM_STAGE_DIR/*" >/dev/null; then
+		echo "[build-full] injecting OpenGEM payload files into FAT16 root"
+		for f in "$OPENGEM_STAGE_DIR"/*; do
+			mcopy -o -i "$IMG" "$f" "::$(basename "$f")" >/dev/null
+		done
+	else
+		echo "[build-full] OpenGEM payload not found at $OPENGEM_PAYLOAD_DIR (skipping)"
+	fi
+else
+	echo "[build-full] WARNING: mcopy not found; OpenGEM payload injection skipped"
 fi
 
 cat > build/full/README.txt << 'TXT'
@@ -167,9 +182,9 @@ CiukiOS Legacy v2 - Full profile (FAT16 baseline)
 
 Image: ciukios-full.img (128MB)
 State: BIOS stage0 -> stage1 with full DOS runtime and FAT16 file I/O
-Filesystem: FAT16 (SPT=63 Heads=16 128MB) with COMDEMO/MZDEMO/FILEIO/DELTEST (+ optional OPENGEM) payloads
+Filesystem: FAT16 (SPT=63 Heads=16 128MB) with COMDEMO/MZDEMO/FILEIO/DELTEST payloads
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-15
-Data: cluster 2=COMDEMO, 3=MZDEMO, 4-5=FILEIO, 6=DELTEST, 7=OPENGEM(optional)
+Data: cluster 2=COMDEMO, 3=MZDEMO, 4-5=FILEIO, 6=DELTEST
 TXT
 
 echo "[build-full] done: build/full/ciukios-full.img"
