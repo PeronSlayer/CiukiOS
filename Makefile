@@ -5,7 +5,7 @@ help:
 	@echo "  make build-floppy     - build floppy profile scaffold"
 	@echo "  make build-full       - build full profile scaffold"
 	@echo "  make qemu-test-floppy - build + QEMU smoke test (floppy image)"
-	@echo "  make qemu-test-stage1 - interactive Stage1 regression (DOS21 + COM demo)"
+	@echo "  make qemu-test-stage1 - interactive Stage1 regression (DOS21 + COM/MZ + file I/O)"
 	@echo "  make qemu-test-full   - build + QEMU smoke test (full image)"
 	@echo "  make qemu-test-all    - build + QEMU smoke test (floppy + full)"
 	@echo "  make clean            - remove build artifacts"

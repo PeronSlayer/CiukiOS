@@ -4,9 +4,10 @@ org 0x0000
 %define CMD_BUF_LEN 64
 %define COM_LOAD_SEG 0x2000
 %define MZ_LOAD_SEG 0x3000
+%define DOS_FILE_BUF_SEG 0x7000
 %define FAT_SPT 18
 %define FAT_HEADS 2
-%define FAT_RESERVED_SECTORS 7
+%define FAT_RESERVED_SECTORS 9
 %define FAT_SECTORS_PER_FAT 9
 %define FAT_COUNT 2
 %define FAT_ROOT_DIR_SECTORS 14
@@ -119,10 +120,20 @@ int21_handler:
     push ds
     push es
 
+    mov byte [cs:int21_carry], 0
+
     cmp ah, 0x02
     je .fn_02
     cmp ah, 0x09
     je .fn_09
+    cmp ah, 0x3D
+    je .fn_3d
+    cmp ah, 0x3E
+    je .fn_3e
+    cmp ah, 0x3F
+    je .fn_3f
+    cmp ah, 0x42
+    je .fn_42
     cmp ah, 0x4C
     je .fn_4c
     cmp ah, 0x4D
@@ -133,32 +144,69 @@ int21_handler:
     mov al, dl
     call bios_putc
     call serial_putc
-    jmp .done
+    jmp .success
 
 .fn_09:
     mov si, dx
 .fn_09_loop:
     lodsb
     cmp al, '$'
-    je .done
+    je .success
     call bios_putc
     call serial_putc
     jmp .fn_09_loop
 
+.fn_3d:
+    call int21_open
+    jc .error
+    jmp .success
+
+.fn_3e:
+    call int21_close
+    jc .error
+    jmp .success
+
+.fn_3f:
+    call int21_read
+    jc .error
+    jmp .success
+
+.fn_42:
+    call int21_seek
+    jc .error
+    jmp .success
+
 .fn_4c:
     mov [cs:last_exit_code], al
     mov byte [cs:last_term_type], 0
-    jmp .done
+    xor ax, ax
+    jmp .success
 
 .fn_4d:
     mov al, [cs:last_exit_code]
     mov ah, [cs:last_term_type]
-    jmp .done
+    jmp .success
 
 .unsupported:
     mov ax, 0x0001
+    jmp .error
+
+.success:
+    mov byte [cs:int21_carry], 0
+    jmp .done
+
+.error:
+    mov byte [cs:int21_carry], 1
 
 .done:
+    mov bp, sp
+    cmp byte [cs:int21_carry], 0
+    jne .set_carry
+    and word [bp + 20], 0xFFFE
+    jmp .restore
+.set_carry:
+    or word [bp + 20], 0x0001
+.restore:
     pop es
     pop ds
     pop bp
@@ -208,6 +256,361 @@ int21_smoke_test:
     pop ds
     ret
 
+int21_open:
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    push es
+
+    cmp al, 0x00
+    jne .access_denied
+
+    mov si, dx
+    call int21_path_to_fat_name
+    jc .path_fail
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_FILE_BUF_SEG
+    mov es, ax
+    mov si, path_fat_name
+    mov bx, 0x0000
+    call load_root_file_first_sector
+    jc .not_found
+
+    mov byte [file_handle_open], 1
+    mov word [file_handle_pos], 0
+    mov word [file_handle_data_seg], DOS_FILE_BUF_SEG
+    mov ax, [search_found_size_lo]
+    mov [file_handle_size_lo], ax
+    mov ax, [search_found_size_hi]
+    mov [file_handle_size_hi], ax
+    mov ax, 0x0005
+    clc
+    jmp .done
+
+.not_found:
+    mov ax, 0x0002
+    stc
+    jmp .done
+
+.path_fail:
+    mov ax, 0x0003
+    stc
+    jmp .done
+
+.access_denied:
+    mov ax, 0x0005
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_close:
+    cmp bx, 0x0005
+    jne .bad_handle
+    cmp byte [cs:file_handle_open], 1
+    jne .bad_handle
+    mov byte [cs:file_handle_open], 0
+    xor ax, ax
+    clc
+    ret
+.bad_handle:
+    mov ax, 0x0006
+    stc
+    ret
+
+int21_read:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    cmp bx, 0x0005
+    jne .bad_handle
+    cmp byte [cs:file_handle_open], 1
+    jne .bad_handle
+
+    cmp cx, 0
+    jne .have_count
+    xor ax, ax
+    clc
+    jmp .done
+
+.have_count:
+    mov ax, [cs:file_handle_size_lo]
+    cmp word [cs:file_handle_size_hi], 0
+    je .size_known
+    mov ax, 0xFFFF
+.size_known:
+    cmp ax, 512
+    jbe .size_capped
+    mov ax, 512
+.size_capped:
+    mov si, [cs:file_handle_pos]
+    cmp si, ax
+    jae .eof
+
+    sub ax, si
+    cmp cx, ax
+    jbe .count_ok
+    mov cx, ax
+.count_ok:
+    mov ax, ds
+    mov [cs:tmp_user_ds], ax
+
+    mov ax, [cs:file_handle_data_seg]
+    mov ds, ax
+    mov si, [cs:file_handle_pos]
+    mov ax, [cs:tmp_user_ds]
+    mov es, ax
+    mov di, dx
+    mov ax, cx
+    rep movsb
+    add word [cs:file_handle_pos], ax
+    clc
+    jmp .done
+
+.eof:
+    xor ax, ax
+    clc
+    jmp .done
+
+.bad_handle:
+    mov ax, 0x0006
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_seek:
+    push bx
+    push cx
+
+    cmp bx, 0x0005
+    jne .bad_handle
+    cmp byte [cs:file_handle_open], 1
+    jne .bad_handle
+    cmp cx, 0
+    jne .bad_function
+
+    cmp al, 0
+    je .from_start
+    cmp al, 1
+    je .from_current
+    cmp al, 2
+    je .from_end
+    jmp .bad_function
+
+.from_start:
+    mov ax, dx
+    jmp .set_pos
+
+.from_current:
+    mov ax, [cs:file_handle_pos]
+    add ax, dx
+    jmp .set_pos
+
+.from_end:
+    mov ax, [cs:file_handle_size_lo]
+    add ax, dx
+
+.set_pos:
+    mov [cs:file_handle_pos], ax
+    xor dx, dx
+    clc
+    jmp .done
+
+.bad_function:
+    mov ax, 0x0001
+    stc
+    jmp .done
+
+.bad_handle:
+    mov ax, 0x0006
+    stc
+
+.done:
+    pop cx
+    pop bx
+    ret
+
+int21_path_to_fat_name:
+    push ax
+    push bx
+    push cx
+    push di
+    push es
+
+    mov ax, cs
+    mov es, ax
+    mov di, path_fat_name
+    mov cx, 11
+    mov al, ' '
+    rep stosb
+
+    cmp byte [si], 0
+    je .fail
+
+    cmp byte [si + 1], ':'
+    jne .skip_drive
+    add si, 2
+
+.skip_drive:
+    mov al, [si]
+    cmp al, '\'
+    je .skip_sep
+    cmp al, '/'
+    jne .name_start
+.skip_sep:
+    inc si
+    jmp .skip_drive
+
+.name_start:
+    xor bx, bx
+.name_loop:
+    mov al, [si]
+    cmp al, 0
+    je .name_done
+    cmp al, '.'
+    je .ext_start
+    cmp al, '\'
+    je .name_done
+    cmp al, '/'
+    je .name_done
+    cmp bx, 8
+    jae .name_advance
+    call int21_upcase_al
+    mov [es:path_fat_name + bx], al
+    inc bx
+.name_advance:
+    inc si
+    jmp .name_loop
+
+.name_done:
+    cmp bx, 0
+    je .fail
+    clc
+    jmp .done
+
+.ext_start:
+    inc si
+    xor bx, bx
+.ext_loop:
+    mov al, [si]
+    cmp al, 0
+    je .success
+    cmp al, '\'
+    je .success
+    cmp al, '/'
+    je .success
+    cmp bx, 3
+    jae .ext_advance
+    call int21_upcase_al
+    mov [es:path_fat_name + 8 + bx], al
+    inc bx
+.ext_advance:
+    inc si
+    jmp .ext_loop
+
+.success:
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop es
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_upcase_al:
+    cmp al, 'a'
+    jb .done
+    cmp al, 'z'
+    ja .done
+    sub al, 32
+.done:
+    ret
+
+int21_fileio_test:
+    push ds
+
+    mov si, msg_fileio_begin
+    call print_string_dual
+
+    mov ax, cs
+    mov ds, ax
+
+    mov dx, path_comdemo_dos
+    mov ax, 0x3D00
+    int 0x21
+    cmp ax, 0x0005
+    jne .fail
+
+    mov bx, ax
+    mov cx, 3
+    mov dx, fileio_buf
+    mov ah, 0x3F
+    int 0x21
+    cmp ax, 3
+    jne .fail_close
+
+    cmp byte [fileio_buf + 0], 0xBA
+    jne .fail_close
+    cmp byte [fileio_buf + 1], 0x0D
+    jne .fail_close
+    cmp byte [fileio_buf + 2], 0x01
+    jne .fail_close
+
+    xor cx, cx
+    xor dx, dx
+    mov ax, 0x4200
+    int 0x21
+    cmp ax, 0
+    jne .fail_close
+
+    mov ah, 0x3E
+    int 0x21
+    cmp ax, 0
+    jne .fail
+
+    mov si, msg_fileio_serial_pass
+    call print_string_serial
+    pop ds
+    ret
+
+.fail_close:
+    mov ah, 0x3E
+    int 0x21
+.fail:
+    mov si, msg_fileio_serial_fail
+    call print_string_serial
+    pop ds
+    ret
+
 run_stage1_selftest:
     mov si, msg_stage1_selftest_begin
     call print_string_dual
@@ -220,6 +623,9 @@ run_stage1_selftest:
     call load_cmd_buffer
     call dispatch_command
     mov si, cmd_selftest_mzdemo
+    call load_cmd_buffer
+    call dispatch_command
+    mov si, cmd_selftest_fileio
     call load_cmd_buffer
     call dispatch_command
     mov si, msg_stage1_selftest_done
@@ -503,6 +909,9 @@ load_root_file_first_sector:
 
     mov [search_name_ptr], si
     mov [search_target_off], bx
+    mov word [search_found_cluster], 0
+    mov word [search_found_size_lo], 0
+    mov word [search_found_size_hi], 0
     mov dx, FAT_ROOT_START_LBA
 
 .scan_next_sector:
@@ -550,6 +959,13 @@ load_root_file_first_sector:
     cmp ax, 2
     jb .read_fail
 
+    mov [search_found_cluster], ax
+    mov ax, [es:di + 28]
+    mov [search_found_size_lo], ax
+    mov ax, [es:di + 30]
+    mov [search_found_size_hi], ax
+
+    mov ax, [search_found_cluster]
     sub ax, 2
     add ax, FAT_DATA_START_LBA
     mov bx, [search_target_off]
@@ -668,6 +1084,10 @@ dispatch_command:
     call str_eq
     jc .cmd_mzdemo
     mov di, bx
+    mov si, str_fileio
+    call str_eq
+    jc .cmd_fileio
+    mov di, bx
     mov si, str_reboot
     call str_eq
     jc .cmd_reboot
@@ -730,6 +1150,10 @@ dispatch_command:
 
 .cmd_mzdemo:
     call run_mz_demo
+    jmp .done
+
+.cmd_fileio:
+    call int21_fileio_test
     jmp .done
 
 .cmd_reboot:
@@ -939,10 +1363,17 @@ serial_putc:
 
 boot_drive db 0
 int21_installed db 0
+int21_carry db 0
 last_exit_code db 0
 last_term_type db 0
 old_int21_off dw 0
 old_int21_seg dw 0
+file_handle_open db 0
+file_handle_pos dw 0
+file_handle_data_seg dw 0
+file_handle_size_lo dw 0
+file_handle_size_hi dw 0
+tmp_user_ds dw 0
 saved_ss dw 0
 saved_sp dw 0
 saved_ds dw 0
@@ -957,6 +1388,11 @@ mz_stack_seg dw 0
 mz_stack_sp dw 0
 search_name_ptr dw 0
 search_target_off dw 0
+search_found_cluster dw 0
+search_found_size_lo dw 0
+search_found_size_hi dw 0
+path_fat_name times 11 db 0
+fileio_buf times 4 db 0
 cmd_buffer times CMD_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] CiukiOS stage1 running", 13, 10, 0
@@ -976,7 +1412,7 @@ msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
 
 msg_prompt    db "ciukios> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
-msg_help      db "commands: help cls ticks drive dos21 comdemo mzdemo reboot halt", 13, 10, 0
+msg_help      db "commands: help cls ticks drive dos21 comdemo mzdemo fileio reboot halt", 13, 10, 0
 msg_cleared   db "screen cleared", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
@@ -995,6 +1431,9 @@ msg_mz_header_fail db "[STAGE1] MZ demo invalid header", 13, 10, 0
 msg_mz_done  db "[STAGE1] MZ demo code/query=0x", 0
 msg_mz_serial_pass db "[MZDEMO-SERIAL] PASS", 13, 10, 0
 msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
+msg_fileio_begin db "[STAGE1] INT21h file io", 13, 10, 0
+msg_fileio_serial_pass db "[FILEIO-SERIAL] PASS", 13, 10, 0
+msg_fileio_serial_fail db "[FILEIO-SERIAL] FAIL", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
 
@@ -1005,12 +1444,16 @@ str_drive  db "drive", 0
 str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_mzdemo db "mzdemo", 0
+str_fileio db "fileio", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
 
 cmd_selftest_dos21 db "dos21", 0
 cmd_selftest_comdemo db "comdemo", 0
 cmd_selftest_mzdemo db "mzdemo", 0
+cmd_selftest_fileio db "fileio", 0
+
+path_comdemo_dos db "COMDEMO.COM", 0
 
 fat_comdemo_name db "COMDEMO COM"
 fat_mzdemo_name  db "MZDEMO  EXE"

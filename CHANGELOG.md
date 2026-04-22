@@ -9,6 +9,9 @@ This changelog is intentionally concise and includes only major milestones.
 3. Fixed Stage1 floppy LBA read path to preserve target buffer register semantics during CHS conversion.
 4. Added Stage1 `.EXE` MZ execution baseline with relocation handling and PSP-linked launch flow.
 5. Added deterministic Stage1 regression gate for `.EXE` runtime (`MZDEMO`) and integrated it into `qemu-test-stage1`.
+6. Added Stage1 `INT 21h` file-handle baseline (`AH=3Dh/3Eh/3Fh/42h`) with DOS-like read path over FAT root entries.
+7. Added deterministic `FILEIO` runtime regression marker in Stage1 selftest and `qemu-test-stage1`.
+8. Expanded Stage1 loader slot from 6 to 8 sectors to support Phase 2 DOS runtime growth.
 
 ## pre-Alpha v0.5.5 (2026-04-22)
 1. Completed Stage1 milestone with deterministic `stage0 -> stage1` handoff and stable BIOS diagnostics (`INT 10h/13h/16h/1Ah`).
