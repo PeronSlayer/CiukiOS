@@ -4299,11 +4299,35 @@ draw_shell_chrome:
     mov bl, 0x1E
     call video_write_string_attr
 
-    mov si, msg_shell_sysinfo
+%ifdef FAT_TYPE
+%if FAT_TYPE == 12
+    mov si, msg_shell_sysinfo_prefix
     mov dh, 24
     mov dl, 40
     mov bl, 0x1E
     call video_write_string_attr
+
+    int 0x12
+    mov cx, ax
+    mov ax, cx
+    mov bx, 10
+    xor dx, dx
+    mov di, ram_buf
+    call convert_dec_buf
+
+    mov si, ram_buf
+    mov dh, 24
+    mov dl, 45
+    mov bl, 0x1E
+    call video_write_string_attr
+
+    mov al, 'K'
+    mov dh, 24
+    mov dl, 49
+    mov bl, 0x1E
+    call video_write_char_attr
+%endif
+%endif
 
     mov dh, 6
     xor dl, dl
@@ -4427,6 +4451,44 @@ serial_putc:
     ret
 
 ; Stage2 Extended Services Integration
+convert_dec_buf:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    xor cx, cx
+    cmp ax, 0
+    jne .div_loop
+    mov byte [di], '0'
+    mov byte [di + 1], 0
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.div_loop:
+    xor dx, dx
+    div bx
+    add dl, '0'
+    push dx
+    inc cx
+    test ax, ax
+    jnz .div_loop
+.pop_loop:
+    pop ax
+    mov [di], al
+    inc di
+    loop .pop_loop
+    mov byte [di], 0
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 init_stage2_services:
     push ax
     push si
@@ -4584,7 +4646,7 @@ msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
 msg_shell_hint db "CiukiDOS Shell", 0
 msg_shell_quick db "For commands write Help and press send", 0
 msg_shell_footer db "ready", 0
-msg_shell_sysinfo db "RAM: 640K | CPU: x86 | DISK: 1.4M", 0
+msg_shell_sysinfo_prefix db "RAM:", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
 msg_help_core db "core: help ver tree cls ticks drive dir cd cd..", 13, 10, 0
 msg_help_runtime db "ciukidos: dos21 comdemo mzdemo fileio findtest gfxdemo", 13, 10, 0
@@ -4663,6 +4725,7 @@ path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
 path_root_dos    db "\", 0
 cwd_buf times 8 db 0
+ram_buf times 6 db 0
 shell_dir_count dw 0
 shell_dir_name_buf times 16 db 0
 gfx_draw_color db 0
