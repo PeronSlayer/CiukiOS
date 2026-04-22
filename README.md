@@ -1,3 +1,5 @@
+![Splashscreen CiukiOS](misc/CiukiOS_SplashScreen.png)
+
 # CiukiOS
 
 Open Source RetroOS project rebuilt from a clean baseline.
