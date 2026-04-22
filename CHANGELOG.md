@@ -3,6 +3,11 @@
 All notable changes to CiukiOS are tracked here.
 
 ## Unreleased
+1. Started repository reset on a legacy BIOS x86 architecture path (no UEFI dependency in the new core).
+2. Archived the previous project state in `OLD/archive-2026-04-22/`.
+3. Added the v2 documentation baseline: architecture, roadmap, logbook, and AI operating directives.
+4. Added initial build profile scaffolding for `floppy` and `full`.
+5. Added dedicated QEMU smoke-test scripts for both images (`scripts/qemu_test_floppy.sh`, `scripts/qemu_test_full.sh`) and wired Make targets.
 
 ## v0.8.9
 1. Added the GDT byte-layout encoder for the v8086 monitor: `vm86_gdt_encode`, `vm86_gdt_read_access`, `vm86_gdt_read_base`, `vm86_gdt_read_limit`, `vm86_gdt_encoder_probe`. Lays the full 7-slot descriptor set (NULL, PE_CODE32, PE_DATA32, V86_STACK, V86_TSS, RETURN_CODE64, RETURN_DATA64) into a host-owned buffer with CPU-visible 8-byte layout (limit_lo, base_lo, base_mid, access, flags|limit_hi, base_hi) matching Intel SDM Vol.3A §3.4.5 exactly. Access bytes pinned as public macros `VM86_GDT_AR_CODE32=0x9A`, `VM86_GDT_AR_DATA32=0x92`, `VM86_GDT_AR_TSS32=0x89`, `VM86_GDT_AR_CODE64=0x9A`; flag nibbles `VM86_GDT_FLAGS_32=0xC` (G=1,D=1,L=0), `VM86_GDT_FLAGS_64=0xA` (G=1,D=0,L=1), `VM86_GDT_FLAGS_TSS=0x0` (byte-granular). GDTR limit pre-computed as `VM86_GDT_BYTES-1` and emitted as an audit marker for the future live LGDT. No `LGDT` load performed.

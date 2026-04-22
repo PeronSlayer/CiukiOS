@@ -1,0 +1,19 @@
+You are working on CiukiOS. Execute ONLY this task pack:
+`docs/collab/copilot-task-claude-phase1-closure-v1.md`
+
+Hard requirements:
+1) Create and use dedicated branch only:
+   `feature/copilot-claude-phase1-closure-v1` from `origin/main`.
+2) Do not modify `main`.
+3) Implement all scope items P1-V1..P1-V5.
+4) Run all validation commands listed in the task pack.
+5) If a test fails, fix and re-run until green.
+6) Produce final handoff file exactly as requested in the task pack.
+7) Keep token usage low: no long explanations, no repeated status spam, concise commit messages.
+
+Output format at the end (strict):
+- Branch name
+- Commits created (hash + title)
+- Tests run + PASS/FAIL
+- Handoff file path
+- Remaining risks (max 5 bullets)

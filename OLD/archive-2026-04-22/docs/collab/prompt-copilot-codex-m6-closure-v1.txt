@@ -1,0 +1,19 @@
+You are working on CiukiOS. Execute ONLY this task pack:
+`docs/collab/copilot-task-codex-m6-closure-v1.md`
+
+Hard requirements:
+1) Create and use dedicated branch only:
+   `feature/copilot-codex-m6-closure-v1` from `origin/main`.
+2) Do not modify `main`.
+3) Implement all scope items M6-C1..M6-C5.
+4) Run all validation commands listed in the task pack.
+5) If a test fails, fix and re-run until green.
+6) Produce final handoff file exactly as requested in the task pack.
+7) Keep token usage low: concise reasoning and concise final report.
+
+Output format at the end (strict):
+- Branch name
+- Commits created (hash + title)
+- Tests run + PASS/FAIL
+- Handoff file path
+- Residual risks (max 5 bullets)
