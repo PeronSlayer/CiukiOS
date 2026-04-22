@@ -175,6 +175,7 @@ install_int21_vector:
     mov [es:bx + 2], ax
 
     mov byte [int21_installed], 1
+    mov byte [int2f_installed], 0
     mov byte [last_exit_code], 0
     mov byte [last_term_type], 0
     mov byte [dos_default_drive], 0
@@ -182,6 +183,17 @@ install_int21_vector:
     mov ax, cs
     mov [dta_seg], ax
     mov word [dta_off], find_dta
+
+    ; Install a minimal INT 2Fh multiplex handler for DOS compatibility.
+    mov bx, 0x2F * 4
+    mov ax, [es:bx]
+    mov [old_int2f_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int2f_seg], ax
+    mov word [es:bx], int2f_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+    mov byte [int2f_installed], 1
 
     pop es
     pop bx
@@ -202,6 +214,7 @@ int21_handler:
     push es
 
     mov byte [cs:int21_carry], 0
+    mov byte [cs:int21_return_es], 0
 
     cmp ah, 0x02
     je .fn_02
@@ -213,14 +226,24 @@ int21_handler:
     je .fn_1a
     cmp ah, 0x19
     je .fn_19
+    cmp ah, 0x2A
+    je .fn_2a
+    cmp ah, 0x2C
+    je .fn_2c
     cmp ah, 0x25
     je .fn_25
     cmp ah, 0x2F
     je .fn_2f
     cmp ah, 0x30
     je .fn_30
+    cmp ah, 0x33
+    je .fn_33
+    cmp ah, 0x34
+    je .fn_34
     cmp ah, 0x35
     je .fn_35
+    cmp ah, 0x36
+    je .fn_36
     cmp ah, 0x3B
     je .fn_3b
     cmp ah, 0x3D
@@ -255,6 +278,12 @@ int21_handler:
     je .fn_4c
     cmp ah, 0x4D
     je .fn_4d
+    cmp ah, 0x52
+    je .fn_52
+    cmp ah, 0x54
+    je .fn_54
+    cmp ah, 0x58
+    je .fn_58
     cmp ah, 0x62
     je .fn_62
     jmp .unsupported
@@ -290,6 +319,16 @@ int21_handler:
     jc .error
     jmp .success
 
+.fn_2a:
+    call int21_get_date
+    jc .error
+    jmp .success
+
+.fn_2c:
+    call int21_get_time
+    jc .error
+    jmp .success
+
 .fn_25:
     call int21_set_vector
     jc .error
@@ -297,6 +336,7 @@ int21_handler:
 
 .fn_2f:
     call int21_get_dta
+    mov byte [cs:int21_return_es], 1
     jc .error
     jmp .success
 
@@ -305,8 +345,25 @@ int21_handler:
     jc .error
     jmp .success
 
+.fn_33:
+    call int21_ctrl_break
+    jc .error
+    jmp .success
+
+.fn_34:
+    call int21_get_indos_ptr
+    mov byte [cs:int21_return_es], 1
+    jc .error
+    jmp .success
+
 .fn_35:
     call int21_get_vector
+    mov byte [cs:int21_return_es], 1
+    jc .error
+    jmp .success
+
+.fn_36:
+    call int21_get_free_space
     jc .error
     jmp .success
 
@@ -396,12 +453,38 @@ int21_handler:
     mov ah, [cs:last_term_type]
     jmp .success
 
+.fn_52:
+    call int21_get_list_of_lists
+    mov byte [cs:int21_return_es], 1
+    jc .error
+    jmp .success
+
+.fn_54:
+    xor al, al
+    xor ah, ah
+    jmp .success
+
+.fn_58:
+    call int21_mem_strategy
+    jc .error
+    jmp .success
+
 .fn_62:
     call int21_get_psp
     jc .error
     jmp .success
 
 .unsupported:
+    push ax
+    mov si, msg_int21_unsup
+    call print_string_serial
+    pop ax
+    mov al, ah
+    call print_hex8_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
     mov ax, 0x0001
     jmp .error
 
@@ -414,6 +497,10 @@ int21_handler:
 
 .done:
     mov bp, sp
+    cmp byte [cs:int21_return_es], 0
+    je .flags_only
+    mov [bp + 0], es
+.flags_only:
     cmp byte [cs:int21_carry], 0
     jne .set_carry
     and word [bp + 20], 0xFFFE
@@ -989,6 +1076,92 @@ int21_get_version:
     clc
     ret
 
+int21_get_date:
+    mov cx, 2026
+    mov dh, 4
+    mov dl, 22
+    mov al, 2
+    xor ah, ah
+    clc
+    ret
+
+int21_get_time:
+    mov ch, 12
+    xor cl, cl
+    xor dh, dh
+    xor dl, dl
+    clc
+    ret
+
+int21_ctrl_break:
+    cmp al, 0x00
+    je .get_state
+    cmp al, 0x01
+    je .set_state
+    mov ax, 0x0001
+    stc
+    ret
+.get_state:
+    xor dl, dl
+    xor ax, ax
+    clc
+    ret
+.set_state:
+    xor dl, dl
+    xor ax, ax
+    clc
+    ret
+
+int21_get_free_space:
+    cmp dl, 0
+    je .ok
+    cmp dl, 1
+    je .ok
+    mov ax, 0xFFFF
+    stc
+    ret
+.ok:
+    mov ax, FAT_SECTORS_PER_CLUSTER
+    mov bx, 0x2000
+    mov cx, 512
+    mov dx, 0x4000
+    clc
+    ret
+
+int21_get_indos_ptr:
+    mov bx, dos_indos_flag
+    mov ax, cs
+    mov es, ax
+    xor ax, ax
+    clc
+    ret
+
+int21_get_list_of_lists:
+    mov bx, dos_list_of_lists
+    mov ax, cs
+    mov es, ax
+    xor ax, ax
+    clc
+    ret
+
+int21_mem_strategy:
+    cmp al, 0x00
+    je .get
+    cmp al, 0x01
+    je .set
+    mov ax, 0x0001
+    stc
+    ret
+.get:
+    xor bx, bx
+    xor ax, ax
+    clc
+    ret
+.set:
+    xor ax, ax
+    clc
+    ret
+
 int21_set_vector:
     push ax
     push bx
@@ -1011,9 +1184,7 @@ int21_set_vector:
 
 int21_get_vector:
     push ax
-    push bx
     push di
-    push es
     xor ah, ah
     mov di, ax
     shl di, 1
@@ -1025,9 +1196,7 @@ int21_get_vector:
     mov es, ax
     xor ax, ax
     clc
-    pop es
     pop di
-    pop bx
     pop ax
     ret
 
@@ -4653,6 +4822,27 @@ print_hex8_dual:
     pop ax
     ret
 
+print_hex8_serial:
+    push ax
+    mov ah, al
+    shr al, 4
+    call print_hex_nibble_serial
+    mov al, ah
+    and al, 0x0F
+    call print_hex_nibble_serial
+    pop ax
+    ret
+
+print_hex_nibble_serial:
+    and al, 0x0F
+    cmp al, 9
+    jbe .digit
+    add al, 7
+.digit:
+    add al, '0'
+    call serial_putc
+    ret
+
 print_hex_nibble_dual:
     and al, 0x0F
     cmp al, 9
@@ -4822,14 +5012,30 @@ int33_handler:
     pop ax
     iret
 
+int2f_handler:
+    cmp ax, 0x1680
+    je .idle
+    cmp ax, 0x1600
+    je .query_win
+    iret
+.idle:
+    iret
+.query_win:
+    xor ax, ax
+    iret
+
 boot_drive db 0
 int21_installed db 0
 int21_carry db 0
+int21_return_es db 0
+int2f_installed db 0
 dos_default_drive db 0
 last_exit_code db 0
 last_term_type db 0
 old_int21_off dw 0
 old_int21_seg dw 0
+old_int2f_off dw 0
+old_int2f_seg dw 0
 file_handle_open db 0
 file_handle_pos dw 0
 file_handle_mode db 0
@@ -4896,6 +5102,8 @@ path_fat_name times 11 db 0
 fileio_buf times 4 db 0
 fileio_patch db 0x11, 0x22
 find_dta times 64 db 0
+dos_indos_flag db 0
+dos_list_of_lists times 32 db 0
 cmd_buffer times CMD_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] CiukiOS stage1 running", 13, 10, 0
@@ -4908,6 +5116,7 @@ msg_diag_int16_ok db "[STAGE1] INT16h OK", 13, 10, 0
 msg_diag_int1a    db "[STAGE1] INT1Ah ticks=0x", 0
 msg_int21_installed db "[STAGE1] INT21h vector installed", 13, 10, 0
 msg_int21_missing db "[STAGE1] INT21h vector not installed", 13, 10, 0
+msg_int21_unsup db "[INT21-UNSUP] AH=", 0
 msg_stage1_selftest_begin db "[STAGE1] selftest begin", 13, 10, 0
 msg_stage1_selftest_done db "[STAGE1] selftest done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[STAGE1-SELFTEST] BEGIN", 13, 10, 0
