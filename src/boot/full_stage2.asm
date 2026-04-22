@@ -9,34 +9,59 @@ stage2_entry:
     mov ah, 0x09
     int 0x21
 
-    ; Load mouse driver if present, then launch GEM.EXE.
-    mov dx, path_ctmouse_exe
-    xor bx, bx
-    mov ax, 0x4B00
+    ; Keep startup coherent with OpenGEM layout expectations.
+    mov dx, path_gemsys_dir
+    mov ah, 0x3B
     int 0x21
 
-    mov dx, path_gem_exe
-    xor bx, bx
-    mov ax, 0x4B00
-    int 0x21
-    jnc .wait_child
+    ; Best effort mouse init.
+    mov dx, path_ctmouse_sys
+    call exec_try_ignore
+    mov dx, path_ctmouse_root
+    call exec_try_ignore
 
-    ; Fallback for alternate payload layouts.
-    mov dx, path_gem_bat
-    xor bx, bx
-    mov ax, 0x4B00
-    int 0x21
-    jc .launch_fail
+    ; Primary startup path: GEMVDI.EXE.
+    mov dx, path_gemvdi_sys
+    call exec_try_wait
+    jnc .wait_done
+    mov [last_fail_ax], ax
 
-.wait_child:
-    mov ah, 0x4D
-    int 0x21
+    mov dx, path_gemvdi_root
+    call exec_try_wait
+    jnc .wait_done
+    mov [last_fail_ax], ax
+
+    ; Fallbacks.
+    mov dx, path_gem_exe_sys
+    call exec_try_wait
+    jnc .wait_done
+    mov [last_fail_ax], ax
+
+    mov dx, path_gem_exe_root
+    call exec_try_wait
+    jnc .wait_done
+    mov [last_fail_ax], ax
+
+    mov dx, path_gem_bat_sys
+    call exec_try_wait
+    jnc .wait_done
+    mov [last_fail_ax], ax
+
+    mov dx, path_gem_bat_root
+    call exec_try_wait
+    jnc .wait_done
+    mov [last_fail_ax], ax
+
+    jmp .launch_fail
+
+.wait_done:
     mov dx, msg_return
     mov ah, 0x09
     int 0x21
     jmp .done
 
 .launch_fail:
+    mov ax, [last_fail_ax]
     push ax
     mov dx, msg_fail
     mov ah, 0x09
@@ -52,6 +77,30 @@ stage2_entry:
 
 .done:
     retf
+
+exec_try_wait:
+    xor bx, bx
+    mov ax, 0x4B00
+    int 0x21
+    jc .fail
+    mov ah, 0x4D
+    int 0x21
+    xor ax, ax
+    clc
+    ret
+.fail:
+    stc
+    ret
+
+exec_try_ignore:
+    push ax
+    push bx
+    xor bx, bx
+    mov ax, 0x4B00
+    int 0x21
+    pop bx
+    pop ax
+    ret
 
 print_ax_hex:
     push ax
@@ -96,6 +145,13 @@ msg_begin db "[OPENGEM] launch", 13, 10, '$'
 msg_fail db "[OPENGEM] launch failed", 13, 10, '$'
 msg_ax db " AX=", '$'
 msg_return db "[OPENGEM] returned", 13, 10, '$'
-path_ctmouse_exe db "CTMOUSE.EXE", 0
-path_gem_bat db "GEM.BAT", 0
-path_gem_exe db "GEM.EXE", 0
+path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
+path_ctmouse_sys db "GEMAPPS\GEMSYS\CTMOUSE.EXE", 0
+path_ctmouse_root db "CTMOUSE.EXE", 0
+path_gemvdi_sys db "GEMAPPS\GEMSYS\GEMVDI.EXE", 0
+path_gemvdi_root db "GEMVDI.EXE", 0
+path_gem_exe_sys db "GEMAPPS\GEMSYS\GEM.EXE", 0
+path_gem_exe_root db "GEM.EXE", 0
+path_gem_bat_sys db "GEMAPPS\GEMSYS\GEM.BAT", 0
+path_gem_bat_root db "GEM.BAT", 0
+last_fail_ax dw 0

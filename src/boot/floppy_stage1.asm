@@ -31,6 +31,9 @@ org 0x0000
 %ifndef FAT_ROOT_DIR_SECTORS
 %define FAT_ROOT_DIR_SECTORS 14
 %endif
+%ifndef FAT_SECTORS_PER_CLUSTER
+%define FAT_SECTORS_PER_CLUSTER 1
+%endif
 %ifndef FAT_TYPE
 %define FAT_TYPE 12
 %endif
@@ -46,6 +49,25 @@ org 0x0000
 %define FAT2_LBA (FAT1_LBA + FAT_SECTORS_PER_FAT)
 %define FAT_ROOT_START_LBA (FAT_RESERVED_SECTORS + (FAT_COUNT * FAT_SECTORS_PER_FAT))
 %define FAT_DATA_START_LBA (FAT_ROOT_START_LBA + FAT_ROOT_DIR_SECTORS)
+%if FAT_SECTORS_PER_CLUSTER == 1
+%define FAT_CLUSTER_SECTOR_SHIFT 0
+%define FAT_CLUSTER_SHIFT 9
+%define FAT_CLUSTER_MASK 0x01FF
+%elif FAT_SECTORS_PER_CLUSTER == 2
+%define FAT_CLUSTER_SECTOR_SHIFT 1
+%define FAT_CLUSTER_SHIFT 10
+%define FAT_CLUSTER_MASK 0x03FF
+%elif FAT_SECTORS_PER_CLUSTER == 4
+%define FAT_CLUSTER_SECTOR_SHIFT 2
+%define FAT_CLUSTER_SHIFT 11
+%define FAT_CLUSTER_MASK 0x07FF
+%elif FAT_SECTORS_PER_CLUSTER == 8
+%define FAT_CLUSTER_SECTOR_SHIFT 3
+%define FAT_CLUSTER_SHIFT 12
+%define FAT_CLUSTER_MASK 0x0FFF
+%else
+%error Unsupported FAT_SECTORS_PER_CLUSTER value
+%endif
 
 stage1_start:
     cli
@@ -544,6 +566,8 @@ int21_exec_load_to_es:
     push ds
     push es
 
+    mov [cs:tmp_user_ds], es
+
     mov [cs:tmp_exec_error], cx
 
     mov ax, cs
@@ -590,6 +614,20 @@ int21_exec_load_to_es:
 
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
+    mov word [cs:tmp_cluster_off], 0
+
+.cluster_sector_loop:
+    mov ax, [cs:tmp_exec_limit]
+    or ax, [cs:tmp_exec_total]
+    je .close_ok
+
+    mov ax, [cs:tmp_cluster_off]
+    mov cl, 9
+    shr ax, cl
+    cmp ax, FAT_SECTORS_PER_CLUSTER
+    jae .next_cluster
+    add ax, [cs:tmp_lba]
+    mov [cs:tmp_lba], ax
 
     mov ax, DOS_IO_BUF_SEG
     mov es, ax
@@ -616,6 +654,8 @@ int21_exec_load_to_es:
     mov ax, DOS_IO_BUF_SEG
     mov ds, ax
     xor si, si
+    mov ax, [cs:tmp_user_ds]
+    mov es, ax
     mov cx, [cs:tmp_chunk]
 
 .copy_loop:
@@ -627,20 +667,27 @@ int21_exec_load_to_es:
     cmp ax, DOS_META_BUF_SEG
     jae .copy_too_large
     mov es, ax
+    mov [cs:tmp_user_ds], ax
 
 .copy_next:
     loop .copy_loop
+    mov ax, es
+    mov [cs:tmp_user_ds], ax
     pop cx
     pop ds
 
     mov ax, [cs:tmp_chunk]
     sub [cs:tmp_exec_limit], ax
     sbb word [cs:tmp_exec_total], 0
+    add word [cs:tmp_cluster_off], 512
 
-    mov ax, [cs:tmp_exec_limit]
-    or ax, [cs:tmp_exec_total]
-    je .close_ok
+    mov ax, [cs:tmp_lba]
+    inc ax
+    mov [cs:tmp_lba], ax
 
+    jmp .cluster_sector_loop
+
+.next_cluster:
     mov ax, [cs:tmp_cluster]
     mov bx, ax
     call fat12_get_entry_cached
@@ -1543,6 +1590,15 @@ int21_read:
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
 
+    mov ax, [cs:tmp_cluster_off]
+    mov cl, 9
+    shr ax, cl
+    add [cs:tmp_lba], ax
+
+    mov ax, [cs:tmp_cluster_off]
+    and ax, 0x01FF
+    mov [cs:tmp_sector_off], ax
+
     mov ax, DOS_IO_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_lba]
@@ -1551,7 +1607,7 @@ int21_read:
     jc .io_error
 
     mov ax, 512
-    sub ax, [cs:tmp_cluster_off]
+    sub ax, [cs:tmp_sector_off]
     mov dx, [cs:tmp_rw_remaining]
     cmp dx, ax
     ja .chunk_ready
@@ -1561,7 +1617,7 @@ int21_read:
 
     mov ax, DOS_IO_BUF_SEG
     mov ds, ax
-    mov si, [cs:tmp_cluster_off]
+    mov si, [cs:tmp_sector_off]
     mov ax, [cs:tmp_user_ds]
     mov es, ax
     mov di, [cs:tmp_user_ptr]
@@ -1646,7 +1702,7 @@ int21_write:
 
 .prepare:
     mov ax, [cs:file_handle_cluster_count]
-    mov cl, 9
+    mov cl, FAT_CLUSTER_SHIFT
     shl ax, cl
     mov [cs:tmp_capacity], ax
 
@@ -1677,6 +1733,15 @@ int21_write:
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
 
+    mov ax, [cs:tmp_cluster_off]
+    mov cl, 9
+    shr ax, cl
+    add [cs:tmp_lba], ax
+
+    mov ax, [cs:tmp_cluster_off]
+    and ax, 0x01FF
+    mov [cs:tmp_sector_off], ax
+
     mov ax, DOS_IO_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_lba]
@@ -1685,7 +1750,7 @@ int21_write:
     jc .io_error
 
     mov ax, 512
-    sub ax, [cs:tmp_cluster_off]
+    sub ax, [cs:tmp_sector_off]
     mov dx, [cs:tmp_rw_remaining]
     cmp dx, ax
     ja .chunk_ready
@@ -1699,7 +1764,7 @@ int21_write:
     add si, [cs:tmp_rw_done]
     mov ax, DOS_IO_BUF_SEG
     mov es, ax
-    mov di, [cs:tmp_cluster_off]
+    mov di, [cs:tmp_sector_off]
     mov cx, [cs:tmp_chunk]
     rep movsb
     mov ax, cs
@@ -2019,8 +2084,8 @@ int21_cluster_for_pos:
     push cx
 
     mov dx, ax
-    and dx, 0x01FF
-    mov cl, 9
+    and dx, FAT_CLUSTER_MASK
+    mov cl, FAT_CLUSTER_SHIFT
     shr ax, cl
     mov cx, ax
 
@@ -2055,6 +2120,10 @@ int21_cluster_for_pos:
 
 int21_cluster_to_lba:
     sub ax, 2
+%if FAT_CLUSTER_SECTOR_SHIFT > 0
+    mov cl, FAT_CLUSTER_SECTOR_SHIFT
+    shl ax, cl
+%endif
     add ax, FAT_DATA_START_LBA
     ret
 
@@ -4666,6 +4735,7 @@ tmp_rw_done dw 0
 tmp_chunk dw 0
 tmp_cluster dw 0
 tmp_cluster_off dw 0
+tmp_sector_off dw 0
 tmp_lba dw 0
 tmp_capacity dw 0
 tmp_next_cluster dw 0

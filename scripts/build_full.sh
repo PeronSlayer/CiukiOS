@@ -20,6 +20,7 @@ STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 
 FAT_SPT=63
 FAT_HEADS=16
+FAT_SECTORS_PER_CLUSTER=8
 FAT_RESERVED_SECTORS=$((1 + STAGE1_SECTORS))
 FAT_SECTORS_PER_FAT=128
 FAT_COUNT=2
@@ -64,6 +65,7 @@ nasm -f bin "$STAGE1_SRC" \
 	-D FAT_SPT="$FAT_SPT" \
 	-D FAT_HEADS="$FAT_HEADS" \
 	-D FAT_RESERVED_SECTORS="$FAT_RESERVED_SECTORS" \
+	-D FAT_SECTORS_PER_CLUSTER="$FAT_SECTORS_PER_CLUSTER" \
 	-D FAT_SECTORS_PER_FAT="$FAT_SECTORS_PER_FAT" \
 	-D FAT_ROOT_DIR_SECTORS="$ROOT_DIR_SECTORS" \
 	-D FAT_TYPE=16 \
@@ -105,9 +107,9 @@ fi
 
 # FAT16 sector (little-endian 16-bit entries):
 #  [0]=0xFFF8 media+reserved, [1]=0xFFFF, [2]=EOF(COMDEMO), [3]=EOF(MZDEMO),
-#  [4]=0x0005 FILEIO chain->5, [5]=EOF(FILEIO), [6]=EOF(DELTEST), [7]=EOF(STAGE2)
+#  [4]=EOF(FILEIO), [5]=free, [6]=EOF(DELTEST), [7]=EOF(STAGE2)
 FAT_SECTOR_BIN="build/full/obj/fat16_sector.bin"
-printf 'F8FFFFFFFFFFFFFF0500FFFFFFFFFFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
+printf 'F8FFFFFFFFFFFFFFFFFF0000FFFFFFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
 dd if=/dev/zero bs=1 count=$((512 - 16)) status=none >> "$FAT_SECTOR_BIN"
 
 # Helper: write a 32-byte FAT root directory entry
@@ -146,11 +148,11 @@ dd if="$ROOT_ENTRY_MZDEMO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=no
 dd if="$ROOT_ENTRY_FILEIO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_DELTEST" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_STAGE2"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
-dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 0)) count=1 conv=notrunc status=none
-dd if="$MZDEMO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
-dd if="$FILEIO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + 2)) count=2 conv=notrunc status=none
-dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 4)) count=1 conv=notrunc status=none
-dd if="$STAGE2_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + 5)) count=1 conv=notrunc status=none
+dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((2 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
+dd if="$MZDEMO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((3 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
+dd if="$FILEIO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((4 - 2) * FAT_SECTORS_PER_CLUSTER))) count=2 conv=notrunc status=none
+dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((6 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
+dd if="$STAGE2_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((7 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
 
 OPENGEM_STAGE_DIR="build/full/obj/opengem_stage"
 mkdir -p "$OPENGEM_STAGE_DIR"
@@ -179,9 +181,15 @@ if [[ "$INCLUDE_OPENGEM_PAYLOAD" != "1" ]]; then
 	echo "[build-full] OpenGEM payload injection disabled (CIUKIOS_INCLUDE_OPENGEM=$INCLUDE_OPENGEM_PAYLOAD)"
 elif command -v mcopy >/dev/null 2>&1; then
 	if compgen -G "$OPENGEM_STAGE_DIR/*" >/dev/null; then
-		echo "[build-full] injecting OpenGEM payload files into FAT16 root"
+		echo "[build-full] injecting OpenGEM payload files (root + GEMAPPS/GEMSYS)"
+		if command -v mmd >/dev/null 2>&1; then
+			mmd -i "$IMG" ::GEMAPPS >/dev/null 2>&1 || true
+			mmd -i "$IMG" ::GEMAPPS/GEMSYS >/dev/null 2>&1 || true
+		fi
 		for f in "$OPENGEM_STAGE_DIR"/*; do
-			mcopy -o -i "$IMG" "$f" "::$(basename "$f")" >/dev/null
+			base="$(basename "$f")"
+			mcopy -o -i "$IMG" "$f" "::$base" >/dev/null
+			mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMSYS/$base" >/dev/null || true
 		done
 	else
 		echo "[build-full] OpenGEM payload not found at $OPENGEM_PAYLOAD_DIR (skipping)"
