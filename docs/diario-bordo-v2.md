@@ -25,3 +25,4 @@
 22. Milestone: switched Stage1 `comdemo` and `mzdemo` validation paths to use DOS `AH=4Bh` execution flow.
 23. Milestone: added minimal MCB-compatible header behavior to Stage1 memory services (`INT 21h AH=48h/49h/4Ah`).
 24. Milestone: added Stage1 DTA and file search baseline (`INT 21h AH=1Ah/4Eh/4Fh`) with deterministic `findtest` coverage.
+25. Milestone: added Stage1 drive/CWD compatibility baseline (`INT 21h AH=19h/0Eh/3Bh/47h`).

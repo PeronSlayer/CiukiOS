@@ -16,6 +16,7 @@ This changelog is intentionally concise and includes only major milestones.
 10. Switched Stage1 `comdemo` and `mzdemo` flows to execute through DOS `AH=4Bh` instead of direct internal launch paths.
 11. Added minimal MCB-compatible memory block header behavior for `INT 21h AH=48h/49h/4Ah`.
 12. Added Stage1 `INT 21h` DTA and directory search baseline (`AH=1Ah/4Eh/4Fh`) with deterministic `FIND-SERIAL` regression markers.
+13. Added Stage1 default-drive and CWD baseline services (`INT 21h AH=19h/0Eh/3Bh/47h`) for DOS runtime compatibility.
 
 ## pre-Alpha v0.5.5 (2026-04-22)
 1. Completed Stage1 milestone with deterministic `stage0 -> stage1` handoff and stable BIOS diagnostics (`INT 10h/13h/16h/1Ah`).

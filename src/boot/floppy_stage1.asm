@@ -110,6 +110,7 @@ install_int21_vector:
     mov byte [int21_installed], 1
     mov byte [last_exit_code], 0
     mov byte [last_term_type], 0
+    mov byte [dos_default_drive], 0
     mov byte [find_active], 0
     mov ax, cs
     mov [dta_seg], ax
@@ -139,8 +140,14 @@ int21_handler:
     je .fn_02
     cmp ah, 0x09
     je .fn_09
+    cmp ah, 0x0E
+    je .fn_0e
     cmp ah, 0x1A
     je .fn_1a
+    cmp ah, 0x19
+    je .fn_19
+    cmp ah, 0x3B
+    je .fn_3b
     cmp ah, 0x3D
     je .fn_3d
     cmp ah, 0x3E
@@ -153,6 +160,8 @@ int21_handler:
     je .fn_41
     cmp ah, 0x42
     je .fn_42
+    cmp ah, 0x47
+    je .fn_47
     cmp ah, 0x4E
     je .fn_4e
     cmp ah, 0x4F
@@ -187,8 +196,23 @@ int21_handler:
     call serial_putc
     jmp .fn_09_loop
 
+.fn_0e:
+    call int21_set_default_drive
+    jc .error
+    jmp .success
+
 .fn_1a:
     call int21_set_dta
+    jc .error
+    jmp .success
+
+.fn_19:
+    call int21_get_default_drive
+    jc .error
+    jmp .success
+
+.fn_3b:
+    call int21_chdir
     jc .error
     jmp .success
 
@@ -219,6 +243,11 @@ int21_handler:
 
 .fn_42:
     call int21_seek
+    jc .error
+    jmp .success
+
+.fn_47:
+    call int21_getcwd
     jc .error
     jmp .success
 
@@ -325,6 +354,29 @@ int21_smoke_test:
     mov al, ah
     call print_hex8_dual
     call print_newline_dual
+
+    mov ah, 0x19
+    int 0x21
+    cmp al, 0
+    jne .fail
+
+    xor dx, dx
+    mov ah, 0x0E
+    int 0x21
+    jc .fail
+
+    mov dx, path_root_dos
+    mov ah, 0x3B
+    int 0x21
+    jc .fail
+
+    mov si, cwd_buf
+    xor dl, dl
+    mov ah, 0x47
+    int 0x21
+    jc .fail
+    cmp byte [cwd_buf], 0
+    jne .fail
 
     mov bx, 0x0020
     mov ah, 0x48
@@ -715,6 +767,47 @@ int21_set_dta:
     mov ax, ds
     mov [cs:dta_seg], ax
     mov [cs:dta_off], dx
+    xor ax, ax
+    clc
+    ret
+
+int21_get_default_drive:
+    xor ah, ah
+    mov al, [cs:dos_default_drive]
+    clc
+    ret
+
+int21_set_default_drive:
+    cmp dl, 1
+    ja .invalid
+    mov [cs:dos_default_drive], dl
+    mov al, 1
+    xor ah, ah
+    clc
+    ret
+.invalid:
+    mov ax, 0x000F
+    stc
+    ret
+
+int21_chdir:
+    mov si, dx
+    cmp byte [si], 0
+    je .ok
+    cmp byte [si], '\'
+    je .ok
+    cmp byte [si], '/'
+    je .ok
+    mov ax, 0x0003
+    stc
+    ret
+.ok:
+    xor ax, ax
+    clc
+    ret
+
+int21_getcwd:
+    mov byte [ds:si], 0
     xor ax, ax
     clc
     ret
@@ -2974,6 +3067,7 @@ serial_putc:
 boot_drive db 0
 int21_installed db 0
 int21_carry db 0
+dos_default_drive db 0
 last_exit_code db 0
 last_term_type db 0
 old_int21_off dw 0
@@ -3107,3 +3201,5 @@ path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
 path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
+path_root_dos    db "\", 0
+cwd_buf times 8 db 0
