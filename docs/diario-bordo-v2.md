@@ -32,3 +32,11 @@
 29. Milestone: upgraded the Stage1 graphics smoke path to a non-blocking timer/input-driven demo loop instead of a fixed blocking frame hold.
 30. Milestone: introduced a small VDI-like video compatibility layer (`vdi_enter_graphics`, `vdi_bar`, `vdi_box`, `vdi_line`, `vdi_gtext`) as the first bridge toward the OpenGEM rendering path.
 31. Action: expanded the Stage1 reserved loader budget from 18 to 20 sectors to keep the new graphics baseline stable in both floppy and full profiles.
+32. Milestone: implemented FAT16 multi-sector cluster semantics in Stage1 DOS runtime core paths (`open/read/write/exec`) and fixed root-file load cluster-to-LBA conversion for Stage2 chainload.
+33. Milestone: aligned full-profile FAT16 image build with 8-sector cluster geometry, including coherent FAT entries and cluster-based payload placement.
+34. Milestone: expanded DOS compatibility with additional `INT 21h` services (`2Ah`, `2Ch`, `33h`, `34h`, `36h`, `52h`, `54h`, `58h`) and minimal `INT 2Fh` multiplex handler.
+35. Milestone: corrected `INT 21h` register return behavior for `ES:BX`-based APIs and added serial diagnostics for unsupported DOS calls (`[INT21-UNSUP]`).
+36. Milestone: integrated OpenGEM payload in both root and `GEMAPPS/GEMSYS` layouts in the full image and hardened Stage2 launcher with deterministic trace markers.
+37. Action: introduced guarded OpenGEM safe-launch mode (default) to prevent shell hard-hang while preserving an opt-in real execution path for compatibility testing.
+38. Action: expanded Stage1 reserved loader budget from 21 to 22 sectors in both full and floppy profiles to absorb DOS runtime completion work.
+39. Release: bumped project version to `CiukiOS pre-Alpha v0.5.7` after DOS runtime compatibility expansion and regression validation.

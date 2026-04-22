@@ -4,11 +4,15 @@ All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
 ## Unreleased
-1. Refined the Stage1 shell UX with a text-mode boot splash, loading bar, white title banner, clearer help output, and a logical `root -> system files | applications` layout.
-2. Started Phase 3 with a Stage1 VGA mode 13h graphics demo path (`gfxdemo`) and deterministic `GFX-SERIAL` regression coverage.
-3. Added reusable Stage1 mode 13h primitives for pixels, lines, rectangles, and bitmap text rendering.
-4. Extended the Stage1 graphics smoke path with non-blocking timer/input handling and a small VDI-like compatibility layer to prepare the future OpenGEM video path.
-5. Expanded the Stage1 loader slot from 18 to 20 sectors to absorb the new graphics baseline.
+
+## pre-Alpha v0.5.7 (2026-04-22)
+1. Extended Stage1 FAT16 runtime to handle multi-sector clusters in core DOS paths (`open/read/write/exec`) and fixed cluster-to-LBA mapping inconsistencies.
+2. Reworked full-profile FAT16 image assembly to align built-in payload FAT entries and data placement with 8-sector cluster geometry.
+3. Expanded DOS compatibility surface with additional `INT 21h` handlers (`2Ah`, `2Ch`, `33h`, `34h`, `36h`, `52h`, `54h`, `58h`) plus minimal `INT 2Fh` multiplex support.
+4. Corrected `INT 21h` register return semantics for `ES:BX`-returning functions and added serial diagnostics for unsupported `INT 21h` calls.
+5. Added OpenGEM payload dual-layout injection (`root` and `GEMAPPS/GEMSYS`) for the full profile image.
+6. Improved Stage2 OpenGEM launcher flow with deterministic progress markers, primary GEM path attempts, and explicit guarded-safe mode to avoid hard shell hangs.
+7. Increased Stage1 reserved slot from 21 to 22 sectors in both full and floppy profiles to absorb DOS runtime growth while keeping regression gates green.
 
 ## pre-Alpha v0.5.6 (2026-04-22)
 1. Phase 2 work in progress: move from embedded `.COM` demo payloads to FAT-backed `.COM` loading and execution.
