@@ -3,6 +3,10 @@
 ## Vision
 Build a simple, native x86 BIOS operating system that runs DOS and pre-NT workloads without CPU emulation in the final runtime path.
 
+## Normative References
+1. DOS core contract: `docs/dos-core-spec-v0.1.md`
+2. DOS core execution plan: `docs/dos-core-implementation-plan-v0.1.md`
+
 ## Phase 0 - Reset Foundation
 1. Archive previous project state under `OLD/`.
 2. Define and freeze legacy-first architecture.
