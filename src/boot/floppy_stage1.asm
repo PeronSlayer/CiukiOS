@@ -4273,23 +4273,15 @@ draw_shell_chrome:
     mov bl, 0x70
     call video_write_string_attr
 
-    mov al, ' '
-    mov dh, 2
-    mov dl, 0
-    mov bl, 0x70
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
-
     mov si, msg_shell_hint
-    mov dh, 3
-    mov dl, 2
+    mov dh, 2
+    mov dl, 20
     mov bl, 0x1E
     call video_write_string_attr
 
     mov si, msg_shell_quick
-    mov dh, 4
-    mov dl, 2
+    mov dh, 3
+    mov dl, 20
     mov bl, 0x0F
     call video_write_string_attr
 
