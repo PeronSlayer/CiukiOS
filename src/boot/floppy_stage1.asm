@@ -372,10 +372,6 @@ int21_smoke_test:
     mov si, msg_dos21_begin
     call print_string_dual
 
-    mov ax, cs
-    mov ds, ax
-
-    mov dx, msg_dos21_ah09
     mov ah, 0x09
     int 0x21
 
@@ -472,7 +468,7 @@ int21_exec:
     push es
 
     cmp al, 0x00
-    jne .bad_function
+        mov byte [si], '\'
 
     mov si, dx
     call int21_path_to_fat_name
@@ -3492,6 +3488,18 @@ dispatch_command:
     call str_eq
     jc .cmd_drive
     mov di, bx
+    mov si, str_dir
+    call str_eq
+    jc .cmd_dir
+    mov di, bx
+    mov si, str_cdup
+    call str_eq
+    jc .cmd_cdup
+    mov di, bx
+    mov si, str_cd
+    call str_eq
+    jc .cmd_cd
+    mov di, bx
     mov si, str_dos21
     call str_eq
     jc .cmd_dos21
@@ -3566,6 +3574,18 @@ dispatch_command:
     mov al, [boot_drive]
     call print_hex8_dual
     call print_newline_dual
+    jmp .done
+
+.cmd_dir:
+    call shell_cmd_dir
+    jmp .done
+
+.cmd_cd:
+    call shell_cmd_cd
+    jmp .done
+
+.cmd_cdup:
+    call shell_cmd_cdup
     jmp .done
 
 .cmd_dos21:
@@ -3668,6 +3688,191 @@ skip_spaces:
 .done:
     ret
 
+shell_arg_ptr:
+    mov si, bx
+.scan_token:
+    mov al, [si]
+    cmp al, 0
+    je .done
+    cmp al, ' '
+    je .skip_tail_spaces
+    inc si
+    jmp .scan_token
+
+.skip_tail_spaces:
+    call skip_spaces
+.done:
+    ret
+
+shell_trim_first_arg:
+.scan:
+    cmp byte [si], 0
+    je .done
+    cmp byte [si], ' '
+    je .term
+    inc si
+    jmp .scan
+.term:
+    mov byte [si], 0
+.done:
+    ret
+
+shell_cmd_cdup:
+    push ax
+    push dx
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+    mov dx, path_root_dos
+    mov ah, 0x3B
+    int 0x21
+    jc .fail
+    jmp .ok
+
+.fail:
+    mov si, msg_cd_fail
+    call print_string_dual
+.ok:
+    pop ds
+    pop dx
+    pop ax
+    ret
+
+shell_cmd_cd:
+    push ax
+    push bx
+    push dx
+    push si
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .show
+
+    cmp byte [si], '.'
+    jne .not_dot
+    cmp byte [si + 1], 0
+    je .done
+    cmp byte [si + 1], '.'
+    jne .not_dot
+    cmp byte [si + 2], 0
+    je .go_root
+
+.not_dot:
+    push si
+    call shell_trim_first_arg
+    pop si
+    cmp byte [si], '/'
+    jne .call_chdir
+    mov byte [si], '\'
+
+.call_chdir:
+    mov dx, si
+    mov ah, 0x3B
+    int 0x21
+    jc .fail
+    jmp .done
+
+.go_root:
+    mov dx, path_root_dos
+    mov ah, 0x3B
+    int 0x21
+    jc .fail
+    jmp .done
+
+.show:
+    mov si, msg_cwd_prefix
+    call print_string_dual
+    mov si, cwd_buf
+    xor dl, dl
+    mov ah, 0x47
+    int 0x21
+    jc .fail
+    cmp byte [cwd_buf], 0
+    jne .print_cwd
+    mov si, path_root_dos
+    call print_string_dual
+    call print_newline_dual
+    jmp .done
+
+.print_cwd:
+    mov si, cwd_buf
+    call print_string_dual
+    call print_newline_dual
+    jmp .done
+
+.fail:
+    mov si, msg_cd_fail
+    call print_string_dual
+
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+shell_cmd_dir:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+
+.dir_start:
+    mov dx, find_dta
+    mov ah, 0x1A
+    int 0x21
+
+    mov dx, path_pattern_all_dos
+    xor cx, cx
+    mov ah, 0x4E
+    int 0x21
+    jc .dir_first_fail
+
+.dir_loop:
+    mov si, find_dta + 0x1E
+    call print_string_dual
+
+    call print_newline_dual
+
+.next:
+    mov ah, 0x4F
+    int 0x21
+    jnc .dir_loop
+    cmp ax, 0x0012
+    jne .dir_fail
+    jmp .done
+
+.dir_first_fail:
+    cmp ax, 0x0012
+    jne .dir_fail
+    mov si, msg_dir_empty
+    call print_string_dual
+    jmp .done
+
+.dir_fail:
+    mov si, msg_dir_fail
+    call print_string_dual
+
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; Compare DI (input command) to SI (constant command string).
 ; Carry set if equal and fully terminated.
 str_eq:
@@ -3753,7 +3958,7 @@ video_write_char_attr:
     push di
     push es
     mov ch, bl
-    mov ah, al
+    mov cl, al
     xor ax, ax
     mov al, dh
     mov di, ax
@@ -3767,7 +3972,7 @@ video_write_char_attr:
     add di, ax
     mov ax, 0xB800
     mov es, ax
-    mov al, ah
+    mov al, cl
     mov ah, ch
     mov [es:di], ax
     pop es
@@ -4284,7 +4489,7 @@ msg_shell_layout db "layout: root -> system files | applications (reserved)", 0
 msg_shell_hint db "type 'help' for commands, 'tree' for logical layout, 'ver' for version", 13, 10, 0
 msg_shell_footer db " shell ready | use 'help' | run 'gfxdemo' manually for graphics test ", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
-msg_help_core db "  core:   help  ver  tree  cls  ticks  drive", 13, 10, 0
+msg_help_core db "  core:   help  ver  tree  cls  ticks  drive  dir  cd  cd..", 13, 10, 0
 msg_help_runtime db "  dos:    dos21  comdemo  mzdemo  fileio  findtest  gfxdemo", 13, 10, 0
 msg_help_system db "  system: reboot  halt", 13, 10, 0
 msg_help_apps db "  apps:   reserved for future installed applications", 13, 10, 0
@@ -4321,6 +4526,10 @@ msg_gfx_done db "[STAGE1] VGA primitives + timer/input smoke done", 13, 10, 0
 msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
+msg_dir_empty db "no files found", 13, 10, 0
+msg_dir_fail db "dir failed", 13, 10, 0
+msg_cd_fail db "cd failed", 13, 10, 0
+msg_cwd_prefix db "cwd=", 0
 splash_title db "CiukiOS", 0
 splash_subtitle db "Legacy BIOS runtime loading...", 0
 splash_status db "initializing stage1 runtime", 0
@@ -4336,6 +4545,9 @@ str_tree   db "tree", 0
 str_cls    db "cls", 0
 str_ticks  db "ticks", 0
 str_drive  db "drive", 0
+str_dir    db "dir", 0
+str_cd     db "cd", 0
+str_cdup   db "cd..", 0
 str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_mzdemo db "mzdemo", 0
@@ -4351,6 +4563,7 @@ path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
 path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
+path_pattern_all_dos db "*.*", 0
 path_root_dos    db "\", 0
 cwd_buf times 8 db 0
 gfx_draw_color db 0
