@@ -4275,13 +4275,13 @@ draw_shell_chrome:
 
     mov si, msg_shell_hint
     mov dh, 2
-    mov dl, 20
+    mov dl, 2
     mov bl, 0x1E
     call video_write_string_attr
 
     mov si, msg_shell_quick
     mov dh, 3
-    mov dl, 20
+    mov dl, 2
     mov bl, 0x0F
     call video_write_string_attr
 
