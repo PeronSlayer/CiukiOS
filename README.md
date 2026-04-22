@@ -70,3 +70,9 @@ If you want to support CiukiOS development, see:
 
 ## Credits
 Developed collaboratively with AI-assisted workflows and human-driven architecture decisions.
+
+The name **CiukiOS** comes from a private joke between me and my girlfriend about our dog Jack (Jacky), who is no longer with us.
+His nickname was **Ciuk/Ciuki**, and we used to joke that if we ever built an operating system, we would call it **CiukiOS**.
+
+So this is why is dedicated to one of the best dogs i ever met, Jack.
+
