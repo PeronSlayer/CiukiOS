@@ -22,25 +22,35 @@ pick_qemu() {
 
 usage() {
   cat << 'TXT'
-Usage: scripts/qemu_run_full.sh [--no-build] [--dry-run] [--display <backend>]
+Usage: scripts/qemu_run_full.sh [--test] [--no-build] [--dry-run] [--display <backend>]
+
+Modes:
+  default            Visual run mode (GUI window).
+  --test             Smoke-test mode (headless with timeout).
 
 Options:
   --no-build           Skip image build step.
   --dry-run            Print the QEMU command without running it.
-  --display <backend>  QEMU display backend (default: gtk).
+  --display <backend>  QEMU display backend in visual mode (default: gtk).
 
 Environment:
   QEMU_BIN         Override QEMU binary.
   QEMU_EXTRA_ARGS  Extra args appended to QEMU command.
+  QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
 TXT
 }
 
+MODE="visual"
 DO_BUILD=1
 DRY_RUN=0
 DISPLAY_BACKEND="${QEMU_DISPLAY:-gtk}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --test)
+      MODE="test"
+      shift
+      ;;
     --no-build)
       DO_BUILD=0
       shift
@@ -85,12 +95,56 @@ if [[ ! -f "$IMG" ]]; then
   exit 1
 fi
 
-QEMU_ARGS=(
+BASE_ARGS=(
   -M pc
   -cpu pentium3
   -m 128
   -drive "file=$IMG,format=raw,if=ide"
   -boot c
+)
+
+if [[ "$MODE" == "test" ]]; then
+  TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-8}"
+
+  QEMU_ARGS=(
+    "${BASE_ARGS[@]}"
+    -nographic
+    -serial mon:stdio
+    -no-reboot
+    -no-shutdown
+  )
+
+  if [[ -n "${QEMU_EXTRA_ARGS:-}" ]]; then
+    # shellcheck disable=SC2206
+    EXTRA_ARGS=(${QEMU_EXTRA_ARGS})
+    QEMU_ARGS+=("${EXTRA_ARGS[@]}")
+  fi
+
+  echo "[qemu-run-full] running smoke test with $QEMU_CMD (timeout=${TIMEOUT_SEC}s)"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '[qemu-run-full] dry-run:'
+    printf ' %q' timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}"
+    printf '\n'
+    exit 0
+  fi
+
+  set +e
+  timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}"
+  RC=$?
+  set -e
+
+  if [[ $RC -eq 0 || $RC -eq 124 ]]; then
+    echo "[qemu-run-full] PASS (smoke execution completed)"
+    exit 0
+  fi
+
+  echo "[qemu-run-full] FAIL (qemu exit code: $RC)" >&2
+  exit "$RC"
+fi
+
+QEMU_ARGS=(
+  "${BASE_ARGS[@]}"
   -display "$DISPLAY_BACKEND"
   -serial stdio
 )
