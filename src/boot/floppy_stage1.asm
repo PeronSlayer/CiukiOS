@@ -4590,12 +4590,12 @@ msg_prompt    db "root:\> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
 msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
 msg_shell_layout db "layout: root", 0
-msg_shell_hint db "DOS shell loaded", 0
+msg_shell_hint db "CiukiDOS shell loaded", 0
 msg_shell_quick db "cmd: help  dir  cd  cd..  cls  ver  tree", 0
 msg_shell_footer db "ready", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
 msg_help_core db "core: help ver tree cls ticks drive dir cd cd..", 13, 10, 0
-msg_help_runtime db "dos: dos21 comdemo mzdemo fileio findtest gfxdemo", 13, 10, 0
+msg_help_runtime db "ciukidos: dos21 comdemo mzdemo fileio findtest gfxdemo", 13, 10, 0
 msg_help_system db "system: reboot halt", 13, 10, 0
 msg_help_apps db "apps: reserved", 13, 10, 0
 msg_version_line db "CiukiOS pre-Alpha v0.5.6", 13, 10, 0
@@ -4605,8 +4605,8 @@ msg_tree_system db "   |- SYSTEM FILES", 13, 10, 0
 msg_tree_apps db "   `- APPLICATIONS", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
-msg_dos21_begin db "[STAGE1] INT21h smoke", 13, 10, 0
-msg_dos21_ah09 db "[INT21/AH=09h] console path active", 13, 10, '$'
+msg_dos21_begin db "[STAGE1] CiukiDOS INT21h smoke", 13, 10, 0
+msg_dos21_ah09 db "[INT21/AH=09h] CiukiDOS console path active", 13, 10, '$'
 msg_dos21_status db "[INT21/AH=4Dh] code/type=0x", 0
 msg_dos21_serial_pass db "[DOS21-SERIAL] PASS", 13, 10, 0
 msg_dos21_serial_fail db "[DOS21-SERIAL] FAIL", 13, 10, 0
