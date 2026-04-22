@@ -212,12 +212,27 @@ run_stage1_selftest:
     call print_string_dual
     mov si, msg_stage1_selftest_serial_begin
     call print_string_serial
-    call int21_smoke_test
-    call run_com_demo
+    mov si, cmd_selftest_dos21
+    call load_cmd_buffer
+    call dispatch_command
+    mov si, cmd_selftest_comdemo
+    call load_cmd_buffer
+    call dispatch_command
     mov si, msg_stage1_selftest_done
     call print_string_dual
     mov si, msg_stage1_selftest_serial_done
     call print_string_serial
+    ret
+
+load_cmd_buffer:
+    push di
+    mov di, cmd_buffer
+.copy:
+    lodsb
+    stosb
+    test al, al
+    jnz .copy
+    pop di
     ret
 
 run_com_demo:
@@ -411,6 +426,9 @@ read_sector_lba:
     push bx
     push cx
     push dx
+    push si
+
+    mov si, bx
 
     xor dx, dx
     mov cx, FAT_SPT
@@ -425,12 +443,14 @@ read_sector_lba:
 
     mov ch, al
     mov dh, dl
+    mov bx, si
     mov dl, [boot_drive]
 
     mov ah, 0x02
     mov al, 0x01
     int 0x13
 
+    pop si
     pop dx
     pop cx
     pop bx
@@ -440,31 +460,40 @@ dispatch_command:
     mov si, cmd_buffer
     call skip_spaces
     mov di, si
+    mov bx, di
 
     cmp byte [di], 0
     je .done
 
+    mov di, bx
     mov si, str_help
     call str_eq
     jc .cmd_help
+    mov di, bx
     mov si, str_cls
     call str_eq
     jc .cmd_cls
+    mov di, bx
     mov si, str_ticks
     call str_eq
     jc .cmd_ticks
+    mov di, bx
     mov si, str_drive
     call str_eq
     jc .cmd_drive
+    mov di, bx
     mov si, str_dos21
     call str_eq
     jc .cmd_dos21
+    mov di, bx
     mov si, str_comdemo
     call str_eq
     jc .cmd_comdemo
+    mov di, bx
     mov si, str_reboot
     call str_eq
     jc .cmd_reboot
+    mov di, bx
     mov si, str_halt
     call str_eq
     jc .cmd_halt
@@ -781,5 +810,8 @@ str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
+
+cmd_selftest_dos21 db "dos21", 0
+cmd_selftest_comdemo db "comdemo", 0
 
 fat_comdemo_name db "COMDEMO COM"
