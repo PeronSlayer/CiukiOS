@@ -4281,12 +4281,6 @@ draw_shell_chrome:
     mov cl, 80
     call draw_hline_attr
 
-    mov si, msg_shell_layout
-    mov dh, 2
-    mov dl, 2
-    mov bl, 0x70
-    call video_write_string_attr
-
     mov si, msg_shell_hint
     mov dh, 3
     mov dl, 2
@@ -4589,7 +4583,7 @@ msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
 msg_prompt    db "root:\> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
 msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
-msg_shell_hint db "CiukiDOS Shell , 0
+msg_shell_hint db "CiukiDOS Shell", 0
 msg_shell_quick db "For commands write Help and press send", 0
 msg_shell_footer db "ready", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
