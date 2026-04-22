@@ -3633,6 +3633,9 @@ dispatch_command:
     xor bx, bx
     mov ax, 0x4B00
     int 0x21
+    jnc .done
+    mov si, msg_mz_load_fail
+    call print_string_dual
     jmp .done
 %endif
 
