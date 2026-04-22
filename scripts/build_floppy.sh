@@ -9,7 +9,7 @@ BOOT_BIN="build/floppy/obj/floppy_boot.bin"
 STAGE1_SRC="src/boot/floppy_stage1.asm"
 STAGE1_BIN="build/floppy/obj/floppy_stage1.bin"
 STAGE1_SLOT_BIN="build/floppy/obj/floppy_stage1_slot.bin"
-STAGE1_SECTORS=8
+STAGE1_SECTORS=12
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 COMDEMO_SRC="src/com/comdemo.asm"
 COMDEMO_BIN="build/floppy/obj/comdemo.com"
@@ -17,6 +17,12 @@ COMDEMO_MAX_SIZE=512
 MZDEMO_SRC="src/com/mzdemo.asm"
 MZDEMO_BIN="build/floppy/obj/mzdemo.exe"
 MZDEMO_MAX_SIZE=512
+FILEIO_SRC="src/com/fileio.bin.asm"
+FILEIO_BIN="build/floppy/obj/fileio.bin"
+FILEIO_MAX_SIZE=1024
+DELTEST_SRC="src/com/deltest.bin.asm"
+DELTEST_BIN="build/floppy/obj/deltest.bin"
+DELTEST_MAX_SIZE=512
 
 FAT_RESERVED_SECTORS=$((1 + STAGE1_SECTORS))
 FAT_SECTORS_PER_FAT=9
@@ -43,6 +49,14 @@ if [[ ! -f "$COMDEMO_SRC" ]]; then
 fi
 if [[ ! -f "$MZDEMO_SRC" ]]; then
   echo "[build-floppy] ERROR: MZ demo source not found: $MZDEMO_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$FILEIO_SRC" ]]; then
+  echo "[build-floppy] ERROR: fileio payload source not found: $FILEIO_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$DELTEST_SRC" ]]; then
+  echo "[build-floppy] ERROR: deltest payload source not found: $DELTEST_SRC" >&2
   exit 1
 fi
 
@@ -86,12 +100,34 @@ if [[ "$MZDEMO_SIZE" -gt "$MZDEMO_MAX_SIZE" ]]; then
   exit 1
 fi
 
+echo "[build-floppy] assembling file I/O payloads"
+nasm -f bin "$FILEIO_SRC" -o "$FILEIO_BIN"
+nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
+
+FILEIO_SIZE="$(stat -c%s "$FILEIO_BIN")"
+if [[ "$FILEIO_SIZE" -gt "$FILEIO_MAX_SIZE" ]]; then
+  echo "[build-floppy] ERROR: FILEIO payload is $FILEIO_SIZE bytes (max $FILEIO_MAX_SIZE)" >&2
+  exit 1
+fi
+if [[ "$FILEIO_SIZE" -le 512 ]]; then
+  echo "[build-floppy] ERROR: FILEIO payload must span >1 cluster (current $FILEIO_SIZE bytes)" >&2
+  exit 1
+fi
+
+DELTEST_SIZE="$(stat -c%s "$DELTEST_BIN")"
+if [[ "$DELTEST_SIZE" -gt "$DELTEST_MAX_SIZE" ]]; then
+  echo "[build-floppy] ERROR: DELTEST payload is $DELTEST_SIZE bytes (max $DELTEST_MAX_SIZE)" >&2
+  exit 1
+fi
+
 FAT_SECTOR_BIN="build/floppy/obj/fat_sector.bin"
 ROOT_ENTRY_BIN="build/floppy/obj/root_comdemo_entry.bin"
 ROOT_ENTRY_MZ_BIN="build/floppy/obj/root_mzdemo_entry.bin"
+ROOT_ENTRY_FILEIO_BIN="build/floppy/obj/root_fileio_entry.bin"
+ROOT_ENTRY_DELTEST_BIN="build/floppy/obj/root_deltest_entry.bin"
 
-printf 'F0FFFFFFFFFF' | xxd -r -p > "$FAT_SECTOR_BIN"
-dd if=/dev/zero bs=1 count=$((512 - 6)) status=none >> "$FAT_SECTOR_BIN"
+printf 'F0FFFFFFFFFF05F0FFFF0F00' | xxd -r -p > "$FAT_SECTOR_BIN"
+dd if=/dev/zero bs=1 count=$((512 - 12)) status=none >> "$FAT_SECTOR_BIN"
 
 dd if=/dev/zero of="$ROOT_ENTRY_BIN" bs=1 count=32 status=none
 printf 'COMDEMO COM' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=0 conv=notrunc status=none
@@ -105,6 +141,18 @@ printf '\x20' | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=11 conv=notrunc status=none
 printf '\x03\x00' | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=26 conv=notrunc status=none
 printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((MZDEMO_SIZE & 0xFF)) $(((MZDEMO_SIZE >> 8) & 0xFF)) $(((MZDEMO_SIZE >> 16) & 0xFF)) $(((MZDEMO_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=28 conv=notrunc status=none
 
+dd if=/dev/zero of="$ROOT_ENTRY_FILEIO_BIN" bs=1 count=32 status=none
+printf 'FILEIO  BIN' | dd of="$ROOT_ENTRY_FILEIO_BIN" bs=1 seek=0 conv=notrunc status=none
+printf '\x20' | dd of="$ROOT_ENTRY_FILEIO_BIN" bs=1 seek=11 conv=notrunc status=none
+printf '\x04\x00' | dd of="$ROOT_ENTRY_FILEIO_BIN" bs=1 seek=26 conv=notrunc status=none
+printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((FILEIO_SIZE & 0xFF)) $(((FILEIO_SIZE >> 8) & 0xFF)) $(((FILEIO_SIZE >> 16) & 0xFF)) $(((FILEIO_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_FILEIO_BIN" bs=1 seek=28 conv=notrunc status=none
+
+dd if=/dev/zero of="$ROOT_ENTRY_DELTEST_BIN" bs=1 count=32 status=none
+printf 'DELTEST BIN' | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=0 conv=notrunc status=none
+printf '\x20' | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=11 conv=notrunc status=none
+printf '\x06\x00' | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=26 conv=notrunc status=none
+printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((DELTEST_SIZE & 0xFF)) $(((DELTEST_SIZE >> 8) & 0xFF)) $(((DELTEST_SIZE >> 16) & 0xFF)) $(((DELTEST_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=28 conv=notrunc status=none
+
 echo "[build-floppy] creating 1.44MB floppy image"
 dd if=/dev/zero of=build/floppy/ciukios-floppy.img bs=512 count=2880 status=none
 dd if="$BOOT_BIN" of="$IMG" bs=512 count=1 conv=notrunc status=none
@@ -113,18 +161,24 @@ dd if="$FAT_SECTOR_BIN" of="$IMG" bs=512 seek="$FAT1_LBA" count=1 conv=notrunc s
 dd if="$FAT_SECTOR_BIN" of="$IMG" bs=512 seek="$FAT2_LBA" count=1 conv=notrunc status=none
 dd if="$ROOT_ENTRY_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_MZ_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_FILEIO_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_DELTEST_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
 dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek="$DATA_LBA" count=1 conv=notrunc status=none
 dd if="$MZDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
+dd if="$FILEIO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 2)) count=2 conv=notrunc status=none
+dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 4)) count=1 conv=notrunc status=none
 
 cat > build/floppy/README.txt << 'TXT'
 CiukiOS Legacy v2 - Floppy profile
 
 Image: ciukios-floppy.img (1.44MB)
 State: BIOS stage0 -> stage1 chain-loader baseline
-Boot path: stage0 at LBA0, stage1 payload in sectors 2-7
+Boot path: stage0 at LBA0, stage1 payload in sectors 2-13
 FAT layout: reserved sectors include stage1 area, FAT/root/data follow BPB geometry
 COM demo payload: COMDEMO.COM root entry + first cluster at FAT data start
 MZ demo payload: MZDEMO.EXE root entry + first cluster at FAT data start + 1
+FILEIO payload: FILEIO.BIN root entry + cluster chain 4->5 for multi-cluster I/O tests
+DELTEST payload: DELTEST.BIN root entry + cluster 6 for delete-path tests
 TXT
 
 echo "[build-floppy] done: $IMG"
