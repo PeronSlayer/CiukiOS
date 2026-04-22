@@ -2,6 +2,7 @@ bits 16
 org 0x0000
 
 %define CMD_BUF_LEN 64
+%define COM_LOAD_SEG 0x2000
 
 stage1_start:
     cli
@@ -194,6 +195,86 @@ int21_smoke_test:
     pop ds
     ret
 
+run_com_demo:
+    mov si, msg_com_begin
+    call print_string_dual
+
+    call build_com_demo_image
+
+    mov [saved_ss], ss
+    mov [saved_sp], sp
+    mov [saved_ds], ds
+    mov [saved_es], es
+
+    cli
+    mov ax, COM_LOAD_SEG
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0xFFFE
+    sti
+
+    call far [cs:com_entry_off]
+
+    cli
+    mov ax, cs
+    mov ds, ax
+    mov ax, [saved_ss]
+    mov ss, ax
+    mov sp, [saved_sp]
+    sti
+
+    mov ax, [saved_ds]
+    mov ds, ax
+    mov ax, [saved_es]
+    mov es, ax
+
+    mov ah, 0x4D
+    int 0x21
+
+    mov si, msg_com_done
+    call print_string_dual
+    call print_hex8_dual
+    call print_newline_dual
+    ret
+
+build_com_demo_image:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, COM_LOAD_SEG
+    mov es, ax
+
+    xor ax, ax
+    xor di, di
+    mov cx, 128
+    rep stosw
+
+    mov word [es:0x0000], 0x20CD
+    mov byte [es:0x0080], 0
+
+    mov si, com_demo_payload
+    mov di, 0x0100
+    mov cx, com_demo_payload_end - com_demo_payload
+    rep movsb
+
+    mov word [com_entry_off], 0x0100
+    mov word [com_entry_seg], COM_LOAD_SEG
+
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
 dispatch_command:
     mov si, cmd_buffer
     call skip_spaces
@@ -217,6 +298,9 @@ dispatch_command:
     mov si, str_dos21
     call str_eq
     jc .cmd_dos21
+    mov si, str_comdemo
+    call str_eq
+    jc .cmd_comdemo
     mov si, str_reboot
     call str_eq
     jc .cmd_reboot
@@ -270,6 +354,10 @@ dispatch_command:
 .cmd_dos21_missing:
     mov si, msg_int21_missing
     call print_string_dual
+    jmp .done
+
+.cmd_comdemo:
+    call run_com_demo
     jmp .done
 
 .cmd_reboot:
@@ -483,6 +571,12 @@ last_exit_code db 0
 last_term_type db 0
 old_int21_off dw 0
 old_int21_seg dw 0
+saved_ss dw 0
+saved_sp dw 0
+saved_ds dw 0
+saved_es dw 0
+com_entry_off dw 0
+com_entry_seg dw 0
 cmd_buffer times CMD_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] CiukiOS stage1 running", 13, 10, 0
@@ -498,13 +592,15 @@ msg_int21_missing db "[STAGE1] INT21h vector not installed", 13, 10, 0
 
 msg_prompt    db "ciukios> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
-msg_help      db "commands: help cls ticks drive dos21 reboot halt", 13, 10, 0
+msg_help      db "commands: help cls ticks drive dos21 comdemo reboot halt", 13, 10, 0
 msg_cleared   db "screen cleared", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
 msg_dos21_begin db "[STAGE1] INT21h smoke", 13, 10, 0
 msg_dos21_ah09 db "[INT21/AH=09h] console path active", 13, 10, '$'
 msg_dos21_status db "[INT21/AH=4Dh] code/type=0x", 0
+msg_com_begin db "[STAGE1] COM demo load/exec", 13, 10, 0
+msg_com_done  db "[STAGE1] COM demo exit code=0x", 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
 
@@ -513,5 +609,16 @@ str_cls    db "cls", 0
 str_ticks  db "ticks", 0
 str_drive  db "drive", 0
 str_dos21  db "dos21", 0
+str_comdemo db "comdemo", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
+
+com_demo_payload:
+    db 0xBA, 0x0C, 0x01          ; mov dx,0x010C
+    db 0xB4, 0x09                ; mov ah,0x09
+    db 0xCD, 0x21                ; int 0x21
+    db 0xB8, 0x37, 0x4C          ; mov ax,0x4C37
+    db 0xCD, 0x21                ; int 0x21
+    db 0xCB                      ; retf
+    db "COM demo via INT21h", 13, 10, '$'
+com_demo_payload_end:
