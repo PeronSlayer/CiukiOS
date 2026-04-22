@@ -3523,6 +3523,12 @@ dispatch_command:
     mov si, str_findtest
     call str_eq
     jc .cmd_findtest
+%if FAT_TYPE == 16
+    mov di, bx
+    mov si, str_opengem
+    call str_eq
+    jc .cmd_opengem
+%endif
     mov di, bx
     mov si, str_reboot
     call str_eq
@@ -3618,6 +3624,17 @@ dispatch_command:
 .cmd_findtest:
     call int21_find_test
     jmp .done
+
+%if FAT_TYPE == 16
+.cmd_opengem:
+    mov ax, cs
+    mov ds, ax
+    mov dx, path_opengem_dos
+    xor bx, bx
+    mov ax, 0x4B00
+    int 0x21
+    jmp .done
+%endif
 
 .cmd_reboot:
     mov si, msg_rebooting
@@ -4451,6 +4468,7 @@ serial_putc:
     ret
 
 ; Stage2 Extended Services Integration
+%if FAT_TYPE == 12
 convert_dec_buf:
     push ax
     push bx
@@ -4468,6 +4486,7 @@ convert_dec_buf:
     pop bx
     pop ax
     ret
+%endif
 .div_loop:
     xor dx, dx
     div bx
@@ -4646,7 +4665,9 @@ msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
 msg_shell_hint db "CiukiDOS Shell", 0
 msg_shell_quick db "For commands write Help and press send", 0
 msg_shell_footer db "ready", 0
+%if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
+%endif
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
 msg_help_core db "core: help ver tree cls ticks drive dir cd cd..", 13, 10, 0
 msg_help_runtime db "ciukidos: dos21 comdemo mzdemo fileio findtest gfxdemo", 13, 10, 0
@@ -4714,6 +4735,9 @@ str_mzdemo db "mzdemo", 0
 str_fileio db "fileio", 0
 str_gfxdemo db "gfxdemo", 0
 str_findtest db "findtest", 0
+%if FAT_TYPE == 16
+str_opengem db "opengem", 0
+%endif
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
 
@@ -4721,11 +4745,16 @@ path_comdemo_dos db "COMDEMO.COM", 0
 path_mzdemo_dos  db "MZDEMO.EXE", 0
 path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
+%if FAT_TYPE == 16
+path_opengem_dos db "OPENGEM.COM", 0
+%endif
 path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
 path_root_dos    db "\", 0
 cwd_buf times 8 db 0
+%if FAT_TYPE == 12
 ram_buf times 6 db 0
+%endif
 shell_dir_count dw 0
 shell_dir_name_buf times 16 db 0
 gfx_draw_color db 0
