@@ -33,6 +33,7 @@ check_marker "[COMDEMO-SERIAL] PASS"
 check_marker "[MZDEMO-SERIAL] PASS"
 check_marker "[FILEIO-SERIAL] PASS"
 check_marker "[FIND-SERIAL] PASS"
+check_marker "[GFX-SERIAL] PASS"
 check_marker "[STAGE1-SELFTEST] DONE"
 
-echo "[qemu-test-full-stage1] PASS (FAT16 stage1 selftest + INT21h + COM/MZ + file I/O + findfirst)"
+echo "[qemu-test-full-stage1] PASS (FAT16 stage1 selftest + INT21h + COM/MZ + file I/O + findfirst + VGA mode13h)"

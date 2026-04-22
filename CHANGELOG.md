@@ -3,6 +3,13 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
+## Unreleased
+1. Refined the Stage1 shell UX with a text-mode boot splash, loading bar, white title banner, clearer help output, and a logical `root -> system files | applications` layout.
+2. Started Phase 3 with a Stage1 VGA mode 13h graphics demo path (`gfxdemo`) and deterministic `GFX-SERIAL` regression coverage.
+3. Added reusable Stage1 mode 13h primitives for pixels, lines, rectangles, and bitmap text rendering.
+4. Extended the Stage1 graphics smoke path with non-blocking timer/input handling and a small VDI-like compatibility layer to prepare the future OpenGEM video path.
+5. Expanded the Stage1 loader slot from 18 to 20 sectors to absorb the new graphics baseline.
+
 ## pre-Alpha v0.5.6 (2026-04-22)
 1. Phase 2 work in progress: move from embedded `.COM` demo payloads to FAT-backed `.COM` loading and execution.
 2. Fixed Stage1 command dispatch to correctly parse `dos21` and `comdemo` from the interactive prompt.

@@ -26,3 +26,9 @@
 23. Milestone: added minimal MCB-compatible header behavior to Stage1 memory services (`INT 21h AH=48h/49h/4Ah`).
 24. Milestone: added Stage1 DTA and file search baseline (`INT 21h AH=1Ah/4Eh/4Fh`) with deterministic `findtest` coverage.
 25. Milestone: added Stage1 drive/CWD compatibility baseline (`INT 21h AH=19h/0Eh/3Bh/47h`).
+26. Milestone: refreshed the Stage1 shell presentation with a boot splash, loading bar, top banner, clearer help surface, and explicit logical root layout.
+27. Milestone: kicked off Phase 3 with a Stage1 VGA mode 13h graphics demo plus deterministic `GFX-SERIAL` regression marker coverage.
+28. Milestone: extracted reusable Stage1 VGA mode 13h drawing primitives for pixels, horizontal/vertical lines, rectangles, generic line drawing, and bitmap text.
+29. Milestone: upgraded the Stage1 graphics smoke path to a non-blocking timer/input-driven demo loop instead of a fixed blocking frame hold.
+30. Milestone: introduced a small VDI-like video compatibility layer (`vdi_enter_graphics`, `vdi_bar`, `vdi_box`, `vdi_line`, `vdi_gtext`) as the first bridge toward the OpenGEM rendering path.
+31. Action: expanded the Stage1 reserved loader budget from 18 to 20 sectors to keep the new graphics baseline stable in both floppy and full profiles.

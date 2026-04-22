@@ -12,7 +12,7 @@ STAGE1_SLOT_BIN="build/full/obj/full_stage1_slot.bin"
 
 IMG="build/full/ciukios-full.img"
 TOTAL_SECTORS=262144
-STAGE1_SECTORS=14
+STAGE1_SECTORS=20
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 
 FAT_SPT=63

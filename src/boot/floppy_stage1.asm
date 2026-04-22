@@ -19,7 +19,7 @@ org 0x0000
 %define FAT_HEADS 2
 %endif
 %ifndef FAT_RESERVED_SECTORS
-%define FAT_RESERVED_SECTORS 15
+%define FAT_RESERVED_SECTORS 21
 %endif
 %ifndef FAT_SECTORS_PER_FAT
 %define FAT_SECTORS_PER_FAT 9
@@ -58,17 +58,30 @@ stage1_start:
     mov [boot_drive], dl
 
     call serial_init
+    call show_boot_splash
+    mov al, 16
+    call splash_set_progress
 
     mov si, msg_stage1
-    call print_string_dual
+    call print_string_serial
     mov si, msg_stage1_serial
     call print_string_serial
 
+    mov al, 40
+    call splash_set_progress
     call run_bios_diagnostics
+    mov al, 68
+    call splash_set_progress
     call install_int21_vector
 %if STAGE1_SELFTEST_AUTORUN
+    mov al, 84
+    call splash_set_progress
     call run_stage1_selftest
 %endif
+
+    mov al, 100
+    call splash_set_progress
+    call draw_shell_chrome
 
 main_loop:
     mov ax, cs
@@ -2614,10 +2627,558 @@ run_stage1_selftest:
     call run_mz_demo
     call int21_fileio_test
     call int21_find_test
+    call run_gfx_demo
     mov si, msg_stage1_selftest_done
     call print_string_dual
     mov si, msg_stage1_selftest_serial_done
     call print_string_serial
+    ret
+
+run_gfx_demo:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    mov si, msg_gfx_begin
+    call print_string_dual
+
+    call vdi_enter_graphics
+    call gfx_demo_run
+    call vdi_leave_graphics
+    call draw_shell_chrome
+
+    mov si, msg_gfx_done
+    call print_string_dual
+    mov si, msg_gfx_serial_pass
+    call print_string_serial
+
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_demo_run:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    call gfx_get_tick_count
+    mov [gfx_demo_last_tick], dx
+    mov ax, dx
+    add ax, 10
+    mov [gfx_demo_deadline], ax
+
+.loop:
+    call gfx_try_read_key
+    jc .done
+
+    call gfx_get_tick_count
+    cmp dx, [gfx_demo_last_tick]
+    je .check_deadline
+    mov [gfx_demo_last_tick], dx
+    mov al, dl
+    call gfx_demo_render_frame
+
+.check_deadline:
+    mov ax, dx
+    cmp ax, [gfx_demo_deadline]
+    jb .loop
+
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_demo_render_frame:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+
+    mov [gfx_demo_frame], al
+
+    mov al, 1
+    call vdi_clear_screen
+
+    mov bx, 8
+    mov dx, 8
+    mov si, 304
+    mov di, 184
+    mov al, 9
+    call vdi_box
+
+    mov bx, 12
+    mov dx, 12
+    mov si, 296
+    mov di, 22
+    mov al, 3
+    call vdi_bar
+
+    mov bx, 12
+    mov dx, 38
+    mov si, 296
+    mov di, 150
+    mov al, 8
+    call vdi_bar
+
+    xor bx, bx
+    mov bl, [gfx_demo_frame]
+    and bx, 0x001F
+    shl bx, 3
+    add bx, 24
+    mov dx, 142
+    mov si, 48
+    mov di, 12
+    mov al, 10
+    call vdi_bar
+
+    mov bx, 24
+    mov dx, 60
+    mov si, 280
+    mov di, 60
+    mov al, 14
+    call vdi_line
+
+    mov bx, 24
+    mov dx, 160
+    mov si, 280
+    mov di, 100
+    mov al, 12
+    call vdi_line
+
+    mov bx, 36
+    mov dx, 20
+    mov si, gfx_text_ciukios
+    mov al, 15
+    call vdi_gtext
+
+    mov bx, 36
+    mov dx, 72
+    mov si, gfx_text_demo
+    mov al, 15
+    call vdi_gtext
+
+    mov bx, 36
+    mov dx, 92
+    mov si, gfx_text_vdi
+    mov al, 11
+    call vdi_gtext
+
+    mov bx, 36
+    mov dx, 112
+    mov si, gfx_text_timer
+    mov al, 15
+    call vdi_gtext
+
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+vdi_enter_graphics:
+    mov ax, 0x0013
+    int 0x10
+    ret
+
+vdi_leave_graphics:
+    mov ax, 0x0003
+    int 0x10
+    ret
+
+vdi_clear_screen:
+    push bx
+    push dx
+    push si
+    push di
+    xor bx, bx
+    xor dx, dx
+    mov si, 320
+    mov di, 200
+    call gfx_fill_rect
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+vdi_bar:
+    call gfx_fill_rect
+    ret
+
+vdi_box:
+    call gfx_draw_rect
+    ret
+
+vdi_line:
+    call gfx_draw_line
+    ret
+
+vdi_gtext:
+    call gfx_draw_text8
+    ret
+
+gfx_get_tick_count:
+    mov ah, 0x00
+    int 0x1A
+    ret
+
+gfx_try_read_key:
+    push ax
+    mov ah, 0x01
+    int 0x16
+    jz .none
+    xor ah, ah
+    int 0x16
+    stc
+    pop ax
+    ret
+.none:
+    clc
+    pop ax
+    ret
+
+gfx_plot_pixel:
+    push ax
+    push bx
+    push dx
+    push di
+    push es
+
+    mov di, dx
+    shl di, 6
+    mov bx, dx
+    shl bx, 8
+    add di, bx
+    add di, cx
+    mov bx, 0xA000
+    mov es, bx
+    mov [es:di], al
+
+    pop es
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+gfx_draw_hline:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    mov [gfx_draw_color], al
+    mov di, dx
+    shl di, 6
+    mov ax, dx
+    shl ax, 8
+    add di, ax
+    add di, bx
+    mov ax, 0xA000
+    mov es, ax
+    mov al, [gfx_draw_color]
+    rep stosb
+
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_draw_vline:
+    push ax
+    push bx
+    push cx
+    push dx
+
+.loop:
+    push cx
+    mov cx, bx
+    call gfx_plot_pixel
+    inc dx
+    pop cx
+    loop .loop
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_fill_rect:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov cx, di
+.row:
+    push cx
+    mov cx, si
+    call gfx_draw_hline
+    inc dx
+    pop cx
+    loop .row
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_draw_rect:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov cx, si
+    call gfx_draw_hline
+
+    mov cx, si
+    mov ax, di
+    dec ax
+    add dx, ax
+    call gfx_draw_hline
+    sub dx, ax
+
+    mov cx, di
+    call gfx_draw_vline
+
+    mov ax, si
+    dec ax
+    add bx, ax
+    mov cx, di
+    call gfx_draw_vline
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_draw_line:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov [gfx_draw_color], al
+    mov [gfx_line_x0], bx
+    mov [gfx_line_y0], dx
+    mov [gfx_line_x1], si
+    mov [gfx_line_y1], di
+
+    mov ax, si
+    sub ax, bx
+    jns .dx_abs
+    neg ax
+.dx_abs:
+    mov [gfx_line_dx], ax
+    mov word [gfx_line_sx], 1
+    cmp bx, si
+    jle .sx_done
+    mov word [gfx_line_sx], -1
+.sx_done:
+
+    mov ax, di
+    sub ax, dx
+    jns .dy_abs
+    neg ax
+.dy_abs:
+    neg ax
+    mov [gfx_line_dy], ax
+    mov word [gfx_line_sy], 1
+    cmp dx, di
+    jle .sy_done
+    mov word [gfx_line_sy], -1
+.sy_done:
+
+    mov ax, [gfx_line_dx]
+    add ax, [gfx_line_dy]
+    mov [gfx_line_err], ax
+
+.loop:
+    mov cx, [gfx_line_x0]
+    mov dx, [gfx_line_y0]
+    mov al, [gfx_draw_color]
+    call gfx_plot_pixel
+
+    mov ax, [gfx_line_x0]
+    cmp ax, [gfx_line_x1]
+    jne .step
+    mov ax, [gfx_line_y0]
+    cmp ax, [gfx_line_y1]
+    je .done
+
+.step:
+    mov ax, [gfx_line_err]
+    shl ax, 1
+    mov [gfx_line_e2], ax
+
+    mov ax, [gfx_line_e2]
+    cmp ax, [gfx_line_dy]
+    jl .skip_x
+    mov ax, [gfx_line_err]
+    add ax, [gfx_line_dy]
+    mov [gfx_line_err], ax
+    mov ax, [gfx_line_x0]
+    add ax, [gfx_line_sx]
+    mov [gfx_line_x0], ax
+
+.skip_x:
+    mov ax, [gfx_line_e2]
+    cmp ax, [gfx_line_dx]
+    jg .skip_y
+    mov ax, [gfx_line_err]
+    add ax, [gfx_line_dx]
+    mov [gfx_line_err], ax
+    mov ax, [gfx_line_y0]
+    add ax, [gfx_line_sy]
+    mov [gfx_line_y0], ax
+
+.skip_y:
+    jmp .loop
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_draw_text8:
+    push ax
+    push bx
+    push dx
+    push si
+
+    mov [gfx_draw_color], al
+
+.next_char:
+    lodsb
+    test al, al
+    jz .done
+    cmp al, ' '
+    je .advance
+
+    push ax
+    push bx
+    push dx
+    push si
+    call gfx_lookup_glyph
+    jnc .skip_draw
+    mov al, [gfx_draw_color]
+    call gfx_draw_glyph8
+.skip_draw:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+
+.advance:
+    add bx, 8
+    jmp .next_char
+
+.done:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+gfx_lookup_glyph:
+    push ax
+    mov si, gfx_font8_table
+.scan:
+    cmp byte [si], 0
+    je .not_found
+    cmp al, [si]
+    je .found
+    add si, 9
+    jmp .scan
+.found:
+    inc si
+    pop ax
+    stc
+    ret
+.not_found:
+    pop ax
+    clc
+    ret
+
+gfx_draw_glyph8:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov [gfx_draw_color], al
+    mov cx, 8
+
+.row:
+    push cx
+    lodsb
+    mov [gfx_row_bits], al
+    mov di, bx
+    mov cx, 8
+
+.bit:
+    mov al, [gfx_row_bits]
+    shl al, 1
+    mov [gfx_row_bits], al
+    jnc .next_bit
+    mov al, [gfx_draw_color]
+    push cx
+    mov cx, di
+    call gfx_plot_pixel
+    pop cx
+.next_bit:
+    inc di
+    loop .bit
+
+    inc dx
+    pop cx
+    loop .row
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 run_com_demo:
@@ -2909,6 +3470,14 @@ dispatch_command:
     call str_eq
     jc .cmd_help
     mov di, bx
+    mov si, str_ver
+    call str_eq
+    jc .cmd_ver
+    mov di, bx
+    mov si, str_tree
+    call str_eq
+    jc .cmd_tree
+    mov di, bx
     mov si, str_cls
     call str_eq
     jc .cmd_cls
@@ -2937,6 +3506,10 @@ dispatch_command:
     call str_eq
     jc .cmd_fileio
     mov di, bx
+    mov si, str_gfxdemo
+    call str_eq
+    jc .cmd_gfxdemo
+    mov di, bx
     mov si, str_findtest
     call str_eq
     jc .cmd_findtest
@@ -2954,15 +3527,22 @@ dispatch_command:
     jmp .done
 
 .cmd_help:
-    mov si, msg_help
+    call print_shell_help
+    jmp .done
+
+.cmd_ver:
+    mov si, msg_version_line
     call print_string_dual
+    jmp .done
+
+.cmd_tree:
+    call print_shell_tree
     jmp .done
 
 .cmd_cls:
     mov ax, 0x0003
     int 0x10
-    mov si, msg_cleared
-    call print_string_dual
+    call draw_shell_chrome
     jmp .done
 
 .cmd_ticks:
@@ -3007,6 +3587,10 @@ dispatch_command:
 
 .cmd_fileio:
     call int21_fileio_test
+    jmp .done
+
+.cmd_gfxdemo:
+    call run_gfx_demo
     jmp .done
 
 .cmd_findtest:
@@ -3130,6 +3714,268 @@ print_newline_dual:
     call putc_dual
     mov al, 10
     call putc_dual
+    ret
+
+clear_screen_attr:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ah, 0x06
+    xor al, al
+    mov bh, bl
+    xor cx, cx
+    mov dx, 0x184F
+    int 0x10
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+set_cursor_pos:
+    push ax
+    push bx
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    pop bx
+    pop ax
+    ret
+
+video_write_char_attr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov ch, bl
+    mov ah, al
+    xor ax, ax
+    mov al, dh
+    mov di, ax
+    shl di, 5
+    mov bx, ax
+    shl bx, 7
+    add di, bx
+    xor ax, ax
+    mov al, dl
+    shl ax, 1
+    add di, ax
+    mov ax, 0xB800
+    mov es, ax
+    mov al, ah
+    mov ah, ch
+    mov [es:di], ax
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+video_write_string_attr:
+    push ax
+    push bx
+    push dx
+    push si
+.next:
+    lodsb
+    test al, al
+    jz .done
+    call video_write_char_attr
+    inc dl
+    jmp .next
+.done:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+draw_hline_attr:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ah, al
+.loop:
+    mov al, ah
+    call video_write_char_attr
+    inc dl
+    loop .loop
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+show_boot_splash:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ax, 0x0003
+    int 0x10
+    mov bl, 0x1F
+    call clear_screen_attr
+
+    mov si, splash_title
+    mov dh, 7
+    mov dl, 28
+    mov bl, 0x1F
+    call video_write_string_attr
+
+    mov si, splash_subtitle
+    mov dh, 9
+    mov dl, 21
+    mov bl, 0x1E
+    call video_write_string_attr
+
+    mov si, splash_status
+    mov dh, 15
+    mov dl, 23
+    mov bl, 0x1F
+    call video_write_string_attr
+
+    mov al, '['
+    mov dh, 17
+    mov dl, 17
+    mov bl, 0x1F
+    call video_write_char_attr
+    mov al, ']'
+    mov dl, 62
+    call video_write_char_attr
+
+    mov al, 0
+    call splash_set_progress
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+splash_set_progress:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    xor ah, ah
+    mov bl, 45
+    mul bl
+    mov bl, 100
+    div bl
+    mov ch, al
+
+    mov al, ' '
+    mov dh, 17
+    mov dl, 18
+    mov bl, 0x17
+    xor cx, cx
+    mov cl, 45
+    call draw_hline_attr
+
+    cmp ch, 0
+    je .percent
+    mov al, 0xDB
+    mov dh, 17
+    mov dl, 18
+    mov bl, 0x1F
+    mov cl, ch
+    xor ch, ch
+    call draw_hline_attr
+
+.percent:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+draw_shell_chrome:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov bl, 0x07
+    call clear_screen_attr
+
+    mov al, ' '
+    mov dh, 0
+    mov dl, 0
+    mov bl, 0x70
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
+
+    mov si, msg_banner_title
+    mov dh, 0
+    mov dl, 24
+    mov bl, 0x70
+    call video_write_string_attr
+
+    mov al, ' '
+    mov dh, 1
+    mov dl, 0
+    mov bl, 0x17
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
+
+    mov si, msg_shell_layout
+    mov dh, 1
+    mov dl, 2
+    mov bl, 0x17
+    call video_write_string_attr
+
+    mov si, msg_shell_hint
+    mov dh, 2
+    mov dl, 2
+    mov bl, 0x07
+    call video_write_string_attr
+
+    mov dh, 3
+    xor dl, dl
+    call set_cursor_pos
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+print_shell_help:
+    mov si, msg_help_header
+    call print_string_dual
+    mov si, msg_help_core
+    call print_string_dual
+    mov si, msg_help_runtime
+    call print_string_dual
+    mov si, msg_help_system
+    call print_string_dual
+    mov si, msg_help_apps
+    call print_string_dual
+    ret
+
+print_shell_tree:
+    mov si, msg_tree_header
+    call print_string_dual
+    mov si, msg_tree_root
+    call print_string_dual
+    mov si, msg_tree_system
+    call print_string_dual
+    mov si, msg_tree_apps
+    call print_string_dual
     ret
 
 print_hex16_dual:
@@ -3308,10 +4154,21 @@ msg_stage1_selftest_done db "[STAGE1] selftest done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[STAGE1-SELFTEST] BEGIN", 13, 10, 0
 msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
 
-msg_prompt    db "ciukios> ", 0
+msg_prompt    db "root:\> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
-msg_help      db "commands: help cls ticks drive dos21 comdemo mzdemo fileio findtest reboot halt", 13, 10, 0
-msg_cleared   db "screen cleared", 13, 10, 0
+msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
+msg_shell_layout db "layout: root -> system files | applications (reserved)", 0
+msg_shell_hint db "type 'help' for commands, 'tree' for logical layout, 'ver' for version", 13, 10, 0
+msg_help_header db "CiukiOS shell commands", 13, 10, 0
+msg_help_core db "  core:   help  ver  tree  cls  ticks  drive", 13, 10, 0
+msg_help_runtime db "  dos:    dos21  comdemo  mzdemo  fileio  findtest  gfxdemo", 13, 10, 0
+msg_help_system db "  system: reboot  halt", 13, 10, 0
+msg_help_apps db "  apps:   reserved for future installed applications", 13, 10, 0
+msg_version_line db "CiukiOS pre-Alpha v0.5.6", 13, 10, 0
+msg_tree_header db "CiukiOS logical system tree", 13, 10, 0
+msg_tree_root db "  ROOT", 13, 10, 0
+msg_tree_system db "   |- SYSTEM FILES  (boot + DOS runtime + shell services)", 13, 10, 0
+msg_tree_apps db "   `- APPLICATIONS  (reserved for future installs)", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
 msg_dos21_begin db "[STAGE1] INT21h smoke", 13, 10, 0
@@ -3335,10 +4192,22 @@ msg_fileio_serial_fail db "[FILEIO-SERIAL] FAIL", 13, 10, 0
 msg_find_begin db "[STAGE1] INT21h findfirst/findnext", 13, 10, 0
 msg_find_serial_pass db "[FIND-SERIAL] PASS", 13, 10, 0
 msg_find_serial_fail db "[FIND-SERIAL] FAIL", 13, 10, 0
+msg_gfx_begin db "[STAGE1] VGA mode13h gfx demo", 13, 10, 0
+msg_gfx_done db "[STAGE1] VGA primitives + timer/input smoke done", 13, 10, 0
+msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
+splash_title db "CiukiOS", 0
+splash_subtitle db "Legacy BIOS runtime loading...", 0
+splash_status db "initializing stage1 runtime", 0
+gfx_text_ciukios db "CIUKIOS", 0
+gfx_text_demo db "GFX DEMO", 0
+gfx_text_vdi db "VDI BASE", 0
+gfx_text_timer db "TIMER KEY EXIT", 0
 
 str_help   db "help", 0
+str_ver    db "ver", 0
+str_tree   db "tree", 0
 str_cls    db "cls", 0
 str_ticks  db "ticks", 0
 str_drive  db "drive", 0
@@ -3346,6 +4215,7 @@ str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_mzdemo db "mzdemo", 0
 str_fileio db "fileio", 0
+str_gfxdemo db "gfxdemo", 0
 str_findtest db "findtest", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
@@ -3358,3 +4228,38 @@ path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
 path_root_dos    db "\", 0
 cwd_buf times 8 db 0
+gfx_draw_color db 0
+gfx_row_bits db 0
+gfx_demo_frame db 0
+gfx_demo_deadline dw 0
+gfx_demo_last_tick dw 0
+gfx_line_x0 dw 0
+gfx_line_y0 dw 0
+gfx_line_x1 dw 0
+gfx_line_y1 dw 0
+gfx_line_dx dw 0
+gfx_line_dy dw 0
+gfx_line_sx dw 0
+gfx_line_sy dw 0
+gfx_line_err dw 0
+gfx_line_e2 dw 0
+
+gfx_font8_table:
+    db 'A', 0x18,0x24,0x42,0x7E,0x42,0x42,0x42,0x00
+    db 'B', 0x7C,0x42,0x42,0x7C,0x42,0x42,0x7C,0x00
+    db 'C', 0x3C,0x42,0x40,0x40,0x40,0x42,0x3C,0x00
+    db 'D', 0x78,0x44,0x42,0x42,0x42,0x44,0x78,0x00
+    db 'E', 0x7E,0x40,0x40,0x7C,0x40,0x40,0x7E,0x00
+    db 'F', 0x7E,0x40,0x40,0x7C,0x40,0x40,0x40,0x00
+    db 'G', 0x3C,0x42,0x40,0x4E,0x42,0x42,0x3C,0x00
+    db 'I', 0x3E,0x08,0x08,0x08,0x08,0x08,0x3E,0x00
+    db 'K', 0x42,0x44,0x48,0x70,0x48,0x44,0x42,0x00
+    db 'M', 0x42,0x66,0x5A,0x5A,0x42,0x42,0x42,0x00
+    db 'O', 0x3C,0x42,0x42,0x42,0x42,0x42,0x3C,0x00
+    db 'R', 0x7C,0x42,0x42,0x7C,0x48,0x44,0x42,0x00
+    db 'T', 0x7F,0x08,0x08,0x08,0x08,0x08,0x08,0x00
+    db 'U', 0x42,0x42,0x42,0x42,0x42,0x42,0x3C,0x00
+    db 'V', 0x42,0x42,0x42,0x42,0x24,0x24,0x18,0x00
+    db 'X', 0x42,0x24,0x18,0x18,0x18,0x24,0x42,0x00
+    db 'Y', 0x41,0x22,0x14,0x08,0x08,0x08,0x08,0x00
+    db 0
