@@ -73,6 +73,7 @@ stage1_start:
     mov al, 68
     call splash_set_progress
     call install_int21_vector
+    call init_stage2_services
 %if STAGE1_SELFTEST_AUTORUN
     mov al, 84
     call splash_set_progress
@@ -4064,6 +4065,68 @@ serial_putc:
     pop ax
     ret
 
+; Stage2 Extended Services Integration
+init_stage2_services:
+    push ax
+    push si
+    mov si, msg_stage2_entry
+    call print_string_serial
+    call init_mouse
+    call init_vbe_query
+    call install_int33_vector
+    mov si, msg_stage2_ready
+    call print_string_serial
+    pop si
+    pop ax
+    ret
+
+init_mouse:
+    push ax
+    push bx
+    mov ax, 0x0000
+    int 0x33
+    cmp ax, 0xFFFF
+    jne .no_mouse
+    mov ax, 0x0001
+    int 0x33
+    mov si, msg_mouse_enabled
+    call print_string_serial
+    pop bx
+    pop ax
+    ret
+.no_mouse:
+    mov si, msg_mouse_not_found
+    call print_string_serial
+    pop bx
+    pop ax
+    ret
+
+init_vbe_query:
+    mov si, msg_vbe_init
+    call print_string_serial
+    ret
+
+install_int33_vector:
+    push ax
+    push bx
+    push es
+    xor ax, ax
+    mov es, ax
+    mov bx, 0x33 * 4
+    mov word [es:bx], int33_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+    pop es
+    pop bx
+    pop ax
+    ret
+
+int33_handler:
+    push ax
+    xor ax, ax
+    pop ax
+    iret
+
 boot_drive db 0
 int21_installed db 0
 int21_carry db 0
@@ -4263,3 +4326,10 @@ gfx_font8_table:
     db 'X', 0x42,0x24,0x18,0x18,0x18,0x24,0x42,0x00
     db 'Y', 0x41,0x22,0x14,0x08,0x08,0x08,0x08,0x00
     db 0
+
+; Stage2 Extended Services Messages
+msg_stage2_entry db "[STAGE1] Initializing extended services...", 13, 10, 0
+msg_stage2_ready db "[STAGE1] Extended services ready", 13, 10, 0
+msg_mouse_enabled db "[STAGE1] Mouse INT33h installed", 13, 10, 0
+msg_mouse_not_found db "[STAGE1] Mouse not detected", 13, 10, 0
+msg_vbe_init db "[STAGE1] VBE query ready", 13, 10, 0
