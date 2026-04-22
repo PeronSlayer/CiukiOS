@@ -6,10 +6,12 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 ## Quick Links
 1. Project roadmap: [Roadmap.md](Roadmap.md)
 2. Architecture baseline: [docs/architecture-legacy-x86-v1.md](docs/architecture-legacy-x86-v1.md)
-3. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
-4. Engineering logbook: [docs/diario-bordo-v2.md](docs/diario-bordo-v2.md)
-5. Full changelog: [CHANGELOG.md](CHANGELOG.md)
-6. Donations and support: [DONATIONS.md](DONATIONS.md)
+3. DOS core spec: [docs/dos-core-spec-v0.1.md](docs/dos-core-spec-v0.1.md)
+4. DOS core implementation plan: [docs/dos-core-implementation-plan-v0.1.md](docs/dos-core-implementation-plan-v0.1.md)
+5. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
+6. Engineering logbook: [docs/diario-bordo-v2.md](docs/diario-bordo-v2.md)
+7. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+8. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
 `CiukiOS pre-Alpha v0.5.0`
@@ -51,8 +53,10 @@ Progress is continuous but not tied to a fixed release calendar.
 ## Key Docs
 1. Roadmap: [Roadmap.md](Roadmap.md)
 2. Architecture baseline: [docs/architecture-legacy-x86-v1.md](docs/architecture-legacy-x86-v1.md)
-3. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
-4. Migration/archive note: [docs/migration-note-old-archive.md](docs/migration-note-old-archive.md)
+3. DOS core spec: [docs/dos-core-spec-v0.1.md](docs/dos-core-spec-v0.1.md)
+4. DOS core implementation plan: [docs/dos-core-implementation-plan-v0.1.md](docs/dos-core-implementation-plan-v0.1.md)
+5. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
+6. Migration/archive note: [docs/migration-note-old-archive.md](docs/migration-note-old-archive.md)
 
 ## Legacy Archive
 Historical project content is preserved under:
