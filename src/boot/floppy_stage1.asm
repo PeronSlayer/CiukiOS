@@ -4299,6 +4299,12 @@ draw_shell_chrome:
     mov bl, 0x1E
     call video_write_string_attr
 
+    mov si, msg_shell_sysinfo
+    mov dh, 24
+    mov dl, 40
+    mov bl, 0x1E
+    call video_write_string_attr
+
     mov dh, 6
     xor dl, dl
     call set_cursor_pos
@@ -4578,6 +4584,7 @@ msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
 msg_shell_hint db "CiukiDOS Shell", 0
 msg_shell_quick db "For commands write Help and press send", 0
 msg_shell_footer db "ready", 0
+msg_shell_sysinfo db "RAM: 640K | CPU: x86 | DISK: 1.4M", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
 msg_help_core db "core: help ver tree cls ticks drive dir cd cd..", 13, 10, 0
 msg_help_runtime db "ciukidos: dos21 comdemo mzdemo fileio findtest gfxdemo", 13, 10, 0
