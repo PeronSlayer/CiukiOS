@@ -71,6 +71,7 @@ static uint16_t s_v86_mem_next_seg = V86_MEM_FIRST_SEG;
 static uint8_t s_v86_time_second = 0u;
 static uint8_t s_v86_time_hundredth = 0u;
 static v86_file_handle_t s_v86_file_handles[V86_FILE_MAX_HANDLES];
+static uint16_t s_v86_last_file_handle = 0u;
 static uint16_t s_v86_last_ef_opcode = 0u;
 static uint8_t s_v86_ef_diag_count = 0u;
 
@@ -85,6 +86,7 @@ static uint16_t s_vdi_fill_color   = 1u;
 static uint16_t s_vdi_fill_style   = 1u; /* 0 hollow 1 solid 2 pattern 3 hatch */
 static uint16_t s_vdi_fill_index   = 0u;
 static uint16_t s_vdi_write_mode   = 1u; /* 1=replace 2=trans 3=xor 4=erase */
+static uint16_t s_vdi_tone_muted   = 0u; /* v_escape sub-op 62 (vs_mute): 0=on 1=off */
 static uint16_t s_vdi_clip_on      = 0u;
 static int16_t  s_vdi_clip_x1      = 0;
 static int16_t  s_vdi_clip_y1      = 0;
@@ -910,6 +912,29 @@ static int v86_try_emulate_int_ef(legacy_v86_frame_t *frame)
         serial_write_hex64((uint64_t)v86_load_u16(ptsin_lin + 4u)); serial_write(",");
         serial_write_hex64((uint64_t)v86_load_u16(ptsin_lin + 6u));
         serial_write("\n");
+    }
+
+    if (opcode == 0x0005u) {
+        /* VDI opcode 5 = v_escape.
+         * We implement the sub-opcode observed in GEM bring-up:
+         *   sub 62 (0x3E) = vs_mute (tone generation on/off/query).
+         * intin[0]: 0=on, 1=off, -1=query.
+         * intout[0]: current state (0=on, 1=off). */
+        uint16_t sub = v86_load_u16(ctrl_lin + 10u);
+        if (sub == 0x003Eu) {
+            uint16_t in0 = v86_load_u16(intin_lin + 0u);
+            if (in0 == 0u) {
+                s_vdi_tone_muted = 0u;
+            } else if (in0 == 1u) {
+                s_vdi_tone_muted = 1u;
+            }
+            v86_store_u16(intout_lin + 0u, s_vdi_tone_muted ? 1u : 0u);
+            v86_store_u16(ctrl_lin + 4u, 0u); /* n_ptsout */
+            v86_store_u16(ctrl_lin + 8u, 1u); /* n_intout */
+            frame->reserved[0] &= 0xFFFF0000u;
+            frame->eflags &= ~0x00000001u;
+            return 1;
+        }
     }
 
     if (opcode == 0x000Cu) {
@@ -2422,6 +2447,7 @@ static int v86_mem_alloc(uint16_t paras, uint16_t *seg_out, uint16_t *max_out)
 static void v86_file_handles_reset(void)
 {
     v86_memset(s_v86_file_handles, 0u, (uint32_t)sizeof(s_v86_file_handles));
+    s_v86_last_file_handle = 0u;
 }
 
 static v86_file_handle_t *v86_file_find_handle(uint16_t handle)
@@ -2447,6 +2473,12 @@ static uint16_t v86_resolve_bx0_handle(uint16_t handle)
 {
     if (handle != 0u) {
         return handle;
+    }
+    if (s_v86_last_file_handle > 2u) {
+        v86_file_handle_t *h = v86_file_find_handle(s_v86_last_file_handle);
+        if (h && h->used) {
+            return h->handle_id;
+        }
     }
     {
         v86_file_handle_t *only = (v86_file_handle_t *)0;
@@ -2476,6 +2508,7 @@ static v86_file_handle_t *v86_file_alloc_handle(uint8_t mode, const char *path)
             h->size = 0u;
             h->pos = 0u;
             v86_str_copy(h->path, path ? path : "", (uint32_t)sizeof(h->path));
+            s_v86_last_file_handle = h->handle_id;
             return h;
         }
     }
@@ -3249,6 +3282,15 @@ v86_dispatch_result_t v86_dispatch_int(uint8_t vector, legacy_v86_frame_t *frame
         }
 
         h->used = 0u;
+        if (s_v86_last_file_handle == handle) {
+            s_v86_last_file_handle = 0u;
+            for (uint32_t i = 0u; i < V86_FILE_MAX_HANDLES; ++i) {
+                if (s_v86_file_handles[i].used) {
+                    s_v86_last_file_handle = s_v86_file_handles[i].handle_id;
+                    break;
+                }
+            }
+        }
         frame->reserved[0] = (eax & 0xFFFF0000u);
         V86_CF_CLEAR();
         return V86_DISPATCH_CONT;
