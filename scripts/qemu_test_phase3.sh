@@ -71,11 +71,13 @@ grep -q "Extended services ready" "$SERIAL_LOG" || {
     exit 1
 }
 
-# Check for VDI layer (graphics demo)
-grep -q "VGA primitives" "$SERIAL_LOG" || {
-    echo "[phase3-gate] FAIL: VGA primitives not tested"
-    exit 1
-}
+# Check for VDI layer marker.
+# `gfxdemo` is now manual (no autorun), so this marker may be absent in boot-only runs.
+if grep -q "VGA primitives" "$SERIAL_LOG"; then
+    echo "[phase3-gate] PASS: VGA primitives tested"
+else
+    echo "[phase3-gate] WARN: VGA primitives not auto-tested (run 'gfxdemo' manually in shell)"
+fi
 
 # Check for shell prompt
 grep -q "root:" "$SERIAL_LOG" || {

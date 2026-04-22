@@ -39,7 +39,7 @@ org 0x0000
 %define FAT_EOF 0xFF8
 %endif
 %ifndef STAGE1_SELFTEST_AUTORUN
-%define STAGE1_SELFTEST_AUTORUN 1
+%define STAGE1_SELFTEST_AUTORUN 0
 %endif
 %define FAT1_LBA FAT_RESERVED_SECTORS
 %define FAT2_LBA (FAT1_LBA + FAT_SECTORS_PER_FAT)
@@ -82,6 +82,7 @@ stage1_start:
 
     mov al, 100
     call splash_set_progress
+    call splash_hold
     call draw_shell_chrome
 
 main_loop:
@@ -3843,6 +3844,12 @@ show_boot_splash:
     mov bl, 0x1F
     call video_write_string_attr
 
+    mov si, splash_wait_hint
+    mov dh, 19
+    mov dl, 21
+    mov bl, 0x1E
+    call video_write_string_attr
+
     mov al, '['
     mov dh, 17
     mov dl, 17
@@ -3900,6 +3907,37 @@ splash_set_progress:
     pop ax
     ret
 
+splash_hold:
+    push ax
+    push bx
+    push dx
+
+    mov ah, 0x00
+    int 0x1A
+    mov bx, dx
+    add bx, 18
+
+.loop:
+    mov ah, 0x01
+    int 0x16
+    jnz .consume
+
+    mov ah, 0x00
+    int 0x1A
+    cmp dx, bx
+    jb .loop
+    jmp .done
+
+.consume:
+    xor ah, ah
+    int 0x16
+
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 draw_shell_chrome:
     push ax
     push bx
@@ -3918,14 +3956,22 @@ draw_shell_chrome:
     mov cl, 80
     call draw_hline_attr
 
+    mov al, '='
+    mov dh, 1
+    mov dl, 0
+    mov bl, 0x1F
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
+
     mov si, msg_banner_title
     mov dh, 0
-    mov dl, 24
+    mov dl, 20
     mov bl, 0x70
     call video_write_string_attr
 
     mov al, ' '
-    mov dh, 1
+    mov dh, 2
     mov dl, 0
     mov bl, 0x17
     xor cx, cx
@@ -3933,18 +3979,32 @@ draw_shell_chrome:
     call draw_hline_attr
 
     mov si, msg_shell_layout
-    mov dh, 1
+    mov dh, 2
     mov dl, 2
     mov bl, 0x17
     call video_write_string_attr
 
     mov si, msg_shell_hint
-    mov dh, 2
+    mov dh, 3
     mov dl, 2
     mov bl, 0x07
     call video_write_string_attr
 
-    mov dh, 3
+    mov al, '='
+    mov dh, 24
+    mov dl, 0
+    mov bl, 0x1F
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
+
+    mov si, msg_shell_footer
+    mov dh, 24
+    mov dl, 2
+    mov bl, 0x1F
+    call video_write_string_attr
+
+    mov dh, 5
     xor dl, dl
     call set_cursor_pos
 
@@ -4222,6 +4282,7 @@ msg_unknown   db "unknown command. type 'help'", 13, 10, 0
 msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
 msg_shell_layout db "layout: root -> system files | applications (reserved)", 0
 msg_shell_hint db "type 'help' for commands, 'tree' for logical layout, 'ver' for version", 13, 10, 0
+msg_shell_footer db " shell ready | use 'help' | run 'gfxdemo' manually for graphics test ", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
 msg_help_core db "  core:   help  ver  tree  cls  ticks  drive", 13, 10, 0
 msg_help_runtime db "  dos:    dos21  comdemo  mzdemo  fileio  findtest  gfxdemo", 13, 10, 0
@@ -4263,6 +4324,7 @@ msg_halting   db "halting...", 13, 10, 0
 splash_title db "CiukiOS", 0
 splash_subtitle db "Legacy BIOS runtime loading...", 0
 splash_status db "initializing stage1 runtime", 0
+splash_wait_hint db "starting shell in 1s (or press any key)", 0
 gfx_text_ciukios db "CIUKIOS", 0
 gfx_text_demo db "GFX DEMO", 0
 gfx_text_vdi db "VDI BASE", 0
