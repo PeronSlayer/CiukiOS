@@ -20,7 +20,6 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 
 Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
-2. Version bumps are patch-only (`x.x.1`) and happen only on explicit user instruction.
 
 ## Changelog (Latest)
 ### pre-Alpha v0.5.0

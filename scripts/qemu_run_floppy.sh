@@ -109,7 +109,7 @@ BASE_ARGS=(
 if [[ "$MODE" == "test" ]]; then
   TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-8}"
   STAGE0_MARKER="${STAGE0_MARKER:-[BOOT0] CiukiOS stage0 ready}"
-  STAGE1_MARKER="${STAGE1_MARKER:-[STAGE1] CiukiOS stage1 running}"
+  STAGE1_MARKER="${STAGE1_MARKER:-[STAGE1-SERIAL] READY}"
   LOG_FILE="${LOG_FILE:-build/floppy/qemu-floppy.log}"
 
   QEMU_ARGS=(
