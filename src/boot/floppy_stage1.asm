@@ -30,6 +30,14 @@ org 0x0000
 %ifndef FAT_ROOT_DIR_SECTORS
 %define FAT_ROOT_DIR_SECTORS 14
 %endif
+%ifndef FAT_TYPE
+%define FAT_TYPE 12
+%endif
+%if FAT_TYPE == 16
+%define FAT_EOF 0xFFF8
+%else
+%define FAT_EOF 0xFF8
+%endif
 %ifndef STAGE1_SELFTEST_AUTORUN
 %define STAGE1_SELFTEST_AUTORUN 1
 %endif
@@ -1700,7 +1708,7 @@ int21_delete:
     mov ax, [tmp_next_cluster]
     cmp ax, 2
     jb .free_done
-    cmp ax, 0xFF8
+    cmp ax, FAT_EOF
     jae .free_done
 
     mov bx, ax
@@ -1949,7 +1957,7 @@ int21_cluster_for_pos:
     jc .fail
     cmp ax, 2
     jb .fail
-    cmp ax, 0xFF8
+    cmp ax, FAT_EOF
     jae .fail
     dec cx
     jmp .step
@@ -1985,7 +1993,7 @@ int21_count_chain:
     jc .zero
     cmp ax, 2
     jb .done
-    cmp ax, 0xFF8
+    cmp ax, FAT_EOF
     jae .done
     jmp .loop
 
@@ -2001,12 +2009,160 @@ int21_count_chain:
     ret
 
 int21_load_fat_cache:
+; -----------------------------------------------------------------------
+; FAT cluster cache: compile-time selection FAT12 vs FAT16
+; FAT12: nibble-packed 12-bit entries, 1 sector always covers enough
+; FAT16: 16-bit word entries, multi-sector FAT, cache tracks which sector
+; -----------------------------------------------------------------------
+%if FAT_TYPE == 16
+
+; int21_load_fat_cache: for FAT16 this is a no-op warmup stub.
+; Actual sector selection happens inside fat12_get_entry_cached per cluster.
+int21_load_fat_cache:
+    clc
+    ret
+
+; fat16_ensure_sector: internal helper. AX = cluster. Ensures the FAT
+; sector covering cluster AX is loaded into DOS_FAT_BUF_SEG.
+; Trashes: AX, BX, ES. Returns CF on I/O error.
+fat16_ensure_sector:
+    push ax
+    shr ax, 8                   ; AX = cluster / 256 = sector index in FAT
+    cmp word [cs:fat_cache_sector], 0xFFFF
+    je .do_load
+    cmp ax, [cs:fat_cache_sector]
+    je .already_ok
+    ; Need different sector: flush dirty first
+    cmp byte [cs:fat_cache_dirty], 1
+    jne .do_load
+    push ax
+    mov ax, DOS_FAT_BUF_SEG
+    mov es, ax
+    mov ax, [cs:fat_cache_sector]
+    add ax, FAT1_LBA
+    xor bx, bx
+    call write_sector_lba
+    jc .write_fail
+    mov ax, [cs:fat_cache_sector]
+    add ax, FAT2_LBA
+    xor bx, bx
+    call write_sector_lba
+    jc .write_fail
+    mov byte [cs:fat_cache_dirty], 0
+    pop ax
+    jmp .do_load
+.write_fail:
+    pop ax
+    pop ax
+    stc
+    ret
+.do_load:
+    mov [cs:fat_cache_sector], ax
+    add ax, FAT1_LBA
+    mov bx, DOS_FAT_BUF_SEG
+    mov es, bx
+    xor bx, bx
+    call read_sector_lba
+    jc .load_fail
+    mov byte [cs:fat_cache_valid], 1
+    mov byte [cs:fat_cache_dirty], 0
+.already_ok:
+    pop ax
+    clc
+    ret
+.load_fail:
+    pop ax
+    stc
+    ret
+
+fat12_get_entry_cached:
+    push bx
+    push cx
+    push es
+    mov cx, ax
+    call fat16_ensure_sector
+    jc .fail
+    mov bx, cx
+    and bx, 0x00FF
+    shl bx, 1                   ; BX = (cluster % 256) * 2
+    mov ax, DOS_FAT_BUF_SEG
+    mov es, ax
+    mov ax, [es:bx]
+    clc
+    jmp .done
+.fail:
+    xor ax, ax
+    stc
+.done:
+    pop es
+    pop cx
+    pop bx
+    ret
+
+fat12_set_entry_cached:
+    push bx
+    push cx
+    push es
+    mov cx, ax
+    call fat16_ensure_sector
+    jc .fail
+    mov bx, cx
+    and bx, 0x00FF
+    shl bx, 1                   ; BX = (cluster % 256) * 2
+    mov ax, DOS_FAT_BUF_SEG
+    mov es, ax
+    mov [es:bx], dx
+    mov byte [cs:fat_cache_dirty], 1
+    clc
+    jmp .done
+.fail:
+    stc
+.done:
+    pop es
+    pop cx
+    pop bx
+    ret
+
+fat12_flush_cache:
+    push ax
     push bx
     push es
+    cmp byte [cs:fat_cache_valid], 1
+    jne .ok
+    cmp byte [cs:fat_cache_dirty], 1
+    jne .ok
+    mov ax, DOS_FAT_BUF_SEG
+    mov es, ax
+    mov ax, [cs:fat_cache_sector]
+    add ax, FAT1_LBA
+    xor bx, bx
+    call write_sector_lba
+    jc .fail
+    mov ax, [cs:fat_cache_sector]
+    add ax, FAT2_LBA
+    xor bx, bx
+    call write_sector_lba
+    jc .fail
+    mov byte [cs:fat_cache_dirty], 0
+.ok:
+    clc
+    jmp .done
+.fail:
+    stc
+.done:
+    pop es
+    pop bx
+    pop ax
+    ret
 
+%else
+; ---- FAT12 implementation (default) ----
+
+int21_load_fat_cache:
+    push bx
+    push es
     cmp byte [cs:fat_cache_valid], 1
     je .ok
-
     mov ax, DOS_FAT_BUF_SEG
     mov es, ax
     mov ax, FAT1_LBA
@@ -2015,14 +2171,11 @@ int21_load_fat_cache:
     jc .fail
     mov byte [cs:fat_cache_valid], 1
     mov byte [cs:fat_cache_dirty], 0
-
 .ok:
     clc
     jmp .done
-
 .fail:
     stc
-
 .done:
     pop es
     pop bx
@@ -2033,15 +2186,12 @@ fat12_get_entry_cached:
     push cx
     push dx
     push es
-
     mov cx, ax
     call int21_load_fat_cache
     jc .fail
-
     mov bx, cx
     shr bx, 1
     add bx, cx
-
     mov ax, DOS_FAT_BUF_SEG
     mov es, ax
     mov dx, [es:bx]
@@ -2052,17 +2202,14 @@ fat12_get_entry_cached:
     mov ax, dx
     clc
     jmp .done
-
 .even:
     and dx, 0x0FFF
     mov ax, dx
     clc
     jmp .done
-
 .fail:
     xor ax, ax
     stc
-
 .done:
     pop es
     pop dx
@@ -2074,44 +2221,35 @@ fat12_set_entry_cached:
     push bx
     push cx
     push es
-
     mov cx, ax
     call int21_load_fat_cache
     jc .fail
-
     mov bx, cx
     shr bx, 1
     add bx, cx
-
     mov ax, DOS_FAT_BUF_SEG
     mov es, ax
-
     mov ax, dx
     and ax, 0x0FFF
     test cx, 1
     jz .even
-
     mov dx, [es:bx]
     and dx, 0x000F
     shl ax, 4
     or dx, ax
     mov [es:bx], dx
     jmp .mark
-
 .even:
     mov dx, [es:bx]
     and dx, 0xF000
     or dx, ax
     mov [es:bx], dx
-
 .mark:
     mov byte [cs:fat_cache_dirty], 1
     clc
     jmp .done
-
 .fail:
     stc
-
 .done:
     pop es
     pop cx
@@ -2121,38 +2259,33 @@ fat12_set_entry_cached:
 fat12_flush_cache:
     push bx
     push es
-
     cmp byte [cs:fat_cache_valid], 1
     jne .ok
     cmp byte [cs:fat_cache_dirty], 1
     jne .ok
-
     mov ax, DOS_FAT_BUF_SEG
     mov es, ax
-
     mov ax, FAT1_LBA
     xor bx, bx
     call write_sector_lba
     jc .fail
-
     mov ax, FAT2_LBA
     xor bx, bx
     call write_sector_lba
     jc .fail
-
     mov byte [cs:fat_cache_dirty], 0
-
 .ok:
     clc
     jmp .done
-
 .fail:
     stc
-
 .done:
     pop es
     pop bx
     ret
+
+%endif
+; -----------------------------------------------------------------------
 
 int21_update_root_entry_size:
     push bx
@@ -3100,6 +3233,7 @@ file_handle_size_lo dw 0
 file_handle_size_hi dw 0
 fat_cache_valid db 0
 fat_cache_dirty db 0
+fat_cache_sector dw 0xFFFF
 tmp_user_ds dw 0
 tmp_user_ptr dw 0
 tmp_rw_remaining dw 0
