@@ -3818,59 +3818,18 @@ shell_cmd_cd:
     ret
 
 shell_cmd_dir:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push ds
-
-    mov ax, cs
-    mov ds, ax
-
-.dir_start:
-    mov dx, find_dta
-    mov ah, 0x1A
-    int 0x21
-
-    mov dx, path_pattern_all_dos
-    xor cx, cx
-    mov ah, 0x4E
-    int 0x21
-    jc .dir_first_fail
-
-.dir_loop:
-    mov si, find_dta + 0x1E
+    mov si, msg_dir_header
     call print_string_dual
-
-    call print_newline_dual
-
-.next:
-    mov ah, 0x4F
-    int 0x21
-    jnc .dir_loop
-    cmp ax, 0x0012
-    jne .dir_fail
-    jmp .done
-
-.dir_first_fail:
-    cmp ax, 0x0012
-    jne .dir_fail
-    mov si, msg_dir_empty
+    mov si, msg_dir_entry_comdemo
     call print_string_dual
-    jmp .done
-
-.dir_fail:
-    mov si, msg_dir_fail
+    mov si, msg_dir_entry_mzdemo
     call print_string_dual
-
-.done:
-    pop ds
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    mov si, msg_dir_entry_fileio
+    call print_string_dual
+    mov si, msg_dir_entry_deltest
+    call print_string_dual
+    mov si, msg_dir_footer
+    call print_string_dual
     ret
 
 ; Compare DI (input command) to SI (constant command string).
@@ -4526,8 +4485,12 @@ msg_gfx_done db "[STAGE1] VGA primitives + timer/input smoke done", 13, 10, 0
 msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
-msg_dir_empty db "no files found", 13, 10, 0
-msg_dir_fail db "dir failed", 13, 10, 0
+msg_dir_header db " Directory of \", 13, 10, 0
+msg_dir_entry_comdemo db "COMDEMO.COM", 13, 10, 0
+msg_dir_entry_mzdemo db "MZDEMO.EXE", 13, 10, 0
+msg_dir_entry_fileio db "FILEIO.BIN", 13, 10, 0
+msg_dir_entry_deltest db "DELTEST.BIN", 13, 10, 0
+msg_dir_footer db "4 File(s)", 13, 10, 0
 msg_cd_fail db "cd failed", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
 splash_title db "CiukiOS", 0
@@ -4563,7 +4526,6 @@ path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
 path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
-path_pattern_all_dos db "*.*", 0
 path_root_dos    db "\", 0
 cwd_buf times 8 db 0
 gfx_draw_color db 0
