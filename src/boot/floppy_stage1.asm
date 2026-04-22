@@ -3818,18 +3818,157 @@ shell_cmd_cd:
     ret
 
 shell_cmd_dir:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov ax, cs
+    mov ds, ax
+
     mov si, msg_dir_header
     call print_string_dual
-    mov si, msg_dir_entry_comdemo
+
+    mov word [shell_dir_count], 0
+    mov dx, FAT_ROOT_START_LBA
+
+.sector_loop:
+    cmp dx, FAT_ROOT_START_LBA + FAT_ROOT_DIR_SECTORS
+    jae .done_scan
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, dx
+    xor bx, bx
+    call read_sector_lba
+    jc .fail
+
+    xor di, di
+    mov cx, 16
+
+.entry_loop:
+    mov al, [es:di]
+    cmp al, 0x00
+    je .done_scan
+    cmp al, 0xE5
+    je .next_entry
+
+    mov al, [es:di + 11]
+    cmp al, 0x0F
+    je .next_entry
+    test al, 0x08
+    jnz .next_entry
+
+    push cx
+    push dx
+    push di
+    mov si, di
+    call shell_print_root_entry
+    pop di
+    pop dx
+    pop cx
+
+    inc word [shell_dir_count]
+
+.next_entry:
+    add di, 32
+    loop .entry_loop
+
+    inc dx
+    jmp .sector_loop
+
+.done_scan:
+    cmp word [shell_dir_count], 0
+    jne .ok
+    mov si, msg_dir_empty
     call print_string_dual
-    mov si, msg_dir_entry_mzdemo
+
+.ok:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.fail:
+    mov si, msg_dir_fail
     call print_string_dual
-    mov si, msg_dir_entry_fileio
+    jmp .ok
+
+shell_print_root_entry:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov di, shell_dir_name_buf
+    xor bx, bx
+
+.base_loop:
+    cmp bx, 8
+    jae .ext_probe
+    mov al, [es:si + bx]
+    cmp al, ' '
+    je .ext_probe
+    mov [di], al
+    inc di
+    inc bx
+    jmp .base_loop
+
+.ext_probe:
+    xor bx, bx
+    xor cx, cx
+.ext_probe_loop:
+    cmp bx, 3
+    jae .ext_done
+    mov al, [es:si + 8 + bx]
+    cmp al, ' '
+    je .ext_probe_next
+    inc cx
+.ext_probe_next:
+    inc bx
+    jmp .ext_probe_loop
+
+.ext_done:
+    cmp cx, 0
+    je .emit
+    mov byte [di], '.'
+    inc di
+    xor bx, bx
+
+.ext_copy:
+    cmp bx, 3
+    jae .emit
+    mov al, [es:si + 8 + bx]
+    cmp al, ' '
+    je .emit
+    mov [di], al
+    inc di
+    inc bx
+    jmp .ext_copy
+
+.emit:
+    mov byte [di], 0
+    mov si, shell_dir_name_buf
     call print_string_dual
-    mov si, msg_dir_entry_deltest
-    call print_string_dual
-    mov si, msg_dir_footer
-    call print_string_dual
+    call print_newline_dual
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; Compare DI (input command) to SI (constant command string).
@@ -4444,19 +4583,19 @@ msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
 msg_prompt    db "root:\> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
 msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
-msg_shell_layout db "layout: root -> system files | applications (reserved)", 0
-msg_shell_hint db "type 'help' for commands, 'tree' for logical layout, 'ver' for version", 13, 10, 0
-msg_shell_footer db " shell ready | use 'help' | run 'gfxdemo' manually for graphics test ", 0
+msg_shell_layout db "layout: root", 0
+msg_shell_hint db "help/ver/tree", 13, 10, 0
+msg_shell_footer db "shell ready", 0
 msg_help_header db "CiukiOS shell commands", 13, 10, 0
-msg_help_core db "  core:   help  ver  tree  cls  ticks  drive  dir  cd  cd..", 13, 10, 0
-msg_help_runtime db "  dos:    dos21  comdemo  mzdemo  fileio  findtest  gfxdemo", 13, 10, 0
-msg_help_system db "  system: reboot  halt", 13, 10, 0
-msg_help_apps db "  apps:   reserved for future installed applications", 13, 10, 0
+msg_help_core db "core: help ver tree cls ticks drive dir cd cd..", 13, 10, 0
+msg_help_runtime db "dos: dos21 comdemo mzdemo fileio findtest gfxdemo", 13, 10, 0
+msg_help_system db "system: reboot halt", 13, 10, 0
+msg_help_apps db "apps: reserved", 13, 10, 0
 msg_version_line db "CiukiOS pre-Alpha v0.5.6", 13, 10, 0
 msg_tree_header db "CiukiOS logical system tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
-msg_tree_system db "   |- SYSTEM FILES  (boot + DOS runtime + shell services)", 13, 10, 0
-msg_tree_apps db "   `- APPLICATIONS  (reserved for future installs)", 13, 10, 0
+msg_tree_system db "   |- SYSTEM FILES", 13, 10, 0
+msg_tree_apps db "   `- APPLICATIONS", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
 msg_dos21_begin db "[STAGE1] INT21h smoke", 13, 10, 0
@@ -4485,12 +4624,9 @@ msg_gfx_done db "[STAGE1] VGA primitives + timer/input smoke done", 13, 10, 0
 msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
-msg_dir_header db " Directory of \", 13, 10, 0
-msg_dir_entry_comdemo db "COMDEMO.COM", 13, 10, 0
-msg_dir_entry_mzdemo db "MZDEMO.EXE", 13, 10, 0
-msg_dir_entry_fileio db "FILEIO.BIN", 13, 10, 0
-msg_dir_entry_deltest db "DELTEST.BIN", 13, 10, 0
-msg_dir_footer db "4 File(s)", 13, 10, 0
+msg_dir_header db "Directory listing", 13, 10, 0
+msg_dir_empty db "no files found", 13, 10, 0
+msg_dir_fail db "dir failed", 13, 10, 0
 msg_cd_fail db "cd failed", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
 splash_title db "CiukiOS", 0
@@ -4528,6 +4664,8 @@ path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
 path_root_dos    db "\", 0
 cwd_buf times 8 db 0
+shell_dir_count dw 0
+shell_dir_name_buf times 16 db 0
 gfx_draw_color db 0
 gfx_row_bits db 0
 gfx_demo_frame db 0
