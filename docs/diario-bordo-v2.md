@@ -13,4 +13,7 @@
 10. Milestone: added a minimal Stage1 command loop for runtime bring-up checks (`help`, `cls`, `ticks`, `drive`, `reboot`, `halt`).
 11. Milestone: initialized `INT 21h` vector in Stage1 and implemented baseline DOS services (`AH=02h`, `AH=09h`, `AH=4Ch`, `AH=4Dh`) with smoke command `dos21`.
 12. Milestone: added first `.COM` execution baseline with PSP-compatible setup and deterministic command `comdemo`.
-13. Next step: move from embedded COM payload to FAT-backed `.COM` file loading and execution.
+13. Milestone: added deterministic Stage1 boot selftest path with serial PASS markers for DOS and COM runtime checkpoints.
+14. Milestone: introduced `qemu-test-stage1` automated regression and integrated it into `qemu-test-all`.
+15. Release: bumped project version to `CiukiOS pre-Alpha v0.5.5` after Stage1 milestone closure.
+16. Next step: move from embedded COM payload to FAT-backed `.COM` file loading and execution.

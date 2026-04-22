@@ -4,14 +4,14 @@ All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
 ## Unreleased
-1. Delivered a BIOS `floppy` stage0->stage1 chain-loader baseline with a real 16-bit boot sector and stage1 payload jump.
-2. Upgraded floppy build pipeline to assemble stage0 and stage1, enforce stage1 slot size, and inject both payloads into deterministic sectors.
-3. Upgraded floppy QEMU smoke test to validate both stage0 and stage1 execution markers.
-4. Added a real-mode Stage1 BIOS core monitor with startup diagnostics for `INT 10h`, `INT 13h`, `INT 16h`, and `INT 1Ah`.
-5. Added a minimal interactive Stage1 command loop (`help`, `cls`, `ticks`, `drive`, `reboot`, `halt`) for BIOS bring-up checks.
-6. Added Stage1 interrupt vector initialization for `INT 21h` with baseline DOS services (`AH=02h`, `AH=09h`, `AH=4Ch`, `AH=4Dh`) and an integrated smoke command.
-7. Added a first `.COM` execution baseline in Stage1 with PSP-compatible memory setup and a deterministic `comdemo` runtime path.
-8. Defined `DOS Core Specification v0.1` and `DOS Core Implementation Plan v0.1` as the normative baseline for MS-DOS/PC DOS style core development.
+1. Phase 2 work in progress: move from embedded `.COM` demo payloads to FAT-backed `.COM` loading and execution.
+
+## pre-Alpha v0.5.5 (2026-04-22)
+1. Completed Stage1 milestone with deterministic `stage0 -> stage1` handoff and stable BIOS diagnostics (`INT 10h/13h/16h/1Ah`).
+2. Delivered first DOS runtime surface in Stage1: `INT 21h` baseline services (`AH=02h`, `09h`, `4Ch`, `4Dh`) plus deterministic smoke paths.
+3. Added `.COM` execution baseline with PSP-compatible memory setup and reproducible `comdemo` validation path.
+4. Unified QEMU run/test flows per profile and introduced Stage1 boot selftest regression gate (`qemu-test-stage1`) integrated in `qemu-test-all`.
+5. Finalized project bootstrap contracts (`DOS Core Specification v0.1` + `DOS Core Implementation Plan v0.1`) as normative references for next-phase DOS compatibility work.
 
 ## pre-Alpha v0.5.0 (2026-04-22)
 1. Restarted the project from a clean legacy BIOS x86 architecture baseline.

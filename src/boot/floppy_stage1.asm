@@ -24,6 +24,7 @@ stage1_start:
 
     call run_bios_diagnostics
     call install_int21_vector
+    call run_stage1_selftest
 
 main_loop:
     mov si, msg_prompt
@@ -192,7 +193,23 @@ int21_smoke_test:
     call print_hex8_dual
     call print_newline_dual
 
+    mov si, msg_dos21_serial_pass
+    call print_string_serial
+
     pop ds
+    ret
+
+run_stage1_selftest:
+    mov si, msg_stage1_selftest_begin
+    call print_string_dual
+    mov si, msg_stage1_selftest_serial_begin
+    call print_string_serial
+    call int21_smoke_test
+    call run_com_demo
+    mov si, msg_stage1_selftest_done
+    call print_string_dual
+    mov si, msg_stage1_selftest_serial_done
+    call print_string_serial
     ret
 
 run_com_demo:
@@ -231,11 +248,26 @@ run_com_demo:
 
     mov ah, 0x4D
     int 0x21
+    mov bl, al
 
+    mov al, [last_exit_code]
     mov si, msg_com_done
     call print_string_dual
     call print_hex8_dual
+    mov al, ' '
+    call putc_dual
+    mov al, bl
+    call print_hex8_dual
     call print_newline_dual
+
+    cmp byte [last_exit_code], 0x37
+    jne .serial_fail
+    mov si, msg_com_serial_pass
+    call print_string_serial
+    ret
+.serial_fail:
+    mov si, msg_com_serial_fail
+    call print_string_serial
     ret
 
 build_com_demo_image:
@@ -589,6 +621,10 @@ msg_diag_int16_ok db "[STAGE1] INT16h OK", 13, 10, 0
 msg_diag_int1a    db "[STAGE1] INT1Ah ticks=0x", 0
 msg_int21_installed db "[STAGE1] INT21h vector installed", 13, 10, 0
 msg_int21_missing db "[STAGE1] INT21h vector not installed", 13, 10, 0
+msg_stage1_selftest_begin db "[STAGE1] selftest begin", 13, 10, 0
+msg_stage1_selftest_done db "[STAGE1] selftest done", 13, 10, 0
+msg_stage1_selftest_serial_begin db "[STAGE1-SELFTEST] BEGIN", 13, 10, 0
+msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
 
 msg_prompt    db "ciukios> ", 0
 msg_unknown   db "unknown command. type 'help'", 13, 10, 0
@@ -599,8 +635,11 @@ msg_drive     db "boot drive=0x", 0
 msg_dos21_begin db "[STAGE1] INT21h smoke", 13, 10, 0
 msg_dos21_ah09 db "[INT21/AH=09h] console path active", 13, 10, '$'
 msg_dos21_status db "[INT21/AH=4Dh] code/type=0x", 0
+msg_dos21_serial_pass db "[DOS21-SERIAL] PASS", 13, 10, 0
 msg_com_begin db "[STAGE1] COM demo load/exec", 13, 10, 0
-msg_com_done  db "[STAGE1] COM demo exit code=0x", 0
+msg_com_done  db "[STAGE1] COM demo code/query=0x", 0
+msg_com_serial_pass db "[COMDEMO-SERIAL] PASS", 13, 10, 0
+msg_com_serial_fail db "[COMDEMO-SERIAL] FAIL", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
 
