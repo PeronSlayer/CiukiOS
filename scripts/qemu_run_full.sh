@@ -115,7 +115,9 @@ if [[ "$MODE" == "test" ]]; then
   QEMU_ARGS=(
     "${BASE_ARGS[@]}"
     -nographic
-    -serial mon:stdio
+    -chardev "file,id=ser0,path=$LOG_FILE"
+    -serial chardev:ser0
+    -monitor none
     -no-reboot
     -no-shutdown
   )
@@ -131,7 +133,7 @@ if [[ "$MODE" == "test" ]]; then
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '[qemu-run-full] dry-run:'
     printf ' %q' timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}"
-    printf ' >%q 2>&1\n' "$LOG_FILE"
+    printf ' >/dev/null 2>&1 (serial -> %q)\n' "$LOG_FILE"
     printf '\n'
     exit 0
   fi
@@ -140,7 +142,7 @@ if [[ "$MODE" == "test" ]]; then
   rm -f "$LOG_FILE"
 
   set +e
-  timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}" >"$LOG_FILE" 2>&1
+  timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}" >/dev/null 2>&1
   RC=$?
   set -e
 
@@ -155,13 +157,8 @@ if [[ "$MODE" == "test" ]]; then
     exit 0
   fi
 
-  if [[ ! -s "$LOG_FILE" ]]; then
-    echo "[qemu-run-full] FAIL (empty serial log; likely capture infra issue in this environment)" >&2
-    echo "[qemu-run-full] diag: serial mode is mon:stdio, debugcon not enabled" >&2
-    exit 1
-  fi
-
   echo "[qemu-run-full] FAIL (stage0/stage1 marker not detected)" >&2
+  echo "[qemu-run-full] serial log size: $(wc -c < "$LOG_FILE" 2>/dev/null || echo 0) bytes" >&2
   tail -n 80 "$LOG_FILE" >&2 || true
   exit 1
 fi
