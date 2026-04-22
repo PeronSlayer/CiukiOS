@@ -12,12 +12,27 @@ org 0x0000
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
 %define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
+%ifndef FAT_SPT
 %define FAT_SPT 18
+%endif
+%ifndef FAT_HEADS
 %define FAT_HEADS 2
+%endif
+%ifndef FAT_RESERVED_SECTORS
 %define FAT_RESERVED_SECTORS 15
+%endif
+%ifndef FAT_SECTORS_PER_FAT
 %define FAT_SECTORS_PER_FAT 9
+%endif
+%ifndef FAT_COUNT
 %define FAT_COUNT 2
+%endif
+%ifndef FAT_ROOT_DIR_SECTORS
 %define FAT_ROOT_DIR_SECTORS 14
+%endif
+%ifndef STAGE1_SELFTEST_AUTORUN
+%define STAGE1_SELFTEST_AUTORUN 1
+%endif
 %define FAT1_LBA FAT_RESERVED_SECTORS
 %define FAT2_LBA (FAT1_LBA + FAT_SECTORS_PER_FAT)
 %define FAT_ROOT_START_LBA (FAT_RESERVED_SECTORS + (FAT_COUNT * FAT_SECTORS_PER_FAT))
@@ -43,7 +58,9 @@ stage1_start:
 
     call run_bios_diagnostics
     call install_int21_vector
+%if STAGE1_SELFTEST_AUTORUN
     call run_stage1_selftest
+%endif
 
 main_loop:
     mov si, msg_prompt

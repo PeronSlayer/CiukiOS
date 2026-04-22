@@ -37,6 +37,9 @@ Environment:
   QEMU_BIN         Override QEMU binary.
   QEMU_EXTRA_ARGS  Extra args appended to QEMU command.
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
+  LOG_FILE         Test log path (default: build/full/qemu-full.log).
+  STAGE0_MARKER    Marker 1 for test validation.
+  STAGE1_MARKER    Marker 2 for test validation.
 TXT
 }
 
@@ -105,6 +108,9 @@ BASE_ARGS=(
 
 if [[ "$MODE" == "test" ]]; then
   TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-8}"
+  STAGE0_MARKER="${STAGE0_MARKER:-[BOOT0-FULL] CiukiOS full stage0 ready}"
+  STAGE1_MARKER="${STAGE1_MARKER:-[STAGE1-SERIAL] READY}"
+  LOG_FILE="${LOG_FILE:-build/full/qemu-full.log}"
 
   QEMU_ARGS=(
     "${BASE_ARGS[@]}"
@@ -125,22 +131,39 @@ if [[ "$MODE" == "test" ]]; then
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '[qemu-run-full] dry-run:'
     printf ' %q' timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}"
+    printf ' >%q 2>&1\n' "$LOG_FILE"
     printf '\n'
     exit 0
   fi
 
+  mkdir -p "$(dirname "$LOG_FILE")"
+  rm -f "$LOG_FILE"
+
   set +e
-  timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}"
+  timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}" >"$LOG_FILE" 2>&1
   RC=$?
   set -e
 
-  if [[ $RC -eq 0 || $RC -eq 124 ]]; then
-    echo "[qemu-run-full] PASS (smoke execution completed)"
+  if [[ $RC -ne 0 && $RC -ne 124 ]]; then
+    echo "[qemu-run-full] FAIL (qemu exit code: $RC)" >&2
+    tail -n 80 "$LOG_FILE" >&2 || true
+    exit "$RC"
+  fi
+
+  if grep -Fq "$STAGE0_MARKER" "$LOG_FILE" && grep -Fq "$STAGE1_MARKER" "$LOG_FILE"; then
+    echo "[qemu-run-full] PASS (stage0 and stage1 markers detected)"
     exit 0
   fi
 
-  echo "[qemu-run-full] FAIL (qemu exit code: $RC)" >&2
-  exit "$RC"
+  if [[ ! -s "$LOG_FILE" ]]; then
+    echo "[qemu-run-full] FAIL (empty serial log; likely capture infra issue in this environment)" >&2
+    echo "[qemu-run-full] diag: serial mode is mon:stdio, debugcon not enabled" >&2
+    exit 1
+  fi
+
+  echo "[qemu-run-full] FAIL (stage0/stage1 marker not detected)" >&2
+  tail -n 80 "$LOG_FILE" >&2 || true
+  exit 1
 fi
 
 QEMU_ARGS=(
@@ -156,7 +179,7 @@ if [[ -n "${QEMU_EXTRA_ARGS:-}" ]]; then
 fi
 
 echo "[qemu-run-full] starting visual QEMU session"
-echo "[qemu-run-full] note: full image is still an early scaffold"
+echo "[qemu-run-full] full profile FAT16 baseline boot"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '[qemu-run-full] dry-run:'
