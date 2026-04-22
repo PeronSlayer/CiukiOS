@@ -1,7 +1,34 @@
 bits 16
 org 0x7C00
 
-start:
+%define STAGE1_SEG     0x0800
+%define STAGE1_SECTORS 4
+
+jmp short boot_start
+nop
+
+; FAT12 BPB (1.44MB floppy geometry)
+bpb_oem_label        db "CIUKBIOS"
+bpb_bytes_per_sector dw 512
+bpb_sectors_per_clu  db 1
+bpb_reserved_secs    dw 1
+bpb_fat_count        db 2
+bpb_root_entries     dw 224
+bpb_total_secs16     dw 2880
+bpb_media            db 0xF0
+bpb_sectors_per_fat  dw 9
+bpb_sectors_per_trk  dw 18
+bpb_heads            dw 2
+bpb_hidden_secs      dd 0
+bpb_total_secs32     dd 0
+bs_drive_num         db 0
+bs_reserved1         db 0
+bs_boot_sig          db 0x29
+bs_volume_id         dd 0x20260422
+bs_volume_label      db "CIUKIOSFLP "
+bs_fs_type           db "FAT12   "
+
+boot_start:
     cli
     xor ax, ax
     mov ds, ax
@@ -10,13 +37,50 @@ start:
     mov sp, 0x7C00
     sti
 
+    mov [boot_drive], dl
+    mov [bs_drive_num], dl
+
     call serial_init
 
-    mov si, msg_boot
+    mov si, msg_stage0
     call print_bios_string
-
-    mov si, msg_boot
+    mov si, msg_stage0
     call print_serial_string
+
+    mov byte [retry_count], 3
+
+.read_stage1:
+    mov ax, STAGE1_SEG
+    mov es, ax
+    xor bx, bx
+    mov ah, 0x02
+    mov al, STAGE1_SECTORS
+    mov ch, 0
+    mov cl, 2
+    mov dh, 0
+    mov dl, [boot_drive]
+    int 0x13
+    jnc .stage1_ok
+
+    xor ah, ah
+    mov dl, [boot_drive]
+    int 0x13
+    dec byte [retry_count]
+    jnz .read_stage1
+
+    mov si, msg_disk_err
+    call print_bios_string
+    mov si, msg_disk_err
+    call print_serial_string
+    jmp halt
+
+.stage1_ok:
+    mov si, msg_stage1_jump
+    call print_bios_string
+    mov si, msg_stage1_jump
+    call print_serial_string
+    mov dl, [boot_drive]
+    jmp STAGE1_SEG:0x0000
 
 halt:
     cli
@@ -27,27 +91,21 @@ serial_init:
     mov dx, 0x03F8 + 1
     mov al, 0x00
     out dx, al
-
     mov dx, 0x03F8 + 3
     mov al, 0x80
     out dx, al
-
     mov dx, 0x03F8 + 0
     mov al, 0x03
     out dx, al
-
     mov dx, 0x03F8 + 1
     mov al, 0x00
     out dx, al
-
     mov dx, 0x03F8 + 3
     mov al, 0x03
     out dx, al
-
     mov dx, 0x03F8 + 2
     mov al, 0xC7
     out dx, al
-
     mov dx, 0x03F8 + 4
     mov al, 0x0B
     out dx, al
@@ -89,7 +147,12 @@ serial_putc:
     pop ax
     ret
 
-msg_boot db "[BOOT] CiukiOS pre-Alpha v0.5.0", 13, 10, 0
+boot_drive  db 0
+retry_count db 0
+
+msg_stage0      db "[BOOT0] CiukiOS stage0 ready", 13, 10, 0
+msg_stage1_jump db "[BOOT0] Loading stage1", 13, 10, 0
+msg_disk_err    db "[BOOT0] Disk read error", 13, 10, 0
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
