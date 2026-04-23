@@ -479,12 +479,20 @@ int21_handler:
     jmp .success
 
 .fn_3d:
+    push ds
+    mov ax, cs
+    mov ds, ax
     mov si, msg_trace_3d
     call print_string_serial
+    pop ds
     call int21_open
     push ax
+    push ds
+    mov ax, cs
+    mov ds, ax
     mov si, msg_trace_ax
     call print_string_serial
+    pop ds
     pop ax
     call print_hex8_serial
     mov al, 13
@@ -520,6 +528,8 @@ int21_handler:
     jmp .success
 
 .fn_44:
+    mov al, 'i'
+    call serial_putc
     call int21_ioctl
     jc .error
     jmp .success
@@ -530,12 +540,35 @@ int21_handler:
     jmp .success
 
 .fn_4e:
+    push ds
+    mov ax, cs
+    mov ds, ax
     mov si, msg_trace_4e
     call print_string_serial
+    pop ds
+    push ax
+    push si
+    mov si, dx
+    mov al, '{'
+    call serial_putc
+    mov al, [ds:si]
+    call serial_putc
+    mov al, [ds:si + 1]
+    call serial_putc
+    mov al, [ds:si + 2]
+    call serial_putc
+    mov al, '}'
+    call serial_putc
+    pop si
+    pop ax
     call int21_find_first
     push ax
+    push ds
+    mov ax, cs
+    mov ds, ax
     mov si, msg_trace_ax
     call print_string_serial
+    pop ds
     pop ax
     call print_hex8_serial
     mov al, 13
@@ -551,12 +584,20 @@ int21_handler:
     jmp .success
 
 .fn_4b:
+    push ds
+    mov ax, cs
+    mov ds, ax
     mov si, msg_trace_4b
     call print_string_serial
+    pop ds
     call int21_exec
     push ax
+    push ds
+    mov ax, cs
+    mov ds, ax
     mov si, msg_trace_ax
     call print_string_serial
+    pop ds
     pop ax
     call print_hex8_serial
     mov al, 13
@@ -1590,6 +1631,25 @@ int21_get_dta:
     ret
 
 int21_ioctl:
+    mov [cs:tmp_ioctl_subfn], al
+    push ax
+    push bx
+    mov al, 'I'
+    call serial_putc
+    pop bx
+    pop ax
+    push ax
+    call print_hex8_serial
+    pop ax
+    mov al, ':'
+    call serial_putc
+    push ax
+    mov al, bl
+    call print_hex8_serial
+    pop ax
+    mov al, ' '
+    call serial_putc
+    mov al, [cs:tmp_ioctl_subfn]
     cmp al, 0x00                ; Get device information
     je .get_dev_info
     cmp al, 0x06                ; Get input status
@@ -1864,6 +1924,21 @@ int21_find_first:
     call int21_find_try_gem_special
     jnc .done_ok
 
+    mov si, find_pattern
+    cmp byte [cs:si + 2], '?'
+    jne .scan_generic
+    cmp byte [cs:si + 1], 'D'
+    jne .scan_generic
+    cmp byte [cs:si], 'S'
+    je .scan_generic
+
+.probe_not_found:
+    mov ax, 0x0012
+    stc
+    jmp .done
+
+.scan_generic:
+
     mov word [cs:find_cursor], 0
     call int21_find_scan_from_cursor
     jc .scan_fail
@@ -1940,29 +2015,32 @@ int21_find_try_gem_special:
     push ds
     push es
 
+    ; Check SD pattern first (SD + 9 wildcards)
     mov si, find_pattern
     cmp byte [cs:si], 'S'
-    jne .miss
+    jne .check_gem
     cmp byte [cs:si + 1], 'D'
-    jne .miss
+    jne .check_gem
     add si, 2
     mov cx, 9
 .match_loop:
     cmp byte [cs:si], '?'
-    jne .miss
+    jne .check_gem
     inc si
     loop .match_loop
-
-    mov si, find_pattern
-    cmp byte [cs:si], 'S'
-    jne .check_pd
-    cmp byte [cs:si + 1], 'D'
-    jne .miss
     mov si, path_sd_driver_fat
     jmp .match_root
 
-.check_pd:
-    jmp .miss
+.check_gem:
+    mov si, find_pattern
+    cmp byte [cs:si], 'G'
+    jne .miss
+    cmp byte [cs:si + 1], 'E'
+    jne .miss
+    cmp byte [cs:si + 2], 'M'
+    jne .miss
+    mov si, path_gem_exe_fat
+    jmp .match_root
 
 .match_root:
     mov ax, cs
@@ -2234,8 +2312,12 @@ int21_path_to_fat_pattern:
     mov al, ' '
     rep stosb
 
+    mov byte [cs:tmp_path_guard], 96
+
     ; DOS callers often pass paths extracted from command tails with leading spaces.
 .skip_leading_space:
+    dec byte [cs:tmp_path_guard]
+    jz .fail
     cmp byte [si], ' '
     jne .check_empty
     inc si
@@ -2252,6 +2334,8 @@ int21_path_to_fat_pattern:
 .find_last:
     mov [cs:tmp_find_comp], si
 .walk:
+    dec byte [cs:tmp_path_guard]
+    jz .fail
     mov al, [si]
     cmp al, 0
     je .parse_start
@@ -2274,6 +2358,8 @@ int21_path_to_fat_pattern:
 
     xor bx, bx
 .name_loop:
+    dec byte [cs:tmp_path_guard]
+    jz .fail
     mov al, [si]
     cmp al, 0
     je .name_done
@@ -2311,6 +2397,8 @@ int21_path_to_fat_pattern:
 .name_skip_star:
     inc si
 .name_after_star:
+    dec byte [cs:tmp_path_guard]
+    jz .fail
     mov al, [si]
     cmp al, 0
     je .success
@@ -2333,6 +2421,8 @@ int21_path_to_fat_pattern:
     inc si
     xor bx, bx
 .ext_loop:
+    dec byte [cs:tmp_path_guard]
+    jz .fail
     mov al, [si]
     cmp al, 0
     je .success
@@ -2608,6 +2698,9 @@ int21_read:
 
     mov byte [cs:file_handle_swapped], 0
 
+    cmp bx, 0x0000
+    je .stdin_read
+
     cmp bx, 0x0005
     je .handle_ready
     cmp bx, 0x0006
@@ -2754,6 +2847,40 @@ int21_read:
     pop bx
     ret
 
+.stdin_read:
+    cmp cx, 0
+    jne .stdin_have_count
+    xor ax, ax
+    clc
+    jmp .done
+
+.stdin_have_count:
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, dx
+    xor bx, bx
+.stdin_loop:
+    cmp bx, cx
+    jae .stdin_done
+    mov ah, 0x01
+    int 0x16
+    jz .stdin_done
+    mov ah, 0x00
+    int 0x16
+    mov [ds:si + bx], al
+    inc bx
+    jmp .stdin_loop
+.stdin_done:
+    mov ax, bx
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    jmp .done
+
 int21_write:
     push bx
     push cx
@@ -2764,6 +2891,11 @@ int21_write:
     push es
 
     mov byte [cs:file_handle_swapped], 0
+
+    cmp bx, 0x0001
+    je .stdio_write
+    cmp bx, 0x0002
+    je .stdio_write
 
     cmp bx, 0x0005
     je .handle_ready
@@ -2934,6 +3066,37 @@ int21_write:
     pop cx
     pop bx
     ret
+
+.stdio_write:
+    cmp cx, 0
+    jne .stdio_have_count
+    xor ax, ax
+    clc
+    jmp .done
+
+.stdio_have_count:
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, dx
+    xor bx, bx
+.stdio_loop:
+    cmp bx, cx
+    jae .stdio_done
+    mov al, [ds:si + bx]
+    call bios_putc
+    call serial_putc
+    inc bx
+    jmp .stdio_loop
+.stdio_done:
+    mov ax, bx
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    jmp .done
 
 int21_delete:
     push bx
@@ -4908,7 +5071,11 @@ read_sector_lba:
     mov ch, al
     mov dh, dl
     mov bx, si
+%if FAT_TYPE == 16
+    mov dl, 0x80
+%else
     mov dl, [cs:boot_drive]
+%endif
 
     mov ah, 0x02
     mov al, 0x01
@@ -4942,7 +5109,11 @@ write_sector_lba:
     mov ch, al
     mov dh, dl
     mov bx, si
+%if FAT_TYPE == 16
+    mov dl, 0x80
+%else
     mov dl, [cs:boot_drive]
+%endif
 
     mov ah, 0x03
     mov al, 0x01
@@ -6215,6 +6386,8 @@ tmp_exec_limit dw 0
 tmp_exec_total dw 0
 tmp_exec_handle dw 0
 tmp_exec_error dw 0
+tmp_path_guard db 0
+tmp_ioctl_subfn db 0
 dos_mem_init db 0
 dos_mem_alloc_seg dw 0
 dos_mem_alloc_size dw 0
@@ -6387,6 +6560,7 @@ path_stage2_dos db "STAGE2  BIN"
 path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
 path_sd_driver_fat db "SDPSC9  VGA"
+path_gem_exe_fat   db "GEM     EXE"
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
 %if FAT_TYPE == 12
