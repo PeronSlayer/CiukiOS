@@ -41,6 +41,9 @@ stage2_entry:
     cmp ax, 0x0002
     jne .launch_fail
 
+    mov dx, msg_try_gem
+    mov ah, 0x09
+    int 0x21
     mov dx, path_gem_exe_root
     call exec_try_wait
     jnc .wait_done
@@ -48,6 +51,9 @@ stage2_entry:
     cmp ax, 0x0002
     jne .launch_fail
 
+    mov dx, msg_try_bat
+    mov ah, 0x09
+    int 0x21
     mov dx, path_gem_bat_root
     call exec_try_wait
     jnc .wait_done
@@ -151,6 +157,8 @@ print_hex_nibble:
 msg_begin db "[OPENGEM] launch", 13, 10, '$'
 msg_blocked db "[OPENGEM] runtime not ready, launch skipped", 13, 10, '$'
 msg_try_vdi db "[OPENGEM] try GEMVDI", 13, 10, '$'
+msg_try_gem db "[OPENGEM] try GEM.EXE", 13, 10, '$'
+msg_try_bat db "[OPENGEM] try GEM.BAT", 13, 10, '$'
 msg_fail db "[OPENGEM] launch failed AX=", '$'
 msg_return db "[OPENGEM] returned", 13, 10, '$'
 path_gemsys_dir db "\GEMAPPS\GEMSYS", 0

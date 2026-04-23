@@ -47,19 +47,6 @@ entry:
 ; === Initialization ===
 gfx_init_desktop:
     ; Set up graphics mode
-    mov ax, 0
-    mov es, ax
-    mov es, VGA_BUFFER
-    mov ax, VGA_BUFFER
-
-    mov es, ax
-
-    ; Clear screen to turquoise
-    xor di, di
-    mov al, DESKTOP_COLOR
-    mov cx, 0x8000            ; 320*200 pixels = 64K
-gfx_init_desktop:
-    ; Set up graphics mode
     mov ax, VGA_BUFFER
     mov es, ax
 

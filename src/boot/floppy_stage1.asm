@@ -4981,6 +4981,11 @@ gfx_plot_pixel:
     push di
     push es
 
+    cmp cx, 320
+    jae .done
+    cmp dx, 200
+    jae .done
+
     mov di, dx
     shl di, 6
     mov bx, dx
@@ -4990,6 +4995,8 @@ gfx_plot_pixel:
     mov bx, 0xA000
     mov es, bx
     mov [es:di], al
+
+.done:
 
     pop es
     pop di
@@ -6754,6 +6761,7 @@ init_mouse:
     int 0x33
     cmp ax, 0xFFFF
     jne .no_mouse
+    mov byte [mouse_installed], 1
     mov ax, 0x0001
     int 0x33
     mov si, msg_mouse_enabled
@@ -6762,6 +6770,7 @@ init_mouse:
     pop ax
     ret
 .no_mouse:
+    mov byte [mouse_installed], 0
     mov si, msg_mouse_not_found
     call print_string_serial
     pop bx
@@ -6793,9 +6802,11 @@ int33_handler:
     je .reset
     cmp ax, 0x0003
     je .status
+    cmp ax, 0x0004
+    je .set_pos
     cmp ax, 0x0024
     je .version
-    ; Minimal deterministic stub: no mouse installed / no state.
+
     xor ax, ax
     xor bx, bx
     xor cx, cx
@@ -6803,21 +6814,50 @@ int33_handler:
     iret
 
 .reset:
+    cmp byte [mouse_installed], 1
+    jne .reset_not_installed
+    mov ax, 0xFFFF
+    mov bx, 0x0002
+    mov word [mouse_pos_x], 160
+    mov word [mouse_pos_y], 100
+    iret
+.reset_not_installed:
     xor ax, ax
     xor bx, bx
     iret
 
 .status:
+    cmp byte [mouse_installed], 1
+    jne .status_not_installed
+    xor bh, bh
+    mov bl, [mouse_buttons]
+    mov cx, [mouse_pos_x]
+    mov dx, [mouse_pos_y]
+    iret
+.status_not_installed:
     xor bx, bx
     xor cx, cx
     xor dx, dx
     iret
 
+.set_pos:
+    cmp cx, 319
+    jbe .x_ok
+    mov cx, 319
+.x_ok:
+    cmp dx, 199
+    jbe .y_ok
+    mov dx, 199
+.y_ok:
+    mov [mouse_pos_x], cx
+    mov [mouse_pos_y], dx
+    iret
+
 .version:
+    mov ax, 0x061A
     xor bx, bx
-    xor cx, cx
-    xor dx, dx
-    xor ax, ax
+    mov cx, 0x0004
+    mov dx, 0x0000
     iret
 
 int2f_handler:
@@ -6980,10 +7020,10 @@ msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
 msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
 msg_prompt    db "root:\> ", 0
-msg_unknown   db "Unknown command. Type 'help' for available commands.", 13, 10, 0
+msg_unknown   db "Unknown command", 13, 10, 0
 msg_banner_title db " CiukiOS pre-Alpha v0.5.8 ", 0
 msg_shell_hint db "CiukiDOS Shell", 0
-msg_shell_quick db "Type 'help' for available commands", 0
+msg_shell_quick db "Type 'help'", 0
 msg_shell_footer db "Ready", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
@@ -7094,6 +7134,10 @@ gfx_line_sx dw 0
 gfx_line_sy dw 0
 gfx_line_err dw 0
 gfx_line_e2 dw 0
+mouse_pos_x dw 160
+mouse_pos_y dw 100
+mouse_buttons db 0
+mouse_installed db 0
 
 gfx_font8_table:
     db 'A', 0x18,0x24,0x42,0x7E,0x42,0x42,0x42,0x00
