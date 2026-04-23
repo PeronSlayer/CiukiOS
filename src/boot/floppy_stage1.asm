@@ -629,6 +629,21 @@ int21_handler:
     jmp .success
 
 .fn_49:
+    push ax
+    push es
+    mov al, '4'
+    call serial_putc
+    mov al, '9'
+    call serial_putc
+    mov al, '@'
+    call serial_putc
+    pop ax
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop ax
     call int21_free
     jc .error
     jmp .success
@@ -3449,8 +3464,130 @@ int21_mem_write_mcb:
     mov [es:0x0001], ax
     mov ax, [cs:dos_mem_mcb_size]
     mov [es:0x0003], ax
+    call int21_mem_trace_chain
 
     pop es
+    pop ax
+    ret
+
+int21_mem_current_owner:
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jnz .have_owner
+    mov ax, 0x0008
+.have_owner:
+    ret
+
+int21_mem_largest_consume:
+    cmp cx, 0
+    je .done
+    cmp ax, dx
+    jb .skip_gap
+    mov si, ax
+    sub si, dx
+    cmp si, bx
+    jbe .skip_gap
+    mov bx, si
+
+.skip_gap:
+    add ax, cx
+    cmp ax, dx
+    jbe .done
+    mov dx, ax
+
+.done:
+    ret
+
+int21_mem_largest_global:
+    push si
+    push di
+    push dx
+
+    call int21_mem_query_free
+    mov dx, ax
+    xor bx, bx
+
+    mov ax, [cs:dos_mem_alloc_seg]
+    mov cx, [cs:dos_mem_alloc_size]
+    mov si, [cs:dos_mem_alloc_seg2]
+    mov di, [cs:dos_mem_alloc_size2]
+
+    cmp cx, 0
+    jne .has_block1
+    cmp di, 0
+    je .tail
+    mov ax, si
+    mov cx, di
+    call int21_mem_largest_consume
+    jmp .tail
+
+.has_block1:
+    cmp di, 0
+    je .only_block1
+    cmp ax, si
+    jbe .b1_then_b2
+    xchg ax, si
+    xchg cx, di
+
+.b1_then_b2:
+    call int21_mem_largest_consume
+    mov ax, si
+    mov cx, di
+    call int21_mem_largest_consume
+    jmp .tail
+
+.only_block1:
+    call int21_mem_largest_consume
+
+.tail:
+    mov ax, DOS_HEAP_LIMIT_SEG
+    cmp dx, ax
+    jae .done
+    sub ax, dx
+    cmp ax, bx
+    jbe .done
+    mov bx, ax
+
+.done:
+    pop dx
+    pop di
+    pop si
+    ret
+
+int21_mem_trace_chain:
+    push ax
+
+    mov al, 'M'
+    call serial_putc
+    mov al, '1'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, [cs:dos_mem_alloc_seg]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:dos_mem_alloc_size]
+    call print_hex16_serial
+    mov al, ' '
+    call serial_putc
+
+    mov al, '2'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, [cs:dos_mem_alloc_seg2]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:dos_mem_alloc_size2]
+    call print_hex16_serial
+
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+
     pop ax
     ret
 
@@ -3469,6 +3606,7 @@ int21_alloc:
 
     mov [cs:dos_mem_alloc_seg], ax
     mov [cs:dos_mem_alloc_size], bx
+    call int21_mem_current_owner
     mov [cs:dos_mem_mcb_owner], ax
     mov [cs:dos_mem_mcb_size], bx
     call int21_mem_write_mcb
@@ -3499,9 +3637,11 @@ int21_alloc:
     mov byte [es:0x0000], 'Z'
     pop bx
     pop ax
-    mov [es:0x0001], ax   ; owner = block2 data segment
+    call int21_mem_current_owner
+    mov [es:0x0001], ax   ; owner = current PSP
     mov [es:0x0003], bx   ; size in paragraphs
     pop es
+    call int21_mem_trace_chain
     ; update block1 MCB type to 'M' (middle, not last)
     push es
     mov ax, DOS_HEAP_BASE_SEG
@@ -3512,12 +3652,12 @@ int21_alloc:
     clc
     ret
 .no_memory_b2:
-    mov bx, cx
+    call int21_mem_largest_global
     mov ax, 0x0008
     stc
     ret
 .both_busy:
-    xor bx, bx
+    call int21_mem_largest_global
     mov ax, 0x0008
     stc
     ret
@@ -3547,6 +3687,7 @@ int21_free:
     mov es, ax
     mov byte [es:0x0000], 'Z'
     pop es
+    call int21_mem_trace_chain
     xor ax, ax
     clc
     ret
@@ -3625,7 +3766,21 @@ int21_resize:
     jne .invalid
     cmp bx, 0
     je .no_memory
+    mov dx, DOS_HEAP_LIMIT_SEG
+    sub dx, ax
+    cmp bx, dx
+    ja .block2_no_memory
     mov [cs:dos_mem_alloc_size2], bx
+    push es
+    push ax
+    dec ax
+    mov es, ax
+    call int21_mem_current_owner
+    mov [es:0x0001], ax
+    mov [es:0x0003], bx
+    pop ax
+    pop es
+    call int21_mem_trace_chain
     xor dx, dx
     mov ax, es
     clc
@@ -3633,10 +3788,18 @@ int21_resize:
 .resize_block1:
     cmp bx, 0
     je .no_memory
-    cmp bx, DOS_HEAP_USER_MAX_PARAS
-    ja .no_memory
+    mov dx, DOS_HEAP_LIMIT_SEG
+    cmp word [cs:dos_mem_alloc_size2], 0
+    je .block1_have_limit
+    mov dx, [cs:dos_mem_alloc_seg2]
+.block1_have_limit:
+    sub dx, ax
+    cmp bx, dx
+    ja .block1_no_memory
 
     mov [cs:dos_mem_alloc_size], bx
+    call int21_mem_current_owner
+    mov [cs:dos_mem_mcb_owner], ax
     mov [cs:dos_mem_mcb_size], bx
     call int21_mem_write_mcb
     xor dx, dx
@@ -3650,7 +3813,19 @@ int21_resize:
     ret
 
 .no_memory:
-    mov bx, DOS_HEAP_USER_MAX_PARAS
+    xor bx, bx
+    mov ax, 0x0008
+    stc
+    ret
+
+.block1_no_memory:
+    mov bx, dx
+    mov ax, 0x0008
+    stc
+    ret
+
+.block2_no_memory:
+    mov bx, dx
     mov ax, 0x0008
     stc
     ret
