@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-all opengem-trace-full opengem-acceptance-full opengem-gate-final opengem-regression-lock clean
+.PHONY: help build-floppy build-full qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-all opengem-trace-full opengem-acceptance-full opengem-gate-final opengem-regression-lock opengem-perf-baseline opengem-perf-check clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -12,6 +12,8 @@ help:
 	@echo "  make opengem-acceptance-full - OpenGEM graphical acceptance loop with metrics"
 	@echo "  make opengem-gate-final      - official OG-P0-05 final pass/fail gate"
 	@echo "  make opengem-regression-lock - OG-P2-01 historical regression lock checks"
+	@echo "  make opengem-perf-baseline   - OG-P2-02 baseline capture for performance budgets"
+	@echo "  make opengem-perf-check      - OG-P2-02 periodic budget check against baseline"
 	@echo "  make clean            - remove build artifacts"
 
 build-floppy:
@@ -43,6 +45,12 @@ opengem-gate-final:
 
 opengem-regression-lock:
 	@bash scripts/opengem_regression_lock.sh
+
+opengem-perf-baseline:
+	@bash scripts/opengem_perf_baseline.sh
+
+opengem-perf-check:
+	@bash scripts/opengem_perf_budget_check.sh
 
 clean:
 	@rm -rf build

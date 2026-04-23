@@ -89,6 +89,14 @@ Progress is continuous but not tied to a fixed release calendar.
 	`scripts/qemu_test_all.sh` now includes `scripts/qemu_test_opengem_regressions.sh`.
 3. Parallel-agent OG-P1 task handoff:
 	[docs/opengem-p1-agent-task.md](docs/opengem-p1-agent-task.md)
+4. `make opengem-perf-baseline`
+	Captures OG-P2-02 baseline metrics in:
+	- `build/full/opengem-performance-baseline.latest.json`
+5. `make opengem-perf-check`
+	Runs periodic budget checks against baseline and writes:
+	- `build/full/opengem-performance-budget-check.perfcheck.report.txt`
+6. Budget config:
+	- [docs/opengem-performance-budget.json](docs/opengem-performance-budget.json)
 
 ## Legacy Archive
 Historical project content is preserved under:
