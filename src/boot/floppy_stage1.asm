@@ -538,20 +538,23 @@ int21_handler:
     call print_string_serial
     pop ds
     call int21_exec
+    jnc .fn_4b_ok
     push ax
-    push ds
-    mov ax, cs
-    mov ds, ax
-    mov si, msg_trace_ax
-    call print_string_serial
-    pop ds
+    mov al, '4'
+    call serial_putc
+    mov al, 'B'
+    call serial_putc
+    mov al, '!'
+    call serial_putc
     pop ax
-    call print_hex8_serial
+    call print_hex16_serial
     mov al, 13
     call serial_putc
     mov al, 10
     call serial_putc
-    jc .error
+    jmp .error
+
+.fn_4b_ok:
     jmp .success
 
 .fn_48:
@@ -2922,10 +2925,12 @@ int21_read:
     stc
 
 .done:
+    pushf
     cmp byte [cs:file_handle_swapped], 1
     jne .done_noswap
     call int21_swap_file_handles
 .done_noswap:
+    popf
     pop es
     pop ds
     pop di
@@ -3142,10 +3147,12 @@ int21_write:
     stc
 
 .done:
+    pushf
     cmp byte [cs:file_handle_swapped], 1
     jne .done_noswap
     call int21_swap_file_handles
 .done_noswap:
+    popf
     pop es
     pop ds
     pop di
@@ -3348,10 +3355,12 @@ int21_seek:
     stc
 
 .done:
+    pushf
     cmp byte [cs:file_handle_swapped], 1
     jne .done_noswap
     call int21_swap_file_handles
 .done_noswap:
+    popf
     pop cx
     pop bx
     ret
@@ -6976,8 +6985,6 @@ msg_int21_installed db "[INT21] ok", 13, 10, 0
 msg_int21_missing db "[I21] no", 13, 10, 0
 msg_int21_unsup db "[INT21-UNSUP] AH=", 0
 msg_int21_err db "[IERR] ", 0
-msg_trace_3d db "[T3D]", 0
-msg_trace_4e db "[T4E]", 0
 msg_trace_4b db "[T4B]", 0
 msg_trace_ax db " AX=", 0
 msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
