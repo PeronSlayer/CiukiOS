@@ -29,3 +29,4 @@ copilot-task-codex-config-persistence-v1.md
 # Local-only handoffs (do not publish)
 handoffs/
 *HANDOFF*.md
+OLD/**/docs/handoffs/
