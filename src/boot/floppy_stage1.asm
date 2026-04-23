@@ -1482,6 +1482,11 @@ int21_set_vector:
     push ax
     push bx
     push es
+
+    ; Keep DOS core stable: ignore attempts to replace INT 21h.
+    cmp al, 0x21
+    je .ok
+
     xor ah, ah
     mov bx, ax
     shl bx, 1
@@ -1491,6 +1496,8 @@ int21_set_vector:
     mov [es:bx], dx
     mov ax, ds
     mov [es:bx + 2], ax
+
+.ok:
     xor ax, ax
     clc
     pop es
@@ -2223,7 +2230,22 @@ int21_open:
     cmp al, 2
     ja .access_denied
 
-    mov [cs:file_handle_mode], al
+    cmp byte [cs:file_handle_open], 0
+    je .target_slot1
+    cmp byte [cs:file_handle2_open], 0
+    je .target_slot2
+    mov ax, 0x0004
+    stc
+    jmp .done
+
+.target_slot1:
+    mov byte [cs:file_handle_target], 1
+    jmp .target_ready
+
+.target_slot2:
+    mov byte [cs:file_handle_target], 2
+
+.target_ready:
 
     mov si, dx
     call int21_path_to_fat_name
@@ -2238,26 +2260,55 @@ int21_open:
     call load_root_file_first_sector
     jc .not_found
 
-    mov byte [file_handle_open], 1
-    mov word [file_handle_pos], 0
-    mov ax, [search_found_cluster]
-    mov [file_handle_start_cluster], ax
-    mov ax, [search_found_size_lo]
-    mov [file_handle_size_lo], ax
-    mov ax, [search_found_size_hi]
-    mov [file_handle_size_hi], ax
-    mov ax, [search_found_root_lba]
-    mov [file_handle_root_lba], ax
-    mov ax, [search_found_root_off]
-    mov [file_handle_root_off], ax
+    cmp byte [cs:file_handle_target], 2
+    je .assign_slot2
+
+    mov byte [cs:file_handle_open], 1
+    mov word [cs:file_handle_pos], 0
+    mov [cs:file_handle_mode], al
+    mov ax, [cs:search_found_cluster]
+    mov [cs:file_handle_start_cluster], ax
+    mov ax, [cs:search_found_size_lo]
+    mov [cs:file_handle_size_lo], ax
+    mov ax, [cs:search_found_size_hi]
+    mov [cs:file_handle_size_hi], ax
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:file_handle_root_lba], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:file_handle_root_off], ax
 
     call int21_load_fat_cache
     jc .io_fail
-    mov ax, [file_handle_start_cluster]
+    mov ax, [cs:file_handle_start_cluster]
     call int21_count_chain
-    mov [file_handle_cluster_count], ax
+    mov [cs:file_handle_cluster_count], ax
 
     mov ax, 0x0005
+    clc
+    jmp .done
+
+.assign_slot2:
+    mov byte [cs:file_handle2_open], 1
+    mov word [cs:file_handle2_pos], 0
+    mov [cs:file_handle2_mode], al
+    mov ax, [cs:search_found_cluster]
+    mov [cs:file_handle2_start_cluster], ax
+    mov ax, [cs:search_found_size_lo]
+    mov [cs:file_handle2_size_lo], ax
+    mov ax, [cs:search_found_size_hi]
+    mov [cs:file_handle2_size_hi], ax
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:file_handle2_root_lba], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:file_handle2_root_off], ax
+
+    call int21_load_fat_cache
+    jc .io_fail
+    mov ax, [cs:file_handle2_start_cluster]
+    call int21_count_chain
+    mov [cs:file_handle2_cluster_count], ax
+
+    mov ax, 0x0006
     clc
     jmp .done
 
@@ -2290,7 +2341,17 @@ int21_open:
 
 int21_close:
     cmp bx, 0x0005
+    je .close_slot1
+    cmp bx, 0x0006
     jne .bad_handle
+    cmp byte [cs:file_handle2_open], 1
+    jne .bad_handle
+    mov byte [cs:file_handle2_open], 0
+    xor ax, ax
+    clc
+    ret
+
+.close_slot1:
     cmp byte [cs:file_handle_open], 1
     jne .bad_handle
     mov byte [cs:file_handle_open], 0
@@ -2311,6 +2372,19 @@ int21_read:
     push ds
     push es
 
+    mov byte [cs:file_handle_swapped], 0
+
+    cmp bx, 0x0005
+    je .handle_ready
+    cmp bx, 0x0006
+    jne .bad_handle
+    cmp byte [cs:file_handle2_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+
+.handle_ready:
     cmp bx, 0x0005
     jne .bad_handle
     cmp byte [cs:file_handle_open], 1
@@ -2423,6 +2497,10 @@ int21_read:
     stc
 
 .done:
+    cmp byte [cs:file_handle_swapped], 1
+    jne .done_noswap
+    call int21_swap_file_handles
+.done_noswap:
     pop es
     pop ds
     pop di
@@ -2441,6 +2519,19 @@ int21_write:
     push ds
     push es
 
+    mov byte [cs:file_handle_swapped], 0
+
+    cmp bx, 0x0005
+    je .handle_ready
+    cmp bx, 0x0006
+    jne .bad_handle
+    cmp byte [cs:file_handle2_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+
+.handle_ready:
     cmp bx, 0x0005
     jne .bad_handle
     cmp byte [cs:file_handle_open], 1
@@ -2577,6 +2668,10 @@ int21_write:
     stc
 
 .done:
+    cmp byte [cs:file_handle_swapped], 1
+    jne .done_noswap
+    call int21_swap_file_handles
+.done_noswap:
     pop es
     pop ds
     pop di
@@ -2679,6 +2774,20 @@ int21_seek:
     push bx
     push cx
 
+    mov byte [cs:file_handle_swapped], 0
+
+    cmp bx, 0x0005
+    je .handle_ready
+    cmp bx, 0x0006
+    jne .bad_handle
+    cmp byte [cs:file_handle2_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+
+.handle_ready:
+
     cmp bx, 0x0005
     jne .bad_handle
     cmp byte [cs:file_handle_open], 1
@@ -2724,8 +2833,54 @@ int21_seek:
     stc
 
 .done:
+    cmp byte [cs:file_handle_swapped], 1
+    jne .done_noswap
+    call int21_swap_file_handles
+.done_noswap:
     pop cx
     pop bx
+    ret
+
+int21_swap_file_handles:
+    push ax
+
+    mov al, [cs:file_handle_open]
+    xchg al, [cs:file_handle2_open]
+    mov [cs:file_handle_open], al
+
+    mov ax, [cs:file_handle_pos]
+    xchg ax, [cs:file_handle2_pos]
+    mov [cs:file_handle_pos], ax
+
+    mov al, [cs:file_handle_mode]
+    xchg al, [cs:file_handle2_mode]
+    mov [cs:file_handle_mode], al
+
+    mov ax, [cs:file_handle_start_cluster]
+    xchg ax, [cs:file_handle2_start_cluster]
+    mov [cs:file_handle_start_cluster], ax
+
+    mov ax, [cs:file_handle_root_lba]
+    xchg ax, [cs:file_handle2_root_lba]
+    mov [cs:file_handle_root_lba], ax
+
+    mov ax, [cs:file_handle_root_off]
+    xchg ax, [cs:file_handle2_root_off]
+    mov [cs:file_handle_root_off], ax
+
+    mov ax, [cs:file_handle_cluster_count]
+    xchg ax, [cs:file_handle2_cluster_count]
+    mov [cs:file_handle_cluster_count], ax
+
+    mov ax, [cs:file_handle_size_lo]
+    xchg ax, [cs:file_handle2_size_lo]
+    mov [cs:file_handle_size_lo], ax
+
+    mov ax, [cs:file_handle_size_hi]
+    xchg ax, [cs:file_handle2_size_hi]
+    mov [cs:file_handle_size_hi], ax
+
+    pop ax
     ret
 
 int21_mem_init:
@@ -5708,6 +5863,17 @@ file_handle_root_off dw 0
 file_handle_cluster_count dw 0
 file_handle_size_lo dw 0
 file_handle_size_hi dw 0
+file_handle2_open db 0
+file_handle2_pos dw 0
+file_handle2_mode db 0
+file_handle2_start_cluster dw 0
+file_handle2_root_lba dw 0
+file_handle2_root_off dw 0
+file_handle2_cluster_count dw 0
+file_handle2_size_lo dw 0
+file_handle2_size_hi dw 0
+file_handle_target db 0
+file_handle_swapped db 0
 fat_cache_valid db 0
 fat_cache_dirty db 0
 fat_cache_sector dw 0xFFFF
