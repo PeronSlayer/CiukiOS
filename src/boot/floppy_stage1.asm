@@ -2020,9 +2020,8 @@ int21_find_next:
     cmp byte [cs:find_special_mode], 1
     jne .check_active
     mov byte [cs:find_special_mode], 0
-    mov byte [cs:find_active], 0
-    mov ax, 0x0012
-    stc
+    xor ax, ax
+    clc
     ret
 
 .check_active:
@@ -6986,7 +6985,6 @@ msg_int21_missing db "[I21] no", 13, 10, 0
 msg_int21_unsup db "[INT21-UNSUP] AH=", 0
 msg_int21_err db "[IERR] ", 0
 msg_trace_4b db "[T4B]", 0
-msg_trace_ax db " AX=", 0
 msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
 msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
