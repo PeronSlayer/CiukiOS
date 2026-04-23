@@ -12,8 +12,9 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 4. DOS core implementation plan: [docs/dos-core-implementation-plan-v0.1.md](docs/dos-core-implementation-plan-v0.1.md)
 5. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
 6. Engineering logbook: [docs/diario-bordo-v2.md](docs/diario-bordo-v2.md)
-7. Full changelog: [CHANGELOG.md](CHANGELOG.md)
-8. Donations and support: [DONATIONS.md](DONATIONS.md)
+7. OpenGEM completion plan: [docs/opengem-completion-execution-plan-v0.5.9.md](docs/opengem-completion-execution-plan-v0.5.9.md)
+8. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+9. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
 `CiukiOS pre-Alpha v0.5.9`

@@ -40,6 +40,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 - ✓ Nested exec chain (GEMVDI → GEM.EXE) functional; GEM reaches event loop
 - ✓ DOS memory allocator (2-block alloc/free/resize) stabilized
 - OpenGEM graphical desktop (full AES/VDI rendering) still pending
+- Execution backlog and closure criteria: `docs/opengem-completion-execution-plan-v0.5.9.md`
 
 ## Phase 3.5 - CiukiOS Installer (Setup project)
 > Tracked separately under `setup/`. Prerequisite: stable Phase 3 runtime.
