@@ -9,6 +9,7 @@ org 0x0000
 %define DOS_META_BUF_SEG 0x7000
 %define DOS_FAT_BUF_SEG  0x7200
 %define DOS_IO_BUF_SEG   0x7400
+%define DOS_ENV_SEG      0x7600
 %define DOS_HEAP_BASE_SEG 0x8000
 %define DOS_HEAP_LIMIT_SEG 0x9F00
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
@@ -799,14 +800,29 @@ int21_exec:
 .check_exe:
     mov al, [cs:path_fat_name + 8]
     cmp al, 'E'
+    je .check_exe_x
+    cmp al, 'A'
+    je .check_app_p1
     jne .invalid_format
+
+.check_exe_x:
     mov al, [cs:path_fat_name + 9]
     cmp al, 'X'
     jne .invalid_format
     mov al, [cs:path_fat_name + 10]
     cmp al, 'E'
     jne .invalid_format
+    jmp .exec_mz
 
+.check_app_p1:
+    mov al, [cs:path_fat_name + 9]
+    cmp al, 'P'
+    jne .invalid_format
+    mov al, [cs:path_fat_name + 10]
+    cmp al, 'P'
+    jne .invalid_format
+
+.exec_mz:
     cmp word [cs:current_psp_seg], 0
     jne .nested_exec_seg
     mov word [cs:current_load_seg], MZ_LOAD_SEG
@@ -1115,6 +1131,8 @@ int21_exec_load_com:
     mov [es:0x0010], ax
     mov word [es:0x0012], 0x0005
     mov [es:0x0014], ax
+    mov word [es:0x002C], DOS_ENV_SEG
+    call int21_build_env_block
     call int21_exec_write_tail
 
     mov di, 0x0100
@@ -1268,7 +1286,8 @@ int21_exec_run_mz:
     mov [es:0x0014], ax
     mov word [es:0x0002], DOS_HEAP_LIMIT_SEG
     mov [es:0x0016], ax
-    mov word [es:0x002C], DOS_META_BUF_SEG
+    mov word [es:0x002C], DOS_ENV_SEG
+    call int21_build_env_block
     call int21_exec_write_tail
 
     push ds
@@ -1526,26 +1545,94 @@ int21_chdir:
     mov al, [si]
     cmp al, 0
     je .root
-    cmp al, '\'
-    je .skip_sep
-    cmp al, '/'
-    jne .copy
-.skip_sep:
+
+    ; skip drive prefix (X:)
+    cmp byte [si + 1], ':'
+    jne .scan_components
+    add si, 2
+
+.scan_components:
+    ; absolute path starts from root in this minimal model
+    cmp byte [si], '\'
+    je .abs_skip
+    cmp byte [si], '/'
+    jne .comp_loop_entry
+.abs_skip:
+    mov byte [cs:cwd_buf], 0
     inc si
-.copy:
-    xor bx, bx
-.copy_loop:
+
+.comp_loop_entry:
     mov al, [si]
     cmp al, 0
-    je .done_copy
+    je .ok
+
+    ; isolate current component
+    xor bx, bx
+.comp_copy:
+    mov al, [si]
+    cmp al, 0
+    je .comp_done
+    cmp al, '\'
+    je .comp_done
+    cmp al, '/'
+    je .comp_done
     cmp bx, 23
-    jae .done_copy
-    mov [cs:cwd_buf + bx], al
+    jae .comp_advance
+    mov [cs:tmp_cwd_comp + bx], al
     inc bx
+.comp_advance:
     inc si
-    jmp .copy_loop
-.done_copy:
-    mov byte [cs:cwd_buf + bx], 0
+    jmp .comp_copy
+
+.comp_done:
+    mov byte [cs:tmp_cwd_comp + bx], 0
+
+    ; skip separator for next component (if present)
+    mov al, [si]
+    cmp al, '\'
+    je .skip_sep_after_comp
+    cmp al, '/'
+    jne .handle_comp
+.skip_sep_after_comp:
+    inc si
+
+.handle_comp:
+    ; ignore empty component
+    cmp byte [cs:tmp_cwd_comp], 0
+    je .comp_loop_entry
+
+    ; ignore "."
+    cmp byte [cs:tmp_cwd_comp], '.'
+    jne .check_parent
+    cmp byte [cs:tmp_cwd_comp + 1], 0
+    je .comp_loop_entry
+
+.check_parent:
+    ; handle ".." as root fallback in this simplified cwd model
+    cmp byte [cs:tmp_cwd_comp], '.'
+    jne .set_component
+    cmp byte [cs:tmp_cwd_comp + 1], '.'
+    jne .set_component
+    cmp byte [cs:tmp_cwd_comp + 2], 0
+    jne .set_component
+    mov byte [cs:cwd_buf], 0
+    jmp .comp_loop_entry
+
+.set_component:
+    ; keep last canonical component as cwd token
+    xor bx, bx
+.set_copy:
+    mov al, [cs:tmp_cwd_comp + bx]
+    mov [cs:cwd_buf + bx], al
+    cmp al, 0
+    je .comp_loop_entry
+    inc bx
+    cmp bx, 23
+    jb .set_copy
+    mov byte [cs:cwd_buf + 23], 0
+    jmp .comp_loop_entry
+
+.ok:
     xor ax, ax
     clc
     ret
@@ -3341,6 +3428,31 @@ int21_upcase_al:
     ja .done
     sub al, 32
 .done:
+    ret
+
+int21_build_env_block:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_ENV_SEG
+    mov es, ax
+    xor di, di
+    mov si, dos_env_block
+    mov cx, dos_env_block_end - dos_env_block
+    rep movsb
+
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
     ret
 
 int21_fileio_test:
@@ -5662,6 +5774,11 @@ fileio_patch db 0x11, 0x22
 find_dta times 64 db 0
 dos_indos_flag db 0
 dos_list_of_lists times 64 db 0
+tmp_cwd_comp times 24 db 0
+dos_env_block db 'COMSPEC=C:\COMMAND.COM', 0
+              db 'PATH=C:\', 0
+              db 0
+dos_env_block_end:
 cmd_buffer times CMD_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] run", 13, 10, 0
