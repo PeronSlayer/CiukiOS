@@ -2591,6 +2591,28 @@ int21_open:
     call int21_path_to_fat_name
     jc .path_fail
 
+    mov si, path_fat_name
+    cmp byte [cs:si + 1], 'D'
+    jne .name_ready
+    cmp byte [cs:si], 'V'
+    jne .name_ready
+
+.alias_vd:
+    mov si, path_sd_driver_fat
+
+.alias_copy:
+    push di
+    push cx
+    mov ax, cs
+    mov ds, ax
+    mov di, path_fat_name
+    mov cx, 11
+    rep movsb
+    pop cx
+    pop di
+
+.name_ready:
+
     mov ax, cs
     mov ds, ax
     mov ax, DOS_META_BUF_SEG
