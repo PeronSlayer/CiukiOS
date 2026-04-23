@@ -4,6 +4,9 @@ boot/uefi-loader/build/
 .claude/
 .vscode/
 
+.DS_Store
+gemvdi*.bin
+
 *.log
 *.img
 *.fd

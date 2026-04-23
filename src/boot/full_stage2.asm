@@ -25,24 +25,36 @@ stage2_entry:
     mov ah, 0x3B
     int 0x21
 
-    ; Primary startup path: GEM.EXE.
+    mov dx, path_sd_pattern
+    xor cx, cx
+    mov ah, 0x4E
+    int 0x21
+    jc .sd_fail
+    mov dx, msg_sd_ok
+    mov ah, 0x09
+    int 0x21
+    jmp .sd_done
+
+.sd_fail:
+    mov dx, msg_sd_fail
+    mov ah, 0x09
+    int 0x21
+
+.sd_done:
+
+    ; OpenGEM bootstraps through GEMVDI.EXE.
+    mov dx, msg_try_vdi
+    mov ah, 0x09
+    int 0x21
+    mov dx, path_gemvdi_root
+    call exec_try_wait_gemarg
+    jnc .wait_done
+    mov [last_fail_ax], ax
+
     mov dx, msg_try_gem
     mov ah, 0x09
     int 0x21
-    mov dx, path_gem_exe_sys
-    call exec_try_wait
-    jnc .wait_done
-    mov [last_fail_ax], ax
-
     mov dx, path_gem_exe_root
-    call exec_try_wait
-    jnc .wait_done
-    mov [last_fail_ax], ax
-
-    mov dx, msg_try_bat
-    mov ah, 0x09
-    int 0x21
-    mov dx, path_gem_bat_sys
     call exec_try_wait
     jnc .wait_done
     mov [last_fail_ax], ax
@@ -92,14 +104,24 @@ exec_try_wait:
     stc
     ret
 
-exec_try_ignore:
-    push ax
-    push bx
-    xor bx, bx
+exec_try_wait_gemarg:
+    push es
+    push ds
+    pop es
+    mov ax, ds
+    mov [exec_gemvdi_params + 4], ax
+    mov bx, exec_gemvdi_params
     mov ax, 0x4B00
     int 0x21
-    pop bx
-    pop ax
+    pop es
+    jc .fail
+    mov ah, 0x4D
+    int 0x21
+    xor ax, ax
+    clc
+    ret
+.fail:
+    stc
     ret
 
 print_ax_hex:
@@ -143,14 +165,25 @@ print_hex_nibble:
 
 msg_begin db "[OPENGEM] launch", 13, 10, '$'
 msg_blocked db "[OPENGEM] runtime not ready, launch skipped", 13, 10, '$'
+msg_try_vdi db "[OPENGEM] try GEMVDI", 13, 10, '$'
 msg_try_gem db "[OPENGEM] try GEM", 13, 10, '$'
-msg_try_bat db "[OPENGEM] try BAT", 13, 10, '$'
-msg_fail db "[OPENGEM] launch failed", 13, 10, '$'
+msg_sd_ok db "[OPENGEM] SD ok", 13, 10, '$'
+msg_sd_fail db "[OPENGEM] SD miss", 13, 10, '$'
+msg_fail db "[OPENGEM] launch failed - AX=", '$'
 msg_ax db " AX=", '$'
 msg_return db "[OPENGEM] returned", 13, 10, '$'
 path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
-path_gem_exe_sys db "GEMAPPS\GEMSYS\GEM.EXE", 0
+path_sd_pattern db "SD*.*", 0
+path_gemvdi_root db "GEMVDI.EXE", 0
 path_gem_exe_root db "GEM.EXE", 0
-path_gem_bat_sys db "GEMAPPS\GEMSYS\GEM.BAT", 0
 path_gem_bat_root db "GEM.BAT", 0
+exec_gemvdi_tail db 0, 13
+exec_gemvdi_params:
+    dw 0
+    dw exec_gemvdi_tail
+    dw 0
+    dw 0
+    dw 0
+    dw 0
+    dw 0
 last_fail_ax dw 0

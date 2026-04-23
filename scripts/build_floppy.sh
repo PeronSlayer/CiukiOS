@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  # Allow direct invocation on macOS without going through the wrapper entrypoint.
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/macos" && pwd)/common.sh"
+  ciuk_macos_prepare_tools
+  ciuk_macos_check_required
+  cd "$CIUKIOS_ROOT"
+fi
+
 mkdir -p build/floppy
 mkdir -p build/floppy/obj
 
@@ -11,6 +19,8 @@ STAGE1_BIN="build/floppy/obj/floppy_stage1.bin"
 STAGE1_SLOT_BIN="build/floppy/obj/floppy_stage1_slot.bin"
 STAGE1_SECTORS=22
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
+STAGE2_SRC="src/boot/floppy_stage2.asm"
+STAGE2_BIN="build/floppy/obj/floppy_stage2.bin"
 COMDEMO_SRC="src/com/comdemo.asm"
 COMDEMO_BIN="build/floppy/obj/comdemo.com"
 COMDEMO_MAX_SIZE=512
@@ -41,6 +51,10 @@ if [[ ! -f "$BOOT_SRC" ]]; then
 fi
 if [[ ! -f "$STAGE1_SRC" ]]; then
   echo "[build-floppy] ERROR: stage1 source not found: $STAGE1_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$STAGE2_SRC" ]]; then
+  echo "[build-floppy] ERROR: stage2 source not found: $STAGE2_SRC" >&2
   exit 1
 fi
 if [[ ! -f "$COMDEMO_SRC" ]]; then
@@ -81,6 +95,14 @@ fi
 echo "[build-floppy] preparing stage1 slot (${STAGE1_SECTORS} sectors)"
 dd if=/dev/zero of="$STAGE1_SLOT_BIN" bs=512 count="$STAGE1_SECTORS" status=none
 dd if="$STAGE1_BIN" of="$STAGE1_SLOT_BIN" conv=notrunc status=none
+
+echo "[build-floppy] assembling stage2 payload"
+nasm -f bin "$STAGE2_SRC" -o "$STAGE2_BIN"
+
+STAGE2_SIZE="$(stat -c%s "$STAGE2_BIN")"
+if [[ "$STAGE2_SIZE" -gt 4096 ]]; then
+  echo "[build-floppy] WARNING: stage2 payload is $STAGE2_SIZE bytes (soft limit 4096)" >&2
+fi
 
 echo "[build-floppy] assembling COM demo payload"
 nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
@@ -125,8 +147,9 @@ ROOT_ENTRY_BIN="build/floppy/obj/root_comdemo_entry.bin"
 ROOT_ENTRY_MZ_BIN="build/floppy/obj/root_mzdemo_entry.bin"
 ROOT_ENTRY_FILEIO_BIN="build/floppy/obj/root_fileio_entry.bin"
 ROOT_ENTRY_DELTEST_BIN="build/floppy/obj/root_deltest_entry.bin"
+ROOT_ENTRY_STAGE2_BIN="build/floppy/obj/root_stage2_entry.bin"
 
-printf 'F0FFFFFFFFFF05F0FFFF0F00' | xxd -r -p > "$FAT_SECTOR_BIN"
+printf 'F0FFFFFFFFFF05F0FFFF0F07F0' | xxd -r -p > "$FAT_SECTOR_BIN"
 dd if=/dev/zero bs=1 count=$((512 - 12)) status=none >> "$FAT_SECTOR_BIN"
 
 dd if=/dev/zero of="$ROOT_ENTRY_BIN" bs=1 count=32 status=none
@@ -153,6 +176,12 @@ printf '\x20' | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=11 conv=notrunc status
 printf '\x06\x00' | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=26 conv=notrunc status=none
 printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((DELTEST_SIZE & 0xFF)) $(((DELTEST_SIZE >> 8) & 0xFF)) $(((DELTEST_SIZE >> 16) & 0xFF)) $(((DELTEST_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=28 conv=notrunc status=none
 
+dd if=/dev/zero of="$ROOT_ENTRY_STAGE2_BIN" bs=1 count=32 status=none
+printf 'STAGE2  BIN' | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=0 conv=notrunc status=none
+printf '\x20' | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=11 conv=notrunc status=none
+printf '\x07\x00' | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=26 conv=notrunc status=none
+printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((STAGE2_SIZE & 0xFF)) $(((STAGE2_SIZE >> 8) & 0xFF)) $(((STAGE2_SIZE >> 16) & 0xFF)) $(((STAGE2_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=28 conv=notrunc status=none
+
 echo "[build-floppy] creating 1.44MB floppy image"
 dd if=/dev/zero of=build/floppy/ciukios-floppy.img bs=512 count=2880 status=none
 dd if="$BOOT_BIN" of="$IMG" bs=512 count=1 conv=notrunc status=none
@@ -163,22 +192,25 @@ dd if="$ROOT_ENTRY_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512)) conv=notrunc sta
 dd if="$ROOT_ENTRY_MZ_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_FILEIO_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_DELTEST_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_STAGE2_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
 dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek="$DATA_LBA" count=1 conv=notrunc status=none
 dd if="$MZDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
 dd if="$FILEIO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 2)) count=2 conv=notrunc status=none
 dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 4)) count=1 conv=notrunc status=none
+dd if="$STAGE2_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 5)) status=none
 
 cat > build/floppy/README.txt << 'TXT'
 CiukiOS Legacy v2 - Floppy profile
 
 Image: ciukios-floppy.img (1.44MB)
-State: BIOS stage0 -> stage1 chain-loader baseline
-Boot path: stage0 at LBA0, stage1 payload in sectors 2-15
-FAT layout: reserved sectors include stage1 area, FAT/root/data follow BPB geometry
-COM demo payload: COMDEMO.COM root entry + first cluster at FAT data start
-MZ demo payload: MZDEMO.EXE root entry + first cluster at FAT data start + 1
-FILEIO payload: FILEIO.BIN root entry + cluster chain 4->5 for multi-cluster I/O tests
-DELTEST payload: DELTEST.BIN root entry + cluster 6 for delete-path tests
+State: BIOS stage0 -> stage1 -> stage2 runtime
+Boot path: stage0 at LBA0, stage1 payload in sectors 2-23, stage2 in FAT data area
+FAT layout: reserved sectors include stage1, FAT/root/data follow BPB geometry
+COM demo: COMDEMO.COM cluster 2 for test/demo
+MZ demo: MZDEMO.EXE cluster 3 for test/demo
+FILEIO test: FILEIO.BIN clusters 4-5 for multi-sector I/O tests
+DELTEST test: DELTEST.BIN cluster 6 for file deletion tests
+Stage2 runtime: STAGE2.BIN cluster 7 (OpenGEM bootstrap and extended services)
 TXT
 
 echo "[build-floppy] done: $IMG"

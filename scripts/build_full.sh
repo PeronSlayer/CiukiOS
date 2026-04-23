@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+	# Allow direct invocation on macOS without going through the wrapper entrypoint.
+	source "$(cd "$(dirname "${BASH_SOURCE[0]}")/macos" && pwd)/common.sh"
+	ciuk_macos_prepare_tools
+	ciuk_macos_check_required
+	cd "$CIUKIOS_ROOT"
+fi
+
 mkdir -p build/full
 mkdir -p build/full/obj
 
@@ -44,6 +52,7 @@ OPENGEM_PAYLOAD_DIR="assets/full/opengem"
 OPENGEM_UPSTREAM_DIR="$OPENGEM_PAYLOAD_DIR/upstream/OPENGEM7-RC3"
 INCLUDE_OPENGEM_PAYLOAD="${CIUKIOS_INCLUDE_OPENGEM:-1}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
+STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-0}"
 
 for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC"; do
 	if [[ ! -f "$f" ]]; then
@@ -71,6 +80,7 @@ nasm -f bin "$STAGE1_SRC" \
 	-D FAT_ROOT_DIR_SECTORS="$ROOT_DIR_SECTORS" \
 	-D FAT_TYPE=16 \
 	-D STAGE1_SELFTEST_AUTORUN="$STAGE1_SELFTEST_AUTORUN" \
+	-D STAGE2_AUTORUN="$STAGE2_AUTORUN" \
 	-o "$STAGE1_BIN"
 
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
@@ -176,7 +186,26 @@ stage_regular_files() {
 
 stage_regular_files "$OPENGEM_PAYLOAD_DIR"
 stage_regular_files "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS"
+stage_regular_files "$CIUKIOS_ROOT/OLD/archive-2026-04-22/third_party/freedos/runtime/OPENGEM/GEMAPPS/FONTS"
+stage_regular_files "$CIUKIOS_ROOT/OLD/archive-2026-04-22/third_party/freedos/runtime/OPENGEM/GEMAPPS"
 stage_regular_files "$OPENGEM_UPSTREAM_DIR"
+
+if [[ -f "$OPENGEM_STAGE_DIR/VGAFSTR.INF" ]]; then
+	cp "$OPENGEM_STAGE_DIR/VGAFSTR.INF" "$OPENGEM_STAGE_DIR/FSTR.INF"
+	cp "$OPENGEM_STAGE_DIR/VGAFSTR.INF" "$OPENGEM_STAGE_DIR/FHDR.INF"
+fi
+
+if [[ -f "$OPENGEM_STAGE_DIR/STANDARD.PSF" ]]; then
+	cp "$OPENGEM_STAGE_DIR/STANDARD.PSF" "$OPENGEM_STAGE_DIR/STANDARD.FNT"
+fi
+
+if [[ -f "$OPENGEM_STAGE_DIR/ROMAN.PSF" ]]; then
+	cp "$OPENGEM_STAGE_DIR/ROMAN.PSF" "$OPENGEM_STAGE_DIR/ROMAN.FNT"
+fi
+
+if [[ -f "$OPENGEM_STAGE_DIR/SANSERIF.PSF" ]]; then
+	cp "$OPENGEM_STAGE_DIR/SANSERIF.PSF" "$OPENGEM_STAGE_DIR/SANSERIF.FNT"
+fi
 
 if [[ "$INCLUDE_OPENGEM_PAYLOAD" != "1" ]]; then
 	echo "[build-full] OpenGEM payload injection disabled (CIUKIOS_INCLUDE_OPENGEM=$INCLUDE_OPENGEM_PAYLOAD)"
@@ -186,11 +215,23 @@ elif command -v mcopy >/dev/null 2>&1; then
 		if command -v mmd >/dev/null 2>&1; then
 			mmd -i "$IMG" ::GEMAPPS >/dev/null 2>&1 || true
 			mmd -i "$IMG" ::GEMAPPS/GEMSYS >/dev/null 2>&1 || true
+			mmd -i "$IMG" ::GEMAPPS/FONTS >/dev/null 2>&1 || true
+			mmd -i "$IMG" ::GEMAPPS/GEMBOOT >/dev/null 2>&1 || true
+			mmd -i "$IMG" ::GEMBOOT >/dev/null 2>&1 || true
 		fi
 		for f in "$OPENGEM_STAGE_DIR"/*; do
 			base="$(basename "$f")"
 			mcopy -o -i "$IMG" "$f" "::$base" >/dev/null
 			mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMSYS/$base" >/dev/null || true
+			case "$base" in
+				*.PSF|*.AFF|*.B30|*.CGA|*.ELQ|*.EPS|*.HPH|*.VGA|*.X20|FSTR.INF|FHDR.INF|VGAFSTR.INF|*.FNT)
+					mcopy -o -i "$IMG" "$f" "::GEMAPPS/FONTS/$base" >/dev/null || true
+					;;
+			esac
+			if [[ "$base" == "GEM.EXE" ]]; then
+				mcopy -o -i "$IMG" "$f" "::GEMBOOT/$base" >/dev/null || true
+				mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMBOOT/$base" >/dev/null || true
+			fi
 		done
 	else
 		echo "[build-full] OpenGEM payload not found at $OPENGEM_PAYLOAD_DIR (skipping)"

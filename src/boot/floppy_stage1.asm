@@ -184,6 +184,15 @@ install_int21_vector:
     mov [dta_seg], ax
     mov word [dta_off], find_dta
 
+    mov bx, 0x20 * 4
+    mov ax, [es:bx]
+    mov [old_int20_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int20_seg], ax
+    mov word [es:bx], int20_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+
     ; Install a minimal INT 2Fh multiplex handler for DOS compatibility.
     mov bx, 0x2F * 4
     mov ax, [es:bx]
@@ -203,6 +212,23 @@ install_int21_vector:
     call print_string_dual
     ret
 
+int20_handler:
+    push ax
+    push bp
+    mov byte [last_exit_code], 0
+    mov byte [last_term_type], 0
+    mov ax, [current_psp_seg]
+    or ax, ax
+    jz .done
+    mov bp, sp
+    mov word [ss:bp + 6], 0x0005
+    mov [ss:bp + 8], ax
+
+.done:
+    pop bp
+    pop ax
+    iret
+
 int21_handler:
     push bx
     push cx
@@ -215,11 +241,20 @@ int21_handler:
 
     mov byte [cs:int21_carry], 0
     mov byte [cs:int21_return_es], 0
+    mov byte [cs:int21_last_ah], ah
 
     cmp ah, 0x02
     je .fn_02
+    cmp ah, 0x06
+    je .fn_06
+    cmp ah, 0x07
+    je .fn_07
+    cmp ah, 0x08
+    je .fn_08
     cmp ah, 0x09
     je .fn_09
+    cmp ah, 0x0A
+    je .fn_0a
     cmp ah, 0x0E
     je .fn_0e
     cmp ah, 0x1A
@@ -236,6 +271,8 @@ int21_handler:
     je .fn_2f
     cmp ah, 0x30
     je .fn_30
+    cmp ah, 0x31
+    je .fn_31
     cmp ah, 0x33
     je .fn_33
     cmp ah, 0x34
@@ -294,6 +331,21 @@ int21_handler:
     call serial_putc
     jmp .success
 
+.fn_06:
+    cmp dl, 0xFF
+    je .fn_key_cr
+    mov al, dl
+    call bios_putc
+    call serial_putc
+    jmp .success
+
+.fn_07:
+.fn_08:
+.fn_key_cr:
+    mov al, 0x0D
+    xor ah, ah
+    jmp .success
+
 .fn_09:
     mov si, dx
 .fn_09_loop:
@@ -303,6 +355,22 @@ int21_handler:
     call bios_putc
     call serial_putc
     jmp .fn_09_loop
+
+.fn_0a:
+    push bx
+    mov bx, dx
+    mov al, [ds:bx]
+    cmp al, 1
+    jb .fn_0a_empty
+    mov byte [ds:bx + 1], 1
+    mov byte [ds:bx + 2], 0x0D
+    pop bx
+    jmp .success
+
+.fn_0a_empty:
+    mov byte [ds:bx + 1], 0
+    pop bx
+    jmp .success
 
 .fn_0e:
     call int21_set_default_drive
@@ -445,12 +513,28 @@ int21_handler:
 .fn_4c:
     mov [cs:last_exit_code], al
     mov byte [cs:last_term_type], 0
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jz .fn_4c_no_process
+    mov byte [cs:int21_force_terminate], 1
+.fn_4c_no_process:
     xor ax, ax
     jmp .success
 
 .fn_4d:
     mov al, [cs:last_exit_code]
     mov ah, [cs:last_term_type]
+    jmp .success
+
+.fn_31:
+    mov [cs:last_exit_code], al
+    mov byte [cs:last_term_type], 1
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jz .fn_31_done
+    mov byte [cs:int21_force_terminate], 1
+.fn_31_done:
+    xor ax, ax
     jmp .success
 
 .fn_52:
@@ -493,10 +577,30 @@ int21_handler:
     jmp .done
 
 .error:
+    push ax
+    mov si, msg_int21_err
+    call print_string_serial
+    mov al, [cs:int21_last_ah]
+    call print_hex8_serial
+    mov al, ':'
+    call serial_putc
+    pop ax
+    call print_hex8_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
     mov byte [cs:int21_carry], 1
 
 .done:
     mov bp, sp
+    cmp byte [cs:int21_force_terminate], 0
+    je .term_done
+    mov byte [cs:int21_force_terminate], 0
+    mov ax, [cs:current_psp_seg]
+    mov word [bp + 16], 0x0005
+    mov [bp + 18], ax
+.term_done:
     cmp byte [cs:int21_return_es], 0
     je .flags_only
     mov [bp + 0], es
@@ -622,6 +726,12 @@ int21_exec:
     cmp al, 0x00
     jne .bad_function
 
+    mov byte [cs:exec_cmd_len], 0
+    cmp bx, 0
+    je .no_param_block
+    call int21_exec_capture_tail
+.no_param_block:
+
     mov si, dx
     call int21_path_to_fat_name
     jc .path_fail
@@ -687,6 +797,87 @@ int21_exec:
     pop bx
     ret
 
+int21_exec_capture_tail:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov ax, es
+    or ax, ax
+    jz .done
+
+    mov ds, ax
+    mov si, bx
+    mov di, [si + 2]
+    mov dx, [si + 4]
+    or dx, dx
+    jz .done
+
+    mov ds, dx
+    mov si, di
+    mov cl, [si]
+    cmp cl, 126
+    jbe .len_ok
+    mov cl, 126
+.len_ok:
+    mov [cs:exec_cmd_len], cl
+    xor ch, ch
+    inc si
+
+    mov ax, cs
+    mov es, ax
+    mov di, exec_cmd_buf
+    rep movsb
+
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_exec_write_tail:
+    push ax
+    push bx
+    push cx
+    push di
+    push si
+    push ds
+
+    mov al, [cs:exec_cmd_len]
+    mov [es:0x0080], al
+    xor ch, ch
+    mov cl, al
+    jcxz .set_cr
+
+    mov ax, cs
+    mov ds, ax
+    mov si, exec_cmd_buf
+    mov di, 0x0081
+    rep movsb
+
+.set_cr:
+    xor bx, bx
+    mov bl, [cs:exec_cmd_len]
+    mov byte [es:0x0081 + bx], 0x0D
+
+    pop ds
+    pop si
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 int21_exec_load_to_es:
     push bx
     push cx
@@ -743,6 +934,7 @@ int21_exec_load_to_es:
 
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
+    mov [cs:tmp_next_cluster], ax
     mov word [cs:tmp_cluster_off], 0
 
 .cluster_sector_loop:
@@ -755,7 +947,7 @@ int21_exec_load_to_es:
     shr ax, cl
     cmp ax, FAT_SECTORS_PER_CLUSTER
     jae .next_cluster
-    add ax, [cs:tmp_lba]
+    add ax, [cs:tmp_next_cluster]
     mov [cs:tmp_lba], ax
 
     mov ax, DOS_IO_BUF_SEG
@@ -809,10 +1001,6 @@ int21_exec_load_to_es:
     sub [cs:tmp_exec_limit], ax
     sbb word [cs:tmp_exec_total], 0
     add word [cs:tmp_cluster_off], 512
-
-    mov ax, [cs:tmp_lba]
-    inc ax
-    mov [cs:tmp_lba], ax
 
     jmp .cluster_sector_loop
 
@@ -870,7 +1058,15 @@ int21_exec_load_com:
     mov cx, 128
     rep stosw
     mov word [es:0x0000], 0x20CD
-    mov byte [es:0x0080], 0
+    mov byte [es:0x0005], 0xCB
+    mov word [es:0x000A], 0x0005
+    mov ax, es
+    mov [es:0x000C], ax
+    mov word [es:0x000E], 0x0005
+    mov [es:0x0010], ax
+    mov word [es:0x0012], 0x0005
+    mov [es:0x0014], ax
+    call int21_exec_write_tail
 
     mov di, 0x0100
     mov cx, 0xFE00
@@ -900,10 +1096,18 @@ int21_exec_run_com:
 
     cli
     mov ax, COM_LOAD_SEG
+    mov [cs:current_psp_seg], ax
     mov ds, ax
     mov es, ax
     mov ss, ax
     mov sp, 0xFFFE
+    xor ax, ax
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    xor si, si
+    xor di, di
+    xor bp, bp
     sti
 
     call far [cs:com_entry_off]
@@ -920,6 +1124,7 @@ int21_exec_run_com:
     mov ds, ax
     mov ax, [cs:saved_es]
     mov es, ax
+    mov word [cs:current_psp_seg], 0
     clc
     ret
 
@@ -1000,7 +1205,25 @@ int21_exec_run_mz:
     mov cx, 128
     rep stosw
     mov word [es:0x0000], 0x20CD
-    mov byte [es:0x0080], 0
+    mov byte [es:0x0005], 0xCB
+    mov word [es:0x000A], 0x0005
+    mov ax, es
+    mov [es:0x000C], ax
+    mov word [es:0x000E], 0x0005
+    mov [es:0x0010], ax
+    mov word [es:0x0012], 0x0005
+    mov [es:0x0014], ax
+    mov word [es:0x0002], DOS_HEAP_LIMIT_SEG
+    mov [es:0x0016], ax
+    mov word [es:0x002C], DOS_META_BUF_SEG
+    call int21_exec_write_tail
+
+    push ds
+    mov ax, DOS_META_BUF_SEG
+    mov ds, ax
+    xor ax, ax
+    mov [0x0000], ax
+    pop ds
 
     mov [cs:saved_ss], ss
     mov [cs:saved_sp], sp
@@ -1010,11 +1233,19 @@ int21_exec_run_mz:
 
     cli
     mov ax, [cs:mz_psp_seg]
+    mov [cs:current_psp_seg], ax
     mov ds, ax
     mov es, ax
     mov ax, [cs:mz_stack_seg]
     mov ss, ax
     mov sp, [cs:mz_stack_sp]
+    xor ax, ax
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    xor si, si
+    xor di, di
+    xor bp, bp
     sti
 
     call far [cs:mz_entry_off]
@@ -1026,6 +1257,7 @@ int21_exec_run_mz:
     mov ss, ax
     mov sp, [cs:saved_sp]
     sti
+    mov word [cs:current_psp_seg], 0
 
     mov ax, [cs:saved_ds]
     mov ds, ax
@@ -1226,22 +1458,49 @@ int21_get_psp:
 
 int21_chdir:
     mov si, dx
-    cmp byte [si], 0
-    je .ok
-    cmp byte [si], '\'
-    je .ok
-    cmp byte [si], '/'
-    je .ok
-    mov ax, 0x0003
-    stc
+    mov al, [si]
+    cmp al, 0
+    je .root
+    cmp al, '\'
+    je .skip_sep
+    cmp al, '/'
+    jne .copy
+.skip_sep:
+    inc si
+.copy:
+    xor bx, bx
+.copy_loop:
+    mov al, [si]
+    cmp al, 0
+    je .done_copy
+    cmp bx, 23
+    jae .done_copy
+    mov [cs:cwd_buf + bx], al
+    inc bx
+    inc si
+    jmp .copy_loop
+.done_copy:
+    mov byte [cs:cwd_buf + bx], 0
+    xor ax, ax
+    clc
     ret
-.ok:
+.root:
+    mov byte [cs:cwd_buf], 0
     xor ax, ax
     clc
     ret
 
 int21_getcwd:
-    mov byte [ds:si], 0
+    xor bx, bx
+.copy_loop:
+    mov al, [cs:cwd_buf + bx]
+    mov [ds:si], al
+    inc si
+    cmp al, 0
+    je .done
+    inc bx
+    jmp .copy_loop
+.done:
     xor ax, ax
     clc
     ret
@@ -1259,6 +1518,9 @@ int21_find_first:
     call int21_path_to_fat_pattern
     jc .path_fail
 
+    call int21_find_try_gem_special
+    jnc .done_ok
+
     mov word [cs:find_cursor], 0
     call int21_find_scan_from_cursor
     jc .scan_fail
@@ -1266,6 +1528,7 @@ int21_find_first:
     call int21_find_write_dta
     jc .io_fail
 
+.done_ok:
     xor ax, ax
     clc
     jmp .done
@@ -1293,6 +1556,15 @@ int21_find_first:
     ret
 
 int21_find_next:
+    cmp byte [cs:find_special_mode], 1
+    jne .check_active
+    mov byte [cs:find_special_mode], 0
+    mov byte [cs:find_active], 0
+    mov ax, 0x0012
+    stc
+    ret
+
+.check_active:
     cmp byte [cs:find_active], 1
     jne .no_more
 
@@ -1318,6 +1590,63 @@ int21_find_next:
     stc
     ret
 
+int21_find_try_gem_special:
+    push bx
+    push cx
+    push si
+    push ds
+    push es
+
+    mov si, find_pattern
+    cmp byte [cs:si], 'S'
+    jne .miss
+    cmp byte [cs:si + 1], 'D'
+    jne .miss
+    add si, 2
+    mov cx, 9
+.match_loop:
+    cmp byte [cs:si], '?'
+    jne .miss
+    inc si
+    loop .match_loop
+
+    mov si, find_pattern
+    cmp byte [cs:si], 'S'
+    jne .check_pd
+    cmp byte [cs:si + 1], 'D'
+    jne .miss
+    mov si, path_sd_driver_fat
+    jmp .match_root
+
+.check_pd:
+    jmp .miss
+
+.match_root:
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov bx, 0xFFFF
+    call load_root_file_first_sector
+    jc .miss
+    call int21_find_write_dta
+    jc .miss
+    mov byte [cs:find_active], 1
+    mov byte [cs:find_special_mode], 1
+    clc
+    jmp .done
+
+.miss:
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop si
+    pop cx
+    pop bx
+    ret
+
 int21_find_scan_from_cursor:
     push bx
     push cx
@@ -1333,7 +1662,7 @@ int21_find_scan_from_cursor:
     mov word [cs:find_cached_sector], 0xFFFF
 
 .scan_loop:
-    cmp bx, 224
+    cmp bx, FAT_ROOT_DIR_SECTORS * 16
     jae .not_found
 
     mov ax, bx
@@ -2334,6 +2663,21 @@ int21_free:
 int21_resize:
     call int21_mem_init
 
+    ; Many DOS programs first resize their own PSP block (ES=PSP).
+    ; Accept it as a compatibility no-op in this minimal allocator.
+    mov ax, es
+    cmp ax, [cs:current_psp_seg]
+    jne .check_heap_block
+    cmp ax, 0
+    je .check_heap_block
+    cmp bx, 0
+    je .no_memory
+    mov ax, es
+    clc
+    ret
+
+.check_heap_block:
+
     cmp word [cs:dos_mem_alloc_size], 0
     je .invalid
     mov ax, es
@@ -2794,9 +3138,9 @@ int21_path_to_fat_name:
     cmp al, '.'
     je .ext_start
     cmp al, '\'
-    je .name_done
+    je .next_component
     cmp al, '/'
-    je .name_done
+    je .next_component
     cmp bx, 8
     jae .name_advance
     call int21_upcase_al
@@ -2812,6 +3156,15 @@ int21_path_to_fat_name:
     clc
     jmp .done
 
+.next_component:
+    inc si
+    mov di, path_fat_name
+    mov cx, 11
+    mov al, ' '
+    rep stosb
+    xor bx, bx
+    jmp .name_loop
+
 .ext_start:
     inc si
     xor bx, bx
@@ -2820,9 +3173,9 @@ int21_path_to_fat_name:
     cmp al, 0
     je .success
     cmp al, '\'
-    je .success
+    je .next_component
     cmp al, '/'
-    je .success
+    je .next_component
     cmp bx, 3
     jae .ext_advance
     call int21_upcase_al
@@ -4042,14 +4395,8 @@ dispatch_command:
 
 %if FAT_TYPE == 16
 .cmd_opengem:
-    mov ax, STAGE2_LOAD_SEG
-    mov es, ax
-    xor bx, bx
-    mov si, path_stage2_dos
-    call load_root_file_first_sector
+    call run_stage2_payload
     jc .load_fail
-
-    call STAGE2_LOAD_SEG:0x0000
     jmp .done
 
 .load_fail:
@@ -4961,9 +5308,45 @@ init_stage2_services:
     call install_int33_vector
     mov si, msg_stage2_ready
     call print_string_serial
+%if FAT_TYPE == 16
+%if STAGE2_AUTORUN
+    call run_stage2_payload
+%endif
+%endif
     pop si
     pop ax
     ret
+
+%if FAT_TYPE == 16
+run_stage2_payload:
+    push ax
+    push bx
+    push ds
+    push es
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, STAGE2_LOAD_SEG
+    mov es, ax
+    xor bx, bx
+    mov si, path_stage2_dos
+    call load_root_file_first_sector
+    jc .load_fail
+
+    call STAGE2_LOAD_SEG:0x0000
+    clc
+    jmp .done
+
+.load_fail:
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop bx
+    pop ax
+    ret
+%endif
 
 init_mouse:
     push ax
@@ -5031,9 +5414,16 @@ int21_return_es db 0
 int2f_installed db 0
 dos_default_drive db 0
 last_exit_code db 0
+int21_last_ah db 0
 last_term_type db 0
+int21_force_terminate db 0
+current_psp_seg dw 0
+exec_cmd_len db 0
+exec_cmd_buf times 126 db 0
 old_int21_off dw 0
 old_int21_seg dw 0
+old_int20_off dw 0
+old_int20_seg dw 0
 old_int2f_off dw 0
 old_int2f_seg dw 0
 file_handle_open db 0
@@ -5094,6 +5484,7 @@ dta_seg dw 0
 dta_off dw 0
 find_attr db 0
 find_active db 0
+find_special_mode db 0
 find_cursor dw 0
 find_cached_sector dw 0
 find_pattern times 11 db 0
@@ -5106,82 +5497,83 @@ dos_indos_flag db 0
 dos_list_of_lists times 32 db 0
 cmd_buffer times CMD_BUF_LEN db 0
 
-msg_stage1        db "[STAGE1] CiukiOS stage1 running", 13, 10, 0
+msg_stage1        db "[STAGE1] run", 13, 10, 0
 msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
-msg_diag_begin    db "[STAGE1] BIOS diagnostics", 13, 10, 0
-msg_diag_int10    db "[STAGE1] INT10h OK", 13, 10, 0
-msg_diag_int13_ok db "[STAGE1] INT13h OK", 13, 10, 0
-msg_diag_int13_fail db "[STAGE1] INT13h FAIL", 13, 10, 0
-msg_diag_int16_ok db "[STAGE1] INT16h OK", 13, 10, 0
-msg_diag_int1a    db "[STAGE1] INT1Ah ticks=0x", 0
-msg_int21_installed db "[STAGE1] INT21h vector installed", 13, 10, 0
-msg_int21_missing db "[STAGE1] INT21h vector not installed", 13, 10, 0
+msg_diag_begin    db "[STAGE1] diag", 13, 10, 0
+msg_diag_int10    db "[INT10] OK", 13, 10, 0
+msg_diag_int13_ok db "[INT13] OK", 13, 10, 0
+msg_diag_int13_fail db "[INT13] FAIL", 13, 10, 0
+msg_diag_int16_ok db "[INT16] OK", 13, 10, 0
+msg_diag_int1a    db "[TICKS] 0x", 0
+msg_int21_installed db "[INT21] ok", 13, 10, 0
+msg_int21_missing db "[I21] no", 13, 10, 0
 msg_int21_unsup db "[INT21-UNSUP] AH=", 0
-msg_stage1_selftest_begin db "[STAGE1] selftest begin", 13, 10, 0
-msg_stage1_selftest_done db "[STAGE1] selftest done", 13, 10, 0
-msg_stage1_selftest_serial_begin db "[STAGE1-SELFTEST] BEGIN", 13, 10, 0
-msg_stage1_selftest_serial_done db "[STAGE1-SELFTEST] DONE", 13, 10, 0
+msg_int21_err db "[IERR] ", 0
+msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
+msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
+msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
+msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
 msg_prompt    db "root:\> ", 0
-msg_unknown   db "unknown command. type 'help'", 13, 10, 0
-msg_banner_title db " CiukiOS  pre-Alpha v0.5.6 ", 0
+msg_unknown   db "unknown", 13, 10, 0
+msg_banner_title db " CiukiOS ", 0
 msg_shell_hint db "CiukiDOS Shell", 0
-msg_shell_quick db "For commands write Help and press send", 0
+msg_shell_quick db "type help", 0
 msg_shell_footer db "ready", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
-msg_help_header db "CiukiOS shell commands", 13, 10, 0
-msg_help_core db "core: help ver tree cls ticks drive dir cd cd..", 13, 10, 0
-msg_help_runtime db "ciukidos: dos21 comdemo mzdemo fileio findtest gfxdemo", 13, 10, 0
-msg_help_system db "system: reboot halt", 13, 10, 0
-msg_help_apps db "apps: reserved", 13, 10, 0
-msg_version_line db "CiukiOS pre-Alpha v0.5.6", 13, 10, 0
-msg_tree_header db "CiukiOS logical system tree", 13, 10, 0
+msg_help_header db "commands", 13, 10, 0
+msg_help_core db "core", 13, 10, 0
+msg_help_runtime db "rt", 13, 10, 0
+msg_help_system db "sys", 13, 10, 0
+msg_help_apps db "apps", 13, 10, 0
+msg_version_line db "CiukiOS v0.5.6", 13, 10, 0
+msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
-msg_tree_system db "   |- SYSTEM FILES", 13, 10, 0
-msg_tree_apps db "   `- APPLICATIONS", 13, 10, 0
+msg_tree_system db "   |- SYSTEM", 13, 10, 0
+msg_tree_apps db "   `- APPS", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
-msg_dos21_begin db "[STAGE1] CiukiDOS INT21h smoke", 13, 10, 0
-msg_dos21_ah09 db "[INT21/AH=09h] CiukiDOS console path active", 13, 10, '$'
-msg_dos21_status db "[INT21/AH=4Dh] code/type=0x", 0
+msg_dos21_begin db "[DOS21] smoke", 13, 10, 0
+msg_dos21_ah09 db "[INT21/09] ok", 13, 10, '$'
+msg_dos21_status db "[INT21/4D] 0x", 0
 msg_dos21_serial_pass db "[DOS21-SERIAL] PASS", 13, 10, 0
 msg_dos21_serial_fail db "[DOS21-SERIAL] FAIL", 13, 10, 0
-msg_com_begin db "[STAGE1] COM demo load/exec", 13, 10, 0
-msg_com_load_fail db "[STAGE1] COM demo exec FAIL", 13, 10, 0
-msg_com_done  db "[STAGE1] COM demo code/query=0x", 0
+msg_com_begin db "[COM] run", 13, 10, 0
+msg_com_load_fail db "[COM] fail", 13, 10, 0
+msg_com_done  db "[COM] 0x", 0
 msg_com_serial_pass db "[COMDEMO-SERIAL] PASS", 13, 10, 0
 msg_com_serial_fail db "[COMDEMO-SERIAL] FAIL", 13, 10, 0
-msg_mz_begin db "[STAGE1] MZ demo load/exec", 13, 10, 0
-msg_mz_load_fail db "[STAGE1] Program exec FAIL", 13, 10, 0
-msg_mz_done  db "[STAGE1] MZ demo code/query=0x", 0
+msg_mz_begin db "[MZ] run", 13, 10, 0
+msg_mz_load_fail db "[MZ] fail", 13, 10, 0
+msg_mz_done  db "[MZ] 0x", 0
 msg_mz_serial_pass db "[MZDEMO-SERIAL] PASS", 13, 10, 0
 msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
-msg_fileio_begin db "[STAGE1] INT21h file io", 13, 10, 0
+msg_fileio_begin db "[FILEIO]", 13, 10, 0
 msg_fileio_serial_pass db "[FILEIO-SERIAL] PASS", 13, 10, 0
 msg_fileio_serial_fail db "[FILEIO-SERIAL] FAIL", 13, 10, 0
-msg_find_begin db "[STAGE1] INT21h findfirst/findnext", 13, 10, 0
+msg_find_begin db "[FIND]", 13, 10, 0
 msg_find_serial_pass db "[FIND-SERIAL] PASS", 13, 10, 0
 msg_find_serial_fail db "[FIND-SERIAL] FAIL", 13, 10, 0
-msg_gfx_begin db "[STAGE1] VGA mode13h gfx demo", 13, 10, 0
-msg_gfx_done db "[STAGE1] VGA primitives + timer/input smoke done", 13, 10, 0
+msg_gfx_begin db "[GFX] run", 13, 10, 0
+msg_gfx_done db "[GFX] done", 13, 10, 0
 msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
-msg_dir_header db "Directory listing", 13, 10, 0
+msg_dir_header db "Dir", 13, 10, 0
 msg_dir_empty db "no files found", 13, 10, 0
 msg_dir_fail db "dir failed", 13, 10, 0
 msg_cd_fail db "cd failed", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
 splash_title db "CiukiOS", 0
-splash_subtitle db "Legacy BIOS runtime loading...", 0
-splash_status db "initializing stage1 runtime", 0
-splash_wait_hint db "starting shell in 5s (or press any key)", 0
+splash_subtitle db "loading", 0
+splash_status db "init", 0
+splash_wait_hint db "shell in 5s", 0
 gfx_text_ciukios db "CIUKIOS", 0
 gfx_text_demo db "GFX DEMO", 0
 gfx_text_vdi db "VDI BASE", 0
-gfx_text_timer db "TIMER KEY EXIT", 0
+gfx_text_timer db "KEY EXIT", 0
 
 str_help   db "help", 0
 str_ver    db "ver", 0
@@ -5213,8 +5605,9 @@ path_stage2_dos db "STAGE2  BIN"
 %endif
 path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
+path_sd_driver_fat db "SDPSC9  VGA"
 path_root_dos    db "\", 0
-cwd_buf times 8 db 0
+cwd_buf times 24 db 0
 %if FAT_TYPE == 12
 ram_buf times 6 db 0
 %endif
@@ -5257,8 +5650,8 @@ gfx_font8_table:
     db 0
 
 ; Stage2 Extended Services Messages
-msg_stage2_entry db "[STAGE1] Initializing extended services...", 13, 10, 0
-msg_stage2_ready db "[STAGE1] Extended services ready", 13, 10, 0
-msg_mouse_enabled db "[STAGE1] Mouse INT33h installed", 13, 10, 0
-msg_mouse_not_found db "[STAGE1] Mouse not detected", 13, 10, 0
-msg_vbe_init db "[STAGE1] VBE query ready", 13, 10, 0
+msg_stage2_entry db "[S2] init", 13, 10, 0
+msg_stage2_ready db "[S2] ready", 13, 10, 0
+msg_mouse_enabled db "[S2] mouse", 13, 10, 0
+msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
+msg_vbe_init db "[S2] vbe", 13, 10, 0
