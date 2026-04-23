@@ -81,6 +81,15 @@ Progress is continuous but not tied to a fixed release calendar.
 	- `OPENGEM_GATE_RETURN_THRESHOLD=<pct>` (default 95)
 	- `OPENGEM_GATE_MAX_HANGS=<n>` (default derived from return threshold)
 
+## OpenGEM P2 Tooling
+1. `make opengem-regression-lock`
+	Runs OG-P2-01 historical regression checks (carry, find-next, alias path, memory free/resize signatures)
+	and writes: `build/full/opengem-regression-lock.latest.report.txt`
+2. Aggregate suite integration:
+	`scripts/qemu_test_all.sh` now includes `scripts/qemu_test_opengem_regressions.sh`.
+3. Parallel-agent OG-P1 task handoff:
+	[docs/opengem-p1-agent-task.md](docs/opengem-p1-agent-task.md)
+
 ## Legacy Archive
 Historical project content is preserved under:
 `OLD/archive-2026-04-22/`
