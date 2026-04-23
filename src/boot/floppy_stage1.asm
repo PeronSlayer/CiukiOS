@@ -10,7 +10,7 @@ org 0x0000
 %define DOS_FAT_BUF_SEG  0x7200
 %define DOS_IO_BUF_SEG   0x7400
 %define DOS_ENV_SEG      0x7600
-%define DOS_HEAP_BASE_SEG 0x8000
+%define DOS_HEAP_BASE_SEG 0x7700
 %define DOS_HEAP_LIMIT_SEG 0x9F00
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
@@ -3712,6 +3712,38 @@ int21_alloc:
     ; block 1 busy: check if block 2 is free
     cmp word [cs:dos_mem_alloc_size2], 0
     jne .both_busy
+    ; prefer free tail produced by PSP AH=4A shrink, if present
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .busy_heap_tail
+    cmp bx, [cs:dos_mem_psp_free_size]
+    ja .busy_heap_tail
+    jmp .alloc_slot2_from_psp
+
+.alloc_slot2_from_psp:
+    mov ax, [cs:dos_mem_psp_free_seg]
+    mov [cs:dos_mem_alloc_seg2], ax
+    mov [cs:dos_mem_alloc_size2], bx
+    add word [cs:dos_mem_psp_free_seg], bx
+    sub word [cs:dos_mem_psp_free_size], bx
+
+    push es
+    push ax
+    push bx
+    dec ax
+    mov es, ax
+    mov byte [es:0x0000], 'Z'
+    pop bx
+    pop ax
+    call int21_mem_current_owner
+    mov [es:0x0001], ax
+    mov [es:0x0003], bx
+    pop es
+    call int21_mem_trace_chain
+    mov ax, [cs:dos_mem_alloc_seg2]
+    clc
+    ret
+
+.busy_heap_tail:
     ; compute start of free space = end of block 1
     mov ax, [cs:dos_mem_alloc_seg]
     add ax, [cs:dos_mem_alloc_size]
@@ -3751,21 +3783,14 @@ int21_alloc:
     ret
 .no_memory_b2:
 .both_busy:
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .both_busy_fail
+    cmp bx, [cs:dos_mem_psp_free_size]
+    ja .both_busy_fail
+    jmp .alloc_slot2_from_psp
+
+.both_busy_fail:
     call int21_mem_largest_global
-    push ax
-    mov al, '4'
-    call serial_putc
-    mov al, 'L'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, bx
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop ax
     mov ax, 0x0008
     stc
     ret
@@ -3894,6 +3919,15 @@ int21_resize:
     call serial_putc
     mov al, 10
     call serial_putc
+
+    ; expose tail from current PSP end up to DOS heap limit as AH=48 source
+    mov [cs:dos_mem_psp_free_seg], dx
+    mov si, DOS_HEAP_LIMIT_SEG
+    sub si, dx
+    jnc .psp_tail_done
+    xor si, si
+.psp_tail_done:
+    mov [cs:dos_mem_psp_free_size], si
     pop bx
     pop ax
     mov [es:0x0002], dx
@@ -6796,40 +6830,8 @@ int2f_handler:
     je .query_win
     iret
 .idle:
-    cmp byte [cs:int2f_seen_1680], 1
-    je .idle_ret
-    mov byte [cs:int2f_seen_1680], 1
-    mov al, '2'
-    call serial_putc
-    mov al, 'F'
-    call serial_putc
-    mov al, '8'
-    call serial_putc
-    mov al, '0'
-    call serial_putc
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-.idle_ret:
     iret
 .query_win:
-    cmp byte [cs:int2f_seen_1600], 1
-    je .query_ret
-    mov byte [cs:int2f_seen_1600], 1
-    mov al, '2'
-    call serial_putc
-    mov al, 'F'
-    call serial_putc
-    mov al, '0'
-    call serial_putc
-    mov al, '0'
-    call serial_putc
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-.query_ret:
     xor ax, ax
     iret
 
@@ -6838,8 +6840,6 @@ int21_installed db 0
 int21_carry db 0
 int21_return_es db 0
 int2f_installed db 0
-int2f_seen_1680 db 0
-int2f_seen_1600 db 0
 dos_default_drive db 0
 last_exit_code db 0
 int21_last_ah db 0
@@ -6906,6 +6906,8 @@ tmp_ioctl_subfn db 0
 dos_mem_init db 0
 dos_mem_alloc_seg dw 0
 dos_mem_alloc_size dw 0
+dos_mem_psp_free_seg dw 0
+dos_mem_psp_free_size dw 0
 dos_mem_alloc_seg2 dw 0
 dos_mem_alloc_size2 dw 0
 dos_mem_mcb_owner dw 0
