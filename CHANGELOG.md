@@ -5,6 +5,13 @@ This changelog is intentionally concise and includes only major milestones.
 
 ## Unreleased
 
+## pre-Alpha v0.5.8 (2026-04-23)
+1. Fixed nested `INT 21h AH=4Bh` execution flow for OpenGEM chainload (`GEMVDI -> GEM.EXE`) by separating parent/child load segments and preserving parent PSP context on return.
+2. Corrected DOS find-first compatibility in root scanning by copying the matched 11-byte FAT name before DTA emission, restoring OpenGEM file-discovery expectations.
+3. Extended Stage1 DOS heap ceiling (`0x9A00 -> 0x9F00`) and introduced two-block allocation behavior in `INT 21h AH=48h/49h` to reduce immediate memory-allocation failures during GEM runtime.
+4. Increased Stage1 reserved slot from 22 to 23 sectors in full and floppy profiles to absorb runtime growth while keeping build and test flows stable.
+5. Consolidated OpenGEM launch-path diagnostics and runtime hardening to move execution beyond the previous post-`[OPENGEM] try GEMVDI` hang condition.
+
 ## pre-Alpha v0.5.7 (2026-04-22)
 1. Extended Stage1 FAT16 runtime to handle multi-sector clusters in core DOS paths (`open/read/write/exec`) and fixed cluster-to-LBA mapping inconsistencies.
 2. Reworked full-profile FAT16 image assembly to align built-in payload FAT entries and data placement with 8-sector cluster geometry.

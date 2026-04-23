@@ -40,3 +40,7 @@
 37. Action: introduced guarded OpenGEM safe-launch mode (default) to prevent shell hard-hang while preserving an opt-in real execution path for compatibility testing.
 38. Action: expanded Stage1 reserved loader budget from 21 to 22 sectors in both full and floppy profiles to absorb DOS runtime completion work.
 39. Release: bumped project version to `CiukiOS pre-Alpha v0.5.7` after DOS runtime compatibility expansion and regression validation.
+40. Milestone: fixed OpenGEM nested execution path (`GEMVDI -> GEM.EXE`) with separated MZ load segments, restored parent PSP context after child return, and corrected FAT short-name propagation for DOS find-first compatibility.
+41. Milestone: extended DOS heap limit and introduced two-block allocation behavior to improve GEM runtime memory allocation during launch sequence.
+42. Action: expanded Stage1 reserved loader budget from 22 to 23 sectors in both full and floppy profiles to keep runtime growth stable.
+43. Release: bumped project version to `CiukiOS pre-Alpha v0.5.8` after OpenGEM runtime stabilization work and regression validation.
