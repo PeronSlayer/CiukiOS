@@ -479,26 +479,7 @@ int21_handler:
     jmp .success
 
 .fn_3d:
-    push ds
-    mov ax, cs
-    mov ds, ax
-    mov si, msg_trace_3d
-    call print_string_serial
-    pop ds
     call int21_open
-    push ax
-    push ds
-    mov ax, cs
-    mov ds, ax
-    mov si, msg_trace_ax
-    call print_string_serial
-    pop ds
-    pop ax
-    call print_hex8_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
     jc .error
     jmp .success
 
@@ -540,41 +521,7 @@ int21_handler:
     jmp .success
 
 .fn_4e:
-    push ds
-    mov ax, cs
-    mov ds, ax
-    mov si, msg_trace_4e
-    call print_string_serial
-    pop ds
-    push ax
-    push si
-    mov si, dx
-    mov al, '{'
-    call serial_putc
-    mov al, [ds:si]
-    call serial_putc
-    mov al, [ds:si + 1]
-    call serial_putc
-    mov al, [ds:si + 2]
-    call serial_putc
-    mov al, '}'
-    call serial_putc
-    pop si
-    pop ax
     call int21_find_first
-    push ax
-    push ds
-    mov ax, cs
-    mov ds, ax
-    mov si, msg_trace_ax
-    call print_string_serial
-    pop ds
-    pop ax
-    call print_hex8_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
     jc .error
     jmp .success
 
@@ -633,21 +580,6 @@ int21_handler:
     jmp .error
 
 .fn_49:
-    push ax
-    push es
-    mov al, '4'
-    call serial_putc
-    mov al, '9'
-    call serial_putc
-    mov al, '@'
-    call serial_putc
-    pop ax
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop ax
     call int21_free
     jc .error
     jmp .success
@@ -2629,8 +2561,11 @@ int21_open:
     push ds
     push es
 
-    cmp al, 2
-    ja .access_denied
+    ; AH=3Dh: AL carries access in bits 0..2 plus sharing/inherit flags.
+    ; Accept higher bits and validate only access mode.
+    and al, 0x03
+    cmp al, 0x03
+    je .access_denied
 
     cmp byte [cs:file_handle_open], 0
     je .target_slot1
@@ -2775,6 +2710,12 @@ int21_open:
     ret
 
 int21_close:
+    cmp bx, 0x000A
+    jb .close_no_alias
+    cmp bx, 0x000C
+    ja .close_no_alias
+    sub bx, 0x0005
+.close_no_alias:
     cmp bx, 0x0005
     je .close_slot1
     cmp bx, 0x0006
@@ -2818,6 +2759,13 @@ int21_read:
     push es
 
     mov byte [cs:file_handle_swapped], 0
+
+    cmp bx, 0x000A
+    jb .read_no_alias
+    cmp bx, 0x000C
+    ja .read_no_alias
+    sub bx, 0x0005
+.read_no_alias:
 
     cmp bx, 0x0000
     je .stdin_read
@@ -3783,6 +3731,28 @@ int21_alloc:
     ret
 .no_memory_b2:
 .both_busy:
+    mov si, bx
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .both_busy_refresh
+    cmp bx, [cs:dos_mem_psp_free_size]
+    ja .both_busy_fail
+    jmp .alloc_slot2_from_psp
+
+.both_busy_refresh:
+    push es
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jz .both_busy_refresh_done
+    mov es, ax
+    mov ax, [es:0x0002]
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jae .both_busy_refresh_done
+    mov [cs:dos_mem_psp_free_seg], ax
+    mov dx, DOS_HEAP_LIMIT_SEG
+    sub dx, ax
+    mov [cs:dos_mem_psp_free_size], dx
+.both_busy_refresh_done:
+    pop es
     cmp word [cs:dos_mem_psp_free_size], 0
     je .both_busy_fail
     cmp bx, [cs:dos_mem_psp_free_size]
@@ -3791,6 +3761,17 @@ int21_alloc:
 
 .both_busy_fail:
     call int21_mem_largest_global
+    cmp bx, si
+    jb .both_busy_error
+    mov ax, DOS_HEAP_LIMIT_SEG
+    sub ax, si
+    mov [cs:dos_mem_alloc_seg2], ax
+    mov [cs:dos_mem_alloc_size2], si
+    mov ax, [cs:dos_mem_alloc_seg2]
+    clc
+    ret
+
+.both_busy_error:
     mov ax, 0x0008
     stc
     ret
