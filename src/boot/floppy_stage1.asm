@@ -608,6 +608,22 @@ int21_handler:
     jmp .success
 
 .fn_48:
+    push ax
+    push bx
+    mov al, '4'
+    call serial_putc
+    mov al, '8'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop bx
+    pop ax
     call int21_alloc
     jc .error
     jmp .success
@@ -618,6 +634,27 @@ int21_handler:
     jmp .success
 
 .fn_4a:
+    push ax
+    push bx
+    push es
+    mov al, '4'
+    call serial_putc
+    mov al, 'A'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, '@'
+    call serial_putc
+    pop ax
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop bx
+    pop ax
     call int21_resize
     jc .error
     jmp .success
@@ -722,6 +759,11 @@ int21_handler:
     je .flags_only
     mov [bp + 0], es
 .flags_only:
+    mov [bp + 14], bx
+    mov [bp + 12], cx
+    mov [bp + 10], dx
+    mov [bp + 8], si
+    mov [bp + 6], di
     cmp byte [cs:int21_carry], 0
     jne .set_carry
     and word [bp + 20], 0xFFFE
@@ -3366,11 +3408,41 @@ int21_mem_init:
 .done:
     ret
 
+int21_mem_query_free:
+    push es
+
+    mov ax, DOS_HEAP_USER_SEG
+    mov cx, DOS_HEAP_LIMIT_SEG
+    mov dx, [cs:current_psp_seg]
+    or dx, dx
+    jz .have_base
+
+    mov es, dx
+    mov ax, [es:0x0002]
+    cmp ax, DOS_HEAP_USER_SEG
+    jae .check_limit
+    mov ax, DOS_HEAP_USER_SEG
+
+.check_limit:
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jbe .have_base
+    mov ax, DOS_HEAP_LIMIT_SEG
+
+.have_base:
+    sub cx, ax
+    pop es
+    ret
+
 int21_mem_write_mcb:
     push ax
     push es
 
-    mov ax, DOS_HEAP_BASE_SEG
+    mov ax, [cs:dos_mem_alloc_seg]
+    or ax, ax
+    jnz .have_seg
+    call int21_mem_query_free
+.have_seg:
+    dec ax
     mov es, ax
     mov byte [es:0x0000], 'Z'
     mov ax, [cs:dos_mem_mcb_owner]
@@ -3384,6 +3456,7 @@ int21_mem_write_mcb:
 
 int21_alloc:
     call int21_mem_init
+    call int21_mem_query_free
 
     cmp bx, 0
     je .no_memory
@@ -3391,15 +3464,14 @@ int21_alloc:
     cmp word [cs:dos_mem_alloc_size], 0
     jne .busy
 
-    cmp bx, DOS_HEAP_USER_MAX_PARAS
+    cmp bx, cx
     ja .no_memory
 
-    mov word [cs:dos_mem_alloc_seg], DOS_HEAP_USER_SEG
+    mov [cs:dos_mem_alloc_seg], ax
     mov [cs:dos_mem_alloc_size], bx
-    mov word [cs:dos_mem_mcb_owner], DOS_HEAP_USER_SEG
+    mov [cs:dos_mem_mcb_owner], ax
     mov [cs:dos_mem_mcb_size], bx
     call int21_mem_write_mcb
-    mov ax, DOS_HEAP_USER_SEG
     clc
     ret
 
@@ -3451,7 +3523,7 @@ int21_alloc:
     ret
 
 .no_memory:
-    mov bx, DOS_HEAP_USER_MAX_PARAS
+    mov bx, cx
     mov ax, 0x0008
     stc
     ret
@@ -3497,8 +3569,6 @@ int21_free:
 int21_resize:
     call int21_mem_init
 
-    ; Many DOS programs first resize their own PSP block (ES=PSP).
-    ; Accept it as a compatibility no-op in this minimal allocator.
     mov ax, es
     cmp ax, [cs:current_psp_seg]
     jne .check_heap_block
@@ -3506,8 +3576,41 @@ int21_resize:
     je .check_heap_block
     cmp bx, 0
     je .no_memory
+
+    mov dx, DOS_HEAP_LIMIT_SEG
+    sub dx, ax
+    cmp bx, dx
+    ja .psp_no_memory
+
+    cmp word [cs:dos_mem_alloc_size], 0
+    je .resize_psp_commit
+    mov dx, ax
+    add dx, bx
+    cmp dx, [cs:dos_mem_alloc_seg]
+    ja .psp_overlap
+
+.resize_psp_commit:
+    mov dx, ax
+    add dx, bx
+    mov [es:0x0002], dx
     mov ax, es
     clc
+    ret
+
+.psp_overlap:
+    mov bx, [cs:dos_mem_alloc_seg]
+    mov ax, es
+    sub bx, ax
+    mov ax, 0x0008
+    stc
+    ret
+
+.psp_no_memory:
+    mov bx, DOS_HEAP_LIMIT_SEG
+    mov ax, es
+    sub bx, ax
+    mov ax, 0x0008
+    stc
     ret
 
 .check_heap_block:
@@ -6059,6 +6162,14 @@ print_hex16_dual:
     call print_hex8_dual
     pop ax
     call print_hex8_dual
+    ret
+
+print_hex16_serial:
+    push ax
+    mov al, ah
+    call print_hex8_serial
+    pop ax
+    call print_hex8_serial
     ret
 
 print_hex8_dual:
