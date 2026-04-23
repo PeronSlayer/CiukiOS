@@ -4,12 +4,13 @@ org 0x0000
 %define CMD_BUF_LEN 64
 %define COM_LOAD_SEG 0x2000
 %define MZ_LOAD_SEG 0x3000
+%define MZ2_LOAD_SEG 0x3800
 %define STAGE2_LOAD_SEG 0x5000
 %define DOS_META_BUF_SEG 0x7000
 %define DOS_FAT_BUF_SEG  0x7200
 %define DOS_IO_BUF_SEG   0x7400
 %define DOS_HEAP_BASE_SEG 0x8000
-%define DOS_HEAP_LIMIT_SEG 0x9A00
+%define DOS_HEAP_LIMIT_SEG 0x9F00
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
 %define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
@@ -765,6 +766,13 @@ int21_exec:
     cmp al, 'E'
     jne .invalid_format
 
+    cmp word [cs:current_psp_seg], 0
+    jne .nested_exec_seg
+    mov word [cs:current_load_seg], MZ_LOAD_SEG
+    jmp .do_exec_mz
+.nested_exec_seg:
+    mov word [cs:current_load_seg], MZ2_LOAD_SEG
+.do_exec_mz:
     call int21_exec_load_mz
     jc .done
     call int21_exec_run_mz
@@ -1088,6 +1096,9 @@ int21_exec_load_com:
     ret
 
 int21_exec_run_com:
+    ; save parent PSP before overwriting with new process
+    mov ax, [cs:current_psp_seg]
+    mov [cs:saved_psp], ax
     mov [cs:saved_ss], ss
     mov [cs:saved_sp], sp
     mov ax, ds
@@ -1124,7 +1135,8 @@ int21_exec_run_com:
     mov ds, ax
     mov ax, [cs:saved_es]
     mov es, ax
-    mov word [cs:current_psp_seg], 0
+    mov ax, [cs:saved_psp]
+    mov [cs:current_psp_seg], ax
     clc
     ret
 
@@ -1133,7 +1145,7 @@ int21_exec_load_mz:
     push di
     push es
 
-    mov ax, MZ_LOAD_SEG
+    mov ax, [cs:current_load_seg]
     mov es, ax
     xor ax, ax
     xor di, di
@@ -1159,13 +1171,13 @@ int21_exec_load_mz:
 int21_exec_run_mz:
     push es
 
-    mov ax, MZ_LOAD_SEG
+    mov ax, [cs:current_load_seg]
     mov es, ax
     cmp word [es:0x0000], 0x5A4D
     jne .invalid_header
 
     mov bx, [es:0x0008]
-    add bx, MZ_LOAD_SEG
+    add bx, [cs:current_load_seg]
     mov [cs:mz_image_seg], bx
     mov ax, bx
     sub ax, 0x0010
@@ -1253,11 +1265,22 @@ int21_exec_run_mz:
     cli
     mov ax, cs
     mov ds, ax
+    ; restore SS:SP from appropriate slot
+    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    jne .restore_primary_ss
+    mov ax, [cs:saved_ss2]
+    mov ss, ax
+    mov sp, [cs:saved_sp2]
+    jmp .done_ss_restore
+.restore_primary_ss:
     mov ax, [cs:saved_ss]
     mov ss, ax
     mov sp, [cs:saved_sp]
+.done_ss_restore:
     sti
-    mov word [cs:current_psp_seg], 0
+    ; restore parent PSP instead of clearing to 0
+    mov ax, [cs:saved_psp]
+    mov [cs:current_psp_seg], ax
 
     mov ax, [cs:saved_ds]
     mov ds, ax
@@ -2626,6 +2649,28 @@ int21_alloc:
     ret
 
 .busy:
+    ; block 1 busy: check if block 2 is free
+    cmp word [cs:dos_mem_alloc_size2], 0
+    jne .both_busy
+    ; compute start of free space = end of block 1
+    mov ax, [cs:dos_mem_alloc_seg]
+    add ax, [cs:dos_mem_alloc_size]
+    ; compute available paras
+    mov cx, DOS_HEAP_LIMIT_SEG
+    sub cx, ax
+    cmp bx, cx
+    ja .no_memory_b2
+    ; allocate block 2
+    mov [cs:dos_mem_alloc_seg2], ax
+    mov [cs:dos_mem_alloc_size2], bx
+    clc
+    ret
+.no_memory_b2:
+    mov bx, cx
+    mov ax, 0x0008
+    stc
+    ret
+.both_busy:
     xor bx, bx
     mov ax, 0x0008
     stc
@@ -2644,7 +2689,16 @@ int21_free:
     je .invalid
     mov ax, es
     cmp ax, [cs:dos_mem_alloc_seg]
+    je .free_block1
+    ; check block 2
+    cmp ax, [cs:dos_mem_alloc_seg2]
     jne .invalid
+    mov word [cs:dos_mem_alloc_seg2], 0
+    mov word [cs:dos_mem_alloc_size2], 0
+    xor ax, ax
+    clc
+    jmp .free_done
+.free_block1:
 
     mov word [cs:dos_mem_alloc_seg], 0
     mov word [cs:dos_mem_alloc_size], 0
@@ -2655,6 +2709,7 @@ int21_free:
     clc
     ret
 
+.free_done:
 .invalid:
     mov ax, 0x0009
     stc
@@ -4095,6 +4150,23 @@ load_root_file_first_sector:
     sub ax, 0x0200
     mov [search_found_root_off], ax
 
+    ; copy 11-byte FAT name from directory entry to search_found_name
+    push cx
+    push si
+    push di
+    mov si, di
+    mov di, search_found_name
+    mov cx, 11
+.lrfs_name_copy:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .lrfs_name_copy
+    pop di
+    pop si
+    pop cx
+
     mov ax, [es:di + 26]
     cmp ax, 2
     jb .read_fail
@@ -5456,6 +5528,8 @@ tmp_exec_error dw 0
 dos_mem_init db 0
 dos_mem_alloc_seg dw 0
 dos_mem_alloc_size dw 0
+dos_mem_alloc_seg2 dw 0
+dos_mem_alloc_size2 dw 0
 dos_mem_mcb_owner dw 0
 dos_mem_mcb_size dw 0
 dos21_test_seg dw 0
@@ -5463,6 +5537,10 @@ saved_ss dw 0
 saved_sp dw 0
 saved_ds dw 0
 saved_es dw 0
+current_load_seg dw MZ_LOAD_SEG
+saved_psp dw 0
+saved_ss2 dw 0
+saved_sp2 dw 0
 com_entry_off dw 0
 com_entry_seg dw 0
 mz_entry_off dw 0

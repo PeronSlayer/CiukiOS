@@ -2,6 +2,13 @@
 
 **Status: COMPLETE AND VALIDATED** ✓
 
+## 2026-04-23 Runtime Stabilization Update (v0.5.8)
+
+- Fixed OpenGEM nested DOS execute flow (`GEMVDI -> GEM.EXE`) by separating parent/child MZ load segments and restoring parent PSP context after child return.
+- Fixed root find-first compatibility by copying the matched FAT 8.3 name before DTA write, restoring expected OpenGEM driver lookup behavior.
+- Increased Stage1 loader budget from 22 to 23 sectors and extended DOS heap limit for full-profile OpenGEM runtime growth.
+- Added two-block DOS allocation behavior to reduce immediate `INT 21h AH=48h` memory-allocation failures during GEM startup.
+
 ## Milestone Achievements
 
 ### 1. Native VGA/VBE Path ✓
@@ -144,12 +151,12 @@ LBA 53+:    Data area (payloads: COM demos, OpenGEM, etc.)
 
 ## Remaining Work for Full Milestone
 
-The "stable OpenGEM desktop on real hardware" milestone requires:
+The "stable OpenGEM desktop on real hardware" milestone now requires:
 
-1. **OpenGEM Binary**: Obtain or create OPENGEM.COM/.EXE executable
-2. **Integration**: Deploy OpenGEM binary to FAT root directory
-3. **Real Hardware Testing**: Boot and run on legacy x86 hardware (486+)
-4. **Desktop Stability**: Validate GUI responsiveness and system stability
+1. **Memory Manager Finalization**: complete robust multi-block DOS MCB semantics for GEM workload edge cases.
+2. **Runtime Validation**: verify full OpenGEM desktop responsiveness under graphical QEMU runs (not only headless serial tests).
+3. **Real Hardware Testing**: boot and validate on legacy x86 hardware (486+).
+4. **Desktop Stability**: validate sustained GUI stability and clean process termination paths.
 
 ## Build & Validation
 
