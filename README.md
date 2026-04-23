@@ -60,6 +60,20 @@ Progress is continuous but not tied to a fixed release calendar.
 5. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
 6. Migration/archive note: [docs/migration-note-old-archive.md](docs/migration-note-old-archive.md)
 
+## OpenGEM P0 Tooling
+1. `make opengem-trace-full`
+	Generates DOS/OpenGEM tracing artifacts in `build/full/`:
+	- `opengem-trace-full.latest.serial.log`
+	- `opengem-trace-full.latest.qemu-int.log`
+	- `opengem-trace-full.latest.int21-summary.txt`
+2. `make opengem-acceptance-full`
+	Runs the graphical acceptance loop (default `N=20`) and writes:
+	- per-run logs in `build/full/opengem-acceptance-latest/`
+	- summary report `build/full/opengem-acceptance-full.latest.report.txt`
+3. Optional environment overrides:
+	- `RUNS=<n>` for acceptance iterations
+	- `QEMU_TIMEOUT_SEC=<seconds>` for trace/acceptance timeout
+
 ## Legacy Archive
 Historical project content is preserved under:
 `OLD/archive-2026-04-22/`
