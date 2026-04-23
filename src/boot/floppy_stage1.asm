@@ -479,7 +479,18 @@ int21_handler:
     jmp .success
 
 .fn_3d:
+    mov si, msg_trace_3d
+    call print_string_serial
     call int21_open
+    push ax
+    mov si, msg_trace_ax
+    call print_string_serial
+    pop ax
+    call print_hex8_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
     jc .error
     jmp .success
 
@@ -519,7 +530,18 @@ int21_handler:
     jmp .success
 
 .fn_4e:
+    mov si, msg_trace_4e
+    call print_string_serial
     call int21_find_first
+    push ax
+    mov si, msg_trace_ax
+    call print_string_serial
+    pop ax
+    call print_hex8_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
     jc .error
     jmp .success
 
@@ -529,7 +551,18 @@ int21_handler:
     jmp .success
 
 .fn_4b:
+    mov si, msg_trace_4b
+    call print_string_serial
     call int21_exec
+    push ax
+    mov si, msg_trace_ax
+    call print_string_serial
+    pop ax
+    call print_hex8_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
     jc .error
     jmp .success
 
@@ -1557,9 +1590,76 @@ int21_get_dta:
     ret
 
 int21_ioctl:
+    cmp al, 0x00                ; Get device information
+    je .get_dev_info
+    cmp al, 0x06                ; Get input status
+    je .get_input_status
+    cmp al, 0x07                ; Get output status
+    je .get_output_status
+    xor ax, ax
+    clc
+    ret
+
+.get_dev_info:
+    cmp bx, 0x0000
+    je .stdio
+    cmp bx, 0x0001
+    je .stdio
+    cmp bx, 0x0002
+    je .stdio
+    cmp bx, 0x0005
+    je .disk_slot1
+    cmp bx, 0x0006
+    je .disk_slot2
+    cmp bx, 0x0007
+    je .disk_slot3
+    mov ax, 0x0006
+    stc
+    ret
+
+.stdio:
+    mov dx, 0x80D3              ; char device (CON-like), standard bits set
+    xor ax, ax
+    clc
+    ret
+
+.disk_slot1:
+    cmp byte [cs:file_handle_open], 1
+    jne .bad_handle
+    xor dx, dx                  ; disk file
+    xor ax, ax
+    clc
+    ret
+
+.disk_slot2:
+    cmp byte [cs:file_handle2_open], 1
+    jne .bad_handle
     xor dx, dx
     xor ax, ax
     clc
+    ret
+
+.disk_slot3:
+    cmp byte [cs:file_handle3_open], 1
+    jne .bad_handle
+    xor dx, dx
+    xor ax, ax
+    clc
+    ret
+
+.get_input_status:
+    mov ax, 0x00FF              ; ready
+    clc
+    ret
+
+.get_output_status:
+    mov ax, 0x00FF              ; ready
+    clc
+    ret
+
+.bad_handle:
+    mov ax, 0x0006
+    stc
     ret
 
 int21_get_psp:
@@ -2325,6 +2425,8 @@ int21_open:
     je .target_slot1
     cmp byte [cs:file_handle2_open], 0
     je .target_slot2
+    cmp byte [cs:file_handle3_open], 0
+    je .target_slot3
     mov ax, 0x0004
     stc
     jmp .done
@@ -2335,6 +2437,10 @@ int21_open:
 
 .target_slot2:
     mov byte [cs:file_handle_target], 2
+    jmp .target_ready
+
+.target_slot3:
+    mov byte [cs:file_handle_target], 3
 
 .target_ready:
 
@@ -2353,6 +2459,8 @@ int21_open:
 
     cmp byte [cs:file_handle_target], 2
     je .assign_slot2
+    cmp byte [cs:file_handle_target], 3
+    je .assign_slot3
 
     mov byte [cs:file_handle_open], 1
     mov word [cs:file_handle_pos], 0
@@ -2403,6 +2511,31 @@ int21_open:
     clc
     jmp .done
 
+.assign_slot3:
+    mov byte [cs:file_handle3_open], 1
+    mov word [cs:file_handle3_pos], 0
+    mov [cs:file_handle3_mode], al
+    mov ax, [cs:search_found_cluster]
+    mov [cs:file_handle3_start_cluster], ax
+    mov ax, [cs:search_found_size_lo]
+    mov [cs:file_handle3_size_lo], ax
+    mov ax, [cs:search_found_size_hi]
+    mov [cs:file_handle3_size_hi], ax
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:file_handle3_root_lba], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:file_handle3_root_off], ax
+
+    call int21_load_fat_cache
+    jc .io_fail
+    mov ax, [cs:file_handle3_start_cluster]
+    call int21_count_chain
+    mov [cs:file_handle3_cluster_count], ax
+
+    mov ax, 0x0007
+    clc
+    jmp .done
+
 .not_found:
     mov ax, 0x0002
     stc
@@ -2434,7 +2567,17 @@ int21_close:
     cmp bx, 0x0005
     je .close_slot1
     cmp bx, 0x0006
+    je .close_slot2
+    cmp bx, 0x0007
     jne .bad_handle
+    cmp byte [cs:file_handle3_open], 1
+    jne .bad_handle
+    mov byte [cs:file_handle3_open], 0
+    xor ax, ax
+    clc
+    ret
+
+.close_slot2:
     cmp byte [cs:file_handle2_open], 1
     jne .bad_handle
     mov byte [cs:file_handle2_open], 0
@@ -2468,7 +2611,17 @@ int21_read:
     cmp bx, 0x0005
     je .handle_ready
     cmp bx, 0x0006
+    je .use_slot2
+    cmp bx, 0x0007
     jne .bad_handle
+    cmp byte [cs:file_handle3_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles3
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+    jmp .handle_ready
+
+.use_slot2:
     cmp byte [cs:file_handle2_open], 1
     jne .bad_handle
     call int21_swap_file_handles
@@ -2615,7 +2768,17 @@ int21_write:
     cmp bx, 0x0005
     je .handle_ready
     cmp bx, 0x0006
+    je .use_slot2
+    cmp bx, 0x0007
     jne .bad_handle
+    cmp byte [cs:file_handle3_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles3
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+    jmp .handle_ready
+
+.use_slot2:
     cmp byte [cs:file_handle2_open], 1
     jne .bad_handle
     call int21_swap_file_handles
@@ -2870,7 +3033,17 @@ int21_seek:
     cmp bx, 0x0005
     je .handle_ready
     cmp bx, 0x0006
+    je .use_slot2
+    cmp bx, 0x0007
     jne .bad_handle
+    cmp byte [cs:file_handle3_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles3
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+    jmp .handle_ready
+
+.use_slot2:
     cmp byte [cs:file_handle2_open], 1
     jne .bad_handle
     call int21_swap_file_handles
@@ -2969,6 +3142,48 @@ int21_swap_file_handles:
 
     mov ax, [cs:file_handle_size_hi]
     xchg ax, [cs:file_handle2_size_hi]
+    mov [cs:file_handle_size_hi], ax
+
+    pop ax
+    ret
+
+int21_swap_file_handles3:
+    push ax
+
+    mov al, [cs:file_handle_open]
+    xchg al, [cs:file_handle3_open]
+    mov [cs:file_handle_open], al
+
+    mov ax, [cs:file_handle_pos]
+    xchg ax, [cs:file_handle3_pos]
+    mov [cs:file_handle_pos], ax
+
+    mov al, [cs:file_handle_mode]
+    xchg al, [cs:file_handle3_mode]
+    mov [cs:file_handle_mode], al
+
+    mov ax, [cs:file_handle_start_cluster]
+    xchg ax, [cs:file_handle3_start_cluster]
+    mov [cs:file_handle_start_cluster], ax
+
+    mov ax, [cs:file_handle_root_lba]
+    xchg ax, [cs:file_handle3_root_lba]
+    mov [cs:file_handle_root_lba], ax
+
+    mov ax, [cs:file_handle_root_off]
+    xchg ax, [cs:file_handle3_root_off]
+    mov [cs:file_handle_root_off], ax
+
+    mov ax, [cs:file_handle_cluster_count]
+    xchg ax, [cs:file_handle3_cluster_count]
+    mov [cs:file_handle_cluster_count], ax
+
+    mov ax, [cs:file_handle_size_lo]
+    xchg ax, [cs:file_handle3_size_lo]
+    mov [cs:file_handle_size_lo], ax
+
+    mov ax, [cs:file_handle_size_hi]
+    xchg ax, [cs:file_handle3_size_hi]
     mov [cs:file_handle_size_hi], ax
 
     pop ax
@@ -5971,6 +6186,15 @@ file_handle2_root_off dw 0
 file_handle2_cluster_count dw 0
 file_handle2_size_lo dw 0
 file_handle2_size_hi dw 0
+file_handle3_open db 0
+file_handle3_pos dw 0
+file_handle3_mode db 0
+file_handle3_start_cluster dw 0
+file_handle3_root_lba dw 0
+file_handle3_root_off dw 0
+file_handle3_cluster_count dw 0
+file_handle3_size_lo dw 0
+file_handle3_size_hi dw 0
 file_handle_target db 0
 file_handle_swapped db 0
 fat_cache_valid db 0
@@ -6062,6 +6286,10 @@ msg_int21_installed db "[INT21] ok", 13, 10, 0
 msg_int21_missing db "[I21] no", 13, 10, 0
 msg_int21_unsup db "[INT21-UNSUP] AH=", 0
 msg_int21_err db "[IERR] ", 0
+msg_trace_3d db "[T3D]", 0
+msg_trace_4e db "[T4E]", 0
+msg_trace_4b db "[T4B]", 0
+msg_trace_ax db " AX=", 0
 msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
 msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
