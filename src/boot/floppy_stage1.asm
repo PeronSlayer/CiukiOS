@@ -704,6 +704,12 @@ int21_handler:
     mov ax, [cs:current_psp_seg]
     or ax, ax
     jz .fn_31_done
+    ; AH=31 keep-resident: try to resize PSP block to DX paragraphs.
+    push dx
+    mov es, ax
+    mov bx, dx
+    call int21_resize
+    pop dx
     mov byte [cs:int21_force_terminate], 1
 .fn_31_done:
     xor ax, ax
