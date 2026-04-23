@@ -608,25 +608,29 @@ int21_handler:
     jmp .success
 
 .fn_48:
-    push ax
-    push bx
+    call int21_alloc
+    jnc .success
+    mov dx, ax
+    mov cx, bx
     mov al, '4'
     call serial_putc
     mov al, '8'
     call serial_putc
-    mov al, '='
+    mov al, '!'
     call serial_putc
-    mov ax, bx
+    mov ax, dx
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, cx
     call print_hex16_serial
     mov al, 13
     call serial_putc
     mov al, 10
     call serial_putc
-    pop bx
-    pop ax
-    call int21_alloc
-    jc .error
-    jmp .success
+    mov ax, dx
+    mov bx, cx
+    jmp .error
 
 .fn_49:
     push ax
@@ -649,30 +653,29 @@ int21_handler:
     jmp .success
 
 .fn_4a:
-    push ax
-    push bx
-    push es
+    call int21_resize
+    jnc .success
+    mov dx, ax
+    mov cx, bx
     mov al, '4'
     call serial_putc
     mov al, 'A'
     call serial_putc
-    mov al, '='
+    mov al, '!'
     call serial_putc
-    mov ax, bx
+    mov ax, dx
     call print_hex16_serial
-    mov al, '@'
+    mov al, '/'
     call serial_putc
-    pop ax
+    mov ax, cx
     call print_hex16_serial
     mov al, 13
     call serial_putc
     mov al, 10
     call serial_putc
-    pop bx
-    pop ax
-    call int21_resize
-    jc .error
-    jmp .success
+    mov ax, dx
+    mov bx, cx
+    jmp .error
 
 .fn_4c:
     mov [cs:last_exit_code], al
@@ -3652,12 +3655,22 @@ int21_alloc:
     clc
     ret
 .no_memory_b2:
-    call int21_mem_largest_global
-    mov ax, 0x0008
-    stc
-    ret
 .both_busy:
     call int21_mem_largest_global
+    push ax
+    mov al, '4'
+    call serial_putc
+    mov al, 'L'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop ax
     mov ax, 0x0008
     stc
     ret
@@ -3733,6 +3746,27 @@ int21_resize:
 .resize_psp_commit:
     mov dx, ax
     add dx, bx
+    push ax
+    push bx
+    mov bx, [es:0x0002]
+    mov al, '4'
+    call serial_putc
+    mov al, 'P'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, '>'
+    call serial_putc
+    mov ax, dx
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop bx
+    pop ax
     mov [es:0x0002], dx
     mov ax, es
     clc
