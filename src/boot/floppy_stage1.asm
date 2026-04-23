@@ -1570,10 +1570,42 @@ int21_get_date:
     ret
 
 int21_get_time:
-    mov ch, 12
-    xor cl, cl
-    xor dh, dh
-    xor dl, dl
+    push ax
+    push bx
+    push dx
+
+    mov ah, 0x00
+    int 0x1A                    ; CX:DX = ticks since midnight
+
+    mov ax, dx
+    xor dx, dx
+    mov bx, 18
+    div bx                      ; AX = approx seconds, DX = tick remainder (0..17)
+
+    push dx                     ; save remainder for hundredths
+
+    xor dx, dx
+    mov bx, 60
+    div bx                      ; AX = total minutes, DX = seconds
+    mov dh, dl
+
+    xor dx, dx
+    mov bx, 60
+    div bx                      ; AX = hours, DX = minutes
+    mov ch, al
+    mov cl, dl
+
+    pop ax                      ; AX = tick remainder (0..17)
+    mov bx, 100
+    mul bx                      ; AX = remainder * 100
+    xor dx, dx
+    mov bx, 18
+    div bx                      ; AX = hundredths (0..99)
+    mov dl, al
+
+    pop dx
+    pop bx
+    pop ax
     clc
     ret
 
@@ -6699,9 +6731,35 @@ install_int33_vector:
     ret
 
 int33_handler:
-    push ax
+    cmp ax, 0x0000
+    je .reset
+    cmp ax, 0x0003
+    je .status
+    cmp ax, 0x0024
+    je .version
+    ; Minimal deterministic stub: no mouse installed / no state.
     xor ax, ax
-    pop ax
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    iret
+
+.reset:
+    xor ax, ax
+    xor bx, bx
+    iret
+
+.status:
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    iret
+
+.version:
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    xor ax, ax
     iret
 
 int2f_handler:
