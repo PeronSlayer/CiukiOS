@@ -70,9 +70,16 @@ Progress is continuous but not tied to a fixed release calendar.
 	Runs the graphical acceptance loop (default `N=20`) and writes:
 	- per-run logs in `build/full/opengem-acceptance-latest/`
 	- summary report `build/full/opengem-acceptance-full.latest.report.txt`
-3. Optional environment overrides:
+3. `make opengem-gate-final`
+	Runs the official OG-P0-05 final gate (single verdict PASS/FAIL) and writes:
+	- `build/full/opengem-gate-final.latest.report.txt`
+	Documentation: [docs/opengem-final-gate-og-p0-05.md](docs/opengem-final-gate-og-p0-05.md)
+4. Optional environment overrides:
 	- `RUNS=<n>` for acceptance iterations
 	- `QEMU_TIMEOUT_SEC=<seconds>` for trace/acceptance timeout
+	- `OPENGEM_GATE_LAUNCH_THRESHOLD=<pct>` (default 90)
+	- `OPENGEM_GATE_RETURN_THRESHOLD=<pct>` (default 95)
+	- `OPENGEM_GATE_MAX_HANGS=<n>` (default derived from return threshold)
 
 ## Legacy Archive
 Historical project content is preserved under:

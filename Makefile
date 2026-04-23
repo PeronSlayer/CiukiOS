@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-all opengem-trace-full opengem-acceptance-full clean
+.PHONY: help build-floppy build-full qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-all opengem-trace-full opengem-acceptance-full opengem-gate-final clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -10,6 +10,7 @@ help:
 	@echo "  make qemu-test-all    - build + QEMU smoke test (floppy + full)"
 	@echo "  make opengem-trace-full      - full-profile OpenGEM DOS syscall trace artifacts"
 	@echo "  make opengem-acceptance-full - OpenGEM graphical acceptance loop with metrics"
+	@echo "  make opengem-gate-final      - official OG-P0-05 final pass/fail gate"
 	@echo "  make clean            - remove build artifacts"
 
 build-floppy:
@@ -35,6 +36,9 @@ opengem-trace-full:
 
 opengem-acceptance-full:
 	@bash scripts/opengem_acceptance_full.sh
+
+opengem-gate-final:
+	@bash scripts/opengem_gate_final.sh
 
 clean:
 	@rm -rf build
