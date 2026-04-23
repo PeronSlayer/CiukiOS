@@ -53,6 +53,7 @@ DELTEST_SRC="src/com/deltest.bin.asm"
 DELTEST_BIN="build/full/obj/deltest.bin"
 OPENGEM_PAYLOAD_DIR="assets/full/opengem"
 OPENGEM_UPSTREAM_DIR="$OPENGEM_PAYLOAD_DIR/upstream/OPENGEM7-RC3"
+CTMOUSE_BIN="$CIUKIOS_ROOT/third_party/ctmouse/ctmouse.exe"
 INCLUDE_OPENGEM_PAYLOAD="${CIUKIOS_INCLUDE_OPENGEM:-1}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-1}"
@@ -241,6 +242,16 @@ elif command -v mcopy >/dev/null 2>&1; then
 	fi
 else
 	echo "[build-full] WARNING: mcopy not found; OpenGEM payload injection skipped"
+fi
+
+if command -v mcopy >/dev/null 2>&1; then
+	if [[ -f "$CTMOUSE_BIN" ]]; then
+		echo "[build-full] injecting CTMOUSE.EXE (third_party/ctmouse)"
+		mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::CTMOUSE.EXE" >/dev/null || true
+		mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::GEMAPPS/GEMSYS/CTMOUSE.EXE" >/dev/null || true
+	else
+		echo "[build-full] CTMOUSE payload not found at $CTMOUSE_BIN (skipping)"
+	fi
 fi
 
 cat > build/full/README.txt << 'TXT'

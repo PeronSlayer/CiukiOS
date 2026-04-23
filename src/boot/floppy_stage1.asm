@@ -1666,8 +1666,21 @@ int21_mem_strategy:
     je .get
     cmp al, 0x01
     je .set
-    mov ax, 0x0001
-    stc
+    cmp al, 0x02
+    je .get_umb
+    cmp al, 0x03
+    je .set_umb
+    ; Be permissive for unknown subfunctions used by TSRs.
+    xor ax, ax
+    clc
+    ret
+ .get_umb:
+    xor ax, ax
+    clc
+    ret
+ .set_umb:
+    xor ax, ax
+    clc
     ret
 .get:
     xor bx, bx
@@ -3760,9 +3773,12 @@ int21_alloc:
 int21_free:
     call int21_mem_init
 
+    mov ax, es
+    cmp ax, DOS_ENV_SEG
+    je .env_static_ok
+
     cmp word [cs:dos_mem_alloc_size], 0
     je .invalid
-    mov ax, es
     cmp ax, [cs:dos_mem_alloc_seg]
     je .free_block1
     ; check block 2
@@ -3820,6 +3836,11 @@ int21_free:
 .invalid:
     mov ax, 0x0009
     stc
+    ret
+
+.env_static_ok:
+    xor ax, ax
+    clc
     ret
 
 int21_resize:
