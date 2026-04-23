@@ -130,10 +130,6 @@ print_ax_hex:
 
     mov bx, ax
 
-    mov dx, msg_ax
-    mov ah, 0x09
-    int 0x21
-
     mov al, bh
     shr al, 4
     call print_hex_nibble
@@ -169,8 +165,7 @@ msg_try_vdi db "[OPENGEM] try GEMVDI", 13, 10, '$'
 msg_try_gem db "[OPENGEM] try GEM", 13, 10, '$'
 msg_sd_ok db "[OPENGEM] SD ok", 13, 10, '$'
 msg_sd_fail db "[OPENGEM] SD miss", 13, 10, '$'
-msg_fail db "[OPENGEM] launch failed - AX=", '$'
-msg_ax db " AX=", '$'
+msg_fail db "[OPENGEM] launch failed AX=", '$'
 msg_return db "[OPENGEM] returned", 13, 10, '$'
 path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
 path_sd_pattern db "SD*.*", 0
