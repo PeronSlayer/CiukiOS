@@ -710,6 +710,16 @@ int21_handler:
     jmp .success
 
 .fn_52:
+    mov al, '5'
+    call serial_putc
+    mov al, '2'
+    call serial_putc
+    mov al, '?'
+    call serial_putc
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
     call int21_get_list_of_lists
     mov byte [cs:int21_return_es], 1
     jc .error
@@ -3481,6 +3491,35 @@ int21_mem_current_owner:
 .have_owner:
     ret
 
+int21_psp_mcb_update_type:
+    push ax
+    push bx
+    push dx
+    push es
+
+    mov dx, [cs:current_psp_seg]
+    or dx, dx
+    jz .done
+
+    mov es, dx
+    mov bx, [es:0x0002]
+    sub bx, dx
+
+    mov ax, dx
+    dec ax
+    mov es, ax
+    mov [cs:dos_list_of_lists], ax
+    mov [es:0x0000], al
+    mov [es:0x0001], dx
+    mov [es:0x0003], bx
+
+.done:
+    pop es
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 int21_mem_largest_consume:
     cmp cx, 0
     je .done
@@ -3613,6 +3652,8 @@ int21_alloc:
     mov [cs:dos_mem_mcb_owner], ax
     mov [cs:dos_mem_mcb_size], bx
     call int21_mem_write_mcb
+    mov al, 'M'
+    call int21_psp_mcb_update_type
     clc
     ret
 
@@ -3647,10 +3688,13 @@ int21_alloc:
     call int21_mem_trace_chain
     ; update block1 MCB type to 'M' (middle, not last)
     push es
-    mov ax, DOS_HEAP_BASE_SEG
+    mov ax, [cs:dos_mem_alloc_seg]
+    dec ax
     mov es, ax
     mov byte [es:0x0000], 'M'
     pop es
+    mov al, 'M'
+    call int21_psp_mcb_update_type
     mov ax, [cs:dos_mem_alloc_seg2]
     clc
     ret
@@ -3696,21 +3740,47 @@ int21_free:
     mov word [cs:dos_mem_alloc_size2], 0
     ; restore block1 MCB type to 'Z' (now last block)
     push es
-    mov ax, DOS_HEAP_BASE_SEG
+    mov ax, [cs:dos_mem_alloc_seg]
+    dec ax
     mov es, ax
     mov byte [es:0x0000], 'Z'
     pop es
+    mov al, 'M'
+    call int21_psp_mcb_update_type
     call int21_mem_trace_chain
     xor ax, ax
     clc
     ret
 .free_block1:
+    cmp word [cs:dos_mem_alloc_size2], 0
+    je .free_block1_clear
+
+    mov ax, [cs:dos_mem_alloc_seg2]
+    mov [cs:dos_mem_alloc_seg], ax
+    mov ax, [cs:dos_mem_alloc_size2]
+    mov [cs:dos_mem_alloc_size], ax
+    mov word [cs:dos_mem_alloc_seg2], 0
+    mov word [cs:dos_mem_alloc_size2], 0
+    call int21_mem_current_owner
+    mov [cs:dos_mem_mcb_owner], ax
+    mov ax, [cs:dos_mem_alloc_size]
+    mov [cs:dos_mem_mcb_size], ax
+    call int21_mem_write_mcb
+    mov al, 'M'
+    call int21_psp_mcb_update_type
+    xor ax, ax
+    clc
+    ret
+
+.free_block1_clear:
 
     mov word [cs:dos_mem_alloc_seg], 0
     mov word [cs:dos_mem_alloc_size], 0
     mov word [cs:dos_mem_mcb_owner], 0
     mov word [cs:dos_mem_mcb_size], DOS_HEAP_USER_MAX_PARAS
     call int21_mem_write_mcb
+    mov al, 'Z'
+    call int21_psp_mcb_update_type
     xor ax, ax
     clc
     ret
@@ -3768,6 +3838,12 @@ int21_resize:
     pop bx
     pop ax
     mov [es:0x0002], dx
+    mov al, 'Z'
+    cmp word [cs:dos_mem_alloc_size], 0
+    je .psp_type_ready
+    mov al, 'M'
+.psp_type_ready:
+    call int21_psp_mcb_update_type
     mov ax, es
     clc
     ret
@@ -6635,8 +6711,40 @@ int2f_handler:
     je .query_win
     iret
 .idle:
+    cmp byte [cs:int2f_seen_1680], 1
+    je .idle_ret
+    mov byte [cs:int2f_seen_1680], 1
+    mov al, '2'
+    call serial_putc
+    mov al, 'F'
+    call serial_putc
+    mov al, '8'
+    call serial_putc
+    mov al, '0'
+    call serial_putc
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+.idle_ret:
     iret
 .query_win:
+    cmp byte [cs:int2f_seen_1600], 1
+    je .query_ret
+    mov byte [cs:int2f_seen_1600], 1
+    mov al, '2'
+    call serial_putc
+    mov al, 'F'
+    call serial_putc
+    mov al, '0'
+    call serial_putc
+    mov al, '0'
+    call serial_putc
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+.query_ret:
     xor ax, ax
     iret
 
@@ -6645,6 +6753,8 @@ int21_installed db 0
 int21_carry db 0
 int21_return_es db 0
 int2f_installed db 0
+int2f_seen_1680 db 0
+int2f_seen_1600 db 0
 dos_default_drive db 0
 last_exit_code db 0
 int21_last_ah db 0
