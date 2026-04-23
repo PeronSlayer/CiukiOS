@@ -44,3 +44,10 @@
 41. Milestone: extended DOS heap limit and introduced two-block allocation behavior to improve GEM runtime memory allocation during launch sequence.
 42. Action: expanded Stage1 reserved loader budget from 22 to 23 sectors in both full and floppy profiles to keep runtime growth stable.
 43. Release: bumped project version to `CiukiOS pre-Alpha v0.5.8` after OpenGEM runtime stabilization work and regression validation.
+
+## 2026-04-23 (continued)
+44. Action: restored descriptive shell messages in Stage1 (banner with version, full help listing, readable prompt and error text) after text regression introduced by stage2 overflow fix.
+45. Action: expanded Stage1 reserved loader budget from 23 to 24 sectors in both full and floppy profiles, bringing both in sync; floppy was silently overflowing by 330 bytes.
+46. Fix: corrected `INT 21h AH=49h` (free) block2 path — `.free_done` was aliased to `.invalid`, causing all block2 free calls to return error 9 instead of success.
+47. Fix: added block2 path to `INT 21h AH=4Ah` (resize) — previously only block1 was handled, leaving GEM runtime with inconsistent memory state on resize calls targeting the secondary heap block.
+48. Action: created `setup/` installer skeleton — source stubs, build scripts, manifest, and full TODO list for a future DOS-Setup-style multi-floppy + CD-ROM installer project.

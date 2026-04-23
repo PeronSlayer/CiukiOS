@@ -1392,7 +1392,8 @@ int21_get_indos_ptr:
     ret
 
 int21_get_list_of_lists:
-    mov bx, dos_list_of_lists
+    ; return ES:BX pointing to SYSVARS; ES:[BX-2] = first MCB segment
+    mov bx, dos_list_of_lists + 2
     mov ax, cs
     mov es, ax
     xor ax, ax
@@ -2607,6 +2608,8 @@ int21_mem_init:
     mov word [cs:dos_mem_alloc_size], 0
     mov word [cs:dos_mem_mcb_owner], 0
     mov word [cs:dos_mem_mcb_size], DOS_HEAP_USER_MAX_PARAS
+    ; initialise list-of-lists: first word (BX-2) = first MCB segment
+    mov word [cs:dos_list_of_lists], DOS_HEAP_BASE_SEG
     call int21_mem_write_mcb
 .done:
     ret
@@ -2663,6 +2666,25 @@ int21_alloc:
     ; allocate block 2
     mov [cs:dos_mem_alloc_seg2], ax
     mov [cs:dos_mem_alloc_size2], bx
+    ; write MCB for block2 at (block2_seg - 1)
+    push es
+    push ax
+    push bx
+    dec ax
+    mov es, ax
+    mov byte [es:0x0000], 'Z'
+    pop bx
+    pop ax
+    mov [es:0x0001], ax   ; owner = block2 data segment
+    mov [es:0x0003], bx   ; size in paragraphs
+    pop es
+    ; update block1 MCB type to 'M' (middle, not last)
+    push es
+    mov ax, DOS_HEAP_BASE_SEG
+    mov es, ax
+    mov byte [es:0x0000], 'M'
+    pop es
+    mov ax, [cs:dos_mem_alloc_seg2]
     clc
     ret
 .no_memory_b2:
@@ -2695,6 +2717,12 @@ int21_free:
     jne .invalid
     mov word [cs:dos_mem_alloc_seg2], 0
     mov word [cs:dos_mem_alloc_size2], 0
+    ; restore block1 MCB type to 'Z' (now last block)
+    push es
+    mov ax, DOS_HEAP_BASE_SEG
+    mov es, ax
+    mov byte [es:0x0000], 'Z'
+    pop es
     xor ax, ax
     clc
     ret
@@ -5582,7 +5610,7 @@ fileio_buf times 4 db 0
 fileio_patch db 0x11, 0x22
 find_dta times 64 db 0
 dos_indos_flag db 0
-dos_list_of_lists times 32 db 0
+dos_list_of_lists times 64 db 0
 cmd_buffer times CMD_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] run", 13, 10, 0

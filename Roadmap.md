@@ -29,7 +29,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 2. Extended `INT 10h` plus robust timer/mouse/input services.
 3. Native VDI/AES compatibility layer for OpenGEM.
 4. Milestone: stable OpenGEM desktop on real hardware.
-**STATUS: IN PROGRESS (v0.5.7)**
+**STATUS: IN PROGRESS (v0.5.8)**
 - ✓ VGA mode13h primitives (pixels, lines, boxes, text)
 - ✓ INT33h mouse handler installed at bootstrap
 - ✓ VBE query service ready (stub for full implementation)
@@ -37,7 +37,18 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 - ✓ Timer/input services (INT1Ah, INT16h)
 - ✓ OpenGEM payload integration in full image (`root` + `GEMAPPS/GEMSYS`)
 - ✓ Stage2 OpenGEM launcher and guarded fallback flow
-- OpenGEM desktop bootstrap still pending full DOS compatibility closure (runtime currently pre-desktop)
+- ✓ Nested exec chain (GEMVDI → GEM.EXE) functional; GEM reaches event loop
+- ✓ DOS memory allocator (2-block alloc/free/resize) stabilized
+- OpenGEM graphical desktop (full AES/VDI rendering) still pending
+
+## Phase 3.5 - CiukiOS Installer (Setup project)
+> Tracked separately under `setup/`. Prerequisite: stable Phase 3 runtime.
+1. DOS-Setup-style text-mode TUI installer binary (`SETUP.COM`).
+2. Multi-floppy distribution: N × 1.44MB images with disk-swap engine.
+3. CD-ROM distribution: single bootable ISO 9660 image.
+4. Installation flow: drive detection, FAT16 format, file copy, config write.
+5. Component selection: Minimal / Standard / Full+GEM.
+- See `setup/README.md` for full TODO breakdown.
 
 ## Phase 4 - DOOM Milestone
 1. Optimize mode 13h/VGA rendering path.

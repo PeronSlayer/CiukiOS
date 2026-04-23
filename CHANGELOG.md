@@ -4,6 +4,11 @@ All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
 ## Unreleased
+1. Restored descriptive shell messages in Stage1 (banner with version, full `help` listing, `Unknown command` text).
+2. Expanded Stage1 loader budget to 24 sectors in both full and floppy profiles (was 23/22 respectively); fixes a silent 330-byte overflow in the floppy profile.
+3. Fixed `INT 21h AH=49h` block2 free path: `.free_done` was aliased to `.invalid`, causing all secondary-block frees to return error 9.
+4. Added block2 path to `INT 21h AH=4Ah` resize: secondary heap block can now be resized without corrupting block1 MCB state.
+5. Created `setup/` installer project skeleton: source stubs, build scripts, manifest template, and full TODO list for multi-floppy + CD-ROM distribution.
 
 ## pre-Alpha v0.5.8 (2026-04-23)
 1. Fixed nested `INT 21h AH=4Bh` execution flow for OpenGEM chainload (`GEMVDI -> GEM.EXE`) by separating parent/child load segments and preserving parent PSP context on return.

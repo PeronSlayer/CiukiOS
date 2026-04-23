@@ -1,0 +1,15 @@
+# SETUP.INF - CiukiOS Installation Manifest
+# Format: DISK|FILENAME|SOURCE_PATH|TARGET_PATH|SIZE_BYTES|CHECKSUM
+# TODO: populate with real file list once installer is implemented
+#
+# [MANIFEST]
+# DISK=1|SETUP.COM|build/setup/SETUP.COM|/|?|?
+# DISK=1|CIUKIOS.SYS|build/full/obj/full_stage1.bin|/|?|?
+# DISK=2|GEM.EXE|assets/full/opengem/GEM.EXE|/GEMAPPS/|?|?
+# DISK=2|GEMVDI.EXE|assets/full/opengem/GEMVDI.EXE|/GEMAPPS/|?|?
+# ... (add all OpenGEM assets, fonts, configs)
+#
+# [COMPONENTS]
+# MINIMAL: DISK=1 files only
+# STANDARD: DISK=1-2 files
+# FULL+GEM: all disks
