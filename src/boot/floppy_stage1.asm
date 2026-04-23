@@ -2697,7 +2697,7 @@ int21_free:
     mov word [cs:dos_mem_alloc_size2], 0
     xor ax, ax
     clc
-    jmp .free_done
+    ret
 .free_block1:
 
     mov word [cs:dos_mem_alloc_seg], 0
@@ -2709,7 +2709,6 @@ int21_free:
     clc
     ret
 
-.free_done:
 .invalid:
     mov ax, 0x0009
     stc
@@ -2737,7 +2736,18 @@ int21_resize:
     je .invalid
     mov ax, es
     cmp ax, [cs:dos_mem_alloc_seg]
+    je .resize_block1
+    ; check block2
+    cmp ax, [cs:dos_mem_alloc_seg2]
     jne .invalid
+    cmp bx, 0
+    je .no_memory
+    mov [cs:dos_mem_alloc_size2], bx
+    xor dx, dx
+    mov ax, es
+    clc
+    ret
+.resize_block1:
     cmp bx, 0
     je .no_memory
     cmp bx, DOS_HEAP_USER_MAX_PARAS
