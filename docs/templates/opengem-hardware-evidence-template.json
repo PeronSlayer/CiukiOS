@@ -1,0 +1,34 @@
+{
+  "date_utc": "",
+  "operator": "",
+  "hardware": {
+    "machine_model": "",
+    "cpu": "",
+    "ram_mb": 0,
+    "gpu": "",
+    "input": {
+      "keyboard": true,
+      "mouse": false
+    }
+  },
+  "campaign": {
+    "runs": 20,
+    "boot_success": 0,
+    "launch_success": 0,
+    "interaction_success": 0,
+    "return_to_shell_success": 0
+  },
+  "deltas_vs_qemu": [
+    {
+      "area": "",
+      "severity": "low|medium|high",
+      "description": "",
+      "workaround": ""
+    }
+  ],
+  "evidence": {
+    "photos": [],
+    "videos": [],
+    "notes": ""
+  }
+}

@@ -13,8 +13,10 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 5. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
 6. Engineering logbook: [docs/diario-bordo-v2.md](docs/diario-bordo-v2.md)
 7. OpenGEM completion plan: [docs/opengem-completion-execution-plan-v0.5.9.md](docs/opengem-completion-execution-plan-v0.5.9.md)
-8. Full changelog: [CHANGELOG.md](CHANGELOG.md)
-9. Donations and support: [DONATIONS.md](DONATIONS.md)
+8. OpenGEM runtime normalization: [docs/opengem-runtime-normalization.md](docs/opengem-runtime-normalization.md)
+9. OpenGEM hardware lane: [docs/opengem-hardware-validation-lane.md](docs/opengem-hardware-validation-lane.md)
+10. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+11. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
 `CiukiOS pre-Alpha v0.5.9`
@@ -60,7 +62,7 @@ Progress is continuous but not tied to a fixed release calendar.
 5. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
 6. Migration/archive note: [docs/migration-note-old-archive.md](docs/migration-note-old-archive.md)
 
-## OpenGEM P0 Tooling
+## OpenGEM P0/P1 Tooling
 1. `make opengem-trace-full`
 	Generates DOS/OpenGEM tracing artifacts in `build/full/`:
 	- `opengem-trace-full.latest.serial.log`
@@ -74,9 +76,22 @@ Progress is continuous but not tied to a fixed release calendar.
 	Runs the official OG-P0-05 final gate (single verdict PASS/FAIL) and writes:
 	- `build/full/opengem-gate-final.latest.report.txt`
 	Documentation: [docs/opengem-final-gate-og-p0-05.md](docs/opengem-final-gate-og-p0-05.md)
-4. Optional environment overrides:
+4. `make opengem-soak-full`
+	Runs OG-P1-02 long-session soak campaign (default 20 minutes) and writes:
+	- `build/full/opengem-soak-full.latest.report.json`
+	- `build/full/opengem-soak-full.latest.report.txt`
+	- per-run artifacts in `build/full/opengem-soak-latest/`
+5. `make opengem-hardware-lane-pack`
+	Packages OG-P1-03 hardware lane templates under `build/full/opengem-hardware-lane-latest/`.
+6. Runtime/hardware docs:
+	- [docs/opengem-runtime-normalization.md](docs/opengem-runtime-normalization.md)
+	- [docs/opengem-hardware-validation-lane.md](docs/opengem-hardware-validation-lane.md)
+	- [docs/templates/opengem-hardware-execution-template.md](docs/templates/opengem-hardware-execution-template.md)
+	- [docs/templates/opengem-hardware-evidence-template.json](docs/templates/opengem-hardware-evidence-template.json)
+7. Optional environment overrides:
 	- `RUNS=<n>` for acceptance iterations
 	- `QEMU_TIMEOUT_SEC=<seconds>` for trace/acceptance timeout
+	- `SOAK_DURATION_MIN=<20..30>` for soak duration
 	- `OPENGEM_GATE_LAUNCH_THRESHOLD=<pct>` (default 90)
 	- `OPENGEM_GATE_RETURN_THRESHOLD=<pct>` (default 95)
 	- `OPENGEM_GATE_MAX_HANGS=<n>` (default derived from return threshold)

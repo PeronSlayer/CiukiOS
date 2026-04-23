@@ -39,8 +39,13 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 - ✓ Stage2 OpenGEM launcher and guarded fallback flow
 - ✓ Nested exec chain (GEMVDI → GEM.EXE) functional; GEM reaches event loop
 - ✓ DOS memory allocator (2-block alloc/free/resize) stabilized
+- ✓ OG-P1 soak harness and machine-readable report path (`scripts/opengem_soak_full.sh`)
+- ✓ OG-P1 hardware validation lane package (guide + templates)
+- ✓ Runtime launch-order/payload/troubleshooting normalization docs
 - OpenGEM graphical desktop (full AES/VDI rendering) still pending
 - Execution backlog and closure criteria: `docs/opengem-completion-execution-plan-v0.5.9.md`
+- Runtime normalization reference: `docs/opengem-runtime-normalization.md`
+- Hardware lane reference: `docs/opengem-hardware-validation-lane.md`
 
 ## Phase 3.5 - CiukiOS Installer (Setup project)
 > Tracked separately under `setup/`. Prerequisite: stable Phase 3 runtime.

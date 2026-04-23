@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-all opengem-trace-full opengem-acceptance-full opengem-gate-final opengem-regression-lock opengem-perf-baseline opengem-perf-check clean
+.PHONY: help build-floppy build-full qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-all opengem-trace-full opengem-acceptance-full opengem-soak-full opengem-hardware-lane-pack opengem-gate-final opengem-regression-lock opengem-perf-baseline opengem-perf-check clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -10,6 +10,8 @@ help:
 	@echo "  make qemu-test-all    - build + QEMU smoke test (floppy + full)"
 	@echo "  make opengem-trace-full      - full-profile OpenGEM DOS syscall trace artifacts"
 	@echo "  make opengem-acceptance-full - OpenGEM graphical acceptance loop with metrics"
+	@echo "  make opengem-soak-full       - OpenGEM long-session soak campaign (20-30 min)"
+	@echo "  make opengem-hardware-lane-pack - package hardware validation templates"
 	@echo "  make opengem-gate-final      - official OG-P0-05 final pass/fail gate"
 	@echo "  make opengem-regression-lock - OG-P2-01 historical regression lock checks"
 	@echo "  make opengem-perf-baseline   - OG-P2-02 baseline capture for performance budgets"
@@ -39,6 +41,12 @@ opengem-trace-full:
 
 opengem-acceptance-full:
 	@bash scripts/opengem_acceptance_full.sh
+
+opengem-soak-full:
+	@bash scripts/opengem_soak_full.sh
+
+opengem-hardware-lane-pack:
+	@bash scripts/opengem_hardware_lane_pack.sh latest
 
 opengem-gate-final:
 	@bash scripts/opengem_gate_final.sh

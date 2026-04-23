@@ -4,15 +4,21 @@ All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
 ## Unreleased
-1. Restored descriptive shell messages in Stage1 (banner with version, full `help` listing, `Unknown command` text).
-2. Expanded Stage1 loader budget to 24 sectors in both full and floppy profiles (was 23/22 respectively); fixes a silent 330-byte overflow in the floppy profile.
-3. Fixed `INT 21h AH=49h` block2 free path: `.free_done` was aliased to `.invalid`, causing all secondary-block frees to return error 9.
-4. Added block2 path to `INT 21h AH=4Ah` resize: secondary heap block can now be resized without corrupting block1 MCB state.
-5. Created `setup/` installer project skeleton: source stubs, build scripts, manifest template, and full TODO list for multi-floppy + CD-ROM distribution.
-6. Improved MCB/List-of-Lists coherence for multi-block allocators: block2 now writes a real MCB header, block1 toggles `M/Z` type correctly, and `INT 21h AH=52h` now returns a valid first-MCB pointer in `ES:[BX-2]`.
-7. Completed keyboard-backed DOS input path for `INT 21h` (`AH=06h/07h/08h/0Ah`) by routing to BIOS `INT 16h` instead of CR stubs, improving OpenGEM event-loop compatibility.
-8. Added `INT 21h AH=51h` support and corrected PSP reporting (`AH=62h`) to use `current_psp_seg`, with sane fallback to DOS heap base.
-9. Switched full-profile defaults to real OpenGEM execution (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) and added Stage2 autorun diagnostics (`[S2] autorun/loaded/return/fail`).
+1. OG-P1-01: hardened Stage1 VDI/AES primitives with coordinate clipping guards for pixel/line/rect paths and upgraded INT33h handler from minimal stub to deterministic stateful behavior (reset/status/position/range/version).
+2. OG-P1-01: extended full-profile Stage2 OpenGEM launch diagnostics with explicit `try GEM.EXE` and `try GEM.BAT` markers for troubleshooting parity.
+3. OG-P1-02: added long-session soak runner `scripts/opengem_soak_full.sh` (20-30 min) with per-run NDJSON plus JSON/TXT summary reports.
+4. OG-P1-03: added real hardware lane package (`docs/opengem-hardware-validation-lane.md`, execution/evidence templates, and `scripts/opengem_hardware_lane_pack.sh`).
+5. OG-P1-04: added runtime normalization guide (`docs/opengem-runtime-normalization.md`) covering launch order, payload requirements, and troubleshooting signatures.
+6. Added Makefile targets for OG-P1 flows: `opengem-soak-full` and `opengem-hardware-lane-pack`.
+7. Restored descriptive shell messages in Stage1 (banner with version, full `help` listing, `Unknown command` text).
+8. Expanded Stage1 loader budget to 24 sectors in both full and floppy profiles (was 23/22 respectively); fixes a silent 330-byte overflow in the floppy profile.
+9. Fixed `INT 21h AH=49h` block2 free path: `.free_done` was aliased to `.invalid`, causing all secondary-block frees to return error 9.
+10. Added block2 path to `INT 21h AH=4Ah` resize: secondary heap block can now be resized without corrupting block1 MCB state.
+11. Created `setup/` installer project skeleton: source stubs, build scripts, manifest template, and full TODO list for multi-floppy + CD-ROM distribution.
+12. Improved MCB/List-of-Lists coherence for multi-block allocators: block2 now writes a real MCB header, block1 toggles `M/Z` type correctly, and `INT 21h AH=52h` now returns a valid first-MCB pointer in `ES:[BX-2]`.
+13. Completed keyboard-backed DOS input path for `INT 21h` (`AH=06h/07h/08h/0Ah`) by routing to BIOS `INT 16h` instead of CR stubs, improving OpenGEM event-loop compatibility.
+14. Added `INT 21h AH=51h` support and corrected PSP reporting (`AH=62h`) to use `current_psp_seg`, with sane fallback to DOS heap base.
+15. Switched full-profile defaults to real OpenGEM execution (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) and added Stage2 autorun diagnostics (`[S2] autorun/loaded/return/fail`).
 
 ## pre-Alpha v0.5.9 (2026-04-23)
 1. Fixed carry-flag preservation in DOS I/O done paths (`INT 21h AH=3Fh/40h/42h`) so handle-swap housekeeping no longer corrupts success/error status.
