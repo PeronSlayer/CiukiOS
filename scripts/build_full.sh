@@ -57,6 +57,11 @@ CTMOUSE_BIN="$CIUKIOS_ROOT/third_party/ctmouse/ctmouse.exe"
 INCLUDE_OPENGEM_PAYLOAD="${CIUKIOS_INCLUDE_OPENGEM:-1}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-1}"
+MTOOLS_TIMEOUT_SEC="${MTOOLS_TIMEOUT_SEC:-20}"
+
+mtools_try() {
+	timeout "$MTOOLS_TIMEOUT_SEC" "$@" >/dev/null 2>&1 || true
+}
 
 for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC"; do
 	if [[ ! -f "$f" ]]; then
@@ -217,11 +222,11 @@ elif command -v mcopy >/dev/null 2>&1; then
 	if compgen -G "$OPENGEM_STAGE_DIR/*" >/dev/null; then
 		echo "[build-full] injecting OpenGEM payload files (root + GEMAPPS/GEMSYS)"
 		if command -v mmd >/dev/null 2>&1; then
-			mmd -i "$IMG" ::GEMAPPS >/dev/null 2>&1 || true
-			mmd -i "$IMG" ::GEMAPPS/GEMSYS >/dev/null 2>&1 || true
-			mmd -i "$IMG" ::GEMAPPS/FONTS >/dev/null 2>&1 || true
-			mmd -i "$IMG" ::GEMAPPS/GEMBOOT >/dev/null 2>&1 || true
-			mmd -i "$IMG" ::GEMBOOT >/dev/null 2>&1 || true
+			mtools_try mmd -i "$IMG" ::GEMAPPS
+			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMSYS
+			mtools_try mmd -i "$IMG" ::GEMAPPS/FONTS
+			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMBOOT
+			mtools_try mmd -i "$IMG" ::GEMBOOT
 		fi
 		for f in "$OPENGEM_STAGE_DIR"/*; do
 			base="$(basename "$f")"
@@ -247,6 +252,8 @@ fi
 if command -v mcopy >/dev/null 2>&1; then
 	if [[ -f "$CTMOUSE_BIN" ]]; then
 		echo "[build-full] injecting CTMOUSE.EXE (third_party/ctmouse)"
+		mtools_try mmd -i "$IMG" ::GEMAPPS
+		mtools_try mmd -i "$IMG" ::GEMAPPS/GEMSYS
 		mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::CTMOUSE.EXE" >/dev/null || true
 		mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::GEMAPPS/GEMSYS/CTMOUSE.EXE" >/dev/null || true
 	else

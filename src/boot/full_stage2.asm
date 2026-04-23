@@ -25,23 +25,6 @@ stage2_entry:
     mov ah, 0x3B
     int 0x21
 
-    mov dx, path_sd_pattern
-    xor cx, cx
-    mov ah, 0x4E
-    int 0x21
-    jc .sd_fail
-    mov dx, msg_sd_ok
-    mov ah, 0x09
-    int 0x21
-    jmp .sd_done
-
-.sd_fail:
-    mov dx, msg_sd_fail
-    mov ah, 0x09
-    int 0x21
-
-.sd_done:
-
     ; Try to load a generic DOS mouse driver before GEMVDI.
     ; Ignore failures to keep boot robust when payload is absent.
     mov dx, path_ctmouse_root
@@ -55,11 +38,15 @@ stage2_entry:
     call exec_try_wait_gemarg
     jnc .wait_done
     mov [last_fail_ax], ax
+    cmp ax, 0x0002
+    jne .launch_fail
 
     mov dx, path_gem_exe_root
     call exec_try_wait
     jnc .wait_done
     mov [last_fail_ax], ax
+    cmp ax, 0x0002
+    jne .launch_fail
 
     mov dx, path_gem_bat_root
     call exec_try_wait
@@ -164,12 +151,9 @@ print_hex_nibble:
 msg_begin db "[OPENGEM] launch", 13, 10, '$'
 msg_blocked db "[OPENGEM] runtime not ready, launch skipped", 13, 10, '$'
 msg_try_vdi db "[OPENGEM] try GEMVDI", 13, 10, '$'
-msg_sd_ok db "[OPENGEM] SD ok", 13, 10, '$'
-msg_sd_fail db "[OPENGEM] SD miss", 13, 10, '$'
 msg_fail db "[OPENGEM] launch failed AX=", '$'
 msg_return db "[OPENGEM] returned", 13, 10, '$'
 path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
-path_sd_pattern db "SD*.*", 0
 path_ctmouse_root db "CTMOUSE.EXE", 0
 path_gemvdi_root db "GEMVDI.EXE", 0
 path_gem_exe_root db "GEM.EXE", 0

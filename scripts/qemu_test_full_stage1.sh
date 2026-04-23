@@ -31,14 +31,25 @@ check_marker() {
   fi
 }
 
+check_any_marker() {
+  local marker_a="$1"
+  local marker_b="$2"
+  if grep -Fq "$marker_a" "$LOG_FILE" || grep -Fq "$marker_b" "$LOG_FILE"; then
+    return 0
+  fi
+  echo "[qemu-test-full-stage1] FAIL (missing markers: $marker_a | $marker_b)" >&2
+  tail -n 150 "$LOG_FILE" >&2 || true
+  exit 1
+}
+
 check_marker "[STAGE1-SERIAL] READY"
-check_marker "[STAGE1-SELFTEST] BEGIN"
+check_any_marker "[STAGE1-SELFTEST] BEGIN" "[S1T] B"
 check_marker "[DOS21-SERIAL] PASS"
 check_marker "[COMDEMO-SERIAL] PASS"
 check_marker "[MZDEMO-SERIAL] PASS"
 check_marker "[FILEIO-SERIAL] PASS"
 check_marker "[FIND-SERIAL] PASS"
 check_marker "[GFX-SERIAL] PASS"
-check_marker "[STAGE1-SELFTEST] DONE"
+check_any_marker "[STAGE1-SELFTEST] DONE" "[S1T] D"
 
 echo "[qemu-test-full-stage1] PASS (FAT16 stage1 selftest + INT21h + COM/MZ + file I/O + findfirst + VGA mode13h)"

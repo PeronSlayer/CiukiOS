@@ -3788,17 +3788,6 @@ int21_alloc:
 
 .both_busy_fail:
     call int21_mem_largest_global
-    cmp bx, si
-    jb .both_busy_error
-    mov ax, DOS_HEAP_LIMIT_SEG
-    sub ax, si
-    mov [cs:dos_mem_alloc_seg2], ax
-    mov [cs:dos_mem_alloc_size2], si
-    mov ax, [cs:dos_mem_alloc_seg2]
-    clc
-    ret
-
-.both_busy_error:
     mov ax, 0x0008
     stc
     ret
