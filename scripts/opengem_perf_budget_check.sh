@@ -101,6 +101,7 @@ extract_json_number() {
 
 base_launch="$(extract_json_number "$BASELINE" "launch_success_rate_percent")"
 base_return="$(extract_json_number "$BASELINE" "return_to_shell_rate_percent")"
+base_ready="$(extract_json_number "$BASELINE" "desktop_ready_rate_percent")"
 base_hang="$(extract_json_number "$BASELINE" "hang_count")"
 base_latency="$(extract_json_number "$BASELINE" "average_launch_latency_sec")"
 base_paras="$(extract_json_number "$BASELINE" "observed_max_allocated_paras")"
@@ -110,13 +111,18 @@ if [[ -z "$base_launch" || -z "$base_return" || -z "$base_hang" || -z "$base_lat
   exit 1
 fi
 
+if [[ -z "$base_ready" ]]; then
+  base_ready="$base_launch"
+fi
+
 latency_mult="$(extract_json_number "$BUDGET" "max_avg_launch_latency_multiplier")"
 launch_drop="$(extract_json_number "$BUDGET" "max_launch_success_drop_percent")"
 return_drop="$(extract_json_number "$BUDGET" "max_return_to_shell_drop_percent")"
+ready_drop="$(extract_json_number "$BUDGET" "max_desktop_ready_drop_percent")"
 hang_delta="$(extract_json_number "$BUDGET" "max_hang_count_increase")"
 paras_mult="$(extract_json_number "$BUDGET" "max_allocated_paras_multiplier")"
 
-if [[ -z "$latency_mult" || -z "$launch_drop" || -z "$return_drop" || -z "$hang_delta" || -z "$paras_mult" ]]; then
+if [[ -z "$latency_mult" || -z "$launch_drop" || -z "$return_drop" || -z "$ready_drop" || -z "$hang_delta" || -z "$paras_mult" ]]; then
   echo "[opengem-perf-check] ERROR: incomplete budget config in $BUDGET" >&2
   exit 1
 fi
@@ -138,21 +144,34 @@ cur_return="$(awk -F': ' '/return_to_shell_rate_percent/ {print $2}' "$ACC_REPOR
 cur_hang="$(awk -F': ' '/hang_count/ {print $2}' "$ACC_REPORT" | tail -n 1 | tr -d '[:space:]')"
 cur_latency="$(awk -F': ' '/average_launch_latency_sec/ {print $2}' "$ACC_REPORT" | tail -n 1 | tr -d '[:space:]')"
 
+cur_ready=0
+ready_pattern='\[OPENGEM-DESKTOP\][[:space:]]+Starting|OOPPEENNGGEEMM-DDEESSKKTTOOPP.*SSttaarrttiinngg'
+ACC_DIR="build/full/opengem-acceptance-${LABEL}"
+if compgen -G "$ACC_DIR/run-*.serial.log" >/dev/null; then
+  while IFS= read -r f; do
+    if grep -Eqi "$ready_pattern" "$f"; then
+      cur_ready=$((cur_ready + 1))
+    fi
+  done < <(ls -1 "$ACC_DIR"/run-*.serial.log)
+fi
+cur_ready_rate="$(awk -v ok="$cur_ready" -v total="$RUNS" 'BEGIN { printf "%.2f", (ok*100.0)/total }')"
+
 latency_limit="$(awk -v b="$base_latency" -v m="$latency_mult" 'BEGIN { printf "%.3f", b*m }')"
 launch_min="$(awk -v b="$base_launch" -v d="$launch_drop" 'BEGIN { v=b-d; if (v<0) v=0; printf "%.2f", v }')"
 return_min="$(awk -v b="$base_return" -v d="$return_drop" 'BEGIN { v=b-d; if (v<0) v=0; printf "%.2f", v }')"
+ready_min="$(awk -v b="$base_ready" -v d="$ready_drop" 'BEGIN { v=b-d; if (v<0) v=0; printf "%.2f", v }')"
 hang_max="$(awk -v b="$base_hang" -v d="$hang_delta" 'BEGIN { printf "%d", int(b+d) }')"
 
 latency_ok="$(awk -v c="$cur_latency" -v l="$latency_limit" 'BEGIN { if (c+0 <= l+0) print 1; else print 0 }')"
 launch_ok="$(awk -v c="$cur_launch" -v l="$launch_min" 'BEGIN { if (c+0 >= l+0) print 1; else print 0 }')"
 return_ok="$(awk -v c="$cur_return" -v l="$return_min" 'BEGIN { if (c+0 >= l+0) print 1; else print 0 }')"
+ready_ok="$(awk -v c="$cur_ready_rate" -v l="$ready_min" 'BEGIN { if (c+0 >= l+0) print 1; else print 0 }')"
 hang_ok=0
 if [[ "$cur_hang" =~ ^[0-9]+$ ]] && [[ "$cur_hang" -le "$hang_max" ]]; then
   hang_ok=1
 fi
 
 cur_paras=0
-ACC_DIR="build/full/opengem-acceptance-${LABEL}"
 if compgen -G "$ACC_DIR/run-*.serial.log" >/dev/null; then
   while IFS= read -r f; do
     v="$(strings -a "$f" | awk '
@@ -179,7 +198,7 @@ if [[ "${base_paras:-0}" -gt 0 ]] && [[ "$cur_paras" -gt "$paras_limit" ]]; then
 fi
 
 verdict="PASS"
-if [[ "$latency_ok" -ne 1 || "$launch_ok" -ne 1 || "$return_ok" -ne 1 || "$hang_ok" -ne 1 || "$paras_ok" -ne 1 ]]; then
+if [[ "$latency_ok" -ne 1 || "$launch_ok" -ne 1 || "$return_ok" -ne 1 || "$ready_ok" -ne 1 || "$hang_ok" -ne 1 || "$paras_ok" -ne 1 ]]; then
   verdict="FAIL"
 fi
 
@@ -193,6 +212,7 @@ Baseline:
 - file: $BASELINE
 - launch_success_rate_percent: $base_launch
 - return_to_shell_rate_percent: $base_return
+- desktop_ready_rate_percent: $base_ready
 - hang_count: $base_hang
 - average_launch_latency_sec: $base_latency
 - observed_max_allocated_paras: ${base_paras:-0}
@@ -202,6 +222,7 @@ Budget:
 - max_avg_launch_latency_multiplier: $latency_mult
 - max_launch_success_drop_percent: $launch_drop
 - max_return_to_shell_drop_percent: $return_drop
+- max_desktop_ready_drop_percent: $ready_drop
 - max_hang_count_increase: $hang_delta
 - max_allocated_paras_multiplier: $paras_mult
 
@@ -209,6 +230,7 @@ Current:
 - acceptance_report: $ACC_REPORT
 - launch_success_rate_percent: $cur_launch
 - return_to_shell_rate_percent: $cur_return
+- desktop_ready_rate_percent: $cur_ready_rate
 - hang_count: $cur_hang
 - average_launch_latency_sec: $cur_latency
 - observed_max_allocated_paras: $cur_paras
@@ -216,6 +238,7 @@ Current:
 Computed limits:
 - launch_success_min: $launch_min
 - return_to_shell_min: $return_min
+- desktop_ready_min: $ready_min
 - hang_count_max: $hang_max
 - avg_launch_latency_max: $latency_limit
 - allocated_paras_max: $paras_limit
@@ -223,6 +246,7 @@ Computed limits:
 Checks:
 - launch_check: $launch_ok
 - return_check: $return_ok
+- desktop_ready_check: $ready_ok
 - hang_check: $hang_ok
 - latency_check: $latency_ok
 - allocated_paras_check: $paras_ok

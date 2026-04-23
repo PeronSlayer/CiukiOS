@@ -11,6 +11,7 @@ Usage: scripts/opengem_perf_baseline.sh [--runs <n>] [--timeout-sec <n>] [--labe
 Generates OG-P2-02 baseline metrics from OpenGEM acceptance runs:
 - launch success rate
 - return-to-shell rate
+- desktop ready rate
 - hang count
 - average launch latency
 - observed DOS allocator high-water mark (paras) from serial traces
@@ -96,8 +97,14 @@ if [[ -z "$launch_rate" || -z "$return_rate" || -z "$hang_count" || -z "$avg_lat
 fi
 
 max_paras=0
+ready_count=0
+ready_pattern='\[OPENGEM-DESKTOP\][[:space:]]+Starting|OOPPEENNGGEEMM-DDEESSKKTTOOPP.*SSttaarrttiinngg'
 if compgen -G "$ACC_DIR/run-*.serial.log" >/dev/null; then
   while IFS= read -r f; do
+    if grep -Eqi "$ready_pattern" "$f"; then
+      ready_count=$((ready_count + 1))
+    fi
+
     cur="$(strings -a "$f" | awk '
       {
         if (match($0, /M1=[0-9A-F]{4}\/([0-9A-F]{4}) 2=[0-9A-F]{4}\/([0-9A-F]{4})/, m)) {
@@ -115,6 +122,8 @@ if compgen -G "$ACC_DIR/run-*.serial.log" >/dev/null; then
   done < <(ls -1 "$ACC_DIR"/run-*.serial.log)
 fi
 
+ready_rate="$(awk -v ok="$ready_count" -v total="$RUNS" 'BEGIN { printf "%.2f", (ok*100.0)/total }')"
+
 cat > "$OUT_JSON" << EOF
 {
   "date_utc": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -123,6 +132,7 @@ cat > "$OUT_JSON" << EOF
   "timeout_sec": $TIMEOUT_SEC,
   "launch_success_rate_percent": $launch_rate,
   "return_to_shell_rate_percent": $return_rate,
+  "desktop_ready_rate_percent": $ready_rate,
   "hang_count": $hang_count,
   "average_launch_latency_sec": $avg_latency,
   "observed_max_allocated_paras": $max_paras,
