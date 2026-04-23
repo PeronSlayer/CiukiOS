@@ -42,12 +42,12 @@ stage2_entry:
 
 .sd_done:
 
-    ; OpenGEM bootstraps through GEMVDI.EXE.
+    ; Preload GEMVDI first, then start GEM.EXE.
     mov dx, msg_try_vdi
     mov ah, 0x09
     int 0x21
     mov dx, path_gemvdi_root
-    call exec_try_wait_gemarg
+    call exec_try_wait
     jnc .wait_done
     mov [last_fail_ax], ax
 
