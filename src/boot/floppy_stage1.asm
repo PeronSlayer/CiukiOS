@@ -5593,19 +5593,19 @@ msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
 msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
 msg_prompt    db "root:\> ", 0
-msg_unknown   db "unknown", 13, 10, 0
-msg_banner_title db " CiukiOS ", 0
+msg_unknown   db "Unknown command. Type 'help' for available commands.", 13, 10, 0
+msg_banner_title db " CiukiOS pre-Alpha v0.5.8 ", 0
 msg_shell_hint db "CiukiDOS Shell", 0
-msg_shell_quick db "type help", 0
-msg_shell_footer db "ready", 0
+msg_shell_quick db "Type 'help' for available commands", 0
+msg_shell_footer db "Ready", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
-msg_help_header db "commands", 13, 10, 0
-msg_help_core db "core", 13, 10, 0
-msg_help_runtime db "rt", 13, 10, 0
-msg_help_system db "sys", 13, 10, 0
-msg_help_apps db "apps", 13, 10, 0
+msg_help_header db "--- CiukiDOS Commands ---", 13, 10, 0
+msg_help_core db "  help  dir  cd  cls  tree  ver", 13, 10, 0
+msg_help_runtime db "  dos21  comdemo  mzdemo  fileio  findtest", 13, 10, 0
+msg_help_system db "  gfxdemo  ticks  drive  reboot  halt", 13, 10, 0
+msg_help_apps db "  opengem", 13, 10, 0
 msg_version_line db "CiukiOS v0.5.6", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
