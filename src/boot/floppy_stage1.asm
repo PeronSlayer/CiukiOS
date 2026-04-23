@@ -1977,19 +1977,6 @@ int21_find_first:
     call int21_find_try_gem_special
     jnc .done_ok
 
-    mov si, find_pattern
-    cmp byte [cs:si + 2], '?'
-    jne .scan_generic
-    cmp byte [cs:si + 1], 'D'
-    jne .scan_generic
-    cmp byte [cs:si], 'S'
-    je .scan_generic
-
-.probe_not_found:
-    mov ax, 0x0012
-    stc
-    jmp .done
-
 .scan_generic:
 
     mov word [cs:find_cursor], 0
@@ -2085,6 +2072,16 @@ int21_find_try_gem_special:
     jmp .match_root
 
 .check_gem:
+    ; OpenGEM probes VDx wildcard names; map them to bundled SDPSC9.VGA.
+    mov si, find_pattern
+    cmp byte [cs:si], 'V'
+    jne .check_gem_exe
+    cmp byte [cs:si + 1], 'D'
+    jne .check_gem_exe
+    mov si, path_sd_driver_fat
+    jmp .match_root
+
+.check_gem_exe:
     mov si, find_pattern
     cmp byte [cs:si], 'G'
     jne .miss
