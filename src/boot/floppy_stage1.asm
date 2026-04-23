@@ -1297,11 +1297,26 @@ int21_exec_run_mz:
     mov [0x0000], ax
     pop ds
 
+    mov ax, ds
+    mov dx, es
+    mov bx, [cs:current_psp_seg]
+    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    jne .save_primary_ctx
+    mov [cs:saved_psp2], bx
+    mov [cs:saved_ss2], ss
+    mov [cs:saved_sp2], sp
+    mov [cs:saved_ds2], ax
+    mov [cs:saved_es2], dx
+    jmp .ctx_saved
+
+.save_primary_ctx:
+    mov [cs:saved_psp], bx
     mov [cs:saved_ss], ss
     mov [cs:saved_sp], sp
-    mov ax, ds
     mov [cs:saved_ds], ax
-    mov [cs:saved_es], ax
+    mov [cs:saved_es], dx
+
+.ctx_saved:
 
     cli
     mov ax, [cs:mz_psp_seg]
@@ -1338,10 +1353,20 @@ int21_exec_run_mz:
     mov sp, [cs:saved_sp]
 .done_ss_restore:
     sti
-    ; restore parent PSP instead of clearing to 0
+    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    jne .restore_primary_ctx
+    mov ax, [cs:saved_psp2]
+    mov [cs:current_psp_seg], ax
+    mov ax, [cs:saved_ds2]
+    mov ds, ax
+    mov ax, [cs:saved_es2]
+    mov es, ax
+    clc
+    jmp .done
+
+.restore_primary_ctx:
     mov ax, [cs:saved_psp]
     mov [cs:current_psp_seg], ax
-
     mov ax, [cs:saved_ds]
     mov ds, ax
     mov ax, [cs:saved_es]
@@ -1549,31 +1574,48 @@ int21_get_psp:
 
 int21_chdir:
     mov si, dx
+    mov byte [cs:tmp_cwd_comp], 0
+    mov byte [cs:tmp_cwd_build], 0
+
     mov al, [si]
     cmp al, 0
     je .root
 
     ; skip drive prefix (X:)
     cmp byte [si + 1], ':'
-    jne .scan_components
+    jne .check_absolute
     add si, 2
 
-.scan_components:
-    ; absolute path starts from root in this minimal model
+.check_absolute:
     cmp byte [si], '\'
-    je .abs_skip
+    je .abs_path
     cmp byte [si], '/'
-    jne .comp_loop_entry
-.abs_skip:
-    mov byte [cs:cwd_buf], 0
+    je .abs_path
+    ; relative path: start from existing cwd
+    xor bx, bx
+.seed_loop:
+    mov al, [cs:cwd_buf + bx]
+    mov [cs:tmp_cwd_build + bx], al
+    cmp al, 0
+    je .parse_components
+    inc bx
+    cmp bx, 23
+    jb .seed_loop
+    mov byte [cs:tmp_cwd_build + 23], 0
+    jmp .parse_components
+
+.abs_path:
     inc si
 
-.comp_loop_entry:
+.parse_components:
     mov al, [si]
     cmp al, 0
-    je .ok
+    je .commit
+    cmp al, '\'
+    je .skip_sep
+    cmp al, '/'
+    je .skip_sep
 
-    ; isolate current component
     xor bx, bx
 .comp_copy:
     mov al, [si]
@@ -1584,60 +1626,102 @@ int21_chdir:
     cmp al, '/'
     je .comp_done
     cmp bx, 23
-    jae .comp_advance
+    jae .comp_skip_advance
     mov [cs:tmp_cwd_comp + bx], al
     inc bx
-.comp_advance:
+.comp_skip_advance:
     inc si
     jmp .comp_copy
 
 .comp_done:
     mov byte [cs:tmp_cwd_comp + bx], 0
-
-    ; skip separator for next component (if present)
-    mov al, [si]
-    cmp al, '\'
-    je .skip_sep_after_comp
-    cmp al, '/'
-    jne .handle_comp
-.skip_sep_after_comp:
-    inc si
-
-.handle_comp:
-    ; ignore empty component
     cmp byte [cs:tmp_cwd_comp], 0
-    je .comp_loop_entry
+    je .parse_components
 
-    ; ignore "."
     cmp byte [cs:tmp_cwd_comp], '.'
     jne .check_parent
     cmp byte [cs:tmp_cwd_comp + 1], 0
-    je .comp_loop_entry
+    je .parse_components
 
 .check_parent:
-    ; handle ".." as root fallback in this simplified cwd model
     cmp byte [cs:tmp_cwd_comp], '.'
-    jne .set_component
+    jne .append_component
     cmp byte [cs:tmp_cwd_comp + 1], '.'
-    jne .set_component
+    jne .append_component
     cmp byte [cs:tmp_cwd_comp + 2], 0
-    jne .set_component
-    mov byte [cs:cwd_buf], 0
-    jmp .comp_loop_entry
-
-.set_component:
-    ; keep last canonical component as cwd token
+    jne .append_component
     xor bx, bx
-.set_copy:
-    mov al, [cs:tmp_cwd_comp + bx]
-    mov [cs:cwd_buf + bx], al
-    cmp al, 0
-    je .comp_loop_entry
+.find_end_parent:
+    cmp byte [cs:tmp_cwd_build + bx], 0
+    je .trim_parent
     inc bx
     cmp bx, 23
-    jb .set_copy
+    jb .find_end_parent
+.trim_parent:
+    cmp bx, 0
+    je .parse_components
+    dec bx
+.trim_loop:
+    cmp bx, 0
+    je .clear_root_parent
+    cmp byte [cs:tmp_cwd_build + bx - 1], '\'
+    je .trim_done
+    dec bx
+    jmp .trim_loop
+.clear_root_parent:
+    mov byte [cs:tmp_cwd_build], 0
+    jmp .parse_components
+.trim_done:
+    mov byte [cs:tmp_cwd_build + bx - 1], 0
+    jmp .parse_components
+
+.append_component:
+    xor bx, bx
+.find_end_append:
+    cmp byte [cs:tmp_cwd_build + bx], 0
+    je .append_start
+    inc bx
+    cmp bx, 23
+    jb .find_end_append
+    jmp .commit
+.append_start:
+    cmp bx, 0
+    je .copy_component
+    mov byte [cs:tmp_cwd_build + bx], '\'
+    inc bx
+    cmp bx, 23
+    jae .commit
+.copy_component:
+    xor di, di
+.copy_component_loop:
+    mov al, [cs:tmp_cwd_comp + di]
+    cmp al, 0
+    je .append_term
+    mov [cs:tmp_cwd_build + bx], al
+    inc bx
+    inc di
+    cmp bx, 23
+    jb .copy_component_loop
+.append_term:
+    mov byte [cs:tmp_cwd_build + bx], 0
+    jmp .parse_components
+
+.skip_sep:
+    inc si
+    jmp .parse_components
+
+.commit:
+    xor bx, bx
+.commit_loop:
+    mov al, [cs:tmp_cwd_build + bx]
+    mov [cs:cwd_buf + bx], al
+    cmp al, 0
+    je .ok
+    inc bx
+    cmp bx, 23
+    jb .commit_loop
     mov byte [cs:cwd_buf + 23], 0
-    jmp .comp_loop_entry
+    jmp .ok
 
 .ok:
     xor ax, ax
@@ -1935,7 +2019,6 @@ int21_find_attr_ok:
     and al, bl
     cmp al, 0
     jne .skip
-
 .ok:
     stc
     jmp .done
@@ -2051,6 +2134,14 @@ int21_path_to_fat_pattern:
     mov al, ' '
     rep stosb
 
+    ; DOS callers often pass paths extracted from command tails with leading spaces.
+.skip_leading_space:
+    cmp byte [si], ' '
+    jne .check_empty
+    inc si
+    jmp .skip_leading_space
+
+.check_empty:
     cmp byte [si], 0
     je .fail
 
@@ -3488,6 +3579,14 @@ int21_path_to_fat_name:
     mov al, ' '
     rep stosb
 
+    ; DOS callers often pass paths extracted from command tails with leading spaces.
+.skip_leading_space:
+    cmp byte [si], ' '
+    jne .check_empty
+    inc si
+    jmp .skip_leading_space
+
+.check_empty:
     cmp byte [si], 0
     je .fail
 
@@ -5902,8 +6001,11 @@ dos_mem_mcb_size dw 0
 dos21_test_seg dw 0
 saved_ss dw 0
 saved_sp dw 0
+saved_psp2 dw 0
 saved_ds dw 0
 saved_es dw 0
+saved_ds2 dw 0
+saved_es2 dw 0
 current_load_seg dw MZ_LOAD_SEG
 saved_psp dw 0
 saved_ss2 dw 0
@@ -5941,6 +6043,7 @@ find_dta times 64 db 0
 dos_indos_flag db 0
 dos_list_of_lists times 64 db 0
 tmp_cwd_comp times 24 db 0
+tmp_cwd_build times 24 db 0
 dos_env_block db 'COMSPEC=C:\COMMAND.COM', 0
               db 'PATH=C:\', 0
               db 0
@@ -6104,7 +6207,7 @@ msg_stage2_entry db "[S2] init", 13, 10, 0
 msg_stage2_ready db "[S2] ready", 13, 10, 0
 msg_stage2_autorun_begin db "[S2] autorun", 13, 10, 0
 msg_stage2_autorun_loaded db "[S2] stage2 loaded", 13, 10, 0
-msg_stage2_autorun_return db "[S2] stage2 return", 13, 10, 0
+msg_stage2_autorun_return db "[S2] stg2 return", 13, 10, 0
 msg_stage2_autorun_fail db "[S2] stage2 load fail", 13, 10, 0
 msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
