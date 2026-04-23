@@ -9,6 +9,10 @@ This changelog is intentionally concise and includes only major milestones.
 3. Fixed `INT 21h AH=49h` block2 free path: `.free_done` was aliased to `.invalid`, causing all secondary-block frees to return error 9.
 4. Added block2 path to `INT 21h AH=4Ah` resize: secondary heap block can now be resized without corrupting block1 MCB state.
 5. Created `setup/` installer project skeleton: source stubs, build scripts, manifest template, and full TODO list for multi-floppy + CD-ROM distribution.
+6. Improved MCB/List-of-Lists coherence for multi-block allocators: block2 now writes a real MCB header, block1 toggles `M/Z` type correctly, and `INT 21h AH=52h` now returns a valid first-MCB pointer in `ES:[BX-2]`.
+7. Completed keyboard-backed DOS input path for `INT 21h` (`AH=06h/07h/08h/0Ah`) by routing to BIOS `INT 16h` instead of CR stubs, improving OpenGEM event-loop compatibility.
+8. Added `INT 21h AH=51h` support and corrected PSP reporting (`AH=62h`) to use `current_psp_seg`, with sane fallback to DOS heap base.
+9. Switched full-profile defaults to real OpenGEM execution (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) and added Stage2 autorun diagnostics (`[S2] autorun/loaded/return/fail`).
 
 ## pre-Alpha v0.5.8 (2026-04-23)
 1. Fixed nested `INT 21h AH=4Bh` execution flow for OpenGEM chainload (`GEMVDI -> GEM.EXE`) by separating parent/child load segments and preserving parent PSP context on return.

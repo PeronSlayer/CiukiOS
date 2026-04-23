@@ -316,6 +316,8 @@ int21_handler:
     je .fn_4c
     cmp ah, 0x4D
     je .fn_4d
+    cmp ah, 0x51
+    je .fn_51
     cmp ah, 0x52
     je .fn_52
     cmp ah, 0x54
@@ -334,17 +336,29 @@ int21_handler:
 
 .fn_06:
     cmp dl, 0xFF
-    je .fn_key_cr
+    je .fn_06_input
     mov al, dl
     call bios_putc
     call serial_putc
     jmp .success
 
+.fn_06_input:
+    mov ah, 0x01
+    int 0x16
+    jz .fn_06_no_key
+    mov ah, 0x00
+    int 0x16
+    jmp .success
+
+.fn_06_no_key:
+    xor al, al
+    xor ah, ah
+    jmp .success
+
 .fn_07:
 .fn_08:
-.fn_key_cr:
-    mov al, 0x0D
-    xor ah, ah
+    mov ah, 0x00
+    int 0x16
     jmp .success
 
 .fn_09:
@@ -359,17 +373,39 @@ int21_handler:
 
 .fn_0a:
     push bx
+    push cx
     mov bx, dx
-    mov al, [ds:bx]
-    cmp al, 1
-    jb .fn_0a_empty
-    mov byte [ds:bx + 1], 1
-    mov byte [ds:bx + 2], 0x0D
-    pop bx
-    jmp .success
+    mov cl, [ds:bx]         ; max length
+    xor ch, ch
+    xor si, si              ; count
+    cmp cx, 1
+    jbe .fn_0a_done
 
-.fn_0a_empty:
-    mov byte [ds:bx + 1], 0
+.fn_0a_read_loop:
+    mov ah, 0x00
+    int 0x16
+    cmp al, 0x0D
+    je .fn_0a_store_cr
+    cmp al, 0x08
+    jne .fn_0a_store_char
+    cmp si, 0
+    je .fn_0a_read_loop
+    dec si
+    jmp .fn_0a_read_loop
+
+.fn_0a_store_char:
+    cmp si, cx
+    jae .fn_0a_read_loop
+    mov [ds:bx + 2 + si], al
+    inc si
+    jmp .fn_0a_read_loop
+
+.fn_0a_store_cr:
+    mov [ds:bx + 2 + si], al
+
+.fn_0a_done:
+    mov [ds:bx + 1], si
+    pop cx
     pop bx
     jmp .success
 
@@ -525,6 +561,11 @@ int21_handler:
 .fn_4d:
     mov al, [cs:last_exit_code]
     mov ah, [cs:last_term_type]
+    jmp .success
+
+.fn_51:
+    call int21_get_psp
+    jc .error
     jmp .success
 
 .fn_31:
@@ -1471,10 +1512,10 @@ int21_ioctl:
     ret
 
 int21_get_psp:
-    mov bx, [cs:mz_psp_seg]
+    mov bx, [cs:current_psp_seg]
     cmp bx, 0
     jne .ok
-    mov bx, DOS_HEAP_USER_SEG
+    mov bx, DOS_HEAP_BASE_SEG
 .ok:
     xor ax, ax
     clc
@@ -5434,6 +5475,9 @@ run_stage2_payload:
     push ds
     push es
 
+    mov si, msg_stage2_autorun_begin
+    call print_string_serial
+
     mov ax, cs
     mov ds, ax
     mov ax, STAGE2_LOAD_SEG
@@ -5443,11 +5487,18 @@ run_stage2_payload:
     call load_root_file_first_sector
     jc .load_fail
 
+    mov si, msg_stage2_autorun_loaded
+    call print_string_serial
+
     call STAGE2_LOAD_SEG:0x0000
+    mov si, msg_stage2_autorun_return
+    call print_string_serial
     clc
     jmp .done
 
 .load_fail:
+    mov si, msg_stage2_autorun_fail
+    call print_string_serial
     stc
 
 .done:
@@ -5644,7 +5695,7 @@ msg_help_core db "  help  dir  cd  cls  tree  ver", 13, 10, 0
 msg_help_runtime db "  dos21  comdemo  mzdemo  fileio  findtest", 13, 10, 0
 msg_help_system db "  gfxdemo  ticks  drive  reboot  halt", 13, 10, 0
 msg_help_apps db "  opengem", 13, 10, 0
-msg_version_line db "CiukiOS v0.5.6", 13, 10, 0
+msg_version_line db "CiukiOS v0.5.8", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
 msg_tree_system db "   |- SYSTEM", 13, 10, 0
@@ -5768,6 +5819,10 @@ gfx_font8_table:
 ; Stage2 Extended Services Messages
 msg_stage2_entry db "[S2] init", 13, 10, 0
 msg_stage2_ready db "[S2] ready", 13, 10, 0
+msg_stage2_autorun_begin db "[S2] autorun", 13, 10, 0
+msg_stage2_autorun_loaded db "[S2] stage2 loaded", 13, 10, 0
+msg_stage2_autorun_return db "[S2] stage2 return", 13, 10, 0
+msg_stage2_autorun_fail db "[S2] stage2 load fail", 13, 10, 0
 msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0

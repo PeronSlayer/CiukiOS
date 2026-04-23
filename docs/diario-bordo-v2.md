@@ -51,3 +51,7 @@
 46. Fix: corrected `INT 21h AH=49h` (free) block2 path — `.free_done` was aliased to `.invalid`, causing all block2 free calls to return error 9 instead of success.
 47. Fix: added block2 path to `INT 21h AH=4Ah` (resize) — previously only block1 was handled, leaving GEM runtime with inconsistent memory state on resize calls targeting the secondary heap block.
 48. Action: created `setup/` installer skeleton — source stubs, build scripts, manifest, and full TODO list for a future DOS-Setup-style multi-floppy + CD-ROM installer project.
+49. Fix: improved DOS MCB chain consistency for two-block allocations: block2 now writes a physical MCB header, block1 MCB toggles between `M` and `Z` when block2 is allocated/freed, and `INT 21h AH=52h` now returns a valid first-MCB pointer via List-of-Lists.
+50. Fix: upgraded DOS keyboard input services from stubs to BIOS-backed behavior (`INT 21h AH=06h/07h/08h/0Ah` using `INT 16h`), removing forced-CR behavior that could destabilize interactive runtime workloads.
+51. Fix: implemented `INT 21h AH=51h` and corrected PSP reporting for `AH=62h` to use `current_psp_seg` instead of stale MZ-only context.
+52. Action: enabled full-profile real OpenGEM path by default (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) and added explicit Stage2 autorun diagnostics to support deterministic runtime tracing.
