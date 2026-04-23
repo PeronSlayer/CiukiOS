@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Default CIUKIOS_ROOT to the repository root (parent of scripts/) when not set externally.
+: "${CIUKIOS_ROOT:=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
 if [[ "$(uname -s)" == "Darwin" ]]; then
 	# Allow direct invocation on macOS without going through the wrapper entrypoint.
 	source "$(cd "$(dirname "${BASH_SOURCE[0]}")/macos" && pwd)/common.sh"
