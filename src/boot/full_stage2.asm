@@ -172,7 +172,7 @@ path_sd_pattern db "SD*.*", 0
 path_gemvdi_root db "GEMVDI.EXE", 0
 path_gem_exe_root db "GEM.EXE", 0
 path_gem_bat_root db "GEM.BAT", 0
-exec_gemvdi_tail db 0, 13
+exec_gemvdi_tail db 8, ' GEM.EXE', 13
 exec_gemvdi_params:
     dw 0
     dw exec_gemvdi_tail
