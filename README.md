@@ -16,17 +16,17 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 8. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.5.8`
+`CiukiOS pre-Alpha v0.5.9`
 
 Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
 
 ## Changelog (Latest)
-### pre-Alpha v0.5.8
-1. Fixed nested OpenGEM execution path (`GEMVDI -> GEM.EXE`) by separating load segments and restoring parent PSP context correctly after child return.
-2. Corrected DOS find-first root entry handling to write the matched FAT short name into DTA-compatible buffers for OpenGEM discovery.
-3. Extended Stage1 DOS heap limit and added two-block allocation behavior to improve GEM runtime memory allocation stability.
-4. Increased Stage1 reserved size from 22 to 23 sectors (full and floppy) to absorb runtime growth while keeping build/test flows stable.
+### pre-Alpha v0.5.9
+1. Fixed DOS I/O carry propagation in `INT 21h AH=3Fh/40h/42h` done paths, removing false read-error reporting during OpenGEM probe flow.
+2. Improved OpenGEM GEMVDI probe compatibility by relaxing special `find-next` behavior and reducing premature `0x12` no-more-files returns.
+3. Added `VD*` open alias mapping to bundled `SDPSC9.VGA` to keep GEM driver discovery aligned with available runtime payloads.
+4. Hardened Stage1 OpenGEM tracing stability while keeping loader payload inside the 29-sector budget.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 

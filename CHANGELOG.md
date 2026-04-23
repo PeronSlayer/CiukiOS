@@ -14,6 +14,13 @@ This changelog is intentionally concise and includes only major milestones.
 8. Added `INT 21h AH=51h` support and corrected PSP reporting (`AH=62h`) to use `current_psp_seg`, with sane fallback to DOS heap base.
 9. Switched full-profile defaults to real OpenGEM execution (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) and added Stage2 autorun diagnostics (`[S2] autorun/loaded/return/fail`).
 
+## pre-Alpha v0.5.9 (2026-04-23)
+1. Fixed carry-flag preservation in DOS I/O done paths (`INT 21h AH=3Fh/40h/42h`) so handle-swap housekeeping no longer corrupts success/error status.
+2. Removed false `3F:02` read-error signature in OpenGEM/GEMVDI runtime tracing caused by flag clobbering after successful reads.
+3. Relaxed special GEM probe `find-next` behavior to avoid immediate `0x12` termination in OpenGEM driver-discovery flow.
+4. Added `VD*` open alias handling to `SDPSC9.VGA` for better compatibility with bundled GEM driver payload names.
+5. Kept Stage1 full-profile payload within the 29-sector budget while preserving OpenGEM launch diagnostics stability.
+
 ## pre-Alpha v0.5.8 (2026-04-23)
 1. Fixed nested `INT 21h AH=4Bh` execution flow for OpenGEM chainload (`GEMVDI -> GEM.EXE`) by separating parent/child load segments and preserving parent PSP context on return.
 2. Corrected DOS find-first compatibility in root scanning by copying the matched 11-byte FAT name before DTA emission, restoring OpenGEM file-discovery expectations.

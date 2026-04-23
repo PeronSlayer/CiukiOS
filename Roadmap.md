@@ -29,7 +29,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 2. Extended `INT 10h` plus robust timer/mouse/input services.
 3. Native VDI/AES compatibility layer for OpenGEM.
 4. Milestone: stable OpenGEM desktop on real hardware.
-**STATUS: IN PROGRESS (v0.5.8)**
+**STATUS: IN PROGRESS (v0.5.9)**
 - ✓ VGA mode13h primitives (pixels, lines, boxes, text)
 - ✓ INT33h mouse handler installed at bootstrap
 - ✓ VBE query service ready (stub for full implementation)

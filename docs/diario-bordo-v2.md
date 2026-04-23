@@ -55,3 +55,4 @@
 50. Fix: upgraded DOS keyboard input services from stubs to BIOS-backed behavior (`INT 21h AH=06h/07h/08h/0Ah` using `INT 16h`), removing forced-CR behavior that could destabilize interactive runtime workloads.
 51. Fix: implemented `INT 21h AH=51h` and corrected PSP reporting for `AH=62h` to use `current_psp_seg` instead of stale MZ-only context.
 52. Action: enabled full-profile real OpenGEM path by default (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) and added explicit Stage2 autorun diagnostics to support deterministic runtime tracing.
+53. Release: bumped project version to `CiukiOS pre-Alpha v0.5.9` after OpenGEM probe-path stabilization (carry preservation in DOS I/O tails and special find-next compatibility adjustments).

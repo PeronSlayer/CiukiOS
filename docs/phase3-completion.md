@@ -2,7 +2,7 @@
 
 **Status: COMPLETE AND VALIDATED** ✓
 
-## 2026-04-23 Runtime Stabilization Update (v0.5.8)
+## 2026-04-23 Runtime Stabilization Update (v0.5.9)
 
 - Fixed OpenGEM nested DOS execute flow (`GEMVDI -> GEM.EXE`) by separating parent/child MZ load segments and restoring parent PSP context after child return.
 - Fixed root find-first compatibility by copying the matched FAT 8.3 name before DTA write, restoring expected OpenGEM driver lookup behavior.
