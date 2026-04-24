@@ -5,12 +5,12 @@ org 0x0000
 %define COM_LOAD_SEG 0x2000
 %define MZ_LOAD_SEG 0x3000
 %define MZ2_LOAD_SEG 0x3800
-%define STAGE2_LOAD_SEG 0x5000
-%define DOS_META_BUF_SEG 0x7000
-%define DOS_FAT_BUF_SEG  0x7200
-%define DOS_IO_BUF_SEG   0x7400
-%define DOS_ENV_SEG      0x7600
-%define DOS_HEAP_BASE_SEG 0x7700
+%define STAGE2_LOAD_SEG 0x4E00
+%define DOS_META_BUF_SEG 0x5000
+%define DOS_FAT_BUF_SEG  0x5200
+%define DOS_IO_BUF_SEG   0x5400
+%define DOS_ENV_SEG      0x5600
+%define DOS_HEAP_BASE_SEG 0x5800
 %define DOS_HEAP_LIMIT_SEG 0x9F00
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
@@ -89,31 +89,19 @@ stage1_start:
     mov [boot_drive], dl
 
     call serial_init
-    call show_boot_splash
-    mov al, 16
-    call splash_set_progress
 
     mov si, msg_stage1
     call print_string_serial
     mov si, msg_stage1_serial
     call print_string_serial
 
-    mov al, 40
-    call splash_set_progress
     call run_bios_diagnostics
-    mov al, 68
-    call splash_set_progress
     call install_int21_vector
     call init_stage2_services
 %if STAGE1_SELFTEST_AUTORUN
-    mov al, 84
-    call splash_set_progress
     call run_stage1_selftest
 %endif
 
-    mov al, 100
-    call splash_set_progress
-    call splash_hold
     call draw_shell_chrome
 %if FAT_TYPE == 16
 %if HARDWARE_VALIDATION_SCREEN
@@ -296,6 +284,8 @@ int21_handler:
     je .fn_36
     cmp ah, 0x3B
     je .fn_3b
+    cmp ah, 0x3C
+    je .fn_3c
     cmp ah, 0x3D
     je .fn_3d
     cmp ah, 0x3E
@@ -310,6 +300,8 @@ int21_handler:
     je .fn_42
     cmp ah, 0x44
     je .fn_44
+    cmp ah, 0x43
+    je .fn_43
     cmp ah, 0x47
     je .fn_47
     cmp ah, 0x4E
@@ -489,6 +481,13 @@ int21_handler:
     jc .error
     jmp .success
 
+.fn_3c:
+    ; Create file: forward to open (write mode); returns error if not found.
+    mov al, 1
+    call int21_open
+    jc .error
+    jmp .success
+
 .fn_3d:
     call int21_open
     jc .error
@@ -520,9 +519,12 @@ int21_handler:
     jmp .success
 
 .fn_44:
-    mov al, 'i'
-    call serial_putc
     call int21_ioctl
+    jc .error
+    jmp .success
+
+.fn_43:
+    call int21_get_set_attr
     jc .error
     jmp .success
 
@@ -571,26 +573,6 @@ int21_handler:
 .fn_48:
     call int21_alloc
     jnc .success
-    mov dx, ax
-    mov cx, bx
-    mov al, '4'
-    call serial_putc
-    mov al, '8'
-    call serial_putc
-    mov al, '!'
-    call serial_putc
-    mov ax, dx
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, cx
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    mov ax, dx
-    mov bx, cx
     jmp .error
 
 .fn_49:
@@ -601,26 +583,6 @@ int21_handler:
 .fn_4a:
     call int21_resize
     jnc .success
-    mov dx, ax
-    mov cx, bx
-    mov al, '4'
-    call serial_putc
-    mov al, 'A'
-    call serial_putc
-    mov al, '!'
-    call serial_putc
-    mov ax, dx
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, cx
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    mov ax, dx
-    mov bx, cx
     jmp .error
 
 .fn_4c:
@@ -662,16 +624,6 @@ int21_handler:
     jmp .success
 
 .fn_52:
-    mov al, '5'
-    call serial_putc
-    mov al, '2'
-    call serial_putc
-    mov al, '?'
-    call serial_putc
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
     call int21_get_list_of_lists
     mov byte [cs:int21_return_es], 1
     jc .error
@@ -875,6 +827,14 @@ int21_exec:
     call int21_path_to_fat_name
     jc .path_fail
 
+%if FAT_TYPE == 16
+    push si
+    mov si, dx
+    call int21_resolve_and_find_path
+    pop si
+    jc .done
+%endif
+
     mov al, [cs:path_fat_name + 8]
     cmp al, 'C'
     jne .check_exe
@@ -1051,6 +1011,9 @@ int21_exec_load_to_es:
 
     mov [cs:tmp_exec_error], cx
 
+%if FAT_TYPE == 16
+    ; FAT16 path resolution is performed in int21_exec before loading.
+%else
     mov ax, cs
     mov ds, ax
     mov ax, DOS_META_BUF_SEG
@@ -1059,6 +1022,7 @@ int21_exec_load_to_es:
     mov bx, 0xFFFF
     call load_root_file_first_sector
     jc .open_fail
+%endif
 
     mov ax, [cs:search_found_size_hi]
     mov [cs:tmp_exec_total], ax
@@ -1380,7 +1344,7 @@ int21_exec_run_mz:
     mov [es:0x0010], ax
     mov word [es:0x0012], 0x0005
     mov [es:0x0014], ax
-    mov word [es:0x0002], DOS_HEAP_LIMIT_SEG
+    mov word [es:0x0002], DOS_HEAP_USER_SEG
     mov [es:0x0016], ax
     mov word [es:0x002C], DOS_ENV_SEG
     call int21_build_env_block
@@ -1606,6 +1570,7 @@ int21_get_indos_ptr:
 
 int21_get_list_of_lists:
     ; return ES:BX pointing to SYSVARS; ES:[BX-2] = first MCB segment
+    call int21_mem_init
     mov bx, dos_list_of_lists + 2
     mov ax, cs
     mov es, ax
@@ -1699,26 +1664,19 @@ int21_get_dta:
 
 int21_ioctl:
     mov [cs:tmp_ioctl_subfn], al
-    push ax
-    push bx
-    mov al, 'I'
-    call serial_putc
-    pop bx
-    pop ax
-    push ax
-    call print_hex8_serial
-    pop ax
-    mov al, ':'
-    call serial_putc
-    push ax
-    mov al, bl
-    call print_hex8_serial
-    pop ax
-    mov al, ' '
-    call serial_putc
     mov al, [cs:tmp_ioctl_subfn]
     cmp al, 0x00                ; Get device information
     je .get_dev_info
+%if FAT_TYPE == 16
+    cmp al, 0x04                ; Read from character device control channel
+    je .read_ctrl_channel
+    cmp al, 0x05                ; Write to character device control channel
+    je .write_ctrl_channel
+    cmp al, 0x08                ; Check if block device is removable
+    je .check_removable
+    cmp al, 0x0D                ; Generic IOCTL for block devices
+    je .generic_ioctl
+%endif
     cmp al, 0x06                ; Get input status
     je .get_input_status
     cmp al, 0x07                ; Get output status
@@ -1726,6 +1684,29 @@ int21_ioctl:
     xor ax, ax
     clc
     ret
+
+%if FAT_TYPE == 16
+.read_ctrl_channel:
+    xor ax, ax
+    clc
+    ret
+
+.write_ctrl_channel:
+    xor ax, ax
+    clc
+    ret
+
+.check_removable:
+    mov al, 1                   ; AL=1 -> non-removable
+    xor ah, ah
+    clc
+    ret
+
+.generic_ioctl:
+    mov ax, 0x001F              ; unsupported request
+    stc
+    ret
+%endif
 
 .get_dev_info:
     cmp bx, 0x0000
@@ -1740,6 +1721,10 @@ int21_ioctl:
     je .disk_slot2
     cmp bx, 0x0007
     je .disk_slot3
+%if FAT_TYPE == 16
+    cmp bx, 0x0008
+    je .disk_slot4
+%endif
     mov ax, 0x0006
     stc
     ret
@@ -1773,6 +1758,16 @@ int21_ioctl:
     xor ax, ax
     clc
     ret
+
+%if FAT_TYPE == 16
+.disk_slot4:
+    cmp byte [cs:file_handle4_open], 1
+    jne .bad_handle
+    xor dx, dx
+    xor ax, ax
+    clc
+    ret
+%endif
 
 .get_input_status:
     mov ax, 0x00FF              ; ready
@@ -1818,6 +1813,96 @@ int21_chdir:
     je .abs_path
     cmp byte [si], '/'
     je .abs_path
+%if FAT_TYPE == 16
+    cmp word [cs:cwd_cluster], 0
+    je .seed_relative
+    push si
+    xor bx, bx
+.fast_copy_check:
+    mov al, [si]
+    cmp al, 0
+    je .fast_component_done
+    cmp al, '\'
+    je .fast_component_abort
+    cmp al, '/'
+    je .fast_component_abort
+    cmp bx, 23
+    jae .fast_component_advance
+    mov [cs:tmp_cwd_comp + bx], al
+    inc bx
+.fast_component_advance:
+    inc si
+    jmp .fast_copy_check
+
+.fast_component_done:
+    mov byte [cs:tmp_cwd_comp + bx], 0
+    pop si
+    cmp bx, 0
+    je .seed_relative
+    cmp byte [cs:tmp_cwd_comp], '.'
+    je .seed_relative
+    push ds
+    mov ax, cs
+    mov ds, ax
+    mov si, tmp_cwd_comp
+    call int21_path_to_fat_name
+    pop ds
+    jc .seed_relative
+    mov ax, [cs:cwd_cluster]
+    push ds
+    mov dx, si
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov ax, [cs:cwd_cluster]
+    call int21_lookup_in_dir
+    pop ds
+    mov si, dx
+    jc .seed_relative
+    test byte [cs:search_found_attr], 0x10
+    jz .seed_relative
+    mov ax, [cs:search_found_cluster]
+    mov [cs:tmp_lookup_dir], ax
+    xor bx, bx
+.fast_seed_loop:
+    mov al, [cs:cwd_buf + bx]
+    mov [cs:tmp_cwd_build + bx], al
+    cmp al, 0
+    je .fast_append_start
+    inc bx
+    cmp bx, 23
+    jb .fast_seed_loop
+    mov byte [cs:tmp_cwd_build + 23], 0
+    jmp .commit_copy
+
+.fast_append_start:
+    cmp bx, 0
+    je .fast_copy_component
+    mov byte [cs:tmp_cwd_build + bx], '\'
+    inc bx
+    cmp bx, 23
+    jae .commit_copy
+
+.fast_copy_component:
+    xor di, di
+.fast_copy_component_loop:
+    mov al, [cs:tmp_cwd_comp + di]
+    cmp al, 0
+    je .fast_append_term
+    mov [cs:tmp_cwd_build + bx], al
+    inc bx
+    inc di
+    cmp bx, 23
+    jb .fast_copy_component_loop
+.fast_append_term:
+    mov byte [cs:tmp_cwd_build + bx], 0
+    jmp .commit_copy
+
+.fast_component_abort:
+    pop si
+%endif
+    
+.seed_relative:
     ; relative path: start from existing cwd
     xor bx, bx
 .seed_loop:
@@ -1938,6 +2023,33 @@ int21_chdir:
     jmp .parse_components
 
 .commit:
+%if FAT_TYPE == 16
+    cmp byte [cs:tmp_cwd_build], 0
+    je .commit_root
+
+    push ax
+    mov ax, [cs:cwd_cluster]
+    push ax
+    mov word [cs:cwd_cluster], 0
+    mov ax, cs
+    mov ds, ax
+    mov si, tmp_cwd_build
+    call int21_resolve_and_find_path
+    pop ax
+    mov [cs:cwd_cluster], ax
+    pop ax
+    jc .fail
+    test byte [cs:search_found_attr], 0x10
+    jz .fail
+    mov ax, [cs:search_found_cluster]
+    mov [cs:tmp_lookup_dir], ax
+    jmp .commit_copy
+
+.commit_root:
+    mov word [cs:tmp_lookup_dir], 0
+
+.commit_copy:
+%endif
     xor bx, bx
 .commit_loop:
     mov al, [cs:tmp_cwd_build + bx]
@@ -1951,13 +2063,25 @@ int21_chdir:
     jmp .ok
 
 .ok:
+%if FAT_TYPE == 16
+    mov ax, [cs:tmp_lookup_dir]
+    mov [cs:cwd_cluster], ax
+%endif
     xor ax, ax
     clc
     ret
 .root:
     mov byte [cs:cwd_buf], 0
+%if FAT_TYPE == 16
+    mov word [cs:cwd_cluster], 0
+%endif
     xor ax, ax
     clc
+    ret
+
+.fail:
+    mov ax, 0x0003
+    stc
     ret
 
 int21_getcwd:
@@ -1973,6 +2097,75 @@ int21_getcwd:
 .done:
     xor ax, ax
     clc
+    ret
+
+int21_get_set_attr:
+    cmp al, 0x00
+    je .get_attr
+    cmp al, 0x01
+    je .set_attr
+    mov ax, 0x0001
+    stc
+    ret
+
+.get_attr:
+%if FAT_TYPE == 16
+    mov si, dx
+    call int21_resolve_and_find_path
+    jc .not_found
+    xor ch, ch
+    mov cl, [cs:search_found_attr]
+    xor ax, ax
+    clc
+    ret
+%else
+    mov si, dx
+    call int21_path_to_fat_name
+    jc .not_found
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov si, path_fat_name
+    mov bx, 0xFFFF
+    call load_root_file_first_sector
+    jc .not_found
+    xor ch, ch
+    mov cl, [cs:search_found_attr]
+    xor ax, ax
+    clc
+    ret
+%endif
+
+.set_attr:
+%if FAT_TYPE == 16
+    ; Compatibility no-op: validate target exists, then report success.
+    mov si, dx
+    call int21_resolve_and_find_path
+    jc .not_found
+    xor ax, ax
+    clc
+    ret
+%else
+    mov si, dx
+    call int21_path_to_fat_name
+    jc .not_found
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov si, path_fat_name
+    mov bx, 0xFFFF
+    call load_root_file_first_sector
+    jc .not_found
+    xor ax, ax
+    clc
+    ret
+%endif
+
+.not_found:
+    mov ax, 0x0002
+    stc
     ret
 
 int21_find_first:
@@ -2583,6 +2776,10 @@ int21_open:
     je .target_slot2
     cmp byte [cs:file_handle3_open], 0
     je .target_slot3
+%if FAT_TYPE == 16
+    cmp byte [cs:file_handle4_open], 0
+    je .target_slot4
+%endif
     mov ax, 0x0004
     stc
     jmp .done
@@ -2597,9 +2794,20 @@ int21_open:
 
 .target_slot3:
     mov byte [cs:file_handle_target], 3
+    jmp .target_ready
+
+%if FAT_TYPE == 16
+.target_slot4:
+    mov byte [cs:file_handle_target], 4
+    jmp .target_ready
+%endif
 
 .target_ready:
-
+%if FAT_TYPE == 16
+    mov si, dx
+    call int21_resolve_and_find_path
+    jc .done
+%else
     mov si, dx
     call int21_path_to_fat_name
     jc .path_fail
@@ -2634,11 +2842,16 @@ int21_open:
     mov bx, 0xFFFF
     call load_root_file_first_sector
     jc .not_found
+%endif
 
     cmp byte [cs:file_handle_target], 2
     je .assign_slot2
     cmp byte [cs:file_handle_target], 3
     je .assign_slot3
+%if FAT_TYPE == 16
+    cmp byte [cs:file_handle_target], 4
+    je .assign_slot4
+%endif
 
     mov byte [cs:file_handle_open], 1
     mov word [cs:file_handle_pos], 0
@@ -2714,6 +2927,33 @@ int21_open:
     clc
     jmp .done
 
+%if FAT_TYPE == 16
+.assign_slot4:
+    mov byte [cs:file_handle4_open], 1
+    mov word [cs:file_handle4_pos], 0
+    mov [cs:file_handle4_mode], al
+    mov ax, [cs:search_found_cluster]
+    mov [cs:file_handle4_start_cluster], ax
+    mov ax, [cs:search_found_size_lo]
+    mov [cs:file_handle4_size_lo], ax
+    mov ax, [cs:search_found_size_hi]
+    mov [cs:file_handle4_size_hi], ax
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:file_handle4_root_lba], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:file_handle4_root_off], ax
+
+    call int21_load_fat_cache
+    jc .io_fail
+    mov ax, [cs:file_handle4_start_cluster]
+    call int21_count_chain
+    mov [cs:file_handle4_cluster_count], ax
+
+    mov ax, 0x0008
+    clc
+    jmp .done
+%endif
+
 .not_found:
     mov ax, 0x0002
     stc
@@ -2742,24 +2982,39 @@ int21_open:
     ret
 
 int21_close:
-    cmp bx, 0x000A
-    jb .close_no_alias
-    cmp bx, 0x000C
-    ja .close_no_alias
-    sub bx, 0x0005
-.close_no_alias:
+    ; Handles 0-4 are DOS standard handles (stdin/stdout/stderr/aux/prn).
+    ; We do not manage them, so silently succeed on close.
+    cmp bx, 5
+    jb .close_noop
     cmp bx, 0x0005
     je .close_slot1
     cmp bx, 0x0006
     je .close_slot2
     cmp bx, 0x0007
+    je .close_slot3
+%if FAT_TYPE == 16
+    cmp bx, 0x0008
+    je .close_slot4
+%endif
     jne .bad_handle
+
+.close_slot3:
     cmp byte [cs:file_handle3_open], 1
     jne .bad_handle
     mov byte [cs:file_handle3_open], 0
     xor ax, ax
     clc
     ret
+
+%if FAT_TYPE == 16
+.close_slot4:
+    cmp byte [cs:file_handle4_open], 1
+    jne .bad_handle
+    mov byte [cs:file_handle4_open], 0
+    xor ax, ax
+    clc
+    ret
+%endif
 
 .close_slot2:
     cmp byte [cs:file_handle2_open], 1
@@ -2779,6 +3034,11 @@ int21_close:
 .bad_handle:
     mov ax, 0x0006
     stc
+    ret
+
+.close_noop:
+    xor ax, ax
+    clc
     ret
 
 int21_read:
@@ -2807,13 +3067,30 @@ int21_read:
     cmp bx, 0x0006
     je .use_slot2
     cmp bx, 0x0007
+    je .use_slot3
+%if FAT_TYPE == 16
+    cmp bx, 0x0008
+    je .use_slot4
+%endif
     jne .bad_handle
+
+.use_slot3:
     cmp byte [cs:file_handle3_open], 1
     jne .bad_handle
     call int21_swap_file_handles3
     mov byte [cs:file_handle_swapped], 1
     mov bx, 0x0005
     jmp .handle_ready
+
+%if FAT_TYPE == 16
+.use_slot4:
+    cmp byte [cs:file_handle4_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles4
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+    jmp .handle_ready
+%endif
 
 .use_slot2:
     cmp byte [cs:file_handle2_open], 1
@@ -3005,13 +3282,30 @@ int21_write:
     cmp bx, 0x0006
     je .use_slot2
     cmp bx, 0x0007
+    je .use_slot3
+%if FAT_TYPE == 16
+    cmp bx, 0x0008
+    je .use_slot4
+%endif
     jne .bad_handle
+
+.use_slot3:
     cmp byte [cs:file_handle3_open], 1
     jne .bad_handle
     call int21_swap_file_handles3
     mov byte [cs:file_handle_swapped], 1
     mov bx, 0x0005
     jmp .handle_ready
+
+%if FAT_TYPE == 16
+.use_slot4:
+    cmp byte [cs:file_handle4_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles4
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+    jmp .handle_ready
+%endif
 
 .use_slot2:
     cmp byte [cs:file_handle2_open], 1
@@ -3210,6 +3504,11 @@ int21_delete:
     push ds
     push es
 
+%if FAT_TYPE == 16
+    mov si, dx
+    call int21_resolve_and_find_path
+    jc .done
+%else
     mov si, dx
     call int21_path_to_fat_name
     jc .path_fail
@@ -3222,6 +3521,7 @@ int21_delete:
     mov bx, 0xFFFF
     call load_root_file_first_sector
     jc .not_found
+%endif
 
     mov ax, [search_found_cluster]
     mov [tmp_next_cluster], ax
@@ -3303,13 +3603,30 @@ int21_seek:
     cmp bx, 0x0006
     je .use_slot2
     cmp bx, 0x0007
+    je .use_slot3
+%if FAT_TYPE == 16
+    cmp bx, 0x0008
+    je .use_slot4
+%endif
     jne .bad_handle
+
+.use_slot3:
     cmp byte [cs:file_handle3_open], 1
     jne .bad_handle
     call int21_swap_file_handles3
     mov byte [cs:file_handle_swapped], 1
     mov bx, 0x0005
     jmp .handle_ready
+
+%if FAT_TYPE == 16
+.use_slot4:
+    cmp byte [cs:file_handle4_open], 1
+    jne .bad_handle
+    call int21_swap_file_handles4
+    mov byte [cs:file_handle_swapped], 1
+    mov bx, 0x0005
+    jmp .handle_ready
+%endif
 
 .use_slot2:
     cmp byte [cs:file_handle2_open], 1
@@ -3459,6 +3776,50 @@ int21_swap_file_handles3:
     pop ax
     ret
 
+%if FAT_TYPE == 16
+int21_swap_file_handles4:
+    push ax
+
+    mov al, [cs:file_handle_open]
+    xchg al, [cs:file_handle4_open]
+    mov [cs:file_handle_open], al
+
+    mov ax, [cs:file_handle_pos]
+    xchg ax, [cs:file_handle4_pos]
+    mov [cs:file_handle_pos], ax
+
+    mov al, [cs:file_handle_mode]
+    xchg al, [cs:file_handle4_mode]
+    mov [cs:file_handle_mode], al
+
+    mov ax, [cs:file_handle_start_cluster]
+    xchg ax, [cs:file_handle4_start_cluster]
+    mov [cs:file_handle_start_cluster], ax
+
+    mov ax, [cs:file_handle_root_lba]
+    xchg ax, [cs:file_handle4_root_lba]
+    mov [cs:file_handle_root_lba], ax
+
+    mov ax, [cs:file_handle_root_off]
+    xchg ax, [cs:file_handle4_root_off]
+    mov [cs:file_handle_root_off], ax
+
+    mov ax, [cs:file_handle_cluster_count]
+    xchg ax, [cs:file_handle4_cluster_count]
+    mov [cs:file_handle_cluster_count], ax
+
+    mov ax, [cs:file_handle_size_lo]
+    xchg ax, [cs:file_handle4_size_lo]
+    mov [cs:file_handle_size_lo], ax
+
+    mov ax, [cs:file_handle_size_hi]
+    xchg ax, [cs:file_handle4_size_hi]
+    mov [cs:file_handle_size_hi], ax
+
+    pop ax
+    ret
+%endif
+
 int21_mem_init:
     cmp byte [cs:dos_mem_init], 1
     je .done
@@ -3469,6 +3830,9 @@ int21_mem_init:
     mov word [cs:dos_mem_mcb_size], DOS_HEAP_USER_MAX_PARAS
     ; initialise list-of-lists: first word (BX-2) = first MCB segment
     mov word [cs:dos_list_of_lists], DOS_HEAP_BASE_SEG
+    ; compatibility mirror for clients reading ES:BX directly
+    mov word [cs:dos_list_of_lists + 2], DOS_HEAP_BASE_SEG
+    mov word [cs:dos_list_of_lists + 4], DOS_HEAP_BASE_SEG
     call int21_mem_write_mcb
 .done:
     ret
@@ -3531,8 +3895,11 @@ int21_mem_current_owner:
 int21_psp_mcb_update_type:
     push ax
     push bx
+    push cx
     push dx
     push es
+
+    mov cl, al
 
     mov dx, [cs:current_psp_seg]
     or dx, dx
@@ -3546,6 +3913,9 @@ int21_psp_mcb_update_type:
     dec ax
     mov es, ax
     mov [cs:dos_list_of_lists], ax
+    mov [cs:dos_list_of_lists + 2], ax
+    mov [cs:dos_list_of_lists + 4], ax
+    mov al, cl
     mov [es:0x0000], al
     mov [es:0x0001], dx
     mov [es:0x0003], bx
@@ -3553,6 +3923,7 @@ int21_psp_mcb_update_type:
 .done:
     pop es
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -3670,9 +4041,181 @@ int21_mem_trace_chain:
     pop ax
     ret
 
+int21_mem_trace_nomem:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+
+    mov al, 'A'
+    call serial_putc
+    mov al, '4'
+    call serial_putc
+    mov al, '8'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, cx
+    call print_hex16_serial
+    mov al, ' '
+    call serial_putc
+
+    mov al, 'P'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, [cs:current_psp_seg]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov dx, [cs:current_psp_seg]
+    or dx, dx
+    jz .no_psp
+    mov es, dx
+    mov ax, [es:0x0002]
+    jmp .have_psp_end
+.no_psp:
+    xor ax, ax
+.have_psp_end:
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_trace_lookup_cluster:
+    push ax
+    mov al, 'L'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, [cs:tmp_cluster]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:tmp_lba]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop ax
+    ret
+
+int21_trace_lookup_found:
+    push ax
+    push bx
+    mov al, 'F'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, [cs:search_found_cluster]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    xor ax, ax
+    mov al, [cs:search_found_attr]
+    call print_hex16_serial
+    mov al, ' '
+    call serial_putc
+    xor bx, bx
+.name_loop:
+    cmp bx, 11
+    jae .done_name
+    mov al, [cs:search_found_name + bx]
+    call serial_putc
+    inc bx
+    jmp .name_loop
+.done_name:
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop bx
+    pop ax
+    ret
+
+int21_trace_lookup_miss:
+    push ax
+    push bx
+    mov al, 'N'
+    call serial_putc
+    mov al, 'F'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov bx, [cs:search_name_ptr]
+    xor ax, ax
+    mov al, [bx + 0]
+    call serial_putc
+    mov al, [bx + 1]
+    call serial_putc
+    mov al, [bx + 2]
+    call serial_putc
+    mov al, [bx + 3]
+    call serial_putc
+    mov al, [bx + 4]
+    call serial_putc
+    mov al, [bx + 5]
+    call serial_putc
+    mov al, [bx + 6]
+    call serial_putc
+    mov al, [bx + 7]
+    call serial_putc
+    mov al, [bx + 8]
+    call serial_putc
+    mov al, [bx + 9]
+    call serial_putc
+    mov al, [bx + 10]
+    call serial_putc
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop bx
+    pop ax
+    ret
+
+int21_trace_cwd_commit:
+    push ax
+    mov al, 'C'
+    call serial_putc
+    mov al, 'D'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, [cs:tmp_lookup_dir]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop ax
+    ret
+
 int21_alloc:
     call int21_mem_init
     call int21_mem_query_free
+
+    ; Compatibility: some DOS programs use BX=FFFF as "allocate maximum".
+    ; Normalize request to the currently available largest block.
+    cmp bx, 0xFFFF
+    jne .req_ready
+    mov bx, cx
+
+.req_ready:
 
     cmp bx, 0
     je .no_memory
@@ -3799,11 +4342,13 @@ int21_alloc:
 
 .both_busy_fail:
     call int21_mem_largest_global
+    call int21_mem_trace_nomem
     mov ax, 0x0008
     stc
     ret
 
 .no_memory:
+    call int21_mem_trace_nomem
     mov bx, cx
     mov ax, 0x0008
     stc
@@ -3911,22 +4456,6 @@ int21_resize:
     push ax
     push bx
     mov bx, [es:0x0002]
-    mov al, '4'
-    call serial_putc
-    mov al, 'P'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, bx
-    call print_hex16_serial
-    mov al, '>'
-    call serial_putc
-    mov ax, dx
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
 
     ; expose tail from current PSP end up to DOS heap limit as AH=48 source
     mov [cs:dos_mem_psp_free_seg], dx
@@ -4550,6 +5079,356 @@ int21_upcase_al:
     sub al, 32
 .done:
     ret
+
+%if FAT_TYPE == 16
+int21_resolve_and_find_path:
+    push si
+
+    call int21_resolve_parent_dir
+    jc .fail
+    mov [cs:tmp_lookup_dir], ax
+
+    call int21_path_to_fat_name
+    jc .bad_path
+
+    mov ax, [cs:tmp_lookup_dir]
+    push ds
+    mov bx, ax
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov ax, bx
+    call int21_lookup_in_dir
+    pop ds
+    jnc .ok
+    jmp .fail
+
+.bad_path:
+    mov ax, 0x0003
+    stc
+    jmp .done
+
+.ok:
+    xor ax, ax
+    clc
+
+.done:
+    pop si
+    ret
+
+.fail:
+    pop si
+    ret
+
+; Resolve parent directory cluster and return SI at last path component.
+; Input : DS:SI path
+; Output: AX=parent cluster (0=root), SI=last component ptr, CF clear
+int21_resolve_parent_dir:
+    push bx
+    push cx
+    push dx
+    push di
+
+    mov byte [cs:tmp_path_guard], 96
+
+.skip_space:
+    dec byte [cs:tmp_path_guard]
+    jnz .skip_space_ok
+    jmp .path_fail
+.skip_space_ok:
+    cmp byte [si], ' '
+    jne .drive_check
+    inc si
+    jmp .skip_space
+
+.drive_check:
+    cmp byte [si], 0
+    je .path_fail
+    cmp byte [si + 1], ':'
+    jne .base_dir
+    add si, 2
+
+.base_dir:
+    cmp byte [si], '\'
+    je .root_base
+    cmp byte [si], '/'
+    je .root_base
+    mov ax, [cs:cwd_cluster]
+    mov [cs:tmp_lookup_dir], ax
+    jmp .component_start
+
+.root_base:
+    mov word [cs:tmp_lookup_dir], 0
+.skip_root_sep:
+    cmp byte [si], '\'
+    je .inc_root_sep
+    cmp byte [si], '/'
+    jne .component_start
+.inc_root_sep:
+    inc si
+    jmp .skip_root_sep
+
+.component_start:
+    dec byte [cs:tmp_path_guard]
+    jnz .component_guard_ok
+    jmp .path_fail
+.component_guard_ok:
+    cmp byte [si], 0
+    je .path_fail
+
+    mov di, si
+    xor bx, bx
+.comp_copy:
+    dec byte [cs:tmp_path_guard]
+    jnz .comp_guard_ok
+    jmp .path_fail
+.comp_guard_ok:
+    mov al, [si]
+    cmp al, 0
+    je .comp_done
+    cmp al, '\'
+    je .comp_done
+    cmp al, '/'
+    je .comp_done
+    cmp bx, 23
+    jae .comp_advance
+    mov [cs:tmp_cwd_comp + bx], al
+    inc bx
+.comp_advance:
+    inc si
+    jmp .comp_copy
+
+.comp_done:
+    mov byte [cs:tmp_cwd_comp + bx], 0
+    cmp bx, 0
+    je .path_fail
+    mov dl, [si]
+
+    cmp dl, 0
+    je .leaf_ok
+
+    ; Ignore intermediate '.' component.
+    cmp byte [cs:tmp_cwd_comp], '.'
+    jne .check_dotdot
+    cmp byte [cs:tmp_cwd_comp + 1], 0
+    je .skip_sep
+
+.check_dotdot:
+    ; At root, intermediate '..' keeps us at root.
+    cmp byte [cs:tmp_cwd_comp], '.'
+    jne .lookup_component
+    cmp byte [cs:tmp_cwd_comp + 1], '.'
+    jne .lookup_component
+    cmp byte [cs:tmp_cwd_comp + 2], 0
+    jne .lookup_component
+    cmp word [cs:tmp_lookup_dir], 0
+    je .skip_sep
+
+    ; has further components: current component must be a directory.
+.lookup_component:
+    push si
+    push ds
+    mov ax, cs
+    mov ds, ax
+    mov si, tmp_cwd_comp
+    call int21_path_to_fat_name
+    pop ds
+    pop si
+    jnc .comp_name_ok
+    jmp .path_fail
+.comp_name_ok:
+
+    mov ax, [cs:tmp_lookup_dir]
+    push si                         ; preserve original path position
+    push ds
+    mov bx, ax                      ; save dir cluster while DS is being changed
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov ax, bx                      ; restore dir cluster
+    call int21_lookup_in_dir
+    pop ds
+    pop si                          ; restore original path position
+    jnc .lookup_ok
+    jmp .path_fail
+.lookup_ok:
+    test byte [cs:search_found_attr], 0x10
+    jnz .is_dir_ok
+    jmp .path_fail
+.is_dir_ok:
+    mov ax, [cs:search_found_cluster]
+    mov [cs:tmp_lookup_dir], ax
+
+.skip_sep:
+    cmp byte [si], '\'
+    je .sep_next
+    cmp byte [si], '/'
+    jne .after_sep
+.sep_next:
+    inc si
+    jmp .skip_sep
+
+.after_sep:
+    cmp byte [si], 0
+    je .path_fail
+    jmp .component_start
+
+.leaf_ok:
+    mov ax, [cs:tmp_lookup_dir]
+    mov si, di
+    clc
+    jmp .done
+
+.path_fail:
+    mov ax, 0x0003
+    stc
+
+.done:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; Lookup 11-byte FAT name in directory AX (0=root, else first cluster).
+; DS:SI -> 11-byte FAT name. Returns search_found_* and CF clear if found.
+int21_lookup_in_dir:
+    push bx
+    push cx
+    push dx
+    push di
+    push ds
+    push es
+
+    mov [cs:search_name_ptr], si
+    mov [cs:tmp_lookup_dir], ax
+
+    cmp ax, 0
+    jne .scan_cluster
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov si, [cs:search_name_ptr]
+    mov bx, 0xFFFF
+    call load_root_file_first_sector
+    jc .not_found
+    clc
+    jmp .done
+
+.scan_cluster:
+    call int21_load_fat_cache
+    jc .io_fail
+    mov ax, [cs:tmp_lookup_dir]
+    mov [cs:tmp_cluster], ax
+
+.cluster_loop:
+    mov ax, [cs:tmp_cluster]
+    cmp ax, 2
+    jb .not_found
+    cmp ax, FAT_EOF
+    jae .not_found
+
+    call int21_cluster_to_lba
+    mov [cs:tmp_lba], ax
+    call int21_trace_lookup_cluster
+    xor dx, dx
+
+.sector_loop:
+    cmp dx, FAT_SECTORS_PER_CLUSTER
+    jae .next_cluster
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    xor bx, bx
+    call read_sector_lba
+    jc .io_fail
+
+    xor di, di
+    mov cx, 16
+
+.entry_loop:
+    mov al, [es:di]
+    cmp al, 0x00
+    je .not_found
+    cmp al, 0xE5
+    je .next_entry
+
+    mov al, [es:di + 11]
+    cmp al, 0x0F
+    je .next_entry
+    test al, 0x08
+    jnz .next_entry
+
+    mov si, [cs:search_name_ptr]
+    call fat_entry_matches_name
+    jnc .next_entry
+
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    mov [cs:search_found_root_lba], ax
+    mov [cs:search_found_root_off], di
+    mov ax, [es:di + 26]
+    mov [cs:search_found_cluster], ax
+    mov ax, [es:di + 28]
+    mov [cs:search_found_size_lo], ax
+    mov ax, [es:di + 30]
+    mov [cs:search_found_size_hi], ax
+    mov al, [es:di + 11]
+    mov [cs:search_found_attr], al
+
+    push cx
+    push si
+    mov cx, 11
+    mov si, di
+    mov di, search_found_name
+.copy_name:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .copy_name
+    pop si
+    pop cx
+    call int21_trace_lookup_found
+    clc
+    jmp .done
+
+.next_entry:
+    add di, 32
+    loop .entry_loop
+    inc dx
+    jmp .sector_loop
+
+.next_cluster:
+    mov ax, [cs:tmp_cluster]
+    call fat12_get_entry_cached
+    jc .io_fail
+    mov [cs:tmp_cluster], ax
+    jmp .cluster_loop
+
+.not_found:
+    call int21_trace_lookup_miss
+    mov ax, 0x0002
+    stc
+    jmp .done
+
+.io_fail:
+    mov ax, 0x0005
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
 
 int21_build_env_block:
     push ax
@@ -5293,6 +6172,7 @@ gfx_draw_glyph8:
     push cx
     lodsb
     mov [gfx_row_bits], al
+    call int21_trace_cwd_commit
     mov di, bx
     mov cx, 8
 
@@ -5495,6 +6375,8 @@ load_root_file_first_sector:
     mov [search_found_size_lo], ax
     mov ax, [es:di + 30]
     mov [search_found_size_hi], ax
+    mov al, [es:di + 11]
+    mov [search_found_attr], al
 
     mov ax, [search_found_cluster]
     call int21_cluster_to_lba
@@ -6343,130 +7225,6 @@ draw_hline_attr:
     pop ax
     ret
 
-show_boot_splash:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov ax, 0x0003
-    int 0x10
-    mov bl, 0x1F
-    call clear_screen_attr
-
-    mov si, splash_title
-    mov dh, 7
-    mov dl, 28
-    mov bl, 0x1F
-    call video_write_string_attr
-
-    mov si, splash_subtitle
-    mov dh, 9
-    mov dl, 21
-    mov bl, 0x1E
-    call video_write_string_attr
-
-    mov si, splash_status
-    mov dh, 15
-    mov dl, 23
-    mov bl, 0x1F
-    call video_write_string_attr
-
-    mov si, splash_wait_hint
-    mov dh, 19
-    mov dl, 21
-    mov bl, 0x1E
-    call video_write_string_attr
-
-    mov al, '['
-    mov dh, 17
-    mov dl, 17
-    mov bl, 0x1F
-    call video_write_char_attr
-    mov al, ']'
-    mov dl, 62
-    call video_write_char_attr
-
-    mov al, 0
-    call splash_set_progress
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-splash_set_progress:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    xor ah, ah
-    mov bl, 45
-    mul bl
-    mov bl, 100
-    div bl
-    mov ch, al
-
-    mov al, ' '
-    mov dh, 17
-    mov dl, 18
-    mov bl, 0x17
-    xor cx, cx
-    mov cl, 45
-    call draw_hline_attr
-
-    cmp ch, 0
-    je .percent
-    mov al, 0xDB
-    mov dh, 17
-    mov dl, 18
-    mov bl, 0x1F
-    mov cl, ch
-    xor ch, ch
-    call draw_hline_attr
-
-.percent:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-splash_hold:
-    push ax
-    push bx
-    push dx
-
-    mov ah, 0x00
-    int 0x1A
-    mov bx, dx
-    add bx, 91
-
-.loop:
-    mov ah, 0x01
-    int 0x16
-    jnz .consume
-
-    mov ah, 0x00
-    int 0x1A
-    cmp dx, bx
-    jb .loop
-    jmp .done
-
-.consume:
-    xor ah, ah
-    int 0x16
-
-.done:
-    pop dx
-    pop bx
-    pop ax
-    ret
-
 draw_shell_chrome:
     push ax
     push bx
@@ -6907,16 +7665,11 @@ int33_handler:
     iret
 
 .reset:
-    cmp byte [mouse_installed], 1
-    jne .reset_not_installed
     mov ax, 0xFFFF
     mov bx, 0x0002
+    mov byte [mouse_installed], 1
     mov word [mouse_pos_x], 160
     mov word [mouse_pos_y], 100
-    iret
-.reset_not_installed:
-    xor ax, ax
-    xor bx, bx
     iret
 
 .status:
@@ -6944,6 +7697,7 @@ int33_handler:
 .y_ok:
     mov [mouse_pos_x], cx
     mov [mouse_pos_y], dx
+    xor ax, ax
     iret
 
 .version:
@@ -7011,6 +7765,17 @@ file_handle3_root_off dw 0
 file_handle3_cluster_count dw 0
 file_handle3_size_lo dw 0
 file_handle3_size_hi dw 0
+%if FAT_TYPE == 16
+file_handle4_open db 0
+file_handle4_pos dw 0
+file_handle4_mode db 0
+file_handle4_start_cluster dw 0
+file_handle4_root_lba dw 0
+file_handle4_root_off dw 0
+file_handle4_cluster_count dw 0
+file_handle4_size_lo dw 0
+file_handle4_size_hi dw 0
+%endif
 file_handle_target db 0
 file_handle_swapped db 0
 fat_cache_valid db 0
@@ -7034,6 +7799,9 @@ tmp_exec_handle dw 0
 tmp_exec_error dw 0
 tmp_path_guard db 0
 tmp_ioctl_subfn db 0
+%if FAT_TYPE == 16
+tmp_lookup_dir dw 0
+%endif
 dos_mem_init db 0
 dos_mem_alloc_seg dw 0
 dos_mem_alloc_size dw 0
@@ -7172,10 +7940,6 @@ msg_dir_empty db "no files found", 13, 10, 0
 msg_dir_fail db "dir failed", 13, 10, 0
 msg_cd_fail db "cd failed", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
-splash_title db "CiukiOS", 0
-splash_subtitle db "loading", 0
-splash_status db "init", 0
-splash_wait_hint db "shell in 5s", 0
 gfx_text_ciukios db "CIUKIOS", 0
 gfx_text_demo db "GFX DEMO", 0
 gfx_text_vdi db "VDI BASE", 0
@@ -7215,6 +7979,9 @@ path_sd_driver_fat db "SDPSC9  VGA"
 path_gem_exe_fat   db "GEM     EXE"
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
+%if FAT_TYPE == 16
+cwd_cluster dw 0
+%endif
 %if FAT_TYPE == 12
 ram_buf times 6 db 0
 %endif

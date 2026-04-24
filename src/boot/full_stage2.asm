@@ -20,66 +20,40 @@ stage2_entry:
     jmp .done
 %endif
 
-    ; Keep startup coherent with OpenGEM layout expectations.
-    mov dx, path_gemsys_dir
+    mov dx, path_root_dir
     mov ah, 0x3B
     int 0x21
+    jnc .cwd_ready
+    mov [last_fail_ax], ax
+    jmp .print_fail
 
-    ; Try to load a generic DOS mouse driver before GEMVDI.
-    ; Ignore failures to keep boot robust when payload is absent.
-    mov dx, path_ctmouse_root
-    call exec_try_wait
+.cwd_ready:
 
-    ; Preload GEMVDI first, then start GEM.EXE.
     mov dx, msg_try_vdi
     mov ah, 0x09
     int 0x21
-    mov dx, path_gemvdi_root
+    mov dx, path_gemvdi_rel_from_root
     call exec_try_wait_gemarg
     jnc .wait_done
     mov [last_fail_ax], ax
-    cmp ax, 0x0002
-    jne .launch_fail
 
-    mov dx, msg_try_gem
-    mov ah, 0x09
-    int 0x21
-    mov dx, path_gem_exe_root
-    call exec_try_wait
-    jnc .wait_done
-    mov [last_fail_ax], ax
-    cmp ax, 0x0002
-    jne .launch_fail
-
-    mov dx, msg_try_bat
-    mov ah, 0x09
-    int 0x21
-    mov dx, path_gem_bat_root
-    call exec_try_wait
-    jnc .wait_done
-    mov [last_fail_ax], ax
-
-    jmp .launch_fail
-
-.wait_done:
-    mov dx, msg_return
-    mov ah, 0x09
-    int 0x21
-    jmp .done
-
-.launch_fail:
-    mov ax, [last_fail_ax]
-    push ax
+.print_fail:
     mov dx, msg_fail
     mov ah, 0x09
     int 0x21
-    pop ax
+    mov ax, [last_fail_ax]
     call print_ax_hex
     mov dl, 13
     mov ah, 0x02
     int 0x21
     mov dl, 10
     mov ah, 0x02
+    int 0x21
+    jmp .done
+
+.wait_done:
+    mov dx, msg_return
+    mov ah, 0x09
     int 0x21
 
 .done:
@@ -122,9 +96,7 @@ exec_try_wait_gemarg:
 print_ax_hex:
     push ax
     push bx
-
     mov bx, ax
-
     mov al, bh
     shr al, 4
     call print_hex_nibble
@@ -137,7 +109,6 @@ print_ax_hex:
     mov al, bl
     and al, 0x0F
     call print_hex_nibble
-
     pop bx
     pop ax
     ret
@@ -154,19 +125,14 @@ print_hex_nibble:
     int 0x21
     ret
 
-msg_begin db "[OPENGEM] launch", 13, 10, '$'
-msg_blocked db "[OPENGEM] runtime not ready, launch skipped", 13, 10, '$'
-msg_try_vdi db "[OPENGEM] try GEMVDI", 13, 10, '$'
-msg_try_gem db "[OPENGEM] try GEM.EXE", 13, 10, '$'
-msg_try_bat db "[OPENGEM] try GEM.BAT", 13, 10, '$'
-msg_fail db "[OPENGEM] launch failed AX=", '$'
-msg_return db 13, 10, "[OPENGEM] returned", 13, 10, '$'
-path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
-path_ctmouse_root db "CTMOUSE.EXE", 0
-path_gemvdi_root db "GEMVDI.EXE", 0
-path_gem_exe_root db "GEM.EXE", 0
-path_gem_bat_root db "GEM.BAT", 0
-exec_gemvdi_tail db 19, ' ..\GEMBOOT\GEM.EXE', 13
+msg_begin    db "[OPENGEM] launch", 13, 10, '$'
+msg_blocked  db "[OPENGEM] runtime not ready, launch skipped", 13, 10, '$'
+msg_try_vdi  db "[OPENGEM] try GEMVDI", 13, 10, '$'
+msg_fail     db "[OPENGEM] launch failed AX=", '$'
+msg_return   db 13, 10, "[OPENGEM] returned", 13, 10, '$'
+path_root_dir db "\", 0
+path_gemvdi_rel_from_root  db "GEMAPPS\GEMSYS\GEMVDI.EXE", 0
+exec_gemvdi_tail db 24, ' \GEMAPPS\GEMSYS\GEM.EXE', 13
 exec_gemvdi_params:
     dw 0
     dw exec_gemvdi_tail
