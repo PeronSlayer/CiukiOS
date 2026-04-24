@@ -117,6 +117,10 @@ rm -f "$REPORT" "$OUT_DIR"/run-*.serial.log "$OUT_DIR"/run-*.meta.txt
 launch_success=0
 return_success=0
 hang_count=0
+no_return_count=0
+qemu_fail_count=0
+infra_fail_count=0
+unexpected_exit_count=0
 latency_sum_ms=0
 
 run_one() {
@@ -150,17 +154,34 @@ run_one() {
   local launch_ok=0
   local return_ok=0
   local hang=0
+  local no_return=0
+  local qemu_fail=0
+  local infra_fail=0
+  local unexpected_exit=0
 
   if grep -Eqi '(\[OPENGEM\]|\[\[OOPPEENNGGEEMM\]\]).*(launch|try GEMVDI|llaauunncch|ttrryy  GGEEMMVVDDI)' "$serial_log"; then
     launch_ok=1
   fi
 
-  if grep -Eqi '(\[OPENGEM\]|\[\[OOPPEENNGGEEMM\]\]).*(returned|rreettuurrnneedd)' "$serial_log"; then
+  if grep -Eqi '(\[OPENGEM\]|\[\[OOPPEENNGGEEMM\]\]).*(returned|rreettuurrnneedd|rreettuurrnneed)' "$serial_log"; then
     return_ok=1
   fi
 
   if [[ $rc -eq 124 ]] && [[ "$return_ok" -eq 0 ]]; then
     hang=1
+  fi
+
+  if [[ "$launch_ok" -eq 1 ]] && [[ "$return_ok" -eq 0 ]]; then
+    no_return=1
+  fi
+
+  if [[ $rc -ne 0 ]] && [[ $rc -ne 124 ]]; then
+    qemu_fail=1
+    if [[ "$launch_ok" -eq 0 ]] && [[ "$return_ok" -eq 0 ]]; then
+      infra_fail=1
+    elif [[ "$return_ok" -eq 0 ]]; then
+      unexpected_exit=1
+    fi
   fi
 
   {
@@ -170,9 +191,13 @@ run_one() {
     echo "launch_ok=$launch_ok"
     echo "return_ok=$return_ok"
     echo "hang=$hang"
+    echo "no_return=$no_return"
+    echo "qemu_fail=$qemu_fail"
+    echo "infra_fail=$infra_fail"
+    echo "unexpected_exit=$unexpected_exit"
   } > "$meta_log"
 
-  echo "$launch_ok $return_ok $hang $elapsed_ms $rc"
+  echo "$launch_ok $return_ok $hang $no_return $qemu_fail $infra_fail $unexpected_exit $elapsed_ms $rc"
 }
 
 echo "[opengem-acceptance] running ${RUNS} iterations (timeout=${TIMEOUT_SEC}s)"
@@ -188,14 +213,18 @@ for i in $(seq 1 "$RUNS"); do
     exit 1
   fi
 
-  read -r launch_ok return_ok hang elapsed_ms qemu_rc <<< "$line"
+  read -r launch_ok return_ok hang no_return qemu_fail infra_fail unexpected_exit elapsed_ms qemu_rc <<< "$line"
 
   launch_success=$((launch_success + launch_ok))
   return_success=$((return_success + return_ok))
   hang_count=$((hang_count + hang))
+  no_return_count=$((no_return_count + no_return))
+  qemu_fail_count=$((qemu_fail_count + qemu_fail))
+  infra_fail_count=$((infra_fail_count + infra_fail))
+  unexpected_exit_count=$((unexpected_exit_count + unexpected_exit))
   latency_sum_ms=$((latency_sum_ms + elapsed_ms))
 
-  echo "[opengem-acceptance] run $i/$RUNS rc=$qemu_rc launch=$launch_ok return=$return_ok hang=$hang elapsed_ms=$elapsed_ms"
+  echo "[opengem-acceptance] run $i/$RUNS rc=$qemu_rc launch=$launch_ok return=$return_ok hang=$hang noreturn=$no_return qfail=$qemu_fail infra=$infra_fail uexit=$unexpected_exit elapsed_ms=$elapsed_ms"
 done
 
 launch_rate="$(awk -v ok="$launch_success" -v total="$RUNS" 'BEGIN { printf "%.2f", (ok*100.0)/total }')"
@@ -214,12 +243,20 @@ Metrics:
 - launch_success_rate_percent: $launch_rate
 - return_to_shell_rate_percent: $return_rate
 - hang_count: $hang_count
+- launch_without_return_count: $no_return_count
+- qemu_fail_count: $qemu_fail_count
+- infra_fail_count: $infra_fail_count
+- unexpected_exit_count: $unexpected_exit_count
 - average_launch_latency_sec: $avg_latency_sec
 
 Raw counts:
 - launch_success: $launch_success/$RUNS
 - return_to_shell_success: $return_success/$RUNS
 - hangs: $hang_count/$RUNS
+- launch_without_return: $no_return_count/$RUNS
+- qemu_failures: $qemu_fail_count/$RUNS
+- infra_failures: $infra_fail_count/$RUNS
+- unexpected_exits: $unexpected_exit_count/$RUNS
 EOF
 
 echo "[opengem-acceptance] done"

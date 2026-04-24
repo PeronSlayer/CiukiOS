@@ -107,14 +107,21 @@ gate_hang=""
 acc_launch=""
 acc_return=""
 acc_hang=""
+acc_no_return=""
+acc_qemu_fail=""
+acc_infra_fail=""
+acc_unexpected_exit=""
 acc_latency=""
 
 soak_runs=""
 soak_launch=""
 soak_return=""
 soak_hang=""
+soak_no_return=""
 soak_latency=""
 soak_qemu_fail=""
+soak_infra_fail=""
+soak_unexpected_exit=""
 soak_error_sig=""
 
 if [[ -f "$GATE_REPORT" ]]; then
@@ -130,6 +137,10 @@ if [[ -f "$ACC_REPORT" ]]; then
   acc_launch="$(extract_colon_value "$ACC_REPORT" "- launch_success_rate_percent")"
   acc_return="$(extract_colon_value "$ACC_REPORT" "- return_to_shell_rate_percent")"
   acc_hang="$(extract_colon_value "$ACC_REPORT" "- hang_count")"
+  acc_no_return="$(extract_colon_value "$ACC_REPORT" "- launch_without_return_count")"
+  acc_qemu_fail="$(extract_colon_value "$ACC_REPORT" "- qemu_fail_count")"
+  acc_infra_fail="$(extract_colon_value "$ACC_REPORT" "- infra_fail_count")"
+  acc_unexpected_exit="$(extract_colon_value "$ACC_REPORT" "- unexpected_exit_count")"
   acc_latency="$(extract_colon_value "$ACC_REPORT" "- average_launch_latency_sec")"
 fi
 
@@ -139,8 +150,11 @@ if [[ -f "$SOAK_REPORT" ]]; then
   soak_launch="$(extract_colon_value "$SOAK_REPORT" "- launch_success_rate_percent")"
   soak_return="$(extract_colon_value "$SOAK_REPORT" "- return_to_shell_rate_percent")"
   soak_hang="$(extract_colon_value "$SOAK_REPORT" "- hang_count")"
+  soak_no_return="$(extract_colon_value "$SOAK_REPORT" "- launch_without_return_count")"
   soak_latency="$(extract_colon_value "$SOAK_REPORT" "- average_launch_latency_sec")"
   soak_qemu_fail="$(extract_colon_value "$SOAK_REPORT" "- qemu_fail_count")"
+  soak_infra_fail="$(extract_colon_value "$SOAK_REPORT" "- infra_fail_count")"
+  soak_unexpected_exit="$(extract_colon_value "$SOAK_REPORT" "- unexpected_exit_count")"
   soak_error_sig="$(extract_colon_value "$SOAK_REPORT" "- error_signature_count")"
 fi
 
@@ -209,6 +223,10 @@ Acceptance:
 - launch_success_rate_percent: ${acc_launch:-N/A}
 - return_to_shell_rate_percent: ${acc_return:-N/A}
 - hang_count: ${acc_hang:-N/A}
+- launch_without_return_count: ${acc_no_return:-N/A}
+- qemu_fail_count: ${acc_qemu_fail:-N/A}
+- infra_fail_count: ${acc_infra_fail:-N/A}
+- unexpected_exit_count: ${acc_unexpected_exit:-N/A}
 - average_launch_latency_sec: ${acc_latency:-N/A}
 
 Soak:
@@ -217,8 +235,11 @@ Soak:
 - launch_success_rate_percent: ${soak_launch:-N/A}
 - return_to_shell_rate_percent: ${soak_return:-N/A}
 - hang_count: ${soak_hang:-N/A}
+- launch_without_return_count: ${soak_no_return:-N/A}
 - average_launch_latency_sec: ${soak_latency:-N/A}
 - qemu_fail_count: ${soak_qemu_fail:-N/A}
+- infra_fail_count: ${soak_infra_fail:-N/A}
+- unexpected_exit_count: ${soak_unexpected_exit:-N/A}
 - error_signature_count: ${soak_error_sig:-N/A}
 
 Hardware evidence:
@@ -255,6 +276,10 @@ cat > "$OUT_JSON" << EOF
     "launch_success_rate_percent": "$(json_escape "${acc_launch:-}")",
     "return_to_shell_rate_percent": "$(json_escape "${acc_return:-}")",
     "hang_count": "$(json_escape "${acc_hang:-}")",
+    "launch_without_return_count": "$(json_escape "${acc_no_return:-}")",
+    "qemu_fail_count": "$(json_escape "${acc_qemu_fail:-}")",
+    "infra_fail_count": "$(json_escape "${acc_infra_fail:-}")",
+    "unexpected_exit_count": "$(json_escape "${acc_unexpected_exit:-}")",
     "average_launch_latency_sec": "$(json_escape "${acc_latency:-}")"
   },
   "soak": {
@@ -263,8 +288,11 @@ cat > "$OUT_JSON" << EOF
     "launch_success_rate_percent": "$(json_escape "${soak_launch:-}")",
     "return_to_shell_rate_percent": "$(json_escape "${soak_return:-}")",
     "hang_count": "$(json_escape "${soak_hang:-}")",
+    "launch_without_return_count": "$(json_escape "${soak_no_return:-}")",
     "average_launch_latency_sec": "$(json_escape "${soak_latency:-}")",
     "qemu_fail_count": "$(json_escape "${soak_qemu_fail:-}")",
+    "infra_fail_count": "$(json_escape "${soak_infra_fail:-}")",
+    "unexpected_exit_count": "$(json_escape "${soak_unexpected_exit:-}")",
     "error_signature_count": "$(json_escape "${soak_error_sig:-}")"
   },
   "hardware_evidence": {

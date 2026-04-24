@@ -115,7 +115,11 @@ run_id=0
 launch_success=0
 return_success=0
 hang_count=0
+no_return_count=0
 qemu_fail_count=0
+infra_fail_count=0
+infrastructure_retry_count=0
+unexpected_exit_count=0
 error_signature_count=0
 latency_sum_ms=0
 
@@ -135,6 +139,7 @@ while :; do
     -cpu pentium3 \
     -m 128 \
     -drive "file=$IMG,format=raw,if=ide" \
+    -snapshot \
     -boot c \
     -nographic \
     -chardev "file,id=ser0,path=$serial_log" \
@@ -151,13 +156,17 @@ while :; do
   launch_ok=0
   return_ok=0
   hang=0
+  no_return=0
+  qemu_fail=0
+  infra_fail=0
+  unexpected_exit=0
   sig_count=0
 
   if [[ -f "$serial_log" ]]; then
     if grep -Eqi '(\[OPENGEM\]|\[\[OOPPEENNGGEEMM\]\]).*(launch|try GEMVDI|llaauunncch|ttrryy  GGEEMMVVDDI)' "$serial_log"; then
       launch_ok=1
     fi
-    if grep -Eqi '(\[OPENGEM\]|\[\[OOPPEENNGGEEMM\]\]).*(returned|rreettuurrnneedd)' "$serial_log"; then
+    if grep -Eqi '(\[OPENGEM\]|\[\[OOPPEENNGGEEMM\]\]).*(returned|rreettuurrnneedd|rreettuurrnneed)' "$serial_log"; then
       return_ok=1
     fi
     sig_count="$(grep -Eci '\[IERR\]|\[OPENGEM\] launch failed|\[\[OOPPEENNGGEEMM\]\].*ffaaiilleedd' "$serial_log" || true)"
@@ -167,20 +176,41 @@ while :; do
     hang=1
   fi
 
+  if [[ "$launch_ok" -eq 1 ]] && [[ "$return_ok" -eq 0 ]]; then
+    no_return=1
+  fi
+
   if [[ "$rc" -ne 0 && "$rc" -ne 124 ]]; then
-    qemu_fail_count=$((qemu_fail_count + 1))
+    qemu_fail=1
+    if [[ "$launch_ok" -eq 0 ]] && [[ "$return_ok" -eq 0 ]]; then
+      infra_fail=1
+    elif [[ "$return_ok" -eq 0 ]]; then
+      unexpected_exit=1
+    fi
+  fi
+
+  if [[ "$infra_fail" -eq 1 ]] && [[ "$sig_count" -eq 0 ]]; then
+    infrastructure_retry_count=$((infrastructure_retry_count + 1))
+    rm -f "$serial_log"
+    run_id=$((run_id - 1))
+    sleep 1
+    continue
   fi
 
   launch_success=$((launch_success + launch_ok))
   return_success=$((return_success + return_ok))
   hang_count=$((hang_count + hang))
+  no_return_count=$((no_return_count + no_return))
+  qemu_fail_count=$((qemu_fail_count + qemu_fail))
+  infra_fail_count=$((infra_fail_count + infra_fail))
+  unexpected_exit_count=$((unexpected_exit_count + unexpected_exit))
   error_signature_count=$((error_signature_count + sig_count))
   latency_sum_ms=$((latency_sum_ms + elapsed_ms))
 
-  printf '{"run":%d,"qemu_rc":%d,"elapsed_ms":%d,"launch_ok":%d,"return_ok":%d,"hang":%d,"error_signatures":%d}\n' \
-    "$run_id" "$rc" "$elapsed_ms" "$launch_ok" "$return_ok" "$hang" "$sig_count" >> "$RUNS_NDJSON"
+  printf '{"run":%d,"qemu_rc":%d,"elapsed_ms":%d,"launch_ok":%d,"return_ok":%d,"hang":%d,"launch_without_return":%d,"qemu_fail":%d,"infra_fail":%d,"unexpected_exit":%d,"error_signatures":%d}\n' \
+    "$run_id" "$rc" "$elapsed_ms" "$launch_ok" "$return_ok" "$hang" "$no_return" "$qemu_fail" "$infra_fail" "$unexpected_exit" "$sig_count" >> "$RUNS_NDJSON"
 
-  echo "[opengem-soak] run $run_id rc=$rc launch=$launch_ok return=$return_ok hang=$hang sig=$sig_count elapsed_ms=$elapsed_ms"
+  echo "[opengem-soak] run $run_id rc=$rc launch=$launch_ok return=$return_ok hang=$hang noreturn=$no_return qfail=$qemu_fail infra=$infra_fail uexit=$unexpected_exit sig=$sig_count elapsed_ms=$elapsed_ms"
 done
 
 end_epoch="$(date +%s)"
@@ -213,8 +243,12 @@ cat > "$JSON_REPORT" << EOF
     "launch_success_rate_percent": $launch_rate,
     "return_to_shell_rate_percent": $return_rate,
     "hang_count": $hang_count,
+    "launch_without_return_count": $no_return_count,
     "average_launch_latency_sec": $avg_latency_sec,
     "qemu_fail_count": $qemu_fail_count,
+    "infra_fail_count": $infra_fail_count,
+    "infrastructure_retry_count": $infrastructure_retry_count,
+    "unexpected_exit_count": $unexpected_exit_count,
     "error_signature_count": $error_signature_count
   },
   "integrity": {
@@ -243,8 +277,12 @@ Metrics:
 - launch_success_rate_percent: $launch_rate
 - return_to_shell_rate_percent: $return_rate
 - hang_count: $hang_count
+- launch_without_return_count: $no_return_count
 - average_launch_latency_sec: $avg_latency_sec
 - qemu_fail_count: $qemu_fail_count
+- infra_fail_count: $infra_fail_count
+- infrastructure_retry_count: $infrastructure_retry_count
+- unexpected_exit_count: $unexpected_exit_count
 - error_signature_count: $error_signature_count
 
 Integrity:
