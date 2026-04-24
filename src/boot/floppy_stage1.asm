@@ -646,8 +646,12 @@ int21_handler:
 
 .unsupported:
     push ax
+    push ds
+    mov ax, cs
+    mov ds, ax
     mov si, msg_int21_unsup
     call print_string_serial
+    pop ds
     pop ax
     mov al, ah
     call print_hex8_serial
@@ -664,8 +668,12 @@ int21_handler:
 
 .error:
     push ax
+    push ds
+    mov ax, cs
+    mov ds, ax
     mov si, msg_int21_err
     call print_string_serial
+    pop ds
     mov al, [cs:int21_last_ah]
     call print_hex8_serial
     mov al, ':'
@@ -831,6 +839,39 @@ int21_exec:
     push si
     mov si, dx
     call int21_resolve_and_find_path
+    jnc .path_resolved
+
+    ; Compatibility fallback for OpenGEM/GEMVDI: if the caller asks for
+    ; plain GEM.EXE and root lookup misses, retry absolute GEMSYS path.
+    mov si, dx
+    call int21_path_to_fat_name
+    jc .path_resolved
+    mov al, [cs:path_fat_name + 0]
+    cmp al, 'G'
+    jne .path_resolved
+    mov al, [cs:path_fat_name + 1]
+    cmp al, 'E'
+    jne .path_resolved
+    mov al, [cs:path_fat_name + 2]
+    cmp al, 'M'
+    jne .path_resolved
+    mov al, [cs:path_fat_name + 8]
+    cmp al, 'E'
+    jne .path_resolved
+    mov al, [cs:path_fat_name + 9]
+    cmp al, 'X'
+    jne .path_resolved
+    mov al, [cs:path_fat_name + 10]
+    cmp al, 'E'
+    jne .path_resolved
+    push ds
+    mov ax, cs
+    mov ds, ax
+    mov si, path_gem_exe_abs
+    call int21_resolve_and_find_path
+    pop ds
+
+.path_resolved:
     pop si
     jc .done
 %endif
@@ -1394,7 +1435,6 @@ int21_exec_run_mz:
     xor di, di
     xor bp, bp
     sti
-
     call far [cs:mz_entry_off]
 
     cli
@@ -2581,6 +2621,8 @@ int21_path_to_fat_pattern:
 
 .check_empty:
     cmp byte [si], 0
+    je .fail
+    cmp byte [si], 13
     je .fail
 
     cmp byte [si + 1], ':'
@@ -5006,6 +5048,8 @@ int21_path_to_fat_name:
     mov al, [si]
     cmp al, 0
     je .name_done
+    cmp al, 13
+    je .name_done
     cmp al, '.'
     je .ext_start
     cmp al, '\'
@@ -5042,6 +5086,8 @@ int21_path_to_fat_name:
 .ext_loop:
     mov al, [si]
     cmp al, 0
+    je .success
+    cmp al, 13
     je .success
     cmp al, '\'
     je .next_component
@@ -5175,6 +5221,8 @@ int21_resolve_parent_dir:
 .component_guard_ok:
     cmp byte [si], 0
     je .path_fail
+    cmp byte [si], 13
+    je .path_fail
 
     mov di, si
     xor bx, bx
@@ -5185,6 +5233,8 @@ int21_resolve_parent_dir:
 .comp_guard_ok:
     mov al, [si]
     cmp al, 0
+    je .comp_done
+    cmp al, 13
     je .comp_done
     cmp al, '\'
     je .comp_done
@@ -5205,6 +5255,8 @@ int21_resolve_parent_dir:
     mov dl, [si]
 
     cmp dl, 0
+    je .leaf_ok
+    cmp dl, 13
     je .leaf_ok
 
     ; Ignore intermediate '.' component.
@@ -5346,6 +5398,8 @@ int21_lookup_in_dir:
     xor bx, bx
     call read_sector_lba
     jc .io_fail
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
 
     xor di, di
     mov cx, 16
@@ -7509,9 +7563,9 @@ init_stage2_services:
     push si
     mov si, msg_stage2_entry
     call print_string_serial
+    call install_int33_vector
     call init_mouse
     call init_vbe_query
-    call install_int33_vector
     mov si, msg_stage2_ready
     call print_string_serial
 %if FAT_TYPE == 16
@@ -7977,6 +8031,9 @@ path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
 path_sd_driver_fat db "SDPSC9  VGA"
 path_gem_exe_fat   db "GEM     EXE"
+%if FAT_TYPE == 16
+path_gem_exe_abs db "\\GEMAPPS\\GEMSYS\\GEM.EXE", 0
+%endif
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
 %if FAT_TYPE == 16

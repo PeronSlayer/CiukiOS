@@ -20,20 +20,47 @@ stage2_entry:
     jmp .done
 %endif
 
+    mov dx, path_gemsys_dir
+    mov ah, 0x3B
+    int 0x21
+    jnc .cwd_gemsys_ready
+
+    ; Fallback: if GEMSYS chdir fails, keep previous root-based flow.
     mov dx, path_root_dir
     mov ah, 0x3B
     int 0x21
-    jnc .cwd_ready
+    jnc .cwd_root_ready
     mov [last_fail_ax], ax
     jmp .print_fail
 
-.cwd_ready:
+.cwd_gemsys_ready:
+
+    mov dx, msg_try_vdi
+    mov ah, 0x09
+    int 0x21
+    mov dx, path_gemvdi_local
+    call exec_try_wait_gemarg
+    jnc .wait_done
+
+    ; If local launch fails, retry with previous root absolute strategy.
+    mov [last_fail_ax], ax
+    mov dx, path_root_dir
+    mov ah, 0x3B
+    int 0x21
+    jc .print_fail
+
+.cwd_root_ready:
 
     mov dx, msg_try_vdi
     mov ah, 0x09
     int 0x21
     mov dx, path_gemvdi_rel_from_root
     call exec_try_wait_gemarg
+    jnc .wait_done
+    mov [last_fail_ax], ax
+
+    mov dx, path_gem_exe_rel_from_root
+    call exec_try_wait
     jnc .wait_done
     mov [last_fail_ax], ax
 
@@ -130,9 +157,12 @@ msg_blocked  db "[OPENGEM] runtime not ready, launch skipped", 13, 10, '$'
 msg_try_vdi  db "[OPENGEM] try GEMVDI", 13, 10, '$'
 msg_fail     db "[OPENGEM] launch failed AX=", '$'
 msg_return   db 13, 10, "[OPENGEM] returned", 13, 10, '$'
+path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
 path_root_dir db "\", 0
+path_gemvdi_local db "GEMVDI.EXE", 0
 path_gemvdi_rel_from_root  db "GEMAPPS\GEMSYS\GEMVDI.EXE", 0
-exec_gemvdi_tail db 24, ' \GEMAPPS\GEMSYS\GEM.EXE', 13
+path_gem_exe_rel_from_root db "GEMAPPS\GEMSYS\GEM.EXE", 0
+exec_gemvdi_tail db 8, ' GEM.EXE', 13
 exec_gemvdi_params:
     dw 0
     dw exec_gemvdi_tail
