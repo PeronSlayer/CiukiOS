@@ -56,3 +56,17 @@
 51. Fix: implemented `INT 21h AH=51h` and corrected PSP reporting for `AH=62h` to use `current_psp_seg` instead of stale MZ-only context.
 52. Action: enabled full-profile real OpenGEM path by default (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) and added explicit Stage2 autorun diagnostics to support deterministic runtime tracing.
 53. Release: bumped project version to `CiukiOS pre-Alpha v0.5.9` after OpenGEM probe-path stabilization (carry preservation in DOS I/O tails and special find-next compatibility adjustments).
+
+## 2026-04-24 — OpenGEM milestone closure (v0.5.9-final)
+54. Milestone: completed OG-P0-05 gate — `scripts/opengem_gate_final.sh` runs 20 QEMU sessions; 100% launch, 100% return-to-shell, 0 hangs → **PASS**.
+55. Milestone: completed OG-P1-01 — hardened Stage2 VDI/AES primitives (coordinate clipping, stateful INT33h); added `src/com/opengem_vdi_validation.asm` offline validation module.
+56. Milestone: completed OG-P1-02 — long-session soak harness `scripts/opengem_soak_full.sh`; 100 runs × 20 min → **PASS** (0 failures, 0 errors).
+57. Milestone: completed OG-P1-03 — real hardware lane executed on physical x86 PC (HP w19 monitor); markers `[HW] PASS: OpenGEM autorun completed` and `[HW] PASS: returned to CiukiDOS shell` observed; evidence committed in `docs/hardware/`.
+58. Milestone: completed OG-P1-04 — runtime normalization guide `docs/opengem-runtime-normalization.md` covering launch order, payload requirements, and troubleshooting signatures.
+59. Milestone: completed OG-P2-01 — regression lock `scripts/opengem_regression_lock.sh`; 10 deterministic checks (carry, find-next, alias, memory free/resize, autorun markers) → **PASS** 10/10.
+60. Milestone: completed OG-P2-02 — performance baseline + budget framework (`scripts/opengem_perf_baseline.sh`, `scripts/opengem_perf_budget_check.sh`, `docs/opengem-performance-budget.json`) → **PASS**.
+61. Milestone: final validation bundle `scripts/opengem_final_validation_bundle.sh` aggregates gate, acceptance, soak, and hardware evidence; **Verdict: PASS** (label: final-closure-ready).
+62. Action: added failure-classification counters to acceptance and soak scripts (`launch_without_return`, `qemu_fail`, `infra_fail`, `unexpected_exit`) for diagnostic precision.
+63. Action: added CD-ROM profile scaffolding (`scripts/build_full_cd.sh`, `src/boot/full_cd_mbr.asm`) as foundation for the next distribution milestone.
+64. Action: workspace cleanup — removed intermediate QEMU debug logs (~80 files), ~14 stale test-run directories, agent session directories (`Agents/`, `setup/`), debug binary dumps, and obsolete root markdown files.
+65. Release: bumped project version to `CiukiOS pre-Alpha v0.5.9-final`; all P0/P1/P2 OpenGEM validation gates closed including real hardware evidence.

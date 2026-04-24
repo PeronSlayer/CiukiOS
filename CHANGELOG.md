@@ -3,22 +3,42 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
-## Unreleased
-1. OG-P1-01: hardened Stage1 VDI/AES primitives with coordinate clipping guards for pixel/line/rect paths and upgraded INT33h handler from minimal stub to deterministic stateful behavior (reset/status/position/range/version).
-2. OG-P1-01: extended full-profile Stage2 OpenGEM launch diagnostics with explicit `try GEM.EXE` and `try GEM.BAT` markers for troubleshooting parity.
-3. OG-P1-02: added long-session soak runner `scripts/opengem_soak_full.sh` (20-30 min) with per-run NDJSON plus JSON/TXT summary reports.
-4. OG-P1-03: added real hardware lane package (`docs/opengem-hardware-validation-lane.md`, execution/evidence templates, and `scripts/opengem_hardware_lane_pack.sh`).
-5. OG-P1-04: added runtime normalization guide (`docs/opengem-runtime-normalization.md`) covering launch order, payload requirements, and troubleshooting signatures.
-6. Added Makefile targets for OG-P1 flows: `opengem-soak-full` and `opengem-hardware-lane-pack`.
-7. Restored descriptive shell messages in Stage1 (banner with version, full `help` listing, `Unknown command` text).
-8. Expanded Stage1 loader budget to 24 sectors in both full and floppy profiles (was 23/22 respectively); fixes a silent 330-byte overflow in the floppy profile.
-9. Fixed `INT 21h AH=49h` block2 free path: `.free_done` was aliased to `.invalid`, causing all secondary-block frees to return error 9.
-10. Added block2 path to `INT 21h AH=4Ah` resize: secondary heap block can now be resized without corrupting block1 MCB state.
-11. Created `setup/` installer project skeleton: source stubs, build scripts, manifest template, and full TODO list for multi-floppy + CD-ROM distribution.
-12. Improved MCB/List-of-Lists coherence for multi-block allocators: block2 now writes a real MCB header, block1 toggles `M/Z` type correctly, and `INT 21h AH=52h` now returns a valid first-MCB pointer in `ES:[BX-2]`.
-13. Completed keyboard-backed DOS input path for `INT 21h` (`AH=06h/07h/08h/0Ah`) by routing to BIOS `INT 16h` instead of CR stubs, improving OpenGEM event-loop compatibility.
-14. Added `INT 21h AH=51h` support and corrected PSP reporting (`AH=62h`) to use `current_psp_seg`, with sane fallback to DOS heap base.
-15. Switched full-profile defaults to real OpenGEM execution (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) and added Stage2 autorun diagnostics (`[S2] autorun/loaded/return/fail`).
+## pre-Alpha v0.5.9-final (2026-04-24) — OpenGEM milestone closure
+
+### OG-P0 — Gate validation
+1. Added `scripts/opengem_gate_final.sh` (OG-P0-05): official single-verdict gate; 20 runs, 100% launch, 100% return-to-shell, 0 hangs → **PASS**.
+2. Added `scripts/opengem_trace_full.sh`: deterministic DOS/OpenGEM trace artifacts generator (serial, INT log, INT21 summary).
+3. Added `scripts/opengem_acceptance_full.sh`: N-run acceptance loop with per-run logs and summary report.
+4. Added failure classification counters to acceptance and soak scripts (`launch_without_return`, `qemu_fail`, `infra_fail`, `unexpected_exit`).
+
+### OG-P1 — Hardening, soak, hardware
+5. OG-P1-01: hardened Stage2 VDI/AES primitives with coordinate clipping guards for pixel/line/rect paths; upgraded INT33h handler from minimal stub to deterministic stateful behavior (reset/status/position/range/version).
+6. OG-P1-01: extended full-profile Stage2 OpenGEM launch diagnostics with explicit `try GEM.EXE` and `try GEM.BAT` markers.
+7. OG-P1-01: added `src/com/opengem_vdi_validation.asm` — VDI validation module for offline harness testing.
+8. OG-P1-02: added long-session soak runner `scripts/opengem_soak_full.sh` (20-30 min, 100 runs) with per-run NDJSON and JSON/TXT summary; **PASS** (100/100, 0 errors).
+9. OG-P1-03: added real hardware lane package: `docs/opengem-hardware-validation-lane.md`, execution/evidence templates, `scripts/opengem_hardware_lane_pack.sh`.
+10. OG-P1-03: **hardware evidence collected on real x86 hardware** (HP w19 monitor, legacy PC): `[HW] PASS: OpenGEM autorun completed`, `[HW] PASS: returned to CiukiDOS shell`.
+11. OG-P1-04: added runtime normalization guide `docs/opengem-runtime-normalization.md` covering launch order, payload requirements, and troubleshooting signatures.
+12. Added Makefile targets: `opengem-soak-full`, `opengem-hardware-lane-pack`, `opengem-final-bundle`.
+
+### OG-P2 — Quality lock
+13. OG-P2-01: added `scripts/opengem_regression_lock.sh` with 10 deterministic regression checks (carry, find-next, alias path, memory free/resize, autorun markers) → **PASS** 10/10.
+14. OG-P2-02: added `scripts/opengem_perf_baseline.sh` and `scripts/opengem_perf_budget_check.sh`; baseline and budget enforcement with desktop readiness drift tracking → **PASS**.
+15. OG-P2-02: added `docs/opengem-performance-budget.json` with latency thresholds and desktop readiness metric.
+
+### Final bundle
+16. Added `scripts/opengem_final_validation_bundle.sh`: aggregates gate/acceptance/soak/hardware evidence into single PASS/FAIL verdict; **final-closure-ready verdict: PASS**.
+17. Added CD-ROM profile scaffolding: `scripts/build_full_cd.sh`, `src/boot/full_cd_mbr.asm`.
+
+### Prior v0.5.9 work (2026-04-23)
+18. Restored descriptive shell messages in Stage1 (banner with version, full `help` listing, `Unknown command` text).
+19. Expanded Stage1 loader budget to 24 sectors in both full and floppy profiles (was 23/22 respectively); fixes a silent 330-byte overflow in the floppy profile.
+20. Fixed `INT 21h AH=49h` block2 free path: `.free_done` was aliased to `.invalid`, causing all secondary-block frees to return error 9.
+21. Added block2 path to `INT 21h AH=4Ah` resize: secondary heap block can now be resized without corrupting block1 MCB state.
+22. Improved MCB/List-of-Lists coherence: block2 now writes a real MCB header, block1 toggles `M/Z` type correctly, `INT 21h AH=52h` returns valid first-MCB pointer.
+23. Completed keyboard-backed DOS input path (`INT 21h AH=06h/07h/08h/0Ah`) via BIOS `INT 16h`, replacing forced-CR stubs.
+24. Added `INT 21h AH=51h` support and corrected PSP reporting (`AH=62h`) to use `current_psp_seg`.
+25. Switched full-profile defaults to real OpenGEM execution (`CIUKIOS_OPENGEM_TRY_EXEC=1`, `CIUKIOS_STAGE2_AUTORUN=1`) with Stage2 autorun diagnostics.
 
 ## pre-Alpha v0.5.9 (2026-04-23)
 1. Fixed carry-flag preservation in DOS I/O done paths (`INT 21h AH=3Fh/40h/42h`) so handle-swap housekeeping no longer corrupts success/error status.

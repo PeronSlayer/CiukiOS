@@ -15,28 +15,33 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 7. OpenGEM completion plan: [docs/opengem-completion-execution-plan-v0.5.9.md](docs/opengem-completion-execution-plan-v0.5.9.md)
 8. OpenGEM runtime normalization: [docs/opengem-runtime-normalization.md](docs/opengem-runtime-normalization.md)
 9. OpenGEM hardware lane: [docs/opengem-hardware-validation-lane.md](docs/opengem-hardware-validation-lane.md)
+10. OpenGEM final closure report: [docs/opengem-final-validation-closure-2026-04-24.md](docs/opengem-final-validation-closure-2026-04-24.md)
+11. Hardware evidence: [docs/hardware/opengem-hardware-execution-2026-04-24.md](docs/hardware/opengem-hardware-execution-2026-04-24.md)
 10. Full changelog: [CHANGELOG.md](CHANGELOG.md)
 11. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.5.9`
+`CiukiOS pre-Alpha v0.5.9-final`
 
 Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
+2. `-final` suffix marks a closed milestone: all P0/P1/P2 validation gates passed, including real hardware evidence.
 
 ## Changelog (Latest)
-### pre-Alpha v0.5.9
-1. Fixed DOS I/O carry propagation in `INT 21h AH=3Fh/40h/42h` done paths, removing false read-error reporting during OpenGEM probe flow.
-2. Improved OpenGEM GEMVDI probe compatibility by relaxing special `find-next` behavior and reducing premature `0x12` no-more-files returns.
-3. Added `VD*` open alias mapping to bundled `SDPSC9.VGA` to keep GEM driver discovery aligned with available runtime payloads.
-4. Hardened Stage1 OpenGEM tracing stability while keeping loader payload inside the 29-sector budget.
+### pre-Alpha v0.5.9-final (2026-04-24) — OpenGEM milestone closure
+1. **OG-P0 gate**: 20 QEMU runs, 100% launch, 100% return-to-shell, 0 hangs → PASS.
+2. **OG-P1 soak**: 100 runs × 20 min on QEMU → PASS; hardware evidence on real x86 (HP w19) → PASS.
+3. **OG-P1 VDI/AES**: hardened coordinate clipping, stateful INT33h, VDI validation module.
+4. **OG-P2 regression lock**: 10 deterministic checks → PASS; perf budget framework → PASS.
+5. **Final validation bundle**: gate + acceptance + soak + hardware aggregated → Verdict: PASS.
+6. Added CD-ROM profile scaffolding (`build_full_cd.sh`, `full_cd_mbr.asm`).
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
-1. Keep deterministic BIOS bring-up and DOS runtime gates green on both `floppy` and `full` profiles.
-2. Expand native DOS compatibility incrementally on top of the current Stage1 FAT/file I/O foundation.
-3. Reach OpenGEM and DOOM milestones, then progress toward Windows pre-NT compatibility (up to Windows 98).
+1. OpenGEM milestone **closed** (v0.5.9-final): gate, acceptance, soak, regression lock, perf budget, and hardware evidence all PASS.
+2. Next targets: DOOM-on-DOS runtime bring-up, then Windows pre-NT compatibility (up to Windows 98).
+3. CD-ROM boot profile in scaffolding — to be completed in the next minor milestone.
 
 ## Open Source Collaboration
 CiukiOS welcomes collaboration through issues and pull requests.
