@@ -112,6 +112,12 @@ Progress is continuous but not tied to a fixed release calendar.
 	- `build/full/opengem-performance-budget-check.perfcheck.report.txt`
 6. Budget config:
 	- [docs/opengem-performance-budget.json](docs/opengem-performance-budget.json)
+7. `make opengem-final-bundle`
+	Aggregates final milestone evidence from gate, acceptance, soak, and hardware artifacts into:
+	- `build/full/opengem-final-validation-bundle.latest.report.txt`
+	- `build/full/opengem-final-validation-bundle.latest.report.json`
+	Optional labels can be passed by calling the script directly:
+	- `bash scripts/opengem_final_validation_bundle.sh --label final --gate-label final-closure --acceptance-label final-closure-acc --soak-label final-closure-soak`
 
 ## Legacy Archive
 Historical project content is preserved under:
