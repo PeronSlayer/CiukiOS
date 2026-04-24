@@ -35,11 +35,8 @@ stage2_entry:
 
 .cwd_gemsys_ready:
 
-    mov dx, msg_try_vdi
-    mov ah, 0x09
-    int 0x21
-    mov dx, path_gemvdi_local
-    call exec_try_wait_gemarg
+    mov dx, path_gem_exe_local
+    call exec_try_wait
     jnc .wait_done
 
     ; If local launch fails, retry with previous root absolute strategy.
@@ -50,14 +47,6 @@ stage2_entry:
     jc .print_fail
 
 .cwd_root_ready:
-
-    mov dx, msg_try_vdi
-    mov ah, 0x09
-    int 0x21
-    mov dx, path_gemvdi_rel_from_root
-    call exec_try_wait_gemarg
-    jnc .wait_done
-    mov [last_fail_ax], ax
 
     mov dx, path_gem_exe_rel_from_root
     call exec_try_wait
@@ -159,6 +148,7 @@ msg_fail     db "[OPENGEM] launch failed AX=", '$'
 msg_return   db 13, 10, "[OPENGEM] returned", 13, 10, '$'
 path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
 path_root_dir db "\", 0
+path_gem_exe_local db "GEM.EXE", 0
 path_gemvdi_local db "GEMVDI.EXE", 0
 path_gemvdi_rel_from_root  db "GEMAPPS\GEMSYS\GEMVDI.EXE", 0
 path_gem_exe_rel_from_root db "GEMAPPS\GEMSYS\GEM.EXE", 0
