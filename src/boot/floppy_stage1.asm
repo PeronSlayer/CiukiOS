@@ -39,6 +39,9 @@ org 0x0000
 %ifndef FAT_TYPE
 %define FAT_TYPE 12
 %endif
+%ifndef FAT_LBA_OFFSET
+%define FAT_LBA_OFFSET 0
+%endif
 %if FAT_TYPE == 16
 %define FAT_EOF 0xFFF8
 %else
@@ -46,6 +49,9 @@ org 0x0000
 %endif
 %ifndef STAGE1_SELFTEST_AUTORUN
 %define STAGE1_SELFTEST_AUTORUN 0
+%endif
+%ifndef HARDWARE_VALIDATION_SCREEN
+%define HARDWARE_VALIDATION_SCREEN 0
 %endif
 %define FAT1_LBA FAT_RESERVED_SECTORS
 %define FAT2_LBA (FAT1_LBA + FAT_SECTORS_PER_FAT)
@@ -109,6 +115,11 @@ stage1_start:
     call splash_set_progress
     call splash_hold
     call draw_shell_chrome
+%if FAT_TYPE == 16
+%if HARDWARE_VALIDATION_SCREEN
+    call print_hardware_validation_screen
+%endif
+%endif
 
 main_loop:
     mov ax, cs
@@ -5540,6 +5551,25 @@ read_sector_lba:
     push dx
     push si
 
+%if FAT_TYPE == 16
+    push ds
+    add ax, FAT_LBA_OFFSET
+    mov [cs:disk_packet_lba], ax
+    mov [cs:disk_packet_lba + 2], word 0
+    mov [cs:disk_packet_lba + 4], word 0
+    mov [cs:disk_packet_lba + 6], word 0
+    mov [cs:disk_packet_off], bx
+    mov [cs:disk_packet_seg], es
+    mov ax, cs
+    mov ds, ax
+    mov si, disk_packet
+    mov dl, [cs:boot_drive]
+    mov ah, 0x42
+    int 0x13
+    pop ds
+    jmp .done
+%endif
+
     mov si, bx
 
     xor dx, dx
@@ -5566,6 +5596,7 @@ read_sector_lba:
     mov al, 0x01
     int 0x13
 
+.done:
     pop si
     pop dx
     pop cx
@@ -5577,6 +5608,26 @@ write_sector_lba:
     push cx
     push dx
     push si
+
+%if FAT_TYPE == 16
+    push ds
+    add ax, FAT_LBA_OFFSET
+    mov [cs:disk_packet_lba], ax
+    mov [cs:disk_packet_lba + 2], word 0
+    mov [cs:disk_packet_lba + 4], word 0
+    mov [cs:disk_packet_lba + 6], word 0
+    mov [cs:disk_packet_off], bx
+    mov [cs:disk_packet_seg], es
+    mov ax, cs
+    mov ds, ax
+    mov si, disk_packet
+    mov dl, [cs:boot_drive]
+    mov ah, 0x43
+    mov al, 0x00
+    int 0x13
+    pop ds
+    jmp .done
+%endif
 
     mov si, bx
 
@@ -5604,6 +5655,7 @@ write_sector_lba:
     mov al, 0x01
     int 0x13
 
+.done:
     pop si
     pop dx
     pop cx
@@ -6736,12 +6788,14 @@ run_stage2_payload:
     call print_string_serial
 
     call STAGE2_LOAD_SEG:0x0000
+    mov byte [cs:stage2_autorun_status], 1
     mov si, msg_stage2_autorun_return
     call print_string_serial
     clc
     jmp .done
 
 .load_fail:
+    mov byte [cs:stage2_autorun_status], 2
     mov si, msg_stage2_autorun_fail
     call print_string_serial
     stc
@@ -6769,6 +6823,7 @@ init_mouse:
     pop bx
     pop ax
     ret
+
 .no_mouse:
     mov byte [mouse_installed], 0
     mov si, msg_mouse_not_found
@@ -6776,6 +6831,44 @@ init_mouse:
     pop bx
     pop ax
     ret
+
+%if FAT_TYPE == 16
+%if HARDWARE_VALIDATION_SCREEN
+print_hardware_validation_screen:
+    push ax
+    push si
+
+    mov si, msg_hw_validation_title
+    call print_string_dual
+    cmp byte [cs:stage2_autorun_status], 1
+    je .pass
+    cmp byte [cs:stage2_autorun_status], 2
+    je .fail
+
+    mov si, msg_hw_validation_notrun
+    call print_string_dual
+    jmp .done
+
+.pass:
+    mov si, msg_hw_validation_pass
+    call print_string_dual
+    mov si, msg_hw_validation_return
+    call print_string_dual
+    mov si, msg_hw_validation_capture
+    call print_string_dual
+    jmp .done
+
+.fail:
+    mov si, msg_hw_validation_fail
+    call print_string_dual
+
+.done:
+    call print_newline_dual
+    pop si
+    pop ax
+    ret
+%endif
+%endif
 
 init_vbe_query:
     mov si, msg_vbe_init
@@ -6923,6 +7016,7 @@ file_handle_swapped db 0
 fat_cache_valid db 0
 fat_cache_dirty db 0
 fat_cache_sector dw 0xFFFF
+stage2_autorun_status db 0
 tmp_user_ds dw 0
 tmp_user_ptr dw 0
 tmp_rw_remaining dw 0
@@ -6999,6 +7093,13 @@ dos_env_block db 'COMSPEC=C:\COMMAND.COM', 0
               db 'PATH=C:\', 0
               db 0
 dos_env_block_end:
+disk_packet:
+    db 0x10
+    db 0
+    dw 1
+disk_packet_off dw 0
+disk_packet_seg dw 0
+disk_packet_lba dq 0
 cmd_buffer times CMD_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] run", 13, 10, 0
@@ -7166,6 +7267,12 @@ msg_stage2_autorun_begin db "[S2] autorun", 13, 10, 0
 msg_stage2_autorun_loaded db "[S2] stage2 loaded", 13, 10, 0
 msg_stage2_autorun_return db "[S2] stg2 return", 13, 10, 0
 msg_stage2_autorun_fail db "[S2] stage2 load fail", 13, 10, 0
+msg_hw_validation_title db "[HW] OpenGEM hardware validation", 13, 10, 0
+msg_hw_validation_pass db "[HW] PASS: OpenGEM autorun completed", 13, 10, 0
+msg_hw_validation_return db "[HW] PASS: returned to CiukiDOS shell", 13, 10, 0
+msg_hw_validation_capture db "[HW] Capture this screen for P1 evidence", 13, 10, 0
+msg_hw_validation_fail db "[HW] FAIL: stage2/OpenGEM autorun failed", 13, 10, 0
+msg_hw_validation_notrun db "[HW] WARN: OpenGEM autorun did not run", 13, 10, 0
 msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0

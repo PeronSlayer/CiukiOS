@@ -2,7 +2,10 @@ bits 16
 org 0x7C00
 
 %define STAGE1_SEG     0x0800
-%define STAGE1_SECTORS 29
+%define STAGE1_SECTORS 30
+%ifndef BOOT_LBA_OFFSET
+%define BOOT_LBA_OFFSET 0
+%endif
 
 jmp short boot_start
 nop
@@ -19,7 +22,7 @@ bpb_media             db 0xF8
 bpb_sectors_per_fat   dw 128
 bpb_sectors_per_trk   dw 63
 bpb_heads             dw 16
-bpb_hidden_secs       dd 0
+bpb_hidden_secs       dd BOOT_LBA_OFFSET
 bpb_total_secs32      dd 262144
 bs_drive_num          db 0x80
 bs_reserved1          db 0
@@ -50,6 +53,12 @@ boot_start:
     mov byte [retry_count], 3
 
 .read_stage1:
+    mov si, stage1_dap
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    int 0x13
+    jnc .stage1_ok
+
     mov ax, STAGE1_SEG
     mov es, ax
     xor bx, bx
@@ -149,6 +158,14 @@ serial_putc:
 
 boot_drive  db 0
 retry_count db 0
+stage1_dap:
+    db 0x10
+    db 0
+    dw STAGE1_SECTORS
+    dw 0x0000
+    dw STAGE1_SEG
+    dd BOOT_LBA_OFFSET + 1
+    dd 0
 
 msg_stage0      db "[BOOT0-FULL] CiukiOS full stage0 ready", 13, 10, 0
 msg_stage1_jump db "[BOOT0-FULL] Loading stage1", 13, 10, 0

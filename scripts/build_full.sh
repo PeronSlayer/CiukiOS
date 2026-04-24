@@ -24,11 +24,14 @@ STAGE2_SRC="src/boot/full_stage2.asm"
 STAGE2_BIN="build/full/obj/full_stage2.bin"
 STAGE2_MAX_SIZE=512
 OPENGEM_TRY_EXEC="${CIUKIOS_OPENGEM_TRY_EXEC:-1}"
+OPENGEM_VALIDATION_VDI="${CIUKIOS_OPENGEM_VALIDATION_VDI:-1}"
 
-IMG="build/full/ciukios-full.img"
+IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 TOTAL_SECTORS=262144
-STAGE1_SECTORS=29
+STAGE1_SECTORS=30
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
+BOOT_LBA_OFFSET="${CIUKIOS_FULL_BOOT_LBA_OFFSET:-0}"
+FAT_LBA_OFFSET="${CIUKIOS_FULL_FAT_LBA_OFFSET:-0}"
 
 FAT_SPT=63
 FAT_HEADS=16
@@ -51,19 +54,24 @@ FILEIO_SRC="src/com/fileio.bin.asm"
 FILEIO_BIN="build/full/obj/fileio.bin"
 DELTEST_SRC="src/com/deltest.bin.asm"
 DELTEST_BIN="build/full/obj/deltest.bin"
+OPENGEM_VALIDATION_VDI_SRC="src/com/opengem_vdi_validation.asm"
+OPENGEM_VALIDATION_VDI_BIN="build/full/obj/opengem_vdi_validation.exe"
 OPENGEM_PAYLOAD_DIR="assets/full/opengem"
 OPENGEM_UPSTREAM_DIR="$OPENGEM_PAYLOAD_DIR/upstream/OPENGEM7-RC3"
 CTMOUSE_BIN="$CIUKIOS_ROOT/third_party/ctmouse/ctmouse.exe"
 INCLUDE_OPENGEM_PAYLOAD="${CIUKIOS_INCLUDE_OPENGEM:-1}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-1}"
+HARDWARE_VALIDATION_SCREEN="${CIUKIOS_HARDWARE_VALIDATION_SCREEN:-0}"
 MTOOLS_TIMEOUT_SEC="${MTOOLS_TIMEOUT_SEC:-20}"
+MTOOLS_KILL_AFTER_SEC="${MTOOLS_KILL_AFTER_SEC:-2}"
+OPENGEM_DIRS_PREPARED=0
 
 mtools_try() {
-	timeout "$MTOOLS_TIMEOUT_SEC" "$@" >/dev/null 2>&1 || true
+	timeout --kill-after="${MTOOLS_KILL_AFTER_SEC}s" "${MTOOLS_TIMEOUT_SEC}s" "$@" >/dev/null 2>&1 || true
 }
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$OPENGEM_VALIDATION_VDI_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -71,7 +79,9 @@ for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$
 done
 
 echo "[build-full] assembling full stage0 boot sector"
-nasm -f bin "$BOOT_SRC" -o "$BOOT_BIN"
+nasm -f bin "$BOOT_SRC" \
+	-D BOOT_LBA_OFFSET="$BOOT_LBA_OFFSET" \
+	-o "$BOOT_BIN"
 
 BOOT_SIZE="$(stat -c%s "$BOOT_BIN")"
 if [[ "$BOOT_SIZE" -ne 512 ]]; then
@@ -88,8 +98,10 @@ nasm -f bin "$STAGE1_SRC" \
 	-D FAT_SECTORS_PER_FAT="$FAT_SECTORS_PER_FAT" \
 	-D FAT_ROOT_DIR_SECTORS="$ROOT_DIR_SECTORS" \
 	-D FAT_TYPE=16 \
+	-D FAT_LBA_OFFSET="$FAT_LBA_OFFSET" \
 	-D STAGE1_SELFTEST_AUTORUN="$STAGE1_SELFTEST_AUTORUN" \
 	-D STAGE2_AUTORUN="$STAGE2_AUTORUN" \
+	-D HARDWARE_VALIDATION_SCREEN="$HARDWARE_VALIDATION_SCREEN" \
 	-o "$STAGE1_BIN"
 
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
@@ -108,6 +120,7 @@ nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
 nasm -f bin "$MZDEMO_SRC"  -o "$MZDEMO_BIN"
 nasm -f bin "$FILEIO_SRC"  -o "$FILEIO_BIN"
 nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
+nasm -f bin "$OPENGEM_VALIDATION_VDI_SRC" -o "$OPENGEM_VALIDATION_VDI_BIN"
 
 STAGE2_SIZE="$(stat -c%s "$STAGE2_BIN")"
 if [[ "$STAGE2_SIZE" -gt "$STAGE2_MAX_SIZE" ]]; then
@@ -216,6 +229,11 @@ if [[ -f "$OPENGEM_STAGE_DIR/SANSERIF.PSF" ]]; then
 	cp "$OPENGEM_STAGE_DIR/SANSERIF.PSF" "$OPENGEM_STAGE_DIR/SANSERIF.FNT"
 fi
 
+if [[ "$OPENGEM_VALIDATION_VDI" == "1" ]]; then
+	echo "[build-full] using deterministic OpenGEM validation GEMVDI.EXE"
+	cp "$OPENGEM_VALIDATION_VDI_BIN" "$OPENGEM_STAGE_DIR/GEMVDI.EXE"
+fi
+
 if [[ "$INCLUDE_OPENGEM_PAYLOAD" != "1" ]]; then
 	echo "[build-full] OpenGEM payload injection disabled (CIUKIOS_INCLUDE_OPENGEM=$INCLUDE_OPENGEM_PAYLOAD)"
 elif command -v mcopy >/dev/null 2>&1; then
@@ -227,19 +245,20 @@ elif command -v mcopy >/dev/null 2>&1; then
 			mtools_try mmd -i "$IMG" ::GEMAPPS/FONTS
 			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMBOOT
 			mtools_try mmd -i "$IMG" ::GEMBOOT
+			OPENGEM_DIRS_PREPARED=1
 		fi
 		for f in "$OPENGEM_STAGE_DIR"/*; do
 			base="$(basename "$f")"
-			mcopy -o -i "$IMG" "$f" "::$base" >/dev/null
-			mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMSYS/$base" >/dev/null || true
+			mtools_try mcopy -o -i "$IMG" "$f" "::$base"
+			mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMSYS/$base"
 			case "$base" in
 				*.PSF|*.AFF|*.B30|*.CGA|*.ELQ|*.EPS|*.HPH|*.VGA|*.X20|FSTR.INF|FHDR.INF|VGAFSTR.INF|*.FNT)
-					mcopy -o -i "$IMG" "$f" "::GEMAPPS/FONTS/$base" >/dev/null || true
+					mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/FONTS/$base"
 					;;
 			esac
 			if [[ "$base" == "GEM.EXE" ]]; then
-				mcopy -o -i "$IMG" "$f" "::GEMBOOT/$base" >/dev/null || true
-				mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMBOOT/$base" >/dev/null || true
+				mtools_try mcopy -o -i "$IMG" "$f" "::GEMBOOT/$base"
+				mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMBOOT/$base"
 			fi
 		done
 	else
@@ -252,10 +271,12 @@ fi
 if command -v mcopy >/dev/null 2>&1; then
 	if [[ -f "$CTMOUSE_BIN" ]]; then
 		echo "[build-full] injecting CTMOUSE.EXE (third_party/ctmouse)"
-		mtools_try mmd -i "$IMG" ::GEMAPPS
-		mtools_try mmd -i "$IMG" ::GEMAPPS/GEMSYS
-		mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::CTMOUSE.EXE" >/dev/null || true
-		mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::GEMAPPS/GEMSYS/CTMOUSE.EXE" >/dev/null || true
+		if [[ "$OPENGEM_DIRS_PREPARED" != "1" ]]; then
+			mtools_try mmd -i "$IMG" ::GEMAPPS
+			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMSYS
+		fi
+		mtools_try mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::CTMOUSE.EXE"
+		mtools_try mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::GEMAPPS/GEMSYS/CTMOUSE.EXE"
 	else
 		echo "[build-full] CTMOUSE payload not found at $CTMOUSE_BIN (skipping)"
 	fi
@@ -271,4 +292,4 @@ Boot path: stage0 at LBA0, stage1 payload in sectors 2-15
 Data: cluster 2=COMDEMO, 3=MZDEMO, 4-5=FILEIO, 6=DELTEST, 7=STAGE2
 TXT
 
-echo "[build-full] done: build/full/ciukios-full.img"
+echo "[build-full] done: $IMG"

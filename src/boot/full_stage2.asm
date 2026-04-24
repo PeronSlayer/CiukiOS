@@ -160,7 +160,7 @@ msg_try_vdi db "[OPENGEM] try GEMVDI", 13, 10, '$'
 msg_try_gem db "[OPENGEM] try GEM.EXE", 13, 10, '$'
 msg_try_bat db "[OPENGEM] try GEM.BAT", 13, 10, '$'
 msg_fail db "[OPENGEM] launch failed AX=", '$'
-msg_return db "[OPENGEM] returned", 13, 10, '$'
+msg_return db 13, 10, "[OPENGEM] returned", 13, 10, '$'
 path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
 path_ctmouse_root db "CTMOUSE.EXE", 0
 path_gemvdi_root db "GEMVDI.EXE", 0
