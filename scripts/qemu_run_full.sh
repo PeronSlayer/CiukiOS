@@ -40,7 +40,7 @@ Environment:
   LOG_FILE         Test log path (default: build/full/qemu-full.log).
   STAGE0_MARKER    Marker 1 for test validation.
   STAGE1_MARKER    Marker 2 for test validation.
-  CIUKIOS_STAGE2_AUTORUN  Visual mode default: 1 (OpenGEM); set 0 for shell.
+  CIUKIOS_STAGE2_AUTORUN  Set 1 to launch OpenGEM automatically.
 TXT
 }
 
@@ -90,11 +90,7 @@ fi
 
 if [[ "$DO_BUILD" -eq 1 ]]; then
   echo "[qemu-run-full] build step"
-  if [[ "$MODE" == "visual" ]]; then
-    CIUKIOS_STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-1}" bash scripts/build_full.sh
-  else
-    bash scripts/build_full.sh
-  fi
+  bash scripts/build_full.sh
 fi
 
 IMG="build/full/ciukios-full.img"

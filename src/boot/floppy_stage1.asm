@@ -7760,9 +7760,25 @@ dispatch_command:
     mov si, str_findtest
     call str_eq
     jc .cmd_findtest
+    mov di, bx
+    mov si, str_mouse
+    call str_eq
+    jc .cmd_mouse
+    mov di, bx
+    mov si, str_keytest
+    call str_eq
+    jc .cmd_keytest
 %if FAT_TYPE == 16
     mov di, bx
     mov si, str_opengem
+    call str_eq
+    jc .cmd_opengem
+    mov di, bx
+    mov si, str_gem
+    call str_eq
+    jc .cmd_opengem
+    mov di, bx
+    mov si, str_desktop
     call str_eq
     jc .cmd_opengem
 %endif
@@ -7860,6 +7876,14 @@ dispatch_command:
 
 .cmd_findtest:
     call int21_find_test
+    jmp .done
+
+.cmd_mouse:
+    call shell_cmd_mouse
+    jmp .done
+
+.cmd_keytest:
+    call shell_cmd_keytest
     jmp .done
 
 %if FAT_TYPE == 16
@@ -7991,6 +8015,66 @@ shell_cmd_cdup:
 .ok:
     pop ds
     pop dx
+    pop ax
+    ret
+
+shell_cmd_mouse:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov ax, 0x0003
+    int 0x33
+    push bx
+    push cx
+    push dx
+    mov si, msg_mouse_status
+    call print_string_dual
+    mov al, [cs:mouse_installed]
+    call print_hex8_dual
+    mov al, ' '
+    call putc_dual
+    mov si, msg_mouse_buttons
+    call print_string_dual
+    pop dx
+    pop cx
+    pop bx
+    mov ax, bx
+    call print_hex16_dual
+    mov al, ' '
+    call putc_dual
+    mov si, msg_mouse_x
+    call print_string_dual
+    mov ax, cx
+    call print_hex16_dual
+    mov al, ' '
+    call putc_dual
+    mov si, msg_mouse_y
+    call print_string_dual
+    mov ax, dx
+    call print_hex16_dual
+    call print_newline_dual
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_cmd_keytest:
+    push ax
+    mov si, msg_keytest_prompt
+    call print_string_dual
+    xor ah, ah
+    int 0x16
+    push ax
+    call print_newline_dual
+    mov si, msg_keytest_ax
+    call print_string_dual
+    pop ax
+    call print_hex16_dual
+    call print_newline_dual
     pop ax
     ret
 
@@ -9143,12 +9227,6 @@ int_ef_target_off dw 0
 int_ef_target_seg dw 0
 int_ef_trace_count db 0
 int_ef_return_trace_count db 0
-int16_trace_count db 0
-int16_trace_ax dw 0
-int16_status_polls db 0
-int16_synth_pending db 0
-int16_synth_used db 0
-int16_read_ah db 0
 int33_trace_count db 0
 int33_trace_ax dw 0
 old_int10_off dw 0
@@ -9347,8 +9425,8 @@ msg_shell_sysinfo_prefix db "RAM:", 0
 msg_help_header db "--- CiukiDOS Commands ---", 13, 10, 0
 msg_help_core db "  help  dir  cd  cls  tree  ver", 13, 10, 0
 msg_help_runtime db "  dos21  comdemo  mzdemo  fileio  findtest", 13, 10, 0
-msg_help_system db "  gfxdemo  ticks  drive  reboot  halt", 13, 10, 0
-msg_help_apps db "  opengem", 13, 10, 0
+msg_help_system db "  gfxdemo  ticks  drive  mouse  keytest  reboot  halt", 13, 10, 0
+msg_help_apps db "  opengem  gem  desktop", 13, 10, 0
 msg_version_line db "CiukiOS v0.5.8", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
@@ -9387,6 +9465,12 @@ msg_dir_empty db "no files found", 13, 10, 0
 msg_dir_fail db "dir failed", 13, 10, 0
 msg_cd_fail db "cd failed", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
+msg_mouse_status db "mouse=0x", 0
+msg_mouse_buttons db "buttons=0x", 0
+msg_mouse_x db "x=0x", 0
+msg_mouse_y db "y=0x", 0
+msg_keytest_prompt db "press a key...", 0
+msg_keytest_ax db "key AX=0x", 0
 gfx_text_ciukios db "CIUKIOS", 0
 gfx_text_demo db "GFX DEMO", 0
 gfx_text_vdi db "VDI BASE", 0
@@ -9407,8 +9491,12 @@ str_mzdemo db "mzdemo", 0
 str_fileio db "fileio", 0
 str_gfxdemo db "gfxdemo", 0
 str_findtest db "findtest", 0
+str_mouse db "mouse", 0
+str_keytest db "keytest", 0
 %if FAT_TYPE == 16
 str_opengem db "opengem", 0
+str_gem db "gem", 0
+str_desktop db "desktop", 0
 %endif
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
@@ -9481,7 +9569,7 @@ gfx_font8_table:
 ; Stage2 Extended Services Messages
 msg_stage2_entry db "[S2] init", 13, 10, 0
 msg_stage2_ready db "[S2] ready", 13, 10, 0
-msg_stage2_autorun_begin db "[S2] autorun", 13, 10, 0
+msg_stage2_autorun_begin db "[S2] launch", 13, 10, 0
 msg_stage2_autorun_loaded db "[S2] stage2 loaded", 13, 10, 0
 msg_stage2_autorun_return db "[S2] stg2 return", 13, 10, 0
 msg_stage2_autorun_fail db "[S2] stage2 load fail", 13, 10, 0
