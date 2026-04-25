@@ -8890,27 +8890,6 @@ int10_handler:
     iret
 
 int16_handler:
-    cmp byte [cs:int16_trace_count], 64
-    jae .trace_done
-    mov [cs:int16_trace_ax], ax
-    push ax
-    push bx
-    push cx
-    push dx
-    inc byte [cs:int16_trace_count]
-    mov al, 'K'
-    call serial_putc
-    mov ax, [cs:int16_trace_ax]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.trace_done:
     cmp ah, 0x00
     je .read_key
     cmp ah, 0x10
@@ -8937,24 +8916,6 @@ int16_handler:
     iret
 
 .status_no_real_key:
-    cmp byte [cs:int16_synth_pending], 0
-    jne .status_synth_key
-    cmp byte [cs:int16_synth_used], 0
-    jne .status_no_key
-    inc byte [cs:int16_status_polls]
-    cmp byte [cs:int16_status_polls], 24
-    jb .status_no_key
-    mov byte [cs:int16_synth_pending], 1
-
-.status_synth_key:
-    mov ax, 0x1C0D
-    push bp
-    mov bp, sp
-    and word [ss:bp + 6], 0xFFBF
-    pop bp
-    iret
-
-.status_no_key:
     push bp
     mov bp, sp
     xor ax, ax
@@ -8966,33 +8927,7 @@ int16_handler:
     jmp far [cs:old_int16_off]
 
 .read_key:
-    cmp byte [cs:int16_synth_pending], 0
-    je .read_real_or_default
-    mov byte [cs:int16_synth_pending], 0
-    mov byte [cs:int16_synth_used], 1
-    mov ax, 0x1C0D
-    iret
-
-.read_real_or_default:
-    mov [cs:int16_read_ah], ah
-    cmp ah, 0x10
-    je .read_check_enhanced
-    mov ah, 0x01
-    jmp .read_check
-.read_check_enhanced:
-    mov ah, 0x11
-.read_check:
-    pushf
-    call far [cs:old_int16_off]
-    jz .read_default
-    mov ah, [cs:int16_read_ah]
-    pushf
-    call far [cs:old_int16_off]
-    iret
-
-.read_default:
-    mov ax, 0x011B
-    iret
+    jmp far [cs:old_int16_off]
 
 int33_handler:
     cmp byte [cs:int33_trace_count], 96
