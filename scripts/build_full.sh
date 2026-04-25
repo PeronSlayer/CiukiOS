@@ -28,7 +28,7 @@ OPENGEM_VALIDATION_VDI="${CIUKIOS_OPENGEM_VALIDATION_VDI:-0}"
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 TOTAL_SECTORS=262144
-STAGE1_SECTORS=33
+STAGE1_SECTORS=40
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 BOOT_LBA_OFFSET="${CIUKIOS_FULL_BOOT_LBA_OFFSET:-0}"
 FAT_LBA_OFFSET="${CIUKIOS_FULL_FAT_LBA_OFFSET:-0}"
@@ -235,6 +235,11 @@ if [[ "$OPENGEM_VALIDATION_VDI" == "1" ]]; then
 	cp "$OPENGEM_VALIDATION_VDI_BIN" "$OPENGEM_STAGE_DIR/GEMVDI.EXE"
 fi
 
+if [[ -f "$OPENGEM_STAGE_DIR/GEM.EXE" ]]; then
+	echo "[build-full] patching GEM.EXE timer bootstrap for CiukiDOS"
+	printf '\220\220\220' | dd of="$OPENGEM_STAGE_DIR/GEM.EXE" bs=1 seek=$((0x0A67)) conv=notrunc status=none
+fi
+
 if [[ "$INCLUDE_OPENGEM_PAYLOAD" != "1" ]]; then
 	echo "[build-full] OpenGEM payload injection disabled (CIUKIOS_INCLUDE_OPENGEM=$INCLUDE_OPENGEM_PAYLOAD)"
 elif command -v mcopy >/dev/null 2>&1; then
@@ -246,6 +251,8 @@ elif command -v mcopy >/dev/null 2>&1; then
 			mtools_try mmd -i "$IMG" ::GEMAPPS/FONTS
 			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMBOOT
 			mtools_try mmd -i "$IMG" ::GEMBOOT
+			mtools_try mmd -i "$IMG" ::CLIPBRD
+			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMSYS/CLIPBRD
 			OPENGEM_DIRS_PREPARED=1
 		fi
 		for f in "$OPENGEM_STAGE_DIR"/*; do

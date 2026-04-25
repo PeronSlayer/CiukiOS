@@ -5,6 +5,7 @@ org 0x0000
 %define COM_LOAD_SEG 0x2000
 %define MZ_LOAD_SEG 0x3000
 %define MZ2_LOAD_SEG 0x3800
+%define MZ3_LOAD_SEG 0x7800
 %define STAGE2_LOAD_SEG 0x4E00
 %define DOS_META_BUF_SEG 0x5000
 %define DOS_FAT_BUF_SEG  0x5200
@@ -205,6 +206,27 @@ install_int21_vector:
     mov [es:bx + 2], ax
     mov byte [int2f_installed], 1
 
+    ; Track video mode for DOS programs that query INT 10h directly.
+    mov bx, 0x10 * 4
+    mov ax, [es:bx]
+    mov [old_int10_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int10_seg], ax
+    mov word [es:bx], int10_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+    mov byte [current_video_mode], 0x03
+
+    ; Keep process keyboard polling from blocking the loader forever.
+    mov bx, 0x16 * 4
+    mov ax, [es:bx]
+    mov [old_int16_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int16_seg], ax
+    mov word [es:bx], int16_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+
     pop es
     pop bx
     pop ax
@@ -216,14 +238,15 @@ install_int21_vector:
 int20_handler:
     push ax
     push bp
-    mov byte [last_exit_code], 0
-    mov byte [last_term_type], 0
-    mov ax, [current_psp_seg]
+    mov byte [cs:last_exit_code], 0
+    mov byte [cs:last_term_type], 0
+    mov ax, [cs:current_psp_seg]
     or ax, ax
     jz .done
     mov bp, sp
-    mov word [ss:bp + 6], 0x0005
-    mov [ss:bp + 8], ax
+    mov word [ss:bp + 4], int21_mz_terminate_trampoline
+    mov ax, cs
+    mov [ss:bp + 6], ax
 
 .done:
     pop bp
@@ -240,9 +263,30 @@ int21_handler:
     push ds
     push es
 
+    push ax
+    mov ax, ds
+    mov [cs:int21_caller_ds], ax
+    pop ax
     mov byte [cs:int21_carry], 0
     mov byte [cs:int21_return_es], 0
     mov byte [cs:int21_last_ah], ah
+    mov byte [cs:int21_last_al], al
+    push ax
+    mov bp, sp
+    mov ax, [ss:bp + 18]
+    mov [cs:int21_trace_call_ip], ax
+    mov ax, [ss:bp + 20]
+    mov [cs:int21_trace_call_cs], ax
+    mov ax, ss
+    mov [cs:int21_trace_call_ss], ax
+    mov ax, [ss:bp + 24]
+    mov [cs:int21_trace_call_stk0], ax
+    mov ax, [ss:bp + 26]
+    mov [cs:int21_trace_call_stk1], ax
+    mov ax, [ss:bp + 28]
+    mov [cs:int21_trace_call_stk2], ax
+    pop ax
+    call int21_trace_call
 
     cmp ah, 0x02
     je .fn_02
@@ -330,6 +374,8 @@ int21_handler:
     je .fn_58
     cmp ah, 0x62
     je .fn_62
+    cmp ah, 0x66
+    je .fn_66
     jmp .unsupported
 
 .fn_02:
@@ -435,6 +481,108 @@ int21_handler:
 
 .fn_2c:
     call int21_get_time
+    pushf
+    cmp dx, [cs:int21_trace2c_dx]
+    je .fn_2c_trace_done
+    mov [cs:int21_trace2c_dx], dx
+    cmp byte [cs:int21_trace2c_count], 20
+    jae .fn_2c_trace_done
+    inc byte [cs:int21_trace2c_count]
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    mov al, 'T'
+    call serial_putc
+    mov ax, [ss:bp + 20]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [ss:bp + 18]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:int21_trace2c_dx]
+    call print_hex16_serial
+    mov al, ';'
+    call serial_putc
+    mov ax, ss
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [ss:bp + 24]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 26]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 28]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 30]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 32]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 34]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 36]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 38]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 40]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 42]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 44]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 46]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 48]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [ss:bp + 50]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.fn_2c_trace_done:
+    popf
     jc .error
     jmp .success
 
@@ -494,6 +642,8 @@ int21_handler:
     jmp .success
 
 .fn_3e:
+    mov al, 'X'
+    call serial_putc
     call int21_close
     jc .error
     jmp .success
@@ -534,22 +684,33 @@ int21_handler:
     jmp .success
 
 .fn_4e:
+    mov al, 'E'
+    call serial_putc
     call int21_find_first
     jc .error
+    mov al, 'e'
+    call serial_putc
     jmp .success
 
 .fn_4f:
+    mov al, 'N'
+    call serial_putc
     call int21_find_next
     jc .error
+    mov al, 'n'
+    call serial_putc
     jmp .success
 
 .fn_4b:
+    push ax
     push ds
     mov ax, cs
     mov ds, ax
     mov si, msg_trace_4b
     call print_string_serial
     pop ds
+    pop ax
+    mov al, [cs:int21_last_al]
     call int21_exec
     jnc .fn_4b_ok
     push ax
@@ -571,8 +732,93 @@ int21_handler:
     jmp .success
 
 .fn_48:
+    cmp byte [cs:int21_trace48_count], 12
+    jae .fn_48_trace_done
+    inc byte [cs:int21_trace48_count]
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    mov al, 'B'
+    call serial_putc
+    mov ax, [ss:bp + 18]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [ss:bp + 16]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.fn_48_trace_done:
     call int21_alloc
-    jnc .success
+    pushf
+    cmp byte [cs:int21_trace48_ret_count], 12
+    jae .fn_48_ret_trace_done
+    inc byte [cs:int21_trace48_ret_count]
+    mov [cs:int21_trace48_ax], ax
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    mov al, 'b'
+    call serial_putc
+    mov ax, [cs:int21_trace48_ax]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.fn_48_ret_trace_done:
+    popf
+    jc .fn_48_error_restore
+    mov bp, sp
+    mov bx, [ss:bp + 14]
+    mov cx, [ss:bp + 12]
+    mov dx, [ss:bp + 10]
+    mov si, [ss:bp + 8]
+    mov di, [ss:bp + 6]
+    jmp .success
+.fn_48_error_restore:
+    mov bp, sp
+    mov cx, [ss:bp + 12]
+    mov dx, [ss:bp + 10]
+    mov si, [ss:bp + 8]
+    mov di, [ss:bp + 6]
     jmp .error
 
 .fn_49:
@@ -644,6 +890,11 @@ int21_handler:
     jc .error
     jmp .success
 
+.fn_66:
+    call int21_code_page
+    jc .error
+    jmp .success
+
 .unsupported:
     push ax
     push ds
@@ -667,23 +918,40 @@ int21_handler:
     jmp .done
 
 .error:
+    mov [cs:int21_error_ax], ax
+    cmp byte [cs:int21_last_ah], 0x48
+    je .error_no_log
     push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
     push ds
+    push es
     mov ax, cs
     mov ds, ax
     mov si, msg_int21_err
     call print_string_serial
-    pop ds
     mov al, [cs:int21_last_ah]
     call print_hex8_serial
     mov al, ':'
     call serial_putc
-    pop ax
+    mov ax, [cs:int21_error_ax]
     call print_hex8_serial
     mov al, 13
     call serial_putc
     mov al, 10
     call serial_putc
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.error_no_log:
     mov byte [cs:int21_carry], 1
 
 .done:
@@ -691,8 +959,8 @@ int21_handler:
     cmp byte [cs:int21_force_terminate], 0
     je .term_done
     mov byte [cs:int21_force_terminate], 0
-    mov ax, [cs:current_psp_seg]
-    mov word [bp + 16], 0x0005
+    mov word [bp + 16], int21_mz_terminate_trampoline
+    mov ax, cs
     mov [bp + 18], ax
 .term_done:
     cmp byte [cs:int21_return_es], 0
@@ -821,15 +1089,33 @@ int21_exec:
     push di
     push ds
     push es
+    push word [cs:current_load_seg]
 
+    mov [cs:tmp_exec_subfn], al
     cmp al, 0x00
-    jne .bad_function
+    je .exec_subfn_ok
+    cmp al, 0x03
+    je .overlay_subfn_ok
+    jmp .bad_function
 
+.exec_subfn_ok:
     mov byte [cs:exec_cmd_len], 0
     cmp bx, 0
     je .no_param_block
     call int21_exec_capture_tail
 .no_param_block:
+    jmp .subfn_ready
+
+.overlay_subfn_ok:
+    mov ax, es
+    mov [cs:tmp_overlay_block_seg], ax
+    mov [cs:tmp_overlay_block_off], bx
+    mov ax, [es:bx]
+    mov [cs:tmp_overlay_load_seg], ax
+    mov ax, [es:bx + 2]
+    mov [cs:tmp_overlay_reloc_seg], ax
+
+.subfn_ready:
 
     mov si, dx
     call int21_path_to_fat_name
@@ -875,6 +1161,9 @@ int21_exec:
     pop si
     jc .done
 %endif
+
+    cmp byte [cs:tmp_exec_subfn], 0x03
+    je .load_overlay
 
     mov al, [cs:path_fat_name + 8]
     cmp al, 'C'
@@ -922,14 +1211,46 @@ int21_exec:
 .exec_mz:
     cmp word [cs:current_psp_seg], 0
     jne .nested_exec_seg
+    mov al, 'G'
+    call serial_putc
     mov word [cs:current_load_seg], MZ_LOAD_SEG
     jmp .do_exec_mz
 .nested_exec_seg:
+    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    je .third_exec_seg
+    mov al, 'C'
+    call serial_putc
     mov word [cs:current_load_seg], MZ2_LOAD_SEG
+    jmp .do_exec_mz
+.third_exec_seg:
+    mov al, 'D'
+    call serial_putc
+    mov byte [cs:int21_trace_call_count], 0
+    mov byte [cs:int21_trace48_count], 0
+    mov byte [cs:int21_trace48_ret_count], 0
+    mov word [cs:current_load_seg], MZ3_LOAD_SEG
 .do_exec_mz:
     call int21_exec_load_mz
     jc .done
     call int21_exec_run_mz
+    jc .done
+    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    je .nested_return_trace
+    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    jne .exec_mz_ok
+.nested_return_trace:
+    mov al, 'R'
+    call serial_putc
+.exec_mz_ok:
+    xor ax, ax
+    clc
+    jmp .done
+
+.load_overlay:
+    mov al, 'O'
+    call serial_putc
+    mov word [cs:current_load_seg], MZ3_LOAD_SEG
+    call int21_exec_load_overlay
     jc .done
     xor ax, ax
     clc
@@ -950,6 +1271,7 @@ int21_exec:
     stc
 
 .done:
+    pop word [cs:current_load_seg]
     pop es
     pop ds
     pop di
@@ -1151,8 +1473,15 @@ int21_exec_load_to_es:
     jne .copy_next
     mov ax, es
     add ax, 0x1000
+    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    je .copy_limit_high
     cmp ax, DOS_META_BUF_SEG
     jae .copy_too_large
+    jmp .copy_limit_ready
+.copy_limit_high:
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jae .copy_too_large
+.copy_limit_ready:
     mov es, ax
     mov [cs:tmp_user_ds], ax
 
@@ -1328,6 +1657,100 @@ int21_exec_load_mz:
     pop cx
     ret
 
+int21_exec_load_overlay:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov ax, MZ3_LOAD_SEG
+    mov es, ax
+    xor ax, ax
+    xor di, di
+    mov cx, 128
+    rep stosw
+
+    mov ax, MZ3_LOAD_SEG
+    mov es, ax
+    xor di, di
+    xor cx, cx
+    call int21_exec_load_to_es
+    jc .done
+
+    mov ax, MZ3_LOAD_SEG
+    mov es, ax
+    cmp word [es:0x0000], 0x5A4D
+    jne .invalid_format
+
+    cmp word [cs:search_found_size_hi], 0
+    jne .too_large
+    mov ax, [es:0x0008]
+    mov cl, 4
+    shl ax, cl
+    mov [cs:tmp_overlay_header_bytes], ax
+    mov dx, [cs:search_found_size_lo]
+    cmp dx, ax
+    jb .invalid_format
+    sub dx, ax
+    mov [cs:tmp_overlay_image_size], dx
+
+    mov ax, MZ3_LOAD_SEG
+    add ax, [es:0x0008]
+    mov ds, ax
+    mov ax, [cs:tmp_overlay_load_seg]
+    mov es, ax
+    xor si, si
+    xor di, di
+    mov cx, [cs:tmp_overlay_image_size]
+    cld
+    rep movsb
+
+    mov ax, MZ3_LOAD_SEG
+    mov ds, ax
+    mov cx, [ds:0x0006]
+    mov si, [ds:0x0018]
+
+.reloc_loop:
+    jcxz .success
+    mov bx, [ds:si]
+    mov dx, [ds:si + 2]
+    mov ax, [cs:tmp_overlay_load_seg]
+    add dx, ax
+    push ds
+    mov ds, dx
+    mov ax, [cs:tmp_overlay_reloc_seg]
+    add word [ds:bx], ax
+    pop ds
+    add si, 4
+    loop .reloc_loop
+
+.success:
+    xor ax, ax
+    clc
+    jmp .done
+
+.invalid_format:
+    mov ax, 0x000B
+    stc
+    jmp .done
+
+.too_large:
+    mov ax, 0x0008
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 int21_exec_run_mz:
     push es
 
@@ -1386,6 +1809,10 @@ int21_exec_run_mz:
     mov word [es:0x0012], 0x0005
     mov [es:0x0014], ax
     mov word [es:0x0002], DOS_HEAP_USER_SEG
+    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    jne .psp_limit_ready
+    mov word [es:0x0002], DOS_HEAP_LIMIT_SEG
+.psp_limit_ready:
     mov [es:0x0016], ax
     mov word [es:0x002C], DOS_ENV_SEG
     call int21_build_env_block
@@ -1401,6 +1828,8 @@ int21_exec_run_mz:
     mov ax, ds
     mov dx, es
     mov bx, [cs:current_psp_seg]
+    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    je .save_third_ctx
     cmp word [cs:current_load_seg], MZ2_LOAD_SEG
     jne .save_primary_ctx
     mov [cs:saved_psp2], bx
@@ -1408,6 +1837,14 @@ int21_exec_run_mz:
     mov [cs:saved_sp2], sp
     mov [cs:saved_ds2], ax
     mov [cs:saved_es2], dx
+    jmp .ctx_saved
+
+.save_third_ctx:
+    mov [cs:saved_psp3], bx
+    mov [cs:saved_ss3], ss
+    mov [cs:saved_sp3], sp
+    mov [cs:saved_ds3], ax
+    mov [cs:saved_es3], dx
     jmp .ctx_saved
 
 .save_primary_ctx:
@@ -1437,15 +1874,23 @@ int21_exec_run_mz:
     sti
     call far [cs:mz_entry_off]
 
+.after_call:
     cli
     mov ax, cs
     mov ds, ax
     ; restore SS:SP from appropriate slot
+    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    je .restore_third_ss
     cmp word [cs:current_load_seg], MZ2_LOAD_SEG
     jne .restore_primary_ss
     mov ax, [cs:saved_ss2]
     mov ss, ax
     mov sp, [cs:saved_sp2]
+    jmp .done_ss_restore
+.restore_third_ss:
+    mov ax, [cs:saved_ss3]
+    mov ss, ax
+    mov sp, [cs:saved_sp3]
     jmp .done_ss_restore
 .restore_primary_ss:
     mov ax, [cs:saved_ss]
@@ -1453,6 +1898,8 @@ int21_exec_run_mz:
     mov sp, [cs:saved_sp]
 .done_ss_restore:
     sti
+    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    je .restore_third_ctx
     cmp word [cs:current_load_seg], MZ2_LOAD_SEG
     jne .restore_primary_ctx
     mov ax, [cs:saved_psp2]
@@ -1460,6 +1907,16 @@ int21_exec_run_mz:
     mov ax, [cs:saved_ds2]
     mov ds, ax
     mov ax, [cs:saved_es2]
+    mov es, ax
+    clc
+    jmp .done
+
+.restore_third_ctx:
+    mov ax, [cs:saved_psp3]
+    mov [cs:current_psp_seg], ax
+    mov ax, [cs:saved_ds3]
+    mov ds, ax
+    mov ax, [cs:saved_es3]
     mov es, ax
     clc
     jmp .done
@@ -1482,6 +1939,9 @@ int21_exec_run_mz:
     pop es
     ret
 
+int21_mz_terminate_trampoline:
+    jmp int21_exec_run_mz.after_call
+
 int21_set_dta:
     mov ax, ds
     mov [cs:dta_seg], ax
@@ -1493,6 +1953,25 @@ int21_set_dta:
 int21_get_default_drive:
     xor ah, ah
     mov al, [cs:dos_default_drive]
+    clc
+    ret
+
+int21_code_page:
+    cmp al, 0x01
+    je .get
+    cmp al, 0x02
+    je .set
+    mov ax, 0x0001
+    stc
+    ret
+.get:
+    mov bx, 437
+    mov dx, 437
+    xor ax, ax
+    clc
+    ret
+.set:
+    xor ax, ax
     clc
     ret
 
@@ -1528,7 +2007,7 @@ int21_get_date:
 int21_get_time:
     push ax
     push bx
-    push dx
+    push si
 
     mov ah, 0x00
     int 0x1A                    ; CX:DX = ticks since midnight
@@ -1543,7 +2022,7 @@ int21_get_time:
     xor dx, dx
     mov bx, 60
     div bx                      ; AX = total minutes, DX = seconds
-    mov dh, dl
+    mov si, dx                  ; save seconds for DH
 
     xor dx, dx
     mov bx, 60
@@ -1558,8 +2037,26 @@ int21_get_time:
     mov bx, 18
     div bx                      ; AX = hundredths (0..99)
     mov dl, al
+    mov ax, si
+    mov dh, al
 
-    pop dx
+    ; GEM's startup calibrates busy-wait delays from DL.  A BIOS tick only
+    ; changes every ~55 ms, so expose a monotonically advancing centisecond
+    ; value to keep DOS clients from spinning in calibration loops.
+    mov al, [cs:dos_time_centis]
+    add al, 7
+    cmp al, 100
+    jb .centis_ready
+    sub al, 100
+.centis_ready:
+    or al, al
+    jnz .centis_nonzero
+    inc al
+.centis_nonzero:
+    mov [cs:dos_time_centis], al
+    mov dl, al
+
+    pop si
     pop bx
     pop ax
     clc
@@ -1657,7 +2154,6 @@ int21_set_vector:
     ; Keep DOS core stable: ignore attempts to replace INT 21h.
     cmp al, 0x21
     je .ok
-
     xor ah, ah
     mov bx, ax
     shl bx, 1
@@ -1667,6 +2163,7 @@ int21_set_vector:
     mov [es:bx], dx
     mov ax, ds
     mov [es:bx + 2], ax
+    jmp .ok
 
 .ok:
     xor ax, ax
@@ -1838,6 +2335,7 @@ int21_chdir:
     mov si, dx
     mov byte [cs:tmp_cwd_comp], 0
     mov byte [cs:tmp_cwd_build], 0
+    mov byte [cs:tmp_path_guard], 160
 
     mov al, [si]
     cmp al, 0
@@ -1859,6 +2357,8 @@ int21_chdir:
     push si
     xor bx, bx
 .fast_copy_check:
+    dec byte [cs:tmp_path_guard]
+    jz .fast_component_abort
     mov al, [si]
     cmp al, 0
     je .fast_component_done
@@ -1960,6 +2460,8 @@ int21_chdir:
     inc si
 
 .parse_components:
+    dec byte [cs:tmp_path_guard]
+    jz .fail
     mov al, [si]
     cmp al, 0
     je .commit
@@ -1970,6 +2472,8 @@ int21_chdir:
 
     xor bx, bx
 .comp_copy:
+    dec byte [cs:tmp_path_guard]
+    jz .fail
     mov al, [si]
     cmp al, 0
     je .comp_done
@@ -2220,9 +2724,13 @@ int21_find_first:
     mov si, dx
     call int21_path_to_fat_pattern
     jc .path_fail
+    mov al, 'p'
+    call serial_putc
 
     call int21_find_try_gem_special
     jnc .done_ok
+    mov al, 'g'
+    call serial_putc
 
 .scan_generic:
 
@@ -2234,6 +2742,7 @@ int21_find_first:
     jc .io_fail
 
 .done_ok:
+    call int21_patch_gem_desktop_tree
     xor ax, ax
     clc
     jmp .done
@@ -2244,6 +2753,7 @@ int21_find_first:
     jmp .done
 
 .scan_fail:
+    call int21_trace_find_pattern_fail
     stc
     jmp .done
 
@@ -2264,6 +2774,7 @@ int21_find_next:
     cmp byte [cs:find_special_mode], 1
     jne .check_active
     mov byte [cs:find_special_mode], 0
+    mov byte [cs:find_active], 0
     xor ax, ax
     clc
     ret
@@ -2292,6 +2803,46 @@ int21_find_next:
 .io_fail:
     mov ax, 0x0005
     stc
+    ret
+
+int21_patch_gem_desktop_tree:
+    push ax
+    push bx
+    push ds
+    push es
+
+    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    jne .done
+    mov ax, [cs:int21_caller_ds]
+    cmp ax, 0x4000
+    jb .done
+    cmp ax, 0x5000
+    jae .done
+
+    mov bx, [cs:dos_mem_alloc_seg]
+    cmp bx, DOS_HEAP_USER_SEG
+    jb .done
+    mov es, bx
+    cmp word [es:0x0022], 0x1DCC
+    jne .done
+
+    mov ax, [es:0x0012]
+    cmp ax, 0x1DCC
+    jae .done
+    mov bx, ax
+    mov ax, [es:bx + 8]
+
+    mov ds, [cs:int21_caller_ds]
+    mov [ds:0x0A8C], ax
+    mov ax, [es:bx + 10]
+    add ax, [cs:dos_mem_alloc_seg]
+    mov [ds:0x0A8E], ax
+
+.done:
+    pop es
+    pop ds
+    pop bx
+    pop ax
     ret
 
 int21_find_try_gem_special:
@@ -2372,6 +2923,8 @@ int21_find_scan_from_cursor:
     push di
     push ds
     push es
+    mov al, 's'
+    call serial_putc
 
     mov ax, cs
     mov ds, ax
@@ -2396,8 +2949,14 @@ int21_find_scan_from_cursor:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_lba]
+    push ax
+    mov al, '.'
+    call serial_putc
+    pop ax
+    push bx
     xor bx, bx
     call read_sector_lba
+    pop bx
     jc .io_fail
 
 .sector_ready:
@@ -2461,6 +3020,8 @@ int21_find_scan_from_cursor:
     jmp .scan_loop
 
 .not_found:
+    mov al, 'q'
+    call serial_putc
     mov byte [cs:find_active], 0
     mov ax, 0x0012
     stc
@@ -2805,12 +3366,17 @@ int21_open:
     push si
     push ds
     push es
+    push ax
+    mov al, 'O'
+    call serial_putc
+    pop ax
 
     ; AH=3Dh: AL carries access in bits 0..2 plus sharing/inherit flags.
     ; Accept higher bits and validate only access mode.
     and al, 0x03
     cmp al, 0x03
     je .access_denied
+    mov [cs:tmp_open_mode], al
 
     cmp byte [cs:file_handle_open], 0
     je .target_slot1
@@ -2848,7 +3414,10 @@ int21_open:
 %if FAT_TYPE == 16
     mov si, dx
     call int21_resolve_and_find_path
+    jnc .path_ready
+    call int21_open_try_gem_cpi_fallback
     jc .done
+.path_ready:
 %else
     mov si, dx
     call int21_path_to_fat_name
@@ -2897,6 +3466,7 @@ int21_open:
 
     mov byte [cs:file_handle_open], 1
     mov word [cs:file_handle_pos], 0
+    mov al, [cs:tmp_open_mode]
     mov [cs:file_handle_mode], al
     mov ax, [cs:search_found_cluster]
     mov [cs:file_handle_start_cluster], ax
@@ -2922,6 +3492,7 @@ int21_open:
 .assign_slot2:
     mov byte [cs:file_handle2_open], 1
     mov word [cs:file_handle2_pos], 0
+    mov al, [cs:tmp_open_mode]
     mov [cs:file_handle2_mode], al
     mov ax, [cs:search_found_cluster]
     mov [cs:file_handle2_start_cluster], ax
@@ -2947,6 +3518,7 @@ int21_open:
 .assign_slot3:
     mov byte [cs:file_handle3_open], 1
     mov word [cs:file_handle3_pos], 0
+    mov al, [cs:tmp_open_mode]
     mov [cs:file_handle3_mode], al
     mov ax, [cs:search_found_cluster]
     mov [cs:file_handle3_start_cluster], ax
@@ -2973,6 +3545,7 @@ int21_open:
 .assign_slot4:
     mov byte [cs:file_handle4_open], 1
     mov word [cs:file_handle4_pos], 0
+    mov al, [cs:tmp_open_mode]
     mov [cs:file_handle4_mode], al
     mov ax, [cs:search_found_cluster]
     mov [cs:file_handle4_start_cluster], ax
@@ -3020,8 +3593,43 @@ int21_open:
     pop ds
     pop si
     pop dx
+	pop bx
+	ret
+
+%if FAT_TYPE == 16
+int21_open_try_gem_cpi_fallback:
+    push bx
+    push si
+    push ds
+
+    mov ax, [cs:int21_trace_call_cs]
+    cmp ax, 0x5800
+    jb .fail
+    cmp ax, 0x7000
+    jae .fail
+
+    mov al, 'c'
+    call serial_putc
+    mov ax, cs
+    mov ds, ax
+    mov si, path_gem_cpi_fat
+    xor ax, ax
+    call int21_lookup_in_dir
+    jc .fail
+    xor ax, ax
+    clc
+    jmp .done
+
+.fail:
+    mov ax, 0x0003
+    stc
+
+.done:
+    pop ds
+    pop si
     pop bx
     ret
+%endif
 
 int21_close:
     ; Handles 0-4 are DOS standard handles (stdin/stdout/stderr/aux/prn).
@@ -3091,6 +3699,8 @@ int21_read:
     push di
     push ds
     push es
+    mov al, 'r'
+    call serial_putc
 
     mov byte [cs:file_handle_swapped], 0
 
@@ -3120,7 +3730,7 @@ int21_read:
     cmp byte [cs:file_handle3_open], 1
     jne .bad_handle
     call int21_swap_file_handles3
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 3
     mov bx, 0x0005
     jmp .handle_ready
 
@@ -3129,7 +3739,7 @@ int21_read:
     cmp byte [cs:file_handle4_open], 1
     jne .bad_handle
     call int21_swap_file_handles4
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 4
     mov bx, 0x0005
     jmp .handle_ready
 %endif
@@ -3138,7 +3748,7 @@ int21_read:
     cmp byte [cs:file_handle2_open], 1
     jne .bad_handle
     call int21_swap_file_handles
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 2
     mov bx, 0x0005
 
 .handle_ready:
@@ -3245,19 +3855,43 @@ int21_read:
     jmp .done
 
 .access_denied:
+    mov al, 'a'
+    call serial_putc
     mov ax, 0x0005
     stc
     jmp .done
 
 .io_error:
+    call int21_trace_read_io_error
     mov ax, 0x0005
     stc
 
 .done:
     pushf
-    cmp byte [cs:file_handle_swapped], 1
-    jne .done_noswap
+    push ax
+    mov al, 'd'
+    call serial_putc
+    pop ax
+    mov al, [cs:file_handle_swapped]
+    cmp al, 2
+    je .done_swap2
+    cmp al, 3
+    je .done_swap3
+%if FAT_TYPE == 16
+    cmp al, 4
+    je .done_swap4
+%endif
+    jmp .done_noswap
+.done_swap2:
     call int21_swap_file_handles
+    jmp .done_noswap
+.done_swap3:
+    call int21_swap_file_handles3
+    jmp .done_noswap
+%if FAT_TYPE == 16
+.done_swap4:
+    call int21_swap_file_handles4
+%endif
 .done_noswap:
     popf
     pop es
@@ -3335,7 +3969,7 @@ int21_write:
     cmp byte [cs:file_handle3_open], 1
     jne .bad_handle
     call int21_swap_file_handles3
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 3
     mov bx, 0x0005
     jmp .handle_ready
 
@@ -3344,7 +3978,7 @@ int21_write:
     cmp byte [cs:file_handle4_open], 1
     jne .bad_handle
     call int21_swap_file_handles4
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 4
     mov bx, 0x0005
     jmp .handle_ready
 %endif
@@ -3353,7 +3987,7 @@ int21_write:
     cmp byte [cs:file_handle2_open], 1
     jne .bad_handle
     call int21_swap_file_handles
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 2
     mov bx, 0x0005
 
 .handle_ready:
@@ -3494,9 +4128,26 @@ int21_write:
 
 .done:
     pushf
-    cmp byte [cs:file_handle_swapped], 1
-    jne .done_noswap
+    mov al, [cs:file_handle_swapped]
+    cmp al, 2
+    je .done_swap2
+    cmp al, 3
+    je .done_swap3
+%if FAT_TYPE == 16
+    cmp al, 4
+    je .done_swap4
+%endif
+    jmp .done_noswap
+.done_swap2:
     call int21_swap_file_handles
+    jmp .done_noswap
+.done_swap3:
+    call int21_swap_file_handles3
+    jmp .done_noswap
+%if FAT_TYPE == 16
+.done_swap4:
+    call int21_swap_file_handles4
+%endif
 .done_noswap:
     popf
     pop es
@@ -3656,7 +4307,7 @@ int21_seek:
     cmp byte [cs:file_handle3_open], 1
     jne .bad_handle
     call int21_swap_file_handles3
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 3
     mov bx, 0x0005
     jmp .handle_ready
 
@@ -3665,7 +4316,7 @@ int21_seek:
     cmp byte [cs:file_handle4_open], 1
     jne .bad_handle
     call int21_swap_file_handles4
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 4
     mov bx, 0x0005
     jmp .handle_ready
 %endif
@@ -3674,7 +4325,7 @@ int21_seek:
     cmp byte [cs:file_handle2_open], 1
     jne .bad_handle
     call int21_swap_file_handles
-    mov byte [cs:file_handle_swapped], 1
+    mov byte [cs:file_handle_swapped], 2
     mov bx, 0x0005
 
 .handle_ready:
@@ -3725,9 +4376,26 @@ int21_seek:
 
 .done:
     pushf
-    cmp byte [cs:file_handle_swapped], 1
-    jne .done_noswap
+    mov al, [cs:file_handle_swapped]
+    cmp al, 2
+    je .done_swap2
+    cmp al, 3
+    je .done_swap3
+%if FAT_TYPE == 16
+    cmp al, 4
+    je .done_swap4
+%endif
+    jmp .done_noswap
+.done_swap2:
     call int21_swap_file_handles
+    jmp .done_noswap
+.done_swap3:
+    call int21_swap_file_handles3
+    jmp .done_noswap
+%if FAT_TYPE == 16
+.done_swap4:
+    call int21_swap_file_handles4
+%endif
 .done_noswap:
     popf
     pop cx
@@ -3870,6 +4538,10 @@ int21_mem_init:
     mov word [cs:dos_mem_alloc_size], 0
     mov word [cs:dos_mem_mcb_owner], 0
     mov word [cs:dos_mem_mcb_size], DOS_HEAP_USER_MAX_PARAS
+    mov word [cs:dos_mem_alloc_seg2], 0
+    mov word [cs:dos_mem_alloc_size2], 0
+    mov word [cs:dos_mem_alloc_seg3], 0
+    mov word [cs:dos_mem_alloc_size3], 0
     ; initialise list-of-lists: first word (BX-2) = first MCB segment
     mov word [cs:dos_list_of_lists], DOS_HEAP_BASE_SEG
     ; compatibility mirror for clients reading ES:BX directly
@@ -4074,6 +4746,19 @@ int21_mem_trace_chain:
     call serial_putc
     mov ax, [cs:dos_mem_alloc_size2]
     call print_hex16_serial
+    mov al, ' '
+    call serial_putc
+
+    mov al, '3'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    mov ax, [cs:dos_mem_alloc_seg3]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:dos_mem_alloc_size3]
+    call print_hex16_serial
 
     mov al, 13
     call serial_putc
@@ -4189,6 +4874,32 @@ int21_trace_lookup_found:
     pop ax
     ret
 
+int21_trace_find_pattern_fail:
+    push ax
+    push bx
+
+    mov al, 'Q'
+    call serial_putc
+    mov al, '='
+    call serial_putc
+    xor bx, bx
+.pattern_loop:
+    cmp bx, 11
+    jae .done
+    mov al, [cs:find_pattern + bx]
+    call serial_putc
+    inc bx
+    jmp .pattern_loop
+.done:
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+
+    pop bx
+    pop ax
+    ret
+
 int21_trace_lookup_miss:
     push ax
     push bx
@@ -4247,15 +4958,136 @@ int21_trace_cwd_commit:
     pop ax
     ret
 
+int21_trace_call:
+    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    je .trace_enabled
+    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    jne .done
+.trace_enabled:
+    cmp byte [cs:int21_last_ah], 0x2C
+    je .done
+    cmp byte [cs:int21_last_ah], 0x3F
+    je .done
+    cmp byte [cs:int21_last_ah], 0x42
+    je .done
+    cmp byte [cs:int21_trace_call_count], 240
+    jae .done
+    inc byte [cs:int21_trace_call_count]
+
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov al, 'H'
+    call serial_putc
+    mov al, [cs:int21_last_ah]
+    call print_hex8_serial
+    mov al, '@'
+    call serial_putc
+    mov ax, [cs:int21_trace_call_cs]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [cs:int21_trace_call_ip]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, dx
+    call print_hex16_serial
+    mov al, ';'
+    call serial_putc
+    mov ax, [cs:int21_trace_call_ss]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [cs:int21_trace_call_stk0]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [cs:int21_trace_call_stk1]
+    call print_hex16_serial
+    mov al, ','
+    call serial_putc
+    mov ax, [cs:int21_trace_call_stk2]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.done:
+    ret
+
+int21_trace_read_io_error:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov al, 'I'
+    call serial_putc
+    mov ax, [cs:file_handle_pos]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:file_handle_start_cluster]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:tmp_cluster]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:tmp_lba]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:tmp_rw_remaining]
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    xor ax, ax
+    mov al, [cs:tmp_disk_status]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 int21_alloc:
     call int21_mem_init
     call int21_mem_query_free
 
-    ; Compatibility: some DOS programs use BX=FFFF as "allocate maximum".
-    ; Normalize request to the currently available largest block.
+    ; DOS callers use BX=FFFFh to query the largest available block.
     cmp bx, 0xFFFF
     jne .req_ready
     mov bx, cx
+    mov ax, 0x0008
+    stc
+    ret
 
 .req_ready:
 
@@ -4276,6 +5108,21 @@ int21_alloc:
     call int21_mem_write_mcb
     mov al, 'M'
     call int21_psp_mcb_update_type
+    mov dx, [cs:dos_mem_alloc_seg]
+    add dx, [cs:dos_mem_alloc_size]
+    cmp word [cs:dos_mem_psp_free_seg], 0
+    je .first_return
+    cmp [cs:dos_mem_psp_free_seg], dx
+    jae .first_return
+    mov [cs:dos_mem_psp_free_seg], dx
+    mov ax, DOS_HEAP_LIMIT_SEG
+    sub ax, dx
+    jnc .first_free_size_ready
+    xor ax, ax
+.first_free_size_ready:
+    mov [cs:dos_mem_psp_free_size], ax
+.first_return:
+    mov ax, [cs:dos_mem_alloc_seg]
     clc
     ret
 
@@ -4355,11 +5202,13 @@ int21_alloc:
 .no_memory_b2:
 .both_busy:
     mov si, bx
+    cmp word [cs:dos_mem_alloc_size3], 0
+    jne .alloc_bump_from_psp
     cmp word [cs:dos_mem_psp_free_size], 0
     je .both_busy_refresh
     cmp bx, [cs:dos_mem_psp_free_size]
     ja .both_busy_fail
-    jmp .alloc_slot2_from_psp
+    jmp .alloc_slot3_from_psp
 
 .both_busy_refresh:
     push es
@@ -4370,6 +5219,10 @@ int21_alloc:
     mov ax, [es:0x0002]
     cmp ax, DOS_HEAP_LIMIT_SEG
     jae .both_busy_refresh_done
+    cmp ax, DOS_HEAP_USER_SEG
+    jae .both_busy_base_ready
+    mov ax, DOS_HEAP_USER_SEG
+.both_busy_base_ready:
     mov [cs:dos_mem_psp_free_seg], ax
     mov dx, DOS_HEAP_LIMIT_SEG
     sub dx, ax
@@ -4380,7 +5233,92 @@ int21_alloc:
     je .both_busy_fail
     cmp bx, [cs:dos_mem_psp_free_size]
     ja .both_busy_fail
-    jmp .alloc_slot2_from_psp
+    jmp .alloc_slot3_from_psp
+
+.alloc_slot3_from_psp:
+    mov ax, [cs:dos_mem_psp_free_seg]
+    mov [cs:dos_mem_alloc_seg3], ax
+    mov [cs:dos_mem_alloc_size3], bx
+    add word [cs:dos_mem_psp_free_seg], bx
+    sub word [cs:dos_mem_psp_free_size], bx
+
+    push es
+    push ax
+    push bx
+    dec ax
+    mov es, ax
+    mov byte [es:0x0000], 'Z'
+    pop bx
+    pop ax
+    call int21_mem_current_owner
+    mov [es:0x0001], ax
+    mov [es:0x0003], bx
+    pop es
+    call int21_mem_trace_chain
+    mov ax, [cs:dos_mem_alloc_seg3]
+    clc
+    ret
+
+.alloc_bump_from_psp:
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .both_busy_refresh_bump
+.alloc_bump_check:
+    cmp bx, [cs:dos_mem_psp_free_size]
+    ja .both_busy_fail
+    mov ax, [cs:dos_mem_psp_free_seg]
+    mov dx, ax
+    add dx, bx
+    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    je .bump_limit_high
+    cmp dx, MZ3_LOAD_SEG
+    ja .both_busy_fail
+    jmp .bump_limit_ready
+.bump_limit_high:
+    cmp dx, DOS_HEAP_LIMIT_SEG
+    ja .both_busy_fail
+.bump_limit_ready:
+    mov [cs:dos_mem_psp_free_seg], dx
+    sub [cs:dos_mem_psp_free_size], bx
+
+    push es
+    push ax
+    push bx
+    dec ax
+    mov es, ax
+    mov byte [es:0x0000], 'Z'
+    pop bx
+    pop ax
+    call int21_mem_current_owner
+    mov [es:0x0001], ax
+    mov [es:0x0003], bx
+    pop es
+    mov ax, [cs:dos_mem_psp_free_seg]
+    sub ax, bx
+    clc
+    ret
+
+.both_busy_refresh_bump:
+    push es
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jz .both_busy_refresh_bump_done
+    mov es, ax
+    mov ax, [es:0x0002]
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jae .both_busy_refresh_bump_done
+    cmp ax, DOS_HEAP_USER_SEG
+    jae .bump_base_ready
+    mov ax, DOS_HEAP_USER_SEG
+.bump_base_ready:
+    mov [cs:dos_mem_psp_free_seg], ax
+    mov dx, DOS_HEAP_LIMIT_SEG
+    sub dx, ax
+    mov [cs:dos_mem_psp_free_size], dx
+.both_busy_refresh_bump_done:
+    pop es
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .both_busy_fail
+    jmp .alloc_bump_check
 
 .both_busy_fail:
     call int21_mem_largest_global
@@ -4409,7 +5347,7 @@ int21_free:
     je .free_block1
     ; check block 2
     cmp ax, [cs:dos_mem_alloc_seg2]
-    jne .invalid
+    jne .check_block3
     mov word [cs:dos_mem_alloc_seg2], 0
     mov word [cs:dos_mem_alloc_size2], 0
     ; restore block1 MCB type to 'Z' (now last block)
@@ -4421,6 +5359,15 @@ int21_free:
     pop es
     mov al, 'M'
     call int21_psp_mcb_update_type
+    call int21_mem_trace_chain
+    xor ax, ax
+    clc
+    ret
+.check_block3:
+    cmp ax, [cs:dos_mem_alloc_seg3]
+    jne .invalid
+    mov word [cs:dos_mem_alloc_seg3], 0
+    mov word [cs:dos_mem_alloc_size3], 0
     call int21_mem_trace_chain
     xor ax, ax
     clc
@@ -4460,6 +5407,35 @@ int21_free:
     ret
 
 .invalid:
+    mov ax, es
+    cmp ax, DOS_HEAP_USER_SEG
+    jb .invalid_real
+    cmp ax, MZ3_LOAD_SEG
+    jae .invalid_real
+    push bx
+    push cx
+    push dx
+    push es
+    dec ax
+    mov es, ax
+    mov cx, [es:0x0003]
+    pop es
+    mov dx, es
+    add dx, cx
+    cmp dx, [cs:dos_mem_psp_free_seg]
+    jne .bump_free_done
+    mov ax, es
+    mov [cs:dos_mem_psp_free_seg], ax
+    add [cs:dos_mem_psp_free_size], cx
+.bump_free_done:
+    pop dx
+    pop cx
+    pop bx
+    xor ax, ax
+    clc
+    ret
+
+.invalid_real:
     mov ax, 0x0009
     stc
     ret
@@ -4472,6 +5448,7 @@ int21_free:
 int21_resize:
     call int21_mem_init
 
+.resize_entry:
     mov ax, es
     cmp ax, [cs:current_psp_seg]
     jne .check_heap_block
@@ -4499,14 +5476,19 @@ int21_resize:
     push bx
     mov bx, [es:0x0002]
 
-    ; expose tail from current PSP end up to DOS heap limit as AH=48 source
-    mov [cs:dos_mem_psp_free_seg], dx
-    mov si, DOS_HEAP_LIMIT_SEG
-    sub si, dx
+    ; expose only the safe DOS heap tail; lower segments hold stage1 buffers.
+    mov si, dx
+    cmp si, DOS_HEAP_USER_SEG
+    jae .psp_tail_base_ready
+    mov si, DOS_HEAP_USER_SEG
+.psp_tail_base_ready:
+    mov [cs:dos_mem_psp_free_seg], si
+    mov ax, DOS_HEAP_LIMIT_SEG
+    sub ax, si
     jnc .psp_tail_done
-    xor si, si
+    xor ax, ax
 .psp_tail_done:
-    mov [cs:dos_mem_psp_free_size], si
+    mov [cs:dos_mem_psp_free_size], ax
     pop bx
     pop ax
     mov [es:0x0002], dx
@@ -4545,6 +5527,34 @@ int21_resize:
     je .resize_block1
     ; check block2
     cmp ax, [cs:dos_mem_alloc_seg2]
+    jne .check_block3_resize
+    cmp bx, 0
+    je .no_memory
+    mov dx, DOS_HEAP_LIMIT_SEG
+    cmp word [cs:dos_mem_alloc_size3], 0
+    je .block2_have_limit
+    mov dx, [cs:dos_mem_alloc_seg3]
+.block2_have_limit:
+    sub dx, ax
+    cmp bx, dx
+    ja .block2_no_memory
+    mov [cs:dos_mem_alloc_size2], bx
+    push es
+    push ax
+    dec ax
+    mov es, ax
+    call int21_mem_current_owner
+    mov [es:0x0001], ax
+    mov [es:0x0003], bx
+    pop ax
+    pop es
+    call int21_mem_trace_chain
+    xor dx, dx
+    mov ax, es
+    clc
+    ret
+.check_block3_resize:
+    cmp ax, [cs:dos_mem_alloc_seg3]
     jne .invalid
     cmp bx, 0
     je .no_memory
@@ -4552,7 +5562,7 @@ int21_resize:
     sub dx, ax
     cmp bx, dx
     ja .block2_no_memory
-    mov [cs:dos_mem_alloc_size2], bx
+    mov [cs:dos_mem_alloc_size3], bx
     push es
     push ax
     dec ax
@@ -4590,6 +5600,27 @@ int21_resize:
     ret
 
 .invalid:
+    mov ax, es
+    mov dx, [cs:current_psp_seg]
+    cmp dx, 0
+    je .invalid_check_high
+    cmp ax, dx
+    jb .invalid_check_high
+    cmp ax, DOS_HEAP_USER_SEG
+    jae .invalid_check_high
+    mov es, dx
+    jmp .resize_entry
+
+.invalid_check_high:
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jb .invalid_real
+    mov ax, dx
+    cmp ax, 0
+    je .invalid_real
+    mov es, ax
+    jmp .resize_entry
+
+.invalid_real:
     mov ax, 0x0009
     stc
     ret
@@ -6490,6 +7521,7 @@ read_sector_lba:
 %if FAT_TYPE == 16
     push ds
     add ax, FAT_LBA_OFFSET
+    mov [cs:tmp_disk_lba_save], ax
     mov [cs:disk_packet_lba], ax
     mov [cs:disk_packet_lba + 2], word 0
     mov [cs:disk_packet_lba + 4], word 0
@@ -6501,7 +7533,15 @@ read_sector_lba:
     mov si, disk_packet
     mov dl, [cs:boot_drive]
     mov ah, 0x42
+    sti
     int 0x13
+    jnc .edd_read_done
+    mov ax, [cs:disk_packet_seg]
+    mov es, ax
+    mov bx, [cs:disk_packet_off]
+    mov ax, [cs:tmp_disk_lba_save]
+    call bios_read_chs_sector
+.edd_read_done:
     pop ds
     jmp .done
 %endif
@@ -6530,9 +7570,11 @@ read_sector_lba:
 
     mov ah, 0x02
     mov al, 0x01
+    sti
     int 0x13
 
 .done:
+    mov [cs:tmp_disk_status], ah
     pop si
     pop dx
     pop cx
@@ -6548,6 +7590,7 @@ write_sector_lba:
 %if FAT_TYPE == 16
     push ds
     add ax, FAT_LBA_OFFSET
+    mov [cs:tmp_disk_lba_save], ax
     mov [cs:disk_packet_lba], ax
     mov [cs:disk_packet_lba + 2], word 0
     mov [cs:disk_packet_lba + 4], word 0
@@ -6560,7 +7603,15 @@ write_sector_lba:
     mov dl, [cs:boot_drive]
     mov ah, 0x43
     mov al, 0x00
+    sti
     int 0x13
+    jnc .edd_write_done
+    mov ax, [cs:disk_packet_seg]
+    mov es, ax
+    mov bx, [cs:disk_packet_off]
+    mov ax, [cs:tmp_disk_lba_save]
+    call bios_write_chs_sector
+.edd_write_done:
     pop ds
     jmp .done
 %endif
@@ -6589,13 +7640,55 @@ write_sector_lba:
 
     mov ah, 0x03
     mov al, 0x01
+    sti
     int 0x13
 
 .done:
+    mov [cs:tmp_disk_status], ah
     pop si
     pop dx
     pop cx
     pop bx
+    ret
+
+bios_read_chs_sector:
+    mov si, bx
+    xor dx, dx
+    mov cx, FAT_SPT
+    div cx
+    mov cl, dl
+    inc cl
+    xor dx, dx
+    mov bx, FAT_HEADS
+    div bx
+    mov ch, al
+    mov dh, dl
+    mov bx, si
+    mov dl, [cs:boot_drive]
+    mov ah, 0x02
+    mov al, 0x01
+    sti
+    int 0x13
+    ret
+
+bios_write_chs_sector:
+    mov si, bx
+    xor dx, dx
+    mov cx, FAT_SPT
+    div cx
+    mov cl, dl
+    inc cl
+    xor dx, dx
+    mov bx, FAT_HEADS
+    div bx
+    mov ch, al
+    mov dh, dl
+    mov bx, si
+    mov dl, [cs:boot_drive]
+    mov ah, 0x03
+    mov al, 0x01
+    sti
+    int 0x13
     ret
 
 dispatch_command:
@@ -7627,7 +8720,7 @@ init_mouse:
     int 0x33
     cmp ax, 0xFFFF
     jne .no_mouse
-    mov byte [mouse_installed], 1
+    mov byte [cs:mouse_installed], 1
     mov ax, 0x0001
     int 0x33
     mov si, msg_mouse_enabled
@@ -7637,7 +8730,7 @@ init_mouse:
     ret
 
 .no_mouse:
-    mov byte [mouse_installed], 0
+    mov byte [cs:mouse_installed], 0
     mov si, msg_mouse_not_found
     call print_string_serial
     pop bx
@@ -7687,6 +8780,73 @@ init_vbe_query:
     call print_string_serial
     ret
 
+int_ef_handler:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp byte [cs:int_ef_trace_count], 64
+    jae .trace_done
+    inc byte [cs:int_ef_trace_count]
+    mov al, 'J'
+    call serial_putc
+    mov ax, cx
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, dx
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    mov al, '/'
+    call serial_putc
+    mov ax, [cs:int_ef_target_seg]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [cs:int_ef_target_off]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+.trace_done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+
+    cmp word [cs:int_ef_target_seg], 0
+    je .no_target
+    pushf
+    call far [cs:int_ef_target_off]
+    pushf
+    push ax
+    cmp byte [cs:int_ef_return_trace_count], 64
+    jae .return_trace_done
+    inc byte [cs:int_ef_return_trace_count]
+    mov al, 'j'
+    call serial_putc
+    mov ax, [cs:int_ef_target_seg]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [cs:int_ef_target_off]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+.return_trace_done:
+    pop ax
+    popf
+    iret
+
+.no_target:
+    iret
+
 install_int33_vector:
     push ax
     push bx
@@ -7702,13 +8862,180 @@ install_int33_vector:
     pop ax
     ret
 
+int10_handler:
+    cmp ah, 0x0F
+    je .get_mode
+    cmp ah, 0x00
+    je .set_mode
+    jmp far [cs:old_int10_off]
+
+.set_mode:
+    mov [cs:current_video_mode], al
+    push ax
+    mov al, 'M'
+    call serial_putc
+    pop ax
+    jmp far [cs:old_int10_off]
+
+.get_mode:
+    mov al, 'V'
+    call serial_putc
+    mov al, [cs:current_video_mode]
+    mov ah, 80
+    cmp al, 0x13
+    jne .mode_ready
+    mov ah, 40
+.mode_ready:
+    xor bh, bh
+    iret
+
+int16_handler:
+    cmp byte [cs:int16_trace_count], 64
+    jae .trace_done
+    mov [cs:int16_trace_ax], ax
+    push ax
+    push bx
+    push cx
+    push dx
+    inc byte [cs:int16_trace_count]
+    mov al, 'K'
+    call serial_putc
+    mov ax, [cs:int16_trace_ax]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.trace_done:
+    cmp ah, 0x00
+    je .read_key
+    cmp ah, 0x10
+    je .read_key
+    cmp ah, 0x01
+    je .status
+    cmp ah, 0x11
+    je .status
+    cmp ah, 0x02
+    je .shift_status
+    cmp ah, 0x12
+    je .shift_status
+.chain:
+    jmp far [cs:old_int16_off]
+
+.status:
+    pushf
+    call far [cs:old_int16_off]
+    jz .status_no_real_key
+    push bp
+    mov bp, sp
+    and word [ss:bp + 6], 0xFFBF
+    pop bp
+    iret
+
+.status_no_real_key:
+    cmp byte [cs:int16_synth_pending], 0
+    jne .status_synth_key
+    cmp byte [cs:int16_synth_used], 0
+    jne .status_no_key
+    inc byte [cs:int16_status_polls]
+    cmp byte [cs:int16_status_polls], 24
+    jb .status_no_key
+    mov byte [cs:int16_synth_pending], 1
+
+.status_synth_key:
+    mov ax, 0x1C0D
+    push bp
+    mov bp, sp
+    and word [ss:bp + 6], 0xFFBF
+    pop bp
+    iret
+
+.status_no_key:
+    push bp
+    mov bp, sp
+    xor ax, ax
+    or word [ss:bp + 6], 0x0040
+    pop bp
+    iret
+
+.shift_status:
+    jmp far [cs:old_int16_off]
+
+.read_key:
+    cmp byte [cs:int16_synth_pending], 0
+    je .read_real_or_default
+    mov byte [cs:int16_synth_pending], 0
+    mov byte [cs:int16_synth_used], 1
+    mov ax, 0x1C0D
+    iret
+
+.read_real_or_default:
+    mov [cs:int16_read_ah], ah
+    cmp ah, 0x10
+    je .read_check_enhanced
+    mov ah, 0x01
+    jmp .read_check
+.read_check_enhanced:
+    mov ah, 0x11
+.read_check:
+    pushf
+    call far [cs:old_int16_off]
+    jz .read_default
+    mov ah, [cs:int16_read_ah]
+    pushf
+    call far [cs:old_int16_off]
+    iret
+
+.read_default:
+    mov ax, 0x011B
+    iret
+
 int33_handler:
+    cmp byte [cs:int33_trace_count], 96
+    jae .trace_done
+    mov [cs:int33_trace_ax], ax
+    push ax
+    push bx
+    push cx
+    push dx
+    inc byte [cs:int33_trace_count]
+    mov al, 'm'
+    call serial_putc
+    mov ax, [cs:int33_trace_ax]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.trace_done:
     cmp ax, 0x0000
     je .reset
+    cmp ax, 0x0001
+    je .show
+    cmp ax, 0x0002
+    je .hide
     cmp ax, 0x0003
     je .status
     cmp ax, 0x0004
     je .set_pos
+    cmp ax, 0x0007
+    je .set_x_range
+    cmp ax, 0x0008
+    je .set_y_range
+    cmp ax, 0x000B
+    je .motion
+    cmp ax, 0x000C
+    je .set_callback
+    cmp ax, 0x000F
+    je .set_mickey_ratio
     cmp ax, 0x0024
     je .version
 
@@ -7721,18 +9048,33 @@ int33_handler:
 .reset:
     mov ax, 0xFFFF
     mov bx, 0x0002
-    mov byte [mouse_installed], 1
-    mov word [mouse_pos_x], 160
-    mov word [mouse_pos_y], 100
+    mov byte [cs:mouse_installed], 1
+    mov word [cs:mouse_pos_x], 160
+    mov word [cs:mouse_pos_y], 100
+    mov word [cs:mouse_min_x], 0
+    mov word [cs:mouse_max_x], 319
+    mov word [cs:mouse_min_y], 0
+    mov word [cs:mouse_max_y], 199
+    mov byte [cs:mouse_visible], 0
+    iret
+
+.show:
+    mov byte [cs:mouse_visible], 1
+    xor ax, ax
+    iret
+
+.hide:
+    mov byte [cs:mouse_visible], 0
+    xor ax, ax
     iret
 
 .status:
-    cmp byte [mouse_installed], 1
+    cmp byte [cs:mouse_installed], 1
     jne .status_not_installed
     xor bh, bh
-    mov bl, [mouse_buttons]
-    mov cx, [mouse_pos_x]
-    mov dx, [mouse_pos_y]
+    mov bl, [cs:mouse_buttons]
+    mov cx, [cs:mouse_pos_x]
+    mov dx, [cs:mouse_pos_y]
     iret
 .status_not_installed:
     xor bx, bx
@@ -7741,16 +9083,70 @@ int33_handler:
     iret
 
 .set_pos:
-    cmp cx, 319
+    cmp cx, [cs:mouse_min_x]
+    jae .x_min_ok
+    mov cx, [cs:mouse_min_x]
+.x_min_ok:
+    cmp cx, [cs:mouse_max_x]
     jbe .x_ok
-    mov cx, 319
+    mov cx, [cs:mouse_max_x]
 .x_ok:
-    cmp dx, 199
+    cmp dx, [cs:mouse_min_y]
+    jae .y_min_ok
+    mov dx, [cs:mouse_min_y]
+.y_min_ok:
+    cmp dx, [cs:mouse_max_y]
     jbe .y_ok
-    mov dx, 199
+    mov dx, [cs:mouse_max_y]
 .y_ok:
-    mov [mouse_pos_x], cx
-    mov [mouse_pos_y], dx
+    mov [cs:mouse_pos_x], cx
+    mov [cs:mouse_pos_y], dx
+    xor ax, ax
+    iret
+
+.set_x_range:
+    mov [cs:mouse_min_x], cx
+    mov [cs:mouse_max_x], dx
+    cmp [cs:mouse_pos_x], cx
+    jae .x_range_min_ok
+    mov [cs:mouse_pos_x], cx
+.x_range_min_ok:
+    cmp [cs:mouse_pos_x], dx
+    jbe .x_range_done
+    mov [cs:mouse_pos_x], dx
+.x_range_done:
+    xor ax, ax
+    iret
+
+.set_y_range:
+    mov [cs:mouse_min_y], cx
+    mov [cs:mouse_max_y], dx
+    cmp [cs:mouse_pos_y], cx
+    jae .y_range_min_ok
+    mov [cs:mouse_pos_y], cx
+.y_range_min_ok:
+    cmp [cs:mouse_pos_y], dx
+    jbe .y_range_done
+    mov [cs:mouse_pos_y], dx
+.y_range_done:
+    xor ax, ax
+    iret
+
+.motion:
+    xor cx, cx
+    xor dx, dx
+    iret
+
+.set_callback:
+    mov [cs:mouse_cb_mask], cx
+    mov [cs:mouse_cb_off], dx
+    mov [cs:mouse_cb_seg], es
+    xor ax, ax
+    iret
+
+.set_mickey_ratio:
+    mov [cs:mouse_mickey_x], cx
+    mov [cs:mouse_mickey_y], dx
     xor ax, ax
     iret
 
@@ -7776,11 +9172,27 @@ int2f_handler:
 boot_drive db 0
 int21_installed db 0
 int21_carry db 0
+int21_caller_ds dw 0
 int21_return_es db 0
 int2f_installed db 0
 dos_default_drive db 0
 last_exit_code db 0
 int21_last_ah db 0
+int21_last_al db 0
+int21_error_ax dw 0
+int21_trace48_count db 0
+int21_trace48_ret_count db 0
+int21_trace48_ax dw 0
+int21_trace2c_count db 0
+int21_trace2c_dx dw 0
+int21_trace_call_count db 0
+int21_trace_call_ip dw 0
+int21_trace_call_cs dw 0
+int21_trace_call_ss dw 0
+int21_trace_call_stk0 dw 0
+int21_trace_call_stk1 dw 0
+int21_trace_call_stk2 dw 0
+dos_time_centis db 0
 last_term_type db 0
 int21_force_terminate db 0
 current_psp_seg dw 0
@@ -7792,9 +9204,37 @@ old_int20_off dw 0
 old_int20_seg dw 0
 old_int2f_off dw 0
 old_int2f_seg dw 0
+int_ef_target_off dw 0
+int_ef_target_seg dw 0
+int_ef_trace_count db 0
+int_ef_return_trace_count db 0
+int16_trace_count db 0
+int16_trace_ax dw 0
+int16_status_polls db 0
+int16_synth_pending db 0
+int16_synth_used db 0
+int16_read_ah db 0
+int33_trace_count db 0
+int33_trace_ax dw 0
+old_int10_off dw 0
+old_int10_seg dw 0
+old_int16_off dw 0
+old_int16_seg dw 0
+current_video_mode db 0x03
+mouse_visible db 0
+mouse_min_x dw 0
+mouse_max_x dw 319
+mouse_min_y dw 0
+mouse_max_y dw 199
+mouse_cb_mask dw 0
+mouse_cb_off dw 0
+mouse_cb_seg dw 0
+mouse_mickey_x dw 8
+mouse_mickey_y dw 8
 file_handle_open db 0
 file_handle_pos dw 0
 file_handle_mode db 0
+tmp_open_mode db 0
 file_handle_start_cluster dw 0
 file_handle_root_lba dw 0
 file_handle_root_off dw 0
@@ -7841,6 +9281,8 @@ tmp_user_ptr dw 0
 tmp_rw_remaining dw 0
 tmp_rw_done dw 0
 tmp_chunk dw 0
+tmp_disk_lba_save dw 0
+tmp_disk_status db 0
 tmp_cluster dw 0
 tmp_cluster_off dw 0
 tmp_sector_off dw 0
@@ -7851,6 +9293,13 @@ tmp_exec_limit dw 0
 tmp_exec_total dw 0
 tmp_exec_handle dw 0
 tmp_exec_error dw 0
+tmp_exec_subfn db 0
+tmp_overlay_block_seg dw 0
+tmp_overlay_block_off dw 0
+tmp_overlay_load_seg dw 0
+tmp_overlay_reloc_seg dw 0
+tmp_overlay_header_bytes dw 0
+tmp_overlay_image_size dw 0
 tmp_path_guard db 0
 tmp_ioctl_subfn db 0
 %if FAT_TYPE == 16
@@ -7863,6 +9312,8 @@ dos_mem_psp_free_seg dw 0
 dos_mem_psp_free_size dw 0
 dos_mem_alloc_seg2 dw 0
 dos_mem_alloc_size2 dw 0
+dos_mem_alloc_seg3 dw 0
+dos_mem_alloc_size3 dw 0
 dos_mem_mcb_owner dw 0
 dos_mem_mcb_size dw 0
 dos21_test_seg dw 0
@@ -7877,6 +9328,11 @@ current_load_seg dw MZ_LOAD_SEG
 saved_psp dw 0
 saved_ss2 dw 0
 saved_sp2 dw 0
+saved_psp3 dw 0
+saved_ss3 dw 0
+saved_sp3 dw 0
+saved_ds3 dw 0
+saved_es3 dw 0
 com_entry_off dw 0
 com_entry_seg dw 0
 mz_entry_off dw 0
@@ -7912,8 +9368,10 @@ dos_list_of_lists times 64 db 0
 tmp_cwd_comp times 24 db 0
 tmp_cwd_build times 24 db 0
 dos_env_block db 'COMSPEC=C:\COMMAND.COM', 0
-              db 'PATH=C:\', 0
+              db 'PATH=C:\GEMAPPS\GEMSYS;C:\GEMAPPS;C:\', 0
               db 0
+              dw 1
+              db 'C:\GEMAPPS\GEMSYS\GEMVDI.EXE', 0
 dos_env_block_end:
 disk_packet:
     db 0x10
@@ -8031,6 +9489,7 @@ path_pattern_com db "*.COM", 0
 path_pattern_mz  db "MZDEMO.EXE", 0
 path_sd_driver_fat db "SDPSC9  VGA"
 path_gem_exe_fat   db "GEM     EXE"
+path_gem_cpi_fat   db "GEM     CPI"
 %if FAT_TYPE == 16
 path_gem_exe_abs db "\\GEMAPPS\\GEMSYS\\GEM.EXE", 0
 %endif
