@@ -9014,27 +9014,6 @@ int16_handler:
     jmp far [cs:old_int16_off]
 
 int33_handler:
-    cmp byte [cs:int33_trace_count], 96
-    jae .trace_done
-    mov [cs:int33_trace_ax], ax
-    push ax
-    push bx
-    push cx
-    push dx
-    inc byte [cs:int33_trace_count]
-    mov al, 'm'
-    call serial_putc
-    mov ax, [cs:int33_trace_ax]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.trace_done:
     cmp ax, 0x0000
     je .reset
     cmp ax, 0x0001
@@ -9227,8 +9206,6 @@ int_ef_target_off dw 0
 int_ef_target_seg dw 0
 int_ef_trace_count db 0
 int_ef_return_trace_count db 0
-int33_trace_count db 0
-int33_trace_ax dw 0
 old_int10_off dw 0
 old_int10_seg dw 0
 old_int16_off dw 0
