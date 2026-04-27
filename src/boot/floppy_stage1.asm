@@ -304,6 +304,10 @@ int21_handler:
     pop ax
     call int21_trace_call
 
+    cmp ah, 0x00
+    je .fn_00
+    cmp ah, 0x01
+    je .fn_01
     cmp ah, 0x02
     je .fn_02
     cmp ah, 0x06
@@ -320,6 +324,8 @@ int21_handler:
     je .fn_0b
     cmp ah, 0x0C
     je .fn_0c
+    cmp ah, 0x0D
+    je .fn_0d
     cmp ah, 0x0E
     je .fn_0e
     cmp ah, 0x1A
@@ -328,8 +334,14 @@ int21_handler:
     je .fn_19
     cmp ah, 0x2A
     je .fn_2a
+    cmp ah, 0x2B
+    je .fn_2b
     cmp ah, 0x2C
     je .fn_2c
+    cmp ah, 0x2D
+    je .fn_2d
+    cmp ah, 0x2E
+    je .fn_2e
     cmp ah, 0x25
     je .fn_25
     cmp ah, 0x2F
@@ -346,6 +358,10 @@ int21_handler:
     je .fn_35
     cmp ah, 0x36
     je .fn_36
+    cmp ah, 0x39
+    je .fn_39
+    cmp ah, 0x3A
+    je .fn_3a
     cmp ah, 0x3B
     je .fn_3b
     cmp ah, 0x3C
@@ -364,6 +380,10 @@ int21_handler:
     je .fn_42
     cmp ah, 0x44
     je .fn_44
+    cmp ah, 0x45
+    je .fn_45
+    cmp ah, 0x46
+    je .fn_46
     cmp ah, 0x43
     je .fn_43
     cmp ah, 0x47
@@ -384,16 +404,28 @@ int21_handler:
     je .fn_4c
     cmp ah, 0x4D
     je .fn_4d
+    cmp ah, 0x50
+    je .fn_50
     cmp ah, 0x51
     je .fn_51
     cmp ah, 0x52
     je .fn_52
     cmp ah, 0x54
     je .fn_54
+    cmp ah, 0x57
+    je .fn_57
     cmp ah, 0x58
     je .fn_58
+    cmp ah, 0x59
+    je .fn_59
+    cmp ah, 0x60
+    je .fn_60
     cmp ah, 0x62
     je .fn_62
+    cmp ah, 0x67
+    je .fn_67
+    cmp ah, 0x68
+    je .fn_68
     cmp ah, 0x66
     je .fn_66
     jmp .unsupported
@@ -431,6 +463,17 @@ int21_handler:
 .fn_08:
     mov ah, 0x00
     int 0x16
+    jmp .success
+
+.fn_00:
+    xor al, al
+    jmp .fn_4c
+
+.fn_01:
+    mov ah, 0x00
+    int 0x16
+    call bios_putc
+    call serial_putc
     jmp .success
 
 .fn_09:
@@ -506,6 +549,10 @@ int21_handler:
     xor al, al
     jmp .success
 
+.fn_0d:
+    xor ax, ax
+    jmp .success
+
 .fn_0e:
     call int21_set_default_drive
     jc .error
@@ -524,6 +571,11 @@ int21_handler:
 .fn_2a:
     call int21_get_date
     jc .error
+    jmp .success
+
+.fn_2b:
+    xor al, al
+    xor ah, ah
     jmp .success
 
 .fn_2c:
@@ -633,6 +685,18 @@ int21_handler:
     jc .error
     jmp .success
 
+.fn_2d:
+    xor al, al
+    xor ah, ah
+    jmp .success
+
+.fn_2e:
+    mov al, dl
+    and al, 0x01
+    mov [cs:dos_verify_flag], al
+    xor ah, ah
+    jmp .success
+
 .fn_25:
     call int21_set_vector
     jc .error
@@ -670,6 +734,14 @@ int21_handler:
     call int21_get_free_space
     jc .error
     jmp .success
+
+.fn_39:
+    mov ax, 0x0005
+    jmp .error
+
+.fn_3a:
+    mov ax, 0x0005
+    jmp .error
 
 .fn_3b:
     call int21_chdir
@@ -719,6 +791,29 @@ int21_handler:
     call int21_ioctl
     jc .error
     jmp .success
+
+.fn_45:
+    call int21_is_valid_handle
+    jc .error
+    mov ax, bx
+    jmp .success
+
+.fn_46:
+    call int21_is_valid_handle
+    jc .error
+    push bx
+    mov bx, cx
+    cmp bx, 5
+    jb .fn_46_ok
+    call int21_is_valid_handle
+    jc .fn_46_bad_target
+.fn_46_ok:
+    pop bx
+    mov ax, cx
+    jmp .success
+.fn_46_bad_target:
+    pop bx
+    jmp .error
 
 .fn_43:
     call int21_get_set_attr
@@ -894,6 +989,11 @@ int21_handler:
     mov ah, [cs:last_term_type]
     jmp .success
 
+.fn_50:
+    mov [cs:current_psp_seg], bx
+    xor ax, ax
+    jmp .success
+
 .fn_51:
     call int21_get_psp
     jc .error
@@ -927,14 +1027,144 @@ int21_handler:
     xor ah, ah
     jmp .success
 
+.fn_57:
+    cmp al, 0x00
+    je .fn_57_get
+    cmp al, 0x01
+    je .fn_57_set
+    mov ax, 0x0001
+    jmp .error
+
+.fn_57_get:
+    call int21_is_valid_handle
+    jc .error
+
+    call int21_get_time
+    jc .error
+
+    mov bl, cl
+    mov bh, dh
+    xor ax, ax
+    mov al, ch
+    mov cl, 11
+    shl ax, cl
+    mov cx, ax
+
+    xor ax, ax
+    mov al, bl
+    mov cl, 5
+    shl ax, cl
+    or cx, ax
+
+    xor ax, ax
+    mov al, bh
+    shr al, 1
+    or cx, ax
+
+    call int21_get_date
+    jc .error
+
+    push cx
+    mov ax, cx
+    sub ax, 1980
+    jnc .fn_57_year_ok
+    xor ax, ax
+.fn_57_year_ok:
+    mov cl, 9
+    shl ax, cl
+    mov bx, ax
+
+    xor ax, ax
+    mov al, dh
+    mov cl, 5
+    shl ax, cl
+    or bx, ax
+
+    xor ax, ax
+    mov al, dl
+    or bx, ax
+    mov dx, bx
+    pop cx
+
+    xor ax, ax
+    jmp .success
+
+.fn_57_set:
+    call int21_is_valid_handle
+    jc .error
+    xor ax, ax
+    jmp .success
+
 .fn_58:
     call int21_mem_strategy
     jc .error
     jmp .success
 
+.fn_59:
+    mov ax, [cs:int21_error_ax]
+    xor bx, bx
+    xor ch, ch
+    jmp .success
+
+.fn_60:
+    push bx
+    push cx
+    push si
+    push di
+
+    mov ax, ds
+    or ax, ax
+    jz .fn_60_bad
+    mov ax, es
+    or ax, ax
+    jz .fn_60_bad
+    or si, si
+    jz .fn_60_bad
+    or di, di
+    jz .fn_60_bad
+    mov al, [ds:si]
+    or al, al
+    jz .fn_60_bad
+
+    cld
+    mov cx, 127
+.fn_60_copy:
+    lodsb
+    stosb
+    or al, al
+    jz .fn_60_ok
+    loop .fn_60_copy
+    mov byte [es:di - 1], 0
+
+.fn_60_ok:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    xor ax, ax
+    jmp .success
+
+.fn_60_bad:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    mov ax, 0x0003
+    jmp .error
+
 .fn_62:
     call int21_get_psp
     jc .error
+    jmp .success
+
+.fn_67:
+    xor ax, ax
+    jmp .success
+
+.fn_68:
+    call int21_is_valid_handle
+    jc .error
+    xor ax, ax
     jmp .success
 
 .fn_66:
@@ -4113,6 +4343,81 @@ int21_close:
 .close_noop:
     xor ax, ax
     clc
+    ret
+
+int21_is_valid_handle:
+    cmp bx, 5
+    jb .ok
+    cmp bx, 0x0005
+    je .slot1
+    cmp bx, 0x0006
+    je .slot2
+    cmp bx, 0x0007
+    je .slot3
+%if FAT_TYPE == 16
+    cmp bx, 0x0008
+    je .slot4
+    cmp bx, 0x0009
+    je .slot5
+    cmp bx, 0x000A
+    je .slot6
+    cmp bx, 0x000B
+    je .slot7
+    cmp bx, 0x000C
+    je .slot8
+%endif
+    jmp .bad
+
+.slot1:
+    cmp byte [cs:file_handle_open], 1
+    jne .bad
+    jmp .ok
+
+.slot2:
+    cmp byte [cs:file_handle2_open], 1
+    jne .bad
+    jmp .ok
+
+.slot3:
+    cmp byte [cs:file_handle3_open], 1
+    jne .bad
+    jmp .ok
+
+%if FAT_TYPE == 16
+.slot4:
+    cmp byte [cs:file_handle4_open], 1
+    jne .bad
+    jmp .ok
+
+.slot5:
+    cmp byte [cs:file_handle5_open], 1
+    jne .bad
+    jmp .ok
+
+.slot6:
+    cmp byte [cs:file_handle6_open], 1
+    jne .bad
+    jmp .ok
+
+.slot7:
+    cmp byte [cs:file_handle7_open], 1
+    jne .bad
+    jmp .ok
+
+.slot8:
+    cmp byte [cs:file_handle8_open], 1
+    jne .bad
+    jmp .ok
+%endif
+
+.ok:
+    xor ax, ax
+    clc
+    ret
+
+.bad:
+    mov ax, 0x0006
+    stc
     ret
 
 int21_read:
@@ -10808,6 +11113,7 @@ int21_caller_ds dw 0
 int21_return_es db 0
 int2f_installed db 0
 dos_default_drive db 0
+dos_verify_flag db 0
 last_exit_code db 0
 int21_last_ah db 0
 int21_last_al db 0
