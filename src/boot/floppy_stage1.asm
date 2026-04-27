@@ -54,6 +54,12 @@ org 0x0000
 %ifndef HARDWARE_VALIDATION_SCREEN
 %define HARDWARE_VALIDATION_SCREEN 0
 %endif
+%ifndef ENABLE_PS2_MOUSE_INIT
+%define ENABLE_PS2_MOUSE_INIT 1
+%endif
+%ifndef MOUSE_VGA_SCALE_SHIFT
+%define MOUSE_VGA_SCALE_SHIFT 1
+%endif
 %define FAT1_LBA FAT_RESERVED_SECTORS
 %define FAT2_LBA (FAT1_LBA + FAT_SECTORS_PER_FAT)
 %define FAT_ROOT_START_LBA (FAT_RESERVED_SECTORS + (FAT_COUNT * FAT_SECTORS_PER_FAT))
@@ -180,7 +186,11 @@ install_int21_vector:
     mov byte [int2f_installed], 0
     mov byte [last_exit_code], 0
     mov byte [last_term_type], 0
+%if FAT_TYPE == 16
+    mov byte [dos_default_drive], 2
+%else
     mov byte [dos_default_drive], 0
+%endif
     mov byte [find_active], 0
     mov ax, cs
     mov [dta_seg], ax
@@ -217,15 +227,20 @@ install_int21_vector:
     mov [es:bx + 2], ax
     mov byte [current_video_mode], 0x03
 
-    ; Keep process keyboard polling from blocking the loader forever.
-    mov bx, 0x16 * 4
+    ; Keep BIOS keyboard services untouched on real hardware.
+    ; Some legacy machines (e.g. ThinkPad T23) are sensitive to INT16 hooks.
+
+%if FAT_TYPE == 16
+    ; OpenGEM's VGA driver can use the IBM PS/2 BIOS mouse API directly.
+    mov bx, 0x15 * 4
     mov ax, [es:bx]
-    mov [old_int16_off], ax
+    mov [old_int15_off], ax
     mov ax, [es:bx + 2]
-    mov [old_int16_seg], ax
-    mov word [es:bx], int16_handler
+    mov [old_int15_seg], ax
+    mov word [es:bx], int15_handler
     mov ax, cs
     mov [es:bx + 2], ax
+%endif
 
     pop es
     pop bx
@@ -269,6 +284,7 @@ int21_handler:
     pop ax
     mov byte [cs:int21_carry], 0
     mov byte [cs:int21_return_es], 0
+    mov byte [cs:int21_zf_state], 0xFF
     mov byte [cs:int21_last_ah], ah
     mov byte [cs:int21_last_al], al
     push ax
@@ -300,6 +316,10 @@ int21_handler:
     je .fn_09
     cmp ah, 0x0A
     je .fn_0a
+    cmp ah, 0x0B
+    je .fn_0b
+    cmp ah, 0x0C
+    je .fn_0c
     cmp ah, 0x0E
     je .fn_0e
     cmp ah, 0x1A
@@ -398,11 +418,13 @@ int21_handler:
     jz .fn_06_no_key
     mov ah, 0x00
     int 0x16
+    mov byte [cs:int21_zf_state], 0
     jmp .success
 
 .fn_06_no_key:
     xor al, al
     xor ah, ah
+    mov byte [cs:int21_zf_state], 1
     jmp .success
 
 .fn_07:
@@ -457,6 +479,31 @@ int21_handler:
     mov [ds:bx + 1], si
     pop cx
     pop bx
+    jmp .success
+
+.fn_0b:
+    mov ah, 0x01
+    int 0x16
+    jz .fn_0b_no_key
+    mov al, 0xFF
+    jmp .success
+.fn_0b_no_key:
+    xor al, al
+    jmp .success
+
+.fn_0c:
+    mov bl, al
+    call int21_kbd_flush
+    mov al, bl
+    cmp al, 0x06
+    je .fn_06_input
+    cmp al, 0x07
+    je .fn_07
+    cmp al, 0x08
+    je .fn_08
+    cmp al, 0x0A
+    je .fn_0a
+    xor al, al
     jmp .success
 
 .fn_0e:
@@ -972,6 +1019,17 @@ int21_handler:
     mov [bp + 10], dx
     mov [bp + 8], si
     mov [bp + 6], di
+
+    cmp byte [cs:int21_zf_state], 0xFF
+    je .zf_done
+    cmp byte [cs:int21_zf_state], 0
+    jne .zf_set
+    and word [bp + 20], 0xFFBF
+    jmp .zf_done
+.zf_set:
+    or word [bp + 20], 0x0040
+.zf_done:
+
     cmp byte [cs:int21_carry], 0
     jne .set_carry
     and word [bp + 20], 0xFFFE
@@ -988,6 +1046,17 @@ int21_handler:
     pop cx
     pop bx
     iret
+
+int21_kbd_flush:
+.loop:
+    mov ah, 0x01
+    int 0x16
+    jz .done
+    mov ah, 0x00
+    int 0x16
+    jmp .loop
+.done:
+    ret
 
 int21_smoke_test:
     push ds
@@ -1976,6 +2045,15 @@ int21_code_page:
     ret
 
 int21_set_default_drive:
+%if FAT_TYPE == 16
+    cmp dl, 2
+    ja .invalid
+    mov [cs:dos_default_drive], dl
+    mov al, 3
+    xor ah, ah
+    clc
+    ret
+%else
     cmp dl, 1
     ja .invalid
     mov [cs:dos_default_drive], dl
@@ -1983,6 +2061,7 @@ int21_set_default_drive:
     xor ah, ah
     clc
     ret
+%endif
 .invalid:
     mov ax, 0x000F
     stc
@@ -2721,8 +2800,16 @@ int21_find_first:
     push es
 
     mov [cs:find_attr], cl
+%if FAT_TYPE == 16
+    mov si, dx
+    call int21_resolve_parent_dir
+    jc .path_fail
+    mov [cs:find_dir_cluster], ax
+    call int21_path_to_fat_pattern
+%else
     mov si, dx
     call int21_path_to_fat_pattern
+%endif
     jc .path_fail
     mov al, 'p'
     call serial_putc
@@ -2931,6 +3018,11 @@ int21_find_scan_from_cursor:
     mov bx, [cs:find_cursor]
     mov word [cs:find_cached_sector], 0xFFFF
 
+%if FAT_TYPE == 16
+    cmp word [cs:find_dir_cluster], 0
+    jne .scan_subdir_loop
+%endif
+
 .scan_loop:
     cmp bx, FAT_ROOT_DIR_SECTORS * 16
     jae .not_found
@@ -3026,6 +3118,122 @@ int21_find_scan_from_cursor:
     mov ax, 0x0012
     stc
     jmp .done
+
+%if FAT_TYPE == 16
+.scan_subdir_loop:
+    call int21_load_fat_cache
+    jc .io_fail
+
+    mov ax, [cs:find_dir_cluster]
+    mov [cs:tmp_cluster], ax
+    xor bx, bx
+
+.subdir_cluster_loop:
+    mov ax, [cs:tmp_cluster]
+    cmp ax, 2
+    jb .not_found
+    cmp ax, FAT_EOF
+    jae .not_found
+
+    call int21_cluster_to_lba
+    mov [cs:tmp_lba], ax
+    xor dx, dx
+
+.subdir_sector_loop:
+    cmp dx, FAT_SECTORS_PER_CLUSTER
+    jae .subdir_next_cluster
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    push ax
+    mov al, '.'
+    call serial_putc
+    pop ax
+    push bx
+    xor bx, bx
+    call read_sector_lba
+    pop bx
+    jc .io_fail
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    xor di, di
+    mov cx, 16
+
+.subdir_entry_loop:
+    cmp bx, [cs:find_cursor]
+    jb .subdir_next_entry
+
+    mov al, [es:di]
+    cmp al, 0x00
+    je .not_found
+    cmp al, 0xE5
+    je .subdir_next_entry
+
+    mov al, [es:di + 11]
+    cmp al, 0x0F
+    je .subdir_next_entry
+
+    call int21_find_attr_ok
+    jnc .subdir_next_entry
+
+    mov si, find_pattern
+    call fat_entry_matches_pattern
+    jnc .subdir_next_entry
+
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    mov [cs:search_found_root_lba], ax
+    mov [cs:search_found_root_off], di
+    mov ax, [es:di + 26]
+    mov [cs:search_found_cluster], ax
+    mov ax, [es:di + 28]
+    mov [cs:search_found_size_lo], ax
+    mov ax, [es:di + 30]
+    mov [cs:search_found_size_hi], ax
+    mov al, [es:di + 11]
+    mov [cs:search_found_attr], al
+
+    push bx
+    push cx
+    mov cx, 11
+    mov si, di
+    mov di, search_found_name
+.subdir_copy_name:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .subdir_copy_name
+    pop cx
+    pop bx
+
+    mov ax, bx
+    inc ax
+    mov [cs:find_cursor], ax
+    mov byte [cs:find_active], 1
+    clc
+    jmp .done
+
+.subdir_next_entry:
+    inc bx
+    add di, 32
+    dec cx
+    jz .subdir_sector_done
+    jmp .subdir_entry_loop
+.subdir_sector_done:
+    inc dx
+    jmp .subdir_sector_loop
+
+.subdir_next_cluster:
+    mov ax, [cs:tmp_cluster]
+    call fat12_get_entry_cached
+    jc .io_fail
+    mov [cs:tmp_cluster], ax
+    jmp .subdir_cluster_loop
+%endif
 
 .io_fail:
     mov ax, 0x0005
@@ -8800,6 +9008,14 @@ run_stage2_payload:
 init_mouse:
     push ax
     push bx
+%if FAT_TYPE == 16
+%if ENABLE_PS2_MOUSE_INIT
+    call ps2_mouse_init
+    jc .reset_int33
+%endif
+%endif
+
+.reset_int33:
     mov ax, 0x0000
     int 0x33
     cmp ax, 0xFFFF
@@ -8809,6 +9025,11 @@ init_mouse:
     int 0x33
     mov si, msg_mouse_enabled
     call print_string_serial
+%if FAT_TYPE == 16
+    mov word [cs:mouse_max_x], 639
+    mov word [cs:mouse_max_y], 479
+    mov byte [cs:mouse_visible], 1
+%endif
     pop bx
     pop ax
     ret
@@ -8941,10 +9162,736 @@ install_int33_vector:
     mov word [es:bx], int33_handler
     mov ax, cs
     mov [es:bx + 2], ax
+%if FAT_TYPE == 16
+    mov bx, 0x74 * 4
+    mov ax, [es:bx]
+    mov [old_int74_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int74_seg], ax
+    mov word [es:bx], irq12_mouse_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+%endif
     pop es
     pop bx
     pop ax
     ret
+
+%if FAT_TYPE == 16
+ps2_wait_input_clear:
+    push cx
+    push dx
+    mov cx, 0xFFFF
+.loop:
+    mov dx, 0x0064
+    in al, dx
+    test al, 0x02
+    jz .ok
+    loop .loop
+    stc
+    jmp .done
+.ok:
+    clc
+.done:
+    pop dx
+    pop cx
+    ret
+
+ps2_wait_output_full:
+    push cx
+    push dx
+    mov cx, 0xFFFF
+.loop:
+    mov dx, 0x0064
+    in al, dx
+    test al, 0x01
+    jnz .ok
+    loop .loop
+    stc
+    jmp .done
+.ok:
+    clc
+.done:
+    pop dx
+    pop cx
+    ret
+
+ps2_write_cmd:
+    push dx
+    push ax
+    call ps2_wait_input_clear
+    jc .done
+    pop ax
+    mov dx, 0x0064
+    out dx, al
+    push ax
+.done:
+    pop ax
+    pop dx
+    ret
+
+ps2_write_data:
+    push dx
+    push ax
+    call ps2_wait_input_clear
+    jc .done
+    pop ax
+    mov dx, 0x0060
+    out dx, al
+    push ax
+.done:
+    pop ax
+    pop dx
+    ret
+
+ps2_read_data:
+    push dx
+    call ps2_wait_output_full
+    jc .done
+    mov dx, 0x0060
+    in al, dx
+    clc
+.done:
+    pop dx
+    ret
+
+ps2_mouse_write:
+    push ax
+    mov al, 0xD4
+    call ps2_write_cmd
+    pop ax
+    jc .done
+    call ps2_write_data
+    jc .done
+    call ps2_read_data
+    jc .done
+    cmp al, 0xFA
+    je .ack
+    stc
+    ret
+.ack:
+    clc
+.done:
+    ret
+
+ps2_mouse_flush:
+    push ax
+    push cx
+    push dx
+    mov cx, 32
+.loop:
+    mov dx, 0x0064
+    in al, dx
+    test al, 0x01
+    jz .done
+    mov dx, 0x0060
+    in al, dx
+    loop .loop
+.done:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+ps2_mouse_init:
+    push ax
+    push dx
+    cli
+    call ps2_mouse_flush
+    mov al, 0xA8
+    call ps2_write_cmd
+    jc .fail
+    mov al, 0x20
+    call ps2_write_cmd
+    jc .fail
+    call ps2_read_data
+    jc .fail
+    or al, 0x02
+    and al, 0xDF
+    mov ah, al
+    mov al, 0x60
+    call ps2_write_cmd
+    jc .fail
+    mov al, ah
+    call ps2_write_data
+    jc .fail
+    mov al, 0xF6
+    call ps2_mouse_write
+    jc .fail
+    mov al, 0xF4
+    call ps2_mouse_write
+    jc .fail
+
+    in al, 0xA1
+    and al, 0xEF
+    out 0xA1, al
+    in al, 0x21
+    and al, 0xFB
+    out 0x21, al
+    sti
+    mov byte [cs:mouse_hw_ready], 1
+    push ax
+    mov al, 'M'
+    call serial_putc
+    pop ax
+    clc
+    jmp .done
+.fail:
+    sti
+    mov byte [cs:mouse_hw_ready], 0
+    push ax
+    mov al, 'm'
+    call serial_putc
+    pop ax
+    stc
+.done:
+    pop dx
+    pop ax
+    ret
+
+irq12_mouse_handler:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ds
+    push es
+
+    cmp word [cs:irq12_trace_count16], 1024
+    jae .trace_skip
+    inc word [cs:irq12_trace_count16]
+    mov al, 'I'
+    call serial_putc
+.trace_skip:
+
+    ; --- desync watchdog: reset partial packet if >2 BIOS ticks since last byte ---
+    cmp byte [cs:mouse_packet_index], 0
+    je .watchdog_skip
+    push es
+    mov ax, 0x0040
+    mov es, ax
+    mov ax, [es:0x006C]     ; BIOS tick counter low word (~18.2 Hz)
+    pop es
+    sub ax, [cs:mouse_last_byte_tick]
+    cmp ax, 2               ; > ~110 ms without completing packet?
+    jb .watchdog_skip
+    mov byte [cs:mouse_packet_index], 0   ; resync
+.watchdog_skip:
+
+    in al, 0x64
+    test al, 0x01
+    jz .eoi_fast        ; no data in output buffer
+    ; Some legacy controllers and QEMU builds do not reliably set the AUX
+    ; source bit here. Because this is IRQ12, treat the byte as mouse data
+    ; and let the PS/2 packet sync bit reject noise.
+    in al, 0x60
+
+    ; Update last-byte tick for watchdog
+    push es
+    push ax
+    mov ax, 0x0040
+    mov es, ax
+    mov ax, [es:0x006C]
+    mov [cs:mouse_last_byte_tick], ax
+    pop ax
+    pop es
+
+    mov bl, [cs:mouse_packet_index]
+    cmp bl, 0
+    jne .store
+    test al, 0x08
+    jz .eoi_fast        ; bad sync byte – discard, reset happens via watchdog
+.store:
+    xor bh, bh
+    mov [cs:mouse_packet + bx], al
+    inc bl
+    mov [cs:mouse_packet_index], bl
+    cmp bl, 3
+    jne .eoi_fast       ; partial packet – EOI and return, no VGA work
+    mov byte [cs:mouse_packet_index], 0
+    cmp word [cs:irq12_pkt_trace_count16], 512
+    jae .pkt_trace_skip
+    inc word [cs:irq12_pkt_trace_count16]
+    push ax
+    mov al, 'J'
+    call serial_putc
+    pop ax
+.pkt_trace_skip:
+
+    xor bp, bp
+    cmp byte [cs:mouse_packet + 1], 0
+    jne .mark_motion
+    cmp byte [cs:mouse_packet + 2], 0
+    je .button_events
+.mark_motion:
+    or bp, 0x0001
+
+.button_events:
+    mov al, [cs:mouse_packet]
+    mov bl, al
+    mov ah, [cs:mouse_buttons]
+    and al, 0x07
+    mov [cs:mouse_buttons], al
+    mov bh, ah
+
+    test al, 0x01
+    jz .left_up
+    test bh, 0x01
+    jnz .left_done
+    or bp, 0x0002
+    jmp .left_done
+.left_up:
+    test bh, 0x01
+    jz .left_done
+    or bp, 0x0004
+.left_done:
+
+    test al, 0x02
+    jz .right_up
+    test bh, 0x02
+    jnz .right_done
+    or bp, 0x0008
+    jmp .right_done
+.right_up:
+    test bh, 0x02
+    jz .right_done
+    or bp, 0x0010
+.right_done:
+
+    test al, 0x04
+    jz .middle_up
+    test bh, 0x04
+    jnz .middle_done
+    or bp, 0x0020
+    jmp .middle_done
+.middle_up:
+    test bh, 0x04
+    jz .middle_done
+    or bp, 0x0040
+.middle_done:
+
+    mov al, [cs:mouse_packet + 1]
+    cbw
+    test bl, 0x10
+    jz .x_signed
+    or ah, 0xFF
+.x_signed:
+    mov [cs:mouse_last_mickey_x], ax
+    add [cs:mouse_delta_x], ax
+%if MOUSE_VGA_SCALE_SHIFT > 0
+%rep MOUSE_VGA_SCALE_SHIFT
+    sal ax, 1
+%endrep
+%endif
+    mov cx, [cs:mouse_pos_x]
+    add cx, ax
+
+    mov al, [cs:mouse_packet + 2]
+    cbw
+    test bl, 0x20
+    jz .y_signed
+    or ah, 0xFF
+.y_signed:
+    neg ax
+    mov [cs:mouse_last_mickey_y], ax
+    add [cs:mouse_delta_y], ax
+%if MOUSE_VGA_SCALE_SHIFT > 0
+%rep MOUSE_VGA_SCALE_SHIFT
+    sal ax, 1
+%endrep
+%endif
+    mov dx, [cs:mouse_pos_y]
+    add dx, ax
+
+    cmp cx, [cs:mouse_min_x]
+    jae .x_min_ok
+    mov cx, [cs:mouse_min_x]
+.x_min_ok:
+    cmp cx, [cs:mouse_max_x]
+    jbe .x_ok
+    mov cx, [cs:mouse_max_x]
+.x_ok:
+    cmp dx, [cs:mouse_min_y]
+    jae .y_min_ok
+    mov dx, [cs:mouse_min_y]
+.y_min_ok:
+    cmp dx, [cs:mouse_max_y]
+    jbe .y_ok
+    mov dx, [cs:mouse_max_y]
+.y_ok:
+    mov [cs:mouse_pos_x], cx
+    mov [cs:mouse_pos_y], dx
+    call mouse_vga_update_position
+
+    cmp byte [cs:mouse_bios_enabled], 0
+    je .int33_callback
+    cmp word [cs:mouse_bios_asr_seg], 0
+    je .int33_callback
+    inc word [cs:mouse_bios_callback_count]
+    xor ah, ah
+    mov al, [cs:mouse_buttons]
+    push ax
+    mov al, [cs:mouse_packet + 1]
+    cbw
+    push ax
+    mov al, [cs:mouse_packet + 2]
+    cbw
+    push ax
+    pushf
+    call far [cs:mouse_bios_asr_off]
+    add sp, 8
+
+.int33_callback:
+    mov ax, bp
+    and ax, [cs:mouse_cb_mask]
+    jz .eoi
+    cmp word [cs:mouse_cb_seg], 0
+    je .eoi
+
+    xor bx, bx
+    mov bl, [cs:mouse_buttons]
+    mov cx, [cs:mouse_pos_x]
+    mov dx, [cs:mouse_pos_y]
+    mov si, [cs:mouse_last_mickey_x]
+    mov di, [cs:mouse_last_mickey_y]
+    call far [cs:mouse_cb_off]
+
+.eoi:
+    ; Full packet processed – refresh sprite, then EOI
+    call mouse_vga_cursor_refresh
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    iret
+
+.eoi_fast:
+    ; Partial packet or no data – just EOI, no VGA work
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    iret
+
+mouse_vga_update_position:
+    push ax
+    push bx
+
+    mov ax, [cs:mouse_vga_cursor_x]
+    mov bx, [cs:mouse_last_mickey_x]
+%if MOUSE_VGA_SCALE_SHIFT > 0
+%rep MOUSE_VGA_SCALE_SHIFT
+    sal bx, 1
+%endrep
+%endif
+    add ax, bx
+    test ax, 0x8000
+    jz .x_not_negative
+    xor ax, ax
+.x_not_negative:
+    cmp ax, 632
+    jbe .x_clamped
+    mov ax, 632
+.x_clamped:
+    mov [cs:mouse_vga_cursor_x], ax
+
+    mov ax, [cs:mouse_vga_cursor_y]
+    mov bx, [cs:mouse_last_mickey_y]
+%if MOUSE_VGA_SCALE_SHIFT > 0
+%rep MOUSE_VGA_SCALE_SHIFT
+    sal bx, 1
+%endrep
+%endif
+    add ax, bx
+    test ax, 0x8000
+    jz .y_not_negative
+    xor ax, ax
+.y_not_negative:
+    cmp ax, 472
+    jbe .y_clamped
+    mov ax, 472
+.y_clamped:
+    mov [cs:mouse_vga_cursor_y], ax
+
+    pop bx
+    pop ax
+    ret
+
+mouse_vga_cursor_refresh:
+    push ax
+    push bx
+    push dx
+
+    cmp byte [cs:mouse_bios_enabled], 0
+    je .inactive
+    cmp word [cs:mouse_bios_asr_seg], 0
+    jne .active
+
+.inactive:
+    cmp byte [cs:mouse_visible], 1
+    je .active
+    cmp byte [cs:refresh_skip_trace_count], 8
+    jae .skip_no_trace
+    inc byte [cs:refresh_skip_trace_count]
+    push ax
+    mov al, 'X'
+    call serial_putc
+    pop ax
+.skip_no_trace:
+    mov byte [cs:mouse_vga_cursor_drawn], 0
+    jmp .done
+
+.active:
+    cmp byte [cs:refresh_active_trace_count], 8
+    jae .active_no_trace
+    inc byte [cs:refresh_active_trace_count]
+    push ax
+    mov al, 'D'
+    call serial_putc
+    pop ax
+.active_no_trace:
+    cmp byte [cs:mouse_vga_cursor_drawn], 0
+    je .draw_new
+    mov bx, [cs:mouse_vga_cursor_last_x]
+    mov dx, [cs:mouse_vga_cursor_last_y]
+    call mouse_vga_xor_cursor12
+
+.draw_new:
+    mov bx, [cs:mouse_vga_cursor_x]
+    mov dx, [cs:mouse_vga_cursor_y]
+    call mouse_vga_xor_cursor12
+    mov [cs:mouse_vga_cursor_last_x], bx
+    mov [cs:mouse_vga_cursor_last_y], dx
+    mov byte [cs:mouse_vga_cursor_drawn], 1
+
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+mouse_vga_xor_cursor12:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+
+    mov [cs:mouse_vga_work_x], bx
+    mov [cs:mouse_vga_work_y], dx
+
+    mov dx, 0x3CE
+    mov al, 0x00
+    out dx, al
+    inc dx
+    in al, dx
+    mov [cs:mouse_vga_save_gc0], al
+    dec dx
+    mov al, 0x01
+    out dx, al
+    inc dx
+    in al, dx
+    mov [cs:mouse_vga_save_gc1], al
+    dec dx
+    mov al, 0x03
+    out dx, al
+    inc dx
+    in al, dx
+    mov [cs:mouse_vga_save_gc3], al
+    dec dx
+    mov al, 0x05
+    out dx, al
+    inc dx
+    in al, dx
+    mov [cs:mouse_vga_save_gc5], al
+    dec dx
+    mov al, 0x08
+    out dx, al
+    inc dx
+    in al, dx
+    mov [cs:mouse_vga_save_gc8], al
+
+    mov dx, 0x3C4
+    mov al, 0x02
+    out dx, al
+    inc dx
+    in al, dx
+    mov [cs:mouse_vga_save_seq2], al
+
+    mov dx, 0x3C4
+    mov al, 0x02
+    out dx, al
+    inc dx
+    mov al, 0x0F
+    out dx, al
+
+    mov dx, 0x3CE
+    mov al, 0x00
+    out dx, al
+    inc dx
+    mov al, 0x0F
+    out dx, al
+    dec dx
+    mov al, 0x01
+    out dx, al
+    inc dx
+    mov al, 0x0F
+    out dx, al
+    dec dx
+    mov al, 0x03
+    out dx, al
+    inc dx
+    mov al, 0x18
+    out dx, al
+    dec dx
+    mov al, 0x05
+    out dx, al
+    inc dx
+    xor al, al
+    out dx, al
+
+    mov ax, 0xA000
+    mov es, ax
+    mov si, mouse_vga_cursor_mask
+    mov bp, 8
+
+.row_loop:
+    mov al, [cs:si]
+    inc si
+    mov [cs:mouse_vga_row_mask], al
+    mov cx, 8
+    mov di, [cs:mouse_vga_work_x]
+
+.col_loop:
+    shl byte [cs:mouse_vga_row_mask], 1
+    jnc .next_col
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov ax, [cs:mouse_vga_work_y]
+    cmp ax, 480
+    jae .pixel_done
+    cmp di, 640
+    jae .pixel_done
+
+    mov bx, ax
+    shl bx, 4
+    mov dx, ax
+    shl dx, 6
+    add bx, dx
+    mov ax, di
+    mov cl, 3
+    shr ax, cl
+    add bx, ax
+
+    mov ax, di
+    and al, 0x07
+    mov cl, al
+    mov ah, 0x80
+    shr ah, cl
+
+    mov dx, 0x3CE
+    mov al, 0x08
+    out dx, al
+    inc dx
+    mov al, ah
+    out dx, al
+
+    mov al, [es:bx]
+    mov al, 0xFF
+    mov [es:bx], al
+
+.pixel_done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+
+.next_col:
+    inc di
+    loop .col_loop
+    inc word [cs:mouse_vga_work_y]
+    dec bp
+    jnz .row_loop
+
+    mov dx, 0x3CE
+    mov al, 0x00
+    out dx, al
+    inc dx
+    mov al, [cs:mouse_vga_save_gc0]
+    out dx, al
+    dec dx
+    mov al, 0x01
+    out dx, al
+    inc dx
+    mov al, [cs:mouse_vga_save_gc1]
+    out dx, al
+    dec dx
+    mov al, 0x03
+    out dx, al
+    inc dx
+    mov al, [cs:mouse_vga_save_gc3]
+    out dx, al
+    dec dx
+    mov al, 0x05
+    out dx, al
+    inc dx
+    mov al, [cs:mouse_vga_save_gc5]
+    out dx, al
+    dec dx
+    mov al, 0x08
+    out dx, al
+    inc dx
+    mov al, [cs:mouse_vga_save_gc8]
+    out dx, al
+
+    mov dx, 0x3C4
+    mov al, 0x02
+    out dx, al
+    inc dx
+    mov al, [cs:mouse_vga_save_seq2]
+    out dx, al
+
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 int10_handler:
     cmp ah, 0x0F
@@ -8972,6 +9919,85 @@ int10_handler:
 .mode_ready:
     xor bh, bh
     iret
+
+%if FAT_TYPE == 16
+int15_handler:
+    push bp
+    mov bp, sp
+    cmp ah, 0xC2
+    jne .chain
+
+    cmp al, 0x00
+    je .enable_disable
+    cmp al, 0x01
+    je .reset
+    cmp al, 0x02
+    je .success
+    cmp al, 0x03
+    je .success
+    cmp al, 0x05
+    je .success
+    cmp al, 0x06
+    je .success
+    cmp al, 0x07
+    je .set_handler
+    jmp .unsupported
+
+.enable_disable:
+    cmp bh, 0
+    je .disable
+    mov byte [cs:mouse_bios_enabled], 1
+    cmp byte [cs:mouse_vga_cursor_drawn], 1
+    je .enable_seed_done
+    call mouse_vga_cursor_seed
+.enable_seed_done:
+    jmp .success
+.disable:
+    mov byte [cs:mouse_bios_enabled], 0
+    mov byte [cs:mouse_vga_cursor_drawn], 0
+    jmp .success
+
+.reset:
+    mov byte [cs:mouse_bios_enabled], 0
+    mov byte [cs:mouse_packet_index], 0
+    mov byte [cs:mouse_vga_cursor_drawn], 0
+    xor bx, bx
+    jmp .success
+
+.set_handler:
+    inc word [cs:mouse_bios_asr_set_count]
+    mov [cs:mouse_bios_asr_off], bx
+    mov [cs:mouse_bios_asr_seg], es
+    cmp byte [cs:mouse_vga_cursor_drawn], 1
+    je .set_handler_seed_done
+    call mouse_vga_cursor_seed
+.set_handler_seed_done:
+    jmp .success
+
+.success:
+    and word [ss:bp + 6], 0xFFFE
+    xor ah, ah
+    pop bp
+    iret
+
+.unsupported:
+    or word [ss:bp + 6], 0x0001
+    mov ah, 0x86
+    pop bp
+    iret
+
+.chain:
+    pop bp
+    jmp far [cs:old_int15_off]
+
+mouse_vga_cursor_seed:
+    mov word [cs:mouse_vga_cursor_x], 320
+    mov word [cs:mouse_vga_cursor_y], 240
+    mov word [cs:mouse_vga_cursor_last_x], 320
+    mov word [cs:mouse_vga_cursor_last_y], 240
+    mov byte [cs:mouse_vga_cursor_drawn], 0
+    ret
+%endif
 
 int16_handler:
     cmp ah, 0x00
@@ -9032,6 +10058,8 @@ int33_handler:
     je .motion
     cmp ax, 0x000C
     je .set_callback
+    cmp ax, 0x0014
+    je .exchange_callback
     cmp ax, 0x000F
     je .set_mickey_ratio
     cmp ax, 0x0024
@@ -9047,13 +10075,23 @@ int33_handler:
     mov ax, 0xFFFF
     mov bx, 0x0002
     mov byte [cs:mouse_installed], 1
-    mov word [cs:mouse_pos_x], 160
-    mov word [cs:mouse_pos_y], 100
+    mov word [cs:mouse_pos_x], 320
+    mov word [cs:mouse_pos_y], 240
     mov word [cs:mouse_min_x], 0
+%if FAT_TYPE == 16
+    mov word [cs:mouse_max_x], 639
+%else
     mov word [cs:mouse_max_x], 319
+%endif
     mov word [cs:mouse_min_y], 0
+%if FAT_TYPE == 16
+    mov word [cs:mouse_max_y], 479
+    mov byte [cs:mouse_visible], 1
+    call mouse_vga_cursor_seed
+%else
     mov word [cs:mouse_max_y], 199
     mov byte [cs:mouse_visible], 0
+%endif
     iret
 
 .show:
@@ -9062,7 +10100,36 @@ int33_handler:
     iret
 
 .hide:
+%if FAT_TYPE == 16
     mov byte [cs:mouse_visible], 0
+    cmp byte [cs:mouse_vga_cursor_drawn], 0
+    je .hide_done
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ds
+    mov bx, [cs:mouse_vga_cursor_last_x]
+    mov dx, [cs:mouse_vga_cursor_last_y]
+    call mouse_vga_xor_cursor12
+    pop ds
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov byte [cs:mouse_vga_cursor_drawn], 0
+.hide_done:
+%else
+    mov byte [cs:mouse_visible], 0
+%endif
     xor ax, ax
     iret
 
@@ -9131,14 +10198,34 @@ int33_handler:
     iret
 
 .motion:
+%if FAT_TYPE == 16
+    mov cx, [cs:mouse_delta_x]
+    mov dx, [cs:mouse_delta_y]
+    mov word [cs:mouse_delta_x], 0
+    mov word [cs:mouse_delta_y], 0
+%else
     xor cx, cx
     xor dx, dx
+%endif
     iret
 
 .set_callback:
     mov [cs:mouse_cb_mask], cx
     mov [cs:mouse_cb_off], dx
     mov [cs:mouse_cb_seg], es
+    xor ax, ax
+    iret
+
+.exchange_callback:
+    mov ax, [cs:mouse_cb_seg]
+    mov bx, [cs:mouse_cb_off]
+    mov si, [cs:mouse_cb_mask]
+    mov [cs:mouse_cb_mask], cx
+    mov [cs:mouse_cb_off], dx
+    mov [cs:mouse_cb_seg], es
+    mov cx, si
+    mov dx, bx
+    mov es, ax
     xor ax, ax
     iret
 
@@ -9170,6 +10257,7 @@ int2f_handler:
 boot_drive db 0
 int21_installed db 0
 int21_carry db 0
+int21_zf_state db 0xFF
 int21_caller_ds dw 0
 int21_return_es db 0
 int2f_installed db 0
@@ -9206,10 +10294,24 @@ int_ef_target_off dw 0
 int_ef_target_seg dw 0
 int_ef_trace_count db 0
 int_ef_return_trace_count db 0
+irq12_trace_count db 0
+irq12_pkt_trace_count db 0
+refresh_skip_trace_count db 0
+refresh_active_trace_count db 0
+irq12_trace_count16 dw 0
+irq12_pkt_trace_count16 dw 0
 old_int10_off dw 0
 old_int10_seg dw 0
+%if FAT_TYPE == 16
+old_int15_off dw 0
+old_int15_seg dw 0
+%endif
 old_int16_off dw 0
 old_int16_seg dw 0
+%if FAT_TYPE == 16
+old_int74_off dw 0
+old_int74_seg dw 0
+%endif
 current_video_mode db 0x03
 mouse_visible db 0
 mouse_min_x dw 0
@@ -9221,6 +10323,36 @@ mouse_cb_off dw 0
 mouse_cb_seg dw 0
 mouse_mickey_x dw 8
 mouse_mickey_y dw 8
+%if FAT_TYPE == 16
+mouse_hw_ready db 0
+mouse_packet_index db 0
+mouse_packet times 3 db 0
+mouse_last_byte_tick dw 0
+mouse_delta_x dw 0
+mouse_delta_y dw 0
+mouse_last_mickey_x dw 0
+mouse_last_mickey_y dw 0
+mouse_bios_enabled db 0
+mouse_bios_asr_off dw 0
+mouse_bios_asr_seg dw 0
+mouse_bios_asr_set_count dw 0
+mouse_bios_callback_count dw 0
+mouse_vga_cursor_x dw 320
+mouse_vga_cursor_y dw 240
+mouse_vga_cursor_last_x dw 320
+mouse_vga_cursor_last_y dw 240
+mouse_vga_cursor_drawn db 0
+mouse_vga_work_x dw 0
+mouse_vga_work_y dw 0
+mouse_vga_row_mask db 0
+mouse_vga_save_gc0 db 0
+mouse_vga_save_gc1 db 0
+mouse_vga_save_gc3 db 0
+mouse_vga_save_gc5 db 0
+mouse_vga_save_gc8 db 0
+mouse_vga_save_seq2 db 0
+mouse_vga_cursor_mask db 0x80,0xC0,0xE0,0xF0,0xF8,0xDC,0x8E,0x06
+%endif
 file_handle_open db 0
 file_handle_pos dw 0
 file_handle_mode db 0
@@ -9345,6 +10477,7 @@ dta_off dw 0
 find_attr db 0
 find_active db 0
 find_special_mode db 0
+find_dir_cluster dw 0
 find_cursor dw 0
 find_cached_sector dw 0
 find_pattern times 11 db 0
@@ -9518,8 +10651,8 @@ gfx_line_sx dw 0
 gfx_line_sy dw 0
 gfx_line_err dw 0
 gfx_line_e2 dw 0
-mouse_pos_x dw 160
-mouse_pos_y dw 100
+mouse_pos_x dw 320
+mouse_pos_y dw 240
 mouse_buttons db 0
 mouse_installed db 0
 

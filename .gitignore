@@ -33,3 +33,5 @@ copilot-task-codex-config-persistence-v1.md
 handoffs/
 *HANDOFF*.md
 OLD/**/docs/handoffs/
+
+.github/*

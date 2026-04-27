@@ -100,7 +100,7 @@ if [[ ! -f "$IMG" ]]; then
 fi
 
 BASE_ARGS=(
-  -M pc
+  -machine pc,vmport=off
   -cpu pentium3
   -m 128
   -drive "file=$IMG,format=raw,if=ide"

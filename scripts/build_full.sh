@@ -28,7 +28,7 @@ OPENGEM_VALIDATION_VDI="${CIUKIOS_OPENGEM_VALIDATION_VDI:-0}"
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 TOTAL_SECTORS=262144
-STAGE1_SECTORS=40
+STAGE1_SECTORS=48
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 BOOT_LBA_OFFSET="${CIUKIOS_FULL_BOOT_LBA_OFFSET:-0}"
 FAT_LBA_OFFSET="${CIUKIOS_FULL_FAT_LBA_OFFSET:-0}"
@@ -58,6 +58,7 @@ OPENGEM_VALIDATION_VDI_SRC="src/com/opengem_vdi_validation.asm"
 OPENGEM_VALIDATION_VDI_BIN="build/full/obj/opengem_vdi_validation.exe"
 OPENGEM_PAYLOAD_DIR="assets/full/opengem"
 OPENGEM_UPSTREAM_DIR="$OPENGEM_PAYLOAD_DIR/upstream/OPENGEM7-RC3"
+OPENGEM_RUNTIME_DIR="$CIUKIOS_ROOT/OLD/archive-2026-04-22/third_party/freedos/runtime/OPENGEM"
 CTMOUSE_BIN="$CIUKIOS_ROOT/third_party/ctmouse/ctmouse.exe"
 INCLUDE_OPENGEM_PAYLOAD="${CIUKIOS_INCLUDE_OPENGEM:-1}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
@@ -209,8 +210,8 @@ stage_regular_files() {
 
 stage_regular_files "$OPENGEM_PAYLOAD_DIR"
 stage_regular_files "$OPENGEM_UPSTREAM_DIR/GEMAPPS/GEMSYS"
-stage_regular_files "$CIUKIOS_ROOT/OLD/archive-2026-04-22/third_party/freedos/runtime/OPENGEM/GEMAPPS/FONTS"
-stage_regular_files "$CIUKIOS_ROOT/OLD/archive-2026-04-22/third_party/freedos/runtime/OPENGEM/GEMAPPS"
+stage_regular_files "$OPENGEM_RUNTIME_DIR/GEMAPPS/FONTS"
+stage_regular_files "$OPENGEM_RUNTIME_DIR/GEMAPPS"
 stage_regular_files "$OPENGEM_UPSTREAM_DIR"
 
 if [[ -f "$OPENGEM_STAGE_DIR/VGAFSTR.INF" ]]; then
@@ -235,6 +236,11 @@ if [[ "$OPENGEM_VALIDATION_VDI" == "1" ]]; then
 	cp "$OPENGEM_VALIDATION_VDI_BIN" "$OPENGEM_STAGE_DIR/GEMVDI.EXE"
 fi
 
+if [[ -f "$OPENGEM_STAGE_DIR/SDPSC9.VGA" ]]; then
+	echo "[build-full] patching SDPSC9.VGA mouse backend to Microsoft INT33"
+	perl -0777 -pi -e 's/zyxg\xff[\x00-\xff]/zyxg\xff\x02/g' "$OPENGEM_STAGE_DIR/SDPSC9.VGA"
+fi
+
 if [[ -f "$OPENGEM_STAGE_DIR/GEM.EXE" ]]; then
 	echo "[build-full] patching GEM.EXE timer bootstrap for CiukiDOS"
 	printf '\220\220\220' | dd of="$OPENGEM_STAGE_DIR/GEM.EXE" bs=1 seek=$((0x0A67)) conv=notrunc status=none
@@ -250,6 +256,7 @@ elif command -v mcopy >/dev/null 2>&1; then
 			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMSYS
 			mtools_try mmd -i "$IMG" ::GEMAPPS/FONTS
 			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMBOOT
+			mtools_try mmd -i "$IMG" ::GEMAPPS/HELPZONE
 			mtools_try mmd -i "$IMG" ::GEMBOOT
 			mtools_try mmd -i "$IMG" ::CLIPBRD
 			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMSYS/CLIPBRD
@@ -260,6 +267,13 @@ elif command -v mcopy >/dev/null 2>&1; then
 			mtools_try mcopy -o -i "$IMG" "$f" "::$base"
 			mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMSYS/$base"
 			case "$base" in
+				*.APP|*.RSC)
+					# All .APP and .RSC go into GEMAPPS so DESKTOP.INF
+					# window "C:\GEMAPPS\*.APP" shows all available apps.
+					mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/$base"
+					;;
+			esac
+			case "$base" in
 				*.PSF|*.AFF|*.B30|*.CGA|*.ELQ|*.EPS|*.HPH|*.VGA|*.X20|FSTR.INF|FHDR.INF|VGAFSTR.INF|*.FNT)
 					mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/FONTS/$base"
 					;;
@@ -269,6 +283,26 @@ elif command -v mcopy >/dev/null 2>&1; then
 				mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/GEMBOOT/$base"
 			fi
 		done
+		if [[ -d "$OPENGEM_RUNTIME_DIR/GEMAPPS" ]]; then
+			echo "[build-full] preserving OpenGEM GEMAPPS application directory"
+			while IFS= read -r -d '' f; do
+				base="$(basename "$f")"
+				if [[ "$base" == "_DS_STOR" ]]; then
+					continue
+				fi
+				mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/$base"
+			done < <(find "$OPENGEM_RUNTIME_DIR/GEMAPPS" -maxdepth 1 -type f -print0)
+		fi
+		if [[ -d "$OPENGEM_RUNTIME_DIR/GEMAPPS/HELPZONE" ]]; then
+			echo "[build-full] preserving OpenGEM HELPZONE files"
+			while IFS= read -r -d '' f; do
+				base="$(basename "$f")"
+				if [[ "$base" == "_DS_STOR" ]]; then
+					continue
+				fi
+				mtools_try mcopy -o -i "$IMG" "$f" "::GEMAPPS/HELPZONE/$base"
+			done < <(find "$OPENGEM_RUNTIME_DIR/GEMAPPS/HELPZONE" -maxdepth 1 -type f -print0)
+		fi
 	else
 		echo "[build-full] OpenGEM payload not found at $OPENGEM_PAYLOAD_DIR (skipping)"
 	fi
