@@ -10193,10 +10193,13 @@ mouse_vga_cursor_refresh:
     jmp .done
 
 .active:
-    ; If a GEM INT 33h callback is registered, GEM draws its own cursor.
-    ; Skip our XOR cursor to avoid double-XOR conflict.
+    ; If GEM callback is registered for motion events, let GEM draw cursor.
+    ; If callback exists but motion bit is not enabled, keep XOR fallback active.
     cmp word [cs:mouse_cb_seg], 0
-    jne .done
+    je .active_no_cb
+    test word [cs:mouse_cb_mask], 0x0001
+    jnz .done
+.active_no_cb:
     cmp byte [cs:refresh_active_trace_count], 8
     jae .active_no_trace
     inc byte [cs:refresh_active_trace_count]
