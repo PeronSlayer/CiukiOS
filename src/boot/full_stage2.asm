@@ -35,6 +35,15 @@ stage2_entry:
 
 .cwd_gemsys_ready:
 
+    mov dx, msg_try_ctmouse
+    mov ah, 0x09
+    int 0x21
+    mov dx, path_ctmouse_local
+    call exec_try_wait
+    jc .ctmouse_done
+
+.ctmouse_done:
+
     ; Pre-query VGA capability (INT10h AH=12h BL=00h)
     mov ax, 0x1200
     int 0x10
@@ -47,7 +56,6 @@ stage2_entry:
     jnc .wait_done
 
     ; If GEMVDI launch fails, retry with GEM.EXE fallback
-    mov [last_fail_ax], ax
     mov dx, path_root_dir
     mov ah, 0x3B
     int 0x21
@@ -61,11 +69,23 @@ stage2_entry:
     mov dx, path_gemvdi_rel_from_root
     call exec_try_wait
     jnc .wait_done
-    mov [last_fail_ax], ax
 
     mov dx, path_gem_exe_rel_from_root
     call exec_try_wait
     jnc .wait_done
+
+    mov dx, msg_try_bat
+    mov ah, 0x09
+    int 0x21
+    mov dx, path_gemsys_dir
+    mov ah, 0x3B
+    int 0x21
+    jc .bat_fail
+    mov dx, path_gem_bat_local
+    call exec_try_wait
+    jnc .wait_done
+
+.bat_fail:
     mov [last_fail_ax], ax
 
 .print_fail:
@@ -94,26 +114,6 @@ exec_try_wait:
     xor bx, bx
     mov ax, 0x4B00
     int 0x21
-    jc .fail
-    mov ah, 0x4D
-    int 0x21
-    xor ax, ax
-    clc
-    ret
-.fail:
-    stc
-    ret
-
-exec_try_wait_gemarg:
-    push es
-    push ds
-    pop es
-    mov ax, ds
-    mov [exec_gemvdi_params + 4], ax
-    mov bx, exec_gemvdi_params
-    mov ax, 0x4B00
-    int 0x21
-    pop es
     jc .fail
     mov ah, 0x4D
     int 0x21
@@ -157,22 +157,17 @@ print_hex_nibble:
     ret
 
 msg_begin    db "[OPENGEM] launch", 13, 10, '$'
-msg_blocked  db "[OPENGEM] runtime not ready, launch skipped", 13, 10, '$'
+msg_blocked  db "[OPENGEM] launch skipped", 13, 10, '$'
+msg_try_ctmouse db "[OPENGEM] try CTMOUSE", 13, 10, '$'
 msg_try_vdi  db "[OPENGEM] try GEMVDI", 13, 10, '$'
+msg_try_bat  db "[OPENGEM] try GEM.BAT", 13, 10, '$'
 msg_fail     db "[OPENGEM] launch failed AX=", '$'
 msg_return   db 13, 10, "[OPENGEM] returned", 13, 10, '$'
 path_gemsys_dir db "\GEMAPPS\GEMSYS", 0
 path_root_dir db "\", 0
+path_ctmouse_local db "CTMOUSE.EXE", 0
+path_gem_bat_local db "GEM.BAT", 0
 path_gemvdi_local db "GEMVDI.EXE", 0
 path_gemvdi_rel_from_root  db "GEMAPPS\GEMSYS\GEMVDI.EXE", 0
 path_gem_exe_rel_from_root db "GEMAPPS\GEMSYS\GEM.EXE", 0
-exec_gemvdi_tail db 8, ' GEM.EXE', 13
-exec_gemvdi_params:
-    dw 0
-    dw exec_gemvdi_tail
-    dw 0
-    dw 0
-    dw 0
-    dw 0
-    dw 0
 last_fail_ax dw 0

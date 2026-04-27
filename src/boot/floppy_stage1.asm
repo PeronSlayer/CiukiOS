@@ -10786,7 +10786,7 @@ int2f_handler:
     je .idle
     cmp ax, 0x1600
     je .query_win
-    iret
+    jmp far [cs:old_int2f_off]
 .idle:
     iret
 .query_win:
