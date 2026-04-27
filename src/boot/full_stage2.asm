@@ -111,6 +111,11 @@ stage2_entry:
     retf
 
 exec_try_wait:
+    push bx
+    ; Keep DS stable across EXEC/TSR handoffs: child programs may return
+    ; with registers altered, but Stage2 strings/paths are CS-relative.
+    push cs
+    pop ds
     xor bx, bx
     mov ax, 0x4B00
     int 0x21
@@ -119,9 +124,14 @@ exec_try_wait:
     int 0x21
     xor ax, ax
     clc
-    ret
+    jmp .done
 .fail:
     stc
+.done:
+    ; Restore DS for subsequent DOS path/message calls in Stage2 flow.
+    push cs
+    pop ds
+    pop bx
     ret
 
 print_ax_hex:
