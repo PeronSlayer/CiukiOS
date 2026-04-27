@@ -91,7 +91,7 @@ fi
 
 echo "[opengem-reglock] step 1/3 full smoke"
 set +e
-CIUKIOS_INCLUDE_OPENGEM=1 QEMU_TIMEOUT_SEC="$TIMEOUT_SEC" bash scripts/qemu_run_full.sh "${SMOKE_ARGS[@]}"
+CIUKIOS_INCLUDE_OPENGEM=1 CIUKIOS_STAGE2_AUTORUN=1 QEMU_TIMEOUT_SEC="$TIMEOUT_SEC" bash scripts/qemu_run_full.sh "${SMOKE_ARGS[@]}"
 SMOKE_RC=$?
 set -e
 if [[ $SMOKE_RC -eq 0 ]]; then
@@ -105,7 +105,7 @@ TRACE_ARGS=(--label "$LABEL" --timeout-sec "$TIMEOUT_SEC")
 if [[ "$DO_BUILD" -eq 0 ]]; then
   TRACE_ARGS+=(--no-build)
 fi
-if bash scripts/opengem_trace_full.sh "${TRACE_ARGS[@]}"; then
+if CIUKIOS_STAGE2_AUTORUN=1 bash scripts/opengem_trace_full.sh "${TRACE_ARGS[@]}"; then
   record_pass "trace_generation"
 else
   record_fail "trace_generation"
@@ -120,7 +120,7 @@ fi
 echo "[opengem-reglock] step 3/3 invariant checks"
 
 # Deterministic fallback guards in stage2 (continue only on AX=0002).
-FALLBACK_GUARDS="$(rg -n "cmp ax, 0x0002" src/boot/full_stage2.asm | wc -l | tr -d '[:space:]')"
+FALLBACK_GUARDS="$( (rg -n "cmp ax, 0x0002" src/boot/full_stage2.asm || true) | wc -l | tr -d '[:space:]' )"
 if [[ "$FALLBACK_GUARDS" -ge 2 ]]; then
   record_pass "stage2_fallback_guards"
 else

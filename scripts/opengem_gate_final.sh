@@ -135,7 +135,7 @@ if [[ "$DO_SMOKE" -eq 1 ]]; then
     SMOKE_ARGS+=(--no-build)
   fi
   set +e
-  CIUKIOS_INCLUDE_OPENGEM=1 QEMU_TIMEOUT_SEC="$TIMEOUT_SEC" bash scripts/qemu_run_full.sh "${SMOKE_ARGS[@]}"
+  CIUKIOS_INCLUDE_OPENGEM=1 CIUKIOS_STAGE2_AUTORUN=1 QEMU_TIMEOUT_SEC="$TIMEOUT_SEC" bash scripts/qemu_run_full.sh "${SMOKE_ARGS[@]}"
   SMOKE_RC=$?
   set -e
   if [[ $SMOKE_RC -eq 0 ]]; then
@@ -150,14 +150,14 @@ TRACE_ARGS=(--label "$LABEL" --timeout-sec "$TIMEOUT_SEC")
 if [[ "$DO_BUILD" -eq 0 ]]; then
   TRACE_ARGS+=(--no-build)
 fi
-bash scripts/opengem_trace_full.sh "${TRACE_ARGS[@]}"
+CIUKIOS_STAGE2_AUTORUN=1 bash scripts/opengem_trace_full.sh "${TRACE_ARGS[@]}"
 
 echo "[opengem-gate] step 3/3: acceptance campaign"
 ACC_ARGS=(--label "$LABEL" --timeout-sec "$TIMEOUT_SEC" --runs "$RUNS")
 if [[ "$DO_BUILD" -eq 0 ]]; then
   ACC_ARGS+=(--no-build)
 fi
-bash scripts/opengem_acceptance_full.sh "${ACC_ARGS[@]}"
+CIUKIOS_STAGE2_AUTORUN=1 bash scripts/opengem_acceptance_full.sh "${ACC_ARGS[@]}"
 
 ACC_REPORT="build/full/opengem-acceptance-full.${LABEL}.report.txt"
 TRACE_SERIAL="build/full/opengem-trace-full.${LABEL}.serial.log"
