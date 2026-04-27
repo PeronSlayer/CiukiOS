@@ -10179,6 +10179,13 @@ mouse_vga_cursor_refresh:
     jne .active
 
 .inactive:
+    cmp byte [cs:current_video_mode], 0x12
+    jne .inactive_visibility_check
+    cmp word [cs:mouse_cb_seg], 0
+    jne .inactive_visibility_check
+    cmp byte [cs:mouse_bios_enabled], 0
+    je .skip_no_trace
+.inactive_visibility_check:
     cmp byte [cs:mouse_visible], 1
     je .active
     cmp byte [cs:refresh_skip_trace_count], 8
