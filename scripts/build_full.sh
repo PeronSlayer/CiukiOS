@@ -318,8 +318,8 @@ if command -v mcopy >/dev/null 2>&1; then
 			mtools_try mmd -i "$IMG" ::GEMAPPS
 			mtools_try mmd -i "$IMG" ::GEMAPPS/GEMSYS
 		fi
-		mtools_try mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::CTMOUSE.EXE"
-		mtools_try mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::GEMAPPS/GEMSYS/CTMOUSE.EXE"
+#		mtools_try mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::CTMOUSE.EXE"
+#		mtools_try mcopy -o -i "$IMG" "$CTMOUSE_BIN" "::GEMAPPS/GEMSYS/CTMOUSE.EXE"
 	else
 		echo "[build-full] CTMOUSE payload not found at $CTMOUSE_BIN (skipping)"
 	fi

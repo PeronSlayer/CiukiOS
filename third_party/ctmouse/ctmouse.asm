@@ -3784,7 +3784,7 @@ real_start:	cld
 		push	ds
 		MOVSEG	ds,es,,@TSRcode
 		mov	[disabled?],1		; copied back in setupdriver
-		DOSSetIntr 33h,,,@TSRcode:handler33
+;PATCHED: 		DOSSetIntr 33h,,,@TSRcode:handler33
 		POPSEG	ds,@data
 		pop	ax
 		mov	di,dataref:S_installed	; 'Installed at'
