@@ -112,9 +112,64 @@ stage1_start:
 %endif
 %endif
 
-main_loop:
-    mov si, msg_prompt
+helper_get_drive_letter:
+    ; Input: al = boot_drive value (BIOS format: 0x00=A, 0x01=B, 0x80=C, 0x81=D, etc.)
+    ; Output: al = drive letter ASCII ('A', 'B', 'C', etc.)
+    cmp al, 0x80
+    jb .floppy_drive
+    ; Hard disk: 0x80=C, 0x81=D, etc.
+    sub al, 0x7E    ; 0x80 - 0x7E = 2, so 0x80 -> 2 (C), 0x81 -> 3 (D), etc.
+.floppy_drive:
+    ; Floppy: 0x00=A, 0x01=B, 0x02=C (shouldn't happen on floppy)
+    and al, 0x0F    ; Ensure single digit (0-15)
+    add al, 0x41    ; Convert to ASCII ('A', 'B', etc.)
+    ret
+
+print_prompt:
+    push ax
+    push si
+    ; Print "CiukiOS "
+    mov si, msg_prompt_prefix
     call print_string_dual
+    ; Print drive letter
+    mov al, [boot_drive]
+    call helper_get_drive_letter
+    call putc_dual
+    ; Print ":"
+    mov al, 0x3A
+    call putc_dual
+    ; Print "\"
+    mov al, 0x5C
+    call putc_dual
+    ; Get and print CWD if not root
+    xor dl, dl
+    mov si, cwd_buf
+    mov ah, 0x47
+    int 0x21
+    cmp byte [cwd_buf], 0
+    je .prompt_gt
+    mov si, cwd_buf
+    call print_string_dual
+    ; Print "\" after CWD
+    mov al, 0x5C
+    call putc_dual
+.prompt_gt:
+    ; Print "> "
+    mov al, 0x3E
+    call putc_dual
+    mov al, 0x20
+    call putc_dual
+    ; Print newline and set cursor to row 2
+    call print_newline_dual
+    xor dl, dl
+    mov dh, 2
+    call set_cursor_pos
+    pop si
+    pop ax
+    ret
+
+main_loop:
+    call print_prompt
 
     call read_command_line
     call dispatch_command
@@ -11361,6 +11416,7 @@ msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
 msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
 msg_prompt    db "Ciuki> ", 0
+msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
 msg_banner_title db "CiukiOS pre-Alpha v0.5.0 (CiukiDOS Shell)", 0
 msg_shell_hint db "Shell", 0
