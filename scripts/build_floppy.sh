@@ -33,6 +33,10 @@ FILEIO_MAX_SIZE=1024
 DELTEST_SRC="src/com/deltest.bin.asm"
 DELTEST_BIN="build/floppy/obj/deltest.bin"
 DELTEST_MAX_SIZE=512
+CIUKEDIT_SRC="src/com/ciukedit.asm"
+CIUKEDIT_BIN="build/floppy/obj/ciukedit.com"
+CIUKEDIT_MAX_SIZE=1024
+STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 
 FAT_RESERVED_SECTORS=$((1 + STAGE1_SECTORS))
 FAT_SECTORS_PER_FAT=9
@@ -73,6 +77,10 @@ if [[ ! -f "$DELTEST_SRC" ]]; then
   echo "[build-floppy] ERROR: deltest payload source not found: $DELTEST_SRC" >&2
   exit 1
 fi
+if [[ ! -f "$CIUKEDIT_SRC" ]]; then
+  echo "[build-floppy] ERROR: ciukedit source not found: $CIUKEDIT_SRC" >&2
+  exit 1
+fi
 
 echo "[build-floppy] assembling stage0 boot sector"
 nasm -f bin "$BOOT_SRC" -o "$BOOT_BIN"
@@ -93,8 +101,8 @@ nasm -f bin "$STAGE1_SRC" \
   -D FAT_ROOT_DIR_SECTORS="$ROOT_DIR_SECTORS" \
   -D FAT_TYPE=12 \
   -D FAT_LBA_OFFSET=0 \
+  -D STAGE1_SELFTEST_AUTORUN="$STAGE1_SELFTEST_AUTORUN" \
   -o "$STAGE1_BIN"
-
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
 if [[ "$STAGE1_SIZE" -gt "$STAGE1_SLOT_SIZE" ]]; then
   echo "[build-floppy] ERROR: stage1 payload is $STAGE1_SIZE bytes (max $STAGE1_SLOT_SIZE)" >&2
@@ -151,15 +159,29 @@ if [[ "$DELTEST_SIZE" -gt "$DELTEST_MAX_SIZE" ]]; then
   exit 1
 fi
 
+echo "[build-floppy] assembling CIUKEDIT editor payload"
+nasm -f bin "$CIUKEDIT_SRC" -o "$CIUKEDIT_BIN"
+
+CIUKEDIT_SIZE="$(stat -c%s "$CIUKEDIT_BIN")"
+if [[ "$CIUKEDIT_SIZE" -gt "$CIUKEDIT_MAX_SIZE" ]]; then
+  echo "[build-floppy] ERROR: CIUKEDIT payload is $CIUKEDIT_SIZE bytes (max $CIUKEDIT_MAX_SIZE)" >&2
+  exit 1
+fi
+
 FAT_SECTOR_BIN="build/floppy/obj/fat_sector.bin"
 ROOT_ENTRY_BIN="build/floppy/obj/root_comdemo_entry.bin"
 ROOT_ENTRY_MZ_BIN="build/floppy/obj/root_mzdemo_entry.bin"
 ROOT_ENTRY_FILEIO_BIN="build/floppy/obj/root_fileio_entry.bin"
 ROOT_ENTRY_DELTEST_BIN="build/floppy/obj/root_deltest_entry.bin"
 ROOT_ENTRY_STAGE2_BIN="build/floppy/obj/root_stage2_entry.bin"
+ROOT_ENTRY_CIUKEDIT_BIN="build/floppy/obj/root_ciukedit_entry.bin"
 
-printf 'F0FFFFFFFFFF05F0FFFF0F07F0' | xxd -r -p > "$FAT_SECTOR_BIN"
-dd if=/dev/zero bs=1 count=$((512 - 12)) status=none >> "$FAT_SECTOR_BIN"
+# FAT12: entries 0-9
+# [0]=0xFF0 media, [1]=0xFFF, [2]=0xFFF(COMDEMO), [3]=0xFFF(MZDEMO)
+# [4]=0x005(FILEIO->5), [5]=0xFFF(FILEIO end), [6]=0xFFF(DELTEST), [7]=0x070(STAGE2)
+# [8]=0x009(CIUKEDIT->9), [9]=0xFFF(CIUKEDIT end)
+printf 'F0FFFFFFFFFF05F0FFFF0F0709F0FF' | xxd -r -p > "$FAT_SECTOR_BIN"
+dd if=/dev/zero bs=1 count=$((512 - 15)) status=none >> "$FAT_SECTOR_BIN"
 
 dd if=/dev/zero of="$ROOT_ENTRY_BIN" bs=1 count=32 status=none
 printf 'COMDEMO COM' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=0 conv=notrunc status=none
@@ -191,6 +213,12 @@ printf '\x20' | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=11 conv=notrunc status=
 printf '\x07\x00' | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=26 conv=notrunc status=none
 printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((STAGE2_SIZE & 0xFF)) $(((STAGE2_SIZE >> 8) & 0xFF)) $(((STAGE2_SIZE >> 16) & 0xFF)) $(((STAGE2_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=28 conv=notrunc status=none
 
+dd if=/dev/zero of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 count=32 status=none
+printf 'CIUKEDITCOM' | dd of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 seek=0 conv=notrunc status=none
+printf '\x20' | dd of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 seek=11 conv=notrunc status=none
+printf '\x08\x00' | dd of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 seek=26 conv=notrunc status=none
+printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((CIUKEDIT_SIZE & 0xFF)) $(((CIUKEDIT_SIZE >> 8) & 0xFF)) $(((CIUKEDIT_SIZE >> 16) & 0xFF)) $(((CIUKEDIT_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 seek=28 conv=notrunc status=none
+
 echo "[build-floppy] creating 1.44MB floppy image"
 dd if=/dev/zero of=build/floppy/ciukios-floppy.img bs=512 count=2880 status=none
 dd if="$BOOT_BIN" of="$IMG" bs=512 count=1 conv=notrunc status=none
@@ -202,11 +230,13 @@ dd if="$ROOT_ENTRY_MZ_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=not
 dd if="$ROOT_ENTRY_FILEIO_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_DELTEST_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_STAGE2_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_CIUKEDIT_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 160)) conv=notrunc status=none
 dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek="$DATA_LBA" count=1 conv=notrunc status=none
 dd if="$MZDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
 dd if="$FILEIO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 2)) count=2 conv=notrunc status=none
 dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 4)) count=1 conv=notrunc status=none
 dd if="$STAGE2_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 5)) status=none
+dd if="$CIUKEDIT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 6)) count=2 conv=notrunc status=none
 
 cat > build/floppy/README.txt << 'TXT'
 CiukiOS Legacy v2 - Floppy profile
@@ -220,6 +250,7 @@ MZ demo: MZDEMO.EXE cluster 3 for test/demo
 FILEIO test: FILEIO.BIN clusters 4-5 for multi-sector I/O tests
 DELTEST test: DELTEST.BIN cluster 6 for file deletion tests
 Stage2 runtime: STAGE2.BIN cluster 7 (shell-only bootstrap and extended services)
+Editor: CIUKEDIT.COM clusters 8-9 (minimal line editor MVP)
 TXT
 
 echo "[build-floppy] done: $IMG"
