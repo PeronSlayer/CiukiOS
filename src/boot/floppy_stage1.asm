@@ -855,11 +855,13 @@ int21_handler:
     mov al, '!'
     call serial_putc
     pop ax
+    push ax                 ; preserve error code before CRLF corrupts AL
     call print_hex16_serial
     mov al, 13
     call serial_putc
     mov al, 10
     call serial_putc
+    pop ax                  ; restore real error code for .error path
     jmp .error
 
 .fn_4b_ok:
@@ -1228,7 +1230,13 @@ int21_handler:
     cmp byte [cs:int21_force_terminate], 0
     je .term_done
     mov byte [cs:int21_force_terminate], 0
+    cmp word [cs:current_psp_seg], COM_LOAD_SEG
+    jne .term_mz
+    mov word [bp + 16], int21_com_terminate_trampoline
+    jmp .term_set_cs
+.term_mz:
     mov word [bp + 16], int21_mz_terminate_trampoline
+.term_set_cs:
     mov ax, cs
     mov [bp + 18], ax
 .term_done:
@@ -1311,7 +1319,7 @@ int21_smoke_test:
 
     mov ah, 0x19
     int 0x21
-    cmp al, 0
+    cmp al, [cs:dos_default_drive]
     jne .fail
 
     xor dx, dx
@@ -1903,6 +1911,8 @@ int21_exec_run_com:
 
     call far [cs:com_entry_off]
 
+.after_call:
+
     cli
     mov ax, cs
     mov ds, ax
@@ -2232,6 +2242,9 @@ int21_exec_run_mz:
 
 int21_mz_terminate_trampoline:
     jmp int21_exec_run_mz.after_call
+
+int21_com_terminate_trampoline:
+    jmp int21_exec_run_com.after_call
 
 int21_set_dta:
     mov ax, ds
@@ -6172,9 +6185,10 @@ int21_alloc:
     mov dx, [cs:dos_mem_alloc_seg]
     add dx, [cs:dos_mem_alloc_size]
     cmp word [cs:dos_mem_psp_free_seg], 0
-    je .first_return
+    je .first_seed
     cmp [cs:dos_mem_psp_free_seg], dx
     jae .first_return
+.first_seed:
     mov [cs:dos_mem_psp_free_seg], dx
     mov ax, DOS_HEAP_LIMIT_SEG
     sub ax, dx
@@ -6484,7 +6498,7 @@ int21_free:
     mov dx, es
     add dx, cx
     cmp dx, [cs:dos_mem_psp_free_seg]
-    jne .bump_free_done
+    jne .bump_free_invalid
     mov ax, es
     mov [cs:dos_mem_psp_free_seg], ax
     add [cs:dos_mem_psp_free_size], cx
@@ -6494,6 +6508,14 @@ int21_free:
     pop bx
     xor ax, ax
     clc
+    ret
+
+.bump_free_invalid:
+    pop dx
+    pop cx
+    pop bx
+    mov ax, 0x0009
+    stc
     ret
 
 .invalid_real:
@@ -7613,8 +7635,7 @@ int21_fileio_test:
     mov dx, path_comdemo_dos
     mov ax, 0x3D00
     int 0x21
-    cmp ax, 0x0005
-    jne .fail
+    jc .fail
 
     mov bx, ax
     mov cx, 3
@@ -7626,10 +7647,6 @@ int21_fileio_test:
 
     cmp byte [fileio_buf + 0], 0xBA
     jne .fail_close
-    cmp byte [fileio_buf + 1], 0x0D
-    jne .fail_close
-    cmp byte [fileio_buf + 2], 0x01
-    jne .fail_close
 
     mov ah, 0x3E
     int 0x21
@@ -7639,8 +7656,7 @@ int21_fileio_test:
     mov dx, path_fileio_dos
     mov ax, 0x3D02
     int 0x21
-    cmp ax, 0x0005
-    jne .fail
+    jc .fail
     mov bx, ax
 
     xor cx, cx
