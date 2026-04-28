@@ -459,6 +459,8 @@ int21_handler:
     je .fn_52
     cmp ah, 0x54
     je .fn_54
+    cmp ah, 0x56
+    je .fn_56
     cmp ah, 0x57
     je .fn_57
     cmp ah, 0x58
@@ -783,12 +785,19 @@ int21_handler:
     jmp .success
 
 .fn_39:
-    mov ax, 0x0005
-    jmp .error
+    call int21_mkdir
+    jc .error
+    jmp .success
 
 .fn_3a:
-    mov ax, 0x0005
-    jmp .error
+    call int21_rmdir
+    jc .error
+    jmp .success
+
+.fn_56:
+    call int21_rename
+    jc .error
+    jmp .success
 
 .fn_3b:
     call int21_chdir
@@ -5184,6 +5193,259 @@ int21_delete:
     pop ds
     pop si
     pop dx
+    pop bx
+    ret
+
+int21_mkdir:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov si, dx
+    call int21_path_to_fat_name
+    jc .mkdir_fail
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov si, path_fat_name
+    mov bx, 0xFFFF
+    call load_root_file_first_sector
+    jnc .mkdir_fail
+
+    xor dx, dx
+.mkdir_scan:
+    cmp dx, FAT_ROOT_START_LBA + FAT_ROOT_DIR_SECTORS
+    jae .mkdir_alloc
+    mov ax, dx
+    xor bx, bx
+    call read_sector_lba
+    jc .mkdir_io_err
+
+    xor di, di
+    mov cx, 16
+.mkdir_entries:
+    mov al, [es:di]
+    cmp al, 0x00
+    je .mkdir_create
+    cmp al, 0xE5
+    je .mkdir_create
+    add di, 32
+    loop .mkdir_entries
+    inc dx
+    jmp .mkdir_scan
+
+.mkdir_create:
+    mov ax, dx
+    mov [cs:tmp_next_cluster], ax
+    mov ax, di
+    mov [cs:tmp_cluster], ax
+    mov di, es
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+
+    mov byte [es:di - 11 + 11], 0x10
+    mov byte [es:di - 11 + 12], 0
+    mov byte [es:di - 11 + 13], 0
+    mov word [es:di - 11 + 14], 0
+    mov word [es:di - 11 + 16], 0x2121
+    mov word [es:di - 11 + 18], 0x2121
+    mov word [es:di - 11 + 20], 0
+    mov word [es:di - 11 + 22], 0x0200
+    mov word [es:di - 11 + 24], 0x0002
+    mov word [es:di - 11 + 26], 0x0002
+    mov word [es:di - 11 + 28], 0
+    mov word [es:di - 11 + 30], 0
+
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call write_sector_lba
+    jc .mkdir_io_err
+
+    xor ax, ax
+    clc
+    jmp .mkdir_done
+
+.mkdir_alloc:
+    mov ax, 0x0005
+    stc
+    jmp .mkdir_done
+
+.mkdir_fail:
+    mov ax, 0x0003
+    stc
+    jmp .mkdir_done
+
+.mkdir_io_err:
+    mov ax, 0x0005
+    stc
+
+.mkdir_done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_rmdir:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov si, dx
+    call int21_path_to_fat_name
+    jc .rmdir_fail
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov si, path_fat_name
+    mov bx, 0xFFFF
+    call load_root_file_first_sector
+    jc .rmdir_not_found
+
+    test byte [cs:search_found_attr], 0x10
+    jz .rmdir_not_dir
+
+    mov ax, [cs:search_found_root_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .rmdir_io_err
+
+    mov di, [cs:search_found_root_off]
+    mov byte [es:di], 0xE5
+
+    mov ax, [cs:search_found_root_lba]
+    xor bx, bx
+    call write_sector_lba
+    jc .rmdir_io_err
+
+    xor ax, ax
+    clc
+    jmp .rmdir_done
+
+.rmdir_not_dir:
+    mov ax, 0x0010
+    stc
+    jmp .rmdir_done
+
+.rmdir_not_found:
+    mov ax, 0x0002
+    stc
+    jmp .rmdir_done
+
+.rmdir_fail:
+    mov ax, 0x0003
+    stc
+    jmp .rmdir_done
+
+.rmdir_io_err:
+    mov ax, 0x0005
+    stc
+
+.rmdir_done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_rename:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    mov si, [ss:bp + 6]
+    mov ds, [ss:bp + 12]
+    call int21_path_to_fat_name
+    jc .rename_fail
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov di, search_found_name
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+
+    mov si, [ss:bp + 10]
+    mov ds, [ss:bp + 14]
+    call int21_path_to_fat_name
+    jc .rename_fail
+
+    mov ax, cs
+    mov ds, ax
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov si, search_found_name
+    mov bx, 0xFFFF
+    call load_root_file_first_sector
+    jc .rename_not_found
+
+    mov ax, [cs:search_found_root_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .rename_io_err
+
+    mov di, [cs:search_found_root_off]
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+
+    mov ax, [cs:search_found_root_lba]
+    xor bx, bx
+    call write_sector_lba
+    jc .rename_io_err
+
+    xor ax, ax
+    clc
+    jmp .rename_done
+
+.rename_not_found:
+    mov ax, 0x0002
+    stc
+    jmp .rename_done
+
+.rename_fail_path:
+.rename_fail_newname:
+.rename_fail:
+    mov ax, 0x0003
+    stc
+    jmp .rename_done
+
+.rename_io_err:
+    mov ax, 0x0005
+    stc
+
+.rename_done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     ret
 
