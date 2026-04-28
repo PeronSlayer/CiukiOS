@@ -3,6 +3,11 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
+## pre-Alpha v0.5.0 (2026-04-28)
+1. Stabilized Stage1 startup and shell-entry runtime behavior for more deterministic boot bring-up.
+2. Hardened shell prompt/input paths, including drive and current-directory state handling.
+3. Improved QEMU stderr observability to speed up runtime diagnostics and regression triage.
+
 ## pre-Alpha v0.5.0 (2026-04-22)
 1. Restarted the project from a clean legacy BIOS x86 architecture baseline.
 2. Archived the previous codebase state to `OLD/archive-2026-04-22/` for historical reference.
