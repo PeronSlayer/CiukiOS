@@ -9525,58 +9525,19 @@ draw_shell_chrome:
     mov cl, 80
     call draw_hline_attr
 
-    mov al, ' '
-    mov dh, 1
-    mov dl, 0
-    mov bl, 0x3F
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
 
     mov si, msg_banner_title
     mov dh, 0
-    mov dl, 16
+    mov dl, 20
     mov bl, 0x1F
     call video_write_string_attr
 
-    mov si, msg_shell_hint
-    mov dh, 1
-    mov dl, 2
-    mov bl, 0x3F
-    call video_write_string_attr
-
-    mov si, msg_shell_quick
-    mov dh, 1
-    mov dl, 44
-    mov bl, 0x3F
-    call video_write_string_attr
-
-    mov al, 0xC4
     mov dh, 2
-    mov dl, 0
-    mov bl, 0x17
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
-
-    mov al, ' '
-    mov dh, 24
-    mov dl, 0
-    mov bl, 0x17
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
-
-    mov si, msg_shell_footer
-    mov dh, 24
-    mov dl, 1
-    mov bl, 0x1F
-    call video_write_string_attr
 
 %ifdef FAT_TYPE
 %if FAT_TYPE == 12
     mov si, msg_shell_sysinfo_prefix
-    mov dh, 24
+    mov dh, 0
     mov dl, 70
     mov bl, 0x1F
     call video_write_string_attr
@@ -9590,20 +9551,20 @@ draw_shell_chrome:
     call convert_dec_buf
 
     mov si, ram_buf
-    mov dh, 24
+    mov dh, 0
     mov dl, 74
     mov bl, 0x1F
     call video_write_string_attr
 
     mov al, 'K'
-    mov dh, 24
+    mov dh, 0
     mov dl, 79
     mov bl, 0x1F
     call video_write_char_attr
 %endif
 %endif
 
-    mov dh, 6
+    mov dh, 2
     xor dl, dl
     call set_cursor_pos
 
@@ -11401,7 +11362,7 @@ msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
 msg_prompt    db "Ciuki> ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db " CiukiOS v0.5.8 ", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.5.0 (CiukiDOS Shell)", 0
 msg_shell_hint db "Shell", 0
 msg_shell_quick db "help dir", 0
 msg_shell_footer db "help cls reboot", 0
@@ -11413,7 +11374,7 @@ msg_help_core db "  help  dir  cd  cls  tree  ver", 13, 10, 0
 msg_help_runtime db "  dos21  comdemo  mzdemo  fileio  findtest", 13, 10, 0
 msg_help_system db "  gfxdemo  ticks  drive  mouse  keytest  reboot  halt", 13, 10, 0
 msg_help_apps db "", 0
-msg_version_line db "CiukiOS v0.5.8", 13, 10, 0
+msg_version_line db "CiukiOS pre-Alpha v0.5.0 (CiukiDOS Shell)", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
 msg_tree_system db "   |- SYSTEM", 13, 10, 0
