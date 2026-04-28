@@ -11,6 +11,8 @@ echo "[qemu-test-stage1] running stage1 boot selftest regression"
 mkdir -p "$(dirname "$LOG_FILE")"
 rm -f "$LOG_FILE"
 
+export CIUKIOS_STAGE1_SELFTEST_AUTORUN=1
+
 if ! LOG_FILE="$LOG_FILE" QEMU_TIMEOUT_SEC="$TIMEOUT_SEC" bash scripts/qemu_run_floppy.sh --test; then
   echo "[qemu-test-stage1] FAIL (floppy test harness failed)" >&2
   tail -n 120 "$LOG_FILE" >&2 || true

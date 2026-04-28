@@ -52,6 +52,8 @@ FILEIO_SRC="src/com/fileio.bin.asm"
 FILEIO_BIN="build/full/obj/fileio.bin"
 DELTEST_SRC="src/com/deltest.bin.asm"
 DELTEST_BIN="build/full/obj/deltest.bin"
+CIUKEDIT_SRC="src/com/ciukedit.asm"
+CIUKEDIT_BIN="build/full/obj/ciukedit.com"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 # Default to shell-first UX on full profile; enable autorun explicitly for desktop tests.
 STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-0}"
@@ -63,7 +65,7 @@ mtools_try() {
 	timeout --kill-after="${MTOOLS_KILL_AFTER_SEC}s" "${MTOOLS_TIMEOUT_SEC}s" "$@" >/dev/null 2>&1 || true
 }
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -112,6 +114,7 @@ nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
 nasm -f bin "$MZDEMO_SRC"  -o "$MZDEMO_BIN"
 nasm -f bin "$FILEIO_SRC"  -o "$FILEIO_BIN"
 nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
+nasm -f bin "$CIUKEDIT_SRC" -o "$CIUKEDIT_BIN"
 
 STAGE2_SIZE="$(stat -c%s "$STAGE2_BIN")"
 if [[ "$STAGE2_SIZE" -gt "$STAGE2_MAX_SIZE" ]]; then
@@ -123,6 +126,7 @@ COMDEMO_SIZE="$(stat -c%s "$COMDEMO_BIN")"
 MZDEMO_SIZE="$(stat -c%s  "$MZDEMO_BIN")"
 FILEIO_SIZE="$(stat -c%s  "$FILEIO_BIN")"
 DELTEST_SIZE="$(stat -c%s "$DELTEST_BIN")"
+CIUKEDIT_SIZE="$(stat -c%s "$CIUKEDIT_BIN")"
 
 if [[ "$FILEIO_SIZE" -le 512 ]]; then
 	echo "[build-full] ERROR: FILEIO payload must span >1 cluster ($FILEIO_SIZE bytes)" >&2
@@ -131,10 +135,10 @@ fi
 
 # FAT16 sector (little-endian 16-bit entries):
 #  [0]=0xFFF8 media+reserved, [1]=0xFFFF, [2]=EOF(COMDEMO), [3]=EOF(MZDEMO),
-#  [4]=EOF(FILEIO), [5]=free, [6]=EOF(DELTEST), [7]=EOF(STAGE2)
+#  [4]=EOF(FILEIO), [5]=free, [6]=EOF(DELTEST), [7]=EOF(STAGE2), [8]=EOF(CIUKEDIT)
 FAT_SECTOR_BIN="build/full/obj/fat16_sector.bin"
-printf 'F8FFFFFFFFFFFFFFFFFF0000FFFFFFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
-dd if=/dev/zero bs=1 count=$((512 - 16)) status=none >> "$FAT_SECTOR_BIN"
+printf 'F8FFFFFFFFFFFFFFFFFF0000FFFFFFFFFFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
+dd if=/dev/zero bs=1 count=$((512 - 18)) status=none >> "$FAT_SECTOR_BIN"
 
 # Helper: write a 32-byte FAT root directory entry
 make_root_entry() {
@@ -155,11 +159,13 @@ ROOT_ENTRY_MZDEMO="build/full/obj/root_mzdemo.bin"
 ROOT_ENTRY_FILEIO="build/full/obj/root_fileio.bin"
 ROOT_ENTRY_DELTEST="build/full/obj/root_deltest.bin"
 ROOT_ENTRY_STAGE2="build/full/obj/root_stage2.bin"
+ROOT_ENTRY_CIUKEDIT="build/full/obj/root_ciukedit.bin"
 make_root_entry "$ROOT_ENTRY_COMDEMO" 'COMDEMO COM' 2 "$COMDEMO_SIZE"
 make_root_entry "$ROOT_ENTRY_MZDEMO"  'MZDEMO  EXE' 3 "$MZDEMO_SIZE"
 make_root_entry "$ROOT_ENTRY_FILEIO"  'FILEIO  BIN' 4 "$FILEIO_SIZE"
 make_root_entry "$ROOT_ENTRY_DELTEST" 'DELTEST BIN' 6 "$DELTEST_SIZE"
 make_root_entry "$ROOT_ENTRY_STAGE2"  'STAGE2  BIN' 7 "$STAGE2_SIZE"
+make_root_entry "$ROOT_ENTRY_CIUKEDIT" 'CIUKEDITCOM' 8 "$CIUKEDIT_SIZE"
 
 echo "[build-full] creating 128MB FAT16 image"
 dd if=/dev/zero of="$IMG" bs=512 count="$TOTAL_SECTORS" status=none
@@ -171,12 +177,14 @@ dd if="$ROOT_ENTRY_COMDEMO" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 0))  conv=no
 dd if="$ROOT_ENTRY_MZDEMO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_FILEIO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_DELTEST" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_STAGE2"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_STAGE2"   of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_CIUKEDIT" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 160)) conv=notrunc status=none
 dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((2 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
 dd if="$MZDEMO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((3 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
 dd if="$FILEIO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((4 - 2) * FAT_SECTORS_PER_CLUSTER))) count=2 conv=notrunc status=none
 dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((6 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
 dd if="$STAGE2_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((7 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
+dd if="$CIUKEDIT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((8 - 2) * FAT_SECTORS_PER_CLUSTER))) count=2 conv=notrunc status=none
 
 echo "[build-full] shell-only profile: external desktop payload injection disabled"
 
@@ -185,9 +193,9 @@ CiukiOS Legacy v2 - Full profile (FAT16 baseline)
 
 Image: ciukios-full.img (128MB)
 State: BIOS stage0 -> stage1 with full DOS runtime and FAT16 file I/O
-Filesystem: FAT16 (SPT=63 Heads=16 128MB) with COMDEMO/MZDEMO/FILEIO/DELTEST/STAGE2 payloads
+Filesystem: FAT16 (SPT=63 Heads=16 128MB) with COMDEMO/MZDEMO/FILEIO/DELTEST/STAGE2/CIUKEDIT payloads
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-15
-Data: cluster 2=COMDEMO, 3=MZDEMO, 4-5=FILEIO, 6=DELTEST, 7=STAGE2
+Data: cluster 2=COMDEMO, 3=MZDEMO, 4-5=FILEIO, 6=DELTEST, 7=STAGE2, 8=CIUKEDIT
 TXT
 
 echo "[build-full] done: $IMG"

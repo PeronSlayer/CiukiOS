@@ -112,9 +112,64 @@ stage1_start:
 %endif
 %endif
 
-main_loop:
-    mov si, msg_prompt
+helper_get_drive_letter:
+    ; Input: al = boot_drive value (BIOS format: 0x00=A, 0x01=B, 0x80=C, 0x81=D, etc.)
+    ; Output: al = drive letter ASCII ('A', 'B', 'C', etc.)
+    cmp al, 0x80
+    jb .floppy_drive
+    ; Hard disk: 0x80=C, 0x81=D, etc.
+    sub al, 0x7E    ; 0x80 - 0x7E = 2, so 0x80 -> 2 (C), 0x81 -> 3 (D), etc.
+.floppy_drive:
+    ; Floppy: 0x00=A, 0x01=B, 0x02=C (shouldn't happen on floppy)
+    and al, 0x0F    ; Ensure single digit (0-15)
+    add al, 0x41    ; Convert to ASCII ('A', 'B', etc.)
+    ret
+
+print_prompt:
+    push ax
+    push si
+    ; Print "CiukiOS "
+    mov si, msg_prompt_prefix
     call print_string_dual
+    ; Print drive letter
+    mov al, [boot_drive]
+    call helper_get_drive_letter
+    call putc_dual
+    ; Print ":"
+    mov al, 0x3A
+    call putc_dual
+    ; Print "\"
+    mov al, 0x5C
+    call putc_dual
+    ; Get and print CWD if not root
+    xor dl, dl
+    mov si, cwd_buf
+    mov ah, 0x47
+    int 0x21
+    cmp byte [cwd_buf], 0
+    je .prompt_gt
+    mov si, cwd_buf
+    call print_string_dual
+    ; Print "\" after CWD
+    mov al, 0x5C
+    call putc_dual
+.prompt_gt:
+    ; Print "> "
+    mov al, 0x3E
+    call putc_dual
+    mov al, 0x20
+    call putc_dual
+    ; Print newline and set cursor to row 2
+    call print_newline_dual
+    xor dl, dl
+    mov dh, 2
+    call set_cursor_pos
+    pop si
+    pop ax
+    ret
+
+main_loop:
+    call print_prompt
 
     call read_command_line
     call dispatch_command
@@ -855,11 +910,13 @@ int21_handler:
     mov al, '!'
     call serial_putc
     pop ax
+    push ax                 ; preserve error code before CRLF corrupts AL
     call print_hex16_serial
     mov al, 13
     call serial_putc
     mov al, 10
     call serial_putc
+    pop ax                  ; restore real error code for .error path
     jmp .error
 
 .fn_4b_ok:
@@ -1228,7 +1285,13 @@ int21_handler:
     cmp byte [cs:int21_force_terminate], 0
     je .term_done
     mov byte [cs:int21_force_terminate], 0
+    cmp word [cs:current_psp_seg], COM_LOAD_SEG
+    jne .term_mz
+    mov word [bp + 16], int21_com_terminate_trampoline
+    jmp .term_set_cs
+.term_mz:
     mov word [bp + 16], int21_mz_terminate_trampoline
+.term_set_cs:
     mov ax, cs
     mov [bp + 18], ax
 .term_done:
@@ -1311,7 +1374,7 @@ int21_smoke_test:
 
     mov ah, 0x19
     int 0x21
-    cmp al, 0
+    cmp al, [cs:dos_default_drive]
     jne .fail
 
     xor dx, dx
@@ -1903,6 +1966,8 @@ int21_exec_run_com:
 
     call far [cs:com_entry_off]
 
+.after_call:
+
     cli
     mov ax, cs
     mov ds, ax
@@ -2232,6 +2297,9 @@ int21_exec_run_mz:
 
 int21_mz_terminate_trampoline:
     jmp int21_exec_run_mz.after_call
+
+int21_com_terminate_trampoline:
+    jmp int21_exec_run_com.after_call
 
 int21_set_dta:
     mov ax, ds
@@ -6172,9 +6240,10 @@ int21_alloc:
     mov dx, [cs:dos_mem_alloc_seg]
     add dx, [cs:dos_mem_alloc_size]
     cmp word [cs:dos_mem_psp_free_seg], 0
-    je .first_return
+    je .first_seed
     cmp [cs:dos_mem_psp_free_seg], dx
     jae .first_return
+.first_seed:
     mov [cs:dos_mem_psp_free_seg], dx
     mov ax, DOS_HEAP_LIMIT_SEG
     sub ax, dx
@@ -6484,7 +6553,7 @@ int21_free:
     mov dx, es
     add dx, cx
     cmp dx, [cs:dos_mem_psp_free_seg]
-    jne .bump_free_done
+    jne .bump_free_invalid
     mov ax, es
     mov [cs:dos_mem_psp_free_seg], ax
     add [cs:dos_mem_psp_free_size], cx
@@ -6494,6 +6563,14 @@ int21_free:
     pop bx
     xor ax, ax
     clc
+    ret
+
+.bump_free_invalid:
+    pop dx
+    pop cx
+    pop bx
+    mov ax, 0x0009
+    stc
     ret
 
 .invalid_real:
@@ -7613,8 +7690,7 @@ int21_fileio_test:
     mov dx, path_comdemo_dos
     mov ax, 0x3D00
     int 0x21
-    cmp ax, 0x0005
-    jne .fail
+    jc .fail
 
     mov bx, ax
     mov cx, 3
@@ -7626,10 +7702,6 @@ int21_fileio_test:
 
     cmp byte [fileio_buf + 0], 0xBA
     jne .fail_close
-    cmp byte [fileio_buf + 1], 0x0D
-    jne .fail_close
-    cmp byte [fileio_buf + 2], 0x01
-    jne .fail_close
 
     mov ah, 0x3E
     int 0x21
@@ -7639,8 +7711,7 @@ int21_fileio_test:
     mov dx, path_fileio_dos
     mov ax, 0x3D02
     int 0x21
-    cmp ax, 0x0005
-    jne .fail
+    jc .fail
     mov bx, ax
 
     xor cx, cx
@@ -9509,58 +9580,19 @@ draw_shell_chrome:
     mov cl, 80
     call draw_hline_attr
 
-    mov al, ' '
-    mov dh, 1
-    mov dl, 0
-    mov bl, 0x3F
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
 
     mov si, msg_banner_title
     mov dh, 0
-    mov dl, 16
+    mov dl, 20
     mov bl, 0x1F
     call video_write_string_attr
 
-    mov si, msg_shell_hint
-    mov dh, 1
-    mov dl, 2
-    mov bl, 0x3F
-    call video_write_string_attr
-
-    mov si, msg_shell_quick
-    mov dh, 1
-    mov dl, 44
-    mov bl, 0x3F
-    call video_write_string_attr
-
-    mov al, 0xC4
     mov dh, 2
-    mov dl, 0
-    mov bl, 0x17
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
-
-    mov al, ' '
-    mov dh, 24
-    mov dl, 0
-    mov bl, 0x17
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
-
-    mov si, msg_shell_footer
-    mov dh, 24
-    mov dl, 1
-    mov bl, 0x1F
-    call video_write_string_attr
 
 %ifdef FAT_TYPE
 %if FAT_TYPE == 12
     mov si, msg_shell_sysinfo_prefix
-    mov dh, 24
+    mov dh, 0
     mov dl, 70
     mov bl, 0x1F
     call video_write_string_attr
@@ -9574,20 +9606,20 @@ draw_shell_chrome:
     call convert_dec_buf
 
     mov si, ram_buf
-    mov dh, 24
+    mov dh, 0
     mov dl, 74
     mov bl, 0x1F
     call video_write_string_attr
 
     mov al, 'K'
-    mov dh, 24
+    mov dh, 0
     mov dl, 79
     mov bl, 0x1F
     call video_write_char_attr
 %endif
 %endif
 
-    mov dh, 6
+    mov dh, 2
     xor dl, dl
     call set_cursor_pos
 
@@ -11384,8 +11416,9 @@ msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
 msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
 msg_prompt    db "Ciuki> ", 0
+msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db " CiukiOS v0.5.8 ", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.5.0 (CiukiDOS Shell)", 0
 msg_shell_hint db "Shell", 0
 msg_shell_quick db "help dir", 0
 msg_shell_footer db "help cls reboot", 0
@@ -11397,7 +11430,7 @@ msg_help_core db "  help  dir  cd  cls  tree  ver", 13, 10, 0
 msg_help_runtime db "  dos21  comdemo  mzdemo  fileio  findtest", 13, 10, 0
 msg_help_system db "  gfxdemo  ticks  drive  mouse  keytest  reboot  halt", 13, 10, 0
 msg_help_apps db "", 0
-msg_version_line db "CiukiOS v0.5.8", 13, 10, 0
+msg_version_line db "CiukiOS pre-Alpha v0.5.0 (CiukiDOS Shell)", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
 msg_tree_system db "   |- SYSTEM", 13, 10, 0

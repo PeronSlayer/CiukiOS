@@ -70,3 +70,9 @@
 63. Action: added CD-ROM profile scaffolding (`scripts/build_full_cd.sh`, `src/boot/full_cd_mbr.asm`) as foundation for the next distribution milestone.
 64. Action: workspace cleanup — removed intermediate QEMU debug logs (~80 files), ~14 stale test-run directories, agent session directories (`Agents/`, `setup/`), debug binary dumps, and obsolete root markdown files.
 65. Release: bumped project version to `CiukiOS pre-Alpha v0.5.9-final`; all P0/P1/P2 desktop runtime validation gates closed including real hardware evidence.
+
+## 2026-04-28
+66. Milestone: stabilized Stage1 startup path for deterministic shell entry during repeated boot cycles.
+67. Fix: hardened prompt, drive, and current-working-directory handling to keep interactive shell state coherent.
+68. Fix: enforced cursor placement behavior on line 1 in the shell prompt return flow.
+69. Action: improved QEMU stderr diagnostics to accelerate runtime regression triage.

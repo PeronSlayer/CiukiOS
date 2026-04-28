@@ -12,8 +12,9 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 4. DOS core implementation plan: [docs/dos-core-implementation-plan-v0.1.md](docs/dos-core-implementation-plan-v0.1.md)
 5. AI/development directives: [docs/ai-agent-directives.md](docs/ai-agent-directives.md)
 6. Engineering logbook: [docs/diario-bordo-v2.md](docs/diario-bordo-v2.md)
-7. Full changelog: [CHANGELOG.md](CHANGELOG.md)
-8. Donations and support: [DONATIONS.md](DONATIONS.md)
+7. Shell runtime stability note (2026-04-28): [docs/shell-runtime-stability-2026-04-28.md](docs/shell-runtime-stability-2026-04-28.md)
+8. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+9. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
 `CiukiOS pre-Alpha v0.5.0`
@@ -23,10 +24,10 @@ Versioning policy:
 2. Minor updates on this branch keep compatibility with the `v0.5.0` baseline.
 
 ## Changelog (Latest)
-### pre-Alpha v0.5.0 (2026-04-22)
-1. Reset to a clean legacy BIOS x86 baseline.
-2. Introduced official `floppy` and `full` profiles with shell-first bring-up.
-3. Added reproducible build and smoke-test scripts for both profiles.
+### pre-Alpha v0.5.0 (2026-04-28)
+1. Stabilized Stage1 startup and shell-entry runtime behavior for deterministic boot bring-up.
+2. Hardened shell prompt/input paths, including drive and current-directory state handling.
+3. Improved QEMU stderr observability to speed up runtime diagnostics and regression triage.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
