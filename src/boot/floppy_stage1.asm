@@ -9538,38 +9538,46 @@ draw_shell_chrome:
     mov al, ' '
     mov dh, 0
     mov dl, 0
-    mov bl, 0x70
+    mov bl, 0x1F
     xor cx, cx
     mov cl, 80
     call draw_hline_attr
 
-    mov al, 0xC4
+    mov al, ' '
     mov dh, 1
     mov dl, 0
-    mov bl, 0x17
+    mov bl, 0x3F
     xor cx, cx
     mov cl, 80
     call draw_hline_attr
 
     mov si, msg_banner_title
     mov dh, 0
-    mov dl, 22
-    mov bl, 0x70
+    mov dl, 16
+    mov bl, 0x1F
     call video_write_string_attr
 
     mov si, msg_shell_hint
-    mov dh, 2
+    mov dh, 1
     mov dl, 2
-    mov bl, 0x1E
+    mov bl, 0x3F
     call video_write_string_attr
 
     mov si, msg_shell_quick
-    mov dh, 3
-    mov dl, 2
-    mov bl, 0x0F
+    mov dh, 1
+    mov dl, 44
+    mov bl, 0x3F
     call video_write_string_attr
 
     mov al, 0xC4
+    mov dh, 2
+    mov dl, 0
+    mov bl, 0x17
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
+
+    mov al, ' '
     mov dh, 24
     mov dl, 0
     mov bl, 0x17
@@ -9579,16 +9587,16 @@ draw_shell_chrome:
 
     mov si, msg_shell_footer
     mov dh, 24
-    mov dl, 2
-    mov bl, 0x1E
+    mov dl, 1
+    mov bl, 0x1F
     call video_write_string_attr
 
 %ifdef FAT_TYPE
 %if FAT_TYPE == 12
     mov si, msg_shell_sysinfo_prefix
     mov dh, 24
-    mov dl, 40
-    mov bl, 0x1E
+    mov dl, 70
+    mov bl, 0x1F
     call video_write_string_attr
 
     int 0x12
@@ -9601,14 +9609,14 @@ draw_shell_chrome:
 
     mov si, ram_buf
     mov dh, 24
-    mov dl, 45
-    mov bl, 0x1E
+    mov dl, 74
+    mov bl, 0x1F
     call video_write_string_attr
 
     mov al, 'K'
     mov dh, 24
-    mov dl, 49
-    mov bl, 0x1E
+    mov dl, 79
+    mov bl, 0x1F
     call video_write_char_attr
 %endif
 %endif
@@ -11409,12 +11417,12 @@ msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
 msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
-msg_prompt    db "root:\> ", 0
+msg_prompt    db "Ciuki> ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db " CiukiOS pre-Alpha v0.5.8 ", 0
-msg_shell_hint db "CiukiDOS Shell", 0
-msg_shell_quick db "Type 'help'", 0
-msg_shell_footer db "Ready", 0
+msg_banner_title db " CiukiOS v0.5.8 ", 0
+msg_shell_hint db "Shell", 0
+msg_shell_quick db "help dir", 0
+msg_shell_footer db "help cls reboot", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
