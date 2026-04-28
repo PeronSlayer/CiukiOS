@@ -24,32 +24,14 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 3. High-compatibility `INT 21h` surface.
 4. FAT12/FAT16 baseline for floppy profile.
 
-## Phase 3 - DOS Graphics Runtime + OpenGEM
+## Phase 3 - DOS Graphics Runtime (Shell-first)
 1. Native VGA/VBE path.
 2. Extended `INT 10h` plus robust timer/mouse/input services.
-3. Native VDI/AES compatibility layer for OpenGEM.
-4. Milestone: stable OpenGEM desktop on real hardware.
-**STATUS: P0/P1/P2 GATES CLOSED (v0.5.9-final) - OG-P3 full native desktop pending**
-- ✓ VGA mode13h primitives (pixels, lines, boxes, text)
-- ✓ INT33h mouse handler installed at bootstrap (stateful, hardened)
-- ✓ VBE query service ready (stub for full implementation)
-- ✓ VDI/AES compatibility layer (8 core functions, clipping guards)
-- ✓ Timer/input services (INT1Ah, INT16h)
-- ✓ OpenGEM payload integration in full image
-- ✓ Stage2 OpenGEM launcher and guarded fallback flow
-- ✓ Nested exec chain (GEMVDI to GEM.EXE) functional; GEM reaches event loop
-- ✓ DOS memory allocator (2-block alloc/free/resize) stabilized
-- ✓ OG-P0-05 gate: 20 QEMU runs, 100pct launch, 100pct return-to-shell, 0 hangs PASS
-- ✓ OG-P1-02 soak: 100 runs x 20 min on QEMU PASS
-- ✓ OG-P1-03 hardware lane: real x86 hardware evidence committed PASS
-- ✓ OG-P1-04 runtime normalization guide
-- ✓ OG-P2-01 regression lock: 10 deterministic checks PASS
-- ✓ OG-P2-02 performance baseline and budget framework PASS
-- ✓ Final validation bundle: gate + acceptance + soak + hardware PASS
-- OG-P3 (next sprint): full native OpenGEM graphical desktop (file handles, AES/VDI, mouse cursor) pending
-- Runtime normalization reference: docs/opengem-runtime-normalization.md
-- Hardware lane reference: docs/opengem-hardware-validation-lane.md
-- OG-P3 task spec: docs/opengem-p3-agent-task.md
+3. Incremental graphics services that keep shell stability as primary target.
+4. Milestone: stable graphics/runtime services on real hardware with shell loop preserved.
+**STATUS: baseline tracking on pre-Alpha v0.5.0**
+- Focus now: keep shell-first runtime deterministic on real floppy and emulator smoke paths.
+- Next sprint: extend graphics/runtime in small increments without destabilizing boot and shell loop.
 
 ## Phase 3.5 - CiukiOS Installer (Setup project)
 > Tracked separately under `setup/`. Prerequisite: stable Phase 3 runtime.
@@ -57,7 +39,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 2. Multi-floppy distribution: N × 1.44MB images with disk-swap engine.
 3. CD-ROM distribution: single bootable ISO 9660 image.
 4. Installation flow: drive detection, FAT16 format, file copy, config write.
-5. Component selection: Minimal / Standard / Full+GEM.
+5. Component selection: Minimal / Standard / Full.
 - See `setup/README.md` for full TODO breakdown.
 
 ## Phase 4 - DOOM Milestone
@@ -73,7 +55,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 
 ## Phase 6 - Build and Release Discipline
 1. `floppy` profile: minimal, portable, diagnostics-first.
-2. `full` profile: complete runtime and desktop stack.
+2. `full` profile: complete runtime with shell-first behavior.
 3. Regression pipeline on emulators and real legacy hardware.
 
 ## Advancement Criteria

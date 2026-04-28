@@ -40,7 +40,7 @@ Environment:
   LOG_FILE         Test log path (default: build/full/qemu-full.log).
   STAGE0_MARKER    Marker 1 for test validation.
   STAGE1_MARKER    Marker 2 for test validation.
-  CIUKIOS_STAGE2_AUTORUN  Set 1 to launch OpenGEM automatically.
+  CIUKIOS_STAGE2_AUTORUN  Set 1 to trigger stage2 automatically.
 TXT
 }
 

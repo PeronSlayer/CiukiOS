@@ -17,7 +17,7 @@ BOOT_BIN="build/floppy/obj/floppy_boot.bin"
 STAGE1_SRC="src/boot/floppy_stage1.asm"
 STAGE1_BIN="build/floppy/obj/floppy_stage1.bin"
 STAGE1_SLOT_BIN="build/floppy/obj/floppy_stage1_slot.bin"
-STAGE1_SECTORS=29
+STAGE1_SECTORS=40
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 STAGE2_SRC="src/boot/floppy_stage2.asm"
 STAGE2_BIN="build/floppy/obj/floppy_stage2.bin"
@@ -84,7 +84,16 @@ if [[ "$BOOT_SIZE" -ne 512 ]]; then
 fi
 
 echo "[build-floppy] assembling stage1 payload"
-nasm -f bin "$STAGE1_SRC" -o "$STAGE1_BIN"
+nasm -f bin "$STAGE1_SRC" \
+  -D FAT_SPT=18 \
+  -D FAT_HEADS=2 \
+  -D FAT_RESERVED_SECTORS="$FAT_RESERVED_SECTORS" \
+  -D FAT_SECTORS_PER_CLUSTER=1 \
+  -D FAT_SECTORS_PER_FAT="$FAT_SECTORS_PER_FAT" \
+  -D FAT_ROOT_DIR_SECTORS="$ROOT_DIR_SECTORS" \
+  -D FAT_TYPE=12 \
+  -D FAT_LBA_OFFSET=0 \
+  -o "$STAGE1_BIN"
 
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
 if [[ "$STAGE1_SIZE" -gt "$STAGE1_SLOT_SIZE" ]]; then
@@ -210,7 +219,7 @@ COM demo: COMDEMO.COM cluster 2 for test/demo
 MZ demo: MZDEMO.EXE cluster 3 for test/demo
 FILEIO test: FILEIO.BIN clusters 4-5 for multi-sector I/O tests
 DELTEST test: DELTEST.BIN cluster 6 for file deletion tests
-Stage2 runtime: STAGE2.BIN cluster 7 (OpenGEM bootstrap and extended services)
+Stage2 runtime: STAGE2.BIN cluster 7 (shell-only bootstrap and extended services)
 TXT
 
 echo "[build-floppy] done: $IMG"

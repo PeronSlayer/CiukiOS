@@ -23,7 +23,7 @@ org 0x1000
 %define DOS_FAT_BUF_SEG  0x7200
 %define DOS_IO_BUF_SEG   0x7400
 
-%define OPENGEM_LOAD_SEG 0xA000
+%define RUNTIME_LOAD_SEG 0xA000
 
 section .text
 stage2_start:
@@ -45,7 +45,7 @@ stage2_start:
     mov si, msg_stage2_ready
     call print_string_serial
 
-    call load_and_boot_opengem
+    call load_and_boot_runtime
 
     mov si, msg_stage2_done
     call print_string_serial
@@ -105,39 +105,39 @@ int33_handler:
     pop ax
     iret
 
-load_and_boot_opengem:
-    mov si, msg_loading_opengem
+load_and_boot_runtime:
+    mov si, msg_loading_runtime
     call print_string_serial
 
-    mov si, path_opengem
+    mov si, path_runtime
     call find_file_in_root
     jc .load_fail
 
-    mov ax, OPENGEM_LOAD_SEG
+    mov ax, RUNTIME_LOAD_SEG
     mov es, ax
     xor di, di
     call load_file_to_es
     jc .load_fail
 
-    mov si, msg_opengem_loaded
+    mov si, msg_runtime_loaded
     call print_string_serial
 
-    call boot_opengem
+    call boot_runtime
     ret
 
 .load_fail:
-    mov si, msg_opengem_load_fail
+    mov si, msg_runtime_load_fail
     call print_string_serial
     ret
 
-boot_opengem:
-    mov si, msg_booting_opengem
+boot_runtime:
+    mov si, msg_booting_runtime
     call print_string_serial
 
     mov ax, 0x0013
     int 0x10
 
-    mov si, msg_opengem_started
+    mov si, msg_runtime_started
     call print_string_serial
 
     ret
@@ -354,14 +354,14 @@ msg_stage2_done db "[STAGE2] Complete", 13, 10, 0
 msg_mouse_enabled db "[STAGE2] Mouse INT33h installed", 13, 10, 0
 msg_mouse_not_found db "[STAGE2] Mouse not detected", 13, 10, 0
 msg_vbe_init db "[STAGE2] VBE query initialized", 13, 10, 0
-msg_loading_opengem db "[STAGE2] Loading OpenGEM...", 13, 10, 0
-msg_opengem_loaded db "[STAGE2] OpenGEM loaded", 13, 10, 0
-msg_booting_opengem db "[STAGE2] Booting OpenGEM...", 13, 10, 0
-msg_opengem_started db "[STAGE2] OpenGEM started (mode 13h)", 13, 10, 0
-msg_opengem_load_fail db "[STAGE2] OpenGEM load failed", 13, 10, 0
+msg_loading_runtime db "[STAGE2] Loading runtime...", 13, 10, 0
+msg_runtime_loaded db "[STAGE2] Runtime loaded", 13, 10, 0
+msg_booting_runtime db "[STAGE2] Booting runtime...", 13, 10, 0
+msg_runtime_started db "[STAGE2] Runtime started (mode 13h)", 13, 10, 0
+msg_runtime_load_fail db "[STAGE2] Runtime load failed", 13, 10, 0
 
-path_opengem db "OPENGEM SYS", 0
-path_name db "OPENGEM ", 0
+path_runtime db "RUNTIME SYS", 0
+path_name db "RUNTIME ", 0
 path_ext db "SYS", 0
 
 tmp_lba dw 0

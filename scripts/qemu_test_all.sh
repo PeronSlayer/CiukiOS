@@ -41,7 +41,6 @@ run_test "floppy image smoke test" "scripts/qemu_test_floppy.sh" || overall_rc=1
 run_test "stage1 boot selftest regression" "scripts/qemu_test_stage1.sh" || overall_rc=1
 run_test "full image smoke test" "scripts/qemu_test_full.sh" || overall_rc=1
 run_test "full stage1 selftest regression" "scripts/qemu_test_full_stage1.sh" || overall_rc=1
-run_test "opengem historical regression lock" "scripts/qemu_test_opengem_regressions.sh" || overall_rc=1
 
 if [[ $overall_rc -eq 0 ]]; then
   echo "[qemu-test-all] PASS (all image tests passed)"
