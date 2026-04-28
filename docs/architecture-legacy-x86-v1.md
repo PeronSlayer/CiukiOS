@@ -14,7 +14,7 @@ Define a native legacy x86 (BIOS) architecture, without UEFI dependency in the n
 2. Stage-B1 (Extended Loader): memory setup, boot-media access, kernel loading.
 3. Stage-K (Kernel Core): interrupt routing, memory manager, simple scheduler/event loop.
 4. Stage-D (Native DOS Runtime): COM/EXE loader, PSP/MCB, `INT 21h/10h/13h/16h/1Ah/33h`.
-5. Stage-G (Graphics/Desktop): VGA/VBE and native compatibility surface for OpenGEM paths.
+5. Stage-G (Graphics/Desktop): VGA/VBE and native compatibility surface for desktop runtime paths.
 6. Stage-A (Applications): DOS tools, DOOM target, and Windows pre-NT milestones.
 
 ## 4. Execution Model
@@ -31,12 +31,12 @@ Define a native legacy x86 (BIOS) architecture, without UEFI dependency in the n
 
 ### 5.2 `full` profile
 1. Target: extended disk image (`FAT16/FAT32`) for full runtime.
-2. Content: graphics stack, OpenGEM path, advanced DOS tools, complex app targets.
+2. Content: graphics stack, desktop runtime path, advanced DOS tools, complex app targets.
 3. Purpose: complete operating environment.
 
 ## 6. Compatibility Targets
 1. DOS applications: highest priority baseline.
-2. OpenGEM desktop: primary desktop milestone.
+2. Desktop runtime: primary desktop milestone.
 3. DOOM: performance and compatibility milestone.
 4. Windows pre-NT (up to 98): progressive milestones, not monolithic delivery.
 

@@ -1,8 +1,0 @@
-{
-  "max_avg_launch_latency_multiplier": 1.20,
-  "max_launch_success_drop_percent": 5.00,
-  "max_return_to_shell_drop_percent": 5.00,
-  "max_desktop_ready_drop_percent": 5.00,
-  "max_hang_count_increase": 1,
-  "max_allocated_paras_multiplier": 1.25
-}

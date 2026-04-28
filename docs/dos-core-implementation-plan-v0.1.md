@@ -40,8 +40,8 @@ Deliver the DOS core in deterministic milestones, from BIOS boot to stable DOS r
 
 ### M6 - GUI-Ready DOS Core Surface
 1. Freeze DOS core contracts for desktop/runtime layering.
-2. Add compatibility-critical APIs for OpenGEM bring-up path.
-3. Gate: OpenGEM pre-desktop boot path reaches deterministic runtime checkpoints.
+2. Add compatibility-critical APIs for desktop runtime bring-up path.
+3. Gate: desktop pre-desktop boot path reaches deterministic runtime checkpoints.
 
 ## 3. Cross-cutting Requirements
 1. Every milestone must include automated regression gates.

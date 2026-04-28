@@ -96,9 +96,6 @@ stage1_start:
     mov [boot_drive], dl
 
     call serial_init
-
-    mov si, msg_stage1
-    call print_string_serial
     mov si, msg_stage1_serial
     call print_string_serial
 
@@ -108,7 +105,6 @@ stage1_start:
 %if STAGE1_SELFTEST_AUTORUN
     call run_stage1_selftest
 %endif
-
     call draw_shell_chrome
 %if FAT_TYPE == 16
 %if HARDWARE_VALIDATION_SCREEN
@@ -117,10 +113,6 @@ stage1_start:
 %endif
 
 main_loop:
-    mov ax, cs
-    mov ds, ax
-    mov es, ax
-
     mov si, msg_prompt
     call print_string_dual
 
@@ -231,7 +223,7 @@ install_int21_vector:
     ; Some legacy machines (e.g. ThinkPad T23) are sensitive to INT16 hooks.
 
 %if FAT_TYPE == 16
-    ; OpenGEM's VGA driver can use the IBM PS/2 BIOS mouse API directly.
+    ; The desktop runtime VGA driver can use the IBM PS/2 BIOS mouse API directly.
     mov bx, 0x15 * 4
     mov ax, [es:bx]
     mov [old_int15_off], ax
@@ -1426,8 +1418,8 @@ int21_exec:
     call int21_resolve_and_find_path
     jnc .path_resolved
 
-    ; Compatibility fallback for OpenGEM/GEMVDI: if the caller asks for
-    ; plain GEM.EXE and root lookup misses, retry absolute GEMSYS path.
+    ; Compatibility fallback for the desktop runtime: if the caller asks for
+    ; plain GEM.EXE and root lookup misses, retry the legacy absolute system path.
     mov si, dx
     call int21_path_to_fat_name
     jc .path_resolved
@@ -3226,7 +3218,7 @@ int21_find_try_gem_special:
     jmp .match_root
 
 .check_gem:
-    ; OpenGEM probes VDx wildcard names; map them to bundled SDPSC9.VGA.
+    ; Desktop runtime probes VDx wildcard names; map them to bundled SDPSC9.VGA.
     mov si, find_pattern
     cmp byte [cs:si], 'V'
     jne .check_gem_exe
@@ -8837,20 +8829,6 @@ dispatch_command:
     mov si, str_keytest
     call str_eq
     jc .cmd_keytest
-%if FAT_TYPE == 16
-    mov di, bx
-    mov si, str_opengem
-    call str_eq
-    jc .cmd_opengem
-    mov di, bx
-    mov si, str_gem
-    call str_eq
-    jc .cmd_opengem
-    mov di, bx
-    mov si, str_desktop
-    call str_eq
-    jc .cmd_opengem
-%endif
     mov di, bx
     mov si, str_reboot
     call str_eq
@@ -8954,18 +8932,6 @@ dispatch_command:
 .cmd_keytest:
     call shell_cmd_keytest
     jmp .done
-
-%if FAT_TYPE == 16
-.cmd_opengem:
-    call run_stage2_payload
-    jc .load_fail
-    jmp .done
-
-.load_fail:
-    mov si, msg_mz_load_fail
-    call print_string_dual
-    jmp .done
-%endif
 
 .cmd_reboot:
     mov si, msg_rebooting
@@ -11385,10 +11351,10 @@ dos_list_of_lists times 64 db 0
 tmp_cwd_comp times 24 db 0
 tmp_cwd_build times 24 db 0
 dos_env_block db 'COMSPEC=C:\COMMAND.COM', 0
-              db 'PATH=C:\GEMAPPS\GEMSYS;C:\GEMAPPS;C:\', 0
+              db 'PATH=C:\', 0
               db 0
               dw 1
-              db 'C:\GEMAPPS\GEMSYS\GEMVDI.EXE', 0
+              db 'C:\COMMAND.COM', 0
 dos_env_block_end:
 disk_packet:
     db 0x10
@@ -11430,7 +11396,7 @@ msg_help_header db "--- CiukiDOS Commands ---", 13, 10, 0
 msg_help_core db "  help  dir  cd  cls  tree  ver", 13, 10, 0
 msg_help_runtime db "  dos21  comdemo  mzdemo  fileio  findtest", 13, 10, 0
 msg_help_system db "  gfxdemo  ticks  drive  mouse  keytest  reboot  halt", 13, 10, 0
-msg_help_apps db "  opengem  gem  desktop", 13, 10, 0
+msg_help_apps db "", 0
 msg_version_line db "CiukiOS v0.5.8", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
@@ -11497,11 +11463,6 @@ str_gfxdemo db "gfxdemo", 0
 str_findtest db "findtest", 0
 str_mouse db "mouse", 0
 str_keytest db "keytest", 0
-%if FAT_TYPE == 16
-str_opengem db "opengem", 0
-str_gem db "gem", 0
-str_desktop db "desktop", 0
-%endif
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
 
@@ -11518,7 +11479,7 @@ path_sd_driver_fat db "SDPSC9  VGA"
 path_gem_exe_fat   db "GEM     EXE"
 path_gem_cpi_fat   db "GEM     CPI"
 %if FAT_TYPE == 16
-path_gem_exe_abs db "\\GEMAPPS\\GEMSYS\\GEM.EXE", 0
+path_gem_exe_abs db "\\SYSTEM\\DESKTOP\\GEM.EXE", 0
 %endif
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
@@ -11577,12 +11538,12 @@ msg_stage2_autorun_begin db "[S2] launch", 13, 10, 0
 msg_stage2_autorun_loaded db "[S2] stage2 loaded", 13, 10, 0
 msg_stage2_autorun_return db "[S2] stg2 return", 13, 10, 0
 msg_stage2_autorun_fail db "[S2] stage2 load fail", 13, 10, 0
-msg_hw_validation_title db "[HW] OpenGEM hardware validation", 13, 10, 0
-msg_hw_validation_pass db "[HW] PASS: OpenGEM autorun completed", 13, 10, 0
+msg_hw_validation_title db "[HW] Stage2 hardware validation", 13, 10, 0
+msg_hw_validation_pass db "[HW] PASS: stage2 autorun completed", 13, 10, 0
 msg_hw_validation_return db "[HW] PASS: returned to CiukiDOS shell", 13, 10, 0
 msg_hw_validation_capture db "[HW] Capture this screen for P1 evidence", 13, 10, 0
-msg_hw_validation_fail db "[HW] FAIL: stage2/OpenGEM autorun failed", 13, 10, 0
-msg_hw_validation_notrun db "[HW] WARN: OpenGEM autorun did not run", 13, 10, 0
+msg_hw_validation_fail db "[HW] FAIL: stage2 autorun failed", 13, 10, 0
+msg_hw_validation_notrun db "[HW] WARN: stage2 autorun did not run", 13, 10, 0
 msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0

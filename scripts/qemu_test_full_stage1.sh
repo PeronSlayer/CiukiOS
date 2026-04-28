@@ -11,7 +11,6 @@ echo "[qemu-test-full-stage1] running full profile stage1 selftest regression (F
 mkdir -p "$(dirname "$LOG_FILE")"
 rm -f "$LOG_FILE"
 
-export CIUKIOS_INCLUDE_OPENGEM=0
 export CIUKIOS_STAGE1_SELFTEST_AUTORUN=1
 export LOG_FILE="$LOG_FILE"
 export QEMU_TIMEOUT_SEC="$TIMEOUT_SEC"

@@ -219,7 +219,7 @@ COM demo: COMDEMO.COM cluster 2 for test/demo
 MZ demo: MZDEMO.EXE cluster 3 for test/demo
 FILEIO test: FILEIO.BIN clusters 4-5 for multi-sector I/O tests
 DELTEST test: DELTEST.BIN cluster 6 for file deletion tests
-Stage2 runtime: STAGE2.BIN cluster 7 (OpenGEM bootstrap and extended services)
+Stage2 runtime: STAGE2.BIN cluster 7 (shell-only bootstrap and extended services)
 TXT
 
 echo "[build-floppy] done: $IMG"

@@ -6,7 +6,7 @@ Source:
 
 Runtime integration:
 - build_full.sh injects CTMOUSE.EXE into the full FAT16 image root.
-- stage2 (full_stage2.asm) tries to run CTMOUSE.EXE before GEMVDI.
+- stage2 (full_stage2.asm) tries to run CTMOUSE.EXE before the desktop runtime bootstrap.
 - Launch is best-effort: boot continues if CTMOUSE is missing or fails.
 
 License:
