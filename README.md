@@ -17,17 +17,17 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 9. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.5.0`
+`CiukiOS pre-Alpha v0.5.2`
 
 Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
 2. Minor updates on this branch keep compatibility with the `v0.5.0` baseline.
 
 ## Changelog (Latest)
-### pre-Alpha v0.5.0 (2026-04-28)
-1. Stabilized Stage1 startup and shell-entry runtime behavior for deterministic boot bring-up.
-2. Hardened shell prompt/input paths, including drive and current-directory state handling.
-3. Improved QEMU stderr observability to speed up runtime diagnostics and regression triage.
+### pre-Alpha v0.5.2 (2026-04-29)
+1. Closed Stage1 DOS command regressions across floppy (FAT12) and full (FAT16) profiles.
+2. Stabilized INT 21h runtime return behavior in critical read/write/seek paths for deterministic file I/O outcomes.
+3. Fixed floppy image build write path to preserve root/runtime payload integrity during regression runs.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 

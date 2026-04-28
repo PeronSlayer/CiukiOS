@@ -3,6 +3,11 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
+## pre-Alpha v0.5.2 (2026-04-29)
+1. Closed Stage1 DOS command regressions across floppy (FAT12) and full (FAT16) profiles.
+2. Stabilized INT 21h runtime return behavior in critical read/write/seek paths for deterministic file I/O outcomes.
+3. Fixed floppy image build write path to preserve root/runtime payload integrity during regression runs.
+
 ## pre-Alpha v0.5.0 (2026-04-28)
 1. Stabilized Stage1 startup and shell-entry runtime behavior for more deterministic boot bring-up.
 2. Hardened shell prompt/input paths, including drive and current-directory state handling.

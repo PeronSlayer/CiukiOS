@@ -76,3 +76,9 @@
 67. Fix: hardened prompt, drive, and current-working-directory handling to keep interactive shell state coherent.
 68. Fix: enforced cursor placement behavior on line 1 in the shell prompt return flow.
 69. Action: improved QEMU stderr diagnostics to accelerate runtime regression triage.
+
+## 2026-04-29
+70. Fix: resolved Stage1 DOS command regressions on floppy (FAT12) and full (FAT16) runtime paths.
+71. Fix: corrected INT 21h read/write/seek return-value stability to prevent false file-I/O failures in regression flow.
+72. Fix: preserved floppy image payload integrity during build by hardening non-truncating write behavior.
+73. Release: bumped project version to `CiukiOS pre-Alpha v0.5.2` after Stage1 DOS regression closure and validation.
