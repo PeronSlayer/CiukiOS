@@ -20,11 +20,12 @@ LDLINUX_C32="${LDLINUX_C32:-/usr/lib/syslinux/bios/ldlinux.c32}"
 mkdir -p build/full/obj
 
 echo "[build-full-cd] building CD partition image"
-echo "[build-full-cd] hardware profile: forcing stage2 autorun (CIUKIOS_STAGE2_AUTORUN=1)"
+echo "[build-full-cd] hardware profile: forcing stage2 autorun + OpenGEM validation VDI (CIUKIOS_STAGE2_AUTORUN=1, CIUKIOS_OPENGEM_VALIDATION_VDI=1)"
 CIUKIOS_FULL_IMG="$PART_IMG" \
 CIUKIOS_FULL_BOOT_LBA_OFFSET="$PARTITION_LBA" \
 CIUKIOS_FULL_FAT_LBA_OFFSET="$PARTITION_LBA" \
 CIUKIOS_STAGE2_AUTORUN=1 \
+CIUKIOS_OPENGEM_VALIDATION_VDI=1 \
 CIUKIOS_HARDWARE_VALIDATION_SCREEN="${CIUKIOS_HARDWARE_VALIDATION_SCREEN:-1}" \
 MTOOLS_TIMEOUT_SEC="${MTOOLS_TIMEOUT_SEC:-5}" \
 MTOOLS_KILL_AFTER_SEC="${MTOOLS_KILL_AFTER_SEC:-1}" \
