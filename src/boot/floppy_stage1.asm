@@ -3137,6 +3137,7 @@ int21_find_first:
     mov [cs:find_dir_cluster], ax
     call int21_path_to_fat_pattern
 %else
+    mov word [cs:find_dir_cluster], 0
     mov si, dx
     call int21_path_to_fat_pattern
 %endif

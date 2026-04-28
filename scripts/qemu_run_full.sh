@@ -112,6 +112,7 @@ if [[ "$MODE" == "test" ]]; then
   STAGE0_MARKER="${STAGE0_MARKER:-[BOOT0-FULL] CiukiOS full stage0 ready}"
   STAGE1_MARKER="${STAGE1_MARKER:-[STAGE1-SERIAL] READY}"
   LOG_FILE="${LOG_FILE:-build/full/qemu-full.log}"
+  STDERR_FILE="${STDERR_FILE:-build/full/qemu-full.stderr.log}"
 
   QEMU_ARGS=(
     "${BASE_ARGS[@]}"
@@ -141,14 +142,19 @@ if [[ "$MODE" == "test" ]]; then
 
   mkdir -p "$(dirname "$LOG_FILE")"
   rm -f "$LOG_FILE"
+  rm -f "$STDERR_FILE"
 
   set +e
-  timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}" >/dev/null 2>&1
+  timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}" >/dev/null 2>"$STDERR_FILE"
   RC=$?
   set -e
 
   if [[ $RC -ne 0 && $RC -ne 124 ]]; then
     echo "[qemu-run-full] FAIL (qemu exit code: $RC)" >&2
+    if [[ -s "$STDERR_FILE" ]]; then
+      echo "[qemu-run-full] qemu stderr:" >&2
+      tail -n 40 "$STDERR_FILE" >&2 || true
+    fi
     tail -n 80 "$LOG_FILE" >&2 || true
     exit "$RC"
   fi
