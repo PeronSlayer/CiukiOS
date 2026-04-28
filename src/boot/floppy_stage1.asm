@@ -9833,10 +9833,10 @@ run_stage2_payload:
     mov si, msg_stage2_autorun_begin
     call print_string_serial
 
-    mov ax, cs
-    mov ds, ax
     mov ax, STAGE2_LOAD_SEG
     mov es, ax
+    push cs
+    pop ds
     xor bx, bx
     mov si, path_stage2_dos
     call load_root_file_first_sector
