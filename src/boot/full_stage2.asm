@@ -9,6 +9,10 @@ org 0x0000
 %define OPENGEM_TRY_CTMOUSE 0
 %endif
 
+%ifndef OPENGEM_SKIP_GEMVDI
+%define OPENGEM_SKIP_GEMVDI 0
+%endif
+
 stage2_entry:
     push cs
     pop ds
@@ -52,6 +56,17 @@ stage2_entry:
 
 %endif
 
+%if OPENGEM_SKIP_GEMVDI == 1
+
+    ; Hardware CD profile: bypass GEMVDI and jump straight to GEM launcher.
+    mov dx, path_root_dir
+    mov ah, 0x3B
+    int 0x21
+    jc .print_fail
+    jmp .cwd_root_ready
+
+%else
+
     ; Pre-query VGA capability (INT10h AH=12h BL=00h)
     mov ax, 0x1200
     int 0x10
@@ -69,7 +84,12 @@ stage2_entry:
     int 0x21
     jc .print_fail
 
+
+%endif
+
 .cwd_root_ready:
+
+%if OPENGEM_SKIP_GEMVDI == 0
 
     mov dx, msg_try_vdi
     mov ah, 0x09
@@ -77,6 +97,8 @@ stage2_entry:
     mov dx, path_gemvdi_rel_from_root
     call exec_try_wait
     jnc .wait_done
+
+%endif
 
     mov dx, path_gem_exe_rel_from_root
     call exec_try_wait
