@@ -24,6 +24,7 @@ STAGE2_SRC="src/boot/full_stage2.asm"
 STAGE2_BIN="build/full/obj/full_stage2.bin"
 STAGE2_MAX_SIZE=512
 OPENGEM_TRY_EXEC="${CIUKIOS_OPENGEM_TRY_EXEC:-1}"
+OPENGEM_TRY_CTMOUSE="${CIUKIOS_OPENGEM_TRY_CTMOUSE:-0}"
 OPENGEM_VALIDATION_VDI="${CIUKIOS_OPENGEM_VALIDATION_VDI:-0}"
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
@@ -117,7 +118,7 @@ dd if=/dev/zero of="$STAGE1_SLOT_BIN" bs=512 count="$STAGE1_SECTORS" status=none
 dd if="$STAGE1_BIN" of="$STAGE1_SLOT_BIN" conv=notrunc status=none
 
 echo "[build-full] assembling application payloads"
-nasm -f bin "$STAGE2_SRC" -D OPENGEM_TRY_EXEC="$OPENGEM_TRY_EXEC" -o "$STAGE2_BIN"
+nasm -f bin "$STAGE2_SRC" -D OPENGEM_TRY_EXEC="$OPENGEM_TRY_EXEC" -D OPENGEM_TRY_CTMOUSE="$OPENGEM_TRY_CTMOUSE" -o "$STAGE2_BIN"
 nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
 nasm -f bin "$MZDEMO_SRC"  -o "$MZDEMO_BIN"
 nasm -f bin "$FILEIO_SRC"  -o "$FILEIO_BIN"

@@ -5,6 +5,10 @@ org 0x0000
 %define OPENGEM_TRY_EXEC 1
 %endif
 
+%ifndef OPENGEM_TRY_CTMOUSE
+%define OPENGEM_TRY_CTMOUSE 0
+%endif
+
 stage2_entry:
     push cs
     pop ds
@@ -35,6 +39,8 @@ stage2_entry:
 
 .cwd_gemsys_ready:
 
+%if OPENGEM_TRY_CTMOUSE == 1
+
     mov dx, msg_try_ctmouse
     mov ah, 0x09
     int 0x21
@@ -43,6 +49,8 @@ stage2_entry:
     jc .ctmouse_done
 
 .ctmouse_done:
+
+%endif
 
     ; Pre-query VGA capability (INT10h AH=12h BL=00h)
     mov ax, 0x1200
