@@ -8870,6 +8870,46 @@ dispatch_command:
     call str_eq
     jc .cmd_cd
     mov di, bx
+    mov si, str_copy
+    call str_eq
+    jc .cmd_copy
+    mov di, bx
+    mov si, str_del
+    call str_eq
+    jc .cmd_del
+    mov di, bx
+    mov si, str_md
+    call str_eq
+    jc .cmd_md
+    mov di, bx
+    mov si, str_mkdir
+    call str_eq
+    jc .cmd_md
+    mov di, bx
+    mov si, str_rd
+    call str_eq
+    jc .cmd_rd
+    mov di, bx
+    mov si, str_rmdir
+    call str_eq
+    jc .cmd_rd
+    mov di, bx
+    mov si, str_ren
+    call str_eq
+    jc .cmd_ren
+    mov di, bx
+    mov si, str_rename
+    call str_eq
+    jc .cmd_ren
+    mov di, bx
+    mov si, str_type
+    call str_eq
+    jc .cmd_type
+    mov di, bx
+    mov si, str_exit
+    call str_eq
+    jc .cmd_exit
+    mov di, bx
     mov si, str_dos21
     call str_eq
     jc .cmd_dos21
@@ -8964,6 +9004,34 @@ dispatch_command:
 
 .cmd_cdup:
     call shell_cmd_cdup
+    jmp .done
+
+.cmd_copy:
+    call shell_cmd_copy
+    jmp .done
+
+.cmd_del:
+    call shell_cmd_del
+    jmp .done
+
+.cmd_md:
+    call shell_cmd_md
+    jmp .done
+
+.cmd_rd:
+    call shell_cmd_rd
+    jmp .done
+
+.cmd_ren:
+    call shell_cmd_ren
+    jmp .done
+
+.cmd_type:
+    call shell_cmd_type
+    jmp .done
+
+.cmd_exit:
+    call shell_cmd_exit
     jmp .done
 
 .cmd_dos21:
@@ -9262,6 +9330,249 @@ shell_cmd_cd:
     pop bx
     pop ax
     ret
+
+shell_cmd_copy:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .copy_fail
+    mov dx, si
+    call shell_trim_first_arg
+    mov di, cmd_buffer + 40
+    mov si, dx
+.copy_src_cpy:
+    lodsb
+    stosb
+    test al, al
+    jnz .copy_src_cpy
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .copy_fail
+    mov cx, di
+    sub cx, cmd_buffer + 40
+    mov di, cmd_buffer + 40
+.copy_cmp:
+    lodsb
+    stosb
+    cmp di, cx
+    jne .copy_cmp
+    mov ah, 0x3D
+    mov al, 0
+    mov dx, cmd_buffer + 40
+    int 0x21
+    jc .copy_fail
+    mov bx, ax
+.copy_read:
+    mov ah, 0x3F
+    mov cx, 512
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    xor dx, dx
+    int 0x21
+    jc .copy_close
+    cmp ax, 0
+    je .copy_done
+    mov cx, ax
+    mov ah, 0x40
+    int 0x21
+    jc .copy_close
+    jmp .copy_read
+.copy_done:
+    mov ah, 0x3E
+    int 0x21
+    jmp .copy_ok
+.copy_close:
+    mov ah, 0x3E
+    int 0x21
+.copy_fail:
+    mov si, msg_cmd_fail
+    call print_string_dual
+.copy_ok:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_cmd_del:
+    push dx
+    push ds
+    mov ax, cs
+    mov ds, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .del_fail
+    mov dx, si
+    call shell_trim_first_arg
+    mov ah, 0x41
+    int 0x21
+    jc .del_fail
+    jmp .del_ok
+.del_fail:
+    mov si, msg_cmd_fail
+    call print_string_dual
+.del_ok:
+    pop ds
+    pop dx
+    ret
+
+shell_cmd_md:
+    push dx
+    push ds
+    mov ax, cs
+    mov ds, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .md_fail
+    mov dx, si
+    call shell_trim_first_arg
+    mov ah, 0x39
+    int 0x21
+    jc .md_fail
+    jmp .md_ok
+.md_fail:
+    mov si, msg_cmd_fail
+    call print_string_dual
+.md_ok:
+    pop ds
+    pop dx
+    ret
+
+shell_cmd_rd:
+    push dx
+    push ds
+    mov ax, cs
+    mov ds, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .rd_fail
+    mov dx, si
+    call shell_trim_first_arg
+    mov ah, 0x3A
+    int 0x21
+    jc .rd_fail
+    jmp .rd_ok
+.rd_fail:
+    mov si, msg_cmd_fail
+    call print_string_dual
+.rd_ok:
+    pop ds
+    pop dx
+    ret
+
+shell_cmd_ren:
+    push dx
+    push si
+    push ds
+    mov ax, cs
+    mov ds, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .ren_fail
+    push si
+    mov dx, si
+    call shell_trim_first_arg
+    call shell_arg_ptr
+    pop si
+    cmp byte [si], 0
+    je .ren_fail_pop
+    mov ah, 0x56
+    int 0x21
+    jc .ren_fail_pop
+    jmp .ren_ok
+.ren_fail_pop:
+    add sp, 2
+.ren_fail:
+    mov si, msg_cmd_fail
+    call print_string_dual
+.ren_ok:
+    pop ds
+    pop si
+    pop dx
+    ret
+
+shell_cmd_type:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    push es
+    mov ax, cs
+    mov ds, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .type_fail
+    mov dx, si
+    call shell_trim_first_arg
+    mov ah, 0x3D
+    mov al, 0
+    int 0x21
+    jc .type_fail
+    mov bx, ax
+.type_read:
+    mov ah, 0x3F
+    mov cx, 512
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    xor dx, dx
+    int 0x21
+    jc .type_close
+    cmp ax, 0
+    je .type_done
+    mov cx, ax
+    mov ax, DOS_IO_BUF_SEG
+    mov es, ax
+    xor di, di
+.type_print:
+    mov al, [es:di]
+    cmp al, 0x1A
+    je .type_done
+    call putc_dual
+    inc di
+    loop .type_print
+    jmp .type_read
+.type_done:
+    mov ah, 0x3E
+    int 0x21
+    call print_newline_dual
+    jmp .type_ok
+.type_close:
+    mov ah, 0x3E
+    int 0x21
+.type_fail:
+    mov si, msg_cmd_fail
+    call print_string_dual
+.type_ok:
+    pop es
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_cmd_exit:
+    mov si, msg_exit_str
+    call print_string_dual
+    int 0x19
+    hlt
 
 shell_cmd_dir:
     push ax
@@ -11489,6 +11800,16 @@ str_drive  db "drive", 0
 str_dir    db "dir", 0
 str_cd     db "cd", 0
 str_cdup   db "cd..", 0
+str_copy   db "copy", 0
+str_del    db "del", 0
+str_md     db "md", 0
+str_mkdir  db "mkdir", 0
+str_rd     db "rd", 0
+str_rmdir  db "rmdir", 0
+str_ren    db "ren", 0
+str_rename db "rename", 0
+str_type   db "type", 0
+str_exit   db "exit", 0
 str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_mzdemo db "mzdemo", 0
@@ -11581,3 +11902,5 @@ msg_hw_validation_notrun db "[HW] WARN: stage2 autorun did not run", 13, 10, 0
 msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0
+msg_cmd_fail db "Error", 13, 10, 0
+msg_exit_str db "Exit", 13, 10, 0
