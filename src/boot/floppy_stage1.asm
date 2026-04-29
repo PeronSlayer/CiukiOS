@@ -161,10 +161,10 @@ print_prompt:
     call putc_dual
     mov al, 0x20
     call putc_dual
-    ; Print newline and set cursor to row 2
+    ; Print newline and set cursor to row 3 (input line)
     call print_newline_dual
     xor dl, dl
-    mov dh, 2
+    mov dh, 3
     call set_cursor_pos
     pop si
     pop ax
