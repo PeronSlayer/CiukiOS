@@ -12048,7 +12048,7 @@ msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 msg_prompt    db "Ciuki> ", 0
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db "CiukiOS pre-Alpha v0.5.0 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.5.2 (CiukiDOS Shell)", 0
 msg_shell_hint db "Shell", 0
 msg_shell_quick db "help dir", 0
 msg_shell_footer db "help cls reboot", 0
@@ -12060,7 +12060,7 @@ msg_help_core db "  help  dir  cd  cls  tree  ver", 13, 10, 0
 msg_help_runtime db "  dos21  comdemo  mzdemo  fileio  findtest", 13, 10, 0
 msg_help_system db "  gfxdemo  ticks  drive  mouse  keytest  reboot  halt", 13, 10, 0
 msg_help_apps db "", 0
-msg_version_line db "CiukiOS pre-Alpha v0.5.0 (CiukiDOS Shell)", 13, 10, 0
+msg_version_line db "CiukiOS pre-Alpha v0.5.2 (CiukiDOS Shell)", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
 msg_tree_system db "   |- SYSTEM", 13, 10, 0
