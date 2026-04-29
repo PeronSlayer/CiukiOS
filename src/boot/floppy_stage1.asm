@@ -5256,6 +5256,62 @@ int21_mkdir:
     mov [cs:tmp_next_cluster], ax
     mov ax, di
     mov [cs:tmp_cluster], ax
+
+    call int21_load_fat_cache
+    jc .mkdir_io_err
+
+    mov bx, 2
+.mkdir_find_cluster:
+    cmp bx, FAT_EOF
+    jae .mkdir_no_free_cluster
+    mov ax, bx
+    call fat12_get_entry_cached
+    jc .mkdir_io_err
+    cmp ax, 0
+    je .mkdir_cluster_found
+    inc bx
+    jmp .mkdir_find_cluster
+
+.mkdir_cluster_found:
+    mov [cs:tmp_cluster_off], bx
+    mov ax, bx
+    mov dx, FAT_EOF
+    call fat12_set_entry_cached
+    jc .mkdir_io_err
+    call fat12_flush_cache
+    jc .mkdir_io_err
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    mov cx, 256
+    rep stosw
+
+    mov ax, [cs:tmp_cluster_off]
+    call int21_cluster_to_lba
+    mov [cs:tmp_lba], ax
+    xor dx, dx
+.mkdir_zero_cluster_loop:
+    cmp dx, FAT_SECTORS_PER_CLUSTER
+    jae .mkdir_reload_root_sector
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    xor bx, bx
+    call write_sector_lba
+    jc .mkdir_io_err
+    inc dx
+    jmp .mkdir_zero_cluster_loop
+
+.mkdir_reload_root_sector:
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call read_sector_lba
+    jc .mkdir_io_err
+
+    mov di, [cs:tmp_cluster]
     mov si, path_fat_name
     mov cx, 11
     rep movsb
@@ -5269,7 +5325,8 @@ int21_mkdir:
     mov word [es:di - 11 + 20], 0
     mov word [es:di - 11 + 22], 0x0200
     mov word [es:di - 11 + 24], 0x0002
-    mov word [es:di - 11 + 26], 0x0002
+    mov ax, [cs:tmp_cluster_off]
+    mov word [es:di - 11 + 26], ax
     mov word [es:di - 11 + 28], 0
     mov word [es:di - 11 + 30], 0
 
@@ -5280,6 +5337,11 @@ int21_mkdir:
 
     xor ax, ax
     clc
+    jmp .mkdir_done
+
+.mkdir_no_free_cluster:
+    mov ax, 0x0005
+    stc
     jmp .mkdir_done
 
 .mkdir_alloc:
