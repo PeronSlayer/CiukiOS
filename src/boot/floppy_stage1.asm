@@ -9908,6 +9908,12 @@ shell_cmd_dir:
     call print_string_dual
 
     mov word [shell_dir_count], 0
+%if FAT_TYPE == 16
+    mov ax, [cs:cwd_cluster]
+    cmp ax, 0
+    jne .scan_subdir_start
+%endif
+
     mov dx, FAT_ROOT_START_LBA
 
 .sector_loop:
@@ -9954,6 +9960,77 @@ shell_cmd_dir:
 
     inc dx
     jmp .sector_loop
+
+%if FAT_TYPE == 16
+.scan_subdir_start:
+    call int21_load_fat_cache
+    jc .fail
+    mov [cs:tmp_cluster], ax
+
+.subdir_cluster_loop:
+    mov ax, [cs:tmp_cluster]
+    cmp ax, 2
+    jb .done_scan
+    cmp ax, FAT_EOF
+    jae .done_scan
+
+    call int21_cluster_to_lba
+    mov [cs:tmp_lba], ax
+    xor dx, dx
+
+.subdir_sector_loop:
+    cmp dx, FAT_SECTORS_PER_CLUSTER
+    jae .subdir_next_cluster
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    xor bx, bx
+    call read_sector_lba
+    jc .fail
+
+    xor di, di
+    mov cx, 16
+
+.subdir_entry_loop:
+    mov al, [es:di]
+    cmp al, 0x00
+    je .done_scan
+    cmp al, 0xE5
+    je .subdir_next_entry
+
+    mov al, [es:di + 11]
+    cmp al, 0x0F
+    je .subdir_next_entry
+    test al, 0x08
+    jnz .subdir_next_entry
+
+    push cx
+    push dx
+    push di
+    mov si, di
+    call shell_print_root_entry
+    pop di
+    pop dx
+    pop cx
+
+    inc word [shell_dir_count]
+
+.subdir_next_entry:
+    add di, 32
+    loop .subdir_entry_loop
+
+    inc dx
+    jmp .subdir_sector_loop
+
+.subdir_next_cluster:
+    mov ax, [cs:tmp_cluster]
+    call fat12_get_entry_cached
+    jc .fail
+    mov [cs:tmp_cluster], ax
+    jmp .subdir_cluster_loop
+%endif
 
 .done_scan:
     cmp word [shell_dir_count], 0
