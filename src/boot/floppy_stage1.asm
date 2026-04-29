@@ -5486,10 +5486,6 @@ int21_rename:
     call int21_path_to_fat_name
     jc .rename_fail_newname
 
-    mov ax, [cs:tmp_rename_old_parent]
-    cmp ax, [cs:tmp_rename_new_parent]
-    jne .rename_cross_dir_fail
-
     mov ax, [cs:tmp_rename_new_parent]
     push ds
     mov bx, ax
@@ -5502,6 +5498,10 @@ int21_rename:
     jnc .rename_dest_exists
     cmp ax, 0x0002
     jne .rename_io_err
+
+    mov ax, [cs:tmp_rename_old_parent]
+    cmp ax, [cs:tmp_rename_new_parent]
+    jne .rename_cross_dir
 
     mov ax, DOS_META_BUF_SEG
     mov es, ax
@@ -5526,12 +5526,91 @@ int21_rename:
     clc
     jmp .rename_done
 
+.rename_cross_dir:
+    mov ax, [cs:tmp_rename_new_parent]
+    call int21_find_free_dir_entry
+    jc .rename_io_err
+
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:tmp_next_cluster], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:tmp_cluster], ax
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_rename_old_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .rename_io_err
+
+    push ds
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    mov si, [cs:tmp_rename_old_off]
+    xor di, di
+    mov cx, 32
+.rename_copy_old_entry:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .rename_copy_old_entry
+
+    mov ax, DOS_IO_BUF_SEG
+    mov es, ax
+    xor di, di
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+    pop ds
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call read_sector_lba
+    jc .rename_io_err
+
+    push ds
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    xor si, si
+    mov di, [cs:tmp_cluster]
+    mov cx, 32
+    rep movsb
+    pop ds
+
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call write_sector_lba
+    jc .rename_io_err
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_rename_old_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .rename_io_err
+
+    mov di, [cs:tmp_rename_old_off]
+    mov byte [es:di], 0xE5
+
+    mov ax, [cs:tmp_rename_old_lba]
+    xor bx, bx
+    call write_sector_lba
+    jc .rename_io_err
+
+    xor ax, ax
+    clc
+    jmp .rename_done
+
 .rename_old_lookup_fail:
     cmp ax, 0x0002
     je .rename_not_found
     jmp .rename_io_err
 
-.rename_cross_dir_fail:
 .rename_dest_exists:
     mov ax, 0x0005
     stc
@@ -6329,258 +6408,24 @@ int21_mem_trace_nomem:
     ret
 
 int21_trace_lookup_cluster:
-    push ax
-    mov al, 'L'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:tmp_cluster]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:tmp_lba]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop ax
     ret
 
 int21_trace_lookup_found:
-    push ax
-    push bx
-    mov al, 'F'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:search_found_cluster]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    xor ax, ax
-    mov al, [cs:search_found_attr]
-    call print_hex16_serial
-    mov al, ' '
-    call serial_putc
-    xor bx, bx
-.name_loop:
-    cmp bx, 11
-    jae .done_name
-    mov al, [cs:search_found_name + bx]
-    call serial_putc
-    inc bx
-    jmp .name_loop
-.done_name:
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop bx
-    pop ax
     ret
 
 int21_trace_find_pattern_fail:
-    push ax
-    push bx
-
-    mov al, 'Q'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    xor bx, bx
-.pattern_loop:
-    cmp bx, 11
-    jae .done
-    mov al, [cs:find_pattern + bx]
-    call serial_putc
-    inc bx
-    jmp .pattern_loop
-.done:
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-
-    pop bx
-    pop ax
     ret
 
 int21_trace_lookup_miss:
-    push ax
-    push bx
-    mov al, 'N'
-    call serial_putc
-    mov al, 'F'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov bx, [cs:search_name_ptr]
-    xor ax, ax
-    mov al, [bx + 0]
-    call serial_putc
-    mov al, [bx + 1]
-    call serial_putc
-    mov al, [bx + 2]
-    call serial_putc
-    mov al, [bx + 3]
-    call serial_putc
-    mov al, [bx + 4]
-    call serial_putc
-    mov al, [bx + 5]
-    call serial_putc
-    mov al, [bx + 6]
-    call serial_putc
-    mov al, [bx + 7]
-    call serial_putc
-    mov al, [bx + 8]
-    call serial_putc
-    mov al, [bx + 9]
-    call serial_putc
-    mov al, [bx + 10]
-    call serial_putc
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop bx
-    pop ax
     ret
 
 int21_trace_cwd_commit:
-    push ax
-    mov al, 'C'
-    call serial_putc
-    mov al, 'D'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:tmp_lookup_dir]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop ax
     ret
 
 int21_trace_call:
-    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
-    je .trace_enabled
-    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
-    jne .done
-.trace_enabled:
-    cmp byte [cs:int21_last_ah], 0x2C
-    je .done
-    cmp byte [cs:int21_last_ah], 0x3F
-    je .done
-    cmp byte [cs:int21_last_ah], 0x42
-    je .done
-    cmp byte [cs:int21_trace_call_count], 240
-    jae .done
-    inc byte [cs:int21_trace_call_count]
-
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push ds
-    push es
-
-    mov al, 'H'
-    call serial_putc
-    mov al, [cs:int21_last_ah]
-    call print_hex8_serial
-    mov al, '@'
-    call serial_putc
-    mov ax, [cs:int21_trace_call_cs]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [cs:int21_trace_call_ip]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, bx
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, dx
-    call print_hex16_serial
-    mov al, ';'
-    call serial_putc
-    mov ax, [cs:int21_trace_call_ss]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [cs:int21_trace_call_stk0]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [cs:int21_trace_call_stk1]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [cs:int21_trace_call_stk2]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.done:
     ret
 
 int21_trace_read_io_error:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    mov al, 'I'
-    call serial_putc
-    mov ax, [cs:file_handle_pos]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:file_handle_start_cluster]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:tmp_cluster]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:tmp_lba]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:tmp_rw_remaining]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    xor ax, ax
-    mov al, [cs:tmp_disk_status]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 int21_alloc:
@@ -9852,39 +9697,43 @@ shell_cmd_copy:
     push si
     push di
     push ds
-    push es
     mov ax, cs
     mov ds, ax
-    mov es, ax
+
+    mov bx, 0xFFFF
+    mov di, 0xFFFF
+    mov cl, 1
+
     call shell_arg_ptr
     cmp byte [si], 0
-    je .copy_fail
+    je .copy_report
+
     mov dx, si
     call shell_trim_first_arg
-    mov di, cmd_buffer + 40
-    mov si, dx
-.copy_src_cpy:
-    lodsb
-    stosb
-    test al, al
-    jnz .copy_src_cpy
-    call shell_arg_ptr
+    inc si
+    call skip_spaces
     cmp byte [si], 0
-    je .copy_fail
-    mov cx, di
-    sub cx, cmd_buffer + 40
-    mov di, cmd_buffer + 40
-.copy_cmp:
-    lodsb
-    stosb
-    cmp di, cx
-    jne .copy_cmp
+    je .copy_report
+
+    mov di, si
+    call shell_trim_first_arg
+
     mov ah, 0x3D
     mov al, 0
-    mov dx, cmd_buffer + 40
     int 0x21
-    jc .copy_fail
+    jc .copy_report
+
     mov bx, ax
+
+    mov ah, 0x3C
+    xor cx, cx
+    mov dx, di
+    mov di, 0xFFFF
+    int 0x21
+    jc .copy_cleanup
+
+    mov di, ax
+
 .copy_read:
     mov ah, 0x3F
     mov cx, 512
@@ -9892,26 +9741,45 @@ shell_cmd_copy:
     mov ds, ax
     xor dx, dx
     int 0x21
-    jc .copy_close
+    jc .copy_cleanup
     cmp ax, 0
     je .copy_done
+
     mov cx, ax
+    xchg bx, di
     mov ah, 0x40
     int 0x21
-    jc .copy_close
+    xchg bx, di
+    jc .copy_cleanup
+    cmp ax, cx
+    jne .copy_cleanup
     jmp .copy_read
+
 .copy_done:
+    mov cl, 0
+
+.copy_cleanup:
+    mov ah, 0x3E
+    cmp bx, 0xFFFF
+    je .copy_close_dst
+    int 0x21
+
+.copy_close_dst:
+    mov bx, di
+    cmp bx, 0xFFFF
+    je .copy_report
     mov ah, 0x3E
     int 0x21
-    jmp .copy_ok
-.copy_close:
-    mov ah, 0x3E
-    int 0x21
-.copy_fail:
+
+.copy_report:
+    mov ax, cs
+    mov ds, ax
+    cmp cl, 0
+    je .copy_ok
     mov si, msg_cmd_fail
     call print_string_dual
+
 .copy_ok:
-    pop es
     pop ds
     pop di
     pop si
