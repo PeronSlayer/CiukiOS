@@ -5216,6 +5216,38 @@ int21_mkdir:
     push ds
     push es
 
+%if FAT_TYPE == 16
+    mov si, dx
+    call int21_resolve_parent_dir
+    jc .mkdir_fail
+    mov [cs:tmp_lookup_dir], ax
+
+    call int21_path_to_fat_name
+    jc .mkdir_fail
+
+    mov ax, [cs:tmp_lookup_dir]
+    push ds
+    mov bx, ax
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov ax, bx
+    call int21_lookup_in_dir
+    pop ds
+    jnc .mkdir_fail
+    cmp ax, 0x0002
+    jne .mkdir_io_err
+
+    mov ax, [cs:tmp_lookup_dir]
+    call int21_find_free_dir_entry
+    jc .mkdir_alloc
+
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:tmp_next_cluster], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:tmp_cluster], ax
+    jmp .mkdir_slot_ready
+%else
     mov si, dx
     call int21_path_to_fat_name
     jc .mkdir_fail
@@ -5256,7 +5288,9 @@ int21_mkdir:
     mov [cs:tmp_next_cluster], ax
     mov ax, di
     mov [cs:tmp_cluster], ax
+%endif
 
+.mkdir_slot_ready:
     call int21_load_fat_cache
     jc .mkdir_io_err
 
@@ -5377,6 +5411,11 @@ int21_rmdir:
     push ds
     push es
 
+%if FAT_TYPE == 16
+    mov si, dx
+    call int21_resolve_and_find_path
+    jc .rmdir_done
+%else
     mov si, dx
     call int21_path_to_fat_name
     jc .rmdir_fail
@@ -5389,6 +5428,7 @@ int21_rmdir:
     mov bx, 0xFFFF
     call load_root_file_first_sector
     jc .rmdir_not_found
+%endif
 
     test byte [cs:search_found_attr], 0x10
     jz .rmdir_not_dir
@@ -5448,6 +5488,93 @@ int21_rename:
     push ds
     push es
 
+%if FAT_TYPE == 16
+    mov si, [ss:bp + 6]
+    mov ds, [ss:bp + 12]
+    call int21_resolve_parent_dir
+    jc .rename_fail_path
+    mov [cs:tmp_rename_old_parent], ax
+
+    call int21_path_to_fat_name
+    jc .rename_fail_path
+
+    mov ax, cs
+    mov ds, ax
+    mov di, search_found_name
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+
+    mov ax, [cs:tmp_rename_old_parent]
+    mov si, search_found_name
+    call int21_lookup_in_dir
+    jc .rename_old_lookup_fail
+
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:tmp_rename_old_lba], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:tmp_rename_old_off], ax
+
+    mov si, [ss:bp + 10]
+    mov ds, [ss:bp + 14]
+    call int21_resolve_parent_dir
+    jc .rename_fail_newname
+    mov [cs:tmp_rename_new_parent], ax
+
+    call int21_path_to_fat_name
+    jc .rename_fail_newname
+
+    mov ax, [cs:tmp_rename_old_parent]
+    cmp ax, [cs:tmp_rename_new_parent]
+    jne .rename_cross_dir_fail
+
+    mov ax, [cs:tmp_rename_new_parent]
+    push ds
+    mov bx, ax
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov ax, bx
+    call int21_lookup_in_dir
+    pop ds
+    jnc .rename_dest_exists
+    cmp ax, 0x0002
+    jne .rename_io_err
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_rename_old_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .rename_io_err
+
+    mov ax, cs
+    mov ds, ax
+    mov di, [cs:tmp_rename_old_off]
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+
+    mov ax, [cs:tmp_rename_old_lba]
+    xor bx, bx
+    call write_sector_lba
+    jc .rename_io_err
+
+    xor ax, ax
+    clc
+    jmp .rename_done
+
+.rename_old_lookup_fail:
+    cmp ax, 0x0002
+    je .rename_not_found
+    jmp .rename_io_err
+
+.rename_cross_dir_fail:
+.rename_dest_exists:
+    mov ax, 0x0005
+    stc
+    jmp .rename_done
+%else
     mov si, [ss:bp + 6]
     mov ds, [ss:bp + 12]
     call int21_path_to_fat_name
@@ -5494,6 +5621,7 @@ int21_rename:
     xor ax, ax
     clc
     jmp .rename_done
+%endif
 
 .rename_not_found:
     mov ax, 0x0002
@@ -7986,6 +8114,127 @@ int21_lookup_in_dir:
     pop cx
     pop bx
     ret
+
+; Find first free directory entry (0x00 or 0xE5) in AX directory cluster.
+; AX=0 means root directory.
+; On success: search_found_root_lba/search_found_root_off set, CF clear.
+%if FAT_TYPE == 16
+int21_find_free_dir_entry:
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    mov [cs:tmp_lookup_dir], ax
+    cmp ax, 0
+    jne .scan_cluster
+
+    mov dx, FAT_ROOT_START_LBA
+.root_scan:
+    cmp dx, FAT_ROOT_START_LBA + FAT_ROOT_DIR_SECTORS
+    jae .full
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, dx
+    xor bx, bx
+    call read_sector_lba
+    jc .io_fail
+
+    xor di, di
+    mov cx, 16
+.root_entries:
+    mov al, [es:di]
+    cmp al, 0x00
+    je .root_found
+    cmp al, 0xE5
+    je .root_found
+    add di, 32
+    loop .root_entries
+    inc dx
+    jmp .root_scan
+
+.root_found:
+    mov [cs:search_found_root_lba], dx
+    mov [cs:search_found_root_off], di
+    clc
+    jmp .done
+
+.scan_cluster:
+    call int21_load_fat_cache
+    jc .io_fail
+    mov ax, [cs:tmp_lookup_dir]
+    mov [cs:tmp_cluster], ax
+
+.cluster_loop:
+    mov ax, [cs:tmp_cluster]
+    cmp ax, 2
+    jb .full
+    cmp ax, FAT_EOF
+    jae .full
+
+    call int21_cluster_to_lba
+    mov [cs:tmp_lba], ax
+    xor dx, dx
+
+.sector_loop:
+    cmp dx, FAT_SECTORS_PER_CLUSTER
+    jae .next_cluster
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    xor bx, bx
+    call read_sector_lba
+    jc .io_fail
+
+    xor di, di
+    mov cx, 16
+.entry_loop:
+    mov al, [es:di]
+    cmp al, 0x00
+    je .subdir_found
+    cmp al, 0xE5
+    je .subdir_found
+    add di, 32
+    loop .entry_loop
+    inc dx
+    jmp .sector_loop
+
+.subdir_found:
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    mov [cs:search_found_root_lba], ax
+    mov [cs:search_found_root_off], di
+    clc
+    jmp .done
+
+.next_cluster:
+    mov ax, [cs:tmp_cluster]
+    call fat12_get_entry_cached
+    jc .io_fail
+    mov [cs:tmp_cluster], ax
+    jmp .cluster_loop
+
+.full:
+    mov ax, 0x0005
+    stc
+    jmp .done
+
+.io_fail:
+    mov ax, 0x0005
+    stc
+
+.done:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
 %endif
 
 int21_build_env_block:
@@ -12087,6 +12336,10 @@ tmp_overlay_image_size dw 0
 tmp_path_guard db 0
 tmp_ioctl_subfn db 0
 tmp_lookup_dir dw 0
+tmp_rename_old_parent dw 0
+tmp_rename_new_parent dw 0
+tmp_rename_old_lba dw 0
+tmp_rename_old_off dw 0
 dos_mem_init db 0
 dos_mem_alloc_seg dw 0
 dos_mem_alloc_size dw 0
