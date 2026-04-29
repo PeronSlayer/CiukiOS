@@ -5229,7 +5229,7 @@ int21_mkdir:
     call load_root_file_first_sector
     jnc .mkdir_fail
 
-    xor dx, dx
+    mov dx, FAT_ROOT_START_LBA
 .mkdir_scan:
     cmp dx, FAT_ROOT_START_LBA + FAT_ROOT_DIR_SECTORS
     jae .mkdir_alloc
@@ -5256,7 +5256,6 @@ int21_mkdir:
     mov [cs:tmp_next_cluster], ax
     mov ax, di
     mov [cs:tmp_cluster], ax
-    mov di, es
     mov si, path_fat_name
     mov cx, 11
     rep movsb
