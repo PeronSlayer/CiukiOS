@@ -161,8 +161,7 @@ print_prompt:
     call putc_dual
     mov al, 0x20
     call putc_dual
-    ; Print newline and set cursor to row 3 (input line)
-    call print_newline_dual
+    ; Set cursor to row 3 (input line) - newline will be called by read_command_line after input
     xor dl, dl
     mov dh, 3
     call set_cursor_pos
