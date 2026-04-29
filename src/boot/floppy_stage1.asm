@@ -816,9 +816,7 @@ int21_handler:
     jmp .success
 
 .fn_3c:
-    ; Create file: forward to open (write mode); returns error if not found.
-    mov al, 1
-    call int21_open
+    call int21_create
     jc .error
     jmp .success
 
@@ -3903,6 +3901,80 @@ fat_entry_matches_pattern:
     pop ax
     ret
 
+int21_create:
+    push dx
+    push ds
+
+    mov si, dx
+    call int21_resolve_parent_dir
+    jc .path_fail
+    mov [cs:tmp_lookup_dir], ax
+
+    call int21_path_to_fat_name
+    jc .path_fail
+
+    mov ax, [cs:tmp_lookup_dir]
+    mov bx, ax
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov ax, bx
+    call int21_lookup_in_dir
+    jnc .open_created
+    cmp ax, 0x0002
+    jne .io_error
+
+    mov ax, [cs:tmp_lookup_dir]
+    call int21_find_free_dir_entry
+    jc .io_error
+
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:tmp_next_cluster], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:tmp_cluster], ax
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call read_sector_lba
+    jc .io_error
+
+    mov di, [cs:tmp_cluster]
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+
+    mov byte [es:di - 11 + 11], 0x20
+    mov word [es:di - 11 + 26], 0
+    mov word [es:di - 11 + 28], 0
+    mov word [es:di - 11 + 30], 0
+
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call write_sector_lba
+    jc .io_error
+
+.open_created:
+    pop ds
+    pop dx
+    mov al, 2
+    jmp int21_open
+
+.path_fail:
+    mov ax, 0x0003
+    stc
+    jmp .done
+
+.io_error:
+    mov ax, 0x0005
+    stc
+
+.done:
+    pop ds
+    pop dx
+    ret
+
 int21_open:
     push bx
     push dx
@@ -3978,49 +4050,14 @@ int21_open:
 %endif
 
 .target_ready:
-%if FAT_TYPE == 16
     mov si, dx
     call int21_resolve_and_find_path
     jnc .path_ready
+%if FAT_TYPE == 16
     call int21_open_try_gem_cpi_fallback
     jc .done
-.path_ready:
-%else
-    mov si, dx
-    call int21_path_to_fat_name
-    jc .path_fail
-
-    mov si, path_fat_name
-    cmp byte [cs:si + 1], 'D'
-    jne .name_ready
-    cmp byte [cs:si], 'V'
-    jne .name_ready
-
-.alias_vd:
-    mov si, path_sd_driver_fat
-
-.alias_copy:
-    push di
-    push cx
-    mov ax, cs
-    mov ds, ax
-    mov di, path_fat_name
-    mov cx, 11
-    rep movsb
-    pop cx
-    pop di
-
-.name_ready:
-
-    mov ax, cs
-    mov ds, ax
-    mov ax, DOS_META_BUF_SEG
-    mov es, ax
-    mov si, path_fat_name
-    mov bx, 0xFFFF
-    call load_root_file_first_sector
-    jc .not_found
 %endif
+.path_ready:
 
     cmp byte [cs:file_handle_target], 2
     je .assign_slot2
@@ -7760,13 +7797,28 @@ int21_resolve_parent_dir:
     mov byte [cs:tmp_cwd_comp + bx], 0
     cmp bx, 0
     je .path_fail
-    mov dl, [si]
 
+    mov dl, [si]
     cmp dl, 0
     je .leaf_ok
     cmp dl, 13
     je .leaf_ok
+    cmp dl, '\'
+    je .trail_check
+    cmp dl, '/'
+    jne .non_leaf
+.trail_check:
+    cmp byte [si + 1], 0
+    je .leaf_term
+    cmp byte [si + 1], 13
+    je .leaf_term
+    jmp .non_leaf
 
+.leaf_term:
+    mov byte [si], 0
+    jmp .leaf_ok
+
+.non_leaf:
     ; Ignore intermediate '.' component.
     cmp byte [cs:tmp_cwd_comp], '.'
     jne .check_dotdot
@@ -9673,25 +9725,9 @@ shell_trim_first_arg:
     ret
 
 shell_cmd_cdup:
-    push ax
-    push dx
-    push ds
-
-    mov ax, cs
-    mov ds, ax
-    mov dx, path_root_dos
+    mov dx, path_parent_dos
     mov ah, 0x3B
     int 0x21
-    jc .fail
-    jmp .ok
-
-.fail:
-    mov si, msg_cd_fail
-    call print_string_dual
-.ok:
-    pop ds
-    pop dx
-    pop ax
     ret
 
 shell_cmd_mouse:
@@ -9767,33 +9803,9 @@ shell_cmd_cd:
     call shell_arg_ptr
     cmp byte [si], 0
     je .show
-
-    cmp byte [si], '.'
-    jne .not_dot
-    cmp byte [si + 1], 0
-    je .done
-    cmp byte [si + 1], '.'
-    jne .not_dot
-    cmp byte [si + 2], 0
-    je .go_root
-
-.not_dot:
-    push si
-    call shell_trim_first_arg
-    pop si
-    cmp byte [si], '/'
-    jne .call_chdir
-    mov byte [si], '\'
-
-.call_chdir:
     mov dx, si
-    mov ah, 0x3B
-    int 0x21
-    jc .fail
-    jmp .done
-
-.go_root:
-    mov dx, path_root_dos
+    call shell_trim_first_arg
+.call_chdir:
     mov ah, 0x3B
     int 0x21
     jc .fail
@@ -10087,6 +10099,16 @@ shell_cmd_dir:
 
     mov ax, cs
     mov ds, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .scan_start
+    mov dx, si
+    call shell_trim_first_arg
+    mov ah, 0x3B
+    int 0x21
+    jc .fail
+
+.scan_start:
 
     mov si, msg_dir_header
     call print_string_dual
@@ -12419,6 +12441,7 @@ path_gem_cpi_fat   db "GEM     CPI"
 %if FAT_TYPE == 16
 path_gem_exe_abs db "\\SYSTEM\\DESKTOP\\GEM.EXE", 0
 %endif
+path_parent_dos  db "..", 0
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
 cwd_cluster dw 0
