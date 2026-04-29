@@ -112,9 +112,6 @@ stage1_start:
 %endif
 %endif
 
-    call flush_keyboard_buffer
-    jmp main_loop
-
 helper_get_drive_letter:
     ; Input: al = boot_drive value (BIOS format: 0x00=A, 0x01=B, 0x80=C, 0x81=D, etc.)
     ; Output: al = drive letter ASCII ('A', 'B', 'C', etc.)
@@ -162,6 +159,11 @@ print_prompt:
     call putc_dual
     mov al, 0x20
     call putc_dual
+    ; Print newline and set cursor to row 2
+    call print_newline_dual
+    xor dl, dl
+    mov dh, 2
+    call set_cursor_pos
     pop si
     pop ax
     ret
@@ -173,17 +175,6 @@ main_loop:
     call dispatch_command
     jmp main_loop
 
-flush_keyboard_buffer:
-.check:
-    mov ah, 0x01
-    int 0x16
-    jz .done
-    xor ah, ah
-    int 0x16
-    jmp .check
-.done:
-    ret
-
 run_bios_diagnostics:
     mov si, msg_diag_begin
     call print_string_dual
@@ -191,17 +182,15 @@ run_bios_diagnostics:
     mov si, msg_diag_int10
     call print_string_dual
 
-    ; INT13 AH=0x00 (disk reset) may fail in some QEMU configurations or after
-    ; PS/2 mouse initialization due to PIC mask changes. However, actual disk I/O
-    ; (AH=0x02 read operations) works correctly. This is a diagnostic-only call.
-    ; We always report OK since real disk operations are verified by boot success.
     mov ah, 0x00
     mov dl, [boot_drive]
     int 0x13
-    ; Ignore carry flag - reset failures are non-critical for diagnostics.
-    ; If real disk I/O fails, the boot would have already failed.
-    clc
+    jc .int13_fail
     mov si, msg_diag_int13_ok
+    call print_string_dual
+    jmp .int13_done
+.int13_fail:
+    mov si, msg_diag_int13_fail
     call print_string_dual
 .int13_done:
 
@@ -8121,41 +8110,6 @@ int21_find_test:
     pop ds
     ret
 
-int21_dir_test:
-    push si
-    mov si, msg_dir_serial_pass
-    call print_string_serial
-    pop si
-    ret
-
-
-int21_tree_test:
-    push si
-    mov si, msg_tree_serial_pass
-    call print_string_serial
-    pop si
-    ret
-
-int21_cd_test:
-    push si
-    mov si, msg_cd_serial_pass
-    call print_string_serial
-    pop si
-    ret
-
-int21_info_test:
-    push si
-    mov si, msg_info_serial_pass
-    call print_string_serial
-    pop si
-    ret
-
-int21_ctrl_test:
-    push si
-    mov si, msg_ctrl_serial_pass
-    call print_string_serial
-    pop si
-    ret
 run_stage1_selftest:
     mov si, msg_stage1_selftest_begin
     call print_string_dual
@@ -8166,11 +8120,6 @@ run_stage1_selftest:
     call run_mz_demo
     call int21_fileio_test
     call int21_find_test
-    call int21_dir_test
-    call int21_tree_test
-    call int21_cd_test
-    call int21_info_test
-    call int21_ctrl_test
     call run_gfx_demo
     mov si, msg_stage1_selftest_done
     call print_string_dual
@@ -9376,11 +9325,6 @@ dispatch_command:
 
 .cmd_findtest:
     call int21_find_test
-    call int21_dir_test
-    call int21_tree_test
-    call int21_cd_test
-    call int21_info_test
-    call int21_ctrl_test
     jmp .done
 
 .cmd_mouse:
@@ -12227,4 +12171,3 @@ msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0
 msg_cmd_fail db "Error", 13, 10, 0
 msg_exit_str db "Exit", 13, 10, 0
-
