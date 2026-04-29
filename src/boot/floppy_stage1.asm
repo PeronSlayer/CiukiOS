@@ -12055,11 +12055,11 @@ msg_shell_footer db "help cls reboot", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
-msg_help_header db "--- CiukiDOS Commands ---", 13, 10, 0
-msg_help_core db "  help  dir  cd  cls  tree  ver", 13, 10, 0
-msg_help_runtime db "  dos21  comdemo  mzdemo  fileio  findtest", 13, 10, 0
-msg_help_system db "  gfxdemo  ticks  drive  mouse  keytest  reboot  halt", 13, 10, 0
-msg_help_apps db "", 0
+msg_help_header db "--- CiukiDOS Commands ---", 13, 10, "Comando - breve descrizione", 13, 10, 0
+msg_help_core db "  help - mostra questa guida", 13, 10, "  ver - mostra versione sistema", 13, 10, "  cls - pulisce lo schermo", 13, 10, "  dir - elenca file e directory", 13, 10, "  tree - mostra albero directory", 13, 10, 0
+msg_help_runtime db "  cd <path> - cambia directory", 13, 10, "  cd.. - directory padre", 13, 10, "  copy <src> <dst> - copia file", 13, 10, "  del <file> - elimina file", 13, 10, "  type <file> - mostra contenuto", 13, 10, 0
+msg_help_system db "  md/mkdir <dir> - crea directory", 13, 10, "  rd/rmdir <dir> - rimuove directory", 13, 10, "  ren/rename <a> <b> - rinomina", 13, 10, "  drive - mostra drive di boot", 13, 10, "  ticks - mostra timer BIOS", 13, 10, 0
+msg_help_apps db "  exit - esce dalla shell", 13, 10, "  reboot - riavvia sistema", 13, 10, "  halt - arresta sistema", 13, 10, 0
 msg_version_line db "CiukiOS pre-Alpha v0.5.2 (CiukiDOS Shell)", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
