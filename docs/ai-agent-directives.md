@@ -35,3 +35,9 @@
 1. No implicit merges.
 2. No destructive changes without explicit consent.
 3. Every change must include test status, or a clear reason when tests cannot run.
+
+## UX Invariance Rules
+1. UX is frozen by default: do not change layouts, visual behavior, prompts, flows, labels, colors, spacing, navigation, or interaction patterns unless the user explicitly approves the UX change first.
+2. If a fix requires UX impact, stop and request explicit approval before any UX-affecting edit.
+3. Prefer internal/behavioral fixes that preserve existing UX output exactly.
+4. Any approved UX change must be documented with explicit scope and rationale in the task recap.

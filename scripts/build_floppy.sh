@@ -235,7 +235,7 @@ dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek="$DATA_LBA" count=1 conv=notrunc stat
 dd if="$MZDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
 dd if="$FILEIO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 2)) count=2 conv=notrunc status=none
 dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 4)) count=1 conv=notrunc status=none
-dd if="$STAGE2_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 5)) status=none
+dd if="$STAGE2_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 5)) conv=notrunc status=none
 dd if="$CIUKEDIT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 6)) count=2 conv=notrunc status=none
 
 cat > build/floppy/README.txt << 'TXT'

@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 LOG_FILE="${LOG_FILE:-build/floppy/qemu-stage1.log}"
 TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-12}"
 
-echo "[qemu-test-stage1] running stage1 boot selftest regression"
+echo "[qemu-test-stage1] running stage1 boot selftest + DIR/TREE/CD/INFO/CTRL markers
 mkdir -p "$(dirname "$LOG_FILE")"
 rm -f "$LOG_FILE"
 
@@ -47,6 +47,11 @@ check_marker "[MZDEMO-SERIAL] PASS"
 check_marker "[FILEIO-SERIAL] PASS"
 check_marker "[FIND-SERIAL] PASS"
 check_marker "[GFX-SERIAL] PASS"
+check_any_marker "[DIR-SERIAL] PASS" "[DIR-SERIAL] PASS"
+check_any_marker "[TREE-SERIAL] PASS" "[TREE-SERIAL] PASS"
+check_any_marker "[CD-SERIAL] PASS" "[CD-SERIAL] PASS"
+check_any_marker "[INFO-SERIAL] PASS" "[INFO-SERIAL] PASS"
+check_any_marker "[CTRL-SERIAL] PASS" "[CTRL-SERIAL] PASS"
 check_any_marker "[STAGE1-SELFTEST] DONE" "[S1T] D"
 
 echo "[qemu-test-stage1] PASS (stage1 selftest + INT21h + COM/MZ via AH=4Bh + file I/O + findfirst/findnext + VGA mode13h)"

@@ -49,6 +49,11 @@ check_marker "[MZDEMO-SERIAL] PASS"
 check_marker "[FILEIO-SERIAL] PASS"
 check_marker "[FIND-SERIAL] PASS"
 check_marker "[GFX-SERIAL] PASS"
+check_any_marker "[DIR-SERIAL] PASS" "[DIR-SERIAL] PASS"
+check_any_marker "[TREE-SERIAL] PASS" "[TREE-SERIAL] PASS"
+check_any_marker "[CD-SERIAL] PASS" "[CD-SERIAL] PASS"
+check_any_marker "[INFO-SERIAL] PASS" "[INFO-SERIAL] PASS"
+check_any_marker "[CTRL-SERIAL] PASS" "[CTRL-SERIAL] PASS"
 check_any_marker "[STAGE1-SELFTEST] DONE" "[S1T] D"
 
-echo "[qemu-test-full-stage1] PASS (FAT16 stage1 selftest + INT21h + COM/MZ + file I/O + findfirst + VGA mode13h)"
+echo "[qemu-test-full-stage1] PASS (FAT16 stage1 selftest + DIR/TREE/CD/INFO/CTRL markers

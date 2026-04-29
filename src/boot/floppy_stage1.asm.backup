@@ -8110,41 +8110,6 @@ int21_find_test:
     pop ds
     ret
 
-int21_dir_test:
-    push si
-    mov si, msg_dir_serial_pass
-    call print_string_serial
-    pop si
-    ret
-
-
-int21_tree_test:
-    push si
-    mov si, msg_tree_serial_pass
-    call print_string_serial
-    pop si
-    ret
-
-int21_cd_test:
-    push si
-    mov si, msg_cd_serial_pass
-    call print_string_serial
-    pop si
-    ret
-
-int21_info_test:
-    push si
-    mov si, msg_info_serial_pass
-    call print_string_serial
-    pop si
-    ret
-
-int21_ctrl_test:
-    push si
-    mov si, msg_ctrl_serial_pass
-    call print_string_serial
-    pop si
-    ret
 run_stage1_selftest:
     mov si, msg_stage1_selftest_begin
     call print_string_dual
@@ -8155,11 +8120,6 @@ run_stage1_selftest:
     call run_mz_demo
     call int21_fileio_test
     call int21_find_test
-    call int21_dir_test
-    call int21_tree_test
-    call int21_cd_test
-    call int21_info_test
-    call int21_ctrl_test
     call run_gfx_demo
     mov si, msg_stage1_selftest_done
     call print_string_dual
@@ -9365,11 +9325,6 @@ dispatch_command:
 
 .cmd_findtest:
     call int21_find_test
-    call int21_dir_test
-    call int21_tree_test
-    call int21_cd_test
-    call int21_info_test
-    call int21_ctrl_test
     jmp .done
 
 .cmd_mouse:
@@ -12216,4 +12171,3 @@ msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0
 msg_cmd_fail db "Error", 13, 10, 0
 msg_exit_str db "Exit", 13, 10, 0
-
