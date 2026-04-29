@@ -2996,7 +2996,6 @@ int21_chdir:
     jmp .parse_components
 
 .commit:
-%if FAT_TYPE == 16
     cmp byte [cs:tmp_cwd_build], 0
     je .commit_root
 
@@ -3022,7 +3021,6 @@ int21_chdir:
     mov word [cs:tmp_lookup_dir], 0
 
 .commit_copy:
-%endif
     xor bx, bx
 .commit_loop:
     mov al, [cs:tmp_cwd_build + bx]
@@ -3036,18 +3034,14 @@ int21_chdir:
     jmp .ok
 
 .ok:
-%if FAT_TYPE == 16
     mov ax, [cs:tmp_lookup_dir]
     mov [cs:cwd_cluster], ax
-%endif
     xor ax, ax
     clc
     ret
 .root:
     mov byte [cs:cwd_buf], 0
-%if FAT_TYPE == 16
     mov word [cs:cwd_cluster], 0
-%endif
     xor ax, ax
     clc
     ret
@@ -3150,17 +3144,11 @@ int21_find_first:
     push es
 
     mov [cs:find_attr], cl
-%if FAT_TYPE == 16
     mov si, dx
     call int21_resolve_parent_dir
     jc .path_fail
     mov [cs:find_dir_cluster], ax
     call int21_path_to_fat_pattern
-%else
-    mov word [cs:find_dir_cluster], 0
-    mov si, dx
-    call int21_path_to_fat_pattern
-%endif
     jc .path_fail
     mov al, 'p'
     call serial_putc
@@ -3369,10 +3357,8 @@ int21_find_scan_from_cursor:
     mov bx, [cs:find_cursor]
     mov word [cs:find_cached_sector], 0xFFFF
 
-%if FAT_TYPE == 16
     cmp word [cs:find_dir_cluster], 0
     jne .scan_subdir_loop
-%endif
 
 .scan_loop:
     cmp bx, FAT_ROOT_DIR_SECTORS * 16
@@ -3470,7 +3456,6 @@ int21_find_scan_from_cursor:
     stc
     jmp .done
 
-%if FAT_TYPE == 16
 .scan_subdir_loop:
     call int21_load_fat_cache
     jc .io_fail
@@ -3584,7 +3569,6 @@ int21_find_scan_from_cursor:
     jc .io_fail
     mov [cs:tmp_cluster], ax
     jmp .subdir_cluster_loop
-%endif
 
 .io_fail:
     mov ax, 0x0005
@@ -5216,7 +5200,6 @@ int21_mkdir:
     push ds
     push es
 
-%if FAT_TYPE == 16
     mov si, dx
     call int21_resolve_parent_dir
     jc .mkdir_fail
@@ -5247,48 +5230,6 @@ int21_mkdir:
     mov ax, [cs:search_found_root_off]
     mov [cs:tmp_cluster], ax
     jmp .mkdir_slot_ready
-%else
-    mov si, dx
-    call int21_path_to_fat_name
-    jc .mkdir_fail
-
-    mov ax, cs
-    mov ds, ax
-    mov ax, DOS_META_BUF_SEG
-    mov es, ax
-    mov si, path_fat_name
-    mov bx, 0xFFFF
-    call load_root_file_first_sector
-    jnc .mkdir_fail
-
-    mov dx, FAT_ROOT_START_LBA
-.mkdir_scan:
-    cmp dx, FAT_ROOT_START_LBA + FAT_ROOT_DIR_SECTORS
-    jae .mkdir_alloc
-    mov ax, dx
-    xor bx, bx
-    call read_sector_lba
-    jc .mkdir_io_err
-
-    xor di, di
-    mov cx, 16
-.mkdir_entries:
-    mov al, [es:di]
-    cmp al, 0x00
-    je .mkdir_create
-    cmp al, 0xE5
-    je .mkdir_create
-    add di, 32
-    loop .mkdir_entries
-    inc dx
-    jmp .mkdir_scan
-
-.mkdir_create:
-    mov ax, dx
-    mov [cs:tmp_next_cluster], ax
-    mov ax, di
-    mov [cs:tmp_cluster], ax
-%endif
 
 .mkdir_slot_ready:
     call int21_load_fat_cache
@@ -5411,24 +5352,9 @@ int21_rmdir:
     push ds
     push es
 
-%if FAT_TYPE == 16
     mov si, dx
     call int21_resolve_and_find_path
     jc .rmdir_done
-%else
-    mov si, dx
-    call int21_path_to_fat_name
-    jc .rmdir_fail
-
-    mov ax, cs
-    mov ds, ax
-    mov ax, DOS_META_BUF_SEG
-    mov es, ax
-    mov si, path_fat_name
-    mov bx, 0xFFFF
-    call load_root_file_first_sector
-    jc .rmdir_not_found
-%endif
 
     test byte [cs:search_found_attr], 0x10
     jz .rmdir_not_dir
@@ -5488,7 +5414,6 @@ int21_rename:
     push ds
     push es
 
-%if FAT_TYPE == 16
     mov si, [ss:bp + 6]
     mov ds, [ss:bp + 12]
     call int21_resolve_parent_dir
@@ -5574,54 +5499,6 @@ int21_rename:
     mov ax, 0x0005
     stc
     jmp .rename_done
-%else
-    mov si, [ss:bp + 6]
-    mov ds, [ss:bp + 12]
-    call int21_path_to_fat_name
-    jc .rename_fail
-
-    mov ax, cs
-    mov ds, ax
-    mov ax, DOS_META_BUF_SEG
-    mov es, ax
-    mov di, search_found_name
-    mov si, path_fat_name
-    mov cx, 11
-    rep movsb
-
-    mov si, [ss:bp + 10]
-    mov ds, [ss:bp + 14]
-    call int21_path_to_fat_name
-    jc .rename_fail
-
-    mov ax, cs
-    mov ds, ax
-    mov ax, DOS_META_BUF_SEG
-    mov es, ax
-    mov si, search_found_name
-    mov bx, 0xFFFF
-    call load_root_file_first_sector
-    jc .rename_not_found
-
-    mov ax, [cs:search_found_root_lba]
-    xor bx, bx
-    call read_sector_lba
-    jc .rename_io_err
-
-    mov di, [cs:search_found_root_off]
-    mov si, path_fat_name
-    mov cx, 11
-    rep movsb
-
-    mov ax, [cs:search_found_root_lba]
-    xor bx, bx
-    call write_sector_lba
-    jc .rename_io_err
-
-    xor ax, ax
-    clc
-    jmp .rename_done
-%endif
 
 .rename_not_found:
     mov ax, 0x0002
@@ -7758,7 +7635,6 @@ int21_upcase_al:
 .done:
     ret
 
-%if FAT_TYPE == 16
 int21_resolve_and_find_path:
     push si
 
@@ -8118,7 +7994,6 @@ int21_lookup_in_dir:
 ; Find first free directory entry (0x00 or 0xE5) in AX directory cluster.
 ; AX=0 means root directory.
 ; On success: search_found_root_lba/search_found_root_off set, CF clear.
-%if FAT_TYPE == 16
 int21_find_free_dir_entry:
     push bx
     push cx
@@ -8234,8 +8109,6 @@ int21_find_free_dir_entry:
     pop cx
     pop bx
     ret
-%endif
-%endif
 
 int21_build_env_block:
     push ax
@@ -10219,11 +10092,9 @@ shell_cmd_dir:
     call print_string_dual
 
     mov word [shell_dir_count], 0
-%if FAT_TYPE == 16
     mov ax, [cs:cwd_cluster]
     cmp ax, 0
     jne .scan_subdir_start
-%endif
 
     mov dx, FAT_ROOT_START_LBA
 
@@ -10272,7 +10143,6 @@ shell_cmd_dir:
     inc dx
     jmp .sector_loop
 
-%if FAT_TYPE == 16
 .scan_subdir_start:
     call int21_load_fat_cache
     jc .fail
@@ -10341,7 +10211,6 @@ shell_cmd_dir:
     jc .fail
     mov [cs:tmp_cluster], ax
     jmp .subdir_cluster_loop
-%endif
 
 .done_scan:
     cmp word [shell_dir_count], 0
@@ -12552,9 +12421,7 @@ path_gem_exe_abs db "\\SYSTEM\\DESKTOP\\GEM.EXE", 0
 %endif
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
-%if FAT_TYPE == 16
 cwd_cluster dw 0
-%endif
 %if FAT_TYPE == 12
 ram_buf times 6 db 0
 %endif
