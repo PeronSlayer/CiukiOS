@@ -112,6 +112,7 @@ stage1_start:
 %endif
 %endif
 
+    call flush_keyboard_buffer
     jmp main_loop
 
 helper_get_drive_letter:
@@ -161,10 +162,9 @@ print_prompt:
     call putc_dual
     mov al, 0x20
     call putc_dual
-    ; Print newline and set cursor to row 2
-    call print_newline_dual
+    ; Set cursor to row 3 (input line) - newline will be called by read_command_line after input
     xor dl, dl
-    mov dh, 2
+    mov dh, 3
     call set_cursor_pos
     pop si
     pop ax
@@ -176,6 +176,17 @@ main_loop:
     call read_command_line
     call dispatch_command
     jmp main_loop
+
+flush_keyboard_buffer:
+.check:
+    mov ah, 0x01
+    int 0x16
+    jz .done
+    xor ah, ah
+    int 0x16
+    jmp .check
+.done:
+    ret
 
 run_bios_diagnostics:
     mov si, msg_diag_begin
