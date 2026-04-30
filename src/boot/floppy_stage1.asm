@@ -5454,8 +5454,8 @@ int21_rename:
     push ds
     push es
 
-    mov si, [ss:bp + 6]
-    mov ds, [ss:bp + 12]
+    mov si, [ss:bp + 12]
+    mov ds, [ss:bp + 4]
     call int21_resolve_parent_dir
     jc .rename_fail_path
     mov [cs:tmp_rename_old_parent], ax
@@ -5480,8 +5480,8 @@ int21_rename:
     mov ax, [cs:search_found_root_off]
     mov [cs:tmp_rename_old_off], ax
 
-    mov si, [ss:bp + 10]
-    mov ds, [ss:bp + 14]
+    mov si, [ss:bp + 8]
+    mov ds, [ss:bp + 2]
     call int21_resolve_parent_dir
     jc .rename_fail_newname
     mov [cs:tmp_rename_new_parent], ax
