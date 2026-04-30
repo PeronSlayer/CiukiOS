@@ -816,9 +816,7 @@ int21_handler:
     jmp .success
 
 .fn_3c:
-    ; Create file: forward to open (write mode); returns error if not found.
-    mov al, 1
-    call int21_open
+    call int21_create
     jc .error
     jmp .success
 
@@ -3903,6 +3901,80 @@ fat_entry_matches_pattern:
     pop ax
     ret
 
+int21_create:
+    push dx
+    push ds
+
+    mov si, dx
+    call int21_resolve_parent_dir
+    jc .path_fail
+    mov [cs:tmp_lookup_dir], ax
+
+    call int21_path_to_fat_name
+    jc .path_fail
+
+    mov ax, [cs:tmp_lookup_dir]
+    mov bx, ax
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov ax, bx
+    call int21_lookup_in_dir
+    jnc .open_created
+    cmp ax, 0x0002
+    jne .io_error
+
+    mov ax, [cs:tmp_lookup_dir]
+    call int21_find_free_dir_entry
+    jc .io_error
+
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:tmp_next_cluster], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:tmp_cluster], ax
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call read_sector_lba
+    jc .io_error
+
+    mov di, [cs:tmp_cluster]
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+
+    mov byte [es:di - 11 + 11], 0x20
+    mov word [es:di - 11 + 26], 0
+    mov word [es:di - 11 + 28], 0
+    mov word [es:di - 11 + 30], 0
+
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call write_sector_lba
+    jc .io_error
+
+.open_created:
+    pop ds
+    pop dx
+    mov al, 2
+    jmp int21_open
+
+.path_fail:
+    mov ax, 0x0003
+    stc
+    jmp .done
+
+.io_error:
+    mov ax, 0x0005
+    stc
+
+.done:
+    pop ds
+    pop dx
+    ret
+
 int21_open:
     push bx
     push dx
@@ -3978,49 +4050,14 @@ int21_open:
 %endif
 
 .target_ready:
-%if FAT_TYPE == 16
     mov si, dx
     call int21_resolve_and_find_path
     jnc .path_ready
+%if FAT_TYPE == 16
     call int21_open_try_gem_cpi_fallback
     jc .done
-.path_ready:
-%else
-    mov si, dx
-    call int21_path_to_fat_name
-    jc .path_fail
-
-    mov si, path_fat_name
-    cmp byte [cs:si + 1], 'D'
-    jne .name_ready
-    cmp byte [cs:si], 'V'
-    jne .name_ready
-
-.alias_vd:
-    mov si, path_sd_driver_fat
-
-.alias_copy:
-    push di
-    push cx
-    mov ax, cs
-    mov ds, ax
-    mov di, path_fat_name
-    mov cx, 11
-    rep movsb
-    pop cx
-    pop di
-
-.name_ready:
-
-    mov ax, cs
-    mov ds, ax
-    mov ax, DOS_META_BUF_SEG
-    mov es, ax
-    mov si, path_fat_name
-    mov bx, 0xFFFF
-    call load_root_file_first_sector
-    jc .not_found
 %endif
+.path_ready:
 
     cmp byte [cs:file_handle_target], 2
     je .assign_slot2
@@ -5449,10 +5486,6 @@ int21_rename:
     call int21_path_to_fat_name
     jc .rename_fail_newname
 
-    mov ax, [cs:tmp_rename_old_parent]
-    cmp ax, [cs:tmp_rename_new_parent]
-    jne .rename_cross_dir_fail
-
     mov ax, [cs:tmp_rename_new_parent]
     push ds
     mov bx, ax
@@ -5465,6 +5498,10 @@ int21_rename:
     jnc .rename_dest_exists
     cmp ax, 0x0002
     jne .rename_io_err
+
+    mov ax, [cs:tmp_rename_old_parent]
+    cmp ax, [cs:tmp_rename_new_parent]
+    jne .rename_cross_dir
 
     mov ax, DOS_META_BUF_SEG
     mov es, ax
@@ -5489,12 +5526,91 @@ int21_rename:
     clc
     jmp .rename_done
 
+.rename_cross_dir:
+    mov ax, [cs:tmp_rename_new_parent]
+    call int21_find_free_dir_entry
+    jc .rename_io_err
+
+    mov ax, [cs:search_found_root_lba]
+    mov [cs:tmp_next_cluster], ax
+    mov ax, [cs:search_found_root_off]
+    mov [cs:tmp_cluster], ax
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_rename_old_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .rename_io_err
+
+    push ds
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    mov si, [cs:tmp_rename_old_off]
+    xor di, di
+    mov cx, 32
+.rename_copy_old_entry:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .rename_copy_old_entry
+
+    mov ax, DOS_IO_BUF_SEG
+    mov es, ax
+    xor di, di
+    mov ax, cs
+    mov ds, ax
+    mov si, path_fat_name
+    mov cx, 11
+    rep movsb
+    pop ds
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call read_sector_lba
+    jc .rename_io_err
+
+    push ds
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    xor si, si
+    mov di, [cs:tmp_cluster]
+    mov cx, 32
+    rep movsb
+    pop ds
+
+    mov ax, [cs:tmp_next_cluster]
+    xor bx, bx
+    call write_sector_lba
+    jc .rename_io_err
+
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:tmp_rename_old_lba]
+    xor bx, bx
+    call read_sector_lba
+    jc .rename_io_err
+
+    mov di, [cs:tmp_rename_old_off]
+    mov byte [es:di], 0xE5
+
+    mov ax, [cs:tmp_rename_old_lba]
+    xor bx, bx
+    call write_sector_lba
+    jc .rename_io_err
+
+    xor ax, ax
+    clc
+    jmp .rename_done
+
 .rename_old_lookup_fail:
     cmp ax, 0x0002
     je .rename_not_found
     jmp .rename_io_err
 
-.rename_cross_dir_fail:
 .rename_dest_exists:
     mov ax, 0x0005
     stc
@@ -6292,258 +6408,24 @@ int21_mem_trace_nomem:
     ret
 
 int21_trace_lookup_cluster:
-    push ax
-    mov al, 'L'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:tmp_cluster]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:tmp_lba]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop ax
     ret
 
 int21_trace_lookup_found:
-    push ax
-    push bx
-    mov al, 'F'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:search_found_cluster]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    xor ax, ax
-    mov al, [cs:search_found_attr]
-    call print_hex16_serial
-    mov al, ' '
-    call serial_putc
-    xor bx, bx
-.name_loop:
-    cmp bx, 11
-    jae .done_name
-    mov al, [cs:search_found_name + bx]
-    call serial_putc
-    inc bx
-    jmp .name_loop
-.done_name:
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop bx
-    pop ax
     ret
 
 int21_trace_find_pattern_fail:
-    push ax
-    push bx
-
-    mov al, 'Q'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    xor bx, bx
-.pattern_loop:
-    cmp bx, 11
-    jae .done
-    mov al, [cs:find_pattern + bx]
-    call serial_putc
-    inc bx
-    jmp .pattern_loop
-.done:
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-
-    pop bx
-    pop ax
     ret
 
 int21_trace_lookup_miss:
-    push ax
-    push bx
-    mov al, 'N'
-    call serial_putc
-    mov al, 'F'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov bx, [cs:search_name_ptr]
-    xor ax, ax
-    mov al, [bx + 0]
-    call serial_putc
-    mov al, [bx + 1]
-    call serial_putc
-    mov al, [bx + 2]
-    call serial_putc
-    mov al, [bx + 3]
-    call serial_putc
-    mov al, [bx + 4]
-    call serial_putc
-    mov al, [bx + 5]
-    call serial_putc
-    mov al, [bx + 6]
-    call serial_putc
-    mov al, [bx + 7]
-    call serial_putc
-    mov al, [bx + 8]
-    call serial_putc
-    mov al, [bx + 9]
-    call serial_putc
-    mov al, [bx + 10]
-    call serial_putc
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop bx
-    pop ax
     ret
 
 int21_trace_cwd_commit:
-    push ax
-    mov al, 'C'
-    call serial_putc
-    mov al, 'D'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:tmp_lookup_dir]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop ax
     ret
 
 int21_trace_call:
-    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
-    je .trace_enabled
-    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
-    jne .done
-.trace_enabled:
-    cmp byte [cs:int21_last_ah], 0x2C
-    je .done
-    cmp byte [cs:int21_last_ah], 0x3F
-    je .done
-    cmp byte [cs:int21_last_ah], 0x42
-    je .done
-    cmp byte [cs:int21_trace_call_count], 240
-    jae .done
-    inc byte [cs:int21_trace_call_count]
-
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push ds
-    push es
-
-    mov al, 'H'
-    call serial_putc
-    mov al, [cs:int21_last_ah]
-    call print_hex8_serial
-    mov al, '@'
-    call serial_putc
-    mov ax, [cs:int21_trace_call_cs]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [cs:int21_trace_call_ip]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, bx
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, dx
-    call print_hex16_serial
-    mov al, ';'
-    call serial_putc
-    mov ax, [cs:int21_trace_call_ss]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [cs:int21_trace_call_stk0]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [cs:int21_trace_call_stk1]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [cs:int21_trace_call_stk2]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.done:
     ret
 
 int21_trace_read_io_error:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    mov al, 'I'
-    call serial_putc
-    mov ax, [cs:file_handle_pos]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:file_handle_start_cluster]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:tmp_cluster]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:tmp_lba]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:tmp_rw_remaining]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    xor ax, ax
-    mov al, [cs:tmp_disk_status]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 int21_alloc:
@@ -7760,13 +7642,28 @@ int21_resolve_parent_dir:
     mov byte [cs:tmp_cwd_comp + bx], 0
     cmp bx, 0
     je .path_fail
-    mov dl, [si]
 
+    mov dl, [si]
     cmp dl, 0
     je .leaf_ok
     cmp dl, 13
     je .leaf_ok
+    cmp dl, '\'
+    je .trail_check
+    cmp dl, '/'
+    jne .non_leaf
+.trail_check:
+    cmp byte [si + 1], 0
+    je .leaf_term
+    cmp byte [si + 1], 13
+    je .leaf_term
+    jmp .non_leaf
 
+.leaf_term:
+    mov byte [si], 0
+    jmp .leaf_ok
+
+.non_leaf:
     ; Ignore intermediate '.' component.
     cmp byte [cs:tmp_cwd_comp], '.'
     jne .check_dotdot
@@ -9673,25 +9570,9 @@ shell_trim_first_arg:
     ret
 
 shell_cmd_cdup:
-    push ax
-    push dx
-    push ds
-
-    mov ax, cs
-    mov ds, ax
-    mov dx, path_root_dos
+    mov dx, path_parent_dos
     mov ah, 0x3B
     int 0x21
-    jc .fail
-    jmp .ok
-
-.fail:
-    mov si, msg_cd_fail
-    call print_string_dual
-.ok:
-    pop ds
-    pop dx
-    pop ax
     ret
 
 shell_cmd_mouse:
@@ -9767,33 +9648,9 @@ shell_cmd_cd:
     call shell_arg_ptr
     cmp byte [si], 0
     je .show
-
-    cmp byte [si], '.'
-    jne .not_dot
-    cmp byte [si + 1], 0
-    je .done
-    cmp byte [si + 1], '.'
-    jne .not_dot
-    cmp byte [si + 2], 0
-    je .go_root
-
-.not_dot:
-    push si
-    call shell_trim_first_arg
-    pop si
-    cmp byte [si], '/'
-    jne .call_chdir
-    mov byte [si], '\'
-
-.call_chdir:
     mov dx, si
-    mov ah, 0x3B
-    int 0x21
-    jc .fail
-    jmp .done
-
-.go_root:
-    mov dx, path_root_dos
+    call shell_trim_first_arg
+.call_chdir:
     mov ah, 0x3B
     int 0x21
     jc .fail
@@ -9840,39 +9697,43 @@ shell_cmd_copy:
     push si
     push di
     push ds
-    push es
     mov ax, cs
     mov ds, ax
-    mov es, ax
+
+    mov bx, 0xFFFF
+    mov di, 0xFFFF
+    mov cl, 1
+
     call shell_arg_ptr
     cmp byte [si], 0
-    je .copy_fail
+    je .copy_report
+
     mov dx, si
     call shell_trim_first_arg
-    mov di, cmd_buffer + 40
-    mov si, dx
-.copy_src_cpy:
-    lodsb
-    stosb
-    test al, al
-    jnz .copy_src_cpy
-    call shell_arg_ptr
+    inc si
+    call skip_spaces
     cmp byte [si], 0
-    je .copy_fail
-    mov cx, di
-    sub cx, cmd_buffer + 40
-    mov di, cmd_buffer + 40
-.copy_cmp:
-    lodsb
-    stosb
-    cmp di, cx
-    jne .copy_cmp
+    je .copy_report
+
+    mov di, si
+    call shell_trim_first_arg
+
     mov ah, 0x3D
     mov al, 0
-    mov dx, cmd_buffer + 40
     int 0x21
-    jc .copy_fail
+    jc .copy_report
+
     mov bx, ax
+
+    mov ah, 0x3C
+    xor cx, cx
+    mov dx, di
+    mov di, 0xFFFF
+    int 0x21
+    jc .copy_cleanup
+
+    mov di, ax
+
 .copy_read:
     mov ah, 0x3F
     mov cx, 512
@@ -9880,26 +9741,45 @@ shell_cmd_copy:
     mov ds, ax
     xor dx, dx
     int 0x21
-    jc .copy_close
+    jc .copy_cleanup
     cmp ax, 0
     je .copy_done
+
     mov cx, ax
+    xchg bx, di
     mov ah, 0x40
     int 0x21
-    jc .copy_close
+    xchg bx, di
+    jc .copy_cleanup
+    cmp ax, cx
+    jne .copy_cleanup
     jmp .copy_read
+
 .copy_done:
+    mov cl, 0
+
+.copy_cleanup:
+    mov ah, 0x3E
+    cmp bx, 0xFFFF
+    je .copy_close_dst
+    int 0x21
+
+.copy_close_dst:
+    mov bx, di
+    cmp bx, 0xFFFF
+    je .copy_report
     mov ah, 0x3E
     int 0x21
-    jmp .copy_ok
-.copy_close:
-    mov ah, 0x3E
-    int 0x21
-.copy_fail:
+
+.copy_report:
+    mov ax, cs
+    mov ds, ax
+    cmp cl, 0
+    je .copy_ok
     mov si, msg_cmd_fail
     call print_string_dual
+
 .copy_ok:
-    pop es
     pop ds
     pop di
     pop si
@@ -10087,6 +9967,16 @@ shell_cmd_dir:
 
     mov ax, cs
     mov ds, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .scan_start
+    mov dx, si
+    call shell_trim_first_arg
+    mov ah, 0x3B
+    int 0x21
+    jc .fail
+
+.scan_start:
 
     mov si, msg_dir_header
     call print_string_dual
@@ -12419,6 +12309,7 @@ path_gem_cpi_fat   db "GEM     CPI"
 %if FAT_TYPE == 16
 path_gem_exe_abs db "\\SYSTEM\\DESKTOP\\GEM.EXE", 0
 %endif
+path_parent_dos  db "..", 0
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
 cwd_cluster dw 0

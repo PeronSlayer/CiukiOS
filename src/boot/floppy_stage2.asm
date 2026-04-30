@@ -134,12 +134,203 @@ boot_runtime:
     mov si, msg_booting_runtime
     call print_string_serial
 
-    mov ax, 0x0013
-    int 0x10
+    call gfx2d_mvp_entry
 
     mov si, msg_runtime_started
     call print_string_serial
 
+    ret
+
+; -----------------------------------------------------------------------------
+; 2D driver MVP (mode 13h context + basic primitives)
+; -----------------------------------------------------------------------------
+gfx2d_mvp_entry:
+    call gfx2d_init_mode13
+    call gfx2d_render_test_frame
+    mov si, msg_gfx_serial_pass
+    call print_string_serial
+    ret
+
+gfx2d_init_mode13:
+    push ax
+    mov ax, 0x0013
+    int 0x10
+    mov byte [gfx2d_ctx_mode], 0x13
+    mov word [gfx2d_ctx_width], 320
+    mov word [gfx2d_ctx_height], 200
+    mov word [gfx2d_ctx_pitch], 320
+    mov word [gfx2d_ctx_fb_seg], 0xA000
+    mov word [gfx2d_ctx_fb_off], 0x0000
+    pop ax
+    ret
+
+; in: al = color
+gfx2d_clear:
+    push ax
+    push cx
+    push di
+    push es
+    mov ah, al
+    mov ax, [gfx2d_ctx_fb_seg]
+    mov es, ax
+    xor di, di
+    mov al, ah
+    mov cx, 64000
+    rep stosb
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; in: cx = x, dx = y, al = color
+gfx2d_put_pixel:
+    push ax
+    push bx
+    push es
+    cmp cx, [gfx2d_ctx_width]
+    jae .done
+    cmp dx, [gfx2d_ctx_height]
+    jae .done
+    mov [gfx2d_tmp_color], al
+    mov bx, dx
+    shl bx, 6
+    mov ax, dx
+    shl ax, 8
+    add bx, ax
+    add bx, cx
+    mov ax, [gfx2d_ctx_fb_seg]
+    mov es, ax
+    mov al, [gfx2d_tmp_color]
+    mov [es:bx], al
+.done:
+    pop es
+    pop bx
+    pop ax
+    ret
+
+; in: cx = x, dx = y, si = width, di = height, al = color
+gfx2d_fill_rect:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [gfx2d_tmp_color], al
+
+    mov ax, [gfx2d_ctx_width]
+    cmp cx, ax
+    jae .done
+    mov ax, [gfx2d_ctx_height]
+    cmp dx, ax
+    jae .done
+
+    mov ax, [gfx2d_ctx_width]
+    sub ax, cx
+    cmp si, ax
+    jbe .clip_h
+    mov si, ax
+
+.clip_h:
+    mov ax, [gfx2d_ctx_height]
+    sub ax, dx
+    cmp di, ax
+    jbe .dims_ok
+    mov di, ax
+
+.dims_ok:
+    test si, si
+    jz .done
+    test di, di
+    jz .done
+
+    mov ax, [gfx2d_ctx_fb_seg]
+    mov es, ax
+
+    mov bx, dx
+    shl bx, 6
+    mov ax, dx
+    shl ax, 8
+    add bx, ax
+    add bx, cx
+
+    mov bp, di
+.row_loop:
+    mov di, bx
+    mov cx, si
+    mov al, [gfx2d_tmp_color]
+    rep stosb
+    add bx, [gfx2d_ctx_pitch]
+    dec bp
+    jnz .row_loop
+
+.done:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Stub for next iteration (kept as stable symbol for runtime/apps).
+gfx2d_draw_line:
+    stc
+    ret
+
+; Stub for next iteration (kept as stable symbol for runtime/apps).
+gfx2d_blit:
+    stc
+    ret
+
+gfx2d_render_test_frame:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov al, 0x01
+    call gfx2d_clear
+
+    mov cx, 16
+    mov dx, 16
+    mov si, 288
+    mov di, 16
+    mov al, 0x04
+    call gfx2d_fill_rect
+
+    mov cx, 24
+    mov dx, 40
+    mov si, 272
+    mov di, 120
+    mov al, 0x02
+    call gfx2d_fill_rect
+
+    xor bx, bx
+.diag_loop:
+    mov cx, bx
+    add cx, 32
+    mov dx, bx
+    add dx, 32
+    mov al, 0x0F
+    call gfx2d_put_pixel
+    inc bx
+    cmp bx, 120
+    jb .diag_loop
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 find_file_in_root:
@@ -359,6 +550,7 @@ msg_runtime_loaded db "[STAGE2] Runtime loaded", 13, 10, 0
 msg_booting_runtime db "[STAGE2] Booting runtime...", 13, 10, 0
 msg_runtime_started db "[STAGE2] Runtime started (mode 13h)", 13, 10, 0
 msg_runtime_load_fail db "[STAGE2] Runtime load failed", 13, 10, 0
+msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
 
 path_runtime db "RUNTIME SYS", 0
 path_name db "RUNTIME ", 0
@@ -367,3 +559,10 @@ path_ext db "SYS", 0
 tmp_lba dw 0
 tmp_cluster dw 0
 tmp_done dw 0
+gfx2d_ctx_mode db 0
+gfx2d_ctx_width dw 0
+gfx2d_ctx_height dw 0
+gfx2d_ctx_pitch dw 0
+gfx2d_ctx_fb_seg dw 0
+gfx2d_ctx_fb_off dw 0
+gfx2d_tmp_color db 0
