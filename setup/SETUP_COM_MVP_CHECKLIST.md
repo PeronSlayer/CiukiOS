@@ -16,9 +16,11 @@ Use this checklist to track implementation and acceptance evidence for the Phase
 - [ ] Record critical-path dependencies between UX, workflow engine, and media contracts with owner/date.
 
 ## B. Text-mode UX flow
-- [ ] Create welcome screen with explicit key hints.
-- [ ] Create component selection screen (Minimal/Standard/Full).
-- [ ] Create target-drive selection and confirmation screen.
+- [x] Create welcome screen with explicit key hints.
+- [x] Create component selection screen (Minimal/Standard/Full).
+- [x] Create target-drive selection and confirmation screen.
+- Evidence (2026-04-30): `setup/SETUP_COM_B1_B2_B3_SCREEN_FLOW.md`, `setup/SETUP_COM_B1_B2_B3_PROMPT_COPY.md`.
+- Test status (2026-04-30): `scripts/setup_prepare_artifacts.sh --validate-only` PASS; `scripts/setup_prepare_artifacts.sh --dry-run` PASS.
 - [ ] Create progress screen with current file/media context.
 - [ ] Create completion and failure screens with actionable next steps.
 - [ ] Validate full keyboard navigation (Up/Down, Enter, Esc, retry path).
