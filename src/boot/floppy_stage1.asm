@@ -61,6 +61,18 @@ org 0x0000
 %ifndef MOUSE_VGA_SCALE_SHIFT
 %define MOUSE_VGA_SCALE_SHIFT 1
 %endif
+%if FAT_TYPE == 16
+%define SPLASH_PALETTE_COLORS 32
+%define SPLASH_PALETTE_SIZE (SPLASH_PALETTE_COLORS * 3)
+%define SPLASH_SRC_W 80
+%define SPLASH_SRC_H 50
+%define SPLASH_SCALE_X 4
+%define SPLASH_SCALE_Y 4
+%define SPLASH_PIXEL_BYTES (SPLASH_SRC_W * SPLASH_SRC_H)
+%define SPLASH_TOTAL_SIZE (SPLASH_PALETTE_SIZE + SPLASH_PIXEL_BYTES)
+%define SPLASH_BUF_SEG 0x9000
+%define SPLASH_WAIT_TICKS 91
+%endif
 %define FAT1_LBA FAT_RESERVED_SECTORS
 %define FAT2_LBA (FAT1_LBA + FAT_SECTORS_PER_FAT)
 %define FAT_ROOT_START_LBA (FAT_RESERVED_SECTORS + (FAT_COUNT * FAT_SECTORS_PER_FAT))
@@ -105,6 +117,11 @@ stage1_start:
     call init_stage2_services
 %if STAGE1_SELFTEST_AUTORUN
     call run_stage1_selftest
+%endif
+%if FAT_TYPE == 16
+%if STAGE1_SELFTEST_AUTORUN == 0
+    call stage1_show_boot_splash
+%endif
 %endif
     call draw_shell_chrome
 %if FAT_TYPE == 16
@@ -8329,6 +8346,297 @@ run_gfx_demo:
     pop ax
     ret
 
+%if FAT_TYPE == 16
+stage1_show_boot_splash:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    call vdi_enter_graphics
+    call stage1_splash_load_asset
+    jc .fallback
+
+    mov si, msg_splash_serial_ok
+    call print_string_serial
+
+    call stage1_splash_apply_palette
+    call stage1_splash_blit_scaled
+    jmp .wait
+
+.fallback:
+    mov si, msg_splash_serial_fail
+    call print_string_serial
+    call stage1_splash_draw_fallback
+
+.wait:
+    call stage1_splash_wait_progress
+    call vdi_leave_graphics
+
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+stage1_splash_load_asset:
+    push ax
+    push bx
+    push cx
+    push dx
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+    mov dx, path_splash_bin_dos
+    mov ax, 0x3D00
+    int 0x21
+    jc .fail
+
+    mov bx, ax
+    mov ax, SPLASH_BUF_SEG
+    mov ds, ax
+    xor dx, dx
+    mov cx, SPLASH_TOTAL_SIZE
+    mov ah, 0x3F
+    int 0x21
+    jc .close_fail
+    cmp ax, SPLASH_TOTAL_SIZE
+    jne .close_fail
+
+    mov ah, 0x3E
+    int 0x21
+    clc
+    jmp .done
+
+.close_fail:
+    push ax
+    mov ah, 0x3E
+    int 0x21
+    pop ax
+
+.fail:
+    stc
+
+.done:
+    pop ds
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+stage1_splash_apply_palette:
+    push ax
+    push cx
+    push dx
+    push si
+    push ds
+
+    mov ax, SPLASH_BUF_SEG
+    mov ds, ax
+    xor si, si
+    mov dx, 0x03C8
+    xor al, al
+    out dx, al
+    inc dx
+
+    mov cx, SPLASH_PALETTE_SIZE
+.loop:
+    lodsb
+    shr al, 1
+    shr al, 1
+    out dx, al
+    loop .loop
+
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+stage1_splash_blit_scaled:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ds
+    push es
+
+    mov ax, SPLASH_BUF_SEG
+    mov ds, ax
+    mov ax, 0xA000
+    mov es, ax
+    mov bx, SPLASH_PALETTE_SIZE
+    xor di, di
+    mov dx, SPLASH_SRC_H
+
+.row:
+    mov bp, SPLASH_SCALE_Y
+.row_scale:
+    mov si, bx
+    mov cx, SPLASH_SRC_W
+.pixel:
+    lodsb
+    stosb
+    stosb
+    stosb
+    stosb
+    loop .pixel
+    dec bp
+    jnz .row_scale
+
+    add bx, SPLASH_SRC_W
+    dec dx
+    jnz .row
+
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+stage1_splash_draw_fallback:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+
+    mov al, 1
+    call vdi_clear_screen
+
+    mov bx, 0
+    mov dx, 0
+    mov si, 320
+    mov di, 140
+    mov al, 4
+    call vdi_bar
+
+    mov bx, 0
+    mov dx, 140
+    mov si, 320
+    mov di, 60
+    mov al, 1
+    call vdi_bar
+
+    mov bx, 16
+    mov dx, 16
+    mov si, 288
+    mov di, 152
+    mov al, 15
+    call vdi_box
+
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+stage1_splash_wait_progress:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov bx, 8
+    mov dx, 184
+    mov si, 304
+    mov di, 12
+    mov al, 0
+    call vdi_bar
+
+    mov bx, 8
+    mov dx, 184
+    mov si, 304
+    mov di, 12
+    mov al, 15
+    call vdi_box
+
+    mov bx, 10
+    mov dx, 186
+    mov si, 300
+    mov di, 8
+    mov al, 8
+    call vdi_bar
+
+    call gfx_get_tick_count
+    mov [cs:splash_wait_start_tick], dx
+    mov [cs:splash_wait_last_tick], dx
+
+.loop:
+    call gfx_get_tick_count
+    cmp dx, [cs:splash_wait_last_tick]
+    je .loop
+    mov [cs:splash_wait_last_tick], dx
+
+    mov ax, dx
+    sub ax, [cs:splash_wait_start_tick]
+    cmp ax, SPLASH_WAIT_TICKS
+    jae .done
+
+    mov bx, 300
+    mul bx
+    mov bx, SPLASH_WAIT_TICKS
+    div bx
+
+    mov bx, 10
+    mov dx, 186
+    mov si, ax
+    mov di, 8
+    mov al, 10
+    call vdi_bar
+
+    mov bx, 10
+    add bx, ax
+    cmp bx, 306
+    jbe .head_ok
+    mov bx, 306
+.head_ok:
+    mov dx, 186
+    mov si, 4
+    mov di, 8
+    mov al, 14
+    call vdi_bar
+    jmp .loop
+
+.done:
+    mov bx, 10
+    mov dx, 186
+    mov si, 300
+    mov di, 8
+    mov al, 10
+    call vdi_bar
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 gfx_demo_run:
     push ax
     push bx
@@ -12697,6 +13005,9 @@ path_mvren_dir_dos db "\T", 0
 path_mvren_final_dos db "\T\C.COM", 0
 %if FAT_TYPE == 16
 path_stage2_dos db "STAGE2  BIN"
+path_splash_bin_dos db "SPLASH.BIN", 0
+msg_splash_serial_ok db "[SPLASH] LOAD OK", 13, 10, 0
+msg_splash_serial_fail db "[SPLASH] LOAD FAIL", 13, 10, 0
 %endif
 path_pattern_com db "*.COM", 0
 path_pattern_mz equ path_mzdemo_dos
@@ -12721,6 +13032,10 @@ gfx_row_bits db 0
 gfx_demo_frame db 0
 gfx_demo_deadline dw 0
 gfx_demo_last_tick dw 0
+%if FAT_TYPE == 16
+splash_wait_start_tick dw 0
+splash_wait_last_tick dw 0
+%endif
 gfx_line_x0 dw 0
 gfx_line_y0 dw 0
 gfx_line_x1 dw 0
