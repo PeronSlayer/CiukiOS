@@ -9944,7 +9944,7 @@ shell_cmd_copy:
     call shell_trim_first_arg
 %if FAT_TYPE == 16 || FAT_TYPE == 12
     mov [cs:shell_copy_src_ptr], dx
-    mov bp, di
+    mov [cs:shell_copy_dst_ptr], di
 
     mov ah, 0x3D
     mov al, 0
@@ -9955,7 +9955,7 @@ shell_cmd_copy:
 
     mov ah, 0x3C
     xor cx, cx
-    mov dx, bp
+    mov dx, [cs:shell_copy_dst_ptr]
     mov di, 0xFFFF
     int 0x21
     jc .copy_dst_create_fail
@@ -9968,12 +9968,13 @@ shell_cmd_copy:
     test byte [cs:search_found_attr], 0x10
     jz .copy_report
 
-    mov si, bp
+    mov si, [cs:shell_copy_dst_ptr]
     call int21_resolve_and_find_path
     jc .copy_report
     test byte [cs:search_found_attr], 0x10
     jz .copy_report
-    mov bp, [cs:search_found_cluster]
+    mov ax, [cs:search_found_cluster]
+    mov [cs:shell_copy_dst_cluster], ax
 
     mov si, [cs:shell_copy_src_ptr]
     call int21_resolve_parent_dir
@@ -9981,7 +9982,8 @@ shell_cmd_copy:
 
     mov ax, [cs:cwd_cluster]
     push ax
-    mov [cs:cwd_cluster], bp
+    mov ax, [cs:shell_copy_dst_cluster]
+    mov [cs:cwd_cluster], ax
     mov dx, si
     mov ah, 0x39
     int 0x21
@@ -9992,12 +9994,13 @@ shell_cmd_copy:
     jmp .copy_report
 
 .copy_dst_create_fail:
-    mov si, bp
+    mov si, [cs:shell_copy_dst_ptr]
     call int21_resolve_and_find_path
     jc .copy_cleanup
     test byte [cs:search_found_attr], 0x10
     jz .copy_cleanup
-    mov bp, [cs:search_found_cluster]
+    mov ax, [cs:search_found_cluster]
+    mov [cs:shell_copy_dst_cluster], ax
 
     mov si, [cs:shell_copy_src_ptr]
     call int21_resolve_parent_dir
@@ -10005,7 +10008,8 @@ shell_cmd_copy:
 
     mov ax, [cs:cwd_cluster]
     push ax
-    mov [cs:cwd_cluster], bp
+    mov ax, [cs:shell_copy_dst_cluster]
+    mov [cs:cwd_cluster], ax
     mov dx, si
     mov ah, 0x3C
     xor cx, cx
@@ -12480,6 +12484,8 @@ cmd_buffer times CMD_BUF_LEN db 0
 shell_exec_path_buf times SHELL_EXEC_PATH_BUF_LEN db 0
 %if FAT_TYPE == 16 || FAT_TYPE == 12
 shell_copy_src_ptr dw 0
+shell_copy_dst_ptr dw 0
+shell_copy_dst_cluster dw 0
 %endif
 
 msg_stage1        db "[STAGE1] run", 13, 10, 0
