@@ -10202,39 +10202,72 @@ shell_cmd_ren:
     pop di
     jnc .ren_ok
 
+    ; Destination is a directory: build dst/src_basename and retry rename.
     push dx
     mov si, di
     call int21_resolve_and_find_path
-    jc .ren_fail_pop
+    jc .ren_fail_pop_src
     test byte [cs:search_found_attr], 0x10
-    jz .ren_fail_pop
+    jz .ren_fail_pop_src
 
-    mov ax, [cs:search_found_cluster]
+    mov si, di
+    mov di, shell_exec_path_buf
+    mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
+
+.build_dst_loop:
+    cmp cx, 0
+    je .ren_fail_pop_src
+    lodsb
+    cmp al, 0
+    je .build_dst_done
+    stosb
+    dec cx
+    jmp .build_dst_loop
+
+.build_dst_done:
+    cmp di, shell_exec_path_buf
+    je .append_sep
+    mov al, [di - 1]
+    cmp al, 0x5C
+    je .have_sep
+    cmp al, 0x2F
+    je .have_sep
+
+.append_sep:
+    cmp cx, 0
+    je .ren_fail_pop_src
+    mov al, 0x5C
+    stosb
+    dec cx
+
+.have_sep:
     pop dx
-    push ax
+    push dx
 
     mov si, dx
     call int21_resolve_parent_dir
-    jc .ren_fail_pop
-    mov di, si
+    jc .ren_fail_pop_src
 
-    mov ax, [cs:cwd_cluster]
-    pop bx
-    push ax
-    mov [cs:cwd_cluster], bx
+.append_name_loop:
+    cmp cx, 0
+    je .ren_fail_pop_src
+    lodsb
+    stosb
+    dec cx
+    cmp al, 0
+    jne .append_name_loop
 
     mov ax, ds
     mov es, ax
+    mov di, shell_exec_path_buf
     mov ah, 0x56
     int 0x21
-
-    pop ax
-    mov [cs:cwd_cluster], ax
+    pop dx
     jc .ren_fail
     jmp .ren_ok
 
-.ren_fail_pop:
-    add sp, 2
+.ren_fail_pop_src:
+    pop dx
 
 .ren_fail:
     mov si, msg_cmd_fail
