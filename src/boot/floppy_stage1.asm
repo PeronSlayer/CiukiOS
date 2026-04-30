@@ -7462,6 +7462,8 @@ int21_path_to_fat_name:
     jmp .name_loop
 
 .ext_start:
+    cmp bx, 0
+    je .fail
     inc si
     xor bx, bx
 .ext_loop:
@@ -7484,6 +7486,8 @@ int21_path_to_fat_name:
     jmp .ext_loop
 
 .success:
+    cmp byte [es:path_fat_name + 0], ' '
+    je .fail
     clc
     jmp .done
 
@@ -7643,9 +7647,19 @@ int21_resolve_parent_dir:
     cmp dl, '/'
     jne .non_leaf
 .trail_check:
-    cmp byte [si + 1], 0
+    mov bx, si
+.trail_skip_sep:
+    dec byte [cs:tmp_path_guard]
+    jz .path_fail
+    inc bx
+    mov al, [bx]
+    cmp al, '\'
+    je .trail_skip_sep
+    cmp al, '/'
+    je .trail_skip_sep
+    cmp al, 0
     je .leaf_term
-    cmp byte [si + 1], 13
+    cmp al, 13
     je .leaf_term
     jmp .non_leaf
 
@@ -7670,6 +7684,17 @@ int21_resolve_parent_dir:
     jne .lookup_component
     cmp word [cs:tmp_lookup_dir], 0
     je .skip_sep
+    push si
+    push ds
+    mov ax, cs
+    mov ds, ax
+    mov si, path_dotdot_fat
+    mov ax, [cs:tmp_lookup_dir]
+    call int21_lookup_in_dir
+    pop ds
+    pop si
+    jc .path_fail
+    jmp .lookup_ok
 
     ; has further components: current component must be a directory.
 .lookup_component:
@@ -12489,6 +12514,7 @@ path_pattern_mz  db "MZDEMO.EXE", 0
 path_sd_driver_fat db "SDPSC9  VGA"
 path_gem_exe_fat   db "GEM     EXE"
 path_gem_cpi_fat   db "GEM     CPI"
+path_dotdot_fat    db "..         "
 %if FAT_TYPE == 16
 path_gem_exe_abs db "\\SYSTEM\\DESKTOP\\GEM.EXE", 0
 %endif
