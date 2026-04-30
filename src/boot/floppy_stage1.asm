@@ -2,6 +2,7 @@ bits 16
 org 0x0000
 
 %define CMD_BUF_LEN 64
+%define SHELL_EXEC_PATH_BUF_LEN 80
 %define COM_LOAD_SEG 0x2000
 %define MZ_LOAD_SEG 0x3000
 %define MZ2_LOAD_SEG 0x3800
@@ -1493,12 +1494,12 @@ int21_exec:
     call int21_path_to_fat_name
     jc .path_fail
 
-%if FAT_TYPE == 16
     push si
     mov si, dx
     call int21_resolve_and_find_path
     jnc .path_resolved
 
+%if FAT_TYPE == 16
     ; Compatibility fallback for the desktop runtime: if the caller asks for
     ; plain GEM.EXE and root lookup misses, retry the legacy absolute system path.
     mov si, dx
@@ -1528,11 +1529,11 @@ int21_exec:
     mov si, path_gem_exe_abs
     call int21_resolve_and_find_path
     pop ds
+%endif
 
 .path_resolved:
     pop si
     jc .done
-%endif
 
     cmp byte [cs:tmp_exec_subfn], 0x03
     je .load_overlay
@@ -1746,18 +1747,7 @@ int21_exec_load_to_es:
 
     mov [cs:tmp_exec_error], cx
 
-%if FAT_TYPE == 16
-    ; FAT16 path resolution is performed in int21_exec before loading.
-%else
-    mov ax, cs
-    mov ds, ax
-    mov ax, DOS_META_BUF_SEG
-    mov es, ax
-    mov si, path_fat_name
-    mov bx, 0xFFFF
-    call load_root_file_first_sector
-    jc .open_fail
-%endif
+    ; Path resolution is performed in int21_exec before loading.
 
     mov ax, [cs:search_found_size_hi]
     mov [cs:tmp_exec_total], ax
@@ -9299,6 +9289,10 @@ dispatch_command:
     call str_eq
     jc .cmd_type
     mov di, bx
+    mov si, str_run
+    call str_eq
+    jc .cmd_run
+    mov di, bx
     mov si, str_exit
     call str_eq
     jc .cmd_exit
@@ -9342,6 +9336,10 @@ dispatch_command:
     mov si, str_halt
     call str_eq
     jc .cmd_halt
+
+    mov si, bx
+    call shell_try_exec_token
+    jnc .done
 
     mov si, msg_unknown
     call print_string_dual
@@ -9421,6 +9419,10 @@ dispatch_command:
 
 .cmd_type:
     call shell_cmd_type
+    jmp .done
+
+.cmd_run:
+    call shell_cmd_run
     jmp .done
 
 .cmd_exit:
@@ -9567,6 +9569,183 @@ shell_trim_first_arg:
 .term:
     mov byte [si], 0
 .done:
+    ret
+
+shell_copy_token_for_exec:
+    mov di, shell_exec_path_buf
+    mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
+
+.copy_loop:
+    mov al, [si]
+    cmp al, 0
+    je .copy_done
+    cmp al, ' '
+    je .copy_done
+    cmp cx, 0
+    je .copy_fail
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .copy_loop
+
+.copy_done:
+    mov byte [di], 0
+    cmp di, shell_exec_path_buf
+    je .copy_fail
+    clc
+    ret
+
+.copy_fail:
+    stc
+    ret
+
+shell_token_has_extension:
+    xor dl, dl
+
+.scan_loop:
+    mov al, [si]
+    cmp al, 0
+    je .scan_done
+    cmp al, '\'
+    je .scan_sep
+    cmp al, '/'
+    je .scan_sep
+    cmp al, '.'
+    je .scan_dot
+    inc si
+    jmp .scan_loop
+
+.scan_sep:
+    xor dl, dl
+    inc si
+    jmp .scan_loop
+
+.scan_dot:
+    mov dl, 1
+    inc si
+    jmp .scan_loop
+
+.scan_done:
+    cmp dl, 0
+    je .no_ext
+    stc
+    ret
+
+.no_ext:
+    clc
+    ret
+
+shell_append_exec_extension:
+    mov di, shell_exec_path_buf
+    mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
+
+.find_end:
+    cmp byte [di], 0
+    je .append_loop
+    inc di
+    dec cx
+    jnz .find_end
+    jmp .append_fail
+
+.append_loop:
+    mov al, [si]
+    cmp al, 0
+    je .append_done
+    cmp cx, 0
+    je .append_fail
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .append_loop
+
+.append_done:
+    mov byte [di], 0
+    clc
+    ret
+
+.append_fail:
+    stc
+    ret
+
+shell_exec_buffer_path:
+    push bx
+    mov dx, shell_exec_path_buf
+    xor bx, bx
+    mov ax, 0x4B00
+    int 0x21
+
+    pop bx
+    ret
+
+shell_try_exec_token:
+    push ds
+
+    mov bx, si
+    mov ax, cs
+    mov ds, ax
+
+    mov si, bx
+    call shell_copy_token_for_exec
+    jc .fail
+
+    mov si, shell_exec_path_buf
+    call shell_token_has_extension
+    jc .try_as_is
+
+    mov si, str_ext_com
+    call shell_append_exec_extension
+    jc .fail
+    call shell_exec_buffer_path
+    jnc .ok
+
+    mov si, bx
+    call shell_copy_token_for_exec
+    jc .fail
+    mov si, str_ext_exe
+    call shell_append_exec_extension
+    jc .fail
+
+.try_as_is:
+    call shell_exec_buffer_path
+    jc .fail
+
+.ok:
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop ds
+    ret
+
+shell_cmd_run:
+    push ax
+    push bx
+    push si
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+    call shell_arg_ptr
+    cmp byte [si], 0
+    je .fail
+
+    call shell_try_exec_token
+    jnc .done
+
+.fail:
+    mov si, msg_cmd_fail
+    call print_string_dual
+
+.done:
+    pop ds
+    pop si
+    pop bx
+    pop ax
     ret
 
 shell_cmd_cdup:
@@ -12176,6 +12355,7 @@ disk_packet_off dw 0
 disk_packet_seg dw 0
 disk_packet_lba dq 0
 cmd_buffer times CMD_BUF_LEN db 0
+shell_exec_path_buf times SHELL_EXEC_PATH_BUF_LEN db 0
 
 msg_stage1        db "[STAGE1] run", 13, 10, 0
 msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
@@ -12205,11 +12385,11 @@ msg_shell_footer db "help cls reboot", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
-msg_help_header db "--- CiukiDOS Commands ---", 13, 10, "Comando - breve descrizione", 13, 10, 0
-msg_help_core db "  help - mostra questa guida", 13, 10, "  ver - mostra versione sistema", 13, 10, "  cls - pulisce lo schermo", 13, 10, "  dir - elenca file e directory", 13, 10, "  tree - mostra albero directory", 13, 10, 0
-msg_help_runtime db "  cd <path> - cambia directory", 13, 10, "  cd.. - directory padre", 13, 10, "  copy <src> <dst> - copia file", 13, 10, "  del <file> - elimina file", 13, 10, "  type <file> - mostra contenuto", 13, 10, 0
-msg_help_system db "  md/mkdir <dir> - crea directory", 13, 10, "  rd/rmdir <dir> - rimuove directory", 13, 10, "  ren/rename <a> <b> - rinomina", 13, 10, "  drive - mostra drive di boot", 13, 10, "  ticks - mostra timer BIOS", 13, 10, 0
-msg_help_apps db "  exit - esce dalla shell", 13, 10, "  reboot - riavvia sistema", 13, 10, "  halt - arresta sistema", 13, 10, 0
+msg_help_header db "--- CiukiDOS Commands ---", 13, 10, "Command - short description", 13, 10, 0
+msg_help_core db "  help - show this guide", 13, 10, "  ver - show system version", 13, 10, "  cls - clear screen", 13, 10, "  dir - list files and directories", 13, 10, "  tree - show directory tree", 13, 10, 0
+msg_help_runtime db "  cd <path> - change directory", 13, 10, "  cd.. - go to parent directory", 13, 10, "  copy <src> <dst> - copy file", 13, 10, "  del <file> - delete file", 13, 10, "  type <file> - show file contents", 13, 10, "  run <path|name> - run EXE/COM program", 13, 10, 0
+msg_help_system db "  md/mkdir <dir> - create directory", 13, 10, "  rd/rmdir <dir> - remove directory", 13, 10, "  ren/rename <a> <b> - rename entry", 13, 10, 0
+msg_help_apps db "  exit - exit shell", 13, 10, "  reboot - reboot system", 13, 10, 0
 msg_version_line db "CiukiOS pre-Alpha v0.5.2 (CiukiDOS Shell)", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
@@ -12282,6 +12462,7 @@ str_rmdir  db "rmdir", 0
 str_ren    db "ren", 0
 str_rename db "rename", 0
 str_type   db "type", 0
+str_run    db "run", 0
 str_exit   db "exit", 0
 str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
@@ -12293,6 +12474,8 @@ str_mouse db "mouse", 0
 str_keytest db "keytest", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
+str_ext_com db ".COM", 0
+str_ext_exe db ".EXE", 0
 
 path_comdemo_dos db "COMDEMO.COM", 0
 path_mzdemo_dos  db "MZDEMO.EXE", 0

@@ -4,7 +4,7 @@ org 0x1000
 %define STAGE2_ENTRY 0x1000
 %define STAGE2_SEG   0x1000
 %define STAGE2_STACK_SIZE 2048
-%define STAGE2_STACK_BASE (STAGE2_ENTRY + 0xFFFE - STAGE2_STACK_SIZE)
+%define STAGE2_STACK_BASE (0xFFFE - STAGE2_STACK_SIZE)
 
 %define FAT_SPT 18
 %define FAT_HEADS 2
@@ -476,9 +476,6 @@ load_file_to_es:
     mov word [tmp_done], 0
 
 .load_loop:
-    cmp word [tmp_done], 65536
-    jae .done
-
     mov ax, [tmp_cluster]
     cmp ax, FAT_EOF
     jae .done
@@ -492,10 +489,7 @@ load_file_to_es:
     jc .fail
 
     add di, 512
-    cmp di, 0
-    jne .load_loop
-    add word [tmp_done], 512
-
+    jc .done
     jmp .load_loop
 
 .done:
