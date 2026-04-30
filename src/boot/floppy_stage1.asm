@@ -9303,6 +9303,14 @@ dispatch_command:
     call str_eq
     jc .cmd_copy
     mov di, bx
+    mov si, str_move
+    call str_eq
+    jc .cmd_move
+    mov di, bx
+    mov si, str_mv
+    call str_eq
+    jc .cmd_move
+    mov di, bx
     mov si, str_del
     call str_eq
     jc .cmd_del
@@ -9396,8 +9404,9 @@ dispatch_command:
     jmp .done
 
 .cmd_ver:
-    mov si, msg_version_line
+    mov si, msg_banner_title
     call print_string_dual
+    call print_newline_dual
     jmp .done
 
 .cmd_tree:
@@ -9445,6 +9454,10 @@ dispatch_command:
 
 .cmd_copy:
     call shell_cmd_copy
+    jmp .done
+
+.cmd_move:
+    call shell_cmd_move
     jmp .done
 
 .cmd_del:
@@ -10159,35 +10172,78 @@ shell_cmd_rd:
     pop dx
     ret
 
+shell_cmd_move:
 shell_cmd_ren:
-    push dx
-    push si
+    push bx
     push ds
+    push es
     mov ax, cs
     mov ds, ax
+
     call shell_arg_ptr
     cmp byte [si], 0
     je .ren_fail
-    push si
+
     mov dx, si
     call shell_trim_first_arg
-    call shell_arg_ptr
-    pop si
+    inc si
+    call skip_spaces
     cmp byte [si], 0
-    je .ren_fail_pop
+    je .ren_fail
+
+    mov di, si
+    call shell_trim_first_arg
+
+    push di
+    mov ax, ds
+    mov es, ax
     mov ah, 0x56
     int 0x21
+    pop di
+    jnc .ren_ok
+
+    push dx
+    mov si, di
+    call int21_resolve_and_find_path
     jc .ren_fail_pop
+    test byte [cs:search_found_attr], 0x10
+    jz .ren_fail_pop
+
+    mov ax, [cs:search_found_cluster]
+    pop dx
+    push ax
+
+    mov si, dx
+    call int21_resolve_parent_dir
+    jc .ren_fail_pop
+    mov di, si
+
+    mov ax, [cs:cwd_cluster]
+    pop bx
+    push ax
+    mov [cs:cwd_cluster], bx
+
+    mov ax, ds
+    mov es, ax
+    mov ah, 0x56
+    int 0x21
+
+    pop ax
+    mov [cs:cwd_cluster], ax
+    jc .ren_fail
     jmp .ren_ok
+
 .ren_fail_pop:
     add sp, 2
+
 .ren_fail:
     mov si, msg_cmd_fail
     call print_string_dual
+
 .ren_ok:
+    pop es
     pop ds
-    pop si
-    pop dx
+    pop bx
     ret
 
 shell_cmd_type:
@@ -12487,12 +12543,10 @@ shell_copy_dst_ptr dw 0
 shell_copy_dst_cluster dw 0
 %endif
 
-msg_stage1        db "[STAGE1] run", 13, 10, 0
 msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
 msg_diag_begin    db "[STAGE1] diag", 13, 10, 0
 msg_diag_int10    db "[INT10] OK", 13, 10, 0
 msg_diag_int13_ok db "[INT13] OK", 13, 10, 0
-msg_diag_int13_fail db "[INT13] FAIL", 13, 10, 0
 msg_diag_int16_ok db "[INT16] OK", 13, 10, 0
 msg_diag_int1a    db "[TICKS] 0x", 0
 msg_int21_installed db "[INT21] ok", 13, 10, 0
@@ -12505,13 +12559,9 @@ msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
 msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
-msg_prompt    db "Ciuki> ", 0
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
 msg_banner_title db "CiukiOS pre-Alpha v0.5.2 (CiukiDOS Shell)", 0
-msg_shell_hint db "Shell", 0
-msg_shell_quick db "help dir", 0
-msg_shell_footer db "help cls reboot", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
@@ -12520,7 +12570,6 @@ msg_help_core db "  help - show this guide", 13, 10, "  ver - show system versio
 msg_help_runtime db "  cd <path> - change directory", 13, 10, "  cd.. - go to parent directory", 13, 10, "  copy <src> <dst> - copy file", 13, 10, "  del <file> - delete file", 13, 10, "  type <file> - show file contents", 13, 10, "  run <path|name> - run EXE/COM program", 13, 10, 0
 msg_help_system db "  md/mkdir <dir> - create directory", 13, 10, "  rd/rmdir <dir> - remove directory", 13, 10, "  ren/rename <a> <b> - rename entry", 13, 10, 0
 msg_help_apps db "  exit - exit shell", 13, 10, "  reboot - reboot system", 13, 10, 0
-msg_version_line db "CiukiOS pre-Alpha v0.5.2 (CiukiDOS Shell)", 13, 10, 0
 msg_tree_header db "tree", 13, 10, 0
 msg_tree_root db "  ROOT", 13, 10, 0
 msg_tree_system db "   |- SYSTEM", 13, 10, 0
@@ -12528,7 +12577,6 @@ msg_tree_apps db "   `- APPS", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
 msg_dos21_begin db "[DOS21] smoke", 13, 10, 0
-msg_dos21_ah09 db "[INT21/09] ok", 13, 10, '$'
 msg_dos21_status db "[INT21/4D] 0x", 0
 msg_dos21_serial_pass db "[DOS21-SERIAL] PASS", 13, 10, 0
 msg_dos21_serial_fail db "[DOS21-SERIAL] FAIL", 13, 10, 0
@@ -12584,6 +12632,8 @@ str_dir    db "dir", 0
 str_cd     db "cd", 0
 str_cdup   db "cd..", 0
 str_copy   db "copy", 0
+str_move   db "move", 0
+str_mv     db "mv", 0
 str_del    db "del", 0
 str_md     db "md", 0
 str_mkdir  db "mkdir", 0
@@ -12615,7 +12665,7 @@ path_deltest_dos db "DELTEST.BIN", 0
 path_stage2_dos db "STAGE2  BIN"
 %endif
 path_pattern_com db "*.COM", 0
-path_pattern_mz  db "MZDEMO.EXE", 0
+path_pattern_mz equ path_mzdemo_dos
 path_sd_driver_fat db "SDPSC9  VGA"
 path_gem_exe_fat   db "GEM     EXE"
 path_gem_cpi_fat   db "GEM     CPI"
