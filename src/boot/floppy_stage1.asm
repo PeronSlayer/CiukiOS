@@ -12594,7 +12594,7 @@ msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db "CiukiOS pre-Alpha v0.5.2 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.5.3 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif

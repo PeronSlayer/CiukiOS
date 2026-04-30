@@ -3,6 +3,11 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
+## pre-Alpha v0.5.3 (2026-04-30)
+1. Stabilized shell `move/mv` path-command handling across floppy (FAT12) and full (FAT16) runtime profiles.
+2. Fixed `INT 21h AH=56h` rename/move behavior to preserve deterministic DOS file-move semantics.
+3. Revalidated shell command regression lanes after the fixes to confirm runtime stability.
+
 ## pre-Alpha v0.5.2 (2026-04-29)
 1. Closed Stage1 DOS command regressions across floppy (FAT12) and full (FAT16) profiles.
 2. Stabilized INT 21h runtime return behavior in critical read/write/seek paths for deterministic file I/O outcomes.

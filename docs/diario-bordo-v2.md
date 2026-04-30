@@ -82,3 +82,9 @@
 71. Fix: corrected INT 21h read/write/seek return-value stability to prevent false file-I/O failures in regression flow.
 72. Fix: preserved floppy image payload integrity during build by hardening non-truncating write behavior.
 73. Release: bumped project version to `CiukiOS pre-Alpha v0.5.2` after Stage1 DOS regression closure and validation.
+
+## 2026-04-30
+74. Fix: stabilized Stage1 shell `move/mv` path-command behavior across floppy (FAT12) and full (FAT16) runtime paths.
+75. Fix: corrected `INT 21h AH=56h` rename/move handling for deterministic DOS file-move semantics.
+76. Validation: reran shell command regression lanes on both profiles after the fix set; outcomes stable.
+77. Release: bumped project version to `CiukiOS pre-Alpha v0.5.3` after move/mv + AH=56h closure and regression validation.

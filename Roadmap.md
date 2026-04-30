@@ -29,9 +29,9 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 2. Extended `INT 10h` plus robust timer/mouse/input services.
 3. Incremental graphics services that keep shell stability as primary target.
 4. Milestone: stable graphics/runtime services on real hardware with shell loop preserved.
-**STATUS: tracking on pre-Alpha v0.5.2**
-- Focus now: keep DOS shell-first runtime deterministic across floppy (FAT12) and full (FAT16) regression lanes.
-- Next sprint: continue graphics/runtime increments without destabilizing boot and Stage1 command compatibility.
+**STATUS: tracking on pre-Alpha v0.5.3**
+- Focus now: stabilize shell path-command behavior (`move/mv` and rename flow) across floppy (FAT12) and full (FAT16) regression lanes.
+- Next sprint: continue graphics/runtime increments while preserving boot determinism and Stage1 command compatibility.
 
 ## Phase 3.5 - CiukiOS Installer (Setup project)
 > Tracked separately under `setup/`. Prerequisite: stable Phase 3 runtime.

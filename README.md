@@ -17,17 +17,17 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 9. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.5.2`
+`CiukiOS pre-Alpha v0.5.3`
 
 Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
 2. Minor updates on this branch keep compatibility with the `v0.5.0` baseline.
 
 ## Changelog (Latest)
-### pre-Alpha v0.5.2 (2026-04-29)
-1. Closed Stage1 DOS command regressions across floppy (FAT12) and full (FAT16) profiles.
-2. Stabilized INT 21h runtime return behavior in critical read/write/seek paths for deterministic file I/O outcomes.
-3. Fixed floppy image build write path to preserve root/runtime payload integrity during regression runs.
+### pre-Alpha v0.5.3 (2026-04-30)
+1. Stabilized shell `move/mv` path-command handling across floppy (FAT12) and full (FAT16) runtime profiles.
+2. Fixed `INT 21h AH=56h` rename/move behavior to keep DOS file-move semantics deterministic.
+3. Validated regression lanes after the fix set to confirm stable shell command behavior.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
