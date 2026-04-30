@@ -8262,6 +8262,9 @@ int21_move_rename_path_test:
     call int21_resolve_and_find_path
     jc .fail
 
+    mov bx, cmd_selftest_restore
+    call shell_cmd_ren
+
     mov si, msg_mvren_serial_pass
     call print_string_serial
     jmp .done
@@ -12689,6 +12692,7 @@ path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
 cmd_selftest_mv db "mv COMDEMO.COM \T", 0
 cmd_selftest_rename db "ren \T\COMDEMO.COM \T\C.COM", 0
+cmd_selftest_restore db "ren \T\C.COM COMDEMO.COM", 0
 path_mvren_dir_dos db "\T", 0
 path_mvren_final_dos db "\T\C.COM", 0
 %if FAT_TYPE == 16
