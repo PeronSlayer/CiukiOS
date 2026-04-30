@@ -3910,7 +3910,16 @@ int21_create:
     mov si, path_fat_name
     mov ax, bx
     call int21_lookup_in_dir
+%if FAT_TYPE == 16 || FAT_TYPE == 12
+    jc .create_missing
+    test byte [cs:search_found_attr], 0x10
+    jnz .io_error
+    jmp .open_created
+
+.create_missing:
+%else
     jnc .open_created
+%endif
     cmp ax, 0x0002
     jne .io_error
 
@@ -4048,6 +4057,10 @@ int21_open:
     jc .done
 %endif
 .path_ready:
+%if FAT_TYPE == 16 || FAT_TYPE == 12
+    test byte [cs:search_found_attr], 0x10
+    jnz .access_denied
+%endif
 
     cmp byte [cs:file_handle_target], 2
     je .assign_slot2
@@ -6293,6 +6306,7 @@ int21_mem_largest_global:
     pop si
     ret
 
+%if FAT_TYPE == 16
 int21_mem_trace_chain:
     push ax
 
@@ -6396,6 +6410,13 @@ int21_mem_trace_nomem:
     pop bx
     pop ax
     ret
+%else
+int21_mem_trace_chain:
+    ret
+
+int21_mem_trace_nomem:
+    ret
+%endif
 
 int21_trace_lookup_cluster:
     ret
@@ -7462,6 +7483,8 @@ int21_path_to_fat_name:
     jmp .name_loop
 
 .ext_start:
+    cmp bx, 0
+    je .fail
     inc si
     xor bx, bx
 .ext_loop:
@@ -7484,6 +7507,8 @@ int21_path_to_fat_name:
     jmp .ext_loop
 
 .success:
+    cmp byte [es:path_fat_name + 0], ' '
+    je .fail
     clc
     jmp .done
 
@@ -7643,9 +7668,19 @@ int21_resolve_parent_dir:
     cmp dl, '/'
     jne .non_leaf
 .trail_check:
-    cmp byte [si + 1], 0
+    mov bx, si
+.trail_skip_sep:
+    dec byte [cs:tmp_path_guard]
+    jz .path_fail
+    inc bx
+    mov al, [bx]
+    cmp al, '\'
+    je .trail_skip_sep
+    cmp al, '/'
+    je .trail_skip_sep
+    cmp al, 0
     je .leaf_term
-    cmp byte [si + 1], 13
+    cmp al, 13
     je .leaf_term
     jmp .non_leaf
 
@@ -7670,6 +7705,17 @@ int21_resolve_parent_dir:
     jne .lookup_component
     cmp word [cs:tmp_lookup_dir], 0
     je .skip_sep
+    push si
+    push ds
+    mov ax, cs
+    mov ds, ax
+    mov si, path_dotdot_fat
+    mov ax, [cs:tmp_lookup_dir]
+    call int21_lookup_in_dir
+    pop ds
+    pop si
+    jc .path_fail
+    jmp .lookup_ok
 
     ; has further components: current component must be a directory.
 .lookup_component:
@@ -9896,7 +9942,82 @@ shell_cmd_copy:
 
     mov di, si
     call shell_trim_first_arg
+%if FAT_TYPE == 16 || FAT_TYPE == 12
+    mov [cs:shell_copy_src_ptr], dx
+    mov bp, di
 
+    mov ah, 0x3D
+    mov al, 0
+    int 0x21
+    jc .copy_src_open_fail
+
+    mov bx, ax
+
+    mov ah, 0x3C
+    xor cx, cx
+    mov dx, bp
+    mov di, 0xFFFF
+    int 0x21
+    jc .copy_dst_create_fail
+    jmp .copy_create_done
+
+.copy_src_open_fail:
+    mov si, [cs:shell_copy_src_ptr]
+    call int21_resolve_and_find_path
+    jc .copy_report
+    test byte [cs:search_found_attr], 0x10
+    jz .copy_report
+
+    mov si, bp
+    call int21_resolve_and_find_path
+    jc .copy_report
+    test byte [cs:search_found_attr], 0x10
+    jz .copy_report
+    mov bp, [cs:search_found_cluster]
+
+    mov si, [cs:shell_copy_src_ptr]
+    call int21_resolve_parent_dir
+    jc .copy_report
+
+    mov ax, [cs:cwd_cluster]
+    push ax
+    mov [cs:cwd_cluster], bp
+    mov dx, si
+    mov ah, 0x39
+    int 0x21
+    pop ax
+    mov [cs:cwd_cluster], ax
+    jc .copy_report
+    mov cl, 0
+    jmp .copy_report
+
+.copy_dst_create_fail:
+    mov si, bp
+    call int21_resolve_and_find_path
+    jc .copy_cleanup
+    test byte [cs:search_found_attr], 0x10
+    jz .copy_cleanup
+    mov bp, [cs:search_found_cluster]
+
+    mov si, [cs:shell_copy_src_ptr]
+    call int21_resolve_parent_dir
+    jc .copy_cleanup
+
+    mov ax, [cs:cwd_cluster]
+    push ax
+    mov [cs:cwd_cluster], bp
+    mov dx, si
+    mov ah, 0x3C
+    xor cx, cx
+    mov di, 0xFFFF
+    int 0x21
+    pop ax
+    mov [cs:cwd_cluster], ax
+    jc .copy_cleanup
+
+.copy_create_done:
+    mov di, ax
+%else
     mov ah, 0x3D
     mov al, 0
     int 0x21
@@ -9912,6 +10033,7 @@ shell_cmd_copy:
     jc .copy_cleanup
 
     mov di, ax
+%endif
 
 .copy_read:
     mov ah, 0x3F
@@ -12356,6 +12478,9 @@ disk_packet_seg dw 0
 disk_packet_lba dq 0
 cmd_buffer times CMD_BUF_LEN db 0
 shell_exec_path_buf times SHELL_EXEC_PATH_BUF_LEN db 0
+%if FAT_TYPE == 16 || FAT_TYPE == 12
+shell_copy_src_ptr dw 0
+%endif
 
 msg_stage1        db "[STAGE1] run", 13, 10, 0
 msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
@@ -12489,6 +12614,7 @@ path_pattern_mz  db "MZDEMO.EXE", 0
 path_sd_driver_fat db "SDPSC9  VGA"
 path_gem_exe_fat   db "GEM     EXE"
 path_gem_cpi_fat   db "GEM     CPI"
+path_dotdot_fat    db "..         "
 %if FAT_TYPE == 16
 path_gem_exe_abs db "\\SYSTEM\\DESKTOP\\GEM.EXE", 0
 %endif
