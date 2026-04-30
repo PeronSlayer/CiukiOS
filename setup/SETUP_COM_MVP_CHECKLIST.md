@@ -21,9 +21,12 @@ Use this checklist to track implementation and acceptance evidence for the Phase
 - [x] Create target-drive selection and confirmation screen.
 - Evidence (2026-04-30): `setup/SETUP_COM_B1_B2_B3_SCREEN_FLOW.md`, `setup/SETUP_COM_B1_B2_B3_PROMPT_COPY.md`.
 - Test status (2026-04-30): `scripts/setup_prepare_artifacts.sh --validate-only` PASS; `scripts/setup_prepare_artifacts.sh --dry-run` PASS.
-- [ ] Create progress screen with current file/media context.
-- [ ] Create completion and failure screens with actionable next steps.
-- [ ] Validate full keyboard navigation (Up/Down, Enter, Esc, retry path).
+- [x] Create progress screen with current file/media context.
+- [x] Create completion and failure screens with actionable next steps.
+- [x] Define keyboard navigation baseline (Up/Down, Enter, Esc, retry path) in setup documents.
+- [ ] Validate full keyboard navigation at runtime (Up/Down, Enter, Esc, retry path).
+- Baseline evidence (2026-04-30): `setup/SETUP_COM_B4_B6_SCREEN_FLOW.md`, `setup/SETUP_COM_B4_B6_PROMPT_COPY.md`, `setup/SETUP_COM_B6_KEYBOARD_VALIDATION.md`.
+- Artifact check status (2026-04-30): `scripts/setup_prepare_artifacts.sh --validate-only` PASS; `scripts/setup_prepare_artifacts.sh --dry-run` PASS (document checks only).
 
 ## C. Installer workflow engine
 - [ ] Implement deterministic state machine for all screens/steps.
