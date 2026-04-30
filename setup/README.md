@@ -1,9 +1,14 @@
-# CiukiOS Setup Stream (Phase 3.5)
+# CiukiOS Setup Stream (Phase 4 Installer Execution Track)
+
+## Status update (2026-04-30)
+- Phase 3.5 foundation stream is formally closed as a FOUNDATION/PLACEHOLDER baseline.
+- Closure scope accepted: setup planning artifacts and helper scaffolding already present in repository.
+- Remaining executable installer implementation and validation tasks are moved to the active Phase 4 installer execution track.
 
 ## Current objective
-Bootstrap a dedicated installer stream for Phase 3.5 under `setup/` without changing runtime core files.
+Execute the Phase 4 installer track under `setup/` without changing runtime core files.
 
-The stream delivers a DOS-style text-mode installer (`SETUP.COM`) and installation media workflows after Phase 3 runtime stability.
+The stream now focuses on turning the accepted foundation artifacts into an executable, testable DOS-style installer (`SETUP.COM`).
 
 ## Scope and boundaries
 - In scope: installer planning, task tracking, setup-specific helper tooling, setup artifact validation.
@@ -36,15 +41,15 @@ The stream delivers a DOS-style text-mode installer (`SETUP.COM`) and installati
 - Install report artifact for post-run diagnostics.
 
 ## Step-by-step phased plan
-Critical path: Phase A -> Phase B -> Phase C -> Phase D. Parallel streams are limited to 3 and only where tasks are independent.
+Critical path for active work: Phase B -> Phase C -> Phase D. Phase A is closed as accepted baseline evidence. Parallel streams are limited to 3 and only where tasks are independent.
 
-### Phase A - Bootstrap baseline
-- Deliverables:
+### Phase A - Bootstrap baseline (completed)
+- Status: completed and accepted in Phase 3.5 closure scope (2026-04-30).
+- Evidence artifacts:
   - `setup/README.md` (architecture + plan + acceptance criteria).
-  - `setup/SETUP_COM_MVP_CHECKLIST.md` (execution checklist).
+  - `setup/SETUP_COM_MVP_CHECKLIST.md` (execution checklist baseline).
   - `scripts/setup_prepare_artifacts.sh` (validation and artifact prep helper).
-- Dependencies: stable Phase 3 branch baseline.
-- Verification output: helper script dry-run/validate-only exits successfully.
+- Verification output: helper script supports dry-run and validate-only setup checks.
 
 ### Phase B - Installer shell skeleton (independent streams)
 Stream 1 (UX flow):
@@ -93,19 +98,21 @@ Stream 3 (media contracts):
 6. Checklist in `setup/SETUP_COM_MVP_CHECKLIST.md` is fully checked with evidence.
 
 ## Immediate next action
-Run:
+Start Phase B implementation tasks from `setup/SETUP_COM_MVP_CHECKLIST.md`.
+
+Optional baseline verification before implementation:
 
 ```bash
 scripts/setup_prepare_artifacts.sh --dry-run
 ```
 
-Then run:
+Then:
 
 ```bash
 scripts/setup_prepare_artifacts.sh --validate-only
 ```
 
-If both pass, proceed with Phase B implementation tasks from the checklist.
+If both pass, continue with Phase B execution backlog items.
 
 ## Helper script usage
 The setup bootstrap helper validates required setup files and can prepare metadata artifacts under `build/setup/`.

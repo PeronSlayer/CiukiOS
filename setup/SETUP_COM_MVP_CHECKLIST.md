@@ -1,13 +1,19 @@
-# SETUP.COM Text-Mode Installer MVP Checklist
+# SETUP.COM Text-Mode Installer Checklist
 
-Use this checklist to track implementation and acceptance evidence for Phase 3.5.
+Use this checklist to track implementation and acceptance evidence for the Phase 4 installer execution track.
 
-## A. Bootstrap and contracts
-- [ ] Confirm setup stream boundaries (no runtime core edits) are documented.
-- [ ] Freeze MVP scope for `SETUP.COM` text-mode flow.
-- [ ] Define installer input manifest fields (source media, profile, target path).
-- [ ] Define installer output report fields (status, error code, copied files).
-- [ ] Record critical-path dependencies between UX, workflow engine, and media contracts.
+## Phase 3.5 closure baseline (completed)
+- [x] Setup stream boundaries and architecture baseline documented in `setup/README.md`.
+- [x] Installer phased plan baseline documented in `setup/README.md`.
+- [x] Setup execution checklist baseline documented in `setup/SETUP_COM_MVP_CHECKLIST.md`.
+- [x] Setup helper scaffolding available in `scripts/setup_prepare_artifacts.sh`.
+
+## Phase 4 installer execution backlog
+
+## A. Execution contracts hardening
+- [ ] Freeze installer input manifest fields (source media, profile, target path) for executable implementation.
+- [ ] Freeze installer output report fields (status, error code, copied files) for deterministic diagnostics.
+- [ ] Record critical-path dependencies between UX, workflow engine, and media contracts with owner/date.
 
 ## B. Text-mode UX flow
 - [ ] Create welcome screen with explicit key hints.
@@ -46,8 +52,8 @@ Use this checklist to track implementation and acceptance evidence for Phase 3.5
 - [ ] Run failure case: insufficient target space and validate user feedback.
 - [ ] Capture final evidence bundle (logs, manifests, report).
 
-## MVP acceptance gate
-Mark MVP complete only when all conditions are true:
+## Phase 4 acceptance gate
+Mark the installer execution backlog complete only when all conditions are true:
 - [ ] Sections A-F are fully checked.
 - [ ] No blocking defects in critical path (drive select -> format -> copy -> finalize).
 - [ ] Installer run produces deterministic report artifacts.

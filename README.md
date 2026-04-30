@@ -32,9 +32,9 @@ Versioning policy:
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
-1. Keep shell-first runtime stable across floppy/full profiles.
-2. Prioritize real floppy reliability and deterministic boot behavior.
-3. Advance DOS compatibility in small, testable steps.
+1. Phase 4 is active (from 2026-04-30) with dual focus on runtime milestones and installer execution.
+2. Installer execution work moved from the accepted Phase 3.5 foundation closure into the Phase 4 installer track.
+3. Keep shell-first runtime stable across floppy/full profiles while advancing DOS compatibility in small, testable steps.
 
 ## Open Source Collaboration
 CiukiOS welcomes collaboration through issues and pull requests.

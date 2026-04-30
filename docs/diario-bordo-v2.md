@@ -88,3 +88,6 @@
 75. Fix: corrected `INT 21h AH=56h` rename/move handling for deterministic DOS file-move semantics.
 76. Validation: reran shell command regression lanes on both profiles after the fix set; outcomes stable.
 77. Release: bumped project version to `CiukiOS pre-Alpha v0.5.3` after move/mv + AH=56h closure and regression validation.
+78. Decision: formally closed Phase 3 on 2026-04-30 based on v0.5.3 evidence and cross-profile regression stability.
+79. Decision: formally closed Phase 3.5 as a FOUNDATION/PLACEHOLDER baseline; setup artifacts were accepted as closure scope by project decision.
+80. Transition: activated Phase 4 and moved all remaining executable installer implementation/validation work into the Phase 4 installer execution track.
