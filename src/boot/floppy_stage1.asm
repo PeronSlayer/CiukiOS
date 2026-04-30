@@ -8237,40 +8237,48 @@ int21_find_test:
     pop ds
     ret
 
-int21_dir_test:
+int21_move_rename_path_test:
+    push ax
+    push bx
+    push dx
     push si
-    mov si, msg_dir_serial_pass
-    call print_string_serial
-    pop si
-    ret
+    push ds
 
+    mov ax, cs
+    mov ds, ax
 
-int21_tree_test:
-    push si
-    mov si, msg_tree_serial_pass
-    call print_string_serial
-    pop si
-    ret
+    mov dx, path_mvren_dir_dos
+    mov ah, 0x39
+    int 0x21
+    jc .fail
 
-int21_cd_test:
-    push si
-    mov si, msg_cd_serial_pass
-    call print_string_serial
-    pop si
-    ret
+    mov bx, cmd_selftest_mv
+    call shell_cmd_move
 
-int21_info_test:
-    push si
-    mov si, msg_info_serial_pass
-    call print_string_serial
-    pop si
-    ret
+    mov bx, cmd_selftest_rename
+    call shell_cmd_ren
 
-int21_ctrl_test:
-    push si
-    mov si, msg_ctrl_serial_pass
+    mov si, path_mvren_final_dos
+    call int21_resolve_and_find_path
+    jc .fail
+
+    mov bx, cmd_selftest_restore
+    call shell_cmd_ren
+
+    mov si, msg_mvren_serial_pass
     call print_string_serial
+    jmp .done
+
+.fail:
+    mov si, msg_mvren_serial_fail
+    call print_string_serial
+
+.done:
+    pop ds
     pop si
+    pop dx
+    pop bx
+    pop ax
     ret
 run_stage1_selftest:
     mov si, msg_stage1_selftest_begin
@@ -8282,11 +8290,7 @@ run_stage1_selftest:
     call run_mz_demo
     call int21_fileio_test
     call int21_find_test
-    call int21_dir_test
-    call int21_tree_test
-    call int21_cd_test
-    call int21_info_test
-    call int21_ctrl_test
+    call int21_move_rename_path_test
     call run_gfx_demo
     mov si, msg_stage1_selftest_done
     call print_string_dual
@@ -9517,11 +9521,6 @@ dispatch_command:
 
 .cmd_findtest:
     call int21_find_test
-    call int21_dir_test
-    call int21_tree_test
-    call int21_cd_test
-    call int21_info_test
-    call int21_ctrl_test
     jmp .done
 
 .cmd_mouse:
@@ -12632,11 +12631,8 @@ msg_find_serial_fail db "[FIND-SERIAL] FAIL", 13, 10, 0
 msg_gfx_begin db "[GFX] run", 13, 10, 0
 msg_gfx_done db "[GFX] done", 13, 10, 0
 msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
-msg_dir_serial_pass db "[DIR-SERIAL] PASS", 13, 10, 0
-msg_tree_serial_pass db "[TREE-SERIAL] PASS", 13, 10, 0
-msg_cd_serial_pass db "[CD-SERIAL] PASS", 13, 10, 0
-msg_info_serial_pass db "[INFO-SERIAL] PASS", 13, 10, 0
-msg_ctrl_serial_pass db "[CTRL-SERIAL] PASS", 13, 10, 0
+msg_mvren_serial_pass db "[MVR] PASS", 13, 10, 0
+msg_mvren_serial_fail db "[MVR] FAIL", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
 msg_dir_header db "Dir", 13, 10, 0
@@ -12694,6 +12690,11 @@ path_comdemo_dos db "COMDEMO.COM", 0
 path_mzdemo_dos  db "MZDEMO.EXE", 0
 path_fileio_dos  db "FILEIO.BIN", 0
 path_deltest_dos db "DELTEST.BIN", 0
+cmd_selftest_mv db "mv COMDEMO.COM \T", 0
+cmd_selftest_rename db "ren \T\COMDEMO.COM \T\C.COM", 0
+cmd_selftest_restore db "ren \T\C.COM COMDEMO.COM", 0
+path_mvren_dir_dos db "\T", 0
+path_mvren_final_dos db "\T\C.COM", 0
 %if FAT_TYPE == 16
 path_stage2_dos db "STAGE2  BIN"
 %endif
