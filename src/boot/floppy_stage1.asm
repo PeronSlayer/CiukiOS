@@ -9925,8 +9925,6 @@ shell_cmd_copy:
     mov ax, cs
     mov ds, ax
 
-    mov bx, 0xFFFF
-    mov di, 0xFFFF
     mov cl, 1
 
     call shell_arg_ptr
@@ -9942,10 +9940,11 @@ shell_cmd_copy:
 
     mov di, si
     call shell_trim_first_arg
-%if FAT_TYPE == 16 || FAT_TYPE == 12
     mov [cs:shell_copy_src_ptr], dx
     mov [cs:shell_copy_dst_ptr], di
-
+    mov bx, 0xFFFF
+    mov di, 0xFFFF
+%if FAT_TYPE == 16 || FAT_TYPE == 12
     mov ah, 0x3D
     mov al, 0
     int 0x21
@@ -10031,7 +10030,7 @@ shell_cmd_copy:
 
     mov ah, 0x3C
     xor cx, cx
-    mov dx, di
+    mov dx, [cs:shell_copy_dst_ptr]
     mov di, 0xFFFF
     int 0x21
     jc .copy_cleanup
