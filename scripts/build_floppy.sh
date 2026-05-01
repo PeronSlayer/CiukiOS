@@ -17,7 +17,7 @@ BOOT_BIN="build/floppy/obj/floppy_boot.bin"
 STAGE1_SRC="src/boot/floppy_stage1.asm"
 STAGE1_BIN="build/floppy/obj/floppy_stage1.bin"
 STAGE1_SLOT_BIN="build/floppy/obj/floppy_stage1_slot.bin"
-STAGE1_SECTORS=44
+STAGE1_SECTORS=45
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 STAGE2_SRC="src/boot/floppy_stage2.asm"
 STAGE2_BIN="build/floppy/obj/floppy_stage2.bin"
@@ -36,6 +36,12 @@ DELTEST_MAX_SIZE=512
 CIUKEDIT_SRC="src/com/ciukedit.asm"
 CIUKEDIT_BIN="build/floppy/obj/ciukedit.com"
 CIUKEDIT_MAX_SIZE=1024
+GFXRECT_SRC="src/com/gfxrect.asm"
+GFXRECT_BIN="build/floppy/obj/gfxrect.com"
+GFXRECT_MAX_SIZE=1024
+GFXSTAR_SRC="src/com/gfxstar.asm"
+GFXSTAR_BIN="build/floppy/obj/gfxstar.com"
+GFXSTAR_MAX_SIZE=1024
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 
 FAT_RESERVED_SECTORS=$((1 + STAGE1_SECTORS))
@@ -79,6 +85,14 @@ if [[ ! -f "$DELTEST_SRC" ]]; then
 fi
 if [[ ! -f "$CIUKEDIT_SRC" ]]; then
   echo "[build-floppy] ERROR: ciukedit source not found: $CIUKEDIT_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$GFXRECT_SRC" ]]; then
+  echo "[build-floppy] ERROR: gfxrect source not found: $GFXRECT_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$GFXSTAR_SRC" ]]; then
+  echo "[build-floppy] ERROR: gfxstar source not found: $GFXSTAR_SRC" >&2
   exit 1
 fi
 
@@ -168,56 +182,179 @@ if [[ "$CIUKEDIT_SIZE" -gt "$CIUKEDIT_MAX_SIZE" ]]; then
   exit 1
 fi
 
+echo "[build-floppy] assembling GFX demo payloads"
+nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
+nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
+
+GFXRECT_SIZE="$(stat -c%s "$GFXRECT_BIN")"
+if [[ "$GFXRECT_SIZE" -gt "$GFXRECT_MAX_SIZE" ]]; then
+  echo "[build-floppy] ERROR: GFXRECT payload is $GFXRECT_SIZE bytes (max $GFXRECT_MAX_SIZE)" >&2
+  exit 1
+fi
+
+GFXSTAR_SIZE="$(stat -c%s "$GFXSTAR_BIN")"
+if [[ "$GFXSTAR_SIZE" -gt "$GFXSTAR_MAX_SIZE" ]]; then
+  echo "[build-floppy] ERROR: GFXSTAR payload is $GFXSTAR_SIZE bytes (max $GFXSTAR_MAX_SIZE)" >&2
+  exit 1
+fi
+
+STAGE2_SECTORS=$(((STAGE2_SIZE + 511) / 512))
+COMDEMO_SECTORS=$(((COMDEMO_SIZE + 511) / 512))
+MZDEMO_SECTORS=$(((MZDEMO_SIZE + 511) / 512))
+FILEIO_SECTORS=$(((FILEIO_SIZE + 511) / 512))
+DELTEST_SECTORS=$(((DELTEST_SIZE + 511) / 512))
+CIUKEDIT_SECTORS=$(((CIUKEDIT_SIZE + 511) / 512))
+GFXRECT_SECTORS=$(((GFXRECT_SIZE + 511) / 512))
+GFXSTAR_SECTORS=$(((GFXSTAR_SIZE + 511) / 512))
+
+echo "[build-floppy] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS"
+
+ROOT_SYSTEM_CLUSTER=2
+ROOT_APPS_CLUSTER=3
+NEXT_CLUSTER=4
+SYSTEM_STAGE2_CLUSTER=$NEXT_CLUSTER
+NEXT_CLUSTER=$((NEXT_CLUSTER + STAGE2_SECTORS))
+APPS_COMDEMO_CLUSTER=$NEXT_CLUSTER
+NEXT_CLUSTER=$((NEXT_CLUSTER + COMDEMO_SECTORS))
+APPS_MZDEMO_CLUSTER=$NEXT_CLUSTER
+NEXT_CLUSTER=$((NEXT_CLUSTER + MZDEMO_SECTORS))
+APPS_FILEIO_CLUSTER=$NEXT_CLUSTER
+NEXT_CLUSTER=$((NEXT_CLUSTER + FILEIO_SECTORS))
+APPS_DELTEST_CLUSTER=$NEXT_CLUSTER
+NEXT_CLUSTER=$((NEXT_CLUSTER + DELTEST_SECTORS))
+APPS_CIUKEDIT_CLUSTER=$NEXT_CLUSTER
+NEXT_CLUSTER=$((NEXT_CLUSTER + CIUKEDIT_SECTORS))
+APPS_GFXRECT_CLUSTER=$NEXT_CLUSTER
+NEXT_CLUSTER=$((NEXT_CLUSTER + GFXRECT_SECTORS))
+APPS_GFXSTAR_CLUSTER=$NEXT_CLUSTER
+NEXT_CLUSTER=$((NEXT_CLUSTER + GFXSTAR_SECTORS))
+
+TOTAL_DATA_CLUSTERS=$((2880 - DATA_LBA))
+if (( NEXT_CLUSTER - 2 > TOTAL_DATA_CLUSTERS )); then
+  echo "[build-floppy] ERROR: payload layout exceeds FAT12 data area" >&2
+  exit 1
+fi
+
 FAT_SECTOR_BIN="build/floppy/obj/fat_sector.bin"
-ROOT_ENTRY_BIN="build/floppy/obj/root_comdemo_entry.bin"
-ROOT_ENTRY_MZ_BIN="build/floppy/obj/root_mzdemo_entry.bin"
-ROOT_ENTRY_FILEIO_BIN="build/floppy/obj/root_fileio_entry.bin"
-ROOT_ENTRY_DELTEST_BIN="build/floppy/obj/root_deltest_entry.bin"
-ROOT_ENTRY_STAGE2_BIN="build/floppy/obj/root_stage2_entry.bin"
-ROOT_ENTRY_CIUKEDIT_BIN="build/floppy/obj/root_ciukedit_entry.bin"
+ROOT_ENTRY_SYSTEM_BIN="build/floppy/obj/root_system_entry.bin"
+ROOT_ENTRY_APPS_BIN="build/floppy/obj/root_apps_entry.bin"
+DIR_ENTRY_DOT_SYSTEM="build/floppy/obj/dir_dot_system_entry.bin"
+DIR_ENTRY_DOTDOT_ROOT="build/floppy/obj/dir_dotdot_root_entry.bin"
+DIR_ENTRY_DOT_APPS="build/floppy/obj/dir_dot_apps_entry.bin"
+DIR_ENTRY_STAGE2_BIN="build/floppy/obj/dir_stage2_entry.bin"
+DIR_ENTRY_COMDEMO_BIN="build/floppy/obj/dir_comdemo_entry.bin"
+DIR_ENTRY_MZ_BIN="build/floppy/obj/dir_mzdemo_entry.bin"
+DIR_ENTRY_FILEIO_BIN="build/floppy/obj/dir_fileio_entry.bin"
+DIR_ENTRY_DELTEST_BIN="build/floppy/obj/dir_deltest_entry.bin"
+DIR_ENTRY_CIUKEDIT_BIN="build/floppy/obj/dir_ciukedit_entry.bin"
+DIR_ENTRY_GFXRECT_BIN="build/floppy/obj/dir_gfxrect_entry.bin"
+DIR_ENTRY_GFXSTAR_BIN="build/floppy/obj/dir_gfxstar_entry.bin"
+SYSTEM_DIR_CLUSTER_BIN="build/floppy/obj/system_dir_cluster.bin"
+APPS_DIR_CLUSTER_BIN="build/floppy/obj/apps_dir_cluster.bin"
 
-# FAT12: entries 0-9
-# [0]=0xFF0 media, [1]=0xFFF, [2]=0xFFF(COMDEMO), [3]=0xFFF(MZDEMO)
-# [4]=0x005(FILEIO->5), [5]=0xFFF(FILEIO end), [6]=0xFFF(DELTEST), [7]=0x070(STAGE2)
-# [8]=0x009(CIUKEDIT->9), [9]=0xFFF(CIUKEDIT end)
-printf 'F0FFFFFFFFFF05F0FFFF0F0709F0FF' | xxd -r -p > "$FAT_SECTOR_BIN"
-dd if=/dev/zero bs=1 count=$((512 - 15)) status=none >> "$FAT_SECTOR_BIN"
+dd if=/dev/zero of="$FAT_SECTOR_BIN" bs=1 count=512 status=none
 
-dd if=/dev/zero of="$ROOT_ENTRY_BIN" bs=1 count=32 status=none
-printf 'COMDEMO COM' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=0 conv=notrunc status=none
-printf '\x20' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=11 conv=notrunc status=none
-printf '\x02\x00' | dd of="$ROOT_ENTRY_BIN" bs=1 seek=26 conv=notrunc status=none
-printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((COMDEMO_SIZE & 0xFF)) $(((COMDEMO_SIZE >> 8) & 0xFF)) $(((COMDEMO_SIZE >> 16) & 0xFF)) $(((COMDEMO_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_BIN" bs=1 seek=28 conv=notrunc status=none
+fat12_get_byte() {
+  local offset="$1"
+  local hex
+  hex=$(xxd -p -l 1 -s "$offset" "$FAT_SECTOR_BIN")
+  if [[ -z "$hex" ]]; then
+    echo 0
+    return
+  fi
+  echo $((16#$hex))
+}
 
-dd if=/dev/zero of="$ROOT_ENTRY_MZ_BIN" bs=1 count=32 status=none
-printf 'MZDEMO  EXE' | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=0 conv=notrunc status=none
-printf '\x20' | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=11 conv=notrunc status=none
-printf '\x03\x00' | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=26 conv=notrunc status=none
-printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((MZDEMO_SIZE & 0xFF)) $(((MZDEMO_SIZE >> 8) & 0xFF)) $(((MZDEMO_SIZE >> 16) & 0xFF)) $(((MZDEMO_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_MZ_BIN" bs=1 seek=28 conv=notrunc status=none
+fat12_set_byte() {
+  local offset="$1" value="$2"
+  printf "$(printf '\\x%02x' "$value")" | dd of="$FAT_SECTOR_BIN" bs=1 seek="$offset" conv=notrunc status=none
+}
 
-dd if=/dev/zero of="$ROOT_ENTRY_FILEIO_BIN" bs=1 count=32 status=none
-printf 'FILEIO  BIN' | dd of="$ROOT_ENTRY_FILEIO_BIN" bs=1 seek=0 conv=notrunc status=none
-printf '\x20' | dd of="$ROOT_ENTRY_FILEIO_BIN" bs=1 seek=11 conv=notrunc status=none
-printf '\x04\x00' | dd of="$ROOT_ENTRY_FILEIO_BIN" bs=1 seek=26 conv=notrunc status=none
-printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((FILEIO_SIZE & 0xFF)) $(((FILEIO_SIZE >> 8) & 0xFF)) $(((FILEIO_SIZE >> 16) & 0xFF)) $(((FILEIO_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_FILEIO_BIN" bs=1 seek=28 conv=notrunc status=none
+fat12_set_entry() {
+  local index="$1" value="$2"
+  local offset=$((index + index / 2))
 
-dd if=/dev/zero of="$ROOT_ENTRY_DELTEST_BIN" bs=1 count=32 status=none
-printf 'DELTEST BIN' | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=0 conv=notrunc status=none
-printf '\x20' | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=11 conv=notrunc status=none
-printf '\x06\x00' | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=26 conv=notrunc status=none
-printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((DELTEST_SIZE & 0xFF)) $(((DELTEST_SIZE >> 8) & 0xFF)) $(((DELTEST_SIZE >> 16) & 0xFF)) $(((DELTEST_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_DELTEST_BIN" bs=1 seek=28 conv=notrunc status=none
+  if (( index % 2 == 0 )); then
+    local b1
+    b1=$(fat12_get_byte $((offset + 1)))
+    fat12_set_byte "$offset" $((value & 0xFF))
+    fat12_set_byte $((offset + 1)) $(((b1 & 0xF0) | ((value >> 8) & 0x0F)))
+  else
+    local b0
+    b0=$(fat12_get_byte "$offset")
+    fat12_set_byte "$offset" $(((b0 & 0x0F) | ((value << 4) & 0xF0)))
+    fat12_set_byte $((offset + 1)) $(((value >> 4) & 0xFF))
+  fi
+}
 
-dd if=/dev/zero of="$ROOT_ENTRY_STAGE2_BIN" bs=1 count=32 status=none
-printf 'STAGE2  BIN' | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=0 conv=notrunc status=none
-printf '\x20' | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=11 conv=notrunc status=none
-printf '\x07\x00' | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=26 conv=notrunc status=none
-printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((STAGE2_SIZE & 0xFF)) $(((STAGE2_SIZE >> 8) & 0xFF)) $(((STAGE2_SIZE >> 16) & 0xFF)) $(((STAGE2_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_STAGE2_BIN" bs=1 seek=28 conv=notrunc status=none
+fat12_chain_span() {
+  local start="$1" count="$2"
+  local i cluster
+  for ((i = 0; i < count; i++)); do
+    cluster=$((start + i))
+    if (( i + 1 < count )); then
+      fat12_set_entry "$cluster" $((cluster + 1))
+    else
+      fat12_set_entry "$cluster" 0xFFF
+    fi
+  done
+}
 
-dd if=/dev/zero of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 count=32 status=none
-printf 'CIUKEDITCOM' | dd of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 seek=0 conv=notrunc status=none
-printf '\x20' | dd of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 seek=11 conv=notrunc status=none
-printf '\x08\x00' | dd of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 seek=26 conv=notrunc status=none
-printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((CIUKEDIT_SIZE & 0xFF)) $(((CIUKEDIT_SIZE >> 8) & 0xFF)) $(((CIUKEDIT_SIZE >> 16) & 0xFF)) $(((CIUKEDIT_SIZE >> 24) & 0xFF)))" | dd of="$ROOT_ENTRY_CIUKEDIT_BIN" bs=1 seek=28 conv=notrunc status=none
+fat12_set_entry 0 0xFF0
+fat12_set_entry 1 0xFFF
+fat12_chain_span "$ROOT_SYSTEM_CLUSTER" 1
+fat12_chain_span "$ROOT_APPS_CLUSTER" 1
+fat12_chain_span "$SYSTEM_STAGE2_CLUSTER" "$STAGE2_SECTORS"
+fat12_chain_span "$APPS_COMDEMO_CLUSTER" "$COMDEMO_SECTORS"
+fat12_chain_span "$APPS_MZDEMO_CLUSTER" "$MZDEMO_SECTORS"
+fat12_chain_span "$APPS_FILEIO_CLUSTER" "$FILEIO_SECTORS"
+fat12_chain_span "$APPS_DELTEST_CLUSTER" "$DELTEST_SECTORS"
+fat12_chain_span "$APPS_CIUKEDIT_CLUSTER" "$CIUKEDIT_SECTORS"
+fat12_chain_span "$APPS_GFXRECT_CLUSTER" "$GFXRECT_SECTORS"
+fat12_chain_span "$APPS_GFXSTAR_CLUSTER" "$GFXSTAR_SECTORS"
+
+make_entry() {
+  local out="$1" name="$2" attr="$3" cluster="$4" size="$5"
+  dd if=/dev/zero of="$out" bs=1 count=32 status=none
+  printf '%s' "$name" | dd of="$out" bs=1 seek=0 conv=notrunc status=none
+  printf "$(printf '\\x%02x' "$attr")" | dd of="$out" bs=1 seek=11 conv=notrunc status=none
+  printf "$(printf '\\x%02x\\x%02x' $((cluster & 0xFF)) $(((cluster >> 8) & 0xFF)))" \
+    | dd of="$out" bs=1 seek=26 conv=notrunc status=none
+  printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((size & 0xFF)) $(((size >> 8) & 0xFF)) $(((size >> 16) & 0xFF)) $(((size >> 24) & 0xFF)))" \
+    | dd of="$out" bs=1 seek=28 conv=notrunc status=none
+}
+
+make_entry "$ROOT_ENTRY_SYSTEM_BIN" 'SYSTEM     ' 0x10 "$ROOT_SYSTEM_CLUSTER" 0
+make_entry "$ROOT_ENTRY_APPS_BIN"   'APPS       ' 0x10 "$ROOT_APPS_CLUSTER" 0
+
+make_entry "$DIR_ENTRY_DOT_SYSTEM" '.          ' 0x10 "$ROOT_SYSTEM_CLUSTER" 0
+make_entry "$DIR_ENTRY_DOTDOT_ROOT" '..         ' 0x10 0 0
+make_entry "$DIR_ENTRY_DOT_APPS" '.          ' 0x10 "$ROOT_APPS_CLUSTER" 0
+
+make_entry "$DIR_ENTRY_STAGE2_BIN" 'STAGE2  BIN' 0x20 "$SYSTEM_STAGE2_CLUSTER" "$STAGE2_SIZE"
+make_entry "$DIR_ENTRY_COMDEMO_BIN" 'COMDEMO COM' 0x20 "$APPS_COMDEMO_CLUSTER" "$COMDEMO_SIZE"
+make_entry "$DIR_ENTRY_MZ_BIN" 'MZDEMO  EXE' 0x20 "$APPS_MZDEMO_CLUSTER" "$MZDEMO_SIZE"
+make_entry "$DIR_ENTRY_FILEIO_BIN" 'FILEIO  BIN' 0x20 "$APPS_FILEIO_CLUSTER" "$FILEIO_SIZE"
+make_entry "$DIR_ENTRY_DELTEST_BIN" 'DELTEST BIN' 0x20 "$APPS_DELTEST_CLUSTER" "$DELTEST_SIZE"
+make_entry "$DIR_ENTRY_CIUKEDIT_BIN" 'CIUKEDITCOM' 0x20 "$APPS_CIUKEDIT_CLUSTER" "$CIUKEDIT_SIZE"
+make_entry "$DIR_ENTRY_GFXRECT_BIN" 'GFXRECT COM' 0x20 "$APPS_GFXRECT_CLUSTER" "$GFXRECT_SIZE"
+make_entry "$DIR_ENTRY_GFXSTAR_BIN" 'GFXSTAR COM' 0x20 "$APPS_GFXSTAR_CLUSTER" "$GFXSTAR_SIZE"
+
+dd if=/dev/zero of="$SYSTEM_DIR_CLUSTER_BIN" bs=512 count=1 status=none
+dd if="$DIR_ENTRY_DOT_SYSTEM" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=0 conv=notrunc status=none
+dd if="$DIR_ENTRY_DOTDOT_ROOT" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=32 conv=notrunc status=none
+dd if="$DIR_ENTRY_STAGE2_BIN" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=64 conv=notrunc status=none
+
+dd if=/dev/zero of="$APPS_DIR_CLUSTER_BIN" bs=512 count=1 status=none
+dd if="$DIR_ENTRY_DOT_APPS" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=0 conv=notrunc status=none
+dd if="$DIR_ENTRY_DOTDOT_ROOT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=32 conv=notrunc status=none
+dd if="$DIR_ENTRY_COMDEMO_BIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=64 conv=notrunc status=none
+dd if="$DIR_ENTRY_MZ_BIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=96 conv=notrunc status=none
+dd if="$DIR_ENTRY_FILEIO_BIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=128 conv=notrunc status=none
+dd if="$DIR_ENTRY_DELTEST_BIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=160 conv=notrunc status=none
+dd if="$DIR_ENTRY_CIUKEDIT_BIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=192 conv=notrunc status=none
+dd if="$DIR_ENTRY_GFXRECT_BIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=224 conv=notrunc status=none
+dd if="$DIR_ENTRY_GFXSTAR_BIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=256 conv=notrunc status=none
 
 echo "[build-floppy] creating 1.44MB floppy image"
 dd if=/dev/zero of=build/floppy/ciukios-floppy.img bs=512 count=2880 status=none
@@ -225,32 +362,37 @@ dd if="$BOOT_BIN" of="$IMG" bs=512 count=1 conv=notrunc status=none
 dd if="$STAGE1_SLOT_BIN" of="$IMG" bs=512 seek=1 count="$STAGE1_SECTORS" conv=notrunc status=none
 dd if="$FAT_SECTOR_BIN" of="$IMG" bs=512 seek="$FAT1_LBA" count=1 conv=notrunc status=none
 dd if="$FAT_SECTOR_BIN" of="$IMG" bs=512 seek="$FAT2_LBA" count=1 conv=notrunc status=none
-dd if="$ROOT_ENTRY_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_MZ_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_FILEIO_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_DELTEST_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_STAGE2_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_CIUKEDIT_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 160)) conv=notrunc status=none
-dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek="$DATA_LBA" count=1 conv=notrunc status=none
-dd if="$MZDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 1)) count=1 conv=notrunc status=none
-dd if="$FILEIO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 2)) count=2 conv=notrunc status=none
-dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 4)) count=1 conv=notrunc status=none
-dd if="$STAGE2_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 5)) conv=notrunc status=none
-dd if="$CIUKEDIT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + 6)) count=2 conv=notrunc status=none
+dd if="$ROOT_ENTRY_SYSTEM_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_APPS_BIN" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
 
-cat > build/floppy/README.txt << 'TXT'
+dd if="$SYSTEM_DIR_CLUSTER_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ROOT_SYSTEM_CLUSTER - 2)) count=1 conv=notrunc status=none
+dd if="$APPS_DIR_CLUSTER_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ROOT_APPS_CLUSTER - 2)) count=1 conv=notrunc status=none
+
+dd if="$STAGE2_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + SYSTEM_STAGE2_CLUSTER - 2)) count="$STAGE2_SECTORS" conv=notrunc status=none
+dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + APPS_COMDEMO_CLUSTER - 2)) count="$COMDEMO_SECTORS" conv=notrunc status=none
+dd if="$MZDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + APPS_MZDEMO_CLUSTER - 2)) count="$MZDEMO_SECTORS" conv=notrunc status=none
+dd if="$FILEIO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + APPS_FILEIO_CLUSTER - 2)) count="$FILEIO_SECTORS" conv=notrunc status=none
+dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + APPS_DELTEST_CLUSTER - 2)) count="$DELTEST_SECTORS" conv=notrunc status=none
+dd if="$CIUKEDIT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + APPS_CIUKEDIT_CLUSTER - 2)) count="$CIUKEDIT_SECTORS" conv=notrunc status=none
+dd if="$GFXRECT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + APPS_GFXRECT_CLUSTER - 2)) count="$GFXRECT_SECTORS" conv=notrunc status=none
+dd if="$GFXSTAR_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + APPS_GFXSTAR_CLUSTER - 2)) count="$GFXSTAR_SECTORS" conv=notrunc status=none
+
+cat > build/floppy/README.txt <<TXT
 CiukiOS Legacy v2 - Floppy profile
 
 Image: ciukios-floppy.img (1.44MB)
 State: BIOS stage0 -> stage1 -> stage2 runtime
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-23, stage2 in FAT data area
 FAT layout: reserved sectors include stage1, FAT/root/data follow BPB geometry
-COM demo: COMDEMO.COM cluster 2 for test/demo
-MZ demo: MZDEMO.EXE cluster 3 for test/demo
-FILEIO test: FILEIO.BIN clusters 4-5 for multi-sector I/O tests
-DELTEST test: DELTEST.BIN cluster 6 for file deletion tests
-Stage2 runtime: STAGE2.BIN cluster 7 (shell-only bootstrap and extended services)
-Editor: CIUKEDIT.COM clusters 8-9 (minimal line editor MVP)
+Root directories: SYSTEM cluster ${ROOT_SYSTEM_CLUSTER}, APPS cluster ${ROOT_APPS_CLUSTER}
+SYSTEM: STAGE2.BIN clusters ${SYSTEM_STAGE2_CLUSTER}-$((SYSTEM_STAGE2_CLUSTER + STAGE2_SECTORS - 1))
+APPS: COMDEMO.COM clusters ${APPS_COMDEMO_CLUSTER}-$((APPS_COMDEMO_CLUSTER + COMDEMO_SECTORS - 1))
+APPS: MZDEMO.EXE clusters ${APPS_MZDEMO_CLUSTER}-$((APPS_MZDEMO_CLUSTER + MZDEMO_SECTORS - 1))
+APPS: FILEIO.BIN clusters ${APPS_FILEIO_CLUSTER}-$((APPS_FILEIO_CLUSTER + FILEIO_SECTORS - 1))
+APPS: DELTEST.BIN clusters ${APPS_DELTEST_CLUSTER}-$((APPS_DELTEST_CLUSTER + DELTEST_SECTORS - 1))
+APPS: CIUKEDIT.COM clusters ${APPS_CIUKEDIT_CLUSTER}-$((APPS_CIUKEDIT_CLUSTER + CIUKEDIT_SECTORS - 1))
+APPS: GFXRECT.COM clusters ${APPS_GFXRECT_CLUSTER}-$((APPS_GFXRECT_CLUSTER + GFXRECT_SECTORS - 1))
+APPS: GFXSTAR.COM clusters ${APPS_GFXSTAR_CLUSTER}-$((APPS_GFXSTAR_CLUSTER + GFXSTAR_SECTORS - 1))
 TXT
 
 echo "[build-floppy] done: $IMG"

@@ -54,11 +54,17 @@ DELTEST_SRC="src/com/deltest.bin.asm"
 DELTEST_BIN="build/full/obj/deltest.bin"
 CIUKEDIT_SRC="src/com/ciukedit.asm"
 CIUKEDIT_BIN="build/full/obj/ciukedit.com"
+GFXRECT_SRC="src/com/gfxrect.asm"
+GFXRECT_BIN="build/full/obj/gfxrect.com"
+GFXRECT_MAX_SIZE=1024
+GFXSTAR_SRC="src/com/gfxstar.asm"
+GFXSTAR_BIN="build/full/obj/gfxstar.com"
+GFXSTAR_MAX_SIZE=1024
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
 SPLASH_BIN="build/full/obj/SPLASH.BIN"
-SPLASH_MAX_SIZE=4096
-SPLASH_EXPECTED_SIZE=$((32 * 3 + (80 * 50)))
+SPLASH_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512 * 6))
+SPLASH_EXPECTED_SIZE=16768
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 # Default to shell-first UX on full profile; enable autorun explicitly for desktop tests.
 STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-0}"
@@ -70,7 +76,7 @@ mtools_try() {
 	timeout --kill-after="${MTOOLS_KILL_AFTER_SEC}s" "${MTOOLS_TIMEOUT_SEC}s" "$@" >/dev/null 2>&1 || true
 }
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -130,6 +136,8 @@ nasm -f bin "$MZDEMO_SRC"  -o "$MZDEMO_BIN"
 nasm -f bin "$FILEIO_SRC"  -o "$FILEIO_BIN"
 nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
 nasm -f bin "$CIUKEDIT_SRC" -o "$CIUKEDIT_BIN"
+nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
+nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
 
 echo "[build-full] generating splash asset"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -153,8 +161,32 @@ MZDEMO_SIZE="$(stat -c%s  "$MZDEMO_BIN")"
 FILEIO_SIZE="$(stat -c%s  "$FILEIO_BIN")"
 DELTEST_SIZE="$(stat -c%s "$DELTEST_BIN")"
 CIUKEDIT_SIZE="$(stat -c%s "$CIUKEDIT_BIN")"
+GFXRECT_SIZE="$(stat -c%s "$GFXRECT_BIN")"
+GFXSTAR_SIZE="$(stat -c%s "$GFXSTAR_BIN")"
 SPLASH_SIZE="$(stat -c%s "$SPLASH_BIN")"
 SPLASH_SECTORS=$(((SPLASH_SIZE + 511) / 512))
+CLUSTER_SIZE_BYTES=$((FAT_SECTORS_PER_CLUSTER * 512))
+SPLASH_CLUSTERS=$(((SPLASH_SIZE + CLUSTER_SIZE_BYTES - 1) / CLUSTER_SIZE_BYTES))
+STAGE2_SECTORS=$(((STAGE2_SIZE + 511) / 512))
+COMDEMO_SECTORS=$(((COMDEMO_SIZE + 511) / 512))
+MZDEMO_SECTORS=$(((MZDEMO_SIZE + 511) / 512))
+FILEIO_SECTORS=$(((FILEIO_SIZE + 511) / 512))
+DELTEST_SECTORS=$(((DELTEST_SIZE + 511) / 512))
+CIUKEDIT_SECTORS=$(((CIUKEDIT_SIZE + 511) / 512))
+GFXRECT_SECTORS=$(((GFXRECT_SIZE + 511) / 512))
+GFXSTAR_SECTORS=$(((GFXSTAR_SIZE + 511) / 512))
+
+if [[ "$GFXRECT_SIZE" -gt "$GFXRECT_MAX_SIZE" ]]; then
+	echo "[build-full] ERROR: GFXRECT payload is $GFXRECT_SIZE bytes (max $GFXRECT_MAX_SIZE)" >&2
+	exit 1
+fi
+
+if [[ "$GFXSTAR_SIZE" -gt "$GFXSTAR_MAX_SIZE" ]]; then
+	echo "[build-full] ERROR: GFXSTAR payload is $GFXSTAR_SIZE bytes (max $GFXSTAR_MAX_SIZE)" >&2
+	exit 1
+fi
+
+echo "[build-full] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS SPLASH=$SPLASH_SECTORS"
 
 if [[ "$SPLASH_SIZE" -ne "$SPLASH_EXPECTED_SIZE" ]]; then
 	echo "[build-full] ERROR: SPLASH.BIN size is $SPLASH_SIZE bytes (expected $SPLASH_EXPECTED_SIZE)" >&2
@@ -171,19 +203,93 @@ if [[ "$FILEIO_SIZE" -le 512 ]]; then
 	exit 1
 fi
 
-# FAT16 sector (little-endian 16-bit entries):
-#  [0]=0xFFF8 media+reserved, [1]=0xFFFF, [2]=EOF(COMDEMO), [3]=EOF(MZDEMO),
-#  [4]=EOF(FILEIO), [5]=EOF(SPLASH), [6]=EOF(DELTEST), [7]=EOF(STAGE2), [8]=EOF(CIUKEDIT)
-FAT_SECTOR_BIN="build/full/obj/fat16_sector.bin"
-printf 'F8FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF' | tr -d ' ' | xxd -r -p > "$FAT_SECTOR_BIN"
-dd if=/dev/zero bs=1 count=$((512 - 18)) status=none >> "$FAT_SECTOR_BIN"
+# FAT16 directory/cluster map with contiguous SYSTEM/SPLASH chain.
+# SYSTEM/APPS directories and app payloads remain single-cluster by contract.
+ROOT_SYSTEM_CLUSTER=2
+ROOT_APPS_CLUSTER=3
+SYSTEM_STAGE2_CLUSTER=4
+SYSTEM_SPLASH_CLUSTER=5
+SYSTEM_SPLASH_LAST_CLUSTER=$((SYSTEM_SPLASH_CLUSTER + SPLASH_CLUSTERS - 1))
+APPS_COMDEMO_CLUSTER=$((SYSTEM_SPLASH_LAST_CLUSTER + 1))
+APPS_MZDEMO_CLUSTER=$((APPS_COMDEMO_CLUSTER + 1))
+APPS_FILEIO_CLUSTER=$((APPS_MZDEMO_CLUSTER + 1))
+APPS_DELTEST_CLUSTER=$((APPS_FILEIO_CLUSTER + 1))
+APPS_CIUKEDIT_CLUSTER=$((APPS_DELTEST_CLUSTER + 1))
+APPS_GFXRECT_CLUSTER=$((APPS_CIUKEDIT_CLUSTER + 1))
+APPS_GFXSTAR_CLUSTER=$((APPS_GFXRECT_CLUSTER + 1))
 
-# Helper: write a 32-byte FAT root directory entry
-make_root_entry() {
-	local out="$1" name="$2" cluster="$3" size="$4"
+if (( SPLASH_CLUSTERS < 1 )); then
+	echo "[build-full] ERROR: SPLASH.BIN requires an invalid cluster count ($SPLASH_CLUSTERS)" >&2
+	exit 1
+fi
+
+if (( APPS_GFXSTAR_CLUSTER >= 256 )); then
+	echo "[build-full] ERROR: FAT16 layout exceeds first FAT sector entry range" >&2
+	exit 1
+fi
+
+for sectors in \
+	"$STAGE2_SECTORS" \
+	"$COMDEMO_SECTORS" \
+	"$MZDEMO_SECTORS" \
+	"$FILEIO_SECTORS" \
+	"$DELTEST_SECTORS" \
+	"$CIUKEDIT_SECTORS" \
+	"$GFXRECT_SECTORS" \
+	"$GFXSTAR_SECTORS"; do
+	if (( sectors > FAT_SECTORS_PER_CLUSTER )); then
+		echo "[build-full] ERROR: payload exceeds single FAT16 cluster (${FAT_SECTORS_PER_CLUSTER} sectors)" >&2
+		exit 1
+	fi
+done
+
+FAT_SECTOR_BIN="build/full/obj/fat16_sector.bin"
+dd if=/dev/zero of="$FAT_SECTOR_BIN" bs=1 count=512 status=none
+
+fat16_set_entry() {
+	local index="$1" value="$2"
+	local offset=$((index * 2))
+	printf "$(printf '\\x%02x\\x%02x' $((value & 0xFF)) $(((value >> 8) & 0xFF)))" \
+		| dd of="$FAT_SECTOR_BIN" bs=1 seek="$offset" conv=notrunc status=none
+}
+
+fat16_set_contiguous_chain() {
+	local start="$1" count="$2"
+	local cluster="$start"
+	local remaining="$count"
+
+	if (( remaining <= 0 )); then
+		return
+	fi
+
+	while (( remaining > 1 )); do
+		fat16_set_entry "$cluster" "$((cluster + 1))"
+		cluster=$((cluster + 1))
+		remaining=$((remaining - 1))
+	done
+
+	fat16_set_entry "$cluster" 0xFFFF
+}
+
+fat16_set_entry 0 0xFFF8
+fat16_set_entry 1 0xFFFF
+fat16_set_entry "$ROOT_SYSTEM_CLUSTER" 0xFFFF
+fat16_set_entry "$ROOT_APPS_CLUSTER" 0xFFFF
+fat16_set_entry "$SYSTEM_STAGE2_CLUSTER" 0xFFFF
+fat16_set_contiguous_chain "$SYSTEM_SPLASH_CLUSTER" "$SPLASH_CLUSTERS"
+fat16_set_entry "$APPS_COMDEMO_CLUSTER" 0xFFFF
+fat16_set_entry "$APPS_MZDEMO_CLUSTER" 0xFFFF
+fat16_set_entry "$APPS_FILEIO_CLUSTER" 0xFFFF
+fat16_set_entry "$APPS_DELTEST_CLUSTER" 0xFFFF
+fat16_set_entry "$APPS_CIUKEDIT_CLUSTER" 0xFFFF
+fat16_set_entry "$APPS_GFXRECT_CLUSTER" 0xFFFF
+fat16_set_entry "$APPS_GFXSTAR_CLUSTER" 0xFFFF
+
+make_entry() {
+	local out="$1" name="$2" attr="$3" cluster="$4" size="$5"
 	dd if=/dev/zero of="$out" bs=1 count=32 status=none
 	printf '%s' "$name" | dd of="$out" bs=1 seek=0 conv=notrunc status=none
-	printf '\x20' | dd of="$out" bs=1 seek=11 conv=notrunc status=none
+	printf "$(printf '\\x%02x' "$attr")" | dd of="$out" bs=1 seek=11 conv=notrunc status=none
 	printf "$(printf '\\x%02x\\x%02x' $((cluster & 0xFF)) $(((cluster >> 8) & 0xFF)))" \
 		| dd of="$out" bs=1 seek=26 conv=notrunc status=none
 	printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
@@ -192,20 +298,56 @@ make_root_entry() {
 		| dd of="$out" bs=1 seek=28 conv=notrunc status=none
 }
 
-ROOT_ENTRY_COMDEMO="build/full/obj/root_comdemo.bin"
-ROOT_ENTRY_MZDEMO="build/full/obj/root_mzdemo.bin"
-ROOT_ENTRY_FILEIO="build/full/obj/root_fileio.bin"
-ROOT_ENTRY_SPLASH="build/full/obj/root_splash.bin"
-ROOT_ENTRY_DELTEST="build/full/obj/root_deltest.bin"
-ROOT_ENTRY_STAGE2="build/full/obj/root_stage2.bin"
-ROOT_ENTRY_CIUKEDIT="build/full/obj/root_ciukedit.bin"
-make_root_entry "$ROOT_ENTRY_COMDEMO" 'COMDEMO COM' 2 "$COMDEMO_SIZE"
-make_root_entry "$ROOT_ENTRY_MZDEMO"  'MZDEMO  EXE' 3 "$MZDEMO_SIZE"
-make_root_entry "$ROOT_ENTRY_FILEIO"  'FILEIO  BIN' 4 "$FILEIO_SIZE"
-make_root_entry "$ROOT_ENTRY_SPLASH"  'SPLASH  BIN' 5 "$SPLASH_SIZE"
-make_root_entry "$ROOT_ENTRY_DELTEST" 'DELTEST BIN' 6 "$DELTEST_SIZE"
-make_root_entry "$ROOT_ENTRY_STAGE2"  'STAGE2  BIN' 7 "$STAGE2_SIZE"
-make_root_entry "$ROOT_ENTRY_CIUKEDIT" 'CIUKEDITCOM' 8 "$CIUKEDIT_SIZE"
+ROOT_ENTRY_SYSTEM="build/full/obj/root_system.bin"
+ROOT_ENTRY_APPS="build/full/obj/root_apps.bin"
+DIR_ENTRY_DOT_SYSTEM="build/full/obj/dir_dot_system.bin"
+DIR_ENTRY_DOTDOT_ROOT="build/full/obj/dir_dotdot_root.bin"
+DIR_ENTRY_DOT_APPS="build/full/obj/dir_dot_apps.bin"
+DIR_ENTRY_STAGE2="build/full/obj/dir_stage2.bin"
+DIR_ENTRY_SPLASH="build/full/obj/dir_splash.bin"
+DIR_ENTRY_COMDEMO="build/full/obj/dir_comdemo.bin"
+DIR_ENTRY_MZDEMO="build/full/obj/dir_mzdemo.bin"
+DIR_ENTRY_FILEIO="build/full/obj/dir_fileio.bin"
+DIR_ENTRY_DELTEST="build/full/obj/dir_deltest.bin"
+DIR_ENTRY_CIUKEDIT="build/full/obj/dir_ciukedit.bin"
+DIR_ENTRY_GFXRECT="build/full/obj/dir_gfxrect.bin"
+DIR_ENTRY_GFXSTAR="build/full/obj/dir_gfxstar.bin"
+SYSTEM_DIR_CLUSTER_BIN="build/full/obj/system_dir_cluster.bin"
+APPS_DIR_CLUSTER_BIN="build/full/obj/apps_dir_cluster.bin"
+
+make_entry "$ROOT_ENTRY_SYSTEM" 'SYSTEM     ' 0x10 "$ROOT_SYSTEM_CLUSTER" 0
+make_entry "$ROOT_ENTRY_APPS"   'APPS       ' 0x10 "$ROOT_APPS_CLUSTER" 0
+
+make_entry "$DIR_ENTRY_DOT_SYSTEM" '.          ' 0x10 "$ROOT_SYSTEM_CLUSTER" 0
+make_entry "$DIR_ENTRY_DOTDOT_ROOT" '..         ' 0x10 0 0
+make_entry "$DIR_ENTRY_DOT_APPS" '.          ' 0x10 "$ROOT_APPS_CLUSTER" 0
+
+make_entry "$DIR_ENTRY_STAGE2"   'STAGE2  BIN' 0x20 "$SYSTEM_STAGE2_CLUSTER" "$STAGE2_SIZE"
+make_entry "$DIR_ENTRY_SPLASH"   'SPLASH  BIN' 0x20 "$SYSTEM_SPLASH_CLUSTER" "$SPLASH_SIZE"
+make_entry "$DIR_ENTRY_COMDEMO"  'COMDEMO COM' 0x20 "$APPS_COMDEMO_CLUSTER" "$COMDEMO_SIZE"
+make_entry "$DIR_ENTRY_MZDEMO"   'MZDEMO  EXE' 0x20 "$APPS_MZDEMO_CLUSTER" "$MZDEMO_SIZE"
+make_entry "$DIR_ENTRY_FILEIO"   'FILEIO  BIN' 0x20 "$APPS_FILEIO_CLUSTER" "$FILEIO_SIZE"
+make_entry "$DIR_ENTRY_DELTEST"  'DELTEST BIN' 0x20 "$APPS_DELTEST_CLUSTER" "$DELTEST_SIZE"
+make_entry "$DIR_ENTRY_CIUKEDIT" 'CIUKEDITCOM' 0x20 "$APPS_CIUKEDIT_CLUSTER" "$CIUKEDIT_SIZE"
+make_entry "$DIR_ENTRY_GFXRECT"  'GFXRECT COM' 0x20 "$APPS_GFXRECT_CLUSTER" "$GFXRECT_SIZE"
+make_entry "$DIR_ENTRY_GFXSTAR"  'GFXSTAR COM' 0x20 "$APPS_GFXSTAR_CLUSTER" "$GFXSTAR_SIZE"
+
+dd if=/dev/zero of="$SYSTEM_DIR_CLUSTER_BIN" bs=512 count="$FAT_SECTORS_PER_CLUSTER" status=none
+dd if="$DIR_ENTRY_DOT_SYSTEM" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=0 conv=notrunc status=none
+dd if="$DIR_ENTRY_DOTDOT_ROOT" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=32 conv=notrunc status=none
+dd if="$DIR_ENTRY_STAGE2" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=64 conv=notrunc status=none
+dd if="$DIR_ENTRY_SPLASH" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=96 conv=notrunc status=none
+
+dd if=/dev/zero of="$APPS_DIR_CLUSTER_BIN" bs=512 count="$FAT_SECTORS_PER_CLUSTER" status=none
+dd if="$DIR_ENTRY_DOT_APPS" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=0 conv=notrunc status=none
+dd if="$DIR_ENTRY_DOTDOT_ROOT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=32 conv=notrunc status=none
+dd if="$DIR_ENTRY_COMDEMO" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=64 conv=notrunc status=none
+dd if="$DIR_ENTRY_MZDEMO" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=96 conv=notrunc status=none
+dd if="$DIR_ENTRY_FILEIO" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=128 conv=notrunc status=none
+dd if="$DIR_ENTRY_DELTEST" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=160 conv=notrunc status=none
+dd if="$DIR_ENTRY_CIUKEDIT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=192 conv=notrunc status=none
+dd if="$DIR_ENTRY_GFXRECT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=224 conv=notrunc status=none
+dd if="$DIR_ENTRY_GFXSTAR" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=256 conv=notrunc status=none
 
 echo "[build-full] creating 128MB FAT16 image"
 dd if=/dev/zero of="$IMG" bs=512 count="$TOTAL_SECTORS" status=none
@@ -213,31 +355,33 @@ dd if="$BOOT_BIN"           of="$IMG" bs=512 count=1                seek=0      
 dd if="$STAGE1_SLOT_BIN"    of="$IMG" bs=512 count="$STAGE1_SECTORS" seek=1          conv=notrunc status=none
 dd if="$FAT_SECTOR_BIN"     of="$IMG" bs=512 count=1                seek="$FAT1_LBA" conv=notrunc status=none
 dd if="$FAT_SECTOR_BIN"     of="$IMG" bs=512 count=1                seek="$FAT2_LBA" conv=notrunc status=none
-dd if="$ROOT_ENTRY_COMDEMO" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 0))  conv=notrunc status=none
-dd if="$ROOT_ENTRY_MZDEMO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_FILEIO"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_SPLASH"  of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_DELTEST" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_STAGE2"   of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 160)) conv=notrunc status=none
-dd if="$ROOT_ENTRY_CIUKEDIT" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 192)) conv=notrunc status=none
-dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((2 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
-dd if="$MZDEMO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((3 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
-dd if="$FILEIO_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((4 - 2) * FAT_SECTORS_PER_CLUSTER))) count=2 conv=notrunc status=none
-dd if="$SPLASH_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((5 - 2) * FAT_SECTORS_PER_CLUSTER))) count="$SPLASH_SECTORS" conv=notrunc status=none
-dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((6 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
-dd if="$STAGE2_BIN"  of="$IMG" bs=512 seek=$((DATA_LBA + ((7 - 2) * FAT_SECTORS_PER_CLUSTER))) count=1 conv=notrunc status=none
-dd if="$CIUKEDIT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((8 - 2) * FAT_SECTORS_PER_CLUSTER))) count=2 conv=notrunc status=none
+dd if="$ROOT_ENTRY_SYSTEM" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 0)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_APPS" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
+
+dd if="$SYSTEM_DIR_CLUSTER_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_SYSTEM_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$FAT_SECTORS_PER_CLUSTER" conv=notrunc status=none
+dd if="$APPS_DIR_CLUSTER_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_APPS_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$FAT_SECTORS_PER_CLUSTER" conv=notrunc status=none
+
+dd if="$STAGE2_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((SYSTEM_STAGE2_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$STAGE2_SECTORS" conv=notrunc status=none
+dd if="$SPLASH_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((SYSTEM_SPLASH_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$SPLASH_SECTORS" conv=notrunc status=none
+dd if="$COMDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_COMDEMO_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$COMDEMO_SECTORS" conv=notrunc status=none
+dd if="$MZDEMO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_MZDEMO_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$MZDEMO_SECTORS" conv=notrunc status=none
+dd if="$FILEIO_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_FILEIO_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$FILEIO_SECTORS" conv=notrunc status=none
+dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_DELTEST_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$DELTEST_SECTORS" conv=notrunc status=none
+dd if="$CIUKEDIT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_CIUKEDIT_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$CIUKEDIT_SECTORS" conv=notrunc status=none
+dd if="$GFXRECT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_GFXRECT_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$GFXRECT_SECTORS" conv=notrunc status=none
+dd if="$GFXSTAR_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_GFXSTAR_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$GFXSTAR_SECTORS" conv=notrunc status=none
 
 echo "[build-full] shell-only profile: external desktop payload injection disabled"
 
-cat > build/full/README.txt << 'TXT'
+cat > build/full/README.txt << TXT
 CiukiOS Legacy v2 - Full profile (FAT16 baseline)
 
 Image: ciukios-full.img (128MB)
 State: BIOS stage0 -> stage1 with full DOS runtime and FAT16 file I/O
-Filesystem: FAT16 (SPT=63 Heads=16 128MB) with COMDEMO/MZDEMO/FILEIO/SPLASH/DELTEST/STAGE2/CIUKEDIT payloads
+Filesystem: FAT16 (SPT=63 Heads=16 128MB) with root directories SYSTEM/APPS
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-15
-Data: cluster 2=COMDEMO, 3=MZDEMO, 4=FILEIO, 5=SPLASH, 6=DELTEST, 7=STAGE2, 8=CIUKEDIT
+Data: cluster 2=SYSTEM dir, 3=APPS dir, 4=SYSTEM/STAGE2, ${SYSTEM_SPLASH_CLUSTER}-${SYSTEM_SPLASH_LAST_CLUSTER}=SYSTEM/SPLASH
+Data: cluster ${APPS_COMDEMO_CLUSTER}=APPS/COMDEMO, ${APPS_MZDEMO_CLUSTER}=APPS/MZDEMO, ${APPS_FILEIO_CLUSTER}=APPS/FILEIO, ${APPS_DELTEST_CLUSTER}=APPS/DELTEST, ${APPS_CIUKEDIT_CLUSTER}=APPS/CIUKEDIT, ${APPS_GFXRECT_CLUSTER}=APPS/GFXRECT, ${APPS_GFXSTAR_CLUSTER}=APPS/GFXSTAR
 TXT
 
 echo "[build-full] done: $IMG"

@@ -62,14 +62,18 @@ org 0x0000
 %define MOUSE_VGA_SCALE_SHIFT 1
 %endif
 %if FAT_TYPE == 16
-%define SPLASH_PALETTE_COLORS 32
-%define SPLASH_PALETTE_SIZE (SPLASH_PALETTE_COLORS * 3)
-%define SPLASH_SRC_W 80
-%define SPLASH_SRC_H 50
-%define SPLASH_SCALE_X 4
-%define SPLASH_SCALE_Y 4
-%define SPLASH_PIXEL_BYTES (SPLASH_SRC_W * SPLASH_SRC_H)
-%define SPLASH_TOTAL_SIZE (SPLASH_PALETTE_SIZE + SPLASH_PIXEL_BYTES)
+%define SPLASH_PALETTE_COLORS 256
+%define SPLASH_PALETTE_SIZE 768
+%define SPLASH_SRC_W 160
+%define SPLASH_SRC_H 100
+%define SPLASH_SRC_ROW_BYTES 160
+%define SPLASH_PIXEL_BYTES 16000
+%define SPLASH_TOTAL_SIZE 16768
+%define SPLASH_SCALE_X 5
+%define SPLASH_SCALE_Y 5
+%define SPLASH_VESA_MODE 0x0103
+%define SPLASH_VESA_ROW_BYTES 800
+%define SPLASH_VRAM_SAFE_OFFSET 0xFCE0
 %define SPLASH_BUF_SEG 0x9000
 %define SPLASH_WAIT_TICKS 91
 %endif
@@ -115,6 +119,7 @@ stage1_start:
     call run_bios_diagnostics
     call install_int21_vector
     call init_stage2_services
+    call init_shell_default_dirs
 %if STAGE1_SELFTEST_AUTORUN
     call run_stage1_selftest
 %endif
@@ -185,11 +190,45 @@ print_prompt:
     ret
 
 main_loop:
+%if FAT_TYPE == 16
+    call shell_update_footer
+%endif
     call print_prompt
 
     call read_command_line
     call dispatch_command
     jmp main_loop
+
+init_shell_default_dirs:
+    push ax
+    push dx
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+
+    mov dx, path_system_dir_dos
+    mov ah, 0x39
+    int 0x21
+
+    mov dx, path_apps_dir_dos
+    mov ah, 0x39
+    int 0x21
+
+    mov dx, path_apps_dir_dos
+    mov ah, 0x3B
+    int 0x21
+    jnc .done
+
+    mov dx, path_root_dos
+    mov ah, 0x3B
+    int 0x21
+
+.done:
+    pop ds
+    pop dx
+    pop ax
+    ret
 
 flush_keyboard_buffer:
 .check:
@@ -1157,7 +1196,7 @@ int21_handler:
 .fn_57_year_ok:
     mov cl, 9
     shl ax, cl
-    mov bx, ax
+    xchg bx, ax
 
     xor ax, ax
     mov al, dh
@@ -5964,6 +6003,7 @@ int21_swap_file_handles4:
     mov [cs:file_handle_size_hi], ax
 
     pop ax
+    ret
 int21_swap_file_handles5:
     push ax
 
@@ -6130,8 +6170,6 @@ int21_swap_file_handles8:
     mov [cs:file_handle_size_hi], ax
 
     pop ax
-    ret
-
     ret
 %endif
 
@@ -6325,107 +6363,9 @@ int21_mem_largest_global:
 
 %if FAT_TYPE == 16
 int21_mem_trace_chain:
-    push ax
-
-    mov al, 'M'
-    call serial_putc
-    mov al, '1'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:dos_mem_alloc_seg]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:dos_mem_alloc_size]
-    call print_hex16_serial
-    mov al, ' '
-    call serial_putc
-
-    mov al, '2'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:dos_mem_alloc_seg2]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:dos_mem_alloc_size2]
-    call print_hex16_serial
-    mov al, ' '
-    call serial_putc
-
-    mov al, '3'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:dos_mem_alloc_seg3]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:dos_mem_alloc_size3]
-    call print_hex16_serial
-
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-
-    pop ax
     ret
 
 int21_mem_trace_nomem:
-    push ax
-    push bx
-    push cx
-    push dx
-    push es
-
-    mov al, 'A'
-    call serial_putc
-    mov al, '4'
-    call serial_putc
-    mov al, '8'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, bx
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, cx
-    call print_hex16_serial
-    mov al, ' '
-    call serial_putc
-
-    mov al, 'P'
-    call serial_putc
-    mov al, '='
-    call serial_putc
-    mov ax, [cs:current_psp_seg]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov dx, [cs:current_psp_seg]
-    or dx, dx
-    jz .no_psp
-    mov es, dx
-    mov ax, [es:0x0002]
-    jmp .have_psp_end
-.no_psp:
-    xor ax, ax
-.have_psp_end:
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 %else
 int21_mem_trace_chain:
@@ -8305,6 +8245,8 @@ run_stage1_selftest:
     call int21_smoke_test
     call run_com_demo
     call run_mz_demo
+    call run_gfxrect_demo
+    call run_gfxstar_demo
     call int21_fileio_test
     call int21_find_test
     call int21_move_rename_path_test
@@ -8357,25 +8299,34 @@ stage1_show_boot_splash:
     push ds
     push es
 
-    call vdi_enter_graphics
+    call stage1_splash_set_mode_vesa
+    jc .fail_text
+
     call stage1_splash_load_asset
-    jc .fallback
+    jc .fail_graphics
 
     mov si, msg_splash_serial_ok
     call print_string_serial
 
     call stage1_splash_apply_palette
     call stage1_splash_blit_scaled
-    jmp .wait
+    jc .fail_graphics
 
-.fallback:
-    mov si, msg_splash_serial_fail
-    call print_string_serial
-    call stage1_splash_draw_fallback
-
-.wait:
     call stage1_splash_wait_progress
     call vdi_leave_graphics
+    jmp .done
+
+.fail_graphics:
+    mov si, msg_splash_serial_fail
+    call print_string_serial
+    call vdi_leave_graphics
+    jmp .done
+
+.fail_text:
+    mov si, msg_splash_serial_fail
+    call print_string_serial
+
+.done:
 
     pop es
     pop ds
@@ -8387,51 +8338,94 @@ stage1_show_boot_splash:
     pop ax
     ret
 
-stage1_splash_load_asset:
-    push ax
+stage1_splash_set_mode_vesa:
     push bx
-    push cx
-    push dx
-    push ds
 
-    mov ax, cs
-    mov ds, ax
-    mov dx, path_splash_bin_dos
-    mov ax, 0x3D00
-    int 0x21
-    jc .fail
+    mov ax, 0x4F02
+    mov bx, SPLASH_VESA_MODE
+    int 0x10
+    cmp ax, 0x004F
 
-    mov bx, ax
-    mov ax, SPLASH_BUF_SEG
-    mov ds, ax
-    xor dx, dx
-    mov cx, SPLASH_TOTAL_SIZE
-    mov ah, 0x3F
-    int 0x21
-    jc .close_fail
-    cmp ax, SPLASH_TOTAL_SIZE
-    jne .close_fail
-
-    mov ah, 0x3E
-    int 0x21
+    pop bx
+    jne .fail
     clc
-    jmp .done
-
-.close_fail:
-    push ax
-    mov ah, 0x3E
-    int 0x21
-    pop ax
+    ret
 
 .fail:
     stc
+    ret
 
-.done:
-    pop ds
+stage1_splash_set_bank:
+    push ax
+    push bx
+    push dx
+    push di
+
+    mov ax, 0x4F05
+    xor bx, bx
+    int 0x10
+    cmp ax, 0x004F
+
+    pop di
     pop dx
-    pop cx
     pop bx
     pop ax
+    jne .fail
+    clc
+    ret
+
+.fail:
+    stc
+    ret
+
+stage1_splash_compose_background:
+    ret
+
+stage1_splash_load_asset:
+    push ds
+    push cs
+    pop ds
+
+    mov dx, path_splash_bin_dos
+    mov ax, 0x3D00
+    int 0x21
+    jc .fail_no_handle
+
+    xchg bx, ax
+
+    push word SPLASH_BUF_SEG
+    pop ds
+    xor dx, dx
+    mov di, SPLASH_TOTAL_SIZE
+
+.read_loop:
+    mov cx, 0x0200
+    cmp di, cx
+    jae .read_chunk
+    mov cx, di
+
+.read_chunk:
+    mov ah, 0x3F
+    int 0x21
+    jc .fail_with_handle
+    xchg ax, cx
+    jcxz .done_ok
+    add dx, cx
+    sub di, cx
+    jnz .read_loop
+
+.done_ok:
+    call int21_close
+    clc
+    pop ds
+    ret
+
+.fail_with_handle:
+    call int21_close
+
+.fail_no_handle:
+    stc
+    pop ds
     ret
 
 stage1_splash_apply_palette:
@@ -8475,33 +8469,66 @@ stage1_splash_blit_scaled:
     push ds
     push es
 
+    cld
+
+    xor dx, dx
+    xor di, di
+    call stage1_splash_set_bank
+    jc .fail
+
     mov ax, SPLASH_BUF_SEG
     mov ds, ax
-    mov ax, 0xA000
-    mov es, ax
     mov bx, SPLASH_PALETTE_SIZE
-    xor di, di
-    mov dx, SPLASH_SRC_H
+    mov bp, SPLASH_SRC_H
 
 .row:
-    mov bp, SPLASH_SCALE_Y
-.row_scale:
     mov si, bx
+    push di
+    mov ax, DOS_IO_BUF_SEG
+    mov es, ax
+    xor di, di
     mov cx, SPLASH_SRC_W
-.pixel:
+.expand_x:
     lodsb
     stosb
     stosb
     stosb
     stosb
-    loop .pixel
-    dec bp
-    jnz .row_scale
+    stosb
+    loop .expand_x
+    pop di
 
-    add bx, SPLASH_SRC_W
-    dec dx
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    mov ax, 0xA000
+    mov es, ax
+    mov cx, SPLASH_SCALE_Y
+    ; Render a 570px image from 100px source (6x for first 70 rows, then 5x).
+    cmp bp, 30
+    jbe .copy_y
+    inc cx
+.copy_y:
+    call stage1_splash_copy_row_to_vram
+    jc .fail_restore_ds
+    loop .copy_y
+
+    mov ax, SPLASH_BUF_SEG
+    mov ds, ax
+    add bx, SPLASH_SRC_ROW_BYTES
+    dec bp
     jnz .row
 
+    clc
+    jmp .done
+
+.fail_restore_ds:
+    mov ax, SPLASH_BUF_SEG
+    mov ds, ax
+
+.fail:
+    stc
+
+.done:
     pop es
     pop ds
     pop bp
@@ -8513,40 +8540,154 @@ stage1_splash_blit_scaled:
     pop ax
     ret
 
+stage1_splash_copy_row_to_vram:
+    push bx
+    push cx
+    push si
+
+    xor si, si
+    cmp di, SPLASH_VRAM_SAFE_OFFSET
+    jb .single_chunk
+
+    mov cx, 0
+    sub cx, di
+    mov bx, cx
+    rep movsb
+
+    inc dx
+    call stage1_splash_set_bank
+    jc .fail
+
+    xor di, di
+    mov cx, SPLASH_VESA_ROW_BYTES
+    sub cx, bx
+    rep movsb
+    jmp .done
+
+.single_chunk:
+    mov cx, SPLASH_VESA_ROW_BYTES
+    rep movsb
+
+.done:
+    clc
+    pop si
+    pop cx
+    pop bx
+    ret
+
+.fail:
+    stc
+    pop si
+    pop cx
+    pop bx
+    ret
+
+stage1_splash_overlay:
+    ret
+
 stage1_splash_draw_fallback:
+    ret
+
+stage1_splash_draw_progress_bar:
     push ax
     push bx
+    push cx
     push dx
     push si
     push di
+    push bp
+    push ds
+    push es
 
-    mov al, 1
-    call vdi_clear_screen
+    mov bp, ax
+    cmp bp, 40
+    jbe .count_ok
+    mov bp, 40
+.count_ok:
 
-    mov bx, 0
-    mov dx, 0
-    mov si, 320
-    mov di, 140
-    mov al, 4
-    call vdi_bar
+    mov ax, 570
+    mov bx, SPLASH_VESA_ROW_BYTES
+    mul bx
+    mov di, ax
+    call stage1_splash_set_bank
+    jc .fail
 
-    mov bx, 0
-    mov dx, 140
-    mov si, 320
-    mov di, 60
-    mov al, 1
-    call vdi_bar
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    mov bx, 30
+    mov si, 570
 
-    mov bx, 16
-    mov dx, 16
-    mov si, 288
-    mov di, 152
-    mov al, 15
-    call vdi_box
+.row_loop:
+    cmp bx, 0
+    je .done_rows
 
+    push di
+
+    mov ax, DOS_IO_BUF_SEG
+    mov es, ax
+    xor di, di
+    mov al, 253
+    mov cx, SPLASH_VESA_ROW_BYTES
+    rep stosb
+
+    mov di, 120
+    mov al, 253
+    mov cx, 560
+    rep stosb
+
+    cmp si, 577
+    jb .copy_row
+    cmp si, 592
+    ja .copy_row
+
+    mov di, 122
+    mov al, 254
+    mov cx, 556
+    rep stosb
+
+    cmp si, 581
+    jb .copy_row
+    cmp si, 588
+    ja .copy_row
+    mov cx, bp
+    jcxz .copy_row
+
+    mov di, 122
+.block_loop:
+    mov al, 255
+    push cx
+    mov cx, 10
+    rep stosb
+    add di, 4
+    pop cx
+    loop .block_loop
+
+.copy_row:
+    pop di
+    mov ax, 0xA000
+    mov es, ax
+    call stage1_splash_copy_row_to_vram
+    jc .fail
+
+    inc si
+    dec bx
+    jmp .row_loop
+
+.done_rows:
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop bp
     pop di
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -8558,27 +8699,12 @@ stage1_splash_wait_progress:
     push dx
     push si
     push di
+    push bp
+    push ds
+    push es
 
-    mov bx, 8
-    mov dx, 184
-    mov si, 304
-    mov di, 12
-    mov al, 0
-    call vdi_bar
-
-    mov bx, 8
-    mov dx, 184
-    mov si, 304
-    mov di, 12
-    mov al, 15
-    call vdi_box
-
-    mov bx, 10
-    mov dx, 186
-    mov si, 300
-    mov di, 8
-    mov al, 8
-    call vdi_bar
+    xor ax, ax
+    call stage1_splash_draw_progress_bar
 
     call gfx_get_tick_count
     mov [cs:splash_wait_start_tick], dx
@@ -8593,41 +8719,23 @@ stage1_splash_wait_progress:
     mov ax, dx
     sub ax, [cs:splash_wait_start_tick]
     cmp ax, SPLASH_WAIT_TICKS
-    jae .done
+    jae .done_fill
 
-    mov bx, 300
+    mov bx, 40
     mul bx
     mov bx, SPLASH_WAIT_TICKS
     div bx
-
-    mov bx, 10
-    mov dx, 186
-    mov si, ax
-    mov di, 8
-    mov al, 10
-    call vdi_bar
-
-    mov bx, 10
-    add bx, ax
-    cmp bx, 306
-    jbe .head_ok
-    mov bx, 306
-.head_ok:
-    mov dx, 186
-    mov si, 4
-    mov di, 8
-    mov al, 14
-    call vdi_bar
+    call stage1_splash_draw_progress_bar
     jmp .loop
 
-.done:
-    mov bx, 10
-    mov dx, 186
-    mov si, 300
-    mov di, 8
-    mov al, 10
-    call vdi_bar
+.done_fill:
+    mov ax, 40
+    call stage1_splash_draw_progress_bar
 
+.done:
+    pop es
+    pop ds
+    pop bp
     pop di
     pop si
     pop dx
@@ -9245,6 +9353,54 @@ run_mz_demo:
     call print_string_serial
     ret
 
+run_gfxrect_demo:
+    mov dx, path_gfxrect_dos
+    mov al, 0x71
+    mov si, msg_gfxrect_serial_pass
+    mov di, msg_gfxrect_serial_fail
+    call run_expected_com_demo
+    ret
+
+run_gfxstar_demo:
+    mov dx, path_gfxstar_dos
+    mov al, 0x72
+    mov si, msg_gfxstar_serial_pass
+    mov di, msg_gfxstar_serial_fail
+    call run_expected_com_demo
+    ret
+
+run_expected_com_demo:
+    push ax
+    push si
+    push di
+
+    mov ax, cs
+    mov ds, ax
+    xor bx, bx
+    mov ax, 0x4B00
+    int 0x21
+    jc .serial_fail_pop
+
+    mov ah, 0x4D
+    int 0x21
+    pop di
+    pop si
+    pop bx
+    cmp byte [last_exit_code], bl
+    jne .serial_fail
+
+    call print_string_serial
+    ret
+
+.serial_fail_pop:
+    pop di
+    pop si
+    pop bx
+.serial_fail:
+    mov si, di
+    call print_string_serial
+    ret
+
 load_root_file_first_sector:
     push ax
     push bx
@@ -9583,10 +9739,6 @@ dispatch_command:
     call str_eq
     jc .cmd_ver
     mov di, bx
-    mov si, str_tree
-    call str_eq
-    jc .cmd_tree
-    mov di, bx
     mov si, str_cls
     call str_eq
     jc .cmd_cls
@@ -9683,6 +9835,14 @@ dispatch_command:
     call str_eq
     jc .cmd_gfxdemo
     mov di, bx
+    mov si, str_gfxrect
+    call str_eq
+    jc .cmd_gfxrect
+    mov di, bx
+    mov si, str_gfxstar
+    call str_eq
+    jc .cmd_gfxstar
+    mov di, bx
     mov si, str_findtest
     call str_eq
     jc .cmd_findtest
@@ -9719,10 +9879,6 @@ dispatch_command:
     mov si, msg_banner_title
     call print_string_dual
     call print_newline_dual
-    jmp .done
-
-.cmd_tree:
-    call print_shell_tree
     jmp .done
 
 .cmd_cls:
@@ -9825,6 +9981,14 @@ dispatch_command:
 
 .cmd_gfxdemo:
     call run_gfx_demo
+    jmp .done
+
+.cmd_gfxrect:
+    call run_gfxrect_demo
+    jmp .done
+
+.cmd_gfxstar:
+    call run_gfxstar_demo
     jmp .done
 
 .cmd_findtest:
@@ -11048,6 +11212,7 @@ draw_shell_chrome:
     mov bl, 0x07
     call clear_screen_attr
 
+%if FAT_TYPE == 16
     mov al, ' '
     mov dh, 0
     mov dl, 0
@@ -11056,6 +11221,40 @@ draw_shell_chrome:
     mov cl, 80
     call draw_hline_attr
 
+    mov si, msg_banner_title
+    mov dh, 0
+    mov dl, 19
+    mov bl, 0x1F
+    call video_write_string_attr
+
+    mov al, '='
+    mov dh, 1
+    mov dl, 0
+    mov bl, 0x08
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
+
+    mov al, '='
+    mov dh, 23
+    mov dl, 0
+    mov bl, 0x08
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
+
+    call shell_update_footer
+
+    mov dh, 2
+    mov dl, 0
+%else
+    mov al, ' '
+    mov dh, 0
+    mov dl, 0
+    mov bl, 0x1F
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
 
     mov si, msg_banner_title
     mov dh, 0
@@ -11097,6 +11296,7 @@ draw_shell_chrome:
 
     mov dh, 2
     xor dl, dl
+%endif
     call set_cursor_pos
 
     pop si
@@ -11105,6 +11305,149 @@ draw_shell_chrome:
     pop bx
     pop ax
     ret
+
+%if FAT_TYPE == 16
+shell_update_footer:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+
+    push cs
+    pop ds
+
+    mov al, ' '
+    mov dh, 24
+    mov dl, 0
+    mov bl, 0x30
+    xor cx, cx
+    mov cl, 80
+    call draw_hline_attr
+
+    mov si, msg_shell_status
+    mov dh, 24
+    mov dl, 1
+    mov bl, 0x30
+    call video_write_string_attr
+
+    mov ax, [cs:dos_mem_alloc_size]
+    add ax, [cs:dos_mem_alloc_size2]
+    add ax, [cs:dos_mem_alloc_size3]
+    cmp ax, 0
+    jne .ram_from_alloc
+
+    call int21_mem_query_free
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    mov bx, ax
+
+    int 0x12
+    sub ax, bx
+    jnc .ram_ready
+    xor ax, ax
+    jmp .ram_ready
+
+.ram_from_alloc:
+    add ax, 63
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+
+.ram_ready:
+
+    mov di, shell_footer_ram_buf
+    call shell_u16_to_dec
+
+    mov si, shell_footer_ram_buf
+    xor cx, cx
+.len_loop:
+    cmp byte [si], 0
+    je .len_ready
+    inc si
+    inc cx
+    jmp .len_loop
+
+.len_ready:
+    mov dl, 75
+    sub dl, cl
+
+    mov si, msg_shell_ram_prefix
+    mov dh, 24
+    mov bl, 0x30
+    call video_write_string_attr
+
+    mov si, shell_footer_ram_buf
+    mov dh, 24
+    add dl, 4
+    mov bl, 0x30
+    call video_write_string_attr
+
+    add dl, cl
+    mov al, 'K'
+    mov dh, 24
+    mov bl, 0x30
+    call video_write_char_attr
+
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_u16_to_dec:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+
+    xor cx, cx
+    cmp ax, 0
+    jne .div_loop
+    mov byte [di], '0'
+    mov byte [di + 1], 0
+    jmp .done
+
+.div_loop:
+    mov bx, 10
+.div_next:
+    xor dx, dx
+    div bx
+    add dl, '0'
+    push dx
+    inc cx
+    test ax, ax
+    jnz .div_next
+
+.pop_loop:
+    pop dx
+    mov [di], dl
+    inc di
+    loop .pop_loop
+    mov byte [di], 0
+
+.done:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 print_shell_help:
     mov si, msg_help_header
@@ -11116,17 +11459,6 @@ print_shell_help:
     mov si, msg_help_system
     call print_string_dual
     mov si, msg_help_apps
-    call print_string_dual
-    ret
-
-print_shell_tree:
-    mov si, msg_tree_header
-    call print_string_dual
-    mov si, msg_tree_root
-    call print_string_dual
-    mov si, msg_tree_system
-    call print_string_dual
-    mov si, msg_tree_apps
     call print_string_dual
     ret
 
@@ -11198,6 +11530,46 @@ putc_dual:
 bios_putc:
     push ax
     push bx
+    cmp al, 0x0A
+    jne .teletype
+
+    push cx
+    push dx
+
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10
+%if FAT_TYPE == 16
+    cmp dh, 22
+    jb .lf_teletype
+
+    mov ax, 0x0601
+    mov bh, 0x07
+    mov cx, 0x0200
+    mov dx, 0x164F
+    int 0x10
+%else
+    cmp dh, 24
+    jb .lf_teletype
+
+    mov ax, 0x0601
+    mov bh, 0x07
+    mov cx, 0x0200
+    mov dx, 0x184F
+    int 0x10
+%endif
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.lf_teletype:
+    pop dx
+    pop cx
+
+.teletype:
     mov ah, 0x0E
     mov bx, 0x0007
     int 0x10
@@ -11309,20 +11681,37 @@ init_stage2_services:
 run_stage2_payload:
     push ax
     push bx
+    push cx
+    push dx
     push ds
     push es
 
+    push cs
+    pop ds
     mov si, msg_stage2_autorun_begin
     call print_string_serial
 
+    mov dx, path_stage2_dos
+    mov ax, 0x3D00
+    int 0x21
+    jc .load_fail
+    mov bx, ax
+
     mov ax, STAGE2_LOAD_SEG
-    mov es, ax
+    mov ds, ax
+    xor dx, dx
+    mov cx, 512
+    mov ah, 0x3F
+    int 0x21
+    jc .close_fail
+    cmp ax, 512
+    jne .close_fail
+
+    mov ah, 0x3E
+    int 0x21
+
     push cs
     pop ds
-    xor bx, bx
-    mov si, path_stage2_dos
-    call load_root_file_first_sector
-    jc .load_fail
 
     mov si, msg_stage2_autorun_loaded
     call print_string_serial
@@ -11334,6 +11723,14 @@ run_stage2_payload:
     clc
     jmp .done
 
+.close_fail:
+    push ax
+    mov ah, 0x3E
+    int 0x21
+    pop ax
+    push cs
+    pop ds
+
 .load_fail:
     mov byte [cs:stage2_autorun_status], 2
     mov si, msg_stage2_autorun_fail
@@ -11343,6 +11740,8 @@ run_stage2_payload:
 .done:
     pop es
     pop ds
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -12884,16 +13283,16 @@ shell_copy_dst_cluster dw 0
 %endif
 
 msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
-msg_diag_begin    db "[STAGE1] diag", 13, 10, 0
-msg_diag_int10    db "[INT10] OK", 13, 10, 0
-msg_diag_int13_ok db "[INT13] OK", 13, 10, 0
-msg_diag_int16_ok db "[INT16] OK", 13, 10, 0
+msg_diag_begin    db "[S1] d", 13, 10, 0
+msg_diag_int10    db "[10]", 13, 10, 0
+msg_diag_int13_ok db "[13]", 13, 10, 0
+msg_diag_int16_ok db "[16]", 13, 10, 0
 msg_diag_int1a    db "[TICKS] 0x", 0
 msg_int21_installed db "[INT21] ok", 13, 10, 0
 msg_int21_missing db "[I21] no", 13, 10, 0
 msg_int21_unsup db "[INT21-UNSUP] AH=", 0
 msg_int21_err db "[IERR] ", 0
-msg_trace_4b db "[T4B]", 0
+msg_trace_4b db "4", 0
 msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
 msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
@@ -12902,18 +13301,18 @@ msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
 msg_banner_title db "CiukiOS pre-Alpha v0.5.3 (CiukiDOS Shell)", 0
+%if FAT_TYPE == 16
+msg_shell_status db "Type Help to see all command list.", 0
+msg_shell_ram_prefix db "RAM:", 0
+%endif
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
 msg_help_header db "--- CiukiDOS Commands ---", 13, 10, "Command - short description", 13, 10, 0
-msg_help_core db "  help - show this guide", 13, 10, "  ver - show system version", 13, 10, "  cls - clear screen", 13, 10, "  dir - list files and directories", 13, 10, "  tree - show directory tree", 13, 10, 0
+msg_help_core db "  help - show this guide", 13, 10, "  ver - show system version", 13, 10, "  cls - clear screen", 13, 10, "  dir - list files and directories", 13, 10, 0
 msg_help_runtime db "  cd <path> - change directory", 13, 10, "  cd.. - go to parent directory", 13, 10, "  copy <src> <dst> - copy file", 13, 10, "  del <file> - delete file", 13, 10, "  type <file> - show file contents", 13, 10, "  run <path|name> - run EXE/COM program", 13, 10, 0
 msg_help_system db "  md/mkdir <dir> - create directory", 13, 10, "  rd/rmdir <dir> - remove directory", 13, 10, "  ren/rename <a> <b> - rename entry", 13, 10, 0
-msg_help_apps db "  exit - exit shell", 13, 10, "  reboot - reboot system", 13, 10, 0
-msg_tree_header db "tree", 13, 10, 0
-msg_tree_root db "  ROOT", 13, 10, 0
-msg_tree_system db "   |- SYSTEM", 13, 10, 0
-msg_tree_apps db "   `- APPS", 13, 10, 0
+msg_help_apps db "  gfxrect", 13, 10, "  gfxstar", 13, 10, "  exit - exit shell", 13, 10, "  reboot - reboot system", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
 msg_dos21_begin db "[DOS21] smoke", 13, 10, 0
@@ -12939,6 +13338,10 @@ msg_find_serial_fail db "[FIND-SERIAL] FAIL", 13, 10, 0
 msg_gfx_begin db "[GFX] run", 13, 10, 0
 msg_gfx_done db "[GFX] done", 13, 10, 0
 msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
+msg_gfxrect_serial_pass db "[GFXRECT-SERIAL] PASS", 0
+msg_gfxrect_serial_fail db "[GFXRECT-SERIAL] FAIL", 0
+msg_gfxstar_serial_pass db "[GFXSTAR-SERIAL] PASS", 0
+msg_gfxstar_serial_fail db "[GFXSTAR-SERIAL] FAIL", 0
 msg_mvren_serial_pass db "[MVR] PASS", 13, 10, 0
 msg_mvren_serial_fail db "[MVR] FAIL", 13, 10, 0
 msg_rebooting db "rebooting...", 13, 10, 0
@@ -12961,7 +13364,6 @@ gfx_text_timer db "KEY EXIT", 0
 
 str_help   db "help", 0
 str_ver    db "ver", 0
-str_tree   db "tree", 0
 str_cls    db "cls", 0
 str_ticks  db "ticks", 0
 str_drive  db "drive", 0
@@ -12986,6 +13388,8 @@ str_comdemo db "comdemo", 0
 str_mzdemo db "mzdemo", 0
 str_fileio db "fileio", 0
 str_gfxdemo db "gfxdemo", 0
+str_gfxrect db "gfxrect", 0
+str_gfxstar db "gfxstar", 0
 str_findtest db "findtest", 0
 str_mouse db "mouse", 0
 str_keytest db "keytest", 0
@@ -12994,18 +13398,20 @@ str_halt   db "halt", 0
 str_ext_com db ".COM", 0
 str_ext_exe db ".EXE", 0
 
-path_comdemo_dos db "COMDEMO.COM", 0
-path_mzdemo_dos  db "MZDEMO.EXE", 0
-path_fileio_dos  db "FILEIO.BIN", 0
-path_deltest_dos db "DELTEST.BIN", 0
-cmd_selftest_mv db "mv COMDEMO.COM \T", 0
-cmd_selftest_rename db "ren \T\COMDEMO.COM \T\C.COM", 0
-cmd_selftest_restore db "ren \T\C.COM COMDEMO.COM", 0
-path_mvren_dir_dos db "\T", 0
-path_mvren_final_dos db "\T\C.COM", 0
+path_comdemo_dos db "\APPS\COMDEMO.COM", 0
+path_mzdemo_dos  db "\APPS\MZDEMO.EXE", 0
+path_fileio_dos  db "\APPS\FILEIO.BIN", 0
+path_deltest_dos db "\APPS\DELTEST.BIN", 0
+path_gfxrect_dos db "\APPS\GFXRECT.COM", 0
+path_gfxstar_dos db "\APPS\GFXSTAR.COM", 0
+cmd_selftest_mv db "mv \APPS\COMDEMO.COM \APPS\T", 0
+cmd_selftest_rename db "ren \APPS\T\COMDEMO.COM \APPS\T\C.COM", 0
+cmd_selftest_restore db "ren \APPS\T\C.COM \APPS\COMDEMO.COM", 0
+path_mvren_dir_dos db "\APPS\T", 0
+path_mvren_final_dos db "\APPS\T\C.COM", 0
 %if FAT_TYPE == 16
-path_stage2_dos db "STAGE2  BIN"
-path_splash_bin_dos db "SPLASH.BIN", 0
+path_stage2_dos db "\SYSTEM\STAGE2.BIN", 0
+path_splash_bin_dos db "\SYSTEM\SPLASH.BIN", 0
 msg_splash_serial_ok db "[SPLASH] LOAD OK", 13, 10, 0
 msg_splash_serial_fail db "[SPLASH] LOAD FAIL", 13, 10, 0
 %endif
@@ -13018,10 +13424,15 @@ path_dotdot_fat    db "..         "
 %if FAT_TYPE == 16
 path_gem_exe_abs db "\\SYSTEM\\DESKTOP\\GEM.EXE", 0
 %endif
+path_system_dir_dos db "\SYSTEM", 0
+path_apps_dir_dos db "\APPS", 0
 path_parent_dos  db "..", 0
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
 cwd_cluster dw 0
+%if FAT_TYPE == 16
+shell_footer_ram_buf times 6 db 0
+%endif
 %if FAT_TYPE == 12
 ram_buf times 6 db 0
 %endif
