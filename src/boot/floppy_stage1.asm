@@ -394,6 +394,9 @@ int21_handler:
     push es
 
     push ax
+    mov bp, sp
+    mov ax, [ss:bp + 20]
+    mov [cs:int21_trace_call_cs], ax
     mov ax, ds
     mov [cs:int21_caller_ds], ax
     pop ax
@@ -402,22 +405,6 @@ int21_handler:
     mov byte [cs:int21_zf_state], 0xFF
     mov byte [cs:int21_last_ah], ah
     mov byte [cs:int21_last_al], al
-    push ax
-    mov bp, sp
-    mov ax, [ss:bp + 18]
-    mov [cs:int21_trace_call_ip], ax
-    mov ax, [ss:bp + 20]
-    mov [cs:int21_trace_call_cs], ax
-    mov ax, ss
-    mov [cs:int21_trace_call_ss], ax
-    mov ax, [ss:bp + 24]
-    mov [cs:int21_trace_call_stk0], ax
-    mov ax, [ss:bp + 26]
-    mov [cs:int21_trace_call_stk1], ax
-    mov ax, [ss:bp + 28]
-    mov [cs:int21_trace_call_stk2], ax
-    pop ax
-    call int21_trace_call
 
     cmp ah, 0x00
     je .fn_00
@@ -697,108 +684,6 @@ int21_handler:
 
 .fn_2c:
     call int21_get_time
-    pushf
-    cmp dx, [cs:int21_trace2c_dx]
-    je .fn_2c_trace_done
-    mov [cs:int21_trace2c_dx], dx
-    cmp byte [cs:int21_trace2c_count], 20
-    jae .fn_2c_trace_done
-    inc byte [cs:int21_trace2c_count]
-    mov bp, sp
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push ds
-    push es
-    mov al, 'T'
-    call serial_putc
-    mov ax, [ss:bp + 20]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [ss:bp + 18]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, [cs:int21_trace2c_dx]
-    call print_hex16_serial
-    mov al, ';'
-    call serial_putc
-    mov ax, ss
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [ss:bp + 24]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 26]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 28]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 30]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 32]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 34]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 36]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 38]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 40]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 42]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 44]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 46]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 48]
-    call print_hex16_serial
-    mov al, ','
-    call serial_putc
-    mov ax, [ss:bp + 50]
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.fn_2c_trace_done:
-    popf
     jc .error
     jmp .success
 
@@ -998,79 +883,7 @@ int21_handler:
     jmp .success
 
 .fn_48:
-    cmp byte [cs:int21_trace48_count], 12
-    jae .fn_48_trace_done
-    inc byte [cs:int21_trace48_count]
-    mov bp, sp
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push ds
-    push es
-    mov al, 'B'
-    call serial_putc
-    mov ax, [ss:bp + 18]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [ss:bp + 16]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, bx
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.fn_48_trace_done:
     call int21_alloc
-    pushf
-    cmp byte [cs:int21_trace48_ret_count], 12
-    jae .fn_48_ret_trace_done
-    inc byte [cs:int21_trace48_ret_count]
-    mov [cs:int21_trace48_ax], ax
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push ds
-    push es
-    mov al, 'b'
-    call serial_putc
-    mov ax, [cs:int21_trace48_ax]
-    call print_hex16_serial
-    mov al, '/'
-    call serial_putc
-    mov ax, bx
-    call print_hex16_serial
-    mov al, 13
-    call serial_putc
-    mov al, 10
-    call serial_putc
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.fn_48_ret_trace_done:
-    popf
     jc .fn_48_error_restore
     mov bp, sp
     mov bx, [ss:bp + 14]
@@ -1315,6 +1128,24 @@ int21_handler:
     jmp .error
 
 .success:
+%if FAT_TYPE == 16
+    push ax
+    mov al, [cs:int21_last_ah]
+    cmp al, 0x39
+    je .mark_disk_dirty
+    cmp al, 0x3A
+    je .mark_disk_dirty
+    cmp al, 0x3C
+    je .mark_disk_dirty
+    cmp al, 0x41
+    je .mark_disk_dirty
+    cmp al, 0x56
+    jne .mark_done
+.mark_disk_dirty:
+    mov byte [cs:shell_footer_dsk_dirty], 1
+.mark_done:
+    pop ax
+%endif
     mov byte [cs:int21_carry], 0
     jmp .done
 
@@ -1654,9 +1485,6 @@ int21_exec:
 .third_exec_seg:
     mov al, 'D'
     call serial_putc
-    mov byte [cs:int21_trace_call_count], 0
-    mov byte [cs:int21_trace48_count], 0
-    mov byte [cs:int21_trace48_ret_count], 0
     mov word [cs:current_load_seg], MZ3_LOAD_SEG
 .do_exec_mz:
     call int21_exec_load_mz
@@ -5090,6 +4918,9 @@ int21_write:
     jc .io_error
 
 .done_ok:
+%if FAT_TYPE == 16
+    mov byte [cs:shell_footer_dsk_dirty], 1
+%endif
     mov ax, [cs:tmp_rw_done]
     clc
     jmp .done
@@ -6779,9 +6610,13 @@ int21_resize:
 .resize_entry:
     mov ax, es
     cmp ax, [cs:current_psp_seg]
-    jne .check_heap_block
+    je .check_psp_zero
+    jmp .check_heap_block
+.check_psp_zero:
     cmp ax, 0
-    je .check_heap_block
+    jne .check_psp_size
+    jmp .check_heap_block
+.check_psp_size:
     cmp bx, 0
     je .no_memory
 
@@ -10022,10 +9857,40 @@ dispatch_command:
 
 read_command_line:
     mov di, cmd_buffer
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10
+
     mov cx, CMD_BUF_LEN - 1
+    mov al, 79
+    cmp dl, 79
+    jbe .cap_line
+    xor al, al
+    jmp .cap_ready
+.cap_line:
+    sub al, dl
+.cap_ready:
+    xor ah, ah
+    cmp ax, cx
+    jae .cap_done
+    mov cx, ax
+.cap_done:
+%if FAT_TYPE == 16
+    mov byte [cs:shell_footer_tick_key_activity], 0
+%endif
 .read_key:
+%if FAT_TYPE == 16
+    call shell_footer_poll
+%endif
+    mov ah, 0x01
+    int 0x16
+    jz .read_key
+
     xor ah, ah
     int 0x16
+%if FAT_TYPE == 16
+    mov byte [cs:shell_footer_tick_key_activity], 1
+%endif
 
     cmp al, 0x0D
     je .finish
@@ -11333,6 +11198,50 @@ shell_update_footer:
     mov bl, 0x30
     call video_write_string_attr
 
+    mov al, [cs:shell_footer_cpu_pct]
+    mov di, shell_footer_pct_buf
+    call shell_u8_to_dec2
+
+    mov si, msg_shell_cpu_prefix
+    mov dh, 24
+    mov dl, 52
+    mov bl, 0x30
+    call video_write_string_attr
+
+    mov si, shell_footer_pct_buf
+    mov dh, 24
+    mov dl, 56
+    mov bl, 0x30
+    call video_write_string_attr
+
+    mov al, '%'
+    mov dh, 24
+    mov dl, 58
+    mov bl, 0x30
+    call video_write_char_attr
+
+    mov al, [cs:shell_footer_dsk_pct]
+    mov di, shell_footer_pct_buf
+    call shell_u8_to_dec2
+
+    mov si, msg_shell_dsk_prefix
+    mov dh, 24
+    mov dl, 60
+    mov bl, 0x30
+    call video_write_string_attr
+
+    mov si, shell_footer_pct_buf
+    mov dh, 24
+    mov dl, 64
+    mov bl, 0x30
+    call video_write_string_attr
+
+    mov al, '%'
+    mov dh, 24
+    mov dl, 66
+    mov bl, 0x30
+    call video_write_char_attr
+
     mov ax, [cs:dos_mem_alloc_size]
     add ax, [cs:dos_mem_alloc_size2]
     add ax, [cs:dos_mem_alloc_size3]
@@ -11402,6 +11311,177 @@ shell_update_footer:
     pop ds
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_u8_to_dec2:
+    push ax
+    push bx
+
+    xor ah, ah
+    mov bl, 10
+    div bl
+    add al, '0'
+    mov [di], al
+    mov al, ah
+    add al, '0'
+    mov [di + 1], al
+    mov byte [di + 2], 0
+
+    pop bx
+    pop ax
+    ret
+
+shell_footer_poll:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov ah, 0x00
+    int 0x1A
+
+    cmp word [cs:shell_footer_last_tick], 0xFFFF
+    jne .have_last_tick
+    mov [cs:shell_footer_last_tick], dx
+    call shell_footer_compute_cpu_pct
+    call shell_footer_maybe_refresh_disk
+    call shell_update_footer
+    jmp .done
+
+.have_last_tick:
+    cmp dx, [cs:shell_footer_last_tick]
+    je .done
+
+    cmp byte [cs:shell_footer_tick_key_activity], 0
+    jne .tick_busy
+    cmp word [cs:shell_footer_cpu_idle_ticks], 0xFFFF
+    je .tick_counted
+    inc word [cs:shell_footer_cpu_idle_ticks]
+    jmp .tick_counted
+
+.tick_busy:
+    cmp word [cs:shell_footer_cpu_busy_ticks], 0xFFFF
+    je .tick_counted
+    inc word [cs:shell_footer_cpu_busy_ticks]
+
+.tick_counted:
+    mov byte [cs:shell_footer_tick_key_activity], 0
+    mov [cs:shell_footer_last_tick], dx
+
+    mov ax, [cs:shell_footer_cpu_idle_ticks]
+    add ax, [cs:shell_footer_cpu_busy_ticks]
+    cmp ax, 120
+    jb .recompute
+    shr word [cs:shell_footer_cpu_idle_ticks], 1
+    shr word [cs:shell_footer_cpu_busy_ticks], 1
+
+.recompute:
+    call shell_footer_compute_cpu_pct
+    call shell_footer_maybe_refresh_disk
+    call shell_update_footer
+
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_footer_compute_cpu_pct:
+    push ax
+    push bx
+    push dx
+
+    mov ax, [cs:shell_footer_cpu_idle_ticks]
+    add ax, [cs:shell_footer_cpu_busy_ticks]
+    cmp ax, 0
+    jne .have_total
+    mov byte [cs:shell_footer_cpu_pct], 0
+    jmp .done
+
+.have_total:
+    mov bx, ax
+    mov ax, [cs:shell_footer_cpu_busy_ticks]
+    mov dx, 99
+    mul dx
+    add ax, bx
+    dec ax
+    div bx
+
+.store:
+    mov [cs:shell_footer_cpu_pct], al
+
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+shell_footer_maybe_refresh_disk:
+    push ax
+
+    cmp byte [cs:shell_footer_dsk_dirty], 1
+    je .refresh
+    mov ax, [cs:shell_footer_last_tick]
+    sub ax, [cs:shell_footer_dsk_last_scan_tick]
+    cmp ax, 54
+    jb .done
+
+.refresh:
+    call shell_footer_refresh_disk_pct
+    jc .done
+    mov ax, [cs:shell_footer_last_tick]
+    mov [cs:shell_footer_dsk_last_scan_tick], ax
+    mov byte [cs:shell_footer_dsk_dirty], 0
+
+.done:
+    pop ax
+    ret
+
+shell_footer_refresh_disk_pct:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    xor dx, dx
+    mov bx, 2
+    mov cx, FAT_SECTORS_PER_FAT * 256 - 2
+
+.scan_loop:
+    mov ax, bx
+    call fat12_get_entry_cached
+    jc .fail
+    cmp ax, 0
+    je .next
+    inc dx
+
+.next:
+    inc bx
+    loop .scan_loop
+    mov ax, dx
+    mov bx, 99
+    mul bx
+    mov bx, FAT_SECTORS_PER_FAT * 256 - 2
+    add ax, bx
+    adc dx, 0
+    sub ax, 1
+    sbb dx, 0
+    div bx
+
+.store:
+    mov [cs:shell_footer_dsk_pct], al
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
     pop dx
     pop cx
     pop bx
@@ -12999,18 +13079,7 @@ last_exit_code db 0
 int21_last_ah db 0
 int21_last_al db 0
 int21_error_ax dw 0
-int21_trace48_count db 0
-int21_trace48_ret_count db 0
-int21_trace48_ax dw 0
-int21_trace2c_count db 0
-int21_trace2c_dx dw 0
-int21_trace_call_count db 0
-int21_trace_call_ip dw 0
 int21_trace_call_cs dw 0
-int21_trace_call_ss dw 0
-int21_trace_call_stk0 dw 0
-int21_trace_call_stk1 dw 0
-int21_trace_call_stk2 dw 0
 dos_time_centis db 0
 last_term_type db 0
 int21_force_terminate db 0
@@ -13300,9 +13369,11 @@ msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db "CiukiOS pre-Alpha v0.5.3 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.5.4 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 16
-msg_shell_status db "Type Help to see all command list.", 0
+msg_shell_status db "Type Help for commands.", 0
+msg_shell_cpu_prefix db "CPU:", 0
+msg_shell_dsk_prefix db "DSK:", 0
 msg_shell_ram_prefix db "RAM:", 0
 %endif
 %if FAT_TYPE == 12
@@ -13432,6 +13503,15 @@ cwd_buf times 24 db 0
 cwd_cluster dw 0
 %if FAT_TYPE == 16
 shell_footer_ram_buf times 6 db 0
+shell_footer_pct_buf times 3 db 0
+shell_footer_cpu_idle_ticks dw 0
+shell_footer_cpu_busy_ticks dw 0
+shell_footer_last_tick dw 0xFFFF
+shell_footer_dsk_last_scan_tick dw 0
+shell_footer_tick_key_activity db 0
+shell_footer_cpu_pct db 0
+shell_footer_dsk_pct db 0
+shell_footer_dsk_dirty db 1
 %endif
 %if FAT_TYPE == 12
 ram_buf times 6 db 0
