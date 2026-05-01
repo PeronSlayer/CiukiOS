@@ -91,3 +91,6 @@
 78. Decision: formally closed Phase 3 on 2026-04-30 based on v0.5.3 evidence and cross-profile regression stability.
 79. Decision: formally closed Phase 3.5 as a FOUNDATION/PLACEHOLDER baseline; setup artifacts were accepted as closure scope by project decision.
 80. Transition: activated Phase 4 and moved all remaining executable installer implementation/validation work into the Phase 4 installer execution track.
+
+## 2026-05-01
+81. Planning: introduced `docs/external-storage-automount-plan-v0.1.md` to define external storage support scope (USB sticks, additional IDE/SATA disks, floppy automount), drive-letter policy, removable-media change handling, and verification lanes; implementation remains pending.
