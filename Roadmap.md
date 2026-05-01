@@ -55,6 +55,8 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 3. Optimize mode 13h/VGA rendering path.
 4. Add the minimum extender compatibility needed by complex DOS binaries.
 5. Milestone: DOOM boots and is playable.
+- Evidence (2026-05-01): released `CiukiOS pre-Alpha v0.5.4` after shell input stability improvements (hold-key repeat, wrap, backspace) and FAT16 footer telemetry stabilization (`CPU/DSK/RAM`).
+- Evidence (2026-05-01): reran cross-profile build/regression lanes for floppy (FAT12) and full (FAT16) with stable high-level outcomes.
 
 ## Phase 5 - Windows pre-NT Milestones
 1. Expand DOS compatibility required by Windows 3.x/95/98 bootstrap and runtime paths.

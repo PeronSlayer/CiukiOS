@@ -3,6 +3,11 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
+## pre-Alpha v0.5.4 (2026-05-01)
+1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.
+2. Stabilized FAT16 shell footer telemetry (`CPU/DSK/RAM`) with corrected non-stuck stat refresh behavior.
+3. Revalidated cross-profile build and regression lanes on floppy (FAT12) and full (FAT16) profiles.
+
 ## pre-Alpha v0.5.3 (2026-04-30)
 1. Stabilized shell `move/mv` path-command handling across floppy (FAT12) and full (FAT16) runtime profiles.
 2. Fixed `INT 21h AH=56h` rename/move behavior to preserve deterministic DOS file-move semantics.

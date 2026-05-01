@@ -94,3 +94,7 @@
 
 ## 2026-05-01
 81. Planning: introduced `docs/external-storage-automount-plan-v0.1.md` to define external storage support scope (USB sticks, additional IDE/SATA disks, floppy automount), drive-letter policy, removable-media change handling, and verification lanes; implementation remains pending.
+82. Fix: improved Stage1 shell input stability for hold-key repeat, line wrap, and backspace editing behavior.
+83. Fix: stabilized FAT16 shell footer telemetry (`CPU/DSK/RAM`) by correcting refresh logic to prevent stuck runtime stats.
+84. Validation: reran cross-profile build/regression lanes (floppy FAT12 + full FAT16) after the stability set with high-level stable outcomes.
+85. Release: bumped project version to `CiukiOS pre-Alpha v0.5.4` after shell input and footer telemetry stabilization closure.
