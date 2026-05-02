@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-all clean
+.PHONY: help build-floppy build-full qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-doom-taxonomy qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -7,6 +7,7 @@ help:
 	@echo "  make qemu-test-floppy - build + QEMU smoke test (floppy image)"
 	@echo "  make qemu-test-stage1 - interactive Stage1 regression (DOS21 + COM/MZ + file I/O)"
 	@echo "  make qemu-test-full   - build + QEMU smoke test (full image)"
+	@echo "  make qemu-test-full-doom-taxonomy - classify DOOM full-profile taxonomy stages"
 	@echo "  make qemu-test-all    - build + QEMU smoke test (floppy + full)"
 	@echo "  make clean            - remove build artifacts"
 
@@ -24,6 +25,9 @@ qemu-test-stage1:
 
 qemu-test-full:
 	@bash scripts/qemu_test_full.sh
+
+qemu-test-full-doom-taxonomy:
+	@bash scripts/qemu_test_full_doom_taxonomy.sh
 
 qemu-test-all:
 	@bash scripts/qemu_test_all.sh
