@@ -1,14 +1,23 @@
-# CiukiOS Setup Stream (Phase 4 Installer Execution Track)
+# CiukiOS Setup Stream (Phase 3.5 Functional Closure + Phase 4 Follow-up Track)
 
 ## Status update (2026-04-30)
 - Phase 3.5 foundation stream is formally closed as a FOUNDATION/PLACEHOLDER baseline.
 - Closure scope accepted: setup planning artifacts and helper scaffolding already present in repository.
 - Remaining executable installer implementation and validation tasks are moved to the active Phase 4 installer execution track.
 
-## Current objective
-Execute the Phase 4 installer track under `setup/` without changing runtime core files.
+## Status update (2026-05-01)
+- Historical trace preserved: the 2026-04-30 placeholder closure remains part of project history.
+- Phase 3.5 closure is now upgraded to FUNCTIONAL MVP on a FULL-only baseline.
+- Stream C FULL-only packaging baseline implemented: `SETUP.COM` is built from `src/com/setup.asm` and embedded as `APPS/SETUP.COM` in the full FAT16 image.
+- Evidence (2026-05-01): `scripts/qemu_test_full_stage1.sh` PASS.
+- Evidence (2026-05-01): `scripts/qemu_test_setup_full_acceptance.sh` PASS (smoke boot + installer payload marker checks).
+- Scope caveat: full-only baseline remains the installer requirement; floppy lane is not required for this closure.
+- Advanced backlog note: multi-floppy media flow and extended CD installer workflow remain post-MVP items for a later phase.
 
-The stream now focuses on turning the accepted foundation artifacts into an executable, testable DOS-style installer (`SETUP.COM`).
+## Current objective
+Execute the post-MVP installer backlog under `setup/` without changing runtime core files.
+
+The stream now focuses on hardening and extending the functional FULL-only MVP baseline while preserving runtime-core boundaries.
 
 ## Scope and boundaries
 - In scope: installer planning, task tracking, setup-specific helper tooling, setup artifact validation.
@@ -45,6 +54,7 @@ Critical path for active work: Phase B -> Phase C -> Phase D. Phase A is closed 
 
 ### Phase A - Bootstrap baseline (completed)
 - Status: completed and accepted in Phase 3.5 closure scope (2026-04-30).
+- Update (2026-05-01): upgraded to functional FULL-only MVP closure with green validation gates.
 - Evidence artifacts:
   - `setup/README.md` (architecture + plan + acceptance criteria).
   - `setup/SETUP_COM_MVP_CHECKLIST.md` (execution checklist baseline).
@@ -71,7 +81,7 @@ Stream 3 (media contracts):
 
 ### Phase D - Hardening and release gate
 - Regression scenarios for user abort, bad media, and low-space paths.
-- MVP packaging rules for floppy set and CD image payload manifests.
+- Post-MVP packaging rules for advanced media targets (multi-floppy set and extended CD payload manifests).
 - Verifiable output: signed-off checklist and reproducible validation logs.
 
 ## Assignments
@@ -98,7 +108,7 @@ Stream 3 (media contracts):
 6. Checklist in `setup/SETUP_COM_MVP_CHECKLIST.md` is fully checked with evidence.
 
 ## Immediate next action
-Start Phase B implementation tasks from `setup/SETUP_COM_MVP_CHECKLIST.md`.
+Start post-MVP hardening tasks from `setup/SETUP_COM_MVP_CHECKLIST.md`.
 
 Optional baseline verification before implementation:
 

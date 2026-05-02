@@ -2,7 +2,7 @@ bits 16
 org 0x7C00
 
 %define STAGE1_SEG     0x0800
-%define STAGE1_SECTORS 45
+%define STAGE1_SECTORS 50
 
 jmp short boot_start
 nop

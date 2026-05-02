@@ -41,16 +41,18 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 3. CD-ROM distribution: single bootable ISO 9660 image.
 4. Installation flow: drive detection, FAT16 format, file copy, config write.
 5. Component selection: Minimal / Standard / Full.
-**STATUS: CLOSED - FOUNDATION/PLACEHOLDER (2026-04-30)**
-- Closure scope accepted: setup planning and scaffolding artifacts already present in repository.
-- Evidence: `setup/README.md`, `setup/SETUP_COM_MVP_CHECKLIST.md`, and `scripts/setup_prepare_artifacts.sh`.
-- Explicit caveat: this closure does not claim end-to-end executable installer completion.
-- Transition: full installer execution work moves into the active Phase 4 installer execution track.
-- See `setup/README.md` for the active execution backlog.
+**STATUS: CLOSED - FUNCTIONAL MVP (FULL-only) (update 2026-05-01)**
+- Historical trace: Phase 3.5 was first closed as a FOUNDATION/PLACEHOLDER baseline on 2026-04-30.
+- Functional closure update (2026-05-01): MVP installer baseline is executable on the full profile, with `SETUP.COM` packaged in the FAT16 full image.
+- Evidence (2026-05-01): `scripts/qemu_test_full_stage1.sh` PASS.
+- Evidence (2026-05-01): `scripts/qemu_test_setup_full_acceptance.sh` PASS.
+- Scope caveat: closure is full-profile only; floppy lane is not a required installer baseline.
+- Advanced backlog note: multi-floppy distribution and extended CD installer workflow remain post-MVP backlog items for a later phase.
+- See `setup/README.md` for active post-MVP installer backlog tracking.
 
 ## Phase 4 - DOOM Milestone + Installer Execution Track
 **STATUS: ACTIVE (from 2026-04-30)**
-1. Execute installer backlog moved from Phase 3.5 (workflow engine, media swap flow, FAT16 prep, payload copy, config/reporting).
+1. Execute post-MVP installer backlog after the Phase 3.5 functional closure (workflow hardening, advanced media swap flow, extended CD workflow, and expanded failure-path validation).
 2. Produce reproducible installer validation evidence for success/failure scenarios.
 3. Optimize mode 13h/VGA rendering path.
 4. Add the minimum extender compatibility needed by complex DOS binaries.

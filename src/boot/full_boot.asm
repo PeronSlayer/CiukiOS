@@ -2,7 +2,7 @@ bits 16
 org 0x7C00
 
 %define STAGE1_SEG     0x0800
-%define STAGE1_SECTORS 55
+%define STAGE1_SECTORS 61
 %ifndef BOOT_LBA_OFFSET
 %define BOOT_LBA_OFFSET 0
 %endif

@@ -36,6 +36,11 @@
 2. No destructive changes without explicit consent.
 3. Every change must include test status, or a clear reason when tests cannot run.
 
+## Build Profile Rules
+1. The `full` profile is the default and only required build/test target from now on.
+2. Do not run `floppy` build/test lanes unless the user explicitly requests them.
+3. Any new validation checklist must prioritize `full` profile evidence first.
+
 ## UX Invariance Rules
 1. UX is frozen by default: do not change layouts, visual behavior, prompts, flows, labels, colors, spacing, navigation, or interaction patterns unless the user explicitly approves the UX change first.
 2. If a fix requires UX impact, stop and request explicit approval before any UX-affecting edit.

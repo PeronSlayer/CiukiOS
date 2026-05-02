@@ -7,6 +7,19 @@ Use this checklist to track implementation and acceptance evidence for the Phase
 - [x] Installer phased plan baseline documented in `setup/README.md`.
 - [x] Setup execution checklist baseline documented in `setup/SETUP_COM_MVP_CHECKLIST.md`.
 - [x] Setup helper scaffolding available in `scripts/setup_prepare_artifacts.sh`.
+- [x] Historical trace preserved: 2026-04-30 closure recorded as a FOUNDATION/PLACEHOLDER baseline.
+- [x] Functional closure upgrade recorded on 2026-05-01 for a FULL-only MVP baseline.
+
+## Stream C FULL-only packaging status (2026-05-01)
+- [x] Full image build compiles `src/com/setup.asm` and packages `APPS/SETUP.COM` in FAT16 map.
+- [x] Full-only installer acceptance script added: `scripts/qemu_test_setup_full_acceptance.sh`.
+- [x] Packaging acceptance evidence captured with marker checks (directory entry, FAT chain, payload bytes).
+- [x] Full stage1 selftest gate green.
+	- Evidence (2026-05-01): `./scripts/qemu_test_full_stage1.sh` PASS.
+- [x] Full-only installer acceptance gate green.
+	- Evidence (2026-05-01): `./scripts/qemu_test_setup_full_acceptance.sh` PASS (smoke boot + marker checks).
+- [x] Phase 3.5 functional MVP closure formalized as FULL-only baseline.
+	- Scope caveat: multi-floppy and extended CD installer workflows remain post-MVP backlog items.
 
 ## Phase 4 installer execution backlog
 

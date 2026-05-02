@@ -98,3 +98,7 @@
 83. Fix: stabilized FAT16 shell footer telemetry (`CPU/DSK/RAM`) by correcting refresh logic to prevent stuck runtime stats.
 84. Validation: reran cross-profile build/regression lanes (floppy FAT12 + full FAT16) after the stability set with high-level stable outcomes.
 85. Release: bumped project version to `CiukiOS pre-Alpha v0.5.4` after shell input and footer telemetry stabilization closure.
+86. Fix: resolved the loader exec regression affecting COM demo marker emission in the full stage1 selftest path.
+87. Validation: FULL-only gate is green; `scripts/qemu_test_full_stage1.sh` PASS and `scripts/qemu_test_setup_full_acceptance.sh` PASS.
+88. Decision: upgraded Phase 3.5 from the 2026-04-30 FOUNDATION/PLACEHOLDER closure to a FUNCTIONAL MVP closure on the FULL-only baseline.
+89. Backlog note: advanced installer media targets (multi-floppy flow and extended CD workflow) remain post-MVP items for a later phase.
