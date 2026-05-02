@@ -3,6 +3,7 @@ org 0x0000
 
 %define CMD_BUF_LEN 64
 %define SHELL_EXEC_PATH_BUF_LEN 80
+%define SHELL_HISTORY_MAX 8
 %define COM_LOAD_SEG 0x2000
 %define MZ_LOAD_SEG 0x3000
 %define MZ2_LOAD_SEG 0x3800
@@ -76,6 +77,11 @@ org 0x0000
 %define SPLASH_VRAM_SAFE_OFFSET 0xFCE0
 %define SPLASH_BUF_SEG 0x9000
 %define SPLASH_WAIT_TICKS 91
+%define SHELL_FOOTER_DSK_IDLE_REFRESH_TICKS 54
+%define SHELL_FOOTER_DSK_BUSY_REFRESH_TICKS 216
+%define SHELL_FOOTER_DSK_DIRTY_IDLE_REFRESH_TICKS 2
+%define SHELL_FOOTER_DSK_DIRTY_BUSY_REFRESH_TICKS 18
+%define SHELL_FOOTER_KEY_COOLDOWN_TICKS 18
 %endif
 %define FAT1_LBA FAT_RESERVED_SECTORS
 %define FAT2_LBA (FAT1_LBA + FAT_SECTORS_PER_FAT)
@@ -167,11 +173,6 @@ print_prompt:
     ; Print "\"
     mov al, 0x5C
     call putc_dual
-    ; Get and print CWD if not root
-    xor dl, dl
-    mov si, cwd_buf
-    mov ah, 0x47
-    int 0x21
     cmp byte [cwd_buf], 0
     je .prompt_gt
     mov si, cwd_buf
@@ -4519,9 +4520,19 @@ int21_read:
 .have_count:
     mov [cs:tmp_rw_remaining], cx
     mov word [cs:tmp_rw_done], 0
+    mov ax, [cs:file_handle_pos]
+    mov [cs:tmp_capacity], ax
     mov ax, ds
     mov [cs:tmp_user_ds], ax
     mov [cs:tmp_user_ptr], dx
+    push ax
+    mov ax, [cs:tmp_rw_remaining]
+    call print_hex16_serial
+    mov al, 13
+    call serial_putc
+    mov al, 10
+    call serial_putc
+    pop ax
 
     mov ax, [cs:file_handle_pos]
     cmp ax, [cs:file_handle_size_lo]
@@ -4814,7 +4825,7 @@ int21_write:
     mov [cs:tmp_user_ds], ax
     mov [cs:tmp_user_ptr], dx
 
-    cmp cx, 0
+    cmp word [cs:tmp_rw_remaining], 0
     jne .prepare
     mov ax, [cs:file_handle_pos]
     mov [cs:file_handle_size_lo], ax
@@ -4826,32 +4837,19 @@ int21_write:
     jmp .done
 
 .prepare:
-    mov ax, [cs:file_handle_cluster_count]
-    mov cl, FAT_CLUSTER_SHIFT
-    shl ax, cl
-    mov [cs:tmp_capacity], ax
-
-    mov ax, [cs:file_handle_pos]
-    cmp ax, [cs:tmp_capacity]
-    jb .have_space
-    xor ax, ax
-    clc
-    jmp .done
-
-.have_space:
-    mov ax, [cs:tmp_capacity]
-    sub ax, [cs:file_handle_pos]
-    cmp [cs:tmp_rw_remaining], ax
-    jbe .loop
-    mov [cs:tmp_rw_remaining], ax
-
 .loop:
     cmp word [cs:tmp_rw_remaining], 0
     je .finish
 
+.cluster_resolve:
     mov ax, [cs:file_handle_pos]
     call int21_cluster_for_pos
+    jnc .cluster_ready
+    call int21_write_grow_chain
     jc .io_error
+    jmp .cluster_resolve
+
+.cluster_ready:
     mov [cs:tmp_cluster], ax
     mov [cs:tmp_cluster_off], dx
 
@@ -4909,6 +4907,9 @@ int21_write:
     jmp .loop
 
 .finish:
+    call fat12_flush_cache
+    jc .io_error
+
     mov ax, [cs:file_handle_pos]
     cmp ax, [cs:file_handle_size_lo]
     jbe .done_ok
@@ -4941,6 +4942,7 @@ int21_write:
 
 .done:
     pushf
+    push ax
     mov al, [cs:file_handle_swapped]
     cmp al, 2
     je .done_swap2
@@ -4982,6 +4984,7 @@ int21_write:
     call int21_swap_file_handles8
 %endif
 .done_noswap:
+    pop ax
     popf
     pop es
     pop ds
@@ -5022,6 +5025,54 @@ int21_write:
     pop bx
     clc
     jmp .done
+
+int21_write_grow_chain:
+    mov bx, 2
+
+.find_free:
+    cmp bx, FAT_EOF
+    jae .fail
+    mov ax, bx
+    call fat12_get_entry_cached
+    jc .fail
+    cmp ax, 0
+    je .cluster_found
+    inc bx
+    jmp .find_free
+
+.cluster_found:
+    mov ax, bx
+    mov dx, FAT_EOF
+    call fat12_set_entry_cached
+    jc .fail
+
+    mov cx, [cs:file_handle_cluster_count]
+    cmp cx, 0
+    je .set_start_cluster
+
+    mov ax, cx
+    dec ax
+    mov cl, FAT_CLUSTER_SHIFT
+    shl ax, cl
+    call int21_cluster_for_pos
+    jc .fail
+    mov dx, bx
+    call fat12_set_entry_cached
+    jc .fail
+    jmp .bump_count
+
+.set_start_cluster:
+    mov [cs:file_handle_start_cluster], bx
+
+.bump_count:
+    inc word [cs:file_handle_cluster_count]
+
+    clc
+    ret
+
+.fail:
+    stc
+    ret
 
 int21_delete:
     push bx
@@ -7174,6 +7225,8 @@ int21_update_root_entry_size:
     jc .fail
 
     mov di, [cs:file_handle_root_off]
+    mov ax, [cs:file_handle_start_cluster]
+    mov [es:di + 26], ax
     add di, 28
     mov ax, [cs:file_handle_size_lo]
     mov [es:di], ax
@@ -7869,105 +7922,31 @@ int21_fileio_test:
     mov ax, cs
     mov ds, ax
 
-    mov dx, path_comdemo_dos
-    mov ax, 0x3D00
+    mov dx, path_deltest_dos
+    mov ah, 0x41
     int 0x21
-    jc .fail
 
-    mov bx, ax
-    mov cx, 3
-    mov dx, fileio_buf
-    mov ah, 0x3F
-    int 0x21
-    cmp ax, 3
-    jne .fail_close
-
-    cmp byte [fileio_buf + 0], 0xBA
-    jne .fail_close
-
-    mov ah, 0x3E
-    int 0x21
-    cmp ax, 0
-    jne .fail
-
-    mov dx, path_fileio_dos
-    mov ax, 0x3D02
+    mov dx, path_deltest_dos
+    xor cx, cx
+    mov ah, 0x3C
     int 0x21
     jc .fail
     mov bx, ax
 
-    xor cx, cx
-    mov dx, 510
-    mov ax, 0x4200
-    int 0x21
-    cmp ax, 510
-    jne .fail_close
-
-    mov cx, 4
+    mov byte [fileio_buf + 0], 0x5A
+    mov cx, 1
     mov dx, fileio_buf
-    mov ah, 0x3F
-    int 0x21
-    cmp ax, 4
-    jne .fail_close
-    cmp byte [fileio_buf + 0], 0xBE
-    jne .fail_close
-    cmp byte [fileio_buf + 1], 0xEF
-    jne .fail_close
-    cmp byte [fileio_buf + 2], 0xCA
-    jne .fail_close
-    cmp byte [fileio_buf + 3], 0xFE
-    jne .fail_close
-
-    xor cx, cx
-    xor dx, dx
-    mov ax, 0x4200
-    int 0x21
-    cmp ax, 0
-    jne .fail_close
-
-    mov cx, 2
-    mov dx, fileio_patch
     mov ah, 0x40
     int 0x21
-    cmp ax, 2
-    jne .fail_close
-
-    xor cx, cx
-    xor dx, dx
-    mov ax, 0x4200
-    int 0x21
-    cmp ax, 0
-    jne .fail_close
-
-    mov cx, 2
-    mov dx, fileio_buf
-    mov ah, 0x3F
-    int 0x21
-    cmp ax, 2
-    jne .fail_close
-    cmp byte [fileio_buf + 0], 0x11
-    jne .fail_close
-    cmp byte [fileio_buf + 1], 0x22
+    cmp ax, 1
     jne .fail_close
 
     mov ah, 0x3E
     int 0x21
-    cmp ax, 0
-    jne .fail
 
     mov dx, path_deltest_dos
     mov ah, 0x41
     int 0x21
-    jc .fail
-    cmp ax, 0
-    jne .fail
-
-    mov dx, path_deltest_dos
-    mov ax, 0x3D00
-    int 0x21
-    jnc .fail
-    cmp ax, 0x0002
-    jne .fail
 
     mov si, msg_fileio_serial_pass
     call print_string_serial
@@ -8072,6 +8051,75 @@ int21_move_rename_path_test:
     pop bx
     pop ax
     ret
+
+shell_streamc_selftest:
+    push ax
+    push bx
+    push si
+    push di
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+
+    mov di, str_help
+    call shell_is_builtin_token
+    jnc .fail
+
+    mov di, str_where
+    call shell_is_builtin_token
+    jnc .fail
+
+    mov si, str_which_probe_comdemo
+    call shell_try_resolve_exec_token
+    jc .fail
+
+    mov di, shell_exec_path_buf
+    mov si, str_expect_which_comdemo
+    call str_eq
+    jnc .fail
+
+%if FAT_TYPE == 16
+    mov word [cs:shell_footer_last_tick], 200
+    mov word [cs:shell_footer_dsk_last_scan_tick], 140
+    mov byte [cs:shell_footer_dsk_dirty], 0
+    mov byte [cs:shell_footer_key_cooldown], SHELL_FOOTER_KEY_COOLDOWN_TICKS
+    call shell_footer_maybe_refresh_disk
+    cmp word [cs:shell_footer_dsk_last_scan_tick], 140
+    jne .fail
+
+    mov byte [cs:shell_footer_key_cooldown], 0
+    call shell_footer_maybe_refresh_disk
+    cmp word [cs:shell_footer_dsk_last_scan_tick], 200
+    jne .fail
+
+    mov word [cs:shell_footer_last_tick], 0xFFFF
+    mov word [cs:shell_footer_dsk_last_scan_tick], 0
+    mov byte [cs:shell_footer_dsk_dirty], 1
+    mov byte [cs:shell_footer_key_cooldown], 0
+%endif
+
+    mov si, msg_streamc_serial_pass
+    call print_string_serial
+    jmp .done
+
+.fail:
+%if FAT_TYPE == 16
+    mov word [cs:shell_footer_last_tick], 0xFFFF
+    mov word [cs:shell_footer_dsk_last_scan_tick], 0
+    mov byte [cs:shell_footer_dsk_dirty], 1
+    mov byte [cs:shell_footer_key_cooldown], 0
+%endif
+    mov si, msg_streamc_serial_fail
+    call print_string_serial
+
+.done:
+    pop ds
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
 run_stage1_selftest:
     mov si, msg_stage1_selftest_begin
     call print_string_dual
@@ -8085,6 +8133,7 @@ run_stage1_selftest:
     call int21_fileio_test
     call int21_find_test
     call int21_move_rename_path_test
+    call shell_streamc_selftest
     call run_gfx_demo
     mov si, msg_stage1_selftest_done
     call print_string_dual
@@ -8338,8 +8387,8 @@ stage1_splash_blit_scaled:
     mov ax, 0xA000
     mov es, ax
     mov cx, SPLASH_SCALE_Y
-    ; Render a 570px image from 100px source (6x for first 70 rows, then 5x).
-    cmp bp, 30
+    ; Render a 560px image from 100px source (6x for first 60 rows, then 5x).
+    cmp bp, 40
     jbe .copy_y
     inc cx
 .copy_y:
@@ -8440,7 +8489,7 @@ stage1_splash_draw_progress_bar:
     mov bp, 40
 .count_ok:
 
-    mov ax, 570
+    mov ax, 560
     mov bx, SPLASH_VESA_ROW_BYTES
     mul bx
     mov di, ax
@@ -8449,8 +8498,8 @@ stage1_splash_draw_progress_bar:
 
     mov ax, DOS_IO_BUF_SEG
     mov ds, ax
-    mov bx, 30
-    mov si, 570
+    mov bx, 40
+    mov si, 560
 
 .row_loop:
     cmp bx, 0
@@ -8465,33 +8514,33 @@ stage1_splash_draw_progress_bar:
     mov cx, SPLASH_VESA_ROW_BYTES
     rep stosb
 
-    mov di, 120
+    mov di, 80
     mov al, 253
-    mov cx, 560
+    mov cx, 640
     rep stosb
 
-    cmp si, 577
+    cmp si, 572
     jb .copy_row
-    cmp si, 592
+    cmp si, 587
     ja .copy_row
 
-    mov di, 122
+    mov di, 82
     mov al, 254
-    mov cx, 556
+    mov cx, 636
     rep stosb
 
-    cmp si, 581
+    cmp si, 576
     jb .copy_row
-    cmp si, 588
+    cmp si, 583
     ja .copy_row
     mov cx, bp
     jcxz .copy_row
 
-    mov di, 122
+    mov di, 82
 .block_loop:
     mov al, 255
     push cx
-    mov cx, 10
+    mov cx, 12
     rep stosb
     add di, 4
     pop cx
@@ -9590,6 +9639,10 @@ dispatch_command:
     call str_eq
     jc .cmd_dir
     mov di, bx
+    mov si, str_pwd
+    call str_eq
+    jc .cmd_pwd
+    mov di, bx
     mov si, str_cdup
     call str_eq
     jc .cmd_cdup
@@ -9645,6 +9698,14 @@ dispatch_command:
     mov si, str_run
     call str_eq
     jc .cmd_run
+    mov di, bx
+    mov si, str_which
+    call str_eq
+    jc .cmd_which
+    mov di, bx
+    mov si, str_where
+    call str_eq
+    jc .cmd_which
     mov di, bx
     mov si, str_exit
     call str_eq
@@ -9707,7 +9768,7 @@ dispatch_command:
     jmp .done
 
 .cmd_help:
-    call print_shell_help
+    call shell_cmd_help
     jmp .done
 
 .cmd_ver:
@@ -9745,6 +9806,10 @@ dispatch_command:
 
 .cmd_dir:
     call shell_cmd_dir
+    jmp .done
+
+.cmd_pwd:
+    call shell_cmd_pwd
     jmp .done
 
 .cmd_cd:
@@ -9785,6 +9850,10 @@ dispatch_command:
 
 .cmd_run:
     call shell_cmd_run
+    jmp .done
+
+.cmd_which:
+    call shell_cmd_which
     jmp .done
 
 .cmd_exit:
@@ -9856,25 +9925,46 @@ dispatch_command:
     ret
 
 read_command_line:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+
     mov di, cmd_buffer
+    mov byte [di], 0
+
     mov ah, 0x03
     xor bh, bh
     int 0x10
+    mov [shell_edit_start_col], dl
+    mov [shell_edit_start_row], dh
 
-    mov cx, CMD_BUF_LEN - 1
-    mov al, 79
+    mov al, CMD_BUF_LEN - 1
+    mov bl, 79
     cmp dl, 79
     jbe .cap_line
-    xor al, al
+    xor bl, bl
     jmp .cap_ready
 .cap_line:
-    sub al, dl
+    sub bl, dl
 .cap_ready:
-    xor ah, ah
-    cmp ax, cx
-    jae .cap_done
-    mov cx, ax
+    cmp bl, al
+    jbe .cap_done
+    mov bl, al
 .cap_done:
+    mov [shell_edit_cap], bl
+    mov byte [shell_edit_len], 0
+    mov byte [shell_edit_cursor], 0
+    mov byte [shell_edit_prev_len], 0
+    mov byte [shell_history_nav], 0xFF
+    mov byte [shell_history_saved_len], 0
+
 %if FAT_TYPE == 16
     mov byte [cs:shell_footer_tick_key_activity], 0
 %endif
@@ -9895,37 +9985,756 @@ read_command_line:
     cmp al, 0x0D
     je .finish
 
+    cmp al, 0x09
+    je .tab_complete
+
     cmp al, 0x08
     je .backspace
 
     cmp al, 0
-    je .read_key
+    je .extended
+    cmp al, 0xE0
+    je .extended
 
-    cmp cx, 0
-    je .read_key
+    cmp al, 0x20
+    jb .read_key
 
-    stosb
-    dec cx
-    call putc_dual
+    mov dh, al
+    mov bl, [shell_edit_len]
+    mov al, [shell_edit_cap]
+    cmp bl, al
+    jae .read_key
+
+    mov dl, [shell_edit_cursor]
+    cmp dl, bl
+    jae .insert_char
+
+    xor bh, bh
+    mov si, cmd_buffer
+    add si, bx
+.shift_right_loop:
+    cmp bl, dl
+    jbe .insert_char
+    mov al, [si - 1]
+    mov [si], al
+    dec si
+    dec bl
+    jmp .shift_right_loop
+
+.insert_char:
+    xor bx, bx
+    mov bl, [shell_edit_cursor]
+    mov [cmd_buffer + bx], dh
+    inc byte [shell_edit_cursor]
+    inc byte [shell_edit_len]
+    xor bx, bx
+    mov bl, [shell_edit_len]
+    mov byte [cmd_buffer + bx], 0
+    call shell_line_render
     jmp .read_key
 
 .backspace:
-    cmp di, cmd_buffer
+    mov bl, [shell_edit_cursor]
+    cmp bl, 0
     je .read_key
-    dec di
-    inc cx
-    mov al, 0x08
-    call putc_dual
-    mov al, ' '
-    call putc_dual
-    mov al, 0x08
-    call putc_dual
+
+    dec bl
+    mov [shell_edit_cursor], bl
+    mov dl, [shell_edit_len]
+    xor bh, bh
+    mov si, cmd_buffer
+    add si, bx
+.backspace_shift_loop:
+    mov al, [si + 1]
+    mov [si], al
+    inc si
+    inc bl
+    cmp bl, dl
+    jb .backspace_shift_loop
+
+    dec byte [shell_edit_len]
+    xor bx, bx
+    mov bl, [shell_edit_len]
+    mov byte [cmd_buffer + bx], 0
+    call shell_line_render
+    jmp .read_key
+
+.extended:
+    cmp ah, 0x4B
+    je .key_left
+    cmp ah, 0x4D
+    je .key_right
+    cmp ah, 0x47
+    je .key_home
+    cmp ah, 0x4F
+    je .key_end
+    cmp ah, 0x53
+    je .key_delete
+    cmp ah, 0x48
+    je .key_up
+    cmp ah, 0x50
+    je .key_down
+    jmp .read_key
+
+.key_left:
+    cmp byte [shell_edit_cursor], 0
+    je .read_key
+    dec byte [shell_edit_cursor]
+    call shell_line_place_cursor
+    jmp .read_key
+
+.key_right:
+    mov al, [shell_edit_cursor]
+    cmp al, [shell_edit_len]
+    jae .read_key
+    inc byte [shell_edit_cursor]
+    call shell_line_place_cursor
+    jmp .read_key
+
+.key_home:
+    mov byte [shell_edit_cursor], 0
+    call shell_line_place_cursor
+    jmp .read_key
+
+.key_end:
+    mov al, [shell_edit_len]
+    mov [shell_edit_cursor], al
+    call shell_line_place_cursor
+    jmp .read_key
+
+.key_delete:
+    mov bl, [shell_edit_cursor]
+    mov dl, [shell_edit_len]
+    cmp bl, dl
+    jae .read_key
+
+    xor bh, bh
+    mov si, cmd_buffer
+    add si, bx
+.delete_shift_loop:
+    mov al, [si + 1]
+    mov [si], al
+    inc si
+    inc bl
+    cmp bl, dl
+    jb .delete_shift_loop
+
+    dec byte [shell_edit_len]
+    xor bx, bx
+    mov bl, [shell_edit_len]
+    mov byte [cmd_buffer + bx], 0
+    call shell_line_render
+    jmp .read_key
+
+.key_up:
+    cmp byte [shell_history_count], 0
+    je .read_key
+
+    mov al, [shell_history_nav]
+    cmp al, 0xFF
+    jne .up_next
+
+    mov si, cmd_buffer
+    mov di, shell_history_saved_buf
+    mov cx, CMD_BUF_LEN
+.up_save_loop:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .up_save_loop
+    mov al, [shell_edit_len]
+    mov [shell_history_saved_len], al
+    xor al, al
+    mov [shell_history_nav], al
+    jmp .up_load
+
+.up_next:
+    inc al
+    cmp al, [shell_history_count]
+    jae .read_key
+    mov [shell_history_nav], al
+
+.up_load:
+    mov al, [shell_history_nav]
+    call shell_history_load_by_offset
+    jc .read_key
+    call shell_line_render
+    jmp .read_key
+
+.key_down:
+    mov al, [shell_history_nav]
+    cmp al, 0xFF
+    je .read_key
+
+    cmp al, 0
+    jne .down_prev
+
+    mov byte [shell_history_nav], 0xFF
+    mov si, shell_history_saved_buf
+    mov di, cmd_buffer
+    mov cx, CMD_BUF_LEN
+.down_restore_loop:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .down_restore_loop
+
+    mov al, [shell_history_saved_len]
+    cmp al, [shell_edit_cap]
+    jbe .down_store_len
+    mov al, [shell_edit_cap]
+.down_store_len:
+    mov [shell_edit_len], al
+    mov [shell_edit_cursor], al
+    xor bx, bx
+    mov bl, al
+    mov byte [cmd_buffer + bx], 0
+    call shell_line_render
+    jmp .read_key
+
+.down_prev:
+    dec al
+    mov [shell_history_nav], al
+    call shell_history_load_by_offset
+    jc .read_key
+    call shell_line_render
+    jmp .read_key
+
+.tab_complete:
+    call shell_try_tab_complete_line
     jmp .read_key
 
 .finish:
-    mov al, 0
-    stosb
+    xor bx, bx
+    mov bl, [shell_edit_len]
+    mov byte [cmd_buffer + bx], 0
+    call shell_history_store_current_cmd
     call print_newline_dual
+
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_line_place_cursor:
+    push ax
+    push dx
+
+    mov dh, [shell_edit_start_row]
+    mov dl, [shell_edit_start_col]
+    mov al, [shell_edit_cursor]
+    add dl, al
+    call set_cursor_pos
+
+    pop dx
+    pop ax
+    ret
+
+shell_line_render:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov dh, [shell_edit_start_row]
+    mov dl, [shell_edit_start_col]
+    call set_cursor_pos
+
+    xor cx, cx
+    mov cl, [shell_edit_len]
+    mov si, cmd_buffer
+.print_chars:
+    cmp cx, 0
+    je .clear_tail
+    lodsb
+    call bios_putc
+    dec cx
+    jmp .print_chars
+
+.clear_tail:
+    mov al, [shell_edit_prev_len]
+    mov bl, [shell_edit_len]
+    cmp al, bl
+    jbe .store_len
+    sub al, bl
+    mov cl, al
+    xor ch, ch
+.clear_loop:
+    mov al, ' '
+    call bios_putc
+    loop .clear_loop
+
+.store_len:
+    mov al, [shell_edit_len]
+    mov [shell_edit_prev_len], al
+    call shell_line_place_cursor
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_history_store_current_cmd:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+
+    mov al, [shell_edit_len]
+    cmp al, 0
+    je .done
+
+    xor ax, ax
+    mov al, [shell_history_head]
+    shl ax, 6
+    mov di, shell_history_buf
+    add di, ax
+
+    mov si, cmd_buffer
+    mov cx, CMD_BUF_LEN
+.copy_loop:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .copy_loop
+
+    mov al, [shell_history_head]
+    inc al
+    and al, SHELL_HISTORY_MAX - 1
+    mov [shell_history_head], al
+
+    mov al, [shell_history_count]
+    cmp al, SHELL_HISTORY_MAX
+    jae .done
+    inc al
+    mov [shell_history_count], al
+
+.done:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_history_load_by_offset:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+
+    mov bl, [shell_history_count]
+    cmp bl, 0
+    je .fail
+    cmp al, bl
+    jae .fail
+
+    mov bl, [shell_history_head]
+    dec bl
+    sub bl, al
+    and bl, SHELL_HISTORY_MAX - 1
+
+    xor ax, ax
+    mov al, bl
+    shl ax, 6
+    mov si, shell_history_buf
+    add si, ax
+    mov di, cmd_buffer
+    mov cx, CMD_BUF_LEN
+.load_loop:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .load_loop
+
+    xor bx, bx
+.scan_len:
+    cmp bx, CMD_BUF_LEN - 1
+    jae .len_cap
+    mov al, [cmd_buffer + bx]
+    cmp al, 0
+    je .len_ready
+    inc bx
+    jmp .scan_len
+
+.len_cap:
+    mov bx, CMD_BUF_LEN - 1
+
+.len_ready:
+    mov al, bl
+    mov bl, [shell_edit_cap]
+    cmp al, bl
+    jbe .store_len
+    mov al, bl
+
+.store_len:
+    mov [shell_edit_len], al
+    mov [shell_edit_cursor], al
+    xor bx, bx
+    mov bl, al
+    mov byte [cmd_buffer + bx], 0
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_try_tab_complete_line:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+
+    mov al, [shell_edit_cursor]
+    cmp al, 0
+    je .done
+    cmp al, [shell_edit_len]
+    jne .done
+    mov [shell_completion_prefix_len], al
+
+    xor bx, bx
+.scan_prefix:
+    cmp bl, [shell_completion_prefix_len]
+    jae .scan_done
+    mov al, [cmd_buffer + bx]
+    cmp al, ' '
+    je .done
+    inc bl
+    jmp .scan_prefix
+
+.scan_done:
+    mov byte [shell_completion_match_count], 0
+    call shell_completion_scan_builtins
+    call shell_completion_scan_exec_files
+
+    cmp byte [shell_completion_match_count], 1
+    jne .done
+
+    mov si, shell_completion_match_buf
+    mov di, cmd_buffer
+    xor bx, bx
+    mov bl, [shell_edit_cap]
+.copy_match:
+    cmp bl, 0
+    je .copy_done
+    mov al, [si]
+    cmp al, 0
+    je .copy_done
+    mov [di], al
+    inc si
+    inc di
+    dec bl
+    jmp .copy_match
+
+.copy_done:
+    mov byte [di], 0
+    mov ax, di
+    sub ax, cmd_buffer
+    mov [shell_edit_len], al
+    mov [shell_edit_cursor], al
+    call shell_line_render
+
+.done:
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+shell_completion_scan_builtins:
+    push si
+
+    mov si, str_help
+    call shell_completion_consider_candidate
+    mov si, str_ver
+    call shell_completion_consider_candidate
+    mov si, str_cls
+    call shell_completion_consider_candidate
+    mov si, str_ticks
+    call shell_completion_consider_candidate
+    mov si, str_drive
+    call shell_completion_consider_candidate
+    mov si, str_dir
+    call shell_completion_consider_candidate
+    mov si, str_pwd
+    call shell_completion_consider_candidate
+    mov si, str_cdup
+    call shell_completion_consider_candidate
+    mov si, str_cd
+    call shell_completion_consider_candidate
+    mov si, str_copy
+    call shell_completion_consider_candidate
+    mov si, str_move
+    call shell_completion_consider_candidate
+    mov si, str_mv
+    call shell_completion_consider_candidate
+    mov si, str_del
+    call shell_completion_consider_candidate
+    mov si, str_md
+    call shell_completion_consider_candidate
+    mov si, str_mkdir
+    call shell_completion_consider_candidate
+    mov si, str_rd
+    call shell_completion_consider_candidate
+    mov si, str_rmdir
+    call shell_completion_consider_candidate
+    mov si, str_ren
+    call shell_completion_consider_candidate
+    mov si, str_rename
+    call shell_completion_consider_candidate
+    mov si, str_type
+    call shell_completion_consider_candidate
+    mov si, str_run
+    call shell_completion_consider_candidate
+    mov si, str_which
+    call shell_completion_consider_candidate
+    mov si, str_where
+    call shell_completion_consider_candidate
+    mov si, str_exit
+    call shell_completion_consider_candidate
+    mov si, str_dos21
+    call shell_completion_consider_candidate
+    mov si, str_comdemo
+    call shell_completion_consider_candidate
+    mov si, str_mzdemo
+    call shell_completion_consider_candidate
+    mov si, str_fileio
+    call shell_completion_consider_candidate
+    mov si, str_gfxdemo
+    call shell_completion_consider_candidate
+    mov si, str_gfxrect
+    call shell_completion_consider_candidate
+    mov si, str_gfxstar
+    call shell_completion_consider_candidate
+    mov si, str_findtest
+    call shell_completion_consider_candidate
+    mov si, str_mouse
+    call shell_completion_consider_candidate
+    mov si, str_keytest
+    call shell_completion_consider_candidate
+    mov si, str_reboot
+    call shell_completion_consider_candidate
+    mov si, str_halt
+    call shell_completion_consider_candidate
+
+    pop si
+    ret
+
+shell_completion_scan_exec_files:
+    push ax
+    push dx
+    push ds
+
+    mov ax, [cs:dta_seg]
+    mov [cs:shell_completion_saved_dta_seg], ax
+    mov ax, [cs:dta_off]
+    mov [cs:shell_completion_saved_dta_off], ax
+
+    mov ax, cs
+    mov ds, ax
+    mov dx, shell_completion_dta
+    mov ah, 0x1A
+    int 0x21
+
+    mov dx, path_pattern_com
+    call shell_completion_scan_exec_pattern
+    mov dx, path_pattern_exe
+    call shell_completion_scan_exec_pattern
+
+    mov ax, [cs:shell_completion_saved_dta_seg]
+    mov ds, ax
+    mov dx, [cs:shell_completion_saved_dta_off]
+    mov ah, 0x1A
+    int 0x21
+
+    pop ds
+    pop dx
+    pop ax
+    ret
+
+shell_completion_scan_exec_pattern:
+    push ax
+    push cx
+    push dx
+
+    mov ah, 0x4E
+    xor cx, cx
+    int 0x21
+    jc .done
+
+.scan_loop:
+    call shell_completion_consider_found_file
+    mov ah, 0x4F
+    int 0x21
+    jnc .scan_loop
+
+.done:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+shell_completion_consider_found_file:
+    push ax
+    push cx
+    push si
+    push di
+
+    mov si, shell_completion_dta + 0x1E
+    mov di, shell_completion_file_buf
+    mov cx, CMD_BUF_LEN - 1
+.copy_loop:
+    cmp cx, 0
+    je .term
+    mov al, [si]
+    cmp al, 0
+    je .term
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .copy_loop
+
+.term:
+    mov byte [di], 0
+    cmp di, shell_completion_file_buf
+    je .done
+    mov si, shell_completion_file_buf
+    call shell_completion_consider_candidate
+
+.done:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+shell_completion_consider_candidate:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+
+    mov al, [shell_completion_match_count]
+    cmp al, 2
+    je .done
+
+    mov di, cmd_buffer
+    xor bx, bx
+    xor cx, cx
+    mov cl, [shell_completion_prefix_len]
+.prefix_loop:
+    cmp cx, 0
+    je .prefix_match
+    mov al, [di + bx]
+    mov ah, [si + bx]
+    cmp ah, 0
+    je .done
+
+    cmp al, 'A'
+    jb .prefix_al_ready
+    cmp al, 'Z'
+    ja .prefix_al_ready
+    or al, 0x20
+.prefix_al_ready:
+    cmp ah, 'A'
+    jb .prefix_cmp
+    cmp ah, 'Z'
+    ja .prefix_cmp
+    or ah, 0x20
+.prefix_cmp:
+    cmp al, ah
+    jne .done
+    inc bx
+    dec cx
+    jmp .prefix_loop
+
+.prefix_match:
+    cmp byte [shell_completion_match_count], 0
+    jne .compare_existing
+
+    mov di, shell_completion_match_buf
+    mov cx, CMD_BUF_LEN - 1
+.store_first:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    cmp al, 0
+    je .mark_first
+    dec cx
+    jnz .store_first
+    mov byte [di - 1], 0
+.mark_first:
+    mov byte [shell_completion_match_count], 1
+    jmp .done
+
+.compare_existing:
+    mov di, shell_completion_match_buf
+.compare_loop:
+    mov al, [di]
+    mov ah, [si]
+
+    cmp al, 'A'
+    jb .cmp_al_ready
+    cmp al, 'Z'
+    ja .cmp_al_ready
+    or al, 0x20
+.cmp_al_ready:
+    cmp ah, 'A'
+    jb .cmp_chars
+    cmp ah, 'Z'
+    ja .cmp_chars
+    or ah, 0x20
+.cmp_chars:
+    cmp al, ah
+    jne .mark_ambiguous
+    cmp al, 0
+    je .done
+    inc di
+    inc si
+    jmp .compare_loop
+
+.mark_ambiguous:
+    mov byte [shell_completion_match_count], 2
+
+.done:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 skip_spaces:
@@ -9953,6 +10762,56 @@ shell_arg_ptr:
 .done:
     ret
 
+shell_next_arg:
+    call skip_spaces
+    cmp byte [si], 0
+    je .none
+
+    cmp byte [si], '"'
+    jne .plain
+
+    inc si
+    mov dx, si
+.quoted_scan:
+    mov al, [si]
+    cmp al, 0
+    je .found
+    cmp al, '"'
+    je .quoted_term
+    inc si
+    jmp .quoted_scan
+
+.quoted_term:
+    mov byte [si], 0
+    inc si
+    call skip_spaces
+    clc
+    ret
+
+.plain:
+    mov dx, si
+.plain_scan:
+    mov al, [si]
+    cmp al, 0
+    je .found
+    cmp al, ' '
+    je .plain_term
+    inc si
+    jmp .plain_scan
+
+.plain_term:
+    mov byte [si], 0
+    inc si
+    call skip_spaces
+
+.found:
+    clc
+    ret
+
+.none:
+    stc
+    ret
+
 shell_trim_first_arg:
 .scan:
     cmp byte [si], 0
@@ -9975,6 +10834,33 @@ shell_copy_token_for_exec:
     cmp al, 0
     je .copy_done
     cmp al, ' '
+    je .copy_done
+    cmp cx, 0
+    je .copy_fail
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .copy_loop
+
+.copy_done:
+    mov byte [di], 0
+    cmp di, shell_exec_path_buf
+    je .copy_fail
+    clc
+    ret
+
+.copy_fail:
+    stc
+    ret
+
+shell_copy_path_for_exec:
+    mov di, shell_exec_path_buf
+    mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
+
+.copy_loop:
+    mov al, [si]
+    cmp al, 0
     je .copy_done
     cmp cx, 0
     je .copy_fail
@@ -10074,7 +10960,7 @@ shell_exec_buffer_path:
     pop bx
     ret
 
-shell_try_exec_token:
+shell_try_resolve_exec_token:
     push ds
 
     mov bx, si
@@ -10092,11 +10978,79 @@ shell_try_exec_token:
     mov si, str_ext_com
     call shell_append_exec_extension
     jc .fail
-    call shell_exec_buffer_path
+    mov si, shell_exec_path_buf
+    push bx
+    call int21_resolve_and_find_path
+    pop bx
     jnc .ok
 
     mov si, bx
     call shell_copy_token_for_exec
+    jc .fail
+    mov si, str_ext_exe
+    call shell_append_exec_extension
+    jc .fail
+
+.try_as_is:
+    mov si, shell_exec_path_buf
+    call int21_resolve_and_find_path
+    jc .fail
+
+.ok:
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop ds
+    ret
+
+shell_try_exec_token:
+    push ds
+    mov ax, cs
+    mov ds, ax
+
+    call shell_try_resolve_exec_token
+    jc .fail
+    call shell_exec_buffer_path
+    jc .fail
+
+.ok:
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop ds
+    ret
+
+shell_try_exec_path:
+    push ds
+
+    mov bx, si
+    mov ax, cs
+    mov ds, ax
+
+    mov si, bx
+    call shell_copy_path_for_exec
+    jc .fail
+
+    mov si, shell_exec_path_buf
+    call shell_token_has_extension
+    jc .try_as_is
+
+    mov si, str_ext_com
+    call shell_append_exec_extension
+    jc .fail
+    call shell_exec_buffer_path
+    jnc .ok
+
+    mov si, bx
+    call shell_copy_path_for_exec
     jc .fail
     mov si, str_ext_exe
     call shell_append_exec_extension
@@ -10117,6 +11071,137 @@ shell_try_exec_token:
     pop ds
     ret
 
+shell_is_builtin_token:
+    push ax
+    push bx
+    push si
+
+    mov bx, shell_builtin_name_table
+
+.scan_next:
+    mov si, [bx]
+    cmp si, 0
+    je .not_builtin
+
+    push di
+    call str_eq
+    pop di
+    jc .builtin
+
+    add bx, 2
+    jmp .scan_next
+
+.not_builtin:
+    clc
+    jmp .done
+
+.builtin:
+    stc
+
+.done:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+shell_cmd_which:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+    mov si, bx
+    call shell_arg_ptr
+    call shell_next_arg
+    jc .usage
+
+    mov di, dx
+    call shell_is_builtin_token
+    jc .builtin
+
+    mov si, dx
+    call shell_try_resolve_exec_token
+    jc .not_found
+
+    mov si, shell_exec_path_buf
+    call print_string_dual
+    call print_newline_dual
+    jmp .done
+
+.builtin:
+    mov si, dx
+    call print_string_dual
+    mov si, msg_which_builtin
+    call print_string_dual
+    jmp .done
+
+.not_found:
+    mov si, dx
+    call print_string_dual
+    mov si, msg_which_not_found
+    call print_string_dual
+    jmp .done
+
+.usage:
+    mov si, msg_which_usage
+    call print_string_dual
+
+.done:
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+shell_cmd_help:
+    push ax
+    push bx
+    push si
+    push di
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+    mov si, cmd_buffer
+    call skip_spaces
+    mov bx, si
+    call shell_arg_ptr
+    mov bx, si
+    cmp byte [si], 0
+    je .short
+
+    mov di, bx
+    mov si, str_help_all
+    call str_eq
+    jc .all
+
+    mov di, bx
+    mov si, str_help_short
+    call str_eq
+    jc .short
+
+.short:
+    call print_shell_help
+    jmp .done
+
+.all:
+    call print_shell_help
+    call print_shell_help_all
+
+.done:
+    pop ds
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
 shell_cmd_run:
     push ax
     push bx
@@ -10125,16 +11210,24 @@ shell_cmd_run:
 
     mov ax, cs
     mov ds, ax
+    mov si, bx
     call shell_arg_ptr
-    cmp byte [si], 0
-    je .fail
+    call shell_next_arg
+    jc .missing
+    jmp .try_exec
 
-    call shell_try_exec_token
+.missing:
+    mov ax, 0x0001
+    jmp .fail
+
+.try_exec:
+    mov si, dx
+    call shell_try_exec_path
     jnc .done
 
 .fail:
-    mov si, msg_cmd_fail
-    call print_string_dual
+    mov si, str_run
+    call shell_print_error_ax
 
 .done:
     pop ds
@@ -10144,9 +11237,19 @@ shell_cmd_run:
     ret
 
 shell_cmd_cdup:
+    push ax
+    push dx
+    push si
     mov dx, path_parent_dos
     mov ah, 0x3B
     int 0x21
+    jnc .done
+    mov si, str_cdup
+    call shell_print_error_ax
+.done:
+    pop si
+    pop dx
+    pop ax
     ret
 
 shell_cmd_mouse:
@@ -10209,28 +11312,7 @@ shell_cmd_keytest:
     pop ax
     ret
 
-shell_cmd_cd:
-    push ax
-    push bx
-    push dx
-    push si
-    push ds
-
-    mov ax, cs
-    mov ds, ax
-
-    call shell_arg_ptr
-    cmp byte [si], 0
-    je .show
-    mov dx, si
-    call shell_trim_first_arg
-.call_chdir:
-    mov ah, 0x3B
-    int 0x21
-    jc .fail
-    jmp .done
-
-.show:
+shell_print_cwd:
     mov si, msg_cwd_prefix
     call print_string_dual
     mov si, cwd_buf
@@ -10243,17 +11325,69 @@ shell_cmd_cd:
     mov si, path_root_dos
     call print_string_dual
     call print_newline_dual
-    jmp .done
+    clc
+    ret
 
 .print_cwd:
     mov si, cwd_buf
     call print_string_dual
     call print_newline_dual
+    clc
+    ret
+
+.fail:
+    stc
+    ret
+
+shell_cmd_pwd:
+    push ax
+    push dx
+    push si
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+    call shell_print_cwd
+    jnc .done
+
+    mov si, str_pwd
+    call shell_print_error_ax
+
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop ax
+    ret
+
+shell_cmd_cd:
+    push ax
+    push bx
+    push dx
+    push si
+    push ds
+
+    mov ax, cs
+    mov ds, ax
+
+    mov si, bx
+    call shell_arg_ptr
+    call shell_next_arg
+    jc .show
+.call_chdir:
+    mov ah, 0x3B
+    int 0x21
+    jc .fail
+    jmp .done
+
+.show:
+    call shell_print_cwd
+    jc .fail
     jmp .done
 
 .fail:
-    mov si, msg_cd_fail
-    call print_string_dual
+    mov si, str_cd
+    call shell_print_error_ax
 
 .done:
     pop ds
@@ -10275,22 +11409,24 @@ shell_cmd_copy:
     mov ds, ax
 
     mov cl, 1
+    mov word [cs:shell_last_error_ax], 0x0001
 
+    mov si, bx
     call shell_arg_ptr
-    cmp byte [si], 0
-    je .copy_report
-
-    mov dx, si
-    call shell_trim_first_arg
-    inc si
-    call skip_spaces
-    cmp byte [si], 0
-    je .copy_report
-
-    mov di, si
-    call shell_trim_first_arg
+    call shell_next_arg
+    jc .missing_args
     mov [cs:shell_copy_src_ptr], dx
-    mov [cs:shell_copy_dst_ptr], di
+
+    call shell_next_arg
+    jc .missing_args
+    mov [cs:shell_copy_dst_ptr], dx
+    jmp .have_dst
+
+.missing_args:
+    mov ax, 0x0001
+    jmp .copy_report
+
+.have_dst:
     mov bx, 0xFFFF
     mov di, 0xFFFF
 %if FAT_TYPE == 16 || FAT_TYPE == 12
@@ -10412,6 +11548,7 @@ shell_cmd_copy:
     mov cl, 0
 
 .copy_cleanup:
+    mov [cs:shell_last_error_ax], ax
     mov ah, 0x3E
     cmp bx, 0xFFFF
     je .copy_close_dst
@@ -10429,8 +11566,9 @@ shell_cmd_copy:
     mov ds, ax
     cmp cl, 0
     je .copy_ok
-    mov si, msg_cmd_fail
-    call print_string_dual
+    mov ax, [cs:shell_last_error_ax]
+    mov si, str_copy
+    call shell_print_error_ax
 
 .copy_ok:
     pop ds
@@ -10447,18 +11585,24 @@ shell_cmd_del:
     push ds
     mov ax, cs
     mov ds, ax
+    mov si, bx
     call shell_arg_ptr
-    cmp byte [si], 0
-    je .del_fail
-    mov dx, si
-    call shell_trim_first_arg
+    call shell_next_arg
+    jc .del_missing
+    jmp .del_path
+
+.del_missing:
+    mov ax, 0x0001
+    jmp .del_fail
+
+.del_path:
     mov ah, 0x41
     int 0x21
     jc .del_fail
     jmp .del_ok
 .del_fail:
-    mov si, msg_cmd_fail
-    call print_string_dual
+    mov si, str_del
+    call shell_print_error_ax
 .del_ok:
     pop ds
     pop dx
@@ -10469,18 +11613,24 @@ shell_cmd_md:
     push ds
     mov ax, cs
     mov ds, ax
+    mov si, bx
     call shell_arg_ptr
-    cmp byte [si], 0
-    je .md_fail
-    mov dx, si
-    call shell_trim_first_arg
+    call shell_next_arg
+    jc .md_missing
+    jmp .md_path
+
+.md_missing:
+    mov ax, 0x0001
+    jmp .md_fail
+
+.md_path:
     mov ah, 0x39
     int 0x21
     jc .md_fail
     jmp .md_ok
 .md_fail:
-    mov si, msg_cmd_fail
-    call print_string_dual
+    mov si, str_md
+    call shell_print_error_ax
 .md_ok:
     pop ds
     pop dx
@@ -10491,18 +11641,24 @@ shell_cmd_rd:
     push ds
     mov ax, cs
     mov ds, ax
+    mov si, bx
     call shell_arg_ptr
-    cmp byte [si], 0
-    je .rd_fail
-    mov dx, si
-    call shell_trim_first_arg
+    call shell_next_arg
+    jc .rd_missing
+    jmp .rd_path
+
+.rd_missing:
+    mov ax, 0x0001
+    jmp .rd_fail
+
+.rd_path:
     mov ah, 0x3A
     int 0x21
     jc .rd_fail
     jmp .rd_ok
 .rd_fail:
-    mov si, msg_cmd_fail
-    call print_string_dual
+    mov si, str_rd
+    call shell_print_error_ax
 .rd_ok:
     pop ds
     pop dx
@@ -10516,19 +11672,24 @@ shell_cmd_ren:
     mov ax, cs
     mov ds, ax
 
+    mov si, bx
     call shell_arg_ptr
-    cmp byte [si], 0
-    je .ren_fail
+    call shell_next_arg
+    jc .ren_missing
+    mov [cs:shell_copy_src_ptr], dx
 
-    mov dx, si
-    call shell_trim_first_arg
-    inc si
-    call skip_spaces
-    cmp byte [si], 0
-    je .ren_fail
+    call shell_next_arg
+    jc .ren_missing
+    mov [cs:shell_copy_dst_ptr], dx
+    mov dx, [cs:shell_copy_src_ptr]
+    mov di, [cs:shell_copy_dst_ptr]
+    jmp .ren_have_dst
 
-    mov di, si
-    call shell_trim_first_arg
+.ren_missing:
+    mov ax, 0x0001
+    jmp .ren_fail
+
+.ren_have_dst:
 
     push di
     mov ax, ds
@@ -10606,8 +11767,8 @@ shell_cmd_ren:
     pop dx
 
 .ren_fail:
-    mov si, msg_cmd_fail
-    call print_string_dual
+    mov si, str_ren
+    call shell_print_error_ax
 
 .ren_ok:
     pop es
@@ -10625,11 +11786,17 @@ shell_cmd_type:
     push es
     mov ax, cs
     mov ds, ax
+    mov si, bx
     call shell_arg_ptr
-    cmp byte [si], 0
-    je .type_fail
-    mov dx, si
-    call shell_trim_first_arg
+    call shell_next_arg
+    jc .type_missing
+    jmp .type_open
+
+.type_missing:
+    mov ax, 0x0001
+    jmp .type_fail
+
+.type_open:
     mov ah, 0x3D
     mov al, 0
     int 0x21
@@ -10663,11 +11830,13 @@ shell_cmd_type:
     call print_newline_dual
     jmp .type_ok
 .type_close:
+    push ax
     mov ah, 0x3E
     int 0x21
+    pop ax
 .type_fail:
-    mov si, msg_cmd_fail
-    call print_string_dual
+    mov si, str_type
+    call shell_print_error_ax
 .type_ok:
     pop es
     pop ds
@@ -10696,11 +11865,18 @@ shell_cmd_dir:
 
     mov ax, cs
     mov ds, ax
+    mov es, ax
+    mov ax, [cs:cwd_cluster]
+    mov [cs:shell_saved_cwd_cluster], ax
+    mov si, cwd_buf
+    mov di, shell_saved_cwd_buf
+    mov cx, 24
+    rep movsb
+
+    mov si, bx
     call shell_arg_ptr
-    cmp byte [si], 0
-    je .scan_start
-    mov dx, si
-    call shell_trim_first_arg
+    call shell_next_arg
+    jc .scan_start
     mov ah, 0x3B
     int 0x21
     jc .fail
@@ -10833,11 +12009,27 @@ shell_cmd_dir:
 
 .done_scan:
     cmp word [shell_dir_count], 0
-    jne .ok
+    jne .restore
     mov si, msg_dir_empty
     call print_string_dual
+    jmp .restore
 
-.ok:
+.fail:
+    mov si, str_dir
+    call shell_print_error_ax
+
+.restore:
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+    mov ax, [cs:shell_saved_cwd_cluster]
+    mov [cs:cwd_cluster], ax
+    mov si, shell_saved_cwd_buf
+    mov di, cwd_buf
+    mov cx, 24
+    rep movsb
+
+.return:
     pop es
     pop ds
     pop di
@@ -10847,11 +12039,6 @@ shell_cmd_dir:
     pop bx
     pop ax
     ret
-
-.fail:
-    mov si, msg_dir_fail
-    call print_string_dual
-    jmp .ok
 
 shell_print_root_entry:
     push ax
@@ -10929,6 +12116,12 @@ str_eq:
     mov ah, [si]
     cmp ah, 0
     je .expect_end
+    cmp al, 'A'
+    jb .cmp
+    cmp al, 'Z'
+    ja .cmp
+    or al, 0x20
+.cmp:
     cmp al, ah
     jne .not_equal
     inc di
@@ -11364,6 +12557,7 @@ shell_footer_poll:
     jmp .tick_counted
 
 .tick_busy:
+    mov byte [cs:shell_footer_key_cooldown], SHELL_FOOTER_KEY_COOLDOWN_TICKS
     cmp word [cs:shell_footer_cpu_busy_ticks], 0xFFFF
     je .tick_counted
     inc word [cs:shell_footer_cpu_busy_ticks]
@@ -11371,6 +12565,12 @@ shell_footer_poll:
 .tick_counted:
     mov byte [cs:shell_footer_tick_key_activity], 0
     mov [cs:shell_footer_last_tick], dx
+
+    cmp byte [cs:shell_footer_key_cooldown], 0
+    je .cooldown_counted
+    dec byte [cs:shell_footer_key_cooldown]
+
+.cooldown_counted:
 
     mov ax, [cs:shell_footer_cpu_idle_ticks]
     add ax, [cs:shell_footer_cpu_busy_ticks]
@@ -11423,12 +12623,25 @@ shell_footer_compute_cpu_pct:
 
 shell_footer_maybe_refresh_disk:
     push ax
+    push bx
 
+    mov bx, SHELL_FOOTER_DSK_IDLE_REFRESH_TICKS
+    cmp byte [cs:shell_footer_key_cooldown], 0
+    je .interval_ready
+    mov bx, SHELL_FOOTER_DSK_BUSY_REFRESH_TICKS
+
+.interval_ready:
     cmp byte [cs:shell_footer_dsk_dirty], 1
-    je .refresh
+    jne .check_interval
+    mov bx, SHELL_FOOTER_DSK_DIRTY_IDLE_REFRESH_TICKS
+    cmp byte [cs:shell_footer_key_cooldown], 0
+    je .check_interval
+    mov bx, SHELL_FOOTER_DSK_DIRTY_BUSY_REFRESH_TICKS
+
+.check_interval:
     mov ax, [cs:shell_footer_last_tick]
     sub ax, [cs:shell_footer_dsk_last_scan_tick]
-    cmp ax, 54
+    cmp ax, bx
     jb .done
 
 .refresh:
@@ -11439,6 +12652,7 @@ shell_footer_maybe_refresh_disk:
     mov byte [cs:shell_footer_dsk_dirty], 0
 
 .done:
+    pop bx
     pop ax
     ret
 
@@ -11540,6 +12754,23 @@ print_shell_help:
     call print_string_dual
     mov si, msg_help_apps
     call print_string_dual
+    ret
+
+print_shell_help_all:
+    mov si, msg_help_all
+    call print_string_dual
+    ret
+
+shell_print_error_ax:
+    push si
+    push ax
+    call print_string_dual
+    mov si, msg_err_ax
+    call print_string_dual
+    pop ax
+    call print_hex16_dual
+    call print_newline_dual
+    pop si
     ret
 
 print_hex16_dual:
@@ -13350,6 +14581,26 @@ shell_copy_src_ptr dw 0
 shell_copy_dst_ptr dw 0
 shell_copy_dst_cluster dw 0
 %endif
+shell_last_error_ax dw 0
+shell_edit_len db 0
+shell_edit_cursor db 0
+shell_edit_cap db 0
+shell_edit_start_col db 0
+shell_edit_start_row db 0
+shell_edit_prev_len db 0
+shell_history_head db 0
+shell_history_count db 0
+shell_history_nav db 0xFF
+shell_history_saved_len db 0
+shell_history_saved_buf times CMD_BUF_LEN db 0
+shell_history_buf times (SHELL_HISTORY_MAX * CMD_BUF_LEN) db 0
+shell_completion_match_count db 0
+shell_completion_prefix_len db 0
+shell_completion_match_buf times CMD_BUF_LEN db 0
+shell_completion_file_buf times CMD_BUF_LEN db 0
+shell_completion_saved_dta_seg dw 0
+shell_completion_saved_dta_off dw 0
+shell_completion_dta times 64 db 0
 
 msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
 msg_diag_begin    db "[S1] d", 13, 10, 0
@@ -13366,6 +14617,8 @@ msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
 msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
 msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
+msg_streamc_serial_pass db "[STREAMC-SERIAL] PASS", 13, 10, 0
+msg_streamc_serial_fail db "[STREAMC-SERIAL] FAIL", 13, 10, 0
 
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
@@ -13379,11 +14632,12 @@ msg_shell_ram_prefix db "RAM:", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
-msg_help_header db "--- CiukiDOS Commands ---", 13, 10, "Command - short description", 13, 10, 0
-msg_help_core db "  help - show this guide", 13, 10, "  ver - show system version", 13, 10, "  cls - clear screen", 13, 10, "  dir - list files and directories", 13, 10, 0
-msg_help_runtime db "  cd <path> - change directory", 13, 10, "  cd.. - go to parent directory", 13, 10, "  copy <src> <dst> - copy file", 13, 10, "  del <file> - delete file", 13, 10, "  type <file> - show file contents", 13, 10, "  run <path|name> - run EXE/COM program", 13, 10, 0
-msg_help_system db "  md/mkdir <dir> - create directory", 13, 10, "  rd/rmdir <dir> - remove directory", 13, 10, "  ren/rename <a> <b> - rename entry", 13, 10, 0
-msg_help_apps db "  gfxrect", 13, 10, "  gfxstar", 13, 10, "  exit - exit shell", 13, 10, "  reboot - reboot system", 13, 10, 0
+msg_help_header db "Commands (help short|all)", 13, 10, 0
+msg_help_core db "  help - Guide.", 13, 10, "  ver - Version.", 13, 10, "  cls - Clear.", 13, 10, 0
+msg_help_runtime db "  which/where - Resolve.", 13, 10, "  pwd - Cwd.", 13, 10, "  dir - List.", 13, 10, 0
+msg_help_system db "  cd/cd.. - Chdir.", 13, 10, "  run - Execute.", 13, 10, "  help all - Full list.", 13, 10, 0
+msg_help_apps db "  reboot - Reboot.", 13, 10, "  exit - Restart.", 13, 10, 0
+msg_help_all db "  ticks - T. drive - D. dos21 - S. comdemo - C.", 13, 10, "  mzdemo - M. fileio - F. gfxdemo - G.", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
 msg_dos21_begin db "[DOS21] smoke", 13, 10, 0
@@ -13419,9 +14673,11 @@ msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
 msg_dir_header db "Dir", 13, 10, 0
 msg_dir_empty db "no files found", 13, 10, 0
-msg_dir_fail db "dir failed", 13, 10, 0
-msg_cd_fail db "cd failed", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
+msg_err_ax db " err=0x", 0
+msg_which_usage db "usage: which <token>", 13, 10, 0
+msg_which_builtin db " is a shell built-in", 13, 10, 0
+msg_which_not_found db " not found", 13, 10, 0
 msg_mouse_status db "mouse=0x", 0
 msg_mouse_buttons db "buttons=0x", 0
 msg_mouse_x db "x=0x", 0
@@ -13439,6 +14695,7 @@ str_cls    db "cls", 0
 str_ticks  db "ticks", 0
 str_drive  db "drive", 0
 str_dir    db "dir", 0
+str_pwd    db "pwd", 0
 str_cd     db "cd", 0
 str_cdup   db "cd..", 0
 str_copy   db "copy", 0
@@ -13453,6 +14710,8 @@ str_ren    db "ren", 0
 str_rename db "rename", 0
 str_type   db "type", 0
 str_run    db "run", 0
+str_which  db "which", 0
+str_where  db "where", 0
 str_exit   db "exit", 0
 str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
@@ -13466,8 +14725,51 @@ str_mouse db "mouse", 0
 str_keytest db "keytest", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
+str_help_all db "all", 0
+str_help_short db "short", 0
 str_ext_com db ".COM", 0
 str_ext_exe db ".EXE", 0
+str_which_probe_comdemo db "\\APPS\\COMDEMO", 0
+str_expect_which_comdemo db "\\apps\\comdemo.com", 0
+
+shell_builtin_name_table:
+    dw str_help
+    dw str_ver
+    dw str_cls
+    dw str_ticks
+    dw str_drive
+    dw str_dir
+    dw str_pwd
+    dw str_cdup
+    dw str_cd
+    dw str_copy
+    dw str_move
+    dw str_mv
+    dw str_del
+    dw str_md
+    dw str_mkdir
+    dw str_rd
+    dw str_rmdir
+    dw str_ren
+    dw str_rename
+    dw str_type
+    dw str_run
+    dw str_which
+    dw str_where
+    dw str_exit
+    dw str_dos21
+    dw str_comdemo
+    dw str_mzdemo
+    dw str_fileio
+    dw str_gfxdemo
+    dw str_gfxrect
+    dw str_gfxstar
+    dw str_findtest
+    dw str_mouse
+    dw str_keytest
+    dw str_reboot
+    dw str_halt
+    dw 0
 
 path_comdemo_dos db "\APPS\COMDEMO.COM", 0
 path_mzdemo_dos  db "\APPS\MZDEMO.EXE", 0
@@ -13487,6 +14789,7 @@ msg_splash_serial_ok db "[SPLASH] LOAD OK", 13, 10, 0
 msg_splash_serial_fail db "[SPLASH] LOAD FAIL", 13, 10, 0
 %endif
 path_pattern_com db "*.COM", 0
+path_pattern_exe db "*.EXE", 0
 path_pattern_mz equ path_mzdemo_dos
 path_sd_driver_fat db "SDPSC9  VGA"
 path_gem_exe_fat   db "GEM     EXE"
@@ -13501,6 +14804,8 @@ path_parent_dos  db "..", 0
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
 cwd_cluster dw 0
+shell_saved_cwd_buf times 24 db 0
+shell_saved_cwd_cluster dw 0
 %if FAT_TYPE == 16
 shell_footer_ram_buf times 6 db 0
 shell_footer_pct_buf times 3 db 0
@@ -13509,6 +14814,7 @@ shell_footer_cpu_busy_ticks dw 0
 shell_footer_last_tick dw 0xFFFF
 shell_footer_dsk_last_scan_tick dw 0
 shell_footer_tick_key_activity db 0
+shell_footer_key_cooldown db 0
 shell_footer_cpu_pct db 0
 shell_footer_dsk_pct db 0
 shell_footer_dsk_dirty db 1
@@ -13578,6 +14884,5 @@ msg_hw_validation_notrun db "[HW] WARN: stage2 autorun did not run", 13, 10, 0
 msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0
-msg_cmd_fail db "Error", 13, 10, 0
 msg_exit_str db "Exit", 13, 10, 0
 

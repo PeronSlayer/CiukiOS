@@ -26,7 +26,7 @@ STAGE2_MAX_SIZE=512
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 TOTAL_SECTORS=262144
-STAGE1_SECTORS=55
+STAGE1_SECTORS=61
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 BOOT_LBA_OFFSET="${CIUKIOS_FULL_BOOT_LBA_OFFSET:-0}"
 FAT_LBA_OFFSET="${CIUKIOS_FULL_FAT_LBA_OFFSET:-0}"
@@ -60,6 +60,9 @@ GFXRECT_MAX_SIZE=1024
 GFXSTAR_SRC="src/com/gfxstar.asm"
 GFXSTAR_BIN="build/full/obj/gfxstar.com"
 GFXSTAR_MAX_SIZE=1024
+SETUP_SRC="src/com/setup.asm"
+SETUP_BIN="build/full/obj/setup.com"
+SETUP_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512))
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
 SPLASH_BIN="build/full/obj/SPLASH.BIN"
@@ -76,7 +79,7 @@ mtools_try() {
 	timeout --kill-after="${MTOOLS_KILL_AFTER_SEC}s" "${MTOOLS_TIMEOUT_SEC}s" "$@" >/dev/null 2>&1 || true
 }
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$SETUP_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -138,6 +141,7 @@ nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
 nasm -f bin "$CIUKEDIT_SRC" -o "$CIUKEDIT_BIN"
 nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
 nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
+nasm -f bin "$SETUP_SRC" -o "$SETUP_BIN"
 
 echo "[build-full] generating splash asset"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -163,6 +167,7 @@ DELTEST_SIZE="$(stat -c%s "$DELTEST_BIN")"
 CIUKEDIT_SIZE="$(stat -c%s "$CIUKEDIT_BIN")"
 GFXRECT_SIZE="$(stat -c%s "$GFXRECT_BIN")"
 GFXSTAR_SIZE="$(stat -c%s "$GFXSTAR_BIN")"
+SETUP_SIZE="$(stat -c%s "$SETUP_BIN")"
 SPLASH_SIZE="$(stat -c%s "$SPLASH_BIN")"
 SPLASH_SECTORS=$(((SPLASH_SIZE + 511) / 512))
 CLUSTER_SIZE_BYTES=$((FAT_SECTORS_PER_CLUSTER * 512))
@@ -175,6 +180,7 @@ DELTEST_SECTORS=$(((DELTEST_SIZE + 511) / 512))
 CIUKEDIT_SECTORS=$(((CIUKEDIT_SIZE + 511) / 512))
 GFXRECT_SECTORS=$(((GFXRECT_SIZE + 511) / 512))
 GFXSTAR_SECTORS=$(((GFXSTAR_SIZE + 511) / 512))
+SETUP_SECTORS=$(((SETUP_SIZE + 511) / 512))
 
 if [[ "$GFXRECT_SIZE" -gt "$GFXRECT_MAX_SIZE" ]]; then
 	echo "[build-full] ERROR: GFXRECT payload is $GFXRECT_SIZE bytes (max $GFXRECT_MAX_SIZE)" >&2
@@ -186,7 +192,12 @@ if [[ "$GFXSTAR_SIZE" -gt "$GFXSTAR_MAX_SIZE" ]]; then
 	exit 1
 fi
 
-echo "[build-full] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS SPLASH=$SPLASH_SECTORS"
+if [[ "$SETUP_SIZE" -gt "$SETUP_MAX_SIZE" ]]; then
+	echo "[build-full] ERROR: SETUP payload is $SETUP_SIZE bytes (max $SETUP_MAX_SIZE)" >&2
+	exit 1
+fi
+
+echo "[build-full] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS SETUP=$SETUP_SECTORS SPLASH=$SPLASH_SECTORS"
 
 if [[ "$SPLASH_SIZE" -ne "$SPLASH_EXPECTED_SIZE" ]]; then
 	echo "[build-full] ERROR: SPLASH.BIN size is $SPLASH_SIZE bytes (expected $SPLASH_EXPECTED_SIZE)" >&2
@@ -217,13 +228,14 @@ APPS_DELTEST_CLUSTER=$((APPS_FILEIO_CLUSTER + 1))
 APPS_CIUKEDIT_CLUSTER=$((APPS_DELTEST_CLUSTER + 1))
 APPS_GFXRECT_CLUSTER=$((APPS_CIUKEDIT_CLUSTER + 1))
 APPS_GFXSTAR_CLUSTER=$((APPS_GFXRECT_CLUSTER + 1))
+APPS_SETUP_CLUSTER=$((APPS_GFXSTAR_CLUSTER + 1))
 
 if (( SPLASH_CLUSTERS < 1 )); then
 	echo "[build-full] ERROR: SPLASH.BIN requires an invalid cluster count ($SPLASH_CLUSTERS)" >&2
 	exit 1
 fi
 
-if (( APPS_GFXSTAR_CLUSTER >= 256 )); then
+if (( APPS_SETUP_CLUSTER >= 256 )); then
 	echo "[build-full] ERROR: FAT16 layout exceeds first FAT sector entry range" >&2
 	exit 1
 fi
@@ -236,7 +248,8 @@ for sectors in \
 	"$DELTEST_SECTORS" \
 	"$CIUKEDIT_SECTORS" \
 	"$GFXRECT_SECTORS" \
-	"$GFXSTAR_SECTORS"; do
+	"$GFXSTAR_SECTORS" \
+	"$SETUP_SECTORS"; do
 	if (( sectors > FAT_SECTORS_PER_CLUSTER )); then
 		echo "[build-full] ERROR: payload exceeds single FAT16 cluster (${FAT_SECTORS_PER_CLUSTER} sectors)" >&2
 		exit 1
@@ -284,6 +297,7 @@ fat16_set_entry "$APPS_DELTEST_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_CIUKEDIT_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_GFXRECT_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_GFXSTAR_CLUSTER" 0xFFFF
+fat16_set_entry "$APPS_SETUP_CLUSTER" 0xFFFF
 
 make_entry() {
 	local out="$1" name="$2" attr="$3" cluster="$4" size="$5"
@@ -312,6 +326,7 @@ DIR_ENTRY_DELTEST="build/full/obj/dir_deltest.bin"
 DIR_ENTRY_CIUKEDIT="build/full/obj/dir_ciukedit.bin"
 DIR_ENTRY_GFXRECT="build/full/obj/dir_gfxrect.bin"
 DIR_ENTRY_GFXSTAR="build/full/obj/dir_gfxstar.bin"
+DIR_ENTRY_SETUP="build/full/obj/dir_setup.bin"
 SYSTEM_DIR_CLUSTER_BIN="build/full/obj/system_dir_cluster.bin"
 APPS_DIR_CLUSTER_BIN="build/full/obj/apps_dir_cluster.bin"
 
@@ -331,6 +346,7 @@ make_entry "$DIR_ENTRY_DELTEST"  'DELTEST BIN' 0x20 "$APPS_DELTEST_CLUSTER" "$DE
 make_entry "$DIR_ENTRY_CIUKEDIT" 'CIUKEDITCOM' 0x20 "$APPS_CIUKEDIT_CLUSTER" "$CIUKEDIT_SIZE"
 make_entry "$DIR_ENTRY_GFXRECT"  'GFXRECT COM' 0x20 "$APPS_GFXRECT_CLUSTER" "$GFXRECT_SIZE"
 make_entry "$DIR_ENTRY_GFXSTAR"  'GFXSTAR COM' 0x20 "$APPS_GFXSTAR_CLUSTER" "$GFXSTAR_SIZE"
+make_entry "$DIR_ENTRY_SETUP"    'SETUP   COM' 0x20 "$APPS_SETUP_CLUSTER" "$SETUP_SIZE"
 
 dd if=/dev/zero of="$SYSTEM_DIR_CLUSTER_BIN" bs=512 count="$FAT_SECTORS_PER_CLUSTER" status=none
 dd if="$DIR_ENTRY_DOT_SYSTEM" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=0 conv=notrunc status=none
@@ -348,6 +364,7 @@ dd if="$DIR_ENTRY_DELTEST" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=160 conv=notrunc
 dd if="$DIR_ENTRY_CIUKEDIT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=192 conv=notrunc status=none
 dd if="$DIR_ENTRY_GFXRECT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=224 conv=notrunc status=none
 dd if="$DIR_ENTRY_GFXSTAR" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=256 conv=notrunc status=none
+dd if="$DIR_ENTRY_SETUP" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=288 conv=notrunc status=none
 
 echo "[build-full] creating 128MB FAT16 image"
 dd if=/dev/zero of="$IMG" bs=512 count="$TOTAL_SECTORS" status=none
@@ -370,6 +387,7 @@ dd if="$DELTEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_DELTEST_CLUSTER 
 dd if="$CIUKEDIT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_CIUKEDIT_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$CIUKEDIT_SECTORS" conv=notrunc status=none
 dd if="$GFXRECT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_GFXRECT_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$GFXRECT_SECTORS" conv=notrunc status=none
 dd if="$GFXSTAR_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_GFXSTAR_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$GFXSTAR_SECTORS" conv=notrunc status=none
+dd if="$SETUP_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_SETUP_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$SETUP_SECTORS" conv=notrunc status=none
 
 echo "[build-full] shell-only profile: external desktop payload injection disabled"
 
@@ -379,9 +397,9 @@ CiukiOS Legacy v2 - Full profile (FAT16 baseline)
 Image: ciukios-full.img (128MB)
 State: BIOS stage0 -> stage1 with full DOS runtime and FAT16 file I/O
 Filesystem: FAT16 (SPT=63 Heads=16 128MB) with root directories SYSTEM/APPS
-Boot path: stage0 at LBA0, stage1 payload in sectors 2-15
+Boot path: stage0 at LBA0, stage1 payload in sectors 2-$((STAGE1_SECTORS + 1))
 Data: cluster 2=SYSTEM dir, 3=APPS dir, 4=SYSTEM/STAGE2, ${SYSTEM_SPLASH_CLUSTER}-${SYSTEM_SPLASH_LAST_CLUSTER}=SYSTEM/SPLASH
-Data: cluster ${APPS_COMDEMO_CLUSTER}=APPS/COMDEMO, ${APPS_MZDEMO_CLUSTER}=APPS/MZDEMO, ${APPS_FILEIO_CLUSTER}=APPS/FILEIO, ${APPS_DELTEST_CLUSTER}=APPS/DELTEST, ${APPS_CIUKEDIT_CLUSTER}=APPS/CIUKEDIT, ${APPS_GFXRECT_CLUSTER}=APPS/GFXRECT, ${APPS_GFXSTAR_CLUSTER}=APPS/GFXSTAR
+Data: cluster ${APPS_COMDEMO_CLUSTER}=APPS/COMDEMO, ${APPS_MZDEMO_CLUSTER}=APPS/MZDEMO, ${APPS_FILEIO_CLUSTER}=APPS/FILEIO, ${APPS_DELTEST_CLUSTER}=APPS/DELTEST, ${APPS_CIUKEDIT_CLUSTER}=APPS/CIUKEDIT, ${APPS_GFXRECT_CLUSTER}=APPS/GFXRECT, ${APPS_GFXSTAR_CLUSTER}=APPS/GFXSTAR, ${APPS_SETUP_CLUSTER}=APPS/SETUP
 TXT
 
 echo "[build-full] done: $IMG"

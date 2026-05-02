@@ -52,9 +52,10 @@ def _prepare_source_image(image: Image.Image) -> Image.Image:
         crop_box = (left, 0, left + crop_w, src_h)
     else:
         crop_h = max(1, int(src_w / target_ratio))
-        top = max(0, (src_h - crop_h) // 3)
-        if top + crop_h > src_h:
-            top = src_h - crop_h
+        vertical_trim = max(0, src_h - crop_h)
+        # Keep more bottom content ("CiukiOS" logo) visible after 16:10 crop.
+        top = (vertical_trim * 3) // 5
+        top = max(0, min(top, src_h - crop_h))
         crop_box = (0, top, src_w, top + crop_h)
 
     cropped = rgb.crop(crop_box)
@@ -90,8 +91,8 @@ def generate_splash_asset(source: Path, output: Path) -> int:
         raw_palette = indexed.getpalette() or []
         palette_list = (raw_palette + [0] * PALETTE_BYTES)[:PALETTE_BYTES]
         # Reserve top 3 palette entries for splash UI chrome colors.
-        palette_list[253 * 3 : 253 * 3 + 3] = [48, 96, 208]   # blue banner
-        palette_list[254 * 3 : 254 * 3 + 3] = [76, 84, 104] # gray inset
+        palette_list[253 * 3 : 253 * 3 + 3] = [16, 32, 96]   # dark blue banner
+        palette_list[254 * 3 : 254 * 3 + 3] = [24, 44, 128]  # dark blue inset
         palette_list[255 * 3 : 255 * 3 + 3] = [146, 88, 186]  # purple blocks
         palette = bytes(palette_list)
         indexed_pixels = indexed.tobytes()
