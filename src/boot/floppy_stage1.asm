@@ -1883,6 +1883,9 @@ int21_exec_load_mz:
     push di
     push es
 
+    mov bx, [cs:search_found_size_lo]
+    mov bp, [cs:search_found_size_hi]
+
     mov ax, [cs:current_load_seg]
     mov es, ax
     xor ax, ax
@@ -1890,17 +1893,72 @@ int21_exec_load_mz:
     mov cx, 128
     rep stosw
 
+    mov word [cs:search_found_size_lo], 512
+    mov word [cs:search_found_size_hi], 0
+
     xor di, di
     xor cx, cx
     call int21_exec_load_to_es
-    jc .fail
+    jc .done
+
+    cmp word [es:0x0000], 0x5A4D
+    jne .invalid_format
+
+    mov ax, [es:0x0004]
+    or ax, ax
+    je .invalid_format
+    mov cx, [es:0x0002]
+    cmp cx, 512
+    jae .invalid_format
+    mov dx, cx
+
+    mov di, ax
+    mov cl, 7
+    shr di, cl
+    mov cl, 9
+    shl ax, cl
+    or dx, dx
+    je .mz_size_ready
+    sub ax, 512
+    sbb di, 0
+    add ax, dx
+    adc di, 0
+
+.mz_size_ready:
+    mov dx, [es:0x0008]
+    mov cl, 4
+    shl dx, cl
+
+    cmp di, 0
+    jne .mz_size_header_ok
+    cmp ax, dx
+    jb .invalid_format
+
+.mz_size_header_ok:
+    cmp di, bp
+    ja .invalid_format
+    jb .mz_size_file_ok
+    cmp ax, bx
+    ja .invalid_format
+
+.mz_size_file_ok:
+    mov [cs:search_found_size_lo], ax
+    mov [cs:search_found_size_hi], di
+
+    xor di, di
+    xor cx, cx
+    call int21_exec_load_to_es
+    jc .done
     clc
     jmp .done
 
-.fail:
+.invalid_format:
+    mov ax, 0x000B
     stc
 
 .done:
+    mov [cs:search_found_size_lo], bx
+    mov [cs:search_found_size_hi], bp
     pop es
     pop di
     pop cx

@@ -68,6 +68,8 @@ SPLASH_TOOL="scripts/generate_splash_asset.py"
 SPLASH_BIN="build/full/obj/SPLASH.BIN"
 SPLASH_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512 * 6))
 SPLASH_EXPECTED_SIZE=16768
+DOOM_SRC_DIR="${CIUKIOS_DOOM_SRC_DIR:-$CIUKIOS_ROOT/third_party/Doom}"
+DOOM_IMAGE_DIR="${CIUKIOS_DOOM_IMAGE_DIR:-::APPS/DOOM}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 # Default to shell-first UX on full profile; enable autorun explicitly for desktop tests.
 STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-0}"
@@ -390,6 +392,27 @@ dd if="$GFXSTAR_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_GFXSTAR_CLUSTER 
 dd if="$SETUP_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_SETUP_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$SETUP_SECTORS" conv=notrunc status=none
 
 echo "[build-full] shell-only profile: external desktop payload injection disabled"
+if [[ -d "$DOOM_SRC_DIR" ]]; then
+    if ! command -v mmd >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+        echo "[build-full] ERROR: DOOM source present but mtools (mmd/mcopy) is missing" >&2
+        exit 1
+    fi
+
+    echo "[build-full] injecting local Doom payload from $DOOM_SRC_DIR to $DOOM_IMAGE_DIR"
+    mmd -i "$IMG" "$DOOM_IMAGE_DIR" >/dev/null 2>&1 || true
+
+    shopt -s nullglob dotglob
+    doom_items=("$DOOM_SRC_DIR"/*)
+    shopt -u nullglob dotglob
+    if (( ${#doom_items[@]} > 0 )); then
+        mcopy -s -o -i "$IMG" "${doom_items[@]}" "$DOOM_IMAGE_DIR/"
+    else
+        echo "[build-full] WARN: Doom source directory is empty: $DOOM_SRC_DIR" >&2
+    fi
+else
+    echo "[build-full] doom payload not found at $DOOM_SRC_DIR (skipped)"
+fi
+
 
 cat > build/full/README.txt << TXT
 CiukiOS Legacy v2 - Full profile (FAT16 baseline)
