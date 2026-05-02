@@ -70,6 +70,10 @@ SPLASH_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512 * 6))
 SPLASH_EXPECTED_SIZE=16768
 DOOM_SRC_DIR="${CIUKIOS_DOOM_SRC_DIR:-$CIUKIOS_ROOT/third_party/Doom}"
 DOOM_IMAGE_DIR="${CIUKIOS_DOOM_IMAGE_DIR:-::APPS/DOOM}"
+DRIVERS_SRC_DIR="${CIUKIOS_DRIVERS_SRC_DIR:-$CIUKIOS_ROOT/third_party/drivers}"
+DRIVERS_IMAGE_DIR="${CIUKIOS_DRIVERS_IMAGE_DIR:-::SYSTEM/DRIVERS}"
+DRIVERS_VERIFY_SCRIPT="$CIUKIOS_ROOT/scripts/verify_full_drivers_payload.sh"
+CIUKIOS_ALLOW_MISSING_DRIVERS="${CIUKIOS_ALLOW_MISSING_DRIVERS:-0}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 # Default to shell-first UX on full profile; enable autorun explicitly for desktop tests.
 STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-0}"
@@ -413,6 +417,48 @@ else
     echo "[build-full] doom payload not found at $DOOM_SRC_DIR (skipped)"
 fi
 
+if [[ ! -d "$DRIVERS_SRC_DIR" ]]; then
+	if [[ "$CIUKIOS_ALLOW_MISSING_DRIVERS" == "1" ]]; then
+		echo "[build-full] WARN: drivers payload not found at $DRIVERS_SRC_DIR (skipped by CIUKIOS_ALLOW_MISSING_DRIVERS=1)" >&2
+	else
+		echo "[build-full] ERROR: drivers source directory not found: $DRIVERS_SRC_DIR (set CIUKIOS_ALLOW_MISSING_DRIVERS=1 to skip intentionally)" >&2
+		exit 1
+	fi
+else
+	shopt -s nullglob dotglob
+	drivers_items=("$DRIVERS_SRC_DIR"/*)
+	shopt -u nullglob dotglob
+
+	if (( ${#drivers_items[@]} == 0 )); then
+		if [[ "$CIUKIOS_ALLOW_MISSING_DRIVERS" == "1" ]]; then
+			echo "[build-full] WARN: drivers source directory is empty: $DRIVERS_SRC_DIR (skipped by CIUKIOS_ALLOW_MISSING_DRIVERS=1)" >&2
+		else
+			echo "[build-full] ERROR: drivers source directory is empty: $DRIVERS_SRC_DIR (set CIUKIOS_ALLOW_MISSING_DRIVERS=1 to skip intentionally)" >&2
+			exit 1
+		fi
+	else
+		if ! command -v mmd >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+			echo "[build-full] ERROR: drivers source present but mtools (mmd/mcopy) is missing" >&2
+			exit 1
+		fi
+
+		if [[ ! -f "$DRIVERS_VERIFY_SCRIPT" ]]; then
+			echo "[build-full] ERROR: drivers verifier not found: $DRIVERS_VERIFY_SCRIPT" >&2
+			exit 1
+		fi
+
+		echo "[build-full] injecting local drivers payload from $DRIVERS_SRC_DIR to $DRIVERS_IMAGE_DIR"
+		mmd -i "$IMG" "$DRIVERS_IMAGE_DIR" >/dev/null 2>&1 || true
+		mcopy -s -o -i "$IMG" "${drivers_items[@]}" "$DRIVERS_IMAGE_DIR/"
+
+		if ! IMG="$IMG" DRIVERS_SRC_DIR="$DRIVERS_SRC_DIR" DRIVERS_IMAGE_DIR="$DRIVERS_IMAGE_DIR" \
+			bash "$DRIVERS_VERIFY_SCRIPT"; then
+			echo "[build-full] ERROR: drivers payload verification failed" >&2
+			exit 1
+		fi
+	fi
+fi
+
 
 cat > build/full/README.txt << TXT
 CiukiOS Legacy v2 - Full profile (FAT16 baseline)
@@ -423,6 +469,7 @@ Filesystem: FAT16 (SPT=63 Heads=16 128MB) with root directories SYSTEM/APPS
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-$((STAGE1_SECTORS + 1))
 Data: cluster 2=SYSTEM dir, 3=APPS dir, 4=SYSTEM/STAGE2, ${SYSTEM_SPLASH_CLUSTER}-${SYSTEM_SPLASH_LAST_CLUSTER}=SYSTEM/SPLASH
 Data: cluster ${APPS_COMDEMO_CLUSTER}=APPS/COMDEMO, ${APPS_MZDEMO_CLUSTER}=APPS/MZDEMO, ${APPS_FILEIO_CLUSTER}=APPS/FILEIO, ${APPS_DELTEST_CLUSTER}=APPS/DELTEST, ${APPS_CIUKEDIT_CLUSTER}=APPS/CIUKEDIT, ${APPS_GFXRECT_CLUSTER}=APPS/GFXRECT, ${APPS_GFXSTAR_CLUSTER}=APPS/GFXSTAR, ${APPS_SETUP_CLUSTER}=APPS/SETUP
+Optional payloads: third_party/drivers is injected under SYSTEM/DRIVERS when available at build time
 TXT
 
 echo "[build-full] done: $IMG"

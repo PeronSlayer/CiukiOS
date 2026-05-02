@@ -1,0 +1,239 @@
+
+1394cd.sys - Phoenix Technology DOS Firewire (IEEE1394) CD-ROM (El Torito) Driver
+device=1394cd.sys /d:MSCD001
+
+
+amsida.sys - AMD PCscsi ASPI Manager (Qlogic Fast!SCSI Basic, Tekram DC-390, Dawi DC2964F)
+device=amsida.sys /v /l
+
+
+aspi1394.sys - Iomega Driver for 1394 (FireWire) Devices
+device=aspi1394.sys /int /all
+
+
+aspi2dos.sys - Adaptec AIC-6260/6360/6370 ASPI Manager
+device=aspi2dos.sys /d
+
+
+aspi320.sys - Adaptec Ultra320 DOS ASPI
+device=aspi320.sys /d
+
+
+aspi4dos.sys - Adaptec AHA-1540/1542/1640 ASPI Manager
+device=aspi4dos.sys /d
+
+
+aspi7dos.sys - Adaptec AIC-7770 ASPI Manager
+device=aspi7dos.sys /d
+
+
+aspi8dos.sys - Adaptec AIC-78XX/AIC-75XX ASPI Manager
+device=aspi8dos.sys /d
+
+
+aspi8u2.sys - Adaptec AIC-7892/99 ASPI Manager
+device=aspi8u2.sys /d
+
+
+aspi8xx.sys - LSI Logic (Symbios Logic) Sym53c8xx SDMS PCI ASPI Manager
+device=aspi8xx.sys /VERBOSE
+
+
+aspi910u.sys - Initio INI-9100/9100W or INI-9XXXU/UW ASPI Manager
+device=aspi910u.sys /d
+
+
+aspia100.sys - Initio INI-A100U2W ASPI Manager
+device=aspia100.sys /d
+
+
+aspiatap.sys - Iomega Scsi to ATAPI Interface Manager
+device=aspiatap.sys
+
+
+aspicd.sys - Adaptec ASPI CD-ROM Driver (Supports Yamaha, Kodak, HP C4324/c4325, Plextor, Shinaken, Matshita, DEC, IBM, Teac, Compaq, Chinon, Denon, Hitachi, LMS, NEC, Panasonic, Sony, Toshiba, Texel, JVC, IMS and Pioneer brands)
+device=aspicd.sys /d:MSCD001
+
+
+aspiedos.sys - Adaptec AHA-1740/1742/1744 (enhanced mode) ASPI Manager
+device=aspiedos.sys /d
+
+
+aspifcam.sys - Future Domain's PowerSCSI ASPI Interface
+device=aspifcam.sys [/D (Enables SCSI disconnect/reconnect feature) /O (Enables posting of ASPI commands) /M (Disables the display of parameter option messages)]
+
+
+aspipc16.sys - Iomega ASPI Manager for the PC1600(or other AIC-6260/6360 based SCSI Controllers) Host Adapter.
+device=aspipc16.sys
+
+
+aspippm2.sys - Iomega Fast Parallel Port Interface Manager
+device=aspippm2.sys
+
+
+atapicd.sys - Standard ATAPI CD/DVD-ROM Device Driver 2.12
+device=atapicd.sys /d:MSCD001
+
+
+btcdrom.sys - CDROM Driver for Buslogic Controller Cards (Supports Sony, Toshiba, Chinon, Hitachi, Texel, Matshita, NEC, Ibm, Shinaken, Pioneer, Plextor, Sanyo, Teac, and Aiwa Brands)
+device=btcdrom.sys /d:MSCD000
+
+
+btdosm.sys - Mylex Corp. BusLogic DOS SCSI Manager
+device=btdosm.sys
+
+
+dcam18xx.exe - Future Domain 18XX/36XX SCSI IC-based Controller
+device=dcam18xx.exe
+
+
+ddloader.com - Tool to load a driver from command-line
+ddloader example.sys
+
+
+devload.com - Load device drivers from the command line at any time without rebooting
+devload [/H - try to load driver to UMB. /Q - quiet mode. /V - verbose mode. /A - auto-mode (force to stay loaded).] filename [params]
+
+
+di1000dd.sys - Novac ASPI Mass Storage Device Driver (Motto Hairu USB Mass storage Driver)
+device=di1000dd.sys
+
+
+doskey.com - edits, recalls, auto-completes Dos commands
+doskey /R (To Install new instance of DosKey)
+
+
+duse.exe - supports USB hardware that meets the OHCI specification, the UHCI Specification, and the EHCI specifications. Supports USB ZIP drives, USB Hard disk, USB Super Floppy/HiFD drives, USB CD-ROM, USB MO drives (includes duseldr.com)
+duseldr duse.exe
+
+
+edit.com - DOS ASCII text editor, Sometimes used as a substitute for Notepad on Windows 95/98
+edit newfile.txt (This will open newfile.txt or create new file if not exist)
+
+
+extract.exe - Extracts files from cabinet (.cab) files.
+extract [/Y (Do not prompt before overwriting an existing file) /A (Process ALL cabinets. Follows cabinet chain starting in first cabinet mentioned) /E (Use this instead of *.* to extract all files) /L (Location to place extracted files, default is current directory) cabinet [filename ...]
+
+
+flashpt.sys - Mylex BusLogic FlashPoint SCSI Manager
+device=flashpt.sys
+
+
+gcdrom.sys - SATA Native IDE CD/DVD-ROM driver (Supports Intel ICH6/ICH7/ICH8, JMicron 361/363/368, NVidia CK804/MCP55/MCP51...(may not work with PATA)
+device=gcdrom.sys /d:MSCD001 /C0
+
+
+get.exe - Batch File Enhancer (better than choice.com)
+get c " Choose an option : " 1234567 (This will let set %get% as choice)
+
+
+ifshlp.sys - 32-bit Installable File System Manager
+device=ifshlp.sys
+
+
+ipsraspi.sys - IBM ServeRAID DOS ASPI Driver
+device=ipsraspi.sys
+
+
+keyb.exe - a very small keyboard driver
+keyb us (be, bg, br, bx, dk, fr, gr, he, it, la, nl, no, pl, po, ru, sf, sg, sl, sp, su, sv and uk supported)
+
+
+loadsys.exe - TSR and Device Driver loader/unloader - Download loadsys.txt
+loadsys [/ss (for silent) /od (force load as device driver) /ot (force load as tsr)] driver.sys (or tsr.exe)
+
+
+megaspi.sys - American Megatrends Inc. ASPI Manager For HP NetRAID
+device=megaspi.sys [/d (scan down PCI bus) /b (override BIOS setting) /h (no INT13h support) /a (physical drive access mode) /p (Netware is exist)]
+
+
+mem.exe - Displays the amount of used and free memory in your system.
+mem /c /p (This displays detailed info with pause)
+
+
+mi.com - Displays Memory information (better than mem.exe)
+mi (this displays detailed information)
+
+
+mouse.com - Microsoft Mouse Driver Version 9 which provides mouse pointer device support for DOS & Win3.xx
+mouse.com
+
+
+mscdex.exe - Microsoft CD-Rom Extension
+mscdex /d:MSCD001
+
+
+oakcdrom.sys - Generic CD-Rom driver, work with the most of IDE CD-ROM Drives
+device=oakcdrom.sys /d:MSCD001 (/L:X to assign drive letter as X)
+
+
+qcdrom.sys - UltraDMA CDROM Driver (Supports ATAPI-standard CD/DVD Drives attached to normal PC system IDE channels) - qcdrom.txt
+device=qcdrom.sys /d:MSCD001
+
+
+ramdrive.sys - DOS Device driver that creates a Ram Drive drive in memory.
+device=ramdrive.sys 32767 512 512 /E (This creates a virtual drive of 32mb)
+
+
+sbide.sys - Creative OTI-011 CD-ROM device driver (Marvell PATA Driver)
+device=sbide.sys /v /d:mscd001 /p:1016,10,1022
+
+
+shsucdx.com - Unloadable CD-ROM redirector (substitute for mscdex.exe)
+shsucdx /d:MSCD001
+
+
+shsurdrv.exe - Simulate a floppy or hard disk using an image file in memory and/or create a RAM drive
+shsurdrv /D:51200K:D512:$RAM-DRIVE,R /T (This creates 50Mb Ram Drive as R:)
+
+
+smartdrv.exe - Device driver to perform double buffering, This also perform disk caching, which can speed up your computer
+device=smartdrv.exe /double_buffer (To use SMARTDrive for disk caching, add the smartdrv command to your AUTOEXEC.BAT file)
+
+
+t3x5aspi.sys - Tekram DC-3X5 PCI SCSI Controller Series ASPI Manager
+device=t3x5aspi.sys
+
+
+usbaspi1.sys - Panasonic Communications Co. ASPI Manager for USB mass-storage (Universal Driver)
+device=usbaspi1.sys /V [/E (EHCI USB 2.0) /O (OHCI USB 1.1 Add-on) /U (UHCI USB 1.1 Integrated)]
+
+
+usbaspi2.sys - Novac ASPI Manager for UHCI/OHCI USB mass-storage
+device=usbaspi2.sys
+
+
+usbaspi3.sys - Medialogic ASPI Manager for USB mass-storage
+device=usbaspi3.sys
+
+
+usbaspi4.sys - Iomega ASPI USB-OHCI 1.1
+device=usbaspi4.sys
+
+
+usbaspi5.sys - Iomega ASPI USB-UHCI 1.0
+device=usbaspi5.sys
+
+
+usbcd1.sys - Panasonic USB CD-ROM Device Driver 1.0
+device=usbcd1.sys /d:MSCD000
+
+
+usbcd2.sys - TEAC USB CD-ROM Device Driver
+device=usbcd2.sys /d:MSCD000
+
+
+usbcd3.sys - ASUSTeK USB CD-ROM Device Driver
+device=usbcd3.sys /d:MSCD000
+
+
+vide-cdd.sys - IDE/ATAPI CD-ROM Device Driver (Small Footprint - Only 6k Upper memory required)
+device=vide-cdd.sys /d:MSCD001
+
+
+xcdrom.sys - DOS CD-ROM Disk Driver for Intel/VIA/SiS/ALi or other UltraDMA controller chip (JMicron JMB361)
+device=xcdrom.sys /d:MSCD000
+
+
+xmsdsk.exe - Adjustable XMS RAMdisk Driver - Freeware
+xmsdsk 51200 R: /t /y (This creates 50Mb Ram Drive as R:)
