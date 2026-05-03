@@ -3966,6 +3966,34 @@ int21_open:
     mov word [si + 11], 0x4F43
     mov byte [si + 13], 'M'
 .resolve_path:
+    push si
+.doom_etx_scan:
+    cmp byte [si], 0
+    je .doom_etx_done
+    cmp byte [si], 'D'
+    jne .doom_etx_next
+    cmp byte [si + 1], 'O'
+    jne .doom_etx_next
+    cmp byte [si + 2], 'O'
+    jne .doom_etx_next
+    cmp byte [si + 3], 'M'
+    jne .doom_etx_next
+    cmp byte [si + 4], '.'
+    jne .doom_etx_next
+    cmp byte [si + 5], 'E'
+    jne .doom_etx_next
+    cmp byte [si + 6], 'T'
+    jne .doom_etx_next
+    cmp byte [si + 7], 'X'
+    jne .doom_etx_next
+    mov byte [si + 6], 'X'
+    mov byte [si + 7], 'E'
+    jmp .doom_etx_done
+.doom_etx_next:
+    inc si
+    jmp .doom_etx_scan
+.doom_etx_done:
+    pop si
 %endif
     call int21_resolve_and_find_path
     jnc .path_ready
@@ -6215,6 +6243,14 @@ int21_mem_init:
 int21_mem_query_free:
     push es
 
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .query_psp
+    mov ax, [cs:dos_mem_psp_free_seg]
+    mov cx, [cs:dos_mem_psp_free_size]
+    pop es
+    ret
+
+.query_psp:
     mov ax, DOS_HEAP_USER_SEG
     mov cx, DOS_HEAP_LIMIT_SEG
     mov dx, [cs:current_psp_seg]
@@ -6280,6 +6316,18 @@ int21_mem_write_psp_free_mcb:
     dec ax
     mov es, ax
     mov byte [es:0x0000], 'Z'
+    mov ax, [cs:dos_mem_alloc_seg]
+    cmp ax, [cs:dos_mem_psp_free_seg]
+    ja .mark_middle
+    mov ax, [cs:dos_mem_alloc_seg2]
+    cmp ax, [cs:dos_mem_psp_free_seg]
+    ja .mark_middle
+    mov ax, [cs:dos_mem_alloc_seg3]
+    cmp ax, [cs:dos_mem_psp_free_seg]
+    jbe .type_ready
+.mark_middle:
+    mov byte [es:0x0000], 'M'
+.type_ready:
     mov word [es:0x0001], 0
     mov [es:0x0003], bx
 
@@ -6290,10 +6338,10 @@ int21_mem_write_psp_free_mcb:
     ret
 
 int21_mem_carve_psp_tail:
-    push ax
     push bx
     push cx
 
+    mov ax, [cs:dos_mem_psp_free_seg]
     mov cx, [cs:dos_mem_psp_free_size]
     sub cx, bx
     cmp cx, 1
@@ -6304,17 +6352,14 @@ int21_mem_carve_psp_tail:
     jmp .done
 
 .has_tail:
-    add ax, bx
-    inc ax
-    mov [cs:dos_mem_psp_free_seg], ax
+    add ax, cx
     dec cx
     mov [cs:dos_mem_psp_free_size], cx
-    mov dl, 'M'
+    mov dl, 'Z'
 
 .done:
     pop cx
     pop bx
-    pop ax
     ret
 
 int21_mem_current_owner:
@@ -6550,6 +6595,25 @@ int21_alloc:
     cmp bx, cx
     ja .no_memory
 
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .first_low_alloc
+    cmp ax, [cs:dos_mem_psp_free_seg]
+    jne .first_low_alloc
+    mov [cs:dos_mem_alloc_size], bx
+    call int21_mem_carve_psp_tail
+    mov [cs:dos_mem_alloc_seg], ax
+    call int21_mem_current_owner
+    mov [cs:dos_mem_mcb_owner], ax
+    mov [cs:dos_mem_mcb_size], bx
+    call int21_mem_write_mcb
+    mov al, 'M'
+    call int21_psp_mcb_update_type
+    call int21_mem_write_psp_free_mcb
+    mov ax, [cs:dos_mem_alloc_seg]
+    clc
+    ret
+
+.first_low_alloc:
     mov [cs:dos_mem_alloc_seg], ax
     mov [cs:dos_mem_alloc_size], bx
     call int21_mem_current_owner
@@ -6600,10 +6664,9 @@ int21_alloc:
     jmp .alloc_slot2_from_psp
 
 .alloc_slot2_from_psp:
-    mov ax, [cs:dos_mem_psp_free_seg]
-    mov [cs:dos_mem_alloc_seg2], ax
     mov [cs:dos_mem_alloc_size2], bx
     call int21_mem_carve_psp_tail
+    mov [cs:dos_mem_alloc_seg2], ax
 
     push es
     push ax
@@ -6700,10 +6763,9 @@ int21_alloc:
     jmp .alloc_slot3_from_psp
 
 .alloc_slot3_from_psp:
-    mov ax, [cs:dos_mem_psp_free_seg]
-    mov [cs:dos_mem_alloc_seg3], ax
     mov [cs:dos_mem_alloc_size3], bx
     call int21_mem_carve_psp_tail
+    mov [cs:dos_mem_alloc_seg3], ax
 
     push es
     push ax
@@ -6728,7 +6790,6 @@ int21_alloc:
 .alloc_bump_check:
     cmp bx, [cs:dos_mem_psp_free_size]
     ja .both_busy_fail
-    mov ax, [cs:dos_mem_psp_free_seg]
     call int21_mem_carve_psp_tail
 
     push es
@@ -6934,7 +6995,8 @@ int21_resize:
     cmp dx, [cs:dos_mem_alloc_seg]
     ja .psp_overlap
 .resize_psp_commit:
-    mov dx, ax
+    mov si, ax
+    add si, bx
     mov dx, DOS_HEAP_LIMIT_SEG
     push ax
     push bx
@@ -6946,7 +7008,6 @@ int21_resize:
     je .psp_tail_check
     mov al, 'M'
 .psp_tail_check:
-    mov si, dx
     inc si
     cmp si, DOS_HEAP_LIMIT_SEG
     jae .psp_type_ready
@@ -14568,6 +14629,256 @@ xms_entrypoint:
     retf
 
 .move_emb:
+%if FAT_TYPE == 16
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    push bp
+
+    mov ax, [ds:si]
+    mov [cs:xms_move_len_lo], ax
+    mov ax, [ds:si + 2]
+    mov [cs:xms_move_len_hi], ax
+    test byte [cs:xms_move_len_lo], 1
+    jnz .move_bad_length
+
+    mov ax, [cs:xms_move_len_lo]
+    or ax, [cs:xms_move_len_hi]
+    jz .move_success
+
+    mov ax, [ds:si + 4]
+    cmp ax, 1
+    ja .move_bad_src
+    je .move_src_emb
+
+    mov ax, [ds:si + 6]
+    mov [cs:xms_move_src_lo], ax
+    mov ax, [ds:si + 8]
+    mov dx, ax
+    mov cl, 4
+    shl ax, cl
+    add [cs:xms_move_src_lo], ax
+    mov ax, dx
+    mov cl, 12
+    shr ax, cl
+    adc ax, 0
+    mov [cs:xms_move_src_hi], ax
+    jmp .move_dst_setup
+
+.move_src_emb:
+    cmp word [cs:xms_alloc_kb], 0
+    je .move_bad_src
+    mov ax, [ds:si + 6]
+    mov dx, [ds:si + 8]
+    call .move_check_emb_range
+    jc .move_bad_src_offset
+    mov ax, [ds:si + 6]
+    mov [cs:xms_move_src_lo], ax
+    mov ax, [ds:si + 8]
+    add ax, 0x0010
+    jc .move_bad_src_offset
+    cmp ax, 0x0100
+    jae .move_bad_src_offset
+    mov [cs:xms_move_src_hi], ax
+
+.move_dst_setup:
+    mov ax, [ds:si + 10]
+    cmp ax, 1
+    ja .move_bad_dst
+    je .move_dst_emb
+
+    mov ax, [ds:si + 12]
+    mov [cs:xms_move_dst_lo], ax
+    mov ax, [ds:si + 14]
+    mov dx, ax
+    mov cl, 4
+    shl ax, cl
+    add [cs:xms_move_dst_lo], ax
+    mov ax, dx
+    mov cl, 12
+    shr ax, cl
+    adc ax, 0
+    mov [cs:xms_move_dst_hi], ax
+    jmp .move_loop
+
+.move_dst_emb:
+    cmp word [cs:xms_alloc_kb], 0
+    je .move_bad_dst
+    mov ax, [ds:si + 12]
+    mov dx, [ds:si + 14]
+    call .move_check_emb_range
+    jc .move_bad_dst_offset
+    mov ax, [ds:si + 12]
+    mov [cs:xms_move_dst_lo], ax
+    mov ax, [ds:si + 14]
+    add ax, 0x0010
+    jc .move_bad_dst_offset
+    cmp ax, 0x0100
+    jae .move_bad_dst_offset
+    mov [cs:xms_move_dst_hi], ax
+
+.move_loop:
+    mov ax, [cs:xms_move_len_lo]
+    or ax, [cs:xms_move_len_hi]
+    jz .move_success
+
+    mov ax, 0x8000
+    cmp word [cs:xms_move_len_hi], 0
+    jne .move_chunk_ready
+    cmp [cs:xms_move_len_lo], ax
+    ja .move_chunk_ready
+    mov ax, [cs:xms_move_len_lo]
+.move_chunk_ready:
+    mov [cs:xms_move_chunk], ax
+    mov ax, [cs:xms_move_src_lo]
+    mov dx, [cs:xms_move_src_hi]
+    call .move_check_addr24_chunk
+    jc .move_bad_src_offset
+    mov ax, [cs:xms_move_dst_lo]
+    mov dx, [cs:xms_move_dst_hi]
+    call .move_check_addr24_chunk
+    jc .move_bad_dst_offset
+    call .move_chunk_87
+    jc .move_bios_fail
+
+    mov ax, [cs:xms_move_chunk]
+    add [cs:xms_move_src_lo], ax
+    adc word [cs:xms_move_src_hi], 0
+    add [cs:xms_move_dst_lo], ax
+    adc word [cs:xms_move_dst_hi], 0
+    sub [cs:xms_move_len_lo], ax
+    sbb word [cs:xms_move_len_hi], 0
+    jmp .move_loop
+
+.move_success:
+    pop bp
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    mov ax, 1
+    xor bl, bl
+    retf
+
+.move_bad_length:
+    mov bl, 0xA7
+    jmp .move_fail
+.move_bad_src:
+    mov bl, 0xA3
+    jmp .move_fail
+.move_bad_src_offset:
+    mov bl, 0xA4
+    jmp .move_fail
+.move_bad_dst:
+    mov bl, 0xA5
+    jmp .move_fail
+.move_bad_dst_offset:
+    mov bl, 0xA6
+    jmp .move_fail
+.move_bios_fail:
+    mov bl, 0xA0
+.move_fail:
+    pop bp
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    mov bh, ah
+    xor ax, ax
+    retf
+
+.move_check_emb_range:
+    add ax, [cs:xms_move_len_lo]
+    adc dx, [cs:xms_move_len_hi]
+    jc .move_range_bad
+    mov bx, [cs:xms_alloc_kb]
+    mov cx, bx
+    shl bx, 10
+    shr cx, 6
+    cmp dx, cx
+    ja .move_range_bad
+    jb .move_range_ok
+    cmp ax, bx
+    ja .move_range_bad
+.move_range_ok:
+    clc
+    ret
+.move_range_bad:
+    stc
+    ret
+
+.move_check_addr24_chunk:
+    mov bx, [cs:xms_move_chunk]
+    dec bx
+    add ax, bx
+    adc dx, 0
+    cmp dx, 0x0100
+    jae .move_range_bad
+    clc
+    ret
+
+.move_chunk_87:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    push cs
+    pop es
+    mov di, xms_87_gdt
+    xor ax, ax
+    mov cx, 24
+    pushf
+    cld
+    rep stosw
+    popf
+
+    mov ax, [cs:xms_move_chunk]
+    dec ax
+    mov [cs:xms_87_gdt + 16], ax
+    mov ax, [cs:xms_move_src_lo]
+    mov [cs:xms_87_gdt + 18], ax
+    mov al, [cs:xms_move_src_hi]
+    mov [cs:xms_87_gdt + 20], al
+    mov byte [cs:xms_87_gdt + 21], 0x93
+
+    mov ax, [cs:xms_move_chunk]
+    dec ax
+    mov [cs:xms_87_gdt + 24], ax
+    mov ax, [cs:xms_move_dst_lo]
+    mov [cs:xms_87_gdt + 26], ax
+    mov al, [cs:xms_move_dst_hi]
+    mov [cs:xms_87_gdt + 28], al
+    mov byte [cs:xms_87_gdt + 29], 0x93
+
+    mov cx, [cs:xms_move_chunk]
+    shr cx, 1
+    mov si, xms_87_gdt
+    mov ah, 0x87
+    int 0x15
+
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%else
     mov ax, [ds:si + 4]
     or ax, [ds:si + 10]
     cmp ax, 1
@@ -14580,6 +14891,7 @@ xms_entrypoint:
     mov ax, 1
     xor bl, bl
     retf
+%endif
 
 .check_handle:
     cmp dx, 1
@@ -14663,8 +14975,18 @@ old_int2f_off dw 0
 old_int2f_seg dw 0
 int_ef_target_off dw 0
 int_ef_target_seg dw 0
-xms_free_kb dw 0x8000
+xms_free_kb dw 0x3C00
 xms_alloc_kb dw 0
+%if FAT_TYPE == 16
+xms_move_len_lo dw 0
+xms_move_len_hi dw 0
+xms_move_src_lo dw 0
+xms_move_src_hi dw 0
+xms_move_dst_lo dw 0
+xms_move_dst_hi dw 0
+xms_move_chunk dw 0
+xms_87_gdt times 48 db 0
+%endif
 old_int10_off dw 0
 old_int10_seg dw 0
 %if FAT_TYPE == 16
