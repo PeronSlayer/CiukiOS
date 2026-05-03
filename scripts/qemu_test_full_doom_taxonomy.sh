@@ -15,11 +15,20 @@ DOOM_RUNTIME_LOG="${DOOM_RUNTIME_LOG:-build/full/qemu-visual.log}"
 QEMU_TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-45}"
 DOOM_TAXONOMY_MIN_STAGE="${DOOM_TAXONOMY_MIN_STAGE:-wad_found}"
 DOOM_TAXONOMY_STRICT="${DOOM_TAXONOMY_STRICT:-0}"
+DOOM_TAXONOMY_LAUNCH="${DOOM_TAXONOMY_LAUNCH:-1}"
+DOOM_TAXONOMY_RUN_DRVLOAD="${DOOM_TAXONOMY_RUN_DRVLOAD:-1}"
+DOOM_TAXONOMY_PROMPT_TIMEOUT_SEC="${DOOM_TAXONOMY_PROMPT_TIMEOUT_SEC:-120}"
+DOOM_TAXONOMY_MARKER_TIMEOUT_SEC="${DOOM_TAXONOMY_MARKER_TIMEOUT_SEC:-45}"
+DOOM_TAXONOMY_OBSERVE_SEC="${DOOM_TAXONOMY_OBSERVE_SEC:-15}"
+DOOM_QEMU_STDERR="${DOOM_QEMU_STDERR:-build/full/qemu-full-doom-taxonomy.stderr.log}"
+DOOM_QEMU_CMD_LOG="${DOOM_QEMU_CMD_LOG:-build/full/qemu-full-doom-taxonomy.commands.log}"
+DOOM_MON_SOCK="${DOOM_MON_SOCK:-/tmp/ciukios-doom-taxonomy.monitor.sock}"
 FUTURE_MTIME_TOLERANCE_SEC="${FUTURE_MTIME_TOLERANCE_SEC:-5}"
 
 STAGES=(
   binary_found
   wad_found
+  doom_exec_attempted
   extender_init
   video_init
   menu_reached
@@ -32,6 +41,24 @@ declare -A PRE_LOG_MTIME
 declare -A PRE_LOG_SIZE
 
 LOG_FRESHNESS_REASON=""
+ACTIVE_QEMU_PID=0
+ACTIVE_MON_SOCK=""
+ACTIVE_CMD_LOG=""
+
+cleanup_active_qemu() {
+  if [[ "$ACTIVE_QEMU_PID" -ne 0 ]] && kill -0 "$ACTIVE_QEMU_PID" >/dev/null 2>&1; then
+    if [[ -n "$ACTIVE_MON_SOCK" && -S "$ACTIVE_MON_SOCK" && -n "$ACTIVE_CMD_LOG" ]]; then
+      hmp "$ACTIVE_MON_SOCK" "$ACTIVE_CMD_LOG" "quit" >/dev/null 2>&1 || true
+    fi
+    kill "$ACTIVE_QEMU_PID" >/dev/null 2>&1 || true
+    wait "$ACTIVE_QEMU_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$ACTIVE_MON_SOCK" ]]; then
+    rm -f "$ACTIVE_MON_SOCK"
+  fi
+}
+
+trap cleanup_active_qemu EXIT
 
 normalize_detail() {
   local detail="$1"
@@ -70,18 +97,27 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
-qemu_available() {
+pick_qemu() {
   if [[ -n "${QEMU_BIN:-}" ]]; then
-    if command -v "$QEMU_BIN" >/dev/null 2>&1 || [[ -x "$QEMU_BIN" ]]; then
-      return 0
-    fi
+    echo "$QEMU_BIN"
+    return 0
   fi
 
-  if command_exists qemu-system-i386 || command_exists qemu-system-x86_64; then
+  if command_exists qemu-system-i386; then
+    echo "qemu-system-i386"
+    return 0
+  fi
+
+  if command_exists qemu-system-x86_64; then
+    echo "qemu-system-x86_64"
     return 0
   fi
 
   return 1
+}
+
+qemu_available() {
+  pick_qemu >/dev/null 2>&1
 }
 
 log_has_pattern() {
@@ -132,6 +168,137 @@ capture_log_metadata() {
     PRE_LOG_MTIME["$log_path"]=0
     PRE_LOG_SIZE["$log_path"]=0
   fi
+}
+
+wait_for_socket() {
+  local sock="$1"
+  local timeout_sec="$2"
+  local start now
+  start="$(date +%s)"
+
+  while true; do
+    if [[ -S "$sock" ]]; then
+      return 0
+    fi
+
+    now="$(date +%s)"
+    if (( now - start >= timeout_sec )); then
+      return 1
+    fi
+  done
+}
+
+wait_for_regex() {
+  local file="$1"
+  local pattern="$2"
+  local timeout_sec="$3"
+  local start now
+  start="$(date +%s)"
+
+  while true; do
+    if [[ -f "$file" ]] && grep -Eiq "$pattern" "$file"; then
+      return 0
+    fi
+
+    now="$(date +%s)"
+    if (( now - start >= timeout_sec )); then
+      return 1
+    fi
+  done
+}
+
+shell_prompt_seen() {
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    return 1
+  fi
+  grep -Eiq 'CiukiOS C:\\|CCiiuukkiiOOSS' "$file"
+}
+
+wait_for_shell_prompt() {
+  local file="$1"
+  local timeout_sec="$2"
+  local start now
+  start="$(date +%s)"
+
+  while true; do
+    if shell_prompt_seen "$file"; then
+      return 0
+    fi
+
+    now="$(date +%s)"
+    if (( now - start >= timeout_sec )); then
+      return 1
+    fi
+  done
+}
+
+hmp() {
+  local sock="$1"
+  local cmd_log="$2"
+  local cmd="$3"
+  local out rc
+
+  echo "[HMP] $cmd" >> "$cmd_log"
+  set +e
+  out="$(printf '%s\n' "$cmd" | socat - UNIX-CONNECT:"$sock" 2>&1)"
+  rc=$?
+  set -e
+
+  if [[ -n "$out" ]]; then
+    printf '%s\n' "$out" >> "$cmd_log"
+  fi
+  echo "[HMP_RC] $cmd => $rc" >> "$cmd_log"
+
+  return "$rc"
+}
+
+send_key() {
+  local sock="$1"
+  local cmd_log="$2"
+  local key="$3"
+  hmp "$sock" "$cmd_log" "sendkey $key" >/dev/null 2>&1 || return 1
+}
+
+send_text_and_enter() {
+  local sock="$1"
+  local cmd_log="$2"
+  local txt="$3"
+  local i ch key
+
+  for ((i=0; i<${#txt}; i++)); do
+    ch="${txt:i:1}"
+    case "$ch" in
+      ' ') key="spc" ;;
+      '.') key="dot" ;;
+      '/') key="slash" ;;
+      '\') key="backslash" ;;
+      '-') key="minus" ;;
+      [A-Z]) key="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')" ;;
+      [a-z0-9]) key="$ch" ;;
+      *) continue ;;
+    esac
+    send_key "$sock" "$cmd_log" "$key" || return 1
+  done
+
+  send_key "$sock" "$cmd_log" ret || return 1
+}
+
+observe_runtime_window() {
+  local pid="$1"
+  local observe_sec="$2"
+  local start now
+  start="$(date +%s)"
+
+  while kill -0 "$pid" >/dev/null 2>&1; do
+    now="$(date +%s)"
+    if (( now - start >= observe_sec )); then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 0
 }
 
 log_is_fresh_for_run() {
@@ -247,11 +414,25 @@ classify_runtime() {
   local runtime_log_sources=""
   local stale_log_sources=""
   local stale_detail=""
+  local qemu_cmd
+  local qemu_pid
+  local qemu_rc=0
+  local drvload_done_pattern='\[DRVLOAD\][[:space:]]+DONE|\[\[DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
+  local doom_cmd="RUN \\APPS\\DOOM\\${DOOM_EXE_NAME}"
 
   if ! qemu_available; then
+    set_stage "doom_exec_attempted" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "extender_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "video_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "menu_reached" "DEFERRED" "qemu unavailable; runtime probe skipped"
+    return
+  fi
+
+  if [[ "$DOOM_TAXONOMY_LAUNCH" != "0" && "$DOOM_TAXONOMY_LAUNCH" != "1" ]]; then
+    set_stage "doom_exec_attempted" "FAIL" "invalid DOOM_TAXONOMY_LAUNCH=$DOOM_TAXONOMY_LAUNCH (expected 0 or 1)"
+    set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
+    set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
+    set_stage "menu_reached" "DEFERRED" "runtime launch skipped due invalid launch mode"
     return
   fi
 
@@ -262,18 +443,87 @@ classify_runtime() {
   fi
 
   runtime_run_start_epoch="$(date +%s)"
-  rm -f "$LOG_FILE"
+  rm -f "$LOG_FILE" "$DOOM_QEMU_STDERR" "$DOOM_QEMU_CMD_LOG" "$DOOM_MON_SOCK"
 
-  set +e
-  LOG_FILE="$LOG_FILE" QEMU_TIMEOUT_SEC="$QEMU_TIMEOUT_SEC" \
-    bash scripts/qemu_run_full.sh --test --no-build >/dev/null 2>&1
-  smoke_rc=$?
-  set -e
+  if [[ "$DOOM_TAXONOMY_LAUNCH" == "1" ]]; then
+    if ! command_exists socat; then
+      set_stage "doom_exec_attempted" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
+      set_stage "extender_init" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
+      set_stage "video_init" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
+      set_stage "menu_reached" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
+      return
+    fi
+
+    qemu_cmd="$(pick_qemu)"
+    QEMU_ARGS=(
+      -machine pc,vmport=off
+      -cpu pentium3
+      -m 128
+      -drive "file=$IMG,format=raw,if=ide"
+      -boot c
+      -nographic
+      -chardev "file,id=ser0,path=$LOG_FILE"
+      -serial chardev:ser0
+      -monitor "unix:$DOOM_MON_SOCK,server,nowait"
+      -no-reboot
+      -no-shutdown
+    )
+
+    set +e
+    timeout "$QEMU_TIMEOUT_SEC" "$qemu_cmd" "${QEMU_ARGS[@]}" >/dev/null 2>"$DOOM_QEMU_STDERR" &
+    qemu_pid=$!
+    set -e
+
+    ACTIVE_QEMU_PID="$qemu_pid"
+    ACTIVE_MON_SOCK="$DOOM_MON_SOCK"
+    ACTIVE_CMD_LOG="$DOOM_QEMU_CMD_LOG"
+
+    if ! wait_for_socket "$DOOM_MON_SOCK" 20; then
+      set_stage "doom_exec_attempted" "FAIL" "monitor socket not ready"
+    elif ! wait_for_shell_prompt "$LOG_FILE" "$DOOM_TAXONOMY_PROMPT_TIMEOUT_SEC"; then
+      set_stage "doom_exec_attempted" "FAIL" "shell prompt not detected before DOOM launch"
+    else
+      if [[ "$DOOM_TAXONOMY_RUN_DRVLOAD" == "1" ]]; then
+        if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" 'RUN \SYSTEM\DRIVERS\DRVLOAD.COM'; then
+          wait_for_regex "$LOG_FILE" "$drvload_done_pattern" "$DOOM_TAXONOMY_MARKER_TIMEOUT_SEC" || true
+          wait_for_shell_prompt "$LOG_FILE" 30 || true
+        fi
+      fi
+
+      if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "$doom_cmd"; then
+        set_stage "doom_exec_attempted" "PASS" "sent shell command: $doom_cmd"
+        observe_runtime_window "$qemu_pid" "$DOOM_TAXONOMY_OBSERVE_SEC"
+      else
+        set_stage "doom_exec_attempted" "FAIL" "failed to send shell command: $doom_cmd"
+      fi
+    fi
+
+    hmp "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "quit" >/dev/null 2>&1 || true
+    set +e
+    wait "$qemu_pid"
+    qemu_rc=$?
+    set -e
+    ACTIVE_QEMU_PID=0
+    ACTIVE_MON_SOCK=""
+    ACTIVE_CMD_LOG=""
+    rm -f "$DOOM_MON_SOCK"
+    smoke_rc="$qemu_rc"
+  else
+    set +e
+    LOG_FILE="$LOG_FILE" QEMU_TIMEOUT_SEC="$QEMU_TIMEOUT_SEC" \
+      bash scripts/qemu_run_full.sh --test --no-build >/dev/null 2>&1
+    smoke_rc=$?
+    set -e
+
+    set_stage "doom_exec_attempted" "DEFERRED" "interactive DOOM launch disabled (DOOM_TAXONOMY_LAUNCH=0)"
+  fi
 
   if [[ $smoke_rc -eq 0 ]]; then
-    smoke_detail="qemu smoke rc=0"
+    smoke_detail="qemu runtime rc=0"
+  elif [[ $smoke_rc -eq 124 ]]; then
+    smoke_detail="qemu runtime rc=124 (timeout)"
   else
-    smoke_detail="qemu smoke rc=$smoke_rc"
+    smoke_detail="qemu runtime rc=$smoke_rc"
   fi
 
   if [[ -s "$LOG_FILE" ]]; then
@@ -305,13 +555,19 @@ classify_runtime() {
   fi
 
   if (( ${#runtime_logs[@]} == 0 )); then
+    if [[ "${STAGE_STATUS[doom_exec_attempted]}" == "DEFERRED" ]]; then
+      set_stage "doom_exec_attempted" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
+    fi
     set_stage "extender_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "video_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "menu_reached" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     return
   fi
 
-  if [[ $smoke_rc -ne 0 ]]; then
+  if [[ $smoke_rc -ne 0 && $smoke_rc -ne 124 ]]; then
+    if [[ "${STAGE_STATUS[doom_exec_attempted]}" == "DEFERRED" ]]; then
+      set_stage "doom_exec_attempted" "DEFERRED" "$smoke_detail; fresh logs seen: $runtime_log_sources$stale_detail"
+    fi
     set_stage "extender_init" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
     set_stage "video_init" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
     set_stage "menu_reached" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
