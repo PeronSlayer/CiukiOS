@@ -1,0 +1,3 @@
+# Keep the local handoff workspace private by default.
+*
+!.gitignore

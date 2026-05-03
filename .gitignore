@@ -29,7 +29,9 @@ docs/copilot-task-*.md
 COPILOT_HANDOFF_TOTAL_2026-04-16.md
 copilot-task-codex-config-persistence-v1.md
 
-# Local-only handoffs (do not publish)
+# Local-only handoff workspace (do not publish handoff documents)
+handoff/*
+!handoff/.gitignore
 handoffs/
 *HANDOFF*.md
 OLD/**/docs/handoffs/
