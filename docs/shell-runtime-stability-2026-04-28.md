@@ -24,3 +24,13 @@ This note captures shell runtime hardening completed on 2026-04-28 for Stage1 st
 1. Smoke validation on 2026-04-28 confirms stable Stage1 startup and shell prompt continuity.
 2. Cursor behavior remains anchored to line 1 in the expected shell flow.
 3. QEMU stderr diagnostics provide actionable traces for regressions without changing runtime behavior.
+
+## Driver Helper Invocation (Full Profile)
+1. Runtime driver activation is available via helper COM at SYSTEM/DRIVERS/DRVLOAD.COM.
+2. Manual invocation from CiukiOS shell:
+	- RUN \SYSTEM\DRIVERS\DRVLOAD.COM
+3. Expected marker format on DOS output:
+	- [DRVLOAD] BEGIN
+	- [DRVLOAD] TRY ... / [DRVLOAD] OK ... / [DRVLOAD] FAIL ...
+	- [DRVLOAD] DONE
+4. Fail-open contract: helper always exits with code 0, and partial load failures do not block runtime flow.

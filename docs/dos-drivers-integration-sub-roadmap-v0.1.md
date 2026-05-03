@@ -3,11 +3,13 @@
 ## Current objective
 Complete runtime-ready integration of DOS generic drivers into CiukiOS, starting from the already stable full-build packaging baseline under SYSTEM/DRIVERS.
 
-### Progress delta (as of 2026-05-02)
+### Progress delta (as of 2026-05-03)
 - Completed: full build packaging path injects drivers under SYSTEM/DRIVERS.
 - Completed: baseline build evidence exists from full build runs.
-- In Progress: runtime activation contract (load order, fallback policy, activation markers).
-- Pending: runtime activation implementation and runtime regression matrix execution.
+- Deferred by decision gate: stage1 boot-time autoload remains disabled due to stage1 size gate risk.
+- Completed: runtime activation helper is available via SYSTEM/DRIVERS/DRVLOAD.COM with fail-open behavior and markers.
+- Completed: automated runtime smoke helper is available to invoke DRVLOAD from shell and verify deterministic serial markers.
+- Pending: launcher and automation integration for DOOM runtime path using the helper-based activation lane.
 
 ## Step-by-step plan
 Dependency chain: Phase 1 -> Phase 2 -> Phase 3A -> Phase 4 -> Phase 5.
@@ -117,8 +119,11 @@ Phase ownership:
 - Handoff package includes decisions, status, risks, test outcome summary, and prioritized next-cycle TODOs.
 
 ## Next action
-Finalize and approve Phase 2 runtime activation contract now (load order, fallback policy, marker format) to unlock Phase 3A implementation on the critical path.
+Wire the DRVLOAD runtime smoke into recurring full-profile validation, then integrate helper invocation into launcher and DOOM automation flow for Phase 4 matrix execution.
 
 ## Test status
 - Full build integration status (SYSTEM/DRIVERS): Completed/PASS in full build packaging baseline.
-- Runtime activation and regression matrix status: Pending until next phase (Phase 3 implementation and Phase 4 matrix execution).
+- Runtime activation status: Available through DRVLOAD.COM helper lane (manual invocation).
+- Runtime activation smoke status: Available through scripts/qemu_test_full_drvload_smoke.sh (serial markers BEGIN/TRY/DONE).
+- Stage1 boot autoload status: Deferred by size gate decision.
+- Regression matrix status: Pending launcher/automation integration and Phase 4 execution.
