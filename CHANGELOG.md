@@ -3,10 +3,13 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise and includes only major milestones.
 
-## Unreleased (2026-05-02)
+## Unreleased (2026-05-03)
 1. Added a full-profile DOOM taxonomy harness and Makefile target to classify launch progress stages deterministically.
 2. Added local-only DOOM payload packaging in the full image build lane and guarded proprietary assets from publication.
 3. Fixed INT 21h MZ loading to use header-declared module size, removing the previous 4B:08 launch failure and advancing DOOM to extender startup diagnostics.
+4. Closed the Phase 4 installer execution lane with deterministic scenario coverage (success, media swap, timeout, missing media, and insufficient space).
+5. Hardened installer manifest-source diagnostics, including explicit `MANIFEST_MEDIA_HEX` reporting for normal and fallback parse paths.
+6. Synchronized project documentation to reflect installer-lane closure while keeping the runtime/DOOM lane active.
 
 ## pre-Alpha v0.5.4 (2026-05-01)
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.

@@ -32,9 +32,10 @@ Versioning policy:
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
-1. Phase 4 is active (from 2026-04-30) with dual focus on runtime milestones and installer execution.
-2. Installer execution work moved from the accepted Phase 3.5 foundation closure into the Phase 4 installer track.
-3. Keep shell-first runtime stable across floppy/full profiles while advancing DOS compatibility in small, testable steps.
+1. Phase 4 remains active for the runtime/DOOM lane, with shell-first stability as the primary guardrail.
+2. The Phase 4 installer execution lane is closed (2026-05-03) with deterministic evidence and scenario coverage.
+3. Keep cross-profile runtime stability across floppy/full profiles while advancing DOS compatibility in small, testable steps.
+4. Track advanced installer media targets (multi-floppy and extended CD workflow) as post-MVP follow-up scope.
 
 ## Open Source Collaboration
 CiukiOS welcomes collaboration through issues and pull requests.

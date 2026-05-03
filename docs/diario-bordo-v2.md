@@ -102,3 +102,12 @@
 87. Validation: FULL-only gate is green; `scripts/qemu_test_full_stage1.sh` PASS and `scripts/qemu_test_setup_full_acceptance.sh` PASS.
 88. Decision: upgraded Phase 3.5 from the 2026-04-30 FOUNDATION/PLACEHOLDER closure to a FUNCTIONAL MVP closure on the FULL-only baseline.
 89. Backlog note: advanced installer media targets (multi-floppy flow and extended CD workflow) remain post-MVP items for a later phase.
+
+
+## 2026-05-03
+90. Milestone: closed the Phase 4 installer execution backlog (sections A-F) with deterministic report-contract evidence and scenario validation.
+91. Validation: required command suite green in the same cycle: ./scripts/build_full.sh, ./scripts/qemu_test_setup_full_acceptance.sh, and ./scripts/qemu_test_setup_installer_scenarios.sh.
+92. Fix: normalized installer manifest media-source reporting with explicit MANIFEST_MEDIA_HEX behavior for normal parse (0001) and raw fallback (0000).
+93. Action: added and stabilized installer scenario-matrix validation for success and failure paths in scripts/qemu_test_setup_installer_scenarios.sh.
+94. Compatibility: introduced setup COMMAND.COM compatibility stub path (src/com/command_stub.asm) for deterministic installer lane behavior.
+95. Documentation: synchronized README.md, Roadmap.md, setup stream docs, and CHANGELOG.md to reflect closed installer scope and active runtime/DOOM scope.
