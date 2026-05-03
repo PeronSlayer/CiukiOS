@@ -6223,9 +6223,15 @@ int21_mem_query_free:
 
     mov es, dx
     mov ax, [es:0x0002]
-    cmp ax, DOS_HEAP_USER_SEG
+    cmp ax, DOS_HEAP_LIMIT_SEG
     jae .check_limit
+    cmp ax, DOS_HEAP_BASE_SEG
+    jae .from_psp_end
     mov ax, DOS_HEAP_USER_SEG
+    jmp .check_limit
+
+.from_psp_end:
+    inc ax
 
 .check_limit:
     cmp ax, DOS_HEAP_LIMIT_SEG
@@ -6255,6 +6261,59 @@ int21_mem_write_mcb:
     mov [es:0x0003], ax
 
     pop es
+    pop ax
+    ret
+
+int21_mem_write_psp_free_mcb:
+    push ax
+    push bx
+    push es
+
+    mov bx, [cs:dos_mem_psp_free_size]
+    cmp bx, 0
+    je .done
+    mov ax, [cs:dos_mem_psp_free_seg]
+    cmp ax, DOS_HEAP_USER_SEG
+    jb .done
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jae .done
+    dec ax
+    mov es, ax
+    mov byte [es:0x0000], 'Z'
+    mov word [es:0x0001], 0
+    mov [es:0x0003], bx
+
+.done:
+    pop es
+    pop bx
+    pop ax
+    ret
+
+int21_mem_carve_psp_tail:
+    push ax
+    push bx
+    push cx
+
+    mov cx, [cs:dos_mem_psp_free_size]
+    sub cx, bx
+    cmp cx, 1
+    ja .has_tail
+    mov word [cs:dos_mem_psp_free_seg], 0
+    mov word [cs:dos_mem_psp_free_size], 0
+    mov dl, 'Z'
+    jmp .done
+
+.has_tail:
+    add ax, bx
+    inc ax
+    mov [cs:dos_mem_psp_free_seg], ax
+    dec cx
+    mov [cs:dos_mem_psp_free_size], cx
+    mov dl, 'M'
+
+.done:
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -6475,7 +6534,7 @@ int21_alloc:
     ; DOS callers use BX=FFFFh to query the largest available block.
     cmp bx, 0xFFFF
     jne .req_ready
-    mov bx, cx
+    call int21_mem_largest_global
     mov ax, 0x0008
     stc
     ret
@@ -6501,18 +6560,29 @@ int21_alloc:
     call int21_psp_mcb_update_type
     mov dx, [cs:dos_mem_alloc_seg]
     add dx, [cs:dos_mem_alloc_size]
+    inc dx
     cmp word [cs:dos_mem_psp_free_seg], 0
     je .first_seed
     cmp [cs:dos_mem_psp_free_seg], dx
     jae .first_return
 .first_seed:
+    cmp dx, DOS_HEAP_LIMIT_SEG
+    jae .first_no_tail
     mov [cs:dos_mem_psp_free_seg], dx
     mov ax, DOS_HEAP_LIMIT_SEG
     sub ax, dx
-    jnc .first_free_size_ready
-    xor ax, ax
-.first_free_size_ready:
     mov [cs:dos_mem_psp_free_size], ax
+    call int21_mem_write_psp_free_mcb
+    push es
+    mov ax, [cs:dos_mem_alloc_seg]
+    dec ax
+    mov es, ax
+    mov byte [es:0x0000], 'M'
+    pop es
+    jmp .first_return
+.first_no_tail:
+    mov word [cs:dos_mem_psp_free_seg], 0
+    mov word [cs:dos_mem_psp_free_size], 0
 .first_return:
     mov ax, [cs:dos_mem_alloc_seg]
     clc
@@ -6533,21 +6603,21 @@ int21_alloc:
     mov ax, [cs:dos_mem_psp_free_seg]
     mov [cs:dos_mem_alloc_seg2], ax
     mov [cs:dos_mem_alloc_size2], bx
-    add word [cs:dos_mem_psp_free_seg], bx
-    sub word [cs:dos_mem_psp_free_size], bx
+    call int21_mem_carve_psp_tail
 
     push es
     push ax
     push bx
     dec ax
     mov es, ax
-    mov byte [es:0x0000], 'Z'
+    mov [es:0x0000], dl
     pop bx
     pop ax
     call int21_mem_current_owner
     mov [es:0x0001], ax
     mov [es:0x0003], bx
     pop es
+    call int21_mem_write_psp_free_mcb
     mov ax, [cs:dos_mem_alloc_seg2]
     clc
     ret
@@ -6555,6 +6625,7 @@ int21_alloc:
 .busy_heap_tail:
     ; compute start of free space = end of block 1
     mov ax, [cs:dos_mem_alloc_seg]
+    inc ax
     add ax, [cs:dos_mem_alloc_size]
     ; compute available paras
     mov cx, DOS_HEAP_LIMIT_SEG
@@ -6609,9 +6680,12 @@ int21_alloc:
     mov ax, [es:0x0002]
     cmp ax, DOS_HEAP_LIMIT_SEG
     jae .both_busy_refresh_done
-    cmp ax, DOS_HEAP_USER_SEG
-    jae .both_busy_base_ready
+    cmp ax, DOS_HEAP_BASE_SEG
+    jae .both_busy_from_psp_end
     mov ax, DOS_HEAP_USER_SEG
+    jmp .both_busy_base_ready
+.both_busy_from_psp_end:
+    inc ax
 .both_busy_base_ready:
     mov [cs:dos_mem_psp_free_seg], ax
     mov dx, DOS_HEAP_LIMIT_SEG
@@ -6629,21 +6703,21 @@ int21_alloc:
     mov ax, [cs:dos_mem_psp_free_seg]
     mov [cs:dos_mem_alloc_seg3], ax
     mov [cs:dos_mem_alloc_size3], bx
-    add word [cs:dos_mem_psp_free_seg], bx
-    sub word [cs:dos_mem_psp_free_size], bx
+    call int21_mem_carve_psp_tail
 
     push es
     push ax
     push bx
     dec ax
     mov es, ax
-    mov byte [es:0x0000], 'Z'
+    mov [es:0x0000], dl
     pop bx
     pop ax
     call int21_mem_current_owner
     mov [es:0x0001], ax
     mov [es:0x0003], bx
     pop es
+    call int21_mem_write_psp_free_mcb
     mov ax, [cs:dos_mem_alloc_seg3]
     clc
     ret
@@ -6655,30 +6729,25 @@ int21_alloc:
     cmp bx, [cs:dos_mem_psp_free_size]
     ja .both_busy_fail
     mov ax, [cs:dos_mem_psp_free_seg]
-    mov dx, ax
-    add dx, bx
-    cmp dx, DOS_HEAP_LIMIT_SEG
-    ja .both_busy_fail
-    mov [cs:dos_mem_psp_free_seg], dx
-    sub [cs:dos_mem_psp_free_size], bx
+    call int21_mem_carve_psp_tail
 
     push es
     push ax
     push bx
     dec ax
     mov es, ax
-    mov byte [es:0x0000], 'Z'
+    mov [es:0x0000], dl
     pop bx
     pop ax
+    mov dx, ax
     call int21_mem_current_owner
     mov [es:0x0001], ax
     mov [es:0x0003], bx
     pop es
-    mov ax, [cs:dos_mem_psp_free_seg]
-    sub ax, bx
+    call int21_mem_write_psp_free_mcb
+    mov ax, dx
     clc
     ret
-
 .both_busy_refresh_bump:
     push es
     mov ax, [cs:current_psp_seg]
@@ -6688,9 +6757,12 @@ int21_alloc:
     mov ax, [es:0x0002]
     cmp ax, DOS_HEAP_LIMIT_SEG
     jae .both_busy_refresh_bump_done
-    cmp ax, DOS_HEAP_USER_SEG
-    jae .bump_base_ready
+    cmp ax, DOS_HEAP_BASE_SEG
+    jae .bump_from_psp_end
     mov ax, DOS_HEAP_USER_SEG
+    jmp .bump_base_ready
+.bump_from_psp_end:
+    inc ax
 .bump_base_ready:
     mov [cs:dos_mem_psp_free_seg], ax
     mov dx, DOS_HEAP_LIMIT_SEG
@@ -6784,7 +6856,6 @@ int21_free:
     xor ax, ax
     clc
     ret
-
 .invalid:
     mov ax, es
     cmp ax, DOS_HEAP_USER_SEG
@@ -6801,11 +6872,16 @@ int21_free:
     pop es
     mov dx, es
     add dx, cx
-    cmp dx, [cs:dos_mem_psp_free_seg]
+    mov bx, [cs:dos_mem_psp_free_seg]
+    dec bx
+    cmp dx, bx
     jne .bump_free_invalid
     mov ax, es
     mov [cs:dos_mem_psp_free_seg], ax
-    add [cs:dos_mem_psp_free_size], cx
+    add cx, [cs:dos_mem_psp_free_size]
+    inc cx
+    mov [cs:dos_mem_psp_free_size], cx
+    call int21_mem_write_psp_free_mcb
 .bump_free_done:
     pop dx
     pop cx
@@ -6857,36 +6933,33 @@ int21_resize:
     add dx, bx
     cmp dx, [cs:dos_mem_alloc_seg]
     ja .psp_overlap
-
 .resize_psp_commit:
     mov dx, ax
     add dx, bx
     push ax
     push bx
-    mov bx, [es:0x0002]
-
-    ; expose only the safe DOS heap tail; lower segments hold stage1 buffers.
+    mov [es:0x0002], dx
+    mov word [cs:dos_mem_psp_free_seg], 0
+    mov word [cs:dos_mem_psp_free_size], 0
+    mov al, 'Z'
+    cmp word [cs:dos_mem_alloc_size], 0
+    je .psp_tail_check
+    mov al, 'M'
+.psp_tail_check:
     mov si, dx
-    cmp si, DOS_HEAP_USER_SEG
-    jae .psp_tail_base_ready
-    mov si, DOS_HEAP_USER_SEG
-.psp_tail_base_ready:
+    inc si
+    cmp si, DOS_HEAP_LIMIT_SEG
+    jae .psp_type_ready
     mov [cs:dos_mem_psp_free_seg], si
     mov ax, DOS_HEAP_LIMIT_SEG
     sub ax, si
-    jnc .psp_tail_done
-    xor ax, ax
-.psp_tail_done:
     mov [cs:dos_mem_psp_free_size], ax
-    pop bx
-    pop ax
-    mov [es:0x0002], dx
-    mov al, 'Z'
-    cmp word [cs:dos_mem_alloc_size], 0
-    je .psp_type_ready
     mov al, 'M'
+    call int21_mem_write_psp_free_mcb
 .psp_type_ready:
     call int21_psp_mcb_update_type
+    pop bx
+    pop ax
     mov ax, es
     clc
     ret
