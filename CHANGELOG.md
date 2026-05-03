@@ -13,7 +13,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 7. Improved README changelog visibility and updated local agent directives to require a `CHANGELOG.md` update for every completed task.
 8. Advanced the DOOM taxonomy harness to boot the full profile interactively, invoke `DRVLOAD.COM`, and launch `DOOM.EXE`, adding a deterministic `doom_exec_attempted` stage before extender/video/menu gates.
 9. Advanced DOOM runtime coverage to `extender_init` by adding an MZ transfer stage, FAT16 32-bit seek/read file positions, real handle duplication for DOS extender loaders, and DOOM-specific environment executable path handling; DOS/16M tstack blocker resolved in item 10.
-10. Fixed INT 21h memory arena so DOS extenders (DOS/16M, DOS4GW) can allocate conventional memory: added real DOS MCB free-block headers after PSP shrink (AH=4Ah), PSP-tail allocations, and free/coalesce paths; corrected PSP:0002 off-by-one in all tail-base calculations; improved AH=48h BX=FFFFh largest-block reporting. DOOM taxonomy now reaches `extender_init` PASS with tstack error absent.
+10. Fixed DOS/16M conventional-memory bring-up for DOOM by repairing the INT 21h MCB arena and setting PSP:0002 to `DOS_HEAP_LIMIT_SEG` on resize success; the tstack error is absent and taxonomy reaches `extender_init`.
 
 ## pre-Alpha v0.5.4 (2026-05-01)
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.

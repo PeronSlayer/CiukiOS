@@ -6935,7 +6935,7 @@ int21_resize:
     ja .psp_overlap
 .resize_psp_commit:
     mov dx, ax
-    add dx, bx
+    mov dx, DOS_HEAP_LIMIT_SEG
     push ax
     push bx
     mov [es:0x0002], dx
