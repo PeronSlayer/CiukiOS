@@ -7,6 +7,7 @@ set -euo pipefail
 : "${IMG:=$CIUKIOS_ROOT/build/full/ciukios-full.img}"
 : "${DRIVERS_SRC_DIR:=$CIUKIOS_ROOT/third_party/drivers}"
 : "${DRIVERS_IMAGE_DIR:=::SYSTEM/DRIVERS}"
+: "${GENERATED_DRVLOAD_COM:=$CIUKIOS_ROOT/build/full/obj/drvload.com}"
 
 if [[ "$IMG" != /* ]]; then
 	IMG="$CIUKIOS_ROOT/$IMG"
@@ -89,7 +90,16 @@ fi
 
 src_manifest="$tmp_dir/src_manifest.txt"
 img_manifest="$tmp_dir/img_manifest.txt"
-payload_manifest_from_dir "$DRIVERS_SRC_DIR" "$src_manifest"
+expected_src_dir="$DRIVERS_SRC_DIR"
+
+if [[ -f "$GENERATED_DRVLOAD_COM" ]]; then
+	expected_src_dir="$tmp_dir/expected_drivers"
+	mkdir -p "$expected_src_dir"
+	cp -a "$DRIVERS_SRC_DIR"/. "$expected_src_dir"/
+	cp "$GENERATED_DRVLOAD_COM" "$expected_src_dir/DRVLOAD.COM"
+fi
+
+payload_manifest_from_dir "$expected_src_dir" "$src_manifest"
 payload_manifest_from_dir "$extracted_dir" "$img_manifest"
 
 read -r src_files src_bytes < <(payload_stats_from_manifest "$src_manifest")

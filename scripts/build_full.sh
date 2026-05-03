@@ -68,6 +68,8 @@ SETUP_MANIFEST_BIN="build/full/obj/setup.mft"
 COMMAND_STUB_SRC="src/com/command_stub.asm"
 COMMAND_STUB_BIN="build/full/obj/command.com"
 COMMAND_COMPAT_IMAGE_PATH="${CIUKIOS_COMMAND_COM_IMAGE_PATH:-::COMMAND.COM}"
+DRVLOAD_SRC="src/com/drvload.asm"
+DRVLOAD_BIN="build/full/obj/drvload.com"
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
 SPLASH_BIN="build/full/obj/SPLASH.BIN"
@@ -86,11 +88,49 @@ HARDWARE_VALIDATION_SCREEN="${CIUKIOS_HARDWARE_VALIDATION_SCREEN:-0}"
 MTOOLS_TIMEOUT_SEC="${MTOOLS_TIMEOUT_SEC:-20}"
 MTOOLS_KILL_AFTER_SEC="${MTOOLS_KILL_AFTER_SEC:-2}"
 
-mtools_try() {
-	timeout --kill-after="${MTOOLS_KILL_AFTER_SEC}s" "${MTOOLS_TIMEOUT_SEC}s" "$@" >/dev/null 2>&1 || true
+mtools_ensure_dir() {
+	local image="$1"
+	local dir_path="$2"
+	local out rc
+
+	if mdir -i "$image" "$dir_path" >/dev/null 2>&1; then
+		echo "[build-full] mtools mkdir: already exists (verified): $dir_path"
+		return 0
+	fi
+
+	set +e
+	out="$(timeout --kill-after="${MTOOLS_KILL_AFTER_SEC}s" "${MTOOLS_TIMEOUT_SEC}s" mmd -i "$image" "$dir_path" 2>&1)"
+	rc=$?
+	set -e
+
+	if [[ $rc -eq 0 ]]; then
+		echo "[build-full] mtools mkdir: created: $dir_path"
+		return 0
+	fi
+
+	# Benign case: command returned non-zero but directory is confirmed present.
+	if mdir -i "$image" "$dir_path" >/dev/null 2>&1; then
+		echo "[build-full] mtools mkdir: non-zero rc=$rc but directory is present (verified): $dir_path"
+		if [[ -n "$out" ]]; then
+			echo "[build-full] mtools mkdir detail: $out"
+		fi
+		return 0
+	fi
+
+	if [[ $rc -eq 124 ]]; then
+		echo "[build-full] ERROR: mtools mkdir timed out creating $dir_path (timeout=${MTOOLS_TIMEOUT_SEC}s kill-after=${MTOOLS_KILL_AFTER_SEC}s)" >&2
+	else
+		echo "[build-full] ERROR: mtools mkdir failed creating $dir_path (rc=$rc)" >&2
+	fi
+	if [[ -n "$out" ]]; then
+		echo "[build-full] mtools mkdir output: $out" >&2
+	fi
+	exit 1
 }
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$SETUP_SRC" "$COMMAND_STUB_SRC"; do
+
+
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$SETUP_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -154,6 +194,7 @@ nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
 nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
 nasm -f bin "$SETUP_SRC" -o "$SETUP_BIN"
 nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
+nasm -f bin "$DRVLOAD_SRC" -o "$DRVLOAD_BIN"
 
 echo "[build-full] generating splash asset"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -444,18 +485,27 @@ if ! command -v mcopy >/dev/null 2>&1; then
 	exit 1
 fi
 
+if ! command -v mmd >/dev/null 2>&1 || ! command -v mdir >/dev/null 2>&1; then
+	echo "[build-full] ERROR: mtools mmd/mdir are required to inject runtime driver helper" >&2
+	exit 1
+fi
+
 echo "[build-full] injecting COMMAND.COM compatibility stub to $COMMAND_COMPAT_IMAGE_PATH"
 mcopy -o -i "$IMG" "$COMMAND_STUB_BIN" "$COMMAND_COMPAT_IMAGE_PATH"
 
+echo "[build-full] injecting DRVLOAD.COM helper to ${DRIVERS_IMAGE_DIR%/}/DRVLOAD.COM"
+mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
+mcopy -o -i "$IMG" "$DRVLOAD_BIN" "${DRIVERS_IMAGE_DIR%/}/DRVLOAD.COM"
+
 echo "[build-full] shell-only profile: external desktop payload injection disabled"
 if [[ -d "$DOOM_SRC_DIR" ]]; then
-    if ! command -v mmd >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
-        echo "[build-full] ERROR: DOOM source present but mtools (mmd/mcopy) is missing" >&2
+    if ! command -v mmd >/dev/null 2>&1 || ! command -v mdir >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+	    echo "[build-full] ERROR: DOOM source present but mtools (mmd/mdir/mcopy) is missing" >&2
         exit 1
     fi
 
     echo "[build-full] injecting local Doom payload from $DOOM_SRC_DIR to $DOOM_IMAGE_DIR"
-    mmd -i "$IMG" "$DOOM_IMAGE_DIR" >/dev/null 2>&1 || true
+	mtools_ensure_dir "$IMG" "$DOOM_IMAGE_DIR"
 
     shopt -s nullglob dotglob
     doom_items=("$DOOM_SRC_DIR"/*)
@@ -489,8 +539,8 @@ else
 			exit 1
 		fi
 	else
-		if ! command -v mmd >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
-			echo "[build-full] ERROR: drivers source present but mtools (mmd/mcopy) is missing" >&2
+		if ! command -v mmd >/dev/null 2>&1 || ! command -v mdir >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+			echo "[build-full] ERROR: drivers source present but mtools (mmd/mdir/mcopy) is missing" >&2
 			exit 1
 		fi
 
@@ -500,7 +550,7 @@ else
 		fi
 
 		echo "[build-full] injecting local drivers payload from $DRIVERS_SRC_DIR to $DRIVERS_IMAGE_DIR"
-		mmd -i "$IMG" "$DRIVERS_IMAGE_DIR" >/dev/null 2>&1 || true
+		mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
 		mcopy -s -o -i "$IMG" "${drivers_items[@]}" "$DRIVERS_IMAGE_DIR/"
 
 		if ! IMG="$IMG" DRIVERS_SRC_DIR="$DRIVERS_SRC_DIR" DRIVERS_IMAGE_DIR="$DRIVERS_IMAGE_DIR" \
