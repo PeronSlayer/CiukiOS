@@ -829,21 +829,13 @@ int21_handler:
     jmp .success
 
 .fn_4e:
-    mov al, 'E'
-    call serial_putc
     call int21_find_first
     jc .error
-    mov al, 'e'
-    call serial_putc
     jmp .success
 
 .fn_4f:
-    mov al, 'N'
-    call serial_putc
     call int21_find_next
     jc .error
-    mov al, 'n'
-    call serial_putc
     jmp .success
 
 .fn_4b:
@@ -853,8 +845,6 @@ int21_handler:
     jmp .success
 
 .fn_48:
-    mov al, '8'
-    call serial_putc
     call int21_alloc
     jc .fn_48_error_restore
     mov bp, sp
@@ -866,10 +856,6 @@ int21_handler:
     jmp .success
 .fn_48_error_restore:
     mov bp, sp
-    push ax
-    mov al, 'x'
-    call serial_putc
-    pop ax
     mov cx, [ss:bp + 12]
     mov dx, [ss:bp + 10]
     mov si, [ss:bp + 8]
@@ -877,27 +863,15 @@ int21_handler:
     jmp .error
 
 .fn_49:
-    mov al, '9'
-    call serial_putc
     call int21_free
     jc .fn_49_error
     jmp .success
 .fn_49_error:
-    push ax
-    mov al, 'y'
-    call serial_putc
-    pop ax
     jmp .error
 
 .fn_4a:
-    mov al, 'A'
-    call serial_putc
     call int21_resize
     jnc .success
-    push ax
-    mov al, 'z'
-    call serial_putc
-    pop ax
     jmp .error
 
 .fn_4c:
@@ -1158,6 +1132,7 @@ int21_handler:
     mov ax, [cs:int21_error_ax]
     call print_hex8_serial
     call print_newline_serial
+    call int21_diag_log_ierr
     pop es
     pop ds
     pop di
@@ -3053,13 +3028,9 @@ int21_find_first:
     mov [cs:find_dir_cluster], ax
     call int21_path_to_fat_pattern
     jc .path_fail
-    mov al, 'p'
-    call serial_putc
 
     call int21_find_try_gem_special
     jnc .done_ok
-    mov al, 'g'
-    call serial_putc
 
 .scan_generic:
 
@@ -3082,7 +3053,6 @@ int21_find_first:
     jmp .done
 
 .scan_fail:
-    call int21_trace_find_pattern_fail
     stc
     jmp .done
 
@@ -3252,9 +3222,6 @@ int21_find_scan_from_cursor:
     push di
     push ds
     push es
-    mov al, 's'
-    call serial_putc
-
     mov ax, cs
     mov ds, ax
     mov bx, [cs:find_cursor]
@@ -3281,10 +3248,6 @@ int21_find_scan_from_cursor:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_lba]
-    push ax
-    mov al, '.'
-    call serial_putc
-    pop ax
     push bx
     xor bx, bx
     call read_sector_lba
@@ -3386,10 +3349,6 @@ int21_find_scan_from_cursor:
     mov es, ax
     mov ax, [cs:tmp_lba]
     add ax, dx
-    push ax
-    mov al, '.'
-    call serial_putc
-    pop ax
     push bx
     xor bx, bx
     call read_sector_lba
@@ -3961,6 +3920,19 @@ int21_open:
 
 .target_ready:
     mov si, dx
+%if FAT_TYPE == 16
+    cmp word [si + 3], 0x4F43
+    jne .resolve_path
+    cmp word [si + 5], 0x4D4D
+    jne .resolve_path
+    cmp word [si + 11], 0x5445
+    jne .resolve_path
+    cmp byte [si + 13], 'X'
+    jne .resolve_path
+    mov word [si + 11], 0x4F43
+    mov byte [si + 13], 'M'
+.resolve_path:
+%endif
     call int21_resolve_and_find_path
     jnc .path_ready
 %if FAT_TYPE == 16
@@ -4232,18 +4204,21 @@ int21_open_try_gem_cpi_fallback:
     push si
     push ds
 
-    mov ax, [cs:int21_trace_call_cs]
+    mov ax, cs
+    mov ds, ax
+
+    mov ax, [int21_trace_call_cs]
     cmp ax, 0x5800
     jb .fail
     cmp ax, 0x7000
     jae .fail
 
-    mov ax, cs
-    mov ds, ax
     mov si, path_gem_cpi_fat
     xor ax, ax
     call int21_lookup_in_dir
     jc .fail
+
+.ok:
     xor ax, ax
     clc
     jmp .done
@@ -4442,9 +4417,6 @@ int21_read:
     push di
     push ds
     push es
-    mov al, 'r'
-    call serial_putc
-
     mov byte [cs:file_handle_swapped], 0
     cmp bx, 0x0000
     je .stdin_read
@@ -4549,17 +4521,17 @@ int21_read:
     mov ax, ds
     mov [cs:tmp_user_ds], ax
     mov [cs:tmp_user_ptr], dx
-    push ax
-    mov ax, [cs:tmp_rw_remaining]
-    call print_hex16_serial
-    call print_newline_serial
-    pop ax
-
-    mov ax, [cs:file_handle_pos]
-    cmp ax, [cs:file_handle_size_lo]
-    jae .eof
 
     mov ax, [cs:file_handle_size_lo]
+    or ax, ax
+    jne .size_ready
+    cmp word [cs:file_handle_cluster_count], 0
+    je .size_ready
+    mov ax, FAT_CLUSTER_MASK + 1
+.size_ready:
+    cmp [cs:file_handle_pos], ax
+    jae .eof
+
     sub ax, [cs:file_handle_pos]
     cmp [cs:tmp_rw_remaining], ax
     jbe .loop
@@ -4637,23 +4609,16 @@ int21_read:
     jmp .done
 
 .access_denied:
-    mov al, 'a'
-    call serial_putc
     mov ax, 0x0005
     stc
     jmp .done
 
 .io_error:
-    call int21_trace_read_io_error
     mov ax, 0x0005
     stc
 
 .done:
     pushf
-    push ax
-    mov al, 'd'
-    call serial_putc
-    pop ax
     mov al, [cs:file_handle_swapped]
     cmp al, 2
     je .done_swap2
@@ -6138,7 +6103,6 @@ int21_mem_write_mcb:
     mov [es:0x0001], ax
     mov ax, [cs:dos_mem_mcb_size]
     mov [es:0x0003], ax
-    call int21_mem_trace_chain
 
     pop es
     pop ax
@@ -6250,6 +6214,16 @@ int21_mem_largest_global:
     call int21_mem_largest_consume
 
 .tail:
+    mov ax, [cs:dos_mem_alloc_seg3]
+    mov cx, [cs:dos_mem_alloc_size3]
+    call int21_mem_largest_consume
+
+    mov ax, [cs:dos_mem_psp_free_seg]
+    cmp ax, dx
+    jbe .tail_finalize
+    mov dx, ax
+
+.tail_finalize:
     mov ax, DOS_HEAP_LIMIT_SEG
     cmp dx, ax
     jae .done
@@ -6264,39 +6238,84 @@ int21_mem_largest_global:
     pop si
     ret
 
-%if FAT_TYPE == 16
 int21_mem_trace_chain:
-    ret
-
 int21_mem_trace_nomem:
-    ret
-%else
-int21_mem_trace_chain:
-    ret
-
-int21_mem_trace_nomem:
-    ret
-%endif
-
 int21_trace_lookup_cluster:
-    ret
-
 int21_trace_lookup_found:
-    ret
-
 int21_trace_find_pattern_fail:
-    ret
-
 int21_trace_lookup_miss:
-    ret
-
 int21_trace_cwd_commit:
-    ret
-
 int21_trace_call:
+int21_trace_read_io_error:
     ret
 
-int21_trace_read_io_error:
+int21_diag_log_ierr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+
+    mov al, [cs:int21_last_ah]
+    cmp al, 0x3D
+    je .log
+    cmp al, 0x3E
+    je .log
+    cmp al, 0x3F
+    je .log
+    cmp al, 0x42
+    je .log
+    jmp .done
+
+.log:
+    mov ax, cs
+    mov ds, ax
+
+    mov si, msg_ierrpath
+    call print_string_serial
+    mov al, [cs:int21_last_ah]
+    call print_hex8_serial
+
+    mov al, [cs:int21_last_ah]
+    cmp al, 0x3D
+    jne .line_done
+
+    mov si, msg_ierrpath_p
+    call print_string_serial
+
+    push ds
+    mov ax, [cs:int21_caller_ds]
+    mov ds, ax
+    mov si, dx
+    mov cx, 63
+
+.path_loop:
+    cmp cx, 0
+    je .path_done
+    mov al, [ds:si]
+    cmp al, 0
+    je .path_done
+    cmp al, 13
+    je .path_done
+    call serial_putc
+    inc si
+    dec cx
+    jmp .path_loop
+
+.path_done:
+    pop ds
+
+.line_done:
+    call print_newline_serial
+
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 int21_alloc:
@@ -6379,7 +6398,6 @@ int21_alloc:
     mov [es:0x0001], ax
     mov [es:0x0003], bx
     pop es
-    call int21_mem_trace_chain
     mov ax, [cs:dos_mem_alloc_seg2]
     clc
     ret
@@ -6409,7 +6427,6 @@ int21_alloc:
     mov [es:0x0001], ax   ; owner = current PSP
     mov [es:0x0003], bx   ; size in paragraphs
     pop es
-    call int21_mem_trace_chain
     ; update block1 MCB type to 'M' (middle, not last)
     push es
     mov ax, [cs:dos_mem_alloc_seg]
@@ -6477,7 +6494,6 @@ int21_alloc:
     mov [es:0x0001], ax
     mov [es:0x0003], bx
     pop es
-    call int21_mem_trace_chain
     mov ax, [cs:dos_mem_alloc_seg3]
     clc
     ret
@@ -6491,15 +6507,8 @@ int21_alloc:
     mov ax, [cs:dos_mem_psp_free_seg]
     mov dx, ax
     add dx, bx
-    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
-    je .bump_limit_high
-    cmp dx, MZ3_LOAD_SEG
-    ja .both_busy_fail
-    jmp .bump_limit_ready
-.bump_limit_high:
     cmp dx, DOS_HEAP_LIMIT_SEG
     ja .both_busy_fail
-.bump_limit_ready:
     mov [cs:dos_mem_psp_free_seg], dx
     sub [cs:dos_mem_psp_free_size], bx
 
@@ -6545,13 +6554,11 @@ int21_alloc:
 
 .both_busy_fail:
     call int21_mem_largest_global
-    call int21_mem_trace_nomem
     mov ax, 0x0008
     stc
     ret
 
 .no_memory:
-    call int21_mem_trace_nomem
     mov bx, cx
     mov ax, 0x0008
     stc
@@ -6582,7 +6589,6 @@ int21_free:
     pop es
     mov al, 'M'
     call int21_psp_mcb_update_type
-    call int21_mem_trace_chain
     xor ax, ax
     clc
     ret
@@ -6591,7 +6597,6 @@ int21_free:
     jne .invalid
     mov word [cs:dos_mem_alloc_seg3], 0
     mov word [cs:dos_mem_alloc_size3], 0
-    call int21_mem_trace_chain
     xor ax, ax
     clc
     ret
@@ -6782,7 +6787,6 @@ int21_resize:
     mov [es:0x0003], bx
     pop ax
     pop es
-    call int21_mem_trace_chain
     xor dx, dx
     mov ax, es
     clc
@@ -6806,7 +6810,6 @@ int21_resize:
     mov [es:0x0003], bx
     pop ax
     pop es
-    call int21_mem_trace_chain
     xor dx, dx
     mov ax, es
     clc
@@ -7690,7 +7693,6 @@ int21_lookup_in_dir:
 
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
-    call int21_trace_lookup_cluster
     xor dx, dx
 
 .sector_loop:
@@ -7753,7 +7755,6 @@ int21_lookup_in_dir:
     loop .copy_name
     pop si
     pop cx
-    call int21_trace_lookup_found
     clc
     jmp .done
 
@@ -7771,7 +7772,6 @@ int21_lookup_in_dir:
     jmp .cluster_loop
 
 .not_found:
-    call int21_trace_lookup_miss
     mov ax, 0x0002
     stc
     jmp .done
@@ -9143,7 +9143,6 @@ gfx_draw_glyph8:
     push cx
     lodsb
     mov [gfx_row_bits], al
-    call int21_trace_cwd_commit
     mov di, bx
     mov cx, 8
 
@@ -14690,6 +14689,8 @@ msg_int21_installed db "[INT21] ok", 13, 10, 0
 msg_int21_missing db "[I21] no", 13, 10, 0
 msg_int21_unsup db "[INT21-UNSUP] AH=", 0
 msg_int21_err db "[IERR] ", 0
+msg_ierrpath db "[IERRPATH] ", 0
+msg_ierrpath_p db " P=", 0
 msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
 msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0

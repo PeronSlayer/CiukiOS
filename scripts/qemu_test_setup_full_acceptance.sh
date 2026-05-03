@@ -85,6 +85,7 @@ fi
 
 IMG="build/full/ciukios-full.img"
 SETUP_BIN="build/full/obj/setup.com"
+SETUP_MANIFEST_BIN="build/full/obj/setup.mft"
 STAGE1_BIN="build/full/obj/full_stage1.bin"
 
 if [[ ! -f "$IMG" ]]; then
@@ -97,6 +98,11 @@ if [[ ! -f "$SETUP_BIN" ]]; then
 fi
 mark_pass "SETUP_BIN_PRESENT"
 
+if [[ ! -f "$SETUP_MANIFEST_BIN" ]]; then
+  mark_fail "SETUP_MANIFEST_PRESENT" "missing payload: $SETUP_MANIFEST_BIN"
+fi
+mark_pass "SETUP_MANIFEST_PRESENT"
+
 if [[ ! -f "$STAGE1_BIN" ]]; then
   mark_fail "STAGE1_BIN_PRESENT" "missing stage1 payload: $STAGE1_BIN"
 fi
@@ -106,10 +112,19 @@ SETUP_SIZE="$(stat -c%s "$SETUP_BIN")"
 if [[ "$SETUP_SIZE" -le 0 ]]; then
   mark_fail "SETUP_SIZE_VALID" "unexpected size: $SETUP_SIZE"
 fi
-if [[ "$SETUP_SIZE" -gt 4096 ]]; then
-  mark_fail "SETUP_SIZE_VALID" "payload exceeds single-cluster contract: $SETUP_SIZE"
+if [[ "$SETUP_SIZE" -gt 16384 ]]; then
+  mark_fail "SETUP_SIZE_VALID" "payload exceeds setup packaging cap (16384 bytes): $SETUP_SIZE"
 fi
 mark_pass "SETUP_SIZE_VALID"
+
+SETUP_MANIFEST_SIZE="$(stat -c%s "$SETUP_MANIFEST_BIN")"
+if [[ "$SETUP_MANIFEST_SIZE" -le 0 ]]; then
+  mark_fail "SETUP_MANIFEST_SIZE" "unexpected manifest size: $SETUP_MANIFEST_SIZE"
+fi
+if [[ "$SETUP_MANIFEST_SIZE" -gt 4096 ]]; then
+  mark_fail "SETUP_MANIFEST_SIZE" "manifest exceeds single-cluster contract: $SETUP_MANIFEST_SIZE"
+fi
+mark_pass "SETUP_MANIFEST_SIZE"
 
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
 STAGE1_SLOT_SIZE=$((61 * 512))
@@ -132,9 +147,12 @@ FAT1_LBA=$FAT_RESERVED_SECTORS
 ROOT_LBA=$((FAT1_LBA + FAT_SECTORS_PER_FAT * FAT_COUNT))
 DATA_LBA=$((ROOT_LBA + ROOT_DIR_SECTORS))
 ROOT_APPS_CLUSTER=3
+CLUSTER_BYTES=$((FAT_SECTORS_PER_CLUSTER * 512))
+SETUP_CLUSTERS=$(((SETUP_SIZE + CLUSTER_BYTES - 1) / CLUSTER_BYTES))
 
 APPS_DIR_OFFSET=$(((DATA_LBA + ((ROOT_APPS_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER)) * 512))
 SETUP_ENTRY_OFFSET=$((APPS_DIR_OFFSET + 288))
+MANIFEST_ENTRY_OFFSET=$((APPS_DIR_OFFSET + 320))
 
 ENTRY_NAME="$(dd if="$IMG" bs=1 skip="$SETUP_ENTRY_OFFSET" count=11 status=none)"
 if [[ "$ENTRY_NAME" != "SETUP   COM" ]]; then
@@ -162,6 +180,22 @@ mark_pass "SETUP_DIR_SIZE"
 
 FAT_ENTRY_OFFSET=$(((FAT1_LBA * 512) + (ENTRY_CLUSTER * 2)))
 FAT_ENTRY_VALUE="$(read_u16_le "$IMG" "$FAT_ENTRY_OFFSET")"
+
+SETUP_CHAIN_CLUSTER="$ENTRY_CLUSTER"
+SETUP_CHAIN_REMAINING="$SETUP_CLUSTERS"
+while (( SETUP_CHAIN_REMAINING > 1 )); do
+  FAT_ENTRY_OFFSET=$(((FAT1_LBA * 512) + (SETUP_CHAIN_CLUSTER * 2)))
+  FAT_ENTRY_VALUE="$(read_u16_le "$IMG" "$FAT_ENTRY_OFFSET")"
+  EXPECTED_NEXT=$((SETUP_CHAIN_CLUSTER + 1))
+  if (( FAT_ENTRY_VALUE != EXPECTED_NEXT )); then
+    mark_fail "SETUP_FAT_CHAIN" "expected next cluster $EXPECTED_NEXT got $FAT_ENTRY_VALUE"
+  fi
+  SETUP_CHAIN_CLUSTER="$FAT_ENTRY_VALUE"
+  SETUP_CHAIN_REMAINING=$((SETUP_CHAIN_REMAINING - 1))
+done
+
+FAT_ENTRY_OFFSET=$(((FAT1_LBA * 512) + (SETUP_CHAIN_CLUSTER * 2)))
+FAT_ENTRY_VALUE="$(read_u16_le "$IMG" "$FAT_ENTRY_OFFSET")"
 if [[ "$FAT_ENTRY_VALUE" != "65535" ]]; then
   mark_fail "SETUP_FAT_CHAIN" "expected EOC=65535 got $FAT_ENTRY_VALUE"
 fi
@@ -172,5 +206,42 @@ if ! cmp -n "$SETUP_SIZE" "$SETUP_BIN" <(dd if="$IMG" bs=1 skip="$SETUP_DATA_OFF
   mark_fail "SETUP_PAYLOAD_MATCH" "image payload differs from $SETUP_BIN"
 fi
 mark_pass "SETUP_PAYLOAD_MATCH"
+
+MANIFEST_ENTRY_NAME="$(dd if="$IMG" bs=1 skip="$MANIFEST_ENTRY_OFFSET" count=11 status=none)"
+if [[ "$MANIFEST_ENTRY_NAME" != "SETUPMFTBIN" ]]; then
+  mark_fail "SETUP_MFT_DIR_NAME" "entry mismatch at APPS offset 320 (got '$MANIFEST_ENTRY_NAME')"
+fi
+mark_pass "SETUP_MFT_DIR_NAME"
+
+MANIFEST_ENTRY_ATTR="$(read_u8 "$IMG" $((MANIFEST_ENTRY_OFFSET + 11)))"
+if [[ "$MANIFEST_ENTRY_ATTR" != "32" ]]; then
+  mark_fail "SETUP_MFT_DIR_ATTR" "expected attr=32 got $MANIFEST_ENTRY_ATTR"
+fi
+mark_pass "SETUP_MFT_DIR_ATTR"
+
+MANIFEST_ENTRY_CLUSTER="$(read_u16_le "$IMG" $((MANIFEST_ENTRY_OFFSET + 26)))"
+if [[ -z "$MANIFEST_ENTRY_CLUSTER" || "$MANIFEST_ENTRY_CLUSTER" -le 1 ]]; then
+  mark_fail "SETUP_MFT_DIR_CLUSTER" "invalid start cluster: $MANIFEST_ENTRY_CLUSTER"
+fi
+mark_pass "SETUP_MFT_DIR_CLUSTER"
+
+MANIFEST_ENTRY_SIZE="$(read_u32_le "$IMG" $((MANIFEST_ENTRY_OFFSET + 28)))"
+if [[ "$MANIFEST_ENTRY_SIZE" != "$SETUP_MANIFEST_SIZE" ]]; then
+  mark_fail "SETUP_MFT_DIR_SIZE" "entry size=$MANIFEST_ENTRY_SIZE payload size=$SETUP_MANIFEST_SIZE"
+fi
+mark_pass "SETUP_MFT_DIR_SIZE"
+
+MANIFEST_FAT_ENTRY_OFFSET=$(((FAT1_LBA * 512) + (MANIFEST_ENTRY_CLUSTER * 2)))
+MANIFEST_FAT_ENTRY_VALUE="$(read_u16_le "$IMG" "$MANIFEST_FAT_ENTRY_OFFSET")"
+if [[ "$MANIFEST_FAT_ENTRY_VALUE" != "65535" ]]; then
+  mark_fail "SETUP_MFT_FAT_CHAIN" "expected EOC=65535 got $MANIFEST_FAT_ENTRY_VALUE"
+fi
+mark_pass "SETUP_MFT_FAT_CHAIN"
+
+MANIFEST_DATA_OFFSET=$(((DATA_LBA + ((MANIFEST_ENTRY_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER)) * 512))
+if ! cmp -n "$SETUP_MANIFEST_SIZE" "$SETUP_MANIFEST_BIN" <(dd if="$IMG" bs=1 skip="$MANIFEST_DATA_OFFSET" count="$SETUP_MANIFEST_SIZE" status=none) >/dev/null 2>&1; then
+  mark_fail "SETUP_MFT_PAYLOAD_MATCH" "image payload differs from $SETUP_MANIFEST_BIN"
+fi
+mark_pass "SETUP_MFT_PAYLOAD_MATCH"
 
 echo "[setup-accept-full] PASS (FULL-only setup packaging acceptance)"

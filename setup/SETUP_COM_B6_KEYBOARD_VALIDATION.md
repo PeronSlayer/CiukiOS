@@ -1,9 +1,9 @@
 # SETUP.COM Phase 4 Block B6 Keyboard Validation
 
 ## Validation Mode
-- Baseline type: `document baseline`
-- Runtime execution: `not executed in this document`
-- Scope: keyboard navigation expectations for screens B1-B5.
+- Baseline type: `document baseline + targeted runtime evidence`
+- Runtime execution: `executed via scripts/qemu_test_setup_installer_scenarios.sh (2026-05-03)`
+- Scope: keyboard navigation expectations for screens B1-B5, with sampled runtime coverage on critical paths.
 
 ## Expected Key Semantics
 - `Up/Down`: move focus between selectable options where lists/actions exist.
@@ -11,8 +11,8 @@
 - `Esc`: deterministic back/cancel according to current screen/state rules.
 - `Retry path`: available in error/recovery prompts only.
 
-## Expectation Matrix (Document Baseline)
-No case below is marked runtime PASS/FAIL in this document. `Baseline status` means documented expectation only.
+## Expectation Matrix (Baseline + Runtime Sample Coverage)
+Table rows remain the normative keyboard contract. Runtime evidence is currently sampled on critical flows; full per-row evidence remains part of post-closure hardening.
 
 | Case ID | Screen | Key(s) | Expected behavior | Baseline status | Runtime evidence placeholder |
 |---|---|---|---|---|---|
@@ -39,10 +39,15 @@ No case below is marked runtime PASS/FAIL in this document. `Baseline status` me
 | `KB-B5-04` | `B5_FAILURE` | `Enter` on Retry | Retry failed step when class is recoverable. | Defined (runtime pending) | `[ ] Attach recoverable retry log` |
 | `KB-B5-05` | `B5_FAILURE` | `Esc` or Back | Return to `B4_PROGRESS` or `B3_TARGET_SELECT` per safe state. | Defined (runtime pending) | `[ ] Attach safe-state back transition` |
 
-## Pending Runtime Verification Items
+## Remaining Runtime Verification Items
+- Expand from sampled coverage to per-case evidence for every matrix row.
 - Verify key capture hooks emit one event per keypress for B1-B5.
 - Verify action resolution hooks map keypress to deterministic action ids.
 - Verify transition hooks report correct `from/action/to` tuples for all documented cases.
 - Verify retry hook increments retry count and persists status code across attempts.
-- Capture evidence artifacts (screenshots/log extracts) for all placeholders in this matrix.
-- Re-run matrix after stream C state machine and stream D target/media checks are integrated.
+- Capture dedicated evidence artifacts (screenshots/log extracts) for all placeholders in this matrix.
+
+## Covered runtime evidence snapshot (2026-05-03)
+- `success_minimal` scenario: validated `Down/Up/Enter` navigation path through component/flow progression and successful completion.
+- `failure_missing_media` scenario: validated retry-path interaction and `Esc` cancellation behavior in failure handling.
+- `failure_media_swap_timeout` scenario: validated timeout-safe behavior for media-swap wait states.

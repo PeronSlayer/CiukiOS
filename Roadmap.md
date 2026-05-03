@@ -48,17 +48,22 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 - Evidence (2026-05-01): `scripts/qemu_test_setup_full_acceptance.sh` PASS.
 - Scope caveat: closure is full-profile only; floppy lane is not a required installer baseline.
 - Advanced backlog note: multi-floppy distribution and extended CD installer workflow remain post-MVP backlog items for a later phase.
-- See `setup/README.md` for active post-MVP installer backlog tracking.
+- See `setup/README.md` for post-MVP installer maintenance and advanced backlog tracking.
 
 ## Phase 4 - DOOM Milestone + Installer Execution Track
-**STATUS: ACTIVE (from 2026-04-30)**
-1. Execute post-MVP installer backlog after the Phase 3.5 functional closure (workflow hardening, advanced media swap flow, extended CD workflow, and expanded failure-path validation).
-2. Produce reproducible installer validation evidence for success/failure scenarios.
+**STATUS: ACTIVE (runtime lane ongoing)**
+**INSTALLER EXECUTION LANE: CLOSED (2026-05-03)**
+1. Installer execution backlog (post-MVP hardening, media-swap flows, and failure-path validation) is completed.
+2. Reproducible installer evidence bundle is completed and archived.
 3. Optimize mode 13h/VGA rendering path.
 4. Add the minimum extender compatibility needed by complex DOS binaries.
 5. Milestone: DOOM boots and is playable.
 - Evidence (2026-05-01): released `CiukiOS pre-Alpha v0.5.4` after shell input stability improvements (hold-key repeat, wrap, backspace) and FAT16 footer telemetry stabilization (`CPU/DSK/RAM`).
 - Evidence (2026-05-01): reran cross-profile build/regression lanes for floppy (FAT12) and full (FAT16) with stable high-level outcomes.
+- Evidence (2026-05-03): `./scripts/build_full.sh` PASS.
+- Evidence (2026-05-03): `./scripts/qemu_test_setup_full_acceptance.sh` PASS.
+- Evidence (2026-05-03): `./scripts/qemu_test_setup_installer_scenarios.sh` PASS.
+- Scope note: Phase 4 remains active until runtime/DOOM milestones (items 3-5) are closed.
 
 ## Phase 5 - Windows pre-NT Milestones
 1. Expand DOS compatibility required by Windows 3.x/95/98 bootstrap and runtime paths.
