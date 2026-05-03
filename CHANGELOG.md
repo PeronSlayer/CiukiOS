@@ -12,6 +12,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 6. Synchronized project documentation to reflect installer-lane closure while keeping the runtime/DOOM lane active.
 7. Improved README changelog visibility and updated local agent directives to require a `CHANGELOG.md` update for every completed task.
 8. Advanced the DOOM taxonomy harness to boot the full profile interactively, invoke `DRVLOAD.COM`, and launch `DOOM.EXE`, adding a deterministic `doom_exec_attempted` stage before extender/video/menu gates.
+9. Advanced DOOM runtime coverage to `extender_init` by adding an MZ transfer stage, FAT16 32-bit seek/read file positions, real handle duplication for DOS extender loaders, and DOOM-specific environment executable path handling; current blocker is DOS/16M `cannot allocate tstack`.
 
 ## pre-Alpha v0.5.4 (2026-05-01)
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.

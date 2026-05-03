@@ -796,12 +796,39 @@ int21_handler:
     jmp .success
 
 .fn_45:
+%if FAT_TYPE == 16
+    cmp bx, 0x0005
+    jne .fn_45_legacy
+    cmp byte [cs:file_handle_open], 1
+    jne .error
+    cmp byte [cs:file_handle2_open], 0
+    jne .fn_45_no_slots
+    call int21_dup_handle1_to_2
+    mov ax, 0x0006
+    jmp .success
+.fn_45_no_slots:
+    mov ax, 0x0004
+    jmp .error
+.fn_45_legacy:
+%endif
     call int21_is_valid_handle
     jc .error
     mov ax, bx
     jmp .success
 
 .fn_46:
+%if FAT_TYPE == 16
+    cmp bx, 0x0005
+    jne .fn_46_legacy
+    cmp cx, 0x0006
+    jne .fn_46_legacy
+    cmp byte [cs:file_handle_open], 1
+    jne .error
+    call int21_dup_handle1_to_2
+    xor ax, ax
+    jmp .success
+.fn_46_legacy:
+%endif
     call int21_is_valid_handle
     jc .error
     push bx
@@ -2062,11 +2089,7 @@ int21_exec_run_mz:
     mov [es:0x0010], ax
     mov word [es:0x0012], 0x0005
     mov [es:0x0014], ax
-    mov word [es:0x0002], DOS_HEAP_USER_SEG
-    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
-    jne .psp_limit_ready
     mov word [es:0x0002], DOS_HEAP_LIMIT_SEG
-.psp_limit_ready:
     mov [es:0x0016], ax
     mov word [es:0x002C], DOS_ENV_SEG
     call int21_build_env_block
@@ -2110,9 +2133,20 @@ int21_exec_run_mz:
 
 .ctx_saved:
 
+    push ds
+    push cs
+    pop ds
+    mov si, msg_mz_begin
+    call print_string_serial
+    pop ds
+
     cli
     mov ax, [cs:mz_psp_seg]
     mov [cs:current_psp_seg], ax
+    push ax
+    mov al, 'Z'
+    call int21_psp_mcb_update_type
+    pop ax
     mov ds, ax
     mov es, ax
     mov ax, [cs:mz_stack_seg]
@@ -3964,6 +3998,9 @@ int21_open:
 
     mov byte [cs:file_handle_open], 1
     mov word [cs:file_handle_pos], 0
+%if FAT_TYPE == 16
+    mov word [cs:file_handle_pos_hi], 0
+%endif
     mov al, [cs:tmp_open_mode]
     mov [cs:file_handle_mode], al
     mov ax, [cs:search_found_cluster]
@@ -3990,6 +4027,9 @@ int21_open:
 .assign_slot2:
     mov byte [cs:file_handle2_open], 1
     mov word [cs:file_handle2_pos], 0
+%if FAT_TYPE == 16
+    mov word [cs:file_handle2_pos_hi], 0
+%endif
     mov al, [cs:tmp_open_mode]
     mov [cs:file_handle2_mode], al
     mov ax, [cs:search_found_cluster]
@@ -4016,6 +4056,9 @@ int21_open:
 .assign_slot3:
     mov byte [cs:file_handle3_open], 1
     mov word [cs:file_handle3_pos], 0
+%if FAT_TYPE == 16
+    mov word [cs:file_handle3_pos_hi], 0
+%endif
     mov al, [cs:tmp_open_mode]
     mov [cs:file_handle3_mode], al
     mov ax, [cs:search_found_cluster]
@@ -4043,6 +4086,7 @@ int21_open:
 .assign_slot4:
     mov byte [cs:file_handle4_open], 1
     mov word [cs:file_handle4_pos], 0
+    mov word [cs:file_handle4_pos_hi], 0
     mov al, [cs:tmp_open_mode]
     mov [cs:file_handle4_mode], al
     mov ax, [cs:search_found_cluster]
@@ -4068,6 +4112,7 @@ int21_open:
 .assign_slot5:
     mov byte [cs:file_handle5_open], 1
     mov word [cs:file_handle5_pos], 0
+    mov word [cs:file_handle5_pos_hi], 0
     mov al, [cs:tmp_open_mode]
     mov [cs:file_handle5_mode], al
     mov ax, [cs:search_found_cluster]
@@ -4094,6 +4139,7 @@ int21_open:
 .assign_slot6:
     mov byte [cs:file_handle6_open], 1
     mov word [cs:file_handle6_pos], 0
+    mov word [cs:file_handle6_pos_hi], 0
     mov al, [cs:tmp_open_mode]
     mov [cs:file_handle6_mode], al
     mov ax, [cs:search_found_cluster]
@@ -4120,6 +4166,7 @@ int21_open:
 .assign_slot7:
     mov byte [cs:file_handle7_open], 1
     mov word [cs:file_handle7_pos], 0
+    mov word [cs:file_handle7_pos_hi], 0
     mov al, [cs:tmp_open_mode]
     mov [cs:file_handle7_mode], al
     mov ax, [cs:search_found_cluster]
@@ -4146,6 +4193,7 @@ int21_open:
 .assign_slot8:
     mov byte [cs:file_handle8_open], 1
     mov word [cs:file_handle8_pos], 0
+    mov word [cs:file_handle8_pos_hi], 0
     mov al, [cs:tmp_open_mode]
     mov [cs:file_handle8_mode], al
     mov ax, [cs:search_found_cluster]
@@ -4325,8 +4373,8 @@ int21_close:
     clc
     ret
 .bad_handle:
-    mov ax, 0x0006
-    stc
+    xor ax, ax
+    clc
     ret
 
 .close_noop:
@@ -4522,6 +4570,21 @@ int21_read:
     mov [cs:tmp_user_ds], ax
     mov [cs:tmp_user_ptr], dx
 
+%if FAT_TYPE == 16
+    mov ax, [cs:file_handle_size_hi]
+    cmp [cs:file_handle_pos_hi], ax
+    ja .eof
+    jb .loop
+
+    mov ax, [cs:file_handle_size_lo]
+    cmp [cs:file_handle_pos], ax
+    jae .eof
+
+    sub ax, [cs:file_handle_pos]
+    cmp [cs:tmp_rw_remaining], ax
+    jbe .loop
+    mov [cs:tmp_rw_remaining], ax
+%else
     mov ax, [cs:file_handle_size_lo]
     or ax, ax
     jne .size_ready
@@ -4536,6 +4599,7 @@ int21_read:
     cmp [cs:tmp_rw_remaining], ax
     jbe .loop
     mov [cs:tmp_rw_remaining], ax
+%endif
 
 .loop:
     cmp word [cs:tmp_rw_remaining], 0
@@ -4589,6 +4653,9 @@ int21_read:
 
     mov ax, [cs:tmp_chunk]
     add [cs:file_handle_pos], ax
+%if FAT_TYPE == 16
+    adc word [cs:file_handle_pos_hi], 0
+%endif
     add [cs:tmp_rw_done], ax
     sub [cs:tmp_rw_remaining], ax
     jmp .loop
@@ -5658,8 +5725,10 @@ int21_seek:
     jne .bad_handle
     cmp byte [cs:file_handle_open], 1
     jne .bad_handle
+%if FAT_TYPE != 16
     cmp cx, 0
     jne .bad_function
+%endif
 
     cmp al, 0
     je .from_start
@@ -5670,17 +5739,41 @@ int21_seek:
     jmp .bad_function
 
 .from_start:
+%if FAT_TYPE == 16
+    mov [cs:file_handle_pos], dx
+    mov [cs:file_handle_pos_hi], cx
+    jmp .return_pos
+%else
     mov ax, dx
     jmp .set_pos
+%endif
 
 .from_current:
+%if FAT_TYPE == 16
+    add dx, [cs:file_handle_pos]
+    adc cx, [cs:file_handle_pos_hi]
+    mov [cs:file_handle_pos], dx
+    mov [cs:file_handle_pos_hi], cx
+    jmp .return_pos
+%else
     mov ax, [cs:file_handle_pos]
     add ax, dx
     jmp .set_pos
+%endif
 
 .from_end:
+%if FAT_TYPE == 16
+    mov ax, [cs:file_handle_size_lo]
+    mov bx, [cs:file_handle_size_hi]
+    add ax, dx
+    adc bx, cx
+    mov [cs:file_handle_pos], ax
+    mov [cs:file_handle_pos_hi], bx
+    jmp .return_pos
+%else
     mov ax, [cs:file_handle_size_lo]
     add ax, dx
+%endif
 
 .set_pos:
     mov [cs:file_handle_pos], ax
@@ -5688,6 +5781,14 @@ int21_seek:
     mov ax, [cs:file_handle_pos]
     clc
     jmp .done
+
+%if FAT_TYPE == 16
+.return_pos:
+    mov ax, [cs:file_handle_pos]
+    mov dx, [cs:file_handle_pos_hi]
+    clc
+    jmp .done
+%endif
 
 .bad_function:
     mov ax, 0x0001
@@ -5746,6 +5847,30 @@ int21_seek:
     pop bx
     ret
 
+%if FAT_TYPE == 16
+int21_dup_handle1_to_2:
+    mov byte [cs:file_handle2_open], 1
+    mov ax, [cs:file_handle_pos]
+    mov [cs:file_handle2_pos], ax
+    mov ax, [cs:file_handle_pos_hi]
+    mov [cs:file_handle2_pos_hi], ax
+    mov al, [cs:file_handle_mode]
+    mov [cs:file_handle2_mode], al
+    mov ax, [cs:file_handle_start_cluster]
+    mov [cs:file_handle2_start_cluster], ax
+    mov ax, [cs:file_handle_root_lba]
+    mov [cs:file_handle2_root_lba], ax
+    mov ax, [cs:file_handle_root_off]
+    mov [cs:file_handle2_root_off], ax
+    mov ax, [cs:file_handle_cluster_count]
+    mov [cs:file_handle2_cluster_count], ax
+    mov ax, [cs:file_handle_size_lo]
+    mov [cs:file_handle2_size_lo], ax
+    mov ax, [cs:file_handle_size_hi]
+    mov [cs:file_handle2_size_hi], ax
+    ret
+%endif
+
 int21_swap_file_handles:
     push ax
 
@@ -5756,6 +5881,11 @@ int21_swap_file_handles:
     mov ax, [cs:file_handle_pos]
     xchg ax, [cs:file_handle2_pos]
     mov [cs:file_handle_pos], ax
+%if FAT_TYPE == 16
+    mov ax, [cs:file_handle_pos_hi]
+    xchg ax, [cs:file_handle2_pos_hi]
+    mov [cs:file_handle_pos_hi], ax
+%endif
 
     mov al, [cs:file_handle_mode]
     xchg al, [cs:file_handle2_mode]
@@ -5798,6 +5928,11 @@ int21_swap_file_handles3:
     mov ax, [cs:file_handle_pos]
     xchg ax, [cs:file_handle3_pos]
     mov [cs:file_handle_pos], ax
+%if FAT_TYPE == 16
+    mov ax, [cs:file_handle_pos_hi]
+    xchg ax, [cs:file_handle3_pos_hi]
+    mov [cs:file_handle_pos_hi], ax
+%endif
 
     mov al, [cs:file_handle_mode]
     xchg al, [cs:file_handle3_mode]
@@ -5841,6 +5976,9 @@ int21_swap_file_handles4:
     mov ax, [cs:file_handle_pos]
     xchg ax, [cs:file_handle4_pos]
     mov [cs:file_handle_pos], ax
+    mov ax, [cs:file_handle_pos_hi]
+    xchg ax, [cs:file_handle4_pos_hi]
+    mov [cs:file_handle_pos_hi], ax
 
     mov al, [cs:file_handle_mode]
     xchg al, [cs:file_handle4_mode]
@@ -5882,6 +6020,9 @@ int21_swap_file_handles5:
     mov ax, [cs:file_handle_pos]
     xchg ax, [cs:file_handle5_pos]
     mov [cs:file_handle_pos], ax
+    mov ax, [cs:file_handle_pos_hi]
+    xchg ax, [cs:file_handle5_pos_hi]
+    mov [cs:file_handle_pos_hi], ax
 
     mov al, [cs:file_handle_mode]
     xchg al, [cs:file_handle5_mode]
@@ -5924,6 +6065,9 @@ int21_swap_file_handles6:
     mov ax, [cs:file_handle_pos]
     xchg ax, [cs:file_handle6_pos]
     mov [cs:file_handle_pos], ax
+    mov ax, [cs:file_handle_pos_hi]
+    xchg ax, [cs:file_handle6_pos_hi]
+    mov [cs:file_handle_pos_hi], ax
 
     mov al, [cs:file_handle_mode]
     xchg al, [cs:file_handle6_mode]
@@ -5966,6 +6110,9 @@ int21_swap_file_handles7:
     mov ax, [cs:file_handle_pos]
     xchg ax, [cs:file_handle7_pos]
     mov [cs:file_handle_pos], ax
+    mov ax, [cs:file_handle_pos_hi]
+    xchg ax, [cs:file_handle7_pos_hi]
+    mov [cs:file_handle_pos_hi], ax
 
     mov al, [cs:file_handle_mode]
     xchg al, [cs:file_handle7_mode]
@@ -6008,6 +6155,9 @@ int21_swap_file_handles8:
     mov ax, [cs:file_handle_pos]
     xchg ax, [cs:file_handle8_pos]
     mov [cs:file_handle_pos], ax
+    mov ax, [cs:file_handle_pos_hi]
+    xchg ax, [cs:file_handle8_pos_hi]
+    mov [cs:file_handle_pos_hi], ax
 
     mov al, [cs:file_handle_mode]
     xchg al, [cs:file_handle8_mode]
@@ -6888,7 +7038,21 @@ int21_cluster_for_pos:
     and dx, FAT_CLUSTER_MASK
     mov cl, FAT_CLUSTER_SHIFT
     shr ax, cl
+%if FAT_TYPE == 16
+    mov cx, [cs:file_handle_pos_hi]
+%if FAT_CLUSTER_SHIFT == 9
+    shl cx, 7
+%elif FAT_CLUSTER_SHIFT == 10
+    shl cx, 6
+%elif FAT_CLUSTER_SHIFT == 11
+    shl cx, 5
+%elif FAT_CLUSTER_SHIFT == 12
+    shl cx, 4
+%endif
+    add cx, ax
+%else
     mov cx, ax
+%endif
 
     mov ax, [cs:file_handle_start_cluster]
     cmp ax, 2
@@ -7924,7 +8088,31 @@ int21_build_env_block:
     mov si, dos_env_block
     mov cx, dos_env_block_end - dos_env_block
     rep movsb
+%if FAT_TYPE == 16
+    cmp byte [cs:path_fat_name + 0], 'D'
+    jne .done
+    cmp byte [cs:path_fat_name + 1], 'O'
+    jne .done
+    cmp byte [cs:path_fat_name + 2], 'O'
+    jne .done
+    cmp byte [cs:path_fat_name + 3], 'M'
+    jne .done
+    cmp byte [cs:path_fat_name + 8], 'E'
+    jne .done
+    cmp byte [cs:path_fat_name + 9], 'X'
+    jne .done
+    cmp byte [cs:path_fat_name + 10], 'E'
+    jne .done
+    mov di, dos_env_exec_path - dos_env_block
+    mov si, env_doom_exe_path
+.doom_path_copy:
+    lodsb
+    stosb
+    test al, al
+    jnz .doom_path_copy
+%endif
 
+.done:
     pop es
     pop ds
     pop di
@@ -14218,13 +14406,7 @@ int2f_handler:
 .fn_1687:
     push bp
     mov bp, sp
-    xor ax, ax
-    mov bx, 0x0001
-    mov cx, 0x0090
-    mov si, 0x0001
-    mov di, 0x0001
-    push cs
-    pop es
+    mov ax, 0x8001
     jmp .iret_clear_cf
 
 .fn_4300:
@@ -14465,6 +14647,9 @@ mouse_vga_cursor_mask db 0x80,0xC0,0xE0,0xF0,0xF8,0xDC,0x8E,0x06
 %endif
 file_handle_open db 0
 file_handle_pos dw 0
+%if FAT_TYPE == 16
+file_handle_pos_hi dw 0
+%endif
 file_handle_mode db 0
 tmp_open_mode db 0
 file_handle_start_cluster dw 0
@@ -14475,6 +14660,9 @@ file_handle_size_lo dw 0
 file_handle_size_hi dw 0
 file_handle2_open db 0
 file_handle2_pos dw 0
+%if FAT_TYPE == 16
+file_handle2_pos_hi dw 0
+%endif
 file_handle2_mode db 0
 file_handle2_start_cluster dw 0
 file_handle2_root_lba dw 0
@@ -14484,6 +14672,9 @@ file_handle2_size_lo dw 0
 file_handle2_size_hi dw 0
 file_handle3_open db 0
 file_handle3_pos dw 0
+%if FAT_TYPE == 16
+file_handle3_pos_hi dw 0
+%endif
 file_handle3_mode db 0
 file_handle3_start_cluster dw 0
 file_handle3_root_lba dw 0
@@ -14494,6 +14685,7 @@ file_handle3_size_hi dw 0
 %if FAT_TYPE == 16
 file_handle4_open db 0
 file_handle4_pos dw 0
+file_handle4_pos_hi dw 0
 file_handle4_mode db 0
 file_handle4_start_cluster dw 0
 file_handle4_root_lba dw 0
@@ -14503,6 +14695,7 @@ file_handle4_size_lo dw 0
 file_handle4_size_hi dw 0
 file_handle5_open db 0
 file_handle5_pos dw 0
+file_handle5_pos_hi dw 0
 file_handle5_mode db 0
 file_handle5_start_cluster dw 0
 file_handle5_root_lba dw 0
@@ -14512,6 +14705,7 @@ file_handle5_size_lo dw 0
 file_handle5_size_hi dw 0
 file_handle6_open db 0
 file_handle6_pos dw 0
+file_handle6_pos_hi dw 0
 file_handle6_mode db 0
 file_handle6_start_cluster dw 0
 file_handle6_root_lba dw 0
@@ -14521,6 +14715,7 @@ file_handle6_size_lo dw 0
 file_handle6_size_hi dw 0
 file_handle7_open db 0
 file_handle7_pos dw 0
+file_handle7_pos_hi dw 0
 file_handle7_mode db 0
 file_handle7_start_cluster dw 0
 file_handle7_root_lba dw 0
@@ -14530,6 +14725,7 @@ file_handle7_size_lo dw 0
 file_handle7_size_hi dw 0
 file_handle8_open db 0
 file_handle8_pos dw 0
+file_handle8_pos_hi dw 0
 file_handle8_mode db 0
 file_handle8_start_cluster dw 0
 file_handle8_root_lba dw 0
@@ -14642,8 +14838,10 @@ dos_env_block db 'COMSPEC=C:\COMMAND.COM', 0
               db 'PATH=C:\', 0
               db 0
               dw 1
-              db 'C:\COMMAND.COM', 0
+dos_env_exec_path db 'C:\COMMAND.COM', 0
+              times 64 - ($ - dos_env_exec_path) db 0
 dos_env_block_end:
+env_doom_exe_path db 'C:\APPS\DOOM\DOOM.EXE', 0
 disk_packet:
     db 0x10
     db 0
@@ -14963,4 +15161,3 @@ msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0
 msg_exit_str db "Exit", 13, 10, 0
-

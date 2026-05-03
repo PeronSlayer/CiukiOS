@@ -32,6 +32,7 @@ Versioning policy:
 6. Synchronized project documentation to reflect installer-lane closure while keeping the runtime/DOOM lane active.
 7. Improved README changelog visibility and updated local agent directives to require a `CHANGELOG.md` update for every completed task.
 8. Advanced the DOOM taxonomy harness to boot the full profile interactively, invoke `DRVLOAD.COM`, and launch `DOOM.EXE`, adding a deterministic `doom_exec_attempted` stage before extender/video/menu gates.
+9. Advanced DOOM runtime coverage to `extender_init`; current blocker is DOS/16M `cannot allocate tstack` before video/menu initialization.
 
 ### pre-Alpha v0.5.4 (2026-05-01)
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.

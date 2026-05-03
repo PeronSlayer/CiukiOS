@@ -120,12 +120,12 @@ Phase ownership:
 - Handoff package includes decisions, status, risks, test outcome summary, and prioritized next-cycle TODOs.
 
 ## Next action
-Investigate the first deterministic DOOM launch runtime blocker observed by the taxonomy harness: `INT 21h AH=3Eh` returning bad handle (`06`) after `RUN \APPS\DOOM\DOOM.EXE`, before extender/video/menu markers appear.
+Investigate the current deterministic DOOM launch runtime blocker observed by the taxonomy harness: DOS/16M reaches extender startup, probes `C:\APPS\DOOM\DOOM.ETX`, then reports `cannot allocate tstack` before video/menu markers appear.
 
 ## Test status
 - Full build integration status (SYSTEM/DRIVERS): Completed/PASS in full build packaging baseline.
 - Runtime activation status: Available through DRVLOAD.COM helper lane (manual invocation).
 - Runtime activation smoke status: Available through scripts/qemu_test_full_drvload_smoke.sh (serial markers BEGIN/TRY/DONE).
-- DOOM automation integration status: Available through scripts/qemu_test_full_doom_taxonomy.sh with `doom_exec_attempted` PASS.
+- DOOM automation integration status: Available through scripts/qemu_test_full_doom_taxonomy.sh with `extender_init` PASS.
 - Stage1 boot autoload status: Deferred by size gate decision.
-- Regression matrix status: Pending runtime bad-handle investigation and later extender/video/menu stage closure.
+- Regression matrix status: Pending DOS/16M transfer-stack memory investigation and later video/menu stage closure.

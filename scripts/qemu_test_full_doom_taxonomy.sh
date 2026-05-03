@@ -29,6 +29,7 @@ STAGES=(
   binary_found
   wad_found
   doom_exec_attempted
+  mz_transfer
   extender_init
   video_init
   menu_reached
@@ -422,6 +423,7 @@ classify_runtime() {
 
   if ! qemu_available; then
     set_stage "doom_exec_attempted" "DEFERRED" "qemu unavailable; runtime probe skipped"
+    set_stage "mz_transfer" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "extender_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "video_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "menu_reached" "DEFERRED" "qemu unavailable; runtime probe skipped"
@@ -430,6 +432,7 @@ classify_runtime() {
 
   if [[ "$DOOM_TAXONOMY_LAUNCH" != "0" && "$DOOM_TAXONOMY_LAUNCH" != "1" ]]; then
     set_stage "doom_exec_attempted" "FAIL" "invalid DOOM_TAXONOMY_LAUNCH=$DOOM_TAXONOMY_LAUNCH (expected 0 or 1)"
+    set_stage "mz_transfer" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "menu_reached" "DEFERRED" "runtime launch skipped due invalid launch mode"
@@ -448,6 +451,7 @@ classify_runtime() {
   if [[ "$DOOM_TAXONOMY_LAUNCH" == "1" ]]; then
     if ! command_exists socat; then
       set_stage "doom_exec_attempted" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
+      set_stage "mz_transfer" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       set_stage "extender_init" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       set_stage "video_init" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       set_stage "menu_reached" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
@@ -516,6 +520,7 @@ classify_runtime() {
     set -e
 
     set_stage "doom_exec_attempted" "DEFERRED" "interactive DOOM launch disabled (DOOM_TAXONOMY_LAUNCH=0)"
+    set_stage "mz_transfer" "DEFERRED" "interactive DOOM launch disabled (DOOM_TAXONOMY_LAUNCH=0)"
   fi
 
   if [[ $smoke_rc -eq 0 ]]; then
@@ -558,6 +563,7 @@ classify_runtime() {
     if [[ "${STAGE_STATUS[doom_exec_attempted]}" == "DEFERRED" ]]; then
       set_stage "doom_exec_attempted" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     fi
+    set_stage "mz_transfer" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "extender_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "video_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "menu_reached" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
@@ -568,14 +574,22 @@ classify_runtime() {
     if [[ "${STAGE_STATUS[doom_exec_attempted]}" == "DEFERRED" ]]; then
       set_stage "doom_exec_attempted" "DEFERRED" "$smoke_detail; fresh logs seen: $runtime_log_sources$stale_detail"
     fi
+    set_stage "mz_transfer" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
     set_stage "extender_init" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
     set_stage "video_init" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
     set_stage "menu_reached" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
     return
   fi
 
+  if log_has_fixed_marker '[MZ] run' "${runtime_logs[@]}" \
+    || log_has_pattern '\\[\\[MMZZ\\]\\][[:space:]]+rruunn' "${runtime_logs[@]}"; then
+    set_stage "mz_transfer" "PASS" "$smoke_detail; MZ transfer marker observed in fresh logs: $runtime_log_sources"
+  else
+    set_stage "mz_transfer" "DEFERRED" "$smoke_detail; MZ transfer marker not observed in fresh logs: $runtime_log_sources"
+  fi
+
   if log_has_fixed_marker '[ doom ] stage reached: extender_init' "${runtime_logs[@]}" \
-    || log_has_pattern '\\[ *doom *\\].*stage reached: *(extender_init|extender)|OpenGEM: extender (probe complete|mode=dpmi-stub)|DOS/?4GW|DPMI' "${runtime_logs[@]}"; then
+    || log_has_pattern '\\[ *doom *\\].*stage reached: *(extender_init|extender)|OpenGEM: extender (probe complete|mode=dpmi-stub)|DOS/?4G|DOS/?16M|DDOOSS//1166MM|DPMI' "${runtime_logs[@]}"; then
     set_stage "extender_init" "PASS" "$smoke_detail; extender marker observed in fresh logs: $runtime_log_sources"
   else
     set_stage "extender_init" "DEFERRED" "$smoke_detail; extender marker not observed in fresh logs: $runtime_log_sources"
@@ -626,6 +640,7 @@ fi
 if [[ ! -f "$IMG" ]]; then
   set_stage "binary_found" "FAIL" "image not found: $IMG"
   set_stage "wad_found" "FAIL" "image not found: $IMG"
+  set_stage "mz_transfer" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "extender_init" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "video_init" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "menu_reached" "DEFERRED" "runtime probe skipped (image missing)"
