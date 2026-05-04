@@ -108,7 +108,7 @@ fail_with_rc() {
 }
 
 echo "[setup-runtime-hdd] building full-CD source image"
-CIUKIOS_SETUP_RAW_HDD_INSTALL=1 bash scripts/build_full_cd.sh
+bash scripts/build_full_cd.sh
 
 if [[ ! -f "$DIRECT_ISO" ]]; then
   fail_with_rc "missing direct ISO: $DIRECT_ISO"
@@ -141,7 +141,15 @@ fi
 
 send_key ret
 send_key ret
+send_key c
+send_key ret
 send_key d
+send_key e
+send_key s
+send_key t
+send_key r
+send_key o
+send_key y
 send_key ret
 
 if ! wait_for_regex "$INSTALL_SERIAL_LOG" "\[SETUP-HDD-INSTALL\] START" 30; then

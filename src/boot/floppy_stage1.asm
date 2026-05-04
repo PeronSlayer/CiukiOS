@@ -22,6 +22,13 @@ org 0x0000
 %define DOS_MEM_BLOCK_ALLOC 1
 %define DOS_MEM_BLOCK_TABLE_MAX 16
 %define DOS_MEM_BLOCK_ENTRY_SIZE 8
+%ifndef DOS_DEFAULT_DRIVE_INDEX
+%if FAT_TYPE == 16
+%define DOS_DEFAULT_DRIVE_INDEX 2
+%else
+%define DOS_DEFAULT_DRIVE_INDEX 0
+%endif
+%endif
 %ifndef FAT_SPT
 %define FAT_SPT 18
 %endif
@@ -306,11 +313,7 @@ install_int21_vector:
     mov byte [int2f_installed], 0
     mov byte [last_exit_code], 0
     mov byte [last_term_type], 0
-%if FAT_TYPE == 16
-    mov byte [dos_default_drive], 2
-%else
-    mov byte [dos_default_drive], 0
-%endif
+    mov byte [dos_default_drive], DOS_DEFAULT_DRIVE_INDEX
     mov byte [find_active], 0
     mov ax, cs
     mov [dta_seg], ax
@@ -10595,6 +10598,10 @@ dispatch_command:
     call str_eq
     jc .cmd_drive
     mov di, bx
+    mov si, str_drives
+    call str_eq
+    jc .cmd_drives
+    mov di, bx
     mov si, str_dir
     call str_eq
     jc .cmd_dir
@@ -10762,6 +10769,27 @@ dispatch_command:
     mov al, [boot_drive]
     call print_hex8_dual
     call print_newline_dual
+    jmp .done
+
+.cmd_drives:
+    mov si, msg_drive
+    call print_string_dual
+    xor ah, ah
+    mov al, [boot_drive]
+    call print_hex8_dual
+    call print_newline_dual
+    mov si, msg_drives_default
+    call print_string_dual
+    mov al, [dos_default_drive]
+    add al, 65
+    call putc_dual
+    mov si, msg_drives_index
+    call print_string_dual
+    mov al, [dos_default_drive]
+    call print_hex8_dual
+    call print_newline_dual
+    mov si, msg_drives_units
+    call print_string_dual
     jmp .done
 
 .cmd_dir:
@@ -11443,6 +11471,8 @@ shell_completion_scan_builtins:
     mov si, str_ticks
     call shell_completion_consider_candidate
     mov si, str_drive
+    call shell_completion_consider_candidate
+    mov si, str_drives
     call shell_completion_consider_candidate
     mov si, str_dir
     call shell_completion_consider_candidate
@@ -15955,9 +15985,12 @@ msg_help_core db "  help - Guide.", 13, 10, "  ver - Version.", 13, 10, "  cls -
 msg_help_runtime db "  which/where - Resolve.", 13, 10, "  pwd - Cwd.", 13, 10, "  dir - List.", 13, 10, 0
 msg_help_system db "  cd/cd.. - Chdir.", 13, 10, "  run - Execute.", 13, 10, "  help all - Full list.", 13, 10, 0
 msg_help_apps db "  reboot - Reboot.", 13, 10, "  exit - Restart.", 13, 10, 0
-msg_help_all db "  ticks - T. drive - D. dos21 - S. comdemo - C.", 13, 10, "  mzdemo - M. fileio - F. gfxdemo - G.", 13, 10, 0
+msg_help_all db "  ticks - T. drive/drives - D. dos21 - S.", 13, 10, "  comdemo - C. mzdemo - M. fileio - F. gfxdemo - G.", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
+msg_drives_default db "default drive=", 0
+msg_drives_index db " index=0x", 0
+msg_drives_units db "units: C=HDD D=Live/CD when booted from install media", 13, 10, 0
 msg_dos21_begin db "[DOS21] smoke", 13, 10, 0
 msg_dos21_status db "[INT21/4D] 0x", 0
 msg_dos21_serial_pass db "[DOS21-SERIAL] PASS", 13, 10, 0
@@ -16012,6 +16045,7 @@ str_ver    db "ver", 0
 str_cls    db "cls", 0
 str_ticks  db "ticks", 0
 str_drive  db "drive", 0
+str_drives db "drives", 0
 str_dir    db "dir", 0
 str_pwd    db "pwd", 0
 str_cd     db "cd", 0
@@ -16056,6 +16090,7 @@ shell_builtin_name_table:
     dw str_cls
     dw str_ticks
     dw str_drive
+    dw str_drives
     dw str_dir
     dw str_pwd
     dw str_cdup

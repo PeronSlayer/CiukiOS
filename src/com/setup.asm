@@ -18,9 +18,26 @@ org 0x0100
 %define RAW_HDD_TARGET_DRIVE 0x81
 %define RAW_HDD_CLONE_SECTORS_LO 0x003F
 %define RAW_HDD_CLONE_SECTORS_HI 0x0004
+%define RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA 64
+%define RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF 0x0134
+%define RAW_STAGE1_LIVE_DRIVE_INDEX 3
+%define RAW_STAGE1_INSTALLED_DRIVE_INDEX 2
 %define RAW_HDD_SECTORS_PER_CYL 1008
 %ifndef SETUP_ENABLE_RAW_HDD_INSTALL
 %define SETUP_ENABLE_RAW_HDD_INSTALL 0
+%endif
+%ifndef SETUP_ENABLE_RAW_HDD_DESTRUCTIVE
+%define SETUP_ENABLE_RAW_HDD_DESTRUCTIVE 0
+%endif
+%ifndef SETUP_LIVE_CD_MODE
+%define SETUP_LIVE_CD_MODE 0
+%endif
+%ifndef SETUP_RAW_TARGET_DRIVE_INDEX
+%if SETUP_LIVE_CD_MODE
+%define SETUP_RAW_TARGET_DRIVE_INDEX 2
+%else
+%define SETUP_RAW_TARGET_DRIVE_INDEX 3
+%endif
 %endif
 
 start:
@@ -78,6 +95,8 @@ start:
 
     cmp byte [raw_hdd_install_mode], 1
     jne .int21_install
+    call confirm_raw_hdd_destroy
+    jc install_fail
     mov byte [step_id], 0x40
     call raw_hdd_clone_install
     jc install_fail
@@ -338,7 +357,7 @@ guard_target_selection:
 
 .maybe_raw_hdd_target:
 %if SETUP_ENABLE_RAW_HDD_INSTALL
-    cmp al, 3
+    cmp al, SETUP_RAW_TARGET_DRIVE_INDEX
     jne .unsupported_target
     call guard_raw_hdd_topology
     jc .unsupported_target
@@ -378,12 +397,17 @@ probe_target_drive:
 guard_raw_hdd_topology:
     cmp byte [bios_probe_present_mask], 0x03
     jne .fail
-    cmp byte [bios_probe_blank_mask], 0x02
-    jne .fail
     cmp byte [bios_probe_mbrsig_mask], 0x01
+    jne .fail
+%if SETUP_ENABLE_RAW_HDD_DESTRUCTIVE
+    clc
+    ret
+%else
+    cmp byte [bios_probe_blank_mask], 0x02
     jne .fail
     clc
     ret
+%endif
 .fail:
     stc
     ret
@@ -438,6 +462,10 @@ raw_hdd_clone_install:
     jmp .copy_loop
 
 .done:
+%if SETUP_LIVE_CD_MODE
+    call raw_patch_installed_default_drive
+    jc .fail
+%endif
     mov dx, msg_serial_hdd_install_done
     call serial_write_z
     call serial_write_crlf
@@ -474,6 +502,35 @@ raw_hdd_clone_install:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+raw_patch_installed_default_drive:
+    push ax
+    push bx
+    push dx
+    mov byte [raw_last_stage], 80
+    mov byte [raw_last_path], 69
+    mov word [raw_clone_lba_lo], RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA
+    mov word [raw_clone_lba_hi], 0
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    call raw_edd_read_current_lba
+    jc .fail
+    cmp byte [io_buffer + RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF], RAW_STAGE1_LIVE_DRIVE_INDEX
+    jne .fail
+    mov byte [io_buffer + RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF], RAW_STAGE1_INSTALLED_DRIVE_INDEX
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    call raw_edd_write_current_lba
+    jc .fail
+    clc
+    jmp .out
+.fail:
+    stc
+.out:
+    pop dx
     pop bx
     pop ax
     ret
@@ -882,6 +939,73 @@ serial_write_char:
     pop dx
     pop cx
     pop ax
+    ret
+
+confirm_raw_hdd_destroy:
+    push ax
+    push bx
+    push dx
+    push si
+
+    call print_crlf
+    mov dx, msg_raw_destroy_1
+    call print_line
+    mov dx, msg_raw_destroy_2
+    call print_line
+    mov dx, msg_raw_destroy_3
+    call print_line
+    mov si, str_destroy_confirm
+
+.next_char:
+    lodsb
+    or al, al
+    jz .wait_enter
+    mov bl, al
+    call read_key
+    cmp al, 27
+    je .abort
+    cmp al, 'a'
+    jb .compare
+    cmp al, 'z'
+    ja .compare
+    sub al, 32
+.compare:
+    cmp al, bl
+    jne .bad
+    jmp .next_char
+
+.wait_enter:
+    call read_key
+    cmp al, 13
+    je .ok
+    cmp al, 27
+    je .abort
+
+.bad:
+    mov word [fail_code], 0x0702
+    mov dx, msg_raw_destroy_bad
+    call print_line
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+
+.abort:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+
+.ok:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    clc
     ret
 
 preflight_space:
@@ -2440,6 +2564,10 @@ msg_target_prompt    db 'Enter confirm / Esc cancel / A-Z set drive.', 0
 msg_target_selected  db 'Target set to ', 0
 msg_target_invalid   db 'Invalid target drive.', 0
 msg_target_unsupported db 'Only source drive is supported.', 0
+msg_raw_destroy_1 db 'DESTRUCTIVE HDD INSTALL ENABLED.', 0
+msg_raw_destroy_2 db 'Target BIOS 81h will be overwritten.', 0
+msg_raw_destroy_3 db 'Type DESTROY then Enter to continue.', 0
+msg_raw_destroy_bad db 'Destroy confirmation mismatch.', 0
 
 msg_preflight_start  db 'Preflight: checking free space...', 0
 msg_preflight_ok     db 'Preflight OK.', 0
@@ -2503,6 +2631,7 @@ msg_serial_hdd_install_chs db ' C=', 0
 
 str_crlf             db 13, 10, 0
 str_ok2              db 'OK', 0
+str_destroy_confirm db 'DESTROY', 0
 
 name_min             db 'MINIMAL', 0
 name_std             db 'STANDARD', 0

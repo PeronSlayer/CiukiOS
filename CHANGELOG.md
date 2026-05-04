@@ -11,6 +11,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 5. Integrated the direct El Torito hard-disk CD image into `scripts/build_full_cd.sh` and added a disposable CD-to-blank-HDD probe lane that boots the direct CD with a separate blank target disk attached while verifying the target remains unchanged.
 6. Added a serial-only read-only BIOS HDD probe in `SETUP.COM` and extended the CD-to-blank-HDD QEMU lane to launch setup, verify the probe masks, and stop before any destructive install step.
 7. Added a build-gated `SETUP.COM` raw runtime HDD install path for the disposable QEMU topology: `qemu-test-setup-runtime-hdd-install` enables `CIUKIOS_SETUP_RAW_HDD_INSTALL=1`, clones the direct-CD hard-disk image from BIOS `80h` to blank BIOS `81h`, verifies `[SETUP-HDD-INSTALL] START/DONE`, checks MBR/FAT16/mtools readability, and boots the installed HDD standalone. Normal full-CD builds leave the raw install path disabled unless explicitly enabled.
+8. Promoted the full-CD build into the main Live/install media path: CD/QEMU boots default to D:, installed HDD boots default to C:, SETUP enables destructive raw HDD installation with a typed DESTROY confirmation, SETUP patches the installed Stage1 default back to C: after cloning, and the shell now includes a drives command for quick unit visibility.
 
 ## pre-Alpha v0.6.1 (2026-05-04)
 1. Added a full-profile DOOM taxonomy harness and Makefile target to classify launch progress stages deterministically.
