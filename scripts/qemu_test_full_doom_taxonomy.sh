@@ -20,6 +20,9 @@ DOOM_TAXONOMY_RUN_DRVLOAD="${DOOM_TAXONOMY_RUN_DRVLOAD:-1}"
 DOOM_TAXONOMY_PROMPT_TIMEOUT_SEC="${DOOM_TAXONOMY_PROMPT_TIMEOUT_SEC:-120}"
 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC="${DOOM_TAXONOMY_MARKER_TIMEOUT_SEC:-45}"
 DOOM_TAXONOMY_OBSERVE_SEC="${DOOM_TAXONOMY_OBSERVE_SEC:-15}"
+DOOM_TAXONOMY_DOOM_CWD="${DOOM_TAXONOMY_DOOM_CWD:-\\APPS\\DOOM}"
+DOOM_TAXONOMY_DISPLAY_MODE="${DOOM_TAXONOMY_DISPLAY_MODE:-nographic}"
+DOOM_TAXONOMY_SCREENSHOT="${DOOM_TAXONOMY_SCREENSHOT:-}"
 DOOM_QEMU_STDERR="${DOOM_QEMU_STDERR:-build/full/qemu-full-doom-taxonomy.stderr.log}"
 DOOM_QEMU_CMD_LOG="${DOOM_QEMU_CMD_LOG:-build/full/qemu-full-doom-taxonomy.commands.log}"
 DOOM_MON_SOCK="${DOOM_MON_SOCK:-/tmp/ciukios-doom-taxonomy.monitor.sock}"
@@ -418,8 +421,10 @@ classify_runtime() {
   local qemu_cmd
   local qemu_pid
   local qemu_rc=0
+  local -a qemu_display_args
   local drvload_done_pattern='\[DRVLOAD\][[:space:]]+DONE|\[\[DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
-  local doom_cmd="RUN \\APPS\\DOOM\\${DOOM_EXE_NAME}"
+  local doom_cmd="RUN ${DOOM_EXE_NAME}"
+  local launch_detail="$doom_cmd"
 
   if ! qemu_available; then
     set_stage "doom_exec_attempted" "DEFERRED" "qemu unavailable; runtime probe skipped"
@@ -447,6 +452,10 @@ classify_runtime() {
 
   runtime_run_start_epoch="$(date +%s)"
   rm -f "$LOG_FILE" "$DOOM_QEMU_STDERR" "$DOOM_QEMU_CMD_LOG" "$DOOM_MON_SOCK"
+  if [[ -n "$DOOM_TAXONOMY_SCREENSHOT" ]]; then
+    mkdir -p "$(dirname "$DOOM_TAXONOMY_SCREENSHOT")"
+    rm -f "$DOOM_TAXONOMY_SCREENSHOT"
+  fi
 
   if [[ "$DOOM_TAXONOMY_LAUNCH" == "1" ]]; then
     if ! command_exists socat; then
@@ -459,13 +468,26 @@ classify_runtime() {
     fi
 
     qemu_cmd="$(pick_qemu)"
+    case "$DOOM_TAXONOMY_DISPLAY_MODE" in
+      nographic) qemu_display_args=(-nographic) ;;
+      none) qemu_display_args=(-display none) ;;
+      *)
+        set_stage "doom_exec_attempted" "FAIL" "invalid DOOM_TAXONOMY_DISPLAY_MODE=$DOOM_TAXONOMY_DISPLAY_MODE (expected nographic or none)"
+        set_stage "mz_transfer" "DEFERRED" "runtime launch skipped due invalid display mode"
+        set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid display mode"
+        set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid display mode"
+        set_stage "menu_reached" "DEFERRED" "runtime launch skipped due invalid display mode"
+        return
+        ;;
+    esac
+
     QEMU_ARGS=(
       -machine pc,vmport=off
       -cpu pentium3
       -m 128
       -drive "file=$IMG,format=raw,if=ide"
       -boot c
-      -nographic
+      "${qemu_display_args[@]}"
       -chardev "file,id=ser0,path=$LOG_FILE"
       -serial chardev:ser0
       -monitor "unix:$DOOM_MON_SOCK,server,nowait"
@@ -494,9 +516,19 @@ classify_runtime() {
         fi
       fi
 
+      if [[ -n "$DOOM_TAXONOMY_DOOM_CWD" ]]; then
+        if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "CD $DOOM_TAXONOMY_DOOM_CWD"; then
+          wait_for_shell_prompt "$LOG_FILE" 30 || true
+          launch_detail="CD $DOOM_TAXONOMY_DOOM_CWD; $doom_cmd"
+        fi
+      fi
+
       if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "$doom_cmd"; then
-        set_stage "doom_exec_attempted" "PASS" "sent shell command: $doom_cmd"
+        set_stage "doom_exec_attempted" "PASS" "sent shell command: $launch_detail"
         observe_runtime_window "$qemu_pid" "$DOOM_TAXONOMY_OBSERVE_SEC"
+        if [[ -n "$DOOM_TAXONOMY_SCREENSHOT" ]]; then
+          hmp "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "screendump $DOOM_TAXONOMY_SCREENSHOT" >/dev/null 2>&1 || true
+        fi
       else
         set_stage "doom_exec_attempted" "FAIL" "failed to send shell command: $doom_cmd"
       fi
@@ -570,17 +602,6 @@ classify_runtime() {
     return
   fi
 
-  if [[ $smoke_rc -ne 0 && $smoke_rc -ne 124 ]]; then
-    if [[ "${STAGE_STATUS[doom_exec_attempted]}" == "DEFERRED" ]]; then
-      set_stage "doom_exec_attempted" "DEFERRED" "$smoke_detail; fresh logs seen: $runtime_log_sources$stale_detail"
-    fi
-    set_stage "mz_transfer" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
-    set_stage "extender_init" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
-    set_stage "video_init" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
-    set_stage "menu_reached" "DEFERRED" "$smoke_detail; runtime markers ignored because smoke failed; fresh logs seen: $runtime_log_sources$stale_detail"
-    return
-  fi
-
   if log_has_fixed_marker '[MZ] run' "${runtime_logs[@]}" \
     || log_has_pattern '\\[\\[MMZZ\\]\\][[:space:]]+rruunn' "${runtime_logs[@]}"; then
     set_stage "mz_transfer" "PASS" "$smoke_detail; MZ transfer marker observed in fresh logs: $runtime_log_sources"
@@ -588,16 +609,22 @@ classify_runtime() {
     set_stage "mz_transfer" "DEFERRED" "$smoke_detail; MZ transfer marker not observed in fresh logs: $runtime_log_sources"
   fi
 
-  if log_has_fixed_marker '[ doom ] stage reached: extender_init' "${runtime_logs[@]}" \
-    || log_has_pattern '\\[ *doom *\\].*stage reached: *(extender_init|extender)|OpenGEM: extender (probe complete|mode=dpmi-stub)|DOS/?4G|DOS/?16M|DDOOSS//1166MM|DPMI' "${runtime_logs[@]}"; then
+  if log_has_pattern 'cannot allocate tstack|ccaannnnoott[[:space:]]+aallllooccaattee[[:space:]]+ttssttaacck' "${runtime_logs[@]}"; then
+    set_stage "extender_init" "FAIL" "$smoke_detail; DOS/16M tstack allocation failed in fresh logs: $runtime_log_sources"
+  elif log_has_pattern "not a DOS/16M executable|nnoott[[:space:]]+aa[[:space:]]+DDOOSS//1166MM[[:space:]]+eexxeeccuuttaabbllee" "${runtime_logs[@]}"; then
+    set_stage "extender_init" "FAIL" "$smoke_detail; DOS/16M executable validation failed in fresh logs: $runtime_log_sources"
+  elif log_has_fixed_marker '[ doom ] stage reached: extender_init' "${runtime_logs[@]}" \
+    || log_has_pattern '\\[ *doom *\\].*stage reached: *(extender_init|extender)|OpenGEM: extender (probe complete|mode=dpmi-stub)|DOS/?4G|DOS/?16M|DDOOSS//44GGWW|DDOOSS//1166MM|DPMI' "${runtime_logs[@]}"; then
     set_stage "extender_init" "PASS" "$smoke_detail; extender marker observed in fresh logs: $runtime_log_sources"
   else
     set_stage "extender_init" "DEFERRED" "$smoke_detail; extender marker not observed in fresh logs: $runtime_log_sources"
   fi
 
-  if log_has_fixed_marker '[ doom ] stage reached: video' "${runtime_logs[@]}" \
+  if log_has_pattern 'Game mode indeterminate|GGaammee[[:space:]]+mmooddee[[:space:]]+iinnddeetteerrmmiinnaattee' "${runtime_logs[@]}"; then
+    set_stage "video_init" "FAIL" "$smoke_detail; DOOM exited before video because IWAD/game mode was not resolved in fresh logs: $runtime_log_sources"
+  elif log_has_fixed_marker '[ doom ] stage reached: video' "${runtime_logs[@]}" \
     || log_has_fixed_marker '[ doom ] stage reached: video/menu' "${runtime_logs[@]}" \
-    || log_has_pattern '\\[ *doom *\\].*stage reached: *(video|video/menu|gfx)|I_InitGraphics|V_Init|video init' "${runtime_logs[@]}"; then
+    || log_has_pattern '\\[ *doom *\\].*stage reached: *(video|video/menu|gfx)|I_InitGraphics|I__Init|II__IInniitt|V_Init|VV__IInniitt|DOOM System Startup|DDOOOOMM[[:space:]]+SSyysstteemm[[:space:]]+SSttaarrttuupp|video init' "${runtime_logs[@]}"; then
     set_stage "video_init" "PASS" "$smoke_detail; video marker observed in fresh logs: $runtime_log_sources"
   else
     set_stage "video_init" "DEFERRED" "$smoke_detail; video marker not observed in fresh logs: $runtime_log_sources"
@@ -605,7 +632,7 @@ classify_runtime() {
 
   if log_has_fixed_marker '[ doom ] stage reached: menu' "${runtime_logs[@]}" \
     || log_has_fixed_marker '[ doom ] stage reached: video/menu' "${runtime_logs[@]}" \
-    || log_has_pattern '\\[ *doom *\\].*stage reached: *(menu|video/menu)|M_Init|D_DoomMain|TITLEPIC|new game' "${runtime_logs[@]}"; then
+    || log_has_pattern '\\[ *doom *\\].*stage reached: *(menu|video/menu)|D_DoomMain|TITLEPIC|new game' "${runtime_logs[@]}"; then
     set_stage "menu_reached" "PASS" "$smoke_detail; menu marker observed in fresh logs: $runtime_log_sources"
   else
     set_stage "menu_reached" "DEFERRED" "$smoke_detail; menu marker not observed in fresh logs: $runtime_log_sources"

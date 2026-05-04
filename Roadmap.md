@@ -51,22 +51,29 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 - See `setup/README.md` for post-MVP installer maintenance and advanced backlog tracking.
 
 ## Phase 4 - DOOM Milestone + Installer Execution Track
-**STATUS: ACTIVE (runtime lane ongoing)**
+**STATUS: CLOSED - DOOM GAMEPLAY PLAYABLE (2026-05-04)**
 **INSTALLER EXECUTION LANE: CLOSED (2026-05-03)**
+**RUNTIME/DOOM LANE: CLOSED - PLAYABLE (2026-05-04)**
 1. Installer execution backlog (post-MVP hardening, media-swap flows, and failure-path validation) is completed.
 2. Reproducible installer evidence bundle is completed and archived.
-3. Optimize mode 13h/VGA rendering path.
-4. Add the minimum extender compatibility needed by complex DOS binaries.
-5. Milestone: DOOM boots and is playable.
+3. Mode 13h/VGA and DOS extender compatibility reached the level required for DOOM gameplay on the full FAT16 profile.
+4. Minimum extender compatibility for complex DOS binaries is proven through DOS/4GW startup, WAD loading, refresh/playloop/input/sound/HUD/status-bar initialization, and rendered gameplay.
+5. Milestone: DOOM boots and is playable. **COMPLETED (2026-05-04)**
 - Evidence (2026-05-01): released `CiukiOS pre-Alpha v0.5.4` after shell input stability improvements (hold-key repeat, wrap, backspace) and FAT16 footer telemetry stabilization (`CPU/DSK/RAM`).
 - Evidence (2026-05-01): reran cross-profile build/regression lanes for floppy (FAT12) and full (FAT16) with stable high-level outcomes.
 - Evidence (2026-05-03): `./scripts/build_full.sh` PASS.
 - Evidence (2026-05-03): `./scripts/qemu_test_setup_full_acceptance.sh` PASS.
 - Evidence (2026-05-03): `./scripts/qemu_test_setup_installer_scenarios.sh` PASS.
-- Evidence (2026-05-03): `make qemu-test-full-doom-taxonomy` PASS with `binary_found`, `wad_found`, `doom_exec_attempted`, `mz_transfer`, and `extender_init`; video/menu stages remain deferred on DOS/16M `cannot allocate tstack`.
-- Scope note: Phase 4 remains active until runtime/DOOM milestones (items 3-5) are closed.
+- Evidence (2026-05-04): `make build-full` PASS.
+- Evidence (2026-05-04): `make qemu-test-full` PASS.
+- Evidence (2026-05-04): `DO_BUILD=0 DOOM_TAXONOMY_DISPLAY_MODE=none DOOM_TAXONOMY_SCREENSHOT=build/full/doom_post_status_after_rebuild.ppm QEMU_TIMEOUT_SEC=120 DOOM_TAXONOMY_OBSERVE_SEC=45 DOOM_TAXONOMY_MIN_STAGE=video_init make qemu-test-full-doom-taxonomy` PASS.
+- Evidence (2026-05-04): visual screenshot `build/full/doom_post_status_after_rebuild.png` shows DOOM gameplay viewport and HUD after status-bar initialization.
+- Evidence (2026-05-04): project owner manually confirmed DOOM is playable interactively on the generated full-profile image.
+- Release: `CiukiOS pre-Alpha v0.6.1`.
+- Scope note: follow-up audio/driver polish and richer gameplay taxonomy remain hardening work, not Phase 4 closure blockers.
 
 ## Phase 5 - Windows pre-NT Milestones
+**STATUS: ACTIVE (next major compatibility direction after v0.6.1)**
 1. Expand DOS compatibility required by Windows 3.x/95/98 bootstrap and runtime paths.
 2. Extend protected-mode services and interrupt/timer compatibility.
 3. Add required device and setup-path behavior.

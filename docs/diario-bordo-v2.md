@@ -111,3 +111,12 @@
 93. Action: added and stabilized installer scenario-matrix validation for success and failure paths in scripts/qemu_test_setup_installer_scenarios.sh.
 94. Compatibility: introduced setup COMMAND.COM compatibility stub path (src/com/command_stub.asm) for deterministic installer lane behavior.
 95. Documentation: synchronized README.md, Roadmap.md, setup stream docs, and CHANGELOG.md to reflect closed installer scope and active runtime/DOOM scope.
+
+## 2026-05-04
+96. Milestone: closed the Phase 4 DOOM gameplay lane; the full FAT16 profile now reaches DOS/4GW, loads `doom.wad`, initializes refresh/playloop/input/sound/HUD/status-bar paths, and renders playable gameplay.
+97. Fix: completed the ordered MCB table transition for full-profile INT 21h AH=48h/49h/4Ah memory mutation, with legacy allocation slots retained only as compatibility mirrors.
+98. Fix: preserved FAT16 INT 21h read/seek return values across handle-slot cleanup so DOS/4GW observes correct byte counts and file positions.
+99. Validation: visual DOOM taxonomy lane PASS using QEMU `-display none` and monitor `screendump`, with gameplay evidence captured at `build/full/doom_post_status_after_rebuild.png`.
+100. Validation: project owner manually confirmed DOOM is playable interactively on the generated full-profile image.
+101. Documentation: added `docs/phase4-doom-gameplay-playable-2026-05-04.md` and synchronized README, Roadmap, CHANGELOG, and VERSION for the milestone.
+102. Release: bumped project version to `CiukiOS pre-Alpha v0.6.1` after Phase 4 gameplay playable closure.
