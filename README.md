@@ -17,29 +17,29 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 9. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.6.1`
+`CiukiOS pre-Alpha v0.6.3`
 
 Versioning policy:
 1. Baseline was reset to `pre-Alpha v0.5.0`.
 2. The `v0.6.x` line marks the Phase 4 DOOM-playable runtime milestone while keeping the legacy BIOS x86 direction intact.
 
 ## Changelog (Latest 2 Entries)
+### pre-Alpha v0.6.3 (2026-05-05)
+1. Promoted the full-CD Live/install path with D: prompt validation, full-CD QEMU runner support, and direct ISO smoke coverage.
+2. Stabilized the full-profile shell return path after DOS program exit, added the `woof` cd alias, corrected FREE/CPU footer telemetry, and expanded shell stability QEMU coverage.
+3. Hardened FAT16 INT 21h path case handling and C:/D: drive/free-space semantics while preserving DOOM runtime stability through taxonomy validation.
+
 ### pre-Alpha v0.6.1 (2026-05-04)
 1. Closed the Phase 4 DOOM gameplay milestone: the full FAT16 runtime reaches DOS/4GW, loads `doom.wad`, initializes the gameplay path, renders the viewport/HUD, and has been manually confirmed playable.
 2. Reworked the full-profile INT 21h memory arena around an ordered MCB table and fixed DOS extender compatibility issues in MZ sizing, PSP/MCB visibility, AH=33h, FAT16 read/seek returns, and WAD discovery.
 3. Added a visual DOOM taxonomy lane with QEMU `-display none` plus optional monitor `screendump` capture, while keeping serial `menu_reached` classification conservative.
-
-### pre-Alpha v0.5.4 (2026-05-01)
-1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.
-2. Stabilized FAT16 shell footer telemetry (`CPU/DSK/RAM`) with corrected non-stuck stat refresh behavior.
-3. Revalidated cross-profile build/regression lanes on floppy (FAT12) and full (FAT16) profiles.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
 1. Phase 4 is closed as of 2026-05-04: installer execution is complete and DOOM is playable on the full FAT16 profile.
 2. Keep the full-profile runtime stable while preserving the conservative taxonomy split between serial `menu_reached` and visual gameplay evidence.
-3. Phase 5 becomes the next major compatibility direction: Windows pre-NT bootstrap/runtime work, starting from the DOS extender and protected-mode compatibility gains proven by DOOM.
+3. Phase 5 remains the next major compatibility direction after v0.6.3: Windows pre-NT bootstrap/runtime work, starting from the DOS extender and protected-mode compatibility gains proven by DOOM.
 4. Track audio, driver activation, and richer gameplay taxonomy as follow-up hardening rather than Phase 4 blockers.
 
 ## Open Source Collaboration

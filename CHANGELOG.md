@@ -3,7 +3,10 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task must update the `Unreleased` section unless the task is a release cut that creates a new version section.
 
-## Unreleased (2026-05-04)
+## Unreleased (2026-05-05)
+- No unreleased changes.
+
+## pre-Alpha v0.6.3 (2026-05-05)
 1. Added a `runtime_stable` DOOM taxonomy stage after `video_init` to classify post-video observation stability separately from startup progress; a 120s visual headless run now fails explicitly on QEMU SIGSEGV instead of being masked by earlier `video_init=PASS`.
 2. Added CHS fallback boot paths for the full-CD MBR and full stage0 when booting via direct El Torito hard-disk emulation, enabling the faster non-ISOLINUX real-hardware ISO to reach Stage1 in QEMU.
 3. Fixed full-CD hardware validation by accepting valid short reads of `SYSTEM/STAGE2.BIN` during Stage2 autorun and making the CD hardware profile leave PS/2 mouse controller initialization disabled by default to preserve legacy keyboard input.

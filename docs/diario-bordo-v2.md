@@ -120,3 +120,6 @@
 100. Validation: project owner manually confirmed DOOM is playable interactively on the generated full-profile image.
 101. Documentation: added `docs/phase4-doom-gameplay-playable-2026-05-04.md` and synchronized README, Roadmap, CHANGELOG, and VERSION for the milestone.
 102. Release: bumped project version to `CiukiOS pre-Alpha v0.6.1` after Phase 4 gameplay playable closure.
+
+## 2026-05-05
+103. Release: bumped project version to `CiukiOS pre-Alpha v0.6.3` after full/full-CD shell, setup, path-case, and drive-semantics stabilization.

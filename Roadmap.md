@@ -73,7 +73,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 - Scope note: follow-up audio/driver polish and richer gameplay taxonomy remain hardening work, not Phase 4 closure blockers.
 
 ## Phase 5 - Windows pre-NT Milestones
-**STATUS: ACTIVE (next major compatibility direction after v0.6.1)**
+**STATUS: ACTIVE (next major compatibility direction after v0.6.3)**
 1. Expand DOS compatibility required by Windows 3.x/95/98 bootstrap and runtime paths.
 2. Extend protected-mode services and interrupt/timer compatibility.
 3. Add required device and setup-path behavior.
