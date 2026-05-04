@@ -35,6 +35,7 @@ STAGES=(
   mz_transfer
   extender_init
   video_init
+  runtime_stable
   menu_reached
 )
 
@@ -431,6 +432,7 @@ classify_runtime() {
     set_stage "mz_transfer" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "extender_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "video_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
+    set_stage "runtime_stable" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "menu_reached" "DEFERRED" "qemu unavailable; runtime probe skipped"
     return
   fi
@@ -440,6 +442,7 @@ classify_runtime() {
     set_stage "mz_transfer" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
+    set_stage "runtime_stable" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "menu_reached" "DEFERRED" "runtime launch skipped due invalid launch mode"
     return
   fi
@@ -463,6 +466,7 @@ classify_runtime() {
       set_stage "mz_transfer" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       set_stage "extender_init" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       set_stage "video_init" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
+      set_stage "runtime_stable" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       set_stage "menu_reached" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       return
     fi
@@ -476,6 +480,7 @@ classify_runtime() {
         set_stage "mz_transfer" "DEFERRED" "runtime launch skipped due invalid display mode"
         set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid display mode"
         set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid display mode"
+        set_stage "runtime_stable" "DEFERRED" "runtime launch skipped due invalid display mode"
         set_stage "menu_reached" "DEFERRED" "runtime launch skipped due invalid display mode"
         return
         ;;
@@ -494,6 +499,12 @@ classify_runtime() {
       -no-reboot
       -no-shutdown
     )
+
+    if [[ -n "${QEMU_EXTRA_ARGS:-}" ]]; then
+      # shellcheck disable=SC2206
+      EXTRA_ARGS=(${QEMU_EXTRA_ARGS})
+      QEMU_ARGS+=("${EXTRA_ARGS[@]}")
+    fi
 
     set +e
     timeout "$QEMU_TIMEOUT_SEC" "$qemu_cmd" "${QEMU_ARGS[@]}" >/dev/null 2>"$DOOM_QEMU_STDERR" &
@@ -598,6 +609,7 @@ classify_runtime() {
     set_stage "mz_transfer" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "extender_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "video_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
+    set_stage "runtime_stable" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "menu_reached" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     return
   fi
@@ -628,6 +640,18 @@ classify_runtime() {
     set_stage "video_init" "PASS" "$smoke_detail; video marker observed in fresh logs: $runtime_log_sources"
   else
     set_stage "video_init" "DEFERRED" "$smoke_detail; video marker not observed in fresh logs: $runtime_log_sources"
+  fi
+
+  if [[ "${STAGE_STATUS[video_init]}" != "PASS" ]]; then
+    set_stage "runtime_stable" "DEFERRED" "$smoke_detail; video gate not passed, stability window not evaluated"
+  elif [[ $smoke_rc -eq 0 ]]; then
+    set_stage "runtime_stable" "PASS" "$smoke_detail; QEMU remained controllable through the observation window"
+  elif [[ $smoke_rc -eq 139 ]]; then
+    set_stage "runtime_stable" "FAIL" "$smoke_detail; QEMU terminated with SIGSEGV during the post-video observation window"
+  elif [[ $smoke_rc -eq 124 ]]; then
+    set_stage "runtime_stable" "FAIL" "$smoke_detail; QEMU timed out before controlled shutdown during the post-video observation window"
+  else
+    set_stage "runtime_stable" "FAIL" "$smoke_detail; QEMU exited unexpectedly during the post-video observation window"
   fi
 
   if log_has_fixed_marker '[ doom ] stage reached: menu' "${runtime_logs[@]}" \
@@ -670,6 +694,7 @@ if [[ ! -f "$IMG" ]]; then
   set_stage "mz_transfer" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "extender_init" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "video_init" "DEFERRED" "runtime probe skipped (image missing)"
+  set_stage "runtime_stable" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "menu_reached" "DEFERRED" "runtime probe skipped (image missing)"
 else
   if command_exists mdir; then

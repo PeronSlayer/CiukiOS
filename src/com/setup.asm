@@ -12,8 +12,16 @@ org 0x0100
 %define RAW_FAT_SPT 63
 %define RAW_FAT_HEADS 16
 %define RAW_BOOT_DRIVE 0x80
-%define RAW_DATA_LBA 350
+%define RAW_DATA_LBA 359
 %define RAW_APPS_DIR_LBA (RAW_DATA_LBA + 8)
+%define RAW_HDD_SOURCE_DRIVE 0x80
+%define RAW_HDD_TARGET_DRIVE 0x81
+%define RAW_HDD_CLONE_SECTORS_LO 0x003F
+%define RAW_HDD_CLONE_SECTORS_HI 0x0004
+%define RAW_HDD_SECTORS_PER_CYL 1008
+%ifndef SETUP_ENABLE_RAW_HDD_INSTALL
+%define SETUP_ENABLE_RAW_HDD_INSTALL 0
+%endif
 
 start:
     cld
@@ -41,6 +49,10 @@ start:
     mov byte [target_drive], 0
     mov byte [valid_target_count], 0
     mov word [prompt_tick_start], 0
+    mov byte [bios_probe_present_mask], 0
+    mov byte [bios_probe_blank_mask], 0
+    mov byte [bios_probe_mbrsig_mask], 0
+    mov byte [raw_hdd_install_mode], 0
 
     mov byte [step_id], 0x10
     call detect_targets
@@ -63,6 +75,21 @@ start:
     mov byte [step_id], 0x14
     call guard_target_selection
     jc install_fail
+
+    cmp byte [raw_hdd_install_mode], 1
+    jne .int21_install
+    mov byte [step_id], 0x40
+    call raw_hdd_clone_install
+    jc install_fail
+    mov byte [step_id], 0x30
+    mov byte [install_ok], 1
+    mov dx, msg_success
+    call print_line
+    mov dx, msg_marker_done
+    call print_line
+    jmp finalize
+
+.int21_install:
 
     mov byte [step_id], 0x20
     call load_payload_manifest
@@ -119,7 +146,10 @@ install_fail:
     call print_line
 
 finalize:
+    cmp byte [raw_hdd_install_mode], 1
+    je .skip_report
     call write_install_report
+.skip_report:
     mov ax, 0x4C00
     cmp byte [install_ok], 1
     je .exit
@@ -157,6 +187,7 @@ detect_targets:
     mov byte [valid_target_count], 1
     mov dx, msg_marker_target_scan
     call print_line
+    call probe_bios_hdds_readonly
     clc
     ret
 
@@ -291,18 +322,32 @@ confirm_target:
 ; -----------------------------------------------------------------------------
 
 guard_target_selection:
+    mov byte [raw_hdd_install_mode], 0
     mov al, [target_drive]
     cmp al, 2
     jb .invalid_target
 
     cmp al, [source_drive]
-    jne .unsupported_target
+    jne .maybe_raw_hdd_target
 
     call probe_target_drive
     jc .invalid_target
 
     clc
     ret
+
+.maybe_raw_hdd_target:
+%if SETUP_ENABLE_RAW_HDD_INSTALL
+    cmp al, 3
+    jne .unsupported_target
+    call guard_raw_hdd_topology
+    jc .unsupported_target
+    mov byte [raw_hdd_install_mode], 1
+    clc
+    ret
+%else
+    jmp .unsupported_target
+%endif
 
 .invalid_target:
     mov word [fail_code], 0x0203
@@ -328,6 +373,515 @@ probe_target_drive:
     ret
 .ok:
     clc
+    ret
+
+guard_raw_hdd_topology:
+    cmp byte [bios_probe_present_mask], 0x03
+    jne .fail
+    cmp byte [bios_probe_blank_mask], 0x02
+    jne .fail
+    cmp byte [bios_probe_mbrsig_mask], 0x01
+    jne .fail
+    clc
+    ret
+.fail:
+    stc
+    ret
+
+raw_hdd_clone_install:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+
+    call serial_init_com1
+    mov dx, msg_serial_hdd_install_start
+    call serial_write_z
+    call serial_write_crlf
+    call raw_init_drive_geometries
+
+    mov word [raw_clone_lba_lo], 0
+    mov word [raw_clone_lba_hi], 0
+    mov word [raw_clone_remaining_lo], RAW_HDD_CLONE_SECTORS_LO
+    mov word [raw_clone_remaining_hi], RAW_HDD_CLONE_SECTORS_HI
+    mov byte [raw_edd_status], 0
+    mov byte [raw_chs_status], 0
+
+.copy_loop:
+    mov ax, [raw_clone_remaining_lo]
+    or ax, [raw_clone_remaining_hi]
+    jz .done
+
+    mov dl, RAW_HDD_SOURCE_DRIVE
+    mov bx, io_buffer
+    call raw_edd_read_current_lba
+    jc .fail
+
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    call raw_edd_write_current_lba
+    jc .fail
+
+    inc word [raw_clone_lba_lo]
+    jnz .dec_remaining
+    inc word [raw_clone_lba_hi]
+
+.dec_remaining:
+    sub word [raw_clone_remaining_lo], 1
+    sbb word [raw_clone_remaining_hi], 0
+    jmp .copy_loop
+
+.done:
+    mov dx, msg_serial_hdd_install_done
+    call serial_write_z
+    call serial_write_crlf
+    clc
+    jmp .out
+
+.fail:
+    mov word [fail_code], 0x0701
+    mov dx, msg_serial_hdd_install_fail
+    call serial_write_z
+    mov al, [raw_last_stage]
+    call serial_write_char
+    mov dx, msg_serial_hdd_install_path
+    call serial_write_z
+    mov al, [raw_last_path]
+    call serial_write_char
+    mov dx, msg_serial_hdd_install_status
+    call serial_write_z
+    mov al, [raw_last_status]
+    call serial_write_hex_byte
+    mov dx, msg_serial_hdd_install_edd
+    call serial_write_z
+    mov al, [raw_edd_status]
+    call serial_write_hex_byte
+    mov dx, msg_serial_hdd_install_chs
+    call serial_write_z
+    mov al, [raw_chs_status]
+    call serial_write_hex_byte
+    call serial_write_crlf
+    stc
+
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+raw_edd_read_current_lba:
+    mov byte [raw_last_stage], 'R'
+    mov byte [raw_last_path], 'E'
+    mov ah, 0x42
+    call raw_edd_transfer_current_lba
+    jnc .ok
+    mov byte [raw_last_path], 'C'
+    mov ah, 0x02
+    call raw_chs_transfer_current_lba
+.ok:
+    ret
+
+raw_edd_write_current_lba:
+    mov byte [raw_last_stage], 'W'
+    mov byte [raw_last_path], 'E'
+    mov ah, 0x43
+    call raw_edd_transfer_current_lba
+    jnc .ok
+    mov byte [raw_last_path], 'C'
+    mov ah, 0x03
+    call raw_chs_transfer_current_lba
+.ok:
+    ret
+
+raw_init_drive_geometries:
+    mov dl, RAW_HDD_SOURCE_DRIVE
+    mov si, raw_source_spt
+    call raw_get_drive_geometry
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov si, raw_target_spt
+    call raw_get_drive_geometry
+    ret
+
+raw_get_drive_geometry:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push cs
+    pop ds
+
+    mov word [si], RAW_FAT_SPT
+    mov word [si + 2], RAW_FAT_HEADS
+    mov word [si + 4], RAW_HDD_SECTORS_PER_CYL
+
+    mov ah, 0x08
+    int 0x13
+    jc .done
+
+    push cs
+    pop ds
+    and cl, 0x3F
+    jz .done
+
+    xor ax, ax
+    mov al, cl
+    mov [si], ax
+    xor ax, ax
+    mov al, dh
+    inc ax
+    mov [si + 2], ax
+    mul word [si]
+    or dx, dx
+    jnz .done
+    mov [si + 4], ax
+
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+raw_edd_transfer_current_lba:
+    push ax
+    push bx
+    push dx
+    push si
+    push cs
+    pop ds
+    mov word [bios_probe_dap + 2], 0x0001
+    mov word [bios_probe_dap + 4], bx
+    mov bx, cs
+    mov word [bios_probe_dap + 6], bx
+    mov bx, [raw_clone_lba_lo]
+    mov word [bios_probe_dap + 8], bx
+    mov bx, [raw_clone_lba_hi]
+    mov word [bios_probe_dap + 10], bx
+    mov word [bios_probe_dap + 12], 0
+    mov word [bios_probe_dap + 14], 0
+    mov si, bios_probe_dap
+    push cs
+    pop ds
+    xor al, al
+    cmp ah, 0x43
+    jne .int13
+    xor al, al
+.int13:
+    int 0x13
+    jc .fail
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+.fail:
+    mov [raw_last_status], ah
+    mov [raw_edd_status], ah
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+
+raw_chs_transfer_current_lba:
+    push ax
+    push bx
+    push dx
+    push si
+    push es
+    push cs
+    pop ds
+
+    mov si, bx
+    mov [raw_chs_drive], dl
+    mov [raw_chs_op], ah
+
+    cmp dl, RAW_HDD_SOURCE_DRIVE
+    jne .target_geometry
+    mov bx, [raw_source_spc]
+    mov [raw_chs_spc], bx
+    mov bx, [raw_source_spt]
+    mov [raw_chs_spt], bx
+    jmp .have_geometry
+
+.target_geometry:
+    mov bx, [raw_target_spc]
+    mov [raw_chs_spc], bx
+    mov bx, [raw_target_spt]
+    mov [raw_chs_spt], bx
+
+.have_geometry:
+
+    mov ax, [raw_clone_lba_lo]
+    mov dx, [raw_clone_lba_hi]
+    mov bx, [raw_chs_spc]
+    div bx
+    mov [raw_chs_cylinder], ax
+
+    mov ax, dx
+    xor dx, dx
+    mov bx, [raw_chs_spt]
+    div bx
+
+    mov dh, al
+    mov cl, dl
+    inc cl
+    mov ax, [raw_chs_cylinder]
+    mov ch, al
+    mov al, ah
+    and al, 0x03
+    shl al, 6
+    or cl, al
+
+    push cs
+    pop es
+    mov bx, si
+    mov dl, [raw_chs_drive]
+    mov ah, [raw_chs_op]
+    mov al, 0x01
+    int 0x13
+    jc .fail
+
+    pop es
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+.fail:
+    mov [raw_last_status], ah
+    mov [raw_chs_status], ah
+    pop es
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+
+probe_bios_hdds_readonly:
+    push ax
+    push bx
+    push dx
+
+    mov byte [bios_probe_present_mask], 0
+    mov byte [bios_probe_blank_mask], 0
+    mov byte [bios_probe_mbrsig_mask], 0
+
+    mov dl, 0x80
+    mov bl, 0x01
+    call bios_probe_one_readonly
+    mov dl, 0x81
+    mov bl, 0x02
+    call bios_probe_one_readonly
+
+    call serial_emit_bios_probe
+
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+bios_probe_one_readonly:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    push ds
+    push cs
+    pop ds
+
+    mov [bios_probe_drive], dl
+    mov [bios_probe_bit], bl
+
+    mov word [bios_probe_dap + 4], io_buffer
+    mov ax, cs
+    mov [bios_probe_dap + 6], ax
+    mov word [bios_probe_dap + 8], 0
+    mov word [bios_probe_dap + 10], 0
+    mov word [bios_probe_dap + 12], 0
+    mov word [bios_probe_dap + 14], 0
+
+    mov si, bios_probe_dap
+    mov dl, [bios_probe_drive]
+    mov ah, 0x42
+    int 0x13
+    jnc .read_ok
+
+    push cs
+    pop es
+    mov bx, io_buffer
+    mov ax, 0x0201
+    mov cx, 0x0001
+    xor dh, dh
+    mov dl, [bios_probe_drive]
+    int 0x13
+    jc .done
+
+.read_ok:
+    mov al, [bios_probe_bit]
+    or byte [bios_probe_present_mask], al
+
+    cmp byte [io_buffer + 510], 0x55
+    jne .check_blank
+    cmp byte [io_buffer + 511], 0xAA
+    jne .check_blank
+    mov al, [bios_probe_bit]
+    or byte [bios_probe_mbrsig_mask], al
+
+.check_blank:
+    mov si, io_buffer
+    mov cx, 256
+    xor ax, ax
+.blank_loop:
+    cmp [si], ax
+    jne .done
+    add si, 2
+    loop .blank_loop
+    mov al, [bios_probe_bit]
+    or byte [bios_probe_blank_mask], al
+
+.done:
+    pop ds
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+serial_emit_bios_probe:
+    push ax
+    push dx
+    call serial_init_com1
+    mov dx, msg_serial_bios_probe
+    call serial_write_z
+    mov al, [bios_probe_present_mask]
+    call serial_write_hex_byte
+    mov dx, msg_serial_probe_blank
+    call serial_write_z
+    mov al, [bios_probe_blank_mask]
+    call serial_write_hex_byte
+    mov dx, msg_serial_probe_sig
+    call serial_write_z
+    mov al, [bios_probe_mbrsig_mask]
+    call serial_write_hex_byte
+    call serial_write_crlf
+    pop dx
+    pop ax
+    ret
+
+serial_init_com1:
+    push ax
+    push dx
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 0x80
+    out dx, al
+    mov dx, 0x3F8
+    mov al, 0x01
+    out dx, al
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 0x03
+    out dx, al
+    mov dx, 0x3FA
+    mov al, 0xC7
+    out dx, al
+    mov dx, 0x3FC
+    mov al, 0x0B
+    out dx, al
+    pop dx
+    pop ax
+    ret
+
+serial_write_z:
+    push ax
+    push dx
+    push si
+    mov si, dx
+.serial_loop:
+    lodsb
+    or al, al
+    jz .serial_done
+    call serial_write_char
+    jmp .serial_loop
+.serial_done:
+    pop si
+    pop dx
+    pop ax
+    ret
+
+serial_write_crlf:
+    mov al, 13
+    call serial_write_char
+    mov al, 10
+    call serial_write_char
+    ret
+
+serial_write_hex_byte:
+    push ax
+    mov ah, al
+    shr al, 4
+    call serial_write_hex_nibble
+    mov al, ah
+    and al, 0x0F
+    call serial_write_hex_nibble
+    pop ax
+    ret
+
+serial_write_hex_nibble:
+    and al, 0x0F
+    cmp al, 9
+    jbe .digit
+    add al, 7
+.digit:
+    add al, '0'
+    call serial_write_char
+    ret
+
+serial_write_char:
+    push ax
+    push cx
+    push dx
+    mov ah, al
+    mov dx, 0x3FD
+    mov cx, 0xFFFF
+.wait_tx:
+    in al, dx
+    test al, 0x20
+    jnz .ready_tx
+    loop .wait_tx
+    jmp .out
+.ready_tx:
+    mov dx, 0x3F8
+    mov al, ah
+    out dx, al
+.out:
+    pop dx
+    pop cx
+    pop ax
     ret
 
 preflight_space:
@@ -1936,6 +2490,16 @@ msg_marker_start     db 'START', 0
 msg_marker_copy_ok   db 'COPY_OK', 0
 msg_marker_done      db 'DONE', 0
 msg_marker_fail      db 'FAIL', 0
+msg_serial_bios_probe db '[SETUP-HDD-PROBE] P=', 0
+msg_serial_probe_blank db ' B=', 0
+msg_serial_probe_sig db ' S=', 0
+msg_serial_hdd_install_start db '[SETUP-HDD-INSTALL] START', 0
+msg_serial_hdd_install_done db '[SETUP-HDD-INSTALL] DONE', 0
+msg_serial_hdd_install_fail db '[SETUP-HDD-INSTALL] FAIL S=', 0
+msg_serial_hdd_install_path db ' P=', 0
+msg_serial_hdd_install_status db ' AH=', 0
+msg_serial_hdd_install_edd db ' E=', 0
+msg_serial_hdd_install_chs db ' C=', 0
 
 str_crlf             db 13, 10, 0
 str_ok2              db 'OK', 0
@@ -2028,6 +2592,32 @@ manifest_loaded_from_media db 0
 source_drive            db 0
 target_drive            db 0
 valid_target_count      db 0
+bios_probe_present_mask db 0
+bios_probe_blank_mask   db 0
+bios_probe_mbrsig_mask  db 0
+raw_hdd_install_mode    db 0
+bios_probe_drive        db 0
+bios_probe_bit          db 0
+raw_clone_lba_lo        dw 0
+raw_clone_lba_hi        dw 0
+raw_clone_remaining_lo  dw 0
+raw_clone_remaining_hi  dw 0
+raw_chs_cylinder        dw 0
+raw_chs_drive           db 0
+raw_chs_op              db 0
+raw_source_spt          dw RAW_FAT_SPT
+raw_source_heads        dw RAW_FAT_HEADS
+raw_source_spc          dw RAW_HDD_SECTORS_PER_CYL
+raw_target_spt          dw RAW_FAT_SPT
+raw_target_heads        dw RAW_FAT_HEADS
+raw_target_spc          dw RAW_HDD_SECTORS_PER_CYL
+raw_chs_spt             dw RAW_FAT_SPT
+raw_chs_spc             dw RAW_HDD_SECTORS_PER_CYL
+raw_last_stage          db 0
+raw_last_path           db 0
+raw_last_status         db 0
+raw_edd_status          db 0
+raw_chs_status          db 0
 prompt_tick_start       dw 0
 kb_key_total            dw 0
 kb_nav_count            db 0
@@ -2061,5 +2651,10 @@ manifest_dbg_size_hi    dw 0
 
 hex_word_buf            times 5 db 0
 hex_dword_buf           times 9 db 0
+bios_probe_dap         db 0x10, 0x00
+                       dw 0x0001
+                       dw 0x0000
+                       dw 0x0000
+                       dq 0x0000000000000000
 
 io_buffer               times 512 db 0
