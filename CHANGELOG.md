@@ -1,7 +1,7 @@
 # Changelog
 
 All notable project-level changes are tracked here.
-This changelog is intentionally concise and includes only major milestones.
+This changelog is intentionally concise. Every completed task must update the `Unreleased` section unless the task is a release cut that creates a new version section.
 
 ## Unreleased (2026-05-03)
 1. Added a full-profile DOOM taxonomy harness and Makefile target to classify launch progress stages deterministically.
@@ -10,6 +10,11 @@ This changelog is intentionally concise and includes only major milestones.
 4. Closed the Phase 4 installer execution lane with deterministic scenario coverage (success, media swap, timeout, missing media, and insufficient space).
 5. Hardened installer manifest-source diagnostics, including explicit `MANIFEST_MEDIA_HEX` reporting for normal and fallback parse paths.
 6. Synchronized project documentation to reflect installer-lane closure while keeping the runtime/DOOM lane active.
+7. Improved README changelog visibility and updated local agent directives to require a `CHANGELOG.md` update for every completed task.
+8. Advanced the DOOM taxonomy harness to boot the full profile interactively, invoke `DRVLOAD.COM`, and launch `DOOM.EXE`, adding a deterministic `doom_exec_attempted` stage before extender/video/menu gates.
+9. Advanced DOOM runtime coverage to `extender_init` by adding an MZ transfer stage, FAT16 32-bit seek/read file positions, real handle duplication for DOS extender loaders, and DOOM-specific environment executable path handling; DOS/16M tstack blocker resolved in item 10.
+10. Fixed DOS/16M conventional-memory bring-up for DOOM by repairing the INT 21h MCB arena and setting PSP:0002 to `DOS_HEAP_LIMIT_SEG` on resize success; the tstack error is absent and taxonomy reaches `extender_init`.
+11. Added a full-profile DOOM loader fallback for `DOOM.ETX` self-reopens, preserved PSP free-tail allocation state while keeping DOS/16M-compatible PSP limits, and implemented XMS `move_emb` via BIOS INT 15h AH=87h; current DOOM validation advances past file/memory/tstack failures and blocks after MZ transfer before video init.
 
 ## pre-Alpha v0.5.4 (2026-05-01)
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.

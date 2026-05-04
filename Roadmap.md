@@ -63,6 +63,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 - Evidence (2026-05-03): `./scripts/build_full.sh` PASS.
 - Evidence (2026-05-03): `./scripts/qemu_test_setup_full_acceptance.sh` PASS.
 - Evidence (2026-05-03): `./scripts/qemu_test_setup_installer_scenarios.sh` PASS.
+- Evidence (2026-05-03): `make qemu-test-full-doom-taxonomy` PASS with `binary_found`, `wad_found`, `doom_exec_attempted`, `mz_transfer`, and `extender_init`; video/menu stages remain deferred on DOS/16M `cannot allocate tstack`.
 - Scope note: Phase 4 remains active until runtime/DOOM milestones (items 3-5) are closed.
 
 ## Phase 5 - Windows pre-NT Milestones

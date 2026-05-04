@@ -9,7 +9,8 @@ Complete runtime-ready integration of DOS generic drivers into CiukiOS, starting
 - Deferred by decision gate: stage1 boot-time autoload remains disabled due to stage1 size gate risk.
 - Completed: runtime activation helper is available via SYSTEM/DRIVERS/DRVLOAD.COM with fail-open behavior and markers.
 - Completed: automated runtime smoke helper is available to invoke DRVLOAD from shell and verify deterministic serial markers.
-- Pending: launcher and automation integration for DOOM runtime path using the helper-based activation lane.
+- Completed: DOOM taxonomy automation now invokes DRVLOAD before launching DOOM from the full-profile shell.
+- Pending: real DEVLOAD/MSCDEX activation remains deferred by INT21 API gap; DRVLOAD currently provides deterministic fail-open diagnostics.
 
 ## Step-by-step plan
 Dependency chain: Phase 1 -> Phase 2 -> Phase 3A -> Phase 4 -> Phase 5.
@@ -119,11 +120,12 @@ Phase ownership:
 - Handoff package includes decisions, status, risks, test outcome summary, and prioritized next-cycle TODOs.
 
 ## Next action
-Wire the DRVLOAD runtime smoke into recurring full-profile validation, then integrate helper invocation into launcher and DOOM automation flow for Phase 4 matrix execution.
+Investigate the current deterministic DOOM launch runtime blocker observed by the taxonomy harness: DOS/16M reaches extender startup, probes `C:\APPS\DOOM\DOOM.ETX`, then reports `cannot allocate tstack` before video/menu markers appear.
 
 ## Test status
 - Full build integration status (SYSTEM/DRIVERS): Completed/PASS in full build packaging baseline.
 - Runtime activation status: Available through DRVLOAD.COM helper lane (manual invocation).
 - Runtime activation smoke status: Available through scripts/qemu_test_full_drvload_smoke.sh (serial markers BEGIN/TRY/DONE).
+- DOOM automation integration status: Available through scripts/qemu_test_full_doom_taxonomy.sh with `extender_init` PASS.
 - Stage1 boot autoload status: Deferred by size gate decision.
-- Regression matrix status: Pending launcher/automation integration and Phase 4 execution.
+- Regression matrix status: Pending DOS/16M transfer-stack memory investigation and later video/menu stage closure.

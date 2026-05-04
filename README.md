@@ -22,7 +22,18 @@ Versioning policy:
 1. Baseline is reset to `pre-Alpha v0.5.0`.
 2. Minor updates on this branch keep compatibility with the `v0.5.0` baseline.
 
-## Changelog (Latest)
+## Changelog (Latest 2 Entries)
+### Unreleased (2026-05-03)
+1. Added a full-profile DOOM taxonomy harness and Makefile target to classify launch progress stages deterministically.
+2. Added local-only DOOM payload packaging in the full image build lane and guarded proprietary assets from publication.
+3. Fixed INT 21h MZ loading to use header-declared module size, removing the previous 4B:08 launch failure and advancing DOOM to extender startup diagnostics.
+4. Closed the Phase 4 installer execution lane with deterministic scenario coverage (success, media swap, timeout, missing media, and insufficient space).
+5. Hardened installer manifest-source diagnostics, including explicit `MANIFEST_MEDIA_HEX` reporting for normal and fallback parse paths.
+6. Synchronized project documentation to reflect installer-lane closure while keeping the runtime/DOOM lane active.
+7. Improved README changelog visibility and updated local agent directives to require a `CHANGELOG.md` update for every completed task.
+8. Advanced the DOOM taxonomy harness to boot the full profile interactively, invoke `DRVLOAD.COM`, and launch `DOOM.EXE`, adding a deterministic `doom_exec_attempted` stage before extender/video/menu gates.
+9. Advanced DOOM runtime coverage to `extender_init`; current blocker is DOS/16M `cannot allocate tstack` before video/menu initialization.
+
 ### pre-Alpha v0.5.4 (2026-05-01)
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.
 2. Stabilized FAT16 shell footer telemetry (`CPU/DSK/RAM`) with corrected non-stuck stat refresh behavior.
