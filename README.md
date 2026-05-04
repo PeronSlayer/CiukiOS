@@ -13,26 +13,21 @@ Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT soft
 5. Engineering logbook: [docs/diario-bordo-v2.md](docs/diario-bordo-v2.md)
 6. Shell runtime stability note (2026-04-28): [docs/shell-runtime-stability-2026-04-28.md](docs/shell-runtime-stability-2026-04-28.md)
 7. Full changelog: [CHANGELOG.md](CHANGELOG.md)
-8. Donations and support: [DONATIONS.md](DONATIONS.md)
+8. Phase 4 DOOM playable milestone: [docs/phase4-doom-gameplay-playable-2026-05-04.md](docs/phase4-doom-gameplay-playable-2026-05-04.md)
+9. Donations and support: [DONATIONS.md](DONATIONS.md)
 
 ## Current Version
-`CiukiOS pre-Alpha v0.5.4`
+`CiukiOS pre-Alpha v0.6.1`
 
 Versioning policy:
-1. Baseline is reset to `pre-Alpha v0.5.0`.
-2. Minor updates on this branch keep compatibility with the `v0.5.0` baseline.
+1. Baseline was reset to `pre-Alpha v0.5.0`.
+2. The `v0.6.x` line marks the Phase 4 DOOM-playable runtime milestone while keeping the legacy BIOS x86 direction intact.
 
 ## Changelog (Latest 2 Entries)
-### Unreleased (2026-05-03)
-1. Added a full-profile DOOM taxonomy harness and Makefile target to classify launch progress stages deterministically.
-2. Added local-only DOOM payload packaging in the full image build lane and guarded proprietary assets from publication.
-3. Fixed INT 21h MZ loading to use header-declared module size, removing the previous 4B:08 launch failure and advancing DOOM to extender startup diagnostics.
-4. Closed the Phase 4 installer execution lane with deterministic scenario coverage (success, media swap, timeout, missing media, and insufficient space).
-5. Hardened installer manifest-source diagnostics, including explicit `MANIFEST_MEDIA_HEX` reporting for normal and fallback parse paths.
-6. Synchronized project documentation to reflect installer-lane closure while keeping the runtime/DOOM lane active.
-7. Improved README changelog visibility and updated local agent directives to require a `CHANGELOG.md` update for every completed task.
-8. Advanced the DOOM taxonomy harness to boot the full profile interactively, invoke `DRVLOAD.COM`, and launch `DOOM.EXE`, adding a deterministic `doom_exec_attempted` stage before extender/video/menu gates.
-9. Advanced DOOM runtime coverage to `extender_init`; current blocker is DOS/16M `cannot allocate tstack` before video/menu initialization.
+### pre-Alpha v0.6.1 (2026-05-04)
+1. Closed the Phase 4 DOOM gameplay milestone: the full FAT16 runtime reaches DOS/4GW, loads `doom.wad`, initializes the gameplay path, renders the viewport/HUD, and has been manually confirmed playable.
+2. Reworked the full-profile INT 21h memory arena around an ordered MCB table and fixed DOS extender compatibility issues in MZ sizing, PSP/MCB visibility, AH=33h, FAT16 read/seek returns, and WAD discovery.
+3. Added a visual DOOM taxonomy lane with QEMU `-display none` plus optional monitor `screendump` capture, while keeping serial `menu_reached` classification conservative.
 
 ### pre-Alpha v0.5.4 (2026-05-01)
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.
@@ -42,10 +37,10 @@ Versioning policy:
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
-1. Phase 4 remains active for the runtime/DOOM lane, with shell-first stability as the primary guardrail.
-2. The Phase 4 installer execution lane is closed (2026-05-03) with deterministic evidence and scenario coverage.
-3. Keep cross-profile runtime stability across floppy/full profiles while advancing DOS compatibility in small, testable steps.
-4. Track advanced installer media targets (multi-floppy and extended CD workflow) as post-MVP follow-up scope.
+1. Phase 4 is closed as of 2026-05-04: installer execution is complete and DOOM is playable on the full FAT16 profile.
+2. Keep the full-profile runtime stable while preserving the conservative taxonomy split between serial `menu_reached` and visual gameplay evidence.
+3. Phase 5 becomes the next major compatibility direction: Windows pre-NT bootstrap/runtime work, starting from the DOS extender and protected-mode compatibility gains proven by DOOM.
+4. Track audio, driver activation, and richer gameplay taxonomy as follow-up hardening rather than Phase 4 blockers.
 
 ## Open Source Collaboration
 CiukiOS welcomes collaboration through issues and pull requests.
@@ -68,7 +63,8 @@ Progress is continuous but not tied to a fixed release calendar.
 2. Architecture baseline: [docs/architecture-legacy-x86-v1.md](docs/architecture-legacy-x86-v1.md)
 3. DOS core spec: [docs/dos-core-spec-v0.1.md](docs/dos-core-spec-v0.1.md)
 4. DOS core implementation plan: [docs/dos-core-implementation-plan-v0.1.md](docs/dos-core-implementation-plan-v0.1.md)
-5. Migration/archive note: [docs/migration-note-old-archive.md](docs/migration-note-old-archive.md)
+5. Phase 4 DOOM playable milestone: [docs/phase4-doom-gameplay-playable-2026-05-04.md](docs/phase4-doom-gameplay-playable-2026-05-04.md)
+6. Migration/archive note: [docs/migration-note-old-archive.md](docs/migration-note-old-archive.md)
 
 ## Legacy Archive
 Historical project content is preserved under:

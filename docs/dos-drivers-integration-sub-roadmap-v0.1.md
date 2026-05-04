@@ -3,13 +3,14 @@
 ## Current objective
 Complete runtime-ready integration of DOS generic drivers into CiukiOS, starting from the already stable full-build packaging baseline under SYSTEM/DRIVERS.
 
-### Progress delta (as of 2026-05-03)
+### Progress delta (as of 2026-05-04)
 - Completed: full build packaging path injects drivers under SYSTEM/DRIVERS.
 - Completed: baseline build evidence exists from full build runs.
 - Deferred by decision gate: stage1 boot-time autoload remains disabled due to stage1 size gate risk.
 - Completed: runtime activation helper is available via SYSTEM/DRIVERS/DRVLOAD.COM with fail-open behavior and markers.
 - Completed: automated runtime smoke helper is available to invoke DRVLOAD from shell and verify deterministic serial markers.
 - Completed: DOOM taxonomy automation now invokes DRVLOAD before launching DOOM from the full-profile shell.
+- Completed: DOOM is playable on the full FAT16 profile despite DRVLOAD remaining a fail-open helper for unavailable DEVLOAD/MSCDEX activation.
 - Pending: real DEVLOAD/MSCDEX activation remains deferred by INT21 API gap; DRVLOAD currently provides deterministic fail-open diagnostics.
 
 ## Step-by-step plan
@@ -120,12 +121,12 @@ Phase ownership:
 - Handoff package includes decisions, status, risks, test outcome summary, and prioritized next-cycle TODOs.
 
 ## Next action
-Investigate the current deterministic DOOM launch runtime blocker observed by the taxonomy harness: DOS/16M reaches extender startup, probes `C:\APPS\DOOM\DOOM.ETX`, then reports `cannot allocate tstack` before video/menu markers appear.
+Define the next driver-runtime hardening slice after the DOOM playable milestone: keep DRVLOAD fail-open behavior stable, then close the INT21 API gaps needed for real DEVLOAD/MSCDEX activation without regressing the full-profile DOOM lane.
 
 ## Test status
 - Full build integration status (SYSTEM/DRIVERS): Completed/PASS in full build packaging baseline.
 - Runtime activation status: Available through DRVLOAD.COM helper lane (manual invocation).
 - Runtime activation smoke status: Available through scripts/qemu_test_full_drvload_smoke.sh (serial markers BEGIN/TRY/DONE).
-- DOOM automation integration status: Available through scripts/qemu_test_full_doom_taxonomy.sh with `extender_init` PASS.
+- DOOM automation integration status: Available through scripts/qemu_test_full_doom_taxonomy.sh; Phase 4 gameplay playable milestone is closed in v0.6.1.
 - Stage1 boot autoload status: Deferred by size gate decision.
-- Regression matrix status: Pending DOS/16M transfer-stack memory investigation and later video/menu stage closure.
+- Regression matrix status: Pending real DEVLOAD/MSCDEX activation coverage; no longer blocked by DOS/16M transfer-stack investigation.

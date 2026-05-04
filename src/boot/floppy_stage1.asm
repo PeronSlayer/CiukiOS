@@ -18,6 +18,10 @@ org 0x0000
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
 %define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
+%define DOS_MEM_BLOCK_FREE 0
+%define DOS_MEM_BLOCK_ALLOC 1
+%define DOS_MEM_BLOCK_TABLE_MAX 16
+%define DOS_MEM_BLOCK_ENTRY_SIZE 8
 %ifndef FAT_SPT
 %define FAT_SPT 18
 %endif
@@ -892,13 +896,38 @@ int21_handler:
 .fn_49:
     call int21_free
     jc .fn_49_error
+    mov bp, sp
+    mov bx, [ss:bp + 14]
+    mov cx, [ss:bp + 12]
+    mov dx, [ss:bp + 10]
+    mov si, [ss:bp + 8]
+    mov di, [ss:bp + 6]
     jmp .success
 .fn_49_error:
+    mov bp, sp
+    mov bx, [ss:bp + 14]
+    mov cx, [ss:bp + 12]
+    mov dx, [ss:bp + 10]
+    mov si, [ss:bp + 8]
+    mov di, [ss:bp + 6]
     jmp .error
 
 .fn_4a:
     call int21_resize
-    jnc .success
+    jc .fn_4a_error_restore
+    mov bp, sp
+    mov bx, [ss:bp + 14]
+    mov cx, [ss:bp + 12]
+    mov dx, [ss:bp + 10]
+    mov si, [ss:bp + 8]
+    mov di, [ss:bp + 6]
+    jmp .success
+.fn_4a_error_restore:
+    mov bp, sp
+    mov cx, [ss:bp + 12]
+    mov dx, [ss:bp + 10]
+    mov si, [ss:bp + 8]
+    mov di, [ss:bp + 6]
     jmp .error
 
 .fn_4c:
@@ -1594,6 +1623,97 @@ int21_exec_write_tail:
     pop ax
     ret
 
+int21_exec_prepare_mz_free_mcb:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    cmp word [cs:current_load_seg], MZ_LOAD_SEG
+    jne .arena_state_ready
+    mov word [cs:dos_mem_alloc_seg], 0
+    mov word [cs:dos_mem_alloc_size], 0
+    mov word [cs:dos_mem_alloc_seg2], 0
+    mov word [cs:dos_mem_alloc_size2], 0
+    mov word [cs:dos_mem_alloc_seg3], 0
+    mov word [cs:dos_mem_alloc_size3], 0
+    mov word [cs:dos_mem_free2_seg], 0
+    mov word [cs:dos_mem_free2_size], 0
+    call int21_mem_table_clear
+.arena_state_ready:
+    mov word [cs:dos_mem_psp_mcb_end], 0
+    mov word [cs:dos_mem_psp_free_seg], 0
+    mov word [cs:dos_mem_psp_free_size], 0
+
+    mov ax, [cs:current_load_seg]
+    mov es, ax
+
+    mov bx, [es:0x0004]
+    or bx, bx
+    jz .done
+
+    mov cl, 5
+    shl bx, cl
+
+    mov ax, [es:0x0002]
+    or ax, ax
+    jz .total_paras_ready
+    sub bx, 32
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    add bx, ax
+
+.total_paras_ready:
+    mov ax, [es:0x0008]
+    cmp bx, ax
+    jbe .done
+    sub bx, ax
+
+    add bx, 0x0010
+    jc .done
+    add bx, [es:0x000A]
+    jc .done
+
+    mov ax, [cs:mz_psp_seg]
+    mov dx, DOS_HEAP_LIMIT_SEG
+    sub dx, ax
+    cmp bx, dx
+    ja .done
+
+    mov cx, [es:0x000C]
+    cmp cx, [es:0x000A]
+    jb .mz_alloc_size_ready
+    sub cx, [es:0x000A]
+    jz .mz_alloc_size_ready
+    mov ax, dx
+    sub ax, bx
+    cmp cx, ax
+    jae .mz_alloc_all_available
+    add bx, cx
+    jmp .mz_alloc_size_ready
+
+.mz_alloc_all_available:
+    mov bx, dx
+
+.mz_alloc_size_ready:
+    mov ax, [cs:mz_psp_seg]
+    mov es, ax
+    call int21_resize
+
+.done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 int21_exec_load_to_es:
     push bx
     push cx
@@ -2144,8 +2264,14 @@ int21_exec_run_mz:
     mov ax, [cs:mz_psp_seg]
     mov [cs:current_psp_seg], ax
     push ax
+    call int21_exec_prepare_mz_free_mcb
     mov al, 'Z'
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .mz_mcb_type_ready
+    mov al, 'M'
+.mz_mcb_type_ready:
     call int21_psp_mcb_update_type
+    call int21_mem_rebuild_chain
     pop ax
     mov ds, ax
     mov es, ax
@@ -2372,13 +2498,14 @@ int21_ctrl_break:
     stc
     ret
 .get_state:
-    xor dl, dl
-    xor ax, ax
+    mov dl, [cs:dos_ctrl_break_flag]
+    mov ax, 0x3300
     clc
     ret
 .set_state:
-    xor dl, dl
-    xor ax, ax
+    and dl, 0x01
+    mov [cs:dos_ctrl_break_flag], dl
+    mov ax, 0x3301
     clc
     ret
 
@@ -2438,11 +2565,12 @@ int21_mem_strategy:
     clc
     ret
 .get:
-    xor bx, bx
-    xor ax, ax
+    mov bx, [cs:dos_mem_strategy]
+    mov ax, bx
     clc
     ret
 .set:
+    mov [cs:dos_mem_strategy], bx
     xor ax, ax
     clc
     ret
@@ -2552,6 +2680,10 @@ int21_ioctl:
     cmp bx, 0x0001
     je .stdio
     cmp bx, 0x0002
+    je .stdio
+    cmp bx, 0x0003
+    je .stdio
+    cmp bx, 0x0004
     je .stdio
     cmp bx, 0x0005
     je .disk_slot1
@@ -3954,47 +4086,6 @@ int21_open:
 
 .target_ready:
     mov si, dx
-%if FAT_TYPE == 16
-    cmp word [si + 3], 0x4F43
-    jne .resolve_path
-    cmp word [si + 5], 0x4D4D
-    jne .resolve_path
-    cmp word [si + 11], 0x5445
-    jne .resolve_path
-    cmp byte [si + 13], 'X'
-    jne .resolve_path
-    mov word [si + 11], 0x4F43
-    mov byte [si + 13], 'M'
-.resolve_path:
-    push si
-.doom_etx_scan:
-    cmp byte [si], 0
-    je .doom_etx_done
-    cmp byte [si], 'D'
-    jne .doom_etx_next
-    cmp byte [si + 1], 'O'
-    jne .doom_etx_next
-    cmp byte [si + 2], 'O'
-    jne .doom_etx_next
-    cmp byte [si + 3], 'M'
-    jne .doom_etx_next
-    cmp byte [si + 4], '.'
-    jne .doom_etx_next
-    cmp byte [si + 5], 'E'
-    jne .doom_etx_next
-    cmp byte [si + 6], 'T'
-    jne .doom_etx_next
-    cmp byte [si + 7], 'X'
-    jne .doom_etx_next
-    mov byte [si + 6], 'X'
-    mov byte [si + 7], 'E'
-    jmp .doom_etx_done
-.doom_etx_next:
-    inc si
-    jmp .doom_etx_scan
-.doom_etx_done:
-    pop si
-%endif
     call int21_resolve_and_find_path
     jnc .path_ready
 %if FAT_TYPE == 16
@@ -4714,6 +4805,7 @@ int21_read:
 
 .done:
     pushf
+    push ax
     mov al, [cs:file_handle_swapped]
     cmp al, 2
     je .done_swap2
@@ -4755,6 +4847,7 @@ int21_read:
     call int21_swap_file_handles8
 %endif
 .done_noswap:
+    pop ax
     popf
     pop es
     pop ds
@@ -5829,6 +5922,7 @@ int21_seek:
 
 .done:
     pushf
+    push ax
     mov al, [cs:file_handle_swapped]
     cmp al, 2
     je .done_swap2
@@ -5870,6 +5964,7 @@ int21_seek:
     call int21_swap_file_handles8
 %endif
 .done_noswap:
+    pop ax
     popf
     pop cx
     pop bx
@@ -6231,6 +6326,10 @@ int21_mem_init:
     mov word [cs:dos_mem_alloc_size2], 0
     mov word [cs:dos_mem_alloc_seg3], 0
     mov word [cs:dos_mem_alloc_size3], 0
+    mov word [cs:dos_mem_psp_mcb_end], 0
+    mov word [cs:dos_mem_free2_seg], 0
+    mov word [cs:dos_mem_free2_size], 0
+    call int21_mem_table_clear
     ; initialise list-of-lists: first word (BX-2) = first MCB segment
     mov word [cs:dos_list_of_lists], DOS_HEAP_BASE_SEG
     ; compatibility mirror for clients reading ES:BX directly
@@ -6281,6 +6380,7 @@ int21_mem_query_free:
 
 int21_mem_write_mcb:
     push ax
+    push dx
     push es
 
     mov ax, [cs:dos_mem_alloc_seg]
@@ -6288,21 +6388,24 @@ int21_mem_write_mcb:
     jnz .have_seg
     call int21_mem_query_free
 .have_seg:
+    call int21_mem_type_for_seg
     dec ax
     mov es, ax
-    mov byte [es:0x0000], 'Z'
+    mov [es:0x0000], dl
     mov ax, [cs:dos_mem_mcb_owner]
     mov [es:0x0001], ax
     mov ax, [cs:dos_mem_mcb_size]
     mov [es:0x0003], ax
 
     pop es
+    pop dx
     pop ax
     ret
 
 int21_mem_write_psp_free_mcb:
     push ax
     push bx
+    push dx
     push es
 
     mov bx, [cs:dos_mem_psp_free_size]
@@ -6313,27 +6416,935 @@ int21_mem_write_psp_free_mcb:
     jb .done
     cmp ax, DOS_HEAP_LIMIT_SEG
     jae .done
+    call int21_mem_type_for_seg
     dec ax
     mov es, ax
-    mov byte [es:0x0000], 'Z'
-    mov ax, [cs:dos_mem_alloc_seg]
-    cmp ax, [cs:dos_mem_psp_free_seg]
-    ja .mark_middle
-    mov ax, [cs:dos_mem_alloc_seg2]
-    cmp ax, [cs:dos_mem_psp_free_seg]
-    ja .mark_middle
-    mov ax, [cs:dos_mem_alloc_seg3]
-    cmp ax, [cs:dos_mem_psp_free_seg]
-    jbe .type_ready
-.mark_middle:
-    mov byte [es:0x0000], 'M'
-.type_ready:
+    mov [es:0x0000], dl
     mov word [es:0x0001], 0
     mov [es:0x0003], bx
 
 .done:
     pop es
+    pop dx
     pop bx
+    pop ax
+    ret
+
+int21_mem_write_free2_mcb:
+    push ax
+    push bx
+    push dx
+    push es
+
+    mov bx, [cs:dos_mem_free2_size]
+    cmp bx, 0
+    je .done
+    mov ax, [cs:dos_mem_free2_seg]
+    cmp ax, DOS_HEAP_USER_SEG
+    jb .done
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jae .done
+    call int21_mem_type_for_seg
+    dec ax
+    mov es, ax
+    mov [es:0x0000], dl
+    mov word [es:0x0001], 0
+    mov [es:0x0003], bx
+
+.done:
+    pop es
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+int21_mem_write_chain_entry:
+    push ax
+    push es
+
+    dec ax
+    mov es, ax
+    mov [es:0x0000], dl
+    mov [es:0x0001], cx
+    mov [es:0x0003], bx
+
+    pop es
+    pop ax
+    ret
+
+int21_mem_find_next_alloc:
+    push cx
+    push dx
+    push si
+    push di
+
+    mov si, DOS_HEAP_LIMIT_SEG
+    xor di, di
+    mov word [cs:dos_mem_block_found_owner], 0
+    xor cx, cx
+    mov cl, [cs:dos_mem_block_count]
+    mov bx, dos_mem_block_table
+
+.scan:
+    cmp cx, 0
+    je .result
+    cmp word [cs:bx + 6], DOS_MEM_BLOCK_ALLOC
+    jne .next
+    mov ax, [cs:bx]
+    cmp ax, dx
+    jb .next
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jae .next
+    cmp ax, si
+    jae .next
+    mov si, ax
+    mov di, [cs:bx + 2]
+    mov ax, [cs:bx + 4]
+    mov [cs:dos_mem_block_found_owner], ax
+.next:
+    add bx, DOS_MEM_BLOCK_ENTRY_SIZE
+    dec cx
+    jmp .scan
+
+.result:
+    cmp di, 0
+    je .none
+    mov ax, si
+    mov bx, di
+    clc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    ret
+
+.none:
+    stc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    ret
+
+int21_mem_table_clear:
+    mov byte [cs:dos_mem_block_count], 0
+    ret
+
+int21_mem_arena_start:
+    push bx
+    push es
+
+    mov ax, DOS_HEAP_USER_SEG
+    mov bx, [cs:current_psp_seg]
+    or bx, bx
+    jz .done
+    mov es, bx
+    mov ax, [cs:dos_mem_psp_mcb_end]
+    or ax, ax
+    jnz .have_end
+    mov ax, [es:0x0002]
+.have_end:
+    cmp ax, bx
+    jae .end_ready
+    mov ax, bx
+.end_ready:
+    inc ax
+    cmp ax, DOS_HEAP_USER_SEG
+    jae .check_limit
+    mov ax, DOS_HEAP_USER_SEG
+.check_limit:
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jbe .done
+    mov ax, DOS_HEAP_LIMIT_SEG
+
+.done:
+    pop es
+    pop bx
+    ret
+
+int21_mem_table_insert:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    cmp bx, 0
+    je .done
+    cmp ax, DOS_HEAP_USER_SEG
+    jb .done
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jae .done
+    cmp byte [cs:dos_mem_block_count], DOS_MEM_BLOCK_TABLE_MAX
+    jae .done
+
+    mov [cs:dos_mem_block_tmp_seg], ax
+    mov [cs:dos_mem_block_tmp_size], bx
+    mov [cs:dos_mem_block_tmp_owner], cx
+    mov [cs:dos_mem_block_tmp_state], dx
+
+    xor si, si
+    xor cx, cx
+    mov cl, [cs:dos_mem_block_count]
+.find_slot:
+    cmp cx, 0
+    je .slot_ready
+    mov ax, [cs:dos_mem_block_table + si]
+    cmp [cs:dos_mem_block_tmp_seg], ax
+    jb .slot_ready
+    add si, DOS_MEM_BLOCK_ENTRY_SIZE
+    dec cx
+    jmp .find_slot
+
+.slot_ready:
+    xor di, di
+    mov dl, [cs:dos_mem_block_count]
+    mov di, dx
+    shl di, 1
+    shl di, 1
+    shl di, 1
+.shift_loop:
+    cmp di, si
+    jbe .store
+    mov bp, di
+    sub bp, DOS_MEM_BLOCK_ENTRY_SIZE
+    mov ax, [cs:dos_mem_block_table + bp]
+    mov [cs:dos_mem_block_table + di], ax
+    mov ax, [cs:dos_mem_block_table + bp + 2]
+    mov [cs:dos_mem_block_table + di + 2], ax
+    mov ax, [cs:dos_mem_block_table + bp + 4]
+    mov [cs:dos_mem_block_table + di + 4], ax
+    mov ax, [cs:dos_mem_block_table + bp + 6]
+    mov [cs:dos_mem_block_table + di + 6], ax
+    sub di, DOS_MEM_BLOCK_ENTRY_SIZE
+    jmp .shift_loop
+
+.store:
+    mov ax, [cs:dos_mem_block_tmp_seg]
+    mov [cs:dos_mem_block_table + si], ax
+    mov ax, [cs:dos_mem_block_tmp_size]
+    mov [cs:dos_mem_block_table + si + 2], ax
+    mov ax, [cs:dos_mem_block_tmp_owner]
+    mov [cs:dos_mem_block_table + si + 4], ax
+    mov ax, [cs:dos_mem_block_tmp_state]
+    mov [cs:dos_mem_block_table + si + 6], ax
+    inc byte [cs:dos_mem_block_count]
+
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_mem_table_rebuild:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    call int21_mem_sync_legacy
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_mem_table_find_exact:
+    push dx
+    push di
+
+    xor si, si
+    xor di, di
+    xor dx, dx
+    mov dl, [cs:dos_mem_block_count]
+
+.scan:
+    cmp di, dx
+    jae .not_found
+    cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
+    jne .next
+    cmp [cs:dos_mem_block_table + si], ax
+    je .found
+.next:
+    add si, DOS_MEM_BLOCK_ENTRY_SIZE
+    inc di
+    jmp .scan
+
+.found:
+    mov bx, [cs:dos_mem_block_table + si + 2]
+    mov cx, [cs:dos_mem_block_table + si + 4]
+    clc
+    pop di
+    pop dx
+    ret
+
+.not_found:
+    stc
+    pop di
+    pop dx
+    ret
+
+int21_mem_table_remove_at_si:
+    push ax
+    push bx
+    push cx
+    push di
+
+    mov di, si
+    mov al, [cs:dos_mem_block_count]
+    cmp al, 0
+    je .done
+    dec al
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+
+.shift:
+    cmp di, bx
+    jae .shrink
+    mov ax, [cs:dos_mem_block_table + di + DOS_MEM_BLOCK_ENTRY_SIZE]
+    mov [cs:dos_mem_block_table + di], ax
+    mov ax, [cs:dos_mem_block_table + di + DOS_MEM_BLOCK_ENTRY_SIZE + 2]
+    mov [cs:dos_mem_block_table + di + 2], ax
+    mov ax, [cs:dos_mem_block_table + di + DOS_MEM_BLOCK_ENTRY_SIZE + 4]
+    mov [cs:dos_mem_block_table + di + 4], ax
+    mov ax, [cs:dos_mem_block_table + di + DOS_MEM_BLOCK_ENTRY_SIZE + 6]
+    mov [cs:dos_mem_block_table + di + 6], ax
+    add di, DOS_MEM_BLOCK_ENTRY_SIZE
+    jmp .shift
+
+.shrink:
+    dec byte [cs:dos_mem_block_count]
+
+.done:
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_mem_table_resize_at_si:
+    mov [cs:dos_mem_block_table + si + 2], bx
+    ret
+
+int21_mem_table_clear_if_no_alloc:
+    push cx
+    push si
+
+    xor si, si
+    xor cx, cx
+    mov cl, [cs:dos_mem_block_count]
+
+.scan:
+    cmp cx, 0
+    je .clear
+    cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
+    je .done
+    add si, DOS_MEM_BLOCK_ENTRY_SIZE
+    dec cx
+    jmp .scan
+
+.clear:
+    call int21_mem_table_clear
+
+.done:
+    pop si
+    pop cx
+    ret
+
+int21_mem_table_next_limit:
+    push ax
+    push cx
+    push si
+    push di
+
+    mov dx, DOS_HEAP_LIMIT_SEG
+    xor si, si
+    xor di, di
+    xor cx, cx
+    mov cl, [cs:dos_mem_block_count]
+
+.scan:
+    cmp di, cx
+    jae .done
+    cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
+    jne .next
+    mov ax, [cs:dos_mem_block_table + si]
+    cmp ax, bx
+    jbe .next
+    cmp ax, dx
+    jae .next
+    mov dx, ax
+.next:
+    add si, DOS_MEM_BLOCK_ENTRY_SIZE
+    inc di
+    jmp .scan
+
+.done:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+int21_mem_table_resize_limit:
+    push ax
+    push bx
+
+    mov bx, ax
+    call int21_mem_table_next_limit
+    mov ax, dx
+    sub dx, bx
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    je .done
+    dec dx
+
+.done:
+    pop bx
+    pop ax
+    ret
+
+int21_mem_find_free_gap:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov [cs:dos_mem_block_req_size], bx
+    call int21_mem_arena_start
+    mov dx, ax
+    xor si, si
+    xor di, di
+    xor cx, cx
+    mov cl, [cs:dos_mem_block_count]
+
+.scan:
+    cmp di, cx
+    jae .tail
+    mov ax, [cs:dos_mem_block_table + si]
+    cmp ax, dx
+    jbe .consume
+    mov bx, ax
+    sub bx, dx
+    dec bx
+    cmp bx, [cs:dos_mem_block_req_size]
+    jae .found
+.consume:
+    mov dx, [cs:dos_mem_block_table + si]
+    add dx, [cs:dos_mem_block_table + si + 2]
+    inc dx
+.next:
+    add si, DOS_MEM_BLOCK_ENTRY_SIZE
+    inc di
+    jmp .scan
+
+.tail:
+    cmp dx, DOS_HEAP_LIMIT_SEG
+    jae .not_found
+    mov bx, DOS_HEAP_LIMIT_SEG
+    sub bx, dx
+    cmp bx, [cs:dos_mem_block_req_size]
+    jb .not_found
+
+.found:
+    mov ax, dx
+    mov bx, [cs:dos_mem_block_req_size]
+    clc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.not_found:
+    stc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_mem_table_alloc_from_free:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov [cs:dos_mem_block_req_size], bx
+    xor si, si
+    xor di, di
+    xor cx, cx
+    mov cl, [cs:dos_mem_block_count]
+
+.scan:
+    cmp di, cx
+    jae .not_found
+    cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_FREE
+    jne .next
+    mov bx, [cs:dos_mem_block_table + si + 2]
+    cmp bx, [cs:dos_mem_block_req_size]
+    jae .use_free
+.next:
+    add si, DOS_MEM_BLOCK_ENTRY_SIZE
+    inc di
+    jmp .scan
+
+.use_free:
+    mov bx, [cs:dos_mem_block_req_size]
+    mov dx, [cs:dos_mem_block_table + si + 2]
+    sub dx, bx
+    cmp dx, 1
+    ja .split_high
+.use_whole:
+    call int21_mem_current_owner
+    mov [cs:dos_mem_block_table + si + 4], ax
+    mov word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
+    mov ax, [cs:dos_mem_block_table + si]
+    clc
+    jmp .done
+
+.split_high:
+    cmp byte [cs:dos_mem_block_count], DOS_MEM_BLOCK_TABLE_MAX
+    jae .use_whole
+    dec dx
+    mov [cs:dos_mem_block_table + si + 2], dx
+    mov ax, [cs:dos_mem_block_table + si]
+    add ax, dx
+    inc ax
+    mov [cs:dos_mem_block_tmp_seg], ax
+    call int21_mem_current_owner
+    mov cx, ax
+    mov dx, DOS_MEM_BLOCK_ALLOC
+    mov ax, [cs:dos_mem_block_tmp_seg]
+    mov bx, [cs:dos_mem_block_req_size]
+    call int21_mem_table_insert
+    mov ax, [cs:dos_mem_block_tmp_seg]
+    clc
+    jmp .done
+
+.not_found:
+    stc
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_mem_sync_legacy:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    xor ax, ax
+    mov [cs:dos_mem_alloc_seg], ax
+    mov [cs:dos_mem_alloc_size], ax
+    mov [cs:dos_mem_alloc_seg2], ax
+    mov [cs:dos_mem_alloc_size2], ax
+    mov [cs:dos_mem_alloc_seg3], ax
+    mov [cs:dos_mem_alloc_size3], ax
+    mov [cs:dos_mem_psp_free_seg], ax
+    mov [cs:dos_mem_psp_free_size], ax
+    mov [cs:dos_mem_free2_seg], ax
+    mov [cs:dos_mem_free2_size], ax
+
+    call int21_mem_arena_start
+    mov dx, ax
+    xor si, si
+    xor di, di
+    xor bx, bx
+    xor cx, cx
+    mov cl, [cs:dos_mem_block_count]
+
+.scan:
+    cmp di, cx
+    jae .tail_gap
+    cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
+    jne .next
+    mov ax, [cs:dos_mem_block_table + si]
+    cmp ax, dx
+    jbe .store_alloc
+    push bx
+    mov bx, ax
+    sub bx, dx
+    dec bx
+    call int21_mem_sync_store_gap
+    pop bx
+.store_alloc:
+    cmp bx, 0
+    je .slot1
+    cmp bx, 1
+    je .slot2
+    cmp bx, 2
+    je .slot3
+    jmp .advance_alloc
+.slot1:
+    mov ax, [cs:dos_mem_block_table + si]
+    mov [cs:dos_mem_alloc_seg], ax
+    mov ax, [cs:dos_mem_block_table + si + 2]
+    mov [cs:dos_mem_alloc_size], ax
+    mov ax, [cs:dos_mem_block_table + si + 4]
+    mov [cs:dos_mem_mcb_owner], ax
+    mov ax, [cs:dos_mem_block_table + si + 2]
+    mov [cs:dos_mem_mcb_size], ax
+    jmp .advance_alloc
+.slot2:
+    mov ax, [cs:dos_mem_block_table + si]
+    mov [cs:dos_mem_alloc_seg2], ax
+    mov ax, [cs:dos_mem_block_table + si + 2]
+    mov [cs:dos_mem_alloc_size2], ax
+    jmp .advance_alloc
+.slot3:
+    mov ax, [cs:dos_mem_block_table + si]
+    mov [cs:dos_mem_alloc_seg3], ax
+    mov ax, [cs:dos_mem_block_table + si + 2]
+    mov [cs:dos_mem_alloc_size3], ax
+.advance_alloc:
+    inc bx
+    mov dx, [cs:dos_mem_block_table + si]
+    add dx, [cs:dos_mem_block_table + si + 2]
+    inc dx
+.next:
+    add si, DOS_MEM_BLOCK_ENTRY_SIZE
+    inc di
+    jmp .scan
+
+.tail_gap:
+    cmp dx, DOS_HEAP_LIMIT_SEG
+    jae .done
+    mov bx, DOS_HEAP_LIMIT_SEG
+    sub bx, dx
+    call int21_mem_sync_store_gap
+
+.done:
+    cmp word [cs:dos_mem_alloc_size], 0
+    jne .return
+    mov word [cs:dos_mem_mcb_owner], 0
+    mov word [cs:dos_mem_mcb_size], DOS_HEAP_USER_MAX_PARAS
+.return:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_mem_sync_store_gap:
+    cmp bx, 0
+    je .done
+    cmp word [cs:dos_mem_psp_free_size], 0
+    jne .check_free2
+    mov [cs:dos_mem_psp_free_seg], dx
+    mov [cs:dos_mem_psp_free_size], bx
+    jmp .done
+.check_free2:
+    cmp word [cs:dos_mem_free2_size], 0
+    jne .done
+    mov [cs:dos_mem_free2_seg], dx
+    mov [cs:dos_mem_free2_size], bx
+.done:
+    ret
+
+int21_mem_rebuild_chain:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    push es
+
+    call int21_mem_table_rebuild
+
+    mov dx, [cs:current_psp_seg]
+    or dx, dx
+    jz .done
+
+    mov es, dx
+    mov bx, [cs:dos_mem_psp_mcb_end]
+    or bx, bx
+    jnz .have_psp_end
+    mov bx, [es:0x0002]
+.have_psp_end:
+    cmp bx, dx
+    jae .psp_end_ready
+    mov bx, dx
+.psp_end_ready:
+    mov ax, dx
+    dec ax
+    mov [cs:dos_list_of_lists], ax
+    mov [cs:dos_list_of_lists + 2], ax
+    mov [cs:dos_list_of_lists + 4], ax
+
+    mov ax, dx
+    mov cx, dx
+    sub bx, dx
+    mov dl, 'M'
+    call int21_mem_write_chain_entry
+    mov si, ax
+
+    mov di, ax
+    add di, bx
+    inc di
+
+    cmp di, DOS_HEAP_USER_SEG
+    jae .scan_next
+    cmp di, DOS_HEAP_BASE_SEG
+    jae .raise_to_heap_user
+    mov ax, di
+    mov bx, DOS_HEAP_BASE_SEG
+    sub bx, di
+    mov cx, 0x0008
+    mov dl, 'M'
+    call int21_mem_write_chain_entry
+    mov si, ax
+.raise_to_heap_user:
+    mov di, DOS_HEAP_USER_SEG
+
+.scan_next:
+    mov dx, di
+    call int21_mem_find_next_alloc
+    jc .final_gap
+    cmp ax, di
+    jbe .write_alloc
+
+    push ax
+    push bx
+    mov bx, ax
+    sub bx, di
+    dec bx
+    cmp bx, 0
+    je .skip_gap
+    mov ax, di
+    xor cx, cx
+    mov dl, 'M'
+    call int21_mem_write_chain_entry
+    mov si, ax
+.skip_gap:
+    pop bx
+    pop ax
+
+.write_alloc:
+    mov cx, [cs:dos_mem_block_found_owner]
+    mov dl, 'M'
+    call int21_mem_write_chain_entry
+    mov si, ax
+    mov di, ax
+    add di, bx
+    inc di
+    jmp .scan_next
+
+.final_gap:
+    cmp di, DOS_HEAP_LIMIT_SEG
+    jae .mark_last
+    mov ax, di
+    mov bx, DOS_HEAP_LIMIT_SEG
+    sub bx, di
+    cmp bx, 0
+    je .mark_last
+    xor cx, cx
+    mov dl, 'M'
+    call int21_mem_write_chain_entry
+    mov si, ax
+
+.mark_last:
+    mov ax, si
+    dec ax
+    mov es, ax
+    mov byte [es:0x0000], 'Z'
+
+.done:
+    pop es
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_mem_resize_limit:
+    push ax
+    push bx
+    push cx
+
+    mov cx, ax
+    mov dx, ax
+    inc dx
+    call int21_mem_find_next_alloc
+    jc .heap_limit
+    mov dx, ax
+    sub dx, cx
+    dec dx
+    jmp .done
+
+.heap_limit:
+    mov dx, DOS_HEAP_LIMIT_SEG
+    sub dx, cx
+
+.done:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_mem_refresh_free2:
+    push ax
+    push bx
+    push dx
+
+    cmp word [cs:dos_mem_alloc_size2], 0
+    je .clear
+    mov dx, [cs:dos_mem_alloc_seg2]
+    add dx, [cs:dos_mem_alloc_size2]
+    inc dx
+    cmp word [cs:dos_mem_alloc_size3], 0
+    je .to_limit
+    mov ax, [cs:dos_mem_alloc_seg3]
+    cmp dx, ax
+    jae .clear
+    mov bx, ax
+    sub bx, dx
+    dec bx
+    cmp bx, 0
+    je .clear
+    jmp .store
+.to_limit:
+    cmp dx, DOS_HEAP_LIMIT_SEG
+    jae .clear
+    mov bx, DOS_HEAP_LIMIT_SEG
+    sub bx, dx
+    cmp bx, 0
+    je .clear
+.store:
+    mov [cs:dos_mem_free2_seg], dx
+    mov [cs:dos_mem_free2_size], bx
+    jmp .done
+.clear:
+    mov word [cs:dos_mem_free2_seg], 0
+    mov word [cs:dos_mem_free2_size], 0
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+int21_mem_type_for_seg:
+    push ax
+    push bx
+
+    mov dl, 'Z'
+
+    cmp word [cs:dos_mem_psp_free_size], 0
+    je .check_free2
+    mov bx, [cs:dos_mem_psp_free_seg]
+    cmp bx, ax
+    jbe .check_free2
+    mov dl, 'M'
+    jmp .done
+
+.check_free2:
+    cmp word [cs:dos_mem_free2_size], 0
+    je .check_block1
+    mov bx, [cs:dos_mem_free2_seg]
+    cmp bx, ax
+    jbe .check_block1
+    mov dl, 'M'
+    jmp .done
+
+.check_block1:
+    cmp word [cs:dos_mem_alloc_size], 0
+    je .check_block2
+    mov bx, [cs:dos_mem_alloc_seg]
+    cmp bx, ax
+    jbe .check_block2
+    mov dl, 'M'
+    jmp .done
+
+.check_block2:
+    cmp word [cs:dos_mem_alloc_size2], 0
+    je .check_block3
+    mov bx, [cs:dos_mem_alloc_seg2]
+    cmp bx, ax
+    jbe .check_block3
+    mov dl, 'M'
+    jmp .done
+
+.check_block3:
+    cmp word [cs:dos_mem_alloc_size3], 0
+    je .done
+    mov bx, [cs:dos_mem_alloc_seg3]
+    cmp bx, ax
+    jbe .done
+    mov dl, 'M'
+
+.done:
+    pop bx
+    pop ax
+    ret
+
+int21_mem_rewrite_alloc_types:
+    push ax
+    push dx
+    push es
+
+    cmp word [cs:dos_mem_alloc_size], 0
+    je .block2
+    mov ax, [cs:dos_mem_alloc_seg]
+    call int21_mem_type_for_seg
+    dec ax
+    mov es, ax
+    mov [es:0x0000], dl
+
+.block2:
+    cmp word [cs:dos_mem_alloc_size2], 0
+    je .block3
+    mov ax, [cs:dos_mem_alloc_seg2]
+    call int21_mem_type_for_seg
+    dec ax
+    mov es, ax
+    mov [es:0x0000], dl
+
+.block3:
+    cmp word [cs:dos_mem_alloc_size3], 0
+    je .free2
+    mov ax, [cs:dos_mem_alloc_seg3]
+    call int21_mem_type_for_seg
+    dec ax
+    mov es, ax
+    mov [es:0x0000], dl
+
+.free2:
+    cmp word [cs:dos_mem_free2_size], 0
+    je .done
+    mov ax, [cs:dos_mem_free2_seg]
+    call int21_mem_type_for_seg
+    dec ax
+    mov es, ax
+    mov [es:0x0000], dl
+
+.done:
+    pop es
+    pop dx
     pop ax
     ret
 
@@ -6362,6 +7373,27 @@ int21_mem_carve_psp_tail:
     pop bx
     ret
 
+int21_mem_store_promoted_low_free:
+    push ax
+    push bx
+    push dx
+
+    cmp dx, ax
+    jbe .done
+    mov bx, dx
+    sub bx, ax
+    cmp bx, 1
+    jbe .done
+    dec bx
+    mov [cs:dos_mem_psp_free_seg], ax
+    mov [cs:dos_mem_psp_free_size], bx
+
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 int21_mem_current_owner:
     mov ax, [cs:current_psp_seg]
     or ax, ax
@@ -6384,7 +7416,11 @@ int21_psp_mcb_update_type:
     jz .done
 
     mov es, dx
+    mov bx, [cs:dos_mem_psp_mcb_end]
+    or bx, bx
+    jnz .have_end
     mov bx, [es:0x0002]
+.have_end:
     sub bx, dx
 
     mov ax, dx
@@ -6427,69 +7463,53 @@ int21_mem_largest_consume:
     ret
 
 int21_mem_largest_global:
-    push si
-    push di
+    push ax
+    push cx
     push dx
+    push si
+    push es
 
-    call int21_mem_query_free
+    call int21_mem_table_rebuild
+    call int21_mem_arena_start
     mov dx, ax
-    xor bx, bx
+    xor si, si
 
-    mov ax, [cs:dos_mem_alloc_seg]
-    mov cx, [cs:dos_mem_alloc_size]
-    mov si, [cs:dos_mem_alloc_seg2]
-    mov di, [cs:dos_mem_alloc_size2]
+.scan_next:
+    call int21_mem_find_next_alloc
+    jc .tail
+    cmp ax, dx
+    jbe .consume_alloc
+    mov cx, ax
+    sub cx, dx
+    dec cx
+    cmp cx, si
+    jbe .consume_alloc
+    mov si, cx
 
-    cmp cx, 0
-    jne .has_block1
-    cmp di, 0
-    je .tail
-    mov ax, si
-    mov cx, di
-    call int21_mem_largest_consume
-    jmp .tail
-
-.has_block1:
-    cmp di, 0
-    je .only_block1
-    cmp ax, si
-    jbe .b1_then_b2
-    xchg ax, si
-    xchg cx, di
-
-.b1_then_b2:
-    call int21_mem_largest_consume
-    mov ax, si
-    mov cx, di
-    call int21_mem_largest_consume
-    jmp .tail
-
-.only_block1:
-    call int21_mem_largest_consume
+.consume_alloc:
+    mov dx, ax
+    add dx, bx
+    inc dx
+    jmp .scan_next
 
 .tail:
-    mov ax, [cs:dos_mem_alloc_seg3]
-    mov cx, [cs:dos_mem_alloc_size3]
-    call int21_mem_largest_consume
+    cmp dx, DOS_HEAP_LIMIT_SEG
+    jae .largest_ready
+    mov cx, DOS_HEAP_LIMIT_SEG
+    sub cx, dx
+    cmp cx, si
+    jbe .largest_ready
+    mov si, cx
 
-    mov ax, [cs:dos_mem_psp_free_seg]
-    cmp ax, dx
-    jbe .tail_finalize
-    mov dx, ax
-
-.tail_finalize:
-    mov ax, DOS_HEAP_LIMIT_SEG
-    cmp dx, ax
-    jae .done
-    sub ax, dx
-    cmp ax, bx
-    jbe .done
-    mov bx, ax
+.largest_ready:
+    mov bx, si
 
 .done:
-    pop dx
-    pop di
+    pop es
     pop si
+    pop dx
+    pop cx
+    pop ax
     ret
 
 int21_mem_trace_chain:
@@ -6574,7 +7594,6 @@ int21_diag_log_ierr:
 
 int21_alloc:
     call int21_mem_init
-    call int21_mem_query_free
 
     ; DOS callers use BX=FFFFh to query the largest available block.
     cmp bx, 0xFFFF
@@ -6585,264 +7604,31 @@ int21_alloc:
     ret
 
 .req_ready:
-
     cmp bx, 0
     je .no_memory
 
-    cmp word [cs:dos_mem_alloc_size], 0
-    jne .busy
-
-    cmp bx, cx
-    ja .no_memory
-
-    cmp word [cs:dos_mem_psp_free_size], 0
-    je .first_low_alloc
-    cmp ax, [cs:dos_mem_psp_free_seg]
-    jne .first_low_alloc
-    mov [cs:dos_mem_alloc_size], bx
-    call int21_mem_carve_psp_tail
-    mov [cs:dos_mem_alloc_seg], ax
+    call int21_mem_table_alloc_from_free
+    jnc .alloc_from_table_ready
+    cmp byte [cs:dos_mem_block_count], DOS_MEM_BLOCK_TABLE_MAX
+    jae .no_memory
+    call int21_mem_find_free_gap
+    jc .no_memory
+    mov [cs:dos_mem_block_tmp_seg], ax
     call int21_mem_current_owner
-    mov [cs:dos_mem_mcb_owner], ax
-    mov [cs:dos_mem_mcb_size], bx
-    call int21_mem_write_mcb
-    mov al, 'M'
-    call int21_psp_mcb_update_type
-    call int21_mem_write_psp_free_mcb
-    mov ax, [cs:dos_mem_alloc_seg]
+    mov cx, ax
+    mov dx, DOS_MEM_BLOCK_ALLOC
+    mov ax, [cs:dos_mem_block_tmp_seg]
+    call int21_mem_table_insert
+.alloc_from_table_ready:
+    mov [cs:dos_mem_block_tmp_seg], ax
+    call int21_mem_sync_legacy
+    call int21_mem_rebuild_chain
+    mov ax, [cs:dos_mem_block_tmp_seg]
     clc
-    ret
-
-.first_low_alloc:
-    mov [cs:dos_mem_alloc_seg], ax
-    mov [cs:dos_mem_alloc_size], bx
-    call int21_mem_current_owner
-    mov [cs:dos_mem_mcb_owner], ax
-    mov [cs:dos_mem_mcb_size], bx
-    call int21_mem_write_mcb
-    mov al, 'M'
-    call int21_psp_mcb_update_type
-    mov dx, [cs:dos_mem_alloc_seg]
-    add dx, [cs:dos_mem_alloc_size]
-    inc dx
-    cmp word [cs:dos_mem_psp_free_seg], 0
-    je .first_seed
-    cmp [cs:dos_mem_psp_free_seg], dx
-    jae .first_return
-.first_seed:
-    cmp dx, DOS_HEAP_LIMIT_SEG
-    jae .first_no_tail
-    mov [cs:dos_mem_psp_free_seg], dx
-    mov ax, DOS_HEAP_LIMIT_SEG
-    sub ax, dx
-    mov [cs:dos_mem_psp_free_size], ax
-    call int21_mem_write_psp_free_mcb
-    push es
-    mov ax, [cs:dos_mem_alloc_seg]
-    dec ax
-    mov es, ax
-    mov byte [es:0x0000], 'M'
-    pop es
-    jmp .first_return
-.first_no_tail:
-    mov word [cs:dos_mem_psp_free_seg], 0
-    mov word [cs:dos_mem_psp_free_size], 0
-.first_return:
-    mov ax, [cs:dos_mem_alloc_seg]
-    clc
-    ret
-
-.busy:
-    ; block 1 busy: check if block 2 is free
-    cmp word [cs:dos_mem_alloc_size2], 0
-    jne .both_busy
-    ; prefer free tail produced by PSP AH=4A shrink, if present
-    cmp word [cs:dos_mem_psp_free_size], 0
-    je .busy_heap_tail
-    cmp bx, [cs:dos_mem_psp_free_size]
-    ja .busy_heap_tail
-    jmp .alloc_slot2_from_psp
-
-.alloc_slot2_from_psp:
-    mov [cs:dos_mem_alloc_size2], bx
-    call int21_mem_carve_psp_tail
-    mov [cs:dos_mem_alloc_seg2], ax
-
-    push es
-    push ax
-    push bx
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-    pop bx
-    pop ax
-    call int21_mem_current_owner
-    mov [es:0x0001], ax
-    mov [es:0x0003], bx
-    pop es
-    call int21_mem_write_psp_free_mcb
-    mov ax, [cs:dos_mem_alloc_seg2]
-    clc
-    ret
-
-.busy_heap_tail:
-    ; compute start of free space = end of block 1
-    mov ax, [cs:dos_mem_alloc_seg]
-    inc ax
-    add ax, [cs:dos_mem_alloc_size]
-    ; compute available paras
-    mov cx, DOS_HEAP_LIMIT_SEG
-    sub cx, ax
-    cmp bx, cx
-    ja .no_memory_b2
-    ; allocate block 2
-    mov [cs:dos_mem_alloc_seg2], ax
-    mov [cs:dos_mem_alloc_size2], bx
-    ; write MCB for block2 at (block2_seg - 1)
-    push es
-    push ax
-    push bx
-    dec ax
-    mov es, ax
-    mov byte [es:0x0000], 'Z'
-    pop bx
-    pop ax
-    call int21_mem_current_owner
-    mov [es:0x0001], ax   ; owner = current PSP
-    mov [es:0x0003], bx   ; size in paragraphs
-    pop es
-    ; update block1 MCB type to 'M' (middle, not last)
-    push es
-    mov ax, [cs:dos_mem_alloc_seg]
-    dec ax
-    mov es, ax
-    mov byte [es:0x0000], 'M'
-    pop es
-    mov al, 'M'
-    call int21_psp_mcb_update_type
-    mov ax, [cs:dos_mem_alloc_seg2]
-    clc
-    ret
-.no_memory_b2:
-.both_busy:
-    mov si, bx
-    cmp word [cs:dos_mem_alloc_size3], 0
-    jne .alloc_bump_from_psp
-    cmp word [cs:dos_mem_psp_free_size], 0
-    je .both_busy_refresh
-    cmp bx, [cs:dos_mem_psp_free_size]
-    ja .both_busy_fail
-    jmp .alloc_slot3_from_psp
-
-.both_busy_refresh:
-    push es
-    mov ax, [cs:current_psp_seg]
-    or ax, ax
-    jz .both_busy_refresh_done
-    mov es, ax
-    mov ax, [es:0x0002]
-    cmp ax, DOS_HEAP_LIMIT_SEG
-    jae .both_busy_refresh_done
-    cmp ax, DOS_HEAP_BASE_SEG
-    jae .both_busy_from_psp_end
-    mov ax, DOS_HEAP_USER_SEG
-    jmp .both_busy_base_ready
-.both_busy_from_psp_end:
-    inc ax
-.both_busy_base_ready:
-    mov [cs:dos_mem_psp_free_seg], ax
-    mov dx, DOS_HEAP_LIMIT_SEG
-    sub dx, ax
-    mov [cs:dos_mem_psp_free_size], dx
-.both_busy_refresh_done:
-    pop es
-    cmp word [cs:dos_mem_psp_free_size], 0
-    je .both_busy_fail
-    cmp bx, [cs:dos_mem_psp_free_size]
-    ja .both_busy_fail
-    jmp .alloc_slot3_from_psp
-
-.alloc_slot3_from_psp:
-    mov [cs:dos_mem_alloc_size3], bx
-    call int21_mem_carve_psp_tail
-    mov [cs:dos_mem_alloc_seg3], ax
-
-    push es
-    push ax
-    push bx
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-    pop bx
-    pop ax
-    call int21_mem_current_owner
-    mov [es:0x0001], ax
-    mov [es:0x0003], bx
-    pop es
-    call int21_mem_write_psp_free_mcb
-    mov ax, [cs:dos_mem_alloc_seg3]
-    clc
-    ret
-
-.alloc_bump_from_psp:
-    cmp word [cs:dos_mem_psp_free_size], 0
-    je .both_busy_refresh_bump
-.alloc_bump_check:
-    cmp bx, [cs:dos_mem_psp_free_size]
-    ja .both_busy_fail
-    call int21_mem_carve_psp_tail
-
-    push es
-    push ax
-    push bx
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-    pop bx
-    pop ax
-    mov dx, ax
-    call int21_mem_current_owner
-    mov [es:0x0001], ax
-    mov [es:0x0003], bx
-    pop es
-    call int21_mem_write_psp_free_mcb
-    mov ax, dx
-    clc
-    ret
-.both_busy_refresh_bump:
-    push es
-    mov ax, [cs:current_psp_seg]
-    or ax, ax
-    jz .both_busy_refresh_bump_done
-    mov es, ax
-    mov ax, [es:0x0002]
-    cmp ax, DOS_HEAP_LIMIT_SEG
-    jae .both_busy_refresh_bump_done
-    cmp ax, DOS_HEAP_BASE_SEG
-    jae .bump_from_psp_end
-    mov ax, DOS_HEAP_USER_SEG
-    jmp .bump_base_ready
-.bump_from_psp_end:
-    inc ax
-.bump_base_ready:
-    mov [cs:dos_mem_psp_free_seg], ax
-    mov dx, DOS_HEAP_LIMIT_SEG
-    sub dx, ax
-    mov [cs:dos_mem_psp_free_size], dx
-.both_busy_refresh_bump_done:
-    pop es
-    cmp word [cs:dos_mem_psp_free_size], 0
-    je .both_busy_fail
-    jmp .alloc_bump_check
-
-.both_busy_fail:
-    call int21_mem_largest_global
-    mov ax, 0x0008
-    stc
     ret
 
 .no_memory:
-    mov bx, cx
+    call int21_mem_largest_global
     mov ax, 0x0008
     stc
     ret
@@ -6854,108 +7640,16 @@ int21_free:
     cmp ax, DOS_ENV_SEG
     je .env_static_ok
 
-    cmp word [cs:dos_mem_alloc_size], 0
-    je .invalid
-    cmp ax, [cs:dos_mem_alloc_seg]
-    je .free_block1
-    ; check block 2
-    cmp ax, [cs:dos_mem_alloc_seg2]
-    jne .check_block3
-    mov word [cs:dos_mem_alloc_seg2], 0
-    mov word [cs:dos_mem_alloc_size2], 0
-    ; restore block1 MCB type to 'Z' (now last block)
-    push es
-    mov ax, [cs:dos_mem_alloc_seg]
-    dec ax
-    mov es, ax
-    mov byte [es:0x0000], 'Z'
-    pop es
-    mov al, 'M'
-    call int21_psp_mcb_update_type
+    call int21_mem_table_find_exact
+    jc .invalid_real
+    mov word [cs:dos_mem_block_table + si + 4], 0
+    mov word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_FREE
+    call int21_mem_table_clear_if_no_alloc
+    call int21_mem_sync_legacy
+    call int21_mem_rebuild_chain
     xor ax, ax
     clc
     ret
-.check_block3:
-    cmp ax, [cs:dos_mem_alloc_seg3]
-    jne .invalid
-    mov word [cs:dos_mem_alloc_seg3], 0
-    mov word [cs:dos_mem_alloc_size3], 0
-    xor ax, ax
-    clc
-    ret
-.free_block1:
-    cmp word [cs:dos_mem_alloc_size2], 0
-    je .free_block1_clear
-
-    mov ax, [cs:dos_mem_alloc_seg2]
-    mov [cs:dos_mem_alloc_seg], ax
-    mov ax, [cs:dos_mem_alloc_size2]
-    mov [cs:dos_mem_alloc_size], ax
-    mov word [cs:dos_mem_alloc_seg2], 0
-    mov word [cs:dos_mem_alloc_size2], 0
-    call int21_mem_current_owner
-    mov [cs:dos_mem_mcb_owner], ax
-    mov ax, [cs:dos_mem_alloc_size]
-    mov [cs:dos_mem_mcb_size], ax
-    call int21_mem_write_mcb
-    mov al, 'M'
-    call int21_psp_mcb_update_type
-    xor ax, ax
-    clc
-    ret
-
-.free_block1_clear:
-
-    xor ax, ax
-    mov [cs:dos_mem_alloc_seg], ax
-    mov [cs:dos_mem_alloc_size], ax
-    mov [cs:dos_mem_mcb_owner], ax
-    mov word [cs:dos_mem_mcb_size], DOS_HEAP_USER_MAX_PARAS
-    call int21_mem_write_mcb
-    mov al, 'Z'
-    call int21_psp_mcb_update_type
-    xor ax, ax
-    clc
-    ret
-.invalid:
-    mov ax, es
-    cmp ax, DOS_HEAP_USER_SEG
-    jb .invalid_real
-    cmp ax, MZ3_LOAD_SEG
-    jae .invalid_real
-    push bx
-    push cx
-    push dx
-    push es
-    dec ax
-    mov es, ax
-    mov cx, [es:0x0003]
-    pop es
-    mov dx, es
-    add dx, cx
-    mov bx, [cs:dos_mem_psp_free_seg]
-    dec bx
-    cmp dx, bx
-    jne .bump_free_invalid
-    mov ax, es
-    mov [cs:dos_mem_psp_free_seg], ax
-    add cx, [cs:dos_mem_psp_free_size]
-    inc cx
-    mov [cs:dos_mem_psp_free_size], cx
-    call int21_mem_write_psp_free_mcb
-.bump_free_done:
-    pop dx
-    pop cx
-    pop bx
-    xor ax, ax
-    clc
-    ret
-
-.bump_free_invalid:
-    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
-    je .bump_free_done
-    add sp, 6
-    jmp .invalid_real
 
 .invalid_real:
     mov ax, 0x0009
@@ -6983,138 +7677,69 @@ int21_resize:
     cmp bx, 0
     je .no_memory
 
-    mov dx, DOS_HEAP_LIMIT_SEG
+    mov [cs:dos_mem_block_req_size], bx
+    mov bx, ax
+    call int21_mem_table_next_limit
+    mov si, dx
     sub dx, ax
+    cmp si, DOS_HEAP_LIMIT_SEG
+    je .psp_limit_ready
+    dec dx
+.psp_limit_ready:
+    mov bx, [cs:dos_mem_block_req_size]
     cmp bx, dx
     ja .psp_no_memory
 
-    cmp word [cs:dos_mem_alloc_size], 0
-    je .resize_psp_commit
-    mov dx, ax
-    add dx, bx
-    cmp dx, [cs:dos_mem_alloc_seg]
-    ja .psp_overlap
-.resize_psp_commit:
     mov si, ax
     add si, bx
-    mov dx, DOS_HEAP_LIMIT_SEG
     push ax
     push bx
-    mov [es:0x0002], dx
-    mov word [cs:dos_mem_psp_free_seg], 0
-    mov word [cs:dos_mem_psp_free_size], 0
+    mov [cs:dos_mem_psp_mcb_end], si
+    mov word [es:0x0002], DOS_HEAP_LIMIT_SEG
+    call int21_mem_sync_legacy
     mov al, 'Z'
-    cmp word [cs:dos_mem_alloc_size], 0
-    je .psp_tail_check
+    cmp byte [cs:dos_mem_block_count], 0
+    je .psp_type_ready
     mov al, 'M'
-.psp_tail_check:
-    inc si
-    cmp si, DOS_HEAP_LIMIT_SEG
-    jae .psp_type_ready
-    mov [cs:dos_mem_psp_free_seg], si
-    mov ax, DOS_HEAP_LIMIT_SEG
-    sub ax, si
-    mov [cs:dos_mem_psp_free_size], ax
-    mov al, 'M'
-    call int21_mem_write_psp_free_mcb
 .psp_type_ready:
     call int21_psp_mcb_update_type
+    call int21_mem_rebuild_chain
     pop bx
     pop ax
     mov ax, es
     clc
     ret
 
-.psp_overlap:
-    mov bx, [cs:dos_mem_alloc_seg]
-    mov ax, es
-    sub bx, ax
-    mov ax, 0x0008
-    stc
-    ret
-
 .psp_no_memory:
-    mov bx, DOS_HEAP_LIMIT_SEG
     mov ax, es
-    sub bx, ax
+    mov bx, ax
+    call int21_mem_table_next_limit
+    mov si, dx
+    sub dx, ax
+    cmp si, DOS_HEAP_LIMIT_SEG
+    je .psp_no_mem_limit_ready
+    dec dx
+.psp_no_mem_limit_ready:
+    mov bx, dx
     mov ax, 0x0008
     stc
     ret
 
 .check_heap_block:
-
-    cmp word [cs:dos_mem_alloc_size], 0
-    je .invalid
-    mov ax, es
-    cmp ax, [cs:dos_mem_alloc_seg]
-    je .resize_block1
-    ; check block2
-    cmp ax, [cs:dos_mem_alloc_seg2]
-    jne .check_block3_resize
     cmp bx, 0
     je .no_memory
-    mov dx, DOS_HEAP_LIMIT_SEG
-    cmp word [cs:dos_mem_alloc_size3], 0
-    je .block2_have_limit
-    mov dx, [cs:dos_mem_alloc_seg3]
-.block2_have_limit:
-    sub dx, ax
-    cmp bx, dx
-    ja .block2_no_memory
-    mov [cs:dos_mem_alloc_size2], bx
-    push es
-    push ax
-    dec ax
-    mov es, ax
-    call int21_mem_current_owner
-    mov [es:0x0001], ax
-    mov [es:0x0003], bx
-    pop ax
-    pop es
-    xor dx, dx
+    mov [cs:dos_mem_block_req_size], bx
     mov ax, es
-    clc
-    ret
-.check_block3_resize:
-    cmp ax, [cs:dos_mem_alloc_seg3]
-    jne .invalid
-    cmp bx, 0
-    je .no_memory
-    mov dx, DOS_HEAP_LIMIT_SEG
-    sub dx, ax
-    cmp bx, dx
-    ja .block2_no_memory
-    mov [cs:dos_mem_alloc_size3], bx
-    push es
-    push ax
-    dec ax
-    mov es, ax
-    call int21_mem_current_owner
-    mov [es:0x0001], ax
-    mov [es:0x0003], bx
-    pop ax
-    pop es
-    xor dx, dx
+    call int21_mem_table_find_exact
+    jc .invalid
     mov ax, es
-    clc
-    ret
-.resize_block1:
-    cmp bx, 0
-    je .no_memory
-    mov dx, DOS_HEAP_LIMIT_SEG
-    cmp word [cs:dos_mem_alloc_size2], 0
-    je .block1_have_limit
-    mov dx, [cs:dos_mem_alloc_seg2]
-.block1_have_limit:
-    sub dx, ax
+    call int21_mem_table_resize_limit
+    mov bx, [cs:dos_mem_block_req_size]
     cmp bx, dx
-    ja .block1_no_memory
-
-    mov [cs:dos_mem_alloc_size], bx
-    call int21_mem_current_owner
-    mov [cs:dos_mem_mcb_owner], ax
-    mov [cs:dos_mem_mcb_size], bx
-    call int21_mem_write_mcb
+    ja .block_no_memory
+    call int21_mem_table_resize_at_si
+    call int21_mem_sync_legacy
+    call int21_mem_rebuild_chain
     xor dx, dx
     mov ax, es
     clc
@@ -7152,13 +7777,7 @@ int21_resize:
     stc
     ret
 
-.block1_no_memory:
-    mov bx, dx
-    mov ax, 0x0008
-    stc
-    ret
-
-.block2_no_memory:
+.block_no_memory:
     mov bx, dx
     mov ax, 0x0008
     stc
@@ -14209,6 +14828,8 @@ int10_handler:
 int15_handler:
     push bp
     mov bp, sp
+    cmp ah, 0x88
+    je .extmem_88
     cmp ah, 0xC2
     jne .chain
 
@@ -14227,6 +14848,12 @@ int15_handler:
     cmp al, 0x07
     je .set_handler
     jmp .unsupported
+
+.extmem_88:
+    mov ax, [cs:xms_free_kb]
+    and word [ss:bp + 6], 0xFFFE
+    pop bp
+    iret
 
 .enable_disable:
     cmp bh, 0
@@ -14956,6 +15583,7 @@ int21_return_es db 0
 int2f_installed db 0
 dos_default_drive db 0
 dos_verify_flag db 0
+dos_ctrl_break_flag db 0
 last_exit_code db 0
 int21_last_ah db 0
 int21_last_al db 0
@@ -15171,12 +15799,24 @@ dos_mem_alloc_seg dw 0
 dos_mem_alloc_size dw 0
 dos_mem_psp_free_seg dw 0
 dos_mem_psp_free_size dw 0
+dos_mem_psp_mcb_end dw 0
+dos_mem_free2_seg dw 0
+dos_mem_free2_size dw 0
 dos_mem_alloc_seg2 dw 0
 dos_mem_alloc_size2 dw 0
 dos_mem_alloc_seg3 dw 0
 dos_mem_alloc_size3 dw 0
 dos_mem_mcb_owner dw 0
 dos_mem_mcb_size dw 0
+dos_mem_strategy dw 0
+dos_mem_block_count db 0
+dos_mem_block_table times DOS_MEM_BLOCK_TABLE_MAX * DOS_MEM_BLOCK_ENTRY_SIZE db 0
+dos_mem_block_tmp_seg dw 0
+dos_mem_block_tmp_size dw 0
+dos_mem_block_tmp_owner dw 0
+dos_mem_block_tmp_state dw 0
+dos_mem_block_found_owner dw 0
+dos_mem_block_req_size dw 0
 dos21_test_seg dw 0
 saved_ss dw 0
 saved_sp dw 0
@@ -15293,7 +15933,7 @@ msg_streamc_serial_fail db "[STREAMC-SERIAL] FAIL", 13, 10, 0
 
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db "CiukiOS pre-Alpha v0.5.4 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.6.1 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 16
 msg_shell_status db "Type Help for commands.", 0
 msg_shell_cpu_prefix db "CPU:", 0

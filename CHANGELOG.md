@@ -3,7 +3,10 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task must update the `Unreleased` section unless the task is a release cut that creates a new version section.
 
-## Unreleased (2026-05-03)
+## Unreleased (2026-05-04)
+No unreleased changes yet.
+
+## pre-Alpha v0.6.1 (2026-05-04)
 1. Added a full-profile DOOM taxonomy harness and Makefile target to classify launch progress stages deterministically.
 2. Added local-only DOOM payload packaging in the full image build lane and guarded proprietary assets from publication.
 3. Fixed INT 21h MZ loading to use header-declared module size, removing the previous 4B:08 launch failure and advancing DOOM to extender startup diagnostics.
@@ -12,15 +15,24 @@ This changelog is intentionally concise. Every completed task must update the `U
 6. Synchronized project documentation to reflect installer-lane closure while keeping the runtime/DOOM lane active.
 7. Improved README changelog visibility and updated local agent directives to require a `CHANGELOG.md` update for every completed task.
 8. Advanced the DOOM taxonomy harness to boot the full profile interactively, invoke `DRVLOAD.COM`, and launch `DOOM.EXE`, adding a deterministic `doom_exec_attempted` stage before extender/video/menu gates.
-9. Advanced DOOM runtime coverage to `extender_init` by adding an MZ transfer stage, FAT16 32-bit seek/read file positions, real handle duplication for DOS extender loaders, and DOOM-specific environment executable path handling; DOS/16M tstack blocker resolved in item 10.
-10. Fixed DOS/16M conventional-memory bring-up for DOOM by repairing the INT 21h MCB arena and setting PSP:0002 to `DOS_HEAP_LIMIT_SEG` on resize success; the tstack error is absent and taxonomy reaches `extender_init`.
-11. Added a full-profile DOOM loader fallback for `DOOM.ETX` self-reopens, preserved PSP free-tail allocation state while keeping DOS/16M-compatible PSP limits, and implemented XMS `move_emb` via BIOS INT 15h AH=87h; current DOOM validation advances past file/memory/tstack failures and blocks after MZ transfer before video init.
+9. Advanced DOOM runtime coverage by adding an MZ transfer stage, FAT16 32-bit seek/read file positions, real handle duplication for DOS extender loaders, and DOOM-specific environment executable path handling; stricter taxonomy in item 13 now separates DOS/16M banner detection from the remaining `tstack` blocker.
+10. Improved DOS/16M conventional-memory bring-up for DOOM by repairing the INT 21h MCB arena and setting PSP:0002 to `DOS_HEAP_LIMIT_SEG` on resize success; later stricter taxonomy in item 13 reclassifies the remaining `tstack` allocation error as still open.
+11. Added a full-profile DOOM loader fallback for `DOOM.ETX` self-reopens, preserved PSP free-tail allocation state while keeping DOS/16M-compatible PSP limits, and implemented XMS `move_emb` via BIOS INT 15h AH=87h; intermediate stricter DOOM validation blocked at DOS/16M `tstack` after MZ transfer and before video init.
+12. Rebuilt the full-profile INT 21h MCB arena from an ordered chain source after allocation, free, and resize operations: PSP MCB sizing remains separate from compatibility `PSP:0002`, heap resize limits preserve adjacent MCB headers, invisible bump allocations are disabled, PSP resize no longer relocates caller-owned blocks, and post-block2 free gaps are allocatable by slot3.
+13. Tightened the DOOM taxonomy harness so DOS/16M `tstack` allocation errors fail `extender_init` instead of producing a false extender pass, and added persistent INT 21h AH=58h memory-strategy get/set state; intermediate DOOM validation was honestly classified as blocked at DOS/16M `tstack` before `video_init`.
+14. Aligned full-profile MZ process memory setup closer to DOS semantics by sizing the initial PSP block from MZ minalloc/maxalloc, keeping PSP:0002 as the compatible top-of-memory value while tracking the real MCB end internally, and reserving the below-heap MCB gap; intermediate diagnostics showed DOS/16M AH=4Ah/48h/4Ah calls succeeding while the runtime still reported the tstack blocker before video_init.
+15. Introduced a compact ordered DOS memory block table to drive MCB chain rebuild, next-allocation scanning, and largest-gap reporting, and persisted the low free gap exposed by AH=49 block promotion so AH=48 can consume it; full and stage1 smoke lanes remained green during this intermediate step while DOOM taxonomy still failed honestly at DOS/16M tstack.
+
+16. Converted INT 21h AH=48h/49h/4Ah memory mutation to the ordered DOS memory block table as the allocator source of truth, including reusable FREE entries, legacy mirror synchronization, and allocator register preservation; full and stage1 lanes passed, while fresh DOOM taxonomy reached MZ transfer without the prior tstack marker but still lacked an extender marker at that point.
+17. Fixed INT 21h AH=33h Ctrl-Break get/set compatibility so DOS/4G can preserve AH across its get-then-set sequence instead of accidentally invoking AH=00 terminate, removed the stale `DOOM.ETX` to `DOOM.EXE` path rewrite, and tightened taxonomy to fail DOS/16M executable-validation errors; DOOM now advances past the immediate return-to-prompt path and blocks honestly on `not a DOS/16M executable`.
+18. Fixed FAT16 INT 21h read/seek return-value preservation across handle-slot swaps so DOS/4GW sees correct `AX` byte counts and 32-bit seek positions, expanded the ordered MCB table to 16 entries for DOOM's later runtime allocations, and updated the DOOM taxonomy launch to run from `\APPS\DOOM` with DOS4GW/video markers; full-profile DOOM taxonomy now reaches `video_init=PASS`.
+19. Added a full-profile DOOM visual taxonomy lane using QEMU `-display none` and optional monitor `screendump` capture, removed the false `M_Init` menu marker, and captured post-status-bar gameplay evidence at `build/full/doom_post_status_after_marker_fix.png`; serial taxonomy remains honest at `video_init=PASS` with `menu_reached=DEFERRED`.
+20. Closed the Phase 4 DOOM gameplay playable milestone and bumped the public project version to `CiukiOS pre-Alpha v0.6.1`; manual owner validation confirms DOOM is playable on the generated full-profile image.
 
 ## pre-Alpha v0.5.4 (2026-05-01)
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.
 2. Stabilized FAT16 shell footer telemetry (`CPU/DSK/RAM`) with corrected non-stuck stat refresh behavior.
 3. Revalidated cross-profile build and regression lanes on floppy (FAT12) and full (FAT16) profiles.
-
 ## pre-Alpha v0.5.3 (2026-04-30)
 1. Stabilized shell `move/mv` path-command handling across floppy (FAT12) and full (FAT16) runtime profiles.
 2. Fixed `INT 21h AH=56h` rename/move behavior to preserve deterministic DOS file-move semantics.
