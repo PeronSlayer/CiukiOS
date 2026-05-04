@@ -175,8 +175,8 @@ print_prompt:
     mov si, msg_prompt_prefix
     call print_string_dual
     ; Print drive letter
-    mov al, [boot_drive]
-    call helper_get_drive_letter
+    mov al, [dos_default_drive]
+    add al, 0x41
     call putc_dual
     ; Print ":"
     mov al, 0x3A
@@ -405,6 +405,14 @@ int21_handler:
     mov bp, sp
     mov ax, [ss:bp + 20]
     mov [cs:int21_trace_call_cs], ax
+    push bx
+    mov bx, cs
+    mov byte [cs:int21_path_upcase], 0
+    cmp ax, bx
+    je .path_case_ready
+    mov byte [cs:int21_path_upcase], 1
+.path_case_ready:
+    pop bx
     mov ax, ds
     mov [cs:int21_caller_ds], ax
     pop ax
@@ -1245,6 +1253,7 @@ int21_handler:
 .set_carry:
     or word [bp + 20], 0x0001
 .restore:
+    mov byte [cs:int21_path_upcase], 0
     pop es
     pop ds
     pop bp
@@ -1301,9 +1310,27 @@ int21_smoke_test:
     jne .fail
 
     xor dx, dx
+    mov dl, [cs:dos_default_drive]
     mov ah, 0x0E
     int 0x21
     jc .fail
+
+    xor dx, dx
+    mov ah, 0x36
+    int 0x21
+    jc .fail
+
+%if FAT_TYPE == 16
+    mov dl, 3
+    mov ah, 0x36
+    int 0x21
+    jc .fail
+
+    mov dl, 4
+    mov ah, 0x36
+    int 0x21
+    jc .fail
+%endif
 
     mov dx, path_root_dos
     mov ah, 0x3B
@@ -2397,10 +2424,10 @@ int21_code_page:
 
 int21_set_default_drive:
 %if FAT_TYPE == 16
-    cmp dl, 2
+    cmp dl, 3
     ja .invalid
     mov [cs:dos_default_drive], dl
-    mov al, 3
+    mov al, 4
     xor ah, ah
     clc
     ret
@@ -2515,8 +2542,15 @@ int21_ctrl_break:
 int21_get_free_space:
     cmp dl, 0
     je .ok
+%if FAT_TYPE == 16
+    cmp dl, 3
+    je .ok
+    cmp dl, 4
+    je .ok
+%else
     cmp dl, 1
     je .ok
+%endif
     mov ax, 0xFFFF
     stc
     ret
@@ -3808,7 +3842,10 @@ int21_path_to_fat_pattern:
     jae .name_advance
     cmp al, '?'
     je .name_qmark
+    cmp byte [cs:int21_path_upcase], 0
+    je .name_store
     call int21_upcase_al
+.name_store:
     mov [es:find_pattern + bx], al
     inc bx
     jmp .name_advance
@@ -3869,7 +3906,10 @@ int21_path_to_fat_pattern:
     jae .ext_advance
     cmp al, '?'
     je .ext_qmark
+    cmp byte [cs:int21_path_upcase], 0
+    je .ext_store
     call int21_upcase_al
+.ext_store:
     mov [es:find_pattern + 8 + bx], al
     inc bx
     jmp .ext_advance
@@ -8248,7 +8288,10 @@ int21_path_to_fat_name:
     je .next_component
     cmp bx, 8
     jae .name_advance
+    cmp byte [cs:int21_path_upcase], 0
+    je .name_store
     call int21_upcase_al
+.name_store:
     mov [es:path_fat_name + bx], al
     inc bx
 .name_advance:
@@ -8287,7 +8330,10 @@ int21_path_to_fat_name:
     je .next_component
     cmp bx, 3
     jae .ext_advance
+    cmp byte [cs:int21_path_upcase], 0
+    je .ext_store
     call int21_upcase_al
+.ext_store:
     mov [es:path_fat_name + 8 + bx], al
     inc bx
 .ext_advance:
@@ -10610,6 +10656,10 @@ dispatch_command:
     call str_eq
     jc .cmd_pwd
     mov di, bx
+    mov si, str_woof
+    call str_eq
+    jc .cmd_cd
+    mov di, bx
     mov si, str_cdup
     call str_eq
     jc .cmd_cdup
@@ -10959,6 +11009,7 @@ read_command_line:
 .read_key:
 %if FAT_TYPE == 16
     call shell_footer_poll
+    inc word [cs:shell_footer_loop_count]
 %endif
     mov ah, 0x01
     int 0x16
@@ -11941,13 +11992,62 @@ shell_append_exec_extension:
     ret
 
 shell_exec_buffer_path:
+    ; Save CWD before exec so it can be restored after program exits
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push cs
+    pop es
+    mov si, cwd_buf
+    mov di, shell_exec_saved_cwd_buf
+    mov cx, 24
+    rep movsb
+    mov ax, [cs:cwd_cluster]
+    mov [cs:shell_exec_saved_cwd_cluster], ax
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ; Run the program
     push bx
     mov dx, shell_exec_path_buf
     xor bx, bx
     mov ax, 0x4B00
     int 0x21
-
     pop bx
+    jc .exec_failed
+    ; Exec succeeded: restore CWD to pre-exec state
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push cs
+    pop es
+    mov si, shell_exec_saved_cwd_buf
+    mov di, cwd_buf
+    mov cx, 24
+    rep movsb
+    mov ax, [cs:shell_exec_saved_cwd_cluster]
+    mov [cs:cwd_cluster], ax
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ; Clear screen and redraw shell chrome
+    push ax
+    mov ax, 0x0003
+    int 0x10
+    call draw_shell_chrome
+    pop ax
+    clc
+    ret
+.exec_failed:
+    stc
     ret
 
 shell_try_resolve_exec_token:
@@ -13430,30 +13530,8 @@ shell_update_footer:
     mov bl, 0x30
     call video_write_char_attr
 
-    mov ax, [cs:dos_mem_alloc_size]
-    add ax, [cs:dos_mem_alloc_size2]
-    add ax, [cs:dos_mem_alloc_size3]
-    cmp ax, 0
-    jne .ram_from_alloc
-
     call int21_mem_query_free
     mov ax, cx
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    mov bx, ax
-
-    int 0x12
-    sub ax, bx
-    jnc .ram_ready
-    xor ax, ax
-    jmp .ram_ready
-
-.ram_from_alloc:
-    add ax, 63
     shr ax, 1
     shr ax, 1
     shr ax, 1
@@ -13476,7 +13554,7 @@ shell_update_footer:
     jmp .len_loop
 
 .len_ready:
-    mov dl, 75
+    mov dl, 74
     sub dl, cl
 
     mov si, msg_shell_ram_prefix
@@ -13486,7 +13564,7 @@ shell_update_footer:
 
     mov si, shell_footer_ram_buf
     mov dh, 24
-    add dl, 4
+    add dl, 5
     mov bl, 0x30
     call video_write_string_attr
 
@@ -13544,20 +13622,11 @@ shell_footer_poll:
     cmp dx, [cs:shell_footer_last_tick]
     je .done
 
+    ; Update key cooldown used by disk refresh rate logic
     cmp byte [cs:shell_footer_tick_key_activity], 0
-    jne .tick_busy
-    cmp word [cs:shell_footer_cpu_idle_ticks], 0xFFFF
-    je .tick_counted
-    inc word [cs:shell_footer_cpu_idle_ticks]
-    jmp .tick_counted
-
-.tick_busy:
+    je .no_key_this_tick
     mov byte [cs:shell_footer_key_cooldown], SHELL_FOOTER_KEY_COOLDOWN_TICKS
-    cmp word [cs:shell_footer_cpu_busy_ticks], 0xFFFF
-    je .tick_counted
-    inc word [cs:shell_footer_cpu_busy_ticks]
-
-.tick_counted:
+.no_key_this_tick:
     mov byte [cs:shell_footer_tick_key_activity], 0
     mov [cs:shell_footer_last_tick], dx
 
@@ -13567,14 +13636,6 @@ shell_footer_poll:
 
 .cooldown_counted:
 
-    mov ax, [cs:shell_footer_cpu_idle_ticks]
-    add ax, [cs:shell_footer_cpu_busy_ticks]
-    cmp ax, 120
-    jb .recompute
-    shr word [cs:shell_footer_cpu_idle_ticks], 1
-    shr word [cs:shell_footer_cpu_busy_ticks], 1
-
-.recompute:
     call shell_footer_compute_cpu_pct
     call shell_footer_maybe_refresh_disk
     call shell_update_footer
@@ -13591,21 +13652,31 @@ shell_footer_compute_cpu_pct:
     push bx
     push dx
 
-    mov ax, [cs:shell_footer_cpu_idle_ticks]
-    add ax, [cs:shell_footer_cpu_busy_ticks]
-    cmp ax, 0
-    jne .have_total
-    mov byte [cs:shell_footer_cpu_pct], 0
-    jmp .done
+    ; Read and reset per-tick idle loop counter
+    mov ax, [cs:shell_footer_loop_count]
+    mov word [cs:shell_footer_loop_count], 0
 
-.have_total:
-    mov bx, ax
-    mov ax, [cs:shell_footer_cpu_busy_ticks]
-    mov dx, 99
+    ; Update high watermark of idle loops per tick
+    cmp ax, [cs:shell_footer_max_loop]
+    jbe .no_max_update
+    mov [cs:shell_footer_max_loop], ax
+.no_max_update:
+
+    ; CPU% = (max - current) * 100 / max
+    ; High loop count (idle tick) -> low CPU%; low count (busy) -> high CPU%
+    mov bx, [cs:shell_footer_max_loop]
+    sub bx, ax
+    jnc .compute
+    xor bx, bx         ; underflow guard
+.compute:
+    mov ax, bx
+    mov dx, 100
     mul dx
-    add ax, bx
-    dec ax
+    mov bx, [cs:shell_footer_max_loop]
     div bx
+    cmp ax, 99
+    jbe .store
+    mov ax, 99
 
 .store:
     mov [cs:shell_footer_cpu_pct], al
@@ -15626,6 +15697,7 @@ int21_last_ah db 0
 int21_last_al db 0
 int21_error_ax dw 0
 int21_trace_call_cs dw 0
+int21_path_upcase db 0
 dos_time_centis db 0
 last_term_type db 0
 int21_force_terminate db 0
@@ -15975,7 +16047,7 @@ msg_banner_title db "CiukiOS pre-Alpha v0.6.1 (CiukiDOS Shell)", 0
 msg_shell_status db "Type Help for commands.", 0
 msg_shell_cpu_prefix db "CPU:", 0
 msg_shell_dsk_prefix db "DSK:", 0
-msg_shell_ram_prefix db "RAM:", 0
+msg_shell_ram_prefix db "FREE:", 0
 %endif
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
@@ -15983,7 +16055,7 @@ msg_shell_sysinfo_prefix db "RAM:", 0
 msg_help_header db "Commands (help short|all)", 13, 10, 0
 msg_help_core db "  help - Guide.", 13, 10, "  ver - Version.", 13, 10, "  cls - Clear.", 13, 10, 0
 msg_help_runtime db "  which/where - Resolve.", 13, 10, "  pwd - Cwd.", 13, 10, "  dir - List.", 13, 10, 0
-msg_help_system db "  cd/cd.. - Chdir.", 13, 10, "  run - Execute.", 13, 10, "  help all - Full list.", 13, 10, 0
+msg_help_system db "  cd/woof/cd.. - Chdir.", 13, 10, "  run - Execute.", 13, 10, "  help all - Full list.", 13, 10, 0
 msg_help_apps db "  reboot - Reboot.", 13, 10, "  exit - Restart.", 13, 10, 0
 msg_help_all db "  ticks - T. drive/drives - D. dos21 - S.", 13, 10, "  comdemo - C. mzdemo - M. fileio - F. gfxdemo - G.", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
@@ -16048,6 +16120,7 @@ str_drive  db "drive", 0
 str_drives db "drives", 0
 str_dir    db "dir", 0
 str_pwd    db "pwd", 0
+str_woof   db "woof", 0
 str_cd     db "cd", 0
 str_cdup   db "cd..", 0
 str_copy   db "copy", 0
@@ -16093,6 +16166,7 @@ shell_builtin_name_table:
     dw str_drives
     dw str_dir
     dw str_pwd
+    dw str_woof
     dw str_cdup
     dw str_cd
     dw str_copy
@@ -16159,11 +16233,13 @@ cwd_buf times 24 db 0
 cwd_cluster dw 0
 shell_saved_cwd_buf times 24 db 0
 shell_saved_cwd_cluster dw 0
+shell_exec_saved_cwd_buf times 24 db 0
+shell_exec_saved_cwd_cluster dw 0
 %if FAT_TYPE == 16
 shell_footer_ram_buf times 6 db 0
 shell_footer_pct_buf times 3 db 0
-shell_footer_cpu_idle_ticks dw 0
-shell_footer_cpu_busy_ticks dw 0
+shell_footer_loop_count dw 0
+shell_footer_max_loop dw 1
 shell_footer_last_tick dw 0xFFFF
 shell_footer_dsk_last_scan_tick dw 0
 shell_footer_tick_key_activity db 0

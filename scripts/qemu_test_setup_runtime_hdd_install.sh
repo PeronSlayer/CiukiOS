@@ -88,15 +88,15 @@ send_key() {
 }
 
 send_setup_command() {
-  send_key s
-  send_key e
-  send_key t
-  send_key u
-  send_key p
+  send_key shift-s
+  send_key shift-e
+  send_key shift-t
+  send_key shift-u
+  send_key shift-p
   send_key dot
-  send_key c
-  send_key o
-  send_key m
+  send_key shift-c
+  send_key shift-o
+  send_key shift-m
   send_key ret
 }
 

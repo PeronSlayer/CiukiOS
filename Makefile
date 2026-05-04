@@ -1,10 +1,12 @@
-.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
 	@echo "  make build-floppy     - build floppy profile scaffold"
 	@echo "  make build-full       - build full profile scaffold"
 	@echo "  make build-full-cd    - build full-profile bootable CD image"
+	@echo "  make qemu-run-full-cd - boot the Live/install CD in visual QEMU"
+	@echo "  make qemu-test-full-cd - smoke test the Live/install CD D: prompt"
 	@echo "  make verify-full-drivers-payload - verify full-profile driver payload"
 	@echo "  make qemu-test-floppy - build + QEMU smoke test (floppy image)"
 	@echo "  make qemu-test-stage1 - interactive Stage1 regression (DOS21 + COM/MZ + file I/O)"
@@ -12,6 +14,7 @@ help:
 	@echo "  make qemu-test-full-stage1 - full-profile Stage1 selftest regression"
 	@echo "  make qemu-test-full-doom-taxonomy - classify DOOM full-profile taxonomy stages"
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
+	@echo "  make qemu-test-full-shell-stability - run full-profile shell stability test"
 	@echo "  make qemu-test-setup-full-acceptance - run setup full-profile acceptance test"
 	@echo "  make qemu-test-setup-installer-scenarios - run setup installer scenario tests"
 	@echo "  make qemu-test-setup-hdd-install - create and boot a disposable full-profile HDD install image"
@@ -32,6 +35,12 @@ build-full-cd:
 verify-full-drivers-payload:
 	@bash scripts/verify_full_drivers_payload.sh
 
+qemu-run-full-cd:
+	@bash scripts/qemu_run_full_cd.sh
+
+qemu-test-full-cd:
+	@bash scripts/qemu_run_full_cd.sh --test
+
 qemu-test-floppy:
 	@bash scripts/qemu_test_floppy.sh
 
@@ -49,6 +58,9 @@ qemu-test-full-doom-taxonomy:
 
 qemu-test-full-drvload-smoke:
 	@bash scripts/qemu_test_full_drvload_smoke.sh
+
+qemu-test-full-shell-stability:
+	@bash scripts/qemu_test_full_shell_stability.sh
 
 qemu-test-setup-full-acceptance:
 	@bash scripts/qemu_test_setup_full_acceptance.sh

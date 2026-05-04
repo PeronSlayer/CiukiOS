@@ -208,7 +208,7 @@ send_text_and_enter() {
       '/') key="slash" ;;
       '\\') key="backslash" ;;
       '-') key="minus" ;;
-      [A-Z]) key="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')" ;;
+      [A-Z]) key="shift-$(printf '%s' "$ch" | tr 'A-Z' 'a-z')" ;;
       [a-z0-9]) key="$ch" ;;
       *) continue ;;
     esac
@@ -459,7 +459,7 @@ run_setup_case() {
     mark_fail "${case_id}_PROMPT" "$prompt_detail"
   fi
 
-  send_text_and_enter "$mon_sock" "$cmd_log" "setup.com" || mark_fail "${case_id}_SETUP_CMD" "cannot send setup command"
+  send_text_and_enter "$mon_sock" "$cmd_log" "SETUP.COM" || mark_fail "${case_id}_SETUP_CMD" "cannot send setup command"
 
   wait_for_regex "$serial_log" 'Press Enter to continue or Esc to abort\.|aabboorrtt\.' 40 || mark_fail "${case_id}_WELCOME" "welcome prompt not detected"
   send_key "$mon_sock" "$cmd_log" ret || mark_fail "${case_id}_WELCOME_KEY" "cannot send Enter"

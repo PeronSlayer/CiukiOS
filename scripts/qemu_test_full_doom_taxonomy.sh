@@ -279,7 +279,7 @@ send_text_and_enter() {
       '/') key="slash" ;;
       '\') key="backslash" ;;
       '-') key="minus" ;;
-      [A-Z]) key="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')" ;;
+      [A-Z]) key="shift-$(printf '%s' "$ch" | tr 'A-Z' 'a-z')" ;;
       [a-z0-9]) key="$ch" ;;
       *) continue ;;
     esac
@@ -424,7 +424,7 @@ classify_runtime() {
   local qemu_rc=0
   local -a qemu_display_args
   local drvload_done_pattern='\[DRVLOAD\][[:space:]]+DONE|\[\[DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
-  local doom_cmd="RUN ${DOOM_EXE_NAME}"
+  local doom_cmd="run ${DOOM_EXE_NAME}"
   local launch_detail="$doom_cmd"
 
   if ! qemu_available; then
@@ -521,16 +521,16 @@ classify_runtime() {
       set_stage "doom_exec_attempted" "FAIL" "shell prompt not detected before DOOM launch"
     else
       if [[ "$DOOM_TAXONOMY_RUN_DRVLOAD" == "1" ]]; then
-        if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" 'RUN \SYSTEM\DRIVERS\DRVLOAD.COM'; then
+        if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" 'run \SYSTEM\DRIVERS\DRVLOAD.COM'; then
           wait_for_regex "$LOG_FILE" "$drvload_done_pattern" "$DOOM_TAXONOMY_MARKER_TIMEOUT_SEC" || true
           wait_for_shell_prompt "$LOG_FILE" 30 || true
         fi
       fi
 
       if [[ -n "$DOOM_TAXONOMY_DOOM_CWD" ]]; then
-        if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "CD $DOOM_TAXONOMY_DOOM_CWD"; then
+        if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "cd $DOOM_TAXONOMY_DOOM_CWD"; then
           wait_for_shell_prompt "$LOG_FILE" 30 || true
-          launch_detail="CD $DOOM_TAXONOMY_DOOM_CWD; $doom_cmd"
+          launch_detail="cd $DOOM_TAXONOMY_DOOM_CWD; $doom_cmd"
         fi
       fi
 

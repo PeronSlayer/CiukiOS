@@ -19,7 +19,7 @@ org 0x0100
 %define RAW_HDD_CLONE_SECTORS_LO 0x003F
 %define RAW_HDD_CLONE_SECTORS_HI 0x0004
 %define RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA 64
-%define RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF 0x0134
+%define RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF 0x0133
 %define RAW_STAGE1_LIVE_DRIVE_INDEX 3
 %define RAW_STAGE1_INSTALLED_DRIVE_INDEX 2
 %define RAW_HDD_SECTORS_PER_CYL 1008
@@ -207,6 +207,7 @@ detect_targets:
     mov dx, msg_marker_target_scan
     call print_line
     call probe_bios_hdds_readonly
+    call print_disk_status_panel
     clc
     ret
 
@@ -295,6 +296,7 @@ confirm_target:
     call print_crlf
     mov dx, msg_target_1
     call print_line
+    call print_disk_status_panel
 
 .show_target:
     mov dx, msg_target_drive_prefix
@@ -334,6 +336,78 @@ confirm_target:
 
 .esc:
     stc
+    ret
+
+print_disk_status_panel:
+    push ax
+    push dx
+    call print_crlf
+    mov dx, msg_disk_panel_header
+    call print_line
+%if SETUP_LIVE_CD_MODE
+    mov dx, msg_disk_live_d
+    call print_z
+    mov al, 0x01
+    call print_probe_status
+    call print_crlf
+    mov dx, msg_disk_target_c
+    call print_z
+    mov al, 0x02
+    call print_probe_status
+    call print_crlf
+%else
+    mov dx, msg_disk_bios80
+    call print_z
+    mov al, 0x01
+    call print_probe_status
+    call print_crlf
+    mov dx, msg_disk_bios81
+    call print_z
+    mov al, 0x02
+    call print_probe_status
+    call print_crlf
+%endif
+    pop dx
+    pop ax
+    ret
+
+print_probe_status:
+    push ax
+    push bx
+    push dx
+    mov bl, al
+    mov al, [bios_probe_present_mask]
+    test al, bl
+    jnz .present
+    mov dx, msg_disk_absent
+    call print_z
+    jmp .done
+.present:
+    mov dx, msg_disk_present
+    call print_z
+    mov al, [bios_probe_blank_mask]
+    test al, bl
+    jz .has_data
+    mov dx, msg_disk_blank
+    call print_z
+    jmp .sig
+.has_data:
+    mov dx, msg_disk_data
+    call print_z
+.sig:
+    mov al, [bios_probe_mbrsig_mask]
+    test al, bl
+    jz .no_sig
+    mov dx, msg_disk_mbr
+    call print_z
+    jmp .done
+.no_sig:
+    mov dx, msg_disk_no_mbr
+    call print_z
+.done:
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -429,7 +503,6 @@ raw_hdd_clone_install:
     call serial_write_z
     call serial_write_crlf
     call raw_init_drive_geometries
-
     mov word [raw_clone_lba_lo], 0
     mov word [raw_clone_lba_hi], 0
     mov word [raw_clone_remaining_lo], RAW_HDD_CLONE_SECTORS_LO
@@ -451,7 +524,6 @@ raw_hdd_clone_install:
     mov bx, io_buffer
     call raw_edd_write_current_lba
     jc .fail
-
     inc word [raw_clone_lba_lo]
     jnz .dec_remaining
     inc word [raw_clone_lba_hi]
@@ -482,6 +554,14 @@ raw_hdd_clone_install:
     call serial_write_z
     mov al, [raw_last_path]
     call serial_write_char
+    mov dx, msg_serial_hdd_install_lba
+    call serial_write_z
+    mov ax, [raw_clone_lba_hi]
+    call serial_write_hex_word
+    mov al, ':'
+    call serial_write_char
+    mov ax, [raw_clone_lba_lo]
+    call serial_write_hex_word
     mov dx, msg_serial_hdd_install_status
     call serial_write_z
     mov al, [raw_last_status]
@@ -906,6 +986,14 @@ serial_write_hex_byte:
     and al, 0x0F
     call serial_write_hex_nibble
     pop ax
+    ret
+
+serial_write_hex_word:
+    push ax
+    mov al, ah
+    call serial_write_hex_byte
+    pop ax
+    call serial_write_hex_byte
     ret
 
 serial_write_hex_nibble:
@@ -2564,6 +2652,17 @@ msg_target_prompt    db 'Enter confirm / Esc cancel / A-Z set drive.', 0
 msg_target_selected  db 'Target set to ', 0
 msg_target_invalid   db 'Invalid target drive.', 0
 msg_target_unsupported db 'Only source drive is supported.', 0
+msg_disk_panel_header db 'Connected disk map:', 0
+msg_disk_live_d db 'D: Live media BIOS 80h - ', 0
+msg_disk_target_c db 'C: Install target BIOS 81h - ', 0
+msg_disk_bios80 db 'BIOS 80h - ', 0
+msg_disk_bios81 db 'BIOS 81h - ', 0
+msg_disk_present db 'present ', 0
+msg_disk_absent db 'absent', 0
+msg_disk_blank db 'blank ', 0
+msg_disk_data db 'data ', 0
+msg_disk_mbr db 'mbr', 0
+msg_disk_no_mbr db 'no-mbr', 0
 msg_raw_destroy_1 db 'DESTRUCTIVE HDD INSTALL ENABLED.', 0
 msg_raw_destroy_2 db 'Target BIOS 81h will be overwritten.', 0
 msg_raw_destroy_3 db 'Type DESTROY then Enter to continue.', 0
@@ -2625,6 +2724,7 @@ msg_serial_hdd_install_start db '[SETUP-HDD-INSTALL] START', 0
 msg_serial_hdd_install_done db '[SETUP-HDD-INSTALL] DONE', 0
 msg_serial_hdd_install_fail db '[SETUP-HDD-INSTALL] FAIL S=', 0
 msg_serial_hdd_install_path db ' P=', 0
+msg_serial_hdd_install_lba db ' L=', 0
 msg_serial_hdd_install_status db ' AH=', 0
 msg_serial_hdd_install_edd db ' E=', 0
 msg_serial_hdd_install_chs db ' C=', 0

@@ -22,7 +22,7 @@ usage() {
 Usage: scripts/qemu_test_full_drvload_smoke.sh [--no-build]
 
 Boots full profile, waits for shell prompt, runs:
-  RUN \SYSTEM\DRIVERS\DRVLOAD.COM
+  run \SYSTEM\DRIVERS\DRVLOAD.COM
 
 Checks runtime markers in serial output:
   [DRVLOAD] BEGIN
@@ -215,7 +215,7 @@ send_text_and_enter() {
       '/') key="slash" ;;
       '\') key="backslash" ;;
       '-') key="minus" ;;
-      [A-Z]) key="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')" ;;
+      [A-Z]) key="shift-$(printf '%s' "$ch" | tr 'A-Z' 'a-z')" ;;
       [a-z0-9]) key="$ch" ;;
       *) continue ;;
     esac
@@ -309,7 +309,18 @@ if ! wait_for_shell_prompt "$SERIAL_LOG" "$PROMPT_TIMEOUT_SEC"; then
 fi
 mark_pass "PROMPT"
 
-send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'RUN \SYSTEM\DRIVERS\DRVLOAD.COM' || mark_fail "SEND_COMMAND" "cannot send DRVLOAD command"
+CD_CASE_FAIL_PATTERN='cd[[:space:]]+err=0x|ccdd.*00xx'
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cd \Apps' || mark_fail "SEND_CASE_REJECT" "cannot send mixed-case cd command"
+if ! wait_for_regex "$SERIAL_LOG" "$CD_CASE_FAIL_PATTERN" 20; then
+  mark_fail "PATH_CASE_REJECT" "mixed-case path unexpectedly resolved or error marker missing"
+fi
+mark_pass "PATH_CASE_REJECT"
+if ! wait_for_shell_prompt "$SERIAL_LOG" 30; then
+  mark_fail "PROMPT_AFTER_CASE_REJECT" "shell prompt missing after mixed-case path rejection"
+fi
+mark_pass "PROMPT_AFTER_CASE_REJECT"
+
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'run \SYSTEM\DRIVERS\DRVLOAD.COM' || mark_fail "SEND_COMMAND" "cannot send DRVLOAD command"
 mark_pass "SEND_COMMAND"
 
 if ! wait_for_regex "$SERIAL_LOG" "$DRVLOAD_BEGIN_PATTERN" "$MARKER_TIMEOUT_SEC"; then
