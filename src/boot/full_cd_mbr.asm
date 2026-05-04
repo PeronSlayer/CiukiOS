@@ -36,8 +36,20 @@ relocated:
     mov dl, [RELOC_BASE + (boot_drive - $$)]
     mov ah, 0x42
     int 0x13
+    jnc boot_vbr
+
+    xor ax, ax
+    mov es, ax
+    mov bx, 0x7C00
+    mov ax, 0x0201
+    xor ch, ch
+    mov cl, 0x01
+    mov dh, 0x01
+    mov dl, [RELOC_BASE + (boot_drive - $$)]
+    int 0x13
     jc disk_error
 
+boot_vbr:
     mov dl, [RELOC_BASE + (boot_drive - $$)]
     jmp 0x0000:0x7C00
 

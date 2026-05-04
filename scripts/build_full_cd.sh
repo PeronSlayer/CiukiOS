@@ -13,6 +13,7 @@ DISK_IMG="build/full/ciukios-full-cd-disk.img"
 MBR_BIN="build/full/obj/full_cd_mbr.bin"
 ISO_ROOT="build/full/cd-iso-root"
 ISO_IMG="build/full/ciukios-full-cd.iso"
+DIRECT_ISO_IMG="build/full/ciukios-full-cd-direct.iso"
 ISOLINUX_BIN="${ISOLINUX_BIN:-/usr/lib/syslinux/bios/isolinux.bin}"
 MEMDISK_BIN="${MEMDISK_BIN:-/usr/lib/syslinux/bios/memdisk}"
 LDLINUX_C32="${LDLINUX_C32:-/usr/lib/syslinux/bios/ldlinux.c32}"
@@ -21,11 +22,13 @@ mkdir -p build/full/obj
 
 echo "[build-full-cd] building CD partition image"
 echo "[build-full-cd] hardware profile: forcing stage2 autorun (CIUKIOS_STAGE2_AUTORUN=1)"
+export CIUKIOS_SETUP_RAW_HDD_INSTALL="${CIUKIOS_SETUP_RAW_HDD_INSTALL:-0}"
 CIUKIOS_FULL_IMG="$PART_IMG" \
 CIUKIOS_FULL_BOOT_LBA_OFFSET="$PARTITION_LBA" \
 CIUKIOS_FULL_FAT_LBA_OFFSET="$PARTITION_LBA" \
 CIUKIOS_STAGE2_AUTORUN=1 \
 CIUKIOS_HARDWARE_VALIDATION_SCREEN="${CIUKIOS_HARDWARE_VALIDATION_SCREEN:-1}" \
+CIUKIOS_ENABLE_PS2_MOUSE_INIT="${CIUKIOS_ENABLE_PS2_MOUSE_INIT:-0}" \
 MTOOLS_TIMEOUT_SEC="${MTOOLS_TIMEOUT_SEC:-5}" \
 MTOOLS_KILL_AFTER_SEC="${MTOOLS_KILL_AFTER_SEC:-1}" \
 bash scripts/build_full.sh
@@ -89,4 +92,8 @@ xorriso -as mkisofs -quiet \
 	-boot-info-table \
 	"$ISO_ROOT"
 
+echo "[build-full-cd] creating direct El Torito hard-disk ISO"
+xorriso -as mkisofs -quiet -V CIUKIOS061 -o "$DIRECT_ISO_IMG" -b ciukios-full-cd-disk.img -c boot-direct.cat -hard-disk-boot "$ISO_ROOT"
+
 echo "[build-full-cd] done: $ISO_IMG"
+echo "[build-full-cd] done: $DIRECT_ISO_IMG"

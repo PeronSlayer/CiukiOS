@@ -4,7 +4,13 @@ All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task must update the `Unreleased` section unless the task is a release cut that creates a new version section.
 
 ## Unreleased (2026-05-04)
-No unreleased changes yet.
+1. Added a `runtime_stable` DOOM taxonomy stage after `video_init` to classify post-video observation stability separately from startup progress; a 120s visual headless run now fails explicitly on QEMU SIGSEGV instead of being masked by earlier `video_init=PASS`.
+2. Added CHS fallback boot paths for the full-CD MBR and full stage0 when booting via direct El Torito hard-disk emulation, enabling the faster non-ISOLINUX real-hardware ISO to reach Stage1 in QEMU.
+3. Fixed full-CD hardware validation by accepting valid short reads of `SYSTEM/STAGE2.BIN` during Stage2 autorun and making the CD hardware profile leave PS/2 mouse controller initialization disabled by default to preserve legacy keyboard input.
+4. Added a disposable HDD install validation lane that writes the full-profile MBR, FAT16 partition, and boot chain to `build/full/setup-hdd/target-hdd.img`, verifies the partition geometry and FAT directories, and boots the image standalone in QEMU.
+5. Integrated the direct El Torito hard-disk CD image into `scripts/build_full_cd.sh` and added a disposable CD-to-blank-HDD probe lane that boots the direct CD with a separate blank target disk attached while verifying the target remains unchanged.
+6. Added a serial-only read-only BIOS HDD probe in `SETUP.COM` and extended the CD-to-blank-HDD QEMU lane to launch setup, verify the probe masks, and stop before any destructive install step.
+7. Added a build-gated `SETUP.COM` raw runtime HDD install path for the disposable QEMU topology: `qemu-test-setup-runtime-hdd-install` enables `CIUKIOS_SETUP_RAW_HDD_INSTALL=1`, clones the direct-CD hard-disk image from BIOS `80h` to blank BIOS `81h`, verifies `[SETUP-HDD-INSTALL] START/DONE`, checks MBR/FAT16/mtools readability, and boots the installed HDD standalone. Normal full-CD builds leave the raw install path disabled unless explicitly enabled.
 
 ## pre-Alpha v0.6.1 (2026-05-04)
 1. Added a full-profile DOOM taxonomy harness and Makefile target to classify launch progress stages deterministically.

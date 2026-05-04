@@ -53,6 +53,33 @@ boot_start:
     mov byte [retry_count], 3
 
 .read_stage1:
+%if BOOT_LBA_OFFSET != 0
+    mov ax, STAGE1_SEG
+    mov es, ax
+    xor bx, bx
+    mov ah, 0x02
+    mov al, 62
+    mov ch, 0
+    mov cl, 2
+    mov dh, 1
+    mov dl, [boot_drive]
+    int 0x13
+    jc .try_lba
+
+    mov ax, STAGE1_SEG
+    mov es, ax
+    mov bx, 62 * 512
+    mov ah, 0x02
+    mov al, 8
+    mov ch, 0
+    mov cl, 1
+    mov dh, 2
+    mov dl, [boot_drive]
+    int 0x13
+    jnc .stage1_ok
+.try_lba:
+%endif
+
     mov si, stage1_dap
     mov ah, 0x42
     mov dl, [boot_drive]

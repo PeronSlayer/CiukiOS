@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -14,6 +14,9 @@ help:
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
 	@echo "  make qemu-test-setup-full-acceptance - run setup full-profile acceptance test"
 	@echo "  make qemu-test-setup-installer-scenarios - run setup installer scenario tests"
+	@echo "  make qemu-test-setup-hdd-install - create and boot a disposable full-profile HDD install image"
+	@echo "  make qemu-test-setup-cd-hdd-probe - boot direct CD with a blank disposable HDD attached"
+	@echo "  make qemu-test-setup-runtime-hdd-install - install from direct CD to disposable HDD via SETUP.COM"
 	@echo "  make qemu-test-all    - build + QEMU smoke test (floppy + full)"
 	@echo "  make clean            - remove build artifacts"
 
@@ -52,6 +55,15 @@ qemu-test-setup-full-acceptance:
 
 qemu-test-setup-installer-scenarios:
 	@bash scripts/qemu_test_setup_installer_scenarios.sh
+
+qemu-test-setup-hdd-install:
+	@bash scripts/qemu_test_setup_hdd_install.sh
+
+qemu-test-setup-cd-hdd-probe:
+	@bash scripts/qemu_test_setup_cd_hdd_probe.sh
+
+qemu-test-setup-runtime-hdd-install:
+	@bash scripts/qemu_test_setup_runtime_hdd_install.sh
 
 qemu-test-all:
 	@bash scripts/qemu_test_all.sh

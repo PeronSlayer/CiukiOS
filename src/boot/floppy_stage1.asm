@@ -13971,14 +13971,21 @@ run_stage2_payload:
     mov bx, ax
 
     mov ax, STAGE2_LOAD_SEG
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    mov cx, 256
+    rep stosw
+
+    mov ax, STAGE2_LOAD_SEG
     mov ds, ax
     xor dx, dx
     mov cx, 512
     mov ah, 0x3F
     int 0x21
     jc .close_fail
-    cmp ax, 512
-    jne .close_fail
+    cmp ax, 1
+    jb .close_fail
 
     mov ah, 0x3E
     int 0x21
