@@ -21,7 +21,7 @@ help:
 	@echo "  make qemu-test-setup-hdd-install - create and boot a disposable full-profile HDD install image"
 	@echo "  make qemu-test-setup-cd-hdd-probe - boot direct CD with a blank disposable HDD attached"
 	@echo "  make qemu-test-setup-runtime-hdd-install - install from direct CD to disposable HDD via SETUP.COM"
-	@echo "  make qemu-test-all    - build + QEMU smoke test (floppy + full)"
+	@echo "  make qemu-test-all    - validate active profiles: full and full-cd"
 	@echo "  make clean            - remove build artifacts"
 
 build-floppy:

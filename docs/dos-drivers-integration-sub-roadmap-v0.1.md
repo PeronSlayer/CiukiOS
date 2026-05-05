@@ -3,7 +3,7 @@
 ## Current objective
 Complete runtime-ready integration of DOS generic drivers into CiukiOS, starting from the already stable full-build packaging baseline under SYSTEM/DRIVERS.
 
-### Progress delta (as of 2026-05-04)
+### Progress delta (as of 2026-05-05)
 - Completed: full build packaging path injects drivers under SYSTEM/DRIVERS.
 - Completed: baseline build evidence exists from full build runs.
 - Deferred by decision gate: stage1 boot-time autoload remains disabled due to stage1 size gate risk.
@@ -11,7 +11,7 @@ Complete runtime-ready integration of DOS generic drivers into CiukiOS, starting
 - Completed: automated runtime smoke helper is available to invoke DRVLOAD from shell and verify deterministic serial markers.
 - Completed: DOOM taxonomy automation now invokes DRVLOAD before launching DOOM from the full-profile shell.
 - Completed: DOOM is playable on the full FAT16 profile despite DRVLOAD remaining a fail-open helper for unavailable DEVLOAD/MSCDEX activation.
-- Pending: real DEVLOAD/MSCDEX activation remains deferred by INT21 API gap; DRVLOAD currently provides deterministic fail-open diagnostics.
+- Pending: real DEVLOAD/MSCDEX activation remains deferred at the `.SYS` device-driver execution boundary. DEVLOAD evidence now reaches `INT 21h AH=4Bh` and the kernel correctly reports `000Bh` invalid format for `.SYS` as a process image; DRVLOAD still provides deterministic fail-open diagnostics.
 
 ## Step-by-step plan
 Dependency chain: Phase 1 -> Phase 2 -> Phase 3A -> Phase 4 -> Phase 5.
@@ -70,9 +70,16 @@ Parallelization model: only 2 independent streams in Phase 3 (A implementation, 
 	- Every scenario has explicit pass/fail plus linked evidence artifact.
 	- No unresolved high-severity regression remains open, or it is explicitly deferred with owner/date.
 - Evidence command checklist:
-	- bash scripts/qemu_test_full.sh
-	- bash scripts/qemu_test_full_stage1.sh
-	- bash scripts/qemu_test_all.sh
+	- make build-full
+	- make build-full-cd
+	- make qemu-test-full
+	- make qemu-test-full-cd
+	- make qemu-test-full-cd-shell-drive
+	- make qemu-test-full-shell-stability
+	- make qemu-test-full-drvload-smoke
+	- make qemu-test-setup-runtime-hdd-install
+	- make qemu-test-all
+	- DOOM_TAXONOMY_DISPLAY_MODE=none DOOM_TAXONOMY_SCREENSHOT=build/full/doom_stability.ppm QEMU_TIMEOUT_SEC=120 DOOM_TAXONOMY_OBSERVE_SEC=45 DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy
 	- find build/validation -type f | sort
 	- rg -n "DRIVER|ERROR|FALLBACK|SYSTEM/DRIVERS" build/validation build/full
 
@@ -121,12 +128,12 @@ Phase ownership:
 - Handoff package includes decisions, status, risks, test outcome summary, and prioritized next-cycle TODOs.
 
 ## Next action
-Define the next driver-runtime hardening slice after the DOOM playable milestone: keep DRVLOAD fail-open behavior stable, then close the INT21 API gaps needed for real DEVLOAD/MSCDEX activation without regressing the full-profile DOOM lane.
+Define the next driver-runtime hardening slice after the DOOM playable milestone: keep DRVLOAD fail-open behavior stable, then implement a real `.SYS` device-driver loader for DEVLOAD/MSCDEX activation instead of treating `.SYS` as a COM/EXE process image, without regressing the full-profile DOOM lane.
 
 ## Test status
 - Full build integration status (SYSTEM/DRIVERS): Completed/PASS in full build packaging baseline.
 - Runtime activation status: Available through DRVLOAD.COM helper lane (manual invocation).
-- Runtime activation smoke status: Available through scripts/qemu_test_full_drvload_smoke.sh (serial markers BEGIN/TRY/DONE).
-- DOOM automation integration status: Available through scripts/qemu_test_full_doom_taxonomy.sh; Phase 4 gameplay playable milestone is closed in v0.6.1.
+- Runtime activation smoke status: Available through scripts/qemu_test_full_drvload_smoke.sh (serial markers BEGIN/TRY/DONE); DEVLOAD evidence boundary is `.SYS` via `INT 21h AH=4Bh` returning `000Bh` until a real device-driver loader exists.
+- DOOM automation integration status: Available through scripts/qemu_test_full_doom_taxonomy.sh; Phase 4 gameplay playable milestone is closed in v0.6.1 and the 2026-05-05 stability run reached `visual_gameplay` with minimum stage `runtime_stable`.
 - Stage1 boot autoload status: Deferred by size gate decision.
-- Regression matrix status: Pending real DEVLOAD/MSCDEX activation coverage; no longer blocked by DOS/16M transfer-stack investigation.
+- Regression matrix status: Active full/full-CD stability baseline passed on 2026-05-05; real DEVLOAD/MSCDEX activation coverage remains pending on `.SYS` loader implementation.

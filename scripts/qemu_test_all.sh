@@ -6,21 +6,27 @@ cd "$ROOT_DIR"
 
 run_test() {
   local label="$1"
-  local script_path="$2"
+  shift
+  local cmd=("$@")
   local start_ts
   local end_ts
   local elapsed
   local rc
 
-  if [[ ! -x "$script_path" ]]; then
-    echo "[qemu-test-all] ERROR: missing executable script: $script_path" >&2
+  if [[ ${#cmd[@]} -eq 0 ]]; then
+    echo "[qemu-test-all] ERROR: no command provided for test: $label" >&2
+    return 2
+  fi
+
+  if [[ ! -x "${cmd[0]}" ]]; then
+    echo "[qemu-test-all] ERROR: missing executable script: ${cmd[0]}" >&2
     return 2
   fi
 
   echo "[qemu-test-all] running $label"
   start_ts="$(date +%s)"
   set +e
-  bash "$script_path"
+  "${cmd[@]}"
   rc=$?
   set -e
   end_ts="$(date +%s)"
@@ -37,10 +43,9 @@ run_test() {
 
 overall_rc=0
 
-run_test "floppy image smoke test" "scripts/qemu_test_floppy.sh" || overall_rc=1
-run_test "stage1 boot selftest regression" "scripts/qemu_test_stage1.sh" || overall_rc=1
+# Focused aggregate: validate active "full" and "full-cd" profiles only
 run_test "full image smoke test" "scripts/qemu_test_full.sh" || overall_rc=1
-run_test "full stage1 selftest regression" "scripts/qemu_test_full_stage1.sh" || overall_rc=1
+run_test "full-cd image smoke test" "scripts/qemu_run_full_cd.sh" --test || overall_rc=1
 
 if [[ $overall_rc -eq 0 ]]; then
   echo "[qemu-test-all] PASS (all image tests passed)"
