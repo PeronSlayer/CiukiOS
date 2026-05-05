@@ -136,3 +136,57 @@ This delegates the first real responsibility to the loaded runtime: runtime iden
 
 ### Next Migration Slice
 Move a tiny runtime-owned service table header into `RUNTIME.BIN` and make the probe query a callable service descriptor rather than only fixed status words. Keep it opt-in, keep default boot independent of `RUNTIME.BIN`, and only then consider extracting a diagnostic or shell constant.
+
+## Service Table Foundation Finalized
+This cycle closes the architecture foundation for the Stage1/runtime split without changing default boot ownership.
+
+### Additional Stage1 Margin Recovery
+A dead Stage1 DOS-memory helper cluster was removed from default builds after confirming the symbols had no remaining references. This recovered enough space to exceed the preferred 1,024-byte full-CD margin target.
+
+| Profile | Before | After | Bytes recovered this cycle | Free margin |
+|---|---:|---:|---:|---:|
+| full default | 34,949 | 34,421 | 528 | 1,419 |
+| full-cd default | 35,014 | 34,486 | 528 | 1,354 |
+| full runtime probe | 35,174 | 34,768 | 406 | 1,072 |
+
+The default full-CD build now clears the preferred margin target while keeping default boot and shell behavior unchanged.
+
+### Runtime-Owned Service Table
+The probe handoff no longer exposes ABI version and service count as fixed Stage1-owned status words. Runtime entry now writes a pointer to a runtime-owned service table plus a status flag word through `ES:DI`.
+
+Handoff buffer written by runtime entry:
+| Offset | Size | Meaning |
+|---:|---:|---|
+| `0x00` | word | Service table offset inside `RUNTIME.BIN`. |
+| `0x02` | word | Service table segment, currently `0x4C00`. |
+| `0x04` | word | Runtime status flags; bit 0 means runtime services ready. |
+
+Runtime service table layout at the returned far pointer:
+| Offset | Size | Meaning |
+|---:|---:|---|
+| `0x00` | dword | Header magic `RTSV`. |
+| `0x04` | word | ABI version, currently `1`. |
+| `0x06` | word | Service count, currently `1`. |
+| `0x08` | word | Descriptor size, currently `8`. |
+| `0x0A` | 8 bytes | First service descriptor. |
+
+Runtime service descriptor format:
+| Offset | Size | Meaning |
+|---:|---:|---|
+| `0x00` | word | Service id, currently `1` for runtime identity/status. |
+| `0x02` | word | Flags, bit 0 means callable. |
+| `0x04` | word | Far-call entry offset in the runtime segment. |
+| `0x06` | word | Reserved. |
+
+The first callable service has no side effects, returns `CF=0`, and returns `AX=0x5254`. Stage1 requires a valid header, a valid descriptor, a successful service call, and `status_flags & 1` before emitting probe success.
+
+### Probe Validation Semantics
+Probe markers now represent ordered checkpoints:
+1. `[RTP] B` - runtime probe started.
+2. `[RTP] T` - runtime service table header and descriptor validated.
+3. `[RTP] C` - runtime service call returned the expected result.
+4. `[RTP] OK` - probe success after all validations.
+5. `[RTP] BAD` - runtime load, signature, table, descriptor, or service validation failed; fallback continued safely.
+
+### Exact Next Extraction Target
+Move one tiny real diagnostic or shell-owned constant behind service id `2` while keeping the current identity/status service as the stable foundation contract. Do not make default boot depend on `RUNTIME.BIN` until multiple runtime-owned services prove stable over time.
