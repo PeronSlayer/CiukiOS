@@ -12,6 +12,16 @@ if ! grep -Fq "[RTP] B" build/full/qemu-full-runtime-probe.log; then
   exit 1
 fi
 
+if ! grep -Fq "[RTP] T" build/full/qemu-full-runtime-probe.log; then
+  echo "[qemu-test-full-runtime-probe] FAIL: probe table marker missing" >&2
+  exit 1
+fi
+
+if ! grep -Fq "[RTP] C" build/full/qemu-full-runtime-probe.log; then
+  echo "[qemu-test-full-runtime-probe] FAIL: probe service-call marker missing" >&2
+  exit 1
+fi
+
 if ! grep -Fq "[RTP] OK" build/full/qemu-full-runtime-probe.log; then
   echo "[qemu-test-full-runtime-probe] FAIL: probe success marker missing" >&2
   exit 1
