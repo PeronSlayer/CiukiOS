@@ -72,14 +72,42 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 - Release: `CiukiOS pre-Alpha v0.6.1`.
 - Scope note: follow-up audio/driver polish and richer gameplay taxonomy remain hardening work, not Phase 4 closure blockers.
 
-## Phase 5 - Windows pre-NT Milestones
-**STATUS: QUEUED (after the v0.6.5 Stage1/runtime split foundation)**
+## Phase 5 - Runtime Ownership Transition
+**STATUS: ACTIVE (after the v0.6.5 Stage1/runtime split foundation)**
+1. Continue the Stage1/runtime split through small, low-risk runtime-owned service slices.
+2. Keep Stage1 loader-first while moving immutable constants, diagnostics, and safe support helpers behind `\SYSTEM\RUNTIME.BIN`.
+3. Avoid early migration of allocator, PSP/MCB, EXEC, and file-I/O core ownership until the runtime contract is stronger.
+4. Milestone: Stage1 pressure is reduced by architecture, not by repeated byte-level patching.
+
+## Phase 6 - DOS Application Compatibility
+**STATUS: QUEUED (after the next runtime-split slices are stable)**
+1. Make CiukiOS capable of launching a broader set of arbitrary real DOS programs from the full and full-CD profiles.
+2. Build a compatibility matrix across utilities, editors, file managers, real-mode games, DOS extender applications, and setup tools.
+3. Classify failures by subsystem so fixes broaden compatibility across multiple workloads, not only milestone demos.
+4. Milestone: external DOS programs can be copied into CiukiOS and launched with a documented, improving pass rate.
+
+## Phase 7 - Legacy Audio Compatibility
+**STATUS: QUEUED (after DOS application compatibility is broader)**
+1. Close the current no-audio gap for DOOM and similar DOS workloads.
+2. Investigate and implement the minimum sound-device compatibility required for conservative Sound Blaster and AdLib bring-up.
+3. Validate detection, initialization, and practical playback separately.
+4. Milestone: DOOM reaches a documented audio success target and at least one additional DOS audio workload is exercised.
+
+## Phase 8 - Legacy Networking
+**STATUS: QUEUED (after runtime and audio compatibility are materially stronger)**
+1. Explore narrow DOS-era networking targets with practical value.
+2. Prefer packet-driver or similarly bounded compatibility investigations before any broad networking scope.
+3. Keep networking behind DOS compatibility and audio in the engineering priority order.
+4. Milestone: one constrained networking path is documented and validated.
+
+## Phase 9 - Windows pre-NT Milestones
+**STATUS: QUEUED (after runtime split, DOS compatibility, and audio groundwork)**
 1. Expand DOS compatibility required by Windows 3.x/95/98 bootstrap and runtime paths.
 2. Extend protected-mode services and interrupt/timer compatibility.
 3. Add required device and setup-path behavior.
 4. Milestones: Windows 3.x -> Windows 95 -> Windows 98.
 
-## Phase 6 - Build and Release Discipline
+## Phase 10 - Build and Release Discipline
 1. `floppy` profile: minimal, portable, diagnostics-first.
 2. `full` profile: complete runtime with shell-first behavior.
 3. Regression pipeline on emulators and real legacy hardware.
