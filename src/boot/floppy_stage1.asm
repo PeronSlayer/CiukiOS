@@ -20,7 +20,7 @@ org 0x0000
 %define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
 %define DOS_MEM_BLOCK_FREE 0
 %define DOS_MEM_BLOCK_ALLOC 1
-%define DOS_MEM_BLOCK_TABLE_MAX 16
+%define DOS_MEM_BLOCK_TABLE_MAX 32
 %define DOS_MEM_BLOCK_ENTRY_SIZE 8
 %ifndef DOS_DEFAULT_DRIVE_INDEX
 %if FAT_TYPE == 16
@@ -448,6 +448,8 @@ int21_handler:
     je .fn_0e
     cmp ah, 0x1A
     je .fn_1a
+    cmp ah, 0x20
+    je .fn_20
     cmp ah, 0x19
     je .fn_19
     cmp ah, 0x2A
@@ -476,6 +478,8 @@ int21_handler:
     je .fn_35
     cmp ah, 0x36
     je .fn_36
+    cmp ah, 0x37
+    je .fn_37
     cmp ah, 0x39
     je .fn_39
     cmp ah, 0x3A
@@ -530,6 +534,8 @@ int21_handler:
     je .fn_52
     cmp ah, 0x54
     je .fn_54
+    cmp ah, 0x55
+    je .fn_55
     cmp ah, 0x56
     je .fn_56
     cmp ah, 0x57
@@ -587,6 +593,10 @@ int21_handler:
     jmp .success
 
 .fn_00:
+    xor al, al
+    jmp .fn_4c
+
+.fn_20:
     xor al, al
     jmp .fn_4c
 
@@ -986,6 +996,23 @@ int21_handler:
     xor ax, ax
     jmp .success
 
+.fn_37:
+    cmp al, 0x00
+    je .fn_37_get
+    cmp al, 0x01
+    je .fn_37_set
+    mov ax, 0x0001
+    jmp .error
+
+.fn_37_get:
+    mov dl, 0x2F
+    xor ax, ax
+    jmp .success
+
+.fn_37_set:
+    xor ax, ax
+    jmp .success
+
 .fn_52:
     call int21_get_list_of_lists
     mov byte [cs:int21_return_es], 1
@@ -994,6 +1021,11 @@ int21_handler:
 
 .fn_54:
     xor ax, ax
+    jmp .success
+
+.fn_55:
+    call int21_create_child_psp
+    jc .error
     jmp .success
 
 .fn_57:
@@ -1223,7 +1255,7 @@ int21_handler:
     cmp byte [cs:int21_force_terminate], 0
     je .term_done
     mov byte [cs:int21_force_terminate], 0
-    cmp word [cs:current_psp_seg], COM_LOAD_SEG
+    cmp word [bp + 18], COM_LOAD_SEG
     jne .term_mz
     mov word [bp + 16], int21_com_terminate_trampoline
     jmp .term_set_cs
@@ -1703,6 +1735,53 @@ int21_exec_write_tail:
     mov byte [es:0x0081 + bx], 0x0D
 
     pop ds
+    pop si
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int21_create_child_psp:
+    push bx
+    push cx
+    push di
+    push es
+    mov es, dx
+    xor di, di
+    xor ax, ax
+    mov cx, 128
+    rep stosw
+    mov word [es:0x0000], 0x20CD
+    mov [es:0x0002], si
+    call int21_init_psp_handles
+    call int21_mem_adopt_child_psp
+    xor ax, ax
+    clc
+    pop es
+    pop di
+    pop cx
+    pop bx
+    ret
+
+int21_mem_adopt_child_psp:
+    push ax
+    push bx
+    push cx
+    push di
+    push si
+    push es
+
+    call int21_mem_init
+    mov ax, es
+    call int21_mem_table_find_exact
+    jc .done
+    mov [cs:dos_mem_block_table + si + 4], ax
+    call int21_mem_sync_legacy
+    call int21_mem_rebuild_chain
+
+.done:
+    pop es
     pop si
     pop di
     pop cx
@@ -6866,8 +6945,16 @@ int21_mem_find_next_alloc:
     cmp word [cs:bx + 6], DOS_MEM_BLOCK_ALLOC
     jne .next
     mov ax, [cs:bx]
+    cmp ax, DOS_HEAP_LIMIT_SEG
+    jae .next
     cmp ax, dx
+    jae .candidate_start_ready
+    push ax
+    add ax, [cs:bx + 2]
+    cmp ax, dx
+    pop ax
     jb .next
+.candidate_start_ready:
     cmp ax, DOS_HEAP_LIMIT_SEG
     jae .next
     cmp ax, si
@@ -7206,6 +7293,8 @@ int21_mem_find_free_gap:
 .scan:
     cmp di, cx
     jae .tail
+    cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
+    jne .next
     mov ax, [cs:dos_mem_block_table + si]
     cmp ax, dx
     jbe .consume
@@ -8012,6 +8101,10 @@ int21_free:
     call int21_mem_init
 
     mov ax, es
+    cmp ax, COM_LOAD_SEG
+    je .static_psp_ok
+
+    mov ax, es
     cmp ax, DOS_ENV_SEG
     je .env_static_ok
 
@@ -8032,6 +8125,7 @@ int21_free:
     ret
 
 .env_static_ok:
+.static_psp_ok:
     xor ax, ax
     clc
     ret
@@ -12345,10 +12439,15 @@ shell_exec_buffer_path:
     pop ax
     ; Run the program
     push bx
+    push es
     mov dx, shell_exec_path_buf
-    xor bx, bx
+    mov ax, cs
+    mov es, ax
+    mov [cs:shell_exec_param_block + 4], ax
+    mov bx, shell_exec_param_block
     mov ax, 0x4B00
     int 0x21
+    pop es
     pop bx
     jc .exec_failed
     ; Exec succeeded: restore CWD to pre-exec state
@@ -12380,6 +12479,51 @@ shell_exec_buffer_path:
     ret
 .exec_failed:
     stc
+    ret
+
+shell_exec_set_empty_tail:
+    mov byte [cs:shell_exec_cmd_tail], 0
+    mov byte [cs:shell_exec_cmd_tail + 1], 0x0D
+    ret
+
+shell_exec_set_tail_from_si:
+    push ax
+    push cx
+    push di
+    push es
+
+    call shell_exec_set_empty_tail
+    cmp byte [si], 0
+    je .done
+
+    push cs
+    pop es
+    mov di, shell_exec_cmd_tail + 2
+    mov byte [cs:shell_exec_cmd_tail + 1], ' '
+    mov cl, 1
+
+.copy_loop:
+    cmp cl, 126
+    jae .finish
+    lodsb
+    cmp al, 0
+    je .finish
+    stosb
+    inc cl
+    jmp .copy_loop
+
+.finish:
+    xor ch, ch
+    mov byte [cs:shell_exec_cmd_tail], cl
+    mov di, shell_exec_cmd_tail + 1
+    add di, cx
+    mov byte [cs:di], 0x0D
+
+.done:
+    pop es
+    pop di
+    pop cx
+    pop ax
     ret
 
 shell_try_resolve_exec_token:
@@ -12643,6 +12787,7 @@ shell_cmd_run:
     jmp .fail
 
 .try_exec:
+    call shell_exec_set_tail_from_si
     mov si, dx
     call shell_try_exec_path
     jnc .done
@@ -12652,6 +12797,7 @@ shell_cmd_run:
     call shell_print_error_ax
 
 .done:
+    call shell_exec_set_empty_tail
     pop ds
     pop si
     pop bx
@@ -16330,6 +16476,16 @@ disk_packet_seg dw 0
 disk_packet_lba dq 0
 cmd_buffer times CMD_BUF_LEN db 0
 shell_exec_path_buf times SHELL_EXEC_PATH_BUF_LEN db 0
+shell_exec_param_block:
+    dw 0
+    dw shell_exec_cmd_tail
+    dw 0
+    dw 0x005C
+    dw 0
+    dw 0x006C
+    dw 0
+shell_exec_cmd_tail db 0, 0x0D
+                    times 127 db 0
 %if FAT_TYPE == 16 || FAT_TYPE == 12
 shell_copy_src_ptr dw 0
 shell_copy_dst_ptr dw 0
