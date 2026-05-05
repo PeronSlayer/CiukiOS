@@ -267,6 +267,11 @@ rm -f "$SERIAL_LOG" "$STRINGS_LOG" "$STDERR_LOG" "$CMD_LOG" "$META_LOG" "$MON_SO
 QEMU_TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-240}"
 PROMPT_TIMEOUT_SEC="${DRVLOAD_PROMPT_TIMEOUT_SEC:-120}"
 MARKER_TIMEOUT_SEC="${DRVLOAD_MARKER_TIMEOUT_SEC:-120}"
+DRVLOAD_ARGS="${DRVLOAD_ARGS:-}"
+DRVLOAD_COMMAND='run \SYSTEM\DRIVERS\DRVLOAD.COM'
+if [[ -n "$DRVLOAD_ARGS" ]]; then
+  DRVLOAD_COMMAND+=" $DRVLOAD_ARGS"
+fi
 
 DRVLOAD_BEGIN_PATTERN='\[DRVLOAD\][[:space:]]+BEGIN|\[\[DDRRVVLLOOAADD\]\][[:space:]]+BBEEGGIIN'
 DRVLOAD_TRY_PATTERN='\[DRVLOAD\][[:space:]]+TRY[[:space:]]+|\[\[DDRRVVLLOOAADD\]\][[:space:]]+TTRRYY[[:space:]]+'
@@ -320,7 +325,7 @@ if ! wait_for_shell_prompt "$SERIAL_LOG" 30; then
 fi
 mark_pass "PROMPT_AFTER_CASE_REJECT"
 
-send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'run \SYSTEM\DRIVERS\DRVLOAD.COM' || mark_fail "SEND_COMMAND" "cannot send DRVLOAD command"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$DRVLOAD_COMMAND" || mark_fail "SEND_COMMAND" "cannot send DRVLOAD command"
 mark_pass "SEND_COMMAND"
 
 if ! wait_for_regex "$SERIAL_LOG" "$DRVLOAD_BEGIN_PATTERN" "$MARKER_TIMEOUT_SEC"; then

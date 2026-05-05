@@ -11,7 +11,7 @@ Complete runtime-ready integration of DOS generic drivers into CiukiOS, starting
 - Completed: automated runtime smoke helper is available to invoke DRVLOAD from shell and verify deterministic serial markers.
 - Completed: DOOM taxonomy automation now invokes DRVLOAD before launching DOOM from the full-profile shell.
 - Completed: DOOM is playable on the full FAT16 profile despite DRVLOAD remaining a fail-open helper for unavailable DEVLOAD/MSCDEX activation.
-- Pending: real DEVLOAD/MSCDEX activation remains deferred at the `.SYS` device-driver execution boundary. DEVLOAD evidence now reaches `INT 21h AH=4Bh` and the kernel correctly reports `000Bh` invalid format for `.SYS` as a process image; DRVLOAD still provides deterministic fail-open diagnostics.
+- In progress: DRVLOAD evidence mode now includes a native `.SYS` loader slice. It loads `QCDROM.SYS`, calls the driver INIT strategy/interrupt entry points, links the device header from DRVLOAD, and QCDROM detects the QEMU DVD-ROM as `QCDROM1`; MSCDEX launches but remains blocked at child exit `0x11` until kernel-owned DOS List-of-Lists/CDS/device-handle compatibility is implemented.
 
 ## Step-by-step plan
 Dependency chain: Phase 1 -> Phase 2 -> Phase 3A -> Phase 4 -> Phase 5.
@@ -128,12 +128,12 @@ Phase ownership:
 - Handoff package includes decisions, status, risks, test outcome summary, and prioritized next-cycle TODOs.
 
 ## Next action
-Define the next driver-runtime hardening slice after the DOOM playable milestone: keep DRVLOAD fail-open behavior stable, then implement a real `.SYS` device-driver loader for DEVLOAD/MSCDEX activation instead of treating `.SYS` as a COM/EXE process image, without regressing the full-profile DOOM lane.
+Define the next driver-runtime hardening slice after the QCDROM `.SYS` INIT milestone: keep DRVLOAD fail-open behavior stable, then complete MSCDEX compatibility by hardening DOS List-of-Lists/CDS/device-chain internals and IOCTL forwarding without regressing the full-profile DOOM lane.
 
 ## Test status
 - Full build integration status (SYSTEM/DRIVERS): Completed/PASS in full build packaging baseline.
 - Runtime activation status: Available through DRVLOAD.COM helper lane (manual invocation).
-- Runtime activation smoke status: Available through scripts/qemu_test_full_drvload_smoke.sh (serial markers BEGIN/TRY/DONE); DEVLOAD evidence boundary is `.SYS` via `INT 21h AH=4Bh` returning `000Bh` until a real device-driver loader exists.
+- Runtime activation smoke status: Available through scripts/qemu_test_full_drvload_smoke.sh (serial markers BEGIN/TRY/DONE); `DRVLOAD_ARGS=/DEVLOAD make qemu-test-full-drvload-smoke` now verifies the native `.SYS` loader reaches QCDROM INIT and detects the QEMU DVD-ROM, while MSCDEX still exits with `0x11`.
 - DOOM automation integration status: Available through scripts/qemu_test_full_doom_taxonomy.sh; Phase 4 gameplay playable milestone is closed in v0.6.1 and the 2026-05-05 stability run reached `visual_gameplay` with minimum stage `runtime_stable`.
 - Stage1 boot autoload status: Deferred by size gate decision.
-- Regression matrix status: Active full/full-CD stability baseline passed on 2026-05-05; real DEVLOAD/MSCDEX activation coverage remains pending on `.SYS` loader implementation.
+- Regression matrix status: Active full/full-CD stability baseline passed on 2026-05-05; QCDROM `.SYS` INIT evidence now passes, and real MSCDEX drive-letter activation remains pending on kernel-owned DOS List-of-Lists/CDS/device-handle and IOCTL compatibility.
