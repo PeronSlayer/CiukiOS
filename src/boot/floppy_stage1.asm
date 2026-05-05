@@ -2581,6 +2581,19 @@ int21_set_dta:
     ret
 
 int21_get_default_drive:
+%if FAT_TYPE == 16
+    push ds
+    call stage1_runtime_get_default_drive_ptr
+    jc .fallback
+    xor ah, ah
+    mov al, [ds:si]
+    clc
+    pop ds
+    ret
+
+.fallback:
+    pop ds
+%endif
     xor ah, ah
     mov al, [cs:dos_default_drive]
     clc
@@ -2704,6 +2717,7 @@ int21_set_default_drive:
     ja .invalid
     call cwd_save_current_drive
     mov [cs:dos_default_drive], dl
+    call stage1_runtime_sync_default_drive
     mov al, dl
     call cwd_load_drive_al
     mov al, 4
@@ -14368,6 +14382,45 @@ stage1_runtime_call_version_service:
     pop ds
     ret
 
+stage1_runtime_get_default_drive_ptr:
+    push ax
+
+    mov ax, 0x0005
+    call stage1_runtime_lookup_service
+    jc .fail
+    call far [cs:runtime_service_ptr]
+    jc .fail
+    mov ax, ds
+    cmp ax, RUNTIME_LOAD_SEG
+    jne .fail
+    or si, si
+    jz .fail
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop ax
+    ret
+
+stage1_runtime_sync_default_drive:
+    push ax
+    push ds
+    push si
+
+    call stage1_runtime_get_default_drive_ptr
+    jc .done
+    mov al, [cs:dos_default_drive]
+    mov [ds:si], al
+
+.done:
+    pop si
+    pop ds
+    pop ax
+    ret
+
 stage1_runtime_print_stage2_ready:
     push ax
     push ds
@@ -14418,7 +14471,7 @@ stage1_runtime_validate_cache:
     jne .fail
     cmp word [es:bx + 4], 1
     jne .fail
-    cmp word [es:bx + 6], 4
+    cmp word [es:bx + 6], 5
     jb .fail
     cmp word [es:bx + 8], 8
     jne .fail
@@ -14510,6 +14563,8 @@ stage1_runtime_init:
     pop ds
     call stage1_runtime_validate_cache
     jc .fail
+    call stage1_runtime_sync_default_drive
+    jc .fail
     clc
     jmp .done
 
@@ -14576,7 +14631,7 @@ stage1_runtime_probe:
     mov ax, [runtime_table_seg]
     mov es, ax
     mov bx, [runtime_table_off]
-    cmp word [es:bx + 6], 4
+    cmp word [es:bx + 6], 5
     jb .fail
 
     mov si, msg_runtime_probe_table
@@ -14643,6 +14698,14 @@ stage1_runtime_probe:
     jne .fail
     or cx, cx
     jne .fail
+
+    call stage1_runtime_get_default_drive_ptr
+    jc .fail
+    mov al, [ds:si]
+    cmp al, [cs:dos_default_drive]
+    jne .fail
+    push cs
+    pop ds
 
     mov si, msg_runtime_probe_call
     call print_string_serial
