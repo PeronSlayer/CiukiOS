@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -13,6 +13,7 @@ help:
 	@echo "  make qemu-test-stage1 - interactive Stage1 regression (DOS21 + COM/MZ + file I/O)"
 	@echo "  make qemu-test-full   - build + QEMU smoke test (full image)"
 	@echo "  make qemu-test-full-stage1 - full-profile Stage1 selftest regression"
+	@echo "  make qemu-test-full-runtime-probe - probe runtime load/entry fallback"
 	@echo "  make qemu-test-full-doom-taxonomy - classify DOOM full-profile taxonomy stages"
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
 	@echo "  make qemu-test-full-shell-stability - run full-profile shell stability test"
@@ -56,6 +57,9 @@ qemu-test-full:
 
 qemu-test-full-stage1:
 	@bash scripts/qemu_test_full_stage1.sh
+
+qemu-test-full-runtime-probe:
+	@bash scripts/qemu_test_full_runtime_probe.sh
 
 qemu-test-full-doom-taxonomy:
 	@bash scripts/qemu_test_full_doom_taxonomy.sh

@@ -8,6 +8,7 @@ org 0x0000
 %define MZ_LOAD_SEG 0x3000
 %define MZ2_LOAD_SEG 0x3800
 %define MZ3_LOAD_SEG 0x7800
+%define RUNTIME_LOAD_SEG 0x4C00
 %define STAGE2_LOAD_SEG 0x4E00
 %define DOS_META_BUF_SEG 0x5000
 %define DOS_FAT_BUF_SEG  0x5200
@@ -63,6 +64,9 @@ org 0x0000
 %endif
 %ifndef STAGE1_SELFTEST_AUTORUN
 %define STAGE1_SELFTEST_AUTORUN 0
+%endif
+%ifndef STAGE1_RUNTIME_PROBE
+%define STAGE1_RUNTIME_PROBE 0
 %endif
 %ifndef HARDWARE_VALIDATION_SCREEN
 %define HARDWARE_VALIDATION_SCREEN 0
@@ -137,6 +141,9 @@ stage1_start:
     call install_int21_vector
     call init_stage2_services
     call init_shell_default_dirs
+%if FAT_TYPE == 16 && STAGE1_RUNTIME_PROBE
+    call stage1_runtime_probe
+%endif
 %if STAGE1_SELFTEST_AUTORUN
     call run_stage1_selftest
 %endif
@@ -9444,6 +9451,7 @@ int21_find_test:
     pop ds
     ret
 
+%if STAGE1_SELFTEST_AUTORUN
 int21_move_rename_path_test:
     push ax
     push bx
@@ -9576,6 +9584,8 @@ run_stage1_selftest:
     mov si, msg_stage1_selftest_serial_done
     call print_string_serial
     ret
+
+%endif
 
 run_gfx_demo:
     push ax
@@ -14530,6 +14540,104 @@ init_stage2_services:
     ret
 
 %if FAT_TYPE == 16
+%if STAGE1_RUNTIME_PROBE
+stage1_runtime_probe:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    push cs
+    pop ds
+    mov si, msg_runtime_probe_begin
+    call print_string_serial
+
+    mov dx, path_runtime_dos
+    mov ax, 0x3D00
+    int 0x21
+    jc .fail
+    mov bx, ax
+
+    mov ax, RUNTIME_LOAD_SEG
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    mov cx, 256
+    rep stosw
+
+    mov ax, RUNTIME_LOAD_SEG
+    mov ds, ax
+    xor dx, dx
+    mov cx, 512
+    mov ah, 0x3F
+    int 0x21
+    jc .close_fail
+    cmp ax, 10
+    jb .close_fail
+
+    mov ah, 0x3E
+    int 0x21
+
+    push cs
+    pop ds
+    mov ax, RUNTIME_LOAD_SEG
+    mov es, ax
+    mov si, runtime_probe_signature
+    mov di, 0x0002
+    mov cx, 8
+    cld
+    repe cmpsb
+    jne .fail
+
+    mov word [runtime_probe_abi_version], 0
+    mov word [runtime_probe_service_count], 0
+    mov word [runtime_probe_status_flags], 0
+    push cs
+    pop es
+    mov di, runtime_probe_handoff
+    call RUNTIME_LOAD_SEG:0x0000
+
+    push cs
+    pop ds
+    cmp word [runtime_probe_abi_version], 1
+    jne .fail
+    cmp word [runtime_probe_service_count], 1
+    jb .fail
+
+    mov si, msg_runtime_probe_ok
+    call print_string_serial
+    clc
+    jmp .done
+
+.close_fail:
+    push ax
+    mov ah, 0x3E
+    int 0x21
+    pop ax
+    push cs
+    pop ds
+
+.fail:
+    mov si, msg_runtime_probe_bad
+    call print_string_serial
+    stc
+
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 run_stage2_payload:
     push ax
     push bx
@@ -16352,6 +16460,12 @@ fat_cache_valid db 0
 fat_cache_dirty db 0
 fat_cache_sector dw 0xFFFF
 stage2_autorun_status db 0
+%if FAT_TYPE == 16 && STAGE1_RUNTIME_PROBE
+runtime_probe_handoff:
+runtime_probe_abi_version dw 0
+runtime_probe_service_count dw 0
+runtime_probe_status_flags dw 0
+%endif
 tmp_user_ds dw 0
 tmp_user_ptr dw 0
 tmp_rw_remaining dw 0
@@ -16537,12 +16651,20 @@ country_info_default:
 msg_int21_err db "[IERR] ", 0
 msg_ierrpath db "[IERRPATH] ", 0
 msg_ierrpath_p db " P=", 0
+%if STAGE1_SELFTEST_AUTORUN
 msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
 msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
 msg_stage1_selftest_serial_begin db "[S1T] B", 13, 10, 0
 msg_stage1_selftest_serial_done db "[S1T] D", 13, 10, 0
 msg_streamc_serial_pass db "[STREAMC-SERIAL] PASS", 13, 10, 0
 msg_streamc_serial_fail db "[STREAMC-SERIAL] FAIL", 13, 10, 0
+%endif
+%if FAT_TYPE == 16 && STAGE1_RUNTIME_PROBE
+msg_runtime_probe_begin db "[RTP] B", 13, 10, 0
+msg_runtime_probe_ok db "[RTP] OK", 13, 10, 0
+msg_runtime_probe_bad db "[RTP] BAD", 13, 10, 0
+runtime_probe_signature db "CIUKRT01"
+%endif
 
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
@@ -16658,8 +16780,10 @@ str_help_all db "all", 0
 str_help_short db "short", 0
 str_ext_com db ".COM", 0
 str_ext_exe db ".EXE", 0
+%if STAGE1_SELFTEST_AUTORUN
 str_which_probe_comdemo db "\\APPS\\COMDEMO", 0
 str_expect_which_comdemo db "\\apps\\comdemo.com", 0
+%endif
 
 shell_builtin_name_table:
     dw str_help
@@ -16708,13 +16832,16 @@ path_fileio_dos  db "\APPS\FILEIO.BIN", 0
 path_deltest_dos db "\APPS\DELTEST.BIN", 0
 path_gfxrect_dos db "\APPS\GFXRECT.COM", 0
 path_gfxstar_dos db "\APPS\GFXSTAR.COM", 0
+%if STAGE1_SELFTEST_AUTORUN
 cmd_selftest_mv db "mv \APPS\COMDEMO.COM \APPS\T", 0
 cmd_selftest_rename db "ren \APPS\T\COMDEMO.COM \APPS\T\C.COM", 0
 cmd_selftest_restore db "ren \APPS\T\C.COM \APPS\COMDEMO.COM", 0
 path_mvren_dir_dos db "\APPS\T", 0
 path_mvren_final_dos db "\APPS\T\C.COM", 0
+%endif
 %if FAT_TYPE == 16
 path_stage2_dos db "\SYSTEM\STAGE2.BIN", 0
+path_runtime_dos db "\SYSTEM\RUNTIME.BIN", 0
 path_splash_bin_dos db "\SYSTEM\SPLASH.BIN", 0
 msg_splash_serial_ok db "[SPLASH] LOAD OK", 13, 10, 0
 msg_splash_serial_fail db "[SPLASH] LOAD FAIL", 13, 10, 0
