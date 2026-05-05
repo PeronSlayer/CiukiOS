@@ -14,10 +14,10 @@ CiukiOS is not a finished operating system. It is an active learning and researc
 The Phase 4 DOOM gameplay milestone is closed: the full FAT16 runtime can launch DOOM through DOS/4GW, load `doom.wad`, initialize the gameplay path, and reach a playable visual runtime.
 
 Current work focuses on:
-1. stabilizing the DOS runtime after program execution
-2. improving FAT16, CD, and HDD install paths
-3. hardening shell behavior and compatibility test lanes
-4. splitting Stage1 toward a loader plus loaded runtime architecture
+1. advancing the Stage1/runtime split through small runtime-owned service extractions
+2. improving DOS compatibility so arbitrary real DOS programs can launch from the full and full-CD profiles
+3. bringing DOOM and broader DOS software closer to real legacy audio support
+4. hardening shell, CD/HDD install, and validation lanes while keeping runtime stability
 
 ## Quick Links
 1. Full changelog: [CHANGELOG.md](CHANGELOG.md)
@@ -44,9 +44,10 @@ Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
 1. Phase 4 is closed as of 2026-05-04: installer execution is complete and DOOM is playable on the full FAT16 profile.
-2. Keep the full-profile runtime stable while preserving the conservative taxonomy split between serial `menu_reached` and visual gameplay evidence.
-3. The next structural direction after v0.6.5 is the Stage1/runtime split: keep Stage1 as a loader, then move DOS runtime, shell, driver policy, and diagnostics into loaded components.
-4. Track audio, driver activation, and richer gameplay taxonomy as follow-up hardening rather than Phase 4 blockers.
+2. The immediate architecture priority after v0.6.5 is the Stage1/runtime split: keep Stage1 loader-first and move low-risk runtime ownership into `\SYSTEM\RUNTIME.BIN` one slice at a time.
+3. The next product milestone after the split foundation is broad DOS application compatibility: CiukiOS should launch a wider set of real DOS programs directly from the full and full-CD images, not only curated demos.
+4. Legacy audio support for DOOM and other DOS software is the next major compatibility milestone after broader program bring-up.
+5. Networking and Windows pre-NT remain later milestones; the Windows 3.11-style GUI demo is exploratory only and not on the critical path.
 
 ## Project Scope
 CiukiOS is currently useful as:
@@ -76,7 +77,8 @@ This is a spare-time project. Progress is continuous, but not tied to a fixed re
 2. Architecture baseline: [docs/architecture-legacy-x86-v1.md](docs/architecture-legacy-x86-v1.md)
 3. DOS core spec: [docs/dos-core-spec-v0.1.md](docs/dos-core-spec-v0.1.md)
 4. DOS core implementation plan: [docs/dos-core-implementation-plan-v0.1.md](docs/dos-core-implementation-plan-v0.1.md)
-5. Phase 4 DOOM playable milestone: [docs/phase4-doom-gameplay-playable-2026-05-04.md](docs/phase4-doom-gameplay-playable-2026-05-04.md)
+5. Post-runtime-split roadmap: [docs/post-runtime-compatibility-roadmap-v0.1.md](docs/post-runtime-compatibility-roadmap-v0.1.md)
+6. Phase 4 DOOM playable milestone: [docs/phase4-doom-gameplay-playable-2026-05-04.md](docs/phase4-doom-gameplay-playable-2026-05-04.md)
 
 ## Donations and Support
 CiukiOS is a personal open source project. If you want to support development costs such as AI tooling, test workflows, and maintenance time, you can use [GitHub Sponsors](https://github.com/sponsors/PeronSlayer) or see [DONATIONS.md](DONATIONS.md).

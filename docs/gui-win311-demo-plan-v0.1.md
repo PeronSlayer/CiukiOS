@@ -5,6 +5,8 @@ Prototype a tiny Windows 3.11-inspired graphical shell without changing the core
 
 The demo is intentionally packaged as a normal full-profile DOS `.COM` application so runtime work can continue independently.
 
+This document remains exploratory only. It does not change the mainline engineering priority order, which is runtime split, broad DOS program compatibility, legacy audio, and only later Windows pre-NT readiness.
+
 ## Branch Scope
 Branch: `feat/gui-win311-demo`
 
@@ -19,6 +21,7 @@ Excluded from this branch:
 3. mouse driver dependency
 4. protected-mode graphics
 5. changes to `main` or the active runtime-cleanup branch
+6. any claim that GUI work is ahead of DOS compatibility, audio, or runtime-split milestones
 
 ## Demo Behavior
 Run from the full-profile shell:
