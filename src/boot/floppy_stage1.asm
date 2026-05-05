@@ -14341,7 +14341,7 @@ stage1_runtime_probe:
     jne .fail
     cmp word [es:bx + 4], 1
     jne .fail
-    cmp word [es:bx + 6], 1
+    cmp word [es:bx + 6], 2
     jb .fail
     cmp word [es:bx + 8], 8
     jne .fail
@@ -14361,6 +14361,31 @@ stage1_runtime_probe:
     jc .fail
     cmp ax, 0x5254
     jne .fail
+
+    cmp word [es:bx + 18], 2
+    jne .fail
+    test word [es:bx + 20], 1
+    jz .fail
+    mov ax, [es:bx + 22]
+    mov [runtime_probe_service_off], ax
+    mov ax, [runtime_probe_table_seg]
+    mov [runtime_probe_service_seg], ax
+    call far [cs:runtime_probe_service_ptr]
+    jc .fail
+    mov ax, ds
+    cmp ax, RUNTIME_LOAD_SEG
+    jne .fail
+    or si, si
+    jz .fail
+    push cs
+    pop es
+    mov di, runtime_probe_version_prefix
+    mov cx, runtime_probe_version_prefix_len
+    cld
+    repe cmpsb
+    jne .fail
+    push cs
+    pop ds
     test word [runtime_probe_status_flags], 1
     jz .fail
 
@@ -14380,6 +14405,8 @@ stage1_runtime_probe:
     pop ds
 
 .fail:
+    push cs
+    pop ds
     mov si, msg_runtime_probe_bad
     call print_string_serial
     stc
@@ -16427,6 +16454,8 @@ msg_runtime_probe_call db "[RTP] C", 13, 10, 0
 msg_runtime_probe_ok db "[RTP] OK", 13, 10, 0
 msg_runtime_probe_bad db "[RTP] BAD", 13, 10, 0
 runtime_probe_signature db "CIUKRT01"
+runtime_probe_version_prefix db "CiukiOS runtime split"
+runtime_probe_version_prefix_len equ $ - runtime_probe_version_prefix
 %endif
 
 msg_prompt_prefix db "CiukiOS ", 0

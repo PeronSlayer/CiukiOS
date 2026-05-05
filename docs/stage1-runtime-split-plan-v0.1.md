@@ -166,19 +166,23 @@ Runtime service table layout at the returned far pointer:
 |---:|---:|---|
 | `0x00` | dword | Header magic `RTSV`. |
 | `0x04` | word | ABI version, currently `1`. |
-| `0x06` | word | Service count, currently `1`. |
+| `0x06` | word | Service count, currently `2`. |
 | `0x08` | word | Descriptor size, currently `8`. |
 | `0x0A` | 8 bytes | First service descriptor. |
+| `0x12` | 8 bytes | Second service descriptor. |
 
 Runtime service descriptor format:
 | Offset | Size | Meaning |
 |---:|---:|---|
-| `0x00` | word | Service id, currently `1` for runtime identity/status. |
+| `0x00` | word | Service id. |
 | `0x02` | word | Flags, bit 0 means callable. |
 | `0x04` | word | Far-call entry offset in the runtime segment. |
 | `0x06` | word | Reserved. |
 
-The first callable service has no side effects, returns `CF=0`, and returns `AX=0x5254`. Stage1 requires a valid header, a valid descriptor, a successful service call, and `status_flags & 1` before emitting probe success.
+1. Service id `1` remains the runtime identity/status service. It has no side effects, returns `CF=0`, and returns `AX=0x5254`.
+2. Service id `2` is a version-string diagnostic provider. It returns `CF=0` and returns `DS:SI` pointing at the runtime-owned `runtime_version` string.
+
+Stage1 now requires a valid header, two valid callable descriptors, a successful service id `1` call, a successful service id `2` call returning the expected `CiukiOS runtime split` prefix from runtime-owned memory, and `status_flags & 1` before emitting probe success.
 
 ### Probe Validation Semantics
 Probe markers now represent ordered checkpoints:
@@ -189,4 +193,4 @@ Probe markers now represent ordered checkpoints:
 5. `[RTP] BAD` - runtime load, signature, table, descriptor, or service validation failed; fallback continued safely.
 
 ### Exact Next Extraction Target
-Move one tiny real diagnostic or shell-owned constant behind service id `2` while keeping the current identity/status service as the stable foundation contract. Do not make default boot depend on `RUNTIME.BIN` until multiple runtime-owned services prove stable over time.
+Move one tiny real diagnostic word or shell-owned immutable constant behind service id `3` while keeping services `1` and `2` as the stable foundation contract. Do not make default boot depend on `RUNTIME.BIN` until multiple runtime-owned services prove stable over time.
