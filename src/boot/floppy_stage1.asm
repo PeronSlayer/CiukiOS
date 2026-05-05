@@ -139,6 +139,9 @@ stage1_start:
 
     call run_bios_diagnostics
     call install_int21_vector
+%if FAT_TYPE == 16
+    call stage1_runtime_init
+%endif
     call init_stage2_services
     call init_shell_default_dirs
 %if FAT_TYPE == 16 && STAGE1_RUNTIME_PROBE
@@ -1224,6 +1227,8 @@ int21_handler:
 
 .error:
     mov [cs:int21_error_ax], ax
+    cmp byte [cs:int21_silent_errors], 0
+    jne .error_no_log
     cmp byte [cs:int21_last_ah], 0xFF
     je .error_no_log
     push ax
@@ -2720,10 +2725,15 @@ int21_set_default_drive:
     ret
 
 int21_get_version:
+%if FAT_TYPE == 16
+    call stage1_runtime_get_version
+    jnc .done
+%endif
     mov ax, 0x0005
     xor bx, bx
     xor cx, cx
     clc
+.done:
     ret
 
 int21_country_info:
@@ -14253,8 +14263,12 @@ init_stage2_services:
     call install_int33_vector
     call init_mouse
     call init_vbe_query
+%if FAT_TYPE == 16
+    call stage1_runtime_print_stage2_ready
+%else
     mov si, msg_stage2_ready
     call print_string_serial
+%endif
 %if FAT_TYPE == 16
 %if STAGE2_AUTORUN
     call run_stage2_payload
@@ -14265,8 +14279,177 @@ init_stage2_services:
     ret
 
 %if FAT_TYPE == 16
-%if STAGE1_RUNTIME_PROBE
-stage1_runtime_probe:
+stage1_runtime_clear_cache:
+    push ax
+    xor ax, ax
+    mov [runtime_table_off], ax
+    mov [runtime_table_seg], ax
+    mov [runtime_status_flags], ax
+    mov [runtime_service_off], ax
+    mov [runtime_service_seg], ax
+    pop ax
+    ret
+
+stage1_runtime_lookup_service:
+    push bx
+    push cx
+    push dx
+    push es
+
+    mov dx, ax
+    mov ax, [runtime_status_flags]
+    test ax, 1
+    jz .fail
+    mov ax, [runtime_table_seg]
+    or ax, ax
+    jz .fail
+    mov es, ax
+    mov bx, [runtime_table_off]
+    or bx, bx
+    jz .fail
+    cmp dx, 0x0001
+    jne .service_two_plus
+    cmp word [es:bx + 12], 0x0001
+    jne .fail
+    mov ax, [es:bx + 14]
+    or ax, ax
+    jz .fail
+    mov [runtime_service_off], ax
+    mov ax, [runtime_table_seg]
+    mov [runtime_service_seg], ax
+    clc
+    jmp .done
+
+.service_two_plus:
+    mov cx, [es:bx + 6]
+    cmp cx, 2
+    jb .fail
+    dec cx
+    add bx, 18
+
+.next_entry:
+    cmp word [es:bx], dx
+    je .found
+    add bx, 8
+    loop .next_entry
+    jmp .fail
+
+.found:
+    test word [es:bx + 2], 1
+    jz .fail
+    mov ax, [es:bx + 4]
+    or ax, ax
+    jz .fail
+    mov [runtime_service_off], ax
+    mov ax, [runtime_table_seg]
+    mov [runtime_service_seg], ax
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+stage1_runtime_call_version_service:
+    push ds
+    push es
+    push si
+    push di
+    call far [cs:runtime_service_ptr]
+    pop di
+    pop si
+    pop es
+    pop ds
+    ret
+
+stage1_runtime_print_stage2_ready:
+    push ax
+    push ds
+
+    mov ax, 0x0003
+    call stage1_runtime_lookup_service
+    jc .fallback
+    call far [cs:runtime_service_ptr]
+    jc .fallback
+    mov ax, ds
+    cmp ax, RUNTIME_LOAD_SEG
+    jne .fallback
+    or si, si
+    jz .fallback
+    call print_string_serial
+    pop ds
+    pop ax
+    ret
+
+.fallback:
+    pop ds
+    mov si, msg_stage2_ready
+    call print_string_serial
+    pop ax
+    ret
+
+stage1_runtime_validate_cache:
+    push ax
+    push bx
+    push cx
+    push es
+
+    mov ax, [runtime_status_flags]
+    test ax, 1
+    jz .fail
+    mov ax, [runtime_table_seg]
+    cmp ax, RUNTIME_LOAD_SEG
+    jne .fail
+    or ax, ax
+    jz .fail
+    mov es, ax
+    mov bx, [runtime_table_off]
+    or bx, bx
+    jz .fail
+    cmp word [es:bx], 0x5452
+    jne .fail
+    cmp word [es:bx + 2], 0x5653
+    jne .fail
+    cmp word [es:bx + 4], 1
+    jne .fail
+    cmp word [es:bx + 6], 4
+    jb .fail
+    cmp word [es:bx + 8], 8
+    jne .fail
+    cmp word [es:bx + 10], 1
+    jne .fail
+
+    mov ax, 0x0004
+    call stage1_runtime_lookup_service
+    jc .fail
+    call stage1_runtime_call_version_service
+    jc .fail
+    cmp ax, 0x0005
+    jne .fail
+    or bx, bx
+    jne .fail
+    or cx, cx
+    jne .fail
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+stage1_runtime_init:
     push ax
     push bx
     push cx
@@ -14276,11 +14459,11 @@ stage1_runtime_probe:
     push ds
     push es
 
+    call stage1_runtime_clear_cache
+    mov byte [int21_silent_errors], 1
+
     push cs
     pop ds
-    mov si, msg_runtime_probe_begin
-    call print_string_serial
-
     mov dx, path_runtime_dos
     mov ax, 0x3D00
     int 0x21
@@ -14311,70 +14494,106 @@ stage1_runtime_probe:
     pop ds
     mov ax, RUNTIME_LOAD_SEG
     mov es, ax
-    mov si, runtime_probe_signature
+    mov si, runtime_loader_signature
     mov di, 0x0002
     mov cx, 8
     cld
     repe cmpsb
     jne .fail
 
-    mov word [runtime_probe_table_off], 0
-    mov word [runtime_probe_table_seg], 0
-    mov word [runtime_probe_status_flags], 0
     push cs
     pop es
-    mov di, runtime_probe_handoff
+    mov di, runtime_handoff
     call RUNTIME_LOAD_SEG:0x0000
 
     push cs
     pop ds
-    mov ax, [runtime_probe_table_seg]
-    cmp ax, RUNTIME_LOAD_SEG
-    jne .fail
+    call stage1_runtime_validate_cache
+    jc .fail
+    clc
+    jmp .done
+
+.close_fail:
+    push ax
+    mov ah, 0x3E
+    int 0x21
+    pop ax
+    push cs
+    pop ds
+
+.fail:
+    call stage1_runtime_clear_cache
+    stc
+
+.done:
+    mov byte [int21_silent_errors], 0
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+stage1_runtime_get_version:
+    mov ax, 0x0004
+    call stage1_runtime_lookup_service
+    jc .fail
+    call stage1_runtime_call_version_service
+    ret
+
+.fail:
+    stc
+    ret
+
+%if STAGE1_RUNTIME_PROBE
+stage1_runtime_probe:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    push cs
+    pop ds
+    mov si, msg_runtime_probe_begin
+    call print_string_serial
+
+    test word [runtime_status_flags], 1
+    jnz .cache_ready
+    call stage1_runtime_init
+    jc .fail
+
+.cache_ready:
+    call stage1_runtime_validate_cache
+    jc .fail
+
+    mov ax, [runtime_table_seg]
     mov es, ax
-    mov bx, [runtime_probe_table_off]
-    or bx, bx
-    jz .fail
-    cmp word [es:bx], 0x5452
-    jne .fail
-    cmp word [es:bx + 2], 0x5653
-    jne .fail
-    cmp word [es:bx + 4], 1
-    jne .fail
-    cmp word [es:bx + 6], 2
+    mov bx, [runtime_table_off]
+    cmp word [es:bx + 6], 4
     jb .fail
-    cmp word [es:bx + 8], 8
-    jne .fail
-    cmp word [es:bx + 10], 1
-    jne .fail
-    test word [es:bx + 12], 1
-    jz .fail
 
     mov si, msg_runtime_probe_table
     call print_string_serial
 
-    mov ax, [es:bx + 14]
-    mov [runtime_probe_service_off], ax
-    mov ax, [runtime_probe_table_seg]
-    mov [runtime_probe_service_seg], ax
-    call far [cs:runtime_probe_service_ptr]
+    mov ax, 0x0001
+    call stage1_runtime_lookup_service
+    jc .fail
+    call far [cs:runtime_service_ptr]
     jc .fail
     cmp ax, 0x5254
     jne .fail
 
-    mov ax, [runtime_probe_table_seg]
-    mov es, ax
-    mov bx, [runtime_probe_table_off]
-
-    cmp word [es:bx + 18], 2
-    jne .fail
-    test word [es:bx + 20], 1
-    jz .fail
-    mov ax, [es:bx + 22]
-    mov [runtime_probe_service_off], ax
-    mov ax, [runtime_probe_table_seg]
-    mov [runtime_probe_service_seg], ax
-    call far [cs:runtime_probe_service_ptr]
+    mov ax, 0x0002
+    call stage1_runtime_lookup_service
+    jc .fail
+    call far [cs:runtime_service_ptr]
     jc .fail
     mov ax, ds
     cmp ax, RUNTIME_LOAD_SEG
@@ -14390,8 +14609,40 @@ stage1_runtime_probe:
     jne .fail
     push cs
     pop ds
-    test word [runtime_probe_status_flags], 1
+    test word [runtime_status_flags], 1
     jz .fail
+
+    mov ax, 0x0003
+    call stage1_runtime_lookup_service
+    jc .fail
+    call far [cs:runtime_service_ptr]
+    jc .fail
+    mov ax, ds
+    cmp ax, RUNTIME_LOAD_SEG
+    jne .fail
+    or si, si
+    jz .fail
+    push cs
+    pop es
+    mov di, runtime_probe_marker_prefix
+    mov cx, runtime_probe_marker_prefix_len
+    cld
+    repe cmpsb
+    jne .fail
+    push cs
+    pop ds
+
+    mov ax, 0x0004
+    call stage1_runtime_lookup_service
+    jc .fail
+    call stage1_runtime_call_version_service
+    jc .fail
+    cmp ax, 0x0005
+    jne .fail
+    or bx, bx
+    jne .fail
+    or cx, cx
+    jne .fail
 
     mov si, msg_runtime_probe_call
     call print_string_serial
@@ -14399,14 +14650,6 @@ stage1_runtime_probe:
     call print_string_serial
     clc
     jmp .done
-
-.close_fail:
-    push ax
-    mov ah, 0x3E
-    int 0x21
-    pop ax
-    push cs
-    pop ds
 
 .fail:
     push cs
@@ -16071,6 +16314,7 @@ last_exit_code db 0
 int21_last_ah db 0
 int21_last_al db 0
 int21_error_ax dw 0
+int21_silent_errors db 0
 int21_chdir_drive db 0
 int21_chdir_qualified db 0
 int21_trace_call_cs dw 0
@@ -16249,14 +16493,14 @@ fat_cache_valid db 0
 fat_cache_dirty db 0
 fat_cache_sector dw 0xFFFF
 stage2_autorun_status db 0
-%if FAT_TYPE == 16 && STAGE1_RUNTIME_PROBE
-runtime_probe_handoff:
-runtime_probe_table_off dw 0
-runtime_probe_table_seg dw 0
-runtime_probe_status_flags dw 0
-runtime_probe_service_ptr:
-runtime_probe_service_off dw 0
-runtime_probe_service_seg dw 0
+%if FAT_TYPE == 16
+runtime_handoff:
+runtime_table_off dw 0
+runtime_table_seg dw 0
+runtime_status_flags dw 0
+runtime_service_ptr:
+runtime_service_off dw 0
+runtime_service_seg dw 0
 %endif
 tmp_user_ds dw 0
 tmp_user_ptr dw 0
@@ -16457,9 +16701,10 @@ msg_runtime_probe_table db "[RTP] T", 13, 10, 0
 msg_runtime_probe_call db "[RTP] C", 13, 10, 0
 msg_runtime_probe_ok db "[RTP] OK", 13, 10, 0
 msg_runtime_probe_bad db "[RTP] BAD", 13, 10, 0
-runtime_probe_signature db "CIUKRT01"
 runtime_probe_version_prefix db "CiukiOS runtime split"
 runtime_probe_version_prefix_len equ $ - runtime_probe_version_prefix
+runtime_probe_marker_prefix db "[S2] ready"
+runtime_probe_marker_prefix_len equ $ - runtime_probe_marker_prefix
 %endif
 
 msg_prompt_prefix db "CiukiOS ", 0
@@ -16639,6 +16884,7 @@ path_mvren_final_dos db "\APPS\T\C.COM", 0
 path_stage2_dos db "\SYSTEM\STAGE2.BIN", 0
 path_runtime_dos db "\SYSTEM\RUNTIME.BIN", 0
 path_splash_bin_dos db "\SYSTEM\SPLASH.BIN", 0
+runtime_loader_signature db "CIUKRT01"
 msg_splash_serial_ok db "[SPLASH] LOAD OK", 13, 10, 0
 msg_splash_serial_fail db "[SPLASH] LOAD FAIL", 13, 10, 0
 %endif
