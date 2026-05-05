@@ -19,6 +19,10 @@ This changelog is intentionally concise. Every completed task must update the `U
 13. Added an opt-in `CIUKIOS_STAGE1_RUNTIME_PROBE=1` Stage1 probe that opens `\SYSTEM\RUNTIME.BIN`, loads it at segment `0x4C00`, verifies `CIUKRT01`, far-calls the runtime entry, consumes a runtime-written identity/service-status ABI, and falls back safely on bad runtime artifacts.
 14. Added `make qemu-test-full-runtime-probe` to validate both the runtime probe success path and corrupt-runtime fallback path without changing default boot/shell behavior.
 15. Validated the executable split across default full/full-CD builds, full/full-CD QEMU smoke, full-CD shell drive, shell stability, DRVLOAD smoke, qemu-test-all, Stage1 selftest, runtime probe success/corrupt fallback, and DOOM runtime-stable taxonomy.
+16. Removed an unreferenced Stage1 DOS-memory helper cluster from default full/full-CD builds, recovering 528 additional bytes this cycle and raising the default full-CD free margin to 1,354 bytes without changing default UX or regression behavior.
+17. Replaced the fixed Stage1-owned probe status layout with a runtime-owned service table contract: runtime entry now returns a service-table far pointer, Stage1 validates the `RTSV` header plus descriptor metadata, and probe success depends on a callable runtime identity/status service returning the expected result.
+18. Expanded `make qemu-test-full-runtime-probe` so the success path requires ordered `[RTP] B`, `[RTP] T`, `[RTP] C`, and `[RTP] OK` markers, while the corrupt-runtime case still emits `[RTP] BAD` and falls back safely to the normal boot path.
+19. Revalidated the finalization state across build-full, build-full-cd, full/full-CD QEMU smoke, full-CD shell drive, shell stability, DRVLOAD smoke, qemu-test-all, Stage1 selftest, runtime-probe validation, and DOOM runtime-stable taxonomy.
 
 ## pre-Alpha v0.6.5 (2026-05-05)
 1. Established the Stage1/runtime split architecture as the next structural direction: Stage1 is now documented as a loader boundary, with DOS runtime, shell, driver/CD policy, diagnostics, and module responsibilities mapped for migration into loaded components under `\SYSTEM`.

@@ -6863,62 +6863,6 @@ int21_mem_write_mcb:
     pop ax
     ret
 
-int21_mem_write_psp_free_mcb:
-    push ax
-    push bx
-    push dx
-    push es
-
-    mov bx, [cs:dos_mem_psp_free_size]
-    cmp bx, 0
-    je .done
-    mov ax, [cs:dos_mem_psp_free_seg]
-    cmp ax, DOS_HEAP_USER_SEG
-    jb .done
-    cmp ax, DOS_HEAP_LIMIT_SEG
-    jae .done
-    call int21_mem_type_for_seg
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-    mov word [es:0x0001], 0
-    mov [es:0x0003], bx
-
-.done:
-    pop es
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-int21_mem_write_free2_mcb:
-    push ax
-    push bx
-    push dx
-    push es
-
-    mov bx, [cs:dos_mem_free2_size]
-    cmp bx, 0
-    je .done
-    mov ax, [cs:dos_mem_free2_seg]
-    cmp ax, DOS_HEAP_USER_SEG
-    jb .done
-    cmp ax, DOS_HEAP_LIMIT_SEG
-    jae .done
-    call int21_mem_type_for_seg
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-    mov word [es:0x0001], 0
-    mov [es:0x0003], bx
-
-.done:
-    pop es
-    pop dx
-    pop bx
-    pop ax
-    ret
-
 int21_mem_write_chain_entry:
     push ax
     push es
@@ -7158,47 +7102,6 @@ int21_mem_table_find_exact:
     stc
     pop di
     pop dx
-    ret
-
-int21_mem_table_remove_at_si:
-    push ax
-    push bx
-    push cx
-    push di
-
-    mov di, si
-    mov al, [cs:dos_mem_block_count]
-    cmp al, 0
-    je .done
-    dec al
-    xor ah, ah
-    mov bx, ax
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-
-.shift:
-    cmp di, bx
-    jae .shrink
-    mov ax, [cs:dos_mem_block_table + di + DOS_MEM_BLOCK_ENTRY_SIZE]
-    mov [cs:dos_mem_block_table + di], ax
-    mov ax, [cs:dos_mem_block_table + di + DOS_MEM_BLOCK_ENTRY_SIZE + 2]
-    mov [cs:dos_mem_block_table + di + 2], ax
-    mov ax, [cs:dos_mem_block_table + di + DOS_MEM_BLOCK_ENTRY_SIZE + 4]
-    mov [cs:dos_mem_block_table + di + 4], ax
-    mov ax, [cs:dos_mem_block_table + di + DOS_MEM_BLOCK_ENTRY_SIZE + 6]
-    mov [cs:dos_mem_block_table + di + 6], ax
-    add di, DOS_MEM_BLOCK_ENTRY_SIZE
-    jmp .shift
-
-.shrink:
-    dec byte [cs:dos_mem_block_count]
-
-.done:
-    pop di
-    pop cx
-    pop bx
-    pop ax
     ret
 
 int21_mem_table_resize_at_si:
@@ -7653,72 +7556,6 @@ int21_mem_rebuild_chain:
     pop ax
     ret
 
-int21_mem_resize_limit:
-    push ax
-    push bx
-    push cx
-
-    mov cx, ax
-    mov dx, ax
-    inc dx
-    call int21_mem_find_next_alloc
-    jc .heap_limit
-    mov dx, ax
-    sub dx, cx
-    dec dx
-    jmp .done
-
-.heap_limit:
-    mov dx, DOS_HEAP_LIMIT_SEG
-    sub dx, cx
-
-.done:
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-int21_mem_refresh_free2:
-    push ax
-    push bx
-    push dx
-
-    cmp word [cs:dos_mem_alloc_size2], 0
-    je .clear
-    mov dx, [cs:dos_mem_alloc_seg2]
-    add dx, [cs:dos_mem_alloc_size2]
-    inc dx
-    cmp word [cs:dos_mem_alloc_size3], 0
-    je .to_limit
-    mov ax, [cs:dos_mem_alloc_seg3]
-    cmp dx, ax
-    jae .clear
-    mov bx, ax
-    sub bx, dx
-    dec bx
-    cmp bx, 0
-    je .clear
-    jmp .store
-.to_limit:
-    cmp dx, DOS_HEAP_LIMIT_SEG
-    jae .clear
-    mov bx, DOS_HEAP_LIMIT_SEG
-    sub bx, dx
-    cmp bx, 0
-    je .clear
-.store:
-    mov [cs:dos_mem_free2_seg], dx
-    mov [cs:dos_mem_free2_size], bx
-    jmp .done
-.clear:
-    mov word [cs:dos_mem_free2_seg], 0
-    mov word [cs:dos_mem_free2_size], 0
-.done:
-    pop dx
-    pop bx
-    pop ax
-    ret
-
 int21_mem_type_for_seg:
     push ax
     push bx
@@ -7773,98 +7610,6 @@ int21_mem_type_for_seg:
     pop ax
     ret
 
-int21_mem_rewrite_alloc_types:
-    push ax
-    push dx
-    push es
-
-    cmp word [cs:dos_mem_alloc_size], 0
-    je .block2
-    mov ax, [cs:dos_mem_alloc_seg]
-    call int21_mem_type_for_seg
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-
-.block2:
-    cmp word [cs:dos_mem_alloc_size2], 0
-    je .block3
-    mov ax, [cs:dos_mem_alloc_seg2]
-    call int21_mem_type_for_seg
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-
-.block3:
-    cmp word [cs:dos_mem_alloc_size3], 0
-    je .free2
-    mov ax, [cs:dos_mem_alloc_seg3]
-    call int21_mem_type_for_seg
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-
-.free2:
-    cmp word [cs:dos_mem_free2_size], 0
-    je .done
-    mov ax, [cs:dos_mem_free2_seg]
-    call int21_mem_type_for_seg
-    dec ax
-    mov es, ax
-    mov [es:0x0000], dl
-
-.done:
-    pop es
-    pop dx
-    pop ax
-    ret
-
-int21_mem_carve_psp_tail:
-    push bx
-    push cx
-
-    mov ax, [cs:dos_mem_psp_free_seg]
-    mov cx, [cs:dos_mem_psp_free_size]
-    sub cx, bx
-    cmp cx, 1
-    ja .has_tail
-    mov word [cs:dos_mem_psp_free_seg], 0
-    mov word [cs:dos_mem_psp_free_size], 0
-    mov dl, 'Z'
-    jmp .done
-
-.has_tail:
-    add ax, cx
-    dec cx
-    mov [cs:dos_mem_psp_free_size], cx
-    mov dl, 'Z'
-
-.done:
-    pop cx
-    pop bx
-    ret
-
-int21_mem_store_promoted_low_free:
-    push ax
-    push bx
-    push dx
-
-    cmp dx, ax
-    jbe .done
-    mov bx, dx
-    sub bx, ax
-    cmp bx, 1
-    jbe .done
-    dec bx
-    mov [cs:dos_mem_psp_free_seg], ax
-    mov [cs:dos_mem_psp_free_size], bx
-
-.done:
-    pop dx
-    pop bx
-    pop ax
-    ret
-
 int21_mem_current_owner:
     mov ax, [cs:current_psp_seg]
     or ax, ax
@@ -7911,26 +7656,6 @@ int21_psp_mcb_update_type:
     pop cx
     pop bx
     pop ax
-    ret
-
-int21_mem_largest_consume:
-    cmp cx, 0
-    je .done
-    cmp ax, dx
-    jb .skip_gap
-    mov si, ax
-    sub si, dx
-    cmp si, bx
-    jbe .skip_gap
-    mov bx, si
-
-.skip_gap:
-    add ax, cx
-    cmp ax, dx
-    jbe .done
-    mov dx, ax
-
-.done:
     ret
 
 int21_mem_largest_global:
@@ -14593,8 +14318,8 @@ stage1_runtime_probe:
     repe cmpsb
     jne .fail
 
-    mov word [runtime_probe_abi_version], 0
-    mov word [runtime_probe_service_count], 0
+    mov word [runtime_probe_table_off], 0
+    mov word [runtime_probe_table_seg], 0
     mov word [runtime_probe_status_flags], 0
     push cs
     pop es
@@ -14603,13 +14328,44 @@ stage1_runtime_probe:
 
     push cs
     pop ds
-    cmp word [runtime_probe_abi_version], 1
+    mov ax, [runtime_probe_table_seg]
+    cmp ax, RUNTIME_LOAD_SEG
     jne .fail
-    cmp word [runtime_probe_service_count], 1
+    mov es, ax
+    mov bx, [runtime_probe_table_off]
+    or bx, bx
+    jz .fail
+    cmp word [es:bx], 0x5452
+    jne .fail
+    cmp word [es:bx + 2], 0x5653
+    jne .fail
+    cmp word [es:bx + 4], 1
+    jne .fail
+    cmp word [es:bx + 6], 1
     jb .fail
+    cmp word [es:bx + 8], 8
+    jne .fail
+    cmp word [es:bx + 10], 1
+    jne .fail
+    test word [es:bx + 12], 1
+    jz .fail
+
+    mov si, msg_runtime_probe_table
+    call print_string_serial
+
+    mov ax, [es:bx + 14]
+    mov [runtime_probe_service_off], ax
+    mov ax, [runtime_probe_table_seg]
+    mov [runtime_probe_service_seg], ax
+    call far [cs:runtime_probe_service_ptr]
+    jc .fail
+    cmp ax, 0x5254
+    jne .fail
     test word [runtime_probe_status_flags], 1
     jz .fail
 
+    mov si, msg_runtime_probe_call
+    call print_string_serial
     mov si, msg_runtime_probe_ok
     call print_string_serial
     clc
@@ -16464,9 +16220,12 @@ fat_cache_sector dw 0xFFFF
 stage2_autorun_status db 0
 %if FAT_TYPE == 16 && STAGE1_RUNTIME_PROBE
 runtime_probe_handoff:
-runtime_probe_abi_version dw 0
-runtime_probe_service_count dw 0
+runtime_probe_table_off dw 0
+runtime_probe_table_seg dw 0
 runtime_probe_status_flags dw 0
+runtime_probe_service_ptr:
+runtime_probe_service_off dw 0
+runtime_probe_service_seg dw 0
 %endif
 tmp_user_ds dw 0
 tmp_user_ptr dw 0
@@ -16663,6 +16422,8 @@ msg_streamc_serial_fail db "[STREAMC-SERIAL] FAIL", 13, 10, 0
 %endif
 %if FAT_TYPE == 16 && STAGE1_RUNTIME_PROBE
 msg_runtime_probe_begin db "[RTP] B", 13, 10, 0
+msg_runtime_probe_table db "[RTP] T", 13, 10, 0
+msg_runtime_probe_call db "[RTP] C", 13, 10, 0
 msg_runtime_probe_ok db "[RTP] OK", 13, 10, 0
 msg_runtime_probe_bad db "[RTP] BAD", 13, 10, 0
 runtime_probe_signature db "CIUKRT01"
