@@ -4,7 +4,7 @@ All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task must update the `Unreleased` section unless the task is a release cut that creates a new version section.
 
 ## Unreleased (2026-05-05)
-- No unreleased changes.
+1. Added FAT16 per-drive CWD mirror state for C: and D: when INT 21h changes the default drive, kept chdir updates synchronized with the active drive slot, extended DOS21 smoke coverage for explicit C:/D: getcwd paths, added a full-CD shell drive QEMU lane for D: prompt/CWD validation, and expanded shell stability stress loops for repeated invalid commands plus COM/MZ execution, then added DOS-like drive-qualified chdir handling for C: and D: absolute paths, C:REL/D:REL relative paths, parent traversal, and invalid drive rejection without changing the default drive, and split INT 21h AH=38h country-info handling from AH=67h set-handle-count compatibility so DOOM-era callers no longer hit an unsupported or empty country-info path, and confirmed the only observed AH=44h IOCTL failure class is AL=06h input-status by adding DOS21 smoke coverage for that subfunction without broadening generic IOCTL behavior, and initialized COM/MZ PSP handle tables with DOS-standard inherited handles 0-4 plus closed entries so programs that inspect or close inherited handles no longer see an all-zero PSP handle map.
 
 ## pre-Alpha v0.6.3 (2026-05-05)
 1. Added a `runtime_stable` DOOM taxonomy stage after `video_init` to classify post-video observation stability separately from startup progress; a 120s visual headless run now fails explicitly on QEMU SIGSEGV instead of being masked by earlier `video_init=PASS`.

@@ -179,6 +179,7 @@ send_text() {
       '/') key="slash" ;;
       '\') key="backslash" ;;
       '-') key="minus" ;;
+      ':') key="shift-semicolon" ;;
       [A-Z]) key="shift-$(printf '%s' "$ch" | tr 'A-Z' 'a-z')" ;;
       [a-z0-9]) key="$ch" ;;
       *) continue ;;
@@ -316,6 +317,7 @@ QEMU_TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-300}"
 PROMPT_TIMEOUT_SEC="${SHELL_STABILITY_PROMPT_TIMEOUT_SEC:-120}"
 COMMAND_TIMEOUT_SEC="${SHELL_STABILITY_COMMAND_TIMEOUT_SEC:-60}"
 DRVLOAD_TIMEOUT_SEC="${SHELL_STABILITY_DRVLOAD_TIMEOUT_SEC:-120}"
+STRESS_LOOPS="${SHELL_STABILITY_STRESS_LOOPS:-4}"
 
 PROMPT_PREFIX='C{1,2}i{1,2}u{1,2}k{1,2}i{1,2}O{1,2}S{1,2}[[:space:]]+'
 BS='[\\]'
@@ -371,6 +373,9 @@ mark_pass "INITIAL_PROMPT_DETECTED"
 
 send_keys_and_wait_for_prompt "$APPS_PROMPT_PATTERN" "EMPTY_COMMAND_PROMPT_RETURNED" "$COMMAND_TIMEOUT_SEC" ret
 send_and_wait_for_pattern_and_prompt 'notacommand' "$UNKNOWN_COMMAND_PATTERN" "$APPS_PROMPT_PATTERN" "INVALID_COMMAND_RECOVERY" "$COMMAND_TIMEOUT_SEC"
+for ((stress_i=1; stress_i<=STRESS_LOOPS; stress_i++)); do
+  send_and_wait_for_pattern_and_prompt "badcmd${stress_i}" "$UNKNOWN_COMMAND_PATTERN" "$APPS_PROMPT_PATTERN" "INVALID_COMMAND_STRESS_${stress_i}" "$COMMAND_TIMEOUT_SEC"
+done
 send_and_wait_for_pattern_and_prompt 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz' "$UNKNOWN_COMMAND_PATTERN" "$APPS_PROMPT_PATTERN" "LONG_INVALID_COMMAND_RECOVERY" "$COMMAND_TIMEOUT_SEC"
 send_text_keys_and_wait_for_pattern_and_prompt 'pwz' 'd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "BACKSPACE_CORRECTION_PWD" "$COMMAND_TIMEOUT_SEC" backspace
 send_keys_and_wait_for_prompt "$APPS_PROMPT_PATTERN" "TAB_KEY_RECOVERY" "$COMMAND_TIMEOUT_SEC" tab ret
@@ -378,10 +383,15 @@ send_and_wait_for_prompt 'pwd' "$APPS_PROMPT_PATTERN" "PWD_APPS_PROMPT_RETURNED"
 send_and_wait_for_prompt 'woof \APPS' "$APPS_PROMPT_PATTERN" "WOOF_APPS_PROMPT" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'woof DOOM' "$DOOM_PROMPT_PATTERN" "WOOF_DOOM_PROMPT" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'cd..' "$APPS_PROMPT_PATTERN" "CDDOTDOT_APPS_PROMPT" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_pattern_and_prompt 'comdemo' "$COMDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "COMDEMO_LOOP_1" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_pattern_and_prompt 'mzdemo' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "MZDEMO_LOOP_1" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_pattern_and_prompt 'comdemo' "$COMDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "COMDEMO_LOOP_2" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_pattern_and_prompt 'mzdemo' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "MZDEMO_LOOP_2" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_prompt 'cd D:\' "$APPS_PROMPT_PATTERN" "CD_D_ROOT_DEFAULT_C_APPS" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_prompt 'cd D:APPS' "$APPS_PROMPT_PATTERN" "CD_D_REL_DEFAULT_C_APPS" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_prompt 'cd C:\APPS\..' "$ROOT_PROMPT_PATTERN" "CD_C_PARENT_ROOT" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_prompt 'cd C:\APPS' "$APPS_PROMPT_PATTERN" "CD_C_ABS_APPS" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'cd Z:\' "$CD_CASE_FAIL_PATTERN" "$APPS_PROMPT_PATTERN" "CD_BAD_DRIVE_REJECT" "$COMMAND_TIMEOUT_SEC"
+for ((stress_i=1; stress_i<=STRESS_LOOPS; stress_i++)); do
+  send_and_wait_for_pattern_and_prompt 'comdemo' "$COMDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "COMDEMO_LOOP_${stress_i}" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'mzdemo' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "MZDEMO_LOOP_${stress_i}" "$COMMAND_TIMEOUT_SEC"
+done
 
 CASE_OFFSET="$(file_size "$SERIAL_LOG")"
 send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cd \Apps' || mark_fail "SEND_MIXED_CASE_PATH_REJECT" "cannot send mixed-case cd command"
