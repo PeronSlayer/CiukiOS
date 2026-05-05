@@ -34,6 +34,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 28. Tightened the Stage1 runtime probe so success now requires callable runtime service ids `1` through `5` plus default-drive consistency between Stage1 and runtime-owned state.
 29. Added the full-only DOS compatibility smoke lane `make qemu-test-full-dos-compat-smoke`, with validated coverage for `CIUKEDIT` via run-with-args and `GFXSTAR` via the built-in `gfxstar` command, and wired `make qemu-test-all` to include that lane in the active full-profile aggregate smoke bundle.
 30. Added public documentation for the current DOS compatibility matrix and legacy-audio bring-up plan, plus a private restart handoff for the validated service-5 tranche.
+31. Packaged external DOSNavigator under `\APPS\DOSNAV` when present, extended `make qemu-test-full-dos-compat-smoke` to launch `DN.COM` from that directory and wait for the startup banner, and recorded the required third-party acknowledgement: "Based on Dos Navigator by RIT Research Labs."
 
 ## pre-Alpha v0.6.5 (2026-05-05)
 1. Established the Stage1/runtime split architecture as the next structural direction: Stage1 is now documented as a loader boundary, with DOS runtime, shell, driver/CD policy, diagnostics, and module responsibilities mapped for migration into loaded components under `\SYSTEM`.

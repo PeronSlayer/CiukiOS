@@ -32,6 +32,12 @@ Boots the full profile headlessly and validates DOS compatibility smoke flow:
   run built-in gfxstar command
   wait for [GFXSTAR-SERIAL] PASS
   verify prompt returns
+  if third_party/DOSNavigator/DN.COM is present:
+    cd \APPS\DOSNAV
+    verify prompt changes to C:\APPS\DOSNAV>
+    run DN.COM
+    wait for a DOSNavigator startup banner marker
+  otherwise: print skip/pass note and keep the lane green
 
 Artifacts:
   build/full/qemu-full-dos-compat-smoke.{serial.log,strings.log,stderr.log,commands.log,meta}
@@ -252,14 +258,23 @@ APP_TIMEOUT_SEC="${DOS_COMPAT_APP_TIMEOUT_SEC:-120}"
 EDITOR_INPUT_LINE="${DOS_COMPAT_EDITOR_INPUT_LINE:-compat smoke}"
 CIUKEDIT_COMMAND='run \APPS\CIUKEDIT.COM MATRIX.TXT'
 GFXSTAR_COMMAND='gfxstar'
+DOSNAV_PAYLOAD='third_party/DOSNavigator/DN.COM'
+DOSNAV_DIR_COMMAND='cd \APPS\DOSNAV'
+DOSNAV_COMMAND='run DN.COM'
+DOSNAV_PRESENT=0
+if [[ -f "$DOSNAV_PAYLOAD" ]]; then
+  DOSNAV_PRESENT=1
+fi
 
 PROMPT_PREFIX='C{1,2}i{1,2}u{1,2}k{1,2}i{1,2}O{1,2}S{1,2}[[:space:]]+'
 BS='[\\]'
 APPS_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}A{1,2}P{2,4}S{1,2}${BS}{1,2}>{1,2}"
+DOSNAV_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}A{1,2}P{2,4}S{1,2}${BS}{1,2}D{1,2}O{1,2}S{1,2}N{1,2}A{1,2}V{1,2}${BS}{1,2}>{1,2}"
 CIUKEDIT_BOOT_PATTERN='\[CIUKEDIT:BOOT\]|\[{1,2}C{1,2}I{1,2}U{1,2}K{1,2}E{1,2}D{1,2}I{1,2}T{1,2}:{1,2}B{1,2}O{2,4}T{1,2}\]{1,2}'
 CIUKEDIT_INPUT_PATTERN='Enter[[:space:]]+line>|E{1,2}n{1,2}t{1,2}e{1,2}r{1,2}[[:space:]]+l{1,2}i{1,2}n{1,2}e{1,2}>'
 CIUKEDIT_OK_PATTERN='\[CIUKEDIT:OK\]|\[{1,2}C{1,2}I{1,2}U{1,2}K{1,2}E{1,2}D{1,2}I{1,2}T{1,2}:{1,2}O{1,2}K{1,2}\]{1,2}'
 GFXSTAR_PASS_PATTERN='\[GFXSTAR-SERIAL\][[:space:]]+PASS|\[{1,2}G{1,2}F{1,2}X{1,2}S{1,2}T{1,2}A{1,2}R{1,2}-{1,2}S{1,2}E{1,2}R{1,2}I{1,2}A{1,2}L{1,2}\]{1,2}[[:space:]]+P{1,2}A{1,2}S{2,4}'
+DOSNAV_START_PATTERN='Dos[[:space:]]+Navigator|D{1,2}o{1,2}s{1,2}[[:space:]]+N{1,2}a{1,2}v{1,2}i{1,2}g{1,2}a{1,2}t{1,2}o{1,2}r|RIT[[:space:]]+Research[[:space:]]+Labs|R{1,2}I{1,2}T{1,2}[[:space:]]+R{1,2}e{1,2}s{1,2}e{1,2}a{1,2}r{1,2}c{1,2}h{1,2}[[:space:]]+L{1,2}a{1,2}b{1,2}s{1,2}'
 
 QEMU_ARGS=(
   -machine pc,vmport=off
@@ -325,6 +340,24 @@ mark_pass "GFXSTAR_PASS"
 
 wait_for_prompt_from_offset "$GFXSTAR_OFFSET" "$APP_TIMEOUT_SEC" "GFXSTAR_PROMPT_RETURNED"
 
+if (( DOSNAV_PRESENT )); then
+  DOSNAV_CD_OFFSET="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$DOSNAV_DIR_COMMAND" || mark_fail "SEND_DOSNAV_CD_COMMAND" "cannot send DOSNavigator directory change command"
+  if ! wait_for_regex_from_offset "$SERIAL_LOG" "$DOSNAV_PROMPT_PATTERN" "$DOSNAV_CD_OFFSET" "$APP_TIMEOUT_SEC"; then
+    mark_fail "DOSNAV_PROMPT_CHANGED" "C:\APPS\DOSNAV prompt did not appear"
+  fi
+  mark_pass "DOSNAV_PROMPT_CHANGED"
+
+  DOSNAV_RUN_OFFSET="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$DOSNAV_COMMAND" || mark_fail "SEND_DOSNAV_COMMAND" "cannot send DOSNavigator launch command"
+  if ! wait_for_regex_from_offset "$SERIAL_LOG" "$DOSNAV_START_PATTERN" "$DOSNAV_RUN_OFFSET" "$APP_TIMEOUT_SEC"; then
+    mark_fail "DOSNAV_START" "missing DOSNavigator startup banner marker"
+  fi
+  mark_pass "DOSNAV_START"
+else
+  echo "[dos-compat-smoke] PASS DOSNAV_SKIP: payload not present at $DOSNAV_PAYLOAD"
+fi
+
 hmp "$MON_SOCK" "$CMD_LOG" "quit" >/dev/null 2>&1 || true
 set +e
 wait "$QEMU_PID"
@@ -349,6 +382,11 @@ fi
 if ! grep -Eiq "$GFXSTAR_PASS_PATTERN" "$STRINGS_LOG"; then
   mark_fail "STRINGS_GFXSTAR_PASS" "GFXSTAR pass marker missing in strings log"
 fi
+if (( DOSNAV_PRESENT )); then
+  if ! grep -Eiq "$DOSNAV_START_PATTERN" "$STRINGS_LOG"; then
+    mark_fail "STRINGS_DOSNAV_START" "DOSNavigator startup marker missing in strings log"
+  fi
+fi
 
 {
   echo "QEMU_CMD=$QEMU_CMD"
@@ -364,7 +402,15 @@ fi
   echo "EDITOR_INPUT_LINE=$EDITOR_INPUT_LINE"
   echo "CIUKEDIT_COMMAND=$CIUKEDIT_COMMAND"
   echo "GFXSTAR_COMMAND=$GFXSTAR_COMMAND"
-  echo "VALIDATION_FLOW=ciukedit_run_with_args_then_gfxstar_builtin"
+  echo "DOSNAV_PAYLOAD=$DOSNAV_PAYLOAD"
+  echo "DOSNAV_PRESENT=$DOSNAV_PRESENT"
+  echo "DOSNAV_DIR_COMMAND=$DOSNAV_DIR_COMMAND"
+  echo "DOSNAV_COMMAND=$DOSNAV_COMMAND"
+  echo "VALIDATION_FLOW=ciukedit_run_with_args_then_gfxstar_builtin_then_dosnavigator_launch_if_present"
 } > "$META_LOG"
 
-echo "[dos-compat-smoke] PASS (CIUKEDIT via run-with-args and GFXSTAR via built-in command verified)"
+if (( DOSNAV_PRESENT )); then
+  echo "[dos-compat-smoke] PASS (CIUKEDIT via run-with-args, GFXSTAR via built-in command, and DOSNavigator launch verified)"
+else
+  echo "[dos-compat-smoke] PASS (CIUKEDIT via run-with-args and GFXSTAR via built-in command verified; DOSNavigator skipped because payload is absent)"
+fi
