@@ -10,6 +10,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 4. Added DOOM taxonomy `visual_gameplay` screenshot validation for fresh QEMU P6 PPM captures, separating missing/stale screenshots from low-diversity visual failures.
 5. Removed the obsolete `build-profiles/` stub documentation directory now that active profile guidance lives in the Makefile, README, roadmap, and agent directives.
 6. Removed obsolete historical smoke notes, unused screenshot artifacts, the stale ASCII splash source, and the unreferenced standalone CIUKEDIT smoke script while preserving active full/full-CD build, setup, driver, and runtime paths.
+7. Added an isolated full-profile `CIUKWIN.COM` Windows 3.11-inspired GUI preview branch plan and packaged demo app without changing the runtime shell or Stage1 path.
 
 ## pre-Alpha v0.6.3 (2026-05-05)
 1. Added a `runtime_stable` DOOM taxonomy stage after `video_init` to classify post-video observation stability separately from startup progress; a 120s visual headless run now fails explicitly on QEMU SIGSEGV instead of being masked by earlier `video_init=PASS`.
