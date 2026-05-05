@@ -2,23 +2,29 @@
 
 # CiukiOS
 
-Open Source RetroOS project rebuilt from a clean baseline.
-Mission: deliver a native legacy BIOS x86 system able to run DOS and pre-NT software progressively, without CPU emulation in the final runtime path.
+CiukiOS is a personal open source retro-computing project: a small legacy BIOS x86 operating system rebuilt from a clean baseline.
 
-## Quick Links
-1. Project roadmap: [Roadmap.md](Roadmap.md)
-2. Architecture baseline: [docs/architecture-legacy-x86-v1.md](docs/architecture-legacy-x86-v1.md)
-3. DOS core spec: [docs/dos-core-spec-v0.1.md](docs/dos-core-spec-v0.1.md)
-4. DOS core implementation plan: [docs/dos-core-implementation-plan-v0.1.md](docs/dos-core-implementation-plan-v0.1.md)
-5. Engineering logbook: [docs/diario-bordo-v2.md](docs/diario-bordo-v2.md)
-6. Shell runtime stability note (2026-04-28): [docs/shell-runtime-stability-2026-04-28.md](docs/shell-runtime-stability-2026-04-28.md)
-7. Full changelog: [CHANGELOG.md](CHANGELOG.md)
-8. Phase 4 DOOM playable milestone: [docs/phase4-doom-gameplay-playable-2026-05-04.md](docs/phase4-doom-gameplay-playable-2026-05-04.md)
-9. Donations and support: [DONATIONS.md](DONATIONS.md)
+The long-term goal is to progressively support DOS and pre-NT software without CPU emulation in the final runtime path. The current runtime is command-line first, inspired by MS-DOS/FreeDOS, with a full FAT16 profile used for the main compatibility work.
 
-## Current Version
+CiukiOS is not a finished operating system. It is an active learning and research project, built in spare time with AI-assisted development workflows and a lot of low-level debugging.
+
+## Current Milestone
 `CiukiOS pre-Alpha v0.6.3`
 
+The Phase 4 DOOM gameplay milestone is closed: the full FAT16 runtime can launch DOOM through DOS/4GW, load `doom.wad`, initialize the gameplay path, and reach a playable visual runtime.
+
+Current work focuses on:
+1. stabilizing the DOS runtime after program execution
+2. improving FAT16, CD, and HDD install paths
+3. hardening shell behavior and compatibility test lanes
+4. preparing the next compatibility direction: Windows pre-NT bootstrap/runtime work
+
+## Quick Links
+1. Full changelog: [CHANGELOG.md](CHANGELOG.md)
+2. Project roadmap: [Roadmap.md](Roadmap.md)
+3. Donations and support: [DONATIONS.md](DONATIONS.md)
+
+## Versioning
 Versioning policy:
 1. Baseline was reset to `pre-Alpha v0.5.0`.
 2. The `v0.6.x` line marks the Phase 4 DOOM-playable runtime milestone while keeping the legacy BIOS x86 direction intact.
@@ -42,6 +48,14 @@ Full changelog: [CHANGELOG.md](CHANGELOG.md)
 3. Phase 5 remains the next major compatibility direction after v0.6.3: Windows pre-NT bootstrap/runtime work, starting from the DOS extender and protected-mode compatibility gains proven by DOOM.
 4. Track audio, driver activation, and richer gameplay taxonomy as follow-up hardening rather than Phase 4 blockers.
 
+## Project Scope
+CiukiOS is currently useful as:
+1. a retro-computing experiment
+2. a learning project around BIOS boot, FAT filesystems, DOS APIs, MZ loading, and protected-mode compatibility
+3. a testbed for AI-assisted low-level development workflows
+
+It is not yet intended as a polished daily-use operating system.
+
 ## Open Source Collaboration
 CiukiOS welcomes collaboration through issues and pull requests.
 When proposing work, include:
@@ -50,8 +64,7 @@ When proposing work, include:
 3. reproducible technical context
 
 ## Development Pace
-This is a spare-time project.
-Progress is continuous but not tied to a fixed release calendar.
+This is a spare-time project. Progress is continuous, but not tied to a fixed release calendar.
 
 ## Pre-Alpha Policy
 1. `main` is protected by branch-based workflow and explicit merge approval.
@@ -64,17 +77,11 @@ Progress is continuous but not tied to a fixed release calendar.
 3. DOS core spec: [docs/dos-core-spec-v0.1.md](docs/dos-core-spec-v0.1.md)
 4. DOS core implementation plan: [docs/dos-core-implementation-plan-v0.1.md](docs/dos-core-implementation-plan-v0.1.md)
 5. Phase 4 DOOM playable milestone: [docs/phase4-doom-gameplay-playable-2026-05-04.md](docs/phase4-doom-gameplay-playable-2026-05-04.md)
-6. Migration/archive note: [docs/migration-note-old-archive.md](docs/migration-note-old-archive.md)
-
-## Legacy Archive
-Historical project content is preserved under:
-`OLD/archive-2026-04-22/`
-
-This archive includes prior implementation, docs, and build history for reference.
 
 ## Donations and Support
-If you want to support CiukiOS development, see:
-- [DONATIONS.md](DONATIONS.md)
+CiukiOS is a personal open source project. If you want to support development costs such as AI tooling, test workflows, and maintenance time, see [DONATIONS.md](DONATIONS.md).
+
+Non-monetary help is also welcome: bug reports, focused pull requests, documentation improvements, and compatibility test results are all useful.
 
 ## Credits
 Developed collaboratively with AI-assisted workflows and human-driven architecture decisions.
@@ -82,4 +89,4 @@ Developed collaboratively with AI-assisted workflows and human-driven architectu
 The name **CiukiOS** comes from a private joke between me and my girlfriend about our dog Jack (Jacky), who is no longer with us.
 His nickname was **Ciuk/Ciuki**, and we used to joke that if we ever built an operating system, we would call it **CiukiOS**.
 
-So this is why is dedicated to one of the best dogs i ever met, Jack.
+That is why this project is dedicated to one of the best dogs I ever met: Jack.

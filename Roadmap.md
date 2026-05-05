@@ -8,7 +8,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 2. DOS core execution plan: `docs/dos-core-implementation-plan-v0.1.md`
 
 ## Phase 0 - Reset Foundation
-1. Archive previous project state under `OLD/`.
+1. Reset the previous project state and establish a clean legacy-first baseline.
 2. Define and freeze legacy-first architecture.
 3. Establish new AI and development operating rules.
 

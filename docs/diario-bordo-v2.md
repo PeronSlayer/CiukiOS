@@ -2,7 +2,7 @@
 
 ## 2026-04-22
 1. Decision: full architectural reset toward legacy BIOS x86.
-2. Action: previous project archived to `OLD/archive-2026-04-22/`.
+2. Action: previous project state reset for the clean legacy BIOS x86 baseline.
 3. Action: new documentation baseline created (architecture, roadmap, AI directives).
 4. Action: versioning baseline reset to `pre-Alpha v0.5.0`.
 5. Milestone: delivered a BIOS-bootable `floppy` stage0 baseline with a real 16-bit boot sector.

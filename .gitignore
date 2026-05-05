@@ -34,7 +34,6 @@ handoff/*
 !handoff/.gitignore
 handoffs/
 *HANDOFF*.md
-OLD/**/docs/handoffs/
 
 .github/*
 # Local proprietary test payloads (internal-only, never publish)

@@ -5,6 +5,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 
 ## Unreleased (2026-05-05)
 1. Added FAT16 per-drive CWD mirror state for C: and D: when INT 21h changes the default drive, kept chdir updates synchronized with the active drive slot, extended DOS21 smoke coverage for explicit C:/D: getcwd paths, added a full-CD shell drive QEMU lane for D: prompt/CWD validation, and expanded shell stability stress loops for repeated invalid commands plus COM/MZ execution, then added DOS-like drive-qualified chdir handling for C: and D: absolute paths, C:REL/D:REL relative paths, parent traversal, and invalid drive rejection without changing the default drive, and split INT 21h AH=38h country-info handling from AH=67h set-handle-count compatibility so DOOM-era callers no longer hit an unsupported or empty country-info path, and confirmed the only observed AH=44h IOCTL failure class is AL=06h input-status by adding DOS21 smoke coverage for that subfunction without broadening generic IOCTL behavior, and initialized COM/MZ PSP handle tables with DOS-standard inherited handles 0-4 plus closed entries so programs that inspect or close inherited handles no longer see an all-zero PSP handle map.
+2. Slimmed the public README quick links and removed the legacy in-repo `OLD/` archive from the current project tree, keeping the repository focused on the active legacy BIOS x86 codebase and documentation.
 
 ## pre-Alpha v0.6.3 (2026-05-05)
 1. Added a `runtime_stable` DOOM taxonomy stage after `video_init` to classify post-video observation stability separately from startup progress; a 120s visual headless run now fails explicitly on QEMU SIGSEGV instead of being masked by earlier `video_init=PASS`.
@@ -69,7 +70,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 
 ## pre-Alpha v0.5.0 (2026-04-22)
 1. Restarted the project from a clean legacy BIOS x86 architecture baseline.
-2. Archived the previous codebase state to `OLD/archive-2026-04-22/` for historical reference.
+2. Reset the previous codebase state to start from a clean legacy BIOS x86 architecture baseline.
 3. Introduced two official build profiles: `floppy` (1.44MB bring-up) and `full` (extended runtime), both shell-first.
 4. Added build and QEMU smoke-test scripts for both image profiles.
 5. Established branch discipline and documentation standards for reproducible delivery.
