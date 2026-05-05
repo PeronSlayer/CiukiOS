@@ -23,6 +23,9 @@ STAGE1_SLOT_BIN="build/full/obj/full_stage1_slot.bin"
 STAGE2_SRC="src/boot/full_stage2.asm"
 STAGE2_BIN="build/full/obj/full_stage2.bin"
 STAGE2_MAX_SIZE=512
+RUNTIME_SRC="src/runtime/runtime.asm"
+RUNTIME_BIN="build/full/obj/runtime.bin"
+RUNTIME_MAX_SIZE=512
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 TOTAL_SECTORS=262144
@@ -138,7 +141,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -195,6 +198,7 @@ dd if="$STAGE1_BIN" of="$STAGE1_SLOT_BIN" conv=notrunc status=none
 
 echo "[build-full] assembling application payloads"
 nasm -f bin "$STAGE2_SRC" -o "$STAGE2_BIN"
+nasm -f bin "$RUNTIME_SRC" -o "$RUNTIME_BIN"
 nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
 nasm -f bin "$MZDEMO_SRC"  -o "$MZDEMO_BIN"
 nasm -f bin "$FILEIO_SRC"  -o "$FILEIO_BIN"
@@ -219,8 +223,14 @@ if ! python3 "$SPLASH_TOOL" "$SPLASH_SRC" "$SPLASH_BIN"; then
 fi
 
 STAGE2_SIZE="$(stat -c%s "$STAGE2_BIN")"
+RUNTIME_SIZE="$(stat -c%s "$RUNTIME_BIN")"
 if [[ "$STAGE2_SIZE" -gt "$STAGE2_MAX_SIZE" ]]; then
 	echo "[build-full] ERROR: stage2 payload is $STAGE2_SIZE bytes (max $STAGE2_MAX_SIZE)" >&2
+	exit 1
+fi
+
+if [[ "$RUNTIME_SIZE" -gt "$RUNTIME_MAX_SIZE" ]]; then
+	echo "[build-full] ERROR: runtime placeholder is $RUNTIME_SIZE bytes (max $RUNTIME_MAX_SIZE)" >&2
 	exit 1
 fi
 
@@ -517,6 +527,9 @@ fi
 
 echo "[build-full] injecting COMMAND.COM compatibility stub to $COMMAND_COMPAT_IMAGE_PATH"
 mcopy -o -i "$IMG" "$COMMAND_STUB_BIN" "$COMMAND_COMPAT_IMAGE_PATH"
+
+echo "[build-full] injecting runtime split placeholder to ::SYSTEM/RUNTIME.BIN"
+mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/RUNTIME.BIN
 
 echo "[build-full] injecting DRVLOAD.COM helper to ${DRIVERS_IMAGE_DIR%/}/DRVLOAD.COM"
 mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
