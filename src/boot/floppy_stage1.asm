@@ -14607,6 +14607,8 @@ stage1_runtime_probe:
     jne .fail
     cmp word [runtime_probe_service_count], 1
     jb .fail
+    test word [runtime_probe_status_flags], 1
+    jz .fail
 
     mov si, msg_runtime_probe_ok
     call print_string_serial

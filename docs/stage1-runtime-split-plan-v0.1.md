@@ -109,7 +109,7 @@ Selftest-only code and data are now gated behind `STAGE1_SELFTEST_AUTORUN`. Defa
 |---|---:|---:|---:|---:|
 | full default | 35,476 | 34,949 | 527 | 891 |
 | full-cd default | 35,541 | 35,014 | 527 | 826 |
-| full runtime probe | n/a | 35,164 | n/a | 676 |
+| full runtime probe | n/a | 35,174 | n/a | 666 |
 
 The full-CD margin now exceeds the 512-byte minimum target. The 1,024-byte preferred target remains a follow-up extraction goal.
 
