@@ -36,5 +36,6 @@ handoffs/
 *HANDOFF*.md
 
 .github/*
+!.github/FUNDING.yml
 # Local proprietary test payloads (internal-only, never publish)
 third_party/Doom/

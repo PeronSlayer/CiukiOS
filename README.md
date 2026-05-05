@@ -79,7 +79,7 @@ This is a spare-time project. Progress is continuous, but not tied to a fixed re
 5. Phase 4 DOOM playable milestone: [docs/phase4-doom-gameplay-playable-2026-05-04.md](docs/phase4-doom-gameplay-playable-2026-05-04.md)
 
 ## Donations and Support
-CiukiOS is a personal open source project. If you want to support development costs such as AI tooling, test workflows, and maintenance time, see [DONATIONS.md](DONATIONS.md).
+CiukiOS is a personal open source project. If you want to support development costs such as AI tooling, test workflows, and maintenance time, you can use [GitHub Sponsors](https://github.com/sponsors/PeronSlayer) or see [DONATIONS.md](DONATIONS.md).
 
 Non-monetary help is also welcome: bug reports, focused pull requests, documentation improvements, and compatibility test results are all useful.
 
