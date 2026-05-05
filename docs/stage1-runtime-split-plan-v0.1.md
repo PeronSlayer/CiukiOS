@@ -98,3 +98,41 @@ Every migration phase must pass active profile checks only:
 9. `DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` when local DOOM assets are present.
 
 No floppy, FAT32, GUI expansion, UX change, merge, or push is part of this plan without explicit owner approval.
+
+## Executable Probe Slice Implemented
+The completion slice moves the split beyond an inert artifact while preserving default behavior.
+
+### Stage1 Size Recovery
+Selftest-only code and data are now gated behind `STAGE1_SELFTEST_AUTORUN`. Default full and full-CD builds no longer carry the Stage1 autorun move/rename test, stream-C resolver/footer selftest, selftest orchestrator, or their private strings. Selftest builds still include the same code because `scripts/qemu_test_full_stage1.sh` exports `CIUKIOS_STAGE1_SELFTEST_AUTORUN=1`.
+
+| Profile | Before | After | Bytes recovered | Free margin |
+|---|---:|---:|---:|---:|
+| full default | 35,476 | 34,949 | 527 | 891 |
+| full-cd default | 35,541 | 35,014 | 527 | 826 |
+| full runtime probe | n/a | 35,164 | n/a | 676 |
+
+The full-CD margin now exceeds the 512-byte minimum target. The 1,024-byte preferred target remains a follow-up extraction goal.
+
+### Runtime Load Probe
+Probe flag: `CIUKIOS_STAGE1_RUNTIME_PROBE=1`, passed to NASM as `STAGE1_RUNTIME_PROBE`.
+
+When enabled, Stage1 opens `\SYSTEM\RUNTIME.BIN`, loads up to 512 bytes at segment `0x4C00`, verifies signature `CIUKRT01` at offset `0x0002`, calls `0x4C00:0x0000`, then falls back to the existing boot/shell path. Default builds leave the probe compiled out.
+
+Minimal probe serial markers are gated with the probe:
+1. `[RTP] B` when the probe starts.
+2. `[RTP] OK` after signature verification, runtime call, and ABI status validation.
+3. `[RTP] BAD` when load/signature/ABI validation fails; boot continues through the existing fallback path.
+
+### Runtime Handoff ABI
+Stage1 passes `ES:DI` pointing to a small handoff/status buffer in Stage1 data before far-calling the runtime.
+
+| Offset | Size | Owner | Meaning |
+|---:|---:|---|---|
+| `0x00` | word | runtime writes | ABI version, currently `1`. |
+| `0x02` | word | runtime writes | Runtime service count, currently `1`. |
+| `0x04` | word | runtime writes | Runtime status flags, bit 0 currently means identity/status service ready. |
+
+This delegates the first real responsibility to the loaded runtime: runtime identity/service status is produced by `RUNTIME.BIN` and consumed by the probe lane before `[RTP] OK` is emitted.
+
+### Next Migration Slice
+Move a tiny runtime-owned service table header into `RUNTIME.BIN` and make the probe query a callable service descriptor rather than only fixed status words. Keep it opt-in, keep default boot independent of `RUNTIME.BIN`, and only then consider extracting a diagnostic or shell constant.
