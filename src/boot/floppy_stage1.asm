@@ -543,6 +543,8 @@ int21_handler:
     cmp ah, 0x62
     je .fn_62
     cmp ah, 0x38
+    je .fn_38
+    cmp ah, 0x67
     je .fn_67
     cmp ah, 0x68
     je .fn_68
@@ -1124,6 +1126,11 @@ int21_handler:
     jc .error
     jmp .success
 
+.fn_38:
+    call int21_country_info
+    jc .error
+    jmp .success
+
 .fn_67:
     xor ax, ax
     jmp .success
@@ -1308,6 +1315,7 @@ int21_smoke_test:
     int 0x21
     cmp al, [cs:dos_default_drive]
     jne .fail
+    mov [cs:dos21_saved_drive], al
 
     xor dx, dx
     mov dl, [cs:dos_default_drive]
@@ -1328,6 +1336,55 @@ int21_smoke_test:
 
     mov dl, 4
     mov ah, 0x36
+    int 0x21
+    jc .fail
+%endif
+
+    mov dx, find_dta
+    mov ax, 0x3800
+    int 0x21
+    jc .fail
+    cmp bx, 1
+    jne .fail
+    cmp word [cs:find_dta], 0
+    jne .fail
+    cmp byte [cs:find_dta + 2], '$'
+    jne .fail
+
+    mov bx, 20
+    mov ah, 0x67
+    int 0x21
+    jc .fail
+
+    xor bx, bx
+    mov ax, 0x4406
+    int 0x21
+    jc .fail
+    cmp al, 0xFF
+    jne .fail
+%if FAT_TYPE == 16
+    mov dl, 3
+    mov ah, 0x0E
+    int 0x21
+    jc .fail
+    mov si, tmp_cwd_comp
+    mov dl, 4
+    mov ah, 0x47
+    int 0x21
+    jc .fail
+
+    mov dl, 2
+    mov ah, 0x0E
+    int 0x21
+    jc .fail
+    mov si, tmp_cwd_comp
+    mov dl, 3
+    mov ah, 0x47
+    int 0x21
+    jc .fail
+
+    mov dl, [cs:dos21_saved_drive]
+    mov ah, 0x0E
     int 0x21
     jc .fail
 %endif
@@ -1653,6 +1710,39 @@ int21_exec_write_tail:
     pop ax
     ret
 
+int21_init_psp_handles:
+    push ax
+    push cx
+    push di
+    mov word [es:0x0032], 20
+    mov word [es:0x0034], 0x0018
+    mov ax, es
+    mov [es:0x0036], ax
+    mov ax, [cs:current_psp_seg]
+    cmp ax, 0
+    jne .parent_ready
+    mov ax, es
+.parent_ready:
+    mov [es:0x0016], ax
+    mov di, 0x0018
+    mov al, 0
+    stosb
+    mov al, 1
+    stosb
+    mov al, 2
+    stosb
+    mov al, 3
+    stosb
+    mov al, 4
+    stosb
+    mov al, 0xFF
+    mov cx, 15
+    rep stosb
+    pop di
+    pop cx
+    pop ax
+    ret
+
 int21_exec_prepare_mz_free_mcb:
     push ax
     push bx
@@ -1933,6 +2023,7 @@ int21_exec_load_com:
     mov word [es:0x0012], 0x0005
     mov [es:0x0014], ax
     mov word [es:0x002C], DOS_ENV_SEG
+    call int21_init_psp_handles
     call int21_build_env_block
     call int21_exec_write_tail
 
@@ -2242,6 +2333,7 @@ int21_exec_run_mz:
     mov word [es:0x0002], DOS_HEAP_LIMIT_SEG
     mov [es:0x0016], ax
     mov word [es:0x002C], DOS_ENV_SEG
+    call int21_init_psp_handles
     call int21_build_env_block
     call int21_exec_write_tail
 
@@ -2403,6 +2495,99 @@ int21_get_default_drive:
     clc
     ret
 
+%if FAT_TYPE == 16
+cwd_save_current_drive:
+    push ax
+    mov al, [cs:dos_default_drive]
+    call cwd_save_drive_al
+    pop ax
+    ret
+
+cwd_save_drive_al:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov bl, al
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+    cmp bl, 2
+    je .save_c
+    cmp bl, 3
+    je .save_d
+    jmp .done
+.save_c:
+    mov si, cwd_buf
+    mov di, cwd_c_buf
+    jmp .copy
+.save_d:
+    mov si, cwd_buf
+    mov di, cwd_d_buf
+.copy:
+    mov cx, 24
+    rep movsb
+    mov ax, [cs:cwd_cluster]
+    cmp bl, 2
+    je .store_c_cluster
+    mov [cs:cwd_d_cluster], ax
+    jmp .done
+.store_c_cluster:
+    mov [cs:cwd_c_cluster], ax
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+cwd_load_drive_al:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov bl, al
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+    cmp bl, 2
+    je .load_c
+    cmp bl, 3
+    je .load_d
+    jmp .done
+.load_c:
+    mov si, cwd_c_buf
+    mov di, cwd_buf
+    mov ax, [cs:cwd_c_cluster]
+    jmp .copy
+.load_d:
+    mov si, cwd_d_buf
+    mov di, cwd_buf
+    mov ax, [cs:cwd_d_cluster]
+.copy:
+    mov [cs:cwd_cluster], ax
+    mov cx, 24
+    rep movsb
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 int21_code_page:
     cmp al, 0x01
     je .get
@@ -2426,7 +2611,10 @@ int21_set_default_drive:
 %if FAT_TYPE == 16
     cmp dl, 3
     ja .invalid
+    call cwd_save_current_drive
     mov [cs:dos_default_drive], dl
+    mov al, dl
+    call cwd_load_drive_al
     mov al, 4
     xor ah, ah
     clc
@@ -2450,6 +2638,42 @@ int21_get_version:
     xor bx, bx
     xor cx, cx
     clc
+    ret
+
+int21_country_info:
+    cmp al, 0x00
+    je .copy_current
+    cmp al, 0xFF
+    je .copy_current
+    cmp al, 0x01
+    jne .bad_country
+.copy_current:
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov di, dx
+    mov ax, ds
+    mov es, ax
+    mov ax, cs
+    mov ds, ax
+    mov si, country_info_default
+    mov cx, 34
+    cld
+    rep movsb
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    mov bx, 1
+    xor ax, ax
+    clc
+    ret
+.bad_country:
+    mov ax, 0x0002
+    stc
     ret
 
 int21_get_date:
@@ -2846,15 +3070,50 @@ int21_chdir:
     mov byte [cs:tmp_cwd_comp], 0
     mov byte [cs:tmp_cwd_build], 0
     mov byte [cs:tmp_path_guard], 160
+%if FAT_TYPE == 16
+    mov al, [cs:dos_default_drive]
+    mov [cs:int21_chdir_drive], al
+    mov byte [cs:int21_chdir_qualified], 0
+%endif
 
     mov al, [si]
     cmp al, 0
     je .root
 
-    ; skip drive prefix (X:)
+    ; DOS drive-qualified chdir mutates that drive slot without changing the default drive.
     cmp byte [si + 1], ':'
     jne .check_absolute
+%if FAT_TYPE == 16
+    mov al, [si]
+    cmp al, 'C'
+    je .drive_c
+    cmp al, 'D'
+    je .drive_d
+    jmp .invalid_drive
+.drive_c:
+    mov byte [cs:int21_chdir_drive], 2
+    jmp .drive_prefix_ok
+.drive_d:
+    mov byte [cs:int21_chdir_drive], 3
+.drive_prefix_ok:
+    mov byte [cs:int21_chdir_qualified], 1
     add si, 2
+    mov al, [cs:int21_chdir_drive]
+    cmp al, [cs:dos_default_drive]
+    je .drive_prefix_loaded
+    call cwd_save_current_drive
+    mov al, [cs:int21_chdir_drive]
+    call cwd_load_drive_al
+.drive_prefix_loaded:
+    cmp byte [si], 0
+    jne .check_absolute
+    call int21_chdir_restore_default
+    xor ax, ax
+    clc
+    ret
+%else
+    add si, 2
+%endif
 
 .check_absolute:
     cmp byte [si], '\'
@@ -3117,22 +3376,86 @@ int21_chdir:
 .ok:
     mov ax, [cs:tmp_lookup_dir]
     mov [cs:cwd_cluster], ax
+%if FAT_TYPE == 16
+    call int21_chdir_commit_drive
+%endif
     xor ax, ax
     clc
     ret
 .root:
     mov byte [cs:cwd_buf], 0
     mov word [cs:cwd_cluster], 0
+%if FAT_TYPE == 16
+    call cwd_save_current_drive
+%endif
     xor ax, ax
     clc
     ret
 
+.invalid_drive:
+    mov ax, 0x000F
+    stc
+    ret
+
 .fail:
+%if FAT_TYPE == 16
+    call int21_chdir_restore_default
+%endif
     mov ax, 0x0003
     stc
     ret
 
+%if FAT_TYPE == 16
+int21_chdir_commit_drive:
+    push ax
+    cmp byte [cs:int21_chdir_qualified], 0
+    jne .save_qualified
+    call cwd_save_current_drive
+    jmp .done
+.save_qualified:
+    mov al, [cs:int21_chdir_drive]
+    call cwd_save_drive_al
+    cmp al, [cs:dos_default_drive]
+    je .done
+    mov al, [cs:dos_default_drive]
+    call cwd_load_drive_al
+.done:
+    pop ax
+    ret
+
+int21_chdir_restore_default:
+    push ax
+    cmp byte [cs:int21_chdir_qualified], 0
+    je .done
+    mov al, [cs:int21_chdir_drive]
+    cmp al, [cs:dos_default_drive]
+    je .done
+    mov al, [cs:dos_default_drive]
+    call cwd_load_drive_al
+.done:
+    pop ax
+    ret
+%endif
+
 int21_getcwd:
+%if FAT_TYPE == 16
+    cmp dl, 0
+    je .copy_current
+    cmp dl, 3
+    je .copy_c
+    cmp dl, 4
+    je .copy_d
+    mov ax, 0x000F
+    stc
+    ret
+.copy_c:
+    mov bx, cwd_c_buf
+    jmp .copy_explicit
+.copy_d:
+    mov bx, cwd_d_buf
+    jmp .copy_explicit
+.copy_current:
+%endif
     xor bx, bx
 .copy_loop:
     mov al, [cs:cwd_buf + bx]
@@ -3142,6 +3465,15 @@ int21_getcwd:
     je .done
     inc bx
     jmp .copy_loop
+%if FAT_TYPE == 16
+.copy_explicit:
+    mov al, [cs:bx]
+    mov [ds:si], al
+    inc si
+    inc bx
+    cmp al, 0
+    jne .copy_explicit
+%endif
 .done:
     xor ax, ax
     clc
@@ -15696,6 +16028,8 @@ last_exit_code db 0
 int21_last_ah db 0
 int21_last_al db 0
 int21_error_ax dw 0
+int21_chdir_drive db 0
+int21_chdir_qualified db 0
 int21_trace_call_cs dw 0
 int21_path_upcase db 0
 dos_time_centis db 0
@@ -15927,6 +16261,7 @@ dos_mem_block_tmp_state dw 0
 dos_mem_block_found_owner dw 0
 dos_mem_block_req_size dw 0
 dos21_test_seg dw 0
+dos21_saved_drive db 0
 saved_ss dw 0
 saved_sp dw 0
 saved_psp2 dw 0
@@ -16030,6 +16365,19 @@ msg_diag_int1a    db "[TICKS] 0x", 0
 msg_int21_installed db "[INT21] ok", 13, 10, 0
 msg_int21_missing db "[I21] no", 13, 10, 0
 msg_int21_unsup db "[INT21-UNSUP] AH=", 0
+country_info_default:
+    dw 0
+    db "$", 0, 0, 0, 0
+    db ",", 0
+    db ".", 0
+    db "-", 0
+    db ":", 0
+    db 0
+    db 2
+    db 0
+    dd 0
+    db ",", 0
+    times 10 db 0
 msg_int21_err db "[IERR] ", 0
 msg_ierrpath db "[IERRPATH] ", 0
 msg_ierrpath_p db " P=", 0
@@ -16231,6 +16579,12 @@ path_parent_dos  db "..", 0
 path_root_dos    db "\", 0
 cwd_buf times 24 db 0
 cwd_cluster dw 0
+%if FAT_TYPE == 16
+cwd_c_buf times 24 db 0
+cwd_c_cluster dw 0
+cwd_d_buf times 24 db 0
+cwd_d_cluster dw 0
+%endif
 shell_saved_cwd_buf times 24 db 0
 shell_saved_cwd_cluster dw 0
 shell_exec_saved_cwd_buf times 24 db 0

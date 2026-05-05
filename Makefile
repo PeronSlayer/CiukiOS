@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -7,6 +7,7 @@ help:
 	@echo "  make build-full-cd    - build full-profile bootable CD image"
 	@echo "  make qemu-run-full-cd - boot the Live/install CD in visual QEMU"
 	@echo "  make qemu-test-full-cd - smoke test the Live/install CD D: prompt"
+	@echo "  make qemu-test-full-cd-shell-drive - validate Live CD shell drive/CWD commands"
 	@echo "  make verify-full-drivers-payload - verify full-profile driver payload"
 	@echo "  make qemu-test-floppy - build + QEMU smoke test (floppy image)"
 	@echo "  make qemu-test-stage1 - interactive Stage1 regression (DOS21 + COM/MZ + file I/O)"
@@ -40,6 +41,9 @@ qemu-run-full-cd:
 
 qemu-test-full-cd:
 	@bash scripts/qemu_run_full_cd.sh --test
+
+qemu-test-full-cd-shell-drive:
+	@bash scripts/qemu_test_full_cd_shell_drive.sh
 
 qemu-test-floppy:
 	@bash scripts/qemu_test_floppy.sh
