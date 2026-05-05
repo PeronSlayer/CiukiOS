@@ -36,6 +36,7 @@ STAGES=(
   extender_init
   video_init
   runtime_stable
+  visual_gameplay
   menu_reached
 )
 
@@ -357,6 +358,91 @@ log_is_fresh_for_run() {
   return 1
 }
 
+ppm_visual_diversity() {
+  local ppm_path="$1"
+
+  perl -0777ne '
+    my $data = $_;
+    my $pos = 0;
+    my @tokens;
+    while (@tokens < 4) {
+      $data =~ /\G\s*/gc or last;
+      if ($data =~ /\G#[^\n]*(?:\n|$)/gc) {
+        next;
+      }
+      if ($data =~ /\G(\S+)/gc) {
+        push @tokens, $1;
+        next;
+      }
+      last;
+    }
+    die "invalid ppm header\n" unless @tokens == 4 && $tokens[0] eq "P6" && $tokens[1] =~ /^\d+$/ && $tokens[2] =~ /^\d+$/ && $tokens[3] =~ /^\d+$/;
+    die "unsupported ppm maxval\n" unless $tokens[3] == 255;
+    $pos = pos($data);
+    die "invalid ppm raster separator\n" unless defined $pos && $pos < length($data) && substr($data, $pos, 1) =~ /\s/;
+    $pos++;
+    my ($width, $height) = ($tokens[1], $tokens[2]);
+    my $expected = $width * $height * 3;
+    my $pixels = substr($data, $pos, $expected);
+    die "truncated ppm raster\n" unless length($pixels) == $expected;
+    my $nonblank = 0;
+    my %colors;
+    my $sample_step = 3;
+    my $max_samples = 20000;
+    if ($width * $height > $max_samples) {
+      $sample_step = int(($width * $height) / $max_samples) * 3;
+      $sample_step = 3 if $sample_step < 3;
+    }
+    for (my $i = 0; $i + 2 < length($pixels); $i += $sample_step) {
+      my ($r, $g, $b) = unpack("CCC", substr($pixels, $i, 3));
+      $nonblank++ if $r || $g || $b;
+      $colors{pack("CCC", $r, $g, $b)} = 1;
+    }
+    print "$width $height $nonblank ", scalar(keys %colors), "\n";
+  ' "$ppm_path"
+}
+
+classify_visual_gameplay() {
+  local run_start_epoch="$1"
+  local smoke_detail="$2"
+  local screenshot_mtime
+  local ppm_stats
+  local width height nonblank unique_colors
+
+  if [[ "${STAGE_STATUS[runtime_stable]}" != "PASS" ]]; then
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; runtime_stable gate not passed, visual screenshot not evaluated"
+    return
+  fi
+
+  if [[ -z "$DOOM_TAXONOMY_SCREENSHOT" ]]; then
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot not requested (DOOM_TAXONOMY_SCREENSHOT empty)"
+    return
+  fi
+
+  if [[ ! -s "$DOOM_TAXONOMY_SCREENSHOT" ]]; then
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot missing or empty: $DOOM_TAXONOMY_SCREENSHOT"
+    return
+  fi
+
+  screenshot_mtime="$(get_file_mtime_epoch "$DOOM_TAXONOMY_SCREENSHOT")"
+  if [[ "$screenshot_mtime" -lt "$run_start_epoch" ]]; then
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot stale for current run: $DOOM_TAXONOMY_SCREENSHOT (mtime=$screenshot_mtime, run_start=$run_start_epoch)"
+    return
+  fi
+
+  if ! ppm_stats="$(ppm_visual_diversity "$DOOM_TAXONOMY_SCREENSHOT" 2>&1)"; then
+    set_stage "visual_gameplay" "FAIL" "$smoke_detail; screenshot PPM validation failed for $DOOM_TAXONOMY_SCREENSHOT: $ppm_stats"
+    return
+  fi
+
+  read -r width height nonblank unique_colors <<<"$ppm_stats"
+  if [[ "$nonblank" -ge 1000 && "$unique_colors" -ge 16 ]]; then
+    set_stage "visual_gameplay" "PASS" "$smoke_detail; screenshot fresh P6 PPM has visual diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
+  else
+    set_stage "visual_gameplay" "FAIL" "$smoke_detail; screenshot blank or low diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
+  fi
+}
+
 classify_static_with_mdir() {
   local doom_dir="${DOOM_DIR_IN_IMAGE%/}"
 
@@ -433,6 +519,7 @@ classify_runtime() {
     set_stage "extender_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "video_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
     set_stage "runtime_stable" "DEFERRED" "qemu unavailable; runtime probe skipped"
+    set_stage "visual_gameplay" "DEFERRED" "qemu unavailable; visual screenshot probe skipped"
     set_stage "menu_reached" "DEFERRED" "qemu unavailable; runtime probe skipped"
     return
   fi
@@ -443,6 +530,7 @@ classify_runtime() {
     set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "runtime_stable" "DEFERRED" "runtime launch skipped due invalid launch mode"
+    set_stage "visual_gameplay" "DEFERRED" "runtime launch skipped due invalid launch mode"
     set_stage "menu_reached" "DEFERRED" "runtime launch skipped due invalid launch mode"
     return
   fi
@@ -467,6 +555,7 @@ classify_runtime() {
       set_stage "extender_init" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       set_stage "video_init" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       set_stage "runtime_stable" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
+      set_stage "visual_gameplay" "DEFERRED" "socat unavailable; visual screenshot probe skipped"
       set_stage "menu_reached" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
       return
     fi
@@ -481,6 +570,7 @@ classify_runtime() {
         set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid display mode"
         set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid display mode"
         set_stage "runtime_stable" "DEFERRED" "runtime launch skipped due invalid display mode"
+        set_stage "visual_gameplay" "DEFERRED" "runtime launch skipped due invalid display mode"
         set_stage "menu_reached" "DEFERRED" "runtime launch skipped due invalid display mode"
         return
         ;;
@@ -610,6 +700,7 @@ classify_runtime() {
     set_stage "extender_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "video_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     set_stage "runtime_stable" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; no fresh runtime logs available; visual screenshot not evaluated$stale_detail"
     set_stage "menu_reached" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     return
   fi
@@ -654,6 +745,8 @@ classify_runtime() {
     set_stage "runtime_stable" "FAIL" "$smoke_detail; QEMU exited unexpectedly during the post-video observation window"
   fi
 
+  classify_visual_gameplay "$runtime_run_start_epoch" "$smoke_detail"
+
   if log_has_fixed_marker '[ doom ] stage reached: menu' "${runtime_logs[@]}" \
     || log_has_fixed_marker '[ doom ] stage reached: video/menu' "${runtime_logs[@]}" \
     || log_has_pattern '\\[ *doom *\\].*stage reached: *(menu|video/menu)|D_DoomMain|TITLEPIC|new game' "${runtime_logs[@]}"; then
@@ -695,6 +788,7 @@ if [[ ! -f "$IMG" ]]; then
   set_stage "extender_init" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "video_init" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "runtime_stable" "DEFERRED" "runtime probe skipped (image missing)"
+  set_stage "visual_gameplay" "DEFERRED" "runtime probe skipped (image missing)"
   set_stage "menu_reached" "DEFERRED" "runtime probe skipped (image missing)"
 else
   if command_exists mdir; then
