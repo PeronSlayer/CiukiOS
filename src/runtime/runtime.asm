@@ -25,14 +25,25 @@ runtime_entry:
 runtime_service_table:
     db 'R', 'T', 'S', 'V'
     dw 0x0001
-    dw 0x0001
+    dw 0x0002
     dw 0x0008
     dw 0x0001
     dw 0x0001
     dw runtime_identity_service
     dw 0x0000
+    dw 0x0002
+    dw 0x0001
+    dw runtime_version_service
+    dw 0x0000
 
 runtime_identity_service:
     mov ax, 0x5254
+    clc
+    retf
+
+runtime_version_service:
+    push cs
+    pop ds
+    mov si, runtime_version
     clc
     retf

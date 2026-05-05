@@ -23,6 +23,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 17. Replaced the fixed Stage1-owned probe status layout with a runtime-owned service table contract: runtime entry now returns a service-table far pointer, Stage1 validates the `RTSV` header plus descriptor metadata, and probe success depends on a callable runtime identity/status service returning the expected result.
 18. Expanded `make qemu-test-full-runtime-probe` so the success path requires ordered `[RTP] B`, `[RTP] T`, `[RTP] C`, and `[RTP] OK` markers, while the corrupt-runtime case still emits `[RTP] BAD` and falls back safely to the normal boot path.
 19. Revalidated the finalization state across build-full, build-full-cd, full/full-CD QEMU smoke, full-CD shell drive, shell stability, DRVLOAD smoke, qemu-test-all, Stage1 selftest, runtime-probe validation, and DOOM runtime-stable taxonomy.
+20. Added runtime service id `2` as a version-string diagnostic provider, made the Stage1 runtime probe require two callable descriptors instead of one, and revalidated the focused full, full-CD, and runtime-probe lanes without changing default boot ownership.
 
 ## pre-Alpha v0.6.5 (2026-05-05)
 1. Established the Stage1/runtime split architecture as the next structural direction: Stage1 is now documented as a loader boundary, with DOS runtime, shell, driver/CD policy, diagnostics, and module responsibilities mapped for migration into loaded components under `\SYSTEM`.
