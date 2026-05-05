@@ -60,6 +60,9 @@ GFXRECT_MAX_SIZE=1024
 GFXSTAR_SRC="src/com/gfxstar.asm"
 GFXSTAR_BIN="build/full/obj/gfxstar.com"
 GFXSTAR_MAX_SIZE=1024
+CIUKWIN_SRC="src/com/ciukwin.asm"
+CIUKWIN_BIN="build/full/obj/ciukwin.com"
+CIUKWIN_MAX_SIZE=4096
 SETUP_SRC="src/com/setup.asm"
 SETUP_BIN="build/full/obj/setup.com"
 SETUP_MAX_CLUSTERS=4
@@ -135,7 +138,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$SETUP_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -199,6 +202,7 @@ nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
 nasm -f bin "$CIUKEDIT_SRC" -o "$CIUKEDIT_BIN"
 nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
 nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
+nasm -f bin "$CIUKWIN_SRC" -o "$CIUKWIN_BIN"
 nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL" -D SETUP_ENABLE_RAW_HDD_DESTRUCTIVE="$SETUP_RAW_HDD_DESTRUCTIVE" -D SETUP_LIVE_CD_MODE="$SETUP_LIVE_CD_MODE" -o "$SETUP_BIN"
 nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
 nasm -f bin "$DRVLOAD_SRC" -o "$DRVLOAD_BIN"
@@ -227,6 +231,7 @@ DELTEST_SIZE="$(stat -c%s "$DELTEST_BIN")"
 CIUKEDIT_SIZE="$(stat -c%s "$CIUKEDIT_BIN")"
 GFXRECT_SIZE="$(stat -c%s "$GFXRECT_BIN")"
 GFXSTAR_SIZE="$(stat -c%s "$GFXSTAR_BIN")"
+CIUKWIN_SIZE="$(stat -c%s "$CIUKWIN_BIN")"
 SETUP_SIZE="$(stat -c%s "$SETUP_BIN")"
 SPLASH_SIZE="$(stat -c%s "$SPLASH_BIN")"
 SPLASH_SECTORS=$(((SPLASH_SIZE + 511) / 512))
@@ -240,6 +245,7 @@ DELTEST_SECTORS=$(((DELTEST_SIZE + 511) / 512))
 CIUKEDIT_SECTORS=$(((CIUKEDIT_SIZE + 511) / 512))
 GFXRECT_SECTORS=$(((GFXRECT_SIZE + 511) / 512))
 GFXSTAR_SECTORS=$(((GFXSTAR_SIZE + 511) / 512))
+CIUKWIN_SECTORS=$(((CIUKWIN_SIZE + 511) / 512))
 SETUP_SECTORS=$(((SETUP_SIZE + 511) / 512))
 SETUP_CLUSTERS=$(((SETUP_SIZE + CLUSTER_SIZE_BYTES - 1) / CLUSTER_SIZE_BYTES))
 
@@ -250,6 +256,11 @@ fi
 
 if [[ "$GFXSTAR_SIZE" -gt "$GFXSTAR_MAX_SIZE" ]]; then
 	echo "[build-full] ERROR: GFXSTAR payload is $GFXSTAR_SIZE bytes (max $GFXSTAR_MAX_SIZE)" >&2
+	exit 1
+fi
+
+if [[ "$CIUKWIN_SIZE" -gt "$CIUKWIN_MAX_SIZE" ]]; then
+	echo "[build-full] ERROR: CIUKWIN payload is $CIUKWIN_SIZE bytes (max $CIUKWIN_MAX_SIZE)" >&2
 	exit 1
 fi
 
@@ -285,7 +296,7 @@ if (( SETUP_MANIFEST_CLUSTERS != 1 )); then
 	exit 1
 fi
 
-echo "[build-full] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS SETUP=$SETUP_SECTORS SETUP_MFT=$SETUP_MANIFEST_SECTORS SPLASH=$SPLASH_SECTORS"
+echo "[build-full] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS CIUKWIN=$CIUKWIN_SECTORS SETUP=$SETUP_SECTORS SETUP_MFT=$SETUP_MANIFEST_SECTORS SPLASH=$SPLASH_SECTORS"
 
 if [[ "$SPLASH_SIZE" -ne "$SPLASH_EXPECTED_SIZE" ]]; then
 	echo "[build-full] ERROR: SPLASH.BIN size is $SPLASH_SIZE bytes (expected $SPLASH_EXPECTED_SIZE)" >&2
@@ -319,13 +330,14 @@ APPS_GFXSTAR_CLUSTER=$((APPS_GFXRECT_CLUSTER + 1))
 APPS_SETUP_CLUSTER=$((APPS_GFXSTAR_CLUSTER + 1))
 APPS_SETUP_LAST_CLUSTER=$((APPS_SETUP_CLUSTER + SETUP_CLUSTERS - 1))
 APPS_SETUP_MANIFEST_CLUSTER=$((APPS_SETUP_LAST_CLUSTER + 1))
+APPS_CIUKWIN_CLUSTER=$((APPS_SETUP_MANIFEST_CLUSTER + 1))
 
 if (( SPLASH_CLUSTERS < 1 )); then
 	echo "[build-full] ERROR: SPLASH.BIN requires an invalid cluster count ($SPLASH_CLUSTERS)" >&2
 	exit 1
 fi
 
-if (( APPS_SETUP_MANIFEST_CLUSTER >= 256 )); then
+if (( APPS_CIUKWIN_CLUSTER >= 256 )); then
 	echo "[build-full] ERROR: FAT16 layout exceeds first FAT sector entry range" >&2
 	exit 1
 fi
@@ -339,6 +351,7 @@ for sectors in \
 	"$CIUKEDIT_SECTORS" \
 	"$GFXRECT_SECTORS" \
 	"$GFXSTAR_SECTORS" \
+	"$CIUKWIN_SECTORS" \
 	"$SETUP_MANIFEST_SECTORS"; do
 	if (( sectors > FAT_SECTORS_PER_CLUSTER )); then
 		echo "[build-full] ERROR: payload exceeds single FAT16 cluster (${FAT_SECTORS_PER_CLUSTER} sectors)" >&2
@@ -389,6 +402,7 @@ fat16_set_entry "$APPS_GFXRECT_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_GFXSTAR_CLUSTER" 0xFFFF
 fat16_set_contiguous_chain "$APPS_SETUP_CLUSTER" "$SETUP_CLUSTERS"
 fat16_set_entry "$APPS_SETUP_MANIFEST_CLUSTER" 0xFFFF
+fat16_set_entry "$APPS_CIUKWIN_CLUSTER" 0xFFFF
 
 make_entry() {
 	local out="$1" name="$2" attr="$3" cluster="$4" size="$5"
@@ -417,6 +431,7 @@ DIR_ENTRY_DELTEST="build/full/obj/dir_deltest.bin"
 DIR_ENTRY_CIUKEDIT="build/full/obj/dir_ciukedit.bin"
 DIR_ENTRY_GFXRECT="build/full/obj/dir_gfxrect.bin"
 DIR_ENTRY_GFXSTAR="build/full/obj/dir_gfxstar.bin"
+DIR_ENTRY_CIUKWIN="build/full/obj/dir_ciukwin.bin"
 DIR_ENTRY_SETUP="build/full/obj/dir_setup.bin"
 DIR_ENTRY_SETUP_MFT="build/full/obj/dir_setup_mft.bin"
 DIR_ENTRY_SETUP_MFT_ALT="build/full/obj/dir_setup_mft_alt.bin"
@@ -442,6 +457,7 @@ make_entry "$DIR_ENTRY_GFXSTAR"  'GFXSTAR COM' 0x20 "$APPS_GFXSTAR_CLUSTER" "$GF
 make_entry "$DIR_ENTRY_SETUP"    'SETUP   COM' 0x20 "$APPS_SETUP_CLUSTER" "$SETUP_SIZE"
 make_entry "$DIR_ENTRY_SETUP_MFT" 'SETUPMFTBIN' 0x20 "$APPS_SETUP_MANIFEST_CLUSTER" "$SETUP_MANIFEST_SIZE"
 make_entry "$DIR_ENTRY_SETUP_MFT_ALT" 'MANIFST BIN' 0x20 "$APPS_SETUP_MANIFEST_CLUSTER" "$SETUP_MANIFEST_SIZE"
+make_entry "$DIR_ENTRY_CIUKWIN"  'CIUKWIN COM' 0x20 "$APPS_CIUKWIN_CLUSTER" "$CIUKWIN_SIZE"
 
 dd if=/dev/zero of="$SYSTEM_DIR_CLUSTER_BIN" bs=512 count="$FAT_SECTORS_PER_CLUSTER" status=none
 dd if="$DIR_ENTRY_DOT_SYSTEM" of="$SYSTEM_DIR_CLUSTER_BIN" bs=1 seek=0 conv=notrunc status=none
@@ -462,6 +478,7 @@ dd if="$DIR_ENTRY_GFXSTAR" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=256 conv=notrunc
 dd if="$DIR_ENTRY_SETUP" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=288 conv=notrunc status=none
 dd if="$DIR_ENTRY_SETUP_MFT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=320 conv=notrunc status=none
 dd if="$DIR_ENTRY_SETUP_MFT_ALT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=352 conv=notrunc status=none
+dd if="$DIR_ENTRY_CIUKWIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=384 conv=notrunc status=none
 
 echo "[build-full] creating 128MB FAT16 image"
 dd if=/dev/zero of="$IMG" bs=512 count="$TOTAL_SECTORS" status=none
@@ -486,6 +503,7 @@ dd if="$GFXRECT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_GFXRECT_CLUSTER 
 dd if="$GFXSTAR_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_GFXSTAR_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$GFXSTAR_SECTORS" conv=notrunc status=none
 dd if="$SETUP_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_SETUP_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$SETUP_SECTORS" conv=notrunc status=none
 dd if="$SETUP_MANIFEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_SETUP_MANIFEST_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$SETUP_MANIFEST_SECTORS" conv=notrunc status=none
+dd if="$CIUKWIN_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_CIUKWIN_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$CIUKWIN_SECTORS" conv=notrunc status=none
 
 if ! command -v mcopy >/dev/null 2>&1; then
 	echo "[build-full] ERROR: mcopy is required to inject COMMAND.COM compatibility stub" >&2
@@ -577,7 +595,7 @@ State: BIOS stage0 -> stage1 with full DOS runtime and FAT16 file I/O
 Filesystem: FAT16 (SPT=63 Heads=16 128MB) with root directories SYSTEM/APPS
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-$((STAGE1_SECTORS + 1))
 Data: cluster 2=SYSTEM dir, 3=APPS dir, 4=SYSTEM/STAGE2, ${SYSTEM_SPLASH_CLUSTER}-${SYSTEM_SPLASH_LAST_CLUSTER}=SYSTEM/SPLASH
-Data: cluster ${APPS_COMDEMO_CLUSTER}=APPS/COMDEMO, ${APPS_MZDEMO_CLUSTER}=APPS/MZDEMO, ${APPS_FILEIO_CLUSTER}=APPS/FILEIO, ${APPS_DELTEST_CLUSTER}=APPS/DELTEST, ${APPS_CIUKEDIT_CLUSTER}=APPS/CIUKEDIT, ${APPS_GFXRECT_CLUSTER}=APPS/GFXRECT, ${APPS_GFXSTAR_CLUSTER}=APPS/GFXSTAR, ${APPS_SETUP_CLUSTER}-${APPS_SETUP_LAST_CLUSTER}=APPS/SETUP, ${APPS_SETUP_MANIFEST_CLUSTER}=APPS/SETUPMFT.BIN
+Data: cluster ${APPS_COMDEMO_CLUSTER}=APPS/COMDEMO, ${APPS_MZDEMO_CLUSTER}=APPS/MZDEMO, ${APPS_FILEIO_CLUSTER}=APPS/FILEIO, ${APPS_DELTEST_CLUSTER}=APPS/DELTEST, ${APPS_CIUKEDIT_CLUSTER}=APPS/CIUKEDIT, ${APPS_GFXRECT_CLUSTER}=APPS/GFXRECT, ${APPS_GFXSTAR_CLUSTER}=APPS/GFXSTAR, ${APPS_SETUP_CLUSTER}-${APPS_SETUP_LAST_CLUSTER}=APPS/SETUP, ${APPS_SETUP_MANIFEST_CLUSTER}=APPS/SETUPMFT.BIN, ${APPS_CIUKWIN_CLUSTER}=APPS/CIUKWIN
 Optional payloads: third_party/drivers is injected under SYSTEM/DRIVERS when available at build time
 TXT
 
