@@ -166,10 +166,12 @@ Runtime service table layout at the returned far pointer:
 |---:|---:|---|
 | `0x00` | dword | Header magic `RTSV`. |
 | `0x04` | word | ABI version, currently `1`. |
-| `0x06` | word | Service count, currently `2`. |
+| `0x06` | word | Service count, currently `4`. |
 | `0x08` | word | Descriptor size, currently `8`. |
 | `0x0A` | 8 bytes | First service descriptor. |
 | `0x12` | 8 bytes | Second service descriptor. |
+| `0x1A` | 8 bytes | Third service descriptor. |
+| `0x22` | 8 bytes | Fourth service descriptor. |
 
 Runtime service descriptor format:
 | Offset | Size | Meaning |
@@ -181,16 +183,34 @@ Runtime service descriptor format:
 
 1. Service id `1` remains the runtime identity/status service. It has no side effects, returns `CF=0`, and returns `AX=0x5254`.
 2. Service id `2` is a version-string diagnostic provider. It returns `CF=0` and returns `DS:SI` pointing at the runtime-owned `runtime_version` string.
+3. Service id `3` is a stage2-ready marker provider. It returns `CF=0` and returns `DS:SI` pointing at a runtime-owned `[S2]` ready marker string.
+4. Service id `4` is a DOS version query provider. It returns `CF=0` and provides the runtime-owned DOS version result used by the normal full/full-CD silent bootstrap cache and by `INT 21h AH=30h` forwarding when runtime state is available.
 
-Stage1 now requires a valid header, two valid callable descriptors, a successful service id `1` call, a successful service id `2` call returning the expected `CiukiOS runtime split` prefix from runtime-owned memory, and `status_flags & 1` before emitting probe success.
+Normal full and full-CD boots now perform a silent runtime bootstrap/cache step so Stage1 can consult runtime-owned immutable state without changing visible boot output. `INT 21h AH=30h` forwards to cached service id `4` state when available and falls back to the previous local DOS version path when runtime bootstrap or the service call is unavailable.
+
+The first live extraction also now consumes runtime service id `3` inside `init_stage2_services`. If the runtime marker is unavailable or invalid, Stage1 keeps the previous local Stage2-ready behavior, including the preserved fallback-local serial marker path.
+
+Stage1 now requires a valid header, four valid callable descriptors, a successful service id `1` call, a successful service id `2` call returning the expected `CiukiOS runtime split` prefix from runtime-owned memory, a successful service id `3` call returning the runtime-owned `[S2]` ready marker string, a successful service id `4` call returning the expected DOS version state, and `status_flags & 1` before emitting probe success.
 
 ### Probe Validation Semantics
 Probe markers now represent ordered checkpoints:
 1. `[RTP] B` - runtime probe started.
 2. `[RTP] T` - runtime service table header and descriptor validated.
-3. `[RTP] C` - runtime service call returned the expected result.
+3. `[RTP] C` - runtime service calls returned the expected identity, version string, stage2-ready marker, and DOS version results.
 4. `[RTP] OK` - probe success after all validations.
 5. `[RTP] BAD` - runtime load, signature, table, descriptor, or service validation failed; fallback continued safely.
 
 ### Exact Next Extraction Target
-Move one tiny real diagnostic word or shell-owned immutable constant behind service id `3` while keeping services `1` and `2` as the stable foundation contract. Do not make default boot depend on `RUNTIME.BIN` until multiple runtime-owned services prove stable over time.
+Move service id `5` as a conservative default-drive/profile-state query or a similarly narrow live state bridge that can be consumed by one existing Stage1 path while keeping fallback-local behavior intact. Do not make default boot depend on `RUNTIME.BIN` until multiple runtime-owned services prove stable over time.
+
+## Post-Foundation Product Order
+After the current split foundation, the execution order should remain conservative:
+
+1. Continue the runtime split with the next read-only immutable-state service and other tiny runtime-owned slices.
+2. Add one read-only runtime service that returns real runtime or profile state.
+3. Move one small live helper or diagnostic path into runtime ownership.
+4. Use the stronger runtime boundary to improve arbitrary DOS program compatibility from the full and full-CD profiles.
+5. Treat legacy audio as the next major compatibility milestone after broader DOS application bring-up.
+6. Keep networking and Windows pre-NT behind those priorities.
+
+The split is therefore not an isolated architecture exercise. It is the enabling path for broader DOS software compatibility, later audio/device work, and only then Windows pre-NT milestones.
