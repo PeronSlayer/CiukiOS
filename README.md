@@ -9,7 +9,7 @@ The long-term goal is to progressively support DOS and pre-NT software without C
 CiukiOS is not a finished operating system. It is an active learning and research project, built in spare time with AI-assisted development workflows and a lot of low-level debugging.
 
 ## Current Milestone
-`CiukiOS pre-Alpha v0.6.3`
+`CiukiOS pre-Alpha v0.6.5`
 
 The Phase 4 DOOM gameplay milestone is closed: the full FAT16 runtime can launch DOOM through DOS/4GW, load `doom.wad`, initialize the gameplay path, and reach a playable visual runtime.
 
@@ -17,7 +17,7 @@ Current work focuses on:
 1. stabilizing the DOS runtime after program execution
 2. improving FAT16, CD, and HDD install paths
 3. hardening shell behavior and compatibility test lanes
-4. preparing the next compatibility direction: Windows pre-NT bootstrap/runtime work
+4. splitting Stage1 toward a loader plus loaded runtime architecture
 
 ## Quick Links
 1. Full changelog: [CHANGELOG.md](CHANGELOG.md)
@@ -30,22 +30,22 @@ Versioning policy:
 2. The `v0.6.x` line marks the Phase 4 DOOM-playable runtime milestone while keeping the legacy BIOS x86 direction intact.
 
 ## Changelog (Latest 2 Entries)
+### pre-Alpha v0.6.5 (2026-05-05)
+1. Established the Stage1/runtime split path by documenting Stage1 responsibilities, target loader/runtime boundaries, ABI assumptions, migration order, and acceptance gates.
+2. Added the first external runtime landing artifact, `\SYSTEM\RUNTIME.BIN`, built from `src/runtime/runtime.asm` and packaged by the full/full-CD build path without changing boot behavior.
+3. Bumped the project version to `CiukiOS pre-Alpha v0.6.5` to mark the structural architecture milestone while preserving current full/full-CD runtime behavior.
+
 ### pre-Alpha v0.6.3 (2026-05-05)
 1. Promoted the full-CD Live/install path with D: prompt validation, full-CD QEMU runner support, and direct ISO smoke coverage.
 2. Stabilized the full-profile shell return path after DOS program exit, added the `woof` cd alias, corrected FREE/CPU footer telemetry, and expanded shell stability QEMU coverage.
 3. Hardened FAT16 INT 21h path case handling and C:/D: drive/free-space semantics while preserving DOOM runtime stability through taxonomy validation.
-
-### pre-Alpha v0.6.1 (2026-05-04)
-1. Closed the Phase 4 DOOM gameplay milestone: the full FAT16 runtime reaches DOS/4GW, loads `doom.wad`, initializes the gameplay path, renders the viewport/HUD, and has been manually confirmed playable.
-2. Reworked the full-profile INT 21h memory arena around an ordered MCB table and fixed DOS extender compatibility issues in MZ sizing, PSP/MCB visibility, AH=33h, FAT16 read/seek returns, and WAD discovery.
-3. Added a visual DOOM taxonomy lane with QEMU `-display none` plus optional monitor `screendump` capture, while keeping serial `menu_reached` classification conservative.
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Current Direction
 1. Phase 4 is closed as of 2026-05-04: installer execution is complete and DOOM is playable on the full FAT16 profile.
 2. Keep the full-profile runtime stable while preserving the conservative taxonomy split between serial `menu_reached` and visual gameplay evidence.
-3. Phase 5 remains the next major compatibility direction after v0.6.3: Windows pre-NT bootstrap/runtime work, starting from the DOS extender and protected-mode compatibility gains proven by DOOM.
+3. The next structural direction after v0.6.5 is the Stage1/runtime split: keep Stage1 as a loader, then move DOS runtime, shell, driver policy, and diagnostics into loaded components.
 4. Track audio, driver activation, and richer gameplay taxonomy as follow-up hardening rather than Phase 4 blockers.
 
 ## Project Scope

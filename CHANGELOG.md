@@ -16,6 +16,13 @@ This changelog is intentionally concise. Every completed task must update the `U
 10. Rebaselined active-profile validation around the full and full-CD lanes by making `make qemu-test-all` run only current active profile smoke tests, documenting the DEVLOAD `.SYS` execution boundary, and recording a full/full-CD stability matrix with build, shell, driver, setup, and DOOM taxonomy validation.
 11. Advanced DRVLOAD evidence mode with a native `.SYS` loader slice that opens and loads `QCDROM.SYS`, calls the DOS device-driver INIT strategy/interrupt path, links the loaded header into the DOS List-of-Lists from DRVLOAD, and verifies QCDROM detects the QEMU DVD-ROM; MSCDEX still launches against `QCDROM1` but remains blocked at child exit `0x11` until the kernel owns the required DOS List-of-Lists/CDS/device-handle compatibility.
 
+## pre-Alpha v0.6.5 (2026-05-05)
+1. Established the Stage1/runtime split architecture as the next structural direction: Stage1 is now documented as a loader boundary, with DOS runtime, shell, driver/CD policy, diagnostics, and module responsibilities mapped for migration into loaded components under `\SYSTEM`.
+2. Added `docs/stage1-runtime-split-plan-v0.1.md` with the Stage1 responsibility inventory, target `\SYSTEM\RUNTIME.BIN` architecture, memory/ABI assumptions, fallback rules, migration order, and full/full-CD acceptance gates.
+3. Added the first safe runtime-split implementation slice: `src/runtime/runtime.asm` builds into `build/full/obj/runtime.bin` and is packaged as `\SYSTEM\RUNTIME.BIN` by `scripts/build_full.sh`, inherited by full-CD without changing Stage1 boot flow, shell behavior, FAT32 scope, GUI scope, or DOOM runtime expectations.
+4. Bumped the project version to `CiukiOS pre-Alpha v0.6.5` to mark the structural split milestone and require future runtime features to target loaded runtime, shell, helper, driver, or module boundaries before adding more Stage1 logic.
+5. Validated the slice across active full/full-CD lanes: build-full, build-full-cd, full/full-CD QEMU smoke, full-CD drive shell coverage, shell stability, DRVLOAD smoke, qemu-test-all, full Stage1 selftest, and DOOM runtime-stable taxonomy all passed with the inert runtime artifact present in both images.
+
 ## pre-Alpha v0.6.3 (2026-05-05)
 1. Added a `runtime_stable` DOOM taxonomy stage after `video_init` to classify post-video observation stability separately from startup progress; a 120s visual headless run now fails explicitly on QEMU SIGSEGV instead of being masked by earlier `video_init=PASS`.
 2. Added CHS fallback boot paths for the full-CD MBR and full stage0 when booting via direct El Torito hard-disk emulation, enabling the faster non-ISOLINUX real-hardware ISO to reach Stage1 in QEMU.
