@@ -22,6 +22,7 @@ This changelog is intentionally concise. Every completed task must update the `U
 3. Added the first safe runtime-split implementation slice: `src/runtime/runtime.asm` builds into `build/full/obj/runtime.bin` and is packaged as `\SYSTEM\RUNTIME.BIN` by `scripts/build_full.sh`, inherited by full-CD without changing Stage1 boot flow, shell behavior, FAT32 scope, GUI scope, or DOOM runtime expectations.
 4. Bumped the project version to `CiukiOS pre-Alpha v0.6.5` to mark the structural split milestone and require future runtime features to target loaded runtime, shell, helper, driver, or module boundaries before adding more Stage1 logic.
 5. Validated the slice across active full/full-CD lanes: build-full, build-full-cd, full/full-CD QEMU smoke, full-CD drive shell coverage, shell stability, DRVLOAD smoke, qemu-test-all, full Stage1 selftest, and DOOM runtime-stable taxonomy all passed with the inert runtime artifact present in both images.
+6. Aligned release-facing metadata for v0.6.5, including the boot shell banner, direct full-CD ISO label, README, Roadmap, and VERSION file.
 
 ## pre-Alpha v0.6.3 (2026-05-05)
 1. Added a `runtime_stable` DOOM taxonomy stage after `video_init` to classify post-video observation stability separately from startup progress; a 120s visual headless run now fails explicitly on QEMU SIGSEGV instead of being masked by earlier `video_init=PASS`.

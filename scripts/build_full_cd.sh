@@ -96,7 +96,7 @@ xorriso -as mkisofs -quiet \
 	"$ISO_ROOT"
 
 echo "[build-full-cd] creating direct El Torito hard-disk ISO"
-xorriso -as mkisofs -quiet -V CIUKIOS063 -o "$DIRECT_ISO_IMG" -b ciukios-full-cd-disk.img -c boot-direct.cat -hard-disk-boot "$ISO_ROOT"
+xorriso -as mkisofs -quiet -V CIUKIOS065 -o "$DIRECT_ISO_IMG" -b ciukios-full-cd-disk.img -c boot-direct.cat -hard-disk-boot "$ISO_ROOT"
 
 echo "[build-full-cd] done: $ISO_IMG"
 echo "[build-full-cd] done: $DIRECT_ISO_IMG"

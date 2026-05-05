@@ -16546,7 +16546,7 @@ msg_streamc_serial_fail db "[STREAMC-SERIAL] FAIL", 13, 10, 0
 
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db "CiukiOS pre-Alpha v0.6.3 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.6.5 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 16
 msg_shell_status db "Type Help for commands.", 0
 msg_shell_cpu_prefix db "CPU:", 0
