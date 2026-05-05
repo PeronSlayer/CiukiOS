@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -17,6 +17,7 @@ help:
 	@echo "  make qemu-test-full-doom-taxonomy - classify DOOM full-profile taxonomy stages"
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
 	@echo "  make qemu-test-full-shell-stability - run full-profile shell stability test"
+	@echo "  make qemu-test-full-dos-compat-smoke - run full-profile DOS compatibility smoke test"
 	@echo "  make qemu-test-setup-full-acceptance - run setup full-profile acceptance test"
 	@echo "  make qemu-test-setup-installer-scenarios - run setup installer scenario tests"
 	@echo "  make qemu-test-setup-hdd-install - create and boot a disposable full-profile HDD install image"
@@ -69,6 +70,9 @@ qemu-test-full-drvload-smoke:
 
 qemu-test-full-shell-stability:
 	@bash scripts/qemu_test_full_shell_stability.sh
+
+qemu-test-full-dos-compat-smoke:
+	@bash scripts/qemu_test_full_dos_compat_smoke.sh
 
 qemu-test-setup-full-acceptance:
 	@bash scripts/qemu_test_setup_full_acceptance.sh

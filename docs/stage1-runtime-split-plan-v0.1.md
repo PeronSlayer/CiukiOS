@@ -10,10 +10,11 @@ The active Stage1 slot is 70 sectors, or 35,840 bytes.
 
 | Profile | Build mode | Size source | Margin source | Notes |
 |---|---|---|---|---|
-| full | FAT16 HDD, C: default | 35,476 bytes | 364 bytes | Stage1 remains the current DOS runtime owner; the first slice adds no Stage1 code. |
-| full-cd | FAT16 Live/install CD, D: default | 35,541 bytes | 299 bytes | Critical profile because CD-specific defines keep the margin tighter than full. |
+| full | FAT16 HDD, C: default | 34,989 bytes | 851 bytes | Current validated default Stage1 after the five-service runtime tranche. |
+| full-cd | FAT16 Live/install CD, D: default | 35,054 bytes | 786 bytes | Tightest active profile; default boot still stays within the 70-sector ceiling. |
+| full runtime probe | FAT16 HDD, probe-enabled validation build | 35,336 bytes | 504 bytes | Probe success now requires runtime services `1` through `5` plus default-drive consistency. |
 
-The first migration slice intentionally does not add Stage1 code. It creates an external runtime artifact and packages it under `\SYSTEM` so later slices have a concrete landing zone without increasing Stage1 size.
+Current `RUNTIME.BIN` size is 167 bytes. The split is now beyond the inert landing slice: the runtime owns a validated five-service table, while default full and full-CD boots still preserve Stage1 fallback ownership whenever runtime bootstrap or validation fails.
 
 ## Stage1 Responsibility Inventory
 
@@ -166,12 +167,13 @@ Runtime service table layout at the returned far pointer:
 |---:|---:|---|
 | `0x00` | dword | Header magic `RTSV`. |
 | `0x04` | word | ABI version, currently `1`. |
-| `0x06` | word | Service count, currently `4`. |
+| `0x06` | word | Service count, currently `5`. |
 | `0x08` | word | Descriptor size, currently `8`. |
 | `0x0A` | 8 bytes | First service descriptor. |
 | `0x12` | 8 bytes | Second service descriptor. |
 | `0x1A` | 8 bytes | Third service descriptor. |
 | `0x22` | 8 bytes | Fourth service descriptor. |
+| `0x2A` | 8 bytes | Fifth service descriptor. |
 
 Runtime service descriptor format:
 | Offset | Size | Meaning |
@@ -185,23 +187,37 @@ Runtime service descriptor format:
 2. Service id `2` is a version-string diagnostic provider. It returns `CF=0` and returns `DS:SI` pointing at the runtime-owned `runtime_version` string.
 3. Service id `3` is a stage2-ready marker provider. It returns `CF=0` and returns `DS:SI` pointing at a runtime-owned `[S2]` ready marker string.
 4. Service id `4` is a DOS version query provider. It returns `CF=0` and provides the runtime-owned DOS version result used by the normal full/full-CD silent bootstrap cache and by `INT 21h AH=30h` forwarding when runtime state is available.
+5. Service id `5` is a default-drive state bridge. It returns `CF=0` and `DS:SI` pointing at the runtime-owned default-drive byte.
 
-Normal full and full-CD boots now perform a silent runtime bootstrap/cache step so Stage1 can consult runtime-owned immutable state without changing visible boot output. `INT 21h AH=30h` forwards to cached service id `4` state when available and falls back to the previous local DOS version path when runtime bootstrap or the service call is unavailable.
+Normal full and full-CD boots now perform a silent runtime bootstrap/cache step so Stage1 can consult runtime-owned immutable and low-risk live state without changing visible boot output. `INT 21h AH=30h` forwards to cached service id `4` state when available and falls back to the previous local DOS version path when runtime bootstrap or the service call is unavailable.
+
+Stage1 now also uses service id `5` as the narrow mutable-state bridge for the current tranche. Stage1 reads the runtime-owned default-drive byte when available, synchronizes the runtime-owned byte after silent runtime init, and mirrors later set-default-drive updates back into runtime state so the current default-drive view remains aligned without making normal boot depend on `RUNTIME.BIN`.
 
 The first live extraction also now consumes runtime service id `3` inside `init_stage2_services`. If the runtime marker is unavailable or invalid, Stage1 keeps the previous local Stage2-ready behavior, including the preserved fallback-local serial marker path.
 
-Stage1 now requires a valid header, four valid callable descriptors, a successful service id `1` call, a successful service id `2` call returning the expected `CiukiOS runtime split` prefix from runtime-owned memory, a successful service id `3` call returning the runtime-owned `[S2]` ready marker string, a successful service id `4` call returning the expected DOS version state, and `status_flags & 1` before emitting probe success.
+Stage1 now requires a valid header, five valid callable descriptors, a successful service id `1` call, a successful service id `2` call returning the expected `CiukiOS runtime split` prefix from runtime-owned memory, a successful service id `3` call returning the runtime-owned `[S2]` ready marker string, a successful service id `4` call returning the expected DOS version state, a successful service id `5` call returning a default-drive pointer inside the runtime segment, matching Stage1/runtime default-drive bytes, and `status_flags & 1` before emitting probe success.
+
+### Current Validated Five-Service Sizes
+| Artifact | Size |
+|---|---:|
+| full Stage1 | 34,989 bytes |
+| full-cd Stage1 | 35,054 bytes |
+| full runtime probe Stage1 | 35,336 bytes |
+| `RUNTIME.BIN` | 167 bytes |
 
 ### Probe Validation Semantics
 Probe markers now represent ordered checkpoints:
 1. `[RTP] B` - runtime probe started.
 2. `[RTP] T` - runtime service table header and descriptor validated.
-3. `[RTP] C` - runtime service calls returned the expected identity, version string, stage2-ready marker, and DOS version results.
+3. `[RTP] C` - runtime service calls returned the expected identity, version string, stage2-ready marker, DOS version state, and default-drive pointer/consistency results.
 4. `[RTP] OK` - probe success after all validations.
 5. `[RTP] BAD` - runtime load, signature, table, descriptor, or service validation failed; fallback continued safely.
 
-### Exact Next Extraction Target
-Move service id `5` as a conservative default-drive/profile-state query or a similarly narrow live state bridge that can be consumed by one existing Stage1 path while keeping fallback-local behavior intact. Do not make default boot depend on `RUNTIME.BIN` until multiple runtime-owned services prove stable over time.
+### Service id `5` Completed
+This cycle completed the previous conservative extraction target by moving default-drive state into a runtime-owned byte exposed through a service-table pointer, while still keeping Stage1 as the visible default owner when runtime bootstrap or validation fails.
+
+### Conservative Next Extraction Target
+Keep the next slice narrower than a subsystem transfer: extract one more read-mostly runtime-owned profile or diagnostic byte that is consumed by exactly one existing Stage1 path and still has an unchanged local fallback. Do not move allocator, PSP/MCB, EXEC, file-I/O core, termination, or CD/device-mutation ownership yet.
 
 ## Post-Foundation Product Order
 After the current split foundation, the execution order should remain conservative:
