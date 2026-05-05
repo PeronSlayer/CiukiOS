@@ -14362,6 +14362,10 @@ stage1_runtime_probe:
     cmp ax, 0x5254
     jne .fail
 
+    mov ax, [runtime_probe_table_seg]
+    mov es, ax
+    mov bx, [runtime_probe_table_off]
+
     cmp word [es:bx + 18], 2
     jne .fail
     test word [es:bx + 20], 1
