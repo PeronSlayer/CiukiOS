@@ -2,6 +2,7 @@ bits 16
 org 0x0000
 
 %define CMD_BUF_LEN 64
+%define DOS_ENV_EXEC_PATH_LEN 64
 %define SHELL_EXEC_PATH_BUF_LEN 80
 %define SHELL_HISTORY_MAX 8
 %define COM_LOAD_SEG 0x2000
@@ -1313,6 +1314,7 @@ int21_handler:
     pop dx
     pop cx
     pop bx
+    cld
     iret
 
 int21_kbd_flush:
@@ -1521,6 +1523,7 @@ int21_exec:
     mov [cs:tmp_overlay_reloc_seg], ax
 
 .subfn_ready:
+    call int21_exec_capture_path
 
     mov si, dx
     call int21_path_to_fat_name
@@ -1534,33 +1537,41 @@ int21_exec:
 %if FAT_TYPE == 16
     ; Compatibility fallback for the desktop runtime: if the caller asks for
     ; plain GEM.EXE and root lookup misses, retry the legacy absolute system path.
+    push ax
     mov si, dx
     call int21_path_to_fat_name
-    jc .path_resolved
+    jc .gem_fallback_restore_error
     mov al, [cs:path_fat_name + 0]
     cmp al, 'G'
-    jne .path_resolved
+    jne .gem_fallback_restore_error
     mov al, [cs:path_fat_name + 1]
     cmp al, 'E'
-    jne .path_resolved
+    jne .gem_fallback_restore_error
     mov al, [cs:path_fat_name + 2]
     cmp al, 'M'
-    jne .path_resolved
+    jne .gem_fallback_restore_error
     mov al, [cs:path_fat_name + 8]
     cmp al, 'E'
-    jne .path_resolved
+    jne .gem_fallback_restore_error
     mov al, [cs:path_fat_name + 9]
     cmp al, 'X'
-    jne .path_resolved
+    jne .gem_fallback_restore_error
     mov al, [cs:path_fat_name + 10]
     cmp al, 'E'
-    jne .path_resolved
+    jne .gem_fallback_restore_error
     push ds
     mov ax, cs
     mov ds, ax
     mov si, path_gem_exe_abs
     call int21_resolve_and_find_path
     pop ds
+    jc .gem_fallback_restore_error
+    add sp, 2
+    jmp .path_resolved
+
+.gem_fallback_restore_error:
+    pop ax
+    stc
 %endif
 
 .path_resolved:
@@ -1594,6 +1605,8 @@ int21_exec:
     je .check_exe_x
     cmp al, 'A'
     je .check_app_p1
+     cmp al, 'P'
+     je .check_prg_r
     jne .invalid_format
 
 .check_exe_x:
@@ -1612,6 +1625,14 @@ int21_exec:
     mov al, [cs:path_fat_name + 10]
     cmp al, 'P'
     jne .invalid_format
+
+.check_prg_r:
+     mov al, [cs:path_fat_name + 9]
+     cmp al, 'R'
+     jne .invalid_format
+     mov al, [cs:path_fat_name + 10]
+     cmp al, 'G'
+     jne .invalid_format
 
 .exec_mz:
     cmp word [cs:current_psp_seg], 0
@@ -1671,6 +1692,35 @@ int21_exec:
     pop dx
     pop cx
     pop bx
+    ret
+
+int21_exec_capture_path:
+    push ax
+    push cx
+    push si
+    push di
+
+    mov si, dx
+    mov di, dos_child_exec_path_buf
+    mov cx, DOS_ENV_EXEC_PATH_LEN - 1
+
+.copy_loop:
+    mov al, [si]
+    mov [cs:di], al
+    inc si
+    inc di
+    test al, al
+    jz .done
+    dec cx
+    jnz .copy_loop
+
+    mov byte [cs:di], 0
+
+.done:
+    pop di
+    pop si
+    pop cx
+    pop ax
     ret
 
 int21_exec_capture_tail:
@@ -2162,6 +2212,7 @@ int21_exec_run_com:
     xor di, di
     xor bp, bp
     sti
+    cld
 
     call far [cs:com_entry_off]
 
@@ -2499,6 +2550,7 @@ int21_exec_run_mz:
     xor di, di
     xor bp, bp
     sti
+    cld
     call far [cs:mz_entry_off]
 
 .after_call:
@@ -4420,13 +4472,23 @@ int21_create:
     push dx
     push ds
 
+    call int21_normalize_leading_drive_designator
+
+    mov byte [cs:int21_path_stage_marker], 1
     mov si, dx
     call int21_resolve_parent_dir
+    jnc .parent_ok
+    mov si, dx
+    call .resolve_root_leaf_fallback
     jc .path_fail
+
+.parent_ok:
+    mov byte [cs:int21_path_stage_marker], 2
     mov [cs:tmp_lookup_dir], ax
 
     call int21_path_to_fat_name
     jc .path_fail
+    mov byte [cs:int21_path_stage_marker], 3
 
     mov ax, [cs:tmp_lookup_dir]
     mov bx, ax
@@ -4434,6 +4496,7 @@ int21_create:
     mov ds, ax
     mov si, path_fat_name
     mov ax, bx
+    mov byte [cs:int21_path_stage_marker], 4
     call int21_lookup_in_dir
 %if FAT_TYPE == 16 || FAT_TYPE == 12
     jc .create_missing
@@ -4479,11 +4542,83 @@ int21_create:
     call write_sector_lba
     jc .io_error
 
+    mov word [cs:search_found_cluster], 0
+    mov word [cs:search_found_size_lo], 0
+    mov word [cs:search_found_size_hi], 0
+    mov ax, [cs:tmp_next_cluster]
+    mov [cs:search_found_root_lba], ax
+    mov ax, [cs:tmp_cluster]
+    mov [cs:search_found_root_off], ax
+    mov byte [cs:tmp_open_mode], 2
+
+    call int21_select_free_file_handle
+    jc .done
+    call int21_assign_selected_file_handle
+    jmp .done
+
 .open_created:
     pop ds
     pop dx
     mov al, 2
     jmp int21_open
+
+.resolve_root_leaf_fallback:
+    push bx
+
+.fallback_skip_space:
+    cmp byte [si], ' '
+    jne .fallback_drive_check
+    inc si
+    jmp .fallback_skip_space
+
+.fallback_drive_check:
+    cmp byte [si], 'C'
+    je .fallback_drive_colon
+    cmp byte [si], 'c'
+    jne .fallback_sep_check
+.fallback_drive_colon:
+    cmp byte [si + 1], ':'
+    jne .fallback_fail
+    add si, 2
+
+.fallback_sep_check:
+    cmp byte [si], '\'
+    je .fallback_leaf_start
+    cmp byte [si], '/'
+    jne .fallback_fail
+
+.fallback_leaf_start:
+    inc si
+    mov bx, si
+
+.fallback_leaf_scan:
+    mov al, [si]
+    cmp al, 0
+    je .fallback_leaf_ok
+    cmp al, 13
+    je .fallback_leaf_ok
+    cmp al, '\'
+    je .fallback_fail
+    cmp al, '/'
+    je .fallback_fail
+    inc si
+    jmp .fallback_leaf_scan
+
+.fallback_leaf_ok:
+    cmp si, bx
+    je .fallback_fail
+    xor ax, ax
+    mov si, bx
+    clc
+    jmp .fallback_done
+
+.fallback_fail:
+    mov ax, 0x0003
+    stc
+
+.fallback_done:
+    pop bx
+    ret
 
 .path_fail:
     mov ax, 0x0003
@@ -4499,20 +4634,28 @@ int21_create:
     pop dx
     ret
 
-int21_open:
+int21_normalize_leading_drive_designator:
+    push ax
     push bx
-    push dx
-    push si
-    push ds
-    push es
 
-    ; AH=3Dh: AL carries access in bits 0..2 plus sharing/inherit flags.
-    ; Accept higher bits and validate only access mode.
-    and al, 0x03
-    cmp al, 0x03
-    je .access_denied
-    mov [cs:tmp_open_mode], al
+    mov bx, dx
 
+    mov al, [bx]
+    or al, 0x20
+    cmp al, 'a'
+    jb .done
+    cmp al, 'z'
+    ja .done
+    cmp byte [bx + 1], ':'
+    jne .done
+    add dx, 2
+
+.done:
+    pop bx
+    pop ax
+    ret
+
+int21_select_free_file_handle:
     cmp byte [cs:file_handle_open], 0
     je .target_slot1
     cmp byte [cs:file_handle2_open], 0
@@ -4533,7 +4676,7 @@ int21_open:
 %endif
     mov ax, 0x0004
     stc
-    jmp .done
+    ret
 
 .target_slot1:
     mov byte [cs:file_handle_target], 1
@@ -4551,6 +4694,7 @@ int21_open:
 .target_slot4:
     mov byte [cs:file_handle_target], 4
     jmp .target_ready
+
 .target_slot5:
     mov byte [cs:file_handle_target], 5
     jmp .target_ready
@@ -4565,24 +4709,14 @@ int21_open:
 
 .target_slot8:
     mov byte [cs:file_handle_target], 8
-    jmp .target_ready
-
 %endif
 
 .target_ready:
-    mov si, dx
-    call int21_resolve_and_find_path
-    jnc .path_ready
-%if FAT_TYPE == 16
-    call int21_open_try_gem_cpi_fallback
-    jc .done
-%endif
-.path_ready:
-%if FAT_TYPE == 16 || FAT_TYPE == 12
-    test byte [cs:search_found_attr], 0x10
-    jnz .access_denied
-%endif
+    xor ax, ax
+    clc
+    ret
 
+int21_assign_selected_file_handle:
     cmp byte [cs:file_handle_target], 2
     je .assign_slot2
     cmp byte [cs:file_handle_target], 3
@@ -4626,7 +4760,7 @@ int21_open:
 
     mov ax, 0x0005
     clc
-    jmp .done
+    ret
 
 .assign_slot2:
     mov byte [cs:file_handle2_open], 1
@@ -4655,7 +4789,7 @@ int21_open:
 
     mov ax, 0x0006
     clc
-    jmp .done
+    ret
 
 .assign_slot3:
     mov byte [cs:file_handle3_open], 1
@@ -4684,7 +4818,7 @@ int21_open:
 
     mov ax, 0x0007
     clc
-    jmp .done
+    ret
 
 %if FAT_TYPE == 16
 .assign_slot4:
@@ -4712,7 +4846,8 @@ int21_open:
 
     mov ax, 0x0008
     clc
-    jmp .done
+    ret
+
 .assign_slot5:
     mov byte [cs:file_handle5_open], 1
     mov word [cs:file_handle5_pos], 0
@@ -4738,7 +4873,7 @@ int21_open:
 
     mov ax, 0x0009
     clc
-    jmp .done
+    ret
 
 .assign_slot6:
     mov byte [cs:file_handle6_open], 1
@@ -4765,7 +4900,7 @@ int21_open:
 
     mov ax, 0x000A
     clc
-    jmp .done
+    ret
 
 .assign_slot7:
     mov byte [cs:file_handle7_open], 1
@@ -4792,7 +4927,7 @@ int21_open:
 
     mov ax, 0x000B
     clc
-    jmp .done
+    ret
 
 .assign_slot8:
     mov byte [cs:file_handle8_open], 1
@@ -4819,9 +4954,55 @@ int21_open:
 
     mov ax, 0x000C
     clc
+    ret
+%endif
+
+.io_fail:
+    mov ax, 0x0005
+    stc
+    ret
+
+int21_open:
+    push bx
+    push dx
+    push si
+    push ds
+    push es
+
+    call int21_normalize_leading_drive_designator
+
+    ; AH=3Dh: AL carries access in bits 0..2 plus sharing/inherit flags.
+    ; Accept higher bits and validate only access mode.
+    and al, 0x03
+    cmp al, 0x03
+    je .access_denied
+    mov [cs:tmp_open_mode], al
+
+    call int21_select_free_file_handle
+    jc .done
+
+    mov byte [cs:int21_path_stage_marker], 1
+    mov si, dx
+    call int21_resolve_and_find_path
+    jnc .path_ready
+%if FAT_TYPE == 16
+    push ax
+    call int21_open_try_gem_cpi_fallback
+    jnc .gem_cpi_fallback_ready
+    pop ax
     jmp .done
 
+.gem_cpi_fallback_ready:
+    add sp, 2
 %endif
+.path_ready:
+%if FAT_TYPE == 16 || FAT_TYPE == 12
+    test byte [cs:search_found_attr], 0x10
+    jnz .access_denied
+%endif
+
+    call int21_assign_selected_file_handle
+    jmp .done
 
 .not_found:
     mov ax, 0x0002
@@ -4837,10 +5018,6 @@ int21_open:
     mov ax, 0x0005
     stc
     jmp .done
-
-.io_fail:
-    mov ax, 0x0005
-    stc
 
 .done:
     pop es
@@ -5740,6 +5917,8 @@ int21_delete:
     push ds
     push es
 
+    call int21_normalize_leading_drive_designator
+
 %if FAT_TYPE == 16
     mov si, dx
     call int21_resolve_and_find_path
@@ -6053,6 +6232,9 @@ int21_rename:
 
     mov si, [ss:bp + 12]
     mov ds, [ss:bp + 4]
+    mov dx, si
+    call int21_normalize_leading_drive_designator
+    mov si, dx
     call int21_resolve_parent_dir
     jc .rename_fail_path
     mov [cs:tmp_rename_old_parent], ax
@@ -6079,6 +6261,9 @@ int21_rename:
 
     mov si, [ss:bp + 8]
     mov ds, [ss:bp + 2]
+    mov dx, si
+    call int21_normalize_leading_drive_designator
+    mov si, dx
     call int21_resolve_parent_dir
     jc .rename_fail_newname
     mov [cs:tmp_rename_new_parent], ax
@@ -7752,6 +7937,8 @@ int21_diag_log_ierr:
     push ds
 
     mov al, [cs:int21_last_ah]
+    cmp al, 0x3C
+    je .log
     cmp al, 0x3D
     je .log
     cmp al, 0x3E
@@ -7759,6 +7946,8 @@ int21_diag_log_ierr:
     cmp al, 0x3F
     je .log
     cmp al, 0x42
+    je .log
+    cmp al, 0x4B
     je .log
     jmp .done
 
@@ -7773,8 +7962,11 @@ int21_diag_log_ierr:
 
     mov al, [cs:int21_last_ah]
     cmp al, 0x3D
+    je .print_path
+    cmp al, 0x4B
     jne .line_done
 
+.print_path:
     mov si, msg_ierrpath_p
     call print_string_serial
 
@@ -7799,6 +7991,19 @@ int21_diag_log_ierr:
 
 .path_done:
     pop ds
+
+.line_suffix:
+    mov al, [cs:int21_last_ah]
+    cmp al, 0x3C
+    je .print_stage
+    cmp al, 0x3D
+    jne .line_done
+
+.print_stage:
+    mov si, msg_ierrpath_s
+    call print_string_serial
+    mov al, [cs:int21_path_stage_marker]
+    call print_hex8_serial
 
 .line_done:
     call print_newline_serial
@@ -8553,10 +8758,12 @@ int21_resolve_and_find_path:
 
     call int21_resolve_parent_dir
     jc .fail
+    mov byte [cs:int21_path_stage_marker], 2
     mov [cs:tmp_lookup_dir], ax
 
     call int21_path_to_fat_name
     jc .bad_path
+    mov byte [cs:int21_path_stage_marker], 3
 
     mov ax, [cs:tmp_lookup_dir]
     push ds
@@ -8565,6 +8772,7 @@ int21_resolve_and_find_path:
     mov ds, ax
     mov si, path_fat_name
     mov ax, bx
+    mov byte [cs:int21_path_stage_marker], 4
     call int21_lookup_in_dir
     pop ds
     jnc .ok
@@ -8590,6 +8798,74 @@ int21_resolve_and_find_path:
 ; Resolve parent directory cluster and return SI at last path component.
 ; Input : DS:SI path
 ; Output: AX=parent cluster (0=root), SI=last component ptr, CF clear
+int21_resolve_root_leaf_parent:
+    push bx
+    push cx
+
+    mov bx, si
+
+.skip_space:
+    cmp byte [si], ' '
+    jne .drive_check
+    inc si
+    jmp .skip_space
+
+.drive_check:
+    cmp byte [si], 'C'
+    je .drive_colon
+    cmp byte [si], 'c'
+    jne .sep_check
+.drive_colon:
+    cmp byte [si + 1], ':'
+    jne .fail
+    add si, 2
+
+.sep_check:
+    cmp byte [si], '\'
+    je .leaf_start
+    cmp byte [si], '/'
+    jne .fail
+
+.leaf_start:
+    inc si
+    mov di, si
+    cmp byte [si], 0
+    je .fail
+    cmp byte [si], 13
+    je .fail
+    mov cx, 96
+
+.leaf_scan:
+    dec cx
+    jz .fail
+    mov al, [si]
+    cmp al, 0
+    je .ok
+    cmp al, 13
+    je .ok
+    cmp al, '\'
+    je .fail
+    cmp al, '/'
+    je .fail
+    inc si
+    jmp .leaf_scan
+
+.ok:
+    xor ax, ax
+    mov si, di
+    clc
+    jmp .done
+
+.fail:
+    mov si, bx
+    mov ax, 0x0003
+    stc
+
+.done:
+    pop cx
+    pop bx
+    ret
+
 int21_resolve_parent_dir:
     push bx
     push cx
@@ -8597,6 +8873,11 @@ int21_resolve_parent_dir:
     push di
 
     mov byte [cs:tmp_path_guard], 96
+
+    mov bx, si
+    call int21_resolve_root_leaf_parent
+    jnc .done
+    mov si, bx
 
 .skip_space:
     dec byte [cs:tmp_path_guard]
@@ -8630,10 +8911,33 @@ int21_resolve_parent_dir:
     cmp byte [si], '\'
     je .inc_root_sep
     cmp byte [si], '/'
-    jne .component_start
+    jne .root_leaf_fastpath
 .inc_root_sep:
     inc si
     jmp .skip_root_sep
+
+.root_leaf_fastpath:
+    cmp byte [si], 0
+    je .path_fail
+    cmp byte [si], 13
+    je .path_fail
+    mov di, si
+    mov bx, si
+    mov cx, 96
+.root_leaf_scan:
+    dec cx
+    jz .path_fail
+    mov al, [bx]
+    cmp al, 0
+    je .leaf_ok
+    cmp al, 13
+    je .leaf_ok
+    cmp al, '\'
+    je .component_start
+    cmp al, '/'
+    je .component_start
+    inc bx
+    jmp .root_leaf_scan
 
 .component_start:
     dec byte [cs:tmp_path_guard]
@@ -9072,6 +9376,20 @@ int21_build_env_block:
     mov si, dos_env_block
     mov cx, dos_env_block_end - dos_env_block
     rep movsb
+    mov di, dos_env_exec_path - dos_env_block
+    mov si, dos_child_exec_path_buf
+    mov cx, DOS_ENV_EXEC_PATH_LEN - 1
+
+.exec_path_copy:
+    lodsb
+    stosb
+    test al, al
+    jz .exec_path_done
+    dec cx
+    jnz .exec_path_copy
+    mov byte [es:di], 0
+
+.exec_path_done:
 %if FAT_TYPE == 16
     cmp byte [cs:path_fat_name + 0], 'D'
     jne .done
@@ -16376,6 +16694,7 @@ dos_ctrl_break_flag db 0
 last_exit_code db 0
 int21_last_ah db 0
 int21_last_al db 0
+int21_path_stage_marker db 0
 int21_error_ax dw 0
 int21_silent_errors db 0
 int21_chdir_drive db 0
@@ -16677,9 +16996,10 @@ dos_env_block db 'COMSPEC=C:\COMMAND.COM', 0
               db 0
               dw 1
 dos_env_exec_path db 'C:\COMMAND.COM', 0
-              times 64 - ($ - dos_env_exec_path) db 0
+              times DOS_ENV_EXEC_PATH_LEN - ($ - dos_env_exec_path) db 0
 dos_env_block_end:
 env_doom_exe_path db 'C:\APPS\DOOM\DOOM.EXE', 0
+dos_child_exec_path_buf times DOS_ENV_EXEC_PATH_LEN db 0
 disk_packet:
     db 0x10
     db 0
@@ -16750,6 +17070,7 @@ country_info_default:
 msg_int21_err db "[IERR] ", 0
 msg_ierrpath db "[IERRPATH] ", 0
 msg_ierrpath_p db " P=", 0
+msg_ierrpath_s db " S=", 0
 %if STAGE1_SELFTEST_AUTORUN
 msg_stage1_selftest_begin db "[S1T] begin", 13, 10, 0
 msg_stage1_selftest_done db "[S1T] done", 13, 10, 0
