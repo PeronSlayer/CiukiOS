@@ -83,6 +83,7 @@ SPLASH_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512 * 6))
 SPLASH_EXPECTED_SIZE=16768
 DOOM_SRC_DIR="${CIUKIOS_DOOM_SRC_DIR:-$CIUKIOS_ROOT/third_party/Doom}"
 DOOM_IMAGE_DIR="${CIUKIOS_DOOM_IMAGE_DIR:-::APPS/DOOM}"
+DOOMDATA_IMAGE_DIR="${CIUKIOS_DOOMDATA_IMAGE_DIR:-::DOOMDATA}"
 DOSNAV_SRC_DIR="${CIUKIOS_DOSNAV_SRC_DIR:-$CIUKIOS_ROOT/third_party/DOSNavigator}"
 DOSNAV_IMAGE_DIR="${CIUKIOS_DOSNAV_IMAGE_DIR:-::APPS/DOSNAV}"
 DRIVERS_SRC_DIR="${CIUKIOS_DRIVERS_SRC_DIR:-$CIUKIOS_ROOT/third_party/drivers}"
@@ -554,6 +555,12 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
     shopt -u nullglob dotglob
     if (( ${#doom_items[@]} > 0 )); then
         mcopy -s -o -i "$IMG" "${doom_items[@]}" "$DOOM_IMAGE_DIR/"
+        echo "[build-full] creating DOOM runtime data directory at $DOOMDATA_IMAGE_DIR"
+        mtools_ensure_dir "$IMG" "$DOOMDATA_IMAGE_DIR"
+        if [[ -f "$DOOM_SRC_DIR/DEFAULT.CFG" ]]; then
+            echo "[build-full] mirroring Doom DEFAULT.CFG to $DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
+            mcopy -o -i "$IMG" "$DOOM_SRC_DIR/DEFAULT.CFG" "$DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
+        fi
     else
         echo "[build-full] WARN: Doom source directory is empty: $DOOM_SRC_DIR" >&2
     fi
