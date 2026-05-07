@@ -407,7 +407,14 @@ int20_handler:
     or ax, ax
     jz .done
     mov bp, sp
+    mov ax, [cs:current_com_load_seg]
+    cmp [ss:bp + 6], ax
+    jne .mz_terminate
+    mov word [ss:bp + 4], int21_com_terminate_trampoline
+    jmp .set_terminate_cs
+.mz_terminate:
     mov word [ss:bp + 4], int21_mz_terminate_trampoline
+.set_terminate_cs:
     mov ax, cs
     mov [ss:bp + 6], ax
 
@@ -1241,7 +1248,8 @@ int21_handler:
     cmp byte [cs:int21_force_terminate], 0
     je .term_done
     mov byte [cs:int21_force_terminate], 0
-    cmp word [bp + 18], COM_LOAD_SEG
+    mov ax, [cs:current_com_load_seg]
+    cmp [bp + 18], ax
     jne .term_mz
     mov word [bp + 16], int21_com_terminate_trampoline
     jmp .term_set_cs
@@ -1470,6 +1478,8 @@ int21_exec:
     push ds
     push es
     push word [cs:current_load_seg]
+    push word [cs:current_mz_context_slot]
+    push word [cs:current_com_load_seg]
 
     mov [cs:tmp_exec_subfn], al
     cmp al, 0x00
@@ -1575,6 +1585,14 @@ int21_exec:
     cmp al, 'M'
     jne .check_exe
 
+    cmp word [cs:current_psp_seg], 0
+    jne .nested_com_seg
+    mov word [cs:current_mz_context_slot], 1
+    mov word [cs:current_com_load_seg], COM_LOAD_SEG
+    jmp .do_exec_com
+.nested_com_seg:
+    mov word [cs:current_com_load_seg], MZ3_LOAD_SEG
+.do_exec_com:
     call int21_exec_load_com
     jc .done
     call int21_exec_run_com
@@ -1621,11 +1639,13 @@ int21_exec:
 .exec_mz:
     cmp word [cs:current_psp_seg], 0
     jne .nested_exec_seg
+    mov word [cs:current_mz_context_slot], 1
     mov word [cs:current_load_seg], MZ_LOAD_SEG
     jmp .do_exec_mz
 .nested_exec_seg:
-    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
-    je .third_exec_seg
+    cmp word [cs:current_mz_context_slot], 2
+    jae .third_exec_seg
+    mov word [cs:current_mz_context_slot], 2
     mov ax, [cs:current_psp_seg]
     mov es, ax
     mov ax, [es:0x0002]
@@ -1640,6 +1660,7 @@ int21_exec:
     mov word [cs:current_load_seg], MZ2_LOAD_SEG
     jmp .do_exec_mz
 .third_exec_seg:
+    mov word [cs:current_mz_context_slot], 3
     mov word [cs:current_load_seg], MZ3_LOAD_SEG
 .do_exec_mz:
     call int21_exec_load_mz
@@ -1679,6 +1700,8 @@ int21_exec:
     stc
 
 .done:
+    pop word [cs:current_com_load_seg]
+    pop word [cs:current_mz_context_slot]
     pop word [cs:current_load_seg]
     pop es
     pop ds
@@ -2179,7 +2202,7 @@ int21_exec_load_com:
     push di
     push es
 
-    mov ax, COM_LOAD_SEG
+    mov ax, [cs:current_com_load_seg]
     mov es, ax
     call int21_exec_init_program_psp
     call int21_build_env_block
@@ -2191,7 +2214,8 @@ int21_exec_load_com:
     jc .fail
 
     mov word [cs:com_entry_off], 0x0100
-    mov word [cs:com_entry_seg], COM_LOAD_SEG
+    mov ax, [cs:current_com_load_seg]
+    mov word [cs:com_entry_seg], ax
     clc
     jmp .done
 
@@ -2205,8 +2229,20 @@ int21_exec_load_com:
     ret
 
 int21_exec_run_com:
-    ; save parent PSP before overwriting with new process
     mov ax, [cs:current_psp_seg]
+    cmp word [cs:current_com_load_seg], COM_LOAD_SEG
+    je .save_primary_ctx
+
+.save_third_ctx:
+    mov [cs:saved_psp3], ax
+    mov [cs:saved_ss3], ss
+    mov [cs:saved_sp3], sp
+    mov ax, ds
+    mov [cs:saved_ds3], ax
+    mov [cs:saved_es3], ax
+    jmp .ctx_saved
+
+.save_primary_ctx:
     mov [cs:saved_psp], ax
     mov [cs:saved_ss], ss
     mov [cs:saved_sp], sp
@@ -2214,8 +2250,9 @@ int21_exec_run_com:
     mov [cs:saved_ds], ax
     mov [cs:saved_es], ax
 
+.ctx_saved:
     cli
-    mov ax, COM_LOAD_SEG
+    mov ax, [cs:current_com_load_seg]
     mov [cs:current_psp_seg], ax
     mov ds, ax
     mov es, ax
@@ -2238,11 +2275,34 @@ int21_exec_run_com:
     cli
     mov ax, cs
     mov ds, ax
+    cmp word [cs:current_com_load_seg], COM_LOAD_SEG
+    je .restore_primary_ss
+.restore_third_ss:
+    mov ax, [cs:saved_ss3]
+    mov ss, ax
+    mov sp, [cs:saved_sp3]
+    jmp .done_ss_restore
+.restore_primary_ss:
     mov ax, [cs:saved_ss]
     mov ss, ax
     mov sp, [cs:saved_sp]
+.done_ss_restore:
     sti
 
+    cmp word [cs:current_com_load_seg], COM_LOAD_SEG
+    je .restore_primary_ctx
+
+.restore_third_ctx:
+    mov ax, [cs:saved_ds3]
+    mov ds, ax
+    mov ax, [cs:saved_es3]
+    mov es, ax
+    mov ax, [cs:saved_psp3]
+    mov [cs:current_psp_seg], ax
+    clc
+    ret
+
+.restore_primary_ctx:
     mov ax, [cs:saved_ds]
     mov ds, ax
     mov ax, [cs:saved_es]
@@ -2477,9 +2537,9 @@ int21_exec_run_mz:
     mov ax, ds
     mov dx, [cs:mz_psp_seg]
     mov bx, [cs:current_psp_seg]
-    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    cmp word [cs:current_mz_context_slot], 3
     je .save_third_ctx
-    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    cmp word [cs:current_mz_context_slot], 2
     jne .save_primary_ctx
     mov [cs:saved_psp2], bx
     mov [cs:saved_ss2], ss
@@ -2558,9 +2618,9 @@ int21_exec_run_mz:
     mov ax, cs
     mov ds, ax
     ; restore SS:SP from appropriate slot
-    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    cmp word [cs:current_mz_context_slot], 3
     je .restore_third_ss
-    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    cmp word [cs:current_mz_context_slot], 2
     jne .restore_primary_ss
     mov ax, [cs:saved_ss2]
     mov ss, ax
@@ -2577,9 +2637,9 @@ int21_exec_run_mz:
     mov sp, [cs:saved_sp]
 .done_ss_restore:
     sti
-    cmp word [cs:current_load_seg], MZ3_LOAD_SEG
+    cmp word [cs:current_mz_context_slot], 3
     je .restore_third_ctx
-    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    cmp word [cs:current_mz_context_slot], 2
     jne .restore_primary_ctx
     mov ax, [cs:saved_psp2]
     mov [cs:current_psp_seg], ax
@@ -16990,6 +17050,8 @@ saved_es dw 0
 saved_ds2 dw 0
 saved_es2 dw 0
 current_load_seg dw MZ_LOAD_SEG
+current_mz_context_slot dw 0
+current_com_load_seg dw COM_LOAD_SEG
 saved_psp dw 0
 saved_ss2 dw 0
 saved_sp2 dw 0
@@ -17404,18 +17466,18 @@ gfx_font8_table:
 msg_stage2_entry db "[S2] init", 13, 10, 0
 msg_stage2_ready db "[S2] ready", 13, 10, 0
 %if STAGE2_AUTORUN
-msg_stage2_autorun_begin db "[S2] launch", 13, 10, 0
-msg_stage2_autorun_loaded db "[S2] stage2 loaded", 13, 10, 0
-msg_stage2_autorun_return db "[S2] stg2 return", 13, 10, 0
-msg_stage2_autorun_fail db "[S2] stage2 load fail", 13, 10, 0
+msg_stage2_autorun_begin db "[S2]L", 13, 10, 0
+msg_stage2_autorun_loaded db "[S2]LD", 13, 10, 0
+msg_stage2_autorun_return db "[S2]R", 13, 10, 0
+msg_stage2_autorun_fail db "[S2]F", 13, 10, 0
 %endif
 %if HARDWARE_VALIDATION_SCREEN
 msg_hw_validation_title db "[HW] Stage2 hardware validation", 13, 10, 0
-msg_hw_validation_pass db "[HW] PASS: stage2 autorun completed", 13, 10, 0
-msg_hw_validation_return db "[HW] PASS: returned to CiukiDOS shell", 13, 10, 0
-msg_hw_validation_capture db "[HW] Capture this screen for P1 evidence", 13, 10, 0
-msg_hw_validation_fail db "[HW] FAIL: stage2 autorun failed", 13, 10, 0
-msg_hw_validation_notrun db "[HW] WARN: stage2 autorun did not run", 13, 10, 0
+msg_hw_validation_pass db "[HW] PASS", 13, 10, 0
+msg_hw_validation_return db "[HW] RETURN", 13, 10, 0
+msg_hw_validation_capture db "[HW] CAPTURE", 13, 10, 0
+msg_hw_validation_fail db "[HW] FAIL", 13, 10, 0
+msg_hw_validation_notrun db "[HW] WARN", 13, 10, 0
 %endif
 msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
