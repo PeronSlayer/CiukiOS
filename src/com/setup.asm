@@ -19,7 +19,7 @@ org 0x0100
 %define RAW_HDD_CLONE_SECTORS_LO 0x003F
 %define RAW_HDD_CLONE_SECTORS_HI 0x0004
 %define RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA 64
-%define RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF 0x0133
+%define RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF 0x0136
 %define RAW_STAGE1_LIVE_DRIVE_INDEX 3
 %define RAW_STAGE1_INSTALLED_DRIVE_INDEX 2
 %define RAW_HDD_SECTORS_PER_CYL 1008
@@ -498,6 +498,7 @@ format_target_hdd:
     push cx
     push dx
     push si
+    push di
     push es
     push cs
     pop ds
@@ -510,110 +511,100 @@ format_target_hdd:
     call serial_write_crlf
 
     call raw_init_drive_geometries
+
+    mov dx, msg_hdd_format_screen_start
+    call print_line
+
+    xor ax, ax
+    mov di, io_buffer
+    mov cx, 256
+    rep stosw
+
     mov word [raw_clone_lba_lo], 0
     mov word [raw_clone_lba_hi], 0
     mov dword [format_sectors_done], 0
-    mov byte [format_progress_pct], 0
-    mov byte [format_last_pct], 0xFF
+    mov byte [format_progress_pct], 10
+
+    mov bx, 10
+    xor dx, dx
+    mov ax, [format_sectors_total + 2]
+    div bx
+    mov [format_progress_step_hi], ax
+    mov ax, [format_sectors_total]
+    div bx
+    mov [format_progress_step_lo], ax
+
+    mov ax, [format_progress_step_lo]
+    or ax, [format_progress_step_hi]
+    jnz .have_progress_step
+    mov word [format_progress_step_lo], 1
+    mov word [format_progress_step_hi], 0
+
+.have_progress_step:
+    mov ax, [format_progress_step_lo]
+    mov [format_next_mark_lo], ax
+    mov ax, [format_progress_step_hi]
+    mov [format_next_mark_hi], ax
 
 .format_loop:
-    mov ax, [format_sectors_done]
-    or ax, [format_sectors_done + 2]
-    cmp ax, word [format_sectors_total]
-    jae .check_high
-    cmp ax, word [format_sectors_total + 2]
-    jb .have_remaining
-.check_high:
     mov ax, [format_sectors_done + 2]
     cmp ax, [format_sectors_total + 2]
+    jb .have_remaining
+    ja .format_done
+    mov ax, [format_sectors_done]
+    cmp ax, [format_sectors_total]
+    jb .have_remaining
     jae .format_done
 
 .have_remaining:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
-    mov word [bios_probe_dap + 2], 0x0001
-    mov word [bios_probe_dap + 4], bx
-    mov ax, cs
-    mov word [bios_probe_dap + 6], ax
-    mov bx, [raw_clone_lba_lo]
-    mov word [bios_probe_dap + 8], bx
-    mov bx, [raw_clone_lba_hi]
-    mov word [bios_probe_dap + 10], bx
-    mov word [bios_probe_dap + 12], 0
-    mov word [bios_probe_dap + 14], 0
-
-    xor ax, ax
-    xor bx, bx
-    mov cx, 512
-    mov si, io_buffer
-.zero_loop:
-    mov [si], ax
-    add si, 2
-    loop .zero_loop
-
-    mov si, bios_probe_dap
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov ah, 0x43
-    int 0x13
+    call raw_edd_write_current_lba
     jc .format_fail
 
     inc word [raw_clone_lba_lo]
-    jnz .check_progress
+    jnz .inc_done
     inc word [raw_clone_lba_hi]
 
-.check_progress:
+.inc_done:
     inc dword [format_sectors_done]
 
-    mov ax, [format_sectors_done]
-    xor dx, dx
-    mov bx, 10
-    div bx
-    mov cl, al
-    mov ax, [format_sectors_total]
-    xor dx, dx
-    div bx
-    cmp cl, al
-    jne .format_loop
+    mov al, [format_progress_pct]
+    cmp al, 100
+    ja .format_loop
 
+    mov ax, [format_sectors_done + 2]
+    cmp ax, [format_next_mark_hi]
+    jb .format_loop
+    ja .emit_progress
     mov ax, [format_sectors_done]
-    xor dx, dx
-    mov bx, 100
-    div bx
-    mov cl, al
-    xor dx, dx
-    mov ax, [format_sectors_total]
-    div bx
-    cmp cl, al
-    je .format_loop
+    cmp ax, [format_next_mark_lo]
+    jb .format_loop
 
-    mov ax, [format_sectors_done]
-    xor dx, dx
-    mov bx, [format_sectors_total]
-    div bx
-    mov cl, al
-    cmp cl, [format_last_pct]
-    je .format_loop
-    mov [format_last_pct], cl
+.emit_progress:
+    mov dl, '.'
+    call print_char_dl
 
     mov dx, msg_serial_hdd_format_progress
     call serial_write_z
-    mov al, cl
-    mov bl, 10
-    div bl
-    mov ah, al
-    mov al, ah
-    call serial_write_hex_nibble
-    mov al, ah
-    mov bl, 10
-    div bl
-    mov al, ah
-    call serial_write_hex_nibble
+    mov al, [format_progress_pct]
+    call serial_write_hex_byte
     mov al, '%'
     call serial_write_char
     call serial_write_crlf
+
+    mov ax, [format_next_mark_lo]
+    add ax, [format_progress_step_lo]
+    mov [format_next_mark_lo], ax
+    mov ax, [format_next_mark_hi]
+    adc ax, [format_progress_step_hi]
+    mov [format_next_mark_hi], ax
+
+    add byte [format_progress_pct], 10
     jmp .format_loop
 
 .format_done:
+    call print_crlf
     mov dx, msg_serial_hdd_format_done
     call serial_write_z
     call serial_write_crlf
@@ -621,16 +612,24 @@ format_target_hdd:
     jmp .format_out
 
 .format_fail:
-    mov word [fail_code], 0x0702
+    mov word [fail_code], 0x0703
     mov dx, msg_serial_hdd_format_fail
     call serial_write_z
-    mov al, ah
+    mov al, [raw_edd_status]
     call serial_write_hex_byte
     call serial_write_crlf
+
+    call print_crlf
+    mov dx, msg_screen_hdd_format_fail
+    call print_z
+    mov al, [raw_edd_status]
+    call print_u8_dec
+    call print_crlf
     stc
 
 .format_out:
     pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -708,7 +707,13 @@ raw_hdd_clone_install:
     jmp .copy_loop
 
 .done:
+    mov dx, msg_serial_hdd_install_copy_done
+    call serial_write_z
+    call serial_write_crlf
 %if SETUP_LIVE_CD_MODE
+    mov dx, msg_serial_hdd_install_patch_start
+    call serial_write_z
+    call serial_write_crlf
     call raw_patch_installed_default_drive
     jc .fail
 %endif
@@ -749,6 +754,21 @@ raw_hdd_clone_install:
     mov al, [raw_chs_status]
     call serial_write_hex_byte
     call serial_write_crlf
+
+    call print_crlf
+    mov dx, msg_screen_hdd_install_fail
+    call print_z
+    mov al, [raw_last_status]
+    call print_u8_dec
+    mov dx, msg_screen_hdd_install_path
+    call print_z
+    mov dl, [raw_last_path]
+    call print_char_dl
+    mov dx, msg_screen_hdd_install_lba
+    call print_z
+    mov ax, [raw_clone_lba_lo]
+    call print_u16_dec
+    call print_crlf
     stc
 
 .out:
@@ -793,7 +813,16 @@ raw_edd_read_current_lba:
     mov byte [raw_last_stage], 'R'
     mov byte [raw_last_path], 'E'
     mov ah, 0x42
+    push dx
     call raw_edd_transfer_current_lba
+    pop dx
+    jnc .done
+    cmp dl, RAW_HDD_SOURCE_DRIVE
+    jne .done
+    mov byte [raw_last_path], 'C'
+    mov ah, 0x02
+    call raw_chs_transfer_current_lba
+.done:
     ret
 
 raw_edd_write_current_lba:
@@ -861,6 +890,7 @@ raw_edd_transfer_current_lba:
     push si
     push cs
     pop ds
+    mov word [bios_probe_dap + 0], 0x0010
     mov word [bios_probe_dap + 2], 0x0001
     mov word [bios_probe_dap + 4], bx
     mov bx, cs
@@ -871,16 +901,28 @@ raw_edd_transfer_current_lba:
     mov word [bios_probe_dap + 10], bx
     mov word [bios_probe_dap + 12], 0
     mov word [bios_probe_dap + 14], 0
+    mov [raw_edd_retry_op], ah
+    mov [raw_edd_retry_drive], dl
     mov si, bios_probe_dap
+    xor al, al
+    int 0x13
+    jnc .success
+
+    mov dl, [raw_edd_retry_drive]
+    xor ax, ax
+    int 0x13
+
     push cs
     pop ds
+    mov word [bios_probe_dap + 0], 0x0010
+    mov word [bios_probe_dap + 2], 0x0001
+    mov si, bios_probe_dap
+    mov dl, [raw_edd_retry_drive]
+    mov ah, [raw_edd_retry_op]
     xor al, al
-    cmp ah, 0x43
-    jne .int13
-    xor al, al
-.int13:
     int 0x13
     jc .fail
+.success:
     pop si
     pop dx
     pop bx
@@ -2704,6 +2746,32 @@ print_u8_dec:
     pop ax
     ret
 
+print_u16_dec:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, dec_u16_buf + 5
+    mov byte [si], 0
+    mov bx, 10
+.div_loop:
+    xor dx, dx
+    div bx
+    dec si
+    add dl, '0'
+    mov [si], dl
+    or ax, ax
+    jnz .div_loop
+    mov dx, si
+    call print_z
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 print_char_dl:
     push ax
     mov ah, 0x02
@@ -2886,16 +2954,23 @@ msg_serial_probe_blank db ' B=', 0
 msg_serial_probe_sig db ' S=', 0
 msg_serial_hdd_install_start db '[SETUP-HDD-INSTALL] START', 0
 msg_serial_hdd_install_done db '[SETUP-HDD-INSTALL] DONE', 0
+msg_serial_hdd_install_copy_done db '[SETUP-HDD-INSTALL] COPY-DONE', 0
+msg_serial_hdd_install_patch_start db '[SETUP-HDD-INSTALL] PATCH-START', 0
 msg_serial_hdd_install_fail db '[SETUP-HDD-INSTALL] FAIL S=', 0
 msg_serial_hdd_install_path db ' P=', 0
 msg_serial_hdd_install_lba db ' L=', 0
 msg_serial_hdd_install_status db ' AH=', 0
 msg_serial_hdd_install_edd db ' E=', 0
 msg_serial_hdd_install_chs db ' C=', 0
+msg_hdd_format_screen_start db 'Formatting target HDD...', 0
 msg_serial_hdd_format_start db '[SETUP-HDD-FORMAT] START', 0
 msg_serial_hdd_format_progress db '[SETUP-HDD-FORMAT] PROGRESS ', 0
 msg_serial_hdd_format_done db '[SETUP-HDD-FORMAT] DONE', 0
 msg_serial_hdd_format_fail db '[SETUP-HDD-FORMAT] FAIL S=', 0
+msg_screen_hdd_install_fail db 'HDD install failed. AH=', 0
+msg_screen_hdd_install_path db ' P=', 0
+msg_screen_hdd_install_lba db ' L=', 0
+msg_screen_hdd_format_fail db 'HDD format failed. AH=', 0
 
 str_crlf             db 13, 10, 0
 str_ok2              db 'OK', 0
@@ -2980,6 +3055,10 @@ cleanup_file_ptrs    dw path_cfg, path_report, path_sanity, dst_stage2, dst_comd
 format_sectors_total    dd 0x00040000  ; ~262GB sectors
 format_sectors_done     dd 0
 format_progress_pct     db 0
+format_progress_step_lo dw 0
+format_progress_step_hi dw 0
+format_next_mark_lo     dw 0
+format_next_mark_hi     dw 0
 format_last_pct         db 0xFF        ; force first print
 
 selected_profile        db 1
@@ -3020,6 +3099,8 @@ raw_last_path           db 0
 raw_last_status         db 0
 raw_edd_status          db 0
 raw_chs_status          db 0
+raw_edd_retry_op        db 0
+raw_edd_retry_drive     db 0
 prompt_tick_start       dw 0
 kb_key_total            dw 0
 kb_nav_count            db 0
@@ -3053,6 +3134,7 @@ manifest_dbg_size_hi    dw 0
 
 hex_word_buf            times 5 db 0
 hex_dword_buf           times 9 db 0
+dec_u16_buf             times 6 db 0
 align 16
 bios_probe_dap         db 0x10, 0x00
                        dw 0x0001

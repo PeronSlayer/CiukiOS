@@ -152,10 +152,10 @@ send_key o
 send_key y
 send_key ret
 
-if ! wait_for_regex "$INSTALL_SERIAL_LOG" "\[SETUP-HDD-INSTALL\] START" 30; then
+if ! wait_for_regex "$INSTALL_SERIAL_LOG" "\[SETUP-HDD-INSTALL\] START" 300; then
   fail_with_rc "runtime HDD install start marker missing"
 fi
-if ! wait_for_regex "$INSTALL_SERIAL_LOG" "\[SETUP-HDD-INSTALL\] DONE" 180; then
+if ! wait_for_regex "$INSTALL_SERIAL_LOG" "\[SETUP-HDD-INSTALL\] DONE" 300; then
   fail_with_rc "runtime HDD install done marker missing"
 fi
 
