@@ -73,10 +73,9 @@ cp "$LDLINUX_C32" "$ISO_ROOT/boot/isolinux/ldlinux.c32"
 cp "$MEMDISK_BIN" "$ISO_ROOT/boot/memdisk"
 cp "$DISK_IMG" "$ISO_ROOT/ciukios-full-cd-disk.img"
 cat > "$ISO_ROOT/boot/isolinux/isolinux.cfg" <<'TXT'
-SERIAL 0 115200
 CONSOLE 1
-PROMPT 0
-TIMEOUT 10
+PROMPT 1
+TIMEOUT 50
 DEFAULT ciukios
 
 LABEL ciukios
@@ -86,7 +85,7 @@ LABEL ciukios
 TXT
 
 echo "[build-full-cd] creating bootable ISO"
-xorriso -as mkisofs -quiet \
+xorriso -as mkisofs -quiet -V CIUKIOS_FULL \
 	-o "$ISO_IMG" \
 	-b boot/isolinux/isolinux.bin \
 	-c boot/isolinux/boot.cat \
