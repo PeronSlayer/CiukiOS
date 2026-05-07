@@ -620,11 +620,6 @@ raw_edd_read_current_lba:
     mov byte [raw_last_path], 'E'
     mov ah, 0x42
     call raw_edd_transfer_current_lba
-    jnc .ok
-    mov byte [raw_last_path], 'C'
-    mov ah, 0x02
-    call raw_chs_transfer_current_lba
-.ok:
     ret
 
 raw_edd_write_current_lba:
@@ -632,11 +627,6 @@ raw_edd_write_current_lba:
     mov byte [raw_last_path], 'E'
     mov ah, 0x43
     call raw_edd_transfer_current_lba
-    jnc .ok
-    mov byte [raw_last_path], 'C'
-    mov ah, 0x03
-    call raw_chs_transfer_current_lba
-.ok:
     ret
 
 raw_init_drive_geometries:
@@ -2880,10 +2870,12 @@ manifest_dbg_size_hi    dw 0
 
 hex_word_buf            times 5 db 0
 hex_dword_buf           times 9 db 0
+align 16
 bios_probe_dap         db 0x10, 0x00
                        dw 0x0001
                        dw 0x0000
                        dw 0x0000
                        dq 0x0000000000000000
 
+align 16
 io_buffer               times 512 db 0
