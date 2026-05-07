@@ -17472,12 +17472,15 @@ msg_stage2_autorun_return db "[S2]R", 13, 10, 0
 msg_stage2_autorun_fail db "[S2]F", 13, 10, 0
 %endif
 %if HARDWARE_VALIDATION_SCREEN
-msg_hw_validation_title db "[HW] Stage2 hardware validation", 13, 10, 0
-msg_hw_validation_pass db "[HW] PASS", 13, 10, 0
-msg_hw_validation_return db "[HW] RETURN", 13, 10, 0
-msg_hw_validation_capture db "[HW] CAPTURE", 13, 10, 0
-msg_hw_validation_fail db "[HW] FAIL", 13, 10, 0
-msg_hw_validation_notrun db "[HW] WARN", 13, 10, 0
+; HW validation strings emptied so the function runs (stage1 layout preserved
+; for the SETUP default-drive byte patch) but no [HW] lines are printed on
+; the screen. The [S2] / shell prompt come right after.
+msg_hw_validation_title db 0
+msg_hw_validation_pass db 0
+msg_hw_validation_return db 0
+msg_hw_validation_capture db 0
+msg_hw_validation_fail db 0
+msg_hw_validation_notrun db 0
 %endif
 msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0

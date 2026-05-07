@@ -111,6 +111,7 @@ start:
     jc install_fail
 %if SETUP_LIVE_CD_MODE
     call vis_install_screen_init
+    call vis_install_phase_format
 %endif
     mov byte [step_id], 0x3F
     call format_target_hdd
@@ -1267,6 +1268,29 @@ vis_press_any_key:
 ; -----------------------------------------------------------------------------
 ; vis_install_screen_init: draw the install progress screen (3 phases) once.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; Single-bar install progress UI. Layout:
+;   row 0           : title bar (white-on-blue)
+;   row 4..18       : framed panel
+;   row 6           : 'Installing CiukiOS...' centered
+;   row 9, col 12   : phase label (e.g. 'Phase 1/3: Formatting target HDD')
+;   row 11, col 12  : progress bar (width 56)  + pct on right (col 70)
+;   row 14          : status text (changes during operation)
+;   row 22 (footer) : hint
+; -----------------------------------------------------------------------------
+%define VIS_INST_TITLE_ROW    0
+%define VIS_INST_BOX_TOP      4
+%define VIS_INST_BOX_LEFT     8
+%define VIS_INST_BOX_HEIGHT   16
+%define VIS_INST_BOX_WIDTH    64
+%define VIS_INST_HEADER_ROW   6
+%define VIS_INST_PHASE_ROW    9
+%define VIS_INST_BAR_ROW      11
+%define VIS_INST_BAR_COL      12
+%define VIS_INST_BAR_WIDTH    52
+%define VIS_INST_PCT_COL      66
+%define VIS_INST_STATUS_ROW   14
+
 vis_install_screen_init:
     push ax
     push bx
@@ -1276,56 +1300,43 @@ vis_install_screen_init:
 
     call vis_clear_screen
 
-    ; Title bar
-    mov dh, 0
+    ; Top title bar
+    mov dh, VIS_INST_TITLE_ROW
     mov dl, 0
     call vis_set_cursor
     mov al, ' '
     mov bl, VIS_ATTR_TITLE
     mov cx, 80
     call vis_putc_attr
-    mov dh, 0
-    mov dl, 28
+    mov dh, VIS_INST_TITLE_ROW
+    mov dl, 23
     mov bl, VIS_ATTR_TITLE
-    mov si, msg_vis_install_title
+    mov si, msg_vis_install_titlebar
     call vis_print_z_at
 
-    ; Outer frame
-    mov dh, 4
-    mov dl, 8
-    mov ch, 16
-    mov cl, 64
+    ; Outer frame (panel)
+    mov dh, VIS_INST_BOX_TOP
+    mov dl, VIS_INST_BOX_LEFT
+    mov ch, VIS_INST_BOX_HEIGHT
+    mov cl, VIS_INST_BOX_WIDTH
     mov ah, VIS_ATTR_FRAME
     call vis_box
 
-    ; Phase 1 label
-    mov dh, 6
-    mov dl, 12
-    mov bl, VIS_ATTR_ITEM
-    mov si, msg_vis_install_phase_format
+    ; Header inside the panel
+    mov dh, VIS_INST_HEADER_ROW
+    mov dl, 28
+    mov bl, VIS_ATTR_TITLE
+    mov si, msg_vis_install_header
     call vis_print_z_at
 
-    ; Phase 2 label
-    mov dh, 10
-    mov dl, 12
-    mov bl, VIS_ATTR_ITEM
-    mov si, msg_vis_install_phase_clone
+    ; Footer hint
+    mov dh, 22
+    mov dl, 22
+    mov bl, VIS_ATTR_HINT
+    mov si, msg_vis_install_hint
     call vis_print_z_at
 
-    ; Phase 3 label
-    mov dh, 14
-    mov dl, 12
-    mov bl, VIS_ATTR_ITEM
-    mov si, msg_vis_install_phase_patch
-    call vis_print_z_at
-
-    ; Initialize the three progress bars at 0%
-    xor al, al
-    call vis_format_phase_update
-    xor al, al
-    call vis_clone_phase_update
-
-    ; Park cursor
+    ; Park cursor off panel
     mov dh, 24
     mov dl, 79
     call vis_set_cursor
@@ -1337,20 +1348,33 @@ vis_install_screen_init:
     pop ax
     ret
 
-vis_format_phase_update:
+; vis_install_set_phase: write a fresh phase label at row 9 and clear the bar.
+; Inputs: SI = phase label string (zero-terminated)
+vis_install_set_phase:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov ah, al
-    mov dh, 7
-    mov dl, 12
-    xor ch, ch
-    mov cl, 56
-    mov al, ah
-    call vis_progress_bar
-    call vis_print_pct
+
+    push si
+    mov dh, VIS_INST_PHASE_ROW
+    mov dl, VIS_INST_BAR_COL
+    call vis_set_cursor
+    mov al, ' '
+    mov bl, VIS_ATTR_BG
+    mov cx, VIS_INST_BAR_WIDTH
+    call vis_putc_attr
+    pop si
+
+    mov dh, VIS_INST_PHASE_ROW
+    mov dl, VIS_INST_BAR_COL
+    mov bl, VIS_ATTR_TITLE
+    call vis_print_z_at
+
+    xor al, al
+    call vis_install_set_pct
+
     pop si
     pop dx
     pop cx
@@ -1358,119 +1382,137 @@ vis_format_phase_update:
     pop ax
     ret
 
-vis_clone_phase_update:
+; vis_install_set_pct: render the unified bar at row 11 with the given percent.
+; Input: AL = 0..100
+vis_install_set_pct:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov ah, al                          ; preserve pct
+    mov dh, VIS_INST_BAR_ROW
+    mov dl, VIS_INST_BAR_COL
+    xor ch, ch
+    mov cl, VIS_INST_BAR_WIDTH
+    mov al, ah
+    call vis_progress_bar
+
+    ; Clear pct field
+    mov dh, VIS_INST_BAR_ROW
+    mov dl, VIS_INST_PCT_COL
+    call vis_set_cursor
+    mov al, ' '
+    mov bl, VIS_ATTR_OK
+    mov cx, 5
+    call vis_putc_attr
+
+    ; Re-cursor and print decimal + '%'
+    mov dh, VIS_INST_BAR_ROW
+    mov dl, VIS_INST_PCT_COL
+    call vis_set_cursor
+    mov al, ah
+    call vis_print_u8_dec_attr
+    mov al, '%'
+    mov bl, VIS_ATTR_OK
+    mov cx, 1
+    call vis_putc_attr
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vis_install_set_status: write status text at row 14, col 12
+; Input: SI = zero-terminated string
+vis_install_set_status:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov ah, al
-    mov dh, 11
-    mov dl, 12
-    xor ch, ch
-    mov cl, 56
-    mov al, ah
-    call vis_progress_bar
-    push ax
-    mov dh, 11
-    pop ax
-    call vis_print_pct_at_clone
+
+    push si
+    mov dh, VIS_INST_STATUS_ROW
+    mov dl, VIS_INST_BAR_COL
+    call vis_set_cursor
+    mov al, ' '
+    mov bl, VIS_ATTR_BG
+    mov cx, VIS_INST_BAR_WIDTH
+    call vis_putc_attr
+    pop si
+
+    mov dh, VIS_INST_STATUS_ROW
+    mov dl, VIS_INST_BAR_COL
+    mov bl, VIS_ATTR_HINT
+    call vis_print_z_at
+
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- Compatibility shims used by format_target_hdd / raw_hdd_clone_install ---
+vis_format_phase_update:
+    push si
+    cmp byte [vis_install_phase_active], 1
+    jne .skip
+    call vis_install_set_pct
+.skip:
+    pop si
+    ret
+
+vis_clone_phase_update:
+    push si
+    cmp byte [vis_install_phase_active], 2
+    jne .skip
+    call vis_install_set_pct
+.skip:
+    pop si
     ret
 
 vis_install_phase_clone:
     push ax
+    push si
     mov al, 100
-    call vis_format_phase_update
+    call vis_install_set_pct
+    mov byte [vis_install_phase_active], 2
+    mov si, msg_vis_install_phase_clone
+    call vis_install_set_phase
+    mov si, msg_vis_install_status_clone
+    call vis_install_set_status
+    pop si
+    pop ax
+    ret
+
+vis_install_phase_format:
+    push ax
+    push si
+    mov byte [vis_install_phase_active], 1
+    mov si, msg_vis_install_phase_format
+    call vis_install_set_phase
+    mov si, msg_vis_install_status_format
+    call vis_install_set_status
+    pop si
     pop ax
     ret
 
 vis_install_phase_done:
     push ax
-    mov al, 100
-    call vis_clone_phase_update
-    push bx
-    push cx
-    push dx
     push si
-    mov dh, 15
-    mov dl, 12
-    xor ch, ch
-    mov cl, 56
     mov al, 100
-    call vis_progress_bar
-    mov dh, 18
-    mov dl, 24
-    mov bl, VIS_ATTR_OK
+    call vis_install_set_pct
+    mov byte [vis_install_phase_active], 3
+    mov si, msg_vis_install_phase_patch
+    call vis_install_set_phase
+    mov al, 100
+    call vis_install_set_pct
     mov si, msg_vis_install_done
-    call vis_print_z_at
+    call vis_install_set_status
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; vis_print_pct: print "  NN%" right of the format progress bar at (DH=7, col=70)
-vis_print_pct:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ah, al                       ; preserve pct in AH
-    mov dh, 7
-    mov dl, 70
-    call vis_set_cursor
-    mov bh, 0
-    mov bl, VIS_ATTR_OK
-    mov al, ' '
-    mov cx, 5
-    call vis_putc_attr
-    mov dh, 7
-    mov dl, 70
-    call vis_set_cursor
-    mov al, ah
-    call vis_print_u8_dec_attr
-    mov al, '%'
-    mov bl, VIS_ATTR_OK
-    mov cx, 1
-    call vis_putc_attr
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-vis_print_pct_at_clone:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ah, al
-    mov dh, 11
-    mov dl, 70
-    call vis_set_cursor
-    mov bh, 0
-    mov bl, VIS_ATTR_OK
-    mov al, ' '
-    mov cx, 5
-    call vis_putc_attr
-    mov dh, 11
-    mov dl, 70
-    call vis_set_cursor
-    mov al, ah
-    call vis_print_u8_dec_attr
-    mov al, '%'
-    mov bl, VIS_ATTR_OK
-    mov cx, 1
-    call vis_putc_attr
-    pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 
@@ -1579,10 +1621,10 @@ raw_hdd_clone_install:
     mov bx, 10
     div bx
     mov [clone_step_lo], ax
-    mov ax, dx
-    mov [clone_step_hi], ax
+    mov word [clone_step_hi], 0      ; quotient fits in 16 bits; high word = 0
     mov ax, [clone_step_lo]
     mov [clone_next_mark_lo], ax
+    mov word [clone_next_mark_hi], 0
 
 .copy_loop:
     mov ax, [raw_clone_remaining_lo]
@@ -3929,9 +3971,14 @@ msg_vis_format_done     db 'Format complete.', 0
 msg_vis_format_fail     db 'Format failed.', 0
 msg_vis_press_any       db 'Press any key to return to menu.', 0
 msg_vis_install_title   db 'Installing CiukiOS...', 0
+msg_vis_install_titlebar db 'CiukiOS Setup - Installing system', 0
+msg_vis_install_header  db 'Installing CiukiOS', 0
+msg_vis_install_hint    db 'Please wait. Do not power off the system.', 0
 msg_vis_install_phase_format  db 'Phase 1/3: Formatting target HDD', 0
 msg_vis_install_phase_clone   db 'Phase 2/3: Cloning system image', 0
 msg_vis_install_phase_patch   db 'Phase 3/3: Finalizing installation', 0
+msg_vis_install_status_format db 'Zeroing target sectors via INT 13h EDD...', 0
+msg_vis_install_status_clone  db 'Cloning live-CD image to target HDD...', 0
 msg_vis_install_done    db 'Installation complete. Rebooting...', 0
 
 format_path             db '\APPS\FORMAT.COM', 0
@@ -4084,6 +4131,7 @@ pb_width                db 0
 pb_pct                  db 0
 pb_filled               db 0
 visual_destroy_confirmed db 0
+vis_install_phase_active db 0
 clone_done_lo           dw 0
 clone_done_hi           dw 0
 clone_step_lo           dw 0
