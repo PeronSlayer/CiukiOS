@@ -390,6 +390,23 @@ install_int21_vector:
     mov [es:bx + 2], ax
 %endif
 
+    ; Install minimal CPU exception handlers (INT 0 div-by-zero, INT 6 invalid
+    ; opcode, INT 0Dh GP fault) so a wild DOS child does not hang the system.
+    ; Slice 1: print diagnostic + warm reboot via INT 19h (slice 2 will add a
+    ; long-jump back to the shell).
+    mov bx, 0 * 4
+    mov word [es:bx], int00_fault_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+    mov bx, 6 * 4
+    mov word [es:bx], int06_fault_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+    mov bx, 0x0D * 4
+    mov word [es:bx], int0d_fault_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+
     pop es
     pop bx
     pop ax
@@ -425,6 +442,45 @@ int20_handler:
 
 int_default_iret:
     iret
+
+; -----------------------------------------------------------------------------
+; Compact CPU fault handlers (INT 0/6/0Dh). Print one-line marker, wait key,
+; warm-reboot. Replaces the previous full-system hang on wild DOS children.
+; -----------------------------------------------------------------------------
+int00_fault_handler:
+    mov al, '0'
+    jmp fault_common
+int06_fault_handler:
+    mov al, '6'
+    jmp fault_common
+int0d_fault_handler:
+    mov al, 'D'
+fault_common:
+    cli
+    push cs
+    pop ds
+    mov bl, al
+    mov si, msg_fault
+.lp:
+    lodsb
+    or al, al
+    jz .key
+    cmp al, 1
+    jne .out
+    mov al, bl
+.out:
+    mov ah, 0x0E
+    xor bh, bh
+    int 0x10
+    jmp .lp
+.key:
+    xor ax, ax
+    int 0x16
+    int 0x19
+.hng:
+    hlt
+    jmp .hng
+msg_fault: db 13,10,"[CRASH] INT ",1,"h - reboot.",13,10,0
 
 int21_handler:
     push bx
@@ -2867,8 +2923,20 @@ int21_country_info:
     je .copy_current
     cmp al, 0xFF
     je .copy_current
+    ; AL=0x01 is "Set country" (no buffer in DS:DX); AL=0x02 is "Set code page"
+    ; (also bufferless). For these we accept and return success without
+    ; writing the caller's buffer -- old code did `rep movsb 34` into DS:DX
+    ; for AL=0x01 too which corrupted 34 bytes of caller memory.
     cmp al, 0x01
-    jne .bad_country
+    je .accept_set
+    cmp al, 0x02
+    je .accept_set
+    jmp .bad_country
+.accept_set:
+    mov bx, 1
+    xor ax, ax
+    clc
+    ret
 .copy_current:
     push cx
     push si
