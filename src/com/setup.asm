@@ -75,6 +75,15 @@ start:
     call detect_targets
     jc install_fail
 
+%if SETUP_LIVE_CD_MODE
+    call visual_main_loop
+    jc user_abort
+    ; visual flow has prepared selected_profile/target_drive and confirmed destroy.
+    mov byte [step_id], 0x14
+    call guard_target_selection
+    jc install_fail
+    jmp .live_cd_install_path
+%else
     mov byte [step_id], 0x11
     call show_welcome
     jc user_abort
@@ -92,18 +101,30 @@ start:
     mov byte [step_id], 0x14
     call guard_target_selection
     jc install_fail
+%endif
+
+.live_cd_install_path:
 
     cmp byte [raw_hdd_install_mode], 1
     jne .int21_install
     call confirm_raw_hdd_destroy
     jc install_fail
+%if SETUP_LIVE_CD_MODE
+    call vis_install_screen_init
+%endif
     mov byte [step_id], 0x3F
     call format_target_hdd
     jc install_fail
     mov byte [step_id], 0x40
+%if SETUP_LIVE_CD_MODE
+    call vis_install_phase_clone
+%endif
     call raw_hdd_clone_install
     jc install_fail
     mov byte [step_id], 0x30
+%if SETUP_LIVE_CD_MODE
+    call vis_install_phase_done
+%endif
     mov byte [install_ok], 1
     mov dx, msg_success
     call print_line
@@ -582,8 +603,13 @@ format_target_hdd:
     jb .format_loop
 
 .emit_progress:
+%if SETUP_LIVE_CD_MODE
+    mov al, [format_progress_pct]
+    call vis_format_phase_update
+%else
     mov dl, '.'
     call print_char_dl
+%endif
 
     mov dx, msg_serial_hdd_format_progress
     call serial_write_z
@@ -637,6 +663,866 @@ format_target_hdd:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; Visual UI primitives (text mode 80x25 with CP437 box drawing + colors).
+; Active only when SETUP_LIVE_CD_MODE=1.
+; -----------------------------------------------------------------------------
+%define VIS_ATTR_BG       0x17     ; white on blue (background)
+%define VIS_ATTR_TITLE    0x1F     ; bright white on blue
+%define VIS_ATTR_FRAME    0x17     ; white on blue
+%define VIS_ATTR_ITEM     0x17     ; normal item
+%define VIS_ATTR_SELECTED 0x70     ; black on white (highlighted)
+%define VIS_ATTR_HINT     0x1B     ; bright cyan on blue
+%define VIS_ATTR_OK       0x1A     ; bright green on blue
+%define VIS_ATTR_ERR      0x1C     ; bright red on blue
+
+vis_clear_screen:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, 0x0600
+    mov bh, VIS_ATTR_BG
+    xor cx, cx
+    mov dx, 0x184F
+    int 0x10
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+vis_set_cursor:
+    ; DH=row, DL=col
+    push ax
+    push bx
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    pop bx
+    pop ax
+    ret
+
+vis_putc_attr:
+    ; AL=char, BL=attribute, CX=count
+    push ax
+    push bx
+    mov ah, 0x09
+    xor bh, bh
+    int 0x10
+    pop bx
+    pop ax
+    ret
+
+vis_print_z_at:
+    ; DH=row, DL=col, BL=attribute, SI=zero-terminated string
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call vis_set_cursor
+.loop:
+    lodsb
+    or al, al
+    jz .done
+    push si
+    push dx
+    mov ah, 0x09
+    xor bh, bh
+    mov cx, 1
+    int 0x10
+    pop dx
+    inc dl
+    push dx
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    pop dx
+    pop si
+    jmp .loop
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+vis_draw_box:
+    ; DH=top row, DL=left col, CH=height, CL=width, BL=attr
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; top-left corner
+    call vis_set_cursor
+    mov al, 0xC9
+    mov cx, 1
+    call vis_putc_attr
+    inc dl
+    call vis_set_cursor
+    mov al, 0xCD
+    mov cl, [bp_box_w]
+    sub cl, 2
+    xor ch, ch
+    call vis_putc_attr
+    add dl, [bp_box_w]
+    sub dl, 2
+    call vis_set_cursor
+    mov al, 0xBB
+    mov cx, 1
+    call vis_putc_attr
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Simpler box drawing using a register-only approach.
+vis_box_draw:
+    ; DH=top, DL=left, BH=height, BL=width, AH=attribute
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov [bp_box_attr], ah
+
+    ; Top row
+    call vis_set_cursor
+    mov al, 0xC9
+    mov bh, [bp_box_attr]
+    push bx
+    mov bl, bh
+    mov cx, 1
+    mov ah, 0x09
+    xor bh, bh
+    int 0x10
+    pop bx
+    inc dl
+    call vis_set_cursor
+    mov al, 0xCD
+    mov bh, [bp_box_attr]
+    push bx
+    mov bl, bh
+    mov cl, [bp_box_w_in]
+    xor ch, ch
+    sub cl, 2
+    mov ah, 0x09
+    xor bh, bh
+    int 0x10
+    pop bx
+
+    ; (top-right + sides + bottom omitted — simplified version below)
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vis_box: minimal frame draw (top, sides, bottom) using BIOS scroll for solid
+; background fill, then writing CP437 corner/edge chars.
+; Inputs: top row in DH, left col in DL, height in CH, width in CL, attr in AH
+; -----------------------------------------------------------------------------
+vis_box:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov [box_top], dh
+    mov [box_left], dl
+    mov [box_height], ch
+    mov [box_width], cl
+    mov [box_attr], ah
+
+    ; Fill background
+    mov ah, 0x06
+    xor al, al
+    mov bh, [box_attr]
+    mov ch, [box_top]
+    mov cl, [box_left]
+    mov dh, [box_top]
+    add dh, [box_height]
+    dec dh
+    mov dl, [box_left]
+    add dl, [box_width]
+    dec dl
+    int 0x10
+
+    ; Top edge
+    mov dh, [box_top]
+    mov dl, [box_left]
+    call vis_set_cursor
+    mov al, 0xC9
+    mov bl, [box_attr]
+    mov cx, 1
+    call vis_putc_attr
+    mov dh, [box_top]
+    mov dl, [box_left]
+    inc dl
+    call vis_set_cursor
+    mov al, 0xCD
+    mov bl, [box_attr]
+    xor ch, ch
+    mov cl, [box_width]
+    sub cl, 2
+    call vis_putc_attr
+    mov dh, [box_top]
+    mov dl, [box_left]
+    add dl, [box_width]
+    dec dl
+    call vis_set_cursor
+    mov al, 0xBB
+    mov bl, [box_attr]
+    mov cx, 1
+    call vis_putc_attr
+
+    ; Sides
+    xor ch, ch
+    mov cl, [box_height]
+    sub cl, 2
+    mov dh, [box_top]
+    inc dh
+.side_loop:
+    push cx
+    mov dl, [box_left]
+    call vis_set_cursor
+    mov al, 0xBA
+    mov bl, [box_attr]
+    mov cx, 1
+    call vis_putc_attr
+    mov dl, [box_left]
+    add dl, [box_width]
+    dec dl
+    call vis_set_cursor
+    mov al, 0xBA
+    mov bl, [box_attr]
+    mov cx, 1
+    call vis_putc_attr
+    pop cx
+    inc dh
+    loop .side_loop
+
+    ; Bottom edge
+    mov dh, [box_top]
+    add dh, [box_height]
+    dec dh
+    mov dl, [box_left]
+    call vis_set_cursor
+    mov al, 0xC8
+    mov bl, [box_attr]
+    mov cx, 1
+    call vis_putc_attr
+    mov dh, [box_top]
+    add dh, [box_height]
+    dec dh
+    mov dl, [box_left]
+    inc dl
+    call vis_set_cursor
+    mov al, 0xCD
+    mov bl, [box_attr]
+    xor ch, ch
+    mov cl, [box_width]
+    sub cl, 2
+    call vis_putc_attr
+    mov dh, [box_top]
+    add dh, [box_height]
+    dec dh
+    mov dl, [box_left]
+    add dl, [box_width]
+    dec dl
+    call vis_set_cursor
+    mov al, 0xBC
+    mov bl, [box_attr]
+    mov cx, 1
+    call vis_putc_attr
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vis_progress_bar: render a progress bar at (DH,DL) of width CL.
+; AL = percent 0..100. Filled with 0xDB, empty with 0xB0.
+; -----------------------------------------------------------------------------
+vis_progress_bar:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov [pb_top], dh
+    mov [pb_left], dl
+    mov [pb_width], cl
+    mov [pb_pct], al
+
+    ; Compute filled count = pct * width / 100
+    xor ah, ah
+    mov bl, [pb_width]
+    mul bl                         ; AX = pct * width
+    mov bl, 100
+    div bl                         ; AL = filled, AH = remainder
+    mov [pb_filled], al
+
+    mov dh, [pb_top]
+    mov dl, [pb_left]
+    call vis_set_cursor
+    mov al, 0xDB
+    mov bl, VIS_ATTR_OK
+    xor ch, ch
+    mov cl, [pb_filled]
+    cmp cl, 0
+    je .skip_fill
+    call vis_putc_attr
+.skip_fill:
+    mov dh, [pb_top]
+    mov dl, [pb_left]
+    add dl, [pb_filled]
+    call vis_set_cursor
+    mov al, 0xB0
+    mov bl, VIS_ATTR_FRAME
+    xor ch, ch
+    mov cl, [pb_width]
+    sub cl, [pb_filled]
+    cmp cl, 0
+    je .skip_empty
+    call vis_putc_attr
+.skip_empty:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; visual_main_loop: render menu, accept F/I/R/Esc, return.
+; CF=0 if user picked Install (proceed with install pipeline), CF=1 if Esc.
+; Side effects: when picking Format, exec FORMAT.COM and redraw.
+; -----------------------------------------------------------------------------
+visual_main_loop:
+    mov byte [selected_profile], 1               ; minimal profile = clone all
+    mov byte [target_drive], 2                   ; C:
+    mov byte [visual_destroy_confirmed], 0
+
+.redraw:
+    call vis_clear_screen
+    ; Title bar
+    mov dh, 0
+    mov dl, 0
+    call vis_set_cursor
+    mov al, ' '
+    mov bl, VIS_ATTR_TITLE
+    mov cx, 80
+    call vis_putc_attr
+    mov dh, 0
+    mov dl, 26
+    mov bl, VIS_ATTR_TITLE
+    mov si, msg_vis_title
+    call vis_print_z_at
+
+    ; Main panel box
+    mov dh, 5
+    mov dl, 18
+    mov ch, 13
+    mov cl, 44
+    mov ah, VIS_ATTR_FRAME
+    call vis_box
+
+    ; Header inside the box
+    mov dh, 6
+    mov dl, 22
+    mov bl, VIS_ATTR_TITLE
+    mov si, msg_vis_header
+    call vis_print_z_at
+
+    mov dh, 9
+    mov dl, 22
+    mov bl, VIS_ATTR_ITEM
+    mov si, msg_vis_item_format
+    call vis_print_z_at
+
+    mov dh, 11
+    mov dl, 22
+    mov bl, VIS_ATTR_ITEM
+    mov si, msg_vis_item_install
+    call vis_print_z_at
+
+    mov dh, 13
+    mov dl, 22
+    mov bl, VIS_ATTR_ITEM
+    mov si, msg_vis_item_reboot
+    call vis_print_z_at
+
+    mov dh, 15
+    mov dl, 22
+    mov bl, VIS_ATTR_ITEM
+    mov si, msg_vis_item_exit
+    call vis_print_z_at
+
+    ; Hint bar
+    mov dh, 22
+    mov dl, 12
+    mov bl, VIS_ATTR_HINT
+    mov si, msg_vis_hint
+    call vis_print_z_at
+
+    ; Park cursor off-screen
+    mov dh, 24
+    mov dl, 79
+    call vis_set_cursor
+
+.wait_key:
+    call read_key
+    cmp al, 27
+    je .esc
+    cmp al, 'F'
+    je .do_format
+    cmp al, 'f'
+    je .do_format
+    cmp al, 'I'
+    je .do_install
+    cmp al, 'i'
+    je .do_install
+    cmp al, 'R'
+    je .do_reboot
+    cmp al, 'r'
+    je .do_reboot
+    cmp al, 13
+    je .do_install
+    jmp .wait_key
+
+.do_format:
+    call vis_run_format
+    jmp .redraw
+
+.do_install:
+    call vis_confirm_destroy
+    jc .redraw
+    mov byte [visual_destroy_confirmed], 1
+    clc
+    ret
+
+.do_reboot:
+    call reboot_system
+
+.esc:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; vis_confirm_destroy: visual Yes/No dialog before clobbering target HDD.
+; CF=0 if confirmed, CF=1 if cancelled.
+; -----------------------------------------------------------------------------
+vis_confirm_destroy:
+    mov dh, 9
+    mov dl, 20
+    mov ch, 7
+    mov cl, 40
+    mov ah, VIS_ATTR_ERR
+    call vis_box
+
+    mov dh, 10
+    mov dl, 24
+    mov bl, VIS_ATTR_ERR
+    mov si, msg_vis_destroy_1
+    call vis_print_z_at
+
+    mov dh, 12
+    mov dl, 24
+    mov bl, VIS_ATTR_ERR
+    mov si, msg_vis_destroy_2
+    call vis_print_z_at
+
+    mov dh, 14
+    mov dl, 24
+    mov bl, VIS_ATTR_HINT
+    mov si, msg_vis_destroy_3
+    call vis_print_z_at
+
+.wait:
+    call read_key
+    cmp al, 'Y'
+    je .yes
+    cmp al, 'y'
+    je .yes
+    cmp al, 'N'
+    je .no
+    cmp al, 'n'
+    je .no
+    cmp al, 27
+    je .no
+    jmp .wait
+
+.yes:
+    clc
+    ret
+
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; vis_run_format: invoke the internal format_target_hdd routine (which uses
+; the same INT 13h EDD+retry+CHS-fallback hardening as install) with a visual
+; progress bar drawn live, then redraw the menu.
+;
+; The standalone FORMAT.COM payload at \APPS\FORMAT.COM remains available
+; from the shell prompt (`run FORMAT.COM /F`) for users who want the
+; standalone DOS tool path.
+; -----------------------------------------------------------------------------
+vis_run_format:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    call vis_clear_screen
+
+    mov dh, 0
+    mov dl, 0
+    call vis_set_cursor
+    mov al, ' '
+    mov bl, VIS_ATTR_TITLE
+    mov cx, 80
+    call vis_putc_attr
+    mov dh, 0
+    mov dl, 26
+    mov bl, VIS_ATTR_TITLE
+    mov si, msg_vis_format_title
+    call vis_print_z_at
+
+    mov dh, 8
+    mov dl, 8
+    mov ch, 7
+    mov cl, 64
+    mov ah, VIS_ATTR_FRAME
+    call vis_box
+
+    mov dh, 10
+    mov dl, 12
+    mov bl, VIS_ATTR_ITEM
+    mov si, msg_vis_install_phase_format
+    call vis_print_z_at
+
+    xor al, al
+    call vis_format_phase_update
+
+    mov dh, 24
+    mov dl, 79
+    call vis_set_cursor
+
+    call format_target_hdd
+    jc .fail
+
+    mov al, 100
+    call vis_format_phase_update
+
+    mov dh, 13
+    mov dl, 12
+    mov bl, VIS_ATTR_OK
+    mov si, msg_vis_format_done
+    call vis_print_z_at
+    call vis_press_any_key
+    jmp .out
+
+.fail:
+    mov dh, 13
+    mov dl, 12
+    mov bl, VIS_ATTR_ERR
+    mov si, msg_vis_format_fail
+    call vis_print_z_at
+    call vis_press_any_key
+
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+vis_press_any_key:
+    mov dh, 14
+    mov dl, 22
+    mov bl, VIS_ATTR_HINT
+    mov si, msg_vis_press_any
+    call vis_print_z_at
+    call read_key
+    ret
+
+; -----------------------------------------------------------------------------
+; vis_install_screen_init: draw the install progress screen (3 phases) once.
+; -----------------------------------------------------------------------------
+vis_install_screen_init:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    call vis_clear_screen
+
+    ; Title bar
+    mov dh, 0
+    mov dl, 0
+    call vis_set_cursor
+    mov al, ' '
+    mov bl, VIS_ATTR_TITLE
+    mov cx, 80
+    call vis_putc_attr
+    mov dh, 0
+    mov dl, 28
+    mov bl, VIS_ATTR_TITLE
+    mov si, msg_vis_install_title
+    call vis_print_z_at
+
+    ; Outer frame
+    mov dh, 4
+    mov dl, 8
+    mov ch, 16
+    mov cl, 64
+    mov ah, VIS_ATTR_FRAME
+    call vis_box
+
+    ; Phase 1 label
+    mov dh, 6
+    mov dl, 12
+    mov bl, VIS_ATTR_ITEM
+    mov si, msg_vis_install_phase_format
+    call vis_print_z_at
+
+    ; Phase 2 label
+    mov dh, 10
+    mov dl, 12
+    mov bl, VIS_ATTR_ITEM
+    mov si, msg_vis_install_phase_clone
+    call vis_print_z_at
+
+    ; Phase 3 label
+    mov dh, 14
+    mov dl, 12
+    mov bl, VIS_ATTR_ITEM
+    mov si, msg_vis_install_phase_patch
+    call vis_print_z_at
+
+    ; Initialize the three progress bars at 0%
+    xor al, al
+    call vis_format_phase_update
+    xor al, al
+    call vis_clone_phase_update
+
+    ; Park cursor
+    mov dh, 24
+    mov dl, 79
+    call vis_set_cursor
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+vis_format_phase_update:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ah, al
+    mov dh, 7
+    mov dl, 12
+    xor ch, ch
+    mov cl, 56
+    mov al, ah
+    call vis_progress_bar
+    call vis_print_pct
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+vis_clone_phase_update:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ah, al
+    mov dh, 11
+    mov dl, 12
+    xor ch, ch
+    mov cl, 56
+    mov al, ah
+    call vis_progress_bar
+    push ax
+    mov dh, 11
+    pop ax
+    call vis_print_pct_at_clone
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+vis_install_phase_clone:
+    push ax
+    mov al, 100
+    call vis_format_phase_update
+    pop ax
+    ret
+
+vis_install_phase_done:
+    push ax
+    mov al, 100
+    call vis_clone_phase_update
+    push bx
+    push cx
+    push dx
+    push si
+    mov dh, 15
+    mov dl, 12
+    xor ch, ch
+    mov cl, 56
+    mov al, 100
+    call vis_progress_bar
+    mov dh, 18
+    mov dl, 24
+    mov bl, VIS_ATTR_OK
+    mov si, msg_vis_install_done
+    call vis_print_z_at
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vis_print_pct: print "  NN%" right of the format progress bar at (DH=7, col=70)
+vis_print_pct:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ah, al                       ; preserve pct in AH
+    mov dh, 7
+    mov dl, 70
+    call vis_set_cursor
+    mov bh, 0
+    mov bl, VIS_ATTR_OK
+    mov al, ' '
+    mov cx, 5
+    call vis_putc_attr
+    mov dh, 7
+    mov dl, 70
+    call vis_set_cursor
+    mov al, ah
+    call vis_print_u8_dec_attr
+    mov al, '%'
+    mov bl, VIS_ATTR_OK
+    mov cx, 1
+    call vis_putc_attr
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+vis_print_pct_at_clone:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ah, al
+    mov dh, 11
+    mov dl, 70
+    call vis_set_cursor
+    mov bh, 0
+    mov bl, VIS_ATTR_OK
+    mov al, ' '
+    mov cx, 5
+    call vis_putc_attr
+    mov dh, 11
+    mov dl, 70
+    call vis_set_cursor
+    mov al, ah
+    call vis_print_u8_dec_attr
+    mov al, '%'
+    mov bl, VIS_ATTR_OK
+    mov cx, 1
+    call vis_putc_attr
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vis_print_u8_dec_attr: write 0..100 as decimal at cursor with attribute in BL
+; Cursor is advanced by INT 10h AH=0Ah-style writes (we use AH=0Ah no-advance,
+; then manually move). Simpler: emit each digit as char+attr then increment.
+vis_print_u8_dec_attr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, vis_dec_buf + 3
+    mov byte [si], 0
+    mov bl, 10
+.div_loop:
+    xor ah, ah
+    div bl                            ; AL=quot, AH=rem
+    dec si
+    add ah, '0'
+    mov [si], ah
+    or al, al
+    jnz .div_loop
+    mov si, si                        ; SI -> first digit
+.print:
+    mov al, [si]
+    or al, al
+    jz .done
+    push si
+    mov bl, VIS_ATTR_OK
+    mov bh, 0
+    mov cx, 1
+    mov ah, 0x09
+    int 0x10
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10                          ; get cursor
+    inc dl
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    pop si
+    inc si
+    jmp .print
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 reboot_system:
     push cs
     pop ds
@@ -683,6 +1569,21 @@ raw_hdd_clone_install:
     mov byte [raw_edd_status], 0
     mov byte [raw_chs_status], 0
 
+    mov word [clone_done_lo], 0
+    mov word [clone_done_hi], 0
+    mov byte [clone_progress_pct], 0
+    mov word [clone_next_mark_lo], 0
+    mov word [clone_next_mark_hi], 0
+    mov ax, RAW_HDD_CLONE_SECTORS_LO
+    mov dx, RAW_HDD_CLONE_SECTORS_HI
+    mov bx, 10
+    div bx
+    mov [clone_step_lo], ax
+    mov ax, dx
+    mov [clone_step_hi], ax
+    mov ax, [clone_step_lo]
+    mov [clone_next_mark_lo], ax
+
 .copy_loop:
     mov ax, [raw_clone_remaining_lo]
     or ax, [raw_clone_remaining_hi]
@@ -704,6 +1605,34 @@ raw_hdd_clone_install:
 .dec_remaining:
     sub word [raw_clone_remaining_lo], 1
     sbb word [raw_clone_remaining_hi], 0
+
+    add word [clone_done_lo], 1
+    adc word [clone_done_hi], 0
+
+    mov al, [clone_progress_pct]
+    cmp al, 100
+    jae .copy_loop
+
+    mov ax, [clone_done_hi]
+    cmp ax, [clone_next_mark_hi]
+    jb .copy_loop
+    ja .clone_emit
+    mov ax, [clone_done_lo]
+    cmp ax, [clone_next_mark_lo]
+    jb .copy_loop
+
+.clone_emit:
+    add byte [clone_progress_pct], 10
+%if SETUP_LIVE_CD_MODE
+    mov al, [clone_progress_pct]
+    call vis_clone_phase_update
+%endif
+    mov ax, [clone_next_mark_lo]
+    add ax, [clone_step_lo]
+    mov [clone_next_mark_lo], ax
+    mov ax, [clone_next_mark_hi]
+    adc ax, [clone_step_hi]
+    mov [clone_next_mark_hi], ax
     jmp .copy_loop
 
 .done:
@@ -1240,6 +2169,18 @@ confirm_raw_hdd_destroy:
     push bx
     push dx
     push si
+
+%if SETUP_LIVE_CD_MODE
+    cmp byte [visual_destroy_confirmed], 1
+    jne .interactive
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+.interactive:
+%endif
 
     call print_crlf
     mov dx, msg_raw_destroy_1
@@ -2972,6 +3913,32 @@ msg_screen_hdd_install_path db ' P=', 0
 msg_screen_hdd_install_lba db ' L=', 0
 msg_screen_hdd_format_fail db 'HDD format failed. AH=', 0
 
+msg_vis_title           db 'CiukiOS Setup - Live CD Installer', 0
+msg_vis_header          db 'Choose an action:', 0
+msg_vis_item_format     db '[F]  Format target HDD (native FAT16 MBR)', 0
+msg_vis_item_install    db '[I]  Install OS to target HDD', 0
+msg_vis_item_reboot     db '[R]  Reboot system', 0
+msg_vis_item_exit       db '[Esc] Exit to DOS prompt', 0
+msg_vis_hint            db 'Press F / I / R / Esc to choose', 0
+msg_vis_destroy_1       db 'Confirm destructive install', 0
+msg_vis_destroy_2       db 'BIOS HDD #2 will be wiped.', 0
+msg_vis_destroy_3       db 'Press Y to proceed, N to cancel.', 0
+msg_vis_format_title    db 'Format target HDD', 0
+msg_vis_format_running  db 'Formatting target HDD...', 0
+msg_vis_format_done     db 'Format complete.', 0
+msg_vis_format_fail     db 'Format failed.', 0
+msg_vis_press_any       db 'Press any key to return to menu.', 0
+msg_vis_install_title   db 'Installing CiukiOS...', 0
+msg_vis_install_phase_format  db 'Phase 1/3: Formatting target HDD', 0
+msg_vis_install_phase_clone   db 'Phase 2/3: Cloning system image', 0
+msg_vis_install_phase_patch   db 'Phase 3/3: Finalizing installation', 0
+msg_vis_install_done    db 'Installation complete. Rebooting...', 0
+
+format_path             db '\APPS\FORMAT.COM', 0
+format_cmdtail          db 3, ' /F', 13
+format_fcb1             times 16 db 0
+format_fcb2             times 16 db 0
+
 str_crlf             db 13, 10, 0
 str_ok2              db 'OK', 0
 str_destroy_confirm db 'DESTROY', 0
@@ -3102,6 +4069,32 @@ raw_chs_status          db 0
 raw_edd_retry_op        db 0
 raw_edd_retry_drive     db 0
 prompt_tick_start       dw 0
+
+box_top                 db 0
+box_left                db 0
+box_height              db 0
+box_width               db 0
+box_attr                db 0
+bp_box_w                db 0
+bp_box_w_in             db 0
+bp_box_attr             db 0
+pb_top                  db 0
+pb_left                 db 0
+pb_width                db 0
+pb_pct                  db 0
+pb_filled               db 0
+visual_destroy_confirmed db 0
+clone_done_lo           dw 0
+clone_done_hi           dw 0
+clone_step_lo           dw 0
+clone_step_hi           dw 0
+clone_next_mark_lo      dw 0
+clone_next_mark_hi      dw 0
+clone_progress_pct      db 0
+vis_dec_buf             times 4 db 0
+
+exec_param              times 14 db 0
+
 kb_key_total            dw 0
 kb_nav_count            db 0
 

@@ -139,18 +139,8 @@ if ! wait_for_regex "$INSTALL_SERIAL_LOG" "\[SETUP-HDD-PROBE\] P=03 B=02 S=01" 4
   fail_with_rc "safe QEMU HDD probe marker missing"
 fi
 
-send_key ret
-send_key ret
-send_key c
-send_key ret
-send_key d
-send_key e
-send_key s
-send_key t
-send_key r
-send_key o
+send_key i
 send_key y
-send_key ret
 
 if ! wait_for_regex "$INSTALL_SERIAL_LOG" "\[SETUP-HDD-INSTALL\] START" 300; then
   fail_with_rc "runtime HDD install start marker missing"

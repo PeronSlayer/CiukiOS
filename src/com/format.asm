@@ -49,8 +49,12 @@ start:
     jc .probe_fail
 
     call print_geometry
+
+    cmp byte [force_flag], 1
+    je .skip_confirm
     call confirm_destructive
     jc .user_abort
+.skip_confirm:
 
     call write_mbr_sector
     jc .write_fail
@@ -120,38 +124,59 @@ start:
 parse_command_tail:
     push si
     push cx
+    push dx
+    mov byte [force_flag], 0
+    mov dl, 0xFF                          ; DL = pending drive index
     mov si, 0x0081
     mov cl, [0x0080]
     xor ch, ch
     or cx, cx
-    jz .none
+    jz .done
 
 .scan:
     lodsb
+    cmp al, '/'
+    je .switch
+    cmp al, '-'
+    je .switch
     cmp al, 'a'
     jb .check_upper
     cmp al, 'z'
     ja .next
-    sub al, 'a'
-    jmp .have
+    sub al, ('a' - 'A')
 
 .check_upper:
     cmp al, 'A'
     jb .next
     cmp al, 'Z'
     ja .next
+    cmp dl, 0xFF
+    jne .next
     sub al, 'A'
+    mov dl, al
+    jmp .next
 
-.have:
-    pop cx
-    pop si
-    ret
+.switch:
+    or cx, cx
+    jz .done
+    lodsb
+    dec cx
+    cmp al, 'F'
+    je .force
+    cmp al, 'f'
+    je .force
+    jmp .next
+
+.force:
+    mov byte [force_flag], 1
+    jmp .next
 
 .next:
     loop .scan
 
-.none:
-    mov al, 0xFF
+.done:
+    mov al, dl
+    pop dx
     pop cx
     pop si
     ret
@@ -821,6 +846,7 @@ retry_op            db 0
 retry_drive         db 0
 last_int13_status   db 0
 last_int13_path     db 0
+force_flag          db 0
 input_buf           times 16 db 0
 dec_u16_buf         times 6 db 0
 
