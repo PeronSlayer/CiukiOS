@@ -516,14 +516,22 @@ probe_target_drive:
     ret
 
 guard_raw_hdd_topology:
+    ; Both BIOS HDDs must be present (0x80=CD source, 0x81=target HDD).
     cmp byte [bios_probe_present_mask], 0x03
     jne .fail
-    cmp byte [bios_probe_mbrsig_mask], 0x01
-    jne .fail
+    ; The CD source (bit 0) must have a valid MBR signature so we know
+    ; the clone source is bootable. The target HDD (bit 1) may or may
+    ; not have a signature — after a previous install attempt it will,
+    ; and the user has explicitly confirmed destruction.
+    test byte [bios_probe_mbrsig_mask], 0x01
+    jz .fail
 %if SETUP_ENABLE_RAW_HDD_DESTRUCTIVE
+    ; Destructive mode: user has confirmed wipe — don't gate on target
+    ; being blank. This is what the live-CD installer always uses.
     clc
     ret
 %else
+    ; Non-destructive: target must be blank to avoid clobbering data.
     cmp byte [bios_probe_blank_mask], 0x02
     jne .fail
     clc
