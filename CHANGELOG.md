@@ -15,6 +15,10 @@ This changelog is intentionally concise. Every completed task must update the `U
 	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` PASS.
 3. Fixed external-DOS return-state handling for the shell `run` path by explicitly resetting `shell_exec_external_mouse_disabled` in the exec-success return flow before INT 10h hook reinstall/chrome redraw; this prevents the post-return shell session from remaining in external-mouse-disabled state after a successful DOS program launch/exit sequence.
 	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
+4. Extended `make qemu-test-full-dos-compat-smoke` with a systematic `dos21` serial check between `CIUKEDIT` and `GFXSTAR`, requiring `[DOS21-SERIAL] PASS` plus prompt return and documenting lane coverage for INT 21h AH=38h/44h/67h via `dos21` in the lane meta log.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS (dos21 extension lane).
+5. Fixed `scripts/qemu_test_full_dos_compat_smoke.sh` to avoid DOS21 prompt false negatives by introducing `ROOT_PROMPT_PATTERN` (`CiukiOS C:\>`), introducing `SHELL_PROMPT_PATTERN` (root OR apps prompt), and using shell-prompt regex matching only for the `DOS21_PROMPT_RETURNED` step while preserving strict `C:\APPS\>` checks elsewhere.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS (added post-dos21 `cd \APPS` prompt resync to keep `GFXSTAR_PROMPT_RETURNED` green).
 
 ## pre-Alpha v0.6.6 (2026-05-08)
 1. Reordered the post-v0.6.5 roadmap around continued Stage1/runtime split work, broader arbitrary DOS program compatibility, legacy audio, and only later networking and Windows pre-NT milestones; aligned the README, architecture notes, runtime-split plan, GUI demo notes, and agent directives with that priority order.

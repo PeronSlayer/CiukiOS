@@ -29,6 +29,9 @@ Boots the full profile headlessly and validates DOS compatibility smoke flow:
   submit one input line
   wait for [CIUKEDIT:OK]
   verify prompt returns
+  run dos21 built-in command
+  wait for [DOS21-SERIAL] PASS
+  verify prompt returns
   run built-in gfxstar command
   wait for [GFXSTAR-SERIAL] PASS
   verify prompt returns
@@ -268,11 +271,14 @@ fi
 
 PROMPT_PREFIX='C{1,2}i{1,2}u{1,2}k{1,2}i{1,2}O{1,2}S{1,2}[[:space:]]+'
 BS='[\\]'
+ROOT_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}>{1,2}"
 APPS_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}A{1,2}P{2,4}S{1,2}${BS}{1,2}>{1,2}"
+SHELL_PROMPT_PATTERN="(${ROOT_PROMPT_PATTERN})|(${APPS_PROMPT_PATTERN})"
 DOSNAV_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}A{1,2}P{2,4}S{1,2}${BS}{1,2}D{1,2}O{1,2}S{1,2}N{1,2}A{1,2}V{1,2}${BS}{1,2}>{1,2}"
 CIUKEDIT_BOOT_PATTERN='\[CIUKEDIT:BOOT\]|\[{1,2}C{1,2}I{1,2}U{1,2}K{1,2}E{1,2}D{1,2}I{1,2}T{1,2}:{1,2}B{1,2}O{2,4}T{1,2}\]{1,2}'
 CIUKEDIT_INPUT_PATTERN='Enter[[:space:]]+line>|E{1,2}n{1,2}t{1,2}e{1,2}r{1,2}[[:space:]]+l{1,2}i{1,2}n{1,2}e{1,2}>'
 CIUKEDIT_OK_PATTERN='\[CIUKEDIT:OK\]|\[{1,2}C{1,2}I{1,2}U{1,2}K{1,2}E{1,2}D{1,2}I{1,2}T{1,2}:{1,2}O{1,2}K{1,2}\]{1,2}'
+DOS21_PASS_PATTERN='\[DOS21-SERIAL\][[:space:]]+PASS|\[{1,2}D{1,2}O{1,2}S{1,2}2{1,2}1{1,2}-{1,2}S{1,2}E{1,2}R{1,2}I{1,2}A{1,2}L{1,2}\]{1,2}[[:space:]]+P{1,2}A{1,2}S{2,4}'
 GFXSTAR_PASS_PATTERN='\[GFXSTAR-SERIAL\][[:space:]]+PASS|\[{1,2}G{1,2}F{1,2}X{1,2}S{1,2}T{1,2}A{1,2}R{1,2}-{1,2}S{1,2}E{1,2}R{1,2}I{1,2}A{1,2}L{1,2}\]{1,2}[[:space:]]+P{1,2}A{1,2}S{2,4}'
 DOSNAV_START_PATTERN='Dos[[:space:]]+Navigator|D{1,2}o{1,2}s{1,2}[[:space:]]+N{1,2}a{1,2}v{1,2}i{1,2}g{1,2}a{1,2}t{1,2}o{1,2}r|RIT[[:space:]]+Research[[:space:]]+Labs|R{1,2}I{1,2}T{1,2}[[:space:]]+R{1,2}e{1,2}s{1,2}e{1,2}a{1,2}r{1,2}c{1,2}h{1,2}[[:space:]]+L{1,2}a{1,2}b{1,2}s{1,2}'
 
@@ -331,6 +337,22 @@ mark_pass "CIUKEDIT_OK"
 
 wait_for_prompt_from_offset "$CIUKEDIT_INPUT_OFFSET" "$APP_TIMEOUT_SEC" "CIUKEDIT_PROMPT_RETURNED"
 
+DOS21_OFFSET="$(file_size "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" "dos21" || mark_fail "SEND_DOS21_COMMAND" "cannot send dos21 command"
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$DOS21_PASS_PATTERN" "$DOS21_OFFSET" "$APP_TIMEOUT_SEC"; then
+  mark_fail "DOS21_SERIAL_PASS" "missing [DOS21-SERIAL] PASS marker"
+fi
+mark_pass "DOS21_SERIAL_PASS"
+
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$SHELL_PROMPT_PATTERN" "$DOS21_OFFSET" "$APP_TIMEOUT_SEC"; then
+  mark_fail "DOS21_PROMPT_RETURNED" "shell prompt did not appear"
+fi
+mark_pass "DOS21_PROMPT_RETURNED"
+
+APPS_SYNC_OFFSET="$(file_size "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cd \APPS' || mark_fail "SEND_APPS_SYNC_CD_COMMAND" "cannot send APPS sync directory change command"
+wait_for_prompt_from_offset "$APPS_SYNC_OFFSET" "$APP_TIMEOUT_SEC" "APPS_SYNC_PROMPT_RETURNED"
+
 GFXSTAR_OFFSET="$(file_size "$SERIAL_LOG")"
 send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$GFXSTAR_COMMAND" || mark_fail "SEND_GFXSTAR_BUILTIN_COMMAND" "cannot send built-in GFXSTAR command"
 if ! wait_for_regex_from_offset "$SERIAL_LOG" "$GFXSTAR_PASS_PATTERN" "$GFXSTAR_OFFSET" "$APP_TIMEOUT_SEC"; then
@@ -379,6 +401,9 @@ fi
 if ! grep -Eiq "$CIUKEDIT_OK_PATTERN" "$STRINGS_LOG"; then
   mark_fail "STRINGS_CIUKEDIT_OK" "CIUKEDIT ok marker missing in strings log"
 fi
+if ! grep -Eiq "$DOS21_PASS_PATTERN" "$STRINGS_LOG"; then
+  mark_fail "STRINGS_DOS21_PASS" "DOS21 pass marker missing in strings log"
+fi
 if ! grep -Eiq "$GFXSTAR_PASS_PATTERN" "$STRINGS_LOG"; then
   mark_fail "STRINGS_GFXSTAR_PASS" "GFXSTAR pass marker missing in strings log"
 fi
@@ -406,7 +431,8 @@ fi
   echo "DOSNAV_PRESENT=$DOSNAV_PRESENT"
   echo "DOSNAV_DIR_COMMAND=$DOSNAV_DIR_COMMAND"
   echo "DOSNAV_COMMAND=$DOSNAV_COMMAND"
-  echo "VALIDATION_FLOW=ciukedit_run_with_args_then_gfxstar_builtin_then_dosnavigator_launch_if_present"
+  echo "DOS21_MATRIX_COVERAGE=INT21_AH_38h_44h_67h_via_dos21"
+  echo "VALIDATION_FLOW=ciukedit_run_with_args_then_dos21_builtin_then_gfxstar_builtin_then_dosnavigator_launch_if_present"
 } > "$META_LOG"
 
 if (( DOSNAV_PRESENT )); then

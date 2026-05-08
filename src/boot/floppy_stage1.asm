@@ -344,6 +344,15 @@ install_int21_vector:
     mov ax, cs
     mov [es:bx + 2], ax
 
+    mov bx, 0x24 * 4
+    mov ax, [es:bx]
+    mov [old_int24_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int24_seg], ax
+    mov word [es:bx], int24_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
+
     ; Install a minimal INT 2Fh multiplex handler for DOS compatibility.
     mov bx, 0x2F * 4
     mov ax, [es:bx]
@@ -446,6 +455,10 @@ int20_handler:
     iret
 
 int_default_iret:
+    iret
+
+int24_handler:
+    mov al, 0x03
     iret
 
 %if STAGE2_AUTORUN == 0
@@ -1279,6 +1292,22 @@ int21_handler:
     jmp .success
 
 .fn_67:
+    mov ax, bx
+    cmp ax, 20
+    jae .fn_67_min_ok
+    mov ax, 20
+.fn_67_min_ok:
+    cmp ax, 232
+    jbe .fn_67_max_ok
+    mov ax, 232
+.fn_67_max_ok:
+    push ax
+    push bx
+    call int21_get_psp
+    mov es, bx
+    pop ax
+    mov [es:0x0032], ax
+    pop bx
     xor ax, ax
     jmp .success
 
@@ -1949,13 +1978,7 @@ int21_exec_init_program_psp:
     rep stosw
     mov word [es:0x0000], 0x20CD
     mov byte [es:0x0005], 0xCB
-    mov word [es:0x000A], 0x0005
-    mov ax, es
-    mov [es:0x000C], ax
-    mov word [es:0x000E], 0x0005
-    mov [es:0x0010], ax
-    mov word [es:0x0012], 0x0005
-    mov [es:0x0014], ax
+    call int21_psp_copy_runtime_vectors
     call int21_init_psp_handles
     ret
 
@@ -1971,6 +1994,7 @@ int21_create_child_psp:
     rep stosw
     mov word [es:0x0000], 0x20CD
     mov [es:0x0002], si
+    call int21_psp_copy_runtime_vectors
     call int21_init_psp_handles
     call int21_mem_adopt_child_psp
     xor ax, ax
@@ -2031,6 +2055,25 @@ int21_init_psp_handles:
     mov cx, 15
     rep stosb
     pop di
+    pop cx
+    pop ax
+    ret
+
+int21_psp_copy_runtime_vectors:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    xor ax, ax
+    mov ds, ax
+    mov si, 0x0088
+    mov di, 0x000A
+    mov cx, 6
+    rep movsw
+    pop ds
+    pop di
+    pop si
     pop cx
     pop ax
     ret
@@ -2733,6 +2776,7 @@ int21_exec_run_mz:
     mov sp, [cs:saved_sp]
 .done_ss_restore:
     sti
+
     cmp word [cs:current_mz_context_slot], 3
     je .restore_third_ctx
     cmp word [cs:current_mz_context_slot], 2
@@ -3437,8 +3481,8 @@ int21_ioctl:
     ret
 
 .bad_handle:
-    xor ax, ax
-    clc
+    mov ax, 0x0006
+    stc
     ret
 
 int21_get_psp:
@@ -16492,6 +16536,12 @@ int33_handler:
     iret
 
 int2f_handler:
+    cmp ax, 0x1600
+    je .fn_16xx_idle
+    cmp ax, 0x1680
+    je .fn_16xx_idle
+    cmp ax, 0x1689
+    je .fn_16xx_idle
     cmp ax, 0x1687
     je .fn_1687
     cmp ax, 0x4300
@@ -16503,6 +16553,10 @@ int2f_handler:
 
 .fn_1687:
     mov ax, 0x8001
+    jmp .iret_clear_cf_enter
+
+.fn_16xx_idle:
+    xor ax, ax
     jmp .iret_clear_cf_enter
 
 .fn_4300:
@@ -16941,6 +16995,8 @@ old_int21_off dw 0
 old_int21_seg dw 0
 old_int20_off dw 0
 old_int20_seg dw 0
+old_int24_off dw 0
+old_int24_seg dw 0
 old_int2f_off dw 0
 old_int2f_seg dw 0
 int_ef_target_off dw 0
