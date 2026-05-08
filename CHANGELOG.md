@@ -3,7 +3,9 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task must update the `Unreleased` section unless the task is a release cut that creates a new version section.
 
-## Unreleased (2026-05-05)
+## Unreleased (2026-05-08)
+
+## pre-Alpha v0.6.6 (2026-05-08)
 1. Reordered the post-v0.6.5 roadmap around continued Stage1/runtime split work, broader arbitrary DOS program compatibility, legacy audio, and only later networking and Windows pre-NT milestones; aligned the README, architecture notes, runtime-split plan, GUI demo notes, and agent directives with that priority order.
 2. Added FAT16 per-drive CWD mirror state for C: and D: when INT 21h changes the default drive, kept chdir updates synchronized with the active drive slot, extended DOS21 smoke coverage for explicit C:/D: getcwd paths, added a full-CD shell drive QEMU lane for D: prompt/CWD validation, and expanded shell stability stress loops for repeated invalid commands plus COM/MZ execution, then added DOS-like drive-qualified chdir handling for C: and D: absolute paths, C:REL/D:REL relative paths, parent traversal, and invalid drive rejection without changing the default drive, and split INT 21h AH=38h country-info handling from AH=67h set-handle-count compatibility so DOOM-era callers no longer hit an unsupported or empty country-info path, and confirmed the only observed AH=44h IOCTL failure class is AL=06h input-status by adding DOS21 smoke coverage for that subfunction without broadening generic IOCTL behavior, and initialized COM/MZ PSP handle tables with DOS-standard inherited handles 0-4 plus closed entries so programs that inspect or close inherited handles no longer see an all-zero PSP handle map.
 3. Slimmed the public README quick links and removed the legacy in-repo `OLD/` archive from the current project tree, keeping the repository focused on the active legacy BIOS x86 codebase and documentation.
@@ -66,6 +68,25 @@ This changelog is intentionally concise. Every completed task must update the `U
 	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=extender_init make qemu-test-full-doom-taxonomy` PASS.
 	Validation evidence: `make qemu-test-full-dos-taxonomy` PASS.
 	Validation evidence: `make qemu-test-full-cd` PASS.
+
+
+56. Fixed the DOOM runtime regression introduced by the `cd58da5` memory-layout shift by restoring full-profile Stage1 DOS/runtime buffer segments and heap limit to the pre-regression map (`RUNTIME_LOAD_SEG=0x4C00`, `DOS_META/FAT/IO/ENV=0x5000/0x5200/0x5400/0x5600`, `DOS_HEAP_LIMIT_SEG=0x9F00`, `SPLASH_BUF_SEG=0x9000`), removing the startup stall at `V_Init: allocate screens.` and restoring post-video progress markers through `M_LoadDefaults`, `Z_Init`, `W_Init`, and `S_Init`.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=visual_gameplay DOOM_TAXONOMY_OBSERVE_SEC=180 QEMU_TIMEOUT_SEC=260 DOOM_TAXONOMY_DISPLAY_MODE=none make qemu-test-full-doom-taxonomy` reached post-`V_Init` markers (`M_LoadDefaults`, `Z_Init`, `W_Init`, `S_Init`) in fresh runtime logs.
+
+57. Improved full-profile Stage1 DOS memory management while staying inside the Stage1 budget: AH=48 free-table allocation now honors minimal first-fit/best-fit/last-fit strategy selection with invalid-strategy fallback to first-fit, AH=48 gap-scan now treats both ALLOC and FREE entries as barriers to avoid overlap with tracked free ranges, obsolete candidate-state symbols were pruned from Stage1 data, and AH=58 strategy set now normalizes unsupported values to 0 to keep allocator behavior deterministic across callers.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make build-full-cd` PASS.
+	Validation evidence: `make qemu-test-full-cd` PASS.
+
+58. Hardened AH=4Ah resize behavior for fragmented DOS memory-table edge-cases by treating tracked FREE entries as hard boundaries in resize-limit and gap computations (ignoring only invalid states), and added a dedicated DOS21 fragmented-resize smoke scenario that verifies grow-failure signaling (`CF=1`, error `0x0008`, and returned max paragraphs) while a second block fragments the arena.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make build-full-cd` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-cd` PASS.
+
+59. Cut release `CiukiOS pre-Alpha v0.6.6` and aligned release-facing metadata (`CHANGELOG.md`, `README.md`, `VERSION`, and shell banner string) with the new version.
 
 ## pre-Alpha v0.6.5 (2026-05-05)
 1. Established the Stage1/runtime split architecture as the next structural direction: Stage1 is now documented as a loader boundary, with DOS runtime, shell, driver/CD policy, diagnostics, and module responsibilities mapped for migration into loaded components under `\SYSTEM`.

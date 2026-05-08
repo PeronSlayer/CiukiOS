@@ -9,19 +9,19 @@ org 0x0000
 %define MZ_LOAD_SEG 0x3000
 %define MZ2_LOAD_SEG 0x3800
 %define MZ3_LOAD_SEG 0x7800
-%define RUNTIME_LOAD_SEG 0x9000
+%define RUNTIME_LOAD_SEG 0x4C00
 %define STAGE2_LOAD_SEG 0x4E00
-%define DOS_META_BUF_SEG 0x9200
-%define DOS_FAT_BUF_SEG  0x9400
-%define DOS_IO_BUF_SEG   0x9600
-%define DOS_ENV_SEG      0x9800
+%define DOS_META_BUF_SEG 0x5000
+%define DOS_FAT_BUF_SEG  0x5200
+%define DOS_IO_BUF_SEG   0x5400
+%define DOS_ENV_SEG      0x5600
 %define DOS_SYSVARS_ANCHOR_OFF 0x0800
 %define DOS_SYSVARS_OFF        0x0802
 %define DOS_SYSVARS_CDS_OFF    0x0900
 %define DOS_SYSVARS_DPB_OFF    0x0A80
 %define DOS_SYSVARS_SFT_OFF    0x0B00
 %define DOS_HEAP_BASE_SEG 0x5800
-%define DOS_HEAP_LIMIT_SEG 0x9000
+%define DOS_HEAP_LIMIT_SEG 0x9F00
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
 %define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
@@ -96,7 +96,7 @@ org 0x0000
 %define SPLASH_VESA_MODE 0x0103
 %define SPLASH_VESA_ROW_BYTES 800
 %define SPLASH_VRAM_SAFE_OFFSET 0xFCE0
-%define SPLASH_BUF_SEG 0x9A00
+%define SPLASH_BUF_SEG 0x9000
 %define SPLASH_WAIT_TICKS 91
 %define SHELL_FOOTER_DSK_IDLE_REFRESH_TICKS 54
 %define SHELL_FOOTER_DSK_BUSY_REFRESH_TICKS 216
@@ -1513,9 +1513,7 @@ int21_smoke_test:
     mov ah, 0x48
     int 0x21
     jc .fail
-    cmp ax, DOS_HEAP_USER_SEG
-    jne .fail
-    mov [dos21_test_seg], ax
+    mov [dos_mem_alloc_seg], ax
 
     mov es, ax
     mov bx, 0x0030
@@ -1523,18 +1521,36 @@ int21_smoke_test:
     int 0x21
     jc .fail
 
-    mov ax, [dos21_test_seg]
-    mov es, ax
+    mov bx, 0x0010
+    mov ah, 0x48
+    int 0x21
+    jc .fail
+    mov [dos_mem_alloc_seg2], ax
+
+    mov es, [dos_mem_alloc_seg]
+    mov bx, 0x0031
+    mov ah, 0x4A
+    int 0x21
+    jnc .fail
+    cmp al, 0x08
+    jne .fail
+    cmp bx, 0x0030
+    jb .fail
+
+    mov es, [dos_mem_alloc_seg2]
     mov ah, 0x49
     int 0x21
     jc .fail
 
-    mov ax, [dos21_test_seg]
-    mov es, ax
+    mov es, [dos_mem_alloc_seg]
+    mov ah, 0x49
+    int 0x21
+    jc .fail
+
     mov ah, 0x49
     int 0x21
     jnc .fail
-    cmp ax, 0x0009
+    cmp al, 0x09
     jne .fail
 
     mov si, msg_dos21_serial_pass
@@ -3198,6 +3214,9 @@ int21_mem_strategy:
     clc
     ret
 .set:
+    cmp bx, 3
+    sbb ax, ax
+    and bx, ax
     mov [cs:dos_mem_strategy], bx
     xor ax, ax
     clc
@@ -7563,7 +7582,7 @@ int21_mem_table_next_limit:
     cmp di, cx
     jae .done
     cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
-    jne .next
+    ja .next
     mov ax, [cs:dos_mem_block_table + si]
     cmp ax, bx
     jbe .next
@@ -7600,12 +7619,6 @@ int21_mem_table_resize_limit:
     ret
 
 int21_mem_find_free_gap:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
     mov [cs:dos_mem_block_req_size], bx
     call int21_mem_arena_start
     mov dx, ax
@@ -7618,7 +7631,7 @@ int21_mem_find_free_gap:
     cmp di, cx
     jae .tail
     cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
-    jne .next
+    ja .next
     mov ax, [cs:dos_mem_block_table + si]
     cmp ax, dx
     jbe .consume
@@ -7626,7 +7639,11 @@ int21_mem_find_free_gap:
     sub bx, dx
     dec bx
     cmp bx, [cs:dos_mem_block_req_size]
-    jae .found
+    jb .consume
+    mov ax, dx
+    mov bx, [cs:dos_mem_block_req_size]
+    clc
+    ret
 .consume:
     mov dx, [cs:dos_mem_block_table + si]
     add dx, [cs:dos_mem_block_table + si + 2]
@@ -7643,35 +7660,28 @@ int21_mem_find_free_gap:
     sub bx, dx
     cmp bx, [cs:dos_mem_block_req_size]
     jb .not_found
-
-.found:
     mov ax, dx
     mov bx, [cs:dos_mem_block_req_size]
     clc
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 .not_found:
     stc
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 int21_mem_table_alloc_from_free:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
     mov [cs:dos_mem_block_req_size], bx
+    mov bp, [cs:dos_mem_strategy]
+    cmp bp, 2
+    jbe .strategy_ready
+    xor bp, bp
+.strategy_ready:
+    mov word [cs:dos_mem_block_candidate_si], 0xFFFF
+    mov dx, 0xFFFF
+    cmp bp, 2
+    jne .metric_ready
+    xor dx, dx
+.metric_ready:
     xor si, si
     xor di, di
     xor cx, cx
@@ -7679,18 +7689,47 @@ int21_mem_table_alloc_from_free:
 
 .scan:
     cmp di, cx
-    jae .not_found
+    jae .use_free
     cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_FREE
     jne .next
     mov bx, [cs:dos_mem_block_table + si + 2]
     cmp bx, [cs:dos_mem_block_req_size]
-    jae .use_free
+    jb .next
+    cmp bp, 0
+    je .select_immediate
+    cmp bp, 1
+    je .best_fit
+    cmp bp, 2
+    je .last_fit
+    jmp .next
+
+.best_fit:
+    cmp bx, dx
+    jae .next
+    mov dx, bx
+    mov [cs:dos_mem_block_candidate_si], si
+    jmp .next
+
+.last_fit:
+    mov ax, [cs:dos_mem_block_table + si]
+    cmp ax, dx
+    jbe .next
+    mov dx, ax
+    mov [cs:dos_mem_block_candidate_si], si
+    jmp .next
+
+.select_immediate:
+    mov [cs:dos_mem_block_candidate_si], si
+    jmp .use_free
 .next:
     add si, DOS_MEM_BLOCK_ENTRY_SIZE
     inc di
     jmp .scan
 
 .use_free:
+    mov si, [cs:dos_mem_block_candidate_si]
+    cmp si, 0xFFFF
+    je .not_found
     mov bx, [cs:dos_mem_block_req_size]
     mov dx, [cs:dos_mem_block_table + si + 2]
     sub dx, bx
@@ -7727,11 +7766,6 @@ int21_mem_table_alloc_from_free:
     stc
 
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 int21_mem_sync_legacy:
@@ -12640,13 +12674,6 @@ shell_exec_buffer_path:
     pop si
     pop cx
     pop ax
-    ; Clear shell chrome before handing control to external DOS programs.
-    push ax
-    mov ax, 0x0003
-    int 0x10
-    pop ax
-    mov byte [cs:shell_exec_external_mouse_disabled], 1
-    call shell_exec_restore_bios_int10
     ; Run the program
     push bx
     push es
@@ -12661,7 +12688,6 @@ shell_exec_buffer_path:
     pop bx
     jc .exec_failed
     ; Exec succeeded: restore CWD to pre-exec state
-    mov byte [cs:shell_exec_external_mouse_disabled], 0
     push ax
     push cx
     push si
@@ -12684,19 +12710,11 @@ shell_exec_buffer_path:
     push ax
     mov ax, 0x0003
     int 0x10
-    pop ax
-    call shell_exec_reinstall_int10
     call draw_shell_chrome
+    pop ax
     clc
     ret
 .exec_failed:
-    mov byte [cs:shell_exec_external_mouse_disabled], 0
-    push ax
-    mov ax, 0x0003
-    int 0x10
-    pop ax
-    call shell_exec_reinstall_int10
-    call draw_shell_chrome
     stc
     ret
 
@@ -15910,7 +15928,7 @@ mouse_vga_xor_cursor12:
     inc dx
     in al, dx
     mov [cs:mouse_vga_save_gc0], al
-    dec dx
+    mov bx, 0xFFFF
     mov al, 0x01
     out dx, al
     inc dx
@@ -16125,7 +16143,7 @@ int15_handler:
     cmp ah, 0xC2
     jne .chain
     cmp byte [cs:shell_exec_external_mouse_disabled], 0
-    jne .unsupported
+    jne .chain
 
     cmp al, 0x00
     je .enable_disable
@@ -16246,8 +16264,6 @@ int16_handler:
     jmp far [cs:old_int16_off]
 
 int33_handler:
-    cmp byte [cs:shell_exec_external_mouse_disabled], 0
-    jne .external_mouse_disabled
     cmp ax, 0x0000
     je .reset
     cmp ax, 0x0001
@@ -17134,7 +17150,7 @@ dos_mem_block_tmp_owner dw 0
 dos_mem_block_tmp_state dw 0
 dos_mem_block_found_owner dw 0
 dos_mem_block_req_size dw 0
-dos21_test_seg dw 0
+dos_mem_block_candidate_si dw 0
 dos21_saved_drive db 0
 saved_ss dw 0
 saved_sp dw 0
@@ -17286,7 +17302,7 @@ runtime_probe_marker_prefix_len equ $ - runtime_probe_marker_prefix
 
 msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
-msg_banner_title db "CiukiOS pre-Alpha v0.6.5 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.6.6 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 16
 msg_shell_status db "Type Help for commands.", 0
 msg_shell_cpu_prefix db "CPU:", 0
