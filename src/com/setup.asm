@@ -1971,18 +1971,23 @@ raw_hdd_clone_install:
     add [clone_done_lo], ax
     adc word [clone_done_hi], 0
 
-    ; Reset both drives every 64 batches (~512 sectors) to keep BIOS happy.
+    ; Periodic recovery: keep BIOS source-drive state fresh, but never call
+    ; INT 13h reset on the target while writes are running through ATA PIO.
+    ; Some real BIOSes wedge when mixing direct ATA writes with repeated
+    ; INT 13h resets of the same target device mid-clone.
     inc word [reset_counter]
     test word [reset_counter], 0x003F
     jnz .no_reset
     push ax
     push dx
+    push cx
     xor ax, ax
     mov dl, RAW_HDD_SOURCE_DRIVE
     int 0x13
-    xor ax, ax
-    mov dl, RAW_HDD_TARGET_DRIVE
-    int 0x13
+    call ata_pri_soft_reset
+    ; Ignore ATA reset failure here: write path has per-sector timeout+recovery
+    ; and will surface the failure with stage/path/status diagnostics.
+    pop cx
     pop dx
     pop ax
 .no_reset:
