@@ -112,15 +112,9 @@ start:
     jc install_fail
 %if SETUP_LIVE_CD_MODE
     call vis_install_screen_init
-    call vis_install_phase_format
-%endif
-    mov byte [step_id], 0x3F
-    call format_target_hdd
-    jc install_fail
-    mov byte [step_id], 0x40
-%if SETUP_LIVE_CD_MODE
     call vis_install_phase_clone
 %endif
+    mov byte [step_id], 0x40
     call raw_hdd_clone_install
     jc install_fail
     mov byte [step_id], 0x30
@@ -197,6 +191,12 @@ finalize:
 .skip_report:
     cmp byte [install_ok], 1
     je .do_reboot
+%if SETUP_LIVE_CD_MODE
+    ; In live-CD mode, never return to the shell on failure — the BIOS may be
+    ; in a degraded state after INT 13h errors. Show the error and reboot so
+    ; the user can try again from a clean BIOS state.
+    call vis_install_fail_prompt
+%endif
     mov ax, 0x4C01
     int 0x21
 .do_reboot:
@@ -521,6 +521,18 @@ guard_raw_hdd_topology:
     stc
     ret
 
+; format_target_hdd: write a minimal valid FAT16 structure to the target HDD.
+;
+; Layout written (absolute disk LBAs):
+;   LBA  0      : MBR (partition table, one FAT16B entry at LBA 63)
+;   LBA  63     : FAT16 VBR / BPB
+;   LBA  64-66  : Reserved sectors 2-4 (zeros)
+;   LBA  67-194 : FAT1 (128 sectors; sector 0 has media-byte entry, rest zeros)
+;   LBA 195-322 : FAT2 (identical to FAT1)
+;   LBA 323-354 : Root directory (32 sectors of zeros)
+;
+; Total I/O: ~294 sectors vs 262144 for zero-fill — ~900× reduction.
+;
 format_target_hdd:
     push ax
     push bx
@@ -539,143 +551,287 @@ format_target_hdd:
     call serial_write_z
     call serial_write_crlf
 
-    call raw_init_drive_geometries
-
-%if SETUP_LIVE_CD_MODE == 0
-    mov dx, msg_hdd_format_screen_start
-    call print_line
-%endif
-
-    xor ax, ax
-    mov di, io_buffer
-    mov cx, 2048                ; 4096-byte io_buffer / 2 = 2048 words
-    rep stosw
-
-    mov word [raw_clone_lba_lo], 0
-    mov word [raw_clone_lba_hi], 0
-    mov dword [format_sectors_done], 0
-    mov byte [format_progress_pct], 1
-    mov word [reset_counter], 0
-
-    mov bx, 100
-    xor dx, dx
-    mov ax, [format_sectors_total + 2]
-    div bx
-    mov [format_progress_step_hi], ax
-    mov ax, [format_sectors_total]
-    div bx
-    mov [format_progress_step_lo], ax
-
-    mov ax, [format_progress_step_lo]
-    or ax, [format_progress_step_hi]
-    jnz .have_progress_step
-    mov word [format_progress_step_lo], 1
-    mov word [format_progress_step_hi], 0
-
-.have_progress_step:
-    mov ax, [format_progress_step_lo]
-    mov [format_next_mark_lo], ax
-    mov ax, [format_progress_step_hi]
-    mov [format_next_mark_hi], ax
-
-.format_loop:
-    mov ax, [format_sectors_done + 2]
-    cmp ax, [format_sectors_total + 2]
-    jb .have_remaining
-    ja .format_done
-    mov ax, [format_sectors_done]
-    cmp ax, [format_sectors_total]
-    jb .have_remaining
-    jae .format_done
-
-.have_remaining:
-    ; this_batch = min(BATCH, sectors_total - sectors_done) capped at 16-bit
-    mov ax, [format_sectors_total]
-    sub ax, [format_sectors_done]
-    mov dx, [format_sectors_total + 2]
-    sbb dx, [format_sectors_done + 2]
-    or dx, dx
-    jnz .full_fmt_batch
-    cmp ax, RAW_HDD_BATCH_SECTORS
-    jb .partial_fmt_batch
-.full_fmt_batch:
-    mov cx, RAW_HDD_BATCH_SECTORS
-    jmp .have_fmt_batch
-.partial_fmt_batch:
-    mov cx, ax
-.have_fmt_batch:
-    mov [batch_count], cx
-
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    mov cx, [batch_count]
-    call raw_edd_write_n
-    jc .format_fail
-
-    ; advance LBA by batch_count
-    mov ax, [batch_count]
-    add [raw_clone_lba_lo], ax
-    adc word [raw_clone_lba_hi], 0
-
-    ; advance sectors_done by batch_count (32-bit)
-    xor dx, dx
-    add [format_sectors_done], ax
-    adc word [format_sectors_done + 2], dx
-
-    ; Reset target drive every 64 batches.
-    inc word [reset_counter]
-    test word [reset_counter], 0x003F
-    jnz .no_fmt_reset
-    push ax
-    push dx
+    ; Hard reset target drive before any I/O to clear BIOS state.
     xor ax, ax
     mov dl, RAW_HDD_TARGET_DRIVE
     int 0x13
-    pop dx
-    pop ax
-.no_fmt_reset:
 
-    mov al, [format_progress_pct]
-    cmp al, 100
-    ja .format_loop
+    call raw_init_drive_geometries
 
-    mov ax, [format_sectors_done + 2]
-    cmp ax, [format_next_mark_hi]
-    jb .format_loop
-    ja .emit_progress
-    mov ax, [format_sectors_done]
-    cmp ax, [format_next_mark_lo]
-    jb .format_loop
+    ; ---------------------------------------------------------------
+    ; Prepare zero-filled io_buffer (used as the base for all writes).
+    ; ---------------------------------------------------------------
+    xor ax, ax
+    mov di, io_buffer
+    mov cx, 2048            ; 4096 bytes / 2
+    rep stosw
 
-.emit_progress:
+    ; ---------------------------------------------------------------
+    ; Step 1: Write MBR at LBA 0
+    ; ---------------------------------------------------------------
+    ; Partition table entry at offset 446 (16 bytes):
+    ;   +0  status      = 0x80 (active)
+    ;   +1  CHS_start   = {0x01,0x01,0x00}  (H=1 S=1 C=0 → LBA 63)
+    ;   +4  type        = 0x06 (FAT16B, >32 MB)
+    ;   +5  CHS_end     = {0xFE,0xFF,0xFF}  (saturated for large disk)
+    ;   +8  LBA_start   = 63  (LE32)
+    ;   +12 LBA_size    = 262144 (LE32)
+    mov byte [io_buffer + 446], 0x80
+    mov byte [io_buffer + 447], 0x01
+    mov byte [io_buffer + 448], 0x01
+    mov byte [io_buffer + 449], 0x00
+    mov byte [io_buffer + 450], 0x06
+    mov byte [io_buffer + 451], 0xFE
+    mov byte [io_buffer + 452], 0xFF
+    mov byte [io_buffer + 453], 0xFF
+    mov word [io_buffer + 454], 63      ; LBA_start low word
+    mov word [io_buffer + 456], 0       ; LBA_start high word
+    mov word [io_buffer + 458], 0x0000  ; LBA_size = 0x00040000
+    mov word [io_buffer + 460], 0x0004
+    mov byte [io_buffer + 510], 0x55
+    mov byte [io_buffer + 511], 0xAA
+
+    mov word [raw_clone_lba_lo], 0
+    mov word [raw_clone_lba_hi], 0
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    mov cx, 1
+    call raw_edd_write_n
+    jc .format_fail
+
 %if SETUP_LIVE_CD_MODE
-    mov al, [format_progress_pct]
+    mov al, 10
     call vis_format_phase_update
-%else
-    mov dl, '.'
-    call print_char_dl
 %endif
 
-    mov dx, msg_serial_hdd_format_progress
-    call serial_write_z
-    mov al, [format_progress_pct]
-    call serial_write_hex_byte
-    mov al, '%'
-    call serial_write_char
-    call serial_write_crlf
+    ; ---------------------------------------------------------------
+    ; Step 2: Write VBR (FAT16 BPB) at LBA 63
+    ; ---------------------------------------------------------------
+    ; Zero io_buffer first, then fill BPB fields in place.
+    xor ax, ax
+    mov di, io_buffer
+    mov cx, 2048
+    rep stosw
 
-    mov ax, [format_next_mark_lo]
-    add ax, [format_progress_step_lo]
-    mov [format_next_mark_lo], ax
-    mov ax, [format_next_mark_hi]
-    adc ax, [format_progress_step_hi]
-    mov [format_next_mark_hi], ax
+    ; Jump + NOP (JMP SHORT +0x58, NOP) — jumps over the BPB to boot code area.
+    mov byte [io_buffer + 0], 0xEB
+    mov byte [io_buffer + 1], 0x58
+    mov byte [io_buffer + 2], 0x90
+    ; OEM name: "CIUKIOS "
+    mov byte [io_buffer + 3],  'C'
+    mov byte [io_buffer + 4],  'I'
+    mov byte [io_buffer + 5],  'U'
+    mov byte [io_buffer + 6],  'K'
+    mov byte [io_buffer + 7],  'I'
+    mov byte [io_buffer + 8],  'O'
+    mov byte [io_buffer + 9],  'S'
+    mov byte [io_buffer + 10], ' '
+    ; BPB_BytsPerSec = 512
+    mov word [io_buffer + 11], 512
+    ; BPB_SecPerClus = 8
+    mov byte [io_buffer + 13], 8
+    ; BPB_RsvdSecCnt = 4
+    mov word [io_buffer + 14], 4
+    ; BPB_NumFATs = 2
+    mov byte [io_buffer + 16], 2
+    ; BPB_RootEntCnt = 512
+    mov word [io_buffer + 17], 512
+    ; BPB_TotSec16 = 0 (use TotSec32)
+    mov word [io_buffer + 19], 0
+    ; BPB_Media = 0xF8
+    mov byte [io_buffer + 21], 0xF8
+    ; BPB_FATSz16 = 128
+    mov word [io_buffer + 22], 128
+    ; BPB_SecPerTrk = 63
+    mov word [io_buffer + 24], 63
+    ; BPB_NumHeads = 255
+    mov word [io_buffer + 26], 255
+    ; BPB_HiddSec = 63
+    mov dword [io_buffer + 28], 63
+    ; BPB_TotSec32 = 262144 = 0x00040000
+    mov dword [io_buffer + 32], 0x00040000
+    ; BS_DrvNum = 0x80, BS_Reserved1 = 0, BS_BootSig = 0x29
+    mov byte [io_buffer + 36], 0x80
+    mov byte [io_buffer + 37], 0
+    mov byte [io_buffer + 38], 0x29
+    ; BS_VolID = 0x4B49554B ("KIUK")
+    mov dword [io_buffer + 39], 0x4B49554B
+    ; BS_VolLab = "NO NAME    " (11 bytes)
+    mov byte [io_buffer + 43], 'N'
+    mov byte [io_buffer + 44], 'O'
+    mov byte [io_buffer + 45], ' '
+    mov byte [io_buffer + 46], 'N'
+    mov byte [io_buffer + 47], 'A'
+    mov byte [io_buffer + 48], 'M'
+    mov byte [io_buffer + 49], 'E'
+    mov byte [io_buffer + 50], ' '
+    mov byte [io_buffer + 51], ' '
+    mov byte [io_buffer + 52], ' '
+    mov byte [io_buffer + 53], ' '
+    ; BS_FilSysType = "FAT16   " (8 bytes)
+    mov byte [io_buffer + 54], 'F'
+    mov byte [io_buffer + 55], 'A'
+    mov byte [io_buffer + 56], 'T'
+    mov byte [io_buffer + 57], '1'
+    mov byte [io_buffer + 58], '6'
+    mov byte [io_buffer + 59], ' '
+    mov byte [io_buffer + 60], ' '
+    mov byte [io_buffer + 61], ' '
+    ; Boot signature
+    mov byte [io_buffer + 510], 0x55
+    mov byte [io_buffer + 511], 0xAA
 
-    add byte [format_progress_pct], 1
-    jmp .format_loop
+    mov word [raw_clone_lba_lo], 63
+    mov word [raw_clone_lba_hi], 0
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    mov cx, 1
+    call raw_edd_write_n
+    jc .format_fail
+
+%if SETUP_LIVE_CD_MODE
+    mov al, 20
+    call vis_format_phase_update
+%endif
+
+    ; ---------------------------------------------------------------
+    ; Step 3: Write 3 reserved sectors at LBA 64-66 (zeros)
+    ; ---------------------------------------------------------------
+    ; Clear BPB area from io_buffer (leave buffer as all zeros)
+    xor ax, ax
+    mov di, io_buffer
+    mov cx, 2048
+    rep stosw
+
+    mov word [raw_clone_lba_lo], 64
+    mov word [raw_clone_lba_hi], 0
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    mov cx, 3
+    call raw_edd_write_n
+    jc .format_fail
+
+%if SETUP_LIVE_CD_MODE
+    mov al, 25
+    call vis_format_phase_update
+%endif
+
+    ; ---------------------------------------------------------------
+    ; Step 4: Write FAT1 at LBA 67 (128 sectors)
+    ; Sector 0: media-byte entry (0xF8FF FFFF, rest zeros)
+    ; Sectors 1-127: zeros
+    ; ---------------------------------------------------------------
+    mov byte [io_buffer + 0], 0xF8
+    mov byte [io_buffer + 1], 0xFF
+    mov byte [io_buffer + 2], 0xFF
+    mov byte [io_buffer + 3], 0xFF
+
+    mov word [raw_clone_lba_lo], 67
+    mov word [raw_clone_lba_hi], 0
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    mov cx, 1
+    call raw_edd_write_n
+    jc .format_fail
+
+    ; Clear media bytes, then write sectors 1-127 as zeros in batches.
+    mov dword [io_buffer], 0
+    mov word [raw_clone_lba_lo], 68
+    mov word [raw_clone_lba_hi], 0
+    mov word [format_sectors_done], 127  ; reuse as countdown
+
+.fat1_loop:
+    cmp word [format_sectors_done], 0
+    je .fat1_done
+    mov cx, RAW_HDD_BATCH_SECTORS
+    cmp [format_sectors_done], cx
+    jae .fat1_full
+    mov cx, [format_sectors_done]
+.fat1_full:
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    call raw_edd_write_n
+    jc .format_fail
+    sub [format_sectors_done], cx
+    add [raw_clone_lba_lo], cx
+    adc word [raw_clone_lba_hi], 0
+    jmp .fat1_loop
+.fat1_done:
+
+%if SETUP_LIVE_CD_MODE
+    mov al, 50
+    call vis_format_phase_update
+%endif
+
+    ; ---------------------------------------------------------------
+    ; Step 5: Write FAT2 at LBA 195 (128 sectors, identical to FAT1)
+    ; ---------------------------------------------------------------
+    mov byte [io_buffer + 0], 0xF8
+    mov byte [io_buffer + 1], 0xFF
+    mov byte [io_buffer + 2], 0xFF
+    mov byte [io_buffer + 3], 0xFF
+
+    mov word [raw_clone_lba_lo], 195
+    mov word [raw_clone_lba_hi], 0
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    mov cx, 1
+    call raw_edd_write_n
+    jc .format_fail
+
+    mov dword [io_buffer], 0
+    mov word [raw_clone_lba_lo], 196
+    mov word [raw_clone_lba_hi], 0
+    mov word [format_sectors_done], 127
+
+.fat2_loop:
+    cmp word [format_sectors_done], 0
+    je .fat2_done
+    mov cx, RAW_HDD_BATCH_SECTORS
+    cmp [format_sectors_done], cx
+    jae .fat2_full
+    mov cx, [format_sectors_done]
+.fat2_full:
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    call raw_edd_write_n
+    jc .format_fail
+    sub [format_sectors_done], cx
+    add [raw_clone_lba_lo], cx
+    adc word [raw_clone_lba_hi], 0
+    jmp .fat2_loop
+.fat2_done:
+
+%if SETUP_LIVE_CD_MODE
+    mov al, 80
+    call vis_format_phase_update
+%endif
+
+    ; ---------------------------------------------------------------
+    ; Step 6: Write root directory at LBA 323 (32 sectors of zeros)
+    ; ---------------------------------------------------------------
+    mov word [raw_clone_lba_lo], 323
+    mov word [raw_clone_lba_hi], 0
+    mov word [format_sectors_done], 32
+
+.rootdir_loop:
+    cmp word [format_sectors_done], 0
+    je .format_done
+    mov cx, RAW_HDD_BATCH_SECTORS
+    cmp [format_sectors_done], cx
+    jae .rootdir_full
+    mov cx, [format_sectors_done]
+.rootdir_full:
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov bx, io_buffer
+    call raw_edd_write_n
+    jc .format_fail
+    sub [format_sectors_done], cx
+    add [raw_clone_lba_lo], cx
+    adc word [raw_clone_lba_hi], 0
+    jmp .rootdir_loop
 
 .format_done:
-    call print_crlf
     mov dx, msg_serial_hdd_format_done
     call serial_write_z
     call serial_write_crlf
@@ -689,13 +845,6 @@ format_target_hdd:
     mov al, [raw_edd_status]
     call serial_write_hex_byte
     call serial_write_crlf
-
-    call print_crlf
-    mov dx, msg_screen_hdd_format_fail
-    call print_z
-    mov al, [raw_edd_status]
-    call print_u8_dec
-    call print_crlf
     stc
 
 .format_out:
@@ -1601,6 +1750,49 @@ vis_install_eject_prompt:
     pop cx
     pop bx
     pop ax
+    ret
+
+; vis_install_fail_prompt: display installation failure, wait for key, then
+; warm-reboot. Called on install failure in live-CD mode so the user never
+; lands in a potentially broken shell after an INT 13h wedge.
+vis_install_fail_prompt:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov dh, VIS_INST_STATUS_ROW
+    mov dl, VIS_INST_BAR_COL
+    call vis_set_cursor
+    mov al, ' '
+    mov bl, VIS_ATTR_ERR
+    mov cx, VIS_INST_BAR_WIDTH
+    call vis_putc_attr
+    mov dh, VIS_INST_STATUS_ROW
+    mov dl, VIS_INST_BAR_COL
+    mov bl, VIS_ATTR_ERR
+    mov si, msg_vis_install_fail_banner
+    call vis_print_z_at
+
+    mov dh, VIS_INST_STATUS_ROW
+    add dh, 2
+    mov dl, VIS_INST_BAR_COL
+    mov bl, VIS_ATTR_HINT
+    mov si, msg_vis_install_fail_hint
+    call vis_print_z_at
+
+    xor ax, ax
+    int 0x16
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ; Fall through: caller does int 0x21 / 4C01h which won't execute in
+    ; live-CD mode — we reboot directly here.
+    call reboot_system
     ret
 
 ; vis_print_u8_dec_attr: write 0..100 as decimal at cursor with attribute in BL
@@ -4136,13 +4328,15 @@ msg_vis_install_titlebar db 'CiukiOS Setup - Installing system', 0
 msg_vis_install_header  db 'Installing CiukiOS', 0
 msg_vis_install_hint    db 'Please wait. Do not power off the system.', 0
 msg_vis_install_phase_format  db 'Phase 1/3: Formatting target HDD', 0
-msg_vis_install_phase_clone   db 'Phase 2/3: Cloning system image', 0
-msg_vis_install_phase_patch   db 'Phase 3/3: Finalizing installation', 0
-msg_vis_install_status_format db 'Zeroing target sectors via INT 13h EDD...', 0
+msg_vis_install_phase_clone   db 'Phase 1/2: Cloning system image', 0
+msg_vis_install_phase_patch   db 'Phase 2/2: Finalizing installation', 0
+msg_vis_install_status_format db 'Writing FAT16 structure to target HDD...', 0
 msg_vis_install_status_clone  db 'Cloning live-CD image to target HDD...', 0
 msg_vis_install_done    db 'Installation complete. Rebooting...', 0
-msg_vis_install_eject     db 'Installation complete. REMOVE the CD now.', 0
+msg_vis_install_eject      db 'Installation complete. REMOVE the CD now.', 0
 msg_vis_install_eject_hint db 'Press any key to reboot from the installed HDD.', 0
+msg_vis_install_fail_banner db 'INSTALLATION FAILED. System will reboot.', 0
+msg_vis_install_fail_hint   db 'Press any key to reboot and try again.', 0
 
 format_path             db '\APPS\FORMAT.COM', 0
 format_cmdtail          db 3, ' /F', 13
