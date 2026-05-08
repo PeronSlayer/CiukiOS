@@ -534,8 +534,10 @@ format_target_hdd:
 
     call raw_init_drive_geometries
 
+%if SETUP_LIVE_CD_MODE == 0
     mov dx, msg_hdd_format_screen_start
     call print_line
+%endif
 
     xor ax, ax
     mov di, io_buffer

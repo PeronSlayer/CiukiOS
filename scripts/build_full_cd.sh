@@ -14,6 +14,7 @@ MBR_BIN="build/full/obj/full_cd_mbr.bin"
 ISO_ROOT="build/full/cd-iso-root"
 ISO_IMG="build/full/ciukios-full-cd.iso"
 DIRECT_ISO_IMG="build/full/ciukios-full-cd-direct.iso"
+ISOLINUX_FALLBACK_IMG="build/full/ciukios-full-cd-isolinux.iso"
 ISOLINUX_BIN="${ISOLINUX_BIN:-/usr/lib/syslinux/bios/isolinux.bin}"
 MEMDISK_BIN="${MEMDISK_BIN:-/usr/lib/syslinux/bios/memdisk}"
 LDLINUX_C32="${LDLINUX_C32:-/usr/lib/syslinux/bios/ldlinux.c32}"
@@ -84,9 +85,25 @@ LABEL ciukios
   APPEND harddisk raw
 TXT
 
-echo "[build-full-cd] creating bootable ISO"
+echo "[build-full-cd] creating primary ISO (direct El Torito hard-disk emulation)"
+# Real-hardware boot path: BIOS handles the El Torito hard-disk-boot record
+# directly, so the kernel/MBR runs in seconds with no ISOLINUX/memdisk
+# 128 MB load delay. This is the ISO end-users should burn to a CD/CD-RW.
 xorriso -as mkisofs -quiet -V CIUKIOS_FULL \
 	-o "$ISO_IMG" \
+	-b ciukios-full-cd-disk.img \
+	-c boot.cat \
+	-hard-disk-boot \
+	"$ISO_ROOT"
+
+# Maintain the legacy file name "ciukios-full-cd-direct.iso" so existing
+# QEMU test lanes (qemu_test_setup_runtime_hdd_install.sh,
+# qemu_test_setup_cd_hdd_probe.sh, qemu_run_full_cd.sh) keep working.
+cp -f "$ISO_IMG" "$DIRECT_ISO_IMG"
+
+echo "[build-full-cd] creating ISOLINUX fallback ISO (slow on real HW; use only if direct does not boot)"
+xorriso -as mkisofs -quiet -V CIUKIOS_FB \
+	-o "$ISOLINUX_FALLBACK_IMG" \
 	-b boot/isolinux/isolinux.bin \
 	-c boot/isolinux/boot.cat \
 	-no-emul-boot \
@@ -94,8 +111,6 @@ xorriso -as mkisofs -quiet -V CIUKIOS_FULL \
 	-boot-info-table \
 	"$ISO_ROOT"
 
-echo "[build-full-cd] creating direct El Torito hard-disk ISO"
-xorriso -as mkisofs -quiet -V CIUKIOS065 -o "$DIRECT_ISO_IMG" -b ciukios-full-cd-disk.img -c boot-direct.cat -hard-disk-boot "$ISO_ROOT"
-
 echo "[build-full-cd] done: $ISO_IMG"
-echo "[build-full-cd] done: $DIRECT_ISO_IMG"
+echo "[build-full-cd] done: $DIRECT_ISO_IMG (alias of primary ISO)"
+echo "[build-full-cd] done: $ISOLINUX_FALLBACK_IMG (fallback)"

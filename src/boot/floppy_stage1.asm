@@ -390,10 +390,12 @@ install_int21_vector:
     mov [es:bx + 2], ax
 %endif
 
-    ; Install minimal CPU exception handlers (INT 0 div-by-zero, INT 6 invalid
-    ; opcode, INT 0Dh GP fault) so a wild DOS child does not hang the system.
-    ; Slice 1: print diagnostic + warm reboot via INT 19h (slice 2 will add a
-    ; long-jump back to the shell).
+%if STAGE2_AUTORUN == 0
+    ; CPU fault handlers: INT 0 (DIV) + INT 6 (invalid opcode) only.
+    ; INT 0Dh is *not* hooked: in real mode it is IRQ 5 (LPT2 / sound),
+    ; not GP fault (which only fires in protected mode). Hooking it caused
+    ; a reboot loop on real hardware whenever the sound card pulled IRQ 5.
+    ; Live-CD builds skip these handlers to fit the stage1 sector budget.
     mov bx, 0 * 4
     mov word [es:bx], int00_fault_handler
     mov ax, cs
@@ -402,8 +404,17 @@ install_int21_vector:
     mov word [es:bx], int06_fault_handler
     mov ax, cs
     mov [es:bx + 2], ax
-    mov bx, 0x0D * 4
-    mov word [es:bx], int0d_fault_handler
+%endif
+
+    ; Hook INT 09h (keyboard hardware IRQ 1) to detect Ctrl+Alt+Del and
+    ; warm-reboot via INT 19h. We chain to the original BIOS handler for
+    ; all other keystrokes so DOS keyboard reads still work.
+    mov bx, 0x09 * 4
+    mov ax, [es:bx]
+    mov [old_int09_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int09_seg], ax
+    mov word [es:bx], int09_kbd_handler
     mov ax, cs
     mov [es:bx + 2], ax
 
@@ -443,18 +454,13 @@ int20_handler:
 int_default_iret:
     iret
 
-; -----------------------------------------------------------------------------
-; Compact CPU fault handlers (INT 0/6/0Dh). Print one-line marker, wait key,
-; warm-reboot. Replaces the previous full-system hang on wild DOS children.
-; -----------------------------------------------------------------------------
+%if STAGE2_AUTORUN == 0
+; Compact CPU fault handlers (INT 0/6). Print marker, wait key, warm-reboot.
 int00_fault_handler:
     mov al, '0'
     jmp fault_common
 int06_fault_handler:
     mov al, '6'
-    jmp fault_common
-int0d_fault_handler:
-    mov al, 'D'
 fault_common:
     cli
     push cs
@@ -481,6 +487,48 @@ fault_common:
     hlt
     jmp .hng
 msg_fault: db 13,10,"[CRASH] INT ",1,"h - reboot.",13,10,0
+%endif
+
+; PC speaker beep: ~1000 Hz on PIT ch2 for ~1 s. 'beep' at shell.
+pc_speaker_beep:
+    pusha
+    mov al, 0xB6
+    out 0x43, al
+    mov ax, 1193
+    out 0x42, al
+    mov al, ah
+    out 0x42, al
+    in al, 0x61
+    or al, 0x03
+    out 0x61, al
+    mov cx, 0x000F
+    mov dx, 0x4240
+    mov ah, 0x86
+    int 0x15
+    in al, 0x61
+    and al, 0xFC
+    out 0x61, al
+    popa
+    ret
+
+; INT 09h hook: Ctrl+Alt+Del (scan 0x53 + Ctrl+Alt in 0040:0017) -> INT 19h.
+int09_kbd_handler:
+    push ax
+    push ds
+    in al, 0x60
+    cmp al, 0x53
+    jne .chain
+    mov ax, 0x0040
+    mov ds, ax
+    mov al, [0x0017]
+    and al, 0x0C
+    cmp al, 0x0C
+    jne .chain
+    int 0x19
+.chain:
+    pop ds
+    pop ax
+    jmp far [cs:old_int09_off]
 
 int21_handler:
     push bx
@@ -11378,6 +11426,10 @@ dispatch_command:
     mov si, str_halt
     call str_eq
     jc .cmd_halt
+    mov di, bx
+    mov si, str_beep
+    call str_eq
+    jc .cmd_beep
 
     mov si, bx
     call shell_try_exec_token
@@ -11561,6 +11613,10 @@ dispatch_command:
     cli
     hlt
     jmp .halt_forever
+
+.cmd_beep:
+    call pc_speaker_beep
+    jmp .done
 
 .done:
     ret
@@ -16897,6 +16953,8 @@ xms_move_dst_hi dw 0
 xms_move_chunk dw 0
 xms_87_gdt times 48 db 0
 %endif
+old_int09_off dw 0
+old_int09_seg dw 0
 old_int10_off dw 0
 old_int10_seg dw 0
 %if FAT_TYPE == 16
@@ -17368,6 +17426,7 @@ str_mouse db "mouse", 0
 str_keytest db "keytest", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
+str_beep   db "beep", 0
 str_help_all db "all", 0
 str_help_short db "short", 0
 str_ext_com db ".COM", 0
