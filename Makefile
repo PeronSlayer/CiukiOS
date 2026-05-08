@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-dos-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -15,6 +15,7 @@ help:
 	@echo "  make qemu-test-full-stage1 - full-profile Stage1 selftest regression"
 	@echo "  make qemu-test-full-runtime-probe - probe runtime load/entry fallback"
 	@echo "  make qemu-test-full-doom-taxonomy - classify DOOM full-profile taxonomy stages"
+	@echo "  make qemu-test-full-dos-taxonomy - classify generic DOS full-profile taxonomy stages"
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
 	@echo "  make qemu-test-full-shell-stability - run full-profile shell stability test"
 	@echo "  make qemu-test-full-dos-compat-smoke - run full-profile DOS compatibility smoke test"
@@ -64,6 +65,9 @@ qemu-test-full-runtime-probe:
 
 qemu-test-full-doom-taxonomy:
 	@bash scripts/qemu_test_full_doom_taxonomy.sh
+
+qemu-test-full-dos-taxonomy:
+	@DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS DOOM_TAXONOMY_APP_BINARY_NAME=CIUKEDIT.COM DOOM_TAXONOMY_RUN_COMMAND='run \APPS\CIUKEDIT.COM MATRIX.TXT' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='\[CIUKEDIT:BOOT\]|\[CIUKEDIT:OK\]|\[{1,2}C{1,2}I{1,2}U{1,2}K{1,2}E{1,2}D{1,2}I{1,2}T{1,2}:{1,2}(B{1,2}O{2,4}T{1,2}|O{1,2}K{1,2})\]{1,2}' DOOM_TAXONOMY_DOOM_CWD='' DOOM_TAXONOMY_RUN_DRVLOAD=0 bash scripts/qemu_test_full_doom_taxonomy.sh
 
 qemu-test-full-drvload-smoke:
 	@bash scripts/qemu_test_full_drvload_smoke.sh
