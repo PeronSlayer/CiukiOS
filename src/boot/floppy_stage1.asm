@@ -430,28 +430,20 @@ install_int21_vector:
     ret
 
 int20_handler:
-    push ax
-    push bp
-    mov byte [cs:last_exit_code], 0
-    mov byte [cs:last_term_type], 0
-    mov ax, [cs:current_psp_seg]
-    or ax, ax
-    jz .done
+    push cs
+    pop ds
+    mov byte [last_exit_code], 0
+    mov byte [last_term_type], 0
     mov bp, sp
-    mov ax, [cs:current_com_load_seg]
-    cmp [ss:bp + 6], ax
-    jne .mz_terminate
-    mov word [ss:bp + 4], int21_com_terminate_trampoline
-    jmp .set_terminate_cs
-.mz_terminate:
-    mov word [ss:bp + 4], int21_mz_terminate_trampoline
-.set_terminate_cs:
+    mov ax, [bp + 2]
+    cmp ax, [current_com_load_seg]
+    mov ax, int21_mz_terminate_trampoline
+    jne .patch_ip
+    mov ax, int21_com_terminate_trampoline
+.patch_ip:
+    mov [bp + 0], ax
     mov ax, cs
-    mov [ss:bp + 6], ax
-
-.done:
-    pop bp
-    pop ax
+    mov [bp + 2], ax
     iret
 
 int_default_iret:
@@ -462,38 +454,30 @@ int24_handler:
     iret
 
 %if STAGE2_AUTORUN == 0
-; Compact CPU fault handlers (INT 0/6). Print marker, wait key, warm-reboot.
+; Compact CPU fault handlers (INT 0/6): recover to shell child or reboot.
 int00_fault_handler:
-    mov al, '0'
     jmp fault_common
 int06_fault_handler:
-    mov al, '6'
+    jmp fault_common
 fault_common:
     cli
+    push bp
+    mov bp, sp
     push cs
     pop ds
-    mov bl, al
-    mov si, msg_fault
-.lp:
-    lodsb
-    or al, al
-    jz .key
-    cmp al, 1
-    jne .out
-    mov al, bl
-.out:
-    mov ah, 0x0E
-    xor bh, bh
-    int 0x10
-    jmp .lp
-.key:
-    xor ax, ax
-    int 0x16
+    cmp byte [shell_exec_external_mouse_disabled], 0
+    je .reboot
+    cmp word [current_psp_seg], 0
+    je .reboot
+    mov byte [last_exit_code], 0xFF
+    mov byte [last_term_type], 0
+    mov ax, [bp + 4]
+    jmp exec_terminate_dispatch_cs
+.reboot:
     int 0x19
 .hng:
     hlt
     jmp .hng
-msg_fault: db 13,10,"[CRASH] INT ",1,"h - reboot.",13,10,0
 %endif
 
 ; PC speaker beep: ~1000 Hz on PIT ch2 for ~1 s. 'beep' at shell.
@@ -2808,6 +2792,13 @@ int21_mz_terminate_trampoline:
     jmp int21_exec_run_mz.after_call
 
 int21_com_terminate_trampoline:
+    jmp int21_exec_run_com.after_call
+
+exec_terminate_dispatch_cs:
+    cmp ax, [current_com_load_seg]
+    je .com
+    jmp int21_exec_run_mz.after_call
+.com:
     jmp int21_exec_run_com.after_call
 
 int21_set_dta:

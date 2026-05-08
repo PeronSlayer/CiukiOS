@@ -24,6 +24,16 @@ This changelog is intentionally concise. Every completed task must update the `U
 	Validation evidence: `make qemu-test-full` PASS.
 	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
 	Validation evidence: `env DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='Dos[[:space:]]+Navigator|\[CRASH\]|INT[[:space:]]+6h' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_OBSERVE_SEC=80 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=240 make qemu-test-full-doom-taxonomy` PASS (no crash marker in strings log).
+7. Hardened Stage1 CPU-fault behavior for external DOS apps: INT 0/6 faults raised while a shell-launched DOS child is active now set an abnormal DOS exit code (`0xFF`) and route through the existing COM/MZ terminate trampolines back to the shell instead of forcing an immediate warm reboot. Non-child/system faults keep the previous wait-key + `INT 19h` reboot behavior.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
+	Validation evidence: `env DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='Dos[[:space:]]+Navigator|\[CRASH\]|INT[[:space:]]+6h' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_OBSERVE_SEC=100 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=280 make qemu-test-full-doom-taxonomy` PASS.
+8. Compacted the Stage1 INT 0/6 fault-handler block under `STAGE2_AUTORUN == 0` by removing crash marker printing and the embedded fault string, while preserving the same functional split: recover to shell child termination (`last_exit_code=0xFF`, dispatch by frame CS through `exec_terminate_dispatch_cs`) when an external DOS child is active, otherwise immediate `INT 19h` reboot.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
+	Validation evidence: `env DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='Dos[[:space:]]+Navigator|\[CRASH\]|INT[[:space:]]+6h' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_OBSERVE_SEC=100 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=280 make qemu-test-full-doom-taxonomy` PASS.
 
 ## pre-Alpha v0.6.6 (2026-05-08)
 1. Reordered the post-v0.6.5 roadmap around continued Stage1/runtime split work, broader arbitrary DOS program compatibility, legacy audio, and only later networking and Windows pre-NT milestones; aligned the README, architecture notes, runtime-split plan, GUI demo notes, and agent directives with that priority order.
