@@ -547,9 +547,9 @@ format_target_hdd:
     mov word [raw_clone_lba_lo], 0
     mov word [raw_clone_lba_hi], 0
     mov dword [format_sectors_done], 0
-    mov byte [format_progress_pct], 10
+    mov byte [format_progress_pct], 1
 
-    mov bx, 10
+    mov bx, 100
     xor dx, dx
     mov ax, [format_sectors_total + 2]
     div bx
@@ -629,7 +629,7 @@ format_target_hdd:
     adc ax, [format_progress_step_hi]
     mov [format_next_mark_hi], ax
 
-    add byte [format_progress_pct], 10
+    add byte [format_progress_pct], 1
     jmp .format_loop
 
 .format_done:
@@ -1620,7 +1620,7 @@ raw_hdd_clone_install:
     mov word [clone_next_mark_hi], 0
     mov ax, RAW_HDD_CLONE_SECTORS_LO
     mov dx, RAW_HDD_CLONE_SECTORS_HI
-    mov bx, 10
+    mov bx, 100
     div bx
     mov [clone_step_lo], ax
     mov word [clone_step_hi], 0      ; quotient fits in 16 bits; high word = 0
@@ -1666,7 +1666,7 @@ raw_hdd_clone_install:
     jb .copy_loop
 
 .clone_emit:
-    add byte [clone_progress_pct], 10
+    add byte [clone_progress_pct], 1
 %if SETUP_LIVE_CD_MODE
     mov al, [clone_progress_pct]
     call vis_clone_phase_update

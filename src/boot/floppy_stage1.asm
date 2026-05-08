@@ -406,17 +406,11 @@ install_int21_vector:
     mov [es:bx + 2], ax
 %endif
 
-    ; Hook INT 09h (keyboard hardware IRQ 1) to detect Ctrl+Alt+Del and
-    ; warm-reboot via INT 19h. We chain to the original BIOS handler for
-    ; all other keystrokes so DOS keyboard reads still work.
-    mov bx, 0x09 * 4
-    mov ax, [es:bx]
-    mov [old_int09_off], ax
-    mov ax, [es:bx + 2]
-    mov [old_int09_seg], ax
-    mov word [es:bx], int09_kbd_handler
-    mov ax, cs
-    mov [es:bx + 2], ax
+    ; Ctrl+Alt+Del: handled natively by the BIOS keyboard interrupt (INT 09h
+    ; checks scan code 0x53 with Ctrl+Alt and triggers INT 19h itself).
+    ; We do NOT hook INT 09h: doing so would either consume port 0x60 ahead
+    ; of the BIOS (breaking keyboard delivery) or duplicate BIOS work for
+    ; no gain. A future shell/UI keymap can install a chained hook.
 
     pop es
     pop bx
@@ -511,24 +505,6 @@ pc_speaker_beep:
     popa
     ret
 
-; INT 09h hook: Ctrl+Alt+Del (scan 0x53 + Ctrl+Alt in 0040:0017) -> INT 19h.
-int09_kbd_handler:
-    push ax
-    push ds
-    in al, 0x60
-    cmp al, 0x53
-    jne .chain
-    mov ax, 0x0040
-    mov ds, ax
-    mov al, [0x0017]
-    and al, 0x0C
-    cmp al, 0x0C
-    jne .chain
-    int 0x19
-.chain:
-    pop ds
-    pop ax
-    jmp far [cs:old_int09_off]
 
 int21_handler:
     push bx
@@ -16953,8 +16929,6 @@ xms_move_dst_hi dw 0
 xms_move_chunk dw 0
 xms_87_gdt times 48 db 0
 %endif
-old_int09_off dw 0
-old_int09_seg dw 0
 old_int10_off dw 0
 old_int10_seg dw 0
 %if FAT_TYPE == 16
