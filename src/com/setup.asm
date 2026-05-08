@@ -24,6 +24,18 @@ org 0x0100
 %define RAW_STAGE1_LIVE_DRIVE_INDEX 3
 %define RAW_STAGE1_INSTALLED_DRIVE_INDEX 2
 %define RAW_HDD_SECTORS_PER_CYL 1008
+
+; Direct ATA port I/O — used for all target HDD writes to avoid BIOS INT 13h
+; wedge on the ThinkPad T23 (and similar hardware) where the BIOS write
+; handler sometimes never returns after many sequential calls.
+%define ATA_PRI_DATA    0x1F0   ; 16-bit data register
+%define ATA_PRI_NSECT   0x1F2   ; sector count
+%define ATA_PRI_LBAL    0x1F3   ; LBA bits [7:0]
+%define ATA_PRI_LBAM    0x1F4   ; LBA bits [15:8]
+%define ATA_PRI_LBAH    0x1F5   ; LBA bits [23:16]
+%define ATA_PRI_DEV     0x1F6   ; device/head (bit6=LBA, bit4=slave)
+%define ATA_PRI_STATUS  0x1F7   ; status (read) / command (write)
+%define ATA_PRI_CTRL    0x3F6   ; alt-status / device control
 %ifndef SETUP_ENABLE_RAW_HDD_INSTALL
 %define SETUP_ENABLE_RAW_HDD_INSTALL 0
 %endif
@@ -596,7 +608,7 @@ format_target_hdd:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
     mov cx, 1
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .format_fail
 
 %if SETUP_LIVE_CD_MODE
@@ -686,7 +698,7 @@ format_target_hdd:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
     mov cx, 1
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .format_fail
 
 %if SETUP_LIVE_CD_MODE
@@ -708,7 +720,7 @@ format_target_hdd:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
     mov cx, 3
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .format_fail
 
 %if SETUP_LIVE_CD_MODE
@@ -731,7 +743,7 @@ format_target_hdd:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
     mov cx, 1
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .format_fail
 
     ; Clear media bytes, then write sectors 1-127 as zeros in batches.
@@ -750,7 +762,7 @@ format_target_hdd:
 .fat1_full:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .format_fail
     sub [format_sectors_done], cx
     add [raw_clone_lba_lo], cx
@@ -776,7 +788,7 @@ format_target_hdd:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
     mov cx, 1
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .format_fail
 
     mov dword [io_buffer], 0
@@ -794,7 +806,7 @@ format_target_hdd:
 .fat2_full:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .format_fail
     sub [format_sectors_done], cx
     add [raw_clone_lba_lo], cx
@@ -824,7 +836,7 @@ format_target_hdd:
 .rootdir_full:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .format_fail
     sub [format_sectors_done], cx
     add [raw_clone_lba_lo], cx
@@ -1934,7 +1946,7 @@ raw_hdd_clone_install:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
     mov cx, [batch_count]
-    call raw_edd_write_n
+    call raw_ata_write_n
     jc .fail
 
     ; advance LBA by batch_count
@@ -2109,7 +2121,7 @@ raw_edd_read_current_lba:
 raw_edd_write_current_lba:
     push cx
     mov cx, 1
-    call raw_edd_write_n
+    call raw_ata_write_n        ; bypass BIOS for all target-HDD writes
     pop cx
     ret
 
@@ -2137,6 +2149,173 @@ raw_edd_write_n:
     mov byte [raw_last_path], 'E'
     mov ah, 0x43
     call raw_edd_transfer_current_lba
+    ret
+
+; raw_ata_write_n: write CX sectors from CS:BX to primary ATA master HDD
+; using direct port I/O, bypassing INT 13h entirely.
+;
+; Inputs:  BX = buffer offset (in CS), CX = sector count
+;          [raw_clone_lba_lo/hi] = starting LBA (28-bit, high word < 0x10)
+; Returns: CF=0 OK, CF=1 error
+; Clobbers: nothing (all registers preserved via push/pop)
+;
+; This replaces raw_edd_write_n for target HDD writes on T23 hardware where
+; the BIOS INT 13h write handler wedges the CPU after many sequential calls.
+;
+raw_ata_write_n:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    push cs
+    pop ds                      ; DS=CS so rep outsw addresses CS:SI
+
+    mov si, bx                  ; CS:SI = write buffer
+    mov ax, [raw_clone_lba_lo]
+    mov [ata_cur_lba_lo], ax
+    mov ax, [raw_clone_lba_hi]
+    mov [ata_cur_lba_hi], ax
+    mov [ata_sectors_left], cx
+
+.ata_next_sector:
+    ; --- Wait for drive ready (BSY=0) ---
+    xor cx, cx                  ; 65536 iterations ≈ 33 ms at 1 GHz
+.ata_bsy0:
+    mov dx, ATA_PRI_STATUS
+    in al, dx
+    test al, 0x80               ; BSY?
+    jz .ata_bsy0_ok
+    loop .ata_bsy0
+    ; Timeout: soft-reset and retry once
+    call ata_pri_soft_reset
+    jc .ata_write_fail
+    jmp .ata_next_sector
+
+.ata_bsy0_ok:
+    ; --- Program LBA and device registers ---
+    ; Device: 0xE0 = LBA mode, master (bit4=0); OR bits [27:24] of LBA
+    mov dx, ATA_PRI_DEV
+    mov al, 0xE0
+    or  al, [ata_cur_lba_hi + 1] ; bits [27:24] (always 0 for disks < 128 GB)
+    out dx, al
+
+    mov dx, ATA_PRI_NSECT
+    mov al, 1
+    out dx, al
+
+    mov ax, [ata_cur_lba_lo]
+    mov dx, ATA_PRI_LBAL
+    out dx, al                  ; bits [7:0]
+    mov dx, ATA_PRI_LBAM
+    mov al, ah
+    out dx, al                  ; bits [15:8]
+
+    mov ax, [ata_cur_lba_hi]
+    mov dx, ATA_PRI_LBAH
+    out dx, al                  ; bits [23:16]
+
+    ; --- Issue WRITE SECTORS (0x30) ---
+    mov dx, ATA_PRI_STATUS      ; same port address as command register
+    mov al, 0x30
+    out dx, al
+
+    ; 400 ns settling delay: read alt-status 4× (each I/O ≈ 100 ns)
+    mov dx, ATA_PRI_CTRL
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    ; --- Wait for DRQ=1, BSY=0 (drive ready for data) ---
+    xor cx, cx
+.ata_drq_wait:
+    mov dx, ATA_PRI_STATUS
+    in al, dx
+    test al, 0x80               ; BSY still set?
+    jnz .ata_drq_loop
+    test al, 0x01               ; ERR?
+    jnz .ata_write_fail
+    test al, 0x08               ; DRQ?
+    jnz .ata_do_write
+.ata_drq_loop:
+    loop .ata_drq_wait
+    jmp .ata_write_fail
+
+.ata_do_write:
+    ; --- Transfer 256 words (512 bytes) to ATA data register ---
+    mov dx, ATA_PRI_DATA
+    mov cx, 256
+    rep outsw                   ; DS:SI → port DX; SI auto-advances
+
+    ; --- Wait for BSY=0 (drive processing the write) ---
+    xor cx, cx
+.ata_bsy1:
+    mov dx, ATA_PRI_STATUS
+    in al, dx
+    test al, 0x80
+    jz .ata_sector_ok
+    loop .ata_bsy1
+    jmp .ata_write_fail
+
+.ata_sector_ok:
+    ; Advance per-sector LBA and buffer pointer; loop for next sector
+    add word [ata_cur_lba_lo], 1
+    adc word [ata_cur_lba_hi], 0
+    ; SI already advanced by rep outsw
+    dec word [ata_sectors_left]
+    jnz .ata_next_sector
+    clc
+    jmp .ata_write_out
+
+.ata_write_fail:
+    mov byte [raw_edd_status], 0xFF
+    stc
+
+.ata_write_out:
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ata_pri_soft_reset: ATA SRST on primary channel, waits for BSY to clear.
+ata_pri_soft_reset:
+    push ax
+    push cx
+    push dx
+    mov dx, ATA_PRI_CTRL
+    mov al, 0x04                ; SRST bit
+    out dx, al
+    ; 5 µs delay via 8 alt-status reads
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    mov al, 0x00
+    out dx, al
+    ; Wait up to ~130 ms for BSY=0
+    xor cx, cx
+.rst_bsy_wait:
+    in al, dx                   ; read alt-status (no side effects)
+    test al, 0x80
+    jz .rst_ok
+    loop .rst_bsy_wait
+    stc
+    jmp .rst_out
+.rst_ok:
+    clc
+.rst_out:
+    pop dx
+    pop cx
+    pop ax
     ret
 
 raw_init_drive_geometries:
@@ -4422,6 +4601,10 @@ cleanup_file_ptrs    dw path_cfg, path_report, path_sanity, dst_stage2, dst_comd
 ; -----------------------------------------------------------------------------
 ; State
 ; -----------------------------------------------------------------------------
+
+ata_cur_lba_lo      dw 0    ; working copy of LBA for raw_ata_write_n
+ata_cur_lba_hi      dw 0
+ata_sectors_left    dw 0
 
 format_sectors_total    dd 0x00040000  ; ~262GB sectors
 format_sectors_done     dd 0
