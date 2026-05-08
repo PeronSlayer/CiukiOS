@@ -516,14 +516,22 @@ probe_target_drive:
     ret
 
 guard_raw_hdd_topology:
+    ; Both BIOS HDDs must be present (0x80=CD source, 0x81=target HDD).
     cmp byte [bios_probe_present_mask], 0x03
     jne .fail
-    cmp byte [bios_probe_mbrsig_mask], 0x01
-    jne .fail
+    ; The CD source (bit 0) must have a valid MBR signature so we know
+    ; the clone source is bootable. The target HDD (bit 1) may or may
+    ; not have a signature — after a previous install attempt it will,
+    ; and the user has explicitly confirmed destruction.
+    test byte [bios_probe_mbrsig_mask], 0x01
+    jz .fail
 %if SETUP_ENABLE_RAW_HDD_DESTRUCTIVE
+    ; Destructive mode: user has confirmed wipe — don't gate on target
+    ; being blank. This is what the live-CD installer always uses.
     clc
     ret
 %else
+    ; Non-destructive: target must be blank to avoid clobbering data.
     cmp byte [bios_probe_blank_mask], 0x02
     jne .fail
     clc
@@ -1963,18 +1971,23 @@ raw_hdd_clone_install:
     add [clone_done_lo], ax
     adc word [clone_done_hi], 0
 
-    ; Reset both drives every 64 batches (~512 sectors) to keep BIOS happy.
+    ; Periodic recovery: keep BIOS source-drive state fresh, but never call
+    ; INT 13h reset on the target while writes are running through ATA PIO.
+    ; Some real BIOSes wedge when mixing direct ATA writes with repeated
+    ; INT 13h resets of the same target device mid-clone.
     inc word [reset_counter]
     test word [reset_counter], 0x003F
     jnz .no_reset
     push ax
     push dx
+    push cx
     xor ax, ax
     mov dl, RAW_HDD_SOURCE_DRIVE
     int 0x13
-    xor ax, ax
-    mov dl, RAW_HDD_TARGET_DRIVE
-    int 0x13
+    call ata_pri_soft_reset
+    ; Ignore ATA reset failure here: write path has per-sector timeout+recovery
+    ; and will surface the failure with stage/path/status diagnostics.
+    pop cx
     pop dx
     pop ax
 .no_reset:
