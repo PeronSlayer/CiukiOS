@@ -18,6 +18,7 @@ org 0x0100
 %define RAW_HDD_TARGET_DRIVE 0x81
 %define RAW_HDD_CLONE_SECTORS_LO 0x003F
 %define RAW_HDD_CLONE_SECTORS_HI 0x0004
+%define RAW_HDD_BATCH_SECTORS    8           ; multi-sector batch size; matches io_buffer 4 KB
 %define RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA 64
 %define RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF 0x0136
 %define RAW_STAGE1_LIVE_DRIVE_INDEX 3
@@ -547,13 +548,14 @@ format_target_hdd:
 
     xor ax, ax
     mov di, io_buffer
-    mov cx, 256
+    mov cx, 2048                ; 4096-byte io_buffer / 2 = 2048 words
     rep stosw
 
     mov word [raw_clone_lba_lo], 0
     mov word [raw_clone_lba_hi], 0
     mov dword [format_sectors_done], 0
     mov byte [format_progress_pct], 1
+    mov word [reset_counter], 0
 
     mov bx, 100
     xor dx, dx
@@ -587,21 +589,42 @@ format_target_hdd:
     jae .format_done
 
 .have_remaining:
+    ; this_batch = min(BATCH, sectors_total - sectors_done) capped at 16-bit
+    mov ax, [format_sectors_total]
+    sub ax, [format_sectors_done]
+    mov dx, [format_sectors_total + 2]
+    sbb dx, [format_sectors_done + 2]
+    or dx, dx
+    jnz .full_fmt_batch
+    cmp ax, RAW_HDD_BATCH_SECTORS
+    jb .partial_fmt_batch
+.full_fmt_batch:
+    mov cx, RAW_HDD_BATCH_SECTORS
+    jmp .have_fmt_batch
+.partial_fmt_batch:
+    mov cx, ax
+.have_fmt_batch:
+    mov [batch_count], cx
+
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
-    call raw_edd_write_current_lba
+    mov cx, [batch_count]
+    call raw_edd_write_n
     jc .format_fail
 
-    inc word [raw_clone_lba_lo]
-    jnz .inc_done
-    inc word [raw_clone_lba_hi]
+    ; advance LBA by batch_count
+    mov ax, [batch_count]
+    add [raw_clone_lba_lo], ax
+    adc word [raw_clone_lba_hi], 0
 
-.inc_done:
-    inc dword [format_sectors_done]
+    ; advance sectors_done by batch_count (32-bit)
+    xor dx, dx
+    add [format_sectors_done], ax
+    adc word [format_sectors_done + 2], dx
 
-    ; Real-HW T23: reset target drive every 1024 ops to avoid BIOS state
-    ; corruption after many sequential INT 13h writes.
-    test word [format_sectors_done], 0x03FF
+    ; Reset target drive every 64 batches.
+    inc word [reset_counter]
+    test word [reset_counter], 0x003F
     jnz .no_fmt_reset
     push ax
     push dx
@@ -1674,6 +1697,7 @@ raw_hdd_clone_install:
     mov word [raw_clone_remaining_hi], RAW_HDD_CLONE_SECTORS_HI
     mov byte [raw_edd_status], 0
     mov byte [raw_chs_status], 0
+    mov word [reset_counter], 0
 
     mov word [clone_done_lo], 0
     mov word [clone_done_hi], 0
@@ -1691,33 +1715,53 @@ raw_hdd_clone_install:
     mov word [clone_next_mark_hi], 0
 
 .copy_loop:
+    ; remaining sectors
     mov ax, [raw_clone_remaining_lo]
     or ax, [raw_clone_remaining_hi]
     jz .done
 
+    ; this_batch = min(BATCH, remaining). For >65535-remaining, always BATCH.
+    cmp word [raw_clone_remaining_hi], 0
+    jne .full_batch
+    cmp word [raw_clone_remaining_lo], RAW_HDD_BATCH_SECTORS
+    jb .partial_batch
+.full_batch:
+    mov cx, RAW_HDD_BATCH_SECTORS
+    jmp .have_batch
+.partial_batch:
+    mov cx, [raw_clone_remaining_lo]
+.have_batch:
+    mov [batch_count], cx
+
     mov dl, RAW_HDD_SOURCE_DRIVE
     mov bx, io_buffer
-    call raw_edd_read_current_lba
+    mov cx, [batch_count]
+    call raw_edd_read_n
     jc .fail
 
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
-    call raw_edd_write_current_lba
+    mov cx, [batch_count]
+    call raw_edd_write_n
     jc .fail
-    inc word [raw_clone_lba_lo]
-    jnz .dec_remaining
-    inc word [raw_clone_lba_hi]
 
-.dec_remaining:
-    sub word [raw_clone_remaining_lo], 1
+    ; advance LBA by batch_count
+    mov ax, [batch_count]
+    add [raw_clone_lba_lo], ax
+    adc word [raw_clone_lba_hi], 0
+
+    ; subtract batch_count from remaining
+    sub [raw_clone_remaining_lo], ax
     sbb word [raw_clone_remaining_hi], 0
 
-    add word [clone_done_lo], 1
+    ; add batch_count to clone_done
+    mov ax, [batch_count]
+    add [clone_done_lo], ax
     adc word [clone_done_hi], 0
 
-    ; Real-HW T23 BIOS hangs INT 13h after several thousand sequential ops.
-    ; Reset both drives every 1024 ops to keep BIOS state fresh.
-    test word [clone_done_lo], 0x03FF
+    ; Reset both drives every 64 batches (~512 sectors) to keep BIOS happy.
+    inc word [reset_counter]
+    test word [reset_counter], 0x003F
     jnz .no_reset
     push ax
     push dx
@@ -1860,7 +1904,27 @@ raw_patch_installed_default_drive:
     pop ax
     ret
 
+; Single-sector wrappers (kept for raw_patch_installed_default_drive which
+; only touches one sector). Internally call the multi-sector routines with
+; CX=1.
 raw_edd_read_current_lba:
+    push cx
+    mov cx, 1
+    call raw_edd_read_n
+    pop cx
+    ret
+
+raw_edd_write_current_lba:
+    push cx
+    mov cx, 1
+    call raw_edd_write_n
+    pop cx
+    ret
+
+; Multi-sector read: AH=0x42 EDD with CX sectors. CHS fallback for source
+; drive (CD) only -- target HDD writes are EDD-only per d3e2fb7. CX must be
+; 1..127 (DAP limit).
+raw_edd_read_n:
     mov byte [raw_last_stage], 'R'
     mov byte [raw_last_path], 'E'
     mov ah, 0x42
@@ -1876,7 +1940,7 @@ raw_edd_read_current_lba:
 .done:
     ret
 
-raw_edd_write_current_lba:
+raw_edd_write_n:
     mov byte [raw_last_stage], 'W'
     mov byte [raw_last_path], 'E'
     mov ah, 0x43
@@ -1934,15 +1998,22 @@ raw_get_drive_geometry:
     pop ax
     ret
 
+; raw_edd_transfer_current_lba
+; Inputs: AH=0x42 (read) or 0x43 (write), DL=drive, BX=buffer offset (CS:BX),
+;         CX=sector count (caller-driven, supports multi-sector batches),
+;         [raw_clone_lba_lo/hi]=starting LBA
+; The DAP sector count field is loaded from CX so the same routine handles
+; both single-sector (CX=1) and batched (CX=8/16/etc.) transfers.
 raw_edd_transfer_current_lba:
     push ax
     push bx
+    push cx
     push dx
     push si
     push cs
     pop ds
     mov word [bios_probe_dap + 0], 0x0010
-    mov word [bios_probe_dap + 2], 0x0001
+    mov [bios_probe_dap + 2], cx
     mov word [bios_probe_dap + 4], bx
     mov bx, cs
     mov word [bios_probe_dap + 6], bx
@@ -1954,6 +2025,7 @@ raw_edd_transfer_current_lba:
     mov word [bios_probe_dap + 14], 0
     mov [raw_edd_retry_op], ah
     mov [raw_edd_retry_drive], dl
+    mov [raw_edd_retry_count], cx
     mov si, bios_probe_dap
     xor al, al
     int 0x13
@@ -1966,7 +2038,8 @@ raw_edd_transfer_current_lba:
     push cs
     pop ds
     mov word [bios_probe_dap + 0], 0x0010
-    mov word [bios_probe_dap + 2], 0x0001
+    mov cx, [raw_edd_retry_count]
+    mov [bios_probe_dap + 2], cx
     mov si, bios_probe_dap
     mov dl, [raw_edd_retry_drive]
     mov ah, [raw_edd_retry_op]
@@ -1976,6 +2049,7 @@ raw_edd_transfer_current_lba:
 .success:
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     clc
@@ -1985,14 +2059,18 @@ raw_edd_transfer_current_lba:
     mov [raw_edd_status], ah
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     stc
     ret
 
+; CHS fallback: takes CX = sector count (1..63) like the EDD routine. Saved
+; into raw_chs_count before CL gets repurposed for the CHS register layout.
 raw_chs_transfer_current_lba:
     push ax
     push bx
+    push cx
     push dx
     push si
     push es
@@ -2002,6 +2080,7 @@ raw_chs_transfer_current_lba:
     mov si, bx
     mov [raw_chs_drive], dl
     mov [raw_chs_op], ah
+    mov [raw_chs_count], cl
 
     cmp dl, RAW_HDD_SOURCE_DRIVE
     jne .target_geometry
@@ -2045,13 +2124,14 @@ raw_chs_transfer_current_lba:
     mov bx, si
     mov dl, [raw_chs_drive]
     mov ah, [raw_chs_op]
-    mov al, 0x01
+    mov al, [raw_chs_count]
     int 0x13
     jc .fail
 
     pop es
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     clc
@@ -2062,6 +2142,7 @@ raw_chs_transfer_current_lba:
     pop es
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     stc
@@ -4195,8 +4276,12 @@ raw_last_path           db 0
 raw_last_status         db 0
 raw_edd_status          db 0
 raw_chs_status          db 0
+raw_chs_count           db 1
 raw_edd_retry_op        db 0
 raw_edd_retry_drive     db 0
+raw_edd_retry_count     dw 1
+batch_count             dw 0
+reset_counter           dw 0
 prompt_tick_start       dw 0
 
 box_top                 db 0
@@ -4266,4 +4351,7 @@ bios_probe_dap         db 0x10, 0x00
                        dq 0x0000000000000000
 
 align 16
-io_buffer               times 512 db 0
+; Multi-sector I/O buffer: 8 sectors (4 KB) so the install/format loops can
+; batch INT 13h transfers and reduce the call count by 8x. Larger batches
+; mean fewer chances for a real-HW BIOS (e.g. ThinkPad T23) to wedge.
+io_buffer               times 4096 db 0
