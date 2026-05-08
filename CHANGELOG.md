@@ -13,6 +13,8 @@ This changelog is intentionally concise. Every completed task must update the `U
 	Validation evidence: `make build-full` PASS.
 	Validation evidence: `make qemu-test-full` PASS.
 	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` PASS.
+3. Fixed external-DOS return-state handling for the shell `run` path by explicitly resetting `shell_exec_external_mouse_disabled` in the exec-success return flow before INT 10h hook reinstall/chrome redraw; this prevents the post-return shell session from remaining in external-mouse-disabled state after a successful DOS program launch/exit sequence.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
 
 ## pre-Alpha v0.6.6 (2026-05-08)
 1. Reordered the post-v0.6.5 roadmap around continued Stage1/runtime split work, broader arbitrary DOS program compatibility, legacy audio, and only later networking and Windows pre-NT milestones; aligned the README, architecture notes, runtime-split plan, GUI demo notes, and agent directives with that priority order.

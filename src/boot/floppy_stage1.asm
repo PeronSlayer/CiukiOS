@@ -12718,6 +12718,7 @@ shell_exec_buffer_path:
     mov ax, 0x0003
     int 0x10
     pop ax
+    mov byte [cs:shell_exec_external_mouse_disabled], 0
     call shell_exec_reinstall_int10
     call draw_shell_chrome
     clc
