@@ -19,6 +19,11 @@ This changelog is intentionally concise. Every completed task must update the `U
 	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS (dos21 extension lane).
 5. Fixed `scripts/qemu_test_full_dos_compat_smoke.sh` to avoid DOS21 prompt false negatives by introducing `ROOT_PROMPT_PATTERN` (`CiukiOS C:\>`), introducing `SHELL_PROMPT_PATTERN` (root OR apps prompt), and using shell-prompt regex matching only for the `DOS21_PROMPT_RETURNED` step while preserving strict `C:\APPS\>` checks elsewhere.
 	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS (added post-dos21 `cd \APPS` prompt resync to keep `GFXSTAR_PROMPT_RETURNED` green).
+6. Fixed the DOSNavigator INT 6h reboot regression on nested MZ launch paths by rolling back PSP runtime-vector inheritance to the stable behavior: exec-created program PSPs now restore the DOS-style hardcoded terminate/Ctrl-Break/critical-error vectors at PSP offsets `0x0A..0x14`, and AH=55 child PSP creation no longer copies live IVT vectors into child PSP memory. This removes the unstable vector-copy side effect seen as `[CRASH] INT 6h - reboot.` after `run DN.COM` in runtime diagnostics.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
+	Validation evidence: `env DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='Dos[[:space:]]+Navigator|\[CRASH\]|INT[[:space:]]+6h' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_OBSERVE_SEC=80 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=240 make qemu-test-full-doom-taxonomy` PASS (no crash marker in strings log).
 
 ## pre-Alpha v0.6.6 (2026-05-08)
 1. Reordered the post-v0.6.5 roadmap around continued Stage1/runtime split work, broader arbitrary DOS program compatibility, legacy audio, and only later networking and Windows pre-NT milestones; aligned the README, architecture notes, runtime-split plan, GUI demo notes, and agent directives with that priority order.

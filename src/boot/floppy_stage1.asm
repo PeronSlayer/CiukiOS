@@ -1978,7 +1978,13 @@ int21_exec_init_program_psp:
     rep stosw
     mov word [es:0x0000], 0x20CD
     mov byte [es:0x0005], 0xCB
-    call int21_psp_copy_runtime_vectors
+    mov word [es:0x000A], 0x0005
+    mov ax, es
+    mov [es:0x000C], ax
+    mov word [es:0x000E], 0x0005
+    mov [es:0x0010], ax
+    mov word [es:0x0012], 0x0005
+    mov [es:0x0014], ax
     call int21_init_psp_handles
     ret
 
@@ -1994,7 +2000,6 @@ int21_create_child_psp:
     rep stosw
     mov word [es:0x0000], 0x20CD
     mov [es:0x0002], si
-    call int21_psp_copy_runtime_vectors
     call int21_init_psp_handles
     call int21_mem_adopt_child_psp
     xor ax, ax
@@ -2055,25 +2060,6 @@ int21_init_psp_handles:
     mov cx, 15
     rep stosb
     pop di
-    pop cx
-    pop ax
-    ret
-
-int21_psp_copy_runtime_vectors:
-    push ax
-    push cx
-    push si
-    push di
-    push ds
-    xor ax, ax
-    mov ds, ax
-    mov si, 0x0088
-    mov di, 0x000A
-    mov cx, 6
-    rep movsw
-    pop ds
-    pop di
-    pop si
     pop cx
     pop ax
     ret
