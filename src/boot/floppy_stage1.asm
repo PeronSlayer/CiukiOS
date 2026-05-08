@@ -2943,24 +2943,18 @@ int21_get_version:
     ret
 
 int21_country_info:
+    ; AL=0x00 (current) / 0xFF (current) / 0x01 (country 1=USA): fill the
+    ; caller's 34-byte buffer at DS:DX with the default country info block.
+    ; This loose interpretation matches what Watcom C runtime expects from
+    ; DOS 3+: a successful Get with USA-like data. Splitting Set off was
+    ; tempting per spec but broke DOOM's setlocale path on real hardware.
     cmp al, 0x00
     je .copy_current
     cmp al, 0xFF
     je .copy_current
-    ; AL=0x01 is "Set country" (no buffer in DS:DX); AL=0x02 is "Set code page"
-    ; (also bufferless). For these we accept and return success without
-    ; writing the caller's buffer -- old code did `rep movsb 34` into DS:DX
-    ; for AL=0x01 too which corrupted 34 bytes of caller memory.
     cmp al, 0x01
-    je .accept_set
-    cmp al, 0x02
-    je .accept_set
+    je .copy_current
     jmp .bad_country
-.accept_set:
-    mov bx, 1
-    xor ax, ax
-    clc
-    ret
 .copy_current:
     push cx
     push si

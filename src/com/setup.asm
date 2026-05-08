@@ -199,6 +199,12 @@ finalize:
     mov ax, 0x4C01
     int 0x21
 .do_reboot:
+%if SETUP_LIVE_CD_MODE
+    ; Live-CD install: prompt the user to remove the CD before reboot, so
+    ; the BIOS picks the freshly-installed HDD as the next boot device
+    ; instead of looping back into the live CD.
+    call vis_install_eject_prompt
+%endif
     call reboot_system
     ; fallback if reboot fails
     mov ax, 0x4C00
@@ -1515,6 +1521,49 @@ vis_install_phase_done:
     mov si, msg_vis_install_done
     call vis_install_set_status
     pop si
+    pop ax
+    ret
+
+; vis_install_eject_prompt: ask the user to remove the live CD before warm
+; reboot, then wait for any key. Without this prompt the BIOS boot order
+; (CD first on most laptops) re-enters the live CD instead of booting the
+; freshly-installed HDD.
+vis_install_eject_prompt:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; Bright eject banner inside the install panel
+    mov dh, VIS_INST_STATUS_ROW
+    mov dl, VIS_INST_BAR_COL
+    call vis_set_cursor
+    mov al, ' '
+    mov bl, VIS_ATTR_BG
+    mov cx, VIS_INST_BAR_WIDTH
+    call vis_putc_attr
+    mov dh, VIS_INST_STATUS_ROW
+    mov dl, VIS_INST_BAR_COL
+    mov bl, VIS_ATTR_OK
+    mov si, msg_vis_install_eject
+    call vis_print_z_at
+
+    mov dh, VIS_INST_STATUS_ROW
+    add dh, 2
+    mov dl, VIS_INST_BAR_COL
+    mov bl, VIS_ATTR_HINT
+    mov si, msg_vis_install_eject_hint
+    call vis_print_z_at
+
+    ; Block on a key (bypasses the keyboard buffer state our shell may have left)
+    xor ax, ax
+    int 0x16
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -3982,6 +4031,8 @@ msg_vis_install_phase_patch   db 'Phase 3/3: Finalizing installation', 0
 msg_vis_install_status_format db 'Zeroing target sectors via INT 13h EDD...', 0
 msg_vis_install_status_clone  db 'Cloning live-CD image to target HDD...', 0
 msg_vis_install_done    db 'Installation complete. Rebooting...', 0
+msg_vis_install_eject     db 'Installation complete. REMOVE the CD now.', 0
+msg_vis_install_eject_hint db 'Press any key to reboot from the installed HDD.', 0
 
 format_path             db '\APPS\FORMAT.COM', 0
 format_cmdtail          db 3, ' /F', 13
