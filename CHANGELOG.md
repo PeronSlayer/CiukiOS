@@ -61,6 +61,12 @@ This changelog is intentionally concise. Every completed task must update the `U
 
 54. Addressed a real-hardware live-CD installer hang reported around 4% clone progress by removing periodic BIOS target-drive resets from the raw clone loop and replacing them with ATA primary-channel soft reset plus source-drive BIOS reset only; this avoids mixed INT 13h target resets during ATA PIO writes on BIOSes that wedge under that combination. Revalidated with make build-full, make build-full-cd, make qemu-test-setup-runtime-hdd-install, make qemu-test-setup-full-acceptance, and make qemu-test-setup-installer-scenarios.
 
+55. Hardened full-profile taxonomy classification by adding a selectable `DOOM_TAXONOMY_PROFILE` (`doom` default, `dos_generic` optional), keeping explicit extender-failure markers authoritative, restricting inferred `extender_init` pass to a strong evidence chain (`mz_transfer=PASS` and `video_init=PASS`), and making `dos_generic` app-runtime markers optional via `DOOM_TAXONOMY_APP_RUNTIME_MARKERS` (default empty) so no app-specific regex is hardcoded in the script internals.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=extender_init make qemu-test-full-doom-taxonomy` PASS.
+	Validation evidence: `make qemu-test-full-dos-taxonomy` PASS.
+	Validation evidence: `make qemu-test-full-cd` PASS.
+
 ## pre-Alpha v0.6.5 (2026-05-05)
 1. Established the Stage1/runtime split architecture as the next structural direction: Stage1 is now documented as a loader boundary, with DOS runtime, shell, driver/CD policy, diagnostics, and module responsibilities mapped for migration into loaded components under `\SYSTEM`.
 2. Added `docs/stage1-runtime-split-plan-v0.1.md` with the Stage1 responsibility inventory, target `\SYSTEM\RUNTIME.BIN` architecture, memory/ABI assumptions, fallback rules, migration order, and full/full-CD acceptance gates.
