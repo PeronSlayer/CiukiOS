@@ -599,6 +599,19 @@ format_target_hdd:
 .inc_done:
     inc dword [format_sectors_done]
 
+    ; Real-HW T23: reset target drive every 1024 ops to avoid BIOS state
+    ; corruption after many sequential INT 13h writes.
+    test word [format_sectors_done], 0x03FF
+    jnz .no_fmt_reset
+    push ax
+    push dx
+    xor ax, ax
+    mov dl, RAW_HDD_TARGET_DRIVE
+    int 0x13
+    pop dx
+    pop ax
+.no_fmt_reset:
+
     mov al, [format_progress_pct]
     cmp al, 100
     ja .format_loop
@@ -1701,6 +1714,22 @@ raw_hdd_clone_install:
 
     add word [clone_done_lo], 1
     adc word [clone_done_hi], 0
+
+    ; Real-HW T23 BIOS hangs INT 13h after several thousand sequential ops.
+    ; Reset both drives every 1024 ops to keep BIOS state fresh.
+    test word [clone_done_lo], 0x03FF
+    jnz .no_reset
+    push ax
+    push dx
+    xor ax, ax
+    mov dl, RAW_HDD_SOURCE_DRIVE
+    int 0x13
+    xor ax, ax
+    mov dl, RAW_HDD_TARGET_DRIVE
+    int 0x13
+    pop dx
+    pop ax
+.no_reset:
 
     mov al, [clone_progress_pct]
     cmp al, 100
