@@ -4,6 +4,15 @@ All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task must update the `Unreleased` section unless the task is a release cut that creates a new version section.
 
 ## Unreleased (2026-05-08)
+1. Fixed a Stage1 DOS memory-table regression in AH=4Ah resize/gap-limit scans: INVALID entries are now ignored while ALLOC and FREE entries are treated as hard boundaries, preventing stale invalid slots from skewing allocation limits and reducing random external DOS app crashes/reboots (e.g. DOSNavigator/DOOM long runs).
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
+	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` PASS.
+2. Restored DOSNavigator display rendering by reinstating four code blocks inadvertently removed by the previous memory-manager commit: (a) pre-exec chrome clear (INT 10h AH=0003h mode-set + set shell_exec_external_mouse_disabled=1 + call shell_exec_restore_bios_int10) before AH=4Bh exec, (b) corrected post-exec success path (pop ax before call shell_exec_reinstall_int10 then draw_shell_chrome), (c) full exec_failed cleanup path (reset shell_exec_external_mouse_disabled=0, mode-set, pop ax, reinstall INT 10h, redraw chrome, stc/ret), (d) INT 33h mouse-disabled guard at handler entry (cmp byte shell_exec_external_mouse_disabled / jne .external_mouse_disabled). Also corrected the int21_mem_table_next_limit memory-barrier branch from jb to ja, matching the already-correct int21_mem_find_free_gap fix applied in the prior session.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` PASS.
 
 ## pre-Alpha v0.6.6 (2026-05-08)
 1. Reordered the post-v0.6.5 roadmap around continued Stage1/runtime split work, broader arbitrary DOS program compatibility, legacy audio, and only later networking and Windows pre-NT milestones; aligned the README, architecture notes, runtime-split plan, GUI demo notes, and agent directives with that priority order.

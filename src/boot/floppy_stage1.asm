@@ -7631,7 +7631,7 @@ int21_mem_find_free_gap:
     cmp di, cx
     jae .tail
     cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
-    ja .next
+    jb .next
     mov ax, [cs:dos_mem_block_table + si]
     cmp ax, dx
     jbe .consume
@@ -12674,6 +12674,13 @@ shell_exec_buffer_path:
     pop si
     pop cx
     pop ax
+    ; Clear shell chrome before handing control to external DOS programs.
+    push ax
+    mov ax, 0x0003
+    int 0x10
+    pop ax
+    mov byte [cs:shell_exec_external_mouse_disabled], 1
+    call shell_exec_restore_bios_int10
     ; Run the program
     push bx
     push es
@@ -12710,11 +12717,19 @@ shell_exec_buffer_path:
     push ax
     mov ax, 0x0003
     int 0x10
-    call draw_shell_chrome
     pop ax
+    call shell_exec_reinstall_int10
+    call draw_shell_chrome
     clc
     ret
 .exec_failed:
+    mov byte [cs:shell_exec_external_mouse_disabled], 0
+    push ax
+    mov ax, 0x0003
+    int 0x10
+    pop ax
+    call shell_exec_reinstall_int10
+    call draw_shell_chrome
     stc
     ret
 
@@ -16264,6 +16279,8 @@ int16_handler:
     jmp far [cs:old_int16_off]
 
 int33_handler:
+    cmp byte [cs:shell_exec_external_mouse_disabled], 0
+    jne .external_mouse_disabled
     cmp ax, 0x0000
     je .reset
     cmp ax, 0x0001
