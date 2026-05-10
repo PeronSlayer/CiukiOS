@@ -8888,9 +8888,12 @@ int21_path_to_fat_name:
     je .next_component
     cmp bx, 3
     jae .ext_advance
-    cmp byte [cs:int21_path_upcase], 0
-    je .ext_store
-    call int21_upcase_al
+    ; Inline upcase for extension
+    cmp al, 'a'
+    jb .ext_store
+    cmp al, 'z'
+    ja .ext_store
+    sub al, 0x20
 .ext_store:
     mov [es:path_fat_name + 8 + bx], al
     inc bx

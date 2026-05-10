@@ -90,6 +90,8 @@ DOOM_IMAGE_DIR="${CIUKIOS_DOOM_IMAGE_DIR:-::APPS/DOOM}"
 DOOMDATA_IMAGE_DIR="${CIUKIOS_DOOMDATA_IMAGE_DIR:-::DOOMDATA}"
 DOSNAV_SRC_DIR="${CIUKIOS_DOSNAV_SRC_DIR:-$CIUKIOS_ROOT/third_party/DOSNavigator}"
 DOSNAV_IMAGE_DIR="${CIUKIOS_DOSNAV_IMAGE_DIR:-::APPS/DOSNAV}"
+WOLF3D_SRC_DIR="${CIUKIOS_WOLF3D_SRC_DIR:-$CIUKIOS_ROOT/third_party/WOLF3D}"
+WOLF3D_IMAGE_DIR="${CIUKIOS_WOLF3D_IMAGE_DIR:-::APPS/WOLF3D}"
 DRIVERS_SRC_DIR="${CIUKIOS_DRIVERS_SRC_DIR:-$CIUKIOS_ROOT/third_party/drivers}"
 DRIVERS_IMAGE_DIR="${CIUKIOS_DRIVERS_IMAGE_DIR:-::SYSTEM/DRIVERS}"
 DRIVERS_VERIFY_SCRIPT="$CIUKIOS_ROOT/scripts/verify_full_drivers_payload.sh"
@@ -103,6 +105,7 @@ SETUP_RAW_HDD_DESTRUCTIVE="${CIUKIOS_SETUP_RAW_HDD_DESTRUCTIVE:-0}"
 SETUP_LIVE_CD_MODE="${CIUKIOS_SETUP_LIVE_CD_MODE:-0}"
 DOS_DEFAULT_DRIVE_INDEX="${CIUKIOS_DOS_DEFAULT_DRIVE_INDEX:-2}"
 ENABLE_PS2_MOUSE_INIT="${CIUKIOS_ENABLE_PS2_MOUSE_INIT:-1}"
+WOLF_RUNTIME_DIAG="${CIUKIOS_WOLF_RUNTIME_DIAG:-0}"
 MTOOLS_TIMEOUT_SEC="${MTOOLS_TIMEOUT_SEC:-20}"
 MTOOLS_KILL_AFTER_SEC="${MTOOLS_KILL_AFTER_SEC:-2}"
 SETUP_RAW_HDD_INSTALL="${CIUKIOS_SETUP_RAW_HDD_INSTALL:-0}"
@@ -193,7 +196,7 @@ nasm -f bin "$STAGE1_SRC" \
 	-D HARDWARE_VALIDATION_SCREEN="$HARDWARE_VALIDATION_SCREEN" \
 	-D DOS_DEFAULT_DRIVE_INDEX="$DOS_DEFAULT_DRIVE_INDEX" \
 	-D ENABLE_PS2_MOUSE_INIT="$ENABLE_PS2_MOUSE_INIT" \
-	-o "$STAGE1_BIN"
+	-D WOLF_RUNTIME_DIAG="$WOLF_RUNTIME_DIAG" -o "$STAGE1_BIN"
 
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
 if [[ "$STAGE1_SIZE" -gt "$STAGE1_SLOT_SIZE" ]]; then
@@ -614,6 +617,27 @@ else
 	echo "[build-full] DOSNavigator payload not found at $DOSNAV_SRC_DIR (skipped)"
 fi
 
+if [[ -d "$WOLF3D_SRC_DIR" ]]; then
+	if ! command -v mmd >/dev/null 2>&1 || ! command -v mdir >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+		echo "[build-full] ERROR: WOLF3D source present but mtools (mmd/mdir/mcopy) is missing" >&2
+		exit 1
+	fi
+
+	echo "[build-full] injecting WOLF3D payload from $WOLF3D_SRC_DIR to $WOLF3D_IMAGE_DIR"
+	mtools_ensure_dir "$IMG" "$WOLF3D_IMAGE_DIR"
+
+	shopt -s nullglob dotglob
+	wolf3d_items=("$WOLF3D_SRC_DIR"/*)
+	shopt -u nullglob dotglob
+	if (( ${#wolf3d_items[@]} > 0 )); then
+		mcopy -s -o -i "$IMG" "${wolf3d_items[@]}" "$WOLF3D_IMAGE_DIR/"
+	else
+		echo "[build-full] WARN: WOLF3D source directory is empty: $WOLF3D_SRC_DIR" >&2
+	fi
+else
+	echo "[build-full] WOLF3D payload not found at $WOLF3D_SRC_DIR (skipped)"
+fi
+
 if [[ ! -d "$DRIVERS_SRC_DIR" ]]; then
 	if [[ "$CIUKIOS_ALLOW_MISSING_DRIVERS" == "1" ]]; then
 		echo "[build-full] WARN: drivers payload not found at $DRIVERS_SRC_DIR (skipped by CIUKIOS_ALLOW_MISSING_DRIVERS=1)" >&2
@@ -662,6 +686,9 @@ if [[ -d "$DOSNAV_SRC_DIR" ]]; then
 	README_OPTIONAL_PAYLOADS+=", third_party/DOSNavigator is copied under APPS/DOSNAV when present at build time"
 fi
 
+if [[ -d "$WOLF3D_SRC_DIR" ]]; then
+	README_OPTIONAL_PAYLOADS+=", third_party/WOLF3D is copied under APPS/WOLF3D when present at build time"
+fi
 
 cat > build/full/README.txt << TXT
 CiukiOS Legacy v2 - Full profile (FAT16 baseline)

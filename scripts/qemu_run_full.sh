@@ -48,6 +48,26 @@ MODE="visual"
 DO_BUILD=1
 DRY_RUN=0
 DISPLAY_BACKEND="${QEMU_DISPLAY:-gtk}"
+DISPLAY_BACKEND_EXPLICIT=0
+
+resolve_display_backend() {
+  local backend="$1"
+
+  # Prefer SDL on auto-selection because some Linux hosts show a black GTK window.
+  # If GTK is requested explicitly, keep GTK and only disable GL by default.
+  if [[ "$backend" == "gtk" ]]; then
+    if [[ "${DISPLAY_BACKEND_EXPLICIT:-0}" -eq 0 ]] &&
+      "$QEMU_CMD" -display help 2>/dev/null | grep -Eq "(^|[[:space:]])sdl([[:space:]]|$)"; then
+      echo "sdl"
+      return
+    fi
+
+    echo "gtk,gl=off"
+    return
+  fi
+
+  echo "$backend"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -65,6 +85,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --display)
       DISPLAY_BACKEND="${2:-}"
+      DISPLAY_BACKEND_EXPLICIT=1
       if [[ -z "$DISPLAY_BACKEND" ]]; then
         echo "[qemu-run-full] ERROR: missing value for --display" >&2
         exit 1
@@ -172,7 +193,8 @@ fi
 
 QEMU_ARGS=(
   "${BASE_ARGS[@]}"
-  -display "$DISPLAY_BACKEND"
+  -vga std
+  -display "$(resolve_display_backend "$DISPLAY_BACKEND")"
   -chardev "file,id=ser0,path=build/full/qemu-visual.log"
   -serial chardev:ser0
 )
@@ -185,6 +207,8 @@ fi
 
 echo "[qemu-run-full] starting visual QEMU session"
 echo "[qemu-run-full] full profile FAT16 baseline boot"
+echo "[qemu-run-full] display backend: $(resolve_display_backend "$DISPLAY_BACKEND")"
+echo "[qemu-run-full] vga device: std"
 echo "[qemu-run-full] serial log: build/full/qemu-visual.log"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then

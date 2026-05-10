@@ -35,6 +35,188 @@ This changelog is intentionally concise. Every completed task must update the `U
 	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
 	Validation evidence: `env DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='Dos[[:space:]]+Navigator|\[CRASH\]|INT[[:space:]]+6h' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_OBSERVE_SEC=100 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=280 make qemu-test-full-doom-taxonomy` PASS.
 
+9. Improved DOSNavigator nested COM->MZ startup stability by selecting `MZ_LOAD_SEG` for nested MZ launches when the parent process is a COM program (instead of always forcing `MZ2_LOAD_SEG`), recovering additional conventional-memory headroom for `DN.COM -> DN.PRG` startup paths; also hardened FAT16 AH=3Fh read clamping to cap reads against 32-bit file-size minus file-position deltas before I/O loops, preventing false I/O errors when reads approach EOF on large files.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
+	Validation evidence: `DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_DISPLAY_MODE=none DOOM_TAXONOMY_OBSERVE_SEC=10 bash scripts/qemu_test_full_doom_taxonomy.sh` PASS.
+
+
+10. Optimized FAT16 cluster traversal for large sequential reads by adding a lightweight last-cluster cache in `int21_cluster_for_pos` and corrected INT 21h AH=67h PSP bookkeeping to keep handle-count metadata coherent with the in-PSP JFT pointer (`PSP:0032/0034/0036`) instead of exposing oversized inconsistent values; trimmed non-critical demo strings to stay within the full Stage1 size budget.
+	Validation evidence: `make build-full` PASS (Stage1 35839/35840).
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
+	Validation evidence: `DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_DOOM_CWD='APPSDOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_DISPLAY_MODE=none DOOM_TAXONOMY_OBSERVE_SEC=20 bash scripts/qemu_test_full_doom_taxonomy.sh` PASS (DOSNAV banner observed; follow-up still needed for full interactive panel rendering stability).
+
+11. Reverted the speculative INT 21h AH=4Bh AL=01 fast-path acceptance in `int21_exec` after it caused an unstable reboot loop that surfaced as `[BOOT0-FULL] Disk read error` during DOSNavigator launches; restored strict AL=00 handling for execute requests to recover stable shell return behavior.
+	Validation evidence: `make build-full` PASS (Stage1 35834/35840).
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
+	Validation evidence: `timeout 25 bash scripts/build_run_full.sh` visual run no longer shows `Disk read error` in `build/full/qemu-visual.log`.
+
+12. Added optional third-party `WOLF3D` payload packaging to the shared full-image builder so local files under `third_party/WOLF3D` are copied to `C:APPSWOLF3D` in generated images (including the full-CD partition path that reuses `scripts/build_full.sh`), and added a local gitignore rule to keep `third_party/WOLF3D/` untracked.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `mdir -i build/full/ciukios-full.img ::APPS/WOLF3D` PASS (WOLF3D files listed in image).
+	Validation evidence: `make build-full-cd` currently FAIL in pre-existing state (`stage1 payload is 36005 bytes (max 35840)` under forced autorun), so full-CD build output could not be re-validated in this task.
+
+13. Increased primary MZ loader headroom by lowering `MZ_LOAD_SEG` from `0x3000` to `0x1000`, so INT 21h AH=4Bh can load larger EXE images before hitting the `0x0008` load-too-large boundary in Stage1. This is a structural compatibility step for arbitrary DOS executables and removes the previous fixed 128 KiB MZ window bottleneck.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: manual WOLF3D launch in QEMU still required for final app-level confirmation.
+
+14. Generalized the full-profile taxonomy harness for arbitrary DOS executables by switching taxonomy targets to DOS-generic naming (`DOS_TAXONOMY_*`), renaming the runner to `scripts/qemu_test_full_dos_taxonomy.sh`, and removing DOOM-specific target exposure from `Makefile` so DOOM is exercised as a standard DOS app path rather than a special taxonomy lane.
+	Validation evidence: `bash -n scripts/qemu_test_full_dos_taxonomy.sh` PASS.
+	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_LAUNCH=0 DOS_TAXONOMY_MIN_STAGE=binary_found DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS DOS_TAXONOMY_APP_BINARY_NAME=CIUKEDIT.COM DOS_TAXONOMY_RUN_COMMAND='run CIUKEDIT.COM MATRIX.TXT' DOS_TAXONOMY_APP_RUNTIME_MARKERS='[CIUKEDIT:BOOT]|[CIUKEDIT:OK]' DOS_TAXONOMY_DOSAPP_CWD='APPS' DOS_TAXONOMY_RUN_DRVLOAD=0 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS.
+
+15. Reduced Stage1 full-profile payload by 1 byte to recover from the size overflow (35841 > 35840) without changing execution logic, by compacting a non-critical shell help string in Stage1 data.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+
+16. Restored DOOM launch stability after the Stage1 overflow hotfix cycle by reverting the accidental EXEC loader corruption (`int21_exec_load_to_es` now returns DOS error `0x0008` on `too_large` again, and MZ loader segments are read from `current_load_seg` instead of the hardcoded `0x0008`), and by re-enabling robust taxonomy transfer detection for compact MZ markers (`[M]`) so successful launches are not misclassified as failures. Also restored a legacy `qemu-test-full-doom-taxonomy` Make target entrypoint for compatibility.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOOM DOS_TAXONOMY_APP_BINARY_NAME=DOOM.EXE DOS_TAXONOMY_RUN_COMMAND='run DOOM.EXE' DOS_TAXONOMY_CWD='APPSDOOM' DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=20 DOS_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS.
+
+17. Extended the DOS taxonomy runner with multi-use-case presets (DOS_TAXONOMY_USE_CASE=generic|doom|wolf3d) so DOOM and WOLF3D are validated through the same generic transfer/runtime flow, added make qemu-test-full-wolf3d-taxonomy, and preserved make qemu-test-full-doom-taxonomy as a legacy compatibility entrypoint.
+    Validation evidence: bash -n scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+
+18. Fixed WOLF3D launch regression (`run err=0x0008`) by restoring the primary MZ load base to `MZ_LOAD_SEG=0x1000`, recovering enough contiguous load headroom for larger DOS EXE payloads while preserving existing nested-segment handling.
+    Validation evidence: make build-full PASS.
+    Validation evidence: make qemu-test-full PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: no 'run err=0x' match in build/full/qemu-full-dos-taxonomy.log after the WOLF3D validation run.
+
+19. Increased the general DOS EXE load window by relocating Stage1 DOS internal buffer segments upward (`DOS_META/FAT/IO/ENV` moved to `0x9600..0x9C00`) and setting `DOS_HEAP_LIMIT_SEG=0x9600`, allowing primary/nested MZ loads to use a much larger contiguous low-memory range before hitting `0x0008` while preserving runtime stability checks.
+    Validation evidence: make build-full PASS.
+    Validation evidence: make qemu-test-full PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: no 'run err=0x' match in build/full/qemu-full-dos-taxonomy.log after validation runs.
+
+20. Restored stable native launch behavior for both DOOM and WOLF3D by rebalancing Stage1 DOS memory layout: set primary MZ load base to `MZ_LOAD_SEG=0x1800`, moved runtime split payload segments to `RUNTIME_LOAD_SEG=0x8800` / `STAGE2_LOAD_SEG=0x8A00`, relocated DOS metadata/FAT/I-O/env buffers to `0x9800..0x9E00`, capped DOS heap at `DOS_HEAP_LIMIT_SEG=0x8800`, and constrained primary MZ PSP resize growth to `DOS_EXEC_LOAD_LIMIT_SEG` so external EXE memory growth cannot trample runtime-owned segments.
+    Validation evidence: make build-full PASS.
+    Validation evidence: make qemu-test-full PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: raw serial logs show a single boot banner and single [STAGE1-SERIAL] READY marker after run DOOM.EXE / run WOLF3D.EXE in final candidate runs.
+21. Hardened generic DOS taxonomy against reboot false-positives by adding explicit reboot detection from fresh runtime logs (boot banner and stage1 ready counts) and failing both `transfer_marker` and `runtime_stable` when a post-run reboot is observed, even if QEMU exits with rc=0.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=20 bash scripts/qemu_test_full_dos_taxonomy.sh FAIL with reboot counts when forced-regression config MZ_LOAD_SEG=0x1000 was used.
+    Validation evidence: taxonomy still PASSes for final stable layout on both DOOM and WOLF3D.
+
+22. Raised the Stage1 DOS executable load and heap caps to 0xA000 so large MZ/DOS extender programs keep more contiguous conventional memory during startup, matching the current loader sizing probe for DOOM and WOLF3D.
+    Validation evidence: make qemu-test-full PASS.
+
+23. Moved the WOLF3D visual screenshot probe earlier in the runtime window and made the delay configurable via DOS_TAXONOMY_SCREENSHOT_DELAY_SEC, so the taxonomy runner samples gameplay instead of the post-return shell frame.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_SCREENSHOT=build/full/wolf-early.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=5 DOS_TAXONOMY_OBSERVE_SEC=20 QEMU_TIMEOUT_SEC=120 make qemu-test-full-wolf3d-taxonomy PASS.
+
+24. Added prompt-return diagnostics to scripts/qemu_test_full_dos_taxonomy.sh by counting shell-prompt occurrences before and after app launch and reporting shell_prompt_returned in exec_attempted details, making immediate DOS app return-to-shell behavior explicit during runtime probes.
+    Validation evidence: bash -n scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_SCREENSHOT=build/full/wolf-promptdiag.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=15 DOS_TAXONOMY_OBSERVE_SEC=30 QEMU_TIMEOUT_SEC=180 make qemu-test-full-wolf3d-taxonomy PASS with exec_attempted detail shell_prompt_returned=yes.
+
+25. Stabilized WOLF3D taxonomy launch input by switching default use-case run commands to lowercase executable names (e.g., run wolf3d.exe/run doom.exe), reducing HMP shifted-key injection artifacts that were producing near-black captures despite successful transfer stages; also added optional post-launch key injection knobs (DOS_TAXONOMY_POST_LAUNCH_KEY and DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC) for focused startup diagnostics.
+    Validation evidence: bash -n scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_SCREENSHOT=build/full/wolf-final-lower-run.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=12 DOS_TAXONOMY_OBSERVE_SEC=25 QEMU_TIMEOUT_SEC=180 make qemu-test-full-wolf3d-taxonomy PASS with PPM stats 720x400 nonblack=24727 unique_colors=11.
+    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_SCREENSHOT=build/full/doom-after-lower-run.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=12 DOS_TAXONOMY_OBSERVE_SEC=25 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+
+26. Hardened HMP command injection in the generic DOS taxonomy runner by adding safe default key pacing (`DOS_TAXONOMY_KEY_DELAY_SEC=0.12`), a pre-Enter settle delay (`DOS_TAXONOMY_PRE_ENTER_DELAY_SEC=0.35`), and extensionless use-case launch defaults (`run doom`, `run wolf3d`) so the shell resolver can still map to `.EXE` when extension keystrokes are unstable; this reduces `run err=0x0002` and false black-screen diagnostics in WOLF3D/DOOM probes.
+    Validation evidence: bash -n scripts/qemu_test_full_dos_taxonomy.sh PASS.
+    Validation evidence: task `shell: check-doom-raw` PASS with `shell_prompt_returned=no` and no `run err=0x` in `build/full/check_doom_raw.log`.
+    Validation evidence: task `shell: check-wolf-raw` PASS with `shell_prompt_returned=no` and no `run err=0x` in `build/full/check_wolf_raw.log`.
+
+27. Reduced WOLF3D black-screen risk in external DOS runs by hardening Stage1 IRQ12 behavior and launch defaults: IRQ12 now bails out early while `shell_exec_external_mouse_disabled=1` (skipping shell VGA cursor work during external app ownership), and taxonomy use-case defaults were switched back to explicit executable commands (`run DOOM.EXE` and `run WOLF3D.EXE`) to avoid intermittent extensionless `run` resolution failures that surfaced as `run err=0x0002`.
+    Validation evidence: make build-full PASS.
+    Validation evidence: make qemu-test-full PASS.
+    Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS with `run WOLF3D.EXE` and transfer marker `[M]` observed.
+
+28. Hardened the full-profile visual QEMU lane against host-side black-window regressions by forcing `-vga std` in visual mode and defaulting plain `--display gtk` to `gtk,gl=off`; this preserves existing test/headless behavior while improving on-screen rendering reliability for manual `scripts/build_run_full.sh` sessions.
+    Validation evidence: make qemu-test-full PASS.
+    Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
+
+29. Hardened external DOS runtime compatibility for WOLF3D by bypassing the Stage1 INT 2Fh XMS shim while `shell_exec_external_mouse_disabled=1`, so external apps can use the BIOS/chain path instead of the minimal in-kernel XMS facade during gameplay startup.
+    Validation evidence: make build-full PASS.
+    Validation evidence: make qemu-test-full PASS.
+    Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
+
+30. Increased external DOS app compatibility by chaining Stage1 interrupt shims directly to BIOS/previous handlers while `shell_exec_external_mouse_disabled=1` for INT 15h, INT 16h, and INT 2Fh; this avoids shell-specific keyboard/mouse/multiplexer behavior leaking into game runtime and targets persistent WOLF3D black-screen startup hangs in graphical mode.
+    Validation evidence: make build-full PASS.
+    Validation evidence: make qemu-test-full PASS.
+    Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
+
+31. Added opt-in WOLF runtime serial diagnostics in Stage1 (CIUKIOS_WOLF_RUNTIME_DIAG=1) with granular markers around external exec and DOS dispatch ([WD]X, [WD]4B, plus INT10 mode/open-path probes), and wired the full-image builder to expose the compile-time flag so black-screen investigations can collect runtime evidence without altering default builds.
+	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make build-full PASS.
+	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make qemu-test-full PASS.
+	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make qemu-test-full-wolf3d-taxonomy PASS.
+	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=60 QEMU_TIMEOUT_SEC=300 bash scripts/qemu_test_full_dos_taxonomy.sh PASS with serial markers [WD]X and [WD]4B in build/full/qemu-full-dos-taxonomy.log.
+
+32. Reduced the default Stage1 payload back under the 35840-byte cap by moving WOLF runtime diagnostic-only strings, helper code, and state behind `WOLF_RUNTIME_DIAG` compile-time guards, preserving the opt-in diagnostic lane without bloating normal full builds.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `CIUKIOS_WOLF_RUNTIME_DIAG=1 make build-full` PASS.
+
+33. Tightened WOLF3D runtime diagnostics by making post-transfer BIOS markers reliable in external mode and confirming the black-screen path reaches BIOS video mode 13h after MZ handoff; the current stall occurs after the VGA mode switch and before any observed DOS file-open path, narrowing follow-up work to early game hardware/init behavior rather than QEMU display switching or INT 21h exec handoff.
+	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make build-full PASS.
+	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=90 QEMU_TIMEOUT_SEC=360 bash scripts/qemu_test_full_dos_taxonomy.sh PASS with serial markers [WD]X, [WD]4B, [M], and [WD]V 13 in build/full/qemu-full-dos-taxonomy.log.
+
+34. Preserved `INT 21h AH=38h` success signature by returning `AX=0x3800` in `int21_country_info` instead of zeroing AX, preventing accidental process termination on callers that issue follow-up DOS calls by changing only `AL` after a country-info call.
+	Validation evidence: make build-full PASS.
+	Validation evidence: make qemu-test-full PASS.
+	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=none DOS_TAXONOMY_SCREENSHOT=build/full/wolf-subagent-fix.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=12 DOS_TAXONOMY_OBSERVE_SEC=35 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+
+35. Fixed WOLF3D black-screen on launch by reordering INT 2Fh multiplex handler checks: XMS presence (AX=4300h) and entry-point (AX=4310h) requests are now serviced before the exec-mode guard (shell_exec_external_mouse_disabled), so external DOS applications can query and use the Stage1 XMS driver while running under the shell exec path. Previously WOLF3D found no XMS; the Borland C runtime aborted at startup and the screen remained black.
+	Validation evidence: make build-full PASS (Stage1 35840 bytes).
+	Validation evidence: make qemu-test-full PASS.
+	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS (DOOM no regression).
+	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=280 bash scripts/qemu_test_full_dos_taxonomy.sh PASS (WOLF3D runtime_stable, 89% non-black pixels in gameplay screenshot).
+
+36. Added targeted WOLF runtime diagnostics for XMS call tracing under `WOLF_RUNTIME_DIAG == 1` in Stage1: INT 2Fh AX=4300h now emits `W2X <AH>` before AL dispatch, and `xms_entrypoint` emits `WXH <AH>` at handler entry, with dedicated diag strings in the WOLF diag data block. Default builds/behavior are unchanged because all additions are guard-scoped.
+	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make build-full FAIL (`stage1 payload is 35892 bytes (max 35840)`).
+	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=45 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
+
+37. Added XMS HMA and A20 compatibility stubs (AH=01..07) in `xms_entrypoint`: Request HMA (AH=01), Release HMA (AH=02), Global Enable A20 (AH=03), Global Disable A20 (AH=04), Local Enable A20 (AH=05), Local Disable A20 (AH=06), and Query A20 (AH=07) now return AX=1/BL=0 (success/enabled) via a shared `.hma_a20_stub`, dispatched before the existing AH=08..0F EMB handlers. Stage1 payload after change: 35836/35840 bytes.
+	Validation evidence: `make build-full` PASS (35836/35840).
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-wolf3d-taxonomy` PASS (transfer_marker and runtime_stable reached; shell_prompt_returned=no; [M] observed in serial log).
+	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS (DOOM no regression).
+	Validation evidence: `shell: wolf-screen-capture` PASS; `shell: wolf-ppm-stats` check_wolf_stats.txt = 6 unique colors / 80 non-black pixels (WOLF3D remains in VGA black-screen stall post-transfer; stall is post-VGA-init, unrelated to XMS AH=01..07 dispatch).
+
+37. Completed XMS 2.0 INT 2Fh AX=4310h response: Stage1 `xms_entrypoint` query now returns `AX=0x0080` (AL=80h, XMS present) in addition to `ES:BX=xms_entrypoint`, matching the HIMEM.SYS behavior that DOS apps such as WOLF3D expect after the entry-point query; previously AL was left as 0x10 (from the original AH=43h sub-code), causing callers that check the return value to misidentify the XMS driver state.
+	Validation evidence: make build-full PASS.
+	Validation evidence: make qemu-test-full PASS.
+	Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS (transfer_marker + runtime_stable; shell_prompt_returned=no, count 3->3 during exec window).
+	Validation evidence: make qemu-test-full-doom-taxonomy FAIL (pre-existing legacy target issue: invokes qemu_test_full_doom_taxonomy.sh with CIUKEDIT.COM defaults, unrelated to this change).
+	Validation evidence: wolf-screen-capture PASS (taxonomy runtime_stable); check_wolf_stats.txt unique_colors=6 nonblack=80 (screenshot timing unaligned — no DOS_TAXONOMY_SCREENSHOT_DELAY_SEC set in wolf-screen-capture task; gameplay frames require a calibrated delay to avoid the early-load or post-return window).
+
+38. Updated Stage1 XMS version reporting in `xms_entrypoint .version` from `AX=0x0200` to `AX=0x0300` as a minimal compatibility tweak, with no other functional changes.
+	Validation evidence: make build-full PASS.
+	Validation evidence: make qemu-test-full PASS.
+	Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
+	Validation evidence: shell task `wolf-screen-capture` PASS (`build/full/check_wolf_screen.log`: `shell_prompt_returned=no`).
+	Validation evidence: shell task `wolf-ppm-stats` PASS (`build/full/check_wolf_stats.txt`: `6 80`, unchanged vs baseline 6 colors / 80 non-black).
+	Validation evidence: env DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker bash scripts/qemu_test_full_dos_taxonomy.sh PASS (`build/full/check_doom_summary.log`: `shell_prompt_returned=no`; `build/full/qemu-full-dos-taxonomy.log` shows DOOM startup after `[M]` with no shell prompt return in the observed window).
+
+39. Fixed a Stage1 XMS stack-safety bug in `xms_entrypoint`: `.check_handle` is now a pure near helper (`clc/stc` + `ret`) and `AH=0Ch/0Dh/0Eh` handlers (`.lock_emb/.unlock_emb/.query_handle`) now branch to `.free_fail` on carry, preserving existing failure code semantics (`BL=0xA2`) while removing the near-call/far-return mismatch risk in XMS handle validation paths.
+	Validation evidence: make build-full PASS.
+	Validation evidence: make qemu-test-full PASS.
+	Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
+	Validation evidence: task shell wolf-screen-capture PASS.
+	Validation evidence: task shell wolf-ppm-stats PASS.
+	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh > build/full/check_doom_summary.log 2>&1` PASS.
+
+40. Stabilized the dedicated DOOM visual taxonomy lane by switching the default target runner to `DOS_TAXONOMY_DISPLAY_MODE=nographic` and extending screenshot sampling (`DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=25`, `DOS_TAXONOMY_OBSERVE_SEC=50`, `QEMU_TIMEOUT_SEC=320`) so `visual_gameplay` captures gameplay frames instead of low-diversity pre-render states.
+	Validation evidence: `make qemu-test-full-doom-taxonomy` FAIL in pre-fix baseline (`visual_gameplay` low diversity: 720x400, unique_sampled_colors=3).
+	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doom-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=25 DOS_TAXONOMY_OBSERVE_SEC=50 DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=320 bash scripts/qemu_test_full_doom_taxonomy.sh` PASS (repeated twice; screenshot diversity around nonblank_samples about 21k and unique_sampled_colors about 101).
+
+64. Restored AX preservation across INT 21h vector APIs (`int21_set_vector` and `int21_get_vector`) and kept AH=67h PSP handle-count write coherent with caller semantics, removing a runtime-compatibility edge where external DOS apps could return immediately after `[M]` handoff; validated with WOLF3D runtime window and DOOM non-regression runtime checks.
+	Validation evidence: `DO_BUILD=1 LOG_FILE=build/full/qemu-wolf-after-int21vecfix.log DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_OBSERVE_SEC=90 QEMU_TIMEOUT_SEC=420 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS.
+	Validation evidence: `strings -a build/full/qemu-wolf-after-int21vecfix.log | awk 'BEGIN{s=0;c=0} /[M]/{s=1} s&&/CCiiuukkiiOOSS  CC::\AAPPPPSS\WWOOLLFF33DD\>>/{c++} END{print "prompt_after_M=" c}'` => `prompt_after_M=0` (no prompt return observed after transfer marker in the captured window).
+	Validation evidence: `DO_BUILD=0 LOG_FILE=build/full/qemu-doom-after-int21vecfix.log DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_OBSERVE_SEC=45 QEMU_TIMEOUT_SEC=300 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS.
+
+65. Fixed DOS filename extension case-sensitivity in INT21 AH=4Bh exec handler by replacing conditional upcase flag logic with inline uppercase-matching for extension bytes (a-z → A-Z): filenames like `wolf3d.exe` and `doom.com` now execute correctly regardless of input case, resolving `run err=0x0002` failures on case-mismatched program names and improving cross-shell compatibility for DOS executable launching.
+	Validation evidence: `make build-full` PASS (Stage1 35800/35840 bytes).
+	Validation evidence: `DOS_TAXONOMY_USE_CASE=wolf3d ... bash scripts/qemu_test_full_dos_taxonomy.sh` PASS with `exec_attempted=PASS` and no `run err=0x0002` in transfer_marker.
+	Validation evidence: `DOS_TAXONOMY_USE_CASE=doom ... bash scripts/qemu_test_full_dos_taxonomy.sh` PASS (no regression).
+
 ## pre-Alpha v0.6.6 (2026-05-08)
 1. Reordered the post-v0.6.5 roadmap around continued Stage1/runtime split work, broader arbitrary DOS program compatibility, legacy audio, and only later networking and Windows pre-NT milestones; aligned the README, architecture notes, runtime-split plan, GUI demo notes, and agent directives with that priority order.
 2. Added FAT16 per-drive CWD mirror state for C: and D: when INT 21h changes the default drive, kept chdir updates synchronized with the active drive slot, extended DOS21 smoke coverage for explicit C:/D: getcwd paths, added a full-CD shell drive QEMU lane for D: prompt/CWD validation, and expanded shell stability stress loops for repeated invalid commands plus COM/MZ execution, then added DOS-like drive-qualified chdir handling for C: and D: absolute paths, C:REL/D:REL relative paths, parent traversal, and invalid drive rejection without changing the default drive, and split INT 21h AH=38h country-info handling from AH=67h set-handle-count compatibility so DOOM-era callers no longer hit an unsupported or empty country-info path, and confirmed the only observed AH=44h IOCTL failure class is AL=06h input-status by adding DOS21 smoke coverage for that subfunction without broadening generic IOCTL behavior, and initialized COM/MZ PSP handle tables with DOS-standard inherited handles 0-4 plus closed entries so programs that inspect or close inherited handles no longer see an all-zero PSP handle map.
@@ -117,6 +299,28 @@ This changelog is intentionally concise. Every completed task must update the `U
 	Validation evidence: `make qemu-test-full-cd` PASS.
 
 59. Cut release `CiukiOS pre-Alpha v0.6.6` and aligned release-facing metadata (`CHANGELOG.md`, `README.md`, `VERSION`, and shell banner string) with the new version.
+
+60. Updated Stage1 DOS heap upper bound in the full profile from `DOS_HEAP_LIMIT_SEG=0xA000` to `DOS_HEAP_LIMIT_SEG=0x8800` in `src/boot/floppy_stage1.asm`, aligning the allocator ceiling with runtime/stage2 ownership at `0x8800/0x8A00` to avoid potential overlap with runtime-owned memory during external DOS execution.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full` PASS.
+	Validation evidence: `make qemu-test-full-wolf3d-taxonomy` PASS.
+	Validation evidence: `shell: wolf-screen-capture` PASS (`build/full/check_wolf_screen.log`: `shell_prompt_returned=no`; transfer marker stage PASS).
+	Validation evidence: `shell: wolf-ppm-stats` PASS (`build/full/check_wolf_stats.txt`: `6 80`, unchanged vs baseline 6/80).
+	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh > build/full/check_doom_summary.log 2>&1` PASS.
+
+61. Hardened generic DOS taxonomy runtime classification by detecting shell-prompt return from newly appended log lines after app launch and flagging `runtime_stable=FAIL` when the launched app drops back to the shell during the observation window, avoiding false stability PASSes for fast-return cases.
+	Validation evidence: `bash -n scripts/qemu_test_full_dos_taxonomy.sh` PASS.
+	Validation evidence: `shell: check-wolf-raw` result PASS at `min_stage=transfer_marker` with `runtime_stable=FAIL` and `shell_prompt_returned=yes` (WOLF3D returns to prompt immediately after `[M]`).
+	Validation evidence: `shell: check-doom-raw` PASS with `runtime_stable=PASS` and `shell_prompt_returned=no` (DOOM remains in runtime window).
+
+62. Restored the full-profile Stage1 runtime memory map to the known DOOM-stable layout (`RUNTIME_LOAD_SEG=0x4C00`, `DOS_META/FAT/IO/ENV=0x5000/0x5200/0x5400/0x5600`, `DOS_HEAP_LIMIT_SEG=0x9F00`) and re-hardened the dedicated DOOM taxonomy lane to validate actual DOOM startup/rendering (`dosapp` profile, `visual_gameplay` minimum stage, automatic screendump, 35s observation window). This removes the false CIUKEDIT alias behavior in the legacy target and avoids long-window host QEMU `rc=139` crashes from masking successful DOOM runtime progress.
+	Validation evidence: `make build-full` PASS.
+	Validation evidence: `make qemu-test-full-doom-taxonomy` PASS (DOOM reached `visual_gameplay` with screenshot diversity 640x400 / nonblank_samples=21216 / unique_sampled_colors=122).
+	Validation evidence: `env DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=35 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh` FAIL (WOLF3D still returns to shell during observation window).
+
+63. Fixed Stage1 INT 21h AH=67h PSP bookkeeping regression in the handle-count setter path by preserving AX across `int21_get_psp` (helper no longer zeroes AX), so the caller-requested handle count is written correctly to `PSP:0032` instead of being accidentally forced to zero after `run` handoff; this targets immediate clean exits in DOS C-runtime programs (including WOLF3D) while keeping DOOM behavior unchanged.
+	Validation evidence: `DO_BUILD=1 LOG_FILE=build/full/qemu-wolf-fix.log DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_OBSERVE_SEC=90 QEMU_TIMEOUT_SEC=420 bash scripts/qemu_test_full_dos_taxonomy.sh` FAIL (`[M]` observed, then shell prompt `C:\APPS\WOLF3D\>` returned in the same runtime log).
+	Validation evidence: `DO_BUILD=0 LOG_FILE=build/full/qemu-doom-fix.log DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_OBSERVE_SEC=45 QEMU_TIMEOUT_SEC=300 bash scripts/qemu_test_full_dos_taxonomy.sh` non-regression evidence captured in serial log (`[M]` plus DOOM startup through DOS/4GW and `DOOM System Startup` markers; no shell prompt return observed before interruption).
 
 ## pre-Alpha v0.6.5 (2026-05-05)
 1. Established the Stage1/runtime split architecture as the next structural direction: Stage1 is now documented as a loader boundary, with DOS runtime, shell, driver/CD policy, diagnostics, and module responsibilities mapped for migration into loaded components under `\SYSTEM`.

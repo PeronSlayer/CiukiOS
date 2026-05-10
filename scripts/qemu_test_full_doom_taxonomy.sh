@@ -6,39 +6,39 @@ cd "$ROOT_DIR"
 
 DO_BUILD="${DO_BUILD:-1}"
 IMG="${IMG:-build/full/ciukios-full.img}"
-DOOM_DIR_IN_IMAGE="${DOOM_DIR_IN_IMAGE:-::APPS/DOOM}"
-DOOM_EXE_NAME="${DOOM_EXE_NAME:-DOOM.EXE}"
-DOOM_WAD_PRIMARY="${DOOM_WAD_PRIMARY:-DOOM1.WAD}"
-DOOM_WAD_ALIAS="${DOOM_WAD_ALIAS:-DOOM.WAD}"
-LOG_FILE="${LOG_FILE:-build/full/qemu-full-doom-taxonomy.log}"
-DOOM_RUNTIME_LOG="${DOOM_RUNTIME_LOG:-build/full/qemu-visual.log}"
-QEMU_TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-45}"
-DOOM_TAXONOMY_MIN_STAGE="${DOOM_TAXONOMY_MIN_STAGE:-wad_found}"
-DOOM_TAXONOMY_PROFILE="${DOOM_TAXONOMY_PROFILE:-doom}"
-DOOM_TAXONOMY_STRICT="${DOOM_TAXONOMY_STRICT:-0}"
-DOOM_TAXONOMY_LAUNCH="${DOOM_TAXONOMY_LAUNCH:-1}"
-DOOM_TAXONOMY_RUN_DRVLOAD="${DOOM_TAXONOMY_RUN_DRVLOAD:-1}"
-DOOM_TAXONOMY_PROMPT_TIMEOUT_SEC="${DOOM_TAXONOMY_PROMPT_TIMEOUT_SEC:-120}"
-DOOM_TAXONOMY_MARKER_TIMEOUT_SEC="${DOOM_TAXONOMY_MARKER_TIMEOUT_SEC:-45}"
-DOOM_TAXONOMY_OBSERVE_SEC="${DOOM_TAXONOMY_OBSERVE_SEC:-15}"
-DOOM_TAXONOMY_DOOM_CWD="${DOOM_TAXONOMY_DOOM_CWD:-\\APPS\\DOOM}"
-DOOM_TAXONOMY_APP_DIR_IN_IMAGE="${DOOM_TAXONOMY_APP_DIR_IN_IMAGE:-$DOOM_DIR_IN_IMAGE}"
-DOOM_TAXONOMY_APP_BINARY_NAME="${DOOM_TAXONOMY_APP_BINARY_NAME:-$DOOM_EXE_NAME}"
-DOOM_TAXONOMY_RUN_COMMAND="${DOOM_TAXONOMY_RUN_COMMAND:-run ${DOOM_TAXONOMY_APP_BINARY_NAME}}"
-DOOM_TAXONOMY_APP_RUNTIME_MARKERS="${DOOM_TAXONOMY_APP_RUNTIME_MARKERS:-}"
-DOOM_TAXONOMY_DISPLAY_MODE="${DOOM_TAXONOMY_DISPLAY_MODE:-nographic}"
-DOOM_TAXONOMY_SCREENSHOT="${DOOM_TAXONOMY_SCREENSHOT:-}"
-DOOM_QEMU_STDERR="${DOOM_QEMU_STDERR:-build/full/qemu-full-doom-taxonomy.stderr.log}"
-DOOM_QEMU_CMD_LOG="${DOOM_QEMU_CMD_LOG:-build/full/qemu-full-doom-taxonomy.commands.log}"
-DOOM_MON_SOCK="${DOOM_MON_SOCK:-/tmp/ciukios-doom-taxonomy.monitor.sock}"
+DOS_APP_DIR_IN_IMAGE="${DOS_APP_DIR_IN_IMAGE:-::APPS/DOOM}"
+DOS_APP_EXE_NAME="${DOS_APP_EXE_NAME:-DOOM.EXE}"
+DOS_APP_AUX_PRIMARY="${DOS_APP_AUX_PRIMARY:-DOOM1.WAD}"
+DOS_APP_AUX_ALIAS="${DOS_APP_AUX_ALIAS:-DOOM.WAD}"
+LOG_FILE="${LOG_FILE:-build/full/qemu-full-dos-taxonomy.log}"
+RUNTIME_LOG_FILE="${RUNTIME_LOG_FILE:-build/full/qemu-visual.log}"
+QEMU_TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-260}"
+DOS_TAXONOMY_MIN_STAGE="${DOS_TAXONOMY_MIN_STAGE:-visual_gameplay}"
+DOS_TAXONOMY_PROFILE="${DOS_TAXONOMY_PROFILE:-dosapp}"
+DOS_TAXONOMY_STRICT="${DOS_TAXONOMY_STRICT:-0}"
+DOS_TAXONOMY_LAUNCH="${DOS_TAXONOMY_LAUNCH:-1}"
+DOS_TAXONOMY_RUN_DRVLOAD="${DOS_TAXONOMY_RUN_DRVLOAD:-0}"
+DOS_TAXONOMY_PROMPT_TIMEOUT_SEC="${DOS_TAXONOMY_PROMPT_TIMEOUT_SEC:-120}"
+DOS_TAXONOMY_MARKER_TIMEOUT_SEC="${DOS_TAXONOMY_MARKER_TIMEOUT_SEC:-45}"
+DOS_TAXONOMY_OBSERVE_SEC="${DOS_TAXONOMY_OBSERVE_SEC:-35}"
+DOS_TAXONOMY_CWD="${DOS_TAXONOMY_CWD:-\\APPS\\DOOM}"
+DOS_TAXONOMY_APP_DIR_IN_IMAGE="${DOS_TAXONOMY_APP_DIR_IN_IMAGE:-$DOS_APP_DIR_IN_IMAGE}"
+DOS_TAXONOMY_APP_BINARY_NAME="${DOS_TAXONOMY_APP_BINARY_NAME:-$DOS_APP_EXE_NAME}"
+DOS_TAXONOMY_RUN_COMMAND="${DOS_TAXONOMY_RUN_COMMAND:-run ${DOS_TAXONOMY_APP_BINARY_NAME}}"
+DOS_TAXONOMY_APP_RUNTIME_MARKERS="${DOS_TAXONOMY_APP_RUNTIME_MARKERS:-}"
+DOS_TAXONOMY_DISPLAY_MODE="${DOS_TAXONOMY_DISPLAY_MODE:-none}"
+DOS_TAXONOMY_SCREENSHOT="${DOS_TAXONOMY_SCREENSHOT:-build/full/qemu-full-doom-taxonomy.ppm}"
+QEMU_STDERR="${QEMU_STDERR:-build/full/qemu-full-dos-taxonomy.stderr.log}"
+QEMU_CMD_LOG="${QEMU_CMD_LOG:-build/full/qemu-full-dos-taxonomy.commands.log}"
+QEMU_MON_SOCK="${QEMU_MON_SOCK:-/tmp/ciukios-dosapp-taxonomy.monitor.sock}"
 FUTURE_MTIME_TOLERANCE_SEC="${FUTURE_MTIME_TOLERANCE_SEC:-5}"
 
-case "$DOOM_TAXONOMY_PROFILE" in
-  doom)
+case "$DOS_TAXONOMY_PROFILE" in
+  dosapp)
     STAGES=(
       binary_found
       wad_found
-      doom_exec_attempted
+      dosapp_exec_attempted
       mz_transfer
       extender_init
       video_init
@@ -54,18 +54,18 @@ case "$DOOM_TAXONOMY_PROFILE" in
       transfer_marker
       runtime_stable
     )
-    if [[ "$DOOM_TAXONOMY_MIN_STAGE" == "wad_found" ]]; then
-      DOOM_TAXONOMY_MIN_STAGE="transfer_marker"
+    if [[ "$DOS_TAXONOMY_MIN_STAGE" == "wad_found" ]]; then
+      DOS_TAXONOMY_MIN_STAGE="transfer_marker"
     fi
     ;;
   *)
-    echo "[doom-taxonomy] ERROR invalid profile: $DOOM_TAXONOMY_PROFILE (expected doom or dos_generic)" >&2
+    echo "[dos-taxonomy] ERROR invalid profile: $DOS_TAXONOMY_PROFILE (expected dosapp or dos_generic)" >&2
     exit 1
     ;;
 esac
 
-if [[ "$DOOM_TAXONOMY_PROFILE" == "dos_generic" && "$DOOM_TAXONOMY_DOOM_CWD" == "\\APPS\\DOOM" ]]; then
-  DOOM_TAXONOMY_DOOM_CWD=""
+if [[ "$DOS_TAXONOMY_PROFILE" == "dos_generic" && "$DOS_TAXONOMY_CWD" == "\\APPS\\DOSAPP" ]]; then
+  DOS_TAXONOMY_CWD=""
 fi
 
 declare -A STAGE_STATUS
@@ -112,7 +112,7 @@ set_stage() {
 
 emit_stage() {
   local stage="$1"
-  echo "[doom-taxonomy] STAGE ${stage}=${STAGE_STATUS[$stage]} detail=${STAGE_DETAIL[$stage]}"
+  echo "[dos-taxonomy] STAGE ${stage}=${STAGE_STATUS[$stage]} detail=${STAGE_DETAIL[$stage]}"
 }
 
 stage_index() {
@@ -442,24 +442,24 @@ classify_visual_gameplay() {
     return
   fi
 
-  if [[ -z "$DOOM_TAXONOMY_SCREENSHOT" ]]; then
-    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot not requested (DOOM_TAXONOMY_SCREENSHOT empty)"
+  if [[ -z "$DOS_TAXONOMY_SCREENSHOT" ]]; then
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot not requested (DOS_TAXONOMY_SCREENSHOT empty)"
     return
   fi
 
-  if [[ ! -s "$DOOM_TAXONOMY_SCREENSHOT" ]]; then
-    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot missing or empty: $DOOM_TAXONOMY_SCREENSHOT"
+  if [[ ! -s "$DOS_TAXONOMY_SCREENSHOT" ]]; then
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot missing or empty: $DOS_TAXONOMY_SCREENSHOT"
     return
   fi
 
-  screenshot_mtime="$(get_file_mtime_epoch "$DOOM_TAXONOMY_SCREENSHOT")"
+  screenshot_mtime="$(get_file_mtime_epoch "$DOS_TAXONOMY_SCREENSHOT")"
   if [[ "$screenshot_mtime" -lt "$run_start_epoch" ]]; then
-    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot stale for current run: $DOOM_TAXONOMY_SCREENSHOT (mtime=$screenshot_mtime, run_start=$run_start_epoch)"
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot stale for current run: $DOS_TAXONOMY_SCREENSHOT (mtime=$screenshot_mtime, run_start=$run_start_epoch)"
     return
   fi
 
-  if ! ppm_stats="$(ppm_visual_diversity "$DOOM_TAXONOMY_SCREENSHOT" 2>&1)"; then
-    set_stage "visual_gameplay" "FAIL" "$smoke_detail; screenshot PPM validation failed for $DOOM_TAXONOMY_SCREENSHOT: $ppm_stats"
+  if ! ppm_stats="$(ppm_visual_diversity "$DOS_TAXONOMY_SCREENSHOT" 2>&1)"; then
+    set_stage "visual_gameplay" "FAIL" "$smoke_detail; screenshot PPM validation failed for $DOS_TAXONOMY_SCREENSHOT: $ppm_stats"
     return
   fi
 
@@ -472,29 +472,29 @@ classify_visual_gameplay() {
 }
 
 classify_static_with_mdir() {
-  local app_dir="${DOOM_TAXONOMY_APP_DIR_IN_IMAGE%/}"
+  local app_dir="${DOS_TAXONOMY_APP_DIR_IN_IMAGE%/}"
 
   if ! mdir -i "$IMG" "$app_dir" >/dev/null 2>&1; then
     set_stage "binary_found" "FAIL" "directory $app_dir missing in image (mdir)"
-    if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+    if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
       set_stage "wad_found" "FAIL" "directory $app_dir missing in image (mdir)"
     fi
     return
   fi
 
-  if mdir -i "$IMG" "$app_dir/$DOOM_TAXONOMY_APP_BINARY_NAME" >/dev/null 2>&1; then
-    set_stage "binary_found" "PASS" "found $DOOM_TAXONOMY_APP_BINARY_NAME in $app_dir via mdir"
+  if mdir -i "$IMG" "$app_dir/$DOS_TAXONOMY_APP_BINARY_NAME" >/dev/null 2>&1; then
+    set_stage "binary_found" "PASS" "found $DOS_TAXONOMY_APP_BINARY_NAME in $app_dir via mdir"
   else
-    set_stage "binary_found" "FAIL" "missing $DOOM_TAXONOMY_APP_BINARY_NAME in $app_dir (mdir)"
+    set_stage "binary_found" "FAIL" "missing $DOS_TAXONOMY_APP_BINARY_NAME in $app_dir (mdir)"
   fi
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
-    if mdir -i "$IMG" "$app_dir/$DOOM_WAD_PRIMARY" >/dev/null 2>&1; then
-      set_stage "wad_found" "PASS" "found $DOOM_WAD_PRIMARY in $app_dir via mdir"
-    elif mdir -i "$IMG" "$app_dir/$DOOM_WAD_ALIAS" >/dev/null 2>&1; then
-      set_stage "wad_found" "PASS" "found $DOOM_WAD_ALIAS in $app_dir via mdir"
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
+    if mdir -i "$IMG" "$app_dir/$DOS_APP_AUX_PRIMARY" >/dev/null 2>&1; then
+      set_stage "wad_found" "PASS" "found $DOS_APP_AUX_PRIMARY in $app_dir via mdir"
+    elif mdir -i "$IMG" "$app_dir/$DOS_APP_AUX_ALIAS" >/dev/null 2>&1; then
+      set_stage "wad_found" "PASS" "found $DOS_APP_AUX_ALIAS in $app_dir via mdir"
     else
-      set_stage "wad_found" "FAIL" "missing $DOOM_WAD_PRIMARY/$DOOM_WAD_ALIAS in $app_dir (mdir)"
+      set_stage "wad_found" "FAIL" "missing $DOS_APP_AUX_PRIMARY/$DOS_APP_AUX_ALIAS in $app_dir (mdir)"
     fi
   fi
 }
@@ -510,19 +510,19 @@ classify_static_with_strings() {
     return
   fi
 
-  if grep -Fqi "$DOOM_TAXONOMY_APP_BINARY_NAME" "$dump_file"; then
-    set_stage "binary_found" "PASS" "found $DOOM_TAXONOMY_APP_BINARY_NAME via strings fallback"
+  if grep -Fqi "$DOS_TAXONOMY_APP_BINARY_NAME" "$dump_file"; then
+    set_stage "binary_found" "PASS" "found $DOS_TAXONOMY_APP_BINARY_NAME via strings fallback"
   else
-    set_stage "binary_found" "FAIL" "missing $DOOM_TAXONOMY_APP_BINARY_NAME via strings fallback"
+    set_stage "binary_found" "FAIL" "missing $DOS_TAXONOMY_APP_BINARY_NAME via strings fallback"
   fi
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
-    if grep -Fqi "$DOOM_WAD_PRIMARY" "$dump_file"; then
-      set_stage "wad_found" "PASS" "found $DOOM_WAD_PRIMARY via strings fallback"
-    elif grep -Fqi "$DOOM_WAD_ALIAS" "$dump_file"; then
-      set_stage "wad_found" "PASS" "found $DOOM_WAD_ALIAS via strings fallback"
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
+    if grep -Fqi "$DOS_APP_AUX_PRIMARY" "$dump_file"; then
+      set_stage "wad_found" "PASS" "found $DOS_APP_AUX_PRIMARY via strings fallback"
+    elif grep -Fqi "$DOS_APP_AUX_ALIAS" "$dump_file"; then
+      set_stage "wad_found" "PASS" "found $DOS_APP_AUX_ALIAS via strings fallback"
     else
-      set_stage "wad_found" "FAIL" "missing $DOOM_WAD_PRIMARY/$DOOM_WAD_ALIAS via strings fallback"
+      set_stage "wad_found" "FAIL" "missing $DOS_APP_AUX_PRIMARY/$DOS_APP_AUX_ALIAS via strings fallback"
     fi
   fi
 
@@ -544,17 +544,17 @@ classify_runtime() {
   local qemu_rc=0
   local -a qemu_display_args
   local drvload_done_pattern='\[DRVLOAD\][[:space:]]+DONE|\[\[DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
-  local doom_cmd="$DOOM_TAXONOMY_RUN_COMMAND"
-  local launch_detail="$doom_cmd"
-  local exec_stage_name="doom_exec_attempted"
+  local dosapp_cmd="$DOS_TAXONOMY_RUN_COMMAND"
+  local launch_detail="$dosapp_cmd"
+  local exec_stage_name="dosapp_exec_attempted"
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "dos_generic" ]]; then
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dos_generic" ]]; then
     exec_stage_name="exec_attempted"
   fi
 
   if ! qemu_available; then
     set_stage "$exec_stage_name" "DEFERRED" "qemu unavailable; runtime probe skipped"
-    if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+    if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
       set_stage "mz_transfer" "DEFERRED" "qemu unavailable; runtime probe skipped"
       set_stage "extender_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
       set_stage "video_init" "DEFERRED" "qemu unavailable; runtime probe skipped"
@@ -567,9 +567,9 @@ classify_runtime() {
     return
   fi
 
-  if [[ "$DOOM_TAXONOMY_LAUNCH" != "0" && "$DOOM_TAXONOMY_LAUNCH" != "1" ]]; then
-    set_stage "$exec_stage_name" "FAIL" "invalid DOOM_TAXONOMY_LAUNCH=$DOOM_TAXONOMY_LAUNCH (expected 0 or 1)"
-    if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+  if [[ "$DOS_TAXONOMY_LAUNCH" != "0" && "$DOS_TAXONOMY_LAUNCH" != "1" ]]; then
+    set_stage "$exec_stage_name" "FAIL" "invalid DOS_TAXONOMY_LAUNCH=$DOS_TAXONOMY_LAUNCH (expected 0 or 1)"
+    if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
       set_stage "mz_transfer" "DEFERRED" "runtime launch skipped due invalid launch mode"
       set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
       set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid launch mode"
@@ -584,21 +584,21 @@ classify_runtime() {
 
   mkdir -p "$(dirname "$LOG_FILE")"
   capture_log_metadata "$LOG_FILE"
-  if [[ "$DOOM_RUNTIME_LOG" != "$LOG_FILE" ]]; then
-    capture_log_metadata "$DOOM_RUNTIME_LOG"
+  if [[ "$RUNTIME_LOG_FILE" != "$LOG_FILE" ]]; then
+    capture_log_metadata "$RUNTIME_LOG_FILE"
   fi
 
   runtime_run_start_epoch="$(date +%s)"
-  rm -f "$LOG_FILE" "$DOOM_QEMU_STDERR" "$DOOM_QEMU_CMD_LOG" "$DOOM_MON_SOCK"
-  if [[ -n "$DOOM_TAXONOMY_SCREENSHOT" ]]; then
-    mkdir -p "$(dirname "$DOOM_TAXONOMY_SCREENSHOT")"
-    rm -f "$DOOM_TAXONOMY_SCREENSHOT"
+  rm -f "$LOG_FILE" "$QEMU_STDERR" "$QEMU_CMD_LOG" "$QEMU_MON_SOCK"
+  if [[ -n "$DOS_TAXONOMY_SCREENSHOT" ]]; then
+    mkdir -p "$(dirname "$DOS_TAXONOMY_SCREENSHOT")"
+    rm -f "$DOS_TAXONOMY_SCREENSHOT"
   fi
 
-  if [[ "$DOOM_TAXONOMY_LAUNCH" == "1" ]]; then
+  if [[ "$DOS_TAXONOMY_LAUNCH" == "1" ]]; then
     if ! command_exists socat; then
       set_stage "$exec_stage_name" "DEFERRED" "socat unavailable; interactive app launch skipped"
-      if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+      if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
         set_stage "mz_transfer" "DEFERRED" "socat unavailable; interactive app launch skipped"
         set_stage "extender_init" "DEFERRED" "socat unavailable; interactive app launch skipped"
         set_stage "video_init" "DEFERRED" "socat unavailable; interactive app launch skipped"
@@ -607,17 +607,17 @@ classify_runtime() {
       else
         set_stage "transfer_marker" "DEFERRED" "socat unavailable; interactive app launch skipped"
       fi
-      set_stage "runtime_stable" "DEFERRED" "socat unavailable; interactive DOOM launch skipped"
+      set_stage "runtime_stable" "DEFERRED" "socat unavailable; interactive DOSAPP launch skipped"
       return
     fi
 
     qemu_cmd="$(pick_qemu)"
-    case "$DOOM_TAXONOMY_DISPLAY_MODE" in
+    case "$DOS_TAXONOMY_DISPLAY_MODE" in
       nographic) qemu_display_args=(-nographic) ;;
       none) qemu_display_args=(-display none) ;;
       *)
-        set_stage "$exec_stage_name" "FAIL" "invalid DOOM_TAXONOMY_DISPLAY_MODE=$DOOM_TAXONOMY_DISPLAY_MODE (expected nographic or none)"
-        if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+        set_stage "$exec_stage_name" "FAIL" "invalid DOS_TAXONOMY_DISPLAY_MODE=$DOS_TAXONOMY_DISPLAY_MODE (expected nographic or none)"
+        if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
           set_stage "mz_transfer" "DEFERRED" "runtime launch skipped due invalid display mode"
           set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid display mode"
           set_stage "video_init" "DEFERRED" "runtime launch skipped due invalid display mode"
@@ -640,7 +640,7 @@ classify_runtime() {
       "${qemu_display_args[@]}"
       -chardev "file,id=ser0,path=$LOG_FILE"
       -serial chardev:ser0
-      -monitor "unix:$DOOM_MON_SOCK,server,nowait"
+      -monitor "unix:$QEMU_MON_SOCK,server,nowait"
       -no-reboot
       -no-shutdown
     )
@@ -652,45 +652,45 @@ classify_runtime() {
     fi
 
     set +e
-    timeout "$QEMU_TIMEOUT_SEC" "$qemu_cmd" "${QEMU_ARGS[@]}" >/dev/null 2>"$DOOM_QEMU_STDERR" &
+    timeout "$QEMU_TIMEOUT_SEC" "$qemu_cmd" "${QEMU_ARGS[@]}" >/dev/null 2>"$QEMU_STDERR" &
     qemu_pid=$!
     set -e
 
     ACTIVE_QEMU_PID="$qemu_pid"
-    ACTIVE_MON_SOCK="$DOOM_MON_SOCK"
-    ACTIVE_CMD_LOG="$DOOM_QEMU_CMD_LOG"
+    ACTIVE_MON_SOCK="$QEMU_MON_SOCK"
+    ACTIVE_CMD_LOG="$QEMU_CMD_LOG"
 
-    if ! wait_for_socket "$DOOM_MON_SOCK" 20; then
+    if ! wait_for_socket "$QEMU_MON_SOCK" 20; then
       set_stage "$exec_stage_name" "FAIL" "monitor socket not ready"
-    elif ! wait_for_shell_prompt "$LOG_FILE" "$DOOM_TAXONOMY_PROMPT_TIMEOUT_SEC"; then
+    elif ! wait_for_shell_prompt "$LOG_FILE" "$DOS_TAXONOMY_PROMPT_TIMEOUT_SEC"; then
       set_stage "$exec_stage_name" "FAIL" "shell prompt not detected before app launch"
     else
-      if [[ "$DOOM_TAXONOMY_RUN_DRVLOAD" == "1" ]]; then
-        if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" 'run \SYSTEM\DRIVERS\DRVLOAD.COM'; then
-          wait_for_regex "$LOG_FILE" "$drvload_done_pattern" "$DOOM_TAXONOMY_MARKER_TIMEOUT_SEC" || true
+      if [[ "$DOS_TAXONOMY_RUN_DRVLOAD" == "1" ]]; then
+        if send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" 'run \SYSTEM\DRIVERS\DRVLOAD.COM'; then
+          wait_for_regex "$LOG_FILE" "$drvload_done_pattern" "$DOS_TAXONOMY_MARKER_TIMEOUT_SEC" || true
           wait_for_shell_prompt "$LOG_FILE" 30 || true
         fi
       fi
 
-      if [[ -n "$DOOM_TAXONOMY_DOOM_CWD" ]]; then
-        if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "cd $DOOM_TAXONOMY_DOOM_CWD"; then
+      if [[ -n "$DOS_TAXONOMY_CWD" ]]; then
+        if send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "cd $DOS_TAXONOMY_CWD"; then
           wait_for_shell_prompt "$LOG_FILE" 30 || true
-          launch_detail="cd $DOOM_TAXONOMY_DOOM_CWD; $doom_cmd"
+          launch_detail="cd $DOS_TAXONOMY_CWD; $dosapp_cmd"
         fi
       fi
 
-      if send_text_and_enter "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "$doom_cmd"; then
+      if send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$dosapp_cmd"; then
         set_stage "$exec_stage_name" "PASS" "sent shell command: $launch_detail"
-        observe_runtime_window "$qemu_pid" "$DOOM_TAXONOMY_OBSERVE_SEC"
-        if [[ -n "$DOOM_TAXONOMY_SCREENSHOT" ]]; then
-          hmp "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "screendump $DOOM_TAXONOMY_SCREENSHOT" >/dev/null 2>&1 || true
+        observe_runtime_window "$qemu_pid" "$DOS_TAXONOMY_OBSERVE_SEC"
+        if [[ -n "$DOS_TAXONOMY_SCREENSHOT" ]]; then
+          hmp "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "screendump $DOS_TAXONOMY_SCREENSHOT" >/dev/null 2>&1 || true
         fi
       else
-        set_stage "$exec_stage_name" "FAIL" "failed to send shell command: $doom_cmd"
+        set_stage "$exec_stage_name" "FAIL" "failed to send shell command: $dosapp_cmd"
       fi
     fi
 
-    hmp "$DOOM_MON_SOCK" "$DOOM_QEMU_CMD_LOG" "quit" >/dev/null 2>&1 || true
+    hmp "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "quit" >/dev/null 2>&1 || true
     set +e
     wait "$qemu_pid"
     qemu_rc=$?
@@ -698,7 +698,7 @@ classify_runtime() {
     ACTIVE_QEMU_PID=0
     ACTIVE_MON_SOCK=""
     ACTIVE_CMD_LOG=""
-    rm -f "$DOOM_MON_SOCK"
+    rm -f "$QEMU_MON_SOCK"
     smoke_rc="$qemu_rc"
   else
     set +e
@@ -707,11 +707,11 @@ classify_runtime() {
     smoke_rc=$?
     set -e
 
-    set_stage "$exec_stage_name" "DEFERRED" "interactive app launch disabled (DOOM_TAXONOMY_LAUNCH=0)"
-    if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
-      set_stage "mz_transfer" "DEFERRED" "interactive app launch disabled (DOOM_TAXONOMY_LAUNCH=0)"
+    set_stage "$exec_stage_name" "DEFERRED" "interactive app launch disabled (DOS_TAXONOMY_LAUNCH=0)"
+    if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
+      set_stage "mz_transfer" "DEFERRED" "interactive app launch disabled (DOS_TAXONOMY_LAUNCH=0)"
     else
-      set_stage "transfer_marker" "DEFERRED" "interactive app launch disabled (DOOM_TAXONOMY_LAUNCH=0)"
+      set_stage "transfer_marker" "DEFERRED" "interactive app launch disabled (DOS_TAXONOMY_LAUNCH=0)"
     fi
   fi
 
@@ -731,12 +731,12 @@ classify_runtime() {
       stale_runtime_log_details+=("$LOG_FILE ($LOG_FRESHNESS_REASON)")
     fi
   fi
-  if [[ -s "$DOOM_RUNTIME_LOG" && "$DOOM_RUNTIME_LOG" != "$LOG_FILE" ]]; then
-    if log_is_fresh_for_run "$DOOM_RUNTIME_LOG" "$runtime_run_start_epoch"; then
-      runtime_logs+=("$DOOM_RUNTIME_LOG")
+  if [[ -s "$RUNTIME_LOG_FILE" && "$RUNTIME_LOG_FILE" != "$LOG_FILE" ]]; then
+    if log_is_fresh_for_run "$RUNTIME_LOG_FILE" "$runtime_run_start_epoch"; then
+      runtime_logs+=("$RUNTIME_LOG_FILE")
     else
-      stale_runtime_logs+=("$DOOM_RUNTIME_LOG")
-      stale_runtime_log_details+=("$DOOM_RUNTIME_LOG ($LOG_FRESHNESS_REASON)")
+      stale_runtime_logs+=("$RUNTIME_LOG_FILE")
+      stale_runtime_log_details+=("$RUNTIME_LOG_FILE ($LOG_FRESHNESS_REASON)")
     fi
   fi
 
@@ -755,7 +755,7 @@ classify_runtime() {
     if [[ "${STAGE_STATUS[$exec_stage_name]}" == "DEFERRED" ]]; then
       set_stage "$exec_stage_name" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
     fi
-    if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+    if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
       set_stage "mz_transfer" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
       set_stage "extender_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
       set_stage "video_init" "DEFERRED" "$smoke_detail; no fresh runtime logs available$stale_detail"
@@ -768,8 +768,9 @@ classify_runtime() {
     return
   fi
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
     if log_has_fixed_marker '[MZ] run' "${runtime_logs[@]}" \
+      || log_has_fixed_marker '[M]' "${runtime_logs[@]}" \
       || log_has_pattern '\\[\\[MMZZ\\]\\][[:space:]]+rruunn' "${runtime_logs[@]}"; then
       set_stage "mz_transfer" "PASS" "$smoke_detail; MZ transfer marker observed in fresh logs: $runtime_log_sources"
     else
@@ -777,50 +778,51 @@ classify_runtime() {
     fi
   else
     if log_has_fixed_marker '[MZ] run' "${runtime_logs[@]}" \
+      || log_has_fixed_marker '[M]' "${runtime_logs[@]}" \
       || log_has_fixed_marker '[COM] run' "${runtime_logs[@]}" \
       || log_has_pattern '\\[\\[(MMZZ|CCOOMM)\\]\\][[:space:]]+rruunn' "${runtime_logs[@]}"; then
       set_stage "transfer_marker" "PASS" "$smoke_detail; COM/MZ transfer marker observed in fresh logs: $runtime_log_sources"
-    elif [[ -n "$DOOM_TAXONOMY_APP_RUNTIME_MARKERS" ]] && \
-      log_has_pattern "$DOOM_TAXONOMY_APP_RUNTIME_MARKERS" "${runtime_logs[@]}"; then
-      set_stage "transfer_marker" "PASS" "$smoke_detail; inferred transfer from app-specific runtime markers (DOOM_TAXONOMY_APP_RUNTIME_MARKERS) in fresh logs: $runtime_log_sources"
+    elif [[ -n "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" ]] && \
+      log_has_pattern "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" "${runtime_logs[@]}"; then
+      set_stage "transfer_marker" "PASS" "$smoke_detail; inferred transfer from app-specific runtime markers (DOS_TAXONOMY_APP_RUNTIME_MARKERS) in fresh logs: $runtime_log_sources"
     else
       set_stage "transfer_marker" "DEFERRED" "$smoke_detail; COM/MZ transfer marker not observed in fresh logs: $runtime_log_sources"
     fi
   fi
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
     if log_has_pattern 'cannot allocate tstack|ccaannnnoott[[:space:]]+aallllooccaattee[[:space:]]+ttssttaacck' "${runtime_logs[@]}"; then
       set_stage "extender_init" "FAIL" "$smoke_detail; DOS/16M tstack allocation failed in fresh logs: $runtime_log_sources"
     elif log_has_pattern "not a DOS/16M executable|nnoott[[:space:]]+aa[[:space:]]+DDOOSS//1166MM[[:space:]]+eexxeeccuuttaabbllee" "${runtime_logs[@]}"; then
       set_stage "extender_init" "FAIL" "$smoke_detail; DOS/16M executable validation failed in fresh logs: $runtime_log_sources"
-    elif log_has_fixed_marker '[ doom ] stage reached: extender_init' "${runtime_logs[@]}" \
-      || log_has_pattern '\\[ *doom *\\].*stage reached: *(extender_init|extender)|OpenGEM: extender (probe complete|mode=dpmi-stub)|DOS/?4G|DOS/?16M|DDOOSS//44GGWW|DDOOSS//1166MM|DPMI' "${runtime_logs[@]}"; then
+    elif log_has_fixed_marker '[ dosapp ] stage reached: extender_init' "${runtime_logs[@]}" \
+      || log_has_pattern '\\[ *dosapp *\\].*stage reached: *(extender_init|extender)|OpenGEM: extender (probe complete|mode=dpmi-stub)|DOS/?4G|DOS/?16M|DDOOSS//44GGWW|DDOOSS//1166MM|DPMI' "${runtime_logs[@]}"; then
       set_stage "extender_init" "PASS" "$smoke_detail; extender marker observed in fresh logs: $runtime_log_sources"
     else
       set_stage "extender_init" "DEFERRED" "$smoke_detail; extender marker not observed in fresh logs: $runtime_log_sources"
     fi
   fi
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
     if log_has_pattern 'Game mode indeterminate|GGaammee[[:space:]]+mmooddee[[:space:]]+iinnddeetteerrmmiinnaattee' "${runtime_logs[@]}"; then
-      set_stage "video_init" "FAIL" "$smoke_detail; DOOM exited before video because IWAD/game mode was not resolved in fresh logs: $runtime_log_sources"
-    elif log_has_fixed_marker '[ doom ] stage reached: video' "${runtime_logs[@]}" \
-      || log_has_fixed_marker '[ doom ] stage reached: video/menu' "${runtime_logs[@]}" \
-      || log_has_pattern '\\[ *doom *\\].*stage reached: *(video|video/menu|gfx)|I_InitGraphics|I__Init|II__IInniitt|V_Init|VV__IInniitt|DOOM System Startup|DDOOOOMM[[:space:]]+SSyysstteemm[[:space:]]+SSttaarrttuupp|video init' "${runtime_logs[@]}"; then
+      set_stage "video_init" "FAIL" "$smoke_detail; DOSAPP exited before video because IWAD/game mode was not resolved in fresh logs: $runtime_log_sources"
+    elif log_has_fixed_marker '[ dosapp ] stage reached: video' "${runtime_logs[@]}" \
+      || log_has_fixed_marker '[ dosapp ] stage reached: video/menu' "${runtime_logs[@]}" \
+      || log_has_pattern '\\[ *dosapp *\\].*stage reached: *(video|video/menu|gfx)|I_InitGraphics|I__Init|II__IInniitt|V_Init|VV__IInniitt|DOSAPP System Startup|DDOOOOMM[[:space:]]+SSyysstteemm[[:space:]]+SSttaarrttuupp|video init' "${runtime_logs[@]}"; then
       set_stage "video_init" "PASS" "$smoke_detail; video marker observed in fresh logs: $runtime_log_sources"
     else
       set_stage "video_init" "DEFERRED" "$smoke_detail; video marker not observed in fresh logs: $runtime_log_sources"
     fi
   fi
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" \
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" \
     && "${STAGE_STATUS[extender_init]}" == "DEFERRED" \
     && "${STAGE_STATUS[mz_transfer]}" == "PASS" \
     && "${STAGE_STATUS[video_init]}" == "PASS" ]]; then
     set_stage "extender_init" "PASS" "$smoke_detail; inferred extender init from strong evidence chain (mz_transfer=PASS and video_init=PASS) in fresh logs: $runtime_log_sources"
   fi
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" && "${STAGE_STATUS[video_init]}" != "PASS" ]]; then
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" && "${STAGE_STATUS[video_init]}" != "PASS" ]]; then
     set_stage "runtime_stable" "DEFERRED" "$smoke_detail; video gate not passed, stability window not evaluated"
   elif [[ $smoke_rc -eq 0 ]]; then
     set_stage "runtime_stable" "PASS" "$smoke_detail; QEMU remained controllable through the observation window"
@@ -832,12 +834,12 @@ classify_runtime() {
     set_stage "runtime_stable" "FAIL" "$smoke_detail; QEMU exited unexpectedly during the post-video observation window"
   fi
 
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
     classify_visual_gameplay "$runtime_run_start_epoch" "$smoke_detail"
 
-    if log_has_fixed_marker '[ doom ] stage reached: menu' "${runtime_logs[@]}" \
-      || log_has_fixed_marker '[ doom ] stage reached: video/menu' "${runtime_logs[@]}" \
-      || log_has_pattern '\\[ *doom *\\].*stage reached: *(menu|video/menu)|D_DoomMain|TITLEPIC|new game' "${runtime_logs[@]}"; then
+    if log_has_fixed_marker '[ dosapp ] stage reached: menu' "${runtime_logs[@]}" \
+      || log_has_fixed_marker '[ dosapp ] stage reached: video/menu' "${runtime_logs[@]}" \
+      || log_has_pattern '\\[ *dosapp *\\].*stage reached: *(menu|video/menu)|D_Main_Generic|TITLEPIC|new game' "${runtime_logs[@]}"; then
       set_stage "menu_reached" "PASS" "$smoke_detail; menu marker observed in fresh logs: $runtime_log_sources"
     else
       set_stage "menu_reached" "DEFERRED" "$smoke_detail; menu marker not observed in fresh logs: $runtime_log_sources"
@@ -845,13 +847,13 @@ classify_runtime() {
   fi
 }
 
-if [[ "$DOOM_TAXONOMY_STRICT" != "0" && "$DOOM_TAXONOMY_STRICT" != "1" ]]; then
-  echo "[doom-taxonomy] ERROR invalid strict mode: $DOOM_TAXONOMY_STRICT (expected 0 or 1)" >&2
+if [[ "$DOS_TAXONOMY_STRICT" != "0" && "$DOS_TAXONOMY_STRICT" != "1" ]]; then
+  echo "[dos-taxonomy] ERROR invalid strict mode: $DOS_TAXONOMY_STRICT (expected 0 or 1)" >&2
   exit 1
 fi
 
-if ! MIN_STAGE_INDEX="$(stage_index "$DOOM_TAXONOMY_MIN_STAGE")"; then
-  echo "[doom-taxonomy] ERROR invalid min stage: $DOOM_TAXONOMY_MIN_STAGE" >&2
+if ! MIN_STAGE_INDEX="$(stage_index "$DOS_TAXONOMY_MIN_STAGE")"; then
+  echo "[dos-taxonomy] ERROR invalid min stage: $DOS_TAXONOMY_MIN_STAGE" >&2
   exit 1
 fi
 
@@ -865,14 +867,14 @@ if [[ "$DO_BUILD" == "1" ]]; then
   build_rc=$?
   set -e
   if [[ $build_rc -ne 0 ]]; then
-    echo "[doom-taxonomy] ERROR build failed rc=$build_rc (DO_BUILD=1)" >&2
+    echo "[dos-taxonomy] ERROR build failed rc=$build_rc (DO_BUILD=1)" >&2
     exit "$build_rc"
   fi
 fi
 
 if [[ ! -f "$IMG" ]]; then
   set_stage "binary_found" "FAIL" "image not found: $IMG"
-  if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
     set_stage "wad_found" "FAIL" "image not found: $IMG"
     set_stage "mz_transfer" "DEFERRED" "runtime probe skipped (image missing)"
     set_stage "extender_init" "DEFERRED" "runtime probe skipped (image missing)"
@@ -891,7 +893,7 @@ else
     classify_static_with_strings
   else
     set_stage "binary_found" "FAIL" "missing mdir and strings tooling"
-    if [[ "$DOOM_TAXONOMY_PROFILE" == "doom" ]]; then
+    if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
       set_stage "wad_found" "FAIL" "missing mdir and strings tooling"
     fi
   fi
@@ -917,7 +919,7 @@ for ((i=0; i<=MIN_STAGE_INDEX; i++)); do
   fi
 done
 
-if [[ "$RESULT" == "PASS" && "$DOOM_TAXONOMY_STRICT" == "1" ]]; then
+if [[ "$RESULT" == "PASS" && "$DOS_TAXONOMY_STRICT" == "1" ]]; then
   for stage in "${STAGES[@]}"; do
     if [[ "${STAGE_STATUS[$stage]}" != "PASS" ]]; then
       RESULT="FAIL"
@@ -930,7 +932,7 @@ for stage in "${STAGES[@]}"; do
   emit_stage "$stage"
 done
 
-echo "[doom-taxonomy] SUMMARY min_stage=$DOOM_TAXONOMY_MIN_STAGE reached=$REACHED_STAGE result=$RESULT"
+echo "[dos-taxonomy] SUMMARY min_stage=$DOS_TAXONOMY_MIN_STAGE reached=$REACHED_STAGE result=$RESULT"
 
 if [[ "$RESULT" != "PASS" ]]; then
   exit 1
