@@ -107,7 +107,7 @@ Keep third-party payloads legally supplied, local, and untracked unless a licens
 
 The full profile now includes a narrow SB16 validation path. `SB16INIT.COM` probes Sound Blaster-compatible DSP bases, verifies the QEMU SB16 DSP at `0x220`, and plays a short direct-DAC tone. `DRVLOAD.COM /AUDIO` runs that helper from `C:\SYSTEM\DRIVERS`.
 
-QEMU full-profile runners support `QEMU_AUDIO_MODE=auto|on|off` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|none`. Headless tests use the non-audible `none` backend; for an audible local run, use a host backend such as PipeWire or PulseAudio and then run `\SYSTEM\DRIVERS\DRVLOAD.COM /AUDIO` from the shell.
+QEMU full-profile runners support `QEMU_AUDIO_MODE=off|auto|on` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|none`. The default is `off` so DOS games do not auto-detect an incomplete sound path during compatibility runs; for an audible local probe, set `QEMU_AUDIO_MODE=on` with a host backend such as PipeWire or PulseAudio and then run `\SYSTEM\DRIVERS\DRVLOAD.COM /AUDIO` from the shell.
 
 This is SB16 DSP and direct-DAC tone evidence. Broader DOS game audio, AdLib/OPL behavior, DMA/IRQ playback paths, and DOOM in-game audio remain follow-up compatibility work.
 

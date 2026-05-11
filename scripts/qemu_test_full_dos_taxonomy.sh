@@ -38,7 +38,7 @@ QEMU_STDERR="${QEMU_STDERR:-build/full/qemu-full-dos-taxonomy.stderr.log}"
 QEMU_CMD_LOG="${QEMU_CMD_LOG:-build/full/qemu-full-dos-taxonomy.commands.log}"
 QEMU_MON_SOCK="${QEMU_MON_SOCK:-/tmp/ciukios-dosapp-taxonomy.monitor.sock}"
 FUTURE_MTIME_TOLERANCE_SEC="${FUTURE_MTIME_TOLERANCE_SEC:-5}"
-QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-auto}"
+QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-off}"
 
 case "$DOS_TAXONOMY_PROFILE" in
   doom|dosapp)

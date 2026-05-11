@@ -36,7 +36,7 @@ Options:
 Environment:
   QEMU_BIN         Override QEMU binary.
   QEMU_EXTRA_ARGS  Extra args appended to QEMU command.
-  QEMU_AUDIO_MODE  Audio mode: auto, on, off (default: auto).
+  QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: off).
   QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full.log).
@@ -51,7 +51,7 @@ DO_BUILD=1
 DRY_RUN=0
 DISPLAY_BACKEND="${QEMU_DISPLAY:-gtk}"
 DISPLAY_BACKEND_EXPLICIT=0
-AUDIO_MODE="${QEMU_AUDIO_MODE:-auto}"
+AUDIO_MODE="${QEMU_AUDIO_MODE:-off}"
 
 resolve_display_backend() {
   local backend="$1"
