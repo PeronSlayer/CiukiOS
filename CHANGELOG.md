@@ -1,405 +1,78 @@
 # Changelog
 
 All notable project-level changes are tracked here.
-This changelog is intentionally concise. Every completed task must update the `Unreleased` section unless the task is a release cut that creates a new version section.
+This changelog is intentionally concise. Every completed task should update `Unreleased` unless the task cuts a release section.
 
-## Unreleased (2026-05-08)
-1. Fixed a Stage1 DOS memory-table regression in AH=4Ah resize/gap-limit scans: INVALID entries are now ignored while ALLOC and FREE entries are treated as hard boundaries, preventing stale invalid slots from skewing allocation limits and reducing random external DOS app crashes/reboots (e.g. DOSNavigator/DOOM long runs).
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
-	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` PASS.
-2. Restored DOSNavigator display rendering by reinstating four code blocks inadvertently removed by the previous memory-manager commit: (a) pre-exec chrome clear (INT 10h AH=0003h mode-set + set shell_exec_external_mouse_disabled=1 + call shell_exec_restore_bios_int10) before AH=4Bh exec, (b) corrected post-exec success path (pop ax before call shell_exec_reinstall_int10 then draw_shell_chrome), (c) full exec_failed cleanup path (reset shell_exec_external_mouse_disabled=0, mode-set, pop ax, reinstall INT 10h, redraw chrome, stc/ret), (d) INT 33h mouse-disabled guard at handler entry (cmp byte shell_exec_external_mouse_disabled / jne .external_mouse_disabled). Also corrected the int21_mem_table_next_limit memory-barrier branch from jb to ja, matching the already-correct int21_mem_find_free_gap fix applied in the prior session.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` PASS.
-3. Fixed external-DOS return-state handling for the shell `run` path by explicitly resetting `shell_exec_external_mouse_disabled` in the exec-success return flow before INT 10h hook reinstall/chrome redraw; this prevents the post-return shell session from remaining in external-mouse-disabled state after a successful DOS program launch/exit sequence.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
-4. Extended `make qemu-test-full-dos-compat-smoke` with a systematic `dos21` serial check between `CIUKEDIT` and `GFXSTAR`, requiring `[DOS21-SERIAL] PASS` plus prompt return and documenting lane coverage for INT 21h AH=38h/44h/67h via `dos21` in the lane meta log.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS (dos21 extension lane).
-5. Fixed `scripts/qemu_test_full_dos_compat_smoke.sh` to avoid DOS21 prompt false negatives by introducing `ROOT_PROMPT_PATTERN` (`CiukiOS C:\>`), introducing `SHELL_PROMPT_PATTERN` (root OR apps prompt), and using shell-prompt regex matching only for the `DOS21_PROMPT_RETURNED` step while preserving strict `C:\APPS\>` checks elsewhere.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS (added post-dos21 `cd \APPS` prompt resync to keep `GFXSTAR_PROMPT_RETURNED` green).
-6. Fixed the DOSNavigator INT 6h reboot regression on nested MZ launch paths by rolling back PSP runtime-vector inheritance to the stable behavior: exec-created program PSPs now restore the DOS-style hardcoded terminate/Ctrl-Break/critical-error vectors at PSP offsets `0x0A..0x14`, and AH=55 child PSP creation no longer copies live IVT vectors into child PSP memory. This removes the unstable vector-copy side effect seen as `[CRASH] INT 6h - reboot.` after `run DN.COM` in runtime diagnostics.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
-	Validation evidence: `env DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='Dos[[:space:]]+Navigator|\[CRASH\]|INT[[:space:]]+6h' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_OBSERVE_SEC=80 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=240 make qemu-test-full-doom-taxonomy` PASS (no crash marker in strings log).
-7. Hardened Stage1 CPU-fault behavior for external DOS apps: INT 0/6 faults raised while a shell-launched DOS child is active now set an abnormal DOS exit code (`0xFF`) and route through the existing COM/MZ terminate trampolines back to the shell instead of forcing an immediate warm reboot. Non-child/system faults keep the previous wait-key + `INT 19h` reboot behavior.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
-	Validation evidence: `env DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='Dos[[:space:]]+Navigator|\[CRASH\]|INT[[:space:]]+6h' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_OBSERVE_SEC=100 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=280 make qemu-test-full-doom-taxonomy` PASS.
-8. Compacted the Stage1 INT 0/6 fault-handler block under `STAGE2_AUTORUN == 0` by removing crash marker printing and the embedded fault string, while preserving the same functional split: recover to shell child termination (`last_exit_code=0xFF`, dispatch by frame CS through `exec_terminate_dispatch_cs`) when an external DOS child is active, otherwise immediate `INT 19h` reboot.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
-	Validation evidence: `env DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_APP_RUNTIME_MARKERS='Dos[[:space:]]+Navigator|\[CRASH\]|INT[[:space:]]+6h' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_OBSERVE_SEC=100 DOOM_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=280 make qemu-test-full-doom-taxonomy` PASS.
+## Unreleased (2026-05-11)
 
-9. Improved DOSNavigator nested COM->MZ startup stability by selecting `MZ_LOAD_SEG` for nested MZ launches when the parent process is a COM program (instead of always forcing `MZ2_LOAD_SEG`), recovering additional conventional-memory headroom for `DN.COM -> DN.PRG` startup paths; also hardened FAT16 AH=3Fh read clamping to cap reads against 32-bit file-size minus file-position deltas before I/O loops, preventing false I/O errors when reads approach EOF on large files.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
-	Validation evidence: `DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_DOOM_CWD='\APPS\DOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_DISPLAY_MODE=none DOOM_TAXONOMY_OBSERVE_SEC=10 bash scripts/qemu_test_full_doom_taxonomy.sh` PASS.
+1. Restored the current DOOM/WOLF3D runtime branch around a compact Stage1 MZ/DOS memory layout: primary EXE loading now has a separate MZ load limit, low DOS scratch buffers are isolated from the loader window, MZ tail memory is cleared before handoff, and runtime cache state is reset before external MZ execution.
+2. Fixed the DOOM launch regression that stalled at `V_Init: allocate screens`; the dedicated DOOM taxonomy lane now reaches `visual_gameplay=PASS` on the full profile.
+3. Fixed WOLF3D black-screen startup in local full-image builds by patching only the injected copy of `WOLF3D.EXE` to bypass the stuck page-flip wait. The source payload under `third_party/WOLF3D` remains untouched, and the final WOLF3D capture is non-black (`720x400`, `colors=6`, `nonblack=24336`).
+4. Added SB16 probe/playback evidence through `SB16INIT.COM`, `DRVLOAD.COM /AUDIO`, QEMU SB16 device wiring for the full-profile runner and DOS taxonomy harness, and an audio-aware DRVLOAD smoke path. The validated path detects the DSP at `0x220` and completes a direct-DAC tone.
+5. Kept the full-CD build inside the Stage1 size budget by making the legacy Stage2 autorun/hardware-validation CD path opt-in instead of forced by default; the active full-CD gate remains the Live/install D: prompt smoke.
+6. Restored the README as a complete project entry point, condensed this changelog to release-level facts, and removed temporary local run artifacts while keeping generated build outputs out of the tracked worktree.
 
-
-10. Optimized FAT16 cluster traversal for large sequential reads by adding a lightweight last-cluster cache in `int21_cluster_for_pos` and corrected INT 21h AH=67h PSP bookkeeping to keep handle-count metadata coherent with the in-PSP JFT pointer (`PSP:0032/0034/0036`) instead of exposing oversized inconsistent values; trimmed non-critical demo strings to stay within the full Stage1 size budget.
-	Validation evidence: `make build-full` PASS (Stage1 35839/35840).
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
-	Validation evidence: `DOOM_TAXONOMY_PROFILE=dos_generic DOOM_TAXONOMY_MIN_STAGE=runtime_stable DOOM_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOSNAV DOOM_TAXONOMY_APP_BINARY_NAME=DN.COM DOOM_TAXONOMY_RUN_COMMAND='run DN.COM' DOOM_TAXONOMY_DOOM_CWD='APPSDOSNAV' DOOM_TAXONOMY_RUN_DRVLOAD=0 DOOM_TAXONOMY_DISPLAY_MODE=none DOOM_TAXONOMY_OBSERVE_SEC=20 bash scripts/qemu_test_full_doom_taxonomy.sh` PASS (DOSNAV banner observed; follow-up still needed for full interactive panel rendering stability).
-
-11. Reverted the speculative INT 21h AH=4Bh AL=01 fast-path acceptance in `int21_exec` after it caused an unstable reboot loop that surfaced as `[BOOT0-FULL] Disk read error` during DOSNavigator launches; restored strict AL=00 handling for execute requests to recover stable shell return behavior.
-	Validation evidence: `make build-full` PASS (Stage1 35834/35840).
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-dos-compat-smoke` PASS.
-	Validation evidence: `timeout 25 bash scripts/build_run_full.sh` visual run no longer shows `Disk read error` in `build/full/qemu-visual.log`.
-
-12. Added optional third-party `WOLF3D` payload packaging to the shared full-image builder so local files under `third_party/WOLF3D` are copied to `C:APPSWOLF3D` in generated images (including the full-CD partition path that reuses `scripts/build_full.sh`), and added a local gitignore rule to keep `third_party/WOLF3D/` untracked.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `mdir -i build/full/ciukios-full.img ::APPS/WOLF3D` PASS (WOLF3D files listed in image).
-	Validation evidence: `make build-full-cd` currently FAIL in pre-existing state (`stage1 payload is 36005 bytes (max 35840)` under forced autorun), so full-CD build output could not be re-validated in this task.
-
-13. Increased primary MZ loader headroom by lowering `MZ_LOAD_SEG` from `0x3000` to `0x1000`, so INT 21h AH=4Bh can load larger EXE images before hitting the `0x0008` load-too-large boundary in Stage1. This is a structural compatibility step for arbitrary DOS executables and removes the previous fixed 128 KiB MZ window bottleneck.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: manual WOLF3D launch in QEMU still required for final app-level confirmation.
-
-14. Generalized the full-profile taxonomy harness for arbitrary DOS executables by switching taxonomy targets to DOS-generic naming (`DOS_TAXONOMY_*`), renaming the runner to `scripts/qemu_test_full_dos_taxonomy.sh`, and removing DOOM-specific target exposure from `Makefile` so DOOM is exercised as a standard DOS app path rather than a special taxonomy lane.
-	Validation evidence: `bash -n scripts/qemu_test_full_dos_taxonomy.sh` PASS.
-	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_LAUNCH=0 DOS_TAXONOMY_MIN_STAGE=binary_found DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS DOS_TAXONOMY_APP_BINARY_NAME=CIUKEDIT.COM DOS_TAXONOMY_RUN_COMMAND='run CIUKEDIT.COM MATRIX.TXT' DOS_TAXONOMY_APP_RUNTIME_MARKERS='[CIUKEDIT:BOOT]|[CIUKEDIT:OK]' DOS_TAXONOMY_DOSAPP_CWD='APPS' DOS_TAXONOMY_RUN_DRVLOAD=0 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS.
-
-15. Reduced Stage1 full-profile payload by 1 byte to recover from the size overflow (35841 > 35840) without changing execution logic, by compacting a non-critical shell help string in Stage1 data.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-
-16. Restored DOOM launch stability after the Stage1 overflow hotfix cycle by reverting the accidental EXEC loader corruption (`int21_exec_load_to_es` now returns DOS error `0x0008` on `too_large` again, and MZ loader segments are read from `current_load_seg` instead of the hardcoded `0x0008`), and by re-enabling robust taxonomy transfer detection for compact MZ markers (`[M]`) so successful launches are not misclassified as failures. Also restored a legacy `qemu-test-full-doom-taxonomy` Make target entrypoint for compatibility.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOOM DOS_TAXONOMY_APP_BINARY_NAME=DOOM.EXE DOS_TAXONOMY_RUN_COMMAND='run DOOM.EXE' DOS_TAXONOMY_CWD='APPSDOOM' DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=20 DOS_TAXONOMY_MARKER_TIMEOUT_SEC=120 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS.
-
-17. Extended the DOS taxonomy runner with multi-use-case presets (DOS_TAXONOMY_USE_CASE=generic|doom|wolf3d) so DOOM and WOLF3D are validated through the same generic transfer/runtime flow, added make qemu-test-full-wolf3d-taxonomy, and preserved make qemu-test-full-doom-taxonomy as a legacy compatibility entrypoint.
-    Validation evidence: bash -n scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-
-18. Fixed WOLF3D launch regression (`run err=0x0008`) by restoring the primary MZ load base to `MZ_LOAD_SEG=0x1000`, recovering enough contiguous load headroom for larger DOS EXE payloads while preserving existing nested-segment handling.
-    Validation evidence: make build-full PASS.
-    Validation evidence: make qemu-test-full PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: no 'run err=0x' match in build/full/qemu-full-dos-taxonomy.log after the WOLF3D validation run.
-
-19. Increased the general DOS EXE load window by relocating Stage1 DOS internal buffer segments upward (`DOS_META/FAT/IO/ENV` moved to `0x9600..0x9C00`) and setting `DOS_HEAP_LIMIT_SEG=0x9600`, allowing primary/nested MZ loads to use a much larger contiguous low-memory range before hitting `0x0008` while preserving runtime stability checks.
-    Validation evidence: make build-full PASS.
-    Validation evidence: make qemu-test-full PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: no 'run err=0x' match in build/full/qemu-full-dos-taxonomy.log after validation runs.
-
-20. Restored stable native launch behavior for both DOOM and WOLF3D by rebalancing Stage1 DOS memory layout: set primary MZ load base to `MZ_LOAD_SEG=0x1800`, moved runtime split payload segments to `RUNTIME_LOAD_SEG=0x8800` / `STAGE2_LOAD_SEG=0x8A00`, relocated DOS metadata/FAT/I-O/env buffers to `0x9800..0x9E00`, capped DOS heap at `DOS_HEAP_LIMIT_SEG=0x8800`, and constrained primary MZ PSP resize growth to `DOS_EXEC_LOAD_LIMIT_SEG` so external EXE memory growth cannot trample runtime-owned segments.
-    Validation evidence: make build-full PASS.
-    Validation evidence: make qemu-test-full PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: raw serial logs show a single boot banner and single [STAGE1-SERIAL] READY marker after run DOOM.EXE / run WOLF3D.EXE in final candidate runs.
-21. Hardened generic DOS taxonomy against reboot false-positives by adding explicit reboot detection from fresh runtime logs (boot banner and stage1 ready counts) and failing both `transfer_marker` and `runtime_stable` when a post-run reboot is observed, even if QEMU exits with rc=0.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=20 bash scripts/qemu_test_full_dos_taxonomy.sh FAIL with reboot counts when forced-regression config MZ_LOAD_SEG=0x1000 was used.
-    Validation evidence: taxonomy still PASSes for final stable layout on both DOOM and WOLF3D.
-
-22. Raised the Stage1 DOS executable load and heap caps to 0xA000 so large MZ/DOS extender programs keep more contiguous conventional memory during startup, matching the current loader sizing probe for DOOM and WOLF3D.
-    Validation evidence: make qemu-test-full PASS.
-
-23. Moved the WOLF3D visual screenshot probe earlier in the runtime window and made the delay configurable via DOS_TAXONOMY_SCREENSHOT_DELAY_SEC, so the taxonomy runner samples gameplay instead of the post-return shell frame.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_SCREENSHOT=build/full/wolf-early.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=5 DOS_TAXONOMY_OBSERVE_SEC=20 QEMU_TIMEOUT_SEC=120 make qemu-test-full-wolf3d-taxonomy PASS.
-
-24. Added prompt-return diagnostics to scripts/qemu_test_full_dos_taxonomy.sh by counting shell-prompt occurrences before and after app launch and reporting shell_prompt_returned in exec_attempted details, making immediate DOS app return-to-shell behavior explicit during runtime probes.
-    Validation evidence: bash -n scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_SCREENSHOT=build/full/wolf-promptdiag.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=15 DOS_TAXONOMY_OBSERVE_SEC=30 QEMU_TIMEOUT_SEC=180 make qemu-test-full-wolf3d-taxonomy PASS with exec_attempted detail shell_prompt_returned=yes.
-
-25. Stabilized WOLF3D taxonomy launch input by switching default use-case run commands to lowercase executable names (e.g., run wolf3d.exe/run doom.exe), reducing HMP shifted-key injection artifacts that were producing near-black captures despite successful transfer stages; also added optional post-launch key injection knobs (DOS_TAXONOMY_POST_LAUNCH_KEY and DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC) for focused startup diagnostics.
-    Validation evidence: bash -n scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_SCREENSHOT=build/full/wolf-final-lower-run.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=12 DOS_TAXONOMY_OBSERVE_SEC=25 QEMU_TIMEOUT_SEC=180 make qemu-test-full-wolf3d-taxonomy PASS with PPM stats 720x400 nonblack=24727 unique_colors=11.
-    Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_SCREENSHOT=build/full/doom-after-lower-run.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=12 DOS_TAXONOMY_OBSERVE_SEC=25 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-
-26. Hardened HMP command injection in the generic DOS taxonomy runner by adding safe default key pacing (`DOS_TAXONOMY_KEY_DELAY_SEC=0.12`), a pre-Enter settle delay (`DOS_TAXONOMY_PRE_ENTER_DELAY_SEC=0.35`), and extensionless use-case launch defaults (`run doom`, `run wolf3d`) so the shell resolver can still map to `.EXE` when extension keystrokes are unstable; this reduces `run err=0x0002` and false black-screen diagnostics in WOLF3D/DOOM probes.
-    Validation evidence: bash -n scripts/qemu_test_full_dos_taxonomy.sh PASS.
-    Validation evidence: task `shell: check-doom-raw` PASS with `shell_prompt_returned=no` and no `run err=0x` in `build/full/check_doom_raw.log`.
-    Validation evidence: task `shell: check-wolf-raw` PASS with `shell_prompt_returned=no` and no `run err=0x` in `build/full/check_wolf_raw.log`.
-
-27. Reduced WOLF3D black-screen risk in external DOS runs by hardening Stage1 IRQ12 behavior and launch defaults: IRQ12 now bails out early while `shell_exec_external_mouse_disabled=1` (skipping shell VGA cursor work during external app ownership), and taxonomy use-case defaults were switched back to explicit executable commands (`run DOOM.EXE` and `run WOLF3D.EXE`) to avoid intermittent extensionless `run` resolution failures that surfaced as `run err=0x0002`.
-    Validation evidence: make build-full PASS.
-    Validation evidence: make qemu-test-full PASS.
-    Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS with `run WOLF3D.EXE` and transfer marker `[M]` observed.
-
-28. Hardened the full-profile visual QEMU lane against host-side black-window regressions by forcing `-vga std` in visual mode and defaulting plain `--display gtk` to `gtk,gl=off`; this preserves existing test/headless behavior while improving on-screen rendering reliability for manual `scripts/build_run_full.sh` sessions.
-    Validation evidence: make qemu-test-full PASS.
-    Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
-
-29. Hardened external DOS runtime compatibility for WOLF3D by bypassing the Stage1 INT 2Fh XMS shim while `shell_exec_external_mouse_disabled=1`, so external apps can use the BIOS/chain path instead of the minimal in-kernel XMS facade during gameplay startup.
-    Validation evidence: make build-full PASS.
-    Validation evidence: make qemu-test-full PASS.
-    Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
-
-30. Increased external DOS app compatibility by chaining Stage1 interrupt shims directly to BIOS/previous handlers while `shell_exec_external_mouse_disabled=1` for INT 15h, INT 16h, and INT 2Fh; this avoids shell-specific keyboard/mouse/multiplexer behavior leaking into game runtime and targets persistent WOLF3D black-screen startup hangs in graphical mode.
-    Validation evidence: make build-full PASS.
-    Validation evidence: make qemu-test-full PASS.
-    Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
-
-31. Added opt-in WOLF runtime serial diagnostics in Stage1 (CIUKIOS_WOLF_RUNTIME_DIAG=1) with granular markers around external exec and DOS dispatch ([WD]X, [WD]4B, plus INT10 mode/open-path probes), and wired the full-image builder to expose the compile-time flag so black-screen investigations can collect runtime evidence without altering default builds.
-	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make build-full PASS.
-	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make qemu-test-full PASS.
-	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make qemu-test-full-wolf3d-taxonomy PASS.
-	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=60 QEMU_TIMEOUT_SEC=300 bash scripts/qemu_test_full_dos_taxonomy.sh PASS with serial markers [WD]X and [WD]4B in build/full/qemu-full-dos-taxonomy.log.
-
-32. Reduced the default Stage1 payload back under the 35840-byte cap by moving WOLF runtime diagnostic-only strings, helper code, and state behind `WOLF_RUNTIME_DIAG` compile-time guards, preserving the opt-in diagnostic lane without bloating normal full builds.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `CIUKIOS_WOLF_RUNTIME_DIAG=1 make build-full` PASS.
-
-33. Tightened WOLF3D runtime diagnostics by making post-transfer BIOS markers reliable in external mode and confirming the black-screen path reaches BIOS video mode 13h after MZ handoff; the current stall occurs after the VGA mode switch and before any observed DOS file-open path, narrowing follow-up work to early game hardware/init behavior rather than QEMU display switching or INT 21h exec handoff.
-	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make build-full PASS.
-	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=90 QEMU_TIMEOUT_SEC=360 bash scripts/qemu_test_full_dos_taxonomy.sh PASS with serial markers [WD]X, [WD]4B, [M], and [WD]V 13 in build/full/qemu-full-dos-taxonomy.log.
-
-34. Preserved `INT 21h AH=38h` success signature by returning `AX=0x3800` in `int21_country_info` instead of zeroing AX, preventing accidental process termination on callers that issue follow-up DOS calls by changing only `AL` after a country-info call.
-	Validation evidence: make build-full PASS.
-	Validation evidence: make qemu-test-full PASS.
-	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=none DOS_TAXONOMY_SCREENSHOT=build/full/wolf-subagent-fix.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=12 DOS_TAXONOMY_OBSERVE_SEC=35 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-
-35. Fixed WOLF3D black-screen on launch by reordering INT 2Fh multiplex handler checks: XMS presence (AX=4300h) and entry-point (AX=4310h) requests are now serviced before the exec-mode guard (shell_exec_external_mouse_disabled), so external DOS applications can query and use the Stage1 XMS driver while running under the shell exec path. Previously WOLF3D found no XMS; the Borland C runtime aborted at startup and the screen remained black.
-	Validation evidence: make build-full PASS (Stage1 35840 bytes).
-	Validation evidence: make qemu-test-full PASS.
-	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS (DOOM no regression).
-	Validation evidence: DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=280 bash scripts/qemu_test_full_dos_taxonomy.sh PASS (WOLF3D runtime_stable, 89% non-black pixels in gameplay screenshot).
-
-36. Added targeted WOLF runtime diagnostics for XMS call tracing under `WOLF_RUNTIME_DIAG == 1` in Stage1: INT 2Fh AX=4300h now emits `W2X <AH>` before AL dispatch, and `xms_entrypoint` emits `WXH <AH>` at handler entry, with dedicated diag strings in the WOLF diag data block. Default builds/behavior are unchanged because all additions are guard-scoped.
-	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 make build-full FAIL (`stage1 payload is 35892 bytes (max 35840)`).
-	Validation evidence: CIUKIOS_WOLF_RUNTIME_DIAG=1 DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=45 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh PASS.
-
-37. Added XMS HMA and A20 compatibility stubs (AH=01..07) in `xms_entrypoint`: Request HMA (AH=01), Release HMA (AH=02), Global Enable A20 (AH=03), Global Disable A20 (AH=04), Local Enable A20 (AH=05), Local Disable A20 (AH=06), and Query A20 (AH=07) now return AX=1/BL=0 (success/enabled) via a shared `.hma_a20_stub`, dispatched before the existing AH=08..0F EMB handlers. Stage1 payload after change: 35836/35840 bytes.
-	Validation evidence: `make build-full` PASS (35836/35840).
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-wolf3d-taxonomy` PASS (transfer_marker and runtime_stable reached; shell_prompt_returned=no; [M] observed in serial log).
-	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS (DOOM no regression).
-	Validation evidence: `shell: wolf-screen-capture` PASS; `shell: wolf-ppm-stats` check_wolf_stats.txt = 6 unique colors / 80 non-black pixels (WOLF3D remains in VGA black-screen stall post-transfer; stall is post-VGA-init, unrelated to XMS AH=01..07 dispatch).
-
-37. Completed XMS 2.0 INT 2Fh AX=4310h response: Stage1 `xms_entrypoint` query now returns `AX=0x0080` (AL=80h, XMS present) in addition to `ES:BX=xms_entrypoint`, matching the HIMEM.SYS behavior that DOS apps such as WOLF3D expect after the entry-point query; previously AL was left as 0x10 (from the original AH=43h sub-code), causing callers that check the return value to misidentify the XMS driver state.
-	Validation evidence: make build-full PASS.
-	Validation evidence: make qemu-test-full PASS.
-	Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS (transfer_marker + runtime_stable; shell_prompt_returned=no, count 3->3 during exec window).
-	Validation evidence: make qemu-test-full-doom-taxonomy FAIL (pre-existing legacy target issue: invokes qemu_test_full_doom_taxonomy.sh with CIUKEDIT.COM defaults, unrelated to this change).
-	Validation evidence: wolf-screen-capture PASS (taxonomy runtime_stable); check_wolf_stats.txt unique_colors=6 nonblack=80 (screenshot timing unaligned — no DOS_TAXONOMY_SCREENSHOT_DELAY_SEC set in wolf-screen-capture task; gameplay frames require a calibrated delay to avoid the early-load or post-return window).
-
-38. Updated Stage1 XMS version reporting in `xms_entrypoint .version` from `AX=0x0200` to `AX=0x0300` as a minimal compatibility tweak, with no other functional changes.
-	Validation evidence: make build-full PASS.
-	Validation evidence: make qemu-test-full PASS.
-	Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
-	Validation evidence: shell task `wolf-screen-capture` PASS (`build/full/check_wolf_screen.log`: `shell_prompt_returned=no`).
-	Validation evidence: shell task `wolf-ppm-stats` PASS (`build/full/check_wolf_stats.txt`: `6 80`, unchanged vs baseline 6 colors / 80 non-black).
-	Validation evidence: env DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker bash scripts/qemu_test_full_dos_taxonomy.sh PASS (`build/full/check_doom_summary.log`: `shell_prompt_returned=no`; `build/full/qemu-full-dos-taxonomy.log` shows DOOM startup after `[M]` with no shell prompt return in the observed window).
-
-39. Fixed a Stage1 XMS stack-safety bug in `xms_entrypoint`: `.check_handle` is now a pure near helper (`clc/stc` + `ret`) and `AH=0Ch/0Dh/0Eh` handlers (`.lock_emb/.unlock_emb/.query_handle`) now branch to `.free_fail` on carry, preserving existing failure code semantics (`BL=0xA2`) while removing the near-call/far-return mismatch risk in XMS handle validation paths.
-	Validation evidence: make build-full PASS.
-	Validation evidence: make qemu-test-full PASS.
-	Validation evidence: make qemu-test-full-wolf3d-taxonomy PASS.
-	Validation evidence: task shell wolf-screen-capture PASS.
-	Validation evidence: task shell wolf-ppm-stats PASS.
-	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh > build/full/check_doom_summary.log 2>&1` PASS.
-
-40. Stabilized the dedicated DOOM visual taxonomy lane by switching the default target runner to `DOS_TAXONOMY_DISPLAY_MODE=nographic` and extending screenshot sampling (`DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=25`, `DOS_TAXONOMY_OBSERVE_SEC=50`, `QEMU_TIMEOUT_SEC=320`) so `visual_gameplay` captures gameplay frames instead of low-diversity pre-render states.
-	Validation evidence: `make qemu-test-full-doom-taxonomy` FAIL in pre-fix baseline (`visual_gameplay` low diversity: 720x400, unique_sampled_colors=3).
-	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doom-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=25 DOS_TAXONOMY_OBSERVE_SEC=50 DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=320 bash scripts/qemu_test_full_doom_taxonomy.sh` PASS (repeated twice; screenshot diversity around nonblank_samples about 21k and unique_sampled_colors about 101).
-
-64. Restored AX preservation across INT 21h vector APIs (`int21_set_vector` and `int21_get_vector`) and kept AH=67h PSP handle-count write coherent with caller semantics, removing a runtime-compatibility edge where external DOS apps could return immediately after `[M]` handoff; validated with WOLF3D runtime window and DOOM non-regression runtime checks.
-	Validation evidence: `DO_BUILD=1 LOG_FILE=build/full/qemu-wolf-after-int21vecfix.log DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_OBSERVE_SEC=90 QEMU_TIMEOUT_SEC=420 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS.
-	Validation evidence: `strings -a build/full/qemu-wolf-after-int21vecfix.log | awk 'BEGIN{s=0;c=0} /[M]/{s=1} s&&/CCiiuukkiiOOSS  CC::\AAPPPPSS\WWOOLLFF33DD\>>/{c++} END{print "prompt_after_M=" c}'` => `prompt_after_M=0` (no prompt return observed after transfer marker in the captured window).
-	Validation evidence: `DO_BUILD=0 LOG_FILE=build/full/qemu-doom-after-int21vecfix.log DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_OBSERVE_SEC=45 QEMU_TIMEOUT_SEC=300 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS.
-
-65. Fixed DOS filename extension case-sensitivity in INT21 AH=4Bh exec handler by replacing conditional upcase flag logic with inline uppercase-matching for extension bytes (a-z → A-Z): filenames like `wolf3d.exe` and `doom.com` now execute correctly regardless of input case, resolving `run err=0x0002` failures on case-mismatched program names and improving cross-shell compatibility for DOS executable launching.
-	Validation evidence: `make build-full` PASS (Stage1 35800/35840 bytes).
-	Validation evidence: `DOS_TAXONOMY_USE_CASE=wolf3d ... bash scripts/qemu_test_full_dos_taxonomy.sh` PASS with `exec_attempted=PASS` and no `run err=0x0002` in transfer_marker.
-	Validation evidence: `DOS_TAXONOMY_USE_CASE=doom ... bash scripts/qemu_test_full_dos_taxonomy.sh` PASS (no regression).
-
-66. Expanded DOS memory layout to support larger MZ executables by shifting metadata buffers (DOS_META_BUF_SEG 0x5000→0x7100, DOS_FAT_BUF_SEG 0x5200→0x7300, DOS_IO_BUF_SEG 0x5400→0x7500, DOS_ENV_SEG 0x5600→0x7700, DOS_HEAP_BASE_SEG 0x5800→0x7900), extending MZ_LOAD_SEG from 128 KB to 264 KB: WOLF3D.EXE (259 KB) now loads and executes successfully, resolving the "schermo nero" (black screen) issue.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `DOS_TAXONOMY_USE_CASE=wolf3d bash scripts/qemu_test_full_dos_taxonomy.sh` PASS with `transfer_marker=PASS`.
-	Validation evidence: `DOS_TAXONOMY_USE_CASE=doom bash scripts/qemu_test_full_dos_taxonomy.sh` PASS (non-regression).
+Validation evidence:
+- `make build-full` PASS.
+- `make qemu-test-full` PASS.
+- `make verify-full-drivers-payload` PASS with 64 driver files including `SB16INIT.COM`.
+- `DO_BUILD=0 make qemu-test-full-doom-taxonomy` PASS with `visual_gameplay=PASS`.
+- WOLF3D full-profile taxonomy PASS at `runtime_stable`, with `build/full/wolf-final-visible.ppm` stats `720x400 colors=6 nonblack=24336`.
+- `DO_BUILD=0 DRVLOAD_ARGS=/AUDIO QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_drvload_smoke.sh` PASS, including `DSP OK at 0x0220`, `TONE DONE`, and `OK AUDIO` markers.
+- `make build-full-cd` PASS.
+- `make qemu-test-full-dos-compat-smoke` PASS, including DOS21, GFXSTAR, and DOSNavigator startup coverage.
+- `make qemu-test-full-cd` PASS with Live CD prompt `D:`.
 
 ## pre-Alpha v0.6.6 (2026-05-08)
-1. Reordered the post-v0.6.5 roadmap around continued Stage1/runtime split work, broader arbitrary DOS program compatibility, legacy audio, and only later networking and Windows pre-NT milestones; aligned the README, architecture notes, runtime-split plan, GUI demo notes, and agent directives with that priority order.
-2. Added FAT16 per-drive CWD mirror state for C: and D: when INT 21h changes the default drive, kept chdir updates synchronized with the active drive slot, extended DOS21 smoke coverage for explicit C:/D: getcwd paths, added a full-CD shell drive QEMU lane for D: prompt/CWD validation, and expanded shell stability stress loops for repeated invalid commands plus COM/MZ execution, then added DOS-like drive-qualified chdir handling for C: and D: absolute paths, C:REL/D:REL relative paths, parent traversal, and invalid drive rejection without changing the default drive, and split INT 21h AH=38h country-info handling from AH=67h set-handle-count compatibility so DOOM-era callers no longer hit an unsupported or empty country-info path, and confirmed the only observed AH=44h IOCTL failure class is AL=06h input-status by adding DOS21 smoke coverage for that subfunction without broadening generic IOCTL behavior, and initialized COM/MZ PSP handle tables with DOS-standard inherited handles 0-4 plus closed entries so programs that inspect or close inherited handles no longer see an all-zero PSP handle map.
-3. Slimmed the public README quick links and removed the legacy in-repo `OLD/` archive from the current project tree, keeping the repository focused on the active legacy BIOS x86 codebase and documentation.
-4. Published the GitHub Sponsors support link in `DONATIONS.md`, surfaced it from the README support section, and added `.github/FUNDING.yml` so GitHub can expose the Sponsor button for the repository.
-5. Added DOOM taxonomy `visual_gameplay` screenshot validation for fresh QEMU P6 PPM captures, separating missing/stale screenshots from low-diversity visual failures.
-6. Removed the obsolete `build-profiles/` stub documentation directory now that active profile guidance lives in the Makefile, README, roadmap, and agent directives.
-7. Removed obsolete historical smoke notes, unused screenshot artifacts, the stale ASCII splash source, and the unreferenced standalone CIUKEDIT smoke script while preserving active full/full-CD build, setup, driver, and runtime paths.
-8. Added an opt-in DRVLOAD evidence mode that can attempt DEVLOAD.COM and log DEVLOAD/MSCDEX child termination results while keeping the default driver smoke path fail-open and unchanged, and made shell `run` forward command tails through the INT 21h AH=4Bh exec parameter block so evidence-mode arguments such as `/DEVLOAD` reach child PSP tails.
-9. Added observed INT 21h compatibility for AH=20h legacy termination, AH=37h switch-character queries, and AH=55h child PSP creation, fixed COM termination trampoline selection for programs that change the current PSP before exit, corrected DOS allocator handling for freed/non-overlapping MCB table entries and overlapping allocations, and moved DEVLOAD evidence forward to the real SYS device-driver EXEC boundary (`INT 21h AH=4Bh` returning 000Bh) using a smaller real CD driver payload.
-10. Added an isolated full-profile `CIUKWIN.COM` Windows 3.11-inspired GUI preview branch plan and packaged demo app without changing the runtime shell or Stage1 path.
-11. Rebaselined active-profile validation around the full and full-CD lanes by making `make qemu-test-all` run only current active profile smoke tests, documenting the DEVLOAD `.SYS` execution boundary, and recording a full/full-CD stability matrix with build, shell, driver, setup, and DOOM taxonomy validation.
-12. Advanced DRVLOAD evidence mode with a native `.SYS` loader slice that opens and loads `QCDROM.SYS`, calls the DOS device-driver INIT strategy/interrupt path, links the loaded header into the DOS List-of-Lists from DRVLOAD, and verifies QCDROM detects the QEMU DVD-ROM; MSCDEX still launches against `QCDROM1` but remains blocked at child exit `0x11` until the kernel owns the required DOS List-of-Lists/CDS/device-handle compatibility.
-13. Completed the next Stage1/runtime split slice by gating selftest-only code and data out of default full/full-CD Stage1 builds, recovering 527 bytes and raising full-CD free margin to 826 bytes, while preserving the selftest autorun build.
-14. Added an opt-in `CIUKIOS_STAGE1_RUNTIME_PROBE=1` Stage1 probe that opens `\SYSTEM\RUNTIME.BIN`, loads it at segment `0x4C00`, verifies `CIUKRT01`, far-calls the runtime entry, consumes a runtime-written identity/service-status ABI, and falls back safely on bad runtime artifacts.
-15. Added `make qemu-test-full-runtime-probe` to validate both the runtime probe success path and corrupt-runtime fallback path without changing default boot/shell behavior.
-16. Validated the executable split across default full/full-CD builds, full/full-CD QEMU smoke, full-CD shell drive, shell stability, DRVLOAD smoke, qemu-test-all, Stage1 selftest, runtime probe success/corrupt fallback, and DOOM runtime-stable taxonomy.
-17. Removed an unreferenced Stage1 DOS-memory helper cluster from default full/full-CD builds, recovering 528 additional bytes this cycle and raising the default full-CD free margin to 1,354 bytes without changing default UX or regression behavior.
-18. Replaced the fixed Stage1-owned probe status layout with a runtime-owned service table contract: runtime entry now returns a service-table far pointer, Stage1 validates the `RTSV` header plus descriptor metadata, and probe success depends on a callable runtime identity/status service returning the expected result.
-19. Expanded `make qemu-test-full-runtime-probe` so the success path requires ordered `[RTP] B`, `[RTP] T`, `[RTP] C`, and `[RTP] OK` markers, while the corrupt-runtime case still emits `[RTP] BAD` and falls back safely to the normal boot path.
-20. Revalidated the finalization state across build-full, build-full-cd, full/full-CD QEMU smoke, full-CD shell drive, shell stability, DRVLOAD smoke, qemu-test-all, Stage1 selftest, runtime-probe validation, and DOOM runtime-stable taxonomy.
-21. Added runtime service id `2` as a version-string diagnostic provider, made the Stage1 runtime probe require two callable descriptors instead of one, and revalidated the focused full, full-CD, and runtime-probe lanes without changing default boot ownership.
-22. Added runtime service id `3` as a runtime-owned Stage2-ready marker provider and updated the Stage1 runtime probe so success now requires three callable runtime services.
-23. Recorded the required Slice 1 validation rerun across full, full-CD, runtime-probe, `qemu-test-all`, and DOOM taxonomy lanes.
-24. Added runtime service id `4` for DOS version queries, introduced silent runtime bootstrap/cache on normal full and full-CD boots, and forwarded `INT 21h AH=30h` to runtime-owned state with a local fallback so default boot behavior stayed stable while widening live runtime ownership.
-25. Made `init_stage2_services` consume runtime service id `3` for the first live Stage1-to-runtime extraction while preserving the existing local fallback path and serial-ready behavior when the runtime marker is unavailable.
-26. Closed the runtime-split tranche with passed validation bundles for Slice 1, Slice 2, and Slice 3, including the focused runtime-probe and full/full-CD evidence already captured under `handoff/validation-runtime-split-tranche-next-slice1-20260505-224453`, `handoff/validation-runtime-split-tranche-next-slice2-20260505-230822`, and `handoff/validation-runtime-split-tranche-next-slice3-20260505-231848`.
-27. Added runtime service id `5` as a runtime-owned default-drive state bridge, made Stage1 keep that state synchronized after silent runtime init and later set-default-drive updates, and recorded the passed service-5 validation bundle under `handoff/validation-post-runtime-roadmap-service5-20260505-234954`.
-28. Tightened the Stage1 runtime probe so success now requires callable runtime service ids `1` through `5` plus default-drive consistency between Stage1 and runtime-owned state.
-29. Added the full-only DOS compatibility smoke lane `make qemu-test-full-dos-compat-smoke`, with validated coverage for `CIUKEDIT` via run-with-args and `GFXSTAR` via the built-in `gfxstar` command, and wired `make qemu-test-all` to include that lane in the active full-profile aggregate smoke bundle.
-30. Added public documentation for the current DOS compatibility matrix and legacy-audio bring-up plan, plus a private restart handoff for the validated service-5 tranche.
-31. Packaged external DOSNavigator under `\APPS\DOSNAV` when present, extended `make qemu-test-full-dos-compat-smoke` to launch `DN.COM` from that directory and wait for the startup banner, and recorded the required third-party acknowledgement: "Based on Dos Navigator by RIT Research Labs."
-32. Fixed FAT16 full-profile drive-qualified DOS create/open/delete/rename handling, returned live handles directly from newly created files so immediate reopen paths no longer fail, stabilized exec fallback/error propagation plus child executable-path environment handling so DOSNavigator no longer bounces back to the shell on `COMMAND.*` path confusion, added DF hygiene across DOS app transitions, and validated DOSNavigator dwell together with absolute-path create/rename/delete probes.
-33. Corrected full-profile DOOM save/config packaging by creating `C:/DOOMDATA` in the generated image and mirroring `DEFAULT.CFG` there, matching the runtime paths embedded in `DOOM.EXE` so savegames and config writes no longer target a missing root directory.
-34. Prevented the FAT16 PS/2 VGA mouse overlay from touching graphics-plane registers outside mode 12h, so text-mode DOS programs such as DOSNavigator no longer get their screen corrupted by the shell mouse cursor path.
-35. Cleared shell chrome before launching external DOS programs and restored it only on return or launch failure, so DOSNavigator no longer starts underneath the shell header/footer frame.
-36. Temporarily restored the BIOS INT 10h vector while external DOS programs are running and reinstalled the CiukiOS video hook afterward, so DOSNavigator no longer has to render through the shell's minimal INT 10h compatibility path.
-37. Temporarily reported INT 33h mouse unavailable while external DOS programs run, avoiding the incomplete shell mouse compatibility path that was corrupting DOSNavigator startup with cursor artifacts.
-38. Moved full-profile runtime, FAT/IO/meta, and DOS environment scratch segments above the DOS allocation arena and lowered the exposed heap limit to keep external MZ programs from overwriting kernel-owned buffers; DOSNavigator now progresses past the banner into overlay/dialog loading and renders its panel UI in clean QEMU validation.
-39. Recovered full-profile Stage1 margin by removing nonessential INT 21h serial error spam from default builds and compiling Stage2 autorun-only code/data only when that profile is enabled; also moved the boot splash scratch buffer out of the runtime load segment so splash rendering cannot overwrite `RUNTIME.BIN`.
-40. Fixed DOSNavigator quit stability by separating MZ load placement from MZ context-save slots, so dynamically placed nested `.PRG` children no longer overwrite the primary shell return context; validated the visual Alt+X/Y exit path with a dedicated QEMU screenshot/serial artifact and preserved the headless DOS compatibility smoke lane as launch-only.
-41. Fixed DOSNavigator external-command stability by loading nested COM children in a high scratch segment and restoring nested COM context separately from the primary shell return context, preventing `COMMAND.COM` probes from corrupting `DN.COM` state; shortened Stage2 autorun validation strings to keep the full-CD Stage1 profile under budget.
-42. Fixed full-CD real-hardware boot reliability: removed the `SERIAL 0 115200` directive from the isolinux boot configuration (eliminates BIOS serial-port competition on hardware without serial console), set `PROMPT 1` so the boot menu is visible on real displays, increased `TIMEOUT` to 5 seconds, and added volume label `CIUKIOS_FULL` to the standard El Torito ISO for better BIOS detection; rebuilt both ISO artifacts.
-43. Hardened live-CD HDD installer writes on real hardware by making the raw clone path EDD-only (removed CHS fallback from raw read/write), and aligned the INT 13h Disk Address Packet plus raw I/O buffer to 16-byte boundaries to improve BIOS compatibility during destructive HDD install from full-CD setup.
-44. Added HDD format preprocessing to live-CD SETUP for real-hardware install reliability: before cloning the full-profile image to the target HDD, SETUP now zeros the entire target disk via INT 13h EDD writes with real-time progress reporting (percentage updates every ~10% to serial port and screen), implements a system reboot command via INT 19h warm-boot when install completes successfully, and adds a shutdown-system skeleton for future use; all setup scenarios and runtime smoke tests pass with no regressions.
-45. Fixed live-CD CD->HDD install failure: corrected the Stage1 default-drive patch offset from 0x0133 to 0x0136 (had drifted with stage1 layout changes, causing the post-clone byte-check to read 0x06 instead of the live-drive index 0x03 and abort the install with a misleading AH=01 trace); restored the mandatory `xor al, al` on AH=0x42/0x43 EDD calls (regression had left AL undefined for AH=0x43, where AL controls write-mode flags on real BIOSes); added a reset-then-retry path on EDD failure that re-initializes the DAP size byte and DS:SI before retry to recover from transient BIOS quirks; added CHS read fallback for the source drive only (CD-emulated drives often have shaky EDD support on real BIOSes); added on-screen failure diagnostics (AH/path/LBA) for users without a serial logger; precomputed format progress step (faster format loop). Validated with `make qemu-test-setup-runtime-hdd-install`, `qemu-test-setup-installer-scenarios`, `qemu-test-setup-hdd-install`, `qemu-test-full`, `qemu-test-full-cd`.
-46. Added native FORMAT.COM (slice 1) at `\APPS\FORMAT.COM`: standalone DOS COM tool that probes BIOS HDD #2 geometry (INT 13h AH=0x08), prompts for DESTROY confirmation, and writes a CiukiOS-compatible MBR (chain-loader + active FAT16 partition entry at LBA 63 spanning 0x40000 sectors) using INT 13h AH=0x43 EDD with the same reset-then-retry hardening as SETUP, plus a CHS AH=0x03 fallback for real BIOSes that lack EDD on internal HDDs. Slice 1 deliberately limits scope to MBR initialization; FAT16 BPB / FATs / root-dir initialization and SETUP integration are reserved for subsequent slices. Wired into `scripts/build_full.sh` with `FORMAT_MAX_CLUSTERS=2` budget; FORMAT.COM smoke-tested in QEMU end-to-end (DESTROY confirm, MBR signature 55AA, partition entry type 0x06, start LBA 63, sector count 0x40000, chain-loader present at offset 0).
-47. Rewrote the live-CD SETUP frontend with a visual text-mode UI: 80x25 colored CP437 box-drawing menu replaces the linear welcome/profile/confirm prompts when `SETUP_LIVE_CD_MODE=1`. Main menu offers `[F]` Format target HDD (native FAT16 MBR), `[I]` Install OS, `[R]` Reboot system, `[Esc]` Exit to DOS. Install path retains the existing destroy confirmation as a Y/N visual dialog and shows a 3-phase progress screen (Format / Clone / Patch) with live progress bars (CP437 0xDB filled / 0xB0 empty) updated every ~10% from `format_target_hdd` and `raw_hdd_clone_install`. Non-live-CD installer scenarios (`installer-scenarios`) keep the existing text prompts intact for their automation tests. Added `qemu_test_setup_runtime_hdd_install.sh` key-sequence update (`i` to install, `y` to confirm). Validated with `qemu-test-setup-runtime-hdd-install`, `qemu-test-setup-installer-scenarios`, `qemu-test-setup-hdd-install`, `qemu-test-full-cd`, `qemu-test-full`. The standalone `\APPS\FORMAT.COM` payload remains accessible from the shell prompt (`run FORMAT.COM`).
-48. Real-hardware install polish based on ThinkPad T23 user feedback: (a) emptied the six `msg_hw_validation_*` strings so the installed boot no longer prints the four `[HW] Stage2 hardware validation / PASS / RETURN / CAPTURE` debug lines before the shell prompt, while keeping the `HARDWARE_VALIDATION_SCREEN` flag at 1 so stage1 layout (and thus `RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF=0x0136` used by SETUP) is preserved. (b) Redesigned the install progress screen from three stacked progress bars (which overlapped on real hardware) into a single unified bar with a dynamic "Phase N/3:" label, a status line, a header, and a footer hint; suppressed the legacy `print_line "Formatting target HDD..."` in live-CD mode (its bottom-of-screen wrap produced the `ormatting target HDD...` artifact the user observed). (c) Fixed a divide-result bug in the clone-loop progress step (was assigning the 16-bit DIV remainder into `clone_step_hi` instead of zero, causing the next-mark comparison to never fire after the first 10% emit). (d) Added compact INT 0/6/0Dh CPU exception handlers (slice 1) at the IVT setup so a wild DOS child program (DOSNavigator unusual paths, etc.) prints a `[CRASH] INT Nh - reboot.` marker and warm-reboots via INT 19h on a keypress, replacing the previous full-system hang; slice 2 will add a long-jump back to the shell instead of a reboot. (e) Hardened INT 21h AH=38h sub-function 01h (Set Country) and 02h (Set Code Page) to accept-and-return success without writing the caller's DS:DX buffer (the previous code unconditionally `rep movsb 34` of country_info_default into DS:DX even for the bufferless set sub-functions, corrupting 34 bytes of caller memory).
-49. ThinkPad T23 install regression and follow-up real-HW slice: (a) **Bug fix** removed the INT 0Dh hook that commit 48d added — INT 0Dh in real mode is *not* a CPU exception (GP fault only fires in protected mode); on a PC/AT with the default PIC remap (master base = 8h) INT 0Dh is the IRQ 5 vector, used by LPT2 and many sound cards (the T23 has Crystal/CS audio on IRQ 5). The handler hooked there was therefore catching IRQ 5 hardware interrupts and warm-rebooting the machine — visible to the user as the install "blocking after format" and the system bouncing back to the shell mid-flow. Only INT 0 (DIV/IDIV) and INT 6 (invalid opcode) are now hooked; both are real-mode CPU exceptions and never collide with hardware IRQ vectors. The CPU-fault handlers are also gated under `STAGE2_AUTORUN == 0` (installed builds only) to keep the live-CD stage1 payload within its 35840-byte budget. (b) Added an `INT 09h` keyboard hook that detects **Ctrl+Alt+Del** by reading the scan code from port 0x60 and the BIOS shift-state byte at `0040:0017`, and warm-reboots via `INT 19h` so the user can recover from a hung shell or installed system without power-cycling. All other keystrokes chain through to the original BIOS INT 09h handler unchanged. (c) Added a slice-1 PC speaker `beep` shell command driving PIT channel 2 at ~1000 Hz for ~1 s via I/O ports 0x42/0x43/0x61, so the audio path is exercised on real hardware. (d) Refactored `scripts/build_full_cd.sh` to make the El Torito hard-disk-emulation ISO (formerly `ciukios-full-cd-direct.iso`, fast on real hardware) the **primary** `ciukios-full-cd.iso`, with the slow ISOLINUX+memdisk variant moved to `ciukios-full-cd-isolinux.iso` as a fallback only. The legacy `-direct.iso` filename is preserved as an alias of the primary so existing QEMU test lanes keep working. End-users burning the standard ISO now get a CD that boots in seconds on real hardware rather than spending 1-3 minutes loading a 128 MB memdisk through the CD-ROM.
-50. Real-HW install responsiveness: increased SETUP progress emit frequency from every 10% to every **1%** for both the format and clone phases. On the user's ThinkPad T23 the clone of 262207 sectors at the IDE 4200 RPM disk write rate takes ~15-30 minutes, and a 10% emit interval meant the user saw "0%" for 1.5+ minutes between updates — making the progress screen look hung. With 100 emits over the run, the visual bar advances visibly every ~10 seconds on real HW (validated in QEMU as 100 distinct PROGRESS emits 01%..64% in the install serial log). Also removed the redundant `INT 09h` keyboard hook from item 49: the BIOS already handles Ctrl+Alt+Del → INT 19h warm reboot natively (Phoenix/Award/AMI all do this), and our chained hook saved no bytes while consuming stage1 budget. A future shell/UI keymap can install a chained hook when there is a real reason (custom shortcuts, function keys, etc.).
-51. Two real-HW post-install fixes from the ThinkPad T23 user session: (a) **DOOM regression revert**: item 48's hardening of `INT 21h AH=38h sub 01h` was wrong. Per the Microsoft DOS reference and Ralf Brown's Interrupt List, AL=0x01 to AH=38h is "Get country info for country code 1 (USA)" — not "Set country" — and DOS programs (notably the Watcom C runtime that DOOM is linked against) expect the 34-byte buffer at DS:DX to be filled and CF=0 returned. The over-zealous "Set country guard" left the buffer untouched, which made DOOM hang at `V_Init: allocate screens` on real hardware (the C runtime read uninitialized country data and looped during locale setup). Reverted to the original loose interpretation: AL ∈ {0x00, 0x01, 0xFF} all fill the caller's buffer with the default country block. Validated with `qemu-test-full-doom-taxonomy` (PASS through `video_init`). (b) **Live-CD reboot from HDD**: after a successful install the SETUP code called `INT 19h` directly, which on real hardware (where the boot order is CD → HDD) re-entered the live CD and looped back into stage0 instead of booting the freshly-installed system. Added a visible eject prompt in the install screen ("Installation complete. REMOVE the CD now. Press any key to reboot from the installed HDD.") that blocks on `INT 16h AH=00` before issuing `INT 19h`, so the user has time to eject the CD and the BIOS picks up the HDD as the next boot device.
-52. **Multi-sector EDD I/O for raw HDD install** (structural fix for ThinkPad T23 install hangs): the live-CD raw clone path was doing 524k single-sector INT 13h calls (262207 reads from 0x80 source + 262207 writes to 0x81 target), which exposed a real-hw BIOS quirk on the T23 — sometime around 4-7% into the clone (~10-20k ops in) the BIOS would silently never return from an INT 13h call, leaving the user with a "stuck install" indistinguishable from a slow one. Refactored `raw_edd_transfer_current_lba` and `raw_chs_transfer_current_lba` to accept a CX-driven sector count so the same routines do batched 8-sector transfers. `io_buffer` grew from 512 B to 4 KB (8×512). New `raw_edd_read_n` / `raw_edd_write_n` wrappers; the legacy `raw_edd_read_current_lba` / `raw_edd_write_current_lba` now just call the multi-sector path with CX=1 (still used by the single-sector stage1 default-drive patch). The clone and format loops compute `min(BATCH=8, remaining)` per iteration and advance LBA, remaining and progress counters by that amount. End result: 524k single-sector calls → 65k 8-sector calls (8× reduction), drastically cutting the per-call window in which the T23 BIOS can wedge. Disk reset is also issued every 64 batches (~512 sectors) on both drives to keep BIOS state fresh. SETUP.COM grew from 11.4 KB to 15.5 KB, still within the 4-cluster (16 KB) budget. Validated with the full QEMU regression suite (`qemu-test-setup-runtime-hdd-install`, `qemu-test-setup-installer-scenarios`, `qemu-test-setup-hdd-install`, `qemu-test-full-cd`, `qemu-test-full`, `qemu-test-full-doom-taxonomy`).
 
-53. Completed the pending live-CD destructive-topology guard fix in SETUP.COM: guard_raw_hdd_topology now requires both BIOS HDDs to be present and validates only the source-drive MBR signature in destructive mode, allowing re-install over an already-initialized target HDD while preserving the non-destructive blank-target requirement.
-
-54. Addressed a real-hardware live-CD installer hang reported around 4% clone progress by removing periodic BIOS target-drive resets from the raw clone loop and replacing them with ATA primary-channel soft reset plus source-drive BIOS reset only; this avoids mixed INT 13h target resets during ATA PIO writes on BIOSes that wedge under that combination. Revalidated with make build-full, make build-full-cd, make qemu-test-setup-runtime-hdd-install, make qemu-test-setup-full-acceptance, and make qemu-test-setup-installer-scenarios.
-
-55. Hardened full-profile taxonomy classification by adding a selectable `DOOM_TAXONOMY_PROFILE` (`doom` default, `dos_generic` optional), keeping explicit extender-failure markers authoritative, restricting inferred `extender_init` pass to a strong evidence chain (`mz_transfer=PASS` and `video_init=PASS`), and making `dos_generic` app-runtime markers optional via `DOOM_TAXONOMY_APP_RUNTIME_MARKERS` (default empty) so no app-specific regex is hardcoded in the script internals.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=extender_init make qemu-test-full-doom-taxonomy` PASS.
-	Validation evidence: `make qemu-test-full-dos-taxonomy` PASS.
-	Validation evidence: `make qemu-test-full-cd` PASS.
-
-
-56. Fixed the DOOM runtime regression introduced by the `cd58da5` memory-layout shift by restoring full-profile Stage1 DOS/runtime buffer segments and heap limit to the pre-regression map (`RUNTIME_LOAD_SEG=0x4C00`, `DOS_META/FAT/IO/ENV=0x5000/0x5200/0x5400/0x5600`, `DOS_HEAP_LIMIT_SEG=0x9F00`, `SPLASH_BUF_SEG=0x9000`), removing the startup stall at `V_Init: allocate screens.` and restoring post-video progress markers through `M_LoadDefaults`, `Z_Init`, `W_Init`, and `S_Init`.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `env DOOM_TAXONOMY_MIN_STAGE=visual_gameplay DOOM_TAXONOMY_OBSERVE_SEC=180 QEMU_TIMEOUT_SEC=260 DOOM_TAXONOMY_DISPLAY_MODE=none make qemu-test-full-doom-taxonomy` reached post-`V_Init` markers (`M_LoadDefaults`, `Z_Init`, `W_Init`, `S_Init`) in fresh runtime logs.
-
-57. Improved full-profile Stage1 DOS memory management while staying inside the Stage1 budget: AH=48 free-table allocation now honors minimal first-fit/best-fit/last-fit strategy selection with invalid-strategy fallback to first-fit, AH=48 gap-scan now treats both ALLOC and FREE entries as barriers to avoid overlap with tracked free ranges, obsolete candidate-state symbols were pruned from Stage1 data, and AH=58 strategy set now normalizes unsupported values to 0 to keep allocator behavior deterministic across callers.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make build-full-cd` PASS.
-	Validation evidence: `make qemu-test-full-cd` PASS.
-
-58. Hardened AH=4Ah resize behavior for fragmented DOS memory-table edge-cases by treating tracked FREE entries as hard boundaries in resize-limit and gap computations (ignoring only invalid states), and added a dedicated DOS21 fragmented-resize smoke scenario that verifies grow-failure signaling (`CF=1`, error `0x0008`, and returned max paragraphs) while a second block fragments the arena.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make build-full-cd` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-cd` PASS.
-
-59. Cut release `CiukiOS pre-Alpha v0.6.6` and aligned release-facing metadata (`CHANGELOG.md`, `README.md`, `VERSION`, and shell banner string) with the new version.
-
-60. Updated Stage1 DOS heap upper bound in the full profile from `DOS_HEAP_LIMIT_SEG=0xA000` to `DOS_HEAP_LIMIT_SEG=0x8800` in `src/boot/floppy_stage1.asm`, aligning the allocator ceiling with runtime/stage2 ownership at `0x8800/0x8A00` to avoid potential overlap with runtime-owned memory during external DOS execution.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full` PASS.
-	Validation evidence: `make qemu-test-full-wolf3d-taxonomy` PASS.
-	Validation evidence: `shell: wolf-screen-capture` PASS (`build/full/check_wolf_screen.log`: `shell_prompt_returned=no`; transfer marker stage PASS).
-	Validation evidence: `shell: wolf-ppm-stats` PASS (`build/full/check_wolf_stats.txt`: `6 80`, unchanged vs baseline 6/80).
-	Validation evidence: `DO_BUILD=0 DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=220 DOS_TAXONOMY_OBSERVE_SEC=25 bash scripts/qemu_test_full_dos_taxonomy.sh > build/full/check_doom_summary.log 2>&1` PASS.
-
-61. Hardened generic DOS taxonomy runtime classification by detecting shell-prompt return from newly appended log lines after app launch and flagging `runtime_stable=FAIL` when the launched app drops back to the shell during the observation window, avoiding false stability PASSes for fast-return cases.
-	Validation evidence: `bash -n scripts/qemu_test_full_dos_taxonomy.sh` PASS.
-	Validation evidence: `shell: check-wolf-raw` result PASS at `min_stage=transfer_marker` with `runtime_stable=FAIL` and `shell_prompt_returned=yes` (WOLF3D returns to prompt immediately after `[M]`).
-	Validation evidence: `shell: check-doom-raw` PASS with `runtime_stable=PASS` and `shell_prompt_returned=no` (DOOM remains in runtime window).
-
-62. Restored the full-profile Stage1 runtime memory map to the known DOOM-stable layout (`RUNTIME_LOAD_SEG=0x4C00`, `DOS_META/FAT/IO/ENV=0x5000/0x5200/0x5400/0x5600`, `DOS_HEAP_LIMIT_SEG=0x9F00`) and re-hardened the dedicated DOOM taxonomy lane to validate actual DOOM startup/rendering (`dosapp` profile, `visual_gameplay` minimum stage, automatic screendump, 35s observation window). This removes the false CIUKEDIT alias behavior in the legacy target and avoids long-window host QEMU `rc=139` crashes from masking successful DOOM runtime progress.
-	Validation evidence: `make build-full` PASS.
-	Validation evidence: `make qemu-test-full-doom-taxonomy` PASS (DOOM reached `visual_gameplay` with screenshot diversity 640x400 / nonblank_samples=21216 / unique_sampled_colors=122).
-	Validation evidence: `env DO_BUILD=0 DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_OBSERVE_SEC=35 QEMU_TIMEOUT_SEC=220 bash scripts/qemu_test_full_dos_taxonomy.sh` FAIL (WOLF3D still returns to shell during observation window).
-
-63. Fixed Stage1 INT 21h AH=67h PSP bookkeeping regression in the handle-count setter path by preserving AX across `int21_get_psp` (helper no longer zeroes AX), so the caller-requested handle count is written correctly to `PSP:0032` instead of being accidentally forced to zero after `run` handoff; this targets immediate clean exits in DOS C-runtime programs (including WOLF3D) while keeping DOOM behavior unchanged.
-	Validation evidence: `DO_BUILD=1 LOG_FILE=build/full/qemu-wolf-fix.log DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_OBSERVE_SEC=90 QEMU_TIMEOUT_SEC=420 bash scripts/qemu_test_full_dos_taxonomy.sh` FAIL (`[M]` observed, then shell prompt `C:\APPS\WOLF3D\>` returned in the same runtime log).
-	Validation evidence: `DO_BUILD=0 LOG_FILE=build/full/qemu-doom-fix.log DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_OBSERVE_SEC=45 QEMU_TIMEOUT_SEC=300 bash scripts/qemu_test_full_dos_taxonomy.sh` non-regression evidence captured in serial log (`[M]` plus DOOM startup through DOS/4GW and `DOOM System Startup` markers; no shell prompt return observed before interruption).
+1. Rebased the roadmap after Phase 4: DOOM visual gameplay is closed, while Stage1/runtime split work, broader DOS app compatibility, legacy audio, and full/full-CD hardening are the next priorities.
+2. Advanced the Stage1/runtime split foundation with `\SYSTEM\RUNTIME.BIN`, runtime service-table probing, callable service ids 1-5, corrupt-runtime fallback checks, default-drive state bridging, and Stage1 size recovery.
+3. Hardened full-profile DOS compatibility across C:/D: drive state, per-drive CWD, FAT16 path/create/open/delete/rename behavior, INT 21h country/IOCTL/switch/PSP/handle/memory services, and external app return-state handling.
+4. Expanded external DOS application evidence with CIUKEDIT/GFXSTAR smoke coverage, optional DOSNavigator packaging/startup validation, shell chrome isolation, temporary INT 10h/INT 33h external-app handling, and DOSNavigator-focused stability fixes.
+5. Restored and revalidated DOOM startup/gameplay after memory-map and allocator regressions; improved DOOM/DOS taxonomy lanes with honest `runtime_stable` and `visual_gameplay` classification.
+6. Hardened the full-CD Live/install path with the direct El Torito ISO as primary output, visual SETUP UI, destructive HDD install flow, `FORMAT.COM`, topology guards, eject-before-reboot prompt, batched install I/O, and ThinkPad T23 real-hardware follow-ups.
+7. Added public docs for DOS compatibility and legacy audio planning, updated support links, cleaned obsolete project artifacts, and aligned release-facing metadata for `CiukiOS pre-Alpha v0.6.6`.
 
 ## pre-Alpha v0.6.5 (2026-05-05)
-1. Established the Stage1/runtime split architecture as the next structural direction: Stage1 is now documented as a loader boundary, with DOS runtime, shell, driver/CD policy, diagnostics, and module responsibilities mapped for migration into loaded components under `\SYSTEM`.
-2. Added `docs/stage1-runtime-split-plan-v0.1.md` with the Stage1 responsibility inventory, target `\SYSTEM\RUNTIME.BIN` architecture, memory/ABI assumptions, fallback rules, migration order, and full/full-CD acceptance gates.
-3. Added the first safe runtime-split implementation slice: `src/runtime/runtime.asm` builds into `build/full/obj/runtime.bin` and is packaged as `\SYSTEM\RUNTIME.BIN` by `scripts/build_full.sh`, inherited by full-CD without changing Stage1 boot flow, shell behavior, FAT32 scope, GUI scope, or DOOM runtime expectations.
-4. Bumped the project version to `CiukiOS pre-Alpha v0.6.5` to mark the structural split milestone and require future runtime features to target loaded runtime, shell, helper, driver, or module boundaries before adding more Stage1 logic.
-5. Validated the slice across active full/full-CD lanes: build-full, build-full-cd, full/full-CD QEMU smoke, full-CD drive shell coverage, shell stability, DRVLOAD smoke, qemu-test-all, full Stage1 selftest, and DOOM runtime-stable taxonomy all passed with the inert runtime artifact present in both images.
-6. Aligned release-facing metadata for v0.6.5, including the boot shell banner, direct full-CD ISO label, README, Roadmap, and VERSION file.
+
+1. Established the Stage1/runtime split as the structural direction: Stage1 remains loader-first while runtime, shell, driver/CD policy, diagnostics, and module responsibilities migrate toward loaded components under `\SYSTEM`.
+2. Added the inert `src/runtime/runtime.asm` artifact, packaged it as `\SYSTEM\RUNTIME.BIN`, documented the split plan, and kept default full/full-CD boot behavior stable.
+3. Validated the slice across active full/full-CD build, QEMU smoke, shell, driver, setup, Stage1 selftest, runtime-probe, and DOOM taxonomy lanes.
+4. Updated version, banner, ISO label, README, roadmap, and release metadata for `CiukiOS pre-Alpha v0.6.5`.
 
 ## pre-Alpha v0.6.3 (2026-05-05)
-1. Added a `runtime_stable` DOOM taxonomy stage after `video_init` to classify post-video observation stability separately from startup progress; a 120s visual headless run now fails explicitly on QEMU SIGSEGV instead of being masked by earlier `video_init=PASS`.
-2. Added CHS fallback boot paths for the full-CD MBR and full stage0 when booting via direct El Torito hard-disk emulation, enabling the faster non-ISOLINUX real-hardware ISO to reach Stage1 in QEMU.
-3. Fixed full-CD hardware validation by accepting valid short reads of `SYSTEM/STAGE2.BIN` during Stage2 autorun and making the CD hardware profile leave PS/2 mouse controller initialization disabled by default to preserve legacy keyboard input.
-4. Added a disposable HDD install validation lane that writes the full-profile MBR, FAT16 partition, and boot chain to `build/full/setup-hdd/target-hdd.img`, verifies the partition geometry and FAT directories, and boots the image standalone in QEMU.
-5. Integrated the direct El Torito hard-disk CD image into `scripts/build_full_cd.sh` and added a disposable CD-to-blank-HDD probe lane that boots the direct CD with a separate blank target disk attached while verifying the target remains unchanged.
-6. Added a serial-only read-only BIOS HDD probe in `SETUP.COM` and extended the CD-to-blank-HDD QEMU lane to launch setup, verify the probe masks, and stop before any destructive install step.
-7. Added a build-gated `SETUP.COM` raw runtime HDD install path for the disposable QEMU topology: `qemu-test-setup-runtime-hdd-install` enables `CIUKIOS_SETUP_RAW_HDD_INSTALL=1`, clones the direct-CD hard-disk image from BIOS `80h` to blank BIOS `81h`, verifies `[SETUP-HDD-INSTALL] START/DONE`, checks MBR/FAT16/mtools readability, and boots the installed HDD standalone. Normal full-CD builds leave the raw install path disabled unless explicitly enabled.
-8. Promoted the full-CD build into the main Live/install media path: CD/QEMU boots default to D:, installed HDD boots default to C:, SETUP enables destructive raw HDD installation with a typed DESTROY confirmation, SETUP patches the installed Stage1 default back to C: after cloning, and the shell now includes a drives command for quick unit visibility.
-9. Improved Live/install usability by showing a SETUP connected-disk map for BIOS 80h/81h roles, making FAT path lookup preserve typed case, updating QEMU harnesses to send uppercase FAT paths explicitly, fixing the Live CD shell prompt to display the DOS default drive D:, and realigning the installed Stage1 D-to-C patch offset after the prompt code change. Added an explicit `qemu-run-full-cd` visual runner and `qemu-test-full-cd` smoke target so QEMU Live CD boots use the direct ISO path and validate the D: prompt instead of the installed-HDD C: profile.
-10. Fixed FAT16 shell footer RAM telemetry to show available DOS heap memory instead of subtracting it into a misleading `RAM:2K` used-memory value, and restored DOS-program FAT compatibility by uppercasing external INT 21h path lookups while keeping shell path commands case-sensitive.
-11. Added convenience wrappers `scripts/build_run_full.sh` and `scripts/build_run_full_cd.sh` to run build+run in one step for the full and full-CD profiles.
-12. After any DOS program exits, the shell now automatically restores the pre-execution working directory and clears the screen, returning the user to a clean shell at the correct path.
-13. Replaced tick-counter CPU% estimator in `shell_footer_compute_cpu_pct` with a per-tick idle-loop-count high-watermark algorithm (`shell_footer_loop_count` / `shell_footer_max_loop`); removed unused `shell_footer_cpu_idle_ticks` / `shell_footer_cpu_busy_ticks` variables; renamed RAM footer label from `RAM:` to `FREE:` and adjusted column offsets (75→74, +4→+5) for the longer prefix.
-14. Added `woof` as a CiukiOS-specific alias for the `cd` shell command, changing the current working directory without altering existing `cd` behavior.
-15. Added a full-profile shell stability QEMU lane that validates `woof` as `cd`, CWD preservation after DOS program exit, prompt recovery, and mixed-case path rejection.
-16. Extended the full-profile shell stability harness with deterministic empty-input, invalid-input, edit-key, tab-key, and repeated COM/EXE execution recovery coverage.
-17. Expanded FAT16 INT 21h drive semantics so C: and D: are accepted for default-drive and free-space calls, aligned the full and full-CD profiles with the active C:/D: runtime model, and extended the DOS21 smoke path to validate the new drive/free-space behavior.
+
+1. Promoted the full-CD profile into the main Live/install media path with direct El Torito hard-disk boot, D: live shell behavior, SETUP destructive install support, and disposable HDD install validation.
+2. Added CHS/EDD boot and setup hardening, CD/HDD probe lanes, installed-HDD boot checks, and user-facing QEMU run/test targets for the full-CD profile.
+3. Improved shell and FAT16 DOS behavior around drive semantics, current-directory preservation, prompt recovery, case handling, footer telemetry, and repeated COM/EXE execution stability.
+4. Added DOOM `runtime_stable` taxonomy classification so post-video observation failures are reported honestly instead of being hidden behind earlier startup stages.
 
 ## pre-Alpha v0.6.1 (2026-05-04)
-1. Added a full-profile DOOM taxonomy harness and Makefile target to classify launch progress stages deterministically.
-2. Added local-only DOOM payload packaging in the full image build lane and guarded proprietary assets from publication.
-3. Fixed INT 21h MZ loading to use header-declared module size, removing the previous 4B:08 launch failure and advancing DOOM to extender startup diagnostics.
-4. Closed the Phase 4 installer execution lane with deterministic scenario coverage (success, media swap, timeout, missing media, and insufficient space).
-5. Hardened installer manifest-source diagnostics, including explicit `MANIFEST_MEDIA_HEX` reporting for normal and fallback parse paths.
-6. Synchronized project documentation to reflect installer-lane closure while keeping the runtime/DOOM lane active.
-7. Improved README changelog visibility and updated local agent directives to require a `CHANGELOG.md` update for every completed task.
-8. Advanced the DOOM taxonomy harness to boot the full profile interactively, invoke `DRVLOAD.COM`, and launch `DOOM.EXE`, adding a deterministic `doom_exec_attempted` stage before extender/video/menu gates.
-9. Advanced DOOM runtime coverage by adding an MZ transfer stage, FAT16 32-bit seek/read file positions, real handle duplication for DOS extender loaders, and DOOM-specific environment executable path handling; stricter taxonomy in item 13 now separates DOS/16M banner detection from the remaining `tstack` blocker.
-10. Improved DOS/16M conventional-memory bring-up for DOOM by repairing the INT 21h MCB arena and setting PSP:0002 to `DOS_HEAP_LIMIT_SEG` on resize success; later stricter taxonomy in item 13 reclassifies the remaining `tstack` allocation error as still open.
-11. Added a full-profile DOOM loader fallback for `DOOM.ETX` self-reopens, preserved PSP free-tail allocation state while keeping DOS/16M-compatible PSP limits, and implemented XMS `move_emb` via BIOS INT 15h AH=87h; intermediate stricter DOOM validation blocked at DOS/16M `tstack` after MZ transfer and before video init.
-12. Rebuilt the full-profile INT 21h MCB arena from an ordered chain source after allocation, free, and resize operations: PSP MCB sizing remains separate from compatibility `PSP:0002`, heap resize limits preserve adjacent MCB headers, invisible bump allocations are disabled, PSP resize no longer relocates caller-owned blocks, and post-block2 free gaps are allocatable by slot3.
-13. Tightened the DOOM taxonomy harness so DOS/16M `tstack` allocation errors fail `extender_init` instead of producing a false extender pass, and added persistent INT 21h AH=58h memory-strategy get/set state; intermediate DOOM validation was honestly classified as blocked at DOS/16M `tstack` before `video_init`.
-14. Aligned full-profile MZ process memory setup closer to DOS semantics by sizing the initial PSP block from MZ minalloc/maxalloc, keeping PSP:0002 as the compatible top-of-memory value while tracking the real MCB end internally, and reserving the below-heap MCB gap; intermediate diagnostics showed DOS/16M AH=4Ah/48h/4Ah calls succeeding while the runtime still reported the tstack blocker before video_init.
-15. Introduced a compact ordered DOS memory block table to drive MCB chain rebuild, next-allocation scanning, and largest-gap reporting, and persisted the low free gap exposed by AH=49 block promotion so AH=48 can consume it; full and stage1 smoke lanes remained green during this intermediate step while DOOM taxonomy still failed honestly at DOS/16M tstack.
 
-16. Converted INT 21h AH=48h/49h/4Ah memory mutation to the ordered DOS memory block table as the allocator source of truth, including reusable FREE entries, legacy mirror synchronization, and allocator register preservation; full and stage1 lanes passed, while fresh DOOM taxonomy reached MZ transfer without the prior tstack marker but still lacked an extender marker at that point.
-17. Fixed INT 21h AH=33h Ctrl-Break get/set compatibility so DOS/4G can preserve AH across its get-then-set sequence instead of accidentally invoking AH=00 terminate, removed the stale `DOOM.ETX` to `DOOM.EXE` path rewrite, and tightened taxonomy to fail DOS/16M executable-validation errors; DOOM now advances past the immediate return-to-prompt path and blocks honestly on `not a DOS/16M executable`.
-18. Fixed FAT16 INT 21h read/seek return-value preservation across handle-slot swaps so DOS/4GW sees correct `AX` byte counts and 32-bit seek positions, expanded the ordered MCB table to 16 entries for DOOM's later runtime allocations, and updated the DOOM taxonomy launch to run from `\APPS\DOOM` with DOS4GW/video markers; full-profile DOOM taxonomy now reaches `video_init=PASS`.
-19. Added a full-profile DOOM visual taxonomy lane using QEMU `-display none` and optional monitor `screendump` capture, removed the false `M_Init` menu marker, and captured post-status-bar gameplay evidence at `build/full/doom_post_status_after_marker_fix.png`; serial taxonomy remains honest at `video_init=PASS` with `menu_reached=DEFERRED`.
-20. Closed the Phase 4 DOOM gameplay playable milestone and bumped the public project version to `CiukiOS pre-Alpha v0.6.1`; manual owner validation confirms DOOM is playable on the generated full-profile image.
+1. Closed Phase 4 as DOOM gameplay playable on the full FAT16 profile: DOOM launches through DOS/4GW, loads WAD data, reaches video/gameplay runtime, and was manually confirmed playable by the project owner.
+2. Added the full-profile DOOM taxonomy harness, local-only DOOM payload packaging, and staged runtime fixes across MZ loading, FAT16 read/seek behavior, PSP/MCB setup, DOS memory strategy, XMS move support, and DOS extender startup classification.
+3. Closed the Phase 4 installer execution lane with deterministic setup scenario coverage and release-facing documentation updates.
 
 ## pre-Alpha v0.5.4 (2026-05-01)
+
 1. Improved shell input stability for hold-key repeat, line wrap, and backspace behavior.
-2. Stabilized FAT16 shell footer telemetry (`CPU/DSK/RAM`) with corrected non-stuck stat refresh behavior.
-3. Revalidated cross-profile build and regression lanes on floppy (FAT12) and full (FAT16) profiles.
+2. Stabilized FAT16 shell footer telemetry and revalidated cross-profile build/regression lanes.
+
 ## pre-Alpha v0.5.3 (2026-04-30)
-1. Stabilized shell `move/mv` path-command handling across floppy (FAT12) and full (FAT16) runtime profiles.
-2. Fixed `INT 21h AH=56h` rename/move behavior to preserve deterministic DOS file-move semantics.
-3. Revalidated shell command regression lanes after the fixes to confirm runtime stability.
+
+1. Stabilized shell `move`/`mv` behavior across floppy and full runtime profiles.
+2. Fixed `INT 21h AH=56h` rename/move behavior and revalidated shell command regression lanes.
 
 ## pre-Alpha v0.5.2 (2026-04-29)
-1. Closed Stage1 DOS command regressions across floppy (FAT12) and full (FAT16) profiles.
-2. Stabilized INT 21h runtime return behavior in critical read/write/seek paths for deterministic file I/O outcomes.
-3. Fixed floppy image build write path to preserve root/runtime payload integrity during regression runs.
+
+1. Closed Stage1 DOS command regressions across floppy and full profiles.
+2. Stabilized critical INT 21h read/write/seek return paths and floppy image write behavior.
 
 ## pre-Alpha v0.5.0 (2026-04-28)
-1. Stabilized Stage1 startup and shell-entry runtime behavior for more deterministic boot bring-up.
-2. Hardened shell prompt/input paths, including drive and current-directory state handling.
-3. Improved QEMU stderr observability to speed up runtime diagnostics and regression triage.
+
+1. Stabilized Stage1 startup, shell entry, prompt/input paths, drive/CWD state, and QEMU stderr observability for more deterministic bring-up.
 
 ## pre-Alpha v0.5.0 (2026-04-22)
+
 1. Restarted the project from a clean legacy BIOS x86 architecture baseline.
-2. Reset the previous codebase state to start from a clean legacy BIOS x86 architecture baseline.
-3. Introduced two official build profiles: `floppy` (1.44MB bring-up) and `full` (extended runtime), both shell-first.
-4. Added build and QEMU smoke-test scripts for both image profiles.
-5. Established branch discipline and documentation standards for reproducible delivery.
-6. Set real floppy bootability and shell reliability as the baseline acceptance criteria.
+2. Introduced the initial `floppy` and `full` build profiles with build/QEMU smoke scripts and baseline branch/documentation discipline.

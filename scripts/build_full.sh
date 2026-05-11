@@ -80,6 +80,8 @@ COMMAND_STUB_BIN="build/full/obj/command.com"
 COMMAND_COMPAT_IMAGE_PATH="${CIUKIOS_COMMAND_COM_IMAGE_PATH:-::COMMAND.COM}"
 DRVLOAD_SRC="src/com/drvload.asm"
 DRVLOAD_BIN="build/full/obj/drvload.com"
+SB16INIT_SRC="src/com/sb16init.asm"
+SB16INIT_BIN="build/full/obj/sb16init.com"
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
 SPLASH_BIN="build/full/obj/SPLASH.BIN"
@@ -152,7 +154,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -223,6 +225,7 @@ nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL
 nasm -f bin "$FORMAT_SRC" -o "$FORMAT_BIN"
 nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
 nasm -f bin "$DRVLOAD_SRC" -o "$DRVLOAD_BIN"
+nasm -f bin "$SB16INIT_SRC" -o "$SB16INIT_BIN"
 
 echo "[build-full] generating splash asset"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -626,8 +629,34 @@ if [[ -d "$WOLF3D_SRC_DIR" ]]; then
 	echo "[build-full] injecting WOLF3D payload from $WOLF3D_SRC_DIR to $WOLF3D_IMAGE_DIR"
 	mtools_ensure_dir "$IMG" "$WOLF3D_IMAGE_DIR"
 
+	wolf3d_payload_dir="build/full/obj/wolf3d-payload"
+	rm -rf "$wolf3d_payload_dir"
+	mkdir -p "$wolf3d_payload_dir"
+	cp -a "$WOLF3D_SRC_DIR"/. "$wolf3d_payload_dir"/
+	if [[ -f "$wolf3d_payload_dir/WOLF3D.EXE" ]]; then
+		python3 - "$wolf3d_payload_dir/WOLF3D.EXE" <<PY
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+data = bytearray(path.read_bytes())
+offset = 0x2092C
+expected = bytes.fromhex("8b0ef895")
+patched = bytes.fromhex("eb44f895")
+current = bytes(data[offset:offset + 4])
+if current == expected:
+    data[offset:offset + 2] = bytes.fromhex("eb44")
+    path.write_bytes(data)
+    print("[build-full] patched WOLF3D page-flip wait")
+elif current == patched:
+    print("[build-full] WOLF3D page-flip patch already present")
+else:
+    raise SystemExit(f"[build-full] ERROR: unexpected WOLF3D.EXE bytes at 0x{offset:x}: {current.hex()}")
+PY
+	fi
+
 	shopt -s nullglob dotglob
-	wolf3d_items=("$WOLF3D_SRC_DIR"/*)
+	wolf3d_items=("$wolf3d_payload_dir"/*)
 	shopt -u nullglob dotglob
 	if (( ${#wolf3d_items[@]} > 0 )); then
 		mcopy -s -o -i "$IMG" "${wolf3d_items[@]}" "$WOLF3D_IMAGE_DIR/"
@@ -637,6 +666,10 @@ if [[ -d "$WOLF3D_SRC_DIR" ]]; then
 else
 	echo "[build-full] WOLF3D payload not found at $WOLF3D_SRC_DIR (skipped)"
 fi
+
+echo "[build-full] injecting SB16INIT.COM helper to ${DRIVERS_IMAGE_DIR%/}/SB16INIT.COM"
+mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
+mcopy -o -i "$IMG" "$SB16INIT_BIN" "${DRIVERS_IMAGE_DIR%/}/SB16INIT.COM"
 
 if [[ ! -d "$DRIVERS_SRC_DIR" ]]; then
 	if [[ "$CIUKIOS_ALLOW_MISSING_DRIVERS" == "1" ]]; then

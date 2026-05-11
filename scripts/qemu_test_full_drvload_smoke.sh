@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-DO_BUILD=1
+DO_BUILD="${DO_BUILD:-1}"
 IMG="build/full/ciukios-full.img"
 SERIAL_LOG="build/full/qemu-full-drvload-smoke.serial.log"
 STRINGS_LOG="build/full/qemu-full-drvload-smoke.strings.log"
@@ -273,9 +273,9 @@ if [[ -n "$DRVLOAD_ARGS" ]]; then
   DRVLOAD_COMMAND+=" $DRVLOAD_ARGS"
 fi
 
-DRVLOAD_BEGIN_PATTERN='\[DRVLOAD\][[:space:]]+BEGIN|\[\[DDRRVVLLOOAADD\]\][[:space:]]+BBEEGGIIN'
-DRVLOAD_TRY_PATTERN='\[DRVLOAD\][[:space:]]+TRY[[:space:]]+|\[\[DDRRVVLLOOAADD\]\][[:space:]]+TTRRYY[[:space:]]+'
-DRVLOAD_DONE_PATTERN='\[DRVLOAD\][[:space:]]+DONE|\[\[DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
+DRVLOAD_BEGIN_PATTERN='\[DRVLOAD\][[:space:]]+BEGIN|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+BBEEGGIIN'
+DRVLOAD_TRY_PATTERN='\[DRVLOAD\][[:space:]]+TRY[[:space:]]+|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+TTRRYY[[:space:]]+'
+DRVLOAD_DONE_PATTERN='\[DRVLOAD\][[:space:]]+DONE|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
 
 QEMU_ARGS=(
   -machine pc,vmport=off
@@ -287,6 +287,8 @@ QEMU_ARGS=(
   -chardev "file,id=ser0,path=$SERIAL_LOG"
   -serial chardev:ser0
   -monitor "unix:$MON_SOCK,server,nowait"
+  -audiodev none,id=snd0
+  -device sb16,iobase=0x220,irq=5,dma=1,dma16=5,audiodev=snd0
   -no-reboot
   -no-shutdown
 )
@@ -371,6 +373,18 @@ if ! grep -Eiq "$DRVLOAD_DONE_PATTERN" "$STRINGS_LOG"; then
 fi
 if ! grep -Eiq "$DRVLOAD_TRY_PATTERN" "$STRINGS_LOG"; then
   mark_fail "STRINGS_TRY" "TRY marker missing in strings log"
+fi
+
+if [[ " $DRVLOAD_ARGS " == *" /AUDIO "* ]]; then
+  if ! grep -Eiq "\[SB16INIT\][[:space:]]+DSP[[:space:]]+OK|\[{1,2}SSBB1166IINNIITT\]\][[:space:]]+DDSSPP[[:space:]]+OOKK" "$STRINGS_LOG"; then
+    mark_fail "STRINGS_AUDIO_DSP" "SB16 DSP OK marker missing in strings log"
+  fi
+  if ! grep -Eiq "\[SB16INIT\][[:space:]]+TONE[[:space:]]+DONE|\[{1,2}SSBB1166IINNIITT\]\][[:space:]]+TTOONNEE[[:space:]]+DDOONNE" "$STRINGS_LOG"; then
+    mark_fail "STRINGS_AUDIO_TONE" "SB16 tone done marker missing in strings log"
+  fi
+  if ! grep -Eiq "\[DRVLOAD\][[:space:]]+OK[[:space:]]+AUDIO|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+OOKK[[:space:]]+AAUUDDIIO" "$STRINGS_LOG"; then
+    mark_fail "STRINGS_AUDIO_OK" "DRVLOAD OK AUDIO marker missing in strings log"
+  fi
 fi
 
 {

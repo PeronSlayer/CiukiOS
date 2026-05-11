@@ -38,6 +38,7 @@ QEMU_STDERR="${QEMU_STDERR:-build/full/qemu-full-dos-taxonomy.stderr.log}"
 QEMU_CMD_LOG="${QEMU_CMD_LOG:-build/full/qemu-full-dos-taxonomy.commands.log}"
 QEMU_MON_SOCK="${QEMU_MON_SOCK:-/tmp/ciukios-dosapp-taxonomy.monitor.sock}"
 FUTURE_MTIME_TOLERANCE_SEC="${FUTURE_MTIME_TOLERANCE_SEC:-5}"
+QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-auto}"
 
 case "$DOS_TAXONOMY_PROFILE" in
   doom|dosapp)
@@ -180,6 +181,77 @@ pick_qemu() {
 
 qemu_available() {
   pick_qemu >/dev/null 2>&1
+}
+
+normalize_audio_backend() {
+  case "$1" in
+    pulse|pulseaudio)
+      echo "pa"
+      ;;
+    *)
+      echo "$1"
+      ;;
+  esac
+}
+
+audio_backend_supported() {
+  local qemu_cmd="$1"
+  local backend="$2"
+
+  case "$backend" in
+    none|alsa|dbus|jack|oss|pa|pipewire|sdl|spice|wav) ;;
+    *) return 1 ;;
+  esac
+
+  [[ "$backend" == "none" ]] && return 0
+  "$qemu_cmd" -audiodev help 2>/dev/null | grep -Eq "^${backend}$"
+}
+
+configure_audio_args() {
+  local qemu_cmd="$1"
+  local context="$2"
+  local requested_backend="${QEMU_AUDIO_BACKEND:-}"
+  local backend=""
+  local candidate
+
+  QEMU_AUDIO_ARGS=()
+  QEMU_AUDIO_DETAIL="off"
+
+  case "$QEMU_AUDIO_MODE" in
+    auto|on|off) ;;
+    *)
+      echo "[dos-taxonomy] ERROR invalid QEMU_AUDIO_MODE=$QEMU_AUDIO_MODE (expected auto, on or off)" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ "$QEMU_AUDIO_MODE" == "off" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$requested_backend" ]]; then
+    backend="$(normalize_audio_backend "$requested_backend")"
+    if ! audio_backend_supported "$qemu_cmd" "$backend"; then
+      echo "[dos-taxonomy] ERROR unsupported QEMU_AUDIO_BACKEND=$requested_backend for $qemu_cmd" >&2
+      exit 1
+    fi
+  elif [[ "$context" == "headless" ]]; then
+    backend="none"
+  else
+    for candidate in pipewire pa alsa sdl; do
+      if audio_backend_supported "$qemu_cmd" "$candidate"; then
+        backend="$candidate"
+        break
+      fi
+    done
+    [[ -n "$backend" ]] || backend="none"
+  fi
+
+  QEMU_AUDIO_ARGS=(
+    -audiodev "${backend},id=snd0"
+    -device "sb16,iobase=0x220,irq=5,dma=1,dma16=5,audiodev=snd0"
+  )
+  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=5 dma=1 hdma=5"
 }
 
 log_has_pattern() {
@@ -624,7 +696,7 @@ classify_runtime() {
     return
   fi
 
-  mkdir -p "$(dirname "$LOG_FILE")"
+  mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$QEMU_STDERR")" "$(dirname "$QEMU_CMD_LOG")"
   capture_log_metadata "$LOG_FILE"
   if [[ "$RUNTIME_LOG_FILE" != "$LOG_FILE" ]]; then
     capture_log_metadata "$RUNTIME_LOG_FILE"
@@ -654,6 +726,7 @@ classify_runtime() {
     fi
 
     qemu_cmd="$(pick_qemu)"
+    configure_audio_args "$qemu_cmd" headless
     case "$DOS_TAXONOMY_DISPLAY_MODE" in
       nographic) qemu_display_args=(-nographic) ;;
       none) qemu_display_args=(-display none) ;;
@@ -685,7 +758,10 @@ classify_runtime() {
       -monitor "unix:$QEMU_MON_SOCK,server,nowait"
       -no-reboot
       -no-shutdown
+      "${QEMU_AUDIO_ARGS[@]}"
     )
+
+    echo "[QEMU_AUDIO] $QEMU_AUDIO_DETAIL" >> "$QEMU_CMD_LOG"
 
     if [[ -n "${QEMU_EXTRA_ARGS:-}" ]]; then
       # shellcheck disable=SC2206

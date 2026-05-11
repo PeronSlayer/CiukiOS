@@ -6,21 +6,22 @@ org 0x0000
 %define SHELL_EXEC_PATH_BUF_LEN 80
 %define SHELL_HISTORY_MAX 8
 %define COM_LOAD_SEG 0x2000
-%define MZ_LOAD_SEG 0x3000
+%define MZ_LOAD_SEG 0x1800
 %define MZ2_LOAD_SEG 0x3800
 %define MZ3_LOAD_SEG 0x7800
 %define RUNTIME_LOAD_SEG 0x4C00
 %define STAGE2_LOAD_SEG 0x4E00
-%define DOS_META_BUF_SEG 0x7100
-%define DOS_FAT_BUF_SEG  0x7300
-%define DOS_IO_BUF_SEG   0x7500
-%define DOS_ENV_SEG      0x7700
+%define DOS_META_BUF_SEG 0x1200
+%define DOS_FAT_BUF_SEG  0x1400
+%define DOS_IO_BUF_SEG   0x1600
+%define DOS_ENV_SEG      0x1620
+%define MZ_LOAD_LIMIT_SEG 0x5800
 %define DOS_SYSVARS_ANCHOR_OFF 0x0800
 %define DOS_SYSVARS_OFF        0x0802
 %define DOS_SYSVARS_CDS_OFF    0x0900
 %define DOS_SYSVARS_DPB_OFF    0x0A80
 %define DOS_SYSVARS_SFT_OFF    0x0B00
-%define DOS_HEAP_BASE_SEG 0x7900
+%define DOS_HEAP_BASE_SEG 0x5D00
 %define DOS_HEAP_LIMIT_SEG 0x9F00
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
@@ -1693,7 +1694,6 @@ int21_exec:
     mov al, [cs:path_fat_name + 10]
     cmp al, 'M'
     jne .check_exe
-
     cmp word [cs:current_psp_seg], 0
     jne .nested_com_seg
     mov word [cs:current_mz_context_slot], 1
@@ -1761,7 +1761,7 @@ int21_exec:
     add ax, 0x000F
     cmp ax, [cs:current_psp_seg]
     jbe .nested_fixed_seg
-    cmp ax, DOS_META_BUF_SEG
+    cmp ax, MZ_LOAD_LIMIT_SEG
     jae .nested_fixed_seg
     mov [cs:current_load_seg], ax
     jmp .do_exec_mz
@@ -2241,7 +2241,7 @@ int21_exec_load_to_es:
     add ax, 0x1000
     cmp word [cs:current_load_seg], MZ3_LOAD_SEG
     je .copy_limit_high
-    cmp ax, DOS_META_BUF_SEG
+    cmp ax, MZ_LOAD_LIMIT_SEG
     jae .copy_too_large
     jmp .copy_limit_ready
 .copy_limit_high:
@@ -2492,6 +2492,18 @@ int21_exec_load_mz:
     xor cx, cx
     call int21_exec_load_to_es
     jc .done
+
+    mov dx, MZ_LOAD_LIMIT_SEG
+.clear_mz_tail:
+    mov es, dx
+    xor ax, ax
+    xor di, di
+    mov cx, 128
+    rep stosw
+    add dx, 0x0010
+    cmp dx, DOS_HEAP_LIMIT_SEG
+    jb .clear_mz_tail
+
     clc
     jmp .done
 
@@ -2703,6 +2715,8 @@ int21_exec_run_mz:
     mov si, msg_mz_begin
     call print_string_serial
     pop ds
+
+    call stage1_runtime_clear_cache
 
     cli
     mov ax, [cs:mz_psp_seg]
@@ -3013,7 +3027,7 @@ int21_country_info:
     pop si
     pop cx
     mov bx, 1
-    xor ax, ax
+    mov ax, 0x3800
     clc
     ret
 .bad_country:
@@ -16203,6 +16217,7 @@ int15_handler:
 
 .extmem_88:
     mov ax, [cs:xms_free_kb]
+    add ax, [cs:xms_alloc_kb]
     and word [ss:bp + 6], 0xFFFE
     pop bp
     iret
@@ -16549,6 +16564,7 @@ int2f_handler:
     push cs
     pop es
     mov bx, xms_entrypoint
+    mov ax, 0x0080
 
 .iret_clear_cf_enter:
     push bp
@@ -16562,6 +16578,8 @@ int2f_handler:
 xms_entrypoint:
     or ah, ah
     je .version
+    cmp ah, 0x08
+    jb .hma_a20_stub
     cmp ah, 0x08
     je .query_free
     cmp ah, 0x09
@@ -16893,13 +16911,18 @@ xms_entrypoint:
 
 .check_handle:
     cmp dx, 1
-    jne .free_fail
+    jne .check_handle_fail
     cmp word [cs:xms_alloc_kb], 0
-    je .free_fail
+    je .check_handle_fail
+    clc
+    ret
+.check_handle_fail:
+    stc
     ret
 
 .lock_emb:
     call .check_handle
+    jc .free_fail
     mov ax, 1
     mov dx, 0x0010
     xor bx, bx
@@ -16907,12 +16930,14 @@ xms_entrypoint:
 
 .unlock_emb:
     call .check_handle
+    jc .free_fail
     mov ax, 1
     xor bx, bx
     retf
 
 .query_handle:
     call .check_handle
+    jc .free_fail
     mov ax, 1
     mov dx, [cs:xms_alloc_kb]
     xor bx, bx
@@ -16939,8 +16964,13 @@ xms_entrypoint:
     mov bl, 0x80
     retf
 
+.hma_a20_stub:
+    mov ax, 1
+    xor bl, bl
+    retf
+
 .version:
-    mov ax, 0x0200
+    mov ax, 0x0300
     mov bx, ax
     cwd
     retf
@@ -17314,12 +17344,12 @@ shell_completion_saved_dta_off dw 0
 shell_completion_dta times 64 db 0
 
 msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
-msg_diag_begin    db "[S1] d", 13, 10, 0
+msg_diag_begin    db "D", 13, 10, 0
 msg_diag_int10    db "[10]", 13, 10, 0
 msg_diag_int13_ok db "[13]", 13, 10, 0
 msg_diag_int16_ok db "[16]", 13, 10, 0
-msg_diag_int1a    db "[TICKS] 0x", 0
-msg_int21_installed db "[INT21] ok", 13, 10, 0
+msg_diag_int1a    db "T", 0
+msg_int21_installed db "I", 13, 10, 0
 msg_int21_missing db "[I21] no", 13, 10, 0
 country_info_default:
     dw 0

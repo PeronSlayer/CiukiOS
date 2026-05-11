@@ -13,6 +13,7 @@ start:
     mov dx, msg_begin
     call print_line
 
+    call try_audio
     call try_smartdrv
     call try_devload
 
@@ -34,6 +35,35 @@ start:
 
 try_smartdrv:
     mov dx, msg_skip_smartdrv
+    call print_line
+    ret
+
+try_audio:
+    mov dx, msg_try_audio
+    call print_line
+
+    cmp byte [audio_mode], 1
+    jne .skip
+
+    mov si, path_sb16init
+    xor bx, bx
+    call run_program
+    pushf
+    call print_audio_result
+    popf
+    jc .fail
+
+    mov dx, msg_ok_audio
+    call print_line
+    ret
+
+.fail:
+    mov dx, msg_fail_audio
+    call print_line
+    ret
+
+.skip:
+    mov dx, msg_skip_audio
     call print_line
     ret
 
@@ -351,18 +381,21 @@ prepare_sys_init_request:
 
 parse_args:
     mov byte [evidence_mode], 0
+    mov byte [audio_mode], 0
     xor ch, ch
     mov cl, [0x80]
     mov si, 0x81
 
 .scan:
-    cmp cl, 8
-    jb .done
+    cmp cl, 0
+    je .done
     lodsb
     dec cl
     cmp al, 0x2F
     jne .scan
 
+    cmp cl, 7
+    jb .check_audio
     push si
     push cx
     mov di, arg_devload
@@ -370,11 +403,39 @@ parse_args:
     repe cmpsb
     pop cx
     pop si
-    jne .scan
+    jne .check_audio
 
     mov byte [evidence_mode], 1
 
+.check_audio:
+    cmp cl, 5
+    jb .scan
+    push si
+    push cx
+    mov di, arg_audio
+    mov cx, 5
+    repe cmpsb
+    pop cx
+    pop si
+    jne .scan
+
+    mov byte [audio_mode], 1
+    jmp .scan
+
 .done:
+    ret
+
+print_audio_result:
+    mov dx, msg_result_audio_prefix
+    call print_line
+    mov al, [last_term_type]
+    call print_hex_byte
+    mov dx, msg_result_exit_prefix
+    call print_line
+    mov al, [last_exit_code]
+    call print_hex_byte
+    mov dx, msg_crlf
+    call print_line
     ret
 
 print_devload_result:
@@ -448,6 +509,7 @@ path_qcdrom db 92,83,89,83,84,69,77,92,68,82,73,86,69,82,83,92,81,67,68,82,79,77
 
 devload_ok db 0
 evidence_mode db 0
+audio_mode db 0
 last_exit_code db 0
 last_term_type db 0
 
@@ -462,15 +524,21 @@ exec_param_block:
 
 cmdtail_empty db 0, 13
 arg_devload db 'DEVLOAD'
+arg_audio db 'AUDIO'
 cmdtail_devload db 38, ' \SYSTEM\DRIVERS\QCDROM.SYS /D:QCDROM1', 13
 cmdtail_mscdex db 11, ' /D:QCDROM1', 13
 
 path_smartdrv db '\SYSTEM\DRIVERS\SMARTDRV.EXE', 0
 path_devload db '\SYSTEM\DRIVERS\DEVLOAD.COM', 0
+path_sb16init db '\SYSTEM\DRIVERS\SB16INIT.COM', 0
 path_mscdex db '\SYSTEM\DRIVERS\MSCDEX.EXE', 0
 
 msg_begin db '[DRVLOAD] BEGIN', 13, 10, '$'
 msg_done db '[DRVLOAD] DONE', 13, 10, '$'
+msg_try_audio db '[DRVLOAD] TRY AUDIO \SYSTEM\DRIVERS\SB16INIT.COM', 13, 10, '$'
+msg_ok_audio db '[DRVLOAD] OK AUDIO', 13, 10, '$'
+msg_fail_audio db '[DRVLOAD] FAIL AUDIO (optional, continue)', 13, 10, '$'
+msg_skip_audio db '[DRVLOAD] SKIP AUDIO (pass /AUDIO to enable)', 13, 10, '$'
 msg_skip_smartdrv db '[DRVLOAD] SKIP SMARTDRV optional', 13, 10, '$'
 msg_try_smartdrv db '[DRVLOAD] TRY SMARTDRV.EXE', 13, 10, '$'
 msg_ok_smartdrv db '[DRVLOAD] OK SMARTDRV.EXE', 13, 10, '$'
@@ -483,6 +551,7 @@ msg_try_mscdex db '[DRVLOAD] TRY MSCDEX.EXE /D:QCDROM1', 13, 10, '$'
 msg_ok_mscdex db '[DRVLOAD] OK MSCDEX.EXE', 13, 10, '$'
 msg_fail_mscdex db '[DRVLOAD] FAIL MSCDEX.EXE (continue)', 13, 10, '$'
 msg_skip_mscdex db "[DRVLOAD] SKIP MSCDEX.EXE (DEVLOAD not ok)", 13, 10, "$"
+msg_result_audio_prefix db "[DRVLOAD] RESULT AUDIO term=0x", "$"
 msg_result_devload_prefix db "[DRVLOAD] RESULT DEVLOAD term=0x", "$"
 msg_result_mscdex_prefix db "[DRVLOAD] RESULT MSCDEX term=0x", "$"
 msg_result_exit_prefix db " exit=0x", "$"
