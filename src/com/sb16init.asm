@@ -32,6 +32,7 @@ start:
     int 0x21
 
 .found:
+    mov [dsp_base_current], bx
     call print_found
 
     call configure_sb16_platform
@@ -43,6 +44,8 @@ start:
     call play_tone
     jc .tone_fail
 
+    mov dx, msg_dma_done
+    call print_line
     mov dx, msg_tone_done
     call print_line
     mov dx, msg_done
@@ -105,35 +108,154 @@ dsp_reset_handshake:
 ; IN: BX = DSP base port
 ; OUT: CF clear on success, set on write timeout
 play_tone:
-    push ax
-    push cx
+    call install_irq7_handler
+    jc .fail_no_restore
+
+    call program_dma1_playback
+    jc .fail
 
     mov al, 0xD1
     call dsp_write_byte
     jc .fail
 
-    mov cx, 700
-.tone_loop:
-    mov al, 0x10
-    call dsp_write_byte
-    jc .fail
-    mov al, 0x20
+    mov al, 0x40
     call dsp_write_byte
     jc .fail
 
-    mov al, 0x10
-    call dsp_write_byte
-    jc .fail
-    mov al, 0xE0
+    mov al, 0x83
     call dsp_write_byte
     jc .fail
 
-    call delay_tone
-    loop .tone_loop
+    mov al, 0x14
+    call dsp_write_byte
+    jc .fail
+
+    mov ax, dma_sample_len - 1
+    call dsp_write_byte
+    jc .fail
+
+    mov al, ah
+    call dsp_write_byte
+    jc .fail
+
+    call wait_irq7
+    jc .fail
 
     mov al, 0xD3
     call dsp_write_byte
+
+    call restore_irq7_handler
+
+    clc
+    ret
+
+.fail:
+    call mask_dma1
+    call restore_irq7_handler
+
+.fail_no_restore:
+    stc
+    ret
+
+install_irq7_handler:
+    push ax
+    push bx
+    push dx
+    push ds
+    push es
+
+    mov byte [irq7_count], 0
+
+    mov ax, 0x350F
+    int 0x21
+    mov [old_irq7_off], bx
+    mov ax, es
+    mov [old_irq7_seg], ax
+
+    push cs
+    pop ds
+    mov dx, irq7_handler
+    mov ax, 0x250F
+    int 0x21
+    mov byte [irq7_installed], 1
+    clc
+
+    pop es
+    pop ds
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+restore_irq7_handler:
+    push ax
+    push dx
+    push ds
+
+    cmp byte [irq7_installed], 0
+    je .done
+
+    mov ax, [old_irq7_seg]
+    mov dx, [old_irq7_off]
+    mov ds, ax
+    mov ax, 0x250F
+    int 0x21
+
+    pop ds
+    mov byte [irq7_installed], 0
+    jmp .restored
+
+.done:
+    pop ds
+
+.restored:
+    pop dx
+    pop ax
+    ret
+
+program_dma1_playback:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ax, cs
+    mov dx, ax
+    shl ax, 4
+    shr dx, 12
+    add ax, dma_sample
+    adc dl, 0
+
+    mov si, ax
+    mov cx, ax
+    add cx, dma_sample_len - 1
     jc .fail
+    mov bl, dl
+
+    call mask_dma1
+
+    xor al, al
+    out 0x0C, al
+
+    mov al, 0x49
+    out 0x0B, al
+
+    mov ax, si
+    out 0x02, al
+    mov al, ah
+    out 0x02, al
+
+    mov ax, dma_sample_len - 1
+    out 0x03, al
+    mov al, ah
+    out 0x03, al
+
+    mov al, bl
+    out 0x83, al
+
+    mov al, 0x01
+    out 0x0A, al
 
     clc
     jmp .done
@@ -142,9 +264,71 @@ play_tone:
     stc
 
 .done:
+    pop si
+    pop dx
     pop cx
+    pop bx
     pop ax
     ret
+
+mask_dma1:
+    push ax
+    mov al, 0x05
+    out 0x0A, al
+    pop ax
+    ret
+
+wait_irq7:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    sti
+    mov cx, 6
+    mov ah, 0x00
+    int 0x1A
+    mov bx, dx
+
+.wait_tick:
+    cmp byte [irq7_count], 0
+    jne .ok
+
+    mov ah, 0x00
+    int 0x1A
+    cmp dx, bx
+    je .wait_tick
+    mov bx, dx
+    loop .wait_tick
+
+    stc
+    jmp .done
+
+.ok:
+    clc
+
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+irq7_handler:
+    push ax
+    push dx
+
+    mov dx, [cs:dsp_base_current]
+    add dx, 0x0E
+    in al, dx
+    inc byte [cs:irq7_count]
+
+    mov al, 0x20
+    out 0x20, al
+
+    pop dx
+    pop ax
+    iret
 
 ; Configure the QEMU SB16-compatible mixer and legacy PIC/DMA masks.
 configure_sb16_platform:
@@ -223,6 +407,14 @@ delay_tone:
     pop cx
     ret
 
+delay_irq_wait:
+    push cx
+    mov cx, 0x0100
+.loop:
+    loop .loop
+    pop cx
+    ret
+
 print_probe:
     mov dx, msg_probe_prefix
     call print_line
@@ -283,6 +475,16 @@ print_line:
     ret
 
 dsp_base_list dw 0x0220, 0x0240, 0x0260, 0x0280
+dsp_base_current dw 0x0220
+old_irq7_off dw 0
+old_irq7_seg dw 0
+irq7_installed db 0
+irq7_count db 0
+
+dma_sample:
+    times 32 db 0x80, 0xA0, 0xC0, 0xE0, 0xFF, 0xE0, 0xC0, 0xA0
+    times 32 db 0x80, 0x60, 0x40, 0x20, 0x00, 0x20, 0x40, 0x60
+dma_sample_len equ $ - dma_sample
 
 msg_begin db '[SB16INIT] BEGIN', 13, 10, '$'
 msg_probe_prefix db '[SB16INIT] PROBE 0x', '$'
@@ -290,6 +492,7 @@ msg_found_prefix db '[SB16INIT] DSP OK at 0x', '$'
 msg_not_found db '[SB16INIT] NO DSP FOUND', 13, 10, '$'
 msg_cfg_done db '[SB16INIT] CFG IRQ7 DMA1', 13, 10, '$'
 msg_tone_begin db '[SB16INIT] TONE START', 13, 10, '$'
+msg_dma_done db '[SB16INIT] DMA DONE', 13, 10, '$'
 msg_tone_done db '[SB16INIT] TONE DONE', 13, 10, '$'
 msg_tone_fail db '[SB16INIT] TONE FAIL', 13, 10, '$'
 msg_done db '[SB16INIT] DONE', 13, 10, '$'
