@@ -36,6 +36,8 @@ Options:
 Environment:
   QEMU_BIN         Override QEMU binary.
   QEMU_EXTRA_ARGS  Extra args appended to QEMU command.
+  QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: on).
+  QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full-cd.log).
   STAGE0_MARKER    Marker 1 for test validation.
@@ -48,6 +50,78 @@ MODE="visual"
 DO_BUILD=1
 DRY_RUN=0
 DISPLAY_BACKEND="${QEMU_DISPLAY:-gtk}"
+AUDIO_MODE="${QEMU_AUDIO_MODE:-on}"
+QEMU_AUDIO_ARGS=()
+QEMU_AUDIO_DETAIL="off"
+
+normalize_audio_backend() {
+  case "$1" in
+    pulse|pulseaudio)
+      echo "pa"
+      ;;
+    *)
+      echo "$1"
+      ;;
+  esac
+}
+
+audio_backend_supported() {
+  local backend="$1"
+
+  case "$backend" in
+    none|alsa|dbus|jack|oss|pa|pipewire|sdl|spice|wav) ;;
+    *) return 1 ;;
+  esac
+
+  [[ "$backend" == "none" ]] && return 0
+  "$QEMU_CMD" -audiodev help 2>/dev/null | grep -Eq "^${backend}$"
+}
+
+configure_audio_args() {
+  local context="$1"
+  local requested_backend="${QEMU_AUDIO_BACKEND:-}"
+  local backend=""
+  local candidate
+
+  QEMU_AUDIO_ARGS=()
+  QEMU_AUDIO_DETAIL="off"
+
+  case "$AUDIO_MODE" in
+    auto|on|off) ;;
+    *)
+      echo "[qemu-run-full-cd] ERROR: invalid QEMU_AUDIO_MODE=$AUDIO_MODE (expected auto, on or off)" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ "$AUDIO_MODE" == "off" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$requested_backend" ]]; then
+    backend="$(normalize_audio_backend "$requested_backend")"
+    if ! audio_backend_supported "$backend"; then
+      echo "[qemu-run-full-cd] ERROR: unsupported QEMU_AUDIO_BACKEND=$requested_backend for $QEMU_CMD" >&2
+      exit 1
+    fi
+  elif [[ "$context" == "headless" && "$AUDIO_MODE" != "on" ]]; then
+    backend="none"
+  else
+    for candidate in pipewire pa alsa sdl; do
+      if audio_backend_supported "$candidate"; then
+        backend="$candidate"
+        break
+      fi
+    done
+    [[ -n "$backend" ]] || backend="none"
+  fi
+
+  QEMU_AUDIO_ARGS=(
+    -audiodev "${backend},id=snd0"
+    -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
+  )
+  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=7 dma=1 hdma=5"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -113,6 +187,7 @@ if [[ "$MODE" == "test" ]]; then
   STAGE1_MARKER="${STAGE1_MARKER:-[STAGE1-SERIAL] READY}"
   LOG_FILE="${LOG_FILE:-build/full/qemu-full-cd.log}"
   STDERR_FILE="${STDERR_FILE:-build/full/qemu-full-cd.stderr.log}"
+  configure_audio_args headless
 
   QEMU_ARGS=(
     "${BASE_ARGS[@]}"
@@ -120,6 +195,7 @@ if [[ "$MODE" == "test" ]]; then
     -chardev "file,id=ser0,path=$LOG_FILE"
     -serial chardev:ser0
     -monitor none
+    "${QEMU_AUDIO_ARGS[@]}"
     -no-reboot
     -no-shutdown
   )
@@ -131,6 +207,7 @@ if [[ "$MODE" == "test" ]]; then
   fi
 
   echo "[qemu-run-full-cd] running smoke test with $QEMU_CMD (timeout=${TIMEOUT_SEC}s)"
+  echo "[qemu-run-full-cd] audio: $QEMU_AUDIO_DETAIL"
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '[qemu-run-full-cd] dry-run:'
@@ -170,11 +247,14 @@ if [[ "$MODE" == "test" ]]; then
   exit 1
 fi
 
+configure_audio_args visual
+
 QEMU_ARGS=(
   "${BASE_ARGS[@]}"
   -display "$DISPLAY_BACKEND"
   -chardev "file,id=ser0,path=build/full/qemu-full-cd-visual.log"
   -serial chardev:ser0
+  "${QEMU_AUDIO_ARGS[@]}"
 )
 
 if [[ -n "${QEMU_EXTRA_ARGS:-}" ]]; then
@@ -185,6 +265,7 @@ fi
 
 echo "[qemu-run-full-cd] starting visual Live/install CD QEMU session"
 echo "[qemu-run-full-cd] Live/install CD boot"
+echo "[qemu-run-full-cd] audio: $QEMU_AUDIO_DETAIL"
 echo "[qemu-run-full-cd] serial log: build/full/qemu-full-cd-visual.log"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then

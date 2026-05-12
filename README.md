@@ -103,13 +103,15 @@ The repository does not publish commercial DOS game data or proprietary third-pa
 
 Keep third-party payloads legally supplied, local, and untracked unless a license explicitly permits redistribution. DOSNavigator acknowledgement: "Based on Dos Navigator by RIT Research Labs."
 
+CiukiOS project code is licensed under GNU GPLv2. FreeDOS kernel and FreeCOM source snapshots under `third_party/freedos` are GPLv2-compatible source material; selected behavior is ported into the CiukiOS runtime from source, and the active full/full-cd runtime environment exposes a compact DOS-style PATH for driver helpers, exports BLASTER for audio-aware apps, and the shell searches `APPS` after the current directory; upstream license files stay alongside the snapshots.
+
 ## Audio Status
 
 The full profile now includes a narrow SB16 validation path. `SB16INIT.COM` probes Sound Blaster-compatible DSP bases, verifies the QEMU SB16 DSP at `0x220`, and plays a short direct-DAC tone. `DRVLOAD.COM /AUDIO` runs that helper from `C:\SYSTEM\DRIVERS`.
 
-QEMU full-profile runners support `QEMU_AUDIO_MODE=off|auto|on` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|none`. The default is `off` so DOS games do not auto-detect an incomplete sound path during compatibility runs; for an audible local probe, set `QEMU_AUDIO_MODE=on` with a host backend such as PipeWire or PulseAudio and then run `\SYSTEM\DRIVERS\DRVLOAD.COM /AUDIO` from the shell.
+QEMU full, full-CD, taxonomy, and DRVLOAD smoke runners support `QEMU_AUDIO_MODE=off|auto|on` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|none`. The default is `on`, so local QEMU runs expose an SB16 device by default; set `QEMU_AUDIO_MODE=off` only when a silent run is explicitly needed.
 
-This is SB16 DSP and direct-DAC tone evidence. Broader DOS game audio, AdLib/OPL behavior, DMA/IRQ playback paths, and DOOM in-game audio remain follow-up compatibility work.
+This is SB16 DSP and direct-DAC tone evidence. The DOOM visual taxonomy now launches `DOOM.EXE -nosfx`, removing the old `-nosound` workaround while keeping the unstable Sound Blaster SFX/DMA path disabled: AdLib/OPL music remains enabled, and the visual gate reaches gameplay with QEMU audio on; the DOOM taxonomy pins the ALSA backend because the local PipeWire backend can crash QEMU during OPL playback. SB DMA/IRQ sound effects remain follow-up compatibility work.
 
 ## Project Policy
 

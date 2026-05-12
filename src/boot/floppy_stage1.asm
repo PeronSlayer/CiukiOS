@@ -4485,8 +4485,7 @@ int21_find_write_dta:
     jmp .ext_probe
 
 .ext_probe_done:
-    cmp cx, 0
-    je .term
+    jcxz .term
     mov byte [es:di], '.'
     inc di
     mov bx, 0
@@ -6142,8 +6141,7 @@ int21_write_grow_chain:
     jc .fail
 
     mov cx, [cs:file_handle_cluster_count]
-    cmp cx, 0
-    je .set_start_cluster
+    jcxz .set_start_cluster
 
     mov ax, cx
     dec ax
@@ -7359,8 +7357,7 @@ int21_mem_find_next_alloc:
     mov bx, dos_mem_block_table
 
 .scan:
-    cmp cx, 0
-    je .result
+    jcxz .result
     cmp word [cs:bx + 6], DOS_MEM_BLOCK_ALLOC
     jne .next
     mov ax, [cs:bx]
@@ -7470,8 +7467,7 @@ int21_mem_table_insert:
     xor cx, cx
     mov cl, [cs:dos_mem_block_count]
 .find_slot:
-    cmp cx, 0
-    je .slot_ready
+    jcxz .slot_ready
     mov ax, [cs:dos_mem_block_table + si]
     cmp [cs:dos_mem_block_tmp_seg], ax
     jb .slot_ready
@@ -7585,8 +7581,7 @@ int21_mem_table_clear_if_no_alloc:
     mov cl, [cs:dos_mem_block_count]
 
 .scan:
-    cmp cx, 0
-    je .clear
+    jcxz .clear
     cmp word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
     je .done
     add si, DOS_MEM_BLOCK_ENTRY_SIZE
@@ -8427,8 +8422,7 @@ int21_cluster_for_pos:
     jb .fail
 
 .step:
-    cmp cx, 0
-    je .done
+    jcxz .done
     call fat12_get_entry_cached
     jc .fail
     cmp ax, 2
@@ -11991,8 +11985,7 @@ shell_line_render:
     mov cl, [shell_edit_len]
     mov si, cmd_buffer
 .print_chars:
-    cmp cx, 0
-    je .clear_tail
+    jcxz .clear_tail
     lodsb
     call bios_putc
     dec cx
@@ -12356,8 +12349,7 @@ shell_completion_consider_found_file:
     mov di, shell_completion_file_buf
     mov cx, CMD_BUF_LEN - 1
 .copy_loop:
-    cmp cx, 0
-    je .term
+    jcxz .term
     mov al, [si]
     cmp al, 0
     je .term
@@ -12397,8 +12389,7 @@ shell_completion_consider_candidate:
     xor cx, cx
     mov cl, [shell_completion_prefix_len]
 .prefix_loop:
-    cmp cx, 0
-    je .prefix_match
+    jcxz .prefix_match
     mov al, [di + bx]
     mov ah, [si + bx]
     cmp ah, 0
@@ -12489,14 +12480,20 @@ skip_spaces:
     ret
 
 shell_arg_ptr:
+    ; GPLv2 FreeCOM docommand-style first/rest split.
     mov si, bx
+    mov ah, ' '
+    cmp byte [si], '"'
+    jne .scan_token
+    inc si
+    mov ah, '"'
+
 .scan_token:
-    mov al, [si]
+    lodsb
     cmp al, 0
     je .done
-    cmp al, ' '
+    cmp al, ah
     je .skip_tail_spaces
-    inc si
     jmp .scan_token
 
 .skip_tail_spaces:
@@ -12554,34 +12551,24 @@ shell_next_arg:
     stc
     ret
 
-shell_trim_first_arg:
-.scan:
-    cmp byte [si], 0
-    je .done
-    cmp byte [si], ' '
-    je .term
-    inc si
-    jmp .scan
-.term:
-    mov byte [si], 0
-.done:
-    ret
-
 shell_copy_token_for_exec:
     mov di, shell_exec_path_buf
     mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
+    mov ah, ' '
+    cmp byte [si], '"'
+    jne .copy_loop
+    inc si
+    mov ah, '"'
 
 .copy_loop:
-    mov al, [si]
+    lodsb
     cmp al, 0
     je .copy_done
-    cmp al, ' '
+    cmp al, ah
     je .copy_done
-    cmp cx, 0
-    je .copy_fail
+    jcxz .copy_fail
     mov [di], al
     inc di
-    inc si
     dec cx
     jmp .copy_loop
 
@@ -12604,8 +12591,7 @@ shell_copy_path_for_exec:
     mov al, [si]
     cmp al, 0
     je .copy_done
-    cmp cx, 0
-    je .copy_fail
+    jcxz .copy_fail
     mov [di], al
     inc di
     inc si
@@ -12675,8 +12661,7 @@ shell_append_exec_extension:
     mov al, [si]
     cmp al, 0
     je .append_done
-    cmp cx, 0
-    je .append_fail
+    jcxz .append_fail
     mov [di], al
     inc di
     inc si
@@ -12814,6 +12799,7 @@ shell_exec_set_empty_tail:
     ret
 
 shell_exec_set_tail_from_si:
+    ; GPLv2 FreeCOM DoExec command-tail packing ported from third_party/freedos/freecom-master/shell/cswapc.c.
     push ax
     push cx
     push di
@@ -12857,8 +12843,8 @@ shell_try_resolve_exec_token:
     push ds
 
     mov bx, si
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
 
     mov si, bx
     call shell_copy_token_for_exec
@@ -12876,6 +12862,8 @@ shell_try_resolve_exec_token:
     call int21_resolve_and_find_path
     pop bx
     jnc .ok
+    call shell_try_resolve_exec_path_apps
+    jnc .ok
 
     mov si, bx
     call shell_copy_token_for_exec
@@ -12887,6 +12875,8 @@ shell_try_resolve_exec_token:
 .try_as_is:
     mov si, shell_exec_path_buf
     call int21_resolve_and_find_path
+    jnc .ok
+    call shell_try_resolve_exec_path_apps
     jc .fail
 
 .ok:
@@ -12900,13 +12890,29 @@ shell_try_resolve_exec_token:
     pop ds
     ret
 
+shell_try_resolve_exec_path_apps:
+    push ax
+    mov ax, [cs:cwd_cluster]
+    push ax
+    mov word [cs:cwd_cluster], 3
+    mov si, shell_exec_path_buf
+    call int21_resolve_and_find_path
+    pop ax
+    mov [cs:cwd_cluster], ax
+    pop ax
+    ret
+
 shell_try_exec_token:
     push ds
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
 
+    push si
     call shell_try_resolve_exec_token
+    pop bx
     jc .fail
+    call shell_arg_ptr
+    call shell_exec_set_tail_from_si
     call shell_exec_buffer_path
     jc .fail
 
@@ -12925,8 +12931,8 @@ shell_try_exec_path:
     push ds
 
     mov bx, si
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
 
     mov si, bx
     call shell_copy_path_for_exec
@@ -13005,8 +13011,8 @@ shell_cmd_which:
     push di
     push ds
 
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
     mov si, bx
     call shell_arg_ptr
     call shell_next_arg
@@ -13059,8 +13065,8 @@ shell_cmd_help:
     push di
     push ds
 
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
     mov si, cmd_buffer
     call skip_spaces
     mov bx, si
@@ -13101,8 +13107,8 @@ shell_cmd_run:
     push si
     push ds
 
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
     mov si, bx
     call shell_arg_ptr
     call shell_next_arg
@@ -13240,8 +13246,8 @@ shell_cmd_pwd:
     push si
     push ds
 
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
     call shell_print_cwd
     jnc .done
 
@@ -13262,8 +13268,8 @@ shell_cmd_cd:
     push si
     push ds
 
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
 
     mov si, bx
     call shell_arg_ptr
@@ -13300,8 +13306,8 @@ shell_cmd_copy:
     push si
     push di
     push ds
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
 
     mov cl, 1
     mov word [cs:shell_last_error_ax], 0x0001
@@ -13457,8 +13463,8 @@ shell_cmd_copy:
     int 0x21
 
 .copy_report:
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
     cmp cl, 0
     je .copy_ok
     mov ax, [cs:shell_last_error_ax]
@@ -13478,8 +13484,8 @@ shell_cmd_copy:
 shell_cmd_del:
     push dx
     push ds
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
     mov si, bx
     call shell_arg_ptr
     call shell_next_arg
@@ -13506,8 +13512,8 @@ shell_cmd_del:
 shell_cmd_md:
     push dx
     push ds
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
     mov si, bx
     call shell_arg_ptr
     call shell_next_arg
@@ -13534,8 +13540,8 @@ shell_cmd_md:
 shell_cmd_rd:
     push dx
     push ds
-    mov ax, cs
-    mov ds, ax
+    push cs
+    pop ds
     mov si, bx
     call shell_arg_ptr
     call shell_next_arg
@@ -13607,8 +13613,7 @@ shell_cmd_ren:
     mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
 
 .build_dst_loop:
-    cmp cx, 0
-    je .ren_fail_pop_src
+    jcxz .ren_fail_pop_src
     lodsb
     cmp al, 0
     je .build_dst_done
@@ -13626,8 +13631,7 @@ shell_cmd_ren:
     je .have_sep
 
 .append_sep:
-    cmp cx, 0
-    je .ren_fail_pop_src
+    jcxz .ren_fail_pop_src
     mov al, 0x5C
     stosb
     dec cx
@@ -13641,8 +13645,7 @@ shell_cmd_ren:
     jc .ren_fail_pop_src
 
 .append_name_loop:
-    cmp cx, 0
-    je .ren_fail_pop_src
+    jcxz .ren_fail_pop_src
     lodsb
     stosb
     dec cx
@@ -13972,8 +13975,7 @@ shell_print_root_entry:
     jmp .ext_probe_loop
 
 .ext_done:
-    cmp cx, 0
-    je .emit
+    jcxz .emit
     mov byte [di], '.'
     inc di
     xor bx, bx
@@ -17289,8 +17291,9 @@ dos_indos_flag db 0
 dos_list_of_lists times 64 db 0
 tmp_cwd_comp times 24 db 0
 tmp_cwd_build times 24 db 0
-dos_env_block db 'COMSPEC=C:\COMMAND.COM', 0
-              db 'PATH=C:\', 0
+dos_env_block db 'COMSPEC=COMMAND.COM', 0
+              db 'PATH=\SYSTEM\DRIVERS', 0
+              db 'BLASTER=A220 I7 D1', 0
               db 0
               dw 1
 dos_env_exec_path db 'C:\COMMAND.COM', 0

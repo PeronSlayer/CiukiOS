@@ -12,6 +12,9 @@ STDERR_LOG="build/full/qemu-full-drvload-smoke.stderr.log"
 CMD_LOG="build/full/qemu-full-drvload-smoke.commands.log"
 META_LOG="build/full/qemu-full-drvload-smoke.meta"
 MON_SOCK="/tmp/ciukios-drvload-smoke.monitor.sock"
+QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-on}"
+QEMU_AUDIO_ARGS=()
+QEMU_AUDIO_DETAIL="off"
 
 ACTIVE_QEMU_PID=0
 ACTIVE_MON_SOCK=""
@@ -88,6 +91,75 @@ pick_qemu() {
     return 0
   fi
   return 1
+}
+
+normalize_audio_backend() {
+  case "$1" in
+    pulse|pulseaudio)
+      echo "pa"
+      ;;
+    *)
+      echo "$1"
+      ;;
+  esac
+}
+
+audio_backend_supported() {
+  local qemu_cmd="$1"
+  local backend="$2"
+
+  case "$backend" in
+    none|alsa|dbus|jack|oss|pa|pipewire|sdl|spice|wav) ;;
+    *) return 1 ;;
+  esac
+
+  [[ "$backend" == "none" ]] && return 0
+  "$qemu_cmd" -audiodev help 2>/dev/null | grep -Eq "^${backend}$"
+}
+
+configure_audio_args() {
+  local qemu_cmd="$1"
+  local context="$2"
+  local requested_backend="${QEMU_AUDIO_BACKEND:-}"
+  local backend=""
+  local candidate
+
+  QEMU_AUDIO_ARGS=()
+  QEMU_AUDIO_DETAIL="off"
+
+  case "$QEMU_AUDIO_MODE" in
+    auto|on|off) ;;
+    *)
+      mark_fail "AUDIO_MODE" "invalid QEMU_AUDIO_MODE=$QEMU_AUDIO_MODE (expected auto, on or off)"
+      ;;
+  esac
+
+  if [[ "$QEMU_AUDIO_MODE" == "off" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$requested_backend" ]]; then
+    backend="$(normalize_audio_backend "$requested_backend")"
+    if ! audio_backend_supported "$qemu_cmd" "$backend"; then
+      mark_fail "AUDIO_BACKEND" "unsupported QEMU_AUDIO_BACKEND=$requested_backend for $qemu_cmd"
+    fi
+  elif [[ "$context" == "headless" && "$QEMU_AUDIO_MODE" != "on" ]]; then
+    backend="none"
+  else
+    for candidate in pipewire pa alsa sdl; do
+      if audio_backend_supported "$qemu_cmd" "$candidate"; then
+        backend="$candidate"
+        break
+      fi
+    done
+    [[ -n "$backend" ]] || backend="none"
+  fi
+
+  QEMU_AUDIO_ARGS=(
+    -audiodev "${backend},id=snd0"
+    -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
+  )
+  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=7 dma=1 hdma=5"
 }
 
 wait_for_socket() {
@@ -277,6 +349,10 @@ DRVLOAD_BEGIN_PATTERN='\[DRVLOAD\][[:space:]]+BEGIN|\[{1,2}DDRRVVLLOOAADD\]\][[:
 DRVLOAD_TRY_PATTERN='\[DRVLOAD\][[:space:]]+TRY[[:space:]]+|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+TTRRYY[[:space:]]+'
 DRVLOAD_DONE_PATTERN='\[DRVLOAD\][[:space:]]+DONE|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
 
+configure_audio_args "$QEMU_CMD" headless
+
+echo "[drvload-smoke] audio: $QEMU_AUDIO_DETAIL"
+
 QEMU_ARGS=(
   -machine pc,vmport=off
   -cpu pentium3
@@ -287,8 +363,7 @@ QEMU_ARGS=(
   -chardev "file,id=ser0,path=$SERIAL_LOG"
   -serial chardev:ser0
   -monitor "unix:$MON_SOCK,server,nowait"
-  -audiodev none,id=snd0
-  -device sb16,iobase=0x220,irq=5,dma=1,dma16=5,audiodev=snd0
+  "${QEMU_AUDIO_ARGS[@]}"
   -no-reboot
   -no-shutdown
 )
@@ -398,6 +473,8 @@ fi
   echo "PROMPT_TIMEOUT_SEC=$PROMPT_TIMEOUT_SEC"
   echo "MARKER_TIMEOUT_SEC=$MARKER_TIMEOUT_SEC"
   echo "QEMU_TIMEOUT_SEC=$QEMU_TIMEOUT_SEC"
+  echo "QEMU_AUDIO_MODE=$QEMU_AUDIO_MODE"
+  echo "QEMU_AUDIO_DETAIL=$QEMU_AUDIO_DETAIL"
 } > "$META_LOG"
 
 echo "[drvload-smoke] PASS (BEGIN/TRY/DONE markers verified)"

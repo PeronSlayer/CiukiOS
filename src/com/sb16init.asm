@@ -34,6 +34,10 @@ start:
 .found:
     call print_found
 
+    call configure_sb16_platform
+    mov dx, msg_cfg_done
+    call print_line
+
     mov dx, msg_tone_begin
     call print_line
     call play_tone
@@ -142,8 +146,38 @@ play_tone:
     pop ax
     ret
 
-; IN: BX = DSP base port, AL = byte to write to DSP command/data port
-; OUT: CF clear on success, set on timeout
+; Configure the QEMU SB16-compatible mixer and legacy PIC/DMA masks.
+configure_sb16_platform:
+    push ax
+    push dx
+
+    mov dx, bx
+    add dx, 0x04
+    mov al, 0x80
+    out dx, al
+    inc dx
+    mov al, 0x04
+    out dx, al
+
+    mov dx, bx
+    add dx, 0x04
+    mov al, 0x81
+    out dx, al
+    inc dx
+    mov al, 0x22
+    out dx, al
+
+    in al, 0x21
+    and al, 0x7F
+    out 0x21, al
+
+    mov al, 0x01
+    out 0x0A, al
+
+    pop dx
+    pop ax
+    ret
+
 dsp_write_byte:
     push ax
     push cx
@@ -254,6 +288,7 @@ msg_begin db '[SB16INIT] BEGIN', 13, 10, '$'
 msg_probe_prefix db '[SB16INIT] PROBE 0x', '$'
 msg_found_prefix db '[SB16INIT] DSP OK at 0x', '$'
 msg_not_found db '[SB16INIT] NO DSP FOUND', 13, 10, '$'
+msg_cfg_done db '[SB16INIT] CFG IRQ7 DMA1', 13, 10, '$'
 msg_tone_begin db '[SB16INIT] TONE START', 13, 10, '$'
 msg_tone_done db '[SB16INIT] TONE DONE', 13, 10, '$'
 msg_tone_fail db '[SB16INIT] TONE FAIL', 13, 10, '$'
