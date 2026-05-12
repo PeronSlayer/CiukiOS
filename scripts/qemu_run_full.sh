@@ -36,7 +36,7 @@ Options:
 Environment:
   QEMU_BIN         Override QEMU binary.
   QEMU_EXTRA_ARGS  Extra args appended to QEMU command.
-  QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: off).
+  QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: on).
   QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full.log).
@@ -51,7 +51,7 @@ DO_BUILD=1
 DRY_RUN=0
 DISPLAY_BACKEND="${QEMU_DISPLAY:-gtk}"
 DISPLAY_BACKEND_EXPLICIT=0
-AUDIO_MODE="${QEMU_AUDIO_MODE:-off}"
+AUDIO_MODE="${QEMU_AUDIO_MODE:-on}"
 
 resolve_display_backend() {
   local backend="$1"
@@ -122,7 +122,7 @@ configure_audio_args() {
       echo "[qemu-run-full] ERROR: unsupported QEMU_AUDIO_BACKEND=$requested_backend for $QEMU_CMD" >&2
       exit 1
     fi
-  elif [[ "$context" == "headless" ]]; then
+  elif [[ "$context" == "headless" && "$AUDIO_MODE" != "on" ]]; then
     backend="none"
   else
     for candidate in pipewire pa alsa sdl; do
@@ -136,9 +136,9 @@ configure_audio_args() {
 
   QEMU_AUDIO_ARGS=(
     -audiodev "${backend},id=snd0"
-    -device "sb16,iobase=0x220,irq=5,dma=1,dma16=5,audiodev=snd0"
+    -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
   )
-  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=5 dma=1 hdma=5"
+  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=7 dma=1 hdma=5"
 }
 
 while [[ $# -gt 0 ]]; do

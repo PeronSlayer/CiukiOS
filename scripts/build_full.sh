@@ -589,8 +589,12 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
         echo "[build-full] creating DOOM runtime data directory at $DOOMDATA_IMAGE_DIR"
         mtools_ensure_dir "$IMG" "$DOOMDATA_IMAGE_DIR"
         if [[ -f "$DOOM_SRC_DIR/DEFAULT.CFG" ]]; then
-            echo "[build-full] mirroring Doom DEFAULT.CFG to $DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
-            mcopy -o -i "$IMG" "$DOOM_SRC_DIR/DEFAULT.CFG" "$DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
+            doom_cfg_music="build/full/obj/doom-default-music.cfg"
+            cp "$DOOM_SRC_DIR/DEFAULT.CFG" "$doom_cfg_music"
+            sed -i -E 's/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		0/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/' "$doom_cfg_music"
+            echo "[build-full] injecting Doom music-only DEFAULT.CFG to $DOOM_IMAGE_DIR and $DOOMDATA_IMAGE_DIR"
+            mcopy -o -i "$IMG" "$doom_cfg_music" "$DOOM_IMAGE_DIR/DEFAULT.CFG"
+            mcopy -o -i "$IMG" "$doom_cfg_music" "$DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
         fi
     else
         echo "[build-full] WARN: Doom source directory is empty: $DOOM_SRC_DIR" >&2

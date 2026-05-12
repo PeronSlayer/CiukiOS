@@ -18,6 +18,7 @@ DOS_TAXONOMY_PROFILE="${DOS_TAXONOMY_PROFILE:-dos_generic}"
 DOS_TAXONOMY_STRICT="${DOS_TAXONOMY_STRICT:-0}"
 DOS_TAXONOMY_LAUNCH="${DOS_TAXONOMY_LAUNCH:-1}"
 DOS_TAXONOMY_RUN_DRVLOAD="${DOS_TAXONOMY_RUN_DRVLOAD:-1}"
+DOS_TAXONOMY_DRVLOAD_COMMAND="${DOS_TAXONOMY_DRVLOAD_COMMAND:-run \SYSTEM\DRIVERS\DRVLOAD.COM}"
 DOS_TAXONOMY_PROMPT_TIMEOUT_SEC="${DOS_TAXONOMY_PROMPT_TIMEOUT_SEC:-120}"
 DOS_TAXONOMY_MARKER_TIMEOUT_SEC="${DOS_TAXONOMY_MARKER_TIMEOUT_SEC:-45}"
 DOS_TAXONOMY_OBSERVE_SEC="${DOS_TAXONOMY_OBSERVE_SEC:-15}"
@@ -38,7 +39,7 @@ QEMU_STDERR="${QEMU_STDERR:-build/full/qemu-full-dos-taxonomy.stderr.log}"
 QEMU_CMD_LOG="${QEMU_CMD_LOG:-build/full/qemu-full-dos-taxonomy.commands.log}"
 QEMU_MON_SOCK="${QEMU_MON_SOCK:-/tmp/ciukios-dosapp-taxonomy.monitor.sock}"
 FUTURE_MTIME_TOLERANCE_SEC="${FUTURE_MTIME_TOLERANCE_SEC:-5}"
-QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-off}"
+QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-on}"
 
 case "$DOS_TAXONOMY_PROFILE" in
   doom|dosapp)
@@ -235,7 +236,7 @@ configure_audio_args() {
       echo "[dos-taxonomy] ERROR unsupported QEMU_AUDIO_BACKEND=$requested_backend for $qemu_cmd" >&2
       exit 1
     fi
-  elif [[ "$context" == "headless" ]]; then
+  elif [[ "$context" == "headless" && "$QEMU_AUDIO_MODE" != "on" ]]; then
     backend="none"
   else
     for candidate in pipewire pa alsa sdl; do
@@ -249,9 +250,9 @@ configure_audio_args() {
 
   QEMU_AUDIO_ARGS=(
     -audiodev "${backend},id=snd0"
-    -device "sb16,iobase=0x220,irq=5,dma=1,dma16=5,audiodev=snd0"
+    -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
   )
-  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=5 dma=1 hdma=5"
+  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=7 dma=1 hdma=5"
 }
 
 log_has_pattern() {
@@ -784,7 +785,7 @@ classify_runtime() {
       set_stage "$exec_stage_name" "FAIL" "shell prompt not detected before app launch"
     else
       if [[ "$DOS_TAXONOMY_RUN_DRVLOAD" == "1" ]]; then
-        if send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" 'run \SYSTEM\DRIVERS\DRVLOAD.COM'; then
+        if send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$DOS_TAXONOMY_DRVLOAD_COMMAND"; then
           wait_for_regex "$LOG_FILE" "$drvload_done_pattern" "$DOS_TAXONOMY_MARKER_TIMEOUT_SEC" || true
           wait_for_shell_prompt "$LOG_FILE" 30 || true
         fi
