@@ -591,7 +591,7 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
         if [[ -f "$DOOM_SRC_DIR/DEFAULT.CFG" ]]; then
             doom_cfg_music="build/full/obj/doom-default-music.cfg"
             cp "$DOOM_SRC_DIR/DEFAULT.CFG" "$doom_cfg_music"
-            sed -i -E 's/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		0/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/' "$doom_cfg_music"
+            sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		0/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		0/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/' "$doom_cfg_music"
             echo "[build-full] injecting Doom music-only DEFAULT.CFG to $DOOM_IMAGE_DIR and $DOOMDATA_IMAGE_DIR"
             mcopy -o -i "$IMG" "$doom_cfg_music" "$DOOM_IMAGE_DIR/DEFAULT.CFG"
             mcopy -o -i "$IMG" "$doom_cfg_music" "$DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
