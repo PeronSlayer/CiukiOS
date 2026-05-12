@@ -111,7 +111,7 @@ The full profile now includes a narrow SB16 validation path. `SB16INIT.COM` prob
 
 QEMU full, full-CD, taxonomy, and DRVLOAD smoke runners support `QEMU_AUDIO_MODE=off|auto|on` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|none`. The default is `on`, so local QEMU runs expose an SB16 device by default; set `QEMU_AUDIO_MODE=off` only when a silent run is explicitly needed.
 
-This is SB16 DSP and direct-DAC tone evidence. The DOOM visual taxonomy now launches `DOOM.EXE -nosfx`, removing the old `-nosound` workaround while keeping the unstable Sound Blaster SFX/DMA path disabled: AdLib/OPL music remains enabled, and the visual gate reaches gameplay with QEMU audio on; the DOOM taxonomy pins the ALSA backend because the local PipeWire backend can crash QEMU during OPL playback. SB DMA/IRQ sound effects remain follow-up compatibility work.
+This is SB16 DSP and direct-DAC tone evidence. The DOOM visual taxonomy now launches `DOOM.EXE`, removing the old `-nosound` and `-nosfx` workarounds while the packaged music-only config keeps the unstable Sound Blaster SFX/DMA path disabled with `snd_channels=0` and `snd_sfxdevice=0`: AdLib/OPL music remains enabled, and the visual gate reaches gameplay with QEMU audio on; the DOOM taxonomy pins the ALSA backend because the local PipeWire backend can crash QEMU during OPL playback. SB DMA/IRQ sound effects remain follow-up compatibility work.
 
 ## Project Policy
 
