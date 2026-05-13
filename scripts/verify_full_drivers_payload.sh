@@ -9,6 +9,7 @@ set -euo pipefail
 : "${DRIVERS_IMAGE_DIR:=::SYSTEM/DRIVERS}"
 : "${GENERATED_DRVLOAD_COM:=$CIUKIOS_ROOT/build/full/obj/drvload.com}"
 : "${GENERATED_SB16INIT_COM:=$CIUKIOS_ROOT/build/full/obj/sb16init.com}"
+: "${GENERATED_AUDIOTST_COM:=$CIUKIOS_ROOT/build/full/obj/audiotst.com}"
 
 if [[ "$IMG" != /* ]]; then
 	IMG="$CIUKIOS_ROOT/$IMG"
@@ -93,7 +94,7 @@ src_manifest="$tmp_dir/src_manifest.txt"
 img_manifest="$tmp_dir/img_manifest.txt"
 expected_src_dir="$DRIVERS_SRC_DIR"
 
-if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" ]]; then
+if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" || -f "$GENERATED_AUDIOTST_COM" ]]; then
 	expected_src_dir="$tmp_dir/expected_drivers"
 	mkdir -p "$expected_src_dir"
 	cp -a "$DRIVERS_SRC_DIR"/. "$expected_src_dir"/
@@ -102,6 +103,10 @@ if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" ]]; then
 	fi
 	if [[ -f "$GENERATED_SB16INIT_COM" ]]; then
 		cp "$GENERATED_SB16INIT_COM" "$expected_src_dir/SB16INIT.COM"
+	fi
+	if [[ -f "$GENERATED_AUDIOTST_COM" ]]; then
+		cp "$GENERATED_AUDIOTST_COM" "$expected_src_dir/AUDIOTST.COM"
+		cp "$GENERATED_AUDIOTST_COM" "$expected_src_dir/AUDIO.COM"
 	fi
 fi
 

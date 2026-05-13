@@ -82,6 +82,8 @@ DRVLOAD_SRC="src/com/drvload.asm"
 DRVLOAD_BIN="build/full/obj/drvload.com"
 SB16INIT_SRC="src/com/sb16init.asm"
 SB16INIT_BIN="build/full/obj/sb16init.com"
+AUDIOTST_SRC="src/com/audiotst.asm"
+AUDIOTST_BIN="build/full/obj/audiotst.com"
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
 SPLASH_BIN="build/full/obj/SPLASH.BIN"
@@ -90,6 +92,7 @@ SPLASH_EXPECTED_SIZE=16768
 DOOM_SRC_DIR="${CIUKIOS_DOOM_SRC_DIR:-$CIUKIOS_ROOT/third_party/Doom}"
 DOOM_IMAGE_DIR="${CIUKIOS_DOOM_IMAGE_DIR:-::APPS/DOOM}"
 DOOMDATA_IMAGE_DIR="${CIUKIOS_DOOMDATA_IMAGE_DIR:-::DOOMDATA}"
+DOOM_AUDIO_PROFILE="${CIUKIOS_DOOM_AUDIO_PROFILE:-music-only}"
 DOSNAV_SRC_DIR="${CIUKIOS_DOSNAV_SRC_DIR:-$CIUKIOS_ROOT/third_party/DOSNavigator}"
 DOSNAV_IMAGE_DIR="${CIUKIOS_DOSNAV_IMAGE_DIR:-::APPS/DOSNAV}"
 WOLF3D_SRC_DIR="${CIUKIOS_WOLF3D_SRC_DIR:-$CIUKIOS_ROOT/third_party/WOLF3D}"
@@ -154,7 +157,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -226,6 +229,7 @@ nasm -f bin "$FORMAT_SRC" -o "$FORMAT_BIN"
 nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
 nasm -f bin "$DRVLOAD_SRC" -o "$DRVLOAD_BIN"
 nasm -f bin "$SB16INIT_SRC" -o "$SB16INIT_BIN"
+nasm -f bin "$AUDIOTST_SRC" -o "$AUDIOTST_BIN"
 
 echo "[build-full] generating splash asset"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -589,12 +593,28 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
         echo "[build-full] creating DOOM runtime data directory at $DOOMDATA_IMAGE_DIR"
         mtools_ensure_dir "$IMG" "$DOOMDATA_IMAGE_DIR"
         if [[ -f "$DOOM_SRC_DIR/DEFAULT.CFG" ]]; then
-            doom_cfg_music="build/full/obj/doom-default-music.cfg"
-            cp "$DOOM_SRC_DIR/DEFAULT.CFG" "$doom_cfg_music"
-            sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		0/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		0/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/' "$doom_cfg_music"
-            echo "[build-full] injecting Doom music-only DEFAULT.CFG to $DOOM_IMAGE_DIR and $DOOMDATA_IMAGE_DIR"
-            mcopy -o -i "$IMG" "$doom_cfg_music" "$DOOM_IMAGE_DIR/DEFAULT.CFG"
-            mcopy -o -i "$IMG" "$doom_cfg_music" "$DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
+            doom_cfg_out="build/full/obj/doom-default.cfg"
+            cp "$DOOM_SRC_DIR/DEFAULT.CFG" "$doom_cfg_out"
+            case "$DOOM_AUDIO_PROFILE" in
+                music-only)
+                    sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		0/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		0/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/' "$doom_cfg_out"
+                    echo "[build-full] DOOM audio profile: music-only (SFX disabled)"
+                    ;;
+                sb16)
+                    if [[ -f "$DOOM_SRC_DIR/SB16/DEFAULT.CFG" ]]; then
+                        cp "$DOOM_SRC_DIR/SB16/DEFAULT.CFG" "$doom_cfg_out"
+                    fi
+                    sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		3/; s/^snd_sbport[[:space:]].*/snd_sbport		544/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/; s/^snd_mport[[:space:]].*/snd_mport		816/' "$doom_cfg_out"
+                    echo "[build-full] DOOM audio profile: sb16 (SFX enabled)"
+                    ;;
+                *)
+                    echo "[build-full] ERROR: unsupported DOOM audio profile: $DOOM_AUDIO_PROFILE (expected music-only or sb16)" >&2
+                    exit 1
+                    ;;
+            esac
+            echo "[build-full] injecting Doom DEFAULT.CFG to $DOOM_IMAGE_DIR and $DOOMDATA_IMAGE_DIR"
+            mcopy -o -i "$IMG" "$doom_cfg_out" "$DOOM_IMAGE_DIR/DEFAULT.CFG"
+            mcopy -o -i "$IMG" "$doom_cfg_out" "$DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
         fi
     else
         echo "[build-full] WARN: Doom source directory is empty: $DOOM_SRC_DIR" >&2
@@ -674,6 +694,10 @@ fi
 echo "[build-full] injecting SB16INIT.COM helper to ${DRIVERS_IMAGE_DIR%/}/SB16INIT.COM"
 mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
 mcopy -o -i "$IMG" "$SB16INIT_BIN" "${DRIVERS_IMAGE_DIR%/}/SB16INIT.COM"
+echo "[build-full] injecting AUDIOTST.COM helper to ${DRIVERS_IMAGE_DIR%/}/AUDIOTST.COM"
+mcopy -o -i "$IMG" "$AUDIOTST_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIOTST.COM"
+echo "[build-full] injecting AUDIO.COM alias to ${DRIVERS_IMAGE_DIR%/}/AUDIO.COM"
+mcopy -o -i "$IMG" "$AUDIOTST_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIO.COM"
 
 if [[ ! -d "$DRIVERS_SRC_DIR" ]]; then
 	if [[ "$CIUKIOS_ALLOW_MISSING_DRIVERS" == "1" ]]; then

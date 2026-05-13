@@ -12677,6 +12677,34 @@ shell_append_exec_extension:
     stc
     ret
 
+shell_append_token_for_exec:
+    mov ah, ' '
+    cmp byte [si], '"'
+    jne .copy_loop
+    inc si
+    mov ah, '"'
+
+.copy_loop:
+    lodsb
+    cmp al, 0
+    je .copy_done
+    cmp al, ah
+    je .copy_done
+    jcxz .copy_fail
+    mov [di], al
+    inc di
+    dec cx
+    jmp .copy_loop
+
+.copy_done:
+    mov byte [di], 0
+    clc
+    ret
+
+.copy_fail:
+    stc
+    ret
+
 shell_exec_buffer_path:
     ; Save CWD before exec so it can be restored after program exits
     push ax
@@ -12864,6 +12892,8 @@ shell_try_resolve_exec_token:
     jnc .ok
     call shell_try_resolve_exec_path_apps
     jnc .ok
+    call shell_try_resolve_exec_path_drivers
+    jnc .ok
 
     mov si, bx
     call shell_copy_token_for_exec
@@ -12877,6 +12907,8 @@ shell_try_resolve_exec_token:
     call int21_resolve_and_find_path
     jnc .ok
     call shell_try_resolve_exec_path_apps
+    jnc .ok
+    call shell_try_resolve_exec_path_drivers
     jc .fail
 
 .ok:
@@ -12900,6 +12932,66 @@ shell_try_resolve_exec_path_apps:
     pop ax
     mov [cs:cwd_cluster], ax
     pop ax
+    ret
+
+shell_try_resolve_exec_path_drivers:
+    push bx
+    push ax
+    push si
+    push di
+    push cx
+
+    mov si, shell_exec_path_buf
+    mov di, dos_child_exec_path_buf
+    mov cx, DOS_ENV_EXEC_PATH_LEN - 1
+
+.name_copy:
+    mov al, [si]
+    cmp al, 0
+    je .name_done
+    jcxz .fail
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .name_copy
+
+.name_done:
+    mov byte [di], 0
+
+    mov di, shell_exec_path_buf
+    mov si, path_drivers_dir_dos
+    mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
+
+.prefix_copy:
+    mov al, [si]
+    cmp al, 0
+    je .prefix_done
+    jcxz .fail
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .prefix_copy
+
+.prefix_done:
+    mov si, dos_child_exec_path_buf
+    call shell_append_exec_extension
+    jc .fail
+
+    mov si, shell_exec_path_buf
+    call int21_resolve_and_find_path
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop cx
+    pop di
+    pop si
+    pop ax
+    pop bx
     ret
 
 shell_try_exec_token:
@@ -14187,22 +14279,6 @@ draw_shell_chrome:
     mov bl, 0x1F
     call video_write_string_attr
 
-    mov al, '='
-    mov dh, 1
-    mov dl, 0
-    mov bl, 0x08
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
-
-    mov al, '='
-    mov dh, 23
-    mov dl, 0
-    mov bl, 0x08
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
-
     call shell_update_footer
 
     mov dh, 2
@@ -14268,126 +14344,6 @@ draw_shell_chrome:
 
 %if FAT_TYPE == 16
 shell_update_footer:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push ds
-
-    push cs
-    pop ds
-
-    mov al, ' '
-    mov dh, 24
-    mov dl, 0
-    mov bl, 0x30
-    xor cx, cx
-    mov cl, 80
-    call draw_hline_attr
-
-    mov si, msg_shell_status
-    mov dh, 24
-    mov dl, 1
-    mov bl, 0x30
-    call video_write_string_attr
-
-    mov al, [cs:shell_footer_cpu_pct]
-    mov di, shell_footer_pct_buf
-    call shell_u8_to_dec2
-
-    mov si, msg_shell_cpu_prefix
-    mov dh, 24
-    mov dl, 52
-    mov bl, 0x30
-    call video_write_string_attr
-
-    mov si, shell_footer_pct_buf
-    mov dh, 24
-    mov dl, 56
-    mov bl, 0x30
-    call video_write_string_attr
-
-    mov al, '%'
-    mov dh, 24
-    mov dl, 58
-    mov bl, 0x30
-    call video_write_char_attr
-
-    mov al, [cs:shell_footer_dsk_pct]
-    mov di, shell_footer_pct_buf
-    call shell_u8_to_dec2
-
-    mov si, msg_shell_dsk_prefix
-    mov dh, 24
-    mov dl, 60
-    mov bl, 0x30
-    call video_write_string_attr
-
-    mov si, shell_footer_pct_buf
-    mov dh, 24
-    mov dl, 64
-    mov bl, 0x30
-    call video_write_string_attr
-
-    mov al, '%'
-    mov dh, 24
-    mov dl, 66
-    mov bl, 0x30
-    call video_write_char_attr
-
-    call int21_mem_query_free
-    mov ax, cx
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-
-.ram_ready:
-
-    mov di, shell_footer_ram_buf
-    call shell_u16_to_dec
-
-    mov si, shell_footer_ram_buf
-    xor cx, cx
-.len_loop:
-    cmp byte [si], 0
-    je .len_ready
-    inc si
-    inc cx
-    jmp .len_loop
-
-.len_ready:
-    mov dl, 74
-    sub dl, cl
-
-    mov si, msg_shell_ram_prefix
-    mov dh, 24
-    mov bl, 0x30
-    call video_write_string_attr
-
-    mov si, shell_footer_ram_buf
-    mov dh, 24
-    add dl, 5
-    mov bl, 0x30
-    call video_write_string_attr
-
-    add dl, cl
-    mov al, 'K'
-    mov dh, 24
-    mov bl, 0x30
-    call video_write_char_attr
-
-    pop ds
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 shell_u8_to_dec2:
@@ -14409,170 +14365,16 @@ shell_u8_to_dec2:
     ret
 
 shell_footer_poll:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    mov ah, 0x00
-    int 0x1A
-
-    cmp word [cs:shell_footer_last_tick], 0xFFFF
-    jne .have_last_tick
-    mov [cs:shell_footer_last_tick], dx
-    call shell_footer_compute_cpu_pct
-    call shell_footer_maybe_refresh_disk
-    call shell_update_footer
-    jmp .done
-
-.have_last_tick:
-    cmp dx, [cs:shell_footer_last_tick]
-    je .done
-
-    ; Update key cooldown used by disk refresh rate logic
-    cmp byte [cs:shell_footer_tick_key_activity], 0
-    je .no_key_this_tick
-    mov byte [cs:shell_footer_key_cooldown], SHELL_FOOTER_KEY_COOLDOWN_TICKS
-.no_key_this_tick:
-    mov byte [cs:shell_footer_tick_key_activity], 0
-    mov [cs:shell_footer_last_tick], dx
-
-    cmp byte [cs:shell_footer_key_cooldown], 0
-    je .cooldown_counted
-    dec byte [cs:shell_footer_key_cooldown]
-
-.cooldown_counted:
-
-    call shell_footer_compute_cpu_pct
-    call shell_footer_maybe_refresh_disk
-    call shell_update_footer
-
-.done:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 shell_footer_compute_cpu_pct:
-    push ax
-    push bx
-    push dx
-
-    ; Read and reset per-tick idle loop counter
-    mov ax, [cs:shell_footer_loop_count]
-    mov word [cs:shell_footer_loop_count], 0
-
-    ; Update high watermark of idle loops per tick
-    cmp ax, [cs:shell_footer_max_loop]
-    jbe .no_max_update
-    mov [cs:shell_footer_max_loop], ax
-.no_max_update:
-
-    ; CPU% = (max - current) * 100 / max
-    ; High loop count (idle tick) -> low CPU%; low count (busy) -> high CPU%
-    mov bx, [cs:shell_footer_max_loop]
-    sub bx, ax
-    jnc .compute
-    xor bx, bx         ; underflow guard
-.compute:
-    mov ax, bx
-    mov dx, 100
-    mul dx
-    mov bx, [cs:shell_footer_max_loop]
-    div bx
-    cmp ax, 99
-    jbe .store
-    mov ax, 99
-
-.store:
-    mov [cs:shell_footer_cpu_pct], al
-
-.done:
-    pop dx
-    pop bx
-    pop ax
     ret
 
 shell_footer_maybe_refresh_disk:
-    push ax
-    push bx
-
-    mov bx, SHELL_FOOTER_DSK_IDLE_REFRESH_TICKS
-    cmp byte [cs:shell_footer_key_cooldown], 0
-    je .interval_ready
-    mov bx, SHELL_FOOTER_DSK_BUSY_REFRESH_TICKS
-
-.interval_ready:
-    cmp byte [cs:shell_footer_dsk_dirty], 1
-    jne .check_interval
-    mov bx, SHELL_FOOTER_DSK_DIRTY_IDLE_REFRESH_TICKS
-    cmp byte [cs:shell_footer_key_cooldown], 0
-    je .check_interval
-    mov bx, SHELL_FOOTER_DSK_DIRTY_BUSY_REFRESH_TICKS
-
-.check_interval:
-    mov ax, [cs:shell_footer_last_tick]
-    sub ax, [cs:shell_footer_dsk_last_scan_tick]
-    cmp ax, bx
-    jb .done
-
-.refresh:
-    call shell_footer_refresh_disk_pct
-    jc .done
-    mov ax, [cs:shell_footer_last_tick]
-    mov [cs:shell_footer_dsk_last_scan_tick], ax
-    mov byte [cs:shell_footer_dsk_dirty], 0
-
-.done:
-    pop bx
-    pop ax
     ret
 
 shell_footer_refresh_disk_pct:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    xor dx, dx
-    mov bx, 2
-    mov cx, FAT_SECTORS_PER_FAT * 256 - 2
-
-.scan_loop:
-    mov ax, bx
-    call fat12_get_entry_cached
-    jc .fail
-    cmp ax, 0
-    je .next
-    inc dx
-
-.next:
-    inc bx
-    loop .scan_loop
-    mov ax, dx
-    mov bx, 99
-    mul bx
-    mov bx, FAT_SECTORS_PER_FAT * 256 - 2
-    add ax, bx
-    adc dx, 0
-    sub ax, 1
-    sbb dx, 0
-    div bx
-
-.store:
-    mov [cs:shell_footer_dsk_pct], al
     clc
-    jmp .done
-
-.fail:
-    stc
-
-.done:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 shell_u16_to_dec:
@@ -17582,6 +17384,7 @@ path_dotdot_fat    db "..         "
 path_gem_exe_abs db "\\SYSTEM\\DESKTOP\\GEM.EXE", 0
 %endif
 path_system_dir_dos db "\SYSTEM", 0
+path_drivers_dir_dos db "\SYSTEM\DRIVERS\", 0
 path_apps_dir_dos db "\APPS", 0
 path_parent_dos  db "..", 0
 path_root_dos    db "\", 0
