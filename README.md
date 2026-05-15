@@ -109,9 +109,9 @@ CiukiOS project code is licensed under GNU GPLv2. FreeDOS kernel and FreeCOM sou
 
 The full profile now includes a narrow SB16 validation path. `SB16INIT.COM` probes Sound Blaster-compatible DSP bases, verifies the QEMU SB16 DSP at `0x220`, and plays a short DMA-backed SB sample and observes IRQ7 completion. `DRVLOAD.COM /AUDIO` runs that helper from `C:\SYSTEM\DRIVERS`.
 
-QEMU full, full-CD, taxonomy, and DRVLOAD smoke runners support `QEMU_AUDIO_MODE=off|auto|on` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|none`. The default is `on`, so local QEMU runs expose an SB16 device by default; set `QEMU_AUDIO_MODE=off` only when a silent run is explicitly needed.
+QEMU full, full-CD, taxonomy, and DRVLOAD smoke runners support `QEMU_AUDIO_MODE=off|auto|on` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|none`. The default is `on`, so local QEMU runs expose SB16 and PC speaker audio devices by default; ALSA is preferred first for audible local playback, and `QEMU_AUDIO_MODE=off` is only for explicit silent runs.
 
-This is SB16 DSP plus DMA1/IRQ7 playback evidence. The DOOM visual taxonomy now launches `DOOM.EXE`, removing the old `-nosound` and `-nosfx` workarounds while the packaged music-only config keeps the unstable Sound Blaster SFX/DMA path disabled with `snd_channels=0` and `snd_sfxdevice=0`: AdLib/OPL music remains enabled, and the visual gate reaches gameplay with QEMU audio on; the DOOM taxonomy pins the ALSA backend because the local PipeWire backend can crash QEMU during OPL playback. SB DMA/IRQ sound effects remain follow-up compatibility work.
+This is SB16 DSP plus DMA1/IRQ7 playback evidence plus a practical DOOM fallback. The packaged default DOOM config now enables PC speaker SFX (`snd_sfxdevice=1`) and disables music so DOOM has in-game audio without entering the unstable protected-mode SB/DMX SFX path. `CIUKIOS_DOOM_AUDIO_PROFILE=sb16-sfx` remains available for focused SB16 investigation. `PMIRQSB.COM` now provides a real DOS/4GW protected-mode probe: current evidence shows DPMI timer IRQ reflection and SB IRQ7 delivery both work when the probe waits for DMA completion through the protected-mode timer.
 
 ## Project Policy
 

@@ -146,7 +146,7 @@ configure_audio_args() {
   elif [[ "$context" == "headless" && "$QEMU_AUDIO_MODE" != "on" ]]; then
     backend="none"
   else
-    for candidate in pipewire pa alsa sdl; do
+    for candidate in alsa pipewire pa sdl; do
       if audio_backend_supported "$qemu_cmd" "$candidate"; then
         backend="$candidate"
         break

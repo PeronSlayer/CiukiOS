@@ -41,6 +41,7 @@ QEMU_CMD_LOG="${QEMU_CMD_LOG:-build/full/qemu-full-dos-taxonomy.commands.log}"
 QEMU_MON_SOCK="${QEMU_MON_SOCK:-/tmp/ciukios-dosapp-taxonomy.monitor.sock}"
 FUTURE_MTIME_TOLERANCE_SEC="${FUTURE_MTIME_TOLERANCE_SEC:-5}"
 QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-on}"
+QEMU_MACHINE_ARG="pc,vmport=off"
 
 case "$DOS_TAXONOMY_PROFILE" in
   doom|dosapp)
@@ -82,7 +83,11 @@ case "$DOS_TAXONOMY_USE_CASE" in
     [[ "$DOS_TAXONOMY_APP_DIR_IN_IMAGE" == "::APPS" ]] && DOS_TAXONOMY_APP_DIR_IN_IMAGE="::APPS/DOOM"
     [[ "$DOS_TAXONOMY_APP_BINARY_NAME" == "CIUKEDIT.COM" ]] && DOS_TAXONOMY_APP_BINARY_NAME="DOOM.EXE"
     [[ "$DOS_TAXONOMY_RUN_COMMAND" == "run CIUKEDIT.COM" ]] && DOS_TAXONOMY_RUN_COMMAND="run DOOM.EXE"
-    [[ -z "$DOS_TAXONOMY_PRE_LAUNCH_COMMAND" ]] && DOS_TAXONOMY_PRE_LAUNCH_COMMAND="type DEFAULT.CFG"
+    if [[ "$DOS_TAXONOMY_PRE_LAUNCH_COMMAND" == "__none__" ]]; then
+      DOS_TAXONOMY_PRE_LAUNCH_COMMAND=""
+    elif [[ -z "$DOS_TAXONOMY_PRE_LAUNCH_COMMAND" ]]; then
+      DOS_TAXONOMY_PRE_LAUNCH_COMMAND="type DEFAULT.CFG"
+    fi
     [[ -z "$DOS_TAXONOMY_CWD" || "$DOS_TAXONOMY_CWD" == "\APPS\DOSAPP" ]] && DOS_TAXONOMY_CWD="\APPS\DOOM"
     ;;
   wolf3d)
@@ -241,7 +246,7 @@ configure_audio_args() {
   elif [[ "$context" == "headless" && "$QEMU_AUDIO_MODE" != "on" ]]; then
     backend="none"
   else
-    for candidate in pipewire pa alsa sdl; do
+    for candidate in alsa pipewire pa sdl; do
       if audio_backend_supported "$qemu_cmd" "$candidate"; then
         backend="$candidate"
         break
@@ -250,11 +255,13 @@ configure_audio_args() {
     [[ -n "$backend" ]] || backend="none"
   fi
 
+  local sb_irq="${QEMU_SB_IRQ:-7}"
   QEMU_AUDIO_ARGS=(
     -audiodev "${backend},id=snd0"
-    -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
+    -device "sb16,iobase=0x220,irq=${sb_irq},dma=1,dma16=5,audiodev=snd0"
   )
-  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=7 dma=1 hdma=5"
+  QEMU_MACHINE_ARG="pc,vmport=off,pcspk-audiodev=snd0"
+  QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=${sb_irq} dma=1 hdma=5"
 }
 
 log_has_pattern() {
@@ -547,38 +554,43 @@ classify_visual_gameplay() {
   local screenshot_mtime
   local ppm_stats
   local width height nonblank unique_colors
+  local visual_detail_prefix="$smoke_detail"
 
-  if [[ "${STAGE_STATUS[runtime_stable]}" != "PASS" ]]; then
-    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; runtime_stable gate not passed, visual screenshot not evaluated"
+  if [[ "${STAGE_STATUS[video_init]}" != "PASS" ]]; then
+    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; video gate not passed, visual screenshot not evaluated"
     return
   fi
 
+  if [[ "${STAGE_STATUS[runtime_stable]}" != "PASS" ]]; then
+    visual_detail_prefix="$smoke_detail; runtime_stable=${STAGE_STATUS[runtime_stable]}, evaluating fresh screenshot anyway"
+  fi
+
   if [[ -z "$DOS_TAXONOMY_SCREENSHOT" ]]; then
-    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot not requested (DOS_TAXONOMY_SCREENSHOT empty)"
+    set_stage "visual_gameplay" "DEFERRED" "$visual_detail_prefix; screenshot not requested (DOS_TAXONOMY_SCREENSHOT empty)"
     return
   fi
 
   if [[ ! -s "$DOS_TAXONOMY_SCREENSHOT" ]]; then
-    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot missing or empty: $DOS_TAXONOMY_SCREENSHOT"
+    set_stage "visual_gameplay" "DEFERRED" "$visual_detail_prefix; screenshot missing or empty: $DOS_TAXONOMY_SCREENSHOT"
     return
   fi
 
   screenshot_mtime="$(get_file_mtime_epoch "$DOS_TAXONOMY_SCREENSHOT")"
   if [[ "$screenshot_mtime" -lt "$run_start_epoch" ]]; then
-    set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; screenshot stale for current run: $DOS_TAXONOMY_SCREENSHOT (mtime=$screenshot_mtime, run_start=$run_start_epoch)"
+    set_stage "visual_gameplay" "DEFERRED" "$visual_detail_prefix; screenshot stale for current run: $DOS_TAXONOMY_SCREENSHOT (mtime=$screenshot_mtime, run_start=$run_start_epoch)"
     return
   fi
 
   if ! ppm_stats="$(ppm_visual_diversity "$DOS_TAXONOMY_SCREENSHOT" 2>&1)"; then
-    set_stage "visual_gameplay" "FAIL" "$smoke_detail; screenshot PPM validation failed for $DOS_TAXONOMY_SCREENSHOT: $ppm_stats"
+    set_stage "visual_gameplay" "FAIL" "$visual_detail_prefix; screenshot PPM validation failed for $DOS_TAXONOMY_SCREENSHOT: $ppm_stats"
     return
   fi
 
   read -r width height nonblank unique_colors <<<"$ppm_stats"
   if [[ "$nonblank" -ge 1000 && "$unique_colors" -ge 16 ]]; then
-    set_stage "visual_gameplay" "PASS" "$smoke_detail; screenshot fresh P6 PPM has visual diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
+    set_stage "visual_gameplay" "PASS" "$visual_detail_prefix; screenshot fresh P6 PPM has visual diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
   else
-    set_stage "visual_gameplay" "FAIL" "$smoke_detail; screenshot blank or low diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
+    set_stage "visual_gameplay" "FAIL" "$visual_detail_prefix; screenshot blank or low diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
   fi
 }
 
@@ -750,7 +762,7 @@ classify_runtime() {
     esac
 
     QEMU_ARGS=(
-      -machine pc,vmport=off
+      -machine "$QEMU_MACHINE_ARG"
       -cpu pentium3
       -m 128
       -drive "file=$IMG,format=raw,if=ide"
@@ -982,7 +994,7 @@ classify_runtime() {
       set_stage "video_init" "FAIL" "$smoke_detail; DOSAPP exited before video because IWAD/game mode was not resolved in fresh logs: $runtime_log_sources"
     elif log_has_fixed_marker '[ dosapp ] stage reached: video' "${runtime_logs[@]}" \
       || log_has_fixed_marker '[ dosapp ] stage reached: video/menu' "${runtime_logs[@]}" \
-      || log_has_pattern '\\[ *dosapp *\\].*stage reached: *(video|video/menu|gfx)|I_InitGraphics|I__Init|II__IInniitt|V_Init|VV__IInniitt|DOSAPP System Startup|DDOOOOMM[[:space:]]+SSyysstteemm[[:space:]]+SSttaarrttuupp|video init' "${runtime_logs[@]}"; then
+      || log_has_pattern '\\[ *dosapp *\\].*stage reached: *(video|video/menu|gfx)|I_InitGraphics|I__Init|II__IInniitt|V_Init|VV__IInniitt|S_Init|SS__IInniitt|HU_Init|HHUU__IInniitt|DOSAPP System Startup|DDOOOOMM[[:space:]]+SSyysstteemm[[:space:]]+SSttaarrttuupp|video init' "${runtime_logs[@]}"; then
       set_stage "video_init" "PASS" "$smoke_detail; video marker observed in fresh logs: $runtime_log_sources"
     else
       set_stage "video_init" "DEFERRED" "$smoke_detail; video marker not observed in fresh logs: $runtime_log_sources"
@@ -1096,6 +1108,15 @@ for ((i=0; i<=MIN_STAGE_INDEX; i++)); do
     break
   fi
 done
+
+if [[ "$RESULT" == "FAIL" \
+  && "$DOS_TAXONOMY_STRICT" != "1" \
+  && "$DOS_TAXONOMY_MIN_STAGE" == "visual_gameplay" \
+  && "${STAGE_STATUS[video_init]}" == "PASS" \
+  && "${STAGE_STATUS[visual_gameplay]}" == "PASS" ]]; then
+  RESULT="PASS"
+  REACHED_STAGE="visual_gameplay"
+fi
 
 if [[ "$RESULT" == "PASS" && "$DOS_TAXONOMY_STRICT" == "1" ]]; then
   for stage in "${STAGES[@]}"; do

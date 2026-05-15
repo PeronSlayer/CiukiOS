@@ -53,6 +53,7 @@ DISPLAY_BACKEND="${QEMU_DISPLAY:-gtk}"
 AUDIO_MODE="${QEMU_AUDIO_MODE:-on}"
 QEMU_AUDIO_ARGS=()
 QEMU_AUDIO_DETAIL="off"
+QEMU_MACHINE_ARG="pc,vmport=off"
 
 normalize_audio_backend() {
   case "$1" in
@@ -107,7 +108,7 @@ configure_audio_args() {
   elif [[ "$context" == "headless" && "$AUDIO_MODE" != "on" ]]; then
     backend="none"
   else
-    for candidate in pipewire pa alsa sdl; do
+    for candidate in alsa pipewire pa sdl; do
       if audio_backend_supported "$candidate"; then
         backend="$candidate"
         break
@@ -120,7 +121,8 @@ configure_audio_args() {
     -audiodev "${backend},id=snd0"
     -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
   )
-  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=7 dma=1 hdma=5"
+  QEMU_MACHINE_ARG="pc,vmport=off,pcspk-audiodev=snd0"
+  QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=7 dma=1 hdma=5"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -174,7 +176,7 @@ if [[ ! -f "$IMG" ]]; then
 fi
 
 BASE_ARGS=(
-  -machine pc,vmport=off
+  -machine "$QEMU_MACHINE_ARG"
   -cpu pentium3
   -m 128
   -drive "file=$IMG,format=raw,if=ide,index=2,media=cdrom,readonly=on"

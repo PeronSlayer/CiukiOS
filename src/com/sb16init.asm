@@ -7,6 +7,7 @@ start:
     pop ds
     push cs
     pop es
+    call parse_quiet_switch
 
     mov dx, msg_begin
     call print_line
@@ -415,6 +416,81 @@ delay_irq_wait:
     pop cx
     ret
 
+parse_quiet_switch:
+    push ax
+    push cx
+    push si
+
+    mov si, 0x0081
+    mov cl, [0x0080]
+    xor ch, ch
+
+.next_char:
+    jcxz .done
+    lodsb
+    dec cx
+    cmp al, ' '
+    je .next_char
+    cmp al, 9
+    je .next_char
+    cmp al, '/'
+    jne .skip_token
+
+    jcxz .done
+    lodsb
+    dec cx
+    and al, 0xDF
+    cmp al, 'Q'
+    jne .skip_token
+    jcxz .set_quiet
+
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'U'
+    jne .set_quiet
+    cmp cx, 4
+    jb .skip_token
+    inc si
+    dec cx
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'I'
+    jne .skip_token
+    inc si
+    dec cx
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'E'
+    jne .skip_token
+    inc si
+    dec cx
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'T'
+    jne .skip_token
+    inc si
+    dec cx
+
+.set_quiet:
+    mov byte [quiet_mode], 1
+    jmp .done
+
+.skip_token:
+    jcxz .done
+    lodsb
+    dec cx
+    cmp al, ' '
+    je .next_char
+    cmp al, 9
+    jne .skip_token
+    jmp .next_char
+
+.done:
+    pop si
+    pop cx
+    pop ax
+    ret
+
 print_probe:
     mov dx, msg_probe_prefix
     call print_line
@@ -455,6 +531,8 @@ print_hex_byte:
     ret
 
 print_hex_nibble:
+    cmp byte [quiet_mode], 0
+    jne .done
     cmp al, 10
     jb .digit
     add al, 0x37
@@ -467,11 +545,15 @@ print_hex_nibble:
     mov dl, al
     mov ah, 0x02
     int 0x21
+.done:
     ret
 
 print_line:
+    cmp byte [quiet_mode], 0
+    jne .done
     mov ah, 0x09
     int 0x21
+.done:
     ret
 
 dsp_base_list dw 0x0220, 0x0240, 0x0260, 0x0280
@@ -480,6 +562,7 @@ old_irq7_off dw 0
 old_irq7_seg dw 0
 irq7_installed db 0
 irq7_count db 0
+quiet_mode db 0
 
 dma_sample:
     times 32 db 0x80, 0xA0, 0xC0, 0xE0, 0xFF, 0xE0, 0xC0, 0xA0

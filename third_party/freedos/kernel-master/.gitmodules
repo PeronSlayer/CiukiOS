@@ -1,0 +1,7 @@
+[submodule "share"]
+	path = share
+	url = https://github.com/FDOS/share.git
+	ignore = untracked
+[submodule "country"]
+	path = country
+	url = https://github.com/FDOS/country.git

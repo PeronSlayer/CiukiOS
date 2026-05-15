@@ -84,6 +84,15 @@ SB16INIT_SRC="src/com/sb16init.asm"
 SB16INIT_BIN="build/full/obj/sb16init.com"
 AUDIOTST_SRC="src/com/audiotst.asm"
 AUDIOTST_BIN="build/full/obj/audiotst.com"
+AUDIOKEY_SRC="src/com/audiokey.asm"
+AUDIOKEY_BIN="build/full/obj/audiokey.com"
+DOOMSB_SRC="src/com/doomsb.asm"
+DOOMSB_BIN="build/full/obj/doomsb.com"
+PMIRQSB_LAUNCH_SRC="src/com/pmirqsb_launch.asm"
+PMIRQSB_LAUNCH_BIN="build/full/obj/pmirqsb.com"
+PMIRQSB_SRC="src/probes/pmirqsb/pmirqsb.c"
+PMIRQSB_BIN="build/full/obj/pmirqsb.le"
+DOS4GW_BIN="${DOS4GW_BIN:-/opt/watcom/binw/dos4gw.exe}"
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
 SPLASH_BIN="build/full/obj/SPLASH.BIN"
@@ -92,7 +101,7 @@ SPLASH_EXPECTED_SIZE=16768
 DOOM_SRC_DIR="${CIUKIOS_DOOM_SRC_DIR:-$CIUKIOS_ROOT/third_party/Doom}"
 DOOM_IMAGE_DIR="${CIUKIOS_DOOM_IMAGE_DIR:-::APPS/DOOM}"
 DOOMDATA_IMAGE_DIR="${CIUKIOS_DOOMDATA_IMAGE_DIR:-::DOOMDATA}"
-DOOM_AUDIO_PROFILE="${CIUKIOS_DOOM_AUDIO_PROFILE:-music-only}"
+DOOM_AUDIO_PROFILE="${CIUKIOS_DOOM_AUDIO_PROFILE:-pcspeaker-sfx}"
 DOSNAV_SRC_DIR="${CIUKIOS_DOSNAV_SRC_DIR:-$CIUKIOS_ROOT/third_party/DOSNavigator}"
 DOSNAV_IMAGE_DIR="${CIUKIOS_DOSNAV_IMAGE_DIR:-::APPS/DOSNAV}"
 WOLF3D_SRC_DIR="${CIUKIOS_WOLF3D_SRC_DIR:-$CIUKIOS_ROOT/third_party/WOLF3D}"
@@ -157,7 +166,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -230,6 +239,19 @@ nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
 nasm -f bin "$DRVLOAD_SRC" -o "$DRVLOAD_BIN"
 nasm -f bin "$SB16INIT_SRC" -o "$SB16INIT_BIN"
 nasm -f bin "$AUDIOTST_SRC" -o "$AUDIOTST_BIN"
+nasm -f bin "$AUDIOKEY_SRC" -o "$AUDIOKEY_BIN"
+nasm -f bin "$DOOMSB_SRC" -o "$DOOMSB_BIN"
+nasm -f bin "$PMIRQSB_LAUNCH_SRC" -o "$PMIRQSB_LAUNCH_BIN"
+if bash scripts/build_pmirqsb_dos4gw.sh; then
+	echo "[build-full] PMIRQSB protected-mode probe built"
+else
+	pmirqsb_rc=$?
+	if [[ $pmirqsb_rc -eq 2 ]]; then
+		echo "[build-full] PMIRQSB protected-mode probe skipped (OpenWatcom unavailable)"
+	else
+		exit "$pmirqsb_rc"
+	fi
+fi
 
 echo "[build-full] generating splash asset"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -600,6 +622,10 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
                     sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		0/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		0/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/' "$doom_cfg_out"
                     echo "[build-full] DOOM audio profile: music-only (SFX disabled)"
                     ;;
+                pcspeaker-sfx)
+                    sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		0/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		1/; s/^snd_mport[[:space:]].*/snd_mport		-1/' "$doom_cfg_out"
+                    echo "[build-full] DOOM audio profile: pcspeaker-sfx (PC speaker SFX enabled, music disabled)"
+                    ;;
                 sb16)
                     if [[ -f "$DOOM_SRC_DIR/SB16/DEFAULT.CFG" ]]; then
                         cp "$DOOM_SRC_DIR/SB16/DEFAULT.CFG" "$doom_cfg_out"
@@ -607,8 +633,15 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
                     sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		3/; s/^snd_sbport[[:space:]].*/snd_sbport		544/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/; s/^snd_mport[[:space:]].*/snd_mport		816/' "$doom_cfg_out"
                     echo "[build-full] DOOM audio profile: sb16 (SFX enabled)"
                     ;;
+                sb16-sfx)
+                    if [[ -f "$DOOM_SRC_DIR/SB16/DEFAULT.CFG" ]]; then
+                        cp "$DOOM_SRC_DIR/SB16/DEFAULT.CFG" "$doom_cfg_out"
+                    fi
+                    sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		0/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		3/; s/^snd_sbport[[:space:]].*/snd_sbport		544/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/; s/^snd_mport[[:space:]].*/snd_mport		-1/' "$doom_cfg_out"
+                    echo "[build-full] DOOM audio profile: sb16-sfx (SFX enabled, music disabled)"
+                    ;;
                 *)
-                    echo "[build-full] ERROR: unsupported DOOM audio profile: $DOOM_AUDIO_PROFILE (expected music-only or sb16)" >&2
+                    echo "[build-full] ERROR: unsupported DOOM audio profile: $DOOM_AUDIO_PROFILE (expected music-only, pcspeaker-sfx, sb16 or sb16-sfx)" >&2
                     exit 1
                     ;;
             esac
@@ -616,6 +649,15 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
             mcopy -o -i "$IMG" "$doom_cfg_out" "$DOOM_IMAGE_DIR/DEFAULT.CFG"
             mcopy -o -i "$IMG" "$doom_cfg_out" "$DOOMDATA_IMAGE_DIR/DEFAULT.CFG"
         fi
+        if [[ -f "$DOOM_SRC_DIR/SB16/DEFAULT.CFG" ]]; then
+            doomsb_cfg_out="build/full/obj/doomsb-default.cfg"
+            cp "$DOOM_SRC_DIR/SB16/DEFAULT.CFG" "$doomsb_cfg_out"
+            sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		0/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		3/; s/^snd_sbport[[:space:]].*/snd_sbport		544/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/; s/^snd_mport[[:space:]].*/snd_mport		-1/' "$doomsb_cfg_out"
+            echo "[build-full] injecting DOOMSB.CFG helper profile to $DOOM_IMAGE_DIR"
+            mcopy -o -i "$IMG" "$doomsb_cfg_out" "$DOOM_IMAGE_DIR/DOOMSB.CFG"
+        fi
+        echo "[build-full] injecting DOOMSB.COM helper to $DOOM_IMAGE_DIR"
+        mcopy -o -i "$IMG" "$DOOMSB_BIN" "$DOOM_IMAGE_DIR/DOOMSB.COM"
     else
         echo "[build-full] WARN: Doom source directory is empty: $DOOM_SRC_DIR" >&2
     fi
@@ -698,6 +740,20 @@ echo "[build-full] injecting AUDIOTST.COM helper to ${DRIVERS_IMAGE_DIR%/}/AUDIO
 mcopy -o -i "$IMG" "$AUDIOTST_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIOTST.COM"
 echo "[build-full] injecting AUDIO.COM alias to ${DRIVERS_IMAGE_DIR%/}/AUDIO.COM"
 mcopy -o -i "$IMG" "$AUDIOTST_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIO.COM"
+echo "[build-full] injecting AUDIOKEY.COM helper to ${DRIVERS_IMAGE_DIR%/}/AUDIOKEY.COM"
+mcopy -o -i "$IMG" "$AUDIOKEY_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIOKEY.COM"
+echo "[build-full] injecting AKEY.COM alias to ${DRIVERS_IMAGE_DIR%/}/AKEY.COM"
+mcopy -o -i "$IMG" "$AUDIOKEY_BIN" "${DRIVERS_IMAGE_DIR%/}/AKEY.COM"
+if [[ -f "$PMIRQSB_BIN" ]]; then
+	echo "[build-full] injecting PMIRQSB.COM launcher to ${DRIVERS_IMAGE_DIR%/}/PMIRQSB.COM"
+	mcopy -o -i "$IMG" "$PMIRQSB_LAUNCH_BIN" "${DRIVERS_IMAGE_DIR%/}/PMIRQSB.COM"
+	echo "[build-full] injecting PMIRQSB.LE DOS/4GW probe to ${DRIVERS_IMAGE_DIR%/}/PMIRQSB.LE"
+	mcopy -o -i "$IMG" "$PMIRQSB_BIN" "${DRIVERS_IMAGE_DIR%/}/PMIRQSB.LE"
+	if [[ -f "$DOS4GW_BIN" ]]; then
+		echo "[build-full] injecting DOS4GW.EXE runtime to ${DRIVERS_IMAGE_DIR%/}/DOS4GW.EXE"
+		mcopy -o -i "$IMG" "$DOS4GW_BIN" "${DRIVERS_IMAGE_DIR%/}/DOS4GW.EXE"
+	fi
+fi
 
 if [[ ! -d "$DRIVERS_SRC_DIR" ]]; then
 	if [[ "$CIUKIOS_ALLOW_MISSING_DRIVERS" == "1" ]]; then

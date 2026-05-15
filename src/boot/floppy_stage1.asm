@@ -3265,6 +3265,7 @@ int21_set_vector:
     ; Keep DOS core stable: ignore attempts to replace INT 21h.
     cmp al, 0x21
     je .ok
+    call int21_trace_vector_set
     xor ah, ah
     mov bx, ax
     shl bx, 1
@@ -3296,10 +3297,94 @@ int21_get_vector:
     mov bx, [es:di]
     mov ax, [es:di + 2]
     mov es, ax
+    call int21_trace_vector_get
     xor ax, ax
     clc
     pop di
     pop ax
+    ret
+
+int21_trace_vector_interesting:
+    cmp al, 0x08
+    je .yes
+    cmp al, 0x0D
+    je .yes
+    cmp al, 0x0F
+    je .yes
+    cmp al, 0x1C
+    je .yes
+    clc
+    ret
+.yes:
+    stc
+    ret
+
+int21_trace_vector_set:
+    call int21_trace_vector_interesting
+    jnc .done
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    mov bl, al
+    mov cx, ds
+    push cs
+    pop ds
+    mov si, msg_vec25
+    call print_string_serial
+    mov al, bl
+    call print_hex8_serial
+    mov al, ' '
+    call serial_putc
+    mov ax, cx
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, dx
+    call print_hex16_serial
+    call print_newline_serial
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.done:
+    ret
+
+int21_trace_vector_get:
+    call int21_trace_vector_interesting
+    jnc .done
+    push ax
+    push bx
+    push cx
+    push si
+    push ds
+    mov bl, al
+    mov cx, es
+    push cs
+    pop ds
+    mov si, msg_vec35
+    call print_string_serial
+    mov al, bl
+    call print_hex8_serial
+    mov al, ' '
+    call serial_putc
+    mov ax, cx
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    call print_newline_serial
+    pop ds
+    pop si
+    pop cx
+    pop bx
+    pop ax
+.done:
     ret
 
 int21_get_dta:
@@ -17095,7 +17180,7 @@ tmp_cwd_comp times 24 db 0
 tmp_cwd_build times 24 db 0
 dos_env_block db 'COMSPEC=COMMAND.COM', 0
               db 'PATH=\SYSTEM\DRIVERS', 0
-              db 'BLASTER=A220 I7 D1', 0
+              db 'BLASTER=A220 I7 D1 H5 T6', 0
               db 0
               dw 1
 dos_env_exec_path db 'C:\COMMAND.COM', 0
@@ -17156,6 +17241,8 @@ msg_diag_int16_ok db "[16]", 13, 10, 0
 msg_diag_int1a    db "T", 0
 msg_int21_installed db "I", 13, 10, 0
 msg_int21_missing db "[I21] no", 13, 10, 0
+msg_vec25 db "[V25] ", 0
+msg_vec35 db "[V35] ", 0
 country_info_default:
     dw 0
     db "$", 0, 0, 0, 0
