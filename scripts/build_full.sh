@@ -92,6 +92,10 @@ PMIRQSB_LAUNCH_SRC="src/com/pmirqsb_launch.asm"
 PMIRQSB_LAUNCH_BIN="build/full/obj/pmirqsb.com"
 PMIRQSB_SRC="src/probes/pmirqsb/pmirqsb.c"
 PMIRQSB_BIN="build/full/obj/pmirqsb.le"
+DOOMSFX_LAUNCH_SRC="src/com/doomsfx_launch.asm"
+DOOMSFX_LAUNCH_BIN="build/full/obj/doomsfx.com"
+DOOMSFX_SRC="src/probes/doomsfx/doomsfx.c"
+DOOMSFX_BIN="build/full/obj/doomsfx.le"
 DOS4GW_BIN="${DOS4GW_BIN:-/opt/watcom/binw/dos4gw.exe}"
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
@@ -166,7 +170,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -242,6 +246,7 @@ nasm -f bin "$AUDIOTST_SRC" -o "$AUDIOTST_BIN"
 nasm -f bin "$AUDIOKEY_SRC" -o "$AUDIOKEY_BIN"
 nasm -f bin "$DOOMSB_SRC" -o "$DOOMSB_BIN"
 nasm -f bin "$PMIRQSB_LAUNCH_SRC" -o "$PMIRQSB_LAUNCH_BIN"
+nasm -f bin "$DOOMSFX_LAUNCH_SRC" -o "$DOOMSFX_LAUNCH_BIN"
 if bash scripts/build_pmirqsb_dos4gw.sh; then
 	echo "[build-full] PMIRQSB protected-mode probe built"
 else
@@ -250,6 +255,16 @@ else
 		echo "[build-full] PMIRQSB protected-mode probe skipped (OpenWatcom unavailable)"
 	else
 		exit "$pmirqsb_rc"
+	fi
+fi
+if bash scripts/build_doomsfx_dos4gw.sh; then
+	echo "[build-full] DOOMSFX controlled audio lane built"
+else
+	doomsfx_rc=$?
+	if [[ $doomsfx_rc -eq 2 ]]; then
+		echo "[build-full] DOOMSFX controlled audio lane skipped (OpenWatcom unavailable)"
+	else
+		exit "$doomsfx_rc"
 	fi
 fi
 
@@ -753,6 +768,14 @@ if [[ -f "$PMIRQSB_BIN" ]]; then
 		echo "[build-full] injecting DOS4GW.EXE runtime to ${DRIVERS_IMAGE_DIR%/}/DOS4GW.EXE"
 		mcopy -o -i "$IMG" "$DOS4GW_BIN" "${DRIVERS_IMAGE_DIR%/}/DOS4GW.EXE"
 	fi
+fi
+if [[ -f "$DOOMSFX_BIN" ]]; then
+	DOOMAUD_IMAGE_DIR="::APPS/DOOMAUD"
+	mtools_ensure_dir "$IMG" "$DOOMAUD_IMAGE_DIR"
+	echo "[build-full] injecting DOOMSFX.COM launcher to ${DOOMAUD_IMAGE_DIR%/}/DOOMSFX.COM"
+	mcopy -o -i "$IMG" "$DOOMSFX_LAUNCH_BIN" "${DOOMAUD_IMAGE_DIR%/}/DOOMSFX.COM"
+	echo "[build-full] injecting DOOMSFX.LE controlled audio lane to ${DOOMAUD_IMAGE_DIR%/}/DOOMSFX.LE"
+	mcopy -o -i "$IMG" "$DOOMSFX_BIN" "${DOOMAUD_IMAGE_DIR%/}/DOOMSFX.LE"
 fi
 
 if [[ ! -d "$DRIVERS_SRC_DIR" ]]; then

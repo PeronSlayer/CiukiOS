@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -15,6 +15,8 @@ help:
 	@echo "  make qemu-test-full-stage1 - full-profile Stage1 selftest regression"
 	@echo "  make qemu-test-full-runtime-probe - probe runtime load/entry fallback"
 	@echo "  make qemu-test-full-doom-taxonomy - legacy DOOM taxonomy alias (compat)"
+	@echo "  make qemu-test-full-doomsfx - controlled DOOM WAD SB16 SFX harness"
+	@echo "  make qemu-test-full-doomsfx-dsdoropn - controlled DOOM door-open SB16 SFX harness"
 	@echo "  make qemu-test-full-dos-taxonomy - classify generic DOS full-profile taxonomy stages"
 	@echo "  make qemu-test-full-wolf3d-taxonomy - classify WOLF3D transfer/runtime stages"
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
@@ -66,6 +68,12 @@ qemu-test-full-runtime-probe:
 
 qemu-test-full-doom-taxonomy:
 	@DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_RUN_COMMAND='run DOOM.EXE' DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doom-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=25 DOS_TAXONOMY_OBSERVE_SEC=50 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=320 bash scripts/qemu_test_full_dos_taxonomy.sh
+
+qemu-test-full-doomsfx:
+	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOOMAUD DOS_TAXONOMY_APP_BINARY_NAME=DOOMSFX.COM DOS_TAXONOMY_CWD='\APPS\DOOMAUD' DOS_TAXONOMY_RUN_COMMAND="run DOOMSFX.COM $(DOOMSFX_LUMP)" DOS_TAXONOMY_APP_RUNTIME_MARKERS='\[DOOMSFX\][[:space:]]+PASS' DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_dos_taxonomy.sh
+
+qemu-test-full-doomsfx-dsdoropn:
+	@DOOMSFX_LUMP=DSDOROPN $(MAKE) qemu-test-full-doomsfx
 
 qemu-test-full-dos-taxonomy:
 	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS DOS_TAXONOMY_APP_BINARY_NAME=CIUKEDIT.COM DOS_TAXONOMY_RUN_COMMAND='run CIUKEDIT.COM MATRIX.TXT' DOS_TAXONOMY_APP_RUNTIME_MARKERS='[CIUKEDIT:BOOT]|[CIUKEDIT:OK]|[{1,2}C{1,2}I{1,2}U{1,2}K{1,2}E{1,2}D{1,2}I{1,2}T{1,2}:{1,2}(B{1,2}O{2,4}T{1,2}|O{1,2}K{1,2})]{1,2}' DOS_TAXONOMY_CWD='APPS' DOS_TAXONOMY_RUN_DRVLOAD=0 bash scripts/qemu_test_full_dos_taxonomy.sh
