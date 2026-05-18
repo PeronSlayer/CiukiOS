@@ -885,6 +885,7 @@ handle_power_command:
 
 .token_done:
     mov byte [di], 0
+    mov [power_arg_ptr], si
     mov si, src_path
     mov di, power_token_cancel
     call strings_equal
@@ -893,6 +894,21 @@ handle_power_command:
     mov di, power_token_status
     call strings_equal
     jz .status
+    mov si, src_path
+    mov di, power_token_timer
+    call strings_equal
+    jz .timer_switch
+    call parse_src_path_seconds
+    jc .usage
+    test ax, ax
+    jz .immediate
+    call schedule_power_action
+    jmp .done
+
+.timer_switch:
+    mov si, [power_arg_ptr]
+    call parse_next_power_token
+    jc .usage
     call parse_src_path_seconds
     jc .usage
     test ax, ax
@@ -1068,6 +1084,46 @@ get_bios_tick_low:
     mov es, ax
     mov ax, [es:0x046C]
     pop es
+    ret
+
+parse_next_power_token:
+    push di
+
+.skip_spaces:
+    cmp byte [si], ' '
+    jne .copy_start
+    inc si
+    jmp .skip_spaces
+
+.copy_start:
+    cmp byte [si], 0
+    je .fail
+    mov di, src_path
+
+.copy:
+    mov al, [si]
+    cmp al, 0
+    je .done
+    cmp al, ' '
+    je .done
+    cmp di, src_path + 63
+    jae .advance
+    call upcase_al
+    mov [di], al
+    inc di
+.advance:
+    inc si
+    jmp .copy
+
+.done:
+    mov byte [di], 0
+    clc
+    pop di
+    ret
+
+.fail:
+    stc
+    pop di
     ret
 
 skip_spaces:
@@ -2011,8 +2067,8 @@ msg_copy_use db 'usage: copy <src> <dst>', 0x0D, 0x0A, '$'
 msg_copy_src_err db 'copy: source not found', 0x0D, 0x0A, '$'
 msg_copy_err db 'copy: failed', 0x0D, 0x0A, '$'
 msg_copy_ok db 'File copied', 0x0D, 0x0A, '$'
-msg_reboot_use db 'usage: reboot [seconds|status|cancel]', 0x0D, 0x0A, '$'
-msg_shutdown_use db 'usage: shutdown [seconds|status|cancel]', 0x0D, 0x0A, '$'
+msg_reboot_use db 'usage: reboot [/t seconds|seconds|status|cancel]', 0x0D, 0x0A, '$'
+msg_shutdown_use db 'usage: shutdown [/t seconds|seconds|status|cancel]', 0x0D, 0x0A, '$'
 msg_reboot_scheduled db 'reboot: queued', 0x0D, 0x0A, '$'
 msg_shutdown_scheduled db 'shutdown: queued', 0x0D, 0x0A, '$'
 msg_reboot_now db 'rebooting...', 0x0D, 0x0A, '$'
@@ -2043,6 +2099,7 @@ where_name_mouse db 'MOUSE', 0
 where_name_mouse_com db 'MOUSE.COM', 0
 power_token_cancel db 'CANCEL', 0
 power_token_status db 'STATUS', 0
+power_token_timer db '/T', 0
 where_out_shell db 'C:\SYSTEM\SHELL.COM', 0x0D, 0x0A, '$'
 where_out_dos4gw db 'C:\SYSTEM\DRIVERS\DOS4GW.EXE', 0x0D, 0x0A, '$'
 where_out_mouse db 'C:\SYSTEM\MOUSE.COM', 0x0D, 0x0A, '$'
@@ -2053,6 +2110,7 @@ exec_path_system_mouse db 'C:\SYSTEM\MOUSE.COM', 0
 echo_ptr dw 0
 echo_len dw 0
 pending_power_due_tick dw 0
+power_arg_ptr dw 0
 where_prefix_ptr dw 0
 power_requested_action db 0
 pending_power_action db 0

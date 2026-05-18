@@ -436,6 +436,8 @@ POWER_QUEUE_HALT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+P+E+N+D+I+N+G+[[:space
 POWER_CANCEL_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+C+A+N+C+E+L+E+D+'
 POWER_REBOOT_QUEUE_PATTERN='R+E+B+O+O+T+[:]+[[:space:]]+Q+U+E+U+E+D+'
 POWER_SHUTDOWN_QUEUE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+Q+U+E+U+E+D+'
+POWER_REBOOT_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+R+E+B+O+O+T+'
+POWER_SHUTDOWN_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+S+H+U+T+D+O+W+N+'
 MOUSE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+(I+N+T+3+3+H+[[:space:]]+N+O+T+[[:space:]]+I+N+S+T+A+L+L+E+D+|I+N+T+3+3+H+[[:space:]]+R+E+A+D+Y+)'
 COMDEMO_PASS_PATTERN='C+O+M+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
 ECHO_TOKEN='SH42'
@@ -613,12 +615,13 @@ else
   fi
   send_and_wait_for_pattern_and_prompt 'where MISSING987' "$WHERE_MISSING_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_MISSING_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_IDLE_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_IDLE_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_pattern_and_prompt 'reboot 5' "$POWER_REBOOT_QUEUE_PATTERN" "$APPS_PROMPT_PATTERN" "REBOOT_QUEUE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'reboot /t 5' "$POWER_REBOOT_QUEUE_PATTERN" "$APPS_PROMPT_PATTERN" "REBOOT_QUEUE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_QUEUE_REBOOT_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_REBOOT_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'shutdown cancel' "$POWER_CANCEL_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_CANCEL_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_pattern_and_prompt 'shutdown 5' "$POWER_SHUTDOWN_QUEUE_PATTERN" "$APPS_PROMPT_PATTERN" "SHUTDOWN_QUEUE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'shutdown /t 5' "$POWER_SHUTDOWN_QUEUE_PATTERN" "$APPS_PROMPT_PATTERN" "SHUTDOWN_QUEUE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_QUEUE_HALT_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_SHUTDOWN_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'reboot cancel' "$POWER_CANCEL_PATTERN" "$APPS_PROMPT_PATTERN" "REBOOT_CANCEL_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'shutdown /t nope' "$POWER_SHUTDOWN_USE_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_BAD_TIMER_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'MOUSE' "$MOUSE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PROBE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'COMDEMO.COM' "$COMDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "EXEC_COM_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \' "$ROOT_PROMPT_PATTERN" "EXEC_ROOT_CD_OK" "$COMMAND_TIMEOUT_SEC"

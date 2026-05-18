@@ -295,7 +295,16 @@ STAGE1_PROMPT_PREFIX='C{1,2}i{1,2}u{1,2}k{1,2}i{1,2}O{1,2}S{1,2}[[:space:]]+'
 STAGE1_APPS_PROMPT_PATTERN="${STAGE1_PROMPT_PREFIX}D{1,2}:{1,2}[\\]{1,2}A{1,2}P{2,4}S{1,2}[\\]{1,2}>{1,2}"
 VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+.*C+I+U+K+I+D+O+S+.*S+H+E+L+L+'
 WHERE_SHELL_PATTERN='[CD]+[:]+[\\]+S+Y+S+T+E+M+[\\]+S+H+E+L+L+\.*C+O+M+'
+WHERE_MOUSE_PATTERN='[CD]+[:]+[\\]+S+Y+S+T+E+M+[\\]+M+O+U+S+E+\.*C+O+M+'
 FALLBACK_WARNING_PATTERN='W+A+R+N+[:]+[[:space:]]+S+H+E+L+L+[[:space:]]+B+O+O+T+[[:space:]]+F+A+I+L+'
+POWER_IDLE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+I+D+L+E+'
+POWER_QUEUE_REBOOT_PATTERN='R+E+B+O+O+T+[:]+[[:space:]]+Q+U+E+U+E+D+'
+POWER_QUEUE_HALT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+Q+U+E+U+E+D+'
+POWER_STATUS_REBOOT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+P+E+N+D+I+N+G+[[:space:]]+R+E+B+O+O+T+'
+POWER_STATUS_HALT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+P+E+N+D+I+N+G+[[:space:]]+H+A+L+T+'
+POWER_CANCEL_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+C+A+N+C+E+L+E+D+'
+POWER_BAD_TIMER_PATTERN='U+S+A+G+E+[:]+[[:space:]]+S+H+U+T+D+O+W+N+'
+MOUSE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+(I+N+T+3+3+H+[[:space:]]+N+O+T+[[:space:]]+I+N+S+T+A+L+L+E+D+|I+N+T+3+3+H+[[:space:]]+R+E+A+D+Y+)'
 
 QEMU_ARGS=(
   -machine pc,vmport=off
@@ -364,6 +373,16 @@ mark_pass "INITIAL_SHELL_COM_PROMPT"
 
 send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'where MOUSE' "$WHERE_MOUSE_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_MOUSE_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_IDLE_PATTERN" "$CHILD_PROMPT_PATTERN" "POWER_IDLE_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'reboot /t 3' "$POWER_QUEUE_REBOOT_PATTERN" "$CHILD_PROMPT_PATTERN" "REBOOT_QUEUE_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_STATUS_REBOOT_PATTERN" "$CHILD_PROMPT_PATTERN" "POWER_REBOOT_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'reboot cancel' "$POWER_CANCEL_PATTERN" "$CHILD_PROMPT_PATTERN" "REBOOT_CANCEL_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'shutdown /t 3' "$POWER_QUEUE_HALT_PATTERN" "$CHILD_PROMPT_PATTERN" "SHUTDOWN_QUEUE_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_STATUS_HALT_PATTERN" "$CHILD_PROMPT_PATTERN" "POWER_SHUTDOWN_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'shutdown cancel' "$POWER_CANCEL_PATTERN" "$CHILD_PROMPT_PATTERN" "SHUTDOWN_CANCEL_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'shutdown /t nope' "$POWER_BAD_TIMER_PATTERN" "$CHILD_PROMPT_PATTERN" "POWER_BAD_TIMER_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'MOUSE' "$MOUSE_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_OK" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'exit' "$STAGE1_APPS_PROMPT_PATTERN" "EXIT_TO_STAGE1_OK" "$COMMAND_TIMEOUT_SEC"
 
 hmp "$MON_SOCK" "$CMD_LOG" "quit" >/dev/null 2>&1 || true
