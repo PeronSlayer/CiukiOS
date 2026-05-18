@@ -75,6 +75,9 @@ org 0x0000
 %ifndef STAGE1_RUNTIME_PROBE
 %define STAGE1_RUNTIME_PROBE 0
 %endif
+%ifndef STAGE1_BOOT_EXTERNAL_SHELL
+%define STAGE1_BOOT_EXTERNAL_SHELL 0
+%endif
 %ifndef HARDWARE_VALIDATION_SCREEN
 %define HARDWARE_VALIDATION_SCREEN 0
 %endif
@@ -170,6 +173,16 @@ stage1_start:
 %endif
 
     call flush_keyboard_buffer
+%if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
+    push cs
+    pop ds
+    mov si, dos_env_exec_path
+    call shell_try_exec_path
+    jnc .boot_shell_done
+    mov si, msg_shell_status
+    call print_string_dual
+.boot_shell_done:
+%endif
     jmp main_loop
 
 helper_get_drive_letter:
@@ -17302,7 +17315,11 @@ dos_env_block db 'COMSPEC=COMMAND.COM', 0
               db 'BLASTER=A220 I7 D1 H5 T6', 0
               db 0
               dw 1
+%if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
+dos_env_exec_path db '\SYSTEM\SHELL.COM', 0
+%else
 dos_env_exec_path db 'C:\COMMAND.COM', 0
+%endif
               times DOS_ENV_EXEC_PATH_LEN - ($ - dos_env_exec_path) db 0
 dos_env_block_end:
 env_doom_exe_path db 'C:\APPS\DOOM\DOOM.EXE', 0
@@ -17399,7 +17416,11 @@ msg_prompt_prefix db "CiukiOS ", 0
 msg_unknown   db "Unknown command", 13, 10, 0
 msg_banner_title db "CiukiOS pre-Alpha v0.6.6 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 16
+%if STAGE1_BOOT_EXTERNAL_SHELL
+msg_shell_status db "warn: shell boot fail", 13, 10, 0
+%else
 msg_shell_status db "Type Help for commands.", 0
+%endif
 msg_shell_cpu_prefix db "CPU:", 0
 msg_shell_dsk_prefix db "DSK:", 0
 msg_shell_ram_prefix db "FREE:", 0
@@ -17407,12 +17428,12 @@ msg_shell_ram_prefix db "FREE:", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
-msg_help_header db "Commands (help short|all)", 13, 10, 0
-msg_help_core db "  help - Guide.", 13, 10, "  ver - Version.", 13, 10, "  cls - Clear.", 13, 10, 0
-msg_help_runtime db "  which/where - Resolve.", 13, 10, "  pwd - Cwd.", 13, 10, "  dir - List.", 13, 10, 0
-msg_help_system db "  cd/woof/cd.. - Chdir.", 13, 10, "  run - Execute.", 13, 10, "  help all - Full list.", 13, 10, 0
-msg_help_apps db "  reboot - Reboot.", 13, 10, "  exit - Restart.", 13, 10, 0
-msg_help_all db "  ticks - T. drive/drives - D. dos21 - S.", 13, 10, "  comdemo - C. mzdemo - M. fileio - F. gfxdemo - G.", 13, 10, 0
+msg_help_header db "Stage1 fallback (help/all)", 13, 10, 0
+msg_help_core db "  help ver cls dir cd run", 13, 10, 0
+msg_help_runtime db "  run \\SYSTEM\\SHELL.COM", 13, 10, 0
+msg_help_system db "  reboot exit help all", 13, 10, 0
+msg_help_apps db "  SHELL.COM owns file cmds", 13, 10, 0
+msg_help_all db "  which copy del type md rd ren move", 13, 10, "  diag: ticks drives dos21 demo gfx", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
 msg_drives_default db "default drive=", 0
