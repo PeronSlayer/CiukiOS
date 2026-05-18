@@ -100,9 +100,20 @@ main_loop:
     cmp byte [cmd_buf + 1], 'L'
     jne .check_cd
     cmp byte [cmd_buf + 2], 'S'
+    je .check_cls_short
+    cmp byte [cmd_buf + 2], 'E'
     jne .check_cd
+    cmp byte [cmd_buf + 3], 'A'
+    jne .check_cd
+    cmp byte [cmd_buf + 4], 'R'
+    jne .check_cd
+    cmp byte [cmd_buf + 5], 0
+    jne .check_cd
+    jmp .do_cls
+.check_cls_short:
     cmp byte [cmd_buf + 3], 0
     jne .check_cd
+.do_cls:
     mov ax, 0x0600
     mov bh, 0x07
     xor cx, cx
@@ -112,19 +123,35 @@ main_loop:
     xor bx, bx
     xor dx, dx
     int 0x10
+    mov si, msg_banner_compact
+    call print_dual_dollar_string
     jmp main_loop
 
 .check_exit:
     cmp byte [cmd_buf + 0], 'E'
-    jne .check_path
+    jne .check_quit
     cmp byte [cmd_buf + 1], 'X'
-    jne .check_path
+    jne .check_quit
     cmp byte [cmd_buf + 2], 'I'
     jne .unknown
     cmp byte [cmd_buf + 3], 'T'
     jne .unknown
     cmp byte [cmd_buf + 4], 0
     jne .unknown
+    jmp .do_exit
+
+.check_quit:
+    cmp byte [cmd_buf + 0], 'Q'
+    jne .check_path
+    cmp byte [cmd_buf + 1], 'U'
+    jne .check_path
+    cmp byte [cmd_buf + 2], 'I'
+    jne .check_path
+    cmp byte [cmd_buf + 3], 'T'
+    jne .check_path
+    cmp byte [cmd_buf + 4], 0
+    jne .check_path
+.do_exit:
     mov ax, 0x4C00
     int 0x21
 
@@ -132,7 +159,7 @@ main_loop:
     cmp byte [cmd_buf + 0], 'P'
     jne .check_where
     cmp byte [cmd_buf + 1], 'A'
-    jne .check_where
+    jne .check_pwd
     cmp byte [cmd_buf + 2], 'T'
     jne .check_where
     cmp byte [cmd_buf + 3], 'H'
@@ -142,6 +169,15 @@ main_loop:
     mov si, msg_path
     call print_dual_dollar_string
     jmp main_loop
+
+.check_pwd:
+    cmp byte [cmd_buf + 1], 'W'
+    jne .check_where
+    cmp byte [cmd_buf + 2], 'D'
+    jne .check_where
+    cmp byte [cmd_buf + 3], 0
+    jne .check_where
+    jmp .cd_show
 
 .check_where:
     cmp byte [cmd_buf + 0], 'W'
@@ -1594,37 +1630,45 @@ build_exec_tail:
     pop ax
     ret
 
-msg_banner  db 'CiukiOS SHELL prototype', 0x0D, 0x0A
+msg_banner  db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A
             db 'Type HELP for commands.', 0x0D, 0x0A, '$'
-msg_prompt_pre db 'SHELL ', '$'
-msg_help    db 'Commands: HELP VER ECHO CLS EXIT PATH WHERE CD MKDIR RMDIR REN MOVE DIR TYPE DEL COPY', 0x0D, 0x0A, '$'
-msg_ver     db 'CiukiOS SHELL.COM prototype 0.1', 0x0D, 0x0A, '$'
-msg_unknown db 'Unknown command. Type HELP.', 0x0D, 0x0A, '$'
-msg_exec_not_found db 'exec: not found', 0x0D, 0x0A, '$'
-msg_exec_fail db 'exec: failed', 0x0D, 0x0A, '$'
+msg_banner_compact db 'CiukiOS SHELL', 0x0D, 0x0A, '$'
+msg_prompt_pre db 'CiukiOS SHELL ', '$'
+msg_help    db 'SHELL.COM commands:', 0x0D, 0x0A
+            db '  System: HELP VER ECHO CLS EXIT', 0x0D, 0x0A
+            db '  Navigation: CD CHDIR DIR PATH WHERE PWD', 0x0D, 0x0A
+            db '  Files: TYPE COPY DEL ERASE REN RENAME MOVE MKDIR MD RMDIR RD', 0x0D, 0x0A
+            db '  Execution: run name or path', 0x0D, 0x0A
+            db '  Stage1 fallback: use EXIT or QUIT', 0x0D, 0x0A
+            db '  Use WHERE <name> to see what will run', 0x0D, 0x0A
+            db '  Aliases: CLEAR QUIT PWD', 0x0D, 0x0A, '$'
+msg_ver     db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A, '$'
+msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
+msg_exec_not_found db 'command: not found', 0x0D, 0x0A, '$'
+msg_exec_fail db 'run: cannot execute', 0x0D, 0x0A, '$'
 msg_path    db 'C:\APPS;C:\SYSTEM\DRIVERS;C:\SYSTEM', 0x0D, 0x0A, '$'
-msg_where_use db 'where: usage: WHERE <program>', 0x0D, 0x0A, '$'
+msg_where_use db 'usage: where <name>', 0x0D, 0x0A, '$'
 msg_where_miss db 'where: not found', 0x0D, 0x0A, '$'
 msg_cwd_pre db 'Current directory: ', '$'
 msg_cd_err  db 'cd: invalid path', 0x0D, 0x0A, '$'
-msg_mkdir_use db 'mkdir: usage: MKDIR <dir>', 0x0D, 0x0A, '$'
+msg_mkdir_use db 'usage: mkdir <dir>', 0x0D, 0x0A, '$'
 msg_mkdir_err db 'mkdir: invalid path', 0x0D, 0x0A, '$'
 msg_mkdir_ok db 'Directory created', 0x0D, 0x0A, '$'
-msg_rmdir_use db 'rmdir: usage: RMDIR <dir>', 0x0D, 0x0A, '$'
+msg_rmdir_use db 'usage: rmdir <dir>', 0x0D, 0x0A, '$'
 msg_rmdir_err db 'rmdir: invalid path', 0x0D, 0x0A, '$'
 msg_rmdir_ok db 'Directory removed', 0x0D, 0x0A, '$'
-msg_rename_use db 'rename: usage: REN <old> <new>', 0x0D, 0x0A, '$'
-msg_rename_err db 'rename: failed', 0x0D, 0x0A, '$'
+msg_rename_use db 'usage: ren/move <src> <dst>', 0x0D, 0x0A, '$'
+msg_rename_err db 'ren: cannot rename', 0x0D, 0x0A, '$'
 msg_rename_ok db 'Rename complete', 0x0D, 0x0A, '$'
 msg_dir_hdr db 'Directory listing', 0x0D, 0x0A, '$'
 msg_dir_tag db ' <DIR>', '$'
 msg_dir_none db 'dir: path not found', 0x0D, 0x0A, '$'
-msg_type_use db 'type: usage: TYPE <file>', 0x0D, 0x0A, '$'
+msg_type_use db 'usage: type <file>', 0x0D, 0x0A, '$'
 msg_type_err db 'type: cannot open file', 0x0D, 0x0A, '$'
-msg_del_use db 'del: usage: DEL <file>', 0x0D, 0x0A, '$'
+msg_del_use db 'usage: del <file>', 0x0D, 0x0A, '$'
 msg_del_err db 'del: file not found', 0x0D, 0x0A, '$'
 msg_del_ok  db 'File deleted', 0x0D, 0x0A, '$'
-msg_copy_use db 'copy: usage: COPY <src> <dst>', 0x0D, 0x0A, '$'
+msg_copy_use db 'usage: copy <src> <dst>', 0x0D, 0x0A, '$'
 msg_copy_src_err db 'copy: source not found', 0x0D, 0x0A, '$'
 msg_copy_err db 'copy: failed', 0x0D, 0x0A, '$'
 msg_copy_ok db 'File copied', 0x0D, 0x0A, '$'

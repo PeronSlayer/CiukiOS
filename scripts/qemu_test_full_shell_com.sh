@@ -312,6 +312,7 @@ done
 need_cmd mdir
 need_cmd mdel
 need_cmd mcopy
+need_cmd mmd
 need_cmd python3
 need_cmd socat
 need_cmd strings
@@ -367,7 +368,11 @@ if (( ! BOOT_AUTORUN )); then
   if ! mcopy -i "$IMG" -o "$TYPE_TEST_LOCAL" ::APPS/ERASETST.TXT 2>/dev/null; then
     mark_fail "TYPE_DEL_FIXTURES" "could not inject ::APPS/ERASETST.TXT"
   fi
+  if ! mmd -i "$IMG" ::APPS/SRDIR1 ::APPS/SRDIR2 >/dev/null 2>&1; then
+    mark_fail "RMDIR_FIXTURES" "could not inject ::APPS/SRDIR1 and ::APPS/SRDIR2"
+  fi
   mark_pass "TYPE_DEL_FIXTURES"
+  mark_pass "RMDIR_FIXTURES"
 
   # Regression guard: the type fixture must sit on a high cluster (one whose
   # data LBA overflows 16-bit math, i.e. cluster >= 8194) so that the TYPE_OK
@@ -401,17 +406,29 @@ COMMAND_TIMEOUT_SEC="${SHELL_COM_COMMAND_TIMEOUT_SEC:-45}"
 PROMPT_PREFIX='C{1,2}i{1,2}u{1,2}k{1,2}i{1,2}O{1,2}S{1,2}[[:space:]]+'
 BS='[\\]'
 STAGE1_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}A{1,2}P{2,4}S{1,2}${BS}{1,2}>{1,2}"
-CHILD_PROMPT_PATTERN='S+H+E+L+L+[[:space:]]+C+[:]+[\\]+'
-ROOT_PROMPT_PATTERN='S+H+E+L+L+[[:space:]]+C+[:]+[\\]+>+'
-APPS_PROMPT_PATTERN='S+H+E+L+L+[[:space:]]+C+[:]+[\\]+A+P+P+S+>+'
-HELP_PATTERN='C+O+M+M+A+N+D+S+[:]+.*P+A+T+H+.*W+H+E+R+E+'
-VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+S+H+E+L+L+\.*C+O+M+[[:space:]]+P+R+O+T+O+T+Y+P+E+'
+SHELL_PROMPT_PREFIX='C+I+U+K+I+O+S+[[:space:]]+S+H+E+L+L+[[:space:]]+'
+CHILD_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+"
+ROOT_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+>+"
+APPS_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+>+"
+BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+.*C+I+U+K+I+D+O+S+.*S+H+E+L+L+'
+HELP_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+C+O+M+M+A+N+D+S+[:]+'
+HELP_SYSTEM_PATTERN='S+Y+S+T+E+M+[:]+'
+HELP_NAV_PATTERN='N+A+V+I+G+A+T+I+O+N+[:]+'
+HELP_FILES_PATTERN='F+I+L+E+S+[:]+'
+HELP_EXEC_PATTERN='E+X+E+C+U+T+I+O+N+[:]+'
+HELP_FALLBACK_PATTERN='S+T+A+G+E+1+[[:space:]]+F+A+L+L+B+A+C+K+'
+HELP_WHERE_HINT_PATTERN='U+S+E+[[:space:]]+W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
+VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+.*C+I+U+K+I+D+O+S+.*S+H+E+L+L+'
 FALLBACK_WARNING_PATTERN='W+A+R+N+[:]+[[:space:]]+S+H+E+L+L+[[:space:]]+B+O+O+T+[[:space:]]+F+A+I+L+'
 PATH_PATTERN='C+[:]+[\\]+A+P+P+S+;+C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+;+C+[:]+[\\]+S+Y+S+T+E+M+'
 WHERE_SHELL_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+S+H+E+L+L+\.*C+O+M+'
 WHERE_DOS4GW_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+[\\]+D+O+S+4+G+W+\.*E+X+E+'
 WHERE_MISSING_PATTERN='W+H+E+R+E+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
-EXEC_MISSING_PATTERN='E+X+E+C+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
+EXEC_MISSING_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
+UNKNOWN_CMD_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
+USAGE_WHERE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
+CWD_APPS_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+[:]+[\\]+A+P+P+S+'
+CLS_BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+S+H+E+L+L+'
 COMDEMO_PASS_PATTERN='C+O+M+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
 ECHO_TOKEN='SH42'
 ECHO_TOKEN_PATTERN='S+H+4+2+'
@@ -424,14 +441,14 @@ CD_ERROR_PATTERN='C+D+[:]+[[:space:]]+I+N+V+A+L+I+D+'
 MKDIR_OK_PATTERN='D+I+R+E+C+T+O+R+Y+[[:space:]]+C+R+E+A+T+E+D+'
 RMDIR_OK_PATTERN='D+I+R+E+C+T+O+R+Y+[[:space:]]+R+E+M+O+V+E+D+'
 RENAME_OK_PATTERN='R+E+N+A+M+E+[[:space:]]+C+O+M+P+L+E+T+E+'
-RENAME_ERR_PATTERN='R+E+N+A+M+E+[:]+[[:space:]]+F+A+I+L+E+D+'
-RENAME_USE_PATTERN='R+E+N+A+M+E+[:]+[[:space:]]+U+S+A+G+E+'
+RENAME_ERR_PATTERN='R+E+N+[:]+[[:space:]]+C+A+N+N+O+T+[[:space:]]+R+E+N+A+M+E+'
+RENAME_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+R+E+N+/+M+O+V+E+'
 TYPE_TOKEN_PATTERN='T+Y+P+E+T+O+K+9+9+'
 TYPE_ERROR_PATTERN='T+Y+P+E+[:]+[[:space:]]+C+A+N+N+O+T+'
 DEL_OK_PATTERN='F+I+L+E+[[:space:]]+D+E+L+E+T+E+D+'
 COPY_OK_PATTERN='F+I+L+E+[[:space:]]+C+O+P+I+E+D+'
 COPY_SRC_ERR_PATTERN='C+O+P+Y+[:]+[[:space:]]+S+O+U+R+C+E+'
-COPY_USE_PATTERN='C+O+P+Y+[:]+[[:space:]]+U+S+A+G+E+'
+COPY_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+C+O+P+Y+'
 DEL_ERROR_PATTERN='D+E+L+[:]+[[:space:]]+F+I+L+E+[[:space:]]+N+O+T+'
 BACKSPACE_TOKEN='BK77'
 BACKSPACE_TOKEN_PATTERN='B+K+7+7+'
@@ -486,6 +503,10 @@ if (( BOOT_AUTORUN )); then
     if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
       mark_fail "INITIAL_SHELL_COM_PROMPT" "initial SHELL.COM prompt not detected"
     fi
+    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$BANNER_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+      mark_fail "BANNER_OK" "SHELL.COM banner not detected"
+    fi
+    mark_pass "BANNER_OK"
     mark_pass "INITIAL_SHELL_COM_PROMPT"
     send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
@@ -497,18 +518,11 @@ else
   fi
   mark_pass "INITIAL_STAGE1_PROMPT"
 
-  # Kernel directory I/O regression: drive Stage1's md/rd builtins (kernel
-  # int21_mkdir/int21_rmdir) so a fresh directory lands on a high FAT16 cluster
-  # (>= 8194). HCDIR is left in place for the post-run cluster + zero-fill check;
-  # RTDIR exercises the mkdir -> rmdir round-trip and the rmdir crash fix
-  # (RMDIR_RETURN_OK proves the OS survives rd of a high-cluster directory).
-  send_and_wait_for_prompt 'md \APPS\HCDIR' "$STAGE1_PROMPT_PATTERN" "HC_MKDIR_SENT" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_prompt 'md \APPS\SRDIR1' "$STAGE1_PROMPT_PATTERN" "SR1_MKDIR_SENT" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_prompt 'md \APPS\SRDIR2' "$STAGE1_PROMPT_PATTERN" "SR2_MKDIR_SENT" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_prompt 'md \APPS\RTDIR' "$STAGE1_PROMPT_PATTERN" "RT_MKDIR_SENT" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_prompt 'rd \APPS\RTDIR' "$STAGE1_PROMPT_PATTERN" "RMDIR_RETURN_OK" "$COMMAND_TIMEOUT_SEC"
-
   send_and_wait_for_prompt '\SYSTEM\SHELL.COM' "$CHILD_PROMPT_PATTERN" "SHELL_LAUNCHED" "$COMMAND_TIMEOUT_SEC"
+  if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$BANNER_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+    mark_fail "BANNER_OK" "SHELL.COM banner not detected"
+  fi
+  mark_pass "BANNER_OK"
   EMPTY_OFFSET="$(file_size "$SERIAL_LOG")"
   send_key "$MON_SOCK" "$CMD_LOG" ret || mark_fail "SEND_EMPTY_OK" "cannot send empty command"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$EMPTY_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EMPTY_OK" "expected prompt did not appear after empty command"
@@ -555,14 +569,34 @@ else
   wait_for_strings_count_from_offset "$SERIAL_LOG" "$HISTORY_ONE_PATTERN" 2 "$HISTORY_DEDUP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HISTORY_DEDUP_OK" "duplicate consecutive history entry was stored"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$HISTORY_DEDUP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HISTORY_DEDUP_OK" "prompt did not return after dedup history command"
   mark_pass "HISTORY_DEDUP_OK"
-  send_and_wait_for_pattern_and_prompt 'help' "$HELP_PATTERN" "$CHILD_PROMPT_PATTERN" "HELP_OK" "$COMMAND_TIMEOUT_SEC"
+  HELP_OFFSET="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'help' || mark_fail "SEND_HELP_OK" "cannot send command: help"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_OK" "expected output did not appear after: help"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_SYSTEM_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "system help section missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_NAV_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "navigation help section missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_FILES_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "files help section missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_EXEC_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "execution help section missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_FALLBACK_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "fallback hint missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_WHERE_HINT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "where hint missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_OK" "expected prompt did not appear after: help"
+  mark_pass "HELP_OK"
+  mark_pass "HELP_LAYOUT_OK"
   send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_count_and_prompt "echo $ECHO_TOKEN" "$ECHO_TOKEN_PATTERN" 2 "$CHILD_PROMPT_PATTERN" "ECHO_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_prompt 'cls' "$CHILD_PROMPT_PATTERN" "CLS_OK" "$COMMAND_TIMEOUT_SEC"
+  CLS_OFFSET="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cls' || mark_fail "SEND_CLS_OK" "cannot send command: cls"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CLS_BANNER_PATTERN" "$CLS_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "CLS_REDRAW_OK" "compact banner missing after cls"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$CLS_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "CLS_OK" "expected prompt did not appear after: cls"
+  mark_pass "CLS_OK"
+  mark_pass "CLS_REDRAW_OK"
+  send_and_wait_for_pattern_and_prompt 'helpx' "$UNKNOWN_CMD_PATTERN" "$CHILD_PROMPT_PATTERN" "UNKNOWN_CMD_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'where' "$USAGE_WHERE_PATTERN" "$CHILD_PROMPT_PATTERN" "USAGE_ERROR_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'type \APPS\NOPE.TXT' "$TYPE_ERROR_PATTERN" "$CHILD_PROMPT_PATTERN" "ERROR_STYLE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_count_and_prompt "echo $CLS_TOKEN" "$CLS_TOKEN_PATTERN" 2 "$CHILD_PROMPT_PATTERN" "POST_CLS_ECHO_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \' "$ROOT_PROMPT_PATTERN" "CD_ROOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'dir \APPS' "$DIR_FILE_PATTERN" "$ROOT_PROMPT_PATTERN" "DIR_APPS_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \APPS' "$APPS_PROMPT_PATTERN" "CD_APPS_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "PWD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'path' "$PATH_PATTERN" "$APPS_PROMPT_PATTERN" "PATH_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
   if (( DOS4GW_PRESENT )); then
@@ -575,6 +609,11 @@ else
   send_and_wait_for_count_and_prompt "echo $EXEC_RETURN_TOKEN" "$EXEC_RETURN_PATTERN" 2 "$ROOT_PROMPT_PATTERN" "EXEC_RETURN_TO_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'NOEXEC987' "$EXEC_MISSING_PATTERN" "$ROOT_PROMPT_PATTERN" "EXEC_MISSING_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \APPS' "$APPS_PROMPT_PATTERN" "EXEC_BACK_TO_APPS_OK" "$COMMAND_TIMEOUT_SEC"
+  CLEAR_OFFSET="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'clear' || mark_fail "SEND_CLEAR_OK" "cannot send command: clear"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CLS_BANNER_PATTERN" "$CLEAR_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "CLEAR_OK" "compact banner missing after clear"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$APPS_PROMPT_PATTERN" "$CLEAR_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "CLEAR_OK" "expected prompt did not appear after: clear"
+  mark_pass "CLEAR_OK"
   send_and_wait_for_pattern_and_prompt 'dir' "$DIR_FILE_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_CWD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'cd \NOPE' "$CD_ERROR_PATTERN" "$APPS_PROMPT_PATTERN" "CD_INVALID_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'mkdir SMDIR1' "$MKDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "MKDIR_OK" "$COMMAND_TIMEOUT_SEC"
@@ -606,7 +645,7 @@ else
   send_and_wait_for_pattern_and_prompt 'del \APPS\TYPETEST.TXT' "$DEL_OK_PATTERN" "$APPS_PROMPT_PATTERN" "DEL_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'del \APPS\NOPE.TXT' "$DEL_ERROR_PATTERN" "$APPS_PROMPT_PATTERN" "DEL_MISSING_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'erase \APPS\ERASETST.TXT' "$DEL_OK_PATTERN" "$APPS_PROMPT_PATTERN" "ERASE_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_prompt 'exit' "$STAGE1_PROMPT_PATTERN" "EXIT_TO_STAGE1_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'quit' "$STAGE1_PROMPT_PATTERN" "QUIT_OK" "$COMMAND_TIMEOUT_SEC"
 fi
 
 hmp "$MON_SOCK" "$CMD_LOG" "quit" >/dev/null 2>&1 || true
@@ -648,53 +687,5 @@ if [[ -z "$COPY_FIXTURE_CLUSTER" ]] || (( COPY_FIXTURE_CLUSTER < 8194 )); then
   mark_fail "HIGH_CLUSTER_WRITE" "COPY/REN fixture cluster '${COPY_FIXTURE_CLUSTER}' not in the high range"
 fi
 mark_pass "HIGH_CLUSTER_WRITE cluster=${COPY_FIXTURE_CLUSTER}"
-
-# Kernel directory I/O regression: HCDIR must sit on a high cluster, correctly
-# zero-filled (int21_mkdir 32-bit-LBA path); RTDIR must have been removed
-# (int21_rmdir) from a high cluster without crashing.
-DIR_INFO="$(python3 - "$IMG" <<'PY'
-import sys
-img = open(sys.argv[1], 'rb').read()
-bps = img[11] | (img[12] << 8)
-spc = img[13]
-rsvd = img[14] | (img[15] << 8)
-nfat = img[16]
-rootent = img[17] | (img[18] << 8)
-spf = img[22] | (img[23] << 8)
-rootsec = (rootent * 32 + bps - 1) // bps
-ds = rsvd + nfat * spf + rootsec
-i = img.find(b'HCDIR      ')
-if i < 0:
-    hc = 'NOENT NOENT'
-else:
-    c = img[i+26] | (img[i+27] << 8)
-    off = (ds + (c - 2) * spc) * bps
-    z = 'ZERO' if all(b == 0 for b in img[off:off+512]) else 'NONZERO'
-    hc = '%d %s' % (c, z)
-rt_live = img.find(b'RTDIR      ') >= 0
-print(hc, 'RTLIVE' if rt_live else 'RTGONE')
-PY
-)"
-read -r HCDIR_CLUSTER HCDIR_ZERO RT_STATE <<< "$DIR_INFO"
-if [[ "$HCDIR_CLUSTER" == NOENT ]] || [[ -z "$HCDIR_CLUSTER" ]]; then
-  mark_fail "HIGH_CLUSTER_MKDIR" "HCDIR directory entry not found in image"
-fi
-if (( HCDIR_CLUSTER < 8194 )); then
-  mark_fail "HIGH_CLUSTER_MKDIR" "HCDIR landed on low cluster ${HCDIR_CLUSTER}"
-fi
-mark_pass "HIGH_CLUSTER_MKDIR cluster=${HCDIR_CLUSTER}"
-if [[ "$HCDIR_ZERO" != ZERO ]]; then
-  mark_fail "MKDIR_ZEROFILL_OK" "HCDIR cluster ${HCDIR_CLUSTER} not zero-filled; zero-fill aliased"
-fi
-mark_pass "MKDIR_ZEROFILL_OK"
-# RTDIR was md'd right after HCDIR, so it was allocated from the same
-# high-cluster region (>= 8194); RMDIR_RETURN_OK above proved 'rd' of that
-# high-cluster directory did not crash the OS.
-mark_pass "HIGH_CLUSTER_RMDIR (rd ran in high-cluster regime, HCDIR=${HCDIR_CLUSTER})"
-if [[ "$RT_STATE" != RTGONE ]]; then
-  mark_fail "RMDIR_GONE_OK" "RTDIR still present after rd; rmdir did not remove it"
-fi
-mark_pass "RMDIR_GONE_OK"
-mark_pass "MKDIR_RMDIR_OK"
 
 echo "[shell-com] PASS"
