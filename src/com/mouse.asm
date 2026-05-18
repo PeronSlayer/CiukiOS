@@ -7,15 +7,57 @@ start:
 
     call parse_tail_command
 
-    mov ax, 0x0000
-    int 0x33
-    or ax, ax
-    jz mouse_missing
-    mov [buttons], bx
+    call probe_mouse_driver
+    jc mouse_missing
 
     mov si, msg_ready
     call print_dollar_string
 
+    cmp byte [cmd_word], 0
+    je .status
+
+    cmp byte [cmd_word], 'I'
+    jne .check_status
+    cmp byte [cmd_word + 1], 'N'
+    jne .check_status
+    cmp byte [cmd_word + 2], 'S'
+    jne .check_status
+    cmp byte [cmd_word + 3], 'T'
+    jne .check_status
+    cmp byte [cmd_word + 4], 'A'
+    jne .check_status
+    cmp byte [cmd_word + 5], 'L'
+    jne .check_status
+    cmp byte [cmd_word + 6], 'L'
+    jne .check_status
+    cmp byte [cmd_word + 7], 0
+    jne .check_status
+    mov si, msg_install
+    call print_dollar_string
+    jmp print_status
+
+.check_status:
+    cmp byte [cmd_word], 'S'
+    jne .check_show
+    cmp byte [cmd_word + 1], 'T'
+    jne .check_show
+    cmp byte [cmd_word + 2], 'A'
+    jne .check_show
+    cmp byte [cmd_word + 3], 'T'
+    jne .check_show
+    cmp byte [cmd_word + 4], 'U'
+    jne .check_show
+    cmp byte [cmd_word + 5], 'S'
+    jne .check_show
+    cmp byte [cmd_word + 6], 0
+    jne .check_show
+
+.status:
+    mov si, msg_runtime
+    call print_dollar_string
+    jmp print_status
+
+.check_show:
     cmp byte [cmd_word], 'S'
     jne .check_hide
     cmp byte [cmd_word + 1], 'H'
@@ -47,6 +89,13 @@ start:
     int 0x33
     mov si, msg_hide
     call print_dollar_string
+    jmp print_status
+
+mouse_usage:
+    mov si, msg_usage
+    call print_dollar_string
+    mov ax, 0x4C01
+    int 0x21
 
 print_status:
     mov ax, 0x0003
@@ -73,6 +122,19 @@ mouse_missing:
     call print_dollar_string
     mov ax, 0x4C01
     int 0x21
+
+probe_mouse_driver:
+    mov ax, 0x0000
+    int 0x33
+    or ax, ax
+    jz .missing
+    mov [buttons], bx
+    clc
+    ret
+
+.missing:
+    stc
+    ret
 
 parse_tail_command:
     mov si, 0x0081
@@ -166,8 +228,11 @@ print_hex_nibble:
 
 msg_ready db 'mouse: int33h ready', 13, 10, '$'
 msg_missing db 'mouse: int33h not installed', 13, 10, '$'
+msg_runtime db 'mouse: runtime backed service active', 13, 10, '$'
+msg_install db 'mouse: runtime backed service already installed', 13, 10, '$'
 msg_show db 'mouse: show cursor', 13, 10, '$'
 msg_hide db 'mouse: hide cursor', 13, 10, '$'
+msg_usage db 'usage: mouse [install|status|show|hide]', 13, 10, '$'
 msg_buttons db 'buttons=0x', '$'
 msg_x db ' x=0x', '$'
 msg_y db ' y=0x', '$'

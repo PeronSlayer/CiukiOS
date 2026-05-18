@@ -458,6 +458,8 @@ POWER_SHUTDOWN_QUEUE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+Q+U+E+U+E+D+'
 POWER_REBOOT_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+R+E+B+O+O+T+'
 POWER_SHUTDOWN_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+S+H+U+T+D+O+W+N+'
 MOUSE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+(I+N+T+3+3+H+[[:space:]]+N+O+T+[[:space:]]+I+N+S+T+A+L+L+E+D+|I+N+T+3+3+H+[[:space:]]+R+E+A+D+Y+)'
+MOUSE_RUNTIME_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+U+N+T+I+M+E+[[:space:]]+B+A+C+K+E+D+[[:space:]]+S+E+R+V+I+C+E+[[:space:]]+A+C+T+I+V+E+'
+MOUSE_INSTALL_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+U+N+T+I+M+E+[[:space:]]+B+A+C+K+E+D+[[:space:]]+S+E+R+V+I+C+E+[[:space:]]+A+L+R+E+A+D+Y+[[:space:]]+I+N+S+T+A+L+L+E+D+'
 COMDEMO_PASS_PATTERN='C+O+M+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
 ECHO_TOKEN='SH42'
 ECHO_TOKEN_PATTERN='S+H+4+2+'
@@ -549,6 +551,7 @@ if (( BOOT_AUTORUN )); then
     mark_pass "INITIAL_SHELL_COM_PROMPT"
     send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
+    send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
     EXIT_OFFSET="$(file_size "$SERIAL_LOG")"
     send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' || mark_fail "SEND_EXIT_DISABLED_OK" "cannot send command: exit"
     wait_for_strings_regex_from_offset "$SERIAL_LOG" "$EXIT_DISABLED_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_DISABLED_OK" "disabled exit message not detected after: exit"
@@ -674,7 +677,10 @@ else
   send_and_wait_for_pattern_and_prompt 'reboot cancel' "$POWER_CANCEL_PATTERN" "$APPS_PROMPT_PATTERN" "REBOOT_CANCEL_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'shutdown /t nope' "$POWER_SHUTDOWN_USE_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_BAD_TIMER_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'MOUSE' "$MOUSE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PROBE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE INSTALL' "$MOUSE_INSTALL_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_INSTALL_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'COMDEMO.COM' "$COMDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "EXEC_COM_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PERSIST_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \' "$ROOT_PROMPT_PATTERN" "EXEC_ROOT_CD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'COMDEMO' "$COMDEMO_PASS_PATTERN" "$ROOT_PROMPT_PATTERN" "EXEC_PATH_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_count_and_prompt "echo $EXEC_RETURN_TOKEN" "$EXEC_RETURN_PATTERN" 2 "$ROOT_PROMPT_PATTERN" "EXEC_RETURN_TO_SHELL_OK" "$COMMAND_TIMEOUT_SEC"

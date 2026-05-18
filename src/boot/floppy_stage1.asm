@@ -514,7 +514,7 @@ fault_common:
     mov bp, sp
     push cs
     pop ds
-    cmp byte [shell_exec_external_mouse_disabled], 0
+    cmp byte [shell_exec_external_program_active], 0
     je .reboot
     cmp word [current_psp_seg], 0
     je .reboot
@@ -12978,7 +12978,7 @@ shell_exec_buffer_path:
     mov ax, 0x0003
     int 0x10
     pop ax
-    mov byte [cs:shell_exec_external_mouse_disabled], 1
+    mov byte [cs:shell_exec_external_program_active], 1
     call shell_exec_restore_bios_int10
     ; Run the program
     push bx
@@ -13017,13 +13017,13 @@ shell_exec_buffer_path:
     mov ax, 0x0003
     int 0x10
     pop ax
-    mov byte [cs:shell_exec_external_mouse_disabled], 0
+    mov byte [cs:shell_exec_external_program_active], 0
     call shell_exec_reinstall_int10
     call draw_shell_chrome
     clc
     ret
 .exec_failed:
-    mov byte [cs:shell_exec_external_mouse_disabled], 0
+    mov byte [cs:shell_exec_external_program_active], 0
     push ax
     mov ax, 0x0003
     int 0x10
@@ -16913,6 +16913,7 @@ shell_saved_cwd_buf times 24 db 0
 shell_saved_cwd_cluster dw 0
 shell_exec_saved_cwd_buf times 24 db 0
 shell_exec_saved_cwd_cluster dw 0
+shell_exec_external_program_active db 0
 shell_exec_external_mouse_disabled db 0
 %if FAT_TYPE == 16
 shell_footer_ram_buf times 6 db 0
