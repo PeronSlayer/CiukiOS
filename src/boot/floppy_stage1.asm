@@ -10031,23 +10031,6 @@ shell_streamc_selftest:
     mov ax, cs
     mov ds, ax
 
-    mov di, str_help
-    call shell_is_builtin_token
-    jnc .fail
-
-    mov di, str_run
-    call shell_is_builtin_token
-    jnc .fail
-
-    mov si, str_which_probe_comdemo
-    call shell_try_resolve_exec_token
-    jc .fail
-
-    mov di, shell_exec_path_buf
-    mov si, str_expect_which_comdemo
-    call str_eq
-    jnc .fail
-
 %if FAT_TYPE == 16
     mov word [cs:shell_footer_last_tick], 200
     mov word [cs:shell_footer_dsk_last_scan_tick], 140
@@ -13132,133 +13115,6 @@ shell_exec_set_tail_from_si:
     pop ax
     ret
 
-shell_try_resolve_exec_token:
-    push ds
-
-    mov bx, si
-    push cs
-    pop ds
-
-    mov si, bx
-    call shell_copy_token_for_exec
-    jc .fail
-
-    mov si, shell_exec_path_buf
-    call shell_token_has_extension
-    jc .try_as_is
-
-    mov si, str_ext_com
-    call shell_append_exec_extension
-    jc .fail
-    mov si, shell_exec_path_buf
-    push bx
-    call int21_resolve_and_find_path
-    pop bx
-    jnc .ok
-    call shell_try_resolve_exec_path_apps
-    jnc .ok
-    call shell_try_resolve_exec_path_drivers
-    jnc .ok
-
-    mov si, bx
-    call shell_copy_token_for_exec
-    jc .fail
-    mov si, str_ext_exe
-    call shell_append_exec_extension
-    jc .fail
-
-.try_as_is:
-    mov si, shell_exec_path_buf
-    call int21_resolve_and_find_path
-    jnc .ok
-    call shell_try_resolve_exec_path_apps
-    jnc .ok
-    call shell_try_resolve_exec_path_drivers
-    jc .fail
-
-.ok:
-    clc
-    jmp .done
-
-.fail:
-    stc
-
-.done:
-    pop ds
-    ret
-
-shell_try_resolve_exec_path_apps:
-    push ax
-    mov ax, [cs:cwd_cluster]
-    push ax
-    mov word [cs:cwd_cluster], 3
-    mov si, shell_exec_path_buf
-    call int21_resolve_and_find_path
-    pop ax
-    mov [cs:cwd_cluster], ax
-    pop ax
-    ret
-
-shell_try_resolve_exec_path_drivers:
-    push bx
-    push ax
-    push si
-    push di
-    push cx
-
-    mov si, shell_exec_path_buf
-    mov di, dos_child_exec_path_buf
-    mov cx, DOS_ENV_EXEC_PATH_LEN - 1
-
-.name_copy:
-    mov al, [si]
-    cmp al, 0
-    je .name_done
-    jcxz .fail
-    mov [di], al
-    inc di
-    inc si
-    dec cx
-    jmp .name_copy
-
-.name_done:
-    mov byte [di], 0
-
-    mov di, shell_exec_path_buf
-    mov si, path_drivers_dir_dos
-    mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
-
-.prefix_copy:
-    mov al, [si]
-    cmp al, 0
-    je .prefix_done
-    jcxz .fail
-    mov [di], al
-    inc di
-    inc si
-    dec cx
-    jmp .prefix_copy
-
-.prefix_done:
-    mov si, dos_child_exec_path_buf
-    call shell_append_exec_extension
-    jc .fail
-
-    mov si, shell_exec_path_buf
-    call int21_resolve_and_find_path
-    jmp .done
-
-.fail:
-    stc
-
-.done:
-    pop cx
-    pop di
-    pop si
-    pop ax
-    pop bx
-    ret
-
 %if STAGE1_INTERACTIVE_SHELL
 shell_try_exec_token:
     push ds
@@ -13327,39 +13183,6 @@ shell_try_exec_path:
 
 .done:
     pop ds
-    ret
-
-shell_is_builtin_token:
-    push ax
-    push bx
-    push si
-
-    mov bx, shell_builtin_name_table
-
-.scan_next:
-    mov si, [bx]
-    cmp si, 0
-    je .not_builtin
-
-    push di
-    call str_eq
-    pop di
-    jc .builtin
-
-    add bx, 2
-    jmp .scan_next
-
-.not_builtin:
-    clc
-    jmp .done
-
-.builtin:
-    stc
-
-.done:
-    pop si
-    pop bx
-    pop ax
     ret
 
 %if STAGE1_INTERACTIVE_SHELL
@@ -16980,35 +16803,9 @@ runtime_probe_marker_prefix db "[S2] ready"
 runtime_probe_marker_prefix_len equ $ - runtime_probe_marker_prefix
 %endif
 
-msg_prompt_prefix db "CiukiOS ", 0
-msg_unknown   db "Unknown command", 13, 10, 0
 msg_banner_title db "CiukiOS pre-Alpha v0.6.6 (CiukiDOS Shell)", 0
-%if FAT_TYPE == 16
-%if STAGE1_BOOT_EXTERNAL_SHELL
-msg_shell_status db "warn: shell boot fail", 13, 10, 0
-%else
-msg_shell_status db "Type Help for commands.", 0
-%endif
-msg_shell_cpu_prefix db "CPU:", 0
-msg_shell_dsk_prefix db "DSK:", 0
-msg_shell_ram_prefix db "FREE:", 0
-%endif
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
-%endif
-msg_help_header db "Stage1 recovery shell only", 13, 10, 0
-msg_help_core db "  help ver cls dir cd run reboot", 13, 10, 0
-msg_help_runtime db "  run \\SYSTEM\\SHELL.COM", 13, 10, 0
-msg_help_system db "  Use SHELL.COM for normal work", 13, 10, 0
-msg_help_apps db "  help all = recovery diagnostics", 13, 10, 0
-msg_help_all_disabled db "  debug cmds require STAGE1_DEBUG_COMMANDS=1", 13, 10, 0
-%if STAGE1_DEBUG_COMMANDS
-msg_help_all db "  diag: ticks drives dos21", 13, 10, 0
-msg_ticks     db "ticks=0x", 0
-msg_drive     db "boot drive=0x", 0
-msg_drives_default db "default drive=", 0
-msg_drives_index db " index=0x", 0
-msg_drives_units db "units: C=HDD D=Live/CD", 13, 10, 0
 %endif
 msg_dos21_begin db "[DOS21] smoke", 13, 10, 0
 msg_dos21_status db "[INT21/4D] 0x", 0
@@ -17065,74 +16862,8 @@ gfx_text_ciukios db "CIUKIOS", 0
 gfx_text_demo db "GFX DEMO", 0
 gfx_text_vdi db "VDI BASE", 0
 gfx_text_timer db "KEY EXIT", 0
-
-str_help   db "help", 0
-str_ver    db "ver", 0
-str_cls    db "cls", 0
-%if STAGE1_DEBUG_COMMANDS
-str_ticks  db "ticks", 0
-str_drive  db "drive", 0
-str_drives db "drives", 0
-%endif
-str_dir    db "dir", 0
-str_pwd    db "pwd", 0
-str_cd     db "cd", 0
-str_cdup   db "cd..", 0
-str_run    db "run", 0
-str_exit   db "exit", 0
-%if STAGE1_DEBUG_COMMANDS
-str_dos21  db "dos21", 0
-str_comdemo db "comdemo", 0
-str_mzdemo db "mzdemo", 0
-str_fileio db "fileio", 0
-str_gfxdemo db "gfxdemo", 0
-str_gfxrect db "gfxrect", 0
-str_gfxstar db "gfxstar", 0
-str_findtest db "findtest", 0
-str_mouse db "mouse", 0
-str_keytest db "keytest", 0
-str_beep   db "beep", 0
-%endif
-str_reboot db "reboot", 0
-str_halt   db "halt", 0
-str_help_all db "all", 0
 str_ext_com db ".COM", 0
 str_ext_exe db ".EXE", 0
-%if STAGE1_SELFTEST_AUTORUN
-str_which_probe_comdemo db "\\APPS\\COMDEMO", 0
-str_expect_which_comdemo db "\\apps\\comdemo.com", 0
-%endif
-
-shell_builtin_name_table:
-    dw str_help
-    dw str_ver
-    dw str_cls
-%if STAGE1_DEBUG_COMMANDS
-    dw str_ticks
-    dw str_drive
-    dw str_drives
-%endif
-    dw str_dir
-    dw str_pwd
-    dw str_cdup
-    dw str_cd
-    dw str_run
-    dw str_exit
-%if STAGE1_DEBUG_COMMANDS
-    dw str_dos21
-    dw str_comdemo
-    dw str_mzdemo
-    dw str_fileio
-    dw str_gfxdemo
-    dw str_gfxrect
-    dw str_gfxstar
-    dw str_findtest
-    dw str_mouse
-    dw str_keytest
-%endif
-    dw str_reboot
-    dw str_halt
-    dw 0
 
 path_comdemo_dos db "\APPS\COMDEMO.COM", 0
 path_mzdemo_dos  db "\APPS\MZDEMO.EXE", 0
