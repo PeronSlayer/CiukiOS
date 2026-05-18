@@ -1,14 +1,25 @@
 bits 16
 org 0x0100
 
+%define INPUT_BUF_MAX 126
+%define HISTORY_MAX 8
+%define HISTORY_ENTRY_LEN 128
+
 start:
     push cs
     pop ds
+    push ds
+    pop es
 
     mov si, msg_banner
     call print_dual_dollar_string
 
 main_loop:
+    push cs
+    pop ds
+    push ds
+    pop es
+
     call print_prompt
 
     call read_line
@@ -105,9 +116,9 @@ main_loop:
 
 .check_exit:
     cmp byte [cmd_buf + 0], 'E'
-    jne .check_cd
+    jne .check_path
     cmp byte [cmd_buf + 1], 'X'
-    jne .check_cd
+    jne .check_path
     cmp byte [cmd_buf + 2], 'I'
     jne .unknown
     cmp byte [cmd_buf + 3], 'T'
@@ -117,10 +128,80 @@ main_loop:
     mov ax, 0x4C00
     int 0x21
 
+.check_path:
+    cmp byte [cmd_buf + 0], 'P'
+    jne .check_where
+    cmp byte [cmd_buf + 1], 'A'
+    jne .check_where
+    cmp byte [cmd_buf + 2], 'T'
+    jne .check_where
+    cmp byte [cmd_buf + 3], 'H'
+    jne .check_where
+    cmp byte [cmd_buf + 4], 0
+    jne .check_where
+    mov si, msg_path
+    call print_dual_dollar_string
+    jmp main_loop
+
+.check_where:
+    cmp byte [cmd_buf + 0], 'W'
+    jne .check_cd
+    cmp byte [cmd_buf + 1], 'H'
+    jne .check_cd
+    cmp byte [cmd_buf + 2], 'E'
+    jne .check_cd
+    cmp byte [cmd_buf + 3], 'R'
+    jne .check_cd
+    cmp byte [cmd_buf + 4], 'E'
+    jne .check_cd
+    cmp byte [cmd_buf + 5], 0
+    jne .check_cd
+    mov si, [echo_ptr]
+    mov di, src_path
+.where_arg_parse:
+    mov al, [si]
+    cmp al, 0
+    je .where_arg_done
+    cmp al, ' '
+    je .where_arg_done
+    cmp di, src_path + 63
+    jae .where_arg_skip
+    mov [di], al
+    inc di
+.where_arg_skip:
+    inc si
+    jmp .where_arg_parse
+.where_arg_done:
+    mov byte [di], 0
+    cmp di, src_path
+    je .where_usage
+    call where_try_current
+    jnc .where_done
+    mov si, shell_path_apps
+    call where_try_prefixed
+    jnc .where_done
+    mov si, shell_path_drivers
+    call where_try_prefixed
+    jnc .where_done
+    mov si, shell_path_system
+    call where_try_prefixed
+    jnc .where_done
+    call where_try_known_fallback
+    jnc .where_done
+    mov si, msg_where_miss
+    call print_dual_dollar_string
+    jmp main_loop
+.where_usage:
+    mov si, msg_where_use
+    call print_dual_dollar_string
+    jmp main_loop
+.where_done:
+    jmp main_loop
+
 ; CD / CHDIR: change directory via INT 21h AH=3Bh, then echo the new path.
 .check_cd:
     cmp byte [cmd_buf + 0], 'C'
-    jne .check_dir
+    jne .check_mkdir
     cmp byte [cmd_buf + 1], 'D'
     jne .check_chdir
     cmp byte [cmd_buf + 2], 0
@@ -155,6 +236,198 @@ main_loop:
     mov si, msg_cd_err
     call print_dual_dollar_string
     jmp main_loop
+
+; MKDIR / MD: create a directory via INT 21h AH=39h.
+.check_mkdir:
+    cmp byte [cmd_buf + 0], 'M'
+    jne .check_rmdir
+    cmp byte [cmd_buf + 1], 'D'
+    jne .check_mkdir_long
+    cmp byte [cmd_buf + 2], 0
+    jne .check_rmdir
+    jmp .do_mkdir
+.check_mkdir_long:
+    cmp byte [cmd_buf + 1], 'K'
+    jne .check_rmdir
+    cmp byte [cmd_buf + 2], 'D'
+    jne .check_rmdir
+    cmp byte [cmd_buf + 3], 'I'
+    jne .check_rmdir
+    cmp byte [cmd_buf + 4], 'R'
+    jne .check_rmdir
+    cmp byte [cmd_buf + 5], 0
+    jne .check_rmdir
+.do_mkdir:
+    mov cx, [echo_len]
+    jcxz .mkdir_usage
+    mov dx, [echo_ptr]
+    mov ah, 0x39
+    int 0x21
+    jc .mkdir_error
+    mov si, msg_mkdir_ok
+    call print_dual_dollar_string
+    jmp main_loop
+.mkdir_error:
+    mov si, msg_mkdir_err
+    call print_dual_dollar_string
+    jmp main_loop
+.mkdir_usage:
+    mov si, msg_mkdir_use
+    call print_dual_dollar_string
+    jmp main_loop
+
+; RMDIR / RD: remove a directory via INT 21h AH=3Ah.
+.check_rmdir:
+    cmp byte [cmd_buf + 0], 'R'
+    jne .check_move
+    cmp byte [cmd_buf + 1], 'D'
+    jne .check_rmdir_long
+    cmp byte [cmd_buf + 2], 0
+    jne .check_rename
+    jmp .do_rmdir
+.check_rmdir_long:
+    cmp byte [cmd_buf + 1], 'M'
+    jne .check_rename
+    cmp byte [cmd_buf + 2], 'D'
+    jne .check_rename
+    cmp byte [cmd_buf + 3], 'I'
+    jne .check_rename
+    cmp byte [cmd_buf + 4], 'R'
+    jne .check_rename
+    cmp byte [cmd_buf + 5], 0
+    jne .check_rename
+.do_rmdir:
+    mov cx, [echo_len]
+    jcxz .rmdir_usage
+    mov dx, [echo_ptr]
+    mov ah, 0x3A
+    int 0x21
+    jc .rmdir_error
+    mov si, msg_rmdir_ok
+    call print_dual_dollar_string
+    jmp main_loop
+.rmdir_error:
+    mov si, msg_rmdir_err
+    call print_dual_dollar_string
+    jmp main_loop
+.rmdir_usage:
+    mov si, msg_rmdir_use
+    call print_dual_dollar_string
+    jmp main_loop
+
+; REN / RENAME: rename or move a file via INT 21h AH=56h.
+.check_rename:
+    cmp byte [cmd_buf + 0], 'R'
+    jne .check_move
+    cmp byte [cmd_buf + 1], 'E'
+    jne .check_move
+    cmp byte [cmd_buf + 2], 'N'
+    jne .check_move
+    cmp byte [cmd_buf + 3], 0
+    je .do_rename
+    cmp byte [cmd_buf + 3], 'A'
+    jne .check_move
+    cmp byte [cmd_buf + 4], 'M'
+    jne .check_move
+    cmp byte [cmd_buf + 5], 'E'
+    jne .check_move
+    cmp byte [cmd_buf + 6], 0
+    jne .check_move
+    jmp .do_rename
+
+; MOVE: same INT 21h AH=56h path rename/move primitive.
+.check_move:
+    cmp byte [cmd_buf + 0], 'M'
+    jne .check_dir
+    cmp byte [cmd_buf + 1], 'O'
+    jne .check_dir
+    cmp byte [cmd_buf + 2], 'V'
+    jne .check_dir
+    cmp byte [cmd_buf + 3], 'E'
+    jne .check_dir
+    cmp byte [cmd_buf + 4], 0
+    jne .check_dir
+.do_rename:
+    mov cx, [echo_len]
+    test cx, cx
+    jnz .rename_args
+.rename_usage:
+    mov si, msg_rename_use
+    call print_dual_dollar_string
+    jmp main_loop
+.rename_error:
+    mov si, msg_rename_err
+    call print_dual_dollar_string
+    jmp main_loop
+.rename_ok:
+    mov si, msg_rename_ok
+    call print_dual_dollar_string
+    jmp main_loop
+.rename_args:
+    mov si, [echo_ptr]
+    mov di, src_path
+.rename_src_parse:
+    mov al, [si]
+    cmp al, 0
+    je .rename_src_end
+    cmp al, ' '
+    je .rename_src_end
+    cmp di, src_path + 63
+    jae .rename_src_adv
+    mov [di], al
+    inc di
+.rename_src_adv:
+    inc si
+    jmp .rename_src_parse
+.rename_src_end:
+    mov byte [di], 0
+    cmp di, src_path
+    je .rename_usage
+.rename_skip_sp:
+    cmp byte [si], ' '
+    jne .rename_dst_start
+    inc si
+    jmp .rename_skip_sp
+.rename_dst_start:
+    mov di, dst_path
+.rename_dst_parse:
+    mov al, [si]
+    cmp al, 0
+    je .rename_dst_end
+    cmp al, ' '
+    je .rename_dst_end
+    cmp di, dst_path + 63
+    jae .rename_dst_adv
+    mov [di], al
+    inc di
+.rename_dst_adv:
+    inc si
+    jmp .rename_dst_parse
+.rename_dst_end:
+    mov byte [di], 0
+    cmp di, dst_path
+    je .rename_usage
+    push cs
+    pop ds
+    push cs
+    mov dx, src_path
+    mov ax, 0x3D00
+    int 0x21
+    jc .rename_error
+    mov [file_handle], ax
+    mov bx, ax
+    mov ah, 0x3E
+    int 0x21
+    push cs
+    pop ds
+    mov dx, src_path
+    push cs
+    pop es
+    mov di, dst_path
+    mov ah, 0x56
+    int 0x21
+    jc .rename_error
+    jmp .rename_ok
 
 ; DIR: list a directory via INT 21h FindFirst/FindNext (AH=4Eh/4Fh).
 .check_dir:
@@ -425,7 +698,77 @@ main_loop:
     jmp main_loop
 
 .unknown:
-    mov si, msg_unknown
+    mov si, input_buf
+    mov di, src_path
+.exec_name_parse:
+    mov al, [si]
+    cmp al, 0
+    je .exec_name_done
+    cmp al, ' '
+    je .exec_name_done
+    cmp di, src_path + 63
+    jae .exec_name_skip
+    call upcase_al
+    mov [di], al
+    inc di
+.exec_name_skip:
+    inc si
+    jmp .exec_name_parse
+.exec_name_done:
+    mov byte [di], 0
+    cmp di, src_path
+    je .exec_not_found
+.exec_skip_spaces:
+    cmp byte [si], ' '
+    jne .exec_search
+    inc si
+    jmp .exec_skip_spaces
+.exec_search:
+    mov [exec_tail_src], si
+    call build_exec_tail
+    call setup_exec_block
+    call exec_try_current
+    jnc .exec_found
+    cmp ax, 2
+    je .exec_try_apps
+    cmp ax, 3
+    je .exec_try_apps
+    jmp .exec_fail
+.exec_try_apps:
+    mov si, exec_dir_apps
+    call exec_try_in_dir
+    jnc .exec_found
+    cmp ax, 2
+    je .exec_try_drivers
+    cmp ax, 3
+    je .exec_try_drivers
+    jmp .exec_fail
+.exec_try_drivers:
+    mov si, exec_dir_drivers
+    call exec_try_in_dir
+    jnc .exec_found
+    cmp ax, 2
+    je .exec_try_system
+    cmp ax, 3
+    je .exec_try_system
+    jmp .exec_fail
+.exec_try_system:
+    mov si, exec_dir_system
+    call exec_try_in_dir
+    jnc .exec_found
+    cmp ax, 2
+    je .exec_not_found
+    cmp ax, 3
+    je .exec_not_found
+    jmp .exec_fail
+.exec_found:
+    jmp main_loop
+.exec_not_found:
+    mov si, msg_exec_not_found
+    call print_dual_dollar_string
+    jmp main_loop
+.exec_fail:
+    mov si, msg_exec_fail
     call print_dual_dollar_string
     jmp main_loop
 
@@ -451,35 +794,304 @@ upcase_al:
 
 read_line:
     xor bx, bx
+    mov byte [history_nav], 0xFF
+    mov byte [input_draw_len], 0
+    mov byte [input_buf], 0
 
 .read:
-    mov ah, 0x01
-    int 0x21
+    xor ah, ah
+    int 0x16
     cmp al, 0x0D
     je .done
+    cmp al, 0x03
+    je .cancel
     cmp al, 0x08
     je .backspace
+    test al, al
+    jz .extended
     cmp al, 0x20
     jb .read
-    cmp bx, 126
+    cmp bx, INPUT_BUF_MAX
     jae .read
     mov [input_buf + bx], al
     inc bx
+    mov byte [input_buf + bx], 0
+    mov byte [input_draw_len], bl
+    mov byte [history_nav], 0xFF
+    call dual_putc
+    jmp .read
+
+.extended:
+    cmp ah, 0x48
+    je .history_up
+    cmp ah, 0x50
+    je .history_down
     jmp .read
 
 .backspace:
     cmp bx, 0
     je .read
     dec bx
+    mov byte [input_buf + bx], 0
+    mov byte [input_draw_len], bl
+    mov byte [history_nav], 0xFF
+    mov al, 0x08
+    call dual_putc
+    mov al, ' '
+    call dual_putc
+    mov al, 0x08
+    call dual_putc
     jmp .read
+
+.history_up:
+    call history_recall_up
+    jnc .read
+    call redraw_input_line
+    jmp .read
+
+.history_down:
+    call history_recall_down
+    jnc .read
+    call redraw_input_line
+    jmp .read
+
+.cancel:
+    xor bx, bx
+    mov byte [input_buf], 0
+    mov byte [history_nav], 0xFF
+    mov byte [input_draw_len], 0
+    mov si, msg_ctrl_c
+    call print_dual_dollar_string
+    xor cx, cx
+    mov si, input_buf
+    ret
 
 .done:
     mov byte [input_buf + bx], 0
+    call history_try_store
     mov cx, bx
-    mov si, input_buf
     mov si, msg_crlf
     call print_dual_dollar_string
     mov si, input_buf
+    ret
+
+redraw_input_line:
+    push ax
+    push cx
+    push si
+
+    mov al, 0x0D
+    call dual_putc
+    call print_prompt
+    mov si, input_buf
+    mov cx, bx
+    call print_dual_cx_string
+
+    xor ax, ax
+    mov al, [input_draw_len]
+    cmp ax, bx
+    jbe .save_len
+    sub ax, bx
+    mov cx, ax
+    mov al, ' '
+.erase_tail:
+    call dual_putc
+    loop .erase_tail
+    mov cx, ax
+    mov al, 0x08
+.back_tail:
+    call dual_putc
+    loop .back_tail
+
+.save_len:
+    mov byte [input_draw_len], bl
+    pop si
+    pop cx
+    pop ax
+    ret
+
+history_try_store:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+
+    mov si, input_buf
+    mov cx, bx
+    call skip_spaces
+    jcxz .done
+
+    mov al, [history_count]
+    or al, al
+    jz .store
+
+    mov al, [history_next]
+    dec al
+    and al, HISTORY_MAX - 1
+    call history_slot_to_di
+    call history_compare_input_di
+    jc .done
+
+.store:
+    mov al, [history_next]
+    call history_slot_to_di
+    mov si, input_buf
+    call copy_z_to_di
+
+    mov al, [history_next]
+    inc al
+    and al, HISTORY_MAX - 1
+    mov [history_next], al
+
+    mov al, [history_count]
+    cmp al, HISTORY_MAX
+    jae .done
+    inc al
+    mov [history_count], al
+
+.done:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+history_recall_up:
+    push ax
+    push dx
+
+    mov dl, [history_count]
+    or dl, dl
+    jz .fail
+
+    mov al, [history_nav]
+    cmp al, 0xFF
+    jne .next_older
+    xor al, al
+    jmp .check
+
+.next_older:
+    inc al
+
+.check:
+    cmp al, dl
+    jae .fail
+    mov [history_nav], al
+    call history_load_nav_entry
+    stc
+    jmp .done
+
+.fail:
+    clc
+
+.done:
+    pop dx
+    pop ax
+    ret
+
+history_recall_down:
+    push ax
+
+    mov al, [history_nav]
+    cmp al, 0xFF
+    je .fail
+    or al, al
+    jnz .newer
+
+    mov byte [history_nav], 0xFF
+    xor bx, bx
+    mov byte [input_buf], 0
+    stc
+    jmp .done
+
+.newer:
+    dec al
+    mov [history_nav], al
+    call history_load_nav_entry
+    stc
+    jmp .done
+
+.fail:
+    clc
+
+.done:
+    pop ax
+    ret
+
+history_load_nav_entry:
+    push ax
+    push si
+    push di
+
+    mov al, [history_next]
+    dec al
+    sub al, [history_nav]
+    and al, HISTORY_MAX - 1
+    call history_slot_to_di
+
+    mov si, di
+    mov di, input_buf
+    xor bx, bx
+
+.copy:
+    lodsb
+    stosb
+    test al, al
+    jz .done
+    inc bx
+    jmp .copy
+
+.done:
+    pop di
+    pop si
+    pop ax
+    ret
+
+history_compare_input_di:
+    push ax
+    push si
+    push di
+
+    mov si, input_buf
+
+.loop:
+    mov al, [si]
+    cmp al, [di]
+    jne .not_equal
+    test al, al
+    jz .equal
+    inc si
+    inc di
+    jmp .loop
+
+.equal:
+    stc
+    jmp .done
+
+.not_equal:
+    clc
+
+.done:
+    pop di
+    pop si
+    pop ax
+    ret
+
+history_slot_to_di:
+    push ax
+    xor ah, ah
+    mov di, ax
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    add di, history_buf
+    pop ax
     ret
 
 ; Build the SHELL.COM prompt: "SHELL <drive>:\<cwd>> ".
@@ -645,14 +1257,365 @@ dual_putc:
     pop ax
     ret
 
+where_try_current:
+    mov si, ext_none
+    call where_build_relative_candidate
+    call where_try_candidate
+    jnc .found
+    mov si, ext_com
+    call where_build_relative_candidate
+    call where_try_candidate
+    jnc .found
+    mov si, ext_exe
+    call where_build_relative_candidate
+    call where_try_candidate
+    ret
+.found:
+    call where_print_current_candidate
+    clc
+    ret
+
+where_try_prefixed:
+    mov [where_prefix_ptr], si
+    mov si, ext_none
+    call where_build_prefixed_candidate
+    call where_try_candidate
+    jnc .found
+    mov si, ext_com
+    call where_build_prefixed_candidate
+    call where_try_candidate
+    jnc .found
+    mov si, ext_exe
+    call where_build_prefixed_candidate
+    call where_try_candidate
+    ret
+.found:
+    mov ah, 0x19
+    int 0x21
+    add al, 'A'
+    call dual_putc
+    mov al, ':'
+    call dual_putc
+    mov si, dst_path
+    call print_dual_z_string
+    mov si, msg_crlf
+    call print_dual_dollar_string
+    clc
+    ret
+
+where_build_relative_candidate:
+    push si
+    mov di, dst_path
+    mov si, src_path
+    call copy_z_to_di
+    pop si
+    call append_z_to_di
+    ret
+
+where_build_prefixed_candidate:
+    push si
+    mov di, dst_path
+    mov si, [where_prefix_ptr]
+    call copy_z_to_di
+    mov si, src_path
+    call append_z_to_di
+    pop si
+    call append_z_to_di
+    ret
+
+where_try_candidate:
+    push ds
+    push cs
+    pop ds
+    mov dx, dst_path
+    mov ax, 0x4300
+    int 0x21
+    jc .fail
+    test cl, 0x10
+    jnz .fail
+    pop ds
+    clc
+    ret
+.fail:
+    pop ds
+    stc
+    ret
+
+where_print_current_candidate:
+    push ax
+    push dx
+    push si
+    mov ah, 0x19
+    int 0x21
+    add al, 'A'
+    call dual_putc
+    mov al, ':'
+    call dual_putc
+    mov al, '\'
+    call dual_putc
+    xor dl, dl
+    mov si, path_buf
+    mov ah, 0x47
+    int 0x21
+    mov si, path_buf
+    call print_dual_z_string
+    cmp byte [path_buf], 0
+    je .name
+    mov al, '\'
+    call dual_putc
+.name:
+    mov si, dst_path
+    call print_dual_z_string
+    mov si, msg_crlf
+    call print_dual_dollar_string
+    pop si
+    pop dx
+    pop ax
+    ret
+
+copy_z_to_di:
+.next:
+    lodsb
+    test al, al
+    jz .done
+    stosb
+    jmp .next
+.done:
+    mov byte [di], 0
+    ret
+
+append_z_to_di:
+.seek:
+    cmp byte [di], 0
+    je .copy
+    inc di
+    jmp .seek
+.copy:
+    lodsb
+    mov [di], al
+    inc di
+    test al, al
+    jnz .copy
+    ret
+
+where_try_known_fallback:
+    mov si, src_path
+    mov di, where_name_shell
+    call strings_equal
+    jz .shell
+    mov si, src_path
+    mov di, where_name_shell_com
+    call strings_equal
+    jz .shell
+    mov si, src_path
+    mov di, where_name_dos4gw
+    call strings_equal
+    jz .dos4gw
+    mov si, src_path
+    mov di, where_name_dos4gw_exe
+    call strings_equal
+    jz .dos4gw
+    stc
+    ret
+.shell:
+    mov si, where_out_shell
+    call print_dual_dollar_string
+    clc
+    ret
+.dos4gw:
+    mov si, where_out_dos4gw
+    call print_dual_dollar_string
+    clc
+    ret
+
+strings_equal:
+.next:
+    mov al, [si]
+    cmp al, [di]
+    jne .noteq
+    test al, al
+    je .eq
+    inc si
+    inc di
+    jmp .next
+.noteq:
+    mov al, 1
+    or al, al
+    ret
+.eq:
+    xor al, al
+    or al, al
+    ret
+
+exec_try_current:
+    mov si, ext_none
+    call where_build_relative_candidate
+    call exec_run_candidate
+    jnc .found
+    cmp ax, 2
+    jne .done
+    mov si, ext_com
+    call where_build_relative_candidate
+    call exec_run_candidate
+    jnc .found
+    cmp ax, 2
+    jne .done
+    mov si, ext_exe
+    call where_build_relative_candidate
+    call exec_run_candidate
+.done:
+    ret
+.found:
+    clc
+    ret
+
+exec_try_prefixed:
+    mov [where_prefix_ptr], si
+    mov si, ext_none
+    call where_build_prefixed_candidate
+    call exec_run_candidate
+    jnc .found
+    cmp ax, 2
+    jne .done
+    mov si, ext_com
+    call where_build_prefixed_candidate
+    call exec_run_candidate
+    jnc .found
+    cmp ax, 2
+    jne .done
+    mov si, ext_exe
+    call where_build_prefixed_candidate
+    call exec_run_candidate
+.done:
+    ret
+.found:
+    clc
+    ret
+
+exec_try_in_dir:
+    push si
+    push ds
+    push cs
+    pop ds
+    xor dl, dl
+    mov si, exec_saved_cwd
+    mov ah, 0x47
+    int 0x21
+    pop ds
+    pop si
+    push ds
+    push cs
+    pop ds
+    mov dx, si
+    mov ah, 0x3B
+    int 0x21
+    pop ds
+    jc .done
+    call exec_try_current
+    pushf
+    push ax
+    push ds
+    push cs
+    pop ds
+    mov di, exec_restore_path
+    mov byte [di], '\'
+    inc di
+    mov si, exec_saved_cwd
+    call copy_z_to_di
+    mov dx, exec_restore_path
+    mov ah, 0x3B
+    int 0x21
+    pop ds
+    pop ax
+    popf
+.done:
+    ret
+
+setup_exec_block:
+    mov ah, 0x62
+    int 0x21
+    mov [exec_psp_seg], bx
+    mov word [exec_env_seg], 0
+    mov word [exec_tail_ptr], exec_tail
+    mov word [exec_tail_seg], cs
+    mov word [exec_fcb1_ptr], 0x005C
+    mov word [exec_fcb1_seg], bx
+    mov word [exec_fcb2_ptr], 0x006C
+    mov word [exec_fcb2_seg], bx
+    ret
+
+exec_run_candidate:
+    push ds
+    push es
+    push cs
+    pop ds
+    mov dx, dst_path
+    push cs
+    pop es
+    mov bx, exec_env_seg
+    mov ax, 0x4B00
+    int 0x21
+    pop es
+    pop ds
+    ret
+
+build_exec_tail:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, [exec_tail_src]
+    mov di, exec_tail + 1
+    xor cx, cx
+    cmp byte [si], 0
+    je .done
+    mov byte [di], ' '
+    inc di
+    inc cx
+.copy:
+    mov al, [si]
+    cmp al, 0
+    je .done
+    cmp cx, 126
+    jae .done
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp .copy
+.done:
+    mov [exec_tail], cl
+    mov byte [di], 0x0D
+    inc di
+    mov byte [di], 0
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
 msg_banner  db 'CiukiOS SHELL prototype', 0x0D, 0x0A
             db 'Type HELP for commands.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'SHELL ', '$'
-msg_help    db 'Commands: HELP VER ECHO CLS EXIT CD DIR TYPE DEL COPY', 0x0D, 0x0A, '$'
+msg_help    db 'Commands: HELP VER ECHO CLS EXIT PATH WHERE CD MKDIR RMDIR REN MOVE DIR TYPE DEL COPY', 0x0D, 0x0A, '$'
 msg_ver     db 'CiukiOS SHELL.COM prototype 0.1', 0x0D, 0x0A, '$'
 msg_unknown db 'Unknown command. Type HELP.', 0x0D, 0x0A, '$'
+msg_exec_not_found db 'exec: not found', 0x0D, 0x0A, '$'
+msg_exec_fail db 'exec: failed', 0x0D, 0x0A, '$'
+msg_path    db 'C:\APPS;C:\SYSTEM\DRIVERS;C:\SYSTEM', 0x0D, 0x0A, '$'
+msg_where_use db 'where: usage: WHERE <program>', 0x0D, 0x0A, '$'
+msg_where_miss db 'where: not found', 0x0D, 0x0A, '$'
 msg_cwd_pre db 'Current directory: ', '$'
 msg_cd_err  db 'cd: invalid path', 0x0D, 0x0A, '$'
+msg_mkdir_use db 'mkdir: usage: MKDIR <dir>', 0x0D, 0x0A, '$'
+msg_mkdir_err db 'mkdir: invalid path', 0x0D, 0x0A, '$'
+msg_mkdir_ok db 'Directory created', 0x0D, 0x0A, '$'
+msg_rmdir_use db 'rmdir: usage: RMDIR <dir>', 0x0D, 0x0A, '$'
+msg_rmdir_err db 'rmdir: invalid path', 0x0D, 0x0A, '$'
+msg_rmdir_ok db 'Directory removed', 0x0D, 0x0A, '$'
+msg_rename_use db 'rename: usage: REN <old> <new>', 0x0D, 0x0A, '$'
+msg_rename_err db 'rename: failed', 0x0D, 0x0A, '$'
+msg_rename_ok db 'Rename complete', 0x0D, 0x0A, '$'
 msg_dir_hdr db 'Directory listing', 0x0D, 0x0A, '$'
 msg_dir_tag db ' <DIR>', '$'
 msg_dir_none db 'dir: path not found', 0x0D, 0x0A, '$'
@@ -665,12 +1628,46 @@ msg_copy_use db 'copy: usage: COPY <src> <dst>', 0x0D, 0x0A, '$'
 msg_copy_src_err db 'copy: source not found', 0x0D, 0x0A, '$'
 msg_copy_err db 'copy: failed', 0x0D, 0x0A, '$'
 msg_copy_ok db 'File copied', 0x0D, 0x0A, '$'
+msg_ctrl_c  db '^C', 0x0D, 0x0A, '$'
 msg_crlf    db 0x0D, 0x0A, '$'
+shell_path_apps db '\APPS\', 0
+shell_path_drivers db '\SYSTEM\DRIVERS\', 0
+shell_path_system db '\SYSTEM\', 0
+exec_path_apps db 'C:\APPS\', 0
+exec_path_drivers db 'C:\SYSTEM\DRIVERS\', 0
+exec_path_system db 'C:\SYSTEM\', 0
+exec_dir_apps db '\APPS', 0
+exec_dir_drivers db '\SYSTEM\DRIVERS', 0
+exec_dir_system db '\SYSTEM', 0
+ext_none db 0
+ext_com db '.COM', 0
+ext_exe db '.EXE', 0
+where_name_shell db 'SHELL', 0
+where_name_shell_com db 'SHELL.COM', 0
+where_name_dos4gw db 'DOS4GW', 0
+where_name_dos4gw_exe db 'DOS4GW.EXE', 0
+where_out_shell db 'C:\SYSTEM\SHELL.COM', 0x0D, 0x0A, '$'
+where_out_dos4gw db 'C:\SYSTEM\DRIVERS\DOS4GW.EXE', 0x0D, 0x0A, '$'
 
 echo_ptr dw 0
 echo_len dw 0
+where_prefix_ptr dw 0
+exec_tail_src dw 0
+exec_psp_seg dw 0
+exec_env_seg dw 0
+exec_tail_ptr dw 0
+exec_tail_seg dw 0
+exec_fcb1_ptr dw 0
+exec_fcb1_seg dw 0
+exec_fcb2_ptr dw 0
+exec_fcb2_seg dw 0
 cmd_buf  times 8 db 0
 input_buf times 127 db 0
+input_draw_len db 0
+history_count db 0
+history_next db 0
+history_nav db 0xFF
+history_buf times HISTORY_MAX * HISTORY_ENTRY_LEN db 0
 path_buf times 68 db 0
 dir_pattern times 32 db 0
 dta_buf  times 48 db 0
@@ -679,4 +1676,7 @@ copy_src_handle dw 0
 copy_dst_handle dw 0
 src_path times 64 db 0
 dst_path times 64 db 0
+exec_saved_cwd times 68 db 0
+exec_restore_path times 69 db 0
+exec_tail times 129 db 0
 file_buf times 512 db 0
