@@ -37,6 +37,9 @@ org 0x0000
 %define DOS_DEFAULT_DRIVE_INDEX 0
 %endif
 %endif
+%ifndef STAGE1_DEBUG_COMMANDS
+%define STAGE1_DEBUG_COMMANDS 0
+%endif
 %ifndef FAT_SPT
 %define FAT_SPT 18
 %endif
@@ -8630,6 +8633,12 @@ read_sector_lba32:
     mov ah, 0x42
     sti
     int 0x13
+    jnc .done
+    cmp word [cs:disk_packet_lba + 2], 0
+    jne .done
+    mov ax, [cs:disk_packet_lba]
+    call bios_read_chs_sector
+.done:
     mov [cs:tmp_disk_status], ah
     pop ds
     pop si
@@ -8661,6 +8670,12 @@ write_sector_lba32:
     mov ax, 0x4300
     sti
     int 0x13
+    jnc .done
+    cmp word [cs:disk_packet_lba + 2], 0
+    jne .done
+    mov ax, [cs:disk_packet_lba]
+    call bios_write_chs_sector
+.done:
     mov [cs:tmp_disk_status], ah
     pop ds
     pop si
@@ -9977,7 +9992,7 @@ shell_streamc_selftest:
     call shell_is_builtin_token
     jnc .fail
 
-    mov di, str_where
+    mov di, str_run
     call shell_is_builtin_token
     jnc .fail
 
@@ -11348,6 +11363,9 @@ read_sector_lba:
     push ds
     add ax, FAT_LBA_OFFSET
     mov [cs:tmp_disk_lba_save], ax
+    mov dl, [cs:boot_drive]
+    cmp dl, 0x80
+    jne .chs_read
     mov [cs:disk_packet_lba], ax
     mov [cs:disk_packet_lba + 2], word 0
     mov [cs:disk_packet_lba + 4], word 0
@@ -11362,9 +11380,7 @@ read_sector_lba:
     sti
     int 0x13
     jnc .edd_read_done
-    mov ax, [cs:disk_packet_seg]
-    mov es, ax
-    mov bx, [cs:disk_packet_off]
+.chs_read:
     mov ax, [cs:tmp_disk_lba_save]
     call bios_read_chs_sector
 .edd_read_done:
@@ -11417,6 +11433,9 @@ write_sector_lba:
     push ds
     add ax, FAT_LBA_OFFSET
     mov [cs:tmp_disk_lba_save], ax
+    mov dl, [cs:boot_drive]
+    cmp dl, 0x80
+    jne .chs_write
     mov [cs:disk_packet_lba], ax
     mov [cs:disk_packet_lba + 2], word 0
     mov [cs:disk_packet_lba + 4], word 0
@@ -11432,9 +11451,7 @@ write_sector_lba:
     sti
     int 0x13
     jnc .edd_write_done
-    mov ax, [cs:disk_packet_seg]
-    mov es, ax
-    mov bx, [cs:disk_packet_off]
+.chs_write:
     mov ax, [cs:tmp_disk_lba_save]
     call bios_write_chs_sector
 .edd_write_done:
@@ -11477,15 +11494,51 @@ write_sector_lba:
     pop bx
     ret
 
+bios_get_chs_geometry:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov dl, [cs:boot_drive]
+    mov ah, 0x08
+    sti
+    int 0x13
+    jc .fallback
+    and cl, 0x3F
+    jz .fallback
+    xor ax, ax
+    mov al, cl
+    mov [cs:tmp_disk_spt], ax
+    xor ax, ax
+    mov al, dh
+    inc ax
+    mov [cs:tmp_disk_heads], ax
+    clc
+    jmp .done
+
+.fallback:
+    mov word [cs:tmp_disk_spt], FAT_SPT
+    mov word [cs:tmp_disk_heads], FAT_HEADS
+    stc
+
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 bios_read_chs_sector:
     mov si, bx
+    call bios_get_chs_geometry
     xor dx, dx
-    mov cx, FAT_SPT
+    mov cx, [cs:tmp_disk_spt]
     div cx
     mov cl, dl
     inc cl
     xor dx, dx
-    mov bx, FAT_HEADS
+    mov bx, [cs:tmp_disk_heads]
     div bx
     mov ch, al
     mov dh, dl
@@ -11499,13 +11552,14 @@ bios_read_chs_sector:
 
 bios_write_chs_sector:
     mov si, bx
+    call bios_get_chs_geometry
     xor dx, dx
-    mov cx, FAT_SPT
+    mov cx, [cs:tmp_disk_spt]
     div cx
     mov cl, dl
     inc cl
     xor dx, dx
-    mov bx, FAT_HEADS
+    mov bx, [cs:tmp_disk_heads]
     div bx
     mov ch, al
     mov dh, dl
@@ -11538,6 +11592,7 @@ dispatch_command:
     mov si, str_cls
     call str_eq
     jc .cmd_cls
+%if STAGE1_DEBUG_COMMANDS
     mov di, bx
     mov si, str_ticks
     call str_eq
@@ -11550,6 +11605,7 @@ dispatch_command:
     mov si, str_drives
     call str_eq
     jc .cmd_drives
+%endif
     mov di, bx
     mov si, str_dir
     call str_eq
@@ -11571,10 +11627,6 @@ dispatch_command:
     call str_eq
     jc .cmd_cd
     mov di, bx
-    mov si, str_copy
-    call str_eq
-    jc .cmd_copy
-    mov di, bx
     mov si, str_move
     call str_eq
     jc .cmd_move
@@ -11582,26 +11634,6 @@ dispatch_command:
     mov si, str_mv
     call str_eq
     jc .cmd_move
-    mov di, bx
-    mov si, str_del
-    call str_eq
-    jc .cmd_del
-    mov di, bx
-    mov si, str_md
-    call str_eq
-    jc .cmd_md
-    mov di, bx
-    mov si, str_mkdir
-    call str_eq
-    jc .cmd_md
-    mov di, bx
-    mov si, str_rd
-    call str_eq
-    jc .cmd_rd
-    mov di, bx
-    mov si, str_rmdir
-    call str_eq
-    jc .cmd_rd
     mov di, bx
     mov si, str_ren
     call str_eq
@@ -11611,25 +11643,14 @@ dispatch_command:
     call str_eq
     jc .cmd_ren
     mov di, bx
-    mov si, str_type
-    call str_eq
-    jc .cmd_type
-    mov di, bx
     mov si, str_run
     call str_eq
     jc .cmd_run
     mov di, bx
-    mov si, str_which
-    call str_eq
-    jc .cmd_which
-    mov di, bx
-    mov si, str_where
-    call str_eq
-    jc .cmd_which
-    mov di, bx
     mov si, str_exit
     call str_eq
     jc .cmd_exit
+%if STAGE1_DEBUG_COMMANDS
     mov di, bx
     mov si, str_dos21
     call str_eq
@@ -11671,6 +11692,11 @@ dispatch_command:
     call str_eq
     jc .cmd_keytest
     mov di, bx
+    mov si, str_beep
+    call str_eq
+    jc .cmd_beep
+%endif
+    mov di, bx
     mov si, str_reboot
     call str_eq
     jc .cmd_reboot
@@ -11678,10 +11704,6 @@ dispatch_command:
     mov si, str_halt
     call str_eq
     jc .cmd_halt
-    mov di, bx
-    mov si, str_beep
-    call str_eq
-    jc .cmd_beep
 
     mov si, bx
     call shell_try_exec_token
@@ -11708,6 +11730,7 @@ dispatch_command:
     jmp .done
 
 .cmd_ticks:
+%if STAGE1_DEBUG_COMMANDS
     mov ah, 0x00
     int 0x1A
     mov si, msg_ticks
@@ -11718,8 +11741,12 @@ dispatch_command:
     call print_hex16_dual
     call print_newline_dual
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_drive:
+%if STAGE1_DEBUG_COMMANDS
     mov si, msg_drive
     call print_string_dual
     xor ah, ah
@@ -11727,8 +11754,12 @@ dispatch_command:
     call print_hex8_dual
     call print_newline_dual
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_drives:
+%if STAGE1_DEBUG_COMMANDS
     mov si, msg_drive
     call print_string_dual
     xor ah, ah
@@ -11748,6 +11779,9 @@ dispatch_command:
     mov si, msg_drives_units
     call print_string_dual
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_dir:
     call shell_cmd_dir
@@ -11765,40 +11799,16 @@ dispatch_command:
     call shell_cmd_cdup
     jmp .done
 
-.cmd_copy:
-    call shell_cmd_copy
-    jmp .done
-
 .cmd_move:
     call shell_cmd_move
-    jmp .done
-
-.cmd_del:
-    call shell_cmd_del
-    jmp .done
-
-.cmd_md:
-    call shell_cmd_md
-    jmp .done
-
-.cmd_rd:
-    call shell_cmd_rd
     jmp .done
 
 .cmd_ren:
     call shell_cmd_ren
     jmp .done
 
-.cmd_type:
-    call shell_cmd_type
-    jmp .done
-
 .cmd_run:
     call shell_cmd_run
-    jmp .done
-
-.cmd_which:
-    call shell_cmd_which
     jmp .done
 
 .cmd_exit:
@@ -11806,6 +11816,7 @@ dispatch_command:
     jmp .done
 
 .cmd_dos21:
+%if STAGE1_DEBUG_COMMANDS
     mov al, [int21_installed]
     cmp al, 1
     jne .cmd_dos21_missing
@@ -11815,42 +11826,89 @@ dispatch_command:
     mov si, msg_int21_missing
     call print_string_dual
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_comdemo:
+%if STAGE1_DEBUG_COMMANDS
     call run_com_demo
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_mzdemo:
+%if STAGE1_DEBUG_COMMANDS
     call run_mz_demo
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_fileio:
+%if STAGE1_DEBUG_COMMANDS
     call int21_fileio_test
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_gfxdemo:
+%if STAGE1_DEBUG_COMMANDS
     call run_gfx_demo
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_gfxrect:
+%if STAGE1_DEBUG_COMMANDS
     call run_gfxrect_demo
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_gfxstar:
+%if STAGE1_DEBUG_COMMANDS
     call run_gfxstar_demo
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_findtest:
+%if STAGE1_DEBUG_COMMANDS
     call int21_find_test
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_mouse:
+%if STAGE1_DEBUG_COMMANDS
     call shell_cmd_mouse
     jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_keytest:
+%if STAGE1_DEBUG_COMMANDS
     call shell_cmd_keytest
     jmp .done
+%else
+    jmp .done
+%endif
+
+.cmd_beep:
+%if STAGE1_DEBUG_COMMANDS
+    call pc_speaker_beep
+    jmp .done
+%else
+    jmp .done
+%endif
 
 .cmd_reboot:
     mov si, msg_rebooting
@@ -11865,10 +11923,6 @@ dispatch_command:
     cli
     hlt
     jmp .halt_forever
-
-.cmd_beep:
-    call pc_speaker_beep
-    jmp .done
 
 .done:
     ret
@@ -12429,12 +12483,14 @@ shell_completion_scan_builtins:
     call shell_completion_consider_candidate
     mov si, str_cls
     call shell_completion_consider_candidate
+%if STAGE1_DEBUG_COMMANDS
     mov si, str_ticks
     call shell_completion_consider_candidate
     mov si, str_drive
     call shell_completion_consider_candidate
     mov si, str_drives
     call shell_completion_consider_candidate
+%endif
     mov si, str_dir
     call shell_completion_consider_candidate
     mov si, str_pwd
@@ -12443,36 +12499,19 @@ shell_completion_scan_builtins:
     call shell_completion_consider_candidate
     mov si, str_cd
     call shell_completion_consider_candidate
-    mov si, str_copy
-    call shell_completion_consider_candidate
     mov si, str_move
     call shell_completion_consider_candidate
     mov si, str_mv
-    call shell_completion_consider_candidate
-    mov si, str_del
-    call shell_completion_consider_candidate
-    mov si, str_md
-    call shell_completion_consider_candidate
-    mov si, str_mkdir
-    call shell_completion_consider_candidate
-    mov si, str_rd
-    call shell_completion_consider_candidate
-    mov si, str_rmdir
     call shell_completion_consider_candidate
     mov si, str_ren
     call shell_completion_consider_candidate
     mov si, str_rename
     call shell_completion_consider_candidate
-    mov si, str_type
-    call shell_completion_consider_candidate
     mov si, str_run
-    call shell_completion_consider_candidate
-    mov si, str_which
-    call shell_completion_consider_candidate
-    mov si, str_where
     call shell_completion_consider_candidate
     mov si, str_exit
     call shell_completion_consider_candidate
+%if STAGE1_DEBUG_COMMANDS
     mov si, str_dos21
     call shell_completion_consider_candidate
     mov si, str_comdemo
@@ -12493,6 +12532,7 @@ shell_completion_scan_builtins:
     call shell_completion_consider_candidate
     mov si, str_keytest
     call shell_completion_consider_candidate
+%endif
     mov si, str_reboot
     call shell_completion_consider_candidate
     mov si, str_halt
@@ -13311,61 +13351,6 @@ shell_is_builtin_token:
     pop ax
     ret
 
-shell_cmd_which:
-    push ax
-    push bx
-    push dx
-    push si
-    push di
-    push ds
-
-    push cs
-    pop ds
-    mov si, bx
-    call shell_arg_ptr
-    call shell_next_arg
-    jc .usage
-
-    mov di, dx
-    call shell_is_builtin_token
-    jc .builtin
-
-    mov si, dx
-    call shell_try_resolve_exec_token
-    jc .not_found
-
-    mov si, shell_exec_path_buf
-    call print_string_dual
-    call print_newline_dual
-    jmp .done
-
-.builtin:
-    mov si, dx
-    call print_string_dual
-    mov si, msg_which_builtin
-    call print_string_dual
-    jmp .done
-
-.not_found:
-    mov si, dx
-    call print_string_dual
-    mov si, msg_which_not_found
-    call print_string_dual
-    jmp .done
-
-.usage:
-    mov si, msg_which_usage
-    call print_string_dual
-
-.done:
-    pop ds
-    pop di
-    pop si
-    pop dx
-    pop bx
-    pop ax
-    ret
-
 shell_cmd_help:
     push ax
     push bx
@@ -13399,7 +13384,12 @@ shell_cmd_help:
 
 .all:
     call print_shell_help
+%if STAGE1_DEBUG_COMMANDS
     call print_shell_help_all
+%else
+    mov si, msg_help_all_disabled
+    call print_string_dual
+%endif
 
 .done:
     pop ds
@@ -13462,6 +13452,7 @@ shell_cmd_cdup:
     ret
 
 shell_cmd_mouse:
+%if STAGE1_DEBUG_COMMANDS
     push ax
     push bx
     push cx
@@ -13504,8 +13495,10 @@ shell_cmd_mouse:
     pop bx
     pop ax
     ret
+%endif
 
 shell_cmd_keytest:
+%if STAGE1_DEBUG_COMMANDS
     push ax
     mov si, msg_keytest_prompt
     call print_string_dual
@@ -13520,6 +13513,7 @@ shell_cmd_keytest:
     call print_newline_dual
     pop ax
     ret
+%endif
 
 shell_print_cwd:
     mov si, msg_cwd_prefix
@@ -13604,273 +13598,6 @@ shell_cmd_cd:
     pop dx
     pop bx
     pop ax
-    ret
-
-shell_cmd_copy:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push ds
-    push cs
-    pop ds
-
-    mov cl, 1
-    mov word [cs:shell_last_error_ax], 0x0001
-
-    mov si, bx
-    call shell_arg_ptr
-    call shell_next_arg
-    jc .missing_args
-    mov [cs:shell_copy_src_ptr], dx
-
-    call shell_next_arg
-    jc .missing_args
-    mov [cs:shell_copy_dst_ptr], dx
-    jmp .have_dst
-
-.missing_args:
-    mov ax, 0x0001
-    jmp .copy_report
-
-.have_dst:
-    mov bx, 0xFFFF
-    mov di, 0xFFFF
-%if FAT_TYPE == 16 || FAT_TYPE == 12
-    mov ah, 0x3D
-    mov al, 0
-    int 0x21
-    jc .copy_src_open_fail
-
-    mov bx, ax
-
-    mov ah, 0x3C
-    xor cx, cx
-    mov dx, [cs:shell_copy_dst_ptr]
-    mov di, 0xFFFF
-    int 0x21
-    jc .copy_dst_create_fail
-    jmp .copy_create_done
-
-.copy_src_open_fail:
-    mov si, [cs:shell_copy_src_ptr]
-    call int21_resolve_and_find_path
-    jc .copy_report
-    test byte [cs:search_found_attr], 0x10
-    jz .copy_report
-
-    mov si, [cs:shell_copy_dst_ptr]
-    call int21_resolve_and_find_path
-    jc .copy_report
-    test byte [cs:search_found_attr], 0x10
-    jz .copy_report
-    mov ax, [cs:search_found_cluster]
-    mov [cs:shell_copy_dst_cluster], ax
-
-    mov si, [cs:shell_copy_src_ptr]
-    call int21_resolve_parent_dir
-    jc .copy_report
-
-    mov ax, [cs:cwd_cluster]
-    push ax
-    mov ax, [cs:shell_copy_dst_cluster]
-    mov [cs:cwd_cluster], ax
-    mov dx, si
-    mov ah, 0x39
-    int 0x21
-    pop ax
-    mov [cs:cwd_cluster], ax
-    jc .copy_report
-    mov cl, 0
-    jmp .copy_report
-
-.copy_dst_create_fail:
-    mov si, [cs:shell_copy_dst_ptr]
-    call int21_resolve_and_find_path
-    jc .copy_cleanup
-    test byte [cs:search_found_attr], 0x10
-    jz .copy_cleanup
-    mov ax, [cs:search_found_cluster]
-    mov [cs:shell_copy_dst_cluster], ax
-
-    mov si, [cs:shell_copy_src_ptr]
-    call int21_resolve_parent_dir
-    jc .copy_cleanup
-
-    mov ax, [cs:cwd_cluster]
-    push ax
-    mov ax, [cs:shell_copy_dst_cluster]
-    mov [cs:cwd_cluster], ax
-    mov dx, si
-    mov ah, 0x3C
-    xor cx, cx
-    mov di, 0xFFFF
-    int 0x21
-    pop ax
-    mov [cs:cwd_cluster], ax
-    jc .copy_cleanup
-
-.copy_create_done:
-    mov di, ax
-%else
-    mov ah, 0x3D
-    mov al, 0
-    int 0x21
-    jc .copy_report
-
-    mov bx, ax
-
-    mov ah, 0x3C
-    xor cx, cx
-    mov dx, [cs:shell_copy_dst_ptr]
-    mov di, 0xFFFF
-    int 0x21
-    jc .copy_cleanup
-
-    mov di, ax
-%endif
-
-.copy_read:
-    mov ah, 0x3F
-    mov cx, 512
-    mov ax, DOS_IO_BUF_SEG
-    mov ds, ax
-    xor dx, dx
-    int 0x21
-    jc .copy_cleanup
-    cmp ax, 0
-    je .copy_done
-
-    mov cx, ax
-    xchg bx, di
-    mov ah, 0x40
-    int 0x21
-    xchg bx, di
-    jc .copy_cleanup
-    cmp ax, cx
-    jne .copy_cleanup
-    jmp .copy_read
-
-.copy_done:
-    mov cl, 0
-
-.copy_cleanup:
-    mov [cs:shell_last_error_ax], ax
-    mov ah, 0x3E
-    cmp bx, 0xFFFF
-    je .copy_close_dst
-    int 0x21
-
-.copy_close_dst:
-    mov bx, di
-    cmp bx, 0xFFFF
-    je .copy_report
-    mov ah, 0x3E
-    int 0x21
-
-.copy_report:
-    push cs
-    pop ds
-    cmp cl, 0
-    je .copy_ok
-    mov ax, [cs:shell_last_error_ax]
-    mov si, str_copy
-    call shell_print_error_ax
-
-.copy_ok:
-    pop ds
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-shell_cmd_del:
-    push dx
-    push ds
-    push cs
-    pop ds
-    mov si, bx
-    call shell_arg_ptr
-    call shell_next_arg
-    jc .del_missing
-    jmp .del_path
-
-.del_missing:
-    mov ax, 0x0001
-    jmp .del_fail
-
-.del_path:
-    mov ah, 0x41
-    int 0x21
-    jc .del_fail
-    jmp .del_ok
-.del_fail:
-    mov si, str_del
-    call shell_print_error_ax
-.del_ok:
-    pop ds
-    pop dx
-    ret
-
-shell_cmd_md:
-    push dx
-    push ds
-    push cs
-    pop ds
-    mov si, bx
-    call shell_arg_ptr
-    call shell_next_arg
-    jc .md_missing
-    jmp .md_path
-
-.md_missing:
-    mov ax, 0x0001
-    jmp .md_fail
-
-.md_path:
-    mov ah, 0x39
-    int 0x21
-    jc .md_fail
-    jmp .md_ok
-.md_fail:
-    mov si, str_md
-    call shell_print_error_ax
-.md_ok:
-    pop ds
-    pop dx
-    ret
-
-shell_cmd_rd:
-    push dx
-    push ds
-    push cs
-    pop ds
-    mov si, bx
-    call shell_arg_ptr
-    call shell_next_arg
-    jc .rd_missing
-    jmp .rd_path
-
-.rd_missing:
-    mov ax, 0x0001
-    jmp .rd_fail
-
-.rd_path:
-    mov ah, 0x3A
-    int 0x21
-    jc .rd_fail
-    jmp .rd_ok
-.rd_fail:
-    mov si, str_rd
-    call shell_print_error_ax
-.rd_ok:
-    pop ds
-    pop dx
     ret
 
 shell_cmd_move:
@@ -13980,77 +13707,6 @@ shell_cmd_ren:
     pop es
     pop ds
     pop bx
-    ret
-
-shell_cmd_type:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push ds
-    push es
-    mov ax, cs
-    mov ds, ax
-    mov si, bx
-    call shell_arg_ptr
-    call shell_next_arg
-    jc .type_missing
-    jmp .type_open
-
-.type_missing:
-    mov ax, 0x0001
-    jmp .type_fail
-
-.type_open:
-    mov ah, 0x3D
-    mov al, 0
-    int 0x21
-    jc .type_fail
-    mov bx, ax
-.type_read:
-    mov ah, 0x3F
-    mov cx, 512
-    mov ax, DOS_IO_BUF_SEG
-    mov ds, ax
-    xor dx, dx
-    int 0x21
-    jc .type_close
-    cmp ax, 0
-    je .type_done
-    mov cx, ax
-    mov ax, DOS_IO_BUF_SEG
-    mov es, ax
-    xor di, di
-.type_print:
-    mov al, [es:di]
-    cmp al, 0x1A
-    je .type_done
-    call putc_dual
-    inc di
-    loop .type_print
-    jmp .type_read
-.type_done:
-    mov ah, 0x3E
-    int 0x21
-    call print_newline_dual
-    jmp .type_ok
-.type_close:
-    push ax
-    mov ah, 0x3E
-    int 0x21
-    pop ax
-.type_fail:
-    mov si, str_type
-    call shell_print_error_ax
-.type_ok:
-    pop es
-    pop ds
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 shell_cmd_exit:
@@ -14648,7 +14304,11 @@ print_shell_help:
     ret
 
 print_shell_help_all:
+%if STAGE1_DEBUG_COMMANDS
     mov si, msg_help_all
+%else
+    mov si, msg_help_all_disabled
+%endif
     jmp print_string_dual
 
 shell_print_error_ax:
@@ -17207,6 +16867,8 @@ tmp_rw_done dw 0
 tmp_chunk dw 0
 tmp_disk_lba_save dw 0
 tmp_disk_status db 0
+tmp_disk_spt dw FAT_SPT
+tmp_disk_heads dw FAT_HEADS
 tmp_cluster dw 0
 tmp_cluster_off dw 0
 tmp_sector_off dw 0
@@ -17376,7 +17038,9 @@ msg_diag_int13_ok db "[13]", 13, 10, 0
 msg_diag_int16_ok db "[16]", 13, 10, 0
 msg_diag_int1a    db "T", 0
 msg_int21_installed db "I", 13, 10, 0
+%if STAGE1_DEBUG_COMMANDS
 msg_int21_missing db "[I21] no", 13, 10, 0
+%endif
 msg_vec25 db "[V25] ", 0
 msg_vec35 db "[V35] ", 0
 country_info_default:
@@ -17428,17 +17092,20 @@ msg_shell_ram_prefix db "FREE:", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
-msg_help_header db "Stage1 fallback (help/all)", 13, 10, 0
-msg_help_core db "  help ver cls dir cd run", 13, 10, 0
+msg_help_header db "Stage1 recovery shell only", 13, 10, 0
+msg_help_core db "  help ver cls dir cd run reboot", 13, 10, 0
 msg_help_runtime db "  run \\SYSTEM\\SHELL.COM", 13, 10, 0
-msg_help_system db "  reboot exit help all", 13, 10, 0
-msg_help_apps db "  SHELL.COM owns file cmds", 13, 10, 0
-msg_help_all db "  which copy del type md rd ren move", 13, 10, "  diag: ticks drives dos21 demo gfx", 13, 10, 0
+msg_help_system db "  Use SHELL.COM for normal work", 13, 10, 0
+msg_help_apps db "  help all = recovery diagnostics", 13, 10, 0
+msg_help_all_disabled db "  debug cmds require STAGE1_DEBUG_COMMANDS=1", 13, 10, 0
+%if STAGE1_DEBUG_COMMANDS
+msg_help_all db "  diag: ticks drives dos21", 13, 10, 0
 msg_ticks     db "ticks=0x", 0
 msg_drive     db "boot drive=0x", 0
 msg_drives_default db "default drive=", 0
 msg_drives_index db " index=0x", 0
 msg_drives_units db "units: C=HDD D=Live/CD", 13, 10, 0
+%endif
 msg_dos21_begin db "[DOS21] smoke", 13, 10, 0
 msg_dos21_status db "[INT21/4D] 0x", 0
 msg_dos21_serial_pass db "[DOS21-SERIAL] PASS", 13, 10, 0
@@ -17474,15 +17141,14 @@ msg_dir_header db "Dir", 13, 10, 0
 msg_dir_empty db "no files found", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
 msg_err_ax db " err=0x", 0
-msg_which_usage db "usage: which <token>", 13, 10, 0
-msg_which_builtin db " is a shell built-in", 13, 10, 0
-msg_which_not_found db " not found", 13, 10, 0
+%if STAGE1_DEBUG_COMMANDS
 msg_mouse_status db "mouse=0x", 0
 msg_mouse_buttons db "buttons=0x", 0
 msg_mouse_x db "x=0x", 0
 msg_mouse_y db "y=0x", 0
 msg_keytest_prompt db "press a key...", 0
 msg_keytest_ax db "key AX=0x", 0
+%endif
 gfx_text_ciukios db "CIUKIOS", 0
 gfx_text_demo db "GFX DEMO", 0
 gfx_text_vdi db "VDI BASE", 0
@@ -17491,29 +17157,23 @@ gfx_text_timer db "KEY EXIT", 0
 str_help   db "help", 0
 str_ver    db "ver", 0
 str_cls    db "cls", 0
+%if STAGE1_DEBUG_COMMANDS
 str_ticks  db "ticks", 0
 str_drive  db "drive", 0
 str_drives db "drives", 0
+%endif
 str_dir    db "dir", 0
 str_pwd    db "pwd", 0
 str_woof   db "woof", 0
 str_cd     db "cd", 0
 str_cdup   db "cd..", 0
-str_copy   db "copy", 0
 str_move   db "move", 0
 str_mv     db "mv", 0
-str_del    db "del", 0
-str_md     db "md", 0
-str_mkdir  db "mkdir", 0
-str_rd     db "rd", 0
-str_rmdir  db "rmdir", 0
 str_ren    db "ren", 0
 str_rename db "rename", 0
-str_type   db "type", 0
 str_run    db "run", 0
-str_which  db "which", 0
-str_where  db "where", 0
 str_exit   db "exit", 0
+%if STAGE1_DEBUG_COMMANDS
 str_dos21  db "dos21", 0
 str_comdemo db "comdemo", 0
 str_mzdemo db "mzdemo", 0
@@ -17524,9 +17184,10 @@ str_gfxstar db "gfxstar", 0
 str_findtest db "findtest", 0
 str_mouse db "mouse", 0
 str_keytest db "keytest", 0
+str_beep   db "beep", 0
+%endif
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
-str_beep   db "beep", 0
 str_help_all db "all", 0
 str_help_short db "short", 0
 str_ext_com db ".COM", 0
@@ -17540,29 +17201,23 @@ shell_builtin_name_table:
     dw str_help
     dw str_ver
     dw str_cls
+%if STAGE1_DEBUG_COMMANDS
     dw str_ticks
     dw str_drive
     dw str_drives
+%endif
     dw str_dir
     dw str_pwd
     dw str_woof
     dw str_cdup
     dw str_cd
-    dw str_copy
     dw str_move
     dw str_mv
-    dw str_del
-    dw str_md
-    dw str_mkdir
-    dw str_rd
-    dw str_rmdir
     dw str_ren
     dw str_rename
-    dw str_type
     dw str_run
-    dw str_which
-    dw str_where
     dw str_exit
+%if STAGE1_DEBUG_COMMANDS
     dw str_dos21
     dw str_comdemo
     dw str_mzdemo
@@ -17573,6 +17228,7 @@ shell_builtin_name_table:
     dw str_findtest
     dw str_mouse
     dw str_keytest
+%endif
     dw str_reboot
     dw str_halt
     dw 0
