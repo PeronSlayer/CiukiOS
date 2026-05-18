@@ -2018,12 +2018,76 @@ reboot_system:
 shutdown_system:
     push cs
     pop ds
+    call apm_shutdown_system
+    jnc .halt_now
+    mov si, msg_shutdown_unavailable
+    call print_dual_dollar_string
+
+.halt_now:
     xor ax, ax
     mov cx, ax
     mov dx, ax
     mov sp, 0xFFFC
+    cli
     hlt
     jmp shutdown_system
+
+apm_shutdown_system:
+    push bx
+    push cx
+    push dx
+
+    mov ax, 0x5300
+    xor bx, bx
+    int 0x15
+    jc .fail
+    cmp bx, 0x504D
+    jne .fail
+
+    mov ax, 0x5301
+    xor bx, bx
+    int 0x15
+    jc .fail
+
+    mov ax, 0x530E
+    xor bx, bx
+    mov cx, 0x0102
+    int 0x15
+
+    mov ax, 0x5308
+    mov bx, 0x0001
+    mov cx, 0x0001
+    int 0x15
+    jc .disconnect_fail
+
+    mov ax, 0x5307
+    mov bx, 0x0001
+    mov cx, 0x0003
+    int 0x15
+    jc .disconnect_fail
+
+    clc
+    jmp .disconnect
+
+.disconnect_fail:
+    stc
+
+.disconnect:
+    pushf
+    mov ax, 0x5304
+    xor bx, bx
+    int 0x15
+    popf
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop dx
+    pop cx
+    pop bx
+    ret
 
 msg_banner  db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A
             db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
@@ -2075,7 +2139,8 @@ msg_shutdown_use db 'usage: shutdown [/t seconds|seconds|status|cancel]', 0x0D, 
 msg_reboot_scheduled db 'reboot: queued', 0x0D, 0x0A, '$'
 msg_shutdown_scheduled db 'shutdown: queued', 0x0D, 0x0A, '$'
 msg_reboot_now db 'rebooting...', 0x0D, 0x0A, '$'
-msg_shutdown_now db 'halting...', 0x0D, 0x0A, '$'
+msg_shutdown_now db 'shutting down...', 0x0D, 0x0A, '$'
+msg_shutdown_unavailable db 'ACPI/APM shutdown is not available. System halted.', 0x0D, 0x0A, '$'
 msg_power_cancel db 'shutdown: canceled', 0x0D, 0x0A, '$'
 msg_power_status_none db 'shutdown: idle', 0x0D, 0x0A, '$'
 msg_power_status_reboot db 'shutdown: pending reboot', 0x0D, 0x0A, '$'
