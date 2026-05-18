@@ -196,6 +196,20 @@ stage1_start:
 %endif
 
 stage1_loader_fatal:
+    push si
+    mov bl, 0x1F
+    call clear_screen_attr
+    xor dx, dx
+    call set_cursor_pos
+    mov si, msg_loader_bsod_woof
+    call print_string_dual
+    mov si, msg_loader_bsod_body
+    call print_string_dual
+    mov si, msg_loader_bsod_restart
+    call print_string_dual
+    mov si, msg_loader_bsod_error
+    call print_string_dual
+    pop si
     call print_string_dual
     mov si, msg_halting
     call print_string_dual
@@ -17029,8 +17043,12 @@ msg_mvren_serial_fail db "[MVR] FAIL", 13, 10, 0
 %endif
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
-msg_shell_missing_fatal db "SHELL.COM missing", 13, 10, 0
-msg_shell_returned_fatal db "SHELL.COM exited", 13, 10, 0
+msg_loader_bsod_woof db "WOOF! CiukiOS ran into a problem.", 13, 10, 13, 10, 0
+msg_loader_bsod_body db "The system loader could not continue safely.", 13, 10, 0
+msg_loader_bsod_restart db "Please restart your PC.", 13, 10, 13, 10, 0
+msg_loader_bsod_error db "Error:", 13, 10, 0
+msg_shell_missing_fatal db "- SHELL.COM missing", 13, 10, 0
+msg_shell_returned_fatal db "SHELL.COM returned control to the loader.", 13, 10, "This is not supported in loader-only mode.", 13, 10, 0
 msg_dir_header db "Dir", 13, 10, 0
 msg_dir_empty db "no files found", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0

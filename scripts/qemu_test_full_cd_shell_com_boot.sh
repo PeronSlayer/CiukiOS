@@ -314,9 +314,13 @@ STAGE1_APPS_PROMPT_PATTERN="${STAGE1_PROMPT_PREFIX}D{1,2}:{1,2}[\\]{1,2}A{1,2}P{
 VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+.*C+I+U+K+I+D+O+S+.*S+H+E+L+L+'
 WHERE_SHELL_PATTERN='[CD]+[:]+[\\]+S+Y+S+T+E+M+[\\]+S+H+E+L+L+\.*C+O+M+'
 WHERE_MOUSE_PATTERN='[CD]+[:]+[\\]+S+Y+S+T+E+M+[\\]+M+O+U+S+E+\.*C+O+M+'
+WOOF_PATTERN='W+O+O+F+'
 LOADER_FATAL_MISSING_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+M+I+S+S+I+N+G+'
 LOADER_FATAL_EXITED_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+E+X+I+T+E+D+'
+LOADER_FATAL_RETURN_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+R+E+T+U+R+N+E+D+[[:space:]]+C+O+N+T+R+O+L+'
 HALTING_PATTERN='H+A+L+T+I+N+G+'
+EXIT_DISABLED_PATTERN='E+X+I+T+/+Q+U+I+T+[[:space:]]+I+S+[[:space:]]+N+O+T+[[:space:]]+A+V+A+I+L+A+B+L+E+'
+EXIT_GUIDANCE_PATTERN='U+S+E+[[:space:]]+R+E+B+O+O+T+[[:space:]]+O+R+[[:space:]]+S+H+U+T+D+O+W+N+'
 POWER_IDLE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+I+D+L+E+'
 POWER_QUEUE_REBOOT_PATTERN='R+E+B+O+O+T+[:]+[[:space:]]+Q+U+E+U+E+D+'
 POWER_QUEUE_HALT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+Q+U+E+U+E+D+'
@@ -356,6 +360,10 @@ mark_pass "MONITOR_SOCKET_READY"
 
 if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
   if (( BOOT_EXPECT_FALLBACK )); then
+    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$WOOF_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+      mark_fail "LOADER_FATAL_WOOF" "WOOF fatal header not detected"
+    fi
+    mark_pass "LOADER_FATAL_WOOF"
     if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_MISSING_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
       mark_fail "LOADER_FATAL_MISSING" "fatal missing-shell message not detected"
     fi
@@ -404,13 +412,29 @@ send_and_wait_for_pattern_and_prompt 'shutdown cancel' "$POWER_CANCEL_PATTERN" "
 send_and_wait_for_pattern_and_prompt 'shutdown /t nope' "$POWER_BAD_TIMER_PATTERN" "$CHILD_PROMPT_PATTERN" "POWER_BAD_TIMER_OK" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_pattern_and_prompt 'MOUSE' "$MOUSE_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_OK" "$COMMAND_TIMEOUT_SEC"
 EXIT_OFFSET="$(file_size "$SERIAL_LOG")"
-send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' || mark_fail "SEND_EXIT_FATAL_OK" "cannot send command: exit"
-wait_for_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_EXITED_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_FATAL_OK" "fatal exit message not detected after: exit"
-wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HALTING_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_FATAL_OK" "halting message not detected after: exit"
-if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_APPS_PROMPT_PATTERN" "$EXIT_OFFSET" 5; then
-  mark_fail "EXIT_NO_STAGE1_PROMPT" "Stage1 prompt appeared after SHELL.COM exit"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' || mark_fail "SEND_EXIT_DISABLED_OK" "cannot send command: exit"
+wait_for_strings_regex_from_offset "$SERIAL_LOG" "$EXIT_DISABLED_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_DISABLED_OK" "disabled exit message not detected after: exit"
+wait_for_strings_regex_from_offset "$SERIAL_LOG" "$EXIT_GUIDANCE_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_DISABLED_OK" "exit guidance not detected after: exit"
+wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_DISABLED_OK" "shell prompt did not return after: exit"
+if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$WOOF_PATTERN" "$EXIT_OFFSET" 5; then
+  mark_fail "EXIT_NO_FATAL" "fatal WOOF screen appeared after exit"
 fi
-mark_pass "EXIT_FATAL_OK"
+if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_RETURN_PATTERN" "$EXIT_OFFSET" 5; then
+  mark_fail "EXIT_NO_FATAL" "loader fatal return text appeared after exit"
+fi
+mark_pass "EXIT_DISABLED_OK"
+QUIT_OFFSET="$(file_size "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'quit' || mark_fail "SEND_QUIT_DISABLED_OK" "cannot send command: quit"
+wait_for_strings_regex_from_offset "$SERIAL_LOG" "$EXIT_DISABLED_PATTERN" "$QUIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "QUIT_DISABLED_OK" "disabled quit message not detected after: quit"
+wait_for_strings_regex_from_offset "$SERIAL_LOG" "$EXIT_GUIDANCE_PATTERN" "$QUIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "QUIT_DISABLED_OK" "quit guidance not detected after: quit"
+wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$QUIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "QUIT_DISABLED_OK" "shell prompt did not return after: quit"
+if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$WOOF_PATTERN" "$QUIT_OFFSET" 5; then
+  mark_fail "QUIT_NO_FATAL" "fatal WOOF screen appeared after quit"
+fi
+if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_RETURN_PATTERN" "$QUIT_OFFSET" 5; then
+  mark_fail "QUIT_NO_FATAL" "loader fatal return text appeared after quit"
+fi
+mark_pass "QUIT_DISABLED_OK"
 
 hmp "$MON_SOCK" "$CMD_LOG" "quit" >/dev/null 2>&1 || true
 set +e

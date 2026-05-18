@@ -153,8 +153,9 @@ main_loop:
     cmp byte [cmd_buf + 4], 0
     jne .check_power
 .do_exit:
-    mov ax, 0x4C00
-    int 0x21
+    mov si, msg_exit_disabled
+    call print_dual_dollar_string
+    jmp main_loop
 
 .check_power:
     cmp byte [cmd_buf + 0], 'R'
@@ -2030,15 +2031,17 @@ msg_banner  db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A
 msg_banner_compact db 'CiukiOS SHELL ready', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
 msg_help    db 'SHELL.COM commands:', 0x0D, 0x0A
-            db '  System: HELP VER ECHO CLS EXIT QUIT REBOOT SHUTDOWN', 0x0D, 0x0A
+            db '  System: HELP VER ECHO CLS REBOOT SHUTDOWN', 0x0D, 0x0A
             db '  Navigation: CD CHDIR DIR PATH WHERE PWD', 0x0D, 0x0A
             db '  Files: TYPE COPY DEL ERASE REN RENAME MOVE MKDIR MD RMDIR RD', 0x0D, 0x0A
             db '  Execution: run name/path, MOUSE from C:\SYSTEM', 0x0D, 0x0A
-            db '  Stage1 fallback: use EXIT or QUIT', 0x0D, 0x0A
+            db '  Loader-only mode: EXIT and QUIT stay in SHELL.COM', 0x0D, 0x0A
             db '  Use WHERE <name>; SHUTDOWN STATUS or CANCEL manage queue', 0x0D, 0x0A
-            db '  Aliases: CLEAR QUIT PWD', 0x0D, 0x0A, '$'
+            db '  Aliases: CLEAR PWD', 0x0D, 0x0A, '$'
 msg_ver     db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A, '$'
 msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
+msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
+                  db 'use reboot or shutdown', 0x0D, 0x0A, '$'
 msg_exec_not_found db 'command: not found', 0x0D, 0x0A, '$'
 msg_exec_fail db 'run: cannot execute', 0x0D, 0x0A, '$'
 msg_path    db 'C:\APPS;C:\SYSTEM\DRIVERS;C:\SYSTEM', 0x0D, 0x0A, '$'
