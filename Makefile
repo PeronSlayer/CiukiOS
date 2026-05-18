@@ -1,10 +1,12 @@
-.PHONY: help build-floppy build-full build-full-cd verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd build-shell-com build-doom-vanille-probe verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-doomvan-taxonomy qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-shell-com qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
 	@echo "  make build-floppy     - build floppy profile scaffold"
 	@echo "  make build-full       - build full profile scaffold"
 	@echo "  make build-full-cd    - build full-profile bootable CD image"
+	@echo "  make build-shell-com  - assemble the external SHELL.COM prototype"
+	@echo "  make build-doom-vanille-probe - probe external doom-vanille build"
 	@echo "  make qemu-run-full-cd - boot the Live/install CD in visual QEMU"
 	@echo "  make qemu-test-full-cd - smoke test the Live/install CD D: prompt"
 	@echo "  make qemu-test-full-cd-shell-drive - validate Live CD shell drive/CWD commands"
@@ -15,12 +17,14 @@ help:
 	@echo "  make qemu-test-full-stage1 - full-profile Stage1 selftest regression"
 	@echo "  make qemu-test-full-runtime-probe - probe runtime load/entry fallback"
 	@echo "  make qemu-test-full-doom-taxonomy - legacy DOOM taxonomy alias (compat)"
+	@echo "  make qemu-test-full-doomvan-taxonomy - isolated doom-vanille startup taxonomy"
 	@echo "  make qemu-test-full-doomsfx - controlled DOOM WAD SB16 SFX harness"
 	@echo "  make qemu-test-full-doomsfx-dsdoropn - controlled DOOM door-open SB16 SFX harness"
 	@echo "  make qemu-test-full-dos-taxonomy - classify generic DOS full-profile taxonomy stages"
 	@echo "  make qemu-test-full-wolf3d-taxonomy - classify WOLF3D transfer/runtime stages"
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
 	@echo "  make qemu-test-full-shell-stability - run full-profile shell stability test"
+	@echo "  make qemu-test-full-shell-com - run focused full-profile SHELL.COM nested-shell validation"
 	@echo "  make qemu-test-full-dos-compat-smoke - run full-profile DOS compatibility smoke test"
 	@echo "  make qemu-test-setup-full-acceptance - run setup full-profile acceptance test"
 	@echo "  make qemu-test-setup-installer-scenarios - run setup installer scenario tests"
@@ -38,6 +42,12 @@ build-full:
 
 build-full-cd:
 	@bash scripts/build_full_cd.sh
+
+build-shell-com:
+	@bash scripts/build_shell_com.sh
+
+build-doom-vanille-probe:
+	@bash scripts/build_doom_vanille_probe.sh
 
 verify-full-drivers-payload:
 	@bash scripts/verify_full_drivers_payload.sh
@@ -69,8 +79,11 @@ qemu-test-full-runtime-probe:
 qemu-test-full-doom-taxonomy:
 	@DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_RUN_COMMAND='run DOOM.EXE' DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doom-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=25 DOS_TAXONOMY_OBSERVE_SEC=50 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=320 bash scripts/qemu_test_full_dos_taxonomy.sh
 
+qemu-test-full-doomvan-taxonomy:
+	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOOMVAN DOS_TAXONOMY_APP_BINARY_NAME=PCDOOM.EXE DOS_APP_AUX_PRIMARY=DOOM.WAD DOS_APP_AUX_ALIAS=DOOM.WAD DOS_TAXONOMY_CWD='\APPS\DOOMVAN' DOS_TAXONOMY_RUN_COMMAND='run PCDOOM.EXE -nosound -nomusic' DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doomvan-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=20 DOS_TAXONOMY_OBSERVE_SEC=35 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_dos_taxonomy.sh
+
 qemu-test-full-doomsfx:
-	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOOMAUD DOS_TAXONOMY_APP_BINARY_NAME=DOOMSFX.COM DOS_TAXONOMY_CWD='\APPS\DOOMAUD' DOS_TAXONOMY_RUN_COMMAND="run DOOMSFX.COM $(DOOMSFX_LUMP)" DOS_TAXONOMY_APP_RUNTIME_MARKERS='\[DOOMSFX\][[:space:]]+PASS' DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_dos_taxonomy.sh
+	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_APP_DIR_IN_IMAGE=:: DOS_TAXONOMY_APP_BINARY_NAME=DOOMSFX.EXE DOS_TAXONOMY_CWD='\' DOS_TAXONOMY_RUN_COMMAND="run DOS4GW.EXE DOOMSFX.EXE$(if $(DOOMSFX_LUMP), $(DOOMSFX_LUMP))" DOS_TAXONOMY_APP_RUNTIME_MARKERS='\[DOOMSFX\][[:space:]]+PASS|\[\[DDOOOOMMSSFFXX\]\][[:space:]]+PPAASSSS' DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_dos_taxonomy.sh
 
 qemu-test-full-doomsfx-dsdoropn:
 	@DOOMSFX_LUMP=DSDOROPN $(MAKE) qemu-test-full-doomsfx
@@ -86,6 +99,9 @@ qemu-test-full-drvload-smoke:
 
 qemu-test-full-shell-stability:
 	@bash scripts/qemu_test_full_shell_stability.sh
+
+qemu-test-full-shell-com:
+	@bash scripts/qemu_test_full_shell_com.sh
 
 qemu-test-full-dos-compat-smoke:
 	@bash scripts/qemu_test_full_dos_compat_smoke.sh

@@ -959,16 +959,18 @@ classify_runtime() {
   else
     if (( reboot_detected == 1 )); then
       set_stage "transfer_marker" "FAIL" "$smoke_detail; reboot detected in fresh logs ($reboot_detail): $runtime_log_sources"
-    elif log_has_pattern 'run[[:space:]]+err=0x[0-9A-Fa-f]{4}' "${runtime_logs[@]}"; then
+    elif log_has_pattern 'run[[:space:]]+err=0x[0-9A-Fa-f]{4}|rruunn[[:space:]]+eerrrr==00xx[0-9A-Fa-f]{4}|Unknown[[:space:]]+command|UUnnkknnoowwnn[[:space:]]+ccoommmmaanndd?' "${runtime_logs[@]}"; then
       set_stage "transfer_marker" "FAIL" "$smoke_detail; run err observed in fresh logs: $runtime_log_sources"
+    elif [[ -n "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" ]] && \
+      log_has_pattern "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" "${runtime_logs[@]}"; then
+      set_stage "transfer_marker" "PASS" "$smoke_detail; inferred transfer from app-specific runtime markers (DOS_TAXONOMY_APP_RUNTIME_MARKERS) in fresh logs: $runtime_log_sources"
+    elif [[ -n "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" ]]; then
+      set_stage "transfer_marker" "FAIL" "$smoke_detail; app-specific runtime markers not observed in fresh logs: $runtime_log_sources"
     elif log_has_fixed_marker '[MZ] run' "${runtime_logs[@]}" \
       || log_has_fixed_marker '[M]' "${runtime_logs[@]}" \
       || log_has_fixed_marker '[COM] run' "${runtime_logs[@]}" \
       || log_has_pattern '\[\[(MMZZ|CCOOMM)\]\][[:space:]]+rruunn' "${runtime_logs[@]}"; then
       set_stage "transfer_marker" "PASS" "$smoke_detail; COM/MZ transfer marker observed in fresh logs: $runtime_log_sources"
-    elif [[ -n "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" ]] && \
-      log_has_pattern "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" "${runtime_logs[@]}"; then
-      set_stage "transfer_marker" "PASS" "$smoke_detail; inferred transfer from app-specific runtime markers (DOS_TAXONOMY_APP_RUNTIME_MARKERS) in fresh logs: $runtime_log_sources"
     elif [[ "${STAGE_STATUS[$exec_stage_name]}" == "PASS" && $smoke_rc -eq 0 ]]; then
       set_stage "transfer_marker" "PASS" "$smoke_detail; inferred transfer from successful exec without run errors in fresh logs: $runtime_log_sources"
     else

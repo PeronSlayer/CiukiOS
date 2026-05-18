@@ -78,6 +78,8 @@ FORMAT_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512 * FORMAT_MAX_CLUSTERS))
 COMMAND_STUB_SRC="src/com/command_stub.asm"
 COMMAND_STUB_BIN="build/full/obj/command.com"
 COMMAND_COMPAT_IMAGE_PATH="${CIUKIOS_COMMAND_COM_IMAGE_PATH:-::COMMAND.COM}"
+SHELL_SRC="src/com/shell.asm"
+SHELL_BIN="build/full/obj/shell.com"
 DRVLOAD_SRC="src/com/drvload.asm"
 DRVLOAD_BIN="build/full/obj/drvload.com"
 SB16INIT_SRC="src/com/sb16init.asm"
@@ -96,6 +98,8 @@ DOOMSFX_LAUNCH_SRC="src/com/doomsfx_launch.asm"
 DOOMSFX_LAUNCH_BIN="build/full/obj/doomsfx.com"
 DOOMSFX_SRC="src/probes/doomsfx/doomsfx.c"
 DOOMSFX_BIN="build/full/obj/doomsfx.le"
+DOOMVAN_LAUNCH_SRC="src/com/doomvan_launch.asm"
+DOOMVAN_LAUNCH_BIN="build/full/obj/doomvan.com"
 DOS4GW_BIN="${DOS4GW_BIN:-/opt/watcom/binw/dos4gw.exe}"
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
@@ -106,6 +110,8 @@ DOOM_SRC_DIR="${CIUKIOS_DOOM_SRC_DIR:-$CIUKIOS_ROOT/third_party/Doom}"
 DOOM_IMAGE_DIR="${CIUKIOS_DOOM_IMAGE_DIR:-::APPS/DOOM}"
 DOOMDATA_IMAGE_DIR="${CIUKIOS_DOOMDATA_IMAGE_DIR:-::DOOMDATA}"
 DOOM_AUDIO_PROFILE="${CIUKIOS_DOOM_AUDIO_PROFILE:-pcspeaker-sfx}"
+DOOMVAN_EXE="${CIUKIOS_DOOMVAN_EXE:-$CIUKIOS_ROOT/build/external/doom-vanille/pcdoom.exe}"
+DOOMVAN_IMAGE_DIR="${CIUKIOS_DOOMVAN_IMAGE_DIR:-::APPS/DOOMVAN}"
 DOSNAV_SRC_DIR="${CIUKIOS_DOSNAV_SRC_DIR:-$CIUKIOS_ROOT/third_party/DOSNavigator}"
 DOSNAV_IMAGE_DIR="${CIUKIOS_DOSNAV_IMAGE_DIR:-::APPS/DOSNAV}"
 WOLF3D_SRC_DIR="${CIUKIOS_WOLF3D_SRC_DIR:-$CIUKIOS_ROOT/third_party/WOLF3D}"
@@ -170,7 +176,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -240,6 +246,7 @@ nasm -f bin "$CIUKWIN_SRC" -o "$CIUKWIN_BIN"
 nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL" -D SETUP_ENABLE_RAW_HDD_DESTRUCTIVE="$SETUP_RAW_HDD_DESTRUCTIVE" -D SETUP_LIVE_CD_MODE="$SETUP_LIVE_CD_MODE" -o "$SETUP_BIN"
 nasm -f bin "$FORMAT_SRC" -o "$FORMAT_BIN"
 nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
+nasm -f bin "$SHELL_SRC" -o "$SHELL_BIN"
 nasm -f bin "$DRVLOAD_SRC" -o "$DRVLOAD_BIN"
 nasm -f bin "$SB16INIT_SRC" -o "$SB16INIT_BIN"
 nasm -f bin "$AUDIOTST_SRC" -o "$AUDIOTST_BIN"
@@ -247,6 +254,7 @@ nasm -f bin "$AUDIOKEY_SRC" -o "$AUDIOKEY_BIN"
 nasm -f bin "$DOOMSB_SRC" -o "$DOOMSB_BIN"
 nasm -f bin "$PMIRQSB_LAUNCH_SRC" -o "$PMIRQSB_LAUNCH_BIN"
 nasm -f bin "$DOOMSFX_LAUNCH_SRC" -o "$DOOMSFX_LAUNCH_BIN"
+nasm -f bin "$DOOMVAN_LAUNCH_SRC" -o "$DOOMVAN_LAUNCH_BIN"
 if bash scripts/build_pmirqsb_dos4gw.sh; then
 	echo "[build-full] PMIRQSB protected-mode probe built"
 else
@@ -301,6 +309,8 @@ GFXSTAR_SIZE="$(stat -c%s "$GFXSTAR_BIN")"
 CIUKWIN_SIZE="$(stat -c%s "$CIUKWIN_BIN")"
 SETUP_SIZE="$(stat -c%s "$SETUP_BIN")"
 FORMAT_SIZE="$(stat -c%s "$FORMAT_BIN")"
+DOOMSFX_SIZE="$(stat -c%s "$DOOMSFX_BIN")"
+DOS4GW_SIZE="$(stat -c%s "$DOS4GW_BIN")"
 SPLASH_SIZE="$(stat -c%s "$SPLASH_BIN")"
 SPLASH_SECTORS=$(((SPLASH_SIZE + 511) / 512))
 CLUSTER_SIZE_BYTES=$((FAT_SECTORS_PER_CLUSTER * 512))
@@ -318,6 +328,10 @@ SETUP_SECTORS=$(((SETUP_SIZE + 511) / 512))
 SETUP_CLUSTERS=$(((SETUP_SIZE + CLUSTER_SIZE_BYTES - 1) / CLUSTER_SIZE_BYTES))
 FORMAT_SECTORS=$(((FORMAT_SIZE + 511) / 512))
 FORMAT_CLUSTERS=$(((FORMAT_SIZE + CLUSTER_SIZE_BYTES - 1) / CLUSTER_SIZE_BYTES))
+DOOMSFX_SECTORS=$(((DOOMSFX_SIZE + 511) / 512))
+DOOMSFX_CLUSTERS=$(((DOOMSFX_SIZE + CLUSTER_SIZE_BYTES - 1) / CLUSTER_SIZE_BYTES))
+DOS4GW_SECTORS=$(((DOS4GW_SIZE + 511) / 512))
+DOS4GW_CLUSTERS=$(((DOS4GW_SIZE + CLUSTER_SIZE_BYTES - 1) / CLUSTER_SIZE_BYTES))
 
 if [[ "$GFXRECT_SIZE" -gt "$GFXRECT_MAX_SIZE" ]]; then
 	echo "[build-full] ERROR: GFXRECT payload is $GFXRECT_SIZE bytes (max $GFXRECT_MAX_SIZE)" >&2
@@ -376,7 +390,7 @@ if (( SETUP_MANIFEST_CLUSTERS != 1 )); then
 	exit 1
 fi
 
-echo "[build-full] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS CIUKWIN=$CIUKWIN_SECTORS SETUP=$SETUP_SECTORS SETUP_MFT=$SETUP_MANIFEST_SECTORS FORMAT=$FORMAT_SECTORS SPLASH=$SPLASH_SECTORS"
+echo "[build-full] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS CIUKWIN=$CIUKWIN_SECTORS SETUP=$SETUP_SECTORS SETUP_MFT=$SETUP_MANIFEST_SECTORS FORMAT=$FORMAT_SECTORS DOOMSFX=$DOOMSFX_SECTORS DOS4GW=$DOS4GW_SECTORS SPLASH=$SPLASH_SECTORS"
 
 if [[ "$SPLASH_SIZE" -ne "$SPLASH_EXPECTED_SIZE" ]]; then
 	echo "[build-full] ERROR: SPLASH.BIN size is $SPLASH_SIZE bytes (expected $SPLASH_EXPECTED_SIZE)" >&2
@@ -413,13 +427,17 @@ APPS_SETUP_MANIFEST_CLUSTER=$((APPS_SETUP_LAST_CLUSTER + 1))
 APPS_CIUKWIN_CLUSTER=$((APPS_SETUP_MANIFEST_CLUSTER + 1))
 APPS_FORMAT_CLUSTER=$((APPS_CIUKWIN_CLUSTER + 1))
 APPS_FORMAT_LAST_CLUSTER=$((APPS_FORMAT_CLUSTER + FORMAT_CLUSTERS - 1))
+ROOT_DOS4GW_CLUSTER=$((APPS_FORMAT_LAST_CLUSTER + 1))
+ROOT_DOS4GW_LAST_CLUSTER=$((ROOT_DOS4GW_CLUSTER + DOS4GW_CLUSTERS - 1))
+ROOT_DOOMSFX_CLUSTER=$((ROOT_DOS4GW_LAST_CLUSTER + 1))
+ROOT_DOOMSFX_LAST_CLUSTER=$((ROOT_DOOMSFX_CLUSTER + DOOMSFX_CLUSTERS - 1))
 
 if (( SPLASH_CLUSTERS < 1 )); then
 	echo "[build-full] ERROR: SPLASH.BIN requires an invalid cluster count ($SPLASH_CLUSTERS)" >&2
 	exit 1
 fi
 
-if (( APPS_FORMAT_LAST_CLUSTER >= 256 )); then
+if (( ROOT_DOOMSFX_LAST_CLUSTER >= 256 )); then
 	echo "[build-full] ERROR: FAT16 layout exceeds first FAT sector entry range" >&2
 	exit 1
 fi
@@ -486,6 +504,8 @@ fat16_set_contiguous_chain "$APPS_SETUP_CLUSTER" "$SETUP_CLUSTERS"
 fat16_set_entry "$APPS_SETUP_MANIFEST_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_CIUKWIN_CLUSTER" 0xFFFF
 fat16_set_contiguous_chain "$APPS_FORMAT_CLUSTER" "$FORMAT_CLUSTERS"
+fat16_set_contiguous_chain "$ROOT_DOS4GW_CLUSTER" "$DOS4GW_CLUSTERS"
+fat16_set_contiguous_chain "$ROOT_DOOMSFX_CLUSTER" "$DOOMSFX_CLUSTERS"
 
 make_entry() {
 	local out="$1" name="$2" attr="$3" cluster="$4" size="$5"
@@ -502,6 +522,8 @@ make_entry() {
 
 ROOT_ENTRY_SYSTEM="build/full/obj/root_system.bin"
 ROOT_ENTRY_APPS="build/full/obj/root_apps.bin"
+ROOT_ENTRY_DOS4GW="build/full/obj/root_dos4gw.bin"
+ROOT_ENTRY_DOOMSFX="build/full/obj/root_doomsfx.bin"
 DIR_ENTRY_DOT_SYSTEM="build/full/obj/dir_dot_system.bin"
 DIR_ENTRY_DOTDOT_ROOT="build/full/obj/dir_dotdot_root.bin"
 DIR_ENTRY_DOT_APPS="build/full/obj/dir_dot_apps.bin"
@@ -524,6 +546,8 @@ APPS_DIR_CLUSTER_BIN="build/full/obj/apps_dir_cluster.bin"
 
 make_entry "$ROOT_ENTRY_SYSTEM" 'SYSTEM     ' 0x10 "$ROOT_SYSTEM_CLUSTER" 0
 make_entry "$ROOT_ENTRY_APPS"   'APPS       ' 0x10 "$ROOT_APPS_CLUSTER" 0
+make_entry "$ROOT_ENTRY_DOS4GW" 'DOS4GW  EXE' 0x20 "$ROOT_DOS4GW_CLUSTER" "$DOS4GW_SIZE"
+make_entry "$ROOT_ENTRY_DOOMSFX" 'DOOMSFX EXE' 0x20 "$ROOT_DOOMSFX_CLUSTER" "$DOOMSFX_SIZE"
 
 make_entry "$DIR_ENTRY_DOT_SYSTEM" '.          ' 0x10 "$ROOT_SYSTEM_CLUSTER" 0
 make_entry "$DIR_ENTRY_DOTDOT_ROOT" '..         ' 0x10 0 0
@@ -574,6 +598,8 @@ dd if="$FAT_SECTOR_BIN"     of="$IMG" bs=512 count=1                seek="$FAT1_
 dd if="$FAT_SECTOR_BIN"     of="$IMG" bs=512 count=1                seek="$FAT2_LBA" conv=notrunc status=none
 dd if="$ROOT_ENTRY_SYSTEM" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 0)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_APPS" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_DOS4GW" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_DOOMSFX" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
 
 dd if="$SYSTEM_DIR_CLUSTER_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_SYSTEM_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$FAT_SECTORS_PER_CLUSTER" conv=notrunc status=none
 dd if="$APPS_DIR_CLUSTER_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_APPS_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$FAT_SECTORS_PER_CLUSTER" conv=notrunc status=none
@@ -591,6 +617,8 @@ dd if="$SETUP_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_SETUP_CLUSTER - 2)
 dd if="$SETUP_MANIFEST_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_SETUP_MANIFEST_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$SETUP_MANIFEST_SECTORS" conv=notrunc status=none
 dd if="$CIUKWIN_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_CIUKWIN_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$CIUKWIN_SECTORS" conv=notrunc status=none
 dd if="$FORMAT_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((APPS_FORMAT_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$FORMAT_SECTORS" conv=notrunc status=none
+dd if="$DOS4GW_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_DOS4GW_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$DOS4GW_SECTORS" conv=notrunc status=none
+dd if="$DOOMSFX_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_DOOMSFX_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$DOOMSFX_SECTORS" conv=notrunc status=none
 
 if ! command -v mcopy >/dev/null 2>&1; then
 	echo "[build-full] ERROR: mcopy is required to inject COMMAND.COM compatibility stub" >&2
@@ -604,6 +632,9 @@ fi
 
 echo "[build-full] injecting COMMAND.COM compatibility stub to $COMMAND_COMPAT_IMAGE_PATH"
 mcopy -o -i "$IMG" "$COMMAND_STUB_BIN" "$COMMAND_COMPAT_IMAGE_PATH"
+
+echo "[build-full] injecting external shell prototype to ::SYSTEM/SHELL.COM"
+mcopy -o -i "$IMG" "$SHELL_BIN" ::SYSTEM/SHELL.COM
 
 echo "[build-full] injecting runtime split placeholder to ::SYSTEM/RUNTIME.BIN"
 mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/RUNTIME.BIN
@@ -678,6 +709,28 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
     fi
 else
     echo "[build-full] doom payload not found at $DOOM_SRC_DIR (skipped)"
+fi
+
+if [[ -f "$DOOMVAN_EXE" && -d "$DOOM_SRC_DIR" ]]; then
+	if ! command -v mmd >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+		echo "[build-full] ERROR: DOOMVAN package requested but mtools (mmd/mcopy) is missing" >&2
+		exit 1
+	fi
+	echo "[build-full] injecting doom-vanille probe from $DOOMVAN_EXE to $DOOMVAN_IMAGE_DIR"
+	mtools_ensure_dir "$IMG" "$DOOMVAN_IMAGE_DIR"
+	mcopy -o -i "$IMG" "$DOOMVAN_LAUNCH_BIN" "$DOOMVAN_IMAGE_DIR/DOOMVAN.COM"
+	mcopy -o -i "$IMG" "$DOOMVAN_EXE" "$DOOMVAN_IMAGE_DIR/PCDOOM.EXE"
+	if [[ -f "$DOS4GW_BIN" ]]; then
+		mcopy -o -i "$IMG" "$DOS4GW_BIN" "$DOOMVAN_IMAGE_DIR/DOS4GW.EXE"
+	fi
+	if [[ -f "$DOOM_SRC_DIR/DOOM.WAD" ]]; then
+		mcopy -o -i "$IMG" "$DOOM_SRC_DIR/DOOM.WAD" "$DOOMVAN_IMAGE_DIR/DOOM.WAD"
+	fi
+	if [[ -f "$DOOM_SRC_DIR/DEFAULT.CFG" ]]; then
+		mcopy -o -i "$IMG" "$DOOM_SRC_DIR/DEFAULT.CFG" "$DOOMVAN_IMAGE_DIR/DEFAULT.CFG"
+	fi
+else
+	echo "[build-full] doom-vanille probe executable not found at $DOOMVAN_EXE (skipped)"
 fi
 
 if [[ -d "$DOSNAV_SRC_DIR" ]]; then

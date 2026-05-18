@@ -5737,11 +5737,17 @@ int21_read:
 
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
+%if FAT_TYPE == 16
+    mov [cs:tmp_lba_hi], dx
+%endif
 
     mov ax, [cs:tmp_cluster_off]
     mov cl, 9
     shr ax, cl
     add [cs:tmp_lba], ax
+%if FAT_TYPE == 16
+    adc word [cs:tmp_lba_hi], 0
+%endif
 
     mov ax, [cs:tmp_cluster_off]
     and ax, 0x01FF
@@ -5751,7 +5757,12 @@ int21_read:
     mov es, ax
     mov ax, [cs:tmp_lba]
     xor bx, bx
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_lba_hi]
+    call read_sector_lba32
+%else
     call read_sector_lba
+%endif
     jc .io_error
 
     mov ax, 512
@@ -6034,11 +6045,17 @@ int21_write:
 
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
+%if FAT_TYPE == 16
+    mov [cs:tmp_lba_hi], dx
+%endif
 
     mov ax, [cs:tmp_cluster_off]
     mov cl, 9
     shr ax, cl
     add [cs:tmp_lba], ax
+%if FAT_TYPE == 16
+    adc word [cs:tmp_lba_hi], 0
+%endif
 
     mov ax, [cs:tmp_cluster_off]
     and ax, 0x01FF
@@ -6048,7 +6065,12 @@ int21_write:
     mov es, ax
     mov ax, [cs:tmp_lba]
     xor bx, bx
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_lba_hi]
+    call read_sector_lba32
+%else
     call read_sector_lba
+%endif
     jc .io_error
 
     mov ax, 512
@@ -6076,7 +6098,12 @@ int21_write:
     mov es, ax
     mov ax, [cs:tmp_lba]
     xor bx, bx
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_lba_hi]
+    call write_sector_lba32
+%else
     call write_sector_lba
+%endif
     jc .io_error
 
     mov ax, [cs:tmp_chunk]
@@ -6424,14 +6451,25 @@ int21_mkdir:
     mov ax, [cs:tmp_cluster_off]
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
+%if FAT_TYPE == 16
+    mov [cs:tmp_lba_hi], dx
+%endif
     xor dx, dx
 .mkdir_zero_cluster_loop:
     cmp dx, FAT_SECTORS_PER_CLUSTER
     jae .mkdir_reload_root_sector
+    xor bx, bx
     mov ax, [cs:tmp_lba]
     add ax, dx
-    xor bx, bx
+%if FAT_TYPE == 16
+    push dx
+    mov dx, [cs:tmp_lba_hi]
+    adc dx, 0
+    call write_sector_lba32
+    pop dx
+%else
     call write_sector_lba
+%endif
     jc .mkdir_io_err
     inc dx
     jmp .mkdir_zero_cluster_loop
@@ -6517,6 +6555,11 @@ int21_rmdir:
     test byte [cs:search_found_attr], 0x10
     jz .rmdir_not_dir
 
+    ; Read the parent directory sector into the shared meta buffer. ES must be
+    ; pointed at a safe segment first: read_sector_lba/write_sector_lba target
+    ; ES:BX, and on entry ES still holds the INT 21h caller's segment.
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
     mov ax, [cs:search_found_root_lba]
     xor bx, bx
     call read_sector_lba
@@ -8530,14 +8573,89 @@ int21_cluster_for_pos:
     pop bx
     ret
 
+; Cluster -> data LBA. Returns the LBA as 32-bit DX:AX so high clusters do
+; not alias: the FAT16/full profile shifts by FAT_CLUSTER_SECTOR_SHIFT, which
+; overflows a 16-bit register once (cluster-2) << shift exceeds 0xFFFF.
+; Low clusters keep DX = 0, so callers that only consume AX stay correct.
 int21_cluster_to_lba:
     sub ax, 2
+    xor dx, dx
 %if FAT_CLUSTER_SECTOR_SHIFT > 0
-    mov cl, FAT_CLUSTER_SECTOR_SHIFT
-    shl ax, cl
+    push cx
+    mov cx, FAT_CLUSTER_SECTOR_SHIFT
+.shift_cluster_lba:
+    shl ax, 1
+    rcl dx, 1
+    loop .shift_cluster_lba
+    pop cx
 %endif
     add ax, FAT_DATA_START_LBA
+    adc dx, 0
     ret
+
+%if FAT_TYPE == 16
+; Read one 512-byte sector by 32-bit LBA (DX:AX) into ES:BX via INT 13h EDD.
+; Used for file data, whose clusters can sit past the 16-bit LBA range.
+read_sector_lba32:
+    push ax
+    push cx
+    push dx
+    push si
+    push ds
+    add ax, FAT_LBA_OFFSET
+    adc dx, 0
+    mov [cs:disk_packet_lba], ax
+    mov [cs:disk_packet_lba + 2], dx
+    mov [cs:disk_packet_lba + 4], word 0
+    mov [cs:disk_packet_lba + 6], word 0
+    mov [cs:disk_packet_off], bx
+    mov [cs:disk_packet_seg], es
+    mov ax, cs
+    mov ds, ax
+    mov si, disk_packet
+    mov dl, [cs:boot_drive]
+    mov ah, 0x42
+    sti
+    int 0x13
+    mov [cs:tmp_disk_status], ah
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; Write one 512-byte sector by 32-bit LBA (DX:AX) from ES:BX via INT 13h EDD.
+; Used for file data, whose clusters can sit past the 16-bit LBA range.
+write_sector_lba32:
+    push ax
+    push cx
+    push dx
+    push si
+    push ds
+    add ax, FAT_LBA_OFFSET
+    adc dx, 0
+    mov [cs:disk_packet_lba], ax
+    mov [cs:disk_packet_lba + 2], dx
+    mov [cs:disk_packet_lba + 4], word 0
+    mov [cs:disk_packet_lba + 6], word 0
+    mov [cs:disk_packet_off], bx
+    mov [cs:disk_packet_seg], es
+    mov ax, cs
+    mov ds, ax
+    mov si, disk_packet
+    mov dl, [cs:boot_drive]
+    mov ax, 0x4300
+    sti
+    int 0x13
+    mov [cs:tmp_disk_status], ah
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+%endif
 
 int21_count_chain:
     push bx
@@ -17080,6 +17198,7 @@ tmp_cluster dw 0
 tmp_cluster_off dw 0
 tmp_sector_off dw 0
 tmp_lba dw 0
+tmp_lba_hi dw 0
 tmp_capacity dw 0
 tmp_next_cluster dw 0
 tmp_exec_limit dw 0
