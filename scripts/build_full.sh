@@ -63,6 +63,8 @@ GFXRECT_MAX_SIZE=1024
 GFXSTAR_SRC="src/com/gfxstar.asm"
 GFXSTAR_BIN="build/full/obj/gfxstar.com"
 GFXSTAR_MAX_SIZE=1024
+MOUSE_SRC="src/com/mouse.asm"
+MOUSE_BIN="build/full/obj/mouse.com"
 CIUKWIN_SRC="src/com/ciukwin.asm"
 CIUKWIN_BIN="build/full/obj/ciukwin.com"
 CIUKWIN_MAX_SIZE=4096
@@ -178,7 +180,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -246,6 +248,7 @@ nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
 nasm -f bin "$CIUKEDIT_SRC" -o "$CIUKEDIT_BIN"
 nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
 nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
+nasm -f bin "$MOUSE_SRC" -o "$MOUSE_BIN"
 nasm -f bin "$CIUKWIN_SRC" -o "$CIUKWIN_BIN"
 nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL" -D SETUP_ENABLE_RAW_HDD_DESTRUCTIVE="$SETUP_RAW_HDD_DESTRUCTIVE" -D SETUP_LIVE_CD_MODE="$SETUP_LIVE_CD_MODE" -o "$SETUP_BIN"
 nasm -f bin "$FORMAT_SRC" -o "$FORMAT_BIN"
@@ -646,6 +649,9 @@ mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/RUNTIME.BIN
 echo "[build-full] injecting DRVLOAD.COM helper to ${DRIVERS_IMAGE_DIR%/}/DRVLOAD.COM"
 mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
 mcopy -o -i "$IMG" "$DRVLOAD_BIN" "${DRIVERS_IMAGE_DIR%/}/DRVLOAD.COM"
+
+echo "[build-full] injecting MOUSE.COM helper to ::SYSTEM/MOUSE.COM"
+mcopy -o -i "$IMG" "$MOUSE_BIN" ::SYSTEM/MOUSE.COM
 
 echo "[build-full] shell-only profile: external desktop payload injection disabled"
 if [[ -d "$DOOM_SRC_DIR" ]]; then

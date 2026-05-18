@@ -20,6 +20,7 @@ main_loop:
     push ds
     pop es
 
+    call poll_pending_power_action
     call print_prompt
 
     call read_line
@@ -33,7 +34,7 @@ main_loop:
     cmp al, ' '
     je .cmd_done
     call upcase_al
-    cmp di, cmd_buf + 7
+    cmp di, cmd_buf + 15
     jae .skip_store
     stosb
 .skip_store:
@@ -142,18 +143,60 @@ main_loop:
 
 .check_quit:
     cmp byte [cmd_buf + 0], 'Q'
-    jne .check_path
+    jne .check_power
     cmp byte [cmd_buf + 1], 'U'
-    jne .check_path
+    jne .check_power
     cmp byte [cmd_buf + 2], 'I'
-    jne .check_path
+    jne .check_power
     cmp byte [cmd_buf + 3], 'T'
-    jne .check_path
+    jne .check_power
     cmp byte [cmd_buf + 4], 0
-    jne .check_path
+    jne .check_power
 .do_exit:
     mov ax, 0x4C00
     int 0x21
+
+.check_power:
+    cmp byte [cmd_buf + 0], 'R'
+    jne .check_shutdown
+    cmp byte [cmd_buf + 1], 'E'
+    jne .check_shutdown
+    cmp byte [cmd_buf + 2], 'B'
+    jne .check_shutdown
+    cmp byte [cmd_buf + 3], 'O'
+    jne .check_shutdown
+    cmp byte [cmd_buf + 4], 'O'
+    jne .check_shutdown
+    cmp byte [cmd_buf + 5], 'T'
+    jne .check_shutdown
+    cmp byte [cmd_buf + 6], 0
+    jne .check_shutdown
+    mov al, 1
+    call handle_power_command
+    jmp main_loop
+
+.check_shutdown:
+    cmp byte [cmd_buf + 0], 'S'
+    jne .check_path
+    cmp byte [cmd_buf + 1], 'H'
+    jne .check_path
+    cmp byte [cmd_buf + 2], 'U'
+    jne .check_path
+    cmp byte [cmd_buf + 3], 'T'
+    jne .check_path
+    cmp byte [cmd_buf + 4], 'D'
+    jne .check_path
+    cmp byte [cmd_buf + 5], 'O'
+    jne .check_path
+    cmp byte [cmd_buf + 6], 'W'
+    jne .check_path
+    cmp byte [cmd_buf + 7], 'N'
+    jne .check_path
+    cmp byte [cmd_buf + 8], 0
+    jne .check_path
+    mov al, 2
+    call handle_power_command
+    jmp main_loop
 
 .check_path:
     cmp byte [cmd_buf + 0], 'P'
@@ -763,6 +806,8 @@ main_loop:
     mov [exec_tail_src], si
     call build_exec_tail
     call setup_exec_block
+    call exec_try_known_fallback
+    jnc .exec_found
     call exec_try_current
     jnc .exec_found
     cmp ax, 2
@@ -807,6 +852,223 @@ main_loop:
     mov si, msg_exec_fail
     call print_dual_dollar_string
     jmp main_loop
+
+handle_power_command:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov [power_requested_action], al
+    mov si, [echo_ptr]
+    mov cx, [echo_len]
+    call skip_spaces
+    jcxz .immediate
+
+    mov di, src_path
+.token_copy:
+    mov al, [si]
+    cmp al, 0
+    je .token_done
+    cmp al, ' '
+    je .token_done
+    cmp di, src_path + 63
+    jae .token_skip
+    call upcase_al
+    mov [di], al
+    inc di
+.token_skip:
+    inc si
+    jmp .token_copy
+
+.token_done:
+    mov byte [di], 0
+    mov si, src_path
+    mov di, power_token_cancel
+    call strings_equal
+    jz .cancel
+    mov si, src_path
+    mov di, power_token_status
+    call strings_equal
+    jz .status
+    call parse_src_path_seconds
+    jc .usage
+    test ax, ax
+    jz .immediate
+    call schedule_power_action
+    jmp .done
+
+.immediate:
+    mov al, [power_requested_action]
+    cmp al, 1
+    je .do_reboot
+    mov si, msg_shutdown_now
+    call print_dual_dollar_string
+    call shutdown_system
+.do_reboot:
+    mov si, msg_reboot_now
+    call print_dual_dollar_string
+    call reboot_system
+
+.cancel:
+    cmp byte [pending_power_action], 0
+    je .none
+    mov byte [pending_power_action], 0
+    mov si, msg_power_cancel
+    call print_dual_dollar_string
+    jmp .done
+
+.status:
+    cmp byte [pending_power_action], 0
+    je .none
+    cmp byte [pending_power_action], 1
+    je .status_reboot
+    mov si, msg_power_status_shutdown
+    call print_dual_dollar_string
+    jmp .done
+.status_reboot:
+    mov si, msg_power_status_reboot
+    call print_dual_dollar_string
+    jmp .done
+
+.none:
+    mov si, msg_power_status_none
+    call print_dual_dollar_string
+    jmp .done
+
+.usage:
+    mov al, [power_requested_action]
+    cmp al, 1
+    je .usage_reboot
+    mov si, msg_shutdown_use
+    call print_dual_dollar_string
+    jmp .done
+.usage_reboot:
+    mov si, msg_reboot_use
+    call print_dual_dollar_string
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+schedule_power_action:
+    push bx
+    push dx
+
+    mov bx, 18
+    mul bx
+    or dx, dx
+    jnz .fallback_tick
+    or ax, ax
+    jnz .ticks_ready
+.fallback_tick:
+    mov ax, 1
+
+.ticks_ready:
+    mov bx, ax
+    call get_bios_tick_low
+    add ax, bx
+    mov [pending_power_due_tick], ax
+    mov al, [power_requested_action]
+    mov [pending_power_action], al
+    cmp al, 1
+    je .reboot_msg
+    mov si, msg_shutdown_scheduled
+    call print_dual_dollar_string
+    jmp .done
+.reboot_msg:
+    mov si, msg_reboot_scheduled
+    call print_dual_dollar_string
+
+.done:
+    pop dx
+    pop bx
+    ret
+
+poll_pending_power_action:
+    cmp byte [pending_power_action], 0
+    je .done
+    call get_bios_tick_low
+    sub ax, [pending_power_due_tick]
+    cmp ax, 0x8000
+    jae .done
+    mov al, [pending_power_action]
+    mov byte [pending_power_action], 0
+    cmp al, 1
+    je .reboot_now
+    mov si, msg_shutdown_now
+    call print_dual_dollar_string
+    call shutdown_system
+.reboot_now:
+    mov si, msg_reboot_now
+    call print_dual_dollar_string
+    call reboot_system
+
+.done:
+    ret
+
+parse_src_path_seconds:
+    push bx
+    push cx
+    push dx
+    push si
+
+    xor ax, ax
+    xor cx, cx
+    mov si, src_path
+
+.loop:
+    mov bl, [si]
+    test bl, bl
+    jz .end
+    cmp bl, '0'
+    jb .fail
+    cmp bl, '9'
+    ja .fail
+    mov bx, 10
+    mul bx
+    or dx, dx
+    jne .fail
+    mov bl, [si]
+    sub bl, '0'
+    xor bh, bh
+    add ax, bx
+    cmp ax, 600
+    ja .fail
+    inc si
+    inc cx
+    jmp .loop
+
+.end:
+    or cx, cx
+    jz .fail
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+get_bios_tick_low:
+    push es
+    xor ax, ax
+    mov es, ax
+    mov ax, [es:0x046C]
+    pop es
+    ret
 
 skip_spaces:
     jcxz .done
@@ -1451,6 +1713,14 @@ where_try_known_fallback:
     mov di, where_name_dos4gw_exe
     call strings_equal
     jz .dos4gw
+    mov si, src_path
+    mov di, where_name_mouse
+    call strings_equal
+    jz .mouse
+    mov si, src_path
+    mov di, where_name_mouse_com
+    call strings_equal
+    jz .mouse
     stc
     ret
 .shell:
@@ -1460,6 +1730,11 @@ where_try_known_fallback:
     ret
 .dos4gw:
     mov si, where_out_dos4gw
+    call print_dual_dollar_string
+    clc
+    ret
+.mouse:
+    mov si, where_out_mouse
     call print_dual_dollar_string
     clc
     ret
@@ -1595,6 +1870,47 @@ exec_run_candidate:
     pop ds
     ret
 
+exec_try_known_fallback:
+    mov si, src_path
+    mov di, where_name_shell
+    call strings_equal
+    jz .shell
+    mov si, src_path
+    mov di, where_name_shell_com
+    call strings_equal
+    jz .shell
+    mov si, src_path
+    mov di, where_name_dos4gw
+    call strings_equal
+    jz .dos4gw
+    mov si, src_path
+    mov di, where_name_dos4gw_exe
+    call strings_equal
+    jz .dos4gw
+    mov si, src_path
+    mov di, where_name_mouse
+    call strings_equal
+    jz .mouse
+    mov si, src_path
+    mov di, where_name_mouse_com
+    call strings_equal
+    jz .mouse
+    stc
+    ret
+.shell:
+    mov si, exec_path_system_shell
+    jmp .run
+.dos4gw:
+    mov si, exec_path_drivers_dos4gw
+    jmp .run
+.mouse:
+    mov si, exec_path_system_mouse
+.run:
+    mov di, dst_path
+    call copy_z_to_di
+    call exec_run_candidate
+    ret
+
 build_exec_tail:
     push ax
     push cx
@@ -1630,17 +1946,40 @@ build_exec_tail:
     pop ax
     ret
 
+reboot_system:
+    push cs
+    pop ds
+    push cs
+    pop es
+    xor ax, ax
+    mov cx, ax
+    mov dx, ax
+    int 0x19
+    hlt
+    jmp reboot_system
+
+shutdown_system:
+    push cs
+    pop ds
+    xor ax, ax
+    mov cx, ax
+    mov dx, ax
+    mov sp, 0xFFFC
+    hlt
+    jmp shutdown_system
+
 msg_banner  db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A
-            db 'Type HELP for commands.', 0x0D, 0x0A, '$'
-msg_banner_compact db 'CiukiOS SHELL', 0x0D, 0x0A, '$'
+            db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
+            db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
+msg_banner_compact db 'CiukiOS SHELL ready', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
 msg_help    db 'SHELL.COM commands:', 0x0D, 0x0A
-            db '  System: HELP VER ECHO CLS EXIT', 0x0D, 0x0A
+            db '  System: HELP VER ECHO CLS EXIT QUIT REBOOT SHUTDOWN', 0x0D, 0x0A
             db '  Navigation: CD CHDIR DIR PATH WHERE PWD', 0x0D, 0x0A
             db '  Files: TYPE COPY DEL ERASE REN RENAME MOVE MKDIR MD RMDIR RD', 0x0D, 0x0A
-            db '  Execution: run name or path', 0x0D, 0x0A
+            db '  Execution: run name/path, MOUSE from C:\SYSTEM', 0x0D, 0x0A
             db '  Stage1 fallback: use EXIT or QUIT', 0x0D, 0x0A
-            db '  Use WHERE <name> to see what will run', 0x0D, 0x0A
+            db '  Use WHERE <name>; SHUTDOWN STATUS or CANCEL manage queue', 0x0D, 0x0A
             db '  Aliases: CLEAR QUIT PWD', 0x0D, 0x0A, '$'
 msg_ver     db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A, '$'
 msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
@@ -1672,6 +2011,16 @@ msg_copy_use db 'usage: copy <src> <dst>', 0x0D, 0x0A, '$'
 msg_copy_src_err db 'copy: source not found', 0x0D, 0x0A, '$'
 msg_copy_err db 'copy: failed', 0x0D, 0x0A, '$'
 msg_copy_ok db 'File copied', 0x0D, 0x0A, '$'
+msg_reboot_use db 'usage: reboot [seconds|status|cancel]', 0x0D, 0x0A, '$'
+msg_shutdown_use db 'usage: shutdown [seconds|status|cancel]', 0x0D, 0x0A, '$'
+msg_reboot_scheduled db 'reboot: queued', 0x0D, 0x0A, '$'
+msg_shutdown_scheduled db 'shutdown: queued', 0x0D, 0x0A, '$'
+msg_reboot_now db 'rebooting...', 0x0D, 0x0A, '$'
+msg_shutdown_now db 'halting...', 0x0D, 0x0A, '$'
+msg_power_cancel db 'shutdown: canceled', 0x0D, 0x0A, '$'
+msg_power_status_none db 'shutdown: idle', 0x0D, 0x0A, '$'
+msg_power_status_reboot db 'shutdown: pending reboot', 0x0D, 0x0A, '$'
+msg_power_status_shutdown db 'shutdown: pending halt', 0x0D, 0x0A, '$'
 msg_ctrl_c  db '^C', 0x0D, 0x0A, '$'
 msg_crlf    db 0x0D, 0x0A, '$'
 shell_path_apps db '\APPS\', 0
@@ -1690,12 +2039,23 @@ where_name_shell db 'SHELL', 0
 where_name_shell_com db 'SHELL.COM', 0
 where_name_dos4gw db 'DOS4GW', 0
 where_name_dos4gw_exe db 'DOS4GW.EXE', 0
+where_name_mouse db 'MOUSE', 0
+where_name_mouse_com db 'MOUSE.COM', 0
+power_token_cancel db 'CANCEL', 0
+power_token_status db 'STATUS', 0
 where_out_shell db 'C:\SYSTEM\SHELL.COM', 0x0D, 0x0A, '$'
 where_out_dos4gw db 'C:\SYSTEM\DRIVERS\DOS4GW.EXE', 0x0D, 0x0A, '$'
+where_out_mouse db 'C:\SYSTEM\MOUSE.COM', 0x0D, 0x0A, '$'
+exec_path_system_shell db 'C:\SYSTEM\SHELL.COM', 0
+exec_path_drivers_dos4gw db 'C:\SYSTEM\DRIVERS\DOS4GW.EXE', 0
+exec_path_system_mouse db 'C:\SYSTEM\MOUSE.COM', 0
 
 echo_ptr dw 0
 echo_len dw 0
+pending_power_due_tick dw 0
 where_prefix_ptr dw 0
+power_requested_action db 0
+pending_power_action db 0
 exec_tail_src dw 0
 exec_psp_seg dw 0
 exec_env_seg dw 0
@@ -1705,7 +2065,7 @@ exec_fcb1_ptr dw 0
 exec_fcb1_seg dw 0
 exec_fcb2_ptr dw 0
 exec_fcb2_seg dw 0
-cmd_buf  times 8 db 0
+cmd_buf  times 16 db 0
 input_buf times 127 db 0
 input_draw_len db 0
 history_count db 0

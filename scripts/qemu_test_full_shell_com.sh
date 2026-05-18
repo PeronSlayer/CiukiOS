@@ -424,11 +424,19 @@ PATH_PATTERN='C+[:]+[\\]+A+P+P+S+;+C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+;+C
 WHERE_SHELL_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+S+H+E+L+L+\.*C+O+M+'
 WHERE_DOS4GW_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+[\\]+D+O+S+4+G+W+\.*E+X+E+'
 WHERE_MISSING_PATTERN='W+H+E+R+E+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
+WHERE_MOUSE_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+M+O+U+S+E+\.*C+O+M+'
 EXEC_MISSING_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 UNKNOWN_CMD_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 USAGE_WHERE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
 CWD_APPS_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+[:]+[\\]+A+P+P+S+'
 CLS_BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+S+H+E+L+L+'
+POWER_IDLE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+I+D+L+E+'
+POWER_QUEUE_REBOOT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+P+E+N+D+I+N+G+[[:space:]]+R+E+B+O+O+T+'
+POWER_QUEUE_HALT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+P+E+N+D+I+N+G+[[:space:]]+H+A+L+T+'
+POWER_CANCEL_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+C+A+N+C+E+L+E+D+'
+POWER_REBOOT_QUEUE_PATTERN='R+E+B+O+O+T+[:]+[[:space:]]+Q+U+E+U+E+D+'
+POWER_SHUTDOWN_QUEUE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+Q+U+E+U+E+D+'
+MOUSE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+(I+N+T+3+3+H+[[:space:]]+N+O+T+[[:space:]]+I+N+S+T+A+L+L+E+D+|I+N+T+3+3+H+[[:space:]]+R+E+A+D+Y+)'
 COMDEMO_PASS_PATTERN='C+O+M+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
 ECHO_TOKEN='SH42'
 ECHO_TOKEN_PATTERN='S+H+4+2+'
@@ -599,10 +607,19 @@ else
   send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "PWD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'path' "$PATH_PATTERN" "$APPS_PROMPT_PATTERN" "PATH_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'where MOUSE' "$WHERE_MOUSE_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_MOUSE_OK" "$COMMAND_TIMEOUT_SEC"
   if (( DOS4GW_PRESENT )); then
     send_and_wait_for_pattern_and_prompt 'where DOS4GW' "$WHERE_DOS4GW_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_DOS4GW_OK" "$COMMAND_TIMEOUT_SEC"
   fi
   send_and_wait_for_pattern_and_prompt 'where MISSING987' "$WHERE_MISSING_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_MISSING_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_IDLE_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_IDLE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'reboot 5' "$POWER_REBOOT_QUEUE_PATTERN" "$APPS_PROMPT_PATTERN" "REBOOT_QUEUE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_QUEUE_REBOOT_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_REBOOT_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'shutdown cancel' "$POWER_CANCEL_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_CANCEL_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'shutdown 5' "$POWER_SHUTDOWN_QUEUE_PATTERN" "$APPS_PROMPT_PATTERN" "SHUTDOWN_QUEUE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_QUEUE_HALT_PATTERN" "$APPS_PROMPT_PATTERN" "POWER_SHUTDOWN_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'reboot cancel' "$POWER_CANCEL_PATTERN" "$APPS_PROMPT_PATTERN" "REBOOT_CANCEL_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE' "$MOUSE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PROBE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'COMDEMO.COM' "$COMDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "EXEC_COM_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \' "$ROOT_PROMPT_PATTERN" "EXEC_ROOT_CD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'COMDEMO' "$COMDEMO_PASS_PATTERN" "$ROOT_PROMPT_PATTERN" "EXEC_PATH_OK" "$COMMAND_TIMEOUT_SEC"
