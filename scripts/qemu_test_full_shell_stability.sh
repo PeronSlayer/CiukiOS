@@ -380,8 +380,8 @@ send_and_wait_for_pattern_and_prompt 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
 send_text_keys_and_wait_for_pattern_and_prompt 'pwz' 'd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "BACKSPACE_CORRECTION_PWD" "$COMMAND_TIMEOUT_SEC" backspace
 send_keys_and_wait_for_prompt "$APPS_PROMPT_PATTERN" "TAB_KEY_RECOVERY" "$COMMAND_TIMEOUT_SEC" tab ret
 send_and_wait_for_prompt 'pwd' "$APPS_PROMPT_PATTERN" "PWD_APPS_PROMPT_RETURNED" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_prompt 'woof \APPS' "$APPS_PROMPT_PATTERN" "WOOF_APPS_PROMPT" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_prompt 'woof DOOM' "$DOOM_PROMPT_PATTERN" "WOOF_DOOM_PROMPT" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_prompt 'cd \APPS' "$APPS_PROMPT_PATTERN" "CD_APPS_PROMPT" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_prompt 'cd DOOM' "$DOOM_PROMPT_PATTERN" "CD_DOOM_PROMPT" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'cd..' "$APPS_PROMPT_PATTERN" "CDDOTDOT_APPS_PROMPT" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'cd D:\' "$APPS_PROMPT_PATTERN" "CD_D_ROOT_DEFAULT_C_APPS" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'cd D:APPS' "$APPS_PROMPT_PATTERN" "CD_D_REL_DEFAULT_C_APPS" "$COMMAND_TIMEOUT_SEC"

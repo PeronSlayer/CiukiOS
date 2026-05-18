@@ -3136,7 +3136,6 @@ int21_ctrl_break:
     mov [cs:dos_ctrl_break_flag], dl
     mov ax, 0x3301
     clc
-    ret
 
 int21_get_free_space:
     cmp dl, 0
@@ -9936,31 +9935,42 @@ int21_find_test:
 %if STAGE1_SELFTEST_AUTORUN
 int21_move_rename_path_test:
     push ax
-    push bx
+    push di
     push dx
     push si
     push ds
+    push es
 
     mov ax, cs
     mov ds, ax
+    mov es, ax
 
     mov dx, path_mvren_dir_dos
     mov ah, 0x39
     int 0x21
     jc .fail
 
-    mov bx, cmd_selftest_mv
-    call shell_cmd_move
+    mov dx, path_comdemo_dos
+    mov di, path_mvren_moved_dos
+    mov ah, 0x56
+    int 0x21
+    jc .fail
 
-    mov bx, cmd_selftest_rename
-    call shell_cmd_ren
+    mov dx, path_mvren_moved_dos
+    mov di, path_mvren_final_dos
+    mov ah, 0x56
+    int 0x21
+    jc .fail
 
     mov si, path_mvren_final_dos
     call int21_resolve_and_find_path
     jc .fail
 
-    mov bx, cmd_selftest_restore
-    call shell_cmd_ren
+    mov dx, path_mvren_final_dos
+    mov di, path_comdemo_dos
+    mov ah, 0x56
+    int 0x21
+    jc .fail
 
     mov si, msg_mvren_serial_pass
     call print_string_serial
@@ -9971,10 +9981,11 @@ int21_move_rename_path_test:
     call print_string_serial
 
 .done:
+    pop es
     pop ds
     pop si
     pop dx
-    pop bx
+    pop di
     pop ax
     ret
 
@@ -11615,10 +11626,6 @@ dispatch_command:
     call str_eq
     jc .cmd_pwd
     mov di, bx
-    mov si, str_woof
-    call str_eq
-    jc .cmd_cd
-    mov di, bx
     mov si, str_cdup
     call str_eq
     jc .cmd_cdup
@@ -11626,22 +11633,6 @@ dispatch_command:
     mov si, str_cd
     call str_eq
     jc .cmd_cd
-    mov di, bx
-    mov si, str_move
-    call str_eq
-    jc .cmd_move
-    mov di, bx
-    mov si, str_mv
-    call str_eq
-    jc .cmd_move
-    mov di, bx
-    mov si, str_ren
-    call str_eq
-    jc .cmd_ren
-    mov di, bx
-    mov si, str_rename
-    call str_eq
-    jc .cmd_ren
     mov di, bx
     mov si, str_run
     call str_eq
@@ -11797,14 +11788,6 @@ dispatch_command:
 
 .cmd_cdup:
     call shell_cmd_cdup
-    jmp .done
-
-.cmd_move:
-    call shell_cmd_move
-    jmp .done
-
-.cmd_ren:
-    call shell_cmd_ren
     jmp .done
 
 .cmd_run:
@@ -12498,14 +12481,6 @@ shell_completion_scan_builtins:
     mov si, str_cdup
     call shell_completion_consider_candidate
     mov si, str_cd
-    call shell_completion_consider_candidate
-    mov si, str_move
-    call shell_completion_consider_candidate
-    mov si, str_mv
-    call shell_completion_consider_candidate
-    mov si, str_ren
-    call shell_completion_consider_candidate
-    mov si, str_rename
     call shell_completion_consider_candidate
     mov si, str_run
     call shell_completion_consider_candidate
@@ -13373,11 +13348,6 @@ shell_cmd_help:
     call str_eq
     jc .all
 
-    mov di, bx
-    mov si, str_help_short
-    call str_eq
-    jc .short
-
 .short:
     call print_shell_help
     jmp .done
@@ -13451,8 +13421,8 @@ shell_cmd_cdup:
     pop ax
     ret
 
-shell_cmd_mouse:
 %if STAGE1_DEBUG_COMMANDS
+shell_cmd_mouse:
     push ax
     push bx
     push cx
@@ -13497,8 +13467,8 @@ shell_cmd_mouse:
     ret
 %endif
 
-shell_cmd_keytest:
 %if STAGE1_DEBUG_COMMANDS
+shell_cmd_keytest:
     push ax
     mov si, msg_keytest_prompt
     call print_string_dual
@@ -13598,115 +13568,6 @@ shell_cmd_cd:
     pop dx
     pop bx
     pop ax
-    ret
-
-shell_cmd_move:
-shell_cmd_ren:
-    push bx
-    push ds
-    push es
-    mov ax, cs
-    mov ds, ax
-
-    mov si, bx
-    call shell_arg_ptr
-    call shell_next_arg
-    jc .ren_missing
-    mov [cs:shell_copy_src_ptr], dx
-
-    call shell_next_arg
-    jc .ren_missing
-    mov [cs:shell_copy_dst_ptr], dx
-    mov dx, [cs:shell_copy_src_ptr]
-    mov di, [cs:shell_copy_dst_ptr]
-    jmp .ren_have_dst
-
-.ren_missing:
-    mov ax, 0x0001
-    jmp .ren_fail
-
-.ren_have_dst:
-
-    push di
-    mov ax, ds
-    mov es, ax
-    mov ah, 0x56
-    int 0x21
-    pop di
-    jnc .ren_ok
-
-    ; Destination is a directory: build dst/src_basename and retry rename.
-    push dx
-    mov si, di
-    call int21_resolve_and_find_path
-    jc .ren_fail_pop_src
-    test byte [cs:search_found_attr], 0x10
-    jz .ren_fail_pop_src
-
-    mov si, di
-    mov di, shell_exec_path_buf
-    mov cx, SHELL_EXEC_PATH_BUF_LEN - 1
-
-.build_dst_loop:
-    jcxz .ren_fail_pop_src
-    lodsb
-    cmp al, 0
-    je .build_dst_done
-    stosb
-    dec cx
-    jmp .build_dst_loop
-
-.build_dst_done:
-    cmp di, shell_exec_path_buf
-    je .append_sep
-    mov al, [di - 1]
-    cmp al, 0x5C
-    je .have_sep
-    cmp al, 0x2F
-    je .have_sep
-
-.append_sep:
-    jcxz .ren_fail_pop_src
-    mov al, 0x5C
-    stosb
-    dec cx
-
-.have_sep:
-    pop dx
-    push dx
-
-    mov si, dx
-    call int21_resolve_parent_dir
-    jc .ren_fail_pop_src
-
-.append_name_loop:
-    jcxz .ren_fail_pop_src
-    lodsb
-    stosb
-    dec cx
-    cmp al, 0
-    jne .append_name_loop
-
-    mov ax, ds
-    mov es, ax
-    mov di, shell_exec_path_buf
-    mov ah, 0x56
-    int 0x21
-    pop dx
-    jc .ren_fail
-    jmp .ren_ok
-
-.ren_fail_pop_src:
-    pop dx
-
-.ren_fail:
-    mov si, str_ren
-    call shell_print_error_ax
-
-.ren_ok:
-    pop es
-    pop ds
-    pop bx
     ret
 
 shell_cmd_exit:
@@ -14303,13 +14164,11 @@ print_shell_help:
     call print_string_dual
     ret
 
-print_shell_help_all:
 %if STAGE1_DEBUG_COMMANDS
+print_shell_help_all:
     mov si, msg_help_all
-%else
-    mov si, msg_help_all_disabled
-%endif
     jmp print_string_dual
+%endif
 
 shell_print_error_ax:
     push si
@@ -17133,8 +16992,10 @@ msg_gfxrect_serial_pass db "[GFXRECT-SERIAL] PASS", 0
 msg_gfxrect_serial_fail db "[GFXRECT-SERIAL] FAIL", 0
 msg_gfxstar_serial_pass db "[GFXSTAR-SERIAL] PASS", 0
 msg_gfxstar_serial_fail db "[GFXSTAR-SERIAL] FAIL", 0
+%if STAGE1_SELFTEST_AUTORUN
 msg_mvren_serial_pass db "[MVR] PASS", 13, 10, 0
 msg_mvren_serial_fail db "[MVR] FAIL", 13, 10, 0
+%endif
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
 msg_dir_header db "Dir", 13, 10, 0
@@ -17164,13 +17025,8 @@ str_drives db "drives", 0
 %endif
 str_dir    db "dir", 0
 str_pwd    db "pwd", 0
-str_woof   db "woof", 0
 str_cd     db "cd", 0
 str_cdup   db "cd..", 0
-str_move   db "move", 0
-str_mv     db "mv", 0
-str_ren    db "ren", 0
-str_rename db "rename", 0
 str_run    db "run", 0
 str_exit   db "exit", 0
 %if STAGE1_DEBUG_COMMANDS
@@ -17189,7 +17045,6 @@ str_beep   db "beep", 0
 str_reboot db "reboot", 0
 str_halt   db "halt", 0
 str_help_all db "all", 0
-str_help_short db "short", 0
 str_ext_com db ".COM", 0
 str_ext_exe db ".EXE", 0
 %if STAGE1_SELFTEST_AUTORUN
@@ -17208,13 +17063,8 @@ shell_builtin_name_table:
 %endif
     dw str_dir
     dw str_pwd
-    dw str_woof
     dw str_cdup
     dw str_cd
-    dw str_move
-    dw str_mv
-    dw str_ren
-    dw str_rename
     dw str_run
     dw str_exit
 %if STAGE1_DEBUG_COMMANDS
@@ -17240,10 +17090,8 @@ path_deltest_dos db "\APPS\DELTEST.BIN", 0
 path_gfxrect_dos db "\APPS\GFXRECT.COM", 0
 path_gfxstar_dos db "\APPS\GFXSTAR.COM", 0
 %if STAGE1_SELFTEST_AUTORUN
-cmd_selftest_mv db "mv \APPS\COMDEMO.COM \APPS\T", 0
-cmd_selftest_rename db "ren \APPS\T\COMDEMO.COM \APPS\T\C.COM", 0
-cmd_selftest_restore db "ren \APPS\T\C.COM \APPS\COMDEMO.COM", 0
 path_mvren_dir_dos db "\APPS\T", 0
+path_mvren_moved_dos db "\APPS\T\COMDEMO.COM", 0
 path_mvren_final_dos db "\APPS\T\C.COM", 0
 %endif
 %if FAT_TYPE == 16
