@@ -29,17 +29,16 @@ usage() {
   cat <<'TXT'
 Usage: scripts/qemu_test_full_shell_com.sh [--no-build]
 
-Boots the full profile headlessly, launches \SYSTEM\SHELL.COM from the
-Stage1 shell forced via override, validates help/ver/echo/cls/cd/dir/exit, and
-confirms the Stage1 prompt returns afterward.
+Boots the full profile headlessly with loader-only Stage1, validates the
+SHELL.COM session, and confirms that exiting SHELL.COM returns to the
+Stage1 fatal loader halt path instead of an interactive fallback prompt.
 
-Set SHELL_COM_BOOT_AUTORUN=1 to use the full-profile default image, which boots directly
-into \SYSTEM\SHELL.COM, then validates ver/where/exit before falling back
-to the built-in Stage1 shell.
+Set SHELL_COM_BOOT_AUTORUN=1 to run a shorter boot smoke that validates
+direct boot into \SYSTEM\SHELL.COM, then checks the fatal halt path after exit.
 
 Set SHELL_COM_BOOT_EXPECT_FALLBACK=1 together with SHELL_COM_BOOT_AUTORUN=1
 to remove \SYSTEM\SHELL.COM from the test image, then verify the short
-fallback warning and the built-in Stage1 shell prompt.
+fatal loader message and no shell prompt.
 TXT
 }
 
@@ -166,6 +165,24 @@ wait_for_strings_count_from_offset() {
     now="$(date +%s)"
     if (( now - start >= timeout_sec )); then
       return 1
+    fi
+  done
+}
+
+assert_no_strings_regex_from_offset() {
+  local file="$1"
+  local pattern="$2"
+  local offset="$3"
+  local timeout_sec="$4"
+  local start now
+  start="$(date +%s)"
+  while true; do
+    if strings_from_offset "$file" "$offset" | grep -Eiq "$pattern"; then
+      return 1
+    fi
+    now="$(date +%s)"
+    if (( now - start >= timeout_sec )); then
+      return 0
     fi
   done
 }
@@ -324,11 +341,7 @@ fi
 
 if (( DO_BUILD )); then
   echo "[shell-com] build step"
-  if (( BOOT_AUTORUN )); then
-    bash scripts/build_full.sh
-  else
-    CIUKIOS_STAGE1_BOOT_EXTERNAL_SHELL=0 bash scripts/build_full.sh
-  fi
+  CIUKIOS_STAGE1_BOOT_EXTERNAL_SHELL=1 bash scripts/build_full.sh
 fi
 
 if [[ ! -f "$IMG" ]]; then
@@ -419,7 +432,9 @@ HELP_EXEC_PATTERN='E+X+E+C+U+T+I+O+N+[:]+'
 HELP_FALLBACK_PATTERN='S+T+A+G+E+1+[[:space:]]+F+A+L+L+B+A+C+K+'
 HELP_WHERE_HINT_PATTERN='U+S+E+[[:space:]]+W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
 VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+.*C+I+U+K+I+D+O+S+.*S+H+E+L+L+'
-FALLBACK_WARNING_PATTERN='W+A+R+N+[:]+[[:space:]]+S+H+E+L+L+[[:space:]]+B+O+O+T+[[:space:]]+F+A+I+L+'
+LOADER_FATAL_MISSING_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+M+I+S+S+I+N+G+'
+LOADER_FATAL_EXITED_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+E+X+I+T+E+D+'
+HALTING_PATTERN='H+A+L+T+I+N+G+'
 PATH_PATTERN='C+[:]+[\\]+A+P+P+S+;+C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+;+C+[:]+[\\]+S+Y+S+T+E+M+'
 WHERE_SHELL_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+S+H+E+L+L+\.*C+O+M+'
 WHERE_DOS4GW_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+[\\]+D+O+S+4+G+W+\.*E+X+E+'
@@ -500,15 +515,21 @@ mark_pass "MONITOR_SOCKET_READY"
 
 if (( BOOT_AUTORUN )); then
   if (( BOOT_EXPECT_FALLBACK )); then
-    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$FALLBACK_WARNING_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
-      mark_fail "FALLBACK_WARNING" "fallback warning not detected"
+    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_MISSING_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+      mark_fail "LOADER_FATAL_MISSING" "fatal missing-shell message not detected"
     fi
-    mark_pass "FALLBACK_WARNING"
-    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_PROMPT_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
-      mark_fail "FALLBACK_STAGE1_PROMPT" "Stage1 prompt not detected after fallback"
+    mark_pass "LOADER_FATAL_MISSING"
+    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HALTING_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+      mark_fail "LOADER_FATAL_HALT" "halting message not detected after missing shell"
     fi
-    mark_pass "FALLBACK_STAGE1_PROMPT"
-    send_and_wait_for_prompt 'ver' "$STAGE1_PROMPT_PATTERN" "FALLBACK_STAGE1_STABLE" "$COMMAND_TIMEOUT_SEC"
+    mark_pass "LOADER_FATAL_HALT"
+    if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 5; then
+      mark_fail "NO_SHELL_PROMPT" "shell prompt appeared after fatal missing-shell path"
+    fi
+    if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_PROMPT_PATTERN" 0 5; then
+      mark_fail "NO_STAGE1_PROMPT" "Stage1 prompt appeared after fatal missing-shell path"
+    fi
+    mark_pass "NO_FALLBACK_PROMPT"
   else
     if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
       mark_fail "INITIAL_SHELL_COM_PROMPT" "initial SHELL.COM prompt not detected"
@@ -520,15 +541,21 @@ if (( BOOT_AUTORUN )); then
     mark_pass "INITIAL_SHELL_COM_PROMPT"
     send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
-    send_and_wait_for_prompt 'exit' "$STAGE1_PROMPT_PATTERN" "EXIT_TO_STAGE1_OK" "$COMMAND_TIMEOUT_SEC"
+    EXIT_OFFSET="$(file_size "$SERIAL_LOG")"
+    send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' || mark_fail "SEND_EXIT_FATAL_OK" "cannot send command: exit"
+    wait_for_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_EXITED_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_FATAL_OK" "fatal exit message not detected after: exit"
+    wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HALTING_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_FATAL_OK" "halting message not detected after: exit"
+    if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_PROMPT_PATTERN" "$EXIT_OFFSET" 5; then
+      mark_fail "EXIT_NO_STAGE1_PROMPT" "Stage1 prompt appeared after SHELL.COM exit"
+    fi
+    mark_pass "EXIT_FATAL_OK"
   fi
 else
-  if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_PROMPT_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
-    mark_fail "INITIAL_STAGE1_PROMPT" "initial CiukiOS C:\\APPS prompt not detected"
+  if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+    mark_fail "INITIAL_SHELL_COM_PROMPT" "initial SHELL.COM prompt not detected"
   fi
-  mark_pass "INITIAL_STAGE1_PROMPT"
+  mark_pass "INITIAL_SHELL_COM_PROMPT"
 
-  send_and_wait_for_prompt '\SYSTEM\SHELL.COM' "$CHILD_PROMPT_PATTERN" "SHELL_LAUNCHED" "$COMMAND_TIMEOUT_SEC"
   if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$BANNER_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
     mark_fail "BANNER_OK" "SHELL.COM banner not detected"
   fi
@@ -665,7 +692,14 @@ else
   send_and_wait_for_pattern_and_prompt 'del \APPS\TYPETEST.TXT' "$DEL_OK_PATTERN" "$APPS_PROMPT_PATTERN" "DEL_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'del \APPS\NOPE.TXT' "$DEL_ERROR_PATTERN" "$APPS_PROMPT_PATTERN" "DEL_MISSING_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'erase \APPS\ERASETST.TXT' "$DEL_OK_PATTERN" "$APPS_PROMPT_PATTERN" "ERASE_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_prompt 'quit' "$STAGE1_PROMPT_PATTERN" "QUIT_OK" "$COMMAND_TIMEOUT_SEC"
+  EXIT_OFFSET="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' || mark_fail "SEND_EXIT_FATAL_OK" "cannot send command: exit"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_EXITED_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_FATAL_OK" "fatal exit message not detected after: exit"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HALTING_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_FATAL_OK" "halting message not detected after: exit"
+  if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_PROMPT_PATTERN" "$EXIT_OFFSET" 5; then
+    mark_fail "EXIT_NO_STAGE1_PROMPT" "Stage1 prompt appeared after SHELL.COM exit"
+  fi
+  mark_pass "EXIT_FATAL_OK"
 fi
 
 hmp "$MON_SOCK" "$CMD_LOG" "quit" >/dev/null 2>&1 || true

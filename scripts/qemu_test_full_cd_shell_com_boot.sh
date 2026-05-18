@@ -26,12 +26,12 @@ usage() {
 Usage: scripts/qemu_test_full_cd_shell_com_boot.sh [--no-build]
 
 Boots the direct full-CD ISO headlessly with default SHELL.COM boot enabled,
-validates the SHELL.COM prompt on D:, runs ver/where SHELL/exit, and confirms
-the Stage1 fallback prompt returns afterward.
+validates the SHELL.COM prompt on D:, runs a focused smoke, and confirms
+that exiting SHELL.COM drops into the fatal loader halt path instead of a
+Stage1 fallback prompt.
 
 Set FULL_CD_SHELL_COM_BOOT_EXPECT_FALLBACK=1 to remove \SYSTEM\SHELL.COM
-from the test image, then verify the short fallback warning and the Stage1
-prompt on D: without a reboot loop.
+from the test image, then verify the fatal loader message and no prompt.
 TXT
 }
 
@@ -138,6 +138,24 @@ wait_for_strings_regex_from_offset() {
     now="$(date +%s)"
     if (( now - start >= timeout_sec )); then
       return 1
+    fi
+  done
+}
+
+assert_no_strings_regex_from_offset() {
+  local file="$1"
+  local pattern="$2"
+  local offset="$3"
+  local timeout_sec="$4"
+  local start now
+  start="$(date +%s)"
+  while true; do
+    if strings_from_offset "$file" "$offset" | grep -Eiq "$pattern"; then
+      return 1
+    fi
+    now="$(date +%s)"
+    if (( now - start >= timeout_sec )); then
+      return 0
     fi
   done
 }
@@ -296,7 +314,9 @@ STAGE1_APPS_PROMPT_PATTERN="${STAGE1_PROMPT_PREFIX}D{1,2}:{1,2}[\\]{1,2}A{1,2}P{
 VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+.*C+I+U+K+I+D+O+S+.*S+H+E+L+L+'
 WHERE_SHELL_PATTERN='[CD]+[:]+[\\]+S+Y+S+T+E+M+[\\]+S+H+E+L+L+\.*C+O+M+'
 WHERE_MOUSE_PATTERN='[CD]+[:]+[\\]+S+Y+S+T+E+M+[\\]+M+O+U+S+E+\.*C+O+M+'
-FALLBACK_WARNING_PATTERN='W+A+R+N+[:]+[[:space:]]+S+H+E+L+L+[[:space:]]+B+O+O+T+[[:space:]]+F+A+I+L+'
+LOADER_FATAL_MISSING_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+M+I+S+S+I+N+G+'
+LOADER_FATAL_EXITED_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+E+X+I+T+E+D+'
+HALTING_PATTERN='H+A+L+T+I+N+G+'
 POWER_IDLE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+I+D+L+E+'
 POWER_QUEUE_REBOOT_PATTERN='R+E+B+O+O+T+[:]+[[:space:]]+Q+U+E+U+E+D+'
 POWER_QUEUE_HALT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+Q+U+E+U+E+D+'
@@ -336,15 +356,21 @@ mark_pass "MONITOR_SOCKET_READY"
 
 if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
   if (( BOOT_EXPECT_FALLBACK )); then
-    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$FALLBACK_WARNING_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
-      mark_fail "FALLBACK_WARNING" "fallback warning not detected"
+    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_MISSING_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+      mark_fail "LOADER_FATAL_MISSING" "fatal missing-shell message not detected"
     fi
-    mark_pass "FALLBACK_WARNING"
-    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_APPS_PROMPT_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
-      mark_fail "FALLBACK_STAGE1_PROMPT" "Stage1 prompt not detected after fallback"
+    mark_pass "LOADER_FATAL_MISSING"
+    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HALTING_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+      mark_fail "LOADER_FATAL_HALT" "halting message not detected after missing shell"
     fi
-    mark_pass "FALLBACK_STAGE1_PROMPT"
-    send_and_wait_for_prompt 'ver' "$STAGE1_APPS_PROMPT_PATTERN" "FALLBACK_STAGE1_STABLE" "$COMMAND_TIMEOUT_SEC"
+    mark_pass "LOADER_FATAL_HALT"
+    if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 5; then
+      mark_fail "NO_SHELL_PROMPT" "shell prompt appeared after fatal missing-shell path"
+    fi
+    if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_APPS_PROMPT_PATTERN" 0 5; then
+      mark_fail "NO_STAGE1_PROMPT" "Stage1 prompt appeared after fatal missing-shell path"
+    fi
+    mark_pass "NO_FALLBACK_PROMPT"
     hmp "$MON_SOCK" "$CMD_LOG" "quit" >/dev/null 2>&1 || true
     set +e
     wait "$QEMU_PID"
@@ -360,12 +386,6 @@ if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 
     strings -a "$SERIAL_LOG" > "$STRINGS_LOG" || true
     echo "[full-cd-shell-com-boot] PASS"
     exit 0
-  fi
-  if wait_for_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_APPS_PROMPT_PATTERN" 0 5; then
-    send_and_wait_for_prompt 'cd ..' "${STAGE1_PROMPT_PREFIX}D{1,2}:{1,2}[\\]{1,2}>{1,2}" "MANUAL_RUN_ROOT_OK" "$COMMAND_TIMEOUT_SEC"
-    send_and_wait_for_prompt 'cd SYSTEM' "${STAGE1_PROMPT_PREFIX}D{1,2}:{1,2}[\\]{1,2}S{1,2}Y{1,2}S{1,2}T{1,2}E{1,2}M{1,2}[\\]{1,2}>{1,2}" "MANUAL_RUN_SYSTEM_DIR_OK" "$COMMAND_TIMEOUT_SEC"
-    send_and_wait_for_pattern_and_prompt 'run SHELL.COM' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "MANUAL_RUN_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
-    mark_fail "INITIAL_SHELL_COM_PROMPT" "autorun shell boot did not trigger on CD image"
   fi
   mark_fail "INITIAL_SHELL_COM_PROMPT" "initial D:\\APPS SHELL.COM prompt not detected"
 fi
@@ -383,7 +403,14 @@ send_and_wait_for_pattern_and_prompt 'shutdown status' "$POWER_STATUS_HALT_PATTE
 send_and_wait_for_pattern_and_prompt 'shutdown cancel' "$POWER_CANCEL_PATTERN" "$CHILD_PROMPT_PATTERN" "SHUTDOWN_CANCEL_OK" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_pattern_and_prompt 'shutdown /t nope' "$POWER_BAD_TIMER_PATTERN" "$CHILD_PROMPT_PATTERN" "POWER_BAD_TIMER_OK" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_pattern_and_prompt 'MOUSE' "$MOUSE_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_OK" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_prompt 'exit' "$STAGE1_APPS_PROMPT_PATTERN" "EXIT_TO_STAGE1_OK" "$COMMAND_TIMEOUT_SEC"
+EXIT_OFFSET="$(file_size "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' || mark_fail "SEND_EXIT_FATAL_OK" "cannot send command: exit"
+wait_for_strings_regex_from_offset "$SERIAL_LOG" "$LOADER_FATAL_EXITED_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_FATAL_OK" "fatal exit message not detected after: exit"
+wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HALTING_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_FATAL_OK" "halting message not detected after: exit"
+if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$STAGE1_APPS_PROMPT_PATTERN" "$EXIT_OFFSET" 5; then
+  mark_fail "EXIT_NO_STAGE1_PROMPT" "Stage1 prompt appeared after SHELL.COM exit"
+fi
+mark_pass "EXIT_FATAL_OK"
 
 hmp "$MON_SOCK" "$CMD_LOG" "quit" >/dev/null 2>&1 || true
 set +e

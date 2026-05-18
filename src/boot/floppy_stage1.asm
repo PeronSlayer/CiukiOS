@@ -81,6 +81,9 @@ org 0x0000
 %ifndef STAGE1_BOOT_EXTERNAL_SHELL
 %define STAGE1_BOOT_EXTERNAL_SHELL 0
 %endif
+%ifndef STAGE1_INTERACTIVE_SHELL
+%define STAGE1_INTERACTIVE_SHELL 0
+%endif
 %ifndef HARDWARE_VALIDATION_SCREEN
 %define HARDWARE_VALIDATION_SCREEN 0
 %endif
@@ -176,17 +179,30 @@ stage1_start:
 %endif
 
     call flush_keyboard_buffer
-%if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
     push cs
     pop ds
+%if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
     mov si, dos_env_exec_path
     call shell_try_exec_path
-    jnc .boot_shell_done
-    mov si, msg_shell_status
-    call print_string_dual
-.boot_shell_done:
+    jnc .shell_returned
+    mov si, msg_shell_missing_fatal
+    jmp stage1_loader_fatal
+.shell_returned:
+    mov si, msg_shell_returned_fatal
+    jmp stage1_loader_fatal
+%else
+    mov si, msg_shell_missing_fatal
+    jmp stage1_loader_fatal
 %endif
-    jmp main_loop
+
+stage1_loader_fatal:
+    call print_string_dual
+    mov si, msg_halting
+    call print_string_dual
+.halt_forever:
+    cli
+    hlt
+    jmp .halt_forever
 
 helper_get_drive_letter:
     ; Input: al = boot_drive value (BIOS format: 0x00=A, 0x01=B, 0x80=C, 0x81=D, etc.)
@@ -201,6 +217,7 @@ helper_get_drive_letter:
     add al, 0x41    ; Convert to ASCII ('A', 'B', etc.)
     ret
 
+%if STAGE1_INTERACTIVE_SHELL
 print_prompt:
     push ax
     push si
@@ -243,6 +260,7 @@ main_loop:
     call read_command_line
     call dispatch_command
     jmp main_loop
+%endif
 
 init_shell_default_dirs:
     push ax
@@ -11582,6 +11600,7 @@ bios_write_chs_sector:
     int 0x13
     ret
 
+%if STAGE1_INTERACTIVE_SHELL
 dispatch_command:
     mov si, cmd_buffer
     call skip_spaces
@@ -12700,6 +12719,7 @@ shell_completion_consider_candidate:
     pop bx
     pop ax
     ret
+%endif
 
 skip_spaces:
 .skip:
@@ -13225,6 +13245,7 @@ shell_try_resolve_exec_path_drivers:
     pop bx
     ret
 
+%if STAGE1_INTERACTIVE_SHELL
 shell_try_exec_token:
     push ds
     push cs
@@ -13249,6 +13270,7 @@ shell_try_exec_token:
 .done:
     pop ds
     ret
+%endif
 
 shell_try_exec_path:
     push ds
@@ -13326,6 +13348,7 @@ shell_is_builtin_token:
     pop ax
     ret
 
+%if STAGE1_INTERACTIVE_SHELL
 shell_cmd_help:
     push ax
     push bx
@@ -13830,6 +13853,8 @@ shell_print_root_entry:
     pop ax
     ret
 
+%endif
+
 ; Compare DI (input command) to SI (constant command string).
 ; Carry set if equal and fully terminated.
 str_eq:
@@ -14151,6 +14176,7 @@ shell_u16_to_dec:
     ret
 %endif
 
+%if STAGE1_INTERACTIVE_SHELL
 print_shell_help:
     mov si, msg_help_header
     call print_string_dual
@@ -14181,6 +14207,7 @@ shell_print_error_ax:
     call print_newline_dual
     pop si
     ret
+%endif
 
 print_hex16_dual:
     push ax
@@ -16852,7 +16879,9 @@ disk_packet:
 disk_packet_off dw 0
 disk_packet_seg dw 0
 disk_packet_lba dq 0
+%if STAGE1_INTERACTIVE_SHELL
 cmd_buffer times CMD_BUF_LEN db 0
+%endif
 shell_exec_path_buf times SHELL_EXEC_PATH_BUF_LEN db 0
 shell_exec_param_block:
     dw 0
@@ -16870,6 +16899,7 @@ shell_copy_dst_ptr dw 0
 shell_copy_dst_cluster dw 0
 %endif
 shell_last_error_ax dw 0
+%if STAGE1_INTERACTIVE_SHELL
 shell_edit_len db 0
 shell_edit_cursor db 0
 shell_edit_cap db 0
@@ -16889,6 +16919,7 @@ shell_completion_file_buf times CMD_BUF_LEN db 0
 shell_completion_saved_dta_seg dw 0
 shell_completion_saved_dta_off dw 0
 shell_completion_dta times 64 db 0
+%endif
 
 msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
 msg_diag_begin    db "D", 13, 10, 0
@@ -16998,6 +17029,8 @@ msg_mvren_serial_fail db "[MVR] FAIL", 13, 10, 0
 %endif
 msg_rebooting db "rebooting...", 13, 10, 0
 msg_halting   db "halting...", 13, 10, 0
+msg_shell_missing_fatal db "SHELL.COM missing", 13, 10, 0
+msg_shell_returned_fatal db "SHELL.COM exited", 13, 10, 0
 msg_dir_header db "Dir", 13, 10, 0
 msg_dir_empty db "no files found", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
