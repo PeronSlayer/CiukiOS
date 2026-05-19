@@ -460,6 +460,19 @@ POWER_SHUTDOWN_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+S+H+U+T+D+O+W+N+'
 MOUSE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+(I+N+T+3+3+H+[[:space:]]+N+O+T+[[:space:]]+I+N+S+T+A+L+L+E+D+|I+N+T+3+3+H+[[:space:]]+R+E+A+D+Y+)'
 MOUSE_RUNTIME_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+U+N+T+I+M+E+[[:space:]]+B+A+C+K+E+D+[[:space:]]+S+E+R+V+I+C+E+[[:space:]]+A+C+T+I+V+E+'
 MOUSE_INSTALL_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+U+N+T+I+M+E+[[:space:]]+B+A+C+K+E+D+[[:space:]]+S+E+R+V+I+C+E+[[:space:]]+A+L+R+E+A+D+Y+[[:space:]]+I+N+S+T+A+L+L+E+D+'
+MOUSE_INFO_PATTERN='I+N+F+O+[[:space:]]+V+E+R+=+0+X+0+6+1+A+'
+MOUSE_POS_10_20_PATTERN='M+O+U+S+E+[:]+[[:space:]]+S+E+T+[[:space:]]+P+O+S+I+T+I+O+N+'
+MOUSE_RANGE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+S+E+T+[[:space:]]+R+A+N+G+E+'
+MOUSE_RANGE_CLAMP_PATTERN='M+O+U+S+E+[:]+[[:space:]]+S+E+T+[[:space:]]+P+O+S+I+T+I+O+N+'
+MOUSE_SENS_PATTERN='M+O+U+S+E+[:]+[[:space:]]+S+E+N+S+I+T+I+V+I+T+Y+'
+MOUSE_MOTION_ZERO_PATTERN='M+O+T+I+O+N+[[:space:]]+D+X+=+0+X+'
+MOUSE_PRESS_ZERO_PATTERN='P+R+E+S+S+[[:space:]]+C+O+U+N+T+=+0+X+'
+MOUSE_RELEASE_ZERO_PATTERN='R+E+L+E+A+S+E+[[:space:]]+C+O+U+N+T+=+0+X+'
+MOUSE_PAGE2_PATTERN='P+A+G+E+=+0+X+'
+MOUSE_RATE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+A+T+E+[[:space:]]+S+E+T+'
+MOUSE_DISABLE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+D+R+I+V+E+R+[[:space:]]+D+I+S+A+B+L+E+D+'
+MOUSE_ENABLE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+D+R+I+V+E+R+[[:space:]]+E+N+A+B+L+E+D+'
+MOUSE_RESET_CENTER_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+E+S+E+T+'
 COMDEMO_PASS_PATTERN='C+O+M+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
 ECHO_TOKEN='SH42'
 ECHO_TOKEN_PATTERN='S+H+4+2+'
@@ -679,6 +692,21 @@ else
   send_and_wait_for_pattern_and_prompt 'MOUSE' "$MOUSE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PROBE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'MOUSE INSTALL' "$MOUSE_INSTALL_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_INSTALL_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE INFO' "$MOUSE_INFO_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_INFO_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE POS 10 20' "$MOUSE_POS_10_20_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_POS_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE RANGE 0 100 0 50' "$MOUSE_RANGE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_RANGE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE POS 999 999' "$MOUSE_RANGE_CLAMP_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_CLAMP_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE SENS 8 16 64' "$MOUSE_SENS_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_SENS_SET_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE GETSENS' "$MOUSE_SENS_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_SENS_GET_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE MOTION' "$MOUSE_MOTION_ZERO_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_MOTION_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE PRESS 0' "$MOUSE_PRESS_ZERO_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PRESS_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE RELEASE 0' "$MOUSE_RELEASE_ZERO_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_RELEASE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE PAGE 2' "$MOUSE_PAGE2_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PAGE_SET_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE GETPAGE' "$MOUSE_PAGE2_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PAGE_GET_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE RATE 60' "$MOUSE_RATE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_RATE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE DISABLE' "$MOUSE_DISABLE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_DISABLE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE ENABLE' "$MOUSE_ENABLE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_ENABLE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MOUSE RESET' "$MOUSE_RESET_CENTER_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_RESET_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'COMDEMO.COM' "$COMDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "EXEC_COM_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PERSIST_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \' "$ROOT_PROMPT_PATTERN" "EXEC_ROOT_CD_OK" "$COMMAND_TIMEOUT_SEC"

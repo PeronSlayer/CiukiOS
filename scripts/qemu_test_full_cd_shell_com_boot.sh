@@ -331,6 +331,10 @@ POWER_BAD_TIMER_PATTERN='U+S+A+G+E+[:]+[[:space:]]+S+H+U+T+D+O+W+N+'
 MOUSE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+(I+N+T+3+3+H+[[:space:]]+N+O+T+[[:space:]]+I+N+S+T+A+L+L+E+D+|I+N+T+3+3+H+[[:space:]]+R+E+A+D+Y+)'
 MOUSE_RUNTIME_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+U+N+T+I+M+E+[[:space:]]+B+A+C+K+E+D+[[:space:]]+S+E+R+V+I+C+E+[[:space:]]+A+C+T+I+V+E+'
 MOUSE_INSTALL_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+U+N+T+I+M+E+[[:space:]]+B+A+C+K+E+D+[[:space:]]+S+E+R+V+I+C+E+[[:space:]]+A+L+R+E+A+D+Y+[[:space:]]+I+N+S+T+A+L+L+E+D+'
+MOUSE_INFO_PATTERN='I+N+F+O+[[:space:]]+V+E+R+=+0+X+0+6+1+A+'
+MOUSE_PAGE1_PATTERN='P+A+G+E+=+0+X+'
+MOUSE_DISABLE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+D+R+I+V+E+R+[[:space:]]+D+I+S+A+B+L+E+D+'
+MOUSE_ENABLE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+D+R+I+V+E+R+[[:space:]]+E+N+A+B+L+E+D+'
 
 QEMU_ARGS=(
   -machine pc,vmport=off
@@ -415,6 +419,11 @@ send_and_wait_for_pattern_and_prompt 'shutdown /t nope' "$POWER_BAD_TIMER_PATTER
 send_and_wait_for_pattern_and_prompt 'MOUSE' "$MOUSE_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_OK" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_pattern_and_prompt 'MOUSE INSTALL' "$MOUSE_INSTALL_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_INSTALL_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'MOUSE INFO' "$MOUSE_INFO_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_INFO_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'MOUSE PAGE 1' "$MOUSE_PAGE1_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_PAGE_SET_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'MOUSE GETPAGE' "$MOUSE_PAGE1_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_PAGE_GET_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'MOUSE DISABLE' "$MOUSE_DISABLE_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_DISABLE_OK" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'MOUSE ENABLE' "$MOUSE_ENABLE_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_ENABLE_OK" "$COMMAND_TIMEOUT_SEC"
 EXIT_OFFSET="$(file_size "$SERIAL_LOG")"
 send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' || mark_fail "SEND_EXIT_DISABLED_OK" "cannot send command: exit"
 wait_for_strings_regex_from_offset "$SERIAL_LOG" "$EXIT_DISABLED_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_DISABLED_OK" "disabled exit message not detected after: exit"
