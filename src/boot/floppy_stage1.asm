@@ -17291,7 +17291,7 @@ runtime_probe_marker_prefix db "[S2] ready"
 runtime_probe_marker_prefix_len equ $ - runtime_probe_marker_prefix
 %endif
 
-msg_banner_title db "CiukiOS pre-Alpha v0.6.6 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.6.7 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif

@@ -10,7 +10,7 @@ CiukiOS is not a finished operating system. It is an active learning and researc
 
 ## Current Milestone
 
-Current public version: `CiukiOS pre-Alpha v0.6.6`.
+Current public version: `CiukiOS pre-Alpha v0.6.7`.
 
 The Phase 4 DOOM gameplay milestone is closed. The full FAT16 runtime can launch DOOM through DOS/4GW, load `doom.wad`, initialize the gameplay path, and reach a playable visual runtime.
 

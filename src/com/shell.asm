@@ -2122,7 +2122,7 @@ apm_shutdown_system:
     pop bx
     ret
 
-msg_title_bar db 'CiukiOS pre-Alpha v0.6', 0x0D, 0x0A, '$'
+msg_title_bar db 'CiukiOS pre-Alpha v0.6.7', 0x0D, 0x0A, '$'
 msg_banner_body db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
                 db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
@@ -2134,7 +2134,7 @@ msg_help    db 'SHELL.COM commands:', 0x0D, 0x0A
             db '  Loader-only mode: EXIT and QUIT stay in SHELL.COM', 0x0D, 0x0A
             db '  Use WHERE <name>; SHUTDOWN STATUS or CANCEL manage queue', 0x0D, 0x0A
             db '  Aliases: CLEAR PWD', 0x0D, 0x0A, '$'
-msg_ver     db 'CiukiOS pre-Alpha v0.6', 0x0D, 0x0A, '$'
+msg_ver     db 'CiukiOS pre-Alpha v0.6.7', 0x0D, 0x0A, '$'
 msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
 msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
                   db 'use reboot or shutdown', 0x0D, 0x0A, '$'

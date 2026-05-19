@@ -181,7 +181,7 @@ Validation evidence:
 - `make build-full-cd` PASS after carrying the updated `PMIRQSB TASK` payload into the full-CD image set.
 - `DO_BUILD=0 LOG_FILE=build/full/qemu-pmirqsb-task.log QEMU_STDERR=build/full/qemu-pmirqsb-task.stderr QEMU_CMD_LOG=build/full/qemu-pmirqsb-task.commands.log DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_APP_DIR_IN_IMAGE=::SYSTEM/DRIVERS DOS_TAXONOMY_APP_BINARY_NAME=DOS4GW.EXE DOS_TAXONOMY_CWD='\SYSTEM\DRIVERS' DOS_TAXONOMY_RUN_COMMAND='run DOS4GW.EXE PMIRQSB.LE TASK' DOS_TAXONOMY_APP_RUNTIME_MARKERS='\[PMIRQSB\][[:space:]]+TASK PASS' DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_dos_taxonomy.sh` PASS at `transfer_marker`; fresh markers show `TASK INSTALL`, three `TASK HIT`/`FXDMA START` dispatches, three `FXDMA IRQ` acknowledgements, `TIMER HIT`, `TASK PASS`, and final `PASS`. `runtime_stable` is intentionally FAIL because the probe exits back to the shell after completion.
 
-## pre-Alpha v0.6.6 (2026-05-08)
+## pre-Alpha v0.6.7 (2026-05-08)
 
 1. Rebased the roadmap after Phase 4: DOOM visual gameplay is closed, while Stage1/runtime split work, broader DOS app compatibility, legacy audio, and full/full-CD hardening are the next priorities.
 2. Advanced the Stage1/runtime split foundation with `\SYSTEM\RUNTIME.BIN`, runtime service-table probing, callable service ids 1-5, corrupt-runtime fallback checks, default-drive state bridging, and Stage1 size recovery.
@@ -189,7 +189,7 @@ Validation evidence:
 4. Expanded external DOS application evidence with CIUKEDIT/GFXSTAR smoke coverage, optional DOSNavigator packaging/startup validation, shell chrome isolation, temporary INT 10h/INT 33h external-app handling, and DOSNavigator-focused stability fixes.
 5. Restored and revalidated DOOM startup/gameplay after memory-map and allocator regressions; improved DOOM/DOS taxonomy lanes with honest `runtime_stable` and `visual_gameplay` classification.
 6. Hardened the full-CD Live/install path with the direct El Torito ISO as primary output, visual SETUP UI, destructive HDD install flow, `FORMAT.COM`, topology guards, eject-before-reboot prompt, batched install I/O, and ThinkPad T23 real-hardware follow-ups.
-7. Added public docs for DOS compatibility and legacy audio planning, updated support links, cleaned obsolete project artifacts, and aligned release-facing metadata for `CiukiOS pre-Alpha v0.6.6`.
+7. Added public docs for DOS compatibility and legacy audio planning, updated support links, cleaned obsolete project artifacts, and aligned release-facing metadata for `CiukiOS pre-Alpha v0.6.7`.
 
 ## pre-Alpha v0.6.5 (2026-05-05)
 
