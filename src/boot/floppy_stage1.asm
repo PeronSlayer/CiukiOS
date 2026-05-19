@@ -10520,6 +10520,9 @@ stage1_splash_blit_scaled:
 
     cld
 
+    call stage1_splash_clear_vram
+    jc .fail
+
     xor dx, dx
     xor di, di
     call stage1_splash_set_bank
@@ -10536,6 +10539,7 @@ stage1_splash_blit_scaled:
     mov ax, DOS_IO_BUF_SEG
     mov es, ax
     xor di, di
+    xor ah, ah
     mov cx, SPLASH_SRC_W
 .expand_x:
     lodsb
@@ -10588,6 +10592,45 @@ stage1_splash_blit_scaled:
     pop bp
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+stage1_splash_clear_vram:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    xor dx, dx
+.bank_loop:
+    xor di, di
+    call stage1_splash_set_bank
+    jc .fail
+
+    mov ax, 0xA000
+    mov es, ax
+    xor ax, ax
+    mov cx, 0x8000
+    rep stosb
+
+    inc dx
+    cmp dx, 8
+    jb .bank_loop
+
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop es
+    pop di
     pop dx
     pop cx
     pop bx
