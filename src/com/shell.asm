@@ -4,6 +4,8 @@ org 0x0100
 %define INPUT_BUF_MAX 126
 %define HISTORY_MAX 8
 %define HISTORY_ENTRY_LEN 128
+%define TITLE_BAR_ATTR 0x1F
+%define TITLE_BAR_COL 29
 
 start:
     push cs
@@ -11,7 +13,8 @@ start:
     push ds
     pop es
 
-    mov si, msg_banner
+    call redraw_title_bar
+    mov si, msg_banner_body
     call print_dual_dollar_string
 
 main_loop:
@@ -120,12 +123,7 @@ main_loop:
     xor cx, cx
     mov dx, 0x184F
     int 0x10
-    mov ax, 0x0200
-    xor bx, bx
-    xor dx, dx
-    int 0x10
-    mov si, msg_banner_compact
-    call print_dual_dollar_string
+    call redraw_title_bar
     jmp main_loop
 
 .check_exit:
@@ -1592,6 +1590,41 @@ print_dual_cx_string:
 .done:
     ret
 
+redraw_title_bar:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ax, 0x0600
+    mov bh, TITLE_BAR_ATTR
+    xor cx, cx
+    mov dx, 0x004F
+    int 0x10
+
+    mov ax, 0x0200
+    xor bx, bx
+    xor dh, dh
+    mov dl, TITLE_BAR_COL
+    int 0x10
+
+    mov si, msg_title_bar
+    call print_dual_dollar_string
+
+    mov ax, 0x0200
+    xor bx, bx
+    mov dh, 1
+    xor dl, dl
+    int 0x10
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 dual_putc:
     push ax
     push dx
@@ -2089,10 +2122,9 @@ apm_shutdown_system:
     pop bx
     ret
 
-msg_banner  db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A
-            db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
-            db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
-msg_banner_compact db 'CiukiOS SHELL ready', 0x0D, 0x0A, '$'
+msg_title_bar db 'CiukiOS pre-Alpha v0.6', 0x0D, 0x0A, '$'
+msg_banner_body db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
+                db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
 msg_help    db 'SHELL.COM commands:', 0x0D, 0x0A
             db '  System: HELP VER ECHO CLS REBOOT SHUTDOWN', 0x0D, 0x0A
@@ -2102,7 +2134,7 @@ msg_help    db 'SHELL.COM commands:', 0x0D, 0x0A
             db '  Loader-only mode: EXIT and QUIT stay in SHELL.COM', 0x0D, 0x0A
             db '  Use WHERE <name>; SHUTDOWN STATUS or CANCEL manage queue', 0x0D, 0x0A
             db '  Aliases: CLEAR PWD', 0x0D, 0x0A, '$'
-msg_ver     db 'CiukiOS pre-Alpha v0.6.6 (CiukiDOS SHELL.COM)', 0x0D, 0x0A, '$'
+msg_ver     db 'CiukiOS pre-Alpha v0.6', 0x0D, 0x0A, '$'
 msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
 msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
                   db 'use reboot or shutdown', 0x0D, 0x0A, '$'
