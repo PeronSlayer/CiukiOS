@@ -423,6 +423,7 @@ SHELL_PROMPT_PREFIX='C+I+U+K+I+O+S+[[:space:]]+S+H+E+L+L+[[:space:]]+'
 CHILD_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+"
 ROOT_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+>+"
 APPS_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+>+"
+DOSNAV_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+D+O+S+N+A+V+>+"
 BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+6+[.]+7+'
 HELP_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+C+O+M+M+A+N+D+S+[:]+'
 HELP_SYSTEM_PATTERN='S+Y+S+T+E+M+[:]+'
@@ -448,6 +449,7 @@ EXEC_MISSING_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+
 UNKNOWN_CMD_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 USAGE_WHERE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
 CWD_APPS_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+[:]+[\\]+A+P+P+S+'
+CWD_DOSNAV_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+[:]+[\\]+A+P+P+S+[\\]+D+O+S+N+A+V+'
 CLS_BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+6+[.]+7+'
 POWER_IDLE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+I+D+L+E+'
 POWER_QUEUE_REBOOT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+P+E+N+D+I+N+G+[[:space:]]+R+E+B+O+O+T+'
@@ -481,6 +483,8 @@ EXEC_RETURN_PATTERN='X+R+5+2+'
 CLS_TOKEN='SC43'
 CLS_TOKEN_PATTERN='S+C+4+3+'
 DIR_FILE_PATTERN='C+O+M+D+E+M+O+'
+DIR_DOSNAV_PATTERN='D+O+S+N+A+V+'
+DIR_ROOT_PATTERN='S+Y+S+T+E+M+'
 CD_ERROR_PATTERN='C+D+[:]+[[:space:]]+I+N+V+A+L+I+D+'
 MKDIR_OK_PATTERN='D+I+R+E+C+T+O+R+Y+[[:space:]]+C+R+E+A+T+E+D+'
 RMDIR_OK_PATTERN='D+I+R+E+C+T+O+R+Y+[[:space:]]+R+E+M+O+V+E+D+'
@@ -489,6 +493,7 @@ RENAME_ERR_PATTERN='R+E+N+[:]+[[:space:]]+C+A+N+N+O+T+[[:space:]]+R+E+N+A+M+E+'
 RENAME_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+R+E+N+/+M+O+V+E+'
 TYPE_TOKEN_PATTERN='T+Y+P+E+T+O+K+9+9+'
 TYPE_ERROR_PATTERN='T+Y+P+E+[:]+[[:space:]]+C+A+N+N+O+T+'
+DIR_ERROR_PATTERN='D+I+R+[:]+[[:space:]]+P+A+T+H+[[:space:]]+N+O+T+'
 DEL_OK_PATTERN='F+I+L+E+[[:space:]]+D+E+L+E+T+E+D+'
 COPY_OK_PATTERN='F+I+L+E+[[:space:]]+C+O+P+I+E+D+'
 COPY_SRC_ERR_PATTERN='C+O+P+Y+[:]+[[:space:]]+S+O+U+R+C+E+'
@@ -673,10 +678,22 @@ else
   send_and_wait_for_prompt 'cd \' "$ROOT_PROMPT_PATTERN" "CD_ROOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'dir \APPS' "$DIR_FILE_PATTERN" "$ROOT_PROMPT_PATTERN" "DIR_APPS_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \APPS' "$APPS_PROMPT_PATTERN" "CD_APPS_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'dir' "$DIR_DOSNAV_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_CWD_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'dir .' "$DIR_DOSNAV_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_DOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd DOSNAV' "$DOSNAV_PROMPT_PATTERN" "CD_DOSNAV_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_DOSNAV_PATTERN" "$DOSNAV_PROMPT_PATTERN" "PWD_DOSNAV_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd .' "$DOSNAV_PROMPT_PATTERN" "CD_DOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd ..' "$APPS_PROMPT_PATTERN" "CD_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd..' "$ROOT_PROMPT_PATTERN" "CD_COMPACT_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd \APPS' "$APPS_PROMPT_PATTERN" "CD_APPS_RETURN_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd.' "$APPS_PROMPT_PATTERN" "CD_COMPACT_DOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'dir ..' "$DIR_ROOT_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "PWD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'path' "$PATH_PATTERN" "$APPS_PROMPT_PATTERN" "PATH_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'where MOUSE' "$WHERE_MOUSE_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_MOUSE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'cd \NOPE' "$CD_ERROR_PATTERN" "$APPS_PROMPT_PATTERN" "CD_INVALID_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'dir \NOPE' "$DIR_ERROR_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_INVALID_OK" "$COMMAND_TIMEOUT_SEC"
   if (( DOS4GW_PRESENT )); then
     send_and_wait_for_pattern_and_prompt 'where DOS4GW' "$WHERE_DOS4GW_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_DOS4GW_OK" "$COMMAND_TIMEOUT_SEC"
   fi

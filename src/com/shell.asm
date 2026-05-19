@@ -283,8 +283,14 @@ main_loop:
     cmp byte [cmd_buf + 1], 'D'
     jne .check_chdir
     cmp byte [cmd_buf + 2], 0
-    jne .check_dir
-    jmp .do_cd
+    je .do_cd
+    cmp byte [cmd_buf + 2], '.'
+    je .do_cd_compact
+    cmp byte [cmd_buf + 2], '\'
+    je .do_cd_compact
+    cmp byte [cmd_buf + 2], '/'
+    je .do_cd_compact
+    jmp .check_dir
 .check_chdir:
     cmp byte [cmd_buf + 1], 'H'
     jne .check_dir
@@ -299,7 +305,15 @@ main_loop:
 .do_cd:
     mov cx, [echo_len]
     jcxz .cd_show
-    mov dx, [echo_ptr]
+    mov si, [echo_ptr]
+    call copy_path_token_to_src
+    jmp .cd_apply
+.do_cd_compact:
+    mov si, cmd_buf + 2
+    call copy_path_token_to_src
+.cd_apply:
+    call resolve_src_path_to_dst
+    mov dx, dst_path
     mov ah, 0x3B
     int 0x21
     jc .cd_error
@@ -1493,37 +1507,25 @@ build_dir_pattern:
     push cx
     push si
     push di
-    mov di, dir_pattern
     mov cx, [echo_len]
-    jcxz .use_star
+    jcxz .use_cwd
     mov si, [echo_ptr]
-.copy:
-    mov al, [si]
-    cmp al, 0
-    je .copy_done
-    cmp al, ' '
-    je .copy_done
-    cmp di, dir_pattern + 24
-    jae .copy_done
-    mov [di], al
-    inc di
-    inc si
-    dec cx
-    jnz .copy
-.copy_done:
+    call copy_path_token_to_src
+    jmp .have_target
+.use_cwd:
+    mov byte [src_path], 0
+.have_target:
+    call resolve_src_path_to_dst
+    mov di, dir_pattern
+    mov si, dst_path
+    call copy_z_to_di
     cmp di, dir_pattern
-    je .use_star
-    mov al, [di - 1]
-    cmp al, '\'
-    je .strip
-    cmp al, '/'
-    je .strip
-    jmp .add_sep
-.strip:
-    dec di
-.add_sep:
+    je .append_mask
+    cmp byte [di - 1], '\'
+    je .append_mask
     mov byte [di], '\'
     inc di
+.append_mask:
     mov byte [di], '*'
     inc di
     mov byte [di], '.'
@@ -1531,17 +1533,210 @@ build_dir_pattern:
     mov byte [di], '*'
     inc di
     mov byte [di], 0
-    jmp .done
-.use_star:
-    mov byte [dir_pattern + 0], '*'
-    mov byte [dir_pattern + 1], '.'
-    mov byte [dir_pattern + 2], '*'
-    mov byte [dir_pattern + 3], 0
 .done:
     pop di
     pop si
     pop cx
     pop ax
+    ret
+
+copy_path_token_to_src:
+    push ax
+    push di
+    mov di, src_path
+.copy:
+    mov al, [si]
+    cmp al, 0
+    je .done
+    cmp al, ' '
+    je .done
+    cmp al, '/'
+    jne .store
+    mov al, '\'
+.store:
+    cmp di, src_path + 63
+    jae .advance
+    mov [di], al
+    inc di
+.advance:
+    inc si
+    jmp .copy
+.done:
+    mov byte [di], 0
+    pop di
+    pop ax
+    ret
+
+resolve_src_path_to_dst:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+
+    cmp byte [src_path], 0
+    jne .have_arg
+    call build_current_path_in_dst
+    jmp .done
+
+.have_arg:
+    cmp byte [src_path + 1], ':'
+    je .copy_passthrough
+
+    mov di, dst_path
+    mov al, [src_path]
+    cmp al, '\'
+    je .from_root
+    cmp al, '/'
+    je .from_root
+
+    call build_current_path_in_dst
+    mov si, src_path
+    jmp .parse
+
+.from_root:
+    mov byte [di], '\'
+    inc di
+    mov byte [di], 0
+    mov si, src_path
+    inc si
+    jmp .parse
+
+.copy_passthrough:
+    mov si, src_path
+    mov di, dst_path
+    call copy_z_to_di
+    mov byte [di], 0
+    jmp .done
+
+.parse:
+.skip_sep:
+    mov al, [si]
+    cmp al, '\'
+    je .skip_one
+    cmp al, '/'
+    je .skip_one
+    jmp .check_end
+.skip_one:
+    inc si
+    jmp .skip_sep
+
+.check_end:
+    cmp byte [si], 0
+    je .ensure_root
+
+    mov bx, path_buf
+.copy_component:
+    mov al, [si]
+    cmp al, 0
+    je .component_done
+    cmp al, '\'
+    je .component_done
+    cmp al, '/'
+    je .component_done
+    cmp bx, path_buf + 67
+    jae .component_advance
+    mov [bx], al
+    inc bx
+.component_advance:
+    inc si
+    jmp .copy_component
+
+.component_done:
+    mov byte [bx], 0
+    cmp byte [path_buf], 0
+    je .parse
+    cmp byte [path_buf], '.'
+    jne .append_component
+    cmp byte [path_buf + 1], 0
+    je .parse
+    cmp byte [path_buf + 1], '.'
+    jne .append_component
+    cmp byte [path_buf + 2], 0
+    jne .append_component
+    call pop_dst_component
+    jmp .parse
+
+.append_component:
+    cmp di, dst_path + 1
+    jbe .append_text
+    cmp byte [di - 1], '\'
+    je .append_text
+    mov byte [di], '\'
+    inc di
+.append_text:
+    mov bx, path_buf
+.append_loop:
+    mov al, [bx]
+    cmp al, 0
+    je .append_done
+    cmp di, dst_path + 63
+    jae .append_advance
+    mov [di], al
+    inc di
+.append_advance:
+    inc bx
+    jmp .append_loop
+
+.append_done:
+    mov byte [di], 0
+    jmp .parse
+
+.ensure_root:
+    cmp di, dst_path
+    jne .done
+    mov byte [di], '\'
+    inc di
+    mov byte [di], 0
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+build_current_path_in_dst:
+    push ax
+    push dx
+    push si
+
+    mov di, dst_path
+    mov byte [di], '\'
+    inc di
+    xor dl, dl
+    mov si, path_buf
+    mov ah, 0x47
+    int 0x21
+    mov si, path_buf
+    cmp byte [si], 0
+    je .done
+    call copy_z_to_di
+    mov byte [di], 0
+.done:
+    pop si
+    pop dx
+    pop ax
+    ret
+
+pop_dst_component:
+    cmp di, dst_path + 1
+    jbe .root
+    dec di
+.scan:
+    cmp di, dst_path + 1
+    jbe .root
+    cmp byte [di - 1], '\'
+    je .trim
+    dec di
+    jmp .scan
+.trim:
+    mov byte [di], 0
+    ret
+.root:
+    mov di, dst_path + 1
+    mov byte [di], 0
     ret
 
 ; Print one FindFirst/FindNext result from the DTA, tagging directories.
