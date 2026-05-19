@@ -5,6 +5,7 @@ This changelog is intentionally concise. Every completed task should update `Unr
 
 ## Unreleased (2026-05-11)
 
+1. Expanded the Stage1 runtime-backed `INT 33h` mouse service from a minimal reset/show/hide/status path into a broader DOS compatibility slice: the runtime now tracks richer mouse state, button press/release counters, driver enable/disable state, language/page/sensitivity/rate settings, save/restore blobs, alternate callback slots, exclusion-region state, light-pen toggles, and guarded user-callback dispatch with pending-event queuing when re-entry would be unsafe. `\SYSTEM\MOUSE.COM` was upgraded into a compact control/diagnostic utility covering `STATUS`, `INFO`, `SHOW`, `HIDE`, `POS`, `RANGE`, `SENS`, `GETSENS`, `MOTION`, `PRESS`, `RELEASE`, `RESET`, `PAGE`, `GETPAGE`, `RATE`, `ENABLE`, `DISABLE`, `INSTALL`, and `HELP`, and the existing full/full-CD shell smoke harnesses now exercise that surface without adding a separate test lane. This tranche validates the runtime/service path, command surface, persistence across external COM execution, and shell integration; exact text-mode coordinate semantics under repeated QEMU key echo, custom text/graphics cursor rendering beyond the existing mode `12h` XOR path, and deeper callback/save-restore compatibility against third-party mouse-heavy apps remain follow-up work.
 1. Restored the current DOOM/WOLF3D runtime branch around a compact Stage1 MZ/DOS memory layout: primary EXE loading now has a separate MZ load limit, low DOS scratch buffers are isolated from the loader window, MZ tail memory is cleared before handoff, and runtime cache state is reset before external MZ execution.
 2. Fixed the DOOM launch regression that stalled at `V_Init: allocate screens`; the dedicated DOOM taxonomy lane now reaches `visual_gameplay=PASS` on the full profile.
 3. Fixed WOLF3D black-screen startup in local full-image builds by patching only the injected copy of `WOLF3D.EXE` to bypass the stuck page-flip wait. The source payload under `third_party/WOLF3D` remains untouched, and the final WOLF3D capture is non-black (`720x400`, `colors=6`, `nonblack=24336`).
@@ -65,6 +66,9 @@ This changelog is intentionally concise. Every completed task should update `Unr
 58. Started the external shell migration with an opt-in `\SYSTEM\SHELL.COM` prototype: the full/full-CD builders now package a tiny DOS-only shell there, the default Stage1 shell remains the boot owner and fallback, and `make qemu-test-full-shell-com` validates direct launch, `help`, `ver`, `echo`, `cls`, `exit`, and clean return to `CiukiOS C:\APPS>`.
 
 Validation evidence:
+- `make build-full` PASS after the Stage1 `INT 33h` expansion and `MOUSE.COM` command-surface update.
+- `bash scripts/qemu_test_full_shell_com.sh` PASS with the new `MOUSE` compatibility smoke sequence (`INFO`, `POS`, `RANGE`, `SENS`, `GETSENS`, `MOTION`, `PRESS`, `RELEASE`, `PAGE`, `GETPAGE`, `RATE`, `ENABLE`, `DISABLE`, `RESET`, plus post-`COMDEMO.COM` persistence).
+- `bash scripts/qemu_test_full_cd_shell_com_boot.sh` PASS with matching full-CD `MOUSE` smoke coverage (`INFO`, `PAGE`, `GETPAGE`, `ENABLE`, `DISABLE`) on the shell-boot path.
 - `make build-full` PASS.
 - `make qemu-test-full` PASS.
 - `make verify-full-drivers-payload` PASS with 64 driver files including `SB16INIT.COM`.
