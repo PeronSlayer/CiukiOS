@@ -3,10 +3,10 @@ org 0x0000
 
 %define CMD_BUF_LEN 64
 %define DOS_ENV_EXEC_PATH_LEN 64
-%define BOOT_SPLASH_WAIT_TICKS 27
+%define BOOT_SPLASH_WAIT_TICKS 55
 %define BOOT_STEP_WAIT_TICKS 9
-%define BOOT_SPLASH_WAIT_US_HI 0x0016
-%define BOOT_SPLASH_WAIT_US_LO 0xE360
+%define BOOT_SPLASH_WAIT_US_HI 0x002D
+%define BOOT_SPLASH_WAIT_US_LO 0xC6C0
 %define BOOT_STEP_WAIT_US_HI 0x0007
 %define BOOT_STEP_WAIT_US_LO 0xA120
 %define SHELL_EXEC_PATH_BUF_LEN 80
@@ -10176,31 +10176,36 @@ stage1_show_boot_splash:
     push ds
     push es
 
+    call stage1_splash_set_mode_vesa
+    jc .fail_text
+
+    call stage1_splash_load_asset
+    jc .fail_graphics
+
     mov si, msg_splash_serial_ok
     call print_string_serial
 
-    mov bl, 0x1F
-    call clear_screen_attr
-
-    mov si, msg_boot_splash_title
-    mov dh, 9
-    mov bl, 0x1F
-    call video_write_centered_attr
-
-    mov si, msg_boot_splash_subtitle
-    mov dh, 11
-    mov bl, 0x1F
-    call video_write_centered_attr
-
-    mov si, msg_boot_splash_tagline
-    mov dh, 14
-    mov bl, 0x1F
-    call video_write_centered_attr
+    call stage1_splash_apply_palette
+    call stage1_splash_blit_scaled
+    jc .fail_graphics
 
     mov bx, BOOT_SPLASH_WAIT_TICKS
     mov cx, BOOT_SPLASH_WAIT_US_HI
     mov dx, BOOT_SPLASH_WAIT_US_LO
     call stage1_wait_visible_delay
+
+    call vdi_leave_graphics
+    jmp .done
+
+.fail_graphics:
+    mov si, msg_splash_serial_fail
+    call print_string_serial
+    call vdi_leave_graphics
+    jmp .done
+
+.fail_text:
+    mov si, msg_splash_serial_fail
+    call print_string_serial
 
 .done:
 
@@ -10220,6 +10225,8 @@ stage1_show_boot_loading_screen:
     push cx
     push dx
     push si
+
+    call hide_text_cursor
 
     mov bl, 0x07
     call clear_screen_attr
