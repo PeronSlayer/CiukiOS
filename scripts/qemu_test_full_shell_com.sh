@@ -289,6 +289,28 @@ send_and_wait_for_pattern_and_prompt() {
   mark_pass "$marker"
 }
 
+send_and_wait_for_pattern_prompt_and_absence() {
+  local command_text="$1"
+  local pattern="$2"
+  local prompt_pattern="$3"
+  local absent_pattern="$4"
+  local marker="$5"
+  local timeout_sec="$6"
+  local offset
+  offset="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$command_text" || mark_fail "SEND_${marker}" "cannot send command: $command_text"
+  if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$pattern" "$offset" "$timeout_sec"; then
+    mark_fail "$marker" "expected output did not appear after: $command_text"
+  fi
+  if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$prompt_pattern" "$offset" "$timeout_sec"; then
+    mark_fail "$marker" "expected prompt did not appear after: $command_text"
+  fi
+  if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$absent_pattern" "$offset" 1; then
+    mark_fail "$marker" "unexpected garbage output appeared after: $command_text"
+  fi
+  mark_pass "$marker"
+}
+
 send_and_wait_for_count_and_prompt() {
   local command_text="$1"
   local pattern="$2"
@@ -424,6 +446,7 @@ CHILD_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+"
 ROOT_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+>+"
 APPS_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+>+"
 DOSNAV_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+D+O+S+N+A+V+>+"
+WOLF3D_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+W+O+L+F+3+D+>+"
 BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+6+[.]+7+'
 HELP_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+C+O+M+M+A+N+D+S+[:]+'
 HELP_SYSTEM_PATTERN='S+Y+S+T+E+M+[:]+'
@@ -484,7 +507,9 @@ CLS_TOKEN='SC43'
 CLS_TOKEN_PATTERN='S+C+4+3+'
 DIR_FILE_PATTERN='C+O+M+D+E+M+O+'
 DIR_DOSNAV_PATTERN='D+O+S+N+A+V+'
+DIR_WOLF3D_PATTERN='W+O+L+F+3+D+\.*E+X+E+'
 DIR_ROOT_PATTERN='S+Y+S+T+E+M+'
+DIR_GARBAGE_PROMPT_PATTERN="Q+${SHELL_PROMPT_PREFIX}"
 CD_ERROR_PATTERN='C+D+[:]+[[:space:]]+I+N+V+A+L+I+D+'
 MKDIR_OK_PATTERN='D+I+R+E+C+T+O+R+Y+[[:space:]]+C+R+E+A+T+E+D+'
 RMDIR_OK_PATTERN='D+I+R+E+C+T+O+R+Y+[[:space:]]+R+E+M+O+V+E+D+'
@@ -676,10 +701,13 @@ else
   send_and_wait_for_pattern_and_prompt 'type \APPS\NOPE.TXT' "$TYPE_ERROR_PATTERN" "$CHILD_PROMPT_PATTERN" "ERROR_STYLE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_count_and_prompt "echo $CLS_TOKEN" "$CLS_TOKEN_PATTERN" 2 "$CHILD_PROMPT_PATTERN" "POST_CLS_ECHO_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \' "$ROOT_PROMPT_PATTERN" "CD_ROOT_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_pattern_and_prompt 'dir \APPS' "$DIR_FILE_PATTERN" "$ROOT_PROMPT_PATTERN" "DIR_APPS_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_prompt_and_absence 'dir \APPS' "$DIR_FILE_PATTERN" "$ROOT_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_APPS_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \APPS' "$APPS_PROMPT_PATTERN" "CD_APPS_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_pattern_and_prompt 'dir' "$DIR_DOSNAV_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_CWD_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_pattern_and_prompt 'dir .' "$DIR_DOSNAV_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_DOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_prompt_and_absence 'dir' "$DIR_DOSNAV_PATTERN" "$APPS_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_CWD_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_prompt_and_absence 'dir .' "$DIR_DOSNAV_PATTERN" "$APPS_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_DOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd WOLF3D' "$WOLF3D_PROMPT_PATTERN" "CD_WOLF3D_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_prompt_and_absence 'dir' "$DIR_WOLF3D_PATTERN" "$WOLF3D_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_WOLF3D_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd ..' "$APPS_PROMPT_PATTERN" "CD_WOLF3D_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd DOSNAV' "$DOSNAV_PROMPT_PATTERN" "CD_DOSNAV_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_DOSNAV_PATTERN" "$DOSNAV_PROMPT_PATTERN" "PWD_DOSNAV_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd .' "$DOSNAV_PROMPT_PATTERN" "CD_DOT_OK" "$COMMAND_TIMEOUT_SEC"
@@ -687,7 +715,7 @@ else
   send_and_wait_for_prompt 'cd..' "$ROOT_PROMPT_PATTERN" "CD_COMPACT_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \APPS' "$APPS_PROMPT_PATTERN" "CD_APPS_RETURN_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd.' "$APPS_PROMPT_PATTERN" "CD_COMPACT_DOT_OK" "$COMMAND_TIMEOUT_SEC"
-  send_and_wait_for_pattern_and_prompt 'dir ..' "$DIR_ROOT_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_prompt_and_absence 'dir ..' "$DIR_ROOT_PATTERN" "$APPS_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "PWD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'path' "$PATH_PATTERN" "$APPS_PROMPT_PATTERN" "PATH_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$APPS_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
@@ -736,7 +764,7 @@ else
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CLS_BANNER_PATTERN" "$CLEAR_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "CLEAR_OK" "compact banner missing after clear"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$APPS_PROMPT_PATTERN" "$CLEAR_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "CLEAR_OK" "expected prompt did not appear after: clear"
   mark_pass "CLEAR_OK"
-  send_and_wait_for_pattern_and_prompt 'dir' "$DIR_FILE_PATTERN" "$APPS_PROMPT_PATTERN" "DIR_CWD_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_prompt_and_absence 'dir' "$DIR_FILE_PATTERN" "$APPS_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_CWD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'cd \NOPE' "$CD_ERROR_PATTERN" "$APPS_PROMPT_PATTERN" "CD_INVALID_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'mkdir SMDIR1' "$MKDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "MKDIR_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'md SMDIR2' "$MKDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "MD_OK" "$COMMAND_TIMEOUT_SEC"

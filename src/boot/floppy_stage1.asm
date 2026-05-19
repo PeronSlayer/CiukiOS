@@ -4442,8 +4442,6 @@ int21_find_scan_from_cursor:
     jmp .scan_loop
 
 .not_found:
-    mov al, 'q'
-    call serial_putc
     mov byte [cs:find_active], 0
     mov ax, 0x0012
     stc
@@ -4466,6 +4464,7 @@ int21_find_scan_from_cursor:
 
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
+    mov [cs:tmp_lba_hi], dx
     xor dx, dx
 
 .subdir_sector_loop:
@@ -4474,12 +4473,26 @@ int21_find_scan_from_cursor:
 
     mov ax, DOS_META_BUF_SEG
     mov es, ax
+%if FAT_TYPE == 16
+    push bx
+    mov bx, dx
+    push bx
+    mov ax, [cs:tmp_lba]
+    add ax, bx
+    mov dx, [cs:tmp_lba_hi]
+    adc dx, 0
+    xor bx, bx
+    call read_sector_lba32
+    pop dx
+    pop bx
+%else
     mov ax, [cs:tmp_lba]
     add ax, dx
     push bx
     xor bx, bx
     call read_sector_lba
     pop bx
+%endif
     jc .io_fail
 
     mov ax, DOS_META_BUF_SEG
