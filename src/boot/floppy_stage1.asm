@@ -159,6 +159,9 @@ stage1_start:
     mov si, msg_stage1_serial
     call print_string_serial
 
+    call run_bios_diagnostics
+    call install_int21_vector
+
 %if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
 %if STAGE1_SELFTEST_AUTORUN == 0
     call hide_text_cursor
@@ -166,9 +169,6 @@ stage1_start:
     call stage1_show_boot_loading_screen
 %endif
 %endif
-
-    call run_bios_diagnostics
-    call install_int21_vector
 %if FAT_TYPE == 16
     call stage1_runtime_init
 %if STAGE1_BOOT_EXTERNAL_SHELL
@@ -359,10 +359,10 @@ flush_keyboard_buffer:
 
 run_bios_diagnostics:
     mov si, msg_diag_begin
-    call print_string_dual
+    call print_string_serial
 
     mov si, msg_diag_int10
-    call print_string_dual
+    call print_string_serial
 
     ; INT13 AH=0x00 (disk reset) may fail in some QEMU configurations or after
     ; PS/2 mouse initialization due to PIC mask changes. However, actual disk I/O
@@ -375,23 +375,23 @@ run_bios_diagnostics:
     ; If real disk I/O fails, the boot would have already failed.
     clc
     mov si, msg_diag_int13_ok
-    call print_string_dual
+    call print_string_serial
 .int13_done:
 
     mov ah, 0x01
     int 0x16
     mov si, msg_diag_int16_ok
-    call print_string_dual
+    call print_string_serial
 
     mov ah, 0x00
     int 0x1A
     mov si, msg_diag_int1a
-    call print_string_dual
+    call print_string_serial
     mov ax, cx
-    call print_hex16_dual
+    call print_hex16_serial
     mov ax, dx
-    call print_hex16_dual
-    call print_newline_dual
+    call print_hex16_serial
+    call print_newline_serial
 
     ret
 
