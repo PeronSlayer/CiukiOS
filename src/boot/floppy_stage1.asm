@@ -102,13 +102,13 @@ org 0x0000
 %if FAT_TYPE == 16
 %define SPLASH_PALETTE_COLORS 256
 %define SPLASH_PALETTE_SIZE 768
-%define SPLASH_SRC_W 160
-%define SPLASH_SRC_H 100
-%define SPLASH_SRC_ROW_BYTES 160
-%define SPLASH_PIXEL_BYTES 16000
-%define SPLASH_TOTAL_SIZE 16768
-%define SPLASH_SCALE_X 5
-%define SPLASH_SCALE_Y 5
+%define SPLASH_SRC_W 256
+%define SPLASH_SRC_H 192
+%define SPLASH_SRC_ROW_BYTES 256
+%define SPLASH_PIXEL_BYTES 49152
+%define SPLASH_TOTAL_SIZE 49920
+%define SPLASH_SCALE_X_BASE 3
+%define SPLASH_SCALE_Y_BASE 3
 %define SPLASH_VESA_MODE 0x0103
 %define SPLASH_VESA_ROW_BYTES 800
 %define SPLASH_VRAM_SAFE_OFFSET 0xFCE0
@@ -10542,8 +10542,12 @@ stage1_splash_blit_scaled:
     stosb
     stosb
     stosb
+    inc ah
+    cmp ah, 8
+    jne .next_x
+    xor ah, ah
     stosb
-    stosb
+.next_x:
     loop .expand_x
     pop di
 
@@ -10551,10 +10555,11 @@ stage1_splash_blit_scaled:
     mov ds, ax
     mov ax, 0xA000
     mov es, ax
-    mov cx, SPLASH_SCALE_Y
-    ; Render a 560px image from 100px source (6x for first 60 rows, then 5x).
-    cmp bp, 40
-    jbe .copy_y
+    mov cx, SPLASH_SCALE_Y_BASE
+    mov ax, bp
+    and ax, 0x0007
+    cmp ax, 0x0001
+    jne .copy_y
     inc cx
 .copy_y:
     call stage1_splash_copy_row_to_vram

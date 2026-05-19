@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate a lightweight 160x100 indexed splash asset for CiukiOS full profile.
+"""Generate a lightweight 256x192 indexed splash asset for CiukiOS full profile.
 
 Output format:
 - 768 bytes palette (256 RGB triplets)
-- 16000 bytes pixels (160x100 @ 8bpp, 1 pixel per byte)
+- 49152 bytes pixels (256x192 @ 8bpp, 1 pixel per byte)
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ except ImportError:
     sys.exit(3)
 
 
-WIDTH = 160
-HEIGHT = 100
+WIDTH = 256
+HEIGHT = 192
 PALETTE_COLORS = 256
 PALETTE_BYTES = PALETTE_COLORS * 3
 PIXEL_BYTES = WIDTH * HEIGHT
