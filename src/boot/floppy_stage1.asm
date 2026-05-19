@@ -15129,6 +15129,7 @@ irq12_mouse_handler:
     mov al, [cs:mouse_packet]
     mov bl, al
     mov ah, [cs:mouse_buttons]
+    mov [cs:mouse_prev_buttons], ah
     and al, 0x07
     mov [cs:mouse_buttons], al
     mov bh, ah
@@ -15168,6 +15169,11 @@ irq12_mouse_handler:
     jz .middle_done
     or bp, 0x0040
 .middle_done:
+
+    mov ax, [cs:mouse_pos_x]
+    mov [cs:mouse_prev_x], ax
+    mov ax, [cs:mouse_pos_y]
+    mov [cs:mouse_prev_y], ax
 
     mov al, [cs:mouse_packet + 1]
     cbw
@@ -15220,7 +15226,49 @@ irq12_mouse_handler:
 .y_ok:
     mov [cs:mouse_pos_x], cx
     mov [cs:mouse_pos_y], dx
+    mov [cs:mouse_last_event_mask], bp
+
+    test bp, 0x0002
+    jz .left_press_done
+    inc word [cs:mouse_press_count + 0]
+    mov [cs:mouse_press_x + 0], cx
+    mov [cs:mouse_press_y + 0], dx
+.left_press_done:
+    test bp, 0x0004
+    jz .left_release_done
+    inc word [cs:mouse_release_count + 0]
+    mov [cs:mouse_release_x + 0], cx
+    mov [cs:mouse_release_y + 0], dx
+.left_release_done:
+    test bp, 0x0008
+    jz .right_press_done
+    inc word [cs:mouse_press_count + 2]
+    mov [cs:mouse_press_x + 2], cx
+    mov [cs:mouse_press_y + 2], dx
+.right_press_done:
+    test bp, 0x0010
+    jz .right_release_done
+    inc word [cs:mouse_release_count + 2]
+    mov [cs:mouse_release_x + 2], cx
+    mov [cs:mouse_release_y + 2], dx
+.right_release_done:
+    test bp, 0x0020
+    jz .middle_press_done
+    inc word [cs:mouse_press_count + 4]
+    mov [cs:mouse_press_x + 4], cx
+    mov [cs:mouse_press_y + 4], dx
+.middle_press_done:
+    test bp, 0x0040
+    jz .middle_release_done
+    inc word [cs:mouse_release_count + 4]
+    mov [cs:mouse_release_x + 4], cx
+    mov [cs:mouse_release_y + 4], dx
+.middle_release_done:
+
     call mouse_vga_update_position
+
+    cmp byte [cs:mouse_driver_enabled], 1
+    jne .eoi
 
     cmp byte [cs:mouse_bios_enabled], 0
     je .int33_callback
@@ -15247,13 +15295,26 @@ irq12_mouse_handler:
     cmp word [cs:mouse_cb_seg], 0
     je .eoi
 
+    cmp byte [cs:mouse_cb_busy], 0
+    jne .queue_callback
+
     xor bx, bx
     mov bl, [cs:mouse_buttons]
     mov cx, [cs:mouse_pos_x]
     mov dx, [cs:mouse_pos_y]
     mov si, [cs:mouse_last_mickey_x]
     mov di, [cs:mouse_last_mickey_y]
-    call far [cs:mouse_cb_off]
+    call mouse_dispatch_user_callback
+    jmp .eoi
+
+.queue_callback:
+    or [cs:mouse_cb_pending_mask], ax
+    mov al, [cs:mouse_buttons]
+    mov [cs:mouse_cb_pending_buttons], al
+    mov [cs:mouse_cb_pending_x], cx
+    mov [cs:mouse_cb_pending_y], dx
+    mov [cs:mouse_cb_pending_dx], si
+    mov [cs:mouse_cb_pending_dy], di
 
 .eoi:
     ; Full packet processed – refresh sprite, then EOI
@@ -15315,7 +15376,7 @@ mouse_vga_cursor_refresh:
 
     cmp byte [cs:current_video_mode], 0x12
     je .mode12_ready
-    mov byte [cs:mouse_vga_cursor_drawn], 0
+    call mouse_vga_cursor_erase_if_drawn
     jmp .done
 
 .mode12_ready:
@@ -15332,10 +15393,12 @@ mouse_vga_cursor_refresh:
     cmp byte [cs:mouse_bios_enabled], 0
     je .skip_no_trace
 .inactive_visibility_check:
+    cmp byte [cs:mouse_driver_enabled], 1
+    jne .skip_no_trace
     cmp byte [cs:mouse_visible], 1
     je .active
 .skip_no_trace:
-    mov byte [cs:mouse_vga_cursor_drawn], 0
+    call mouse_vga_cursor_erase_if_drawn
     jmp .done
 
 .active:
@@ -15346,6 +15409,23 @@ mouse_vga_cursor_refresh:
     test word [cs:mouse_cb_mask], 0x0001
     jnz .done
 .active_no_cb:
+    cmp byte [cs:mouse_gfx_cursor_custom], 0
+    jne .skip_no_trace
+    cmp byte [cs:mouse_excl_enabled], 0
+    je .draw_check
+    mov ax, [cs:mouse_pos_x]
+    cmp ax, [cs:mouse_excl_min_x]
+    jb .draw_check
+    cmp ax, [cs:mouse_excl_max_x]
+    ja .draw_check
+    mov ax, [cs:mouse_pos_y]
+    cmp ax, [cs:mouse_excl_min_y]
+    jb .draw_check
+    cmp ax, [cs:mouse_excl_max_y]
+    ja .draw_check
+    jmp .skip_no_trace
+
+.draw_check:
     cmp byte [cs:mouse_vga_cursor_drawn], 0
     je .draw_new
     mov bx, [cs:mouse_vga_cursor_last_x]
@@ -15364,6 +15444,20 @@ mouse_vga_cursor_refresh:
     pop dx
     pop bx
     pop ax
+    ret
+
+mouse_vga_cursor_erase_if_drawn:
+    cmp byte [cs:mouse_vga_cursor_drawn], 0
+    je .done
+    push bx
+    push dx
+    mov bx, [cs:mouse_vga_cursor_last_x]
+    mov dx, [cs:mouse_vga_cursor_last_y]
+    call mouse_vga_xor_cursor12
+    mov byte [cs:mouse_vga_cursor_drawn], 0
+    pop dx
+    pop bx
+.done:
     ret
 
 mouse_vga_xor_cursor12:
@@ -15681,6 +15775,206 @@ mouse_vga_cursor_seed:
     ret
 %endif
 
+mouse_reset_runtime_state:
+    mov byte [cs:mouse_installed], 1
+    mov byte [cs:mouse_driver_enabled], 1
+    mov al, [cs:mouse_hw_ready]
+    mov [cs:mouse_detected], al
+    mov byte [cs:mouse_button_count], 3
+    mov word [cs:mouse_pos_x], 320
+    mov word [cs:mouse_pos_y], 240
+    mov word [cs:mouse_prev_x], 320
+    mov word [cs:mouse_prev_y], 240
+    mov byte [cs:mouse_buttons], 0
+    mov byte [cs:mouse_prev_buttons], 0
+    mov word [cs:mouse_hide_count], 0
+    mov byte [cs:mouse_visible], 1
+    mov word [cs:mouse_min_x], 0
+%if FAT_TYPE == 16
+    mov word [cs:mouse_max_x], 639
+    mov word [cs:mouse_max_y], 479
+%else
+    mov word [cs:mouse_max_x], 319
+    mov word [cs:mouse_max_y], 199
+%endif
+    mov word [cs:mouse_min_y], 0
+    mov word [cs:mouse_cb_mask], 0
+    mov word [cs:mouse_cb_off], 0
+    mov word [cs:mouse_cb_seg], 0
+    mov byte [cs:mouse_cb_busy], 0
+    mov word [cs:mouse_cb_pending_mask], 0
+    mov byte [cs:mouse_cb_pending_buttons], 0
+    mov word [cs:mouse_cb_pending_x], 320
+    mov word [cs:mouse_cb_pending_y], 240
+    mov word [cs:mouse_cb_pending_dx], 0
+    mov word [cs:mouse_cb_pending_dy], 0
+    mov word [cs:mouse_alt_mask], 0
+    mov word [cs:mouse_alt_off], 0
+    mov word [cs:mouse_alt_seg], 0
+    mov word [cs:mouse_mickey_x], 8
+    mov word [cs:mouse_mickey_y], 8
+    mov word [cs:mouse_sens_x], 8
+    mov word [cs:mouse_sens_y], 8
+    mov word [cs:mouse_double_threshold], 64
+    mov word [cs:mouse_interrupt_rate], 100
+    mov byte [cs:mouse_crt_page], 0
+    mov byte [cs:mouse_language], 0
+    mov byte [cs:mouse_light_pen_enabled], 0
+    mov byte [cs:mouse_excl_enabled], 0
+    mov word [cs:mouse_excl_min_x], 0
+    mov word [cs:mouse_excl_min_y], 0
+    mov word [cs:mouse_excl_max_x], 0
+    mov word [cs:mouse_excl_max_y], 0
+    mov word [cs:mouse_text_cursor_type], 0
+    mov word [cs:mouse_text_screen_mask], 0xFFFF
+    mov word [cs:mouse_text_cursor_mask], 0x7700
+    mov word [cs:mouse_gfx_hot_x], 0
+    mov word [cs:mouse_gfx_hot_y], 0
+    mov byte [cs:mouse_gfx_cursor_custom], 0
+    mov word [cs:mouse_last_event_mask], 0
+    mov word [cs:mouse_press_count + 0], 0
+    mov word [cs:mouse_press_count + 2], 0
+    mov word [cs:mouse_press_count + 4], 0
+    mov word [cs:mouse_release_count + 0], 0
+    mov word [cs:mouse_release_count + 2], 0
+    mov word [cs:mouse_release_count + 4], 0
+    mov word [cs:mouse_press_x + 0], 320
+    mov word [cs:mouse_press_x + 2], 320
+    mov word [cs:mouse_press_x + 4], 320
+    mov word [cs:mouse_press_y + 0], 240
+    mov word [cs:mouse_press_y + 2], 240
+    mov word [cs:mouse_press_y + 4], 240
+    mov word [cs:mouse_release_x + 0], 320
+    mov word [cs:mouse_release_x + 2], 320
+    mov word [cs:mouse_release_x + 4], 320
+    mov word [cs:mouse_release_y + 0], 240
+    mov word [cs:mouse_release_y + 2], 240
+    mov word [cs:mouse_release_y + 4], 240
+    mov word [cs:mouse_delta_x], 0
+    mov word [cs:mouse_delta_y], 0
+    mov word [cs:mouse_last_mickey_x], 0
+    mov word [cs:mouse_last_mickey_y], 0
+%if FAT_TYPE == 16
+    call mouse_vga_cursor_seed
+%endif
+    ret
+
+mouse_dispatch_user_callback:
+    cmp word [cs:mouse_cb_seg], 0
+    je .done
+    mov byte [cs:mouse_cb_busy], 1
+    push ds
+    push es
+    pushf
+    call far [cs:mouse_cb_off]
+    pop es
+    pop ds
+    mov byte [cs:mouse_cb_busy], 0
+.done:
+    ret
+
+mouse_flush_pending_callback:
+    cmp byte [cs:mouse_cb_busy], 0
+    jne .done
+    cmp word [cs:mouse_cb_pending_mask], 0
+    je .done
+    cmp word [cs:mouse_cb_seg], 0
+    je .clear
+.loop:
+    mov ax, [cs:mouse_cb_pending_mask]
+    or ax, ax
+    jz .done
+    mov word [cs:mouse_cb_pending_mask], 0
+    xor bx, bx
+    mov bl, [cs:mouse_cb_pending_buttons]
+    mov cx, [cs:mouse_cb_pending_x]
+    mov dx, [cs:mouse_cb_pending_y]
+    mov si, [cs:mouse_cb_pending_dx]
+    mov di, [cs:mouse_cb_pending_dy]
+    call mouse_dispatch_user_callback
+    jmp .loop
+.clear:
+    mov word [cs:mouse_cb_pending_mask], 0
+.done:
+    ret
+
+mouse_copy_gfx_mask_from_esdx:
+    push ds
+    push si
+    push di
+    push cx
+    push es
+    push cs
+    pop es
+    mov di, mouse_gfx_cursor_mask
+    mov si, dx
+    mov cx, 32
+    push es
+    pop ds
+    pop es
+    pushf
+    cld
+    rep movsw
+    popf
+    pop cx
+    pop di
+    pop si
+    pop ds
+    ret
+
+mouse_save_state_to_esdx:
+    push ds
+    push si
+    push di
+    push cx
+    push es
+    push cs
+    pop ds
+    mov si, mouse_state_begin
+    mov di, dx
+    pushf
+    cld
+    mov cx, MOUSE_STATE_SIZE
+    rep movsb
+    popf
+    pop es
+    pop cx
+    pop di
+    pop si
+    pop ds
+    ret
+
+mouse_restore_state_from_esdx:
+    push ds
+    push si
+    push di
+    push cx
+    push es
+    mov si, dx
+    push es
+    pop ds
+    push cs
+    pop es
+    mov di, mouse_state_begin
+    mov ax, [si]
+    cmp ax, MOUSE_STATE_VERSION
+    jne .done
+    mov ax, [si + 2]
+    cmp ax, MOUSE_STATE_SIZE
+    jne .done
+    pushf
+    cld
+    mov cx, MOUSE_STATE_SIZE
+    rep movsb
+    popf
+.done:
+    pop es
+    pop cx
+    pop di
+    pop si
+    pop ds
+    ret
+
 int16_handler:
     cmp ah, 0x00
     je .read_key
@@ -15722,6 +16016,7 @@ int16_handler:
     jmp far [cs:old_int16_off]
 
 int33_handler:
+    call mouse_flush_pending_callback
     cmp byte [cs:shell_exec_external_mouse_disabled], 0
     jne .external_mouse_disabled
     cmp ax, 0x0000
@@ -15734,18 +16029,64 @@ int33_handler:
     je .status
     cmp ax, 0x0004
     je .set_pos
+    cmp ax, 0x0005
+    je .button_press_info
+    cmp ax, 0x0006
+    je .button_release_info
     cmp ax, 0x0007
     je .set_x_range
     cmp ax, 0x0008
     je .set_y_range
+    cmp ax, 0x0009
+    je .set_gfx_cursor
+    cmp ax, 0x000A
+    je .set_text_cursor
     cmp ax, 0x000B
     je .motion
     cmp ax, 0x000C
     je .set_callback
+    cmp ax, 0x000D
+    je .light_pen_on
+    cmp ax, 0x000E
+    je .light_pen_off
     cmp ax, 0x0014
     je .exchange_callback
     cmp ax, 0x000F
     je .set_mickey_ratio
+    cmp ax, 0x0010
+    je .set_exclusion_region
+    cmp ax, 0x0013
+    je .set_double_speed_threshold
+    cmp ax, 0x0015
+    je .get_state_size
+    cmp ax, 0x0016
+    je .save_state
+    cmp ax, 0x0017
+    je .restore_state
+    cmp ax, 0x0018
+    je .set_alt_handler
+    cmp ax, 0x0019
+    je .get_alt_handler
+    cmp ax, 0x001A
+    je .set_sensitivity
+    cmp ax, 0x001B
+    je .get_sensitivity
+    cmp ax, 0x001C
+    je .set_interrupt_rate
+    cmp ax, 0x001D
+    je .set_crt_page
+    cmp ax, 0x001E
+    je .get_crt_page
+    cmp ax, 0x001F
+    je .disable_driver
+    cmp ax, 0x0020
+    je .enable_driver
+    cmp ax, 0x0021
+    je .software_reset
+    cmp ax, 0x0022
+    je .set_language
+    cmp ax, 0x0023
+    je .get_language
     cmp ax, 0x0024
     je .version
 
@@ -15763,60 +16104,30 @@ int33_handler:
     iret
 
 .reset:
+    call mouse_reset_runtime_state
     mov ax, 0xFFFF
-    mov bx, 0x0002
-    mov byte [cs:mouse_installed], 1
-    mov word [cs:mouse_pos_x], 320
-    mov word [cs:mouse_pos_y], 240
-    mov word [cs:mouse_min_x], 0
-%if FAT_TYPE == 16
-    mov word [cs:mouse_max_x], 639
-%else
-    mov word [cs:mouse_max_x], 319
-%endif
-    mov word [cs:mouse_min_y], 0
-%if FAT_TYPE == 16
-    mov word [cs:mouse_max_y], 479
-    mov byte [cs:mouse_visible], 1
-    call mouse_vga_cursor_seed
-%else
-    mov word [cs:mouse_max_y], 199
-    mov byte [cs:mouse_visible], 0
-%endif
+    xor bh, bh
+    mov bl, [cs:mouse_button_count]
     iret
 
 .show:
+    cmp word [cs:mouse_hide_count], 0
+    je .show_visible
+    dec word [cs:mouse_hide_count]
+.show_visible:
+    cmp word [cs:mouse_hide_count], 0
+    jne .show_done
     mov byte [cs:mouse_visible], 1
+    call mouse_vga_cursor_refresh
+.show_done:
     xor ax, ax
     iret
 
 .hide:
+    inc word [cs:mouse_hide_count]
 %if FAT_TYPE == 16
     mov byte [cs:mouse_visible], 0
-    cmp byte [cs:mouse_vga_cursor_drawn], 0
-    je .hide_done
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    push ds
-    mov bx, [cs:mouse_vga_cursor_last_x]
-    mov dx, [cs:mouse_vga_cursor_last_y]
-    call mouse_vga_xor_cursor12
-    pop ds
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    mov byte [cs:mouse_vga_cursor_drawn], 0
+    call mouse_vga_cursor_erase_if_drawn
 .hide_done:
 %else
     mov byte [cs:mouse_visible], 0
@@ -15839,6 +16150,10 @@ int33_handler:
     iret
 
 .set_pos:
+    mov ax, [cs:mouse_pos_x]
+    mov [cs:mouse_prev_x], ax
+    mov ax, [cs:mouse_pos_y]
+    mov [cs:mouse_prev_y], ax
     cmp cx, [cs:mouse_min_x]
     jae .x_min_ok
     mov cx, [cs:mouse_min_x]
@@ -15857,7 +16172,40 @@ int33_handler:
 .y_ok:
     mov [cs:mouse_pos_x], cx
     mov [cs:mouse_pos_y], dx
+    call mouse_vga_update_position
+    call mouse_vga_cursor_refresh
     xor ax, ax
+    iret
+
+.button_press_info:
+    cmp bx, 2
+    ja .button_info_fail
+    shl bx, 1
+    xor ax, ax
+    mov al, [cs:mouse_buttons]
+    mov cx, [cs:mouse_press_x + bx]
+    mov dx, [cs:mouse_press_y + bx]
+    mov bx, [cs:mouse_press_count + bx]
+    mov [cs:mouse_press_count + bx], word 0
+    iret
+
+.button_release_info:
+    cmp bx, 2
+    ja .button_info_fail
+    shl bx, 1
+    xor ax, ax
+    mov al, [cs:mouse_buttons]
+    mov cx, [cs:mouse_release_x + bx]
+    mov dx, [cs:mouse_release_y + bx]
+    mov bx, [cs:mouse_release_count + bx]
+    mov [cs:mouse_release_count + bx], word 0
+    iret
+
+.button_info_fail:
+    xor ax, ax
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
     iret
 
 .set_x_range:
@@ -15871,6 +16219,8 @@ int33_handler:
     jbe .x_range_done
     mov [cs:mouse_pos_x], dx
 .x_range_done:
+    call mouse_vga_update_position
+    call mouse_vga_cursor_refresh
     xor ax, ax
     iret
 
@@ -15885,6 +16235,23 @@ int33_handler:
     jbe .y_range_done
     mov [cs:mouse_pos_y], dx
 .y_range_done:
+    call mouse_vga_update_position
+    call mouse_vga_cursor_refresh
+    xor ax, ax
+    iret
+
+.set_gfx_cursor:
+    mov [cs:mouse_gfx_hot_x], bx
+    mov [cs:mouse_gfx_hot_y], cx
+    call mouse_copy_gfx_mask_from_esdx
+    mov byte [cs:mouse_gfx_cursor_custom], 1
+    xor ax, ax
+    iret
+
+.set_text_cursor:
+    mov [cs:mouse_text_cursor_type], bx
+    mov [cs:mouse_text_screen_mask], cx
+    mov [cs:mouse_text_cursor_mask], dx
     xor ax, ax
     iret
 
@@ -15904,6 +16271,18 @@ int33_handler:
     mov [cs:mouse_cb_mask], cx
     mov [cs:mouse_cb_off], dx
     mov [cs:mouse_cb_seg], es
+    mov byte [cs:mouse_cb_busy], 0
+    mov word [cs:mouse_cb_pending_mask], 0
+    xor ax, ax
+    iret
+
+.light_pen_on:
+    mov byte [cs:mouse_light_pen_enabled], 1
+    xor ax, ax
+    iret
+
+.light_pen_off:
+    mov byte [cs:mouse_light_pen_enabled], 0
     xor ax, ax
     iret
 
@@ -15926,11 +16305,130 @@ int33_handler:
     xor ax, ax
     iret
 
+.set_exclusion_region:
+    mov [cs:mouse_excl_min_x], cx
+    mov [cs:mouse_excl_min_y], dx
+    mov [cs:mouse_excl_max_x], si
+    mov [cs:mouse_excl_max_y], di
+    mov byte [cs:mouse_excl_enabled], 1
+    call mouse_vga_cursor_refresh
+    xor ax, ax
+    iret
+
+.set_double_speed_threshold:
+    mov [cs:mouse_double_threshold], dx
+    xor ax, ax
+    iret
+
+.get_state_size:
+    xor ax, ax
+    mov bx, MOUSE_STATE_SIZE
+    xor cx, cx
+    xor dx, dx
+    iret
+
+.save_state:
+    call mouse_save_state_to_esdx
+    xor ax, ax
+    iret
+
+.restore_state:
+    call mouse_restore_state_from_esdx
+    call mouse_vga_update_position
+    call mouse_vga_cursor_refresh
+    xor ax, ax
+    iret
+
+.set_alt_handler:
+    mov [cs:mouse_alt_mask], cx
+    mov [cs:mouse_alt_off], dx
+    mov [cs:mouse_alt_seg], es
+    xor ax, ax
+    iret
+
+.get_alt_handler:
+    mov ax, [cs:mouse_alt_seg]
+    mov bx, [cs:mouse_alt_off]
+    mov cx, [cs:mouse_alt_mask]
+    mov dx, bx
+    mov es, ax
+    xor ax, ax
+    iret
+
+.set_sensitivity:
+    mov [cs:mouse_sens_x], bx
+    mov [cs:mouse_sens_y], cx
+    mov [cs:mouse_double_threshold], dx
+    xor ax, ax
+    iret
+
+.get_sensitivity:
+    xor ax, ax
+    mov bx, [cs:mouse_sens_x]
+    mov cx, [cs:mouse_sens_y]
+    mov dx, [cs:mouse_double_threshold]
+    iret
+
+.set_interrupt_rate:
+    mov [cs:mouse_interrupt_rate], bx
+    xor ax, ax
+    iret
+
+.set_crt_page:
+    mov [cs:mouse_crt_page], bl
+    xor ax, ax
+    iret
+
+.get_crt_page:
+    xor ax, ax
+    xor bx, bx
+    mov bl, [cs:mouse_crt_page]
+    iret
+
+.disable_driver:
+    xor ax, ax
+    mov al, [cs:mouse_driver_enabled]
+    mov byte [cs:mouse_driver_enabled], 0
+    mov byte [cs:mouse_visible], 0
+    call mouse_vga_cursor_erase_if_drawn
+    iret
+
+.enable_driver:
+    xor ax, ax
+    mov al, [cs:mouse_driver_enabled]
+    mov byte [cs:mouse_driver_enabled], 1
+    cmp word [cs:mouse_hide_count], 0
+    jne .enable_done
+    mov byte [cs:mouse_visible], 1
+    call mouse_vga_cursor_refresh
+.enable_done:
+    iret
+
+.software_reset:
+    jmp .reset
+
+.set_language:
+    mov [cs:mouse_language], bl
+    xor ax, ax
+    iret
+
+.get_language:
+    xor ax, ax
+    xor bx, bx
+    mov bl, [cs:mouse_language]
+    iret
+
 .version:
     mov ax, 0x061A
     xor bx, bx
-    mov cx, 0x0004
+    mov bl, [cs:mouse_button_count]
+%if FAT_TYPE == 16
+    mov bh, 12
+%endif
+    xor cx, cx
+    mov cl, [cs:mouse_driver_enabled]
     xor dx, dx
+    mov dl, [cs:mouse_detected]
     iret
 
 int2f_handler:
@@ -16439,16 +16937,6 @@ old_int74_off dw 0
 old_int74_seg dw 0
 %endif
 current_video_mode db 0x03
-mouse_visible db 0
-mouse_min_x dw 0
-mouse_max_x dw 319
-mouse_min_y dw 0
-mouse_max_y dw 199
-mouse_cb_mask dw 0
-mouse_cb_off dw 0
-mouse_cb_seg dw 0
-mouse_mickey_x dw 8
-mouse_mickey_y dw 8
 %if FAT_TYPE == 16
 mouse_hw_ready db 0
 mouse_packet_index db 0
@@ -16952,10 +17440,68 @@ gfx_line_sx dw 0
 gfx_line_sy dw 0
 gfx_line_err dw 0
 gfx_line_e2 dw 0
+MOUSE_STATE_VERSION equ 0x3301
+MOUSE_STATE_SIZE equ 190
+mouse_state_begin:
+mouse_state_version dw MOUSE_STATE_VERSION
+mouse_state_size_field dw MOUSE_STATE_SIZE
 mouse_pos_x dw 320
 mouse_pos_y dw 240
+mouse_prev_x dw 320
+mouse_prev_y dw 240
 mouse_buttons db 0
+mouse_prev_buttons db 0
 mouse_installed db 0
+mouse_detected db 0
+mouse_button_count db 2
+mouse_driver_enabled db 1
+mouse_visible db 0
+mouse_gfx_cursor_custom db 0
+mouse_language db 0
+mouse_crt_page db 0
+mouse_light_pen_enabled db 0
+mouse_excl_enabled db 0
+mouse_hide_count dw 0
+mouse_min_x dw 0
+mouse_max_x dw 319
+mouse_min_y dw 0
+mouse_max_y dw 199
+mouse_excl_min_x dw 0
+mouse_excl_min_y dw 0
+mouse_excl_max_x dw 0
+mouse_excl_max_y dw 0
+mouse_cb_mask dw 0
+mouse_cb_off dw 0
+mouse_cb_seg dw 0
+mouse_cb_busy db 0
+mouse_cb_pending_buttons db 0
+mouse_cb_pending_mask dw 0
+mouse_cb_pending_x dw 320
+mouse_cb_pending_y dw 240
+mouse_cb_pending_dx dw 0
+mouse_cb_pending_dy dw 0
+mouse_alt_mask dw 0
+mouse_alt_off dw 0
+mouse_alt_seg dw 0
+mouse_mickey_x dw 8
+mouse_mickey_y dw 8
+mouse_sens_x dw 8
+mouse_sens_y dw 8
+mouse_double_threshold dw 64
+mouse_interrupt_rate dw 100
+mouse_last_event_mask dw 0
+mouse_text_cursor_type dw 0
+mouse_text_screen_mask dw 0xFFFF
+mouse_text_cursor_mask dw 0x7700
+mouse_gfx_hot_x dw 0
+mouse_gfx_hot_y dw 0
+mouse_press_count dw 0,0,0
+mouse_release_count dw 0,0,0
+mouse_press_x dw 320,320,320
+mouse_press_y dw 240,240,240
+mouse_release_x dw 320,320,320
+mouse_release_y dw 240,240,240
+mouse_gfx_cursor_mask times 32 dw 0
 
 gfx_font8_table:
     db 'A', 0x18,0x24,0x42,0x7E,0x42,0x42,0x42,0x00
