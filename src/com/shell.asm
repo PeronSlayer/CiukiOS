@@ -223,17 +223,17 @@ main_loop:
 
 .check_where:
     cmp byte [cmd_buf + 0], 'W'
-    jne .check_cd
+    jne .check_run
     cmp byte [cmd_buf + 1], 'H'
-    jne .check_cd
+    jne .check_run
     cmp byte [cmd_buf + 2], 'E'
-    jne .check_cd
+    jne .check_run
     cmp byte [cmd_buf + 3], 'R'
-    jne .check_cd
+    jne .check_run
     cmp byte [cmd_buf + 4], 'E'
-    jne .check_cd
+    jne .check_run
     cmp byte [cmd_buf + 5], 0
-    jne .check_cd
+    jne .check_run
     mov si, [echo_ptr]
     mov di, src_path
 .where_arg_parse:
@@ -274,6 +274,31 @@ main_loop:
     call print_dual_dollar_string
     jmp main_loop
 .where_done:
+    jmp main_loop
+
+.check_run:
+    cmp byte [cmd_buf + 0], 'R'
+    jne .check_cd
+    cmp byte [cmd_buf + 1], 'U'
+    jne .check_cd
+    cmp byte [cmd_buf + 2], 'N'
+    jne .check_cd
+    cmp byte [cmd_buf + 3], 0
+    jne .check_cd
+    mov si, [echo_ptr]
+.run_skip_spaces:
+    cmp byte [si], ' '
+    jne .run_parse
+    inc si
+    jmp .run_skip_spaces
+.run_parse:
+    cmp byte [si], 0
+    je .run_usage
+    mov di, src_path
+    jmp .exec_name_parse
+.run_usage:
+    mov si, msg_run_use
+    call print_dual_dollar_string
     jmp main_loop
 
 ; CD / CHDIR: change directory via INT 21h AH=3Bh, then echo the new path.
@@ -862,7 +887,19 @@ main_loop:
     call print_dual_dollar_string
     jmp main_loop
 .exec_fail:
+    cmp ax, 0x0008
+    je .exec_no_memory
+    cmp ax, 0x000B
+    je .exec_bad_format
     mov si, msg_exec_fail
+    call print_dual_dollar_string
+    jmp main_loop
+.exec_no_memory:
+    mov si, msg_exec_no_mem
+    call print_dual_dollar_string
+    jmp main_loop
+.exec_bad_format:
+    mov si, msg_exec_bad_format
     call print_dual_dollar_string
     jmp main_loop
 
@@ -2334,8 +2371,11 @@ msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
 msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
                   db 'use reboot or shutdown', 0x0D, 0x0A, '$'
 msg_exec_not_found db 'command: not found', 0x0D, 0x0A, '$'
-msg_exec_fail db 'run: cannot execute', 0x0D, 0x0A, '$'
+msg_exec_fail db 'exec: cannot execute', 0x0D, 0x0A, '$'
+msg_exec_bad_format db 'exec: unsupported executable format', 0x0D, 0x0A, '$'
+msg_exec_no_mem db 'exec: insufficient memory', 0x0D, 0x0A, '$'
 msg_path    db 'C:\APPS;C:\SYSTEM\DRIVERS;C:\SYSTEM', 0x0D, 0x0A, '$'
+msg_run_use db 'usage: run <name/path>', 0x0D, 0x0A, '$'
 msg_where_use db 'usage: where <name>', 0x0D, 0x0A, '$'
 msg_where_miss db 'where: not found', 0x0D, 0x0A, '$'
 msg_cwd_pre db 'Current directory: ', '$'

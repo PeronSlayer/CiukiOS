@@ -1716,9 +1716,14 @@ int21_exec:
 .subfn_ready:
     call int21_exec_capture_path
 
+    push ds
+    mov ax, cs
+    mov ds, ax
+    mov dx, dos_child_exec_path_buf
+
     mov si, dx
     call int21_path_to_fat_name
-    jc .path_fail
+    jc .path_fail_restore_ds
 
     push si
     mov si, dx
@@ -1767,6 +1772,7 @@ int21_exec:
 
 .path_resolved:
     pop si
+    pop ds
     jc .done
 
     cmp byte [cs:tmp_exec_subfn], 0x03
@@ -1894,6 +1900,10 @@ int21_exec:
 .path_fail:
     mov ax, 0x0003
     stc
+
+.path_fail_restore_ds:
+    pop ds
+    jmp .path_fail
 
 .done:
     pop word [cs:current_com_load_seg]
@@ -9641,6 +9651,7 @@ int21_lookup_in_dir:
 
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
+    mov [cs:tmp_lba_hi], dx
     xor dx, dx
 
 .sector_loop:
@@ -9649,10 +9660,21 @@ int21_lookup_in_dir:
 
     mov ax, DOS_META_BUF_SEG
     mov es, ax
+%if FAT_TYPE == 16
+    push dx
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    mov dx, [cs:tmp_lba_hi]
+    adc dx, 0
+    xor bx, bx
+    call read_sector_lba32
+    pop dx
+%else
     mov ax, [cs:tmp_lba]
     add ax, dx
     xor bx, bx
     call read_sector_lba
+%endif
     jc .io_fail
     mov ax, DOS_META_BUF_SEG
     mov es, ax

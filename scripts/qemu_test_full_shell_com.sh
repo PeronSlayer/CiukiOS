@@ -311,6 +311,24 @@ send_and_wait_for_pattern_prompt_and_absence() {
   mark_pass "$marker"
 }
 
+send_and_wait_for_prompt_and_absence() {
+  local command_text="$1"
+  local prompt_pattern="$2"
+  local absent_pattern="$3"
+  local marker="$4"
+  local timeout_sec="$5"
+  local offset
+  offset="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$command_text" || mark_fail "SEND_${marker}" "cannot send command: $command_text"
+  if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$prompt_pattern" "$offset" "$timeout_sec"; then
+    mark_fail "$marker" "expected prompt did not appear after: $command_text"
+  fi
+  if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$absent_pattern" "$offset" 1; then
+    mark_fail "$marker" "unexpected error output appeared after: $command_text"
+  fi
+  mark_pass "$marker"
+}
+
 send_and_wait_for_count_and_prompt() {
   local command_text="$1"
   local pattern="$2"
@@ -469,6 +487,7 @@ WHERE_DOS4GW_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+[\\]+D+O+S+4+G+W
 WHERE_MISSING_PATTERN='W+H+E+R+E+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 WHERE_MOUSE_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+M+O+U+S+E+\.*C+O+M+'
 EXEC_MISSING_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
+WHERE_WOLF3D_PATTERN='C+[:]+[\\]+A+P+P+S+[\\]+W+O+L+F+3+D+[\\]+W+O+L+F+3+D+\.*E+X+E+'
 UNKNOWN_CMD_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 USAGE_WHERE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
 CWD_APPS_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+[:]+[\\]+A+P+P+S+'
@@ -500,6 +519,7 @@ MOUSE_ENABLE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+D+R+I+V+E+R+[[:space:]]+E+N+A+B+
 MOUSE_RESET_CENTER_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+E+S+E+T+'
 COMDEMO_PASS_PATTERN='C+O+M+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
 ECHO_TOKEN='SH42'
+MZDEMO_PASS_PATTERN='M+Z+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
 ECHO_TOKEN_PATTERN='S+H+4+2+'
 EXEC_RETURN_TOKEN='XR52'
 EXEC_RETURN_PATTERN='X+R+5+2+'
@@ -707,6 +727,13 @@ else
   send_and_wait_for_pattern_prompt_and_absence 'dir .' "$DIR_DOSNAV_PATTERN" "$APPS_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_DOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd WOLF3D' "$WOLF3D_PROMPT_PATTERN" "CD_WOLF3D_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_prompt_and_absence 'dir' "$DIR_WOLF3D_PATTERN" "$WOLF3D_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_WOLF3D_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt_and_absence 'where WOLF3D' "$WOLF3D_PROMPT_PATTERN" "$WHERE_MISSING_PATTERN" "WHERE_WOLF3D_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt_and_absence 'where wolf3d.exe' "$WOLF3D_PROMPT_PATTERN" "$WHERE_MISSING_PATTERN" "WHERE_WOLF3D_LOWER_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'copy \APPS\MZDEMO.EXE MZDEMO.EXE' "$COPY_OK_PATTERN" "$WOLF3D_PROMPT_PATTERN" "WOLF3D_COPY_MZDEMO_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'MZDEMO' "$MZDEMO_PASS_PATTERN" "$WOLF3D_PROMPT_PATTERN" "EXEC_WOLF3D_CURRENT_EXE_PROBE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'mzdemo.exe' "$MZDEMO_PASS_PATTERN" "$WOLF3D_PROMPT_PATTERN" "EXEC_WOLF3D_CURRENT_EXE_LOWER_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'run MZDEMO' "$MZDEMO_PASS_PATTERN" "$WOLF3D_PROMPT_PATTERN" "RUN_WOLF3D_CURRENT_EXE_PROBE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'run MZDEMO.EXE' "$MZDEMO_PASS_PATTERN" "$WOLF3D_PROMPT_PATTERN" "RUN_WOLF3D_CURRENT_EXE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd ..' "$APPS_PROMPT_PATTERN" "CD_WOLF3D_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd DOSNAV' "$DOSNAV_PROMPT_PATTERN" "CD_DOSNAV_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_DOSNAV_PATTERN" "$DOSNAV_PROMPT_PATTERN" "PWD_DOSNAV_OK" "$COMMAND_TIMEOUT_SEC"
