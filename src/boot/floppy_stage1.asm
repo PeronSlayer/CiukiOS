@@ -3,6 +3,8 @@ org 0x0000
 
 %define CMD_BUF_LEN 64
 %define DOS_ENV_EXEC_PATH_LEN 64
+%define BOOT_SPLASH_WAIT_TICKS 18
+%define BOOT_STEP_WAIT_TICKS 7
 %define SHELL_EXEC_PATH_BUF_LEN 80
 %define SHELL_HISTORY_MAX 8
 %define COM_LOAD_SEG 0x2000
@@ -10189,7 +10191,7 @@ stage1_show_boot_splash:
     mov bl, 0x1F
     call video_write_centered_attr
 
-    mov cx, 4
+    mov cx, BOOT_SPLASH_WAIT_TICKS
     call stage1_boot_wait_ticks
 
 .done:
@@ -10317,6 +10319,8 @@ stage1_boot_mark_step:
     mov dh, 18
     mov bl, 0x0F
     call video_write_centered_attr
+    mov cx, BOOT_STEP_WAIT_TICKS
+    call stage1_boot_wait_ticks
 
     pop si
     pop dx
