@@ -153,25 +153,52 @@ stage1_start:
     mov si, msg_stage1_serial
     call print_string_serial
 
+%if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
+%if STAGE1_SELFTEST_AUTORUN == 0
+    call stage1_show_boot_splash
+    call stage1_show_boot_loading_screen
+%endif
+%endif
+
     call run_bios_diagnostics
     call install_int21_vector
 %if FAT_TYPE == 16
     call stage1_runtime_init
+%if STAGE1_BOOT_EXTERNAL_SHELL
+%if STAGE1_SELFTEST_AUTORUN == 0
+    mov al, 1
+    call stage1_boot_mark_step
+%endif
+%endif
 %endif
     call init_stage2_services
+%if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
+%if STAGE1_SELFTEST_AUTORUN == 0
+    mov al, 4
+    call stage1_boot_mark_step
+%endif
+%endif
     call init_shell_default_dirs
+%if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
+%if STAGE1_SELFTEST_AUTORUN == 0
+    mov al, 2
+    call stage1_boot_mark_step
+%endif
+%endif
 %if FAT_TYPE == 16 && STAGE1_RUNTIME_PROBE
     call stage1_runtime_probe
 %endif
 %if STAGE1_SELFTEST_AUTORUN
     call run_stage1_selftest
 %endif
-%if FAT_TYPE == 16
+%if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
 %if STAGE1_SELFTEST_AUTORUN == 0
-    call stage1_show_boot_splash
+    mov al, 3
+    call stage1_boot_mark_step
 %endif
-%endif
+%else
     call draw_shell_chrome
+%endif
 %if FAT_TYPE == 16
 %if HARDWARE_VALIDATION_SCREEN
     call print_hardware_validation_screen
@@ -182,6 +209,10 @@ stage1_start:
     push cs
     pop ds
 %if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
+%if STAGE1_SELFTEST_AUTORUN == 0
+    mov al, 5
+    call stage1_boot_mark_step
+%endif
     mov si, dos_env_exec_path
     call shell_try_exec_path
     jnc .shell_returned
@@ -10137,32 +10168,29 @@ stage1_show_boot_splash:
     push ds
     push es
 
-    call stage1_splash_set_mode_vesa
-    jc .fail_text
-
-    call stage1_splash_load_asset
-    jc .fail_graphics
-
     mov si, msg_splash_serial_ok
     call print_string_serial
 
-    call stage1_splash_apply_palette
-    call stage1_splash_blit_scaled
-    jc .fail_graphics
+    mov bl, 0x1F
+    call clear_screen_attr
 
-    call stage1_splash_wait_progress
-    call vdi_leave_graphics
-    jmp .done
+    mov si, msg_boot_splash_title
+    mov dh, 9
+    mov bl, 0x1F
+    call video_write_centered_attr
 
-.fail_graphics:
-    mov si, msg_splash_serial_fail
-    call print_string_serial
-    call vdi_leave_graphics
-    jmp .done
+    mov si, msg_boot_splash_subtitle
+    mov dh, 11
+    mov bl, 0x1F
+    call video_write_centered_attr
 
-.fail_text:
-    mov si, msg_splash_serial_fail
-    call print_string_serial
+    mov si, msg_boot_splash_tagline
+    mov dh, 14
+    mov bl, 0x1F
+    call video_write_centered_attr
+
+    mov cx, 4
+    call stage1_boot_wait_ticks
 
 .done:
 
@@ -10172,6 +10200,146 @@ stage1_show_boot_splash:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+stage1_show_boot_loading_screen:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov bl, 0x07
+    call clear_screen_attr
+
+    mov si, msg_boot_loader_title
+    mov dh, 3
+    mov bl, 0x0F
+    call video_write_centered_attr
+
+    mov si, msg_boot_loading_runtime
+    mov dh, 7
+    mov bl, 0x08
+    call video_write_centered_attr
+
+    mov si, msg_boot_loading_volume
+    mov dh, 9
+    mov bl, 0x08
+    call video_write_centered_attr
+
+    mov si, msg_boot_loading_shell
+    mov dh, 11
+    mov bl, 0x08
+    call video_write_centered_attr
+
+    mov si, msg_boot_loading_services
+    mov dh, 13
+    mov bl, 0x08
+    call video_write_centered_attr
+
+    mov si, msg_boot_loading_ready
+    mov dh, 15
+    mov bl, 0x08
+    call video_write_centered_attr
+
+    mov si, msg_boot_progress_0
+    mov dh, 18
+    mov bl, 0x07
+    call video_write_centered_attr
+
+    mov dh, 20
+    xor dl, dl
+    call set_cursor_pos
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+stage1_boot_mark_step:
+    push ax
+    push bx
+    push dx
+    push si
+
+    cmp al, 1
+    je .runtime
+    cmp al, 2
+    je .volume
+    cmp al, 3
+    je .shell
+    cmp al, 4
+    je .services
+
+    mov si, msg_boot_loading_ready
+    mov dh, 15
+    mov bl, 0x0F
+    call video_write_centered_attr
+    mov si, msg_boot_progress_100
+    jmp .progress
+
+.runtime:
+    mov si, msg_boot_loading_runtime
+    mov dh, 7
+    mov bl, 0x0F
+    call video_write_centered_attr
+    mov si, msg_boot_progress_20
+    jmp .progress
+
+.volume:
+    mov si, msg_boot_loading_volume
+    mov dh, 9
+    mov bl, 0x0F
+    call video_write_centered_attr
+    mov si, msg_boot_progress_40
+    jmp .progress
+
+.shell:
+    mov si, msg_boot_loading_shell
+    mov dh, 11
+    mov bl, 0x0F
+    call video_write_centered_attr
+    mov si, msg_boot_progress_80
+    jmp .progress
+
+.services:
+    mov si, msg_boot_loading_services
+    mov dh, 13
+    mov bl, 0x0F
+    call video_write_centered_attr
+    mov si, msg_boot_progress_60
+
+.progress:
+    mov dh, 18
+    mov bl, 0x0F
+    call video_write_centered_attr
+
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+stage1_boot_wait_ticks:
+    push ax
+    push bx
+    push dx
+
+    mov bx, cx
+    call gfx_get_tick_count
+    mov ax, dx
+
+.loop:
+    call gfx_get_tick_count
+    sub dx, ax
+    cmp dx, bx
+    jb .loop
+
+    pop dx
     pop bx
     pop ax
     ret
@@ -13832,6 +14000,35 @@ video_write_string_attr:
     pop ax
     ret
 
+video_write_centered_attr:
+    push ax
+    push cx
+    push dx
+    push si
+
+    push si
+    xor cx, cx
+.count:
+    lodsb
+    test al, al
+    jz .count_done
+    inc cx
+    jmp .count
+.count_done:
+    pop si
+
+    mov ax, 80
+    sub ax, cx
+    shr ax, 1
+    mov dl, al
+    call video_write_string_attr
+
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 draw_hline_attr:
     push ax
     push bx
@@ -17334,6 +17531,21 @@ msg_loader_bsod_restart db "Please restart your PC.", 13, 10, 13, 10, 0
 msg_loader_bsod_error db "Error:", 13, 10, 0
 msg_shell_missing_fatal db "- SHELL.COM missing", 13, 10, 0
 msg_shell_returned_fatal db "SHELL.COM returned control to the loader.", 13, 10, "This is not supported in loader-only mode.", 13, 10, 0
+msg_boot_splash_title db "CiukiOS", 0
+msg_boot_splash_subtitle db "pre-Alpha v0.6.7", 0
+msg_boot_splash_tagline db "WOOF-powered operating system", 0
+msg_boot_loader_title db "CiukiOS loader v0.6.7", 0
+msg_boot_loading_runtime db "Loading core runtime...", 0
+msg_boot_loading_volume db "Mounting system volume...", 0
+msg_boot_loading_shell db "Loading SHELL.COM...", 0
+msg_boot_loading_services db "Starting services...", 0
+msg_boot_loading_ready db "WOOF. System ready.", 0
+msg_boot_progress_0 db "[----------] 0%", 0
+msg_boot_progress_20 db "[##--------] 20%", 0
+msg_boot_progress_40 db "[####------] 40%", 0
+msg_boot_progress_60 db "[######----] 60%", 0
+msg_boot_progress_80 db "[########--] 80%", 0
+msg_boot_progress_100 db "[##########] 100%", 0
 msg_dir_header db "Dir", 13, 10, 0
 msg_dir_empty db "no files found", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
