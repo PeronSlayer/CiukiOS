@@ -161,6 +161,7 @@ stage1_start:
 
 %if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
 %if STAGE1_SELFTEST_AUTORUN == 0
+    call hide_text_cursor
     call stage1_show_boot_splash
     call stage1_show_boot_loading_screen
 %endif
@@ -218,6 +219,7 @@ stage1_start:
 %if STAGE1_SELFTEST_AUTORUN == 0
     mov al, 5
     call stage1_boot_mark_step
+    call show_text_cursor
 %endif
     mov si, dos_env_exec_path
     call shell_try_exec_path
@@ -13979,6 +13981,28 @@ set_cursor_pos:
     xor bh, bh
     int 0x10
     pop bx
+    pop ax
+    ret
+
+hide_text_cursor:
+    push ax
+    push cx
+    mov ah, 0x01
+    mov ch, 0x20
+    mov cl, 0x00
+    int 0x10
+    pop cx
+    pop ax
+    ret
+
+show_text_cursor:
+    push ax
+    push cx
+    mov ah, 0x01
+    mov ch, 0x06
+    mov cl, 0x07
+    int 0x10
+    pop cx
     pop ax
     ret
 
