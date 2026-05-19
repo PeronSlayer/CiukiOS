@@ -3,8 +3,12 @@ org 0x0000
 
 %define CMD_BUF_LEN 64
 %define DOS_ENV_EXEC_PATH_LEN 64
-%define BOOT_SPLASH_WAIT_TICKS 18
-%define BOOT_STEP_WAIT_TICKS 7
+%define BOOT_SPLASH_WAIT_TICKS 27
+%define BOOT_STEP_WAIT_TICKS 9
+%define BOOT_SPLASH_WAIT_US_HI 0x0016
+%define BOOT_SPLASH_WAIT_US_LO 0xE360
+%define BOOT_STEP_WAIT_US_HI 0x0007
+%define BOOT_STEP_WAIT_US_LO 0xA120
 %define SHELL_EXEC_PATH_BUF_LEN 80
 %define SHELL_HISTORY_MAX 8
 %define COM_LOAD_SEG 0x2000
@@ -10191,8 +10195,10 @@ stage1_show_boot_splash:
     mov bl, 0x1F
     call video_write_centered_attr
 
-    mov cx, BOOT_SPLASH_WAIT_TICKS
-    call stage1_boot_wait_ticks
+    mov bx, BOOT_SPLASH_WAIT_TICKS
+    mov cx, BOOT_SPLASH_WAIT_US_HI
+    mov dx, BOOT_SPLASH_WAIT_US_LO
+    call stage1_wait_visible_delay
 
 .done:
 
@@ -10319,11 +10325,35 @@ stage1_boot_mark_step:
     mov dh, 18
     mov bl, 0x0F
     call video_write_centered_attr
-    mov cx, BOOT_STEP_WAIT_TICKS
-    call stage1_boot_wait_ticks
+    mov bx, BOOT_STEP_WAIT_TICKS
+    mov cx, BOOT_STEP_WAIT_US_HI
+    mov dx, BOOT_STEP_WAIT_US_LO
+    call stage1_wait_visible_delay
 
     pop si
     pop dx
+    pop bx
+    pop ax
+    ret
+
+stage1_wait_visible_delay:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; Prefer BIOS elapsed-time wait for a visible pause; fall back to timer ticks
+    ; if the platform does not support INT 15h AH=86h.
+    mov ah, 0x86
+    int 0x15
+    jnc .done
+
+    mov cx, bx
+    call stage1_boot_wait_ticks
+
+.done:
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
