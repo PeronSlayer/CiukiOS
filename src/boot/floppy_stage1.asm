@@ -7565,7 +7565,13 @@ int21_write:
     cmp bx, cx
     jae .stdio_done
     mov al, [ds:si + bx]
+%if TRACE_CHILD_INT21 == 0
+    push ax
+    call console_putc_ansi
+    pop ax
+%else
     call bios_putc
+%endif
     call serial_putc
     inc bx
     jmp .stdio_loop
@@ -7577,6 +7583,190 @@ int21_write:
     pop bx
     clc
     jmp .done
+
+%if TRACE_CHILD_INT21 == 0
+console_ansi_reset:
+    mov byte [cs:console_ansi_state], 0
+    mov byte [cs:console_ansi_flags], 0
+    mov byte [cs:console_ansi_p1], 0
+    mov byte [cs:console_ansi_p2], 0
+    ret
+
+console_putc_ansi:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bl, [cs:console_ansi_state]
+    cmp bl, 0
+    jne .state_nonzero
+    cmp al, 0x1B
+    jne .literal
+    mov byte [cs:console_ansi_state], 1
+    jmp .done
+
+.literal:
+    call bios_putc
+    jmp .done
+
+.state_nonzero:
+    cmp bl, 1
+    jne .state_csi
+    cmp al, '['
+    je .csi_begin
+    mov byte [cs:console_ansi_state], 0
+    push ax
+    mov al, 0x1B
+    call bios_putc
+    pop ax
+    call bios_putc
+    jmp .done
+
+.csi_begin:
+    mov byte [cs:console_ansi_state], 2
+    mov byte [cs:console_ansi_flags], 0
+    mov byte [cs:console_ansi_p1], 0
+    mov byte [cs:console_ansi_p2], 0
+    jmp .done
+
+.state_csi:
+    cmp al, '0'
+    jb .csi_control
+    cmp al, '9'
+    ja .csi_control
+    sub al, '0'
+    mov cl, al
+    mov al, [cs:console_ansi_flags]
+    test al, 0x01
+    jnz .digit_p2
+    mov al, [cs:console_ansi_p1]
+    mov bl, 10
+    mul bl
+    add al, cl
+    mov [cs:console_ansi_p1], al
+    or byte [cs:console_ansi_flags], 0x02
+    jmp .done
+
+.digit_p2:
+    mov al, [cs:console_ansi_p2]
+    mov bl, 10
+    mul bl
+    add al, cl
+    mov [cs:console_ansi_p2], al
+    or byte [cs:console_ansi_flags], 0x04
+    jmp .done
+
+.csi_control:
+    cmp al, ';'
+    je .separator
+    cmp al, 'H'
+    je .cursor
+    cmp al, 'f'
+    je .cursor
+    cmp al, 'J'
+    je .clear_screen
+    cmp al, 'K'
+    je .clear_eol
+    call console_ansi_reset
+    jmp .done
+
+.separator:
+    or byte [cs:console_ansi_flags], 0x01
+    jmp .done
+
+.cursor:
+    xor ax, ax
+    mov al, [cs:console_ansi_p1]
+    test byte [cs:console_ansi_flags], 0x02
+    jnz .row_ready
+    mov al, 1
+.row_ready:
+    or al, al
+    jnz .row_nonzero
+    mov al, 1
+.row_nonzero:
+    cmp al, 25
+    jbe .row_clamped
+    mov al, 25
+.row_clamped:
+    dec al
+    mov dh, al
+    xor ax, ax
+    mov al, [cs:console_ansi_p2]
+    test byte [cs:console_ansi_flags], 0x04
+    jnz .col_ready
+    mov al, 1
+.col_ready:
+    or al, al
+    jnz .col_nonzero
+    mov al, 1
+.col_nonzero:
+    cmp al, 80
+    jbe .col_clamped
+    mov al, 80
+.col_clamped:
+    dec al
+    mov dl, al
+    call set_cursor_pos
+    call console_ansi_reset
+    jmp .done
+
+.clear_screen:
+    xor ax, ax
+    mov al, [cs:console_ansi_p1]
+    test byte [cs:console_ansi_flags], 0x02
+    jz .clear_screen_apply
+    cmp al, 0
+    je .clear_screen_apply
+    cmp al, 2
+    jne .clear_ignore
+.clear_screen_apply:
+    mov bl, 0x07
+    call clear_screen_attr
+    xor dx, dx
+    call set_cursor_pos
+    call console_ansi_reset
+    jmp .done
+
+.clear_eol:
+    xor ax, ax
+    mov al, [cs:console_ansi_p1]
+    test byte [cs:console_ansi_flags], 0x02
+    jz .clear_eol_apply
+    cmp al, 0
+    je .clear_eol_apply
+    cmp al, 2
+    jne .clear_ignore
+.clear_eol_apply:
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10
+    xor ax, ax
+    mov al, [cs:console_ansi_p1]
+    cmp al, 2
+    jne .clear_eol_from_cursor
+    xor dl, dl
+.clear_eol_from_cursor:
+    mov ah, 0x06
+    xor al, al
+    mov bh, 0x07
+    mov ch, dh
+    mov cl, dl
+    mov dl, 79
+    int 0x10
+    call console_ansi_reset
+    jmp .done
+
+.clear_ignore:
+    call console_ansi_reset
+
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 int21_write_grow_chain:
     mov bx, 2
@@ -18559,6 +18749,12 @@ old_int74_off dw 0
 old_int74_seg dw 0
 %endif
 current_video_mode db 0x03
+%if TRACE_CHILD_INT21 == 0
+console_ansi_state db 0
+console_ansi_flags db 0
+console_ansi_p1 db 0
+console_ansi_p2 db 0
+%endif
 %if FAT_TYPE == 16
 mouse_hw_ready db 0
 mouse_packet_index db 0
