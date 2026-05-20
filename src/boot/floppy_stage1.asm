@@ -1180,6 +1180,7 @@ int21_handler:
     mov ax, [cs:current_psp_seg]
     or ax, ax
     jz .fn_4c_no_process
+    call int21_restore_psp_term_vectors
 %if TRACE_CHILD_INT21 != 0
     call child_trace_exit_int21
 %endif
@@ -2192,10 +2193,46 @@ int21_mem_adopt_child_psp:
     pop ax
     ret
 
+int21_restore_psp_term_vectors:
+    push ax
+    push bx
+    push ds
+    push es
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jz .done
+    mov ds, ax
+    xor ax, ax
+    mov es, ax
+    mov bx, (0x22 * 4)
+    mov ax, [ds:0x000A]
+    mov [es:bx], ax
+    mov ax, [ds:0x000C]
+    mov [es:bx + 2], ax
+    mov bx, (0x23 * 4)
+    mov ax, [ds:0x000E]
+    mov [es:bx], ax
+    mov ax, [ds:0x0010]
+    mov [es:bx + 2], ax
+    mov bx, (0x24 * 4)
+    mov ax, [ds:0x0012]
+    mov [es:bx], ax
+    mov ax, [ds:0x0014]
+    mov [es:bx + 2], ax
+.done:
+    pop es
+    pop ds
+    pop bx
+    pop ax
+    ret
+
 int21_init_psp_handles:
     push ax
+    push bx
     push cx
+    push si
     push di
+    push ds
     mov word [es:0x0032], 20
     mov word [es:0x0034], 0x0018
     mov ax, es
@@ -2206,18 +2243,40 @@ int21_init_psp_handles:
     mov ax, es
 .parent_ready:
     mov [es:0x0016], ax
+    mov ax, [cs:current_psp_seg]
+    mov [es:0x002A], ax
     mov di, 0x0018
-    mov ax, 0x0100
-    stosw
-    mov ax, 0x0302
-    stosw
-    mov al, 4
-    stosb
     mov al, 0xFF
-    mov cx, 15
+    mov cx, 20
     rep stosb
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jz .init_defaults
+    mov ds, ax
+    mov si, 0x0018
+    mov di, 0x0018
+    mov cx, [ds:0x0032]
+    or cx, cx
+    jz .init_defaults
+    cmp cx, 20
+    jbe .copy_ready
+    mov cx, 20
+.copy_ready:
+    rep movsb
+    jmp .done
+.init_defaults:
+    mov byte [es:0x0018], 0
+    mov byte [es:0x0019], 1
+    mov byte [es:0x001A], 2
+    mov byte [es:0x001B], 3
+    mov byte [es:0x001C], 4
+.done:
+    mov word [es:0x002C], DOS_ENV_SEG
     pop di
+    pop ds
+    pop si
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -11050,8 +11109,7 @@ int21_build_env_block:
     push ds
     push es
 
-    mov ax, [cs:tmp_overlay_block_seg]
-    mov [es:0x002C], ax
+    mov word [es:0x002C], DOS_ENV_SEG
     mov ax, cs
     mov ds, ax
     mov ax, DOS_ENV_SEG
