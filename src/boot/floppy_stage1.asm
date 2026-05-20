@@ -175,6 +175,7 @@ stage1_start:
 %endif
 %if FAT_TYPE == 16
     call stage1_runtime_init
+    jc .runtime_init_failed
 %if STAGE1_BOOT_EXTERNAL_SHELL
 %if STAGE1_SELFTEST_AUTORUN == 0
     mov al, 1
@@ -215,6 +216,13 @@ stage1_start:
     call print_hardware_validation_screen
 %endif
 %endif
+    jmp .after_runtime_init_failed
+
+.runtime_init_failed:
+    mov si, msg_runtime_missing_fatal
+    jmp stage1_loader_fatal
+
+.after_runtime_init_failed:
 
     call flush_keyboard_buffer
     push cs
@@ -16106,6 +16114,23 @@ stage1_runtime_init:
     repe cmpsb
     jne .fail
 
+    mov word [runtime_handoff_version], 0x0001
+    mov al, [boot_drive]
+    mov [runtime_handoff_boot_drive], al
+    mov al, [dos_default_drive]
+    mov [runtime_handoff_default_drive], al
+    int 0x12
+    mov [runtime_handoff_mem_kb], ax
+    mov word [runtime_handoff_fat_spt], FAT_SPT
+    mov word [runtime_handoff_fat_heads], FAT_HEADS
+    mov word [runtime_handoff_fat_reserved], FAT_RESERVED_SECTORS
+    mov byte [runtime_handoff_fat_spc], FAT_SECTORS_PER_CLUSTER
+%if STAGE1_BOOT_EXTERNAL_SHELL
+    mov byte [runtime_handoff_entry_flags], 1
+%else
+    mov byte [runtime_handoff_entry_flags], 0
+%endif
+
     push cs
     pop es
     mov di, runtime_handoff
@@ -18664,6 +18689,15 @@ runtime_handoff:
 runtime_table_off dw 0
 runtime_table_seg dw 0
 runtime_status_flags dw 0
+runtime_handoff_version dw 0
+runtime_handoff_boot_drive db 0
+runtime_handoff_default_drive db 0
+runtime_handoff_mem_kb dw 0
+runtime_handoff_fat_spt dw FAT_SPT
+runtime_handoff_fat_heads dw FAT_HEADS
+runtime_handoff_fat_reserved dw FAT_RESERVED_SECTORS
+runtime_handoff_fat_spc db FAT_SECTORS_PER_CLUSTER
+runtime_handoff_entry_flags db 0
 runtime_service_ptr:
 runtime_service_off dw 0
 runtime_service_seg dw 0
@@ -18883,7 +18917,7 @@ msg_runtime_probe_table db "[RTP] T", 13, 10, 0
 msg_runtime_probe_call db "[RTP] C", 13, 10, 0
 msg_runtime_probe_ok db "[RTP] OK", 13, 10, 0
 msg_runtime_probe_bad db "[RTP] BAD", 13, 10, 0
-runtime_probe_version_prefix db "CiukiOS runtime split"
+runtime_probe_version_prefix db "CIUKIDOS runtime"
 runtime_probe_version_prefix_len equ $ - runtime_probe_version_prefix
 runtime_probe_marker_prefix db "[S2] ready"
 runtime_probe_marker_prefix_len equ $ - runtime_probe_marker_prefix
@@ -18978,10 +19012,7 @@ msg_child_exec_entry db " entry=", 0
 msg_child_exec_stack db " stack=", 0
 msg_child_exec_minalloc db " min=", 0
 msg_child_exec_maxalloc db " max=", 0
-msg_child21_in db "CH21I ah=", 0
-msg_child21_out db "CH21O ah=", 0
 msg_child_ax db " ax=", 0
-msg_child_bx db " bx=", 0
 msg_child_cx db " cx=", 0
 msg_child_dx db " dx=", 0
 msg_child_ds db " ds=", 0
@@ -18994,7 +19025,6 @@ msg_child_4a_old db " old=", 0
 msg_child_4a_bxout db " bo=", 0
 msg_child_40 db "CH40", 0
 msg_child_40r db "CH40R", 0
-msg_child40_hex db " h=", 0
 msg_child_exit db "CHILD_EXIT", 0
 msg_child_exit_reason db " reason=", 0
 msg_child_exit_reason_retf db " reason=RETF", 0
@@ -19031,6 +19061,7 @@ msg_loader_bsod_woof db "WOOF! CiukiOS ran into a problem.", 13, 10, 13, 10, 0
 msg_loader_bsod_body db "The system loader could not continue safely.", 13, 10, 0
 msg_loader_bsod_restart db "Please restart your PC.", 13, 10, 13, 10, 0
 msg_loader_bsod_error db "Error:", 13, 10, 0
+msg_runtime_missing_fatal db "- CIUKIDOS.SYS missing or invalid", 13, 10, 0
 msg_shell_missing_fatal db "- SHELL.COM missing", 13, 10, 0
 msg_shell_returned_fatal db "SHELL.COM returned control to the loader.", 13, 10, "This is not supported in loader-only mode.", 13, 10, 0
 msg_boot_splash_title db "CiukiOS", 0
@@ -19082,9 +19113,9 @@ path_mvren_final_dos db "\APPS\T\C.COM", 0
 %if STAGE2_AUTORUN
 path_stage2_dos db "\SYSTEM\STAGE2.BIN", 0
 %endif
-path_runtime_dos db "\SYSTEM\RUNTIME.BIN", 0
+path_runtime_dos db "\SYSTEM\CIUKIDOS.SYS", 0
 path_splash_bin_dos db "\SYSTEM\SPLASH.BIN", 0
-runtime_loader_signature db "CIUKRT01"
+runtime_loader_signature db "CIUKIDOS"
 msg_splash_serial_ok db "[SPLASH] LOAD OK", 13, 10, 0
 msg_splash_serial_fail db "[SPLASH] LOAD FAIL", 13, 10, 0
 %endif

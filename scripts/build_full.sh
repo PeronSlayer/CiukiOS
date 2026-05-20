@@ -23,8 +23,8 @@ STAGE1_SLOT_BIN="build/full/obj/full_stage1_slot.bin"
 STAGE2_SRC="src/boot/full_stage2.asm"
 STAGE2_BIN="build/full/obj/full_stage2.bin"
 STAGE2_MAX_SIZE=512
-RUNTIME_SRC="src/runtime/runtime.asm"
-RUNTIME_BIN="build/full/obj/runtime.bin"
+RUNTIME_SRC="src/runtime/ciukidos.asm"
+RUNTIME_BIN="build/full/obj/ciukidos.sys"
 RUNTIME_MAX_SIZE=512
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
@@ -302,7 +302,7 @@ if [[ "$STAGE2_SIZE" -gt "$STAGE2_MAX_SIZE" ]]; then
 fi
 
 if [[ "$RUNTIME_SIZE" -gt "$RUNTIME_MAX_SIZE" ]]; then
-	echo "[build-full] ERROR: runtime placeholder is $RUNTIME_SIZE bytes (max $RUNTIME_MAX_SIZE)" >&2
+	echo "[build-full] ERROR: CIUKIDOS runtime is $RUNTIME_SIZE bytes (max $RUNTIME_MAX_SIZE)" >&2
 	exit 1
 fi
 
@@ -643,8 +643,8 @@ mcopy -o -i "$IMG" "$COMMAND_STUB_BIN" "$COMMAND_COMPAT_IMAGE_PATH"
 echo "[build-full] injecting external shell prototype to ::SYSTEM/SHELL.COM"
 mcopy -o -i "$IMG" "$SHELL_BIN" ::SYSTEM/SHELL.COM
 
-echo "[build-full] injecting runtime split placeholder to ::SYSTEM/RUNTIME.BIN"
-mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/RUNTIME.BIN
+echo "[build-full] injecting CIUKIDOS runtime skeleton to ::SYSTEM/CIUKIDOS.SYS"
+mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/CIUKIDOS.SYS
 
 echo "[build-full] injecting DRVLOAD.COM helper to ${DRIVERS_IMAGE_DIR%/}/DRVLOAD.COM"
 mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
