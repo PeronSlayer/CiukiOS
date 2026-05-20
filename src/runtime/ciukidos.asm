@@ -29,6 +29,8 @@ runtime_state_parent_psp dw 0
 runtime_state_previous_psp dw 0
 runtime_state_dta_seg dw 0
 runtime_state_dta_off dw 0
+runtime_state_saved_parent_dta_seg dw 0
+runtime_state_saved_parent_dta_off dw 0
 runtime_state_jft_seg dw 0
 runtime_state_jft_off dw 0
 runtime_state_jft_count dw 0
@@ -94,7 +96,7 @@ runtime_entry:
 runtime_service_table:
     db 'R', 'T', 'S', 'V'
     dw 0x0001
-    dw 0x0006
+    dw 0x0008
     dw 0x0008
     dw 0x0001
     dw 0x0001
@@ -119,6 +121,14 @@ runtime_service_table:
     dw 0x0006
     dw 0x0001
     dw runtime_get_state_ptr_service
+    dw 0x0000
+    dw 0x0007
+    dw 0x0001
+    dw runtime_prepare_child_dta_service
+    dw 0x0000
+    dw 0x0008
+    dw 0x0001
+    dw runtime_restore_parent_dta_service
     dw 0x0000
 
 runtime_identity_service:
@@ -159,4 +169,34 @@ runtime_get_state_ptr_service:
     pop ds
     mov si, runtime_state_signature
     clc
+    retf
+
+runtime_prepare_child_dta_service:
+    mov [runtime_state_saved_parent_dta_seg], ax
+    mov [runtime_state_saved_parent_dta_off], bx
+    mov [runtime_state_parent_psp], cx
+    mov [runtime_state_previous_psp], cx
+    mov [runtime_state_current_psp], dx
+    mov [runtime_state_dta_seg], dx
+    mov word [runtime_state_dta_off], 0x0080
+    clc
+    retf
+
+runtime_restore_parent_dta_service:
+    mov ax, [runtime_state_saved_parent_dta_seg]
+    or ax, ax
+    jz .fail
+    mov dx, [runtime_state_saved_parent_dta_off]
+    mov [runtime_state_dta_seg], ax
+    mov [runtime_state_dta_off], dx
+    mov bx, [runtime_state_parent_psp]
+    mov [runtime_state_current_psp], bx
+    xor bx, bx
+    mov [runtime_state_saved_parent_dta_seg], bx
+    mov [runtime_state_saved_parent_dta_off], bx
+    clc
+    retf
+
+.fail:
+    stc
     retf

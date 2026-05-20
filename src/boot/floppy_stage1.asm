@@ -36,6 +36,13 @@ org 0x0000
 %define DOS_MEM_BLOCK_ALLOC 1
 %define DOS_MEM_BLOCK_TABLE_MAX 32
 %define DOS_MEM_BLOCK_ENTRY_SIZE 8
+%define CDOSSTATE_OFF_CURRENT_PSP 35
+%define CDOSSTATE_OFF_PARENT_PSP 37
+%define CDOSSTATE_OFF_PREVIOUS_PSP 39
+%define CDOSSTATE_OFF_DTA_SEG 41
+%define CDOSSTATE_OFF_DTA_OFF 43
+%define CDOSSTATE_OFF_SAVED_PARENT_DTA_SEG 45
+%define CDOSSTATE_OFF_SAVED_PARENT_DTA_OFF 47
 %ifndef DOS_DEFAULT_DRIVE_INDEX
 %if FAT_TYPE == 16
 %define DOS_DEFAULT_DRIVE_INDEX 2
@@ -534,6 +541,7 @@ int20_handler:
     pop ds
     mov byte [last_exit_code], 0
     mov byte [last_term_type], 0
+    call ciukidos_restore_parent_dta
     mov bp, sp
     mov ax, [bp + 2]
     cmp ax, [current_com_load_seg]
@@ -1188,6 +1196,7 @@ int21_handler:
     mov ax, [cs:current_psp_seg]
     or ax, ax
     jz .fn_4c_no_process
+    call ciukidos_restore_parent_dta
     call int21_restore_psp_term_vectors
 %if TRACE_CHILD_INT21 != 0
     call child_trace_exit_int21
@@ -2639,8 +2648,10 @@ int21_exec_run_com:
     mov [cs:saved_es], ax
 
 .ctx_saved:
+    mov dx, [cs:current_com_load_seg]
+    call ciukidos_save_parent_dta
     cli
-    mov ax, [cs:current_com_load_seg]
+    mov ax, dx
     mov [cs:current_psp_seg], ax
 %if TRACE_CHILD_INT21 != 0
     call child_trace_begin_com
@@ -3046,7 +3057,9 @@ int21_exec_run_mz:
     mov [cs:saved_es], dx
 
 .ctx_saved:
-    mov ax, [cs:mz_psp_seg]
+    mov dx, [cs:mz_psp_seg]
+    call ciukidos_save_parent_dta
+    mov ax, dx
     mov [cs:current_psp_seg], ax
     push ax
     call int21_exec_prepare_mz_free_mcb
@@ -4072,124 +4085,12 @@ exec_trace_lookup_entry:
     ret
 
 exec_trace_open_state:
-    call exec_format_trace_should_log
-    jnc .done
-    push ax
-    push si
-    mov si, msg_exec_open_handle
-    call exec_format_trace_print_cs_string
-    mov ax, [cs:search_found_cluster]
-    call print_hex16_serial
-    mov si, msg_exec_size_hi
-    call exec_format_trace_print_cs_string
-    mov ax, [cs:search_found_size_hi]
-    call print_hex16_serial
-    mov si, msg_exec_size_lo
-    call exec_format_trace_print_cs_string
-    mov ax, [cs:search_found_size_lo]
-    call print_hex16_serial
-    mov si, msg_exec_off
-    call exec_format_trace_print_cs_string
-    xor ax, ax
-    call print_hex16_serial
-    call print_newline_serial
-    mov si, msg_exec_hdr_read_begin
-    call exec_format_trace_print_cs_string
-    xor ax, ax
-    call print_hex16_serial
-    call print_newline_serial
-    pop si
-    pop ax
-.done:
     ret
 
 exec_trace_hdr_lba:
-    call exec_format_trace_should_log
-    jnc .done
-    push ax
-    push dx
-    push si
-    mov si, msg_exec_hdr_lba
-    call exec_format_trace_print_cs_string
-    mov ax, [cs:tmp_cluster]
-    call print_hex16_serial
-    mov si, msg_exec_sec
-    call exec_format_trace_print_cs_string
-    mov ax, [cs:tmp_cluster_off]
-    mov cl, 9
-    shr ax, cl
-    call print_hex16_serial
-    mov si, msg_exec_lba_hi
-    call exec_format_trace_print_cs_string
-    mov ax, [cs:tmp_lba_hi]
-    call print_hex16_serial
-    mov si, msg_exec_lba_lo
-    call exec_format_trace_print_cs_string
-    mov ax, [cs:tmp_lba]
-    call print_hex16_serial
-    mov si, msg_exec_lba32
-    call exec_format_trace_print_cs_string
-    call print_newline_serial
-    pop si
-    pop dx
-    pop ax
-.done:
     ret
 
 exec_trace_hdr_bytes:
-    call exec_format_trace_should_log
-    jnc .done
-    push ax
-    push si
-    push ds
-    mov ax, DOS_IO_BUF_SEG
-    mov ds, ax
-    xor si, si
-    push cs
-    pop ax
-    mov ds, ax
-    mov si, msg_exec_hdr_bytes
-    call print_string_serial
-    mov ax, DOS_IO_BUF_SEG
-    mov ds, ax
-    mov al, [0x0000]
-    call print_hex8_serial
-    push cs
-    pop ds
-    mov si, msg_exec_b1
-    call print_string_serial
-    mov ax, DOS_IO_BUF_SEG
-    mov ds, ax
-    mov al, [0x0001]
-    call print_hex8_serial
-    push cs
-    pop ds
-    mov si, msg_exec_b2
-    call print_string_serial
-    mov ax, DOS_IO_BUF_SEG
-    mov ds, ax
-    mov al, [0x0002]
-    call print_hex8_serial
-    push cs
-    pop ds
-    mov si, msg_exec_b3
-    call print_string_serial
-    mov ax, DOS_IO_BUF_SEG
-    mov ds, ax
-    mov al, [0x0003]
-    call print_hex8_serial
-    call print_newline_serial
-    push cs
-    pop ds
-    mov si, msg_exec_hdr_read_done
-    call print_string_serial
-    mov ax, 0x0200
-    call print_hex16_serial
-    call print_newline_serial
-    pop ds
-    pop si
-    pop ax
-.done:
     ret
 
 child_trace_begin_com:
@@ -15993,13 +15894,13 @@ init_stage2_services:
 stage1_runtime_clear_cache:
     push ax
     xor ax, ax
-    mov [runtime_table_off], ax
-    mov [runtime_table_seg], ax
-    mov [runtime_status_flags], ax
-    mov [runtime_service_off], ax
-    mov [runtime_service_seg], ax
-    mov [runtime_state_off], ax
-    mov [runtime_state_seg], ax
+    mov [cs:runtime_table_off], ax
+    mov [cs:runtime_table_seg], ax
+    mov [cs:runtime_status_flags], ax
+    mov [cs:runtime_service_off], ax
+    mov [cs:runtime_service_seg], ax
+    mov [cs:runtime_state_off], ax
+    mov [cs:runtime_state_seg], ax
     pop ax
     ret
 
@@ -16010,14 +15911,14 @@ stage1_runtime_lookup_service:
     push es
 
     mov dx, ax
-    mov ax, [runtime_status_flags]
+    mov ax, [cs:runtime_status_flags]
     test ax, 1
     jz .fail
-    mov ax, [runtime_table_seg]
+    mov ax, [cs:runtime_table_seg]
     or ax, ax
     jz .fail
     mov es, ax
-    mov bx, [runtime_table_off]
+    mov bx, [cs:runtime_table_off]
     or bx, bx
     jz .fail
     cmp dx, 0x0001
@@ -16027,9 +15928,9 @@ stage1_runtime_lookup_service:
     mov ax, [es:bx + 14]
     or ax, ax
     jz .fail
-    mov [runtime_service_off], ax
-    mov ax, [runtime_table_seg]
-    mov [runtime_service_seg], ax
+    mov [cs:runtime_service_off], ax
+    mov ax, [cs:runtime_table_seg]
+    mov [cs:runtime_service_seg], ax
     clc
     jmp .done
 
@@ -16053,9 +15954,9 @@ stage1_runtime_lookup_service:
     mov ax, [es:bx + 4]
     or ax, ax
     jz .fail
-    mov [runtime_service_off], ax
-    mov ax, [runtime_table_seg]
-    mov [runtime_service_seg], ax
+    mov [cs:runtime_service_off], ax
+    mov ax, [cs:runtime_table_seg]
+    mov [cs:runtime_service_seg], ax
     clc
     jmp .done
 
@@ -16127,6 +16028,39 @@ ciukidos_get_state_ptr:
     stc
     ret
 
+ciukidos_save_parent_dta:
+    push ax
+    push bx
+    push cx
+    mov ax, 0x0007
+    call stage1_runtime_lookup_service
+    jc .done
+    mov ax, [cs:dta_seg]
+    mov bx, [cs:dta_off]
+    mov cx, [cs:current_psp_seg]
+    call far [cs:runtime_service_ptr]
+    jc .done
+    mov [cs:dta_seg], dx
+    mov word [cs:dta_off], 0x0080
+.done:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+ciukidos_restore_parent_dta:
+    push ax
+    mov ax, 0x0008
+    call stage1_runtime_lookup_service
+    jc .done
+    call far [cs:runtime_service_ptr]
+    jc .done
+    mov [cs:dta_seg], ax
+    mov [cs:dta_off], dx
+.done:
+    pop ax
+    ret
+
 stage1_runtime_sync_default_drive:
     push ax
     push ds
@@ -16175,16 +16109,16 @@ stage1_runtime_validate_cache:
     push cx
     push es
 
-    mov ax, [runtime_status_flags]
+    mov ax, [cs:runtime_status_flags]
     test ax, 1
     jz .fail
-    mov ax, [runtime_table_seg]
+    mov ax, [cs:runtime_table_seg]
     cmp ax, RUNTIME_LOAD_SEG
     jne .fail
     or ax, ax
     jz .fail
     mov es, ax
-    mov bx, [runtime_table_off]
+    mov bx, [cs:runtime_table_off]
     or bx, bx
     jz .fail
     cmp word [es:bx], 0x5452
@@ -16301,6 +16235,8 @@ stage1_runtime_init:
     push cs
     pop ds
     call stage1_runtime_validate_cache
+    jc .fail
+    call ciukidos_get_state_ptr
     jc .fail
     call stage1_runtime_sync_default_drive
     jc .fail
