@@ -3861,9 +3861,9 @@ child_trace_print_far_hex:
     push ds
     mov ds, ax
     mov si, dx
-    cmp cx, 32
+    cmp cx, 64
     jbe .count_ready
-    mov cx, 32
+    mov cx, 64
 .count_ready:
     jcxz .done
 .loop:
@@ -3899,7 +3899,9 @@ child_trace_write40_log:
     push dx
     push si
     push di
+    push bp
     push ds
+    mov bp, sp
     cmp bx, 0x0002
     jne .done
     mov di, ds
@@ -3919,17 +3921,21 @@ child_trace_write40_log:
     call print_string_serial
     mov ax, di
     call print_hex16_serial
-    mov si, msg_child_dx
-    call print_string_serial
+    mov al, ':'
+    call serial_putc
     mov ax, dx
     call print_hex16_serial
+    call print_newline_serial
     mov si, msg_child40_hex
     call print_string_serial
+    mov cx, [ss:bp + 10]
+    mov dx, [ss:bp + 8]
     mov ax, di
     call child_trace_print_far_hex
     call print_newline_serial
 .done:
     pop ds
+    pop bp
     pop di
     pop si
     pop dx
@@ -3945,7 +3951,9 @@ child_trace_write40_result:
     push dx
     push si
     push di
+    push bp
     push ds
+    mov bp, sp
     pushf
     pop di
     call child_trace_should_log_exit
@@ -3966,10 +3974,16 @@ child_trace_write40_result:
     call serial_putc
     mov si, msg_child_ax
     call print_string_serial
+    mov ax, [ss:bp + 14]
+    call print_hex16_serial
+    mov si, msg_child_cx
+    call print_string_serial
+    mov ax, [ss:bp + 10]
     call print_hex16_serial
     call print_newline_serial
 .done:
     pop ds
+    pop bp
     pop di
     pop si
     pop dx
