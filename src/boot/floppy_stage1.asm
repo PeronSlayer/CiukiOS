@@ -3860,37 +3860,6 @@ child_trace_print_path_if_any:
     call child_trace_print_far_string
     ret
 
-child_trace_print_far_hex:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push ds
-    mov ds, ax
-    mov si, dx
-    cmp cx, 64
-    jbe .count_ready
-    mov cx, 64
-.count_ready:
-    jcxz .done
-.loop:
-    lodsb
-    call print_hex8_serial
-    dec cx
-    jz .done
-    mov al, ' '
-    call serial_putc
-    jmp .loop
-.done:
-    pop ds
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 child_trace_int21_interesting:
     cmp ah, 0x40
     je .yes
@@ -3906,45 +3875,23 @@ child_trace_write40_log:
     push cx
     push dx
     push si
-    push di
     push bp
     push ds
     mov bp, sp
     cmp bx, 0x0002
     jne .done
-    mov di, ds
     push cs
     pop ds
     mov si, msg_child_40
     call print_string_serial
-    mov si, msg_child_bx
-    call print_string_serial
-    mov ax, bx
-    call print_hex16_serial
     mov si, msg_child_cx
     call print_string_serial
     mov ax, cx
     call print_hex16_serial
-    mov si, msg_child_ds
-    call print_string_serial
-    mov ax, di
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, dx
-    call print_hex16_serial
-    call print_newline_serial
-    mov si, msg_child40_hex
-    call print_string_serial
-    mov cx, [ss:bp + 10]
-    mov dx, [ss:bp + 8]
-    mov ax, di
-    call child_trace_print_far_hex
     call print_newline_serial
 .done:
     pop ds
     pop bp
-    pop di
     pop si
     pop dx
     pop cx
@@ -16051,6 +15998,8 @@ stage1_runtime_clear_cache:
     mov [runtime_status_flags], ax
     mov [runtime_service_off], ax
     mov [runtime_service_seg], ax
+    mov [runtime_state_off], ax
+    mov [runtime_state_seg], ax
     pop ax
     ret
 
@@ -16153,6 +16102,29 @@ stage1_runtime_get_default_drive_ptr:
 
 .done:
     pop ax
+    ret
+
+ciukidos_get_state_ptr:
+    mov ax, 0x0006
+    call stage1_runtime_lookup_service
+    jc .fail
+    call far [cs:runtime_service_ptr]
+    jc .fail
+    mov ax, ds
+    cmp ax, RUNTIME_LOAD_SEG
+    jne .fail
+    or si, si
+    jz .fail
+    mov [cs:runtime_state_off], si
+    mov [cs:runtime_state_seg], ax
+    clc
+    ret
+
+.fail:
+    xor ax, ax
+    mov [cs:runtime_state_off], ax
+    mov [cs:runtime_state_seg], ax
+    stc
     ret
 
 stage1_runtime_sync_default_drive:
@@ -18894,6 +18866,8 @@ runtime_handoff_fat_heads dw FAT_HEADS
 runtime_handoff_fat_reserved dw FAT_RESERVED_SECTORS
 runtime_handoff_fat_spc db FAT_SECTORS_PER_CLUSTER
 runtime_handoff_entry_flags db 0
+runtime_state_off dw 0
+runtime_state_seg dw 0
 runtime_service_ptr:
 runtime_service_off dw 0
 runtime_service_seg dw 0

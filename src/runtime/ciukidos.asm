@@ -8,7 +8,7 @@ runtime_signature db 'CIUKIDOS'
 runtime_version db 'CIUKIDOS runtime v0.6.7', 0
 runtime_stage2_ready_marker db '[S2] ready', 13, 10, 0
 
-runtime_state_signature db 'CIUKIDOS'
+runtime_state_signature db 'CDOSSTAT'
 runtime_state_version db 0, 6, 7
 runtime_state_flags dw 0
 runtime_state_handoff_version dw 0
@@ -24,6 +24,23 @@ runtime_state_table_off dw 0
 runtime_state_table_seg dw 0
 runtime_state_buffer_seg dw 0
 runtime_state_buffer_size dw 0
+runtime_state_current_psp dw 0
+runtime_state_parent_psp dw 0
+runtime_state_previous_psp dw 0
+runtime_state_dta_seg dw 0
+runtime_state_dta_off dw 0
+runtime_state_jft_seg dw 0
+runtime_state_jft_off dw 0
+runtime_state_jft_count dw 0
+runtime_state_std_handle0 dw 0
+runtime_state_std_handle1 dw 1
+runtime_state_std_handle2 dw 2
+runtime_state_handle_table_seg dw 0
+runtime_state_handle_table_off dw 0
+runtime_state_sft_seg dw 0
+runtime_state_sft_off dw 0
+runtime_state_scratch_seg dw 0
+runtime_state_scratch_off dw 0
 
 runtime_entry:
     push ax
@@ -77,7 +94,7 @@ runtime_entry:
 runtime_service_table:
     db 'R', 'T', 'S', 'V'
     dw 0x0001
-    dw 0x0005
+    dw 0x0006
     dw 0x0008
     dw 0x0001
     dw 0x0001
@@ -98,6 +115,10 @@ runtime_service_table:
     dw 0x0005
     dw 0x0001
     dw runtime_default_drive_service
+    dw 0x0000
+    dw 0x0006
+    dw 0x0001
+    dw runtime_get_state_ptr_service
     dw 0x0000
 
 runtime_identity_service:
@@ -130,5 +151,12 @@ runtime_default_drive_service:
     push cs
     pop ds
     mov si, runtime_state_default_drive
+    clc
+    retf
+
+runtime_get_state_ptr_service:
+    push cs
+    pop ds
+    mov si, runtime_state_signature
     clc
     retf
