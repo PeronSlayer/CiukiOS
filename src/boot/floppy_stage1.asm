@@ -46,6 +46,10 @@ org 0x0000
 %ifndef STAGE1_DEBUG_COMMANDS
 %define STAGE1_DEBUG_COMMANDS 0
 %endif
+%ifndef TRACE_CHILD_INT21
+%define TRACE_CHILD_INT21 0
+%endif
+%define CHILD_TRACE_MAX_CALLS 128
 %ifndef FAT_SPT
 %define FAT_SPT 18
 %endif
@@ -621,6 +625,10 @@ int21_handler:
     mov byte [cs:int21_zf_state], 0xFF
     mov byte [cs:int21_last_ah], ah
     mov byte [cs:int21_last_al], al
+    mov [cs:int21_last_dx], dx
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_int21_enter
+%endif
 
     cmp ah, 0x00
     je .fn_00
@@ -1094,6 +1102,9 @@ int21_handler:
 
 .fn_4b:
     mov al, [cs:int21_last_al]
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_prepare_exec
+%endif
     call int21_exec
     jc .error
     jmp .success
@@ -1159,6 +1170,9 @@ int21_handler:
     mov ax, [cs:current_psp_seg]
     or ax, ax
     jz .fn_4c_no_process
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_exit_int21
+%endif
     mov byte [cs:int21_force_terminate], 1
 .fn_4c_no_process:
     xor ax, ax
@@ -1185,6 +1199,9 @@ int21_handler:
     mov ax, [cs:current_psp_seg]
     or ax, ax
     jz .fn_31_done
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_exit_int21
+%endif
     ; AH=31 keep-resident: try to resize PSP block to DX paragraphs.
     push dx
     mov es, ax
@@ -1440,6 +1457,9 @@ int21_handler:
     mov ax, cs
     mov [bp + 18], ax
 .term_done:
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_int21_exit
+%endif
     cmp byte [cs:int21_return_es], 0
     je .flags_only
     mov [bp + 0], es
@@ -1715,6 +1735,11 @@ int21_exec:
 
 .subfn_ready:
     call int21_exec_capture_path
+%if TRACE_CHILD_INT21 != 0
+    mov word [cs:exec_format_trace_src_ptr], msg_exec_src_int21
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_other
+    call exec_format_trace_enter
+%endif
 
     push ds
     mov ax, cs
@@ -1774,6 +1799,14 @@ int21_exec:
     pop si
     pop ds
     jc .done
+%if TRACE_CHILD_INT21 != 0
+    mov byte [cs:child_trace_armed], 0
+    cmp word [cs:current_psp_seg], 0
+    je .trace_arm_ready
+    mov byte [cs:child_trace_armed], 1
+.trace_arm_ready:
+    call exec_trace_lookup_entry
+%endif
 
     cmp byte [cs:tmp_exec_subfn], 0x03
     je .load_overlay
@@ -1795,6 +1828,9 @@ int21_exec:
 .nested_com_seg:
     mov word [cs:current_com_load_seg], MZ3_LOAD_SEG
 .do_exec_com:
+%if TRACE_CHILD_INT21 != 0
+    call exec_format_trace_is_com_yes
+%endif
     call int21_exec_load_com
     jc .done
     call int21_exec_run_com
@@ -1839,6 +1875,9 @@ int21_exec:
      jne .invalid_format
 
 .exec_mz:
+%if TRACE_CHILD_INT21 != 0
+    call exec_format_trace_is_com_no
+%endif
     cmp word [cs:current_psp_seg], 0
     jne .nested_exec_seg
     mov word [cs:current_mz_context_slot], 1
@@ -1888,6 +1927,9 @@ int21_exec:
     jmp .done
 
 .invalid_format:
+%if TRACE_CHILD_INT21 != 0
+    call exec_format_trace_invalid_format
+%endif
     mov ax, 0x000B
     stc
     jmp .done
@@ -1906,6 +1948,9 @@ int21_exec:
     jmp .path_fail
 
 .done:
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_exec_result
+%endif
     pop word [cs:current_com_load_seg]
     pop word [cs:current_mz_context_slot]
     pop word [cs:current_load_seg]
@@ -2053,19 +2098,40 @@ int21_exec_write_tail:
     ret
 
 int21_exec_init_program_psp:
+    push ax
+    push bx
+    push ds
     xor ax, ax
     xor di, di
     mov cx, 128
     rep stosw
     mov word [es:0x0000], 0x20CD
     mov byte [es:0x0005], 0xCB
-    mov word [es:0x000A], 0x0005
-    mov ax, es
+
+    xor ax, ax
+    mov ds, ax
+
+    mov bx, (0x22 * 4)
+    mov ax, [bx]
+    mov [es:0x000A], ax
+    mov ax, [bx + 2]
     mov [es:0x000C], ax
-    mov word [es:0x000E], 0x0005
+
+    mov bx, (0x23 * 4)
+    mov ax, [bx]
+    mov [es:0x000E], ax
+    mov ax, [bx + 2]
     mov [es:0x0010], ax
-    mov word [es:0x0012], 0x0005
+
+    mov bx, (0x24 * 4)
+    mov ax, [bx]
+    mov [es:0x0012], ax
+    mov ax, [bx + 2]
     mov [es:0x0014], ax
+
+    pop ds
+    pop bx
+    pop ax
     call int21_init_psp_handles
     ret
 
@@ -2275,6 +2341,15 @@ int21_exec_load_to_es:
     mov ax, [cs:tmp_exec_limit]
     or ax, [cs:tmp_exec_total]
     je .close_ok
+%if TRACE_CHILD_INT21 != 0
+    cmp word [cs:tmp_exec_error], 0
+    jne .read_loop
+    cmp word [cs:tmp_exec_total], 0
+    jne .read_loop
+    cmp word [cs:tmp_exec_limit], 512
+    jne .read_loop
+    call exec_trace_open_state
+%endif
 
 .read_loop:
     mov ax, [cs:tmp_cluster]
@@ -2284,8 +2359,8 @@ int21_exec_load_to_es:
     jae .io_fail
 
     call int21_cluster_to_lba
-    mov [cs:tmp_lba], ax
     mov [cs:tmp_next_cluster], ax
+    mov [cs:tmp_next_lba_hi], dx
     mov word [cs:tmp_cluster_off], 0
 
 .cluster_sector_loop:
@@ -2300,13 +2375,43 @@ int21_exec_load_to_es:
     jae .next_cluster
     add ax, [cs:tmp_next_cluster]
     mov [cs:tmp_lba], ax
+    mov dx, [cs:tmp_next_lba_hi]
+    adc dx, 0
+    mov [cs:tmp_lba_hi], dx
+
+%if TRACE_CHILD_INT21 != 0
+    cmp word [cs:tmp_exec_error], 0
+    jne .read_sector_ready
+    cmp word [cs:tmp_exec_total], 0
+    jne .read_sector_ready
+    cmp word [cs:tmp_exec_limit], 512
+    jne .read_sector_ready
+    call exec_trace_hdr_lba
+.read_sector_ready:
+%endif
 
     mov ax, DOS_IO_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_lba]
     xor bx, bx
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_lba_hi]
+    call read_sector_lba32
+%else
     call read_sector_lba
+%endif
     jc .io_fail
+
+%if TRACE_CHILD_INT21 != 0
+    cmp word [cs:tmp_exec_error], 0
+    jne .header_bytes_done
+    cmp word [cs:tmp_exec_total], 0
+    jne .header_bytes_done
+    cmp word [cs:tmp_exec_limit], 512
+    jne .header_bytes_done
+    call exec_trace_hdr_bytes
+.header_bytes_done:
+%endif
 
     mov ax, [cs:tmp_exec_total]
     cmp ax, 0
@@ -2460,6 +2565,9 @@ int21_exec_run_com:
     cli
     mov ax, [cs:current_com_load_seg]
     mov [cs:current_psp_seg], ax
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_begin_com
+%endif
     mov ds, ax
     mov es, ax
     mov ss, ax
@@ -2481,6 +2589,9 @@ int21_exec_run_com:
     cli
     mov ax, cs
     mov ds, ax
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_finalize
+%endif
     cmp word [cs:current_com_load_seg], COM_LOAD_SEG
     je .restore_primary_ss
 .restore_third_ss:
@@ -2522,6 +2633,10 @@ int21_exec_load_mz:
     push cx
     push di
     push es
+%if TRACE_CHILD_INT21 != 0
+    mov word [cs:exec_format_trace_src_ptr], msg_exec_src_load_mz
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_other
+%endif
 
     mov bx, [cs:search_found_size_lo]
     mov bp, [cs:search_found_size_hi]
@@ -2539,17 +2654,28 @@ int21_exec_load_mz:
     xor di, di
     xor cx, cx
     call int21_exec_load_to_es
-    jc .done
+    jc .header_load_fail
+
+%if TRACE_CHILD_INT21 != 0
+    call exec_format_trace_open_ok
+    call exec_format_trace_read_hdr_ok
+    call exec_format_trace_magic
+%endif
 
     cmp word [es:0x0000], 0x5A4D
-    jne .invalid_format
+    jne .bad_magic
+
+%if TRACE_CHILD_INT21 != 0
+    call exec_format_trace_is_mz_yes
+    call exec_format_trace_mz_header
+%endif
 
     mov ax, [es:0x0004]
     or ax, ax
-    je .invalid_format
+    je .bad_image_size
     mov cx, [es:0x0002]
     cmp cx, 512
-    jae .invalid_format
+    jae .bad_image_size
     mov dx, cx
 
     mov di, ax
@@ -2572,23 +2698,26 @@ int21_exec_load_mz:
     cmp di, 0
     jne .mz_size_header_ok
     cmp ax, dx
-    jb .invalid_format
+    jb .bad_header_paras
 
 .mz_size_header_ok:
     cmp di, bp
-    ja .invalid_format
+    ja .bad_image_size
     jb .mz_size_file_ok
     cmp ax, bx
-    ja .invalid_format
+    ja .bad_image_size
 
 .mz_size_file_ok:
+%if TRACE_CHILD_INT21 != 0
+    call exec_format_trace_validate_ok
+%endif
     mov [cs:search_found_size_lo], ax
     mov [cs:search_found_size_hi], di
 
     xor di, di
     xor cx, cx
     call int21_exec_load_to_es
-    jc .done
+    jc .image_load_fail
 
     mov dx, MZ_LOAD_LIMIT_SEG
 .clear_mz_tail:
@@ -2604,7 +2733,55 @@ int21_exec_load_mz:
     clc
     jmp .done
 
+.header_load_fail:
+%if TRACE_CHILD_INT21 != 0
+    cmp ax, 0x0002
+    jne .header_read_fail_trace
+    call exec_format_trace_open_fail
+    jmp .done
+.header_read_fail_trace:
+    call exec_format_trace_open_ok
+    call exec_format_trace_read_hdr_fail
+%endif
+    jmp .done
+
+.bad_magic:
+%if TRACE_CHILD_INT21 != 0
+    call exec_format_trace_is_mz_no
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_bad_magic
+%endif
+    jmp .invalid_format
+
+.bad_header_paras:
+%if TRACE_CHILD_INT21 != 0
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_bad_header_paras
+%endif
+    jmp .invalid_format
+
+.bad_image_size:
+%if TRACE_CHILD_INT21 != 0
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_bad_image_size
+%endif
+    jmp .invalid_format
+
+.image_load_fail:
+%if TRACE_CHILD_INT21 != 0
+    cmp ax, 0x0008
+    jne .image_read_fail
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_alloc_fail
+    jmp .image_fail_trace
+.image_read_fail:
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_read_fail
+.image_fail_trace:
+    call exec_format_trace_validate_fail
+%endif
+    jmp .done
+
 .invalid_format:
+%if TRACE_CHILD_INT21 != 0
+    call exec_format_trace_validate_fail
+    call exec_format_trace_invalid_format
+%endif
     mov ax, 0x000B
     stc
 
@@ -2712,6 +2889,10 @@ int21_exec_load_overlay:
 
 int21_exec_run_mz:
     push es
+%if TRACE_CHILD_INT21 != 0
+    mov word [cs:exec_format_trace_src_ptr], msg_exec_src_run_mz
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_other
+%endif
 
     mov ax, [cs:current_load_seg]
     mov es, ax
@@ -2736,6 +2917,12 @@ int21_exec_run_mz:
     mov [cs:mz_stack_seg], ax
     mov ax, [es:0x0010]
     mov [cs:mz_stack_sp], ax
+%if TRACE_CHILD_INT21 != 0
+    mov ax, [es:0x000A]
+    mov [cs:child_trace_mz_minalloc], ax
+    mov ax, [es:0x000C]
+    mov [cs:child_trace_mz_maxalloc], ax
+%endif
 
     mov cx, [es:0x0006]
     mov di, [es:0x0018]
@@ -2753,7 +2940,7 @@ int21_exec_run_mz:
     loop .reloc_loop
 .reloc_done:
     mov ax, ds
-    mov dx, [cs:mz_psp_seg]
+    mov dx, es
     mov bx, [cs:current_psp_seg]
     cmp word [cs:current_mz_context_slot], 3
     je .save_third_ctx
@@ -2798,6 +2985,9 @@ int21_exec_run_mz:
     mov [es:0x0016], bx
     call int21_build_env_block
     call int21_exec_write_tail
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_begin_mz
+%endif
 
     push ds
     mov ax, DOS_META_BUF_SEG
@@ -2837,6 +3027,9 @@ int21_exec_run_mz:
     cli
     mov ax, cs
     mov ds, ax
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_finalize
+%endif
     ; restore SS:SP from appropriate slot
     cmp word [cs:current_mz_context_slot], 3
     je .restore_third_ss
@@ -2892,6 +3085,11 @@ int21_exec_run_mz:
     jmp .done
 
 .invalid_header:
+%if TRACE_CHILD_INT21 != 0
+    mov word [cs:exec_format_trace_reason_ptr], msg_exec_reason_bad_magic
+    call exec_format_trace_validate_fail
+    call exec_format_trace_invalid_format
+%endif
     mov ax, 0x000B
     stc
 
@@ -3362,6 +3560,9 @@ int21_set_vector:
     cmp al, 0x21
     je .ok
     call int21_trace_vector_set
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_vector_set
+%endif
     xor ah, ah
     mov bx, ax
     shl bx, 1
@@ -3394,6 +3595,9 @@ int21_get_vector:
     mov ax, [es:di + 2]
     mov es, ax
     call int21_trace_vector_get
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_vector_get
+%endif
     xor ax, ax
     clc
     pop di
@@ -3482,6 +3686,1026 @@ int21_trace_vector_get:
     pop ax
 .done:
     ret
+
+%if TRACE_CHILD_INT21 != 0
+child_trace_should_log:
+    cmp byte [cs:child_trace_active], 0
+    je .no
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jz .no
+    cmp ax, [cs:child_trace_psp]
+    jne .no
+    mov ax, [cs:child_trace_count]
+    cmp ax, CHILD_TRACE_MAX_CALLS
+    jae .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+child_trace_should_log_exit:
+    cmp byte [cs:child_trace_active], 0
+    je .no
+    mov ax, [cs:current_psp_seg]
+    or ax, ax
+    jz .no
+    cmp ax, [cs:child_trace_psp]
+    jne .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+child_trace_vector_interesting:
+    cmp al, 0x10
+    je .yes
+    cmp al, 0x16
+    je .yes
+    cmp al, 0x1C
+    je .yes
+    cmp al, 0x21
+    je .yes
+    cmp al, 0x22
+    je .yes
+    cmp al, 0x23
+    je .yes
+    cmp al, 0x24
+    je .yes
+    cmp al, 0x33
+    je .yes
+    clc
+    ret
+.yes:
+    stc
+    ret
+
+child_trace_print_far_string:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    mov ds, ax
+    mov si, dx
+    mov cx, 48
+.loop:
+    jcxz .done
+    lodsb
+    test al, al
+    jz .done
+    call serial_putc
+    dec cx
+    jmp .loop
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+child_trace_print_path_if_any:
+    cmp al, 0x3C
+    je .print
+    cmp al, 0x3D
+    je .print
+    cmp al, 0x41
+    je .print
+    cmp al, 0x43
+    je .print
+    cmp al, 0x4B
+    je .print
+    cmp al, 0x4E
+    je .print
+    cmp al, 0x56
+    je .print
+    ret
+.print:
+    mov si, msg_child_trace_path
+    call print_string_serial
+    call child_trace_print_far_string
+    ret
+
+child_trace_prepare_exec:
+    push ax
+    push dx
+    push si
+    push ds
+    cmp word [cs:current_psp_seg], 0
+    jne .arm
+    mov byte [cs:child_trace_armed], 0
+    jmp .done
+.arm:
+    mov byte [cs:child_trace_armed], 1
+    push cs
+    pop ds
+    mov si, msg_child_exec_req
+    call print_string_serial
+    mov ax, [cs:current_psp_seg]
+    call print_hex16_serial
+    mov si, msg_child_trace_path
+    call print_string_serial
+    mov ax, [cs:int21_caller_ds]
+    mov dx, [cs:int21_last_dx]
+    call child_trace_print_far_string
+    call print_newline_serial
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop ax
+    ret
+
+child_trace_exec_result:
+    push ax
+    push bx
+    push si
+    push ds
+    push bp
+    mov bp, sp
+    cmp byte [cs:child_trace_armed], 0
+    je .done
+    mov bx, [ss:bp + 12]
+    push cs
+    pop ds
+    mov si, msg_child_exec_ret
+    call print_string_serial
+    mov bx, [ss:bp + 12]
+    xor ax, ax
+    test bl, 0x01
+    jz .cf_ready
+    mov al, 0x01
+.cf_ready:
+    call print_hex8_serial
+    mov si, msg_child_ax
+    call print_string_serial
+    mov ax, [ss:bp + 8]
+    call print_hex16_serial
+    call print_newline_serial
+    mov si, msg_exec_ret
+    call print_string_serial
+    mov ax, [ss:bp + 8]
+    call print_hex16_serial
+    call print_newline_serial
+    mov byte [cs:child_trace_armed], 0
+.done:
+    pop bp
+    pop ds
+    pop si
+    pop bx
+    pop ax
+    ret
+
+exec_format_trace_should_log:
+    cmp byte [cs:child_trace_armed], 0
+    je .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+exec_format_trace_print_cs_string:
+    push ds
+    push cs
+    pop ds
+    call print_string_serial
+    pop ds
+    ret
+
+exec_format_trace_enter:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_enter
+    call exec_format_trace_print_cs_string
+    mov si, dos_child_exec_path_buf
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+.done:
+    ret
+
+exec_format_trace_open_ok:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_open_ok
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+.done:
+    ret
+
+exec_format_trace_open_fail:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push si
+    mov si, msg_exec_open_fail
+    call exec_format_trace_print_cs_string
+    pop si
+    pop ax
+    push ax
+    call print_hex16_serial
+    call print_newline_serial
+    pop ax
+.done:
+    ret
+
+exec_format_trace_read_hdr_ok:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push si
+    mov si, msg_exec_read_hdr_ok
+    call exec_format_trace_print_cs_string
+    mov ax, 0x0200
+    call print_hex16_serial
+    mov si, msg_exec_ax
+    call exec_format_trace_print_cs_string
+    xor ax, ax
+    call print_hex16_serial
+    call print_newline_serial
+    pop si
+    pop ax
+.done:
+    ret
+
+exec_format_trace_read_hdr_fail:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push si
+    mov si, msg_exec_read_hdr_fail
+    call exec_format_trace_print_cs_string
+    mov ax, 0x0200
+    call print_hex16_serial
+    pop si
+    pop ax
+    push ax
+    mov si, msg_exec_ax
+    call exec_format_trace_print_cs_string
+    call print_hex16_serial
+    call print_newline_serial
+    pop ax
+.done:
+    ret
+
+exec_format_trace_magic:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push si
+    push ds
+    push cs
+    pop ds
+    mov si, msg_exec_magic
+    call print_string_serial
+    mov al, [es:0x0000]
+    call print_hex8_serial
+    mov si, msg_exec_magic_b1
+    call print_string_serial
+    mov al, [es:0x0001]
+    call print_hex8_serial
+    call print_newline_serial
+    pop ds
+    pop si
+    pop ax
+.done:
+    ret
+
+exec_format_trace_is_mz_yes:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_is_mz_yes
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+.done:
+    ret
+
+exec_format_trace_is_mz_no:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_is_mz_no
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+.done:
+    ret
+
+exec_format_trace_is_com_yes:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_is_com_yes
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+.done:
+    ret
+
+exec_format_trace_is_com_no:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_is_com_no
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+.done:
+    ret
+
+exec_format_trace_mz_header:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push si
+    push ds
+    push cs
+    pop ds
+    mov si, msg_exec_mz_hdr
+    call print_string_serial
+    mov ax, [es:0x0002]
+    call print_hex16_serial
+    mov si, msg_exec_cp
+    call print_string_serial
+    mov ax, [es:0x0004]
+    call print_hex16_serial
+    mov si, msg_exec_crlc
+    call print_string_serial
+    mov ax, [es:0x0006]
+    call print_hex16_serial
+    mov si, msg_exec_cparhdr
+    call print_string_serial
+    mov ax, [es:0x0008]
+    call print_hex16_serial
+    mov si, msg_exec_minalloc
+    call print_string_serial
+    mov ax, [es:0x000A]
+    call print_hex16_serial
+    mov si, msg_exec_maxalloc
+    call print_string_serial
+    mov ax, [es:0x000C]
+    call print_hex16_serial
+    mov si, msg_exec_ss
+    call print_string_serial
+    mov ax, [es:0x000E]
+    call print_hex16_serial
+    mov si, msg_exec_sp
+    call print_string_serial
+    mov ax, [es:0x0010]
+    call print_hex16_serial
+    mov si, msg_exec_ip
+    call print_string_serial
+    mov ax, [es:0x0014]
+    call print_hex16_serial
+    mov si, msg_exec_cs
+    call print_string_serial
+    mov ax, [es:0x0016]
+    call print_hex16_serial
+    mov si, msg_exec_lfarlc
+    call print_string_serial
+    mov ax, [es:0x0018]
+    call print_hex16_serial
+    call print_newline_serial
+    pop ds
+    pop si
+    pop ax
+.done:
+    ret
+
+exec_format_trace_validate_ok:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_mz_validate_ok
+    call exec_format_trace_print_cs_string
+    pop si
+.done:
+    ret
+
+exec_format_trace_validate_fail:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_mz_validate_fail
+    call exec_format_trace_print_cs_string
+    mov si, [cs:exec_format_trace_reason_ptr]
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+.done:
+    ret
+
+exec_format_trace_invalid_format:
+    call exec_format_trace_should_log
+    jnc .done
+    push si
+    mov si, msg_exec_invalid_format
+    call exec_format_trace_print_cs_string
+    mov si, [cs:exec_format_trace_src_ptr]
+    call exec_format_trace_print_cs_string
+    mov si, msg_exec_reason
+    call exec_format_trace_print_cs_string
+    mov si, [cs:exec_format_trace_reason_ptr]
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+.done:
+    ret
+
+exec_trace_print_found_name:
+    push ax
+    push cx
+    push si
+    push ds
+    push cs
+    pop ds
+    mov si, search_found_name
+    mov cx, 11
+.loop:
+    lodsb
+    call serial_putc
+    loop .loop
+    pop ds
+    pop si
+    pop cx
+    pop ax
+    ret
+
+exec_trace_lookup_entry:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push si
+    mov si, msg_exec_lookup_entry
+    call exec_format_trace_print_cs_string
+    call exec_trace_print_found_name
+    mov si, msg_exec_attr
+    call exec_format_trace_print_cs_string
+    mov al, [cs:search_found_attr]
+    call print_hex8_serial
+    mov si, msg_exec_clus
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:search_found_cluster]
+    call print_hex16_serial
+    mov si, msg_exec_size_hi
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:search_found_size_hi]
+    call print_hex16_serial
+    mov si, msg_exec_size_lo
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:search_found_size_lo]
+    call print_hex16_serial
+    call print_newline_serial
+    pop si
+    pop ax
+.done:
+    ret
+
+exec_trace_open_state:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push si
+    mov si, msg_exec_open_handle
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:search_found_cluster]
+    call print_hex16_serial
+    mov si, msg_exec_size_hi
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:search_found_size_hi]
+    call print_hex16_serial
+    mov si, msg_exec_size_lo
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:search_found_size_lo]
+    call print_hex16_serial
+    mov si, msg_exec_off
+    call exec_format_trace_print_cs_string
+    xor ax, ax
+    call print_hex16_serial
+    call print_newline_serial
+    mov si, msg_exec_hdr_read_begin
+    call exec_format_trace_print_cs_string
+    xor ax, ax
+    call print_hex16_serial
+    call print_newline_serial
+    pop si
+    pop ax
+.done:
+    ret
+
+exec_trace_hdr_lba:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push dx
+    push si
+    mov si, msg_exec_hdr_lba
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:tmp_cluster]
+    call print_hex16_serial
+    mov si, msg_exec_sec
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:tmp_cluster_off]
+    mov cl, 9
+    shr ax, cl
+    call print_hex16_serial
+    mov si, msg_exec_lba_hi
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:tmp_lba_hi]
+    call print_hex16_serial
+    mov si, msg_exec_lba_lo
+    call exec_format_trace_print_cs_string
+    mov ax, [cs:tmp_lba]
+    call print_hex16_serial
+    mov si, msg_exec_lba32
+    call exec_format_trace_print_cs_string
+    call print_newline_serial
+    pop si
+    pop dx
+    pop ax
+.done:
+    ret
+
+exec_trace_hdr_bytes:
+    call exec_format_trace_should_log
+    jnc .done
+    push ax
+    push si
+    push ds
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    xor si, si
+    push cs
+    pop ax
+    mov ds, ax
+    mov si, msg_exec_hdr_bytes
+    call print_string_serial
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    mov al, [0x0000]
+    call print_hex8_serial
+    push cs
+    pop ds
+    mov si, msg_exec_b1
+    call print_string_serial
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    mov al, [0x0001]
+    call print_hex8_serial
+    push cs
+    pop ds
+    mov si, msg_exec_b2
+    call print_string_serial
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    mov al, [0x0002]
+    call print_hex8_serial
+    push cs
+    pop ds
+    mov si, msg_exec_b3
+    call print_string_serial
+    mov ax, DOS_IO_BUF_SEG
+    mov ds, ax
+    mov al, [0x0003]
+    call print_hex8_serial
+    call print_newline_serial
+    push cs
+    pop ds
+    mov si, msg_exec_hdr_read_done
+    call print_string_serial
+    mov ax, 0x0200
+    call print_hex16_serial
+    call print_newline_serial
+    pop ds
+    pop si
+    pop ax
+.done:
+    ret
+
+child_trace_begin_com:
+    push ax
+    push bx
+    push dx
+    push si
+    push ds
+    push cs
+    pop ds
+    cmp byte [cs:child_trace_armed], 0
+    je .done
+    mov ax, [cs:current_com_load_seg]
+    mov [cs:child_trace_psp], ax
+    mov word [cs:child_trace_count], 0
+    mov byte [cs:child_trace_active], 1
+    mov byte [cs:child_trace_exit_logged], 0
+    mov si, msg_child_trace_begin
+    call print_string_serial
+    mov si, msg_child_exec_kind
+    call print_string_serial
+    mov si, msg_child_exec_kind_com
+    call print_string_serial
+    mov si, msg_child_trace_path
+    call print_string_serial
+    mov si, dos_child_exec_path_buf
+    call print_string_serial
+    mov si, msg_child_exec_load
+    call print_string_serial
+    mov ax, [cs:current_com_load_seg]
+    call print_hex16_serial
+    mov si, msg_child_exec_psp
+    call print_string_serial
+    mov ax, [cs:current_com_load_seg]
+    call print_hex16_serial
+    mov si, msg_child_exec_entry
+    call print_string_serial
+    mov ax, [cs:current_com_load_seg]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, 0x0100
+    call print_hex16_serial
+    mov si, msg_child_exec_stack
+    call print_string_serial
+    mov ax, [cs:current_com_load_seg]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, 0xFFFE
+    call print_hex16_serial
+    call print_newline_serial
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+child_trace_begin_mz:
+    push ax
+    push bx
+    push dx
+    push si
+    push ds
+    push cs
+    pop ds
+    cmp byte [cs:child_trace_armed], 0
+    je .done
+    mov ax, [cs:mz_psp_seg]
+    mov [cs:child_trace_psp], ax
+    mov word [cs:child_trace_count], 0
+    mov byte [cs:child_trace_active], 1
+    mov byte [cs:child_trace_exit_logged], 0
+    mov si, msg_child_trace_begin
+    call print_string_serial
+    mov si, msg_child_exec_kind
+    call print_string_serial
+    mov si, msg_child_exec_kind_mz
+    call print_string_serial
+    mov si, msg_child_trace_path
+    call print_string_serial
+    mov si, dos_child_exec_path_buf
+    call print_string_serial
+    mov si, msg_child_exec_load
+    call print_string_serial
+    mov ax, [cs:current_load_seg]
+    call print_hex16_serial
+    mov si, msg_child_exec_psp
+    call print_string_serial
+    mov ax, [cs:mz_psp_seg]
+    call print_hex16_serial
+    mov si, msg_child_exec_entry
+    call print_string_serial
+    mov ax, [cs:mz_entry_seg]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [cs:mz_entry_off]
+    call print_hex16_serial
+    mov si, msg_child_exec_stack
+    call print_string_serial
+    mov ax, [cs:mz_stack_seg]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [cs:mz_stack_sp]
+    call print_hex16_serial
+    mov si, msg_child_exec_minalloc
+    call print_string_serial
+    mov ax, [cs:child_trace_mz_minalloc]
+    call print_hex16_serial
+    mov si, msg_child_exec_maxalloc
+    call print_string_serial
+    mov ax, [cs:child_trace_mz_maxalloc]
+    call print_hex16_serial
+    call print_newline_serial
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+child_trace_int21_enter:
+    push ax
+    call child_trace_should_log
+    pop ax
+    jnc .done
+    inc word [cs:child_trace_count]
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    push bp
+    mov bp, sp
+    push cs
+    pop ds
+    mov si, msg_child21_in
+    call print_string_serial
+    mov al, ah
+    call print_hex8_serial
+    mov si, msg_child_ax
+    call print_string_serial
+    mov ax, [ss:bp + 16]
+    call print_hex16_serial
+    mov si, msg_child_bx
+    call print_string_serial
+    mov ax, [ss:bp + 14]
+    call print_hex16_serial
+    mov si, msg_child_cx
+    call print_string_serial
+    mov ax, [ss:bp + 12]
+    call print_hex16_serial
+    mov si, msg_child_dx
+    call print_string_serial
+    mov ax, [ss:bp + 10]
+    call print_hex16_serial
+    mov si, msg_child_ds
+    call print_string_serial
+    mov ax, [ss:bp + 4]
+    call print_hex16_serial
+    mov si, msg_child_es
+    call print_string_serial
+    mov ax, [ss:bp + 2]
+    call print_hex16_serial
+    mov ax, [ss:bp + 4]
+    mov dx, [ss:bp + 10]
+    mov al, byte [ss:bp + 17]
+    call child_trace_print_path_if_any
+    call print_newline_serial
+    pop bp
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.done:
+    ret
+
+child_trace_int21_exit:
+    push ax
+    call child_trace_should_log_exit
+    pop ax
+    jnc .done
+    mov bx, [cs:child_trace_count]
+    cmp bx, CHILD_TRACE_MAX_CALLS
+    ja .done
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    push bp
+    mov bp, sp
+    push cs
+    pop ds
+    mov si, msg_child21_out
+    call print_string_serial
+    mov al, [cs:int21_last_ah]
+    call print_hex8_serial
+    mov si, msg_child_cf
+    call print_string_serial
+    xor ax, ax
+    mov al, [cs:int21_carry]
+    call print_hex8_serial
+    mov si, msg_child_ax
+    call print_string_serial
+    mov ax, [cs:int21_error_ax]
+    cmp byte [cs:int21_carry], 0
+    jne .ax_ready
+    mov ax, [ss:bp + 14]
+.ax_ready:
+    call print_hex16_serial
+    mov si, msg_child_bx
+    call print_string_serial
+    mov ax, [ss:bp + 12]
+    call print_hex16_serial
+    mov si, msg_child_cx
+    call print_string_serial
+    mov ax, [ss:bp + 10]
+    call print_hex16_serial
+    mov si, msg_child_dx
+    call print_string_serial
+    mov ax, [ss:bp + 8]
+    call print_hex16_serial
+    call print_newline_serial
+    pop bp
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.done:
+    ret
+
+child_trace_exit_int21:
+    push ax
+    push bx
+    push dx
+    push si
+    push ds
+    push cs
+    pop ds
+    cmp byte [cs:child_trace_active], 0
+    je .done
+    mov ax, [cs:current_psp_seg]
+    cmp ax, [cs:child_trace_psp]
+    jne .done
+    mov byte [cs:child_trace_exit_logged], 1
+    mov si, msg_child_exit
+    call print_string_serial
+    mov si, msg_child_exit_reason
+    call print_string_serial
+    mov al, [cs:int21_last_ah]
+    call print_hex8_serial
+    mov si, msg_child_exit_code
+    call print_string_serial
+    xor ax, ax
+    mov al, [cs:last_exit_code]
+    call print_hex8_serial
+    mov si, msg_child_exec_psp
+    call print_string_serial
+    mov ax, [cs:child_trace_psp]
+    call print_hex16_serial
+    mov si, msg_child_exit_int22
+    call print_string_serial
+    mov ax, [cs:child_trace_psp]
+    mov ds, ax
+    mov ax, [0x000C]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [0x000A]
+    call print_hex16_serial
+    call print_newline_serial
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+child_trace_exit_int20:
+    push ax
+    mov al, 0x20
+    mov [cs:int21_last_ah], al
+    pop ax
+    jmp child_trace_exit_int21
+
+child_trace_vector_set:
+    push ax
+    call child_trace_should_log_exit
+    pop ax
+    jnc .done
+    call child_trace_vector_interesting
+    jnc .done
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    mov bl, al
+    mov cx, ds
+    push cs
+    pop ds
+    mov si, msg_child_vec25
+    call print_string_serial
+    mov al, bl
+    call print_hex8_serial
+    mov al, ' '
+    call serial_putc
+    mov ax, cx
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, dx
+    call print_hex16_serial
+    call print_newline_serial
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.done:
+    ret
+
+child_trace_vector_get:
+    push ax
+    call child_trace_should_log_exit
+    pop ax
+    jnc .done
+    call child_trace_vector_interesting
+    jnc .done
+    push ax
+    push bx
+    push cx
+    push si
+    push ds
+    mov bl, al
+    mov cx, es
+    push cs
+    pop ds
+    mov si, msg_child_vec35
+    call print_string_serial
+    mov al, bl
+    call print_hex8_serial
+    mov al, ' '
+    call serial_putc
+    mov ax, cx
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, bx
+    call print_hex16_serial
+    call print_newline_serial
+    pop ds
+    pop si
+    pop cx
+    pop bx
+    pop ax
+.done:
+    ret
+
+child_trace_finalize:
+    push ax
+    push si
+    push ds
+    push cs
+    pop ds
+    cmp byte [cs:child_trace_active], 0
+    je .done
+    mov ax, [cs:current_psp_seg]
+    cmp ax, [cs:child_trace_psp]
+    jne .done
+    cmp byte [cs:child_trace_exit_logged], 0
+    jne .emit_end
+    mov si, msg_child_exit
+    call print_string_serial
+    mov si, msg_child_exit_reason_retf
+    call print_string_serial
+    mov si, msg_child_exit_code
+    call print_string_serial
+    xor ax, ax
+    mov al, [cs:last_exit_code]
+    call print_hex8_serial
+    call print_newline_serial
+.emit_end:
+    mov si, msg_child_trace_end
+    call print_string_serial
+    mov byte [cs:child_trace_active], 0
+    mov byte [cs:child_trace_armed], 0
+    mov byte [cs:child_trace_exit_logged], 0
+    mov word [cs:child_trace_count], 0
+    mov word [cs:child_trace_psp], 0
+.done:
+    pop ds
+    pop si
+    pop ax
+    ret
+%endif
 
 int21_get_dta:
     mov bx, [cs:dta_off]
@@ -6729,24 +7953,11 @@ int21_rename:
     mov dx, si
     call int21_normalize_leading_drive_designator
     mov si, dx
-    call int21_resolve_parent_dir
-    jc .rename_fail_path
+    call int21_resolve_and_find_path
+    jc .rename_old_resolve_fail
+
+    mov ax, [cs:tmp_lookup_dir]
     mov [cs:tmp_rename_old_parent], ax
-
-    call int21_path_to_fat_name
-    jc .rename_fail_path
-
-    mov ax, cs
-    mov ds, ax
-    mov di, search_found_name
-    mov si, path_fat_name
-    mov cx, 11
-    rep movsb
-
-    mov ax, [cs:tmp_rename_old_parent]
-    mov si, search_found_name
-    call int21_lookup_in_dir
-    jc .rename_old_lookup_fail
 
     mov ax, [cs:search_found_root_lba]
     mov [cs:tmp_rename_old_lba], ax
@@ -6884,6 +8095,13 @@ int21_rename:
     xor ax, ax
     clc
     jmp .rename_done
+
+.rename_old_resolve_fail:
+    cmp ax, 0x0002
+    je .rename_not_found
+    cmp ax, 0x0003
+    je .rename_fail_path
+    jmp .rename_io_err
 
 .rename_old_lookup_fail:
     cmp ax, 0x0002
@@ -7635,7 +8853,9 @@ int21_mem_find_next_alloc:
 
 .none:
     stc
+    pushf
     pop di
+    popf
     pop si
     pop dx
     pop cx
@@ -16036,6 +17256,9 @@ int15_handler:
     mov bp, sp
     cmp ah, 0x88
     je .extmem_88
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_exit_int20
+%endif
     cmp ah, 0xC2
     jne .chain
     cmp byte [cs:shell_exec_external_mouse_disabled], 0
@@ -17241,10 +18464,22 @@ int21_chdir_drive db 0
 int21_chdir_qualified db 0
 int21_trace_call_cs dw 0
 int21_path_upcase db 0
+int21_last_dx dw 0
 dos_time_centis db 0
 last_term_type db 0
 int21_force_terminate db 0
 current_psp_seg dw 0
+%if TRACE_CHILD_INT21 != 0
+child_trace_active db 0
+child_trace_armed db 0
+child_trace_exit_logged db 0
+child_trace_count dw 0
+child_trace_psp dw 0
+child_trace_mz_minalloc dw 0
+child_trace_mz_maxalloc dw 0
+exec_format_trace_src_ptr dw 0
+exec_format_trace_reason_ptr dw 0
+%endif
 exec_cmd_len db 0
 exec_cmd_buf times 126 db 0
 old_int21_off dw 0
@@ -17432,6 +18667,7 @@ tmp_lba dw 0
 tmp_lba_hi dw 0
 tmp_capacity dw 0
 tmp_next_cluster dw 0
+tmp_next_lba_hi dw 0
 tmp_exec_limit dw 0
 tmp_exec_total dw 0
 tmp_exec_handle dw 0
@@ -17654,6 +18890,93 @@ msg_mz_load_fail db "[MZ] fail", 13, 10, 0
 msg_mz_done  db "[MZ] 0x", 0
 msg_mz_serial_pass db "[MZDEMO-SERIAL] PASS", 13, 10, 0
 msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
+%if TRACE_CHILD_INT21 != 0
+msg_child_trace_begin db "CHILD_TRACE_BEGIN", 13, 10, 0
+msg_child_trace_end db "CHILD_TRACE_END", 13, 10, 0
+msg_child_exec_req db "CHILD_EXEC_REQ psp=", 0
+msg_child_exec_ret db "CHILD_EXEC_RET cf=", 0
+msg_exec_enter db "EXEN p=", 0
+msg_exec_open_ok db "EXOP ok", 0
+msg_exec_open_fail db "EXOP er ax=", 0
+msg_exec_lookup_entry db "EXLK n=", 0
+msg_exec_open_handle db "EXOH s=", 0
+msg_exec_hdr_read_begin db "EXRB o=", 0
+msg_exec_hdr_lba db "EXRL c=", 0
+msg_exec_hdr_bytes db "EXBY 0=", 0
+msg_exec_hdr_read_done db "EXRD n=", 0
+msg_exec_read_hdr_ok db "EXRH ok n=", 0
+msg_exec_read_hdr_fail db "EXRH er n=", 0
+msg_exec_magic db "EXMG 0=", 0
+msg_exec_magic_b1 db " 1=", 0
+msg_exec_b1 db " 1=", 0
+msg_exec_b2 db " 2=", 0
+msg_exec_b3 db " 3=", 0
+msg_exec_is_mz_yes db "EXMZ y", 0
+msg_exec_is_mz_no db "EXMZ n", 0
+msg_exec_is_com_yes db "EXCM y", 0
+msg_exec_is_com_no db "EXCM n", 0
+msg_exec_attr db " a=", 0
+msg_exec_clus db " c=", 0
+msg_exec_size_hi db " sh=", 0
+msg_exec_size_lo db " sl=", 0
+msg_exec_off db " o=", 0
+msg_exec_sec db " s=", 0
+msg_exec_lba_hi db " h=", 0
+msg_exec_lba_lo db " l=", 0
+msg_exec_lba32 db " 32=Y", 0
+msg_exec_mz_hdr db "EXHD cb=", 0
+msg_exec_cp db " cp=", 0
+msg_exec_crlc db " rc=", 0
+msg_exec_cparhdr db " ph=", 0
+msg_exec_minalloc db " mn=", 0
+msg_exec_maxalloc db " mx=", 0
+msg_exec_ss db " ss=", 0
+msg_exec_sp db " sp=", 0
+msg_exec_ip db " ip=", 0
+msg_exec_cs db " cs=", 0
+msg_exec_lfarlc db " rf=", 0
+msg_exec_mz_validate_ok db "EXVL ok", 13, 10, 0
+msg_exec_mz_validate_fail db "EXVL er r=", 0
+msg_exec_invalid_format db "EXIF s=", 0
+msg_exec_reason db " r=", 0
+msg_exec_ret db "EXRT ax=", 0
+msg_exec_ax db " ax=", 0
+msg_exec_src_int21 db "e", 0
+msg_exec_src_load_mz db "lm", 0
+msg_exec_src_run_mz db "rm", 0
+msg_exec_reason_bad_magic db "bm", 0
+msg_exec_reason_bad_header_paras db "bh", 0
+msg_exec_reason_bad_image_size db "bi", 0
+msg_exec_reason_alloc_fail db "af", 0
+msg_exec_reason_read_fail db "rf", 0
+msg_exec_reason_other db "o", 0
+msg_child_exec_kind db "CHILD_EXEC kind=", 0
+msg_child_exec_kind_com db "COM", 0
+msg_child_exec_kind_mz db "MZ", 0
+msg_child_trace_path db " path=", 0
+msg_child_exec_load db " load=", 0
+msg_child_exec_psp db " psp=", 0
+msg_child_exec_entry db " entry=", 0
+msg_child_exec_stack db " stack=", 0
+msg_child_exec_minalloc db " min=", 0
+msg_child_exec_maxalloc db " max=", 0
+msg_child21_in db "CH21I ah=", 0
+msg_child21_out db "CH21O ah=", 0
+msg_child_ax db " ax=", 0
+msg_child_bx db " bx=", 0
+msg_child_cx db " cx=", 0
+msg_child_dx db " dx=", 0
+msg_child_ds db " ds=", 0
+msg_child_es db " es=", 0
+msg_child_cf db " cf=", 0
+msg_child_exit db "CHILD_EXIT", 0
+msg_child_exit_reason db " reason=", 0
+msg_child_exit_reason_retf db " reason=RETF", 0
+msg_child_exit_code db " code=", 0
+msg_child_exit_int22 db " int22=", 0
+msg_child_vec25 db "CHILDV25 ", 0
+msg_child_vec35 db "CHILDV35 ", 0
+%endif
 msg_fileio_begin db "[FILEIO]", 13, 10, 0
 msg_fileio_serial_pass db "[FILEIO-SERIAL] PASS", 13, 10, 0
 msg_fileio_serial_fail db "[FILEIO-SERIAL] FAIL", 13, 10, 0
