@@ -151,6 +151,56 @@ extract_exit_code() {
   echo "${line##*code=}"
 }
 
+extract_first_post_exec_marker() {
+  local log_file="$1"
+  strings -a "$log_file" | awk '
+    /CHILD_EXEC_REQ/ {seen=1; next}
+    !seen {next}
+    /^CHILD_PREJUMP/ {print; exit}
+    /^CHILD_EXIT/ {print; exit}
+    /^CH4A([[:space:]]|$)/ {print; exit}
+    /^CH40([[:space:]]|$)/ {print; exit}
+    /^CH4C([[:space:]]|$)/ {print; exit}
+  '
+}
+
+extract_first_post_exec_int21() {
+  local log_file="$1"
+  strings -a "$log_file" | awk '
+    /CHILD_EXEC_REQ/ {seen=1; next}
+    !seen {next}
+    /^CH4A([[:space:]]|$)/ {print; exit}
+    /^CH40([[:space:]]|$)/ {print; exit}
+    /^CH4C([[:space:]]|$)/ {print; exit}
+  '
+}
+
+format_child_marker() {
+  local line="$1"
+  if [[ -z "$line" ]]; then
+    echo NONE
+    return 0
+  fi
+  case "$line" in
+    CHILD_PREJUMP*)
+      echo CHILD_PREJUMP
+      ;;
+    CHILD_EXIT*)
+      if [[ "$line" =~ reason=([0-9A-F]{2}) ]]; then
+        printf 'AH=%s\n' "${BASH_REMATCH[1]}"
+      else
+        echo CHILD_EXIT
+      fi
+      ;;
+    CH[0-9A-F][0-9A-F]*)
+      printf 'AH=%s\n' "${line:2:2}"
+      ;;
+    *)
+      echo "$line"
+      ;;
+  esac
+}
+
 if [[ "$DO_BUILD" == "1" ]]; then
   CIUKIOS_TRACE_CHILD_INT21=1 make build-full
 fi
@@ -209,7 +259,7 @@ WOLF_CWD_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+
 WOLF_CMD_PATTERN='W+O+L+F+3+D+\.*E+X+E+'
 COMMAND_NOT_FOUND_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 LOADER_RETURN_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+R+E+T+U+R+N+E+D+[[:space:]]+C+O+N+T+R+O+L+'
-TRACE_MARKER_PATTERN='CHILD_EXEC_REQ|CHILD_EXEC_RET|EXRT ax=|EXVL ok|CHILD_PREJUMP|CHILD_EXIT|CH40|CH40R'
+TRACE_MARKER_PATTERN='CHILD_EXEC_REQ|CHILD_EXEC_RET|EXRT ax=|EXVL ok|CHILD_PREJUMP|CHILD_EXIT|CH4A|CH4AR|CH40|CH40R|CH35|CH25'
 
 shell_prompt_reached=no
 cd_wolf3d=no
@@ -217,6 +267,8 @@ wolf3d_submitted=no
 external_lookup=no
 ah4b_reached=no
 child_exec_req=no
+child_prejump=no
+post_transfer_child_activity=no
 child_transfer=no
 wolf3d_exit_03=no
 trace_markers_seen=no
@@ -263,6 +315,8 @@ exec_return_error=no
 child_int21=no
 exit_code=""
 first_blocker="none"
+first_post_transfer_marker="NONE"
+first_child_int21="NONE"
 
 if strings -a "$LOG_FILE" | grep -Eq "$TRACE_MARKER_PATTERN"; then
   trace_markers_seen=yes
@@ -286,10 +340,18 @@ if strings -a "$LOG_FILE" | grep -Eq "$LOADER_RETURN_PATTERN"; then
   loader_return=yes
 fi
 if strings -a "$LOG_FILE" | grep -Eq 'CHILD_PREJUMP'; then
-  child_transfer=yes
+  child_prejump=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT|CH40|CH40R'; then
+first_post_transfer_marker="$(extract_first_post_exec_marker "$LOG_FILE")"
+first_child_int21="$(extract_first_post_exec_int21 "$LOG_FILE")"
+if [[ -n "$first_post_transfer_marker" ]]; then
+  post_transfer_child_activity=yes
+fi
+if [[ -n "$first_child_int21" ]]; then
   child_int21=yes
+fi
+if [[ "$child_prejump" == yes || "$post_transfer_child_activity" == yes ]]; then
+  child_transfer=yes
 fi
 exit_code="$(extract_exit_code "$LOG_FILE")"
 if [[ "$exit_code" == 03 ]]; then
@@ -330,6 +392,10 @@ printf 'WOLF3D.EXE submitted: %s\n' "${wolf3d_submitted^^}"
 printf 'external lookup reached: %s\n' "${external_lookup^^}"
 printf 'AH=4Bh reached: %s\n' "${ah4b_reached^^}"
 printf 'CHILD_EXEC_REQ observed: %s\n' "${child_exec_req^^}"
+printf 'CHILD_PREJUMP observed: %s\n' "${child_prejump^^}"
+printf 'post-transfer child activity observed: %s\n' "${post_transfer_child_activity^^}"
+printf 'first post-transfer marker: %s\n' "$(format_child_marker "$first_post_transfer_marker")"
+printf 'first child INT21 observed: %s\n' "$(format_child_marker "$first_child_int21")"
 printf 'child transfer reached: %s\n' "${child_transfer^^}"
 printf 'WOLF3D exits code 03: %s\n' "${wolf3d_exit_03^^}"
 printf 'next blocker: %s\n' "$first_blocker"
