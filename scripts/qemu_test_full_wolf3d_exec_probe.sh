@@ -156,11 +156,12 @@ extract_first_post_exec_marker() {
   strings -a "$log_file" | awk '
     /CHILD_EXEC_REQ/ {seen=1; next}
     !seen {next}
-    /^CHILD_PREJUMP/ {print; exit}
-    /^CHILD_EXIT/ {print; exit}
-    /^CH4A([[:space:]]|$)/ {print; exit}
-    /^CH40([[:space:]]|$)/ {print; exit}
-    /^CH4C([[:space:]]|$)/ {print; exit}
+    {
+      if (match($0, /CHILD_PREJUMP|CHILD_EXIT|CH44I|CH44O|CH4A|CH40|CH4C/)) {
+        print substr($0, RSTART)
+        exit
+      }
+    }
   '
 }
 
@@ -169,9 +170,12 @@ extract_first_post_exec_int21() {
   strings -a "$log_file" | awk '
     /CHILD_EXEC_REQ/ {seen=1; next}
     !seen {next}
-    /^CH4A([[:space:]]|$)/ {print; exit}
-    /^CH40([[:space:]]|$)/ {print; exit}
-    /^CH4C([[:space:]]|$)/ {print; exit}
+    {
+      if (match($0, /CH44I|CH44O|CH4A|CH40|CH4C/)) {
+        print substr($0, RSTART)
+        exit
+      }
+    }
   '
 }
 
@@ -259,7 +263,7 @@ WOLF_CWD_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+
 WOLF_CMD_PATTERN='W+O+L+F+3+D+\.*E+X+E+'
 COMMAND_NOT_FOUND_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 LOADER_RETURN_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+R+E+T+U+R+N+E+D+[[:space:]]+C+O+N+T+R+O+L+'
-TRACE_MARKER_PATTERN='CHILD_EXEC_REQ|CHILD_EXEC_RET|EXRT ax=|EXVL ok|CHILD_PREJUMP|CHILD_EXIT|CH4A|CH4AR|CH40|CH40R|CH35|CH25'
+TRACE_MARKER_PATTERN='CHILD_EXEC_REQ|CHILD_EXEC_RET|EXRT ax=|EXVL ok|CHILD_PREJUMP|CHILD_EXIT|CH44I|CH44O|CH4A|CH4AR|CH40|CH40R|CH35|CH25'
 
 shell_prompt_reached=no
 cd_wolf3d=no

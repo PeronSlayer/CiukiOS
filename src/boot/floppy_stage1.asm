@@ -1047,7 +1047,13 @@ int21_handler:
     jmp .success
 
 .fn_44:
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_ioctl44_enter
+%endif
     call int21_ioctl
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_ioctl44_exit
+%endif
     jc .error
     jmp .success
 
@@ -4206,8 +4212,6 @@ child_trace_begin_com:
 
 child_trace_begin_mz:
     push ax
-    push bx
-    push dx
     push si
     push ds
     push cs
@@ -4221,87 +4225,10 @@ child_trace_begin_mz:
     mov byte [cs:child_trace_exit_logged], 0
     mov si, msg_child_prejump
     call print_string_serial
-    mov si, msg_child_exec_psp
-    call print_string_serial
-    mov ax, [cs:mz_psp_seg]
-    call print_hex16_serial
-    mov si, msg_child_exec_entry
-    call print_string_serial
-    mov ax, [cs:mz_entry_seg]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [cs:mz_entry_off]
-    call print_hex16_serial
-    mov si, msg_child_exec_stack
-    call print_string_serial
-    mov ax, [cs:mz_stack_seg]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [cs:mz_stack_sp]
-    call print_hex16_serial
-    mov si, msg_child_ds
-    call print_string_serial
-    mov ax, [cs:mz_psp_seg]
-    call print_hex16_serial
-    mov si, msg_child_es
-    call print_string_serial
-    mov ax, [cs:mz_psp_seg]
-    call print_hex16_serial
-    mov si, msg_child_exec_load
-    call print_string_serial
-    mov ax, [cs:mz_image_seg]
-    call print_hex16_serial
-    call print_newline_serial
-    mov si, msg_child_trace_begin
-    call print_string_serial
-    mov si, msg_child_exec_kind
-    call print_string_serial
-    mov si, msg_child_exec_kind_mz
-    call print_string_serial
-    mov si, msg_child_trace_path
-    call print_string_serial
-    mov si, dos_child_exec_path_buf
-    call print_string_serial
-    mov si, msg_child_exec_load
-    call print_string_serial
-    mov ax, [cs:current_load_seg]
-    call print_hex16_serial
-    mov si, msg_child_exec_psp
-    call print_string_serial
-    mov ax, [cs:mz_psp_seg]
-    call print_hex16_serial
-    mov si, msg_child_exec_entry
-    call print_string_serial
-    mov ax, [cs:mz_entry_seg]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [cs:mz_entry_off]
-    call print_hex16_serial
-    mov si, msg_child_exec_stack
-    call print_string_serial
-    mov ax, [cs:mz_stack_seg]
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, [cs:mz_stack_sp]
-    call print_hex16_serial
-    mov si, msg_child_exec_minalloc
-    call print_string_serial
-    mov ax, [cs:child_trace_mz_minalloc]
-    call print_hex16_serial
-    mov si, msg_child_exec_maxalloc
-    call print_string_serial
-    mov ax, [cs:child_trace_mz_maxalloc]
-    call print_hex16_serial
     call print_newline_serial
 .done:
     pop ds
     pop si
-    pop dx
-    pop bx
     pop ax
     ret
 
@@ -4380,143 +4307,9 @@ child_trace_exit_int20:
     jmp child_trace_exit_int21
 
 child_trace_vector_set:
-    push ax
-    call child_trace_should_log_exit
-    pop ax
-    jnc .done
-    call child_trace_vector_interesting
-    jnc .done
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push ds
-    mov bl, al
-    mov di, ds
-    mov bp, dx
-    xor ah, ah
-    mov si, ax
-    shl si, 1
-    shl si, 1
-    xor ax, ax
-    mov ds, ax
-    mov cx, [ds:si]
-    mov dx, [ds:si + 2]
-    push cs
-    pop ds
-    mov si, msg_child_vec25
-    call print_string_serial
-    mov al, bl
-    call print_hex8_serial
-    mov si, msg_child_vec_old
-    call print_string_serial
-    mov ax, dx
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, cx
-    call print_hex16_serial
-    mov si, msg_child_vec_new
-    call print_string_serial
-    mov ax, di
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, bp
-    call print_hex16_serial
-    mov si, msg_child_vec_stored
-    call print_string_serial
-    mov ax, di
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, bp
-    call print_hex16_serial
-    call print_newline_serial
-    pop ds
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.done:
     ret
 
 child_trace_vector_get:
-    push ax
-    push ds
-    call child_trace_should_log_exit
-    pop ds
-    pop ax
-    jnc .done
-    push ax
-    push ds
-    push cs
-    pop ds
-    mov al, [cs:int21_last_al]
-    call child_trace_vector_interesting
-    pop ds
-    pop ax
-    jnc .done
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push ds
-    push cs
-    pop ds
-    mov bl, [cs:int21_last_al]
-    mov di, es
-    mov bp, bx
-    xor ax, ax
-    mov al, bl
-    mov si, ax
-    shl si, 1
-    shl si, 1
-    xor ax, ax
-    mov ds, ax
-    mov cx, [ds:si]
-    mov dx, [ds:si + 2]
-    push cs
-    pop ds
-    mov si, msg_child_vec35
-    call print_string_serial
-    mov al, bl
-    call print_hex8_serial
-    mov si, msg_child_vec_ret
-    call print_string_serial
-    mov ax, di
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, bp
-    call print_hex16_serial
-    mov si, msg_child_vec_ivt
-    call print_string_serial
-    mov ax, dx
-    call print_hex16_serial
-    mov al, ':'
-    call serial_putc
-    mov ax, cx
-    call print_hex16_serial
-    call print_newline_serial
-    pop ds
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.done:
     ret
 
 child_trace_resize_log:
@@ -4578,6 +4371,88 @@ child_trace_resize_log:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+child_trace_ioctl44_enter:
+    push ax
+    push bx
+    push cx
+    push dx
+    push bp
+    push si
+    push ds
+    mov bp, sp
+    call child_trace_should_log
+    jnc .done
+    push cs
+    pop ds
+    mov si, msg_child_44i
+    call print_string_serial
+    mov ax, [ss:bp + 12]
+    call print_hex8_serial
+    mov al, ' '
+    call serial_putc
+    mov ax, [ss:bp + 10]
+    call print_hex16_serial
+    mov al, ' '
+    call serial_putc
+    mov ax, [ss:bp + 8]
+    call print_hex16_serial
+    mov al, ' '
+    call serial_putc
+    mov ax, [ss:bp + 6]
+    call print_hex16_serial
+    call print_newline_serial
+.done:
+    pop ds
+    pop si
+    pop bp
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+child_trace_ioctl44_exit:
+    push ax
+    push bx
+    push dx
+    push di
+    push bp
+    push si
+    push ds
+    mov bp, sp
+    pushf
+    pop di
+    call child_trace_should_log_exit
+    jnc .done
+    push cs
+    pop ds
+    mov si, msg_child_44o
+    call print_string_serial
+    mov al, '0'
+    test di, 0x0001
+    jz .cf_ready
+    mov al, '1'
+.cf_ready:
+    call serial_putc
+    mov al, ' '
+    call serial_putc
+    mov ax, [ss:bp + 12]
+    call print_hex16_serial
+    mov al, ' '
+    call serial_putc
+    mov ax, [ss:bp + 10]
+    call print_hex16_serial
+    call print_newline_serial
+.done:
+    pop ds
+    pop si
+    pop bp
+    pop di
+    pop dx
     pop bx
     pop ax
     ret
@@ -19177,6 +19052,8 @@ msg_child_dx db " dx=", 0
 msg_child_ds db " ds=", 0
 msg_child_es db " es=", 0
 msg_child_cf db " cf=", 0
+msg_child_44i db "CH44I ", 0
+msg_child_44o db "CH44O ", 0
 msg_child_4a db "CH4A", 0
 msg_child_4a_es db " es=", 0
 msg_child_4a_req db " rq=", 0
