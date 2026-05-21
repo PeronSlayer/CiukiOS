@@ -105,6 +105,25 @@ hmp() {
   return "$rc"
 }
 
+hmp_capture() {
+  local sock="$1"
+  local cmd_log="$2"
+  local cmd="$3"
+  local out rc
+
+  echo "[HMP] $cmd" >> "$cmd_log"
+  set +e
+  out="$(printf '%s\n' "$cmd" | socat - UNIX-CONNECT:"$sock" 2>&1)"
+  rc=$?
+  set -e
+  if [[ -n "$out" ]]; then
+    printf '%s\n' "$out" >> "$cmd_log"
+    printf '%s\n' "$out"
+  fi
+  echo "[HMP_RC] $cmd => $rc" >> "$cmd_log"
+  return "$rc"
+}
+
 send_key() {
   local sock="$1"
   local cmd_log="$2"
@@ -191,6 +210,52 @@ extract_first_post_exec_int21() {
       }
     }
   '
+}
+
+capture_video_text() {
+  local sock="$1"
+  local cmd_log="$2"
+  local dump_file
+  local row_count="${VIDEO_TEXT_ROWS:-12}"
+  local byte_count=$((80 * row_count * 2))
+
+  dump_file="$(mktemp)"
+  if ! hmp_capture "$sock" "$cmd_log" "xp /${byte_count}bx 0xb8000" > "$dump_file"; then
+    rm -f "$dump_file"
+    return 1
+  fi
+
+  awk -v max_rows="$row_count" '
+    /:/ {
+      for (i = 2; i <= NF; i++) {
+        if ($i ~ /^[0-9A-Fa-f][0-9A-Fa-f]$/) {
+          bytes[++count] = $i
+        }
+      }
+    }
+    END {
+      row = 0
+      col = 0
+      line = ""
+      for (i = 1; i <= count && row < max_rows; i += 2) {
+        value = strtonum("0x" bytes[i])
+        ch = (value >= 32 && value <= 126) ? sprintf("%c", value) : " "
+        line = line ch
+        col++
+        if (col == 80) {
+          gsub(/  +/, " ", line)
+          sub(/^ +/, "", line)
+          sub(/ +$/, "", line)
+          print line
+          row++
+          line = ""
+          col = 0
+        }
+      }
+    }
+  ' "$dump_file"
+
+  rm -f "$dump_file"
 }
 
 format_child_marker() {
@@ -298,6 +363,9 @@ wolf3d_exit_03=no
 trace_markers_seen=no
 cmd_not_found=no
 loader_return=no
+video_dump_available=no
+video_text_available=no
+video_text_after_exit=""
 
 offset=0
 
@@ -328,6 +396,15 @@ while kill -0 "$QEMU_PID" >/dev/null 2>&1; do
   fi
   sleep 1
 done
+
+if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]* reason=4C code=03'; then
+  if video_text_after_exit="$(capture_video_text "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" || true)"; then
+    video_dump_available=yes
+    if [[ -n "$video_text_after_exit" ]]; then
+      video_text_available=yes
+    fi
+  fi
+fi
 
 hmp "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" quit >/dev/null 2>&1 || true
 set +e
@@ -433,6 +510,13 @@ printf 'first child INT21 observed: %s\n' "$(format_child_marker "$first_child_i
 printf 'INT16 observed: %s\n' "${int16_seen^^}"
 printf 'INT10 observed: %s\n' "${int10_seen^^}"
 printf 'first BIOS marker: %s\n' "$(format_child_marker "$first_bios_marker")"
+printf 'video memory dump available: %s\n' "${video_dump_available^^}"
+printf 'decoded B8000 text available: %s\n' "${video_text_available^^}"
+printf 'VIDEO_TEXT_AFTER_EXIT_BEGIN\n'
+if [[ -n "$video_text_after_exit" ]]; then
+  printf '%s\n' "$video_text_after_exit"
+fi
+printf 'VIDEO_TEXT_AFTER_EXIT_END\n'
 printf 'child transfer reached: %s\n' "${child_transfer^^}"
 printf 'WOLF3D exits code 03: %s\n' "${wolf3d_exit_03^^}"
 printf 'next blocker: %s\n' "$first_blocker"
