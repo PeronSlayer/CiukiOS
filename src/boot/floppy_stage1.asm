@@ -15,8 +15,8 @@ org 0x0000
 %define MZ_LOAD_SEG 0x1800
 %define MZ2_LOAD_SEG 0x3800
 %define MZ3_LOAD_SEG 0x7800
-%define RUNTIME_LOAD_SEG 0x4C00
-%define STAGE2_LOAD_SEG 0x4E00
+%define RUNTIME_LOAD_SEG 0x1100
+%define STAGE2_LOAD_SEG 0x1140
 %define DOS_META_BUF_SEG 0x1200
 %define DOS_FAT_BUF_SEG  0x1400
 %define DOS_IO_BUF_SEG   0x1600
@@ -2995,8 +2995,8 @@ int21_exec_mz_overlaps_runtime:
     push dx
 
     mov bx, ax
-    cmp bx, RUNTIME_LOAD_SEG
-    jae .overlap
+    cmp bx, DOS_META_BUF_SEG
+    jae .no_overlap
 
     mov dx, [cs:search_found_size_hi]
     mov ax, [cs:search_found_size_lo]
@@ -3008,11 +3008,12 @@ int21_exec_mz_overlaps_runtime:
     rcr ax, 1
     loop .size_paras_loop
 
-    mov dx, RUNTIME_LOAD_SEG
+    mov dx, DOS_META_BUF_SEG
     sub dx, bx
     cmp ax, dx
     ja .overlap
 
+.no_overlap:
     mov ax, bx
     clc
     jmp .done
