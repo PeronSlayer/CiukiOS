@@ -235,6 +235,20 @@ extract_exec_req_psp() {
   echo "${line##*psp=}"
 }
 
+extract_last_marker_psp() {
+  local log_file="$1"
+  local marker_regex="$2"
+  local line
+
+  line="$(strings -a "$log_file" | grep -Eo "(${marker_regex})[^[:cntrl:]]* psp=[0-9A-F]+" | tail -n 1 || true)"
+  if [[ -n "$line" && "$line" == *psp=* ]]; then
+    echo "${line##*psp=}"
+    return 0
+  fi
+
+  extract_last_child_psp "$log_file"
+}
+
 capture_physical_bytes() {
   local sock="$1"
   local cmd_log="$2"
@@ -393,6 +407,128 @@ append_reason() {
   else
     printf '%s, %s' "$current" "$reason"
   fi
+}
+
+capture_child_psp_snapshot() {
+  local sock="$1"
+  local cmd_log="$2"
+  local psp_seg_hex="$3"
+  local prefix="$4"
+  local psp_phys
+  local psp_bytes_raw
+  local psp_jft
+  local psp_jft_size
+  local psp_jft_ptr
+  local psp_env_seg
+  local psp_field_003a
+  local psp_term_vec
+  local psp_ctrlc_vec
+  local psp_crit_vec
+  local psp_suspicious="NONE"
+  local -a psp_bytes
+
+  printf '%s_BEGIN\n' "$prefix"
+  if [[ -z "$psp_seg_hex" || "$psp_seg_hex" == "NONE" ]]; then
+    printf 'psp_seg=NONE\n'
+    printf 'jft_20=NONE\n'
+    printf 'jft_size=NONE\n'
+    printf 'jft_ptr=NONE\n'
+    printf 'env_seg=NONE\n'
+    printf 'field_003A=NONE\n'
+    printf 'term_vec=NONE\n'
+    printf 'ctrlc_vec=NONE\n'
+    printf 'crit_vec=NONE\n'
+    printf 'suspicious=psp_unavailable\n'
+    printf '%s_END\n' "$prefix"
+    return 0
+  fi
+
+  psp_phys=$((16#$psp_seg_hex << 4))
+  psp_bytes_raw="$(capture_physical_bytes "$sock" "$cmd_log" "$psp_phys" 0x200 || true)"
+  read -r -a psp_bytes <<< "$psp_bytes_raw"
+  if (( ${#psp_bytes[@]} < 0x3C )); then
+    printf 'psp_seg=%s\n' "$psp_seg_hex"
+    printf 'jft_20=NONE\n'
+    printf 'jft_size=NONE\n'
+    printf 'jft_ptr=NONE\n'
+    printf 'env_seg=NONE\n'
+    printf 'field_003A=NONE\n'
+    printf 'term_vec=NONE\n'
+    printf 'ctrlc_vec=NONE\n'
+    printf 'crit_vec=NONE\n'
+    printf 'suspicious=short_dump\n'
+    printf '%s_END\n' "$prefix"
+    return 0
+  fi
+
+  psp_jft="$(read_hex_range psp_bytes 0x18 20)"
+  psp_jft_size="$(read_le16_dec psp_bytes 0x32)"
+  psp_jft_ptr="$(read_far_ptr psp_bytes 0x34)"
+  psp_env_seg="$(read_le16_hex psp_bytes 0x2C)"
+  psp_field_003a="$(read_le16_hex psp_bytes 0x3A)"
+  psp_term_vec="$(read_far_ptr psp_bytes 0x0A)"
+  psp_ctrlc_vec="$(read_far_ptr psp_bytes 0x0E)"
+  psp_crit_vec="$(read_far_ptr psp_bytes 0x12)"
+
+  if [[ "$psp_jft" != 00\ 01\ 02\ 03\ 04* ]]; then
+    psp_suspicious="$(append_reason "$psp_suspicious" "jft_layout_unexpected")"
+  fi
+  if [[ "$psp_jft_size" != "20" ]]; then
+    psp_suspicious="$(append_reason "$psp_suspicious" "jft_size_${psp_jft_size}")"
+  fi
+  if [[ "$psp_jft_ptr" != "${psp_seg_hex}:0018" ]]; then
+    psp_suspicious="$(append_reason "$psp_suspicious" "jft_ptr_${psp_jft_ptr}")"
+  fi
+  if [[ "$psp_env_seg" == "0000" || "$psp_env_seg" == "FFFF" ]]; then
+    psp_suspicious="$(append_reason "$psp_suspicious" "env_seg_${psp_env_seg}")"
+  fi
+  if [[ "$psp_term_vec" == "0000:0000" || "$psp_term_vec" == "FFFF:FFFF" ]]; then
+    psp_suspicious="$(append_reason "$psp_suspicious" "term_vec_${psp_term_vec}")"
+  fi
+  if [[ "$psp_ctrlc_vec" == "0000:0000" || "$psp_ctrlc_vec" == "FFFF:FFFF" ]]; then
+    psp_suspicious="$(append_reason "$psp_suspicious" "ctrlc_vec_${psp_ctrlc_vec}")"
+  fi
+  if [[ "$psp_crit_vec" == "0000:0000" || "$psp_crit_vec" == "FFFF:FFFF" ]]; then
+    psp_suspicious="$(append_reason "$psp_suspicious" "crit_vec_${psp_crit_vec}")"
+  fi
+
+  printf 'psp_seg=%s\n' "$psp_seg_hex"
+  printf 'jft_20=%s\n' "$psp_jft"
+  printf 'jft_size=%s\n' "$psp_jft_size"
+  printf 'jft_ptr=%s\n' "$psp_jft_ptr"
+  printf 'env_seg=%s\n' "$psp_env_seg"
+  printf 'field_003A=%s\n' "$psp_field_003a"
+  printf 'term_vec=%s\n' "$psp_term_vec"
+  printf 'ctrlc_vec=%s\n' "$psp_ctrlc_vec"
+  printf 'crit_vec=%s\n' "$psp_crit_vec"
+  printf 'suspicious=%s\n' "$psp_suspicious"
+  printf '%s_END\n' "$prefix"
+}
+
+capture_marker_snapshot() {
+  local sock="$1"
+  local cmd_log="$2"
+  local log_file="$3"
+  local offset="$4"
+  local wait_sec="$5"
+  local marker_regex="$6"
+  local marker_psp_regex="$7"
+  local prefix="$8"
+  local -n next_offset_ref="$9"
+  local found_psp
+
+  if ! wait_for_strings_regex_from_offset "$log_file" "$marker_regex" "$offset" "$wait_sec"; then
+    next_offset_ref="$(file_size "$log_file")"
+    capture_child_psp_snapshot "$sock" "$cmd_log" "NONE" "$prefix"
+    return 1
+  fi
+
+  next_offset_ref="$(file_size "$log_file")"
+  hmp "$sock" "$cmd_log" stop >/dev/null 2>&1 || true
+  found_psp="$(extract_last_marker_psp "$log_file" "$marker_psp_regex")"
+  capture_child_psp_snapshot "$sock" "$cmd_log" "$found_psp" "$prefix"
+  hmp "$sock" "$cmd_log" cont >/dev/null 2>&1 || true
+  return 0
 }
 
 capture_video_text() {
@@ -633,6 +769,10 @@ ivt_before_int21="NONE"
 ivt_before_int23="NONE"
 ivt_before_int24="NONE"
 ivt_before_suspicious="NONE"
+child_jft_at_4a_report=""
+child_jft_after_40_1_report=""
+child_jft_after_40_2_report=""
+child_jft_after_exit_report=""
 
 offset=0
 
@@ -725,6 +865,13 @@ if wait_for_strings_regex_from_offset "$LOG_FILE" "$WOLF_CMD_PATTERN" "$offset" 
   wolf3d_submitted=yes
 fi
 
+if [[ "$wolf3d_submitted" == yes ]]; then
+  marker_offset="$offset"
+  child_jft_at_4a_report="$(capture_marker_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$LOG_FILE" "$marker_offset" "$OBSERVE_SEC" 'CH4A' 'CH4A' 'CHILD_JFT_AT_4A' marker_offset || true)"
+  child_jft_after_40_1_report="$(capture_marker_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$LOG_FILE" "$marker_offset" "$OBSERVE_SEC" 'CH40' 'CH4A|CH40' 'CHILD_JFT_AFTER_40_1' marker_offset || true)"
+  child_jft_after_40_2_report="$(capture_marker_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$LOG_FILE" "$marker_offset" "$OBSERVE_SEC" 'CH40' 'CH4A|CH40' 'CHILD_JFT_AFTER_40_2' marker_offset || true)"
+fi
+
 start="$(date +%s)"
 while kill -0 "$QEMU_PID" >/dev/null 2>&1; do
   now="$(date +%s)"
@@ -785,6 +932,7 @@ if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]* reason=4C code=03'
     if psp_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$psp_phys" 0x200 || true)"; then
       read -r -a psp_bytes <<< "$psp_bytes_raw"
       if (( ${#psp_bytes[@]} >= 0x100 )); then
+        child_jft_after_exit_report="$(capture_child_psp_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$child_psp_hex" 'CHILD_JFT_AFTER_EXIT')"
         psp_dump_available=yes
         psp_int20_sig="${psp_bytes[0]:-00}${psp_bytes[1]:-00}"
         psp_end_alloc_seg="$(read_le16_hex psp_bytes 0x02)"
@@ -1050,6 +1198,9 @@ printf 'int23=%s\n' "$ivt_before_int23"
 printf 'int24=%s\n' "$ivt_before_int24"
 printf 'suspicious=%s\n' "$ivt_before_suspicious"
 printf 'IVT_BEFORE_EXEC_END\n'
+printf '%s\n' "$child_jft_at_4a_report"
+printf '%s\n' "$child_jft_after_40_1_report"
+printf '%s\n' "$child_jft_after_40_2_report"
 printf 'BDA_AFTER_EXIT_BEGIN\n'
 printf 'video_mode=%s\n' "$bda_video_mode"
 printf 'columns=%s\n' "$bda_columns"
@@ -1114,6 +1265,7 @@ printf 'int23=%s\n' "$ivt_int23"
 printf 'int24=%s\n' "$ivt_int24"
 printf 'suspicious=%s\n' "$ivt_suspicious"
 printf 'IVT_AFTER_EXIT_END\n'
+printf '%s\n' "$child_jft_after_exit_report"
 printf 'child transfer reached: %s\n' "${child_transfer^^}"
 printf 'WOLF3D exits code 03: %s\n' "${wolf3d_exit_03^^}"
 printf 'next blocker: %s\n' "$first_blocker"
