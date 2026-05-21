@@ -212,24 +212,204 @@ extract_first_post_exec_int21() {
   '
 }
 
-capture_video_text() {
+extract_last_child_psp() {
+  local log_file="$1"
+  local line
+
+  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
+  if [[ -n "$line" ]]; then
+    echo "${line##*psp=}"
+    return 0
+  fi
+
+  line="$(strings -a "$log_file" | grep -Eo 'CH4A[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
+  echo "${line##*psp=}"
+}
+
+capture_physical_bytes() {
   local sock="$1"
   local cmd_log="$2"
+  local phys_addr="$3"
+  local byte_count="$4"
   local dump_file
-  local row_count="${VIDEO_TEXT_ROWS:-12}"
-  local byte_count=$((80 * row_count * 2))
+  local phys_hex
+  local count_dec
 
   dump_file="$(mktemp)"
-  if ! hmp_capture "$sock" "$cmd_log" "xp /${byte_count}bx 0xb8000" > "$dump_file"; then
+  printf -v phys_hex '0x%X' "$phys_addr"
+  count_dec=$((byte_count))
+  if ! hmp_capture "$sock" "$cmd_log" "xp /${count_dec}bx ${phys_hex}" > "$dump_file"; then
     rm -f "$dump_file"
     return 1
   fi
 
-  awk -v max_rows="$row_count" '
+  awk '
     /:/ {
       for (i = 2; i <= NF; i++) {
-        if ($i ~ /^[0-9A-Fa-f][0-9A-Fa-f]$/) {
-          bytes[++count] = $i
+        token = $i
+        gsub(/\r/, "", token)
+        if (token ~ /^0x[0-9A-Fa-f][0-9A-Fa-f]$/) {
+          bytes[++count] = toupper(substr(token, 3, 2))
+        } else if (token ~ /^[0-9A-Fa-f][0-9A-Fa-f]$/) {
+          bytes[++count] = toupper(token)
+        }
+      }
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        if (i > 1) {
+          printf " "
+        }
+        printf "%s", bytes[i]
+      }
+      printf "\n"
+    }
+  ' "$dump_file"
+
+  rm -f "$dump_file"
+}
+
+read_le16_hex() {
+  local -n bytes_ref="$1"
+  local idx="$2"
+  local lo="${bytes_ref[$idx]:-00}"
+  local hi="${bytes_ref[$((idx + 1))]:-00}"
+  printf '%04X' $((16#$lo + (16#$hi << 8)))
+}
+
+read_le16_dec() {
+  local value
+  value="$(read_le16_hex "$1" "$2")"
+  printf '%d' $((16#$value))
+}
+
+read_le32_hex() {
+  local -n bytes_ref="$1"
+  local idx="$2"
+  local b0="${bytes_ref[$idx]:-00}"
+  local b1="${bytes_ref[$((idx + 1))]:-00}"
+  local b2="${bytes_ref[$((idx + 2))]:-00}"
+  local b3="${bytes_ref[$((idx + 3))]:-00}"
+  printf '%08X' $((16#$b0 + (16#$b1 << 8) + (16#$b2 << 16) + (16#$b3 << 24)))
+}
+
+read_far_ptr() {
+  local -n bytes_ref="$1"
+  local idx="$2"
+  local off seg
+  local off_lo="${bytes_ref[$idx]:-00}"
+  local off_hi="${bytes_ref[$((idx + 1))]:-00}"
+  local seg_lo="${bytes_ref[$((idx + 2))]:-00}"
+  local seg_hi="${bytes_ref[$((idx + 3))]:-00}"
+  printf -v off '%04X' $((16#$off_lo + (16#$off_hi << 8)))
+  printf -v seg '%04X' $((16#$seg_lo + (16#$seg_hi << 8)))
+  printf '%s:%s' "$seg" "$off"
+}
+
+read_hex_range() {
+  local -n bytes_ref="$1"
+  local start="$2"
+  local count="$3"
+  local idx
+  local out=""
+
+  for ((idx = 0; idx < count; idx++)); do
+    if (( idx > 0 )); then
+      out+=" "
+    fi
+    out+="${bytes_ref[$((start + idx))]:-00}"
+  done
+
+  printf '%s' "$out"
+}
+
+decode_ascii_range() {
+  local -n bytes_ref="$1"
+  local start="$2"
+  local count="$3"
+  local idx value
+  local out=""
+
+  for ((idx = 0; idx < count; idx++)); do
+    value=$((16#${bytes_ref[$((start + idx))]:-00}))
+    if (( value >= 32 && value <= 126 )); then
+      printf -v out '%s%b' "$out" "\\x$(printf '%02X' "$value")"
+    else
+      out+=" "
+    fi
+  done
+
+  printf '%s' "$out" | sed -E 's/  +/ /g; s/^ +//; s/ +$//'
+}
+
+decode_env_strings() {
+  local -n bytes_ref="$1"
+  local idx value
+  local current=""
+  local out=""
+
+  for ((idx = 0; idx < ${#bytes_ref[@]}; idx++)); do
+    value=$((16#${bytes_ref[$idx]:-00}))
+    if (( value == 0 )); then
+      if [[ -z "$current" ]]; then
+        break
+      fi
+      current="$(printf '%s' "$current" | sed -E 's/  +/ /g; s/^ +//; s/ +$//')"
+      if [[ -n "$current" ]]; then
+        if [[ -n "$out" ]]; then
+          out+=$'\n'
+        fi
+        out+="$current"
+      fi
+      current=""
+      continue
+    fi
+
+    if (( value >= 32 && value <= 126 )); then
+      printf -v current '%s%b' "$current" "\\x$(printf '%02X' "$value")"
+    else
+      current+=" "
+    fi
+  done
+
+  printf '%s' "$out"
+}
+
+append_reason() {
+  local current="$1"
+  local reason="$2"
+
+  if [[ -z "$current" || "$current" == "NONE" ]]; then
+    printf '%s' "$reason"
+  else
+    printf '%s, %s' "$current" "$reason"
+  fi
+}
+
+capture_video_text() {
+  local sock="$1"
+  local cmd_log="$2"
+  local byte_stream
+  local dump_file
+  local row_count="${VIDEO_TEXT_ROWS:-12}"
+  local byte_count=$((80 * row_count * 2))
+
+  if ! byte_stream="$(capture_physical_bytes "$sock" "$cmd_log" 0xB8000 "$byte_count")"; then
+    return 1
+  fi
+
+  dump_file="$(mktemp)"
+  printf '%s\n' "$byte_stream" > "$dump_file"
+
+  awk -v max_rows="$row_count" '
+    {
+      for (i = 1; i <= NF; i++) {
+        token = $i
+        gsub(/\r/, "", token)
+        if (token ~ /^0x[0-9A-Fa-f][0-9A-Fa-f]$/) {
+          bytes[++count] = substr(token, 3, 2)
+        } else if (token ~ /^[0-9A-Fa-f][0-9A-Fa-f]$/) {
+          bytes[++count] = token
         }
       }
     }
@@ -366,6 +546,62 @@ loader_return=no
 video_dump_available=no
 video_text_available=no
 video_text_after_exit=""
+bda_dump_available=no
+bda_video_mode="NONE"
+bda_columns="NONE"
+bda_regen_size="NONE"
+bda_active_page="NONE"
+bda_crtc_base="NONE"
+bda_rows_minus_one="NONE"
+bda_char_height="NONE"
+bda_equipment_word="NONE"
+bda_memory_kb="NONE"
+bda_timer_ticks="NONE"
+bda_suspicious="NONE"
+psp_dump_available=no
+psp_seg="NONE"
+psp_int20_sig="NONE"
+psp_end_alloc_seg="NONE"
+psp_parent_psp="NONE"
+psp_env_seg="NONE"
+psp_jft_size="NONE"
+psp_jft_ptr="NONE"
+psp_jft_20="NONE"
+psp_cmd_tail_len="NONE"
+psp_cmd_tail_ascii="NONE"
+psp_term_vec="NONE"
+psp_ctrlc_vec="NONE"
+psp_crit_vec="NONE"
+psp_suspicious="NONE"
+env_dump_available=no
+env_strings=""
+env_suspicious="NONE"
+stack_dump_available=no
+stack_expected_ss="NONE"
+stack_sp="0080"
+stack_first_words="NONE"
+stack_ascii_snippet=""
+stack_suspicious="NONE"
+entry_dump_available=no
+entry_expected_seg="NONE"
+entry_expected_ip="0000"
+entry_first_32_bytes="NONE"
+entry_suspicious="NONE"
+ivt_dump_available=no
+ivt_int00="NONE"
+ivt_int04="NONE"
+ivt_int05="NONE"
+ivt_int06="NONE"
+ivt_int08="NONE"
+ivt_int09="NONE"
+ivt_int10="NONE"
+ivt_int16="NONE"
+ivt_int1A="NONE"
+ivt_int20="NONE"
+ivt_int21="NONE"
+ivt_int23="NONE"
+ivt_int24="NONE"
+ivt_suspicious="NONE"
 
 offset=0
 
@@ -402,6 +638,177 @@ if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]* reason=4C code=03'
     video_dump_available=yes
     if [[ -n "$video_text_after_exit" ]]; then
       video_text_available=yes
+    fi
+  fi
+
+  child_psp_hex="$(extract_last_child_psp "$LOG_FILE")"
+  if [[ -n "$child_psp_hex" ]]; then
+    psp_seg="$child_psp_hex"
+
+    if bda_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" 0x400 0x100 || true)"; then
+      read -r -a bda_bytes <<< "$bda_bytes_raw"
+      if (( ${#bda_bytes[@]} >= 0x86 )); then
+        bda_dump_available=yes
+        bda_video_mode="${bda_bytes[73]:-00}"
+        bda_columns="$(read_le16_dec bda_bytes 74)"
+        bda_regen_size="$(read_le16_hex bda_bytes 76)"
+        bda_active_page="${bda_bytes[98]:-00}"
+        bda_crtc_base="$(read_le16_hex bda_bytes 99)"
+        bda_rows_minus_one="$((16#${bda_bytes[132]:-00}))"
+        bda_char_height="$((16#${bda_bytes[133]:-00}))"
+        bda_equipment_word="$(read_le16_hex bda_bytes 16)"
+        bda_memory_kb="$(read_le16_dec bda_bytes 19)"
+        bda_timer_ticks="$(read_le32_hex bda_bytes 108)"
+        if [[ "$bda_video_mode" != "03" ]]; then
+          bda_suspicious="$(append_reason "$bda_suspicious" "video_mode_${bda_video_mode}")"
+        fi
+        if [[ "$bda_columns" != "80" ]]; then
+          bda_suspicious="$(append_reason "$bda_suspicious" "columns_${bda_columns}")"
+        fi
+        if [[ "$bda_rows_minus_one" != "0" && "$bda_rows_minus_one" != "24" ]]; then
+          bda_suspicious="$(append_reason "$bda_suspicious" "rows_minus_one_${bda_rows_minus_one}")"
+        fi
+        if [[ "$bda_crtc_base" != "03D4" && "$bda_crtc_base" != "03B4" ]]; then
+          bda_suspicious="$(append_reason "$bda_suspicious" "crtc_base_${bda_crtc_base}")"
+        fi
+        if [[ "$bda_equipment_word" == "0000" ]]; then
+          bda_suspicious="$(append_reason "$bda_suspicious" "equipment_word_zero")"
+        fi
+        if (( bda_memory_kb < 128 || bda_memory_kb > 640 )); then
+          bda_suspicious="$(append_reason "$bda_suspicious" "memory_kb_${bda_memory_kb}")"
+        fi
+      fi
+    fi
+
+    psp_phys=$((16#$child_psp_hex << 4))
+    if psp_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$psp_phys" 0x200 || true)"; then
+      read -r -a psp_bytes <<< "$psp_bytes_raw"
+      if (( ${#psp_bytes[@]} >= 0x100 )); then
+        psp_dump_available=yes
+        psp_int20_sig="${psp_bytes[0]:-00}${psp_bytes[1]:-00}"
+        psp_end_alloc_seg="$(read_le16_hex psp_bytes 0x02)"
+        psp_term_vec="$(read_far_ptr psp_bytes 0x0A)"
+        psp_ctrlc_vec="$(read_far_ptr psp_bytes 0x0E)"
+        psp_crit_vec="$(read_far_ptr psp_bytes 0x12)"
+        psp_parent_psp="$(read_le16_hex psp_bytes 0x16)"
+        psp_jft_20="$(read_hex_range psp_bytes 0x18 20)"
+        psp_env_seg="$(read_le16_hex psp_bytes 0x2C)"
+        psp_jft_size="$(read_le16_dec psp_bytes 0x32)"
+        psp_jft_ptr="$(read_far_ptr psp_bytes 0x34)"
+        psp_cmd_tail_len="$((16#${psp_bytes[0x80]:-00}))"
+        if (( psp_cmd_tail_len > 127 )); then
+          psp_cmd_tail_len=127
+        fi
+        psp_cmd_tail_ascii="$(decode_ascii_range psp_bytes 0x81 "$psp_cmd_tail_len")"
+        if [[ "$psp_int20_sig" != "CD20" ]]; then
+          psp_suspicious="$(append_reason "$psp_suspicious" "bad_int20_sig_${psp_int20_sig}")"
+        fi
+        if (( 16#$psp_end_alloc_seg <= 16#$child_psp_hex )); then
+          psp_suspicious="$(append_reason "$psp_suspicious" "end_alloc_seg_${psp_end_alloc_seg}")"
+        fi
+        if [[ "$psp_parent_psp" == "0000" || "$psp_parent_psp" == "FFFF" ]]; then
+          psp_suspicious="$(append_reason "$psp_suspicious" "parent_psp_${psp_parent_psp}")"
+        fi
+        if [[ "$psp_env_seg" == "0000" || "$psp_env_seg" == "FFFF" ]]; then
+          psp_suspicious="$(append_reason "$psp_suspicious" "env_seg_${psp_env_seg}")"
+        fi
+        if [[ "$psp_jft_20" != 00\ 01\ 02\ 03\ 04* ]]; then
+          psp_suspicious="$(append_reason "$psp_suspicious" "jft_layout_unexpected")"
+        fi
+        if [[ "$psp_term_vec" == "0000:0000" || "$psp_term_vec" == "FFFF:FFFF" ]]; then
+          psp_suspicious="$(append_reason "$psp_suspicious" "term_vec_${psp_term_vec}")"
+        fi
+        if [[ "$psp_ctrlc_vec" == "0000:0000" || "$psp_ctrlc_vec" == "FFFF:FFFF" ]]; then
+          psp_suspicious="$(append_reason "$psp_suspicious" "ctrlc_vec_${psp_ctrlc_vec}")"
+        fi
+        if [[ "$psp_crit_vec" == "0000:0000" || "$psp_crit_vec" == "FFFF:FFFF" ]]; then
+          psp_suspicious="$(append_reason "$psp_suspicious" "crit_vec_${psp_crit_vec}")"
+        fi
+      fi
+    fi
+
+    if [[ "$psp_env_seg" != "NONE" && "$psp_env_seg" != "0000" && "$psp_env_seg" != "FFFF" ]]; then
+      env_phys=$((16#$psp_env_seg << 4))
+      if env_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$env_phys" 0x200 || true)"; then
+        read -r -a env_bytes <<< "$env_bytes_raw"
+        if (( ${#env_bytes[@]} > 0 )); then
+          env_dump_available=yes
+          env_strings="$(decode_env_strings env_bytes)"
+          if [[ -z "$env_strings" ]]; then
+            env_suspicious="$(append_reason "$env_suspicious" "env_not_decoded")"
+          fi
+          if (( 16#$psp_env_seg < 0x0100 || 16#$psp_env_seg >= 0xA000 )); then
+            env_suspicious="$(append_reason "$env_suspicious" "env_seg_${psp_env_seg}")"
+          fi
+        fi
+      fi
+    fi
+
+    reloc_base_seg=$((16#$child_psp_hex + 0x10))
+    expected_ss=$((reloc_base_seg + 0x46AE))
+    stack_expected_ss="$(printf '%04X' "$expected_ss")"
+    stack_focus_phys=$(((expected_ss << 4) + 0x80 - 0x80))
+    if stack_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$stack_focus_phys" 0x100 || true)"; then
+      read -r -a stack_bytes <<< "$stack_bytes_raw"
+      if (( ${#stack_bytes[@]} >= 32 )); then
+        stack_dump_available=yes
+        stack_first_words="$(read_hex_range stack_bytes 0 32)"
+        stack_ascii_snippet="$(decode_ascii_range stack_bytes 0 64)"
+        if [[ "$stack_first_words" == "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" ]]; then
+          stack_suspicious="$(append_reason "$stack_suspicious" "stack_all_zero")"
+        fi
+        if [[ "$bda_memory_kb" != "NONE" ]] && (( expected_ss >= bda_memory_kb * 64 )); then
+          stack_suspicious="$(append_reason "$stack_suspicious" "stack_above_conventional_top")"
+        fi
+      fi
+    fi
+
+    entry_expected_seg="$(printf '%04X' "$reloc_base_seg")"
+    entry_phys=$((reloc_base_seg << 4))
+    if entry_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$entry_phys" 0x100 || true)"; then
+      read -r -a entry_bytes <<< "$entry_bytes_raw"
+      if (( ${#entry_bytes[@]} >= 32 )); then
+        entry_dump_available=yes
+        entry_first_32_bytes="$(read_hex_range entry_bytes 0 32)"
+        if [[ "$entry_first_32_bytes" == "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" ]]; then
+          entry_suspicious="$(append_reason "$entry_suspicious" "entry_all_zero")"
+        elif [[ "${entry_bytes[0]:-00}${entry_bytes[1]:-00}" == "4D5A" ]]; then
+          entry_suspicious="$(append_reason "$entry_suspicious" "entry_starts_with_mz")"
+        fi
+      fi
+    fi
+
+    if ivt_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" 0x0000 0x100 || true)"; then
+      read -r -a ivt_bytes <<< "$ivt_bytes_raw"
+      if (( ${#ivt_bytes[@]} >= 0x98 )); then
+        ivt_dump_available=yes
+        ivt_int00="$(read_far_ptr ivt_bytes $((0x00 * 4)))"
+        ivt_int04="$(read_far_ptr ivt_bytes $((0x04 * 4)))"
+        ivt_int05="$(read_far_ptr ivt_bytes $((0x05 * 4)))"
+        ivt_int06="$(read_far_ptr ivt_bytes $((0x06 * 4)))"
+        ivt_int08="$(read_far_ptr ivt_bytes $((0x08 * 4)))"
+        ivt_int09="$(read_far_ptr ivt_bytes $((0x09 * 4)))"
+        ivt_int10="$(read_far_ptr ivt_bytes $((0x10 * 4)))"
+        ivt_int16="$(read_far_ptr ivt_bytes $((0x16 * 4)))"
+        ivt_int1A="$(read_far_ptr ivt_bytes $((0x1A * 4)))"
+        ivt_int20="$(read_far_ptr ivt_bytes $((0x20 * 4)))"
+        ivt_int21="$(read_far_ptr ivt_bytes $((0x21 * 4)))"
+        ivt_int23="$(read_far_ptr ivt_bytes $((0x23 * 4)))"
+        ivt_int24="$(read_far_ptr ivt_bytes $((0x24 * 4)))"
+        for ivt_value in "$ivt_int00" "$ivt_int04" "$ivt_int05" "$ivt_int06" "$ivt_int08" "$ivt_int09" "$ivt_int10" "$ivt_int16" "$ivt_int1A" "$ivt_int20" "$ivt_int21" "$ivt_int23" "$ivt_int24"; do
+          if [[ "$ivt_value" == "0000:0000" ]]; then
+            ivt_suspicious="$(append_reason "$ivt_suspicious" "zero_vector")"
+            break
+          fi
+          if [[ "$ivt_value" == "FFFF:FFFF" ]]; then
+            ivt_suspicious="$(append_reason "$ivt_suspicious" "ffff_vector")"
+            break
+          fi
+        done
+        if [[ "$ivt_int23" == ${child_psp_hex}:* || "$ivt_int24" == ${child_psp_hex}:* ]]; then
+          ivt_suspicious="$(append_reason "$ivt_suspicious" "child_psp_vector_not_restored")"
+        fi
+      fi
     fi
   fi
 fi
@@ -517,6 +924,70 @@ if [[ -n "$video_text_after_exit" ]]; then
   printf '%s\n' "$video_text_after_exit"
 fi
 printf 'VIDEO_TEXT_AFTER_EXIT_END\n'
+printf 'BDA_AFTER_EXIT_BEGIN\n'
+printf 'video_mode=%s\n' "$bda_video_mode"
+printf 'columns=%s\n' "$bda_columns"
+printf 'regen_size=%s\n' "$bda_regen_size"
+printf 'active_page=%s\n' "$bda_active_page"
+printf 'crtc_base=%s\n' "$bda_crtc_base"
+printf 'rows_minus_one=%s\n' "$bda_rows_minus_one"
+printf 'char_height=%s\n' "$bda_char_height"
+printf 'equipment_word=%s\n' "$bda_equipment_word"
+printf 'memory_kb=%s\n' "$bda_memory_kb"
+printf 'timer_ticks=%s\n' "$bda_timer_ticks"
+printf 'suspicious=%s\n' "$bda_suspicious"
+printf 'BDA_AFTER_EXIT_END\n'
+printf 'PSP_AFTER_EXIT_BEGIN\n'
+printf 'psp_seg=%s\n' "$psp_seg"
+printf 'int20_sig=%s\n' "$psp_int20_sig"
+printf 'end_alloc_seg=%s\n' "$psp_end_alloc_seg"
+printf 'parent_psp=%s\n' "$psp_parent_psp"
+printf 'env_seg=%s\n' "$psp_env_seg"
+printf 'jft_size=%s\n' "$psp_jft_size"
+printf 'jft_ptr=%s\n' "$psp_jft_ptr"
+printf 'jft_20=%s\n' "$psp_jft_20"
+printf 'cmd_tail_len=%s\n' "$psp_cmd_tail_len"
+printf 'cmd_tail_ascii=%s\n' "$psp_cmd_tail_ascii"
+printf 'term_vec=%s\n' "$psp_term_vec"
+printf 'ctrlc_vec=%s\n' "$psp_ctrlc_vec"
+printf 'crit_vec=%s\n' "$psp_crit_vec"
+printf 'suspicious=%s\n' "$psp_suspicious"
+printf 'PSP_AFTER_EXIT_END\n'
+printf 'ENV_AFTER_EXIT_BEGIN\n'
+if [[ -n "$env_strings" ]]; then
+  printf '%s\n' "$env_strings"
+fi
+printf 'suspicious=%s\n' "$env_suspicious"
+printf 'ENV_AFTER_EXIT_END\n'
+printf 'STACK_AFTER_EXIT_BEGIN\n'
+printf 'expected_ss=%s\n' "$stack_expected_ss"
+printf 'sp=%s\n' "$stack_sp"
+printf 'first_words=%s\n' "$stack_first_words"
+printf 'ascii_snippet=%s\n' "$stack_ascii_snippet"
+printf 'suspicious=%s\n' "$stack_suspicious"
+printf 'STACK_AFTER_EXIT_END\n'
+printf 'ENTRY_AFTER_EXIT_BEGIN\n'
+printf 'expected_entry_seg=%s\n' "$entry_expected_seg"
+printf 'expected_entry_ip=%s\n' "$entry_expected_ip"
+printf 'first_32_bytes=%s\n' "$entry_first_32_bytes"
+printf 'suspicious=%s\n' "$entry_suspicious"
+printf 'ENTRY_AFTER_EXIT_END\n'
+printf 'IVT_AFTER_EXIT_BEGIN\n'
+printf 'int00=%s\n' "$ivt_int00"
+printf 'int04=%s\n' "$ivt_int04"
+printf 'int05=%s\n' "$ivt_int05"
+printf 'int06=%s\n' "$ivt_int06"
+printf 'int08=%s\n' "$ivt_int08"
+printf 'int09=%s\n' "$ivt_int09"
+printf 'int10=%s\n' "$ivt_int10"
+printf 'int16=%s\n' "$ivt_int16"
+printf 'int1A=%s\n' "$ivt_int1A"
+printf 'int20=%s\n' "$ivt_int20"
+printf 'int21=%s\n' "$ivt_int21"
+printf 'int23=%s\n' "$ivt_int23"
+printf 'int24=%s\n' "$ivt_int24"
+printf 'suspicious=%s\n' "$ivt_suspicious"
+printf 'IVT_AFTER_EXIT_END\n'
 printf 'child transfer reached: %s\n' "${child_transfer^^}"
 printf 'WOLF3D exits code 03: %s\n' "${wolf3d_exit_03^^}"
 printf 'next blocker: %s\n' "$first_blocker"
