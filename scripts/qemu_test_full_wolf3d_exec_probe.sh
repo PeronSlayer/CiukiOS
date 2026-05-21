@@ -235,6 +235,18 @@ extract_exec_req_psp() {
   echo "${line##*psp=}"
 }
 
+extract_prejump_jft() {
+  local log_file="$1"
+  strings -a "$log_file" | awk '
+    /JFTP / {
+      line = $0
+      sub(/^.*JFTP /, "", line)
+      print line
+      exit
+    }
+  '
+}
+
 extract_last_marker_psp() {
   local log_file="$1"
   local marker_regex="$2"
@@ -769,6 +781,7 @@ ivt_before_int21="NONE"
 ivt_before_int23="NONE"
 ivt_before_int24="NONE"
 ivt_before_suspicious="NONE"
+prejump_jft_5="NONE"
 child_jft_at_4a_report=""
 child_jft_after_40_1_report=""
 child_jft_after_40_2_report=""
@@ -1122,6 +1135,7 @@ if [[ "$child_prejump" == yes || "$post_transfer_child_activity" == yes ]]; then
 fi
 exit_code="$(extract_exit_code "$LOG_FILE")"
 parent_exec_req_psp="$(extract_exec_req_psp "$LOG_FILE")"
+prejump_jft_5="$(extract_prejump_jft "$LOG_FILE")"
 if [[ "$exit_code" == 03 ]]; then
   wolf3d_exit_03=yes
 fi
@@ -1198,6 +1212,9 @@ printf 'int23=%s\n' "$ivt_before_int23"
 printf 'int24=%s\n' "$ivt_before_int24"
 printf 'suspicious=%s\n' "$ivt_before_suspicious"
 printf 'IVT_BEFORE_EXEC_END\n'
+printf 'JFTP_PREJUMP_BEGIN\n'
+printf 'jft_5=%s\n' "$prejump_jft_5"
+printf 'JFTP_PREJUMP_END\n'
 printf '%s\n' "$child_jft_at_4a_report"
 printf '%s\n' "$child_jft_after_40_1_report"
 printf '%s\n' "$child_jft_after_40_2_report"

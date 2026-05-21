@@ -2152,6 +2152,7 @@ int21_exec_init_program_psp:
     xor ax, ax
     xor di, di
     mov cx, 128
+    cld
     rep stosw
     mov word [es:0x0000], 0x20CD
     mov byte [es:0x0005], 0xCB
@@ -2290,6 +2291,7 @@ int21_init_psp_handles:
     mov di, 0x0018
     mov al, 0xFF
     mov cx, 20
+    cld
     rep stosb
     mov ax, [cs:current_psp_seg]
     or ax, ax
@@ -3128,8 +3130,10 @@ int21_exec_run_mz:
     push ax
     call int21_exec_prepare_mz_free_mcb
     pop ax
+    mov [cs:current_psp_seg], bx
     mov es, ax
     call int21_exec_init_program_psp
+    mov [cs:current_psp_seg], ax
     mov ax, [cs:dos_mem_psp_mcb_end]
     mov [es:0x0002], ax
     or bx, bx
@@ -4214,9 +4218,13 @@ child_trace_begin_com:
     ret
 
 child_trace_begin_mz:
+    pushf
     push ax
+    push bx
+    push cx
     push si
     push ds
+    push es
     push cs
     pop ds
     cmp byte [cs:child_trace_armed], 0
@@ -4229,10 +4237,39 @@ child_trace_begin_mz:
     mov si, msg_child_prejump
     call print_string_serial
     call print_newline_serial
+    mov al, 'J'
+    call serial_putc
+    mov al, 'F'
+    call serial_putc
+    mov al, 'T'
+    call serial_putc
+    mov al, 'P'
+    call serial_putc
+    mov al, ' '
+    call serial_putc
+    mov ax, [cs:mz_psp_seg]
+    mov es, ax
+    mov bx, 0x0018
+    mov cx, 5
+.jft_loop:
+    mov al, [es:bx]
+    call print_hex8_serial
+    inc bx
+    dec cx
+    jz .jft_done
+    mov al, ' '
+    call serial_putc
+    jmp .jft_loop
+.jft_done:
+    call print_newline_serial
 .done:
+    pop es
     pop ds
     pop si
+    pop cx
+    pop bx
     pop ax
+    popf
     ret
 
 child_trace_int21_enter:
