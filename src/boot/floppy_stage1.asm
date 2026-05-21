@@ -4090,8 +4090,6 @@ child_trace_exec_result:
     ret
 
 exec_format_trace_should_log:
-    ret
-
 exec_format_trace_print_cs_string:
     ret
 
@@ -4138,7 +4136,7 @@ exec_format_trace_invalid_format:
     ret
 
 exec_trace_print_found_name:
-    ret
+    jmp exec_format_trace_should_log
 
 exec_trace_lookup_entry:
     ret
@@ -4307,8 +4305,6 @@ child_trace_exit_int20:
     jmp child_trace_exit_int21
 
 child_trace_vector_set:
-    ret
-
 child_trace_vector_get:
     ret
 
@@ -4376,27 +4372,6 @@ child_trace_resize_log:
     ret
 
 child_trace_ioctl44_enter:
-    push ax
-    push bx
-    push cx
-    push dx
-    push bp
-    push si
-    push ds
-    mov bp, sp
-    call child_trace_should_log
-    jnc .done
-    push cs
-    pop ds
-    mov si, msg_child_44i
-    call print_string_serial
-    mov ax, [ss:bp + 12]
-    call print_hex8_serial
-    mov al, ' '
-    call serial_putc
-    mov ax, [ss:bp + 10]
-    call print_hex16_serial
-    mov al, ' '
     call serial_putc
     mov ax, [ss:bp + 8]
     call print_hex16_serial
@@ -17297,6 +17272,9 @@ mouse_vga_xor_cursor12:
 %endif
 
 int10_handler:
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_int10_enter
+%endif
     cmp ah, 0x0F
     je .get_mode
     cmp ah, 0x00
@@ -17611,13 +17589,13 @@ mouse_restore_state_from_esdx:
     ret
 
 int16_handler:
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_int16_enter
+%endif
     cmp ah, 0x00
     je .read_key
     cmp ah, 0x10
     je .read_key
-    cmp ah, 0x01
-    je .status
-    cmp ah, 0x11
     je .status
     cmp ah, 0x02
     je .shift_status
@@ -18434,7 +18412,7 @@ xms_entrypoint:
     mov ax, [ds:si + 4]
     or ax, [ds:si + 10]
     cmp ax, 1
-    ja .free_fail
+    mov si, msg_child_vec25
     cmp ax, 0
     je .move_ok
     cmp word [cs:xms_alloc_kb], 0
@@ -19067,7 +19045,7 @@ msg_child_exit_reason_retf db " reason=RETF", 0
 msg_child_exit_code db " code=", 0
 msg_child_exit_int22 db " int22=", 0
 msg_child_vec25 db "CH25 int=", 0
-msg_child_vec35 db "CH35 int=", 0
+msg_child_vec35 db "I10I ", 0
 msg_child_vec_old db " old=", 0
 msg_child_vec_new db " new=", 0
 msg_child_vec_stored db " stored=", 0
@@ -19328,3 +19306,51 @@ msg_mouse_enabled db "[S2] mouse", 13, 10, 0
 msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
 msg_vbe_init db "[S2] vbe", 13, 10, 0
 msg_exit_str db "Exit", 13, 10, 0
+%if TRACE_CHILD_INT21 != 0
+msg_child_i16i db "I16I ", 0
+
+child_trace_int10_enter:
+    push ax
+    push bp
+    push si
+    push ds
+    mov bp, sp
+    call child_trace_should_log_exit
+    jnc short .done
+    push cs
+    pop ds
+    mov si, msg_child_vec35
+    call print_string_serial
+    mov ax, [ss:bp + 6]
+    call print_hex16_serial
+    call print_newline_serial
+.done:
+    pop ds
+    pop si
+    pop bp
+    pop ax
+    ret
+
+child_trace_int16_enter:
+    push ax
+    push bp
+    push si
+    push ds
+    mov bp, sp
+    call child_trace_should_log_exit
+    jnc short .done
+    push cs
+    pop ds
+    mov si, msg_child_i16i
+    call print_string_serial
+    mov ax, [ss:bp + 6]
+    mov al, ah
+    call print_hex8_serial
+    call print_newline_serial
+.done:
+    pop ds
+    pop si
+    pop bp
+    pop ax
+    ret
+%endif

@@ -157,7 +157,21 @@ extract_first_post_exec_marker() {
     /CHILD_EXEC_REQ/ {seen=1; next}
     !seen {next}
     {
-      if (match($0, /CHILD_PREJUMP|CHILD_EXIT|CH44I|CH44O|CH4A|CH40|CH4C/)) {
+      if (match($0, /CHILD_PREJUMP|CHILD_EXIT|I16I|I10I|CH44I|CH44O|CH4A|CH40|CH4C/)) {
+        print substr($0, RSTART)
+        exit
+      }
+    }
+  '
+}
+
+extract_first_post_exec_bios() {
+  local log_file="$1"
+  strings -a "$log_file" | awk '
+    /CHILD_EXEC_REQ/ {seen=1; next}
+    !seen {next}
+    {
+      if (match($0, /I16I|I10I/)) {
         print substr($0, RSTART)
         exit
       }
@@ -186,6 +200,12 @@ format_child_marker() {
     return 0
   fi
   case "$line" in
+    I16I*)
+      printf 'INT16 %s\n' "$line"
+      ;;
+    I10I*)
+      printf 'INT10 %s\n' "$line"
+      ;;
     CHILD_PREJUMP*)
       echo CHILD_PREJUMP
       ;;
@@ -263,7 +283,7 @@ WOLF_CWD_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+
 WOLF_CMD_PATTERN='W+O+L+F+3+D+\.*E+X+E+'
 COMMAND_NOT_FOUND_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 LOADER_RETURN_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+R+E+T+U+R+N+E+D+[[:space:]]+C+O+N+T+R+O+L+'
-TRACE_MARKER_PATTERN='CHILD_EXEC_REQ|CHILD_EXEC_RET|EXRT ax=|EXVL ok|CHILD_PREJUMP|CHILD_EXIT|CH44I|CH44O|CH4A|CH4AR|CH40|CH40R|CH35|CH25'
+TRACE_MARKER_PATTERN='CHILD_EXEC_REQ|CHILD_EXEC_RET|EXRT ax=|EXVL ok|CHILD_PREJUMP|CHILD_EXIT|I16I|I10I|CH44I|CH44O|CH4A|CH4AR|CH40|CH40R|CH35|CH25'
 
 shell_prompt_reached=no
 cd_wolf3d=no
@@ -321,6 +341,9 @@ exit_code=""
 first_blocker="none"
 first_post_transfer_marker="NONE"
 first_child_int21="NONE"
+first_bios_marker="NONE"
+int16_seen=no
+int10_seen=no
 
 if strings -a "$LOG_FILE" | grep -Eq "$TRACE_MARKER_PATTERN"; then
   trace_markers_seen=yes
@@ -348,11 +371,18 @@ if strings -a "$LOG_FILE" | grep -Eq 'CHILD_PREJUMP'; then
 fi
 first_post_transfer_marker="$(extract_first_post_exec_marker "$LOG_FILE")"
 first_child_int21="$(extract_first_post_exec_int21 "$LOG_FILE")"
+first_bios_marker="$(extract_first_post_exec_bios "$LOG_FILE")"
 if [[ -n "$first_post_transfer_marker" ]]; then
   post_transfer_child_activity=yes
 fi
 if [[ -n "$first_child_int21" ]]; then
   child_int21=yes
+fi
+if strings -a "$LOG_FILE" | grep -Eq 'I16I'; then
+  int16_seen=yes
+fi
+if strings -a "$LOG_FILE" | grep -Eq 'I10I'; then
+  int10_seen=yes
 fi
 if [[ "$child_prejump" == yes || "$post_transfer_child_activity" == yes ]]; then
   child_transfer=yes
@@ -400,6 +430,9 @@ printf 'CHILD_PREJUMP observed: %s\n' "${child_prejump^^}"
 printf 'post-transfer child activity observed: %s\n' "${post_transfer_child_activity^^}"
 printf 'first post-transfer marker: %s\n' "$(format_child_marker "$first_post_transfer_marker")"
 printf 'first child INT21 observed: %s\n' "$(format_child_marker "$first_child_int21")"
+printf 'INT16 observed: %s\n' "${int16_seen^^}"
+printf 'INT10 observed: %s\n' "${int10_seen^^}"
+printf 'first BIOS marker: %s\n' "$(format_child_marker "$first_bios_marker")"
 printf 'child transfer reached: %s\n' "${child_transfer^^}"
 printf 'WOLF3D exits code 03: %s\n' "${wolf3d_exit_03^^}"
 printf 'next blocker: %s\n' "$first_blocker"
