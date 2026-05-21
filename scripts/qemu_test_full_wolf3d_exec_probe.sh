@@ -171,6 +171,22 @@ extract_exit_code() {
   echo "${line##*code=}"
 }
 
+extract_exit_callsite() {
+  local log_file="$1"
+  local line
+  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* CH4CIP [0-9A-F]{4}:[0-9A-F]{4}' | tail -n 1 || true)"
+  echo "${line##*CH4CIP }"
+}
+
+hex16_sub2() {
+  local value="$1"
+  if [[ ! "$value" =~ ^[0-9A-Fa-f]{4}$ ]]; then
+    echo NONE
+    return 0
+  fi
+  printf '%04X\n' "$((((16#$value) - 2) & 0xFFFF))"
+}
+
 extract_first_post_exec_marker() {
   local log_file="$1"
   strings -a "$log_file" | awk '
@@ -782,6 +798,8 @@ ivt_before_int23="NONE"
 ivt_before_int24="NONE"
 ivt_before_suspicious="NONE"
 prejump_jft_5="NONE"
+exit_callsite_return="NONE"
+exit_callsite_int21="NONE"
 child_jft_at_4a_report=""
 child_jft_after_40_1_report=""
 child_jft_after_40_2_report=""
@@ -1136,6 +1154,10 @@ fi
 exit_code="$(extract_exit_code "$LOG_FILE")"
 parent_exec_req_psp="$(extract_exec_req_psp "$LOG_FILE")"
 prejump_jft_5="$(extract_prejump_jft "$LOG_FILE")"
+exit_callsite_return="$(extract_exit_callsite "$LOG_FILE")"
+if [[ "$exit_callsite_return" =~ ^([0-9A-F]{4}):([0-9A-F]{4})$ ]]; then
+  exit_callsite_int21="${BASH_REMATCH[1]}:$(hex16_sub2 "${BASH_REMATCH[2]}")"
+fi
 if [[ "$exit_code" == 03 ]]; then
   wolf3d_exit_03=yes
 fi
@@ -1215,6 +1237,11 @@ printf 'IVT_BEFORE_EXEC_END\n'
 printf 'JFTP_PREJUMP_BEGIN\n'
 printf 'jft_5=%s\n' "$prejump_jft_5"
 printf 'JFTP_PREJUMP_END\n'
+printf 'CH4CIP_EXIT_BEGIN\n'
+printf 'return_csip=%s\n' "$exit_callsite_return"
+printf 'int21_csip=%s\n' "$exit_callsite_int21"
+printf 'ax=%s\n' "4C${exit_code:-00}"
+printf 'CH4CIP_EXIT_END\n'
 printf '%s\n' "$child_jft_at_4a_report"
 printf '%s\n' "$child_jft_after_40_1_report"
 printf '%s\n' "$child_jft_after_40_2_report"

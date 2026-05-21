@@ -4316,6 +4316,17 @@ child_trace_exit_int21:
     xor ax, ax
     mov al, [cs:last_exit_code]
     call print_hex8_serial
+    cmp byte [cs:int21_last_ah], 0x4C
+    jne .skip_callsite
+    mov si, msg_child_exit_callsite
+    call print_string_serial
+    mov ax, [ss:bp + 20]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [ss:bp + 18]
+    call print_hex16_serial
+.skip_callsite:
     mov si, msg_child_exec_psp
     call print_string_serial
     mov ax, [cs:child_trace_psp]
@@ -19085,6 +19096,7 @@ msg_child_exit db "CHILD_EXIT", 0
 msg_child_exit_reason db " reason=", 0
 msg_child_exit_reason_retf db " reason=RETF", 0
 msg_child_exit_code db " code=", 0
+msg_child_exit_callsite db " CH4CIP ", 0
 msg_child_exit_int22 db " int22=", 0
 msg_child_vec25 db "CH25 int=", 0
 msg_child_vec35 db "I10I ", 0
