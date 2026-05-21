@@ -15,6 +15,7 @@ PROMPT_TIMEOUT_SEC="${PROMPT_TIMEOUT_SEC:-120}"
 OBSERVE_SEC="${OBSERVE_SEC:-12}"
 KEY_DELAY_SEC="${KEY_DELAY_SEC:-0.12}"
 PRE_ENTER_DELAY_SEC="${PRE_ENTER_DELAY_SEC:-0.35}"
+DEFAULT_PARENT_PSP_SEG="${DEFAULT_PARENT_PSP_SEG:-2000}"
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -223,6 +224,14 @@ extract_last_child_psp() {
   fi
 
   line="$(strings -a "$log_file" | grep -Eo 'CH4A[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
+  echo "${line##*psp=}"
+}
+
+extract_exec_req_psp() {
+  local log_file="$1"
+  local line
+
+  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXEC_REQ[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
   echo "${line##*psp=}"
 }
 
@@ -573,6 +582,22 @@ psp_term_vec="NONE"
 psp_ctrlc_vec="NONE"
 psp_crit_vec="NONE"
 psp_suspicious="NONE"
+parent_psp_dump_available=no
+parent_psp_seg="$DEFAULT_PARENT_PSP_SEG"
+parent_exec_req_psp="NONE"
+parent_psp_int20_sig="NONE"
+parent_psp_end_alloc_seg="NONE"
+parent_psp_parent_psp="NONE"
+parent_psp_env_seg="NONE"
+parent_psp_jft_size="NONE"
+parent_psp_jft_ptr="NONE"
+parent_psp_jft_20="NONE"
+parent_psp_cmd_tail_len="NONE"
+parent_psp_cmd_tail_ascii="NONE"
+parent_psp_term_vec="NONE"
+parent_psp_ctrlc_vec="NONE"
+parent_psp_crit_vec="NONE"
+parent_psp_suspicious="NONE"
 env_dump_available=no
 env_strings=""
 env_suspicious="NONE"
@@ -602,6 +627,12 @@ ivt_int21="NONE"
 ivt_int23="NONE"
 ivt_int24="NONE"
 ivt_suspicious="NONE"
+ivt_before_dump_available=no
+ivt_before_int20="NONE"
+ivt_before_int21="NONE"
+ivt_before_int23="NONE"
+ivt_before_int24="NONE"
+ivt_before_suspicious="NONE"
 
 offset=0
 
@@ -616,6 +647,76 @@ send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" 'cd WOLF3D'
 if wait_for_strings_regex_from_offset "$LOG_FILE" "$WOLF_CWD_PATTERN" "$offset" 30 && \
    wait_for_strings_regex_from_offset "$LOG_FILE" "$WOLF_PROMPT_PATTERN" "$offset" 30; then
   cd_wolf3d=yes
+fi
+
+if [[ "$cd_wolf3d" == yes ]]; then
+  parent_psp_phys=$((16#$parent_psp_seg << 4))
+  if parent_psp_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$parent_psp_phys" 0x200 || true)"; then
+    read -r -a parent_psp_bytes <<< "$parent_psp_bytes_raw"
+    if (( ${#parent_psp_bytes[@]} >= 0x100 )); then
+      parent_psp_dump_available=yes
+      parent_psp_int20_sig="${parent_psp_bytes[0]:-00}${parent_psp_bytes[1]:-00}"
+      parent_psp_end_alloc_seg="$(read_le16_hex parent_psp_bytes 0x02)"
+      parent_psp_term_vec="$(read_far_ptr parent_psp_bytes 0x0A)"
+      parent_psp_ctrlc_vec="$(read_far_ptr parent_psp_bytes 0x0E)"
+      parent_psp_crit_vec="$(read_far_ptr parent_psp_bytes 0x12)"
+      parent_psp_parent_psp="$(read_le16_hex parent_psp_bytes 0x16)"
+      parent_psp_jft_20="$(read_hex_range parent_psp_bytes 0x18 20)"
+      parent_psp_env_seg="$(read_le16_hex parent_psp_bytes 0x2C)"
+      parent_psp_jft_size="$(read_le16_dec parent_psp_bytes 0x32)"
+      parent_psp_jft_ptr="$(read_far_ptr parent_psp_bytes 0x34)"
+      parent_psp_cmd_tail_len="$((16#${parent_psp_bytes[0x80]:-00}))"
+      if (( parent_psp_cmd_tail_len > 127 )); then
+        parent_psp_cmd_tail_len=127
+      fi
+      parent_psp_cmd_tail_ascii="$(decode_ascii_range parent_psp_bytes 0x81 "$parent_psp_cmd_tail_len")"
+      if [[ "$parent_psp_int20_sig" != "CD20" ]]; then
+        parent_psp_suspicious="$(append_reason "$parent_psp_suspicious" "bad_int20_sig_${parent_psp_int20_sig}")"
+      fi
+      if (( 16#$parent_psp_end_alloc_seg <= 16#$parent_psp_seg )); then
+        parent_psp_suspicious="$(append_reason "$parent_psp_suspicious" "end_alloc_seg_${parent_psp_end_alloc_seg}")"
+      fi
+      if [[ "$parent_psp_parent_psp" == "0000" || "$parent_psp_parent_psp" == "FFFF" ]]; then
+        parent_psp_suspicious="$(append_reason "$parent_psp_suspicious" "parent_psp_${parent_psp_parent_psp}")"
+      fi
+      if [[ "$parent_psp_env_seg" == "0000" || "$parent_psp_env_seg" == "FFFF" ]]; then
+        parent_psp_suspicious="$(append_reason "$parent_psp_suspicious" "env_seg_${parent_psp_env_seg}")"
+      fi
+      if [[ "$parent_psp_jft_20" != 00\ 01\ 02\ 03\ 04* ]]; then
+        parent_psp_suspicious="$(append_reason "$parent_psp_suspicious" "jft_layout_unexpected")"
+      fi
+      if [[ "$parent_psp_term_vec" == "0000:0000" || "$parent_psp_term_vec" == "FFFF:FFFF" ]]; then
+        parent_psp_suspicious="$(append_reason "$parent_psp_suspicious" "term_vec_${parent_psp_term_vec}")"
+      fi
+      if [[ "$parent_psp_ctrlc_vec" == "0000:0000" || "$parent_psp_ctrlc_vec" == "FFFF:FFFF" ]]; then
+        parent_psp_suspicious="$(append_reason "$parent_psp_suspicious" "ctrlc_vec_${parent_psp_ctrlc_vec}")"
+      fi
+      if [[ "$parent_psp_crit_vec" == "0000:0000" || "$parent_psp_crit_vec" == "FFFF:FFFF" ]]; then
+        parent_psp_suspicious="$(append_reason "$parent_psp_suspicious" "crit_vec_${parent_psp_crit_vec}")"
+      fi
+    fi
+  fi
+
+  if ivt_before_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" 0x0000 0x100 || true)"; then
+    read -r -a ivt_before_bytes <<< "$ivt_before_bytes_raw"
+    if (( ${#ivt_before_bytes[@]} >= 0x94 )); then
+      ivt_before_dump_available=yes
+      ivt_before_int20="$(read_far_ptr ivt_before_bytes $((0x20 * 4)))"
+      ivt_before_int21="$(read_far_ptr ivt_before_bytes $((0x21 * 4)))"
+      ivt_before_int23="$(read_far_ptr ivt_before_bytes $((0x23 * 4)))"
+      ivt_before_int24="$(read_far_ptr ivt_before_bytes $((0x24 * 4)))"
+      for ivt_before_value in "$ivt_before_int20" "$ivt_before_int21" "$ivt_before_int23" "$ivt_before_int24"; do
+        if [[ "$ivt_before_value" == "0000:0000" ]]; then
+          ivt_before_suspicious="$(append_reason "$ivt_before_suspicious" "zero_vector")"
+          break
+        fi
+        if [[ "$ivt_before_value" == "FFFF:FFFF" ]]; then
+          ivt_before_suspicious="$(append_reason "$ivt_before_suspicious" "ffff_vector")"
+          break
+        fi
+      done
+    fi
+  fi
 fi
 
 offset="$(file_size "$LOG_FILE")"
@@ -872,6 +973,7 @@ if [[ "$child_prejump" == yes || "$post_transfer_child_activity" == yes ]]; then
   child_transfer=yes
 fi
 exit_code="$(extract_exit_code "$LOG_FILE")"
+parent_exec_req_psp="$(extract_exec_req_psp "$LOG_FILE")"
 if [[ "$exit_code" == 03 ]]; then
   wolf3d_exit_03=yes
 fi
@@ -924,6 +1026,30 @@ if [[ -n "$video_text_after_exit" ]]; then
   printf '%s\n' "$video_text_after_exit"
 fi
 printf 'VIDEO_TEXT_AFTER_EXIT_END\n'
+printf 'PARENT_PSP_BEFORE_EXEC_BEGIN\n'
+printf 'snapshot_seg=%s\n' "$parent_psp_seg"
+printf 'exec_req_psp=%s\n' "$parent_exec_req_psp"
+printf 'int20_sig=%s\n' "$parent_psp_int20_sig"
+printf 'end_alloc_seg=%s\n' "$parent_psp_end_alloc_seg"
+printf 'parent_psp=%s\n' "$parent_psp_parent_psp"
+printf 'env_seg=%s\n' "$parent_psp_env_seg"
+printf 'jft_size=%s\n' "$parent_psp_jft_size"
+printf 'jft_ptr=%s\n' "$parent_psp_jft_ptr"
+printf 'jft_20=%s\n' "$parent_psp_jft_20"
+printf 'cmd_tail_len=%s\n' "$parent_psp_cmd_tail_len"
+printf 'cmd_tail_ascii=%s\n' "$parent_psp_cmd_tail_ascii"
+printf 'term_vec=%s\n' "$parent_psp_term_vec"
+printf 'ctrlc_vec=%s\n' "$parent_psp_ctrlc_vec"
+printf 'crit_vec=%s\n' "$parent_psp_crit_vec"
+printf 'suspicious=%s\n' "$parent_psp_suspicious"
+printf 'PARENT_PSP_BEFORE_EXEC_END\n'
+printf 'IVT_BEFORE_EXEC_BEGIN\n'
+printf 'int20=%s\n' "$ivt_before_int20"
+printf 'int21=%s\n' "$ivt_before_int21"
+printf 'int23=%s\n' "$ivt_before_int23"
+printf 'int24=%s\n' "$ivt_before_int24"
+printf 'suspicious=%s\n' "$ivt_before_suspicious"
+printf 'IVT_BEFORE_EXEC_END\n'
 printf 'BDA_AFTER_EXIT_BEGIN\n'
 printf 'video_mode=%s\n' "$bda_video_mode"
 printf 'columns=%s\n' "$bda_columns"

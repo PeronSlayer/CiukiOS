@@ -2239,6 +2239,11 @@ int21_restore_psp_term_vectors:
     or ax, ax
     jz .done
     mov ds, ax
+    mov ax, [ds:0x0016]
+    or ax, ax
+    jz .psp_ready
+    mov ds, ax
+.psp_ready:
     xor ax, ax
     mov es, ax
     mov bx, (0x22 * 4)
@@ -2281,7 +2286,7 @@ int21_init_psp_handles:
 .parent_ready:
     mov [es:0x0016], ax
     mov ax, [cs:current_psp_seg]
-    mov [es:0x002A], ax
+    mov [es:0x003A], ax
     mov di, 0x0018
     mov al, 0xFF
     mov cx, 20
