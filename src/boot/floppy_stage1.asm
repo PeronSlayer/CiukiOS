@@ -1909,8 +1909,13 @@ int21_exec:
     cmp word [cs:current_psp_seg], 0
     jne .nested_exec_seg
     mov word [cs:current_mz_context_slot], 1
-    mov word [cs:current_load_seg], MZ_LOAD_SEG
+    mov ax, MZ_LOAD_SEG
+    call int21_exec_mz_overlaps_runtime
+    jc .use_high_exec_seg_primary
+    mov [cs:current_load_seg], ax
     jmp .do_exec_mz
+.use_high_exec_seg_primary:
+    jmp .third_exec_seg
 .nested_exec_seg:
     cmp word [cs:current_mz_context_slot], 2
     jae .third_exec_seg
@@ -1921,13 +1926,22 @@ int21_exec:
     add ax, 0x000F
     cmp ax, [cs:current_psp_seg]
     jbe .nested_fixed_seg
-    cmp ax, MZ_LOAD_LIMIT_SEG
+    cmp ax, RUNTIME_LOAD_SEG
     jae .nested_fixed_seg
+    call int21_exec_mz_overlaps_runtime
+    jc .use_high_exec_seg_nested
     mov [cs:current_load_seg], ax
     jmp .do_exec_mz
+.use_high_exec_seg_nested:
+    jmp .third_exec_seg
 .nested_fixed_seg:
-    mov word [cs:current_load_seg], MZ2_LOAD_SEG
+    mov ax, MZ2_LOAD_SEG
+    call int21_exec_mz_overlaps_runtime
+    jc .use_high_exec_seg_fixed
+    mov [cs:current_load_seg], ax
     jmp .do_exec_mz
+.use_high_exec_seg_fixed:
+    jmp .third_exec_seg
 .third_exec_seg:
     mov word [cs:current_mz_context_slot], 3
     mov word [cs:current_load_seg], MZ3_LOAD_SEG
@@ -2970,6 +2984,44 @@ int21_exec_load_overlay:
     pop ds
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+int21_exec_mz_overlaps_runtime:
+    push bx
+    push cx
+    push dx
+
+    mov bx, ax
+    cmp bx, RUNTIME_LOAD_SEG
+    jae .overlap
+
+    mov dx, [cs:search_found_size_hi]
+    mov ax, [cs:search_found_size_lo]
+    add ax, 15
+    adc dx, 0
+    mov cx, 4
+.size_paras_loop:
+    shr dx, 1
+    rcr ax, 1
+    loop .size_paras_loop
+
+    mov dx, RUNTIME_LOAD_SEG
+    sub dx, bx
+    cmp ax, dx
+    ja .overlap
+
+    mov ax, bx
+    clc
+    jmp .done
+
+.overlap:
+    mov ax, bx
+    stc
+
+.done:
     pop dx
     pop cx
     pop bx
