@@ -533,6 +533,77 @@ capture_child_psp_snapshot() {
   printf '%s_END\n' "$prefix"
 }
 
+capture_dgroup_guard_snapshot() {
+  local sock="$1"
+  local cmd_log="$2"
+  local psp_seg_hex="$3"
+  local prefix="$4"
+  local psp_seg
+  local entry_seg
+  local dgroup_seg
+  local dgroup_phys
+  local dgroup_bytes_raw
+  local dgroup_sum=0
+  local dgroup_expected_sum="0D5C"
+  local dgroup_bytes_2f="NONE"
+  local dgroup_ascii="NONE"
+  local dgroup_suspicious="NONE"
+  local -a dgroup_bytes
+
+  printf '%s_BEGIN\n' "$prefix"
+  if [[ -z "$psp_seg_hex" || "$psp_seg_hex" == "NONE" ]]; then
+    printf 'psp_seg=NONE\n'
+    printf 'entry_seg=NONE\n'
+    printf 'dgroup_seg=NONE\n'
+    printf 'bytes_2f=NONE\n'
+    printf 'ascii_2f=NONE\n'
+    printf 'sum=NONE\n'
+    printf 'expected_sum=%s\n' "$dgroup_expected_sum"
+    printf 'suspicious=dgroup_unavailable\n'
+    printf '%s_END\n' "$prefix"
+    return 0
+  fi
+
+  psp_seg=$((16#$psp_seg_hex))
+  entry_seg=$(((psp_seg + 0x0010) & 0xFFFF))
+  dgroup_seg=$(((entry_seg + 0x3818) & 0xFFFF))
+  dgroup_phys=$((dgroup_seg << 4))
+  dgroup_bytes_raw="$(capture_physical_bytes "$sock" "$cmd_log" "$dgroup_phys" 0x2F || true)"
+  read -r -a dgroup_bytes <<< "$dgroup_bytes_raw"
+  if (( ${#dgroup_bytes[@]} < 0x2F )); then
+    printf 'psp_seg=%s\n' "$psp_seg_hex"
+    printf 'entry_seg=%04X\n' "$entry_seg"
+    printf 'dgroup_seg=%04X\n' "$dgroup_seg"
+    printf 'bytes_2f=NONE\n'
+    printf 'ascii_2f=NONE\n'
+    printf 'sum=NONE\n'
+    printf 'expected_sum=%s\n' "$dgroup_expected_sum"
+    printf 'suspicious=short_dump\n'
+    printf '%s_END\n' "$prefix"
+    return 0
+  fi
+
+  dgroup_bytes_2f="$(read_hex_range dgroup_bytes 0 0x2F)"
+  dgroup_ascii="$(decode_ascii_range dgroup_bytes 0 0x2F)"
+  for value_hex in "${dgroup_bytes[@]:0:0x2F}"; do
+    dgroup_sum=$(((dgroup_sum + 16#$value_hex) & 0xFFFF))
+  done
+  printf -v dgroup_sum_hex '%04X' "$dgroup_sum"
+  if [[ "$dgroup_sum_hex" != "$dgroup_expected_sum" ]]; then
+    dgroup_suspicious="checksum_${dgroup_sum_hex}"
+  fi
+
+  printf 'psp_seg=%s\n' "$psp_seg_hex"
+  printf 'entry_seg=%04X\n' "$entry_seg"
+  printf 'dgroup_seg=%04X\n' "$dgroup_seg"
+  printf 'bytes_2f=%s\n' "$dgroup_bytes_2f"
+  printf 'ascii_2f=%s\n' "$dgroup_ascii"
+  printf 'sum=%s\n' "$dgroup_sum_hex"
+  printf 'expected_sum=%s\n' "$dgroup_expected_sum"
+  printf 'suspicious=%s\n' "$dgroup_suspicious"
+  printf '%s_END\n' "$prefix"
+}
+
 capture_marker_snapshot() {
   local sock="$1"
   local cmd_log="$2"
@@ -543,10 +614,14 @@ capture_marker_snapshot() {
   local marker_psp_regex="$7"
   local prefix="$8"
   local -n next_offset_ref="$9"
+  local extra_prefix="${10:-}"
   local found_psp
 
   if ! wait_for_strings_regex_from_offset "$log_file" "$marker_regex" "$offset" "$wait_sec"; then
     next_offset_ref="$(file_size "$log_file")"
+    if [[ -n "$extra_prefix" ]]; then
+      capture_dgroup_guard_snapshot "$sock" "$cmd_log" "NONE" "$extra_prefix"
+    fi
     capture_child_psp_snapshot "$sock" "$cmd_log" "NONE" "$prefix"
     return 1
   fi
@@ -554,6 +629,9 @@ capture_marker_snapshot() {
   next_offset_ref="$(file_size "$log_file")"
   hmp "$sock" "$cmd_log" stop >/dev/null 2>&1 || true
   found_psp="$(extract_last_marker_psp "$log_file" "$marker_psp_regex")"
+  if [[ -n "$extra_prefix" ]]; then
+    capture_dgroup_guard_snapshot "$sock" "$cmd_log" "$found_psp" "$extra_prefix"
+  fi
   capture_child_psp_snapshot "$sock" "$cmd_log" "$found_psp" "$prefix"
   hmp "$sock" "$cmd_log" cont >/dev/null 2>&1 || true
   return 0
@@ -804,6 +882,7 @@ child_jft_at_4a_report=""
 child_jft_after_40_1_report=""
 child_jft_after_40_2_report=""
 child_jft_after_exit_report=""
+child_dgroup_after_exit_report=""
 
 offset=0
 
@@ -898,7 +977,7 @@ fi
 
 if [[ "$wolf3d_submitted" == yes ]]; then
   marker_offset="$offset"
-  child_jft_at_4a_report="$(capture_marker_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$LOG_FILE" "$marker_offset" "$OBSERVE_SEC" 'CH4A' 'CH4A' 'CHILD_JFT_AT_4A' marker_offset || true)"
+  child_jft_at_4a_report="$(capture_marker_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$LOG_FILE" "$marker_offset" "$OBSERVE_SEC" 'CH4A' 'CH4A' 'CHILD_JFT_AT_4A' marker_offset 'CHILD_DGROUP_AT_4A' || true)"
   child_jft_after_40_1_report="$(capture_marker_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$LOG_FILE" "$marker_offset" "$OBSERVE_SEC" 'CH40' 'CH4A|CH40' 'CHILD_JFT_AFTER_40_1' marker_offset || true)"
   child_jft_after_40_2_report="$(capture_marker_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$LOG_FILE" "$marker_offset" "$OBSERVE_SEC" 'CH40' 'CH4A|CH40' 'CHILD_JFT_AFTER_40_2' marker_offset || true)"
 fi
@@ -964,6 +1043,7 @@ if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]* reason=4C code=03'
       read -r -a psp_bytes <<< "$psp_bytes_raw"
       if (( ${#psp_bytes[@]} >= 0x100 )); then
         child_jft_after_exit_report="$(capture_child_psp_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$child_psp_hex" 'CHILD_JFT_AFTER_EXIT')"
+        child_dgroup_after_exit_report="$(capture_dgroup_guard_snapshot "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$child_psp_hex" 'CHILD_DGROUP_AFTER_EXIT')"
         psp_dump_available=yes
         psp_int20_sig="${psp_bytes[0]:-00}${psp_bytes[1]:-00}"
         psp_end_alloc_seg="$(read_le16_hex psp_bytes 0x02)"
@@ -1310,6 +1390,7 @@ printf 'int24=%s\n' "$ivt_int24"
 printf 'suspicious=%s\n' "$ivt_suspicious"
 printf 'IVT_AFTER_EXIT_END\n'
 printf '%s\n' "$child_jft_after_exit_report"
+printf '%s\n' "$child_dgroup_after_exit_report"
 printf 'child transfer reached: %s\n' "${child_transfer^^}"
 printf 'WOLF3D exits code 03: %s\n' "${wolf3d_exit_03^^}"
 printf 'next blocker: %s\n' "$first_blocker"
