@@ -11506,9 +11506,6 @@ stage1_show_boot_splash:
     call stage1_splash_load_asset
     jc .fail_graphics
 
-    mov si, msg_splash_serial_ok
-    call print_string_serial
-
     call stage1_splash_apply_palette
     call stage1_splash_blit_scaled
     jc .fail_graphics
@@ -11522,15 +11519,10 @@ stage1_show_boot_splash:
     jmp .done
 
 .fail_graphics:
-    mov si, msg_splash_serial_fail
-    call print_string_serial
     call vdi_leave_graphics
     jmp .done
 
 .fail_text:
-    mov si, msg_splash_serial_fail
-    call print_string_serial
-
 .done:
 
     pop es
@@ -15877,13 +15869,10 @@ convert_dec_buf:
 init_stage2_services:
     push ax
     push si
-    mov si, msg_stage2_entry
-    call print_string_serial
     call install_int33_vector
     call init_mouse
-    call init_vbe_query
 %if FAT_TYPE == 16
-    call stage1_runtime_print_stage2_ready
+    nop
 %else
     mov si, msg_stage2_ready
     call print_string_serial
@@ -16085,29 +16074,6 @@ stage1_runtime_sync_default_drive:
     ret
 
 stage1_runtime_print_stage2_ready:
-    push ax
-    push ds
-
-    mov ax, 0x0003
-    call stage1_runtime_lookup_service
-    jc .fallback
-    call far [cs:runtime_service_ptr]
-    jc .fallback
-    mov ax, ds
-    cmp ax, RUNTIME_LOAD_SEG
-    jne .fallback
-    or si, si
-    jz .fallback
-    call print_string_serial
-    pop ds
-    pop ax
-    ret
-
-.fallback:
-    pop ds
-    mov si, msg_stage2_ready
-    call print_string_serial
-    pop ax
     ret
 
 stage1_runtime_validate_cache:
@@ -16425,8 +16391,6 @@ run_stage2_payload:
 
     push cs
     pop ds
-    mov si, msg_stage2_autorun_begin
-    call print_string_serial
 
     mov dx, path_stage2_dos
     mov ax, 0x3D00
@@ -16457,13 +16421,8 @@ run_stage2_payload:
     push cs
     pop ds
 
-    mov si, msg_stage2_autorun_loaded
-    call print_string_serial
-
     call STAGE2_LOAD_SEG:0x0000
     mov byte [cs:stage2_autorun_status], 1
-    mov si, msg_stage2_autorun_return
-    call print_string_serial
     clc
     jmp .done
 
@@ -16477,8 +16436,6 @@ run_stage2_payload:
 
 .load_fail:
     mov byte [cs:stage2_autorun_status], 2
-    mov si, msg_stage2_autorun_fail
-    call print_string_serial
     stc
 
 .done:
@@ -16510,8 +16467,6 @@ init_mouse:
     mov byte [cs:mouse_installed], 1
     mov ax, 0x0001
     int 0x33
-    mov si, msg_mouse_enabled
-    call print_string_serial
 %if FAT_TYPE == 16
     mov word [cs:mouse_max_x], 639
     mov word [cs:mouse_max_y], 479
@@ -16523,8 +16478,6 @@ init_mouse:
 
 .no_mouse:
     mov byte [cs:mouse_installed], 0
-    mov si, msg_mouse_not_found
-    call print_string_serial
     pop bx
     pop ax
     ret
@@ -16568,8 +16521,6 @@ print_hardware_validation_screen:
 %endif
 
 init_vbe_query:
-    mov si, msg_vbe_init
-    call print_string_serial
     ret
 
 int_ef_handler:
@@ -17379,14 +17330,32 @@ int10_handler:
 %if TRACE_CHILD_INT21 != 0
     call child_trace_int10_enter
 %endif
+    cmp ah, 0x4F
+    je .vbe
     cmp ah, 0x0F
     je .get_mode
     cmp ah, 0x00
     je .set_mode
     jmp far [cs:old_int10_off]
 
+.vbe:
+    cmp al, 0x00
+    je .vbe_get_controller
+    cmp al, 0x01
+    je .vbe_get_mode_info
+    cmp al, 0x02
+    je .vbe_set_mode
+    cmp al, 0x03
+    je .vbe_get_current_mode
+    cmp al, 0x05
+    je .vbe_window
+    jmp far [cs:old_int10_off]
+
 .set_mode:
     mov [cs:current_video_mode], al
+    mov word [cs:current_vbe_mode], 0
+    mov word [cs:current_vbe_bank_a], 0
+    mov word [cs:current_vbe_bank_b], 0
     jmp far [cs:old_int10_off]
 
 .get_mode:
@@ -17398,6 +17367,164 @@ int10_handler:
 .mode_ready:
     xor bh, bh
     iret
+
+.vbe_get_controller:
+    mov bx, di
+    mov word [es:bx], 0x4556
+    mov word [es:bx + 2], 0x4153
+    mov word [es:bx + 4], 0x0200
+    mov word [es:bx + 6], vbe_oem_string
+    mov ax, cs
+    mov [es:bx + 8], ax
+    xor ax, ax
+    mov [es:bx + 0x0A], ax
+    mov [es:bx + 0x0C], ax
+    mov word [es:bx + 0x0E], vbe_mode_list
+    mov ax, cs
+    mov [es:bx + 0x10], ax
+    mov word [es:bx + 0x12], 16
+    mov ax, 0x004F
+    iret
+
+.vbe_get_mode_info:
+    mov ax, cx
+    and ax, 0x3FFF
+    call int10_vbe_find_mode
+    jc .vbe_unsupported
+    mov bx, di
+    mov word [es:bx], 0x001B
+    mov word [es:bx + 2], 0x0707
+    mov word [es:bx + 4], 64
+    mov word [es:bx + 6], 64
+    mov word [es:bx + 8], 0xA000
+    mov word [es:bx + 0x0A], 0xA000
+    push cx
+    push di
+    mov di, bx
+    add di, 0x0C
+    xor ax, ax
+    mov cx, 15
+    rep stosw
+    pop di
+    pop cx
+    mov ax, [cs:si + 6]
+    mov [es:bx + 0x10], ax
+    mov ax, [cs:si + 2]
+    mov [es:bx + 0x12], ax
+    mov ax, [cs:si + 4]
+    mov [es:bx + 0x14], ax
+    mov byte [es:bx + 0x16], 8
+    mov byte [es:bx + 0x17], 16
+    mov byte [es:bx + 0x18], 1
+    mov byte [es:bx + 0x19], 8
+    mov al, [cs:si + 8]
+    mov [es:bx + 0x1A], al
+    mov byte [es:bx + 0x1B], 4
+    mov byte [es:bx + 0x1C], 64
+    mov al, [cs:si + 9]
+    mov [es:bx + 0x1D], al
+    mov ax, 0x004F
+    iret
+
+.vbe_set_mode:
+    mov ax, bx
+    and ax, 0x3FFF
+    call int10_vbe_find_mode
+    jc .vbe_unsupported
+    mov [cs:current_vbe_mode], ax
+    xor ax, ax
+    mov [cs:current_vbe_bank_a], ax
+    mov [cs:current_vbe_bank_b], ax
+    mov al, [cs:si + 10]
+    mov [cs:current_video_mode], al
+    push es
+    xor ax, ax
+    mov es, ax
+    mov al, [cs:current_video_mode]
+    mov [es:0x0449], al
+    xor ax, ax
+    mov [es:0x0462], ax
+    mov word [es:0x0463], 0x03D4
+    mov al, [cs:si + 11]
+    xor ah, ah
+    mov [es:0x044A], ax
+    pop es
+    mov ax, 0x004F
+    iret
+
+.vbe_get_current_mode:
+    mov bx, [cs:current_vbe_mode]
+    or bx, bx
+    jnz .vbe_current_ready
+    xor bh, bh
+    mov bl, [cs:current_video_mode]
+.vbe_current_ready:
+    mov ax, 0x004F
+    iret
+
+.vbe_window:
+    mov ax, [cs:current_vbe_mode]
+    or ax, ax
+    jz .vbe_unsupported
+    cmp bl, 0x00
+    je .vbe_set_window
+    cmp bl, 0x01
+    je .vbe_get_window
+    jmp .vbe_unsupported
+
+.vbe_set_window:
+    cmp bh, 0x00
+    je .vbe_set_bank_a
+    cmp bh, 0x01
+    je .vbe_set_bank_b
+    jmp .vbe_unsupported
+
+.vbe_set_bank_a:
+    mov [cs:current_vbe_bank_a], dx
+    mov ax, 0x004F
+    iret
+
+.vbe_set_bank_b:
+    mov [cs:current_vbe_bank_b], dx
+    mov ax, 0x004F
+    iret
+
+.vbe_get_window:
+    cmp bh, 0x00
+    je .vbe_get_bank_a
+    cmp bh, 0x01
+    je .vbe_get_bank_b
+    jmp .vbe_unsupported
+
+.vbe_get_bank_a:
+    mov dx, [cs:current_vbe_bank_a]
+    mov ax, 0x004F
+    iret
+
+.vbe_get_bank_b:
+    mov dx, [cs:current_vbe_bank_b]
+    mov ax, 0x004F
+    iret
+
+.vbe_unsupported:
+    mov ax, 0x014F
+    iret
+
+int10_vbe_find_mode:
+    mov si, vbe_mode_table
+.next:
+    cmp word [cs:si], 0xFFFF
+    je .not_found
+    cmp word [cs:si], ax
+    je .found
+    add si, 12
+    jmp .next
+.found:
+    clc
+    ret
+.not_found:
+    stc
+    ret
 
 %if FAT_TYPE == 16
 int15_handler:
@@ -17479,7 +17606,7 @@ int15_handler:
 .chain:
     pop bp
     jmp far [cs:old_int15_off]
-
+ 
 mouse_vga_cursor_seed:
     mov word [cs:mouse_vga_cursor_x], 320
     mov word [cs:mouse_vga_cursor_y], 240
@@ -18157,7 +18284,7 @@ int2f_handler:
     cmp ax, 0x4300
     je .fn_4300
     cmp ax, 0x4310
-    je .fn_4300
+    je .fn_4310
 .chain:
     jmp far [cs:old_int2f_off]
 
@@ -18664,6 +18791,19 @@ old_int74_off dw 0
 old_int74_seg dw 0
 %endif
 current_video_mode db 0x03
+current_vbe_mode dw 0
+current_vbe_bank_a dw 0
+current_vbe_bank_b dw 0
+vbe_mode_list dw 0x0100, 0x0101, 0x0103, 0xFFFF
+vbe_mode_table:
+    dw 0x0100, 640, 400, 640
+    db 4, 0, 0x13, 80
+    dw 0x0101, 640, 480, 640
+    db 5, 0, 0x13, 80
+    dw 0x0103, 800, 600, 800
+    db 8, 0, 0x13, 100
+    dw 0xFFFF
+vbe_oem_string db 'CiukiVBE', 0
 %if TRACE_CHILD_INT21 == 0
 console_ansi_state db 0
 console_ansi_flags db 0
@@ -18991,18 +19131,18 @@ shell_completion_saved_dta_off dw 0
 shell_completion_dta times 64 db 0
 %endif
 
-msg_stage1_serial db "[STAGE1-SERIAL] READY", 13, 10, 0
-msg_diag_begin    db "D", 13, 10, 0
-msg_diag_int10    db "[10]", 13, 10, 0
-msg_diag_int13_ok db "[13]", 13, 10, 0
-msg_diag_int16_ok db "[16]", 13, 10, 0
-msg_diag_int1a    db "T", 0
-msg_int21_installed db "I", 13, 10, 0
+msg_stage1_serial db 0
+msg_diag_begin    db 0
+msg_diag_int10    db 0
+msg_diag_int13_ok db 0
+msg_diag_int16_ok db 0
+msg_diag_int1a    db 0
+msg_int21_installed db 0
 %if STAGE1_DEBUG_COMMANDS
 msg_int21_missing db "[I21] no", 13, 10, 0
 %endif
-msg_vec25 db "[V25] ", 0
-msg_vec35 db "[V35] ", 0
+msg_vec25 db 0
+msg_vec35 db 0
 country_info_default:
     dw 0
     db "$", 0, 0, 0, 0
@@ -19181,21 +19321,21 @@ msg_loader_bsod_error db "Error:", 13, 10, 0
 msg_runtime_missing_fatal db "- CIUKIDOS.SYS missing or invalid", 13, 10, 0
 msg_shell_missing_fatal db "- SHELL.COM missing", 13, 10, 0
 msg_shell_returned_fatal db "SHELL.COM returned control to the loader.", 13, 10, "This is not supported in loader-only mode.", 13, 10, 0
-msg_boot_splash_title db "CiukiOS", 0
-msg_boot_splash_subtitle db "pre-Alpha v0.6.7", 0
-msg_boot_splash_tagline db "WOOF-powered operating system", 0
+msg_boot_splash_title db 0
+msg_boot_splash_subtitle db 0
+msg_boot_splash_tagline db 0
 msg_boot_loader_title db "CiukiOS loader v0.6.7", 0
 msg_boot_loading_runtime db "Loading core runtime...", 0
 msg_boot_loading_volume db "Mounting system volume...", 0
-msg_boot_loading_shell db "Loading SHELL.COM...", 0
-msg_boot_loading_services db "Starting services...", 0
-msg_boot_loading_ready db "WOOF. System ready.", 0
-msg_boot_progress_0 db "[----------] 0%", 0
-msg_boot_progress_20 db "[##--------] 20%", 0
-msg_boot_progress_40 db "[####------] 40%", 0
-msg_boot_progress_60 db "[######----] 60%", 0
-msg_boot_progress_80 db "[########--] 80%", 0
-msg_boot_progress_100 db "[##########] 100%", 0
+msg_boot_loading_shell db 0
+msg_boot_loading_services db 0
+msg_boot_loading_ready db 0
+msg_boot_progress_0 db 0
+msg_boot_progress_20 db 0
+msg_boot_progress_40 db 0
+msg_boot_progress_60 db 0
+msg_boot_progress_80 db 0
+msg_boot_progress_100 db 0
 msg_dir_header db "Dir", 13, 10, 0
 msg_dir_empty db "no files found", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
@@ -19233,8 +19373,6 @@ path_stage2_dos db "\SYSTEM\STAGE2.BIN", 0
 path_runtime_dos db "\SYSTEM\CIUKIDOS.SYS", 0
 path_splash_bin_dos db "\SYSTEM\SPLASH.BIN", 0
 runtime_loader_signature db "CIUKIDOS"
-msg_splash_serial_ok db "[SPLASH] LOAD OK", 13, 10, 0
-msg_splash_serial_fail db "[SPLASH] LOAD FAIL", 13, 10, 0
 %endif
 path_pattern_com db "*.COM", 0
 path_pattern_exe db "*.EXE", 0
@@ -19386,13 +19524,8 @@ gfx_font8_table:
     db 0
 
 ; Stage2 Extended Services Messages
-msg_stage2_entry db "[S2] init", 13, 10, 0
-msg_stage2_ready db "[S2] ready", 13, 10, 0
+msg_stage2_ready db 0
 %if STAGE2_AUTORUN
-msg_stage2_autorun_begin db "[S2]L", 13, 10, 0
-msg_stage2_autorun_loaded db "[S2]LD", 13, 10, 0
-msg_stage2_autorun_return db "[S2]R", 13, 10, 0
-msg_stage2_autorun_fail db "[S2]F", 13, 10, 0
 %endif
 %if HARDWARE_VALIDATION_SCREEN
 ; HW validation strings emptied so the function runs (stage1 layout preserved
@@ -19405,9 +19538,8 @@ msg_hw_validation_capture db 0
 msg_hw_validation_fail db 0
 msg_hw_validation_notrun db 0
 %endif
-msg_mouse_enabled db "[S2] mouse", 13, 10, 0
-msg_mouse_not_found db "[S2] no mouse", 13, 10, 0
-msg_vbe_init db "[S2] vbe", 13, 10, 0
+msg_mouse_enabled db 0
+msg_mouse_not_found db 0
 msg_exit_str db "Exit", 13, 10, 0
 %if TRACE_CHILD_INT21 != 0
 msg_child_i16i db "I16I ", 0
