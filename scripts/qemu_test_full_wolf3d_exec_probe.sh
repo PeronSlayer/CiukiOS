@@ -171,6 +171,13 @@ extract_exit_code() {
   echo "${line##*code=}"
 }
 
+extract_exit_reason() {
+  local log_file="$1"
+  local line
+  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* reason=[0-9A-F]+' | tail -n 1 || true)"
+  echo "${line##*reason=}"
+}
+
 extract_exit_callsite() {
   local log_file="$1"
   local line
@@ -259,6 +266,63 @@ extract_prejump_jft() {
       sub(/^.*JFTP /, "", line)
       print line
       exit
+    }
+  '
+}
+
+extract_marker_sequence() {
+  local log_file="$1"
+  strings -a "$log_file" | awk '
+    /CHILD_EXEC_REQ/ {seen=1}
+    !seen {next}
+    {
+      line = $0
+      while (match(line, /CHILD_EXEC_REQ[^[:cntrl:]]*|CHILD_PREJUMP|JFTP [0-9A-F ]+|CH4AR?[^[:cntrl:]]*|CH40R?[^[:cntrl:]]*|CH44[IO][^[:cntrl:]]*|I10[IO] [0-9A-F]{4}|I16[IO] [0-9A-F]{4}|CH4CIP [0-9A-F]{4}:[0-9A-F]{4}|CHILD_EXIT[^[:cntrl:]]*/)) {
+        print substr(line, RSTART, RLENGTH)
+        line = substr(line, RSTART + RLENGTH)
+      }
+      if ($0 ~ /CHILD_TRACE_END/) {
+        exit
+      }
+    }
+  '
+}
+
+extract_int10_sequence() {
+  local log_file="$1"
+  strings -a "$log_file" | awk '
+    /CHILD_EXEC_REQ/ {seen=1; next}
+    !seen {next}
+    {
+      line = $0
+      while (match(line, /I10[IO] [0-9A-F]{4}/)) {
+        print substr(line, RSTART, RLENGTH)
+        line = substr(line, RSTART + RLENGTH)
+      }
+      if ($0 ~ /CHILD_TRACE_END/) {
+        exit
+      }
+    }
+  '
+}
+
+extract_last_int21_before_exit() {
+  local log_file="$1"
+  strings -a "$log_file" | awk '
+    /CHILD_EXEC_REQ/ {seen=1; next}
+    !seen {next}
+    /CHILD_EXIT/ {
+      if (last != "") {
+        print last
+      }
+      exit
+    }
+    {
+      line = $0
+      while (match(line, /CH4AR?[^[:cntrl:]]*|CH40R?[^[:cntrl:]]*|CH44[IO][^[:cntrl:]]*|CH35[^[:cntrl:]]*|CH25[^[:cntrl:]]*/)) {
+        last = substr(line, RSTART, RLENGTH)
+        line = substr(line, RSTART + RLENGTH)
+      }
     }
   '
 }
@@ -876,6 +940,17 @@ ivt_before_int23="NONE"
 ivt_before_int24="NONE"
 ivt_before_suspicious="NONE"
 prejump_jft_5="NONE"
+marker_sequence=""
+int10_sequence=""
+first_int10_call="NONE"
+last_int10_call="NONE"
+final_int21_before_exit="NONE"
+exit_reason="NONE"
+prompt_after_wolf3d=no
+child_exit_seen=no
+a000_dump_available=no
+a000_nonzero="NONE"
+a000_first_64="NONE"
 exit_callsite_return="NONE"
 exit_callsite_int21="NONE"
 child_jft_at_4a_report=""
@@ -970,6 +1045,7 @@ if [[ "$cd_wolf3d" == yes ]]; then
 fi
 
 offset="$(file_size "$LOG_FILE")"
+wolf_submit_offset="$offset"
 send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" 'WOLF3D.EXE'
 if wait_for_strings_regex_from_offset "$LOG_FILE" "$WOLF_CMD_PATTERN" "$offset" 10; then
   wolf3d_submitted=yes
@@ -991,7 +1067,7 @@ while kill -0 "$QEMU_PID" >/dev/null 2>&1; do
   sleep 1
 done
 
-if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]* reason=4C code=03'; then
+if true; then
   if video_text_after_exit="$(capture_video_text "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" || true)"; then
     video_dump_available=yes
     if [[ -n "$video_text_after_exit" ]]; then
@@ -1035,6 +1111,21 @@ if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]* reason=4C code=03'
         if (( bda_memory_kb < 128 || bda_memory_kb > 640 )); then
           bda_suspicious="$(append_reason "$bda_suspicious" "memory_kb_${bda_memory_kb}")"
         fi
+      fi
+    fi
+
+    if a000_bytes_raw="$(capture_physical_bytes "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" 0xA0000 0x100 || true)"; then
+      read -r -a a000_bytes <<< "$a000_bytes_raw"
+      if (( ${#a000_bytes[@]} >= 64 )); then
+        a000_dump_available=yes
+        a000_first_64="$(read_hex_range a000_bytes 0 64)"
+        a000_nonzero=no
+        for value_hex in "${a000_bytes[@]}"; do
+          if [[ "$value_hex" != "00" ]]; then
+            a000_nonzero=yes
+            break
+          fi
+        done
       fi
     fi
 
@@ -1232,11 +1323,25 @@ if [[ "$child_prejump" == yes || "$post_transfer_child_activity" == yes ]]; then
   child_transfer=yes
 fi
 exit_code="$(extract_exit_code "$LOG_FILE")"
+exit_reason="$(extract_exit_reason "$LOG_FILE")"
 parent_exec_req_psp="$(extract_exec_req_psp "$LOG_FILE")"
 prejump_jft_5="$(extract_prejump_jft "$LOG_FILE")"
+marker_sequence="$(extract_marker_sequence "$LOG_FILE")"
+int10_sequence="$(extract_int10_sequence "$LOG_FILE")"
+if [[ -n "$int10_sequence" ]]; then
+  first_int10_call="$(printf '%s\n' "$int10_sequence" | head -n 1)"
+  last_int10_call="$(printf '%s\n' "$int10_sequence" | tail -n 1)"
+fi
+final_int21_before_exit="$(extract_last_int21_before_exit "$LOG_FILE")"
 exit_callsite_return="$(extract_exit_callsite "$LOG_FILE")"
 if [[ "$exit_callsite_return" =~ ^([0-9A-F]{4}):([0-9A-F]{4})$ ]]; then
   exit_callsite_int21="${BASH_REMATCH[1]}:$(hex16_sub2 "${BASH_REMATCH[2]}")"
+fi
+if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]*'; then
+  child_exit_seen=yes
+fi
+if strings_from_offset "$LOG_FILE" "$wolf_submit_offset" | grep -Eiq "$WOLF_PROMPT_PATTERN|$APPS_PROMPT_PATTERN"; then
+  prompt_after_wolf3d=yes
 fi
 if [[ "$exit_code" == 03 ]]; then
   wolf3d_exit_03=yes
@@ -1283,6 +1388,22 @@ printf 'first child INT21 observed: %s\n' "$(format_child_marker "$first_child_i
 printf 'INT16 observed: %s\n' "${int16_seen^^}"
 printf 'INT10 observed: %s\n' "${int10_seen^^}"
 printf 'first BIOS marker: %s\n' "$(format_child_marker "$first_bios_marker")"
+printf 'shell prompt returned after WOLF3D: %s\n' "${prompt_after_wolf3d^^}"
+printf 'child exit observed within window: %s\n' "${child_exit_seen^^}"
+printf 'run window seconds: %s\n' "$OBSERVE_SEC"
+printf 'MARKER_SEQUENCE_BEGIN\n'
+if [[ -n "$marker_sequence" ]]; then
+  printf '%s\n' "$marker_sequence"
+fi
+printf 'MARKER_SEQUENCE_END\n'
+printf 'INT10_SEQUENCE_BEGIN\n'
+if [[ -n "$int10_sequence" ]]; then
+  printf '%s\n' "$int10_sequence"
+fi
+printf 'INT10_SEQUENCE_END\n'
+printf 'first_int10=%s\n' "$first_int10_call"
+printf 'last_int10=%s\n' "$last_int10_call"
+printf 'final_int21_before_exit=%s\n' "$final_int21_before_exit"
 printf 'video memory dump available: %s\n' "${video_dump_available^^}"
 printf 'decoded B8000 text available: %s\n' "${video_text_available^^}"
 printf 'VIDEO_TEXT_AFTER_EXIT_BEGIN\n'
@@ -1318,9 +1439,14 @@ printf 'JFTP_PREJUMP_BEGIN\n'
 printf 'jft_5=%s\n' "$prejump_jft_5"
 printf 'JFTP_PREJUMP_END\n'
 printf 'CH4CIP_EXIT_BEGIN\n'
+printf 'reason=%s\n' "$exit_reason"
 printf 'return_csip=%s\n' "$exit_callsite_return"
 printf 'int21_csip=%s\n' "$exit_callsite_int21"
-printf 'ax=%s\n' "4C${exit_code:-00}"
+if [[ -n "$exit_callsite_int21" && "$exit_callsite_int21" != "NONE" ]]; then
+  printf 'ax=%s\n' "4C${exit_code:-00}"
+else
+  printf 'ax=NONE\n'
+fi
 printf 'CH4CIP_EXIT_END\n'
 printf '%s\n' "$child_jft_at_4a_report"
 printf '%s\n' "$child_jft_after_40_1_report"
@@ -1338,6 +1464,11 @@ printf 'memory_kb=%s\n' "$bda_memory_kb"
 printf 'timer_ticks=%s\n' "$bda_timer_ticks"
 printf 'suspicious=%s\n' "$bda_suspicious"
 printf 'BDA_AFTER_EXIT_END\n'
+printf 'A000_AFTER_RUN_BEGIN\n'
+printf 'dump_available=%s\n' "${a000_dump_available^^}"
+printf 'nonzero=%s\n' "$a000_nonzero"
+printf 'first_64=%s\n' "$a000_first_64"
+printf 'A000_AFTER_RUN_END\n'
 printf 'PSP_AFTER_EXIT_BEGIN\n'
 printf 'psp_seg=%s\n' "$psp_seg"
 printf 'int20_sig=%s\n' "$psp_int20_sig"
