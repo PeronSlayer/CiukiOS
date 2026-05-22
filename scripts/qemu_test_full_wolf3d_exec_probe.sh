@@ -125,6 +125,15 @@ hmp_capture() {
   return "$rc"
 }
 
+normalize_hex16() {
+  local value="$1"
+  if [[ -z "$value" ]]; then
+    echo NONE
+    return 0
+  fi
+  printf '%04X\n' "$((16#$value & 0xFFFF))"
+}
+
 send_key() {
   local sock="$1"
   local cmd_log="$2"
@@ -758,6 +767,135 @@ capture_video_text() {
   rm -f "$dump_file"
 }
 
+capture_a000_metrics() {
+  local sock="$1"
+  local cmd_log="$2"
+  local raw
+  local checksum=0
+  local nonzero=0
+  local value_hex
+  local value_dec
+  local byte_count="${LIVENESS_A000_BYTES:-4096}"
+
+  if ! raw="$(capture_physical_bytes "$sock" "$cmd_log" 0xA0000 "$byte_count" || true)"; then
+    return 1
+  fi
+
+  read -r -a a000_metric_bytes <<< "$raw"
+  if (( ${#a000_metric_bytes[@]} == 0 )); then
+    return 1
+  fi
+
+  for value_hex in "${a000_metric_bytes[@]}"; do
+    value_dec=$((16#$value_hex))
+    checksum=$(((checksum + value_dec) & 0xFFFFFFFF))
+    if (( value_dec != 0 )); then
+      ((nonzero += 1))
+    fi
+  done
+
+  printf '%08X %d\n' "$checksum" "$nonzero"
+}
+
+capture_b800_nonempty_rows() {
+  local sock="$1"
+  local cmd_log="$2"
+  local video_text
+  local line
+  local nonempty=0
+
+  if ! video_text="$(capture_video_text "$sock" "$cmd_log" || true)"; then
+    return 1
+  fi
+
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      ((nonempty += 1))
+    fi
+  done <<< "$video_text"
+
+  printf '%d\n' "$nonempty"
+}
+
+capture_register_csip() {
+  local sock="$1"
+  local cmd_log="$2"
+  local regs_out
+  local cs_raw=""
+  local ip_raw=""
+  local cs="NONE"
+  local ip="NONE"
+
+  regs_out="$(hmp_capture "$sock" "$cmd_log" 'info registers' || true)"
+  if [[ -z "$regs_out" ]]; then
+    echo UNKNOWN
+    return 0
+  fi
+
+  cs_raw="$(printf '%s\n' "$regs_out" | grep -Eo 'CS ?= ?[0-9A-Fa-f]{4,8}' | head -n 1 | grep -Eo '[0-9A-Fa-f]{4,8}' | tail -n 1 || true)"
+  ip_raw="$(printf '%s\n' "$regs_out" | grep -Eo '(EIP|IP)=[0-9A-Fa-f]{4,8}' | head -n 1 | sed -E 's/.*=//' || true)"
+
+  if [[ -n "$cs_raw" ]]; then
+    cs="$(normalize_hex16 "$cs_raw")"
+  fi
+  if [[ -n "$ip_raw" ]]; then
+    ip="$(normalize_hex16 "$ip_raw")"
+  fi
+
+  if [[ "$cs" == "NONE" || "$ip" == "NONE" ]]; then
+    echo UNKNOWN
+    return 0
+  fi
+
+  printf '%s:%s\n' "$cs" "$ip"
+}
+
+capture_liveness_sample() {
+  local sock="$1"
+  local cmd_log="$2"
+  local log_file="$3"
+  local sample_t="$4"
+  local bda_video_mode_sample="NONE"
+  local a000_checksum_sample="NONE"
+  local a000_nonzero_sample="NONE"
+  local b800_nonempty_rows_sample="NONE"
+  local csip_sample="UNKNOWN"
+  local raw
+
+  if raw="$(capture_physical_bytes "$sock" "$cmd_log" 0x400 0x100 || true)"; then
+    read -r -a liveness_bda_bytes <<< "$raw"
+    if (( ${#liveness_bda_bytes[@]} >= 0x86 )); then
+      bda_video_mode_sample="${liveness_bda_bytes[73]:-00}"
+    fi
+  fi
+
+  if raw="$(capture_a000_metrics "$sock" "$cmd_log" || true)"; then
+    a000_checksum_sample="${raw%% *}"
+    a000_nonzero_sample="${raw##* }"
+  fi
+
+  if raw="$(capture_b800_nonempty_rows "$sock" "$cmd_log" || true)"; then
+    b800_nonempty_rows_sample="$raw"
+  fi
+
+  csip_sample="$(capture_register_csip "$sock" "$cmd_log")"
+
+  if [[ "$a000_checksum_sample" != "NONE" ]]; then
+    liveness_a000_checksums+=("$a000_checksum_sample")
+  fi
+  if [[ "$csip_sample" != "UNKNOWN" ]]; then
+    liveness_csips+=("$csip_sample")
+    liveness_last_csip="$csip_sample"
+  fi
+
+  printf 'LIVENESS_SAMPLE t=%s\n' "$sample_t"
+  printf 'video_mode=%s\n' "$bda_video_mode_sample"
+  printf 'a000_checksum=%s\n' "$a000_checksum_sample"
+  printf 'a000_nonzero=%s\n' "$a000_nonzero_sample"
+  printf 'b8000_nonempty_rows=%s\n' "$b800_nonempty_rows_sample"
+  printf 'csip=%s\n' "$csip_sample"
+}
+
 format_child_marker() {
   local line="$1"
   if [[ -z "$line" ]]; then
@@ -966,6 +1104,20 @@ child_jft_after_40_1_report=""
 child_jft_after_40_2_report=""
 child_jft_after_exit_report=""
 child_dgroup_after_exit_report=""
+post_submit_keyboard_input_sent=no
+qemu_timeout_fired=no
+vesa_marker_seen=no
+vesa_start_epoch=0
+liveness_samples=""
+declare -a liveness_a000_checksums=()
+declare -a liveness_csips=()
+liveness_last_csip="UNKNOWN"
+a000_changed_over_time="UNKNOWN"
+csip_changed_over_time="UNKNOWN"
+still_in_child_segment="UNKNOWN"
+sample_points=(0 5 15 30)
+sample_index=0
+last_marker="NONE"
 
 offset=0
 
@@ -1069,6 +1221,34 @@ fi
 start="$(date +%s)"
 while kill -0 "$QEMU_PID" >/dev/null 2>&1; do
   now="$(date +%s)"
+  if [[ "$vesa_marker_seen" != yes ]]; then
+    if strings_from_offset "$LOG_FILE" "$wolf_submit_offset" | grep -Eq 'I10I 4F02|I10I 4F05'; then
+      vesa_marker_seen=yes
+      vesa_start_epoch="$now"
+    fi
+  fi
+  if [[ "$vesa_marker_seen" == yes ]]; then
+    rel_sec=$((now - vesa_start_epoch))
+    while (( sample_index < ${#sample_points[@]} )) && (( rel_sec >= sample_points[sample_index] )); do
+      sample_block="$(capture_liveness_sample "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$LOG_FILE" "${sample_points[sample_index]}")"
+      if [[ -n "$sample_block" ]]; then
+        sample_a000_checksum="$(printf '%s\n' "$sample_block" | awk -F= '/^a000_checksum=/{print $2; exit}')"
+        sample_csip="$(printf '%s\n' "$sample_block" | awk -F= '/^csip=/{print $2; exit}')"
+        if [[ -n "$sample_a000_checksum" && "$sample_a000_checksum" != "NONE" ]]; then
+          liveness_a000_checksums+=("$sample_a000_checksum")
+        fi
+        if [[ -n "$sample_csip" && "$sample_csip" != "UNKNOWN" ]]; then
+          liveness_csips+=("$sample_csip")
+          liveness_last_csip="$sample_csip"
+        fi
+        if [[ -n "$liveness_samples" ]]; then
+          liveness_samples+=$'\n'
+        fi
+        liveness_samples+="$sample_block"
+      fi
+      ((sample_index += 1))
+    done
+  fi
   if (( now - start >= OBSERVE_SEC )); then
     break
   fi
@@ -1340,6 +1520,9 @@ if [[ -n "$int10_sequence" ]]; then
   first_int10_call="$(printf '%s\n' "$int10_sequence" | head -n 1)"
   last_int10_call="$(printf '%s\n' "$int10_sequence" | tail -n 1)"
 fi
+if [[ -n "$marker_sequence" ]]; then
+  last_marker="$(printf '%s\n' "$marker_sequence" | tail -n 1)"
+fi
 int20_callsites="$(extract_int20_callsites "$LOG_FILE")"
 if [[ -n "$int20_callsites" ]]; then
   first_int20_callsite="$(printf '%s\n' "$int20_callsites" | sed -n '1s/^CH20IP //p')"
@@ -1359,8 +1542,38 @@ fi
 if strings_from_offset "$LOG_FILE" "$wolf_submit_offset" | grep -Eiq "$WOLF_PROMPT_PATTERN|$APPS_PROMPT_PATTERN"; then
   prompt_after_wolf3d=yes
 fi
+if [[ "$QEMU_RC" == 124 ]]; then
+  qemu_timeout_fired=yes
+fi
 if [[ "$exit_code" == 03 ]]; then
   wolf3d_exit_03=yes
+fi
+
+if (( ${#liveness_a000_checksums[@]} >= 2 )); then
+  if (( $(printf '%s\n' "${liveness_a000_checksums[@]}" | sort -u | wc -l) > 1 )); then
+    a000_changed_over_time="YES"
+  else
+    a000_changed_over_time="NO"
+  fi
+fi
+
+if (( ${#liveness_csips[@]} >= 2 )); then
+  if (( $(printf '%s\n' "${liveness_csips[@]}" | sort -u | wc -l) > 1 )); then
+    csip_changed_over_time="YES"
+  else
+    csip_changed_over_time="NO"
+  fi
+fi
+
+if [[ "$liveness_last_csip" =~ ^([0-9A-F]{4}):([0-9A-F]{4})$ && "$psp_seg" != "NONE" && "$psp_end_alloc_seg" != "NONE" ]]; then
+  last_sample_cs=$((16#${BASH_REMATCH[1]}))
+  child_code_base=$((16#$psp_seg + 0x10))
+  child_code_limit=$((16#$psp_end_alloc_seg))
+  if (( last_sample_cs >= child_code_base && last_sample_cs < child_code_limit )); then
+    still_in_child_segment="YES"
+  else
+    still_in_child_segment="NO"
+  fi
 fi
 
 if [[ "$shell_prompt_reached" != yes ]]; then
@@ -1412,6 +1625,7 @@ if [[ -n "$marker_sequence" ]]; then
   printf '%s\n' "$marker_sequence"
 fi
 printf 'MARKER_SEQUENCE_END\n'
+printf 'last_marker=%s\n' "$last_marker"
 printf 'INT10_SEQUENCE_BEGIN\n'
 if [[ -n "$int10_sequence" ]]; then
   printf '%s\n' "$int10_sequence"
@@ -1422,6 +1636,17 @@ printf 'last_int10=%s\n' "$last_int10_call"
 printf 'first_int20_callsite=%s\n' "$first_int20_callsite"
 printf 'second_int20_callsite=%s\n' "$second_int20_callsite"
 printf 'final_int21_before_exit=%s\n' "$final_int21_before_exit"
+printf 'post_submit_keyboard_input_sent=%s\n' "${post_submit_keyboard_input_sent^^}"
+printf 'qemu_timeout_fired=%s\n' "${qemu_timeout_fired^^}"
+printf 'LIVENESS_SAMPLES_BEGIN\n'
+if [[ -n "$liveness_samples" ]]; then
+  printf '%s\n' "$liveness_samples"
+fi
+printf 'LIVENESS_SAMPLES_END\n'
+printf 'A000 changed over time: %s\n' "$a000_changed_over_time"
+printf 'CS:IP changed over time: %s\n' "$csip_changed_over_time"
+printf 'still in child segment: %s\n' "$still_in_child_segment"
+printf 'shell prompt visible: %s\n' "${prompt_after_wolf3d^^}"
 printf 'video memory dump available: %s\n' "${video_dump_available^^}"
 printf 'decoded B8000 text available: %s\n' "${video_text_available^^}"
 printf 'VIDEO_TEXT_AFTER_EXIT_BEGIN\n'
