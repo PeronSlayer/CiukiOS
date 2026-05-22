@@ -544,6 +544,10 @@ int20_handler:
     call ciukidos_restore_parent_dta
     mov bp, sp
     mov ax, [bp + 2]
+%if TRACE_CHILD_INT21 != 0
+    call child_trace_int20_callsite
+    call child_trace_exit_int20
+%endif
     cmp ax, [current_com_load_seg]
     mov ax, int21_mz_terminate_trampoline
     jne .patch_ip
@@ -4380,6 +4384,29 @@ child_trace_exit_int20:
     mov [cs:int21_last_ah], al
     pop ax
     jmp child_trace_exit_int21
+
+child_trace_int20_callsite:
+    push ax
+    push si
+    push ds
+    push cs
+    pop ds
+    call child_trace_should_log_exit
+    jnc .trace_done
+    mov si, msg_child_exit_int20_callsite
+    call print_string_serial
+    mov ax, [ss:bp + 2]
+    call print_hex16_serial
+    mov al, ':'
+    call serial_putc
+    mov ax, [ss:bp + 0]
+    call print_hex16_serial
+    call print_newline_serial
+.trace_done:
+    pop ds
+    pop si
+    pop ax
+    ret
 
 child_trace_vector_set:
 child_trace_vector_get:
@@ -17378,9 +17405,6 @@ int15_handler:
     mov bp, sp
     cmp ah, 0x88
     je .extmem_88
-%if TRACE_CHILD_INT21 != 0
-    call child_trace_exit_int20
-%endif
     cmp ah, 0xC2
     jne .chain
     cmp byte [cs:shell_exec_external_mouse_disabled], 0
@@ -19121,6 +19145,7 @@ msg_child_exit_reason db " reason=", 0
 msg_child_exit_reason_retf db " reason=RETF", 0
 msg_child_exit_code db " code=", 0
 msg_child_exit_callsite db " CH4CIP ", 0
+msg_child_exit_int20_callsite db "CH20IP ", 0
 msg_child_exit_int22 db " int22=", 0
 msg_child_vec25 db "CH25 int=", 0
 msg_child_vec35 db "I10I ", 0

@@ -174,8 +174,13 @@ extract_exit_code() {
 extract_exit_reason() {
   local log_file="$1"
   local line
-  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* reason=[0-9A-F]+' | tail -n 1 || true)"
+  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* reason=([0-9A-F]+|RETF)' | tail -n 1 || true)"
   echo "${line##*reason=}"
+}
+
+extract_int20_callsites() {
+  local log_file="$1"
+  strings -a "$log_file" | grep -Eo 'CH20IP [0-9A-F]{4}:[0-9A-F]{4}' || true
 }
 
 extract_exit_callsite() {
@@ -277,7 +282,7 @@ extract_marker_sequence() {
     !seen {next}
     {
       line = $0
-      while (match(line, /CHILD_EXEC_REQ[^[:cntrl:]]*|CHILD_PREJUMP|JFTP [0-9A-F ]+|CH4AR?[^[:cntrl:]]*|CH40R?[^[:cntrl:]]*|CH44[IO][^[:cntrl:]]*|I10[IO] [0-9A-F]{4}|I16[IO] [0-9A-F]{4}|CH4CIP [0-9A-F]{4}:[0-9A-F]{4}|CHILD_EXIT[^[:cntrl:]]*/)) {
+      while (match(line, /CHILD_EXEC_REQ[^[:cntrl:]]*|CHILD_PREJUMP|JFTP [0-9A-F ]+|CH4AR?[^[:cntrl:]]*|CH40R?[^[:cntrl:]]*|CH44[IO][^[:cntrl:]]*|I10[IO] [0-9A-F]{4}|I16[IO] [0-9A-F]{4}|CH4CIP [0-9A-F]{4}:[0-9A-F]{4}|CH20IP [0-9A-F]{4}:[0-9A-F]{4}|CHILD_EXIT[^[:cntrl:]]*/)) {
         print substr(line, RSTART, RLENGTH)
         line = substr(line, RSTART + RLENGTH)
       }
@@ -946,6 +951,9 @@ first_int10_call="NONE"
 last_int10_call="NONE"
 final_int21_before_exit="NONE"
 exit_reason="NONE"
+int20_callsites=""
+first_int20_callsite="NONE"
+second_int20_callsite="NONE"
 prompt_after_wolf3d=no
 child_exit_seen=no
 a000_dump_available=no
@@ -1332,6 +1340,14 @@ if [[ -n "$int10_sequence" ]]; then
   first_int10_call="$(printf '%s\n' "$int10_sequence" | head -n 1)"
   last_int10_call="$(printf '%s\n' "$int10_sequence" | tail -n 1)"
 fi
+int20_callsites="$(extract_int20_callsites "$LOG_FILE")"
+if [[ -n "$int20_callsites" ]]; then
+  first_int20_callsite="$(printf '%s\n' "$int20_callsites" | sed -n '1s/^CH20IP //p')"
+  second_int20_callsite="$(printf '%s\n' "$int20_callsites" | sed -n '2s/^CH20IP //p')"
+  if [[ -z "$second_int20_callsite" ]]; then
+    second_int20_callsite="NONE"
+  fi
+fi
 final_int21_before_exit="$(extract_last_int21_before_exit "$LOG_FILE")"
 exit_callsite_return="$(extract_exit_callsite "$LOG_FILE")"
 if [[ "$exit_callsite_return" =~ ^([0-9A-F]{4}):([0-9A-F]{4})$ ]]; then
@@ -1403,6 +1419,8 @@ fi
 printf 'INT10_SEQUENCE_END\n'
 printf 'first_int10=%s\n' "$first_int10_call"
 printf 'last_int10=%s\n' "$last_int10_call"
+printf 'first_int20_callsite=%s\n' "$first_int20_callsite"
+printf 'second_int20_callsite=%s\n' "$second_int20_callsite"
 printf 'final_int21_before_exit=%s\n' "$final_int21_before_exit"
 printf 'video memory dump available: %s\n' "${video_dump_available^^}"
 printf 'decoded B8000 text available: %s\n' "${video_text_available^^}"
