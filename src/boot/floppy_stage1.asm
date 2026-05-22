@@ -2555,11 +2555,17 @@ int21_exec_load_to_es:
     mov ax, es
     add ax, 0x1000
     cmp word [cs:current_load_seg], MZ3_LOAD_SEG
-    je .copy_limit_high
+    je .copy_limit_heap
+    cmp word [cs:current_load_seg], MZ2_LOAD_SEG
+    je .copy_limit_mz2
     cmp ax, MZ_LOAD_LIMIT_SEG
     jae .copy_too_large
     jmp .copy_limit_ready
-.copy_limit_high:
+.copy_limit_mz2:
+    cmp ax, MZ3_LOAD_SEG
+    jae .copy_too_large
+    jmp .copy_limit_ready
+.copy_limit_heap:
     cmp ax, DOS_HEAP_LIMIT_SEG
     jae .copy_too_large
 .copy_limit_ready:
@@ -2834,8 +2840,24 @@ int21_exec_load_mz:
     call int21_exec_load_to_es
     jc .image_load_fail
 
-    mov dx, MZ_LOAD_LIMIT_SEG
+    mov ax, [cs:search_found_size_lo]
+    add ax, 15
+    mov dx, [cs:search_found_size_hi]
+    adc dx, 0
+    mov cl, 4
+.clear_mz_tail_shift:
+    shr dx, 1
+    rcr ax, 1
+    loop .clear_mz_tail_shift
+
+    or dx, dx
+    jne .bad_image_size
+    add ax, [cs:current_load_seg]
+    jc .bad_image_size
+    mov dx, ax
 .clear_mz_tail:
+    cmp dx, DOS_HEAP_LIMIT_SEG
+    jae .clear_mz_tail_done
     mov es, dx
     xor ax, ax
     xor di, di
@@ -2844,6 +2866,8 @@ int21_exec_load_mz:
     add dx, 0x0010
     cmp dx, DOS_HEAP_LIMIT_SEG
     jb .clear_mz_tail
+
+.clear_mz_tail_done:
 
     clc
     jmp .done
