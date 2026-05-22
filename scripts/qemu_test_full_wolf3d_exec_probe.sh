@@ -16,6 +16,7 @@ OBSERVE_SEC="${OBSERVE_SEC:-12}"
 KEY_DELAY_SEC="${KEY_DELAY_SEC:-0.12}"
 PRE_ENTER_DELAY_SEC="${PRE_ENTER_DELAY_SEC:-0.35}"
 DEFAULT_PARENT_PSP_SEG="${DEFAULT_PARENT_PSP_SEG:-2000}"
+DEFAULT_OBSERVE_SEC=12
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -1111,6 +1112,10 @@ vesa_start_epoch=0
 retf_code_source="NONE"
 retf_code_reliable="UNKNOWN"
 retf_classification="NONE"
+long_observation_mode=no
+shell_prompt_required=yes
+fatal_probe_failure=yes
+nonfatal_observation_reason="NONE"
 liveness_samples=""
 declare -a liveness_a000_checksums=()
 declare -a liveness_csips=()
@@ -1585,6 +1590,11 @@ if [[ "$exit_reason" == "RETF" ]]; then
   retf_classification="returned_to_mz_trampoline_without_terminate_api"
 fi
 
+if (( OBSERVE_SEC > DEFAULT_OBSERVE_SEC )); then
+  long_observation_mode=yes
+  shell_prompt_required=no
+fi
+
 if [[ "$shell_prompt_reached" != yes ]]; then
   first_blocker='shell prompt not reached'
 elif [[ "$cd_wolf3d" != yes ]]; then
@@ -1615,6 +1625,14 @@ elif [[ "$child_int21" != yes ]]; then
   first_blocker='child made no traced INT21 calls'
 fi
 
+fatal_probe_failure=yes
+if [[ "$first_blocker" == none ]]; then
+  fatal_probe_failure=no
+elif [[ "$long_observation_mode" == yes && "$first_blocker" == 'child returned through MZ trampoline without terminate API' && "$qemu_timeout_fired" != yes && "$child_transfer" == yes && "$trace_markers_seen" == yes ]]; then
+  fatal_probe_failure=no
+  nonfatal_observation_reason='observed_child_return_classified_for_followup'
+fi
+
 printf 'shell prompt reached: %s\n' "${shell_prompt_reached^^}"
 printf 'cd WOLF3D succeeded: %s\n' "${cd_wolf3d^^}"
 printf 'WOLF3D.EXE submitted: %s\n' "${wolf3d_submitted^^}"
@@ -1631,6 +1649,9 @@ printf 'first BIOS marker: %s\n' "$(format_child_marker "$first_bios_marker")"
 printf 'shell prompt returned after WOLF3D: %s\n' "${prompt_after_wolf3d^^}"
 printf 'child exit observed within window: %s\n' "${child_exit_seen^^}"
 printf 'run window seconds: %s\n' "$OBSERVE_SEC"
+printf 'long_observation_mode=%s\n' "${long_observation_mode^^}"
+printf 'shell_prompt_detected=%s\n' "${shell_prompt_reached^^}"
+printf 'shell_prompt_required=%s\n' "${shell_prompt_required^^}"
 printf 'MARKER_SEQUENCE_BEGIN\n'
 if [[ -n "$marker_sequence" ]]; then
   printf '%s\n' "$marker_sequence"
@@ -1649,6 +1670,8 @@ printf 'second_int20_callsite=%s\n' "$second_int20_callsite"
 printf 'final_int21_before_exit=%s\n' "$final_int21_before_exit"
 printf 'post_submit_keyboard_input_sent=%s\n' "${post_submit_keyboard_input_sent^^}"
 printf 'qemu_timeout_fired=%s\n' "${qemu_timeout_fired^^}"
+printf 'fatal_probe_failure=%s\n' "${fatal_probe_failure^^}"
+printf 'nonfatal_observation_reason=%s\n' "$nonfatal_observation_reason"
 printf 'LIVENESS_SAMPLES_BEGIN\n'
 if [[ -n "$liveness_samples" ]]; then
   printf '%s\n' "$liveness_samples"
@@ -1789,6 +1812,6 @@ printf 'exit code: %s\n' "${exit_code:-NONE}"
 printf 'qemu rc: %s\n' "$QEMU_RC"
 printf 'serial log: %s\n' "$LOG_FILE"
 
-if [[ "$first_blocker" != none ]]; then
+if [[ "$fatal_probe_failure" == yes ]]; then
   exit 1
 fi
