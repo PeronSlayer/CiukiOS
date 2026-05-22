@@ -1108,6 +1108,9 @@ post_submit_keyboard_input_sent=no
 qemu_timeout_fired=no
 vesa_marker_seen=no
 vesa_start_epoch=0
+retf_code_source="NONE"
+retf_code_reliable="UNKNOWN"
+retf_classification="NONE"
 liveness_samples=""
 declare -a liveness_a000_checksums=()
 declare -a liveness_csips=()
@@ -1576,6 +1579,12 @@ if [[ "$liveness_last_csip" =~ ^([0-9A-F]{4}):([0-9A-F]{4})$ && "$psp_seg" != "N
   fi
 fi
 
+if [[ "$exit_reason" == "RETF" ]]; then
+  retf_code_source="last_exit_code_global"
+  retf_code_reliable="NO"
+  retf_classification="returned_to_mz_trampoline_without_terminate_api"
+fi
+
 if [[ "$shell_prompt_reached" != yes ]]; then
   first_blocker='shell prompt not reached'
 elif [[ "$cd_wolf3d" != yes ]]; then
@@ -1598,6 +1607,8 @@ elif [[ "$child_transfer" != yes && "$loader_return" == yes ]]; then
   first_blocker='SHELL.COM returned control to loader before child transfer'
 elif [[ "$child_transfer" != yes ]]; then
   first_blocker='child transfer not observed'
+elif [[ "$exit_reason" == "RETF" ]]; then
+  first_blocker='child returned through MZ trampoline without terminate API'
 elif [[ -n "$exit_code" && "$exit_code" != 00 ]]; then
   first_blocker="child exited with code $exit_code"
 elif [[ "$child_int21" != yes ]]; then
@@ -1691,6 +1702,11 @@ else
   printf 'ax=NONE\n'
 fi
 printf 'CH4CIP_EXIT_END\n'
+printf 'RETF_ANALYSIS_BEGIN\n'
+printf 'code_source=%s\n' "$retf_code_source"
+printf 'code_reliable=%s\n' "$retf_code_reliable"
+printf 'classification=%s\n' "$retf_classification"
+printf 'RETF_ANALYSIS_END\n'
 printf '%s\n' "$child_jft_at_4a_report"
 printf '%s\n' "$child_jft_after_40_1_report"
 printf '%s\n' "$child_jft_after_40_2_report"
