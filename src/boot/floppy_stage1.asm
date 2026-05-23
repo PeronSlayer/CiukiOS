@@ -30,6 +30,11 @@ org 0x0000
 %define DOS_HEAP_BASE_SEG 0x5D00
 %define DOS_HEAP_LIMIT_SEG 0x9F00
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
+%define VBE_BANK_WINDOW_PARAS 0x1000
+%define VBE_BANK_WINDOW_WORDS 0x8000
+%define VBE_BACKING_MAX_BANKS (DOS_HEAP_MAX_PARAS / VBE_BANK_WINDOW_PARAS)
+%define VBE_BACKING_TARGET_BANKS (VBE_BACKING_MAX_BANKS - 1)
+%define VBE_BACKING_TARGET_PARAS (VBE_BACKING_TARGET_BANKS * VBE_BANK_WINDOW_PARAS)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
 %define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
 %define DOS_MEM_BLOCK_FREE 0
@@ -17359,9 +17364,7 @@ int10_handler:
 
 .set_mode:
     mov [cs:current_video_mode], al
-    mov word [cs:current_vbe_mode], 0
-    mov word [cs:current_vbe_bank_a], 0
-    mov word [cs:current_vbe_bank_b], 0
+    call int10_vbe_reset_state
     jmp far [cs:old_int10_off]
 
 .get_mode:
@@ -17445,12 +17448,10 @@ int10_handler:
     pop bx
     call int10_call_original_vbe
     jc .vbe_set_mode_local
-    mov ax, bx
-    and ax, 0x3FFF
-    mov [cs:current_vbe_mode], ax
-    xor ax, ax
-    mov [cs:current_vbe_bank_a], ax
-    mov [cs:current_vbe_bank_b], ax
+    mov dx, bx
+    and dx, 0x3FFF
+    call int10_vbe_set_mode_from_bios
+    mov ax, 0x004F
     iret
 
 .vbe_set_mode_local:
@@ -17476,7 +17477,7 @@ int10_handler:
     xor ah, ah
     mov [es:0x044A], ax
     pop es
-    call int10_vbe_clear_window
+    call int10_vbe_activate_local_mode
     mov ax, 0x004F
     iret
 
@@ -17528,9 +17529,9 @@ int10_handler:
     call int10_call_original_vbe
     jc .vbe_window_get_local
     cmp bh, 0x00
-    je .vbe_bios_bank_a
+    je .vbe_bios_get_bank_a
     cmp bh, 0x01
-    je .vbe_bios_bank_b
+    je .vbe_bios_get_bank_b
     iret
 
 .vbe_window_get_local:
@@ -17538,9 +17539,21 @@ int10_handler:
 
 .vbe_bios_bank_a:
     mov [cs:current_vbe_bank_a], dx
+    mov [cs:current_vbe_visible_bank], dx
+    mov byte [cs:current_vbe_visible_window], 0x00
     iret
 
 .vbe_bios_bank_b:
+    mov [cs:current_vbe_bank_b], dx
+    mov [cs:current_vbe_visible_bank], dx
+    mov byte [cs:current_vbe_visible_window], 0x01
+    iret
+
+.vbe_bios_get_bank_a:
+    mov [cs:current_vbe_bank_a], dx
+    iret
+
+.vbe_bios_get_bank_b:
     mov [cs:current_vbe_bank_b], dx
     iret
 
@@ -17555,15 +17568,11 @@ int10_handler:
     jmp .vbe_unsupported
 
 .vbe_set_bank_a:
-    mov [cs:current_vbe_bank_a], dx
-    call int10_vbe_clear_window
-    mov ax, 0x004F
+    call int10_vbe_set_window_local_bank
     iret
 
 .vbe_set_bank_b:
-    mov [cs:current_vbe_bank_b], dx
-    call int10_vbe_clear_window
-    mov ax, 0x004F
+    call int10_vbe_set_window_local_bank
     iret
 
 .vbe_get_window:
@@ -17619,6 +17628,262 @@ int10_call_original_vbe:
     ret
 .failed:
     stc
+    ret
+
+int10_vbe_reset_state:
+    push ax
+    xor ax, ax
+    mov [cs:current_vbe_mode], ax
+    mov [cs:current_vbe_bank_a], ax
+    mov [cs:current_vbe_bank_b], ax
+    mov [cs:current_vbe_mode_banks], ax
+    mov word [cs:current_vbe_visible_bank], 0xFFFF
+    mov byte [cs:current_vbe_visible_window], 0xFF
+    mov byte [cs:current_vbe_backing_ready], 0
+    pop ax
+    ret
+
+int10_vbe_set_mode_common:
+    push bx
+    mov [cs:current_vbe_mode], ax
+    xor bx, bx
+    mov [cs:current_vbe_bank_a], bx
+    mov [cs:current_vbe_bank_b], bx
+    mov [cs:current_vbe_visible_bank], bx
+    mov bl, [cs:si + 8]
+    mov [cs:current_vbe_mode_banks], bx
+    mov byte [cs:current_vbe_visible_window], 0x00
+    mov byte [cs:current_vbe_backing_ready], 0
+    pop bx
+    ret
+
+int10_vbe_set_mode_from_bios:
+    push ax
+    push si
+    mov ax, dx
+    call int10_vbe_find_mode
+    jc .unsupported
+    call int10_vbe_set_mode_common
+    jmp .done
+.unsupported:
+    call int10_vbe_reset_state
+    mov [cs:current_vbe_mode], dx
+.done:
+    pop si
+    pop ax
+    ret
+
+int10_vbe_activate_local_mode:
+    call int10_vbe_set_mode_common
+    call int10_vbe_clear_backing_store
+    xor dx, dx
+    call int10_vbe_load_window_bank
+    mov byte [cs:current_vbe_backing_ready], 1
+    ret
+
+int10_vbe_ensure_backing_store:
+    push ax
+    push bx
+    push dx
+    cmp word [cs:current_vbe_backing_seg], 0
+    jne .done
+    ; Leave one 64 KiB window free for DOS heap callers before reserving banks.
+    mov bx, VBE_BACKING_TARGET_PARAS
+    call int10_vbe_alloc_system_block
+    jnc .full
+    cmp bx, VBE_BANK_WINDOW_PARAS
+    jb .done
+    mov dx, 1
+    cmp bx, VBE_BANK_WINDOW_PARAS * 2
+    jb .partial
+    mov dx, 2
+    cmp bx, VBE_BANK_WINDOW_PARAS * 3
+    jb .partial
+    mov dx, 3
+.partial:
+    mov bx, dx
+    mov cl, 12
+    shl bx, cl
+    call int10_vbe_alloc_system_block
+    jc .done
+    mov [cs:current_vbe_backing_seg], ax
+    mov [cs:current_vbe_backing_banks], dx
+    jmp .done
+.full:
+    mov [cs:current_vbe_backing_seg], ax
+    mov word [cs:current_vbe_backing_banks], VBE_BACKING_TARGET_BANKS
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+int10_vbe_alloc_system_block:
+    push dx
+    mov dx, [cs:current_psp_seg]
+    xor ax, ax
+    mov [cs:current_psp_seg], ax
+    call int21_alloc
+    mov [cs:current_psp_seg], dx
+    jc .done
+    call int21_mem_sync_legacy
+    call int21_mem_rebuild_chain
+.done:
+    pop dx
+    ret
+
+int10_vbe_clear_backing_store:
+    push ax
+    push bx
+    push cx
+    push di
+    push es
+    call int10_vbe_ensure_backing_store
+    mov ax, [cs:current_vbe_backing_seg]
+    or ax, ax
+    jz .done
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    mov bx, [cs:current_vbe_backing_banks]
+.bank_loop:
+    or bx, bx
+    jz .done
+    mov cx, VBE_BANK_WINDOW_WORDS
+    rep stosw
+    mov ax, es
+    add ax, VBE_BANK_WINDOW_PARAS
+    mov es, ax
+    dec bx
+    jmp .bank_loop
+.done:
+    pop es
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int10_vbe_bank_segment:
+    push bx
+    mov ax, [cs:current_vbe_backing_seg]
+    or ax, ax
+    jz .fail
+    cmp dx, [cs:current_vbe_backing_banks]
+    jae .fail
+    mov bx, dx
+.next_bank:
+    or bx, bx
+    jz .ready
+    add ax, VBE_BANK_WINDOW_PARAS
+    dec bx
+    jmp .next_bank
+.ready:
+    clc
+    pop bx
+    ret
+.fail:
+    stc
+    pop bx
+    ret
+
+int10_vbe_save_window_bank:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    call int10_vbe_bank_segment
+    jc .done
+    mov es, ax
+    mov ax, 0xA000
+    mov ds, ax
+    xor si, si
+    xor di, di
+    mov cx, VBE_BANK_WINDOW_WORDS
+    cld
+    rep movsw
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+int10_vbe_load_window_bank:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    call int10_vbe_bank_segment
+    jc .clear
+    mov bx, ax
+    mov ax, 0xA000
+    mov es, ax
+    mov ds, bx
+    xor si, si
+    xor di, di
+    mov cx, VBE_BANK_WINDOW_WORDS
+    cld
+    rep movsw
+    jmp .done
+.clear:
+    call int10_vbe_clear_window
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+int10_vbe_save_visible_bank:
+    push dx
+    mov dx, [cs:current_vbe_visible_bank]
+    cmp dx, 0xFFFF
+    je .done
+    call int10_vbe_save_window_bank
+.done:
+    pop dx
+    ret
+
+int10_vbe_set_window_local_bank:
+    cmp bh, 0x01
+    ja .unsupported
+    mov ax, [cs:current_vbe_mode_banks]
+    or ax, ax
+    jz .unsupported
+    cmp dx, ax
+    jae .unsupported
+    cmp byte [cs:current_vbe_backing_ready], 0
+    jne .save_visible
+    call int10_vbe_ensure_backing_store
+    mov byte [cs:current_vbe_backing_ready], 1
+.save_visible:
+    call int10_vbe_save_visible_bank
+    cmp bh, 0x00
+    jne .bank_b
+    mov [cs:current_vbe_bank_a], dx
+    jmp .load
+.bank_b:
+    mov [cs:current_vbe_bank_b], dx
+.load:
+    call int10_vbe_load_window_bank
+    mov [cs:current_vbe_visible_bank], dx
+    mov [cs:current_vbe_visible_window], bh
+    mov byte [cs:current_vbe_backing_ready], 1
+    mov ax, 0x004F
+    ret
+.unsupported:
+    mov ax, 0x014F
     ret
 
 int10_vbe_clear_window:
@@ -18966,6 +19231,12 @@ current_video_mode db 0x03
 current_vbe_mode dw 0
 current_vbe_bank_a dw 0
 current_vbe_bank_b dw 0
+current_vbe_mode_banks dw 0
+current_vbe_visible_bank dw 0xFFFF
+current_vbe_backing_seg dw 0
+current_vbe_backing_banks dw 0
+current_vbe_visible_window db 0xFF
+current_vbe_backing_ready db 0
 vbe_mode_list dw 0x0100, 0x0101, 0x0103, 0xFFFF
 vbe_mode_table:
     dw 0x0100, 640, 400, 640
@@ -18975,7 +19246,7 @@ vbe_mode_table:
     dw 0x0103, 800, 600, 800
     db 8, 0, 0x13, 100
     dw 0xFFFF
-vbe_oem_string db 'CiukiVBE', 0
+vbe_oem_string db 0
 %if TRACE_CHILD_INT21 == 0
 console_ansi_state db 0
 console_ansi_flags db 0
@@ -19367,81 +19638,81 @@ msg_mz_done  db "[MZ] 0x", 0
 msg_mz_serial_pass db "[MZDEMO-SERIAL] PASS", 13, 10, 0
 msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
 %if TRACE_CHILD_INT21 != 0
-msg_child_trace_begin db "CHILD_PREJUMP CHILD_TRACE_BEGIN", 13, 10, 0
+msg_child_trace_begin db 0
 msg_child_trace_end db "CHILD_TRACE_END", 13, 10, 0
 msg_child_exec_req db "CHILD_EXEC_REQ psp=", 0
 msg_child_exec_ret db "CHILD_EXEC_RET cf=", 0
-msg_exec_enter db "EXEN p=", 0
-msg_exec_open_ok db "EXOP ok", 0
-msg_exec_open_fail db "EXOP er ax=", 0
-msg_exec_lookup_entry db "EXLK n=", 0
-msg_exec_open_handle db "EXOH s=", 0
-msg_exec_hdr_read_begin db "EXRB o=", 0
-msg_exec_hdr_lba db "EXRL c=", 0
-msg_exec_hdr_bytes db "EXBY 0=", 0
-msg_exec_hdr_read_done db "EXRD n=", 0
-msg_exec_read_hdr_ok db "EXRH ok n=", 0
-msg_exec_read_hdr_fail db "EXRH er n=", 0
-msg_exec_magic db "EXMG 0=", 0
-msg_exec_magic_b1 db " 1=", 0
-msg_exec_b1 db " 1=", 0
-msg_exec_b2 db " 2=", 0
-msg_exec_b3 db " 3=", 0
-msg_exec_is_mz_yes db "EXMZ y", 0
-msg_exec_is_mz_no db "EXMZ n", 0
-msg_exec_is_com_yes db "EXCM y", 0
-msg_exec_is_com_no db "EXCM n", 0
-msg_exec_attr db " a=", 0
-msg_exec_clus db " c=", 0
-msg_exec_size_hi db " sh=", 0
-msg_exec_size_lo db " sl=", 0
-msg_exec_off db " o=", 0
-msg_exec_sec db " s=", 0
-msg_exec_lba_hi db " h=", 0
-msg_exec_lba_lo db " l=", 0
-msg_exec_lba32 db " 32=Y", 0
-msg_exec_mz_hdr db "EXHD cb=", 0
-msg_exec_cp db " cp=", 0
-msg_exec_crlc db " rc=", 0
-msg_exec_cparhdr db " ph=", 0
-msg_exec_minalloc db " mn=", 0
-msg_exec_maxalloc db " mx=", 0
-msg_exec_ss db " ss=", 0
-msg_exec_sp db " sp=", 0
-msg_exec_ip db " ip=", 0
-msg_exec_cs db " cs=", 0
-msg_exec_lfarlc db " rf=", 0
-msg_exec_mz_validate_ok db "EXVL ok", 13, 10, 0
-msg_exec_mz_validate_fail db "EXVL er r=", 0
-msg_exec_invalid_format db "EXIF s=", 0
-msg_exec_reason db " r=", 0
+msg_exec_enter db 0
+msg_exec_open_ok db 0
+msg_exec_open_fail db 0
+msg_exec_lookup_entry db 0
+msg_exec_open_handle db 0
+msg_exec_hdr_read_begin db 0
+msg_exec_hdr_lba db 0
+msg_exec_hdr_bytes db 0
+msg_exec_hdr_read_done db 0
+msg_exec_read_hdr_ok db 0
+msg_exec_read_hdr_fail db 0
+msg_exec_magic db 0
+msg_exec_magic_b1 db 0
+msg_exec_b1 db 0
+msg_exec_b2 db 0
+msg_exec_b3 db 0
+msg_exec_is_mz_yes db 0
+msg_exec_is_mz_no db 0
+msg_exec_is_com_yes db 0
+msg_exec_is_com_no db 0
+msg_exec_attr db 0
+msg_exec_clus db 0
+msg_exec_size_hi db 0
+msg_exec_size_lo db 0
+msg_exec_off db 0
+msg_exec_sec db 0
+msg_exec_lba_hi db 0
+msg_exec_lba_lo db 0
+msg_exec_lba32 db 0
+msg_exec_mz_hdr db 0
+msg_exec_cp db 0
+msg_exec_crlc db 0
+msg_exec_cparhdr db 0
+msg_exec_minalloc db 0
+msg_exec_maxalloc db 0
+msg_exec_ss db 0
+msg_exec_sp db 0
+msg_exec_ip db 0
+msg_exec_cs db 0
+msg_exec_lfarlc db 0
+msg_exec_mz_validate_ok db 0
+msg_exec_mz_validate_fail db 0
+msg_exec_invalid_format db 0
+msg_exec_reason db 0
 msg_exec_ret db "EXRT ax=", 0
-msg_exec_ax db " ax=", 0
-msg_exec_src_int21 db "e", 0
-msg_exec_src_load_mz db "lm", 0
-msg_exec_src_run_mz db "rm", 0
-msg_exec_reason_bad_magic db "bm", 0
-msg_exec_reason_bad_header_paras db "bh", 0
-msg_exec_reason_bad_image_size db "bi", 0
-msg_exec_reason_alloc_fail db "af", 0
-msg_exec_reason_read_fail db "rf", 0
-msg_exec_reason_other db "o", 0
-msg_child_exec_kind db "CHILD_EXEC kind=", 0
-msg_child_exec_kind_com db "COM", 0
-msg_child_exec_kind_mz db "MZ", 0
+msg_exec_ax db 0
+msg_exec_src_int21 db 0
+msg_exec_src_load_mz db 0
+msg_exec_src_run_mz db 0
+msg_exec_reason_bad_magic db 0
+msg_exec_reason_bad_header_paras db 0
+msg_exec_reason_bad_image_size db 0
+msg_exec_reason_alloc_fail db 0
+msg_exec_reason_read_fail db 0
+msg_exec_reason_other db 0
+msg_child_exec_kind db 0
+msg_child_exec_kind_com db 0
+msg_child_exec_kind_mz db 0
 msg_child_prejump db "CHILD_PREJUMP", 0
 msg_child_trace_path db " path=", 0
-msg_child_exec_load db " load=", 0
-msg_child_exec_psp db " psp=", 0
-msg_child_exec_entry db " entry=", 0
-msg_child_exec_stack db " stack=", 0
-msg_child_exec_minalloc db " min=", 0
-msg_child_exec_maxalloc db " max=", 0
-msg_child_ax db " ax=", 0
-msg_child_cx db " cx=", 0
-msg_child_dx db " dx=", 0
-msg_child_ds db " ds=", 0
-msg_child_es db " es=", 0
+msg_child_exec_load db 0
+msg_child_exec_psp db 0
+msg_child_exec_entry db 0
+msg_child_exec_stack db 0
+msg_child_exec_minalloc db 0
+msg_child_exec_maxalloc db 0
+msg_child_ax db 0
+msg_child_cx db 0
+msg_child_dx db 0
+msg_child_ds db 0
+msg_child_es db 0
 msg_child_cf db " cf=", 0
 msg_child_44i db "CH44I ", 0
 msg_child_44o db "CH44O ", 0
@@ -19461,11 +19732,11 @@ msg_child_exit_int20_callsite db "CH20IP ", 0
 msg_child_exit_int22 db " int22=", 0
 msg_child_vec25 db "CH25 int=", 0
 msg_child_vec35 db "I10I ", 0
-msg_child_vec_old db " old=", 0
-msg_child_vec_new db " new=", 0
-msg_child_vec_stored db " stored=", 0
-msg_child_vec_ret db " ret=", 0
-msg_child_vec_ivt db " ivt=", 0
+msg_child_vec_old db 0
+msg_child_vec_new db 0
+msg_child_vec_stored db 0
+msg_child_vec_ret db 0
+msg_child_vec_ivt db 0
 %endif
 msg_fileio_begin db 0
 msg_fileio_serial_pass db 0
