@@ -17369,6 +17369,10 @@ int10_handler:
     iret
 
 .vbe_get_controller:
+    call int10_call_original_vbe
+    jnc .vbe_bios_done
+
+.vbe_get_controller_local:
     mov bx, di
     mov word [es:bx], 0x4556
     mov word [es:bx + 2], 0x4153
@@ -17387,6 +17391,10 @@ int10_handler:
     iret
 
 .vbe_get_mode_info:
+    call int10_call_original_vbe
+    jnc .vbe_bios_done
+
+.vbe_get_mode_info_local:
     mov ax, cx
     and ax, 0x3FFF
     call int10_vbe_find_mode
@@ -17427,6 +17435,19 @@ int10_handler:
     iret
 
 .vbe_set_mode:
+    push bx
+    pop bx
+    call int10_call_original_vbe
+    jc .vbe_set_mode_local
+    mov ax, bx
+    and ax, 0x3FFF
+    mov [cs:current_vbe_mode], ax
+    xor ax, ax
+    mov [cs:current_vbe_bank_a], ax
+    mov [cs:current_vbe_bank_b], ax
+    iret
+
+.vbe_set_mode_local:
     mov ax, bx
     and ax, 0x3FFF
     call int10_vbe_find_mode
@@ -17453,6 +17474,12 @@ int10_handler:
     iret
 
 .vbe_get_current_mode:
+    call int10_call_original_vbe
+    jc .vbe_get_current_mode_local
+    mov [cs:current_vbe_mode], bx
+    iret
+
+.vbe_get_current_mode_local:
     mov bx, [cs:current_vbe_mode]
     or bx, bx
     jnz .vbe_current_ready
@@ -17463,6 +17490,12 @@ int10_handler:
     iret
 
 .vbe_window:
+    cmp bl, 0x00
+    je .vbe_window_set_try_bios
+    cmp bl, 0x01
+    je .vbe_window_get_try_bios
+
+.vbe_window_local:
     mov ax, [cs:current_vbe_mode]
     or ax, ax
     jz .vbe_unsupported
@@ -17471,6 +17504,50 @@ int10_handler:
     cmp bl, 0x01
     je .vbe_get_window
     jmp .vbe_unsupported
+
+.vbe_window_set_try_bios:
+    push bx
+    push dx
+    pop dx
+    pop bx
+    call int10_call_original_vbe
+    jc .vbe_window_set_local
+    cmp bh, 0x00
+    je .vbe_bios_bank_a
+    cmp bh, 0x01
+    je .vbe_bios_bank_b
+    iret
+
+.vbe_window_set_local:
+    pop dx
+    pop bx
+    jmp .vbe_window_local
+
+.vbe_window_get_try_bios:
+    push bx
+    pop bx
+    call int10_call_original_vbe
+    jc .vbe_window_get_local
+    cmp bh, 0x00
+    je .vbe_bios_bank_a
+    cmp bh, 0x01
+    je .vbe_bios_bank_b
+    iret
+
+.vbe_window_get_local:
+    pop bx
+    jmp .vbe_window_local
+
+.vbe_bios_bank_a:
+    mov [cs:current_vbe_bank_a], dx
+    iret
+
+.vbe_bios_bank_b:
+    mov [cs:current_vbe_bank_b], dx
+    iret
+
+.vbe_bios_done:
+    iret
 
 .vbe_set_window:
     cmp bh, 0x00
@@ -17509,6 +17586,40 @@ int10_handler:
 .vbe_unsupported:
     mov ax, 0x014F
     iret
+
+int10_call_original_bios:
+    push ax
+    mov ax, [cs:old_int10_off]
+    or ax, [cs:old_int10_seg]
+    jz .missing
+    push cs
+    pop ax
+    cmp ax, [cs:old_int10_seg]
+    jne .call
+    mov ax, [cs:old_int10_off]
+    cmp ax, int10_handler
+    je .missing
+.call:
+    pop ax
+    pushf
+    call far [cs:old_int10_off]
+    clc
+    ret
+.missing:
+    pop ax
+    stc
+    ret
+
+int10_call_original_vbe:
+    call int10_call_original_bios
+    jc .failed
+    cmp ax, 0x004F
+    jne .failed
+    clc
+    ret
+.failed:
+    stc
+    ret
 
 int10_vbe_find_mode:
     mov si, vbe_mode_table
@@ -19312,8 +19423,8 @@ msg_gfxstar_serial_fail db "[GFXSTAR-SERIAL] FAIL", 0
 msg_mvren_serial_pass db "[MVR] PASS", 13, 10, 0
 msg_mvren_serial_fail db "[MVR] FAIL", 13, 10, 0
 %endif
-msg_rebooting db "rebooting...", 13, 10, 0
-msg_halting   db "halting...", 13, 10, 0
+msg_rebooting db 0
+msg_halting   db 0
 msg_loader_bsod_woof db "WOOF! CiukiOS ran into a problem.", 13, 10, 13, 10, 0
 msg_loader_bsod_body db "The system loader could not continue safely.", 13, 10, 0
 msg_loader_bsod_restart db "Please restart your PC.", 13, 10, 13, 10, 0
@@ -19324,9 +19435,9 @@ msg_shell_returned_fatal db "SHELL.COM returned control to the loader.", 13, 10,
 msg_boot_splash_title db 0
 msg_boot_splash_subtitle db 0
 msg_boot_splash_tagline db 0
-msg_boot_loader_title db "CiukiOS loader v0.6.7", 0
-msg_boot_loading_runtime db "Loading core runtime...", 0
-msg_boot_loading_volume db "Mounting system volume...", 0
+msg_boot_loader_title db 0
+msg_boot_loading_runtime db 0
+msg_boot_loading_volume db 0
 msg_boot_loading_shell db 0
 msg_boot_loading_services db 0
 msg_boot_loading_ready db 0
@@ -19348,10 +19459,10 @@ msg_mouse_y db "y=0x", 0
 msg_keytest_prompt db "press a key...", 0
 msg_keytest_ax db "key AX=0x", 0
 %endif
-gfx_text_ciukios db "CIUKIOS", 0
-gfx_text_demo db "GFX DEMO", 0
-gfx_text_vdi db "VDI BASE", 0
-gfx_text_timer db "KEY EXIT", 0
+gfx_text_ciukios db 0
+gfx_text_demo db 0
+gfx_text_vdi db 0
+gfx_text_timer db 0
 str_ext_com db ".COM", 0
 str_ext_exe db ".EXE", 0
 
