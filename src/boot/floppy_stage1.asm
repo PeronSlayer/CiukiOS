@@ -17470,6 +17470,7 @@ int10_handler:
     xor ah, ah
     mov [es:0x044A], ax
     pop es
+    call int10_vbe_clear_window
     mov ax, 0x004F
     iret
 
@@ -17506,10 +17507,6 @@ int10_handler:
     jmp .vbe_unsupported
 
 .vbe_window_set_try_bios:
-    push bx
-    push dx
-    pop dx
-    pop bx
     call int10_call_original_vbe
     jc .vbe_window_set_local
     cmp bh, 0x00
@@ -17519,13 +17516,9 @@ int10_handler:
     iret
 
 .vbe_window_set_local:
-    pop dx
-    pop bx
     jmp .vbe_window_local
 
 .vbe_window_get_try_bios:
-    push bx
-    pop bx
     call int10_call_original_vbe
     jc .vbe_window_get_local
     cmp bh, 0x00
@@ -17535,7 +17528,6 @@ int10_handler:
     iret
 
 .vbe_window_get_local:
-    pop bx
     jmp .vbe_window_local
 
 .vbe_bios_bank_a:
@@ -17558,11 +17550,13 @@ int10_handler:
 
 .vbe_set_bank_a:
     mov [cs:current_vbe_bank_a], dx
+    call int10_vbe_clear_window
     mov ax, 0x004F
     iret
 
 .vbe_set_bank_b:
     mov [cs:current_vbe_bank_b], dx
+    call int10_vbe_clear_window
     mov ax, 0x004F
     iret
 
@@ -17619,6 +17613,24 @@ int10_call_original_vbe:
     ret
 .failed:
     stc
+    ret
+
+int10_vbe_clear_window:
+    push ax
+    push cx
+    push di
+    push es
+    cld
+    mov ax, 0xA000
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    mov cx, 0x8000
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
     ret
 
 int10_vbe_find_mode:
