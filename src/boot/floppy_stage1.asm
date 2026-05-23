@@ -491,8 +491,14 @@ install_int21_vector:
     mov [es:bx + 2], ax
     mov byte [current_video_mode], 0x03
 
-    ; Keep BIOS keyboard services untouched on real hardware.
-    ; Some legacy machines (e.g. ThinkPad T23) are sensitive to INT16 hooks.
+    mov bx, 0x1A * 4
+    mov ax, [es:bx]
+    mov [old_int1a_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int1a_seg], ax
+    mov word [es:bx], int1a_handler
+    mov ax, cs
+    mov [es:bx + 2], ax
 
 %if FAT_TYPE == 16
     ; The desktop runtime VGA driver can use the IBM PS/2 BIOS mouse API directly.
@@ -17649,6 +17655,44 @@ int10_vbe_find_mode:
     stc
     ret
 
+int1a_handler:
+    cmp ah, 0x00
+    je .get_ticks
+    cmp ah, 0x01
+    je .set_ticks
+    jmp far [cs:old_int1a_off]
+
+.get_ticks:
+    push bp
+    mov bp, sp
+    push es
+    mov ax, 0x0040
+    mov es, ax
+    mov dx, [es:0x006C]
+    mov cx, [es:0x006E]
+    mov al, [es:0x0070]
+    mov byte [es:0x0070], 0
+    xor ah, ah
+    and word [ss:bp + 6], 0xFFFE
+    pop es
+    pop bp
+    iret
+
+.set_ticks:
+    push bp
+    mov bp, sp
+    push es
+    mov ax, 0x0040
+    mov es, ax
+    mov [es:0x006C], dx
+    mov [es:0x006E], cx
+    mov byte [es:0x0070], 0
+    xor ax, ax
+    and word [ss:bp + 6], 0xFFFE
+    pop es
+    pop bp
+    iret
+
 %if FAT_TYPE == 16
 int15_handler:
     push bp
@@ -17947,6 +17991,9 @@ int16_handler:
     je .read_key
     cmp ah, 0x10
     je .read_key
+    cmp ah, 0x01
+    je .status
+    cmp ah, 0x11
     je .status
     cmp ah, 0x02
     je .shift_status
@@ -18901,6 +18948,8 @@ xms_move_dst_hi dw 0
 xms_move_chunk dw 0
 xms_87_gdt times 48 db 0
 %endif
+old_int1a_off dw 0
+old_int1a_seg dw 0
 old_int10_off dw 0
 old_int10_seg dw 0
 %if FAT_TYPE == 16
@@ -19418,19 +19467,19 @@ msg_child_vec_stored db " stored=", 0
 msg_child_vec_ret db " ret=", 0
 msg_child_vec_ivt db " ivt=", 0
 %endif
-msg_fileio_begin db "[FILEIO]", 13, 10, 0
-msg_fileio_serial_pass db "[FILEIO-SERIAL] PASS", 13, 10, 0
-msg_fileio_serial_fail db "[FILEIO-SERIAL] FAIL", 13, 10, 0
-msg_find_begin db "[FIND]", 13, 10, 0
-msg_find_serial_pass db "[FIND-SERIAL] PASS", 13, 10, 0
-msg_find_serial_fail db "[FIND-SERIAL] FAIL", 13, 10, 0
-msg_gfx_begin db "[GFX] run", 13, 10, 0
-msg_gfx_done db "[GFX] done", 13, 10, 0
-msg_gfx_serial_pass db "[GFX-SERIAL] PASS", 13, 10, 0
-msg_gfxrect_serial_pass db "[GFXRECT-SERIAL] PASS", 0
-msg_gfxrect_serial_fail db "[GFXRECT-SERIAL] FAIL", 0
-msg_gfxstar_serial_pass db "[GFXSTAR-SERIAL] PASS", 0
-msg_gfxstar_serial_fail db "[GFXSTAR-SERIAL] FAIL", 0
+msg_fileio_begin db 0
+msg_fileio_serial_pass db 0
+msg_fileio_serial_fail db 0
+msg_find_begin db 0
+msg_find_serial_pass db 0
+msg_find_serial_fail db 0
+msg_gfx_begin db 0
+msg_gfx_done db 0
+msg_gfx_serial_pass db 0
+msg_gfxrect_serial_pass db 0
+msg_gfxrect_serial_fail db 0
+msg_gfxstar_serial_pass db 0
+msg_gfxstar_serial_fail db 0
 %if STAGE1_SELFTEST_AUTORUN
 msg_mvren_serial_pass db "[MVR] PASS", 13, 10, 0
 msg_mvren_serial_fail db "[MVR] FAIL", 13, 10, 0
