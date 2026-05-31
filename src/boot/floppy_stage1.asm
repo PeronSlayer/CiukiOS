@@ -6032,6 +6032,7 @@ int21_create:
     push dx
     push ds
 
+
     call int21_normalize_leading_drive_designator
 
     mov byte [cs:int21_path_stage_marker], 1
@@ -6083,8 +6084,14 @@ int21_create:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_next_cluster]
+%if FAT_TYPE == 16
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .io_error
 
     mov di, [cs:tmp_cluster]
@@ -6098,8 +6105,14 @@ int21_create:
     mov word [es:di - 11 + 30], 0
 
     mov ax, [cs:tmp_next_cluster]
+%if FAT_TYPE == 16
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
     xor bx, bx
     call write_sector_lba
+%endif
     jc .io_error
 
     mov word [cs:search_found_cluster], 0
@@ -6309,6 +6322,8 @@ int21_assign_selected_file_handle:
     mov [cs:file_handle_size_hi], ax
     mov ax, [cs:search_found_root_lba]
     mov [cs:file_handle_root_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:file_handle_root_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:file_handle_root_off], ax
 
@@ -6338,6 +6353,8 @@ int21_assign_selected_file_handle:
     mov [cs:file_handle2_size_hi], ax
     mov ax, [cs:search_found_root_lba]
     mov [cs:file_handle2_root_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:file_handle2_root_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:file_handle2_root_off], ax
 
@@ -6367,6 +6384,8 @@ int21_assign_selected_file_handle:
     mov [cs:file_handle3_size_hi], ax
     mov ax, [cs:search_found_root_lba]
     mov [cs:file_handle3_root_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:file_handle3_root_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:file_handle3_root_off], ax
 
@@ -6395,6 +6414,8 @@ int21_assign_selected_file_handle:
     mov [cs:file_handle4_size_hi], ax
     mov ax, [cs:search_found_root_lba]
     mov [cs:file_handle4_root_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:file_handle4_root_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:file_handle4_root_off], ax
 
@@ -6422,6 +6443,8 @@ int21_assign_selected_file_handle:
     mov [cs:file_handle5_size_hi], ax
     mov ax, [cs:search_found_root_lba]
     mov [cs:file_handle5_root_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:file_handle5_root_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:file_handle5_root_off], ax
 
@@ -6449,6 +6472,8 @@ int21_assign_selected_file_handle:
     mov [cs:file_handle6_size_hi], ax
     mov ax, [cs:search_found_root_lba]
     mov [cs:file_handle6_root_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:file_handle6_root_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:file_handle6_root_off], ax
 
@@ -6476,6 +6501,8 @@ int21_assign_selected_file_handle:
     mov [cs:file_handle7_size_hi], ax
     mov ax, [cs:search_found_root_lba]
     mov [cs:file_handle7_root_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:file_handle7_root_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:file_handle7_root_off], ax
 
@@ -6503,6 +6530,8 @@ int21_assign_selected_file_handle:
     mov [cs:file_handle8_size_hi], ax
     mov ax, [cs:search_found_root_lba]
     mov [cs:file_handle8_root_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:file_handle8_root_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:file_handle8_root_off], ax
 
@@ -7745,16 +7774,28 @@ int21_delete:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [search_found_root_lba]
+%if FAT_TYPE == 16
+    mov dx, [search_found_root_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .io_error
 
     mov di, [search_found_root_off]
     mov byte [es:di], 0xE5
 
     mov ax, [search_found_root_lba]
+%if FAT_TYPE == 16
+    mov dx, [search_found_root_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
     xor bx, bx
     call write_sector_lba
+%endif
     jc .io_error
 
     xor ax, ax
@@ -7885,11 +7926,19 @@ int21_mkdir:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_next_cluster]
+%if FAT_TYPE == 16
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .mkdir_io_err
 
     mov di, [cs:tmp_cluster]
+    mov ax, cs
+    mov ds, ax
     mov si, path_fat_name
     mov cx, 11
     rep movsb
@@ -7909,8 +7958,14 @@ int21_mkdir:
     mov word [es:di - 11 + 30], 0
 
     mov ax, [cs:tmp_next_cluster]
+%if FAT_TYPE == 16
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
     xor bx, bx
     call write_sector_lba
+%endif
     jc .mkdir_io_err
 
     xor ax, ax
@@ -7968,16 +8023,28 @@ int21_rmdir:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:search_found_root_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .rmdir_io_err
 
     mov di, [cs:search_found_root_off]
     mov byte [es:di], 0xE5
 
     mov ax, [cs:search_found_root_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
     xor bx, bx
     call write_sector_lba
+%endif
     jc .rmdir_io_err
 
     xor ax, ax
@@ -8035,6 +8102,8 @@ int21_rename:
 
     mov ax, [cs:search_found_root_lba]
     mov [cs:tmp_rename_old_lba], ax
+    mov ax, [cs:search_found_root_lba_hi]
+    mov [cs:tmp_rename_old_lba_hi], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:tmp_rename_old_off], ax
 
@@ -8070,8 +8139,14 @@ int21_rename:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_rename_old_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_rename_old_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .rename_io_err
 
     mov ax, cs
@@ -8082,8 +8157,14 @@ int21_rename:
     rep movsb
 
     mov ax, [cs:tmp_rename_old_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_rename_old_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
     xor bx, bx
     call write_sector_lba
+%endif
     jc .rename_io_err
 
     xor ax, ax
@@ -8103,8 +8184,14 @@ int21_rename:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_rename_old_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_rename_old_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .rename_io_err
 
     push ds
@@ -8133,8 +8220,14 @@ int21_rename:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_next_cluster]
+%if FAT_TYPE == 16
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .rename_io_err
 
     push ds
@@ -8147,23 +8240,41 @@ int21_rename:
     pop ds
 
     mov ax, [cs:tmp_next_cluster]
+%if FAT_TYPE == 16
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
     xor bx, bx
     call write_sector_lba
+%endif
     jc .rename_io_err
 
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_rename_old_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_rename_old_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .rename_io_err
 
     mov di, [cs:tmp_rename_old_off]
     mov byte [es:di], 0xE5
 
     mov ax, [cs:tmp_rename_old_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_rename_old_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
     xor bx, bx
     call write_sector_lba
+%endif
     jc .rename_io_err
 
     xor ax, ax
@@ -8478,6 +8589,10 @@ int21_swap_file_handles:
     xchg ax, [cs:file_handle2_root_lba]
     mov [cs:file_handle_root_lba], ax
 
+    mov ax, [cs:file_handle_root_lba_hi]
+    xchg ax, [cs:file_handle2_root_lba_hi]
+    mov [cs:file_handle_root_lba_hi], ax
+
     mov ax, [cs:file_handle_root_off]
     xchg ax, [cs:file_handle2_root_off]
     mov [cs:file_handle_root_off], ax
@@ -8525,6 +8640,10 @@ int21_swap_file_handles3:
     xchg ax, [cs:file_handle3_root_lba]
     mov [cs:file_handle_root_lba], ax
 
+    mov ax, [cs:file_handle_root_lba_hi]
+    xchg ax, [cs:file_handle3_root_lba_hi]
+    mov [cs:file_handle_root_lba_hi], ax
+
     mov ax, [cs:file_handle_root_off]
     xchg ax, [cs:file_handle3_root_off]
     mov [cs:file_handle_root_off], ax
@@ -8571,6 +8690,10 @@ int21_swap_file_handles4:
     xchg ax, [cs:file_handle4_root_lba]
     mov [cs:file_handle_root_lba], ax
 
+    mov ax, [cs:file_handle_root_lba_hi]
+    xchg ax, [cs:file_handle4_root_lba_hi]
+    mov [cs:file_handle_root_lba_hi], ax
+
     mov ax, [cs:file_handle_root_off]
     xchg ax, [cs:file_handle4_root_off]
     mov [cs:file_handle_root_off], ax
@@ -8614,6 +8737,10 @@ int21_swap_file_handles5:
     mov ax, [cs:file_handle_root_lba]
     xchg ax, [cs:file_handle5_root_lba]
     mov [cs:file_handle_root_lba], ax
+
+    mov ax, [cs:file_handle_root_lba_hi]
+    xchg ax, [cs:file_handle5_root_lba_hi]
+    mov [cs:file_handle_root_lba_hi], ax
 
     mov ax, [cs:file_handle_root_off]
     xchg ax, [cs:file_handle5_root_off]
@@ -8660,6 +8787,10 @@ int21_swap_file_handles6:
     xchg ax, [cs:file_handle6_root_lba]
     mov [cs:file_handle_root_lba], ax
 
+    mov ax, [cs:file_handle_root_lba_hi]
+    xchg ax, [cs:file_handle6_root_lba_hi]
+    mov [cs:file_handle_root_lba_hi], ax
+
     mov ax, [cs:file_handle_root_off]
     xchg ax, [cs:file_handle6_root_off]
     mov [cs:file_handle_root_off], ax
@@ -8705,6 +8836,10 @@ int21_swap_file_handles7:
     xchg ax, [cs:file_handle7_root_lba]
     mov [cs:file_handle_root_lba], ax
 
+    mov ax, [cs:file_handle_root_lba_hi]
+    xchg ax, [cs:file_handle7_root_lba_hi]
+    mov [cs:file_handle_root_lba_hi], ax
+
     mov ax, [cs:file_handle_root_off]
     xchg ax, [cs:file_handle7_root_off]
     mov [cs:file_handle_root_off], ax
@@ -8749,6 +8884,10 @@ int21_swap_file_handles8:
     mov ax, [cs:file_handle_root_lba]
     xchg ax, [cs:file_handle8_root_lba]
     mov [cs:file_handle_root_lba], ax
+
+    mov ax, [cs:file_handle_root_lba_hi]
+    xchg ax, [cs:file_handle8_root_lba_hi]
+    mov [cs:file_handle_root_lba_hi], ax
 
     mov ax, [cs:file_handle_root_off]
     xchg ax, [cs:file_handle8_root_off]
@@ -10399,8 +10538,14 @@ int21_update_root_entry_size:
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:file_handle_root_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:file_handle_root_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+%else
     xor bx, bx
     call read_sector_lba
+%endif
     jc .fail
 
     mov di, [cs:file_handle_root_off]
@@ -10413,8 +10558,14 @@ int21_update_root_entry_size:
     mov [es:di + 2], ax
 
     mov ax, [cs:file_handle_root_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:file_handle_root_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
     xor bx, bx
     call write_sector_lba
+%endif
     jc .fail
 
     clc
@@ -10927,6 +11078,7 @@ int21_lookup_in_dir:
 
     mov [cs:search_name_ptr], si
     mov [cs:tmp_lookup_dir], ax
+    mov word [cs:search_found_root_lba_hi], 0
 
     cmp ax, 0
     jne .scan_cluster
@@ -11076,6 +11228,7 @@ int21_find_free_dir_entry:
     push es
 
     mov [cs:tmp_lookup_dir], ax
+    mov word [cs:search_found_root_lba_hi], 0
     cmp ax, 0
     jne .scan_cluster
 
@@ -11125,6 +11278,7 @@ int21_find_free_dir_entry:
 
     call int21_cluster_to_lba
     mov [cs:tmp_lba], ax
+    mov [cs:tmp_lba_hi], dx
     xor dx, dx
 
 .sector_loop:
@@ -11133,10 +11287,21 @@ int21_find_free_dir_entry:
 
     mov ax, DOS_META_BUF_SEG
     mov es, ax
+%if FAT_TYPE == 16
+    push dx
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+    mov dx, [cs:tmp_lba_hi]
+    adc dx, 0
+    xor bx, bx
+    call read_sector_lba32
+    pop dx
+%else
     mov ax, [cs:tmp_lba]
     add ax, dx
     xor bx, bx
     call read_sector_lba
+%endif
     jc .io_fail
 
     xor di, di
@@ -11156,6 +11321,9 @@ int21_find_free_dir_entry:
     mov ax, [cs:tmp_lba]
     add ax, dx
     mov [cs:search_found_root_lba], ax
+    mov ax, [cs:tmp_lba_hi]
+    adc ax, 0
+    mov [cs:search_found_root_lba_hi], ax
     mov [cs:search_found_root_off], di
     clc
     jmp .done
@@ -12843,6 +13011,7 @@ load_root_file_first_sector:
     mov word [search_found_size_lo], 0
     mov word [search_found_size_hi], 0
     mov word [search_found_root_lba], 0
+    mov word [search_found_root_lba_hi], 0
     mov word [search_found_root_off], 0
     mov dx, FAT_ROOT_START_LBA
 
@@ -15840,6 +16009,7 @@ serial_putc:
     pop dx
     pop ax
     ret
+
 
 ; Stage2 Extended Services Integration
 %if FAT_TYPE == 12
@@ -19297,6 +19467,7 @@ file_handle_mode db 0
 tmp_open_mode db 0
 file_handle_start_cluster dw 0
 file_handle_root_lba dw 0
+file_handle_root_lba_hi dw 0
 file_handle_root_off dw 0
 file_handle_cluster_count dw 0
 file_handle_size_lo dw 0
@@ -19309,6 +19480,7 @@ file_handle2_pos_hi dw 0
 file_handle2_mode db 0
 file_handle2_start_cluster dw 0
 file_handle2_root_lba dw 0
+file_handle2_root_lba_hi dw 0
 file_handle2_root_off dw 0
 file_handle2_cluster_count dw 0
 file_handle2_size_lo dw 0
@@ -19321,6 +19493,7 @@ file_handle3_pos_hi dw 0
 file_handle3_mode db 0
 file_handle3_start_cluster dw 0
 file_handle3_root_lba dw 0
+file_handle3_root_lba_hi dw 0
 file_handle3_root_off dw 0
 file_handle3_cluster_count dw 0
 file_handle3_size_lo dw 0
@@ -19332,6 +19505,7 @@ file_handle4_pos_hi dw 0
 file_handle4_mode db 0
 file_handle4_start_cluster dw 0
 file_handle4_root_lba dw 0
+file_handle4_root_lba_hi dw 0
 file_handle4_root_off dw 0
 file_handle4_cluster_count dw 0
 file_handle4_size_lo dw 0
@@ -19342,6 +19516,7 @@ file_handle5_pos_hi dw 0
 file_handle5_mode db 0
 file_handle5_start_cluster dw 0
 file_handle5_root_lba dw 0
+file_handle5_root_lba_hi dw 0
 file_handle5_root_off dw 0
 file_handle5_cluster_count dw 0
 file_handle5_size_lo dw 0
@@ -19352,6 +19527,7 @@ file_handle6_pos_hi dw 0
 file_handle6_mode db 0
 file_handle6_start_cluster dw 0
 file_handle6_root_lba dw 0
+file_handle6_root_lba_hi dw 0
 file_handle6_root_off dw 0
 file_handle6_cluster_count dw 0
 file_handle6_size_lo dw 0
@@ -19362,6 +19538,7 @@ file_handle7_pos_hi dw 0
 file_handle7_mode db 0
 file_handle7_start_cluster dw 0
 file_handle7_root_lba dw 0
+file_handle7_root_lba_hi dw 0
 file_handle7_root_off dw 0
 file_handle7_cluster_count dw 0
 file_handle7_size_lo dw 0
@@ -19372,6 +19549,7 @@ file_handle8_pos_hi dw 0
 file_handle8_mode db 0
 file_handle8_start_cluster dw 0
 file_handle8_root_lba dw 0
+file_handle8_root_lba_hi dw 0
 file_handle8_root_off dw 0
 file_handle8_cluster_count dw 0
 file_handle8_size_lo dw 0
@@ -19437,6 +19615,7 @@ tmp_lookup_dir dw 0
 tmp_rename_old_parent dw 0
 tmp_rename_new_parent dw 0
 tmp_rename_old_lba dw 0
+tmp_rename_old_lba_hi dw 0
 tmp_rename_old_off dw 0
 dos_mem_init db 0
 dos_mem_alloc_seg dw 0
@@ -19495,6 +19674,7 @@ search_found_cluster dw 0
 search_found_size_lo dw 0
 search_found_size_hi dw 0
 search_found_root_lba dw 0
+search_found_root_lba_hi dw 0
 search_found_root_off dw 0
 search_found_attr db 0
 search_found_name times 11 db 0

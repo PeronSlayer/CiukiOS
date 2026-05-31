@@ -465,6 +465,8 @@ ROOT_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+>+"
 APPS_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+>+"
 DOSNAV_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+D+O+S+N+A+V+>+"
 WOLF3D_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+W+O+L+F+3+D+>+"
+SUBHI_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+S+U+B+H+I+>+"
+DIR_COPYHI_PATTERN='C+O+P+Y+H+I+'
 BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+6+[.]+7+'
 HELP_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+C+O+M+M+A+N+D+S+[:]+'
 HELP_SYSTEM_PATTERN='S+Y+S+T+E+M+[:]+'
@@ -808,6 +810,24 @@ else
   send_and_wait_for_pattern_and_prompt 'cd \NOPE' "$CD_ERROR_PATTERN" "$APPS_PROMPT_PATTERN" "CD_INVALID_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'mkdir SMDIR1' "$MKDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "MKDIR_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'md SMDIR2' "$MKDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "MD_OK" "$COMMAND_TIMEOUT_SEC"
+  # High-cluster FAT16 subdirectory write regression. A freshly md'd subdir on
+  # the large mostly-empty full image allocates a HIGH free cluster whose data
+  # LBA exceeds 65535, so creating a child entry there and writing back its
+  # size/start-cluster exercise the 32-bit-LBA-safe directory-entry write paths
+  # (read_sector_lba32/write_sector_lba32). Before the fix the copy reported
+  # "File copied" but the child entry landed in the wrong physical sector (high
+  # LBA word truncated to 0), so DIR could not find it and TYPE saw size 0.
+  # The TYPE readback proves both placement AND size/cluster writeback are 32-bit
+  # correct. TYPETEST.TXT is still present here (it is deleted further below).
+  send_and_wait_for_pattern_and_prompt 'md SUBHI' "$MKDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "MKDIR_SUBHI_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'copy \APPS\TYPETEST.TXT SUBHI\COPYHI.TXT' "$COPY_OK_PATTERN" "$APPS_PROMPT_PATTERN" "COPY_INTO_SUBHI_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd SUBHI' "$SUBHI_PROMPT_PATTERN" "CD_SUBHI_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_prompt_and_absence 'dir' "$DIR_COPYHI_PATTERN" "$SUBHI_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_SUBHI_FINDABLE_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'type COPYHI.TXT' "$TYPE_TOKEN_PATTERN" "$SUBHI_PROMPT_PATTERN" "TYPE_SUBHI_READBACK_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_prompt 'cd ..' "$APPS_PROMPT_PATTERN" "CD_SUBHI_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'type SUBHI\COPYHI.TXT' "$TYPE_TOKEN_PATTERN" "$APPS_PROMPT_PATTERN" "TYPE_SUBHI_SUBPATH_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'del SUBHI\COPYHI.TXT' "$DEL_OK_PATTERN" "$APPS_PROMPT_PATTERN" "DEL_SUBHI_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'rmdir SUBHI' "$RMDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "RMDIR_SUBHI_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'rmdir SRDIR1' "$RMDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "RMDIR_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'rd SRDIR2' "$RMDIR_OK_PATTERN" "$APPS_PROMPT_PATTERN" "RD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'type \APPS\TYPETEST.TXT' "$TYPE_TOKEN_PATTERN" "$APPS_PROMPT_PATTERN" "TYPE_OK" "$COMMAND_TIMEOUT_SEC"
