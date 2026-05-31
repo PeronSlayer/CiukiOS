@@ -742,6 +742,13 @@ else
   send_and_wait_for_prompt 'cd..' "$ROOT_PROMPT_PATTERN" "CD_COMPACT_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \APPS' "$APPS_PROMPT_PATTERN" "CD_APPS_RETURN_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd.' "$APPS_PROMPT_PATTERN" "CD_COMPACT_DOT_OK" "$COMMAND_TIMEOUT_SEC"
+  # Path-resolution regressions for the external-exec lookup from \APPS:
+  #   - absolute path execution with explicit extension
+  #   - absolute path execution relying on the .COM/.EXE extension search
+  # Both rely only on \APPS\MZDEMO.EXE, which ships in the full image, so they do
+  # not depend on any earlier runtime copy fixture.
+  send_and_wait_for_pattern_and_prompt 'run \APPS\MZDEMO.EXE' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "RUN_ABS_PATH_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'run \APPS\MZDEMO' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "RUN_ABS_PATH_NOEXT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_prompt_and_absence 'dir ..' "$DIR_ROOT_PATTERN" "$APPS_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "PWD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'path' "$PATH_PATTERN" "$APPS_PROMPT_PATTERN" "PATH_OK" "$COMMAND_TIMEOUT_SEC"
