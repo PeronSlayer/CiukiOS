@@ -3225,6 +3225,11 @@ int21_exec_run_mz:
     mov ax, cs
     mov ds, ax
 %if TRACE_CHILD_INT21 != 0
+    call child_trace_should_log_exit
+    jnc .skip_child_mz_after_call
+    mov si, msg_child_mzret
+    call print_string_serial
+.skip_child_mz_after_call:
     call child_trace_finalize
 %endif
     ; restore SS:SP from appropriate slot
@@ -19717,20 +19722,21 @@ msg_child_cf db " cf=", 0
 msg_child_44i db "CH44I ", 0
 msg_child_44o db "CH44O ", 0
 msg_child_4a db "CH4A", 0
-msg_child_4a_es db " es=", 0
-msg_child_4a_req db " rq=", 0
-msg_child_4a_old db " old=", 0
-msg_child_4a_bxout db " bo=", 0
+msg_child_4a_es db "s=", 0
+msg_child_4a_req db "q=", 0
+msg_child_4a_old db "o=", 0
+msg_child_4a_bxout db "b=", 0
 msg_child_40 db "CH40", 0
 msg_child_40r db "CH40R", 0
 msg_child_exit db "CHILD_EXIT", 0
 msg_child_exit_reason db " reason=", 0
 msg_child_exit_reason_retf db " reason=RETF", 0
 msg_child_exit_code db " code=", 0
+msg_child_mzret db "CHMZR", 0
 msg_child_exit_callsite db " CH4CIP ", 0
 msg_child_exit_int20_callsite db "CH20IP ", 0
-msg_child_exit_int22 db " int22=", 0
-msg_child_vec25 db "CH25 int=", 0
+msg_child_exit_int22 db 0
+msg_child_vec25 db "CH25", 0
 msg_child_vec35 db "I10I ", 0
 msg_child_vec_old db 0
 msg_child_vec_new db 0

@@ -15,6 +15,7 @@ ISO_ROOT="build/full/cd-iso-root"
 ISO_IMG="build/full/ciukios-full-cd.iso"
 DIRECT_ISO_IMG="build/full/ciukios-full-cd-direct.iso"
 ISOLINUX_FALLBACK_IMG="build/full/ciukios-full-cd-isolinux.iso"
+OMIT_SYSTEM_SHELL="${CIUKIOS_FULL_CD_OMIT_SYSTEM_SHELL:-0}"
 ISOLINUX_BIN="${ISOLINUX_BIN:-/usr/lib/syslinux/bios/isolinux.bin}"
 MEMDISK_BIN="${MEMDISK_BIN:-/usr/lib/syslinux/bios/memdisk}"
 LDLINUX_C32="${LDLINUX_C32:-/usr/lib/syslinux/bios/ldlinux.c32}"
@@ -23,12 +24,14 @@ mkdir -p build/full/obj
 
 echo "[build-full-cd] building CD partition image"
 echo "[build-full-cd] hardware profile: stage2 autorun is opt-in (set CIUKIOS_STAGE2_AUTORUN=1 to enable)"
+echo "[build-full-cd] shell profile: SHELL.COM boot default (set CIUKIOS_STAGE1_BOOT_EXTERNAL_SHELL=0 to force Stage1 fallback)"
 export CIUKIOS_SETUP_RAW_HDD_INSTALL="${CIUKIOS_SETUP_RAW_HDD_INSTALL:-1}"
 export CIUKIOS_SETUP_RAW_HDD_DESTRUCTIVE="${CIUKIOS_SETUP_RAW_HDD_DESTRUCTIVE:-1}"
 export CIUKIOS_SETUP_LIVE_CD_MODE="${CIUKIOS_SETUP_LIVE_CD_MODE:-1}"
 CIUKIOS_FULL_IMG="$PART_IMG" \
 CIUKIOS_FULL_BOOT_LBA_OFFSET="$PARTITION_LBA" \
 CIUKIOS_FULL_FAT_LBA_OFFSET="$PARTITION_LBA" \
+CIUKIOS_STAGE1_BOOT_EXTERNAL_SHELL="${CIUKIOS_STAGE1_BOOT_EXTERNAL_SHELL:-1}" \
 CIUKIOS_STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-0}" \
 CIUKIOS_HARDWARE_VALIDATION_SCREEN="${CIUKIOS_HARDWARE_VALIDATION_SCREEN:-0}" \
 CIUKIOS_DOS_DEFAULT_DRIVE_INDEX="${CIUKIOS_DOS_DEFAULT_DRIVE_INDEX:-3}" \
@@ -36,6 +39,18 @@ CIUKIOS_ENABLE_PS2_MOUSE_INIT="${CIUKIOS_ENABLE_PS2_MOUSE_INIT:-0}" \
 MTOOLS_TIMEOUT_SEC="${MTOOLS_TIMEOUT_SEC:-5}" \
 MTOOLS_KILL_AFTER_SEC="${MTOOLS_KILL_AFTER_SEC:-1}" \
 bash scripts/build_full.sh
+
+if (( OMIT_SYSTEM_SHELL )); then
+	echo "[build-full-cd] test-only: removing ::SYSTEM/SHELL.COM from partition image"
+	mdel -i "$PART_IMG" ::SYSTEM/SHELL.COM >/dev/null 2>&1 || {
+		echo "[build-full-cd] ERROR: could not remove ::SYSTEM/SHELL.COM" >&2
+		exit 1
+	}
+	if mdir -i "$PART_IMG" ::SYSTEM 2>/dev/null | grep -Eq '^SHELL[[:space:]]+COM[[:space:]]'; then
+		echo "[build-full-cd] ERROR: ::SYSTEM/SHELL.COM still present after test-only removal" >&2
+		exit 1
+	fi
+	fi
 
 echo "[build-full-cd] assembling CD MBR"
 nasm -f bin src/boot/full_cd_mbr.asm \

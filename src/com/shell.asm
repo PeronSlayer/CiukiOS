@@ -524,9 +524,9 @@ main_loop:
     mov byte [di], 0
     cmp di, dst_path
     je .rename_usage
+.rename_open:
     push cs
     pop ds
-    push cs
     mov dx, src_path
     mov ax, 0x3D00
     int 0x21
@@ -620,7 +620,10 @@ main_loop:
 .do_del:
     mov cx, [echo_len]
     jcxz .del_usage
-    mov dx, [echo_ptr]
+    mov si, [echo_ptr]
+    call copy_path_token_to_src
+    call canonicalize_src_path
+    mov dx, src_path
     mov ah, 0x41
     int 0x21
     jc .del_error
@@ -639,7 +642,10 @@ main_loop:
 .do_type:
     mov cx, [echo_len]
     jcxz .type_usage
-    mov dx, [echo_ptr]
+    mov si, [echo_ptr]
+    call copy_path_token_to_src
+    call canonicalize_src_path
+    mov dx, src_path
     mov ax, 0x3D00
     int 0x21
     jc .type_error
@@ -722,48 +728,20 @@ main_loop:
     jmp main_loop
 .copy_args:
     mov si, [echo_ptr]
-    mov di, src_path
-.copy_src_parse:
-    mov al, [si]
-    cmp al, 0
-    je .copy_src_end
-    cmp al, ' '
-    je .copy_src_end
-    cmp di, src_path + 63
-    jae .copy_src_adv
-    mov [di], al
-    inc di
-.copy_src_adv:
-    inc si
-    jmp .copy_src_parse
-.copy_src_end:
-    mov byte [di], 0
-    cmp di, src_path
+    call copy_path_token_to_src
+    cmp byte [src_path], 0
     je .copy_t_usage
+    call canonicalize_src_path
 .copy_skip_sp:
     cmp byte [si], ' '
     jne .copy_dst_start
     inc si
     jmp .copy_skip_sp
 .copy_dst_start:
-    mov di, dst_path
-.copy_dst_parse:
-    mov al, [si]
-    cmp al, 0
-    je .copy_dst_end
-    cmp al, ' '
-    je .copy_dst_end
-    cmp di, dst_path + 63
-    jae .copy_dst_adv
-    mov [di], al
-    inc di
-.copy_dst_adv:
-    inc si
-    jmp .copy_dst_parse
-.copy_dst_end:
-    mov byte [di], 0
-    cmp di, dst_path
+    call copy_path_token_to_dst
+    cmp byte [dst_path], 0
     je .copy_t_usage
+    call canonicalize_dst_path
     jmp .copy_open
 .copy_t_usage:
     jmp .copy_usage
@@ -1117,7 +1095,6 @@ parse_src_path_seconds:
     jz .fail
     clc
     jmp .done
-
 .fail:
     stc
 
@@ -1604,6 +1581,33 @@ copy_path_token_to_src:
     pop ax
     ret
 
+copy_path_token_to_dst:
+    push ax
+    push di
+    mov di, dst_path
+.copy:
+    mov al, [si]
+    cmp al, 0
+    je .done
+    cmp al, ' '
+    je .done
+    cmp al, '/'
+    jne .store
+    mov al, '\'
+.store:
+    cmp di, dst_path + 63
+    jae .advance
+    mov [di], al
+    inc di
+.advance:
+    inc si
+    jmp .copy
+.done:
+    mov byte [di], 0
+    pop di
+    pop ax
+    ret
+
 resolve_src_path_to_dst:
     push ax
     push bx
@@ -1732,6 +1736,105 @@ resolve_src_path_to_dst:
     pop dx
     pop bx
     pop ax
+    ret
+
+canonicalize_src_path:
+    push si
+    push di
+    call resolve_src_path_to_dst
+    mov si, dst_path
+    mov di, src_path
+    call copy_z_to_di
+    pop di
+    pop si
+    ret
+
+canonicalize_dst_path:
+    push si
+    push di
+    mov si, src_path
+    mov di, exec_restore_path
+    call copy_z_to_di
+    mov si, dst_path
+    mov di, src_path
+    call copy_z_to_di
+    call resolve_src_path_to_dst
+    mov si, exec_restore_path
+    mov di, src_path
+    call copy_z_to_di
+    pop di
+    pop si
+    ret
+
+canonicalize_rename_dst_path:
+    push ax
+    push si
+    push di
+    call dst_path_has_separator
+    jnc .done
+    call canonicalize_dst_path
+.done:
+    pop di
+    pop si
+    pop ax
+    ret
+
+prepare_src_parent_dir_and_name:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, src_path
+    mov di, exec_restore_path
+    mov dx, src_path + 1
+.copy:
+    lodsb
+    stosb
+    test al, al
+    jz .done
+    cmp al, '\'
+    je .mark_sep
+    cmp al, '/'
+    jne .copy
+.mark_sep:
+    mov dx, si
+    jmp .copy
+.done:
+    mov bx, dx
+    sub bx, src_path
+    cmp bx, 1
+    jbe .root_dir
+    dec bx
+.root_dir:
+    mov byte [exec_restore_path + bx], 0
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+dst_path_has_separator:
+    push si
+    mov si, dst_path
+.scan:
+    mov al, [si]
+    cmp al, 0
+    je .no
+    cmp al, '\'
+    je .yes
+    cmp al, '/'
+    je .yes
+    cmp al, ':'
+    je .yes
+    inc si
+    jmp .scan
+.yes:
+    stc
+    pop si
+    ret
+.no:
+    clc
+    pop si
     ret
 
 build_current_path_in_dst:

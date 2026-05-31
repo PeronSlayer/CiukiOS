@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd build-shell-com build-doom-vanille-probe verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-doomvan-taxonomy qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-shell-com qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd build-shell-com build-doom-vanille-probe verify-full-drivers-payload qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-full-cd-shell-com-boot qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-doom-taxonomy qemu-test-full-doomvan-taxonomy qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-shell-com qemu-test-full-shell-com-boot qemu-test-full-shell-com-boot-fallback qemu-test-release-sweep qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -10,6 +10,7 @@ help:
 	@echo "  make qemu-run-full-cd - boot the Live/install CD in visual QEMU"
 	@echo "  make qemu-test-full-cd - smoke test the Live/install CD D: prompt"
 	@echo "  make qemu-test-full-cd-shell-drive - validate Live CD shell drive/CWD commands"
+	@echo "  make qemu-test-full-cd-shell-com-boot - validate default full-CD boot into SHELL.COM, then return to Stage1 fallback"
 	@echo "  make verify-full-drivers-payload - verify full-profile driver payload"
 	@echo "  make qemu-test-floppy - build + QEMU smoke test (floppy image)"
 	@echo "  make qemu-test-stage1 - interactive Stage1 regression (DOS21 + COM/MZ + file I/O)"
@@ -24,7 +25,10 @@ help:
 	@echo "  make qemu-test-full-wolf3d-taxonomy - classify WOLF3D transfer/runtime stages"
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
 	@echo "  make qemu-test-full-shell-stability - run full-profile shell stability test"
-	@echo "  make qemu-test-full-shell-com - run focused full-profile SHELL.COM nested-shell validation"
+	@echo "  make qemu-test-full-shell-com - force Stage1 shell, then run focused nested SHELL.COM validation"
+	@echo "  make qemu-test-full-shell-com-boot - validate the default full-profile boot into external SHELL.COM"
+	@echo "  make qemu-test-full-shell-com-boot-fallback - remove SHELL.COM from a default full image and verify Stage1 fallback"
+	@echo "  make qemu-test-release-sweep - manual/expensive cross-area release sweep (includes DOOM taxonomy + DOOMSFX; excludes doom-vanille)"
 	@echo "  make qemu-test-full-dos-compat-smoke - run full-profile DOS compatibility smoke test"
 	@echo "  make qemu-test-setup-full-acceptance - run setup full-profile acceptance test"
 	@echo "  make qemu-test-setup-installer-scenarios - run setup installer scenario tests"
@@ -60,6 +64,12 @@ qemu-test-full-cd:
 
 qemu-test-full-cd-shell-drive:
 	@bash scripts/qemu_test_full_cd_shell_drive.sh
+
+qemu-test-full-cd-shell-com-boot:
+	@bash scripts/qemu_test_full_cd_shell_com_boot.sh
+
+qemu-test-full-cd-shell-com-boot-fallback:
+	@FULL_CD_SHELL_COM_BOOT_EXPECT_FALLBACK=1 bash scripts/qemu_test_full_cd_shell_com_boot.sh
 
 qemu-test-floppy:
 	@bash scripts/qemu_test_floppy.sh
@@ -102,6 +112,39 @@ qemu-test-full-shell-stability:
 
 qemu-test-full-shell-com:
 	@bash scripts/qemu_test_full_shell_com.sh
+
+qemu-test-full-shell-com-boot:
+	@SHELL_COM_BOOT_AUTORUN=1 bash scripts/qemu_test_full_shell_com.sh
+
+qemu-test-full-shell-com-boot-fallback:
+	@SHELL_COM_BOOT_AUTORUN=1 SHELL_COM_BOOT_EXPECT_FALLBACK=1 bash scripts/qemu_test_full_shell_com.sh
+
+qemu-test-release-sweep:
+	@set -e; \
+		echo "[release-sweep] manual/expensive release sweep"; \
+		echo "[release-sweep] doom-vanille excluded: known blocked / not skip-safe"; \
+		echo "[release-sweep] ==== build-full ===="; \
+		$(MAKE) build-full; \
+		echo "[release-sweep] ==== build-full-cd ===="; \
+		$(MAKE) build-full-cd; \
+		echo "[release-sweep] ==== qemu-test-full ===="; \
+		$(MAKE) qemu-test-full; \
+		echo "[release-sweep] ==== qemu-test-full-shell-com ===="; \
+		$(MAKE) qemu-test-full-shell-com; \
+		echo "[release-sweep] ==== qemu-test-full-shell-com-boot ===="; \
+		$(MAKE) qemu-test-full-shell-com-boot; \
+		echo "[release-sweep] ==== qemu-test-full-shell-com-boot-fallback ===="; \
+		$(MAKE) qemu-test-full-shell-com-boot-fallback; \
+		echo "[release-sweep] ==== qemu-test-full-cd-shell-com-boot ===="; \
+		$(MAKE) qemu-test-full-cd-shell-com-boot; \
+		echo "[release-sweep] ==== qemu-test-full-cd-shell-com-boot-fallback ===="; \
+		$(MAKE) qemu-test-full-cd-shell-com-boot-fallback; \
+		echo "[release-sweep] ==== qemu-test-full-doom-taxonomy ===="; \
+		$(MAKE) qemu-test-full-doom-taxonomy; \
+		echo "[release-sweep] ==== qemu-test-full-doomsfx ===="; \
+		$(MAKE) qemu-test-full-doomsfx; \
+		echo "[release-sweep] ==== DOOMSFX_LUMP=DSDOROPN qemu-test-full-doomsfx ===="; \
+		DOOMSFX_LUMP=DSDOROPN $(MAKE) qemu-test-full-doomsfx
 
 qemu-test-full-dos-compat-smoke:
 	@bash scripts/qemu_test_full_dos_compat_smoke.sh
