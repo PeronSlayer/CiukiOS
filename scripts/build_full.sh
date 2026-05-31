@@ -809,6 +809,10 @@ PY
 	else
 		echo "[build-full] WARN: WOLF3D source directory is empty: $WOLF3D_SRC_DIR" >&2
 	fi
+	# Regression fixture for INT 21h AH=4Bh relative multi-component subpath exec:
+	# ship a genuine MZDEMO.EXE inside \APPS\WOLF3D so 'run WOLF3D\MZDEMO.EXE' from
+	# \APPS can be validated deterministically (see qemu_test_full_shell_com.sh).
+	mcopy -o -i "$IMG" "$MZDEMO_BIN" "$WOLF3D_IMAGE_DIR/MZDEMO.EXE"
 else
 	echo "[build-full] WOLF3D payload not found at $WOLF3D_SRC_DIR (skipped)"
 fi

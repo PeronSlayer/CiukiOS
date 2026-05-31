@@ -749,6 +749,12 @@ else
   # not depend on any earlier runtime copy fixture.
   send_and_wait_for_pattern_and_prompt 'run \APPS\MZDEMO.EXE' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "RUN_ABS_PATH_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'run \APPS\MZDEMO' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "RUN_ABS_PATH_NOEXT_OK" "$COMMAND_TIMEOUT_SEC"
+  # Relative multi-component subpath execution from \APPS into the WOLF3D subdir.
+  # Backed by the build-time \APPS\WOLF3D\MZDEMO.EXE fixture (see build_full.sh),
+  # so it exercises pure INT 21h AH=4Bh relative subpath resolution without
+  # depending on any runtime copy fixture.
+  send_and_wait_for_pattern_and_prompt 'run WOLF3D\MZDEMO.EXE' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "RUN_REL_SUBPATH_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'run WOLF3D\MZDEMO' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "RUN_REL_SUBPATH_NOEXT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_prompt_and_absence 'dir ..' "$DIR_ROOT_PATTERN" "$APPS_PROMPT_PATTERN" "$DIR_GARBAGE_PROMPT_PATTERN" "DIR_DOTDOT_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "PWD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'path' "$PATH_PATTERN" "$APPS_PROMPT_PATTERN" "PATH_OK" "$COMMAND_TIMEOUT_SEC"
