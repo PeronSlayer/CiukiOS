@@ -77,15 +77,54 @@ fault inside DMX's SB16 setup at `170:00006930`. PC-speaker SFX is the only
 lane that keeps DOOM running end-to-end, and it is unmeasurable/unpleasant under
 QEMU's pcspk emulation.
 
+## Fault mechanism (pinned down 2026-07-21 via `-d int` + gdbstub)
+
+Not CPU-model dependent: `-cpu pentium3`, `486`, and `pentium` all reproduce the
+identical crash screen (unique_colors=3, nonblank 21114/288000).
+
+`-d int` capture of the #UD:
+
+```
+v=06 e=0000 cpl=0 IP=0170:0000693c  EAX=0000eaff EBX=00000080 ECX=00000c40
+EDX=00000170 ESI=00006284 EDI=00000102 EBP=0000627a ESP=0000623c
+CS=0170 base=0x00000000 limit=ffffffff CS32   (flat: linear == EIP)
+SS=00c8 base=0x00116330  DS=00a0 base=0x00116330 DS16
+```
+
+CS is flat (base 0), so the fault executes at **linear 0x693c**, which is low
+conventional memory - *not* where DOS/4GW maps DOOM's 32-bit code. gdb hardware
+breakpoint at 0x693c, memory dump:
+
+```
+0x6930: 30 41 f3 06 30 41 fd 06 00 00 0a 00 ff ff ff ff
+0x6940: ac 86 0f 00 00 00 0a 00 b9 f8 ff 06 00 00 ff 06
+```
+
+The bytes at 0x693c are `ff ff ff ff`. `FF /7` is an undefined group-5 encoding
+-> genuine #UD. This is a **`0xFFFFFFFF` table terminator**, i.e. execution ran
+into a **data table**, not code. Nearby (0x693f) sits
+`ljmp *0xf(%esi,%eax,4)` - an indirect **jump-table dispatch**. With
+`EAX=0x0000eaff` (a garbage index, 60159) and `ESI=0x6284` (pointing into this
+same low data region), the smoking gun is: DMX's SB path performs a computed
+jump/dispatch through a **corrupted index/pointer** and lands inside a data
+table. The 0xff-heavy `EAX` value hints the index may derive from an SB
+DSP/mixer port read that returns open-bus 0xFF under this SB setup.
+
+This is a defect *inside DMX's protected-mode SB runtime*, deterministic and
+now precisely located - a real reverse target, but a non-trivial one (needs
+backward tracing to find where `EAX`/the dispatch index is computed).
+
 ## Concrete next steps, most-leverage first
 
-1. **Reverse the fault at `170:00006930`.** The EXE is not a plain MZ+LE at
-   `e_lfanew` (embedded LE payload; May note put it near file `0x25214`, an `LE`
-   signature also appears at `0x1AF6B`). Parse the real LE object table, map
-   object #1's file base, disassemble at object-offset `0x6930`, and identify the
-   byte(s) DOS/4GW rejects. Likely an instruction the DMX SB path reaches only
-   with SB selected, or a bad call target from the SB IRQ install. A one-instruction
-   root cause here could be the cheapest full fix.
+1. **Reverse backward from the dispatch.** Find where DMX computes the jump-table
+   index that becomes `EAX=0xeaff`, starting from the `ljmp *[esi+eax*4+0xf]`
+   dispatch near linear 0x693f. If the index comes from an SB DSP/mixer read,
+   the root cause is an SB register QEMU's `sb16` answers with 0xFF that real
+   DMX-era hardware would not - fixable by matching the SB response, not by
+   touching DOOM. The EXE itself is not a plain MZ+LE at `e_lfanew` (embedded LE;
+   May note put the payload near file `0x25214`, an `LE` signature also appears
+   at `0x1AF6B`), so static mapping needs the real LE object table; dynamic
+   gdb tracing (as used here) is the faster route.
 2. **Unblock the open-source port (also improves general DOS-app compat).**
    Enlarge the conventional-memory arena handed to MZ children so
    `I_AllocLow(256000)` succeeds (`DOS_HEAP_BASE_SEG`/`DOS_HEAP_LIMIT_SEG` and
