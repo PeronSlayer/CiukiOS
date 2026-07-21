@@ -20,6 +20,7 @@ BOOT_BIN="build/full/obj/full_boot.bin"
 STAGE1_SRC="src/boot/floppy_stage1.asm"
 STAGE1_BIN="build/full/obj/full_stage1.bin"
 STAGE1_SLOT_BIN="build/full/obj/full_stage1_slot.bin"
+STAGE1_LST="build/full/obj/full_stage1.lst"
 STAGE2_SRC="src/boot/full_stage2.asm"
 STAGE2_BIN="build/full/obj/full_stage2.bin"
 STAGE2_MAX_SIZE=512
@@ -29,7 +30,7 @@ RUNTIME_MAX_SIZE=512
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 TOTAL_SECTORS=262144
-STAGE1_SECTORS=70
+STAGE1_SECTORS=72
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 BOOT_LBA_OFFSET="${CIUKIOS_FULL_BOOT_LBA_OFFSET:-0}"
 FAT_LBA_OFFSET="${CIUKIOS_FULL_FAT_LBA_OFFSET:-0}"
@@ -228,13 +229,34 @@ nasm -f bin "$STAGE1_SRC" \
 	-D HARDWARE_VALIDATION_SCREEN="$HARDWARE_VALIDATION_SCREEN" \
 	-D DOS_DEFAULT_DRIVE_INDEX="$DOS_DEFAULT_DRIVE_INDEX" \
 	-D ENABLE_PS2_MOUSE_INIT="$ENABLE_PS2_MOUSE_INIT" \
-	-D WOLF_RUNTIME_DIAG="$WOLF_RUNTIME_DIAG" -o "$STAGE1_BIN"
+	-D WOLF_RUNTIME_DIAG="$WOLF_RUNTIME_DIAG" \
+	-l "$STAGE1_LST" -o "$STAGE1_BIN"
 
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
 if [[ "$STAGE1_SIZE" -gt "$STAGE1_SLOT_SIZE" ]]; then
 	echo "[build-full] ERROR: stage1 payload is $STAGE1_SIZE bytes (max $STAGE1_SLOT_SIZE)" >&2
 	exit 1
 fi
+
+# SETUP.COM patches the installed default drive by rewriting the imm8 of
+# "mov byte [dos_default_drive], DOS_DEFAULT_DRIVE_INDEX" inside the cloned
+# stage1. Locate that byte from the listing so the patch target follows any
+# stage1 layout change instead of relying on a hardcoded LBA/offset.
+DEFAULT_DRIVE_IMM_ADDR_HEX="$(awk '/mov byte \[dos_default_drive\], DOS_DEFAULT_DRIVE_INDEX/ {print $2; exit}' "$STAGE1_LST")"
+if [[ -z "$DEFAULT_DRIVE_IMM_ADDR_HEX" ]]; then
+	echo "[build-full] ERROR: dos_default_drive patch site not found in $STAGE1_LST" >&2
+	exit 1
+fi
+# C6 06 <addr16> <imm8>: the immediate is the 5th byte of the instruction.
+DEFAULT_DRIVE_IMM_OFF=$((16#$DEFAULT_DRIVE_IMM_ADDR_HEX + 4))
+DEFAULT_DRIVE_IMM_BYTE="$(od -An -tu1 -j "$DEFAULT_DRIVE_IMM_OFF" -N1 "$STAGE1_BIN" | tr -d ' ')"
+if [[ "$DEFAULT_DRIVE_IMM_BYTE" != "$DOS_DEFAULT_DRIVE_INDEX" ]]; then
+	echo "[build-full] ERROR: stage1 default-drive imm byte is $DEFAULT_DRIVE_IMM_BYTE at offset $DEFAULT_DRIVE_IMM_OFF (expected $DOS_DEFAULT_DRIVE_INDEX)" >&2
+	exit 1
+fi
+RAW_STAGE1_PATCH_LBA=$((1 + DEFAULT_DRIVE_IMM_OFF / 512))
+RAW_STAGE1_PATCH_OFF=$((DEFAULT_DRIVE_IMM_OFF % 512))
+echo "[build-full] stage1 default-drive patch site: LBA=$RAW_STAGE1_PATCH_LBA off=$RAW_STAGE1_PATCH_OFF"
 
 echo "[build-full] preparing stage1 slot (${STAGE1_SECTORS} sectors)"
 dd if=/dev/zero of="$STAGE1_SLOT_BIN" bs=512 count="$STAGE1_SECTORS" status=none
@@ -252,7 +274,7 @@ nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
 nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
 nasm -f bin "$MOUSE_SRC" -o "$MOUSE_BIN"
 nasm -f bin "$CIUKWIN_SRC" -o "$CIUKWIN_BIN"
-nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL" -D SETUP_ENABLE_RAW_HDD_DESTRUCTIVE="$SETUP_RAW_HDD_DESTRUCTIVE" -D SETUP_LIVE_CD_MODE="$SETUP_LIVE_CD_MODE" -o "$SETUP_BIN"
+nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL" -D SETUP_ENABLE_RAW_HDD_DESTRUCTIVE="$SETUP_RAW_HDD_DESTRUCTIVE" -D SETUP_LIVE_CD_MODE="$SETUP_LIVE_CD_MODE" -D RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA="$RAW_STAGE1_PATCH_LBA" -D RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF="$RAW_STAGE1_PATCH_OFF" -o "$SETUP_BIN"
 nasm -f bin "$FORMAT_SRC" -o "$FORMAT_BIN"
 nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
 nasm -f bin "$SHELL_SRC" -o "$SHELL_BIN"

@@ -19,8 +19,16 @@ org 0x0100
 %define RAW_HDD_CLONE_SECTORS_LO 0x003F
 %define RAW_HDD_CLONE_SECTORS_HI 0x0004
 %define RAW_HDD_BATCH_SECTORS    8           ; multi-sector batch size; matches io_buffer 4 KB
+; Patch target for the installed-default-drive byte inside stage1 (the imm8
+; of "mov byte [dos_default_drive], DOS_DEFAULT_DRIVE_INDEX"). The build
+; computes LBA/offset from the stage1 listing and overrides these via -D;
+; the fallbacks below are only for standalone assembly.
+%ifndef RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA
 %define RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA 64
+%endif
+%ifndef RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF
 %define RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF 0x0136
+%endif
 %define RAW_STAGE1_LIVE_DRIVE_INDEX 3
 %define RAW_STAGE1_INSTALLED_DRIVE_INDEX 2
 %define RAW_HDD_SECTORS_PER_CYL 1008

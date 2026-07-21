@@ -172,28 +172,30 @@ runtime_get_state_ptr_service:
     retf
 
 runtime_prepare_child_dta_service:
-    mov [runtime_state_saved_parent_dta_seg], ax
-    mov [runtime_state_saved_parent_dta_off], bx
-    mov [runtime_state_parent_psp], cx
-    mov [runtime_state_previous_psp], cx
-    mov [runtime_state_current_psp], dx
-    mov [runtime_state_dta_seg], dx
-    mov word [runtime_state_dta_off], 0x0080
+    ; Far-called with the caller's DS: state writes must be CS-relative.
+    mov [cs:runtime_state_saved_parent_dta_seg], ax
+    mov [cs:runtime_state_saved_parent_dta_off], bx
+    mov [cs:runtime_state_parent_psp], cx
+    mov [cs:runtime_state_previous_psp], cx
+    mov [cs:runtime_state_current_psp], dx
+    mov [cs:runtime_state_dta_seg], dx
+    mov word [cs:runtime_state_dta_off], 0x0080
     clc
     retf
 
 runtime_restore_parent_dta_service:
-    mov ax, [runtime_state_saved_parent_dta_seg]
+    ; Far-called with the caller's DS: state access must be CS-relative.
+    mov ax, [cs:runtime_state_saved_parent_dta_seg]
     or ax, ax
     jz .fail
-    mov dx, [runtime_state_saved_parent_dta_off]
-    mov [runtime_state_dta_seg], ax
-    mov [runtime_state_dta_off], dx
-    mov bx, [runtime_state_parent_psp]
-    mov [runtime_state_current_psp], bx
+    mov dx, [cs:runtime_state_saved_parent_dta_off]
+    mov [cs:runtime_state_dta_seg], ax
+    mov [cs:runtime_state_dta_off], dx
+    mov bx, [cs:runtime_state_parent_psp]
+    mov [cs:runtime_state_current_psp], bx
     xor bx, bx
-    mov [runtime_state_saved_parent_dta_seg], bx
-    mov [runtime_state_saved_parent_dta_off], bx
+    mov [cs:runtime_state_saved_parent_dta_seg], bx
+    mov [cs:runtime_state_saved_parent_dta_off], bx
     clc
     retf
 

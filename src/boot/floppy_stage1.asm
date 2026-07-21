@@ -515,6 +515,14 @@ install_int21_vector:
     mov word [es:bx], int15_handler
     mov ax, cs
     mov [es:bx + 2], ax
+
+    ; INT 16h is not hooked, but int16_handler chains through old_int16:
+    ; capture the BIOS vector so the chain target is never 0000:0000.
+    mov bx, 0x16 * 4
+    mov ax, [es:bx]
+    mov [old_int16_off], ax
+    mov ax, [es:bx + 2]
+    mov [old_int16_seg], ax
 %endif
 
 %if STAGE2_AUTORUN == 0
@@ -2715,8 +2723,9 @@ int21_exec_run_com:
     xor si, si
     xor di, di
     xor bp, bp
-    sti
-    cld
+    ; Hand the child a known FLAGS image (IF=1, TF/DF/CF clear).
+    push word 0x0202
+    popf
 
     call far [cs:com_entry_off]
 
@@ -3216,8 +3225,9 @@ int21_exec_run_mz:
     xor si, si
     xor di, di
     xor bp, bp
-    sti
-    cld
+    ; Hand the child a known FLAGS image (IF=1, TF/DF/CF clear).
+    push word 0x0202
+    popf
     jmp far [cs:mz_entry_off]
 
 .after_call:
@@ -9065,13 +9075,12 @@ int21_mem_find_next_alloc:
     ret
 
 .none:
-    stc
-    pushf
+    ; POP leaves FLAGS untouched, so restore registers first and set CF last.
     pop di
-    popf
     pop si
     pop dx
     pop cx
+    stc
     ret
 
 int21_mem_table_clear:
