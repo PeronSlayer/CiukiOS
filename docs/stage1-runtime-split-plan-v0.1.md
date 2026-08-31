@@ -1,232 +1,212 @@
 # Stage1 Runtime Split Plan v0.1
 
-## Current Objective
-Move CiukiOS away from byte-by-byte Stage1 growth by establishing a durable loader-plus-runtime architecture while preserving current full and full-CD behavior.
+## Status
 
-The governing rule is: Stage1 is a loader, not the operating system. New runtime features should live in a loaded runtime, shell component, helper, driver, or service unless they are required to locate and load the next runtime component.
+**COMPLETED — superseded by the wholesale kernel move.**
 
-## Current Stage1 Size Baseline
-The active Stage1 slot is 70 sectors, or 35,840 bytes.
+Phase 5 is closed. The active `full` and `full-cd` profiles no longer use the incremental resident-front-end architecture described in the historical sections below. They build a dedicated loader-only Stage1 and a wholesale CIUKIDOS kernel containing the normal DOS implementation.
 
-| Profile | Build mode | Size source | Margin source | Notes |
-|---|---|---|---|---|
-| full | FAT16 HDD, C: default | 34,989 bytes | 851 bytes | Current validated default Stage1 after the five-service runtime tranche. |
-| full-cd | FAT16 Live/install CD, D: default | 35,054 bytes | 786 bytes | Tightest active profile; default boot still stays within the 70-sector ceiling. |
-| full runtime probe | FAT16 HDD, probe-enabled validation build | 35,336 bytes | 504 bytes | Probe success now requires runtime services `1` through `5` plus default-drive consistency. |
+The current loader is 1,542 bytes. The boot sector loads eight sectors for it inside the reserved 72-sector Stage1 slot. It locates, validates, and transfers to `\SYSTEM\CIUKIDOS.SYS`; missing or invalid required components enter a bounded fatal halt. There is no interactive Stage1 fallback and no normal DOS owner in the loader.
 
-Current `RUNTIME.BIN` size is 167 bytes. The split is now beyond the inert landing slice: the runtime owns a validated five-service table, while default full and full-CD boots still preserve Stage1 fallback ownership whenever runtime bootstrap or validation fails.
+## Governing Boundary
 
-## Stage1 Responsibility Inventory
+Stage1 is the boot loader, not the final operating-system owner.
 
-| Class | Current responsibilities | Split direction |
-|---|---|---|
-| Boot/load mandatory | Segment setup, stack, boot drive state, BIOS disk reads/writes, LBA/CHS fallback, FAT geometry constants, Stage1 slot execution. | Keep in Stage1. |
-| FAT/file loading before runtime | Root/subdirectory lookup, FAT cache, 8.3 path parsing, cluster walking, file-sector reads needed to find boot payloads. | Keep only the minimum loader subset in Stage1; move general DOS file semantics to runtime. |
-| DOS runtime core | INT 20h/21h/2Fh/10h/15h hooks, PSP, MCB allocator, DTA, handles, COM/MZ execution, file APIs, XMS compatibility. | Move to `\SYSTEM\RUNTIME.BIN` after an ABI and state handoff are defined. |
-| Shell/UX | Prompt, line editor, command dispatch, built-ins, history/completion, footer telemetry. | Move to `\SYSTEM\SHELL.COM` or a runtime-owned shell component. |
-| Diagnostics/debug | Serial markers, IERR logs, hardware validation screens, selftest markers, diagnostic commands. | Gate debug-only output or move test helpers outside default Stage1. |
-| Driver/CD support | Mouse/INT33, PS/2 paths, stage2 services, driver helper assumptions, CD/MSCDEX compatibility surfaces. | Move policy to runtime/modules; keep only boot-critical media detection in Stage1. |
-| Graphics/demo/support | Splash loader/blitter, VDI demo primitives, glyph/demo support. | Keep only user-approved boot splash pieces in Stage1; move demos/helpers out. |
-| Test-only/selftest | Stage1 selftest, file/path smoke helpers, demo launch tests, serial test strings. | Gate out of default builds or move to standalone validation helpers. |
+Stage1 retains only:
 
-## Target Architecture
+1. real-mode entry, stack, and boot-drive initialization
+2. the minimum BIOS disk and FAT16 path needed to locate required system files
+3. CIUKIDOS load, validation, handoff, and transfer
+4. bounded fatal diagnostics when a required component cannot run
+
+CIUKIDOS owns:
+
+1. DOS interrupt dispatch and runtime state
+2. PSP, DTA, MCB, and conventional-memory lifecycle
+3. child load, execution, termination, return code, and parent restoration
+4. JFT/SFT and handle semantics
+5. general file/path APIs and FAT runtime policy
+6. COM/MZ execution services and extender-facing DOS behavior
+7. device, driver, mouse, XMS, and compatibility policy that is not boot-critical
+
+`SHELL.COM` owns the interactive command processor and must use public DOS/BIOS contracts rather than Stage1-private buffers or labels.
+
+## Current Boot Contract
 
 ```text
-Boot sector
-  -> minimal Stage1 loader
-      -> load \SYSTEM\RUNTIME.BIN
-          -> initialize DOS runtime and compatibility services
-          -> start \SYSTEM\SHELL.COM or runtime shell entry
-          -> load optional drivers/services/modules
+BIOS
+  -> boot sector
+      -> load 8 sectors from the reserved 72-sector Stage1 slot
+          -> 1,542-byte loader-only Stage1
+              -> load and validate \SYSTEM\CIUKIDOS.SYS
+                  -> transfer to the CIUKIDOS kernel at 0900h
+                      -> initialize ABI2 runtime state and normal DOS ownership
+                          -> execute \SYSTEM\SHELL.COM
+                              -> child programs through DOS EXEC
+
+Any required-component failure or shell return
+  -> bounded loader-fatal message
+  -> halt
 ```
 
-## Boundaries
-Stage1 after the split should establish real-mode execution, read enough FAT16 to locate `\SYSTEM\RUNTIME.BIN`, load the runtime into a documented segment, transfer through a small ABI structure, and provide a minimal fatal error if loading fails.
+The current CIUKIDOS flat image is 43,254 bytes, loads at segment `0x0900`, and is build-bounded to `0xA900` (43,264) bytes. Four EXEC frames occupy `0x1400-0x1457`; Stage2 starts at `0x1480`. These are enforced product layout boundaries, not estimates. The remaining ten-byte margin makes the limit an active build constraint.
 
-The runtime binary should own DOS compatibility interrupts, PSP/MCB state, DTA, handles, file APIs, COM/MZ execution, XMS, driver/CD compatibility, runtime diagnostics, and shell startup.
+## Current CIUKIDOS ABI
 
-The shell should not remain permanently linked into Stage1. The preferred later boundary is `\SYSTEM\SHELL.COM` once the loaded runtime owns enough DOS APIs to launch it.
+- Runtime file: `\SYSTEM\CIUKIDOS.SYS`
+- Signature: `CIUKIDOS`
+- Service-table magic: `RTSV`
+- ABI version: `2`
+- Descriptor size: `8` bytes
+- Service count: `11`
+- Capability mask: `0x003F`
+- Declared load segment: `0x0900`
+- Maximum image size: `0xA900` bytes (43,264 bytes)
 
-Driver policy, CD/MSCDEX activation, setup helpers, demos, and validation helpers should become runtime modules, `.COM` helpers, or files under `\SYSTEM` and `\APPS`, not Stage1 features.
+The 26-byte image header declares the signature, ABI, service count, descriptor size, capabilities, exact image size, service-table offset, and load segment. The `RTSV` table repeats the ABI/count/descriptor contract and contains eleven ordered, bounded callable descriptors.
 
-## Load Path And File Names
-Initial landing file: `\SYSTEM\RUNTIME.BIN`.
+| ID | Current service | Ownership level |
+|---:|---|---|
+| 1 | Identity/status | Runtime-owned, read-only |
+| 2 | Version string | Runtime-owned, read-only |
+| 3 | Stage2-ready marker | Runtime-owned, read-only |
+| 4 | DOS version result | Kernel-owned provider |
+| 5 | Default-drive state pointer | Kernel-owned state |
+| 6 | Runtime-state pointer | Kernel-owned state |
+| 7 | Prepare child DTA/process state | Kernel-owned process-stack mutation |
+| 8 | Restore parent DTA/process state | Kernel-owned process-stack mutation |
+| 9 | Kernel capabilities and chain identity | Returns `0x003F` and a deliberately null legacy vector |
+| 10 | Synchronize complete process/DTA view | Kernel-owned state synchronization |
+| 11 | Record child termination | Kernel-owned, identity-checked termination record |
 
-Future candidates:
-1. `\SYSTEM\KERNEL.BIN` if the loaded component becomes the primary kernel image.
-2. `\SYSTEM\SHELL.COM` for shell extraction.
-3. `\SYSTEM\MODULES\*.BIN` for optional runtime services after module policy exists.
+CIUKIDOS owns the complete normal `INT 20h`/`INT 21h` path. There is no preserved Stage1 DOS vector and no legacy far-chain target. The black-box contract reports this explicitly as `CHAIN=0`.
 
-## Memory Layout And ABI Assumptions
-The first external artifact is inert and not executed. Future executable runtime slices should use a fixed load segment chosen to avoid Stage1, FAT buffers, DOS heap, application load regions, and full-CD setup paths. A small handoff structure should include boot drive, default DOS drive, FAT geometry, runtime load segment, and feature flags.
+The ABI contract requires all eleven services. Validation against the historical ABI1 five-, eight-, or ten-service checkpoints is invalid for the current product.
 
-The first executable runtime should be a flat binary with a fixed segment ABI. Relocation should be deferred until a flat load/entry path is proven in full and full-CD.
+### Black-box ownership probe
 
-## Error And Fallback Behavior
-Default full/full-CD boot behavior must remain unchanged until an owner-approved runtime handoff exists. Any opt-in runtime probe must fail closed to the current Stage1 path and must avoid noisy permanent traces.
+The build packages `src/com/ciukrtst.asm` as `\APPS\CIUKRTST.COM`. From a normal external child it verifies:
 
-## First Safe Slice Implemented
-This cycle implements the safest structural slice:
+1. IVT `INT 21h` ownership in kernel segment `0x0900`
+2. ABI version 2, eleven descriptors, and service IDs 9, 10, and 11
+3. service 9 capability mask `0x003F` and a zero legacy chain target
+4. DOS version, default drive, current PSP, and set/get/restore DTA coherence
 
-1. Add `src/runtime/runtime.asm` as a tiny inert runtime placeholder with signature `CIUKRT01`.
-2. Build it as `build/full/obj/runtime.bin`.
-3. Package it as `\SYSTEM\RUNTIME.BIN` in the full image.
-4. Let full-CD inherit the artifact through `scripts/build_full_cd.sh`, which delegates to `scripts/build_full.sh`.
-5. Do not modify Stage1 boot flow or user-visible behavior.
+Its exact success marker is:
 
-This does not reduce Stage1 bytes yet. It makes the split real and testable without adding Stage1 risk.
+    [CIUKRTST] OWNER=CIUKIDOS ABI=2 SERVICES=11 CHAIN=0 STATE=PASS
 
-## Migration Order
-1. Establish external runtime artifact packaging and validation.
-2. Add an opt-in Stage1 runtime load probe only after freeing enough Stage1 bytes or gating debug code.
-3. Move diagnostics/debug-only code out of default Stage1 or behind release/debug defines.
-4. Move shell/UX into `\SYSTEM\SHELL.COM` after runtime launch ABI is stable.
-5. Move DOS runtime services from Stage1 into `\SYSTEM\RUNTIME.BIN` in small, tested groups: memory, file/path, process, XMS, driver/CD.
-6. Move driver/CD policy into runtime/module layer.
-7. Keep Stage1 as loader plus minimal emergency fallback.
+The full and full-CD shell gates consume this marker. Its presence in source or in an image is not a PASS until the corresponding same-checkout lane records it and returns cleanly to the shell.
 
-## Acceptance Gates
-Every migration phase must pass active profile checks only:
+### Process, TSR, and MZ hardening already implemented
+
+The wholesale CIUKIDOS kernel and its process record enforce the following general behavior:
+
+1. immutable EXEC identity, independent of application-visible `AH=50h` PSP changes
+2. four ordered nested process frames for parent PSP/DTA/allocator restoration
+3. `AH=31h` residency for the child PSP plus auxiliary child-owned blocks
+4. exact resident-block unload through `AH=49h`, including cross-owner unloader use, double-free rejection with `AX=0009h`, and strict `AH=4Ah` ownership
+5. resident-aware, title-independent first-fit COM/MZ placement and low-memory MCB reconstruction, including the 256,000-byte doom-vanille allocation path and DOSNavigator's COM→MZ chain
+6. 32-bit MZ size/relocation validation plus a bounded DOS-compatible final-page read for historic COM-to-EXE images whose physical EOF extends beyond strict `e_cblp`
+
+The packaged `CIUKPST.COM`/`CIUKTRM.COM`/`CIUKPCOM.COM` lane installs a real resident child, executes another child while the TSR remains installed, verifies its PSP/MCB/image sentinels, unloads it, walks the linked MCB chain, and requires a second free to fail. Its exact completion marker is:
+
+    [PSTACK:C] ALL=PASS TSR-EXEC-UNLOAD=PASS EXIT=5A
+
+These are kernel compatibility and lifecycle guarantees. The current fixed implementation still has explicit architectural caps of 32 tracked memory blocks and four simultaneous EXEC contexts. Raising those bounds, deepening JFT/SFT semantics, and validating more real applications are Phase 6 compatibility work; they do not reopen the completed Phase 5 ownership boundary.
+
+## Historical Pre-Wholesale Ownership Gap — Superseded
+
+> Historical record: the following gap described the final incremental ABI1/front-end checkpoint. The wholesale ABI2 kernel move closed this ownership gap; these items are retained to explain why the incremental plan was superseded.
+
+At that checkpoint, these normal runtime responsibilities remained primarily in `src/boot/floppy_stage1.asm`:
+
+1. most `INT 21h` API implementations behind the CIUKIDOS far-chain boundary
+2. PSP/MCB construction and allocator policy
+3. COM/MZ load, relocation, child transfer, and termination
+4. general handles, file/path operations, directory mutation, and FAT writes
+5. environment and process restoration
+6. much of mouse, driver, and compatibility state
+
+The obsolete `src/runtime/runtime.asm` five-service artifact was removed. Dated evidence may still mention `RUNTIME.BIN`, ABI1, segment `0x1100`, or a chained Stage1 core as historical context; none describes the active product.
+
+## Historical Incremental Migration Order — Completed by Wholesale Move
+
+> Historical record: these tranches were the conservative sequence before the decision to compile the complete normal DOS core into CIUKIDOS. They are no longer open Phase 5 work. Compatibility depth mentioned inside them may still motivate Phase 6 issues.
+
+### Tranche 1 - Contract and negative-path hygiene
+
+1. Keep the eleven-service requirement explicit and versioned.
+2. Validate missing, truncated, bad-signature, bad-header, incompatible-ABI, and missing-service cases.
+3. Require the loader-fatal result and absence of a shell prompt for required-runtime failures.
+4. Remove remaining `RUNTIME.BIN`, five-service, 70-sector, and interactive-fallback assumptions.
+
+### Tranche 2 - Process state ownership
+
+1. Build on the existing CIUKIDOS PSP/DTA ownership by moving return code and the remaining child lifecycle state into the runtime.
+2. Expose operations rather than writable internal pointers where practical.
+3. Prove nested COM and MZ execution plus exact parent restoration.
+
+### Tranche 3 - Conventional memory ownership
+
+1. Move MCB arena initialization, allocation, resize, free, and largest-block reporting.
+2. Remove fixed layout assumptions that leave large MZ children with an artificially small arena.
+3. Use doom-vanille's 256,000-byte low-memory request as a cross-workload regression target, not as a title-specific patch.
+
+### Tranche 4 - EXEC ownership
+
+1. Move COM/MZ validation, relocation, environment/PSP setup, transfer, and termination.
+2. Preserve shell return and nested extender behavior.
+3. Keep title-specific binary patching outside the compatibility contract.
+
+### Tranche 5 - Handles, paths, and file APIs
+
+1. Move JFT/SFT, standard handles, open/read/write/seek/close, find, directory, and rename/move behavior.
+2. Prove root and subdirectory FAT16 mutations, high-cluster access, error mapping, and stale-state cleanup.
+3. Do not accept a PARTIAL file operation as a passing release gate.
+
+### Tranche 6 - Interrupt and device policy
+
+1. Expand the installed CIUKIDOS `INT 21h` front end until Stage1 is no longer the normal DOS service implementation.
+2. Move non-boot-critical device, mouse, driver, XMS, and diagnostic policy behind runtime/module contracts.
+3. Leave Stage1 with only the minimum boot services needed before CIUKIDOS is live.
+
+## Validation Gates
+
+The completed boundary is protected by both static and dynamic gates on the same checkout:
+
+1. `scripts/verify_phase5_runtime_ownership.sh` proves that `full` binds to `full_stage1_loader.asm` and canonical `ciukidos.asm`; the loader source/listing contains no normal DOS interrupts or owner symbols; the kernel listing contains the required DOS owners; no far chain to a previous `INT 21h` owner exists; and every ABI2 header, table, descriptor, size, load-segment, and handler-bound invariant is valid.
+2. `scripts/qemu_test_full_runtime_probe.sh` first builds the exact canonical kernel, runs the external `CIUKRTST.COM` black-box ABI2/owner probe, and verifies the static ownership boundary. It then runs eight independent fatal negatives from a hash-verified good image: missing file, truncated image, bad signature, bad header size, incompatible ABI, missing header service count, missing table service count, and missing required descriptor. Every negative must emit the `WOOF` fatal result, must not reach CIUKRTST, and must not reach a Stage1 or SHELL prompt. The canonical image is restored on every exit path. This avoids a probe-only kernel variant that could exceed the product's ten-byte size margin.
+3. `CIUKRTST.COM` supplies the black-box ownership assertion `ABI=2 SERVICES=11 CHAIN=0` from a normal child.
+
+The wider regression set remains:
 
 1. `make build-full`
 2. `make build-full-cd`
 3. `make qemu-test-full`
 4. `make qemu-test-full-cd`
-5. `make qemu-test-full-cd-shell-drive`
-6. `make qemu-test-full-shell-stability`
-7. `make qemu-test-full-drvload-smoke`
-8. `make qemu-test-all`
-9. `DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` when local DOOM assets are present.
+5. `make qemu-test-full-runtime-probe`
+6. `make qemu-test-full-shell-com`
+7. `make qemu-test-full-shell-com-boot`
+8. `make qemu-test-full-cd-shell-com-boot`
+9. `make qemu-test-full-dos-compat-smoke`
+10. `make qemu-test-setup-runtime-hdd-install` when install/runtime layout is touched
+11. `make qemu-test-all`
+12. affected DOOM, WOLF3D, driver, and audio taxonomy lanes when shared DOS paths change
 
-No floppy, FAT32, GUI expansion, UX change, merge, or push is part of this plan without explicit owner approval.
+A focused PASS does not override an aggregate or negative-path failure. Historical evidence is not a substitute for a fresh run after an ownership change.
 
-## Executable Probe Slice Implemented
-The completion slice moves the split beyond an inert artifact while preserving default behavior.
+Same-checkout closure snapshot (2026-09-01): the loader-only/static ownership gate, exact canonical-kernel ABI2 positive probe, eight-case fatal matrix derived from the same hash-verified image, full/full-CD shell and ownership probes, DOS compatibility smoke, shell stability, DRVLOAD, deterministic full-CD read beyond LBA 65,535, setup packaging, CD/HDD read-only probe, host-built HDD boot, and runtime CD-to-HDD install provide the Phase 5 boundary evidence. Later Costa, DOSNavigator, networking, and Windows 3.1 gates exercise the same wholesale owner without changing the closure definition.
 
-### Stage1 Size Recovery
-Selftest-only code and data are now gated behind `STAGE1_SELFTEST_AUTORUN`. Default full and full-CD builds no longer carry the Stage1 autorun move/rename test, stream-C resolver/footer selftest, selftest orchestrator, or their private strings. Selftest builds still include the same code because `scripts/qemu_test_full_stage1.sh` exports `CIUKIOS_STAGE1_SELFTEST_AUTORUN=1`.
+## Definitive Phase 5 Completion Gate
 
-| Profile | Before | After | Bytes recovered | Free margin |
-|---|---:|---:|---:|---:|
-| full default | 35,476 | 34,949 | 527 | 891 |
-| full-cd default | 35,541 | 35,014 | 527 | 826 |
-| full runtime probe | n/a | 35,174 | n/a | 666 |
+Phase 5 is complete because all of the following ownership conditions are satisfied:
 
-The full-CD margin now exceeds the 512-byte minimum target. The 1,024-byte preferred target remains a follow-up extraction goal.
+1. Stage1 is limited more strictly than originally required: boot-critical loading, validation, handoff, and fatal diagnostics; CIUKIDOS starts the shell.
+2. CIUKIDOS owns normal DOS interrupt, process, memory, handle, file/path, and COM/MZ execution state.
+3. The shell and child programs do not depend on Stage1-private DOS state.
+4. The ABI and memory layout are documented, versioned, and have positive and negative tests.
+5. Obsolete runtime artifacts and fallback assumptions are gone.
+6. Full and full-CD runtime, shell, compatibility, installer-impact, and aggregate gates are green from the same checkout.
 
-### Runtime Load Probe
-Probe flag: `CIUKIOS_STAGE1_RUNTIME_PROBE=1`, passed to NASM as `STAGE1_RUNTIME_PROBE`.
-
-When enabled, Stage1 opens `\SYSTEM\RUNTIME.BIN`, loads up to 512 bytes at segment `0x4C00`, verifies signature `CIUKRT01` at offset `0x0002`, calls `0x4C00:0x0000`, then falls back to the existing boot/shell path. Default builds leave the probe compiled out.
-
-Minimal probe serial markers are gated with the probe:
-1. `[RTP] B` when the probe starts.
-2. `[RTP] OK` after signature verification, runtime call, and ABI status validation.
-3. `[RTP] BAD` when load/signature/ABI validation fails; boot continues through the existing fallback path.
-
-### Runtime Handoff ABI
-Stage1 passes `ES:DI` pointing to a small handoff/status buffer in Stage1 data before far-calling the runtime.
-
-| Offset | Size | Owner | Meaning |
-|---:|---:|---|---|
-| `0x00` | word | runtime writes | ABI version, currently `1`. |
-| `0x02` | word | runtime writes | Runtime service count, currently `1`. |
-| `0x04` | word | runtime writes | Runtime status flags, bit 0 currently means identity/status service ready. |
-
-This delegates the first real responsibility to the loaded runtime: runtime identity/service status is produced by `RUNTIME.BIN` and consumed by the probe lane before `[RTP] OK` is emitted.
-
-### Next Migration Slice
-Move a tiny runtime-owned service table header into `RUNTIME.BIN` and make the probe query a callable service descriptor rather than only fixed status words. Keep it opt-in, keep default boot independent of `RUNTIME.BIN`, and only then consider extracting a diagnostic or shell constant.
-
-## Service Table Foundation Finalized
-This cycle closes the architecture foundation for the Stage1/runtime split without changing default boot ownership.
-
-### Additional Stage1 Margin Recovery
-A dead Stage1 DOS-memory helper cluster was removed from default builds after confirming the symbols had no remaining references. This recovered enough space to exceed the preferred 1,024-byte full-CD margin target.
-
-| Profile | Before | After | Bytes recovered this cycle | Free margin |
-|---|---:|---:|---:|---:|
-| full default | 34,949 | 34,421 | 528 | 1,419 |
-| full-cd default | 35,014 | 34,486 | 528 | 1,354 |
-| full runtime probe | 35,174 | 34,768 | 406 | 1,072 |
-
-The default full-CD build now clears the preferred margin target while keeping default boot and shell behavior unchanged.
-
-### Runtime-Owned Service Table
-The probe handoff no longer exposes ABI version and service count as fixed Stage1-owned status words. Runtime entry now writes a pointer to a runtime-owned service table plus a status flag word through `ES:DI`.
-
-Handoff buffer written by runtime entry:
-| Offset | Size | Meaning |
-|---:|---:|---|
-| `0x00` | word | Service table offset inside `RUNTIME.BIN`. |
-| `0x02` | word | Service table segment, currently `0x4C00`. |
-| `0x04` | word | Runtime status flags; bit 0 means runtime services ready. |
-
-Runtime service table layout at the returned far pointer:
-| Offset | Size | Meaning |
-|---:|---:|---|
-| `0x00` | dword | Header magic `RTSV`. |
-| `0x04` | word | ABI version, currently `1`. |
-| `0x06` | word | Service count, currently `5`. |
-| `0x08` | word | Descriptor size, currently `8`. |
-| `0x0A` | 8 bytes | First service descriptor. |
-| `0x12` | 8 bytes | Second service descriptor. |
-| `0x1A` | 8 bytes | Third service descriptor. |
-| `0x22` | 8 bytes | Fourth service descriptor. |
-| `0x2A` | 8 bytes | Fifth service descriptor. |
-
-Runtime service descriptor format:
-| Offset | Size | Meaning |
-|---:|---:|---|
-| `0x00` | word | Service id. |
-| `0x02` | word | Flags, bit 0 means callable. |
-| `0x04` | word | Far-call entry offset in the runtime segment. |
-| `0x06` | word | Reserved. |
-
-1. Service id `1` remains the runtime identity/status service. It has no side effects, returns `CF=0`, and returns `AX=0x5254`.
-2. Service id `2` is a version-string diagnostic provider. It returns `CF=0` and returns `DS:SI` pointing at the runtime-owned `runtime_version` string.
-3. Service id `3` is a stage2-ready marker provider. It returns `CF=0` and returns `DS:SI` pointing at a runtime-owned `[S2]` ready marker string.
-4. Service id `4` is a DOS version query provider. It returns `CF=0` and provides the runtime-owned DOS version result used by the normal full/full-CD silent bootstrap cache and by `INT 21h AH=30h` forwarding when runtime state is available.
-5. Service id `5` is a default-drive state bridge. It returns `CF=0` and `DS:SI` pointing at the runtime-owned default-drive byte.
-
-Normal full and full-CD boots now perform a silent runtime bootstrap/cache step so Stage1 can consult runtime-owned immutable and low-risk live state without changing visible boot output. `INT 21h AH=30h` forwards to cached service id `4` state when available and falls back to the previous local DOS version path when runtime bootstrap or the service call is unavailable.
-
-Stage1 now also uses service id `5` as the narrow mutable-state bridge for the current tranche. Stage1 reads the runtime-owned default-drive byte when available, synchronizes the runtime-owned byte after silent runtime init, and mirrors later set-default-drive updates back into runtime state so the current default-drive view remains aligned without making normal boot depend on `RUNTIME.BIN`.
-
-The first live extraction also now consumes runtime service id `3` inside `init_stage2_services`. If the runtime marker is unavailable or invalid, Stage1 keeps the previous local Stage2-ready behavior, including the preserved fallback-local serial marker path.
-
-Stage1 now requires a valid header, five valid callable descriptors, a successful service id `1` call, a successful service id `2` call returning the expected `CiukiOS runtime split` prefix from runtime-owned memory, a successful service id `3` call returning the runtime-owned `[S2]` ready marker string, a successful service id `4` call returning the expected DOS version state, a successful service id `5` call returning a default-drive pointer inside the runtime segment, matching Stage1/runtime default-drive bytes, and `status_flags & 1` before emitting probe success.
-
-### Current Validated Five-Service Sizes
-| Artifact | Size |
-|---|---:|
-| full Stage1 | 34,989 bytes |
-| full-cd Stage1 | 35,054 bytes |
-| full runtime probe Stage1 | 35,336 bytes |
-| `RUNTIME.BIN` | 167 bytes |
-
-### Probe Validation Semantics
-Probe markers now represent ordered checkpoints:
-1. `[RTP] B` - runtime probe started.
-2. `[RTP] T` - runtime service table header and descriptor validated.
-3. `[RTP] C` - runtime service calls returned the expected identity, version string, stage2-ready marker, DOS version state, and default-drive pointer/consistency results.
-4. `[RTP] OK` - probe success after all validations.
-5. `[RTP] BAD` - runtime load, signature, table, descriptor, or service validation failed; fallback continued safely.
-
-### Service id `5` Completed
-This cycle completed the previous conservative extraction target by moving default-drive state into a runtime-owned byte exposed through a service-table pointer, while still keeping Stage1 as the visible default owner when runtime bootstrap or validation fails.
-
-### Conservative Next Extraction Target
-Keep the next slice narrower than a subsystem transfer: extract one more read-mostly runtime-owned profile or diagnostic byte that is consumed by exactly one existing Stage1 path and still has an unchanged local fallback. Do not move allocator, PSP/MCB, EXEC, file-I/O core, termination, or CD/device-mutation ownership yet.
-
-## Post-Foundation Product Order
-After the current split foundation, the execution order should remain conservative:
-
-1. Continue the runtime split with the next read-only immutable-state service and other tiny runtime-owned slices.
-2. Add one read-only runtime service that returns real runtime or profile state.
-3. Move one small live helper or diagnostic path into runtime ownership.
-4. Use the stronger runtime boundary to improve arbitrary DOS program compatibility from the full and full-CD profiles.
-5. Treat legacy audio as the next major compatibility milestone after broader DOS application bring-up.
-6. Keep networking and Windows pre-NT behind those priorities.
-
-The split is therefore not an isolated architecture exercise. It is the enabling path for broader DOS software compatibility, later audio/device work, and only then Windows pre-NT milestones.
+Phase 6 is **ACTIVE**. Logical JFT/SFT depth, broader handle semantics, and the quantitative external-program corpus are Phase 6 compatibility closure items. They are not missing Phase 5 ownership tranches: the corresponding implementation now lives inside CIUKIDOS, and Phase 5 concerns the code/state boundary rather than proving complete compatibility with arbitrary DOS software.

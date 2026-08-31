@@ -1,5 +1,7 @@
 # Engineering Logbook - CiukiOS Legacy v2
 
+> Historical log through early May 2026. It is not the current phase-status authority; use `../Roadmap.md` and the focused runtime/compatibility plans for current status.
+
 ## 2026-04-22
 1. Decision: full architectural reset toward legacy BIOS x86.
 2. Action: previous project state reset for the clean legacy BIOS x86 baseline.
@@ -123,3 +125,18 @@
 
 ## 2026-05-05
 103. Release: bumped project version to `CiukiOS pre-Alpha v0.6.3` after full/full-CD shell, setup, path-case, and drive-semantics stabilization.
+
+## 2026-08-29
+104. Release: bumped project version to `CiukiOS pre-Alpha v0.7.1` after the Phase 5 ownership closure, current DOS compatibility work, Costa/WOLF3D integration, and the configurable resident IPv4/ICMP plus FTP networking milestone.
+
+## 2026-08-31
+105. Compatibility: stabilized the shared PS/2 mouse route across Costa, DOSNavigator, and Windows 3.1; SDL over verified X11/XWayland is the canonical graphical path, BIOS PS/2 clients own cursor rendering, and Windows callback state is cleared before guest memory is released.
+106. DOSNavigator: validated one-row arrow navigation, mouse input, Colors/XMS, durable `EXIT`, and restoration of the CiukiOS shell; the workload remains PARTIAL because its packaged loader hook and broad file/full-CD coverage remain open.
+107. Windows: completed the first bounded Phase 9 milestone on `full`: two Windows 3.1 386 Enhanced Mode launches, exactly one moving pointer, Calculator plus task-scoped `Alt+F4`, Program Manager survival, clean shell restoration, and relaunch.
+108. Runtime: increased the default VM to 256 MiB, expanded BIOS/XMS-visible memory to approximately 63 MiB, required KVM in canonical interactive runners, and retained explicit `auto`/TCG diagnostic overrides.
+109. Documentation: synchronized current milestones, compatibility boundaries, Phase 9 status, and the measured Phase 5 layout (1,542-byte loader; 43,254-byte CIUKIDOS with a 43,264-byte ceiling) without promoting unresolved Doom graphics/audio, WOLF3D patch/full-CD/audio, Phase 6 corpus, or wider Windows work.
+
+## 2026-09-01
+110. Runtime validation: replaced the oversized probe-only CIUKIDOS build with a black-box `CIUKRTST.COM` check against the exact canonical 43,254-byte kernel, then derived all eight fatal ABI cases from the same hash-verified image.
+111. Networking/EXEC: fixed `NETSTART` as a normal DOS COM parent by relocating its transient stack and releasing unused PSP paragraphs with `AH=4Ah` before nested `AH=4Bh`; added hexadecimal DOS error reporting and revalidated both FTP and ICMP gates.
+112. Release: promoted the current milestone ledger to a stable filename, aligned the v0.7.1 documentation to the exact release checkout, and retained Phase 6, Phase 7, broader Phase 8/9, Doom graphics/audio, and WOLF3D generalization as explicit open work.

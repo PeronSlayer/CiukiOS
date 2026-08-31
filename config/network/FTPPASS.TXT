@@ -1,0 +1,3 @@
+# user password sandboxdir uploaddir permissions
+# This default is intended for QEMU user-mode networking only.
+ciukios ciukios /drive_c/share [any] all

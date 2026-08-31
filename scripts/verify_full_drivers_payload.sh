@@ -14,6 +14,8 @@ set -euo pipefail
 : "${GENERATED_PMIRQSB_COM:=$CIUKIOS_ROOT/build/full/obj/pmirqsb.com}"
 : "${GENERATED_PMIRQSB_LE:=$CIUKIOS_ROOT/build/full/obj/pmirqsb.le}"
 : "${GENERATED_DOS4GW_EXE:=/opt/watcom/binw/dos4gw.exe}"
+: "${CTMOUSE_BIN:=$CIUKIOS_ROOT/third_party/ctmouse/ctmouse.exe}"
+: "${CTMOUSE_LICENSE:=$CIUKIOS_ROOT/third_party/ctmouse/copying}"
 
 if [[ "$IMG" != /* ]]; then
 	IMG="$CIUKIOS_ROOT/$IMG"
@@ -98,7 +100,7 @@ src_manifest="$tmp_dir/src_manifest.txt"
 img_manifest="$tmp_dir/img_manifest.txt"
 expected_src_dir="$DRIVERS_SRC_DIR"
 
-if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" || -f "$GENERATED_AUDIOTST_COM" || -f "$GENERATED_AUDIOKEY_COM" || -f "$GENERATED_PMIRQSB_COM" || -f "$GENERATED_PMIRQSB_LE" ]]; then
+if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" || -f "$GENERATED_AUDIOTST_COM" || -f "$GENERATED_AUDIOKEY_COM" || -f "$GENERATED_PMIRQSB_COM" || -f "$GENERATED_PMIRQSB_LE" || -f "$CTMOUSE_BIN" ]]; then
 	expected_src_dir="$tmp_dir/expected_drivers"
 	mkdir -p "$expected_src_dir"
 	cp -a "$DRIVERS_SRC_DIR"/. "$expected_src_dir"/
@@ -122,6 +124,10 @@ if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" || -f "$GENERA
 		if [[ -f "$GENERATED_DOS4GW_EXE" ]]; then
 			cp "$GENERATED_DOS4GW_EXE" "$expected_src_dir/DOS4GW.EXE"
 		fi
+	fi
+	if [[ -f "$CTMOUSE_BIN" && -f "$CTMOUSE_LICENSE" ]]; then
+		cp "$CTMOUSE_BIN" "$expected_src_dir/CTMOUSE.EXE"
+		cp "$CTMOUSE_LICENSE" "$expected_src_dir/CTMOUSE.GPL"
 	fi
 fi
 

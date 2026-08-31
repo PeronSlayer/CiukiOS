@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
 
 DO_BUILD=1
 IMG="build/full/ciukios-full-cd-direct.iso"
@@ -23,10 +24,9 @@ usage() {
 Usage: scripts/qemu_test_full_cd_shell_drive.sh [--no-build]
 
 Boots the full-CD direct ISO headlessly and validates shell drive/CWD behavior:
-  initial D:\APPS prompt
-  drives reports default drive D
-  pwd returns APPS
-  dos21 emits DOS21-SERIAL PASS
+  initial SHELL.COM D:\APPS prompt
+  pwd reports D:\APPS
+  CIUKRTST.COM confirms the CIUKIDOS runtime contract
   cd.. returns D:\ prompt
   cd APPS returns D:\APPS prompt
 
@@ -113,6 +113,7 @@ wait_for_socket() {
     if (( now - start >= timeout_sec )); then
       return 1
     fi
+    sleep 0.05
   done
 }
 
@@ -124,13 +125,14 @@ wait_for_regex_from_offset() {
   local start now
   start="$(date +%s)"
   while true; do
-    if [[ -f "$file" ]] && tail -c +"$((offset + 1))" "$file" 2>/dev/null | grep -Eiq "$pattern"; then
+    if [[ -f "$file" ]] && "$SERIAL_NORMALIZER" --offset "$offset" "$file" | grep -Eiq "$pattern"; then
       return 0
     fi
     now="$(date +%s)"
     if (( now - start >= timeout_sec )); then
       return 1
     fi
+    sleep 0.05
   done
 }
 
@@ -247,6 +249,7 @@ done
 need_cmd socat
 need_cmd strings
 need_cmd timeout
+need_cmd python3
 
 if (( DO_BUILD )); then
   echo "[full-cd-shell-drive] build step"
@@ -269,14 +272,12 @@ QEMU_TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-240}"
 PROMPT_TIMEOUT_SEC="${FULL_CD_SHELL_DRIVE_PROMPT_TIMEOUT_SEC:-120}"
 COMMAND_TIMEOUT_SEC="${FULL_CD_SHELL_DRIVE_COMMAND_TIMEOUT_SEC:-60}"
 
-PROMPT_PREFIX='C{1,2}i{1,2}u{1,2}k{1,2}i{1,2}O{1,2}S{1,2}[[:space:]]+'
-BS='[\\]'
-ROOT_PROMPT_PATTERN="${PROMPT_PREFIX}D{1,2}:{1,2}${BS}{1,2}>{1,2}"
-APPS_PROMPT_PATTERN="${PROMPT_PREFIX}D{1,2}:{1,2}${BS}{1,2}A{1,2}P{2,4}S{1,2}${BS}{1,2}>{1,2}"
-DEFAULT_DRIVE_D_PATTERN='d{1,2}e{1,2}f{1,2}a{1,2}u{1,2}l{1,2}t{1,2}[[:space:]]+d{1,2}r{1,2}i{1,2}v{1,2}e{1,2}={1,2}D{1,2}'
-CWD_APPS_PATTERN='c{1,2}w{1,2}d{1,2}={1,2}A{1,2}P{2,4}S{1,2}'
-DOS21_PASS_PATTERN='\[DOS21-SERIAL\][[:space:]]+PASS|\[{1,2}D{1,2}O{1,2}S{1,2}2{1,2}1{1,2}-{1,2}S{1,2}E{1,2}R{1,2}I{1,2}A{1,2}L{1,2}\]{1,2}[[:space:]]+P{1,2}A{1,2}S{2,4}'
-CD_ERROR_PATTERN='cd[[:space:]]+err=0x|c{1,2}d{1,2}.*e{1,2}r{2,4}={1,2}0{1,2}x{1,2}'
+SHELL_PROMPT_PREFIX='C+I+U+K+I+O+S+[[:space:]]+S+H+E+L+L+[[:space:]]+'
+ROOT_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}D+[:]+[\\]+>+"
+APPS_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}D+[:]+[\\]+A+P+P+S+>+"
+CWD_APPS_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+D+[:]+[\\]+A+P+P+S+'
+CIUKRTST_PASS_PATTERN='\[CIUKRTST\][[:space:]]+OWNER=CIUKIDOS[[:space:]]+ABI=2[[:space:]]+SERVICES=11[[:space:]]+CHAIN=0[[:space:]]+STATE=PASS'
+CD_ERROR_PATTERN='C+D+[:]+[[:space:]]+I+N+V+A+L+I+D+'
 
 QEMU_ARGS=(
   -machine pc,vmport=off
@@ -315,9 +316,8 @@ if ! wait_for_regex_from_offset "$SERIAL_LOG" "$APPS_PROMPT_PATTERN" 0 "$PROMPT_
 fi
 mark_pass "INITIAL_D_APPS_PROMPT"
 
-send_and_wait_for_pattern_and_prompt 'drives' "$DEFAULT_DRIVE_D_PATTERN" "$APPS_PROMPT_PATTERN" "DRIVES_DEFAULT_D" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "PWD_APPS" "$COMMAND_TIMEOUT_SEC"
-send_and_wait_for_pattern_and_prompt 'dos21' "$DOS21_PASS_PATTERN" "$ROOT_PROMPT_PATTERN" "DOS21_SERIAL_PASS" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'pwd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "PWD_D_APPS" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt 'ciukrtst' "$CIUKRTST_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "CIUKRTST_D_APPS" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'cd..' "$ROOT_PROMPT_PATTERN" "CDDOTDOT_D_ROOT" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'cd APPS' "$APPS_PROMPT_PATTERN" "CD_APPS_D_APPS" "$COMMAND_TIMEOUT_SEC"
 send_and_wait_for_prompt 'cd C:\' "$APPS_PROMPT_PATTERN" "CD_C_ROOT_DEFAULT_D_APPS" "$COMMAND_TIMEOUT_SEC"
@@ -339,7 +339,7 @@ ACTIVE_MON_SOCK=""
 ACTIVE_CMD_LOG=""
 rm -f "$MON_SOCK"
 
-strings -a "$SERIAL_LOG" > "$STRINGS_LOG" || true
+"$SERIAL_NORMALIZER" "$SERIAL_LOG" | strings -a > "$STRINGS_LOG" || true
 
 {
   echo "QEMU_CMD=$QEMU_CMD"

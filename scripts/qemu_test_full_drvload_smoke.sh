@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
 
 DO_BUILD="${DO_BUILD:-1}"
 IMG="build/full/ciukios-full.img"
@@ -178,36 +179,47 @@ wait_for_socket() {
   done
 }
 
-wait_for_regex() {
+normalized_from_offset() {
+  local file="$1"
+  local offset="$2"
+
+  [[ -f "$file" ]] || return 0
+  "$SERIAL_NORMALIZER" --offset "$offset" "$file"
+}
+
+wait_for_regex_from_offset() {
   local file="$1"
   local pattern="$2"
-  local timeout_sec="$3"
+  local offset="$3"
+  local timeout_sec="$4"
   local start now
   start="$(date +%s)"
   while true; do
-    if [[ -f "$file" ]] && grep -Eiq "$pattern" "$file"; then
+    if normalized_from_offset "$file" "$offset" | grep -aEiq -- "$pattern"; then
       return 0
     fi
     now="$(date +%s)"
     if (( now - start >= timeout_sec )); then
       return 1
     fi
+    sleep 0.05
   done
 }
 
 wait_for_done_with_nudge() {
   local file="$1"
   local pattern="$2"
-  local timeout_sec="$3"
-  local sock="$4"
-  local cmd_log="$5"
+  local offset="$3"
+  local timeout_sec="$4"
+  local sock="$5"
+  local cmd_log="$6"
   local start now next_nudge
 
   start="$(date +%s)"
   next_nudge=$((start + 2))
 
   while true; do
-    if [[ -f "$file" ]] && grep -Eiq "$pattern" "$file"; then
+    if normalized_from_offset "$file" "$offset" | grep -aEiq -- "$pattern"; then
       return 0
     fi
 
@@ -221,31 +233,15 @@ wait_for_done_with_nudge() {
     if (( now - start >= timeout_sec )); then
       return 1
     fi
+    sleep 0.05
   done
-}
-
-shell_prompt_seen() {
-  local file="$1"
-  if [[ ! -f "$file" ]]; then
-    return 1
-  fi
-  grep -Eiq 'CiukiOS C:\\|CCiiuukkiiOOSS' "$file"
 }
 
 wait_for_shell_prompt() {
   local file="$1"
-  local timeout_sec="$2"
-  local start now
-  start="$(date +%s)"
-  while true; do
-    if shell_prompt_seen "$file"; then
-      return 0
-    fi
-    now="$(date +%s)"
-    if (( now - start >= timeout_sec )); then
-      return 1
-    fi
-  done
+  local offset="$2"
+  local timeout_sec="$3"
+  wait_for_regex_from_offset "$file" "$SHELL_PROMPT_PATTERN" "$offset" "$timeout_sec"
 }
 
 hmp() {
@@ -318,6 +314,9 @@ done
 
 need_cmd socat
 need_cmd strings
+need_cmd python3
+[[ -x "$SERIAL_NORMALIZER" ]] \
+  || mark_fail "SERIAL_NORMALIZER" "missing executable: $SERIAL_NORMALIZER"
 
 if (( DO_BUILD )); then
   echo "[drvload-smoke] build step"
@@ -345,9 +344,12 @@ if [[ -n "$DRVLOAD_ARGS" ]]; then
   DRVLOAD_COMMAND+=" $DRVLOAD_ARGS"
 fi
 
-DRVLOAD_BEGIN_PATTERN='\[DRVLOAD\][[:space:]]+BEGIN|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+BBEEGGIIN'
-DRVLOAD_TRY_PATTERN='\[DRVLOAD\][[:space:]]+TRY[[:space:]]+|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+TTRRYY[[:space:]]+'
-DRVLOAD_DONE_PATTERN='\[DRVLOAD\][[:space:]]+DONE|\[{1,2}DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
+SHELL_PROMPT_PATTERN='CiukiOS[[:space:]]+SHELL[[:space:]]+C:[\\]APPS>'
+CD_CASE_FAIL_PATTERN='cd:[[:space:]]+invalid[[:space:]]+path'
+CWD_APPS_PATTERN='Current[[:space:]]+directory:[[:space:]]+C:[\\]APPS'
+DRVLOAD_BEGIN_PATTERN='\[DRVLOAD\][[:space:]]+BEGIN'
+DRVLOAD_TRY_PATTERN='\[DRVLOAD\][[:space:]]+TRY[[:space:]]+'
+DRVLOAD_DONE_PATTERN='\[DRVLOAD\][[:space:]]+DONE'
 
 configure_audio_args "$QEMU_CMD" headless
 
@@ -386,41 +388,53 @@ if ! kill -0 "$QEMU_PID" >/dev/null 2>&1; then
   mark_fail "QEMU_EARLY_EXIT" "qemu exited before shell prompt"
 fi
 
-if ! wait_for_shell_prompt "$SERIAL_LOG" "$PROMPT_TIMEOUT_SEC"; then
+if ! wait_for_shell_prompt "$SERIAL_LOG" 0 "$PROMPT_TIMEOUT_SEC"; then
   mark_fail "PROMPT" "shell prompt not detected"
 fi
 mark_pass "PROMPT"
 
-CD_CASE_FAIL_PATTERN='cd[[:space:]]+err=0x|ccdd.*00xx'
-send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cd \Apps' || mark_fail "SEND_CASE_REJECT" "cannot send mixed-case cd command"
-if ! wait_for_regex "$SERIAL_LOG" "$CD_CASE_FAIL_PATTERN" 20; then
-  mark_fail "PATH_CASE_REJECT" "mixed-case path unexpectedly resolved or error marker missing"
+CASE_OFFSET="$(wc -c < "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cd \Apps' || mark_fail "SEND_CASE_ACCEPT" "cannot send mixed-case cd command"
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$CWD_APPS_PATTERN" "$CASE_OFFSET" 20; then
+  mark_fail "PATH_CASE_ACCEPT" "mixed-case DOS path did not resolve to C:\\APPS"
 fi
-mark_pass "PATH_CASE_REJECT"
-if ! wait_for_shell_prompt "$SERIAL_LOG" 30; then
-  mark_fail "PROMPT_AFTER_CASE_REJECT" "shell prompt missing after mixed-case path rejection"
+mark_pass "PATH_CASE_ACCEPT"
+if ! wait_for_shell_prompt "$SERIAL_LOG" "$CASE_OFFSET" 30; then
+  mark_fail "PROMPT_AFTER_CASE_ACCEPT" "shell prompt missing after mixed-case path acceptance"
 fi
-mark_pass "PROMPT_AFTER_CASE_REJECT"
+mark_pass "PROMPT_AFTER_CASE_ACCEPT"
 
+INVALID_PATH_OFFSET="$(wc -c < "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cd \NoSuchPath' || mark_fail "SEND_INVALID_PATH" "cannot send invalid cd command"
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$CD_CASE_FAIL_PATTERN" "$INVALID_PATH_OFFSET" 20; then
+  mark_fail "INVALID_PATH_REJECT" "invalid path error missing"
+fi
+mark_pass "INVALID_PATH_REJECT"
+if ! wait_for_shell_prompt "$SERIAL_LOG" "$INVALID_PATH_OFFSET" 30; then
+  mark_fail "PROMPT_AFTER_INVALID_PATH" "shell prompt missing after invalid path rejection"
+fi
+mark_pass "PROMPT_AFTER_INVALID_PATH"
+
+DRVLOAD_OFFSET="$(wc -c < "$SERIAL_LOG")"
 send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$DRVLOAD_COMMAND" || mark_fail "SEND_COMMAND" "cannot send DRVLOAD command"
 mark_pass "SEND_COMMAND"
 
-if ! wait_for_regex "$SERIAL_LOG" "$DRVLOAD_BEGIN_PATTERN" "$MARKER_TIMEOUT_SEC"; then
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$DRVLOAD_BEGIN_PATTERN" "$DRVLOAD_OFFSET" "$MARKER_TIMEOUT_SEC"; then
   mark_fail "DRVLOAD_BEGIN" "missing [DRVLOAD] BEGIN marker"
 fi
 mark_pass "DRVLOAD_BEGIN"
 
-if ! wait_for_regex "$SERIAL_LOG" "$DRVLOAD_TRY_PATTERN" "$MARKER_TIMEOUT_SEC"; then
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$DRVLOAD_TRY_PATTERN" "$DRVLOAD_OFFSET" "$MARKER_TIMEOUT_SEC"; then
   mark_fail "DRVLOAD_TRY" "missing [DRVLOAD] TRY marker"
 fi
 mark_pass "DRVLOAD_TRY"
 
-if ! wait_for_done_with_nudge "$SERIAL_LOG" "$DRVLOAD_DONE_PATTERN" "$MARKER_TIMEOUT_SEC" "$MON_SOCK" "$CMD_LOG"; then
+if ! wait_for_done_with_nudge "$SERIAL_LOG" "$DRVLOAD_DONE_PATTERN" "$DRVLOAD_OFFSET" "$MARKER_TIMEOUT_SEC" "$MON_SOCK" "$CMD_LOG"; then
   mark_fail "DRVLOAD_DONE" "missing [DRVLOAD] DONE marker"
 fi
 mark_pass "DRVLOAD_DONE"
 
-if ! wait_for_shell_prompt "$SERIAL_LOG" 60; then
+if ! wait_for_shell_prompt "$SERIAL_LOG" "$DRVLOAD_OFFSET" 60; then
   mark_fail "PROMPT_RETURN" "shell prompt did not return after DRVLOAD"
 fi
 mark_pass "PROMPT_RETURN"
@@ -438,7 +452,7 @@ ACTIVE_MON_SOCK=""
 ACTIVE_CMD_LOG=""
 rm -f "$MON_SOCK"
 
-strings -a "$SERIAL_LOG" > "$STRINGS_LOG" || true
+"$SERIAL_NORMALIZER" "$SERIAL_LOG" | strings -a > "$STRINGS_LOG" || true
 
 if ! grep -Eiq "$DRVLOAD_BEGIN_PATTERN" "$STRINGS_LOG"; then
   mark_fail "STRINGS_BEGIN" "BEGIN marker missing in strings log"

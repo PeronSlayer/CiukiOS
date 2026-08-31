@@ -17,7 +17,7 @@ BOOT_BIN="build/floppy/obj/floppy_boot.bin"
 STAGE1_SRC="src/boot/floppy_stage1.asm"
 STAGE1_BIN="build/floppy/obj/floppy_stage1.bin"
 STAGE1_SLOT_BIN="build/floppy/obj/floppy_stage1_slot.bin"
-STAGE1_SECTORS=50
+STAGE1_SECTORS=56
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 STAGE2_SRC="src/boot/floppy_stage2.asm"
 STAGE2_BIN="build/floppy/obj/floppy_stage2.bin"
@@ -35,7 +35,7 @@ DELTEST_BIN="build/floppy/obj/deltest.bin"
 DELTEST_MAX_SIZE=512
 CIUKEDIT_SRC="src/com/ciukedit.asm"
 CIUKEDIT_BIN="build/floppy/obj/ciukedit.com"
-CIUKEDIT_MAX_SIZE=1024
+CIUKEDIT_MAX_SIZE=8192
 GFXRECT_SRC="src/com/gfxrect.asm"
 GFXRECT_BIN="build/floppy/obj/gfxrect.com"
 GFXRECT_MAX_SIZE=1024
@@ -116,6 +116,7 @@ nasm -f bin "$STAGE1_SRC" \
   -D FAT_TYPE=12 \
   -D FAT_LBA_OFFSET=0 \
   -D STAGE1_SELFTEST_AUTORUN="$STAGE1_SELFTEST_AUTORUN" \
+  -D STAGE2_AUTORUN=0 \
   -o "$STAGE1_BIN"
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
 if [[ "$STAGE1_SIZE" -gt "$STAGE1_SLOT_SIZE" ]]; then

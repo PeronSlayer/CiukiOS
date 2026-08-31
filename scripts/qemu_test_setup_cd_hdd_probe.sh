@@ -7,6 +7,7 @@ cd "$CIUKIOS_ROOT"
 OUT_DIR="build/full/setup-hdd"
 TARGET_IMG="$OUT_DIR/cd-probe-blank-hdd.img"
 SERIAL_LOG="$OUT_DIR/cd_probe.serial.log"
+NORMALIZED_LOG="$OUT_DIR/cd_probe.serial.normalized.log"
 STDERR_LOG="$OUT_DIR/cd_probe.stderr.log"
 CMD_LOG="$OUT_DIR/cd_probe.commands.log"
 MON_SOCK="/tmp/ciukios-setup-cd-hdd-probe-$$.monitor.sock"
@@ -15,6 +16,7 @@ HASH_BEFORE="$OUT_DIR/cd_probe_hdd_before.sha256"
 HASH_AFTER="$OUT_DIR/cd_probe_hdd_after.sha256"
 DIRECT_ISO="build/full/ciukios-full-cd-direct.iso"
 TARGET_SECTORS="${CIUKIOS_CD_HDD_PROBE_TARGET_SECTORS:-524288}"
+SERIAL_NORMALIZER="$CIUKIOS_ROOT/scripts/serial_log_normalize.py"
 qemu_pid=""
 
 cleanup_qemu() {
@@ -40,14 +42,19 @@ for tool in dd sha256sum qemu-system-i386 grep socat; do
     exit 1
   fi
 done
+if [[ ! -x "$SERIAL_NORMALIZER" ]]; then
+  echo "[setup-cd-hdd] ERROR: serial normalizer is not executable: $SERIAL_NORMALIZER" >&2
+  exit 1
+fi
 
-wait_for_regex() {
-  local file="$1"
-  local pattern="$2"
-  local timeout_sec="$3"
+wait_for_normalized_regex() {
+  local pattern="$1"
+  local timeout_sec="$2"
   local start=$SECONDS
   while (( SECONDS - start < timeout_sec )); do
-    if [[ -f "$file" ]] && grep -aEq "$pattern" "$file"; then
+    if [[ -f "$SERIAL_LOG" ]] \
+      && "$SERIAL_NORMALIZER" "$SERIAL_LOG" > "$NORMALIZED_LOG" \
+      && grep -aEq "$pattern" "$NORMALIZED_LOG"; then
       return 0
     fi
     sleep 0.1
@@ -101,7 +108,7 @@ if [[ ! -f "$DIRECT_ISO" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
-rm -f "$TARGET_IMG" "$SERIAL_LOG" "$STDERR_LOG" "$CMD_LOG" "$RC_LOG" "$HASH_BEFORE" "$HASH_AFTER" "$MON_SOCK"
+rm -f "$TARGET_IMG" "$SERIAL_LOG" "$NORMALIZED_LOG" "$STDERR_LOG" "$CMD_LOG" "$RC_LOG" "$HASH_BEFORE" "$HASH_AFTER" "$MON_SOCK"
 
 echo "[setup-cd-hdd] creating blank disposable target HDD: $TARGET_IMG"
 dd if=/dev/zero of="$TARGET_IMG" bs=512 count="$TARGET_SECTORS" status=none
@@ -117,7 +124,7 @@ if ! wait_for_socket "$MON_SOCK" 20; then
   exit 1
 fi
 
-if ! wait_for_regex "$SERIAL_LOG" "AAPPPPSS" 90; then
+if ! wait_for_normalized_regex 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+D:[\\]APPS[\\]?>' 90; then
   echo "[setup-cd-hdd] ERROR: shell prompt marker missing before setup" >&2
   printf "%s\n" "1" > "$RC_LOG"
   exit 1
@@ -125,7 +132,7 @@ fi
 
 send_setup_command
 
-if ! wait_for_regex "$SERIAL_LOG" "\[SETUP-HDD-PROBE\] P=03 B=02 S=01" 45; then
+if ! wait_for_normalized_regex '\[SETUP-HDD-PROBE\] P=03 B=02 S=01' 45; then
   echo "[setup-cd-hdd] ERROR: setup BIOS HDD probe marker missing" >&2
   printf "%s\n" "1" > "$RC_LOG"
   exit 1
@@ -134,28 +141,29 @@ fi
 cleanup_qemu
 sha256sum "$TARGET_IMG" > "$HASH_AFTER"
 
+if ! "$SERIAL_NORMALIZER" "$SERIAL_LOG" > "$NORMALIZED_LOG"; then
+  echo "[setup-cd-hdd] ERROR: could not normalize CD probe serial log" >&2
+  exit 1
+fi
+
 if ! cmp -s "$HASH_BEFORE" "$HASH_AFTER"; then
   echo "[setup-cd-hdd] ERROR: blank target HDD changed during probe" >&2
   exit 1
 fi
 
-if ! grep -aF "Booting from DVD/CD" "$SERIAL_LOG" >/dev/null; then
+if ! grep -aF "Booting from DVD/CD" "$NORMALIZED_LOG" >/dev/null; then
   echo "[setup-cd-hdd] ERROR: CD boot marker missing" >&2
   exit 1
 fi
-if ! grep -aF "[STAGE1-SERIAL] READY" "$SERIAL_LOG" >/dev/null; then
-  echo "[setup-cd-hdd] ERROR: Stage1 marker missing" >&2
+if ! grep -aF "[BOOT0-FULL] CiukiOS full stage0 ready" "$NORMALIZED_LOG" >/dev/null; then
+  echo "[setup-cd-hdd] ERROR: full stage0 marker missing" >&2
   exit 1
 fi
-if ! grep -aF "[STAGE2] return to shell" "$SERIAL_LOG" >/dev/null; then
-  echo "[setup-cd-hdd] ERROR: Stage2 return marker missing" >&2
+if ! grep -aEq 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+D:[\\]APPS[\\]?>' "$NORMALIZED_LOG"; then
+  echo "[setup-cd-hdd] ERROR: D:\\APPS shell prompt missing" >&2
   exit 1
 fi
-if ! grep -aF "PPAASSSS" "$SERIAL_LOG" >/dev/null; then
-  echo "[setup-cd-hdd] ERROR: HW PASS marker missing" >&2
-  exit 1
-fi
-if ! grep -aF "[SETUP-HDD-PROBE]" "$SERIAL_LOG" >/dev/null; then
+if ! grep -aF "[SETUP-HDD-PROBE] P=03 B=02 S=01" "$NORMALIZED_LOG" >/dev/null; then
   echo "[setup-cd-hdd] ERROR: setup probe marker missing" >&2
   exit 1
 fi

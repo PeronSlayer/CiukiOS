@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
 
 DO_BUILD=1
 IMG="build/full/ciukios-full.img"
@@ -130,13 +131,15 @@ wait_for_regex_from_offset() {
   local start now
   start="$(date +%s)"
   while true; do
-    if [[ -f "$file" ]] && tail -c +"$((offset + 1))" "$file" 2>/dev/null | grep -Eiq "$pattern"; then
+    if [[ -f "$file" ]] && \
+      "$SERIAL_NORMALIZER" --offset "$offset" "$file" | grep -aEiq -- "$pattern"; then
       return 0
     fi
     now="$(date +%s)"
     if (( now - start >= timeout_sec )); then
       return 1
     fi
+    sleep 0.05
   done
 }
 
@@ -295,6 +298,9 @@ done
 need_cmd socat
 need_cmd strings
 need_cmd timeout
+need_cmd python3
+[[ -x "$SERIAL_NORMALIZER" ]] \
+  || mark_fail "SERIAL_NORMALIZER" "missing executable: $SERIAL_NORMALIZER"
 
 if (( DO_BUILD )); then
   echo "[shell-stability] build step"
@@ -319,17 +325,20 @@ COMMAND_TIMEOUT_SEC="${SHELL_STABILITY_COMMAND_TIMEOUT_SEC:-60}"
 DRVLOAD_TIMEOUT_SEC="${SHELL_STABILITY_DRVLOAD_TIMEOUT_SEC:-120}"
 STRESS_LOOPS="${SHELL_STABILITY_STRESS_LOOPS:-4}"
 
-PROMPT_PREFIX='C{1,2}i{1,2}u{1,2}k{1,2}i{1,2}O{1,2}S{1,2}[[:space:]]+'
+PROMPT_PREFIX='CiukiOS[[:space:]]+SHELL[[:space:]]+'
 BS='[\\]'
-ROOT_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}>{1,2}"
-ANY_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}"
-APPS_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}A{1,2}P{2,4}S{1,2}${BS}{1,2}>{1,2}"
-DOOM_PROMPT_PATTERN="${PROMPT_PREFIX}C{1,2}:{1,2}${BS}{1,2}A{1,2}P{2,4}S{1,2}${BS}{1,2}D{1,2}O{2,4}M{1,2}${BS}{1,2}>{1,2}"
-CD_CASE_FAIL_PATTERN='cd[[:space:]]+err=0x|c{1,2}d{1,2}.*e{1,2}r{2,4}={1,2}0{1,2}x{1,2}'
-CWD_APPS_PATTERN='cwd=.*APPS|c{1,2}w{1,2}d{1,2}={1,2}.*A{1,2}P{2,4}S{1,2}'
-UNKNOWN_COMMAND_PATTERN='Unknown[[:space:]]+command|U{1,2}n{1,2}k{1,2}n{1,2}o{1,2}w{1,2}n{1,2}[[:space:]]+c{1,2}o{1,2}m{2,4}a{1,2}n{1,2}d{1,2}'
-COMDEMO_PASS_PATTERN='\[COMDEMO-SERIAL\][[:space:]]+PASS|\[{1,2}C{1,2}O{1,2}M{1,2}D{1,2}E{1,2}M{1,2}O{1,2}-{1,2}S{1,2}E{1,2}R{1,2}I{1,2}A{1,2}L{1,2}\]{1,2}[[:space:]]+P{1,2}A{1,2}S{2,4}'
-MZDEMO_PASS_PATTERN='\[MZDEMO-SERIAL\][[:space:]]+PASS|\[{1,2}M{1,2}Z{1,2}D{1,2}E{1,2}M{1,2}O{1,2}-{1,2}S{1,2}E{1,2}R{1,2}I{1,2}A{1,2}L{1,2}\]{1,2}[[:space:]]+P{1,2}A{1,2}S{2,4}'
+ROOT_PROMPT_PATTERN="${PROMPT_PREFIX}C:${BS}>"
+ANY_PROMPT_PATTERN="${PROMPT_PREFIX}C:"
+APPS_PROMPT_PATTERN="${PROMPT_PREFIX}C:${BS}APPS>"
+DOOM_PROMPT_PATTERN="${PROMPT_PREFIX}C:${BS}APPS${BS}DOOM>"
+CD_CASE_FAIL_PATTERN='cd:[[:space:]]+invalid[[:space:]]+path'
+CWD_APPS_PATTERN='Current[[:space:]]+directory:[[:space:]]+C:[\\]APPS'
+UNKNOWN_COMMAND_PATTERN='command:[[:space:]]+not[[:space:]]+found'
+# Keep the long invalid executable name inside the resolver's 64-byte path
+# scratch after the implicit .COM/.EXE suffix and trailing NUL are added.
+LONG_INVALID_COMMAND='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+COMDEMO_PASS_PATTERN='COM[[:space:]]+demo[[:space:]]+via[[:space:]]+INT21h'
+MZDEMO_PASS_PATTERN='MZ[[:space:]]+demo[[:space:]]+via[[:space:]]+INT21h'
 DRVLOAD_BEGIN_PATTERN='\[DRVLOAD\][[:space:]]+BEGIN|\[\[DDRRVVLLOOAADD\]\][[:space:]]+BBEEGGIIN'
 DRVLOAD_DONE_PATTERN='\[DRVLOAD\][[:space:]]+DONE|\[\[DDRRVVLLOOAADD\]\][[:space:]]+DDOONNEE?'
 # TODO: Assert FREE footer presence here after the VGA-only footer renderer gains a serial marker suitable for this headless serial harness.
@@ -376,7 +385,7 @@ send_and_wait_for_pattern_and_prompt 'notacommand' "$UNKNOWN_COMMAND_PATTERN" "$
 for ((stress_i=1; stress_i<=STRESS_LOOPS; stress_i++)); do
   send_and_wait_for_pattern_and_prompt "badcmd${stress_i}" "$UNKNOWN_COMMAND_PATTERN" "$APPS_PROMPT_PATTERN" "INVALID_COMMAND_STRESS_${stress_i}" "$COMMAND_TIMEOUT_SEC"
 done
-send_and_wait_for_pattern_and_prompt 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz' "$UNKNOWN_COMMAND_PATTERN" "$APPS_PROMPT_PATTERN" "LONG_INVALID_COMMAND_RECOVERY" "$COMMAND_TIMEOUT_SEC"
+send_and_wait_for_pattern_and_prompt "$LONG_INVALID_COMMAND" "$UNKNOWN_COMMAND_PATTERN" "$APPS_PROMPT_PATTERN" "LONG_INVALID_COMMAND_RECOVERY" "$COMMAND_TIMEOUT_SEC"
 send_text_keys_and_wait_for_pattern_and_prompt 'pwz' 'd' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "BACKSPACE_CORRECTION_PWD" "$COMMAND_TIMEOUT_SEC" backspace
 send_keys_and_wait_for_prompt "$APPS_PROMPT_PATTERN" "TAB_KEY_RECOVERY" "$COMMAND_TIMEOUT_SEC" tab ret
 send_and_wait_for_prompt 'pwd' "$APPS_PROMPT_PATTERN" "PWD_APPS_PROMPT_RETURNED" "$COMMAND_TIMEOUT_SEC"
@@ -393,12 +402,7 @@ for ((stress_i=1; stress_i<=STRESS_LOOPS; stress_i++)); do
   send_and_wait_for_pattern_and_prompt 'mzdemo' "$MZDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "MZDEMO_LOOP_${stress_i}" "$COMMAND_TIMEOUT_SEC"
 done
 
-CASE_OFFSET="$(file_size "$SERIAL_LOG")"
-send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cd \Apps' || mark_fail "SEND_MIXED_CASE_PATH_REJECT" "cannot send mixed-case cd command"
-if ! wait_for_regex_from_offset "$SERIAL_LOG" "$CD_CASE_FAIL_PATTERN" "$CASE_OFFSET" "$COMMAND_TIMEOUT_SEC"; then
-  mark_fail "MIXED_CASE_PATH_REJECT" "mixed-case path unexpectedly resolved or error marker missing"
-fi
-mark_pass "MIXED_CASE_PATH_REJECT"
+send_and_wait_for_pattern_and_prompt 'cd \Apps' "$CWD_APPS_PATTERN" "$APPS_PROMPT_PATTERN" "MIXED_CASE_PATH_ACCEPT" "$COMMAND_TIMEOUT_SEC"
 
 DRVLOAD_OFFSET="$(file_size "$SERIAL_LOG")"
 send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'run \SYSTEM\DRIVERS\DRVLOAD.COM' || mark_fail "SEND_DRVLOAD_RETURNED" "cannot send DRVLOAD command"
@@ -427,7 +431,7 @@ ACTIVE_MON_SOCK=""
 ACTIVE_CMD_LOG=""
 rm -f "$MON_SOCK"
 
-strings -a "$SERIAL_LOG" > "$STRINGS_LOG" || true
+"$SERIAL_NORMALIZER" "$SERIAL_LOG" | strings -a > "$STRINGS_LOG" || true
 
 {
   echo "QEMU_CMD=$QEMU_CMD"

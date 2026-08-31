@@ -1,38 +1,41 @@
-# SHELL.COM Migration Slice (2026-05-17)
+# SHELL.COM Migration Status
 
-## Goal
-Start moving shell UX out of Stage1 toward `\SYSTEM\SHELL.COM` without changing the default Stage1 shell, full/full-CD boot ownership, or the current DOOM and DOOMSFX lanes.
+## Status
 
-## Current Stage1 Shell Map
-- Prompt and loop: `print_prompt` and `main_loop` in `src/boot/floppy_stage1.asm`
-- Default shell directory setup: `init_shell_default_dirs`
-- Input editor/history/tab completion: `read_command_line`, `shell_line_*`, `shell_history_*`, `shell_try_tab_complete_line`
-- Builtin dispatch chain: `dispatch_command`
-- Exec parsing and command-tail packing: `shell_arg_ptr`, `shell_next_arg`, `shell_exec_set_tail_from_si`
-- External command resolution: `shell_try_resolve_exec_token`, `shell_try_exec_token`, `shell_try_exec_path`
-- Current bare-name search order: CWD, `\APPS`, `\SYSTEM\DRIVERS`
-- Current shell-heavy tests: `scripts/qemu_test_full_shell_stability.sh`, `scripts/qemu_test_full_cd_shell_drive.sh`, `scripts/qemu_test_full_dos_compat_smoke.sh`
+The prototype described on 2026-05-17 has become the default product shell for the active full and full-CD profiles.
 
-## Boundary For `\SYSTEM\SHELL.COM`
-- Normal DOS `.COM` process only; no Stage1 internal label calls.
-- Stable APIs only: DOS `INT 21h`, BIOS `INT 10h` only where needed.
-- No dependence on Stage1 private buffers like `cwd_buf`, `shell_exec_path_buf`, or shell editor state.
-- Launch contract is just PSP/environment/default drive/CWD/console handles from the existing DOS exec path.
-- Return contract is normal DOS process termination back to Stage1.
+Stage1 now behaves as a loader in the visible boot path:
 
-## Implemented In This Slice
-1. Added `src/com/shell.asm`, a tiny DOS shell prototype.
-2. Packaged it into full and full-CD images as `\SYSTEM\SHELL.COM`.
-3. Kept the default Stage1 shell completely unchanged as the boot-time owner and fallback.
-4. Added `scripts/qemu_test_full_shell_com.sh` and `make qemu-test-full-shell-com` for an opt-in launch lane.
+1. load and validate SYSTEM/CIUKIDOS.SYS
+2. initialize the runtime and its service table
+3. execute SYSTEM/SHELL.COM
+4. enter the bounded loader-fatal halt if the runtime or shell is missing/invalid, or if SHELL.COM returns
 
-## Prototype Command Surface
-- `help`
-- `ver`
-- `echo`
-- `cls`
-- `exit`
+The old interactive Stage1 shell is not the supported fallback contract.
 
-## Next Recommended Slice
-- Add `cd` and `dir` inside `SHELL.COM` via DOS `INT 21h`, or
-- Add an opt-in external-shell boot switch while preserving Stage1 fallback as the default.
+## Current Shell Boundary
+
+SHELL.COM is a normal DOS COM process. It uses DOS INT 21h and BIOS services rather than Stage1-private labels or buffers.
+
+The current command surface includes:
+
+1. prompt, line editing, history, and completion
+2. help/version/echo/clear commands
+3. current directory, drive, PATH, WHERE, RUN, and bare external execution
+4. directory listing and directory creation/removal
+5. copy, type, delete, rename, and move
+6. reboot, shutdown, and mouse helper integration
+7. disabled EXIT/QUIT behavior in the normal interactive session
+
+The full shell regression covers absolute and relative multi-component COM/MZ execution, extension search, PATH resolution, file operations, high FAT16 clusters, subdirectories, and prompt recovery. The full-CD D: lane now also covers COM/MZ, CIUKRTST/PSTACK, mouse state, power commands, prompt recovery, and a deterministic read beyond LBA 65,535. It remains an internal workflow rather than the general external-application matrix required by Phase 6.
+
+## Completion Status
+
+The migration completion signal is satisfied: `SHELL.COM` is the only interactive product shell, the loader contains no required interactive command processor or normal DOS owner, CIUKIDOS owns the DOS services used by shell/children, and the full/full-CD positive plus fatal-negative lanes protect the contract.
+
+## Remaining Shell Compatibility Work
+
+1. Keep command behavior independent of hard-coded C: assumptions when running from full-CD D:.
+2. Keep missing-runtime, missing-shell, invalid-shell, and unexpected-return tests aligned with the fatal-loader contract.
+3. Add compatibility features such as batch/config processing only through explicit Phase 6 requirements and tests.
+4. Treat new parser, environment, PATH, and child-return defects as Phase 6 shell compatibility work, not unfinished migration.

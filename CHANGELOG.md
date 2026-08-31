@@ -3,14 +3,116 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task should update `Unreleased` unless the task cuts a release section.
 
-## Unreleased (2026-05-11)
+## Unreleased
 
-0. Fixed the DOOM launch regression (silent hang right after `[MZ] run`): `int21_mem_find_next_alloc`'s empty-arena path loaded the caller's saved DI into FLAGS via a stray `pushf/pop di/popf`, leaking TF/DF into the exec path so the child started single-stepping and DOS/4GW's protected-mode switch vectored through its half-loaded IDT into a wild jump. Also made the CIUKIDOS.SYS DTA services CS-relative (they wrote runtime state through the caller's DS, corrupting the parent PSP area), hardened both COM/MZ child handoffs with a deterministic FLAGS image, captured the BIOS INT 16h vector so `int16_handler`'s chain target can never be `0000:0000`, grew the full-profile stage1 slot from 70 to 72 sectors (the trace-enabled diagnostic build had outgrown the slot), and replaced SETUP.COM's hardcoded stage1 default-drive patch LBA/offset with a build-time computed target derived from the stage1 listing.
+No changes yet.
+
+## pre-Alpha v0.7.1 (2026-09-01)
+
+Status alignment (2026-09-01): Phase 5 is **CLOSED** on the canonical `full`/`full-cd` ownership boundary. Stage1 is a 1,542-byte loader-only component at `0x0800`; stage0 reads 8 sectors while the BPB/disk slot remains 72 sectors (36,864 bytes). The wholesale `CIUKIDOS.SYS` DOS kernel is resident at `0x0900`, exports `ABI=2` with 11 services, 8-byte descriptors and capability mask `0x003F`, and reports `CHAIN=0` because no legacy Stage1 DOS far-chain remains. Its current artifact is 43,254 bytes with a hard maximum of `0xA900` (43,264 bytes); the four EXEC-state frames occupy `0x1400-0x1457`, and Stage2 starts at `0x1480`. Phase 6 remains active because its quantitative external corpus and full JFT/SFT behavioral depth are incomplete. Phase 7 has controlled audio groundwork but is not closed. Phase 8 has its first bounded networking milestone complete. Phase 9 is active with a bounded Windows 3.1 Enhanced Mode workflow complete, but broader Windows 3.1 and Windows 95/98 remain open.
+
+Release completion updates:
+
+- Fixed `NETSTART` nested Packet Driver launch through standard DOS COM
+  behavior: the transient installer stack is relocated, the PSP block is
+  shrunk with `AH=4Ah` before `AH=4Bh`, and failures retain the returned `AX`
+  code. Both FTP and standalone resident-ICMP gates pass without a kernel
+  executable-name exception.
+- Made the Phase 5 positive/negative runtime gate test the exact canonical
+  43,254-byte kernel through external `CIUKRTST.COM`, then mutate that same
+  hash-verified image for all eight fatal cases. The obsolete probe-only build
+  could exceed the product's ten-byte kernel margin and is no longer used as
+  release evidence.
+- Made graphical mouse capture deterministic on Wayland: canonical launchers
+  now prefer SDL over a verified X11/XWayland transport, enable the emulated
+  i8042 controller explicitly, and retain GTK only as a fallback or explicit
+  override. This restores relative PS/2 delivery to Costa, DOS Navigator, and
+  Windows after GTK grab-on-hover lost motion across guest video-mode changes.
+  Host window-close handling is disabled so Windows `Alt+F4` cannot terminate
+  QEMU. BIOS PS/2 clients now exclusively own cursor rendering, and the
+  Windows exit broadcast clears its callback before MOUSE.DRV memory is freed.
+- Increased the canonical `full` and `full-cd` VM default from 128 to 256 MiB
+  and expanded the legacy BIOS/XMS-visible extended-memory window from roughly
+  15 to 63 MiB. XMS moves now populate the complete 32-bit descriptor base,
+  allowing clients such as Windows 3.1 to use memory above the old 16 MiB
+  boundary. CPU and RAM remain configurable without introducing SMP that DOS
+  and Windows 3.1 cannot use.
+- Made KVM hardware acceleration the required default for both canonical
+  graphical launchers. Missing `/dev/kvm` access now fails explicitly instead
+  of silently selecting slow TCG; `auto`, `tcg`, and Wolf3D-safe `tcg-safe`
+  remain deliberate diagnostic/portability overrides. This accelerates
+  CPU-rendered DOS graphics while retaining the compatible standard VGA model.
+- Added verified X11/XWayland routing for graphical mouse capture on Wayland
+  hosts. The launcher prints the selected frontend/transport and the
+  click/Ctrl+Alt+G capture controls instead of inheriting an unreliable native
+  toolkit backend silently.
+- Enabled Windows 3.1 386 Enhanced Mode with the normal `WIN` command. CiukiDOS
+  now publishes the DOS 4/5 Swappable Data Area required by VMM, a valid DOSMGR
+  startup/patch/instance contract and NUL/CON device chain, and XMS-compatible
+  zero-length handles, UMB status, A20 ownership, and free-memory accounting.
+  DOS task termination now distinguishes the Windows system VM's EXEC owner
+  from each application's private PSP, so `Alt+F4` follows the child task's
+  termination vector instead of closing the complete Windows session.
+  The XMS hook window and EXEC file-handle state are restored on exit. Two
+  consecutive `WIN` cycles now reach Program Manager at 640x480 with a working
+  PS/2 mouse; a headless acceptance test covers start, pointer movement,
+  child-window `Alt+F4`, Program Manager responsiveness, visible shell UI
+  restoration after exit, and relaunch. `WIN /S` is retained only as a
+  Standard Mode fallback.
+- Integrated local Windows 3.1 media into the canonical `full` image instead
+  of a title-specific disk build: the seven source IMG files are hash-preserved
+  under `C:\MEDIA\WIN31`, merged setup files live under `C:\WIN31SET`, and an
+  optional locally installed tree is packaged under `C:\WINDOWS`. The common
+  build/run wrapper verifies this payload before launching the usual QEMU full
+  profile. The boot-resident PS/2 `INT 33h` implementation remains the default
+  mouse driver for all DOS clients, while GPL CuteMouse is now packaged as an
+  optional replacement under `C:\SYSTEM\DRIVERS`.
+- Completed the generic IBM PS/2 BIOS mouse path used by Windows 3.x: `INT
+  15h/AH=C2h` now implements device ID, reset, initialization, streaming,
+  sample rate, resolution, status, scaling, and callback framing against the
+  controller. Windows 3.1 now accepts repeated movement and
+  button packets without any executable-specific rule.
+- Removed executable-name/path compatibility rules for `DOOM.EXE` and the
+  legacy GEM desktop from the DOS kernel. Child environment trailers now use
+  the resolved drive/current-directory/path for every executable, and normal
+  FAT directory/open/find semantics handle every application uniformly.
+- Made the packaged DOSNavigator loader's `EXIT` handoff durable: it accepts
+  both plain and DOS-style space-prefixed command tails, stores its bounded
+  hook in explicitly retained memory instead of DN.PRG's reused scratch area,
+  and restores the parent CiukiOS shell prompt after the mouse, one-row arrow,
+  Colors/XMS, and `EXIT` workflow.
+
+Current validation updates:
+
+- Added `NETSTART`/`ICMPD`, a resident ARP/ICMP responder and Packet Driver
+  bridge (`INT 60h` physical, `INT 61h` for mTCP), so host ping no longer
+  depends on `FTPSRV`. `NETCFG` atomically persists IP, subnet, gateway and DNS;
+  `IPCONFIG` reports resident status; HELP documents the complete workflow; and
+  Linux TAP `up-nat` combines host reachability with guest Internet forwarding.
+  Gates prove an inbound checksum-correct Echo without FTP, outbound Internet
+  Echo to `1.1.1.1`, and FTP list/download/upload through the resident bridge.
+- Activated the first bounded Phase 8 networking milestone with pinned GPL mTCP 2025-01-10 and Crynwr NE2000 Packet Driver payloads, QEMU NE2000/user-NAT wiring, static IPv4, and sandboxed bidirectional FTP sharing at `C:\SHARE`. The new disposable gate proves login/list, matching download and upload hashes, FAT16 persistence, and canonical-image immutability. mTCP also exposed and drove general DOS fixes for root-directory `AH=43h` attributes plus register-preserving `AH=3Bh` chdir and `AH=3Ch` create semantics required by OpenWatcom.
+- Integrated the official MIT-licensed Costa v1.8.0 release through a pinned SHA-256 fetcher, full-image packaging at `\APPS\COSTA`, a cwd-preserving `costa` shell launcher, and a fresh 640x350 graphical QEMU gate. The archive hash is `254e79b7617bd96722d228731883ea2aeac982ee22e236d30fa0f9987430ee88`.
+- Fixed DOS child audio environment discovery by giving the shared environment a valid owned MCB, exporting the complete `BLASTER=A220 I7 D1 H5 T6` value through DOS/4GW, and recovering the stranded conventional-memory paragraphs needed after the extender allocation. Doom-vanille now gets through allocation, selects SB device 3/code 8, and completes DMX initialization with an explicit packaged SB16 profile; the final gameplay WAV is still digital silence, so neither Doom audio path is promoted as supported.
+- Lowered and shrank the resident shell to widen the real-mode application arena, made first-level MZ placement dynamic, preserved AH=19h/43h caller registers required by Costa and WOLF3D, and moved AH=52h SYSVARS into a dedicated `1740h-1771h` window. This prevents the List-of-Lists materialization from overwriting the relocated shell and restores the COM/MZ/PSTACK/TSR root-return gate.
+- Fixed the remaining WOLF3D black display in the packaged `full` image: the page-flip workaround now resets the VGA Attribute Controller flip-flop through port `3DAh` before writing the CRTC start and pel-panning registers. Fresh QEMU evidence reaches the sign-on screens, Options/New Game, episode/difficulty selection, and the first rendered level; the taxonomy now requires `visual_gameplay=PASS`. WOLF3D remains PARTIAL only because the injected compatibility patch, clean exit, full-CD, and audio workflows are not yet closed.
+- Isolated the post-level WOLF3D host crash to QEMU 11.1 TCG translation-block invalidation while the game runs its self-modifying renderer. The interactive full runner now selects KVM automatically when available and falls back to TCG `one-insn-per-tb`; the WOLF3D taxonomy uses the same safe policy and remains stable through its post-frame observation window.
+- Reclassified the doom-vanille visual gate after a direct `-warp 1 1` gameplay capture reproduced corrupted planar walls and a missing HUD. The older color-diversity classifier was satisfied by a title frame and is not evidence of correct gameplay textures.
+- The Phase 5 closure bundle passes static loader/kernel ownership verification, all eight fatal ABI2 negative cases, normal `full` and direct `full-cd` boot including the high-LBA fixture, nested COM/MZ process and TSR restoration, direct-CD-to-HDD setup/install boot, CuteMouse install/query/unload, doom-vanille low-memory startup, the current WOLF taxonomy boundary, DRVLOAD smoke, and repeated shell stability. These gates close the ownership phase, not the broader Phase 6 application corpus.
+- The same-checkout `make qemu-test-all` aggregate passes across full/full-CD smoke, CuteMouse, DOS compatibility, external shell/runtime ownership, runtime positive/negative validation, COM/MZ/PSTACK, mouse controls, and the deterministic full-CD high-LBA fixture (`CHS32_HIGH_LBA_READ_OK`). The aggregate remains intentionally narrower than the installer and long game/audio taxonomy lanes.
+- The runtime installer now clones the direct-CD image to a blank disposable HDD, patches the installed Stage1 default drive at the partition-aware LBA, and boots the target alone at `C:\APPS`. CHS fallback batches are track-bounded, ATA PIO write failures reset and retry idempotently, and both the read-only CD/HDD probe and host-built HDD fixture pass with normalized serial gates.
+- Full-CD FAT16 reads now retain the complete 32-bit LBA across EDD and CHS fallback. The generated `LBA32.TXT` fixture is placed beyond LBA 65,535, has matching FAT copies, and is read successfully from the D: shell.
+- The CIUKRTST/PSTACK ownership bundle records `ABI=2`, `SERVICES=11`, `CHAIN=0`, nested COM/MZ parent restoration, true AH=31h residency across EXEC, explicit unload, and root restoration. These remain internal proxies and do not count toward the Phase 6 external corpus.
+- The isolated GPL CuteMouse workflow passes on `full`: `/N /P` installation, CuteMouse 7.05 INT 33h identity, `/U` unload, exact baseline-handler restoration, prompt return, `QEMU_RC=0`, and an unchanged canonical image.
+- The doom-vanille low-memory gate now passes DOS/4GW/DPMI startup through `ST_Init` and `[doomvan-memory] PASS sb16_low_dos_256k`; the former 256 KiB conventional-memory failure is superseded, but the application remains PARTIAL beyond this focused gate.
+- The injected WOLF3D copy reaches `transfer_marker`, `runtime_stable`, and `visual_gameplay` on the current `full` taxonomy lane; the fresh automated first-level frame is `640x400` with more than 100 sampled colors. It remains PARTIAL because the page-flip compatibility patch is still required and unmodified-binary, clean-exit, full-CD, and audio compatibility are not proven.
+
+0. Fixed the DOOM launch regression (silent hang right after `[MZ] run`): `int21_mem_find_next_alloc`'s empty-arena path loaded the caller's saved DI into FLAGS via a stray `pushf/pop di/popf`, leaking TF/DF into the exec path so the child started single-stepping and DOS/4GW's protected-mode switch vectored through its half-loaded IDT into a wild jump. Also made the CIUKIDOS.SYS DTA services CS-relative (they wrote runtime state through the caller's DS, corrupting the parent PSP area), hardened both COM/MZ child handoffs with a deterministic FLAGS image, captured the BIOS INT 16h vector so `int16_handler`'s chain target can never be `0000:0000`, grew the full-profile Stage1 slot from 70 to 72 sectors, and replaced SETUP.COM's hardcoded Stage1 default-drive patch LBA/offset with a build-time computed target derived from the Stage1 listing and the enclosing partition offset.
 
 1. Expanded the Stage1 runtime-backed `INT 33h` mouse service from a minimal reset/show/hide/status path into a broader DOS compatibility slice: the runtime now tracks richer mouse state, button press/release counters, driver enable/disable state, language/page/sensitivity/rate settings, save/restore blobs, alternate callback slots, exclusion-region state, light-pen toggles, and guarded user-callback dispatch with pending-event queuing when re-entry would be unsafe. `\SYSTEM\MOUSE.COM` was upgraded into a compact control/diagnostic utility covering `STATUS`, `INFO`, `SHOW`, `HIDE`, `POS`, `RANGE`, `SENS`, `GETSENS`, `MOTION`, `PRESS`, `RELEASE`, `RESET`, `PAGE`, `GETPAGE`, `RATE`, `ENABLE`, `DISABLE`, `INSTALL`, and `HELP`, and the existing full/full-CD shell smoke harnesses now exercise that surface without adding a separate test lane. This tranche validates the runtime/service path, command surface, persistence across external COM execution, and shell integration; exact text-mode coordinate semantics under repeated QEMU key echo, custom text/graphics cursor rendering beyond the existing mode `12h` XOR path, and deeper callback/save-restore compatibility against third-party mouse-heavy apps remain follow-up work.
 1. Restored the current DOOM/WOLF3D runtime branch around a compact Stage1 MZ/DOS memory layout: primary EXE loading now has a separate MZ load limit, low DOS scratch buffers are isolated from the loader window, MZ tail memory is cleared before handoff, and runtime cache state is reset before external MZ execution.
 2. Fixed the DOOM launch regression that stalled at `V_Init: allocate screens`; the dedicated DOOM taxonomy lane now reaches `visual_gameplay=PASS` on the full profile.
-3. Fixed WOLF3D black-screen startup in local full-image builds by patching only the injected copy of `WOLF3D.EXE` to bypass the stuck page-flip wait. The source payload under `third_party/WOLF3D` remains untouched, and the final WOLF3D capture is non-black (`720x400`, `colors=6`, `nonblack=24336`).
+3. Fixed WOLF3D black-screen startup in local full-image builds by patching only the injected copy of `WOLF3D.EXE`: the compatibility sequence bypasses the stuck page-flip wait while preserving the required VGA Attribute Controller flip-flop reset. The source payload under `third_party/WOLF3D` remains untouched. The automated gate drives the game through New Game, episode and difficulty selection into the correctly rendered first level, submits gameplay input, and keeps the emulator stable through the observation window.
 4. Added SB16 probe/playback evidence through `SB16INIT.COM`, `DRVLOAD.COM /AUDIO`, and QEMU SB16 device wiring. QEMU audio now defaults to on across full, full-CD, taxonomy, and DRVLOAD smoke runners while still allowing `QEMU_AUDIO_MODE=off` for explicit silent runs; the validated path detects the DSP at `0x220`, configures IRQ/DMA mixer state, and completes a real DMA1/IRQ7 SB playback probe. DOOM now launches as `DOOM.EXE`, removing the old `-nosound` and `-nosfx` workarounds while the generated music-only config keeps the unstable SB SFX/DMA path disabled via `snd_channels=0` and `snd_sfxdevice=0`, with the DOOM taxonomy pinned to the ALSA backend to avoid a local PipeWire/OPL QEMU crash, while SB DMA/IRQ sound effects remain follow-up work.
 5. Kept the full-CD build inside the Stage1 size budget by making the legacy Stage2 autorun/hardware-validation CD path opt-in instead of forced by default; the active full-CD gate remains the Live/install D: prompt smoke.
 6. Restored the README as a complete project entry point, condensed this changelog to release-level facts, and removed temporary local run artifacts while keeping generated build outputs out of the tracked worktree.

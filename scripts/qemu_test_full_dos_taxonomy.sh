@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
+if [[ ! -x "$SERIAL_NORMALIZER" ]]; then
+  echo "[dos-taxonomy] ERROR serial normalizer is not executable: $SERIAL_NORMALIZER" >&2
+  exit 1
+fi
 
 DO_BUILD="${DO_BUILD:-1}"
 IMG="${IMG:-build/full/ciukios-full.img}"
@@ -15,6 +20,7 @@ RUNTIME_LOG_FILE="${RUNTIME_LOG_FILE:-build/full/qemu-visual.log}"
 QEMU_TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-45}"
 DOS_TAXONOMY_MIN_STAGE="${DOS_TAXONOMY_MIN_STAGE:-runtime_stable}"
 DOS_TAXONOMY_PROFILE="${DOS_TAXONOMY_PROFILE:-dos_generic}"
+DOS_TAXONOMY_USE_CASE="${DOS_TAXONOMY_USE_CASE:-generic}"
 DOS_TAXONOMY_STRICT="${DOS_TAXONOMY_STRICT:-0}"
 DOS_TAXONOMY_LAUNCH="${DOS_TAXONOMY_LAUNCH:-1}"
 DOS_TAXONOMY_RUN_DRVLOAD="${DOS_TAXONOMY_RUN_DRVLOAD:-1}"
@@ -32,6 +38,8 @@ DOS_TAXONOMY_DISPLAY_MODE="${DOS_TAXONOMY_DISPLAY_MODE:-nographic}"
 DOS_TAXONOMY_SCREENSHOT="${DOS_TAXONOMY_SCREENSHOT:-}"
 DOS_TAXONOMY_SCREENSHOT_DELAY_SEC="${DOS_TAXONOMY_SCREENSHOT_DELAY_SEC:-5}"
 DOS_TAXONOMY_POST_LAUNCH_KEY="${DOS_TAXONOMY_POST_LAUNCH_KEY:-}"
+DOS_TAXONOMY_POST_LAUNCH_KEYS="${DOS_TAXONOMY_POST_LAUNCH_KEYS:-}"
+DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC="${DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC:-1}"
 DOS_TAXONOMY_POST_LAUNCH_COMMAND="${DOS_TAXONOMY_POST_LAUNCH_COMMAND:-}"
 DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC="${DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC:-0}"
 DOS_TAXONOMY_KEY_DELAY_SEC="${DOS_TAXONOMY_KEY_DELAY_SEC:-0.12}"
@@ -41,7 +49,10 @@ QEMU_CMD_LOG="${QEMU_CMD_LOG:-build/full/qemu-full-dos-taxonomy.commands.log}"
 QEMU_MON_SOCK="${QEMU_MON_SOCK:-/tmp/ciukios-dosapp-taxonomy.monitor.sock}"
 FUTURE_MTIME_TOLERANCE_SEC="${FUTURE_MTIME_TOLERANCE_SEC:-5}"
 QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-on}"
+QEMU_ACCEL_MODE="${QEMU_ACCEL_MODE:-default}"
 QEMU_MACHINE_ARG="pc,vmport=off"
+QEMU_ACCEL_ARGS=()
+QEMU_ACCEL_DETAIL="default TCG"
 
 case "$DOS_TAXONOMY_PROFILE" in
   doom|dosapp)
@@ -64,6 +75,9 @@ case "$DOS_TAXONOMY_PROFILE" in
       transfer_marker
       runtime_stable
     )
+    if [[ "$DOS_TAXONOMY_USE_CASE" == "wolf3d" ]]; then
+      STAGES+=(visual_gameplay)
+    fi
     if [[ "$DOS_TAXONOMY_MIN_STAGE" == "wad_found" ]]; then
       DOS_TAXONOMY_MIN_STAGE="transfer_marker"
     fi
@@ -77,7 +91,6 @@ esac
 if [[ "$DOS_TAXONOMY_PROFILE" == "dos_generic" && "$DOS_TAXONOMY_CWD" == "\\APPS\\DOSAPP" ]]; then
   DOS_TAXONOMY_CWD=""
 fi
-DOS_TAXONOMY_USE_CASE="${DOS_TAXONOMY_USE_CASE:-generic}"
 case "$DOS_TAXONOMY_USE_CASE" in
   doom)
     [[ "$DOS_TAXONOMY_APP_DIR_IN_IMAGE" == "::APPS" ]] && DOS_TAXONOMY_APP_DIR_IN_IMAGE="::APPS/DOOM"
@@ -191,6 +204,64 @@ qemu_available() {
   pick_qemu >/dev/null 2>&1
 }
 
+qemu_kvm_available() {
+  local qemu_cmd="$1"
+  [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] \
+    && "$qemu_cmd" -accel help 2>/dev/null | grep -Fxq kvm
+}
+
+configure_accel_args() {
+  local qemu_cmd="$1"
+
+  QEMU_ACCEL_ARGS=()
+  QEMU_ACCEL_DETAIL="default TCG"
+
+  if [[ " ${QEMU_EXTRA_ARGS:-} " == *" -accel "* \
+    || " ${QEMU_EXTRA_ARGS:-} " == *" -accel="* ]]; then
+    QEMU_ACCEL_DETAIL="provided by QEMU_EXTRA_ARGS"
+    return 0
+  fi
+
+  case "$QEMU_ACCEL_MODE" in
+    default) ;;
+    auto)
+      if qemu_kvm_available "$qemu_cmd"; then
+        QEMU_ACCEL_ARGS=(-accel kvm)
+        QEMU_ACCEL_DETAIL="kvm (auto)"
+      fi
+      ;;
+    wolf3d-safe)
+      if qemu_kvm_available "$qemu_cmd"; then
+        QEMU_ACCEL_ARGS=(-accel kvm)
+        QEMU_ACCEL_DETAIL="kvm (Wolf3D-safe)"
+      else
+        QEMU_ACCEL_ARGS=(-accel 'tcg,one-insn-per-tb=on')
+        QEMU_ACCEL_DETAIL="tcg one-insn-per-tb (Wolf3D-safe fallback)"
+      fi
+      ;;
+    kvm)
+      if ! qemu_kvm_available "$qemu_cmd"; then
+        echo "[dos-taxonomy] ERROR QEMU_ACCEL_MODE=kvm requested but /dev/kvm is unavailable" >&2
+        exit 1
+      fi
+      QEMU_ACCEL_ARGS=(-accel kvm)
+      QEMU_ACCEL_DETAIL="kvm"
+      ;;
+    tcg)
+      QEMU_ACCEL_ARGS=(-accel tcg)
+      QEMU_ACCEL_DETAIL="tcg"
+      ;;
+    tcg-safe)
+      QEMU_ACCEL_ARGS=(-accel 'tcg,one-insn-per-tb=on')
+      QEMU_ACCEL_DETAIL="tcg one-insn-per-tb"
+      ;;
+    *)
+      echo "[dos-taxonomy] ERROR invalid QEMU_ACCEL_MODE=$QEMU_ACCEL_MODE (expected default, auto, wolf3d-safe, kvm, tcg or tcg-safe)" >&2
+      exit 1
+      ;;
+  esac
+}
+
 normalize_audio_backend() {
   case "$1" in
     pulse|pulseaudio)
@@ -264,13 +335,52 @@ configure_audio_args() {
   QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=${sb_irq} dma=1 hdma=5"
 }
 
+normalized_log_matches_regex() {
+  local log_path="$1"
+  local pattern="$2"
+  local offset="${3:-0}"
+
+  [[ -s "$log_path" ]] || return 1
+  "$SERIAL_NORMALIZER" --offset "$offset" "$log_path" | grep -Eiq -- "$pattern"
+}
+
+normalized_log_matches_fixed() {
+  local log_path="$1"
+  local marker="$2"
+
+  [[ -s "$log_path" ]] || return 1
+  "$SERIAL_NORMALIZER" "$log_path" | grep -Fqi -- "$marker"
+}
+
+normalized_log_regex_count() {
+  local log_path="$1"
+  local pattern="$2"
+
+  if [[ ! -s "$log_path" ]]; then
+    echo 0
+    return 0
+  fi
+  "$SERIAL_NORMALIZER" "$log_path" | grep -Eic -- "$pattern" || true
+}
+
+normalized_log_fixed_count() {
+  local log_path="$1"
+  local marker="$2"
+
+  if [[ ! -s "$log_path" ]]; then
+    echo 0
+    return 0
+  fi
+  "$SERIAL_NORMALIZER" "$log_path" | grep -Fic -- "$marker" || true
+}
+
 log_has_pattern() {
   local pattern="$1"
   shift
 
   local log_path
   for log_path in "$@"; do
-    if [[ -s "$log_path" ]] && grep -Eiq "$pattern" "$log_path"; then
+    if normalized_log_matches_regex "$log_path" "$pattern"; then
       return 0
     fi
   done
@@ -284,7 +394,7 @@ log_has_fixed_marker() {
 
   local log_path
   for log_path in "$@"; do
-    if [[ -s "$log_path" ]] && grep -Fqi "$marker" "$log_path"; then
+    if normalized_log_matches_fixed "$log_path" "$marker"; then
       return 0
     fi
   done
@@ -340,7 +450,7 @@ wait_for_regex() {
   start="$(date +%s)"
 
   while true; do
-    if [[ -f "$file" ]] && grep -Eiq "$pattern" "$file"; then
+    if normalized_log_matches_regex "$file" "$pattern"; then
       return 0
     fi
 
@@ -356,7 +466,7 @@ shell_prompt_seen() {
   if [[ ! -f "$file" ]]; then
     return 1
   fi
-  grep -Eiq 'CiukiOS C:|CCiiuukkiiOOSS' "$file"
+  normalized_log_matches_regex "$file" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:'
 }
 
 wait_for_shell_prompt() {
@@ -556,7 +666,7 @@ classify_visual_gameplay() {
   local width height nonblank unique_colors
   local visual_detail_prefix="$smoke_detail"
 
-  if [[ "${STAGE_STATUS[video_init]}" != "PASS" ]]; then
+  if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" && "${STAGE_STATUS[video_init]}" != "PASS" ]]; then
     set_stage "visual_gameplay" "DEFERRED" "$smoke_detail; video gate not passed, visual screenshot not evaluated"
     return
   fi
@@ -673,9 +783,10 @@ classify_runtime() {
   local prompt_returned="unknown"
   local prompt_count_before_run=0
   local prompt_count_after_run=0
-  local prompt_line_before_run=0
-  local prompt_count_new_lines=0
+  local prompt_offset_before_run=0
   local prompt_return_detail="shell_prompt_return=unknown"
+  local post_launch_key
+  local -a post_launch_keys=()
 
   if [[ "$DOS_TAXONOMY_PROFILE" == "dos_generic" ]]; then
     exec_stage_name="exec_attempted"
@@ -741,6 +852,7 @@ classify_runtime() {
     fi
 
     qemu_cmd="$(pick_qemu)"
+    configure_accel_args "$qemu_cmd"
     configure_audio_args "$qemu_cmd" headless
     case "$DOS_TAXONOMY_DISPLAY_MODE" in
       nographic) qemu_display_args=(-nographic) ;;
@@ -762,6 +874,7 @@ classify_runtime() {
     esac
 
     QEMU_ARGS=(
+      "${QEMU_ACCEL_ARGS[@]}"
       -machine "$QEMU_MACHINE_ARG"
       -cpu pentium3
       -m 128
@@ -776,6 +889,7 @@ classify_runtime() {
       "${QEMU_AUDIO_ARGS[@]}"
     )
 
+    echo "[QEMU_ACCEL] $QEMU_ACCEL_DETAIL" >> "$QEMU_CMD_LOG"
     echo "[QEMU_AUDIO] $QEMU_AUDIO_DETAIL" >> "$QEMU_CMD_LOG"
 
     if [[ -n "${QEMU_EXTRA_ARGS:-}" ]]; then
@@ -818,12 +932,24 @@ classify_runtime() {
         fi
       fi
 
+      prompt_offset_before_run="$(get_file_size_bytes "$LOG_FILE")"
+      prompt_count_before_run="$(normalized_log_regex_count "$LOG_FILE" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:')"
       if send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$dosapp_cmd"; then
         # Track only prompt markers that appear after launch to avoid
         # misclassifying very fast app exits as still running.
-        prompt_line_before_run="$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)"
-        prompt_count_before_run="$(grep -Eic 'CiukiOS C:|CCiiuukkiiOOSS' "$LOG_FILE" 2>/dev/null || true)"
-        if [[ -n "$DOS_TAXONOMY_POST_LAUNCH_KEY" ]]; then
+        if [[ -n "$DOS_TAXONOMY_POST_LAUNCH_KEYS" ]]; then
+          if [[ "$DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC" =~ ^[0-9]+$ && "$DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC" -gt 0 ]]; then
+            sleep "$DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC"
+          fi
+          read -r -a post_launch_keys <<<"$DOS_TAXONOMY_POST_LAUNCH_KEYS"
+          for post_launch_key in "${post_launch_keys[@]}"; do
+            send_key "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$post_launch_key" || true
+            if [[ "$DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+              && [[ "$DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC" != "0" ]]; then
+              sleep "$DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC"
+            fi
+          done
+        elif [[ -n "$DOS_TAXONOMY_POST_LAUNCH_KEY" ]]; then
           if [[ "$DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC" =~ ^[0-9]+$ && "$DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC" -gt 0 ]]; then
             sleep "$DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC"
           fi
@@ -843,9 +969,9 @@ classify_runtime() {
         fi
         observe_runtime_window "$qemu_pid" "$DOS_TAXONOMY_OBSERVE_SEC"
 
-        prompt_count_after_run="$(grep -Eic 'CiukiOS C:|CCiiuukkiiOOSS' "$LOG_FILE" 2>/dev/null || true)"
-        prompt_count_new_lines="$(tail -n +$((prompt_line_before_run + 1)) "$LOG_FILE" 2>/dev/null | grep -Eic 'CiukiOS C:|CCiiuukkiiOOSS' || true)"
-        if (( prompt_count_after_run > prompt_count_before_run )); then
+        prompt_count_after_run="$(normalized_log_regex_count "$LOG_FILE" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:')"
+        if (( prompt_count_after_run > prompt_count_before_run )) \
+          || normalized_log_matches_regex "$LOG_FILE" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:' "$prompt_offset_before_run"; then
           prompt_returned="yes"
           prompt_return_detail="shell_prompt_returned=yes (count ${prompt_count_before_run}->${prompt_count_after_run})"
         else
@@ -941,12 +1067,12 @@ classify_runtime() {
   local reboot_stage1_count
   local reboot_detected=0
   local reboot_detail
-  reboot_boot_count="$(grep -Eic 'Booting from Hard Disk' "$LOG_FILE" 2>/dev/null || true)"
-  reboot_stage1_count="$(grep -Fic '[STAGE1-SERIAL] READY' "$LOG_FILE" 2>/dev/null || true)"
+  reboot_boot_count="$(normalized_log_regex_count "$LOG_FILE" 'Booting from Hard Disk')"
+  reboot_stage1_count="$(normalized_log_fixed_count "$LOG_FILE" '[BOOT0-FULL] CiukiOS full stage0 ready')"
   if (( reboot_boot_count > 1 || reboot_stage1_count > 1 )); then
     reboot_detected=1
   fi
-  reboot_detail="boot_banner_count=${reboot_boot_count}, stage1_ready_count=${reboot_stage1_count}"
+  reboot_detail="boot_banner_count=${reboot_boot_count}, stage0_count=${reboot_stage1_count}"
 
   if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
     if log_has_fixed_marker '[MZ] run' "${runtime_logs[@]}" \
@@ -959,7 +1085,7 @@ classify_runtime() {
   else
     if (( reboot_detected == 1 )); then
       set_stage "transfer_marker" "FAIL" "$smoke_detail; reboot detected in fresh logs ($reboot_detail): $runtime_log_sources"
-    elif log_has_pattern 'run[[:space:]]+err=0x[0-9A-Fa-f]{4}|rruunn[[:space:]]+eerrrr==00xx[0-9A-Fa-f]{4}|Unknown[[:space:]]+command|UUnnkknnoowwnn[[:space:]]+ccoommmmaanndd?' "${runtime_logs[@]}"; then
+    elif log_has_pattern 'run[[:space:]]+err=0x[0-9A-Fa-f]{4}|rruunn[[:space:]]+eerrrr==00xx[0-9A-Fa-f]{4}|Unknown[[:space:]]+command|UUnnkknnoowwnn[[:space:]]+ccoommmmaanndd?|command:[[:space:]]+not[[:space:]]+found|exec:[[:space:]]+(cannot[[:space:]]+execute|unsupported[[:space:]]+executable[[:space:]]+format|insufficient[[:space:]]+memory)' "${runtime_logs[@]}"; then
       set_stage "transfer_marker" "FAIL" "$smoke_detail; run err observed in fresh logs: $runtime_log_sources"
     elif [[ -n "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" ]] && \
       log_has_pattern "$DOS_TAXONOMY_APP_RUNTIME_MARKERS" "${runtime_logs[@]}"; then
@@ -1036,6 +1162,8 @@ classify_runtime() {
     else
       set_stage "menu_reached" "DEFERRED" "$smoke_detail; menu marker not observed in fresh logs: $runtime_log_sources"
     fi
+  elif [[ "$DOS_TAXONOMY_USE_CASE" == "wolf3d" ]]; then
+    classify_visual_gameplay "$runtime_run_start_epoch" "$smoke_detail"
   fi
 }
 
@@ -1111,7 +1239,8 @@ for ((i=0; i<=MIN_STAGE_INDEX; i++)); do
   fi
 done
 
-if [[ "$RESULT" == "FAIL" \
+if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" \
+  && "$RESULT" == "FAIL" \
   && "$DOS_TAXONOMY_STRICT" != "1" \
   && "$DOS_TAXONOMY_MIN_STAGE" == "visual_gameplay" \
   && "${STAGE_STATUS[video_init]}" == "PASS" \

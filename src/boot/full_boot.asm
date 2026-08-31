@@ -1,10 +1,23 @@
 bits 16
 org 0x7C00
 
-%define STAGE1_SEG     0x0800
-%define STAGE1_SECTORS 72
+%define STAGE1_SEG              0x0800
+%define STAGE1_SLOT_SECTORS     72
+%define STAGE1_LOAD_SECTORS      8
 %ifndef BOOT_LBA_OFFSET
 %define BOOT_LBA_OFFSET 0
+%endif
+
+%if STAGE1_LOAD_SECTORS < 1
+%error STAGE1_LOAD_SECTORS must be positive
+%endif
+%if STAGE1_LOAD_SECTORS > STAGE1_SLOT_SECTORS
+%error STAGE1_LOAD_SECTORS exceeds the reserved Stage1 slot
+%endif
+; Both legacy CHS fallbacks start at sector 2 and must stay on one 63-sector
+; track.  The thin loader currently needs only eight sectors.
+%if STAGE1_LOAD_SECTORS > 62
+%error STAGE1_LOAD_SECTORS exceeds the single-track CHS transfer
 %endif
 
 jmp short boot_start
@@ -14,7 +27,7 @@ nop
 bpb_oem_label         db "CIUKFULL"
 bpb_bytes_per_sector  dw 512
 bpb_sectors_per_clu   db 8
-bpb_reserved_secs     dw (1 + STAGE1_SECTORS)
+bpb_reserved_secs     dw (1 + STAGE1_SLOT_SECTORS)
 bpb_fat_count         db 2
 bpb_root_entries      dw 512
 bpb_total_secs16      dw 0
@@ -58,22 +71,10 @@ boot_start:
     mov es, ax
     xor bx, bx
     mov ah, 0x02
-    mov al, 62
+    mov al, STAGE1_LOAD_SECTORS
     mov ch, 0
     mov cl, 2
     mov dh, 1
-    mov dl, [boot_drive]
-    int 0x13
-    jc .try_lba
-
-    mov ax, STAGE1_SEG
-    mov es, ax
-    mov bx, 62 * 512
-    mov ah, 0x02
-    mov al, 8
-    mov ch, 0
-    mov cl, 1
-    mov dh, 2
     mov dl, [boot_drive]
     int 0x13
     jnc .stage1_ok
@@ -90,7 +91,7 @@ boot_start:
     mov es, ax
     xor bx, bx
     mov ah, 0x02
-    mov al, STAGE1_SECTORS
+    mov al, STAGE1_LOAD_SECTORS
     mov ch, 0
     mov cl, 2
     mov dh, 0
@@ -188,7 +189,7 @@ retry_count db 0
 stage1_dap:
     db 0x10
     db 0
-    dw STAGE1_SECTORS
+    dw STAGE1_LOAD_SECTORS
     dw 0x0000
     dw STAGE1_SEG
     dd BOOT_LBA_OFFSET + 1

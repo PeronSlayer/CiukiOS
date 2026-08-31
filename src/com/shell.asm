@@ -8,6 +8,20 @@ org 0x0100
 %define TITLE_BAR_COL 29
 
 start:
+    ; COM programs enter with a stack near the end of their 64 KiB arena.
+    ; Move it into the image before shrinking the shell PSP block, otherwise
+    ; every child loses almost all of that arena even while the shell sleeps.
+    cli
+    mov ax, cs
+    mov ss, ax
+    mov sp, shell_stack_top
+    sti
+
+    mov es, ax
+    mov bx, ((shell_image_end - $$ + 0x0100) + 15) >> 4
+    mov ah, 0x4A
+    int 0x21
+
     push cs
     pop ds
     push ds
@@ -244,6 +258,7 @@ main_loop:
     je .where_arg_done
     cmp di, src_path + 63
     jae .where_arg_skip
+    call upcase_al
     mov [di], al
     inc di
 .where_arg_skip:
@@ -256,6 +271,9 @@ main_loop:
     call where_try_current
     jnc .where_done
     mov si, shell_path_apps
+    call where_try_prefixed
+    jnc .where_done
+    mov si, shell_path_net
     call where_try_prefixed
     jnc .where_done
     mov si, shell_path_drivers
@@ -836,6 +854,15 @@ main_loop:
     call exec_try_in_dir
     jnc .exec_found
     cmp ax, 2
+    je .exec_try_net
+    cmp ax, 3
+    je .exec_try_net
+    jmp .exec_fail
+.exec_try_net:
+    mov si, exec_dir_net
+    call exec_try_in_dir
+    jnc .exec_found
+    cmp ax, 2
     je .exec_try_drivers
     cmp ax, 3
     je .exec_try_drivers
@@ -859,6 +886,11 @@ main_loop:
     je .exec_not_found
     jmp .exec_fail
 .exec_found:
+    ; External graphical programs may restore text mode while clearing the
+    ; complete display.  Re-establish the shell-owned title bar and cursor
+    ; position before printing the next prompt.  This is intentionally part
+    ; of the generic EXEC return path, not a Windows-specific exception.
+    call redraw_title_bar
     jmp main_loop
 .exec_not_found:
     mov si, msg_exec_not_found
@@ -2146,6 +2178,62 @@ where_try_known_fallback:
     mov di, where_name_mouse_com
     call strings_equal
     jz .mouse
+    mov si, src_path
+    mov di, where_name_edit
+    call strings_equal
+    jz .edit
+    mov si, src_path
+    mov di, where_name_edit_com
+    call strings_equal
+    jz .edit
+    mov si, src_path
+    mov di, where_name_ipconfig
+    call strings_equal
+    jz .ipconfig
+    mov si, src_path
+    mov di, where_name_ipconfig_com
+    call strings_equal
+    jz .ipconfig
+    mov si, src_path
+    mov di, where_name_ne2000
+    call strings_equal
+    jz .ne2000
+    mov si, src_path
+    mov di, where_name_ne2000_com
+    call strings_equal
+    jz .ne2000
+    mov si, src_path
+    mov di, where_name_dhcp
+    call strings_equal
+    jz .dhcp
+    mov si, src_path
+    mov di, where_name_dhcp_exe
+    call strings_equal
+    jz .dhcp
+    mov si, src_path
+    mov di, where_name_ping
+    call strings_equal
+    jz .ping
+    mov si, src_path
+    mov di, where_name_ping_exe
+    call strings_equal
+    jz .ping
+    mov si, src_path
+    mov di, where_name_ftp
+    call strings_equal
+    jz .ftp
+    mov si, src_path
+    mov di, where_name_ftp_exe
+    call strings_equal
+    jz .ftp
+    mov si, src_path
+    mov di, where_name_ftpsrv
+    call strings_equal
+    jz .ftpsrv
+    mov si, src_path
+    mov di, where_name_ftpsrv_exe
+    call strings_equal
+    jz .ftpsrv
     stc
     ret
 .shell:
@@ -2160,6 +2248,32 @@ where_try_known_fallback:
     ret
 .mouse:
     mov si, where_out_mouse
+    call print_dual_dollar_string
+    clc
+    ret
+.edit:
+    mov si, where_out_edit
+    call print_dual_dollar_string
+    clc
+    ret
+.ipconfig:
+    mov si, where_out_ipconfig
+    jmp .network
+.ne2000:
+    mov si, where_out_ne2000
+    jmp .network
+.dhcp:
+    mov si, where_out_dhcp
+    jmp .network
+.ping:
+    mov si, where_out_ping
+    jmp .network
+.ftp:
+    mov si, where_out_ftp
+    jmp .network
+.ftpsrv:
+    mov si, where_out_ftpsrv
+.network:
     call print_dual_dollar_string
     clc
     ret
@@ -2320,6 +2434,70 @@ exec_try_known_fallback:
     mov di, where_name_mouse_com
     call strings_equal
     jz .mouse
+    mov si, src_path
+    mov di, where_name_edit
+    call strings_equal
+    jz .edit
+    mov si, src_path
+    mov di, where_name_edit_com
+    call strings_equal
+    jz .edit
+    mov si, src_path
+    mov di, where_name_costa
+    call strings_equal
+    jz .costa
+    mov si, src_path
+    mov di, where_name_costa_exe
+    call strings_equal
+    jz .costa
+    mov si, src_path
+    mov di, where_name_ipconfig
+    call strings_equal
+    jz .ipconfig
+    mov si, src_path
+    mov di, where_name_ipconfig_com
+    call strings_equal
+    jz .ipconfig
+    mov si, src_path
+    mov di, where_name_ne2000
+    call strings_equal
+    jz .ne2000
+    mov si, src_path
+    mov di, where_name_ne2000_com
+    call strings_equal
+    jz .ne2000
+    mov si, src_path
+    mov di, where_name_dhcp
+    call strings_equal
+    jz .dhcp
+    mov si, src_path
+    mov di, where_name_dhcp_exe
+    call strings_equal
+    jz .dhcp
+    mov si, src_path
+    mov di, where_name_ping
+    call strings_equal
+    jz .ping
+    mov si, src_path
+    mov di, where_name_ping_exe
+    call strings_equal
+    jz .ping
+    mov si, src_path
+    mov di, where_name_ftp
+    call strings_equal
+    jz .ftp
+    mov si, src_path
+    mov di, where_name_ftp_exe
+    call strings_equal
+    jz .ftp
+    mov si, src_path
+    mov di, where_name_ftpsrv
+    call strings_equal
+    jz .ftpsrv
+    mov si, src_path
+    mov di, where_name_ftpsrv_exe
+    call strings_equal
+    jz .ftpsrv
     stc
     ret
 .shell:
@@ -2330,6 +2508,31 @@ exec_try_known_fallback:
     jmp .run
 .mouse:
     mov si, exec_path_system_mouse
+    jmp .run
+.edit:
+    mov si, exec_path_apps_ciukedit
+    jmp .run
+.costa:
+    mov si, exec_dir_costa
+    call exec_try_in_dir
+    ret
+.ipconfig:
+    mov si, exec_path_net_ipconfig
+    jmp .run
+.ne2000:
+    mov si, exec_path_net_ne2000
+    jmp .run
+.dhcp:
+    mov si, exec_path_net_dhcp
+    jmp .run
+.ping:
+    mov si, exec_path_net_ping
+    jmp .run
+.ftp:
+    mov si, exec_path_net_ftp
+    jmp .run
+.ftpsrv:
+    mov si, exec_path_net_ftpsrv
 .run:
     mov di, dst_path
     call copy_z_to_di
@@ -2457,19 +2660,30 @@ apm_shutdown_system:
     pop bx
     ret
 
-msg_title_bar db 'CiukiOS pre-Alpha v0.6.7', 0x0D, 0x0A, '$'
+msg_title_bar db 'CiukiOS pre-Alpha v0.7.1', 0x0D, 0x0A, '$'
 msg_banner_body db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
                 db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
-msg_help    db 'SHELL.COM commands:', 0x0D, 0x0A
-            db '  System: HELP VER ECHO CLS REBOOT SHUTDOWN', 0x0D, 0x0A
-            db '  Navigation: CD CHDIR DIR PATH WHERE PWD', 0x0D, 0x0A
-            db '  Files: TYPE COPY DEL ERASE REN RENAME MOVE MKDIR MD RMDIR RD', 0x0D, 0x0A
-            db '  Execution: run name/path, MOUSE from C:\SYSTEM', 0x0D, 0x0A
-            db '  Loader-only mode: EXIT and QUIT stay in SHELL.COM', 0x0D, 0x0A
-            db '  Use WHERE <name>; SHUTDOWN STATUS or CANCEL manage queue', 0x0D, 0x0A
-            db '  Aliases: CLEAR PWD', 0x0D, 0x0A, '$'
-msg_ver     db 'CiukiOS pre-Alpha v0.6.7', 0x0D, 0x0A, '$'
+msg_help    db '+------------------------ CiukiOS command guide -------------------------+', 0x0D, 0x0A
+            db '| SYSTEM     HELP  VER  ECHO  CLS/CLEAR  REBOOT  SHUTDOWN                |', 0x0D, 0x0A
+            db '| NAVIGATION CD/CHDIR  DIR  PWD  PATH  WHERE <name>                      |', 0x0D, 0x0A
+            db '| FILES      TYPE  COPY  DEL/ERASE  REN/RENAME/MOVE                      |', 0x0D, 0x0A
+            db '| EDITOR     EDIT [file]       full-screen editor; F1 shows shortcuts    |', 0x0D, 0x0A
+            db '| DIRECTORIES MKDIR/MD  RMDIR/RD                                         |', 0x0D, 0x0A
+            db '| PROGRAMS   <name> [args] or RUN <name/path> [args]                     |', 0x0D, 0x0A
+            db '+------------------------------- Network --------------------------------+', 0x0D, 0x0A
+            db '| 1. NETSTART                start NIC + permanent ARP/ICMP service      |', 0x0D, 0x0A
+            db '| 2. IPCONFIG                show IPv4 values and resident ICMP status   |', 0x0D, 0x0A
+            db '| 3. NETCFG STATIC <ip> <mask> <gateway> <dns>                           |', 0x0D, 0x0A
+            db '|                            save; live-apply when NETSTART is active    |', 0x0D, 0x0A
+            db '| 4. NETCFG DHCP             request lease and reload resident ICMP     |', 0x0D, 0x0A
+            db '| 5. PING <host>             send ICMP echo (gateway or Internet)        |', 0x0D, 0x0A
+            db '| 6. FTP <host> / FTPSRV     FTP client / start C:\SHARE server         |', 0x0D, 0x0A
+            db '|    PKTCHK / PKTTOOL        Packet Driver diagnostics                   |', 0x0D, 0x0A
+            db '|    ICMP remains active after FTPSRV stops; TAP enables host ping       |', 0x0D, 0x0A
+            db '+------------------------------------------------------------------------+', 0x0D, 0x0A
+            db 'Power queue: SHUTDOWN/REBOOT <seconds|STATUS|CANCEL>. EXIT is disabled.', 0x0D, 0x0A, '$'
+msg_ver     db 'CiukiOS pre-Alpha v0.7.1', 0x0D, 0x0A, '$'
 msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
 msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
                   db 'use reboot or shutdown', 0x0D, 0x0A, '$'
@@ -2477,7 +2691,7 @@ msg_exec_not_found db 'command: not found', 0x0D, 0x0A, '$'
 msg_exec_fail db 'exec: cannot execute', 0x0D, 0x0A, '$'
 msg_exec_bad_format db 'exec: unsupported executable format', 0x0D, 0x0A, '$'
 msg_exec_no_mem db 'exec: insufficient memory', 0x0D, 0x0A, '$'
-msg_path    db 'C:\APPS;C:\SYSTEM\DRIVERS;C:\SYSTEM', 0x0D, 0x0A, '$'
+msg_path    db 'C:\APPS;C:\NET;C:\SYSTEM\DRIVERS;C:\SYSTEM', 0x0D, 0x0A, '$'
 msg_run_use db 'usage: run <name/path>', 0x0D, 0x0A, '$'
 msg_where_use db 'usage: where <name>', 0x0D, 0x0A, '$'
 msg_where_miss db 'where: not found', 0x0D, 0x0A, '$'
@@ -2518,14 +2732,17 @@ msg_power_status_shutdown db 'shutdown: pending halt', 0x0D, 0x0A, '$'
 msg_ctrl_c  db '^C', 0x0D, 0x0A, '$'
 msg_crlf    db 0x0D, 0x0A, '$'
 shell_path_apps db '\APPS\', 0
+shell_path_net db '\NET\', 0
 shell_path_drivers db '\SYSTEM\DRIVERS\', 0
 shell_path_system db '\SYSTEM\', 0
 exec_path_apps db 'C:\APPS\', 0
 exec_path_drivers db 'C:\SYSTEM\DRIVERS\', 0
 exec_path_system db 'C:\SYSTEM\', 0
 exec_dir_apps db '\APPS', 0
+exec_dir_net db '\NET', 0
 exec_dir_drivers db '\SYSTEM\DRIVERS', 0
 exec_dir_system db '\SYSTEM', 0
+exec_dir_costa db '\APPS\COSTA', 0
 ext_none db 0
 ext_com db '.COM', 0
 ext_exe db '.EXE', 0
@@ -2535,15 +2752,45 @@ where_name_dos4gw db 'DOS4GW', 0
 where_name_dos4gw_exe db 'DOS4GW.EXE', 0
 where_name_mouse db 'MOUSE', 0
 where_name_mouse_com db 'MOUSE.COM', 0
+where_name_edit db 'EDIT', 0
+where_name_edit_com db 'EDIT.COM', 0
+where_name_costa db 'COSTA', 0
+where_name_costa_exe db 'COSTA.EXE', 0
+where_name_ipconfig db 'IPCONFIG', 0
+where_name_ipconfig_com db 'IPCONFIG.COM', 0
+where_name_ne2000 db 'NE2000', 0
+where_name_ne2000_com db 'NE2000.COM', 0
+where_name_dhcp db 'DHCP', 0
+where_name_dhcp_exe db 'DHCP.EXE', 0
+where_name_ping db 'PING', 0
+where_name_ping_exe db 'PING.EXE', 0
+where_name_ftp db 'FTP', 0
+where_name_ftp_exe db 'FTP.EXE', 0
+where_name_ftpsrv db 'FTPSRV', 0
+where_name_ftpsrv_exe db 'FTPSRV.EXE', 0
 power_token_cancel db 'CANCEL', 0
 power_token_status db 'STATUS', 0
 power_token_timer db '/T', 0
 where_out_shell db 'C:\SYSTEM\SHELL.COM', 0x0D, 0x0A, '$'
 where_out_dos4gw db 'C:\SYSTEM\DRIVERS\DOS4GW.EXE', 0x0D, 0x0A, '$'
 where_out_mouse db 'C:\SYSTEM\MOUSE.COM', 0x0D, 0x0A, '$'
+where_out_edit db 'C:\APPS\CIUKEDIT.COM', 0x0D, 0x0A, '$'
+where_out_ipconfig db 'C:\NET\IPCONFIG.COM', 0x0D, 0x0A, '$'
+where_out_ne2000 db 'C:\NET\NE2000.COM', 0x0D, 0x0A, '$'
+where_out_dhcp db 'C:\NET\DHCP.EXE', 0x0D, 0x0A, '$'
+where_out_ping db 'C:\NET\PING.EXE', 0x0D, 0x0A, '$'
+where_out_ftp db 'C:\NET\FTP.EXE', 0x0D, 0x0A, '$'
+where_out_ftpsrv db 'C:\NET\FTPSRV.EXE', 0x0D, 0x0A, '$'
 exec_path_system_shell db 'C:\SYSTEM\SHELL.COM', 0
 exec_path_drivers_dos4gw db 'C:\SYSTEM\DRIVERS\DOS4GW.EXE', 0
 exec_path_system_mouse db 'C:\SYSTEM\MOUSE.COM', 0
+exec_path_apps_ciukedit db 'C:\APPS\CIUKEDIT.COM', 0
+exec_path_net_ipconfig db 'C:\NET\IPCONFIG.COM', 0
+exec_path_net_ne2000 db 'C:\NET\NE2000.COM', 0
+exec_path_net_dhcp db 'C:\NET\DHCP.EXE', 0
+exec_path_net_ping db 'C:\NET\PING.EXE', 0
+exec_path_net_ftp db 'C:\NET\FTP.EXE', 0
+exec_path_net_ftpsrv db 'C:\NET\FTPSRV.EXE', 0
 
 echo_ptr dw 0
 echo_len dw 0
@@ -2580,3 +2827,8 @@ exec_saved_cwd times 68 db 0
 exec_restore_path times 69 db 0
 exec_tail times 129 db 0
 file_buf times 512 db 0
+
+align 16
+shell_stack times 2048 db 0
+shell_stack_top:
+shell_image_end:

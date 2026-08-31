@@ -9,6 +9,8 @@ gemvdi*.bin
 
 *.log
 *.img
+third_party/windows31/installed/
+third_party/windows31/*.txt
 *.fd
 
 third_party/freedos/runtime/*

@@ -1,93 +1,108 @@
 # Post-Runtime Compatibility Roadmap v0.1
 
-## Objective
-Define the product-priority order after the Stage1/runtime split foundation so CiukiOS grows toward a stronger DOS-compatible runtime before opening Windows pre-NT scope.
+## Current State
 
-## Strategic Order
-1. Continue the Stage1/runtime split with small, validated runtime-owned slices.
-2. Improve general DOS program compatibility so arbitrary real DOS software can launch from CiukiOS.
-3. Add legacy audio capability for DOOM and other DOS-era workloads.
-4. Explore legacy networking only after DOS runtime and audio compatibility are materially stronger.
-5. Enter Windows pre-NT milestones only after the previous layers are proven.
+1. Phase 5 runtime ownership: **COMPLETED by the wholesale CIUKIDOS kernel move**.
+2. Current kernel contract: **CIUKIDOS at `0x0900`, `ABI=2`, 11 services, 8-byte descriptors, capability mask `0x003F`, `CHAIN=0`; 43,254-byte artifact with maximum `0xA900` (43,264) bytes**.
+3. Current loader/layout contract: **1,542-byte loader-only Stage1; eight sectors loaded inside the reserved 72-sector slot; four EXEC frames at `0x1400-0x1457`; Stage2 at `0x1480`**.
+4. Phase 6 DOS application compatibility: **ACTIVE and not closed because the quantitative external corpus and several logical compatibility surfaces remain incomplete**.
+5. Phase 7 legacy audio: **controlled groundwork available, but not closed; formal closure work follows broader Phase 6 evidence**.
+6. Phase 8 networking: **ACTIVE with the first bounded Packet Driver/IPv4/FTP milestone complete**.
+7. Phase 9 Windows pre-NT: **ACTIVE with a bounded Windows 3.1 Enhanced Mode milestone complete; the phase remains open**.
 
-## Phase A - Runtime Split Consolidation
-Goal: keep Stage1 loader-first and continue moving low-risk ownership into `\SYSTEM\RUNTIME.BIN`.
+Phase 5 closure establishes where the normal DOS implementation and state live; it does not assert perfect DOS semantics. Logical JFT/SFT depth, broader handle behavior, and the required external-program corpus belong to Phase 6 and do not reopen Phase 5. A compatibility workaround must not replace a general kernel fix.
 
-Target slices:
-1. runtime-owned immutable constants or diagnostic providers
-2. small read-only status/profile queries
-3. low-risk live helpers with no allocator, PSP/MCB, EXEC, or file-I/O core ownership
+## Phase A - Runtime Ownership — Completed
 
-Acceptance gates:
-1. `make build-full`
-2. `make build-full-cd`
-3. `make qemu-test-full`
-4. `make qemu-test-full-cd`
-5. `make qemu-test-full-runtime-probe`
-6. `make qemu-test-all`
-7. `DOOM_TAXONOMY_MIN_STAGE=runtime_stable make qemu-test-full-doom-taxonomy` whenever runtime/shared paths are touched
+Goal achieved: CIUKIDOS, rather than Stage1, is the normal DOS runtime owner.
 
-## Phase B - DOS Application Compatibility
-Goal: make CiukiOS a believable host for arbitrary DOS software, not only curated milestone apps.
+Closure evidence:
 
-Workstreams:
-1. define a compatibility matrix of real DOS programs across categories
-2. add repeatable launch smoke paths for representative external programs
-3. classify failures by runtime subsystem: PSP, MCB, handles, env, IOCTL, seek/read, path semantics, termination, extender compatibility
-4. prioritize fixes that broaden compatibility across multiple programs, not only one title
+1. the active `full` build binds a loader-only Stage1 and a canonical wholesale CIUKIDOS kernel
+2. the loader contains no normal `INT 20h`/`INT 21h` owner or DOS implementation symbols, while the CIUKIDOS listing contains them
+3. the ABI2 image and all eleven descriptors are size- and target-bounded, and service 9 reports no previous DOS chain target
+4. `CIUKRTST.COM` reports `OWNER=CIUKIDOS ABI=2 SERVICES=11 CHAIN=0 STATE=PASS`
+5. process, MCB, COM/MZ EXEC, termination, restoration, file/path, handle, FAT, interrupt, and device implementations are compiled into CIUKIDOS rather than Stage1
+6. `scripts/verify_phase5_runtime_ownership.sh` statically rejects a legacy chain or ownership regression
+7. `scripts/qemu_test_full_runtime_probe.sh` requires the positive ABI path and eight fatal negatives: missing, truncated, bad signature, bad header size, incompatible ABI, missing header count, missing table count, and missing descriptor; each negative requires `WOOF` and absence of a prompt
 
-Suggested program categories:
-1. command-line utilities
-2. text editors and file managers
-3. real-mode games
-4. DOS extender applications
-5. installers or setup utilities
+Satisfied exit signal:
 
-Exit signal:
-CiukiOS can launch a broader mixed set of DOS binaries directly from the full/full-CD environment with documented failure classes and steadily improving pass rate.
+Stage1 is limited to boot-critical loading, CIUKIDOS validation/handoff, and fatal diagnostics. CIUKIDOS owns normal DOS execution and shell startup; the full/full-CD ownership, positive, and fatal-negative gates protect that boundary.
 
-## Phase C - Legacy Audio Bring-up
-Goal: close the current "video yes, audio no" gap for DOOM and strengthen DOS multimedia compatibility.
+The completed ownership contract and the clearly marked historical incremental plan are in `stage1-runtime-split-plan-v0.1.md`.
 
-Priority targets:
-1. sound-device detection paths used by DOOM and similar software
-2. baseline Sound Blaster and AdLib compatibility expectations
-3. timer, IRQ, DMA, and port-I/O behaviors needed for conservative audio bring-up
-4. evidence-based testing that distinguishes detection, initialization, and audible playback
+## Phase B - Broaden DOS Application Compatibility
+
+**Status: ACTIVE.**
+
+Goal: host a mixed, repeatable set of unmodified external DOS software.
+
+Current known boundaries:
+
+1. GPL CuteMouse has a repeatable `full` install/INT33/unload/restore PASS, but no equivalent full-CD workflow is recorded.
+2. DOSNavigator now validates dual-pane startup, generic COM→MZ allocation, one-row keyboard navigation, mouse input, Colors/XMS, `EXIT`, and shell recovery. It remains PARTIAL because the packaged loader uses a bounded compatibility hook and broad file/full-CD workflows are missing.
+3. WOLF3D reaches `visual_gameplay`, keyboard-driven menus, and a correctly rendered first level with the injected page-flip/VGA Attribute Controller workaround; it remains PARTIAL until unmodified-binary, clean-exit, full-CD, and audio workflows are proven.
+4. doom-vanille passes the focused 256 KiB low-DOS allocation gate, but gameplay, audio, clean completion, and full-CD execution remain unproven.
+5. arbitrary application evidence from the full-CD D: environment is missing.
+6. internal CIUKRTST/PSTACK probes are stronger than the external application corpus and do not count toward it.
+7. JFT/SFT structures exist under CIUKIDOS ownership, but DOS-compatible sharing, inheritance, duplication, close-on-exec, device, and error behavior still need workload-driven logical validation. This is Phase 6 compatibility work, not unfinished Phase 5 placement.
 
 Exit signal:
-DOOM and at least one additional audio-capable DOS workload can pass documented audio initialization milestones, with at least one practical playback success target.
+
+1. at least ten external applications on `full`, with two in each required category
+2. at least five redistributable representatives spanning all categories on `full-cd`
+3. at least 80% PASS, with every non-PASS result classified
+4. no critical memory, storage, handle, process-restoration, or shell-return defect
+5. no PARTIAL or title-specific patch counted as general PASS
+
+The authoritative workload table is in `dos-compatibility-matrix-v0.1.md`.
+
+## Phase C - Legacy Audio
+
+Goal: move from controlled device evidence to game-level external audio compatibility.
+
+Already proven in controlled lanes:
+
+1. SB16 DSP detection and initialization
+2. real-mode DMA1/IRQ7 playback
+3. protected-mode timer and SB IRQ delivery
+4. DOOMSFX playback of selected WAD lumps
+
+Still open:
+
+1. original DOOM SB16/DMX protected-mode invalid-opcode failure
+2. valid PC-speaker SFX evidence, preferably on real hardware
+3. a second external DOS audio workload with clean completion
+4. stable AdLib/OPL product evidence
+
+Exit signal:
+
+DOOM reaches a documented repeatable audio target and at least one other external DOS audio program completes detection, initialization, practical playback, and clean return.
 
 ## Phase D - Legacy Networking
-Goal: explore whether packet-driver or other DOS-era networking paths are worth supporting after the runtime is stronger.
 
-Scope rules:
-1. networking is not a blocker for DOS compatibility or audio
-2. choose a narrow first target with practical value
-3. avoid opening broad network scope before runtime/application compatibility is mature
+**Status: ACTIVE; first bounded milestone complete.**
 
-Possible first targets:
-1. packet-driver compatibility investigation
-2. minimal DOS TCP/IP tool bring-up
-3. controlled evidence lane for one networking stack or utility
+The `full` profile now has a pinned open-source Crynwr NE2000 Packet Driver and mTCP IPv4/FTP lane. `NETSTART` adds a resident Packet Driver bridge so ARP/ICMP remains available independently of `FTPSRV`; `NETCFG` persists IP, mask, gateway, and DNS. QEMU user networking provides outbound Internet access and forwarded FTP, while Linux TAP/NAT makes the guest host-routable. Disposable gates validate Internet Echo, FTP transfer/persistence, and a checksum-valid inbound Echo with no FTP server running.
 
-## Phase E - Windows pre-NT Readiness
-Goal: approach Windows 3.x and later pre-NT milestones from a stronger DOS base.
+This explicit Phase 8 advance does not close Phase 6 or Phase 7 and does not imply broad network support. DHCP product evidence, other NICs, physical/bridged networking beyond the isolated TAP lane, encrypted transfer, SMB/CIFS, WebDAV, SFTP, IPv6, and full-CD remain open.
 
-Entry requirements:
-1. Stage1/runtime split has progressed beyond proof-of-concept
-2. DOS application compatibility is broad enough to trust CiukiOS with non-curated programs
-3. legacy audio is no longer a known major gap for DOOM-class software
-4. shell return paths, process execution, file/path semantics, and handle behavior are materially stable
+## Phase E - Windows pre-NT
 
-First Windows target:
-1. Windows 3.x bootstrap and runtime investigation
+**Status: ACTIVE; first bounded Windows 3.1 milestone complete.**
 
-Later targets:
-1. Windows 95
-2. Windows 98
+Current evidence:
 
-## Non-Priority Items During This Roadmap
-1. FAT32 is future scope, not an active prerequisite for the phases above.
-2. The Windows 3.11-style GUI demo branch is exploratory and does not change the mainline critical path.
-3. Floppy/FAT12 is not part of the active engineering baseline unless the owner explicitly reopens it.
+1. Optional user-supplied Windows 3.1 media is integrated into the canonical `full` image without tracking or redistributing it.
+2. Windows reaches 386 Enhanced Mode through the normal `WIN` command using general DOSMGR/SDA, XMS/A20, PS/2 BIOS mouse, device-chain, EXEC-owner, and handle-restoration interfaces.
+3. The focused gate proves two 640x480 Program Manager starts, exactly one moving pointer, Calculator launch, task-scoped `Alt+F4`, Program Manager survival, clean CiukiOS shell recovery, and relaunch.
+
+Still open: wider Windows 3.1 application/device/audio/printing coverage, full-CD, real hardware, Windows 95, and Windows 98. The early result does not satisfy or waive the still-open Phase 6 and Phase 7 exit gates.
+
+## Non-Priority Work
+
+1. FAT32 is future scope, not a prerequisite for Phase 5-7.
+2. The GUI demo is exploratory and does not alter the critical path.
+3. Floppy/FAT12 remains a legacy/minimal lane unless explicitly reopened.
+4. Multi-floppy installer media and external-storage automount remain separate planned work, not hidden prerequisites for Phase 5 or Phase 6 activation.

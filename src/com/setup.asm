@@ -1951,6 +1951,17 @@ raw_hdd_clone_install:
 .partial_batch:
     mov cx, [raw_clone_remaining_lo]
 .have_batch:
+    ; A legacy CHS request must not cross a track boundary. Keep the batch
+    ; count shared by the source read, target write and clone accounting.
+    mov ax, [raw_clone_lba_lo]
+    mov dx, [raw_clone_lba_hi]
+    mov bx, [raw_source_spt]
+    div bx
+    sub bx, dx
+    cmp cx, bx
+    jbe .batch_track_safe
+    mov cx, bx
+.batch_track_safe:
     mov [batch_count], cx
 
     mov dl, RAW_HDD_SOURCE_DRIVE
@@ -1962,8 +1973,12 @@ raw_hdd_clone_install:
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
     mov cx, [batch_count]
+    mov word [raw_last_stage], 0x4157 ; stage='W', path='A' (ATA PIO)
+    call raw_ata_write_n
+    jnc .write_ok
     call raw_ata_write_n
     jc .fail
+.write_ok:
 
     ; advance LBA by batch_count
     mov ax, [batch_count]
@@ -2146,9 +2161,8 @@ raw_edd_write_current_lba:
     pop cx
     ret
 
-; Multi-sector read: AH=0x42 EDD with CX sectors. CHS fallback for source
-; drive (CD) only -- target HDD writes are EDD-only per d3e2fb7. CX must be
-; 1..127 (DAP limit).
+; Multi-sector read: AH=0x42 EDD with CX sectors, with a CHS fallback for
+; both the emulated-CD source and the target HDD. CX must be 1..127.
 raw_edd_read_n:
     mov byte [raw_last_stage], 'R'
     mov byte [raw_last_path], 'E'
@@ -2157,8 +2171,6 @@ raw_edd_read_n:
     call raw_edd_transfer_current_lba
     pop dx
     jnc .done
-    cmp dl, RAW_HDD_SOURCE_DRIVE
-    jne .done
     mov byte [raw_last_path], 'C'
     mov ah, 0x02
     call raw_chs_transfer_current_lba
@@ -2291,7 +2303,8 @@ raw_ata_write_n:
     jmp .ata_write_out
 
 .ata_write_fail:
-    mov byte [raw_edd_status], 0xFF
+    mov [raw_last_status], al
+    call ata_pri_soft_reset
     stc
 
 .ata_write_out:

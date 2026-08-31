@@ -24,7 +24,7 @@ mkdir -p build/full/obj
 
 echo "[build-full-cd] building CD partition image"
 echo "[build-full-cd] hardware profile: stage2 autorun is opt-in (set CIUKIOS_STAGE2_AUTORUN=1 to enable)"
-echo "[build-full-cd] shell profile: SHELL.COM boot default (set CIUKIOS_STAGE1_BOOT_EXTERNAL_SHELL=0 to force Stage1 fallback)"
+echo "[build-full-cd] shell profile: SHELL.COM boot default (external=0 exercises loader-fatal test path)"
 export CIUKIOS_SETUP_RAW_HDD_INSTALL="${CIUKIOS_SETUP_RAW_HDD_INSTALL:-1}"
 export CIUKIOS_SETUP_RAW_HDD_DESTRUCTIVE="${CIUKIOS_SETUP_RAW_HDD_DESTRUCTIVE:-1}"
 export CIUKIOS_SETUP_LIVE_CD_MODE="${CIUKIOS_SETUP_LIVE_CD_MODE:-1}"

@@ -9,6 +9,7 @@ TARGET_IMG="$OUT_DIR/runtime-hdd-install-target.img"
 INSTALL_SERIAL_LOG="$OUT_DIR/runtime_hdd_install.serial.log"
 INSTALL_STDERR_LOG="$OUT_DIR/runtime_hdd_install.stderr.log"
 BOOT_SERIAL_LOG="$OUT_DIR/runtime_hdd_boot.serial.log"
+BOOT_NORMALIZED_LOG="$OUT_DIR/runtime_hdd_boot.normalized.log"
 BOOT_STDERR_LOG="$OUT_DIR/runtime_hdd_boot.stderr.log"
 CMD_LOG="$OUT_DIR/runtime_hdd_install.commands.log"
 MON_SOCK="/tmp/ciukios-setup-runtime-hdd-install-$$.monitor.sock"
@@ -22,6 +23,7 @@ MDIR_SYSTEM_LOG="$OUT_DIR/runtime_hdd_mdir_system.txt"
 MDIR_APPS_LOG="$OUT_DIR/runtime_hdd_mdir_apps.txt"
 PARTITION_OFFSET_BYTES=32256
 DIRECT_ISO="build/full/ciukios-full-cd-direct.iso"
+SERIAL_NORMALIZER="$CIUKIOS_ROOT/scripts/serial_log_normalize.py"
 TARGET_SECTORS="${CIUKIOS_RUNTIME_HDD_INSTALL_TARGET_SECTORS:-524288}"
 qemu_pid=""
 
@@ -42,7 +44,7 @@ case "$TARGET_IMG" in
     ;;
 esac
 
-for tool in dd sha256sum qemu-system-i386 grep socat timeout od mdir; do
+for tool in dd sha256sum qemu-system-i386 grep socat timeout od mdir python3; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "[setup-runtime-hdd] ERROR: required tool not found: $tool" >&2
     exit 1
@@ -55,7 +57,7 @@ wait_for_regex() {
   local timeout_sec="$3"
   local start=$SECONDS
   while (( SECONDS - start < timeout_sec )); do
-    if [[ -f "$file" ]] && grep -aEq "$pattern" "$file"; then
+    if [[ -f "$file" ]] && "$SERIAL_NORMALIZER" "$file" | grep -aEq "$pattern"; then
       return 0
     fi
     sleep 0.1
@@ -115,7 +117,7 @@ if [[ ! -f "$DIRECT_ISO" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
-rm -f "$TARGET_IMG" "$INSTALL_SERIAL_LOG" "$INSTALL_STDERR_LOG" "$BOOT_SERIAL_LOG" "$BOOT_STDERR_LOG" "$CMD_LOG" "$RC_LOG" "$HASH_BEFORE" "$HASH_AFTER" "$MBR_SIG_LOG" "$PARTITION_LOG" "$MDIR_ROOT_LOG" "$MDIR_SYSTEM_LOG" "$MDIR_APPS_LOG" "$MON_SOCK"
+rm -f "$TARGET_IMG" "$INSTALL_SERIAL_LOG" "$INSTALL_STDERR_LOG" "$BOOT_SERIAL_LOG" "$BOOT_NORMALIZED_LOG" "$BOOT_STDERR_LOG" "$CMD_LOG" "$RC_LOG" "$HASH_BEFORE" "$HASH_AFTER" "$MBR_SIG_LOG" "$PARTITION_LOG" "$MDIR_ROOT_LOG" "$MDIR_SYSTEM_LOG" "$MDIR_APPS_LOG" "$MON_SOCK"
 
 echo "[setup-runtime-hdd] creating blank disposable target HDD: $TARGET_IMG"
 dd if=/dev/zero of="$TARGET_IMG" bs=512 count="$TARGET_SECTORS" status=none
@@ -129,7 +131,7 @@ if ! wait_for_socket "$MON_SOCK" 20; then
   fail_with_rc "monitor socket not ready"
 fi
 
-if ! wait_for_regex "$INSTALL_SERIAL_LOG" "AAPPPPSS" 90; then
+if ! wait_for_regex "$INSTALL_SERIAL_LOG" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+D:[\\]APPS>' 90; then
   fail_with_rc "shell prompt marker missing before setup"
 fi
 
@@ -194,20 +196,16 @@ timeout 45 qemu-system-i386 -machine pc,vmport=off -cpu pentium3 -m 128 -drive f
 boot_rc=$?
 set -e
 
-if ! grep -aF "[BOOT0-FULL] CiukiOS full stage0 ready" "$BOOT_SERIAL_LOG" >/dev/null; then
+if ! "$SERIAL_NORMALIZER" "$BOOT_SERIAL_LOG" > "$BOOT_NORMALIZED_LOG"; then
+  echo "[setup-runtime-hdd] ERROR: could not normalize installed-HDD serial log" >&2
+  exit 1
+fi
+if ! grep -aF "[BOOT0-FULL] CiukiOS full stage0 ready" "$BOOT_NORMALIZED_LOG" >/dev/null; then
   echo "[setup-runtime-hdd] ERROR: missing stage0 marker from installed HDD" >&2
   exit 1
 fi
-if ! grep -aF "[STAGE1-SERIAL] READY" "$BOOT_SERIAL_LOG" >/dev/null; then
-  echo "[setup-runtime-hdd] ERROR: missing stage1 marker from installed HDD" >&2
-  exit 1
-fi
-if ! grep -aF "[STAGE2] return to shell" "$BOOT_SERIAL_LOG" >/dev/null; then
-  echo "[setup-runtime-hdd] ERROR: missing stage2 marker from installed HDD" >&2
-  exit 1
-fi
-if ! grep -aF "AAPPPPSS" "$BOOT_SERIAL_LOG" >/dev/null; then
-  echo "[setup-runtime-hdd] ERROR: missing shell prompt from installed HDD" >&2
+if ! grep -aEq 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+C:[\\]APPS>' "$BOOT_NORMALIZED_LOG"; then
+  echo "[setup-runtime-hdd] ERROR: missing C:\\APPS readiness prompt from installed HDD" >&2
   exit 1
 fi
 

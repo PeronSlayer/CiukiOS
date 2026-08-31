@@ -5,7 +5,7 @@ Prototype a tiny Windows 3.11-inspired graphical shell without changing the core
 
 The demo is intentionally packaged as a normal full-profile DOS `.COM` application so runtime work can continue independently.
 
-This document remains exploratory only. It does not change the mainline engineering priority order, which is runtime split, broad DOS program compatibility, legacy audio, and only later Windows pre-NT readiness.
+This document remains exploratory only and describes a native Windows-inspired CiukiOS shell, not Microsoft Windows compatibility. The separate Phase 9 lane has since reached a bounded Windows 3.1 386 Enhanced Mode milestone on `full`; that result does not implement this proposed native GUI or close its plan.
 
 ## Branch Scope
 Branch: `feat/gui-win311-demo`

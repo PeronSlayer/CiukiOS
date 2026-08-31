@@ -1,5 +1,13 @@
 # CiukiOS Setup Stream (Phase 3.5 Functional Closure + Phase 4 Installer Closure + Post-MVP Backlog)
 
+## Current evidence boundary (2026-09-01)
+
+- The functional MVP and Phase 4 installer closures below are historical accepted milestones; they are not a claim that every setup test is green on the current checkout.
+- The B6 keyboard contract has sampled scenario evidence only. Its per-row placeholders remain post-closure hardening work and must not be described as fully evidenced.
+- Multi-floppy distribution, extended media workflows, and external-storage automount remain planned backlog, not implemented installer features.
+- Any new release or runtime-ownership claim requires fresh setup results from the same checkout when installer layout, Stage1, CIUKIDOS, shell, or disk behavior is affected.
+- Current same-checkout evidence: packaging acceptance, direct-CD/blank-HDD read-only probe, host-built HDD boot, and `SETUP.COM` direct-CD cloning to a disposable HDD with autonomous `C:\APPS` boot all pass. The runtime-HDD lane is separate from `qemu-test-all`.
+
 ## Status update (2026-04-30)
 - Phase 3.5 foundation stream is formally closed as a FOUNDATION/PLACEHOLDER baseline.
 - Closure scope accepted: setup planning artifacts and helper scaffolding already present in repository.
@@ -116,10 +124,10 @@ Stream 3 (media contracts):
 3. FAT16 target preparation and validation pass before payload copy.
 4. Copy engine supports media prompt/retry semantics.
 5. Config artifacts are generated for the selected profile.
-6. Checklist in `setup/SETUP_COM_MVP_CHECKLIST.md` is fully checked with evidence.
+6. The MVP checklist is structurally closed with the accepted scenario evidence; the separate B6 keyboard matrix still requires per-row evidence.
 
 ## Immediate next action
-Keep installer closure green while planning post-MVP advanced media scope (multi-floppy and extended CD workflow).
+Keep the accepted installer scope reproducible, collect the remaining B6 per-row keyboard evidence, and plan post-MVP advanced media work separately.
 
 Recommended maintenance verification:
 
@@ -127,9 +135,11 @@ Recommended maintenance verification:
 ./scripts/build_full.sh
 ./scripts/qemu_test_setup_full_acceptance.sh
 ./scripts/qemu_test_setup_installer_scenarios.sh
+./scripts/qemu_test_setup_cd_hdd_probe.sh
+./scripts/qemu_test_setup_runtime_hdd_install.sh
 ```
 
-If all gates remain green, continue with a separate planning cycle for advanced media distribution work.
+Only after fresh gates are green may the current checkout repeat the historical closure claim. Advanced media distribution remains a separate planning cycle.
 
 ## Helper script usage
 The setup bootstrap helper validates required setup files and can prepare metadata artifacts under `build/setup/`.

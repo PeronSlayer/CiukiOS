@@ -1,7 +1,13 @@
 # CiukiOS External Storage Automount Plan v0.1
 
+## Status
+
+**PLANNED — no implementation or PASS evidence is claimed.**
+
+This is a future storage roadmap, not an active Phase 5 or Phase 6 advancement gate. The active engineering profiles are `full` and `full-cd`; floppy coverage is optional legacy/minimal scope unless explicitly reopened. Every command and marker below is proposed until a corresponding script and fresh result exist.
+
 ## 1. Current objective
-Define and execute a practical implementation plan for external storage support in CiukiOS, covering USB mass-storage devices, additional IDE/SATA disks, and floppy auto-mount, with deterministic DOS drive-letter assignment and safe media-change handling.
+Define a future implementation plan for external storage support in CiukiOS, covering USB mass-storage devices, additional IDE/SATA disks, and optional floppy auto-mount, with deterministic DOS drive-letter assignment and safe media-change handling.
 
 Scope includes:
 1. Drive-letter policy proposal and runtime mapping rules.
@@ -17,7 +23,7 @@ Parallel stream (independent after Step 3): Step 5 can run in parallel with Step
 
 | Step | Actions | Dependencies | Critical path | Verifiable output |
 | --- | --- | --- | --- | --- |
-| 1. Baseline and storage observability contract | Capture current disk behavior in `floppy` and `full` profiles. Define serial/log markers for storage lifecycle (`[STOR-ENUM]`, `[DRIVE-MAP]`, `[AUTOMOUNT]`, `[MEDIA-CHANGE]`, `[STOR-FAILSAFE]`). | None | Yes | Existing checks pass: `make qemu-test-floppy`, `make qemu-test-full`, `make qemu-test-stage1`. Baseline logs produced in `build/logs/storage/` (new lane artifact directory). |
+| 1. Baseline and storage observability contract | Capture current disk behavior in `full` and `full-cd`; add floppy only if legacy scope is reopened. Define serial/log markers for storage lifecycle (`[STOR-ENUM]`, `[DRIVE-MAP]`, `[AUTOMOUNT]`, `[MEDIA-CHANGE]`, `[STOR-FAILSAFE]`). | None | Yes | Proposed baseline: affected current gates are green and a new storage log bundle records the approved marker contract. |
 | 2. Device discovery + drive-letter allocator policy | Implement normalized device inventory for floppy, fixed disks, and BIOS-visible USB mass storage. Apply this policy: `A:` floppy 0 (reserved, `NOT READY` if absent), `B:` floppy 1 (reserved, `NOT READY` if absent), `C:` primary boot volume when non-floppy; if boot is floppy, assign `C:` to first fixed disk if available, otherwise keep `C:` unavailable; `D:` onward for remaining fixed disks (BIOS order), then removable media (first-detected order). Preserve letter stability until reboot; on removable reinsertion with matching signature, reuse prior letter. | Step 1 | Yes | Deterministic map marker visible on boot and rescan (`[DRIVE-MAP] A=... B=... C=...`). New automated lane proposed: `bash scripts/qemu_test_storage_drive_letters.sh`. |
 | 3. Automount manager (boot + runtime) | Add boot-time mount pass for all present volumes and runtime automount for removable media insertion. Define mount states: `MOUNTED_RW`, `MOUNTED_RO`, `NOT_READY`, `UNSUPPORTED_FS`, `IO_ERROR`. Add explicit manual rescan hook for operators (`MOUNT /R` command path or equivalent shell verb). | Step 2 | Yes | Boot log shows deterministic automount sequence (`[AUTOMOUNT] begin/end`, per-letter result lines). New lane proposed: `bash scripts/qemu_test_storage_automount.sh`. |
 | 4. Removable media change detection and safety | Implement policy: floppy media-change check at each new open/root directory operation plus periodic prompt-loop poll; USB removable check through periodic poll + explicit rescan command. On change, invalidate FAT/block cache for that drive, mark stale handles invalid, and return deterministic DOS error paths instead of hanging. | Step 3 | Yes | Media-change events logged with previous/new signature and drive letter (`[MEDIA-CHANGE]`). New lane proposed: `bash scripts/qemu_test_storage_media_change.sh`. |
@@ -25,10 +31,10 @@ Parallel stream (independent after Step 3): Step 5 can run in parallel with Step
 | 6. Integration gates and rollout | Integrate new storage lanes into aggregate validation flow (direct scripts + `make qemu-test-all`). Archive evidence in `build/logs/storage/` with pass/fail summary per scenario (boot mount, hot-insert, hot-remove, unsupported FS, I/O error). Update docs after lane stabilization. | Step 4 and Step 5 | Yes | Full lane run produces deterministic PASS summary and marker checks. Candidate command set: `make qemu-test-all`, plus all new storage scripts. |
 
 Test strategy and evidence commands:
-1. Baseline regressions (already available):
-   - `make qemu-test-floppy`
+1. Baseline regressions (commands available; no current storage PASS implied):
    - `make qemu-test-full`
-   - `make qemu-test-stage1`
+   - `make qemu-test-full-cd`
+   - `make qemu-test-floppy` only when the legacy scope is explicitly included
 2. New dedicated storage lanes (to add):
    - `bash scripts/qemu_test_storage_drive_letters.sh`
    - `bash scripts/qemu_test_storage_automount.sh`
@@ -69,10 +75,5 @@ Test strategy and evidence commands:
 6. Documentation and changelog updates are complete for the delivered milestone and reflect only major project-level impact.
 
 ## 6. Next action
-Create execution tickets for Step 1 and Step 2, then run and archive baseline evidence before implementation changes:
-1. `mkdir -p build/logs/storage`
-2. `make qemu-test-floppy`
-3. `make qemu-test-full`
-4. `make qemu-test-stage1`
 
-Expected immediate output: baseline log bundle and approved marker contract for storage instrumentation.
+Do not start implementation implicitly. When this roadmap is explicitly activated, approve the drive-letter policy first, then create Step 1 and Step 2 execution tickets and capture a fresh full/full-CD baseline before any storage mutation code is added.

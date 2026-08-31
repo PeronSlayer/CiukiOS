@@ -7,6 +7,7 @@ cd "$CIUKIOS_ROOT"
 OUT_DIR="build/full/setup-hdd"
 TARGET_IMG="$OUT_DIR/target-hdd.img"
 SERIAL_LOG="$OUT_DIR/target_boot.serial.log"
+NORMALIZED_LOG="$OUT_DIR/target_boot.serial.normalized.log"
 STDERR_LOG="$OUT_DIR/target_boot.stderr.log"
 MBR_SIG_LOG="$OUT_DIR/mbr_sig.txt"
 PARTITION_LOG="$OUT_DIR/partition_entry.hex"
@@ -14,6 +15,7 @@ MDIR_ROOT_LOG="$OUT_DIR/mdir_root.txt"
 MDIR_SYSTEM_LOG="$OUT_DIR/mdir_system.txt"
 MDIR_APPS_LOG="$OUT_DIR/mdir_apps.txt"
 RC_LOG="$OUT_DIR/qemu_test_setup_hdd_install.rc"
+SERIAL_NORMALIZER="$CIUKIOS_ROOT/scripts/serial_log_normalize.py"
 
 PARTITION_LBA="${CIUKIOS_HDD_INSTALL_PARTITION_LBA:-63}"
 PARTITION_SECTORS="${CIUKIOS_HDD_INSTALL_PARTITION_SECTORS:-262144}"
@@ -33,20 +35,25 @@ case "$TARGET_IMG" in
     ;;
 esac
 
-for tool in dd od mdir qemu-system-i386 timeout; do
+for tool in awk dd grep od mdir qemu-system-i386 timeout; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "[setup-hdd] ERROR: required tool not found: $tool" >&2
     exit 1
   fi
 done
+if [[ ! -x "$SERIAL_NORMALIZER" ]]; then
+  echo "[setup-hdd] ERROR: serial normalizer is not executable: $SERIAL_NORMALIZER" >&2
+  exit 1
+fi
 
 echo "[setup-hdd] building full-CD source image"
 bash scripts/build_full_cd.sh
 
 MBR_BIN="build/full/obj/full_cd_mbr.bin"
 PART_IMG="build/full/ciukios-full-cd-partition.img"
-if [[ ! -f "$MBR_BIN" || ! -f "$PART_IMG" ]]; then
-  echo "[setup-hdd] ERROR: missing source artifacts: $MBR_BIN or $PART_IMG" >&2
+STAGE1_LST="build/full/obj/full_stage1.lst"
+if [[ ! -f "$MBR_BIN" || ! -f "$PART_IMG" || ! -f "$STAGE1_LST" ]]; then
+  echo "[setup-hdd] ERROR: missing source artifacts: $MBR_BIN, $PART_IMG, or $STAGE1_LST" >&2
   exit 1
 fi
 
@@ -58,7 +65,7 @@ if [[ "$part_size" -ne "$expected_part_size" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
-rm -f "$TARGET_IMG" "$SERIAL_LOG" "$STDERR_LOG" "$MBR_SIG_LOG" "$PARTITION_LOG" "$MDIR_ROOT_LOG" "$MDIR_SYSTEM_LOG" "$MDIR_APPS_LOG" "$RC_LOG"
+rm -f "$TARGET_IMG" "$SERIAL_LOG" "$NORMALIZED_LOG" "$STDERR_LOG" "$MBR_SIG_LOG" "$PARTITION_LOG" "$MDIR_ROOT_LOG" "$MDIR_SYSTEM_LOG" "$MDIR_APPS_LOG" "$RC_LOG"
 
 echo "[setup-hdd] creating disposable HDD image: $TARGET_IMG"
 dd if=/dev/zero of="$TARGET_IMG" bs=512 count="$TARGET_SECTORS" status=none
@@ -66,6 +73,21 @@ dd if=/dev/zero of="$TARGET_IMG" bs=512 count="$TARGET_SECTORS" status=none
 echo "[setup-hdd] writing MBR and FAT16 full partition"
 dd if="$MBR_BIN" of="$TARGET_IMG" bs=512 count=1 conv=notrunc status=none
 dd if="$PART_IMG" of="$TARGET_IMG" bs=512 seek="$PARTITION_LBA" conv=notrunc status=none
+
+# The source partition is the Live D: profile. Mirror SETUP.COM's installed
+# default-drive patch so this host-built fixture represents a C: HDD install.
+default_drive_addr_hex="$(awk '/mov byte \[loader_default_drive\], DOS_DEFAULT_DRIVE_INDEX/ {print $2; exit}' "$STAGE1_LST")"
+if [[ -z "$default_drive_addr_hex" ]]; then
+  echo "[setup-hdd] ERROR: Stage1 default-drive patch site not found" >&2
+  exit 1
+fi
+default_drive_imm_off=$((16#$default_drive_addr_hex + 4))
+default_drive_target_off=$(((PARTITION_LBA + 1) * 512 + default_drive_imm_off))
+if [[ "$(od -An -tu1 -j "$default_drive_target_off" -N1 "$TARGET_IMG" | tr -d ' ')" != "3" ]]; then
+  echo "[setup-hdd] ERROR: expected Live default drive D: at byte $default_drive_target_off" >&2
+  exit 1
+fi
+printf '\002' | dd of="$TARGET_IMG" bs=1 seek="$default_drive_target_off" count=1 conv=notrunc status=none
 
 dd if="$TARGET_IMG" bs=1 skip=510 count=2 status=none | od -An -tx1 > "$MBR_SIG_LOG"
 if ! grep -qi "55 aa" "$MBR_SIG_LOG"; then
@@ -109,20 +131,16 @@ qemu_rc=$?
 set -e
 printf "%s\n" "$qemu_rc" > "$RC_LOG"
 
-if ! grep -aF "[BOOT0-FULL] CiukiOS full stage0 ready" "$SERIAL_LOG" >/dev/null; then
+if ! "$SERIAL_NORMALIZER" "$SERIAL_LOG" > "$NORMALIZED_LOG"; then
+  echo "[setup-hdd] ERROR: could not normalize installed-HDD serial log" >&2
+  exit 1
+fi
+if ! grep -aF "[BOOT0-FULL] CiukiOS full stage0 ready" "$NORMALIZED_LOG" >/dev/null; then
   echo "[setup-hdd] ERROR: missing stage0 marker" >&2
   exit 1
 fi
-if ! grep -aF "[STAGE1-SERIAL] READY" "$SERIAL_LOG" >/dev/null; then
-  echo "[setup-hdd] ERROR: missing stage1 marker" >&2
-  exit 1
-fi
-if ! grep -aF "[STAGE2] return to shell" "$SERIAL_LOG" >/dev/null; then
-  echo "[setup-hdd] ERROR: missing Stage2 return marker" >&2
-  exit 1
-fi
-if ! grep -aF "AAPPPPSS" "$SERIAL_LOG" >/dev/null; then
-  echo "[setup-hdd] ERROR: missing shell prompt" >&2
+if ! grep -aEq 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+C:[\\]APPS[\\]?>' "$NORMALIZED_LOG"; then
+  echo "[setup-hdd] ERROR: missing C:\\APPS readiness prompt" >&2
   exit 1
 fi
 

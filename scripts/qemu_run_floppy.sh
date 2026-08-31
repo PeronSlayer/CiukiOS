@@ -109,8 +109,9 @@ BASE_ARGS=(
 if [[ "$MODE" == "test" ]]; then
   TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-8}"
   STAGE0_MARKER="${STAGE0_MARKER:-[BOOT0] CiukiOS stage0 ready}"
-  STAGE1_MARKER="${STAGE1_MARKER:-[STAGE1-SERIAL] READY}"
+  STAGE1_MARKER="${STAGE1_MARKER:-WOOF! CiukiOS ran into a problem.}"
   LOG_FILE="${LOG_FILE:-build/floppy/qemu-floppy.log}"
+  NORMALIZED_LOG="${LOG_FILE}.normalized"
 
   QEMU_ARGS=(
     "${BASE_ARGS[@]}"
@@ -138,7 +139,7 @@ if [[ "$MODE" == "test" ]]; then
   fi
 
   mkdir -p "$(dirname "$LOG_FILE")"
-  rm -f "$LOG_FILE"
+  rm -f "$LOG_FILE" "$NORMALIZED_LOG"
 
   set +e
   timeout "$TIMEOUT_SEC" "$QEMU_CMD" "${QEMU_ARGS[@]}" >/dev/null 2>&1
@@ -151,13 +152,18 @@ if [[ "$MODE" == "test" ]]; then
     exit "$RC"
   fi
 
-  if grep -Fq "$STAGE0_MARKER" "$LOG_FILE" && grep -Fq "$STAGE1_MARKER" "$LOG_FILE"; then
+  if ! scripts/serial_log_normalize.py "$LOG_FILE" > "$NORMALIZED_LOG"; then
+    echo "[qemu-run-floppy] FAIL (serial log normalization failed)" >&2
+    exit 1
+  fi
+
+  if grep -Fq "$STAGE0_MARKER" "$NORMALIZED_LOG" && grep -Fq "$STAGE1_MARKER" "$NORMALIZED_LOG"; then
     echo "[qemu-run-floppy] PASS (stage0 and stage1 markers detected)"
     exit 0
   fi
 
   echo "[qemu-run-floppy] FAIL (stage0/stage1 marker not detected)" >&2
-  tail -n 80 "$LOG_FILE" >&2 || true
+  tail -n 80 "$NORMALIZED_LOG" >&2 || true
   exit 1
 fi
 

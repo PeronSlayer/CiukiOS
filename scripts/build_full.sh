@@ -17,7 +17,7 @@ mkdir -p build/full/obj
 
 BOOT_SRC="src/boot/full_boot.asm"
 BOOT_BIN="build/full/obj/full_boot.bin"
-STAGE1_SRC="src/boot/floppy_stage1.asm"
+STAGE1_SRC="src/boot/full_stage1_loader.asm"
 STAGE1_BIN="build/full/obj/full_stage1.bin"
 STAGE1_SLOT_BIN="build/full/obj/full_stage1_slot.bin"
 STAGE1_LST="build/full/obj/full_stage1.lst"
@@ -26,7 +26,12 @@ STAGE2_BIN="build/full/obj/full_stage2.bin"
 STAGE2_MAX_SIZE=512
 RUNTIME_SRC="src/runtime/ciukidos.asm"
 RUNTIME_BIN="build/full/obj/ciukidos.sys"
-RUNTIME_MAX_SIZE=512
+# The loader validates CIUKIDOS at 0x0900 and relocates its position-independent
+# image to 0x0300.  The bounded image may use the complete interval up to, but
+# never including, SYSVARS at 0x0D90.
+RUNTIME_MAX_SIZE=$((0xA900))
+CIUKIDOS_RUNTIME_SEG=0x0300
+CIUKIDOS_ABI_VERSION=2
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 TOTAL_SECTORS=262144
@@ -50,6 +55,16 @@ DATA_LBA=$((ROOT_LBA + ROOT_DIR_SECTORS))
 
 COMDEMO_SRC="src/com/comdemo.asm"
 COMDEMO_BIN="build/full/obj/comdemo.com"
+CIUKRTST_SRC="src/com/ciukrtst.asm"
+CIUKRTST_BIN="build/full/obj/ciukrtst.com"
+MOUSECB_SRC="src/com/mousecb.asm"
+MOUSECB_BIN="build/full/obj/mousecb.com"
+CIUKPST_SRC="src/com/ciukpstk.asm"
+CIUKPST_BIN="build/full/obj/ciukpst.com"
+CIUKPTRM_SRC="src/com/ciukptrm.asm"
+CIUKPTRM_BIN="build/full/obj/ciuktrm.exe"
+CIUKPCOM_SRC="src/com/ciukpcom.asm"
+CIUKPCOM_BIN="build/full/obj/ciukpcom.com"
 MZDEMO_SRC="src/com/mzdemo.asm"
 MZDEMO_BIN="build/full/obj/mzdemo.exe"
 FILEIO_SRC="src/com/fileio.bin.asm"
@@ -74,6 +89,7 @@ SETUP_BIN="build/full/obj/setup.com"
 SETUP_MAX_CLUSTERS=4
 SETUP_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512 * SETUP_MAX_CLUSTERS))
 SETUP_MANIFEST_BIN="build/full/obj/setup.mft"
+LBA32_TEST_BIN="build/full/obj/lba32.txt"
 FORMAT_SRC="src/com/format.asm"
 FORMAT_BIN="build/full/obj/format.com"
 FORMAT_MAX_CLUSTERS=2
@@ -83,6 +99,12 @@ COMMAND_STUB_BIN="build/full/obj/command.com"
 COMMAND_COMPAT_IMAGE_PATH="${CIUKIOS_COMMAND_COM_IMAGE_PATH:-::COMMAND.COM}"
 SHELL_SRC="src/com/shell.asm"
 SHELL_BIN="build/full/obj/shell.com"
+IPCONFIG_SRC="src/com/ipconfig.asm"
+IPCONFIG_BIN="build/full/obj/ipconfig.com"
+ICMPD_SRC="src/com/icmpd.asm"
+ICMPD_BIN="build/full/obj/icmpd.com"
+NETCFG_SRC="src/com/netcfg.asm"
+NETCFG_BIN="build/full/obj/netcfg.com"
 DRVLOAD_SRC="src/com/drvload.asm"
 DRVLOAD_BIN="build/full/obj/drvload.com"
 SB16INIT_SRC="src/com/sb16init.asm"
@@ -117,18 +139,39 @@ DOOMVAN_EXE="${CIUKIOS_DOOMVAN_EXE:-$CIUKIOS_ROOT/build/external/doom-vanille/pc
 DOOMVAN_IMAGE_DIR="${CIUKIOS_DOOMVAN_IMAGE_DIR:-::APPS/DOOMVAN}"
 DOSNAV_SRC_DIR="${CIUKIOS_DOSNAV_SRC_DIR:-$CIUKIOS_ROOT/third_party/DOSNavigator}"
 DOSNAV_IMAGE_DIR="${CIUKIOS_DOSNAV_IMAGE_DIR:-::APPS/DOSNAV}"
+DOSNAV_PATCH_TOOL="$CIUKIOS_ROOT/scripts/patch_dosnav_loader.py"
+DOSNAV_PATCHED_COM="$CIUKIOS_ROOT/build/full/obj/dosnav-patched.com"
 WOLF3D_SRC_DIR="${CIUKIOS_WOLF3D_SRC_DIR:-$CIUKIOS_ROOT/third_party/WOLF3D}"
 WOLF3D_IMAGE_DIR="${CIUKIOS_WOLF3D_IMAGE_DIR:-::APPS/WOLF3D}"
+COSTA_SRC_DIR="${CIUKIOS_COSTA_SRC_DIR:-$CIUKIOS_ROOT/build/external/costa/v1.8.0}"
+COSTA_IMAGE_DIR="${CIUKIOS_COSTA_IMAGE_DIR:-::APPS/COSTA}"
+NETWORK_SRC_DIR="${CIUKIOS_NETWORK_SRC_DIR:-$CIUKIOS_ROOT/build/external/network/mtcp-2025-01-10_crynwr-2006-09-02c}"
+NETWORK_CONFIG_DIR="${CIUKIOS_NETWORK_CONFIG_DIR:-$CIUKIOS_ROOT/config/network}"
+NETWORK_IMAGE_DIR="${CIUKIOS_NETWORK_IMAGE_DIR:-::NET}"
+NETWORK_SHARE_IMAGE_DIR="${CIUKIOS_NETWORK_SHARE_IMAGE_DIR:-::SHARE}"
 DRIVERS_SRC_DIR="${CIUKIOS_DRIVERS_SRC_DIR:-$CIUKIOS_ROOT/third_party/drivers}"
 DRIVERS_IMAGE_DIR="${CIUKIOS_DRIVERS_IMAGE_DIR:-::SYSTEM/DRIVERS}"
 DRIVERS_VERIFY_SCRIPT="$CIUKIOS_ROOT/scripts/verify_full_drivers_payload.sh"
 CIUKIOS_ALLOW_MISSING_DRIVERS="${CIUKIOS_ALLOW_MISSING_DRIVERS:-0}"
+CTMOUSE_BIN="${CIUKIOS_CTMOUSE_BIN:-$CIUKIOS_ROOT/third_party/ctmouse/ctmouse.exe}"
+CTMOUSE_LICENSE="${CIUKIOS_CTMOUSE_LICENSE:-$CIUKIOS_ROOT/third_party/ctmouse/copying}"
+WINDOWS31_MEDIA_DIR="${CIUKIOS_WINDOWS31_MEDIA_DIR:-$CIUKIOS_ROOT/third_party/windows31}"
+WINDOWS31_INSTALLED_DIR="${CIUKIOS_WINDOWS31_INSTALLED_DIR:-$WINDOWS31_MEDIA_DIR/installed}"
+WINDOWS31_MEDIA_IMAGE_DIR="${CIUKIOS_WINDOWS31_MEDIA_IMAGE_DIR:-::MEDIA/WIN31}"
+WINDOWS31_SETUP_IMAGE_DIR="${CIUKIOS_WINDOWS31_SETUP_IMAGE_DIR:-::WIN31SET}"
+WINDOWS31_INSTALLED_IMAGE_DIR="${CIUKIOS_WINDOWS31_INSTALLED_IMAGE_DIR:-::WINDOWS}"
+WINDOWS31_README="$CIUKIOS_ROOT/config/windows31/README.TXT"
+WINDOWS31_MODE="${CIUKIOS_WINDOWS31_MODE:-auto}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 STAGE1_RUNTIME_PROBE="${CIUKIOS_STAGE1_RUNTIME_PROBE:-0}"
 STAGE1_DEBUG_COMMANDS="${CIUKIOS_STAGE1_DEBUG_COMMANDS:-0}"
 TRACE_CHILD_INT21="${CIUKIOS_TRACE_CHILD_INT21:-0}"
+TRACE_WIN_INT2F="${CIUKIOS_TRACE_WIN_INT2F:-0}"
+TRACE_WIN_MEMORY="${CIUKIOS_TRACE_WIN_MEMORY:-0}"
+TRACE_WIN_XMS="${CIUKIOS_TRACE_WIN_XMS:-0}"
 STAGE1_BOOT_EXTERNAL_SHELL="${CIUKIOS_STAGE1_BOOT_EXTERNAL_SHELL:-1}"
-# Full profile defaults to external SHELL.COM with a build-time override back to Stage1 shell.
+# Full profile is loader-only: disabling external SHELL.COM exercises the
+# deterministic loader-fatal path; no interactive Stage1 fallback is built.
 STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-0}"
 HARDWARE_VALIDATION_SCREEN="${CIUKIOS_HARDWARE_VALIDATION_SCREEN:-0}"
 SETUP_RAW_HDD_DESTRUCTIVE="${CIUKIOS_SETUP_RAW_HDD_DESTRUCTIVE:-0}"
@@ -182,7 +225,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$CIUKRTST_SRC" "$MOUSECB_SRC" "$CIUKPST_SRC" "$CIUKPTRM_SRC" "$CIUKPCOM_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -224,6 +267,9 @@ nasm -f bin "$STAGE1_SRC" \
 	-D STAGE1_RUNTIME_PROBE="$STAGE1_RUNTIME_PROBE" \
 	-D STAGE1_DEBUG_COMMANDS="$STAGE1_DEBUG_COMMANDS" \
 	-D TRACE_CHILD_INT21="$TRACE_CHILD_INT21" \
+	-D TRACE_WIN_INT2F="$TRACE_WIN_INT2F" \
+	-D TRACE_WIN_MEMORY="$TRACE_WIN_MEMORY" \
+	-D TRACE_WIN_XMS="$TRACE_WIN_XMS" \
 	-D STAGE1_BOOT_EXTERNAL_SHELL="$STAGE1_BOOT_EXTERNAL_SHELL" \
 	-D STAGE2_AUTORUN="$STAGE2_AUTORUN" \
 	-D HARDWARE_VALIDATION_SCREEN="$HARDWARE_VALIDATION_SCREEN" \
@@ -233,6 +279,10 @@ nasm -f bin "$STAGE1_SRC" \
 	-l "$STAGE1_LST" -o "$STAGE1_BIN"
 
 STAGE1_SIZE="$(stat -c%s "$STAGE1_BIN")"
+if [[ "$STAGE1_SIZE" -gt 4096 ]]; then
+	echo "[build-full] ERROR: loader-only Stage1 is $STAGE1_SIZE bytes (max 4096 before CIUKIDOS at 0x0900)" >&2
+	exit 1
+fi
 if [[ "$STAGE1_SIZE" -gt "$STAGE1_SLOT_SIZE" ]]; then
 	echo "[build-full] ERROR: stage1 payload is $STAGE1_SIZE bytes (max $STAGE1_SLOT_SIZE)" >&2
 	exit 1
@@ -242,9 +292,9 @@ fi
 # "mov byte [dos_default_drive], DOS_DEFAULT_DRIVE_INDEX" inside the cloned
 # stage1. Locate that byte from the listing so the patch target follows any
 # stage1 layout change instead of relying on a hardcoded LBA/offset.
-DEFAULT_DRIVE_IMM_ADDR_HEX="$(awk '/mov byte \[dos_default_drive\], DOS_DEFAULT_DRIVE_INDEX/ {print $2; exit}' "$STAGE1_LST")"
+DEFAULT_DRIVE_IMM_ADDR_HEX="$(awk '/mov byte \[loader_default_drive\], DOS_DEFAULT_DRIVE_INDEX/ {print $2; exit}' "$STAGE1_LST")"
 if [[ -z "$DEFAULT_DRIVE_IMM_ADDR_HEX" ]]; then
-	echo "[build-full] ERROR: dos_default_drive patch site not found in $STAGE1_LST" >&2
+	echo "[build-full] ERROR: loader_default_drive patch site not found in $STAGE1_LST" >&2
 	exit 1
 fi
 # C6 06 <addr16> <imm8>: the immediate is the 5th byte of the instruction.
@@ -254,7 +304,7 @@ if [[ "$DEFAULT_DRIVE_IMM_BYTE" != "$DOS_DEFAULT_DRIVE_INDEX" ]]; then
 	echo "[build-full] ERROR: stage1 default-drive imm byte is $DEFAULT_DRIVE_IMM_BYTE at offset $DEFAULT_DRIVE_IMM_OFF (expected $DOS_DEFAULT_DRIVE_INDEX)" >&2
 	exit 1
 fi
-RAW_STAGE1_PATCH_LBA=$((1 + DEFAULT_DRIVE_IMM_OFF / 512))
+RAW_STAGE1_PATCH_LBA=$((BOOT_LBA_OFFSET + 1 + DEFAULT_DRIVE_IMM_OFF / 512))
 RAW_STAGE1_PATCH_OFF=$((DEFAULT_DRIVE_IMM_OFF % 512))
 echo "[build-full] stage1 default-drive patch site: LBA=$RAW_STAGE1_PATCH_LBA off=$RAW_STAGE1_PATCH_OFF"
 
@@ -264,8 +314,35 @@ dd if="$STAGE1_BIN" of="$STAGE1_SLOT_BIN" conv=notrunc status=none
 
 echo "[build-full] assembling application payloads"
 nasm -f bin "$STAGE2_SRC" -o "$STAGE2_BIN"
-nasm -f bin "$RUNTIME_SRC" -o "$RUNTIME_BIN"
+nasm -f bin "$RUNTIME_SRC" \
+	-D FAT_SPT="$FAT_SPT" \
+	-D FAT_HEADS="$FAT_HEADS" \
+	-D FAT_RESERVED_SECTORS="$FAT_RESERVED_SECTORS" \
+	-D FAT_SECTORS_PER_CLUSTER="$FAT_SECTORS_PER_CLUSTER" \
+	-D FAT_SECTORS_PER_FAT="$FAT_SECTORS_PER_FAT" \
+	-D FAT_ROOT_DIR_SECTORS="$ROOT_DIR_SECTORS" \
+	-D FAT_TYPE=16 \
+	-D FAT_LBA_OFFSET="$FAT_LBA_OFFSET" \
+	-D STAGE1_SELFTEST_AUTORUN="$STAGE1_SELFTEST_AUTORUN" \
+	-D STAGE1_RUNTIME_PROBE="$STAGE1_RUNTIME_PROBE" \
+	-D STAGE1_DEBUG_COMMANDS="$STAGE1_DEBUG_COMMANDS" \
+	-D TRACE_CHILD_INT21="$TRACE_CHILD_INT21" \
+	-D TRACE_WIN_INT2F="$TRACE_WIN_INT2F" \
+	-D TRACE_WIN_MEMORY="$TRACE_WIN_MEMORY" \
+	-D TRACE_WIN_XMS="$TRACE_WIN_XMS" \
+	-D STAGE1_BOOT_EXTERNAL_SHELL="$STAGE1_BOOT_EXTERNAL_SHELL" \
+	-D STAGE2_AUTORUN=0 \
+	-D HARDWARE_VALIDATION_SCREEN="$HARDWARE_VALIDATION_SCREEN" \
+	-D DOS_DEFAULT_DRIVE_INDEX="$DOS_DEFAULT_DRIVE_INDEX" \
+	-D ENABLE_PS2_MOUSE_INIT="$ENABLE_PS2_MOUSE_INIT" \
+	-D WOLF_RUNTIME_DIAG="$WOLF_RUNTIME_DIAG" \
+	-l build/full/obj/ciukidos.lst -o "$RUNTIME_BIN"
 nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
+nasm -f bin "$CIUKRTST_SRC" -D CIUKIDOS_RUNTIME_SEG="$CIUKIDOS_RUNTIME_SEG" -D CIUKIDOS_ABI_VERSION="$CIUKIDOS_ABI_VERSION" -o "$CIUKRTST_BIN"
+nasm -f bin "$MOUSECB_SRC" -o "$MOUSECB_BIN"
+nasm -f bin "$CIUKPST_SRC" -D CIUKIDOS_RUNTIME_SEG="$CIUKIDOS_RUNTIME_SEG" -D CIUKIDOS_ABI_VERSION="$CIUKIDOS_ABI_VERSION" -o "$CIUKPST_BIN"
+nasm -f bin "$CIUKPTRM_SRC" -D CIUKIDOS_RUNTIME_SEG="$CIUKIDOS_RUNTIME_SEG" -D CIUKIDOS_ABI_VERSION="$CIUKIDOS_ABI_VERSION" -o "$CIUKPTRM_BIN"
+nasm -f bin "$CIUKPCOM_SRC" -o "$CIUKPCOM_BIN"
 nasm -f bin "$MZDEMO_SRC"  -o "$MZDEMO_BIN"
 nasm -f bin "$FILEIO_SRC"  -o "$FILEIO_BIN"
 nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
@@ -278,6 +355,9 @@ nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL
 nasm -f bin "$FORMAT_SRC" -o "$FORMAT_BIN"
 nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
 nasm -f bin "$SHELL_SRC" -o "$SHELL_BIN"
+nasm -f bin "$IPCONFIG_SRC" -o "$IPCONFIG_BIN"
+nasm -f bin "$ICMPD_SRC" -o "$ICMPD_BIN"
+nasm -f bin "$NETCFG_SRC" -o "$NETCFG_BIN"
 nasm -f bin "$DRVLOAD_SRC" -o "$DRVLOAD_BIN"
 nasm -f bin "$SB16INIT_SRC" -o "$SB16INIT_BIN"
 nasm -f bin "$AUDIOTST_SRC" -o "$AUDIOTST_BIN"
@@ -352,6 +432,7 @@ MZDEMO_SECTORS=$(((MZDEMO_SIZE + 511) / 512))
 FILEIO_SECTORS=$(((FILEIO_SIZE + 511) / 512))
 DELTEST_SECTORS=$(((DELTEST_SIZE + 511) / 512))
 CIUKEDIT_SECTORS=$(((CIUKEDIT_SIZE + 511) / 512))
+CIUKEDIT_CLUSTERS=$(((CIUKEDIT_SIZE + CLUSTER_SIZE_BYTES - 1) / CLUSTER_SIZE_BYTES))
 GFXRECT_SECTORS=$(((GFXRECT_SIZE + 511) / 512))
 GFXSTAR_SECTORS=$(((GFXSTAR_SIZE + 511) / 512))
 CIUKWIN_SECTORS=$(((CIUKWIN_SIZE + 511) / 512))
@@ -423,6 +504,12 @@ fi
 
 echo "[build-full] sector map: STAGE2=$STAGE2_SECTORS COMDEMO=$COMDEMO_SECTORS MZDEMO=$MZDEMO_SECTORS FILEIO=$FILEIO_SECTORS DELTEST=$DELTEST_SECTORS CIUKEDIT=$CIUKEDIT_SECTORS GFXRECT=$GFXRECT_SECTORS GFXSTAR=$GFXSTAR_SECTORS CIUKWIN=$CIUKWIN_SECTORS SETUP=$SETUP_SECTORS SETUP_MFT=$SETUP_MANIFEST_SECTORS FORMAT=$FORMAT_SECTORS DOOMSFX=$DOOMSFX_SECTORS DOS4GW=$DOS4GW_SECTORS SPLASH=$SPLASH_SECTORS"
 
+# Permanent, tiny compatibility fixture placed beyond the 16-bit LBA boundary.
+# It lets the raw-HDD and El Torito hard-disk-emulation gates prove the EDD/CHS32
+# fallback using only payloads produced by this repository.
+printf '%s\r\n' '[LBA32] HIGH-LBA READ PASS' > "$LBA32_TEST_BIN"
+LBA32_TEST_SIZE="$(stat -c%s "$LBA32_TEST_BIN")"
+
 if [[ "$SPLASH_SIZE" -ne "$SPLASH_EXPECTED_SIZE" ]]; then
 	echo "[build-full] ERROR: SPLASH.BIN size is $SPLASH_SIZE bytes (expected $SPLASH_EXPECTED_SIZE)" >&2
 	exit 1
@@ -439,7 +526,8 @@ if [[ "$FILEIO_SIZE" -le 512 ]]; then
 fi
 
 # FAT16 directory/cluster map with contiguous SYSTEM/SPLASH chain.
-# App payloads remain single-cluster except SETUP.COM, which may span up to SETUP_MAX_CLUSTERS.
+# App payloads remain single-cluster except CIUKEDIT.COM, SETUP.COM, and the
+# other explicitly chained payloads below.
 ROOT_SYSTEM_CLUSTER=2
 ROOT_APPS_CLUSTER=3
 SYSTEM_STAGE2_CLUSTER=4
@@ -450,7 +538,8 @@ APPS_MZDEMO_CLUSTER=$((APPS_COMDEMO_CLUSTER + 1))
 APPS_FILEIO_CLUSTER=$((APPS_MZDEMO_CLUSTER + 1))
 APPS_DELTEST_CLUSTER=$((APPS_FILEIO_CLUSTER + 1))
 APPS_CIUKEDIT_CLUSTER=$((APPS_DELTEST_CLUSTER + 1))
-APPS_GFXRECT_CLUSTER=$((APPS_CIUKEDIT_CLUSTER + 1))
+APPS_CIUKEDIT_LAST_CLUSTER=$((APPS_CIUKEDIT_CLUSTER + CIUKEDIT_CLUSTERS - 1))
+APPS_GFXRECT_CLUSTER=$((APPS_CIUKEDIT_LAST_CLUSTER + 1))
 APPS_GFXSTAR_CLUSTER=$((APPS_GFXRECT_CLUSTER + 1))
 APPS_SETUP_CLUSTER=$((APPS_GFXSTAR_CLUSTER + 1))
 APPS_SETUP_LAST_CLUSTER=$((APPS_SETUP_CLUSTER + SETUP_CLUSTERS - 1))
@@ -462,6 +551,13 @@ ROOT_DOS4GW_CLUSTER=$((APPS_FORMAT_LAST_CLUSTER + 1))
 ROOT_DOS4GW_LAST_CLUSTER=$((ROOT_DOS4GW_CLUSTER + DOS4GW_CLUSTERS - 1))
 ROOT_DOOMSFX_CLUSTER=$((ROOT_DOS4GW_LAST_CLUSTER + 1))
 ROOT_DOOMSFX_LAST_CLUSTER=$((ROOT_DOOMSFX_CLUSTER + DOOMSFX_CLUSTERS - 1))
+LBA32_TEST_CLUSTER=8194
+LBA32_TEST_LBA=$((DATA_LBA + ((LBA32_TEST_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER)))
+
+if (( LBA32_TEST_LBA <= 65535 )); then
+	echo "[build-full] ERROR: LBA32 fixture must live beyond LBA 65535 (got $LBA32_TEST_LBA)" >&2
+	exit 1
+fi
 
 if (( SPLASH_CLUSTERS < 1 )); then
 	echo "[build-full] ERROR: SPLASH.BIN requires an invalid cluster count ($SPLASH_CLUSTERS)" >&2
@@ -479,7 +575,6 @@ for sectors in \
 	"$MZDEMO_SECTORS" \
 	"$FILEIO_SECTORS" \
 	"$DELTEST_SECTORS" \
-	"$CIUKEDIT_SECTORS" \
 	"$GFXRECT_SECTORS" \
 	"$GFXSTAR_SECTORS" \
 	"$CIUKWIN_SECTORS" \
@@ -528,7 +623,7 @@ fat16_set_entry "$APPS_COMDEMO_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_MZDEMO_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_FILEIO_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_DELTEST_CLUSTER" 0xFFFF
-fat16_set_entry "$APPS_CIUKEDIT_CLUSTER" 0xFFFF
+fat16_set_contiguous_chain "$APPS_CIUKEDIT_CLUSTER" "$CIUKEDIT_CLUSTERS"
 fat16_set_entry "$APPS_GFXRECT_CLUSTER" 0xFFFF
 fat16_set_entry "$APPS_GFXSTAR_CLUSTER" 0xFFFF
 fat16_set_contiguous_chain "$APPS_SETUP_CLUSTER" "$SETUP_CLUSTERS"
@@ -555,6 +650,7 @@ ROOT_ENTRY_SYSTEM="build/full/obj/root_system.bin"
 ROOT_ENTRY_APPS="build/full/obj/root_apps.bin"
 ROOT_ENTRY_DOS4GW="build/full/obj/root_dos4gw.bin"
 ROOT_ENTRY_DOOMSFX="build/full/obj/root_doomsfx.bin"
+ROOT_ENTRY_LBA32="build/full/obj/root_lba32.bin"
 DIR_ENTRY_DOT_SYSTEM="build/full/obj/dir_dot_system.bin"
 DIR_ENTRY_DOTDOT_ROOT="build/full/obj/dir_dotdot_root.bin"
 DIR_ENTRY_DOT_APPS="build/full/obj/dir_dot_apps.bin"
@@ -579,6 +675,7 @@ make_entry "$ROOT_ENTRY_SYSTEM" 'SYSTEM     ' 0x10 "$ROOT_SYSTEM_CLUSTER" 0
 make_entry "$ROOT_ENTRY_APPS"   'APPS       ' 0x10 "$ROOT_APPS_CLUSTER" 0
 make_entry "$ROOT_ENTRY_DOS4GW" 'DOS4GW  EXE' 0x20 "$ROOT_DOS4GW_CLUSTER" "$DOS4GW_SIZE"
 make_entry "$ROOT_ENTRY_DOOMSFX" 'DOOMSFX EXE' 0x20 "$ROOT_DOOMSFX_CLUSTER" "$DOOMSFX_SIZE"
+make_entry "$ROOT_ENTRY_LBA32" 'LBA32   TXT' 0x20 "$LBA32_TEST_CLUSTER" "$LBA32_TEST_SIZE"
 
 make_entry "$DIR_ENTRY_DOT_SYSTEM" '.          ' 0x10 "$ROOT_SYSTEM_CLUSTER" 0
 make_entry "$DIR_ENTRY_DOTDOT_ROOT" '..         ' 0x10 0 0
@@ -631,6 +728,13 @@ dd if="$ROOT_ENTRY_SYSTEM" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 0)) conv=notr
 dd if="$ROOT_ENTRY_APPS" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 32)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_DOS4GW" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 64)) conv=notrunc status=none
 dd if="$ROOT_ENTRY_DOOMSFX" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 96)) conv=notrunc status=none
+dd if="$ROOT_ENTRY_LBA32" of="$IMG" bs=1 seek=$((ROOT_LBA * 512 + 128)) conv=notrunc status=none
+
+# The deterministic high-LBA fixture lives outside the first FAT sector used by
+# the compact static layout above, so write its EOF entry to both FAT copies.
+printf '\377\377' | dd of="$IMG" bs=1 seek=$((FAT1_LBA * 512 + LBA32_TEST_CLUSTER * 2)) conv=notrunc status=none
+printf '\377\377' | dd of="$IMG" bs=1 seek=$((FAT2_LBA * 512 + LBA32_TEST_CLUSTER * 2)) conv=notrunc status=none
+dd if="$LBA32_TEST_BIN" of="$IMG" bs=512 seek="$LBA32_TEST_LBA" count=1 conv=notrunc status=none
 
 dd if="$SYSTEM_DIR_CLUSTER_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_SYSTEM_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$FAT_SECTORS_PER_CLUSTER" conv=notrunc status=none
 dd if="$APPS_DIR_CLUSTER_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_APPS_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$FAT_SECTORS_PER_CLUSTER" conv=notrunc status=none
@@ -667,8 +771,19 @@ mcopy -o -i "$IMG" "$COMMAND_STUB_BIN" "$COMMAND_COMPAT_IMAGE_PATH"
 echo "[build-full] injecting external shell prototype to ::SYSTEM/SHELL.COM"
 mcopy -o -i "$IMG" "$SHELL_BIN" ::SYSTEM/SHELL.COM
 
-echo "[build-full] injecting CIUKIDOS runtime skeleton to ::SYSTEM/CIUKIDOS.SYS"
+echo "[build-full] injecting CIUKIDOS kernel to ::SYSTEM/CIUKIDOS.SYS"
 mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/CIUKIDOS.SYS
+
+echo "[build-full] injecting CIUKIDOS ownership probe to ::APPS/CIUKRTST.COM"
+mcopy -o -i "$IMG" "$CIUKRTST_BIN" ::APPS/CIUKRTST.COM
+
+echo "[build-full] injecting INT 33h callback probe to ::APPS/MOUSECB.COM"
+mcopy -o -i "$IMG" "$MOUSECB_BIN" ::APPS/MOUSECB.COM
+
+echo "[build-full] injecting CIUKIDOS nested process probes to ::APPS"
+mcopy -o -i "$IMG" "$CIUKPST_BIN" ::APPS/CIUKPST.COM
+mcopy -o -i "$IMG" "$CIUKPTRM_BIN" ::APPS/CIUKTRM.EXE
+mcopy -o -i "$IMG" "$CIUKPCOM_BIN" ::APPS/CIUKPCOM.COM
 
 echo "[build-full] injecting DRVLOAD.COM helper to ${DRIVERS_IMAGE_DIR%/}/DRVLOAD.COM"
 mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
@@ -761,7 +876,11 @@ if [[ -f "$DOOMVAN_EXE" && -d "$DOOM_SRC_DIR" ]]; then
 		mcopy -o -i "$IMG" "$DOOM_SRC_DIR/DOOM.WAD" "$DOOMVAN_IMAGE_DIR/DOOM.WAD"
 	fi
 	if [[ -f "$DOOM_SRC_DIR/DEFAULT.CFG" ]]; then
-		mcopy -o -i "$IMG" "$DOOM_SRC_DIR/DEFAULT.CFG" "$DOOMVAN_IMAGE_DIR/DEFAULT.CFG"
+		doomvan_cfg_out="build/full/obj/doomvan-default.cfg"
+		cp "$DOOM_SRC_DIR/DEFAULT.CFG" "$doomvan_cfg_out"
+		sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		0/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		3/; s/^snd_sbport[[:space:]].*/snd_sbport		544/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/; s/^snd_mport[[:space:]].*/snd_mport		-1/' "$doomvan_cfg_out"
+		echo "[build-full] injecting doom-vanille SB16 SFX profile to $DOOMVAN_IMAGE_DIR"
+		mcopy -o -i "$IMG" "$doomvan_cfg_out" "$DOOMVAN_IMAGE_DIR/DEFAULT.CFG"
 	fi
 else
 	echo "[build-full] doom-vanille probe executable not found at $DOOMVAN_EXE (skipped)"
@@ -781,6 +900,10 @@ if [[ -d "$DOSNAV_SRC_DIR" ]]; then
 	shopt -u nullglob dotglob
 	if (( ${#dosnav_items[@]} > 0 )); then
 		mcopy -s -o -i "$IMG" "${dosnav_items[@]}" "$DOSNAV_IMAGE_DIR/"
+		if [[ -f "$DOSNAV_SRC_DIR/DN.COM" ]]; then
+			python3 "$DOSNAV_PATCH_TOOL" "$DOSNAV_SRC_DIR/DN.COM" "$DOSNAV_PATCHED_COM"
+			mcopy -o -i "$IMG" "$DOSNAV_PATCHED_COM" "$DOSNAV_IMAGE_DIR/DN.COM"
+		fi
 	else
 		echo "[build-full] WARN: DOSNavigator source directory is empty: $DOSNAV_SRC_DIR" >&2
 	fi
@@ -809,13 +932,18 @@ import sys
 path = Path(sys.argv[1])
 data = bytearray(path.read_bytes())
 offset = 0x2092C
-expected = bytes.fromhex("8b0ef895")
-patched = bytes.fromhex("eb44f895")
-current = bytes(data[offset:offset + 4])
+expected = bytes.fromhex("8b0ef89583c1")
+old_patched = bytes.fromhex("eb44f89583c1")
+patched = bytes.fromhex("bada03eceb40")
+current = bytes(data[offset:offset + 6])
 if current == expected:
-    data[offset:offset + 2] = bytes.fromhex("eb44")
+    data[offset:offset + 6] = patched
     path.write_bytes(data)
-    print("[build-full] patched WOLF3D page-flip wait")
+    print("[build-full] patched WOLF3D page flip with VGA attribute-controller reset")
+elif current == old_patched:
+    data[offset:offset + 6] = patched
+    path.write_bytes(data)
+    print("[build-full] upgraded WOLF3D page-flip patch with VGA attribute-controller reset")
 elif current == patched:
     print("[build-full] WOLF3D page-flip patch already present")
 else:
@@ -837,6 +965,91 @@ PY
 	mcopy -o -i "$IMG" "$MZDEMO_BIN" "$WOLF3D_IMAGE_DIR/MZDEMO.EXE"
 else
 	echo "[build-full] WOLF3D payload not found at $WOLF3D_SRC_DIR (skipped)"
+fi
+
+if [[ -d "$COSTA_SRC_DIR" ]]; then
+	for costa_required in COSTA.EXE DESKTOP.EXE DATA/FONTDATA.BSV DATA/FONTINFO.BSV LICENSE; do
+		if [[ ! -s "$COSTA_SRC_DIR/$costa_required" ]]; then
+			echo "[build-full] ERROR: incomplete Costa payload, missing: $COSTA_SRC_DIR/$costa_required" >&2
+			exit 1
+		fi
+	done
+	if ! command -v mmd >/dev/null 2>&1 || ! command -v mdir >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+		echo "[build-full] ERROR: Costa source present but mtools (mmd/mdir/mcopy) is missing" >&2
+		exit 1
+	fi
+
+	echo "[build-full] injecting Costa payload from $COSTA_SRC_DIR to $COSTA_IMAGE_DIR"
+	mtools_ensure_dir "$IMG" "$COSTA_IMAGE_DIR"
+	shopt -s nullglob dotglob
+	costa_items=("$COSTA_SRC_DIR"/*)
+	shopt -u nullglob dotglob
+	if (( ${#costa_items[@]} == 0 )); then
+		echo "[build-full] ERROR: Costa source directory is empty: $COSTA_SRC_DIR" >&2
+		exit 1
+	fi
+	mcopy -s -o -i "$IMG" "${costa_items[@]}" "$COSTA_IMAGE_DIR/"
+else
+	echo "[build-full] Costa payload not found at $COSTA_SRC_DIR (run scripts/fetch_costa.sh to install it)"
+fi
+
+if [[ -d "$NETWORK_SRC_DIR" ]]; then
+	if ! command -v mmd >/dev/null 2>&1 || ! command -v mcopy >/dev/null 2>&1; then
+		echo "[build-full] ERROR: network payload present but mtools (mmd/mcopy) is missing" >&2
+		exit 1
+	fi
+
+	network_required_files=(
+		"MTCP/dhcp.exe"
+		"MTCP/ftp.exe"
+		"MTCP/ftpsrv.exe"
+		"MTCP/ping.exe"
+		"MTCP/pkttool.exe"
+		"MTCP/COPYING.TXT"
+		"MTCP/SOURCES.ZIP"
+		"PACKET/NE2000.COM"
+		"PACKET/PKTCHK.COM"
+		"PACKET/GPL.DOC"
+		"PACKET/SOURCES.ZIP"
+	)
+	for network_required_file in "${network_required_files[@]}"; do
+		if [[ ! -s "$NETWORK_SRC_DIR/$network_required_file" ]]; then
+			echo "[build-full] ERROR: incomplete network payload: missing $NETWORK_SRC_DIR/$network_required_file" >&2
+			exit 1
+		fi
+	done
+	for network_config_file in MTCP.CFG FTPPASS.TXT README.TXT; do
+		if [[ ! -s "$NETWORK_CONFIG_DIR/$network_config_file" ]]; then
+			echo "[build-full] ERROR: missing network configuration: $NETWORK_CONFIG_DIR/$network_config_file" >&2
+			exit 1
+		fi
+	done
+
+	echo "[build-full] injecting mTCP/Crynwr network payload to $NETWORK_IMAGE_DIR"
+	mtools_ensure_dir "$IMG" "$NETWORK_IMAGE_DIR"
+	mtools_ensure_dir "$IMG" "$NETWORK_IMAGE_DIR/SOURCE"
+	mtools_ensure_dir "$IMG" "$NETWORK_SHARE_IMAGE_DIR"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/PACKET/NE2000.COM" "$NETWORK_IMAGE_DIR/NE2000.COM"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/PACKET/PKTCHK.COM" "$NETWORK_IMAGE_DIR/PKTCHK.COM"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/dhcp.exe" "$NETWORK_IMAGE_DIR/DHCP.EXE"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/ftp.exe" "$NETWORK_IMAGE_DIR/FTP.EXE"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/ftpsrv.exe" "$NETWORK_IMAGE_DIR/FTPSRV.EXE"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/ping.exe" "$NETWORK_IMAGE_DIR/PING.EXE"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/pkttool.exe" "$NETWORK_IMAGE_DIR/PKTTOOL.EXE"
+	mcopy -o -i "$IMG" "$IPCONFIG_BIN" "$NETWORK_IMAGE_DIR/IPCONFIG.COM"
+	mcopy -o -i "$IMG" "$ICMPD_BIN" "$NETWORK_IMAGE_DIR/ICMPD.COM"
+	mcopy -o -i "$IMG" "$ICMPD_BIN" "$NETWORK_IMAGE_DIR/NETSTART.COM"
+	mcopy -o -i "$IMG" "$NETCFG_BIN" "$NETWORK_IMAGE_DIR/NETCFG.COM"
+	mcopy -o -i "$IMG" "$NETWORK_CONFIG_DIR/MTCP.CFG" "$NETWORK_IMAGE_DIR/MTCP.CFG"
+	mcopy -o -i "$IMG" "$NETWORK_CONFIG_DIR/FTPPASS.TXT" "$NETWORK_IMAGE_DIR/FTPPASS.TXT"
+	mcopy -o -i "$IMG" "$NETWORK_CONFIG_DIR/README.TXT" "$NETWORK_IMAGE_DIR/README.TXT"
+	mcopy -o -i "$IMG" "$NETWORK_CONFIG_DIR/README.TXT" "$NETWORK_SHARE_IMAGE_DIR/README.TXT"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/COPYING.TXT" "$NETWORK_IMAGE_DIR/MTCP-GPL.TXT"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/PACKET/GPL.DOC" "$NETWORK_IMAGE_DIR/CRYNWR-GPL.TXT"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/SOURCES.ZIP" "$NETWORK_IMAGE_DIR/SOURCE/MTCP-SRC.ZIP"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/PACKET/SOURCES.ZIP" "$NETWORK_IMAGE_DIR/SOURCE/CRYNWR-SRC.ZIP"
+else
+	echo "[build-full] network payload not found at $NETWORK_SRC_DIR (run scripts/fetch_network_stack.sh)"
 fi
 
 echo "[build-full] injecting SB16INIT.COM helper to ${DRIVERS_IMAGE_DIR%/}/SB16INIT.COM"
@@ -903,11 +1116,123 @@ else
 		mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
 		mcopy -s -o -i "$IMG" "${drivers_items[@]}" "$DRIVERS_IMAGE_DIR/"
 
+		if [[ ! -s "$CTMOUSE_BIN" || ! -s "$CTMOUSE_LICENSE" ]]; then
+			echo "[build-full] ERROR: GPL CuteMouse payload is incomplete: $CTMOUSE_BIN / $CTMOUSE_LICENSE" >&2
+			exit 1
+		fi
+		echo "[build-full] injecting GPL CuteMouse to ${DRIVERS_IMAGE_DIR%/}/CTMOUSE.EXE"
+		mcopy -o -i "$IMG" "$CTMOUSE_BIN" "${DRIVERS_IMAGE_DIR%/}/CTMOUSE.EXE"
+		mcopy -o -i "$IMG" "$CTMOUSE_LICENSE" "${DRIVERS_IMAGE_DIR%/}/CTMOUSE.GPL"
+
 		if ! IMG="$IMG" DRIVERS_SRC_DIR="$DRIVERS_SRC_DIR" DRIVERS_IMAGE_DIR="$DRIVERS_IMAGE_DIR" \
 			bash "$DRIVERS_VERIFY_SCRIPT"; then
 			echo "[build-full] ERROR: drivers payload verification failed" >&2
 			exit 1
 		fi
+	fi
+fi
+
+case "$WINDOWS31_MODE" in
+	auto|require|off) ;;
+	*)
+		echo "[build-full] ERROR: CIUKIOS_WINDOWS31_MODE must be auto, require or off" >&2
+		exit 1
+		;;
+esac
+
+if [[ "$WINDOWS31_MODE" != "off" ]]; then
+	windows31_media=()
+	windows31_media_count=0
+	for disk_number in 01 02 03 04 05 06 07; do
+		disk_path="$WINDOWS31_MEDIA_DIR/disk${disk_number}.img"
+		windows31_media+=("$disk_path")
+		[[ -f "$disk_path" ]] && windows31_media_count=$((windows31_media_count + 1))
+	done
+
+	if (( windows31_media_count != 0 && windows31_media_count != 7 )); then
+		echo "[build-full] ERROR: incomplete Windows 3.1 media set in $WINDOWS31_MEDIA_DIR ($windows31_media_count/7 images)" >&2
+		exit 1
+	fi
+	if [[ "$WINDOWS31_MODE" == "require" && "$windows31_media_count" -ne 7 ]]; then
+		echo "[build-full] ERROR: Windows 3.1 media is required but disk01.img ... disk07.img are unavailable" >&2
+		exit 1
+	fi
+
+	if (( windows31_media_count == 7 )); then
+		for command_name in sha256sum stat; do
+			command -v "$command_name" >/dev/null 2>&1 \
+				|| { echo "[build-full] ERROR: Windows media integration requires $command_name" >&2; exit 1; }
+		done
+		[[ -s "$WINDOWS31_README" ]] \
+			|| { echo "[build-full] ERROR: missing Windows media README: $WINDOWS31_README" >&2; exit 1; }
+
+		windows31_hashes=()
+		for disk_path in "${windows31_media[@]}"; do
+			[[ "$(stat -c%s "$disk_path")" -eq 1474560 ]] \
+				|| { echo "[build-full] ERROR: invalid 1.44MB Windows media: $disk_path" >&2; exit 1; }
+			mdir -i "$disk_path" :: >/dev/null 2>&1 \
+				|| { echo "[build-full] ERROR: unreadable FAT Windows media: $disk_path" >&2; exit 1; }
+			windows31_hashes+=("$(sha256sum "$disk_path" | awk '{print $1}')")
+		done
+
+		echo "[build-full] integrating Windows 3.1 media into the canonical full image"
+		mtools_ensure_dir "$IMG" ::MEDIA
+		mtools_ensure_dir "$IMG" "$WINDOWS31_MEDIA_IMAGE_DIR"
+		mtools_ensure_dir "$IMG" "$WINDOWS31_SETUP_IMAGE_DIR"
+
+		windows31_staging="$(mktemp -d /tmp/ciukios-full-windows31.XXXXXX)"
+		cleanup_windows31_staging() {
+			if [[ -n "${windows31_staging:-}" && -d "$windows31_staging" \
+				&& "$windows31_staging" == /tmp/ciukios-full-windows31.* ]]; then
+				rm -rf -- "$windows31_staging"
+			fi
+		}
+		trap cleanup_windows31_staging EXIT
+
+		for index in 0 1 2 3 4 5 6; do
+			disk_number="$(printf '%02d' "$((index + 1))")"
+			disk_path="${windows31_media[$index]}"
+			mcopy -o -i "$IMG" "$disk_path" "$WINDOWS31_MEDIA_IMAGE_DIR/DISK${disk_number}.IMG"
+			mcopy -s -o -i "$disk_path" "::*" "$windows31_staging/"
+		done
+
+		shopt -s nullglob dotglob
+		windows31_setup_items=("$windows31_staging"/*)
+		shopt -u nullglob dotglob
+		(( ${#windows31_setup_items[@]} > 0 )) \
+			|| { echo "[build-full] ERROR: Windows setup staging is empty" >&2; exit 1; }
+		mcopy -s -o -i "$IMG" "${windows31_setup_items[@]}" "$WINDOWS31_SETUP_IMAGE_DIR/"
+		mcopy -o -i "$IMG" "$WINDOWS31_README" "$WINDOWS31_MEDIA_IMAGE_DIR/README.TXT"
+		mcopy -o -i "$IMG" "$WINDOWS31_README" "$WINDOWS31_SETUP_IMAGE_DIR/CIUKIOS.TXT"
+
+		cleanup_windows31_staging
+		trap - EXIT
+
+		for index in 0 1 2 3 4 5 6; do
+			current_hash="$(sha256sum "${windows31_media[$index]}" | awk '{print $1}')"
+			[[ "$current_hash" == "${windows31_hashes[$index]}" ]] \
+				|| { echo "[build-full] ERROR: source Windows media changed during build: ${windows31_media[$index]}" >&2; exit 1; }
+		done
+		mdir -i "$IMG" "$WINDOWS31_SETUP_IMAGE_DIR/SETUP.EXE" >/dev/null 2>&1 \
+			|| { echo "[build-full] ERROR: SETUP.EXE is missing from $WINDOWS31_SETUP_IMAGE_DIR" >&2; exit 1; }
+
+		if [[ -s "$WINDOWS31_INSTALLED_DIR/WIN.COM" \
+			&& -s "$WINDOWS31_INSTALLED_DIR/SYSTEM/MOUSE.DRV" ]]; then
+			echo "[build-full] integrating locally prepared Windows tree from $WINDOWS31_INSTALLED_DIR"
+			mtools_ensure_dir "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR"
+			shopt -s nullglob dotglob
+			windows31_installed_items=("$WINDOWS31_INSTALLED_DIR"/*)
+			shopt -u nullglob dotglob
+			mcopy -s -o -i "$IMG" "${windows31_installed_items[@]}" "$WINDOWS31_INSTALLED_IMAGE_DIR/"
+			mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/WIN.COM" >/dev/null 2>&1 \
+				|| { echo "[build-full] ERROR: installed WIN.COM was not packaged" >&2; exit 1; }
+			mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/MOUSE.DRV" >/dev/null 2>&1 \
+				|| { echo "[build-full] ERROR: installed Windows mouse driver was not packaged" >&2; exit 1; }
+		else
+			echo "[build-full] Windows setup media ready; no optional installed tree at $WINDOWS31_INSTALLED_DIR"
+		fi
+	else
+		echo "[build-full] Windows 3.1 local media not found at $WINDOWS31_MEDIA_DIR (skipped)"
 	fi
 fi
 
@@ -921,6 +1246,17 @@ if [[ -d "$WOLF3D_SRC_DIR" ]]; then
 	README_OPTIONAL_PAYLOADS+=", third_party/WOLF3D is copied under APPS/WOLF3D when present at build time"
 fi
 
+if [[ -d "$NETWORK_SRC_DIR" ]]; then
+	README_OPTIONAL_PAYLOADS+=", mTCP/Crynwr networking is available under NET with an FTP sandbox at SHARE"
+fi
+
+if [[ "$WINDOWS31_MODE" != "off" && "${windows31_media_count:-0}" -eq 7 ]]; then
+	README_OPTIONAL_PAYLOADS+=", Windows 3.1 source media is archived under MEDIA/WIN31 and merged under WIN31SET"
+	if [[ -s "$WINDOWS31_INSTALLED_DIR/WIN.COM" ]]; then
+		README_OPTIONAL_PAYLOADS+=", the local Windows tree is available under WINDOWS (launch with WIN /S)"
+	fi
+fi
+
 cat > build/full/README.txt << TXT
 CiukiOS Legacy v2 - Full profile (FAT16 baseline)
 
@@ -929,7 +1265,7 @@ State: BIOS stage0 -> stage1 with full DOS runtime and FAT16 file I/O
 Filesystem: FAT16 (SPT=63 Heads=16 128MB) with root directories SYSTEM/APPS
 Boot path: stage0 at LBA0, stage1 payload in sectors 2-$((STAGE1_SECTORS + 1))
 Data: cluster 2=SYSTEM dir, 3=APPS dir, 4=SYSTEM/STAGE2, ${SYSTEM_SPLASH_CLUSTER}-${SYSTEM_SPLASH_LAST_CLUSTER}=SYSTEM/SPLASH
-Data: cluster ${APPS_COMDEMO_CLUSTER}=APPS/COMDEMO, ${APPS_MZDEMO_CLUSTER}=APPS/MZDEMO, ${APPS_FILEIO_CLUSTER}=APPS/FILEIO, ${APPS_DELTEST_CLUSTER}=APPS/DELTEST, ${APPS_CIUKEDIT_CLUSTER}=APPS/CIUKEDIT, ${APPS_GFXRECT_CLUSTER}=APPS/GFXRECT, ${APPS_GFXSTAR_CLUSTER}=APPS/GFXSTAR, ${APPS_SETUP_CLUSTER}-${APPS_SETUP_LAST_CLUSTER}=APPS/SETUP, ${APPS_SETUP_MANIFEST_CLUSTER}=APPS/SETUPMFT.BIN, ${APPS_CIUKWIN_CLUSTER}=APPS/CIUKWIN
+Data: cluster ${APPS_COMDEMO_CLUSTER}=APPS/COMDEMO, ${APPS_MZDEMO_CLUSTER}=APPS/MZDEMO, ${APPS_FILEIO_CLUSTER}=APPS/FILEIO, ${APPS_DELTEST_CLUSTER}=APPS/DELTEST, ${APPS_CIUKEDIT_CLUSTER}-${APPS_CIUKEDIT_LAST_CLUSTER}=APPS/CIUKEDIT, ${APPS_GFXRECT_CLUSTER}=APPS/GFXRECT, ${APPS_GFXSTAR_CLUSTER}=APPS/GFXSTAR, ${APPS_SETUP_CLUSTER}-${APPS_SETUP_LAST_CLUSTER}=APPS/SETUP, ${APPS_SETUP_MANIFEST_CLUSTER}=APPS/SETUPMFT.BIN, ${APPS_CIUKWIN_CLUSTER}=APPS/CIUKWIN
 ${README_OPTIONAL_PAYLOADS}
 TXT
 

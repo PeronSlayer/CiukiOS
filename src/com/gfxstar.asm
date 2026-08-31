@@ -85,8 +85,16 @@ start:
     mov ax, 0x0003
     int 0x10
 
+    push cs
+    pop ds
+    mov dx, msg_pass
+    mov ah, 0x09
+    int 0x21
+
     mov ax, 0x4C72
     int 0x21
+
+msg_pass db "[GFXSTAR] PASS", 13, 10, '$'
 
 fill_rect:
     push bx

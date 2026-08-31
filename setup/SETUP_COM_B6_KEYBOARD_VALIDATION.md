@@ -1,5 +1,9 @@
 # SETUP.COM Phase 4 Block B6 Keyboard Validation
 
+## Current Status
+
+This matrix is a normative keyboard contract with sampled runtime evidence, not a completed per-case validation bundle. None of the unchecked placeholders below should be cited as PASS. The accepted installer MVP closure remains historical and scoped; completing this matrix is post-closure hardening and a prerequisite for any later claim of exhaustive keyboard coverage.
+
 ## Validation Mode
 - Baseline type: `document baseline + targeted runtime evidence`
 - Runtime execution: `executed via scripts/qemu_test_setup_installer_scenarios.sh (2026-05-03)`

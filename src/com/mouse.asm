@@ -504,26 +504,21 @@ print_info:
     mov [info_dx], dx
     mov si, msg_info_ver
     call print_dollar_string
-    mov ax, [info_ax]
+    mov ax, [info_bx]
     call print_hex16
-    mov si, msg_info_buttons
+    mov si, msg_info_type
     call print_dollar_string
-    mov al, [info_bx]
+    mov al, [info_cx + 1]
     xor ah, ah
     call print_hex16
     mov si, msg_info_irq
     call print_dollar_string
-    mov al, [info_bx + 1]
+    mov al, [info_cx]
     xor ah, ah
     call print_hex16
-    mov si, msg_info_flags
+    mov si, msg_info_status
     call print_dollar_string
-    mov ax, [info_cx]
-    call print_hex16
-    mov si, msg_info_detect
-    call print_dollar_string
-    mov al, [info_dx]
-    xor ah, ah
+    mov ax, [info_ax]
     call print_hex16
     mov si, msg_crlf
     call print_dollar_string
@@ -714,10 +709,9 @@ msg_hx db ' hx=0x', '$'
 msg_vy db ' vy=0x', '$'
 msg_th db ' th=0x', '$'
 msg_info_ver db 'info ver=0x', '$'
-msg_info_buttons db ' buttons=0x', '$'
+msg_info_type db ' type=0x', '$'
 msg_info_irq db ' irq=0x', '$'
-msg_info_flags db ' flags=0x', '$'
-msg_info_detect db ' detect=0x', '$'
+msg_info_status db ' status=0x', '$'
 msg_usage db 'usage: mouse [status|show|hide|pos|range|sens|getsens|motion|press|release|reset|info|page|getpage|rate|enable|disable|install|help]', 13, 10, '$'
 msg_help db 'mouse cmds: status show hide pos range sens getsens motion press release reset info page getpage rate enable disable install', 13, 10, '$'
 msg_buttons db 'buttons=0x', '$'

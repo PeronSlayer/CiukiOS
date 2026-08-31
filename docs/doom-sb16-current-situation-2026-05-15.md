@@ -1,5 +1,7 @@
 # DOOM SB16 audio status - 2026-05-15
 
+> Historical investigation snapshot. For the current failure signature, pcdoom memory blocker, and next actions, use `doom-audio-retest-2026-07-21.md`.
+
 ## Executive summary
 
 DOOM runs and reaches a stable runtime in CiukiOS, but the real SB16 SFX path
@@ -266,4 +268,3 @@ Latest known validation:
 - default DOOM PC speaker SFX visual lane: PASS from prior validation
 - opt-in DOOM SB16 SFX lane: FAIL for actual SFX/gameplay path, but reaches
   `runtime_stable=PASS`
-

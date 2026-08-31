@@ -3,11 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
 
 DO_BUILD=1
 BOOT_AUTORUN="${SHELL_COM_BOOT_AUTORUN:-0}"
 BOOT_EXPECT_FALLBACK="${SHELL_COM_BOOT_EXPECT_FALLBACK:-0}"
-IMG="build/full/ciukios-full.img"
+BASE_IMG="build/full/ciukios-full.img"
+IMG=""
 PREFIX="build/full/qemu-full-shell-com"
 if (( BOOT_AUTORUN )); then
   PREFIX="build/full/qemu-full-shell-com-boot"
@@ -20,6 +22,10 @@ STRINGS_LOG="${PREFIX}.strings.log"
 STDERR_LOG="${PREFIX}.stderr.log"
 CMD_LOG="${PREFIX}.commands.log"
 MON_SOCK="/tmp/ciukios-full-shell-com.$$.monitor.sock"
+FIXTURE_DIR=""
+TEST_IMG=""
+TYPE_TEST_LOCAL=""
+BASE_HASH_BEFORE=""
 
 ACTIVE_QEMU_PID=0
 ACTIVE_MON_SOCK=""
@@ -30,11 +36,11 @@ usage() {
 Usage: scripts/qemu_test_full_shell_com.sh [--no-build]
 
 Boots the full profile headlessly with loader-only Stage1, validates the
-SHELL.COM session, and confirms that exiting SHELL.COM returns to the
-Stage1 fatal loader halt path instead of an interactive fallback prompt.
+SHELL.COM session, and confirms that EXIT/QUIT remain disabled without
+transferring control back to the loader.
 
 Set SHELL_COM_BOOT_AUTORUN=1 to run a shorter boot smoke that validates
-direct boot into \SYSTEM\SHELL.COM, then checks the fatal halt path after exit.
+direct boot into \SYSTEM\SHELL.COM and the disabled EXIT/QUIT contract.
 
 Set SHELL_COM_BOOT_EXPECT_FALLBACK=1 together with SHELL_COM_BOOT_AUTORUN=1
 to remove \SYSTEM\SHELL.COM from the test image, then verify the short
@@ -42,10 +48,21 @@ fatal loader message and no shell prompt.
 TXT
 }
 
+base_image_unchanged() {
+  local current_hash
+  [[ -n "$BASE_HASH_BEFORE" ]] || return 0
+  [[ -f "$BASE_IMG" && ! -L "$BASE_IMG" ]] || return 1
+  current_hash="$(sha256sum "$BASE_IMG" | awk '{print $1}')"
+  [[ "$current_hash" == "$BASE_HASH_BEFORE" ]]
+}
+
 mark_fail() {
   local marker="$1"
   local detail="$2"
   echo "[shell-com] FAIL ${marker}: ${detail}" >&2
+  if ! base_image_unchanged; then
+    echo "[shell-com] FAIL BASE_IMAGE_MUTATED: $BASE_IMG changed during the isolated lane" >&2
+  fi
   if [[ -f "$STDERR_LOG" ]]; then
     tail -n 40 "$STDERR_LOG" >&2 || true
   fi
@@ -73,7 +90,59 @@ cleanup_active_qemu() {
   fi
 }
 
-trap cleanup_active_qemu EXIT
+cleanup_fixture() {
+  if [[ -n "$FIXTURE_DIR" ]]; then
+    case "$FIXTURE_DIR" in
+      /tmp/ciukios-full-shell-com.*) ;;
+      *)
+        echo "[shell-com] ERROR: refusing unsafe fixture cleanup: $FIXTURE_DIR" >&2
+        return 1
+        ;;
+    esac
+    if [[ "${FIXTURE_DIR#/tmp/}" == */* ]]; then
+      echo "[shell-com] ERROR: refusing unsafe fixture cleanup: $FIXTURE_DIR" >&2
+      return 1
+    fi
+    if [[ -e "$FIXTURE_DIR" || -L "$FIXTURE_DIR" ]] \
+      && [[ ! -d "$FIXTURE_DIR" || -L "$FIXTURE_DIR" ]]; then
+      echo "[shell-com] ERROR: refusing unsafe fixture cleanup: $FIXTURE_DIR" >&2
+      return 1
+    fi
+  fi
+
+  if [[ -n "$TEST_IMG" ]]; then
+    case "$TEST_IMG" in
+      "$FIXTURE_DIR"/*) rm -f -- "$TEST_IMG" ;;
+      *) return 1 ;;
+    esac
+  fi
+  if [[ -n "$TYPE_TEST_LOCAL" ]]; then
+    case "$TYPE_TEST_LOCAL" in
+      "$FIXTURE_DIR"/*) rm -f -- "$TYPE_TEST_LOCAL" ;;
+      *) return 1 ;;
+    esac
+  fi
+  if [[ -n "$FIXTURE_DIR" && -d "$FIXTURE_DIR" ]]; then
+    rmdir -- "$FIXTURE_DIR"
+  fi
+}
+
+on_exit() {
+  local rc="$1"
+  trap - EXIT HUP INT TERM
+  cleanup_active_qemu || rc=1
+  if ! base_image_unchanged; then
+    echo "[shell-com] FAIL BASE_IMAGE_MUTATED: $BASE_IMG changed during the isolated lane" >&2
+    rc=1
+  fi
+  cleanup_fixture || rc=1
+  exit "$rc"
+}
+
+trap 'on_exit "$?"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 need_cmd() {
   local c="$1"
@@ -119,6 +188,7 @@ wait_for_socket() {
     if (( now - start >= timeout_sec )); then
       return 1
     fi
+    sleep 0.05
   done
 }
 
@@ -128,7 +198,7 @@ strings_from_offset() {
   if [[ ! -f "$file" ]]; then
     return 0
   fi
-  tail -c "+$((offset + 1))" "$file" 2>/dev/null | strings -a
+  "$SERIAL_NORMALIZER" --offset "$offset" "$file" | strings -a
 }
 
 wait_for_strings_regex_from_offset() {
@@ -146,6 +216,7 @@ wait_for_strings_regex_from_offset() {
     if (( now - start >= timeout_sec )); then
       return 1
     fi
+    sleep 0.05
   done
 }
 
@@ -166,6 +237,7 @@ wait_for_strings_count_from_offset() {
     if (( now - start >= timeout_sec )); then
       return 1
     fi
+    sleep 0.05
   done
 }
 
@@ -184,6 +256,7 @@ assert_no_strings_regex_from_offset() {
     if (( now - start >= timeout_sec )); then
       return 0
     fi
+    sleep 0.05
   done
 }
 
@@ -370,7 +443,14 @@ need_cmd mdir
 need_cmd mdel
 need_cmd mcopy
 need_cmd mmd
+need_cmd awk
+need_cmd cmp
+need_cmd cp
+need_cmd mktemp
 need_cmd python3
+need_cmd rm
+need_cmd rmdir
+need_cmd sha256sum
 need_cmd socat
 need_cmd strings
 need_cmd timeout
@@ -384,9 +464,36 @@ if (( DO_BUILD )); then
   CIUKIOS_STAGE1_BOOT_EXTERNAL_SHELL=1 bash scripts/build_full.sh
 fi
 
-if [[ ! -f "$IMG" ]]; then
-  mark_fail "IMAGE" "missing image: $IMG"
+if [[ ! -f "$BASE_IMG" ]]; then
+  mark_fail "BASE_IMAGE" "missing image: $BASE_IMG"
 fi
+if [[ -L "$BASE_IMG" ]]; then
+  mark_fail "BASE_IMAGE" "refusing symlink canonical image: $BASE_IMG"
+fi
+
+BASE_HASH_BEFORE="$(sha256sum "$BASE_IMG" | awk '{print $1}')"
+if ! FIXTURE_DIR="$(mktemp -d /tmp/ciukios-full-shell-com.XXXXXX)"; then
+  mark_fail "FIXTURE_DIR" "cannot create isolated fixture directory under /tmp"
+fi
+case "$FIXTURE_DIR" in
+  /tmp/ciukios-full-shell-com.*) ;;
+  *) mark_fail "FIXTURE_DIR" "unsafe fixture directory returned by mktemp: $FIXTURE_DIR" ;;
+esac
+if [[ ! -d "$FIXTURE_DIR" || -L "$FIXTURE_DIR" || "${FIXTURE_DIR#/tmp/}" == */* ]]; then
+  mark_fail "FIXTURE_DIR" "fixture directory failed path-safety validation: $FIXTURE_DIR"
+fi
+TEST_IMG="$FIXTURE_DIR/ciukios-full-shell-com-test.img"
+if [[ "$TEST_IMG" == "$BASE_IMG" ]]; then
+  mark_fail "FIXTURE_IMAGE" "fixture image resolves to the canonical image"
+fi
+if ! cp --reflink=auto --sparse=always "$BASE_IMG" "$TEST_IMG"; then
+  mark_fail "FIXTURE_COPY" "cannot copy $BASE_IMG to isolated fixture"
+fi
+if [[ "$TEST_IMG" -ef "$BASE_IMG" ]] || ! cmp -s "$BASE_IMG" "$TEST_IMG"; then
+  mark_fail "FIXTURE_COPY" "isolated fixture is not a byte-identical independent copy"
+fi
+IMG="$TEST_IMG"
+mark_pass "FIXTURE_ISOLATED"
 
 if ! mdir -i "$IMG" ::SYSTEM 2>/dev/null | grep -Eq '^SHELL[[:space:]]+COM[[:space:]]'; then
   mark_fail "SHELL_COM_PRESENT" "\\SYSTEM\\SHELL.COM is missing from $IMG"
@@ -413,7 +520,7 @@ if (( ! BOOT_AUTORUN )); then
   # These land on whatever cluster mcopy picks (high in a freshly built image).
   # With the int21h 32-bit cluster->LBA fix in place, a high-cluster file must
   # read back correctly, so TYPE_OK below doubles as that fix's regression check.
-  TYPE_TEST_LOCAL="${PREFIX}.typetest.txt"
+  TYPE_TEST_LOCAL="${FIXTURE_DIR}/typetest.txt"
   printf 'TYPE PAYLOAD TYPETOK99\r\n' > "$TYPE_TEST_LOCAL"
   if ! mcopy -i "$IMG" -o "$TYPE_TEST_LOCAL" ::APPS/TYPETEST.TXT 2>/dev/null; then
     mark_fail "TYPE_DEL_FIXTURES" "could not inject ::APPS/TYPETEST.TXT"
@@ -467,34 +574,42 @@ DOSNAV_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+D+O+S+N+A+V
 WOLF3D_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+W+O+L+F+3+D+>+"
 SUBHI_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+S+U+B+H+I+>+"
 DIR_COPYHI_PATTERN='C+O+P+Y+H+I+'
-BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+6+[.]+7+'
-HELP_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+C+O+M+M+A+N+D+S+[:]+'
-HELP_SYSTEM_PATTERN='S+Y+S+T+E+M+[:]+'
-HELP_NAV_PATTERN='N+A+V+I+G+A+T+I+O+N+[:]+'
-HELP_FILES_PATTERN='F+I+L+E+S+[:]+'
-HELP_EXEC_PATTERN='E+X+E+C+U+T+I+O+N+[:]+'
-HELP_LOADER_ONLY_PATTERN='L+O+A+D+E+R+[-[:space:]]*O+N+L+Y+[[:space:]]+M+O+D+E+'
-HELP_WHERE_HINT_PATTERN='U+S+E+[[:space:]]+W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
+BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+7+[.]+1+'
+HELP_PATTERN='C+I+U+K+I+O+S+[[:space:]]+C+O+M+M+A+N+D+[[:space:]]+G+U+I+D+E+'
+HELP_SYSTEM_PATTERN='S+Y+S+T+E+M+[[:space:]]+H+E+L+P+'
+HELP_NAV_PATTERN='N+A+V+I+G+A+T+I+O+N+[[:space:]]+C+D+'
+HELP_FILES_PATTERN='F+I+L+E+S+[[:space:]]+T+Y+P+E+'
+HELP_EXEC_PATTERN='P+R+O+G+R+A+M+S+[[:space:]]+.*R+U+N+'
+HELP_NETWORK_PATTERN='N+E+T+W+O+R+K+'
+HELP_IPCONFIG_PATTERN='I+P+C+O+N+F+I+G+[[:space:]]+S+H+O+W+[[:space:]]+I+P+V+4+'
+HELP_FTP_CLIENT_PATTERN='F+T+P+[[:space:]]+<+H+O+S+T+>+.*F+T+P+[[:space:]]+C+L+I+E+N+T+'
+HELP_ICMP_PATTERN='I+C+M+P+[[:space:]]+R+E+M+A+I+N+S+[[:space:]]+A+C+T+I+V+E+'
+HELP_PKTTOOLS_PATTERN='P+K+T+C+H+K+[[:space:]]*/+[[:space:]]*P+K+T+T+O+O+L+.*P+A+C+K+E+T+[[:space:]]+D+R+I+V+E+R+'
+HELP_LOADER_ONLY_PATTERN='E+X+I+T+[[:space:]]+I+S+[[:space:]]+D+I+S+A+B+L+E+D+'
+HELP_WHERE_HINT_PATTERN='W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
 WOOF_PATTERN='W+O+O+F+'
 EXIT_DISABLED_PATTERN='E+X+I+T+/+Q+U+I+T+[[:space:]]+I+S+[[:space:]]+N+O+T+[[:space:]]+A+V+A+I+L+A+B+L+E+'
 EXIT_GUIDANCE_PATTERN='U+S+E+[[:space:]]+R+E+B+O+O+T+[[:space:]]+O+R+[[:space:]]+S+H+U+T+D+O+W+N+'
-VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+6+[.]+7+'
+VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+7+[.]+1+'
 LOADER_FATAL_MISSING_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+M+I+S+S+I+N+G+'
 LOADER_FATAL_EXITED_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+E+X+I+T+E+D+'
 LOADER_FATAL_RETURN_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+R+E+T+U+R+N+E+D+[[:space:]]+C+O+N+T+R+O+L+'
-HALTING_PATTERN='H+A+L+T+I+N+G+'
-PATH_PATTERN='C+[:]+[\\]+A+P+P+S+;+C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+;+C+[:]+[\\]+S+Y+S+T+E+M+'
+RESTART_PATTERN='P+L+E+A+S+E+[[:space:]]+R+E+S+T+A+R+T+'
+PATH_PATTERN='C+[:]+[\\]+A+P+P+S+;+C+[:]+[\\]+N+E+T+;+C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+;+C+[:]+[\\]+S+Y+S+T+E+M+'
 WHERE_SHELL_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+S+H+E+L+L+\.*C+O+M+'
 WHERE_DOS4GW_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+D+R+I+V+E+R+S+[\\]+D+O+S+4+G+W+\.*E+X+E+'
 WHERE_MISSING_PATTERN='W+H+E+R+E+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 WHERE_MOUSE_PATTERN='C+[:]+[\\]+S+Y+S+T+E+M+[\\]+M+O+U+S+E+\.*C+O+M+'
+WHERE_IPCONFIG_PATTERN='C+[:]+[\\]+N+E+T+[\\]+I+P+C+O+N+F+I+G+\.*C+O+M+'
+IPCONFIG_HEADER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+I+P+V+4+[[:space:]]+C+O+N+F+I+G+U+R+A+T+I+O+N+'
+IPCONFIG_ADDRESS_PATTERN='I+P+V+4+[[:space:]]+A+D+D+R+E+S+S+[[:space:]]*[:]+[[:space:]]+1+0+[.]+0+[.]+2+[.]+1+5+'
 EXEC_MISSING_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 WHERE_WOLF3D_PATTERN='C+[:]+[\\]+A+P+P+S+[\\]+W+O+L+F+3+D+[\\]+W+O+L+F+3+D+\.*E+X+E+'
 UNKNOWN_CMD_PATTERN='C+O+M+M+A+N+D+[:]+[[:space:]]+N+O+T+[[:space:]]+F+O+U+N+D+'
 USAGE_WHERE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
 CWD_APPS_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+[:]+[\\]+A+P+P+S+'
 CWD_DOSNAV_PATTERN='C+U+R+R+E+N+T+[[:space:]]+D+I+R+E+C+T+O+R+Y+[:]+[[:space:]]+C+[:]+[\\]+A+P+P+S+[\\]+D+O+S+N+A+V+'
-CLS_BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+6+[.]+7+'
+CLS_BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+7+[.]+1+'
 POWER_IDLE_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+I+D+L+E+'
 POWER_QUEUE_REBOOT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+P+E+N+D+I+N+G+[[:space:]]+R+E+B+O+O+T+'
 POWER_QUEUE_HALT_PATTERN='S+H+U+T+D+O+W+N+[:]+[[:space:]]+P+E+N+D+I+N+G+[[:space:]]+H+A+L+T+'
@@ -506,7 +621,7 @@ POWER_SHUTDOWN_USE_PATTERN='U+S+A+G+E+[:]+[[:space:]]+S+H+U+T+D+O+W+N+'
 MOUSE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+(I+N+T+3+3+H+[[:space:]]+N+O+T+[[:space:]]+I+N+S+T+A+L+L+E+D+|I+N+T+3+3+H+[[:space:]]+R+E+A+D+Y+)'
 MOUSE_RUNTIME_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+U+N+T+I+M+E+[[:space:]]+B+A+C+K+E+D+[[:space:]]+S+E+R+V+I+C+E+[[:space:]]+A+C+T+I+V+E+'
 MOUSE_INSTALL_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+U+N+T+I+M+E+[[:space:]]+B+A+C+K+E+D+[[:space:]]+S+E+R+V+I+C+E+[[:space:]]+A+L+R+E+A+D+Y+[[:space:]]+I+N+S+T+A+L+L+E+D+'
-MOUSE_INFO_PATTERN='I+N+F+O+[[:space:]]+V+E+R+=+0+X+0+6+1+A+'
+MOUSE_INFO_PATTERN='I+N+F+O+[[:space:]]+V+E+R+=+0+X+0+6+2+6+[[:space:]]+T+Y+P+E+=+0+X+0+0+0+4+'
 MOUSE_POS_10_20_PATTERN='M+O+U+S+E+[:]+[[:space:]]+S+E+T+[[:space:]]+P+O+S+I+T+I+O+N+'
 MOUSE_RANGE_PATTERN='M+O+U+S+E+[:]+[[:space:]]+S+E+T+[[:space:]]+R+A+N+G+E+'
 MOUSE_RANGE_CLAMP_PATTERN='M+O+U+S+E+[:]+[[:space:]]+S+E+T+[[:space:]]+P+O+S+I+T+I+O+N+'
@@ -522,6 +637,9 @@ MOUSE_RESET_CENTER_PATTERN='M+O+U+S+E+[:]+[[:space:]]+R+E+S+E+T+'
 COMDEMO_PASS_PATTERN='C+O+M+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
 ECHO_TOKEN='SH42'
 MZDEMO_PASS_PATTERN='M+Z+[[:space:]]+D+E+M+O+[[:space:]]+V+I+A+[[:space:]]+I+N+T+2+1+H+'
+CIUKRTST_PASS_PATTERN='\[CIUKRTST\][[:space:]]+OWNER=CIUKIDOS[[:space:]]+ABI=2[[:space:]]+SERVICES=11[[:space:]]+CHAIN=0[[:space:]]+STATE=PASS'
+PSTACK_CHILD_PASS_PATTERN='\[PSTACK:C\][[:space:]]+ALL=PASS[[:space:]]+TSR-EXEC-UNLOAD=PASS[[:space:]]+EXIT=5A'
+PSTACK_ROOT_PASS_PATTERN='\[PSTACK:R\][[:space:]]+ALL=PASS'
 ECHO_TOKEN_PATTERN='S+H+4+2+'
 EXEC_RETURN_TOKEN='XR52'
 EXEC_RETURN_PATTERN='X+R+5+2+'
@@ -594,10 +712,10 @@ if (( BOOT_AUTORUN )); then
       mark_fail "LOADER_FATAL_MISSING" "fatal missing-shell message not detected"
     fi
     mark_pass "LOADER_FATAL_MISSING"
-    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HALTING_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
-      mark_fail "LOADER_FATAL_HALT" "halting message not detected after missing shell"
+    if ! wait_for_strings_regex_from_offset "$SERIAL_LOG" "$RESTART_PATTERN" 0 "$PROMPT_TIMEOUT_SEC"; then
+      mark_fail "LOADER_FATAL_RESTART" "restart instruction not detected after missing shell"
     fi
-    mark_pass "LOADER_FATAL_HALT"
+    mark_pass "LOADER_FATAL_RESTART"
     if ! assert_no_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" 0 5; then
       mark_fail "NO_SHELL_PROMPT" "shell prompt appeared after fatal missing-shell path"
     fi
@@ -617,6 +735,9 @@ if (( BOOT_AUTORUN )); then
     send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
+    send_and_wait_for_pattern_and_prompt 'CIUKRTST.COM' "$CIUKRTST_PASS_PATTERN" "$CHILD_PROMPT_PATTERN" "CIUKRTST_RUNTIME_OWNER_OK" "$COMMAND_TIMEOUT_SEC"
+    send_and_wait_for_pattern_and_prompt 'CIUKPST.COM' "$PSTACK_CHILD_PASS_PATTERN" "$CHILD_PROMPT_PATTERN" "PSTACK_COM2COM_NESTED_OK" "$COMMAND_TIMEOUT_SEC"
+    send_and_wait_for_pattern_and_prompt 'CIUKPST.COM /ROOT' "$PSTACK_ROOT_PASS_PATTERN" "$CHILD_PROMPT_PATTERN" "PSTACK_ROOT_RESTORE_OK" "$COMMAND_TIMEOUT_SEC"
     EXIT_OFFSET="$(file_size "$SERIAL_LOG")"
     send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' || mark_fail "SEND_EXIT_DISABLED_OK" "cannot send command: exit"
     wait_for_strings_regex_from_offset "$SERIAL_LOG" "$EXIT_DISABLED_PATTERN" "$EXIT_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "EXIT_DISABLED_OK" "disabled exit message not detected after: exit"
@@ -705,11 +826,23 @@ else
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_NAV_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "navigation help section missing"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_FILES_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "files help section missing"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_EXEC_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "execution help section missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_NETWORK_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "network help section missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_IPCONFIG_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "IPCONFIG help entry missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_FTP_CLIENT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "FTP client help entry missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_ICMP_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "ICMP service help entry missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_PKTTOOLS_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "Packet Driver diagnostic help entry missing"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_LOADER_ONLY_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "loader-only hint missing"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_WHERE_HINT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "where hint missing"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_OK" "expected prompt did not appear after: help"
   mark_pass "HELP_OK"
   mark_pass "HELP_LAYOUT_OK"
+  send_and_wait_for_pattern_and_prompt 'where ipconfig' "$WHERE_IPCONFIG_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_IPCONFIG_OK" "$COMMAND_TIMEOUT_SEC"
+  IPCONFIG_OFFSET="$(file_size "$SERIAL_LOG")"
+  send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'ipconfig' || mark_fail "SEND_IPCONFIG_OK" "cannot send command: ipconfig"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$IPCONFIG_HEADER_PATTERN" "$IPCONFIG_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "IPCONFIG_OK" "IPCONFIG header missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$IPCONFIG_ADDRESS_PATTERN" "$IPCONFIG_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "IPCONFIG_OK" "IPCONFIG IPv4 address missing"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$IPCONFIG_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "IPCONFIG_OK" "prompt did not return after IPCONFIG"
+  mark_pass "IPCONFIG_OK"
   send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_count_and_prompt "echo $ECHO_TOKEN" "$ECHO_TOKEN_PATTERN" 2 "$CHILD_PROMPT_PATTERN" "ECHO_OK" "$COMMAND_TIMEOUT_SEC"
   CLS_OFFSET="$(file_size "$SERIAL_LOG")"
@@ -795,6 +928,9 @@ else
   send_and_wait_for_pattern_and_prompt 'MOUSE ENABLE' "$MOUSE_ENABLE_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_ENABLE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'MOUSE RESET' "$MOUSE_RESET_CENTER_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_RESET_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'COMDEMO.COM' "$COMDEMO_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "EXEC_COM_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'CIUKRTST.COM' "$CIUKRTST_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "CIUKRTST_RUNTIME_OWNER_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'CIUKPST.COM' "$PSTACK_CHILD_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "PSTACK_COM2COM_NESTED_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt 'CIUKPST.COM /ROOT' "$PSTACK_ROOT_PASS_PATTERN" "$APPS_PROMPT_PATTERN" "PSTACK_ROOT_RESTORE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$APPS_PROMPT_PATTERN" "MOUSE_PERSIST_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_prompt 'cd \' "$ROOT_PROMPT_PATTERN" "EXEC_ROOT_CD_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'COMDEMO' "$COMDEMO_PASS_PATTERN" "$ROOT_PROMPT_PATTERN" "EXEC_PATH_OK" "$COMMAND_TIMEOUT_SEC"
@@ -842,15 +978,10 @@ else
   send_and_wait_for_pattern_and_prompt 'rename RENMSRC.TXT RENB.TXT' "$RENAME_OK_PATTERN" "$APPS_PROMPT_PATTERN" "RENAME_OK" "$COMMAND_TIMEOUT_SEC"
   MOVE_OFFSET="$(file_size "$SERIAL_LOG")"
   send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'move RENA.TXT SMDIR1\RENA.TXT' || mark_fail "SEND_MOVE_OK" "cannot send command: move RENA.TXT SMDIR1\\RENA.TXT"
-  if wait_for_strings_regex_from_offset "$SERIAL_LOG" "$RENAME_OK_PATTERN" "$MOVE_OFFSET" "$COMMAND_TIMEOUT_SEC"; then
-    wait_for_strings_regex_from_offset "$SERIAL_LOG" "$APPS_PROMPT_PATTERN" "$MOVE_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "MOVE_OK" "expected prompt did not appear after: move RENA.TXT SMDIR1\\RENA.TXT"
-    mark_pass "MOVE_OK"
-    send_and_wait_for_pattern_and_prompt 'type SMDIR1\RENA.TXT' "$TYPE_TOKEN_PATTERN" "$APPS_PROMPT_PATTERN" "MOVE_READBACK_OK" "$COMMAND_TIMEOUT_SEC"
-  else
-    wait_for_strings_regex_from_offset "$SERIAL_LOG" "$RENAME_ERR_PATTERN" "$MOVE_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "MOVE_OK" "expected output did not appear after: move RENA.TXT SMDIR1\\RENA.TXT"
-    wait_for_strings_regex_from_offset "$SERIAL_LOG" "$APPS_PROMPT_PATTERN" "$MOVE_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "MOVE_PARTIAL" "expected prompt did not appear after: move RENA.TXT SMDIR1\\RENA.TXT"
-    mark_pass "MOVE_PARTIAL"
-  fi
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$RENAME_OK_PATTERN" "$MOVE_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "MOVE_OK" "cross-directory move did not succeed: RENA.TXT -> SMDIR1\\RENA.TXT"
+  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$APPS_PROMPT_PATTERN" "$MOVE_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "MOVE_OK" "expected prompt did not appear after: move RENA.TXT SMDIR1\\RENA.TXT"
+  mark_pass "MOVE_OK"
+  send_and_wait_for_pattern_and_prompt 'type SMDIR1\RENA.TXT' "$TYPE_TOKEN_PATTERN" "$APPS_PROMPT_PATTERN" "MOVE_READBACK_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'ren NOPE.TXT NOPE2.TXT' "$RENAME_ERR_PATTERN" "$APPS_PROMPT_PATTERN" "REN_MISSING_SRC_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'move SMDIR1\RENA.TXT' "$RENAME_USE_PATTERN" "$APPS_PROMPT_PATTERN" "MOVE_USAGE_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_pattern_and_prompt 'copy \APPS\NOPE.TXT \APPS\NOPEDST.TXT' "$COPY_SRC_ERR_PATTERN" "$APPS_PROMPT_PATTERN" "COPY_MISSING_SRC_OK" "$COMMAND_TIMEOUT_SEC"
@@ -901,7 +1032,12 @@ ACTIVE_MON_SOCK=""
 ACTIVE_CMD_LOG=""
 rm -f "$MON_SOCK"
 
-strings -a "$SERIAL_LOG" > "$STRINGS_LOG" || true
+"$SERIAL_NORMALIZER" "$SERIAL_LOG" | strings -a > "$STRINGS_LOG" || true
+
+if ! base_image_unchanged; then
+  mark_fail "BASE_IMAGE_UNCHANGED" "$BASE_IMG changed while QEMU used the isolated fixture"
+fi
+mark_pass "BASE_IMAGE_UNCHANGED"
 
 if (( BOOT_AUTORUN )); then
   echo "[shell-com] PASS"

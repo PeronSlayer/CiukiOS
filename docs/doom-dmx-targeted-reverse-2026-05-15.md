@@ -1,5 +1,7 @@
 # DOOM DMX targeted reverse report - 2026-05-15
 
+> Historical reverse-engineering record. The latest current-state summary and prioritized next actions are in `doom-audio-retest-2026-07-21.md`.
+
 ## Scope
 
 Target binary:

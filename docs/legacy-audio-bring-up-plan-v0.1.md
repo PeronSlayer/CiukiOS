@@ -1,52 +1,64 @@
 # Legacy Audio Bring-up Plan v0.1
 
-## Objective
-Define the first conservative audio milestone after the current runtime-split and DOS-compatibility tranche so CiukiOS can close the present "video yes, audio not yet proven" gap for DOOM-class software.
+## Status
 
-## Current Status
-1. Current runtime and DOS compatibility evidence is strong enough for DOOM visual gameplay on the full profile.
-2. There is no public PASS evidence yet for legacy audio detection, audio initialization, or audible playback.
-3. The next milestone should be detect-and-init first, not playback first, so failures can be classified precisely instead of being hidden inside one large game-level test.
+Phase 7 has controlled groundwork but is not closed and is not yet the primary project phase.
 
-## Evidence Separation
-| Layer | PASS means | PASS does not mean |
-|---|---|---|
-| Detection | Hardware-facing probe responds in a repeatable way. | IRQ, DMA, mixer, or playback is correct. |
-| Initialization | The device leaves reset or accepts a conservative init sequence and reports sane state. | Audible sample or music playback is working. |
-| Playback | A controlled sample or tone path runs with repeatable success evidence. | Broad driver compatibility or final DOOM audio quality is solved. |
+CiukiOS has repeatable project-probe evidence for SB16 detection, initialization, DMA/IRQ delivery, protected-mode interrupt behavior, and controlled WAD-lump playback. Original DOOM SB16/DMX remains a deterministic failure, PC-speaker output is not validated game-SFX evidence, and no second external DOS audio workload has completed the product exit gate.
 
-## Milestone 1 - Detect And Init First
-Goal: prove that CiukiOS can identify likely Sound Blaster and AdLib paths and complete the smallest safe initialization handshake before attempting playback.
+## Evidence Layers
 
-Done for this milestone:
-1. Sound Blaster reset probe returns the expected DSP ready byte after reset.
-2. DSP version probe returns a stable version pair after reset.
-3. AdLib timer probe shows repeatable timer-state changes consistent with an OPL-compatible device.
-4. Logs and documentation keep detection PASS, init PASS, and playback PASS separate.
-
-## Probe Plan
-| Probe | Purpose | Minimal success signal | If it fails |
+| Layer | Current status | Proven scope | What remains unproven |
 |---|---|---|---|
-| Sound Blaster reset probe | Verify that the DSP responds to a conservative reset handshake at the chosen base port. Start with the usual Sound Blaster base assumption and widen only if evidence requires it. | The DSP returns the ready byte `0xAA` after reset. | Either no Sound Blaster-compatible DSP is responding at the tested base, or the reset timing/port sequence is still wrong. |
-| DSP version probe | Verify that the post-reset command/response path works before any mixer, DMA, or playback logic is attempted. | The DSP version command returns a stable nonzero major/minor pair across repeated runs. | Reset may be incomplete, or the read/write command path still has timing or port-handling gaps. |
-| AdLib timer probe | Verify that OPL timer registers respond before any music playback logic is attempted. Start with the standard AdLib/OPL base assumption and keep the probe read-only. | Timer status changes in a repeatable way after timer mask/start operations. | Either there is no OPL-compatible response at the tested base or the timer-register sequence still needs correction. |
+| SB16 DSP detection | PASS in project helper | DSP reset and response at the configured legacy base. | Broad hardware matrix. |
+| SB16 initialization | PASS in project helper | DSP/mixer setup needed by the controlled path. | Arbitrary third-party driver initialization. |
+| Real-mode playback | PASS in project helper | DMA1/IRQ7 sample transfer and completion. | Game-level mixer/timing compatibility. |
+| Protected-mode IRQ/timer | PASS in PMIRQSB | DOS/4GW/DPMI timer reflection, SB IRQ delivery, and controlled task modes. | Original DMX scheduler/return behavior. |
+| Controlled WAD playback | PASS in DOOMSFX | Selected lumps such as DSPISTOL and DSDOROPN load and play through the controlled SB16 path. | Original DOOM/DMX behavior; external workload breadth. |
+| DOOM PC speaker | UNVERIFIED | Packaged configuration selects PC-speaker SFX and avoids SB16. | QEMU currently produces a constant-tone artifact; real SFX must be validated on hardware or with trustworthy capture. |
+| DOOM SB16/DMX | FAIL | Detection/init paths are reached before a repeatable protected-mode failure. | Invalid-opcode path around 0170:00006930-0000693C and the preceding scheduler/dispatch state. |
+| doom-vanille SB16 | FAIL for product audio | The low-DOS allocator and DMX initialization complete with device 3/code 8. | Captured gameplay audio remains digital silence; planar video is also corrupt, so this is not yet a clean A/B workload. |
+| AdLib/OPL | PARTIAL investigation | Device exposure and focused experiments exist. | Stable initialization/playback evidence suitable for a product claim. |
 
-## Why Detection And Init Come Before Playback
-1. Playback mixes too many variables at once: port decoding, reset timing, DSP command sequencing, DMA, IRQ handling, mixer defaults, and application behavior.
-2. Detection and initialization evidence can be captured with much smaller, clearer serial markers or probe helpers.
-3. DOOM should be a late confirmation target for audio, not the first test, because it cannot cleanly separate detection failure from playback-path failure.
+PASS above is intentionally limited to the named project-owned probe. It does not count as an external-application PASS in the Phase 6 matrix.
 
-## Conservative Execution Order
-1. Add one guarded probe helper or runtime diagnostic path for Sound Blaster reset and DSP version.
-2. Add one separate guarded probe helper or runtime diagnostic path for the AdLib timer.
-3. Record PASS or FAIL evidence for detection and initialization only.
-4. Only after the probes are stable, attempt one narrow playback target with explicit evidence.
-5. Use DOOM audio only as a confirmation stage after the smaller probes are repeatable.
+## Current Blockers
 
-## Current Risks
-1. CiukiOS does not yet have verified Sound Blaster DSP timing evidence.
-2. CiukiOS does not yet have verified AdLib timer evidence.
-3. Treating DOOM audio as the first milestone would hide whether the failure is in detection, initialization, or playback.
+### Original DOOM SB16
 
-## Immediate Next Action
-Implement or expose a minimal Sound Blaster reset plus DSP-version probe with serial evidence, keep it separate from playback logic, and document the exact PASS and FAIL markers before touching IRQ or DMA setup.
+The opt-in SB16 SFX profile reaches a repeatable protected-mode invalid opcode. Current evidence indicates execution enters a low data table through a bad dispatch/index state; raw SB16 and protected-mode IRQ helpers still pass. The next investigation must trace backward from the last valid dispatch state rather than replace the proven IRQ/DMA path speculatively.
+
+### Rebuildable A/B target
+
+doom-vanille/pcdoom is the preferred open-source comparison target. The focused `full` lane passes its former `I_AllocLow(256000)` blocker, reaches DOS/4GW/DPMI, `ST_Init`, and DMX initialization, and records `[doomvan-memory] PASS sb16_low_dos_256k`. This is a general Phase 5/6 memory regression PASS, not gameplay or audio evidence: the direct gameplay frame has corrupted planar walls and a missing HUD, while the captured SB16 stream is digital silence. Clean completion and wider-profile evidence are also open.
+
+### PC speaker
+
+Configuration selection alone is not playback evidence. QEMU's constant tone must not be described as working DOOM SFX. Capture and classify the signal on at least one real legacy target or through a trustworthy emulated waveform before promoting this path.
+
+## Remaining Execution Order
+
+1. Keep SB16, PMIRQSB, and DOOMSFX lanes green while runtime ownership changes.
+2. Keep the 256 KiB low-DOS pcdoom gate green, fix the planar gameplay path, and obtain a clean stable visual baseline before using the target for audio comparison.
+3. Reproduce and trace the original DOOM failure backward from the invalid dispatch without game-specific OS patches.
+4. Validate PC-speaker game SFX separately from configuration and device presence.
+5. Add a redistributable external DOS audio workload that exercises detection, initialization, playback, termination, and shell return.
+6. Revisit AdLib/OPL only through a small controlled probe before integrating a music workload.
+
+## Phase 7 Exit Gate
+
+Phase 7 can close only when:
+
+1. DOOM reaches one explicit, repeatable game-level audio target on a documented profile and device.
+2. At least one other external DOS audio application completes detection, initialization, practical playback, and clean return.
+3. Probe, controlled-harness, and game-level results remain separately reported.
+4. No audio path depends on an undocumented binary patch or hidden Stage1 mutation.
+5. Full and full-CD shared-runtime gates plus all affected audio lanes are green on the same checkout.
+6. At least one real-hardware result records machine, sound device, configuration, observed output, and limitations.
+
+## Evidence References
+
+1. doom-controlled-audio-lane-2026-05-17.md
+2. doom-dmx-targeted-reverse-2026-05-15.md
+3. doom-audio-retest-2026-07-21.md
+4. ../src/probes/pmirqsb/README.md

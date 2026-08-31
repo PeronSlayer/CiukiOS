@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
+if [[ ! -x "$SERIAL_NORMALIZER" ]]; then
+  echo "[wolf-probe] ERROR serial normalizer is not executable: $SERIAL_NORMALIZER" >&2
+  exit 1
+fi
 
 DO_BUILD="${DO_BUILD:-1}"
 IMG="${IMG:-build/full/ciukios-full.img}"
@@ -15,7 +20,7 @@ PROMPT_TIMEOUT_SEC="${PROMPT_TIMEOUT_SEC:-120}"
 OBSERVE_SEC="${OBSERVE_SEC:-12}"
 KEY_DELAY_SEC="${KEY_DELAY_SEC:-0.12}"
 PRE_ENTER_DELAY_SEC="${PRE_ENTER_DELAY_SEC:-0.35}"
-DEFAULT_PARENT_PSP_SEG="${DEFAULT_PARENT_PSP_SEG:-2000}"
+DEFAULT_PARENT_PSP_SEG="${DEFAULT_PARENT_PSP_SEG:-1780}"
 DEFAULT_OBSERVE_SEC=12
 
 command_exists() {
@@ -68,7 +73,15 @@ strings_from_offset() {
   if [[ ! -f "$file" ]]; then
     return 0
   fi
-  tail -c "+$((offset + 1))" "$file" 2>/dev/null | strings -a
+  "$SERIAL_NORMALIZER" --offset "$offset" "$file" | strings -a
+}
+
+strings_from_log() {
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  "$SERIAL_NORMALIZER" "$file" | strings -a
 }
 
 wait_for_strings_regex_from_offset() {
@@ -177,26 +190,26 @@ send_text_and_enter() {
 extract_exit_code() {
   local log_file="$1"
   local line
-  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* code=[0-9A-F]+' | tail -n 1 || true)"
+  line="$(strings_from_log "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* code=[0-9A-F]+' | tail -n 1 || true)"
   echo "${line##*code=}"
 }
 
 extract_exit_reason() {
   local log_file="$1"
   local line
-  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* reason=([0-9A-F]+|RETF)' | tail -n 1 || true)"
+  line="$(strings_from_log "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* reason=([0-9A-F]+|RETF)' | tail -n 1 || true)"
   echo "${line##*reason=}"
 }
 
 extract_int20_callsites() {
   local log_file="$1"
-  strings -a "$log_file" | grep -Eo 'CH20IP [0-9A-F]{4}:[0-9A-F]{4}' || true
+  strings_from_log "$log_file" | grep -Eo 'CH20IP [0-9A-F]{4}:[0-9A-F]{4}' || true
 }
 
 extract_exit_callsite() {
   local log_file="$1"
   local line
-  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* CH4CIP [0-9A-F]{4}:[0-9A-F]{4}' | tail -n 1 || true)"
+  line="$(strings_from_log "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* CH4CIP [0-9A-F]{4}:[0-9A-F]{4}' | tail -n 1 || true)"
   echo "${line##*CH4CIP }"
 }
 
@@ -211,7 +224,7 @@ hex16_sub2() {
 
 extract_first_post_exec_marker() {
   local log_file="$1"
-  strings -a "$log_file" | awk '
+  strings_from_log "$log_file" | awk '
     /CHILD_EXEC_REQ/ {seen=1; next}
     !seen {next}
     {
@@ -225,7 +238,7 @@ extract_first_post_exec_marker() {
 
 extract_first_post_exec_bios() {
   local log_file="$1"
-  strings -a "$log_file" | awk '
+  strings_from_log "$log_file" | awk '
     /CHILD_EXEC_REQ/ {seen=1; next}
     !seen {next}
     {
@@ -239,7 +252,7 @@ extract_first_post_exec_bios() {
 
 extract_first_post_exec_int21() {
   local log_file="$1"
-  strings -a "$log_file" | awk '
+  strings_from_log "$log_file" | awk '
     /CHILD_EXEC_REQ/ {seen=1; next}
     !seen {next}
     {
@@ -255,13 +268,13 @@ extract_last_child_psp() {
   local log_file="$1"
   local line
 
-  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
+  line="$(strings_from_log "$log_file" | grep -Eo 'CHILD_EXIT[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
   if [[ -n "$line" ]]; then
     echo "${line##*psp=}"
     return 0
   fi
 
-  line="$(strings -a "$log_file" | grep -Eo 'CH4A[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
+  line="$(strings_from_log "$log_file" | grep -Eo 'CH4A[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
   echo "${line##*psp=}"
 }
 
@@ -269,13 +282,13 @@ extract_exec_req_psp() {
   local log_file="$1"
   local line
 
-  line="$(strings -a "$log_file" | grep -Eo 'CHILD_EXEC_REQ[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
+  line="$(strings_from_log "$log_file" | grep -Eo 'CHILD_EXEC_REQ[^[:cntrl:]]* psp=[0-9A-F]+' | tail -n 1 || true)"
   echo "${line##*psp=}"
 }
 
 extract_prejump_jft() {
   local log_file="$1"
-  strings -a "$log_file" | awk '
+  strings_from_log "$log_file" | awk '
     /JFTP / {
       line = $0
       sub(/^.*JFTP /, "", line)
@@ -287,7 +300,7 @@ extract_prejump_jft() {
 
 extract_marker_sequence() {
   local log_file="$1"
-  strings -a "$log_file" | awk '
+  strings_from_log "$log_file" | awk '
     /CHILD_EXEC_REQ/ {seen=1}
     !seen {next}
     {
@@ -305,7 +318,7 @@ extract_marker_sequence() {
 
 extract_int10_sequence() {
   local log_file="$1"
-  strings -a "$log_file" | awk '
+  strings_from_log "$log_file" | awk '
     /CHILD_EXEC_REQ/ {seen=1; next}
     !seen {next}
     {
@@ -323,7 +336,7 @@ extract_int10_sequence() {
 
 extract_last_int21_before_exit() {
   local log_file="$1"
-  strings -a "$log_file" | awk '
+  strings_from_log "$log_file" | awk '
     /CHILD_EXEC_REQ/ {seen=1; next}
     !seen {next}
     /CHILD_EXIT/ {
@@ -347,7 +360,7 @@ extract_last_marker_psp() {
   local marker_regex="$2"
   local line
 
-  line="$(strings -a "$log_file" | grep -Eo "(${marker_regex})[^[:cntrl:]]* psp=[0-9A-F]+" | tail -n 1 || true)"
+  line="$(strings_from_log "$log_file" | grep -Eo "(${marker_regex})[^[:cntrl:]]* psp=[0-9A-F]+" | tail -n 1 || true)"
   if [[ -n "$line" && "$line" == *psp=* ]]; then
     echo "${line##*psp=}"
     return 0
@@ -1476,28 +1489,28 @@ first_bios_marker="NONE"
 int16_seen=no
 int10_seen=no
 
-if strings -a "$LOG_FILE" | grep -Eq "$TRACE_MARKER_PATTERN"; then
+if strings_from_log "$LOG_FILE" | grep -Eq "$TRACE_MARKER_PATTERN"; then
   trace_markers_seen=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXEC_REQ.*WOLF3D(\.EXE)?|CHILD_EXEC_REQ.*path=.*WOLF3D'; then
+if strings_from_log "$LOG_FILE" | grep -Eq 'CHILD_EXEC_REQ.*WOLF3D(\.EXE)?|CHILD_EXEC_REQ.*path=.*WOLF3D'; then
   child_exec_req=yes
   external_lookup=yes
   ah4b_reached=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXEC_RET cf=01|CHILD_EXEC_RET cf=1|EXRT ax='; then
+if strings_from_log "$LOG_FILE" | grep -Eq 'CHILD_EXEC_RET cf=01|CHILD_EXEC_RET cf=1|EXRT ax='; then
   ah4b_reached=yes
   external_lookup=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXEC_RET cf=01|CHILD_EXEC_RET cf=1'; then
+if strings_from_log "$LOG_FILE" | grep -Eq 'CHILD_EXEC_RET cf=01|CHILD_EXEC_RET cf=1'; then
   exec_return_error=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq "$COMMAND_NOT_FOUND_PATTERN"; then
+if strings_from_log "$LOG_FILE" | grep -Eq "$COMMAND_NOT_FOUND_PATTERN"; then
   cmd_not_found=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq "$LOADER_RETURN_PATTERN"; then
+if strings_from_log "$LOG_FILE" | grep -Eq "$LOADER_RETURN_PATTERN"; then
   loader_return=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq 'CHILD_PREJUMP'; then
+if strings_from_log "$LOG_FILE" | grep -Eq 'CHILD_PREJUMP'; then
   child_prejump=yes
 fi
 first_post_transfer_marker="$(extract_first_post_exec_marker "$LOG_FILE")"
@@ -1509,10 +1522,10 @@ fi
 if [[ -n "$first_child_int21" ]]; then
   child_int21=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq 'I16I'; then
+if strings_from_log "$LOG_FILE" | grep -Eq 'I16I'; then
   int16_seen=yes
 fi
-if strings -a "$LOG_FILE" | grep -Eq 'I10I'; then
+if strings_from_log "$LOG_FILE" | grep -Eq 'I10I'; then
   int10_seen=yes
 fi
 if [[ "$child_prejump" == yes || "$post_transfer_child_activity" == yes ]]; then
@@ -1544,7 +1557,7 @@ exit_callsite_return="$(extract_exit_callsite "$LOG_FILE")"
 if [[ "$exit_callsite_return" =~ ^([0-9A-F]{4}):([0-9A-F]{4})$ ]]; then
   exit_callsite_int21="${BASH_REMATCH[1]}:$(hex16_sub2 "${BASH_REMATCH[2]}")"
 fi
-if strings -a "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]*'; then
+if strings_from_log "$LOG_FILE" | grep -Eq 'CHILD_EXIT[^[:cntrl:]]*'; then
   child_exit_seen=yes
 fi
 if strings_from_offset "$LOG_FILE" "$wolf_submit_offset" | grep -Eiq "$WOLF_PROMPT_PATTERN|$APPS_PROMPT_PATTERN"; then

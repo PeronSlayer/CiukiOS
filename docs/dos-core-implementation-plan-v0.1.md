@@ -3,10 +3,16 @@
 ## 1. Objective
 Deliver the DOS core in deterministic milestones, from BIOS boot to stable DOS runtime, then desktop-enabling surfaces.
 
+## Current Interpretation
+
+This file preserves the original milestone decomposition. It is not the current phase-status authority. DOS-core ownership has completed its wholesale move out of Stage1; current execution status is governed by `../Roadmap.md`, `stage1-runtime-split-plan-v0.1.md`, `dos-compatibility-matrix-v0.1.md`, and `current-milestones.md`.
+
+The boot, COM/MZ, file/path, graphics, input, and mouse baselines below have implementation evidence and their normal runtime owners are in CIUKIDOS. The active work is to deepen behavioral compatibility and prove those contracts against the quantitative Phase 6 corpus without reopening the completed Phase 5 placement boundary.
+
 ## 2. Milestone Plan
 
 ### M0 - BIOS Stage0 Boot Baseline
-1. Deliver bootable 16-bit boot sector on `floppy` profile.
+1. Deliver a bootable 16-bit BIOS boot baseline; the original milestone used the `floppy` profile.
 2. Emit deterministic boot marker on screen and serial.
 3. Gate: QEMU floppy boot marker detection.
 
@@ -28,10 +34,11 @@ Deliver the DOS core in deterministic milestones, from BIOS boot to stable DOS r
 4. Gate: deterministic COM and EXE compatibility tests.
 
 ### M4 - DOS File and Path Compatibility
-1. FAT12 full baseline on `floppy` profile.
+1. FAT12 historical baseline on `floppy`; FAT16 is the active full/full-CD baseline.
 2. Handle-based I/O (`open/read/write/seek/close`) and directory traversal.
 3. DOS-style path normalization and error mapping.
-4. Gate: DOS file API end-to-end suite.
+4. Preserve 32-bit FAT16 LBAs across reads, writes, directory mutations, EDD, and CHS fallback.
+5. Gate: DOS file API end-to-end suite plus a deterministic full-CD read beyond LBA 65,535.
 
 ### M5 - BIOS and Interactive Surface Expansion
 1. Expand required `INT 10h/13h/16h/1Ah` behavior.

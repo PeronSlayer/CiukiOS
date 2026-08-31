@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
+if [[ ! -x "$SERIAL_NORMALIZER" ]]; then
+  echo "[dos-taxonomy] ERROR serial normalizer is not executable: $SERIAL_NORMALIZER" >&2
+  exit 1
+fi
 
 DO_BUILD="${DO_BUILD:-1}"
 IMG="${IMG:-build/full/ciukios-full.img}"
@@ -154,13 +159,29 @@ qemu_available() {
   pick_qemu >/dev/null 2>&1
 }
 
+normalized_log_matches_regex() {
+  local log_path="$1"
+  local pattern="$2"
+
+  [[ -s "$log_path" ]] || return 1
+  "$SERIAL_NORMALIZER" "$log_path" | grep -Eiq -- "$pattern"
+}
+
+normalized_log_matches_fixed() {
+  local log_path="$1"
+  local marker="$2"
+
+  [[ -s "$log_path" ]] || return 1
+  "$SERIAL_NORMALIZER" "$log_path" | grep -Fqi -- "$marker"
+}
+
 log_has_pattern() {
   local pattern="$1"
   shift
 
   local log_path
   for log_path in "$@"; do
-    if [[ -s "$log_path" ]] && grep -Eiq "$pattern" "$log_path"; then
+    if normalized_log_matches_regex "$log_path" "$pattern"; then
       return 0
     fi
   done
@@ -174,7 +195,7 @@ log_has_fixed_marker() {
 
   local log_path
   for log_path in "$@"; do
-    if [[ -s "$log_path" ]] && grep -Fqi "$marker" "$log_path"; then
+    if normalized_log_matches_fixed "$log_path" "$marker"; then
       return 0
     fi
   done
@@ -230,7 +251,7 @@ wait_for_regex() {
   start="$(date +%s)"
 
   while true; do
-    if [[ -f "$file" ]] && grep -Eiq "$pattern" "$file"; then
+    if normalized_log_matches_regex "$file" "$pattern"; then
       return 0
     fi
 
@@ -246,7 +267,7 @@ shell_prompt_seen() {
   if [[ ! -f "$file" ]]; then
     return 1
   fi
-  grep -Eiq 'CiukiOS C:\\|CCiiuukkiiOOSS' "$file"
+  normalized_log_matches_regex "$file" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:'
 }
 
 wait_for_shell_prompt() {
