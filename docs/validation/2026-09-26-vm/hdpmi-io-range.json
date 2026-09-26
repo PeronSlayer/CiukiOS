@@ -1,0 +1,54 @@
+{
+  "status": "PASS",
+  "upstream_commit": "f2276db9accfc57facf2588bc016a27130597bb1",
+  "source_sha256": "ef283e2576534bed3787a20503cda3e9c4767164bf554fe578cf4ed3a901558e",
+  "scope": "Unmodified official allocator instructions; modeled GDT/TSS; no device or DPMI integration claim",
+  "variants": {
+    "16": {
+      "status": "PASS",
+      "binary_sha256": "5244f845bc5a809d46f32d75d98f0cf08e3d81f4464da5f9d1540ca6fb1afd54",
+      "cases": [
+        "reject_03c0_0000_unchanged",
+        "reject_ffff_0002_unchanged",
+        "reject_fff0_0020_unchanged",
+        "reject_9000_ffff_unchanged",
+        "allocate_release_0000_0001",
+        "allocate_release_03b0_0030",
+        "allocate_release_ffff_0001",
+        "allocate_release_fffe_0002",
+        "allocate_release_0001_ffff",
+        "full_table_failure_preserves_ports",
+        "released_slot_reused_with_client_callbacks",
+        "overlap_rejected_021f_0002",
+        "overlap_rejected_0220_0001",
+        "overlap_rejected_022f_0002",
+        "overlap_rejected_0218_0020",
+        "foreign_iopb_owner_preserved",
+        "invalid_release_preserves_ownership"
+      ]
+    },
+    "32": {
+      "status": "PASS",
+      "binary_sha256": "d3e93922bbc0b79ff1a32915b756ca0daf444f0e645982ac8417b52cba6a8481",
+      "cases": [
+        "reject_03c0_0000_unchanged",
+        "reject_ffff_0002_unchanged",
+        "reject_fff0_0020_unchanged",
+        "reject_9000_ffff_unchanged",
+        "allocate_release_0000_0001",
+        "allocate_release_03b0_0030",
+        "allocate_release_ffff_0001",
+        "allocate_release_fffe_0002",
+        "allocate_release_0001_ffff",
+        "full_table_failure_preserves_ports",
+        "released_slot_reused_with_client_callbacks",
+        "overlap_rejected_021f_0002",
+        "overlap_rejected_0220_0001",
+        "overlap_rejected_022f_0002",
+        "overlap_rejected_0218_0020",
+        "foreign_iopb_owner_preserved",
+        "invalid_release_preserves_ownership"
+      ]
+    }
+  }
+}

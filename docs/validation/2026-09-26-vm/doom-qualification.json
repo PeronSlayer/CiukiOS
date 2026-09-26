@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "scope": "Existing installed-HDD classic Doom gate, ordinary fullscreen DOS launch; no monitor and no windowed-DOS claim",
+  "cpu": "pentium3",
+  "memory_mib": 128,
+  "audio_device": "AC97",
+  "source_image_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "source_image_unchanged": true,
+  "kernel_sha256": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+  "doomcore_sha256": "799a20c759567cebb530b7d8b1e7765b13734be5af7f97367f6aa81d87b636da",
+  "results_sha256": "83a6846ab814fef7cb58c30b73b013a9dcd23f574339183c160ea7d3017c7a87",
+  "audio_windows": [
+    {
+      "name": "classic-doom",
+      "start_byte": 221184,
+      "end_byte": 8531968,
+      "tested_pcm_bytes": 8302592,
+      "ac_rms": 992.7647632196099,
+      "peak": 16708,
+      "sample_count": 4151296,
+      "unique_samples": 18589
+    }
+  ],
+  "kernel_code": {
+    "bytes": 38507,
+    "unexpected_changes": 0,
+    "xms_entry_patch": "eb03909090"
+  },
+  "command": "python3 scripts/qemu_test_installed_hdd.py --image build/full/native-desktop-2026-09-26/final/ciukios-native-desktop.img --output build/full/vm-session-2026-09-26/doom-regression-installed --kernel build/full/vm-session-2026-09-26/ciukidos.sys --case classic-doom --audio ac97 --memory 128 --ui-palette platinum"
+}

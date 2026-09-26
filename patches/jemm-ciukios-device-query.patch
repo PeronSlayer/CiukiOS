@@ -1,0 +1,238 @@
+--- a/src/INIT16.ASM
++++ b/src/INIT16.ASM
+@@ -1910,11 +1910,11 @@
+ 	@dprintf ?EMXRMDBG, <"IsJemmInstalled enter",10>
+ 	mov dx, offset sig1
+ 	mov ax, 3D00h
+-	int 21h
++	call ciuki_device_int21
+ 	jnc @F
+ 	mov dx, offset sig2
+ 	mov ax, 3D00h
+-	int 21h
++	call ciuki_device_int21
+ 	jc @@nojemm1
+ @@:
+ 	@dprintf ?EMXRMDBG, <"EMM device found",10>
+@@ -1926,7 +1926,7 @@
+ 	mov cx,6		;read 6 bytes
+ 	mov dx,sp
+ 	mov ax,4402h	;read ioctl
+-	int 21h
++	call ciuki_device_int21
+ 	pop ax			;version
+ 	pop cx			;API entry offs
+ 	pop cx			;API entry segm
+@@ -1940,7 +1940,7 @@
+ @@nojemm2:
+ 	@dprintf ?EMXRMDBG, <"Jemm not found",10>
+ 	mov ah,3Eh
+-	int 21h
++	call ciuki_device_int21
+ @@nojemm1:
+ 	stc
+ 	ret
+@@ -1969,7 +1969,7 @@
+ 	lea dx,resparm
+ 	mov cx,sizeof resparm	;returns 2 words
+ 	mov ax,4402h	;read ioctl (get monitor's resident segment/size)
+-	int 21h
++	call ciuki_device_int21
+ 	jc @@nojemm2
+ 
+ 	invoke printf, CStr("found Jemm instance at segment %x", LF), resparm[0]
+@@ -1988,7 +1988,7 @@
+ 	mov cx,UMB_MAX_BLOCKS * size UMBBLK
+ 	mov bx,handle
+ 	mov ax,4402h	;read ioctl
+-	int 21h
++	call ciuki_device_int21
+ 	jc @@nouninst
+ 
+ 	@dprintf ?UNLRMDBG, <"TryUnload, got UMBs from Jemm",10>
+@@ -2008,7 +2008,7 @@
+ ;-- close EMMXXXX0 handle
+ 
+ 	mov ah,3Eh
+-	int 21h
++	call ciuki_device_int21
+ 
+ if ?INTEGRATED
+ 
+@@ -2073,7 +2073,7 @@
+ 	MOV DX, CStr( NAMEGEN," unloaded",CR,LF,'$' )
+ @@exit:
+ 	MOV AH,9
+-	INT 21H
++	call ciuki_device_int21
+ @@exit2:
+ 	ret
+ @@nojemm2:
+@@ -2107,7 +2107,7 @@
+ 	mov byte ptr [buff],EMMDEV_VERSION
+ 	mov cx,2
+ 	mov ax,4402h	;read ioctl (get version) [Emm386 compatible call]
+-	int 21h
++	call ciuki_device_int21
+ 	jc jemm_not_found
+ 	movzx ax, byte ptr [buff+0]
+ 	movzx cx, byte ptr [buff+1]
+@@ -2120,7 +2120,7 @@
+ 	mov cx,sizeof EMX06
+ 	mov bx, handle
+ 	mov ax,4402h	;read ioctl
+-	int 21h
++	call ciuki_device_int21
+ 	jc done
+ 	@dprintf ?EMXRMDBG, <"EmmStatus: read ioctl(6) ok",10>
+ 
+@@ -2199,7 +2199,7 @@
+ 	mov cx, UMB_MAX_BLOCKS * sizeof UMBBLK
+ 	mov bx, handle
+ 	mov ax,4402h	;read ioctl
+-	int 21h
++	call ciuki_device_int21
+ 	jc done
+ 	@dprintf ?EMXRMDBG, <"EmmStatus: read ioctl(7) ok",10>
+ 
+@@ -2228,7 +2228,7 @@
+ 	cmp bx, -1
+ 	jz @F
+ 	mov ah, 3Eh
+-	int 21h
++	call ciuki_device_int21
+ @@:
+ 	ret
+ jemm_not_found:
+@@ -2284,13 +2284,13 @@
+ 	mov cx,sizeof CMD15
+ 	lea dx,[buff]
+ 	mov ax,4403h	;write ioctl
+-	int 21h
++	call ciuki_device_int21
+ 	jc @F
+ 	@dprintf ?EMXRMDBG, <"EmmUpdate: write ioctl(15) ok",10>
+ 	inc di
+ @@:
+ 	mov ah,3Eh	;close EMMXXXX0 handle
+-	int 21h
++	call ciuki_device_int21
+ @@exit:
+ 	@dprintf ?EMXRMDBG, <"EmmUpdate exit",10>
+ 	mov ax,di
+@@ -3259,4 +3259,7 @@
+ 
+ mainex ENDP
+ 
++; CiukiOS opt-in device discovery; original driver headers and requests.
++	include ciuki_device_query.inc
++
+ END
+--- a/Tools/JLOAD/JLOAD.ASM
++++ b/Tools/JLOAD/JLOAD.ASM
+@@ -264,11 +264,11 @@
+ 	mov bx, -1
+ 	mov dx, offset sig1
+ 	mov ax, 3D00h
+-	int 21h
++	call ciuki_device_int21
+ 	jnc @@found
+ 	mov dx, offset sig2
+ 	mov ax, 3D00h
+-	int 21h
++	call ciuki_device_int21
+ 	jc @@nojemm
+ @@found:
+ 	mov bx,ax
+@@ -279,7 +279,7 @@
+ 	mov cx,6		;read 6 bytes
+ 	mov dx,sp
+ 	mov ax,4402h	;read ioctl
+-	int 21h
++	call ciuki_device_int21
+ 	pop ax			;version
+ 	pop cx			;API entry offs
+ 	pop cx			;API entry segm
+@@ -293,7 +293,7 @@
+ 	cmp bx,-1
+ 	jz @@noclose
+ 	mov ah,3Eh
+-	int 21h
++	call ciuki_device_int21
+ @@noclose:
+ 	stc
+ 	ret
+@@ -1119,15 +1119,15 @@
+ if 0
+ 	mov dx,DStr("JLoad full path: '")
+ 	mov ah,9
+-	int 21h
++	call ciuki_device_int21
+ 	push offset szLdrPath
+ 	call dispstr
+ 	mov dx,DStr("'",13,10)
+ 	mov ah,9
+-	int 21h
++	call ciuki_device_int21
+ endif
+ 	mov ah,30h
+-	int 21h
++	call ciuki_device_int21
+ 	mov [wVersion],ax
+ 
+ 	mov [vmms.wLdrCS],cs
+@@ -1136,7 +1136,7 @@
+ 	mov si,offset szPgmName
+ 	mov dl,0
+ 	stc
+-	int 21h
++	call ciuki_device_int21
+ 	jc @F
+ 	or fMode, FMODE_LFN
+ @@:
+@@ -1150,7 +1150,7 @@
+ 	jnc @F
+ 	mov dx,offset dUsage
+ 	mov ah,9
+-	int 21h
++	call ciuki_device_int21
+ 	jmp exit
+ @@:
+ 	call _IsJemmInstalled
+@@ -1165,7 +1165,7 @@
+ 	mov cx,2		;returns 1 word
+ 	mov dx, sp
+ 	mov ax,4402h	;read ioctl
+-	int 21h
++	call ciuki_device_int21
+ 	pop ax
+ 	cmp ax,?VERSIONHIGH + 256 * ?VERSIONLOW
+ 	jz @F
+@@ -1177,7 +1177,7 @@
+ 	mov byte ptr [vmms.emx08],8  ;read VMM info
+ 	mov cx,size EMX08
+ 	mov ax,4402h	;read ioctl
+-	int 21h
++	call ciuki_device_int21
+ 	jnc @F
+ 	mov dx,DStr("no support for protected mode API",13,10)
+ 	call errorout
+@@ -1196,7 +1196,7 @@
+ 	cmp bx,-1
+ 	jz @F
+ 	mov ah,3Eh
+-	int 21h
++	call ciuki_device_int21
+ @@:
+ 	cmp [wRet],0
+ 	setz al
+@@ -1301,6 +1301,9 @@
+ 	include dprntf16.inc
+ endif
+ 
++; CiukiOS opt-in device discovery; original driver headers and requests.
++	include ciuki_device_query.inc
++
+ _TEXT ends
+ 
+ 	end  start

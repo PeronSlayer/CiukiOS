@@ -23,10 +23,24 @@ See [the exact evidence and limits](docs/native-desktop-2026-09-26.md).
 **Original DOS graphics applications with audio in native windows are not
 implemented.** The current foreground BIOS-text window is restricted; Doom and
 Wolf3D previews use cooperative source ports and do not satisfy that requirement.
-The next work is a monitored session, virtual VGA memory/ports and input,
-protected-mode host rendering, and coordinated DPMI/audio/peripheral ownership.
-Original binaries, genuine captured audio, visible-frame measurements and clean
-return must qualify that work. Source-port results cannot close these gates.
+A separate opt-in Jemm/JLOAD session foundation now passes QEMU Pentium III/128 MiB
+checks for an ordinary DOS child, shadow video/port access, exact 32-PTE restore,
+bounded copying into a physical VBE framebuffer and complete monitor unload.
+A fresh packaged HDPMI host inside that session also passes protected-mode
+A000/B800 shadow writes, 218 actual I/O traps and cleanup before session end.
+The freestanding VGA model has tested text/planar/mode 13h/Mode X behavior;
+complete access routing and desktop integration remain open.
+Extended XMS and persistent DOS device-chain fixes leave the experimental kernel
+at 43,217 bytes, 47 bytes below its unchanged ceiling. The existing focused
+Windows 3.1 launch/resize/WAV/MIDI workflow and a separate classic Doom fullscreen
+menu/gameplay/audio/exit regression pass. Normal boot and the selected
+desktop image do not enable the monitor. See [the experimental evidence](docs/vm-session-foundation-2026-09-26.md).
+
+The remaining work is desktop presentation/input, complete guest access routing
+through the VGA model and coordinated DPMI/audio/peripheral ownership. Original binaries, genuine captured
+audio, visible-frame measurements and clean return must qualify that work.
+Source-port results cannot close these gates, and physical T23/E500 support
+requires separate qualification.
 
 The dated phase closures below retain their original scope. The desktop report
 does not replace the earlier full application/installer matrix with a blanket
@@ -99,9 +113,11 @@ September 26 PASS.
 
 ## Phase 5 - Runtime Ownership Transition
 **STATUS: COMPLETED (2026-08-28); NORMAL DOS RUNTIME OWNERSHIP CLOSED**
+The numbered implementation snapshot below records the earlier closure layout;
+current placement and artifact sizes are in [the runtime ledger](docs/current-milestones.md#canonical-runtime-boundary).
 1. The active full and full-CD profiles use a 1,542-byte loader-only Stage1. Stage0 loads 8 sectors while the BPB-reserved Stage1 slot remains 72 sectors for the on-disk layout and installer contract.
 2. Stage1 locates and validates `\SYSTEM\CIUKIDOS.SYS` and loads the normal DOS kernel at segment `0x0900`. It contains no normal DOS interrupt, process, allocator/MCB, handle, file/path, COM/MZ, or device ownership and exposes no interactive compatibility fallback.
-3. The versioned kernel contract is `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and a closed Stage1 chain. The current artifacts are 43,167 bytes on `full` and 43,162 bytes on the D:-default `full-cd` profile, with a hard maximum of `0xA900` (43,264 bytes); EXEC snapshot frames occupy `0x1400-0x1457`, and Stage2 starts at `0x1480`.
+3. The versioned kernel contract is `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and a closed Stage1 chain. That snapshot's artifacts were 43,167 bytes on `full` and 43,162 bytes on the D:-default `full-cd` profile, with a hard maximum of `0xA900` (43,264 bytes); EXEC snapshot frames occupied `0x1400-0x1457`, and Stage2 started at `0x1480`.
 4. CIUKIDOS owns the live normal DOS path, launches and restores `\SYSTEM\SHELL.COM` and child processes, and fails closed when the required kernel or shell is missing, invalid, or unexpectedly returns. The black-box ownership marker records `[CIUKRTST] OWNER=CIUKIDOS ABI=2 SERVICES=11 CHAIN=0 STATE=PASS`.
 5. The dedicated ownership-boundary check plus current full/full-CD positive, negative, shell, process/TSR, installer-impact, and aggregate evidence satisfy the Phase 5 completion gate on the same checkout.
 6. Physical runtime ownership is closed. Broader logical DOS compatibility, including stronger JFT/SFT and handle semantics, remains Phase 6 work and does not reopen Phase 5.

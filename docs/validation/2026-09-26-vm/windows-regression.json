@@ -1,0 +1,17 @@
+{
+  "audio": [
+    {
+      "application": "wave",
+      "rms": 1750.398690182659,
+      "peak": 18679.0,
+      "samples": 428824
+    },
+    {
+      "application": "midi",
+      "rms": 2330.4716497100903,
+      "peak": 20693.0,
+      "samples": 652412
+    }
+  ],
+  "repaint_changed_pixels": 0
+}

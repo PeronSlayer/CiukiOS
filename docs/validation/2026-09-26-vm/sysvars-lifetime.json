@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "kernel_bytes": 43217,
+  "kernel_sha256": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+  "listing_sha256": "607f7453aed6ea2ddc76b846a35120586d991a4be46c0933eff8daca944dd74b",
+  "scope": "Compiled AH52+memory initialization; modeled BDA/live DOS metadata, no driver/device integration claim",
+  "cases": [
+    "cold_initialization_publishes_NUL_CON_CDS_and_20_SFT_entries",
+    "registered_device_chain_survives_three_queries",
+    "live_CDS_and_SFT_link_and_record_survive_three_queries",
+    "first_MCB_anchor_refreshes_without_reinitialization",
+    "same_pointer_code_segments_and_stack_preserved"
+  ]
+}

@@ -15,6 +15,8 @@ later images or physical hardware automatically.
 - [Cooperative Doom keyboard correction](window-keyboard-2026-09-26.md)
 - [DOS window architecture and V86/DPMI implementation boundary](dos-window-architecture-2026-09-26.md)
 - [Existing BIOS-text window runtime](dos-window-runtime-2026-09-26.md)
+- [Executable V86/video foundation and qualification](vm-session-foundation-2026-09-26.md)
+- [Shipped DPMI ABI, peripheral ownership and remaining integration](vm-dpmi-contract-2026-09-26.md)
 - [Driver catalog and redistribution information](driver-catalog.md)
 
 ## Compatibility and hardware

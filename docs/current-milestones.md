@@ -24,6 +24,45 @@ the source/image identity and failure evidence.
 | Windowed DOS | Restricted foreground BIOS-text execution; separately, cooperative Doom preview Ctrl/Space/chords/releases pass. | The games are source ports. Original DOS graphics/DPMI/audio virtualization remains unimplemented. |
 | Hardware | No new physical qualification. | T23/E500 input/audio, native hardware acceleration and physical frame rate remain open. |
 
+## Subsequent monitor experiment
+
+The experimental kernel and external session module are a separate increment;
+they do not change the selected desktop image above or enable Jemm in normal
+boot. The final QEMU Pentium III/128 MiB monitor gate passes with the explicitly
+adapted, source-built Jemm/JLOAD binaries. Its ordinary DOS child uses private
+A000/B800 memory, BIOS video, ports and file I/O while the physical text buffer
+remains unchanged. The gate compares all 32 VGA PTEs before and after the session,
+checks a 4,096-byte copy into the physical 800×600×24 VBE framebuffer, rejects
+invalid copy bounds and proves module/monitor unload and native desktop return.
+A fresh packaged HDPMI host starts after the shadow mapping. Its protected-mode
+probe writes A000/B800 and the JLM reads back those private bytes; 218 actual
+I/O traps, register/frame checks and host unload before session end pass. This
+is bounded integrated DPMI video evidence, not a general protected-mode VM.
+
+The separate freestanding VGA model supports text, planar graphics, mode 13h and
+Mode X, with CPU-side host assertions, sanitizers and an OpenWatcom target build.
+The monitor still needs to route every guest memory and port operation through
+it; directly mapped shadow RAM cannot supply planar VGA latch semantics.
+
+The kernel now supports extended XMS query/allocation without truncating EDX and
+preserves registered devices and live CDS/SFT storage across repeated AH=52h
+calls. CPU instruction tests pass on the new kernel and fail on the old binary
+for the corresponding defects. The separate Windows 3.1 regression completes
+two launches, resize/repaint and objectively measured WAV/MIDI playback.
+Classic Doom also passes its independent fullscreen gate: actual menu/skill
+selection, gameplay/movement, AC97 output (Doom-only PCM RMS 992.76), native
+exit, subsequent COM execution and desktop mouse/console return. The monitor
+is absent from that regression VM.
+
+This is a monitor and transfer foundation, not a completed desktop DOS VM.
+Original games in windows, complete guest video/peripheral virtualization,
+focused input, virtual audio and physical T23/E500 operation remain open. Procedures and
+exact evidence are in [the session record](vm-session-foundation-2026-09-26.md)
+and [the Jemm/HDPMI contract](vm-dpmi-contract-2026-09-26.md). The
+[archived monitor report](validation/2026-09-26-vm/monitor-final.json) preserves
+the qualified binary hashes; the session record links the independent Windows,
+Doom and device-model results.
+
 ## Phase Status
 
 The following phase table retains the bounded September 1 application matrix;
@@ -44,11 +83,12 @@ it is not a claim that every workflow was rerun on the selected desktop image.
 ## Canonical Runtime Boundary
 
 - Stage0 loads 8 sectors from the 72-sector reserved Stage1 slot.
-- Loader-only Stage1: 1,542 bytes at segment `0x0800`.
-- `CIUKIDOS.SYS`: 43,169 bytes in the September 26 selected image at segment `0x0900`; hard ceiling `0xA900` (43,264 bytes).
+- Loader-only Stage1: 1,588 bytes at segment `0x0800` in the selected September 26 build.
+- `CIUKIDOS.SYS`: 43,169 bytes in the selected desktop image; 43,217 bytes in the subsequent monitor experiment. Hard ceiling: `0xA900` (43,264 bytes).
+- The loader validates the kernel at temporary segment `0x0900`, then relocates it to resident segment `0x0300`. Persistent SYSVARS occupies `0x0D90:0000` through `0x0D90:06FF`.
 - ABI: version 2, 11 descriptors, 8 bytes per descriptor, capability mask `0x003F`, `CHAIN=0`.
-- Five EXEC-state frames occupy `0x0E00-0x0E6D`; Stage2 starts at `0x0E80`.
-- The selected kernel has 95 bytes below its unchanged build-gated ceiling. New monitor/device code must use explicit module ownership rather than silently expanding the validated layout.
+- Eleven EXEC-state frames occupy paragraphs `0x0E00-0x0EF1`; the boot-only Stage2 window at `0x0E80` is reused after handoff returns.
+- The baseline kernel has 95 bytes below its ceiling; the experimental kernel has 47. New monitor/device code lives in explicit external modules without expanding the build-gated kernel window.
 
 ## Current Compatibility Decisions
 
@@ -94,8 +134,8 @@ The aggregate includes every locally available bundled game and Windows workflow
 
 ## Immediate Operational Order
 
-1. Implement an opt-in monitored foreground DOS session with explicit lifecycle, virtual interrupts and cleanup while preserving existing boot/fullscreen paths.
-2. Virtualize direct VGA/text memory, registers and focused keyboard input; supply a host renderer that can operate under the monitor.
-3. Coordinate DPMI and audio/peripheral ownership, then qualify original Doom/Wolf binaries with actual video/audio, cleanup and separate physical T23/E500 evidence. Cooperative ports cannot satisfy this gate.
+1. Integrate the experimentally qualified monitor lifecycle and protected framebuffer path with the native desktop presenter, preserving normal boot/fullscreen paths.
+2. Connect every guest VGA access to the device model, complete focused keyboard input and coordinate DPMI/audio/peripheral ownership; bounded shadow/copy and protected I/O probes do not close these interfaces.
+3. Qualify original Doom/Wolf binaries with actual video/audio, measured performance, cleanup and separate physical T23/E500 evidence. Cooperative ports cannot satisfy this gate.
 4. Preserve the historical DOS/Windows/audio gates while expanding the Phase 6 corpus and full-CD workflows; keep original Doom SB16/DMX and physical compatibility gaps explicit.
 5. Extend networking and Windows compatibility under their existing separate phase gates.

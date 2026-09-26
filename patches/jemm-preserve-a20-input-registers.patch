@@ -1,0 +1,19 @@
+--- a/src/XMS.ASM
++++ b/src/XMS.ASM
+@@ -1341,11 +1341,16 @@
+     jnz Simulate_IO
+  endif
+ A20_Inp92::
++;--- IN AL preserves bits 8..31 of the guest EAX. AH below is only scratch.
++;--- The V86 dispatcher commits the complete EAX returned by this handler.
++    push eax
+     in al,dx
+     and al, not 2
+     mov ah, [bA20Stat]
+     shl ah, 1
+     or al, ah
++    mov byte ptr [esp],al
++    pop eax
+     @dprintf ?A20DBG, <"A20_Handle60: read port %X kbc output port, al=%X",10>, dx, al
+     ret
+     align 4

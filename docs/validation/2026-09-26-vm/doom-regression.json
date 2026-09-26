@@ -1,0 +1,49 @@
+{
+  "source_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "case": "classic-doom",
+  "completed": true,
+  "directories": [],
+  "files": [],
+  "disk_padding_paras": 0,
+  "keep_display_profile": false,
+  "vga": "std",
+  "direct_dos": false,
+  "pointer_activity": false,
+  "ui_palette": "platinum",
+  "payload_sha256": {
+    "SYSTEM/CIUKIDOS.SYS": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+    "SYSTEM/SHELL.COM": "dadb2e6783c6382ae1dad48531c4aad33f027eeed98948419dcf87c29bc05c53",
+    "SYSTEM/BOOTSND.COM": "9f4cc68dfa5569cc60c8d92220bcfc9fea79bb0cb646f213d827b2c44163f482",
+    "SYSTEM/DRIVERS/SOUND.COM": "9f4cc68dfa5569cc60c8d92220bcfc9fea79bb0cb646f213d827b2c44163f482",
+    "APPS/DOOM/DOOM.COM": "ff28b48f66cc1c770e492a29640d340708b7c276a03c929223cea6147bc64907",
+    "APPS/DOOM/DOOM.EXE": "48fba482f533cd9db3ca34c62d892d199dc3b6a2b35a14131a350c77dff5a439",
+    "APPS/DOOM/DOOMCORE.EXE": "799a20c759567cebb530b7d8b1e7765b13734be5af7f97367f6aa81d87b636da",
+    "SBEMU/VSBHDA.EXE": "caded049f543a6a99cf967469ae7fb8688ea4516c79a4aabd124cb40abdfefe9",
+    "SBEMU/HDPMI32I.EXE": "72d7adce9ddec56a3ba58102d8238738c9f50486680578b30750b9882a38a0b0"
+  },
+  "boot_audio_end": 221184,
+  "cr4_before_doom": 0,
+  "doom_menu_rows": {
+    "doom-menu": 0,
+    "doom-menu-moved": 1,
+    "doom-menu-return": 0,
+    "doom-episode": 0,
+    "doom-skill": 2
+  },
+  "cr4_during_doom": 514,
+  "cr4_after_doom": 512,
+  "audio_windows": [
+    [
+      "classic-doom",
+      221184,
+      8531968
+    ]
+  ],
+  "kernel_code": {
+    "bytes": 38507,
+    "unexpected_changes": 0,
+    "xms_entry_patch": "eb03909090"
+  },
+  "pointer_commands": 0,
+  "pointer_errors": []
+}

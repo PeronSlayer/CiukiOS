@@ -31,8 +31,9 @@ The DOS window runs one restricted BIOS-text foreground process through the
 actual DOS kernel. The Doom and Wolf3D window previews are cooperative source
 ports, with no game audio. **Original DOS graphics programs with audio do not
 yet run in native windows.** Ctrl/Space qualification concerns the Doom preview;
-it is not evidence for the original game. Video-memory/port virtualization,
-DPMI and peripheral ownership are the next implementation work. F4 retains the
+it is not evidence for the original game. An isolated monitor experiment now
+provides shadow video, bounded DPMI port/memory probes and protected framebuffer
+copying; complete desktop presentation and peripheral ownership remain open. F4 retains the
 fullscreen DOS compatibility path; `EXIT` or `DESKTOP` returns to the desktop.
 
 The selected 128 MiB development disk image is
@@ -48,6 +49,26 @@ See [the implementation and evidence record](docs/native-desktop-2026-09-26.md),
 [adding wallpapers](docs/wallpaper-import-2026-09-26.md) and
 [removable-media limits](docs/native-removable-media-2026-09-26.md).
 
+A subsequent **opt-in monitor experiment** builds pinned Jemm/JLOAD and an
+external CiukiOS session module without enabling them in normal boot. QEMU
+Pentium III/128 MiB evidence covers a real DOS child, private video-memory and
+port access, exact restoration of 32 VGA page-table entries, a bounded copy into
+the physical VBE framebuffer, module/monitor unload and return to the native UI.
+A fresh packaged HDPMI host also runs a protected-mode probe inside that session:
+its A000/B800 writes reach private memory, 218 real I/O traps complete, and the
+host unloads before the session ends. A separate tested VGA model implements
+text, planar, mode 13h and Mode X behavior; routing every guest access through
+that model remains integration work.
+The kernel's extended XMS functions and persistent DOS device chain are fixed;
+the experimental kernel is 43,217 bytes, 47 bytes below its unchanged ceiling.
+The existing Windows 3.1 gate also passes two launches, resize/repaint and measured
+WAV/MIDI playback. A separate classic Doom fullscreen regression passes real
+menus, gameplay, movement, audio and clean return on the new kernel. These results
+do not qualify original games in desktop windows, complete virtual peripherals,
+30 fps or real hardware. The selected desktop
+image above remains unchanged. See [the monitor foundation and evidence](docs/vm-session-foundation-2026-09-26.md)
+and [the actual Jemm/HDPMI interface contract](docs/vm-dpmi-contract-2026-09-26.md).
+
 The approved Ciuki portrait, original boot photo, startup melody and Tango
 icons remain the system identity. UI text is English: **A modern Retro OS**.
 
@@ -59,7 +80,7 @@ Windows, installer or physical-hardware test.
 
 The Phase 4 DOOM gameplay milestone is closed. The full FAT16 runtime can launch DOOM through DOS/4GW, load `doom.wad`, initialize the gameplay path, and reach a playable visual runtime.
 
-Phase 5 is **COMPLETE; NORMAL DOS RUNTIME OWNERSHIP CLOSED**. In the active full and full-CD profiles, Stage0 reads 8 sectors from the 72-sector BPB-reserved Stage1 slot and transfers to a bounded 1,542-byte loader-only Stage1. That loader locates and validates `\SYSTEM\CIUKIDOS.SYS`, loads it at segment `0x0900`, and has no normal DOS interrupt, process, memory, handle, file/path, COM/MZ, or device ownership. The current kernel contract is `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and no Stage1 compatibility chain (`CIUKRTST CHAIN=0`). The currently validated `full` kernel is 43,264 bytes, exactly matching the hard `0xA900` ceiling; five EXEC snapshot frames occupy segments `0x0E00-0x0E6D`, and Stage2 starts at `0x0E80`. CIUKIDOS launches the external `\SYSTEM\SHELL.COM`; missing or invalid required components, or an unexpected shell return, still fail closed to the bounded fatal path.
+Phase 5 is **COMPLETE; NORMAL DOS RUNTIME OWNERSHIP CLOSED**. Its earlier closure record used a 1,542-byte loader-only Stage1, a kernel loaded at segment `0x0900`, a 43,264-byte kernel and five EXEC snapshot frames. The current placement and sizes are recorded in [the runtime ledger](docs/current-milestones.md#canonical-runtime-boundary). The ownership contract remains `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and no Stage1 compatibility chain (`CIUKRTST CHAIN=0`). Stage0 reads 8 sectors from the 72-sector BPB-reserved Stage1 slot. CIUKIDOS owns the DOS runtime and launches the external `\SYSTEM\SHELL.COM`; missing or invalid required components, or an unexpected shell return, still fail closed to the bounded fatal path.
 
 Phase 6 is active, not closed. The external GPL CuteMouse workflow passes on `full`, and the official MIT-licensed Costa v1.8.0 lane validates reproducible fetch/package/launch, the 640x350 desktop, one moving cursor, and the complete Desktop → Calculator nested-EXEC workflow. COM and MZ children use one title-independent first-fit EXEC allocator: COM placement derives from PSP+file+stack, while MZ placement derives from the real copy extent, header, `minalloc`, live MCBs, and arena limit. Doom-vanille now passes the focused DOS/4GW 256 KiB low-DOS allocation gate, real gameplay/HUD/wall validation, simultaneous AdLib/OPL2 music plus SB16 SFX, and a timedemo performance gate. Its required Watcom ABI options (`signed char`, 32-bit enums, one-byte structure packing) are applied automatically. DOSNavigator is packaged byte-for-byte from upstream and validates dual-pane startup, one-row arrow navigation, mouse input, Colors/XMS, native `Alt+X` exit, shell return, and same-boot PSP/mouse/video cleanup. It remains PARTIAL only because broad file-operation/editor and full-CD workflows are not recorded. The packaged WOLF3D copy passes resource loading, stable runtime, keyboard-driven menu progression, and correctly rendered first-level video; it remains PARTIAL for unmodified-binary, clean-exit, full-CD, and audio compatibility. The required external corpus and five-category full-CD matrix are incomplete. Phase 7 is not closed: real-mode and DOS/4GW SB16 layers, controlled DOOMSFX, original Doom OPL2 music/PC-speaker gameplay, and doom-vanille combined OPL2/SB16 gameplay are green; original Doom SB16/DMX, clean return from a second external audio workload, full-CD audio, and real hardware remain open.
 
@@ -71,9 +92,9 @@ Validation snapshot (2026-09-01): the Phase 5 loader/kernel ownership boundary a
 
 Current work is concentrated on original DOS execution in native windows:
 
-1. a monitored foreground DOS session with explicit lifecycle, virtual interrupts and safe cleanup
-2. virtual VGA/text memory and I/O, focused keyboard input, and a protected-mode host renderer
-3. shared DPMI/audio ownership, original-binary video/audio evidence, and separate T23/E500 qualification
+1. integrate the experimentally qualified monitor lifecycle and protected framebuffer path with the desktop presenter
+2. connect the VGA model to all guest memory/port paths, complete focused input and coordinate DPMI/audio/peripheral ownership
+3. qualify original-binary video/audio, clean return and measured performance, followed by separate T23/E500 checks
 
 The wider compatibility backlog remains:
 

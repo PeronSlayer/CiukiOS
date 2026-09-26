@@ -1,0 +1,9 @@
+{
+  "status": "FAIL",
+  "kernel": "build/full/obj/ciukidos.sys",
+  "kernel_bytes": 43169,
+  "kernel_sha256": "116276101b269c46d7390eb9bbc6b5dd1da90a371a222ebe22f6ae65c1ce9ea3",
+  "listing_sha256": "96a5266394c4f7c7ed89c0058b3dc233080864b0c7d90b2d75b4b4c55320ba69",
+  "scope": "Full compiled XMS entry instructions; modeled port92; no Jemm/DPMI/device integration claim",
+  "error": "{'eax': 2779054080, 'ebx': 3065385600, 'ecx': 3351721046, 'edx': 4294967295}"
+}

@@ -1,0 +1,82 @@
+{
+  "xms-extended.json": {
+    "source": "build/full/vm-session-2026-09-26/xms-extended-report.json",
+    "sha256": "b742c02a7644b889f7a28798b55995659b5cb9e92609470ab42c39406d25e161"
+  },
+  "xms-old-kernel-failure.json": {
+    "source": "build/full/vm-session-2026-09-26/xms-extended-old-regression.json",
+    "sha256": "7a6ca282e75b3d1fb878aae71ea8ec5d672160ca1f96e1b52fa8ae448782f905"
+  },
+  "sysvars-lifetime.json": {
+    "source": "build/full/vm-session-2026-09-26/sysvars-lifetime-report.json",
+    "sha256": "c0f06816bb6cf715b1faa73f5fac9735590da7617b05e1cbbc72e57bf6a25409"
+  },
+  "sysvars-old-kernel-failure.json": {
+    "source": "build/full/vm-session-2026-09-26/sysvars-lifetime-old-regression.json",
+    "sha256": "8bacef0f90b7b2f1d735115d9ddf12779b457e2f6072a65396686faeeaf5c0a2"
+  },
+  "jemm-device-query.json": {
+    "source": "build/full/jemm-device-query-2026-09-26/report.json",
+    "sha256": "1e21638d48f07da5dc7934f874c71b9c81c332ebe130c6ea1e24c2c8f313b378"
+  },
+  "jemm-unmodified-reproducibility.json": {
+    "source": "build/full/dos-window-research-2026-09-26/jemm-build-verification.json",
+    "sha256": "3403c1a8e53f05e7eebfe20c82300a7250a77d868cb93361f6b6a1355d037d46"
+  },
+  "hdpmi-io-range.json": {
+    "source": "build/full/hdpmi-io-range-2026-09-26/report.json",
+    "sha256": "325cd6e90b37af0c62dc3a7aea9bc3562f703acae0bf22917e6326b92aa8a6e6"
+  },
+  "virtual-vga-model.json": {
+    "source": "build/tests/virtual-vga/report.json",
+    "sha256": "2d11acedcafa1fc58543b0b6449c95bee0f7bb43dccc0988769fca4d4b4210d7"
+  },
+  "dpmi-ports-standalone.json": {
+    "source": "build/tests/dpmi-video/run3/report.json",
+    "sha256": "27213acd5553a1036d7e8d3e4c129c30ebfd08bc3a2d6f8d89902bf71fa9dbc1"
+  },
+  "windows-regression.json": {
+    "source": "build/full/vm-session-2026-09-26/windows-regression/result.json",
+    "sha256": "bc3da9736a07e6280767532120541be09e08cfaca900f206ab90aa0ab57eb100"
+  },
+  "doom-regression.json": {
+    "source": "build/full/vm-session-2026-09-26/doom-regression-installed/results.json",
+    "sha256": "83a6846ab814fef7cb58c30b73b013a9dcd23f574339183c160ea7d3017c7a87"
+  },
+  "doom-qualification.json": {
+    "source": "build/full/vm-session-2026-09-26/doom-regression-installed/qualification.json",
+    "sha256": "de96dfdeeaa8af81b3448da7aff58e00ac4bf2a23646ef6fc70f5a8f01f83500"
+  },
+  "vm-before-vcpi-selection-failure.json": {
+    "source": "build/full/vm-session-2026-09-26/dpmi-interop/report.json",
+    "sha256": "b115378dcc8441d905459d2274095d2c85f309ab137d67a176cfa40a0df49e0d"
+  },
+  "vm-before-tsr-status-fix-failure.json": {
+    "source": "build/full/vm-session-2026-09-26/dpmi-status/report.json",
+    "sha256": "6ecd5c84ac51e78385d6be22b9cadc73b97d7bed2667bd866667f4121f42ad05"
+  },
+  "monitor-final.json": {
+    "source": "build/full/vm-session-2026-09-26/monitor-final/report.json",
+    "sha256": "c17dec9307c47d928eccc45cb80ec2dadedd61d0ea23a17b36215ffb20584cb5"
+  },
+  "jemm-a20-xms-regression.json": {
+    "source": "build/tests/jemm-xms-2026-09-26/report.json",
+    "sha256": "9b213c6692fa6fbd1a485469c4bb65e06e65d86b458a345d8dabf3b0ab1c1b0c"
+  },
+  "jemm-a20-xms-before.json": {
+    "source": "build/tests/jemm-xms-2026-09-26/old/report.json",
+    "sha256": "d40b3daf8d10663f4840043384b7fd6c5178b9e60fa232243c06ea7e6b430bac"
+  },
+  "jemm-a20-xms-after.json": {
+    "source": "build/tests/jemm-xms-2026-09-26/new/report.json",
+    "sha256": "a067bcd63966fa54e4d4b85fe0c38bfc300f42b03162bd136af19cb09d9f3584"
+  },
+  "jemm-build-manifest.json": {
+    "source": "build/external/jemm-monitor/work-v4l0c_oz/output/manifest.json",
+    "sha256": "5d479434291849ddb8eded01cba1c6fe5658ee6a7777cf968086ddb1bacc150f"
+  },
+  "session-build-manifest.json": {
+    "source": "build/full/dos-window-research-2026-09-26/session-final/manifest.json",
+    "sha256": "d209eeafb291d180bd877b0c775d29d8dd1f4499e6d482d715ae89d7695959e4"
+  }
+}

@@ -5188,6 +5188,11 @@ int21_get_list_of_lists:
 
     mov dx, DOS_SYSVARS_SEG
     mov es, dx
+    ; AH=52h publishes live DOS state. Reinitializing it on every query
+    ; unlinked resident device drivers (including Jemm), destroyed CDS edits
+    ; and reset SFT entries while clients still held references to them.
+    cmp byte [cs:dos_sysvars_initialized], 1
+    je .publish
     mov di, DOS_SYSVARS_ANCHOR_OFF
     xor ax, ax
     ; Clear the complete 1792-byte SYSVARS/CDS/SFT/DPB image.  It ends at
@@ -5196,8 +5201,6 @@ int21_get_list_of_lists:
     cld
     rep stosw
 
-    mov ax, [cs:dos_list_of_lists]
-    mov [es:DOS_SYSVARS_ANCHOR_OFF], ax
     mov word [es:DOS_SYSVARS_OFF + 0x00], DOS_SYSVARS_DPB_OFF
     mov [es:DOS_SYSVARS_OFF + 0x02], dx
     mov word [es:DOS_SYSVARS_OFF + 0x04], DOS_SYSVARS_SFT_OFF
@@ -5289,6 +5292,9 @@ int21_get_list_of_lists:
     mov word [es:DOS_SYSVARS_CDS_OFF + 0xB0 + 0x45], DOS_SYSVARS_DPB_OFF
     mov [es:DOS_SYSVARS_CDS_OFF + 0xB0 + 0x47], dx
 
+.publish:
+    mov ax, [cs:dos_list_of_lists]
+    mov [es:DOS_SYSVARS_ANCHOR_OFF], ax
     mov bx, DOS_SYSVARS_OFF
     xor ax, ax
 
@@ -23016,6 +23022,10 @@ xms_entrypoint:
     je .dispatch
     call .a20_hw_enable
 .dispatch:
+    cmp ah, 0x88
+    je .query_free_extended
+    cmp ah, 0x89
+    je .alloc_emb_extended
     or ah, ah
     je .version
     cmp ah, 0x08
@@ -23046,6 +23056,21 @@ xms_entrypoint:
     xor bl, bl
     retf
 
+.query_free_extended:
+    ; XMS 3.0 clients select the 32-bit services from our advertised version.
+    ; Publish only this allocator's existing below-64-MiB pool; do not imply
+    ; that unenumerated high RAM belongs to DOS or truncate a large request.
+    movzx eax, word [cs:xms_free_kb]
+    mov edx, eax
+    mov ecx, (XMS_PHYS_LIMIT_HI << 16) - 1
+    xor bl, bl
+    retf
+
+.alloc_emb_extended:
+    cmp edx, 0xFFFF
+    ja .alloc_fail
+    ; A valid request fits the legacy allocator without changing its handle,
+    ; high-water, HMA exclusion or locked-physical-address contracts.
 .alloc_emb:
     cmp dx, [cs:xms_free_kb]
     ja .alloc_fail

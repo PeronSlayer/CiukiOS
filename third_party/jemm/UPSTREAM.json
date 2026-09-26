@@ -1,0 +1,27 @@
+{
+  "project": "Jemm",
+  "repository": "https://github.com/Baron-von-Riedesel/Jemm",
+  "commit": "e96bb6bb80cbdc3e6585544db79a6b133a5566dd",
+  "archive": "source-e96bb6bb.tar.gz",
+  "download": "https://codeload.github.com/Baron-von-Riedesel/Jemm/tar.gz/e96bb6bb80cbdc3e6585544db79a6b133a5566dd",
+  "sha256": "768ff55df0567284b7fb87717b4e7ce99a9f61517e09c350ef1e1146bcdede5c",
+  "source_date_epoch": 1779807929,
+  "license": "JEMM386/JEMMEX: partly Artistic License, preserve all per-file notices; JLOAD: MIT",
+  "modifications": "None. Build directory contains case-only include symlinks required by upstream Linux.mak.",
+  "toolchains": {
+    "jwasm": {
+      "repository": "https://github.com/Baron-von-Riedesel/JWasm",
+      "commit": "7f6f32e78b79565d40bcce496756aadd1ff66900",
+      "download": "https://codeload.github.com/Baron-von-Riedesel/JWasm/tar.gz/7f6f32e78b79565d40bcce496756aadd1ff66900",
+      "sha256": "713899d9179814e46442c52537fe7fe0ef636d51c05d745641f813739df910c0",
+      "binary": "build/GccUnixR/jwasm"
+    },
+    "jwlink": {
+      "repository": "https://github.com/Baron-von-Riedesel/JWlink",
+      "commit": "cb7df1288619f7d3bf0290566bbe0b643fc05fd1",
+      "download": "https://codeload.github.com/Baron-von-Riedesel/JWlink/tar.gz/cb7df1288619f7d3bf0290566bbe0b643fc05fd1",
+      "sha256": "90c2b34dbcc5b9508935f2abef740382677dc617f1df0cab298262f42c717f38",
+      "binary": "build/jwlinkLR/jwlink"
+    }
+  }
+}

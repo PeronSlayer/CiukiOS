@@ -1,0 +1,64 @@
+{
+  "upstream": {
+    "project": "Jemm",
+    "repository": "https://github.com/Baron-von-Riedesel/Jemm",
+    "commit": "e96bb6bb80cbdc3e6585544db79a6b133a5566dd",
+    "archive": "source-e96bb6bb.tar.gz",
+    "download": "https://codeload.github.com/Baron-von-Riedesel/Jemm/tar.gz/e96bb6bb80cbdc3e6585544db79a6b133a5566dd",
+    "sha256": "768ff55df0567284b7fb87717b4e7ce99a9f61517e09c350ef1e1146bcdede5c",
+    "source_date_epoch": 1779807929,
+    "license": "JEMM386/JEMMEX: partly Artistic License, preserve all per-file notices; JLOAD: MIT",
+    "modifications": "None. Build directory contains case-only include symlinks required by upstream Linux.mak.",
+    "toolchains": {
+      "jwasm": {
+        "repository": "https://github.com/Baron-von-Riedesel/JWasm",
+        "commit": "7f6f32e78b79565d40bcce496756aadd1ff66900",
+        "download": "https://codeload.github.com/Baron-von-Riedesel/JWasm/tar.gz/7f6f32e78b79565d40bcce496756aadd1ff66900",
+        "sha256": "713899d9179814e46442c52537fe7fe0ef636d51c05d745641f813739df910c0",
+        "binary": "build/GccUnixR/jwasm"
+      },
+      "jwlink": {
+        "repository": "https://github.com/Baron-von-Riedesel/JWlink",
+        "commit": "cb7df1288619f7d3bf0290566bbe0b643fc05fd1",
+        "download": "https://codeload.github.com/Baron-von-Riedesel/JWlink/tar.gz/cb7df1288619f7d3bf0290566bbe0b643fc05fd1",
+        "sha256": "90c2b34dbcc5b9508935f2abef740382677dc617f1df0cab298262f42c717f38",
+        "binary": "build/jwlinkLR/jwlink"
+      }
+    }
+  },
+  "source_bytes_modified": true,
+  "adaptation": {
+    "name": "ciukios-device-query",
+    "patch_sha256": "754360529c5092f3572a70128849af29eec1629331f710d0bc7224df37d6f699",
+    "helper_sha256": "468d52afe57bd32c3e08a946634550468227c409871854ac307309b9438d6bea",
+    "helper_license": "MIT",
+    "a20_input_patch_sha256": "342b862d7c562203849466547008158401d8205a012f76ce2402a54ce50b56c0",
+    "line_endings": "LF in the three patched translation units",
+    "scope": "Failed EMMXXXX0/EMMQXXX0 open uses registered device IOCTL/close; A20 port60h/92h IN AL preserves EAX high24; no kernel changes"
+  },
+  "scope": "Compilation only; no CiukiOS installation, guest execution or device virtualization proved.",
+  "runtime_tested": false,
+  "build_log": "build/external/jemm-monitor/work-v4l0c_oz/build.log",
+  "build_script_sha256": "123d432ca183e00ceaea54262ba665aea8ed2b65b18ee34428d4625a0dec7d60",
+  "tools": {
+    "jwasm": {
+      "sha256": "3d7f0d924e2c19ea121ef391cdc4f2ab048839b901aaf5c333c49a4ef57ec9db",
+      "source_commit": "7f6f32e78b79565d40bcce496756aadd1ff66900"
+    },
+    "jwlink": {
+      "sha256": "07eb55dcdafd5a6ee5e62bd1e0c53454e6e996d4ca68fc540bad3550043e872a",
+      "source_commit": "cb7df1288619f7d3bf0290566bbe0b643fc05fd1"
+    }
+  },
+  "host_gcc": "gcc (GCC) 16.2.1 20260810",
+  "outputs": {
+    "JEMM386.EXE": {
+      "bytes": 29954,
+      "sha256": "c30b70098d49e4e15748a3cac7384e998b199fa1360a8311d6cca70775cc4f07"
+    },
+    "JLOAD.EXE": {
+      "bytes": 8796,
+      "sha256": "42599b3cef6d5d2a9c2ec6d117a47a88e6c4c42fd1cd3a5ac60f5ddac20f326f"
+    }
+  }
+}

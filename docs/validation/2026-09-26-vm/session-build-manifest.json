@@ -1,0 +1,15 @@
+{
+  "abi": 1,
+  "runtime_tested": false,
+  "jemm_commit": "e96bb6bb80cbdc3e6585544db79a6b133a5566dd",
+  "sources": {
+    "src/vm/session_jlm.asm": "af4fc06292731a454d38e313b102e39b6077d5d10558cd54721f460fb86887cb",
+    "src/vm/session_abi.inc": "c86dab87869e689ac9b3354339412d7508c2e0dfa2dd228471fa5617fb3a249b",
+    "scripts/build_vm_session.sh": "ce94732416389a0deef2eea2bfbe0e72c419ed8f3710473209bd470f6d0951f8"
+  },
+  "module": {
+    "bytes": 7168,
+    "sha256": "6e8053c04fb616b9bd6ff3368ecd3f597f3858cdd0c64f24c1dc151f8d3a00b5"
+  },
+  "jemm_build_manifest_sha256": "5d479434291849ddb8eded01cba1c6fe5658ee6a7777cf968086ddb1bacc150f"
+}
