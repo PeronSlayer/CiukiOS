@@ -49,7 +49,7 @@ Any required-component failure or shell return
   -> halt
 ```
 
-The current CIUKIDOS flat image is 43,254 bytes, loads at segment `0x0900`, and is build-bounded to `0xA900` (43,264) bytes. Four EXEC frames occupy `0x1400-0x1457`; Stage2 starts at `0x1480`. These are enforced product layout boundaries, not estimates. The remaining ten-byte margin makes the limit an active build constraint.
+The current CIUKIDOS flat image is 43,167 bytes on `full` and 43,162 bytes on the D:-default `full-cd` profile, loads at segment `0x0900`, and is build-bounded to `0xA900` (43,264) bytes. Four EXEC frames occupy `0x1400-0x1457`; Stage2 starts at `0x1480`. These are enforced product layout boundaries, not estimates. The smallest remaining margin is 97 bytes, so the limit remains an active build constraint.
 
 ## Current CIUKIDOS ABI
 

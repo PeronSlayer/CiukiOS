@@ -11,6 +11,27 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 5. Phase 7 evidence boundary: `docs/legacy-audio-bring-up-plan-v0.1.md`
 6. Current cross-phase milestone ledger: `docs/current-milestones.md`
 
+## Current development priority — 2026-09-26
+
+The native-desktop increment passes eleven focused QEMU Pentium III/128 MiB
+reports on disk image `08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6`.
+It adds graphical read-only removable-media access, a 99-tile wallpaper catalog
+and licensed CC0 AC97/Sound Blaster event sounds. USB remains BIOS-exposed,
+without native hot-plug. Physical T23/E500 qualification remains open.
+See [the exact evidence and limits](docs/native-desktop-2026-09-26.md).
+
+**Original DOS graphics applications with audio in native windows are not
+implemented.** The current foreground BIOS-text window is restricted; Doom and
+Wolf3D previews use cooperative source ports and do not satisfy that requirement.
+The next work is a monitored session, virtual VGA memory/ports and input,
+protected-mode host rendering, and coordinated DPMI/audio/peripheral ownership.
+Original binaries, genuine captured audio, visible-frame measurements and clean
+return must qualify that work. Source-port results cannot close these gates.
+
+The dated phase closures below retain their original scope. The desktop report
+does not replace the earlier full application/installer matrix with a blanket
+September 26 PASS.
+
 ## Phase 0 - Reset Foundation
 1. Reset the previous project state and establish a clean legacy-first baseline.
 2. Define and freeze legacy-first architecture.
@@ -80,7 +101,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 **STATUS: COMPLETED (2026-08-28); NORMAL DOS RUNTIME OWNERSHIP CLOSED**
 1. The active full and full-CD profiles use a 1,542-byte loader-only Stage1. Stage0 loads 8 sectors while the BPB-reserved Stage1 slot remains 72 sectors for the on-disk layout and installer contract.
 2. Stage1 locates and validates `\SYSTEM\CIUKIDOS.SYS` and loads the normal DOS kernel at segment `0x0900`. It contains no normal DOS interrupt, process, allocator/MCB, handle, file/path, COM/MZ, or device ownership and exposes no interactive compatibility fallback.
-3. The versioned kernel contract is `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and a closed Stage1 chain. The current artifact is 43,254 bytes with a hard maximum of `0xA900` (43,264 bytes); EXEC snapshot frames occupy `0x1400-0x1457`, and Stage2 starts at `0x1480`.
+3. The versioned kernel contract is `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and a closed Stage1 chain. The current artifacts are 43,167 bytes on `full` and 43,162 bytes on the D:-default `full-cd` profile, with a hard maximum of `0xA900` (43,264 bytes); EXEC snapshot frames occupy `0x1400-0x1457`, and Stage2 starts at `0x1480`.
 4. CIUKIDOS owns the live normal DOS path, launches and restores `\SYSTEM\SHELL.COM` and child processes, and fails closed when the required kernel or shell is missing, invalid, or unexpectedly returns. The black-box ownership marker records `[CIUKRTST] OWNER=CIUKIDOS ABI=2 SERVICES=11 CHAIN=0 STATE=PASS`.
 5. The dedicated ownership-boundary check plus current full/full-CD positive, negative, shell, process/TSR, installer-impact, and aggregate evidence satisfy the Phase 5 completion gate on the same checkout.
 6. Physical runtime ownership is closed. Broader logical DOS compatibility, including stronger JFT/SFT and handle semantics, remains Phase 6 work and does not reopen Phase 5.
@@ -90,7 +111,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 1. Make CiukiOS capable of launching a broader set of arbitrary real DOS programs from the full and full-CD profiles.
 2. Build a compatibility matrix across utilities, editors, file managers, real-mode games, DOS extender applications, and setup tools.
 3. Classify failures by subsystem so fixes broaden compatibility across multiple workloads, not only milestone demos. Logical JFT/SFT, handle, process, and file semantics remain compatibility work here even though their normal runtime code is physically CIUKIDOS-owned.
-4. Current evidence is mixed: the GPL CuteMouse install/INT33/unload/restore workflow passes on `full`; official Costa v1.8.0 passes a pinned-download, package, launch, one-cursor, Calculator, and return workflow; doom-vanille passes the 256 KiB low-DOS gate but a direct gameplay capture exposes corrupted planar rendering; the packaged WOLF3D copy reaches keyboard-driven menus and correctly rendered first-level gameplay but remains PARTIAL for unmodified-binary, clean-exit, full-CD, and audio evidence; DOSNavigator passes mouse, one-row navigation, Colors/XMS, `EXIT`, and shell return but remains PARTIAL because of its bounded packaged-loader compatibility hook and missing broad file/full-CD coverage; and the required external corpus plus five-category full-CD matrix are still missing.
+4. Current evidence is mixed: the GPL CuteMouse install/INT33/unload/restore workflow passes on `full`; official Costa v1.8.0 passes a pinned-download, package, launch, one-cursor, Calculator, and return workflow; doom-vanille passes the 256 KiB low-DOS gate, real gameplay/HUD/wall-integrity, combined OPL2/SB16 audio, and a real-time VGA performance gate after restoring its required Watcom ABI packing; the packaged WOLF3D copy reaches keyboard-driven menus and correctly rendered first-level gameplay but remains PARTIAL for unmodified-binary, clean-exit, full-CD, and audio evidence; the byte-identical upstream DOSNavigator binary passes mouse, one-row navigation, Colors/XMS, native exit, shell return, and same-boot cleanup but lacks broad file/full-CD coverage; and the required external corpus plus five-category full-CD matrix are still missing.
 5. Exit gate: a documented corpus of at least ten external programs, with at least two programs in each category above, has meaningful workflow and clean-return results on `full`; at least five redistributable representatives spanning all categories also run from `full-cd`.
 6. Exit gate: at least 80% of the required matrix cases are PASS, every non-PASS case has a subsystem classification, no PARTIAL result is accepted as PASS, and no open critical defect corrupts memory, storage, handles, or shell return state.
 
@@ -99,8 +120,8 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 1. Close the current game-level audio compatibility gap for DOOM and similar DOS workloads.
 2. Investigate and implement the minimum sound-device compatibility required for conservative Sound Blaster and AdLib bring-up.
 3. Validate detection, initialization, and practical playback separately.
-4. Current groundwork: SB16 detection/init, real-mode DMA/IRQ, protected-mode IRQ/timer probes, and controlled DOOMSFX WAD playback have repeatable evidence. The DOS environment MCB, `BLASTER` propagation, and conventional-memory starvation that blocked doom-vanille are fixed generally; doom-vanille now selects SB device 3/code 8 and completes DMX initialization.
-5. Open boundary: the final doom-vanille gameplay WAV is digital silence despite the active SB16 stream, and the proprietary DOOM SB16/DMX path remains unsupported. WOLF3D video and initial keyboard interaction are now validated, but its game-level audio still has no playback evidence.
+4. Current groundwork: objective WAV gates pass AdLib/OPL2 music, SB16 real-mode DMA/IRQ, DOS/4GW protected-mode IRQ/timer/DMA, controlled DOOMSFX WAD playback, original Doom OPL2/PC-speaker gameplay, and doom-vanille combined OPL2/SB16 gameplay with DMX return 10.
+5. Open boundary: the proprietary original DOOM SB16/DMX path remains unsupported. Doom-vanille audio-enabled clean exit, WOLF3D game-level audio, another external audio workload with clean return, full-CD, and real hardware are also missing.
 6. Exit gate: DOOM reaches a documented, repeatable game-level audio target and at least one additional external DOS audio workload completes detection, initialization, playback, and clean return.
 
 ## Phase 8 - Legacy Networking
@@ -113,12 +134,13 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 6. FTP is plaintext; the default account and forwarding remain restricted to localhost QEMU NAT or a trusted isolated LAN.
 
 ## Phase 9 - Windows pre-NT Milestones
-**STATUS: ACTIVE; FIRST WINDOWS 3.1 BOUNDED MILESTONE COMPLETE (2026-09-01)**
+**STATUS: ACTIVE; EXPANDED WINDOWS 3.1 BOUNDED MILESTONE COMPLETE (2026-09-01)**
 1. The canonical `full` image optionally packages user-supplied Windows 3.1 media and an installed tree; none of that proprietary payload is tracked or redistributed.
 2. Windows 3.1 reaches 386 Enhanced Mode through `WIN` with DOSMGR/SDA, XMS/A20, PS/2 BIOS mouse, DOS device-chain, EXEC-owner, file-handle, and exit-state compatibility supplied through general interfaces rather than executable-name rules.
-3. The focused lane proves two 640x480 Enhanced Mode starts, exactly one moving pointer, Calculator launch, task-scoped `Alt+F4`, Program Manager survival, clean CiukiOS shell restoration, and relaunch.
-4. Open boundaries: Windows 3.1 full-CD, broader application/device/audio/printing coverage, real-hardware evidence, Windows 95, and Windows 98.
-5. This early bounded result does not waive the Phase 6/7 exit gates or close Phase 9 as a whole.
+3. The focused lane proves two 640x480 Enhanced Mode starts, exactly one linear 1:1 PS/2 pointer, native Sound Blaster startup audio, real `CANYON.MID` playback with objective AdLib WAV evidence, clean generic DOS-VM enter/exit, an unprofiled DOS/4GW Doom process with automatic memory and clean return, Calculator launch, task-scoped `Alt+F4`, Program Manager survival, clean CiukiOS shell restoration, and relaunch.
+4. `_DEFAULT.PIF` and `DOSPRMPT.PIF` request all available conventional/EMS/XMS memory. DOSMGR synthetic PSP arenas and post-startup EXEC cleanup are generic kernel behavior, not per-title launch profiles.
+5. Open boundaries: Windows 3.1 full-CD, broader application/device/multimedia/printing coverage, real-hardware evidence, Windows 95, and Windows 98.
+6. This bounded result does not waive the Phase 6/7 exit gates or close Phase 9 as a whole.
 
 ## Phase 10 - Build and Release Discipline
 **STATUS: ACTIVE CROSS-CUTTING WORK; NOT CLOSED**
@@ -126,8 +148,8 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 2. `full` profile: complete runtime with shell-first behavior.
 3. `full-cd` profile: live/install behavior with D: drive semantics and installer safety gates.
 4. Regression pipeline on emulators and real legacy hardware.
-- Evidence (2026-09-01): focused aggregate PASS; deterministic full-CD read beyond LBA 65,535 PASS; shell stability and DRVLOAD PASS; runtime direct-CD-to-HDD install and autonomous C: boot PASS; focused Costa, DOSNavigator, networking, and Windows 3.1 compatibility lanes PASS within their documented boundaries.
-- Boundary: Phase 5 ownership closure is enforced independently by its loader/kernel boundary gate. The aggregate does not include the long installer or game/audio taxonomy lanes and does not close the Phase 6 external corpus.
+- Evidence (2026-09-01): expanded aggregate PASS across full/full-CD, ownership, shell, CuteMouse, Costa, unmodified DOSNavigator with same-boot cleanup, WOLF3D, original Doom gameplay/audio, three-layer DOS SB16 validation, doom-vanille gameplay/audio/memory, and Windows 3.1; deterministic full-CD read beyond LBA 65,535 PASS; runtime direct-CD-to-HDD install and autonomous C: boot PASS in its separate long lane; focused networking PASS.
+- Boundary: Phase 5 ownership closure is enforced independently by its loader/kernel boundary gate. The aggregate includes locally available game/audio and Windows workloads, but not the long installer or focused networking lanes, and it does not close the Phase 6 external corpus.
 
 ## Advancement Criteria
 1. Every milestone must have reproducible tests with fresh results from the same checkout as the claim.

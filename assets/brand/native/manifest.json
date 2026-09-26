@@ -1,0 +1,33 @@
+{
+  "source": "assets/brand/ciuki-logo.png",
+  "source_sha256": "17210ac9cfe07c54d6b0069a1502a036d52cb6340715ad47bdd54fa4dd386620",
+  "source_dimensions": [
+    1254,
+    1254
+  ],
+  "sizes": [
+    16,
+    24,
+    64
+  ],
+  "logo_colors": 64,
+  "palette_indices": [
+    16,
+    79
+  ],
+  "transparent_index": 255,
+  "alpha_threshold": 128,
+  "resampling": "Pillow LANCZOS, complete original canvas",
+  "pillow_version": "12.3.0",
+  "fallback": "Same scaled pixels mapped to nearest existing 16 UI colours only for planar VGA",
+  "files": {
+    "assets/brand/native/ciuki-16.bin": "e4bf73becba9eee3009f2135dfc016eb3bf6c75fd8f97a03a92d07572ea76010",
+    "assets/brand/native/ciuki-16.png": "413c3363b621c60024442c7ef974b019e360a9f0c4a6e1aa667e4842c4016e7e",
+    "assets/brand/native/ciuki-24.bin": "de394da89d0c0ffb2a0717d8e2f653800c71293fd81862b4cf2250327c5c0bf9",
+    "assets/brand/native/ciuki-24.png": "5c557505599690bf3682587567afabf671728af106ae8d885bc603333ebffadf",
+    "assets/brand/native/ciuki-64.bin": "80eed4d8b0f62bda707f026404d640175bd70b11bdad74d350d67d06841e3ca0",
+    "assets/brand/native/ciuki-64.png": "67070b368a27347a4c171e1765aeff46de9235a5ae2364779e758264fe7d9a11",
+    "assets/brand/native/fallback.bin": "585b68d138b1685018585ae5467dbaad3d3fcd702c99d9d837e76a5a58fe12f7",
+    "src/com/ciuki_logo_palette.inc": "1dcee7af6e9df17513250281ab762eb4316dbf5883de9884ed8baa725f2a7d2f"
+  }
+}

@@ -1,0 +1,75 @@
+diff --git a/Src/HDPMI/INIT.ASM b/Src/HDPMI/INIT.ASM
+index ad79f09..91248f5 100644
+--- a/Src/HDPMI/INIT.ASM
++++ b/Src/HDPMI/INIT.ASM
+@@ -653,10 +653,14 @@ nodpmi:
+ 	jz @F
+ 	mov ax,4310h
+ 	int 2fh
+ 	mov word ptr [xmsaddr+0],bx
+ 	mov word ptr [xmsaddr+2],es
+ 	or fHost, FH_XMS
++	; CiukiOS identifies as XMS 3.0 for Windows 3.1 DOSX compatibility, but
++	; intentionally exposes the stable 16-bit allocation ABI to this host.
++	; Do not select AH=88h/89h merely from the advertised version.
++	or bEnvFlags, ENVF_NOXMS30
+ 	test bEnvFlags, ENVF_NOXMS30
+ 	jnz @F
+ 	mov ah,00
+ 	call [xmsaddr]
+@@ -932,23 +932,29 @@ endif
+ 
+ ;--- this log msg will cause a GPF, since limit CS is now too low
+ ;	@dprintf "initsvr_pm: exit, esp=%lX", esp
+-	jmp initsvr_pm_done
+-initsvr_pm_failed2:
+-initsvr_pm_failed:
+-	@dprintf "initsvr_pm: failure"
+-	call pm_exit_pm
+-	stc
+-initsvr_pm_done:
+-pmfirst_done:
+-	@rawjmp_rm _initsvr_rm2
++	; Carry an explicit status through the low-level mode switch. CiukiDOS
++	; exposes a stale carry flag here even though protected-mode setup finished.
++	xor al, al
++	@rawjmp_rm _initsvr_rm2
++initsvr_pm_failed2:
++initsvr_pm_failed:
++	@dprintf "initsvr_pm: failure"
++	call pm_exit_pm
++pmfirst_done:
++	mov al, 1
++	@rawjmp_rm _initsvr_rm2
+ _initsvr_pm endp
+ 
+ _ITEXT32 ends
+ 
+ 	@ResetTrace
+ 
+-_initsvr_rm2 proc
+-	sti
++_initsvr_rm2 proc
++	or al, al
++	jz @F
++	stc
++@@:
++	sti
+ 	pushf
+ if ?HSINEXTMEM
+ ;--- release the dos memory that was temporarily used
+diff --git a/Src/HDPMI/PAGEMGR.ASM b/Src/HDPMI/PAGEMGR.ASM
+index cbd3559..938726f 100644
+--- a/Src/HDPMI/PAGEMGR.ASM
++++ b/Src/HDPMI/PAGEMGR.ASM
+@@ -3414,7 +3414,9 @@ if ?XMSBLOCKCNT
+ 	jnc @F
+ 	shr cl,3			;0->0, 8->1, 16->2	24->3
+ 	neg cl				;0->0,	 -1,	-2	   -3
+-	add cl,4			;	4	  3 	 2		1
++	; Use fewer, larger physical pools on CiukiDOS. This leaves enough XMS
++	; handles for SBEMU while its DJGPP heap is being committed.
++	add cl,3			;	3	  2 	 1		0
+ 	shr eax,cl			;largest block / (16|8|4|2)
+ @@:
+ 	pop ecx

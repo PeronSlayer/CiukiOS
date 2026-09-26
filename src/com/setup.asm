@@ -1,7 +1,8 @@
-; setup.asm - CiukiOS SETUP.COM MVP (FULL-only stream)
-; Text-mode keyboard wizard + install pipeline for DOS COM runtime.
+; setup.asm - CiukiOS installer and FAT16 disk preparation.
+; The live CD uses the VGA graphical wizard; legacy manifest mode is retained.
 
 bits 16
+cpu 386
 org 0x0100
 
 %define FILE_COUNT 9
@@ -12,13 +13,21 @@ org 0x0100
 %define RAW_FAT_SPT 63
 %define RAW_FAT_HEADS 16
 %define RAW_BOOT_DRIVE 0x80
-%define RAW_DATA_LBA 359
+%define RAW_DATA_LBA (73 + 2 * 128 + 32)
 %define RAW_APPS_DIR_LBA (RAW_DATA_LBA + 8)
 %define RAW_HDD_SOURCE_DRIVE 0x80
-%define RAW_HDD_TARGET_DRIVE 0x81
-%define RAW_HDD_CLONE_SECTORS_LO 0x003F
-%define RAW_HDD_CLONE_SECTORS_HI 0x0004
-%define RAW_HDD_BATCH_SECTORS    8           ; multi-sector batch size; matches io_buffer 4 KB
+%define RAW_HDD_TARGET_DRIVE [raw_target_bios]
+%define RAW_HDD_PARTITION_LBA 63
+%ifndef RAW_HDD_PARTITION_SECTORS
+%define RAW_HDD_PARTITION_SECTORS 0x00040000
+%endif
+%define RAW_HDD_CLONE_SECTORS (RAW_HDD_PARTITION_SECTORS + RAW_HDD_PARTITION_LBA)
+%define RAW_HDD_CLONE_SECTORS_LO (RAW_HDD_CLONE_SECTORS & 0xFFFF)
+%define RAW_HDD_CLONE_SECTORS_HI ((RAW_HDD_CLONE_SECTORS >> 16) & 0xFFFF)
+; Keep each optical READ(10) to one native 2048-byte CD block.  Older ATAPI
+; mechanisms (and marginal CD-RW media) are materially more reliable when a
+; failed block can be retried in isolation instead of as a 4096-byte request.
+%define RAW_HDD_BATCH_SECTORS    4
 ; Patch target for the installed-default-drive byte inside stage1 (the imm8
 ; of "mov byte [dos_default_drive], DOS_DEFAULT_DRIVE_INDEX"). The build
 ; computes LBA/offset from the stage1 listing and overrides these via -D;
@@ -36,14 +45,26 @@ org 0x0100
 ; Direct ATA port I/O — used for all target HDD writes to avoid BIOS INT 13h
 ; wedge on the ThinkPad T23 (and similar hardware) where the BIOS write
 ; handler sometimes never returns after many sequential calls.
-%define ATA_PRI_DATA    0x1F0   ; 16-bit data register
-%define ATA_PRI_NSECT   0x1F2   ; sector count
-%define ATA_PRI_LBAL    0x1F3   ; LBA bits [7:0]
-%define ATA_PRI_LBAM    0x1F4   ; LBA bits [15:8]
-%define ATA_PRI_LBAH    0x1F5   ; LBA bits [23:16]
-%define ATA_PRI_DEV     0x1F6   ; device/head (bit6=LBA, bit4=slave)
-%define ATA_PRI_STATUS  0x1F7   ; status (read) / command (write)
-%define ATA_PRI_CTRL    0x3F6   ; alt-status / device control
+; ATA register offsets.  The actual command/control bases and master/slave
+; bit are derived from the BIOS EDD 3.0 device path before any target write.
+; This keeps the raw writer usable on both legacy IDE channels and avoids
+; silently writing primary-master when BIOS drive 81h maps elsewhere.
+%define ATA_REG_DATA    0x00
+%define ATA_REG_FEATURE 0x01
+%define ATA_REG_NSECT   0x02
+%define ATA_REG_LBAL    0x03
+%define ATA_REG_LBAM    0x04
+%define ATA_REG_LBAH    0x05
+%define ATA_REG_DEV     0x06
+%define ATA_REG_STATUS  0x07
+%define ATA_CMD_DEVICE_RESET 0x08
+%define ATA_CMD_PACKET  0xA0
+%define ATAPI_CMD_REQUEST_SENSE 0x03
+%define ATAPI_CMD_READ10 0x28
+%define ATAPI_READ_RETRIES 12
+%ifndef ATAPI_MIRROR_BLOCKS
+%define ATAPI_MIRROR_BLOCKS 0
+%endif
 %ifndef SETUP_ENABLE_RAW_HDD_INSTALL
 %define SETUP_ENABLE_RAW_HDD_INSTALL 0
 %endif
@@ -52,6 +73,9 @@ org 0x0100
 %endif
 %ifndef SETUP_LIVE_CD_MODE
 %define SETUP_LIVE_CD_MODE 0
+%endif
+%ifndef SETUP_FORCE_MEMDISK_SOURCE
+%define SETUP_FORCE_MEMDISK_SOURCE 0
 %endif
 %ifndef SETUP_RAW_TARGET_DRIVE_INDEX
 %if SETUP_LIVE_CD_MODE
@@ -62,6 +86,11 @@ org 0x0100
 %endif
 
 start:
+    cli
+    mov ax, cs
+    mov ss, ax
+    mov sp, setup_stack_top
+    sti
     cld
     push cs
     pop ds
@@ -97,6 +126,9 @@ start:
     jc install_fail
 
 %if SETUP_LIVE_CD_MODE
+    call gui_main
+    mov ax, 0x4C00
+    int 0x21
     call visual_main_loop
     jc user_abort
     ; visual flow has prepared selected_profile/target_drive and confirmed destroy.
@@ -212,9 +244,8 @@ finalize:
     cmp byte [install_ok], 1
     je .do_reboot
 %if SETUP_LIVE_CD_MODE
-    ; In live-CD mode, never return to the shell on failure — the BIOS may be
-    ; in a degraded state after INT 13h errors. Show the error and reboot so
-    ; the user can try again from a clean BIOS state.
+    ; Keep a failed install on the Live CD.  The target MBR is deliberately
+    ; invalid until commit, and returning to D: avoids booting partial media.
     call vis_install_fail_prompt
 %endif
     mov ax, 0x4C01
@@ -549,1340 +580,63 @@ guard_raw_hdd_topology:
     stc
     ret
 
-; format_target_hdd: write a minimal valid FAT16 structure to the target HDD.
-;
-; Layout written (absolute disk LBAs):
-;   LBA  0      : MBR (partition table, one FAT16B entry at LBA 63)
-;   LBA  63     : FAT16 VBR / BPB
-;   LBA  64-66  : Reserved sectors 2-4 (zeros)
-;   LBA  67-194 : FAT1 (128 sectors; sector 0 has media-byte entry, rest zeros)
-;   LBA 195-322 : FAT2 (identical to FAT1)
-;   LBA 323-354 : Root directory (32 sectors of zeros)
-;
-; Total I/O: ~294 sectors vs 262144 for zero-fill — ~900× reduction.
-;
-format_target_hdd:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push cs
-    pop ds
-    push cs
-    pop es
-
-    call serial_init_com1
-    mov dx, msg_serial_hdd_format_start
-    call serial_write_z
-    call serial_write_crlf
-
-    ; Hard reset target drive before any I/O to clear BIOS state.
-    xor ax, ax
-    mov dl, RAW_HDD_TARGET_DRIVE
-    int 0x13
-
-    call raw_init_drive_geometries
-
-    ; ---------------------------------------------------------------
-    ; Prepare zero-filled io_buffer (used as the base for all writes).
-    ; ---------------------------------------------------------------
-    xor ax, ax
-    mov di, io_buffer
-    mov cx, 2048            ; 4096 bytes / 2
-    rep stosw
-
-    ; ---------------------------------------------------------------
-    ; Step 1: Write MBR at LBA 0
-    ; ---------------------------------------------------------------
-    ; Partition table entry at offset 446 (16 bytes):
-    ;   +0  status      = 0x80 (active)
-    ;   +1  CHS_start   = {0x01,0x01,0x00}  (H=1 S=1 C=0 → LBA 63)
-    ;   +4  type        = 0x06 (FAT16B, >32 MB)
-    ;   +5  CHS_end     = {0xFE,0xFF,0xFF}  (saturated for large disk)
-    ;   +8  LBA_start   = 63  (LE32)
-    ;   +12 LBA_size    = 262144 (LE32)
-    mov byte [io_buffer + 446], 0x80
-    mov byte [io_buffer + 447], 0x01
-    mov byte [io_buffer + 448], 0x01
-    mov byte [io_buffer + 449], 0x00
-    mov byte [io_buffer + 450], 0x06
-    mov byte [io_buffer + 451], 0xFE
-    mov byte [io_buffer + 452], 0xFF
-    mov byte [io_buffer + 453], 0xFF
-    mov word [io_buffer + 454], 63      ; LBA_start low word
-    mov word [io_buffer + 456], 0       ; LBA_start high word
-    mov word [io_buffer + 458], 0x0000  ; LBA_size = 0x00040000
-    mov word [io_buffer + 460], 0x0004
-    mov byte [io_buffer + 510], 0x55
-    mov byte [io_buffer + 511], 0xAA
-
-    mov word [raw_clone_lba_lo], 0
-    mov word [raw_clone_lba_hi], 0
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    mov cx, 1
-    call raw_ata_write_n
-    jc .format_fail
-
-%if SETUP_LIVE_CD_MODE
-    mov al, 10
-    call vis_format_phase_update
-%endif
-
-    ; ---------------------------------------------------------------
-    ; Step 2: Write VBR (FAT16 BPB) at LBA 63
-    ; ---------------------------------------------------------------
-    ; Zero io_buffer first, then fill BPB fields in place.
-    xor ax, ax
-    mov di, io_buffer
-    mov cx, 2048
-    rep stosw
-
-    ; Jump + NOP (JMP SHORT +0x58, NOP) — jumps over the BPB to boot code area.
-    mov byte [io_buffer + 0], 0xEB
-    mov byte [io_buffer + 1], 0x58
-    mov byte [io_buffer + 2], 0x90
-    ; OEM name: "CIUKIOS "
-    mov byte [io_buffer + 3],  'C'
-    mov byte [io_buffer + 4],  'I'
-    mov byte [io_buffer + 5],  'U'
-    mov byte [io_buffer + 6],  'K'
-    mov byte [io_buffer + 7],  'I'
-    mov byte [io_buffer + 8],  'O'
-    mov byte [io_buffer + 9],  'S'
-    mov byte [io_buffer + 10], ' '
-    ; BPB_BytsPerSec = 512
-    mov word [io_buffer + 11], 512
-    ; BPB_SecPerClus = 8
-    mov byte [io_buffer + 13], 8
-    ; BPB_RsvdSecCnt = 4
-    mov word [io_buffer + 14], 4
-    ; BPB_NumFATs = 2
-    mov byte [io_buffer + 16], 2
-    ; BPB_RootEntCnt = 512
-    mov word [io_buffer + 17], 512
-    ; BPB_TotSec16 = 0 (use TotSec32)
-    mov word [io_buffer + 19], 0
-    ; BPB_Media = 0xF8
-    mov byte [io_buffer + 21], 0xF8
-    ; BPB_FATSz16 = 128
-    mov word [io_buffer + 22], 128
-    ; BPB_SecPerTrk = 63
-    mov word [io_buffer + 24], 63
-    ; BPB_NumHeads = 255
-    mov word [io_buffer + 26], 255
-    ; BPB_HiddSec = 63
-    mov dword [io_buffer + 28], 63
-    ; BPB_TotSec32 = 262144 = 0x00040000
-    mov dword [io_buffer + 32], 0x00040000
-    ; BS_DrvNum = 0x80, BS_Reserved1 = 0, BS_BootSig = 0x29
-    mov byte [io_buffer + 36], 0x80
-    mov byte [io_buffer + 37], 0
-    mov byte [io_buffer + 38], 0x29
-    ; BS_VolID = 0x4B49554B ("KIUK")
-    mov dword [io_buffer + 39], 0x4B49554B
-    ; BS_VolLab = "NO NAME    " (11 bytes)
-    mov byte [io_buffer + 43], 'N'
-    mov byte [io_buffer + 44], 'O'
-    mov byte [io_buffer + 45], ' '
-    mov byte [io_buffer + 46], 'N'
-    mov byte [io_buffer + 47], 'A'
-    mov byte [io_buffer + 48], 'M'
-    mov byte [io_buffer + 49], 'E'
-    mov byte [io_buffer + 50], ' '
-    mov byte [io_buffer + 51], ' '
-    mov byte [io_buffer + 52], ' '
-    mov byte [io_buffer + 53], ' '
-    ; BS_FilSysType = "FAT16   " (8 bytes)
-    mov byte [io_buffer + 54], 'F'
-    mov byte [io_buffer + 55], 'A'
-    mov byte [io_buffer + 56], 'T'
-    mov byte [io_buffer + 57], '1'
-    mov byte [io_buffer + 58], '6'
-    mov byte [io_buffer + 59], ' '
-    mov byte [io_buffer + 60], ' '
-    mov byte [io_buffer + 61], ' '
-    ; Boot signature
-    mov byte [io_buffer + 510], 0x55
-    mov byte [io_buffer + 511], 0xAA
-
-    mov word [raw_clone_lba_lo], 63
-    mov word [raw_clone_lba_hi], 0
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    mov cx, 1
-    call raw_ata_write_n
-    jc .format_fail
-
-%if SETUP_LIVE_CD_MODE
-    mov al, 20
-    call vis_format_phase_update
-%endif
-
-    ; ---------------------------------------------------------------
-    ; Step 3: Write 3 reserved sectors at LBA 64-66 (zeros)
-    ; ---------------------------------------------------------------
-    ; Clear BPB area from io_buffer (leave buffer as all zeros)
-    xor ax, ax
-    mov di, io_buffer
-    mov cx, 2048
-    rep stosw
-
-    mov word [raw_clone_lba_lo], 64
-    mov word [raw_clone_lba_hi], 0
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    mov cx, 3
-    call raw_ata_write_n
-    jc .format_fail
-
-%if SETUP_LIVE_CD_MODE
-    mov al, 25
-    call vis_format_phase_update
-%endif
-
-    ; ---------------------------------------------------------------
-    ; Step 4: Write FAT1 at LBA 67 (128 sectors)
-    ; Sector 0: media-byte entry (0xF8FF FFFF, rest zeros)
-    ; Sectors 1-127: zeros
-    ; ---------------------------------------------------------------
-    mov byte [io_buffer + 0], 0xF8
-    mov byte [io_buffer + 1], 0xFF
-    mov byte [io_buffer + 2], 0xFF
-    mov byte [io_buffer + 3], 0xFF
-
-    mov word [raw_clone_lba_lo], 67
-    mov word [raw_clone_lba_hi], 0
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    mov cx, 1
-    call raw_ata_write_n
-    jc .format_fail
-
-    ; Clear media bytes, then write sectors 1-127 as zeros in batches.
-    mov dword [io_buffer], 0
-    mov word [raw_clone_lba_lo], 68
-    mov word [raw_clone_lba_hi], 0
-    mov word [format_sectors_done], 127  ; reuse as countdown
-
-.fat1_loop:
-    cmp word [format_sectors_done], 0
-    je .fat1_done
-    mov cx, RAW_HDD_BATCH_SECTORS
-    cmp [format_sectors_done], cx
-    jae .fat1_full
-    mov cx, [format_sectors_done]
-.fat1_full:
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    call raw_ata_write_n
-    jc .format_fail
-    sub [format_sectors_done], cx
-    add [raw_clone_lba_lo], cx
-    adc word [raw_clone_lba_hi], 0
-    jmp .fat1_loop
-.fat1_done:
-
-%if SETUP_LIVE_CD_MODE
-    mov al, 50
-    call vis_format_phase_update
-%endif
-
-    ; ---------------------------------------------------------------
-    ; Step 5: Write FAT2 at LBA 195 (128 sectors, identical to FAT1)
-    ; ---------------------------------------------------------------
-    mov byte [io_buffer + 0], 0xF8
-    mov byte [io_buffer + 1], 0xFF
-    mov byte [io_buffer + 2], 0xFF
-    mov byte [io_buffer + 3], 0xFF
-
-    mov word [raw_clone_lba_lo], 195
-    mov word [raw_clone_lba_hi], 0
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    mov cx, 1
-    call raw_ata_write_n
-    jc .format_fail
-
-    mov dword [io_buffer], 0
-    mov word [raw_clone_lba_lo], 196
-    mov word [raw_clone_lba_hi], 0
-    mov word [format_sectors_done], 127
-
-.fat2_loop:
-    cmp word [format_sectors_done], 0
-    je .fat2_done
-    mov cx, RAW_HDD_BATCH_SECTORS
-    cmp [format_sectors_done], cx
-    jae .fat2_full
-    mov cx, [format_sectors_done]
-.fat2_full:
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    call raw_ata_write_n
-    jc .format_fail
-    sub [format_sectors_done], cx
-    add [raw_clone_lba_lo], cx
-    adc word [raw_clone_lba_hi], 0
-    jmp .fat2_loop
-.fat2_done:
-
-%if SETUP_LIVE_CD_MODE
-    mov al, 80
-    call vis_format_phase_update
-%endif
-
-    ; ---------------------------------------------------------------
-    ; Step 6: Write root directory at LBA 323 (32 sectors of zeros)
-    ; ---------------------------------------------------------------
-    mov word [raw_clone_lba_lo], 323
-    mov word [raw_clone_lba_hi], 0
-    mov word [format_sectors_done], 32
-
-.rootdir_loop:
-    cmp word [format_sectors_done], 0
-    je .format_done
-    mov cx, RAW_HDD_BATCH_SECTORS
-    cmp [format_sectors_done], cx
-    jae .rootdir_full
-    mov cx, [format_sectors_done]
-.rootdir_full:
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    call raw_ata_write_n
-    jc .format_fail
-    sub [format_sectors_done], cx
-    add [raw_clone_lba_lo], cx
-    adc word [raw_clone_lba_hi], 0
-    jmp .rootdir_loop
-
-.format_done:
-    mov dx, msg_serial_hdd_format_done
-    call serial_write_z
-    call serial_write_crlf
-    clc
-    jmp .format_out
-
-.format_fail:
-    mov word [fail_code], 0x0703
-    mov dx, msg_serial_hdd_format_fail
-    call serial_write_z
-    mov al, [raw_edd_status]
-    call serial_write_hex_byte
-    call serial_write_crlf
-    stc
-
-.format_out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; Visual UI primitives (text mode 80x25 with CP437 box drawing + colors).
-; Active only when SETUP_LIVE_CD_MODE=1.
-; -----------------------------------------------------------------------------
-%define VIS_ATTR_BG       0x17     ; white on blue (background)
-%define VIS_ATTR_TITLE    0x1F     ; bright white on blue
-%define VIS_ATTR_FRAME    0x17     ; white on blue
-%define VIS_ATTR_ITEM     0x17     ; normal item
-%define VIS_ATTR_SELECTED 0x70     ; black on white (highlighted)
-%define VIS_ATTR_HINT     0x1B     ; bright cyan on blue
-%define VIS_ATTR_OK       0x1A     ; bright green on blue
-%define VIS_ATTR_ERR      0x1C     ; bright red on blue
-
-vis_clear_screen:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ax, 0x0600
-    mov bh, VIS_ATTR_BG
-    xor cx, cx
-    mov dx, 0x184F
-    int 0x10
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-vis_set_cursor:
-    ; DH=row, DL=col
-    push ax
-    push bx
-    mov ah, 0x02
-    xor bh, bh
-    int 0x10
-    pop bx
-    pop ax
-    ret
-
-vis_putc_attr:
-    ; AL=char, BL=attribute, CX=count
-    push ax
-    push bx
-    mov ah, 0x09
-    xor bh, bh
-    int 0x10
-    pop bx
-    pop ax
-    ret
-
-vis_print_z_at:
-    ; DH=row, DL=col, BL=attribute, SI=zero-terminated string
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call vis_set_cursor
-.loop:
-    lodsb
-    or al, al
-    jz .done
-    push si
-    push dx
-    mov ah, 0x09
-    xor bh, bh
-    mov cx, 1
-    int 0x10
-    pop dx
-    inc dl
-    push dx
-    mov ah, 0x02
-    xor bh, bh
-    int 0x10
-    pop dx
-    pop si
-    jmp .loop
-.done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-vis_draw_box:
-    ; DH=top row, DL=left col, CH=height, CL=width, BL=attr
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    ; top-left corner
-    call vis_set_cursor
-    mov al, 0xC9
-    mov cx, 1
-    call vis_putc_attr
-    inc dl
-    call vis_set_cursor
-    mov al, 0xCD
-    mov cl, [bp_box_w]
-    sub cl, 2
-    xor ch, ch
-    call vis_putc_attr
-    add dl, [bp_box_w]
-    sub dl, 2
-    call vis_set_cursor
-    mov al, 0xBB
-    mov cx, 1
-    call vis_putc_attr
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; Simpler box drawing using a register-only approach.
-vis_box_draw:
-    ; DH=top, DL=left, BH=height, BL=width, AH=attribute
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov [bp_box_attr], ah
-
-    ; Top row
-    call vis_set_cursor
-    mov al, 0xC9
-    mov bh, [bp_box_attr]
-    push bx
-    mov bl, bh
-    mov cx, 1
-    mov ah, 0x09
-    xor bh, bh
-    int 0x10
-    pop bx
-    inc dl
-    call vis_set_cursor
-    mov al, 0xCD
-    mov bh, [bp_box_attr]
-    push bx
-    mov bl, bh
-    mov cl, [bp_box_w_in]
-    xor ch, ch
-    sub cl, 2
-    mov ah, 0x09
-    xor bh, bh
-    int 0x10
-    pop bx
-
-    ; (top-right + sides + bottom omitted — simplified version below)
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vis_box: minimal frame draw (top, sides, bottom) using BIOS scroll for solid
-; background fill, then writing CP437 corner/edge chars.
-; Inputs: top row in DH, left col in DL, height in CH, width in CL, attr in AH
-; -----------------------------------------------------------------------------
-vis_box:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov [box_top], dh
-    mov [box_left], dl
-    mov [box_height], ch
-    mov [box_width], cl
-    mov [box_attr], ah
-
-    ; Fill background
-    mov ah, 0x06
-    xor al, al
-    mov bh, [box_attr]
-    mov ch, [box_top]
-    mov cl, [box_left]
-    mov dh, [box_top]
-    add dh, [box_height]
-    dec dh
-    mov dl, [box_left]
-    add dl, [box_width]
-    dec dl
-    int 0x10
-
-    ; Top edge
-    mov dh, [box_top]
-    mov dl, [box_left]
-    call vis_set_cursor
-    mov al, 0xC9
-    mov bl, [box_attr]
-    mov cx, 1
-    call vis_putc_attr
-    mov dh, [box_top]
-    mov dl, [box_left]
-    inc dl
-    call vis_set_cursor
-    mov al, 0xCD
-    mov bl, [box_attr]
-    xor ch, ch
-    mov cl, [box_width]
-    sub cl, 2
-    call vis_putc_attr
-    mov dh, [box_top]
-    mov dl, [box_left]
-    add dl, [box_width]
-    dec dl
-    call vis_set_cursor
-    mov al, 0xBB
-    mov bl, [box_attr]
-    mov cx, 1
-    call vis_putc_attr
-
-    ; Sides
-    xor ch, ch
-    mov cl, [box_height]
-    sub cl, 2
-    mov dh, [box_top]
-    inc dh
-.side_loop:
-    push cx
-    mov dl, [box_left]
-    call vis_set_cursor
-    mov al, 0xBA
-    mov bl, [box_attr]
-    mov cx, 1
-    call vis_putc_attr
-    mov dl, [box_left]
-    add dl, [box_width]
-    dec dl
-    call vis_set_cursor
-    mov al, 0xBA
-    mov bl, [box_attr]
-    mov cx, 1
-    call vis_putc_attr
-    pop cx
-    inc dh
-    loop .side_loop
-
-    ; Bottom edge
-    mov dh, [box_top]
-    add dh, [box_height]
-    dec dh
-    mov dl, [box_left]
-    call vis_set_cursor
-    mov al, 0xC8
-    mov bl, [box_attr]
-    mov cx, 1
-    call vis_putc_attr
-    mov dh, [box_top]
-    add dh, [box_height]
-    dec dh
-    mov dl, [box_left]
-    inc dl
-    call vis_set_cursor
-    mov al, 0xCD
-    mov bl, [box_attr]
-    xor ch, ch
-    mov cl, [box_width]
-    sub cl, 2
-    call vis_putc_attr
-    mov dh, [box_top]
-    add dh, [box_height]
-    dec dh
-    mov dl, [box_left]
-    add dl, [box_width]
-    dec dl
-    call vis_set_cursor
-    mov al, 0xBC
-    mov bl, [box_attr]
-    mov cx, 1
-    call vis_putc_attr
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vis_progress_bar: render a progress bar at (DH,DL) of width CL.
-; AL = percent 0..100. Filled with 0xDB, empty with 0xB0.
-; -----------------------------------------------------------------------------
-vis_progress_bar:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    mov [pb_top], dh
-    mov [pb_left], dl
-    mov [pb_width], cl
-    mov [pb_pct], al
-
-    ; Compute filled count = pct * width / 100
-    xor ah, ah
-    mov bl, [pb_width]
-    mul bl                         ; AX = pct * width
-    mov bl, 100
-    div bl                         ; AL = filled, AH = remainder
-    mov [pb_filled], al
-
-    mov dh, [pb_top]
-    mov dl, [pb_left]
-    call vis_set_cursor
-    mov al, 0xDB
-    mov bl, VIS_ATTR_OK
-    xor ch, ch
-    mov cl, [pb_filled]
-    cmp cl, 0
-    je .skip_fill
-    call vis_putc_attr
-.skip_fill:
-    mov dh, [pb_top]
-    mov dl, [pb_left]
-    add dl, [pb_filled]
-    call vis_set_cursor
-    mov al, 0xB0
-    mov bl, VIS_ATTR_FRAME
-    xor ch, ch
-    mov cl, [pb_width]
-    sub cl, [pb_filled]
-    cmp cl, 0
-    je .skip_empty
-    call vis_putc_attr
-.skip_empty:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; visual_main_loop: render menu, accept F/I/R/Esc, return.
-; CF=0 if user picked Install (proceed with install pipeline), CF=1 if Esc.
-; Side effects: when picking Format, exec FORMAT.COM and redraw.
-; -----------------------------------------------------------------------------
-visual_main_loop:
-    mov byte [selected_profile], 1               ; minimal profile = clone all
-    mov byte [target_drive], 2                   ; C:
-    mov byte [visual_destroy_confirmed], 0
-
-.redraw:
-    call vis_clear_screen
-    ; Title bar
-    mov dh, 0
-    mov dl, 0
-    call vis_set_cursor
-    mov al, ' '
-    mov bl, VIS_ATTR_TITLE
-    mov cx, 80
-    call vis_putc_attr
-    mov dh, 0
-    mov dl, 26
-    mov bl, VIS_ATTR_TITLE
-    mov si, msg_vis_title
-    call vis_print_z_at
-
-    ; Main panel box
-    mov dh, 5
-    mov dl, 18
-    mov ch, 13
-    mov cl, 44
-    mov ah, VIS_ATTR_FRAME
-    call vis_box
-
-    ; Header inside the box
-    mov dh, 6
-    mov dl, 22
-    mov bl, VIS_ATTR_TITLE
-    mov si, msg_vis_header
-    call vis_print_z_at
-
-    mov dh, 9
-    mov dl, 22
-    mov bl, VIS_ATTR_ITEM
-    mov si, msg_vis_item_format
-    call vis_print_z_at
-
-    mov dh, 11
-    mov dl, 22
-    mov bl, VIS_ATTR_ITEM
-    mov si, msg_vis_item_install
-    call vis_print_z_at
-
-    mov dh, 13
-    mov dl, 22
-    mov bl, VIS_ATTR_ITEM
-    mov si, msg_vis_item_reboot
-    call vis_print_z_at
-
-    mov dh, 15
-    mov dl, 22
-    mov bl, VIS_ATTR_ITEM
-    mov si, msg_vis_item_exit
-    call vis_print_z_at
-
-    ; Hint bar
-    mov dh, 22
-    mov dl, 12
-    mov bl, VIS_ATTR_HINT
-    mov si, msg_vis_hint
-    call vis_print_z_at
-
-    ; Park cursor off-screen
-    mov dh, 24
-    mov dl, 79
-    call vis_set_cursor
-
-.wait_key:
-    call read_key
-    cmp al, 27
-    je .esc
-    cmp al, 'F'
-    je .do_format
-    cmp al, 'f'
-    je .do_format
-    cmp al, 'I'
-    je .do_install
-    cmp al, 'i'
-    je .do_install
-    cmp al, 'R'
-    je .do_reboot
-    cmp al, 'r'
-    je .do_reboot
-    cmp al, 13
-    je .do_install
-    jmp .wait_key
-
-.do_format:
-    call vis_run_format
-    jmp .redraw
-
-.do_install:
-    call vis_confirm_destroy
-    jc .redraw
-    mov byte [visual_destroy_confirmed], 1
-    clc
-    ret
-
-.do_reboot:
-    call reboot_system
-
-.esc:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; vis_confirm_destroy: visual Yes/No dialog before clobbering target HDD.
-; CF=0 if confirmed, CF=1 if cancelled.
-; -----------------------------------------------------------------------------
-vis_confirm_destroy:
-    mov dh, 9
-    mov dl, 20
-    mov ch, 7
-    mov cl, 40
-    mov ah, VIS_ATTR_ERR
-    call vis_box
-
-    mov dh, 10
-    mov dl, 24
-    mov bl, VIS_ATTR_ERR
-    mov si, msg_vis_destroy_1
-    call vis_print_z_at
-
-    mov dh, 12
-    mov dl, 24
-    mov bl, VIS_ATTR_ERR
-    mov si, msg_vis_destroy_2
-    call vis_print_z_at
-
-    mov dh, 14
-    mov dl, 24
-    mov bl, VIS_ATTR_HINT
-    mov si, msg_vis_destroy_3
-    call vis_print_z_at
-
-.wait:
-    call read_key
-    cmp al, 'Y'
-    je .yes
-    cmp al, 'y'
-    je .yes
-    cmp al, 'N'
-    je .no
-    cmp al, 'n'
-    je .no
-    cmp al, 27
-    je .no
-    jmp .wait
-
-.yes:
-    clc
-    ret
-
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; vis_run_format: invoke the internal format_target_hdd routine (which uses
-; the same INT 13h EDD+retry+CHS-fallback hardening as install) with a visual
-; progress bar drawn live, then redraw the menu.
-;
-; The standalone FORMAT.COM payload at \APPS\FORMAT.COM remains available
-; from the shell prompt (`run FORMAT.COM /F`) for users who want the
-; standalone DOS tool path.
-; -----------------------------------------------------------------------------
-vis_run_format:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    call vis_clear_screen
-
-    mov dh, 0
-    mov dl, 0
-    call vis_set_cursor
-    mov al, ' '
-    mov bl, VIS_ATTR_TITLE
-    mov cx, 80
-    call vis_putc_attr
-    mov dh, 0
-    mov dl, 26
-    mov bl, VIS_ATTR_TITLE
-    mov si, msg_vis_format_title
-    call vis_print_z_at
-
-    mov dh, 8
-    mov dl, 8
-    mov ch, 7
-    mov cl, 64
-    mov ah, VIS_ATTR_FRAME
-    call vis_box
-
-    mov dh, 10
-    mov dl, 12
-    mov bl, VIS_ATTR_ITEM
-    mov si, msg_vis_install_phase_format
-    call vis_print_z_at
-
-    xor al, al
-    call vis_format_phase_update
-
-    mov dh, 24
-    mov dl, 79
-    call vis_set_cursor
-
-    call format_target_hdd
-    jc .fail
-
-    mov al, 100
-    call vis_format_phase_update
-
-    mov dh, 13
-    mov dl, 12
-    mov bl, VIS_ATTR_OK
-    mov si, msg_vis_format_done
-    call vis_print_z_at
-    call vis_press_any_key
-    jmp .out
-
-.fail:
-    mov dh, 13
-    mov dl, 12
-    mov bl, VIS_ATTR_ERR
-    mov si, msg_vis_format_fail
-    call vis_print_z_at
-    call vis_press_any_key
-
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-vis_press_any_key:
-    mov dh, 14
-    mov dl, 22
-    mov bl, VIS_ATTR_HINT
-    mov si, msg_vis_press_any
-    call vis_print_z_at
-    call read_key
-    ret
-
-; -----------------------------------------------------------------------------
-; vis_install_screen_init: draw the install progress screen (3 phases) once.
-; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
-; Single-bar install progress UI. Layout:
-;   row 0           : title bar (white-on-blue)
-;   row 4..18       : framed panel
-;   row 6           : 'Installing CiukiOS...' centered
-;   row 9, col 12   : phase label (e.g. 'Phase 1/3: Formatting target HDD')
-;   row 11, col 12  : progress bar (width 56)  + pct on right (col 70)
-;   row 14          : status text (changes during operation)
-;   row 22 (footer) : hint
-; -----------------------------------------------------------------------------
-%define VIS_INST_TITLE_ROW    0
-%define VIS_INST_BOX_TOP      4
-%define VIS_INST_BOX_LEFT     8
-%define VIS_INST_BOX_HEIGHT   16
-%define VIS_INST_BOX_WIDTH    64
-%define VIS_INST_HEADER_ROW   6
-%define VIS_INST_PHASE_ROW    9
-%define VIS_INST_BAR_ROW      11
-%define VIS_INST_BAR_COL      12
-%define VIS_INST_BAR_WIDTH    52
-%define VIS_INST_PCT_COL      66
-%define VIS_INST_STATUS_ROW   14
-
-vis_install_screen_init:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    call vis_clear_screen
-
-    ; Top title bar
-    mov dh, VIS_INST_TITLE_ROW
-    mov dl, 0
-    call vis_set_cursor
-    mov al, ' '
-    mov bl, VIS_ATTR_TITLE
-    mov cx, 80
-    call vis_putc_attr
-    mov dh, VIS_INST_TITLE_ROW
-    mov dl, 23
-    mov bl, VIS_ATTR_TITLE
-    mov si, msg_vis_install_titlebar
-    call vis_print_z_at
-
-    ; Outer frame (panel)
-    mov dh, VIS_INST_BOX_TOP
-    mov dl, VIS_INST_BOX_LEFT
-    mov ch, VIS_INST_BOX_HEIGHT
-    mov cl, VIS_INST_BOX_WIDTH
-    mov ah, VIS_ATTR_FRAME
-    call vis_box
-
-    ; Header inside the panel
-    mov dh, VIS_INST_HEADER_ROW
-    mov dl, 28
-    mov bl, VIS_ATTR_TITLE
-    mov si, msg_vis_install_header
-    call vis_print_z_at
-
-    ; Footer hint
-    mov dh, 22
-    mov dl, 22
-    mov bl, VIS_ATTR_HINT
-    mov si, msg_vis_install_hint
-    call vis_print_z_at
-
-    ; Park cursor off panel
-    mov dh, 24
-    mov dl, 79
-    call vis_set_cursor
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; vis_install_set_phase: write a fresh phase label at row 9 and clear the bar.
-; Inputs: SI = phase label string (zero-terminated)
-vis_install_set_phase:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    push si
-    mov dh, VIS_INST_PHASE_ROW
-    mov dl, VIS_INST_BAR_COL
-    call vis_set_cursor
-    mov al, ' '
-    mov bl, VIS_ATTR_BG
-    mov cx, VIS_INST_BAR_WIDTH
-    call vis_putc_attr
-    pop si
-
-    mov dh, VIS_INST_PHASE_ROW
-    mov dl, VIS_INST_BAR_COL
-    mov bl, VIS_ATTR_TITLE
-    call vis_print_z_at
-
-    xor al, al
-    call vis_install_set_pct
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; vis_install_set_pct: render the unified bar at row 11 with the given percent.
-; Input: AL = 0..100
-vis_install_set_pct:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    mov ah, al                          ; preserve pct
-    mov dh, VIS_INST_BAR_ROW
-    mov dl, VIS_INST_BAR_COL
-    xor ch, ch
-    mov cl, VIS_INST_BAR_WIDTH
-    mov al, ah
-    call vis_progress_bar
-
-    ; Clear pct field
-    mov dh, VIS_INST_BAR_ROW
-    mov dl, VIS_INST_PCT_COL
-    call vis_set_cursor
-    mov al, ' '
-    mov bl, VIS_ATTR_OK
-    mov cx, 5
-    call vis_putc_attr
-
-    ; Re-cursor and print decimal + '%'
-    mov dh, VIS_INST_BAR_ROW
-    mov dl, VIS_INST_PCT_COL
-    call vis_set_cursor
-    mov al, ah
-    call vis_print_u8_dec_attr
-    mov al, '%'
-    mov bl, VIS_ATTR_OK
-    mov cx, 1
-    call vis_putc_attr
-
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; vis_install_set_status: write status text at row 14, col 12
-; Input: SI = zero-terminated string
-vis_install_set_status:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    push si
-    mov dh, VIS_INST_STATUS_ROW
-    mov dl, VIS_INST_BAR_COL
-    call vis_set_cursor
-    mov al, ' '
-    mov bl, VIS_ATTR_BG
-    mov cx, VIS_INST_BAR_WIDTH
-    call vis_putc_attr
-    pop si
-
-    mov dh, VIS_INST_STATUS_ROW
-    mov dl, VIS_INST_BAR_COL
-    mov bl, VIS_ATTR_HINT
-    call vis_print_z_at
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- Compatibility shims used by format_target_hdd / raw_hdd_clone_install ---
-vis_format_phase_update:
-    push si
-    cmp byte [vis_install_phase_active], 1
-    jne .skip
-    call vis_install_set_pct
-.skip:
-    pop si
-    ret
-
-vis_clone_phase_update:
-    push si
-    cmp byte [vis_install_phase_active], 2
-    jne .skip
-    call vis_install_set_pct
-.skip:
-    pop si
-    ret
-
-vis_install_phase_clone:
-    push ax
-    push si
-    mov al, 100
-    call vis_install_set_pct
-    mov byte [vis_install_phase_active], 2
-    mov si, msg_vis_install_phase_clone
-    call vis_install_set_phase
-    mov si, msg_vis_install_status_clone
-    call vis_install_set_status
-    pop si
-    pop ax
-    ret
-
-vis_install_phase_format:
-    push ax
-    push si
-    mov byte [vis_install_phase_active], 1
-    mov si, msg_vis_install_phase_format
-    call vis_install_set_phase
-    mov si, msg_vis_install_status_format
-    call vis_install_set_status
-    pop si
-    pop ax
-    ret
-
-vis_install_phase_done:
-    push ax
-    push si
-    mov al, 100
-    call vis_install_set_pct
-    mov byte [vis_install_phase_active], 3
-    mov si, msg_vis_install_phase_patch
-    call vis_install_set_phase
-    mov al, 100
-    call vis_install_set_pct
-    mov si, msg_vis_install_done
-    call vis_install_set_status
-    pop si
-    pop ax
-    ret
-
-; vis_install_eject_prompt: ask the user to remove the live CD before warm
-; reboot, then wait for any key. Without this prompt the BIOS boot order
-; (CD first on most laptops) re-enters the live CD instead of booting the
-; freshly-installed HDD.
-vis_install_eject_prompt:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    ; Bright eject banner inside the install panel
-    mov dh, VIS_INST_STATUS_ROW
-    mov dl, VIS_INST_BAR_COL
-    call vis_set_cursor
-    mov al, ' '
-    mov bl, VIS_ATTR_BG
-    mov cx, VIS_INST_BAR_WIDTH
-    call vis_putc_attr
-    mov dh, VIS_INST_STATUS_ROW
-    mov dl, VIS_INST_BAR_COL
-    mov bl, VIS_ATTR_OK
-    mov si, msg_vis_install_eject
-    call vis_print_z_at
-
-    mov dh, VIS_INST_STATUS_ROW
-    add dh, 2
-    mov dl, VIS_INST_BAR_COL
-    mov bl, VIS_ATTR_HINT
-    mov si, msg_vis_install_eject_hint
-    call vis_print_z_at
-
-    ; Block on a key (bypasses the keyboard buffer state our shell may have left)
-    xor ax, ax
-    int 0x16
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; vis_install_fail_prompt: display installation failure, wait for key, then
-; warm-reboot. Called on install failure in live-CD mode so the user never
-; lands in a potentially broken shell after an INT 13h wedge.
-vis_install_fail_prompt:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov dh, VIS_INST_STATUS_ROW
-    mov dl, VIS_INST_BAR_COL
-    call vis_set_cursor
-    mov al, ' '
-    mov bl, VIS_ATTR_ERR
-    mov cx, VIS_INST_BAR_WIDTH
-    call vis_putc_attr
-    mov dh, VIS_INST_STATUS_ROW
-    mov dl, VIS_INST_BAR_COL
-    mov bl, VIS_ATTR_ERR
-    mov si, msg_vis_install_fail_banner
-    call vis_print_z_at
-
-    mov dh, VIS_INST_STATUS_ROW
-    add dh, 2
-    mov dl, VIS_INST_BAR_COL
-    mov bl, VIS_ATTR_HINT
-    mov si, msg_vis_install_fail_hint
-    call vis_print_z_at
-
-    xor ax, ax
-    int 0x16
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ; Fall through: caller does int 0x21 / 4C01h which won't execute in
-    ; live-CD mode — we reboot directly here.
-    call reboot_system
-    ret
-
-; vis_print_u8_dec_attr: write 0..100 as decimal at cursor with attribute in BL
-; Cursor is advanced by INT 10h AH=0Ah-style writes (we use AH=0Ah no-advance,
-; then manually move). Simpler: emit each digit as char+attr then increment.
-vis_print_u8_dec_attr:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov si, vis_dec_buf + 3
-    mov byte [si], 0
-    mov bl, 10
-.div_loop:
-    xor ah, ah
-    div bl                            ; AL=quot, AH=rem
-    dec si
-    add ah, '0'
-    mov [si], ah
-    or al, al
-    jnz .div_loop
-    mov si, si                        ; SI -> first digit
-.print:
-    mov al, [si]
-    or al, al
-    jz .done
-    push si
-    mov bl, VIS_ATTR_OK
-    mov bh, 0
-    mov cx, 1
-    mov ah, 0x09
-    int 0x10
-    mov ah, 0x03
-    xor bh, bh
-    int 0x10                          ; get cursor
-    inc dl
-    mov ah, 0x02
-    xor bh, bh
-    int 0x10
-    pop si
-    inc si
-    jmp .print
-.done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+%include "src/com/setup_disk.inc"
+%include "src/com/setup_graphics.inc"
 
 reboot_system:
+    ; A bootstrap interrupt is not a hardware reset and preserves stale DMA,
+    ; PCI and controller state.  Use the ICH reset register used by the T23,
+    ; followed by the two standard PC fallbacks.
     push cs
     pop ds
-    push cs
-    pop es
+    mov dx, msg_hardware_reset
+    call serial_write_z
+    call serial_write_crlf
+    cli
     xor ax, ax
-    mov cx, ax
-    mov dx, ax
-    int 0x19
+    mov ds, ax
+    mov word [0x0472], ax
+    mov dx, 0x0CF9
+    mov al, 0x02
+    out dx, al
+    or al, 0x04
+    out dx, al
+    call .settle
+    mov cx, 0x1000
+.wait_8042:
+    in al, 0x64
+    test al, 0x02
+    jz .pulse_8042
+    loop .wait_8042
+    jmp .fast_reset
+.pulse_8042:
+    mov al, 0xFE
+    out 0x64, al
+    call .settle
+.fast_reset:
+    in al,0x92
+    and al,0xFE
+    out 0x92,al
+    or al,1
+    out 0x92,al
+    call .settle
+.triple_fault:
+    lidt [cs:.null_idt]
+    int 3
     hlt
-    jmp reboot_system
+    jmp .triple_fault
+.settle:
+    ; Port reads provide an I/O delay even on a fast CPU; no BIOS or IRQ
+    ; service is required while a controller completes its reset pulse.
+    mov cx,0x8000
+.delay:
+    in al,0x80
+    loop .delay
+    ret
+.null_idt:
+    dw 0
+    dd 0
+msg_hardware_reset db '[SETUP] HARDWARE RESET',0
 
 shutdown_system:
     push cs
@@ -1917,7 +671,21 @@ raw_hdd_clone_install:
     mov word [raw_clone_remaining_hi], RAW_HDD_CLONE_SECTORS_HI
     mov byte [raw_edd_status], 0
     mov byte [raw_chs_status], 0
-    mov word [reset_counter], 0
+    mov byte [raw_last_status], 0
+    mov byte [raw_default_drive_patched], 0
+    mov byte [raw_clone_mbr_saved], 0
+    mov dword [setup_source_crc], 0xFFFFFFFF
+    mov byte [raw_atapi_ready], 0
+    call raw_configure_atapi_source
+    call setup_preflight
+    jc .fail
+    ; Transactional safety: invalidate sector zero before copying anything.
+    ; The real MBR is committed only after every payload sector and cache
+    ; flush succeeds, so an interrupted install cannot boot a partial image.
+    call raw_invalidate_target_mbr
+    jc .fail
+    mov word [raw_clone_lba_lo], 0
+    mov word [raw_clone_lba_hi], 0
 
     mov word [clone_done_lo], 0
     mov word [clone_done_hi], 0
@@ -1951,12 +719,14 @@ raw_hdd_clone_install:
 .partial_batch:
     mov cx, [raw_clone_remaining_lo]
 .have_batch:
+    cmp byte [raw_atapi_ready], 1
+    je .batch_track_safe
     ; A legacy CHS request must not cross a track boundary. Keep the batch
     ; count shared by the source read, target write and clone accounting.
-    mov ax, [raw_clone_lba_lo]
-    mov dx, [raw_clone_lba_hi]
-    mov bx, [raw_source_spt]
-    div bx
+    mov eax, [raw_clone_lba_lo]
+    xor edx, edx
+    movzx ebx, word [raw_source_spt]
+    div ebx                    ; track numbers can exceed 65535
     sub bx, dx
     cmp cx, bx
     jbe .batch_track_safe
@@ -1964,11 +734,38 @@ raw_hdd_clone_install:
 .batch_track_safe:
     mov [batch_count], cx
 
+    cmp byte [raw_atapi_ready], 1
+    jne .bios_source_read
+    mov bx, io_buffer
+    mov cx, [batch_count]
+    call raw_atapi_read_n
+    jc .fail
+    jmp .source_read_ok
+.bios_source_read:
     mov dl, RAW_HDD_SOURCE_DRIVE
     mov bx, io_buffer
     mov cx, [batch_count]
     call raw_edd_read_n
+    jnc .source_read_ok
+    ; Some optical BIOSes advertise EDD but reject multi-sector requests
+    ; after a number of transfers.  Retry the same LBA as one sector before
+    ; declaring the medium unreadable; future iterations naturally continue
+    ; from the following sector.
+    cmp word [batch_count], 1
+    jbe .fail
+    mov word [batch_count], 1
+    mov cx, 1
+    call raw_edd_read_n
     jc .fail
+.source_read_ok:
+    call raw_stage_clone_mbr
+    jc .fail
+%if SETUP_LIVE_CD_MODE
+    ; Patch D: to C: while the Stage1 sector is still in the source buffer.
+    ; This avoids a post-clone BIOS read of the freshly written HDD.
+    call raw_patch_clone_buffer_default_drive
+    jc .fail
+%endif
 
     mov dl, RAW_HDD_TARGET_DRIVE
     mov bx, io_buffer
@@ -1979,6 +776,15 @@ raw_hdd_clone_install:
     call raw_ata_write_n
     jc .fail
 .write_ok:
+    mov cx, [batch_count]
+    call setup_verify_buffer
+    jc .fail
+    mov si, io_buffer
+    mov eax, [setup_source_crc]
+    call setup_crc_buffer
+    mov [setup_source_crc], eax
+    call gui_cancel_poll
+    jc .fail
 
     ; advance LBA by batch_count
     mov ax, [batch_count]
@@ -1994,26 +800,11 @@ raw_hdd_clone_install:
     add [clone_done_lo], ax
     adc word [clone_done_hi], 0
 
-    ; Periodic recovery: keep BIOS source-drive state fresh, but never call
-    ; INT 13h reset on the target while writes are running through ATA PIO.
-    ; Some real BIOSes wedge when mixing direct ATA writes with repeated
-    ; INT 13h resets of the same target device mid-clone.
-    inc word [reset_counter]
-    test word [reset_counter], 0x003F
-    jnz .no_reset
-    push ax
-    push dx
-    push cx
-    xor ax, ax
-    mov dl, RAW_HDD_SOURCE_DRIVE
-    int 0x13
-    call ata_pri_soft_reset
-    ; Ignore ATA reset failure here: write path has per-sector timeout+recovery
-    ; and will surface the failure with stage/path/status diagnostics.
-    pop cx
-    pop dx
-    pop ax
-.no_reset:
+    ; Do not periodically reset either device.  On real notebooks the HDD and
+    ; optical drive often share one IDE controller; resetting that controller
+    ; while the BIOS owns the CD invalidates later source reads.  Both the EDD
+    ; reader and ATA writer already perform recovery only after an actual I/O
+    ; failure.
 
     mov al, [clone_progress_pct]
     cmp al, 100
@@ -2033,6 +824,11 @@ raw_hdd_clone_install:
     mov al, [clone_progress_pct]
     call vis_clone_phase_update
 %endif
+    mov dx, msg_serial_hdd_install_progress
+    call serial_write_z
+    mov al, [clone_progress_pct]
+    call serial_write_hex_byte
+    call serial_write_crlf
     mov ax, [clone_next_mark_lo]
     add ax, [clone_step_lo]
     mov [clone_next_mark_lo], ax
@@ -2049,15 +845,52 @@ raw_hdd_clone_install:
     mov dx, msg_serial_hdd_install_patch_start
     call serial_write_z
     call serial_write_crlf
-    call raw_patch_installed_default_drive
-    jc .fail
+    cmp byte [raw_default_drive_patched], 1
+    je .patch_ok
+    mov byte [raw_last_stage], 'P'
+    mov byte [raw_last_path], 'B'
+    mov byte [raw_last_status], 0xF1
+    mov word [raw_clone_lba_lo], RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA
+    mov word [raw_clone_lba_hi], 0
+    jmp .fail
+.patch_ok:
 %endif
+    cmp byte [raw_clone_mbr_saved], 1
+    je .mbr_saved
+    mov byte [raw_last_stage], 'C'
+    mov byte [raw_last_path], 'M'
+    mov byte [raw_last_status], 0xF3
+    jmp .fail
+.mbr_saved:
+    ; Commit all cached payload writes while sector zero is still invalid.
+    call raw_ata_flush_cache
+    jc .fail
+    call setup_verify_installed_bios
+    jc .fail
+    ; Atomic install commit: write the saved bootable MBR last, then force it
+    ; to stable media before announcing success or allowing a reboot.
+    mov byte [raw_last_stage], 'C'
+    mov byte [raw_last_path], 'M'
+    mov word [raw_clone_lba_lo], 0
+    mov word [raw_clone_lba_hi], 0
+    mov bx, raw_clone_mbr
+    mov cx, 1
+    call raw_ata_write_n
+    jc .commit_failed
+    call raw_ata_flush_cache
+    jc .commit_failed
+    mov bx, raw_clone_mbr
+    mov cx, 1
+    call setup_verify_expected
+    jc .commit_failed
     mov dx, msg_serial_hdd_install_done
     call serial_write_z
     call serial_write_crlf
     clc
     jmp .out
 
+.commit_failed:
+    call setup_rollback_commit
 .fail:
     mov word [fail_code], 0x0701
     mov dx, msg_serial_hdd_install_fail
@@ -2094,7 +927,11 @@ raw_hdd_clone_install:
     mov dx, msg_screen_hdd_install_fail
     call print_z
     mov al, [raw_last_status]
-    call print_u8_dec
+    call print_hex_byte
+    mov dx, msg_screen_hdd_install_detail
+    call print_z
+    mov al, [raw_last_detail]
+    call print_hex_byte
     mov dx, msg_screen_hdd_install_path
     call print_z
     mov dl, [raw_last_path]
@@ -2115,55 +952,206 @@ raw_hdd_clone_install:
     pop ax
     ret
 
-raw_patch_installed_default_drive:
+; Preserve the source MBR on the first batch, but clear its signature in the
+; version written during the main copy.  The saved sector is committed last.
+raw_stage_clone_mbr:
     push ax
-    push bx
-    push dx
-    mov byte [raw_last_stage], 80
-    mov byte [raw_last_path], 69
-    mov word [raw_clone_lba_lo], RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA
-    mov word [raw_clone_lba_hi], 0
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    call raw_edd_read_current_lba
-    jc .fail
-    cmp byte [io_buffer + RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF], RAW_STAGE1_LIVE_DRIVE_INDEX
+    push cx
+    push di
+    push si
+    push es
+    cmp word [raw_clone_lba_hi], 0
+    jne .not_first
+    cmp word [raw_clone_lba_lo], 0
+    jne .not_first
+    push cs
+    pop es
+    mov si, io_buffer
+    mov di, raw_clone_mbr
+    mov cx, 256
+    rep movsw
+    cmp word [raw_clone_mbr + 510], 0xAA55
     jne .fail
-    mov byte [io_buffer + RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF], RAW_STAGE1_INSTALLED_DRIVE_INDEX
-    mov dl, RAW_HDD_TARGET_DRIVE
-    mov bx, io_buffer
-    call raw_edd_write_current_lba
-    jc .fail
+    mov word [io_buffer + 510], 0
+    mov byte [raw_clone_mbr_saved], 1
+.not_first:
     clc
     jmp .out
 .fail:
+    mov byte [raw_last_stage], 'C'
+    mov byte [raw_last_path], 'M'
+    mov byte [raw_last_status], 0xF4
     stc
 .out:
-    pop dx
+    pop es
+    pop si
+    pop di
+    pop cx
+    pop ax
+    ret
+
+raw_invalidate_target_mbr:
+    push ax
+    push bx
+    push cx
+    push di
+    push es
+    push cs
+    pop es
+    xor ax, ax
+    mov di, io_buffer
+    mov cx, 256
+    rep stosw
+    mov byte [raw_last_stage], 'I'
+    mov byte [raw_last_path], 'M'
+    mov word [raw_clone_lba_lo], 0
+    mov word [raw_clone_lba_hi], 0
+    mov bx, io_buffer
+    mov cx, 1
+    call raw_ata_write_n
+    jc .out
+    call raw_ata_flush_cache
+    jc .out
+    call setup_verify_buffer
+.out:
+    pop es
+    pop di
+    pop cx
     pop bx
     pop ax
     ret
 
-; Single-sector wrappers (kept for raw_patch_installed_default_drive which
-; only touches one sector). Internally call the multi-sector routines with
-; CX=1.
-raw_edd_read_current_lba:
+; Patch the one Stage1 byte in-flight when its source sector is in io_buffer.
+; CF is set only if the expected Live-CD byte is present but invalid; batches
+; which do not contain the patch LBA are left untouched.
+raw_patch_clone_buffer_default_drive:
+    push ax
+    push bx
     push cx
-    mov cx, 1
-    call raw_edd_read_n
+    push dx
+    push si
+
+    cmp word [raw_clone_lba_hi], 0
+    jne .not_this_batch
+    mov ax, [raw_clone_lba_lo]
+    cmp ax, RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA
+    ja .not_this_batch
+    mov dx, RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA
+    sub dx, ax
+    cmp dx, [batch_count]
+    jae .not_this_batch
+
+    mov ax, dx
+    mov bx, 512
+    mul bx
+    add ax, RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF
+    mov si, io_buffer
+    add si, ax
+    cmp byte [si], RAW_STAGE1_LIVE_DRIVE_INDEX
+    jne .fail
+    mov byte [si], RAW_STAGE1_INSTALLED_DRIVE_INDEX
+    mov byte [raw_default_drive_patched], 1
+.not_this_batch:
+    clc
+    jmp .out
+.fail:
+    mov byte [raw_last_stage], 'P'
+    mov byte [raw_last_path], 'B'
+    mov byte [raw_last_status], 0xF2
+    stc
+.out:
+    pop si
+    pop dx
     pop cx
+    pop bx
+    pop ax
     ret
 
-raw_edd_write_current_lba:
-    push cx
-    mov cx, 1
-    call raw_ata_write_n        ; bypass BIOS for all target-HDD writes
-    pop cx
-    ret
-
-; Multi-sector read: AH=0x42 EDD with CX sectors, with a CHS fallback for
-; both the emulated-CD source and the target HDD. CX must be 1..127.
+; BIOS reads use at most the 8-sector I/O buffers. A segment:offset range
+; inside 64 KiB can still cross a physical 64 KiB DMA boundary. Keep normal
+; batches unchanged, but bounce a crossing request through aligned sectors.
 raw_edd_read_n:
+    push eax
+    push edx
+    cmp cx,1
+    jb .bad_buffer
+    cmp cx,8
+    ja .bad_buffer
+    movzx edx,cx
+    shl edx,9
+    movzx eax,bx
+    add eax,edx
+    cmp eax,0x10000
+    ja .bad_buffer
+    mov ax,cs
+    shl ax,4
+    add ax,bx
+    movzx eax,ax
+    add eax,edx
+    cmp eax,0x10000
+    ja .bounce
+    pop edx
+    pop eax
+    jmp raw_bios_read_direct
+.bounce:
+    pop edx
+    pop eax
+    pushad
+    push ds
+    push es
+    push dword [cs:raw_clone_lba_lo]
+    push cs
+    pop ds
+    push cs
+    pop es
+    cld
+    mov di,bx
+    mov bp,cx
+    call setup_bios_bounce_address
+    mov si,bx
+.sector:
+    mov bx,si
+    mov cx,1
+    call raw_bios_read_direct
+    jc .restore                  ; never copy a failed/stale sector
+    push si
+    mov cx,256
+    rep movsw
+    pop si
+    inc dword [raw_clone_lba_lo]
+    dec bp
+    jnz .sector
+    clc
+.restore:
+    pop dword [cs:raw_clone_lba_lo]
+    pop es
+    pop ds
+    popad
+    ret
+.bad_buffer:
+    pop edx
+    pop eax
+    mov byte [cs:raw_last_stage],'R'
+    mov byte [cs:raw_last_path],'E'
+    mov byte [cs:raw_last_status],0x09
+    stc
+    ret
+
+; BX = private 512-byte buffer, aligned in physical memory (CS may be any
+; paragraph). No sector at this address can cross a 64 KiB DMA boundary.
+setup_bios_bounce_address:
+    push ax
+    mov ax,cs
+    shl ax,4
+    add ax,setup_bios_bounce_storage
+    neg ax
+    and ax,511
+    add ax,setup_bios_bounce_storage
+    mov bx,ax
+    pop ax
+    ret
+
+raw_bios_read_direct:
     mov byte [raw_last_stage], 'R'
     mov byte [raw_last_path], 'E'
     mov ah, 0x42
@@ -2184,7 +1172,1115 @@ raw_edd_write_n:
     call raw_edd_transfer_current_lba
     ret
 
-; raw_ata_write_n: write CX sectors from CS:BX to primary ATA master HDD
+; Discover the physical ATAPI source from the El Torito specification packet.
+; AH=4Bh/AL=01h is status-only: emulation stays active, but the packet returns
+; the boot-image CD LBA, controller index and IDE master/slave bit.
+raw_configure_atapi_source:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    push es
+    push cs
+    pop es
+    push cs
+    pop ds
+
+    mov byte [raw_atapi_ready], 0
+%if SETUP_FORCE_MEMDISK_SOURCE
+    ; The release CD is already running from a MEMDISK-owned BIOS drive.
+    ; Never ask the underlying IBM/Phoenix El Torito BIOS for its stale boot
+    ; packet here: some implementations return the physical ATAPI mechanism,
+    ; which silently puts the clone back on the freeze-prone optical path.
+    mov dx, msg_serial_cd_map
+    call serial_write_z
+    mov al, 'R'                ; forced RAM-backed BIOS source
+    call serial_write_char
+    call serial_write_crlf
+    clc
+    jmp .out
+%endif
+    xor ax, ax
+    mov di, eltorito_spec_packet
+    mov cx, 10
+    rep stosw
+    mov byte [eltorito_spec_packet], 0x13
+    mov si, eltorito_spec_packet
+    mov dl, RAW_HDD_SOURCE_DRIVE
+    mov ax, 0x4B01             ; return status, do not terminate emulation
+    call setup_bios_disk
+    push cs
+    pop ds
+    jc .fallback
+    cmp byte [eltorito_spec_packet], 0x13
+    jb .fallback
+    mov al, [eltorito_spec_packet + 1]
+    test al, 0x80              ; SCSI source cannot use legacy ATAPI ports
+    jnz .fallback
+    and al, 0x0F
+    cmp al, 4                  ; hard-disk emulation
+    jne .fallback
+    cmp byte [eltorito_spec_packet + 2], RAW_HDD_SOURCE_DRIVE
+    jne .fallback
+    mov al, [eltorito_spec_packet + 3]
+    cmp al, 1                  ; legacy primary or secondary IDE channel
+    ja .fallback
+    or al, al
+    jnz .secondary
+    mov word [atapi_cmd_base], 0x01F0
+    mov word [atapi_ctrl_base], 0x03F6
+    jmp .device
+.secondary:
+    mov word [atapi_cmd_base], 0x0170
+    mov word [atapi_ctrl_base], 0x0376
+.device:
+    mov byte [atapi_dev_select], 0xA0
+    test byte [eltorito_spec_packet + 8], 1
+    jz .image_lba
+    or byte [atapi_dev_select], 0x10
+.image_lba:
+    mov ax, [eltorito_spec_packet + 4]
+    mov [atapi_image_lba_lo], ax
+    mov ax, [eltorito_spec_packet + 6]
+    mov [atapi_image_lba_hi], ax
+    or ax, [atapi_image_lba_lo]
+    jz .fallback
+    mov byte [raw_atapi_ready], 1
+    call raw_report_atapi_mapping
+    clc
+    jmp .out
+.fallback:
+    mov dx, msg_serial_cd_map
+    call serial_write_z
+    mov al, 'B'                ; BIOS-emulation fallback
+    call serial_write_char
+    call serial_write_crlf
+    stc
+.out:
+    pop es
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+raw_report_atapi_mapping:
+    push ax
+    push dx
+    mov dx, msg_serial_cd_map
+    call serial_write_z
+    mov al, 'T'                ; direct ATAPI transport
+    call serial_write_char
+    mov dx, msg_serial_ata_cmd
+    call serial_write_z
+    mov ax, [atapi_cmd_base]
+    call serial_write_hex_word
+    mov dx, msg_serial_ata_ctrl
+    call serial_write_z
+    mov ax, [atapi_ctrl_base]
+    call serial_write_hex_word
+    mov dx, msg_serial_ata_dev
+    call serial_write_z
+    mov al, [atapi_dev_select]
+    call serial_write_hex_byte
+    mov dx, msg_serial_cd_image
+    call serial_write_z
+    mov ax, [atapi_image_lba_hi]
+    call serial_write_hex_word
+    mov al, ':'
+    call serial_write_char
+    mov ax, [atapi_image_lba_lo]
+    call serial_write_hex_word
+    call serial_write_crlf
+    pop dx
+    pop ax
+    ret
+
+; Read CX virtual 512-byte sectors from the contiguous El Torito boot image.
+; Clone batches are aligned to eight virtual sectors, so one READ(10) fetches
+; one or two native 2048-byte CD blocks directly into CS:BX.
+raw_atapi_read_n:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    push bp
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+
+    mov byte [raw_last_stage], 'R'
+    mov byte [raw_last_path], 'T'
+    mov byte [atapi_using_mirror], 0
+    mov byte [atapi_sense_key], 0xFF
+    mov byte [atapi_sense_asc], 0xFF
+    mov byte [atapi_sense_ascq], 0xFF
+    test word [raw_clone_lba_lo], 3
+    jnz .bad_alignment
+    cmp cx, 1
+    jb .bad_alignment
+    cmp cx, RAW_HDD_BATCH_SECTORS
+    ja .bad_alignment
+    mov [atapi_buffer_ptr], bx
+    mov ax, cx
+    add ax, 3
+    shr ax, 1
+    shr ax, 1
+    mov [atapi_block_count], al
+    mov cx, ax
+    shl ax, 11                 ; native CD block count * 2048
+    mov [atapi_bytes_remaining], ax
+    mov [atapi_transfer_bytes], ax
+
+    ; Convert virtual 512-byte LBA to native CD LBA and add image start.
+    mov ax, [raw_clone_lba_lo]
+    mov dx, [raw_clone_lba_hi]
+    shr dx, 1
+    rcr ax, 1
+    shr dx, 1
+    rcr ax, 1
+    add ax, [atapi_image_lba_lo]
+    adc dx, [atapi_image_lba_hi]
+    mov [atapi_cd_lba_lo], ax
+    mov [atapi_cd_lba_hi], dx
+
+    xor ax, ax
+    mov di, atapi_packet
+    mov cx, 6
+    rep stosw
+    mov byte [atapi_packet + 0], ATAPI_CMD_READ10
+    mov ax, [atapi_cd_lba_lo]
+    mov dx, [atapi_cd_lba_hi]
+    mov byte [atapi_packet + 2], dh
+    mov byte [atapi_packet + 3], dl
+    mov byte [atapi_packet + 4], ah
+    mov byte [atapi_packet + 5], al
+    mov al, [atapi_block_count]
+    mov byte [atapi_packet + 8], al
+
+    ; One initial attempt plus ATAPI_READ_RETRIES recovery attempts.
+    mov byte [atapi_retries_left], ATAPI_READ_RETRIES + 1
+
+.retry_read:
+    ; A failed PIO phase may already have consumed some bytes.  Always restart
+    ; the same native block at the original destination on each retry.
+    mov ax, [atapi_transfer_bytes]
+    mov [atapi_bytes_remaining], ax
+    mov byte [raw_last_detail], 0
+
+    mov dx, [atapi_ctrl_base]
+    mov al, 0x02                ; polled command, no BIOS IRQ15/14
+    out dx, al
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_DEV
+    mov al, [atapi_dev_select]
+    out dx, al
+    mov dx, [atapi_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    mov bp, 0x0020
+.ready_outer:
+    xor cx, cx
+.ready:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    test al, 0x80
+    jz .program_packet
+    loop .ready
+    dec bp
+    jnz .ready_outer
+    jmp .fail
+
+.program_packet:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_FEATURE
+    xor al, al                 ; PIO, no DMA, no overlap
+    out dx, al
+    inc dx                     ; interrupt reason / sector-count register
+    out dx, al
+    inc dx                     ; LBA low
+    out dx, al
+    inc dx                     ; byte-count low (LBA mid)
+    mov ax, [atapi_transfer_bytes]
+    out dx, al
+    inc dx                     ; byte-count high (LBA high)
+    mov al, ah
+    out dx, al
+    inc dx                     ; device/head
+    inc dx                     ; command/status
+    mov al, ATA_CMD_PACKET
+    out dx, al
+    mov dx, [atapi_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    mov bp, 0x0020
+.packet_outer:
+    xor cx, cx
+.packet_wait:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    test al, 0x80
+    jnz .packet_loop
+    test al, 0x01
+    jnz .fail
+    test al, 0x08
+    jnz .send_packet
+.packet_loop:
+    loop .packet_wait
+    dec bp
+    jnz .packet_outer
+    jmp .fail
+
+.send_packet:
+    mov dx, [atapi_cmd_base]
+    mov si, atapi_packet
+    mov cx, 6
+    rep outsw
+    mov di, [atapi_buffer_ptr]
+
+.data_phase:
+    mov bp, 0x0040
+.data_outer:
+    xor cx, cx
+.data_wait:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    test al, 0x80
+    jnz .data_loop
+    test al, 0x01
+    jnz .fail
+    test al, 0x08
+    jnz .transfer_data
+    cmp word [atapi_bytes_remaining], 0
+    je .success
+.data_loop:
+    loop .data_wait
+    dec bp
+    jnz .data_outer
+    jmp .fail
+
+.transfer_data:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_LBAM
+    in al, dx
+    mov bl, al
+    inc dx
+    in al, dx
+    mov bh, al
+    or bx, bx
+    jz .protocol_fail
+    test bl, 1
+    jnz .protocol_fail
+    cmp bx, [atapi_bytes_remaining]
+    ja .protocol_fail
+    sub [atapi_bytes_remaining], bx
+    mov cx, bx
+    shr cx, 1
+    mov dx, [atapi_cmd_base]
+    rep insw
+    jmp .data_phase
+
+.bad_alignment:
+    mov al, 0xF5
+    jmp .terminal_fail
+.protocol_fail:
+    mov al, 0xF6
+    jmp .terminal_fail
+.fail:
+    ; Status 51h is the normal ATAPI CHECK CONDITION completion.  Preserve
+    ; both the status and the Error register (whose high nibble is the sense
+    ; key), then retry the exact same CD block.  Real optical drives may raise
+    ; transient UNIT ATTENTION / NOT READY / recovered-media conditions.
+    mov [raw_last_status], al
+    mov [atapi_last_status], al
+    test al, 0x01
+    jz .retry_decide
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_FEATURE
+    in al, dx
+    mov [raw_last_detail], al
+    mov [atapi_last_error], al
+.retry_decide:
+    ; CHECK CONDITION is followed by REQUEST SENSE before another READ(10).
+    ; Besides producing useful ASC/ASCQ diagnostics, this clears the packet
+    ; device's contingent error state on older ATAPI mechanisms.
+    call raw_atapi_request_sense
+    call raw_report_atapi_retry
+    dec byte [atapi_retries_left]
+    jz .retry_exhausted
+    call raw_atapi_retry_pause
+    ; Periodically reset only the selected packet device.  DEVICE RESET is
+    ; mandatory for ATAPI and, unlike channel SRST, does not disturb the HDD.
+    mov al, [atapi_retries_left]
+    and al, 3
+    jnz .retry_read
+    call raw_atapi_device_reset
+    jmp .retry_read
+.retry_exhausted:
+%if ATAPI_MIRROR_BLOCKS > 0
+    ; The direct CD image contains a second 2048-byte-aligned copy of the
+    ; entire emulated disk.  A persistent medium error in the primary extent
+    ; therefore gets a fresh physical location before installation is failed.
+    cmp byte [atapi_using_mirror], 0
+    jne .mirror_exhausted
+    mov byte [atapi_using_mirror], 1
+    mov byte [raw_last_path], 'M'
+    add word [atapi_cd_lba_lo], (ATAPI_MIRROR_BLOCKS & 0xFFFF)
+    adc word [atapi_cd_lba_hi], ((ATAPI_MIRROR_BLOCKS >> 16) & 0xFFFF)
+    mov ax, [atapi_cd_lba_lo]
+    mov dx, [atapi_cd_lba_hi]
+    mov byte [atapi_packet + 2], dh
+    mov byte [atapi_packet + 3], dl
+    mov byte [atapi_packet + 4], ah
+    mov byte [atapi_packet + 5], al
+    mov byte [atapi_retries_left], ATAPI_READ_RETRIES + 1
+    mov dx, msg_serial_cd_mirror
+    call serial_write_z
+    call serial_write_crlf
+    jmp .retry_read
+.mirror_exhausted:
+%endif
+    mov al, [atapi_last_status]
+.terminal_fail:
+    mov [raw_last_status], al
+    stc
+    jmp .out
+.success:
+    clc
+.out:
+    pushf
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    mov dx, [atapi_ctrl_base]
+    xor al, al
+    out dx, al
+    popf
+    pop es
+    pop ds
+    pop bp
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Fetch fixed-format sense data after an ATAPI CHECK CONDITION.  The original
+; Status/Error bytes remain in raw_last_* while these three fields capture the
+; command-set-specific reason (sense key, ASC and ASCQ).
+raw_atapi_request_sense:
+    pusha
+    push es
+    push cs
+    pop es
+    xor ax, ax
+    mov di, atapi_sense_data
+    mov cx, 9
+    rep stosw
+
+    mov dx, [atapi_ctrl_base]
+    mov al, 0x02
+    out dx, al
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_DEV
+    mov al, [atapi_dev_select]
+    out dx, al
+    mov dx, [atapi_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    mov cx, 0
+.ready:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    test al, 0x80
+    jz .program
+    loop .ready
+    jmp .fail
+.program:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_FEATURE
+    xor al, al
+    out dx, al
+    inc dx
+    out dx, al
+    inc dx
+    out dx, al
+    inc dx
+    mov al, 18
+    out dx, al
+    inc dx
+    xor al, al
+    out dx, al
+    inc dx
+    mov al, [atapi_dev_select]
+    out dx, al
+    inc dx
+    mov al, ATA_CMD_PACKET
+    out dx, al
+
+    mov cx, 0
+.packet_wait:
+    in al, dx
+    test al, 0x80
+    jnz .packet_loop
+    test al, 0x01
+    jnz .fail
+    test al, 0x08
+    jnz .send_packet
+.packet_loop:
+    loop .packet_wait
+    jmp .fail
+.send_packet:
+    mov dx, [atapi_cmd_base]
+    mov si, atapi_sense_packet
+    mov cx, 6
+    rep outsw
+
+    mov cx, 0
+.data_wait:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    test al, 0x80
+    jnz .data_loop
+    test al, 0x01
+    jnz .fail
+    test al, 0x08
+    jnz .transfer
+.data_loop:
+    loop .data_wait
+    jmp .fail
+.transfer:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_LBAM
+    in al, dx
+    mov bl, al
+    inc dx
+    in al, dx
+    mov bh, al
+    or bx, bx
+    jz .fail
+    test bl, 1
+    jnz .fail
+    mov cx, bx
+    shr cx, 1
+    mov dx, [atapi_cmd_base]
+    mov di, atapi_sense_data
+.read_word:
+    in ax, dx
+    cmp di, atapi_sense_data + 18
+    jae .discard
+    stosw
+.discard:
+    loop .read_word
+    mov al, [atapi_sense_data + 2]
+    and al, 0x0F
+    mov [atapi_sense_key], al
+    mov al, [atapi_sense_data + 12]
+    mov [atapi_sense_asc], al
+    mov al, [atapi_sense_data + 13]
+    mov [atapi_sense_ascq], al
+    clc
+    jmp .out
+.fail:
+    stc
+.out:
+    pop es
+    popa
+    ret
+
+; Pause for two BIOS timer ticks (about 110 ms) between optical retries.  This
+; gives a slow mechanism time to finish seek/error recovery without depending
+; on CPU-speed-sensitive empty polling loops.
+raw_atapi_retry_pause:
+    push ax
+    push bx
+    push dx
+    mov ah, 0x00
+    call setup_bios_time
+    mov bx, dx
+.wait:
+    mov ah, 0x00
+    call setup_bios_time
+    mov ax, dx
+    sub ax, bx
+    cmp ax, 2
+    jb .wait
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; DEVICE RESET (08h) targets only the selected ATAPI device.  It is used
+; after repeated completed/failed packet commands; channel-wide SRST remains
+; deliberately prohibited because an HDD may share the channel.
+raw_atapi_device_reset:
+    push ax
+    push cx
+    push dx
+    push di
+    mov dx, [atapi_ctrl_base]
+    mov al, 0x02
+    out dx, al
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_DEV
+    mov al, [atapi_dev_select]
+    out dx, al
+    mov dx, [atapi_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_STATUS
+    mov al, ATA_CMD_DEVICE_RESET
+    out dx, al
+    mov dx, [atapi_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    mov di, 0x0100
+.outer:
+    xor cx, cx
+.wait:
+    mov dx, [atapi_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    test al, 0x80
+    jz .done
+    loop .wait
+    dec di
+    jnz .outer
+.done:
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+raw_report_atapi_retry:
+    push ax
+    push dx
+    mov dx, msg_serial_cd_retry
+    call serial_write_z
+    mov ax, [raw_clone_lba_hi]
+    call serial_write_hex_word
+    mov al, ':'
+    call serial_write_char
+    mov ax, [raw_clone_lba_lo]
+    call serial_write_hex_word
+    mov dx, msg_serial_cd_retry_status
+    call serial_write_z
+    mov al, [raw_last_status]
+    call serial_write_hex_byte
+    mov dx, msg_serial_cd_retry_error
+    call serial_write_z
+    mov al, [raw_last_detail]
+    call serial_write_hex_byte
+    mov dx, msg_serial_cd_retry_left
+    call serial_write_z
+    mov al, [atapi_retries_left]
+    dec al
+    call serial_write_hex_byte
+    mov dx, msg_serial_cd_retry_sense
+    call serial_write_z
+    mov al, [atapi_sense_key]
+    call serial_write_hex_byte
+    mov al, '/'
+    call serial_write_char
+    mov al, [atapi_sense_asc]
+    call serial_write_hex_byte
+    mov al, '/'
+    call serial_write_char
+    mov al, [atapi_sense_ascq]
+    call serial_write_hex_byte
+    call serial_write_crlf
+    pop dx
+    pop ax
+    ret
+
+; Resolve BIOS drive 81h to a legacy ATA command block through the EDD 3.0
+; device-path extension or the older EDD DPTE.  The DPTE is preferred because
+; it is available on the ThinkPad-era EDD 1.x/2.x BIOSes and publishes the
+; exact task-file ports and ATA DEV bit selected by INT 13h.
+raw_configure_ata_target:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+
+    mov byte [raw_last_stage], 'M'
+    mov byte [raw_last_path], 'E'
+    ; Older BIOSes may return less than the requested EDD 3.0 structure.
+    ; Clear it first so a second FORMAT/INSTALL run cannot reuse stale DPTE
+    ; or BEDD bytes left by an earlier invocation.
+    xor ax, ax
+    mov di, edd_drive_params
+    mov cx, 0x004A / 2
+    rep stosw
+    mov word [edd_drive_params], 0x004A
+    mov si, edd_drive_params
+    mov dl, RAW_HDD_TARGET_DRIVE
+    mov ah, 0x48
+    call setup_bios_disk
+    push cs
+    pop ds
+    jc .mapping_fail
+
+    ; EDD 1.x/2.x Drive Parameter Table Extension.  This is the most direct
+    ; BIOS-to-hardware mapping and works even when the BEDD device path below
+    ; is absent, as on some IBM/Phoenix notebook BIOS revisions.
+    call raw_map_ata_from_dpte
+    jnc .mapping_ready
+
+    mov byte [raw_last_path], '3'
+    cmp word [edd_drive_params + 0x1E], 0xBEDD
+    jne .mapping_fail
+    cmp byte [edd_drive_params + 0x28], 'A'
+    jne .mapping_fail
+    cmp byte [edd_drive_params + 0x29], 'T'
+    jne .mapping_fail
+    cmp byte [edd_drive_params + 0x2A], 'A'
+    jne .mapping_fail
+
+    ; The EDD ISA interface path publishes the command-block base only.
+    ; For an ATA compatibility task file, the alternate-status/device-control
+    ; register is command base + 206h (1F0h -> 3F6h, 170h -> 376h).
+    cmp byte [edd_drive_params + 0x24], 'I'
+    jne .try_pci
+    cmp byte [edd_drive_params + 0x25], 'S'
+    jne .mapping_fail
+    cmp byte [edd_drive_params + 0x26], 'A'
+    jne .mapping_fail
+    mov ax, [edd_drive_params + 0x30]
+    or ax, ax
+    jz .mapping_fail
+    cmp ax, 0xFFFF
+    je .mapping_fail
+    mov [ata_cmd_base], ax
+    add ax, 0x0206
+    jc .mapping_fail
+    mov [ata_ctrl_base], ax
+    jmp .device
+
+.try_pci:
+    ; Resolve the exact PCI function named by EDD. Compatibility-mode channels
+    ; use the ISA task files; native-mode channels use their assigned I/O BARs.
+    cmp byte [edd_drive_params + 0x24], 'P'
+    jne .mapping_fail
+    cmp byte [edd_drive_params + 0x25], 'C'
+    jne .mapping_fail
+    cmp byte [edd_drive_params + 0x26], 'I'
+    jne .mapping_fail
+    mov bh, [edd_drive_params + 0x30]
+    mov bl, [edd_drive_params + 0x31]
+    cmp bl, 31
+    ja .mapping_fail
+    shl bl, 3
+    mov al, [edd_drive_params + 0x32]
+    cmp al, 7
+    ja .mapping_fail
+    or bl, al
+    mov [ata_pci_bdf], bx
+
+    mov ax, 0xB108              ; PCI BIOS: read configuration byte
+    mov di, 0x0009              ; programming interface
+    stc
+    call setup_bios_pci
+    jc .mapping_fail
+    push cs
+    pop ds
+    mov al, [edd_drive_params + 0x33]
+    cmp al, 0
+    je .pci_primary
+    cmp al, 1
+    jne .mapping_fail
+    test cl, 0x04               ; secondary channel native-mode bit
+    jnz .pci_secondary_native
+    mov word [ata_cmd_base], 0x0170
+    mov word [ata_ctrl_base], 0x0376
+    jmp .device
+.pci_primary:
+    test cl, 0x01               ; primary channel native-mode bit
+    jnz .pci_primary_native
+    mov word [ata_cmd_base], 0x01F0
+    mov word [ata_ctrl_base], 0x03F6
+    jmp .device
+
+.pci_primary_native:
+    mov di, 0x0010              ; BAR0 command, BAR1 control
+    mov si, 0x0014
+    jmp .pci_native
+.pci_secondary_native:
+    mov di, 0x0018              ; BAR2 command, BAR3 control
+    mov si, 0x001C
+.pci_native:
+    mov bx, [ata_pci_bdf]
+    mov ax, 0xB10A              ; PCI BIOS: read configuration dword
+    stc
+    push si
+    call setup_bios_pci
+    pop si
+    jc .mapping_fail
+    push cs
+    pop ds
+    test cl, 1                  ; only I/O BARs are usable in real mode
+    jz .mapping_fail
+    test ecx, 0xFFFF0000
+    jnz .mapping_fail
+    and cx, 0xFFFC
+    jz .mapping_fail
+    mov [ata_cmd_base], cx
+
+    mov bx, [ata_pci_bdf]
+    mov di, si
+    mov ax, 0xB10A
+    stc
+    call setup_bios_pci
+    jc .mapping_fail
+    push cs
+    pop ds
+    test cl, 1
+    jz .mapping_fail
+    test ecx, 0xFFFF0000
+    jnz .mapping_fail
+    and cx, 0xFFFC
+    jz .mapping_fail
+    add cx, 2                   ; BAR is control block; alt-status is +2
+    jc .mapping_fail
+    mov [ata_ctrl_base], cx
+
+.device:
+    mov al, [edd_drive_params + 0x38]
+    cmp al, 1
+    ja .mapping_fail
+    mov byte [ata_dev_select], 0xE0
+    or al, al
+    jz .mapped
+    or byte [ata_dev_select], 0x10
+.mapped:
+    clc
+    jmp .mapping_ready
+
+.mapping_fail:
+    ; Last-resort compatibility path for pre-EDD-DPTE firmware: accept a
+    ; legacy IDE mapping only when exactly one real ATA disk responds across
+    ; the two standard channels.  ATAPI optical devices are rejected by the
+    ; IDENTIFY DEVICE handshake, so an ambiguous multi-HDD system is never
+    ; written blindly.
+    mov byte [raw_last_path], 'S'
+    ; One ATA disk does not imply one BIOS target (another disk can be SCSI
+    ; or USB). Without an authoritative mapping, only the sole displayed BIOS
+    ; target is eligible; an ambiguous selection must remain read-only.
+    cmp byte [gui_disk_count], 1
+    jne .mapping_rejected
+    cmp byte [raw_target_bios], 0x81
+    jne .mapping_rejected
+    call raw_map_single_legacy_ata
+    jnc .mapping_ready
+.mapping_rejected:
+    mov byte [raw_last_status], 0xF0
+    stc
+    jmp .mapping_out
+.mapping_ready:
+    call raw_report_ata_mapping
+    clc
+.mapping_out:
+    pop es
+    pop ds
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Map the EDD drive through the 16-byte Device Parameter Table Extension.
+; The far pointer is returned by INT 13h/AH=48h at parameter offset 1Ah.
+raw_map_ata_from_dpte:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    mov byte [raw_last_path], 'D'
+    mov di, [edd_drive_params + 0x1A]
+    mov ax, [edd_drive_params + 0x1C]
+    or ax, ax
+    jz .fail
+    cmp ax, 0xFFFF
+    je .fail
+    cmp di, 0xFFF0
+    ja .fail
+    mov es, ax
+
+    ; Bytes 0..15, including the two's-complement checksum, must sum to zero.
+    xor bx, bx
+    mov cx, 16
+.checksum:
+    mov al, [es:di]
+    add bl, al
+    inc di
+    loop .checksum
+    or bl, bl
+    jnz .fail
+    sub di, 16
+
+    ; Reject an ATAPI device and malformed task-file addresses.
+    test byte [es:di + 10], 0x40
+    jnz .fail
+    mov ax, [es:di]
+    mov dx, [es:di + 2]
+    or ax, ax
+    jz .fail
+    cmp ax, 0xFFFF
+    je .fail
+    or dx, dx
+    jz .fail
+    cmp dx, 0xFFFF
+    je .fail
+    mov [ata_cmd_base], ax
+    mov [ata_ctrl_base], dx
+
+    mov al, [es:di + 4]
+    and al, 0x10
+    or al, 0xE0
+    mov [ata_dev_select], al
+    clc
+    jmp .out
+.fail:
+    stc
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Probe standard primary/secondary IDE channels.  Success is deliberately
+; limited to the unambiguous case of one ATA disk; ATAPI CD/DVD devices do
+; not complete command ECh as ATA IDENTIFY DEVICE.
+raw_map_single_legacy_ata:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+
+    mov byte [ata_probe_count], 0
+    mov si, ata_legacy_candidates
+    mov cx, 4
+.next:
+    mov ax, [si]
+    mov [ata_probe_cmd], ax
+    mov ax, [si + 2]
+    mov [ata_probe_ctrl], ax
+    mov al, [si + 4]
+    mov [ata_probe_dev], al
+    push cx
+    call raw_probe_legacy_ata
+    pop cx
+    jc .advance
+    inc byte [ata_probe_count]
+    cmp byte [ata_probe_count], 1
+    jne .advance
+    mov ax, [ata_probe_cmd]
+    mov [ata_probe_saved_cmd], ax
+    mov ax, [ata_probe_ctrl]
+    mov [ata_probe_saved_ctrl], ax
+    mov al, [ata_probe_dev]
+    or al, 0x40
+    mov [ata_probe_saved_dev], al
+.advance:
+    add si, 6
+    loop .next
+
+    cmp byte [ata_probe_count], 1
+    jne .fail
+    mov ax, [ata_probe_saved_cmd]
+    mov [ata_cmd_base], ax
+    mov ax, [ata_probe_saved_ctrl]
+    mov [ata_ctrl_base], ax
+    mov al, [ata_probe_saved_dev]
+    mov [ata_dev_select], al
+
+    ; The scan may have left the optical device with an aborted ATA command.
+    ; Reset the BIOS source once, before cloning starts (never mid-copy).
+    xor ax, ax
+    mov dl, RAW_HDD_SOURCE_DRIVE
+    call setup_bios_disk
+    push cs
+    pop ds
+    clc
+    jmp .out
+.fail:
+    stc
+.out:
+    pop es
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+raw_probe_legacy_ata:
+    push ax
+    push cx
+    push dx
+    push di
+
+    mov dx, [ata_probe_ctrl]
+    mov al, 0x02                ; nIEN: no IRQ into an unowned BIOS handler
+    out dx, al
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    mov dx, [ata_probe_cmd]
+    add dx, ATA_REG_DEV
+    mov al, [ata_probe_dev]
+    out dx, al
+    mov dx, [ata_probe_ctrl]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    mov dx, [ata_probe_cmd]
+    add dx, ATA_REG_NSECT
+    xor al, al
+    out dx, al
+    inc dx
+    out dx, al
+    inc dx
+    out dx, al
+    inc dx
+    out dx, al
+    mov dx, [ata_probe_cmd]
+    add dx, ATA_REG_STATUS
+    mov al, 0xEC
+    out dx, al
+    in al, dx
+    or al, al
+    jz .fail
+    cmp al, 0xFF
+    je .fail
+
+    xor cx, cx
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .continue
+    test al, 0x01
+    jnz .fail
+    test al, 0x08
+    jnz .read_identify
+.continue:
+    loop .wait
+    jmp .fail
+
+.read_identify:
+    mov dx, [ata_probe_cmd]
+    mov di, io_buffer
+    mov cx, 256
+    rep insw
+    clc
+    jmp .out
+.fail:
+    stc
+.out:
+    ; Acknowledge pending INTRQ before restoring the interrupt-enabled state
+    ; expected by BIOS-owned CD reads.  Preserve the probe result in FLAGS.
+    pushf
+    mov dx, [ata_probe_cmd]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    mov dx, [ata_probe_ctrl]
+    xor al, al
+    out dx, al
+    popf
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+raw_report_ata_mapping:
+    push ax
+    push dx
+    mov dx, msg_serial_ata_map
+    call serial_write_z
+    mov al, [raw_last_path]
+    call serial_write_char
+    mov dx, msg_serial_ata_cmd
+    call serial_write_z
+    mov ax, [ata_cmd_base]
+    call serial_write_hex_word
+    mov dx, msg_serial_ata_ctrl
+    call serial_write_z
+    mov ax, [ata_ctrl_base]
+    call serial_write_hex_word
+    mov dx, msg_serial_ata_dev
+    call serial_write_z
+    mov al, [ata_dev_select]
+    call serial_write_hex_byte
+    call serial_write_crlf
+    pop dx
+    pop ax
+    ret
+
+; raw_ata_write_n: write CX sectors from CS:BX to the EDD-mapped ATA HDD
 ; using direct port I/O, bypassing INT 13h entirely.
 ;
 ; Inputs:  BX = buffer offset (in CS), CX = sector count
@@ -2196,16 +2292,38 @@ raw_edd_write_n:
 ; the BIOS INT 13h write handler wedges the CPU after many sequential calls.
 ;
 raw_ata_write_n:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    mov byte [ata_transfer_command], 0x30
+    jmp raw_ata_transfer_n
+raw_ata_read_n:
+    mov byte [ata_transfer_command], 0x20
+raw_ata_transfer_n:
+    push es
+    pushad
     push ds
     push cs
     pop ds                      ; DS=CS so rep outsw addresses CS:SI
-
-    mov si, bx                  ; CS:SI = write buffer
+    cld
+    push cs
+    pop es
+    ; Reject malformed requests before touching the controller. Every public
+    ; installer operation is limited to the displayed system region, and the
+    ; private buffers contain at most eight sectors without segment wrapping.
+    test cx, cx
+    jz .ata_bad_request
+    cmp cx, 8
+    ja .ata_bad_request
+    movzx eax, cx
+    add eax, [raw_clone_lba_lo]
+    jc .ata_bad_request
+    cmp eax, RAW_HDD_CLONE_SECTORS
+    ja .ata_bad_request
+    cmp eax, [setup_disk_sectors]
+    ja .ata_bad_request
+    mov ax, cx
+    shl ax, 9
+    add ax, bx
+    jc .ata_bad_request
+    mov si, bx                  ; CS:SI = transfer buffer
     mov ax, [raw_clone_lba_lo]
     mov [ata_cur_lba_lo], ax
     mov ax, [raw_clone_lba_hi]
@@ -2213,83 +2331,158 @@ raw_ata_write_n:
     mov [ata_sectors_left], cx
 
 .ata_next_sector:
-    ; --- Wait for drive ready (BSY=0) ---
+    ; Own the polling transaction without generating IRQ14/15 into a BIOS
+    ; handler which did not start it.  On a real PIIX4, repeated unsolicited
+    ; disk IRQs can corrupt the following BIOS ATAPI read.
+    mov dx, [ata_ctrl_base]
+    mov al, 0x02                ; Device Control nIEN
+    out dx, al
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    ; Device/Head is itself a task-file register: the previously selected
+    ; device must finish BSY/DRQ before selection changes. An absent device
+    ; (floating FFh or 00h) is allowed here, before selecting our known HDD.
+    mov di, 0x0020
+.ata_channel_outer:
+    xor cx, cx
+.ata_channel_wait:
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    cmp al, 0xFF
+    je .ata_select
+    test al, 0x88
+    jz .ata_select
+    loop .ata_channel_wait
+    dec di
+    jnz .ata_channel_outer
+    jmp .ata_write_fail
+.ata_select:
+    ; A BIOS source read may have left the CD/DVD selected on this channel.
+    ; Select the HDD, wait 400 ns, then poll it before programming the LBA.
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_DEV
+    mov al, [ata_dev_select]
+    or  al, [ata_cur_lba_hi + 1]
+    out dx, al
+    mov dx, [ata_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    ; --- Wait for selected drive ready (BSY=0) ---
+    mov di, 0x0020              ; bounded long timeout for old/slow disks
+.ata_bsy0_outer:
     xor cx, cx                  ; 65536 iterations ≈ 33 ms at 1 GHz
 .ata_bsy0:
-    mov dx, ATA_PRI_STATUS
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS
     in al, dx
-    test al, 0x80               ; BSY?
-    jz .ata_bsy0_ok
+    test al, 0x88               ; BSY or pending data phase (DRQ)?
+    jnz .ata_ready_loop
+    test al, 0x40               ; selected ATA device must also be DRDY
+    jnz .ata_bsy0_ok
+.ata_ready_loop:
     loop .ata_bsy0
-    ; Timeout: soft-reset and retry once
-    call ata_pri_soft_reset
-    jc .ata_write_fail
-    jmp .ata_next_sector
+    dec di
+    jnz .ata_bsy0_outer
+    jmp .ata_write_fail
 
 .ata_bsy0_ok:
     ; --- Program LBA and device registers ---
-    ; Device: 0xE0 = LBA mode, master (bit4=0); OR bits [27:24] of LBA
-    mov dx, ATA_PRI_DEV
-    mov al, 0xE0
-    or  al, [ata_cur_lba_hi + 1] ; bits [27:24] (always 0 for disks < 128 GB)
-    out dx, al
-
-    mov dx, ATA_PRI_NSECT
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_NSECT
     mov al, 1
     out dx, al
 
     mov ax, [ata_cur_lba_lo]
-    mov dx, ATA_PRI_LBAL
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_LBAL
     out dx, al                  ; bits [7:0]
-    mov dx, ATA_PRI_LBAM
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_LBAM
     mov al, ah
     out dx, al                  ; bits [15:8]
 
     mov ax, [ata_cur_lba_hi]
-    mov dx, ATA_PRI_LBAH
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_LBAH
     out dx, al                  ; bits [23:16]
 
     ; --- Issue WRITE SECTORS (0x30) ---
-    mov dx, ATA_PRI_STATUS      ; same port address as command register
-    mov al, 0x30
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS      ; same port address as command register
+    mov al, [ata_transfer_command]
     out dx, al
 
     ; 400 ns settling delay: read alt-status 4× (each I/O ≈ 100 ns)
-    mov dx, ATA_PRI_CTRL
+    mov dx, [ata_ctrl_base]
     in al, dx
     in al, dx
     in al, dx
     in al, dx
 
     ; --- Wait for DRQ=1, BSY=0 (drive ready for data) ---
+    mov di, 0x0020
+.ata_drq_outer:
     xor cx, cx
 .ata_drq_wait:
-    mov dx, ATA_PRI_STATUS
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS
     in al, dx
     test al, 0x80               ; BSY still set?
     jnz .ata_drq_loop
-    test al, 0x01               ; ERR?
+    test al, 0x21               ; DF or ERR?
     jnz .ata_write_fail
     test al, 0x08               ; DRQ?
     jnz .ata_do_write
 .ata_drq_loop:
     loop .ata_drq_wait
+    dec di
+    jnz .ata_drq_outer
     jmp .ata_write_fail
 
 .ata_do_write:
     ; --- Transfer 256 words (512 bytes) to ATA data register ---
-    mov dx, ATA_PRI_DATA
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_DATA
     mov cx, 256
-    rep outsw                   ; DS:SI → port DX; SI auto-advances
-
-    ; --- Wait for BSY=0 (drive processing the write) ---
+    cmp byte [ata_transfer_command], 0x20
+    je .ata_do_read
+    rep outsw
+    jmp .ata_data_done
+.ata_do_read:
+    mov di, si
+    rep insw
+    mov si, di
+.ata_data_done:
+    ; Status can still describe the data phase for 400 ns after its last word.
+    ; Wait before interpreting it; completion requires BOTH BSY and DRQ clear.
+    mov dx, [ata_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    mov di, 0x0020
+.ata_bsy1_outer:
     xor cx, cx
 .ata_bsy1:
-    mov dx, ATA_PRI_STATUS
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS
     in al, dx
-    test al, 0x80
-    jz .ata_sector_ok
+    test al, 0x88
+    jnz .ata_bsy1_loop
+    test al, 0x21               ; DF or ERR after the data phase
+    jnz .ata_write_fail
+    jmp .ata_sector_ok
+.ata_bsy1_loop:
     loop .ata_bsy1
+    dec di
+    jnz .ata_bsy1_outer
     jmp .ata_write_fail
 
 .ata_sector_ok:
@@ -2304,49 +2497,113 @@ raw_ata_write_n:
 
 .ata_write_fail:
     mov [raw_last_status], al
-    call ata_pri_soft_reset
     stc
+    jmp .ata_write_out
+.ata_bad_request:
+    mov byte [raw_last_status], 0xF6
+    stc
+    jmp .ata_restore
 
 .ata_write_out:
+    ; A regular-status read acknowledges pending INTRQ before nIEN is
+    ; cleared.  Never soft-reset here: the live CD may share this controller,
+    ; and SRST invalidates the BIOS' El-Torito source state.
+    pushf
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    mov dx, [ata_ctrl_base]
+    xor al, al
+    out dx, al
+    popf
+.ata_restore:
     pop ds
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    popad
+    pop es
     ret
 
-; ata_pri_soft_reset: ATA SRST on primary channel, waits for BSY to clear.
-ata_pri_soft_reset:
+; Commit the target drive's volatile write cache before reporting FORMAT or
+; INSTALL complete.  ATA FLUSH CACHE (E7h) is the LBA28 command supported by
+; the ThinkPad-era disks targeted by this installer.
+raw_ata_flush_cache:
     push ax
     push cx
     push dx
-    mov dx, ATA_PRI_CTRL
-    mov al, 0x04                ; SRST bit
+    push di
+
+    mov byte [raw_last_stage], 'F'
+    mov byte [raw_last_path], 'A'
+    mov dx, [ata_ctrl_base]
+    mov al, 0x02                ; nIEN while command is polled directly
     out dx, al
-    ; 5 µs delay via 8 alt-status reads
     in al, dx
     in al, dx
     in al, dx
     in al, dx
-    in al, dx
-    in al, dx
-    in al, dx
-    in al, dx
-    mov al, 0x00
+
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_DEV
+    mov al, [ata_dev_select]
     out dx, al
-    ; Wait up to ~130 ms for BSY=0
+    mov dx, [ata_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    mov di, 0x0020
+.ready_outer:
     xor cx, cx
-.rst_bsy_wait:
-    in al, dx                   ; read alt-status (no side effects)
-    test al, 0x80
-    jz .rst_ok
-    loop .rst_bsy_wait
-    stc
-    jmp .rst_out
-.rst_ok:
+.ready:
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    test al, 0x88
+    jz .issue
+    loop .ready
+    dec di
+    jnz .ready_outer
+    jmp .fail
+
+.issue:
+    mov al, 0xE7
+    out dx, al
+    mov dx, [ata_ctrl_base]
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+    mov di, 0x0040              ; cache flush may take longer than one write
+.flush_outer:
+    xor cx, cx
+.flush_wait:
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    test al, 0x88
+    jz .flush_status
+    loop .flush_wait
+    dec di
+    jnz .flush_outer
+    jmp .fail
+.flush_status:
+    test al, 0x21               ; DF or ERR
+    jnz .fail
     clc
-.rst_out:
+    jmp .out
+.fail:
+    mov [raw_last_status], al
+    stc
+.out:
+    pushf
+    mov dx, [ata_cmd_base]
+    add dx, ATA_REG_STATUS
+    in al, dx
+    mov dx, [ata_ctrl_base]
+    xor al, al
+    out dx, al
+    popf
+    pop di
     pop dx
     pop cx
     pop ax
@@ -2375,7 +2632,7 @@ raw_get_drive_geometry:
     mov word [si + 4], RAW_HDD_SECTORS_PER_CYL
 
     mov ah, 0x08
-    int 0x13
+    call setup_bios_disk
     jc .done
 
     push cs
@@ -2401,6 +2658,60 @@ raw_get_drive_geometry:
     pop cx
     pop bx
     pop ax
+    ret
+
+; Disk status/geometry and timer ticks return AX/CX/DX low words; PCI
+; configuration reads return AX and full ECX. All other caller state and the
+; high halves of 16-bit outputs survive firmware. Preserve entry FLAGS except
+; returned CF, then establish the clear direction flag required by copy loops.
+%macro SETUP_BIOS_SAVE 0
+    pushf
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+%endmacro
+setup_bios_disk:
+    SETUP_BIOS_SAVE
+    stc
+    int 0x13
+    jmp setup_bios_low_results
+setup_bios_time:
+    SETUP_BIOS_SAVE
+    int 0x1A
+setup_bios_low_results:
+    pushf
+    push bp
+    mov bp,sp
+    mov [ss:bp+40],ax
+    mov [ss:bp+36],cx
+    mov [ss:bp+32],dx
+    jmp setup_bios_return
+setup_bios_pci:
+    SETUP_BIOS_SAVE
+    stc
+    int 0x1A
+    pushf
+    push bp
+    mov bp,sp
+    mov [ss:bp+40],ax
+    mov [ss:bp+36],ecx
+setup_bios_return:
+    ; BP+2: BIOS flags; BP+12: PUSHAD; BP+44: entry flags.
+    mov ax,[ss:bp+2]
+    and ax,1
+    and word [ss:bp+44],0xFFFE
+    or [ss:bp+44],ax
+    pop bp
+    add sp,2
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    popf
+    cld
     ret
 
 ; raw_edd_transfer_current_lba
@@ -2433,12 +2744,12 @@ raw_edd_transfer_current_lba:
     mov [raw_edd_retry_count], cx
     mov si, bios_probe_dap
     xor al, al
-    int 0x13
+    call setup_bios_disk
     jnc .success
 
     mov dl, [raw_edd_retry_drive]
     xor ax, ax
-    int 0x13
+    call setup_bios_disk
 
     push cs
     pop ds
@@ -2449,7 +2760,7 @@ raw_edd_transfer_current_lba:
     mov dl, [raw_edd_retry_drive]
     mov ah, [raw_edd_retry_op]
     xor al, al
-    int 0x13
+    call setup_bios_disk
     jc .fail
 .success:
     pop si
@@ -2473,11 +2784,8 @@ raw_edd_transfer_current_lba:
 ; CHS fallback: takes CX = sector count (1..63) like the EDD routine. Saved
 ; into raw_chs_count before CL gets repurposed for the CHS register layout.
 raw_chs_transfer_current_lba:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    pushad
+    push ds
     push es
     push cs
     pop ds
@@ -2503,16 +2811,24 @@ raw_chs_transfer_current_lba:
 
 .have_geometry:
 
-    mov ax, [raw_clone_lba_lo]
-    mov dx, [raw_clone_lba_hi]
-    mov bx, [raw_chs_spc]
-    div bx
+    mov eax, [raw_clone_lba_lo]
+    xor edx, edx
+    movzx ebx, word [raw_chs_spc]
+    test ebx,ebx
+    jz .bad_geometry
+    div ebx
+    cmp eax,1023               ; CHS encodes only ten cylinder bits
+    ja .bad_geometry
     mov [raw_chs_cylinder], ax
 
-    mov ax, dx
-    xor dx, dx
-    mov bx, [raw_chs_spt]
-    div bx
+    mov eax, edx
+    xor edx, edx
+    movzx ebx, word [raw_chs_spt]
+    test ebx,ebx
+    jz .bad_geometry
+    div ebx
+    cmp eax,255
+    ja .bad_geometry
 
     mov dh, al
     mov cl, dl
@@ -2530,26 +2846,22 @@ raw_chs_transfer_current_lba:
     mov dl, [raw_chs_drive]
     mov ah, [raw_chs_op]
     mov al, [raw_chs_count]
-    int 0x13
+    call setup_bios_disk
     jc .fail
 
     pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    pop ds
+    popad
     clc
     ret
+.bad_geometry:
+    mov ah,0x04                ; requested sector is not addressable by CHS
 .fail:
     mov [raw_last_status], ah
     mov [raw_chs_status], ah
     pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    pop ds
+    popad
     stc
     ret
 
@@ -2582,6 +2894,7 @@ bios_probe_one_readonly:
     push cx
     push dx
     push si
+    push di
     push es
     push ds
     push cs
@@ -2590,7 +2903,10 @@ bios_probe_one_readonly:
     mov [bios_probe_drive], dl
     mov [bios_probe_bit], bl
 
-    mov word [bios_probe_dap + 4], io_buffer
+    mov word [bios_probe_dap + 0],0x0010
+    mov word [bios_probe_dap + 2],1 ; never reuse a previous transfer count
+    call setup_bios_bounce_address
+    mov word [bios_probe_dap + 4],bx
     mov ax, cs
     mov [bios_probe_dap + 6], ax
     mov word [bios_probe_dap + 8], 0
@@ -2601,20 +2917,28 @@ bios_probe_one_readonly:
     mov si, bios_probe_dap
     mov dl, [bios_probe_drive]
     mov ah, 0x42
-    int 0x13
+    call setup_bios_disk
     jnc .read_ok
 
     push cs
     pop es
-    mov bx, io_buffer
+    call setup_bios_bounce_address
     mov ax, 0x0201
     mov cx, 0x0001
     xor dh, dh
     mov dl, [bios_probe_drive]
-    int 0x13
+    call setup_bios_disk
     jc .done
 
 .read_ok:
+    call setup_bios_bounce_address
+    mov si,bx
+    mov di,io_buffer
+    push cs
+    pop es
+    mov cx,256
+    cld
+    rep movsw
     mov al, [bios_probe_bit]
     or byte [bios_probe_present_mask], al
 
@@ -2640,6 +2964,7 @@ bios_probe_one_readonly:
 .done:
     pop ds
     pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -2747,6 +3072,29 @@ serial_write_hex_nibble:
 .digit:
     add al, '0'
     call serial_write_char
+    ret
+
+print_hex_byte:
+    push ax
+    push dx
+    mov ah, al
+    shr al, 4
+    call .nibble
+    mov al, ah
+    and al, 0x0F
+    call .nibble
+    pop dx
+    pop ax
+    ret
+.nibble:
+    and al, 0x0F
+    cmp al, 9
+    jbe .digit
+    add al, 7
+.digit:
+    add al, '0'
+    mov dl, al
+    call print_char_dl
     ret
 
 serial_write_char:
@@ -3040,10 +3388,12 @@ postformat_sanity:
     jne .fail
 
     call close_active_handle
+    jc .fail
 
     mov dx, path_sanity
     mov ah, 0x41
     int 0x21
+    jc .fail
 
     mov dx, msg_marker_sanity_ok
     call print_line
@@ -3383,9 +3733,13 @@ raw_read_sector_lba:
     push cx
     push dx
     push si
+    push di
     push es
+    push ds
 
-    mov si, bx
+    mov di,bx                    ; caller destination survives the BIOS call
+    call setup_bios_bounce_address
+    mov si,bx
 
     xor dx, dx
     mov cx, RAW_FAT_SPT
@@ -3407,9 +3761,19 @@ raw_read_sector_lba:
     mov dl, RAW_BOOT_DRIVE
     mov ah, 0x02
     mov al, 0x01
-    int 0x13
+    call setup_bios_disk
+    jc .done
+    push cs
+    pop ds
+    mov cx,256
+    cld
+    rep movsw
+    clc
 
+.done:
+    pop ds
     pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -3590,6 +3954,7 @@ copy_one_file:
 
 .done:
     call close_copy_handles
+    jc .close_fail
     inc word [files_copied]
     mov dx, msg_marker_copy_ok
     call print_line
@@ -3615,6 +3980,9 @@ copy_one_file:
 .short_write:
     mov word [fail_code], 0x0405
 
+    jmp .copy_fail
+.close_fail:
+    mov word [fail_code],0x0408 ; delayed target/file-close write failure
 .copy_fail:
     call close_copy_handles
     stc
@@ -3647,6 +4015,7 @@ write_config_file:
     jc .write_fail
 
     call close_active_handle
+    jc .write_fail
     mov dx, msg_cfg_ok
     call print_line
     clc
@@ -3897,23 +4266,34 @@ ensure_directory:
 close_copy_handles:
     push ax
     push bx
-
+    push dx
+    xor dx,dx                  ; preserve either close's delayed-write failure
     mov bx, [dst_handle]
     cmp bx, 0xFFFF
     je .skip_dst
     mov ah, 0x3E
     int 0x21
-
+    jnc .skip_dst
+    inc dx
 .skip_dst:
     mov bx, [src_handle]
     cmp bx, 0xFFFF
     je .skip_src
     mov ah, 0x3E
     int 0x21
-
+    jnc .skip_src
+    inc dx
 .skip_src:
     mov word [src_handle], 0xFFFF
     mov word [dst_handle], 0xFFFF
+    test dx,dx
+    jz .ok
+    stc
+    jmp .out
+.ok:
+    clc
+.out:
+    pop dx
     pop bx
     pop ax
     ret
@@ -4219,7 +4599,7 @@ read_key:
 
 wait_key_timeout:
     mov ah, 0x00
-    int 0x1A
+    call setup_bios_time
     mov [prompt_tick_start], dx
 
 .poll:
@@ -4228,7 +4608,7 @@ wait_key_timeout:
     jnz .have_key
 
     mov ah, 0x00
-    int 0x1A
+    call setup_bios_time
     mov ax, dx
     sub ax, [prompt_tick_start]
     cmp ax, bx
@@ -4338,6 +4718,12 @@ print_crlf:
     ret
 
 print_line:
+    cmp byte [gui_active], 0
+    je .text
+    call serial_write_z
+    call serial_write_crlf
+    ret
+.text:
     call print_z
     call print_crlf
     ret
@@ -4505,18 +4891,33 @@ msg_serial_hdd_install_start db '[SETUP-HDD-INSTALL] START', 0
 msg_serial_hdd_install_done db '[SETUP-HDD-INSTALL] DONE', 0
 msg_serial_hdd_install_copy_done db '[SETUP-HDD-INSTALL] COPY-DONE', 0
 msg_serial_hdd_install_patch_start db '[SETUP-HDD-INSTALL] PATCH-START', 0
+msg_serial_hdd_install_progress db '[SETUP-HDD-INSTALL] PROGRESS ', 0
 msg_serial_hdd_install_fail db '[SETUP-HDD-INSTALL] FAIL S=', 0
 msg_serial_hdd_install_path db ' P=', 0
 msg_serial_hdd_install_lba db ' L=', 0
 msg_serial_hdd_install_status db ' AH=', 0
+msg_serial_hdd_install_detail db ' D=', 0
 msg_serial_hdd_install_edd db ' E=', 0
 msg_serial_hdd_install_chs db ' C=', 0
+msg_serial_ata_map db '[SETUP-ATA-MAP] P=', 0
+msg_serial_ata_cmd db ' CMD=', 0
+msg_serial_ata_ctrl db ' CTRL=', 0
+msg_serial_ata_dev db ' DEV=', 0
+msg_serial_cd_map db '[SETUP-CD-MAP] P=', 0
+msg_serial_cd_image db ' IMG=', 0
+msg_serial_cd_retry db '[SETUP-CD-RETRY] L=', 0
+msg_serial_cd_retry_status db ' ST=', 0
+msg_serial_cd_retry_error db ' ER=', 0
+msg_serial_cd_retry_left db ' LEFT=', 0
+msg_serial_cd_retry_sense db ' SK/ASC/Q=', 0
+msg_serial_cd_mirror db '[SETUP-CD-MIRROR] primary unreadable; using redundant extent', 0
 msg_hdd_format_screen_start db 'Formatting target HDD...', 0
 msg_serial_hdd_format_start db '[SETUP-HDD-FORMAT] START', 0
 msg_serial_hdd_format_progress db '[SETUP-HDD-FORMAT] PROGRESS ', 0
 msg_serial_hdd_format_done db '[SETUP-HDD-FORMAT] DONE', 0
 msg_serial_hdd_format_fail db '[SETUP-HDD-FORMAT] FAIL S=', 0
-msg_screen_hdd_install_fail db 'HDD install failed. AH=', 0
+msg_screen_hdd_install_fail db 'Install I/O failed. ST=0x', 0
+msg_screen_hdd_install_detail db ' ER=0x', 0
 msg_screen_hdd_install_path db ' P=', 0
 msg_screen_hdd_install_lba db ' L=', 0
 msg_screen_hdd_format_fail db 'HDD format failed. AH=', 0
@@ -4548,8 +4949,8 @@ msg_vis_install_status_clone  db 'Cloning live-CD image to target HDD...', 0
 msg_vis_install_done    db 'Installation complete. Rebooting...', 0
 msg_vis_install_eject      db 'Installation complete. REMOVE the CD now.', 0
 msg_vis_install_eject_hint db 'Press any key to reboot from the installed HDD.', 0
-msg_vis_install_fail_banner db 'INSTALLATION FAILED. System will reboot.', 0
-msg_vis_install_fail_hint   db 'Press any key to reboot and try again.', 0
+msg_vis_install_fail_banner db 'INSTALLATION STOPPED. HDD left non-bootable.', 0
+msg_vis_install_fail_hint   db 'Press any key to return to the Live CD shell.', 0
 
 format_path             db '\APPS\FORMAT.COM', 0
 format_cmdtail          db 3, ' /F', 13
@@ -4640,7 +5041,7 @@ ata_cur_lba_lo      dw 0    ; working copy of LBA for raw_ata_write_n
 ata_cur_lba_hi      dw 0
 ata_sectors_left    dw 0
 
-format_sectors_total    dd 0x00040000  ; ~262GB sectors
+format_sectors_total    dd RAW_HDD_PARTITION_SECTORS
 format_sectors_done     dd 0
 format_progress_pct     db 0
 format_progress_step_lo dw 0
@@ -4685,6 +5086,7 @@ raw_chs_spc             dw RAW_HDD_SECTORS_PER_CYL
 raw_last_stage          db 0
 raw_last_path           db 0
 raw_last_status         db 0
+raw_last_detail         db 0
 raw_edd_status          db 0
 raw_chs_status          db 0
 raw_chs_count           db 1
@@ -4692,8 +5094,50 @@ raw_edd_retry_op        db 0
 raw_edd_retry_drive     db 0
 raw_edd_retry_count     dw 1
 batch_count             dw 0
-reset_counter           dw 0
+ata_cmd_base            dw 0
+ata_ctrl_base           dw 0
+ata_dev_select          db 0
+ata_pci_bdf             dw 0
+ata_probe_count         db 0
+ata_probe_cmd           dw 0
+ata_probe_ctrl          dw 0
+ata_probe_dev           db 0
+ata_probe_saved_cmd     dw 0
+ata_probe_saved_ctrl    dw 0
+ata_probe_saved_dev     db 0
+raw_default_drive_patched db 0
+raw_clone_mbr_saved     db 0
+raw_atapi_ready         db 0
+atapi_cmd_base          dw 0
+atapi_ctrl_base         dw 0
+atapi_dev_select        db 0
+atapi_block_count       db 0
+atapi_image_lba_lo      dw 0
+atapi_image_lba_hi      dw 0
+atapi_cd_lba_lo         dw 0
+atapi_cd_lba_hi         dw 0
+atapi_buffer_ptr        dw 0
+atapi_transfer_bytes    dw 0
+atapi_bytes_remaining   dw 0
+atapi_retries_left      db 0
+atapi_last_status       db 0
+atapi_last_error        db 0
+atapi_using_mirror      db 0
+atapi_sense_key         db 0
+atapi_sense_asc         db 0
+atapi_sense_ascq        db 0
 prompt_tick_start       dw 0
+
+; command base, control port, ATA device/head prefix, padding
+ata_legacy_candidates:
+    dw 0x01F0, 0x03F6
+    db 0xA0, 0
+    dw 0x01F0, 0x03F6
+    db 0xB0, 0
+    dw 0x0170, 0x0376
+    db 0xA0, 0
+    dw 0x0170, 0x0376
+    db 0xB0, 0
 
 box_top                 db 0
 box_left                db 0
@@ -4762,7 +5206,33 @@ bios_probe_dap         db 0x10, 0x00
                        dq 0x0000000000000000
 
 align 16
+; INT 13h/AH=48h EDD 3.0 drive-parameter buffer, including host/interface
+; and device paths through the checksum byte.
+edd_drive_params       times 0x4A db 0
+
+align 16
+eltorito_spec_packet   times 20 db 0
+atapi_packet           times 12 db 0
+atapi_sense_packet     db ATAPI_CMD_REQUEST_SENSE, 0, 0, 0, 18, 0
+                       times 6 db 0
+atapi_sense_data       times 18 db 0
+raw_clone_mbr          times 512 db 0
+
+align 16
 ; Multi-sector I/O buffer: 8 sectors (4 KB) so the install/format loops can
 ; batch INT 13h transfers and reduce the call count by 8x. Larger batches
 ; mean fewer chances for a real-HW BIOS (e.g. ThinkPad T23) to wedge.
 io_buffer               times 4096 db 0
+
+raw_target_bios db 0x81
+ata_transfer_command db 0x30
+align 16
+setup_verify_buffer_data times 4096 db 0
+; Runtime alignment needs up to 511 padding bytes plus a complete sector.
+setup_bios_bounce_storage times 1023 db 0
+align 16
+setup_stack times 4096 db 0
+setup_stack_top:
+%if ($-$$) > 0xEF00
+%error SETUP.COM exceeds safe COM code/data/stack size
+%endif

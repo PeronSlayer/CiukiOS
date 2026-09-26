@@ -124,6 +124,8 @@ configure_audio_args() {
   local requested_backend="${QEMU_AUDIO_BACKEND:-}"
   local backend=""
   local candidate
+  local audiodev_spec
+  local sb_irq="${QEMU_SB_IRQ:-7}"
 
   QEMU_AUDIO_ARGS=()
   QEMU_AUDIO_DETAIL="off"
@@ -156,11 +158,16 @@ configure_audio_args() {
     [[ -n "$backend" ]] || backend="none"
   fi
 
+  audiodev_spec="${backend},id=snd0"
+  if [[ "$backend" == "wav" && -n "${QEMU_AUDIO_WAV_PATH:-}" ]]; then
+    audiodev_spec+=",path=${QEMU_AUDIO_WAV_PATH}"
+  fi
   QEMU_AUDIO_ARGS=(
-    -audiodev "${backend},id=snd0"
-    -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
+    -audiodev "$audiodev_spec"
+    -device "sb16,iobase=0x220,irq=${sb_irq},dma=1,dma16=5,audiodev=snd0"
+    -device "adlib,audiodev=snd0"
   )
-  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=7 dma=1 hdma=5"
+  QEMU_AUDIO_DETAIL="backend=${backend} sb16=iobase=0x220 irq=${sb_irq} dma=1 hdma=5 adlib=opl2 ports=0x388"
 }
 
 wait_for_socket() {

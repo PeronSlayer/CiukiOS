@@ -1,0 +1,61 @@
+{
+  "increment_validation": "PASS",
+  "whole_user_request_complete": false,
+  "original_DOS_graphics_in_windows": false,
+  "physical_hardware_qualified": false,
+  "image_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "reports": {
+    "native-media/report.json": {
+      "status": "PASS",
+      "sha256": "44c012a4bbd98ab73cacba25c61f27f60127e3faf6a33d1c898cb40dac1db065"
+    },
+    "console-storage/report.json": {
+      "status": "PASS",
+      "sha256": "437c628747e6ca896fa9d133a414ca9359554b490f4f7ddaf206f9a5bb1e5542"
+    },
+    "wallpaper-import/result.json": {
+      "status": "PASS",
+      "sha256": "27cbd6ee5487e99f8c9741a352300cf7a946abd7f5e325b78130d96c9c1547d7"
+    },
+    "wallpaper-pixels/result.json": {
+      "status": "PASS",
+      "sha256": "67519eaf656d7dd5d71da31deaa0f9ba4796f2fe8bd028dad11b78605293bcf9"
+    },
+    "public-wallpapers/result.json": {
+      "status": "PASS",
+      "sha256": "355bc616f86682240cb73b7bd154110324b1c10da2958e22cde6e2d961ad6071"
+    },
+    "keyboard/report.json": {
+      "status": "PASS",
+      "sha256": "8bc85c0d8d391872d3ff743d51de7c33728b7328bc6f54a5619588d86762cb0b"
+    },
+    "sound-ac97/report.json": {
+      "status": "PASS",
+      "sha256": "42ff3d7063f8131104809c4046934ef64fd5451e7bb49435811a8965640b756b"
+    },
+    "sound-sb16/report.json": {
+      "status": "PASS",
+      "sha256": "5f74dad0bbe452e90f7f9780db80f983e615ea026470248a0a3f17a5bfd0014a"
+    },
+    "sound-none/report.json": {
+      "status": "PASS",
+      "sha256": "e2418638676d37b05970ab6951d34ea5ae7661136dc026c3366086ac776b41ac"
+    },
+    "sound-missing/report.json": {
+      "status": "PASS",
+      "sha256": "535e03c629d73177e65855ad42aff787a81a95309d53dd28e22c4be65249c7c8"
+    },
+    "sound-handoff/report.json": {
+      "status": "PASS",
+      "sha256": "4411c30c931ea0a8aa7b5d468aba19c654311457aac43c25582ffdf3c58c5dd5"
+    }
+  },
+  "source_hashes_match": true,
+  "vscode_cgroup_memory_max_bytes": 8000000000,
+  "outstanding": [
+    "Native V86/VGA/DPMI/audio execution of original DOS graphics binaries in windows",
+    "Physical T23/E500 qualification",
+    "Native USB host-controller hot-plug stack (current media browser uses firmware BIOS disks)",
+    "Full-size wallpaper Fit/Fill (current import supports indexed tiles up to256x256)"
+  ]
+}

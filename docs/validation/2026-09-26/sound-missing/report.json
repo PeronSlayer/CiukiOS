@@ -1,0 +1,18 @@
+{
+  "backend": "ac97",
+  "missing_file": true,
+  "input_image_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "result": "PASS",
+  "status": 4,
+  "harness_control_seconds_including_settling": 0.7927017379988683,
+  "play_range": [
+    61440,
+    61440
+  ],
+  "muted_range": [
+    61440,
+    61440
+  ],
+  "no_DOS_transition": true,
+  "event_pcm_rms": 0
+}

@@ -83,7 +83,7 @@ if [[ "$RUN_SMOKE" -eq 1 ]]; then
   mark_pass "FULL_SMOKE"
 fi
 
-IMG="build/full/ciukios-full.img"
+IMG="${CIUKIOS_SETUP_ACCEPTANCE_IMG:-build/full/ciukios-full.img}"
 SETUP_BIN="build/full/obj/setup.com"
 SETUP_MANIFEST_BIN="build/full/obj/setup.mft"
 STAGE1_BIN="build/full/obj/full_stage1.bin"
@@ -112,8 +112,10 @@ SETUP_SIZE="$(stat -c%s "$SETUP_BIN")"
 if [[ "$SETUP_SIZE" -le 0 ]]; then
   mark_fail "SETUP_SIZE_VALID" "unexpected size: $SETUP_SIZE"
 fi
-if [[ "$SETUP_SIZE" -gt 16384 ]]; then
-  mark_fail "SETUP_SIZE_VALID" "payload exceeds setup packaging cap (16384 bytes): $SETUP_SIZE"
+# Match the code/data/stack bound enforced by src/com/setup.asm.
+SETUP_MAX_SIZE=$((0xEF00))
+if [[ "$SETUP_SIZE" -gt "$SETUP_MAX_SIZE" ]]; then
+  mark_fail "SETUP_SIZE_VALID" "payload exceeds safe COM code/data/stack bound ($SETUP_MAX_SIZE bytes): $SETUP_SIZE"
 fi
 mark_pass "SETUP_SIZE_VALID"
 
@@ -243,5 +245,24 @@ if ! cmp -n "$SETUP_MANIFEST_SIZE" "$SETUP_MANIFEST_BIN" <(dd if="$IMG" bs=1 ski
   mark_fail "SETUP_MFT_PAYLOAD_MATCH" "image payload differs from $SETUP_MANIFEST_BIN"
 fi
 mark_pass "SETUP_MFT_PAYLOAD_MATCH"
+
+# The legacy filename is a real second file: FAT does not support aliases
+# sharing a cluster chain. Rewriting either manifest must not damage the other.
+ALT_ENTRY_OFFSET=$((MANIFEST_ENTRY_OFFSET + 32))
+ALT_ENTRY_NAME="$(dd if="$IMG" bs=1 skip="$ALT_ENTRY_OFFSET" count=11 status=none)"
+ALT_CLUSTER="$(read_u16_le "$IMG" $((ALT_ENTRY_OFFSET + 26)))"
+ALT_SIZE="$(read_u32_le "$IMG" $((ALT_ENTRY_OFFSET + 28)))"
+if [[ "$ALT_ENTRY_NAME" != 'MANIFST BIN' || "$ALT_CLUSTER" -le 1 || "$ALT_CLUSTER" -eq "$MANIFEST_ENTRY_CLUSTER" || "$ALT_SIZE" -ne "$SETUP_MANIFEST_SIZE" ]]; then
+  mark_fail "SETUP_MFT_INDEPENDENT_CHAINS" "legacy manifest missing, cross-linked, or wrong size"
+fi
+ALT_FAT_VALUE="$(read_u16_le "$IMG" $((FAT1_LBA * 512 + ALT_CLUSTER * 2)))"
+if (( ALT_FAT_VALUE < 65528 )); then
+  mark_fail "SETUP_MFT_INDEPENDENT_CHAINS" "legacy manifest has an invalid chain"
+fi
+ALT_DATA_OFFSET=$(((DATA_LBA + (ALT_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER) * 512))
+if ! cmp -n "$SETUP_MANIFEST_SIZE" "$SETUP_MANIFEST_BIN" <(dd if="$IMG" bs=1 skip="$ALT_DATA_OFFSET" count="$SETUP_MANIFEST_SIZE" status=none) >/dev/null 2>&1; then
+  mark_fail "SETUP_MFT_INDEPENDENT_CHAINS" "legacy manifest payload differs"
+fi
+mark_pass "SETUP_MFT_INDEPENDENT_CHAINS"
 
 echo "[setup-accept-full] PASS (FULL-only setup packaging acceptance)"

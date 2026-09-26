@@ -2,12 +2,17 @@ build/
 boot/uefi-loader/build/
 .ciukios-testlogs/
 .claude/
-.vscode/
+# Keep workspace performance settings; local tasks and MCP config stay private.
+.vscode/*
+!.vscode/settings.json
 
 .DS_Store
 gemvdi*.bin
 
 *.log
+__pycache__/
+*.py[cod]
+*.err
 *.img
 third_party/windows31/installed/
 third_party/windows31/*.txt
@@ -42,3 +47,4 @@ handoffs/
 # Local proprietary test payloads (internal-only, never publish)
 third_party/Doom/
 third_party/WOLF3D/
+third_party/win_bg/

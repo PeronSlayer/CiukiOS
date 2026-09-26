@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd build-shell-com build-doom-vanille-probe fetch-costa fetch-network-stack verify-full-drivers-payload verify-phase5-runtime-ownership test-serial-log-normalize qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-full-cd-shell-com-boot qemu-test-full-cd-shell-com-boot-fallback qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-costa qemu-test-full-network-ftp qemu-test-full-network-icmp qemu-test-full-windows31 qemu-test-full-doom-taxonomy qemu-test-full-doomvan-taxonomy qemu-test-full-doomvan-memory qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-cutemouse qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-shell-com qemu-test-full-shell-com-boot qemu-test-full-shell-com-boot-fallback qemu-test-release-sweep qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd build-shell-com build-doom-vanille-probe fetch-costa fetch-network-stack verify-full-drivers-payload verify-phase5-runtime-ownership test-serial-log-normalize qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-full-cd-shell-com-boot qemu-test-full-cd-shell-com-boot-fallback qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-costa qemu-test-full-network-ftp qemu-test-full-network-icmp qemu-test-full-windows31 qemu-test-full-doom-taxonomy qemu-test-full-doom-audio qemu-test-full-doomvan-taxonomy qemu-test-full-doomvan-memory qemu-test-full-doomvan-audio qemu-test-full-doomvan-performance qemu-test-full-opl-audio qemu-test-full-dos-audio qemu-test-full-video-restore qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-wolf3d-audio qemu-test-full-cutemouse qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-shell-com qemu-test-full-shell-com-boot qemu-test-full-shell-com-boot-fallback qemu-test-release-sweep qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -26,12 +26,19 @@ help:
 	@echo "  make qemu-test-full-network-icmp - validate NETCFG and resident ICMP without FTP"
 	@echo "  make qemu-test-full-windows31 - validate the optional Windows 3.1 Enhanced Mode workflow"
 	@echo "  make qemu-test-full-doom-taxonomy - legacy DOOM taxonomy alias (compat)"
+	@echo "  make qemu-test-full-doom-audio - validate original Doom gameplay plus OPL2 music/PC-speaker SFX"
 	@echo "  make qemu-test-full-doomvan-taxonomy - isolated doom-vanille startup taxonomy"
 	@echo "  make qemu-test-full-doomvan-memory - require doom-vanille to pass its 256 KiB low-DOS allocation"
+	@echo "  make qemu-test-full-doomvan-audio - validate doom-vanille OPL2 music plus SB16 SFX"
+	@echo "  make qemu-test-full-doomvan-performance - require real-time doom-vanille VGA rendering"
+	@echo "  make qemu-test-full-opl-audio - isolate and validate external AdLib/OPL2 music"
+	@echo "  make qemu-test-full-dos-audio - validate real-mode, DOS/4GW, OPL2 and SB16 playback"
+	@echo "  make qemu-test-full-video-restore - require clean VGA text mode after a graphics child exits"
 	@echo "  make qemu-test-full-doomsfx - controlled DOOM WAD SB16 SFX harness"
 	@echo "  make qemu-test-full-doomsfx-dsdoropn - controlled DOOM door-open SB16 SFX harness"
 	@echo "  make qemu-test-full-dos-taxonomy - classify generic DOS full-profile taxonomy stages"
 	@echo "  make qemu-test-full-wolf3d-taxonomy - validate WOLF3D transfer/runtime/video stages"
+	@echo "  make qemu-test-full-wolf3d-audio - validate protected Wolf3D AdLib/SB audio over PCI AC97"
 	@echo "  make qemu-test-full-cutemouse - external CuteMouse install/INT33/unload workflow on an isolated image"
 	@echo "  make qemu-test-full-drvload-smoke - run full-profile DRVLOAD smoke test"
 	@echo "  make qemu-test-full-shell-stability - run full-profile shell stability test"
@@ -122,13 +129,31 @@ verify-phase5-runtime-ownership:
 	@bash scripts/verify_phase5_runtime_ownership.sh
 
 qemu-test-full-doom-taxonomy:
-	@DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_RUN_COMMAND='run DOOM.EXE' DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doom-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=25 DOS_TAXONOMY_OBSERVE_SEC=50 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=320 bash scripts/qemu_test_full_dos_taxonomy.sh
+	@DOS_TAXONOMY_USE_CASE=doom DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_VISUAL_PROFILE=doom_vga_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_RUN_COMMAND='run DOOM.EXE' DOS_TAXONOMY_POST_LAUNCH_KEYS='esc ret ret ret' DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC=20 DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC=2 DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doom-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=10 DOS_TAXONOMY_OBSERVE_SEC=30 QEMU_AUDIO_MODE=on DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=320 bash scripts/qemu_test_full_dos_taxonomy.sh
+
+qemu-test-full-doom-audio:
+	@bash scripts/qemu_test_full_doom_audio.sh
 
 qemu-test-full-doomvan-taxonomy:
-	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOOMVAN DOS_TAXONOMY_APP_BINARY_NAME=PCDOOM.EXE DOS_APP_AUX_PRIMARY=DOOM.WAD DOS_APP_AUX_ALIAS=DOOM.WAD DOS_TAXONOMY_CWD='\APPS\DOOMVAN' DOS_TAXONOMY_RUN_COMMAND='run PCDOOM.EXE -nosound -nomusic' DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doomvan-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=20 DOS_TAXONOMY_OBSERVE_SEC=35 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_dos_taxonomy.sh
+	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dosapp DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_VISUAL_PROFILE=doom_vga_gameplay DOS_TAXONOMY_DISPLAY_MODE=nographic DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS/DOOMVAN DOS_TAXONOMY_APP_BINARY_NAME=PCDOOM.EXE DOS_APP_AUX_PRIMARY=DOOM.WAD DOS_APP_AUX_ALIAS=DOOM.WAD DOS_TAXONOMY_CWD='\APPS\DOOMVAN' DOS_TAXONOMY_RUN_COMMAND='run PCDOOM.EXE' DOS_TAXONOMY_POST_LAUNCH_KEYS='esc ret ret ret' DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC=20 DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC=2 DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-doomvan-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=10 DOS_TAXONOMY_OBSERVE_SEC=25 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=none DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_dos_taxonomy.sh
 
 qemu-test-full-doomvan-memory:
 	@bash scripts/qemu_test_full_doomvan_memory.sh
+
+qemu-test-full-doomvan-audio:
+	@bash scripts/qemu_test_full_doomvan_audio.sh
+
+qemu-test-full-doomvan-performance:
+	@bash scripts/qemu_test_full_doomvan_performance.sh
+
+qemu-test-full-opl-audio:
+	@bash scripts/qemu_test_full_opl_audio.sh
+
+qemu-test-full-dos-audio:
+	@bash scripts/qemu_test_full_dos_audio.sh
+
+qemu-test-full-video-restore:
+	@bash scripts/qemu_test_full_video_restore.sh
 
 qemu-test-full-doomsfx:
 	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=transfer_marker DOS_TAXONOMY_APP_DIR_IN_IMAGE=:: DOS_TAXONOMY_APP_BINARY_NAME=DOOMSFX.EXE DOS_TAXONOMY_CWD='\' DOS_TAXONOMY_RUN_COMMAND="run DOS4GW.EXE DOOMSFX.EXE$(if $(DOOMSFX_LUMP), $(DOOMSFX_LUMP))" DOS_TAXONOMY_APP_RUNTIME_MARKERS='\[DOOMSFX\][[:space:]]+PASS|\[\[DDOOOOMMSSFFXX\]\][[:space:]]+PPAASSSS' DOS_TAXONOMY_RUN_DRVLOAD=0 QEMU_AUDIO_MODE=on QEMU_AUDIO_BACKEND=alsa QEMU_TIMEOUT_SEC=260 bash scripts/qemu_test_full_dos_taxonomy.sh
@@ -140,7 +165,10 @@ qemu-test-full-dos-taxonomy:
 	@DOS_TAXONOMY_USE_CASE=generic DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=runtime_stable DOS_TAXONOMY_APP_DIR_IN_IMAGE=::APPS DOS_TAXONOMY_APP_BINARY_NAME=CIUKEDIT.COM DOS_TAXONOMY_RUN_COMMAND='run CIUKEDIT.COM MATRIX.TXT' DOS_TAXONOMY_APP_RUNTIME_MARKERS='[CIUKEDIT:BOOT]|[CIUKEDIT:OK]|[{1,2}C{1,2}I{1,2}U{1,2}K{1,2}E{1,2}D{1,2}I{1,2}T{1,2}:{1,2}(B{1,2}O{2,4}T{1,2}|O{1,2}K{1,2})]{1,2}' DOS_TAXONOMY_CWD='APPS' DOS_TAXONOMY_RUN_DRVLOAD=0 bash scripts/qemu_test_full_dos_taxonomy.sh
 
 qemu-test-full-wolf3d-taxonomy:
-	@DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=none DOS_TAXONOMY_POST_LAUNCH_KEYS='a a ret ret ret ret up ctrl' DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC=5 DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC=3 DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-wolf3d-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=6 DOS_TAXONOMY_OBSERVE_SEC=10 QEMU_ACCEL_MODE=wolf3d-safe QEMU_TIMEOUT_SEC=180 bash scripts/qemu_test_full_dos_taxonomy.sh
+	@DOS_TAXONOMY_USE_CASE=wolf3d DOS_TAXONOMY_PROFILE=dos_generic DOS_TAXONOMY_MIN_STAGE=visual_gameplay DOS_TAXONOMY_RUN_DRVLOAD=0 DOS_TAXONOMY_DISPLAY_MODE=none DOS_TAXONOMY_POST_LAUNCH_KEYS='a a ret ret ret ret up ctrl' DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC=5 DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC=3 DOS_TAXONOMY_SCREENSHOT=build/full/qemu-full-wolf3d-taxonomy.ppm DOS_TAXONOMY_SCREENSHOT_DELAY_SEC=6 DOS_TAXONOMY_OBSERVE_SEC=10 QEMU_ACCEL_MODE=kvm QEMU_TIMEOUT_SEC=180 bash scripts/qemu_test_full_dos_taxonomy.sh
+
+qemu-test-full-wolf3d-audio:
+	@bash scripts/qemu_test_full_wolf3d_audio.sh
 
 qemu-test-full-cutemouse:
 	@bash scripts/qemu_test_full_cutemouse.sh

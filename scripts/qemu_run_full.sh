@@ -32,6 +32,8 @@ Modes:
 Options:
   --no-build           Skip image build step.
   --dry-run            Print the QEMU command without running it.
+  --vga-fast           Use the measured TCG planar-VGA fast path. QEMU 11.1
+                       is not stable with the local original Doom binary.
   --display <backend>  QEMU display backend in visual mode (default: auto;
                        SDL/X11 is preferred, GTK is the fallback).
 
@@ -39,21 +41,23 @@ Environment:
   QEMU_BIN         Override QEMU binary.
   QEMU_CPU_MODEL   CPU model (default: pentium3, single vCPU for DOS/Win 3.x).
   QEMU_MEMORY_MB   VM RAM in MiB (default: 256; minimum: 64).
+  CIUKIOS_FULL_IMG Disk image (default: build/full/ciukios-full.img).
   QEMU_EXTRA_ARGS  Extra args appended to QEMU command.
-  QEMU_ACCEL_MODE  Accelerator: kvm, auto, tcg, or tcg-safe (default: kvm).
-                    The default fails if hardware acceleration is unavailable;
-                    auto permits the Wolf3D-safe TCG fallback.
+  QEMU_ACCEL_MODE  Accelerator: kvm, vga-fast, auto, tcg, or tcg-safe
+                    (default: kvm). vga-fast is an explicit JIT profile for
+                    planar-VGA workloads that are verified TCG-safe.
   QEMU_DISPLAY_TRANSPORT  Pointer transport: auto, x11, or native (default: auto).
                     auto forces verified X11/XWayland for reliable PS/2 grabs.
   QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: on).
+  QEMU_AUDIO_DEVICES Guest sound card: standard (SB16/AdLib, default) or ac97.
   QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
   QEMU_NETWORK_MODE  Network mode: auto, user, tap, off (default: auto; user in GUI).
   QEMU_NET_HOST_FTP_PORT  Host port forwarded to CiukiOS FTP/21 (default: 8021).
                          Passive FTP data uses 127.0.0.1:2048.
   QEMU_NET_TAP_IF    Preconfigured TAP interface for tap mode (default: ciukios0).
                      Tap mode makes 10.0.2.15 directly reachable, including ICMP.
-  QEMU_LEGACY_NAV_KEYS  Map dedicated navigation keys to DOS-compatible scan
-                    codes in visual mode (default: 1; set 0 to disable).
+  QEMU_LEGACY_NAV_KEYS  Diagnostic-only remap of dedicated navigation keys to
+                    keypad scan codes (default: 0; normal DOS input stays native).
   QEMU_KEYMAP_LAYOUT  Base QEMU keymap used for visual input (default: en-us).
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full.log).
@@ -78,6 +82,7 @@ QEMU_MACHINE_ARG="pc,vmport=off,i8042=on"
 QEMU_KEYBOARD_ARGS=()
 QEMU_KEYBOARD_DETAIL="native"
 QEMU_DISPLAY_TRANSPORT_DETAIL="native"
+QEMU_MOUSE_INPUT_DETAIL="display backend default"
 QEMU_CPU_MODEL="${QEMU_CPU_MODEL:-pentium3}"
 QEMU_MEMORY_MB="${QEMU_MEMORY_MB:-256}"
 
@@ -92,7 +97,7 @@ if [[ ! "$QEMU_MEMORY_MB" =~ ^[0-9]+$ ]] \
 fi
 
 prepare_legacy_navigation_keymap() {
-  local enabled="${QEMU_LEGACY_NAV_KEYS:-1}"
+  local enabled="${QEMU_LEGACY_NAV_KEYS:-0}"
   local layout="${QEMU_KEYMAP_LAYOUT:-en-us}"
   local source="${QEMU_KEYMAP_SOURCE:-/usr/share/qemu/keymaps/$layout}"
   local output="$ROOT_DIR/build/full/qemu-keymap-${layout}-legacy-nav"
@@ -181,6 +186,7 @@ configure_display_environment() {
   local x11_socket=""
 
   QEMU_DISPLAY_TRANSPORT_DETAIL="native"
+  QEMU_MOUSE_INPUT_DETAIL="${backend%%,*} display relative input"
 
   case "$transport" in
     auto|x11|native) ;;
@@ -189,6 +195,14 @@ configure_display_environment() {
       exit 1
       ;;
   esac
+
+  # Keep the canonical DOS path on SDL raw-relative input.  Warp-relative mode
+  # generates synthetic recentering motion that breaks Costa and DOSNavigator,
+  # so override any inherited host hint for every canonical visual run.
+  if [[ "$backend" == sdl* ]]; then
+    export SDL_MOUSE_RELATIVE_MODE_WARP=0
+    QEMU_MOUSE_INPUT_DETAIL="SDL raw-relative input (canonical DOS path)"
+  fi
 
   if [[ "$transport" == "native" ]]; then
     QEMU_DISPLAY_TRANSPORT_DETAIL="native (explicit override)"
@@ -244,6 +258,10 @@ configure_accel_args() {
   fi
 
   case "$mode" in
+    vga-fast)
+      QEMU_ACCEL_ARGS=(-accel tcg)
+      QEMU_ACCEL_DETAIL="tcg JIT (legacy VGA fast path)"
+      ;;
     auto)
       if qemu_kvm_available; then
         QEMU_ACCEL_ARGS=(-accel kvm)
@@ -271,7 +289,7 @@ configure_accel_args() {
       QEMU_ACCEL_DETAIL="tcg one-insn-per-tb (Wolf3D-safe)"
       ;;
     *)
-      echo "[qemu-run-full] ERROR: invalid QEMU_ACCEL_MODE=$mode (expected auto, kvm, tcg or tcg-safe)" >&2
+      echo "[qemu-run-full] ERROR: invalid QEMU_ACCEL_MODE=$mode (expected vga-fast, auto, kvm, tcg or tcg-safe)" >&2
       exit 1
       ;;
   esac
@@ -411,12 +429,24 @@ configure_audio_args() {
     [[ -n "$backend" ]] || backend="none"
   fi
 
-  QEMU_AUDIO_ARGS=(
-    -audiodev "${backend},id=snd0"
-    -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
-  )
+  QEMU_AUDIO_ARGS=(-audiodev "${backend},id=snd0")
+  case "${QEMU_AUDIO_DEVICES:-standard}" in
+    standard)
+      QEMU_AUDIO_ARGS+=(
+        -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
+        -device "adlib,audiodev=snd0")
+      QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=7 dma=1 hdma=5 adlib=opl2 ports=0x388"
+      ;;
+    ac97)
+      QEMU_AUDIO_ARGS+=(-device "AC97,audiodev=snd0")
+      QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on ac97=8086:2415"
+      ;;
+    *)
+      echo "[qemu-run-full] ERROR: QEMU_AUDIO_DEVICES must be standard or ac97" >&2
+      exit 1
+      ;;
+  esac
   QEMU_MACHINE_ARG="pc,vmport=off,i8042=on,pcspk-audiodev=snd0"
-  QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=7 dma=1 hdma=5"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -431,6 +461,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --vga-fast)
+      export QEMU_ACCEL_MODE=vga-fast
       shift
       ;;
     --display)
@@ -463,7 +497,7 @@ if [[ "$DO_BUILD" -eq 1 ]]; then
   bash scripts/build_full.sh
 fi
 
-IMG="build/full/ciukios-full.img"
+IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 if [[ ! -f "$IMG" ]]; then
   echo "[qemu-run-full] ERROR: image not found: $IMG" >&2
   exit 1
@@ -588,6 +622,7 @@ echo "[qemu-run-full] starting visual QEMU session"
 echo "[qemu-run-full] full profile FAT16 baseline boot"
 echo "[qemu-run-full] display backend: $RESOLVED_DISPLAY_BACKEND"
 echo "[qemu-run-full] display transport: $QEMU_DISPLAY_TRANSPORT_DETAIL"
+echo "[qemu-run-full] mouse input path: $QEMU_MOUSE_INPUT_DETAIL"
 echo "[qemu-run-full] vga device: std"
 echo "[qemu-run-full] keyboard: $QEMU_KEYBOARD_DETAIL"
 echo "[qemu-run-full] resources: 1 x $QEMU_CPU_MODEL, ${QEMU_MEMORY_MB} MiB RAM"
@@ -595,7 +630,7 @@ echo "[qemu-run-full] accelerator: $QEMU_ACCEL_DETAIL"
 echo "[qemu-run-full] audio: $QEMU_AUDIO_DETAIL"
 echo "[qemu-run-full] network: $QEMU_NETWORK_DETAIL"
 echo "[qemu-run-full] serial log: build/full/qemu-visual.log"
-echo "[qemu-run-full] mouse: PS/2 i8042 enabled; entering the window captures it; Ctrl+Alt+G releases it"
+echo "[qemu-run-full] guest mouse: standard PS/2 i8042; entering the window captures it; Ctrl+Alt+G releases it"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '[qemu-run-full] dry-run:'

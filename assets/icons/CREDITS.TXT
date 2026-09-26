@@ -1,0 +1,33 @@
+CiukiOS official system icons
+============================
+
+Based on Tango Icon Theme 0.8.90.
+Upstream icons are released into the Public Domain.
+See TANGO.TXT for the original declaration and AUTHORS.TXT for authors.
+
+Authors:
+Ulisse Perusin, Steven Garrity, Lapo Calamandrei, Ryan Collier,
+Rodney Dawes, Andreas Nilsson, Tuomas Kuosmanen, Garrett LeSage,
+Jakub Steiner.
+
+Source:
+https://tango.freedesktop.org/releases/tango-icon-theme-0.8.90.tar.gz
+
+Archive SHA-256:
+6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e
+
+Selected generic icons have been converted for the CiukiOS renderer.
+The family does not use extracted Microsoft or Apple icon artwork.
+No endorsement by Tango's authors is implied.
+
+CiukiOS is dedicated to Ciuki, the dog in the original boot splash.
+Computer, About and other identity icons incorporate deterministic
+conversions of the owner's approved Ciuki portrait. That portrait and
+the CiukiOS composites are separate project assets, not part of
+Tango's Public Domain release. This notice grants no new license
+for the portrait. The approved portrait must not be redrawn or replaced.
+
+Project source documents:
+assets/icons/README.md
+assets/brand/README.md
+assets/brand/generation.md

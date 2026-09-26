@@ -8,6 +8,17 @@ bits 16
 org 0x0100
 
 start:
+    cli
+    mov ax, cs
+    mov ss, ax
+    mov sp, launcher_stack_top
+    sti
+    mov es, ax
+    mov bx, ((launcher_image_end - $$ + 0x0100) + 15) >> 4
+    mov ah, 0x4A
+    int 0x21
+    jc memory_error
+
     cld
     push cs
     pop ds
@@ -87,6 +98,14 @@ apply_command:
     mov dx, msg_apply_done
     call print_dollar
     jmp success_exit
+
+memory_error:
+    push cs
+    pop ds
+    mov dx, msg_memory_error
+    call print_dollar
+    mov ax, 0x4C08
+    int 0x21
 
 usage_error:
     mov dx, msg_usage
@@ -542,6 +561,7 @@ msg_dhcp_error db 'NETCFG: DHCP failed', 13, 10, '$'
 msg_dhcp_done db 'NETCFG: DHCP lease saved and resident ICMP address reloaded', 13, 10, '$'
 msg_apply_error db 'NETCFG: cannot start/reload the resident network service', 13, 10, '$'
 msg_apply_done db 'NETCFG: configuration applied to the resident network service', 13, 10, '$'
+msg_memory_error db 'NETCFG: cannot release memory for child process', 13, 10, '$'
 
 config_prefix db '# CiukiOS mTCP profile - managed by NETCFG', 13, 10
               db 'packetint 0x61', 13, 10
@@ -581,3 +601,8 @@ new_mask times 4 db 0
 new_gateway times 4 db 0
 new_dns times 4 db 0
 config_output times 1536 db 0
+
+align 16
+launcher_stack times 1024 db 0
+launcher_stack_top:
+launcher_image_end:

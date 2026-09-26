@@ -1,6 +1,6 @@
 # Engineering Logbook - CiukiOS Legacy v2
 
-> Historical log through early May 2026. It is not the current phase-status authority; use `../Roadmap.md` and the focused runtime/compatibility plans for current status.
+> Chronological engineering record. Older entries retain their original scope; use `../Roadmap.md` and `current-milestones.md` for current status.
 
 ## 2026-04-22
 1. Decision: full architectural reset toward legacy BIOS x86.
@@ -140,3 +140,20 @@
 110. Runtime validation: replaced the oversized probe-only CIUKIDOS build with a black-box `CIUKRTST.COM` check against the exact canonical 43,254-byte kernel, then derived all eight fatal ABI cases from the same hash-verified image.
 111. Networking/EXEC: fixed `NETSTART` as a normal DOS COM parent by relocating its transient stack and releasing unused PSP paragraphs with `AH=4Ah` before nested `AH=4Bh`; added hexadecimal DOS error reporting and revalidated both FTP and ICMP gates.
 112. Release: promoted the current milestone ledger to a stable filename, aligned the v0.7.1 documentation to the exact release checkout, and retained Phase 6, Phase 7, broader Phase 8/9, Doom graphics/audio, and WOLF3D generalization as explicit open work.
+113. Process compatibility: replaced the setup-only `COMMAND.COM` stub with the functional shell compatibility mode, fixed generic termination for children that change PSP, and removed the unused private keyboard handler; the kernel is now 43,167 bytes on `full` and 43,162 bytes on the D:-default `full-cd` profile under the unchanged 43,264-byte ceiling.
+114. DOSNavigator: removed the packaged loader patch, verified the image payload is byte-identical to upstream, switched automation to native `Alt+X`, and proved same-boot ownership, PS/2 callback, and graphics cleanup after navigation, mouse, and Colors/XMS.
+115. Doom-vanille: traced striped wall columns to missing upstream Watcom ABI flags rather than a kernel video defect; one-byte structure packing plus the original compiler contract restores HUD and wall textures while the automatic 256 KiB allocation remains green.
+116. Validation: added Doom-specific HUD/wall-integrity classification, corrected the serial prompt-return race, removed the visual-over-runtime failure override, and added an objective KVM/WAV non-silent PC-speaker gameplay gate for original Doom.
+117. Release discipline: expanded the default aggregate to all locally available Costa, DOSNavigator, WOLF3D, original Doom, doom-vanille, Windows 3.1, CuteMouse, shell/runtime, ABI-negative, and full-CD workloads; installer and networking remain focused lanes.
+118. Video recovery: external child return now recreates the complete BIOS mode-03 contract before the shell redraws. The hostile mode-13 exit gate verifies 720x400 text, font/page/cursor state, title bar, and prompt rather than relying on each application to clean up.
+119. Audio: all canonical runners expose AdLib/OPL2, SB16, and PC speaker together. Original Doom passes OPL2 music plus PC-speaker SFX; doom-vanille passes OPL2 music plus SB16 SFX with combined DMX return 10 and objective mixed output.
+120. Performance: added a measured opt-in `vga-fast` TCG JIT profile for legacy VGA. Doom-vanille improved from 1106 to 172 realtics for 350 gametics, and focused Wolf3D, Costa, DOSNavigator, and Windows 3.1 regressions passed; KVM remains the default because QEMU 11.1 TCG crashes during original Doom gameplay and `tcg-safe` is too slow.
+121. Windows memory: replaced the installed 640/128 KiB conventional and 1 MiB EMS/XMS PIF limits with generated all-available profiles. DOSMGR synthetic PSPs now receive a generic conventional arena, with no executable-name or Doom-specific PIF rule.
+122. Windows process cleanup: traced post-MIDI Doom “memoria insufficiente” to a leaked fifth EXEC frame. Windows now records its four-frame startup baseline and independently unwinds every later Win16 or secondary-DOS-VM frame, while preserving the system VM and task-scoped `Alt+F4` behavior.
+123. Windows validation: proved generic `COMMAND.COM` enter/exit, non-silent advancing `CANYON.MID` through native AdLib, unprofiled DOS/4GW Doom launch/exit with dynamic memory, Calculator `Alt+F4`, Windows exit, DOS mouse recovery, and a second Enhanced Mode launch in one boot. DOSNavigator, Costa/Calculator, and external CuteMouse regressions remained green.
+
+## 2026-09-26
+124. Native desktop: integrated BIOS-text DOS windows, graphical file/media browsing, wallpaper catalog/import, licensed event sounds and cooperative preview keyboard fixes; original DOS graphics virtualization remains open.
+125. Validation: archived eleven focused QEMU reports for image `08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6` in `validation/2026-09-26/`, including actual input, file hashes, framebuffer pixels, PCM and interrupt/device restoration. No physical hardware acceptance is inferred.
+126. Publication: synchronized current documentation, retained dated investigations as historical evidence, preserved upstream licenses and excluded personal Windows wallpaper inputs and generated caches.
+127. Next implementation: original-binary DOS sessions require a V86 monitor, virtual video/input, protected-mode presentation and coordinated DPMI/audio ownership; cooperative source ports do not satisfy that requirement.

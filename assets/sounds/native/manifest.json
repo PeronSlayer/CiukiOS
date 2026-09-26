@@ -1,0 +1,58 @@
+{
+  "license": "CC0-1.0",
+  "source": "https://kenney.nl/assets/interface-sounds",
+  "events": {
+    "ERROR": {
+      "original": "error_001.ogg",
+      "outputs": {
+        "PCM": {
+          "bytes": 31040,
+          "sha256": "f32542bc8809552bf69843e9cab92b6cd0f554e3acb733ce811f6e7239c69eef"
+        },
+        "SB": {
+          "bytes": 1294,
+          "sha256": "1c48ce1a9ae00a4e15a9a0e9f9b21587a78c90a2e3c20955fb71e7770b64f9ee"
+        }
+      }
+    },
+    "INFO": {
+      "original": "confirmation_001.ogg",
+      "outputs": {
+        "PCM": {
+          "bytes": 55652,
+          "sha256": "e6d8f444b80ca0dd8007bb60c9906b0f6d9c0a11e5e88b997024883dd49ac1d7"
+        },
+        "SB": {
+          "bytes": 2319,
+          "sha256": "57099de28d5a2ab766fb7d0d9092ab1301db76e64338d62f9d8132c0c459876b"
+        }
+      }
+    },
+    "WARN": {
+      "original": "question_002.ogg",
+      "outputs": {
+        "PCM": {
+          "bytes": 63844,
+          "sha256": "0a1eba9e9786c43d100a3d81d9694751f99824433d2586368773e7345adf2669"
+        },
+        "SB": {
+          "bytes": 2660,
+          "sha256": "b20460611c88cbba9b9002d99962c90c0593ce7640bdbe4be16823976732c448"
+        }
+      }
+    },
+    "CONFIRM": {
+      "original": "confirmation_003.ogg",
+      "outputs": {
+        "PCM": {
+          "bytes": 61828,
+          "sha256": "764c109c0c08c35ef3feeee7d8567f4ac7502fe944541bb56b7a46cd30b30710"
+        },
+        "SB": {
+          "bytes": 2576,
+          "sha256": "7c4f9f3e7736b61297a582fc67e4b079c51f5e2f1ab1f3d64b85ca6cf0612fc4"
+        }
+      }
+    }
+  }
+}

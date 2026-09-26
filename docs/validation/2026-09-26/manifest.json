@@ -1,0 +1,72 @@
+{
+  "image_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "bytes": 134217728,
+  "files": {
+    "SYSTEM/SHELL.COM": {
+      "bytes": 60832,
+      "sha256": "dadb2e6783c6382ae1dad48531c4aad33f027eeed98948419dcf87c29bc05c53"
+    },
+    "SYSTEM/DOSWIN.DRV": {
+      "bytes": 31536,
+      "sha256": "b908b3df6138d8b51e73f674b23f482f24ca6755e141a022b1c1f8ddfb26e840"
+    },
+    "SYSTEM/CIUKIDOS.SYS": {
+      "bytes": 43169,
+      "sha256": "116276101b269c46d7390eb9bbc6b5dd1da90a371a222ebe22f6ae65c1ce9ea3"
+    },
+    "SYSTEM/DRIVERS/SFX.DRV": {
+      "bytes": 9024,
+      "sha256": "c31495bd4a502a5f5b101cb0e47c529574d4f978eaebb3bee4e121564a157b4d"
+    },
+    "SYSTEM/MEDIA.DRV": {
+      "bytes": 11773,
+      "sha256": "b4195a5f37f8a3a8fc4dc2f0f0adf08dae7393f1807640fd10082ba78afac6bd"
+    },
+    "COMMAND.COM": {
+      "bytes": 14752,
+      "sha256": "8161c1a97036fda0e2dabfe22b861828ebac418299932e05c43c4756d1422eed"
+    },
+    "APPS/DWIN.COM": {
+      "bytes": 1012,
+      "sha256": "ea42069a47bd653c360438db77eebcdbf7b77c64a5cc16f70eb970fbcdce2042"
+    },
+    "APPS/DOOMWIN.EXE": {
+      "bytes": 448516,
+      "sha256": "8cad7ef7d89258ca81a6df9d7e6cd36b9a2aec57fb6038949619add01b0b246c"
+    },
+    "APPS/WOLFWIN.EXE": {
+      "bytes": 413424,
+      "sha256": "fa00c50c0f3c9f61e12d238eb2c505930ea319a31bc939a51dc3d3808c47e4f6"
+    },
+    "SYSTEM/BOOTSND.COM": {
+      "bytes": 9136,
+      "sha256": "9f4cc68dfa5569cc60c8d92220bcfc9fea79bb0cb646f213d827b2c44163f482"
+    },
+    "SYSTEM/SOUNDS/ERROR.PCM": {
+      "bytes": 31040,
+      "sha256": "f32542bc8809552bf69843e9cab92b6cd0f554e3acb733ce811f6e7239c69eef"
+    },
+    "SYSTEM/SOUNDS/INFO.PCM": {
+      "bytes": 55652,
+      "sha256": "e6d8f444b80ca0dd8007bb60c9906b0f6d9c0a11e5e88b997024883dd49ac1d7"
+    },
+    "SYSTEM/SOUNDS/WARN.PCM": {
+      "bytes": 63844,
+      "sha256": "0a1eba9e9786c43d100a3d81d9694751f99824433d2586368773e7345adf2669"
+    },
+    "SYSTEM/SOUNDS/CONFIRM.PCM": {
+      "bytes": 61828,
+      "sha256": "764c109c0c08c35ef3feeee7d8567f4ac7502fe944541bb56b7a46cd30b30710"
+    },
+    "SYSTEM/UI/WALLS.DAT": {
+      "bytes": 512,
+      "sha256": "5cf81f04abe76f337095b0a49702abfeded6b078d3451b8b31d40249d1b84a0a"
+    }
+  },
+  "unchanged_from_previous": [
+    "SYSTEM/CIUKIDOS.SYS",
+    "COMMAND.COM",
+    "SYSTEM/DOSWIN.DRV",
+    "SYSTEM/BOOTSND.COM"
+  ]
+}

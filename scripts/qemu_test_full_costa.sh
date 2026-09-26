@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 DO_BUILD="${DO_BUILD:-1}"
 IMG="${IMG:-build/full/ciukios-full.img}"
+COSTA_BOOT_ISO="${COSTA_BOOT_ISO:-}"
 PREFIX="${COSTA_TEST_PREFIX:-build/full/qemu-full-costa}"
 SERIAL_LOG="${PREFIX}.serial.log"
 STDERR_LOG="${PREFIX}.stderr.log"
@@ -18,8 +19,8 @@ QEMU_TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-120}"
 COSTA_OBSERVE_SEC="${COSTA_OBSERVE_SEC:-22}"
 COSTA_CURSOR_SETTLE_SEC="${COSTA_CURSOR_SETTLE_SEC:-2}"
 COSTA_CALC_OBSERVE_SEC="${COSTA_CALC_OBSERVE_SEC:-15}"
-QEMU_TEST_ACCEL="${QEMU_TEST_ACCEL:-tcg}"
-QEMU_TEST_MEMORY_MB="${QEMU_TEST_MEMORY_MB:-16}"
+QEMU_TEST_ACCEL="${QEMU_TEST_ACCEL:-kvm}"
+QEMU_TEST_MEMORY_MB="${QEMU_TEST_MEMORY_MB:-256}"
 
 fail() {
   echo "[costa-test] FAIL: $*" >&2
@@ -122,14 +123,19 @@ rm -f -- \
   "$SERIAL_LOG" "$STDERR_LOG" "$SCREENSHOT" "$CURSOR_SCREENSHOT" \
   "$CALC_SCREENSHOT" "$META_LOG"
 
+boot_args=(-drive "file=$IMG,format=raw,if=ide" -boot c)
+if [[ -n "$COSTA_BOOT_ISO" ]]; then
+  [[ -f "$COSTA_BOOT_ISO" ]] || fail "missing CD ISO: $COSTA_BOOT_ISO"
+  boot_args=(-cdrom "$COSTA_BOOT_ISO" -boot d)
+fi
+
 timeout "$QEMU_TIMEOUT_SEC" "$QEMU_CMD" \
   -accel "$QEMU_TEST_ACCEL" \
   -machine pc,vmport=off,i8042=on \
   -cpu pentium3 \
   -m "$QEMU_TEST_MEMORY_MB" \
-  -drive "file=$IMG,format=raw,if=ide" \
+  "${boot_args[@]}" \
   -snapshot \
-  -boot c \
   -display none \
   -serial "file:$SERIAL_LOG" \
   -monitor "unix:$MON_SOCK,server,nowait" \

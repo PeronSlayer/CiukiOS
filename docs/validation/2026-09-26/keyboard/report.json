@@ -1,0 +1,195 @@
+{
+  "passed": true,
+  "events": [
+    {
+      "name": "mouse click",
+      "host_seconds": 4.658583860000363,
+      "action": 58,
+      "owner": 1,
+      "position": [
+        622,
+        496
+      ]
+    },
+    {
+      "name": "Doom started actual demo recording",
+      "host_seconds": 20.637484645994846,
+      "host_observed": 127078.498170395,
+      "read_seconds": 0.0017940920079126954,
+      "live": 1,
+      "busy": 1,
+      "graphics_active": 1,
+      "runtime_errors": 0,
+      "completed_callbacks": 1640,
+      "completed_ui_paints": 7,
+      "focused": true,
+      "close_requested": false,
+      "guest_milliseconds": 60,
+      "completed_visible_game_frames": 1,
+      "status": 0,
+      "host_bpp": 32
+    },
+    {
+      "name": "physical PS/2 chord",
+      "host_seconds": 22.62131057899387,
+      "keys": "ctrl",
+      "hold_ms": 550
+    },
+    {
+      "name": "physical PS/2 chord",
+      "host_seconds": 23.521620699000778,
+      "keys": "spc",
+      "hold_ms": 550
+    },
+    {
+      "name": "physical PS/2 chord",
+      "host_seconds": 24.422011475995532,
+      "keys": "ctrl-spc",
+      "hold_ms": 550
+    },
+    {
+      "name": "physical PS/2 chord",
+      "host_seconds": 25.32232172199292,
+      "keys": "ctrl_r",
+      "hold_ms": 550
+    },
+    {
+      "name": "physical PS/2 chord",
+      "host_seconds": 26.22273309499724,
+      "keys": "ctrl-up",
+      "hold_ms": 550
+    },
+    {
+      "name": "graphics/input interrupt vectors restored",
+      "host_seconds": 29.482414255995536,
+      "vectors": {
+        "08": 4026597029,
+        "10": 543884400,
+        "15": 50365825,
+        "16": 4026591278,
+        "2F": 50368597,
+        "33": 50367490
+      }
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 30.726542403994245,
+      "action": 18,
+      "owner": 11,
+      "position": [
+        1040,
+        273
+      ]
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 31.653294010000536,
+      "action": 18,
+      "owner": 1,
+      "position": [
+        863,
+        310
+      ]
+    }
+  ],
+  "source_image_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "guest_memory_writes": false,
+  "guest_pauses": false,
+  "expected_broken": false,
+  "scope": "cooperative Doom backend only",
+  "qemu": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "128",
+    "-drive",
+    "file=build/full/native-desktop-2026-09-26/final/keyboard/private.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:build/full/native-desktop-2026-09-26/final/keyboard/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-890da30f1864437ca52deba6e15fd146.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-vga",
+    "std"
+  ],
+  "original_vectors": {
+    "08": 4026597029,
+    "10": 543884400,
+    "15": 50365825,
+    "16": 4026591278,
+    "2F": 50368597,
+    "33": 50367490
+  },
+  "native_input_restored": true,
+  "demo": {
+    "tics": 273,
+    "action_runs": [
+      {
+        "buttons": 0,
+        "tics": 1
+      },
+      {
+        "buttons": 1,
+        "tics": 22
+      },
+      {
+        "buttons": 0,
+        "tics": 19
+      },
+      {
+        "buttons": 2,
+        "tics": 19
+      },
+      {
+        "buttons": 0,
+        "tics": 20
+      },
+      {
+        "buttons": 1,
+        "tics": 19
+      },
+      {
+        "buttons": 3,
+        "tics": 19
+      },
+      {
+        "buttons": 1,
+        "tics": 19
+      },
+      {
+        "buttons": 0,
+        "tics": 20
+      },
+      {
+        "buttons": 1,
+        "tics": 19
+      },
+      {
+        "buttons": 0,
+        "tics": 19
+      },
+      {
+        "buttons": 1,
+        "tics": 58
+      },
+      {
+        "buttons": 0,
+        "tics": 19
+      }
+    ],
+    "fire_tics": 156,
+    "use_tics": 38,
+    "simultaneous_tics": 19,
+    "moving_fire_tics": 20
+  }
+}

@@ -1,0 +1,33 @@
+CiukiOS Media
+
+MEDIA FLOPPY       Open the floppy browser.
+MEDIA USB          Open a BIOS-visible FAT disk.
+MEDIA CD           Open an ISO 9660 data CD.
+
+Inside the browser:
+  DIR [path]              List files.
+  CD folder               Open a folder; CD .. goes back.
+  TYPE file               Read a text file.
+  COPY file C:\name       Copy a complete file to the system disk.
+  HELP                    Show commands.
+  EXIT                    Return to CiukiOS (or press Escape).
+
+Examples:
+  MEDIA FLOPPY TYPE /README.TXT
+  MEDIA CD DIR /DOCUMENTS
+  MEDIA USB COPY /PHOTO.BMP C:\PHOTO.BMP
+
+Use quotes around paths containing spaces. COPY refuses to overwrite
+existing files. External source media are always read-only.
+
+FAT12, FAT16 and FAT32 use DOS short filenames. A FAT disk may be
+unpartitioned or have a primary FAT partition in an MBR. CDs use ISO 9660
+names. GPT, logical partitions, UDF and Joliet names are not supported.
+
+Connect USB storage before boot and enable BIOS USB legacy storage.
+This browser uses BIOS disks; it does not install a USB hotplug driver.
+MEDIA USB:81 selects BIOS disk 81 explicitly (80 through 87).
+MEDIA CD:IDE tries a legacy IDE CD drive without BIOS optical access.
+
+To open a binary file in a DOS or Windows application, first copy it
+to the system disk. The browser does not assign external DOS drive letters.

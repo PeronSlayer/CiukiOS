@@ -4,7 +4,11 @@
 ; operations over kernel-owned state, not a forwarding layer to a previous
 ; Stage1 DOS handler.
 
-%define KERNEL_PROCESS_STACK_MAX 5
+; Keep the kernel-owned PSP/DTA stack aligned with the loader's EXEC snapshot
+; capacity.  Windows Standard Mode reaches six live frames when it is started
+; through the temporary audio wrapper (WIN -> WINCORE -> WSWAP -> DOSX ->
+; KRNL386); the old limit of five falsely returned DOS error 8.
+%define KERNEL_PROCESS_STACK_MAX DOS_EXEC_STATE_FRAME_MAX
 %define KERNEL_PROCESS_FRAME_SIZE 12
 %define KFRAME_DTA_SEG 0
 %define KFRAME_DTA_OFF 2

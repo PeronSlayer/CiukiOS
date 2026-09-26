@@ -2,6 +2,17 @@ bits 16
 org 0x0100
 
 start:
+    cli
+    mov ax, cs
+    mov ss, ax
+    mov sp, launcher_stack_top
+    sti
+    mov es, ax
+    mov bx, ((launcher_image_end - $$ + 0x0100) + 15) >> 4
+    mov ah, 0x4A
+    int 0x21
+    jc .child_fail
+
     cld
     push cs
     pop ds
@@ -18,6 +29,17 @@ start:
     mov dx, msg_begin
     call print_line
 
+    ; Probe and validate the real hardware before enabling the SB profile.
+    ; A failed probe must leave the packaged PC-speaker-safe configuration
+    ; untouched instead of making subsequent direct Doom launches silent.
+    mov dx, sb16init_path
+    mov bx, sb16init_param_block
+    call exec_child
+    jc .child_fail
+
+    mov dx, msg_drvload_done
+    call print_line
+
     mov dx, src_cfg_path
     mov bx, dst_cfg_path
     call copy_file
@@ -29,14 +51,6 @@ start:
     jc .copy_fail
 
     mov dx, msg_cfg_ready
-    call print_line
-
-    mov dx, sb16init_path
-    mov bx, sb16init_param_block
-    call exec_child
-    jc .child_fail
-
-    mov dx, msg_drvload_done
     call print_line
 
     mov dx, doom_path
@@ -272,3 +286,8 @@ dst_handle dw 0
 quiet_mode db 0
 copy_buf_len equ 512
 copy_buf times copy_buf_len db 0
+
+align 16
+launcher_stack times 1024 db 0
+launcher_stack_top:
+launcher_image_end:

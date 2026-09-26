@@ -1,0 +1,9 @@
+CiukiOS system event sounds
+
+Interface Sounds 1.0 by Kenney (www.kenney.nl)
+Source: https://kenney.nl/assets/interface-sounds
+License: Creative Commons Zero 1.0 Universal (CC0-1.0).
+Original license and source archive are preserved in this repository.
+CiukiOS converts the original Ogg audio to 48 kHz signed 16-bit stereo
+PCM and 8 kHz unsigned mono PCM, without changing the compositions.
+The original CiukiOS startup melody remains separate.

@@ -1,9 +1,24 @@
 # Post-Runtime Compatibility Roadmap v0.1
 
-## Current State
+## Current increment — 2026-09-26
+
+The native desktop increment has eleven passing, narrowly scoped QEMU reports;
+see [current milestones](current-milestones.md) and
+[the validation archive](validation/2026-09-26/README.md). The selected image
+contains a 43,169-byte kernel. Existing BIOS-text windows and cooperative game
+ports do not implement arbitrary original DOS graphics applications in windows.
+
+The next implementation is an opt-in V86 session with virtual VGA memory/ports,
+protected-mode presentation and coordinated DPMI/peripheral ownership. Its
+[architecture record](dos-window-architecture-2026-09-26.md) separates reusable
+Jemm/HDPMI components from missing CiukiOS integration. Existing fullscreen and
+boot paths remain the compatibility baseline. Physical T23/E500 results and
+the broader external DOS corpus remain separate acceptance requirements.
+
+## Historical phase baseline — September 1
 
 1. Phase 5 runtime ownership: **COMPLETED by the wholesale CIUKIDOS kernel move**.
-2. Current kernel contract: **CIUKIDOS at `0x0900`, `ABI=2`, 11 services, 8-byte descriptors, capability mask `0x003F`, `CHAIN=0`; 43,254-byte artifact with maximum `0xA900` (43,264) bytes**.
+2. Current kernel contract: **CIUKIDOS at `0x0900`, `ABI=2`, 11 services, 8-byte descriptors, capability mask `0x003F`, `CHAIN=0`; 43,167-byte `full` and 43,162-byte D:-default `full-cd` artifacts with maximum `0xA900` (43,264) bytes**.
 3. Current loader/layout contract: **1,542-byte loader-only Stage1; eight sectors loaded inside the reserved 72-sector slot; four EXEC frames at `0x1400-0x1457`; Stage2 at `0x1480`**.
 4. Phase 6 DOS application compatibility: **ACTIVE and not closed because the quantitative external corpus and several logical compatibility surfaces remain incomplete**.
 5. Phase 7 legacy audio: **controlled groundwork available, but not closed; formal closure work follows broader Phase 6 evidence**.
@@ -41,9 +56,9 @@ Goal: host a mixed, repeatable set of unmodified external DOS software.
 Current known boundaries:
 
 1. GPL CuteMouse has a repeatable `full` install/INT33/unload/restore PASS, but no equivalent full-CD workflow is recorded.
-2. DOSNavigator now validates dual-pane startup, generic COM→MZ allocation, one-row keyboard navigation, mouse input, Colors/XMS, `EXIT`, and shell recovery. It remains PARTIAL because the packaged loader uses a bounded compatibility hook and broad file/full-CD workflows are missing.
+2. DOSNavigator is now packaged byte-for-byte from upstream and validates dual-pane startup, generic allocation, one-row keyboard navigation, mouse input, Colors/XMS, native `Alt+X` exit, shell recovery, and same-boot PSP/mouse/video cleanup. It remains PARTIAL because broad file/editor and full-CD workflows are missing.
 3. WOLF3D reaches `visual_gameplay`, keyboard-driven menus, and a correctly rendered first level with the injected page-flip/VGA Attribute Controller workaround; it remains PARTIAL until unmodified-binary, clean-exit, full-CD, and audio workflows are proven.
-4. doom-vanille passes the focused 256 KiB low-DOS allocation gate, but gameplay, audio, clean completion, and full-CD execution remain unproven.
+4. doom-vanille passes the focused 256 KiB low-DOS allocation gate, real gameplay/HUD/wall-integrity, SB device 3/code 8 selection, DMX initialization, and objective non-silent PCM after restoring its required Watcom ABI and one-byte structure packing. Clean completion and full-CD execution remain unproven.
 5. arbitrary application evidence from the full-CD D: environment is missing.
 6. internal CIUKRTST/PSTACK probes are stronger than the external application corpus and do not count toward it.
 7. JFT/SFT structures exist under CIUKIDOS ownership, but DOS-compatible sharing, inheritance, duplication, close-on-exec, device, and error behavior still need workload-driven logical validation. This is Phase 6 compatibility work, not unfinished Phase 5 placement.
@@ -68,13 +83,17 @@ Already proven in controlled lanes:
 2. real-mode DMA1/IRQ7 playback
 3. protected-mode timer and SB IRQ delivery
 4. DOOMSFX playback of selected WAD lumps
+5. external AdLib/OPL2 music with objective waveform evidence
+6. original Doom real gameplay with an objectively non-silent OPL2-music/PC-speaker-SFX WAV
+7. doom-vanille simultaneous OPL2 music plus SB16 SFX with DMX return 10
 
 Still open:
 
 1. original DOOM SB16/DMX protected-mode invalid-opcode failure
-2. valid PC-speaker SFX evidence, preferably on real hardware
-3. a second external DOS audio workload with clean completion
-4. stable AdLib/OPL product evidence
+2. doom-vanille audio-enabled clean completion and shell recovery after its now-passing combined OPL2/SB16 gameplay output
+3. another external DOS audio workload with clean completion
+4. a second external AdLib/OPL or SB workload with clean completion
+5. full-CD and real-hardware audio evidence
 
 Exit signal:
 
@@ -96,9 +115,9 @@ Current evidence:
 
 1. Optional user-supplied Windows 3.1 media is integrated into the canonical `full` image without tracking or redistributing it.
 2. Windows reaches 386 Enhanced Mode through the normal `WIN` command using general DOSMGR/SDA, XMS/A20, PS/2 BIOS mouse, device-chain, EXEC-owner, and handle-restoration interfaces.
-3. The focused gate proves two 640x480 Program Manager starts, exactly one moving pointer, Calculator launch, task-scoped `Alt+F4`, Program Manager survival, clean CiukiOS shell recovery, and relaunch.
+3. The focused gate proves two 640x480 Program Manager starts, exactly one linear 1:1 pointer, native Sound Blaster startup WAV audio with AdLib MIDI configured, Calculator launch, task-scoped `Alt+F4`, Program Manager survival, clean CiukiOS shell recovery, and relaunch.
 
-Still open: wider Windows 3.1 application/device/audio/printing coverage, full-CD, real hardware, Windows 95, and Windows 98. The early result does not satisfy or waive the still-open Phase 6 and Phase 7 exit gates.
+Still open: wider Windows 3.1 application/device/multimedia/printing coverage, full-CD, real hardware, Windows 95, and Windows 98. The early result does not satisfy or waive the still-open Phase 6 and Phase 7 exit gates.
 
 ## Non-Priority Work
 

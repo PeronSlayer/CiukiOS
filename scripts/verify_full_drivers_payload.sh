@@ -10,7 +10,11 @@ set -euo pipefail
 : "${GENERATED_DRVLOAD_COM:=$CIUKIOS_ROOT/build/full/obj/drvload.com}"
 : "${GENERATED_SB16INIT_COM:=$CIUKIOS_ROOT/build/full/obj/sb16init.com}"
 : "${GENERATED_AUDIOTST_COM:=$CIUKIOS_ROOT/build/full/obj/audiotst.com}"
+: "${GENERATED_AC97INIT_COM:=$CIUKIOS_ROOT/build/full/obj/ac97init.com}"
+: "${GENERATED_SFX_DRV:=$CIUKIOS_ROOT/build/full/obj/sfx.drv}"
+: "${GENERATED_AUDIOAUTO_COM:=$CIUKIOS_ROOT/build/full/obj/audio.com}"
 : "${GENERATED_AUDIOKEY_COM:=$CIUKIOS_ROOT/build/full/obj/audiokey.com}"
+: "${GENERATED_VGASETUP_COM:=$CIUKIOS_ROOT/build/full/obj/vgasetup.com}"
 : "${GENERATED_PMIRQSB_COM:=$CIUKIOS_ROOT/build/full/obj/pmirqsb.com}"
 : "${GENERATED_PMIRQSB_LE:=$CIUKIOS_ROOT/build/full/obj/pmirqsb.le}"
 : "${GENERATED_DOS4GW_EXE:=/opt/watcom/binw/dos4gw.exe}"
@@ -100,7 +104,7 @@ src_manifest="$tmp_dir/src_manifest.txt"
 img_manifest="$tmp_dir/img_manifest.txt"
 expected_src_dir="$DRIVERS_SRC_DIR"
 
-if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" || -f "$GENERATED_AUDIOTST_COM" || -f "$GENERATED_AUDIOKEY_COM" || -f "$GENERATED_PMIRQSB_COM" || -f "$GENERATED_PMIRQSB_LE" || -f "$CTMOUSE_BIN" ]]; then
+if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" || -f "$GENERATED_AUDIOTST_COM" || -f "$GENERATED_AC97INIT_COM" || -f "$GENERATED_SFX_DRV" || -f "$GENERATED_AUDIOAUTO_COM" || -f "$GENERATED_AUDIOKEY_COM" || -f "$GENERATED_VGASETUP_COM" || -f "$GENERATED_PMIRQSB_COM" || -f "$GENERATED_PMIRQSB_LE" || -f "$CTMOUSE_BIN" ]]; then
 	expected_src_dir="$tmp_dir/expected_drivers"
 	mkdir -p "$expected_src_dir"
 	cp -a "$DRIVERS_SRC_DIR"/. "$expected_src_dir"/
@@ -112,11 +116,25 @@ if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" || -f "$GENERA
 	fi
 	if [[ -f "$GENERATED_AUDIOTST_COM" ]]; then
 		cp "$GENERATED_AUDIOTST_COM" "$expected_src_dir/AUDIOTST.COM"
-		cp "$GENERATED_AUDIOTST_COM" "$expected_src_dir/AUDIO.COM"
+	fi
+	if [[ -f "$GENERATED_AC97INIT_COM" ]]; then
+		cp "$GENERATED_AC97INIT_COM" "$expected_src_dir/AC97INIT.COM"
+	fi
+	if [[ -f build/full/obj/bootsnd.com ]]; then
+		cp build/full/obj/bootsnd.com "$expected_src_dir/SOUND.COM"
+	fi
+	if [[ -f build/full/obj/sbstart.com ]]; then
+		cp build/full/obj/sbstart.com "$expected_src_dir/SBSTART.COM"
+	fi
+	if [[ -f "$GENERATED_AUDIOAUTO_COM" ]]; then
+		cp "$GENERATED_AUDIOAUTO_COM" "$expected_src_dir/AUDIO.COM"
 	fi
 	if [[ -f "$GENERATED_AUDIOKEY_COM" ]]; then
 		cp "$GENERATED_AUDIOKEY_COM" "$expected_src_dir/AUDIOKEY.COM"
 		cp "$GENERATED_AUDIOKEY_COM" "$expected_src_dir/AKEY.COM"
+	fi
+	if [[ -f "$GENERATED_VGASETUP_COM" ]]; then
+		cp "$GENERATED_VGASETUP_COM" "$expected_src_dir/VGASETUP.COM"
 	fi
 	if [[ -f "$GENERATED_PMIRQSB_COM" && -f "$GENERATED_PMIRQSB_LE" ]]; then
 		cp "$GENERATED_PMIRQSB_COM" "$expected_src_dir/PMIRQSB.COM"
@@ -128,6 +146,9 @@ if [[ -f "$GENERATED_DRVLOAD_COM" || -f "$GENERATED_SB16INIT_COM" || -f "$GENERA
 	if [[ -f "$CTMOUSE_BIN" && -f "$CTMOUSE_LICENSE" ]]; then
 		cp "$CTMOUSE_BIN" "$expected_src_dir/CTMOUSE.EXE"
 		cp "$CTMOUSE_LICENSE" "$expected_src_dir/CTMOUSE.GPL"
+	fi
+	if [[ -f "$GENERATED_SFX_DRV" ]]; then
+		cp "$GENERATED_SFX_DRV" "$expected_src_dir/SFX.DRV"
 	fi
 fi
 

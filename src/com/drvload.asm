@@ -2,6 +2,20 @@ bits 16
 org 0x0100
 
 start:
+    ; A DOS COM child initially owns its whole free arena.  Move the live
+    ; stack into the retained image and release the remainder before this
+    ; launcher performs nested EXEC calls.
+    cli
+    mov ax, cs
+    mov ss, ax
+    mov sp, launcher_stack_top
+    sti
+    mov es, ax
+    mov bx, ((launcher_image_end - $$ + 0x0100) + 15) >> 4
+    mov ah, 0x4A
+    int 0x21
+    jc .resize_fail
+
     cld
     push cs
     pop ds
@@ -33,6 +47,14 @@ start:
     mov ax, 0x4C00
     int 0x21
 
+.resize_fail:
+    push cs
+    pop ds
+    mov dx, msg_resize_fail
+    call print_line
+    mov ax, 0x4C08
+    int 0x21
+
 try_smartdrv:
     mov dx, msg_skip_smartdrv
     call print_line
@@ -45,7 +67,7 @@ try_audio:
     cmp byte [audio_mode], 1
     jne .skip
 
-    mov si, path_sb16init
+    mov si, path_audioauto
     xor bx, bx
     call run_program
     pushf
@@ -530,12 +552,12 @@ cmdtail_mscdex db 11, ' /D:QCDROM1', 13
 
 path_smartdrv db '\SYSTEM\DRIVERS\SMARTDRV.EXE', 0
 path_devload db '\SYSTEM\DRIVERS\DEVLOAD.COM', 0
-path_sb16init db '\SYSTEM\DRIVERS\SB16INIT.COM', 0
+path_audioauto db '\SYSTEM\DRIVERS\AUDIO.COM', 0
 path_mscdex db '\SYSTEM\DRIVERS\MSCDEX.EXE', 0
 
 msg_begin db '[DRVLOAD] BEGIN', 13, 10, '$'
 msg_done db '[DRVLOAD] DONE', 13, 10, '$'
-msg_try_audio db '[DRVLOAD] TRY AUDIO \SYSTEM\DRIVERS\SB16INIT.COM', 13, 10, '$'
+msg_try_audio db '[DRVLOAD] TRY AUDIO \SYSTEM\DRIVERS\AUDIO.COM', 13, 10, '$'
 msg_ok_audio db '[DRVLOAD] OK AUDIO', 13, 10, '$'
 msg_fail_audio db '[DRVLOAD] FAIL AUDIO (optional, continue)', 13, 10, '$'
 msg_skip_audio db '[DRVLOAD] SKIP AUDIO (pass /AUDIO to enable)', 13, 10, '$'
@@ -556,3 +578,9 @@ msg_result_devload_prefix db "[DRVLOAD] RESULT DEVLOAD term=0x", "$"
 msg_result_mscdex_prefix db "[DRVLOAD] RESULT MSCDEX term=0x", "$"
 msg_result_exit_prefix db " exit=0x", "$"
 msg_crlf db 13, 10, "$"
+msg_resize_fail db '[DRVLOAD] FAIL cannot release memory for child EXEC', 13, 10, '$'
+
+align 16
+launcher_stack times 1024 db 0
+launcher_stack_top:
+launcher_image_end:

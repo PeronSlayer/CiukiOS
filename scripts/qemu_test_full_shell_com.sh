@@ -575,22 +575,12 @@ WOLF3D_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+W+O+L+F+3+D
 SUBHI_PROMPT_PATTERN="${SHELL_PROMPT_PREFIX}C+[:]+[\\]+A+P+P+S+[\\]+S+U+B+H+I+>+"
 DIR_COPYHI_PATTERN='C+O+P+Y+H+I+'
 BANNER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+7+[.]+1+'
-HELP_PATTERN='C+I+U+K+I+O+S+[[:space:]]+C+O+M+M+A+N+D+[[:space:]]+G+U+I+D+E+'
-HELP_SYSTEM_PATTERN='S+Y+S+T+E+M+[[:space:]]+H+E+L+P+'
-HELP_NAV_PATTERN='N+A+V+I+G+A+T+I+O+N+[[:space:]]+C+D+'
-HELP_FILES_PATTERN='F+I+L+E+S+[[:space:]]+T+Y+P+E+'
-HELP_EXEC_PATTERN='P+R+O+G+R+A+M+S+[[:space:]]+.*R+U+N+'
-HELP_NETWORK_PATTERN='N+E+T+W+O+R+K+'
-HELP_IPCONFIG_PATTERN='I+P+C+O+N+F+I+G+[[:space:]]+S+H+O+W+[[:space:]]+I+P+V+4+'
-HELP_FTP_CLIENT_PATTERN='F+T+P+[[:space:]]+<+H+O+S+T+>+.*F+T+P+[[:space:]]+C+L+I+E+N+T+'
-HELP_ICMP_PATTERN='I+C+M+P+[[:space:]]+R+E+M+A+I+N+S+[[:space:]]+A+C+T+I+V+E+'
-HELP_PKTTOOLS_PATTERN='P+K+T+C+H+K+[[:space:]]*/+[[:space:]]*P+K+T+T+O+O+L+.*P+A+C+K+E+T+[[:space:]]+D+R+I+V+E+R+'
-HELP_LOADER_ONLY_PATTERN='E+X+I+T+[[:space:]]+I+S+[[:space:]]+D+I+S+A+B+L+E+D+'
-HELP_WHERE_HINT_PATTERN='W+H+E+R+E+[[:space:]]+<+N+A+M+E+>+'
 WOOF_PATTERN='W+O+O+F+'
 EXIT_DISABLED_PATTERN='E+X+I+T+/+Q+U+I+T+[[:space:]]+I+S+[[:space:]]+N+O+T+[[:space:]]+A+V+A+I+L+A+B+L+E+'
 EXIT_GUIDANCE_PATTERN='U+S+E+[[:space:]]+R+E+B+O+O+T+[[:space:]]+O+R+[[:space:]]+S+H+U+T+D+O+W+N+'
 VER_PATTERN='C+I+U+K+I+O+S+[[:space:]]+P+R+E+[-[:space:]]*A+L+P+H+A+[[:space:]]+V+0+[.]+7+[.]+1+'
+COMMAND_C_TOKEN='CMDC42'
+COMMAND_C_PATTERN='C+M+D+C+4+2+'
 LOADER_FATAL_MISSING_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+M+I+S+S+I+N+G+'
 LOADER_FATAL_EXITED_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+E+X+I+T+E+D+'
 LOADER_FATAL_RETURN_PATTERN='S+H+E+L+L+\.*C+O+M+[[:space:]]+R+E+T+U+R+N+E+D+[[:space:]]+C+O+N+T+R+O+L+'
@@ -675,9 +665,10 @@ LONG_CMD="$(printf '%*s' 140 '')"
 LONG_CMD="${LONG_CMD// /a}"
 
 QEMU_ARGS=(
-  -machine pc,vmport=off
+  -accel kvm
+  -machine pc,vmport=off,i8042=on
   -cpu pentium3
-  -m 128
+  -m 256
   -drive "file=$IMG,format=raw,if=ide"
   -boot c
   -nographic
@@ -734,6 +725,7 @@ if (( BOOT_AUTORUN )); then
     mark_pass "INITIAL_SHELL_COM_PROMPT"
     send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'where SHELL' "$WHERE_SHELL_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_SHELL_OK" "$COMMAND_TIMEOUT_SEC"
+    send_and_wait_for_pattern_and_prompt "run C:\\COMMAND.COM /C ECHO $COMMAND_C_TOKEN" "$COMMAND_C_PATTERN" "$CHILD_PROMPT_PATTERN" "COMMAND_COM_C_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'MOUSE STATUS' "$MOUSE_RUNTIME_PATTERN" "$CHILD_PROMPT_PATTERN" "MOUSE_STATUS_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'CIUKRTST.COM' "$CIUKRTST_PASS_PATTERN" "$CHILD_PROMPT_PATTERN" "CIUKRTST_RUNTIME_OWNER_OK" "$COMMAND_TIMEOUT_SEC"
     send_and_wait_for_pattern_and_prompt 'CIUKPST.COM' "$PSTACK_CHILD_PASS_PATTERN" "$CHILD_PROMPT_PATTERN" "PSTACK_COM2COM_NESTED_OK" "$COMMAND_TIMEOUT_SEC"
@@ -819,21 +811,13 @@ else
   wait_for_strings_count_from_offset "$SERIAL_LOG" "$HISTORY_ONE_PATTERN" 2 "$HISTORY_DEDUP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HISTORY_DEDUP_OK" "duplicate consecutive history entry was stored"
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$HISTORY_DEDUP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HISTORY_DEDUP_OK" "prompt did not return after dedup history command"
   mark_pass "HISTORY_DEDUP_OK"
-  HELP_OFFSET="$(file_size "$SERIAL_LOG")"
-  send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'help' || mark_fail "SEND_HELP_OK" "cannot send command: help"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_OK" "expected output did not appear after: help"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_SYSTEM_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "system help section missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_NAV_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "navigation help section missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_FILES_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "files help section missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_EXEC_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "execution help section missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_NETWORK_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "network help section missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_IPCONFIG_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "IPCONFIG help entry missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_FTP_CLIENT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "FTP client help entry missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_ICMP_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "ICMP service help entry missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_PKTTOOLS_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "Packet Driver diagnostic help entry missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_LOADER_ONLY_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "loader-only hint missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$HELP_WHERE_HINT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_LAYOUT_OK" "where hint missing"
-  wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_OK" "expected prompt did not appear after: help"
+  for help_spec in 'help|G+U+I+D+A+[[:space:]]+R+A+P+I+D+A+' 'help files|F+I+L+E+[[:space:]]+E+[[:space:]]+C+A+R+T+E+L+L+E+' 'help network|I+P+C+O+N+F+I+G+' 'help system|S+O+U+N+D+[[:space:]]+O+N+'; do
+    IFS='|' read -r help_command help_pattern <<< "$help_spec"
+    HELP_OFFSET="$(file_size "$SERIAL_LOG")"
+    send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$help_command" || mark_fail "SEND_HELP_OK" "$help_command"
+    wait_for_strings_regex_from_offset "$SERIAL_LOG" "$help_pattern" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_OK" "$help_command"
+    wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$HELP_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "HELP_OK" "prompt after $help_command"
+  done
   mark_pass "HELP_OK"
   mark_pass "HELP_LAYOUT_OK"
   send_and_wait_for_pattern_and_prompt 'where ipconfig' "$WHERE_IPCONFIG_PATTERN" "$CHILD_PROMPT_PATTERN" "WHERE_IPCONFIG_OK" "$COMMAND_TIMEOUT_SEC"
@@ -844,6 +828,7 @@ else
   wait_for_strings_regex_from_offset "$SERIAL_LOG" "$CHILD_PROMPT_PATTERN" "$IPCONFIG_OFFSET" "$COMMAND_TIMEOUT_SEC" || mark_fail "IPCONFIG_OK" "prompt did not return after IPCONFIG"
   mark_pass "IPCONFIG_OK"
   send_and_wait_for_pattern_and_prompt 'ver' "$VER_PATTERN" "$CHILD_PROMPT_PATTERN" "VER_OK" "$COMMAND_TIMEOUT_SEC"
+  send_and_wait_for_pattern_and_prompt "run C:\\COMMAND.COM /C ECHO $COMMAND_C_TOKEN" "$COMMAND_C_PATTERN" "$CHILD_PROMPT_PATTERN" "COMMAND_COM_C_OK" "$COMMAND_TIMEOUT_SEC"
   send_and_wait_for_count_and_prompt "echo $ECHO_TOKEN" "$ECHO_TOKEN_PATTERN" 2 "$CHILD_PROMPT_PATTERN" "ECHO_OK" "$COMMAND_TIMEOUT_SEC"
   CLS_OFFSET="$(file_size "$SERIAL_LOG")"
   send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cls' || mark_fail "SEND_CLS_OK" "cannot send command: cls"

@@ -1,0 +1,33 @@
+{
+  "status": "pass",
+  "scope": "QEMU real native Files copy and GUI input; no physical hardware claim",
+  "source_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "ram_writes": false,
+  "events": [
+    {
+      "name": "imported-tile-after-failed-apply",
+      "compared_pixels": 304800,
+      "mismatched_pixels": 0
+    },
+    {
+      "name": "imported-tile-after-cold-boot",
+      "compared_pixels": 304800,
+      "mismatched_pixels": 0
+    }
+  ],
+  "catalog_unmodified": true,
+  "binary_overrides": false,
+  "binary_sha256": {
+    "SYSTEM/SHELL.COM": "dadb2e6783c6382ae1dad48531c4aad33f027eeed98948419dcf87c29bc05c53",
+    "SYSTEM/CIUKIDOS.SYS": "116276101b269c46d7390eb9bbc6b5dd1da90a371a222ebe22f6ae65c1ce9ea3",
+    "SYSTEM/DRIVERS/SFX.DRV": "c31495bd4a502a5f5b101cb0e47c529574d4f978eaebb3bee4e121564a157b4d",
+    "SYSTEM/DOSWIN.DRV": "b908b3df6138d8b51e73f674b23f482f24ca6755e141a022b1c1f8ddfb26e840"
+  },
+  "input_fixtures": {
+    "WALL12.CWP": "b2637260d74bca6f5985df61792d24e5248da984e33e0031ddb38c3278d144d7",
+    "WALL13.CWP": "f37fc386f7994f68c276afe7977f06ba3d3dc264b9201bc2eb93acf3cf6a279e",
+    "DISPLAY.CFG": "0cf4b3fbdcb84810dfb47fa2f6e8b28ce2c852130b2d2795b5e4daf061a44244"
+  },
+  "configuration_override": "DISPLAY.CFG=0800 on private image copy",
+  "source_image_unchanged": true
+}

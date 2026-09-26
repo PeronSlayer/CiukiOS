@@ -1,0 +1,14 @@
+--- a/stage2/asm.S
++++ b/stage2/asm.S
+@@ -3740,7 +3740,10 @@
+ 
+ 3:
+ 	/* EDI=linear address of BUFFER(below 1M) */
+-	xorl	%ebx, %ebx
++	/* Mask audio/HDPMI IRQs before saving or replacing GDTR. BX alone
++	 * is consumed here; the 64-bit path clears EBX independently. */
++	cli
++	xorw	%bx, %bx
+ 	movw	$(EBIOS_disk_address_packet - int13_handler), %si
+ 	movw	%cs, %bx
+ 	movw	%bx, %ds

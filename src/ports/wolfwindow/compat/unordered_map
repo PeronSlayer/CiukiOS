@@ -1,0 +1,3 @@
+/* This port requires ordered lookup semantics only, not hash iteration. */
+#include <map>
+#define unordered_map map

@@ -34,7 +34,7 @@ CIUKIDOS_RUNTIME_SEG=0x0300
 CIUKIDOS_ABI_VERSION=2
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
-TOTAL_SECTORS=262144
+TOTAL_SECTORS="${CIUKIOS_FULL_TOTAL_SECTORS:-262144}"
 STAGE1_SECTORS=72
 STAGE1_SLOT_SIZE=$((STAGE1_SECTORS * 512))
 BOOT_LBA_OFFSET="${CIUKIOS_FULL_BOOT_LBA_OFFSET:-0}"
@@ -79,6 +79,8 @@ GFXRECT_MAX_SIZE=1024
 GFXSTAR_SRC="src/com/gfxstar.asm"
 GFXSTAR_BIN="build/full/obj/gfxstar.com"
 GFXSTAR_MAX_SIZE=1024
+VIDLEAVE_SRC="src/com/vidleave.asm"
+VIDLEAVE_BIN="build/full/obj/vidleave.com"
 MOUSE_SRC="src/com/mouse.asm"
 MOUSE_BIN="build/full/obj/mouse.com"
 CIUKWIN_SRC="src/com/ciukwin.asm"
@@ -86,16 +88,17 @@ CIUKWIN_BIN="build/full/obj/ciukwin.com"
 CIUKWIN_MAX_SIZE=4096
 SETUP_SRC="src/com/setup.asm"
 SETUP_BIN="build/full/obj/setup.com"
-SETUP_MAX_CLUSTERS=4
-SETUP_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512 * SETUP_MAX_CLUSTERS))
+# Match setup.asm's explicit COM code/data/stack bound. The FAT chain and all
+# following payload positions are calculated from the actual file length.
+SETUP_MAX_SIZE=$((0xEF00))
+SETUP_MAX_CLUSTERS=$(((SETUP_MAX_SIZE + FAT_SECTORS_PER_CLUSTER * 512 - 1) / (FAT_SECTORS_PER_CLUSTER * 512)))
 SETUP_MANIFEST_BIN="build/full/obj/setup.mft"
 LBA32_TEST_BIN="build/full/obj/lba32.txt"
 FORMAT_SRC="src/com/format.asm"
 FORMAT_BIN="build/full/obj/format.com"
 FORMAT_MAX_CLUSTERS=2
 FORMAT_MAX_SIZE=$((FAT_SECTORS_PER_CLUSTER * 512 * FORMAT_MAX_CLUSTERS))
-COMMAND_STUB_SRC="src/com/command_stub.asm"
-COMMAND_STUB_BIN="build/full/obj/command.com"
+COMMAND_COMPAT_BIN="build/full/obj/command.com"
 COMMAND_COMPAT_IMAGE_PATH="${CIUKIOS_COMMAND_COM_IMAGE_PATH:-::COMMAND.COM}"
 SHELL_SRC="src/com/shell.asm"
 SHELL_BIN="build/full/obj/shell.com"
@@ -111,8 +114,14 @@ SB16INIT_SRC="src/com/sb16init.asm"
 SB16INIT_BIN="build/full/obj/sb16init.com"
 AUDIOTST_SRC="src/com/audiotst.asm"
 AUDIOTST_BIN="build/full/obj/audiotst.com"
+AC97INIT_SRC="src/com/ac97init.asm"
+AC97INIT_BIN="build/full/obj/ac97init.com"
+AUDIOAUTO_SRC="src/com/audioauto.asm"
+AUDIOAUTO_BIN="build/full/obj/audio.com"
 AUDIOKEY_SRC="src/com/audiokey.asm"
 AUDIOKEY_BIN="build/full/obj/audiokey.com"
+SBEMINIT_SRC="src/com/sbeminit.asm"
+SBEMINIT_BIN="build/full/obj/sbeminit.com"
 DOOMSB_SRC="src/com/doomsb.asm"
 DOOMSB_BIN="build/full/obj/doomsb.com"
 PMIRQSB_LAUNCH_SRC="src/com/pmirqsb_launch.asm"
@@ -125,6 +134,16 @@ DOOMSFX_SRC="src/probes/doomsfx/doomsfx.c"
 DOOMSFX_BIN="build/full/obj/doomsfx.le"
 DOOMVAN_LAUNCH_SRC="src/com/doomvan_launch.asm"
 DOOMVAN_LAUNCH_BIN="build/full/obj/doomvan.com"
+DOOMVAN_LAUNCH_MZ="build/full/obj/doomvan.exe"
+DOOM_LAUNCH_SRC="src/com/doom_launch.asm"
+DOOM_LAUNCH_BIN="build/full/obj/doom.com"
+DOOM_LAUNCH_MZ="build/full/obj/doom.exe"
+WOLF3D_LAUNCH_SRC="src/com/wolf3d_launch.asm"
+WOLF3D_LAUNCH_BIN="build/full/obj/wolf3d.com"
+WIN31_LAUNCH_SRC="src/com/win31_launch.asm"
+WIN31_LAUNCH_BIN="build/full/obj/win.com"
+VGASETUP_SRC="src/com/vgasetup.asm"
+VGASETUP_BIN="build/full/obj/vgasetup.com"
 DOS4GW_BIN="${DOS4GW_BIN:-/opt/watcom/binw/dos4gw.exe}"
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
@@ -134,15 +153,21 @@ SPLASH_EXPECTED_SIZE=49920
 DOOM_SRC_DIR="${CIUKIOS_DOOM_SRC_DIR:-$CIUKIOS_ROOT/third_party/Doom}"
 DOOM_IMAGE_DIR="${CIUKIOS_DOOM_IMAGE_DIR:-::APPS/DOOM}"
 DOOMDATA_IMAGE_DIR="${CIUKIOS_DOOMDATA_IMAGE_DIR:-::DOOMDATA}"
-DOOM_AUDIO_PROFILE="${CIUKIOS_DOOM_AUDIO_PROFILE:-pcspeaker-sfx}"
+DOOM_AUDIO_PROFILE="${CIUKIOS_DOOM_AUDIO_PROFILE:-sb16}"
+DOOMVAN_EXE_OVERRIDDEN="${CIUKIOS_DOOMVAN_EXE+x}"
+DOOMVAN_SRC_DIR="${CIUKIOS_DOOMVAN_SRC_DIR:-$CIUKIOS_ROOT/build/external/doom-vanille}"
+DOOMVAN_WATCOM_ROOT="${WATCOM:-/opt/watcom}"
 DOOMVAN_EXE="${CIUKIOS_DOOMVAN_EXE:-$CIUKIOS_ROOT/build/external/doom-vanille/pcdoom.exe}"
 DOOMVAN_IMAGE_DIR="${CIUKIOS_DOOMVAN_IMAGE_DIR:-::APPS/DOOMVAN}"
 DOSNAV_SRC_DIR="${CIUKIOS_DOSNAV_SRC_DIR:-$CIUKIOS_ROOT/third_party/DOSNavigator}"
 DOSNAV_IMAGE_DIR="${CIUKIOS_DOSNAV_IMAGE_DIR:-::APPS/DOSNAV}"
-DOSNAV_PATCH_TOOL="$CIUKIOS_ROOT/scripts/patch_dosnav_loader.py"
-DOSNAV_PATCHED_COM="$CIUKIOS_ROOT/build/full/obj/dosnav-patched.com"
 WOLF3D_SRC_DIR="${CIUKIOS_WOLF3D_SRC_DIR:-$CIUKIOS_ROOT/third_party/WOLF3D}"
 WOLF3D_IMAGE_DIR="${CIUKIOS_WOLF3D_IMAGE_DIR:-::APPS/WOLF3D}"
+WOLF4GW_BUILD_SCRIPT="$CIUKIOS_ROOT/scripts/build_wolf4gw.sh"
+WOLF4GW_OUTPUT_DIR="${CIUKIOS_WOLF4GW_OUTPUT_DIR:-$CIUKIOS_ROOT/build/external/audio-compat/output}"
+WOLF4GW_EXE="$WOLF4GW_OUTPUT_DIR/WOLF4GW.EXE"
+WOLF4GW_NOTICE="$WOLF4GW_OUTPUT_DIR/WOLF4GW.TXT"
+WOLF4GW_MODE="${CIUKIOS_WOLF4GW_MODE:-build}"
 COSTA_SRC_DIR="${CIUKIOS_COSTA_SRC_DIR:-$CIUKIOS_ROOT/build/external/costa/v1.8.0}"
 COSTA_IMAGE_DIR="${CIUKIOS_COSTA_IMAGE_DIR:-::APPS/COSTA}"
 NETWORK_SRC_DIR="${CIUKIOS_NETWORK_SRC_DIR:-$CIUKIOS_ROOT/build/external/network/mtcp-2025-01-10_crynwr-2006-09-02c}"
@@ -153,15 +178,26 @@ DRIVERS_SRC_DIR="${CIUKIOS_DRIVERS_SRC_DIR:-$CIUKIOS_ROOT/third_party/drivers}"
 DRIVERS_IMAGE_DIR="${CIUKIOS_DRIVERS_IMAGE_DIR:-::SYSTEM/DRIVERS}"
 DRIVERS_VERIFY_SCRIPT="$CIUKIOS_ROOT/scripts/verify_full_drivers_payload.sh"
 CIUKIOS_ALLOW_MISSING_DRIVERS="${CIUKIOS_ALLOW_MISSING_DRIVERS:-0}"
-CTMOUSE_BIN="${CIUKIOS_CTMOUSE_BIN:-$CIUKIOS_ROOT/third_party/ctmouse/ctmouse.exe}"
-CTMOUSE_LICENSE="${CIUKIOS_CTMOUSE_LICENSE:-$CIUKIOS_ROOT/third_party/ctmouse/copying}"
+SBEMU_BUILD_SCRIPT="$CIUKIOS_ROOT/scripts/build_vsbhda_fallback.sh"
+SBEMU_OUTPUT_DIR="${CIUKIOS_SBEMU_OUTPUT_DIR:-$CIUKIOS_ROOT/build/external/audio-compat/output}"
+SBEMU_IMAGE_DIR="${CIUKIOS_SBEMU_IMAGE_DIR:-::SBEMU}"
+SBEMU_MODE="${CIUKIOS_SBEMU_MODE:-build}"
+CTMOUSE_BIN="${CIUKIOS_CTMOUSE_BIN:-$CIUKIOS_ROOT/assets/drivers/ctmouse/CTMOUSE.EXE}"
+CTMOUSE_LICENSE="${CIUKIOS_CTMOUSE_LICENSE:-$CIUKIOS_ROOT/assets/drivers/ctmouse/COPYING}"
 WINDOWS31_MEDIA_DIR="${CIUKIOS_WINDOWS31_MEDIA_DIR:-$CIUKIOS_ROOT/third_party/windows31}"
 WINDOWS31_INSTALLED_DIR="${CIUKIOS_WINDOWS31_INSTALLED_DIR:-$WINDOWS31_MEDIA_DIR/installed}"
 WINDOWS31_MEDIA_IMAGE_DIR="${CIUKIOS_WINDOWS31_MEDIA_IMAGE_DIR:-::MEDIA/WIN31}"
 WINDOWS31_SETUP_IMAGE_DIR="${CIUKIOS_WINDOWS31_SETUP_IMAGE_DIR:-::WIN31SET}"
 WINDOWS31_INSTALLED_IMAGE_DIR="${CIUKIOS_WINDOWS31_INSTALLED_IMAGE_DIR:-::WINDOWS}"
 WINDOWS31_README="$CIUKIOS_ROOT/config/windows31/README.TXT"
+WINDOWS31_PROFILE_SCRIPT="$CIUKIOS_ROOT/scripts/configure_windows31_profile.sh"
+WINDOWS31_SPEAKER_FETCH_SCRIPT="$CIUKIOS_ROOT/scripts/fetch_windows31_speaker_driver.sh"
+WINDOWS31_SPEAKER_DIR="${CIUKIOS_WINDOWS31_SPEAKER_DIR:-$CIUKIOS_ROOT/build/external/windows31-speaker}"
+VBESVGA_BUILD_SCRIPT="$CIUKIOS_ROOT/scripts/build_vbesvga_driver.sh"
+VBESVGA_OUTPUT_DIR="${CIUKIOS_VBESVGA_OUTPUT_DIR:-$CIUKIOS_ROOT/build/external/video-compat/output}"
+VIDEO_IMAGE_DIR="${CIUKIOS_VIDEO_IMAGE_DIR:-::SYSTEM/VIDEO}"
 WINDOWS31_MODE="${CIUKIOS_WINDOWS31_MODE:-auto}"
+WINDOWS31_AUDIO_MODE="${CIUKIOS_WINDOWS31_AUDIO_MODE:-vsbhda}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 STAGE1_RUNTIME_PROBE="${CIUKIOS_STAGE1_RUNTIME_PROBE:-0}"
 STAGE1_DEBUG_COMMANDS="${CIUKIOS_STAGE1_DEBUG_COMMANDS:-0}"
@@ -176,12 +212,14 @@ STAGE2_AUTORUN="${CIUKIOS_STAGE2_AUTORUN:-0}"
 HARDWARE_VALIDATION_SCREEN="${CIUKIOS_HARDWARE_VALIDATION_SCREEN:-0}"
 SETUP_RAW_HDD_DESTRUCTIVE="${CIUKIOS_SETUP_RAW_HDD_DESTRUCTIVE:-0}"
 SETUP_LIVE_CD_MODE="${CIUKIOS_SETUP_LIVE_CD_MODE:-0}"
+SETUP_FORCE_MEMDISK_SOURCE="${CIUKIOS_SETUP_FORCE_MEMDISK_SOURCE:-0}"
 DOS_DEFAULT_DRIVE_INDEX="${CIUKIOS_DOS_DEFAULT_DRIVE_INDEX:-2}"
 ENABLE_PS2_MOUSE_INIT="${CIUKIOS_ENABLE_PS2_MOUSE_INIT:-1}"
 WOLF_RUNTIME_DIAG="${CIUKIOS_WOLF_RUNTIME_DIAG:-0}"
 MTOOLS_TIMEOUT_SEC="${MTOOLS_TIMEOUT_SEC:-20}"
 MTOOLS_KILL_AFTER_SEC="${MTOOLS_KILL_AFTER_SEC:-2}"
 SETUP_RAW_HDD_INSTALL="${CIUKIOS_SETUP_RAW_HDD_INSTALL:-0}"
+SETUP_ATAPI_MIRROR_BLOCKS="${CIUKIOS_SETUP_ATAPI_MIRROR_BLOCKS:-0}"
 
 mtools_ensure_dir() {
 	local image="$1"
@@ -225,12 +263,14 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$CIUKRTST_SRC" "$MOUSECB_SRC" "$CIUKPST_SRC" "$CIUKPTRM_SRC" "$CIUKPCOM_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$COMMAND_STUB_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$CIUKRTST_SRC" "$MOUSECB_SRC" "$CIUKPST_SRC" "$CIUKPTRM_SRC" "$CIUKPCOM_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$VIDLEAVE_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AC97INIT_SRC" "$AUDIOAUTO_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC" "$DOOM_LAUNCH_SRC" "$WOLF3D_LAUNCH_SRC" "$WIN31_LAUNCH_SRC" "$VGASETUP_SRC" "$VBESVGA_BUILD_SCRIPT" "$WINDOWS31_SPEAKER_FETCH_SCRIPT"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
 	fi
 done
+
+VBESVGA_OUTPUT_DIR="$VBESVGA_OUTPUT_DIR" bash "$VBESVGA_BUILD_SCRIPT"
 
 if [[ ! -f "$SPLASH_SRC" ]]; then
 	echo "[build-full] ERROR: source not found: $SPLASH_SRC" >&2
@@ -242,9 +282,36 @@ if [[ ! -f "$SPLASH_TOOL" ]]; then
 	exit 1
 fi
 
+if [[ -z "$DOOMVAN_EXE_OVERRIDDEN" \
+	&& -f "$DOOMVAN_SRC_DIR/pcdoom.wpj" \
+	&& -f "$DOOMVAN_SRC_DIR/pcdoom.tgt" \
+	&& -x "$DOOMVAN_WATCOM_ROOT/binl64/wcl386" ]]; then
+	echo "[build-full] rebuilding doom-vanille with its required Watcom ABI flags"
+	DOOM_VANILLE_SRC="$DOOMVAN_SRC_DIR" WATCOM="$DOOMVAN_WATCOM_ROOT" \
+		bash scripts/build_doom_vanille_probe.sh
+fi
+
+case "$WOLF4GW_MODE" in
+	build)
+		[[ -x "$WOLF4GW_BUILD_SCRIPT" ]] \
+			|| { echo "[build-full] ERROR missing Wolf4GW build script: $WOLF4GW_BUILD_SCRIPT" >&2; exit 1; }
+		bash "$WOLF4GW_BUILD_SCRIPT"
+		;;
+	reuse)
+		[[ -s "$WOLF4GW_EXE" ]] \
+			|| { echo "[build-full] ERROR reusable Wolf4GW binary missing: $WOLF4GW_EXE" >&2; exit 1; }
+		;;
+	off) ;;
+	*)
+		echo "[build-full] ERROR: CIUKIOS_WOLF4GW_MODE must be build, reuse or off" >&2
+		exit 1
+		;;
+esac
+
 echo "[build-full] assembling full stage0 boot sector"
 nasm -f bin "$BOOT_SRC" \
 	-D BOOT_LBA_OFFSET="$BOOT_LBA_OFFSET" \
+	-D FAT_TOTAL_SECTORS="$TOTAL_SECTORS" \
 	-o "$BOOT_BIN"
 
 BOOT_SIZE="$(stat -c%s "$BOOT_BIN")"
@@ -262,6 +329,7 @@ nasm -f bin "$STAGE1_SRC" \
 	-D FAT_SECTORS_PER_FAT="$FAT_SECTORS_PER_FAT" \
 	-D FAT_ROOT_DIR_SECTORS="$ROOT_DIR_SECTORS" \
 	-D FAT_TYPE=16 \
+	-D FAT_TOTAL_SECTORS="$TOTAL_SECTORS" \
 	-D FAT_LBA_OFFSET="$FAT_LBA_OFFSET" \
 	-D STAGE1_SELFTEST_AUTORUN="$STAGE1_SELFTEST_AUTORUN" \
 	-D STAGE1_RUNTIME_PROBE="$STAGE1_RUNTIME_PROBE" \
@@ -313,6 +381,13 @@ dd if=/dev/zero of="$STAGE1_SLOT_BIN" bs=512 count="$STAGE1_SECTORS" status=none
 dd if="$STAGE1_BIN" of="$STAGE1_SLOT_BIN" conv=notrunc status=none
 
 echo "[build-full] assembling application payloads"
+nasm -f bin src/com/hwdetect.asm -o build/full/obj/hwdetect.com
+nasm -f bin src/com/inputinit.asm -o build/full/obj/inputini.com
+nasm -f bin src/com/dos_window_runtime.asm -o build/full/obj/doswin.drv
+nasm -f bin src/com/window_game_launch.asm -o build/full/obj/dwin.com
+nasm -f bin src/com/window_game_launch.asm -D WINDOW_WOLF=1 -o build/full/obj/wwin.com
+python3 scripts/build_doom_window.py --output build/full/obj/doom-window
+python3 scripts/build_wolf_window.py --output build/full/obj/wolf-window
 nasm -f bin "$STAGE2_SRC" -o "$STAGE2_BIN"
 nasm -f bin "$RUNTIME_SRC" \
 	-D FAT_SPT="$FAT_SPT" \
@@ -322,6 +397,7 @@ nasm -f bin "$RUNTIME_SRC" \
 	-D FAT_SECTORS_PER_FAT="$FAT_SECTORS_PER_FAT" \
 	-D FAT_ROOT_DIR_SECTORS="$ROOT_DIR_SECTORS" \
 	-D FAT_TYPE=16 \
+	-D FAT_TOTAL_SECTORS="$TOTAL_SECTORS" \
 	-D FAT_LBA_OFFSET="$FAT_LBA_OFFSET" \
 	-D STAGE1_SELFTEST_AUTORUN="$STAGE1_SELFTEST_AUTORUN" \
 	-D STAGE1_RUNTIME_PROBE="$STAGE1_RUNTIME_PROBE" \
@@ -338,6 +414,7 @@ nasm -f bin "$RUNTIME_SRC" \
 	-D WOLF_RUNTIME_DIAG="$WOLF_RUNTIME_DIAG" \
 	-l build/full/obj/ciukidos.lst -o "$RUNTIME_BIN"
 nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
+bash scripts/build_media.sh build/full/obj
 nasm -f bin "$CIUKRTST_SRC" -D CIUKIDOS_RUNTIME_SEG="$CIUKIDOS_RUNTIME_SEG" -D CIUKIDOS_ABI_VERSION="$CIUKIDOS_ABI_VERSION" -o "$CIUKRTST_BIN"
 nasm -f bin "$MOUSECB_SRC" -o "$MOUSECB_BIN"
 nasm -f bin "$CIUKPST_SRC" -D CIUKIDOS_RUNTIME_SEG="$CIUKIDOS_RUNTIME_SEG" -D CIUKIDOS_ABI_VERSION="$CIUKIDOS_ABI_VERSION" -o "$CIUKPST_BIN"
@@ -349,11 +426,16 @@ nasm -f bin "$DELTEST_SRC" -o "$DELTEST_BIN"
 nasm -f bin "$CIUKEDIT_SRC" -o "$CIUKEDIT_BIN"
 nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
 nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
+nasm -f bin "$VIDLEAVE_SRC" -o "$VIDLEAVE_BIN"
 nasm -f bin "$MOUSE_SRC" -o "$MOUSE_BIN"
 nasm -f bin "$CIUKWIN_SRC" -o "$CIUKWIN_BIN"
-nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL" -D SETUP_ENABLE_RAW_HDD_DESTRUCTIVE="$SETUP_RAW_HDD_DESTRUCTIVE" -D SETUP_LIVE_CD_MODE="$SETUP_LIVE_CD_MODE" -D RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA="$RAW_STAGE1_PATCH_LBA" -D RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF="$RAW_STAGE1_PATCH_OFF" -o "$SETUP_BIN"
-nasm -f bin "$FORMAT_SRC" -o "$FORMAT_BIN"
-nasm -f bin "$COMMAND_STUB_SRC" -o "$COMMAND_STUB_BIN"
+# Runtime logo bytes must originate from the owner's exact approved portrait.
+python3 scripts/build_ciuki_logo.py --check
+# Runtime system icons are reproducible conversions of the pinned Tango release.
+python3 scripts/build_ui_icons.py --check
+nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL" -D SETUP_ENABLE_RAW_HDD_DESTRUCTIVE="$SETUP_RAW_HDD_DESTRUCTIVE" -D SETUP_LIVE_CD_MODE="$SETUP_LIVE_CD_MODE" -D SETUP_FORCE_MEMDISK_SOURCE="$SETUP_FORCE_MEMDISK_SOURCE" -D ATAPI_MIRROR_BLOCKS="$SETUP_ATAPI_MIRROR_BLOCKS" -D RAW_HDD_PARTITION_SECTORS="$TOTAL_SECTORS" -D RAW_STAGE1_DEFAULT_DRIVE_PATCH_LBA="$RAW_STAGE1_PATCH_LBA" -D RAW_STAGE1_DEFAULT_DRIVE_PATCH_OFF="$RAW_STAGE1_PATCH_OFF" -o "$SETUP_BIN"
+nasm -f bin "$FORMAT_SRC" -D MBR_PARTITION_SECTORS="$TOTAL_SECTORS" -o "$FORMAT_BIN"
+nasm -f bin "$SHELL_SRC" -D COMMAND_COMPAT=1 -o "$COMMAND_COMPAT_BIN"
 nasm -f bin "$SHELL_SRC" -o "$SHELL_BIN"
 nasm -f bin "$IPCONFIG_SRC" -o "$IPCONFIG_BIN"
 nasm -f bin "$ICMPD_SRC" -o "$ICMPD_BIN"
@@ -361,11 +443,27 @@ nasm -f bin "$NETCFG_SRC" -o "$NETCFG_BIN"
 nasm -f bin "$DRVLOAD_SRC" -o "$DRVLOAD_BIN"
 nasm -f bin "$SB16INIT_SRC" -o "$SB16INIT_BIN"
 nasm -f bin "$AUDIOTST_SRC" -o "$AUDIOTST_BIN"
+nasm -f bin "$AC97INIT_SRC" -o "$AC97INIT_BIN"
+nasm -f bin "$AC97INIT_SRC" -D BOOT_SOUND=1 -o build/full/obj/bootsnd.com
+nasm -f bin "$AC97INIT_SRC" -D UI_SFX_DRIVER=1 -o build/full/obj/sfx.drv
+bash scripts/build_media_driver.sh build/full/obj/media-driver
+python3 scripts/build_system_sounds.py --output build/full/obj/system-sounds
+python3 scripts/generate_startup_sound.py build/full/obj
+nasm -f bin "$SB16INIT_SRC" -D SB_STARTUP=1 -o build/full/obj/sbstart.com
+nasm -f bin "$AUDIOAUTO_SRC" -o "$AUDIOAUTO_BIN"
 nasm -f bin "$AUDIOKEY_SRC" -o "$AUDIOKEY_BIN"
+nasm -f bin "$SBEMINIT_SRC" -o "$SBEMINIT_BIN"
 nasm -f bin "$DOOMSB_SRC" -o "$DOOMSB_BIN"
 nasm -f bin "$PMIRQSB_LAUNCH_SRC" -o "$PMIRQSB_LAUNCH_BIN"
 nasm -f bin "$DOOMSFX_LAUNCH_SRC" -o "$DOOMSFX_LAUNCH_BIN"
 nasm -f bin "$DOOMVAN_LAUNCH_SRC" -o "$DOOMVAN_LAUNCH_BIN"
+nasm -f bin -D LAUNCHER_MZ=1 "$DOOMVAN_LAUNCH_SRC" -o "$DOOMVAN_LAUNCH_MZ"
+nasm -f bin src/com/doom_safe.asm -o build/full/obj/doomsafe.com
+nasm -f bin "$DOOM_LAUNCH_SRC" -o "$DOOM_LAUNCH_BIN"
+nasm -f bin -D LAUNCHER_MZ=1 "$DOOM_LAUNCH_SRC" -o "$DOOM_LAUNCH_MZ"
+nasm -f bin "$WOLF3D_LAUNCH_SRC" -o "$WOLF3D_LAUNCH_BIN"
+nasm -f bin "$WIN31_LAUNCH_SRC" -o "$WIN31_LAUNCH_BIN"
+nasm -f bin "$VGASETUP_SRC" -o "$VGASETUP_BIN"
 if bash scripts/build_pmirqsb_dos4gw.sh; then
 	echo "[build-full] PMIRQSB protected-mode probe built"
 else
@@ -692,7 +790,9 @@ make_entry "$DIR_ENTRY_GFXRECT"  'GFXRECT COM' 0x20 "$APPS_GFXRECT_CLUSTER" "$GF
 make_entry "$DIR_ENTRY_GFXSTAR"  'GFXSTAR COM' 0x20 "$APPS_GFXSTAR_CLUSTER" "$GFXSTAR_SIZE"
 make_entry "$DIR_ENTRY_SETUP"    'SETUP   COM' 0x20 "$APPS_SETUP_CLUSTER" "$SETUP_SIZE"
 make_entry "$DIR_ENTRY_SETUP_MFT" 'SETUPMFTBIN' 0x20 "$APPS_SETUP_MANIFEST_CLUSTER" "$SETUP_MANIFEST_SIZE"
-make_entry "$DIR_ENTRY_SETUP_MFT_ALT" 'MANIFST BIN' 0x20 "$APPS_SETUP_MANIFEST_CLUSTER" "$SETUP_MANIFEST_SIZE"
+# FAT has no hard links. Reserve an empty directory slot for the legacy name;
+# mcopy below allocates a separate chain instead of cross-linking SETUPMFT.BIN.
+make_entry "$DIR_ENTRY_SETUP_MFT_ALT" 'MANIFST BIN' 0x20 0 0
 make_entry "$DIR_ENTRY_CIUKWIN"  'CIUKWIN COM' 0x20 "$APPS_CIUKWIN_CLUSTER" "$CIUKWIN_SIZE"
 make_entry "$DIR_ENTRY_FORMAT"   'FORMAT  COM' 0x20 "$APPS_FORMAT_CLUSTER" "$FORMAT_SIZE"
 
@@ -718,7 +818,7 @@ dd if="$DIR_ENTRY_SETUP_MFT_ALT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=352 conv=n
 dd if="$DIR_ENTRY_CIUKWIN" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=384 conv=notrunc status=none
 dd if="$DIR_ENTRY_FORMAT" of="$APPS_DIR_CLUSTER_BIN" bs=1 seek=416 conv=notrunc status=none
 
-echo "[build-full] creating 128MB FAT16 image"
+echo "[build-full] creating FAT16 image (${TOTAL_SECTORS} sectors)"
 dd if=/dev/zero of="$IMG" bs=512 count="$TOTAL_SECTORS" status=none
 dd if="$BOOT_BIN"           of="$IMG" bs=512 count=1                seek=0           conv=notrunc status=none
 dd if="$STAGE1_SLOT_BIN"    of="$IMG" bs=512 count="$STAGE1_SECTORS" seek=1          conv=notrunc status=none
@@ -756,20 +856,67 @@ dd if="$DOS4GW_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_DOS4GW_CLUSTER - 
 dd if="$DOOMSFX_BIN" of="$IMG" bs=512 seek=$((DATA_LBA + ((ROOT_DOOMSFX_CLUSTER - 2) * FAT_SECTORS_PER_CLUSTER))) count="$DOOMSFX_SECTORS" conv=notrunc status=none
 
 if ! command -v mcopy >/dev/null 2>&1; then
-	echo "[build-full] ERROR: mcopy is required to inject COMMAND.COM compatibility stub" >&2
+	echo "[build-full] ERROR: mcopy is required to inject the COMMAND.COM compatibility shell" >&2
 	exit 1
 fi
 
-if ! command -v mmd >/dev/null 2>&1 || ! command -v mdir >/dev/null 2>&1; then
-	echo "[build-full] ERROR: mtools mmd/mdir are required to inject runtime driver helper" >&2
+if ! command -v mmd >/dev/null 2>&1 || ! command -v mdir >/dev/null 2>&1 || ! command -v mlabel >/dev/null 2>&1; then
+	echo "[build-full] ERROR: mtools mmd/mdir/mlabel are required to prepare the FAT16 volume" >&2
 	exit 1
 fi
 
-echo "[build-full] injecting COMMAND.COM compatibility stub to $COMMAND_COMPAT_IMAGE_PATH"
-mcopy -o -i "$IMG" "$COMMAND_STUB_BIN" "$COMMAND_COMPAT_IMAGE_PATH"
+mcopy -o -i "$IMG" "$SETUP_MANIFEST_BIN" ::APPS/MANIFST.BIN
+mlabel -i "$IMG" ::CIUKIOSFULL
+
+echo "[build-full] injecting functional COMMAND.COM compatibility shell to $COMMAND_COMPAT_IMAGE_PATH"
+mcopy -o -i "$IMG" "$COMMAND_COMPAT_BIN" "$COMMAND_COMPAT_IMAGE_PATH"
 
 echo "[build-full] injecting external shell prototype to ::SYSTEM/SHELL.COM"
 mcopy -o -i "$IMG" "$SHELL_BIN" ::SYSTEM/SHELL.COM
+mcopy -o -i "$IMG" build/full/obj/doswin.drv ::SYSTEM/DOSWIN.DRV
+mcopy -o -i "$IMG" build/full/obj/dwin.com build/full/obj/wwin.com ::APPS/
+mcopy -o -i "$IMG" build/full/obj/doom-window/DOOMWIN.EXE build/full/obj/wolf-window/WOLFWIN.EXE ::APPS/
+mcopy -o -i "$IMG" "$DOS4GW_BIN" ::APPS/DOS4GW.EXE
+mtools_ensure_dir "$IMG" ::SYSTEM/GAMES
+mcopy -o -i "$IMG" third_party/doomgeneric/LICENSE ::SYSTEM/GAMES/DOOMGPL.TXT
+mcopy -o -i "$IMG" third_party/wolf4sdl/COPYING ::SYSTEM/GAMES/WOLFGPL.TXT
+mcopy -o -i "$IMG" src/ports/README.TXT ::SYSTEM/GAMES/README.TXT
+python3 scripts/package_window_game_sources.py --output build/full/obj/gamesrc.tgz
+mcopy -o -i "$IMG" build/full/obj/gamesrc.tgz ::SYSTEM/GAMES/GAMESRC.TGZ
+if [[ "${CIUKIOS_INCLUDE_DOS_WINDOW_PROBES:-0}" == "1" ]]; then
+    mcopy -o -i "$IMG" build/full/obj/doom-window/CGSMOKE.EXE ::APPS/CGSMOKE.EXE
+    bash src/probes/doswindow/build.sh build/full/obj/doswindow
+    for window_probe in DWBIOST.COM DWBIOST.EXE DWBIOSCH.COM; do
+        mcopy -o -i "$IMG" "build/full/obj/doswindow/$window_probe" "::APPS/$window_probe"
+    done
+fi
+echo "[build-full] injecting official system icons and credits to ::SYSTEM/UI"
+mtools_ensure_dir "$IMG" ::SYSTEM/UI
+python3 scripts/build_desktop_assets.py
+mcopy -o -i "$IMG" assets/desktop/DESKTOP.DAT ::SYSTEM/UI/DESKTOP.DAT
+mcopy -o -i "$IMG" assets/icons/native/ICONS.DAT ::SYSTEM/UI/ICONS.DAT
+mcopy -o -i "$IMG" assets/icons/CREDITS.TXT ::SYSTEM/UI/CREDITS.TXT
+mcopy -o -i "$IMG" assets/icons/upstream/COPYING ::SYSTEM/UI/TANGO.TXT
+mcopy -o -i "$IMG" assets/icons/upstream/AUTHORS ::SYSTEM/UI/AUTHORS.TXT
+wallpaper_args=(--output build/full/obj/wallpapers)
+if [[ "${CIUKIOS_PERSONAL_WALLPAPERS:-0}" == "1" ]]; then
+    wallpaper_args+=(--include-user-wallpapers)
+fi
+python3 scripts/build_wallpapers.py "${wallpaper_args[@]}"
+mcopy -o -i "$IMG" build/full/obj/wallpapers/WALLS.DAT ::SYSTEM/UI/WALLS.DAT
+mcopy -o -i "$IMG" assets/wallpapers/LICENSE.txt ::SYSTEM/UI/WALLLIC.TXT
+mcopy -o -i "$IMG" assets/wallpapers/README.md ::SYSTEM/UI/WALLINFO.TXT
+for wallpaper_file in build/full/obj/wallpapers/WALL[0-9][0-9].CWP; do
+    [[ -f "$wallpaper_file" ]] || continue
+    mcopy -o -i "$IMG" "$wallpaper_file" ::SYSTEM/UI/
+done
+printf 'LIVE' > build/full/obj/STARTUP.CFG
+mcopy -o -i "$IMG" build/full/obj/STARTUP.CFG ::SYSTEM/STARTUP.CFG
+mcopy -o -i "$IMG" src/com/setup_font.LICENSE ::APPS/SETUPFNT.TXT
+
+echo "[build-full] injecting removable-media reader to ::APPS/MEDIA.COM"
+mcopy -o -i "$IMG" build/full/obj/media.com ::APPS/MEDIA.COM
+mcopy -o -i "$IMG" src/com/media.txt ::APPS/MEDIA.TXT
 
 echo "[build-full] injecting CIUKIDOS kernel to ::SYSTEM/CIUKIDOS.SYS"
 mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/CIUKIDOS.SYS
@@ -813,6 +960,10 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
             doom_cfg_out="build/full/obj/doom-default.cfg"
             cp "$DOOM_SRC_DIR/DEFAULT.CFG" "$doom_cfg_out"
             case "$DOOM_AUDIO_PROFILE" in
+                adlib-pcspeaker)
+                    sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		1/; s/^snd_mport[[:space:]].*/snd_mport		-1/' "$doom_cfg_out"
+                    echo "[build-full] DOOM audio profile: adlib-pcspeaker (OPL2 music + stable PC-speaker SFX)"
+                    ;;
                 music-only)
                     sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		0/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		0/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/' "$doom_cfg_out"
                     echo "[build-full] DOOM audio profile: music-only (SFX disabled)"
@@ -836,7 +987,7 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
                     echo "[build-full] DOOM audio profile: sb16-sfx (SFX enabled, music disabled)"
                     ;;
                 *)
-                    echo "[build-full] ERROR: unsupported DOOM audio profile: $DOOM_AUDIO_PROFILE (expected music-only, pcspeaker-sfx, sb16 or sb16-sfx)" >&2
+                    echo "[build-full] ERROR: unsupported DOOM audio profile: $DOOM_AUDIO_PROFILE (expected adlib-pcspeaker, music-only, pcspeaker-sfx, sb16 or sb16-sfx)" >&2
                     exit 1
                     ;;
             esac
@@ -853,6 +1004,14 @@ if [[ -d "$DOOM_SRC_DIR" ]]; then
         fi
         echo "[build-full] injecting DOOMSB.COM helper to $DOOM_IMAGE_DIR"
         mcopy -o -i "$IMG" "$DOOMSB_BIN" "$DOOM_IMAGE_DIR/DOOMSB.COM"
+        # Preserve the engine under a private name; explicit .EXE launches
+        # must not silently bypass the transient PCI-audio driver.
+        [[ -s "$DOOM_SRC_DIR/DOOM.EXE" ]] || { echo '[build-full] ERROR missing Doom engine' >&2; exit 1; }
+        mcopy -o -i "$IMG" "$DOOM_SRC_DIR/DOOM.EXE" "$DOOM_IMAGE_DIR/DOOMCORE.EXE"
+        mcopy -o -i "$IMG" "$DOOM_LAUNCH_MZ" "$DOOM_IMAGE_DIR/DOOM.EXE"
+        echo "[build-full] injecting DOOM.COM/EXE transient AC97 launchers to $DOOM_IMAGE_DIR"
+        mcopy -o -i "$IMG" "$DOOM_LAUNCH_BIN" "$DOOM_IMAGE_DIR/DOOM.COM"
+        mcopy -o -i "$IMG" build/full/obj/doomsafe.com "$DOOM_IMAGE_DIR/DOOMSAFE.COM"
     else
         echo "[build-full] WARN: Doom source directory is empty: $DOOM_SRC_DIR" >&2
     fi
@@ -868,7 +1027,10 @@ if [[ -f "$DOOMVAN_EXE" && -d "$DOOM_SRC_DIR" ]]; then
 	echo "[build-full] injecting doom-vanille probe from $DOOMVAN_EXE to $DOOMVAN_IMAGE_DIR"
 	mtools_ensure_dir "$IMG" "$DOOMVAN_IMAGE_DIR"
 	mcopy -o -i "$IMG" "$DOOMVAN_LAUNCH_BIN" "$DOOMVAN_IMAGE_DIR/DOOMVAN.COM"
-	mcopy -o -i "$IMG" "$DOOMVAN_EXE" "$DOOMVAN_IMAGE_DIR/PCDOOM.EXE"
+	mcopy -o -i "$IMG" "$DOOMVAN_EXE" "$DOOMVAN_IMAGE_DIR/PCDMCORE.EXE"
+	for doomvan_entry in DOOM.EXE DOOMVAN.EXE PCDOOM.EXE; do
+		mcopy -o -i "$IMG" "$DOOMVAN_LAUNCH_MZ" "$DOOMVAN_IMAGE_DIR/$doomvan_entry"
+	done
 	if [[ -f "$DOS4GW_BIN" ]]; then
 		mcopy -o -i "$IMG" "$DOS4GW_BIN" "$DOOMVAN_IMAGE_DIR/DOS4GW.EXE"
 	fi
@@ -878,8 +1040,9 @@ if [[ -f "$DOOMVAN_EXE" && -d "$DOOM_SRC_DIR" ]]; then
 	if [[ -f "$DOOM_SRC_DIR/DEFAULT.CFG" ]]; then
 		doomvan_cfg_out="build/full/obj/doomvan-default.cfg"
 		cp "$DOOM_SRC_DIR/DEFAULT.CFG" "$doomvan_cfg_out"
-		sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		0/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		3/; s/^snd_sbport[[:space:]].*/snd_sbport		544/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/; s/^snd_mport[[:space:]].*/snd_mport		-1/' "$doomvan_cfg_out"
-		echo "[build-full] injecting doom-vanille SB16 SFX profile to $DOOMVAN_IMAGE_DIR"
+		sed -i -E 's/^sfx_volume[[:space:]].*/sfx_volume\t\t15/; s/^music_volume[[:space:]].*/music_volume\t\t15/' "$doomvan_cfg_out"
+		sed -i -E 's/^snd_channels[[:space:]].*/snd_channels		8/; s/^snd_musicdevice[[:space:]].*/snd_musicdevice		3/; s/^snd_sfxdevice[[:space:]].*/snd_sfxdevice		3/; s/^snd_sbport[[:space:]].*/snd_sbport		544/; s/^snd_sbirq[[:space:]].*/snd_sbirq		7/; s/^snd_sbdma[[:space:]].*/snd_sbdma		1/; s/^snd_mport[[:space:]].*/snd_mport		816/' "$doomvan_cfg_out"
+		echo "[build-full] injecting doom-vanille transient AC97/SB16 profile to $DOOMVAN_IMAGE_DIR"
 		mcopy -o -i "$IMG" "$doomvan_cfg_out" "$DOOMVAN_IMAGE_DIR/DEFAULT.CFG"
 	fi
 else
@@ -900,10 +1063,6 @@ if [[ -d "$DOSNAV_SRC_DIR" ]]; then
 	shopt -u nullglob dotglob
 	if (( ${#dosnav_items[@]} > 0 )); then
 		mcopy -s -o -i "$IMG" "${dosnav_items[@]}" "$DOSNAV_IMAGE_DIR/"
-		if [[ -f "$DOSNAV_SRC_DIR/DN.COM" ]]; then
-			python3 "$DOSNAV_PATCH_TOOL" "$DOSNAV_SRC_DIR/DN.COM" "$DOSNAV_PATCHED_COM"
-			mcopy -o -i "$IMG" "$DOSNAV_PATCHED_COM" "$DOSNAV_IMAGE_DIR/DN.COM"
-		fi
 	else
 		echo "[build-full] WARN: DOSNavigator source directory is empty: $DOSNAV_SRC_DIR" >&2
 	fi
@@ -950,6 +1109,18 @@ else:
     raise SystemExit(f"[build-full] ERROR: unexpected WOLF3D.EXE bytes at 0x{offset:x}: {current.hex()}")
 PY
 	fi
+	if [[ -f "$wolf3d_payload_dir/CONFIG.WL6" ]]; then
+		if [[ "$(stat -c%s "$wolf3d_payload_dir/CONFIG.WL6")" -lt 468 ]]; then
+			echo "[build-full] ERROR: WOLF3D CONFIG.WL6 is too small for audio profile" >&2
+			exit 1
+		fi
+		# Wolf4GW stores SoundMode, MusicMode and DigiMode as 16-bit enums.
+		# Select AdLib SFX/music plus Sound Blaster digital audio; VSBHDA maps
+		# those ports to the detected AC97/HDA/PCI controller for one process.
+		printf '\x02\x00\x01\x00\x03\x00' \
+			| dd of="$wolf3d_payload_dir/CONFIG.WL6" bs=1 seek=$((0x1CE)) count=6 conv=notrunc status=none
+		echo "[build-full] WOLF3D profile: transient AC97 Sound Blaster + AdLib"
+	fi
 
 	shopt -s nullglob dotglob
 	wolf3d_items=("$wolf3d_payload_dir"/*)
@@ -958,6 +1129,18 @@ PY
 		mcopy -s -o -i "$IMG" "${wolf3d_items[@]}" "$WOLF3D_IMAGE_DIR/"
 	else
 		echo "[build-full] WARN: WOLF3D source directory is empty: $WOLF3D_SRC_DIR" >&2
+	fi
+	if [[ "$WOLF4GW_MODE" != "off" && -s "$WOLF4GW_EXE" ]]; then
+		mcopy -o -i "$IMG" "$WOLF3D_LAUNCH_BIN" "$WOLF3D_IMAGE_DIR/WOLF3D.COM"
+		mcopy -o -i "$IMG" "$WOLF4GW_EXE" "$WOLF3D_IMAGE_DIR/WOLF4GW.EXE"
+		[[ ! -s "$WOLF4GW_NOTICE" ]] || mcopy -o -i "$IMG" "$WOLF4GW_NOTICE" "$WOLF3D_IMAGE_DIR/WOLF4GW.TXT"
+		if [[ -s "$DOS4GW_BIN" ]]; then
+			mcopy -o -i "$IMG" "$DOS4GW_BIN" "$WOLF3D_IMAGE_DIR/DOS4GW.EXE"
+		else
+			echo "[build-full] ERROR: Wolf4GW requires DOS4GW at $DOS4GW_BIN" >&2
+			exit 1
+		fi
+		echo "[build-full] WOLF3D.COM selects transient VSBHDA AC97 audio; WOLF3D.EXE remains the 16-bit fallback"
 	fi
 	# Regression fixture for INT 21h AH=4Bh relative multi-component subpath exec:
 	# ship a genuine MZDEMO.EXE inside \APPS\WOLF3D so 'run WOLF3D\MZDEMO.EXE' from
@@ -1057,12 +1240,41 @@ mtools_ensure_dir "$IMG" "$DRIVERS_IMAGE_DIR"
 mcopy -o -i "$IMG" "$SB16INIT_BIN" "${DRIVERS_IMAGE_DIR%/}/SB16INIT.COM"
 echo "[build-full] injecting AUDIOTST.COM helper to ${DRIVERS_IMAGE_DIR%/}/AUDIOTST.COM"
 mcopy -o -i "$IMG" "$AUDIOTST_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIOTST.COM"
-echo "[build-full] injecting AUDIO.COM alias to ${DRIVERS_IMAGE_DIR%/}/AUDIO.COM"
-mcopy -o -i "$IMG" "$AUDIOTST_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIO.COM"
+echo "[build-full] injecting AC97INIT.COM helper to ${DRIVERS_IMAGE_DIR%/}/AC97INIT.COM"
+mcopy -o -i "$IMG" "$AC97INIT_BIN" "${DRIVERS_IMAGE_DIR%/}/AC97INIT.COM"
+mcopy -o -i "$IMG" build/full/obj/bootsnd.com "${DRIVERS_IMAGE_DIR%/}/SOUND.COM"
+mcopy -o -i "$IMG" build/full/obj/sbstart.com "${DRIVERS_IMAGE_DIR%/}/SBSTART.COM"
+mcopy -o -i "$IMG" build/full/obj/bootsnd.com ::SYSTEM/BOOTSND.COM
+mcopy -o -i "$IMG" build/full/obj/sfx.drv "${DRIVERS_IMAGE_DIR%/}/SFX.DRV"
+mcopy -o -i "$IMG" build/full/obj/media-driver/media.drv ::SYSTEM/MEDIA.DRV
+mtools_ensure_dir "$IMG" ::SYSTEM/SOUNDS
+for system_sound_file in build/full/obj/system-sounds/*.PCM build/full/obj/system-sounds/*.SB build/full/obj/system-sounds/*.TXT; do
+    mcopy -o -i "$IMG" "$system_sound_file" ::SYSTEM/SOUNDS/
+done
+mcopy -o -i "$IMG" build/full/obj/BOOT.PCM ::SYSTEM/BOOT.PCM
+echo "[build-full] injecting AUDIO.COM hardware dispatcher to ${DRIVERS_IMAGE_DIR%/}/AUDIO.COM"
+mcopy -o -i "$IMG" "$AUDIOAUTO_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIO.COM"
 echo "[build-full] injecting AUDIOKEY.COM helper to ${DRIVERS_IMAGE_DIR%/}/AUDIOKEY.COM"
 mcopy -o -i "$IMG" "$AUDIOKEY_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIOKEY.COM"
 echo "[build-full] injecting AKEY.COM alias to ${DRIVERS_IMAGE_DIR%/}/AKEY.COM"
 mcopy -o -i "$IMG" "$AUDIOKEY_BIN" "${DRIVERS_IMAGE_DIR%/}/AKEY.COM"
+echo "[build-full] injecting VGASETUP.COM display manager"
+mcopy -o -i "$IMG" "$VGASETUP_BIN" "${DRIVERS_IMAGE_DIR%/}/VGASETUP.COM"
+
+vbesvga_payload=(
+	VBESVGA.DRV VDDVBE.386 VBEVMDIB.3GR
+	AUXSTACK.COM AUXCHECK.COM VIDMODES.COM MODETEST.COM SETUP.EXE
+	OEMSETUP.INF VBESVGA.TXT SOURCE.TXT
+)
+for vbesvga_file in "${vbesvga_payload[@]}"; do
+	[[ -s "$VBESVGA_OUTPUT_DIR/$vbesvga_file" ]] \
+		|| { echo "[build-full] ERROR: incomplete VBE video payload: $vbesvga_file" >&2; exit 1; }
+done
+mtools_ensure_dir "$IMG" "$VIDEO_IMAGE_DIR"
+for vbesvga_file in "${vbesvga_payload[@]}"; do
+	mcopy -o -i "$IMG" "$VBESVGA_OUTPUT_DIR/$vbesvga_file" "${VIDEO_IMAGE_DIR%/}/$vbesvga_file"
+done
+echo "[build-full] universal VBE/EDID video suite ready under $VIDEO_IMAGE_DIR"
 if [[ -f "$PMIRQSB_BIN" ]]; then
 	echo "[build-full] injecting PMIRQSB.COM launcher to ${DRIVERS_IMAGE_DIR%/}/PMIRQSB.COM"
 	mcopy -o -i "$IMG" "$PMIRQSB_LAUNCH_BIN" "${DRIVERS_IMAGE_DIR%/}/PMIRQSB.COM"
@@ -1130,6 +1342,48 @@ else
 			exit 1
 		fi
 	fi
+fi
+
+# Keep repository payload verification exact: project-owned probes are added
+# only after the third-party driver tree has been copied and compared.
+echo "[build-full] injecting VIDLEAVE.COM video-restore probe to ${DRIVERS_IMAGE_DIR%/}/VIDLEAVE.COM"
+mcopy -o -i "$IMG" "$VIDLEAVE_BIN" "${DRIVERS_IMAGE_DIR%/}/VIDLEAVE.COM"
+echo "[build-full] injecting SBEMINIT.COM protected-mode PCI audio loader"
+mcopy -o -i "$IMG" "$SBEMINIT_BIN" "${DRIVERS_IMAGE_DIR%/}/SBEMINIT.COM"
+python3 scripts/package_driver_catalog.py "$IMG" --video "$VBESVGA_OUTPUT_DIR"
+
+case "$SBEMU_MODE" in
+	build)
+		[[ -x "$SBEMU_BUILD_SCRIPT" ]] \
+			|| { echo "[build-full] ERROR: missing SBEMU build script: $SBEMU_BUILD_SCRIPT" >&2; exit 1; }
+		bash "$SBEMU_BUILD_SCRIPT"
+		;;
+	reuse) ;;
+	off) ;;
+	*)
+		echo "[build-full] ERROR: CIUKIOS_SBEMU_MODE must be build, reuse or off" >&2
+		exit 1
+		;;
+esac
+if [[ "$SBEMU_MODE" != "off" ]]; then
+	for sbemu_file in VSBHDA.EXE VSBHDA16.EXE SNDCARD.DRV HDPMI32I.EXE HDPMI16I.EXE HDPMI.TXT VSBHDA.GPL VSBHDA.TXT DOSXVS.EXE DOSXVS.TXT; do
+		[[ -s "$SBEMU_OUTPUT_DIR/$sbemu_file" ]] \
+			|| { echo "[build-full] ERROR: incomplete SBEMU fallback output: $SBEMU_OUTPUT_DIR/$sbemu_file" >&2; exit 1; }
+	done
+	mtools_ensure_dir "$IMG" "$SBEMU_IMAGE_DIR"
+	mtools_ensure_dir "$IMG" ::DRIVERS/AUDIO
+	for sbemu_file in VSBHDA.EXE VSBHDA16.EXE SNDCARD.DRV HDPMI32I.EXE HDPMI16I.EXE HDPMI.TXT VSBHDA.GPL VSBHDA.TXT DOSXVS.EXE DOSXVS.TXT; do
+		mcopy -o -i "$IMG" "$SBEMU_OUTPUT_DIR/$sbemu_file" "${SBEMU_IMAGE_DIR%/}/$sbemu_file"
+		mcopy -o -i "$IMG" "$SBEMU_OUTPUT_DIR/$sbemu_file" "::DRIVERS/AUDIO/$sbemu_file"
+	done
+	echo "[build-full] transient universal AC97/HDA/PCI audio stack ready under $SBEMU_IMAGE_DIR"
+fi
+
+if [[ -d "$NETWORK_SRC_DIR/PACKET" ]]; then
+    mtools_ensure_dir "$IMG" ::DRIVERS/NET
+    for network_driver_file in NE2000.COM PKTCHK.COM GPL.DOC SOURCES.ZIP; do
+        mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/PACKET/$network_driver_file" "::DRIVERS/NET/$network_driver_file"
+    done
 fi
 
 case "$WINDOWS31_MODE" in
@@ -1205,9 +1459,6 @@ if [[ "$WINDOWS31_MODE" != "off" ]]; then
 		mcopy -o -i "$IMG" "$WINDOWS31_README" "$WINDOWS31_MEDIA_IMAGE_DIR/README.TXT"
 		mcopy -o -i "$IMG" "$WINDOWS31_README" "$WINDOWS31_SETUP_IMAGE_DIR/CIUKIOS.TXT"
 
-		cleanup_windows31_staging
-		trap - EXIT
-
 		for index in 0 1 2 3 4 5 6; do
 			current_hash="$(sha256sum "${windows31_media[$index]}" | awk '{print $1}')"
 			[[ "$current_hash" == "${windows31_hashes[$index]}" ]] \
@@ -1218,7 +1469,17 @@ if [[ "$WINDOWS31_MODE" != "off" ]]; then
 
 		if [[ -s "$WINDOWS31_INSTALLED_DIR/WIN.COM" \
 			&& -s "$WINDOWS31_INSTALLED_DIR/SYSTEM/MOUSE.DRV" ]]; then
+			for command_name in 7z perl; do
+				command -v "$command_name" >/dev/null 2>&1 \
+					|| { echo "[build-full] ERROR: installed Windows integration requires $command_name" >&2; exit 1; }
+			done
+			[[ -f "$WINDOWS31_PROFILE_SCRIPT" ]] \
+				|| { echo "[build-full] ERROR: missing Windows profile generator: $WINDOWS31_PROFILE_SCRIPT" >&2; exit 1; }
 			echo "[build-full] integrating locally prepared Windows tree from $WINDOWS31_INSTALLED_DIR"
+			if [[ "$WINDOWS31_AUDIO_MODE" == "stable" ]]; then
+				CIUKIOS_WINDOWS31_SPEAKER_DIR="$WINDOWS31_SPEAKER_DIR" \
+					bash "$WINDOWS31_SPEAKER_FETCH_SCRIPT"
+			fi
 			mtools_ensure_dir "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR"
 			shopt -s nullglob dotglob
 			windows31_installed_items=("$WINDOWS31_INSTALLED_DIR"/*)
@@ -1228,9 +1489,113 @@ if [[ "$WINDOWS31_MODE" != "off" ]]; then
 				|| { echo "[build-full] ERROR: installed WIN.COM was not packaged" >&2; exit 1; }
 			mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/MOUSE.DRV" >/dev/null 2>&1 \
 				|| { echo "[build-full] ERROR: installed Windows mouse driver was not packaged" >&2; exit 1; }
+			# Keep Microsoft's loader recoverable and make the canonical WIN command
+			# own the complete 16-bit AC97 lifecycle. Windows must run in Standard
+			# Mode because Enhanced Mode installs its own V86/DPMI monitor.
+			mren -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/WIN.COM" \
+				"$WINDOWS31_INSTALLED_IMAGE_DIR/WINCORE.COM"
+			mcopy -o -i "$IMG" "$WIN31_LAUNCH_BIN" \
+				"$WINDOWS31_INSTALLED_IMAGE_DIR/WIN.COM"
+			mren -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/DOSX.EXE" \
+				"$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/DOSX.IBM"
+			mcopy -o -i "$IMG" "$SBEMU_OUTPUT_DIR/DOSXVS.EXE" \
+				"$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/DOSX.EXE"
+			# VSBHDA16 loads its 16-bit card backend by filename from the caller's
+			# current directory (C:\WINDOWS), not from the absolute EXE directory.
+			mcopy -o -i "$IMG" "$SBEMU_OUTPUT_DIR/SNDCARD.DRV" \
+				"$WINDOWS31_INSTALLED_IMAGE_DIR/SNDCARD.DRV"
+
+			windows31_profile_dir="$windows31_staging/configured-profile"
+			CIUKIOS_WINDOWS31_AUDIO_MODE="$WINDOWS31_AUDIO_MODE" bash "$WINDOWS31_PROFILE_SCRIPT" \
+				"$WINDOWS31_INSTALLED_DIR/SYSTEM.INI" \
+				"$WINDOWS31_INSTALLED_DIR/MOUSE.INI" \
+				"$windows31_profile_dir"
+			mcopy -o -i "$IMG" "$windows31_profile_dir/MOUSE.INI" "$WINDOWS31_INSTALLED_IMAGE_DIR/MOUSE.INI"
+			mcopy -o -i "$IMG" "$windows31_profile_dir/SYSTEM.INI" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM.INI"
+			# Recovery and opt-in video profiles consumed transactionally by
+			# VGASETUP.COM.  SYSTEM.INI and SYSTEM.VGA are deliberately the
+			# boot-safe Microsoft VGA profile; the higher modes use banked VBE.
+			for windows31_video_profile in SYSTEM.VGA SYSTEM.800 SYSTEM.102; do
+				mcopy -o -i "$IMG" "$windows31_profile_dir/$windows31_video_profile" \
+					"$WINDOWS31_INSTALLED_IMAGE_DIR/$windows31_video_profile"
+			done
+			mcopy -o -i "$IMG" "$windows31_profile_dir/_DEFAULT.PIF" "$WINDOWS31_INSTALLED_IMAGE_DIR/_DEFAULT.PIF"
+			mcopy -o -i "$IMG" "$windows31_profile_dir/DOSPRMPT.PIF" "$WINDOWS31_INSTALLED_IMAGE_DIR/DOSPRMPT.PIF"
+			# Keep the same generic compatibility shell beside WIN.COM.  Program
+			# Manager and the packaged MS-DOS Prompt can then start a real nested
+			# DOS VM without a disposable-test-only COMMAND.COM fixture.
+			mcopy -o -i "$IMG" "$COMMAND_COMPAT_BIN" "$WINDOWS31_INSTALLED_IMAGE_DIR/COMMAND.COM"
+
+			# The IBM T23 SuperSavage exposes VBE and needs no incompatible
+			# Win9x miniport.  Install the generic Win16 driver, enhanced-mode
+			# VDD/grabber and the auxiliary BIOS stack directly into this tree.
+			for vbe_system_file in VBESVGA.DRV VDDVBE.386 VBEVMDIB.3GR; do
+				mcopy -o -i "$IMG" "$VBESVGA_OUTPUT_DIR/$vbe_system_file" \
+					"$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/$vbe_system_file"
+			done
+			for vbe_windows_file in AUXSTACK.COM AUXCHECK.COM VIDMODES.COM VBESVGA.TXT; do
+				mcopy -o -i "$IMG" "$VBESVGA_OUTPUT_DIR/$vbe_windows_file" \
+					"$WINDOWS31_INSTALLED_IMAGE_DIR/$vbe_windows_file"
+			done
+			for vbe_verify_file in \
+				SYSTEM/VBESVGA.DRV SYSTEM/VDDVBE.386 SYSTEM/VBEVMDIB.3GR \
+				AUXSTACK.COM VIDMODES.COM; do
+				mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/$vbe_verify_file" >/dev/null 2>&1 \
+					|| { echo "[build-full] ERROR: Windows VBE driver was not packaged: $vbe_verify_file" >&2; exit 1; }
+			done
+
+			# Install Windows' own multimedia drivers from the original media.
+			# Keeping these inside C:\WINDOWS isolates Windows configuration from
+			# CiukiDOS' resident INT 33h path used by Costa and DOSNavigator.
+			windows31_native_system="$windows31_staging/native-system"
+			mkdir -p "$windows31_native_system"
+			windows31_native_drivers=(
+				"SNDBLST2.DR_:SNDBLST2.DRV:14816:f2f47c5257a60d0695715a7458bf08fb592a95241b0568134990bc968e4fefef"
+				"VSBD.38_:VSBD.386:5650:a71301a30f6de3ddf2947ce5a54494785a1da79552d892a0f9ac275ced6981a0"
+				"MSADLIB.DR_:MSADLIB.DRV:22064:ea117304fe1d690eecfc9eae2bc4077b40f1267aee47e5ceffa73360d2816de6"
+				"VADLIBD.38_:VADLIBD.386:5542:44401c32dbb28e431d32fc78eae4d09ac1fa02802236275a4efa85da21c104be"
+			)
+			for driver_spec in "${windows31_native_drivers[@]}"; do
+				IFS=: read -r compressed_name installed_name expected_size expected_hash <<< "$driver_spec"
+				compressed_path="$windows31_staging/$compressed_name"
+				installed_path="$windows31_native_system/$installed_name"
+				[[ -s "$compressed_path" ]] \
+					|| { echo "[build-full] ERROR: Windows driver archive is missing: $compressed_name" >&2; exit 1; }
+				7z x -so "$compressed_path" > "$installed_path"
+				[[ "$(stat -c%s "$installed_path")" -eq "$expected_size" ]] \
+					|| { echo "[build-full] ERROR: invalid expanded Windows driver size: $installed_name" >&2; exit 1; }
+				[[ "$(sha256sum "$installed_path" | awk '{print $1}')" == "$expected_hash" ]] \
+					|| { echo "[build-full] ERROR: invalid expanded Windows driver hash: $installed_name" >&2; exit 1; }
+				mcopy -o -i "$IMG" "$installed_path" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/$installed_name"
+				mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/$installed_name" >/dev/null 2>&1 \
+					|| { echo "[build-full] ERROR: Windows native driver was not packaged: $installed_name" >&2; exit 1; }
+			done
+			if [[ "$WINDOWS31_AUDIO_MODE" == "legacy" ]]; then
+				echo "[build-full] Windows legacy audio profile: SB A220 I7 D1 plus AdLib/OPL2 at 388"
+			elif [[ "$WINDOWS31_AUDIO_MODE" == "vsbhda" ]]; then
+				echo "[build-full] Windows Standard Mode audio: transient VSBHDA16 AC97/ICH + SB/AdLib drivers"
+			else
+				for speaker_file_spec in \
+					"SPEAKER.DRV:SYSTEM/SPEAKER.DRV" \
+					"SPEAKER.TXT:SPEAKER.TXT" \
+					"AUDIO.TXT:AUDIO.TXT" \
+					"LICENSE.TXT:SPKLIC.TXT"; do
+					IFS=: read -r speaker_source speaker_destination <<< "$speaker_file_spec"
+					[[ -s "$WINDOWS31_SPEAKER_DIR/$speaker_source" ]] \
+						|| { echo "[build-full] ERROR: missing verified Windows speaker file: $speaker_source" >&2; exit 1; }
+					mcopy -o -i "$IMG" "$WINDOWS31_SPEAKER_DIR/$speaker_source" \
+						"$WINDOWS31_INSTALLED_IMAGE_DIR/$speaker_destination"
+				done
+				mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/SPEAKER.DRV" >/dev/null 2>&1 \
+					|| { echo "[build-full] ERROR: Windows PC-speaker fallback was not packaged" >&2; exit 1; }
+				echo "[build-full] Windows stable audio: verified Microsoft PC-speaker driver; legacy SB/AdLib VxDs disabled"
+			fi
 		else
 			echo "[build-full] Windows setup media ready; no optional installed tree at $WINDOWS31_INSTALLED_DIR"
 		fi
+
+		cleanup_windows31_staging
+		trap - EXIT
 	else
 		echo "[build-full] Windows 3.1 local media not found at $WINDOWS31_MEDIA_DIR (skipped)"
 	fi
@@ -1253,7 +1618,7 @@ fi
 if [[ "$WINDOWS31_MODE" != "off" && "${windows31_media_count:-0}" -eq 7 ]]; then
 	README_OPTIONAL_PAYLOADS+=", Windows 3.1 source media is archived under MEDIA/WIN31 and merged under WIN31SET"
 	if [[ -s "$WINDOWS31_INSTALLED_DIR/WIN.COM" ]]; then
-		README_OPTIONAL_PAYLOADS+=", the local Windows tree is available under WINDOWS (launch with WIN /S)"
+		README_OPTIONAL_PAYLOADS+=", the local Windows tree is available under WINDOWS with linear PS/2 input and native SB/AdLib audio (launch with WIN)"
 	fi
 fi
 

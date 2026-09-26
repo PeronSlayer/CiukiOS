@@ -1,3 +1,28 @@
+## Project identity — Ciuki
+
+CiukiOS is dedicated to **Ciuki**, the dog pictured in
+`misc/CiukiOS_SplashScreen.png`. This is an explicit project requirement from
+the owner, recorded on 2026-09-25; preserve it across sessions and redesigns.
+
+The approved OS logo is the detailed Ciuki portrait in `assets/brand/ciuki-logo.png`
+(the first generated proposal, explicitly selected by the owner). Derive runtime
+icons directly from that exact asset. The owner rejected the hand-drawn pixel
+reinterpretation and the later simplified alternative: do not redraw, regenerate,
+or substitute them. Preserve the approved portrait's shape, pose and colours;
+only deterministic size/format conversion for the renderer is appropriate.
+Do not substitute a generic dog, an abstract letter C, or an unrelated mascot.
+Keep the original Ciuki photograph in the boot splash. Desktop and Setup must
+share this identity.
+UI copy remains English; the existing tagline is `A modern Retro OS`.
+
+The official system icon family uses **Tango Icon Theme 0.8.90**, whose upstream
+icons are released into the Public Domain. Keep its source archive, authors and
+license notice in `assets/icons/`; see `assets/icons/README.md`. Computer, About
+and other CiukiOS identity icons must incorporate deterministic conversions of
+the exact approved Ciuki portrait above. The portrait is a separate project
+asset, not part of Tango's Public Domain release. Do not replace this family
+with extracted Microsoft/Apple artwork or change the approved portrait.
+
 ## Code Search Policy
 
 Use Semble before reading large files.

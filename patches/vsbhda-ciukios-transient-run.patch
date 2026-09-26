@@ -1,0 +1,255 @@
+diff --git a/Linux.mak b/Linux.mak
+index 98f097e..b058bfd 100644
+--- a/Linux.mak
++++ b/Linux.mak
+@@ -71,7 +71,7 @@ OBJFILES = \
+ 	$(OUTD)/SC_E1371.obj	$(OUTD)/SC_ICH.obj		$(OUTD)/SC_INTHD.obj	$(OUTD)/SC_VIA82.obj	$(OUTD)/SC_SBLIV.obj	$(OUTD)/SC_SBL24.obj \
+ 	$(OUTD)/STACKIO.obj		$(OUTD)/STACKISR.obj	$(OUTD)/SBISR.obj		$(OUTD)/INT31.obj		$(OUTD)/RMWRAP.obj		$(OUTD)/MIXER.obj \
+ 	$(OUTD)/HAPI.obj		$(OUTD)/DPRINTF.obj		$(OUTD)/VIOOUT.obj		$(OUTD)/DJDPMI.obj		$(OUTD)/UNINST.obj		$(OUTD)/GETENV.obj \
+-	$(OUTD)/MALLOC.obj		$(OUTD)/SBRK.obj		$(OUTD)/FILEACC.obj		$(OUTD)/LOGFILE.obj		$(OUTD)/STRTOL.obj		$(OUTD)/_MATHERR.obj
++	$(OUTD)/MALLOC.obj		$(OUTD)/SBRK.obj		$(OUTD)/FILEACC.obj		$(OUTD)/LOGFILE.obj		$(OUTD)/STRTOL.obj		$(OUTD)/_MATHERR.obj		$(OUTD)/RUNEXEC.obj
+ 	
+ C_OPT_FLAGS=-q -mf -oxa -ecc -5s -fp5 -fpi87 -wcd=111
+ # OW's wpp386 doesn't like the -ecc option
+@@ -113,7 +113,7 @@ file $(OUTD)/CSTRTDHX.obj, $(OUTD)/MAIN.obj, $(OUTD)/LINEAR.obj \
+ name $@ \
+ libpath $(WATCOM)/lib386/dos:$(WATCOM)/lib386 \
+ lib $(OUTD)/$(NAME).lib \
+-op q,m=$(OUTD)/$(NAME).map,stub=res/LOADPERO.BIN,stack=0x10000,heap=0x1000 \
++op q,m=$(OUTD)/$(NAME).map,stub=RES/LOADPERO.BIN,stack=0x10000,heap=0x1000 \
+ $(CONSTATTR) $(CONST2ATTR)
+ 
+ $(OUTD16)/$(NAME)16.EXE:
+diff --git a/Linux16.mak b/Linux16.mak
+index 78248ae..e5ec4ee 100644
+--- a/Linux16.mak
++++ b/Linux16.mak
+@@ -61,7 +61,7 @@ OBJFILES = \
+ 	$(OUTD)/MIXER.obj		$(OUTD)/ADPCM.obj \
+ 	$(OUTD)/HAPI.obj		$(OUTD)/DPRINTF.obj		$(OUTD)/VIOOUT.obj		$(OUTD)/DJDPMI.obj		$(OUTD)/UNINST.obj		$(FMOBJS) \
+ 	$(OUTD)/AUIMP16.obj		$(OUTD)/LDMOD16.obj		$(OUTD)/SBRK.obj		$(OUTD)/MALLOC.obj		$(OUTD)/RTE200.obj \
+-	$(OUTD)/FILEACC.obj		$(OUTD)/LOGFILE.obj		$(OUTD)/GETENV.obj		$(OUTD)/STRTOL.obj		$(OUTD)/_MATHERR.obj
++	$(OUTD)/FILEACC.obj		$(OUTD)/LOGFILE.obj		$(OUTD)/GETENV.obj		$(OUTD)/STRTOL.obj		$(OUTD)/_MATHERR.obj		$(OUTD)/RUNEXEC.obj
+ 
+ OBJFILES2 = \
+ 	$(OUTD)/AC97MIX.obj		$(OUTD)/AU_CARDS.obj \
+diff --git a/src/MAIN.C b/src/MAIN.C
+index 0ab8d47..e50b283 100644
+--- a/src/MAIN.C
++++ b/src/MAIN.C
+@@ -98,6 +98,11 @@ struct MAIN_s {
+ 
+ static struct MAIN_s gm = { NULL, false, false, false, false };
+ 
++static char *run_program = NULL;
++static char *run_argument = NULL;
++int RunChild( const char *program, const char *argument );
++void SNDISR_Report( void );
++
+ struct globalvars gvars = { BASE_DEFAULT, IRQ_DEFAULT, DMA_DEFAULT, /* /A /I /D */
+ #if SB16
+ HDMA_DEFAULT, /* /H */
+@@ -155,6 +160,8 @@ static const struct {
+     "MV",  "Set voice limit [0-256, def 64]", &gvars.voices,
+ #endif
+     "CF",  "Set compatibility flags [def 0]", &gvars.compatflags,
++    "RUN:", "Run one child, then release all VSBHDA resources", (int *)&run_program,
++    "ARG:", "Pass one command-tail argument to the /RUN child", (int *)&run_argument,
+ #ifdef _DEBUG
+     "LF:", "Set log file name", (int *)&gvars.logfile,
+     "LM",  "Set log mode [0-2, def 0]", &gvars.logmode,
+@@ -626,6 +633,22 @@ int main(int argc, char* argv[])
+ 
+     //AU_prestart( gm.hAU );
+     AU_start( gm.hAU );
++    if ( run_program ) {
++        int run_rc;
++        printf("VSBHDA transient child: %s\n", run_program);
++        run_rc = RunChild(run_program, run_argument);
++        AU_stop( gm.hAU );
++        /* Games may leave graphics or an order screen with custom attributes. */
++        _settextmode();
++        printf("\nVSBHDA transient child return: %08X\n", run_rc);
++        SNDISR_Report();
++        /* Close the controller before unhooking IRQ and port traps. */
++        AU_close( gm.hAU );
++        ReleaseRes();
++        printf("VSBHDA transient cleanup complete\n");
++        return run_rc;
++    }
++
+     if (bOMode & OM_DOS ) bOMode = OM_DIRECT; /* switch to low-level i/o */
+ 
+     if( gm.bISR && ( gm.bQemm || (!gvars.rm) ) && ( gm.bHdpmi || (!gvars.pm) ) ) {
+diff --git a/src/SNDISR.C b/src/SNDISR.C
+index 8ff7de9..d6743aa 100644
+--- a/src/SNDISR.C
++++ b/src/SNDISR.C
+@@ -5,6 +5,7 @@
+ #include <stdlib.h>
+ #include <stdbool.h>
+ #include <string.h>
++#include <stdio.h>
+ 
+ #include "CONFIG.H"
+ #include "PLATFORM.H"
+@@ -109,6 +110,12 @@ struct SNDISR_s {
+ 
+ static struct SNDISR_s isr = {NULL,-1,0,0};
+ 
++/* IRQ-side accounting only: no DOS, BIOS, printing or file calls here. */
++static volatile uint32_t diag_irqs;
++static volatile uint32_t diag_pcm_blocks;
++static volatile uint32_t diag_opl_blocks;
++static volatile uint32_t diag_nonzero_blocks;
++
+ #ifndef DJGPP
+ /* here malloc/free is superfast since it's a very simple "stack" */
+ #define MALLOCSTATIC 0
+@@ -278,6 +285,7 @@ static int SNDISR_Interrupt( void )
+     /* check if the sound hw does request an interrupt. */
+     if( !AU_isirq( isr.hAU ) )
+         return(0);
++    diag_irqs++;
+ 
+ #if COMPAT4
+     /* v1.8: /CF4 */
+@@ -580,6 +588,8 @@ static int SNDISR_Interrupt( void )
+     }
+ 
+     /* get volumes for software mixer */
++    if( IdxSm )
++        diag_pcm_blocks++;
+ 
+     if( gvars.type < 4) { //SB2.0 and before
+         mastervol = (VSB_GetMixerReg( SB_MIXERREG_MASTERVOL) & 0xF) << 4; /* 3 bits (1-3) */
+@@ -623,6 +633,7 @@ static int SNDISR_Interrupt( void )
+ #ifndef NOFM
+     if( VOPL3_IsActive() ) {
+         int channels;
++        diag_opl_blocks++;
+         pPCMOPL = IdxSm ? isr.pPCM + nSamples * 2 : isr.pPCM;
+         VOPL3_GenSamples( pPCMOPL, nSamples ); //will generate samples*2 if stereo
+         //always use 2 channels
+@@ -697,6 +708,15 @@ static int SNDISR_Interrupt( void )
+         fpu_restore( fpu_buffer );
+     }
+ #endif
++    /* Record whether the actual post-mixer output contains a signal.
++     * This does not claim that the analogue speaker emitted sound. */
++    for( i = 0; i < nSamples * 2; i++ ) {
++        if( isr.pPCM[i] ) {
++            diag_nonzero_blocks++;
++            break;
++        }
++    }
++
+     AU_writedata( isr.hAU, isr.pPCM, nSamples * 2 );
+ 
+ #if SLOWDOWN
+@@ -731,6 +751,21 @@ void SNDISR_IrqOnPortAcc( void )
+ 
+ /* init sound hw - called by main() */
+ 
++/* Called after the transient child returns and the controller is stopped. */
++void SNDISR_Report( void )
++{
++    printf("AUDIO: card=%s HWIRQ=%u rate=%u PIC=%04X\n",
++        AU_getshortname(isr.hAU), AU_getirq(isr.hAU),
++        AU_getfreq(isr.hAU), PIC_GetIRQMask());
++    printf("AUDIO: IRQ=%u PCM=%u OPL=%u OUT=%u\n",
++        diag_irqs, diag_pcm_blocks, diag_opl_blocks, diag_nonzero_blocks);
++    printf("AUDIO: SB mixer master=%02X voice=%02X midi=%02X\n",
++        VSB_GetMixerReg(SB_MIXERREG_MASTERSTEREO),
++        VSB_GetMixerReg(SB_MIXERREG_VOICESTEREO),
++        VSB_GetMixerReg(SB_MIXERREG_MIDISTEREO));
++    printf("AUDIO: OUT counts non-silent digital blocks, not speaker verification\n");
++}
++
+ bool SNDISR_Init( void *hAU, uint16_t vol )
+ ///////////////////////////////////////////
+ {
+diff --git a/src/RUNEXEC.ASM b/src/RUNEXEC.ASM
+new file mode 100644
+index 0000000..3fac7f5
+--- /dev/null
++++ b/src/RUNEXEC.ASM
+@@ -0,0 +1,77 @@
++; Execute one child while VSBHDA remains the active DPMI client.  HDPMI's
++; protected-mode INT 21h/4B00 translator supports nested clients and waits
++; until the child returns.  Keeping the emulation layer non-TSR lets us tear
++; down PCI DMA, IRQ and port traps synchronously afterwards.
++
++	.386
++	.MODEL ?MODEL, c
++	option casemap:none
++
++	.data
++
++child_tail db 128 dup (0)
++
++ifdef NOTFLAT
++; HDPMI 16-bit protected-mode EXEC block: environment plus three 16:16 ptrs.
++child_block dw 0
++child_cmd   dd 0
++child_fcb1  dd 0
++child_fcb2  dd 0
++else
++; HDPMI 32-bit protected-mode EXEC block: three padded 16:32 ptrs, no env.
++child_cmd   dq 0
++child_fcb1  dq 0
++child_fcb2  dq 0
++endif
++
++	.code
++
++RunChild proc uses ebx ecx edx esi edi program:ptr, argument:ptr
++	mov byte ptr child_tail, 0
++	mov byte ptr child_tail+1, 13
++	mov esi, argument
++	test esi, esi
++	jz tail_ready
++	lea edi, child_tail+2
++	mov byte ptr child_tail+1, ' '
++	mov ecx, 1
++copy_tail:
++	cmp ecx, 126
++	jae tail_done
++	lodsb
++	test al, al
++	jz tail_done
++	stosb
++	inc ecx
++	jmp copy_tail
++tail_done:
++	mov byte ptr child_tail, cl
++	mov byte ptr [edi], 13
++tail_ready:
++ifdef NOTFLAT
++	mov word ptr child_cmd+0, offset child_tail
++	mov word ptr child_cmd+2, ds
++	mov edx, program
++	mov ebx, offset child_block
++else
++	mov dword ptr child_cmd+0, offset child_tail
++	mov word ptr child_cmd+4, ds
++	mov edx, program
++	mov ebx, offset child_cmd
++endif
++	push ds
++	pop es
++	mov ax, 4B00h
++	int 21h
++	jc exec_error
++	mov ah, 4Dh
++	int 21h
++	movzx eax, al
++	ret
++exec_error:
++	movzx eax, ax
++	or eax, 80000000h
++	ret
++RunChild endp
++
++	END
+

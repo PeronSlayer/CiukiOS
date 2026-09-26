@@ -35,9 +35,10 @@ relocated:
     mov si, RELOC_BASE + (vbr_dap - $$)
     mov dl, [RELOC_BASE + (boot_drive - $$)]
     mov ah, 0x42
-    int 0x13
+    call bios_disk
     jnc boot_vbr
 
+%if PARTITION_LBA == 63
     xor ax, ax
     mov es, ax
     mov bx, 0x7C00
@@ -46,12 +47,37 @@ relocated:
     mov cl, 0x01
     mov dh, 0x01
     mov dl, [RELOC_BASE + (boot_drive - $$)]
-    int 0x13
+    call bios_disk
     jc disk_error
+%else
+    jmp disk_error              ; the fixed CHS fallback describes LBA 63 only
+%endif
 
 boot_vbr:
+    cmp word [0x7DFE], 0xAA55
+    jne disk_error
     mov dl, [RELOC_BASE + (boot_drive - $$)]
     jmp 0x0000:0x7C00
+
+; Keep the relocated MBR's segments and pointers across both disk services.
+; These calls consume only the BIOS carry result.
+bios_disk:
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+    stc
+    sti
+    int 0x13
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    cld
+    sti
+    ret
 
 disk_error:
     mov si, RELOC_BASE + (msg_disk_error - $$)
@@ -61,7 +87,14 @@ disk_error:
     jz .halt
     mov ah, 0x0E
     mov bx, 0x0007
+    pushad
+    push ds
+    push es
     int 0x10
+    pop es
+    pop ds
+    popad
+    cld
     jmp .print
 .halt:
     cli
@@ -69,6 +102,7 @@ disk_error:
     jmp .halt
 
 boot_drive db 0
+align 4, db 0
 vbr_dap:
     db 0x10
     db 0

@@ -78,7 +78,12 @@ runtime_service_table:
 %define MZ3_LOAD_SEG 0x7200
 %define RUNTIME_LOAD_SEG 0x0300
 %define DOS_EXEC_STATE_BASE_SEG 0x0E00
-%define DOS_EXEC_STATE_FRAME_MAX 5
+; Stage2 is a boot-only 512-byte handoff at 0E80h.  Once it returns, reuse its
+; complete 0E80h-0E9Fh window and the remaining gap below DOS_META_BUF_SEG for
+; EXEC snapshots.  Windows itself consumes four frames before Program Manager;
+; a DOS prompt plus a nested game already needs six, so the old limit of five
+; rejected a perfectly valid AH=4Bh with error 8 despite abundant EMS/XMS.
+%define DOS_EXEC_STATE_FRAME_MAX 11
 %define STAGE2_LOAD_SEG 0x0E80
 %define DOS_META_BUF_SEG 0x0F00
 %define DOS_FAT_BUF_SEG  0x1000
@@ -134,8 +139,8 @@ runtime_service_table:
 ; and let DOS/4GW's 250 KiB block starve MultiVoc's following 8 KiB DMA buffer.
 %define DOS_HEAP_BASE_SEG MZ_LOAD_LIMIT_SEG
 ; A000h is only the architectural ceiling below VGA memory.  The usable
-; runtime limit is read from the BIOS conventional-memory word at 0040:0013,
-; so EXEC/MCB arenas stop before an EBDA which starts below A000h.
+; runtime limit is the lower of the BIOS conventional-memory word and a
+; valid EBDA segment, so EXEC/MCB arenas cannot overwrite firmware storage.
 %define DOS_HEAP_LIMIT_SEG 0xA000
 %define DOS_HEAP_MAX_PARAS (DOS_HEAP_LIMIT_SEG - DOS_HEAP_BASE_SEG)
 %define VBE_BANK_WINDOW_PARAS 0x1000
@@ -145,6 +150,9 @@ runtime_service_table:
 %define VBE_BACKING_TARGET_PARAS (VBE_BACKING_TARGET_BANKS * VBE_BANK_WINDOW_PARAS)
 %define DOS_HEAP_USER_SEG (DOS_HEAP_BASE_SEG + 1)
 %define DOS_HEAP_USER_MAX_PARAS (DOS_HEAP_MAX_PARAS - 1)
+; AH=47h supplies a DOS path without drive/leading slash, in 64 bytes.
+%define DOS_CWD_BYTES 64
+%define DOS_CWD_MAX (DOS_CWD_BYTES - 1)
 %define DOS_MEM_BLOCK_FREE 0
 %define DOS_MEM_BLOCK_INUSE 1
 %define DOS_MEM_BLOCK_RESIDENT 2
@@ -163,6 +171,7 @@ runtime_service_table:
 %define XMS_EMB_BASE_HI 0x0011
 %define XMS_PHYS_LIMIT_HI 0x0400
 %define XMS_FREE_KB_INITIAL 0xFBC0
+%define XMS_HANDLE_COUNT 16
 ; Large clients commonly claim the complete initial "largest" block while
 %define BIOS_EXTMEM_KB 0xFC00
 %define DOS_EXEC_STATE_BLOCK_COUNT_OFF (dos_mem_block_count - dos_mem_exec_state_begin)
@@ -305,6 +314,7 @@ runtime_service_table:
 %endif
 
 stage1_start:
+    cld
 %ifdef CIUKIDOS_KERNEL_BUILD
     mov [cs:kernel_entry_default_drive], al
 %endif
@@ -405,7 +415,11 @@ stage1_start:
     mov si, dos_env_exec_path
     call shell_try_exec_path
     jnc .shell_returned
+    mov [cs:loader_exec_error], ax
     mov si, msg_shell_missing_fatal
+    cmp ax, 2
+    je stage1_loader_fatal
+    mov si, msg_shell_exec_fatal
     jmp stage1_loader_fatal
 .shell_returned:
     mov si, msg_shell_returned_fatal
@@ -431,6 +445,15 @@ stage1_loader_fatal:
     call print_string_dual
     pop si
     call print_string_dual
+    mov ax, [cs:loader_exec_error]
+    test ax, ax
+    jz .no_exec_error
+    push ax
+    mov si, msg_loader_exec_error
+    call print_string_dual
+    pop ax
+    call print_hex16_dual
+.no_exec_error:
     mov si, msg_halting
     call print_string_dual
 .halt_forever:
@@ -695,13 +718,9 @@ install_int21_vector:
     mov ax, cs
     mov [es:bx + 2], ax
 
-    ; INT 16h is not hooked, but int16_handler chains through old_int16:
-    ; capture the BIOS vector so the chain target is never 0000:0000.
-    mov bx, 0x16 * 4
-    mov ax, [es:bx]
-    mov [old_int16_off], ax
-    mov ax, [es:bx + 2]
-    mov [old_int16_seg], ax
+    ; Keyboard consumers use the platform BIOS INT 16h implementation
+    ; directly.  The resident IRQ1 bridge only normalizes the BIOS ring and
+    ; never replaces the public INT 16h API.
 %endif
 
 %if STAGE2_AUTORUN == 0
@@ -766,6 +785,40 @@ int24_handler:
     mov al, 0x03
     iret
 
+hardware_reset:
+    ; INT 19h is only a bootstrap restart.  Reset the chipset/peripherals so
+    ; the next boot begins from POST on physical hardware as well as in VMs.
+    cli
+    xor ax, ax
+    mov ds, ax
+    mov word [0x0472], ax
+    mov dx, 0x0CF9
+    mov al, 0x02
+    out dx, al
+    or al, 0x04
+    out dx, al
+    mov cx, 0x1000
+.wait_8042:
+    in al, 0x64
+    test al, 0x02
+    jz .pulse_8042
+    loop .wait_8042
+    jmp .triple_fault
+.pulse_8042:
+    mov al, 0xFE
+    out 0x64, al
+    mov cx, 0x1000
+.wait_reset:
+    nop
+    loop .wait_reset
+.triple_fault:
+    lidt [cs:.null_idt]
+    int 3
+    jmp 0xFFFF:0x0000
+.null_idt:
+    dw 0
+    dd 0
+
 %if STAGE2_AUTORUN == 0
 ; Compact CPU fault handlers (INT 0/6): recover to shell child or reboot.
 int00_fault_handler:
@@ -789,7 +842,7 @@ fault_common:
     mov ax, [bp + 4]
     jmp exec_terminate_dispatch_cs
 .reboot:
-    int 0x19
+    call hardware_reset
 .hng:
     hlt
     jmp .hng
@@ -1064,14 +1117,23 @@ int21_handler:
     jmp .success
 
 .fn_09:
+    ; DOS AH=09h treats DS:DX as an input pointer and preserves SI.  Some
+    ; protected-mode hosts (notably HDPMI32) keep scanning their own format
+    ; string in SI across this call.  Using SI directly here made the host
+    ; resume at the end of the DOS string instead, producing false errors and
+    ; destabilising the following DPMI client.
+    push si
     mov si, dx
 .fn_09_loop:
     lodsb
     cmp al, '$'
-    je .success
+    je .fn_09_done
     call bios_putc
     call serial_putc
     jmp .fn_09_loop
+.fn_09_done:
+    pop si
+    jmp .success
 
 .fn_0a:
     push bx
@@ -1372,7 +1434,29 @@ int21_handler:
 %if TRACE_CHILD_INT21 != 0
     call child_trace_prepare_exec
 %endif
+    ; EXEC suspends this dispatcher while the child uses the same globals.
+    ; Keep its AH/AL together (adjacent bytes) until the original frame resumes.
+    push word [cs:int21_last_ah]
     call int21_exec
+    pop word [cs:int21_last_ah]
+    ; Restore metadata from the unchanged original interrupt frame. PUSH,
+    ; POP and MOV preserve EXEC's returned CF, and AX remains its result.
+    push ax
+    mov bp, sp
+    mov ax, [ss:bp + 4]
+    mov [cs:int21_caller_ds], ax
+    mov ax, [ss:bp + 16]
+    mov [cs:int21_caller_bx], ax
+    mov ax, [ss:bp + 18]
+    mov [cs:int21_trace_call_ip], ax
+    mov ax, [ss:bp + 20]
+    mov [cs:int21_trace_call_cs], ax
+    mov ax, [ss:bp + 12]
+    mov [cs:int21_last_dx], ax
+    pop ax
+    ; A child's last service cannot make AH=4Bh return its DS/ES or ZF result.
+    mov word [cs:int21_return_es], 0
+    mov byte [cs:int21_zf_state], 0xFF
     jc .error
     jmp .success
 
@@ -1442,14 +1526,20 @@ int21_handler:
     mov ax, [cs:dos_exec_identity_psp]
     or ax, ax
     jz .fn_4c_no_process
+    ; A program started through our INT 21h/4Bh EXEC path unwinds through the
+    ; CiukiDOS trampoline only while its immutable EXEC identity is also the
+    ; PSP selected by AH=50h.  Windows Standard Mode selects a private PSP for
+    ; each Win16 task but its INT 2Fh/1605h broadcast may be consumed inside
+    ; HDPMI.  Therefore PSP identity, not windows_active, is authoritative:
+    ; a different current PSP must terminate through its own INT 22h vector.
+    ; Nested DOS EXEC children set both values to their own PSP and continue
+    ; to take .fn_4c_exec_process below.
     cmp ax, [cs:current_psp_seg]
     je .fn_4c_exec_process
 
-    ; Windows Enhanced Mode assigns a private PSP to every 16-bit task while
-    ; the CIUKIDOS EXEC owner remains the DOS process hosting the system VM.
-    ; Terminating such a task must follow its PSP INT 22h vector.  Unwinding
-    ; the EXEC owner here closes WIN386 and makes Alt+F4 on any child window
-    ; look like a crash of the complete Windows session.
+    ; DOSMGR's private Win16 PSP owns the task-return vector.  Returning there
+    ; closes just that task; forcing the global EXEC trampoline here tears
+    ; down KRNL386 and makes Alt+F4 appear to crash all of Windows.
     push ds
     mov ax, [cs:current_psp_seg]
     mov ds, ax
@@ -1487,7 +1577,8 @@ int21_handler:
     mov [cs:kernel_runtime_state_previous_psp], ax
     mov [cs:kernel_runtime_state_current_psp], bx
 %endif
-    mov [cs:current_psp_seg], bx
+    mov ax, bx
+    call int21_set_current_psp
     xor ax, ax
     jmp .success
 
@@ -1881,6 +1972,9 @@ int21_kbd_flush:
 .done:
     ret
 
+; This diagnostic is called only by the optional boot self-test or the
+; legacy interactive Stage1 shell. It is not part of the INT 21h ABI.
+%if STAGE1_SELFTEST_AUTORUN || STAGE1_INTERACTIVE_SHELL
 int21_smoke_test:
     push ds
 
@@ -2057,6 +2151,8 @@ int21_smoke_test:
     pop ds
     ret
 
+%endif
+
 int21_exec:
     ; Observe direct MCB-owner changes (for example an external TSR unloader)
     ; before capacity and slot decisions can reject on a stale table entry.
@@ -2120,7 +2216,7 @@ int21_exec:
     pop es
     pop ds
     inc byte [cs:dos_exec_state_depth]
-    mov ax, [cs:dos_exec_identity_psp]
+    call int21_mem_active_psp
     mov [cs:dos_exec_parent_identity_psp], ax
 
     mov al, [cs:tmp_exec_subfn]
@@ -2279,6 +2375,8 @@ int21_exec:
 .exec_mz:
     call int21_exec_select_mz_region
     jnc .exec_mz_selected
+    mov dl, 1
+    call int21_exec_log_mz_failure
 %if TRACE_CHILD_INT21 != 0
     push ax
     push ds
@@ -2298,6 +2396,8 @@ int21_exec:
 .do_exec_mz:
     call int21_exec_load_mz
     jnc .exec_mz_loaded
+    mov dl, 2
+    call int21_exec_log_mz_failure
 %if TRACE_CHILD_INT21 != 0
     push ax
     push ds
@@ -2326,6 +2426,8 @@ int21_exec:
 .exec_mz_loaded:
     call int21_exec_run_mz
     jnc .exec_mz_ok
+    mov dl, 3
+    call int21_exec_log_mz_failure
 %if TRACE_CHILD_INT21 != 0
     push ax
     push ds
@@ -2452,6 +2554,16 @@ int21_exec:
     mov di, dos_exec_saved_context_suffix_begin
     mov cx, ((dos_exec_saved_context_end - dos_exec_saved_context_suffix_begin) / 2)
     rep movsw
+    ; A top-level transient program has no live parent application that may
+    ; retain an INT 33h/INT 15h client address.  Tear those callbacks down
+    ; before returning to the shell, but preserve handlers committed by a TSR
+    ; and callbacks belonging to a suspended parent during nested EXEC.
+    cmp byte [cs:dos_exec_state_depth], 0
+    jne .mouse_clients_restored
+    cmp byte [cs:last_term_type], 3
+    je .mouse_clients_restored
+    call mouse_release_transient_clients
+.mouse_clients_restored:
     pop ax
     ; The child rebuilt physical MCB bytes while it owned the arena.  Recreate
     ; the restored parent's chain; the snapshot also restored its list mirror.
@@ -2469,6 +2581,39 @@ int21_exec:
     pop dx
     pop cx
     pop bx
+    ret
+
+; Always leave a compact serial reason for an MZ EXEC failure.  DL identifies
+; region selection (1), image loading (2), or child startup/arena setup (3),
+; while AX is the DOS error returned to the caller.
+int21_exec_log_mz_failure:
+    pushf
+    pusha
+    push ds
+    mov bp, ax
+    mov bl, dl
+    push cs
+    pop ds
+    mov si, msg_mz_exec_fail
+    call print_string_serial
+    mov al, bl
+    call print_hex8_serial
+    mov si, msg_mz_exec_fail_ax
+    call print_string_serial
+    mov ax, bp
+    call print_hex16_serial
+    mov si, msg_mz_exec_fail_sub
+    call print_string_serial
+    mov al, [cs:tmp_exec_mz_run_fail_stage]
+    call print_hex8_serial
+    mov si, msg_mz_exec_fail_arena
+    call print_string_serial
+    mov al, [cs:tmp_exec_mz_arena_fail_stage]
+    call print_hex8_serial
+    call print_newline_serial
+    pop ds
+    popa
+    popf
     ret
 
 int21_exec_capture_path:
@@ -2773,7 +2918,8 @@ int21_create_child_psp:
     mov word [es:0x0038], 0x0000
     mov [es:0x003A], ax
 
-    mov [cs:current_psp_seg], dx
+    mov ax, dx
+    call int21_set_current_psp
     call int21_mem_adopt_child_psp
     xor ax, ax
     clc
@@ -2909,6 +3055,8 @@ int21_exec_prepare_mz_free_mcb:
     push di
     push es
 
+    mov byte [cs:tmp_exec_mz_arena_fail_stage], 1
+
     cmp word [cs:current_load_seg], MZ_LOAD_SEG
     jne .arena_state_ready
     mov word [cs:dos_mem_alloc_seg], 0
@@ -2938,10 +3086,14 @@ int21_exec_prepare_mz_free_mcb:
     jbe .fail
     sub bx, ax
 
+    mov byte [cs:tmp_exec_mz_arena_fail_stage], 2
+
     add bx, 0x0010
     jc .fail
     add bx, [es:0x000A]
     jc .fail
+
+    mov byte [cs:tmp_exec_mz_arena_fail_stage], 3
 
     ; The child may only grow to the first live block above its PSP.  A
     ; suspended parent can retain AH=48 allocations at the high edge of the
@@ -2961,8 +3113,11 @@ int21_exec_prepare_mz_free_mcb:
     cmp dx, ax
     jbe .fail
     sub dx, ax
+    mov byte [cs:tmp_exec_mz_arena_fail_stage], 4
     cmp bx, dx
     ja .fail
+
+    mov byte [cs:tmp_exec_mz_arena_fail_stage], 5
 
     ; MZ images with both allocation fields clear are the DOS load-high
     ; special case.  Their PSP owns the largest available arena while the
@@ -2992,6 +3147,7 @@ int21_exec_prepare_mz_free_mcb:
     mov bx, dx
 
 .mz_alloc_size_ready:
+    mov byte [cs:tmp_exec_mz_arena_fail_stage], 6
     mov ax, [cs:mz_psp_seg]
     mov es, ax
     call int21_resize
@@ -3276,9 +3432,18 @@ int21_exec_find_free_region:
     or ax, ax
     jz .not_found
     mov es, ax
-    mov dx, [es:0x0002]
+    push ax
+    call int21_mem_psp_end
+    mov dx, ax
+    pop ax
     cmp dx, ax
-    jbe .not_found
+    ja .parent_end_ready
+    ; WinOldAp's synthetic per-VM PSP has no owning MCB and can leave PSP:2
+    ; zero.  Preserve its complete 256-byte PSP, then expose the remaining
+    ; conventional arena to the unprofiled DOS child.
+    mov dx, ax
+    add dx, 0x0010
+.parent_end_ready:
     inc dx
     jz .not_found
 
@@ -3343,9 +3508,15 @@ int21_exec_find_largest_free_region:
     or ax, ax
     jz .not_found
     mov es, ax
-    mov dx, [es:0x0002]
+    push ax
+    call int21_mem_psp_end
+    mov dx, ax
+    pop ax
     cmp dx, ax
-    jbe .not_found
+    ja .parent_end_ready
+    mov dx, ax
+    add dx, 0x0010
+.parent_end_ready:
     inc dx
     jz .not_found
 
@@ -3566,7 +3737,10 @@ int21_exec_select_mz_region:
     jc .no_memory
     add bx, 0x0010
     jc .no_memory
-    call int21_exec_find_free_region
+    ; DOS gives an ordinary EXE as much of MAXALLOC as possible. A small
+    ; first-fit hole can satisfy MINALLOC but strand an extender's transfer
+    ; buffer, even though a larger contiguous interval remains available.
+    call int21_exec_find_largest_free_region
     jc .done
     add ax, 0x0010
     jc .no_memory
@@ -3604,7 +3778,8 @@ int21_exec_slot_free:
     or si, si
     jz .table_begin
     mov es, si
-    mov cx, [es:0x0002]
+    call int21_mem_psp_end
+    mov cx, ax
     cmp cx, si
     jbe .busy
     mov ax, si
@@ -3654,7 +3829,7 @@ int21_exec_slot_free:
     ret
 
 int21_exec_run_com:
-    mov ax, [cs:dos_exec_identity_psp]
+    mov ax, [cs:current_psp_seg]
     cmp word [cs:current_mz_context_slot], 3
     je .save_third_ctx
     cmp word [cs:current_mz_context_slot], 2
@@ -3702,7 +3877,7 @@ int21_exec_run_com:
     cli
     mov ax, dx
     mov [cs:dos_exec_identity_psp], ax
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     mov es, ax
     mov bx, [es:0x0002]
     cmp bx, [cs:dos_mem_chain_limit_seg]
@@ -3739,6 +3914,14 @@ int21_exec_run_com:
     mov es, ax
     mov ss, ax
     mov sp, [cs:com_stack_sp]
+    ; A normal COM ends with a near RET to PSP:0000 (INT 20h).  A FAR CALL
+    ; from the kernel put a kernel offset on the child's stack instead, so
+    ; RET ran arbitrary child bytes at that offset and could restart the OS.
+    ; Keep the same entry SP as before, but provide PSP:0000 for both RET and
+    ; the legacy RETF demos. Both exits now use the ordinary DOS termination
+    ; path, including nested-process ownership and parent-state restoration.
+    push ax
+    push word 0
     xor ax, ax
     xor bx, bx
     xor cx, cx
@@ -3746,15 +3929,19 @@ int21_exec_run_com:
     xor si, si
     xor di, di
     xor bp, bp
+    ; EXEC's DOS call is suspended while the child runs. AH=34h must report
+    ; the actual DOS activity rather than count every suspended ancestor.
+    dec byte [cs:dos_indos_flag]
     ; Hand the child a known FLAGS image (IF=1, TF/DF/CF clear).
     push word 0x0202
     popf
 
-    call far [cs:com_entry_off]
+    jmp far [cs:com_entry_off]
 
 .after_call:
 
     cli
+    inc byte [cs:dos_indos_flag]
     mov ax, cs
     mov ds, ax
 %if TRACE_CHILD_INT21 != 0
@@ -3797,7 +3984,7 @@ int21_exec_run_com:
     mov ax, [cs:saved_es2]
     mov es, ax
     mov ax, [cs:saved_psp2]
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     clc
     ret
 
@@ -3807,7 +3994,7 @@ int21_exec_run_com:
     mov ax, [cs:saved_es3]
     mov es, ax
     mov ax, [cs:saved_psp3]
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     clc
     ret
 
@@ -3817,7 +4004,7 @@ int21_exec_run_com:
     mov ax, [cs:saved_es]
     mov es, ax
     mov ax, [cs:saved_psp]
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     clc
     ret
 
@@ -3835,7 +4022,7 @@ int21_exec_run_com:
 .arena_fail_primary:
     mov ax, [cs:saved_psp]
 .arena_fail_parent_ready:
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     mov ax, 0x0008
     stc
     ret
@@ -3914,10 +4101,11 @@ int21_exec_load_mz:
     jcxz .mz_parent_end_ok
     cmp cx, [cs:current_load_seg]
     jae .mz_parent_end_ok
-    mov ax, es
+    push es
     mov es, cx
-    mov cx, [es:0x0002]
-    mov es, ax
+    call int21_mem_psp_end
+    mov cx, ax
+    pop es
     mov dx, [es:0x0008]
     add dx, [cs:current_load_seg]
     jc .image_too_large
@@ -4385,16 +4573,32 @@ int21_exec_run_mz:
     mov dx, [cs:mz_psp_seg]
     call ciukidos_save_parent_dta
     jc .process_state_fail
+    ; Resize rebuilds the MCB chain and walks the new PSP's ancestry. The
+    ; full PSP is initialized after sizing because it can overlap the MZ
+    ; header. Publish these already-consumed header fields first: otherwise
+    ; stale load-module bytes become parent pointers and MCBs overwrite DOS.
+    push es
+    mov es, dx
+    mov word [es:0], 0x20CD
+    mov ax, dx
+    add ax, 0x0010
+    mov [es:2], ax
+    mov ax, [cs:dos_exec_parent_identity_psp]
+    mov [es:0x0016], ax
+    pop es
     mov ax, dx
     mov [cs:dos_exec_identity_psp], ax
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     call int21_exec_prepare_mz_free_mcb
     jc .arena_prepare_fail
     mov ax, [cs:mz_psp_seg]
-    mov [cs:current_psp_seg], bx
+    push ax
+    mov ax, bx
+    call int21_set_current_psp
+    pop ax
     mov es, ax
     call int21_exec_init_program_psp
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     mov ax, [cs:dos_mem_psp_mcb_end]
     mov [es:0x0002], ax
     mov bx, [cs:dos_exec_parent_identity_psp]
@@ -4445,6 +4649,8 @@ int21_exec_run_mz:
     mov si, [cs:mz_entry_off]
     mov di, [cs:mz_stack_sp]
     mov bp, 0x091E
+    ; Balance the suspended EXEC call, including nested MZ/COM children.
+    dec byte [cs:dos_indos_flag]
     ; Hand the child a known FLAGS image (IF=1, TF/DF/CF clear).
     push word 0x0202
     popf
@@ -4452,6 +4658,7 @@ int21_exec_run_mz:
 
 .after_call:
     cli
+    inc byte [cs:dos_indos_flag]
     mov ax, cs
     mov ds, ax
 %if TRACE_CHILD_INT21 != 0
@@ -4488,7 +4695,7 @@ int21_exec_run_mz:
     cmp word [cs:current_mz_context_slot], 2
     jne .restore_primary_ctx
     mov ax, [cs:saved_psp2]
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     mov ax, [cs:saved_ds2]
     mov ds, ax
     mov ax, [cs:saved_es2]
@@ -4498,7 +4705,7 @@ int21_exec_run_mz:
 
 .restore_third_ctx:
     mov ax, [cs:saved_psp3]
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     mov ax, [cs:saved_ds3]
     mov ds, ax
     mov ax, [cs:saved_es3]
@@ -4508,7 +4715,7 @@ int21_exec_run_mz:
 
 .restore_primary_ctx:
     mov ax, [cs:saved_psp]
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     mov ax, [cs:saved_ds]
     mov ds, ax
     mov ax, [cs:saved_es]
@@ -4520,7 +4727,8 @@ int21_exec_run_mz:
     mov byte [cs:tmp_exec_mz_run_fail_stage], 3
     push ax
     call ciukidos_restore_parent_dta
-    mov [cs:current_psp_seg], bx
+    mov ax, bx
+    call int21_set_current_psp
     pop ax
     stc
     jmp .done
@@ -4624,7 +4832,7 @@ cwd_save_drive_al:
     mov si, cwd_buf
     mov di, cwd_d_buf
 .copy:
-    mov cx, 24
+    mov cx, DOS_CWD_BYTES
     rep movsb
     mov ax, [cs:cwd_cluster]
     cmp bl, 2
@@ -4671,7 +4879,7 @@ cwd_load_drive_al:
     mov ax, [cs:cwd_d_cluster]
 .copy:
     mov [cs:cwd_cluster], ax
-    mov cx, 24
+    mov cx, DOS_CWD_BYTES
     rep movsb
 .done:
     pop es
@@ -6155,6 +6363,16 @@ int21_get_psp:
     clc
     ret
 
+; The DOS swappable-data area is a live kernel interface, not a snapshot made
+; only when AH=5D06h is queried.  DPMI hosts read its current-PSP fields
+; directly while admitting a new client, so update all three mirrors as one
+; atomic semantic operation whenever EXEC or AH=50h changes process context.
+int21_set_current_psp:
+    mov [cs:current_psp_seg], ax
+    mov [cs:dos_sda_current_psp], ax
+    mov [cs:dos_sda_owning_psp], ax
+    ret
+
 int21_chdir:
     ; DOS AH=3Bh has no register result other than AX/CF.  In particular the
     ; OpenWatcom tiny-I/O wrapper declares only AX and DX as clobbered and
@@ -6258,12 +6476,16 @@ int21_chdir_impl:
     je .seed_relative
     cmp byte [cs:tmp_cwd_comp], '.'
     je .seed_relative
+    ; Name conversion advances SI. On a fast-lookup miss the general
+    ; parser must retry the caller's path, not the end of our scratch name.
+    push si
     push ds
     mov ax, cs
     mov ds, ax
     mov si, tmp_cwd_comp
     call int21_path_to_fat_name
     pop ds
+    pop si
     jc .seed_relative
     mov ax, [cs:cwd_cluster]
     push ds
@@ -6287,18 +6509,17 @@ int21_chdir_impl:
     cmp al, 0
     je .fast_append_start
     inc bx
-    cmp bx, 23
+    cmp bx, DOS_CWD_MAX
     jb .fast_seed_loop
-    mov byte [cs:tmp_cwd_build + 23], 0
-    jmp .commit_copy
+    jmp .fail
 
 .fast_append_start:
     cmp bx, 0
     je .fast_copy_component
     mov byte [cs:tmp_cwd_build + bx], '\'
     inc bx
-    cmp bx, 23
-    jae .commit_copy
+    cmp bx, DOS_CWD_MAX
+    jae .fail
 
 .fast_copy_component:
     xor di, di
@@ -6309,8 +6530,10 @@ int21_chdir_impl:
     mov [cs:tmp_cwd_build + bx], al
     inc bx
     inc di
-    cmp bx, 23
+    cmp bx, DOS_CWD_MAX
     jb .fast_copy_component_loop
+    cmp byte [cs:tmp_cwd_comp + di], 0
+    jne .fail
 .fast_append_term:
     mov byte [cs:tmp_cwd_build + bx], 0
     jmp .commit_copy
@@ -6328,9 +6551,9 @@ int21_chdir_impl:
     cmp al, 0
     je .parse_components
     inc bx
-    cmp bx, 23
+    cmp bx, DOS_CWD_MAX
     jb .seed_loop
-    mov byte [cs:tmp_cwd_build + 23], 0
+    mov byte [cs:tmp_cwd_build + DOS_CWD_MAX], 0
     jmp .parse_components
 
 .abs_path:
@@ -6388,7 +6611,7 @@ int21_chdir_impl:
     cmp byte [cs:tmp_cwd_build + bx], 0
     je .trim_parent
     inc bx
-    cmp bx, 23
+    cmp bx, DOS_CWD_MAX
     jb .find_end_parent
 .trim_parent:
     cmp bx, 0
@@ -6414,16 +6637,16 @@ int21_chdir_impl:
     cmp byte [cs:tmp_cwd_build + bx], 0
     je .append_start
     inc bx
-    cmp bx, 23
+    cmp bx, DOS_CWD_MAX
     jb .find_end_append
-    jmp .commit
+    jmp .fail
 .append_start:
     cmp bx, 0
     je .copy_component
     mov byte [cs:tmp_cwd_build + bx], '\'
     inc bx
-    cmp bx, 23
-    jae .commit
+    cmp bx, DOS_CWD_MAX
+    jae .fail
 .copy_component:
     xor di, di
 .copy_component_loop:
@@ -6433,8 +6656,10 @@ int21_chdir_impl:
     mov [cs:tmp_cwd_build + bx], al
     inc bx
     inc di
-    cmp bx, 23
+    cmp bx, DOS_CWD_MAX
     jb .copy_component_loop
+    cmp byte [cs:tmp_cwd_comp + di], 0
+    jne .fail
 .append_term:
     mov byte [cs:tmp_cwd_build + bx], 0
     jmp .parse_components
@@ -6476,9 +6701,9 @@ int21_chdir_impl:
     cmp al, 0
     je .ok
     inc bx
-    cmp bx, 23
+    cmp bx, DOS_CWD_MAX
     jb .commit_loop
-    mov byte [cs:cwd_buf + 23], 0
+    mov byte [cs:cwd_buf + DOS_CWD_MAX], 0
     jmp .ok
 
 .ok:
@@ -9078,6 +9303,10 @@ int21_write:
 
     cmp word [cs:tmp_rw_remaining], 0
     jne .prepare
+    ; AH=40h/CX=0 changes the allocation as well as the directory size.
+    ; Do this first: a failed extension must not advertise unreadable bytes.
+    call int21_resize_write_chain
+    jc .io_error
     mov ax, [cs:file_handle_pos]
     mov [cs:file_handle_size_lo], ax
 %if FAT_TYPE == 16
@@ -9551,11 +9780,81 @@ console_putc_ansi:
     ret
 %endif
 
+; Resize the current handle's FAT chain to ceil(position / cluster bytes).
+; Extension contents are unspecified by DOS; existing file data is untouched.
+; SI retains the original allocation for rollback if the volume fills while
+; extending. DI is the requested cluster count; neither is clobbered by the
+; FAT/cache/BIOS helpers. The caller already saves both registers.
+int21_resize_write_chain:
+%if FAT_TYPE == 16
+    mov eax, [cs:file_handle_pos]
+%else
+    movzx eax, word [cs:file_handle_pos]
+%endif
+    add eax, FAT_CLUSTER_MASK
+    jc .fail
+    shr eax, FAT_CLUSTER_SHIFT
+    cmp eax, FAT_DATA_CLUSTER_COUNT
+    ja .fail
+    mov di, ax
+    mov si, [cs:file_handle_cluster_count]
+.grow:
+    cmp di, [cs:file_handle_cluster_count]
+    jbe .shrink
+    call int21_write_grow_chain
+    jnc .grow
+    ; Discard only the newly allocated tail, retaining the original bytes.
+    mov di, si
+    call .shrink
+.fail:
+    stc
+    ret
+.shrink:
+    cmp di, [cs:file_handle_cluster_count]
+    je .flush
+    mov ax, [cs:file_handle_start_cluster]
+    mov cx, di
+    jcxz .empty
+.keep:
+    mov bx, ax
+    call fat12_get_entry_cached
+    jc .fail
+    loop .keep
+    ; BX is the final retained cluster, AX the first cluster to release.
+    push ax
+    mov ax, bx
+    mov dx, FAT_EOF
+    call fat12_set_entry_cached
+    pop ax
+    jc .fail
+    jmp .free
+.empty:
+    mov word [cs:file_handle_start_cluster], 0
+.free:
+    cmp ax, 2
+    jb .resized
+    cmp ax, FAT_EOF
+    jae .resized
+    mov bx, ax
+    call fat12_get_entry_cached
+    jc .fail
+    push ax
+    mov ax, bx
+    xor dx, dx
+    call fat12_set_entry_cached
+    pop ax
+    jc .fail
+    jmp .free
+.resized:
+    mov [cs:file_handle_cluster_count], di
+.flush:
+    jmp fat12_flush_cache
+
 int21_write_grow_chain:
     mov bx, 2
 
 .find_free:
-    cmp bx, FAT_EOF
+    cmp bx, FAT_DATA_CLUSTER_COUNT + 2
     jae .fail
     mov ax, bx
     call fat12_get_entry_cached
@@ -9640,34 +9939,14 @@ int21_delete:
     jc .not_found
 %endif
 
-    mov ax, [cs:search_found_cluster]
-    mov [cs:tmp_next_cluster], ax
-
-    call int21_load_fat_cache
+    ; AH=41h deletes files, never directory trees. RMDIR performs its own
+    ; emptiness/current-directory checks before using the common FAT release.
+    test byte [cs:search_found_attr], 0x10
+    jnz .io_error
+    call int21_free_found_chain
     jc .io_error
-
-.free_loop:
-    mov ax, [cs:tmp_next_cluster]
-    cmp ax, 2
-    jb .free_done
-    cmp ax, FAT_EOF
-    jae .free_done
-
-    mov bx, ax
-    call fat12_get_entry_cached
-    jc .io_error
-    mov [cs:tmp_next_cluster], ax
-
-    mov ax, bx
-    xor dx, dx
-    call fat12_set_entry_cached
-    jc .io_error
-    jmp .free_loop
 
 .free_done:
-    call fat12_flush_cache
-    jc .io_error
-
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:search_found_root_lba]
@@ -9721,6 +10000,41 @@ int21_delete:
     pop bx
     ret
 
+; Release the already-resolved object's FAT chain. Does not alter its parent
+; directory location; callers own the entry update and their register frames.
+int21_free_found_chain:
+    mov ax, [cs:search_found_cluster]
+    mov [cs:tmp_next_cluster], ax
+
+    call int21_load_fat_cache
+    jc .io_error
+
+.free_loop:
+    mov ax, [cs:tmp_next_cluster]
+    cmp ax, 2
+    jb .free_done
+    cmp ax, FAT_EOF
+    jae .free_done
+
+    mov bx, ax
+    call fat12_get_entry_cached
+    jc .io_error
+    mov [cs:tmp_next_cluster], ax
+
+    mov ax, bx
+    xor dx, dx
+    call fat12_set_entry_cached
+    jc .io_error
+    jmp .free_loop
+
+.free_done:
+    jmp fat12_flush_cache
+
+.io_error:
+    mov ax, 0x0005
+    stc
+    ret
+
 int21_mkdir:
     push bx
     push cx
@@ -9767,7 +10081,7 @@ int21_mkdir:
 
     mov bx, 2
 .mkdir_find_cluster:
-    cmp bx, FAT_EOF
+    cmp bx, FAT_DATA_CLUSTER_COUNT + 2
     jae .mkdir_no_free_cluster
     mov ax, bx
     call fat12_get_entry_cached
@@ -9820,6 +10134,35 @@ int21_mkdir:
     jmp .mkdir_zero_cluster_loop
 
 .mkdir_reload_root_sector:
+    ; A subdirectory starts with canonical self/parent entries. Publish the
+    ; parent entry only after these records and all empty sectors are durable.
+    xor di, di
+    mov al, ' '
+    mov cx, 11
+    rep stosb
+    mov byte [es:0], '.'
+    mov byte [es:11], 0x10
+    mov ax, [cs:tmp_cluster_off]
+    mov [es:26], ax
+    mov di, 32
+    mov al, ' '
+    mov cx, 11
+    rep stosb
+    mov word [es:32], 0x2E2E
+    mov byte [es:43], 0x10
+    mov ax, [cs:tmp_lookup_dir]
+    mov [es:58], ax
+    mov ax, [cs:tmp_lba]
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_lba_hi]
+    xor bx, bx
+    call write_sector_lba32
+%else
+    xor bx, bx
+    call write_sector_lba
+%endif
+    jc .mkdir_io_err
+
     mov ax, DOS_META_BUF_SEG
     mov es, ax
     mov ax, [cs:tmp_next_cluster]
@@ -9913,6 +10256,22 @@ int21_rmdir:
 
     test byte [cs:search_found_attr], 0x10
     jz .rmdir_not_dir
+    ; Removing a dot alias would delete its internal entry and release the
+    ; directory while leaving the real name in its parent pointing at it.
+    cmp byte [cs:search_found_name], '.'
+    je .rmdir_io_err
+
+    mov ax, [cs:search_found_cluster]
+    cmp ax, [cs:cwd_cluster]
+    je .rmdir_io_err
+%if FAT_TYPE == 16
+    cmp ax, [cs:cwd_c_cluster]
+    je .rmdir_io_err
+    cmp ax, [cs:cwd_d_cluster]
+    je .rmdir_io_err
+%endif
+    call int21_directory_empty
+    jc .rmdir_io_err
 
     ; Read the parent directory sector into the shared meta buffer. ES must be
     ; pointed at a safe segment first: read_sector_lba/write_sector_lba target
@@ -9944,6 +10303,8 @@ int21_rmdir:
 %endif
     jc .rmdir_io_err
 
+    call int21_free_found_chain
+    jc .rmdir_io_err
     xor ax, ax
     clc
     jmp .rmdir_done
@@ -9975,6 +10336,111 @@ int21_rmdir:
     pop dx
     pop cx
     pop bx
+    ret
+
+; AX = directory first cluster. Return CF clear only after seeing an end
+; marker/EOC with no live entry besides valid dot entries. Never changes the
+; resolved parent entry, DTA or FindFirst state. A corrupt/cyclic chain fails
+; closed within the volume's finite cluster count; no writes occur here.
+int21_directory_empty:
+    push bp
+    mov si, ax
+    mov bp, FAT_DATA_CLUSTER_COUNT
+    call int21_load_fat_cache
+    jc .fail
+.cluster:
+    sub bp, 1
+    jc .fail
+    cmp si, 2
+    jb .fail
+    cmp si, FAT_DATA_CLUSTER_COUNT + 2
+    jae .fail
+    mov ax, si
+    call int21_cluster_to_lba
+    mov [cs:tmp_lba], ax
+    mov [cs:tmp_lba_hi], dx
+    xor dx, dx
+.sector:
+    push dx
+    mov ax, [cs:tmp_lba]
+    add ax, dx
+%if FAT_TYPE == 16
+    mov dx, [cs:tmp_lba_hi]
+    adc dx, 0
+%endif
+    mov bx, DOS_META_BUF_SEG
+    mov es, bx
+    xor bx, bx
+%if FAT_TYPE == 16
+    call read_sector_lba32
+%else
+    call read_sector_lba
+%endif
+    pop dx
+    jc .fail
+    xor di, di
+    mov cx, 16
+.entry:
+    mov al, [es:di]
+    test al, al
+    jz .end_marker
+    cmp al, 0xE5
+    je .next
+    cmp word [es:di], 0x202E
+    je .dot
+    cmp word [es:di], 0x2E2E
+    jne .fail
+.dot:
+    test byte [es:di + 11], 0x10
+    jz .fail
+    push cx
+    lea bx, [di + 2]
+    mov cx, 9
+.dot_padding:
+    cmp byte [es:bx], ' '
+    jne .bad_dot
+    inc bx
+    loop .dot_padding
+    pop cx
+.next:
+    add di, 32
+    loop .entry
+    inc dx
+    cmp dx, FAT_SECTORS_PER_CLUSTER
+    jb .sector
+    mov ax, si
+    call fat12_get_entry_cached
+    jc .fail
+    cmp ax, FAT_EOF
+    jae .empty
+    mov si, ax
+    jmp .cluster
+.end_marker:
+    ; Entries after 00h are unused, but the allocated chain must still be
+    ; valid before deletion can release it. Check its tail without treating
+    ; stale bytes after the logical end as live directory entries.
+    mov ax, si
+    call fat12_get_entry_cached
+    jc .fail
+    cmp ax, FAT_EOF
+    jae .empty
+    cmp ax, 2
+    jb .fail
+    cmp ax, FAT_DATA_CLUSTER_COUNT + 2
+    jae .fail
+    sub bp, 1
+    jc .fail
+    mov si, ax
+    jmp .end_marker
+.bad_dot:
+    pop cx
+.fail:
+    stc
+    pop bp
+    ret
+.empty:
+    clc
+    pop bp
     ret
 
 int21_rename:
@@ -10091,10 +10557,15 @@ int21_rename:
 %endif
     jc .rename_io_err
 
+    ; Moving a directory would also require rewriting its '..' entry and
+    ; rejecting ancestry cycles. AH=56h only renames directories in place.
+    ; Read the original entry: destination lookup has reused found metadata.
+    mov si, [cs:tmp_rename_old_off]
+    test byte [es:si + 11], 0x10
+    jnz .rename_dest_exists
     push ds
     mov ax, DOS_IO_BUF_SEG
     mov ds, ax
-    mov si, [cs:tmp_rename_old_off]
     xor di, di
     mov cx, 32
 .rename_copy_old_entry:
@@ -10846,27 +11317,33 @@ int21_mem_init:
     mov word [cs:dos_mem_free2_size], 0
     call int21_mem_table_clear
 
-    ; INT 12h and BDA 0040:0013 expose conventional memory in KiB.  Convert
-    ; it to the first excluded paragraph, cap it below VGA, and never invent
-    ; memory below the resident heap floor if a broken BIOS reports too little.
+    ; BDA 0040:0013 gives KiB, while 0040:000Eh gives the EBDA segment.
+    ; Some firmware leaves the KiB count above its EBDA: honor the lower
+    ; boundary, rejecting EBDA pointers below our arena or inside VGA/ROM.
+    ; A top below the arena floor exposes an empty arena, not wrapped memory.
     push ax
     push cx
     push ds
     xor ax, ax
     mov ds, ax
     mov ax, [0x0413]
+    mov cx, [0x040E]
     pop ds
     cmp ax, 640
     jbe .bios_top_kb_capped
     mov ax, 640
 .bios_top_kb_capped:
-    mov cx, (DOS_HEAP_USER_SEG + 63) / 64
-    cmp ax, cx
-    jae .bios_top_kb_valid
+    shl ax, 6
+    cmp cx, DOS_HEAP_USER_SEG
+    jb .bios_top_ebda_done
+    cmp cx, ax
+    jae .bios_top_ebda_done
     mov ax, cx
-.bios_top_kb_valid:
-    mov cl, 6
-    shl ax, cl
+.bios_top_ebda_done:
+    cmp ax, DOS_HEAP_USER_SEG
+    jae .bios_top_valid
+    mov ax, DOS_HEAP_USER_SEG
+.bios_top_valid:
     mov [cs:dos_mem_top_seg], ax
     mov [cs:dos_mem_chain_limit_seg], ax
     mov cx, ax
@@ -10960,10 +11437,14 @@ int21_mem_find_next_alloc:
     mov bp, ax
     mov cx, DOS_EXEC_STATE_FRAME_MAX
 .psp_scan:
-    or bp, bp
-    jz .table_begin
+    cmp bp, COM_LOAD_SEG
+    jb .table_begin
+    cmp bp, [cs:dos_mem_top_seg]
+    jae .table_begin
     mov es, bp
-    mov ax, [es:0x0002]
+    cmp word [es:0], 0x20CD
+    jne .table_begin
+    call int21_mem_psp_end
     cmp ax, bp
     jbe .psp_next
     mov bx, ax
@@ -11198,7 +11679,8 @@ int21_mem_commit_tsr:
 
 .upsert_psp:
     mov es, di
-    mov bx, [es:0x0002]
+    call int21_mem_psp_end
+    mov bx, ax
     sub bx, di
     jbe .done
     mov ax, di
@@ -11415,6 +11897,7 @@ int21_mem_arena_start:
     cmp ax, bx
     jae .end_ready
     mov ax, bx
+    add ax, 0x0010
 .end_ready:
     inc ax
 .check_limit:
@@ -11980,10 +12463,12 @@ int21_mem_rebuild_chain:
     jz .done
 
     mov es, dx
-    mov bx, [es:0x0002]
+    call int21_mem_psp_end
+    mov bx, ax
     cmp bx, dx
     jae .psp_end_ready
     mov bx, dx
+    add bx, 0x0010
 .psp_end_ready:
     mov ax, dx
     dec ax
@@ -12118,7 +12603,53 @@ int21_mem_type_for_seg:
     pop ax
     ret
 
+; ES = PSP. Return its current arena end in AX without changing PSP:2,
+; which records the initial EXEC allocation. Synthetic Windows PSPs without
+; a valid owning MCB retain the existing PSP-field fallback.
+int21_mem_psp_end:
+    push bx
+    push es
+    mov bx, es
+    call int21_mem_active_psp
+    cmp ax, bx
+    jne .mcb
+    mov ax, [cs:dos_mem_psp_mcb_end]
+    cmp ax, bx
+    ja .done
+.mcb:
+    mov ax, bx
+    dec ax
+    mov es, ax
+    cmp byte [es:0], 'M'
+    je .owner
+    cmp byte [es:0], 'Z'
+    jne .fallback
+.owner:
+    cmp [es:1], bx
+    jne .fallback
+    mov ax, [es:3]
+    add ax, bx
+    jnc .done
+.fallback:
+    mov es, bx
+    mov ax, [es:2]
+.done:
+    pop es
+    pop bx
+    ret
+
 int21_mem_active_psp:
+    ; DOSMGR selects each Win16 task and secondary DOS VM through AH=50h.  The
+    ; inherited EXEC identity still names WIN.COM; using it for allocations
+    ; makes every DOS box walk the system VM arena and WinOldAp reports
+    ; "insufficient memory" even for COMMAND.COM.  While Windows is active,
+    ; honor the selected, instanced PSP.  The immutable identity remains the
+    ; separate authority for INT 21h/4Ch unwind decisions.
+    cmp word [cs:windows_active], 0
+    je .exec_identity
+    mov ax, [cs:current_psp_seg]
+    ret
+.exec_identity:
     mov ax, [cs:dos_exec_identity_psp]
     or ax, ax
     jnz .done
@@ -12136,16 +12667,20 @@ int21_mem_lowest_psp:
 
     call int21_mem_active_psp
     mov bx, ax
-    mov dx, ax
+    mov dx, 0xFFFF
     mov cx, DOS_EXEC_STATE_FRAME_MAX
 .scan:
-    or bx, bx
-    jz .ready
+    cmp bx, COM_LOAD_SEG
+    jb .ready
+    cmp bx, [cs:dos_mem_top_seg]
+    jae .ready
+    mov es, bx
+    cmp word [es:0], 0x20CD
+    jne .ready
     cmp bx, dx
     jae .parent
     mov dx, bx
 .parent:
-    mov es, bx
     mov ax, [es:0x0016]
     cmp ax, bx
     je .ready
@@ -12153,6 +12688,10 @@ int21_mem_lowest_psp:
     loop .scan
 .ready:
     mov ax, dx
+    cmp ax, 0xFFFF
+    jne .return
+    xor ax, ax
+.return:
     pop es
     pop dx
     pop cx
@@ -12423,8 +12962,18 @@ int21_free:
     jnz .free_exact
     call int21_mem_active_psp
     cmp cx, ax
-    jne .invalid_real
+    jne .owner_invalid
 .free_exact:
+%if TRACE_WIN_MEMORY != 0
+    push ds
+    push si
+    push cs
+    pop ds
+    mov si, msg_win_mem_free_ok
+    call print_string_serial
+    pop si
+    pop ds
+%endif
     push ax
     push es
     mov ax, [cs:dos_mem_block_table + si]
@@ -12441,11 +12990,32 @@ int21_free:
     ret
 
 .legacy_static:
+%if TRACE_WIN_MEMORY != 0
+    push ds
+    push si
+    push cs
+    pop ds
+    mov si, msg_win_mem_free_miss
+    call print_string_serial
+    pop si
+    pop ds
+%endif
     mov ax, es
     cmp ax, DOS_ENV_SEG
     je .env_static_ok
     jmp .invalid_real
 
+.owner_invalid:
+%if TRACE_WIN_MEMORY != 0
+    push ds
+    push si
+    push cs
+    pop ds
+    mov si, msg_win_mem_free_owner
+    call print_string_serial
+    pop si
+    pop ds
+%endif
 .invalid_real:
     mov ax, 0x0009
     stc
@@ -12515,7 +13085,8 @@ int21_resize:
     push ax
     push bx
     mov [cs:dos_mem_psp_mcb_end], si
-    mov [es:0x0002], si
+    ; SETBLOCK changes the MCB, not the initial allocation stored in PSP:2.
+    ; DOS/32A compares that initial ceiling after its first shrink.
     call int21_mem_sync_legacy
     mov al, 'Z'
     cmp byte [cs:dos_mem_block_count], 0
@@ -12703,47 +13274,19 @@ int21_cluster_to_lba:
 ; Read one 512-byte sector by 32-bit LBA (DX:AX) into ES:BX via INT 13h EDD.
 ; Used for file data, whose clusters can sit past the 16-bit LBA range.
 read_sector_lba32:
-    push ax
-    push cx
-    push dx
-    push si
-    push ds
-    add ax, FAT_LBA_OFFSET
-    adc dx, 0
-    mov [cs:disk_packet_lba], ax
-    mov [cs:disk_packet_lba + 2], dx
-    mov [cs:disk_packet_lba + 4], word 0
-    mov [cs:disk_packet_lba + 6], word 0
-    mov [cs:disk_packet_off], bx
-    mov [cs:disk_packet_seg], es
-    mov ax, cs
-    mov ds, ax
-    mov si, disk_packet
-    mov dl, [cs:boot_drive]
-    mov ah, 0x42
-    sti
-    int 0x13
-    jnc .done
-    mov ax, [cs:disk_packet_lba]
-    mov dx, [cs:disk_packet_lba + 2]
-    call bios_read_chs_sector32
-.done:
-    mov [cs:tmp_disk_status], ah
-    pop ds
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+    push bp
+    mov bp, 0x4200
+    jmp disk_sector_lba32
 
-; Write one 512-byte sector by 32-bit LBA (DX:AX) from ES:BX via INT 13h EDD.
-; Used for file data, whose clusters can sit past the 16-bit LBA range.
+; Same register contract and recovery path for writes and reads.
 write_sector_lba32:
-    push ax
-    push cx
-    push dx
-    push si
+    push bp
+    mov bp, 0x4300
+
+disk_sector_lba32:
+    pushad
     push ds
+    push es
     add ax, FAT_LBA_OFFSET
     adc dx, 0
     mov [cs:disk_packet_lba], ax
@@ -12752,24 +13295,43 @@ write_sector_lba32:
     mov [cs:disk_packet_lba + 6], word 0
     mov [cs:disk_packet_off], bx
     mov [cs:disk_packet_seg], es
+    mov di, 3
+.retry:
+    ; EDD writes the number transferred back here even on failure. Reusing
+    ; zero silently turns the next request into a zero-sector transfer on
+    ; some firmware. The DAP is input/output, not an immutable descriptor.
+    mov word [cs:disk_packet + 2], 1
     mov ax, cs
     mov ds, ax
     mov si, disk_packet
     mov dl, [cs:boot_drive]
-    mov ax, 0x4300
-    sti
-    int 0x13
+    mov ax, bp
+    call bios_disk_interrupt
     jnc .done
     mov ax, [cs:disk_packet_lba]
     mov dx, [cs:disk_packet_lba + 2]
+    cmp bp, 0x4200
+    jne .write_chs
+    call bios_read_chs_sector32
+    jmp .chs_done
+.write_chs:
     call bios_write_chs_sector32
+.chs_done:
+    jnc .done
+    dec di
+    jz .failed
+    xor ax, ax
+    mov dl, [cs:boot_drive]
+    call bios_disk_interrupt
+    jmp .retry
+.failed:
+    stc
 .done:
     mov [cs:tmp_disk_status], ah
+    pop es
     pop ds
-    pop si
-    pop dx
-    pop cx
-    pop ax
+    popad
+    pop bp
     ret
 %endif
 
@@ -12866,6 +13428,10 @@ fat16_ensure_sector:
     clc
     ret
 .load_fail:
+    ; A failed replacement did not populate this sector. Never let a later
+    ; cache hit interpret the previous FAT sector as the requested one.
+    mov word [cs:fat_cache_sector], 0xFFFF
+    mov byte [cs:fat_cache_valid], 0
     pop ax
     stc
     ret
@@ -14015,6 +14581,7 @@ int21_build_env_block:
     pop ax
     ret
 
+%if STAGE1_SELFTEST_AUTORUN || STAGE1_INTERACTIVE_SHELL
 int21_fileio_test:
     push ds
 
@@ -14110,6 +14677,7 @@ int21_find_test:
     pop ds
     ret
 
+%endif
 %if STAGE1_SELFTEST_AUTORUN
 int21_move_rename_path_test:
     push ax
@@ -14293,13 +14861,12 @@ stage1_show_boot_splash:
     call stage1_splash_blit_scaled
     jc .fail_graphics
 
-    mov bx, BOOT_SPLASH_WAIT_TICKS
-    mov cx, BOOT_SPLASH_WAIT_US_HI
-    mov dx, BOOT_SPLASH_WAIT_US_LO
-    call stage1_wait_visible_delay
-
-    call vdi_leave_graphics
-    jmp .done
+    mov byte [cs:boot_splash_active], 1
+    xor ax, ax
+    call stage1_splash_draw_progress_bar
+    jnc .done
+    mov byte [cs:boot_splash_active], 0
+    jmp .fail_graphics
 
 .fail_graphics:
     call vdi_leave_graphics
@@ -14319,6 +14886,8 @@ stage1_show_boot_splash:
     ret
 
 stage1_show_boot_loading_screen:
+    cmp byte [cs:boot_splash_active], 1
+    je .skip
     push ax
     push bx
     push cx
@@ -14374,6 +14943,7 @@ stage1_show_boot_loading_screen:
     pop cx
     pop bx
     pop ax
+.skip:
     ret
 
 stage1_boot_mark_step:
@@ -14381,6 +14951,28 @@ stage1_boot_mark_step:
     push bx
     push dx
     push si
+    cmp byte [cs:boot_splash_active], 1
+    jne .text
+    push ax
+    mov bl, al
+    xor bh, bh
+    mov al, [cs:boot_progress_units + bx - 1]
+    xor ah, ah
+    call stage1_splash_advance_progress
+    pop ax
+    jc .graphics_failed
+    cmp al, 5
+    jne .done
+    ; Keep the completed bar briefly visible, then hand over text/VBE to SHELL.
+    push cx
+    mov cx, 36
+    call stage1_boot_wait_ticks
+    pop cx
+.graphics_failed:
+    call vdi_leave_graphics
+    mov byte [cs:boot_splash_active], 0
+    jmp .done
+.text:
 
     cmp al, 1
     je .runtime
@@ -14411,7 +15003,7 @@ stage1_boot_mark_step:
     mov dh, 9
     mov bl, 0x0F
     call video_write_centered_attr
-    mov si, msg_boot_progress_40
+    mov si, msg_boot_progress_60
     jmp .progress
 
 .shell:
@@ -14427,17 +15019,13 @@ stage1_boot_mark_step:
     mov dh, 13
     mov bl, 0x0F
     call video_write_centered_attr
-    mov si, msg_boot_progress_60
+    mov si, msg_boot_progress_40
 
 .progress:
     mov dh, 18
     mov bl, 0x0F
     call video_write_centered_attr
-    mov bx, BOOT_STEP_WAIT_TICKS
-    mov cx, BOOT_STEP_WAIT_US_HI
-    mov dx, BOOT_STEP_WAIT_US_LO
-    call stage1_wait_visible_delay
-
+.done:
     pop si
     pop dx
     pop bx
@@ -14469,19 +15057,25 @@ stage1_wait_visible_delay:
 stage1_boot_wait_ticks:
     push ax
     push bx
+    push cx
     push dx
+    push si
 
     mov bx, cx
     call gfx_get_tick_count
-    mov ax, dx
+    ; INT 1Ah overwrites AH (and CX): AX cannot hold the starting tick.
+    ; Use a preserved register so this also works after BIOS tick 00FFh.
+    mov si, dx
 
 .loop:
     call gfx_get_tick_count
-    sub dx, ax
+    sub dx, si
     cmp dx, bx
     jb .loop
 
+    pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -14658,12 +15252,8 @@ stage1_splash_blit_scaled:
     mov ds, ax
     mov ax, 0xA000
     mov es, ax
+    ; Preserve the whole photograph in 576 rows, with a separate 24-row bar.
     mov cx, SPLASH_SCALE_Y_BASE
-    mov ax, bp
-    and ax, 0x0007
-    cmp ax, 0x0001
-    jne .copy_y
-    inc cx
 .copy_y:
     call stage1_splash_copy_row_to_vram
     jc .fail_restore_ds
@@ -14801,7 +15391,7 @@ stage1_splash_draw_progress_bar:
     mov bp, 40
 .count_ok:
 
-    mov ax, 560
+    mov ax, 576
     mov bx, SPLASH_VESA_ROW_BYTES
     mul bx
     mov di, ax
@@ -14810,8 +15400,8 @@ stage1_splash_draw_progress_bar:
 
     mov ax, DOS_IO_BUF_SEG
     mov ds, ax
-    mov bx, 40
-    mov si, 560
+    mov bx, 24
+    mov si, 576
 
 .row_loop:
     cmp bx, 0
@@ -14831,9 +15421,9 @@ stage1_splash_draw_progress_bar:
     mov cx, 640
     rep stosb
 
-    cmp si, 572
+    cmp si, 580
     jb .copy_row
-    cmp si, 587
+    cmp si, 595
     ja .copy_row
 
     mov di, 82
@@ -14841,9 +15431,9 @@ stage1_splash_draw_progress_bar:
     mov cx, 636
     rep stosb
 
-    cmp si, 576
+    cmp si, 584
     jb .copy_row
-    cmp si, 583
+    cmp si, 591
     ja .copy_row
     mov cx, bp
     jcxz .copy_row
@@ -14888,57 +15478,36 @@ stage1_splash_draw_progress_bar:
     pop ax
     ret
 
-stage1_splash_wait_progress:
+stage1_splash_advance_progress:
     push ax
     push bx
     push cx
-    push dx
-    push si
-    push di
     push bp
-    push ds
-    push es
-
-    xor ax, ax
+    mov bp, ax
+.next:
+    movzx ax, byte [cs:boot_progress_value]
+    cmp ax, bp
+    jae .done
+    add ax, 2
+    cmp ax, bp
+    jbe .draw
+    mov ax, bp
+.draw:
+    mov [cs:boot_progress_value], al
     call stage1_splash_draw_progress_bar
-
-    call gfx_get_tick_count
-    mov [cs:splash_wait_start_tick], dx
-    mov [cs:splash_wait_last_tick], dx
-
-.loop:
-    call gfx_get_tick_count
-    cmp dx, [cs:splash_wait_last_tick]
-    je .loop
-    mov [cs:splash_wait_last_tick], dx
-
-    mov ax, dx
-    sub ax, [cs:splash_wait_start_tick]
-    cmp ax, SPLASH_WAIT_TICKS
-    jae .done_fill
-
-    mov bx, 40
-    mul bx
-    mov bx, SPLASH_WAIT_TICKS
-    div bx
-    call stage1_splash_draw_progress_bar
-    jmp .loop
-
-.done_fill:
-    mov ax, 40
-    call stage1_splash_draw_progress_bar
-
+    jc .return
+    mov cx, 1
+    call stage1_boot_wait_ticks
+    jmp .next
 .done:
-    pop es
-    pop ds
+    clc
+.return:
     pop bp
-    pop di
-    pop si
-    pop dx
     pop cx
     pop bx
     pop ax
     ret
+
 %endif
 
 gfx_demo_run:
@@ -15464,6 +16033,7 @@ gfx_draw_glyph8:
     pop ax
     ret
 
+%if STAGE1_SELFTEST_AUTORUN || STAGE1_INTERACTIVE_SHELL
 run_com_demo:
     mov si, msg_com_begin
     call print_string_dual
@@ -15596,6 +16166,7 @@ run_expected_com_demo:
     call print_string_serial
     ret
 
+%endif
 load_root_file_first_sector:
     push ax
     push bx
@@ -15739,6 +16310,13 @@ fat_entry_matches_name:
     ret
 
 read_sector_lba:
+%if FAT_TYPE == 16
+    push dx
+    xor dx, dx
+    call read_sector_lba32
+    pop dx
+    ret
+%else
     push bx
     push cx
     push dx
@@ -15805,8 +16383,16 @@ read_sector_lba:
     pop cx
     pop bx
     ret
+%endif
 
 write_sector_lba:
+%if FAT_TYPE == 16
+    push dx
+    xor dx, dx
+    call write_sector_lba32
+    pop dx
+    ret
+%else
     push bx
     push cx
     push dx
@@ -15874,17 +16460,46 @@ write_sector_lba:
     pop cx
     pop bx
     ret
+%endif
+
+; INT 13h has AX/CX/DX results; all other caller state belongs to us.
+; AH=08h may return ES:DI and old firmware can damage high register halves.
+; Preserve buffer pointers across both EDD failures and the CHS fallback.
+bios_disk_interrupt:
+    push ebx
+    push esi
+    push edi
+    push ebp
+    push ds
+    push es
+    push fs
+    push gs
+    stc
+    sti
+    int 0x13
+    sti
+    cld
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    pop ebp
+    pop edi
+    pop esi
+    pop ebx
+    ret
 
 bios_get_chs_geometry:
-    push ax
-    push bx
-    push cx
-    push dx
+    pushad
+    push es
+
+    xor ax, ax
+    mov es, ax
+    xor di, di
 
     mov dl, [cs:boot_drive]
     mov ah, 0x08
-    sti
-    int 0x13
+    call bios_disk_interrupt
     jc .fallback
     and cl, 0x3F
     jz .fallback
@@ -15904,10 +16519,8 @@ bios_get_chs_geometry:
     stc
 
 .done:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    pop es
+    popad
     ret
 
 bios_lba32_to_chs:
@@ -15948,8 +16561,7 @@ bios_read_chs_sector32:
     jc .done
     mov ah, 0x02
     mov al, 0x01
-    sti
-    int 0x13
+    call bios_disk_interrupt
 .done:
     ret
 
@@ -15958,8 +16570,7 @@ bios_write_chs_sector32:
     jc .done
     mov ah, 0x03
     mov al, 0x01
-    sti
-    int 0x13
+    call bios_disk_interrupt
 .done:
     ret
 
@@ -16278,7 +16889,7 @@ dispatch_command:
 .cmd_reboot:
     mov si, msg_rebooting
     call print_string_dual
-    int 0x19
+    call hardware_reset
     jmp .done
 
 .cmd_halt:
@@ -17330,7 +17941,7 @@ shell_exec_buffer_path:
     pop es
     mov si, cwd_buf
     mov di, shell_exec_saved_cwd_buf
-    mov cx, 24
+    mov cx, DOS_CWD_BYTES
     rep movsb
     mov ax, [cs:cwd_cluster]
     mov [cs:shell_exec_saved_cwd_cluster], ax
@@ -17371,7 +17982,7 @@ shell_exec_buffer_path:
     pop es
     mov si, shell_exec_saved_cwd_buf
     mov di, cwd_buf
-    mov cx, 24
+    mov cx, DOS_CWD_BYTES
     rep movsb
     mov ax, [cs:shell_exec_saved_cwd_cluster]
     mov [cs:cwd_cluster], ax
@@ -17391,6 +18002,7 @@ shell_exec_buffer_path:
     clc
     ret
 .exec_failed:
+    push ax                     ; preserve DOS error through the video redraw
     mov byte [cs:shell_exec_external_program_active], 0
     push ax
     mov ax, 0x0003
@@ -17398,6 +18010,7 @@ shell_exec_buffer_path:
     pop ax
     call shell_exec_reinstall_int10
     call draw_shell_chrome
+    pop ax
     stc
     ret
 
@@ -17821,7 +18434,7 @@ shell_cmd_dir:
     mov [cs:shell_saved_cwd_cluster], ax
     mov si, cwd_buf
     mov di, shell_saved_cwd_buf
-    mov cx, 24
+    mov cx, DOS_CWD_BYTES
     rep movsb
 
     mov si, bx
@@ -17977,7 +18590,7 @@ shell_cmd_dir:
     mov [cs:cwd_cluster], ax
     mov si, shell_saved_cwd_buf
     mov di, cwd_buf
-    mov cx, 24
+    mov cx, DOS_CWD_BYTES
     rep movsb
 
 .return:
@@ -18529,8 +19142,12 @@ putc_dual:
     ret
 
 bios_putc:
-    push ax
-    push bx
+    ; AH=0Eh can destroy BP when scrolling on older BIOSes.  Keep the
+    ; complete caller state, including the DS:SI string cursor, across all
+    ; INT 10h paths; firmware hooks must not redirect the following print.
+    pushad
+    push ds
+    push es
     cmp al, 0x0A
     jne .teletype
 
@@ -18562,9 +19179,7 @@ bios_putc:
 
     pop dx
     pop cx
-    pop bx
-    pop ax
-    ret
+    jmp .done
 
 .lf_teletype:
     pop dx
@@ -18574,8 +19189,11 @@ bios_putc:
     mov ah, 0x0E
     mov bx, 0x0007
     int 0x10
-    pop bx
-    pop ax
+.done:
+    pop es
+    pop ds
+    popad
+    cld
     ret
 
 serial_init:
@@ -18604,17 +19222,25 @@ serial_init:
 
 serial_putc:
     push ax
+    push cx
     push dx
     mov ah, al
+    ; Diagnostics must also return when COM1 is disabled or never ready.
+    mov cx, 0x1000
 .wait:
     mov dx, 0x03F8 + 5
     in al, dx
     test al, 0x20
-    jz .wait
+    jnz .ready
+    loop .wait
+    jmp .done
+.ready:
     mov dx, 0x03F8
     mov al, ah
     out dx, al
+.done:
     pop dx
+    pop cx
     pop ax
     ret
 
@@ -18825,10 +19451,11 @@ ciukidos_save_parent_dta:
     mov ax, 0x0007
     call stage1_runtime_lookup_service
     jc .done
-    mov ax, [cs:dta_seg]
-    mov bx, [cs:dta_off]
     call int21_mem_active_psp
     mov cx, ax
+    ; The PSP lookup returns AX; load the independent DTA segment after it.
+    mov ax, [cs:dta_seg]
+    mov bx, [cs:dta_off]
     call far [cs:runtime_service_ptr]
     jc .done
     mov [cs:dta_seg], dx
@@ -19275,6 +19902,25 @@ init_mouse:
 
 .no_mouse:
     mov byte [cs:mouse_installed], 0
+%if FAT_TYPE == 16
+    ; Native initialization has quiesced AUX and restored IRQ1. Give a BIOS
+    ; PS/2 driver the original firmware IRQ12/C2 pair, rather than stacking
+    ; it above our unsuccessful direct-controller handler. Keep INT33 safe
+    ; to call: AX=0 against the inert IRET stub reports no installed driver.
+    pushf
+    cli
+    push es
+    xor ax, ax
+    mov es, ax
+    mov byte [cs:shell_exec_external_mouse_disabled], 1
+    mov eax, [cs:old_int74_off]
+    mov [es:0x74 * 4], eax
+    mov word [es:0x33 * 4], int_default_iret
+    mov ax, cs
+    mov [es:0x33 * 4 + 2], ax
+    pop es
+    popf
+%endif
     pop bx
     pop ax
     ret
@@ -19441,14 +20087,29 @@ ps2_mouse_write:
     jc .done
     call ps2_write_data
     jc .done
-    call ps2_read_data
-    jc .done
+    push cx
+    mov cx, 32
+.wait_ack:
+    call ps2_wait_output_full
+    jc .ack_done
+    ; Do not steal a pending keyboard scan while waiting for a mouse ACK.
+    test al, 0x20
+    jz .bad_ack
+    in al, 0x60
     cmp al, 0xFA
     je .ack
+    cmp al, 0xFE
+    je .bad_ack
+    ; A streaming device can finish an older packet before acknowledging
+    ; F6/F4. Bound the drain, rather than treating that packet as an ACK.
+    loop .wait_ack
+.bad_ack:
     stc
-    ret
+    jmp .ack_done
 .ack:
     clc
+.ack_done:
+    pop cx
 .done:
     ret
 
@@ -19474,17 +20135,31 @@ ps2_mouse_flush:
 ps2_mouse_init:
     push ax
     push dx
+    pushf
     cli
-    call ps2_mouse_flush
-    mov al, 0xA8
+    mov byte [cs:ps2_command_saved],0
+    ; The keyboard, TrackPoint and command-byte reply share port 60h.
+    ; Quiesce both ports before reading controller RAM: an arriving scan or
+    ; AUX packet must never become the new keyboard/translation settings.
+    mov al, 0xAD
     call ps2_write_cmd
     jc .fail
+    mov al, 0xA7
+    call ps2_write_cmd
+    jc .fail
+    call ps2_wait_input_clear
+    jc .fail
+    call ps2_mouse_flush
     mov al, 0x20
     call ps2_write_cmd
     jc .fail
     call ps2_read_data
     jc .fail
-    or al, 0x02
+    mov [cs:ps2_saved_command],al
+    mov byte [cs:ps2_command_saved],1
+    ; Preserve BIOS translation and system bits. Keep the keyboard clock
+    ; inhibited until the polled AUX replies have all been consumed.
+    or al, 0x13                 ; IRQ1 + IRQ12, keyboard clock inhibited
     and al, 0xDF
     mov ah, al
     mov al, 0x60
@@ -19492,6 +20167,9 @@ ps2_mouse_init:
     jc .fail
     mov al, ah
     call ps2_write_data
+    jc .fail
+    mov al, 0xA8
+    call ps2_write_cmd
     jc .fail
     mov al, 0xF6
     call ps2_mouse_write
@@ -19503,18 +20181,70 @@ ps2_mouse_init:
     in al, 0xA1
     and al, 0xEF
     out 0xA1, al
-    in al, 0x21
-    and al, 0xFB
-    out 0x21, al
-    sti
+    mov byte [cs:mouse_packet_index], 0
     mov byte [cs:mouse_hw_ready], 1
-    clc
-    jmp .done
+    mov byte [cs:mouse_bios_reporting_stopped], 0
+    jmp .restore_keyboard
 .fail:
-    sti
     mov byte [cs:mouse_hw_ready], 0
-    stc
-.done:
+    ; A failed mouse command can leave IRQ12 enabled and an ACK in the
+    ; shared output buffer. Quiesce AUX before returning the port to the
+    ; keyboard; preserve firmware translation/system bits, not our temporary
+    ; inhibited-keyboard command byte. Never invent a byte if its read failed.
+    mov al,0xA7
+    call ps2_write_cmd
+    call ps2_wait_input_clear
+    call ps2_mouse_flush
+    in al,0xA1
+    or al,0x10
+    out 0xA1,al
+    cmp byte [cs:ps2_command_saved],1
+    je .restore_command
+    ; An early timeout may have cleared by now. Recover the real command
+    ; byte before changing IRQ policy; retain the BIOS translation choice.
+    mov al,0x20
+    call ps2_write_cmd
+    jc .restore_keyboard
+    call ps2_read_data
+    jc .restore_keyboard
+    mov [cs:ps2_saved_command],al
+.restore_command:
+    mov al,0x60
+    call ps2_write_cmd
+    jc .restore_keyboard
+    mov al,[cs:ps2_saved_command]
+    and al,0xED                ; clear IRQ12 and keyboard inhibit
+    or al,0x21                 ; enable IRQ1, inhibit failed AUX
+    call ps2_write_data
+.restore_keyboard:
+    ; Re-enable IRQ1/its clock on success AND on an absent or failed mouse.
+    ; Enabling AUX alone is not sufficient on notebook controllers.
+    mov al, 0xAE
+    call ps2_write_cmd
+    jc .keyboard_unavailable
+    call ps2_wait_input_clear
+    jnc .keyboard_ready
+.keyboard_unavailable:
+    mov byte [cs:mouse_hw_ready], 0
+    ; F4 may already have succeeded when the final keyboard operation times
+    ; out. Mask and inhibit AUX before handing IRQ12 back to firmware; then
+    ; retry keyboard enable once. Never loop indefinitely on a busy 8042.
+    in al, 0xA1
+    or al, 0x10
+    out 0xA1, al
+    mov al, 0xA7
+    call ps2_write_cmd
+    call ps2_wait_input_clear
+    call ps2_mouse_flush
+    mov al, 0xAE
+    call ps2_write_cmd
+    call ps2_wait_input_clear
+.keyboard_ready:
+    in al, 0x21
+    and al, 0xF9                ; keyboard IRQ1 and slave PIC cascade
+    out 0x21, al
+    popf
+    cmp byte [cs:mouse_hw_ready], 1 ; return CF without changing caller's IF
     pop dx
     pop ax
     ret
@@ -19551,9 +20281,10 @@ irq12_mouse_handler:
     in al, 0x64
     test al, 0x01
     jz .eoi_fast        ; no data in output buffer
-    ; Some legacy controllers and QEMU builds do not reliably set the AUX
-    ; source bit here. Because this is IRQ12, treat the byte as mouse data
-    ; and let the PS/2 packet sync bit reject noise.
+    ; A latched/spurious IRQ12 can run after a polled ACK was consumed.
+    ; Leave a keyboard byte in the shared buffer for the BIOS IRQ1 handler.
+    test al, 0x20
+    jz .eoi_fast
     in al, 0x60
 
     ; Update last-byte tick for watchdog
@@ -19776,6 +20507,14 @@ irq12_mouse_handler:
     pop bx
     pop ax
 
+    ; INT 15h/C2 is an exclusive hardware ownership path.  Once a BIOS
+    ; client (notably Windows MOUSE.DRV) has enabled its ASR, never dispatch
+    ; the same packet to a DOS INT 33h callback as well.  A callback left by
+    ; the previously executed DOS program may already point into reclaimed
+    ; memory; invoking both paths caused duplicate/erratic Windows motion and
+    ; could jump into that stale client during a click.
+    jmp .eoi
+
 .int33_callback:
     mov ax, bp
     and ax, [cs:mouse_cb_mask]
@@ -19796,6 +20535,11 @@ irq12_mouse_handler:
     ; keyboard interrupts remaining serviceable while their FAR routine runs.
     sti
     call mouse_dispatch_user_callback
+    ; A real mouse can deliver another complete packet while the client is
+    ; still inside its callback.  The nested IRQ coalesces that packet in the
+    ; pending slot; drain it before leaving this IRQ or button releases and
+    ; motion remain stranded until the next application reset.
+    call mouse_flush_pending_callback
     cli
     jmp .eoi
 
@@ -20571,9 +21315,12 @@ int10_vbe_alloc_system_block:
     push dx
     mov dx, [cs:current_psp_seg]
     xor ax, ax
-    mov [cs:current_psp_seg], ax
+    call int21_set_current_psp
     call int21_alloc
-    mov [cs:current_psp_seg], dx
+    push ax
+    mov ax, dx
+    call int21_set_current_psp
+    pop ax
     jc .done
     push ax
     call int21_mem_table_find_exact
@@ -20857,6 +21604,7 @@ int15_handler:
     mov al, 0xF4                  ; enable PS/2 data reporting
     call ps2_mouse_write
     jc .interface_error
+    mov byte [cs:mouse_bios_reporting_stopped], 0
     mov byte [cs:mouse_bios_enabled], 1
     cmp byte [cs:mouse_vga_cursor_drawn], 1
     je .enable_seed_done
@@ -20867,6 +21615,7 @@ int15_handler:
     mov al, 0xF5                  ; disable PS/2 data reporting
     call ps2_mouse_write
     jc .interface_error
+    mov byte [cs:mouse_bios_reporting_stopped], 1
     mov byte [cs:mouse_bios_enabled], 0
     mov byte [cs:mouse_vga_cursor_drawn], 0
     jmp .success
@@ -20875,6 +21624,7 @@ int15_handler:
     mov al, 0xFF                  ; reset, then consume BAT and device ID
     call ps2_mouse_write
     jc .interface_error
+    mov byte [cs:mouse_bios_reporting_stopped], 1
     call ps2_read_data
     jc .interface_error
     cmp al, 0xAA
@@ -20932,6 +21682,7 @@ int15_handler:
     mov al, 0xF6                  ; defaults also stop data reporting
     call ps2_mouse_write
     jc .interface_error
+    mov byte [cs:mouse_bios_reporting_stopped], 1
     mov byte [cs:mouse_bios_enabled], 0
     mov byte [cs:mouse_packet_index], 0
     jmp .success
@@ -21133,6 +21884,13 @@ mouse_reset_runtime_state:
 %endif
     ret
 
+mouse_release_transient_clients:
+    call mouse_vga_cursor_erase_if_drawn
+    call mouse_reset_runtime_state
+    mov byte [cs:mouse_bios_enabled], 0
+    mov word [cs:mouse_bios_asr_seg], 0
+    ret
+
 mouse_dispatch_user_callback:
     cmp word [cs:mouse_cb_seg], 0
     je .done
@@ -21150,16 +21908,20 @@ mouse_dispatch_user_callback:
     ret
 
 mouse_flush_pending_callback:
+    ; Called with interrupts enabled after the primary client callback.  Take
+    ; each coalesced snapshot atomically, then re-enable interrupts around the
+    ; client routine so further IRQ12 packets can replace the pending slot.
+    ; Preserve the caller's IF state; the IRQ handler disables it before EOI.
+    pushf
+.loop:
+    cli
     cmp byte [cs:mouse_cb_busy], 0
     jne .done
-    cmp word [cs:mouse_cb_pending_mask], 0
-    je .done
-    cmp word [cs:mouse_cb_seg], 0
-    je .clear
-.loop:
     mov ax, [cs:mouse_cb_pending_mask]
     or ax, ax
     jz .done
+    cmp word [cs:mouse_cb_seg], 0
+    je .clear
     mov word [cs:mouse_cb_pending_mask], 0
     xor bx, bx
     mov bl, [cs:mouse_cb_pending_buttons]
@@ -21167,11 +21929,20 @@ mouse_flush_pending_callback:
     mov dx, [cs:mouse_cb_pending_y]
     mov si, [cs:mouse_cb_pending_dx]
     mov di, [cs:mouse_cb_pending_dy]
-    call mouse_dispatch_user_callback
+    mov byte [cs:mouse_cb_busy], 1
+    sti
+    push ds
+    push es
+    call far [cs:mouse_cb_off]
+    pop es
+    pop ds
+    cli
+    mov byte [cs:mouse_cb_busy], 0
     jmp .loop
 .clear:
     mov word [cs:mouse_cb_pending_mask], 0
 .done:
+    popf
     ret
 
 mouse_copy_gfx_mask_from_esdx:
@@ -21255,16 +22026,24 @@ mouse_restore_state_from_esdx:
 
 %if FAT_TYPE == 16
 int09_handler:
+    ; Windows 3.x enhanced mode may attempt to inject the same virtual IRQ1
+    ; again while its BIOS chain is returning. A second V86 entry with no
+    ; keyboard data used to recurse at 0300:8A15 until
+    ; the private DOS stack overwrote the resident kernel.  Bit 7 is a busy
+    ; guard; bit 0 retains the existing external-owner meaning.
+    push ax
+    test byte [cs:irq1_external_owner], 0x80
+    jnz .reentrant_irq
+    mov byte [cs:irq1_external_owner], 0x80
+
     ; A raw DOS IRQ1 owner may read the scan byte before chaining this
     ; handler.  Preserve that byte while checking whether the live vector is
     ; currently owned by the kernel or by an external handler.
-    push ax
     push bx
     push dx
     push ds
     push es
     push si
-    mov byte [cs:irq1_external_owner], 0
     xor ax, ax
     mov es, ax
     mov bx, [es:0x09 * 4]
@@ -21275,15 +22054,15 @@ int09_handler:
     cmp bx, int09_handler
     je .owner_known
 .external_owner:
-    mov byte [cs:irq1_external_owner], 1
+    or byte [cs:irq1_external_owner], 1
 .owner_known:
     mov word [cs:irq1_tail_before], 0xFFFF
 
     ; Record the BIOS ring tail before the chained handler runs.  The raw DOS
     ; owner may already have inserted an enhanced navigation key; the chained
     ; BIOS can then insert the same key a second time during this one IRQ.
-    cmp byte [cs:irq1_external_owner], 1
-    jne .pre_bios_done
+    test byte [cs:irq1_external_owner], 1
+    jz .pre_bios_done
     mov ax, 0x0040
     mov ds, ax
     mov ax, [0x001C]
@@ -21297,9 +22076,7 @@ int09_handler:
     pop ax
 
     ; Let the platform BIOS acknowledge IRQ1 and update its keyboard ring.
-    ; PUSHF + FAR CALL provides the interrupt frame expected by its IRET.
-    pushf
-    call far [cs:old_int09_off]
+    call .call_bios
 
     push ax
     push bx
@@ -21313,8 +22090,8 @@ int09_handler:
     ; the first record.  Collapse the chained BIOS's exact one-slot advance
     ; only when the preceding record is still unread and carries the same
     ; navigation scan.  An insertion into an otherwise empty ring is kept.
-    cmp byte [cs:irq1_external_owner], 1
-    jne .inspect_ring
+    test byte [cs:irq1_external_owner], 1
+    jz .inspect_ring
     mov bx, [0x001C]                  ; tail / next write position
     mov ax, [0x0080]                  ; ring start
     mov dx, [0x0082]                  ; ring end
@@ -21386,12 +22163,51 @@ int09_handler:
 .normalize:
     mov byte [bx], 0
 .done:
+    mov byte [cs:irq1_external_owner], 0
     pop si
     pop ds
     pop dx
     pop bx
     pop ax
     iret
+
+.reentrant_irq:
+    ; An AT BIOS may send EOI and enable interrupts inside its LED-update
+    ; routine, then wait for IRQ1 to receive FAh/FEh. A real pending keyboard
+    ; byte must reach that BIOS even while the outer call is active. Leave
+    ; the byte in port 60h for the original handler and retain the outer guard.
+    in al, 0x64
+    and al, 0x21                     ; output full, excluding auxiliary data
+    cmp al, 0x01
+    jne .reentrant_no_data
+    pop ax
+    call .call_bios
+    iret
+.reentrant_no_data:
+    ; Complete only the duplicate virtual-PIC transaction without entering
+    ; an empty BIOS chain again. The outer handler clears the busy guard.
+    mov al, 0x20
+    out 0x20, al
+    pop ax
+    iret
+
+.call_bios:
+    ; Legacy firmware may preserve only 16-bit registers. IRQ1 can interrupt
+    ; native drawing with live 32-bit offsets and font segments, including a
+    ; nested LED-ACK IRQ while the outer BIOS chain is still running.
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+    pushf
+    call far [cs:old_int09_off]
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    ret
 
 int09_is_navigation_scan:
     cmp al, 0x47                    ; Home
@@ -21420,49 +22236,6 @@ int09_is_navigation_scan:
     stc
     ret
 %endif
-
-int16_handler:
-%if TRACE_CHILD_INT21 != 0
-    call child_trace_int16_enter
-%endif
-    cmp ah, 0x00
-    je .read_key
-    cmp ah, 0x10
-    je .read_key
-    cmp ah, 0x01
-    je .status
-    cmp ah, 0x11
-    je .status
-    cmp ah, 0x02
-    je .shift_status
-    cmp ah, 0x12
-    je .shift_status
-.chain:
-    jmp far [cs:old_int16_off]
-
-.status:
-    pushf
-    call far [cs:old_int16_off]
-    jz .status_no_real_key
-    push bp
-    mov bp, sp
-    and word [ss:bp + 6], 0xFFBF
-    pop bp
-    iret
-
-.status_no_real_key:
-    push bp
-    mov bp, sp
-    xor ax, ax
-    or word [ss:bp + 6], 0x0040
-    pop bp
-    iret
-
-.shift_status:
-    jmp far [cs:old_int16_off]
-
-.read_key:
-    jmp far [cs:old_int16_off]
 
 int33_handler:
     cld
@@ -21571,7 +22344,27 @@ int33_handler:
     iret
 
 .reset:
+%if FAT_TYPE == 16
+    cmp byte [cs:mouse_hw_ready], 1
+    jne .external_mouse_disabled
+%endif
     call mouse_reset_runtime_state
+%if FAT_TYPE == 16
+    ; BIOS clients such as Windows stop PS/2 reporting with C200h/F5 when
+    ; they exit. A subsequent DOS reset must reclaim the physical stream,
+    ; not only reset coordinates. Do this only for a recorded BIOS stop and
+    ; after BIOS ownership has ended; native resets otherwise send no I/O.
+    cmp byte [cs:mouse_bios_reporting_stopped], 1
+    jne .reset_ready
+    cmp byte [cs:mouse_bios_enabled], 0
+    jne .reset_ready
+    mov byte [cs:mouse_packet_index], 0
+    mov al, 0xF4
+    call ps2_mouse_write
+    jc .reset_ready
+    mov byte [cs:mouse_bios_reporting_stopped], 0
+.reset_ready:
+%endif
     mov ax, 0xFFFF
     xor bh, bh
     mov bl, [cs:mouse_button_count]
@@ -22030,6 +22823,16 @@ int2f_handler:
     mov [cs:windows_version], di
     mov [cs:windows_startup_info], di
     mov word [cs:windows_active], 1
+    ; The 1605h broadcast precedes Windows' final system-VM MZ handoff by one
+    ; EXEC frame.  Include that fixed startup continuation in the baseline;
+    ; later application frames must unwind independently on AH=4Ch.
+    mov al, [cs:dos_exec_state_depth]
+    inc ax
+    mov [cs:windows_exec_base_depth], al
+
+    ; Defensively start WIN386 from a clean transient-client state even if a
+    ; nonstandard termination path bypassed normal top-level EXEC cleanup.
+    call mouse_release_transient_clients
     push cs
     pop es
     mov bx, windows_startup_info
@@ -22039,9 +22842,7 @@ int2f_handler:
     mov word [cs:windows_active], 0
     ; Windows has released the system VM.  Never leave IRQ12 targeting its
     ; former MOUSE.DRV callback after that memory has been returned to DOS.
-    call mouse_vga_cursor_erase_if_drawn
-    mov byte [cs:mouse_bios_enabled], 0
-    mov word [cs:mouse_bios_asr_seg], 0
+    call mouse_release_transient_clients
     jmp .iret_clear_cf_enter
 
 .fn_1607:
@@ -22248,91 +23049,37 @@ xms_entrypoint:
 .alloc_emb:
     cmp dx, [cs:xms_free_kb]
     ja .alloc_fail
-    ; XMS 3.0 explicitly permits zero-length EMBs so hook providers can
-    ; reserve a private handle.  Internally FFFFh represents that occupied
-    ; zero-length handle; the public size remains zero.
-    mov bx, dx
-    or dx, dx
+    ; Every live handle has a table slot, including zero-length hook handles.
+    ; New blocks follow the physical high-water mark, so reusing a low-numbered
+    ; slot never moves or overlaps an address already published to a client.
+    push di
+    xor di, di
+.alloc_find_handle:
+    cmp word [cs:xms_handle_size_table + di], 0
+    je .alloc_handle_found
+    add di, 2
+    cmp di, XMS_HANDLE_COUNT * 2
+    jb .alloc_find_handle
+    pop di
+    jmp .alloc_no_handles
+.alloc_handle_found:
+    mov ax, dx
+    or ax, ax
     jnz .alloc_size_ready
-    dec dx
+    dec ax                         ; FFFFh means occupied, public size zero
 .alloc_size_ready:
-
-    cmp word [cs:xms_alloc_kb], 0
-    jne .alloc_second
-    ; A hole below a live second handle cannot be reused without moving that
-    ; handle.  Keep allocation addresses stable as required by XMS locks.
-    cmp word [cs:xms_alloc2_kb], 0
-    jne .alloc_fail
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .alloc_fail
-    mov [cs:xms_alloc_kb], dx
-    sub [cs:xms_free_kb], bx
-    mov ax, 1
-    mov dx, 1
-    xor bl, bl
-    retf
-
-.alloc_second:
-    cmp word [cs:xms_alloc2_kb], 0
-    jne .alloc_third
-    ; Reusing handle 2 while handle 3 is live would place the new block at
-    ; handle 3's fixed base.  Refuse the fragmented allocation instead of
-    ; silently overlapping two XMS clients.
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .alloc_fail
-    mov [cs:xms_alloc2_kb], dx
-    sub [cs:xms_free_kb], bx
-
-    ; Handle 2 starts immediately after handle 1.  XMS sizes are expressed in
-    ; KiB, so keep the full 24-bit base (the low word is not necessarily zero).
-    mov ax, [cs:xms_alloc_kb]
-    mov bx, ax
-    mov cx, ax
-    shl bx, 10
-    shr cx, 6
-    mov [cs:xms_alloc2_base_lo], bx
-    add cx, XMS_EMB_BASE_HI
-    mov [cs:xms_alloc2_base_hi], cx
-
-    mov ax, 1
-    mov dx, 2
-    xor bl, bl
-    retf
-
-.alloc_third:
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .alloc_zero_handle
-    mov [cs:xms_alloc3_kb], dx
-    sub [cs:xms_free_kb], bx
-
-    ; Handle 3 follows handles 1 and 2.  Preserve its physical base so the
-    ; lower handles can later be unlocked or freed without moving it.
-    mov ax, [cs:xms_alloc_kb]
-    add ax, [cs:xms_alloc2_kb]
-    mov bx, ax
-    mov cx, ax
-    shl bx, 10
-    shr cx, 6
-    mov [cs:xms_alloc3_base_lo], bx
-    add cx, XMS_EMB_BASE_HI
-    mov [cs:xms_alloc3_base_hi], cx
-
-    mov ax, 1
-    mov dx, 3
-    xor bl, bl
-    retf
-
-.alloc_zero_handle:
-    ; Handles 4..32 are compact zero-length reservations.  Windows VMM uses
-    ; several private hook handles and none consumes extended memory.
-    or bx, bx
-    jnz .alloc_fail
-    cmp byte [cs:xms_zero_handle_count], 29
-    jae .alloc_no_handles
-    inc byte [cs:xms_zero_handle_count]
-    xor dx, dx
-    mov dl, [cs:xms_zero_handle_count]
-    add dx, 3
+    mov [cs:xms_handle_size_table + di], ax
+    mov ax, [cs:xms_tail_kb]
+    mov [cs:xms_handle_base_table + di], ax
+    or dx, dx
+    jz .alloc_no_storage
+    add [cs:xms_tail_kb], dx
+    sub [cs:xms_free_kb], dx
+.alloc_no_storage:
+    mov dx, di
+    shr dx, 1
+    inc dx
+    pop di
     mov ax, 1
     xor bl, bl
     retf
@@ -22348,86 +23095,50 @@ xms_entrypoint:
     retf
 
 .free_emb:
-    cmp dx, 4
-    jae .free_zero_handle
-    cmp dx, 3
-    je .free_emb_third
-    cmp dx, 2
-    je .free_emb_second
-    cmp dx, 1
-    jne .free_fail
-    mov ax, [cs:xms_alloc_kb]
-    or ax, ax
-    jz .free_fail
-    cmp ax, 0xFFFF
-    jne .free_emb_first_size_ready
-    xor ax, ax
-.free_emb_first_size_ready:
-    mov word [cs:xms_alloc_kb], 0
-    cmp word [cs:xms_alloc2_kb], 0
-    jne .free_success
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .free_success
-    mov byte [cs:xms_zero_handle_count], 0
-    add [cs:xms_free_kb], ax
+    push di
+    call .lookup_handle
+    jc .free_bad_handle
+    mov word [cs:xms_handle_size_table + di], 0
+    mov word [cs:xms_handle_base_table + di], 0
+    call .recompute_tail
+    pop di
 .free_success:
     mov ax, 1
     xor bl, bl
     retf
 
-.free_zero_handle:
-    mov ax, dx
-    sub ax, 3
-    cmp al, [cs:xms_zero_handle_count]
-    ja .free_fail
-    jmp .free_success
-
-.free_emb_second:
-    mov ax, [cs:xms_alloc2_kb]
-    or ax, ax
-    jz .free_fail
-    cmp ax, 0xFFFF
-    jne .free_emb_second_size_ready
-    xor ax, ax
-.free_emb_second_size_ready:
-    mov word [cs:xms_alloc2_kb], 0
-    mov word [cs:xms_alloc2_base_lo], 0
-    mov word [cs:xms_alloc2_base_hi], 0
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .free_success
-    cmp word [cs:xms_alloc_kb], 0
-    jne .free_second_reclaim_tail
-    mov word [cs:xms_free_kb], XMS_FREE_KB_INITIAL
-    jmp .free_success
-.free_second_reclaim_tail:
-    add [cs:xms_free_kb], ax
-    jmp .free_success
-
-.free_emb_third:
-    mov ax, [cs:xms_alloc3_kb]
-    or ax, ax
-    jz .free_fail
-    cmp ax, 0xFFFF
-    jne .free_emb_third_size_ready
-    xor ax, ax
-.free_emb_third_size_ready:
-    mov word [cs:xms_alloc3_kb], 0
-    mov word [cs:xms_alloc3_base_lo], 0
-    mov word [cs:xms_alloc3_base_hi], 0
-    cmp word [cs:xms_alloc2_kb], 0
-    jne .free_third_reclaim_tail
-    cmp word [cs:xms_alloc_kb], 0
-    jne .free_third_reclaim_tail
-    mov word [cs:xms_free_kb], XMS_FREE_KB_INITIAL
-    jmp .free_success
-.free_third_reclaim_tail:
-    add [cs:xms_free_kb], ax
-    jmp .free_success
+.free_bad_handle:
+    pop di
 
 .free_fail:
     xor ax, ax
     mov bl, 0xA2
     retf
+
+; Recalculate the high-water mark. Interior holes remain reserved until every
+; later block is freed, preserving all locked physical addresses.
+.recompute_tail:
+    xor dx, dx
+    xor di, di
+.recompute_tail_loop:
+    mov ax, [cs:xms_handle_size_table + di]
+    or ax, ax
+    jz .recompute_tail_next
+    cmp ax, 0xFFFF
+    je .recompute_tail_next
+    add ax, [cs:xms_handle_base_table + di]
+    cmp ax, dx
+    jbe .recompute_tail_next
+    mov dx, ax
+.recompute_tail_next:
+    add di, 2
+    cmp di, XMS_HANDLE_COUNT * 2
+    jb .recompute_tail_loop
+    mov [cs:xms_tail_kb], dx
+    mov ax, XMS_FREE_KB_INITIAL
+    sub ax, dx
+    mov [cs:xms_free_kb], ax
+    ret
 
 .move_emb:
 %if FAT_TYPE == 16
@@ -22451,10 +23162,8 @@ xms_entrypoint:
     or ax, [cs:xms_move_len_hi]
     jz .move_success
 
-    mov ax, [ds:si + 4]
-    cmp ax, 3
-    ja .move_bad_src
-    or ax, ax
+    mov dx, [ds:si + 4]
+    or dx, dx
     jnz .move_src_emb
 
     mov ax, [ds:si + 6]
@@ -22473,71 +23182,29 @@ xms_entrypoint:
     jmp .move_dst_setup
 
 .move_src_emb:
-    cmp ax, 3
-    je .move_src_emb3
-    cmp ax, 2
-    je .move_src_emb2
-    mov bx, [cs:xms_alloc_kb]
-    or bx, bx
-    jz .move_bad_src
+    call .lookup_handle
+    jc .move_bad_src
+    mov bx, ax
+    cmp bx, 0xFFFF
+    jne .move_src_size_ready
+    xor bx, bx
+.move_src_size_ready:
     mov [cs:xms_move_range_kb], bx
     mov ax, [ds:si + 6]
     mov dx, [ds:si + 8]
     call .move_check_emb_range
     jc .move_bad_src_offset
-    mov ax, [ds:si + 6]
-    mov [cs:xms_move_src_lo], ax
-    mov ax, [ds:si + 8]
-    add ax, XMS_EMB_BASE_HI
-    jc .move_bad_src_offset
-    cmp ax, XMS_PHYS_LIMIT_HI
-    jae .move_bad_src_offset
-    mov [cs:xms_move_src_hi], ax
-    jmp .move_dst_setup
-
-.move_src_emb2:
-    mov bx, [cs:xms_alloc2_kb]
-    or bx, bx
-    jz .move_bad_src
-    mov [cs:xms_move_range_kb], bx
-    mov ax, [ds:si + 6]
-    mov dx, [ds:si + 8]
-    call .move_check_emb_range
-    jc .move_bad_src_offset
-    mov ax, [ds:si + 6]
-    mov dx, [ds:si + 8]
-    add ax, [cs:xms_alloc2_base_lo]
-    adc dx, [cs:xms_alloc2_base_hi]
-    cmp dx, XMS_PHYS_LIMIT_HI
-    jae .move_bad_src_offset
-    mov [cs:xms_move_src_lo], ax
-    mov [cs:xms_move_src_hi], dx
-
-    jmp .move_dst_setup
-
-.move_src_emb3:
-    mov bx, [cs:xms_alloc3_kb]
-    or bx, bx
-    jz .move_bad_src
-    mov [cs:xms_move_range_kb], bx
-    mov ax, [ds:si + 6]
-    mov dx, [ds:si + 8]
-    call .move_check_emb_range
-    jc .move_bad_src_offset
-    mov ax, [ds:si + 6]
-    mov dx, [ds:si + 8]
-    add ax, [cs:xms_alloc3_base_lo]
-    adc dx, [cs:xms_alloc3_base_hi]
+    call .handle_base_physical
+    add ax, [ds:si + 6]
+    adc dx, [ds:si + 8]
     cmp dx, XMS_PHYS_LIMIT_HI
     jae .move_bad_src_offset
     mov [cs:xms_move_src_lo], ax
     mov [cs:xms_move_src_hi], dx
 
 .move_dst_setup:
-    mov ax, [ds:si + 10]
-    cmp ax, 3
-    ja .move_bad_dst
-    or ax, ax
+    mov dx, [ds:si + 10]
+    or dx, dx
     jnz .move_dst_emb
 
     mov ax, [ds:si + 12]
@@ -22554,61 +23221,21 @@ xms_entrypoint:
     jmp .move_loop
 
 .move_dst_emb:
-    cmp ax, 3
-    je .move_dst_emb3
-    cmp ax, 2
-    je .move_dst_emb2
-    mov bx, [cs:xms_alloc_kb]
-    or bx, bx
-    jz .move_bad_dst
+    call .lookup_handle
+    jc .move_bad_dst
+    mov bx, ax
+    cmp bx, 0xFFFF
+    jne .move_dst_size_ready
+    xor bx, bx
+.move_dst_size_ready:
     mov [cs:xms_move_range_kb], bx
     mov ax, [ds:si + 12]
     mov dx, [ds:si + 14]
     call .move_check_emb_range
     jc .move_bad_dst_offset
-    mov ax, [ds:si + 12]
-    mov [cs:xms_move_dst_lo], ax
-    mov ax, [ds:si + 14]
-    add ax, XMS_EMB_BASE_HI
-    jc .move_bad_dst_offset
-    cmp ax, XMS_PHYS_LIMIT_HI
-    jae .move_bad_dst_offset
-    mov [cs:xms_move_dst_hi], ax
-    jmp .move_loop
-
-.move_dst_emb2:
-    mov bx, [cs:xms_alloc2_kb]
-    or bx, bx
-    jz .move_bad_dst
-    mov [cs:xms_move_range_kb], bx
-    mov ax, [ds:si + 12]
-    mov dx, [ds:si + 14]
-    call .move_check_emb_range
-    jc .move_bad_dst_offset
-    mov ax, [ds:si + 12]
-    mov dx, [ds:si + 14]
-    add ax, [cs:xms_alloc2_base_lo]
-    adc dx, [cs:xms_alloc2_base_hi]
-    cmp dx, XMS_PHYS_LIMIT_HI
-    jae .move_bad_dst_offset
-    mov [cs:xms_move_dst_lo], ax
-    mov [cs:xms_move_dst_hi], dx
-
-    jmp .move_loop
-
-.move_dst_emb3:
-    mov bx, [cs:xms_alloc3_kb]
-    or bx, bx
-    jz .move_bad_dst
-    mov [cs:xms_move_range_kb], bx
-    mov ax, [ds:si + 12]
-    mov dx, [ds:si + 14]
-    call .move_check_emb_range
-    jc .move_bad_dst_offset
-    mov ax, [ds:si + 12]
-    mov dx, [ds:si + 14]
-    add ax, [cs:xms_alloc3_base_lo]
-    adc dx, [cs:xms_alloc3_base_hi]
+    call .handle_base_physical
+    add ax, [ds:si + 12]
+    adc dx, [ds:si + 14]
     cmp dx, XMS_PHYS_LIMIT_HI
     jae .move_bad_dst_offset
     mov [cs:xms_move_dst_lo], ax
@@ -22774,183 +23401,150 @@ xms_entrypoint:
     pop ax
     ret
 %else
-    mov ax, [ds:si + 4]
-    or ax, [ds:si + 10]
-    cmp ax, 1
-%if TRACE_CHILD_INT21 != 0
-    mov si, msg_child_vec25
-%endif
-    cmp ax, 0
-    je .move_ok
-    cmp word [cs:xms_alloc_kb], 0
-    je .free_fail
+    push di
+    mov dx, [ds:si + 4]
+    or dx, dx
+    jz .move_check_dst_handle
+    call .lookup_handle
+    jc .move_stub_fail
+.move_check_dst_handle:
+    mov dx, [ds:si + 10]
+    or dx, dx
+    jz .move_stub_ok
+    call .lookup_handle
+    jc .move_stub_fail
+.move_stub_ok:
+    pop di
 .move_ok:
     mov ax, 1
     xor bl, bl
     retf
+.move_stub_fail:
+    pop di
+    jmp .free_fail
 %endif
 
-.check_handle:
-    cmp dx, 4
-    jae .check_zero_handle
-    cmp dx, 3
-    je .check_handle_third
-    cmp dx, 2
-    je .check_handle_second
-    cmp dx, 1
-    jne .check_handle_fail
-    cmp word [cs:xms_alloc_kb], 0
-    je .check_handle_fail
-    clc
-    ret
-.check_handle_second:
-    cmp word [cs:xms_alloc2_kb], 0
-    je .check_handle_fail
-    clc
-    ret
-.check_handle_third:
-    cmp word [cs:xms_alloc3_kb], 0
-    je .check_handle_fail
-    clc
-    ret
-.check_zero_handle:
-    mov ax, dx
-    sub ax, 3
-    cmp al, [cs:xms_zero_handle_count]
+.lookup_handle:
+    mov di, dx
+    dec di
+    cmp di, XMS_HANDLE_COUNT - 1
     ja .check_handle_fail
+    shl di, 1
+    mov ax, [cs:xms_handle_size_table + di]
+    or ax, ax
+    jz .check_handle_fail
     clc
     ret
 .check_handle_fail:
     stc
     ret
 
+; Convert the selected handle's KiB offset to a 32-bit physical address.
+; Output DX:AX points at the first byte of the block.
+.handle_base_physical:
+    mov ax, [cs:xms_handle_base_table + di]
+    mov dx, ax
+    shl ax, 10
+    shr dx, 6
+    add dx, XMS_EMB_BASE_HI
+    ret
+
 .lock_emb:
-    call .check_handle
-    jc .free_fail
-    cmp dx, 3
-    je .lock_emb_third
-    cmp dx, 2
-    je .lock_emb_second
+    push di
+    call .lookup_handle
+    jc .lock_bad_handle
+    call .handle_base_physical
+    mov bx, ax
+    pop di
     mov ax, 1
-    mov dx, XMS_EMB_BASE_HI
-    xor bx, bx
     retf
-.lock_emb_second:
-    mov ax, 1
-    mov bx, [cs:xms_alloc2_base_lo]
-    mov dx, [cs:xms_alloc2_base_hi]
-    retf
-.lock_emb_third:
-    mov ax, 1
-    mov bx, [cs:xms_alloc3_base_lo]
-    mov dx, [cs:xms_alloc3_base_hi]
-    retf
+.lock_bad_handle:
+    pop di
+    jmp .free_fail
 
 .unlock_emb:
-    call .check_handle
-    jc .free_fail
+    push di
+    call .lookup_handle
+    jc .unlock_bad_handle
+    pop di
     mov ax, 1
     xor bx, bx
     retf
+.unlock_bad_handle:
+    pop di
+    jmp .free_fail
 
 .query_handle:
-    call .check_handle
-    jc .free_fail
-    cmp dx, 4
-    jae .query_zero_handle
-    cmp dx, 3
-    je .query_handle_third
-    cmp dx, 2
-    je .query_handle_second
-    mov ax, 1
-    mov dx, [cs:xms_alloc_kb]
-    xor bx, bx
-    cmp word [cs:xms_alloc2_kb], 0
-    jne .query_handle_check_third
-    inc bl
-.query_handle_check_third:
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .query_handle_done
-    inc bl
-.query_handle_done:
+    push di
+    push cx
+    call .lookup_handle
+    jc .query_bad_handle
+    mov dx, ax
     cmp dx, 0xFFFF
-    jne .query_handle_return
+    jne .query_size_ready
     xor dx, dx
-.query_handle_return:
-    retf
-.query_handle_second:
-    mov ax, 1
-    mov dx, [cs:xms_alloc2_kb]
+.query_size_ready:
     xor bx, bx
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .query_handle_second_done
+    xor di, di
+    mov cx, XMS_HANDLE_COUNT
+.query_free_handle_loop:
+    cmp word [cs:xms_handle_size_table + di], 0
+    jne .query_next_handle
     inc bl
-.query_handle_second_done:
-    jmp .query_handle_done
-.query_handle_third:
+.query_next_handle:
+    add di, 2
+    loop .query_free_handle_loop
+    pop cx
+    pop di
     mov ax, 1
-    mov dx, [cs:xms_alloc3_kb]
-    xor bx, bx
-    jmp .query_handle_done
-.query_zero_handle:
-    mov ax, 1
-    xor dx, dx
-    xor bx, bx
     retf
+.query_bad_handle:
+    pop cx
+    pop di
+    jmp .free_fail
 
 .realloc_emb:
-    cmp dx, 3
-    je .realloc_emb_third
-    cmp dx, 2
-    je .realloc_emb_second
-    cmp dx, 1
-    jne .free_fail
-    mov ax, [cs:xms_alloc_kb]
+    push di
+    push cx
+    mov cx, bx
+    call .lookup_handle
+    jc .realloc_bad_handle
+    cmp ax, 0xFFFF
+    jne .realloc_old_size_ready
+    xor ax, ax
+.realloc_old_size_ready:
+    add ax, [cs:xms_handle_base_table + di]
+    cmp ax, [cs:xms_tail_kb]
+    jne .realloc_no_space
+    mov ax, XMS_FREE_KB_INITIAL
+    sub ax, [cs:xms_handle_base_table + di]
+    cmp cx, ax
+    ja .realloc_no_space
+    mov ax, cx
     or ax, ax
-    jz .free_fail
-    cmp word [cs:xms_alloc2_kb], 0
-    jne .alloc_fail
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .alloc_fail
-    add ax, [cs:xms_free_kb]
-    cmp bx, ax
-    ja .alloc_fail
-    sub ax, bx
-    mov [cs:xms_free_kb], ax
-    mov [cs:xms_alloc_kb], bx
+    jnz .realloc_size_ready
+    dec ax
+.realloc_size_ready:
+    mov [cs:xms_handle_size_table + di], ax
+    mov ax, [cs:xms_handle_base_table + di]
+    add ax, cx
+    mov [cs:xms_tail_kb], ax
+    mov dx, XMS_FREE_KB_INITIAL
+    sub dx, ax
+    mov [cs:xms_free_kb], dx
+    pop cx
+    pop di
     mov ax, 1
     xor bl, bl
     retf
-
-.realloc_emb_second:
-    mov ax, [cs:xms_alloc2_kb]
-    or ax, ax
-    jz .free_fail
-    cmp word [cs:xms_alloc3_kb], 0
-    jne .alloc_fail
-    add ax, [cs:xms_free_kb]
-    cmp bx, ax
-    ja .alloc_fail
-    sub ax, bx
-    mov [cs:xms_free_kb], ax
-    mov [cs:xms_alloc2_kb], bx
-    mov ax, 1
-    xor bl, bl
-    retf
-
-.realloc_emb_third:
-    mov ax, [cs:xms_alloc3_kb]
-    or ax, ax
-    jz .free_fail
-    add ax, [cs:xms_free_kb]
-    cmp bx, ax
-    ja .alloc_fail
-    sub ax, bx
-    mov [cs:xms_free_kb], ax
-    mov [cs:xms_alloc3_kb], bx
-    mov ax, 1
-    xor bl, bl
-    retf
+.realloc_bad_handle:
+    pop cx
+    pop di
+    jmp .free_fail
+.realloc_no_space:
+    pop cx
+    pop di
+    jmp .alloc_fail
 
 .unsupported:
     xor ax, ax
@@ -23042,6 +23636,10 @@ xms_entrypoint:
     retf
 
 .version:
+    ; Windows 3.1 DOSX validates a 3.x HIMEM provider before entering Standard
+    ; or 386 Enhanced mode.  Keep the 3.0 identity used by the resident patch
+    ; protocol; HDPMI is constrained to the compatible legacy allocation path
+    ; by the CiukiOS host patch.
     mov ax, 0x0300
     mov bx, ax
     mov dx, 1                      ; HMA is available and AH=01h is supported
@@ -23102,14 +23700,9 @@ old_int2f_seg dw 0
 int_ef_target_off dw 0
 int_ef_target_seg dw 0
 xms_free_kb dw XMS_FREE_KB_INITIAL
-xms_alloc_kb dw 0
-xms_alloc2_kb dw 0
-xms_alloc2_base_lo dw 0
-xms_alloc2_base_hi dw 0
-xms_alloc3_kb dw 0
-xms_alloc3_base_lo dw 0
-xms_alloc3_base_hi dw 0
-xms_zero_handle_count db 0
+xms_tail_kb dw 0
+xms_handle_size_table times XMS_HANDLE_COUNT dw 0
+xms_handle_base_table times XMS_HANDLE_COUNT dw 0
 xms_a20_global_enabled db 1
 xms_a20_local_count db 0
 %if FAT_TYPE == 16
@@ -23137,8 +23730,6 @@ old_int10_seg dw 0
 old_int15_off dw 0
 old_int15_seg dw 0
 %endif
-old_int16_off dw 0
-old_int16_seg dw 0
 %if FAT_TYPE == 16
 old_int74_off dw 0
 old_int74_seg dw 0
@@ -23171,6 +23762,8 @@ console_ansi_p2 db 0
 %endif
 %if FAT_TYPE == 16
 mouse_hw_ready db 0
+ps2_command_saved db 0
+ps2_saved_command db 0
 mouse_packet_index db 0
 mouse_packet times 3 db 0
 mouse_last_byte_tick dw 0
@@ -23179,6 +23772,8 @@ mouse_delta_y dw 0
 mouse_last_mickey_x dw 0
 mouse_last_mickey_y dw 0
 mouse_bios_enabled db 0
+; Physical device state; deliberately outside the per-process EXEC snapshot.
+mouse_bios_reporting_stopped db 0
 mouse_bios_asr_off dw 0
 mouse_bios_asr_seg dw 0
 mouse_bios_asr_set_count dw 0
@@ -23360,6 +23955,7 @@ tmp_exec_mz_load_high db 0
 tmp_exec_mz_high_psp dw 0
 tmp_exec_mz_fail_stage db 0
 tmp_exec_mz_run_fail_stage db 0
+tmp_exec_mz_arena_fail_stage db 0
 tmp_exec_region_best_seg dw 0
 tmp_exec_region_best_size dw 0
 dos_exec_state_depth db 0
@@ -23467,7 +24063,8 @@ fileio_buf times 4 db 0
 fileio_patch db 0x11, 0x22
 find_dta times 64 db 0
 dos_indos_flag db 0
-windows_active dw 0
+windows_active db 0
+windows_exec_base_depth db 0
 windows_version dw 0
 ; WinStartupInfo (INT 2Fh/1605h): version, next record, optional VDD
 ; pointers, required instance-table pointer, and optional-instance pointer.
@@ -23530,7 +24127,7 @@ dos_sda_last_mcb dw DOS_HEAP_LIMIT_SEG - 1 ; +24 last usable MCB
 dos_sda_end:
 dos_list_of_lists times 64 db 0
 tmp_cwd_comp times 24 db 0
-tmp_cwd_build times 24 db 0
+tmp_cwd_build times DOS_CWD_BYTES db 0
 dos_env_block db 'COMSPEC=COMMAND.COM', 0
               db 'PATH=C:\APPS;C:\NET;C:\SYSTEM\DRIVERS;C:\SYSTEM', 0
               db 'BLASTER=A220 I7 D1 H5 T6', 0
@@ -23545,6 +24142,7 @@ dos_env_exec_path db 'C:\COMMAND.COM', 0
               times DOS_ENV_EXEC_PATH_LEN - ($ - dos_env_exec_path) db 0
 dos_env_block_end:
 dos_child_exec_path_buf times DOS_ENV_EXEC_PATH_LEN db 0
+align 4, db 0
 disk_packet:
     db 0x10
     db 0
@@ -23661,6 +24259,10 @@ msg_com_serial_fail db "[COMDEMO-SERIAL] FAIL", 13, 10, 0
 msg_mz_begin db "[MZ] run", 13, 10, 0
 msg_mz_load_fail db "[MZ] fail", 13, 10, 0
 msg_mz_done  db "[MZ] 0x", 0
+msg_mz_exec_fail db "[MZ] exec fail stage=", 0
+msg_mz_exec_fail_ax db " AX=", 0
+msg_mz_exec_fail_sub db " SUB=", 0
+msg_mz_exec_fail_arena db " ARENA=", 0
 msg_mz_serial_pass db "[MZDEMO-SERIAL] PASS", 13, 10, 0
 msg_mz_serial_fail db "[MZDEMO-SERIAL] FAIL", 13, 10, 0
 %if TRACE_WIN_MEMORY != 0
@@ -23668,6 +24270,9 @@ msg_win_mem_48 db "MEM48 ", 0
 msg_win_mem_4a db "MEM4A ", 0
 msg_win_mem_largest db "MEMMAX ", 0
 msg_win_mem_free db "MEMFREE ", 0
+msg_win_mem_free_ok db "MEMOK", 13, 10, 0
+msg_win_mem_free_miss db "MEMMISS", 13, 10, 0
+msg_win_mem_free_owner db "MEMOWNER", 13, 10, 0
 msg_win_mem_sep db ":", 0
 msg_win_exec db "EXEC ", 0
 msg_win_exec_return db "EXRET ", 0
@@ -23710,25 +24315,30 @@ msg_child_exit_code db " code=", 0
 msg_child_vec25 db "CH25", 0
 msg_child_vec35 db "I10I ", 0
 %endif
-msg_fileio_begin db 0
-msg_fileio_serial_pass db 0
-msg_fileio_serial_fail db 0
-msg_find_begin db 0
-msg_find_serial_pass db 0
-msg_find_serial_fail db 0
-msg_gfx_begin db 0
-msg_gfx_done db 0
-msg_gfx_serial_pass db 0
-msg_gfxrect_serial_pass db 0
-msg_gfxrect_serial_fail db 0
-msg_gfxstar_serial_pass db 0
-msg_gfxstar_serial_fail db 0
+; These diagnostics are intentionally silent in the production kernel.  They
+; share one empty ASCIIZ instead of spending a byte per alias in the resident
+; image (the labels remain stable for their callers).
+msg_fileio_begin:
+msg_fileio_serial_pass:
+msg_fileio_serial_fail:
+msg_find_begin:
+msg_find_serial_pass:
+msg_find_serial_fail:
+msg_gfx_begin:
+msg_gfx_done:
+msg_gfx_serial_pass:
+msg_gfxrect_serial_pass:
+msg_gfxrect_serial_fail:
+msg_gfxstar_serial_pass:
+msg_gfxstar_serial_fail:
+    db 0
 %if STAGE1_SELFTEST_AUTORUN
 msg_mvren_serial_pass db "[MVR] PASS", 13, 10, 0
 msg_mvren_serial_fail db "[MVR] FAIL", 13, 10, 0
 %endif
-msg_rebooting db 0
-msg_halting   db 0
+msg_rebooting:
+msg_halting:
+    db 0
 msg_loader_bsod_woof db "WOOF! CiukiOS ran into a problem.", 13, 10, 13, 10, 0
 msg_loader_bsod_body db "The system loader could not continue safely.", 13, 10, 0
 msg_loader_bsod_restart db "Please restart your PC.", 13, 10, 13, 10, 0
@@ -23742,22 +24352,26 @@ msg_child_xms_si db " si=", 0
 %endif
 msg_runtime_missing_fatal db "- CIUKIDOS.SYS missing or invalid", 13, 10, 0
 msg_shell_missing_fatal db "- SHELL.COM missing", 13, 10, 0
+msg_shell_exec_fatal db "- SHELL.COM execution failed", 13, 10, 0
+msg_loader_exec_error db "DOS error: 0x", 0
+loader_exec_error dw 0
 msg_shell_returned_fatal db "SHELL.COM returned control to the loader.", 13, 10, "This is not supported in loader-only mode.", 13, 10, 0
-msg_boot_splash_title db 0
-msg_boot_splash_subtitle db 0
-msg_boot_splash_tagline db 0
-msg_boot_loader_title db 0
-msg_boot_loading_runtime db 0
-msg_boot_loading_volume db 0
-msg_boot_loading_shell db 0
-msg_boot_loading_services db 0
-msg_boot_loading_ready db 0
-msg_boot_progress_0 db 0
-msg_boot_progress_20 db 0
-msg_boot_progress_40 db 0
-msg_boot_progress_60 db 0
-msg_boot_progress_80 db 0
-msg_boot_progress_100 db 0
+msg_boot_splash_title:
+msg_boot_splash_subtitle:
+msg_boot_splash_tagline:
+msg_boot_loader_title:
+msg_boot_loading_runtime:
+msg_boot_loading_volume:
+msg_boot_loading_shell:
+msg_boot_loading_services:
+msg_boot_loading_ready:
+msg_boot_progress_0:
+msg_boot_progress_20:
+msg_boot_progress_40:
+msg_boot_progress_60:
+msg_boot_progress_80:
+msg_boot_progress_100:
+    db 0
 msg_dir_header db "Dir", 13, 10, 0
 msg_dir_empty db "no files found", 13, 10, 0
 msg_cwd_prefix db "cwd=", 0
@@ -23770,10 +24384,11 @@ msg_mouse_y db "y=0x", 0
 msg_keytest_prompt db "press a key...", 0
 msg_keytest_ax db "key AX=0x", 0
 %endif
-gfx_text_ciukios db 0
-gfx_text_demo db 0
-gfx_text_vdi db 0
-gfx_text_timer db 0
+gfx_text_ciukios:
+gfx_text_demo:
+gfx_text_vdi:
+gfx_text_timer:
+    db 0
 str_ext_com db ".COM", 0
 str_ext_exe db ".EXE", 0
 
@@ -23805,17 +24420,19 @@ path_drivers_dir_dos db "\SYSTEM\DRIVERS\", 0
 path_apps_dir_dos db "\APPS", 0
 path_parent_dos  db "..", 0
 path_root_dos    db "\", 0
-cwd_buf times 24 db 0
+cwd_buf times DOS_CWD_BYTES db 0
 cwd_cluster dw 0
 %if FAT_TYPE == 16
-cwd_c_buf times 24 db 0
+cwd_c_buf times DOS_CWD_BYTES db 0
 cwd_c_cluster dw 0
-cwd_d_buf times 24 db 0
+cwd_d_buf times DOS_CWD_BYTES db 0
 cwd_d_cluster dw 0
 %endif
-shell_saved_cwd_buf times 24 db 0
+%if STAGE1_INTERACTIVE_SHELL
+shell_saved_cwd_buf times DOS_CWD_BYTES db 0
 shell_saved_cwd_cluster dw 0
-shell_exec_saved_cwd_buf times 24 db 0
+%endif
+shell_exec_saved_cwd_buf times DOS_CWD_BYTES db 0
 shell_exec_saved_cwd_cluster dw 0
 shell_exec_external_program_active db 0
 shell_exec_external_mouse_disabled db 0
@@ -23843,6 +24460,9 @@ gfx_demo_frame db 0
 gfx_demo_deadline dw 0
 gfx_demo_last_tick dw 0
 %if FAT_TYPE == 16
+boot_splash_active db 0
+boot_progress_value db 0
+boot_progress_units db 8, 24, 32, 16, 40
 splash_wait_start_tick dw 0
 splash_wait_last_tick dw 0
 %endif
@@ -23958,15 +24578,9 @@ msg_mouse_enabled db 0
 msg_mouse_not_found db 0
 msg_exit_str db "Exit", 13, 10, 0
 %if TRACE_CHILD_INT21 != 0
-msg_child_i16i db "I16I ", 0
-
 child_trace_int10_enter:
     push si
     mov si, msg_child_vec35
-    jmp short child_trace_bios_marker
-child_trace_int16_enter:
-    push si
-    mov si, msg_child_i16i
 child_trace_bios_marker:
     push ax
     call child_trace_should_log_exit

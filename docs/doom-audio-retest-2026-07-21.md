@@ -1,6 +1,6 @@
 # DOOM audio re-test after the TF-leak fix - 2026-07-21
 
-> Supersession note (2026-08-31): the low-DOS-memory blocker recorded below is resolved. The current `doom-vanille` lane passes `I_AllocLow(256000)` (`[doomvan-memory] PASS sb16_low_dos_256k`), reaches DMX initialization with the packaged SB16 profile, and produces only digital silence in the captured gameplay stream. A direct gameplay capture also shows corrupted planar walls and a missing HUD. The remainder of this dated report is preserved as historical audio evidence; the allocation PASS is not a graphics or game-level audio PASS.
+> Supersession note (2026-09-01): the low-DOS-memory blocker recorded below is resolved. Current `doom-vanille` lanes pass `I_AllocLow(256000)`, correct gameplay/HUD/walls, simultaneous OPL2 music plus SB16 SFX, combined DMX return 10, objective mixed output, and a real-time timedemo gate. Original Doom separately passes bounded OPL2-music/PC-speaker-SFX gameplay, while its proprietary SB16/DMX branch remains unsupported. The remainder of this dated report is preserved as historical evidence.
 
 ## Why re-test
 

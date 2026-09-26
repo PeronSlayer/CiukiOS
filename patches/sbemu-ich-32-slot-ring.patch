@@ -1,0 +1,203 @@
+diff --git a/main.c b/main.c
+index a964811..3ecf81b 100644
+--- a/main.c
++++ b/main.c
+@@ -36,7 +36,10 @@ static BOOL MAIN_TSRed;
+ #define MAIN_TRAP_PMPIC_ONDEMAND 0 //now we need a Virtual PIC to hide some IRQ for protected mode games (doom especially)
+ #define MAIN_TRAP_RMPIC_ONDEMAND 1 //don't hide IRQ for rm, as some driver(i.e.usbuhci) will use it
+ #define MAIN_INSTALL_RM_ISR 1 //not needed. but to workaround some rm games' problem. need RAW_HOOk in dpmi_dj2.c - disble for more tests.
+-#define MAIN_ISR_CHAINED 0 //auto calls next handler AFTER current handler exits - cause more mode switches, disable for more tests.
++/* Real ICH3 notebooks commonly share the AC97 IRQ with CardBus/USB.  SBEMU's
++ * own interrupt-handler comment documents that non-chained dispatch can
++ * flood a shared level IRQ and freeze the system. */
++#define MAIN_ISR_CHAINED 1
+ #define MAIN_VMPU_HDPMI_MEMFIX 1 //workaround hdpmi bug that a TSR allocated memory being treated as primary client's, also better by avoiding DPMI memory fragments
+                             //details on '_freeclientmemory' at I31MEM.ASM of HDPMI.
+ #define MAIN_PCM_RESAMPLE_INTERPOLATION 0
+@@ -564,7 +564,7 @@ static void MAIN_SetBlasterEnv(struct MAIN_OPT* opt) //alter BLASTER env.
+         sprintf(buf, "A%x I%x D%x P%x T%x", opt[OPT_ADDR].value, opt[OPT_IRQ].value, opt[OPT_DMA].value, opt[OPT_MPUADDR].value, opt[OPT_TYPE].value == 5 ? 4 : opt[OPT_TYPE].value);
+     else
+         sprintf(buf, "A%x I%x D%x T%x H%x P%x", opt[OPT_ADDR].value, opt[OPT_IRQ].value, opt[OPT_DMA].value, opt[OPT_TYPE].value, opt[OPT_HDMA].value, opt[OPT_MPUADDR].value);
+-    #ifdef DJGPP //makes vscode happy
++    #if defined(DJGPP) && !defined(CIUKIOS)
+     setenv("BLASTER", buf, TRUE);
+     #endif
+ }
+diff --git a/makefile b/makefile
+index 7c2cc8e..0db6214 100644
+--- a/makefile
++++ b/makefile
+@@ -2,11 +2,15 @@ TARGET := output/sbemu.exe
+ CC := i586-pc-msdosdjgpp-gcc
+ CXX := i586-pc-msdosdjgpp-g++
+ DEBUG ?= 0
++CIUKIOS ?= 0
+ 
+ VERSION ?= $(shell git describe --tags)
+ 
+ INCLUDES := -I./mpxplay -I./sbemu -I./drivers/include
+ DEFINES := -D__DOS__ -DSBEMU -DDEBUG=$(DEBUG) -DMAIN_SBEMU_VER=\"$(VERSION)\"
++ifeq ($(CIUKIOS),1)
++DEFINES += -DCIUKIOS=1
++endif
+ CFLAGS := -fcommon -march=i386 -ffast-math -O2 -flto $(INCLUDES) $(DEFINES)
+ LDFLAGS := -lstdc++ -lm -Wno-attributes
+ 
+diff --git a/mpxplay/au_cards/sc_ich.c b/mpxplay/au_cards/sc_ich.c
+index a522671..15de4e3 100644
+--- a/mpxplay/au_cards/sc_ich.c
++++ b/mpxplay/au_cards/sc_ich.c
+@@ -344,16 +344,36 @@ static void snd_intel_chip_close(struct intel_card_s *card)
+ 
+ static void snd_intel_ac97_init(struct intel_card_s *card,unsigned int freq_set)
+ {
+- // initial ac97 volumes (and clear mute flag)
+- snd_intel_codec_write(card, AC97_MASTER_VOL_STEREO, 0x0202);
+- snd_intel_codec_write(card, AC97_PCMOUT_VOL,        0x0202);
+- snd_intel_codec_write(card, AC97_HEADPHONE_VOL,     0x0202);
+- snd_intel_codec_write(card, AC97_CD_VOL,            0x0202);
+- snd_intel_codec_write(card, AC97_EXTENDED_STATUS,AC97_EA_SPDIF);
++ unsigned int extid,extstat=0,retry;
++
++ /* A number of notebook BIOSes, including the T23, leave the CS4299 in a
++  * partly powered or muted state.  Reset the codec itself after the ICH
++  * AC-link reset, power every analogue section, then unmute both possible
++  * speaker routes.  Do not enable standard AC97 SPDIF: Cirrus codecs use a
++  * vendor-specific SPDIF layout and setting the generic bit can silence PCM.
++  */
++ snd_intel_codec_write(card, AC97_RESET, 0x0000);
++ pds_delay_10us(100);
++ snd_intel_codec_read(card, AC97_RESET);
++ snd_intel_codec_write(card, AC97_POWER_CONTROL,     0x0000);
++ retry=10000;
++ while(retry--){
++  unsigned int power=snd_intel_codec_read(card,AC97_POWER_CONTROL);
++  if((power&(AC97_PWR_REF|AC97_PWR_ANL|AC97_PWR_DAC))==
++      (AC97_PWR_REF|AC97_PWR_ANL|AC97_PWR_DAC))
++   break;
++  pds_delay_10us(1);
++ }
++ snd_intel_codec_write(card, AC97_MASTER_VOL_STEREO, 0x0000);
++ snd_intel_codec_write(card, AC97_PCMOUT_VOL,         0x0000);
++ snd_intel_codec_write(card, AC97_HEADPHONE_VOL,      0x0000);
++ snd_intel_codec_write(card, AC97_CD_VOL,             0x0000);
+ 
+  // set/check variable bit rate bit
+- if(freq_set!=48000){
+-  snd_intel_codec_write(card,AC97_EXTENDED_STATUS,AC97_EA_VRA);
++ extid=snd_intel_codec_read(card,AC97_EXTENDED_ID);
++ if((freq_set!=48000) && (extid&AC97_EA_VRA)){
++  extstat|=AC97_EA_VRA;
++  snd_intel_codec_write(card,AC97_EXTENDED_STATUS,extstat);
+   if(snd_intel_codec_read(card,AC97_EXTENDED_STATUS)&AC97_EA_VRA)
+    card->vra=1;
+  }
+@@ -364,6 +384,8 @@ static void snd_intel_prepare_playback(struct intel_card_s *card,struct mpxplay_
+ {
+  uint32_t *table_base;
+  unsigned int i,cmd,retry,spdif_rate,period_size_samples;
++ uint16_t vendor_id1=snd_intel_codec_read(card,AC97_VENDOR_ID1);
++ uint16_t vendor_id2=snd_intel_codec_read(card,AC97_VENDOR_ID2);
+ 
+  mpxplay_debugf(ICH_DEBUG_OUTPUT,"prepare playback: period_size_bytes:%d",card->period_size_bytes);
+  // wait until DMA stopped ???
+@@ -399,14 +421,16 @@ static void snd_intel_prepare_playback(struct intel_card_s *card,struct mpxplay_
+   case 44100:spdif_rate=AC97_SC_SPSR_44K;break;
+   default:spdif_rate=AC97_SC_SPSR_48K;break;
+  }
+- cmd=snd_intel_codec_read(card,AC97_SPDIF_CONTROL);
+- cmd&=AC97_SC_SPSR_MASK;
+- cmd|=spdif_rate;
+- snd_intel_codec_write(card,AC97_SPDIF_CONTROL,cmd);
+- pds_delay_10us(10);
+-
+- uint16_t vendor_id1 = snd_intel_codec_read(card, AC97_VENDOR_ID1);
+- uint16_t vendor_id2 = snd_intel_codec_read(card, AC97_VENDOR_ID2);
++ /* CS4299 identifies as CRY0..CRY7 and implements 3Ah as a vendor-reserved
++  * register rather than standard AC97 2.2 S/PDIF.  Writing the generic rate
++  * field there can disconnect the analogue PCM path on ThinkPads. */
++ if(!(vendor_id1==0x4352 && (vendor_id2&0xFFF8)==0x5930)){
++  cmd=snd_intel_codec_read(card,AC97_SPDIF_CONTROL);
++  cmd&=~AC97_SC_SPSR_MASK;
++  cmd|=spdif_rate;
++  snd_intel_codec_write(card,AC97_SPDIF_CONTROL,cmd);
++  pds_delay_10us(10);
++ }
+ 
+  // Analog Devices AD1980: Fix audio routing (set AC97NC, HPSEL and LOSEL bits)
+  // Thanks to dr.zeissler on the Vogons forum for providing register dumps + testing
+@@ -431,19 +455,20 @@ static void snd_intel_prepare_playback(struct intel_card_s *card,struct mpxplay_
+  //set period table
+  table_base=card->virtualpagetable;
+  period_size_samples=card->period_size_bytes/(aui->bits_card>>3);
+- for(i=0; i<ICH_DMABUF_PERIODS; i++){
+-  table_base[i*2]=(uint32_t)pds_cardmem_physicalptr(card->dm,(char *)card->pcmout_buffer+(i*card->period_size_bytes));
++ /*
++  * ICH advances CIV through all 32 BDL slots; LVI does not turn a shorter
++  * descriptor list into a modulo-N ring. Mirror the eight PCM periods over
++  * the complete hardware BDL so the controller never fetches zero entries.
++  */
++ for(i=0; i<ICH_DMABUF_MAX_PERIODS; i++){
++  unsigned int period = i % ICH_DMABUF_PERIODS;
++  table_base[i*2]=(uint32_t)pds_cardmem_physicalptr(card->dm,(char *)card->pcmout_buffer+(period*card->period_size_bytes));
+   /* SIS7012 handles the pcm data in bytes, others are in samples */
+   table_base[i*2+1]= (card->device_type==DEVICE_SIS) ? card->period_size_bytes : period_size_samples;
+   #ifdef SBEMU
+   table_base[i*2+1] |= (ICH_INT_INTERVAL && ((i%ICH_INT_INTERVAL==ICH_INT_INTERVAL-1)) ? (ICH_BD_IOC<<16) : 0);
+   #endif
+  }
+- for(; i < ICH_DMABUF_MAX_PERIODS; ++i)
+- {
+-  table_base[i*2]=0;
+-  table_base[i*2+1]=0;
+- }
+  snd_intel_write_32(card,ICH_PO_BDBAR_REG,(uint32_t)pds_cardmem_physicalptr(card->dm,table_base));
+ 
+  snd_intel_write_8(card,ICH_PO_LVI_REG,(ICH_DMABUF_PERIODS-1)); // set last index
+@@ -779,9 +804,10 @@ static long INTELICH_getbufpos(struct mpxplay_audioout_info_s *aui)
+   //NOTE: align dma pos at the beginning of periods, and free dma space to be in period sizes 
+   //this helps with stability and timing
+   do {
+-  index=snd_intel_read_8(card,ICH_PO_CIV_REG);    // number of current period
+-  if(index>=(ICH_DMABUF_PERIODS-1))
++  index=snd_intel_read_8(card,ICH_PO_CIV_REG);    // number of current BDL slot
++  if(index>=ICH_DMABUF_MAX_PERIODS)
+     continue;
++  index%=ICH_DMABUF_PERIODS;                      // mirrored PCM period
+   bufpos=index*card->period_size_bytes;
+   if(bufpos<aui->card_dmasize){
+    aui->card_dma_lastgoodpos=bufpos;
+@@ -821,19 +847,20 @@ static int INTELICH_IRQRoutine(mpxplay_audioout_info_s* aui)
+   if (status & ICH_PO_SR_LVBCI) {
+       // Last Valid Buffer Completion -- this seems to signify DMA underrun
+ 
+-      // Reset the Last Valid Index, so we don't underrun again immediately
+-      snd_intel_write_8(card, ICH_PO_LVI_REG, (ICH_DMABUF_PERIODS-1));
++      // Re-establish the seven-period lead from the current hardware slot.
++      // CIV is a five-bit index and wraps at 32, not at our eight unique
++      // PCM periods.
++      snd_intel_write_8(card, ICH_PO_LVI_REG,
++              (snd_intel_read_8(card, ICH_PO_CIV_REG) + ICH_DMABUF_PERIODS - 1) % ICH_DMABUF_MAX_PERIODS);
+ 
+       // This kicks off the playback of the buffers (again)
+       snd_intel_write_8(card,ICH_PO_CR_REG, snd_intel_read_8(card, ICH_PO_CR_REG) |
+               ICH_PO_CR_START | ICH_PO_CR_IOCE | ICH_PO_CR_LVBIE);
+-  }
+-
+-  if (status & ICH_PO_SR_BCIS) {
++  } else if (status & ICH_PO_SR_BCIS) {
+       // Buffer Completion Interrupt Status (aka IOC, when the high bit is set in the BDL size field)
+ 
+       // advance the Last Valid Buffer Index
+-      snd_intel_write_8(card, ICH_PO_LVI_REG, (snd_intel_read_8(card,ICH_PO_LVI_REG) + 1) % ICH_DMABUF_PERIODS);
++      snd_intel_write_8(card, ICH_PO_LVI_REG, (snd_intel_read_8(card,ICH_PO_LVI_REG) + 1) % ICH_DMABUF_MAX_PERIODS);
+   }
+ 
+   // acknowledge the interrupt we have seen
+@@ -876,4 +903,4 @@ one_sndcard_info ICH_sndcard_info={
+  &mpxplay_aucards_ac97chan_mixerset[0]
+ };
+ 
+-#endif
+\ No newline at end of file
++#endif

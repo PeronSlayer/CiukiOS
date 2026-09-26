@@ -23,7 +23,10 @@ org 0x7C00
 jmp short boot_start
 nop
 
-; FAT16 BPB (128MB disk)
+; FAT16 BPB (release size supplied by the image builder)
+%ifndef FAT_TOTAL_SECTORS
+%define FAT_TOTAL_SECTORS 262144
+%endif
 bpb_oem_label         db "CIUKFULL"
 bpb_bytes_per_sector  dw 512
 bpb_sectors_per_clu   db 8
@@ -36,7 +39,7 @@ bpb_sectors_per_fat   dw 128
 bpb_sectors_per_trk   dw 63
 bpb_heads             dw 16
 bpb_hidden_secs       dd BOOT_LBA_OFFSET
-bpb_total_secs32      dd 262144
+bpb_total_secs32      dd FAT_TOTAL_SECTORS
 bs_drive_num          db 0x80
 bs_reserved1          db 0
 bs_boot_sig           db 0x29
@@ -45,6 +48,10 @@ bs_volume_label       db "CIUKIOSFULL"
 bs_fs_type            db "FAT16   "
 
 boot_start:
+    ; The BIOS may enter at 07C0:0000 or 0000:7C00. Normalize the code
+    ; address before handing control to the next loader.
+    jmp 0:.normalized
+.normalized:
     cli
     xor ax, ax
     mov ds, ax
@@ -52,6 +59,7 @@ boot_start:
     mov ss, ax
     mov sp, 0x7C00
     sti
+    cld
 
     mov [boot_drive], dl
     mov [bs_drive_num], dl
@@ -66,7 +74,15 @@ boot_start:
     mov byte [retry_count], 3
 
 .read_stage1:
-%if BOOT_LBA_OFFSET != 0
+    ; EDD is independent of the physical drive's translated CHS geometry.
+    ; Firmware can change the packet's transfer count on a failed read.
+    mov word [stage1_dap+2], STAGE1_LOAD_SECTORS
+    mov si, stage1_dap
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    call boot_disk_io
+    jnc .stage1_ok
+%if BOOT_LBA_OFFSET == 63
     mov ax, STAGE1_SEG
     mov es, ax
     xor bx, bx
@@ -76,17 +92,9 @@ boot_start:
     mov cl, 2
     mov dh, 1
     mov dl, [boot_drive]
-    int 0x13
+    call boot_disk_io
     jnc .stage1_ok
-.try_lba:
-%endif
-
-    mov si, stage1_dap
-    mov ah, 0x42
-    mov dl, [boot_drive]
-    int 0x13
-    jnc .stage1_ok
-
+%elif BOOT_LBA_OFFSET == 0
     mov ax, STAGE1_SEG
     mov es, ax
     xor bx, bx
@@ -96,12 +104,15 @@ boot_start:
     mov cl, 2
     mov dh, 0
     mov dl, [boot_drive]
-    int 0x13
+    call boot_disk_io
     jnc .stage1_ok
+%endif
+    ; Other partition offsets require EDD. Never interpret an unoffset
+    ; sector as Stage1 after a failed partition-relative read.
 
     xor ah, ah
     mov dl, [boot_drive]
-    int 0x13
+    call boot_disk_io
     dec byte [retry_count]
     jnz .read_stage1
 
@@ -123,6 +134,26 @@ halt:
     cli
     hlt
     jmp halt
+
+; Only CF is an output here. A disk BIOS must not replace the loader's
+; packet pointer, data segments or retry state. Boot runs with IRQs enabled.
+boot_disk_io:
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+    stc
+    sti
+    int 0x13
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    cld
+    sti
+    ret
 
 serial_init:
     mov dx, 0x03F8 + 1
@@ -149,17 +180,32 @@ serial_init:
     ret
 
 print_bios_string:
+    cld
     lodsb
     test al, al
     jz .done
     mov ah, 0x0E
     mov bx, 0x0007
+    pushf
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
     int 0x10
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    popf
+    cld
     jmp print_bios_string
 .done:
     ret
 
 print_serial_string:
+    cld
     lodsb
     test al, al
     jz .done
@@ -170,22 +216,30 @@ print_serial_string:
 
 serial_putc:
     push ax
+    push cx
     push dx
     mov ah, al
+    mov cx, 0x0400
 .wait:
     mov dx, 0x03F8 + 5
     in al, dx
     test al, 0x20
-    jz .wait
+    jnz .ready
+    loop .wait
+    jmp .done
+.ready:
     mov dx, 0x03F8
     mov al, ah
     out dx, al
+.done:
     pop dx
+    pop cx
     pop ax
     ret
 
 boot_drive  db 0
 retry_count db 0
+align 4, db 0
 stage1_dap:
     db 0x10
     db 0

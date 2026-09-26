@@ -72,6 +72,7 @@ stage1_loader_start:
     ; direct-CD D: build becomes an installed C: build without rewriting the
     ; FAT-resident CIUKIDOS image.
     mov byte [loader_default_drive], DOS_DEFAULT_DRIVE_INDEX
+    cld                         ; keep Setup's immediate patch offset unchanged
 
     call serial_init
     mov si, msg_loader_ready
@@ -411,6 +412,8 @@ fat16_next_cluster:
 
 ; Input DX:AX=relative LBA, ES:BX=512-byte destination.
 ; EDD is preferred; a geometry-derived CHS path is the bounded fallback.
+; Preserve DI: the FAT caller keeps its entry offset there, while INT 13h
+; AH=08h may return a firmware table through ES:DI during CHS discovery.
 read_sector_rel32:
     mov [cs:io_buffer_off], bx
     mov [cs:io_buffer_seg], es
@@ -419,13 +422,14 @@ read_sector_rel32:
     mov [cs:disk_packet_lba], ax
     mov [cs:disk_packet_lba + 2], dx
 
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    pushad
     push ds
     push es
+    push fs
+    push gs
+    ; A failed EDD request can leave a partial/zero transfer count behind.
+    ; Each invocation still requests exactly one sector.
+    mov word [cs:disk_packet+2], 1
     mov [cs:disk_packet_off], bx
     mov [cs:disk_packet_seg], es
     push cs
@@ -433,6 +437,7 @@ read_sector_rel32:
     mov si, disk_packet
     mov dl, [cs:boot_drive]
     mov ah, 0x42
+    stc
     sti
     int 0x13
     jnc .success
@@ -447,13 +452,13 @@ read_sector_rel32:
 .failure:
     stc
 .done:
+    pop gs
+    pop fs
     pop es
     pop ds
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    popad
+    cld
+    sti
     ret
 
 read_sector_chs32:
@@ -461,6 +466,7 @@ read_sector_chs32:
     mov [cs:chs_lba_hi], dx
     mov dl, [cs:boot_drive]
     mov ah, 0x08
+    stc
     sti
     int 0x13
     jc .fallback_geometry
@@ -501,6 +507,7 @@ read_sector_chs32:
     mov dl, [cs:boot_drive]
     mov ah, 0x02
     mov al, 1
+    stc
     sti
     int 0x13
     ret
@@ -613,13 +620,27 @@ serial_init:
     ret
 
 print_string_dual:
+    cld
     lodsb
     test al, al
     jz .done
     push ax
     mov ah, 0x0E
     mov bx, 0x0007
+    pushf
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
     int 0x10
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    popf
+    cld
     pop ax
     call serial_putc
     jmp print_string_dual
@@ -628,17 +649,24 @@ print_string_dual:
 
 serial_putc:
     push ax
+    push cx
     push dx
     mov ah, al
+    mov cx, 0x0400
 .wait:
     mov dx, 0x03FD
     in al, dx
     test al, 0x20
-    jz .wait
+    jnz .ready
+    loop .wait
+    jmp .done
+.ready:
     mov dx, 0x03F8
     mov al, ah
     out dx, al
+.done:
     pop dx
+    pop cx
     pop ax
     ret
 
@@ -673,6 +701,7 @@ chs_lba_hi dw 0
 chs_spt dw FAT_SPT
 chs_heads dw FAT_HEADS
 
+align 4, db 0
 disk_packet:
     db 0x10, 0
     dw 1

@@ -1,0 +1,93 @@
+--- a/MODETEST.ASM
++++ b/MODETEST.ASM
+@@ -388,6 +388,8 @@
+ 	mov	ax,4F02h	; set SuperVGA mode
+ 	mov	bx,si
+ 	int	10h
++	cmp	ax,4Fh
++	jne	@@mode_failed
+ 
+ 	test	si,4000h	; linear mode?
+ 	jz	@@fill_framebuffer
+@@ -508,6 +510,7 @@
+ 	test	di,di
+ 	jnz	@F
+ 	call	next_bank
++	jc	@@mode_failed
+ @@:	dec	bp
+ 	jz	@@nextline
+ 	cmp	ah,1
+@@ -517,6 +520,7 @@
+ 	test	di,di
+ 	jnz	@F
+ 	call	next_bank
++	jc	@@mode_failed
+ @@:	dec	bp
+ 	jz	@@nextline
+ 	cmp	ah,2
+@@ -526,6 +530,7 @@
+ 	test	di,di
+ 	jnz	@F
+ 	call	next_bank
++	jc	@@mode_failed
+ @@:	dec	bp
+ 	jz	@@nextline
+ 	cmp	ah,3
+@@ -535,6 +540,7 @@
+ 	test	di,di
+ 	jnz	@F
+ 	call	next_bank
++	jc	@@mode_failed
+ @@:	dec	bp
+ 	jnz	@@lineloop
+ @@nextline:
+@@ -587,6 +593,13 @@
+ 	mov	ax,3
+ 	int	10h
+ 	ret			; back to int 20h in PSP! :3
++
++@@mode_failed:
++	; Failed modesets/banks must not leave us drawing into an invalid window.
++	mov	ax,3
++	int	10h
++	lea	dx,modefail
++	jmp	@@failure
+ 
+ @@print_usage:
+ 	lea	dx,usage
+@@ -726,8 +739,25 @@
+ 	xor	bx,bx		; set (BH=0) window A (BL=0)
+ 	mov	dx,[curbank]
+ 	inc	dx
+-	call	[lpWinPos]	; call far window positioning function
+-	mov	[curbank],dx
++	mov	[curbank],dx	; BIOS far functions may destroy DX
++	mov	ax,ds
++	cmp	ax,(dsdesc-gdt)
++	je	@@linear
++	; Banked tests use the portable interrupt entry, including AX and status.
++	; A firmware far pointer may be absent or depend on private ROM state.
++	mov	ax,4F05h
++	int	10h
++	cmp	ax,4Fh
++	jne	@@failed
++	jmp	short @@ok
++@@linear:
++	call	[lpWinPos]	; our own bankemu, only in the LFB test
++@@ok:
++	clc
++	jmp	short @@done
++@@failed:
++	stc
++@@done:
+ 
+ 	pop	ax
+ 	pop	bx
+@@ -753,6 +783,7 @@
+ .data
+ vm86	db "Need to be in Real Mode, try rebooting into DOS without EMM386",10,13,'$'
+ colon	db ": ","$"
++modefail db "VBE mode or bank request failed; text mode restored",13,10,"$"
+ failure	db "VBE call to query this mode failed - either the mode doesn't exist",0Dh,0Ah
+ 	db "or there is no SVGA BIOS at all!",'$'
+ nohwsup	db "Not supported by your hardware",'$'

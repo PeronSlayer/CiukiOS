@@ -44,7 +44,7 @@ Define a native legacy x86 (BIOS) architecture, without UEFI dependency in the n
 
 1. Phase 5 is closed for both `full` and `full-cd`: Stage1 is a 1,542-byte loader-only component at `0x0800`, and stage0 loads 8 sectors while retaining the 72-sector reserved BPB/disk slot.
 2. The wholesale `CIUKIDOS.SYS` DOS kernel is resident at `0x0900`. Its stable image/service contract is `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and `CHAIN=0`; Stage1 is no longer a fallback DOS owner.
-3. The current kernel artifact is 43,254 bytes and the enforced maximum is `0xA900` (43,264 bytes). Four external EXEC-state frames occupy `0x1400-0x1457`; Stage2 starts at `0x1480`.
+3. The current kernel artifacts are 43,167 bytes on `full` and 43,162 bytes on the D:-default `full-cd` profile; the enforced maximum is `0xA900` (43,264 bytes). Four external EXEC-state frames occupy `0x1400-0x1457`; Stage2 starts at `0x1480`.
 4. The closure bundle passes static ownership and eight negative ABI cases, normal and high-LBA `full`/`full-cd` boot, nested COM/MZ and TSR restoration, direct-CD-to-HDD installation, CuteMouse, focused doom-vanille and WOLF lanes, DRVLOAD smoke, and repeated shell stability.
 5. This boundary does not close Phase 6. Full JFT/SFT depth and the required external-application corpus remain explicit backlog.
 

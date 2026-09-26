@@ -1,5 +1,6 @@
 bits 16
 org 0x0100
+%include "src/com/dos_window_abi.inc"
 
 %define INPUT_BUF_MAX 126
 %define HISTORY_MAX 8
@@ -27,22 +28,71 @@ start:
     push ds
     pop es
 
+%ifdef COMMAND_COMPAT
+    call command_compat_init
+    cmp byte [command_once_pending], 1
+    je main_loop
+%endif
+
+%ifndef COMMAND_COMPAT
+    call history_allocate
+    ; Protect BIOS video calls, then select Live/Setup before probing graphics.
+    call startup_display_services
+    call startup_driver_services
+    call startup_select_session
+    test al,al
+    jnz main_loop
+%endif
+
+%ifndef COMMAND_COMPAT
+    jmp ui_enter
+%else
     call redraw_title_bar
     mov si, msg_banner_body
     call print_dual_dollar_string
+%endif
 
 main_loop:
+%ifndef COMMAND_COMPAT
+    cmp byte [ui_request],1
+    je ui_enter
+    cmp byte [ui_command_running],0
+    jne ui_command_return
+%endif
+%ifdef COMMAND_COMPAT
+    call command_window_poll
+    cmp byte [command_once_done], 0
+    jne command_compat_terminate
+%endif
     push cs
     pop ds
     push ds
     pop es
 
     call poll_pending_power_action
+%ifdef COMMAND_COMPAT
+    cmp byte [command_once_pending], 1
+    je .use_command_tail
+%endif
     call print_prompt
 
     call read_line
+    jmp .line_ready
+
+%ifdef COMMAND_COMPAT
+.use_command_tail:
+    mov byte [command_once_pending], 0
+    mov al, [command_keep_open]
+    xor al, 1
+    mov [command_once_done], al
+    xor cx, cx
+    mov cl, [command_once_length]
+    mov si, input_buf
+%endif
+.line_ready:
     call skip_spaces
     jcxz main_loop
+    mov [cmd_start], si
 
     mov di, cmd_buf
 .copy_cmd:
@@ -65,6 +115,10 @@ main_loop:
     mov [echo_ptr], si
     mov [echo_len], cx
 
+%ifndef COMMAND_COMPAT
+    call desktop_dispatch
+    jnc main_loop
+%endif
     cmp byte [cmd_buf + 0], 'H'
     jne .check_ver
     cmp byte [cmd_buf + 1], 'E'
@@ -132,11 +186,30 @@ main_loop:
     cmp byte [cmd_buf + 3], 0
     jne .check_cd
 .do_cls:
+%ifndef COMMAND_COMPAT
+    cmp byte [vc_active], 1
+    jne .text_cls
+    call vc_clear
+    call vc_title
+    jmp main_loop
+.text_cls:
+%endif
+    ; BDA 40:84 is the last displayed row on EGA/VGA.  Respect the 80x50
+    ; profile instead of clearing only the historic first 25 rows.
+    push es
+    mov ax, 0x0040
+    mov es, ax
+    mov dh, [es:0x0084]
+    cmp dh, 24
+    jae .cls_rows_ready
+    mov dh, 24
+.cls_rows_ready:
+    pop es
+    mov dl, 79
     mov ax, 0x0600
     mov bh, 0x07
     xor cx, cx
-    mov dx, 0x184F
-    int 0x10
+    call shell_bios
     call redraw_title_bar
     jmp main_loop
 
@@ -165,9 +238,11 @@ main_loop:
     cmp byte [cmd_buf + 4], 0
     jne .check_power
 .do_exit:
-    mov si, msg_exit_disabled
-    call print_dual_dollar_string
-    jmp main_loop
+%ifdef COMMAND_COMPAT
+    jmp command_compat_terminate
+%else
+    jmp ui_enter
+%endif
 
 .check_power:
     cmp byte [cmd_buf + 0], 'R'
@@ -811,7 +886,7 @@ main_loop:
     jmp main_loop
 
 .unknown:
-    mov si, input_buf
+    mov si, [cmd_start]         ; leading spaces were already skipped
     mov di, src_path
 .exec_name_parse:
     mov al, [si]
@@ -886,23 +961,88 @@ main_loop:
     je .exec_not_found
     jmp .exec_fail
 .exec_found:
-    ; External graphical programs may restore text mode while clearing the
-    ; complete display.  Re-establish the shell-owned title bar and cursor
-    ; position before printing the next prompt.  This is intentionally part
-    ; of the generic EXEC return path, not a Windows-specific exception.
-    call redraw_title_bar
+%ifndef COMMAND_COMPAT
+    ; Consume the actual child's status once. A successful explicit display
+    ; choice can leave safe boot; failed/cancelled settings keep it intact.
+    mov ah, 0x4D
+    int 0x21
+    mov [ui_child_exit], al
+    test al, al
+    jnz .display_choice_done
+    mov si, src_path
+    mov di, si
+.display_basename:
+    lodsb
+    cmp al, '\'
+    je .display_separator
+    cmp al, ':'
+    jne .display_name_next
+.display_separator:
+    mov di, si
+.display_name_next:
+    test al, al
+    jnz .display_basename
+    cmp dword [di], 'VGAS'
+    jne .display_choice_done
+    cmp dword [di+4], 'ETUP'
+    jne .display_choice_done
+    cmp byte [di+8], 0
+    je .display_choice_applied
+    cmp dword [di+8], '.COM'
+    jne .display_choice_done
+    cmp byte [di+12], 0
+    jne .display_choice_done
+.display_choice_applied:
+    mov byte [vc_force_safe], 0
+.display_choice_done:
+%endif
+%ifdef COMMAND_COMPAT
+    mov ah, 0x4D
+    int 0x21
+    mov [command_exit_code], al
+    ; `/C` is returning directly to its caller.  The caller, rather than this
+    ; transient command interpreter, owns the display that the child left.
+    cmp byte [command_once_done], 0
+    jne command_compat_terminate
+%endif
+    ; Restore graphics children, but retain output from text commands such as
+    ; VGASETUP. An unconditional mode set erased their results immediately.
+    call restore_shell_video_state
     jmp main_loop
 .exec_not_found:
+%ifndef COMMAND_COMPAT
+    mov al,[ui_command_running]
+    mov [ui_exec_error],al
+%endif
+%ifdef COMMAND_COMPAT
+    mov byte [command_exit_code], 1
+%endif
+%ifndef COMMAND_COMPAT
+    call restore_shell_video_state
+%endif
     mov si, msg_exec_not_found
     call print_dual_dollar_string
     jmp main_loop
 .exec_fail:
+%ifndef COMMAND_COMPAT
+    push ax
+    mov al,[ui_command_running]
+    mov [ui_exec_error],al
+    pop ax
+%endif
+%ifdef COMMAND_COMPAT
+    mov byte [command_exit_code], 1
+%endif
+%ifndef COMMAND_COMPAT
+    push ax
+    call restore_shell_video_state
+    pop ax
+%endif
     cmp ax, 0x0008
     je .exec_no_memory
     cmp ax, 0x000B
     je .exec_bad_format
-    mov si, msg_exec_fail
-    call print_dual_dollar_string
+    call print_exec_error
     jmp main_loop
 .exec_no_memory:
     mov si, msg_exec_no_mem
@@ -912,6 +1052,33 @@ main_loop:
     mov si, msg_exec_bad_format
     call print_dual_dollar_string
     jmp main_loop
+
+%ifdef COMMAND_COMPAT
+command_compat_terminate:
+    mov al, [command_exit_code]
+    mov ah, 0x4C
+    int 0x21
+    hlt
+    jmp command_compat_terminate
+
+; Only the native window launcher opts into this private close handshake.
+; A normal COMMAND.COM never sends unknown requests to firmware.
+command_window_poll:
+    cmp byte [command_window],1
+    jne .done
+    pushad
+    mov ax,DW_QUERY_AX
+    mov bx,DW_QUERY_BX
+    int 0x10
+    cmp ax,DW_QUERY_REPLY
+    jne .restore
+    test dx,1
+    jnz command_compat_terminate
+.restore:
+    popad
+.done:
+    ret
+%endif
 
 handle_power_command:
     push ax
@@ -1196,6 +1363,90 @@ skip_spaces:
 .done:
     ret
 
+%ifdef COMMAND_COMPAT
+; COMMAND.COM compatibility entry.  Normal DOS applications commonly invoke
+; COMSPEC with `/C command`; execute that command once through the same parser
+; used by the interactive shell and then return through DOS AH=4Ch.  With no
+; `/C`, this binary is an ordinary nested interactive command interpreter in
+; which EXIT/QUIT terminate only the nested process.
+command_compat_init:
+    mov byte [command_once_pending], 0
+    mov byte [command_once_done], 0
+    mov byte [command_once_length], 0
+    xor cx, cx
+    mov cl, [0x0080]
+    mov si, 0x0081
+.skip_leading:
+    jcxz .done
+    cmp byte [si], ' '
+    je .skip_one
+    cmp byte [si], 0x09
+    jne .check_switch
+.skip_one:
+    inc si
+    dec cx
+    jmp .skip_leading
+.check_switch:
+    cmp cx, 2
+    jb .done
+    mov al, [si]
+    cmp al, '/'
+    je .switch_prefix
+    cmp al, '-'
+    jne .done
+.switch_prefix:
+    mov al, [si + 1]
+    and al, 0xDF
+    cmp al,'W'
+    jne .standard_switch
+    mov byte [command_window],1
+    add si,2
+    sub cx,2
+    jmp .skip_leading
+.standard_switch:
+    cmp al, 'C'
+    je .switch_valid
+    cmp al, 'K'
+    jne .done
+    mov byte [command_keep_open], 1
+.switch_valid:
+    add si, 2
+    sub cx, 2
+.skip_command_space:
+    jcxz .arm
+    cmp byte [si], ' '
+    je .skip_command_one
+    cmp byte [si], 0x09
+    jne .copy
+.skip_command_one:
+    inc si
+    dec cx
+    jmp .skip_command_space
+.copy:
+    mov di, input_buf
+    xor bx, bx
+.copy_loop:
+    jcxz .copy_done
+    cmp bx, INPUT_BUF_MAX
+    jae .copy_done
+    mov al, [si]
+    cmp al, 0x0D
+    je .copy_done
+    mov [di], al
+    inc si
+    inc di
+    inc bx
+    dec cx
+    jmp .copy_loop
+.copy_done:
+    mov byte [di], 0
+    mov [command_once_length], bl
+.arm:
+    mov byte [command_once_pending], 1
+.done:
+    ret
+%endif
+
 upcase_al:
     cmp al, 'a'
     jb .done
@@ -1205,123 +1456,22 @@ upcase_al:
 .done:
     ret
 
-read_line:
-    xor bx, bx
-    mov byte [history_nav], 0xFF
-    mov byte [input_draw_len], 0
-    mov byte [input_buf], 0
+%include "src/com/shell_input.inc"
 
-.read:
-    xor ah, ah
-    int 0x16
-    cmp al, 0x0D
-    je .done
-    cmp al, 0x03
-    je .cancel
-    cmp al, 0x08
-    je .backspace
-    test al, al
-    jz .extended
-    cmp al, 0x20
-    jb .read
-    cmp bx, INPUT_BUF_MAX
-    jae .read
-    mov [input_buf + bx], al
-    inc bx
-    mov byte [input_buf + bx], 0
-    mov byte [input_draw_len], bl
-    mov byte [history_nav], 0xFF
-    call dual_putc
-    jmp .read
-
-.extended:
-    cmp ah, 0x48
-    je .history_up
-    cmp ah, 0x50
-    je .history_down
-    jmp .read
-
-.backspace:
-    cmp bx, 0
-    je .read
-    dec bx
-    mov byte [input_buf + bx], 0
-    mov byte [input_draw_len], bl
-    mov byte [history_nav], 0xFF
-    mov al, 0x08
-    call dual_putc
-    mov al, ' '
-    call dual_putc
-    mov al, 0x08
-    call dual_putc
-    jmp .read
-
-.history_up:
-    call history_recall_up
-    jnc .read
-    call redraw_input_line
-    jmp .read
-
-.history_down:
-    call history_recall_down
-    jnc .read
-    call redraw_input_line
-    jmp .read
-
-.cancel:
-    xor bx, bx
-    mov byte [input_buf], 0
-    mov byte [history_nav], 0xFF
-    mov byte [input_draw_len], 0
-    mov si, msg_ctrl_c
-    call print_dual_dollar_string
-    xor cx, cx
-    mov si, input_buf
-    ret
-
+%ifndef COMMAND_COMPAT
+; Persistent, PSP-owned history is separate from the 64 KiB shell code arena.
+; COMMAND.COM keeps its original inline buffer and binary layout.
+history_allocate:
+    pusha
+    mov bx,(HISTORY_MAX*HISTORY_ENTRY_LEN)/16
+    mov ah,0x48
+    int 0x21
+    jc .done
+    mov [history_segment],ax
 .done:
-    mov byte [input_buf + bx], 0
-    call history_try_store
-    mov cx, bx
-    mov si, msg_crlf
-    call print_dual_dollar_string
-    mov si, input_buf
+    popa
     ret
-
-redraw_input_line:
-    push ax
-    push cx
-    push si
-
-    mov al, 0x0D
-    call dual_putc
-    call print_prompt
-    mov si, input_buf
-    mov cx, bx
-    call print_dual_cx_string
-
-    xor ax, ax
-    mov al, [input_draw_len]
-    cmp ax, bx
-    jbe .save_len
-    sub ax, bx
-    mov cx, ax
-    mov al, ' '
-.erase_tail:
-    call dual_putc
-    loop .erase_tail
-    mov cx, ax
-    mov al, 0x08
-.back_tail:
-    call dual_putc
-    loop .back_tail
-
-.save_len:
-    mov byte [input_draw_len], bl
-    pop si
-    pop cx
-    pop ax
-    ret
+%endif
 
 history_try_store:
     push ax
@@ -1329,6 +1479,12 @@ history_try_store:
     push cx
     push si
     push di
+%ifndef COMMAND_COMPAT
+    push es
+    cmp word [history_segment],0
+    je .done
+    mov es,[history_segment]
+%endif
 
     mov si, input_buf
     mov cx, bx
@@ -1350,7 +1506,15 @@ history_try_store:
     mov al, [history_next]
     call history_slot_to_di
     mov si, input_buf
+%ifdef COMMAND_COMPAT
     call copy_z_to_di
+%else
+.copy_history:
+    lodsb
+    stosb
+    test al,al
+    jnz .copy_history
+%endif
 
     mov al, [history_next]
     inc al
@@ -1364,6 +1528,9 @@ history_try_store:
     mov [history_count], al
 
 .done:
+%ifndef COMMAND_COMPAT
+    pop es
+%endif
     pop di
     pop si
     pop cx
@@ -1437,6 +1604,10 @@ history_load_nav_entry:
     push ax
     push si
     push di
+%ifndef COMMAND_COMPAT
+    push fs
+    mov fs,[history_segment]
+%endif
 
     mov al, [history_next]
     dec al
@@ -1449,7 +1620,11 @@ history_load_nav_entry:
     xor bx, bx
 
 .copy:
+%ifdef COMMAND_COMPAT
     lodsb
+%else
+    fs lodsb
+%endif
     stosb
     test al, al
     jz .done
@@ -1457,6 +1632,9 @@ history_load_nav_entry:
     jmp .copy
 
 .done:
+%ifndef COMMAND_COMPAT
+    pop fs
+%endif
     pop di
     pop si
     pop ax
@@ -1471,7 +1649,11 @@ history_compare_input_di:
 
 .loop:
     mov al, [si]
+%ifdef COMMAND_COMPAT
     cmp al, [di]
+%else
+    cmp al, [es:di]
+%endif
     jne .not_equal
     test al, al
     jz .equal
@@ -1911,6 +2093,35 @@ pop_dst_component:
     mov byte [di], 0
     ret
 
+; Preserve the actual DOS failure value before text/graphics output changes AX.
+print_exec_error:
+    push ax
+    push bx
+    push cx
+    push si
+    mov bx, ax
+    mov si, msg_exec_fail
+    call print_dual_dollar_string
+    mov cx, 4
+.digit:
+    rol bx, 4
+    mov al, bl
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .emit
+    add al, 'A' - '9' - 1
+.emit:
+    call dual_putc
+    loop .digit
+    mov si, msg_exec_error_end
+    call print_dual_dollar_string
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; Print one FindFirst/FindNext result from the DTA, tagging directories.
 dir_print_entry:
     push ax
@@ -1957,7 +2168,41 @@ print_dual_cx_string:
 .done:
     ret
 
+; Keep BIOS scratch registers and flags out of the DOS command parser and
+; EXEC caller. AX is the BIOS result; query-only BX/CX/DX outputs are captured
+; separately, so setter calls cannot silently replace live shell registers.
+; This path also exists in COMMAND.COM, which does not include the VBE UI.
+shell_bios:
+    pushf
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+    int 0x10
+    mov [cs:shell_bios_ax],ax
+    mov [cs:shell_bios_bx],bx
+    mov [cs:shell_bios_cx],cx
+    mov [cs:shell_bios_dx],dx
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    mov ax,[cs:shell_bios_ax]
+    popf
+    cld
+    ret
+shell_bios_ax dw 0
+shell_bios_bx dw 0
+shell_bios_cx dw 0
+shell_bios_dx dw 0
+
 redraw_title_bar:
+%ifndef COMMAND_COMPAT
+    cmp byte [cs:vc_active], 1
+    je vc_title
+%endif
     push ax
     push bx
     push cx
@@ -1968,13 +2213,13 @@ redraw_title_bar:
     mov bh, TITLE_BAR_ATTR
     xor cx, cx
     mov dx, 0x004F
-    int 0x10
+    call shell_bios
 
     mov ax, 0x0200
     xor bx, bx
     xor dh, dh
     mov dl, TITLE_BAR_COL
-    int 0x10
+    call shell_bios
 
     mov si, msg_title_bar
     call print_dual_dollar_string
@@ -1983,7 +2228,7 @@ redraw_title_bar:
     xor bx, bx
     mov dh, 1
     xor dl, dl
-    int 0x10
+    call shell_bios
 
     pop si
     pop dx
@@ -1992,14 +2237,125 @@ redraw_title_bar:
     pop ax
     ret
 
+; Preserve an ordinary 80-column, page-zero text child's output. Graphics,
+; nonstandard text modes and alternate pages require a fresh mode 03h.
+restore_shell_video_state:
+    push ax
+    push bx
+    push cx
+    push dx
+    push ds
+    push es
+
+    mov ah, 0x0F
+    call shell_bios
+    mov bx,[cs:shell_bios_bx] ; BH is the BIOS active display page
+    and al, 0x7F
+    cmp al, 3
+    jne .reset_mode
+    cmp ah, 80
+    jne .reset_mode
+    or bh, bh
+    jnz .reset_mode
+    mov ah, 0x03
+    xor bx, bx
+    call shell_bios
+    mov dx,[cs:shell_bios_dx] ; preserve the child's actual text cursor
+    jmp .have_cursor
+.reset_mode:
+    mov ax, 0x0003
+    call shell_bios
+    mov dx, 0x0100
+.have_cursor:
+    push dx
+
+    call shell_apply_text_profile
+
+    mov ax, 0x0500
+    call shell_bios
+
+    mov ax, 0x0100
+    mov cx, 0x0607
+    call shell_bios
+
+    mov ax, 0x1003
+    xor bx, bx
+    call shell_bios
+
+    call redraw_title_bar
+    pop dx
+    ; Loading a 25-row profile after a 50-row child can shorten the screen.
+    mov ax, 0x0040
+    mov es, ax
+    cmp dh, [es:0x84]
+    jbe .cursor_valid
+    mov dh, [es:0x84]
+.cursor_valid:
+    mov ah, 0x02
+    xor bx, bx
+    call shell_bios
+    pop es
+    pop ds
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%ifndef COMMAND_COMPAT
+    ; A program launched from the desktop returns straight to the desktop,
+    ; which sets its own mode: a console mode set here would only add two
+    ; visible monitor resyncs and a clear before the first desktop frame.
+    cmp byte [ui_command_running], 2
+    je .console_done
+    pushad
+    call vc_load_profile
+    cmp word [vc_mode], 0
+    je .profile_done
+    mov byte [vc_import_text], 1
+    call vc_begin
+    jc .profile_done
+    call vc_title
+.profile_done:
+    popad
+.console_done:
+%endif
+    ret
+
 dual_putc:
     push ax
     push dx
 
+%ifndef COMMAND_COMPAT
+    cmp byte [cs:vc_active], 1
+    jne .text
+    push ax
+    mov al, [cs:shell_output_color]
+    mov [cs:vc_attr], al
+    pop ax
+    call vc_putc
+    jmp .serial
+.text:
+    cmp byte [cs:shell_output_color], 7
+    je .plain
+    cmp al, 32
+    jb .plain
+    push ax
+    push bx
+    push cx
+    mov ah, 9
+    xor bh, bh
+    mov bl, [cs:shell_output_color]
+    mov cx, 1
+    call shell_bios
+    pop cx
+    pop bx
+    pop ax
+.plain:
+%endif
     mov dl, al
     mov ah, 0x02
     int 0x21
 
+.serial:
     pop dx
     pop ax
 
@@ -2313,7 +2669,11 @@ exec_try_current:
     mov si, ext_exe
     call where_build_relative_candidate
     call exec_run_candidate
+    jnc .found
 .done:
+    ; The AX comparisons above change CF. Preserve a failed EXEC as failure
+    ; when its error stops the extension search (for example disk error 5).
+    stc
     ret
 .found:
     clc
@@ -2336,7 +2696,9 @@ exec_try_prefixed:
     mov si, ext_exe
     call where_build_prefixed_candidate
     call exec_run_candidate
+    jnc .found
 .done:
+    stc
     ret
 .found:
     clc
@@ -2394,7 +2756,145 @@ setup_exec_block:
     mov word [exec_fcb2_seg], bx
     ret
 
+startup_display_services:
+    push ax
+    push bx
+    push dx
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    call setup_exec_block
+
+    mov byte [exec_tail], 0
+    mov byte [exec_tail + 1], 0x0D
+    mov dx, startup_auxstack_path
+    mov bx, exec_env_seg
+    mov ax, 0x4B00
+    int 0x21
+    jc .probe
+    mov ax, 0x4D00
+    int 0x21
+
+.probe:
+.sound_done:
+    call shell_apply_text_profile
+    ; ui_video_begin selects graphics once; do not set and clear VBE twice.
+.done:
+    pop es
+    pop ds
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+startup_play_sound:
+%ifndef COMMAND_COMPAT
+    cmp byte [driver_startup_audio],0
+    je .skip
+%endif
+    pushad
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    call setup_exec_block
+    mov byte [exec_tail], 3
+    mov word [exec_tail + 1], ' /'
+    mov word [exec_tail + 3], 0x0D51 ; Q, CR
+    mov dx, startup_sound_path
+    mov bx, exec_env_seg
+    mov ax, 0x4B00
+    int 0x21
+    jc .sound_done
+    mov ax, 0x4D00
+    int 0x21
+.sound_done:
+    pop es
+    pop ds
+    popad
+.skip:
+    ret
+
+shell_apply_text_profile:
+    push ax
+    push bx
+    push cx
+    push dx
+    push ds
+    push cs
+    pop ds
+    mov word [shell_text_profile], '25'
+    mov dx, shell_text_profile_path
+    mov ax, 0x3D00
+    int 0x21
+    jc .apply
+    mov bx, ax
+    mov dx, shell_text_profile
+    mov cx, 2
+    mov ah, 0x3F
+    int 0x21
+    pushf
+    push ax
+    mov ah, 0x3E
+    int 0x21
+    pop ax
+    popf
+    jc .default
+    cmp ax, 2
+    je .apply
+.default:
+    mov word [shell_text_profile], '25'
+.apply:
+    cmp word [shell_text_profile], '50'
+    je .rows_50
+    mov ax, 0x1114
+    jmp .set_font
+.rows_50:
+    mov ax, 0x1112
+.set_font:
+    xor bx, bx
+    call shell_bios
+    pop ds
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 exec_run_candidate:
+%ifndef COMMAND_COMPAT
+    ; DOS children own their hardware mode. Restore the shared console once
+    ; EXEC returns, including search failures; keep their text output.
+    cmp byte [cs:vc_active], 1
+    jne .native
+    call vc_end
+.native:
+    ; The return path redraws the title over row 0. On a fresh text screen
+    ; start the child on row 1 so its first output line survives.
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ah, 0x03
+    xor bh, bh
+    call shell_bios
+    mov dx,[cs:shell_bios_dx]
+    test dx, dx
+    jnz .cursor_ready
+    mov ah, 0x02
+    mov dh, 1
+    call shell_bios
+.cursor_ready:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%endif
     push ds
     push es
     push cs
@@ -2575,16 +3075,43 @@ build_exec_tail:
     ret
 
 reboot_system:
-    push cs
-    pop ds
-    push cs
-    pop es
+    ; INT 19h only reloads the bootstrap loader.  It does not reset the PCI
+    ; devices/chipset and on real ThinkPads leaves the machine half alive.
+    ; Ask the chipset for a system reset first, then use the legacy 8042
+    ; pulse and a triple fault as progressively more generic fallbacks.
+    cli
     xor ax, ax
-    mov cx, ax
-    mov dx, ax
-    int 0x19
-    hlt
-    jmp reboot_system
+    mov ds, ax
+    mov word [0x0472], ax              ; cold POST, never resume stage 1 state
+
+    mov dx, 0x0CF9
+    mov al, 0x02                       ; reset CPU request
+    out dx, al
+    or al, 0x04                        ; system reset (ICH3-M and compatibles)
+    out dx, al
+
+    mov cx, 0x1000
+.wait_8042:
+    in al, 0x64
+    test al, 0x02                      ; controller input buffer busy?
+    jz .pulse_8042
+    loop .wait_8042
+    jmp .triple_fault
+.pulse_8042:
+    mov al, 0xFE                       ; pulse RESET# low
+    out 0x64, al
+    mov cx, 0x1000
+.wait_reset:
+    nop
+    loop .wait_reset
+
+.triple_fault:
+    lidt [cs:.null_idt]
+    int 3
+    jmp 0xFFFF:0x0000                  ; final BIOS-entry fallback
+.null_idt:
+    dw 0
+    dd 0
 
 shutdown_system:
     push cs
@@ -2661,6 +3188,7 @@ apm_shutdown_system:
     ret
 
 msg_title_bar db 'CiukiOS pre-Alpha v0.7.1', 0x0D, 0x0A, '$'
+startup_sound_path db '\SYSTEM\BOOTSND.COM', 0
 msg_banner_body db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
                 db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
@@ -2688,7 +3216,8 @@ msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
 msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
                   db 'use reboot or shutdown', 0x0D, 0x0A, '$'
 msg_exec_not_found db 'command: not found', 0x0D, 0x0A, '$'
-msg_exec_fail db 'exec: cannot execute', 0x0D, 0x0A, '$'
+msg_exec_fail db 'exec: cannot execute (DOS error ', '$'
+msg_exec_error_end db ')', 0x0D, 0x0A, '$'
 msg_exec_bad_format db 'exec: unsupported executable format', 0x0D, 0x0A, '$'
 msg_exec_no_mem db 'exec: insufficient memory', 0x0D, 0x0A, '$'
 msg_path    db 'C:\APPS;C:\NET;C:\SYSTEM\DRIVERS;C:\SYSTEM', 0x0D, 0x0A, '$'
@@ -2791,6 +3320,9 @@ exec_path_net_dhcp db 'C:\NET\DHCP.EXE', 0
 exec_path_net_ping db 'C:\NET\PING.EXE', 0
 exec_path_net_ftp db 'C:\NET\FTP.EXE', 0
 exec_path_net_ftpsrv db 'C:\NET\FTPSRV.EXE', 0
+startup_auxstack_path db '\SYSTEM\VIDEO\AUXSTACK.COM', 0
+shell_text_profile_path db '\SYSTEM\VIDEO\VGASET.CFG', 0
+shell_text_profile dw '25'
 
 echo_ptr dw 0
 echo_len dw 0
@@ -2809,12 +3341,26 @@ exec_fcb1_seg dw 0
 exec_fcb2_ptr dw 0
 exec_fcb2_seg dw 0
 cmd_buf  times 16 db 0
+cmd_start dw 0
 input_buf times 127 db 0
 input_draw_len db 0
+%ifdef COMMAND_COMPAT
+command_once_pending db 0
+command_once_done db 0
+command_keep_open db 0
+command_window db 0
+command_exit_code db 0
+command_once_length db 0
+%endif
 history_count db 0
 history_next db 0
 history_nav db 0xFF
+%ifdef COMMAND_COMPAT
 history_buf times HISTORY_MAX * HISTORY_ENTRY_LEN db 0
+%else
+history_buf equ 0
+history_segment dw 0
+%endif
 path_buf times 68 db 0
 dir_pattern times 32 db 0
 dta_buf  times 48 db 0
@@ -2828,7 +3374,21 @@ exec_restore_path times 69 db 0
 exec_tail times 129 db 0
 file_buf times 512 db 0
 
+%ifndef COMMAND_COMPAT
+shell_output_color db 7
+%include "src/com/shell_desktop.inc"
+%include "src/com/ui_theme.inc"
+%include "src/com/vbe_console.inc"
+%include "src/com/shell_gui.inc"
+%include "src/com/shell_drivers.inc"
+%include "src/com/boot_session.inc"
+%endif
+
 align 16
 shell_stack times 2048 db 0
 shell_stack_top:
 shell_image_end:
+
+%if ($-$$+0x100) > 0xEF00
+%error "SHELL.COM overlaps its DOS arena ceiling"
+%endif

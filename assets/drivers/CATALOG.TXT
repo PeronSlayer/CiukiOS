@@ -1,0 +1,44 @@
+CiukiOS driver catalog - schema 1
+
+Automatic drivers
+-----------------
+Keyboard: native i8042 controller / BIOS keyboard services.
+Mouse: native PS/2; INPUTINI tries BIOS CuteMouse after a failed native init.
+Video: native VBE capability selection; VGA fallback if VBE is unavailable.
+Disk: BIOS INT 13h access; filesystem handling belongs to CiukiOS.
+Audio: HWDETECT selects supported native startup PCM; application launchers
+       use their existing transient VSBHDA paths on supported PCI hardware.
+
+HWDETECT /SAVE writes ACTIVE.CFG. A successful run and END=1 are required
+before using the report. The report is regenerated on this computer; it is
+not an override to copy from a different computer.
+
+Supported profiles
+------------------
+ICH_AC97: Intel ICH controller IDs supported by the native PCM player.
+VSBHDA: HDA or a matching supported PCI controller in the shipped VSBHDA.
+SB_NATIVE: native legacy Sound Blaster probe, without a PCI driver guess.
+UNSUPPORTED: PCI audio detected but no matching included native backend.
+
+Compaq Armada E500: keyboard/mouse use the i8042-compatible interface.
+ATI Rage Mobility-P uses the video BIOS / VBE. ESS1978 Maestro-2E does not
+use Intel ICH registers, and the included VSBHDA has no Maestro-2E backend.
+The legacy Sound Blaster path may work if firmware initialized it; this is
+a fallback, not a claim of full ESS support.
+
+Generic input fallback
+----------------------
+INPUTINI.COM        Checks native input before trying the BIOS driver.
+MOUSE\CTMOUSE.EXE   CuteMouse 2.1b4, GPLv2, PS/2 and serial mouse driver.
+MOUSE\CTMOUSE.TXT   Upstream usage and limitations.
+MOUSE\CTMSRC.ZIP    Complete matching source, build recipe and licenses.
+MOUSE\COPYING      GNU General Public License, version 2.
+
+INPUTINI uses CTMOUSE /P /W /B only after the kernel's failed native driver
+has released its IRQ and BIOS callback ownership. /B prevents stacking.
+Successful native initialization does not execute the replacement driver.
+
+Compatibility paths
+-------------------
+Existing SYSTEM\DRIVERS and SBEMU paths are retained for older launchers.
+Windows VxD/WDM packages are not DOS or CiukiOS kernel drivers.

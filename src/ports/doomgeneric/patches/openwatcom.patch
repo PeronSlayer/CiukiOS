@@ -1,0 +1,39 @@
+--- a/doomgeneric/doomtype.h
++++ b/doomgeneric/doomtype.h
+@@ -84,7 +84,7 @@
+ 
+ #include <limits.h>
+ 
+-#if defined(_WIN32) || defined(__DJGPP__)
++#if defined(_WIN32) || defined(__DJGPP__) || defined(__WATCOMC__)
+ 
+ #define DIR_SEPARATOR '\\'
+ #define DIR_SEPARATOR_S "\\"
+--- a/doomgeneric/m_misc.c
++++ b/doomgeneric/m_misc.c
+@@ -54,7 +54,7 @@
+ 
+ void M_MakeDirectory(char *path)
+ {
+-#ifdef _WIN32
++#if defined(_WIN32) || defined(__WATCOMC__)
+     mkdir(path);
+ #else
+     mkdir(path, 0755);
+--- a/doomgeneric/p_setup.c
++++ b/doomgeneric/p_setup.c
+@@ -669,11 +669,13 @@
+ 
+     unsigned int rejectpad[4] =
+     {
+-        ((totallines * 4 + 3) & ~3) + 24,     // Size
++        0,                                    // Size assigned below
+         0,                                    // Part of z_zone block header
+         50,                                   // PU_LEVEL
+         0x1d4a11                              // DOOM_CONST_ZONEID
+     };
++
++    rejectpad[0] = ((totallines * 4 + 3) & ~3) + 24;
+ 
+     // Copy values from rejectpad into the destination array.
+ 

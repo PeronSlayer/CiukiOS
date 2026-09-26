@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
 
 DO_BUILD=1
-IMG="build/full/ciukios-full.img"
+IMG="${IMG:-build/full/ciukios-full.img}"
 PREFIX="build/full/qemu-full-dos-compat-smoke"
 SERIAL_LOG="${PREFIX}.serial.log"
 STRINGS_LOG="${PREFIX}.strings.log"
@@ -26,8 +26,8 @@ MON_SOCK="/tmp/ciukios-full-dos-compat-smoke.monitor.sock"
 DOSNAV_STABLE_SEC="${DOSNAV_STABLE_SEC:-10}"
 DOSNAV_MOUSE_SETTLE_SEC="${DOSNAV_MOUSE_SETTLE_SEC:-3}"
 DOSNAV_COLOR_SETTLE_SEC="${DOSNAV_COLOR_SETTLE_SEC:-5}"
-QEMU_TEST_ACCEL="${QEMU_TEST_ACCEL:-tcg}"
-QEMU_TEST_MEMORY_MB="${QEMU_TEST_MEMORY_MB:-128}"
+QEMU_TEST_ACCEL="${QEMU_TEST_ACCEL:-kvm}"
+QEMU_TEST_MEMORY_MB="${QEMU_TEST_MEMORY_MB:-256}"
 
 ACTIVE_QEMU_PID=0
 ACTIVE_MON_SOCK=""
@@ -60,15 +60,19 @@ Boots the full profile headlessly and validates DOS compatibility smoke flow:
     wait for a DOSNavigator startup banner marker
     inject real PS/2 movement and click events and require it to remain active
     exercise Options -> Colors -> VGA palette and confirm both dialogs
-    require it to remain alive, then verify EXIT returns to the shell
+    require it to remain alive, then use DOSNavigator's native Alt+X Quit
+    command and verify that the shell prompt returns
   otherwise: print skip/pass note and keep the lane green
+  return to \APPS and rerun CIUKRTST, the INT 33h callback probe, and
+  GFXSTAR in the same boot to catch leaked process, mouse, or video state
 
 Artifacts:
   build/full/qemu-full-dos-compat-smoke.{serial.log,strings.log,stderr.log,commands.log,meta}
 
 Environment:
-  QEMU_TEST_ACCEL     Test accelerator: tcg or kvm (default: tcg).
-  QEMU_TEST_MEMORY_MB Test RAM in MiB (default: 128).
+  QEMU_TEST_ACCEL     Test accelerator: kvm or tcg (default: kvm).
+  QEMU_TEST_MEMORY_MB Test RAM in MiB (default: 256).
+  IMG                 Boot image override (default: build/full/ciukios-full.img).
 TXT
 }
 
@@ -472,6 +476,8 @@ need_cmd strings
 need_cmd timeout
 need_cmd python3
 need_cmd rg
+need_cmd mtype
+need_cmd sha256sum
 
 if (( DO_BUILD )); then
   echo "[dos-compat-smoke] build step"
@@ -486,6 +492,15 @@ if rg -qi 'env_doom_exe_path|path_gem_exe_abs|int21_find_try_gem_special|int21_p
   mark_fail "GENERIC_EXEC_MEMORY_POLICY" "DOS runtime contains a title-specific executable rule"
 fi
 mark_pass "GENERIC_EXEC_MEMORY_POLICY"
+
+if [[ -f third_party/DOSNavigator/DN.COM ]]; then
+  DOSNAV_SOURCE_HASH="$(sha256sum third_party/DOSNavigator/DN.COM | awk '{print $1}')"
+  DOSNAV_IMAGE_HASH="$(mtype -i "$IMG" ::APPS/DOSNAV/DN.COM | sha256sum | awk '{print $1}')"
+  if [[ "$DOSNAV_IMAGE_HASH" != "$DOSNAV_SOURCE_HASH" ]]; then
+    mark_fail "DOSNAV_UPSTREAM_BINARY" "image DN.COM differs from the unmodified bundled payload"
+  fi
+  mark_pass "DOSNAV_UPSTREAM_BINARY"
+fi
 
 QEMU_CMD="$(pick_qemu || true)"
 if [[ -z "$QEMU_CMD" ]]; then
@@ -667,6 +682,7 @@ if ! wait_for_regex_from_offset "$SERIAL_LOG" "$MOUSECB_PASS_PATTERN" "$MOUSECB_
   mark_fail "MOUSECB_CALLBACK_PASS" "callback did not return cleanly to the DOS application"
 fi
 mark_pass "MOUSECB_CALLBACK_PASS"
+mark_pass "MOUSECB_NESTED_IRQ_DRAIN"
 wait_for_prompt_from_offset "$MOUSECB_OFFSET" "$APP_TIMEOUT_SEC" "MOUSECB_PROMPT_RETURNED"
 
 APPS_SYNC_OFFSET="$(file_size "$SERIAL_LOG")"
@@ -781,15 +797,66 @@ if (( DOSNAV_PRESENT )); then
   mark_pass "DOSNAV_XMS_COLORS_STABLE"
 
   DOSNAV_EXIT_OFFSET="$(file_size "$SERIAL_LOG")"
-  send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'exit' \
-    || mark_fail "DOSNAV_EXIT_KEYS" "cannot submit EXIT in the DOSNavigator command line"
+  # Alt+X is DOSNavigator's own Quit action.  Typing EXIT opens its child
+  # command processor and therefore tests COMMAND.COM, not application exit.
+  send_dosnav_chord "$MON_SOCK" "$CMD_LOG" alt-x \
+    || mark_fail "DOSNAV_EXIT_KEYS" "cannot invoke DOSNavigator Alt+X Quit"
+  # Confirm the standard "Do you wish to quit" dialog.  If a saved profile
+  # disables confirmation, Enter is harmless at the restored shell prompt.
+  send_dosnav_key "$MON_SOCK" "$CMD_LOG" ret \
+    || mark_fail "DOSNAV_EXIT_KEYS" "cannot confirm DOSNavigator Quit"
   if ! wait_for_regex_from_offset "$SERIAL_LOG" "$DOSNAV_PROMPT_PATTERN" "$DOSNAV_EXIT_OFFSET" "$APP_TIMEOUT_SEC"; then
-    mark_fail "DOSNAV_EXIT_RETURN" "EXIT did not terminate DOSNavigator and restore the shell prompt"
+    mark_fail "DOSNAV_EXIT_RETURN" "Alt+X Quit did not terminate DOSNavigator and restore the shell prompt"
   fi
   mark_pass "DOSNAV_EXIT_RETURN"
 else
   echo "[dos-compat-smoke] PASS DOSNAV_SKIP: payload not present at $DOSNAV_PAYLOAD"
 fi
+
+# A successful application run is not enough: prove that DOSNavigator (or the
+# preceding compatibility sequence when the optional payload is absent) did
+# not leave PSP, INT 33h callback, keyboard, or video state behind.
+POST_APPS_OFFSET="$(file_size "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" 'cd \APPS' \
+  || mark_fail "POST_DOSNAV_CD" "cannot return to C:\\APPS after DOSNavigator"
+wait_for_prompt_from_offset "$POST_APPS_OFFSET" "$APP_TIMEOUT_SEC" "POST_DOSNAV_APPS_PROMPT"
+
+POST_CIUKRTST_OFFSET="$(file_size "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$CIUKRTST_COMMAND" \
+  || mark_fail "POST_DOSNAV_CIUKRTST_COMMAND" "cannot rerun CIUKRTST"
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$CIUKRTST_PASS_PATTERN" "$POST_CIUKRTST_OFFSET" "$APP_TIMEOUT_SEC"; then
+  mark_fail "POST_DOSNAV_CIUKRTST_PASS" "runtime/process ownership did not survive the application sequence"
+fi
+mark_pass "POST_DOSNAV_CIUKRTST_PASS"
+wait_for_prompt_from_offset "$POST_CIUKRTST_OFFSET" "$APP_TIMEOUT_SEC" "POST_DOSNAV_CIUKRTST_PROMPT"
+
+POST_MOUSECB_OFFSET="$(file_size "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$MOUSECB_COMMAND" \
+  || mark_fail "POST_DOSNAV_MOUSECB_COMMAND" "cannot rerun the INT 33h callback probe"
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$MOUSECB_READY_PATTERN" "$POST_MOUSECB_OFFSET" "$APP_TIMEOUT_SEC"; then
+  mark_fail "POST_DOSNAV_MOUSECB_READY" "post-sequence INT 33h callback probe did not arm"
+fi
+hmp "$MON_SOCK" "$CMD_LOG" "mouse_move -60 -30 0" >/dev/null 2>&1 \
+  || mark_fail "POST_DOSNAV_MOUSECB_EVENT" "cannot inject post-sequence PS/2 movement"
+hmp "$MON_SOCK" "$CMD_LOG" "mouse_button 1" >/dev/null 2>&1 \
+  || mark_fail "POST_DOSNAV_MOUSECB_EVENT" "cannot inject post-sequence left-button press"
+sleep 0.2
+hmp "$MON_SOCK" "$CMD_LOG" "mouse_button 0" >/dev/null 2>&1 \
+  || mark_fail "POST_DOSNAV_MOUSECB_EVENT" "cannot inject post-sequence left-button release"
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$MOUSECB_PASS_PATTERN" "$POST_MOUSECB_OFFSET" "$APP_TIMEOUT_SEC"; then
+  mark_fail "POST_DOSNAV_MOUSECB_PASS" "post-sequence INT 33h callback did not return cleanly"
+fi
+mark_pass "POST_DOSNAV_MOUSECB_PASS"
+wait_for_prompt_from_offset "$POST_MOUSECB_OFFSET" "$APP_TIMEOUT_SEC" "POST_DOSNAV_MOUSECB_PROMPT"
+
+POST_GFXSTAR_OFFSET="$(file_size "$SERIAL_LOG")"
+send_text_and_enter "$MON_SOCK" "$CMD_LOG" "$GFXSTAR_COMMAND" \
+  || mark_fail "POST_DOSNAV_GFXSTAR_COMMAND" "cannot rerun GFXSTAR"
+if ! wait_for_regex_from_offset "$SERIAL_LOG" "$GFXSTAR_PASS_PATTERN" "$POST_GFXSTAR_OFFSET" "$APP_TIMEOUT_SEC"; then
+  mark_fail "POST_DOSNAV_GFXSTAR_PASS" "video mode/state did not survive the application sequence"
+fi
+mark_pass "POST_DOSNAV_GFXSTAR_PASS"
+wait_for_prompt_from_offset "$POST_GFXSTAR_OFFSET" "$APP_TIMEOUT_SEC" "POST_DOSNAV_GFXSTAR_PROMPT"
 
 hmp "$MON_SOCK" "$CMD_LOG" "quit" >/dev/null 2>&1 || true
 set +e
@@ -852,7 +919,7 @@ fi
 } > "$META_LOG"
 
 if (( DOSNAV_PRESENT )); then
-  echo "[dos-compat-smoke] PASS (CIUKEDIT, CIUKRTST, GFXSTAR, and DOSNavigator mouse/XMS Colors flows verified)"
+  echo "[dos-compat-smoke] PASS (CIUKEDIT, CIUKRTST, GFXSTAR, DOSNavigator, and same-boot post-app cleanup verified)"
 else
   echo "[dos-compat-smoke] PASS (CIUKEDIT, CIUKRTST, and GFXSTAR verified; DOSNavigator skipped because payload is absent)"
 fi

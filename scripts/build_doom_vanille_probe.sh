@@ -38,7 +38,9 @@ if (
 	WATCOM="$WATCOM_ROOT" \
 	INCLUDE="$WATCOM_ROOT/h" \
 	PATH="$WATCOM_ROOT/binl64:$WATCOM_ROOT/binl:$PATH" \
-		"$WCL386" -zq -i=. -bt=dos -l=dos4g -fe=pcdoom.exe *.c pcfx.obj audio_wf.lib
+		"$WCL386" -zq -i=. -bt=dos -l=dos4g \
+			-j -ei -zp=1 -ox -oi -oa -d0 \
+			-fe=pcdoom.exe *.c pcfx.obj audio_wf.lib
 ); then
 	echo "[DOOMVANILLE] BUILD PASS"
 	exit 0

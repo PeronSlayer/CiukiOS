@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "payloads": [
+    {"source": "assets/drivers/CATALOG.TXT", "target": "DRIVERS/CATALOG.TXT"},
+    {"source": "assets/drivers/ctmouse/CTMOUSE.EXE", "target": "DRIVERS/MOUSE/CTMOUSE.EXE", "sha256": "54269b90198f3ad4390e8454ca24bba6ea775adea34f009ab8fd74c5981c49ff"},
+    {"source": "assets/drivers/ctmouse/CTMOUSE.TXT", "target": "DRIVERS/MOUSE/CTMOUSE.TXT"},
+    {"source": "assets/drivers/ctmouse/COPYING", "target": "DRIVERS/MOUSE/COPYING"},
+    {"source": "assets/drivers/ctmouse/CTMSRC.ZIP", "target": "DRIVERS/MOUSE/CTMSRC.ZIP", "sha256": "83c578487a1a53c986a40f4b1354510ce300a6d4e515a44e364c137387199ec2"}
+  ]
+}

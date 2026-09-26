@@ -21,9 +21,20 @@ fallback for Standard mode.
 
 With the normal graphical launcher, click once inside the QEMU display to
 capture the relative PS/2 mouse.  Ctrl+Alt+G releases it back to the host.
+The packaged Windows profile disables mouse acceleration and calibrates its
+sensitivity for linear 1:1 movement without changing the DOS INT 33h service.
+
+The full build also installs the native Microsoft Sound Blaster 1.5 and AdLib
+drivers from these source disks.  They are configured for the canonical QEMU
+hardware: Sound Blaster A220 I7 D1 and AdLib/OPL2 port 388.
+
+The generated default DOS profiles request all conventional, EMS, and XMS
+memory available to each Windows DOS VM.  There is no per-application memory
+setting: programs copied into C:\WINDOWS later inherit the same policy.
 
 Windows can be closed and launched again without rebooting CiukiOS.  XMS,
-A20, and DOS file handles are restored when the Windows session ends.
+A20, DOS file handles, and application EXEC frames are restored when a child
+or the Windows session ends.
 
 CiukiOS installs a standard INT 33h PS/2 mouse service during every boot and
 provides the IBM INT 15h/C2 BIOS interface selected by the Windows PS/2 mouse

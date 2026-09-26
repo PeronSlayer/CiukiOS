@@ -2,6 +2,17 @@ bits 16
 org 0x0100
 
 start:
+    cli
+    mov ax, cs
+    mov ss, ax
+    mov sp, launcher_stack_top
+    sti
+    mov es, ax
+    mov bx, ((launcher_image_end - $$ + 0x0100) + 15) >> 4
+    mov ah, 0x4A
+    int 0x21
+    jc .fail
+
     cld
     push cs
     pop ds
@@ -140,3 +151,8 @@ dos4gw_param_block:
     dw 0
     dw dos4gw_fcb2
     dw 0
+
+align 16
+launcher_stack times 1024 db 0
+launcher_stack_top:
+launcher_image_end:

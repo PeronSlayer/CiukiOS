@@ -1,0 +1,195 @@
+{
+  "library": "Tango 0.8.90",
+  "license": "Public Domain (upstream COPYING)",
+  "source_url": "https://tango.freedesktop.org/releases/tango-icon-theme-0.8.90.tar.gz",
+  "archive_sha256": "6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e",
+  "ciuki_master_sha256": "17210ac9cfe07c54d6b0069a1502a036d52cb6340715ad47bdd54fa4dd386620",
+  "size": [
+    32,
+    32
+  ],
+  "count": 18,
+  "palette_indices": [
+    80,
+    143
+  ],
+  "ciuki_palette_indices": [
+    16,
+    79
+  ],
+  "transparent_index": 255,
+  "alpha_threshold": 128,
+  "pillow_version": "12.3.0",
+  "icons": [
+    {
+      "id": 0,
+      "name": "Computer",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/computer.png",
+      "ciuki_overlay": [
+        16,
+        14,
+        14
+      ]
+    },
+    {
+      "id": 1,
+      "name": "Files",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/places/folder.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 2,
+      "name": "Editor",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/accessories-text-editor.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 3,
+      "name": "Hard disk",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/drive-harddisk.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 4,
+      "name": "DOS",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/utilities-terminal.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 5,
+      "name": "Run",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/mimetypes/application-x-executable.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 6,
+      "name": "Doom",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/input-gaming.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 7,
+      "name": "Games",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/categories/applications-games.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 8,
+      "name": "Display",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/video-display.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 9,
+      "name": "Sound",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/status/audio-volume-high.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 10,
+      "name": "Floppy",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/media-floppy.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 11,
+      "name": "About CiukiOS",
+      "upstream_member": null,
+      "ciuki_overlay": [
+        24,
+        4,
+        4
+      ]
+    },
+    {
+      "id": 12,
+      "name": "Power",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/actions/system-shutdown.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 13,
+      "name": "Windows",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/preferences-system-windows.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 14,
+      "name": "Costa",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/places/user-desktop.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 15,
+      "name": "USB",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/drive-removable-media.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 16,
+      "name": "CD-ROM",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/media-optical.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 17,
+      "name": "Install CiukiOS",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/system-installer.png",
+      "ciuki_overlay": [
+        16,
+        0,
+        16
+      ]
+    }
+  ],
+  "files": {
+    "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz": "6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e",
+    "assets/brand/ciuki-logo.png": "17210ac9cfe07c54d6b0069a1502a036d52cb6340715ad47bdd54fa4dd386620",
+    "scripts/build_ui_icons.py": "41caf630539a8d5a578c4ab98adc833e95cba0005ed4f9f79f372d8d8bbfbb48",
+    "scripts/build_ciuki_logo.py": "a2d943206c7ac62b13438700e7643bc564fd8705bede4e02ee60b723035de40a",
+    "assets/icons/upstream/COPYING": "4f740497cf8ad0e564de90d3416a06c3d6b1d69d6883fe539925e3353d68a466",
+    "assets/icons/upstream/AUTHORS": "5e8f8f713c5436e76acaf9c5b4be0be9426fea2225444c6ecdaa37519f67d0b5",
+    "assets/icons/sources/devices-computer.png": "357c0fdc7e46b0cea655d54317174cea753969919cf9279ef031a93e758f203e",
+    "assets/icons/sources/places-folder.png": "a140d239439c433c5a841c78b612ab7e49d4d54e1e1879d73b1f5927fe02d6af",
+    "assets/icons/sources/apps-accessories-text-editor.png": "f25538ad4bd18543aa05da685cdb91442921f6e1447e300ed7e57d6d007afd63",
+    "assets/icons/sources/devices-drive-harddisk.png": "e4872e9572487bce9eb2eb39aadf750ec94b401ad6c1aa993b44eac39b3e33b1",
+    "assets/icons/sources/apps-utilities-terminal.png": "71c641e27750b53fa263c07423bce61e4229f63d2211e19efd01369a2ad88ee4",
+    "assets/icons/sources/mimetypes-application-x-executable.png": "a875cfb38f9845866c12c8b56941f1c5f4e342296e844dcc276805777d5993dc",
+    "assets/icons/sources/devices-input-gaming.png": "ce080a1c111858a57013eb09414ef09cd2750582ff6a48cf5e08042c1027163a",
+    "assets/icons/sources/categories-applications-games.png": "4496bed09e13fc28ba6c322e143d4c78f6260520c877be4eaaea80c4b9959784",
+    "assets/icons/sources/devices-video-display.png": "1a7dd536a5bc3d10ab0b72e4ee0f416011f60753866682cda35e40da072e5331",
+    "assets/icons/sources/status-audio-volume-high.png": "d7d4ab251d761cc37d6a938733f27f3dc79c987e7687aa689bb4fa2011354b03",
+    "assets/icons/sources/devices-media-floppy.png": "b19ed859cd1b5be7235a7b6c3cc2782617eb73f4a87a05d71926251fe8b0722b",
+    "assets/icons/sources/actions-system-shutdown.png": "6e8e5b6e806bbd7fee0fecc2404474b8f6f8b222190aecc0f4d1a265b00e8450",
+    "assets/icons/sources/apps-preferences-system-windows.png": "c5d170d0fb702068119157c72035fd79b860d8a664902bf88e04227ec776f9c1",
+    "assets/icons/sources/places-user-desktop.png": "dabb8f2416d3bbdd645520fe350a2f43d4266369f2ea87c455477b1bf53aa949",
+    "assets/icons/sources/devices-drive-removable-media.png": "6f022b38145426647d365db046b215117b04d71590f3a4386aed400cc8214b2d",
+    "assets/icons/sources/devices-media-optical.png": "ab2f8791d632e5cc4c1d95763a7b210d2f6dc1100a59ef281df3d8179cb48e4b",
+    "assets/icons/sources/apps-system-installer.png": "8c7ef5fc4bc2a6c412f867f98be7580c13483a0f20a32ca6c6226d1697e8c5a3",
+    "src/com/ciuki_logo_palette.inc": "1dcee7af6e9df17513250281ab762eb4316dbf5883de9884ed8baa725f2a7d2f",
+    "assets/brand/native/ciuki-16.bin": "e4bf73becba9eee3009f2135dfc016eb3bf6c75fd8f97a03a92d07572ea76010",
+    "assets/icons/native/00.png": "e48b9c8421231516e4ab84bba8ed1e575f5102e440e6d1efe6ca4b613b434588",
+    "assets/icons/native/01.png": "ba731e9d8edea4cc925c1b754cd4cbbd6d31e6590342148f3677db03d3c6a792",
+    "assets/icons/native/02.png": "9f1cc8924632dc781f86ea3820ad137e5daba7b7b739477ff84ca07a825af725",
+    "assets/icons/native/03.png": "f5e23f116b67786b1226166b981db407e6f29faf4625805282ff9dbe83d79f7b",
+    "assets/icons/native/04.png": "30e6522edad2454d6b63dca614a7e71e442a3610fb6ec6530769208d5ae6f546",
+    "assets/icons/native/05.png": "d50290d118fd6b362fc30947bf83b1e2fa74c534063fa2dffd5f7b8e79a0ad46",
+    "assets/icons/native/06.png": "ac86ae56b1231fd8ab40668e4f74b0cdd74fef0902db94a5b367f0facf8f937e",
+    "assets/icons/native/07.png": "162fc17e6812e3aaa1eedf07573825dc5bedfa8deb089d3b7aeed23906df869e",
+    "assets/icons/native/08.png": "8ba85ccd5606932b1aa898d8a8b53fdedff2a2f3035a02a39ae9554644725200",
+    "assets/icons/native/09.png": "d7d1168d13a69bba82cf6c4df17ee1de93a229e52b2569a2c1b7a4405b8f4831",
+    "assets/icons/native/10.png": "3d1076b5e9f2634e0ed84a6e08751b42f75ff13b1ec7112e2d12d0d48266bfa8",
+    "assets/brand/native/ciuki-24.bin": "de394da89d0c0ffb2a0717d8e2f653800c71293fd81862b4cf2250327c5c0bf9",
+    "assets/icons/native/11.png": "bd38039867a76070fa146547fa34af96f8afec67b51e2566ffb6fa5bf10dd0c5",
+    "assets/icons/native/12.png": "09100be2376e24271fdf7c666b72e36a461edb99768412b7e6bafa1f428e3f13",
+    "assets/icons/native/13.png": "ece88572cdba263d650d657a23efe951407babff6bffb9569268c6099df24fe8",
+    "assets/icons/native/14.png": "1eb42806015f72a516fbc1b689ea2e1098c5785cda8d84237197e871f95c6b52",
+    "assets/icons/native/15.png": "762010f19936ab2edb6570114ac7e08e08b1c91e92a2b01a9775496d880c0803",
+    "assets/icons/native/16.png": "3c4652049efa507d434e12d8b7d83a7c69022756657245ce0c463e2d8ce8d683",
+    "assets/icons/native/17.png": "51cf9ce6c36dead4dc76d243caa59e000168b7a67abe1556a9affd39cbcf9e93",
+    "assets/icons/native/ICONS.DAT": "7676fb9647230f6a8c2956983b1502c9586456727a8f111bc779f38749dcf3fe",
+    "assets/icons/native/fallback.bin": "ec76651fb253f39884f1f712619c7583e1805e529568cc877bf8b1244187cc1b",
+    "src/com/ui_icons_palette.inc": "f77407a347846fd7218bdf3958006743c504ae2ac5272213d4bd3a788e5fb9f0",
+    "assets/icons/preview.png": "faeb2b9a1061fe39f4017ff3416f90d2fc14a187ad270fe4abe94651fb41f1a6"
+  }
+}

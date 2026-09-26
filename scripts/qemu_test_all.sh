@@ -8,8 +8,10 @@ usage() {
   cat <<'TXT'
 Usage: scripts/qemu_test_all.sh
 
-Runs the focused full/full-CD, DOS compatibility, external shell, runtime
-positive/negative and ownership aggregate. This runner accepts no options.
+Runs the full/full-CD, DOS compatibility, bundled-application, external shell,
+runtime positive/negative and ownership aggregate. This runner accepts no
+options. Set CIUKIOS_TEST_BUNDLED_APPS=0 only for a deliberately shortened
+infrastructure lane.
 TXT
 }
 
@@ -77,8 +79,10 @@ skip_test() {
 
 overall_rc=0
 
-# Focused aggregate: validate the active full/full-CD profiles and the runtime
-# ownership contract without pulling long-running game/audio taxonomy lanes.
+# Release aggregate: validate the active full/full-CD profiles, the runtime
+# ownership contract, and every bundled interactive application for which the
+# full image contains a payload.  This deliberately catches cross-application
+# regressions that isolated kernel probes cannot see.
 if ! run_test "serial normalization self-test" "scripts/serial_log_normalize.py" --self-test; then
   echo "[qemu-test-all] FAIL (serial normalization is a prerequisite for every marker gate)" >&2
   exit 1
@@ -99,6 +103,48 @@ if (( full_image_ready )); then
   DO_BUILD=0 run_test "full CuteMouse external workflow" bash "scripts/qemu_test_full_cutemouse.sh" --no-build || overall_rc=1
   run_test "full DOS compatibility smoke test" "scripts/qemu_test_full_dos_compat_smoke.sh" --no-build || overall_rc=1
   SHELL_COM_BOOT_AUTORUN=1 run_test "full external shell/runtime ownership smoke test" bash "scripts/qemu_test_full_shell_com.sh" --no-build || overall_rc=1
+  DO_BUILD=0 run_test "generic graphics-child text-mode restoration" bash "scripts/qemu_test_full_video_restore.sh" --no-build || overall_rc=1
+
+  if [[ "${CIUKIOS_TEST_BUNDLED_APPS:-1}" == "1" ]]; then
+    if mdir -i build/full/ciukios-full.img ::APPS/COSTA/COSTA.EXE >/dev/null 2>&1; then
+      DO_BUILD=0 run_test "Costa desktop/cursor/calculator workflow" bash "scripts/qemu_test_full_costa.sh" || overall_rc=1
+    else
+      skip_test "Costa desktop/cursor/calculator workflow" "payload absent from full image"
+    fi
+
+    if mdir -i build/full/ciukios-full.img ::APPS/DOSNAV/DN.COM >/dev/null 2>&1; then
+      echo "[qemu-test-all] DOSNavigator is covered by the same-boot DOS compatibility workflow"
+    fi
+
+    if mdir -i build/full/ciukios-full.img ::APPS/WOLF3D/WOLF3D.EXE >/dev/null 2>&1; then
+      DO_BUILD=0 run_test "Wolf3D visual gameplay workflow" make qemu-test-full-wolf3d-taxonomy || overall_rc=1
+      DO_BUILD=0 run_test "Wolf3D protected AC97 audio workflow" bash "scripts/qemu_test_full_wolf3d_audio.sh" --no-build || overall_rc=1
+    else
+      skip_test "Wolf3D visual gameplay workflow" "payload absent from full image"
+    fi
+
+    if mdir -i build/full/ciukios-full.img ::APPS/DOOM/DOOM.EXE >/dev/null 2>&1; then
+      DO_BUILD=0 run_test "Doom visual/audio gameplay workflow" bash "scripts/qemu_test_full_doom_audio.sh" --no-build || overall_rc=1
+    else
+      skip_test "Doom visual gameplay workflow" "payload absent from full image"
+    fi
+
+    if mdir -i build/full/ciukios-full.img ::APPS/DOOMVAN/PCDOOM.EXE >/dev/null 2>&1; then
+      DO_BUILD=0 run_test "doom-vanille legacy-VGA performance workflow" bash "scripts/qemu_test_full_doomvan_performance.sh" --no-build || overall_rc=1
+      DO_BUILD=0 run_test "doom-vanille protected AC97 audio workflow" bash "scripts/qemu_test_full_doomvan_audio.sh" --no-build || overall_rc=1
+      DO_BUILD=0 run_test "doom-vanille automatic memory workflow" make qemu-test-full-doomvan-memory || overall_rc=1
+    else
+      skip_test "doom-vanille workflows" "payload absent from full image"
+    fi
+
+    if mdir -i build/full/ciukios-full.img ::WINDOWS/WIN.COM >/dev/null 2>&1; then
+      run_test "Windows 3.1 mouse/Alt+F4/clean-exit workflow" bash "scripts/qemu_test_full_windows31.sh" --no-build --headless-smoke || overall_rc=1
+    else
+      skip_test "Windows 3.1 workflow" "installed payload absent from full image"
+    fi
+  else
+    skip_test "bundled application regression matrix" "CIUKIOS_TEST_BUNDLED_APPS=0"
+  fi
 fi
 
 run_test "full runtime positive/negative probe" "scripts/qemu_test_full_runtime_probe.sh" || overall_rc=1

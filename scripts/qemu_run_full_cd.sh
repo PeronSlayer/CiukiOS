@@ -32,18 +32,22 @@ Modes:
 Options:
   --no-build           Skip image build step.
   --dry-run            Print the QEMU command without running it.
+  --vga-fast           Use the measured TCG planar-VGA fast path. QEMU 11.1
+                       is not stable with the local original Doom binary.
   --display <backend>  QEMU display backend in visual mode (default: auto;
                        SDL/X11 is preferred, GTK is the fallback).
 
 Environment:
   QEMU_BIN         Override QEMU binary.
   QEMU_CPU_MODEL   CPU model (default: pentium3, single vCPU for DOS/Win 3.x).
-  QEMU_MEMORY_MB   VM RAM in MiB (default: 256; minimum: 64).
+  QEMU_MEMORY_MB   VM RAM in MiB (default: 256; below 160 uses the lowmem ISO).
   QEMU_EXTRA_ARGS  Extra args appended to QEMU command.
-  QEMU_ACCEL_MODE  Accelerator: kvm, auto, tcg, or tcg-safe (default: kvm).
-                    The default fails if hardware acceleration is unavailable.
+  QEMU_ACCEL_MODE  Accelerator: kvm, vga-fast, auto, tcg, or tcg-safe
+                    (default: kvm). vga-fast is an explicit JIT profile for
+                    planar-VGA workloads that are verified TCG-safe.
   QEMU_DISPLAY_TRANSPORT  Pointer transport: auto, x11, or native (default: auto).
   QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: on).
+  QEMU_AUDIO_DEVICES Guest sound card: standard (SB16/AdLib, default) or ac97.
   QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full-cd.log).
@@ -90,6 +94,10 @@ configure_accel_args() {
   fi
 
   case "$mode" in
+    vga-fast)
+      QEMU_ACCEL_ARGS=(-accel tcg)
+      QEMU_ACCEL_DETAIL="tcg JIT (legacy VGA fast path)"
+      ;;
     kvm)
       if ! qemu_kvm_available; then
         echo "[qemu-run-full-cd] ERROR: hardware acceleration is required but KVM is unavailable" >&2
@@ -117,7 +125,7 @@ configure_accel_args() {
       QEMU_ACCEL_DETAIL="tcg one-insn-per-tb (explicit software mode)"
       ;;
     *)
-      echo "[qemu-run-full-cd] ERROR: invalid QEMU_ACCEL_MODE=$mode (expected kvm, auto, tcg or tcg-safe)" >&2
+      echo "[qemu-run-full-cd] ERROR: invalid QEMU_ACCEL_MODE=$mode (expected vga-fast, kvm, auto, tcg or tcg-safe)" >&2
       exit 1
       ;;
   esac
@@ -174,8 +182,8 @@ configure_display_args() {
   QEMU_DISPLAY_TRANSPORT_DETAIL="native (X11 socket not required on this session)"
 }
 if [[ ! "$QEMU_MEMORY_MB" =~ ^[0-9]+$ ]] \
-  || (( QEMU_MEMORY_MB < 64 || QEMU_MEMORY_MB > 4096 )); then
-  echo "[qemu-run-full-cd] ERROR: QEMU_MEMORY_MB must be an integer from 64 to 4096" >&2
+  || (( QEMU_MEMORY_MB < 128 || QEMU_MEMORY_MB > 4096 )); then
+  echo "[qemu-run-full-cd] ERROR: QEMU_MEMORY_MB must be an integer from 128 to 4096" >&2
   exit 1
 fi
 
@@ -241,12 +249,24 @@ configure_audio_args() {
     [[ -n "$backend" ]] || backend="none"
   fi
 
-  QEMU_AUDIO_ARGS=(
-    -audiodev "${backend},id=snd0"
-    -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
-  )
+  QEMU_AUDIO_ARGS=(-audiodev "${backend},id=snd0")
+  case "${QEMU_AUDIO_DEVICES:-standard}" in
+    standard)
+      QEMU_AUDIO_ARGS+=(
+        -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
+        -device "adlib,audiodev=snd0")
+      QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=7 dma=1 hdma=5 adlib=opl2 ports=0x388"
+      ;;
+    ac97)
+      QEMU_AUDIO_ARGS+=(-device "AC97,audiodev=snd0")
+      QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on ac97=8086:2415"
+      ;;
+    *)
+      echo "[qemu-run-full-cd] ERROR: QEMU_AUDIO_DEVICES must be standard or ac97" >&2
+      exit 1
+      ;;
+  esac
   QEMU_MACHINE_ARG="pc,vmport=off,i8042=on,pcspk-audiodev=snd0"
-  QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=7 dma=1 hdma=5"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -261,6 +281,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --vga-fast)
+      export QEMU_ACCEL_MODE=vga-fast
       shift
       ;;
     --display)
@@ -293,7 +317,10 @@ if [[ "$DO_BUILD" -eq 1 ]]; then
   bash scripts/build_full_cd.sh
 fi
 
-IMG="build/full/ciukios-full-cd-direct.iso"
+IMG="build/full/ciukios-full-cd.iso"
+if (( QEMU_MEMORY_MB < 160 )); then
+  IMG="build/full/ciukios-full-cd-lowmem.iso"
+fi
 if [[ ! -f "$IMG" ]]; then
   echo "[qemu-run-full-cd] ERROR: image not found: $IMG" >&2
   exit 1

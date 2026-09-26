@@ -1,6 +1,6 @@
 # doom-vanille Import Probe - 2026-05-17
 
-> Historical import/build report. Supersession note (2026-08-31): both the original `000B` blocker and the later `I_AllocLow(256000)` failure described by subsequent reports are superseded. The isolated `full` lane now reaches DOS/4GW/DPMI and `ST_Init`, records `[doomvan-memory] PASS sb16_low_dos_256k`, and reaches DMX initialization. This promotes only the focused low-DOS/startup boundary: the direct gameplay capture has corrupted planar walls and a missing HUD, the captured SB16 stream is digital silence, and clean exit/full-CD remain unproven. The dated results below are retained as historical evidence rather than rewritten.
+> Historical import/build report. Supersession note (2026-09-01): the original `000B`, `I_AllocLow(256000)`, wall-rendering, and silent-SB16 results described below are superseded. Current `full` gates pass the low-DOS request, healthy gameplay/HUD/walls, simultaneous OPL2 music plus SB16 SFX, combined DMX return 10, objective mixed output, and real-time timedemo performance. Audio-enabled clean exit and full-CD remain unproven. The dated results below are retained as historical evidence rather than rewritten.
 
 ## Decision
 

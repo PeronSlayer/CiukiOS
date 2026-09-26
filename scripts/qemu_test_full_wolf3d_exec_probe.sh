@@ -20,6 +20,8 @@ PROMPT_TIMEOUT_SEC="${PROMPT_TIMEOUT_SEC:-120}"
 OBSERVE_SEC="${OBSERVE_SEC:-12}"
 KEY_DELAY_SEC="${KEY_DELAY_SEC:-0.12}"
 PRE_ENTER_DELAY_SEC="${PRE_ENTER_DELAY_SEC:-0.35}"
+QEMU_TEST_ACCEL="${QEMU_TEST_ACCEL:-kvm}"
+QEMU_TEST_MEMORY_MB="${QEMU_TEST_MEMORY_MB:-256}"
 DEFAULT_PARENT_PSP_SEG="${DEFAULT_PARENT_PSP_SEG:-1780}"
 DEFAULT_OBSERVE_SEC=12
 
@@ -974,9 +976,10 @@ trap cleanup EXIT
 
 set +e
 timeout "$QEMU_TIMEOUT_SEC" "$QEMU_CMD" \
-  -machine pc,vmport=off \
+  -accel "$QEMU_TEST_ACCEL" \
+  -machine pc,vmport=off,i8042=on \
   -cpu pentium3 \
-  -m 128 \
+  -m "$QEMU_TEST_MEMORY_MB" \
   -drive "file=$IMG,format=raw,if=ide" \
   -boot c \
   -nographic \

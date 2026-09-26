@@ -91,9 +91,9 @@ def generate_splash_asset(source: Path, output: Path) -> int:
         raw_palette = indexed.getpalette() or []
         palette_list = (raw_palette + [0] * PALETTE_BYTES)[:PALETTE_BYTES]
         # Reserve top 3 palette entries for splash UI chrome colors.
-        palette_list[253 * 3 : 253 * 3 + 3] = [16, 32, 96]   # dark blue banner
-        palette_list[254 * 3 : 254 * 3 + 3] = [24, 44, 128]  # dark blue inset
-        palette_list[255 * 3 : 255 * 3 + 3] = [146, 88, 186]  # purple blocks
+        palette_list[253 * 3 : 253 * 3 + 3] = [12, 20, 36]   # navy footer
+        palette_list[254 * 3 : 254 * 3 + 3] = [32, 54, 78]   # recessed progress track
+        palette_list[255 * 3 : 255 * 3 + 3] = [104, 216, 240]  # ice-blue progress segments
         palette = bytes(palette_list)
         indexed_pixels = indexed.tobytes()
 

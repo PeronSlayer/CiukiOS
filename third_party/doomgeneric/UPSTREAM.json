@@ -1,0 +1,10 @@
+{
+  "project": "doomgeneric",
+  "url": "https://github.com/ozkl/doomgeneric",
+  "commit": "dcb7a8dbc7a16ce3dda29382ac9aae9d77d21284",
+  "archive": "source-dcb7a8d.tar.gz",
+  "sha256": "816e71d9210298e2e851aeb9c3ff234c729834048882f0518d3711f639191153",
+  "license": "GPL-2.0-or-later; preserve per-file notices",
+  "modifications": "src/ports/doomgeneric and scripts/build_doom_window.py",
+  "game_data": "not included; game-data licensing is separate"
+}

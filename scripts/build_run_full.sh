@@ -19,13 +19,15 @@ Default mode opens the graphical QEMU window.
 Useful QEMU options:
   --test               Run the short headless boot smoke instead of the GUI.
   --dry-run            Build and verify, then only print the QEMU command.
+  --vga-fast           Use the faster legacy-VGA TCG profile. Do not use it
+                       for the local original Doom binary on QEMU 11.1.
   --display <backend>  Select the visual backend (default: auto; SDL/X11 is
                        preferred for reliable DOS/Windows relative mouse input).
   --tap                Use the preconfigured ciukios0 TAP interface.
 
 Environment overrides supported by the QEMU runner include QEMU_BIN,
 QEMU_CPU_MODEL, QEMU_MEMORY_MB, QEMU_EXTRA_ARGS, QEMU_ACCEL_MODE (KVM by
-default; hardware acceleration is required unless explicitly overridden),
+default for the widest stable application set; `vga-fast` is opt-in),
 QEMU_DISPLAY_TRANSPORT (verified X11/XWayland mouse transport by default),
 QEMU_AUDIO_MODE, QEMU_AUDIO_BACKEND,
 QEMU_NETWORK_MODE, and QEMU_NET_HOST_FTP_PORT. FTP passive data is forwarded
@@ -43,6 +45,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tap)
       export QEMU_NETWORK_MODE=tap
+      shift
+      ;;
+    --vga-fast)
+      export QEMU_ACCEL_MODE=vga-fast
+      RUNNER_ARGS+=(--vga-fast)
       shift
       ;;
     *)

@@ -1,0 +1,10 @@
+{
+  "project": "Wolf4SDL",
+  "url": "https://github.com/fabiangreffrath/wolf4sdl",
+  "commit": "a51c229ed89cab1904d68abb8938def3cf456725",
+  "archive": "source-a51c229e.tar.gz",
+  "sha256": "979c8ddd361b2ec367ec5d9f159df791ed98cd4d1c6b4cafdcd4cf75565dd083",
+  "license": "GPL-2.0-or-later, as selected from upstream dual licensing",
+  "modifications": "src/ports/wolfwindow and scripts/build_wolf_window.py",
+  "game_data": "not included; separate game-data licensing"
+}

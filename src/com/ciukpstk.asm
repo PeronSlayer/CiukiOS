@@ -507,8 +507,10 @@ check_tsr_resident:
     jne .fail
     mov ax, dx
     add ax, bx
+    ; PSP:2 retains the initial EXEC ceiling; the MCB below must equal
+    ; the actual resident allocation after SETBLOCK/AH=31h.
     cmp [es:0x0002], ax
-    jne .fail
+    jb .fail
     mov ax, [self_psp]
     cmp [es:0x0016], ax
     jne .fail

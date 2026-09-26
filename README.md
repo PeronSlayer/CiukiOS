@@ -2,9 +2,14 @@
 
 # CiukiOS
 
+CiukiOS is dedicated to **Ciuki**, the dog in the boot splash. Its logo is a
+stylized portrait of him; see the [Ciuki visual identity](assets/brand/README.md).
+The [official system icons](assets/icons/README.md) use the Public Domain
+Tango 0.8.90 family, with Ciuki's approved portrait on identity icons.
+
 CiukiOS is a personal open source retro-computing project: a small legacy BIOS x86 operating system rebuilt from a clean baseline.
 
-The long-term goal is to support DOS and pre-NT software progressively, without CPU emulation in the final runtime path. The current system is shell-first, MS-DOS/FreeDOS-inspired, and focused on the FAT16 `full` profile as the main compatibility lane.
+The long-term goal is to support DOS and pre-NT software progressively, without CPU emulation in the final runtime path. The current system boots into a native desktop above its MS-DOS/FreeDOS-inspired runtime, with the FAT16 `full` profile as the main compatibility lane.
 
 CiukiOS is not a finished operating system. It is an active learning and research project, built in spare time with AI-assisted development workflows and a lot of low-level debugging.
 
@@ -12,31 +17,90 @@ CiukiOS is not a finished operating system. It is an active learning and researc
 
 Current public version: `CiukiOS pre-Alpha v0.7.1`.
 
+Development snapshot, **2026-09-26**: the native desktop includes Files, Tasks,
+Display, Sound and Wallpaper windows. CD-ROM, floppy and BIOS-exposed disks
+open in Files for read-only browsing, text preview and file import. USB must be
+exposed by firmware before boot; there is no native USB hot-plug stack.
+Wallpaper supports 99 indexed tiles, persistent selection and Refresh after
+copying converted PNG/BMP files. Default builds include three original CC0
+patterns; the owner's Windows wallpapers remain an optional personal payload.
+Kenney CC0 event sounds play through native ICH AC97 or supported Sound Blaster
+hardware, with graphical previews, mute and explicit failure messages.
+
+The DOS window runs one restricted BIOS-text foreground process through the
+actual DOS kernel. The Doom and Wolf3D window previews are cooperative source
+ports, with no game audio. **Original DOS graphics programs with audio do not
+yet run in native windows.** Ctrl/Space qualification concerns the Doom preview;
+it is not evidence for the original game. Video-memory/port virtualization,
+DPMI and peripheral ownership are the next implementation work. F4 retains the
+fullscreen DOS compatibility path; `EXIT` or `DESKTOP` returns to the desktop.
+
+The selected 128 MiB development disk image is
+`build/full/native-desktop-2026-09-26/final/ciukios-native-desktop.img`, SHA-256
+`08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6`.
+Eleven focused reports pass on that image in QEMU with a Pentium III CPU model
+and 128 MiB RAM. They cover keyboard chords, native media, console memory,
+wallpaper import/pixels, AC97/SB PCM, negative audio paths and DOS handoff.
+They do not requalify the entire historical application matrix or physical
+T23/E500 hardware. This personal image is not a public software distribution.
+See [the implementation and evidence record](docs/native-desktop-2026-09-26.md),
+[archived validation reports](docs/validation/2026-09-26/validation.json),
+[adding wallpapers](docs/wallpaper-import-2026-09-26.md) and
+[removable-media limits](docs/native-removable-media-2026-09-26.md).
+
+The approved Ciuki portrait, original boot photo, startup melody and Tango
+icons remain the system identity. UI text is English: **A modern Retro OS**.
+
+### Earlier milestone evidence
+
+The phase records below summarize earlier bounded results. Their dates and
+profiles matter: the September 26 desktop checks do not repeat every game,
+Windows, installer or physical-hardware test.
+
 The Phase 4 DOOM gameplay milestone is closed. The full FAT16 runtime can launch DOOM through DOS/4GW, load `doom.wad`, initialize the gameplay path, and reach a playable visual runtime.
 
-Phase 5 is **COMPLETE; NORMAL DOS RUNTIME OWNERSHIP CLOSED**. In the active full and full-CD profiles, Stage0 reads 8 sectors from the 72-sector BPB-reserved Stage1 slot and transfers to a bounded 1,542-byte loader-only Stage1. That loader locates and validates `\SYSTEM\CIUKIDOS.SYS`, loads it at segment `0x0900`, and has no normal DOS interrupt, process, memory, handle, file/path, COM/MZ, or device ownership. The current kernel contract is `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and no Stage1 compatibility chain (`CIUKRTST CHAIN=0`). The current kernel artifact is 43,254 bytes with a hard maximum of `0xA900` (43,264 bytes); four EXEC snapshot frames occupy segments `0x1400-0x1457`, and Stage2 starts at `0x1480`. CIUKIDOS launches the external `\SYSTEM\SHELL.COM`; missing or invalid required components, or an unexpected shell return, still fail closed to the bounded fatal path.
+Phase 5 is **COMPLETE; NORMAL DOS RUNTIME OWNERSHIP CLOSED**. In the active full and full-CD profiles, Stage0 reads 8 sectors from the 72-sector BPB-reserved Stage1 slot and transfers to a bounded 1,542-byte loader-only Stage1. That loader locates and validates `\SYSTEM\CIUKIDOS.SYS`, loads it at segment `0x0900`, and has no normal DOS interrupt, process, memory, handle, file/path, COM/MZ, or device ownership. The current kernel contract is `ABI=2`, 11 descriptors of 8 bytes, capability mask `0x003F`, and no Stage1 compatibility chain (`CIUKRTST CHAIN=0`). The currently validated `full` kernel is 43,264 bytes, exactly matching the hard `0xA900` ceiling; five EXEC snapshot frames occupy segments `0x0E00-0x0E6D`, and Stage2 starts at `0x0E80`. CIUKIDOS launches the external `\SYSTEM\SHELL.COM`; missing or invalid required components, or an unexpected shell return, still fail closed to the bounded fatal path.
 
-Phase 6 is active, not closed. The external GPL CuteMouse workflow passes on `full`, and the official MIT-licensed Costa v1.8.0 lane validates reproducible fetch/package/launch, the 640x350 desktop, one moving cursor, and the complete Desktop → Calculator nested-EXEC workflow. COM and MZ children use one title-independent first-fit EXEC allocator: COM placement derives from PSP+file+stack, while MZ placement derives from the real copy extent, header, `minalloc`, live MCBs, and arena limit. Doom-vanille passes the focused DOS/4GW 256 KiB low-DOS allocation gate and reaches DMX initialization, but its direct gameplay capture has corrupted planar walls and a missing HUD. DOSNavigator now validates dual-pane startup, one-row arrow navigation, mouse input, the Colors/XMS workflow, `EXIT`, and shell return; it remains PARTIAL because its packaged loader contains a bounded compatibility hook and no broad file-operation/editor or full-CD workflow is recorded. The packaged WOLF3D copy passes resource loading, stable runtime, keyboard-driven menu progression, and correctly rendered first-level video; it remains PARTIAL for unmodified-binary, clean-exit, full-CD, and audio compatibility. The required external corpus and five-category full-CD matrix are incomplete. Phase 7 is not closed: controlled SB16/DOOMSFX playback passes, while both Doom integrations still lack validated non-silent playback.
+Phase 6 is active, not closed. The external GPL CuteMouse workflow passes on `full`, and the official MIT-licensed Costa v1.8.0 lane validates reproducible fetch/package/launch, the 640x350 desktop, one moving cursor, and the complete Desktop → Calculator nested-EXEC workflow. COM and MZ children use one title-independent first-fit EXEC allocator: COM placement derives from PSP+file+stack, while MZ placement derives from the real copy extent, header, `minalloc`, live MCBs, and arena limit. Doom-vanille now passes the focused DOS/4GW 256 KiB low-DOS allocation gate, real gameplay/HUD/wall validation, simultaneous AdLib/OPL2 music plus SB16 SFX, and a timedemo performance gate. Its required Watcom ABI options (`signed char`, 32-bit enums, one-byte structure packing) are applied automatically. DOSNavigator is packaged byte-for-byte from upstream and validates dual-pane startup, one-row arrow navigation, mouse input, Colors/XMS, native `Alt+X` exit, shell return, and same-boot PSP/mouse/video cleanup. It remains PARTIAL only because broad file-operation/editor and full-CD workflows are not recorded. The packaged WOLF3D copy passes resource loading, stable runtime, keyboard-driven menu progression, and correctly rendered first-level video; it remains PARTIAL for unmodified-binary, clean-exit, full-CD, and audio compatibility. The required external corpus and five-category full-CD matrix are incomplete. Phase 7 is not closed: real-mode and DOS/4GW SB16 layers, controlled DOOMSFX, original Doom OPL2 music/PC-speaker gameplay, and doom-vanille combined OPL2/SB16 gameplay are green; original Doom SB16/DMX, clean return from a second external audio workload, full-CD audio, and real hardware remain open.
 
 Phase 8 is now active with its first bounded milestone complete. The `full` profile packages the GPL mTCP/Crynwr stack, exposes NE2000 plus configurable IPv4 under QEMU, and provides bidirectional FTP sharing through `C:\SHARE`. `NETSTART` installs a resident ARP/ICMP bridge independent of FTP, `NETCFG` persists IP/mask/gateway/DNS, and `IPCONFIG` reports live values and service status. Isolated gates verify inbound and Internet ICMP plus FTP persistence without mutating the canonical image. This does not yet imply SMB, encrypted transfer, arbitrary NIC, DHCP-server interoperability, or physical-hardware support.
 
-Phase 9 has advanced early but is not closed. With optional local media, Windows 3.1 now reaches 386 Enhanced Mode through the normal `WIN` command on the canonical `full` image. The bounded acceptance workflow proves a single PS/2 pointer, Calculator launch and task-scoped `Alt+F4`, Program Manager survival, clean return to CiukiOS, and a second Windows launch. Windows 95/98, full-CD, broad application coverage, audio, printing, and hardware evidence remain open.
+Phase 9 has advanced early but is not closed. With optional local media, Windows 3.1 now reaches 386 Enhanced Mode through the normal `WIN` command on the canonical `full` image. The bounded acceptance workflow proves one linear PS/2 pointer, native Sound Blaster startup WAV audio, real non-silent AdLib MIDI playback, generic DOS-prompt enter/exit, automatic memory for an unprofiled DOS/4GW Doom launch and clean return, Calculator launch and task-scoped `Alt+F4`, Program Manager survival, clean return to CiukiOS, and a second Windows launch. Windows 95/98, full-CD, broad application and multimedia coverage, printing, and hardware evidence remain open.
 
-Validation snapshot (2026-09-01): the Phase 5 loader/kernel ownership boundary and ABI gate are green, together with the focused `make qemu-test-all` bundle and its full-CD read beyond LBA 65,535. The same checkout also passes the generic EXEC-memory policy guard, DOSNavigator mouse/navigation/Colors/exit workflow, the Costa desktop/cursor/Calculator gate, the Windows 3.1 Enhanced Mode/one-cursor/Alt+F4/exit/relaunch gate, the doom-vanille 256 KiB gate, controlled DOOMSFX playback, the focused shell COM/MZ/PSTACK/TSR return gate, and the bounded mTCP ICMP/FTP gates. The networking gate also proves that a normal COM process can shrink its own DOS block before nested EXEC: `NETSTART` starts `NE2000.COM` without any title-specific kernel rule. The doom-vanille allocation result does not override the direct gameplay capture that exposes incorrect planar rendering. `make qemu-test-setup-runtime-hdd-install` remains a separate long gate and is not included in `qemu-test-all`.
+Validation snapshot (2026-09-01): the Phase 5 loader/kernel ownership boundary and ABI gate are green, together with the expanded `make qemu-test-all` bundle and its full-CD read beyond LBA 65,535. The aggregate covers the generic EXEC-memory policy guard, unmodified DOSNavigator mouse/navigation/Colors/native-exit plus same-boot cleanup, Costa desktop/cursor/Calculator, WOLF3D gameplay, original Doom gameplay plus non-silent WAV, doom-vanille gameplay/texture/audio plus 256 KiB allocation, Windows 3.1 Enhanced Mode/linear cursor/native SB and AdLib MIDI audio/generic DOS VM/unprofiled DOS4GW Doom/Alt+F4/exit/relaunch, CuteMouse, external `COMMAND.COM`, and shell COM/MZ/PSTACK/TSR return gates. The bounded mTCP ICMP/FTP gates remain focused lanes; normal COM launchers relocate their stack and shrink their own DOS block before nested EXEC, without kernel program-name rules. `make qemu-test-setup-runtime-hdd-install` remains a separate long gate and is not included in `qemu-test-all`.
 
-Current work is concentrated on:
+Current work is concentrated on original DOS execution in native windows:
+
+1. a monitored foreground DOS session with explicit lifecycle, virtual interrupts and safe cleanup
+2. virtual VGA/text memory and I/O, focused keyboard input, and a protected-mode host renderer
+3. shared DPMI/audio ownership, original-binary video/audio evidence, and separate T23/E500 qualification
+
+The wider compatibility backlog remains:
 
 1. hardening logical JFT/SFT, handle, process, and file semantics as Phase 6 compatibility work without reopening the closed Phase 5 ownership boundary
 2. keeping the aggregate, runtime-negative, shell, and installer gates green on the same checkout
 3. expanding the Phase 6 matrix with meaningful external-application workflows on both `full` and `full-cd`
 4. removing workload-specific compatibility patches where a general DOS subsystem fix is possible
-5. using controlled audio probes as groundwork without promoting unresolved DOOM SB16 behavior to product support
+5. retaining the verified original Doom OPL2/PC-speaker and doom-vanille OPL2/SB16 paths while keeping the unresolved original Doom SB16/DMX behavior explicitly separate
 6. keeping the bounded Packet Driver/IPv4/FTP lane green while DHCP, other NICs, encrypted protocols, and physical networking remain explicit Phase 8 follow-ups
 7. extending the bounded Windows 3.1 result without treating it as Windows 95/98 or broad Phase 9 closure
 
 ## Quick Start
 
-Install the usual build and test tools for your platform. On Linux, the active lanes use `nasm`, `mtools`, `xorriso`, `qemu-system-i386` or `qemu-system-x86_64`, Syslinux BIOS files for the full-CD fallback ISO, `python3`, and Python Pillow for splash asset generation.
+On Linux, the complete build requires `nasm`, `mtools`, `ffmpeg`, `patch`,
+`make`, host C/C++ build tools, and the IA-16 cross-tools `ia16-elf-gcc`,
+`ia16-elf-ld` and `ia16-elf-objcopy`. Install OpenWatcom under `/opt/watcom` or
+set `WATCOM` to its installation directory; the DOS game and driver builds use
+its compiler, linker and librarian. Python needs Pillow and `tarfile` extraction
+filters (`extractall(..., filter='data')`): Python 3.12+ provides them, as do
+older releases with the relevant backport. The selected development environment
+uses Python 3.14.7.
+
+QEMU checks require `qemu-system-i386` or `qemu-system-x86_64`; CD generation
+also needs `xorriso`, with Syslinux BIOS files for the fallback ISO. Regenerating
+the desktop font additionally requires Fontconfig's `fc-match` and Liberation
+Sans; the generated font asset is already included, so this is optional for
+ordinary builds.
 
 Fetch the verified Costa release, build the complete FAT16 image, verify the runtime boundary, and open QEMU:
 
@@ -45,6 +109,8 @@ bash scripts/build_run_full.sh
 ```
 
 At the CiukiOS prompt, type `costa`. Set `CIUKIOS_FETCH_COSTA=0` only when intentionally building without downloading the optional payload.
+
+For a Doom-vanille performance session, use `bash scripts/build_run_full.sh --vga-fast`. On QEMU 11.1 this opt-in profile must not be used for the local original Doom binary; the normal command keeps the stable KVM default.
 
 To share files with the host, run `NETSTART` and `FTPSRV`, then connect from Linux or Windows to `ftp://127.0.0.1:8021/` with `ciukios` / `ciukios`. See the network section below for exact commands.
 
@@ -84,7 +150,7 @@ Run the active aggregate validation lane:
 make qemu-test-all
 ```
 
-Generated images are written under `build/full/`. The main full-profile disk image is `build/full/ciukios-full.img`; the primary Live/install CD image is `build/full/ciukios-full-cd.iso`; the ISOLINUX/memdisk fallback image is `build/full/ciukios-full-cd-isolinux.iso`.
+Generated images are written under `build/full/`. The main full-profile disk image is `build/full/ciukios-full.img`; the primary Live/install CD image is also emitted with its release version (for v0.7.1: `build/full/CiukiOS_full_cd_0-7-1.iso`), while `build/full/ciukios-full-cd.iso` remains the stable alias. The release CD uses GRUB4DOS to load a compressed 44.5 MiB image into a 96 MiB RAM disk before CiukiOS starts, so `SETUP.COM` clones RAM to HDD. Its recovery menu loads the uncompressed image through GRUB. `build/full/ciukios-full-cd-isolinux.iso` retains the original loader for diagnostics; `build/full/ciukios-full-cd-direct.iso` retains the direct-ATAPI diagnostic path.
 
 ## Active Profiles
 
@@ -112,6 +178,11 @@ make qemu-test-full-network-ftp
 make qemu-test-full-network-icmp
 make qemu-test-full-cutemouse
 make qemu-test-full-doomvan-memory
+make qemu-test-full-doomvan-audio
+make qemu-test-full-doomvan-performance
+make qemu-test-full-doom-audio
+make qemu-test-full-dos-audio
+make qemu-test-full-video-restore
 make qemu-test-full-windows31
 make qemu-test-full-drvload-smoke
 make qemu-test-full-shell-stability
@@ -156,15 +227,27 @@ WIN
 `WIN /3` explicitly requests the same Enhanced Mode. `WIN /S` remains useful
 only as a diagnostic fallback to the less capable Standard Mode.
 
+The full build installs Windows' native Microsoft Sound Blaster 1.5 and AdLib
+drivers from the supplied Windows media. They use the canonical VM hardware:
+Sound Blaster at `A220 I7 D1` and AdLib/OPL2 at `388`. Windows mouse ballistics
+are disabled and its sensitivity is calibrated independently of the resident
+DOS `INT 33h` service, so Costa and DOS Navigator keep their existing input path.
+The generated `_DEFAULT.PIF` and `DOSPRMPT.PIF` request all conventional, EMS,
+and XMS memory available to each DOS VM instead of imposing fixed 1 MiB limits.
+This is a generic Windows/DOS policy: applications copied into the image later
+inherit it without a title-specific PIF.
+
 The normal launcher automatically selects SDL over a verified X11/XWayland
-socket. This is QEMU's reliable relative-pointer path for DOS applications and
-Windows 3.1 across video-mode switches, including Costa and DOS Navigator. It
-is selected even if the desktop inherited a native-Wayland toolkit setting.
-Click inside the QEMU window to capture the pointer; use `Ctrl+Alt+G` to release
-it. GTK remains available explicitly with `--display gtk`, and
-`QEMU_DISPLAY_TRANSPORT=native` is the explicit transport opt-out. The
-frontend ignores host window-close requests so a guest `Alt+F4` cannot
-terminate the complete VM; exit CiukiOS with its `SHUTDOWN` command.
+socket and keeps SDL raw-relative input as the canonical DOS path. Warp-relative
+mode is not enabled automatically because its synthetic recentering events
+regress Costa and DOS Navigator; the launcher overrides any inherited SDL warp
+hint. None of these launcher choices alter the boot image, the
+i8042/IRQ12 implementation, the Windows PS/2 driver or behavior on real
+hardware. Click inside the QEMU window to capture the pointer; use `Ctrl+Alt+G`
+to release it. GTK remains available explicitly with `--display gtk`, and
+`QEMU_DISPLAY_TRANSPORT=native` is the display-transport opt-out. The frontend
+ignores host window-close requests so a guest `Alt+F4` cannot terminate the
+complete VM; exit CiukiOS with its `SHUTDOWN` command.
 
 The `full` and `full-cd` launchers now allocate 256 MiB of VM RAM by default,
 while the DOS/Windows-compatible BIOS and XMS interfaces expose approximately
@@ -187,9 +270,17 @@ acceptance test is:
 bash scripts/qemu_test_full_windows31.sh --no-build --headless-smoke
 ```
 
-It verifies two Enhanced Mode starts at 640x480, exactly one moving PS/2 pointer,
-Calculator launch and task-scoped `Alt+F4`, Program Manager responsiveness,
-the visible CiukiOS title bar after exit, and a clean relaunch.
+It first exits a DOS probe without unregistering its `INT 33h` callback,
+requires top-level EXEC cleanup to survive a subsequent mouse event, and then
+verifies that Windows takes exclusive BIOS PS/2 ownership. It requires two
+Enhanced Mode starts on the same EDID-selected VGA/VBE surface, exactly one linear moving pointer, a generic
+`COMMAND.COM` DOS VM that returns cleanly, progressing `CANYON.MID` playback
+with objective AdLib waveform evidence, an unprofiled DOS/4GW Doom process
+that receives dynamic memory and exits, Calculator task-scoped `Alt+F4`,
+Program Manager responsiveness, the visible CiukiOS title bar after exit, and
+a clean relaunch. Windows records its startup EXEC depth and releases every
+later application frame independently, preventing the former cumulative
+"memoria insufficiente" failure after closing a multimedia application.
 
 The original images remain available under `C:\MEDIA\WIN31`, while
 `C:\WIN31SET\SETUP.EXE` can access the merged installation media without
@@ -201,6 +292,47 @@ forwarded to the PS/2 controller rather than acknowledged as no-ops. `MOUSE
 STATUS` and `MOUSE INFO` inspect the resident DOS service. The GPL CuteMouse binary is also packaged as
 `C:\SYSTEM\DRIVERS\CTMOUSE.EXE` for optional replacement-driver testing; it is
 not automatically layered on top of an already active mouse service.
+
+## Display Setup And ThinkPad T23
+
+The full/full-CD profile packages the VBESVGA Windows 3.1 driver, its Enhanced
+Mode VDD and grabber, and source-rebuilt VBE/EDID utilities under
+`C:\SYSTEM\VIDEO`. Windows starts with EDID auto-selection and a safe 16-bit
+colour profile; the auxiliary INT 10h stack is installed before the shell so
+high-resolution Windows sessions can close without leaving a stale BIOS stack.
+
+Use the following commands from any CiukiOS directory:
+
+```text
+VGASETUP STATUS
+VGASETUP MODES
+VGASETUP
+VGASETUP TEST <VBE-mode>
+VGASETUP BRIGHTNESS <0..100>
+VGASETUP REFRESH AUTO
+```
+
+`VGASETUP` opens an interactive resolution menu for both the CiukiOS shell and
+Windows: 640×480, 800×600, 1024×768, or a native VGA text recovery profile.
+Use the arrow keys and Enter; graphical previews require confirmation within
+12 seconds, and Esc cancels. Confirmed settings update
+`C:\SYSTEM\VIDEO\DISPLAY.CFG` and `C:\WINDOWS\SYSTEM.INI` together. They persist
+on an installed writable system; Live CD changes last for the RAM-disk session.
+DOS applications may select their own video mode while running, and the shell
+restores the selected resolution when they exit. See the
+[display setup and T23 boot notes](docs/global-display-boot-2026-09-06.md).
+`STATUS` and `MODES` are read-only. On IBM
+ThinkPad firmware, brightness uses the embedded-controller HBRV register and
+checkpoints the selected level in ThinkPad NVRAM. Unknown machines never
+receive those EC writes because VBE has no universal brightness interface.
+LCD refresh remains BIOS-managed at its native `AUTO/60` timing; arbitrary raw
+CRTC timing is rejected instead of risking an out-of-range panel mode.
+
+The reproducible hardware-control gate is:
+
+```bash
+bash scripts/qemu_test_full_hardware_controls.sh --no-build
+```
 
 DOS compatibility changes belong in standard DOS, BIOS, XMS, DPMI, graphics,
 input, and device interfaces rather than executable-name rules. Files copied
@@ -256,25 +388,24 @@ CiukiOS project code is licensed under GNU GPLv2. FreeDOS kernel and FreeCOM sou
 
 The full profile now includes a narrow SB16 validation path. `SB16INIT.COM` probes Sound Blaster-compatible DSP bases, verifies the QEMU SB16 DSP at `0x220`, and plays a short DMA-backed SB sample and observes IRQ7 completion. `DRVLOAD.COM /AUDIO` runs that helper from `C:\SYSTEM\DRIVERS`.
 
-QEMU full, full-CD, taxonomy, and DRVLOAD smoke runners support `QEMU_AUDIO_MODE=off|auto|on` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|none`. The default is `on`, so local QEMU runs expose SB16 and PC speaker audio devices by default. Interactive runners prefer PipeWire, PulseAudio, ALSA, then SDL; focused tests may pin ALSA for reproducibility. `QEMU_AUDIO_MODE=off` is only for explicit silent runs.
+QEMU full, full-CD, taxonomy, and DRVLOAD smoke runners support `QEMU_AUDIO_MODE=off|auto|on` and `QEMU_AUDIO_BACKEND=pipewire|pa|pulse|alsa|sdl|wav|none`. The default is `on`, so local QEMU runs expose AdLib/OPL2 at `0x388`, SB16 at `A220 I7 D1 H5`, and PC speaker audio to every guest program. Interactive runners prefer PipeWire, PulseAudio, ALSA, then SDL; the Doom and DOS audio gates use the WAV backend for objective waveform analysis. `QEMU_AUDIO_MODE=off` is only for explicit silent runs.
 
-The interactive `full` and `full-cd` runners default to `QEMU_ACCEL_MODE=kvm`,
-so hardware virtualization is always active and missing `/dev/kvm` access is a
-fatal configuration error. `QEMU_ACCEL_MODE=auto` is the explicit portable
-fallback: it prefers KVM and otherwise enables the slower `tcg-safe` mode
-(`one-insn-per-tb`) required by Wolf3D's self-modifying renderer on affected
-QEMU 11.1 TCG builds. Plain `tcg` remains an explicit, faster but
-Wolf3D-unsafe diagnostic mode. KVM accelerates CPU-rendered DOS graphics; the
-standard VGA device remains intentionally compatible and does not expose a
-modern guest 3D API to DOS or Windows 3.1.
+The interactive `full` and `full-cd` runners default to `QEMU_ACCEL_MODE=kvm`
+for the widest stable application set. `QEMU_ACCEL_MODE=vga-fast` is an
+explicit TCG JIT profile for verified-safe planar-VGA workloads: on the
+validated host Doom-vanille's 350-gametic render fell from 1106 KVM realtics
+to 172. It is not the universal default because QEMU 11.1 itself crashes under
+TCG while the local original Doom binary remains in gameplay; `tcg-safe`
+avoids that host crash but is not fast enough. The guest hardware remains a
+standard PC/VGA machine; no modern 3D API is presented to DOS or Windows 3.1.
 
 This proves SB16 DSP detection and controlled DMA1/IRQ7 playback in project probes. `PMIRQSB.COM` also proves the narrower DOS/4GW protected-mode timer and SB IRQ delivery path, and `DOOMSFX` plays selected WAD lumps through the controlled SB16 harness.
 
-The DOS child environment now has a valid owned MCB and exports `BLASTER=A220 I7 D1 H5 T6`; the conventional-memory arena also leaves room for DOS/4GW plus MultiVoc. Doom-vanille is packaged with an explicit SB16 SFX profile and reaches `DMX_Init() returned 8` with SFX device 3/code 8, but the final gameplay WAV contains only digital silence (`-91 dB`). This does not promote either game path: the proprietary `DOOM.EXE`/DMX SB16 branch remains an investigation lane, and doom-vanille still needs its DMA/mixer sample path fixed.
+The DOS child environment now has a valid owned MCB and exports `BLASTER=A220 I7 D1 H5 T6`; the conventional-memory arena also leaves room for DOS/4GW plus MultiVoc. Original Doom is packaged with AdLib music and stable PC-speaker SFX; `qemu-test-full-doom-audio` proves real gameplay plus a non-silent, non-constant mixed WAV. Its separate proprietary SB16/DMX branch remains unsupported. Doom-vanille is packaged with AdLib music and SB16 SFX together; `qemu-test-full-doomvan-audio` requires DMX music device 2/code 2, SFX device 3/code 8, combined return code 10, healthy gameplay/HUD/walls, and objective mixed output. The isolated OPL gate and four-layer `qemu-test-full-dos-audio` distinguish music, real-mode SB16, protected-mode SB16, and the combined external workload. Full-CD, a second external audio application with clean return, and real hardware remain open.
 
 ## Project Policy
 
-1. Final runtime compatibility work must not rely on CPU emulation shortcuts.
+1. Final physical-hardware compatibility must not rely on emulator-only guest patches; QEMU validation may select the accelerator that most accurately and efficiently exercises legacy devices.
 2. Stage1 size and ownership pressure should be reduced through runtime/module ownership, not endless byte-level feature accretion.
 3. Validation claims must name the lane and scope that proved them.
 4. Local agent handoffs and transient operational notes belong under `handoff/`, not public docs.

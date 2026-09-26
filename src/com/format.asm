@@ -16,7 +16,9 @@ bits 16
 org 0x0100
 
 %define MBR_PARTITION_LBA 63
-%define MBR_PARTITION_SECTORS 0x00040000   ; 128 MB FAT16 (matches full-CD layout)
+%ifndef MBR_PARTITION_SECTORS
+%define MBR_PARTITION_SECTORS 0x00040000
+%endif
 %define TARGET_DRIVE 0x81                  ; live-CD install target (BIOS HDD #2)
 %define SOURCE_DRIVE 0x80                  ; live-CD source media (BIOS HDD #1)
 

@@ -28,7 +28,12 @@ start:
 
     mov dx, msg_not_found
     call print_line
-    mov ax, 0x4C01
+    mov dx, msg_pc_fallback
+    call print_line
+    call play_pc_speaker_fallback
+    mov dx, msg_done
+    call print_line
+    mov ax, 0x4C00
     int 0x21
 
 .found:
@@ -305,7 +310,6 @@ wait_irq7:
     push dx
 
     sti
-    mov cx, 8
     mov ah, 0x00
     int 0x1A
     mov bx, dx
@@ -315,10 +319,10 @@ wait_irq7:
     jne .ok
     mov ah, 0x00
     int 0x1A
-    cmp dx, bx
-    je .wait_tick
-    mov bx, dx
-    loop .wait_tick
+    mov ax, dx
+    sub ax, bx
+    cmp ax, 8
+    jb .wait_tick
     stc
     jmp .done
 
@@ -424,6 +428,59 @@ delay_between:
     pop cx
     ret
 
+; Last-resort backend available on AT-compatible hardware without any sound
+; card.  Preserve port 61h exactly so keyboard/speaker gate state is not left
+; altered for the shell or a following game.
+play_pc_speaker_fallback:
+    push ax
+    push bx
+    push dx
+    in al, 0x61
+    mov [pc_speaker_port61], al
+    or al, 0x03
+    out 0x61, al
+    mov al, 0xB6
+    out 0x43, al
+    mov ax, 2712                   ; ~440 Hz
+    call pc_program_divisor
+    call pc_wait_two_ticks
+    mov ax, 1808                   ; ~660 Hz
+    call pc_program_divisor
+    call pc_wait_two_ticks
+    mov ax, 1356                   ; ~880 Hz
+    call pc_program_divisor
+    call pc_wait_two_ticks
+    mov al, [pc_speaker_port61]
+    out 0x61, al
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+pc_program_divisor:
+    out 0x42, al
+    mov al, ah
+    out 0x42, al
+    ret
+
+pc_wait_two_ticks:
+    push ax
+    push bx
+    push dx
+    mov ah, 0
+    int 0x1A
+    mov bx, dx
+.wait:
+    mov ah, 0
+    int 0x1A
+    sub dx, bx
+    cmp dx, 2
+    jb .wait
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 print_probe:
     mov dx, msg_probe_prefix
     call print_line
@@ -492,6 +549,7 @@ dma_len dw 0
 dma_page db 0
 irq7_installed db 0
 irq7_count db 0
+pc_speaker_port61 db 0
 
 sample_low:
     times 48 db 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0
@@ -511,6 +569,7 @@ msg_begin db '[AUDIOTST] BEGIN', 13, 10, '$'
 msg_probe_prefix db '[AUDIOTST] PROBE 0x', '$'
 msg_found_prefix db '[AUDIOTST] DSP OK at 0x', '$'
 msg_not_found db '[AUDIOTST] NO DSP FOUND', 13, 10, '$'
+msg_pc_fallback db '[AUDIOTST] PC SPEAKER FALLBACK', 13, 10, '$'
 msg_tone1 db '[AUDIOTST] TONE 1', 13, 10, '$'
 msg_tone2 db '[AUDIOTST] TONE 2', 13, 10, '$'
 msg_tone3 db '[AUDIOTST] TONE 3', 13, 10, '$'

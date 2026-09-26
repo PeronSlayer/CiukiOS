@@ -458,7 +458,6 @@ wait_irq7:
     push dx
 
     sti
-    mov cx, 8
     mov ah, 0x00
     int 0x1A
     mov bx, dx
@@ -468,10 +467,10 @@ wait_irq7:
     jne .ok
     mov ah, 0x00
     int 0x1A
-    cmp dx, bx
-    je .wait_tick
-    mov bx, dx
-    loop .wait_tick
+    mov ax, dx
+    sub ax, bx
+    cmp ax, 8
+    jb .wait_tick
     stc
     jmp .done
 

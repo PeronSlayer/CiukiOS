@@ -1,0 +1,11 @@
+{
+  "format": "CIUKUI01",
+  "bytes": 11214,
+  "sha256": "545cd86b4891a2c108b8bb15350d681561b9e0e0b9a8f16ea59316cefc49b52c",
+  "unchanged_inputs": {
+    "src/com/setup_font.bin": "39043ad639dd8c1e1f3c4b93987a97cc04ed3e190d73c3b95cf3297d773945a2",
+    "assets/brand/native/ciuki-16.bin": "e4bf73becba9eee3009f2135dfc016eb3bf6c75fd8f97a03a92d07572ea76010",
+    "assets/brand/native/ciuki-24.bin": "de394da89d0c0ffb2a0717d8e2f653800c71293fd81862b4cf2250327c5c0bf9",
+    "assets/brand/native/ciuki-64.bin": "80eed4d8b0f62bda707f026404d640175bd70b11bdad74d350d67d06841e3ca0"
+  }
+}

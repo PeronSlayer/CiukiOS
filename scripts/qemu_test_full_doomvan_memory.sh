@@ -195,9 +195,9 @@ fi
 
 [[ -f "$IMG" ]] || fail "missing image: $IMG"
 [[ ! -L "$IMG" ]] || fail "refusing symlink source image: $IMG"
-if ! mdir -i "$IMG" ::APPS/DOOMVAN/PCDOOM.EXE >/dev/null 2>&1; then
+if ! mdir -i "$IMG" ::APPS/DOOMVAN/PCDMCORE.EXE >/dev/null 2>&1; then
     if [[ "$DOOMVAN_MEMORY_REQUIRED" == "1" ]]; then
-        fail "PCDOOM.EXE is not packaged in ::APPS/DOOMVAN"
+        fail "PCDMCORE.EXE is not packaged in ::APPS/DOOMVAN"
     fi
     echo "[doomvan-memory] SKIP optional doom-vanille payload is unavailable"
     exit 0
@@ -281,6 +281,7 @@ timeout "$TIMEOUT_SEC" qemu-system-i386 \
     -monitor "unix:$MON_SOCK,server,nowait" \
     -audiodev none,id=snd0 \
     -device sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0 \
+    -device adlib,audiodev=snd0 \
     -no-reboot \
     -no-shutdown \
     >/dev/null 2>"$STDERR_LOG" &
@@ -292,7 +293,7 @@ wait_for_marker 'CiukiOS SHELL C:\APPS>' 30 \
 
 send_text_and_enter 'cd \APPS\DOOMVAN'
 sleep 1
-send_text_and_enter 'run PCDOOM.EXE -nomusic'
+send_text_and_enter 'run PCDMCORE.EXE -nomusic'
 
 wait_for_marker 'DOS/4GW Protected Mode Run-time' 45 \
     || fail "DOS/4GW did not initialize"

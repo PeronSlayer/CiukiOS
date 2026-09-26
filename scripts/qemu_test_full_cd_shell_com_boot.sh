@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
+CIUKIOS_VERSION="${CIUKIOS_VERSION:-0.7.1}"
+ISO_VERSION_TAG="${CIUKIOS_VERSION//./-}"
+VERSIONED_ISO_IMG="build/full/CiukiOS_full_cd_${ISO_VERSION_TAG}.iso"
 
 DO_BUILD=1
 BOOT_EXPECT_FALLBACK="${FULL_CD_SHELL_COM_BOOT_EXPECT_FALLBACK:-0}"
@@ -26,11 +29,14 @@ CD_SNAPSHOT_ACTIVE=0
 CD_ARTIFACTS=(
   "build/full/ciukios-full-cd-partition.img"
   "build/full/ciukios-full-cd-disk.img"
+  "build/full/ciukios-full-cd-redundant.img"
   "build/full/obj/full_cd_mbr.bin"
   "build/full/cd-iso-root"
   "build/full/ciukios-full-cd.iso"
+  "$VERSIONED_ISO_IMG"
   "build/full/ciukios-full-cd-direct.iso"
   "build/full/ciukios-full-cd-isolinux.iso"
+  "build/full/ciukios-full-cd-lowmem.iso"
 )
 CD_ARTIFACT_PRESENT=()
 
@@ -85,11 +91,14 @@ remove_cd_artifact() {
   case "$path" in
     build/full/ciukios-full-cd-partition.img|\
     build/full/ciukios-full-cd-disk.img|\
+    build/full/ciukios-full-cd-redundant.img|\
     build/full/obj/full_cd_mbr.bin|\
     build/full/cd-iso-root|\
     build/full/ciukios-full-cd.iso|\
+    "$VERSIONED_ISO_IMG"|\
     build/full/ciukios-full-cd-direct.iso|\
-    build/full/ciukios-full-cd-isolinux.iso) ;;
+    build/full/ciukios-full-cd-isolinux.iso|\
+    build/full/ciukios-full-cd-lowmem.iso) ;;
     *)
       echo "[full-cd-shell-com-boot] ERROR: refusing unsafe artifact removal: $path" >&2
       return 1

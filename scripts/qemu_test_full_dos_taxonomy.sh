@@ -36,12 +36,20 @@ DOS_TAXONOMY_PRE_LAUNCH_COMMAND="${DOS_TAXONOMY_PRE_LAUNCH_COMMAND:-}"
 DOS_TAXONOMY_APP_RUNTIME_MARKERS="${DOS_TAXONOMY_APP_RUNTIME_MARKERS:-}"
 DOS_TAXONOMY_DISPLAY_MODE="${DOS_TAXONOMY_DISPLAY_MODE:-nographic}"
 DOS_TAXONOMY_SCREENSHOT="${DOS_TAXONOMY_SCREENSHOT:-}"
+DOS_TAXONOMY_VISUAL_PROFILE="${DOS_TAXONOMY_VISUAL_PROFILE:-generic}"
 DOS_TAXONOMY_SCREENSHOT_DELAY_SEC="${DOS_TAXONOMY_SCREENSHOT_DELAY_SEC:-5}"
 DOS_TAXONOMY_POST_LAUNCH_KEY="${DOS_TAXONOMY_POST_LAUNCH_KEY:-}"
 DOS_TAXONOMY_POST_LAUNCH_KEYS="${DOS_TAXONOMY_POST_LAUNCH_KEYS:-}"
 DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC="${DOS_TAXONOMY_POST_LAUNCH_KEY_INTERVAL_SEC:-1}"
 DOS_TAXONOMY_POST_LAUNCH_COMMAND="${DOS_TAXONOMY_POST_LAUNCH_COMMAND:-}"
 DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC="${DOS_TAXONOMY_POST_LAUNCH_KEY_DELAY_SEC:-0}"
+DOS_TAXONOMY_EXIT_KEYS="${DOS_TAXONOMY_EXIT_KEYS:-}"
+DOS_TAXONOMY_EXIT_KEY_DELAY_SEC="${DOS_TAXONOMY_EXIT_KEY_DELAY_SEC:-0}"
+DOS_TAXONOMY_EXIT_KEY_INTERVAL_SEC="${DOS_TAXONOMY_EXIT_KEY_INTERVAL_SEC:-1}"
+DOS_TAXONOMY_AFTER_EXIT_DELAY_SEC="${DOS_TAXONOMY_AFTER_EXIT_DELAY_SEC:-3}"
+DOS_TAXONOMY_AFTER_EXIT_COMMAND="${DOS_TAXONOMY_AFTER_EXIT_COMMAND:-}"
+DOS_TAXONOMY_AFTER_EXIT_SCREENSHOT="${DOS_TAXONOMY_AFTER_EXIT_SCREENSHOT:-}"
+DOS_TAXONOMY_ALLOW_SHELL_RETURN="${DOS_TAXONOMY_ALLOW_SHELL_RETURN:-0}"
 DOS_TAXONOMY_KEY_DELAY_SEC="${DOS_TAXONOMY_KEY_DELAY_SEC:-0.12}"
 DOS_TAXONOMY_PRE_ENTER_DELAY_SEC="${DOS_TAXONOMY_PRE_ENTER_DELAY_SEC:-0.35}"
 QEMU_STDERR="${QEMU_STDERR:-build/full/qemu-full-dos-taxonomy.stderr.log}"
@@ -49,7 +57,8 @@ QEMU_CMD_LOG="${QEMU_CMD_LOG:-build/full/qemu-full-dos-taxonomy.commands.log}"
 QEMU_MON_SOCK="${QEMU_MON_SOCK:-/tmp/ciukios-dosapp-taxonomy.monitor.sock}"
 FUTURE_MTIME_TOLERANCE_SEC="${FUTURE_MTIME_TOLERANCE_SEC:-5}"
 QEMU_AUDIO_MODE="${QEMU_AUDIO_MODE:-on}"
-QEMU_ACCEL_MODE="${QEMU_ACCEL_MODE:-default}"
+QEMU_AUDIO_DEVICES="${QEMU_AUDIO_DEVICES:-standard}"
+QEMU_ACCEL_MODE="${QEMU_ACCEL_MODE:-auto}"
 QEMU_MACHINE_ARG="pc,vmport=off"
 QEMU_ACCEL_ARGS=()
 QEMU_ACCEL_DETAIL="default TCG"
@@ -96,6 +105,8 @@ case "$DOS_TAXONOMY_USE_CASE" in
     [[ "$DOS_TAXONOMY_APP_DIR_IN_IMAGE" == "::APPS" ]] && DOS_TAXONOMY_APP_DIR_IN_IMAGE="::APPS/DOOM"
     [[ "$DOS_TAXONOMY_APP_BINARY_NAME" == "CIUKEDIT.COM" ]] && DOS_TAXONOMY_APP_BINARY_NAME="DOOM.EXE"
     [[ "$DOS_TAXONOMY_RUN_COMMAND" == "run CIUKEDIT.COM" ]] && DOS_TAXONOMY_RUN_COMMAND="run DOOM.EXE"
+    [[ -n "$DOS_APP_AUX_PRIMARY" ]] || DOS_APP_AUX_PRIMARY="DOOM.WAD"
+    [[ -n "$DOS_APP_AUX_ALIAS" ]] || DOS_APP_AUX_ALIAS="DOOM.WAD"
     if [[ "$DOS_TAXONOMY_PRE_LAUNCH_COMMAND" == "__none__" ]]; then
       DOS_TAXONOMY_PRE_LAUNCH_COMMAND=""
     elif [[ -z "$DOS_TAXONOMY_PRE_LAUNCH_COMMAND" ]]; then
@@ -223,6 +234,10 @@ configure_accel_args() {
   fi
 
   case "$QEMU_ACCEL_MODE" in
+    vga-fast)
+      QEMU_ACCEL_ARGS=(-accel tcg)
+      QEMU_ACCEL_DETAIL="tcg JIT (legacy VGA fast path)"
+      ;;
     default) ;;
     auto)
       if qemu_kvm_available "$qemu_cmd"; then
@@ -256,7 +271,7 @@ configure_accel_args() {
       QEMU_ACCEL_DETAIL="tcg one-insn-per-tb"
       ;;
     *)
-      echo "[dos-taxonomy] ERROR invalid QEMU_ACCEL_MODE=$QEMU_ACCEL_MODE (expected default, auto, wolf3d-safe, kvm, tcg or tcg-safe)" >&2
+      echo "[dos-taxonomy] ERROR invalid QEMU_ACCEL_MODE=$QEMU_ACCEL_MODE (expected default, vga-fast, auto, wolf3d-safe, kvm, tcg or tcg-safe)" >&2
       exit 1
       ;;
   esac
@@ -292,6 +307,7 @@ configure_audio_args() {
   local requested_backend="${QEMU_AUDIO_BACKEND:-}"
   local backend=""
   local candidate
+  local audiodev_spec
 
   QEMU_AUDIO_ARGS=()
   QEMU_AUDIO_DETAIL="off"
@@ -317,7 +333,10 @@ configure_audio_args() {
   elif [[ "$context" == "headless" && "$QEMU_AUDIO_MODE" != "on" ]]; then
     backend="none"
   else
-    for candidate in alsa pipewire pa sdl; do
+    # Match the interactive runner.  PipeWire/Pulse are session-aware and are
+    # safer defaults than opening ALSA hardware directly while a desktop sound
+    # server owns it.
+    for candidate in pipewire pa alsa sdl; do
       if audio_backend_supported "$qemu_cmd" "$candidate"; then
         backend="$candidate"
         break
@@ -327,12 +346,36 @@ configure_audio_args() {
   fi
 
   local sb_irq="${QEMU_SB_IRQ:-7}"
-  QEMU_AUDIO_ARGS=(
-    -audiodev "${backend},id=snd0"
-    -device "sb16,iobase=0x220,irq=${sb_irq},dma=1,dma16=5,audiodev=snd0"
-  )
+  audiodev_spec="${backend},id=snd0"
+  if [[ "$backend" == "wav" && -n "${QEMU_AUDIO_WAV_PATH:-}" ]]; then
+    audiodev_spec+=",path=${QEMU_AUDIO_WAV_PATH}"
+  fi
+  case "$QEMU_AUDIO_DEVICES" in
+    standard)
+      QEMU_AUDIO_ARGS=(
+        -audiodev "$audiodev_spec"
+        -device "sb16,iobase=0x220,irq=${sb_irq},dma=1,dma16=5,audiodev=snd0"
+        -device "adlib,audiodev=snd0"
+      )
+      QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=${sb_irq} dma=1 hdma=5 adlib=opl2 ports=0x388"
+      ;;
+    pcspeaker)
+      QEMU_AUDIO_ARGS=(-audiodev "$audiodev_spec")
+      QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=absent adlib=absent"
+      ;;
+    ac97)
+      QEMU_AUDIO_ARGS=(
+        -audiodev "$audiodev_spec"
+        -device "AC97,audiodev=snd0"
+      )
+      QEMU_AUDIO_DETAIL="backend=${backend} ac97=8086:2415 sb16=emulated-by-vsbhda"
+      ;;
+    *)
+      echo "[dos-taxonomy] ERROR invalid QEMU_AUDIO_DEVICES=$QEMU_AUDIO_DEVICES (expected standard, pcspeaker or ac97)" >&2
+      exit 1
+      ;;
+  esac
   QEMU_MACHINE_ARG="pc,vmport=off,pcspk-audiodev=snd0"
-  QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on sb16=iobase=0x220 irq=${sb_irq} dma=1 hdma=5"
 }
 
 normalized_log_matches_regex() {
@@ -658,6 +701,104 @@ ppm_visual_diversity() {
   ' "$ppm_path"
 }
 
+ppm_doom_vga_gameplay_health() {
+  local ppm_path="$1"
+
+  python3 - "$ppm_path" <<'PY'
+import sys
+from pathlib import Path
+
+data = Path(sys.argv[1]).read_bytes()
+pos = 0
+
+def token():
+    global pos
+    while pos < len(data):
+        if data[pos] in b" \t\r\n":
+            pos += 1
+            continue
+        if data[pos] == ord("#"):
+            while pos < len(data) and data[pos] not in b"\r\n":
+                pos += 1
+            continue
+        break
+    start = pos
+    while pos < len(data) and data[pos] not in b" \t\r\n#":
+        pos += 1
+    if start == pos:
+        raise ValueError("missing PPM token")
+    return data[start:pos]
+
+try:
+    magic = token()
+    width = int(token())
+    height = int(token())
+    maxval = int(token())
+    if magic != b"P6" or maxval != 255:
+        raise ValueError("expected 8-bit P6 PPM")
+    if width % 320 or height % 200:
+        raise ValueError(f"expected an integer-scaled 320x200 frame, got {width}x{height}")
+    if pos >= len(data) or data[pos] not in b" \t\r\n":
+        raise ValueError("missing PPM raster separator")
+    pos += 1
+    expected = width * height * 3
+    pixels = data[pos:pos + expected]
+    if len(pixels) != expected:
+        raise ValueError("truncated PPM raster")
+except (OSError, ValueError) as exc:
+    print(f"invalid doom VGA screenshot: {exc}")
+    raise SystemExit(2)
+
+scale_x = width // 320
+scale_y = height // 200
+
+def pixel(x, y):
+    physical_x = x * scale_x + scale_x // 2
+    physical_y = y * scale_y + scale_y // 2
+    offset = (physical_y * width + physical_x) * 3
+    return pixels[offset], pixels[offset + 1], pixels[offset + 2]
+
+horizontal = []
+vertical = []
+for y in range(55, 130):
+    for x in range(319):
+        left = pixel(x, y)
+        right = pixel(x + 1, y)
+        horizontal.append(sum(abs(right[c] - left[c]) for c in range(3)))
+for y in range(55, 129):
+    for x in range(320):
+        top = pixel(x, y)
+        bottom = pixel(x, y + 1)
+        vertical.append(sum(abs(bottom[c] - top[c]) for c in range(3)))
+
+mean_horizontal = sum(horizontal) / len(horizontal)
+mean_vertical = sum(vertical) / len(vertical)
+vertical_ratio = mean_vertical / max(mean_horizontal, 0.001)
+high_vertical_fraction = sum(value > 120 for value in vertical) / len(vertical)
+
+# A real Doom gameplay frame has the grey status bar in the bottom 32 rows.
+# The title/menu screens do not, while the broken 1-byte WAD packing build did.
+hud_grey_pixels = 0
+for y in range(168, 200):
+    for x in range(320):
+        red, green, blue = pixel(x, y)
+        if abs(red - green) < 15 and abs(green - blue) < 15 and 35 < red < 190:
+            hud_grey_pixels += 1
+
+detail = (
+    f"hud_grey_pixels={hud_grey_pixels}, "
+    f"wall_vertical_over_horizontal={vertical_ratio:.3f}, "
+    f"wall_high_vertical_fraction={high_vertical_fraction:.3f}"
+)
+print(detail)
+
+if hud_grey_pixels < 3000:
+    raise SystemExit(1)
+if vertical_ratio > 2.5 or high_vertical_fraction > 0.12:
+    raise SystemExit(1)
+PY
+}
+
 classify_visual_gameplay() {
   local run_start_epoch="$1"
   local smoke_detail="$2"
@@ -698,7 +839,16 @@ classify_visual_gameplay() {
 
   read -r width height nonblank unique_colors <<<"$ppm_stats"
   if [[ "$nonblank" -ge 1000 && "$unique_colors" -ge 16 ]]; then
-    set_stage "visual_gameplay" "PASS" "$visual_detail_prefix; screenshot fresh P6 PPM has visual diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
+    if [[ "$DOS_TAXONOMY_VISUAL_PROFILE" == "doom_vga_gameplay" ]]; then
+      local doom_vga_stats
+      if ! doom_vga_stats="$(ppm_doom_vga_gameplay_health "$DOS_TAXONOMY_SCREENSHOT" 2>&1)"; then
+        set_stage "visual_gameplay" "FAIL" "$visual_detail_prefix; Doom VGA gameplay validation failed: $doom_vga_stats"
+        return
+      fi
+      set_stage "visual_gameplay" "PASS" "$visual_detail_prefix; screenshot fresh P6 PPM has healthy Doom gameplay: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors, $doom_vga_stats"
+    else
+      set_stage "visual_gameplay" "PASS" "$visual_detail_prefix; screenshot fresh P6 PPM has visual diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
+    fi
   else
     set_stage "visual_gameplay" "FAIL" "$visual_detail_prefix; screenshot blank or low diversity: ${width}x${height}, nonblank_samples=$nonblank, unique_sampled_colors=$unique_colors"
   fi
@@ -781,9 +931,7 @@ classify_runtime() {
   local launch_detail="$dosapp_cmd"
   local exec_stage_name="dosapp_exec_attempted"
   local prompt_returned="unknown"
-  local prompt_count_before_run=0
-  local prompt_count_after_run=0
-  local prompt_offset_before_run=0
+  local prompt_return_offset=0
   local prompt_return_detail="shell_prompt_return=unknown"
   local post_launch_key
   local -a post_launch_keys=()
@@ -857,8 +1005,10 @@ classify_runtime() {
     case "$DOS_TAXONOMY_DISPLAY_MODE" in
       nographic) qemu_display_args=(-nographic) ;;
       none) qemu_display_args=(-display none) ;;
+      gtk) qemu_display_args=(-display gtk) ;;
+      sdl) qemu_display_args=(-display sdl) ;;
       *)
-        set_stage "$exec_stage_name" "FAIL" "invalid DOS_TAXONOMY_DISPLAY_MODE=$DOS_TAXONOMY_DISPLAY_MODE (expected nographic or none)"
+        set_stage "$exec_stage_name" "FAIL" "invalid DOS_TAXONOMY_DISPLAY_MODE=$DOS_TAXONOMY_DISPLAY_MODE (expected nographic, none, gtk or sdl)"
         if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" ]]; then
           set_stage "mz_transfer" "DEFERRED" "runtime launch skipped due invalid display mode"
           set_stage "extender_init" "DEFERRED" "runtime launch skipped due invalid display mode"
@@ -875,9 +1025,9 @@ classify_runtime() {
 
     QEMU_ARGS=(
       "${QEMU_ACCEL_ARGS[@]}"
-      -machine "$QEMU_MACHINE_ARG"
+      -machine "$QEMU_MACHINE_ARG,i8042=on"
       -cpu pentium3
-      -m 128
+      -m 256
       -drive "file=$IMG,format=raw,if=ide"
       -boot c
       "${qemu_display_args[@]}"
@@ -932,9 +1082,12 @@ classify_runtime() {
         fi
       fi
 
-      prompt_offset_before_run="$(get_file_size_bytes "$LOG_FILE")"
-      prompt_count_before_run="$(normalized_log_regex_count "$LOG_FILE" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:')"
       if send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$dosapp_cmd"; then
+        # Start the return-to-shell window only after the launch command and
+        # its Enter have been emitted.  Counting complete prompts races with
+        # the serial backend and can mistake the tail of the launch prompt for
+        # a new prompt while a graphical application is still running.
+        prompt_return_offset="$(get_file_size_bytes "$LOG_FILE")"
         # Track only prompt markers that appear after launch to avoid
         # misclassifying very fast app exits as still running.
         if [[ -n "$DOS_TAXONOMY_POST_LAUNCH_KEYS" ]]; then
@@ -967,16 +1120,36 @@ classify_runtime() {
         if [[ -n "$DOS_TAXONOMY_SCREENSHOT" ]]; then
           hmp "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "screendump $DOS_TAXONOMY_SCREENSHOT" >/dev/null 2>&1 || true
         fi
+        if [[ -n "$DOS_TAXONOMY_EXIT_KEYS" ]]; then
+          if [[ "$DOS_TAXONOMY_EXIT_KEY_DELAY_SEC" =~ ^[0-9]+$ && "$DOS_TAXONOMY_EXIT_KEY_DELAY_SEC" -gt 0 ]]; then
+            sleep "$DOS_TAXONOMY_EXIT_KEY_DELAY_SEC"
+          fi
+          read -r -a exit_keys <<<"$DOS_TAXONOMY_EXIT_KEYS"
+          for exit_key in "${exit_keys[@]}"; do
+            send_key "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$exit_key" || true
+            if [[ "$DOS_TAXONOMY_EXIT_KEY_INTERVAL_SEC" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+              && [[ "$DOS_TAXONOMY_EXIT_KEY_INTERVAL_SEC" != "0" ]]; then
+              sleep "$DOS_TAXONOMY_EXIT_KEY_INTERVAL_SEC"
+            fi
+          done
+          if [[ "$DOS_TAXONOMY_AFTER_EXIT_DELAY_SEC" =~ ^[0-9]+$ && "$DOS_TAXONOMY_AFTER_EXIT_DELAY_SEC" -gt 0 ]]; then
+            sleep "$DOS_TAXONOMY_AFTER_EXIT_DELAY_SEC"
+          fi
+          if [[ -n "$DOS_TAXONOMY_AFTER_EXIT_SCREENSHOT" ]]; then
+            hmp "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "screendump $DOS_TAXONOMY_AFTER_EXIT_SCREENSHOT" >/dev/null 2>&1 || true
+          fi
+          if [[ -n "$DOS_TAXONOMY_AFTER_EXIT_COMMAND" ]]; then
+            send_text_and_enter "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" "$DOS_TAXONOMY_AFTER_EXIT_COMMAND" || true
+          fi
+        fi
         observe_runtime_window "$qemu_pid" "$DOS_TAXONOMY_OBSERVE_SEC"
 
-        prompt_count_after_run="$(normalized_log_regex_count "$LOG_FILE" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:')"
-        if (( prompt_count_after_run > prompt_count_before_run )) \
-          || normalized_log_matches_regex "$LOG_FILE" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:' "$prompt_offset_before_run"; then
+        if normalized_log_matches_regex "$LOG_FILE" 'CiukiOS([[:space:]]+SHELL)?[[:space:]]+[CD]:' "$prompt_return_offset"; then
           prompt_returned="yes"
-          prompt_return_detail="shell_prompt_returned=yes (count ${prompt_count_before_run}->${prompt_count_after_run})"
+          prompt_return_detail="shell_prompt_returned=yes (after_offset=$prompt_return_offset)"
         else
           prompt_returned="no"
-          prompt_return_detail="shell_prompt_returned=no (count ${prompt_count_before_run}->${prompt_count_after_run})"
+          prompt_return_detail="shell_prompt_returned=no (after_offset=$prompt_return_offset)"
         fi
 
         set_stage "$exec_stage_name" "PASS" "sent shell command: $launch_detail; $prompt_return_detail"
@@ -1136,14 +1309,18 @@ classify_runtime() {
     set_stage "extender_init" "PASS" "$smoke_detail; inferred extender init from strong evidence chain (mz_transfer=PASS and video_init=PASS) in fresh logs: $runtime_log_sources"
   fi
 
-  if [[ "$prompt_returned" == "yes" ]]; then
+  if [[ "$prompt_returned" == "yes" && "$DOS_TAXONOMY_ALLOW_SHELL_RETURN" != "1" ]]; then
     set_stage "runtime_stable" "FAIL" "$smoke_detail; app returned to shell during observation window ($prompt_return_detail)"
   elif [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" && "${STAGE_STATUS[video_init]}" != "PASS" ]]; then
     set_stage "runtime_stable" "DEFERRED" "$smoke_detail; video gate not passed, stability window not evaluated"
   elif (( reboot_detected == 1 )); then
     set_stage "runtime_stable" "FAIL" "$smoke_detail; reboot detected in fresh logs ($reboot_detail)"
   elif [[ $smoke_rc -eq 0 ]]; then
-    set_stage "runtime_stable" "PASS" "$smoke_detail; QEMU remained controllable through the observation window"
+    if [[ "$prompt_returned" == "yes" ]]; then
+      set_stage "runtime_stable" "PASS" "$smoke_detail; expected clean return to shell ($prompt_return_detail)"
+    else
+      set_stage "runtime_stable" "PASS" "$smoke_detail; QEMU remained controllable through the observation window"
+    fi
   elif [[ $smoke_rc -eq 139 ]]; then
     set_stage "runtime_stable" "FAIL" "$smoke_detail; QEMU terminated with SIGSEGV during the post-video observation window"
   elif [[ $smoke_rc -eq 124 ]]; then
@@ -1171,6 +1348,14 @@ if [[ "$DOS_TAXONOMY_STRICT" != "0" && "$DOS_TAXONOMY_STRICT" != "1" ]]; then
   echo "[dos-taxonomy] ERROR invalid strict mode: $DOS_TAXONOMY_STRICT (expected 0 or 1)" >&2
   exit 1
 fi
+
+case "$DOS_TAXONOMY_VISUAL_PROFILE" in
+  generic|doom_vga_gameplay) ;;
+  *)
+    echo "[dos-taxonomy] ERROR invalid visual profile: $DOS_TAXONOMY_VISUAL_PROFILE (expected generic or doom_vga_gameplay)" >&2
+    exit 1
+    ;;
+esac
 
 if ! MIN_STAGE_INDEX="$(stage_index "$DOS_TAXONOMY_MIN_STAGE")"; then
   echo "[dos-taxonomy] ERROR invalid min stage: $DOS_TAXONOMY_MIN_STAGE" >&2
@@ -1238,16 +1423,6 @@ for ((i=0; i<=MIN_STAGE_INDEX; i++)); do
     break
   fi
 done
-
-if [[ "$DOS_TAXONOMY_PROFILE" == "dosapp" \
-  && "$RESULT" == "FAIL" \
-  && "$DOS_TAXONOMY_STRICT" != "1" \
-  && "$DOS_TAXONOMY_MIN_STAGE" == "visual_gameplay" \
-  && "${STAGE_STATUS[video_init]}" == "PASS" \
-  && "${STAGE_STATUS[visual_gameplay]}" == "PASS" ]]; then
-  RESULT="PASS"
-  REACHED_STAGE="visual_gameplay"
-fi
 
 if [[ "$RESULT" == "PASS" && "$DOS_TAXONOMY_STRICT" == "1" ]]; then
   for stage in "${STAGES[@]}"; do
