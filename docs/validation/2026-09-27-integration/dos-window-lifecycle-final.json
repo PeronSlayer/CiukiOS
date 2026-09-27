@@ -1,0 +1,26 @@
+{
+  "scope": "Execute built DOSWIN/SHELL lifecycle instructions with refused JLM cleanup.\n\nNASM assembles the production files unchanged. Unicorn executes their entry,\nuninstall, release and UI guards; only JLM, BIOS, DOS allocator and unrelated\npainting/audio endpoints are modeled. This is not QEMU or hardware acceptance.\n",
+  "runtime_sha256": "793fa6a37b027d61cb6c20e5625618f7b439c1ca7075ac34aacd503d74de69ff",
+  "shell_sha256": "8093b03b183161c90abc9a8c082bfca897695146d0ec595948b3704da7faa265",
+  "runtime_bytes": 34480,
+  "shell_bytes": 60912,
+  "shell_limit": 60928,
+  "cases": [
+    "END_refusal_retains_owner_hooks_mapping_and_exact_diagnostic",
+    "END_retry_rereads_changed_host_bank_then_releases_once",
+    "UNBIND_refusal_keeps_allocation_and_retry_never_repeats_END",
+    "normal_uninstall_order_and_idempotent_finished_entry",
+    "live_guest_cleanup_and_second_install_rejected",
+    "partial_cleanup_host_recovery_refusal_waits_saved_keyboard_without_rendering",
+    "shell_release_retains_then_retries_operation_2",
+    "shell_release_retains_then_retries_operation_5",
+    "DOS_module_free_failure_does_not_double_free_graphics_buffer",
+    "dw_launch_blocks_new_allocation_or_mode_exit_with_retry_message",
+    "ui_to_dos_blocks_new_allocation_or_mode_exit_with_retry_message",
+    "ui_queue_command_blocks_new_allocation_or_mode_exit_with_retry_message",
+    "close_keeps_retry_window_visible_when_cleanup_refused"
+  ],
+  "qemu": false,
+  "physical_hardware": false,
+  "result": "PASS"
+}

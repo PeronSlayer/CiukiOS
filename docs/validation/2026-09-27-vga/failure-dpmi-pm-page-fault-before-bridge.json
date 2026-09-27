@@ -1,0 +1,90 @@
+{
+  "passed": false,
+  "source_image_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "kernel_sha256": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+  "jemm_sha256": "bd6d2c55e7ea715b4e0c15352a6a3c1e0a92d711443dfa0b8897d018790b0bf8",
+  "jload_sha256": "b44e35332311f2104a58df7e869abe78f0cd745815bcc7ea653b85fd27080c20",
+  "probe_sha256": "3e400972ade6571411199354959ad8f7607b702ed22e036b03f3de38d167eff1",
+  "cpu": "pentium3",
+  "memory_mib": 128,
+  "graphics_virtualized": false,
+  "dpmi_virtualized": false,
+  "events": [
+    {
+      "command": "run \\VMSESS.COM",
+      "output": "[VMSESSION] No V86 monitor\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 7.076511947991094
+    },
+    {
+      "command": "run \\JEMM386.EXE LOAD NOEMS X=A000-FFFF NODYN MAX=32M MIN=32M NOVME",
+      "output": "[MZ] run\r\nJemm386 loaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 13.737967182009015
+    },
+    {
+      "command": "run \\VMSESS.COM",
+      "output": "[VMSESSION] PE=1 VCPI=present\r\n[VMSESSION] DOS create/write/read/close/delete and B800 PASS\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 15.42180385501706
+    },
+    {
+      "command": "comdemo",
+      "output": "COM demo via INT21h\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 16.100268834008602
+    },
+    {
+      "command": "mzdemo",
+      "output": "[MZ] run\r\nMZ demo via INT21h\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 16.715930419013603
+    },
+    {
+      "command": "dir \\SYSTEM",
+      "output": "Directory listing\r\n. <DIR>\r\n.. <DIR>\r\nSTAGE2.BIN\r\nSPLASH.BIN\r\nSHELL.COM\r\nDOSWIN.DRV\r\nGAMES <DIR>\r\nUI <DIR>\r\nSTARTUP.CFG\r\nCIUKIDOS.SYS\r\nDRIVERS <DIR>\r\nMOUSE.COM\r\nBOOTSND.COM\r\nMEDIA.DRV\r\nSOUNDS <DIR>\r\nBOOT.PCM\r\nVIDEO <DIR>\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 17.89609708401258
+    },
+    {
+      "command": "run \\JLOAD.EXE \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' loaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 20.801896132994443
+    }
+  ],
+  "prepared_image_sha256": "56ccc0ba314389677c2cf82ff6ea077e9d624543b2a735e2fe70adbe1b1693f0",
+  "fixture_sha256": {
+    "VMSESS.COM": "3e400972ade6571411199354959ad8f7607b702ed22e036b03f3de38d167eff1",
+    "VMPARENT.COM": "04486535fcd195e6eb880bb50c57c8c6fef39f324915e7635686a1129769b014",
+    "VMGUEST.COM": "9b6cc5a37920b50950b9e309a25b116fce93fa9998172842ba6b78464ff77b9a",
+    "VMNEG.COM": "d86285ddf2beded08cb255c6c4be615d83e47ebca7fad1342d0a2948fe0a06a3"
+  },
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "512",
+    "-drive",
+    "file=/home/peronslayer/Desktop/CiukiOS/build/full/vga-video-2026-09-27/legacy-dpmi1/disk.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/peronslayer/Desktop/CiukiOS/build/full/vga-video-2026-09-27/legacy-dpmi1/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-a57069c029464fd795ebcd3b9399bda0.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-m",
+    "128",
+    "-vga",
+    "std",
+    "-audiodev",
+    "wav,id=snd,path=/home/peronslayer/Desktop/CiukiOS/build/full/vga-video-2026-09-27/legacy-dpmi1/audio.wav",
+    "-device",
+    "AC97,audiodev=snd"
+  ],
+  "error": "AssertionError('Guest did not reach observation point: running-guest')",
+  "registers": "i\u001b[K\u001b[Din\u001b[K\u001b[D\u001b[Dinf\u001b[K\u001b[D\u001b[D\u001b[Dinfo\u001b[K\u001b[D\u001b[D\u001b[D\u001b[Dinfo \u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo r\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo re\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo reg\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo regi\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo regis\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo regist\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo registe\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo register\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo registers\u001b[K\r\n\r\nCPU#0\r\nEAX=000000f4 EBX=0000de80 ECX=0000bdf3 EDX=00000000\r\nESI=000db101 EDI=00001180 EBP=f8004fb4 ESP=f8004df8\r\nEIP=00110c0e EFL=00003202 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=1\r\nES =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]\r\nCS =0008 00000000 ffffffff 00c09b00 DPL=0 CS32 [-RA]\r\nSS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]\r\nDS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]\r\nFS =0000 00000000 00000000 00000000\r\nGS =0000 00000000 00000000 00000000\r\nLDT=0000 00000000 00000000 00000000\r\nTR =0018 f8017000 0000208f 00008b00 DPL=0 TSS32-busy\r\nGDT=     00110250 000001ff\r\nIDT=     00113950 000007ff\r\nCR0=80000011 CR2=000a0000 CR3=00115000 CR4=00000200\r\nDR0=00000000 DR1=00000000 DR2=00000000 DR3=00000000 \r\nDR6=ffff0ff0 DR7=00000400\r\nEFER=0000000000000000\r\nFCW=037f FSW=0000 [ST=0] FTW=00 MXCSR=00001f80\r\nFPR0=0000000000000000 0000 FPR1=0000000000000000 0000\r\nFPR2=0000000000000000 0000 FPR3=0000000000000000 0000\r\nFPR4=0000000000000000 0000 FPR5=0000000000000000 0000\r\nFPR6=0000000000000000 0000 FPR7=0000000000000000 0000\r\nXMM00=0000000000000000 0000000000000000 XMM01=0000000000000000 0000000000000000\r\nXMM02=0000000000000000 0000000000000000 XMM03=0000000000000000 0000000000000000\r\nXMM04=0000000000000000 0000000000000000 XMM05=0000000000000000 0000000000000000\r\nXMM06=0000000000000000 0000000000000000 XMM07=0000000000000000 0000000000000000\r\n(qemu) ",
+  "source_image_unchanged": true
+}

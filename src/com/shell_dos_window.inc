@@ -42,6 +42,7 @@ ui_run_window:
 dw_launch:
     call ui_sfx_end
     call dw_release
+    jc dw_retained_show
     mov word [dw_status],dw_unavailable
     call dos_host_prepare
     jc .show
@@ -85,6 +86,7 @@ dw_launch:
     mov byte [es:DW_GUEST_LIVE],0
     mov ax,DW_OP_UNINSTALL
     call far [cs:dw_entry]
+    jc dw_cleanup_failed
     push cs
     pop ds
     push cs
@@ -105,6 +107,7 @@ dw_launch:
 .closed:
     call dos_host_finish
     call dw_release
+    jc dw_retained_show
     call ui_sfx_begin
     push cs
     pop es
@@ -113,6 +116,9 @@ dw_launch:
     jmp ui_redraw
 .failed:
     mov word [dw_status],dw_exec_failed
+    mov es,[dw_segment]
+    cmp byte [es:DW_INSTALLED],0
+    jne dw_retained_show
 .finish:
     call dos_host_finish
 .show:
@@ -121,12 +127,26 @@ dw_launch:
     push cs
     pop es
     call ui_sfx_begin
+dw_show:
     mov byte [ui_dialog],11
     call ui_windows_open
     mov byte [ui_full_redraw],1
     jmp ui_redraw
+dw_cleanup_failed:
+    add sp,4                        ; discard EXEC result; cleanup owns failure
+dw_retained_show:
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov word [dw_status],dw_retained
+    mov byte [ui_command_running],0
+    call dos_host_finish
+    jmp dw_show                      ; no audio handoff while ownership remains
 
 dw_load:
+    cmp word [dw_segment],0
+    jne .fail                       ; never overwrite a retained allocation
     mov dx,dw_runtime
     mov ax,0x3D00
     int 0x21
@@ -251,10 +271,14 @@ dw_release:
     push es
     mov ax,[dw_segment]
     test ax,ax
-    jz .done
+    jz .success
     mov es,ax
     cmp byte [es:DW_INSTALLED],0
-    jne .done                   ; never release a live interrupt owner
+    je .free
+    mov ax,DW_OP_UNINSTALL
+    call far [dw_entry]
+    jc .retained                 ; preserve owner and both DOS allocations
+.free:
     push es
     mov ax,[es:DW_GFX_BUFFER_SEG]
     test ax,ax
@@ -262,49 +286,62 @@ dw_release:
     mov es,ax
     mov ah,0x49
     int 0x21
+    pop es
+    jc .retained
+    mov word [es:DW_GFX_BUFFER_SEG],0
+    push es
 .module:
     pop es
     mov ah,0x49
     int 0x21
+    jc .retained
     mov word [dw_segment],0
     mov byte [ui_window_flags+11],0
+.success:
+    clc
 .done:
     pop es
     popad
     ret
+.retained:
+    mov word [dw_status],dw_retained
+    stc
+    jmp .done
 
+; The frame follows ui_window_width/height (660x460 unless a VGA-session
+; guest was resized); the client is the frame minus 20x60.
 dw_draw:
     mov bx,[ui_window_x+22]
     mov [ui_dialog_x],bx
     mov dx,[ui_window_y+22]
     mov [ui_dialog_y],dx
-    mov cx,660
-    mov si,460
+    mov cx,[ui_window_width+22]
+    mov si,[ui_window_height+22]
     mov ax,70
     call ui_hit_add
     add bx,4
     add dx,5
-    U_RECT bx,dx,660,460,0
-    mov bx,[ui_dialog_x]
-    mov dx,[ui_dialog_y]
-    mov cx,660
-    mov si,460
+    mov al,0
+    call ui_rect
+    sub bx,4
+    sub dx,5
     mov al,7
     call ui_bevel
     add bx,3
     add dx,3
-    mov cx,654
+    sub cx,6
     mov si,25
     call ui_windows_title_color
     call ui_title_rail
     mov ax,62
-    mov cx,600
+    sub cx,54
     call ui_hit_add
     add bx,7
     add dx,4
     U_TEXT bx,dx,ut_dos_window,15,1
     mov bx,[ui_dialog_x]
-    add bx,607
+    add bx,cx
+    add bx,7
     mov dx,[ui_dialog_y]
     add dx,6
     U_BUTTON bx,dx,22,19,ut_min,17
@@ -314,11 +351,29 @@ dw_draw:
     add bx,10
     mov dx,[ui_dialog_y]
     add dx,34
-    U_RECT bx,dx,640,400,0
+    mov cx,[ui_window_width+22]
+    sub cx,20
+    mov si,[ui_window_height+22]
+    sub si,60
+    mov al,0
+    call ui_rect
     cmp word [dw_segment],0
     je .status
     push fs
     mov fs,[dw_segment]
+    mov [fs:DW_CLIENT_WIDTH],cx
+    mov [fs:DW_CLIENT_HEIGHT],si
+    cmp byte [fs:DW_RESIZABLE],1
+    jne .fixed
+    pusha
+    add bx,cx
+    add bx,10
+    add dx,si
+    add dx,26
+    mov ax,63
+    call ui_grip
+    popa
+.fixed:
     ; Refresh the external renderer's band descriptor once per scene band.
     push es
     push fs
@@ -408,7 +463,8 @@ dw_draw:
     mov bx,[ui_dialog_x]
     add bx,10
     mov dx,[ui_dialog_y]
-    add dx,438
+    add dx,[ui_window_height+22]
+    sub dx,22
     mov si,[dw_status]
     xor ax,ax
     call ui_text
@@ -425,11 +481,12 @@ dw_opaque_cell:
 ut_dos_window db 'DOS window',0
 dw_runtime db '\SYSTEM\DOSWIN.DRV',0
 dw_command db '\COMMAND.COM',0
-dw_live db 'Use the title bar to move, minimize or close this session.',0
-dw_finished db 'Program finished. Close this window to release its memory.',0
-dw_unavailable db 'Window unavailable: needs LFB, 800x600 and DOSWIN.DRV.',0
-dw_exec_failed db 'Cannot start COMMAND.COM. Full-screen DOS remains available.',0
-dw_unsupported db 'Unsupported video call. Use full screen for this program.',0
+dw_live db 'Title bar: move, minimize, close.',0
+dw_finished db 'Finished. Close frees memory.',0
+dw_unavailable db 'Needs 800x600 video and DOSWIN.DRV.',0
+dw_exec_failed db 'COMMAND.COM failed. Try full-screen DOS.',0
+dw_unsupported db 'Video unsupported. Use full screen.',0
+dw_retained db 'Cleanup pending. Close to retry.',0
 dw_status dw dw_finished
 dw_segment dw 0
 dw_entry dw 0,0
@@ -438,4 +495,4 @@ dw_row dw 0
 dw_col dw 0
 dw_cell dw 0
 dw_parameters dw 0,dw_tail,0,0,0,0,0
-dw_tail times 129 db 0
+dw_tail equ exec_tail              ; EXEC copies the tail into the child PSP

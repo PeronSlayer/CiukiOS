@@ -1,14 +1,66 @@
 #include "virtual_vga.h"
 
-/* The register bytes below describe standard VGA timings, not executable
- * firmware. Palette and font policy belongs to the virtual BIOS adapter. */
-static const uint8_t mode03_crtc[25] = {
-    0x5f,0x4f,0x50,0x82,0x55,0x81,0xbf,0x1f,0x00,0x4f,0x0d,0x0e,0,0,0,0,
-    0x9c,0x8e,0x8f,0x28,0x1f,0x96,0xb9,0xa3,0xff
-};
-static const uint8_t mode13_crtc[25] = {
-    0x5f,0x4f,0x50,0x82,0x54,0x80,0xbf,0x1f,0x00,0x41,0,0,0,0,0,0,
-    0x9c,0x8e,0x8f,0x28,0x40,0x96,0xb9,0xa3,0xff
+/* Standard IBM VGA video-parameter-table register values. These are timing
+ * and addressing presets, not executable firmware. Palette and font policy
+ * belongs to the virtual BIOS adapter. scripts/test_virtual_vga.py checks each
+ * array byte-for-byte against QEMU's SeaVGABIOS ROM when it is installed. */
+static const cvga_mode_params modes[] = {
+    {0x01, 1, 40, 25, 16, 2, 0x0800, 0xb800, 360, 400,
+     {0x08,0x03,0x00,0x02}, 0x67,
+     {0x2d,0x27,0x28,0x90,0x2b,0xa0,0xbf,0x1f,0x00,0x4f,0x0d,0x0e,0x00,0x00,0x00,0x00,
+      0x9c,0x8e,0x8f,0x14,0x1f,0x96,0xb9,0xa3,0xff},
+     {0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
+      0x0c,0x00,0x0f,0x08},
+     {0x00,0x00,0x00,0x00,0x00,0x10,0x0e,0x0f,0xff}},
+    {0x03, 1, 80, 25, 16, 2, 0x1000, 0xb800, 720, 400,
+     {0x00,0x03,0x00,0x02}, 0x67,
+     {0x5f,0x4f,0x50,0x82,0x55,0x81,0xbf,0x1f,0x00,0x4f,0x0d,0x0e,0x00,0x00,0x00,0x00,
+      0x9c,0x8e,0x8f,0x28,0x1f,0x96,0xb9,0xa3,0xff},
+     {0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
+      0x0c,0x00,0x0f,0x08},
+     {0x00,0x00,0x00,0x00,0x00,0x10,0x0e,0x0f,0xff}},
+    {0x0d, 0, 40, 25, 8, 1, 0x2000, 0xa000, 320, 200,
+     {0x09,0x0f,0x00,0x06}, 0x63,
+     {0x2d,0x27,0x28,0x90,0x2b,0x80,0xbf,0x1f,0x00,0xc0,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x9c,0x8e,0x8f,0x14,0x00,0x96,0xb9,0xe3,0xff},
+     {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,
+      0x01,0x00,0x0f,0x00},
+     {0x00,0x00,0x00,0x00,0x00,0x00,0x05,0x0f,0xff}},
+    {0x0e, 0, 80, 25, 8, 1, 0x4000, 0xa000, 640, 200,
+     {0x01,0x0f,0x00,0x06}, 0x63,
+     {0x5f,0x4f,0x50,0x82,0x54,0x80,0xbf,0x1f,0x00,0xc0,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x9c,0x8e,0x8f,0x28,0x00,0x96,0xb9,0xe3,0xff},
+     {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,
+      0x01,0x00,0x0f,0x00},
+     {0x00,0x00,0x00,0x00,0x00,0x00,0x05,0x0f,0xff}},
+    {0x10, 0, 80, 25, 14, 2, 0x8000, 0xa000, 640, 350,
+     {0x01,0x0f,0x00,0x06}, 0xa3,
+     {0x5f,0x4f,0x50,0x82,0x54,0x80,0xbf,0x1f,0x00,0x40,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x83,0x85,0x5d,0x28,0x0f,0x63,0xba,0xe3,0xff},
+     {0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
+      0x01,0x00,0x0f,0x00},
+     {0x00,0x00,0x00,0x00,0x00,0x00,0x05,0x0f,0xff}},
+    {0x11, 0, 80, 30, 16, 2, 0xa000, 0xa000, 640, 480,
+     {0x01,0x0f,0x00,0x06}, 0xe3,
+     {0x5f,0x4f,0x50,0x82,0x54,0x80,0x0b,0x3e,0x00,0x40,0x00,0x00,0x00,0x00,0x00,0x00,
+      0xea,0x8c,0xdf,0x28,0x00,0xe7,0x04,0xe3,0xff},
+     {0x00,0x3f,0x00,0x3f,0x00,0x3f,0x00,0x3f,0x00,0x3f,0x00,0x3f,0x00,0x3f,0x00,0x3f,
+      0x01,0x00,0x0f,0x00},
+     {0x00,0x00,0x00,0x00,0x00,0x00,0x05,0x0f,0xff}},
+    {0x12, 0, 80, 30, 16, 2, 0xa000, 0xa000, 640, 480,
+     {0x01,0x0f,0x00,0x06}, 0xe3,
+     {0x5f,0x4f,0x50,0x82,0x54,0x80,0x0b,0x3e,0x00,0x40,0x00,0x00,0x00,0x00,0x00,0x00,
+      0xea,0x8c,0xdf,0x28,0x00,0xe7,0x04,0xe3,0xff},
+     {0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
+      0x01,0x00,0x0f,0x00},
+     {0x00,0x00,0x00,0x00,0x00,0x00,0x05,0x0f,0xff}},
+    {0x13, 0, 40, 25, 8, 3, 0xfa00, 0xa000, 320, 200,
+     {0x01,0x0f,0x00,0x0e}, 0x63,
+     {0x5f,0x4f,0x50,0x82,0x54,0x80,0xbf,0x1f,0x00,0x41,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x9c,0x8e,0x8f,0x28,0x40,0x96,0xb9,0xa3,0xff},
+     {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
+      0x41,0x00,0x0f,0x00},
+     {0x00,0x00,0x00,0x00,0x00,0x40,0x05,0x0f,0xff}},
 };
 static const uint8_t seq_mask[5] = {3,0x3d,15,0x3f,14};
 static const uint8_t gc_mask[9] = {15,15,15,31,3,0x7b,15,15,255};
@@ -18,41 +70,66 @@ static void zero_bytes(uint8_t *p, uint32_t count)
     while (count--) *p++ = 0;
 }
 
+static void fill_bytes(uint8_t *p, uint8_t value, uint32_t count)
+{
+    while (count--) *p++ = value;
+}
+
+static void mark_dirty(cvga_state *v, unsigned plane, unsigned at)
+{
+    at /= CVGA_DIRTY_GRANULE;
+    v->dirty[plane][at >> 3] |= (uint8_t)(1u << (at & 7));
+}
+
+static void store_plane(cvga_state *v, unsigned plane, unsigned at, uint8_t value)
+{
+    if (v->plane[plane][at] == value) return;
+    v->plane[plane][at] = value;
+    mark_dirty(v, plane, at);
+}
+
+void cvga_store_plane(cvga_state *v, unsigned plane, unsigned at, uint8_t value)
+{
+    store_plane(v, plane & 3, at & 0xffffu, value);
+    ++v->changes;
+}
+
+const cvga_mode_params *cvga_find_mode(unsigned mode)
+{
+    unsigned i;
+    mode &= 0x7f;
+    /* Colour-burst variants 00h/02h share the 01h/03h VGA register values. */
+    if (mode == 0 || mode == 2) ++mode;
+    for (i = 0; i != sizeof(modes) / sizeof(modes[0]); ++i)
+        if (modes[i].mode == mode) return &modes[i];
+    return 0;
+}
+
 int cvga_set_bios_mode(cvga_state *v, unsigned mode, int preserve_vram)
 {
-    unsigned i, graphics;
+    unsigned i;
+    const cvga_mode_params *m = cvga_find_mode(mode);
+    if (!m || (mode & ~0x80u) > 0x13) return 0;
     preserve_vram = preserve_vram || (mode & 0x80);
-    mode &= ~0x80u;
-    if (mode != 3 && mode != 0x13) return 0;
-    graphics = mode == 0x13;
-    if (!preserve_vram) zero_bytes(&v->plane[0][0], 4UL * CVGA_PLANE_SIZE);
+    if (!preserve_vram) {
+        zero_bytes(&v->plane[0][0], 4UL * CVGA_PLANE_SIZE);
+        fill_bytes(&v->dirty[0][0], 0xff, sizeof(v->dirty));
+    }
     zero_bytes(v->latch, 4);
-    zero_bytes(v->seq, 5);
-    zero_bytes(v->gc, 9);
-    zero_bytes(v->attr, 21);
     v->seq[0] = 3;
-    v->seq[1] = graphics ? 1 : 0;
-    v->seq[2] = graphics ? 15 : 3;
-    v->seq[4] = graphics ? 14 : 2;
-    v->gc[5] = graphics ? 0x40 : 0x10;
-    v->gc[6] = graphics ? 5 : 14;
-    v->gc[7] = 15;
-    v->gc[8] = 255;
-    for (i = 0; i != 25; ++i)
-        v->crtc[i] = graphics ? mode13_crtc[i] : mode03_crtc[i];
-    for (i = 0; i != 16; ++i)
-        v->attr[i] = (uint8_t)(graphics ? i : (i < 8 ? i : i + 48));
-    if (!graphics) v->attr[6] = 20;
-    v->attr[16] = graphics ? 0x41 : 0x0c;
-    v->attr[18] = 15;
-    v->attr[19] = graphics ? 0 : 8;
+    for (i = 0; i != 4; ++i) v->seq[i + 1] = m->seq[i];
+    for (i = 0; i != 9; ++i) v->gc[i] = m->gc[i];
+    for (i = 0; i != 25; ++i) v->crtc[i] = m->crtc[i];
+    for (i = 0; i != 20; ++i) v->attr[i] = m->attr[i];
+    v->attr[20] = 0;
     v->seq_index = v->gc_index = v->crtc_index = 0;
     v->attr_index = 0x20;
     v->attr_data_phase = 0;
-    v->misc = 0x63;
+    v->misc = m->misc;
     v->feature = 0;
     v->enable = 1;
     ++v->changes;
+    ++v->display_changes;
     return 1;
 }
 
@@ -68,7 +145,7 @@ void cvga_load_font_8x16(cvga_state *v, const uint8_t *font4096)
     unsigned c, row;
     for (c = 0; c < 256; ++c)
         for (row = 0; row < 32; ++row)
-            v->plane[2][c * 32 + row] = row < 16 ? font4096[c * 16 + row] : 0;
+            store_plane(v, 2, c * 32 + row, row < 16 ? font4096[c * 16 + row] : 0);
     ++v->changes;
 }
 
@@ -119,59 +196,87 @@ uint8_t cvga_read_port(cvga_state *v, uint16_t port, uint8_t status1)
     }
 }
 
+/* Store a register byte; returns 1 when scanout-visible state changed. */
+static int set_reg(uint8_t *reg, uint8_t value)
+{
+    if (*reg == value) return 0;
+    *reg = value;
+    return 1;
+}
+
 void cvga_write_port(cvga_state *v, uint16_t port, uint8_t value)
 {
     unsigned index;
+    int display = 0;
     if (!port_active(v, port)) return;
     switch (port) {
     case 0x3c0:
-        if (!v->attr_data_phase) v->attr_index = value & 63;
-        else {
+        if (!v->attr_data_phase) {
+            /* Palette address source (bit 5) enables or blanks the display. */
+            display = ((v->attr_index ^ value) & 32) != 0;
+            v->attr_index = value & 63;
+        } else {
             index = v->attr_index & 31;
             if (index < 16) {
-                if (!(v->attr_index & 32)) v->attr[index] = value & 63;
+                if (!(v->attr_index & 32)) display = set_reg(&v->attr[index], value & 63);
             } else if (index < 21) {
                 if (index == 16) value &= 0xef;
                 if (index == 18) value &= 63;
                 if (index >= 19) value &= 15;
-                v->attr[index] = value;
+                display = set_reg(&v->attr[index], value);
             }
         }
         v->attr_data_phase ^= 1;
         break;
-    case 0x3c2: v->misc = value & 0xef; break;
-    case 0x3c3: v->enable = value & 1; break;
+    case 0x3c2: display = set_reg(&v->misc, value & 0xef); break;
+    case 0x3c3: display = set_reg(&v->enable, value & 1); break;
     case 0x3c4: v->seq_index = value & 7; return;
     case 0x3c5:
-        if (v->seq_index < 5) v->seq[v->seq_index] = value & seq_mask[v->seq_index];
+        if (v->seq_index < 5) {
+            index = v->seq_index;
+            if (set_reg(&v->seq[index], value & seq_mask[index]) &&
+                (index == 0 || index == 1 || index == 3)) display = 1;
+        }
         break;
-    case 0x3c6: v->dac_mask = value; break;
+    case 0x3c6: display = set_reg(&v->dac_mask, value); break;
     case 0x3c7: case 0x3c8:
         v->dac_index = value;
         v->dac_component = 0;
         v->dac_read_mode = port == 0x3c7;
         return;
     case 0x3c9:
-        v->dac[v->dac_index][v->dac_component] = value & 63;
+        display = set_reg(&v->dac[v->dac_index][v->dac_component], value & 63);
         dac_advance(v);
         break;
     case 0x3ce: v->gc_index = value & 15; return;
     case 0x3cf:
-        if (v->gc_index < 9) v->gc[v->gc_index] = value & gc_mask[v->gc_index];
+        if (v->gc_index < 9) {
+            /* Scanout reads only GC05 bits 5-6 (shift/256-colour) and GC06
+             * bit 0 (graphics); write/read modes and memory maps do not. */
+            uint8_t old;
+            index = v->gc_index;
+            old = v->gc[index];
+            if (set_reg(&v->gc[index], value & gc_mask[index]) &&
+                ((index == 5 && ((old ^ v->gc[5]) & 0x60)) ||
+                 (index == 6 && ((old ^ v->gc[6]) & 0x01))))
+                display = 1;
+        }
         break;
     case 0x3b4: case 0x3d4: v->crtc_index = value; return;
     case 0x3b5: case 0x3d5:
         index = v->crtc_index;
         if (index < 25) {
             if ((v->crtc[17] & 128) && index < 8) {
-                if (index == 7) v->crtc[7] = (v->crtc[7] & 0xef) | (value & 16);
-            } else v->crtc[index] = value;
+                if (index == 7)
+                    display = set_reg(&v->crtc[7], (uint8_t)((v->crtc[7] & 0xef) | (value & 16)));
+            } else display = set_reg(&v->crtc[index], value);
         }
         break;
     case 0x3ba: case 0x3da: v->feature = value & 0x0b; return;
     default: return;
     }
     ++v->changes;
+    if (display) ++v->display_changes;
 }
 
 static int aperture(const cvga_state *v, uint32_t address, uint32_t *offset)
@@ -198,24 +303,36 @@ static unsigned memory_address(const cvga_state *v, uint32_t offset)
     return (unsigned)(offset & 0xffffUL);
 }
 
-uint8_t cvga_read_vram(cvga_state *v, uint32_t address)
+/* Common read path. latch == 0 means a side-effect-free peek. */
+static uint8_t read_vram(const cvga_state *v, uint32_t address, uint8_t *latch)
 {
     uint32_t offset;
     unsigned at, plane, i;
-    uint8_t result = 255;
+    uint8_t loaded[4], result = 255;
     if (!aperture(v, address, &offset)) return 255;
     at = memory_address(v, offset);
-    for (i = 0; i != 4; ++i) v->latch[i] = v->plane[i][at];
+    for (i = 0; i != 4; ++i) loaded[i] = v->plane[i][at];
+    if (latch) for (i = 0; i != 4; ++i) latch[i] = loaded[i];
     if (v->gc[5] & 8) {
         for (i = 0; i != 4; ++i)
             if (v->gc[7] & (1u << i))
-                result &= (uint8_t)(v->latch[i] ^ ((v->gc[2] & (1u << i)) ? 0 : 255));
+                result &= (uint8_t)(loaded[i] ^ ((v->gc[2] & (1u << i)) ? 0 : 255));
         return result;
     }
     plane = v->gc[4];
     if (v->seq[4] & 8) plane = (unsigned)(offset & 3);
     else if (v->gc[5] & 16) plane = (plane & 2) | (unsigned)(offset & 1);
-    return v->latch[plane];
+    return loaded[plane];
+}
+
+uint8_t cvga_read_vram(cvga_state *v, uint32_t address)
+{
+    return read_vram(v, address, v->latch);
+}
+
+uint8_t cvga_peek_vram(const cvga_state *v, uint32_t address)
+{
+    return read_vram(v, address, 0);
 }
 
 void cvga_write_vram(cvga_state *v, uint32_t address, uint8_t value)
@@ -251,7 +368,7 @@ void cvga_write_vram(cvga_state *v, uint32_t address, uint8_t value)
             }
             data = (uint8_t)((data & bits) | (v->latch[i] & (uint8_t)~bits));
         }
-        v->plane[i][at] = data;
+        store_plane(v, i, at, data);
     }
     if (mask) ++v->changes;
 }
@@ -329,46 +446,109 @@ static uint8_t text_pixel(const cvga_state *v, const cvga_geometry *g,
     return attr_colour(v, on ? fg : bg);
 }
 
-unsigned cvga_render_row8(const cvga_state *v, unsigned y, uint8_t *dest,
-                          unsigned capacity, unsigned frame_flags)
-{
+/* Scanout addressing of one returned geometry row, shared by rendering and
+ * damage checks so both always agree on which plane bytes a row reads. */
+typedef struct row_setup {
     cvga_geometry g;
-    unsigned x, plane, shift, row, subrow, physical_y, compare, base, pan, at, colour;
-    if (!cvga_get_geometry(v, &g) || y >= g.height || capacity < g.width) return 0;
-    if (g.blank) {
-        for (x = 0; x < g.width; ++x) dest[x] = 0;
-        return g.width;
-    }
-    shift = (v->gc[5] >> 5) & 3;
-    physical_y = y * g.scan_repeat;
+    unsigned shift, base, pan, subrow;
+} row_setup;
+
+static int setup_row(const cvga_state *v, unsigned y, row_setup *r)
+{
+    unsigned row, physical_y, compare, subrow;
+    if (!cvga_get_geometry(v, &r->g) || y >= r->g.height) return 0;
+    r->shift = (v->gc[5] >> 5) & 3;
+    physical_y = y * r->g.scan_repeat;
     compare = v->crtc[24] | ((unsigned)(v->crtc[7] & 16) << 4) |
               ((unsigned)(v->crtc[9] & 64) << 3);
-    base = ((unsigned)v->crtc[12] << 8) | v->crtc[13];
-    pan = v->attr[19] & 7;
-    if (g.text && g.char_width == 9) pan = v->attr[19] == 8 ? 0 : pan + 1;
-    if (!g.text && shift >= 2) pan >>= 1;
+    r->base = ((unsigned)v->crtc[12] << 8) | v->crtc[13];
+    r->pan = v->attr[19] & 7;
+    if (r->g.text && r->g.char_width == 9) r->pan = v->attr[19] == 8 ? 0 : r->pan + 1;
+    if (!r->g.text && r->shift >= 2) r->pan >>= 1;
     if (physical_y > compare) {
         physical_y -= compare + 1;
-        base = 0;
-        if (v->attr[16] & 32) pan = 0;
+        r->base = 0;
+        if (v->attr[16] & 32) r->pan = 0;
         subrow = 0;
     } else subrow = v->crtc[8] & 31;
     row = physical_y / (1u << ((v->crtc[9] >> 7) & 1)) + subrow;
-    subrow = row % g.char_height;
-    row /= g.char_height;
-    base += row * (unsigned)v->crtc[19] * 2;
-    for (x = 0; x < g.width; ++x) {
-        if (g.text) dest[x] = text_pixel(v, &g, base, x + pan, subrow, frame_flags);
-        else if (shift >= 2) {
-            at = scan_address(v, base + (x + pan) / 4);
-            dest[x] = v->plane[(x + pan) & 3][at] & v->dac_mask;
+    r->subrow = row % r->g.char_height;
+    row /= r->g.char_height;
+    r->base += row * (unsigned)v->crtc[19] * 2;
+    return 1;
+}
+
+unsigned cvga_render_row8(const cvga_state *v, unsigned y, uint8_t *dest,
+                          unsigned capacity, unsigned frame_flags)
+{
+    row_setup r;
+    unsigned x, plane, at, colour;
+    if (!setup_row(v, y, &r) || capacity < r.g.width) return 0;
+    if (r.g.blank) {
+        for (x = 0; x < r.g.width; ++x) dest[x] = 0;
+        return r.g.width;
+    }
+    for (x = 0; x < r.g.width; ++x) {
+        if (r.g.text) dest[x] = text_pixel(v, &r.g, r.base, x + r.pan, r.subrow, frame_flags);
+        else if (r.shift >= 2) {
+            at = scan_address(v, r.base + (x + r.pan) / 4);
+            dest[x] = v->plane[(x + r.pan) & 3][at] & v->dac_mask;
         } else {
-            at = scan_address(v, base + (x + pan) / 8);
+            at = scan_address(v, r.base + (x + r.pan) / 8);
             colour = 0;
             for (plane = 0; plane < 4; ++plane)
-                if (v->plane[plane][at] & (128u >> ((x + pan) & 7))) colour |= 1u << plane;
+                if (v->plane[plane][at] & (128u >> ((x + r.pan) & 7))) colour |= 1u << plane;
             dest[x] = attr_colour(v, colour);
         }
     }
-    return g.width;
+    return r.g.width;
+}
+
+int cvga_row_reads_dirty(const cvga_state *v, unsigned y,
+                         const uint8_t dirty[4][CVGA_DIRTY_BYTES])
+{
+    row_setup r;
+    unsigned unit, first, last, at, granule, plane;
+    if (!setup_row(v, y, &r)) return 1;
+    if (r.g.blank) return 0;
+    if (r.g.text) {
+        first = r.pan / r.g.char_width;
+        last = (r.g.width - 1 + r.pan) / r.g.char_width;
+    } else if (r.shift >= 2) {
+        first = r.pan / 4;
+        last = (r.g.width - 1 + r.pan) / 4;
+    } else {
+        first = r.pan / 8;
+        last = (r.g.width - 1 + r.pan) / 8;
+    }
+    for (unit = first; unit <= last; ++unit) {
+        at = scan_address(v, r.base + unit);
+        granule = at / CVGA_DIRTY_GRANULE;
+        for (plane = 0; plane < 4; ++plane) {
+            /* Text cells live in planes 0/1; font dependencies are separate. */
+            if (r.g.text && plane >= 2) break;
+            if (dirty[plane][granule >> 3] & (1u << (granule & 7))) return 1;
+        }
+    }
+    return 0;
+}
+
+int cvga_row_phase_sensitive(const cvga_state *v, unsigned y)
+{
+    row_setup r;
+    unsigned unit, first, last, cell, at, cursor;
+    int cursor_row;
+    if (!setup_row(v, y, &r) || !r.g.text || r.g.blank) return 0;
+    cursor = ((unsigned)v->crtc[14] << 8) | v->crtc[15];
+    cursor_row = !(v->crtc[10] & 32) && r.subrow >= (v->crtc[10] & 31u) &&
+                 r.subrow <= (v->crtc[11] & 31u);
+    first = r.pan / r.g.char_width;
+    last = (r.g.width - 1 + r.pan) / r.g.char_width;
+    for (unit = first; unit <= last; ++unit) {
+        cell = (r.base + unit) & 65535u;
+        at = scan_address(v, cell);
+        if ((v->attr[16] & 8) && (v->plane[1][at] & 128)) return 1;
+        if (cursor_row && cell == cursor) return 1;
+    }
+    return 0;
 }

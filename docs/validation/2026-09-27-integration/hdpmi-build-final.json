@@ -1,0 +1,440 @@
+{
+  "hx_commit": "f2276db9accfc57facf2588bc016a27130597bb1",
+  "inputs": {
+    "HX/Src/HDPMI/HDPMI.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/HDPMI.ASM",
+      "sha256": "c80d65c529f456005a7060f46c89f7b688476e9680325471c9acfd5304eea0c2"
+    },
+    "HX/Src/HDPMI/A20GATE.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/A20GATE.ASM",
+      "sha256": "522ceb2ac04156c728b9730c071383e37d89781f5098c2a5f66c28e221711623"
+    },
+    "HX/Src/HDPMI/CLIENTS.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/CLIENTS.ASM",
+      "sha256": "273245c12ebeee3a509c490c6477db0afb77d3ab16dd2897511acb519b4daa19"
+    },
+    "HX/Src/HDPMI/EXCEPT.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/EXCEPT.ASM",
+      "sha256": "3305358a637687e2ad87fa1fcdc23fb7afc46690f99829f53e44377e68a6b160"
+    },
+    "HX/Src/HDPMI/HEAP.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/HEAP.ASM",
+      "sha256": "07ca4f0c8af3a3c9287dbcc6d8fdbbd040ffdc7b6a8ad4eab9578b86f0e23402"
+    },
+    "HX/Src/HDPMI/HELPERS.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/HELPERS.ASM",
+      "sha256": "a480a91ab372a2d7eee2163bcbe885a5044d257991515b6ccb554bd3077c371d"
+    },
+    "HX/Src/HDPMI/I2FHDPMI.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/I2FHDPMI.ASM",
+      "sha256": "ce05ac18c916d8d79710863914a5a10870611f84fc7b0afa681f76c4dd2d9779"
+    },
+    "HX/Src/HDPMI/I31DEB.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/I31DEB.ASM",
+      "sha256": "8b7b0f100d6b5668ca3523e5b30c6f69bdfdcfe9aa7db17673feac81b9d014b2"
+    },
+    "HX/Src/HDPMI/I31DOS.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/I31DOS.ASM",
+      "sha256": "99fbc050628bbd854de8514ba97254a3ba0f4058ba1c10fa71ed53c092416dee"
+    },
+    "HX/Src/HDPMI/I31FPU.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/I31FPU.ASM",
+      "sha256": "2799158561a4ae3368937ad3dbc7cba7f2b6538e7245128fce16118d25091004"
+    },
+    "HX/Src/HDPMI/I31INT.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/I31INT.ASM",
+      "sha256": "9f76d6910a54842d2772d4ed55bef09c03e411be968abfc473c74f3dbb24d3eb"
+    },
+    "HX/Src/HDPMI/I31MEM.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/I31MEM.ASM",
+      "sha256": "8591e729cd2042f2228156a042a8b1c8ccca5e23b82e84d986a1cd46f4355421"
+    },
+    "HX/Src/HDPMI/I31SEL.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/I31SEL.ASM",
+      "sha256": "0883c27ee06ed17ac17cfdb40ca82d317e02870dbddd8e7deec6367212508579"
+    },
+    "HX/Src/HDPMI/I31SWT.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/I31SWT.ASM",
+      "sha256": "75ca3bc520e782a76790a4688f927f38722c561349425f811c2f075b0ae13e61"
+    },
+    "HX/Src/HDPMI/INIT.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INIT.ASM",
+      "sha256": "708aa7e34b0302f74c9709275a6a070b3b3c9ffeea4c8312ec16f804448c45fe"
+    },
+    "HX/Src/HDPMI/INT13API.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INT13API.ASM",
+      "sha256": "02cb52debb27f08856ae034a03096fdbaaa589a39bf799784e7a102c921e5314"
+    },
+    "HX/Src/HDPMI/INT21API.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INT21API.ASM",
+      "sha256": "6b115d3f086859747f48207c83f8ab44e9ac74bad9d148f3cadae4b97b5b4a48"
+    },
+    "HX/Src/HDPMI/INT2FAPI.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INT2FAPI.ASM",
+      "sha256": "e77237ce0bf7a8cbdf8642132dfe5374721696daee8f3566ee6b17ef1934dcfc"
+    },
+    "HX/Src/HDPMI/INT2XAPI.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INT2XAPI.ASM",
+      "sha256": "824c3490bee914dbbc94616b0d8daa049ad845920316b27f16161840d333e42f"
+    },
+    "HX/Src/HDPMI/INT31API.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INT31API.ASM",
+      "sha256": "df16a3e6c6a9b13d2361a23e7a128b5696a77dbab141487bbfa85e6a29566d77"
+    },
+    "HX/Src/HDPMI/INT33API.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INT33API.ASM",
+      "sha256": "7afa78342787000216f3a3bc5b91fe56770ec2911899ee42483efa7cdc60a405"
+    },
+    "HX/Src/HDPMI/INT41API.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INT41API.ASM",
+      "sha256": "4b4df0e509a9a2e759dc8b4c3c7c576c7b6db67221400977f50913235be621be"
+    },
+    "HX/Src/HDPMI/INTXXAPI.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INTXXAPI.ASM",
+      "sha256": "56462e4f7c442e29f622c50ffe94e234ef41f30a9587cfce69ba295f9b3ee280"
+    },
+    "HX/Src/HDPMI/MOVEHIGH.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/MOVEHIGH.ASM",
+      "sha256": "38dc7f1de3cf6a373550653de9c4b6f8be8a9c317b565b0a3167edab52bb69ba"
+    },
+    "HX/Src/HDPMI/PAGEMGR.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/PAGEMGR.ASM",
+      "sha256": "dda1236ebdb393c8fea4cfed65f03ead57a817962fafbab8776ef78f456cee36"
+    },
+    "HX/Src/HDPMI/PUTCHR.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/PUTCHR.ASM",
+      "sha256": "73c83d0de37b0f8d19dc8e1f36bf6490bab8a003ab38a55d8ee02c4025f91555"
+    },
+    "HX/Src/HDPMI/PUTCHRR.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/PUTCHRR.ASM",
+      "sha256": "ce0d6f16e13ed5200e195d284d272b0ad3830b6d70c8c88694d6e166eafb5958"
+    },
+    "HX/Src/HDPMI/SWITCH.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/SWITCH.ASM",
+      "sha256": "a6ebe8acea7c1dbf8ffd6cd2f185e8d3cfd5aa89c8f64f3d1079fc521c15ad1f"
+    },
+    "HX/Src/HDPMI/VXD.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/VXD.ASM",
+      "sha256": "689eb8a4965d307bb45c7c2ae8febc9a4789ac9292ec8ba3ac02b31c43eab4fd"
+    },
+    "HX/Src/HDPMI/CIUKIVM.ASM": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/CIUKIVM.ASM",
+      "sha256": "c0fdc54e9e4f7ed4430cbaafe6ec72d02a134449e9504feaecc11ba237b648dc"
+    },
+    "HX/Src/HDPMI/DEBUGSYS.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/DEBUGSYS.INC",
+      "sha256": "f544c8fa08c5ad0b048a6440e60c079520b9d5b02faf70d02ad50df2864e6ac0"
+    },
+    "HX/Src/HDPMI/EXTERNAL.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/EXTERNAL.INC",
+      "sha256": "60254b935bd030a5af54abd5d72f95c82ebb385232adbeb1b27e0d6702d928cc"
+    },
+    "HX/Src/HDPMI/HDPMI.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/HDPMI.INC",
+      "sha256": "aee6bd19a7973c0804d958c6c178995fbcf7a2d782efb5f2ab34d219b234a3cb"
+    },
+    "HX/Src/HDPMI/INT31API.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/INT31API.INC",
+      "sha256": "fd87f8f1f690d8b7990ea2ed49c7e0d027b2740b3af45b5e7d13fa02078bc392"
+    },
+    "HX/Src/HDPMI/MODULES.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/MODULES.INC",
+      "sha256": "3251097eb8053561dead7aded6f468b9692fc1bc67f38164b943ad923b01c120"
+    },
+    "HX/Src/HDPMI/PAGEMGR.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/PAGEMGR.INC",
+      "sha256": "1ca371ad49b60a421bec5d17149992316fe4ce1329f4b1606782c03e2ddb478b"
+    },
+    "HX/Src/HDPMI/VERSION.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/VERSION.INC",
+      "sha256": "36508a42299e4f7f9ed1173d45dabdf7b21d0ea8c5fac08e5a5fd30d70311266"
+    },
+    "HX/Src/HDPMI/VXD.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Src/HDPMI/VXD.INC",
+      "sha256": "10ad3a1e44a44d96221610e60c1ddc39dd0f26e6b7878909589a64063015f72c"
+    },
+    "HX/Include/ASCII.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/ASCII.INC",
+      "sha256": "ea83866e97485248d68d30807d8c4e8fab652ee9e4a00586add77be897750a04"
+    },
+    "HX/Include/DDRAW.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/DDRAW.INC",
+      "sha256": "11b0b5e342d0d80f23e34bc79098ed29d1601f02bcce7e9b3809930298e3467c"
+    },
+    "HX/Include/DINPUT.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/DINPUT.INC",
+      "sha256": "c4e77f70c397e76a0bb9ff75a6abc81642cbe929f3c31df89b7022c83abeede1"
+    },
+    "HX/Include/DPMI.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/DPMI.INC",
+      "sha256": "8009fc1a3f9c6c950f3de193154d3584d607c2a5648aba8fb8dbb6206dcdbccc"
+    },
+    "HX/Include/DSOUND.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/DSOUND.INC",
+      "sha256": "e3b1999328143df0f9b8d7393c60367ba95931f988f7bfb27e6b81b9dd2c1a18"
+    },
+    "HX/Include/EXCPT.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/EXCPT.INC",
+      "sha256": "b85fe28695ccdb97f25d3d1449e5cb327f62420a693101a11d0b61c7528a22a9"
+    },
+    "HX/Include/FAT32.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/FAT32.INC",
+      "sha256": "3cbe6397f394becea1190f2007658514a9f078b64fbe6bb2d551a04cbface2f0"
+    },
+    "HX/Include/FIXUPS.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/FIXUPS.INC",
+      "sha256": "6dc1fa19001df43870c39c2b3bdf2842efd4aeeb63bc5f5a890703d213b3f5ab"
+    },
+    "HX/Include/FUNCTION.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/FUNCTION.INC",
+      "sha256": "058fc4ef23402a6f26aae4dcb3d3e9ceda607ea5b86ed63054520e042b02b84c"
+    },
+    "HX/Include/HEAP32.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/HEAP32.INC",
+      "sha256": "b551349015ca4760a3cb4ccbf0ddbbc89d8b8061a6dd437dabee7f5e2bf27d69"
+    },
+    "HX/Include/HXVDD.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/HXVDD.INC",
+      "sha256": "e16826a8223f5e47c9a5ad04044f43f3b388f35f0934ed52af021e360d365958"
+    },
+    "HX/Include/INITPM.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/INITPM.INC",
+      "sha256": "ee0c20ca7f2e0018ce2eeaf5b42fe79dfedffea02b3458f969a478ca32f3f66d"
+    },
+    "HX/Include/INITPM16.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/INITPM16.INC",
+      "sha256": "64e16c8152b31801c439a4de1f118fbfbaa54e29736e229ade3bff929473bd6e"
+    },
+    "HX/Include/ISVBOP.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/ISVBOP.INC",
+      "sha256": "2b11e194f521d55f4926212f46bae41cef7b540415c9f5efc17d8d107f411365"
+    },
+    "HX/Include/KEYBOARD.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/KEYBOARD.INC",
+      "sha256": "6c3df6edb0535b9ebca9ec06b06578197ac359176da2d8498abce4751e0043db"
+    },
+    "HX/Include/MACROS.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/MACROS.INC",
+      "sha256": "8d522002126873361aeb2021788ff99873275c5b46834713eda437c4e6e26b71"
+    },
+    "HX/Include/MMSYSTEM.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/MMSYSTEM.INC",
+      "sha256": "84abfeea13922f234715efb8d9480d8a6490eb21c61ec63cc854551f4536381d"
+    },
+    "HX/Include/NT_VDD.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/NT_VDD.INC",
+      "sha256": "8f97721e453eda327c35fdb629f0760a35443a6a14ecf8905238e6f2e283b259"
+    },
+    "HX/Include/OBJBASE.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/OBJBASE.INC",
+      "sha256": "0947d25c8308bc8438a0b7b901d20a37c00dbf3707ffa7a891b09410ecde0178"
+    },
+    "HX/Include/OLEAUTO.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/OLEAUTO.INC",
+      "sha256": "6ab8a6659c214a5b3290ac1dac5ae0c91e7658a6fc4933f79e0b0055d545eaab"
+    },
+    "HX/Include/SB16.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/SB16.INC",
+      "sha256": "aefa2388629cdf9a7a6b10b958b5b106b8e34c9e8df95a2fd8e233d5bd6fd18b"
+    },
+    "HX/Include/SHELLAPI.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/SHELLAPI.INC",
+      "sha256": "fc9fbd2ffbccd467232ee6d359a79fc3aeaf57feaeb1c1d743e8c10af80d2ab0"
+    },
+    "HX/Include/STDDEFS.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/STDDEFS.INC",
+      "sha256": "e0243307d93ebe9f1867ede8f7852e4ca29e295913b432592b50baddc5e0b6e4"
+    },
+    "HX/Include/TLHELP32.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/TLHELP32.INC",
+      "sha256": "4ebe634b998b1e63da7a618638b61c1dac6b3bfd99e28ec8a05052d904b439b0"
+    },
+    "HX/Include/VDDSVC.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/VDDSVC.INC",
+      "sha256": "b90be92e8b672dba7c5f11c53d5be851d412239a91fc91cbbb32d44008f4c22d"
+    },
+    "HX/Include/VESA32.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/VESA32.INC",
+      "sha256": "f0321c131502d7b5af94a202c860f213bea4d0e1ca7c80fcf4765bf5b9d70200"
+    },
+    "HX/Include/VK.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/VK.INC",
+      "sha256": "2ef620aa4ba84e58b8e06ca51a2f590cb2ff95d4fa3859b3e5ff9fb8d5fcf274"
+    },
+    "HX/Include/VWIN32.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/VWIN32.INC",
+      "sha256": "284fb3ebdb7a712612741a4c1e84b5985b98f1ad82a832b062ce51370c979cd9"
+    },
+    "HX/Include/WINBASE.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINBASE.INC",
+      "sha256": "7bc2b2834c63a59c978370694299ced809dba058f2553be165cb36a817be589c"
+    },
+    "HX/Include/WINCON.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINCON.INC",
+      "sha256": "20fd809b42c9ce2f38aab23d5db6b126ddede38a674c6bcaa2b87a36d928a5a3"
+    },
+    "HX/Include/WINDEF.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINDEF.INC",
+      "sha256": "8e3e046ab698dc371ffcf3400dcc939a666564358ff2d3f338e1e748ee3e5ded"
+    },
+    "HX/Include/WINERROR.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINERROR.INC",
+      "sha256": "638f6a6cc84e5be5a35f446d379592449ac25a70999f041ed3eda27d0d7c81ed"
+    },
+    "HX/Include/WINGDI.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINGDI.INC",
+      "sha256": "ddcf419d82a9f22d445429720265c22cf9f022cb4ea7722b30a23eac45a08067"
+    },
+    "HX/Include/WINIOCTL.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINIOCTL.INC",
+      "sha256": "c7d79e853a095f93bb8bb1fbbea06fc2bc24206d0a9baa7907003d5e581c5d7d"
+    },
+    "HX/Include/WINNLS.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINNLS.INC",
+      "sha256": "3d37db4d99bf35cf867194b95f2c39ccd9781c10e9dc4bf693b677b6c8a91c5f"
+    },
+    "HX/Include/WINNT.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINNT.INC",
+      "sha256": "baf20f1ea9d14dbf91cfe829aceb1b6324f53e0a512b5d272b55fe89e9fca44d"
+    },
+    "HX/Include/WINREG.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINREG.INC",
+      "sha256": "1c8939bd3b90f83f83c87c0771b6c7fb3ad7a1eb82bfed05362d53aac79da695"
+    },
+    "HX/Include/WINSOCK.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINSOCK.INC",
+      "sha256": "11cd74305ef5647f23e20021834ead6e4e9123cec8bd890705259cbc43da7b07"
+    },
+    "HX/Include/WINUSER.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WINUSER.INC",
+      "sha256": "75a90fc82840963d5b4c3bb987303e3444a93ea89583299746f1a23e90133f36"
+    },
+    "HX/Include/WNASPI32.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WNASPI32.INC",
+      "sha256": "171cd7fc3218ba15ca8bc2ae24a0c416e24bb2c07d33b2887b46f7126d10cd2a"
+    },
+    "HX/Include/WTYPES.INC": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/Include/WTYPES.INC",
+      "sha256": "7a9d10dab1f351bcd2192f0b59750bbdaa34fefe6f6e55d22a2dda1bf162e2f5"
+    },
+    "CiukiOS/src/vm/hdpmi_video_adapter.c": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/hdpmi_video_adapter.c",
+      "sha256": "c5c8eb4398ac76b65174a838a7a54f0ab5b4806af0123304cc257cf7ee7098d3"
+    },
+    "CiukiOS/src/vm/hdpmi_video_adapter.h": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/hdpmi_video_adapter.h",
+      "sha256": "578deb35f054a263bc3db3d585df2266dfb4ca0cfdfd8f6fd509a00e8afe6ace"
+    },
+    "CiukiOS/src/vm/vga_x86.c": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/vga_x86.c",
+      "sha256": "52476a71f3e198d8d104b4c0ffc90156af1076510b497ad2c73e50d6d05c0b4c"
+    },
+    "CiukiOS/src/vm/vga_x86.h": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/vga_x86.h",
+      "sha256": "cdda8e45e4c4201aff2e0301fc61b9099ac6f90cf68c02523fb1350edc560a32"
+    },
+    "CiukiOS/src/vm/virtual_vga.c": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/virtual_vga.c",
+      "sha256": "34d9c13a600bb83111a52a2e6b7877a4b252796cf53be5edb82bc61d4388ec32"
+    },
+    "CiukiOS/src/vm/virtual_vga.h": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/virtual_vga.h",
+      "sha256": "2726720ecd0ea10d53d849b5bb2d1770ad4b68b0b935217801570f4d249f207b"
+    },
+    "CiukiOS/src/vm/session_scheduler_abi.inc": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/session_scheduler_abi.inc",
+      "sha256": "0e36eda0e47ed54de794541270f611230e878804f86b349924f8255918592651"
+    },
+    "CiukiOS/src/vm/session_scheduler.h": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/session_scheduler.h",
+      "sha256": "1de2d3e639a67f411e99d6d09639884c95d504bc07d8550e5ec7a43f4b427f43"
+    },
+    "CiukiOS/src/vm/session_video_abi.inc": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/session_video_abi.inc",
+      "sha256": "d86366ba758648faee74a4940d4600bd33a4f1de443474a169304b3f76b01fc5"
+    },
+    "CiukiOS/src/vm/CIUKIOS-HDP324-MODIFICATIONS.TXT": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/CIUKIOS-HDP324-MODIFICATIONS.TXT",
+      "sha256": "816540027cabd7e1f97b19a5da02df1d68705c00f9d1a5854fca5c9f4deb85dd"
+    },
+    "CiukiOS/scripts/build_hdpmi_host.sh": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/scripts/build_hdpmi_host.sh",
+      "sha256": "eb84ff642ff0f19fb4be159ebd1ca9ab0ed2e6dc8d4ddddf92ca1e037c3f395e"
+    },
+    "CiukiOS/scripts/hdpmi_build_manifest.py": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/scripts/hdpmi_build_manifest.py",
+      "sha256": "d6efb9c9f9079b02e96eac3642ba5ffbc36efd9b1a5a83d7c37914296c17e320"
+    },
+    "xms_patch": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/patches/hdpmi-ciukios-xms-status.patch",
+      "sha256": "ed3d390657d3a886d2c0b760c8355a2c9db6d227b74b34de12f8c03d25b1f663"
+    },
+    "session_patch": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/patches/hdpmi-ciukios-session-adapter.patch",
+      "sha256": "49f69502b5758965769fe1fa91d40ed0e8bbe132e614cf72436ccdb49c1df3ce"
+    },
+    "adapter": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/src/vm/hdpmi_session_adapter.asm",
+      "sha256": "c0fdc54e9e4f7ed4430cbaafe6ec72d02a134449e9504feaecc11ba237b648dc"
+    },
+    "JWasm": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/JWasm/build/GccUnixR/jwasm",
+      "sha256": "a8c74a2c20d45e71e407e79574331a80e560636f9422583e37f49aae5e869f5f"
+    },
+    "JWlink": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/JWlink/build/jwlinkLR/jwlink",
+      "sha256": "07eb55dcdafd5a6ee5e62bd1e0c53454e6e996d4ca68fc540bad3550043e872a"
+    },
+    "wcc386": {
+      "path": "/opt/watcom/binl64/wcc386",
+      "sha256": "c1eed15692b98c98f1eda96de4d1c3ef3a09e987c6394f5f8ca94234f02eb6ca"
+    },
+    "wlib": {
+      "path": "/opt/watcom/binl64/wlib",
+      "sha256": "892a71d8cf12ca26108a22ed40809277a8e8c58e1554aa39472fd7d4948d3912"
+    },
+    "EDITPE": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/ciukios-tools/EDITPE.EXE",
+      "sha256": "8dab5567fb9984b38dd8f2de45323872963556e161bd85f1ea9ef02d2b37a6ab"
+    },
+    "PESTUB": {
+      "path": "/home/peronslayer/Desktop/CiukiOS/build/external/audio-compat/HX-f2276db9accfc57facf2588bc016a27130597bb1-ff2b17b6e3558597/ciukios-tools/PESTUB.EXE",
+      "sha256": "a59c1a2d81f230c5a7f5b0a44ef9a730d4a83f6cc02a561e8f99ddb49fd50d48"
+    }
+  },
+  "assembler_defines": [
+    "?32BIT=1/0",
+    "?PMIOPL=0",
+    "?PE",
+    "?WDEB386=1",
+    "?JHDPMI=1",
+    "?EMUDRxRD=1",
+    "?EMUDRxWR=1"
+  ],
+  "c_flags": [
+    "-bt=nt",
+    "-mf",
+    "-3r",
+    "-ecc",
+    "-zl",
+    "-zc",
+    "-s",
+    "-ox",
+    "-os"
+  ],
+  "binaries": {
+    "HDPMI32I.EXE": {
+      "bytes": 62720,
+      "sha256": "6a3f53a48f1336b1b8893f36bafb310697de7a3c9fd09658084e990b34ca11b0",
+      "sections": 3
+    },
+    "HDPMI16I.EXE": {
+      "bytes": 37376,
+      "sha256": "b117ea42d52b7132c90a0c8525bbd73f3f8f8ebecb30bbcb4cb52921486beef9",
+      "sections": 3
+    }
+  },
+  "build_complete": true,
+  "runtime_tested": false,
+  "inputs_unchanged_during_build": true
+}

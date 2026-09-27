@@ -1,0 +1,36 @@
+{
+  "scope": "Console output of unit suites that write no report.json; exact final lines",
+  "virtual_vga": {
+    "command": "python3 scripts/test_virtual_vga.py",
+    "exit": 0,
+    "output": [
+      "PASS: 168060 independent VGA assertions; state 267092 bytes",
+      "firmware cross-check: {\"rom\": \"/usr/share/qemu/vgabios-stdvga.bin\", \"rom_sha256\": \"7c2d15feadfcaf35bd8b9d20983f32c4dd9895a6045a4c9e67a28727bc9b629c\", \"modes\": [{\"mode\": \"0x1\", \"rom_record_offset\": \"0x5bcc\", \"palette\": 2}, {\"mode\": \"0x3\", \"rom_record_offset\": \"0x5c24\", \"palette\": 2}, {\"mode\": \"0xd\", \"rom_record_offset\": \"0x5d00\", \"palette\": 1}, {\"mode\": \"0xe\", \"rom_record_offset\": \"0x5d2c\", \"palette\": 1}, {\"mode\": \"0x10"
+    ]
+  },
+  "vga_x86": {
+    "command": "python3 scripts/test_vga_x86.py --cases 20000 (Unicorn via uv)",
+    "exit": 0,
+    "output": [
+      "PASS {\"code16\": {\"compared\": 20000, \"skipped\": 1190, \"divide\": 255, \"restart_checks\": 427, \"kinds\": {\"xlat\": 890, \"xchg\": 904, \"movimm\": 945, \"string\": 2706, \"alu\": 1833, \"grp3\": 1412, \"shift\": 1800, \"grp1\": 920, \"incdec\": 966, \"setcc\": 899, \"moffs\": 901, \"test\": 913, \"mov\": 1920, \"movzx\": 921, \"imul\": 884, \"movsreg\": 931}}, \"code32\": {\"compared\": 20000, \"skipped\": 4620, \"divide\": 198, \"restart_checks\": 425, \"kinds\": {\"imul\": 920, \"movsreg\": 861, \"moffs\": 1110, \"incdec\": 939, \"string\": 2611, \"shift\": 1846, \"mov\": 1811, \"xlat\": 892, \"grp1\": 905, \"alu\": 1829, \"test\": 938, \"movimm\": 960, \"xchg\": "
+    ]
+  },
+  "jemm_device_query": {
+    "command": "python3 scripts/test_jemm_device_query.py (Unicorn via uv)",
+    "exit": 0,
+    "output": [
+      "    \"no_ioctl_rejected\",",
+      "    \"cycle_rejected\",",
+      "    \"bad_pointer_rejected\",",
+      "    \"bad_strategy_rejected\",",
+      "    \"device_status_or_count_1_rejected\",",
+      "    \"device_status_or_count_2_rejected\",",
+      "    \"device_status_or_count_3_rejected\",",
+      "    \"transfer_bounds_0_37376_8192_rejected\",",
+      "    \"transfer_bounds_512_65280_8192_rejected\",",
+      "    \"transfer_bounds_6_37376_8448_rejected\"",
+      "  ]",
+      "}"
+    ]
+  }
+}

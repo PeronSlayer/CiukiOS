@@ -2,7 +2,7 @@
 set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 exec python3 - "$root_dir" "$@" <<'PY'
-import argparse, hashlib, json, os, pathlib, subprocess, sys
+import argparse, hashlib, json, os, pathlib, subprocess, sys, tarfile
 root=pathlib.Path(sys.argv[1])
 p=argparse.ArgumentParser(description='Build the experimental V86 session JLM; no installation.')
 p.add_argument('--jemm-build',type=pathlib.Path,default=root/'build/external/jemm-monitor')
@@ -14,6 +14,10 @@ if base not in jemm_output.parents: raise SystemExit('Invalid Jemm CURRENT path'
 manifest=json.loads((jemm_output/'manifest.json').read_text());work=jemm_output.parent
 meta=json.loads((root/'third_party/jemm/UPSTREAM.json').read_text())
 if manifest['upstream'] != meta: raise SystemExit('Pinned Jemm build metadata mismatch')
+adaptation=manifest.get('adaptation') or []
+if isinstance(adaptation,dict): adaptation=[adaptation]
+if 'ciukios-vm-scheduler' not in {item.get('name') for item in adaptation}:
+    raise SystemExit('CVSESSION requires a Jemm build selected with --ciukios-vm-scheduler')
 tools={}
 def tree_under(directory):
     trees=[entry for entry in directory.iterdir() if entry.is_dir()]
@@ -27,14 +31,82 @@ for name,spec in meta['toolchains'].items():
 include=tree_under(work/'jemm')/'Include'
 out.mkdir(parents=True,exist_ok=True)
 obj=out/'session.obj';binary=out/'CVSESSION.DLL'
+# Video/presenter track: the monitored VGA model, x86 memory-operand emulator,
+# virtual BIOS, presenter and ring-0 monitor are freestanding OpenWatcom C.
+# nodefaultlibs below guarantees no runtime helper is linked into ring 0.
+watcom=pathlib.Path(os.environ.get('WATCOM','/opt/watcom'))
+wcc=watcom/'binl64/wcc386'
+if not wcc.exists(): wcc=watcom/'binl/wcc386'
+if not wcc.exists(): raise SystemExit('OpenWatcom wcc386 is required for the video monitor objects')
+video_sources=['virtual_vga.c','virtual_vga_bios.c','vga_presenter.c','vga_x86.c','session_video.c',
+               'guest_peripherals.c','session_devices.c']
+# Guest OPL synthesis: DBOPL (GPL-2.0-or-later) from the pinned VSBHDA archive,
+# unmodified, plus the ring-0 adapter, compiled by clang to freestanding COFF.
+vsbhda=json.loads((root/'third_party/vsbhda/UPSTREAM.json').read_text())
+vsbhda_archive=root/'third_party/vsbhda'/vsbhda['archive']
+opl_shim=root/'src/vm/opl_shim'
+clang=os.environ.get('CLANGXX','clang++')
+source_paths=[root/'src/vm'/name for name in
+              ['session_jlm.asm','session_abi.inc','session_scheduler.inc',
+               'session_scheduler_abi.inc','session_scheduler.h',
+               'session_video.inc','session_video_abi.inc','session_video.h',
+               'vga_x86.h','virtual_vga.h','virtual_vga_bios.h','vga_presenter.h',
+               'guest_peripherals.h','session_devices.h','session_devices.inc',
+               'session_devices_abi.inc','session_opl.cpp',
+               *video_sources]]+[root/'scripts/build_vm_session.sh',vsbhda_archive,
+               *sorted(opl_shim.glob('*.h'))]
+def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+def snapshot():
+    return {'sources':{str(path.relative_to(root)):sha(path) for path in source_paths},
+            'include_sources':{str(path.relative_to(include)):sha(path)
+                               for path in sorted(include.rglob('*')) if path.is_file()},
+            'tools':{name:{'path':str(path),'sha256':sha(path)}
+                     for name,path in dict(tools,wcc386=wcc).items()},
+            'jemm_build_manifest_sha256':sha(jemm_output/'manifest.json')}
+inputs=snapshot()
+if inputs['sources'][str(vsbhda_archive.relative_to(root))]!=vsbhda['sha256']:
+    raise SystemExit('Pinned VSBHDA archive hash mismatch')
+inputs['clang']=subprocess.check_output([clang,'--version'],text=True).splitlines()[0]
+(out/'build-inputs.json').write_text(json.dumps(inputs,indent=2)+'\n')
+dbopl=out/'dbopl-src'
+dbopl.mkdir(exist_ok=True)
+with tarfile.open(vsbhda_archive,'r:gz') as source:
+    for member in source.getmembers():
+        for wanted in vsbhda['used_files']:
+            if member.name.endswith('/'+wanted):
+                if not member.isfile() or member.size>1024*1024: raise SystemExit('Invalid DBOPL member')
+                (dbopl/pathlib.Path(wanted).name).write_bytes(source.extractfile(member).read())
+clang_flags=['--target=i686-pc-windows-gnu','-march=i686','-mno-sse','-mno-mmx','-ffreestanding',
+             '-nostdinc','-nostdinc++','-isystem',str(opl_shim),'-isystem',
+             subprocess.check_output([clang,'-print-resource-dir'],text=True).strip()+'/include',
+             '-fno-exceptions','-fno-rtti','-fno-pic','-fno-asynchronous-unwind-tables',
+             '-fno-unwind-tables','-fno-stack-protector','-fno-threadsafe-statics','-fno-builtin',
+             '-O2','-g0','-fno-addrsig','-fno-common','-w','-I'+str(dbopl)]
+opl_objects=[]
+for name,source_path in (('dbopl',dbopl/'DBOPL.CPP'),('session_opl',root/'src/vm/session_opl.cpp')):
+    raw=out/(name+'-clang.obj'); cooked=out/(name+'.obj')
+    subprocess.run([clang,*clang_flags,'-c',str(source_path),'-o',str(raw)],check=True)
+    subprocess.run(['objcopy','--remove-section=.debug$S','--remove-section=.llvm_addrsig',
+                    str(raw),str(cooked)],check=True)
+    opl_objects+=['file',str(cooked)]
 subprocess.run([str(tools['jwasm']),'-coff','-c','-nologo','-I'+str(include),'-I'+str(root/'src/vm'),
                 '-Fo'+str(obj),'-Fl'+str(out/'session.lst'),str(root/'src/vm/session_jlm.asm')],check=True)
-subprocess.run([str(tools['jwlink']),'format','win','nt','hx','dll','ru','native','file',str(obj),
-                'name',str(binary),'op','q,MAP='+str(out/'session.map'),'export','_ddb.1'],check=True)
-def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+video_objects=[]
+for name in video_sources:
+    video_obj=out/(pathlib.Path(name).stem+'.obj')
+    subprocess.run([str(wcc),'-zq','-bt=nt','-mf','-3r','-ecc','-zl','-s','-ox','-ot','-w4','-we',
+                    '-i='+str(watcom/'h'),'-fo='+str(video_obj),str(root/'src/vm'/name)],check=True)
+    video_objects+=['file',str(video_obj)]
+# Relative names: JWlink truncates long directive lines (the output name
+# was cut once the device and OPL objects were added).
+relative=lambda items:[pathlib.Path(i).name if i!='file' else i for i in items]
+subprocess.run([str(tools['jwlink']),'format','win','nt','hx','dll','ru','native','file',obj.name,
+                *relative(video_objects),*relative(opl_objects),'name',binary.name,
+                'op','q,nodefaultlibs,MAP=session.map','export','_ddb.1'],check=True,cwd=out)
+if {k:v for k,v in snapshot().items()}!={k:v for k,v in inputs.items() if k!='clang'}:
+    raise SystemExit('CVSESSION inputs changed during compilation; outputs are not qualified')
 (out/'manifest.json').write_text(json.dumps({'abi':1,'runtime_tested':False,'jemm_commit':meta['commit'],
-    'sources':{str(path.relative_to(root)):sha(path) for path in
-               [root/'src/vm/session_jlm.asm',root/'src/vm/session_abi.inc',root/'scripts/build_vm_session.sh']},
-    'module':{'bytes':binary.stat().st_size,'sha256':sha(binary)},'jemm_build_manifest_sha256':sha(jemm_output/'manifest.json')},indent=2)+'\n')
+    **inputs,'inputs_unchanged_during_build':True,
+    'module':{'bytes':binary.stat().st_size,'sha256':sha(binary)}},indent=2)+'\n')
 print(binary)
 PY

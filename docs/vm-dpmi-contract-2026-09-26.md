@@ -5,10 +5,20 @@ desktop DOS virtualization**. A separate experimental QEMU image has executed an
 ordinary DOS child under Jemm, including shadow video access, exact PTE restore
 and bounded protected framebuffer copying. A fresh packaged HDPMI host in the
 same session passes a bounded protected-mode video-memory and port-trap probe,
-then unloads before the module and monitor. The current production desktop still has restricted
+then unloads before the module and monitor. The 27 September extension also
+executes the unchanged packaged doom-vanille `DOOMVAN/PCDMCORE.EXE` DOS/4GW
+client with a physical-IRQ host
+scheduler, separate HDPMI page-table ownership and exact callback/PTE unwind.
+The current production desktop still has restricted
 BIOS-text execution and cooperative game previews. This record identifies the
 interfaces that a monitored original-binary session must integrate and their
 actual limits.
+
+The [27 September artifact audit](vm-integration-audit-2026-09-27.md) records an
+initial combined run before subsequent scheduler reentry and guest-IF fixes.
+Its PASS is limited to the recorded cases and binaries. Final runtime evidence
+for the corrections is pending; observed host ticks alone do not prove correct
+virtual IF handling for every client.
 
 ## Use the shipped HDPMI source
 
@@ -97,10 +107,12 @@ steps do not yet run as a desktop DOS window:
    (8 pages). The implemented experiment preserves and restores all 32 PTEs
    spanning A0000–BFFFF. Preserve owned interrupt/trap handles and all saved
    video state.
-2. Install logical BIOS/video and per-port handlers, then publish private
-   backing pages using writable/user PTEs. The physical display remains owned
-   by the host. No BIOS mode set or current real-mode `vc_fb_begin` CR0 switch
-   may execute from a V86 guest as the host's renderer.
+2. Install logical BIOS/video and per-port handlers, then publish the aperture
+   as writable/supervisor PTEs. Guest user-mode accesses must fault into the
+   shared VGA instruction model; a user-accessible RAM alias cannot implement
+   latches, plane masks or VGA write modes. The physical display remains owned
+   by the host. No firmware mode set or current real-mode `vc_fb_begin` CR0
+   switch may execute from a V86 guest as the host's renderer.
 3. On partial failure, restore the exact PTE snapshot and flush the monitor
    TLB, undo only successfully installed traps/hooks, and free allocations only
    after no low alias points at them. On normal termination use the same path.
@@ -156,17 +168,48 @@ HDPMI's `I31SWT.ASM:_callrmproc` implements DPMI 0300 by reading the real IVT
 target and far-calling it; JLOAD's V86 interrupt hook operates in the monitor's
 dispatch path. That simulated call may bypass the hook. A DOS-side bootstrap
 can discover the JLM device through a real INT2F/1684 before entering HDPMI and
-retain its callback address. A later DPMI 0301 call to that callback, or to a
-resident thunk executing the actual interrupt, is a **candidate bridge requiring
-execution qualification**, not an established safe exception-handler route.
+retain its entry address. The implemented official-host adapter does this once
+at `-cSSSS:OOOO` binding. While that exact client is owned, DPMI 0300h INT 10h
+and 0302h calls whose target exactly equals the current INT 10h vector invoke
+`VM_OP_VIDEO_INT10` through that JLM entry. Other simulated interrupts and
+arbitrary 0301h/0302h real-mode procedures retain the shipped 3.24 behavior.
+This bridge is for infrequent BIOS/mode transitions; protected VGA port and
+memory instructions remain entirely in the ring-0 adapter.
 
 Use shared bounded shadow state and a protected-mode video adapter for frequent
 port access. Batch presentation at a controlled service point instead of adding
 a real-mode transition to every pixel/register operation. A callback must avoid
 DOS, nested EXEC, firmware video changes, recursive HDPMI entry and blocking
 allocation. Preserve the interrupted frame, private stack and nesting state.
-Actual return, IRQ/audio coexistence and failure unwind need their own QEMU and
-physical-machine gates before this route can launch arbitrary DOS programs.
+Native-window return, virtual IRQ/audio coexistence and physical-machine
+behavior need their own gates before this route can launch arbitrary DOS
+programs from the production desktop.
+
+## Host scheduling and client ownership
+
+The Jemm patch adds one versioned `Install_Host_Scheduler` service backed by
+physical IRQ0. Its callback owns a private stack, a non-reentrancy gate and one
+conventional descriptor. Jemm invokes it before deciding whether IRQ0 is
+deliverable to the V86 guest. The required behavior is host progress without
+altering the guest's virtual IF or delivering masked guest IRQs. The initial
+gate observed progress during its CLI and BIOS waits, but an HDPMI path that
+restored guest interrupt delivery at the next physical tick and the V86 IOPL
+policy require additional correction and qualification. The adapter snapshots
+and restores both pre-client PIC masks exactly. Blocked BIOS keyboard waits
+are separately exercised. The scheduler's reentry guard correction has its own
+assembled-instruction regression; see the audit record.
+
+Every HDPMI client has distinct client-specific storage: official API-6 handle,
+IOPB ownership, callback stack, saved CR4/PIC state and a full 32-entry copy of
+its own A0000–BFFFF PTEs. Attach maps one supervisor-only global alias to the
+shared video block, installs the session shadow in the client's page table and
+then publishes ownership. Detach first removes the exact API-7 handle, unmaps
+the alias, restores and verifies all client PTEs, and only then clears client
+ownership. Fault and partial-attach paths use the same reverse ordering.
+
+This remains one monitored foreground execution context. Source-port callbacks,
+the physical scheduler callback and HDPMI's current protected client are not
+separate background VMs and are never counted as such.
 
 ## Minimal CiukiOS session ABI proposal
 
@@ -298,10 +341,28 @@ has RMS 992.76, peak 16,708 and 18,589 distinct sample values. It also checks
 38,507 kernel code bytes without unexpected changes. This is fullscreen Doom
 compatibility evidence, not proof that the monitor runs Doom in a window.
 
+The newer `scripts/qemu_test_dpmi_lifetime.py` gate stages a different workload:
+the packaged doom-vanille DOS engine `APPS/DOOMVAN/PCDMCORE.EXE`, byte-for-byte
+(SHA-256
+`efbe64359fb1dfe569cde2428f41ef15a40b8975b8eb36a1cfc5a2731b894980`)
+under the real Jemm and official HDPMI 3.24 integration. It is not the proprietary
+original Doom executable used by the fullscreen regression above, and it is
+not recompiled into the cooperative CiukiOS window port. Before this engine, two normal
+DOS/4GW clients execute actual INT 31h allocation/free, scalar IN/OUT, VGA
+loads/stores, CLI and a blocked BIOS wait; a third client deliberately executes
+UD2 to qualify fatal unwind. The one-tic doom-vanille timedemo then performs more than
+the required 10,000 protected instructions, 50 port reads and 500 port writes.
+The final descriptor records five matching install/remove and entry/exit pairs,
+one fault exit, nonzero memory accounting and no retained handle. The harness
+compares both active CR3 shadows and, after END, the complete original Jemm PTE
+array and all 128 KiB of physical A0000–BFFFF bytes.
+These observations do not close the subsequent reentry and guest-IF findings.
+
 The production source image remained unchanged (SHA-256
 `08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6`).
-This monitor experiment does not establish a desktop presenter, original Doom
-or Wolf3D in a window, complete guest video access routing, virtual audio or keyboard
+This lifetime gate does not itself establish desktop presentation (covered
+separately by the [video record](vm-video-session-2026-09-27.md)), Doom or
+Wolf3D in a native window, arbitrary chipset/VBE routing, virtual audio or keyboard
 devices, concurrent DOS sessions, or operation on the physical T23/E500. Those
 capabilities require their own implementation and original-binary evidence.
 The 43,217-byte experimental kernel has 47 bytes below the unchanged 43,264-byte

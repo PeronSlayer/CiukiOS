@@ -1,6 +1,6 @@
 # Current Milestones
 
-Updated 2026-09-26 for `CiukiOS pre-Alpha v0.7.1`. The current desktop increment
+Updated 2026-09-27 for `CiukiOS pre-Alpha v0.7.1`. The current desktop increment
 and the older cross-phase qualification records have separate evidence scopes.
 Dated investigation notes and files under `handoff/` remain historical evidence;
 when they disagree with this ledger, `Roadmap.md` and the current compatibility
@@ -24,7 +24,7 @@ the source/image identity and failure evidence.
 | Windowed DOS | Restricted foreground BIOS-text execution; separately, cooperative Doom preview Ctrl/Space/chords/releases pass. | The games are source ports. Original DOS graphics/DPMI/audio virtualization remains unimplemented. |
 | Hardware | No new physical qualification. | T23/E500 input/audio, native hardware acceleration and physical frame rate remain open. |
 
-## Subsequent monitor experiment
+## September 26 monitor foundation
 
 The experimental kernel and external session module are a separate increment;
 they do not change the selected desktop image above or enable Jemm in normal
@@ -62,6 +62,43 @@ and [the Jemm/HDPMI contract](vm-dpmi-contract-2026-09-26.md). The
 [archived monitor report](validation/2026-09-26-vm/monitor-final.json) preserves
 the qualified binary hashes; the session record links the independent Windows,
 Doom and device-model results.
+
+### September 27 integration correction
+
+V86 and HDPMI VGA memory/port accesses now reach the software model. The
+[video-track record](vm-video-session-2026-09-27.md) qualifies five native-QEMU
+pixel comparisons and the unchanged DOS Navigator FIRE executable in a
+fixed-size desktop window, including focus, cover/uncover and minimize/restore.
+It records approximately 18 window repaint/s on the host machine; this is not
+a physical Pentium III measurement. At that point its keyboard path was BIOS
+INT 16h only, with no guest mouse; see the evening follow-up below. The separate DPMI lifetime workload uses the unchanged
+packaged doom-vanille DOS engine; it does not qualify that game in a native
+window or with audio. The original September 26 selected image remains unchanged.
+
+The peripheral API now uses `cvgp_` / `CVGP_`, resolving its actual compile/link
+collision with the presenter's `cvp_` / `CVP_`. The combined video, presenter
+and peripheral sources pass host execution under ASan/UBSan and a freestanding
+OpenWatcom link; all 912 renamed peripheral-model assertions also pass. The
+[archived before/after evidence](validation/2026-09-27-integration/README.md)
+includes the real pre-fix compiler failure. This qualifies API coexistence and
+the isolated model, not Jemm/HDPMI device wiring, guest audio or native GUI input.
+The [integration audit](vm-integration-audit-2026-09-27.md) distinguishes the
+earlier combined lifetime run from the completion runs. The rebuilt HDPMI, with
+its manifest, the virtual-IF adapter and the corrected scheduler, passes the
+combined lifetime gate under ordinary Jemm and three times under the opt-in V86
+IF profile. VGA acceptance, the native DOS window and the earlier session gates
+also pass with the final module. Seven defects found on the way are archived
+with their fixes. There is no hardware qualification.
+
+### September 27 evening: devices, negotiation, resize
+
+The V86 IF profile is negotiated at runtime through Jemm's
+`Host_Scheduler_Profile` service; one Jemm build serves both uses. The
+peripheral model is attached to real-mode DOS programs: raw keyboard with focus,
+virtual INT 33h mouse, ISA DMA/SB16 and DBOPL OPL streamed to the AC'97. The
+VGA-session DOS window is resizable and rescales the guest. All gates in
+[the device archive](validation/2026-09-27-devices/README.md) pass in QEMU.
+Protected-mode (HDPMI) clients are not attached to the device model yet.
 
 ## Phase Status
 
@@ -134,8 +171,8 @@ The aggregate includes every locally available bundled game and Windows workflow
 
 ## Immediate Operational Order
 
-1. Integrate the experimentally qualified monitor lifecycle and protected framebuffer path with the native desktop presenter, preserving normal boot/fullscreen paths.
-2. Connect every guest VGA access to the device model, complete focused keyboard input and coordinate DPMI/audio/peripheral ownership; bounded shadow/copy and protected I/O probes do not close these interfaces.
+1. Attach protected-mode (HDPMI) clients to the device model: port bridge (`DEV_IO`), virtual IRQ delivery to protected-mode handlers and EOI routing to the profile's PIC. Runtime IF negotiation and the V86 device path are done (QEMU).
+2. Complete protected-mode window presentation.
 3. Qualify original Doom/Wolf binaries with actual video/audio, measured performance, cleanup and separate physical T23/E500 evidence. Cooperative ports cannot satisfy this gate.
 4. Preserve the historical DOS/Windows/audio gates while expanding the Phase 6 corpus and full-CD workflows; keep original Doom SB16/DMX and physical compatibility gaps explicit.
 5. Extend networking and Windows compatibility under their existing separate phase gates.

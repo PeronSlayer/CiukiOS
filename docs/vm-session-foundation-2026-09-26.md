@@ -2,7 +2,12 @@
 
 This work adds executable foundations for running **original DOS binaries**:
 a real V86 monitor, private VGA memory, protected framebuffer transport and
-a protected-mode VGA-port adapter. It does **not** yet put arbitrary DOS
+a protected-mode VGA-port adapter. The 27 September extension additionally
+executes the unmodified packaged doom-vanille DOS engine,
+`APPS/DOOMVAN/PCDMCORE.EXE`, under the real Jemm/HDPMI stack. That executable is
+neither the proprietary original Doom binary nor the cooperative CiukiOS window
+port. It
+does **not** yet put arbitrary DOS
 graphics or audio into a native desktop window. The normal desktop launch
 paths and boot configuration do not load the experimental monitor.
 
@@ -12,6 +17,12 @@ Each new emulator run uses a private copy with the new kernel and the named
 experimental components. The baseline image remains unchanged. This record
 supersedes neither its [eleven desktop checks](validation/2026-09-26/README.md)
 nor the outstanding physical T23/E500 reports.
+
+The [27 September integration audit](vm-integration-audit-2026-09-27.md)
+distinguishes the artifacts from each track. Its initial combined PASS predates
+the scheduler reentry correction and ongoing guest-IF fixes. Final runtime
+qualification of those corrections is pending; earlier tick observations do
+not establish that every guest CLI/POPF sequence preserves interrupt semantics.
 
 ## Kernel defects fixed during integration
 
@@ -48,11 +59,11 @@ special-case Jemm to conceal the problem.
 
 | Component | Implemented | Boundary |
 | --- | --- | --- |
-| Pinned Jemm/JLOAD build | Verified sources and tools, isolated build directories, optional DOS device-query adapter, runtime load/unload | One V86 context; no independent desktop scheduler |
-| `CVSESSION.DLL` | Owns one CR3, shadows all 32 pages at A0000–BFFFF, owns VGA port traps, logical BIOS modes 03h/13h and query 0Fh, bounded readback | Minimal register/DAC state; no planar memory semantics or general video BIOS |
+| Pinned Jemm/JLOAD build | Verified sources and tools, isolated build directories, DOS device-query adapter, physical-IRQ0 host-scheduler service, runtime load/unload | One foreground V86 context; callbacks are services, not independent VMs |
+| `CVSESSION.DLL` | Owns one Jemm CR3, shadows all 32 pages at A0000–BFFFF, owns VGA port/fault traps, logical BIOS modes, planar VGA state and bounded presentation/readback | Experimental foreground session; the desktop DOS window uses it only when Jemm and the JLM are loaded manually ([video record](vm-video-session-2026-09-27.md)) |
 | Protected framebuffer transport | Validated physical framebuffer mapping, uncached protected-mode read/write, at most 4,096 bytes per call, explicit unbind | Not wired into the native UI compositor; trusted host API, not a security boundary |
-| Freestanding VGA model | Four planes, latches, read/write modes, indexed registers, DAC, text/13h/Mode X/planar scanout | Model is not yet connected to trapped guest memory cycles |
-| HDPMI VGA I/O adapter | Real CPU IN/OUT exceptions, byte/word/dword semantics, private model state, owned install/remove handle; a fresh VCPI host inherits the session's shadow mappings | Owning 32-bit client only; string I/O explicitly rejects the session; no original game integration |
+| Freestanding VGA model | Four planes, latches, read/write modes, chain-4, odd/even, indexed registers, DAC, text/13h/Mode X/planar scanout, virtual video BIOS | Connected to trapped V86 and protected-mode memory and port cycles since 27 September |
+| HDPMI session adapter | Official 3.24 API-6/API-7 callbacks, actual protected IN/OUT and VGA-memory instructions, separate per-client PTE snapshot, fault/mode-transition bridge, exact unwind | One owning 32-bit foreground client; no older-fork ABI and no background-VM claim |
 | Peripheral groundwork | Exclusive video-port ownership, read-only host observations, DOS file I/O preserved, defined DPMI ownership contract | No virtual keyboard/mouse/PIC/PIT/DMA/Sound Blaster yet |
 
 The ordinary `VMGUEST.COM` fixture uses only standard DOS, BIOS, VGA memory and
@@ -62,9 +73,11 @@ isolation for those operations; it is not a Doom/Wolf3D compatibility claim.
 
 The JLM saves the **original PTE values**, including flags, and restores all
 32 exactly. It refuses unload while video or framebuffer ownership remains.
-The page-table self-map is specific to the pinned Jemm revision. It maps the
-guest VGA aperture to RAM, which is sufficient for linear byte writes but
-cannot reproduce VGA latches, plane masks or write modes by itself.
+The page-table self-map is specific to the pinned Jemm revision. The original
+design mapped the guest VGA aperture to RAM, which could not reproduce VGA
+latches, plane masks or write modes. Since 27 September the pages are
+supervisor-only guards, and every guest access is executed against the VGA
+model instead.
 
 The framebuffer API accepts an aligned physical base at or above `80000000h`,
 an extent up to 64 MiB and conventional transfer buffers. The parent must
@@ -87,9 +100,20 @@ returns TSR status `AH=3`, with `AL=0/1/2` identifying raw/XMS/VCPI success;
 the parent also confirms DPMI discovery. Treating every nonzero AL as failure
 was a probe defect, corrected from the pinned upstream definitions.
 
+The later unmodified-client gate keeps the same transaction ordering but extends
+it across repeated normal clients, a deliberate protected #UD failure and the
+unchanged packaged doom-vanille DOS/4GW executable. Jemm provides bounded host
+service from physical IRQ0; the probes observed ticks across their CLI and
+blocked BIOS waits. Correct preservation of the guest's virtual IF, including
+PUSHFD/CLI/POPFD, remains under integration review. HDPMI preserves its own IOPB handles, pre-client PIC
+masks and all 32 low-memory PTEs for each client. Official DPMI 0300h INT 10h
+and 0302h calls aimed exactly at the current INT 10h vector cross through the
+owned JLM virtual BIOS; arbitrary real-mode procedures are unchanged.
+
 V86 scalar `IN AL` and `IN AX` preserve the upper bits of EAX; canaries cover
-both sizes, `IN EAX` and carry preservation. V86 string I/O is explicitly
-unsupported: it records a sticky fatal diagnostic, performs no device or
+both sizes, `IN EAX` and carry preservation. V86 string I/O to VGA ports
+(3B0h–3DFh) now runs against the VGA model. String I/O to any other port is
+still unsupported: it records a sticky fatal diagnostic, performs no device or
 memory transfer and makes READBACK fail. The owner must END the session.
 This diagnostic is not a preemptive child-termination facility. The PM adapter
 has its own equivalent unsupported-string path. Neither silently claims REP
@@ -107,10 +131,11 @@ remain in ignored `build/`; report paths identify those original locations.
 | Live DOS SYSVARS | Five cases against actual assembled kernel, plus old-kernel failure reproduction |
 | Jemm query adapter | 15 CPU-level cases, actual strategy/interrupt request fixture, malformed chains and handle lifecycle |
 | HDPMI I/O range allocator | 34 cases against extracted, unchanged shipped allocator routines; both client pointer formats |
-| VGA model | 141,819 expected-value assertions, ASan/UBSan, OpenWatcom freestanding compilation/link |
+| VGA model | 141,819 expected-value assertions, ASan/UBSan, OpenWatcom freestanding compilation/link (168,060 after the 27 September video extension) |
 | V86 session and framebuffer | Real DOS child, DOS file create/read/delete, COM/MZ launches, all 32 PTEs changed then restored exactly, physical B800 surface unchanged, 4,096-byte protected LFB copy, bounds, unload and desktop return |
 | Protected-mode I/O | Actual CPU instructions under packaged HDPMI, 218 exceptions including one deliberately rejected string-I/O instruction, host VGA unchanged, handler removal, resident-host unload and desktop return |
 | Combined V86/VCPI/DPMI | Fresh resident HDPMI under an active session, actual protected-mode A000/B800 writes visible in private readback, protected I/O checks, host removal, ordinary V86 child and exact physical-video/PTE restoration |
+| Unmodified HDPMI client lifecycle | Two normal DOS/4GW probes, one deliberate #UD unwind and fixed-hash `DOOMVAN/PCDMCORE.EXE` timedemo; separate Jemm/HDPMI CR3s, actual protected instructions and I/O, observed host ticks in the probe's CLI/BIOS wait, five exact callback installs/removes, zero PTE repairs, exact 32-PTE and 128-KiB physical-aperture restoration. Final guest-IF qualification is pending. |
 | Windows regression | Two Windows 3.1 sessions on the new kernel, applications, resize/repaint, WAV/MIDI and return to native UI |
 | Classic Doom regression | Original fullscreen executable, actual menus/gameplay/movement, non-silent AC97 audio, quit, COM execution and native desktop return; 38,507 code bytes unchanged outside the allowed XMS entry patch |
 
@@ -126,9 +151,10 @@ Build the pinned monitor and the extension without installing them in any
 normal image:
 
 ```sh
-bash scripts/build_jemm_monitor.sh --ciukios-device-query
+bash scripts/build_jemm_monitor.sh --ciukios-device-query --ciukios-vm-scheduler
 bash scripts/build_vm_session.sh
 bash scripts/build_dpmi_video_probe.sh
+bash scripts/build_dpmi_lifetime_probes.sh
 python3 scripts/test_virtual_vga.py
 ```
 
@@ -152,6 +178,14 @@ an output directory. It sends keyboard events to the running guest and reads
 physical memory through QEMU for verification. It never injects success flags,
 patches guest RAM, or stops the CPU to manufacture an observation.
 
+The unmodified-client lifecycle gate is `scripts/qemu_test_dpmi_lifetime.py`.
+It stages the packaged doom-vanille `APPS/DOOMVAN/PCDMCORE.EXE` byte-for-byte
+(SHA-256 `efbe64359fb1dfe569cde2428f41ef15a40b8975b8eb36a1cfc5a2731b894980`),
+uses a one-tic deterministic demo, and reads the live descriptor and both page
+tables through QEMU. The deeply nested DOS parent remains halted after PASS so
+those final bytes stay observable; returning that parent through CiukiOS's
+current nested-EXEC path is a separate kernel limitation.
+
 The manual monitor command used by the harness is:
 
 ```text
@@ -164,18 +198,18 @@ native XMS owner. Load/unload is qualified in the emulator; it is not enabled
 in live-CD or HDD startup. Never unload the monitor while a DPMI host or session
 still owns its pages or callbacks.
 
-## Remaining work, in three parallel tracks
+## Remaining work after the scheduler/DPMI extension
 
-1. **Video execution and presentation.** Connect the VGA model to actual V86
-   and DPMI memory cycles, preserve exact device state, then connect protected
-   framebuffer transport to the native compositor. Acceptance requires
-   original unmodified mode-13h and planar binaries, damage-limited drawing,
-   clean close/reopen and measured frame times.
-2. **DPMI and scheduling.** Extend the qualified fresh-host startup under Jemm
-   to original extender clients, maintain shared memory and protected I/O callback
-   ABI, handle guest exceptions and support a responsive host even when a
-   child disables interrupts. Acceptance requires original DOS extenders,
-   allocation/free cycles and teardown with no stale callback or PTE.
+1. **Video execution and presentation.** Implemented on 27 September; see
+   [the video record](vm-video-session-2026-09-27.md) for results, frame
+   times and remaining limits (no physical-hardware qualification). The
+   window became resizable, with raw keyboard and a virtual mouse, later the
+   same day; see [the device record](vm-input-audio-devices-2026-09-27.md).
+2. **Native runtime integration.** Connect the qualified single-foreground
+   scheduler and DPMI adapter to the desktop's launch/close path without
+   turning callbacks or the one V86 context into fictitious background VMs.
+   The normal fullscreen fallback remains required outside the advertised
+   video/input/audio capability set.
 3. **Input and sound devices.** Implement focused key make/break events and
    modifiers, mouse ownership, virtual IRQ/timer/DMA/SB/OPL behavior and an
    audio backend that shares resources with the host. Acceptance requires
@@ -184,6 +218,6 @@ still owns its pages or callbacks.
 
 These are independent implementation assignments around the documented
 session ABI, not three claims of completed functionality. Integrate them only
-after their checks pass together. Source ports remain available as existing
-applications and must not be relabelled as original DOS virtualization.
+after their checks pass together. Cooperative CiukiOS window ports remain
+separate applications and do not establish unmodified DOS-binary execution.
 Reusable assignment prompts are in [the parallel handoff](vm-next-steps-prompts-2026-09-26.md).

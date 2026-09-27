@@ -57,6 +57,10 @@ info_packet dd VM_INFO_MAGIC
  dd VM_CAPABILITIES
  dd 13 dup (0)
 
+include session_scheduler.inc
+include session_video.inc
+include session_devices.inc
+
 .code
 
 check_context proc
@@ -208,6 +212,11 @@ bind_framebuffer endp
 ; END deliberately retains the framebuffer binding; UNBIND is explicit.
 ; _PageFree recognizes _PageCommitPhys mappings and never frees MMIO pages.
 unbind_framebuffer proc
+ ; A running presenter or host-mode writer still owns this mapping. END
+ ; must first retire all callbacks and video ownership, including failures
+ ; that deliberately retain the active session for a cleanup retry.
+ cmp active,0
+ jne still_active
  mov eax,fb_linear
  test eax,eax
  jz not_bound
@@ -225,6 +234,9 @@ unbind_framebuffer proc
  ret
 not_bound:
  mov eax,VM_ERROR_FB_UNBOUND
+ ret
+still_active:
+ mov eax,VM_ERROR_ACTIVE
  ret
 failed:
  ; Keep ownership recorded and refuse DLL unload; caller can retry UNBIND.
@@ -298,6 +310,13 @@ clear_shadow endp
 ; Unwind in reverse order. Only called while owner CR3 is active.
 ; Restores the original 32 PTE DWORDs verbatim before freeing their aliases.
 rollback proc uses esi edi ebx
+ ; Devices first: their profile hooks and traps go before the profile itself.
+ call dev_end
+ test eax,eax
+ jnz cleanup_failed
+ call vm_scheduler_disarm
+ test eax,eax
+ jnz cleanup_failed
  cmp mapped,0
  je unmapped
  mov esi,offset saved_ptes
@@ -309,6 +328,9 @@ rollback proc uses esi edi ebx
  mov cr3,eax
  mov mapped,0
 unmapped:
+ call video_end
+ test eax,eax
+ jnz cleanup_failed
  cmp hooked,0
  je unhooked
  mov eax,10h
@@ -429,6 +451,9 @@ install_ports:
  xor eax,eax
  rep stosb
  call clear_shadow
+ call video_begin
+ test eax,eax
+ jnz video_failed
  mov esi,shadow
  shr esi,12
  lea esi,[PAGE_MAP+esi*4]
@@ -437,8 +462,10 @@ install_ports:
 map_pages:
  lodsd
  ; Don't copy JLOAD's allocator metadata bits into a second page-table slot.
+ ; Present+writable but SUPERVISOR: every guest cycle faults into the VGA
+ ; model (session_video.inc); the shadow is never a planar-memory alias.
  and eax,0FFFFF000h
- or eax,7
+ or eax,3
  stosd
  loop map_pages
  mov eax,cr3
@@ -446,8 +473,17 @@ map_pages:
  mov mapped,1
  mov active,1
  inc generation
+ call vm_scheduler_arm
+ test eax,eax
+ jnz scheduler_failed
  xor eax,eax
  ret
+scheduler_failed:
+ mov ebx,eax
+ jmp failed
+video_failed:
+ mov ebx,eax
+ jmp failed
 already:
  mov eax,VM_ERROR_ACTIVE
  ret
@@ -496,8 +532,42 @@ v86_dispatch proc
  je unbind_fb
  cmp eax,VM_OP_FB_COPY
  je copy_fb
+ cmp eax,VM_OP_BIND_SCHED
+ je bind_scheduler
+ cmp eax,VM_OP_UNBIND_SCHED
+ je unbind_scheduler
+ cmp eax,VM_OP_DPMI_RELEASE
+ je release_dpmi
+ cmp eax,VM_OP_IF_PROFILE
+ je if_profile
+ cmp eax,VM_OP_VIDEO_CONFIG
+ jb not_video
+ cmp eax,VM_OP_VIDEO_DAMAGE
+ ja not_video
+ call video_dispatch
+ jmp checked_result
+not_video:
+ cmp eax,VM_OP_DEV_BEGIN
+ jb not_device
+ cmp eax,VM_OP_DEV_KEY
+ ja not_device
+ call dev_dispatch
+ jmp checked_result
+not_device:
  mov eax,VM_ERROR_OPERATION
  jmp error
+bind_scheduler:
+ call vm_scheduler_bind
+ jmp checked_result
+unbind_scheduler:
+ call vm_scheduler_unbind
+ jmp checked_result
+release_dpmi:
+ call vm_scheduler_dpmi_release
+ jmp checked_result
+if_profile:
+ call vm_scheduler_if_profile
+ jmp checked_result
 bind_fb:
  call bind_framebuffer
  jmp checked_result
@@ -518,6 +588,12 @@ start_session:
 end_session:
  cmp active,0
  je inactive
+ call vm_scheduler_can_end
+ test eax,eax
+ jnz error
+ call video_can_end
+ test eax,eax
+ jnz error
  call rollback
  test eax,eax
  jnz error
@@ -541,10 +617,9 @@ readback_live:
  jc address_bad
  cmp eax,VGA_BYTES
  ja address_bad
- add esi,shadow
- rep movsb
- xor eax,eax
- jmp success
+ ; Side-effect-free CPU view of the planar model (no latch load).
+ call video_readback
+ jmp checked_result
 query:
  movzx ecx,word ptr [ebp].Client_Reg_Struc.Client_ECX
  test ecx,ecx
@@ -555,6 +630,13 @@ query:
  call guest_destination
  test eax,eax
  jnz error
+ call vm_scheduler_capabilities
+ or eax,VM_VIDEO_CAPABILITIES
+ test eax,VM_CAP_V86_VIRTUAL_IF
+ jz @F
+ or eax,VM_CAP_GUEST_INPUT or VM_CAP_GUEST_AUDIO
+@@:
+ mov [info_packet+VM_INFO_CAPABILITIES],eax
  mov eax,active
  mov [info_packet+VM_INFO_ACTIVE],eax
  mov eax,video_mode
@@ -585,7 +667,13 @@ query:
  mov esi,offset info_packet
  rep movsb
 query_regs:
- mov word ptr [ebp].Client_Reg_Struc.Client_EBX,VM_CAPABILITIES
+ call vm_scheduler_capabilities
+ or eax,VM_VIDEO_CAPABILITIES
+ test eax,VM_CAP_V86_VIRTUAL_IF
+ jz @F
+ or eax,VM_CAP_GUEST_INPUT or VM_CAP_GUEST_AUDIO
+@@:
+ mov word ptr [ebp].Client_Reg_Struc.Client_EBX,ax
  mov eax,active
  mov [ebp].Client_Reg_Struc.Client_EDX,eax
  mov eax,video_mode
@@ -620,35 +708,18 @@ video_interrupt proc
  call check_context
  test eax,eax
  jnz video_reject
- mov ax,word ptr [ebp].Client_Reg_Struc.Client_EAX
- cmp ah,0Fh
- je get_mode
- test ah,ah
- jnz video_reject
- mov dl,al
- and al,7Fh
- cmp al,3
- je set_mode
- cmp al,13h
- jne video_reject
-set_mode:
- movzx eax,al
+ cmp byte ptr [ebp].Client_Reg_Struc.Client_EAX+1,0
+ jne not_mode_set
+ cmp scheduler_descriptor,0
+ je not_mode_set
+ mov eax,scheduler_descriptor
+ inc dword ptr [eax+CVSCHED_MODE_TRANSITIONS]
+not_mode_set:
+ ; Virtual VGA BIOS over the shared model (session_video.c). Physical video
+ ; firmware is never entered; unsupported functions return unchanged.
+ call video_int10
+ movzx eax,byte ptr ds:[449h]
  mov video_mode,eax
- test dl,80h
- jnz video_done
- call clear_shadow
- jmp video_done
-get_mode:
- mov eax,video_mode
- mov ah,80
- cmp al,13h
- jne mode_result
- mov ah,40
-mode_result:
- mov word ptr [ebp].Client_Reg_Struc.Client_EAX,ax
- mov byte ptr [ebp].Client_Reg_Struc.Client_EBX+1,0
-video_done:
- and [ebp].Client_Reg_Struc.Client_EFlags,not 1
  popad
  clc
  ret
@@ -664,13 +735,21 @@ chain:
  ret
 video_interrupt endp
 
-; Primitive byte register isolation, not a complete VGA model. In particular
-; status is supplied as 0; no fake clock progresses when a guest polls a port.
-; Wide accesses are decomposed into adjacent byte registers, never physical IO.
+; Wide accesses are decomposed into adjacent byte registers of the shared VGA
+; model, never physical IO. Status 1 comes from CRTC timing against host TSC,
+; not from the number of polls, unless no TSC rate was configured.
 port_handler proc uses esi edi ebx
  inc io_count
  test ecx,STRING_IO
+ jz scalar_io
+ ; INS/OUTS on the VGA range: the whole (REP) transfer against the model.
+ cmp fatal_status,0
+ jne reject_after_fatal
+ call video_port_string
+ test eax,eax
  jnz reject_string
+ ret
+scalar_io:
  cmp fatal_status,0
  jne reject_after_fatal
  mov ebx,eax
@@ -735,11 +814,12 @@ preserve_output:
  mov eax,edx
  ret
 reject_string:
- ; Jemm's Crash_Cur_VM faults the entire shared V86 machine; it cannot
- ; terminate only this DOS child. Record a fatal session diagnostic instead.
- ; Do not invent string/REP transfer semantics, touch memory, or pass through
- ; to physical IO. READBACK refuses this session, QUERY exposes the reason,
- ; and END still performs normal ownership cleanup. No support is advertised.
+ ; Reached only when the video monitor could not complete a string transfer
+ ; (unmapped guest buffer or non-VGA port). Jemm's Crash_Cur_VM faults the
+ ; entire shared V86 machine; it cannot terminate only this DOS child. Record
+ ; a fatal session diagnostic instead: no pass-through to physical IO.
+ ; READBACK refuses this session, QUERY exposes the reason, and END still
+ ; performs normal ownership cleanup.
  cmp fatal_status,0
  jne reject_after_fatal
  mov fatal_status,1
@@ -751,140 +831,26 @@ reject_after_fatal:
  ret
 port_handler endp
 
-write_port proc uses ebx
+; Byte accesses to 3B0-3DF reach the shared VGA model (session_video.c):
+; registers, DAC, attribute flip-flop and CRTC-timed status 1.
+write_port proc
  cmp dx,FIRST_PORT
  jb done
  cmp dx,FIRST_PORT+PORT_COUNT
  jae done
- movzx ebx,dx
- mov [port_bytes+ebx-FIRST_PORT],al
- cmp dx,3C4h
- je seq_idx
- cmp dx,3C5h
- je seq_data
- cmp dx,3CEh
- je gc_idx
- cmp dx,3CFh
- je gc_data
- cmp dx,3D4h
- je crtc_idx
- cmp dx,3B4h
- je crtc_idx
- cmp dx,3D5h
- je crtc_data
- cmp dx,3B5h
- je crtc_data
- cmp dx,3C0h
- je attr_data
- cmp dx,3C7h
- je dac_read_idx
- cmp dx,3C8h
- je dac_write_idx
- cmp dx,3C9h
- je dac_data
+ call video_port_write
 done:
- ret
-seq_idx: mov seq_index,al
- ret
-seq_data: movzx ebx,seq_index
- mov seq_regs[ebx],al
- ret
-gc_idx: mov gc_index,al
- ret
-gc_data: movzx ebx,gc_index
- mov gc_regs[ebx],al
- ret
-crtc_idx: mov crtc_index,al
- ret
-crtc_data: movzx ebx,crtc_index
- mov crtc_regs[ebx],al
- ret
-attr_data:
- cmp attr_phase,0
- jne attr_value
- and al,1Fh
- mov attr_index,al
- mov attr_phase,1
- ret
-attr_value:
- movzx ebx,attr_index
- mov attr_regs[ebx],al
- mov attr_phase,0
- ret
-dac_read_idx:
- movzx eax,al
- lea eax,[eax+eax*2]
- mov dac_read_index,ax
- ret
-dac_write_idx:
- movzx eax,al
- lea eax,[eax+eax*2]
- mov dac_write_index,ax
- ret
-dac_data:
- movzx ebx,dac_write_index
- and al,3Fh
- mov dac[ebx],al
- inc ebx
- cmp ebx,768
- jb dac_write_next
- xor ebx,ebx
-dac_write_next:
- mov dac_write_index,bx
  ret
 write_port endp
 
-read_port proc uses ebx
+read_port proc
  mov al,0FFh
  cmp dx,FIRST_PORT
  jb done
  cmp dx,FIRST_PORT+PORT_COUNT
  jae done
- movzx ebx,dx
- mov al,[port_bytes+ebx-FIRST_PORT]
- cmp dx,3BAh
- je status
- cmp dx,3DAh
- je status
- cmp dx,3C5h
- je seq_data
- cmp dx,3CFh
- je gc_data
- cmp dx,3D5h
- je crtc_data
- cmp dx,3B5h
- je crtc_data
- cmp dx,3C1h
- je attr_data
- cmp dx,3C9h
- je dac_data
+ call video_port_read
 done:
- ret
-status:
- mov attr_phase,0
- xor eax,eax
- ret
-seq_data: movzx ebx,seq_index
- mov al,seq_regs[ebx]
- ret
-gc_data: movzx ebx,gc_index
- mov al,gc_regs[ebx]
- ret
-crtc_data: movzx ebx,crtc_index
- mov al,crtc_regs[ebx]
- ret
-attr_data: movzx ebx,attr_index
- mov al,attr_regs[ebx]
- ret
-dac_data:
- movzx ebx,dac_read_index
- mov al,dac[ebx]
- inc ebx
- cmp ebx,768
- jb dac_read_next
- xor ebx,ebx
-dac_read_next:
- mov dac_read_index,bx
  ret
 read_port endp
 
@@ -911,6 +877,15 @@ detach:
  cmp trapped,0
  jne refuse
  cmp fb_linear,0
+ jne refuse
+ call video_owned
+ test eax,eax
+ jnz refuse
+ cmp dev_active,0
+ jne refuse
+ cmp scheduler_installed,0
+ jne refuse
+ cmp scheduler_descriptor,0
  jne refuse
 allow:
  mov eax,1

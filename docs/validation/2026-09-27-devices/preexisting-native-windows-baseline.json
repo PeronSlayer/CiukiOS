@@ -1,0 +1,38 @@
+{
+  "harness_sha256": "2f1d536a12ae208de2ae8953fa9d931bf720e1677f07c89922e2b3a6e1009b5c",
+  "payload_sha256": {
+    "SYSTEM/CIUKIDOS.SYS": "116276101b269c46d7390eb9bbc6b5dd1da90a371a222ebe22f6ae65c1ce9ea3",
+    "SYSTEM/SHELL.COM": "dadb2e6783c6382ae1dad48531c4aad33f027eeed98948419dcf87c29bc05c53",
+    "APPS/MEDIA.COM": "00c5d1c078b002e3324bb4e2e6ecf47dae6c08b892d30a4111fb6b040a762951"
+  },
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "128",
+    "-drive",
+    "file=build/tests/vm-final-2026-09-27/native-windows-baseline/target.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:build/tests/vm-final-2026-09-27/native-windows-baseline/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-404af18650904301a23707a9c571046c.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-vga",
+    "std"
+  ],
+  "memory_mib": 128,
+  "mode": [
+    800,
+    600
+  ]
+}

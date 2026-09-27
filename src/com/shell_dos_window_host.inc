@@ -13,8 +13,20 @@ dos_host_prepare:
     jne .fail
     cmp byte [vc_active],1
     jne .fail
-    cmp byte [vc_lfb],1
+    smsw ax
+    test al,1
+    jnz .v86
+    cmp byte [vc_lfb],1         ; real mode: LFB bursts, as before
     jne .fail
+    jmp .window_ok
+.v86:
+    ; A V86 monitor forbids the LFB burst's CR0 switch: only the banked
+    ; window, which the runtime then serves through CVSESSION host mode.
+    cmp byte [vc_lfb],0
+    jne .fail
+    cmp byte [vc_bank_ok],1
+    jne .fail
+.window_ok:
     cmp word [ui_comp_seg],0
     je .fail
     cmp word [ui_width],800
@@ -49,6 +61,8 @@ dos_host_finish:
     jne .done
     mov byte [dos_host_active],0
     mov byte [dos_host_drag],255
+    mov word [ui_window_width+DOS_HOST_WINDOW*2],660
+    mov word [ui_window_height+DOS_HOST_WINDOW*2],460
     mov byte [ui_dragging],0
     mov byte [ui_previous_button],0
     mov byte [ui_button_down],0
@@ -70,17 +84,28 @@ dos_host_finish:
 
 dos_host_tick:
     pushf
-    push ax
-    smsw ax
-    test al,1
-    pop ax
-    jnz .inactive
     cmp byte [dos_host_active],1
     jne .inactive
     cmp byte [vc_active],1
     jne .inactive
+    push ax
+    smsw ax
+    test al,1
+    pop ax
+    jz .real_mode
+    ; V86: paint only while the runtime holds CVSESSION host mode, which
+    ; serves this banked window from the protected LFB (no CR0, no firmware).
+    cmp byte [es:DW_V86_HOST],1
+    jne .inactive
+    cmp byte [vc_lfb],0
+    jne .inactive
+    cmp byte [vc_bank_ok],1
+    jne .inactive
+    jmp .window_ok
+.real_mode:
     cmp byte [vc_lfb],1
     jne .inactive
+.window_ok:
     cmp byte [vc_fb_depth],0
     jne .inactive
     push cs
@@ -115,13 +140,20 @@ dos_host_tick:
     bsr esi,eax
     sub si,dx
     inc si
-    shl dx,4
-    shl si,4
+    ; 25 dirty bands of ceil(client height/25) rows (16 at 640x400).
+    mov ax,[ui_window_height+DOS_HOST_WINDOW*2]
+    sub ax,60-24
+    mov cl,25
+    div cl
+    movzx cx,al
+    imul dx,cx
+    imul si,cx
     add dx,[ui_window_y+DOS_HOST_WINDOW*2]
     add dx,34
     mov bx,[ui_window_x+DOS_HOST_WINDOW*2]
     add bx,10
-    mov cx,640
+    mov cx,[ui_window_width+DOS_HOST_WINDOW*2]
+    sub cx,20
     call ui_comp_damage
 .paint:
     cmp byte [ui_comp_dirty],1
@@ -245,6 +277,9 @@ dos_host_mouse:
     call ui_windows_raise
     mov byte [ui_motion_phase],0
     mov ax,[dos_host_pressed]
+    cmp ax,63                       ; DOS window grip (VGA session only)
+    sete [dos_host_resize]
+    je .drag_ready
     cmp ax,60
     je .start_drag
     cmp ax,62
@@ -257,6 +292,11 @@ dos_host_mouse:
 .drag_ready:
     mov [dos_host_drag],bl
     call ui_window_bounds
+    cmp byte [dos_host_resize],0
+    je .drag_origin
+    mov bx,cx                       ; resize: pointer offset from the size
+    mov dx,si
+.drag_origin:
     mov ax,[ui_mouse_x]
     sub ax,bx
     mov [dos_host_dx],ax
@@ -272,6 +312,8 @@ dos_host_mouse:
     movzx bx,byte [dos_host_drag]
     call dos_host_damage_window
     call ui_window_bounds
+    cmp byte [dos_host_resize],0
+    jne .resize
     mov ax,[ui_mouse_x]
     sub ax,[dos_host_dx]
     cmp ax,4
@@ -312,6 +354,38 @@ dos_host_mouse:
 .damage_new:
     call dos_host_damage_window
     ret
+.resize:
+    ; Frame >= 340x260 (a 320x200 client) and inside the desktop work area.
+    mov ax,[ui_mouse_x]
+    sub ax,[dos_host_dx]
+    cmp ax,340
+    jge .resize_w
+    mov ax,340
+.resize_w:
+    mov cx,[ui_width]
+    sub cx,bx
+    sub cx,8
+    cmp ax,cx
+    jle .resize_w_end
+    mov ax,cx
+.resize_w_end:
+    mov [ui_window_width+DOS_HOST_WINDOW*2],ax
+    mov ax,[ui_mouse_y]
+    sub ax,[dos_host_dy]
+    cmp ax,260
+    jge .resize_h
+    mov ax,260
+.resize_h:
+    mov cx,[ui_height]
+    sub cx,dx
+    sub cx,37
+    cmp ax,cx
+    jle .resize_h_end
+    mov ax,cx
+.resize_h_end:
+    mov [ui_window_height+DOS_HOST_WINDOW*2],ax
+    mov bx,DOS_HOST_WINDOW
+    jmp .damage_new
 .release:
     cmp byte [dos_host_drag],255
     je .activate
@@ -393,6 +467,7 @@ dos_host_mouse:
 dos_host_active db 0
 dos_host_pages db 0
 dos_host_drag db 255
+dos_host_resize db 0
 dos_host_previous db 0
 dos_host_owner db 0
 dos_host_close db 0

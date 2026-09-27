@@ -1,0 +1,477 @@
+diff --git a/Src/HDPMI/EXTERNAL.INC b/Src/HDPMI/EXTERNAL.INC
+--- a/Src/HDPMI/EXTERNAL.INC
++++ b/Src/HDPMI/EXTERNAL.INC
+@@ -239,6 +239,33 @@
+ _exitclientEx5 proto near	 ;_exitclientEx with error code 5
+ setpmstate proto near
+ closeinterrupts proto near
++
++if ?32BIT
++;--- CiukiOS monitored foreground-session adapter (official 3.24 ABI).
++cvdpmi_parse_option proto near16
++cvdpmi_attach proto near
++cvdpmi_detach proto near
++cvdpmi_mark_fault proto near
++cvdpmi_note_io proto near
++cvdpmi_video_fault proto near
++cvdpmi_scheduler_tick proto near
++cvdpmi_entry_break proto near
++cvdpmi_cli_enter proto near
++cvdpmi_cli_exit proto near
++cvdpmi_if_debug proto near
++cvdpmi_if_irq0 proto near
++cvdpmi_if_api proto near
++cvdpmi_if_return proto near
++externdef r3vect08:R3PROC
++externdef cvdpmi_client_active:dword
++externdef cvdpmi_entry_pending:dword
++externdef cvdpmi_cli_stepping:dword
++externdef cvdpmi_rm_int10_pending:byte
++externdef cvdpmi_jlm_entry:dword
++externdef cvdpmi_int10_result:word
++is0006 proto near
++is0007 proto near
++endif
+ 
+ _rawjmp_pm proto near16		;raw jump to protected-mode, esp = dwHostStack
+ _rawjmp_pm_savesegm proto near16
+@@ -452,6 +479,9 @@
+ if ?NMISAFE
+ externdef rawjmp_rm_nmi:byte  ;v3.24
+ endif
++if ?32BIT
++externdef pPageTab0:dword,pPageTables:dword
++endif
+ _DATA16 ends
+ 
+ _DATA16C segment
+diff --git a/Src/HDPMI/I2FHDPMI.ASM b/Src/HDPMI/I2FHDPMI.ASM
+--- a/Src/HDPMI/I2FHDPMI.ASM
++++ b/Src/HDPMI/I2FHDPMI.ASM
+@@ -214,7 +214,7 @@
+ ;--- c) dx+cx > 10000h
+ ;--- d) not all ports untrapped
+ 
+-is0006 proc
++is0006 proc public
+ 	pushad
+ 	mov edi, offset traphdl
+ nextitem:
+@@ -283,7 +283,7 @@
+ ;--- edx=handle
+ ;--- out: NC=ok, C=error
+ 
+-is0007 proc
++is0007 proc public
+ 
+ 	pushad
+ 	mov edi, offset traphdl
+diff --git a/Src/HDPMI/PAGEMGR.ASM b/Src/HDPMI/PAGEMGR.ASM
+--- a/Src/HDPMI/PAGEMGR.ASM
++++ b/Src/HDPMI/PAGEMGR.ASM
+@@ -110,6 +110,7 @@
+ 
+ _DATA16 segment
+ 
++public pPageTab0,pPageTables
+ pPageDir	 dd ?SYSAREA1-1000h	;const, linear address page dir (FFBFF000)
+ pPageTables  dd ?SYSAREA1	;const, linear address start page tables (FFC00000)
+ pPageTab0	 dd 0			;const after init, linear address page table 0 (FFC02000)
+diff --git a/Src/HDPMI/CLIENTS.ASM b/Src/HDPMI/CLIENTS.ASM
+--- a/Src/HDPMI/CLIENTS.ASM
++++ b/Src/HDPMI/CLIENTS.ASM
+@@ -12,7 +12,7 @@
+ ifndef ?PE
+ externdef endcldata32:byte
+ else
+-?SIZECLDATA32 equ 400h	;also defined in hdpmi.asm
++?SIZECLDATA32 equ 2000h	;also defined in hdpmi.asm; includes CiukiOS adapter stack
+ endif
+ 
+ ?SAVEHOSTSP equ 1	;std=1, 1=save ring 0 ESP from TSS for client
+diff --git a/Src/HDPMI/INIT.ASM b/Src/HDPMI/INIT.ASM
+--- a/Src/HDPMI/INIT.ASM
++++ b/Src/HDPMI/INIT.ASM
+@@ -1149,6 +1149,9 @@
+  if ?VM
+ 	db "  -a: run clients in separate address contexts [32]",lf
+  endif
++if ?32BIT
++	db "  -cSSSS:OOOO: bind CiukiOS session descriptor [32]",lf
++endif
+ if ?RESIDENT
+  if ?TLBLATE
+ 	db "  -b: keep TLB only while a client is running",lf
+@@ -1711,6 +1714,10 @@
+ 	jnz nextopt
+ else
+ 	push offset nextchar
++ if ?32BIT
++	cmp al,'c'
++	jz ciuki_session
++ endif
+  if ?NOINVLPG
+ 	cmp al,'g'
+ 	jz noinvlpg
+@@ -1842,6 +1849,13 @@
+ 	db -1
+ endif
+ 
++if ?32BIT
++ciuki_session:
++	call cvdpmi_parse_option
++	jc ishelp
++	retn
++endif
++
+ ismem10disable:
+ 	or bEnvFlags2, ENVF2_NOMEM10
+ 	retn
+diff --git a/Src/HDPMI/HDPMI.ASM b/Src/HDPMI/HDPMI.ASM
+--- a/Src/HDPMI/HDPMI.ASM
++++ b/Src/HDPMI/HDPMI.ASM
+@@ -95,7 +95,7 @@
+ startof32bitr3 label byte
+ _DATA32C$Z ends
+ else
+-?SIZECLDATA32 equ 400h	;also defined in clients.asm
++?SIZECLDATA32 equ 2000h	;also defined in clients.asm; includes CiukiOS adapter stack
+ endif
+ 
+ ifdef ?PE
+@@ -1260,6 +1260,7 @@
+ r3vect05	R3PROC < _INT05_,_INTSEL_>
+ r3vect06	R3PROC < _INT06_,_INTSEL_>
+ r3vect07	R3PROC < _INT07_,_INTSEL_>
++public r3vect08
+ r3vect08	R3PROC < _INT08_,_INTSEL_>
+ r3vect09	R3PROC < _INT09_,_INTSEL_>
+ r3vect0A	R3PROC < _INT0A_,_INTSEL_>
+@@ -2375,11 +2376,19 @@
+ iret_with_CF_mod proc public
+ 	jc @F
+ 	and byte ptr [esp].IRET32.rFL,not _CY	;reset carry
++if ?32BIT
++	jmp cvdpmi_if_return
++else
+ 	iretd
++endif
+ 	align 4
+ @@:
+ 	or byte ptr [esp].IRET32.rFL, _CY
++if ?32BIT
++	jmp cvdpmi_if_return
++else
+ 	iretd
++endif
+ 	align 4
+ iret_with_CF_mod endp
+ 
+@@ -2574,7 +2583,11 @@
+ 	mov byte ptr [esp+4].IRET32.rFL,ah
+ 	pop eax
+ iretexit::
++if ?32BIT
++	jmp cvdpmi_if_return
++else
+ 	iretd
++endif
+ 	align 4
+ retf2exit endp
+ 
+@@ -2687,6 +2700,12 @@
+ ;--- bit 15: BT, "task switch"
+ 
+ intr01 proc
++if ?32BIT
++	call cvdpmi_if_debug
++	jc @F
++	jmp cvdpmi_if_return
++@@:
++endif
+ if ?TESTEXC01
+ 	push eax
+ 	mov eax, dr6
+@@ -2759,6 +2778,13 @@
+ intr03 proc
+ 	cmp word ptr [esp.IRET32.rCS],_CSSEL_ ;skip int3 in ring 0
+ 	jz iretexit
++if ?32BIT
++	cmp dword ptr ss:cvdpmi_entry_pending,0
++	je @F
++	call cvdpmi_entry_break
++	iretd
++@@:
++endif
+ 	@exception 03
+ 	@mapexc2int 03
+ intr03 endp
+@@ -2783,6 +2809,9 @@
+ 	@simintpms 06
+ noint06:
+ endif
++if ?32BIT
++	call cvdpmi_mark_fault
++endif
+ 	@exception 06
+ 	@defaultexc 06, 1
+ intr06 endp
+@@ -2797,6 +2826,15 @@
+ 
+ intr08 proc
+ 	@testexception exc08
++if ?32BIT
++	cmp dword ptr ss:cvdpmi_client_active,0
++	je @F
++	call cvdpmi_scheduler_tick
++	call cvdpmi_if_irq0
++	jc @F
++	iretd
++@@:
++endif
+ 	@simintlpms 08
+ exc08:
+ 	@exception 08, TRUE
+@@ -2882,6 +2920,13 @@
+ 	@testexception exc0E
+ 	@simintlpms 0E
+ exc0E:
++if ?32BIT
++	call cvdpmi_video_fault
++	jc @F
++	add esp,4
++	iretd
++@@:
++endif
+ 	@exception 0E, TRUE
+ 	@defaultexc 0E,1 
+ intr0E endp
+@@ -3769,6 +3814,17 @@
+ emucli:
+ 	@dprintfxx ?LOG_CLISTI, "emulate cli eip=%lX", [esp].EMUINSFR.rIP
+ 	and byte ptr [esp].EMUINSFR.rFL+1, not 2	; reset IF
++if ?32BIT
++	push ecx
++	push edx
++	lea ecx,[esp+8].EMUINSFR.rIP
++	lea edx,[esp+8].EMUINSFR.dwEAX
++	mov [esp+8].EMUINSFR.rIP,esi
++	call cvdpmi_cli_enter
++	pop edx
++	pop ecx
++	mov esi,[esp].EMUINSFR.rIP
++endif
+  if ?TRAPCLISTI
+ 	cmp [clihdlr._Cs], 0
+ 	jnz clitrapped
+@@ -3823,6 +3879,17 @@
+ emusti:
+ 	@dprintfxx ?LOG_CLISTI, "emulate sti eip=%lX", [esp].EMUINSFR.rIP
+ 	or byte ptr [esp].EMUINSFR.rFL+1, 2	; set IF
++if ?32BIT
++	push ecx
++	push edx
++	lea ecx,[esp+8].EMUINSFR.rIP
++	lea edx,[esp+8].EMUINSFR.dwEAX
++	mov [esp+8].EMUINSFR.rIP,esi
++	call cvdpmi_cli_exit
++	pop edx
++	pop ecx
++	mov esi,[esp].EMUINSFR.rIP
++endif
+  if ?TRAPCLISTI
+ 	cmp [stihdlr._Cs], 0
+ 	jnz stitrapped
+@@ -3985,6 +4052,12 @@
+ 	jnz @F
+ 	movzx edx, byte ptr [esp+4].EMUINSFR.rErr+1
+ @@:
++if ?32BIT
++	push ecx
++	lea ecx,[esp+8]	;official EMUINSFR for the owned scalar callback
++	call cvdpmi_note_io
++	pop ecx
++endif
+ 	call gettrapproc	; get trap proc for port in DX
+ 	pop edx
+ 	push _CSALIAS_
+@@ -5175,9 +5248,21 @@
+ 	@dprintf "initclient: client: CS:IP=%X:%lX, SS:SP=%X:%lX, DS=%lX",[ebp].INITCLPM.rCS, [ebp].INITCLPM.rIP, [ebp].INITCLPM.rSS, [ebp].INITCLPM.rSP,[ebp].INITCLPM.rDS
+ 	@dprintf "initclient: GDT: %lX (%X), IDT: %lX (%X), LDT: %lX (%X)", pdGDT.dwBase, pdGDT.wLimit, pdIDT.dwBase, pdIDT.wLimit, dwLDTAddr, wLDTLimit
+ 
++if ?32BIT
++	; Claim page-table ownership before installing the existing first-entry
++	; INT3/RETF trampoline.  Callback registration occurs in intr03.
++	call cvdpmi_attach
++	jc initclerr19
++endif
+ if ?BRKONENTRY
+ 	test bEnvFlags2, ENVF2_DEBUG	;HDPMI=8192 set?
+-	jz @F
++	jnz @F
++if ?32BIT
++	cmp dword ptr ss:cvdpmi_entry_pending,0
++	jne @F
++endif
++	jmp entry_break_done
++@@:
+ _TEXT32R3 segment
+ r3exc3:
+ 	int 3
+@@ -5194,7 +5279,7 @@
+ 	xchg ax,[ebp].INITCLPM.rCS
+ 	stosd
+ 	pop es
+-@@:
++entry_break_done:
+ endif
+ 	popad
+ if ?32BIT
+@@ -5242,6 +5327,12 @@
+  if _LTRACE_
+ 	jmp @F
+  endif
++endif
++if ?32BIT
++initclerr19:
++	@dprintf "init err19: CiukiOS session adapter rejected client"
++	mov al,14h
++	jmp initclerr
+ endif
+ initclerr21:		;cant alloc DS sel
+ 	@dprintf "init err21: can't alloc DS sel"
+@@ -5377,6 +5468,9 @@
+ 
+ _exitclientEx proc near public
+ 
++if ?32BIT
++	call cvdpmi_mark_fault
++endif
+ if (?DOSOUTPUT eq 0) or (?FORCETEXTMODE eq 1)
+ 	call forcetextmode
+ 	@DebugBreak 0
+@@ -5410,6 +5504,10 @@
+ 
+ 	push byte ptr _FLATSEL_
+ 	pop es
++if ?32BIT
++	; Exact is0007 removal occurs before client IOPB/data teardown.
++	call cvdpmi_detach
++endif
+ 	@dprintf "exitclient enter, cApps=%X, task=%lX RMS=%X:%X, esp=%lX", word ptr gbl.cApps, ltaskaddr, v86iret.rSS, v86iret.rSP, esp
+ 	call closeinterrupts
+ 	cmp [gbl.cApps],0			;fatal error on host initialization?
+diff --git a/Src/HDPMI/I31SWT.ASM b/Src/HDPMI/I31SWT.ASM
+--- a/Src/HDPMI/I31SWT.ASM
++++ b/Src/HDPMI/I31SWT.ASM
+@@ -13,6 +13,7 @@
+ 
+ 	include hdpmi.inc
+ 	include external.inc
++	include session_video_abi.inc
+ 
+ 	option proc:private
+ 
+@@ -453,6 +454,32 @@
+ @@:
+ endif
+ 	mov ebp, esp
++if ?32BIT
++	; Official 3.24 calls the IVT target directly for 0300h, and original
++	; extenders may use 0302h with that same target.  While CiukiOS owns this
++	; client, preserve Jemm's V86 INT 10h hook through the owned JLM entry.
++	mov byte ptr ss:cvdpmi_rm_int10_pending,0
++	cmp dword ptr ss:cvdpmi_client_active,0
++	je cvdpmi_rm_int10_done
++	cmp word ptr [ebp].RMCALLS.rEAX,0300h
++	jne cvdpmi_rm_int10_check_iret
++	cmp byte ptr [ebp].RMCALLS.rEBX,10h
++	jne cvdpmi_rm_int10_done
++	jmp cvdpmi_rm_int10_mark
++cvdpmi_rm_int10_check_iret:
++	cmp word ptr [ebp].RMCALLS.rEAX,0302h
++	jne cvdpmi_rm_int10_done
++	mov eax,es:[edi].RMCS.rCSIP
++	push fs
++	push byte ptr _FLATSEL_
++	pop fs
++	cmp eax,dword ptr fs:[10h*4]
++	pop fs
++	jne cvdpmi_rm_int10_done
++cvdpmi_rm_int10_mark:
++	mov byte ptr ss:cvdpmi_rm_int10_pending,1
++cvdpmi_rm_int10_done:
++endif
+ if _LTRACE_
+ 	mov al, byte ptr [ebp].RMCALLS.rEAX
+ 	mov ah, byte ptr [ebp].RMCALLS.rEBX
+@@ -606,12 +633,45 @@
+ _TEXT16 segment
+ callrmproc_rm:
+ if ?SAFE301
++if ?32BIT
++	cmp byte ptr cs:[cvdpmi_rm_int10_pending],0
++	je callrmproc_rm_iret
++	mov byte ptr cs:[cvdpmi_rm_int10_pending],0
++	push eax
++	movzx eax,ax
++	shl eax,16
++	mov ax,VM_OP_VIDEO_INT10
++	call dword ptr cs:[cvdpmi_jlm_entry]
++	shr eax,16
++	mov cs:[cvdpmi_int10_result],ax
++	pop eax
++	mov ax,cs:[cvdpmi_int10_result]
++	jmp callrmproc_rm_done
++callrmproc_rm_iret:
++endif
+ 	iret
+ callrmproc_rm2:
+ else
+ 	popf
++if ?32BIT
++	cmp byte ptr cs:[cvdpmi_rm_int10_pending],0
++	je @F
++	mov byte ptr cs:[cvdpmi_rm_int10_pending],0
++	push eax
++	movzx eax,ax
++	shl eax,16
++	mov ax,VM_OP_VIDEO_INT10
++	call dword ptr cs:[cvdpmi_jlm_entry]
++	shr eax,16
++	mov cs:[cvdpmi_int10_result],ax
++	pop eax
++	mov ax,cs:[cvdpmi_int10_result]
++	jmp callrmproc_rm_done
++@@:
++endif
+ 	call cs:[tmpRMRegs.rCSIP]
+ endif
++callrmproc_rm_done:
+ 	pushf
+ 	public callrmproc_brk
+ callrmproc_brk::
+diff --git a/Src/HDPMI/INT31API.ASM b/Src/HDPMI/INT31API.ASM
+--- a/Src/HDPMI/INT31API.ASM
++++ b/Src/HDPMI/INT31API.ASM
+@@ -485,6 +485,20 @@
+ endif
+ 
+ func09 proc
++if ?32BIT
++	cmp dword ptr ss:cvdpmi_client_active,0
++	je @F
++	cmp al,2
++	ja @F
++	push ecx
++	lea ecx,[esp+4+sizeof I3109FR]
++	call cvdpmi_if_api
++	pop ecx
++	mov ebx,[esp].I3109FR.rEBX
++	add esp,sizeof I3109FR
++	jmp cvdpmi_if_return
++@@:
++endif
+ if VIRTIF
+ 	test byte ptr ss:[dwFeatures], 2	; PVI supported?
+ 	jz @F

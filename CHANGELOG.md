@@ -5,6 +5,32 @@ This changelog is intentionally concise. Every completed task should update `Unr
 
 ## Unreleased
 
+- Completed the three items the integration audit left open. QEMU only:
+  - **Runtime negotiation of the V86 IF profile.** Jemm's new versioned `Host_Scheduler_Profile` service (query/request/release, virtual IRQ raise, IRQ1/12 filter, state, poll) replaces selection by build hash. There is one Jemm build. CVSESSION requests the profile when its scheduler is armed unless the owner declines (op 0Ah), and reports `VM_CAP_V86_VIRTUAL_IF`.
+  - **Peripheral model connected to DOS programs.** CVSESSION device ops 30h–35h trap 60h/64h, ISA DMA, SB16 and OPL ports for V86 programs and raise model IRQs into the profile's single virtual PIC. Physical 8042 bytes are captured by focus, and PCM (SB DMA plus DBOPL, now built into CVSESSION with clang) is streamed to the ICH AC'97. DEVTEST and GUESTIO hear the SB square wave and the OPL note in the QEMU capture. Protected-mode (HDPMI) clients are not attached yet.
+  - **Resizable DOS window with raw keyboard and mouse.** The VGA-session DOS window has a resize grip, and the guest is rescaled into any client from 320×200 to the desktop work area. Guest keys arrive as raw scan codes on virtual IRQ1 (INT 9/port 60h), and a virtual INT 33h mouse follows desktop focus. Close sends Esc through the model.
+
+  Fixes found on the way:
+  - lost virtual IRQ1 at session end, which left the physical 8042 full and the desktop keyboard/mouse dead;
+  - extra model IRQ0s;
+  - a poll that was too frequent;
+  - a stale BIOS key reaching the desktop;
+  - the launch scene painted to the hidden page (window frame and task button missing).
+
+  See `docs/vm-input-audio-devices-2026-09-27.md`, `docs/vm-v86-interrupt-profile-2026-09-27.md` and `docs/validation/2026-09-27-devices/`.
+- Completed the combined VM qualification left open by the integration audit. The rebuilt HDPMI 3.24 host (manifest recorded) with the guest virtual-IF adapter passes the combined doom-vanille lifetime gate under ordinary Jemm and 3 of 3 runs under the opt-in V86 IF profile. VGA acceptance, the native DOS window and the earlier session gates also pass with the final module. Fixes along the way:
+  - HDPMI's image is kept under the 64 KiB `_TEXT32R3` limit, with a build guard;
+  - same-privilege IRET emulation;
+  - service resume bound to its exact return;
+  - no instruction budget that killed long CLI waits;
+  - the profile keeps NT;
+  - VCPI checks run after the CR3 switch;
+  - V86 EOIs of HDPMI-reflected IRQs reach the physical PIC.
+
+  Each failure report is archived. These are QEMU results only, not hardware results. See `docs/vm-integration-audit-2026-09-27.md`.
+- Connected the VGA model to monitored V86/HDPMI memory, ports and bounded BIOS calls, and added a fixed-size native DOS window presenter. Real QEMU comparisons cover five VGA checkpoints, unchanged FIRE/Costa workloads and window focus/occlusion/minimize restoration. The HDPMI lifetime fixture uses the unchanged packaged doom-vanille DOS engine, not proprietary original Doom or the cooperative window port. The integration audit records distinct track artifacts and the limits of each report; about 18 window repaint/s is not a 30 fps or physical-hardware claim. See `docs/vm-video-session-2026-09-27.md` and `docs/vm-integration-audit-2026-09-27.md`.
+- Added an isolated guest keyboard/mouse, PIC/PIT, DMA, SB16 and OPL model with pinned VSBHDA/DBOPL source and notices. Corrected its actual presenter namespace collision by using `cvgp_`/`CVGP_`; combined ASan/UBSan execution and a freestanding OpenWatcom link pass, alongside 912 peripheral assertions and measured synthesized PCM. Runtime guest input/audio wiring remains open.
+- Fixed the physical scheduler's reentrancy guard so it acquires ownership before changing the shared stack and releases it after restoring the caller stack. Compiled-instruction evidence reproduces the previous corruption and verifies the correction. A running session now refuses framebuffer unbinding. The builders now write source/tool/output manifests for HDPMI and the session module; default HDPMI source caches are separated by patch profile.
 - Added an isolated, opt-in Jemm/JLOAD monitor and external session module foundation. A real QEMU Pentium III/128 MiB session executes an ordinary DOS child through shadow video memory/ports, preserves the physical text buffer, restores all 32 original VGA PTEs, copies a bounded buffer into the physical VBE framebuffer, unloads the module/monitor and returns to the native UI. A fresh packaged HDPMI host runs a protected-mode probe in the same session: private A000/B800 writes, 218 real I/O traps, register/frame restoration and host unload before session cleanup pass. This is not enabled in normal boot and does not yet provide original DOS games with audio in desktop windows. Pinned sources, notices, explicitly selected adaptations and immutable build manifests accompany the experiment. See `docs/vm-session-foundation-2026-09-26.md`.
 - Added a freestanding VGA model for text, planar graphics, mode 13h and Mode X, including latches, plane masks, palette and scanout state. Its independent host assertions, sanitizers and OpenWatcom target build pass. Connecting every guest VRAM/port access and desktop presentation remains separate integration work; the model tests are not original-game or hardware evidence.
 - Implemented extended XMS functions 88h/89h with full-width allocation checks, allowing Jemm's 32,928 KiB request without request truncation. Made the AH=52h list-of-lists storage persistent so querying it no longer removes registered DOS devices or clears live CDS/SFT state. The 43,217-byte experimental kernel retains the 43,264-byte ceiling with 47 bytes spare. Compiled-instruction tests pass and reproduce both defects against the older kernel; the existing Windows 3.1 gate also passes two launches, resize/repaint and measured WAV/MIDI playback. Classic Doom passes a separate fullscreen gate with real menus, gameplay/movement, AC97 output (Doom-only PCM RMS 992.76), native exit, subsequent COM execution and desktop return. These focused results do not repeat the whole historical compatibility matrix or qualify windowed games or physical hardware.

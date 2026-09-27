@@ -1,0 +1,21 @@
+{
+  "baseline_path": "build/full/native-desktop-2026-09-26/final/ciukios-native-desktop.img",
+  "baseline_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "prepared_path": "build/tests/integration-audit-2026-09-27/input.img",
+  "prepared_sha256": "aab06208937b30be232cddba5a5e909e1c57a7670848cac8b9f14c2b310b0e4e",
+  "fixtures": {
+    "SYSTEM/CIUKIDOS.SYS": {
+      "source": "build/full/vm-session-2026-09-26/ciukidos.sys",
+      "sha256": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af"
+    },
+    "SYSTEM/SHELL.COM": {
+      "source": "build/full/vga-video-2026-09-27/window/SHELL.COM",
+      "sha256": "1edc72994b085161bd99750d989b9a2899a0c15726316d9687c8223636a477e7"
+    },
+    "SYSTEM/DOSWIN.DRV": {
+      "source": "build/full/vga-video-2026-09-27/window/DOSWIN.DRV",
+      "sha256": "9be2d3376c9adeb3b46e624e24cedd486f8e901c3c98d8ebb62025d9d1dac677"
+    }
+  },
+  "doomvan_sha256": "efbe64359fb1dfe569cde2428f41ef15a40b8975b8eb36a1cfc5a2731b894980"
+}

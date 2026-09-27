@@ -1,0 +1,118 @@
+{
+  "passed": true,
+  "source_image_sha256": "419d1aa4042a71240febc56c8be2e24ce01f0a335eb4193b1c9f648b676d7f6d",
+  "original_client": {
+    "path": "APPS/DOOMVAN/PCDMCORE.EXE",
+    "staged_path": "DPMIDOOM.EXE",
+    "bytes": 601960,
+    "sha256": "efbe64359fb1dfe569cde2428f41ef15a40b8975b8eb36a1cfc5a2731b894980"
+  },
+  "fixtures": {
+    "JEMM386.EXE": "b45af26aca69ce54cb858119ad846bb5778c50bf3a6905ee05ce22b4c3aefa74",
+    "JLOAD.EXE": "550d71d3e5acc671270123998bbb3869c1b2f8b772082ee69a5ac836dad0d16e",
+    "CVSESSION.DLL": "2bdaf7e2e8537de2d84f20c28beeb7116503dc371143b8f3cb7d1b5acb1e59b6",
+    "HDPMI32I.EXE": "3af7ae37fb5fadb27f8923c931ce441d9edb377177488b7d0e1f65a3cfcd4630",
+    "DPMILIF.EXE": "002add35ad71a44d6bfa52d09a033f74ea63d2eb94d5113163c40c7dbfa26dea",
+    "DPMIFLT.EXE": "864865a8eb8a0798046e5fba9b600a2d8fa6bdd23c9520f8148e2037914cec23",
+    "DPMIDOOM.EXE": "efbe64359fb1dfe569cde2428f41ef15a40b8975b8eb36a1cfc5a2731b894980",
+    "DPMIDOOM.WAD": "ff2c301b8719465a6e386a512bfa319931b7f64ea517d337c5a47afe03951902",
+    "CVTEST.LMP": "45f9177a339e21c8a6459dcf3d1d678e1cc777ddf71d7065c9e8f15fb5c58adb",
+    "DPMIPAR.COM": "37e0537086d57bc2cdc4954a546ed30651c2f71f4a59195543ba2fb843ff07bd"
+  },
+  "events": [
+    {
+      "command": "run \\JEMM386.EXE LOAD NOEMS X=A000-FFFF NODYN MAX=32M MIN=32M NOVME",
+      "output": "[MZ] run\r\nJemm386 loaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\JLOAD.EXE \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' loaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    }
+  ],
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "512",
+    "-drive",
+    "file=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/lifetime-ord2/disk.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/lifetime-ord2/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-f9745c5a2a6d41799cf9f31b34cbca30.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-m",
+    "128",
+    "-vga",
+    "std",
+    "-audiodev",
+    "wav,id=snd,path=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/lifetime-ord2/audio.wav",
+    "-device",
+    "AC97,audiodev=snd"
+  ],
+  "post_begin_pre_host": {
+    "descriptor_physical": "0x216e0",
+    "state": "0x7"
+  },
+  "first_client": {
+    "descriptor_physical": "0x216e0",
+    "jemm_cr3": "0x115000",
+    "hdpmi_cr3": "0x1bf000",
+    "dpmi_ticks_after_cli": 25,
+    "v86_ticks_during_wait": 7,
+    "protected_video": {
+      "pages": 67,
+      "first_physical": "0x179000",
+      "magic": "CVVS",
+      "version": "0x100",
+      "bytes": 274432,
+      "generation": 1,
+      "fatal": 0,
+      "pm_faults": 2,
+      "pm_instructions": 2,
+      "pm_elements": 2,
+      "pm_unsupported": 0,
+      "pm_port_reads": 3,
+      "pm_port_writes": 1,
+      "pm_attached": 1
+    }
+  },
+  "original_client_runtime": {
+    "state": "0x3f",
+    "jemm_cr3": "0x115000",
+    "hdpmi_cr3": "0x1bf000",
+    "pm_instructions": 151009,
+    "pm_port_reads": 137,
+    "pm_port_writes": 3058,
+    "dpmi_ticks": 268
+  },
+  "final": {
+    "installs": 5,
+    "removes": 5,
+    "entries": 5,
+    "exits": 5,
+    "fault_exits": 1,
+    "state": "0x0",
+    "dpmi_handle": "0x0",
+    "pte_checks": 609,
+    "pte_repairs": 0,
+    "v86_ticks": 285,
+    "dpmi_ticks": 319,
+    "scheduler_bytes": 4375,
+    "adapter_bytes": 4516,
+    "callback_bytes": 68,
+    "jemm_ptes_restored": true,
+    "physical_vga_restored": true
+  },
+  "source_image_unchanged": true
+}

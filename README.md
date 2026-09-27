@@ -17,7 +17,7 @@ CiukiOS is not a finished operating system. It is an active learning and researc
 
 Current public version: `CiukiOS pre-Alpha v0.7.1`.
 
-Development snapshot, **2026-09-26**: the native desktop includes Files, Tasks,
+Selected desktop image, **2026-09-26**: the native desktop includes Files, Tasks,
 Display, Sound and Wallpaper windows. CD-ROM, floppy and BIOS-exposed disks
 open in Files for read-only browsing, text preview and file import. USB must be
 exposed by firmware before boot; there is no native USB hot-plug stack.
@@ -49,16 +49,32 @@ See [the implementation and evidence record](docs/native-desktop-2026-09-26.md),
 [adding wallpapers](docs/wallpaper-import-2026-09-26.md) and
 [removable-media limits](docs/native-removable-media-2026-09-26.md).
 
-A subsequent **opt-in monitor experiment** builds pinned Jemm/JLOAD and an
-external CiukiOS session module without enabling them in normal boot. QEMU
-Pentium III/128 MiB evidence covers a real DOS child, private video-memory and
-port access, exact restoration of 32 VGA page-table entries, a bounded copy into
-the physical VBE framebuffer, module/monitor unload and return to the native UI.
-A fresh packaged HDPMI host also runs a protected-mode probe inside that session:
-its A000/B800 writes reach private memory, 218 real I/O traps complete, and the
-host unloads before the session ends. A separate tested VGA model implements
-text, planar, mode 13h and Mode X behavior; routing every guest access through
-that model remains integration work.
+A subsequent **opt-in monitor experiment**, developed through September 27,
+builds pinned Jemm/JLOAD and an external session module without enabling them in
+normal boot. V86 and protected-mode VGA accesses now reach the same software
+model through memory faults, port traps and a bounded BIOS bridge. The native
+desktop can present the V86 session in a resizable window. Five VGA checkpoints
+match QEMU's native pixels; the unchanged DOS Navigator FIRE executable runs in
+that window, including focus changes, cover/uncover and minimize/restore.
+Official HDPMI 3.24 uses separate client page tables and its unchanged API-6/7
+callback ABI. Lifetime probes execute the packaged `DOOMVAN/PCDMCORE.EXE` DOS
+engine unchanged, repeat clients and unwind a deliberate fault. That executable
+is distinct from the proprietary original Doom and the cooperative window port.
+
+These tracks did not initially test the same binaries. The
+[integration audit](docs/vm-integration-audit-2026-09-27.md) records exact inputs,
+the first combined run, the defects found afterwards, and the completion runs.
+In those runs the rebuilt HDPMI with guest virtual IF passes the combined
+lifetime, VGA and window gates in QEMU, with host ticks running while guest
+interrupts stay masked. The standalone keyboard, mouse, PIC/PIT, DMA, SB16 and OPL model
+passes 912 assertions and now serves real-mode DOS programs in the session:
+raw keyboard and a virtual INT 33h mouse that follow desktop focus, and SB16
+DMA plus OPL streamed to the AC'97. The V86 IF profile is negotiated at
+runtime. Protected-mode (HDPMI) clients are not attached yet. The measured FIRE window
+rate is about 18 repaint/s on the test host, not 30 fps or a Pentium III hardware
+result. See [video evidence and limits](docs/vm-video-session-2026-09-27.md) and
+[the peripheral record](docs/vm-input-audio-devices-2026-09-27.md).
+
 The kernel's extended XMS functions and persistent DOS device chain are fixed;
 the experimental kernel is 43,217 bytes, 47 bytes below its unchanged ceiling.
 The existing Windows 3.1 gate also passes two launches, resize/repaint and measured
@@ -92,8 +108,8 @@ Validation snapshot (2026-09-01): the Phase 5 loader/kernel ownership boundary a
 
 Current work is concentrated on original DOS execution in native windows:
 
-1. integrate the experimentally qualified monitor lifecycle and protected framebuffer path with the desktop presenter
-2. connect the VGA model to all guest memory/port paths, complete focused input and coordinate DPMI/audio/peripheral ownership
+1. attach protected-mode (HDPMI) clients to the guest device model (port bridge, IRQ delivery, EOI routing); runtime IF negotiation and V86 devices are done
+2. complete protected-mode window presentation
 3. qualify original-binary video/audio, clean return and measured performance, followed by separate T23/E500 checks
 
 The wider compatibility backlog remains:

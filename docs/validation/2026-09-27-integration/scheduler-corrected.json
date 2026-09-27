@@ -1,0 +1,19 @@
+{
+  "result": "PASS",
+  "scope": "assembled production routines; modeled descriptor/PTEs and nested CALL, not hardware IRQ qualification",
+  "source": "/home/peronslayer/Desktop/CiukiOS/src/vm/session_scheduler.inc",
+  "source_sha256": "c75cc8e0f6431a77688287d0ae3777c86591106f0937478427eedaa8008d471c",
+  "jwasm_sha256": "a8c74a2c20d45e71e407e79574331a80e560636f9422583e37f49aae5e869f5f",
+  "abi_sources": {
+    "session_abi.inc": "46de2b2294cd59193c115665aa20ec3d45fc44ea9142aa5948270917f5ffd016",
+    "session_scheduler_abi.inc": "0e36eda0e47ed54de794541270f611230e878804f86b349924f8255918592651"
+  },
+  "binary_sha256": "e6459ad66c643c5fd56089a2701a6da33dd94d33a213edbe16f3511905dadd7b",
+  "routines_sha256": "a3357dc1a78d4a33837f072ad81c63b38b60734af9166c82e6fe21f8b49009ba",
+  "cases": [
+    "nested_callback_preserves_live_outer_frame_GPR_segments_flags_and_saved_ESP",
+    "one_reentry_recorded_with_one_outer_service_and_PTE_check",
+    "subsequent_callback_preserves_state_and_services_normally",
+    "busy_gate_released_only_after_restoring_caller_stack"
+  ]
+}

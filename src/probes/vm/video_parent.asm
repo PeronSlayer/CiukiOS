@@ -72,6 +72,13 @@ start:
     test ax,ax
     jnz fail
     mov byte [dpmi_observation+4],2
+    ; DPMIVGA needs the real-mode monitor entry for its PM fault bridge.
+    mov ax,[cs:entry+2]
+    mov di,map_tail+7
+    call put_hex4
+    mov ax,[cs:entry]
+    mov di,map_tail+12
+    call put_hex4
     mov word [parameters+2],map_tail
     mov dx,dpmi_path
     call execute_child
@@ -89,7 +96,9 @@ start:
     mov ax,VM_OP_READBACK
     call far [cs:entry]
     jc fail
-    cmp dword [buffer],504D4443h
+    ; Text mode 03h decodes B8000-BFFFF only: the PM A000 store reached no
+    ; plane, exactly as on VGA.
+    cmp dword [buffer],0FFFFFFFFh
     jne fail
     mov edi,buffer
     mov edx,18000h
@@ -123,7 +132,9 @@ start:
     mov ax,VM_OP_READBACK
     call far [cs:entry]
     jc fail
-    cmp dword [buffer],1F4D1F56h
+    ; The child left mode 13h active: B8000 is outside that memory map, so
+    ; its B800 stores never reached planes (as on VGA) and reads return FFh.
+    cmp dword [buffer],0FFFFFFFFh
     jne fail
     ; Aperture overflow must reject without touching the caller's buffer.
     mov dword [buffer],0DEADBEEFh
@@ -221,6 +232,25 @@ owned_failure:
     hlt
     jmp owned_failure
 
+%ifdef VM_DPMI_PROBE
+; AX -> four uppercase hex digits at CS:DI.
+put_hex4:
+    mov cx,4
+.digit:
+    rol ax,4
+    mov bl,al
+    and bl,15
+    add bl,'0'
+    cmp bl,'9'
+    jbe .store
+    add bl,7
+.store:
+    mov [cs:di],bl
+    inc di
+    loop .digit
+    ret
+%endif
+
 execute_child:
     mov ax,cs
     mov ds,ax
@@ -283,7 +313,7 @@ hdpmi_path db '\SBEMU\HDPMI32I.EXE',0
 dpmi_path db '\DPMIVGA.EXE',0
 resident_tail db 6,' -r -v',13
 unload_tail db 3,' -u',13
-map_tail db 5,' -map',13
+map_tail db 15,' -map 0000:0000',13
 %endif
 passed db '[VMVIDEO] Original DOS child, VGA shadow/readback and cleanup PASS',13,10,'$'
 failed db '[VMVIDEO] FAIL',13,10,'$'

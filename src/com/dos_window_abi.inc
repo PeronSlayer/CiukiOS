@@ -51,6 +51,10 @@ DW_CALLBACK_START_TSC equ 116        ; private qword
 DW_PAINT_START_TSC equ 124           ; private qword
 DW_WAIT_SERVICE_COUNT equ 132        ; dword, blocking INT16 service entries
 DW_MOUSE_CHANGE_COUNT equ 136        ; dword
+DW_TSC_KHZ equ 140                   ; dword, VGA session mode: measured TSC rate
+DW_CLEANUP_OP equ 144                ; word, failed JLM/VBE lifecycle operation
+DW_CLEANUP_ERROR equ 146             ; word, exact returned AX (sticky diagnostic)
+DW_CLEANUP_PHASE equ 148             ; byte: 0=none, 1=active, 2=END done/bound
 DW_GFX_ACTIVE equ 192                ; byte, cooperative source-port client
 DW_GFX_BPP equ 193                   ; byte, actual VBE bits per pixel
 DW_GFX_BUFFER_SEG equ 194            ; word, parent-owned 64000-byte block
@@ -58,6 +62,22 @@ DW_GFX_MASKS equ 196                 ; six bytes, RGB size/position pairs
 DW_GFX_DRAW equ 202                  ; FAR opaque indexed band painter
 DW_GFX_DESCRIPTOR equ 206            ; word, module-relative CG ABI1 header
 DW_GFX_PAINTED equ 208               ; byte, current callback completed paint
+DW_V86_HOST equ 209                  ; byte, runtime: host owns the VGA window
+                                     ; through CVSESSION host mode (V86 only)
+DW_CLIENT_WIDTH equ 210              ; word, shell: current client width (0=640)
+DW_CLIENT_HEIGHT equ 212             ; word, shell: current client height (0=400)
+DW_DEVICES equ 214                   ; word, runtime: granted guest device caps
+DW_DEVICE_AUDIO equ 216              ; byte, runtime: 1 = guest PCM on the AC'97
+DW_GUEST_MOUSE equ 217               ; byte, runtime: guest reset virtual INT 33h
+DW_GUEST_MOUSE_X equ 218             ; word, guest-visible virtual mouse state
+DW_GUEST_MOUSE_Y equ 220
+DW_GUEST_MOUSE_BUTTONS equ 222
+DW_MOUSE_EVENTS equ 224              ; dword, guest INT 33h event-handler calls
+DW_CLIENT_X equ 228                  ; word, runtime: client origin on screen
+DW_CLIENT_Y equ 230
+DW_DEVICE_RESULT equ 226             ; word, runtime: DEV_BEGIN AX (FFFFh none)
+DW_RESIZABLE equ 232                 ; byte, runtime: the presenter scales the
+                                     ; guest into DW_CLIENT_* (VGA session only)
 DW_CELL_ENTRY equ 160                ; FAR opaque-cell renderer, segment set by host
 DW_CELL_BAND_SEG equ 164             ; current compositor band segment
 DW_CELL_STRIDE equ 166               ; bytes per band scanline
@@ -86,6 +106,7 @@ DW_ERR_REENTRANT equ 0x0008
 DW_ERR_PROTECTED equ 0x0010
 DW_ERR_KEYBOARD equ 0x0020
 DW_ERR_MOUSE_API equ 0x0040
+DW_ERR_LIFECYCLE equ 0x0080          ; ownership retained; retry UNINSTALL
 
 DW_HOST_TEXT_DIRTY equ 0x0001         ; callback input AX
 DW_HOST_FOCUS equ 0x0001              ; callback result AX

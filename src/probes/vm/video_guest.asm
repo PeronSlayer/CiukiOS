@@ -36,16 +36,18 @@ start:
     jz failed
     cmp eax,0A1B2C35Ah
     jne failed
+    ; SR02 (map mask) implements four bits on VGA: 5Ah reads back as 0Ah.
+    ; The dword read spans index 3C4h, SR02, PEL mask 3C6h, DAC state 3C7h.
     mov dx,3C4h
     mov ax,5A02h
     out dx,ax
     mov eax,0ABCD0000h
     in ax,dx
-    cmp eax,0ABCD5A02h
+    cmp eax,0ABCD0A02h
     jne failed
     mov eax,0FFFFFFFFh
     in eax,dx
-    cmp eax,005A5A02h
+    cmp eax,005A0A02h
     jne failed
     mov ax,0B800h
     mov es,ax

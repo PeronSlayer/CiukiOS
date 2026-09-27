@@ -1,0 +1,604 @@
+{
+  "passed": true,
+  "cpu": "pentium3",
+  "memory_mib": 128,
+  "accelerator": "kvm",
+  "source_image_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "prepared_image_sha256": "d7093cedb65ba777886367d74604c7cc1bf9e06d604cd15adf6b8e308952e235",
+  "inputs": {
+    "SYSTEM/CIUKIDOS.SYS": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+    "JEMM386.EXE": "b45af26aca69ce54cb858119ad846bb5778c50bf3a6905ee05ce22b4c3aefa74",
+    "JLOAD.EXE": "550d71d3e5acc671270123998bbb3869c1b2f8b772082ee69a5ac836dad0d16e",
+    "CVSESS.DLL": "2bdaf7e2e8537de2d84f20c28beeb7116503dc371143b8f3cb7d1b5acb1e59b6",
+    "VGASEM.COM": "bee52ec3c309dfa9ef4629f48de27b706c01937fd4c99a211e1e130b07279a19",
+    "VGAHOST.COM": "37aeb6f3baded4c20ecb9ec2a414a33d61f41baee8fa9a3b36da47fc1a9b20ee",
+    "VMSESS.COM": "3e400972ade6571411199354959ad8f7607b702ed22e036b03f3de38d167eff1",
+    "MEMFREE.COM": "856a30e4906c2dd48a6c2ce5d7206c3f62109b5fe133ce4aa06d3cd860305ef6",
+    "APPS/DOSNAV/SSAVERS/FIRE.EXE": "e7a82211774d1ed6f198c62c5614eef91cadd211cf3068212f073752439471fa"
+  },
+  "physical_hardware_qualified": false,
+  "hardware_acceleration_claimed": false,
+  "phases": [
+    "cleanup",
+    "costa",
+    "fire",
+    "semantics",
+    "wolf"
+  ],
+  "events": [
+    {
+      "command": "run \\MEMFREE.COM",
+      "output": "[MEMFREE] largest block paragraphs=7EAC\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 37.662
+    },
+    {
+      "command": "run \\VMSESS.COM",
+      "output": "[VMSESSION] No V86 monitor\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 39.236
+    },
+    {
+      "command": "run \\JEMM386.EXE LOAD NOEMS X=A000-FFFF NODYN MAX=32M MIN=32M NOVME",
+      "output": "[MZ] run\r\nJemm386 loaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 45.829
+    },
+    {
+      "command": "run \\JLOAD.EXE \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' loaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 48.748
+    },
+    {
+      "command": "run \\MEMFREE.COM",
+      "output": "[MEMFREE] largest block paragraphs=7E90\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 50.525
+    },
+    {
+      "command": "run \\VGAHOST.COM N \\MEMFREE.COM",
+      "output": "[MEMFREE] largest block paragraphs=7B2C\r\n[VGAHOST] PASS exit=00000000 faults=00000000 instructions=00000000 elements=00000000 unsupported=00000000 bios=0000002B bios_unsupported=00000000 bios_last=00000000 mode_sets=00000001 mode=00000003 fatal=00000000 presents=00000000 frames=00000000 port_writes=00000000 tsc_khz=004016CC\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 54.405
+    },
+    {
+      "command": "run \\JLOAD.EXE /u \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' unloaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 121.315
+    },
+    {
+      "command": "run \\JEMM386.EXE UNLOAD",
+      "output": "[MZ] run\r\nfound Jemm instance at segment 20ce\r\nJemm unloaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 123.759
+    },
+    {
+      "command": "run \\VMSESS.COM",
+      "output": "[VMSESSION] No V86 monitor\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 125.331
+    }
+  ],
+  "fire_ss_sha256": "e7a82211774d1ed6f198c62c5614eef91cadd211cf3068212f073752439471fa",
+  "fire_exe_copy_sha256": "e7a82211774d1ed6f198c62c5614eef91cadd211cf3068212f073752439471fa",
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "512",
+    "-drive",
+    "file=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/final-vga-ordinary/disk.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/final-vga-ordinary/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-2c7f3452de7646139f1a19c0e757497d.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-m",
+    "128",
+    "-vga",
+    "std",
+    "-audiodev",
+    "wav,id=snd,path=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/final-vga-ordinary/audio.wav",
+    "-device",
+    "AC97,audiodev=snd"
+  ],
+  "conventional_memory_paragraphs": {
+    "native": "7EAC",
+    "jemm_and_module": "7E90",
+    "session_guest": "7B2C"
+  },
+  "session": {
+    "pages": 67
+  },
+  "semantics_host_summary": [
+    "[VGAHOST] PASS exit=00000000 faults=0001049F instructions=0001049F elements=000B3332 unsupported=00000000 bios=00000071 bios_unsupported=00000000 bios_last=00000000 mode_sets=0000000E mode=00000003 fatal=00000000 presents=00000075 frames=00000005 port_writes=00000516 tsc_khz=0040160A"
+  ],
+  "display_checkpoints": {
+    "1": {
+      "native_size": [
+        640,
+        400
+      ],
+      "mismatched_pixels": 0,
+      "masked_program_clock_pixels": 0,
+      "focus_highlight_pixels": 0,
+      "compared_pixels": 307200,
+      "outside_nonblack": 0
+    },
+    "2": {
+      "native_size": [
+        640,
+        400
+      ],
+      "mismatched_pixels": 0,
+      "masked_program_clock_pixels": 0,
+      "focus_highlight_pixels": 0,
+      "compared_pixels": 307200,
+      "outside_nonblack": 0
+    },
+    "3": {
+      "native_size": [
+        640,
+        480
+      ],
+      "mismatched_pixels": 0,
+      "masked_program_clock_pixels": 0,
+      "focus_highlight_pixels": 0,
+      "compared_pixels": 307200,
+      "outside_nonblack": 0
+    },
+    "4": {
+      "native_size": [
+        640,
+        400
+      ],
+      "mismatched_pixels": 0,
+      "masked_program_clock_pixels": 0,
+      "focus_highlight_pixels": 0,
+      "compared_pixels": 307200,
+      "outside_nonblack": 0
+    },
+    "5": {
+      "native_size": [
+        720,
+        400
+      ],
+      "mismatched_pixels": 0,
+      "masked_program_clock_pixels": 0,
+      "focus_highlight_pixels": 0,
+      "compared_pixels": 307200,
+      "outside_nonblack": 0
+    }
+  },
+  "fire": {
+    "palette_matches_program": true,
+    "geometry": {
+      "mode": 19,
+      "width": 320,
+      "rows": 200,
+      "repeat": 2
+    },
+    "distinct_presented_colours": [
+      70,
+      70,
+      70
+    ],
+    "torn_capture_pixels": [
+      0,
+      0,
+      0
+    ],
+    "measured": {
+      "seconds": 6.023,
+      "trapped_instructions_per_second": 65493,
+      "string_elements_per_second": 10478935,
+      "emulation_cpu_fraction": 0.8222,
+      "presents_per_second": 18.26,
+      "completed_frames_per_second": 0.0,
+      "refresh_passes_per_second": 6.81,
+      "mean_present_ms": 6.7,
+      "max_present_ms": 6.879,
+      "presented_pixels_per_second": 1168759
+    },
+    "framebuffer": {
+      "physical": "0xfd000000",
+      "pitch": 3200,
+      "width": 800,
+      "height": 600,
+      "bytes_per_pixel": 4
+    },
+    "presenter_packet": {
+      "interval_us": 14000,
+      "ticks": 160,
+      "presents": 160,
+      "last_tsc": 28096992,
+      "max_tsc": 28892346
+    },
+    "counters_end": {
+      "faults": 535489,
+      "instructions": 535489,
+      "elements": 85678240,
+      "port_writes": 388,
+      "bios_calls": 2,
+      "bios_unsupported": 0,
+      "presents": 149,
+      "frames": 0,
+      "full_redraws": 1,
+      "status_polls": 0
+    },
+    "host_summary": [
+      "[VGAHOST] PASS exit=00000000 faults=0008C5B0 instructions=0008C5B0 elements=057B8E00 unsupported=00000000 bios=00000003 bios_unsupported=00000000 bios_last=00000000 mode_sets=00000003 mode=00000003 fatal=00000000 presents=000000A1 frames=00000000 port_writes=00000184 tsc_khz=00401655"
+    ]
+  },
+  "wolf_memory_limit": {
+    "exit": "0001",
+    "native_screenshot": "wolf-native-screen.png",
+    "session_text": [
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2592\u2593\u2593\u2593\u2593                                                        \u2593\u2593\u2593\u2593\u2592\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551                                                                \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551   You do not have enough memory to run Wolfenstein 3-D.        \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551   Some things you might try to correct this situation:         \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551                                                                \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551       \u0007 unload any TSRs you have in memory                     \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551       \u0007 rename your AUTOEXEC.BAT and CONFIG.SYS files and      \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551         reboot                                                 \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551       \u0007 install an EMS emulator or Upper-Memory-Block manager  \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551         (if your computer allows this)                         \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551       \u0007 if you are using DOS 5.0, load dos high                \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551                                                                \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551   Hopefully one of these will remedy the situation.            \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2551                                                                \u2551\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u2592\u2592\u2591\u2591\u2591\u2591",
+      " \u2591\u2591\u2591\u2591\u2592\u2592\u2592\u2593\u2593\u2593\u2593                                                        \u2593\u2593\u2593\u2593\u2592\u2592\u2592\u2591\u2591\u2591\u2591"
+    ],
+    "video": {
+      "faults": 809,
+      "instructions": 809,
+      "elements": 66128,
+      "unsupported": 0,
+      "bus_faults": 0,
+      "port_reads": 777,
+      "port_writes": 1580,
+      "bios_calls": 11,
+      "bios_unsupported": 0,
+      "bios_last": 0,
+      "mode_sets": 3,
+      "mode": 3,
+      "width": 720,
+      "rows": 400,
+      "repeat": 1,
+      "text": 1,
+      "display_changes": 2082,
+      "changes": 806116,
+      "fatal": 0,
+      "fatal_csip": 0,
+      "presents": 0,
+      "present_rows": 0,
+      "present_pixels": 0,
+      "frames": 0,
+      "full_redraws": 0,
+      "last_present_tsc": 0,
+      "max_present_tsc": 0,
+      "total_present_tsc": 0,
+      "host_mode": 0,
+      "host_faults": 0,
+      "host_bytes": 0,
+      "tsc_khz": 4200061,
+      "status_polls": 2,
+      "fault_tsc": 19600350,
+      "crtc_start": 0,
+      "share_count": 1,
+      "state_bytes": 267092,
+      "host_enters": 0,
+      "last_fault_csip": 655047081,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_unsupported": 0,
+      "pm_attached": 0,
+      "passes": 0,
+      "fatal_bytes": "00000000000000000000000000000000"
+    }
+  },
+  "cleanup": {
+    "before": {
+      "cr3": 1134592,
+      "ptes": [
+        655719,
+        659815,
+        663911,
+        668007,
+        672103,
+        676199,
+        680295,
+        684391,
+        688487,
+        692583,
+        696679,
+        700775,
+        704871,
+        708967,
+        713063,
+        717159,
+        721159,
+        725255,
+        729351,
+        733447,
+        737543,
+        741639,
+        745735,
+        749831,
+        754023,
+        758119,
+        762215,
+        766311,
+        770407,
+        774503,
+        778599,
+        782695
+      ],
+      "bda_video": "0350000010000000010000000000000000000000000000070600d403000018100060f95108",
+      "vectors": "208900c0206700c0",
+      "physical_text": "206ae081db670a0b075bd1981ed8914cc72b6fa79aea996388d18b40e7297c93",
+      "physical_graphics": "71189f7fb6aed638640078fba3a35fda6c39c8962e74dcc75935aac948da9063",
+      "display": "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/final-vga-ordinary/cleanup-before-display.png"
+    },
+    "during": {
+      "cr3": 1134592,
+      "ptes": [
+        1261571,
+        1413123,
+        1417219,
+        1421315,
+        1425411,
+        1429507,
+        1433603,
+        1437699,
+        1441795,
+        1445891,
+        1449987,
+        1454083,
+        1458179,
+        1462275,
+        1466371,
+        1470467,
+        1474563,
+        1478659,
+        1482755,
+        1486851,
+        1490947,
+        1495043,
+        1499139,
+        1503235,
+        1507331,
+        1511427,
+        1515523,
+        1519619,
+        1523715,
+        1527811,
+        1531907,
+        1536003
+      ],
+      "bda_video": "13280000fa000000000000000000000000000000000000070600d403293f18080060f95108",
+      "vectors": "208900c0208500c0",
+      "physical_text": "206ae081db670a0b075bd1981ed8914cc72b6fa79aea996388d18b40e7297c93",
+      "physical_graphics": "71189f7fb6aed638640078fba3a35fda6c39c8962e74dcc75935aac948da9063",
+      "display": "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/final-vga-ordinary/cleanup-during-display.png"
+    },
+    "after": {
+      "cr3": 1134592,
+      "ptes": [
+        655719,
+        659815,
+        663911,
+        668007,
+        672103,
+        676199,
+        680295,
+        684391,
+        688487,
+        692583,
+        696679,
+        700775,
+        704871,
+        708967,
+        713063,
+        717159,
+        721159,
+        725255,
+        729351,
+        733447,
+        737543,
+        741639,
+        745735,
+        749831,
+        754023,
+        758119,
+        762215,
+        766311,
+        770407,
+        774503,
+        778599,
+        782695
+      ],
+      "bda_video": "0350000010000000010000000000000000000000000000070600d403000018100060f95108",
+      "vectors": "208900c0206700c0",
+      "physical_text": "206ae081db670a0b075bd1981ed8914cc72b6fa79aea996388d18b40e7297c93",
+      "physical_graphics": "71189f7fb6aed638640078fba3a35fda6c39c8962e74dcc75935aac948da9063",
+      "display": "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/final-vga-ordinary/cleanup-after-display.png"
+    },
+    "guarded_during": true,
+    "ptes_changed_during": true,
+    "ptes_restored_exactly": true,
+    "bda_video_restored": true,
+    "vectors_restored": true,
+    "physical_text_restored": true,
+    "physical_graphics_restored": true,
+    "physical_text_unchanged_during": true,
+    "physical_graphics_unchanged_during": true,
+    "physical_display_during": {
+      "classification": "hardware cursor blink",
+      "pixels": 18,
+      "box": [
+        0,
+        29,
+        8,
+        30
+      ]
+    },
+    "physical_display_after": {
+      "classification": "identical",
+      "pixels": 0
+    }
+  },
+  "costa": {
+    "host_summary": [
+      "[VGAHOST] PASS exit=00000000 faults=00007852 instructions=00007852 elements=0002566E unsupported=00000000 bios=00000023 bios_unsupported=00000002 bios_last=0000EF00 mode_sets=00000003 mode=00000003 fatal=00000000 presents=00000197 frames=00000013 port_writes=00017C6D tsc_khz=0040163B"
+    ],
+    "checkpoints": {
+      "start": {
+        "native_size": [
+          640,
+          350
+        ],
+        "mismatched_pixels": 0,
+        "masked_program_clock_pixels": 0,
+        "focus_highlight_pixels": 0,
+        "compared_pixels": 304800,
+        "outside_nonblack": 0
+      },
+      "flag": {
+        "native_size": [
+          640,
+          350
+        ],
+        "mismatched_pixels": 0,
+        "masked_program_clock_pixels": 36,
+        "focus_highlight_pixels": 0,
+        "compared_pixels": 304500,
+        "outside_nonblack": 0
+      },
+      "move": {
+        "native_size": [
+          640,
+          350
+        ],
+        "mismatched_pixels": 0,
+        "masked_program_clock_pixels": 0,
+        "focus_highlight_pixels": 0,
+        "compared_pixels": 304800,
+        "outside_nonblack": 0
+      },
+      "about": {
+        "native_size": [
+          640,
+          350
+        ],
+        "mismatched_pixels": 0,
+        "masked_program_clock_pixels": 0,
+        "focus_highlight_pixels": 0,
+        "compared_pixels": 304800,
+        "outside_nonblack": 0
+      }
+    },
+    "video": {
+      "faults": 30802,
+      "instructions": 30802,
+      "elements": 153198,
+      "unsupported": 0,
+      "bus_faults": 0,
+      "port_reads": 186,
+      "port_writes": 97389,
+      "bios_calls": 35,
+      "bios_unsupported": 2,
+      "bios_last": 61184,
+      "mode_sets": 3,
+      "mode": 3,
+      "width": 720,
+      "rows": 400,
+      "repeat": 1,
+      "text": 1,
+      "display_changes": 81,
+      "changes": 910978,
+      "fatal": 0,
+      "fatal_csip": 0,
+      "presents": 407,
+      "present_rows": 1788,
+      "present_pixels": 1144320,
+      "frames": 19,
+      "full_redraws": 2,
+      "last_present_tsc": 693630,
+      "max_present_tsc": 32932368,
+      "total_present_tsc": 818473110,
+      "host_mode": 0,
+      "host_faults": 0,
+      "host_bytes": 0,
+      "tsc_khz": 4199995,
+      "status_polls": 0,
+      "fault_tsc": 40835088,
+      "crtc_start": 0,
+      "share_count": 1,
+      "state_bytes": 267092,
+      "host_enters": 0,
+      "last_fault_csip": 762078907,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_unsupported": 0,
+      "pm_attached": 0,
+      "passes": 20,
+      "fatal_bytes": "00000000000000000000000000000000"
+    },
+    "settling": {
+      "native-costa-start": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "native-costa-flag": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "native-costa-move": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "native-costa-about": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "session-costa-start": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "session-costa-flag": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "session-costa-move": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "session-costa-about": {
+        "attempts": 2,
+        "changes": 0
+      }
+    }
+  },
+  "monitor_unloaded_and_desktop_returned": true,
+  "result_words": {
+    "native": 27,
+    "session": 27
+  },
+  "result_mismatches": [
+    {
+      "index": 2,
+      "label": "PEL mask / DAC state",
+      "native": "00000300",
+      "session": "0000035a"
+    }
+  ],
+  "qemu_pel_mask_deviation": true,
+  "source_image_unchanged": true
+}

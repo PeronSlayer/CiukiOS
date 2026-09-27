@@ -11,7 +11,7 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 5. Phase 7 evidence boundary: `docs/legacy-audio-bring-up-plan-v0.1.md`
 6. Current cross-phase milestone ledger: `docs/current-milestones.md`
 
-## Current development priority — 2026-09-26
+## Current development priority — 2026-09-27
 
 The native-desktop increment passes eleven focused QEMU Pentium III/128 MiB
 reports on disk image `08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6`.
@@ -28,16 +28,27 @@ checks for an ordinary DOS child, shadow video/port access, exact 32-PTE restore
 bounded copying into a physical VBE framebuffer and complete monitor unload.
 A fresh packaged HDPMI host inside that session also passes protected-mode
 A000/B800 shadow writes, 218 actual I/O traps and cleanup before session end.
-The freestanding VGA model has tested text/planar/mode 13h/Mode X behavior;
-complete access routing and desktop integration remain open.
+The September 27 experiment routes V86 and protected VGA cycles through the
+software model. Five VGA checkpoints match native QEMU pixels, and an unchanged
+DOS Navigator FIRE executable runs in a resizable desktop window. A separate
+lifetime gate runs the packaged doom-vanille DOS engine through official HDPMI
+3.24 with separate page tables, repeated clients and fault cleanup. These tests
+use different initial artifacts; the [integration audit](docs/vm-integration-audit-2026-09-27.md)
+records their identity and the subsequent scheduler/interrupt corrections.
 Extended XMS and persistent DOS device-chain fixes leave the experimental kernel
 at 43,217 bytes, 47 bytes below its unchanged ceiling. The existing focused
 Windows 3.1 launch/resize/WAV/MIDI workflow and a separate classic Doom fullscreen
 menu/gameplay/audio/exit regression pass. Normal boot and the selected
 desktop image do not enable the monitor. See [the experimental evidence](docs/vm-session-foundation-2026-09-26.md).
 
-The remaining work is desktop presentation/input, complete guest access routing
-through the VGA model and coordinated DPMI/audio/peripheral ownership. Original binaries, genuine captured
+The V86 IF profile is now negotiated at runtime, and the peripheral model serves
+real-mode DOS programs through CVSESSION. Keyboard and mouse follow desktop
+focus, and SB16 DMA and OPL are heard through the AC'97 in QEMU. The DOS window
+is resizable (see the [device record](docs/vm-input-audio-devices-2026-09-27.md)).
+The remaining work is attaching protected-mode (HDPMI) clients to the device
+model, protected-mode desktop presentation, and original DPMI games with
+windowed audio. The measured FIRE window rate is about 18 repaint/s on the test host;
+30 fps and hardware acceleration remain unmet. Original binaries, genuine captured
 audio, visible-frame measurements and clean return must qualify that work.
 Source-port results cannot close these gates, and physical T23/E500 support
 requires separate qualification.

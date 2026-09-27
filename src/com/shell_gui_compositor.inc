@@ -283,7 +283,10 @@ ui_pages_switch:
 ui_pages_prepare:
     pushad
     mov byte [ui_page_pending],0
-    mov dword [ui_present_base],0
+    ; Single-page presentation targets the visible page. dos_host_prepare
+    ; suspends paging without flipping, so that can be the second page.
+    mov eax,[ui_front_base]
+    mov [ui_present_base],eax
     cmp byte [ui_page_enabled],1
     jne .done
     ; The back page contains the scene from one presentation ago. Redraw

@@ -1,0 +1,30 @@
+{
+  "abi": 1,
+  "runtime_tested": false,
+  "jemm_commit": "e96bb6bb80cbdc3e6585544db79a6b133a5566dd",
+  "sources": {
+    "src/vm/session_jlm.asm": "3ca266a74e5d4ba306f1ee5dd03c5b3c86fe3e71a03c841bb82d7df0dd2b6b02",
+    "src/vm/session_abi.inc": "46de2b2294cd59193c115665aa20ec3d45fc44ea9142aa5948270917f5ffd016",
+    "src/vm/session_scheduler.inc": "6e097a49d2cf1081c753ba04b849946d1df9af219f198cba756f24f29a97c117",
+    "src/vm/session_scheduler_abi.inc": "0e36eda0e47ed54de794541270f611230e878804f86b349924f8255918592651",
+    "src/vm/session_scheduler.h": "1de2d3e639a67f411e99d6d09639884c95d504bc07d8550e5ec7a43f4b427f43",
+    "scripts/build_vm_session.sh": "5d571d243a01d072121015b3808ad11ef6fc8894895f6f2c7fce96cda2dcab33",
+    "src/vm/session_video.inc": "58fb36fe2321563d88a7db5327a96045b9f584bb566ff87211763033b86380b8",
+    "src/vm/session_video_abi.inc": "43590780b615714c059d2ec879f216e813dc95acb21583a65a54702f856224a1",
+    "src/vm/session_video.h": "c296854c03676bf60a371d1e407e62afc2bd3857fe6c332085eb489ed9f8bcec",
+    "src/vm/vga_x86.h": "cdda8e45e4c4201aff2e0301fc61b9099ac6f90cf68c02523fb1350edc560a32",
+    "src/vm/virtual_vga.h": "7abf27eeac0b5c1e200567e6b4fe51a5e581d5a83b723852b803775e694ff57a",
+    "src/vm/virtual_vga_bios.h": "e5c89b817e17394d1c5c7369f247db3740d631991824c921b19a073f647769fc",
+    "src/vm/vga_presenter.h": "a8eb952132338a04c641e4afe5b58741a7839e099b6c7771aa6e0819ccbaf3c5",
+    "src/vm/virtual_vga.c": "a093dc64b76d01105705caecbb0940d92709b33f69f83cb75407402a173144b5",
+    "src/vm/virtual_vga_bios.c": "2d40eb9c937bded08ea7f3734f55aa5fcb7db4dd379cc60042ee23e7416e67bc",
+    "src/vm/vga_presenter.c": "f8a7ae4202d5be20fe2cbe1bbac81c5c2566a3c5d43a6f509fe0f22f45b52bd9",
+    "src/vm/vga_x86.c": "52476a71f3e198d8d104b4c0ffc90156af1076510b497ad2c73e50d6d05c0b4c",
+    "src/vm/session_video.c": "3d6bbd75ff178825be7c12c82fc567e10fe9bf38253a41d75d9334b52ac8be99"
+  },
+  "module": {
+    "bytes": 67584,
+    "sha256": "5de57c000cd0912c0fed9414ddf99104850b973ab64d6f64c73bc9c12ea10144"
+  },
+  "jemm_build_manifest_sha256": "606b54f9babf5193cfdadd881b185e982ab3dbfc5602589621d71f6afe873ed5"
+}

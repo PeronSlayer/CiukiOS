@@ -114,25 +114,56 @@ start:
     ; The otherwise well-formed bind must stop at the active-session check.
     mov bp,VM_ERROR_ACTIVE
     call expect_bad_bind
+    ; UNBIND must obey the same lifetime rule, even if no FB was bound.
+    mov ax,VM_OP_UNBIND_FB
+    mov bp,VM_ERROR_ACTIVE
+    call expect_error
     call query
     jc failure
     cmp dword [info+VM_INFO_FATAL_CODE],0
     jne failure
 
+    ; Supported string I/O: a REP OUTSB DAC load reaches the VGA model.
     mov byte [step],5
+    mov dx,3C8h
+    mov al,40h
+    out dx,al
+    inc dx
     mov si,port_stream
-    mov cx,1
-    mov dx,3C9h
-    mov eax,0A1B2C3D4h
+    mov cx,3
     cld
     rep outsb
+    test cx,cx
+    jnz failure
+    mov dx,3C7h
+    mov al,40h
+    out dx,al
+    mov dx,3C9h
+    in al,dx
+    cmp al,[port_stream]
+    jne failure
+    in al,dx
+    cmp al,[port_stream+1]
+    jne failure
+    call query
+    jc failure
+    cmp dword [info+VM_INFO_FATAL_CODE],0
+    jne failure
+    ; A transfer that cannot complete stays an explicit sticky fatal: a word
+    ; element at 3DFh would reach 3E0h, outside the trapped VGA range.
+    mov byte [step],7
+    mov si,port_stream
+    mov cx,1
+    mov dx,3DFh
+    mov eax,0A1B2C3D4h
+    rep outsw
     cmp eax,0A1B2C3D4h
     jne failure
     call query
     jc failure
     cmp dword [info+VM_INFO_FATAL_CODE],VM_FATAL_STRING_IO
     jne failure
-    cmp dword [info+VM_INFO_FATAL_PORT],3C9h
+    cmp dword [info+VM_INFO_FATAL_PORT],3DFh
     jne failure
     mov eax,[info+VM_INFO_FATAL_IO_TYPE]
     and eax,64h                 ; STRING_IO | REP_IO | OUTPUT, upstream Jemm
@@ -177,13 +208,14 @@ start:
     jne failure
     cmp dword [info+VM_INFO_FATAL_IO_TYPE],0
     jne failure
+    ; A new session is a freshly set text mode 03h: cleared cells at B800.
     mov edi,buffer
-    xor edx,edx
+    mov edx,18000h
     mov cx,4
     mov ax,VM_OP_READBACK
     call far [cs:entry]
     jc failure
-    cmp dword [buffer],0
+    cmp dword [buffer],07200720h
     jne failure
     mov ax,VM_OP_END
     call far [cs:entry]
@@ -276,7 +308,7 @@ binding dd VM_FB_PACKET_MAGIC
     dw VM_ABI_VERSION,VM_FB_PACKET_SIZE
     dd 0,0
 binding_guard dd 0DEADBEEFh
-port_stream db 37h
+port_stream db 37h,15h,2Ah
 info times VM_INFO_SIZE db 0
 buffer times 16 db 0
 align 16

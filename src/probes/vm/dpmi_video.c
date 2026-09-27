@@ -2,6 +2,8 @@
  * No success can be obtained by directly invoking cvga_read/write_port here.
  * This is a bounded port/exception adapter probe, NOT DOS window acceptance. */
 #include "../../vm/dpmi_video_io.h"
+#include "../../vm/dpmi_video_fault.h"
+#include <stdlib.h>
 #include <conio.h>
 #include <i86.h>
 #include <stdio.h>
@@ -61,28 +63,42 @@ static void check(unsigned got, unsigned expected, const char *name)
     }
 }
 
-static void mapped_aperture_probe(void)
+static void mapped_aperture_probe(unsigned entry_segment, unsigned entry_offset)
 {
     union REGS regs;
-    unsigned selector;
-    /* Opt-in ONLY after the parent has established private VGA PTEs and then
-     * loaded this fresh HDPMI. It would otherwise touch physical video RAM. */
+    unsigned selector, rc;
+    char line[160];
+    /* Opt-in ONLY after the parent armed CVSESSION and then loaded this fresh
+     * HDPMI: its copied VGA PTEs are supervisor-only, so every access below
+     * faults and is executed against the monitor's shared VGA model. */
+    rc = cvpm_install((uint16_t)entry_segment, (uint16_t)entry_offset);
+    if (rc) { check(rc, 0, "PM video fault handler install"); return; }
     memset(&regs, 0, sizeof(regs));
     regs.w.ax = 2; regs.w.bx = 0xa000;
     int386(0x31, &regs, &regs);
-    if (regs.w.cflag) { check(1, 0, "DPMI A000 selector"); return; }
+    if (regs.w.cflag) { check(1, 0, "DPMI A000 selector"); cvpm_remove(); return; }
     selector = regs.w.ax;
-    mapped_store(selector, 0, 0x504d4443UL); /* bytes C D M P */
-    check(mapped_load(selector, 0), 0x504d4443UL, "protected A000 shadow");
+    /* The session is in text mode 03h: GC06 decodes B8000-BFFFF only, so an
+     * A0000 store reaches no plane and a load returns FFh bytes (as on VGA). */
+    mapped_store(selector, 0, 0x504d4443UL);
+    check(mapped_load(selector, 0), 0xffffffffUL, "protected A000 outside text map");
     memset(&regs, 0, sizeof(regs));
     regs.w.ax = 2; regs.w.bx = 0xb800;
     int386(0x31, &regs, &regs);
-    if (regs.w.cflag) { check(1, 0, "DPMI B800 selector"); return; }
+    if (regs.w.cflag) { check(1, 0, "DPMI B800 selector"); cvpm_remove(); return; }
     selector = regs.w.ax;
     mapped_store(selector, 0, 0x31564d50UL);
-    check(mapped_load(selector, 0), 0x31564d50UL, "protected B800 shadow");
+    check(mapped_load(selector, 0), 0x31564d50UL, "protected B800 odd/even round trip");
+    check(cvpm_stats_data.emulated, 4, "four trapped PM instructions");
+    check(cvpm_stats_data.chained, 0, "no chained PM fault");
+    check(cvpm_stats_data.bridge_failures, 0, "no bridge failure");
+    sprintf(line, "[DPMIVGA] PM FAULTS=%lu EMULATED=%lu BRIDGE_CALLS=%lu APERTURE_BYTES=%lu",
+            (unsigned long)cvpm_stats_data.faults, (unsigned long)cvpm_stats_data.emulated,
+            (unsigned long)cvpm_stats_data.bridge_calls, (unsigned long)cvpm_stats_data.aperture_bytes);
+    mark(line);
+    check(cvpm_remove(), CVPM_OK, "PM video fault handler remove");
     /* DPMI0002 selectors are host-managed; do not free them with0001. */
-    if (!failures) mark("[DPMIVGA] PM APERTURE WRITES A000:0000=504D4443 B800:0000=31564D50");
+    if (!failures) mark("[DPMIVGA] PM APERTURE CYCLES REACHED THE SHARED MODEL: A000=FFFFFFFF B800:0000=31564D50");
 }
 
 int main(int argc, char **argv)
@@ -92,7 +108,9 @@ int main(int argc, char **argv)
     char line[128];
     const char rejected[] = {1,2,3};
     mark("[DPMIVGA] BEGIN original CPU IN/OUT, packaged HDPMI 3.24 required");
-    if (argc > 1 && !strcmp(argv[1], "-map")) mapped_aperture_probe();
+    if (argc > 2 && !strcmp(argv[1], "-map"))
+        mapped_aperture_probe((unsigned)strtoul(argv[2], 0, 16),
+                              (unsigned)strtoul(strchr(argv[2], ':') ? strchr(argv[2], ':') + 1 : "0", 0, 16));
     for (i = 0; i < 6; ++i) host_before[i] = io_in8(ports[i], 0);
     cvga_init(&video);
     check(cvio_init(&video), CVIO_OK, "init");

@@ -1,0 +1,1159 @@
+diff --git a/Include/JLM.INC b/Include/JLM.INC
+index d135537..da9018f 100644
+--- a/Include/JLM.INC
++++ b/Include/JLM.INC
+@@ -146,6 +146,13 @@ VMM_Service GetDOSBuffer; get linear address of 4kB DOS buffer in JLOAD (during
+ 
+ VMM_Service Out_Debug_Chr
+ 
++;--- CiukiOS monitored foreground-session extension.  These services own one
++;--- exact physical-IRQ callback; they do not create or schedule a V86 VM.
++
++VMM_Service Install_Host_Scheduler
++VMM_Service Remove_Host_Scheduler
++VMM_Service Host_Scheduler_Profile
++
+ ;--- equates for the page memory functions
+ 
+ ;_PageReserve() page parameter:
+diff --git a/Tools/JLOAD/VMM.ASM b/Tools/JLOAD/VMM.ASM
+index 8294679..ffdb17f 100644
+--- a/Tools/JLOAD/VMM.ASM
++++ b/Tools/JLOAD/VMM.ASM
+@@ -47,6 +47,8 @@ lpV86Hooks		dd 0	;page for hooks (v86 int chain)
+ ppV86Hooks		dd 0	;v5.85: address of pV86Hooks variable in Jemm
+ retaddr			dd 0	;v5.85: return address to V86_Monitor
+ lpV86Faults		dd 0	;v5.86: original address stored in vmm_service_table
++ppHostScheduler	dD 0	;CiukiOS: address of exact-owned Jemm callback slot
++ppProfileService dd 0	;CiukiOS: Jemm interrupt-profile service or 0
+ 
+ ScratchPTE		dd 0	;PTE used to simplify page memory management
+ oldiohandler	dd 0	;saved Jemm's IO handler
+@@ -135,6 +137,9 @@ MoveMemory  		dd 0
+ 					dd V86ToPM ; v5.85
+ 					dd GetDOSBuffer ; v5.86
+ 					dd Out_Debug_Chr; v5.87
++					dd Install_Host_Scheduler
++					dd Remove_Host_Scheduler
++					dd Host_Scheduler_Profile
+ 
+ ?NUMSERV0001 equ ($ - vmm_services)/4
+ 
+@@ -195,6 +200,11 @@ InitVMM proc public
+ 	mov lpV86Faults, eax
+ 	mov [esi-4],offset V86Faults	;new for v5.86
+ 	mov [esi],offset call_control_procs	;new for v5.86
++	add esi,4
++	lodsd				;load Jemm's slot address from the service table
++	mov ppHostScheduler,eax
++	lodsd				;interrupt-profile service entry (0 if absent)
++	mov ppProfileService,eax
+ if ?KD
+ 	mov ax, 4Fh
+ 	int 41h
+@@ -1315,6 +1325,50 @@ Out_Debug_Chr proc
+ 	align 4
+ Out_Debug_Chr endp
+ 
++;--- Install/remove one exact callback.  ESI is the callback address.  A
++;--- different owner can neither overwrite nor remove the live pointer.
++
++Install_Host_Scheduler proc
++	mov eax,[ppHostScheduler]
++	test eax,eax
++	jz short scheduler_error
++	cmp dword ptr [eax],0
++	jne short scheduler_error
++	mov [eax],esi
++	clc
++	ret
++Install_Host_Scheduler endp
++
++Remove_Host_Scheduler proc
++	mov eax,[ppHostScheduler]
++	test eax,eax
++	jz short scheduler_error
++	cmp [eax],esi
++	jne short scheduler_error
++	mov dword ptr [eax],0
++	clc
++	ret
++Remove_Host_Scheduler endp
++
++scheduler_error:
++	stc
++	ret
++
++;--- Versioned run-time negotiation of the Jemm interrupt profile. EAX is
++;--- the function, ECX its argument. A Jemm built without the profile answers
++;--- EAX=0 (no version, nothing available) instead of failing.
++
++Host_Scheduler_Profile proc
++	mov edx,[ppProfileService]
++	test edx,edx
++	jz short profile_absent
++	jmp edx
++profile_absent:
++	xor eax,eax
++	clc
++	ret
++Host_Scheduler_Profile endp
++
+ ;--- to simplify memory management,
+ ;--- a "mapping" page table is maintained which
+ ;--- maps all page tables in linear address space
+diff --git a/src/CVIRQ.INC b/src/CVIRQ.INC
+new file mode 100644
+index 0000000..832bad4
+--- /dev/null
++++ b/src/CVIRQ.INC
+@@ -0,0 +1,823 @@
++; CiukiOS foreground V86 interrupt profile.
++; Compiled with CIUKIOS_V86_INTERRUPTS and negotiated at run time through
++; the versioned Host_Scheduler_Profile service: it is active only while the
++; exact Host_Scheduler owner exists AND that owner has requested it.  IF in
++; monitor frames is logical; CvLeave materializes physical IF=1/IOPL=0
++; immediately before returning to V86.  Not a separate VM.
++align 4
++CvRequested dd 0
++CvFilter dd 0
++CvPollProc dd 0
++CvLinger dd 0
++CvActive dd 0
++CvGuestIF dd 0
++CvPending dd 0
++CvInService dd 0
++CvShadow db 0
++CvShadowTF db 0
++CvSavedMask dw 0
++CvMask dw 0
++CvReadISR dw 0
++CvAutoEOI dw 0
++CvInitPhase dw 0
++CvBases dw 07008h
++CvIopbSaved db 8 dup(0)
++CvTrapPorts dw 20h,21h,40h,43h,0A0h,0A1h,0FFFFh,0FFFFh
++
++; Both entry and exit preserve all general registers and selectors.  Called
++; with EBP pointing at the complete V86 client frame, never a ring-0 frame.
++CvEnter proc
++ pushad
++ push ds
++ mov eax,ss
++ mov ds,eax
++ cmp CvActive,0
++ je enter_done
++ and [ebp].Client_Reg_Struc.Client_EFlags,not 200h
++ or [ebp].Client_Reg_Struc.Client_EFlags,3000h
++ mov eax,CvGuestIF
++ or [ebp].Client_Reg_Struc.Client_EFlags,eax
++enter_done:
++ pop ds
++ popad
++ ret
++CvEnter endp
++
++CvLeave proc public
++ pushad
++ push ds
++ push es
++ mov eax,ss
++ mov ds,eax
++ mov es,eax
++ cmp pHostScheduler,0
++ je leave_disable
++ cmp CvRequested,0
++ jne leave_enabled
++leave_disable:
++ cmp CvActive,0
++ je leave_done
++ ; A physical IRQ acknowledged into the virtual PIC must still reach the
++ ; guest (an unread 8042 byte would otherwise silence the controller for
++ ; good). Stay active until unmasked pending IRQs are delivered, bounded.
++ mov eax,CvPending
++ movzx edx,CvMask
++ not edx
++ and eax,edx
++ jz linger_done
++ inc CvLinger
++ cmp CvLinger,10000h
++ jb profile_ready
++linger_done:
++ mov CvLinger,0
++ ; Restore precisely the owned IOPB bits and physical interrupt masks.
++ mov esi,dwTSS
++ movzx eax,[esi].TSSSEG.tsOfs
++ add esi,eax
++ xor ebx,ebx
++restore_bits:
++ movzx edx,word ptr CvTrapPorts[ebx*2]
++ cmp edx,0FFFFh
++ je masks_restore
++ cmp CvIopbSaved[ebx],0
++ jne old_trapped
++ btr [esi],edx
++ jmp next_restore
++old_trapped:
++ bts [esi],edx
++next_restore:
++ inc ebx
++ jmp restore_bits
++masks_restore:
++ mov al,byte ptr CvSavedMask
++ out 21h,al
++ mov al,byte ptr CvSavedMask+1
++ out 0A1h,al
++ mov CvActive,0
++ mov CvPending,0
++ mov CvInService,0
++ or [ebp].Client_Reg_Struc.Client_EFlags,3000h
++ jmp leave_done
++leave_enabled:
++ cmp CvActive,0
++ jne profile_ready
++ mov CvActive,1
++ mov CvPending,0
++ mov CvInService,0
++ mov CvShadow,0
++ mov CvReadISR,0
++ mov CvAutoEOI,0
++ mov CvInitPhase,0
++ mov ax,wMasterPICBase
++ mov byte ptr CvBases,al
++ mov ax,wSlavePICBase
++ mov byte ptr CvBases+1,al
++ in al,21h
++ mov byte ptr CvSavedMask,al
++ mov byte ptr CvMask,al
++ and al,0FCh
++ out 21h,al
++ in al,0A1h
++ mov byte ptr CvSavedMask+1,al
++ mov byte ptr CvMask+1,al
++ mov esi,dwTSS
++ movzx eax,[esi].TSSSEG.tsOfs
++ add esi,eax
++ xor ebx,ebx
++save_bits:
++ movzx edx,word ptr CvTrapPorts[ebx*2]
++ cmp edx,0FFFFh
++ je profile_ready
++ bts [esi],edx
++ setc CvIopbSaved[ebx]
++ inc ebx
++ jmp save_bits
++profile_ready:
++ ; Owner's device service runs on every return to V86 so the virtual IRQs it
++ ; raises are injected below without waiting for another monitor entry.
++ cmp CvPollProc,0
++ je poll_done
++ call CvPollProc
++poll_done:
++ or [ebp].Client_Reg_Struc.Client_EFlags,3000h
++ mov eax,[ebp].Client_Reg_Struc.Client_EFlags
++ and eax,200h
++ mov CvGuestIF,eax
++ test eax,eax
++ jz materialize
++ cmp CvShadow,0
++ jne materialize
++ ; Fixed-priority cascaded 8259 arbitration: slave IRQs occupy master
++ ; priority 2, not a lower priority than master IRQ7. Keep both ISR levels
++ ; until the corresponding virtual EOI commands arrive.
++ mov eax,CvPending
++ movzx edx,CvMask
++ not edx
++ and eax,edx
++ mov esi,eax
++ shr esi,8
++ and eax,0FFh
++ test byte ptr CvMask,4
++ jnz no_slave_request
++ test esi,esi
++ jz no_slave_request
++ or eax,4
++no_slave_request:
++ test eax,eax
++ jz materialize
++ bsf ecx,eax
++ movzx edx,byte ptr CvInService
++ test edx,edx
++ jz master_eligible
++ bsf edx,edx
++ cmp ecx,edx
++ jae materialize
++master_eligible:
++ cmp ecx,2
++ jne inject_master
++ test esi,esi
++ jz inject_master
++ bsf ecx,esi
++ movzx edx,byte ptr CvInService+1
++ test edx,edx
++ jz slave_eligible
++ bsf edx,edx
++ cmp ecx,edx
++ jae materialize
++slave_eligible:
++ add ecx,8
++ btr CvPending,ecx
++ cmp byte ptr CvAutoEOI,0
++ jne slave_no_master_isr
++ bts CvInService,2
++slave_no_master_isr:
++ cmp byte ptr CvAutoEOI+1,0
++ jne slave_no_isr
++ bts CvInService,ecx
++slave_no_isr:
++ movzx eax,byte ptr CvBases+1
++ add eax,ecx
++ sub eax,8
++ jmp inject_vector
++inject_master:
++ btr CvPending,ecx
++ cmp byte ptr CvAutoEOI,0
++ jne master_no_isr
++ bts CvInService,ecx
++master_no_isr:
++ movzx eax,byte ptr CvBases
++ add eax,ecx
++inject_vector:
++ call Simulate_Int
++ mov CvGuestIF,0
++materialize:
++ and [ebp].Client_Reg_Struc.Client_EFlags,not 3000h
++ or [ebp].Client_Reg_Struc.Client_EFlags,200h
++leave_done:
++ pop es
++ pop ds
++ popad
++ ret
++CvLeave endp
++
++; VCPI specifies IF=0 on its return to V86.  The protected client owns its
++; own CR3/IF latch; never import its physical interrupt state into this one.
++; EAX returns the exact flags to use in the VCPI transition frame.
++CvVCPIFlags proc public
++ mov eax,23002h
++ cmp CvActive,0
++ je vcpi_flags_done
++ mov CvGuestIF,0
++ mov CvShadow,0
++ mov eax,20202h
++vcpi_flags_done:
++ ret
++CvVCPIFlags endp
++
++; ECX is the real physical vector. CF=1 consumed into pending; CF=0 is not
++; a physical IRQ. Only the monitor touches the physical PIC here.
++CvIRQ proc
++ cmp CvActive,0
++ je not_irq
++ pushad
++ mov eax,ecx
++ movzx edx,wMasterPICBase
++ sub eax,edx
++ cmp eax,8
++ jb master_irq
++ mov eax,ecx
++ movzx edx,wSlavePICBase
++ sub eax,edx
++ cmp eax,8
++ jae irq_unclaimed
++ cmp eax,7
++ jne slave_real
++ mov al,0Bh
++ out 0A0h,al
++ in al,0A0h
++ test al,80h
++ jnz slave_seven
++ mov al,20h
++ out 20h,al ; spurious IRQ15 acknowledges only master cascade
++ jmp irq_claimed
++slave_seven:
++ mov eax,7
++slave_real:
++ add eax,8
++ call CvFilterIrq
++ jc slave_acknowledge
++ bts CvPending,eax
++slave_acknowledge:
++ mov al,20h
++ out 0A0h,al
++ out 20h,al
++ jmp irq_claimed
++master_irq:
++ cmp eax,7
++ jne master_real
++ mov al,0Bh
++ out 20h,al
++ in al,20h
++ test al,80h
++ jz irq_claimed ; spurious IRQ7: no ISR to acknowledge
++ mov eax,7
++master_real:
++ call CvFilterIrq
++ jc master_acknowledge
++ bts CvPending,eax
++master_acknowledge:
++ mov al,20h
++ out 20h,al
++irq_claimed:
++ popad
++ stc
++ ret
++irq_unclaimed:
++ popad
++not_irq:
++ clc
++ ret
++CvIRQ endp
++
++; EAX=claimed physical IRQ. Only IRQ1/IRQ12 reach the owner's filter, which
++; reads the 8042 before the physical EOI. CF=1: the owner consumed the byte
++; and raises any virtual IRQ itself; CF=0: pend this IRQ as usual.
++CvFilterIrq proc
++ cmp CvFilter,0
++ je filter_pass
++ cmp eax,1
++ je filter_call
++ cmp eax,12
++ jne filter_pass
++filter_call:
++ pushad
++ call CvFilter
++ popad
++ ret
++filter_pass:
++ clc
++ ret
++CvFilterIrq endp
++
++; Host_Scheduler_Profile, reached through JLOAD. EAX=function, ECX=argument.
++; Returns EAX = 01000000h (version 1.0 in the high word) | state flags:
++; bit0 available, bit1 requested, bit2 active, bit3 guest IF, bit4 filter,
++; bit5 poll.
++;   0 query   1 request   2 release   3 raise virtual IRQ ECX (active only)
++;   4 set IRQ1/IRQ12 filter ECX (0 removes)   5 EDX = in-service, ECX = pending
++;   6 set return-to-V86 poll procedure ECX (0 removes); it preserves all
++;     registers and runs with flat DS/ES before pending IRQs are injected
++; CF=1 only for an invalid function or a raise while inactive.
++CvProfileService proc
++ cmp eax,1
++ jne profile_not_request
++ mov CvRequested,1
++ jmp profile_state
++profile_not_request:
++ cmp eax,2
++ jne profile_not_release
++ mov CvRequested,0
++ mov CvFilter,0
++ mov CvPollProc,0
++ jmp profile_state
++profile_not_release:
++ cmp eax,3
++ jne profile_not_raise
++ cmp CvActive,0
++ je profile_error
++ cmp ecx,16
++ jae profile_error
++ cmp ecx,2
++ je profile_error
++ bts CvPending,ecx
++ jmp profile_state
++profile_not_raise:
++ cmp eax,4
++ jne profile_not_filter
++ mov CvFilter,ecx
++ jmp profile_state
++profile_not_filter:
++ cmp eax,5
++ jne profile_not_state
++ mov edx,CvInService
++ mov ecx,CvPending
++ jmp profile_state
++profile_not_state:
++ cmp eax,6
++ jne profile_not_poll
++ mov CvPollProc,ecx
++ jmp profile_state
++profile_not_poll:
++ test eax,eax
++ jnz profile_error
++profile_state:
++ mov eax,01000001h
++ cmp CvRequested,0
++ je profile_no_request
++ or eax,2
++profile_no_request:
++ cmp CvActive,0
++ je profile_no_active
++ or eax,4
++profile_no_active:
++ cmp CvGuestIF,0
++ je profile_no_if
++ or eax,8
++profile_no_if:
++ cmp CvFilter,0
++ je profile_no_filter
++ or eax,10h
++profile_no_filter:
++ cmp CvPollProc,0
++ je profile_done
++ or eax,20h
++profile_done:
++ clc
++ ret
++profile_error:
++ stc
++ ret
++CvProfileService endp
++
++; Return CF=1 only for our one-instruction STI debug boundary. A genuine
++; guest TF is reflected by the regular exception path after our shadow ends.
++CvDebug proc
++ cmp CvActive,0
++ je debug_unclaimed
++ cmp CvShadow,0
++ je debug_unclaimed
++ mov CvShadow,0
++ cmp CvShadowTF,0
++ jne debug_unclaimed
++ and [ebp].Client_Reg_Struc.Client_EFlags,not 100h
++ stc
++ ret
++debug_unclaimed:
++ clc
++ ret
++CvDebug endp
++
++; Word stack helpers preserve segmented 16-bit SP wrap between words. A
++; word itself cannot straddle the segment limit. Shared DOS is not a sandbox.
++CvPushWord proc
++ sub dx,2
++ cmp dx,0FFFFh
++ je CvReject
++ mov [ecx+edx],ax
++ ret
++CvPushWord endp
++CvPopWord proc
++ cmp dx,0FFFFh
++ je CvReject
++ movzx eax,word ptr [ecx+edx]
++ add dx,2
++ ret
++CvPopWord endp
++CvPushDword proc
++ push eax
++ shr eax,16
++ call CvPushWord
++ pop eax
++ call CvPushWord
++ ret
++CvPushDword endp
++CvPopDword proc
++ call CvPopWord
++ mov edi,eax
++ call CvPopWord
++ shl eax,16
++ or eax,edi
++ ret
++CvPopDword endp
++CvSaveFlags proc
++ ; V86 POPF may set NT and a VM=1 IRET never takes the task-return path,
++ ; so NT is kept exactly as upstream IOPL=3 Jemm keeps it; ring 0 never
++ ; loads client flags. VM/RF/IOPL stay monitor-owned.
++ and eax,00244FD5h
++ or eax,20002h
++ mov [ebp].Client_Reg_Struc.Client_EFlags,eax
++ ret
++CvSaveFlags endp
++
++; ESI points to the current instruction, CS:EIP remains unmodified until
++; its supported operation is identified. CF=1 handled, CF=0 chain original.
++CvGP proc
++ cmp CvActive,0
++ je gp_unclaimed
++ ; The instruction after STI may itself fault for emulation (INT, CLI,
++ ; PUSHF, I/O or HLT). Completing it in the monitor ends the one-instruction
++ ; inhibition; do not wait for a #DB that an emulated INT would suppress.
++ cmp CvShadow,0
++ je shadow_emulation_ready
++ mov CvShadow,0
++ cmp CvShadowTF,0
++ jne shadow_emulation_ready
++ and [ebp].Client_Reg_Struc.Client_EFlags,not 100h
++shadow_emulation_ready:
++ mov edi,esi
++ xor ebx,ebx
++ xor ecx,ecx
++prefix:
++ inc ecx
++ cmp ecx,15
++ ja CvReject
++ mov al,[esi]
++ cmp al,66h
++ jne other_prefix
++ mov bl,1
++ jmp next_prefix
++other_prefix:
++ cmp al,67h
++ je next_prefix
++ cmp al,26h
++ je next_prefix
++ cmp al,2Eh
++ je next_prefix
++ cmp al,36h
++ je next_prefix
++ cmp al,3Eh
++ je next_prefix
++ cmp al,64h
++ je next_prefix
++ cmp al,65h
++ je next_prefix
++ cmp al,0F2h
++ je next_prefix
++ cmp al,0F3h
++ jne opcode
++next_prefix:
++ inc esi
++ jmp prefix
++opcode:
++ cmp al,0FAh
++ je do_cli
++ cmp al,0FBh
++ je do_sti
++ cmp al,9Ch
++ je do_pushf
++ cmp al,9Dh
++ je do_popf
++ cmp al,0CFh
++ je do_iret
++ cmp al,0CDh
++ je do_int
++gp_unclaimed:
++ clc
++ ret
++advance:
++ inc esi
++ sub esi,edi
++ add word ptr [ebp].Client_Reg_Struc.Client_EIP,si
++ ret
++do_cli:
++ call advance
++ and [ebp].Client_Reg_Struc.Client_EFlags,not 200h
++ stc
++ ret
++do_sti:
++ call advance
++ test [ebp].Client_Reg_Struc.Client_EFlags,200h
++ jnz gp_handled
++ mov eax,[ebp].Client_Reg_Struc.Client_EFlags
++ shr eax,8
++ and al,1
++ mov CvShadowTF,al
++ mov CvShadow,1
++ or [ebp].Client_Reg_Struc.Client_EFlags,300h
++gp_handled:
++ stc
++ ret
++stack_setup:
++ movzx ecx,word ptr [ebp].Client_Reg_Struc.Client_SS
++ shl ecx,4
++ movzx edx,word ptr [ebp].Client_Reg_Struc.Client_ESP
++ ret
++stack_done:
++ mov word ptr [ebp].Client_Reg_Struc.Client_ESP,dx
++ stc
++ ret
++do_pushf:
++ call advance
++ call stack_setup
++ mov eax,[ebp].Client_Reg_Struc.Client_EFlags
++ and eax,not 30000h
++ or eax,3000h
++ test bl,bl
++ jnz push32
++ call CvPushWord
++ jmp stack_done
++push32:
++ call CvPushDword
++ jmp stack_done
++do_popf:
++ call advance
++ call stack_setup
++ test bl,bl
++ jnz pop32
++ call CvPopWord
++ mov edi,[ebp].Client_Reg_Struc.Client_EFlags
++ and edi,0FFFF0000h
++ or eax,edi
++ jmp save_flags
++pop32:
++ call CvPopDword
++save_flags:
++ call CvSaveFlags
++ jmp stack_done
++do_iret:
++ call stack_setup
++ test bl,bl
++ jnz iret32
++ call CvPopWord
++ mov [ebp].Client_Reg_Struc.Client_EIP,eax
++ call CvPopWord
++ mov [ebp].Client_Reg_Struc.Client_CS,eax
++ call CvPopWord
++ mov edi,[ebp].Client_Reg_Struc.Client_EFlags
++ and edi,0FFFF0000h
++ or eax,edi
++ jmp save_flags
++iret32:
++ call CvPopDword
++ cmp eax,0FFFFh
++ ja CvReject
++ mov [ebp].Client_Reg_Struc.Client_EIP,eax
++ call CvPopDword
++ and eax,0FFFFh
++ mov [ebp].Client_Reg_Struc.Client_CS,eax
++ call CvPopDword
++ jmp save_flags
++do_int:
++ movzx ebx,byte ptr [esi+1]
++ inc esi
++ call advance
++ mov eax,ebx
++ call Simulate_Int
++ stc
++ ret
++CvGP endp
++
++; DX=20h/A0h. ZF=0 when the physical PIC has a level in service. Profile
++; claims acknowledge physically at once, so a set bit can only belong to an
++; IRQ a VCPI client accepted and reflected to V86; its EOI is physical even
++; if an injected virtual level is also open (its handler may have EOIed in
++; protected mode through a DOS extender pass-up). Leaves IRR selected.
++CvPhysicalISR proc
++ push eax
++ mov al,0Bh
++ out dx,al
++ in al,dx
++ mov ah,al
++ mov al,0Ah
++ out dx,al
++ test ah,ah
++ pop eax
++ ret
++CvPhysicalISR endp
++
++; Pre-dispatch broker for the reserved PIC and PIT0 control ports. No
++; unsupported guest operation is allowed to program the physical PIC/PIT.
++; The full peripheral model is a later owner; this profile is fixed-priority.
++CvIO proc
++ cmp CvActive,0
++ je io_unclaimed
++ cmp dx,40h
++ je pit_counter
++ cmp dx,43h
++ je pit_control
++ cmp dx,20h
++ je master_pic
++ cmp dx,21h
++ je master_pic
++ cmp dx,0A0h
++ je slave_pic
++ cmp dx,0A1h
++ jne io_unclaimed
++slave_pic:
++ mov edi,1
++ jmp pic
++master_pic:
++ xor edi,edi
++pic:
++ test cl,STRING_IO or WORD_IO or DWORD_IO
++ jnz CvReject
++ push ebx
++ mov ebx,edi
++ test cl,OUT_INSTR
++ jnz pic_write
++ test dl,1
++ jnz pic_mask_read
++ mov edi,CvPending
++ cmp byte ptr CvReadISR[ebx],0
++ jne pic_select_isr
++ test ebx,ebx
++ jnz pic_read_shift
++ push eax
++ mov eax,CvPending
++ shr eax,8
++ mov ah,byte ptr CvMask+1
++ not ah
++ and al,ah
++ jz pic_no_cascade
++ or edi,4
++pic_no_cascade:
++ pop eax
++ jmp pic_read_shift
++pic_select_isr:
++ mov edi,CvInService
++pic_read_shift:
++ test ebx,ebx
++ jz pic_read_low
++ shr edi,8
++pic_read_low:
++ and eax,0FFFFFF00h
++ and edi,0FFh
++ or eax,edi
++ jmp pic_done
++pic_mask_read:
++ mov al,byte ptr CvMask[ebx]
++ jmp pic_done
++pic_write:
++ test dl,1
++ jnz pic_data_write
++ test al,10h
++ jnz pic_init
++ cmp al,0Ah
++ je pic_read_irr
++ cmp al,0Bh
++ je pic_read_isr
++ cmp al,20h
++ je pic_eoi
++ mov ah,al
++ and ah,0F8h
++ cmp ah,60h
++ je pic_specific
++ jmp CvReject
++pic_read_irr:
++ mov byte ptr CvReadISR[ebx],0
++ jmp pic_done
++pic_read_isr:
++ mov byte ptr CvReadISR[ebx],1
++ jmp pic_done
++pic_eoi:
++ call CvPhysicalISR
++ jnz pic_eoi_physical
++ mov edi,CvInService
++ test ebx,ebx
++ jz pic_eoi_low
++ shr edi,8
++pic_eoi_low:
++ and edi,0FFh
++ jz pic_eoi_physical
++ bsf edi,edi
++ jmp pic_eoi_clear
++pic_specific:
++ call CvPhysicalISR
++ jnz pic_eoi_physical
++ movzx edi,al
++ and edi,7
++pic_eoi_clear:
++ test ebx,ebx
++ jz pic_eoi_index
++ add edi,8
++pic_eoi_index:
++ btr CvInService,edi
++ jc pic_done
++pic_eoi_physical:
++ ; A physical level is still in service, or no virtual level is: the IRQ was
++ ; accepted by a VCPI client (HDPMI) and reflected here unacknowledged.
++ out dx,al
++ jmp pic_done
++pic_init:
++ cmp al,11h
++ jne CvReject
++ mov byte ptr CvInitPhase[ebx],2
++ mov byte ptr CvMask[ebx],0
++ mov byte ptr CvInService[ebx],0
++ mov byte ptr CvPending[ebx],0
++ mov byte ptr CvReadISR[ebx],0
++ mov byte ptr CvAutoEOI[ebx],0
++ jmp pic_done
++pic_data_write:
++ cmp byte ptr CvInitPhase[ebx],0
++ je pic_mask_write
++ cmp byte ptr CvInitPhase[ebx],2
++ je pic_base_write
++ cmp byte ptr CvInitPhase[ebx],3
++ je pic_cascade_write
++ mov ah,al
++ and ah,0FDh
++ cmp ah,1
++ jne CvReject
++ and al,2
++ mov byte ptr CvAutoEOI[ebx],al
++ mov byte ptr CvInitPhase[ebx],0
++ jmp pic_done
++pic_cascade_write:
++ mov ah,4
++ test ebx,ebx
++ jz pic_cascade_check
++ mov ah,2
++pic_cascade_check:
++ cmp al,ah
++ jne CvReject
++ mov byte ptr CvInitPhase[ebx],4
++ jmp pic_done
++pic_base_write:
++ and al,0F8h
++ mov byte ptr CvBases[ebx],al
++ mov byte ptr CvInitPhase[ebx],3
++ jmp pic_done
++pic_mask_write:
++ mov byte ptr CvMask[ebx],al
++pic_done:
++ pop ebx
++ stc
++ ret
++pit_counter:
++ test cl,OUT_INSTR or STRING_IO or WORD_IO or DWORD_IO
++ jnz CvReject
++ in al,40h
++ stc
++ ret
++pit_control:
++ test cl,OUT_INSTR
++ jz CvReject
++ test cl,STRING_IO or WORD_IO or DWORD_IO
++ jnz CvReject
++ test al,0C0h
++ jnz io_unclaimed ; only channel 0 belongs to this bounded profile
++ test al,30h
++ jnz CvReject ; no false claim of virtual PIT divisor support
++ out 43h,al
++ stc
++ ret
++io_unclaimed:
++ clc
++ ret
++CvIO endp
++
++CvReject:
++ ; Unsupported profile operation follows Jemm's visible fatal exception
++ ; path. It is never emulated as success or sent to physical hardware.
++ jmp handle_exception_ebp
+diff --git a/src/EMU.ASM b/src/EMU.ASM
+index b6a85e6..032b0cf 100644
+--- a/src/EMU.ASM
++++ b/src/EMU.ASM
+@@ -30,6 +30,9 @@ EmuInstr DB 90h,90h  ; run self-modifying code here
+ .text$03 segment
+ 
+ @v86popregX macro
++ifdef CIUKIOS_V86_INTERRUPTS
++    call CvLeave
++endif
+     mov esp,ebp
+     POPAD
+     endm
+diff --git a/src/EXTERN32.INC b/src/EXTERN32.INC
+index 1236884..39f7d26 100644
+--- a/src/EXTERN32.INC
++++ b/src/EXTERN32.INC
+@@ -198,3 +198,10 @@ externdef InitMonitor:near
+ externdef IsUMBMemory:near
+ .text$04 ends
+ 
++
++ifdef CIUKIOS_V86_INTERRUPTS
++externdef CvLeave:near
++externdef CvActive:dword
++externdef CvGuestIF:dword
++externdef CvShadow:byte
++endif
+diff --git a/src/JEMM32.ASM b/src/JEMM32.ASM
+index 509e8bc..10a4d78 100644
+--- a/src/JEMM32.ASM
++++ b/src/JEMM32.ASM
+@@ -67,6 +67,9 @@ MAXBLOCKSIZE equ 40000h ; size for mem moves (XMS, int 15h ah=87h); std=256 kB
+     POPAD
+     endm
+ @v86popregX macro
++ifdef CIUKIOS_V86_INTERRUPTS
++    call CvLeave
++endif
+     mov esp,ebp
+     POPAD
+     endm
+@@ -149,6 +152,7 @@ endif
+ ;--- next 2 vars must be consecutive
+ pV86Hooks       dd 0    ; v86 hook proc installed? ( address of variable exported by VMM_SERV_TABLE )
+ dwHookProc      dd 0
++pHostScheduler  dd 0    ; CiukiOS exact-owned physical IRQ0 callback
+ if ?NMI
+ OldESP          dd 0    ; v5.87; used to temp. store ESP in NMI handling
+ endif
+@@ -626,6 +630,31 @@ V86_Monitor PROC public
+ ;-- valid frame.
+ 
+     MOVZX ECX,byte ptr [EBP].V86FRAME._IntNo ;load 1 byte ONLY (the int# is sign-extended)!
++ifdef CIUKIOS_V86_INTERRUPTS
++    mov eax,ss
++    mov ds,eax
++    mov es,eax
++    call CvEnter
++endif
++
++;--- Service the monitored foreground session before virtual IRQ reflection.
++;--- This callback alone does not virtualize IF: upstream runs V86 at IOPL3.
++;--- The separately selected experimental IOPL0 profile handles guest CLI. Like Jemm's
++;--- V86 hook dispatcher, leave the reserved frame before calling out; the
++;--- owned callback preserves every caller-visible register and flag.
++    cmp cx,cs:[wMasterPICBase]
++    jne @F
++    cmp dword ptr cs:[pHostScheduler],0
++    je @F
++    mov eax,ss
++    mov ds,eax
++    mov es,eax
++    call dword ptr cs:[pHostScheduler]
++@@:
++ifdef CIUKIOS_V86_INTERRUPTS
++    call CvIRQ
++    jc int_handled
++endif
+ 
+ if ?V86DBG
+   if ?SELINTLOG
+@@ -683,6 +712,9 @@ endif
+     MOV [EBP].V86FRAME._Cs, EAX
+     MOV [EBP].V86FRAME._Efl, EDX
+ int_handled:
++ifdef CIUKIOS_V86_INTERRUPTS
++    call CvLeave
++endif
+     @v86popreg
+     add ESP, CRS_SIZEX  ; skip fields between PUSHADS and IRETDV86
+     IRETD               ; return to v86-mode
+@@ -740,8 +772,32 @@ if ?V86DBG
+         ebp, word ptr [ebp-4].V86FRAME._Cs, [ebp-4].V86FRAME._Eip, [ebp-4].V86FRAME._Efl
+ @@:
+ endif
++ifdef CIUKIOS_V86_INTERRUPTS
++    cmp CvActive,0
++    je cv_r0_original
++    mov esi,ecx
++    call CvIRQ
++    jnc cv_r0_original
++    cmp si,wMasterPICBase
++    jne cv_r0_done
++    call dword ptr [pHostScheduler]
++cv_r0_done:
++    @v86popreg
++    add esp,4
++    iretd
++cv_r0_original:
++endif
++    mov esi,ecx                 ; @@runv86 preserves ESI
+     push ecx
+     call @@runv86
++    cmp si,cs:[wMasterPICBase]
++    jne @F
++    cmp dword ptr cs:[pHostScheduler],0
++    je @F
++;--- The guest IRQ has run; now service the blocked HLT/Yield owner without
++;--- perturbing the client frame used by @@runv86.
++    call dword ptr cs:[pHostScheduler]
++@@:
+     @v86popreg
+     add ESP,4      ;skip int#
+     IRETD
+@@ -1124,6 +1180,14 @@ endif
+ 
+ ;    @dprintf ?V86DBG, <"V86_Exception, esp=%X, cs:eip=%X:%X",10>, esp,[ebp].Client_Reg_Struc.Client_CS,[ebp].Client_Reg_Struc.Client_EIP
+ 
++ifdef CIUKIOS_V86_INTERRUPTS
++    call CvEnter
++    cmp ecx,1
++    jne @F
++    call CvDebug
++    jc exc_exit
++@@:
++endif
+     CMP ECX,0DH             ; general protection exception?
+     JNZ @@V86_TEST_EXC      ; no, check further
+ if ?BPOPC ne 0F4h
+@@ -1151,6 +1215,12 @@ endif
+ ;   some are not and then are just translated to an int 6, illegal opcode,
+ ;   which is then reflected to the V86 task!).
+ ;
++ifdef CIUKIOS_V86_INTERRUPTS
++    pushad
++    call CvGP
++    popad
++    jc exc_exit
++endif
+     MOV AL,[ESI]                ; check opcode
+     cmp AL, ?BPOPC
+     jnz @@NoBPOPC               ; breakpoint?
+@@ -1401,6 +1471,10 @@ v86excrtn2:
+ ;--- now DX, EAX and CL is set for the IO handlers    
+ 
+     push ecx
++ifdef CIUKIOS_V86_INTERRUPTS
++    call CvIO
++    jc @@io_handled
++endif
+ if ?ALT_TRAPHDL
+ ;--- v5.85: if trap handler has been changed, and port is < 0x100,
+ ;---        call the alternate handler if it has been set
+@@ -2833,6 +2907,10 @@ _Reboot endp
+ 
+ if ?SERVTABLE
+ 
++ifdef CIUKIOS_V86_INTERRUPTS
++include CVIRQ.INC
++endif
++
+ vmm_service_table label VMM_SERV_TABLE
+     dd Simulate_Int
+     dd Simulate_Iret
+@@ -2853,6 +2931,12 @@ vmm_service_table label VMM_SERV_TABLE
+     dd offset pV86Hooks	;v5.85
+     dd offset V86_Fault	;v5.86
+     dd offset _ret		;v5.86: control proc
++    dd offset pHostScheduler ;CiukiOS exact-owned physical IRQ0 callback slot
++ifdef CIUKIOS_V86_INTERRUPTS
++    dd offset CvProfileService ;CiukiOS run-time interrupt-profile negotiation
++else
++    dd 0                     ;no interrupt profile compiled into this Jemm
++endif
+ 
+ endif
+ 
+diff --git a/src/JEMM32.INC b/src/JEMM32.INC
+index 647fcd6..b330254 100644
+--- a/src/JEMM32.INC
++++ b/src/JEMM32.INC
+@@ -232,6 +232,8 @@ pMoveMemory             dd ?	; linear address of MoveMemory()
+ ppV86Hooks              dd ?	; v5.85: address of pV86Hooks variable
+ pV86Faults              dd ?	; v5.86: address of V86Faults
+ pControlProc            dd ?	; v5.86: address of ControlProc (called by Jemm on certain events)
++ppHostScheduler         dd ?	; CiukiOS: address of the single owned IRQ callback slot
++pProfileService         dd ?	; CiukiOS: interrupt-profile service, 0 when not compiled
+ VMM_SERV_TABLE ends
+ endif
+ 
+diff --git a/src/VCPI.ASM b/src/VCPI.ASM
+index 0574687..1a7cb30 100644
+--- a/src/VCPI.ASM
++++ b/src/VCPI.ASM
+@@ -433,6 +433,19 @@ endif
+     push 20002h or (V86IOPL shl 12)  ; set flags VM=1, NT=0, IOPL=3, IF=0, TF=0
+     sub esp,2*4
+     mov cr3,eax
++ifdef CIUKIOS_V86_INTERRUPTS
++    ; Profile state is mapped only in Jemm's own CR3: a VCPI client's page
++    ; tables share just the server entry pages, so test it after the switch.
++    cmp CvActive,0
++    je @F
++    mov CvGuestIF,0
++    mov CvShadow,0
++    add esp,2*4
++    pop eax
++    push 20202h         ; logical IF=0, physical IF=1 and IOPL=0
++    sub esp,2*4
++@@:
++endif
+ if ?VCPIXDBG
+ 	mov eax,[esp].IRETDV86._Eip
+ 	mov [dbgv.vEIP],eax

@@ -1,0 +1,20 @@
+CiukiOS uses the official HX HDPMI 3.24 host at the pinned f2276db commit.
+The included patch and adapter add an opt-in -cSSSS:OOOO session binding.
+Client I/O uses the shipped AX=6/AX=7 TRAPPROCS ABI and exact returned handle.
+No code or ABI from the older incompatible fork is used.
+The adapter services one monitored foreground DOS context; it is not a VM.
+The Jemm host scheduler runs from physical IRQ0 and remains live across guest
+CLI and blocked BIOS/DOS waits. Guest PIC masks are saved and restored exactly.
+Every client owns a separate 32-entry HDPMI VGA-aperture PTE snapshot, its IOPB
+range handle and its callback lifetime; detach removes the handle before it
+restores the table. Partial failure follows the same reverse-order unwind.
+DPMI 0300h INT 10h and 0302h calls aimed exactly at the current INT 10h vector
+cross mode through the owned JLM virtual-BIOS entry. Other real-mode procedures
+and the official 3.24 callback ABI are unchanged.
+Client IF is logical: CLI/STI/0900h-0902h keep physical IF=1 so host ticks
+run, while guest IRQ0 is deferred. A CLI-started region is single-stepped
+without a time or instruction limit; PUSHF/POPF and same-privilege IRET are
+emulated so the saved IF image restores the logical state. A host service
+entered from such a region re-arms stepping only at its exact return CS:EIP.
+The C objects are compiled for size: HDPMI addresses _TEXT32R3 with 16-bit
+offsets, so the build refuses any image section that ends above RVA 10000h.

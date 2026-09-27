@@ -25,7 +25,9 @@
 #include <stdint.h>
 
 #define CVGA_PLANE_SIZE 65536UL
-#define CVGA_STATE_BYTES 262992UL
+#define CVGA_DIRTY_GRANULE 8u       /* plane bytes represented by one dirty bit */
+#define CVGA_DIRTY_BYTES 1024u      /* 65536 / 8 / 8 per plane */
+#define CVGA_STATE_BYTES 267092UL
 #define CVGA_BLINK_VISIBLE 1u
 #define CVGA_CURSOR_VISIBLE 2u
 
@@ -44,6 +46,14 @@ typedef struct cvga_state {
     uint8_t misc, feature, enable;
     uint8_t dac_mask, dac_index, dac_component, dac_read_mode;
     uint32_t changes;                /* monotonically wrapping invalidation */
+    /* Incremented only when a value read by scanout (CRTC, attribute, DAC,
+     * DAC mask, clocking/reset/character-map sequencer registers, GC shift and
+     * memory-map registers, misc/enable) actually changes. Latch, map-mask,
+     * bit-mask and write-mode updates do not redraw anything by themselves. */
+    uint32_t display_changes;
+    /* One bit per 8-byte granule of each plane, set when a stored plane byte
+     * changes value. A presenter consumes and clears these bits. */
+    uint8_t dirty[4][CVGA_DIRTY_BYTES];
 } cvga_state;
 typedef char cvga_state_layout_must_match[(sizeof(cvga_state) == CVGA_STATE_BYTES) ? 1 : -1];
 
@@ -54,12 +64,31 @@ typedef struct cvga_geometry {
     unsigned blank;                  /* presenter must output black, not DAC[0] */
 } cvga_geometry;
 
+/* Standard IBM VGA BIOS parameter-table values for one mode. seq holds SR1-SR4
+ * (SR0 is always 03h after a mode set); attr holds AR00-AR13 (AR14 = 0). The
+ * test harness cross-checks these arrays against the QEMU/SeaVGABIOS ROM. */
+typedef struct cvga_mode_params {
+    uint8_t mode, text, columns, rows, char_height, palette;
+    uint16_t page_bytes, segment, width, height;
+    uint8_t seq[4], misc, crtc[25], attr[20], gc[9];
+} cvga_mode_params;
+
 void CVGA_CALL cvga_init(cvga_state *v);
 /* Register presets only; DAC and font are supplied by the guest/BIOS adapter.
- * mode may contain bit 7 (preserve video memory). Other modes return 0 without
- * changing state. preserve_vram also overrides clearing. No BIOS-data updates.
+ * Supported: text 00h-03h, 16-colour planar 0Dh/0Eh/10h/12h, 2-colour 11h and
+ * 256-colour 13h. mode may contain bit 7 (preserve video memory). Other modes,
+ * including CGA 04h-06h and monochrome 07h/0Fh, return 0 without changing
+ * state. preserve_vram also overrides clearing. No BIOS-data updates. A
+ * non-preserving set clears all four planes to zero, including plane 2.
  */
 int CVGA_CALL cvga_set_bios_mode(cvga_state *v, unsigned mode, int preserve_vram);
+/* NULL for unsupported modes. Bit 7 is ignored. */
+const cvga_mode_params *CVGA_CALL cvga_find_mode(unsigned mode);
+/* Direct plane store for firmware-level operations (virtual BIOS glyphs,
+ * scrolls, pixels) that real VGA firmware performs by reprogramming the
+ * sequencer/graphics controller. Marks damage; never touches latches.
+ * plane < 4 and at < 65536 are the caller's responsibility. */
+void CVGA_CALL cvga_store_plane(cvga_state *v, unsigned plane, unsigned at, uint8_t value);
 /* Installs one exact caller-provided 256 x 16 font into plane 2, font bank 0. */
 void CVGA_CALL cvga_load_font_8x16(cvga_state *v, const uint8_t *font4096);
 /* status1 is supplied by monitor timing: bit 0 display-disabled, bit 3 retrace.
@@ -72,6 +101,10 @@ void CVGA_CALL cvga_write_port(cvga_state *v, uint16_t port, uint8_t value);
  */
 uint8_t CVGA_CALL cvga_read_vram(cvga_state *v, uint32_t address);
 void CVGA_CALL cvga_write_vram(cvga_state *v, uint32_t address, uint8_t value);
+/* The value cvga_read_vram would return, WITHOUT loading the latches or any
+ * other side effect. For monitors/diagnostics only; guest reads must use
+ * cvga_read_vram because real hardware always loads the latches. */
+uint8_t CVGA_CALL cvga_peek_vram(const cvga_state *v, uint32_t address);
 /* Supported scanout: normal-address VGA text, 16-colour planar graphics,
  * mode 13h and unchained 256-colour (Mode X), with CRTC start, pitch, split,
  * horizontal panning, font banks, cursor and blink. CGA shift/interleave,
@@ -88,5 +121,17 @@ int CVGA_CALL cvga_get_geometry(const cvga_state *v, cvga_geometry *g);
  */
 unsigned CVGA_CALL cvga_render_row8(const cvga_state *v, unsigned y, uint8_t *dest,
                                    unsigned capacity, unsigned frame_flags);
+/* 1 when geometry row y (as used by cvga_render_row8) reads a plane byte in a
+ * granule set in dirty[][], else 0. Text-mode font (plane 2) dependencies are
+ * NOT included: a presenter must redraw all text rows when plane 2 changes.
+ * Returns 1 (conservatively) for unsupported/unrenderable geometry. */
+int CVGA_CALL cvga_row_reads_dirty(const cvga_state *v, unsigned y,
+                                   const uint8_t dirty[4][CVGA_DIRTY_BYTES]);
+
+/* 1 when text row y (geometry row) shows a blinking character with blink
+ * enabled, or a scanline of the visible text cursor: the only pixels that
+ * change with the CVGA_BLINK_VISIBLE / CVGA_CURSOR_VISIBLE phases. 0 for
+ * graphics, blanked or unrenderable geometry. */
+int CVGA_CALL cvga_row_phase_sensitive(const cvga_state *v, unsigned y);
 
 #endif

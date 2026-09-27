@@ -101,10 +101,10 @@ runtime_entry:
     jmp .done
 .install:
     cmp byte [installed],0
-    jne .done
+    jne .error                     ; retained ownership is not a new install
     smsw ax
     test al,1
-    jnz .protected
+    jnz .v86_install
     cmp word [host_callback+2],0
     je .error
     cmp word [host_ds],0
@@ -170,6 +170,37 @@ runtime_entry:
 .uninstall:
     cmp byte [installed],0
     je .done
+    cmp byte [guest_live],0
+    jne .error
+    cmp byte [host_busy],0
+    jne .error
+    cmp byte [vga_session],0
+    je .text_uninstall
+    call vga_session_uninstall
+    jc .error
+    mov ax,[vga_saved_draw]
+    mov [DW_GFX_DRAW],ax
+    mov byte [DW_RESIZABLE],0
+    jmp .done
+.v86_install:
+    ; Under a V86 monitor only the CVSESSION VGA mode can host the child.
+    mov word [errors],0
+    mov byte [guest_focus],1
+    mov byte [guest_live],0
+    mov byte [host_busy],0
+    mov byte [host_unsafe],0
+    mov byte [close_pending],0
+    mov byte [close_request],0
+    mov byte [video_depth],0
+    mov byte [key_wait],0
+    mov ax,[DW_GFX_DRAW]
+    mov [vga_saved_draw],ax
+    call vga_session_install
+    jc .protected
+    mov word [DW_GFX_DRAW],vga_draw_band
+    mov byte [DW_RESIZABLE],1
+    jmp .done
+.text_uninstall:
     cli
     mov byte [guest_live],0
     xor ax,ax
@@ -282,7 +313,15 @@ service_host:
     jne .return
     smsw ax
     test al,1
-    jnz .protected
+    jz .real_mode_host
+    ; V86: only the CVSESSION VGA mode, only while the guest owns the window.
+    cmp byte [vga_session],1
+    jne .protected
+    cmp byte [vga_exec_depth],1
+    jne .return
+    cmp byte [vga_host_entered],0
+    jne .return
+.real_mode_host:
     mov byte [host_busy],1
     mov [irq_saved_ss],ss
     mov [irq_saved_sp],sp
@@ -291,6 +330,8 @@ service_host:
     mov sp,irq_stack_top
     cld
     call poll_physical_mouse
+    cmp byte [vga_session],1
+    je .text_focus                  ; BIOS key focus, as for text children
     cmp byte [cg_active],1
     jne .text_focus
     ; Source ports consume Set1 make/break events. Keeping duplicate BIOS
@@ -305,11 +346,15 @@ service_host:
 .close_key:
     cmp byte [close_pending],0
     je .callback
+    call vga_device_close_key
+    jc .close_sent                   ; raw Esc through the device model
     mov ax,0x011B
     call keyboard_insert
     jc .callback
+.close_sent:
     mov byte [close_pending],0
 .callback:
+    call vga_before_callback
     rdtsc
     mov [callback_start_tsc],eax
     mov [callback_start_tsc+4],edx
@@ -332,6 +377,7 @@ service_host:
     push cs
     pop ds
     mov [last_host_result],ax
+    call vga_after_callback
     push ax
     rdtsc
     sub eax,[callback_start_tsc]
@@ -352,6 +398,7 @@ service_host:
     mov bx,ax
     and al,DW_HOST_FOCUS
     mov [guest_focus],al
+    call vga_device_focus
     test al,al
     jnz .close_result
     call keyboard_discard
@@ -361,6 +408,7 @@ service_host:
     mov byte [close_pending],1
     mov byte [close_request],1
 .restore_stack:
+    call vga_mouse_events
     mov ax,[irq_saved_ss]
     mov ss,ax
     mov sp,[irq_saved_sp]
@@ -505,6 +553,8 @@ F_ES equ -36
 F_FLAGS equ 6
 
 keyboard_handler:
+    cmp byte [cs:guest_live],0
+    je .chain
     cmp ah,0
     je .handled
     cmp ah,0x10
@@ -513,6 +563,7 @@ keyboard_handler:
     je .handled
     cmp ah,0x11
     je .handled
+.chain:
     jmp far [cs:old_int16]
 .handled:
     push bp
@@ -1103,6 +1154,14 @@ clamp_mouse_axis:
 ; it. No virtual guest mouse is advertised until client coordinate mapping
 ; is supplied; polling returns a nonblocking absent interface, not host pixels.
 mouse_handler:
+    cmp byte [cs:guest_live],0
+    jne .guest
+    jmp far [cs:old_int33]
+.guest:
+    cmp byte [cs:vga_session],1
+    jne .absent_mouse
+    jmp vga_guest_mouse
+.absent_mouse:
     cmp ax,0
     je .absent
     cmp ax,0x21
@@ -1142,6 +1201,8 @@ mouse_handler:
 %include "src/com/dos_window_cell.inc"
 %include "src/com/dos_window_graphics.inc"
 %include "src/com/dos_window_graphics_draw.inc"
+%include "src/com/dos_window_vga.inc"
+vga_saved_draw dw 0
 
 align 4
 old_int10 dd 0

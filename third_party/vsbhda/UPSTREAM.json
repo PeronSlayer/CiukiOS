@@ -1,0 +1,16 @@
+{
+  "project": "VSBHDA",
+  "repository": "https://github.com/Baron-von-Riedesel/VSBHDA",
+  "commit": "75fa4bbfea70cbcc0c40d1212f04952ff8abbf16",
+  "archive": "source-75fa4bb.tar.gz",
+  "download": "https://codeload.github.com/Baron-von-Riedesel/VSBHDA/tar.gz/75fa4bbfea70cbcc0c40d1212f04952ff8abbf16",
+  "sha256": "92fbd00814dc3ad2e448b40edb8eb2b0e6f7572b4accdfa6dc5cf17aa431820f",
+  "source_date_epoch": 1788488649,
+  "license": "GPL-2.0; DBOPL source files state GPL-2.0-or-later and retain the DOSBox Team copyright notice",
+  "used_files": [
+    "src/DBOPL.CPP",
+    "src/DBOPL.H",
+    "src/CONFIG.HPP"
+  ],
+  "modifications": "None. CiukiOS supplies a separate adapter in src/vm/guest_opl_dbopl.cpp."
+}

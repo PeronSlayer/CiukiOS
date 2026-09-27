@@ -131,6 +131,7 @@ ui_windows_close:
     cmp bx,11
     jne .files
     call dw_release
+    jc .retained
 .files:
     cmp bx,8
     jne .close
@@ -139,6 +140,11 @@ ui_windows_close:
     mov byte [ui_window_flags+bx],0
     mov byte [ui_bar_dirty],1
     popad
+    jmp ui_windows_unfocus
+.retained:
+    popad
+    stc
+    ret
 ui_windows_unfocus:
     pushad
     call ui_damage_active

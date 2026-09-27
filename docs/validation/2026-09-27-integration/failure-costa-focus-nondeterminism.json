@@ -1,0 +1,226 @@
+{
+  "passed": false,
+  "cpu": "pentium3",
+  "memory_mib": 128,
+  "accelerator": "kvm",
+  "source_image_sha256": "08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6",
+  "prepared_image_sha256": "2686843dd0f97768e4138fade84a92a805a1bebf902ad8c09e799111e00b5111",
+  "inputs": {
+    "SYSTEM/CIUKIDOS.SYS": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+    "JEMM386.EXE": "b45af26aca69ce54cb858119ad846bb5778c50bf3a6905ee05ce22b4c3aefa74",
+    "JLOAD.EXE": "550d71d3e5acc671270123998bbb3869c1b2f8b772082ee69a5ac836dad0d16e",
+    "CVSESS.DLL": "2bdaf7e2e8537de2d84f20c28beeb7116503dc371143b8f3cb7d1b5acb1e59b6",
+    "VGASEM.COM": "bee52ec3c309dfa9ef4629f48de27b706c01937fd4c99a211e1e130b07279a19",
+    "VGAHOST.COM": "37aeb6f3baded4c20ecb9ec2a414a33d61f41baee8fa9a3b36da47fc1a9b20ee",
+    "VMSESS.COM": "3e400972ade6571411199354959ad8f7607b702ed22e036b03f3de38d167eff1",
+    "MEMFREE.COM": "856a30e4906c2dd48a6c2ce5d7206c3f62109b5fe133ce4aa06d3cd860305ef6",
+    "APPS/DOSNAV/SSAVERS/FIRE.EXE": "e7a82211774d1ed6f198c62c5614eef91cadd211cf3068212f073752439471fa"
+  },
+  "physical_hardware_qualified": false,
+  "hardware_acceleration_claimed": false,
+  "phases": [
+    "costa"
+  ],
+  "events": [
+    {
+      "command": "run \\MEMFREE.COM",
+      "output": "[MEMFREE] largest block paragraphs=7EAC\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 26.883
+    },
+    {
+      "command": "run \\VMSESS.COM",
+      "output": "[VMSESSION] No V86 monitor\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 28.456
+    },
+    {
+      "command": "run \\JEMM386.EXE LOAD NOEMS X=A000-FFFF NODYN MAX=32M MIN=32M NOVME",
+      "output": "[MZ] run\r\nJemm386 loaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 35.053
+    },
+    {
+      "command": "run \\JLOAD.EXE \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' loaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 37.84
+    },
+    {
+      "command": "run \\MEMFREE.COM",
+      "output": "[MEMFREE] largest block paragraphs=7E90\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 39.622
+    },
+    {
+      "command": "run \\VGAHOST.COM N \\MEMFREE.COM",
+      "output": "[MEMFREE] largest block paragraphs=7B2C\r\n[VGAHOST] PASS exit=00000000 faults=00000000 instructions=00000000 elements=00000000 unsupported=00000000 bios=0000002B bios_unsupported=00000000 bios_last=00000000 mode_sets=00000001 mode=00000003 fatal=00000000 presents=00000000 frames=00000000 port_writes=00000000 tsc_khz=0040165C\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 43.511
+    }
+  ],
+  "fire_ss_sha256": "e7a82211774d1ed6f198c62c5614eef91cadd211cf3068212f073752439471fa",
+  "fire_exe_copy_sha256": "e7a82211774d1ed6f198c62c5614eef91cadd211cf3068212f073752439471fa",
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "512",
+    "-drive",
+    "file=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/costa-solo-4/disk.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/costa-solo-4/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-5740619efc804c3882dd228977d56d7f.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-m",
+    "128",
+    "-vga",
+    "std",
+    "-audiodev",
+    "wav,id=snd,path=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-completion-2026-09-27/costa-solo-4/audio.wav",
+    "-device",
+    "AC97,audiodev=snd"
+  ],
+  "conventional_memory_paragraphs": {
+    "native": "7EAC",
+    "jemm_and_module": "7E90",
+    "session_guest": "7B2C"
+  },
+  "costa": {
+    "host_summary": [
+      "[VGAHOST] PASS exit=00000000 faults=00007836 instructions=00007836 elements=00025652 unsupported=00000000 bios=00000023 bios_unsupported=00000002 bios_last=0000EF00 mode_sets=00000003 mode=00000003 fatal=00000000 presents=00000196 frames=00000014 port_writes=00017B32 tsc_khz=00401603"
+    ],
+    "checkpoints": {
+      "start": {
+        "native_size": [
+          640,
+          350
+        ],
+        "mismatched_pixels": 0,
+        "masked_program_clock_pixels": 0,
+        "compared_pixels": 304800,
+        "outside_nonblack": 0
+      },
+      "flag": {
+        "native_size": [
+          640,
+          350
+        ],
+        "mismatched_pixels": 186,
+        "masked_program_clock_pixels": 0,
+        "compared_pixels": 304800,
+        "outside_nonblack": 0
+      },
+      "move": {
+        "native_size": [
+          640,
+          350
+        ],
+        "mismatched_pixels": 0,
+        "masked_program_clock_pixels": 25,
+        "compared_pixels": 304800,
+        "outside_nonblack": 0
+      },
+      "about": {
+        "native_size": [
+          640,
+          350
+        ],
+        "mismatched_pixels": 0,
+        "masked_program_clock_pixels": 25,
+        "compared_pixels": 304800,
+        "outside_nonblack": 0
+      }
+    },
+    "video": {
+      "faults": 30774,
+      "instructions": 30774,
+      "elements": 153170,
+      "unsupported": 0,
+      "bus_faults": 0,
+      "port_reads": 186,
+      "port_writes": 97074,
+      "bios_calls": 35,
+      "bios_unsupported": 2,
+      "bios_last": 61184,
+      "mode_sets": 3,
+      "mode": 3,
+      "width": 720,
+      "rows": 400,
+      "repeat": 1,
+      "text": 1,
+      "display_changes": 81,
+      "changes": 910779,
+      "fatal": 0,
+      "fatal_csip": 0,
+      "presents": 406,
+      "present_rows": 1782,
+      "present_pixels": 1140480,
+      "frames": 20,
+      "full_redraws": 2,
+      "last_present_tsc": 680148,
+      "max_present_tsc": 31023720,
+      "total_present_tsc": 790832616,
+      "host_mode": 0,
+      "host_faults": 0,
+      "host_bytes": 0,
+      "tsc_khz": 4199939,
+      "status_polls": 0,
+      "fault_tsc": 40262544,
+      "crtc_start": 0,
+      "share_count": 1,
+      "state_bytes": 267092,
+      "host_enters": 0,
+      "last_fault_csip": 762079257,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_unsupported": 0,
+      "pm_attached": 0,
+      "passes": 21,
+      "fatal_bytes": "00000000000000000000000000000000"
+    },
+    "settling": {
+      "native-costa-start": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "native-costa-flag": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "native-costa-move": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "native-costa-about": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "session-costa-start": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "session-costa-flag": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "session-costa-move": {
+        "attempts": 2,
+        "changes": 0
+      },
+      "session-costa-about": {
+        "attempts": 2,
+        "changes": 0
+      }
+    }
+  },
+  "error": "AssertionError(('flag', {'native_size': [640, 350], 'mismatched_pixels': 186, 'masked_program_clock_pixels': 0, 'compared_pixels': 304800, 'outside_nonblack': 0}))",
+  "registers": "i\u001b[K\u001b[Din\u001b[K\u001b[D\u001b[Dinf\u001b[K\u001b[D\u001b[D\u001b[Dinfo\u001b[K\u001b[D\u001b[D\u001b[D\u001b[Dinfo \u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo r\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo re\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo reg\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo regi\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo regis\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo regist\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo registe\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo register\u001b[K\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[Dinfo registers\u001b[K\r\n\r\nCPU#0\r\nEAX=000000f4 EBX=0000de80 ECX=0000bdf3 EDX=00000000\r\nESI=000db101 EDI=00001180 EBP=f8004fb4 ESP=f8004df8\r\nEIP=00110c22 EFL=00003202 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=1\r\nES =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]\r\nCS =0008 00000000 ffffffff 00c09b00 DPL=0 CS32 [-RA]\r\nSS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]\r\nDS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]\r\nFS =0000 00000000 00000000 00000000\r\nGS =0000 00000000 00000000 00000000\r\nLDT=0000 00000000 00000000 00000000\r\nTR =0018 f8017000 0000208f 00008b00 DPL=0 TSS32-busy\r\nGDT=     00110250 000001ff\r\nIDT=     00113970 000007ff\r\nCR0=80000011 CR2=000a67eb CR3=00115000 CR4=00000000\r\nDR0=00000000 DR1=00000000 DR2=00000000 DR3=00000000 \r\nDR6=ffff0ff0 DR7=00000400\r\nEFER=0000000000000000\r\nFCW=037f FSW=0000 [ST=0] FTW=00 MXCSR=00001f80\r\nFPR0=0000000000000000 0000 FPR1=0000000000000000 0000\r\nFPR2=0000000000000000 0000 FPR3=0000000000000000 0000\r\nFPR4=0000000000000000 0000 FPR5=0000000000000000 0000\r\nFPR6=cb00000000000000 400a FPR7=cafd9a0000000000 400a\r\nXMM00=0000000000000000 0000000000000000 XMM01=0000000000000000 0000000000000000\r\nXMM02=0000000000000000 0000000000000000 XMM03=0000000000000000 0000000000000000\r\nXMM04=0000000000000000 0000000000000000 XMM05=0000000000000000 0000000000000000\r\nXMM06=0000000000000000 0000000000000000 XMM07=0000000000000000 0000000000000000\r\n(qemu) ",
+  "result_files_error": "KeyError('VGANAT.OUT')",
+  "source_image_unchanged": true
+}

@@ -475,6 +475,9 @@ ui_queue_command:
     mov byte [ui_exec_error],0
     push si
     call ui_video_end
+    pop si
+    jc dw_retained_show
+    push si
     call ui_assets_end
     pop si
     mov di,input_buf
@@ -524,6 +527,7 @@ ui_to_dos:
     mov byte [ui_dialog],0
     mov byte [ui_exec_error],0
     call ui_video_end
+    jc dw_retained_show
     call ui_assets_end
     call restore_shell_video_state
     call desktop_home
@@ -745,6 +749,7 @@ ui_video_begin:
 ui_video_end:
     call ui_sfx_end
     call dw_release
+    jc .retained
     call fm_end
     call wp_end
     mov byte [ui_motion_phase],0
@@ -764,6 +769,8 @@ ui_video_end:
     pop ds
     push cs
     pop es
+    clc
+.retained:
     ret
 
 ui_draw:
@@ -772,6 +779,7 @@ ui_draw:
     jne .done
     mov byte [ui_comp_recover],0
     call ui_video_end
+    jc .done
     call ui_video_begin
     mov byte [ui_full_redraw],0
     mov byte [ui_bar_dirty],0
@@ -1020,10 +1028,14 @@ ui_draw_window:
     U_BUTTON bx,dx,81,23,ut_open,44
     mov bx,[ui_wx]
     add bx,[ui_ww]
-    sub bx,12
     mov dx,[ui_wy]
     add dx,[ui_wh]
+    mov ax,61
+; BX/DX = window right/bottom edge, AX = hit action: resize grip + 12x12 hit.
+ui_grip:
+    sub bx,12
     sub dx,12
+    push ax
     U_RECT bx,dx,2,9,8
     add bx,4
     add dx,4
@@ -1032,9 +1044,8 @@ ui_draw_window:
     sub dx,4
     mov cx,12
     mov si,12
-    mov ax,61
-    call ui_hit_add
-    ret
+    pop ax
+    jmp ui_hit_add
 
 ui_shortcut:
     pushad
