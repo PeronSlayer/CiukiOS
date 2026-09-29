@@ -15,6 +15,8 @@ VIDEO_BLOCK_PAGES equ 67                 ; CVVID_BLOCK_BYTES / 4096
 VIDEO_STACK_BYTES equ 16384
 
 externdef c cvvid_attach:near
+externdef c cvvid_select:near
+externdef c cvvid_instance_bytes:near
 externdef c cvvid_detach:near
 externdef c cvvid_v86_fault:near
 externdef c cvvid_port_read:near
@@ -25,6 +27,7 @@ externdef c cvvid_readback:near
 externdef c cvvid_share_count:near
 externdef c cvvid_timer:near
 externdef c cvvid_port_string:near
+externdef c cvvid_host_offset:near
 
 .data
 video_block dd 0
@@ -54,6 +57,15 @@ cvvid_rdtsc proc c public low_ptr:dword, high_ptr:dword
  pop edx
  ret
 cvvid_rdtsc endp
+
+; Host-mode aperture PTEs changed (session_video.c host_map/host_unmap).
+cvvid_flush_tlb proc c public
+ push eax
+ mov eax,cr3
+ mov cr3,eax
+ pop eax
+ ret
+cvvid_flush_tlb endp
 
 ; Physical port access, used only while the HOST (never the guest) draws.
 cvvid_io_in proc c public port:dword, iosize:dword
@@ -153,6 +165,8 @@ video_begin proc uses esi edi ebx
  call video_call
  test eax,eax
  jnz attach_failed
+ cmp video_fault_hooked,0               ; an earlier session's hooks serve
+ jne hooks_ready
  mov eax,0Eh
  mov esi,offset video_fault_hook
  @VMMCall Hook_V86_Fault
@@ -164,6 +178,7 @@ video_begin proc uses esi edi ebx
  @VMMCall Hook_V86_Int_Chain
  jc timer_failed
  mov video_timer_hooked,1
+hooks_ready:
  xor eax,eax
  ret
 timer_failed:
@@ -214,6 +229,8 @@ video_end proc uses esi edi ebx
  mov eax,offset cvvid_detach
  xor ecx,ecx
  call video_call
+ cmp sessions,0                         ; another VM's session keeps them
+ jne unhooked
  cmp video_timer_hooked,0
  je timer_unhooked
  mov eax,8
@@ -257,6 +274,8 @@ video_owned endp
 align 4
  dd offset video_previous_int08
 video_timer_hook proc
+ cmp active,0                           ; the running VM's session: its
+ je timer_other_vm                      ; packet is in its memory
  pushad
  call video_refresh_fb
  mov video_args,offset video_fb_view
@@ -264,6 +283,7 @@ video_timer_hook proc
  mov ecx,1
  call video_call
  popad
+timer_other_vm:
  stc
  ret
 video_timer_hook endp
@@ -275,6 +295,8 @@ video_timer_hook endp
 align 4
  dd offset video_previous_fault
 video_fault_hook proc
+ cmp active,0                           ; the running VM's session
+ je video_fault_chain
  pushad
  mov eax,cr2
  cmp eax,0A0000h
@@ -294,6 +316,7 @@ video_fault_hook proc
  ret
 chain:
  popad
+video_fault_chain:
  jmp [video_previous_fault]
 video_fault_hook endp
 .data

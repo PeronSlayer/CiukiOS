@@ -241,7 +241,7 @@ def probe_gate(ui, exe, kind, escape=False):
     length=ui.b('ui_run_len');vm.key('home')
     for _ in range(length):vm.key('delete')
     ui.type_only('run '+exe)
-    offset=vm.offset();ui.click(58,1)
+    offset=vm.offset();ui.click(40,1)
     vm.wait(prefix+'START psp=',offset,20)
     vm.wait(prefix+'FILE OK',offset,10)
     vm.wait(prefix+'LIVE ticks=',offset,10)

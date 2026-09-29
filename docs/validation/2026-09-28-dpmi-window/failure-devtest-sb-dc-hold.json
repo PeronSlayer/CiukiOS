@@ -1,0 +1,241 @@
+{
+  "passed": false,
+  "source_image_sha256": "419d1aa4042a71240febc56c8be2e24ce01f0a335eb4193b1c9f648b676d7f6d",
+  "fixtures": {
+    "SYSTEM/CIUKIDOS.SYS": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+    "JEMM386.EXE": "68ed772e5f5f489f9854c98fecdde3c54a6e3a12ce4fee51287850fe6f14eb73",
+    "JLOAD.EXE": "93c205814779baf2f9c89d45fe1e60a3b7e597a13a87cfb7538f7cc5b108af40",
+    "CVSESS.DLL": "11de32cc4d3912d63b688cf465888475254908b66d437724b3cdd91ca70c90e4",
+    "DEVTEST.COM": "3aca80681057ebe5089bea8380e1326a8e642ea12c609b0fcf215e3304b2895b"
+  },
+  "events": [
+    {
+      "command": "run \\JEMM386.EXE LOAD NOEMS X=A000-FFFF NODYN MAX=32M MIN=32M NOVME",
+      "output": "[MZ] run\r\nJemm386 loaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\JLOAD.EXE \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' loaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\DEVTEST.COM",
+      "output": "run \\DEVTEST.COM\r\n[DEVTEST] DEVICES GRANTED/AUDIO 0000001B 00000001\r\n[DEVTEST] KEYS FOCUSED\r\n[DEVTEST] FOCUSED BYTES 1E 9E 30 B0 \r\n[DEVTEST] KEYS UNFOCUSED\r\n[DEVTEST] UNFOCUSED BYTES \r\n[DEVTEST] HOLD KEY\r\n[DEVTEST] FOCUS-LOSS BYTES 20 A0 \r\n[DEVTEST] SB PLAY\r\n[DEVTEST] SB DONE IRQS/VERSION 0006 0405\r\n[DEVTEST] OPL PLAY\r\n[DEVTEST] OPL DONE\r\n[DEVTEST] STATE 56445643 00800100 00000001 0000001B 00000001 00000001 00000005 00000003 00000000 00000000 0000000C 00000000 00000323 00000075 00000000 00000000 00000000 00000000 000001F9 00000000 000000E2 00000006 00000010 0000000A 0000C000 0000C400 00000000 0000AC44 00011611 00000000 00000006 00000000 \r\n[DEVTEST] PASS actual V86 keyboard, SB16 DMA/IRQ and OPL through the session\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\JLOAD.EXE -u \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' unloaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\JEMM386.EXE UNLOAD",
+      "output": "[MZ] run\r\nfound Jemm instance at segment 20d3\r\nJemm unloaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "comdemo",
+      "output": "COM demo via INT21h\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    }
+  ],
+  "physical_hardware": false,
+  "host_audio": "QEMU ICH AC97 (no SB16/OPL device present)",
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "512",
+    "-drive",
+    "file=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28/devtest/disk.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28/devtest/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-1bca863cccd74a61948867d5e70a52d7.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-m",
+    "128",
+    "-vga",
+    "std",
+    "-audiodev",
+    "wav,id=snd,path=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28/devtest/audio.wav",
+    "-device",
+    "AC97,audiodev=snd"
+  ],
+  "focused_bytes": [
+    "1E",
+    "9E",
+    "30",
+    "B0"
+  ],
+  "unfocused_bytes": [],
+  "focus_loss_bytes": [
+    "20",
+    "A0"
+  ],
+  "sb_irqs": 6,
+  "dsp_version": "0405",
+  "device_state": {
+    "magic": 1447319107,
+    "version_bytes": 8388864,
+    "active": 1,
+    "caps": 27,
+    "focused": 1,
+    "audio": 1,
+    "keys_forwarded": 5,
+    "keys_dropped": 3,
+    "aux_bytes": 0,
+    "lazy_pulls": 0,
+    "irqs_raised": 12,
+    "irq_failures": 0,
+    "port_reads": 803,
+    "port_writes": 117,
+    "unclaimed_io": 0,
+    "model_errors": 0,
+    "last_error": 0,
+    "last_port": 0,
+    "buffers_rendered": 505,
+    "underruns": 0,
+    "polls": 226,
+    "sb_blocks": 6,
+    "opl_writes": 16,
+    "dsp_commands": 10,
+    "ac97_nam": 49152,
+    "ac97_nabm": 50176,
+    "bridge_calls": 0,
+    "rate": 44100
+  },
+  "audio_wav_rate": 44100,
+  "tone_windows_440hz": [
+    {
+      "second": 9.0,
+      "rms": 10670.5,
+      "peaks_hz": [
+        440.0,
+        436.0,
+        444.0
+      ],
+      "even_harmonics": 0.061,
+      "kind": "square"
+    },
+    {
+      "second": 9.25,
+      "rms": 11636.3,
+      "peaks_hz": [
+        440.0,
+        436.0,
+        444.0
+      ],
+      "even_harmonics": 0.061,
+      "kind": "square"
+    },
+    {
+      "second": 9.5,
+      "rms": 12198.1,
+      "peaks_hz": [
+        440.0,
+        436.0,
+        444.0
+      ],
+      "even_harmonics": 0.061,
+      "kind": "square"
+    },
+    {
+      "second": 9.75,
+      "rms": 11644.0,
+      "peaks_hz": [
+        4.0,
+        440.0,
+        8.0
+      ],
+      "even_harmonics": 0.055,
+      "kind": "other"
+    },
+    {
+      "second": 10.0,
+      "rms": 12198.1,
+      "peaks_hz": [
+        440.0,
+        436.0,
+        444.0
+      ],
+      "even_harmonics": 0.061,
+      "kind": "square"
+    },
+    {
+      "second": 10.25,
+      "rms": 11640.5,
+      "peaks_hz": [
+        4.0,
+        440.0,
+        8.0
+      ],
+      "even_harmonics": 0.049,
+      "kind": "other"
+    },
+    {
+      "second": 10.5,
+      "rms": 12198.3,
+      "peaks_hz": [
+        440.0,
+        436.0,
+        444.0
+      ],
+      "even_harmonics": 0.062,
+      "kind": "square"
+    },
+    {
+      "second": 10.75,
+      "rms": 11642.6,
+      "peaks_hz": [
+        440.0,
+        436.0,
+        444.0
+      ],
+      "even_harmonics": 0.06,
+      "kind": "square"
+    },
+    {
+      "second": 11.0,
+      "rms": 11823.1,
+      "peaks_hz": [
+        440.0,
+        436.0,
+        444.0
+      ],
+      "even_harmonics": 0.061,
+      "kind": "square"
+    },
+    {
+      "second": 11.25,
+      "rms": 12156.1,
+      "peaks_hz": [
+        440.0,
+        436.0,
+        444.0
+      ],
+      "even_harmonics": 0.062,
+      "kind": "square"
+    },
+    {
+      "second": 11.5,
+      "rms": 10778.3,
+      "peaks_hz": [
+        440.0,
+        4.0,
+        436.0
+      ],
+      "even_harmonics": 0.066,
+      "kind": "square"
+    }
+  ],
+  "square_wave_seconds": 2.25,
+  "fm_note_seconds": 0.0,
+  "audio_error": "AssertionError('OPL note not heard')",
+  "source_image_unchanged": true
+}

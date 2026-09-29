@@ -99,6 +99,7 @@ startup_select_session:
     push si
     mov byte [ui_sound_played],1
     call vc_end
+    call shell_apply_text_profile
     call redraw_title_bar
     pop si
     call print_dual_dollar_string

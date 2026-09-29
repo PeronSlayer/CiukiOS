@@ -275,9 +275,9 @@ ut_about_keys db 'F1 Help    F2 Programs    F3 Run    F4 DOS    F10 Power',0
 ut_about_dos db 'In DOS, type EXIT or DESKTOP to return here.',0
 ut_about_apps db 'DOS windows currently support BIOS text programs.',0
 ut_run_help db 'Enter a program name or a DOS command.',0
-ut_run_example db 'Examples: win   |   dir   |   edit notes.txt',0
+ut_run_example db 'Examples: dir   |   edit notes.txt',0
 ut_run_output db 'Window: BIOS text. Run: full-screen DOS.',0
-ut_window db 'Window',0
+ut_window db 'Full screen',0
 ut_power_help db 'Choose how to leave CiukiOS.',0
 ut_power_live db 'Changes made on the live CD are kept in RAM only.',0
 ut_restart db 'Restart',0

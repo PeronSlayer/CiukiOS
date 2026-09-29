@@ -1,0 +1,184 @@
+{
+  "passed": true,
+  "physical_hardware_qualified": false,
+  "parts": [
+    "switch",
+    "io",
+    "window",
+    "sound",
+    "kill",
+    "ivt",
+    "clock"
+  ],
+  "vm_started_at_boot": true,
+  "switch": {
+    "vm1_lines_during_key_wait": 14,
+    "vm0_blocked_during_key_wait": true,
+    "lines": [
+      "[VMMTEST] VM 1 created",
+      "[VM0] 0000",
+      "[VM0] 0001",
+      "[VM1] 0000",
+      "[VM1] 0001",
+      "[VM0] 0002",
+      "[VM0] 0003",
+      "[VM1] 0002",
+      "[VM1] 0003",
+      "[VM0] 0004",
+      "[VM0] 0005",
+      "[VM1] 0004",
+      "[VM1] 0005",
+      "[VM0] 0006",
+      "[VMMTEST] waiting for a key",
+      "[VM1] 0006",
+      "[VM1] 0007",
+      "[VM1] 0008",
+      "[VM1] 0009",
+      "[VM1] 000A",
+      "[VM1] 000B",
+      "[VM1] 000C",
+      "[VM1] 000D",
+      "[VM1] 000E",
+      "[VM1] 000F",
+      "[VM1] 0010",
+      "[VM1] 0011",
+      "[VM1] 0012",
+      "[VM1] 0013",
+      "[VMMTEST] key read",
+      "[VMMTEST] switches 00000016 gated 0000 exit 002A",
+      "[VMMTEST] PASS"
+    ],
+    "alternations": 7,
+    "vm1_lines": 20,
+    "probe_pass": true,
+    "key_read": true,
+    "passed": true,
+    "console_alive_after": true
+  },
+  "io": {
+    "lines": [
+      "[IO B] 0023",
+      "[IO A] 0024",
+      "[IO A] 0025",
+      "[IO B] 0024",
+      "[IO B] 0025",
+      "[IO A] 0026",
+      "[IO A] 0027",
+      "[IO B] 0026",
+      "[IO B] 0027",
+      "[IO A] OK",
+      "[IO B] OK",
+      "[VMMIO] PASS"
+    ],
+    "alternations": 41,
+    "probe_pass": true,
+    "passed": true,
+    "console_alive_after": true,
+    "file_A": 40000,
+    "file_B": 40000,
+    "files_intact": true,
+    "fsck": [
+      "fsck.fat 4.2 (2021-01-31)",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-29b/multi-vm/disk.img: 815 files, 14250/32722 clusters"
+    ],
+    "fat_clean": true
+  },
+  "window": {
+    "lines": [
+      "[VMW1] ready",
+      "[VMWTEST] VM 1 session active",
+      "[VMWTEST] VM 1 screen seen",
+      "[VMWTEST] focus VM1",
+      "[VMW1] key 1E61",
+      "[VMW1] key 3062",
+      "[VMW1] key 2E63",
+      "[VMWTEST] VM 1 got the keys",
+      "[VMWTEST] press the hotkey",
+      "[VMWTEST] focus VM0",
+      "[VMWTEST] VM 0 key x",
+      "[VMW1] key 011B",
+      "[VMW1] session ended",
+      "[VMWTEST] PASS"
+    ],
+    "probe_pass": true,
+    "vm1_keys": [
+      "1E61",
+      "3062",
+      "2E63",
+      "011B"
+    ],
+    "vm1_keys_exact": true,
+    "vm1_text_on_physical_screen_pixels": 0,
+    "passed": true,
+    "console_alive_after": true
+  },
+  "sound": {
+    "lines": [
+      "[VMSTEST] VM 1 created",
+      "[VMS1] playing",
+      "[VMS1] played",
+      "[VMSTEST] PASS"
+    ],
+    "vm0_busy_lines": 41,
+    "probe_pass": true,
+    "wav_window": [
+      200704,
+      983040
+    ],
+    "passed": true,
+    "console_alive_after": true,
+    "wave": {
+      "samples": 195584,
+      "loud_samples": 186564,
+      "level": 12208.0,
+      "seconds": 4.23,
+      "on_level": 1.0,
+      "crossings_per_second": 439.4,
+      "clean": true
+    }
+  },
+  "kill": {
+    "lines": [
+      "[VMK1] session open",
+      "[VMKTEST] press z E",
+      "[VMKTEST] key z",
+      "[VMK1] session open",
+      "[VMKTEST] press z D",
+      "[VMKTEST] key z",
+      "[VMK1] session open",
+      "[VMKTEST] press z H",
+      "[VMKTEST] key z",
+      "[VMKTEST] PASS"
+    ],
+    "keys_ok": 3,
+    "probe_pass": true,
+    "passed": true,
+    "console_alive_after": true
+  },
+  "ivt": {
+    "lines": [
+      "[VMI1] vectors restored",
+      "[VMI1] freed block overwritten",
+      "[VMI1] 40 ticks over overwritten memory",
+      "[VMITEST] PASS"
+    ],
+    "probe_pass": true,
+    "vm1_ok": true,
+    "passed": true,
+    "console_alive_after": true
+  },
+  "clock": {
+    "lines": [
+      "[VMC1] ticks 00B5",
+      "[VMC0] ticks 00B7",
+      "[VMCTEST] done"
+    ],
+    "ticks": {
+      "1": 181,
+      "0": 183
+    },
+    "probe_done": true,
+    "passed": true,
+    "console_alive_after": true
+  }
+}

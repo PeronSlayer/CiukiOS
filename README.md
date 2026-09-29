@@ -17,6 +17,29 @@ CiukiOS is not a finished operating system. It is an active learning and researc
 
 Current public version: `CiukiOS pre-Alpha v0.7.1`.
 
+**DOS windows as virtual machines (2026-09-29).** The development image starts
+a resident VM manager at boot, and several DOS programs run at once, each in
+its own V86 virtual machine:
+- Each VM has private conventional memory and BIOS RAM, and its own virtual
+  VGA, keyboard, mouse, PIC/PIT, DMA, SB16 and OPL model.
+- The keyboard and the mouse follow the focus. Ctrl+Esc gives the keyboard
+  back to the desktop.
+- One AC'97 stream plays the focused session's sound. The other sessions keep
+  running muted in real time.
+- Clocks, file I/O from several VMs, and ending or killing a VM are covered by
+  gates.
+
+Phase 2 milestones M1-M3 pass on QEMU. The complete VM profile passes 21/21,
+and the VM-manager gate passes 10/10 parts
+([evidence](docs/validation/2026-09-29-boot-and-m3/README.md),
+[design](docs/design-multi-vm-2026-09-28.md),
+[roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md)). The desktop does not yet
+paint each VM's session in its own window: that is M4.
+
+The boot now goes from the splash straight to the desktop, with the startup
+melody and no text screen. Windows 3.1 support was removed on 28 September
+2026.
+
 Selected desktop image, **2026-09-26**: the native desktop includes Files, Tasks,
 Display, Sound and Wallpaper windows. CD-ROM, floppy and BIOS-exposed disks
 open in Files for read-only browsing, text preview and file import. USB must be
@@ -77,8 +100,8 @@ result. See [video evidence and limits](docs/vm-video-session-2026-09-27.md) and
 
 The kernel's extended XMS functions and persistent DOS device chain are fixed;
 the experimental kernel is 43,217 bytes, 47 bytes below its unchanged ceiling.
-The existing Windows 3.1 gate also passes two launches, resize/repaint and measured
-WAV/MIDI playback. A separate classic Doom fullscreen regression passes real
+At that time the Windows 3.1 gate (since removed) also passed two launches,
+resize/repaint and measured WAV/MIDI playback. A separate classic Doom fullscreen regression passes real
 menus, gameplay, movement, audio and clean return on the new kernel. These results
 do not qualify original games in desktop windows, complete virtual peripherals,
 30 fps or real hardware. The selected desktop
@@ -102,14 +125,14 @@ Phase 6 is active, not closed. The external GPL CuteMouse workflow passes on `fu
 
 Phase 8 is now active with its first bounded milestone complete. The `full` profile packages the GPL mTCP/Crynwr stack, exposes NE2000 plus configurable IPv4 under QEMU, and provides bidirectional FTP sharing through `C:\SHARE`. `NETSTART` installs a resident ARP/ICMP bridge independent of FTP, `NETCFG` persists IP/mask/gateway/DNS, and `IPCONFIG` reports live values and service status. Isolated gates verify inbound and Internet ICMP plus FTP persistence without mutating the canonical image. This does not yet imply SMB, encrypted transfer, arbitrary NIC, DHCP-server interoperability, or physical-hardware support.
 
-Phase 9 has advanced early but is not closed. With optional local media, Windows 3.1 now reaches 386 Enhanced Mode through the normal `WIN` command on the canonical `full` image. The bounded acceptance workflow proves one linear PS/2 pointer, native Sound Blaster startup WAV audio, real non-silent AdLib MIDI playback, generic DOS-prompt enter/exit, automatic memory for an unprofiled DOS/4GW Doom launch and clean return, Calculator launch and task-scoped `Alt+F4`, Program Manager survival, clean return to CiukiOS, and a second Windows launch. Windows 95/98, full-CD, broad application and multimedia coverage, printing, and hardware evidence remain open.
+Phase 9 advanced early but is not closed; Windows 3.1 support was removed on 28 September 2026 in favour of CiukiOS's own DOS windows. Before that, with optional local media, Windows 3.1 reached 386 Enhanced Mode through the normal `WIN` command on the canonical `full` image. The bounded acceptance workflow proves one linear PS/2 pointer, native Sound Blaster startup WAV audio, real non-silent AdLib MIDI playback, generic DOS-prompt enter/exit, automatic memory for an unprofiled DOS/4GW Doom launch and clean return, Calculator launch and task-scoped `Alt+F4`, Program Manager survival, clean return to CiukiOS, and a second Windows launch. Windows 95/98, full-CD, broad application and multimedia coverage, printing, and hardware evidence remain open.
 
 Validation snapshot (2026-09-01): the Phase 5 loader/kernel ownership boundary and ABI gate are green, together with the expanded `make qemu-test-all` bundle and its full-CD read beyond LBA 65,535. The aggregate covers the generic EXEC-memory policy guard, unmodified DOSNavigator mouse/navigation/Colors/native-exit plus same-boot cleanup, Costa desktop/cursor/Calculator, WOLF3D gameplay, original Doom gameplay plus non-silent WAV, doom-vanille gameplay/texture/audio plus 256 KiB allocation, Windows 3.1 Enhanced Mode/linear cursor/native SB and AdLib MIDI audio/generic DOS VM/unprofiled DOS4GW Doom/Alt+F4/exit/relaunch, CuteMouse, external `COMMAND.COM`, and shell COM/MZ/PSTACK/TSR return gates. The bounded mTCP ICMP/FTP gates remain focused lanes; normal COM launchers relocate their stack and shrink their own DOS block before nested EXEC, without kernel program-name rules. `make qemu-test-setup-runtime-hdd-install` remains a separate long gate and is not included in `qemu-test-all`.
 
-Current work is concentrated on original DOS execution in native windows:
+Current work follows the [DOS-window roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md), phase 2 (several DOS windows at once):
 
-1. attach protected-mode (HDPMI) clients to the guest device model (port bridge, IRQ delivery, EOI routing); runtime IF negotiation and V86 devices are done
-2. complete protected-mode window presentation
+1. M4: the desktop paints each VM's session in its own window and sets the focus with a click; the DOS-window manager moves out of SHELL.COM
+2. M5: a DPMI host per VM
 3. qualify original-binary video/audio, clean return and measured performance, followed by separate T23/E500 checks
 
 The wider compatibility backlog remains:
@@ -120,7 +143,7 @@ The wider compatibility backlog remains:
 4. removing workload-specific compatibility patches where a general DOS subsystem fix is possible
 5. retaining the verified original Doom OPL2/PC-speaker and doom-vanille OPL2/SB16 paths while keeping the unresolved original Doom SB16/DMX behavior explicitly separate
 6. keeping the bounded Packet Driver/IPv4/FTP lane green while DHCP, other NICs, encrypted protocols, and physical networking remain explicit Phase 8 follow-ups
-7. extending the bounded Windows 3.1 result without treating it as Windows 95/98 or broad Phase 9 closure
+7. DOS applications in desktop windows, Windows 95/98 style (resident VM manager, several DOS windows, control panel, file manager): see `docs/roadmap-dos-vm-desktop-2026-09-28.md`
 
 ## Quick Start
 
@@ -220,7 +243,6 @@ make qemu-test-full-doomvan-performance
 make qemu-test-full-doom-audio
 make qemu-test-full-dos-audio
 make qemu-test-full-video-restore
-make qemu-test-full-windows31
 make qemu-test-full-drvload-smoke
 make qemu-test-full-shell-stability
 make qemu-test-setup-runtime-hdd-install
@@ -238,48 +260,21 @@ The repository does not publish commercial DOS game data or proprietary third-pa
 4. `third_party/drivers` can be packaged into `C:\SYSTEM\DRIVERS` when present locally.
 5. `make fetch-costa` downloads the pinned official Costa v1.8.0 archive, verifies SHA-256 `254e79b7617bd96722d228731883ea2aeac982ee22e236d30fa0f9987430ee88`, and packages it into `C:\APPS\COSTA`.
 6. `make fetch-network-stack` downloads pinned GPL mTCP and Crynwr packages, verifies both SHA-256 values, and packages tools, licenses, and sources under `C:\NET`.
-7. A complete local `third_party/windows31/disk01.img` ... `disk07.img` set is copied unchanged to `C:\MEDIA\WIN31` and merged into the directly accessible `C:\WIN31SET`; an optional local `third_party/windows31/installed` tree is copied to `C:\WINDOWS`.
 
 Keep third-party payloads legally supplied, local, and untracked unless a license explicitly permits redistribution. DOSNavigator acknowledgement: "Based on Dos Navigator by RIT Research Labs."
 
-## Windows 3.1 And Mouse
+## Mouse And QEMU Input
 
-Windows 3.1 uses the canonical `full` image; there is no separate Windows
-build. The normal one-command build/run validates the seven embedded IMG files
-before opening QEMU:
-
-```bash
-bash scripts/build_run_full.sh
-```
-
-If the local installed tree is present, launch Windows 3.1 in 386 Enhanced
-Mode from the default `C:\APPS>` prompt with:
-
-```text
-CD ..
-CD WINDOWS
-WIN
-```
-
-`WIN /3` explicitly requests the same Enhanced Mode. `WIN /S` remains useful
-only as a diagnostic fallback to the less capable Standard Mode.
-
-The full build installs Windows' native Microsoft Sound Blaster 1.5 and AdLib
-drivers from the supplied Windows media. They use the canonical VM hardware:
-Sound Blaster at `A220 I7 D1` and AdLib/OPL2 at `388`. Windows mouse ballistics
-are disabled and its sensitivity is calibrated independently of the resident
-DOS `INT 33h` service, so Costa and DOS Navigator keep their existing input path.
-The generated `_DEFAULT.PIF` and `DOSPRMPT.PIF` request all conventional, EMS,
-and XMS memory available to each DOS VM instead of imposing fixed 1 MiB limits.
-This is a generic Windows/DOS policy: applications copied into the image later
-inherit it without a title-specific PIF.
+Windows 3.1 support was removed on 28 September 2026: CiukiOS runs DOS
+applications in its own desktop windows (see the
+[roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md)).
 
 The normal launcher automatically selects SDL over a verified X11/XWayland
 socket and keeps SDL raw-relative input as the canonical DOS path. Warp-relative
 mode is not enabled automatically because its synthetic recentering events
 regress Costa and DOS Navigator; the launcher overrides any inherited SDL warp
 hint. None of these launcher choices alter the boot image, the
-i8042/IRQ12 implementation, the Windows PS/2 driver or behavior on real
+i8042/IRQ12 implementation, or behavior on real
 hardware. Click inside the QEMU window to capture the pointer; use `Ctrl+Alt+G`
 to release it. GTK remains available explicitly with `--display gtk`, and
 `QEMU_DISPLAY_TRANSPORT=native` is the display-transport opt-out. The frontend
@@ -287,43 +282,16 @@ ignores host window-close requests so a guest `Alt+F4` cannot terminate the
 complete VM; exit CiukiOS with its `SHUTDOWN` command.
 
 The `full` and `full-cd` launchers now allocate 256 MiB of VM RAM by default,
-while the DOS/Windows-compatible BIOS and XMS interfaces expose approximately
+while the DOS-compatible BIOS and XMS interfaces expose approximately
 63 MiB of usable extended memory instead of 15 MiB. The compatible single
 Pentium III vCPU remains unthrottled and requires KVM hardware acceleration by
 default; the launcher fails clearly instead of silently selecting slow TCG.
-DOS and Windows 3.1 do not benefit from additional virtual CPUs. Override RAM
+DOS does not benefit from additional virtual CPUs. Override RAM
 and CPU with `QEMU_MEMORY_MB` and `QEMU_CPU_MODEL` when needed.
 
-Windows applications can be closed normally with `Alt+F4` without terminating
-Program Manager or the complete Enhanced Mode session. Windows itself may be
-closed and launched again without rebooting CiukiOS. The XMS
-hook window, A20 state, DOS Swappable Data Area, and file-handle set are
-restored when the session ends, so a later DOS application or a second `WIN`
-starts from a clean runtime state. The shell title bar and text cursor are also
-redrawn after every external program, including Windows. The automated
-acceptance test is:
-
-```bash
-bash scripts/qemu_test_full_windows31.sh --no-build --headless-smoke
-```
-
-It first exits a DOS probe without unregistering its `INT 33h` callback,
-requires top-level EXEC cleanup to survive a subsequent mouse event, and then
-verifies that Windows takes exclusive BIOS PS/2 ownership. It requires two
-Enhanced Mode starts on the same EDID-selected VGA/VBE surface, exactly one linear moving pointer, a generic
-`COMMAND.COM` DOS VM that returns cleanly, progressing `CANYON.MID` playback
-with objective AdLib waveform evidence, an unprofiled DOS/4GW Doom process
-that receives dynamic memory and exits, Calculator task-scoped `Alt+F4`,
-Program Manager responsiveness, the visible CiukiOS title bar after exit, and
-a clean relaunch. Windows records its startup EXEC depth and releases every
-later application frame independently, preventing the former cumulative
-"memoria insufficiente" failure after closing a multimedia application.
-
-The original images remain available under `C:\MEDIA\WIN31`, while
-`C:\WIN31SET\SETUP.EXE` can access the merged installation media without
-mounting floppies. CiukiOS installs its PS/2-backed standard `INT 33h` service
+CiukiOS installs its PS/2-backed standard `INT 33h` service
 at every boot, before any application starts, and exposes the IBM-compatible
-`INT 15h/AH=C2h` BIOS interface used by Windows 3.x. Device reset, data-reporting,
+`INT 15h/AH=C2h` BIOS interface. Device reset, data-reporting,
 sample-rate, resolution, identity, status, scaling, and callback operations are
 forwarded to the PS/2 controller rather than acknowledged as no-ops. `MOUSE
 STATUS` and `MOUSE INFO` inspect the resident DOS service. The GPL CuteMouse binary is also packaged as
@@ -332,11 +300,8 @@ not automatically layered on top of an already active mouse service.
 
 ## Display Setup And ThinkPad T23
 
-The full/full-CD profile packages the VBESVGA Windows 3.1 driver, its Enhanced
-Mode VDD and grabber, and source-rebuilt VBE/EDID utilities under
-`C:\SYSTEM\VIDEO`. Windows starts with EDID auto-selection and a safe 16-bit
-colour profile; the auxiliary INT 10h stack is installed before the shell so
-high-resolution Windows sessions can close without leaving a stale BIOS stack.
+The desktop selects its VBE mode from EDID and keeps the chosen resolution in
+`C:\SYSTEM\VIDEO\DISPLAY.CFG`.
 
 Use the following commands from any CiukiOS directory:
 
@@ -434,7 +399,7 @@ validated host Doom-vanille's 350-gametic render fell from 1106 KVM realtics
 to 172. It is not the universal default because QEMU 11.1 itself crashes under
 TCG while the local original Doom binary remains in gameplay; `tcg-safe`
 avoids that host crash but is not fast enough. The guest hardware remains a
-standard PC/VGA machine; no modern 3D API is presented to DOS or Windows 3.1.
+standard PC/VGA machine; no modern 3D API is presented to DOS programs yet.
 
 This proves SB16 DSP detection and controlled DMA1/IRQ7 playback in project probes. `PMIRQSB.COM` also proves the narrower DOS/4GW protected-mode timer and SB IRQ delivery path, and `DOOMSFX` plays selected WAD lumps through the controlled SB16 harness.
 

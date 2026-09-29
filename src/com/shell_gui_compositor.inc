@@ -19,9 +19,14 @@ ui_comp_begin:
     ja .done
     mov [ui_comp_stride],ax
     mov bx,3840
+    ; Under Jemm (I=) the band lives in an XMS upper memory block, leaving
+    ; conventional memory to the programs a DOS window runs.
+    call ui_umb_alloc
+    jnc .allocated
     mov ah,0x48
     int 0x21
     jc .done
+.allocated:
     mov [ui_comp_seg],ax
     mov bx,[ui_comp_stride]
     mov ax,61440
@@ -38,15 +43,52 @@ ui_comp_begin:
     popad
     ret
 
+; BX paragraphs -> AX segment of an XMS upper memory block; CF=1 if none.
+ui_umb_alloc:
+    push bx
+    push dx
+    push es
+    mov dx,bx
+    mov ax,0x4300
+    int 0x2F
+    cmp al,0x80
+    jne .none
+    mov ax,0x4310
+    int 0x2F
+    mov [ui_xms],bx
+    mov [ui_xms+2],es
+    mov ah,0x10
+    call far [ui_xms]
+    cmp ax,1
+    jne .none
+    mov ax,bx
+    clc
+    jmp .done
+.none:
+    stc
+.done:
+    pop es
+    pop dx
+    pop bx
+    ret
+
 ui_comp_end:
     pushad
     push es
     mov ax,[ui_comp_seg]
     test ax,ax
     jz .done
+    cmp ax,0xA000
+    jb .dos_free
+    mov dx,ax
+    mov ah,0x11
+    call far [ui_xms]
+    jmp .freed
+.dos_free:
     mov es,ax
     mov ah,0x49
     int 0x21
+.freed:
     mov word [ui_comp_seg],0
 .done:
     mov byte [ui_page_enabled],0
@@ -712,6 +754,7 @@ ui_page_pending db 0
 ui_page_failed db 0
 ui_comp_recover db 0
 ui_front_base dd 0
+ui_xms dd 0
 ui_present_base dd 0
 ui_page_scanline dw 0
 ui_page_previous_left dw 0

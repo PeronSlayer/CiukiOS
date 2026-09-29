@@ -64,7 +64,31 @@ int      CVDEV_CALL cvdev_begin(uint32_t generation, uint32_t caps, uint32_t fla
 int      CVDEV_CALL cvdev_end(void);
 int      CVDEV_CALL cvdev_active(void);
 int      CVDEV_CALL cvdev_focus(uint32_t focused);
+/* Which physical 8042 bytes the model may take (both by default). With
+ * several VMs the mouse stays with the desktop's VM, and the keyboard is
+ * taken only while the session's VM has the focus. */
+void     CVDEV_CALL cvdev_set_pull(uint32_t keyboard, uint32_t mouse);
+/* Ctrl+Esc taken from the guest and reported in cvdev_release_request (set to
+ * 1; the caller clears it and gives the focus back). Off by default. */
+void     CVDEV_CALL cvdev_set_hotkey(uint32_t enabled);
+/* Several VMs can each own a device model: CVSESSION selects the instance
+ * block (cvdev_instance_bytes(), zero-filled before first use) and VM it acts
+ * for; 0 selects none. */
+uint32_t CVDEV_CALL cvdev_instance_bytes(void);
+void     CVDEV_CALL cvdev_select(void *instance, uint32_t vm);
+void    *CVDEV_CALL cvdev_selected(void);
+/* The one AC'97 stream: serviced from any VM (the owner session's devices
+ * advance with it), played from the owner (0: silence), stopped by
+ * CVSESSION when no session wants it. */
+void     CVDEV_CALL cvdev_audio_poll(void);
+uint32_t CVDEV_CALL cvdev_audio_running(void);
+void     CVDEV_CALL cvdev_audio_owner(void *instance);
+void     CVDEV_CALL cvdev_audio_stop(void);
+uint32_t CVDEV_CALL cvdev_wants_audio(void);
+extern uint32_t cvdev_release_request;
 int      CVDEV_CALL cvdev_key(uint32_t scan, uint32_t flags);
+/* Relative PS/2 movement (signed 16-bit) and buttons from the host. */
+int      CVDEV_CALL cvdev_mouse(uint32_t dx, uint32_t dy, uint32_t buttons);
 /* Port handlers. Return 1 when the port belongs to this session. */
 int      CVDEV_CALL cvdev_port_claimed(uint32_t port);
 uint32_t CVDEV_CALL cvdev_port_read(uint32_t port, uint32_t width);

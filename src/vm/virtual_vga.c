@@ -62,8 +62,20 @@ static const cvga_mode_params modes[] = {
       0x41,0x00,0x0f,0x00},
      {0x00,0x00,0x00,0x00,0x00,0x40,0x05,0x0f,0xff}},
 };
-static const uint8_t seq_mask[5] = {3,0x3d,15,0x3f,14};
-static const uint8_t gc_mask[9] = {15,15,15,31,3,0x7b,15,15,255};
+/* Writable bits of SR0-SR4 and GR0-GR8, as immediates rather than tables:
+ * this model is also linked into HDPMI, whose ring-0 C calls run with a flat
+ * DS while the image's own data offsets are relative to its code selector. */
+static uint8_t seq_mask(unsigned index)
+{
+    return index < 4 ? (uint8_t)(0x3f0f3d03UL >> (index * 8)) : 0x0e;
+}
+
+static uint8_t gc_mask(unsigned index)
+{
+    if (index < 4) return (uint8_t)(0x1f0f0f0fUL >> (index * 8));
+    if (index < 8) return (uint8_t)(0x0f0f7b03UL >> ((index - 4) * 8));
+    return 0xff;
+}
 
 static void zero_bytes(uint8_t *p, uint32_t count)
 {
@@ -234,7 +246,7 @@ void cvga_write_port(cvga_state *v, uint16_t port, uint8_t value)
     case 0x3c5:
         if (v->seq_index < 5) {
             index = v->seq_index;
-            if (set_reg(&v->seq[index], value & seq_mask[index]) &&
+            if (set_reg(&v->seq[index], value & seq_mask(index)) &&
                 (index == 0 || index == 1 || index == 3)) display = 1;
         }
         break;
@@ -256,7 +268,7 @@ void cvga_write_port(cvga_state *v, uint16_t port, uint8_t value)
             uint8_t old;
             index = v->gc_index;
             old = v->gc[index];
-            if (set_reg(&v->gc[index], value & gc_mask[index]) &&
+            if (set_reg(&v->gc[index], value & gc_mask(index)) &&
                 ((index == 5 && ((old ^ v->gc[5]) & 0x60)) ||
                  (index == 6 && ((old ^ v->gc[6]) & 0x01))))
                 display = 1;

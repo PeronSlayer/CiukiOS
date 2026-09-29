@@ -53,7 +53,7 @@ class Graphics(Session):
         self.until(lambda:self.b('ui_run_len')==len(command) and
                    self.ram[self.offset('ui_run_text'):self.offset('ui_run_text')+len(command)]==command.encode('ascii'),
                    'Run did not accept the complete command',10)
-        offset=self.vm.offset();self.click(58,1)
+        offset=self.vm.offset();self.click(40,1)
         self.until(lambda:self.w('dw_segment')!=0,'runtime allocation missing')
         self.segment=self.w('dw_segment')
         return offset

@@ -111,6 +111,7 @@ typedef struct cvgp_sb_state {
     uint8_t response[64], response_read, response_write, response_count;
     uint8_t test_register, sample_bits, sample_signed, stereo;
     uint8_t auto_init, exit_auto, active, silent;
+    uint8_t irq_status;             /* mixer 82h: bit0 8-bit, bit1 16-bit DMA IRQ */
     uint32_t sample_rate, block_units, units_left;
     uint32_t resample_phase;
     int16_t held_left, held_right;

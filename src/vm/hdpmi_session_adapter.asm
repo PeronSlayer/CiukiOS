@@ -22,6 +22,11 @@ if ?32BIT
 
 CV_FIRST_PORT equ 03B0h
 CV_PORT_COUNT equ 30h
+CV_LAST_VIDEO_PORT equ 03DFh
+CV_DEV_RANGES equ 5
+CV_OP_DEV_IO  equ 34h            ; VM_OP_DEV_IO (session_devices_abi.inc)
+CV_OP_DEV_PM_IRQ equ 36h         ; VM_OP_DEV_PM_IRQ
+CV_SHARED_DEVICE_IRQS equ 320    ; cvvid_shared.device_irqs (session_video.h)
 CV_FIRST_PTE  equ 0A0h
 CV_VIDEO_PAGES equ 67
 CV_VIDEO_BYTES equ CV_VIDEO_PAGES*4096
@@ -51,12 +56,16 @@ _DATA16 segment
 public cvdpmi_shared_linear,cvdpmi_client_active
 public cvdpmi_entry_pending
 public cvdpmi_rm_int10_pending,cvdpmi_jlm_entry,cvdpmi_int10_result
+public cvdpmi_irq_proc
 cvdpmi_shared_linear dd 0
 cvdpmi_client_active dd 0
 cvdpmi_entry_pending dd 0
 cvdpmi_rm_int10_pending db 0
 	align 4
 cvdpmi_jlm_entry dd 0
+; R3PROC of a device IRQ to enter once the current I/O instruction is done
+; (HDPMI's I/O emulation reads and clears it, see cvdpmi_note_io).
+cvdpmi_irq_proc dd 0
 cvdpmi_int10_result dw 0
 	align 4
 cvdpmi_video_linear dd 0
@@ -71,6 +80,16 @@ cv_client_start label byte
 cv_descriptor          dd 0
 cv_generation          dd 0
 cv_handle              dd 0
+cv_dev_handles         dd CV_DEV_RANGES dup (0)
+cv_jlm_entry           dd 0
+; Protected-mode device bridge ranges (start, count): PIC 20h/21h with ISA
+; DMA 00h-0Fh, DMA pages, slave PIC with 16-bit DMA, Sound Blaster, OPL.
+cv_dev_ranges          dw 00h,22h, 80h,10h, 0A0h,40h, 220h,10h, 388h,4
+; Device IRQ lines CVSESSION holds for this client (last DEV_IO / DEV_PM_IRQ)
+; and how many were delivered.
+cv_pm_magic            db 'CVPMIRQ!'
+cv_pm_irqs             dd 0
+cv_pm_delivered        dd 0
 cv_faulted             dd 0
 cv_saved_cr4           dd 0
 cvdpmi_cli_stepping    dd 0
@@ -143,6 +162,18 @@ CV_ADAPTER_BYTES equ cv_client_end-cv_client_start
 ; descriptor itself must already be bound and armed by CVSESSION BEGIN.
 _TEXT16 segment
 	assume ds:GROUP16
+
+; Real-mode leg of the protected-mode device bridge (callrmprocintern):
+; EAX/EBX/ECX/EDX in, EBX/EDX/ESI out.  No V86 interrupt is delivered inside
+; it: the caller enters with IF clear and it stays clear to the end, so Jemm
+; cannot inject a pending IRQ onto this internal real-mode stack, nested
+; inside the client's I/O instruction (and inside whatever DOS/4GW handler
+; that instruction belongs to).
+cvdpmi_devio_rm proc near
+	cli
+	call dword ptr cs:[cvdpmi_jlm_entry]
+	ret
+cvdpmi_devio_rm endp
 
 cv_hex4 proc
 	push bp
@@ -575,6 +606,7 @@ cv_register_callback proc
 	or dword ptr es:[edi+CVSCHED_STATE],CVSCHED_STATE_CALLBACK
 	inc dword ptr es:[edi+CVSCHED_INSTALLS]
 	mov dword ptr es:[edi+CVSCHED_CALLBACK_BYTES],CV_CALLBACK_BYTES
+	call cv_register_devices
 register_ready:
 	clc
 	ret
@@ -582,6 +614,65 @@ register_bad:
 	stc
 	ret
 cv_register_callback endp
+
+; Device bridge ranges.  A range another owner already traps stays theirs
+; (physical for this client); none is required for the video path.
+cv_register_devices proc
+	pushad
+	mov eax,ss:cvdpmi_jlm_entry
+	mov fs:cv_jlm_entry,eax
+	push ds
+	push byte ptr _DSR3SEL_
+	pop ds
+	xor ebx,ebx
+register_device_next:
+	cmp dword ptr fs:[cv_dev_handles+ebx*4],0
+	jne register_device_skip
+	mov esi,offset cv_trap_procs
+	mov dx,word ptr fs:[cv_dev_ranges+ebx*4]
+	mov cx,word ptr fs:[cv_dev_ranges+ebx*4+2]
+	test cx,cx
+	jz register_device_skip
+	push ebx
+	call is0006
+	pop ebx
+	jc register_device_skip
+	mov fs:[cv_dev_handles+ebx*4],eax
+register_device_skip:
+	inc ebx
+	cmp ebx,CV_DEV_RANGES
+	jb register_device_next
+	pop ds
+	popad
+	ret
+cv_register_devices endp
+
+; Remove every device range this client registered.  CF=1 if one refused.
+cv_remove_devices proc
+	pushad
+	xor ebx,ebx
+	clc
+	pushfd
+remove_device_next:
+	mov edx,fs:[cv_dev_handles+ebx*4]
+	test edx,edx
+	jz remove_device_skip
+	push ebx
+	call is0007
+	pop ebx
+	jc remove_device_failed
+	mov dword ptr fs:[cv_dev_handles+ebx*4],0
+	jmp remove_device_skip
+remove_device_failed:
+	or dword ptr [esp],1
+remove_device_skip:
+	inc ebx
+	cmp ebx,CV_DEV_RANGES
+	jb remove_device_next
+	popfd
+	popad
+	ret
+cv_remove_devices endp
 
 ; The host redirects the first ring-3 entry through its existing INT3/RETF
 ; trampoline.  This handler runs after the client is live but before its first
@@ -1044,7 +1135,7 @@ if_prepare_not_movseg:
  cmp al,0Fh
  jne if_prepare_other
  cmp byte ptr es:[esi],0B2h
- je cv_if_abort                    ; LSS suppresses debug delivery
+ je if_prepare_lss                 ; LSS suppresses debug delivery
 if_prepare_other:
  cmp al,0F1h
  je cv_if_abort
@@ -1092,6 +1183,10 @@ if_prepare_int31:
  ja cv_if_abort
  cmp byte ptr es:[esi],21h
  je if_prepare_int21
+ ; HDPMI's own ring-3 stubs (default vectors, IRQ return) enter the host
+ ; through INT 30h; INT clears TF and the host's IRET restores it.
+ cmp word ptr ss:[ebp+4],_INTSEL_
+ je if_prepare_other
  cmp byte ptr es:[esi],31h
  jne cv_if_abort
  inc esi
@@ -1158,30 +1253,43 @@ if_prepare_mov_ss:
  call cv_if_effective_address
  jc if_movss_selector_ready
 if_movss_address:
- mov ecx,fs:cv_if_segment
- verr cx
- jnz cv_if_abort
- lsl edx,ecx
- mov eax,edi
- inc eax
- jz cv_if_abort
- cmp eax,edx
- ja cv_if_abort
- mov ds,cx
- movzx eax,cx
- push eax
- call _cvdpmi_selector_base
- add esp,4
- add eax,edi
- jc cv_if_abort
  mov ecx,2
- mov bl,5
- call cv_if_memory
- jc cv_if_abort
+ call cv_if_far_read
  movzx eax,word ptr ds:[edi]
 if_movss_selector_ready:
  call cv_if_validate_ss
  mov word ptr ss:[ebp+16],ax
+ mov ss:[ebp],esi
+ jmp if_prepare_again
+if_prepare_lss:
+ ; LSS (E)SP,m16:16/32 (a DOS extender's stack switch back): emulated like
+ ; MOV SS, since the CPU would hold the trap past the next instruction.
+ ; Other destination registers are not needed by the known clients.
+ inc esi
+ mov al,es:[esi]
+ cmp al,0C0h
+ jae cv_if_abort
+ and al,38h
+ cmp al,20h
+ jne cv_if_abort
+ call cv_if_effective_address
+ jc cv_if_abort
+ mov ecx,fs:cv_if_operand
+ add ecx,2
+ call cv_if_far_read
+ mov ecx,fs:cv_if_operand
+ movzx eax,word ptr ds:[edi+ecx]
+ call cv_if_validate_ss
+ mov word ptr ss:[ebp+16],ax
+ cmp dword ptr fs:cv_if_operand,2
+ jne if_lss_offset32
+ mov ax,ds:[edi]
+ mov word ptr ss:[ebp+12],ax
+ jmp if_lss_done
+if_lss_offset32:
+ mov eax,ds:[edi]
+ mov ss:[ebp+12],eax
+if_lss_done:
  mov ss:[ebp],esi
  jmp if_prepare_again
 if_prepare_pop_ss:
@@ -1567,6 +1675,35 @@ if_ea_ss_done:
  ret
 cv_if_ea_ss endp
 
+; cv_if_segment:EDI, ECX bytes -> DS:EDI, validated readable guest memory
+; (selector limit, present user pages); anything else aborts the client.
+cv_if_far_read proc
+ mov edx,fs:cv_if_segment
+ verr dx
+ jnz cv_if_abort
+ lsl eax,edx
+ lea ecx,[ecx+edi-1]               ; last byte
+ cmp ecx,edi
+ jb cv_if_abort
+ cmp ecx,eax
+ ja cv_if_abort
+ sub ecx,edi
+ inc ecx
+ mov ds,dx
+ movzx eax,dx
+ push ecx
+ push eax
+ call _cvdpmi_selector_base
+ add esp,4
+ pop ecx
+ add eax,edi
+ jc cv_if_abort
+ mov bl,5
+ call cv_if_memory
+ jc cv_if_abort
+ ret
+cv_if_far_read endp
+
 cv_if_validate_ss proc
  mov ecx,eax
  and ecx,3
@@ -1688,15 +1825,19 @@ _cvdpmi_selector_dbit endp
 ; on the host stack.  The push order is the contract in
 ; hdpmi_video_adapter.h.  CF clear means the faulting instruction was executed.
 cvdpmi_video_fault proc near public
+	; The client's EAX is still live here: the frame below is its register
+	; image, and a chained fault must reach HDPMI unchanged.
+	push eax
 	.586p
 	mov eax,cr2
 	.386p
 	cmp eax,0A0000h
-	jb video_fault_chain
+	jb video_fault_not_aperture
 	cmp eax,0C0000h
-	jae video_fault_chain
+	jae video_fault_not_aperture
 	cmp dword ptr ss:cvdpmi_client_active,0
-	je video_fault_chain
+	je video_fault_not_aperture
+	pop eax
 	pushad
 	push ds
 	push es
@@ -1780,6 +1921,10 @@ video_fault_pop_chain:
 video_fault_chain:
 	stc
 	ret
+video_fault_not_aperture:
+	pop eax
+	stc
+	ret
 cvdpmi_video_fault endp
 
 cvdpmi_attach proc near public
@@ -1835,6 +1980,8 @@ cvdpmi_attach proc near public
 	mov dword ptr fs:cv_if_shadow,0
 	mov dword ptr fs:cv_if_pending,0
 	mov dword ptr fs:cv_if_resume,0
+	mov dword ptr fs:cv_pm_irqs,0
+	mov dword ptr ss:cvdpmi_irq_proc,0
 	in al,21h
 	mov fs:cv_host_pic_master,al
 	and al,0FEh
@@ -1911,6 +2058,8 @@ cvdpmi_detach proc near public
 	mov es:[edi+CVSCHED_LAST_FLAGS],eax
 	mov eax,fs:cv_last_port
 	mov es:[edi+CVSCHED_LAST_PORT],eax
+	call cv_remove_devices
+	jc detach_remove_failed
 	mov edx,fs:cv_handle
 	call is0007
 	jc detach_remove_failed
@@ -1999,9 +2148,10 @@ marked:
 	ret
 cvdpmi_mark_fault endp
 
-; Execute one scalar byte port cycle while HDPMI is still in ring 0.  ECX is
-; the official EMUINSFR supplied by the shipped 3.24 path, EDX is the decoded
-; port, and AL bit 1 selects OUT.  The ring-3 callback only consumes the saved
+; Execute one scalar 8/16/32-bit port access (as byte cycles) while HDPMI is
+; still in ring 0.  CF=1 on return: executed here (the host then skips the
+; instruction without the ring-3 callback); CF=0: not handled.  ECX is the official EMUINSFR supplied by the shipped 3.24
+; path, EDX is the decoded port, and AL bit 1 selects OUT.  The ring-3 callback only consumes the saved
 ; input byte and advances that same official frame.
 cvdpmi_note_io proc near public
 	pushfd
@@ -2016,6 +2166,10 @@ cvdpmi_note_io proc near public
 	pop fs
 	cmp dword ptr ss:cvdpmi_client_active,0
 	je note_io_done
+	cmp edi,CV_FIRST_PORT
+	jb note_io_device
+	cmp edi,CV_LAST_VIDEO_PORT
+	ja note_io_device
 	mov fs:cv_last_port,edi
 	mov eax,ss:[ebp+20]	;EMUINSFR + R3FAULT32.rIP
 	mov fs:cv_last_eip,eax
@@ -2092,19 +2246,43 @@ note_io_status_ready:
 	pushfd
 	pop eax
 	mov fs:cv_saved_host_flags,eax
+	; Access width from HDPMI's decoded flags in EMUINSFR.rErr: SI_WORD
+	; (10h) alone is 16-bit, with SI_DWORD (20h) 32-bit. Wider cycles are
+	; consecutive byte ports, as on the ISA bus (OUT DX,AX to 3C4h/3D4h).
+	mov bh,1
+	test byte ptr ss:[ebp+16],10h
+	jz note_io_width
+	mov bh,2
+	test byte ptr ss:[ebp+16],20h
+	jz note_io_width
+	mov bh,4
+note_io_width:
 	cli
 	lss esp,fword ptr fs:cv_stack_pointer
 	test bl,2
 	jnz note_io_write
+	xor esi,esi
+note_io_read_next:
+	dec bh
+	push byte ptr _CSALIAS_
+	pop fs
 	movzx eax,byte ptr fs:cv_status1
 	push eax
-	push edi
+	movzx eax,bh
+	add eax,edi
+	push eax
 	push fs:cv_video_shared
 	call _cvdpmi_video_port_read
 	add esp,12
-	movzx esi,al
+	shl esi,8
+	movzx eax,al
+	or esi,eax
+	test bh,bh
+	jnz note_io_read_next
 	jmp note_io_called
 note_io_write:
+	push byte ptr _CSALIAS_
+	pop fs
 	mov eax,esi
 	and eax,0FFh
 	push eax
@@ -2112,6 +2290,10 @@ note_io_write:
 	push fs:cv_video_shared
 	call _cvdpmi_video_port_write
 	add esp,12
+	shr esi,8
+	inc edi
+	dec bh
+	jnz note_io_write
 note_io_called:
 	lss esp,fword ptr fs:cv_saved_stack
 	push byte ptr _CSALIAS_
@@ -2120,16 +2302,81 @@ note_io_called:
 	push dword ptr fs:cv_saved_host_flags
 	popfd
 	test bl,2
-	jnz note_io_done
-	; Supply AL in HDPMI's exact saved EMUINSFR.  The official ring-3
+	jnz note_io_handled
+	; Supply AL/AX/EAX in HDPMI's exact saved EMUINSFR.  The official ring-3
 	; callback remains installed and advances the official exception frame;
 	; it does not need a private data selector or a non-upstream ABI.
+	mov ecx,0FFh
+	test byte ptr ss:[ebp+16],10h
+	jz note_io_mask
+	mov ecx,0FFFFh
+	test byte ptr ss:[ebp+16],20h
+	jz note_io_mask
+	or ecx,-1
+note_io_mask:
+	and esi,ecx
+	not ecx
 	mov eax,ss:[ebp]
-	and eax,0FFFFFF00h
-	and esi,0FFh
+	and eax,ecx
 	or eax,esi
 	mov ss:[ebp],eax
+	jmp note_io_handled
+
+; Device and PIC ports: CVSESSION DEV_IO through HDPMI's internal real-mode
+; call (IF clear there, so no V86 interrupt is delivered inside the I/O).
+note_io_device:
+	cmp dword ptr ss:cvdpmi_jlm_entry,0
+	je note_io_done
+	test byte ptr ss:[ebp+16],8	; INS/OUTS are not bridged
+	jnz note_io_done
+	mov ecx,1
+	test byte ptr ss:[ebp+16],10h
+	jz note_io_device_width
+	mov cl,2
+	test byte ptr ss:[ebp+16],20h
+	jz note_io_device_width
+	mov cl,4
+note_io_device_width:
+	test bl,2			; AL bit 1 of the entry: OUT
+	jz note_io_device_call
+	or ch,1
+note_io_device_call:
+	push edi
+	push ecx
+	mov edx,ss:[ebp]
+	mov ebx,edi
+	mov eax,CV_OP_DEV_IO
+	call cv_bridge_call
+	mov fs:cv_pm_irqs,esi
+	pop ecx
+	pop edi
+	test ch,1
+	jnz note_io_handled
+	; IN: merge the returned value into the client's saved EAX.
+	mov eax,0FFh
+	cmp cl,1
+	je note_io_device_mask
+	mov eax,0FFFFh
+	cmp cl,2
+	je note_io_device_mask
+	or eax,-1
+note_io_device_mask:
+	and edx,eax
+	not eax
+	and ss:[ebp],eax
+	or ss:[ebp],edx
+note_io_handled:
+	push ebp
+	add ebp,20			; EMUINSFR.rIP: the client's IRET32
+	call cv_pm_irq_check
+	pop ebp
+	; CF=1: the cycle was executed here; HDPMI advances the client past the
+	; instruction itself and does not enter the ring-3 TRAPPROCS callback.
+	or byte ptr [esp+4*3+4*8],1	; saved EFLAGS (below FS/ES/DS, PUSHAD)
+	jmp note_io_exit
 note_io_done:
+	and byte ptr [esp+4*3+4*8],not 1
+note_io_exit:
 	pop fs
 	pop es
 	pop ds
@@ -2137,6 +2384,185 @@ note_io_done:
 	popfd
 	ret
 cvdpmi_note_io endp
+
+; One CVSESSION operation through HDPMI's internal real-mode call: EAX op,
+; EBX/ECX/EDX in; EBX/EDX/ESI out.  An I/O can arrive while HDPMI is inside
+; a real-mode to protected-mode dispatch (a client IRQ handler, a real-mode
+; callback): that interrupted real-mode context and the client's PM segment
+; state are kept exactly as the official 0300h path does around its own
+; real-mode call.  IF is clear throughout (see cvdpmi_devio_rm).
+cv_bridge_call proc
+	push ebp
+	push edi
+	pushfd
+	cli
+	; v86iret ESP, SS, ES, DS, FS, GS and the whole PMSTATE.
+	.errnz V86IRET.rGSd - V86IRET.rESP - 20
+	.errnz sizeof PMSTATE - 16
+	mov ebp,6
+bridge_save_v86:
+	push dword ptr ss:v86iret.rESP[ebp*4-4]
+	dec ebp
+	jnz bridge_save_v86
+	mov ebp,4
+bridge_save_pm:
+	push dword ptr ss:pmstate[ebp*4-4]
+	dec ebp
+	jnz bridge_save_pm
+	pushd offset cvdpmi_devio_rm
+	call callrmprocintern
+	xor ebp,ebp
+bridge_restore_pm:
+	pop dword ptr ss:pmstate[ebp*4]
+	inc ebp
+	cmp ebp,4
+	jb bridge_restore_pm
+	xor ebp,ebp
+bridge_restore_v86:
+	pop dword ptr ss:v86iret.rESP[ebp*4]
+	inc ebp
+	cmp ebp,6
+	jb bridge_restore_v86
+	popfd
+	pop edi
+	pop ebp
+	ret
+cv_bridge_call endp
+
+; Device IRQs for the protected-mode client (CVSESSION holds them instead of
+; injecting them into V86, where they would nest inside a DOS/4GW handler).
+; Clobbers EAX.
+; At the end of an emulated I/O instruction the client is at an instruction
+; boundary; if it accepts interrupts there (IF set in its frame, no virtual
+; CLI or STI shadow of the IF profile), CVSESSION arbitrates the highest held
+; line through Jemm's virtual PIC and HDPMI enters the client's handler for
+; it through its ordinary locked-stack IRQ path, exactly as a physical IRQ
+; arriving right after the instruction.  EBP = the client's IRET32 frame (SS
+; relative), FS = client data.
+cv_pm_irq_check proc
+	; CVSESSION publishes the held lines in the shared video header.
+	mov eax,fs:cv_video_shared
+	test eax,eax
+	jz pm_irq_done
+	push es
+	push byte ptr _FLATSEL_
+	pop es
+	mov eax,es:[eax+CV_SHARED_DEVICE_IRQS]
+	pop es
+	mov fs:cv_pm_irqs,eax
+	test eax,eax
+	jz pm_irq_done
+	cmp dword ptr ss:cvdpmi_jlm_entry,0
+	je pm_irq_done
+	cmp dword ptr ss:cvdpmi_irq_proc,0
+	jne pm_irq_done
+	call cv_client_interruptible
+	jc pm_irq_done
+	pushad
+	mov eax,CV_OP_DEV_PM_IRQ
+	mov ecx,2
+	call cv_bridge_call
+	mov fs:cv_pm_irqs,esi
+	cmp ebx,16
+	jae pm_irq_refused
+	; HDPMI's client vectors: IRQ 0-7 at INT 08h-0Fh, IRQ 8-15 at 70h-77h.
+	.errnz sizeof R3PROC - 8
+	lea eax,[ebx*8 + offset r3vect08]
+	cmp ebx,8
+	jb pm_irq_vector
+	lea eax,[ebx*8 + offset r3vect70 - 8*8]
+pm_irq_vector:
+	mov ss:cvdpmi_irq_proc,eax
+	inc fs:cv_pm_delivered
+	popad
+	ret
+pm_irq_refused:
+	popad
+pm_irq_done:
+	ret
+cv_pm_irq_check endp
+
+; CF=0 when the client frame at SS:EBP (IRET32) is ring-3 code that accepts
+; an interrupt now: IF set, no virtual CLI or STI shadow of the IF profile.
+cv_client_interruptible proc
+	test byte ptr ss:[ebp+4],3
+	jz not_interruptible
+	test byte ptr ss:[ebp+9],2
+	jz not_interruptible
+	cmp dword ptr fs:cv_if_enabled,0
+	je not_interruptible
+	cmp dword ptr fs:cv_if_shadow,0
+	jne not_interruptible
+	cmp dword ptr fs:cvdpmi_cli_stepping,0
+	jne not_interruptible
+	clc
+	ret
+not_interruptible:
+	stc
+	ret
+cv_client_interruptible endp
+
+; Tail of HDPMI's returns to the client from a client IRQ handler (rpmstacki)
+; and from an emulated VGA memory access (#PF), IRET32 at SS:ESP.  A program
+; waiting for a device IRQ may run without any trapped port I/O (Apogee's
+; MV_TestPlayback spins on a variable), and while a frame is drawn nearly all
+; of the time is spent in the VGA emulation, where the timer lands in ring 0;
+; both boundaries deliver held device IRQs (and a tick deferred for one).
+cvdpmi_irq_return proc near public
+	pushad
+	push fs
+	push byte ptr _CSALIAS_
+	pop fs
+	cmp dword ptr ss:cvdpmi_client_active,0
+	je irq_return_plain
+	lea ebp,[esp+4+32]
+	; A timer tick deferred for a device IRQ (cvdpmi_irq_tick) comes first.
+	cmp dword ptr fs:cv_if_pending,0
+	je irq_return_device
+	call cv_client_interruptible
+	jc irq_return_plain
+	mov dword ptr fs:cv_if_pending,0
+	mov dword ptr ss:cvdpmi_irq_proc,offset r3vect08
+	jmp irq_return_plain
+irq_return_device:
+	call cv_pm_irq_check
+irq_return_plain:
+	pop fs
+	popad
+	cmp dword ptr ss:cvdpmi_irq_proc,0
+	jne irq_return_deliver
+	iretd
+irq_return_deliver:
+	push dword ptr ss:cvdpmi_irq_proc
+	mov dword ptr ss:cvdpmi_irq_proc,0
+	jmp lpms_call_int
+cvdpmi_irq_return endp
+
+; Physical IRQ0 with the client in interruptible ring-3 code and a device IRQ
+; held: that device IRQ is entered now, and this tick is acknowledged and
+; deferred exactly like a virtual-CLI tick, to be entered when the device
+; handler returns (cvdpmi_irq_return).  The handler-return boundary alone is
+; too rare: the client does most of its I/O inside IF=0 handlers.  IRET32 at
+; [ESP+4].  CF=0: cvdpmi_irq_proc holds the device IRQ to enter.
+cvdpmi_irq_tick proc near public
+	pushad
+	push fs
+	push byte ptr _CSALIAS_
+	pop fs
+	lea ebp,[esp+4+32+4]
+	call cv_pm_irq_check
+	cmp dword ptr ss:cvdpmi_irq_proc,0
+	stc
+	je irq_tick_done
+	mov dword ptr fs:cv_if_pending,1
+	mov al,20h
+	out 20h,al
+	clc
+irq_tick_done:
+	pop fs
+	popad
+	ret
+cvdpmi_irq_tick endp
 
 ; Called from physical IRQ0 and the first-entry fallback.  It never invokes
 ; DOS, BIOS, or a source-port callback.

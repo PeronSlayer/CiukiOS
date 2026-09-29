@@ -35,6 +35,46 @@ VM_OP_DPMI_RELEASE     equ 9
 ; Returns AX=0, EBX=Jemm flags (bit0 available, bit1 requested, bit2 active,
 ; bit3 guest IF, bit4 IRQ filter; high word 0100h), CX=1 when allowed.
 VM_OP_IF_PROFILE       equ 0Ah
+; SCHED_INFO: BX:DX = bound scheduler descriptor (segment:offset, for a
+; protected host's -cSSSS:OOOO option), ECX = its CVSCHED_STATE.
+VM_OP_SCHED_INFO       equ 0Bh
+; VM manager (several DOS VMs, session_vmm.inc):
+; VMM_INIT   EBX = CiukiDOS kernel segment and ECX = its InDOS offset (INT 2Fh
+;            1607h/BX=15h DOSMGR table), EDX = first arena MCB segment (INT
+;            21h/52h). Must match the build's kernel layout.
+; VMM_CREATE Fork (from \VM\VMFORK.COM): a new VM is a copy of the calling
+;            system VM's first megabyte at this call. The caller gets CX = 0
+;            (parent) and BX = the new VM; the new VM continues after the
+;            same call with CX = 1 (child) and BX = its own number.
+; VMM_EXIT   From a VM (not the system VM): BX = exit code; the VM ends.
+; VMM_STATE  BX = VMs, CX = current, ECX high word = the VM with the keyboard,
+;            EDX = switches, ESI = gated ticks,
+;            EDI = last exit code (FFFFh until one ends).
+; VMM_FOCUS  BX = the VM that receives the keyboard (the mouse stays with the
+;            system VM). When it is the VM that owns the DOS window session,
+;            the device model takes the physical keys for it; Ctrl+Esc there
+;            gives the keyboard back to the system VM (not seen by the VM).
+; VMM_KILL   BX = another VM (not the system VM): ends it at once, with its
+;            DOS window session; VMM_STATE then reports exit code FFFEh.
+; VMM_IVT    ES:DI <- 1024 bytes: the interrupt vectors as they were when the
+;            module loaded. VMFORK restores from them, in the new VM, every
+;            vector that points into the blocks it frees there.
+; VMM_TARGET BX = the VM whose DOS window session this VM's QUERY, READBACK,
+;            VIDEO_STATE/READ/RENDER/PRESENT/BAND/DAMAGE, DEV_STATE,
+;            DEV_KEY and DEV_MOUSE address (itself: its own). A VM that
+;            ended falls back to the caller's own session.
+; Each VM can own one DOS window session (BEGIN), with its own VGA and
+; device model; its traps and hooks act for it while it runs.
+; A VM that began the DOS window session (BEGIN) owns it: its traps and hooks
+; act for that VM only. VMM_EXIT or VMM_KILL of that VM ends the session.
+VM_OP_VMM_INIT         equ 40h
+VM_OP_VMM_CREATE       equ 41h
+VM_OP_VMM_EXIT         equ 42h
+VM_OP_VMM_STATE        equ 43h
+VM_OP_VMM_FOCUS        equ 44h
+VM_OP_VMM_KILL         equ 45h
+VM_OP_VMM_IVT          equ 46h
+VM_OP_VMM_TARGET       equ 47h
 VM_IF_AVAILABLE        equ 1
 VM_IF_REQUESTED        equ 2
 VM_IF_ACTIVE           equ 4
@@ -97,3 +137,7 @@ VM_ERROR_FB_UNBOUND    equ 11
 VM_ERROR_SCHED_BOUND   equ 12
 VM_ERROR_SCHED_UNBOUND equ 13
 VM_ERROR_DPMI_OWNED    equ 14
+VM_ERROR_VMM_LAYOUT    equ 40h        ; kernel layout differs from the build's
+VM_ERROR_VMM_FULL      equ 41h        ; no free VM slot or memory
+VM_ERROR_VMM_BUSY      equ 42h        ; IRQ0 host scheduler owned elsewhere
+VM_ERROR_VMM_INIT      equ 43h        ; VMM_INIT not done

@@ -12,6 +12,7 @@
 #ifndef CIUKIOS_SESSION_VIDEO_H
 #define CIUKIOS_SESSION_VIDEO_H
 
+#include <stddef.h>
 #include "virtual_vga_bios.h"
 #include "vga_presenter.h"
 
@@ -35,7 +36,12 @@ typedef struct cvvid_shared {
     uint32_t pm_port_reads, pm_port_writes, pm_attached, reserved;
     /* VIDEO_STATE layout, refreshed on every timer tick for observers. */
     uint32_t live[64];
+    /* Device IRQ lines CVSESSION holds for the protected-mode client; the
+     * HDPMI adapter reads them on every trapped I/O (DEV_PM_IRQ). */
+    uint32_t device_irqs;
 } cvvid_shared;
+#define CVVID_DEVICE_IRQS_OFFSET 320
+typedef char cvvid_device_irqs_offset[offsetof(cvvid_shared, device_irqs) == CVVID_DEVICE_IRQS_OFFSET ? 1 : -1];
 
 typedef struct cvvid_config {
     uint32_t magic;
@@ -81,9 +87,17 @@ typedef struct cvvid_fb {
     uint32_t bytes;
 } cvvid_fb;
 
+/* Several VMs can each own a session: CVSESSION selects the instance block
+ * (cvvid_instance_bytes() bytes, zero-filled before first use) of the VM it
+ * acts for; 0 selects none. */
+uint32_t CVGA_CALL cvvid_instance_bytes(void);
+void CVGA_CALL cvvid_select(void *instance);
 int CVGA_CALL cvvid_attach(cvvid_shared *block, uint32_t generation);
 /* Restores BDA/IVT video state; the caller restores PTEs and frees memory. */
 void CVGA_CALL cvvid_detach(void);
+void CVGA_CALL cvvid_note_device_irqs(uint32_t lines);
+uint32_t CVGA_CALL cvvid_host_offset(void);
+uint32_t CVGA_CALL cvvid_pm_attached(void);
 int CVGA_CALL cvvid_attached(void);
 int CVGA_CALL cvvid_share_count(void);
 /* 0: handled, RET to Jemm. 1: not ours or unsupported, chain. */

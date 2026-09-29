@@ -42,6 +42,7 @@ start:
     call startup_select_session
     test al,al
     jnz main_loop
+    call startup_vm_manager
 %endif
 
 %ifndef COMMAND_COMPAT
@@ -2779,45 +2780,14 @@ startup_display_services:
     int 0x21
 
 .probe:
-.sound_done:
-    call shell_apply_text_profile
-    ; ui_video_begin selects graphics once; do not set and clear VBE twice.
+    ; The boot splash stays until the desktop's own mode set: nothing here
+    ; selects text mode (the DOS console path does, through vc_end).
 .done:
     pop es
     pop ds
     pop dx
     pop bx
     pop ax
-    ret
-
-startup_play_sound:
-%ifndef COMMAND_COMPAT
-    cmp byte [driver_startup_audio],0
-    je .skip
-%endif
-    pushad
-    push ds
-    push es
-    push cs
-    pop ds
-    push cs
-    pop es
-    call setup_exec_block
-    mov byte [exec_tail], 3
-    mov word [exec_tail + 1], ' /'
-    mov word [exec_tail + 3], 0x0D51 ; Q, CR
-    mov dx, startup_sound_path
-    mov bx, exec_env_seg
-    mov ax, 0x4B00
-    int 0x21
-    jc .sound_done
-    mov ax, 0x4D00
-    int 0x21
-.sound_done:
-    pop es
-    pop ds
-    popad
-.skip:
     ret
 
 shell_apply_text_profile:
@@ -3188,7 +3158,6 @@ apm_shutdown_system:
     ret
 
 msg_title_bar db 'CiukiOS pre-Alpha v0.7.1', 0x0D, 0x0A, '$'
-startup_sound_path db '\SYSTEM\BOOTSND.COM', 0
 msg_banner_body db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
                 db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
@@ -3320,7 +3289,7 @@ exec_path_net_dhcp db 'C:\NET\DHCP.EXE', 0
 exec_path_net_ping db 'C:\NET\PING.EXE', 0
 exec_path_net_ftp db 'C:\NET\FTP.EXE', 0
 exec_path_net_ftpsrv db 'C:\NET\FTPSRV.EXE', 0
-startup_auxstack_path db '\SYSTEM\VIDEO\AUXSTACK.COM', 0
+startup_auxstack_path db '\SYSTEM\VIDEO\AUXSTART.COM', 0
 shell_text_profile_path db '\SYSTEM\VIDEO\VGASET.CFG', 0
 shell_text_profile dw '25'
 
@@ -3384,8 +3353,10 @@ shell_output_color db 7
 %include "src/com/boot_session.inc"
 %endif
 
+; 1792 bytes: the deepest measured use (desktop, native windows, DOS window
+; and its host callbacks) is 400 bytes.
 align 16
-shell_stack times 2048 db 0
+shell_stack times 1792 db 0
 shell_stack_top:
 shell_image_end:
 

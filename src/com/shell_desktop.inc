@@ -114,7 +114,7 @@ desktop_apps:
     call print_dual_dollar_string
     add bp, 2
     inc bx
-    cmp bx, 9
+    cmp bx, 8
     jb .row
     mov byte [shell_output_color], 7
     mov si, desktop_apps_footer
@@ -132,7 +132,7 @@ desktop_apps:
     je .launch
     cmp al, '1'
     jb .key
-    cmp al, '9'
+    cmp al, '8'
     ja .key
     sub al, '1'
     mov [desktop_selection], al
@@ -140,11 +140,11 @@ desktop_apps:
 .up:
     dec byte [desktop_selection]
     jns .draw
-    mov byte [desktop_selection], 8
+    mov byte [desktop_selection], 7
     jmp .draw
 .down:
     inc byte [desktop_selection]
-    cmp byte [desktop_selection], 9
+    cmp byte [desktop_selection], 8
     jb .draw
     mov byte [desktop_selection], 0
     jmp .draw
@@ -154,15 +154,12 @@ desktop_apps:
     jmp desktop_launch_app
 
 desktop_doom: xor ax, ax
-    inc ax
     jmp desktop_launch_app
-desktop_doomvan: mov ax, 2
+desktop_doomvan: mov ax, 1
     jmp desktop_launch_app
-desktop_wolf: mov ax, 3
+desktop_wolf: mov ax, 2
     jmp desktop_launch_app
-desktop_windows: xor ax, ax
-    jmp desktop_launch_app
-desktop_dosnav: mov ax, 5
+desktop_dosnav: mov ax, 4
     jmp desktop_launch_app
 
 desktop_launch_app:
@@ -172,7 +169,7 @@ desktop_launch_app:
     mov di, src_path
     call copy_z_to_di
     mov si, [echo_ptr]
-    cmp bp, 16
+    cmp bp, 14
     jne .tail_ready
     mov si, desktop_sound_test
     mov word [echo_len], 4
@@ -346,7 +343,7 @@ desktop_commands:
     dw dc_desktop, ui_desktop_command
     dw dc_home, desktop_home, dc_help, desktop_help, dc_apps, desktop_apps
     dw dc_history, desktop_history, dc_info, desktop_info, dc_mem, desktop_memory
-    dw dc_date, desktop_date, dc_time, desktop_time, dc_win, desktop_windows
+    dw dc_date, desktop_date, dc_time, desktop_time
     dw dc_doom, desktop_doom, dc_doomvan, desktop_doomvan, dc_wolf, desktop_wolf
     dw dc_dosnav, desktop_dosnav, 0, 0
 dc_desktop db 'DESKTOP',0
@@ -358,26 +355,23 @@ dc_info db 'SYSINFO', 0
 dc_mem db 'MEM', 0
 dc_date db 'DATE', 0
 dc_time db 'TIME', 0
-dc_win db 'WIN', 0
 dc_doom db 'DOOM', 0
 dc_doomvan db 'DOOMVAN', 0
 dc_wolf db 'WOLF3D', 0
 dc_dosnav db 'DOSNAV', 0
 desktop_sound_test db 'TEST', 0
 desktop_selection db 0
-desktop_app_labels dw da_win, da_doom, da_van, da_wolf, da_costa, da_dn, da_edit, da_video, da_sound
-desktop_app_exes dw de_win, de_doom, de_van, de_wolf, de_costa, de_dn, de_edit, de_video, de_sound
-desktop_app_dirs dw dd_win, dd_doom, dd_van, dd_wolf, dd_costa, dd_dn, dd_apps, dd_drivers, dd_drivers
-da_win db 'Windows 3.1        Windows desktop and applications', 0
+desktop_app_labels dw da_doom, da_van, da_wolf, da_costa, da_dn, da_edit, da_video, da_sound
+desktop_app_exes dw de_doom, de_van, de_wolf, de_costa, de_dn, de_edit, de_video, de_sound
+desktop_app_dirs dw dd_doom, dd_van, dd_wolf, dd_costa, dd_dn, dd_apps, dd_drivers, dd_drivers
 da_doom db 'Doom               Original game', 0
 da_van db 'Doom Vanille       Alternate DOS engine', 0
 da_wolf db 'Wolfenstein 3D     DOS game', 0
 da_costa db 'Costa              DOS desktop', 0
 da_dn db 'DOS Navigator      Two-panel file manager', 0
 da_edit db 'Editor             Text editor', 0
-da_video db 'Display            Shell and Windows resolution', 0
+da_video db 'Display            Desktop resolution', 0
 da_sound db 'Sound              Play the startup sound', 0
-de_win db 'WIN.COM', 0
 de_doom db 'DOOM.EXE', 0
 de_van db 'DOOMVAN.EXE', 0
 de_wolf db 'WOLF3D.COM', 0
@@ -386,7 +380,6 @@ de_dn db 'DN.COM', 0
 de_edit db 'CIUKEDIT.COM', 0
 de_video db 'VGASETUP.COM', 0
 de_sound db 'SOUND.COM', 0
-dd_win db '\WINDOWS', 0
 dd_doom db '\APPS\DOOM', 0
 dd_van db '\APPS\DOOMVAN', 0
 dd_wolf db '\APPS\WOLF3D', 0
@@ -406,7 +399,7 @@ desktop_help_main db 13,10,'  QUICK HELP',13,10
     db '  HISTORY         Recent commands; Up/Down recalls them',13,10
     db '  Tab completes names. F3 recalls the last command. Esc clears.',13,10
     db '  Left/Right, Home/End and Delete edit the command line.',13,10
-    db '  Examples: DIR  |  CD DOOM  |  TYPE README.TXT  |  WIN',13,10,13,10,'$'
+    db '  Examples: DIR  |  CD DOOM  |  TYPE README.TXT',13,10,13,10,'$'
 desktop_help_files db 13,10,'  FILES AND FOLDERS',13,10
     db '  DIR [path]              List files and folders',13,10
     db '  CD path / CD..          Change folder / go up one level',13,10
@@ -426,7 +419,7 @@ desktop_help_network db 13,10,'  NETWORK',13,10
     db '  FTP host / FTPSRV       FTP client / server in C:\SHARE',13,10,13,10,'$'
 desktop_help_system db 13,10,'  SYSTEM',13,10
     db '  SETUP                   Install CiukiOS or format a disk',13,10
-    db '  VGASETUP                Shared shell and Windows resolution',13,10
+    db '  VGASETUP                Desktop resolution',13,10
     db '  SOUND ON / OFF / TEST   Startup sound and preview',13,10
     db '  SOUND /D                Show audio initialization steps',13,10
     db '  EXIT / DESKTOP         Return to the graphical desktop',13,10

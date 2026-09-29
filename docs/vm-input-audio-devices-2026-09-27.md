@@ -6,8 +6,8 @@ interrupt profile. An unmodified DOS program that hooks INT 9 and reads port
 60h, uses INT 33h, or programs ISA DMA, a Sound Blaster 16 DSP and OPL ports
 is served by this model. Its PCM is streamed to the machine's ICH AC'97. In
 the native DOS window, keyboard and mouse follow desktop focus. This is QEMU
-evidence only. Protected-mode (DPMI/HDPMI) clients are **not** attached; see
-[limits](#protected-mode-clients-not-attached).
+evidence only. Protected-mode (DPMI/HDPMI) clients are attached since
+28 September 2026; see [DOS/4GW games in the DOS window](vm-dpmi-window-devices-2026-09-28.md).
 
 The public peripheral namespace is **`cvgp_` / `CVGP_`**. The earlier `cvp_` /
 `CVP_` names collided with the VGA presenter; the
@@ -29,8 +29,9 @@ C/C++ code and the calls into Jemm's profile service. The operations are in
 | 31h | `DEV_END` | Removes traps, then the profile hooks, ends the model, drains a pending 8042 byte and frees the audio pages |
 | 32h | `DEV_FOCUS` | BX = 1/0. Losing focus releases every held key and mouse button |
 | 33h | `DEV_STATE` | 128-byte report (magic `CVDV`): counters, IRQs, audio, last error |
-| 34h | `DEV_IO` | Port bridge reserved for a protected-mode adapter (not used yet) |
+| 34h | `DEV_IO` | Port bridge for the HDPMI adapter: BX port, CL width, CH bit 0 write, EDX value; returns EDX and ESI = device IRQ lines held for the protected-mode client (the first call claims them) |
 | 35h | `DEV_KEY` | Host-originated key for the focused guest (the window's close Esc) |
+| 36h | `DEV_PM_IRQ` | CL = 2: accept the highest held line the virtual PIC allows now (EBX line, EDX vector); CL = 0: release after the client exits (see the [2026-09-28 record](vm-dpmi-window-devices-2026-09-28.md)) |
 
 `VM_OP_QUERY` reports `VM_CAP_GUEST_INPUT` (1000h) and `VM_CAP_GUEST_AUDIO`
 (2000h) only when the virtual-IF profile is available. The session refuses to
@@ -159,6 +160,12 @@ later work.
   recording and unsupported transfer modes never reach the host controller.
 - A virtual SB16 profile at A220, IRQ7, DMA1 and DMA5 by default. Mixer resource
   reads and valid virtual rerouting are supported without changing hardware.
+- SB16 mixer register 82h (interrupt status: bit 0 8-bit, bit 1 16-bit DMA),
+  cleared by the 22Eh/22Fh acknowledgements (added 28 September 2026; SB16
+  drivers such as Apogee's chain an IRQ away when neither bit is set).
+- DSP 4.xx speaker commands only change the D8h status; the DAC is never
+  gated (28 September 2026; DMX, the original DOOM's driver, never sends D1h).
+  A stopped or paused transfer outputs silence.
 - DSP reset/AA, version 4.05, speaker state, time constant or explicit sample
   rate, block size, single-cycle/auto-initialize 8-bit and SB16 8/16-bit output,
   pause/resume, exit-auto, silence, test register, identification and software
@@ -186,7 +193,11 @@ physical sound-card drivers.
 distributed under compatible GPL terms with corresponding source, as recorded
 in `third_party/vsbhda/README.md`.
 
-## Protected-mode clients: not attached
+## Protected-mode clients
+
+Implemented on 28 September 2026; the design and evidence are in
+[DOS/4GW games in the DOS window](vm-dpmi-window-devices-2026-09-28.md). The
+original analysis follows.
 
 A DPMI client under HDPMI runs while HDPMI, not Jemm, owns the CPU. Jemm's port
 traps, virtual PIC and poll never run then. Bridging the ports alone (through
@@ -268,8 +279,8 @@ wave (2.5 s) and the FM note (0.75 s). Final record:
 | Native UI repaint/input while the guest runs | PASS (window harness) |
 | Focus changes through real native GUI events | PASS (click another window, focus-loss key release) |
 | Normal/close exit with trap/hook removal, 8042 drain, desktop keyboard/mouse live | PASS |
-| Protected-mode (HDPMI) clients through this model | NOT IMPLEMENTED |
-| Original Doom/Wolf3D audio through this model | NOT RUN (both are DPMI or unsupported) |
+| Protected-mode (HDPMI) clients through this model | PASS since 2026-09-28 ([record](vm-dpmi-window-devices-2026-09-28.md)) |
+| Original Doom audio through this model | PASS since 2026-09-28 (DOOM 1.9 with DMX, doom-vanille with Apogee); Wolf3D not run |
 | Physical T23/E500 acceptance | OPEN and independent of QEMU |
 
 No 30 fps statement is implied. The existing fullscreen original-game audio

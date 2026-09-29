@@ -9,7 +9,7 @@ usage() {
 Usage: scripts/build_run_full.sh [--tap] [QEMU options]
 
 Builds the complete FAT16 full profile, verifies its loader/kernel boundary
-and any local Windows 3.1 media, then launches the canonical image in QEMU.
+then launches the canonical image in QEMU.
 The boot-resident INT 33h service and IBM INT 15h/C2 BIOS mouse interface are
 shared by DOS/Windows clients; the optional GPL CTMOUSE.EXE replacement is
 packaged under SYSTEM\DRIVERS.
@@ -87,23 +87,11 @@ if [[ "${CIUKIOS_FETCH_NETWORK:-1}" == "1" ]]; then
   bash scripts/fetch_network_stack.sh
 fi
 
-echo "[build-run-full] 1/4 building the complete FAT16 full profile"
+echo "[build-run-full] 1/3 building the complete FAT16 full profile"
 bash scripts/build_full.sh
 
-echo "[build-run-full] 2/4 verifying optional Windows 3.1 integration"
-windows31_media_count=0
-for disk_number in 01 02 03 04 05 06 07; do
-  [[ -f "third_party/windows31/disk${disk_number}.img" ]] \
-    && windows31_media_count=$((windows31_media_count + 1))
-done
-if (( windows31_media_count == 7 )); then
-  bash scripts/qemu_test_full_windows31.sh --no-build --prepare-only
-else
-  echo "[build-run-full] Windows 3.1 local media absent (optional verification skipped)"
-fi
-
-echo "[build-run-full] 3/4 verifying the Phase 5 loader/kernel boundary"
+echo "[build-run-full] 2/3 verifying the Phase 5 loader/kernel boundary"
 bash scripts/verify_phase5_runtime_ownership.sh --no-build
 
-echo "[build-run-full] 4/4 launching CiukiOS in QEMU"
+echo "[build-run-full] 3/3 launching CiukiOS in QEMU"
 exec bash scripts/qemu_run_full.sh --no-build "${RUNNER_ARGS[@]}"

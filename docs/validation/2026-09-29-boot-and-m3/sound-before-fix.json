@@ -1,0 +1,33 @@
+{
+  "passed": false,
+  "physical_hardware_qualified": false,
+  "parts": [
+    "sound"
+  ],
+  "vm_started_at_boot": true,
+  "sound": {
+    "lines": [
+      "[VMSTEST] VM 1 created",
+      "[VMS1] playing",
+      "[VMS1] played",
+      "[VMSTEST] PASS"
+    ],
+    "vm0_busy_lines": 42,
+    "probe_pass": true,
+    "wav_window": [
+      196608,
+      983040
+    ],
+    "passed": false,
+    "console_alive_after": true,
+    "wave": {
+      "samples": 196608,
+      "loud_samples": 184756,
+      "level": 24416.0,
+      "seconds": 4.24,
+      "on_level": 0.216,
+      "crossings_per_second": 1001.8,
+      "clean": false
+    }
+  }
+}

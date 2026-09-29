@@ -1,0 +1,8 @@
+{
+ "gate": "unit-jemm-query",
+ "log_tail": [
+  "    \"transfer_bounds_6_37376_8448_rejected\"",
+  "  ]",
+  "}"
+ ]
+}

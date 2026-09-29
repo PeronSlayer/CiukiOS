@@ -1,0 +1,687 @@
+{
+  "passed": true,
+  "cpu": "pentium3",
+  "memory_mib": 128,
+  "accelerator": "kvm",
+  "source_image_sha256": "7e785c23ca9a4bd2d2aa41c5cbe27f0129f9896da1afac3c90344efe0a60bedd",
+  "inputs": {
+    "SYSTEM/CIUKIDOS.SYS": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+    "SYSTEM/SHELL.COM": "79e879a8f2348394c1708146c3064cb7253924cc4faef7b4d8e6d2cd1e2d57c7",
+    "SYSTEM/DOSWIN.DRV": "e8f440feb9498c720f01f19bbc36c3b962d26db6f7472fdc31de3c0760d3c106",
+    "JEMM386.EXE": "ba16835eb69aee1646fc04beed4ba67136ed4bc1cd26b4678d1782b13420f9af",
+    "JLOAD.EXE": "93c205814779baf2f9c89d45fe1e60a3b7e597a13a87cfb7538f7cc5b108af40",
+    "CVSESS.DLL": "99122776d4e38dde46cb6387d893cecade3d75b93fc288754e689f3a10fafb38",
+    "APPS/VGASEMW.COM": "d705de5ceb634ff2bf0f5dbca874e38f0a6e7ce98a92dd0e084ef82e1dadf37e",
+    "APPS/DOSNAV/SSAVERS/FIRE.EXE": "e7a82211774d1ed6f198c62c5614eef91cadd211cf3068212f073752439471fa",
+    "APPS/GUESTIO.COM": "3d7440e0d232f5aa88c81fd8b55481ad2c1c40bb7b5207ec4715abe823c82f27"
+  },
+  "physical_hardware_qualified": false,
+  "hardware_acceleration_claimed": false,
+  "guest_memory_writes": false,
+  "events": [
+    {
+      "name": "native reference captured",
+      "seconds": 13.84
+    },
+    {
+      "name": "desktop under the V86 monitor uses the banked window",
+      "seconds": 24.74
+    },
+    {
+      "name": "BIOS keyboard ring before Run",
+      "seconds": 24.74,
+      "head_tail": [
+        "0x002a",
+        "0x002a"
+      ]
+    },
+    {
+      "name": "Run field verified",
+      "seconds": 31.57,
+      "command": "run VGASEMW.COM \\VGAWIN.OUT",
+      "attempts": 1
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 7.7627374730072916,
+      "action": 40,
+      "owner": 1,
+      "position": [
+        720,
+        496
+      ]
+    },
+    {
+      "name": "guest launched in the DOS window",
+      "seconds": 32.51,
+      "segment": "0x8820"
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 11.758472713991068,
+      "action": 60,
+      "owner": 0,
+      "position": [
+        672,
+        222
+      ]
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 15.942786084953696,
+      "action": 211,
+      "owner": null,
+      "position": [
+        331,
+        780
+      ]
+    },
+    {
+      "name": "keys typed while another window was active were withheld from the guest",
+      "seconds": 40.68
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 25.61048029595986,
+      "action": 211,
+      "owner": null,
+      "position": [
+        331,
+        780
+      ]
+    },
+    {
+      "name": "guest area repainted from the model after a native window covered it",
+      "seconds": 52.4
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 30.975098884955514,
+      "action": 17,
+      "owner": 11,
+      "position": [
+        1016,
+        273
+      ]
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 33.57748273899779,
+      "action": 211,
+      "owner": null,
+      "position": [
+        331,
+        780
+      ]
+    },
+    {
+      "name": "minimize/restore repainted the guest exactly",
+      "seconds": 60.33
+    },
+    {
+      "name": "runtime uninstalled; IRQ0/video/keyboard/mouse/multiplex vectors restored exactly",
+      "seconds": 63.23
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 40.81123191100778,
+      "action": 18,
+      "owner": 11,
+      "position": [
+        1040,
+        273
+      ]
+    },
+    {
+      "name": "BIOS keyboard ring before Run",
+      "seconds": 65.55,
+      "head_tail": [
+        "0x002e",
+        "0x002e"
+      ]
+    },
+    {
+      "name": "Run field verified",
+      "seconds": 77.94,
+      "command": "run \\APPS\\DOSNAV\\SSAVERS\\FIRE.EXE",
+      "attempts": 1
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 54.44053887500195,
+      "action": 40,
+      "owner": 1,
+      "position": [
+        720,
+        496
+      ]
+    },
+    {
+      "name": "DOS window resized through its grip; FIRE rescaled into each client",
+      "seconds": 107.93,
+      "original": [
+        660,
+        460
+      ],
+      "checks": [
+        {
+          "size": [
+            500,
+            360
+          ],
+          "client": [
+            480,
+            300
+          ],
+          "distinct_colours": 70,
+          "foreign_colours": [],
+          "profile_correlation": 0.993,
+          "lower_columns_lit": 1.0,
+          "vacated_fire_pixels": 0
+        },
+        {
+          "size": [
+            760,
+            496
+          ],
+          "client": [
+            740,
+            436
+          ],
+          "distinct_colours": 70,
+          "foreign_colours": [],
+          "profile_correlation": 0.996,
+          "lower_columns_lit": 1.0
+        }
+      ],
+      "restored": [
+        660,
+        460
+      ]
+    },
+    {
+      "name": "original FIRE animated in the DOS window and closed through the window",
+      "seconds": 109.14,
+      "measured_seconds": 8.0,
+      "compositor_paints_per_second": 18.24,
+      "mean_paint_ms": 16.6,
+      "host_callbacks_per_second": 18.24,
+      "distinct_window_colours": 70,
+      "colours_outside_fire_palette": [],
+      "title_pixel": [
+        52,
+        73,
+        121
+      ],
+      "resize": {
+        "original": [
+          660,
+          460
+        ],
+        "checks": [
+          {
+            "size": [
+              500,
+              360
+            ],
+            "client": [
+              480,
+              300
+            ],
+            "distinct_colours": 70,
+            "foreign_colours": [],
+            "profile_correlation": 0.993,
+            "lower_columns_lit": 1.0,
+            "vacated_fire_pixels": 0
+          },
+          {
+            "size": [
+              760,
+              496
+            ],
+            "client": [
+              740,
+              436
+            ],
+            "distinct_colours": 70,
+            "foreign_colours": [],
+            "profile_correlation": 0.996,
+            "lower_columns_lit": 1.0
+          }
+        ],
+        "restored": [
+          660,
+          460
+        ]
+      }
+    },
+    {
+      "name": "BIOS keyboard ring before Run",
+      "seconds": 109.14,
+      "head_tail": [
+        "0x002a",
+        "0x002a"
+      ]
+    },
+    {
+      "name": "Run field verified",
+      "seconds": 118.71,
+      "command": "run GUESTIO.COM",
+      "attempts": 1
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 95.22797367797466,
+      "action": 40,
+      "owner": 1,
+      "position": [
+        720,
+        496
+      ]
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 101.47548323596129,
+      "action": 211,
+      "owner": null,
+      "position": [
+        331,
+        780
+      ]
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 109.35081498499494,
+      "action": 211,
+      "owner": null,
+      "position": [
+        331,
+        780
+      ]
+    },
+    {
+      "name": "guest devices in the window: raw keyboard focus, virtual mouse, SB16/OPL",
+      "seconds": 145.66,
+      "device_begin": {
+        "devices": 27,
+        "audio": 1,
+        "result": 0
+      },
+      "int33_reset": [
+        "FFFF",
+        "0002"
+      ],
+      "focused_keys": [
+        "1E",
+        "9E",
+        "30",
+        "B0"
+      ],
+      "unfocused_keys": [],
+      "focus_loss_keys": [
+        "20",
+        "A0"
+      ],
+      "pointer_at_centre": [
+        320,
+        100,
+        0
+      ],
+      "handler_events": [
+        "0007",
+        "0007"
+      ],
+      "resized_client": [
+        480,
+        300
+      ],
+      "resized_centre": [
+        320,
+        100,
+        0
+      ],
+      "resized_corner": [
+        632,
+        196,
+        0
+      ],
+      "sb_irqs": 6,
+      "devices": 27,
+      "audio": 1,
+      "mouse_events": 8
+    },
+    {
+      "name": "module and Jemm unloaded; desktop returned",
+      "seconds": 152.55
+    }
+  ],
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "128",
+    "-drive",
+    "file=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/vga-window/disk.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/vga-window/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-f1ac38030d824e738381f0140b9e3c2a.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-vga",
+    "std",
+    "-audiodev",
+    "wav,id=snd,path=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/vga-window/audio.wav",
+    "-device",
+    "AC97,audiodev=snd"
+  ],
+  "metrics": {
+    "checkpoint1": {
+      "tsc_khz": 4200283,
+      "host_callbacks": 207,
+      "compositor_paints": 5,
+      "mean_callback_ms": 0.908,
+      "max_callback_ms": 46.058,
+      "mean_paint_ms": 36.94,
+      "max_paint_ms": 46.052
+    },
+    "checkpoint2": {
+      "tsc_khz": 4200283,
+      "host_callbacks": 398,
+      "compositor_paints": 22,
+      "mean_callback_ms": 1.947,
+      "max_callback_ms": 50.262,
+      "mean_paint_ms": 34.919,
+      "max_paint_ms": 50.197
+    },
+    "checkpoint3": {
+      "tsc_khz": 4200283,
+      "host_callbacks": 554,
+      "compositor_paints": 26,
+      "mean_callback_ms": 1.698,
+      "max_callback_ms": 50.262,
+      "mean_paint_ms": 35.816,
+      "max_paint_ms": 50.197
+    },
+    "checkpoint4": {
+      "tsc_khz": 4200283,
+      "host_callbacks": 580,
+      "compositor_paints": 27,
+      "mean_callback_ms": 1.678,
+      "max_callback_ms": 50.262,
+      "mean_paint_ms": 35.701,
+      "max_paint_ms": 50.197
+    },
+    "checkpoint5": {
+      "tsc_khz": 4200283,
+      "host_callbacks": 606,
+      "compositor_paints": 28,
+      "mean_callback_ms": 1.661,
+      "max_callback_ms": 50.262,
+      "mean_paint_ms": 35.615,
+      "max_paint_ms": 50.197
+    }
+  },
+  "checkpoints": {
+    "1": {
+      "native_size": [
+        640,
+        400
+      ],
+      "origin": [
+        408,
+        292
+      ],
+      "mismatched_pixels": 0,
+      "compared_pixels": 256000,
+      "capture_attempts": 1,
+      "paint_count": 1
+    },
+    "1-refocused": {
+      "native_size": [
+        640,
+        400
+      ],
+      "origin": [
+        408,
+        292
+      ],
+      "mismatched_pixels": 0,
+      "compared_pixels": 256000,
+      "capture_attempts": 1,
+      "paint_count": 5
+    },
+    "2": {
+      "native_size": [
+        640,
+        400
+      ],
+      "origin": [
+        408,
+        292
+      ],
+      "mismatched_pixels": 0,
+      "compared_pixels": 256000,
+      "capture_attempts": 1,
+      "paint_count": 6
+    },
+    "2-covered-mismatch": 212065,
+    "2-exposed": {
+      "native_size": [
+        640,
+        400
+      ],
+      "origin": [
+        408,
+        292
+      ],
+      "mismatched_pixels": 0,
+      "compared_pixels": 256000,
+      "capture_attempts": 1,
+      "paint_count": 22
+    },
+    "3": {
+      "native_size": [
+        640,
+        480
+      ],
+      "origin": [
+        408,
+        292
+      ],
+      "mismatched_pixels": 0,
+      "compared_pixels": 256000,
+      "capture_attempts": 1,
+      "paint_count": 23
+    },
+    "3-restored": {
+      "native_size": [
+        640,
+        480
+      ],
+      "origin": [
+        408,
+        292
+      ],
+      "mismatched_pixels": 0,
+      "compared_pixels": 256000,
+      "capture_attempts": 1,
+      "paint_count": 26
+    },
+    "4": {
+      "native_size": [
+        640,
+        400
+      ],
+      "origin": [
+        408,
+        292
+      ],
+      "mismatched_pixels": 0,
+      "compared_pixels": 256000,
+      "capture_attempts": 1,
+      "paint_count": 27
+    },
+    "5": {
+      "native_size": [
+        720,
+        400
+      ],
+      "origin": [
+        408,
+        292
+      ],
+      "mismatched_pixels": 0,
+      "compared_pixels": 256000,
+      "capture_attempts": 1,
+      "paint_count": 28
+    }
+  },
+  "runtime_metrics": {
+    "tsc_khz": 4200283,
+    "host_callbacks": 607,
+    "compositor_paints": 28,
+    "mean_callback_ms": 1.659,
+    "max_callback_ms": 50.262,
+    "mean_paint_ms": 35.615,
+    "max_paint_ms": 50.197
+  },
+  "vectors": {
+    "before": {
+      "08": 4026597029,
+      "10": 3221245599,
+      "15": 545128528,
+      "16": 4026591278,
+      "2F": 50368607,
+      "33": 50367500
+    },
+    "after": {
+      "08": 4026597029,
+      "10": 3221245599,
+      "15": 545128528,
+      "16": 4026591278,
+      "2F": 50368607,
+      "33": 50367500
+    }
+  },
+  "fire_in_window": {
+    "measured_seconds": 8.0,
+    "compositor_paints_per_second": 18.24,
+    "mean_paint_ms": 16.6,
+    "host_callbacks_per_second": 18.24,
+    "distinct_window_colours": 70,
+    "colours_outside_fire_palette": [],
+    "title_pixel": [
+      52,
+      73,
+      121
+    ],
+    "resize": {
+      "original": [
+        660,
+        460
+      ],
+      "checks": [
+        {
+          "size": [
+            500,
+            360
+          ],
+          "client": [
+            480,
+            300
+          ],
+          "distinct_colours": 70,
+          "foreign_colours": [],
+          "profile_correlation": 0.993,
+          "lower_columns_lit": 1.0,
+          "vacated_fire_pixels": 0
+        },
+        {
+          "size": [
+            760,
+            496
+          ],
+          "client": [
+            740,
+            436
+          ],
+          "distinct_colours": 70,
+          "foreign_colours": [],
+          "profile_correlation": 0.996,
+          "lower_columns_lit": 1.0
+        }
+      ],
+      "restored": [
+        660,
+        460
+      ]
+    }
+  },
+  "guest_devices": {
+    "device_begin": {
+      "devices": 27,
+      "audio": 1,
+      "result": 0
+    },
+    "int33_reset": [
+      "FFFF",
+      "0002"
+    ],
+    "focused_keys": [
+      "1E",
+      "9E",
+      "30",
+      "B0"
+    ],
+    "unfocused_keys": [],
+    "focus_loss_keys": [
+      "20",
+      "A0"
+    ],
+    "pointer_at_centre": [
+      320,
+      100,
+      0
+    ],
+    "handler_events": [
+      "0007",
+      "0007"
+    ],
+    "resized_client": [
+      480,
+      300
+    ],
+    "resized_centre": [
+      320,
+      100,
+      0
+    ],
+    "resized_corner": [
+      632,
+      196,
+      0
+    ],
+    "sb_irqs": 6,
+    "devices": 27,
+    "audio": 1,
+    "mouse_events": 8
+  },
+  "result_word_differences": [
+    2
+  ],
+  "window_audio": {
+    "square_seconds": 2.75,
+    "fm_seconds": 1.0
+  },
+  "source_image_unchanged": true
+}

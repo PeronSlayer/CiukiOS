@@ -14969,11 +14969,9 @@ stage1_boot_mark_step:
     jc .graphics_failed
     cmp al, 5
     jne .done
-    ; Keep the completed bar briefly visible, then hand over text/VBE to SHELL.
-    push cx
-    mov cx, 36
-    call stage1_boot_wait_ticks
-    pop cx
+    ; The completed splash stays on screen until the desktop's own mode set
+    ; replaces it (boot_splash_active stays 1 for the SHELL exec below).
+    jmp .done
 .graphics_failed:
     call vdi_leave_graphics
     mov byte [cs:boot_splash_active], 0
@@ -17956,10 +17954,15 @@ shell_exec_buffer_path:
     pop si
     pop cx
     pop ax
-    ; Clear shell chrome before handing control to external DOS programs.
+    ; Clear shell chrome before handing control to external DOS programs,
+    ; except for SHELL at boot: it replaces the splash itself.
     push ax
+    cmp byte [cs:boot_splash_active], 1
+    je .keep_splash
     mov ax, 0x0003
     int 0x10
+.keep_splash:
+    mov byte [cs:boot_splash_active], 0
     pop ax
     mov byte [cs:shell_exec_external_program_active], 1
     call shell_exec_restore_bios_int10

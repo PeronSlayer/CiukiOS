@@ -108,6 +108,25 @@ invalid:
  ret
 vm_scheduler_if_profile endp
 
+vm_scheduler_info proc
+ mov eax,scheduler_descriptor
+ test eax,eax
+ jz unbound
+ mov ecx,eax
+ shr ecx,4
+ mov word ptr [ebp].Client_Reg_Struc.Client_EBX,cx
+ and eax,0Fh
+ mov word ptr [ebp].Client_Reg_Struc.Client_EDX,ax
+ mov eax,scheduler_descriptor
+ mov eax,[eax+CVSCHED_STATE]
+ mov [ebp].Client_Reg_Struc.Client_ECX,eax
+ xor eax,eax
+ ret
+unbound:
+ mov eax,VM_ERROR_SCHED_UNBOUND
+ ret
+vm_scheduler_info endp
+
 ; EBP is the Jemm client frame. guest_destination validates ES:DI and returns
 ; the conventional linear address in EDI without touching it on failure.
 vm_scheduler_bind proc uses esi edi ebx
@@ -177,8 +196,8 @@ vm_scheduler_arm proc uses esi edi ebx
  mov edi,scheduler_descriptor
  mov eax,cr3
  mov [edi+CVSCHED_LAST_CR3],eax
- mov esi,offset vm_scheduler_irq
- @VMMCall Install_Host_Scheduler
+ mov eax,TICK_SCHEDULER
+ call tick_acquire
  jc install_error
  mov scheduler_installed,1
  or dword ptr [edi+CVSCHED_STATE],CVSCHED_STATE_JEMM
@@ -226,10 +245,13 @@ vm_scheduler_can_end endp
 vm_scheduler_disarm proc uses esi
  cmp scheduler_installed,0
  je mark_inactive
+ cmp vmm_installed,0                    ; the VM manager keeps the profile
+ jne profile_kept
  mov eax,2
  @VMMCall Host_Scheduler_Profile
- mov esi,offset vm_scheduler_irq
- @VMMCall Remove_Host_Scheduler
+profile_kept:
+ mov eax,TICK_SCHEDULER
+ call tick_release
  jc remove_error
  mov scheduler_installed,0
 mark_inactive:

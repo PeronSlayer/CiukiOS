@@ -26,12 +26,12 @@ ui_enter:
     jmp main_loop
 .assets_ready:
     call fm_begin
-    ; Complete optional audio before initializing video and mouse. Firmware
-    ; work and child execution must not interrupt an already-painted desktop.
+    ; The startup melody is the event sound driver's first event: it starts
+    ; with the first desktop frame and plays asynchronously.
     cmp byte [ui_sound_played],1
     je .sound_ready
     mov byte [ui_sound_played],1
-    call startup_play_sound
+    mov byte [ui_sfx_pending],7
 .sound_ready:
     call ui_sfx_begin
     sti
@@ -225,7 +225,7 @@ ui_action:
     cmp ax,25
     je ui_to_dos
     cmp ax,58
-    je ui_run_window
+    je .run_full_screen
     cmp ax,59
     je ui_window_game
     cmp ax,60
@@ -418,6 +418,13 @@ ui_action:
     call ui_windows_close
     jmp ui_redraw
 .run_commit:
+    ; Windows 95 style: a program started from Run opens in a DOS window
+    ; whenever the desktop can host one; otherwise it runs full screen.
+    call dos_host_prepare
+    jc .run_full_screen
+    call dos_host_finish
+    jmp ui_run_window
+.run_full_screen:
     cmp byte [ui_run_len],0
     je ui_redraw             ; queued Backspace + Enter must paint the empty field
     call ui_windows_close
@@ -468,6 +475,37 @@ ui_item_open:
     test ax,ax
     jnz ui_action
     mov si,[si+4]
+    ; Windows 95 style: DOS programs open in a DOS window whenever the desktop
+    ; can host one. Games start their own binary there (the window's devices
+    ; replace the full-screen audio launchers, which stay the fallback).
+    push si
+    call dos_host_prepare
+    pop si
+    jc ui_launch_command
+    call dos_host_finish
+    mov bx,ui_window_commands
+.window_command:
+    mov ax,[bx]
+    test ax,ax
+    jz .copy_command
+    add bx,4
+    cmp ax,si
+    jne .window_command
+    mov si,[bx-2]
+.copy_command:
+    mov di,ui_run_text
+    xor cx,cx
+.copy:
+    lodsb
+    test al,al
+    jz .copied
+    stosb
+    inc cx
+    jmp .copy
+.copied:
+    mov [ui_run_len],cl
+    mov byte [ui_dialog],0
+    jmp ui_run_window
 ui_launch_command:
     mov byte [ui_dialog],0
     mov byte [ui_command_running],2
@@ -615,7 +653,12 @@ ui_video_begin:
     jne .detected_video
     mov byte [vc_force_safe],1
 .detected_video:
+    ; Only an active console is torn down: at boot the splash stays until
+    ; the desktop's own mode set (vc_end would flash text mode 03h).
+    cmp byte [vc_active],0
+    je .console_clear
     call vc_end
+.console_clear:
     call vc_load_profile
     ; A saved DOS text/640 profile must not reduce the desktop below SVGA.
     ; Keep the explicit recovery switch available for firmware without VBE.
@@ -1461,8 +1504,8 @@ ui_record:
 %include "src/com/ui_icons.inc"
 
 ui_items:
-    dw ut_windows,ud_windows,uc_windows,0
-    db 13,0
+    dw ut_dosbox,ud_prompt,0,3
+    db 4,0
     dw ut_files,ud_files,0,2
     db 1,0
     dw ut_editor,ud_editor,uc_editor,0
@@ -1510,7 +1553,7 @@ ut_run db 'Run...',0
 ut_files db 'Files',0
 ut_tasks db 'Task Manager',0
 ut_wallpaper db 'Wallpaper',0
-ud_tasks db 'Windows, processes and memory',0
+ud_tasks db 'Windows, programs and memory',0
 ud_wallpaper db 'Choose a desktop background',0
 ut_editor db 'Editor',0
 ut_costa db 'Costa',0
@@ -1519,7 +1562,7 @@ ut_sound db 'Sound',0
 ut_install db 'Install CiukiOS',0
 ut_about db 'About',0
 ut_power db 'Power',0
-ut_windows db 'Windows 3.1',0
+ut_dosbox db 'DOS Prompt',0
 ut_doom db 'Doom',0
 ut_doom_window db 'Windowed Doom',0
 ut_wolf_window db 'Windowed Wolf3D',0
@@ -1530,7 +1573,7 @@ ut_min db '_',0
 ut_max db '^',0
 ut_close db 'x',0
 ut_prompt db '>_',0
-ud_windows db 'Windows desktop and applications',0
+ud_prompt db 'DOS programs in a window',0
 ud_files db 'Browse folders, copy, move and rename files',0
 ud_editor db 'Create and edit text files',0
 ud_costa db 'Open the Costa desktop',0
@@ -1539,18 +1582,21 @@ ud_run db 'Run a program or a shell command',0
 ud_doom db 'Original Doom',0
 ud_doomvan db 'Doom with the Vanille engine',0
 ud_wolf db 'Wolfenstein 3D',0
-ud_display db 'Set the shared desktop and Windows resolution',0
+ud_display db 'Set the desktop resolution',0
 ud_sound db 'Play the startup sound',0
 ud_install db 'Install CiukiOS or prepare a hard disk',0
 ud_about db 'Version, controls and system information',0
 ud_power db 'Restart or shut down the computer',0
-uc_windows db 'WIN',0
 ui_cmd_files db 'DOSNAV',0
 ut_floppy db 'Floppy',0
 ut_usb db 'USB drive',0
 ut_cd db 'CD-ROM',0
 uc_editor db 'EDIT',0
 uc_costa db 'COSTA',0
+ui_window_commands dw uc_doom,uw_doom,uc_doomvan,uw_doomvan,uc_wolf,uw_wolf,0
+uw_doom db '\APPS\DOOM\DOOMCORE.EXE',0
+uw_doomvan db '\APPS\DOOMVAN\PCDMCORE.EXE',0
+uw_wolf db '\APPS\WOLF3D\WOLF3D.EXE',0
 uc_doom db 'DOOM',0
 uc_doomvan db 'DOOMVAN',0
 uc_wolf db 'WOLF3D',0

@@ -367,10 +367,14 @@ int cvgp_set_focus(cvgp_state *s, uint32_t generation, int focused)
     focused = !!focused;
     if (s->focused == focused) return CVGP_OK;
     if (!focused) {
-        /* Pending guest keyboard bytes are no longer meaningful.  Dropping
-         * them guarantees room for one break for every tracked key and
-         * prevents a stale make from following the release transaction. */
-        kbc_drop_keyboard(s);
+        /* Bytes already queued were typed while the guest had the focus and
+         * stay its own (it may not have run since: another VM's turn); the
+         * breaks follow them in order.  Only when there is no room for one
+         * break for every tracked key are the pending bytes dropped. */
+        unsigned need = 0;
+        for (key = 0; key != 512; ++key)
+            if (key_bit(s, key)) need += (key & 0x100u) ? 2u : 1u;
+        if (CVGP_KBC_QUEUE_BYTES - s->kbc_count < need) kbc_drop_keyboard(s);
         s->raw_prefix = s->raw_skip = 0;
         for (key = 0; key != 512; ++key) {
             if (!key_bit(s, key)) continue;
@@ -736,6 +740,9 @@ static void sb_stop(cvgp_state *s)
     s->sb.paused8 = s->sb.paused16 = 0;
     s->sb.auto_init = s->sb.exit_auto = 0;
     s->sb.units_left = 0;
+    /* A stopped DSP outputs silence: the zero-order hold only bridges the
+     * gaps between samples of a running transfer. */
+    s->sb.held_left = s->sb.held_right = 0;
 }
 
 static void sb_reset_dsp(cvgp_state *s)
@@ -843,8 +850,8 @@ static void sb_execute(cvgp_state *s)
     case 0xe1: sb_response(s, 4); sb_response(s, 5); break;
     case 0xe4: sb->test_register = sb->arguments[0]; break;
     case 0xe8: sb_response(s, sb->test_register); break;
-    case 0xf2: pic_raise(s, sb->irq); break;
-    case 0xf3: pic_raise(s, sb->irq); break;
+    case 0xf2: sb->irq_status |= 1; pic_raise(s, sb->irq); break;
+    case 0xf3: sb->irq_status |= 2; pic_raise(s, sb->irq); break;
     case 0x20: case 0x30: case 0x31: case 0x34: case 0x35: case 0x36: case 0x37:
     case 0xe2:
         fail(s, CVGP_ERR_UNSUPPORTED_SB, (uint16_t)(sb->base + 0x0c));
@@ -879,6 +886,10 @@ static uint8_t sb_read_mixer(cvgp_state *s)
     cvgp_sb_state *sb = &s->sb;
     if (sb->mixer_index == 0x80) return irq_mixer_value(sb->irq);
     if (sb->mixer_index == 0x81) return dma_mixer_value(sb->dma8, sb->dma16);
+    /* SB16 interrupt status: which DSP interrupt is pending. SB16-aware
+     * drivers (Apogee Sound System) read it first and chain the IRQ away
+     * when neither DMA bit is set. */
+    if (sb->mixer_index == 0x82) return sb->irq_status;
     return sb->mixer[sb->mixer_index];
 }
 
@@ -918,9 +929,11 @@ static uint8_t sb_read_port(cvgp_state *s, uint16_t port)
     case 0x0a: return sb_read_response(s);
     case 0x0c: return 0;               /* DSP write buffer ready */
     case 0x0e:
+        sb->irq_status &= (uint8_t)~1u;
         pic_clear_request(s, sb->irq);
         return sb->response_count ? 0x80 : 0;
     case 0x0f:
+        sb->irq_status &= (uint8_t)~2u;
         pic_clear_request(s, sb->irq);
         return 0xff;
     default: return 0xff;
@@ -1000,6 +1013,7 @@ static void sb_complete_unit(cvgp_state *s)
     cvgp_sb_state *sb = &s->sb;
     if (sb->units_left) --sb->units_left;
     if (sb->units_left) return;
+    sb->irq_status |= sb->sample_bits == 16 ? 2 : 1;
     pic_raise(s, sb->irq);
     if (sb->auto_init && !sb->exit_auto) sb->units_left = sb->block_units;
     else sb_stop(s);
@@ -1072,7 +1086,11 @@ int cvgp_render_audio(cvgp_state *s, uint32_t generation, int16_t *stereo,
             rc = sb_next_frame(s);
             if (rc != CVGP_OK) return rc;
         }
-        if (sb->speaker && !sb->silent) {
+        /* DSP 4.xx (SB16): D1h/D3h only change the D8h status; the DAC is
+         * never gated. DMX (original DOOM) plays without ever sending D1h.
+         * A paused transfer outputs silence. */
+        if (sb->active && !sb->silent &&
+            !(sb->sample_bits == 16 ? sb->paused16 : sb->paused8)) {
             stereo[i * 2] = saturate((int32_t)stereo[i * 2] + sb->held_left);
             stereo[i * 2 + 1] = saturate((int32_t)stereo[i * 2 + 1] + sb->held_right);
         }

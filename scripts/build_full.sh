@@ -140,10 +140,14 @@ DOOM_LAUNCH_BIN="build/full/obj/doom.com"
 DOOM_LAUNCH_MZ="build/full/obj/doom.exe"
 WOLF3D_LAUNCH_SRC="src/com/wolf3d_launch.asm"
 WOLF3D_LAUNCH_BIN="build/full/obj/wolf3d.com"
-WIN31_LAUNCH_SRC="src/com/win31_launch.asm"
-WIN31_LAUNCH_BIN="build/full/obj/win.com"
 VGASETUP_SRC="src/com/vgasetup.asm"
 VGASETUP_BIN="build/full/obj/vgasetup.com"
+# DOS VBE helpers of the pinned vbesvga.drv release (not its Win16 driver):
+# AUXSTACK (a larger stack for the video BIOS, run by the desktop at start),
+# AUXCHECK, VIDMODES and MODETEST (used by VGASETUP).
+VBESVGA_BUILD_SCRIPT="$CIUKIOS_ROOT/scripts/build_vbesvga_driver.sh"
+VBESVGA_OUTPUT_DIR="${CIUKIOS_VBESVGA_OUTPUT_DIR:-$CIUKIOS_ROOT/build/external/video-compat/output}"
+VBE_DOS_HELPERS=(AUXSTACK.COM AUXCHECK.COM VIDMODES.COM MODETEST.COM VBESVGA.TXT SOURCE.TXT)
 DOS4GW_BIN="${DOS4GW_BIN:-/opt/watcom/binw/dos4gw.exe}"
 SPLASH_SRC="misc/CiukiOS_SplashScreen.png"
 SPLASH_TOOL="scripts/generate_splash_asset.py"
@@ -184,20 +188,6 @@ SBEMU_IMAGE_DIR="${CIUKIOS_SBEMU_IMAGE_DIR:-::SBEMU}"
 SBEMU_MODE="${CIUKIOS_SBEMU_MODE:-build}"
 CTMOUSE_BIN="${CIUKIOS_CTMOUSE_BIN:-$CIUKIOS_ROOT/assets/drivers/ctmouse/CTMOUSE.EXE}"
 CTMOUSE_LICENSE="${CIUKIOS_CTMOUSE_LICENSE:-$CIUKIOS_ROOT/assets/drivers/ctmouse/COPYING}"
-WINDOWS31_MEDIA_DIR="${CIUKIOS_WINDOWS31_MEDIA_DIR:-$CIUKIOS_ROOT/third_party/windows31}"
-WINDOWS31_INSTALLED_DIR="${CIUKIOS_WINDOWS31_INSTALLED_DIR:-$WINDOWS31_MEDIA_DIR/installed}"
-WINDOWS31_MEDIA_IMAGE_DIR="${CIUKIOS_WINDOWS31_MEDIA_IMAGE_DIR:-::MEDIA/WIN31}"
-WINDOWS31_SETUP_IMAGE_DIR="${CIUKIOS_WINDOWS31_SETUP_IMAGE_DIR:-::WIN31SET}"
-WINDOWS31_INSTALLED_IMAGE_DIR="${CIUKIOS_WINDOWS31_INSTALLED_IMAGE_DIR:-::WINDOWS}"
-WINDOWS31_README="$CIUKIOS_ROOT/config/windows31/README.TXT"
-WINDOWS31_PROFILE_SCRIPT="$CIUKIOS_ROOT/scripts/configure_windows31_profile.sh"
-WINDOWS31_SPEAKER_FETCH_SCRIPT="$CIUKIOS_ROOT/scripts/fetch_windows31_speaker_driver.sh"
-WINDOWS31_SPEAKER_DIR="${CIUKIOS_WINDOWS31_SPEAKER_DIR:-$CIUKIOS_ROOT/build/external/windows31-speaker}"
-VBESVGA_BUILD_SCRIPT="$CIUKIOS_ROOT/scripts/build_vbesvga_driver.sh"
-VBESVGA_OUTPUT_DIR="${CIUKIOS_VBESVGA_OUTPUT_DIR:-$CIUKIOS_ROOT/build/external/video-compat/output}"
-VIDEO_IMAGE_DIR="${CIUKIOS_VIDEO_IMAGE_DIR:-::SYSTEM/VIDEO}"
-WINDOWS31_MODE="${CIUKIOS_WINDOWS31_MODE:-auto}"
-WINDOWS31_AUDIO_MODE="${CIUKIOS_WINDOWS31_AUDIO_MODE:-vsbhda}"
 STAGE1_SELFTEST_AUTORUN="${CIUKIOS_STAGE1_SELFTEST_AUTORUN:-0}"
 STAGE1_RUNTIME_PROBE="${CIUKIOS_STAGE1_RUNTIME_PROBE:-0}"
 STAGE1_DEBUG_COMMANDS="${CIUKIOS_STAGE1_DEBUG_COMMANDS:-0}"
@@ -263,14 +253,12 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$CIUKRTST_SRC" "$MOUSECB_SRC" "$CIUKPST_SRC" "$CIUKPTRM_SRC" "$CIUKPCOM_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$VIDLEAVE_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AC97INIT_SRC" "$AUDIOAUTO_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC" "$DOOM_LAUNCH_SRC" "$WOLF3D_LAUNCH_SRC" "$WIN31_LAUNCH_SRC" "$VGASETUP_SRC" "$VBESVGA_BUILD_SCRIPT" "$WINDOWS31_SPEAKER_FETCH_SCRIPT"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$CIUKRTST_SRC" "$MOUSECB_SRC" "$CIUKPST_SRC" "$CIUKPTRM_SRC" "$CIUKPCOM_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$VIDLEAVE_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AC97INIT_SRC" "$AUDIOAUTO_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC" "$DOOM_LAUNCH_SRC" "$WOLF3D_LAUNCH_SRC" "$VGASETUP_SRC" "$VBESVGA_BUILD_SCRIPT"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
 	fi
 done
-
-VBESVGA_OUTPUT_DIR="$VBESVGA_OUTPUT_DIR" bash "$VBESVGA_BUILD_SCRIPT"
 
 if [[ ! -f "$SPLASH_SRC" ]]; then
 	echo "[build-full] ERROR: source not found: $SPLASH_SRC" >&2
@@ -462,7 +450,6 @@ nasm -f bin src/com/doom_safe.asm -o build/full/obj/doomsafe.com
 nasm -f bin "$DOOM_LAUNCH_SRC" -o "$DOOM_LAUNCH_BIN"
 nasm -f bin -D LAUNCHER_MZ=1 "$DOOM_LAUNCH_SRC" -o "$DOOM_LAUNCH_MZ"
 nasm -f bin "$WOLF3D_LAUNCH_SRC" -o "$WOLF3D_LAUNCH_BIN"
-nasm -f bin "$WIN31_LAUNCH_SRC" -o "$WIN31_LAUNCH_BIN"
 nasm -f bin "$VGASETUP_SRC" -o "$VGASETUP_BIN"
 if bash scripts/build_pmirqsb_dos4gw.sh; then
 	echo "[build-full] PMIRQSB protected-mode probe built"
@@ -890,6 +877,35 @@ if [[ "${CIUKIOS_INCLUDE_DOS_WINDOW_PROBES:-0}" == "1" ]]; then
         mcopy -o -i "$IMG" "build/full/obj/doswindow/$window_probe" "::APPS/$window_probe"
     done
 fi
+if [[ "${CIUKIOS_VM_WINDOW:-1}" == "1" ]]; then
+    # VM manager for the desktop's DOS windows (C:\VM), part of every build:
+    # Jemm386 V86 monitor + JLOAD + CVSESSION (VGA model, keyboard/mouse/
+    # SB16/OPL on AC'97), VMSTART (run by the desktop at boot), DPMIRUN
+    # (each window's launcher and DPMI host) and VMFORK (a program in a DOS
+    # VM of its own). DOS/4GW programs use the
+    # patched HDPMI packaged in ::SBEMU. CIUKIOS_VM_WINDOW=0 leaves it out.
+    [[ "$SBEMU_MODE" != "off" ]] \
+        || { echo "[build-full] ERROR: CIUKIOS_VM_WINDOW=1 needs the patched HDPMI in ::SBEMU (CIUKIOS_SBEMU_MODE=build or reuse)" >&2; exit 1; }
+    VM_WINDOW_DIR="${CIUKIOS_VM_WINDOW_DIR:-$CIUKIOS_ROOT/build/full/obj/vm-window}"
+    echo "[build-full] building the DOS-window VM session into $VM_WINDOW_DIR"
+    bash scripts/build_jemm_monitor.sh --output "$VM_WINDOW_DIR/jemm" \
+        --ciukios-device-query --ciukios-vm-scheduler
+    vm_jemm="$VM_WINDOW_DIR/jemm/$(cat "$VM_WINDOW_DIR/jemm/CURRENT")"
+    rm -rf "$VM_WINDOW_DIR/session"
+    bash scripts/build_vm_session.sh --output "$VM_WINDOW_DIR/session"
+    nasm -f bin src/com/dpmirun.asm -o "$VM_WINDOW_DIR/DPMIRUN.COM"
+    nasm -f bin src/com/vmstart.asm -o "$VM_WINDOW_DIR/VMSTART.COM"
+    nasm -f bin src/com/vmfork.asm -o "$VM_WINDOW_DIR/VMFORK.COM"
+    mtools_ensure_dir "$IMG" ::VM
+    mcopy -o -i "$IMG" "$vm_jemm/JEMM386.EXE" "$vm_jemm/JLOAD.EXE" ::VM/
+    mcopy -o -i "$IMG" "$VM_WINDOW_DIR/session/CVSESSION.DLL" ::VM/CVSESS.DLL
+    mcopy -o -i "$IMG" "$VM_WINDOW_DIR/DPMIRUN.COM" "$VM_WINDOW_DIR/VMSTART.COM" \
+        "$VM_WINDOW_DIR/VMFORK.COM" ::VM/
+    mcopy -o -i "$IMG" config/vm-window/README.TXT ::VM/README.TXT
+    mcopy -o -i "$IMG" "$vm_jemm/ARTISTIC.TXT" ::VM/JEMM.TXT
+    mcopy -o -i "$IMG" "$vm_jemm/JLOAD-LICENSE.TXT" ::VM/JLOAD.TXT
+    mcopy -o -i "$IMG" "$vm_jemm/CIUKIOS-MODIFICATIONS.TXT" ::VM/JEMMMODS.TXT
+fi
 echo "[build-full] injecting official system icons and credits to ::SYSTEM/UI"
 mtools_ensure_dir "$IMG" ::SYSTEM/UI
 python3 scripts/build_desktop_assets.py
@@ -1259,22 +1275,21 @@ mcopy -o -i "$IMG" "$AUDIOKEY_BIN" "${DRIVERS_IMAGE_DIR%/}/AUDIOKEY.COM"
 echo "[build-full] injecting AKEY.COM alias to ${DRIVERS_IMAGE_DIR%/}/AKEY.COM"
 mcopy -o -i "$IMG" "$AUDIOKEY_BIN" "${DRIVERS_IMAGE_DIR%/}/AKEY.COM"
 echo "[build-full] injecting VGASETUP.COM display manager"
+# The desktop keeps its resolution profile in C:\SYSTEM\VIDEO\DISPLAY.CFG.
+mtools_ensure_dir "$IMG" ::SYSTEM/VIDEO
+echo "[build-full] building the VBE DOS helpers into ::SYSTEM/VIDEO"
+VBESVGA_OUTPUT_DIR="$VBESVGA_OUTPUT_DIR" bash "$VBESVGA_BUILD_SCRIPT"
+for vbe_helper in "${VBE_DOS_HELPERS[@]}"; do
+	[[ -s "$VBESVGA_OUTPUT_DIR/$vbe_helper" ]] \
+		|| { echo "[build-full] ERROR: VBE DOS helper missing: $vbe_helper" >&2; exit 1; }
+	mcopy -o -i "$IMG" "$VBESVGA_OUTPUT_DIR/$vbe_helper" "::SYSTEM/VIDEO/$vbe_helper"
+done
+# The desktop starts AUXSTACK through AUXSTART, which keeps its banner off
+# the boot splash (COM1 only on a graphics screen).
+nasm -f bin src/com/auxstart.asm -o build/full/obj/auxstart.com
+mcopy -o -i "$IMG" build/full/obj/auxstart.com ::SYSTEM/VIDEO/AUXSTART.COM
 mcopy -o -i "$IMG" "$VGASETUP_BIN" "${DRIVERS_IMAGE_DIR%/}/VGASETUP.COM"
 
-vbesvga_payload=(
-	VBESVGA.DRV VDDVBE.386 VBEVMDIB.3GR
-	AUXSTACK.COM AUXCHECK.COM VIDMODES.COM MODETEST.COM SETUP.EXE
-	OEMSETUP.INF VBESVGA.TXT SOURCE.TXT
-)
-for vbesvga_file in "${vbesvga_payload[@]}"; do
-	[[ -s "$VBESVGA_OUTPUT_DIR/$vbesvga_file" ]] \
-		|| { echo "[build-full] ERROR: incomplete VBE video payload: $vbesvga_file" >&2; exit 1; }
-done
-mtools_ensure_dir "$IMG" "$VIDEO_IMAGE_DIR"
-for vbesvga_file in "${vbesvga_payload[@]}"; do
-	mcopy -o -i "$IMG" "$VBESVGA_OUTPUT_DIR/$vbesvga_file" "${VIDEO_IMAGE_DIR%/}/$vbesvga_file"
-done
-echo "[build-full] universal VBE/EDID video suite ready under $VIDEO_IMAGE_DIR"
 if [[ -f "$PMIRQSB_BIN" ]]; then
 	echo "[build-full] injecting PMIRQSB.COM launcher to ${DRIVERS_IMAGE_DIR%/}/PMIRQSB.COM"
 	mcopy -o -i "$IMG" "$PMIRQSB_LAUNCH_BIN" "${DRIVERS_IMAGE_DIR%/}/PMIRQSB.COM"
@@ -1386,220 +1401,6 @@ if [[ -d "$NETWORK_SRC_DIR/PACKET" ]]; then
     done
 fi
 
-case "$WINDOWS31_MODE" in
-	auto|require|off) ;;
-	*)
-		echo "[build-full] ERROR: CIUKIOS_WINDOWS31_MODE must be auto, require or off" >&2
-		exit 1
-		;;
-esac
-
-if [[ "$WINDOWS31_MODE" != "off" ]]; then
-	windows31_media=()
-	windows31_media_count=0
-	for disk_number in 01 02 03 04 05 06 07; do
-		disk_path="$WINDOWS31_MEDIA_DIR/disk${disk_number}.img"
-		windows31_media+=("$disk_path")
-		[[ -f "$disk_path" ]] && windows31_media_count=$((windows31_media_count + 1))
-	done
-
-	if (( windows31_media_count != 0 && windows31_media_count != 7 )); then
-		echo "[build-full] ERROR: incomplete Windows 3.1 media set in $WINDOWS31_MEDIA_DIR ($windows31_media_count/7 images)" >&2
-		exit 1
-	fi
-	if [[ "$WINDOWS31_MODE" == "require" && "$windows31_media_count" -ne 7 ]]; then
-		echo "[build-full] ERROR: Windows 3.1 media is required but disk01.img ... disk07.img are unavailable" >&2
-		exit 1
-	fi
-
-	if (( windows31_media_count == 7 )); then
-		for command_name in sha256sum stat; do
-			command -v "$command_name" >/dev/null 2>&1 \
-				|| { echo "[build-full] ERROR: Windows media integration requires $command_name" >&2; exit 1; }
-		done
-		[[ -s "$WINDOWS31_README" ]] \
-			|| { echo "[build-full] ERROR: missing Windows media README: $WINDOWS31_README" >&2; exit 1; }
-
-		windows31_hashes=()
-		for disk_path in "${windows31_media[@]}"; do
-			[[ "$(stat -c%s "$disk_path")" -eq 1474560 ]] \
-				|| { echo "[build-full] ERROR: invalid 1.44MB Windows media: $disk_path" >&2; exit 1; }
-			mdir -i "$disk_path" :: >/dev/null 2>&1 \
-				|| { echo "[build-full] ERROR: unreadable FAT Windows media: $disk_path" >&2; exit 1; }
-			windows31_hashes+=("$(sha256sum "$disk_path" | awk '{print $1}')")
-		done
-
-		echo "[build-full] integrating Windows 3.1 media into the canonical full image"
-		mtools_ensure_dir "$IMG" ::MEDIA
-		mtools_ensure_dir "$IMG" "$WINDOWS31_MEDIA_IMAGE_DIR"
-		mtools_ensure_dir "$IMG" "$WINDOWS31_SETUP_IMAGE_DIR"
-
-		windows31_staging="$(mktemp -d /tmp/ciukios-full-windows31.XXXXXX)"
-		cleanup_windows31_staging() {
-			if [[ -n "${windows31_staging:-}" && -d "$windows31_staging" \
-				&& "$windows31_staging" == /tmp/ciukios-full-windows31.* ]]; then
-				rm -rf -- "$windows31_staging"
-			fi
-		}
-		trap cleanup_windows31_staging EXIT
-
-		for index in 0 1 2 3 4 5 6; do
-			disk_number="$(printf '%02d' "$((index + 1))")"
-			disk_path="${windows31_media[$index]}"
-			mcopy -o -i "$IMG" "$disk_path" "$WINDOWS31_MEDIA_IMAGE_DIR/DISK${disk_number}.IMG"
-			mcopy -s -o -i "$disk_path" "::*" "$windows31_staging/"
-		done
-
-		shopt -s nullglob dotglob
-		windows31_setup_items=("$windows31_staging"/*)
-		shopt -u nullglob dotglob
-		(( ${#windows31_setup_items[@]} > 0 )) \
-			|| { echo "[build-full] ERROR: Windows setup staging is empty" >&2; exit 1; }
-		mcopy -s -o -i "$IMG" "${windows31_setup_items[@]}" "$WINDOWS31_SETUP_IMAGE_DIR/"
-		mcopy -o -i "$IMG" "$WINDOWS31_README" "$WINDOWS31_MEDIA_IMAGE_DIR/README.TXT"
-		mcopy -o -i "$IMG" "$WINDOWS31_README" "$WINDOWS31_SETUP_IMAGE_DIR/CIUKIOS.TXT"
-
-		for index in 0 1 2 3 4 5 6; do
-			current_hash="$(sha256sum "${windows31_media[$index]}" | awk '{print $1}')"
-			[[ "$current_hash" == "${windows31_hashes[$index]}" ]] \
-				|| { echo "[build-full] ERROR: source Windows media changed during build: ${windows31_media[$index]}" >&2; exit 1; }
-		done
-		mdir -i "$IMG" "$WINDOWS31_SETUP_IMAGE_DIR/SETUP.EXE" >/dev/null 2>&1 \
-			|| { echo "[build-full] ERROR: SETUP.EXE is missing from $WINDOWS31_SETUP_IMAGE_DIR" >&2; exit 1; }
-
-		if [[ -s "$WINDOWS31_INSTALLED_DIR/WIN.COM" \
-			&& -s "$WINDOWS31_INSTALLED_DIR/SYSTEM/MOUSE.DRV" ]]; then
-			for command_name in 7z perl; do
-				command -v "$command_name" >/dev/null 2>&1 \
-					|| { echo "[build-full] ERROR: installed Windows integration requires $command_name" >&2; exit 1; }
-			done
-			[[ -f "$WINDOWS31_PROFILE_SCRIPT" ]] \
-				|| { echo "[build-full] ERROR: missing Windows profile generator: $WINDOWS31_PROFILE_SCRIPT" >&2; exit 1; }
-			echo "[build-full] integrating locally prepared Windows tree from $WINDOWS31_INSTALLED_DIR"
-			if [[ "$WINDOWS31_AUDIO_MODE" == "stable" ]]; then
-				CIUKIOS_WINDOWS31_SPEAKER_DIR="$WINDOWS31_SPEAKER_DIR" \
-					bash "$WINDOWS31_SPEAKER_FETCH_SCRIPT"
-			fi
-			mtools_ensure_dir "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR"
-			shopt -s nullglob dotglob
-			windows31_installed_items=("$WINDOWS31_INSTALLED_DIR"/*)
-			shopt -u nullglob dotglob
-			mcopy -s -o -i "$IMG" "${windows31_installed_items[@]}" "$WINDOWS31_INSTALLED_IMAGE_DIR/"
-			mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/WIN.COM" >/dev/null 2>&1 \
-				|| { echo "[build-full] ERROR: installed WIN.COM was not packaged" >&2; exit 1; }
-			mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/MOUSE.DRV" >/dev/null 2>&1 \
-				|| { echo "[build-full] ERROR: installed Windows mouse driver was not packaged" >&2; exit 1; }
-			# Keep Microsoft's loader recoverable and make the canonical WIN command
-			# own the complete 16-bit AC97 lifecycle. Windows must run in Standard
-			# Mode because Enhanced Mode installs its own V86/DPMI monitor.
-			mren -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/WIN.COM" \
-				"$WINDOWS31_INSTALLED_IMAGE_DIR/WINCORE.COM"
-			mcopy -o -i "$IMG" "$WIN31_LAUNCH_BIN" \
-				"$WINDOWS31_INSTALLED_IMAGE_DIR/WIN.COM"
-			mren -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/DOSX.EXE" \
-				"$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/DOSX.IBM"
-			mcopy -o -i "$IMG" "$SBEMU_OUTPUT_DIR/DOSXVS.EXE" \
-				"$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/DOSX.EXE"
-			# VSBHDA16 loads its 16-bit card backend by filename from the caller's
-			# current directory (C:\WINDOWS), not from the absolute EXE directory.
-			mcopy -o -i "$IMG" "$SBEMU_OUTPUT_DIR/SNDCARD.DRV" \
-				"$WINDOWS31_INSTALLED_IMAGE_DIR/SNDCARD.DRV"
-
-			windows31_profile_dir="$windows31_staging/configured-profile"
-			CIUKIOS_WINDOWS31_AUDIO_MODE="$WINDOWS31_AUDIO_MODE" bash "$WINDOWS31_PROFILE_SCRIPT" \
-				"$WINDOWS31_INSTALLED_DIR/SYSTEM.INI" \
-				"$WINDOWS31_INSTALLED_DIR/MOUSE.INI" \
-				"$windows31_profile_dir"
-			mcopy -o -i "$IMG" "$windows31_profile_dir/MOUSE.INI" "$WINDOWS31_INSTALLED_IMAGE_DIR/MOUSE.INI"
-			mcopy -o -i "$IMG" "$windows31_profile_dir/SYSTEM.INI" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM.INI"
-			# Recovery and opt-in video profiles consumed transactionally by
-			# VGASETUP.COM.  SYSTEM.INI and SYSTEM.VGA are deliberately the
-			# boot-safe Microsoft VGA profile; the higher modes use banked VBE.
-			for windows31_video_profile in SYSTEM.VGA SYSTEM.800 SYSTEM.102; do
-				mcopy -o -i "$IMG" "$windows31_profile_dir/$windows31_video_profile" \
-					"$WINDOWS31_INSTALLED_IMAGE_DIR/$windows31_video_profile"
-			done
-			mcopy -o -i "$IMG" "$windows31_profile_dir/_DEFAULT.PIF" "$WINDOWS31_INSTALLED_IMAGE_DIR/_DEFAULT.PIF"
-			mcopy -o -i "$IMG" "$windows31_profile_dir/DOSPRMPT.PIF" "$WINDOWS31_INSTALLED_IMAGE_DIR/DOSPRMPT.PIF"
-			# Keep the same generic compatibility shell beside WIN.COM.  Program
-			# Manager and the packaged MS-DOS Prompt can then start a real nested
-			# DOS VM without a disposable-test-only COMMAND.COM fixture.
-			mcopy -o -i "$IMG" "$COMMAND_COMPAT_BIN" "$WINDOWS31_INSTALLED_IMAGE_DIR/COMMAND.COM"
-
-			# The IBM T23 SuperSavage exposes VBE and needs no incompatible
-			# Win9x miniport.  Install the generic Win16 driver, enhanced-mode
-			# VDD/grabber and the auxiliary BIOS stack directly into this tree.
-			for vbe_system_file in VBESVGA.DRV VDDVBE.386 VBEVMDIB.3GR; do
-				mcopy -o -i "$IMG" "$VBESVGA_OUTPUT_DIR/$vbe_system_file" \
-					"$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/$vbe_system_file"
-			done
-			for vbe_windows_file in AUXSTACK.COM AUXCHECK.COM VIDMODES.COM VBESVGA.TXT; do
-				mcopy -o -i "$IMG" "$VBESVGA_OUTPUT_DIR/$vbe_windows_file" \
-					"$WINDOWS31_INSTALLED_IMAGE_DIR/$vbe_windows_file"
-			done
-			for vbe_verify_file in \
-				SYSTEM/VBESVGA.DRV SYSTEM/VDDVBE.386 SYSTEM/VBEVMDIB.3GR \
-				AUXSTACK.COM VIDMODES.COM; do
-				mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/$vbe_verify_file" >/dev/null 2>&1 \
-					|| { echo "[build-full] ERROR: Windows VBE driver was not packaged: $vbe_verify_file" >&2; exit 1; }
-			done
-
-			# Install Windows' own multimedia drivers from the original media.
-			# Keeping these inside C:\WINDOWS isolates Windows configuration from
-			# CiukiDOS' resident INT 33h path used by Costa and DOSNavigator.
-			windows31_native_system="$windows31_staging/native-system"
-			mkdir -p "$windows31_native_system"
-			windows31_native_drivers=(
-				"SNDBLST2.DR_:SNDBLST2.DRV:14816:f2f47c5257a60d0695715a7458bf08fb592a95241b0568134990bc968e4fefef"
-				"VSBD.38_:VSBD.386:5650:a71301a30f6de3ddf2947ce5a54494785a1da79552d892a0f9ac275ced6981a0"
-				"MSADLIB.DR_:MSADLIB.DRV:22064:ea117304fe1d690eecfc9eae2bc4077b40f1267aee47e5ceffa73360d2816de6"
-				"VADLIBD.38_:VADLIBD.386:5542:44401c32dbb28e431d32fc78eae4d09ac1fa02802236275a4efa85da21c104be"
-			)
-			for driver_spec in "${windows31_native_drivers[@]}"; do
-				IFS=: read -r compressed_name installed_name expected_size expected_hash <<< "$driver_spec"
-				compressed_path="$windows31_staging/$compressed_name"
-				installed_path="$windows31_native_system/$installed_name"
-				[[ -s "$compressed_path" ]] \
-					|| { echo "[build-full] ERROR: Windows driver archive is missing: $compressed_name" >&2; exit 1; }
-				7z x -so "$compressed_path" > "$installed_path"
-				[[ "$(stat -c%s "$installed_path")" -eq "$expected_size" ]] \
-					|| { echo "[build-full] ERROR: invalid expanded Windows driver size: $installed_name" >&2; exit 1; }
-				[[ "$(sha256sum "$installed_path" | awk '{print $1}')" == "$expected_hash" ]] \
-					|| { echo "[build-full] ERROR: invalid expanded Windows driver hash: $installed_name" >&2; exit 1; }
-				mcopy -o -i "$IMG" "$installed_path" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/$installed_name"
-				mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/$installed_name" >/dev/null 2>&1 \
-					|| { echo "[build-full] ERROR: Windows native driver was not packaged: $installed_name" >&2; exit 1; }
-			done
-			if [[ "$WINDOWS31_AUDIO_MODE" == "legacy" ]]; then
-				echo "[build-full] Windows legacy audio profile: SB A220 I7 D1 plus AdLib/OPL2 at 388"
-			elif [[ "$WINDOWS31_AUDIO_MODE" == "vsbhda" ]]; then
-				echo "[build-full] Windows Standard Mode audio: transient VSBHDA16 AC97/ICH + SB/AdLib drivers"
-			else
-				for speaker_file_spec in \
-					"SPEAKER.DRV:SYSTEM/SPEAKER.DRV" \
-					"SPEAKER.TXT:SPEAKER.TXT" \
-					"AUDIO.TXT:AUDIO.TXT" \
-					"LICENSE.TXT:SPKLIC.TXT"; do
-					IFS=: read -r speaker_source speaker_destination <<< "$speaker_file_spec"
-					[[ -s "$WINDOWS31_SPEAKER_DIR/$speaker_source" ]] \
-						|| { echo "[build-full] ERROR: missing verified Windows speaker file: $speaker_source" >&2; exit 1; }
-					mcopy -o -i "$IMG" "$WINDOWS31_SPEAKER_DIR/$speaker_source" \
-						"$WINDOWS31_INSTALLED_IMAGE_DIR/$speaker_destination"
-				done
-				mdir -i "$IMG" "$WINDOWS31_INSTALLED_IMAGE_DIR/SYSTEM/SPEAKER.DRV" >/dev/null 2>&1 \
-					|| { echo "[build-full] ERROR: Windows PC-speaker fallback was not packaged" >&2; exit 1; }
-				echo "[build-full] Windows stable audio: verified Microsoft PC-speaker driver; legacy SB/AdLib VxDs disabled"
-			fi
-		else
-			echo "[build-full] Windows setup media ready; no optional installed tree at $WINDOWS31_INSTALLED_DIR"
-		fi
-
-		cleanup_windows31_staging
-		trap - EXIT
-	else
-		echo "[build-full] Windows 3.1 local media not found at $WINDOWS31_MEDIA_DIR (skipped)"
-	fi
-fi
 
 
 README_OPTIONAL_PAYLOADS="Optional payloads: third_party/drivers is injected under SYSTEM/DRIVERS when available at build time"
@@ -1615,12 +1416,6 @@ if [[ -d "$NETWORK_SRC_DIR" ]]; then
 	README_OPTIONAL_PAYLOADS+=", mTCP/Crynwr networking is available under NET with an FTP sandbox at SHARE"
 fi
 
-if [[ "$WINDOWS31_MODE" != "off" && "${windows31_media_count:-0}" -eq 7 ]]; then
-	README_OPTIONAL_PAYLOADS+=", Windows 3.1 source media is archived under MEDIA/WIN31 and merged under WIN31SET"
-	if [[ -s "$WINDOWS31_INSTALLED_DIR/WIN.COM" ]]; then
-		README_OPTIONAL_PAYLOADS+=", the local Windows tree is available under WINDOWS with linear PS/2 input and native SB/AdLib audio (launch with WIN)"
-	fi
-fi
 
 cat > build/full/README.txt << TXT
 CiukiOS Legacy v2 - Full profile (FAT16 baseline)

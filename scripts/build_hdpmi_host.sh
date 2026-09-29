@@ -121,6 +121,9 @@ for candidate in "$WATCOM_ROOT/binl64/wcc386" "$WATCOM_ROOT/binl/wcc386"; do
 done
 [[ -n "$WCC386" ]] \
 	|| { echo "[build-hdpmi] ERROR: OpenWatcom wcc386 not found under $WATCOM_ROOT" >&2; exit 1; }
+WDIS="$(dirname "$WCC386")/wdis"
+[[ -x "$WDIS" ]] \
+	|| { echo "[build-hdpmi] ERROR: OpenWatcom wdis not found next to $WCC386" >&2; exit 1; }
 
 # HX was authored for a case-insensitive filesystem. Create lowercase include
 # aliases inside the ignored checkout so JWasm resolves the original names on
@@ -198,6 +201,8 @@ build_hdpmi_iopl0() {
 				"-fo=$variant_dir/$object_name.obj" "$ROOT_DIR/src/vm/$source_name"
 			c_objects+=("$object_name")
 		done
+		python3 "$ROOT_DIR/scripts/check_hdpmi_c_data.py" "$WDIS" \
+			"$variant_dir/HVIDEO.obj" "$variant_dir/VGAX86.obj" "$variant_dir/CVGA.obj"
 	fi
 
 	for module in "${modules[@]:1}"; do

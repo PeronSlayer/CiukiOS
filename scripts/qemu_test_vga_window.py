@@ -163,7 +163,7 @@ def launch(ui, vm, command, event):
         got = ui.ram[ui.offset('ui_run_text'):ui.offset('ui_run_text') + ui.b('ui_run_len')]
         raise AssertionError(f'Run field did not receive the command: {got!r}')
     event('Run field verified', command=command, attempts=attempt + 1)
-    ui.click(58, 1)
+    ui.click(40, 1)                  # Run: a DOS window whenever the desktop can host one
     ui.until(lambda: ui.b('dos_host_active') == 1 and ui.w('dw_segment') and ui.module()[1]['live'],
              'DOS window guest did not start', 60)
 

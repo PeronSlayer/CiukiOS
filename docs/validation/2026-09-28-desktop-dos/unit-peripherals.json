@@ -1,0 +1,203 @@
+{
+  "result": "PASS",
+  "scope": "isolated per-session legacy input and sound device model",
+  "assertions": 1054,
+  "capabilities_tested": [
+    "exclusive generation ownership and stale-owner rejection",
+    "set-1 make/break including left/right Ctrl and Space",
+    "focus-loss release and 64 repeated focus cycles",
+    "8042 keyboard and PS/2 mouse queues with IRQ1/IRQ12",
+    "8259 PIC and 8254 PIT modes 0/2/3",
+    "8237 memory-to-device DMA and terminal count",
+    "SB16 reset/version/rate/single-cycle PCM/IRQ/acknowledgement",
+    "OPL2 register/timer behavior and pinned DBOPL synthesis",
+    "normal cleanup, stale-owner cleanup rejection and DMA error cleanup",
+    "explicit word-I/O, string-I/O, PIT, DMA and SB rejection paths"
+  ],
+  "pcm": {
+    "sound_blaster": {
+      "sample_rate": 44100,
+      "channels": 2,
+      "bits": 16,
+      "frames": 128,
+      "bytes": 512,
+      "sha256": "41561431a9d16decf1a5c4ea688b719edbbf8d9a4f65af872435bd88afaf6410",
+      "peak": 32768,
+      "ac_rms": 8450.908590204961,
+      "unique_samples": 4,
+      "sample_changes": 4,
+      "wav": "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/sb-pcm.wav",
+      "wav_sha256": "4a377c2a8e1b2afcaabef53f3acef6d6e8c599fd51e6c467eb3ebca1d7a89489"
+    },
+    "opl": {
+      "sample_rate": 44100,
+      "channels": 2,
+      "bits": 16,
+      "frames": 4096,
+      "bytes": 16384,
+      "sha256": "a05009708d16109835879f1271b42cfbac23dca2c37461f5d4765beec770928b",
+      "peak": 4072,
+      "ac_rms": 3119.9614243953006,
+      "unique_samples": 489,
+      "sample_changes": 3961,
+      "wav": "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/opl-pcm.wav",
+      "wav_sha256": "3850bedabe13bc6e083331916b57f7587b75aef808f893d72ec83bee7ade2bce"
+    }
+  },
+  "dependency": {
+    "archive": "third_party/vsbhda/source-75fa4bb.tar.gz",
+    "archive_sha256": "92fbd00814dc3ad2e448b40edb8eb2b0e6f7572b4accdfa6dc5cf17aa431820f",
+    "commit": "75fa4bbfea70cbcc0c40d1212f04952ff8abbf16",
+    "license_sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "extracted_files": {
+      "src/CONFIG.HPP": {
+        "bytes": 218,
+        "sha256": "927aae87cccc5b90920fd92e5309f3dc3749feea236519af6dacf8f1f4e9c8d4"
+      },
+      "src/DBOPL.CPP": {
+        "bytes": 45476,
+        "sha256": "e24f0c920a4afc176a8805b96d421df4f2b400c13858cc002428ef97901c2b4d"
+      },
+      "src/DBOPL.H": {
+        "bytes": 7434,
+        "sha256": "b53b629b6f9bcb6728d1abf42ff84e925215898ca6cb2fa80b1e5df054c3149f"
+      }
+    }
+  },
+  "sources": {
+    "src/vm/guest_peripherals.c": "911aa6ae8ec8cbcd57425ef2a5d581e7f35ba494763b4eb5a4d241aee4f2eb79",
+    "src/vm/guest_peripherals.h": "c46b91781822de7a06c5be64bf1d9aa7fdd92ca1666bed81936b968ffee1c0ee",
+    "src/vm/guest_opl_dbopl.cpp": "26fe491eca599116ea0cb34ce39d158ba5c22a048f1b68b18075edaeb5f6288f",
+    "src/vm/guest_opl_dbopl.h": "f7b76caf5dd8053aacfe200c7e31e9252b9607137168594f787ea2138306ba70",
+    "src/vm/guest_peripheral_scheduler.h": "701bda2209ccffec0c1afe0f17d88ec3be9e0e7a201b9eaf6f0ab92ae7d7d844",
+    "src/vm/test_guest_peripherals.cpp": "cf6fc9d5246ff7bba03c510db3bc4e9bfe03e9bbe6778f25db86c88d56021c09",
+    "scripts/test_guest_peripherals.py": "f7a591846dca9e011617349d51a3493eeeab4ccf65aa9008b34cfcdc6d5934cf",
+    "third_party/vsbhda/UPSTREAM.json": "d6a89ab66e56086bc1c823feb6daba06f62947791bcd47795a9db24a0e3ac746",
+    "third_party/vsbhda/README.md": "5c2ebe4daf00a2dc07ca4c93d53c31bfb9c9b207faac0aa6b073c0adbd5ea401",
+    "third_party/vsbhda/LICENSE": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+  },
+  "host_commands": [
+    [
+      "cc",
+      "-std=c99",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-pedantic",
+      "-O1",
+      "-g",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-I/home/peronslayer/Desktop/CiukiOS/src/vm",
+      "-I/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/vsbhda-src",
+      "-c",
+      "/home/peronslayer/Desktop/CiukiOS/src/vm/guest_peripherals.c",
+      "-o",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/guest_peripherals.o"
+    ],
+    [
+      "c++",
+      "-std=c++11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-pedantic",
+      "-O1",
+      "-g",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-I/home/peronslayer/Desktop/CiukiOS/src/vm",
+      "-I/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/vsbhda-src",
+      "-c",
+      "/home/peronslayer/Desktop/CiukiOS/src/vm/guest_opl_dbopl.cpp",
+      "-o",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/guest_opl_dbopl.o"
+    ],
+    [
+      "c++",
+      "-std=c++11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-pedantic",
+      "-O1",
+      "-g",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-I/home/peronslayer/Desktop/CiukiOS/src/vm",
+      "-I/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/vsbhda-src",
+      "-c",
+      "/home/peronslayer/Desktop/CiukiOS/src/vm/test_guest_peripherals.cpp",
+      "-o",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/test_guest_peripherals.o"
+    ],
+    [
+      "c++",
+      "-std=c++11",
+      "-Wall",
+      "-Wextra",
+      "-Wno-switch",
+      "-O1",
+      "-g",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-I/home/peronslayer/Desktop/CiukiOS/src/vm",
+      "-I/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/vsbhda-src",
+      "-c",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/vsbhda-src/DBOPL.CPP",
+      "-o",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/DBOPL.o"
+    ],
+    [
+      "c++",
+      "-fsanitize=address,undefined",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/guest_peripherals.o",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/guest_opl_dbopl.o",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/test_guest_peripherals.o",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/DBOPL.o",
+      "-lm",
+      "-o",
+      "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/test-guest-peripherals"
+    ]
+  ],
+  "target_compiler_command": [
+    "/opt/watcom/binl64/wcc386",
+    "-zq",
+    "-bt=dos",
+    "-mf",
+    "-3r",
+    "-ecc",
+    "-zl",
+    "-s",
+    "-w4",
+    "-we",
+    "-i=/opt/watcom/h",
+    "-fo=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/guest_peripherals-watcom.obj",
+    "/home/peronslayer/Desktop/CiukiOS/src/vm/guest_peripherals.c"
+  ],
+  "freestanding_link_command": [
+    "/opt/watcom/binl64/wlink",
+    "option",
+    "quiet,nodefaultlibs,start=_cvgp_init",
+    "format",
+    "raw",
+    "bin",
+    "disable",
+    "1014",
+    "name",
+    "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/guest_peripherals-watcom.bin",
+    "file",
+    "/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/unit-peripherals/guest_peripherals-watcom.obj"
+  ],
+  "target_object_has_no_external_imports": true,
+  "integration": {
+    "jemm_v86_adapter": false,
+    "hdpmi_adapter": false,
+    "real_cpu_io_executed": false,
+    "original_dos_binary_executed": false,
+    "simultaneous_native_ui_executed": false,
+    "qemu_accepted": false,
+    "physical_hardware_accepted": false,
+    "fps_claim": null
+  }
+}

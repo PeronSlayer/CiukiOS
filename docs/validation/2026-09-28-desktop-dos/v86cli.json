@@ -1,0 +1,111 @@
+{
+  "passed": true,
+  "mode": "scheduler-invariant",
+  "source_image_sha256": "419d1aa4042a71240febc56c8be2e24ce01f0a335eb4193b1c9f648b676d7f6d",
+  "fixtures": {
+    "SYSTEM/CIUKIDOS.SYS": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+    "JEMM386.EXE": "ba16835eb69aee1646fc04beed4ba67136ed4bc1cd26b4678d1782b13420f9af",
+    "JLOAD.EXE": "93c205814779baf2f9c89d45fe1e60a3b7e597a13a87cfb7538f7cc5b108af40",
+    "CVSESS.DLL": "99122776d4e38dde46cb6387d893cecade3d75b93fc288754e689f3a10fafb38",
+    "V86CLI.COM": "4d419f73d9d683f5dfb791a2c89f996b952dea2473e116460f2151b9431b3f2b"
+  },
+  "events": [
+    {
+      "command": "run \\JEMM386.EXE LOAD NOEMS X=A000-FFFF NODYN MAX=32M MIN=32M NOVME",
+      "output": "[MZ] run\r\nJemm386 loaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\JLOAD.EXE \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' loaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\V86CLI.COM",
+      "output": "[V86CLI] BIOS KEYBOARD READY\r\n[V86CLI] PROFILE NEGOTIATED ALLOW/DECLINE/RELEASE PASS flags=0100000F\r\n[V86CLI] FLAGS/INT/IRET/stack/STI/PIC/EOI/HLT PASS\r\n[V86CLI] COUNTERS 00000000 0010E3B1 0000000D 0010E3BE 000000E1 0010E3BE 000000EE 0010E3BE 000000EE 0010E3BF 000000FB 0010E3CC \r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\JLOAD.EXE -u \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' unloaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "run \\JEMM386.EXE UNLOAD",
+      "output": "[MZ] run\r\nfound Jemm instance at segment 20d3\r\nJemm unloaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    },
+    {
+      "command": "comdemo",
+      "output": "COM demo via INT21h\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> "
+    }
+  ],
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "512",
+    "-drive",
+    "file=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/v86cli/disk.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/v86cli/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-647d2f909ab341c885a8f0830a7e2d42.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-m",
+    "128",
+    "-vga",
+    "std",
+    "-audiodev",
+    "wav,id=snd,path=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28e/v86cli/audio.wav",
+    "-device",
+    "AC97,audiodev=snd"
+  ],
+  "negotiated_profile_flags": "0100000F",
+  "samples_host_guest_ticks": [
+    [
+      0,
+      1106865
+    ],
+    [
+      13,
+      1106878
+    ],
+    [
+      225,
+      1106878
+    ],
+    [
+      238,
+      1106878
+    ],
+    [
+      238,
+      1106879
+    ],
+    [
+      251,
+      1106892
+    ]
+  ],
+  "deltas_before_during_after_cli": [
+    [
+      13,
+      13
+    ],
+    [
+      13,
+      0
+    ],
+    [
+      13,
+      13
+    ]
+  ],
+  "source_image_unchanged": true
+}

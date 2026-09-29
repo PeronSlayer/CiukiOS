@@ -9,7 +9,7 @@ WATCOM_ROOT="${WATCOM:-/opt/watcom}"
 export WATCOM="$WATCOM_ROOT"
 export INCLUDE="$WATCOM_ROOT/h"
 export PATH="$WATCOM_ROOT/binl64:$WATCOM_ROOT/binl:$PATH"
-for item in dpmi_lifetime:DPMILIF dpmi_fault:DPMIFLT; do
+for item in dpmi_lifetime:DPMILIF dpmi_fault:DPMIFLT dpmi_ports:DPMIPORT; do
     source="${item%%:*}"
     binary="${item##*:}"
     wcc386 -zq -bt=dos -mf -3r -ecc -s -w4 -we \

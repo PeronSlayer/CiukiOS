@@ -1,0 +1,8 @@
+{
+  "gate": "unit-virtual-vga",
+  "exit": 0,
+  "output": [
+    "PASS: 168060 independent VGA assertions; state 267092 bytes",
+    "firmware cross-check: {\"rom\": \"/usr/share/qemu/vgabios-stdvga.bin\", \"rom_sha256\": \"7c2d15feadfcaf35bd8b9d20983f32c4dd9895a6045a4c9e67a28727bc9b629c\", \"modes\": [{\"mode\": \"0x1\", \"rom_record_offset\": \"0x5bcc\", \"palette\": 2}, {\"mode\": \"0x3\", \"rom_record_offset\": \"0x5c24\", \"palette\": 2}, {\"mode\": \"0xd\", \"rom_record_offset\": \"0x5d00\", \"palette\": 1}, {\"mode\": \"0xe\", \"rom_record_offset\": \"0x5d2c\", \"palette\": 1}, {\"mode\": \"0x10"
+  ]
+}

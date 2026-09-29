@@ -1,0 +1,22 @@
+{
+  "source_sha256": "b183eb4f5b9c3ee0bfecf9daf25679287033945fec4ea7d185ff52d9e9af1d29",
+  "fault": "disk",
+  "payload_sha256": {
+    "SYSTEM/CIUKIDOS.SYS": "f181ddea25f6eaa75f24d787d97df1d57fc6ce2779349876a95498b34980d49b",
+    "SYSTEM/SHELL.COM": "933c7321750a01523780a78a4c59e3edfed8911057fedca417cb209ab18dc9f4",
+    "SYSTEM/BOOTSND.COM": "9f4cc68dfa5569cc60c8d92220bcfc9fea79bb0cb646f213d827b2c44163f482"
+  },
+  "error": "missing serial marker: [DESKTOP] READY",
+  "firmware_scratch_counts": [
+    504,
+    0
+  ],
+  "audio": {
+    "bits": 16,
+    "pcm_bytes": 0,
+    "rms": 0,
+    "peak": 0
+  },
+  "firmware_exercised": true,
+  "passed": false
+}

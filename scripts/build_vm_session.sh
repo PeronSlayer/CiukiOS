@@ -7,6 +7,8 @@ root=pathlib.Path(sys.argv[1])
 p=argparse.ArgumentParser(description='Build the experimental V86 session JLM; no installation.')
 p.add_argument('--jemm-build',type=pathlib.Path,default=root/'build/external/jemm-monitor')
 p.add_argument('--output',type=pathlib.Path,default=root/'build/full/vm-session')
+p.add_argument('--kernel-listing',type=pathlib.Path,default=root/'build/full/obj/ciukidos.lst',
+               help='CiukiDOS kernel listing: VM manager offsets of InDOS and the FAT cache')
 a=p.parse_args(sys.argv[2:]);base=a.jemm_build.resolve();out=a.output.resolve()
 if root/'build' not in out.parents: p.error('--output must be inside the ignored build directory')
 current=(base/'CURRENT').read_text().strip();jemm_output=(base/current).resolve()
@@ -89,7 +91,23 @@ for name,source_path in (('dbopl',dbopl/'DBOPL.CPP'),('session_opl',root/'src/vm
     subprocess.run(['objcopy','--remove-section=.debug$S','--remove-section=.llvm_addrsig',
                     str(raw),str(cooked)],check=True)
     opl_objects+=['file',str(cooked)]
-subprocess.run([str(tools['jwasm']),'-coff','-c','-nologo','-I'+str(include),'-I'+str(root/'src/vm'),
+# The VM manager switches DOS VMs only outside DOS with a clean FAT cache and
+# invalidates the resumed VM's cache; it needs these kernel data offsets. A
+# missing listing builds a VMM that refuses to create VMs.
+import re
+wanted={'dos_indos_flag':'KL_INDOS','fat_cache_valid':'KL_FAT_VALID','fat_cache_dirty':'KL_FAT_DIRTY',
+        'fat_cache_sector':'KL_FAT_SECTOR','dos_mem_last_mcb_seg':'KL_LAST_MCB',
+        'int21_last_ah':'KL_LAST_AH'}
+layout={}
+if a.kernel_listing.exists():
+    for line in a.kernel_listing.read_text(errors='replace').splitlines():
+        m=re.match(r'\s*\d+\s+([0-9A-F]{8})\s+\S+\s+(?:<\d+>\s+)?(\w+)\s+d[bw]\b',line)
+        if m and m.group(2) in wanted: layout[wanted[m.group(2)]]=int(m.group(1),16)
+present=len(layout)==len(wanted)
+lines=['; Generated from '+str(a.kernel_listing)+' by build_vm_session.sh','KL_PRESENT equ '+('1' if present else '0')]
+lines+=[f'{name} equ 0{layout.get(name,0):X}h' for name in wanted.values()]
+(out/'kernel_layout.inc').write_text('\n'.join(lines)+'\n')
+subprocess.run([str(tools['jwasm']),'-coff','-c','-nologo','-I'+str(include),'-I'+str(root/'src/vm'),'-I'+str(out),
                 '-Fo'+str(obj),'-Fl'+str(out/'session.lst'),str(root/'src/vm/session_jlm.asm')],check=True)
 video_objects=[]
 for name in video_sources:

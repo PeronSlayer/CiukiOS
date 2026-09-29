@@ -136,12 +136,6 @@ if (( full_image_ready )); then
     else
       skip_test "doom-vanille workflows" "payload absent from full image"
     fi
-
-    if mdir -i build/full/ciukios-full.img ::WINDOWS/WIN.COM >/dev/null 2>&1; then
-      run_test "Windows 3.1 mouse/Alt+F4/clean-exit workflow" bash "scripts/qemu_test_full_windows31.sh" --no-build --headless-smoke || overall_rc=1
-    else
-      skip_test "Windows 3.1 workflow" "installed payload absent from full image"
-    fi
   else
     skip_test "bundled application regression matrix" "CIUKIOS_TEST_BUNDLED_APPS=0"
   fi

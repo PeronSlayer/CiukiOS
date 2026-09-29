@@ -13,8 +13,17 @@ cross mode through the owned JLM virtual-BIOS entry. Other real-mode procedures
 and the official 3.24 callback ABI are unchanged.
 Client IF is logical: CLI/STI/0900h-0902h keep physical IF=1 so host ticks
 run, while guest IRQ0 is deferred. A CLI-started region is single-stepped
-without a time or instruction limit; PUSHF/POPF and same-privilege IRET are
-emulated so the saved IF image restores the logical state. A host service
+without a time or instruction limit; PUSHF/POPF, same-privilege IRET, MOV SS,
+POP SS and LSS (E)SP are emulated so the saved IF image restores the logical
+state, and the host's own INT 30h stubs run natively. A host service
 entered from such a region re-arms stepping only at its exact return CS:EIP.
+Device ports (PIC, ISA DMA, Sound Blaster 220h, OPL 388h) of a bound client
+are executed in ring 0 through the session's DEV_IO real-mode entry, with IF
+clear and the interrupted real-mode context saved. Device IRQs are held by
+the session while a client is bound and entered in protected mode through
+HDPMI's locked-stack IRQ path at an interruptible instruction boundary: the
+end of an emulated port or VGA access, the return from a client IRQ handler,
+or a physical timer tick (that tick is then entered right after the device
+IRQ). They are never injected into V86 underneath a DOS extender's handler.
 The C objects are compiled for size: HDPMI addresses _TEXT32R3 with 16-bit
 offsets, so the build refuses any image section that ends above RVA 10000h.

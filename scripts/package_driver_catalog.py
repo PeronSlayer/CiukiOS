@@ -31,8 +31,8 @@ def main():
     }
     entries += [dict(source=str(args.objects / source), target=target)
                 for source, target in native.items()]
+    # The DOS VBE helpers of vbesvga.drv (its Win16 driver is not shipped).
     for name in ('AUXSTACK.COM', 'AUXCHECK.COM', 'VIDMODES.COM',
-                 'VBESVGA.DRV', 'VDDVBE.386', 'VBEVMDIB.3GR',
                  'VBESVGA.TXT', 'SOURCE.TXT'):
         entries.append(dict(source=str(args.video / name), target=f'DRIVERS/VIDEO/{name}'))
     prepared = []

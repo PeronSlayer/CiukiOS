@@ -90,6 +90,28 @@ startup_driver_services:
     popad
     ret
 
+; The desktop's DOS windows run in virtual machines, as in Windows 95: the
+; VM manager (Jemm386 + CVSESSION) is resident from the start of every normal
+; desktop session. Safe boot keeps the plain real-mode system.
+startup_vm_manager:
+    cmp byte [vc_force_safe],1
+    je .done
+    pushad
+    call setup_exec_block
+    mov byte [exec_tail],0
+    mov byte [exec_tail+1],13
+    mov dx,driver_vm_path
+    mov bx,exec_env_seg
+    mov ax,0x4B00
+    int 0x21
+    push cs
+    pop ds
+    push cs
+    pop es
+    popad
+.done:
+    ret
+
 ; DI zero-terminated full line, CX report length. Only match line starts.
 driver_has_line:
     pushad
@@ -138,6 +160,7 @@ driver_startup_audio db 1
 driver_force_vga db 0
 driver_detector_path db '\DRIVERS\HWDETECT.COM',0
 driver_input_path db '\DRIVERS\INPUTINI.COM',0
+driver_vm_path db '\VM\VMSTART.COM',0
 driver_profile_path db '\DRIVERS\ACTIVE.CFG',0
 driver_audio_ich db 'AUDIO=ICH_AC97',0
 driver_audio_sb db 'AUDIO=SB_NATIVE',0

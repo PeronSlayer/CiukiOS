@@ -1,0 +1,199 @@
+{
+  "events": [
+    {
+      "name": "BIOS keyboard ring before Run",
+      "seconds": 20.65,
+      "head_tail": [
+        "0x0022",
+        "0x0022"
+      ]
+    },
+    {
+      "name": "Run field verified",
+      "seconds": 32.97,
+      "command": "run \\DPMIRUN.COM \\APPS\\DOOMVAN\\PCDMCORE.EXE -warp 1 1",
+      "attempts": 1
+    },
+    {
+      "name": "mouse click",
+      "host_seconds": 13.263503887981642,
+      "action": 58,
+      "owner": 1,
+      "position": [
+        622,
+        496
+      ]
+    },
+    {
+      "name": "launched",
+      "seconds": 34.48
+    }
+  ],
+  "video": [
+    {
+      "t": 0,
+      "seconds": 39.5,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_elements": 0,
+      "pm_unsupported": 0,
+      "pm_port_reads": 0,
+      "pm_port_writes": 0,
+      "pm_attached": 1,
+      "seq": "0300030002",
+      "gc": "0000000000100e0fff",
+      "crtc": "5f4f50825581bf1f004f0d0e000004899c8e8f281f96b9a3ff",
+      "damage_result": "0x0",
+      "damage_mask": "0x4000"
+    },
+    {
+      "t": 1,
+      "seconds": 44.5,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_elements": 0,
+      "pm_unsupported": 0,
+      "pm_port_reads": 0,
+      "pm_port_writes": 0,
+      "pm_attached": 1,
+      "seq": "0300030002",
+      "gc": "0000000000100e0fff",
+      "crtc": "5f4f50825581bf1f004f0d0e000004899c8e8f281f96b9a3ff",
+      "damage_result": "0x0",
+      "damage_mask": "0x0"
+    },
+    {
+      "t": 2,
+      "seconds": 49.6,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_elements": 0,
+      "pm_unsupported": 0,
+      "pm_port_reads": 0,
+      "pm_port_writes": 0,
+      "pm_attached": 1,
+      "seq": "0300030002",
+      "gc": "0000000000100e0fff",
+      "crtc": "5f4f50825581bf1f004f0d0e0000048c9c8e8f281f96b9a3ff",
+      "damage_result": "0x0",
+      "damage_mask": "0x4000"
+    },
+    {
+      "t": 3,
+      "seconds": 54.6,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_elements": 0,
+      "pm_unsupported": 0,
+      "pm_port_reads": 0,
+      "pm_port_writes": 0,
+      "pm_attached": 1,
+      "seq": "0300030002",
+      "gc": "0000000000100e0fff",
+      "crtc": "5f4f50825581bf1f004f0d0e000004949c8e8f281f96b9a3ff",
+      "damage_result": "0x0",
+      "damage_mask": "0x1ffffff"
+    },
+    {
+      "t": 4,
+      "seconds": 59.6,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_elements": 0,
+      "pm_unsupported": 0,
+      "pm_port_reads": 0,
+      "pm_port_writes": 0,
+      "pm_attached": 1,
+      "seq": "0300030002",
+      "gc": "0000000000100e0fff",
+      "crtc": "5f4f50825581bf1f004f0d0e000005079c8e8f281f96b9a3ff",
+      "damage_result": "0x0",
+      "damage_mask": "0x1ffffff"
+    },
+    {
+      "t": 5,
+      "seconds": 64.7,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_elements": 0,
+      "pm_unsupported": 0,
+      "pm_port_reads": 0,
+      "pm_port_writes": 0,
+      "pm_attached": 0,
+      "seq": "0300030002",
+      "gc": "0000000000100e0fff",
+      "crtc": "5f4f50825581bf1f004f0d0e000006e09c8e8f281f96b9a3ff",
+      "damage_result": "0x0",
+      "damage_mask": "0x1ffffff"
+    },
+    {
+      "t": 6,
+      "seconds": 69.7,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_elements": 0,
+      "pm_unsupported": 0,
+      "pm_port_reads": 0,
+      "pm_port_writes": 0,
+      "pm_attached": 0,
+      "seq": "0300030002",
+      "gc": "0000000000100e0fff",
+      "crtc": "5f4f50825581bf1f004f0d0e000006e09c8e8f281f96b9a3ff",
+      "damage_result": "0x0",
+      "damage_mask": "0x1ffffff"
+    },
+    {
+      "t": 7,
+      "seconds": 74.8,
+      "pm_faults": 0,
+      "pm_instructions": 0,
+      "pm_elements": 0,
+      "pm_unsupported": 0,
+      "pm_port_reads": 0,
+      "pm_port_writes": 0,
+      "pm_attached": 0,
+      "seq": "0300030002",
+      "gc": "0000000000100e0fff",
+      "crtc": "5f4f50825581bf1f004f0d0e000006e09c8e8f281f96b9a3ff",
+      "damage_result": "0x0",
+      "damage_mask": "0x1ffffff"
+    }
+  ],
+  "device_reports": [
+    {
+      "magic": "0x56445643",
+      "version_bytes": "0x800100",
+      "active": "0x0",
+      "caps": "0x0",
+      "focused": "0x0",
+      "audio": "0x1",
+      "keys_forwarded": "0x0",
+      "keys_dropped": "0x0",
+      "aux_bytes": "0x0",
+      "lazy_pulls": "0x0",
+      "irqs_raised": "0x4",
+      "irq_failures": "0x0",
+      "port_reads": "0xe87",
+      "port_writes": "0x10d",
+      "unclaimed_io": "0x0",
+      "model_errors": "0x0",
+      "last_error": "0x0",
+      "last_port": "0x0",
+      "buffers_rendered": "0x45c",
+      "underruns": "0x0",
+      "polls": "0x81fa",
+      "sb_blocks": "0x4",
+      "opl_writes": "0x69",
+      "dsp_commands": "0xe",
+      "ac97_nam": "0xc000",
+      "ac97_nabm": "0xc400",
+      "bridge_calls": "0xf94",
+      "rate": "0xac44",
+      "ac97_civ": "0x11b14",
+      "ac97_status": "0x8e38",
+      "ac97_queued": "0x30001",
+      "pic_isr_irr": "0x800080"
+    }
+  ],
+  "serial": "[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DPMIRUN] HOST\r\n[MZ] run\r\nHDPMI32 now resident\r\n[DPMIRUN] RUN \\APPS\\DOOMVAN\\PCDMCORE.EXE IN \\APPS\\DOOMVAN\r\n[MZ] run\r\n[MZ] run\r\nDOS/4GW Protected Mode Run-time  Version 1.97\r\nCopyright (c) Rational Systems, Inc. 1990-1994\r\n\r\nP_Init: Checking cmd-line parameters...\r\nV_Init: allocate screens.\r\nM_LoadDefaults: Load system defaults.\r\nZ_Init: Init zone memory allocation daemon. \r\nDPMI memory: 0x1c55000, 0x800000 allocated for zone\r\nW_Init: Init WADfiles.\r\n\tadding doom.wad\r\n\tregistered version.\r\n===========================================================================\r\n              This version is NOT SHAREWARE, do not distribute!\r\n         Please report software piracy to the SPA: 1-800-388-PIR8\r\n===========================================================================\r\nM_Init: Init miscellaneous info.\r\nR_Init: Init DOOM refresh daemon - [                          ]\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b..........................\r\nP_Init: Init Playloop state.\r\nI_Init: Setting up machine state.\r\nI_StartupDPMI\r\nI_StartupMouse\r\nMouse: detected\r\nCyberMan: Wrong mouse driver - no SWIFT support (AX=53c1).\r\nI_StartupJoystick\r\nI_StartupKeyboard\r\nI_StartupSound\r\nI_StartupTimer()\r\n  calling DMX_Init\r\nD_CheckNetGame: Checking network game status.\r\nstartskill 2  deathmatch: 0  startmap: 1  startepisode: 1\r\nplayer 1 of 1 (1 nodes)\r\nS_Init: Setting up sound.\r\nDOS/4GW error (2001): exception 0Dh (general protection fault) at 97:0000751A\r\nTSF32: prev_tsf32 4FB0\r\nSS        E7 DS      [DPMIRUN] EXIT 00D1\r\n[MZ] run\r\nHDPMI32 uninstalled\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n[DESKTOP] PAINT\r\n"
+}

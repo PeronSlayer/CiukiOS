@@ -60,6 +60,8 @@ info_packet dd VM_INFO_MAGIC
 include session_scheduler.inc
 include session_video.inc
 include session_devices.inc
+include session_desktop.inc
+include session_vmm.inc
 
 .code
 
@@ -310,6 +312,15 @@ clear_shadow endp
 ; Unwind in reverse order. Only called while owner CR3 is active.
 ; Restores the original 32 PTE DWORDs verbatim before freeing their aliases.
 rollback proc uses esi edi ebx
+ ; A begun session leaves the count first: shared traps and hooks go only
+ ; when no other VM's session is left.
+ cmp active,0
+ je uncounted
+ dec sessions
+ mov eax,vmm_current
+ call vmm_record
+ and [esi].VMREC.sess,not SESS_VIDEO
+uncounted:
  ; Devices first: their profile hooks and traps go before the profile itself.
  call dev_end
  test eax,eax
@@ -327,10 +338,13 @@ rollback proc uses esi edi ebx
  mov eax,cr3
  mov cr3,eax
  mov mapped,0
+ call desk_resync
 unmapped:
  call video_end
  test eax,eax
  jnz cleanup_failed
+ cmp sessions,0                         ; another VM's session keeps them
+ jne untrapped
  cmp hooked,0
  je unhooked
  mov eax,10h
@@ -372,6 +386,13 @@ port_cleanup_failed:
  mov trapped,ebx
 cleanup_failed:
  ; Retain the module and remaining ownership for an explicit END retry.
+ cmp active,0
+ je retry_counted
+ inc sessions
+ mov eax,vmm_current
+ call vmm_record
+ or [esi].VMREC.sess,SESS_VIDEO
+retry_counted:
  mov active,1
  mov eax,VM_ERROR_TRAP
  ret
@@ -380,6 +401,12 @@ rollback endp
 begin_session proc uses esi edi ebx
  cmp active,0
  jne already
+ ; The session belongs to the VM that begins it (its aperture PTEs, its
+ ; model instances). Traps and hooks are shared: the first session installs
+ ; them, the last one removes them; they act for the running VM's session.
+ call vmm_video_instance
+ test eax,eax
+ jnz instance_failed
  push 0
  push VGA_PAGES
  push PR_SYSTEM
@@ -425,6 +452,8 @@ validate_pages:
  add ebx,4
  loop validate_pages
 
+ cmp sessions,0                         ; installed by an earlier session
+ jne ports_ready
  mov ebx,FIRST_PORT
 install_ports:
  mov edx,ebx
@@ -441,6 +470,7 @@ install_ports:
  @VMMCall Hook_V86_Int_Chain
  jc trap_failed
  mov hooked,1
+ports_ready:
 
  mov video_mode,3
  mov fatal_status,0
@@ -472,6 +502,10 @@ map_pages:
  mov cr3,eax
  mov mapped,1
  mov active,1
+ inc sessions
+ mov eax,vmm_current
+ call vmm_record
+ or [esi].VMREC.sess,SESS_VIDEO
  inc generation
  call vm_scheduler_arm
  test eax,eax
@@ -486,6 +520,8 @@ video_failed:
  jmp failed
 already:
  mov eax,VM_ERROR_ACTIVE
+ ret
+instance_failed:
  ret
 nomem:
  mov eax,VM_ERROR_MEMORY
@@ -518,6 +554,7 @@ v86_dispatch proc
  test eax,eax
  jnz error
  movzx eax,word ptr [ebp].Client_Reg_Struc.Client_EAX
+ call vmm_target_enter                  ; another VM's session (VMM_TARGET)
  cmp eax,VM_OP_QUERY
  je query
  cmp eax,VM_OP_BEGIN
@@ -540,6 +577,8 @@ v86_dispatch proc
  je release_dpmi
  cmp eax,VM_OP_IF_PROFILE
  je if_profile
+ cmp eax,VM_OP_SCHED_INFO
+ je sched_info
  cmp eax,VM_OP_VIDEO_CONFIG
  jb not_video
  cmp eax,VM_OP_VIDEO_DAMAGE
@@ -549,11 +588,18 @@ v86_dispatch proc
 not_video:
  cmp eax,VM_OP_DEV_BEGIN
  jb not_device
- cmp eax,VM_OP_DEV_KEY
+ cmp eax,VM_OP_DEV_MOUSE
  ja not_device
  call dev_dispatch
  jmp checked_result
 not_device:
+ cmp eax,VM_OP_VMM_INIT
+ jb not_vmm
+ cmp eax,VM_OP_VMM_TARGET
+ ja not_vmm
+ call vmm_dispatch
+ jmp checked_result
+not_vmm:
  mov eax,VM_ERROR_OPERATION
  jmp error
 bind_scheduler:
@@ -567,6 +613,9 @@ release_dpmi:
  jmp checked_result
 if_profile:
  call vm_scheduler_if_profile
+ jmp checked_result
+sched_info:
+ call vm_scheduler_info
  jmp checked_result
 bind_fb:
  call bind_framebuffer
@@ -586,7 +635,7 @@ start_session:
  jnz error
  jmp success
 end_session:
- cmp active,0
+ cmp active,0                           ; the calling VM's own session
  je inactive
  call vm_scheduler_can_end
  test eax,eax
@@ -689,11 +738,13 @@ error:
  inc reject_count
  or [ebp].Client_Reg_Struc.Client_EFlags,1
  mov word ptr [ebp].Client_Reg_Struc.Client_EAX,ax
+ call vmm_target_leave
  popad
  ret
 success:
  and [ebp].Client_Reg_Struc.Client_EFlags,not 1
  mov word ptr [ebp].Client_Reg_Struc.Client_EAX,ax
+ call vmm_target_leave
  popad
  ret
 v86_dispatch endp
@@ -702,7 +753,7 @@ v86_dispatch endp
 align 4
  dd offset previous_int10
 video_interrupt proc
- cmp active,0
+ cmp active,0                           ; the running VM's session
  je chain
  pushad
  call check_context
@@ -738,7 +789,14 @@ video_interrupt endp
 ; Wide accesses are decomposed into adjacent byte registers of the shared VGA
 ; model, never physical IO. Status 1 comes from CRTC timing against host TSC,
 ; not from the number of polls, unless no TSC rate was configured.
-port_handler proc uses esi edi ebx
+port_handler proc
+ cmp active,0                           ; the running VM's session
+ jne port_model
+ @VMMCall Simulate_IO                   ; a VM without one: the real VGA
+ ret
+port_handler endp
+
+port_model proc uses esi edi ebx
  inc io_count
  test ecx,STRING_IO
  jz scalar_io
@@ -829,7 +887,7 @@ reject_string:
 reject_after_fatal:
  inc reject_count
  ret
-port_handler endp
+port_model endp
 
 ; Byte accesses to 3B0-3DF reach the shared VGA model (session_video.c):
 ; registers, DAC, attribute flip-flop and CRTC-timed status 1.
@@ -863,11 +921,15 @@ DllMain proc stdcall public hModule:dword, dwReason:dword, dwRes:dword
  jne refuse
  mov eax,cr3
  mov owner_cr3,eax
+ call vmm_snapshot_ivt
+ call desk_install
  mov eax,1
  ret
 detach:
  cmp dwReason,0
  jne allow
+ cmp sessions,0
+ jne refuse
  cmp active,0
  jne refuse
  cmp mapped,0
@@ -887,7 +949,24 @@ detach:
  jne refuse
  cmp scheduler_descriptor,0
  jne refuse
+ cmp vmm_count,1                        ; DOS VMs still exist
+ jne refuse
+ call guest_window_free
+ call vmm_cmos_untrap
+ cmp vmm_installed,0
+ je allow
+ mov eax,TICK_VMM
+ call tick_release
+ jc refuse
+ mov vmm_installed,0
+ mov eax,2
+ @VMMCall Host_Scheduler_Profile
 allow:
+ cmp dwReason,0
+ jne allow_done
+ call desk_remove
+ jc refuse
+allow_done:
  mov eax,1
  ret
 refuse:

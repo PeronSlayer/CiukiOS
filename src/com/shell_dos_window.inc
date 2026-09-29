@@ -152,10 +152,40 @@ dw_load:
     int 0x21
     jc .fail
     mov [dw_handle],ax
+    ; Hold the largest free block (the programs' EXEC window) while the
+    ; runtime is placed, so first fit puts it in another adequate hole
+    ; (typically the one the event-sound driver just left).
+    mov bx,0xFFFF
+    mov ah,0x48
+    int 0x21
+    mov ah,0x48
+    int 0x21
+    jnc .held
+    xor ax,ax
+.held:
+    push ax
+    mov bx,0x1000
+    mov ah,0x48
+    int 0x21
+    pop dx
+    pushf
+    push ax
+    test dx,dx
+    jz .released
+    push es
+    mov es,dx
+    mov ah,0x49
+    int 0x21
+    pop es
+.released:
+    pop ax
+    popf
+    jnc .placed
     mov bx,0x1000
     mov ah,0x48
     int 0x21
     jc .close_fail
+.placed:
     mov [dw_segment],ax
     mov [dw_entry+2],ax
     mov ds,ax
@@ -208,12 +238,19 @@ dw_load:
     mov ah,0x4A
     int 0x21
     jc .free_fail
+    ; Under a V86 monitor only the CVSESSION VGA mode is used: no 64000-byte
+    ; cooperative graphics buffer.
+    smsw ax
+    test al,1
+    jnz .no_gfx_buffer
     mov bx,4000
     mov ah,0x48
     int 0x21
     jc .free_fail
     mov es,[dw_segment]
     mov [es:DW_GFX_BUFFER_SEG],ax
+.no_gfx_buffer:
+    mov es,[dw_segment]
     mov [es:DW_GFX_DRAW+2],es
     mov al,[vc_info+25]
     mov [es:DW_GFX_BPP],al
@@ -480,7 +517,9 @@ dw_opaque_cell:
 
 ut_dos_window db 'DOS window',0
 dw_runtime db '\SYSTEM\DOSWIN.DRV',0
-dw_command db '\COMMAND.COM',0
+; Every DOS window starts through the VM launcher: it gives the window its
+; DPMI host (Windows 95 style) and runs \COMMAND.COM with the same tail.
+dw_command db '\VM\DPMIRUN.COM',0
 dw_live db 'Title bar: move, minimize, close.',0
 dw_finished db 'Finished. Close frees memory.',0
 dw_unavailable db 'Needs 800x600 video and DOSWIN.DRV.',0

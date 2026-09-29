@@ -107,6 +107,21 @@ vga_session_install:
     ; Guest keyboard/mouse/SB16/OPL when Jemm's virtual-IF profile was
     ; negotiated; otherwise the BIOS INT 16h focus path below stays in use.
     call vga_device_begin
+    ; A protected-mode host started inside the window (HDPMI -cSSSS:OOOO, see
+    ; DPMIRUN.COM) maps the model through the packet after the descriptor.
+    cmp byte [vga_sched_bound],1
+    jne .no_share
+    push cs
+    pop es
+    mov di,vga_share
+    mov cx,VM_VSHARE_BYTES
+    mov ax,VM_OP_VIDEO_SHARE
+    call far [vga_entry]
+    push cs
+    pop ds
+    jc .no_share
+    mov byte [vga_shared],1
+.no_share:
     ; Vectors: timer (host service), BIOS keyboard (focus), mouse (absent to
     ; the guest; the desktop owns it) and DOS (the host's EXEC boundary).
     xor ax,ax
@@ -169,6 +184,13 @@ vga_session_uninstall:
     jne .unbind
     call vga_device_end
     jc .failed
+    cmp byte [vga_shared],0
+    je .unshared
+    mov ax,VM_OP_VIDEO_UNSHARE
+    call vga_cleanup_call
+    jc .failed                      ; a resident protected host still maps it
+    mov byte [vga_shared],0
+.unshared:
     cmp byte [vga_end_started],0
     jne .leave
     push cs
@@ -382,9 +404,12 @@ vga_before_callback:
     mov ax,VM_OP_VIDEO_DAMAGE
     call far [cs:vga_entry]
     jc .no_damage
+    mov [cs:DW_DAMAGE_MASK],edx
     and edx,01FFFFFFh
     or [dirty_rows],edx
+    xor ax,ax
 .no_damage:
+    mov [cs:DW_DAMAGE_RESULT],ax
     pop es
     popad
 .done:
@@ -1143,6 +1168,7 @@ vga_query_vbe:
 vga_session equ DW_CLEANUP_PHASE
 vga_devices db 0
 vga_sched_bound db 0
+vga_shared db 0
 vga_sent_focus db 0FFh
 vm_text db 0
 vm_in_handler db 0
@@ -1212,5 +1238,6 @@ vga_scheduler:
     dd CVSCHED_MAGIC
     dw CVSCHED_VERSION, CVSCHED_BYTES
     times CVSCHED_BYTES-8 db 0
+vga_share times VM_VSHARE_BYTES db 0 ; must follow the descriptor (HDPMI -c)
 vga_mode_info times 256 db 0
 vga_vbe_info times 512 db 0

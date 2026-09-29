@@ -196,6 +196,8 @@ if adaptations:
         'Apply the selected included patches (and copy any included helper) to reproduce.\n'
         'The optional device-query helper is MIT licensed; its complete notice is in the include.\n'
         'The optional scheduler extension owns one exact IRQ0 callback before V86 reflection.\n'
+        'Its negotiated V86 interrupt profile keeps one virtual PIC; function 8 lets the owner accept\n'
+        'a device IRQ for delivery to a protected-mode client with the same masking and priority rules.\n'
         'It services the one foreground DOS context and does not create an independent VM.\n'
         'Compilation does not prove device execution, unload or full DOS virtualization.\n')
 (result_dir/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')

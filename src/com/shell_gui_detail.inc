@@ -345,7 +345,7 @@ ut_text_editor db 'Text editor',0
 ut_commands db 'Commands',0
 ut_system_tool db 'System tool',0
 ut_desktop_app db 'Desktop environment',0
-ut_auto_help db 'Desktop resolution. Windows uses its saved mode.',0
+ut_auto_help db 'Desktop resolution.',0
 ut_automatic db "Use the monitor's preferred resolution",0
 ut_mode640 db '640 x 480',0
 ut_mode800 db '800 x 600',0

@@ -11,7 +11,18 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 5. Phase 7 evidence boundary: `docs/legacy-audio-bring-up-plan-v0.1.md`
 6. Current cross-phase milestone ledger: `docs/current-milestones.md`
 
-## Current development priority — 2026-09-27
+## Current development priority — 2026-09-29
+
+DOS applications run in CiukiOS's own windows, Windows 95/98 style. The plan is
+[the DOS-window roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md). Phase 2
+(several DOS windows at once) has M1-M3 passing on QEMU: a resident VM manager
+runs several V86 VMs, each with its own DOS window session, and keyboard, mouse
+and AC'97 sound follow the focus. Profile 21/21, VM-manager gate 10/10 parts
+([evidence](docs/validation/2026-09-29-boot-and-m3/README.md)). Next is M4, the
+desktop painting each VM's session in its own window. Windows 3.1 support was
+removed on 28 September 2026 (Phase 9 below is history).
+
+## Earlier priority — 2026-09-27
 
 The native-desktop increment passes eleven focused QEMU Pentium III/128 MiB
 reports on disk image `08bc6df6510e55e3f501d49f9414e2d0f0a2006eccdda5dbf8f78bdc1e244bd6`.
@@ -161,7 +172,9 @@ current placement and artifact sizes are in [the runtime ledger](docs/current-mi
 6. FTP is plaintext; the default account and forwarding remain restricted to localhost QEMU NAT or a trusted isolated LAN.
 
 ## Phase 9 - Windows pre-NT Milestones
-**STATUS: ACTIVE; EXPANDED WINDOWS 3.1 BOUNDED MILESTONE COMPLETE (2026-09-01)**
+**STATUS: WINDOWS 3.1 REMOVED (2026-09-28).** The bounded milestone below
+(complete 2026-09-01) is history: CiukiOS now runs DOS applications in its own
+windows ([roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md)).
 1. The canonical `full` image optionally packages user-supplied Windows 3.1 media and an installed tree; none of that proprietary payload is tracked or redistributed.
 2. Windows 3.1 reaches 386 Enhanced Mode through `WIN` with DOSMGR/SDA, XMS/A20, PS/2 BIOS mouse, DOS device-chain, EXEC-owner, file-handle, and exit-state compatibility supplied through general interfaces rather than executable-name rules.
 3. The focused lane proves two 640x480 Enhanced Mode starts, exactly one linear 1:1 PS/2 pointer, native Sound Blaster startup audio, real `CANYON.MID` playback with objective AdLib WAV evidence, clean generic DOS-VM enter/exit, an unprofiled DOS/4GW Doom process with automatic memory and clean return, Calculator launch, task-scoped `Alt+F4`, Program Manager survival, clean CiukiOS shell restoration, and relaunch.

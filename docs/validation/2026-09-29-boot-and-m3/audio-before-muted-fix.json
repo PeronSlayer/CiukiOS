@@ -1,0 +1,57 @@
+{
+  "note": "muted sessions advanced only in their own slices (before the fix)",
+  "lines": [
+    "[VMS1] playing",
+    "[VMS2] playing",
+    "[VMATEST] both playing",
+    "[VMATEST] owner VM1 (focus VM1)",
+    "[VMATEST] owner VM2 (focus VM2)",
+    "[VMATEST] owner VM1 (focus VM0)",
+    "[VMS1] played 001D blocks",
+    "[VMATEST] owner VM2 (VM1 ended)",
+    "[VMS2] played 0023 blocks",
+    "[VMATEST] PASS"
+  ],
+  "blocks": {
+    "1": 29,
+    "2": 35
+  },
+  "realtime": {
+    "1": {
+      "blocks": 29,
+      "expected": 31.7,
+      "ratio": 0.915
+    },
+    "2": {
+      "blocks": 35,
+      "expected": 40.8,
+      "ratio": 0.859
+    }
+  },
+  "states": [
+    {
+      "state": "[VMATEST] owner VM1 (focus VM1)",
+      "crossings_per_second": 439.4,
+      "on_level": 1.0,
+      "clean": true
+    },
+    {
+      "state": "[VMATEST] owner VM2 (focus VM2)",
+      "crossings_per_second": 1099.1,
+      "on_level": 1.0,
+      "clean": true
+    },
+    {
+      "state": "[VMATEST] owner VM1 (focus VM0)",
+      "crossings_per_second": 439.7,
+      "on_level": 1.0,
+      "clean": true
+    },
+    {
+      "state": "[VMATEST] owner VM2 (VM1 ended)",
+      "crossings_per_second": 1098.9,
+      "on_level": 1.0,
+      "clean": true
+    }
+  ]
+}

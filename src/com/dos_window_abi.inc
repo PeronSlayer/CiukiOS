@@ -76,6 +76,8 @@ DW_MOUSE_EVENTS equ 224              ; dword, guest INT 33h event-handler calls
 DW_CLIENT_X equ 228                  ; word, runtime: client origin on screen
 DW_CLIENT_Y equ 230
 DW_DEVICE_RESULT equ 226             ; word, runtime: DEV_BEGIN AX (FFFFh none)
+DW_DAMAGE_RESULT equ 234             ; word, runtime: last VIDEO_DAMAGE AX (0 = ok)
+DW_DAMAGE_MASK equ 236               ; dword, runtime: last VIDEO_DAMAGE band mask
 DW_RESIZABLE equ 232                 ; byte, runtime: the presenter scales the
                                      ; guest into DW_CLIENT_* (VGA session only)
 DW_CELL_ENTRY equ 160                ; FAR opaque-cell renderer, segment set by host

@@ -1,0 +1,126 @@
+{
+  "passed": true,
+  "source_image_sha256": "2e8503f5e6ab4e75fcf9b54d99a798eccfa00024be909034eb17ccf10738f432",
+  "kernel_sha256": "2f53b6e63ccaa04f496b54c29f7e74d3628b1316245e180f21149269173380af",
+  "jemm_sha256": "68ed772e5f5f489f9854c98fecdde3c54a6e3a12ce4fee51287850fe6f14eb73",
+  "jload_sha256": "93c205814779baf2f9c89d45fe1e60a3b7e597a13a87cfb7538f7cc5b108af40",
+  "probe_sha256": "3e400972ade6571411199354959ad8f7607b702ed22e036b03f3de38d167eff1",
+  "cpu": "pentium3",
+  "memory_mib": 128,
+  "graphics_virtualized": false,
+  "dpmi_virtualized": false,
+  "events": [
+    {
+      "command": "run \\VMSESS.COM",
+      "output": "[VMSESSION] No V86 monitor\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 7.086519900010899
+    },
+    {
+      "command": "run \\JEMM386.EXE LOAD NOEMS X=A000-FFFF NODYN MAX=32M MIN=32M NOVME",
+      "output": "[MZ] run\r\nJemm386 loaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 13.68883665301837
+    },
+    {
+      "command": "run \\VMSESS.COM",
+      "output": "[VMSESSION] PE=1 VCPI=present\r\n[VMSESSION] DOS create/write/read/close/delete and B800 PASS\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 15.396896484016906
+    },
+    {
+      "command": "comdemo",
+      "output": "COM demo via INT21h\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 16.07346568797948
+    },
+    {
+      "command": "mzdemo",
+      "output": "[MZ] run\r\nMZ demo via INT21h\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 16.688909486983903
+    },
+    {
+      "command": "dir \\SYSTEM",
+      "output": "Directory listing\r\n. <DIR>\r\n.. <DIR>\r\nSTAGE2.BIN\r\nSPLASH.BIN\r\nSHELL.COM\r\nDOSWIN.DRV\r\nGAMES <DIR>\r\nUI <DIR>\r\nSTARTUP.CFG\r\nCIUKIDOS.SYS\r\nDRIVERS <DIR>\r\nMOUSE.COM\r\nBOOTSND.COM\r\nMEDIA.DRV\r\nSOUNDS <DIR>\r\nBOOT.PCM\r\nVIDEO <DIR>\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 17.885523087985348
+    },
+    {
+      "command": "run \\JLOAD.EXE \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' loaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 20.83508414402604
+    },
+    {
+      "command": "type \\VMGUEST.TXT",
+      "output": "Ordinary DOS child: BIOS video, ports, VRAM and file output.\r\n\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 25.004514869011473
+    },
+    {
+      "command": "run \\VMNEG.COM",
+      "output": "[VMNEG] Lifecycle, rejected I/O and reset PASS\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 26.52166174998274
+    },
+    {
+      "command": "run \\JLOAD.EXE /u \\CVSESS.DLL",
+      "output": "[MZ] run\r\nJLoad: '\\CVSESS.DLL' unloaded successfully.\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 29.49686118098907
+    },
+    {
+      "command": "run \\JEMM386.EXE UNLOAD",
+      "output": "[MZ] run\r\nfound Jemm instance at segment 20cc\r\nJemm unloaded\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 31.978745202999562
+    },
+    {
+      "command": "run \\VMSESS.COM",
+      "output": "[VMSESSION] No V86 monitor\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 33.661994329013396
+    },
+    {
+      "command": "comdemo",
+      "output": "COM demo via INT21h\r\nCiukiOS pre-Alpha v0.7.1\r\nCiukiOS SHELL C:\\APPS> ",
+      "elapsed": 34.33701561501948
+    }
+  ],
+  "prepared_image_sha256": "a9a1234de95ca8b3912c32153d6dab5082e3a0eeb3fe3f2b6a3d3055166c394c",
+  "fixture_sha256": {
+    "VMSESS.COM": "3e400972ade6571411199354959ad8f7607b702ed22e036b03f3de38d167eff1",
+    "VMPARENT.COM": "79fd3d74d4925435626a649b1552b2a2762ee54cda72a9a063a1476643d4bb27",
+    "VMGUEST.COM": "9b6cc5a37920b50950b9e309a25b116fce93fa9998172842ba6b78464ff77b9a",
+    "VMNEG.COM": "badc6c70b120e9452acd085e8376b8c882ed18b74088684126701c41f9b064e4"
+  },
+  "qemu_command": [
+    "qemu-system-i386",
+    "-accel",
+    "kvm",
+    "-machine",
+    "pc,vmport=off,i8042=on",
+    "-cpu",
+    "pentium3",
+    "-m",
+    "512",
+    "-drive",
+    "file=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28b/legacy-dpmi/disk.img,format=raw,if=ide",
+    "-boot",
+    "c",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28b/legacy-dpmi/serial.log",
+    "-monitor",
+    "unix:/tmp/ciukios-display-34274ba15efc442eb7b17c16eda8fd32.sock,server,nowait",
+    "-no-reboot",
+    "-no-shutdown",
+    "-m",
+    "128",
+    "-vga",
+    "std",
+    "-audiodev",
+    "wav,id=snd,path=/home/peronslayer/Desktop/CiukiOS/build/tests/vm-window-profile-2026-09-28b/legacy-dpmi/audio.wav",
+    "-device",
+    "AC97,audiodev=snd"
+  ],
+  "guest_observation_address": 145230,
+  "exact_vga_pte_restore": true,
+  "video_shadow_passed": true,
+  "module_sha256": "fc586c968aa41ebdf677b2e192114e8eefc83ad70008e5549d241a7e3030665d",
+  "dpmi_shadow_and_io_probe_passed": true,
+  "dpmi_probe_sha256": "5dc30d6f75967f21206b907e439a71cdf4ff9eec1a62648807eb434f1c4c3bfc",
+  "hdpmi_sha256": "3dbc9df03ca8508ed931b50f3422dce53c79c8d03929f662827113c843f0c672",
+  "negative_session_lifecycle_passed": true,
+  "source_image_unchanged": true
+}

@@ -1,4 +1,4 @@
-.PHONY: help build-floppy build-full build-full-cd build-shell-com build-doom-vanille-probe fetch-costa fetch-network-stack verify-full-drivers-payload verify-phase5-runtime-ownership test-serial-log-normalize qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-full-cd-shell-com-boot qemu-test-full-cd-shell-com-boot-fallback qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-costa qemu-test-full-network-ftp qemu-test-full-network-icmp qemu-test-full-windows31 qemu-test-full-doom-taxonomy qemu-test-full-doom-audio qemu-test-full-doomvan-taxonomy qemu-test-full-doomvan-memory qemu-test-full-doomvan-audio qemu-test-full-doomvan-performance qemu-test-full-opl-audio qemu-test-full-dos-audio qemu-test-full-video-restore qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-wolf3d-audio qemu-test-full-cutemouse qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-shell-com qemu-test-full-shell-com-boot qemu-test-full-shell-com-boot-fallback qemu-test-release-sweep qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
+.PHONY: help build-floppy build-full build-full-cd build-shell-com build-doom-vanille-probe fetch-costa fetch-network-stack verify-full-drivers-payload verify-phase5-runtime-ownership test-serial-log-normalize qemu-run-full-cd qemu-test-full-cd qemu-test-full-cd-shell-drive qemu-test-full-cd-shell-com-boot qemu-test-full-cd-shell-com-boot-fallback qemu-test-floppy qemu-test-stage1 qemu-test-full qemu-test-full-stage1 qemu-test-full-runtime-probe qemu-test-full-costa qemu-test-full-network-ftp qemu-test-full-network-icmp qemu-test-full-doom-taxonomy qemu-test-full-doom-audio qemu-test-full-doomvan-taxonomy qemu-test-full-doomvan-memory qemu-test-full-doomvan-audio qemu-test-full-doomvan-performance qemu-test-full-opl-audio qemu-test-full-dos-audio qemu-test-full-video-restore qemu-test-full-doomsfx qemu-test-full-doomsfx-dsdoropn qemu-test-full-dos-taxonomy qemu-test-full-wolf3d-taxonomy qemu-test-full-wolf3d-audio qemu-test-full-cutemouse qemu-test-full-drvload-smoke qemu-test-full-shell-stability qemu-test-full-shell-com qemu-test-full-shell-com-boot qemu-test-full-shell-com-boot-fallback qemu-test-release-sweep qemu-test-full-dos-compat-smoke qemu-test-setup-full-acceptance qemu-test-setup-installer-scenarios qemu-test-setup-hdd-install qemu-test-setup-cd-hdd-probe qemu-test-setup-runtime-hdd-install qemu-test-all clean
 
 help:
 	@echo "CiukiOS Legacy v2"
@@ -24,7 +24,6 @@ help:
 	@echo "  make qemu-test-full-costa - fetch, build and validate the Costa desktop graphically"
 	@echo "  make qemu-test-full-network-ftp - validate Internet ping plus bidirectional FTP"
 	@echo "  make qemu-test-full-network-icmp - validate NETCFG and resident ICMP without FTP"
-	@echo "  make qemu-test-full-windows31 - validate the optional Windows 3.1 Enhanced Mode workflow"
 	@echo "  make qemu-test-full-doom-taxonomy - legacy DOOM taxonomy alias (compat)"
 	@echo "  make qemu-test-full-doom-audio - validate original Doom gameplay plus OPL2 music/PC-speaker SFX"
 	@echo "  make qemu-test-full-doomvan-taxonomy - isolated doom-vanille startup taxonomy"
@@ -121,9 +120,6 @@ qemu-test-full-network-ftp:
 
 qemu-test-full-network-icmp:
 	@bash scripts/qemu_test_full_network_icmp.sh
-
-qemu-test-full-windows31:
-	@bash scripts/qemu_test_full_windows31.sh --headless-smoke
 
 verify-phase5-runtime-ownership:
 	@bash scripts/verify_phase5_runtime_ownership.sh

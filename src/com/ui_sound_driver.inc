@@ -1,5 +1,7 @@
 ; CSFX0001: foreground-only, nonresident, asynchronous ICH PCM event player.
-; AX: 0 prepare, 1 poll, 2 release, 3 error, 4 info, 5 warning, 6 confirm.
+; AX: 0 prepare, 1 poll, 2 release, 3 error, 4 info, 5 warning, 6 confirm,
+; 7 startup (\SYSTEM\BOOT.PCM; without an ICH it runs BOOTSND.COM /Q, which
+; returns when its Sound Blaster or PC-speaker melody has finished).
 ; AX result: 0 success/idle, 1 playing, 2 muted, 3 unavailable, 4 read error,
 ; 5 device busy, 6 allocation failure, 7 DMA error. No video or IRQ hooks.
 ; All caller state except AX is preserved. Never call from a DOS interrupt.
@@ -35,7 +37,7 @@ sfx_entry:
     je .release
     cmp ax,3
     jb .done
-    cmp ax,6
+    cmp ax,7
     ja .done
     call sfx_play
     jmp .done
@@ -70,6 +72,7 @@ sfx_init:
     jne .done
     mov byte [quiet_mode],1
     mov byte [audio_diagnostic],0
+    mov byte [sfx_inited],1
     mov byte [sfx_available],0
     mov word [sfx_result],3
     call pci_find_intel_ac97
@@ -98,6 +101,14 @@ sfx_init:
     ret
 
 sfx_play:
+    cmp word [sfx_op],7
+    jne .event
+    cmp byte [sfx_available],1
+    je .event                           ; ICH: asynchronous, below
+    cmp byte [sfx_inited],0
+    je .unavailable
+    jmp sfx_boot_program
+.event:
     cmp byte [sfx_available],0
     je .unavailable
     ; Re-read the user's setting in foreground only. Muting also stops an
@@ -122,6 +133,8 @@ sfx_play:
 .enabled:
     call sfx_stop
     mov word [sfx_result],4
+    cmp word [sfx_op],7
+    je sfx_boot_pcm
     mov bx,[sfx_op]
     sub bx,3
     shl bx,1
@@ -204,6 +217,9 @@ sfx_play:
     shr ax,1
     mov [ac97_bdl+4],ax
     mov word [ac97_bdl+6],0
+    mov word [sfx_timeout],36
+    xor bl,bl
+..@sfx_dma_run:                          ; BL = last valid descriptor
     mov dx,[nabm_base]
     add dx,ICH_PO_SR
     mov ax,0x1C
@@ -217,7 +233,7 @@ sfx_play:
     out dx,eax
     mov dx,[nabm_base]
     add dx,ICH_PO_LVI
-    xor al,al
+    mov al,bl
     out dx,al
     mov dx,[nabm_base]
     add dx,ICH_PO_CR
@@ -260,7 +276,7 @@ sfx_poll:
     mov es,ax
     mov ax,[es:0x046C]
     sub ax,[sfx_tick]
-    cmp ax,36
+    cmp ax,[sfx_timeout]
     jae .fail
     mov word [sfx_result],1
     ret
@@ -277,9 +293,163 @@ sfx_stop:
     je .done
     call ac97_cleanup_output
     mov byte [sfx_playing],0
-    jnc .done
+    jnc .free
     mov word [sfx_result],7
+.free:
+    call sfx_boot_free
 .done:
+    ret
+
+; The startup melody on the ICH: up to 32 descriptors of 16 KB, read from
+; \SYSTEM\BOOT.PCM into its own block (freed when it stops).
+sfx_boot_pcm:
+    mov dx,sfx_boot_path
+    mov ax,0x3D00
+    int 0x21
+    jc .done
+    mov [sfx_file],ax
+    mov bx,ax
+    xor cx,cx
+    xor dx,dx
+    mov ax,0x4202
+    int 0x21
+    jc .close
+    shl edx,16
+    mov dx,ax
+    test dl,3
+    jnz .close
+    test edx,edx
+    jz .close
+    cmp edx,32*16384
+    ja .close
+    mov [sfx_left],edx
+    mov eax,edx
+    add eax,15
+    shr eax,4
+    mov bx,ax
+    mov ah,0x48
+    int 0x21
+    jc .memory
+    mov [sfx_big],ax
+    mov [sfx_segment],ax
+    mov bx,[sfx_file]
+    xor cx,cx
+    xor dx,dx
+    mov ax,0x4200
+    int 0x21
+    jc .close
+    ; Descriptors while reading: 8192 samples each, the last one shorter.
+    movzx eax,word [sfx_big]
+    shl eax,4
+    mov di,ac97_bdl
+    xor bl,bl
+.read:
+    mov ecx,16384
+    cmp [sfx_left],ecx
+    jae .chunk
+    mov ecx,[sfx_left]
+.chunk:
+    mov [di],eax
+    add eax,ecx
+    push eax
+    push bx
+    mov ax,cx
+    shr ax,1
+    mov [di+4],ax
+    mov word [di+6],0
+    mov bx,[sfx_file]
+    xor dx,dx
+    push ds
+    mov ds,[cs:sfx_segment]
+    mov ah,0x3F
+    int 0x21
+    pop ds
+    pop bx
+    pop edx
+    jc .close
+    cmp ax,cx
+    jne .close
+    mov eax,edx
+    add word [sfx_segment],0x400
+    add di,8
+    sub [sfx_left],ecx
+    jz .loaded
+    inc bl
+    jmp .read
+.loaded:
+    push bx
+    mov bx,[sfx_file]
+    mov ah,0x3E
+    int 0x21
+    call ac97_enable_io
+    jc .device
+    call ac97_enable_pci
+    jc .device
+    mov dx,[nabm_base]
+    add dx,ICH_PO_CR
+    mov al,ICH_CR_RESET
+    out dx,al
+    mov cx,0xFFFF
+.reset:
+    in al,dx
+    test al,ICH_CR_RESET
+    jz .run
+    loop .reset
+    pop bx
+    mov word [sfx_result],7
+    call ac97_cleanup_output
+    jmp sfx_boot_free
+.run:
+    pop bx
+    mov word [sfx_timeout],90
+    jmp ..@sfx_dma_run
+.device:
+    pop bx
+    call ac97_cleanup_output
+    jmp sfx_boot_free
+.memory:
+    mov word [sfx_result],6
+.close:
+    mov bx,[sfx_file]
+    mov ah,0x3E
+    int 0x21
+    call sfx_boot_free
+.done:
+    ret
+
+sfx_boot_free:
+    mov ax,[sfx_big]
+    test ax,ax
+    jz .done
+    push es
+    mov es,ax
+    mov ah,0x49
+    int 0x21
+    pop es
+    mov word [sfx_big],0
+.done:
+    ret
+
+; No ICH: the startup program itself (Sound Blaster or PC speaker), which
+; returns when the melody has played. EXEC does not keep SS:SP.
+sfx_boot_program:
+    mov [sfx_exec+4],cs
+    mov [sfx_exec+8],cs
+    mov [sfx_exec+12],cs
+    mov [sfx_exec_sp],sp
+    mov dx,sfx_boot_program_path
+    mov bx,sfx_exec
+    mov ax,0x4B00
+    int 0x21
+    cli
+    mov ax,cs
+    mov ss,ax
+    mov sp,[cs:sfx_exec_sp]
+    mov ds,ax
+    mov es,ax
+    sti
+    cld
+    mov word [sfx_result],0
     ret
 
 sfx_release:
@@ -303,6 +473,17 @@ sfx_info db '\SYSTEM\SOUNDS\INFO.PCM',0
 sfx_warning db '\SYSTEM\SOUNDS\WARN.PCM',0
 sfx_confirm db '\SYSTEM\SOUNDS\CONFIRM.PCM',0
 sfx_preference db '\SYSTEM\BOOT.SND',0
+sfx_boot_path db '\SYSTEM\BOOT.PCM',0
+sfx_boot_program_path db '\SYSTEM\BOOTSND.COM',0
+sfx_exec_tail db 3,' /Q',13
+sfx_exec dw 0,sfx_exec_tail,0,0x5C,0,0x6C,0
+sfx_exec_sp dw 0
+sfx_timeout dw 36
+sfx_big dw 0
+sfx_segment dw 0
+sfx_inited db 0
+align 4
+sfx_left dd 0
 sfx_setting db '1'
 sfx_op dw 0
 sfx_result dw 0

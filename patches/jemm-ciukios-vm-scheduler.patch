@@ -17,7 +17,7 @@ index d135537..da9018f 100644
  
  ;_PageReserve() page parameter:
 diff --git a/Tools/JLOAD/VMM.ASM b/Tools/JLOAD/VMM.ASM
-index 8294679..ffdb17f 100644
+index 8294679..fa5e9f7 100644
 --- a/Tools/JLOAD/VMM.ASM
 +++ b/Tools/JLOAD/VMM.ASM
 @@ -47,6 +47,8 @@ lpV86Hooks		dd 0	;page for hooks (v86 int chain)
@@ -89,10 +89,10 @@ index 8294679..ffdb17f 100644
 +;--- EAX=0 (no version, nothing available) instead of failing.
 +
 +Host_Scheduler_Profile proc
-+	mov edx,[ppProfileService]
-+	test edx,edx
-+	jz short profile_absent
-+	jmp edx
++	; Every register is an argument (function 7 passes its value in EDX).
++	cmp [ppProfileService],0
++	je short profile_absent
++	jmp [ppProfileService]
 +profile_absent:
 +	xor eax,eax
 +	clc
@@ -104,10 +104,10 @@ index 8294679..ffdb17f 100644
  ;--- maps all page tables in linear address space
 diff --git a/src/CVIRQ.INC b/src/CVIRQ.INC
 new file mode 100644
-index 0000000..832bad4
+index 0000000..622b48d
 --- /dev/null
 +++ b/src/CVIRQ.INC
-@@ -0,0 +1,823 @@
+@@ -0,0 +1,986 @@
 +; CiukiOS foreground V86 interrupt profile.
 +; Compiled with CIUKIOS_V86_INTERRUPTS and negotiated at run time through
 +; the versioned Host_Scheduler_Profile service: it is active only while the
@@ -132,6 +132,8 @@ index 0000000..832bad4
 +CvInitPhase dw 0
 +CvBases dw 07008h
 +CvIopbSaved db 8 dup(0)
++; Guest IF .. virtual PIC bases: the state a VM switch saves and restores.
++CV_VM_STATE_BYTES equ offset CvIopbSaved - offset CvGuestIF
 +CvTrapPorts dw 20h,21h,40h,43h,0A0h,0A1h,0FFFFh,0FFFFh
 +
 +; Both entry and exit preserve all general registers and selectors.  Called
@@ -437,7 +439,17 @@ index 0000000..832bad4
 +;   4 set IRQ1/IRQ12 filter ECX (0 removes)   5 EDX = in-service, ECX = pending
 +;   6 set return-to-V86 poll procedure ECX (0 removes); it preserves all
 +;     registers and runs with flat DS/ES before pending IRQs are injected
-+; CF=1 only for an invalid function or a raise while inactive.
++;   7 PIC port access for a protected-mode client: ECX = port 20h/21h/A0h/
++;     A1h (| 10000h for OUT), EDX = value; returns the IN value in EDX
++;   9 save the per-VM interrupt state (guest IF, virtual PIC, STI shadow)
++;     to the CV_VM_STATE_BYTES buffer at linear ECX; 10 restore it from ECX.
++;     The owner switches V86 contexts (VMs) at its IRQ0 callback with these.
++;   8 accept virtual IRQ line ECX for delivery outside V86 (the owner's
++;     protected-mode client): CF=0 when the virtual PIC allows it now, with
++;     the line in service exactly as on V86 injection and EDX = its vector;
++;     CF=1 when it is masked or blocked by an equal/higher level in service
++; CF=1 for an invalid function, a raise or PIC access while inactive, or a
++; PIC operation the V86 broker does not support.
 +CvProfileService proc
 + cmp eax,1
 + jne profile_not_request
@@ -478,6 +490,157 @@ index 0000000..832bad4
 + mov CvPollProc,ecx
 + jmp profile_state
 +profile_not_poll:
++ cmp eax,7
++ jne profile_not_pic
++ ; PIC access on behalf of a protected-mode client (HDPMI bridge): ECX =
++ ; port | 10000h for OUT, EDX = value. Exactly the V86 broker's semantics,
++ ; but operations it would refuse fatally are returned as CF=1 instead.
++ cmp CvActive,0
++ je profile_error
++ push ebx
++ push edi
++ movzx ebx,cx
++ xor edi,edi
++ cmp ebx,20h
++ je profile_pic_port
++ cmp ebx,21h
++ je profile_pic_port
++ inc edi
++ cmp ebx,0A0h
++ je profile_pic_port
++ cmp ebx,0A1h
++ jne profile_pic_error
++profile_pic_port:
++ test ecx,10000h
++ jz profile_pic_call
++ test bl,1
++ jnz profile_pic_data
++ mov al,dl
++ cmp al,0Ah
++ je profile_pic_call
++ cmp al,0Bh
++ je profile_pic_call
++ cmp al,20h
++ je profile_pic_call
++ and al,0F8h
++ cmp al,60h
++ je profile_pic_call
++ jmp profile_pic_error
++profile_pic_data:
++ cmp byte ptr CvInitPhase[edi],0
++ jne profile_pic_error
++profile_pic_call:
++ test ecx,10000h
++ mov eax,edx
++ mov edx,ebx
++ mov ecx,0
++ jz profile_pic_read
++ mov cl,OUT_INSTR
++profile_pic_read:
++ call CvIO
++ jnc profile_pic_error
++ movzx edx,al
++ pop edi
++ pop ebx
++ jmp profile_state
++profile_pic_error:
++ pop edi
++ pop ebx
++ stc
++ ret
++profile_not_pic:
++ cmp eax,8
++ jne profile_not_accept
++ ; Same masking and fixed-priority arbitration as CvLeave, for one line.
++ cmp CvActive,0
++ je profile_error
++ cmp ecx,16
++ jae profile_error
++ cmp ecx,2
++ je profile_error
++ push ebx
++ push esi
++ movzx ebx,CvMask
++ bt ebx,ecx
++ jc accept_refused
++ mov edx,ecx
++ cmp ecx,8
++ jb accept_master_level
++ bt ebx,2
++ jc accept_refused
++ mov edx,2
++accept_master_level:
++ movzx esi,byte ptr CvInService
++ test esi,esi
++ jz accept_master_free
++ bsf esi,esi
++ cmp edx,esi
++ jae accept_refused
++accept_master_free:
++ cmp ecx,8
++ jb accept_master
++ movzx esi,byte ptr CvInService+1
++ test esi,esi
++ jz accept_slave_free
++ bsf esi,esi
++ lea edx,[ecx-8]
++ cmp edx,esi
++ jae accept_refused
++accept_slave_free:
++ cmp byte ptr CvAutoEOI,0
++ jne accept_slave_cascade
++ bts CvInService,2
++accept_slave_cascade:
++ cmp byte ptr CvAutoEOI+1,0
++ jne accept_slave_vector
++ bts CvInService,ecx
++accept_slave_vector:
++ movzx edx,byte ptr CvBases+1
++ add edx,ecx
++ sub edx,8
++ jmp accept_done
++accept_master:
++ cmp byte ptr CvAutoEOI,0
++ jne accept_master_vector
++ bts CvInService,ecx
++accept_master_vector:
++ movzx edx,byte ptr CvBases
++ add edx,ecx
++accept_done:
++ btr CvPending,ecx
++ pop esi
++ pop ebx
++ jmp profile_state
++accept_refused:
++ pop esi
++ pop ebx
++ stc
++ ret
++profile_not_accept:
++ cmp eax,9
++ jb profile_not_vm
++ cmp eax,10
++ ja profile_not_vm
++ cmp CvActive,0
++ je profile_error
++ push esi
++ push edi
++ push ecx
++ mov esi,offset CvGuestIF
++ mov edi,ecx
++ cmp eax,9
++ je vm_state_copy
++ mov esi,ecx
++ mov edi,offset CvGuestIF
++vm_state_copy:
++ mov ecx,CV_VM_STATE_BYTES
++ cld
++ rep movsb
++ pop ecx
++ pop edi
++ pop esi
++ jmp profile_state
++profile_not_vm:
 + test eax,eax
 + jnz profile_error
 +profile_state:

@@ -174,7 +174,7 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--iso',type=Path,default=Path('build/full/CiukiOS_full_cd_0-7-1.iso'))
     ap.add_argument('--output',type=Path,required=True)
-    ap.add_argument('--case',choices=('desktop','safe','recovery','windows','doom','costa','files'),default='desktop')
+    ap.add_argument('--case',choices=('desktop','safe','recovery','doom','costa','files'),default='desktop')
     args=ap.parse_args()
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     target=out/'untouched.img'
@@ -202,16 +202,9 @@ def main():
             vm.desktop();vm.shot('recovery-desktop',boot_size)
             print('[native-desktop] PASS recovery menu, uncompressed RAM boot, DOS, desktop',flush=True)
             return
-        if args.case in ('windows','doom','costa','files'):
+        if args.case in ('doom','costa','files'):
             # Select and open a real application from the graphical library.
-            if args.case=='windows':
-                offset=vm.offset();vm.key('ret')
-                vm.wait('[DESKTOP] RUN WIN',offset)
-                time.sleep(28);vm.shot('windows',(640,480))
-                vm.key('alt-f4');time.sleep(1);vm.key('ret')
-                vm.wait('[WIN31] AUDIO CLEANUP COMPLETE',offset,40)
-                vm.ready(offset);vm.shot('windows-return',boot_size);vm.pointer()
-            elif args.case=='files':
+            if args.case=='files':
                 vm.key('right');offset=vm.offset();vm.key('ret')
                 vm.wait('[DESKTOP] RUN DOSNAV',offset)
                 time.sleep(10);vm.shot('files')

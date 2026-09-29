@@ -118,6 +118,17 @@ static void test_keyboard_focus(cvgp_state &s, uint32_t owner)
         bytes = drain_kbc(s, owner);
         CHECK(bytes.size() == 1 && bytes[0] == 0x9d);
     }
+
+    /* A key typed while focused and not read yet stays the guest's. */
+    CHECK(cvgp_set_focus(&s, owner, 1) == CVGP_OK);
+    CHECK(cvgp_key_event(&s, owner, 0x01, 0, 1) == CVGP_OK);  /* Esc */
+    CHECK(cvgp_key_event(&s, owner, 0x01, 0, 0) == CVGP_OK);
+    CHECK(cvgp_key_event(&s, owner, 0x1d, 0, 1) == CVGP_OK);  /* held Ctrl */
+    CHECK(cvgp_set_focus(&s, owner, 0) == CVGP_OK);
+    bytes = drain_kbc(s, owner);
+    CHECK(bytes.size() == 4);
+    CHECK(bytes[0] == 0x01 && bytes[1] == 0x81 && bytes[2] == 0x1d &&
+          bytes[3] == 0x9d);
 }
 
 static void test_mouse(cvgp_state &s, uint32_t owner)
@@ -199,7 +210,7 @@ static void test_sb_dma(cvgp_state &s, uint32_t owner, fixture &f,
     dsp(s, owner, 0xe1);
     CHECK(inb(s, owner, 0x22a) == 4 && inb(s, owner, 0x22a) == 5);
     program_dma1(s, owner, physical, 3, 0);
-    dsp(s, owner, 0xd1);
+    dsp(s, owner, 0xd3);              /* SB16: speaker off does not gate the DAC */
     dsp(s, owner, 0x41); dsp(s, owner, 0x1f); dsp(s, owner, 0x40); /* 8000 Hz */
     dsp(s, owner, 0x14); dsp(s, owner, 3); dsp(s, owner, 0);
     capture.assign(128 * 2, 0);
@@ -207,8 +218,22 @@ static void test_sb_dma(cvgp_state &s, uint32_t owner, fixture &f,
     CHECK(!s.sb.active);
     CHECK(s.dma[1].terminal && s.dma[1].masked);
     CHECK(cvgp_irq_acknowledge(&s, owner, 1, &vector) && vector == 0x0f);
+    outb(s, owner, 0x224, 0x82);      /* SB16 interrupt status: 8-bit DMA */
+    CHECK(inb(s, owner, 0x225) == 1);
     CHECK(inb(s, owner, 0x22e) == 0);  /* device IRQ acknowledgement */
+    CHECK(inb(s, owner, 0x225) == 0);
     eoi(s, owner, 7);
+    dsp(s, owner, 0xf3);              /* 16-bit interrupt request */
+    CHECK(inb(s, owner, 0x225) == 2);
+    CHECK(cvgp_irq_acknowledge(&s, owner, 1, &vector) && vector == 0x0f);
+    inb(s, owner, 0x22f);
+    CHECK(inb(s, owner, 0x225) == 0);
+    eoi(s, owner, 7);
+    {                                 /* a stopped DSP outputs silence */
+        std::vector<int16_t> after(64 * 2, 1);
+        CHECK(cvgp_render_audio(&s, owner, &after[0], 64, CVGP_AUDIO_RATE) == CVGP_OK);
+        for (unsigned i = 0; i != after.size(); ++i) CHECK(after[i] == 0);
+    }
     int peak = 0;
     unsigned changes = 0;
     for (unsigned i = 0; i != capture.size(); ++i) {
