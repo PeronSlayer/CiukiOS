@@ -595,7 +595,7 @@ not_video:
 not_device:
  cmp eax,VM_OP_VMM_INIT
  jb not_vmm
- cmp eax,VM_OP_VMM_TARGET
+ cmp eax,VM_OP_VMM_LIST
  ja not_vmm
  call vmm_dispatch
  jmp checked_result

@@ -5002,52 +5002,45 @@ int21_country_info:
     stc
     ret
 
+; Date and time from the RTC (INT 1Ah AH=04h/02h, BCD). Before, the date was
+; a fixed 2026-08-30 and the time used only the low word of the tick count.
 int21_get_date:
-    mov cx, 2026
-    mov dh, 8
-    mov dl, 30
-    mov al, 1
-    xor ah, ah
+    mov ah, 0x04
+    int 0x1A                    ; CH century, CL year, DH month, DL day (BCD)
+    mov al, dl
+    call rtc_bcd
+    mov dl, al
+    mov al, dh
+    call rtc_bcd
+    mov dh, al
+    mov al, ch
+    call rtc_bcd
+    mov ah, 100
+    mul ah
+    xchg ax, cx                 ; CX = century*100, AL = year (BCD)
+    call rtc_bcd
+    add cx, ax                  ; CX = year
+    mov al, 6                   ; the RTC's day of the week, 1 = Sunday
+    out 0x70, al
+    in al, 0x71
+    dec al
     clc
     ret
 
 int21_get_time:
     push ax
-    push bx
-    push si
-
-    mov ah, 0x00
-    int 0x1A                    ; CX:DX = ticks since midnight
-
-    mov ax, dx
-    xor dx, dx
-    mov bx, 18
-    div bx                      ; AX = approx seconds, DX = tick remainder (0..17)
-
-    push dx                     ; save remainder for hundredths
-
-    xor dx, dx
-    mov bx, 60
-    div bx                      ; AX = total minutes, DX = seconds
-    mov si, dx                  ; save seconds for DH
-
-    xor dx, dx
-    mov bx, 60
-    div bx                      ; AX = hours, DX = minutes
+    mov ah, 0x02
+    int 0x1A                    ; CH hours, CL minutes, DH seconds (BCD)
+    mov al, ch
+    call rtc_bcd
     mov ch, al
-    mov cl, dl
-
-    pop ax                      ; AX = tick remainder (0..17)
-    mov bx, 100
-    mul bx                      ; AX = remainder * 100
-    xor dx, dx
-    mov bx, 18
-    div bx                      ; AX = hundredths (0..99)
-    mov dl, al
-    mov ax, si
+    mov al, cl
+    call rtc_bcd
+    mov cl, al
+    mov al, dh
+    call rtc_bcd
     mov dh, al
-
-    ; A BIOS tick only changes every ~55 ms.  Expose a monotonically advancing
+    ; A second only changes once a second. Expose a monotonically advancing
     ; centisecond value so DOS clients can calibrate short delays without
     ; spinning on an unchanged sample.
     mov al, [cs:dos_time_centis]
@@ -5062,11 +5055,14 @@ int21_get_time:
 .centis_nonzero:
     mov [cs:dos_time_centis], al
     mov dl, al
-
-    pop si
-    pop bx
     pop ax
     clc
+    ret
+
+; AL (BCD) -> AL binary, AH = 0: AAM 16 splits the nibbles, AAD joins them.
+rtc_bcd:
+    aam 16
+    aad
     ret
 
 int21_ctrl_break:

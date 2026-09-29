@@ -25,6 +25,8 @@
 #             following the focus)
 #   boot      firmware using 1 KiB of the caller's stack (INT 13h, PCI BIOS),
 #             DOS memory allocation rules
+#   desktop   Files, Notepad, Tasks and the shortcuts; removable media in
+#             Files (with the media fixtures)
 # --quick runs only the unit suites and the dpmi group. Each gate writes its
 # report.json under the output directory; SUMMARY.json lists every result.
 # QEMU/KVM evidence only; nothing here qualifies physical hardware.
@@ -40,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 		--image) IMAGE="$2"; shift 2 ;;
 		--output) OUT="$2"; shift 2 ;;
 		--quick) QUICK=1; shift ;;
-		-h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,32p' "$0"; exit 0 ;;
 		*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -153,6 +155,14 @@ if [[ "$QUICK" != "1" ]]; then
 	# and the PCI BIOS; DOS memory rules, also in a nested child and a VM.
 	run startup-stack timeout 900 python3 scripts/qemu_test_startup_stack.py --image "$IMAGE" --fault both --output "$OUT/startup-stack"
 	run dos-memory timeout 900 python3 scripts/qemu_test_full_dos_memory.py --image "$IMAGE" --output "$OUT/dos-memory"
+	drain
+	# Desktop applications (Files, Notepad, Tasks) and shortcuts; removable
+	# media in Files when the media fixtures are built.
+	run desktop-apps timeout 1200 python3 scripts/qemu_test_desktop_apps.py --image "$IMAGE" --output "$OUT/desktop-apps"
+	MEDIA_FIXTURES=build/full/native-media-2026-09-26/driver-tests/fixtures
+	if [[ -f "$MEDIA_FIXTURES/fat12.img" ]]; then
+		run native-media timeout 1200 python3 scripts/qemu_test_native_media.py --image "$IMAGE" --fixtures "$MEDIA_FIXTURES" --output "$OUT/native-media"
+	fi
 fi
 drain
 

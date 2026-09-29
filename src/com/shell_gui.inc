@@ -1,5 +1,5 @@
 %include "src/com/ui_theme.inc"
-%define UI_WINDOW_COUNT 12
+%define UI_WINDOW_COUNT 13
 %include "src/com/shell_assets.inc"
 ; CiukiOS native desktop. Single-tasking applications retain the DOS ABI.
 ; Optional BIOS-text sessions retain the desktop through a scoped runtime.
@@ -25,7 +25,6 @@ ui_enter:
     int 0x21
     jmp main_loop
 .assets_ready:
-    call fm_begin
     ; The startup melody is the event sound driver's first event: it starts
     ; with the first desktop frame and plays asynchronously.
     cmp byte [ui_sound_played],1
@@ -41,8 +40,8 @@ ui_enter:
     call ui_video_begin
     cmp byte [ui_exec_error],0
     jne .error
-    call fm_resume
-    call ui_task_manager_refresh
+    call app_keys_begin
+    call app_resume
     call ui_windows_resume
     jmp .ready
 .error:
@@ -93,7 +92,7 @@ ui_loop:
     call ui_sfx_service
     call poll_pending_power_action
     call ui_motion_poll
-    call fm_poll
+    call app_poll
     test ax,ax
     jnz ui_redraw
     call ui_event
@@ -111,10 +110,12 @@ ui_loop:
 .idle:
     call ui_clock_poll
     call ui_pages_sync
-    cmp byte [fm_busy],1
+    cmp byte [app_busy],1
     je ui_loop
+    call app_idle_tick
     sti
     hlt
+    call app_idle_woke
     jmp ui_loop
 
 ui_redraw_input:
@@ -169,15 +170,25 @@ ui_action:
     jb .non_files
     cmp ax,149
     ja .non_files
-    call fm_action
+    call app_action
     cmp ax,249
     je ui_launch_command
     test ax,ax
     jz ui_loop
     jmp ui_redraw
 .non_files:
-    call ui_task_manager_action
-    jc ui_redraw
+    cmp ax,29
+    jne .non_notepad
+    mov bl,12
+    xor si,si
+    call app_open
+    jmp ui_redraw
+.non_notepad:
+    cmp ax,19
+    jne .non_maximize
+    call app_maximize
+    jmp ui_redraw
+.non_maximize:
     cmp ax,180
     jb .non_wallpaper
     cmp ax,199
@@ -282,26 +293,29 @@ ui_action:
     call ui_windows_open
     jmp ui_redraw
 .files:
-    call fm_open
+    mov bl,8
+    xor si,si
+    call app_open
     jmp ui_redraw
 .tasks:
-    call ui_task_manager_refresh
-    mov byte [ui_dialog],9
-    call ui_windows_open
+    mov bl,9
+    xor si,si
+    call app_open
     jmp ui_redraw
 .wallpaper:
     call wp_open
     jmp ui_redraw
 .media_floppy:
-    mov al,1
+    mov si,app_media_floppy
     jmp .media_open
 .media_usb:
-    mov al,2
+    mov si,app_media_usb
     jmp .media_open
 .media_cd:
-    mov al,3
+    mov si,app_media_cd
 .media_open:
-    call md_open
+    mov bl,8
+    call app_open
     jmp ui_redraw
 .settings:
     mov byte [ui_window_visible],1
@@ -418,6 +432,8 @@ ui_action:
     call ui_windows_close
     jmp ui_redraw
 .run_commit:
+    call app_run_builtin      ; notepad, explorer, taskmgr: desktop applications
+    jc ui_redraw
     ; Windows 95 style: a program started from Run opens in a DOS window
     ; whenever the desktop can host one; otherwise it runs full screen.
     call dos_host_prepare
@@ -793,7 +809,8 @@ ui_video_end:
     call ui_sfx_end
     call dw_release
     jc .retained
-    call fm_end
+    call app_suspend
+    call app_keys_end
     call wp_end
     mov byte [ui_motion_phase],0
     call ui_pointer_hide
@@ -1485,9 +1502,7 @@ ui_record:
 %include "src/com/shell_gui_compositor.inc"
 %include "src/com/shell_gui_windows.inc"
 %include "src/com/shell_gui_dialogs.inc"
-%include "src/com/shell_file_manager.inc"
-%include "src/com/shell_media.inc"
-%include "src/com/shell_task_manager.inc"
+%include "src/com/shell_apps.inc"
 %include "src/com/shell_wallpaper.inc"
 %include "src/com/shell_dos_window.inc"
 %include "src/com/shell_dos_window_host.inc"
@@ -1512,8 +1527,8 @@ ui_items:
     db 2,0
     dw ut_costa,ud_costa,uc_costa,0
     db 14,0
-    dw ut_dos,ud_dos,0,3
-    db 4,0
+    dw ut_notepad,ud_notepad,0,29
+    db 2,0
     dw ut_run,ud_run,0,4
     db 5,0
     dw ut_doom,ud_doom,uc_doom,0
@@ -1552,10 +1567,11 @@ ut_dos db 'DOS',0
 ut_run db 'Run...',0
 ut_files db 'Files',0
 ut_tasks db 'Task Manager',0
+ut_notepad db 'Notepad',0
 ut_wallpaper db 'Wallpaper',0
 ud_tasks db 'Windows, programs and memory',0
 ud_wallpaper db 'Choose a desktop background',0
-ut_editor db 'Editor',0
+ut_editor db 'DOS Editor',0
 ut_costa db 'Costa',0
 ut_display db 'Display',0
 ut_sound db 'Sound',0
@@ -1575,7 +1591,8 @@ ut_close db 'x',0
 ut_prompt db '>_',0
 ud_prompt db 'DOS programs in a window',0
 ud_files db 'Browse folders, copy, move and rename files',0
-ud_editor db 'Create and edit text files',0
+ud_editor db 'Edit text files full screen (EDIT)',0
+ud_notepad db 'Write and edit text documents',0
 ud_costa db 'Open the Costa desktop',0
 ud_dos db 'Full-screen DOS. Type EXIT to return here.',0
 ud_run db 'Run a program or a shell command',0

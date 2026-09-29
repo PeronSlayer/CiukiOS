@@ -1,0 +1,17 @@
+diff --git a/src/JEMM32.ASM b/src/JEMM32.ASM
+--- a/src/JEMM32.ASM
++++ b/src/JEMM32.ASM
+@@ -2362,8 +2362,13 @@
+ 
+ ;--- probably good to check if coming from v86-mode?
+ 
++;--- CiukiOS: Ctrl+Alt+Del goes on to the V86 keyboard intercept, as any
++;--- key: the desktop opens its Task Manager (Windows 9x style); without an
++;--- intercept that takes it, the BIOS resets the machine as usual.
++if 0
+     cmp ax,4F53h    ;DEL pressed?
+     jz @@isdel
++endif
+ ife ?HOOK13
+     cmp ax,9101h    ;diskette interrupt done?
+     jz @@isfdirq

@@ -137,6 +137,13 @@ if args.ciukios_vm_scheduler:
         source_file = jemm/relative
         source_file.write_text(source_file.read_text())
     run(['patch', '--batch', '--forward', '-p1', '-i', str(scheduler_patch)], jemm)
+    # Ctrl+Alt+Del reaches the V86 keyboard intercept (the desktop's Task
+    # Manager) instead of Jemm's own soft reboot.
+    cad_patch = root/'patches/jemm-ciukios-ctrl-alt-del.patch'
+    run(['patch', '--batch', '--forward', '-p1', '-i', str(cad_patch)], jemm)
+    adaptations.append({'name':'ciukios-ctrl-alt-del', 'patch_sha256':digest(cad_patch),
+                        'scope':'INT 15h AX=4F53h is reflected to V86 like any key; the BIOS resets when no intercept takes it'})
+    included_adaptation_files.append(cad_patch)
     adaptations.append({'name':'ciukios-vm-scheduler',
                         'patch_sha256':digest(scheduler_patch),
                         'line_endings':'LF in the seven patched scheduler/profile integration units; CVIRQ.INC is a new LF include',

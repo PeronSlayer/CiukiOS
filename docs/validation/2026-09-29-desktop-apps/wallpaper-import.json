@@ -1,0 +1,19 @@
+{
+  "status": "pass",
+  "scope": "QEMU real native Files copy and GUI input; no physical hardware claim",
+  "source_sha256": "6ed224798bc4d8eda0f0d880ee9aa87d5aee57f431f66f947d7b4d65c97c28e0",
+  "ram_writes": false,
+  "events": [
+    {
+      "name": "imported-tile-after-failed-apply",
+      "compared_pixels": 304800,
+      "mismatched_pixels": 0
+    },
+    {
+      "name": "imported-tile-after-cold-boot",
+      "compared_pixels": 304800,
+      "mismatched_pixels": 0
+    }
+  ],
+  "catalog_unmodified": true
+}

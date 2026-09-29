@@ -1669,6 +1669,8 @@ vmm_dispatch proc
  je op_ivt
  cmp eax,VM_OP_VMM_TARGET
  je op_target
+ cmp eax,VM_OP_VMM_LIST
+ je op_list
  mov eax,VM_ERROR_OPERATION
  ret
 op_focus:
@@ -1677,6 +1679,35 @@ op_kill:
  jmp vmm_kill
 op_target:
  jmp vmm_set_target
+; VMM_LIST: four bytes per VM (state, SESS_* flags, has the focus, runs).
+op_list:
+ mov ecx,VMM_MAX*4
+ call guest_destination
+ test eax,eax
+ jnz list_done
+ xor ecx,ecx
+list_next:
+ mov eax,ecx
+ call vmm_record
+ mov al,byte ptr [esi].VMREC.state
+ mov [edi],al
+ mov al,byte ptr [esi].VMREC.sess
+ mov [edi+1],al
+ xor eax,eax
+ cmp ecx,vmm_focus
+ sete al
+ mov [edi+2],al
+ xor eax,eax
+ cmp ecx,vmm_current
+ sete al
+ mov [edi+3],al
+ add edi,4
+ inc ecx
+ cmp ecx,VMM_MAX
+ jb list_next
+ xor eax,eax
+list_done:
+ ret
 op_ivt:
  mov ecx,1024
  call guest_destination

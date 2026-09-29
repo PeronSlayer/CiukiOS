@@ -1,5 +1,9 @@
 ; Nonblocking keyboard/mouse events. The renderer alone owns cursor pixels.
 ui_event:
+    xor ax,ax
+    xchg al,[app_hotkey]    ; Win/Menu/Ctrl+Alt+Del from the INT 15h intercept
+    test al,al
+    jnz app_hotkey_action
     mov ah,0x11
     int 0x16
     jz .mouse
@@ -7,12 +11,18 @@ ui_event:
     int 0x16
     cmp ah,0xA5             ; enhanced BIOS Alt+Tab, retained after Alt release
     je ui_windows_cycle
-    cmp byte [ui_dialog],8
-    jne .task_key
-    call fm_key
-    jc .out
-.task_key:
-    call ui_task_manager_key
+    cmp ah,0x6B
+    je .alt_close
+    cmp al,27
+    jne .app_key
+    push ax
+    mov ah,2
+    int 0x16
+    test al,4
+    pop ax
+    jnz .escape             ; Ctrl+Esc and Ctrl+Shift+Esc stay global
+.app_key:
+    call app_key            ; the active application first
     jc .out
     cmp ah,0x94             ; enhanced BIOS Ctrl+Tab
     je .cycle_category
@@ -65,8 +75,11 @@ ui_event:
     test al,4
     jz .escape_window
     test al,3
-    jz .escape_window
+    jz .start_menu
     mov ax,23                 ; Ctrl+Shift+Esc opens native Tasks
+    ret
+.start_menu:
+    mov ax,1                  ; Ctrl+Esc: Programs, as the Start menu
     ret
 .escape_window:
     cmp byte [ui_dialog],0
@@ -79,6 +92,8 @@ ui_event:
 .alt_close:
     cmp byte [ui_dialog],0
     jne .close
+    cmp byte [ui_window_visible],1
+    jne .power                ; Alt+F4 on the bare desktop: shut down
     mov ax,12
     ret
 .about:
@@ -251,7 +266,41 @@ ui_event:
     call ui_pointer_show
     cmp byte [ui_dragging],0
     jne .drag
+    cmp byte [app_capture],0
+    je .click
+    test byte [ui_mouse_buttons],1
+    jz .click
+    mov bl,[app_capture]
+    dec bl
+    mov dx,2
+    call app_mouse
+    test ax,ax
+    jnz .out
 .click:
+    ; Right button: the application under the pointer gets it (context menu).
+    mov ax,[ui_mouse_buttons]
+    and al,2
+    cmp al,[app_previous_right]
+    je .left_button
+    mov [app_previous_right],al
+    test al,al
+    jz .left_button
+    call ui_hit_find
+    movzx bx,byte [ui_hit_target]
+    test bx,bx
+    jz .left_button
+    dec bx
+    cmp bl,[ui_active_window]
+    je .right_raised
+    call ui_windows_raise
+.right_raised:
+    mov dx,4
+    call app_mouse
+    test ax,ax
+    jnz .out
+    mov ax,250
+    ret
+.left_button:
     mov ax,[ui_mouse_buttons]
     and al,1
     cmp al,[ui_previous_button]
@@ -301,6 +350,10 @@ ui_event:
     mov byte [ui_window_repaint],1
 .focus_ready:
     pop ax
+    cmp ax,70
+    je .app_press
+    cmp ax,65
+    je .app_resize_start
     cmp ax,62
     je .window_drag_start
     cmp ax,61
@@ -344,6 +397,17 @@ ui_event:
     mov [ui_resize_wh],ax
     jmp .idle
 .release:
+    cmp byte [app_capture],0
+    je .release_controls
+    mov bl,[app_capture]
+    dec bl
+    mov byte [app_capture],0
+    mov dx,3
+    call app_mouse
+    test ax,ax
+    jnz .out
+    jmp .idle
+.release_controls:
     mov bl,[ui_button_down]
     call ui_damage_pressed
     mov byte [ui_button_down],0
@@ -376,6 +440,8 @@ ui_event:
     test word [ui_mouse_buttons],1
     jz .drag_end
     call ui_comp_damage_drag
+    cmp byte [ui_dragging],4
+    je .app_resize
     cmp byte [ui_dragging],2
     je .resize
     cmp byte [ui_dragging],3
@@ -477,6 +543,61 @@ ui_event:
 .resize_h_max:
     mov [ui_wh],ax
     call ui_library_focus_clamp
+    call ui_comp_damage_drag
+    mov ax,250
+    ret
+.app_press:
+    mov bl,[ui_active_window]
+    push si
+    call app_slot
+    pop si
+    jc .idle
+    inc bl
+    mov [app_capture],bl
+    dec bl
+    mov dx,1
+    call app_mouse
+    test ax,ax
+    jnz .out
+    jmp .idle
+.app_resize_start:
+    mov byte [ui_dragging],4
+    mov al,[ui_active_window]
+    mov [ui_window_drag],al
+    jmp .idle
+.app_resize:
+    movzx si,byte [ui_window_drag]
+    shl si,1
+    mov ax,[ui_mouse_x]
+    sub ax,[ui_window_x+si]
+    add ax,8
+    cmp ax,320
+    jge .app_w_min
+    mov ax,320
+.app_w_min:
+    mov bx,[ui_width]
+    sub bx,[ui_window_x+si]
+    sub bx,8
+    cmp ax,bx
+    jle .app_w_max
+    mov ax,bx
+.app_w_max:
+    mov [ui_window_width+si],ax
+    mov ax,[ui_mouse_y]
+    sub ax,[ui_window_y+si]
+    add ax,8
+    cmp ax,200
+    jge .app_h_min
+    mov ax,200
+.app_h_min:
+    mov bx,[ui_height]
+    sub bx,[ui_window_y+si]
+    sub bx,37
+    cmp ax,bx
+    jle .app_h_max
+    mov ax,bx
+.app_h_max:
+    mov [ui_window_height+si],ax
     call ui_comp_damage_drag
     mov ax,250
     ret

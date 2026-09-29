@@ -93,7 +93,7 @@ class Machine:
         self.sput('dos_host_active', 1, 1)
         self.sput('ui_active', 1, 1)
         self.skip = {'ui_sfx_end', 'ui_sfx_begin', 'ui_windows_open'}
-        self.forbidden = {'dw_load', 'fm_end', 'wp_end', 'ui_assets_end', 'vc_end',
+        self.forbidden = {'dw_load', 'app_suspend', 'wp_end', 'ui_assets_end', 'vc_end',
                           'ui_comp_end', 'ui_icons_end', 'restore_shell_video_state'}
         self.shell_stop = None
         u.hook_add(UC_HOOK_CODE, self.code)

@@ -40,6 +40,25 @@ The boot now goes from the splash straight to the desktop, with the startup
 melody and no text screen. Windows 3.1 support was removed on 28 September
 2026.
 
+**Desktop applications (2026-09-29).**
+- **Files:** Explorer/Dolphin style, with Places, address bar, Details,
+  Icons and List views, right-click menus, new folder, cut/copy/paste,
+  rename, delete, properties and removable media.
+- **Notepad:** the Windows Notepad, with every menu, Find/Replace, Go To,
+  Time/Date, `.LOG`, Page Setup and Print to LPT1.
+- **Task Manager:** Applications, Processes, Virtual Machines and
+  Performance with CPU history.
+
+These are separate modules in `\SYSTEM\APPS`, hosted by the desktop.
+
+Shortcuts:
+- Win (Programs), Win+R (Run), Win+E (Files), Win+D (desktop);
+- Alt+F4, Alt+Tab;
+- Ctrl+Shift+Esc and Ctrl+Alt+Del (Task Manager);
+- the Menu key and Shift+F10.
+
+See [the record](docs/desktop-apps-2026-09-29.md).
+
 Selected desktop image, **2026-09-26**: the native desktop includes Files, Tasks,
 Display, Sound and Wallpaper windows. CD-ROM, floppy and BIOS-exposed disks
 open in Files for read-only browsing, text preview and file import. USB must be

@@ -52,8 +52,6 @@ ui_draw_dialog:
 .close_only:
     add bx,24
     U_BUTTON bx,dx,22,19,ut_close,18
-    cmp byte [ui_dialog],9
-    je ui_task_manager_draw
     cmp byte [ui_dialog],10
     je wp_draw
     cmp byte [ui_dialog],5

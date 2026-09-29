@@ -63,6 +63,10 @@ VM_OP_SCHED_INFO       equ 0Bh
 ;            VIDEO_STATE/READ/RENDER/PRESENT/BAND/DAMAGE, DEV_STATE,
 ;            DEV_KEY and DEV_MOUSE address (itself: its own). A VM that
 ;            ended falls back to the caller's own session.
+; VMM_LIST   ES:DI <- 4 bytes per VM (VMM_MAX of them): state (0 free,
+;            1 running, 2 ended), SESS_* flags of its DOS window session
+;            (1 video, 2 devices, 4 audio, 8 keyboard, 10h mouse), 1 when it
+;            has the focus, 1 when it runs now (Task Manager).
 ; Each VM can own one DOS window session (BEGIN), with its own VGA and
 ; device model; its traps and hooks act for it while it runs.
 ; A VM that began the DOS window session (BEGIN) owns it: its traps and hooks
@@ -75,6 +79,7 @@ VM_OP_VMM_FOCUS        equ 44h
 VM_OP_VMM_KILL         equ 45h
 VM_OP_VMM_IVT          equ 46h
 VM_OP_VMM_TARGET       equ 47h
+VM_OP_VMM_LIST         equ 48h
 VM_IF_AVAILABLE        equ 1
 VM_IF_REQUESTED        equ 2
 VM_IF_ACTIVE           equ 4

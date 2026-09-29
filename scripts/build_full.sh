@@ -910,6 +910,12 @@ echo "[build-full] injecting official system icons and credits to ::SYSTEM/UI"
 mtools_ensure_dir "$IMG" ::SYSTEM/UI
 python3 scripts/build_desktop_assets.py
 mcopy -o -i "$IMG" assets/desktop/DESKTOP.DAT ::SYSTEM/UI/DESKTOP.DAT
+# Desktop applications (Files, Notepad, Tasks): modules hosted by SHELL.COM.
+bash scripts/build_apps.sh build/full/obj/apps
+mtools_ensure_dir "$IMG" ::SYSTEM/APPS
+for app_module in build/full/obj/apps/*.APP; do
+	mcopy -o -i "$IMG" "$app_module" ::SYSTEM/APPS/
+done
 mcopy -o -i "$IMG" assets/icons/native/ICONS.DAT ::SYSTEM/UI/ICONS.DAT
 mcopy -o -i "$IMG" assets/icons/CREDITS.TXT ::SYSTEM/UI/CREDITS.TXT
 mcopy -o -i "$IMG" assets/icons/upstream/COPYING ::SYSTEM/UI/TANGO.TXT

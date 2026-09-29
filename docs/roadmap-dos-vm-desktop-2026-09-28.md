@@ -90,3 +90,12 @@ speed is bounded by the CPU.
 - 2026-09-29 (later): the kernel runs the disk BIOS on its own stack, so the
   firmware stack fixture passes; the suspected AH=48h overlap is not
   reproducible. Both are in the profile (23/23) — same record, section 6.
+- 2026-09-29 (later): desktop applications as modules hosted by SHELL.COM
+  — [record](desktop-apps-2026-09-29.md):
+  - Files (Explorer/Dolphin style), a complete Windows Notepad and a
+    detailed Task Manager (with the VMs);
+  - the Windows key shortcuts, and Ctrl+Alt+Del opening Task Manager;
+  - kernel date and time read from the RTC.
+
+  This covers phase 4: the folder tree, drag and drop, copy/move/delete/
+  rename, new folder, properties and open-with.

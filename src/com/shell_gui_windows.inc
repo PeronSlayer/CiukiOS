@@ -1,4 +1,4 @@
-%define UI_WINDOW_COUNT 12
+%define UI_WINDOW_COUNT 13
 ; Independent native windows. DOS children still run exclusively, with this
 ; shell's complete window state retained while their process owns the display.
 ui_windows_resume:
@@ -58,6 +58,9 @@ ui_windows_open:
     pushad
     call ui_sfx_notice
     movzx bx,byte [ui_dialog]
+    mov al,bl
+    mov si,ui_window_opened
+    call ui_window_log
     test bx,bx
     jz .raise
     cmp byte [ui_window_flags+bx],0
@@ -128,14 +131,16 @@ ui_windows_raise:
 ui_windows_close:
     pushad
     movzx bx,byte [ui_active_window]
+    mov al,bl
+    mov si,ui_window_closed
+    call ui_window_log
     cmp bx,11
     jne .files
     call dw_release
     jc .retained
 .files:
-    cmp bx,8
-    jne .close
-    call fm_end
+    call app_close                    ; a module may keep unsaved work open
+    jc .retained
 .close:
     mov byte [ui_window_flags+bx],0
     mov byte [ui_bar_dirty],1
@@ -145,6 +150,19 @@ ui_windows_close:
     popad
     stc
     ret
+; SI = marker, AL = window: "[DESKTOP] WINDOW nn" on COM1 for the gates.
+ui_window_log:
+    pushad
+    aam
+    add ax,'00'
+    xchg al,ah
+    mov [si+17],ax
+    call ui_serial
+    popad
+    ret
+ui_window_opened db '[DESKTOP] WINDOW 00 OPEN',13,10,0
+ui_window_closed db '[DESKTOP] WINDOW 00 CLOSE',13,10,0
+
 ui_windows_unfocus:
     pushad
     call ui_damage_active
@@ -205,9 +223,11 @@ ui_windows_draw:
 .dialog:
     cmp byte [ui_window_flags+bx],1
     jne .advance
-    cmp bx,8
-    jne .standard_dialog
-    call fm_draw
+    push si
+    call app_slot
+    pop si
+    jc .standard_dialog
+    call app_draw
     jmp .advance
 .standard_dialog:
     cmp bx,11
@@ -281,7 +301,7 @@ ui_windows_taskbar:
     inc cx
 .skip_count:
     inc bp
-    cmp bp,8
+    cmp bp,9
     jb .count
     jcxz .done
     mov ax,[ui_width]
@@ -313,7 +333,7 @@ ui_windows_taskbar:
     add bx,[ui_task_button_width]
 .advance:
     inc bp
-    cmp bp,8
+    cmp bp,9
     jb .next
 .done:
     popad
@@ -456,8 +476,8 @@ ui_motion_poll:
 .done:
     ret
 
-ui_task_windows db 1,2,5,6,8,9,10,11
-ui_task_labels dw ui_task_run,ui_task_info,ui_task_video,ui_task_audio,ut_files,ui_task_tasks,ui_task_bg,ut_dos
+ui_task_windows db 1,2,5,6,8,12,9,10,11
+ui_task_labels dw ui_task_run,ui_task_info,ui_task_video,ui_task_audio,ut_files,ut_notepad,ui_task_tasks,ui_task_bg,ut_dos
 ui_task_run db 'Run',0
 ui_task_info db 'Info',0
 ui_task_video db 'Video',0
@@ -465,15 +485,15 @@ ui_task_audio db 'Audio',0
 ui_task_tasks db 'Tasks',0
 ui_task_bg db 'BG',0
 ui_task_button_width dw 72
-ui_window_titles dw ut_programs,ut_run,ut_about,ut_power,ut_launch_error,ut_display,ut_sound,ut_brand,ut_files,ut_tasks,ut_wallpaper,ut_dos_window
+ui_window_titles dw ut_programs,ut_run,ut_about,ut_power,ut_launch_error,ut_display,ut_sound,ut_brand,ut_files,ut_tasks,ut_wallpaper,ut_dos_window,ut_notepad
 ui_window_flags times UI_WINDOW_COUNT db 0
-ui_default_focus dw 44,40,41,41,41,50,55,1,100,160,183,18
-ui_window_focus dw 44,40,41,41,41,50,55,1,100,160,183,18
-ui_window_width dw 466,466,466,466,466,466,466,466,FM_WIDTH,466,466,660
-ui_window_height dw 226,226,226,226,226,226,226,226,FM_HEIGHT,226,226,460
+ui_default_focus dw 44,40,41,41,41,50,55,1,0,0,183,18,0
+ui_window_focus dw 44,40,41,41,41,50,55,1,0,0,183,18,0
+ui_window_width dw 466,466,466,466,466,466,466,466,620,560,466,660,560
+ui_window_height dw 226,226,226,226,226,226,226,226,410,400,226,460,400
 ui_window_x times UI_WINDOW_COUNT dw 0
 ui_window_y times UI_WINDOW_COUNT dw 0
-ui_window_order db 0,1,2,3,4,5,6,7,8,9,10,11
+ui_window_order db 0,1,2,3,4,5,6,7,8,9,10,11,12
 ui_active_window db 0
 ui_window_paint db 0
 ui_hit_owner db 0
