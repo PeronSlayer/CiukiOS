@@ -16478,11 +16478,21 @@ bios_disk_interrupt:
     push es
     push fs
     push gs
+%ifdef CIUKIDOS_KERNEL_BUILD
+    ; Like DOS, run the BIOS on a kernel disk stack, not the caller's: the
+    ; firmware may use 1 KiB there (JLOAD's own stack is 1 KiB).
+    mov [cs:disk_saved_sp], sp
+    mov [cs:disk_saved_sp + 2], ss
+    lss sp, [cs:disk_stack_ptr]
+%endif
     stc
     sti
     int 0x13
     sti
     cld
+%ifdef CIUKIDOS_KERNEL_BUILD
+    lss sp, [cs:disk_saved_sp]
+%endif
     pop gs
     pop fs
     pop es
@@ -24178,6 +24188,10 @@ disk_packet:
 disk_packet_off dw 0
 disk_packet_seg dw 0
 disk_packet_lba dq 0
+%ifdef CIUKIDOS_KERNEL_BUILD
+disk_saved_sp dw 0, 0
+disk_stack_ptr dw 0x1000, 0x0100         ; 02000h, in the kernel's own stack
+%endif
 %if ((dos_mem_exec_state_end - dos_mem_exec_state_begin) + 6 + (dos_exec_saved_context_prefix_end - dos_exec_saved_context_begin) + (dos_exec_saved_context_end - dos_exec_saved_context_suffix_begin)) > (DOS_EXEC_STATE_FRAME_PARAS * 16)
     %error "EXEC allocator snapshot exceeds its CIUKIDOS frame"
 %endif

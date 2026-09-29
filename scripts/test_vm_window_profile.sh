@@ -23,6 +23,8 @@
 #             exit/kill of a session owner, vectors of a forked VM, clocks,
 #             two sessions at once (keyboard, mouse and AC'97 ownership
 #             following the focus)
+#   boot      firmware using 1 KiB of the caller's stack (INT 13h, PCI BIOS),
+#             DOS memory allocation rules
 # --quick runs only the unit suites and the dpmi group. Each gate writes its
 # report.json under the output directory; SUMMARY.json lists every result.
 # QEMU/KVM evidence only; nothing here qualifies physical hardware.
@@ -38,7 +40,7 @@ while [[ $# -gt 0 ]]; do
 		--image) IMAGE="$2"; shift 2 ;;
 		--output) OUT="$2"; shift 2 ;;
 		--quick) QUICK=1; shift ;;
-		-h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,30p' "$0"; exit 0 ;;
 		*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -146,6 +148,11 @@ drain
 run doom-original-sfx timeout 1800 "${AUTO[@]}" --samples 6 --program '\APPS\DOOM\DOOMCORE.EXE' --game-args '-warp 1 1 -nomusic' --output "$OUT/doom-original-sfx"
 if [[ "$QUICK" != "1" ]]; then
 	run multi-vm timeout 1800 python3 scripts/qemu_test_vmm.py --image "$IMAGE" "${J[@]}" --probes "$A/vmm" --output "$OUT/multi-vm"
+	drain
+	# Boot with firmware that uses 1 KiB of the caller's stack in INT 13h
+	# and the PCI BIOS; DOS memory rules, also in a nested child and a VM.
+	run startup-stack timeout 900 python3 scripts/qemu_test_startup_stack.py --image "$IMAGE" --fault both --output "$OUT/startup-stack"
+	run dos-memory timeout 900 python3 scripts/qemu_test_full_dos_memory.py --image "$IMAGE" --output "$OUT/dos-memory"
 fi
 drain
 

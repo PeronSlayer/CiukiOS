@@ -223,10 +223,17 @@ Found and fixed on the way:
   (`VIDEO_BAND` from the system VM), sets the focus on clicks, and the
   DOS-window manager moves out of SHELL.COM.
 - **M5.** DPMI hosts per VM.
-- **Outside the VM manager, found while testing M3:** CiukiDOS AH=48h can
-  return memory inside the calling program's own block. A COM program
-  resized to 0C0h paragraphs at 2180h got 2202h. It happens with or without
-  the VM manager.
+- **Not confirmed: the suspected CiukiDOS AH=48h overlap.** While testing
+  M3, an early VMICHILD seemed to get memory inside its own block. The
+  addresses behind that diagnosis were set by the test harness, and VMFORK
+  has changed since. The DOS memory gate (`qemu_test_full_dos_memory.py`)
+  now checks that AH=48h blocks, including the largest one, lie above the
+  caller's own block:
+  - from the shell;
+  - in a nested EXEC child;
+  - in a VM forked by VMFORK after it freed its ancestors' blocks.
+
+  All three pass on the M3 image.
 
 ## Where we start
 

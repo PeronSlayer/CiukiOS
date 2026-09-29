@@ -87,3 +87,6 @@ speed is bounded by the CPU.
   the BIOS RAM in upper memory. Profile 21/21, VM gate 10/10 parts —
   [evidence](validation/2026-09-29-boot-and-m3/README.md), section 5. M4
   (the desktop paints each VM's session in its window) and M5 are open.
+- 2026-09-29 (later): the kernel runs the disk BIOS on its own stack, so the
+  firmware stack fixture passes; the suspected AH=48h overlap is not
+  reproducible. Both are in the profile (23/23) — same record, section 6.

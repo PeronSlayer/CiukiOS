@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Check DOS allocation semantics and secondary COMMAND.COM behavior."""
+"""Check DOS allocation semantics (also in a nested child and a forked VM:
+AH=48h blocks lie above the caller's own block) and secondary COMMAND.COM."""
 import argparse
 from pathlib import Path
 import shutil
@@ -30,6 +31,15 @@ try:
     vm.wait('CiukiOS SHELL C:\\APPS>')
     vm.command('memtest', 'MEMORY PASS')
     print('[dos-memory] PASS initial PSP ceiling, actual MCB size and allocation isolation', flush=True)
+    # The same checks in a VM forked by the VM manager, whose VMFORK frees
+    # the ancestors' blocks before it runs the program.
+    listing = subprocess.run(['mdir', '-b', '-i', str(disk), '::VM'], capture_output=True, text=True).stdout
+    if 'VMFORK.COM' in listing.upper():
+        offset = vm.offset()
+        vm.text('\\vm\\vmfork.com \\apps\\memtest.com')
+        vm.wait('MEMORY PASS', offset, 60)
+        vm.wait('CiukiOS SHELL C:\\APPS>', offset, 60)
+        print('[dos-memory] PASS the same checks in a forked VM', flush=True)
     vm.command('cmdtest', 'COMMAND STATUS PASS')
     print('[dos-memory] PASS COMMAND /C returns child exit code 37', flush=True)
     offset = vm.offset()

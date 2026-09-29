@@ -91,7 +91,7 @@ also passed as `...28f` (M3 only) and `...28g` (M3 and the first boot changes).
 | `VMSTART.COM` | `4a05f63394a70da4dc5972634cf48311f7ddbe264246a990a91533a30b7ba476` |
 | `SFX.DRV` | `55cd786c31d510a581396d2c5e39972ec61fbc632025f8c72cf1bb078581b374` |
 
-## Open: disk-BIOS stack fixture
+## Disk-BIOS stack fixture (fixed since, see section 6)
 
 `qemu_test_startup_stack.py --fault disk` fails. This fixture makes every
 INT 13h use 1 KB of the caller's stack, as documented firmware may.
@@ -172,5 +172,26 @@ probes that also printed DI, the last hex word on a key line):
 | `VMATEST.COM` | `3fd0160e5900baed00bb3e6f6d7b1f0eda8200e92993d572ba558e6de1cad270` |
 | `VMSCHILD.COM` | `186981d987584715eddfebfd86ba7fe7b47746b1de71fdf1b89c0ff091e3b057` |
 
-Still open, outside M3: the disk-BIOS stack fixture (above) and the kernel
-AH=48h allocator bug (design record). QEMU/KVM evidence only.
+QEMU/KVM evidence only.
+
+## 6. Closed after M3: firmware stack use, AH=48h
+
+- **Disk BIOS on a kernel stack.** CiukiDOS called INT 13h on the caller's
+  stack. JLOAD's own stack is 1 KB, so firmware that uses 1 KB there
+  (`qemu_test_startup_stack.py --fault disk`) overwrote JLOAD at boot. The
+  kernel then failed to run SHELL.COM (DOS error 8).
+  - The RAM dump shows the fixture's pattern at 20100h-20950h, JLOAD's area.
+  - `bios_disk_interrupt` now switches to a disk stack at 0100:1000, inside
+    the kernel's own 8 KB stack segment, like the internal stacks of MS-DOS.
+    It costs 40 bytes; the kernel is 43,257 bytes, 7 under its ceiling.
+  - The fixture passes with the disk fault, the PCI fault, both and none
+    (`startup-stack-disk-fixed.json`, `startup-stack-both-fixed.json`).
+    Before the fix: `startup-stack-disk.json`.
+- **AH=48h.** The suspected overlap is not reproducible (design record). The
+  DOS memory gate checks it from the shell, in a nested child and in a
+  forked VM.
+
+Both now run in the complete profile (`startup-stack` with both faults,
+`dos-memory`). Profile `build/tests/vm-window-profile-2026-09-29e`: **23/23
+pass** (`profile-e-summary.json`). The image is
+`build/tests/kstack/image-k1.img`.
