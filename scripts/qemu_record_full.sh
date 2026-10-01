@@ -71,7 +71,6 @@ if (( DO_BUILD )); then
     bash scripts/fetch_costa.sh
   fi
   bash scripts/fetch_network_stack.sh
-  bash scripts/fetch_microweb.sh
   bash scripts/build_full.sh
 fi
 
