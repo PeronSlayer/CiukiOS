@@ -21,6 +21,7 @@ required_files=(
   MTCP/ftp.exe
   MTCP/ftpsrv.exe
   MTCP/ping.exe
+  MTCP/htget.exe
   MTCP/pkttool.exe
   MTCP/COPYING.TXT
   MTCP/SOURCES.ZIP

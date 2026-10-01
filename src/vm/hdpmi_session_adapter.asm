@@ -23,9 +23,10 @@ if ?32BIT
 CV_FIRST_PORT equ 03B0h
 CV_PORT_COUNT equ 30h
 CV_LAST_VIDEO_PORT equ 03DFh
-CV_DEV_RANGES equ 5
+CV_DEV_RANGES equ 7
 CV_OP_DEV_IO  equ 34h            ; VM_OP_DEV_IO (session_devices_abi.inc)
 CV_OP_DEV_PM_IRQ equ 36h         ; VM_OP_DEV_PM_IRQ
+CV_OP_DEV_PHYSICAL_IRQ equ 38h   ; IRQ1/IRQ12 while HDPMI owns the client
 CV_SHARED_DEVICE_IRQS equ 320    ; cvvid_shared.device_irqs (session_video.h)
 CV_FIRST_PTE  equ 0A0h
 CV_VIDEO_PAGES equ 67
@@ -83,8 +84,11 @@ cv_handle              dd 0
 cv_dev_handles         dd CV_DEV_RANGES dup (0)
 cv_jlm_entry           dd 0
 ; Protected-mode device bridge ranges (start, count): PIC 20h/21h with ISA
-; DMA 00h-0Fh, DMA pages, slave PIC with 16-bit DMA, Sound Blaster, OPL.
-cv_dev_ranges          dw 00h,22h, 80h,10h, 0A0h,40h, 220h,10h, 388h,4
+; DMA 00h-0Fh, DMA pages, slave PIC with 16-bit DMA, Sound Blaster, OPL, and
+; the keyboard controller's data and status ports: with several VMs a key
+; belongs to the VM with the focus, and a client that reads the controller
+; directly gets it from its session's model (the monitor routes the byte).
+cv_dev_ranges          dw 00h,22h, 80h,10h, 0A0h,40h, 220h,10h, 388h,4, 60h,1, 64h,1
 ; Device IRQ lines CVSESSION holds for this client (last DEV_IO / DEV_PM_IRQ)
 ; and how many were delivered.
 cv_pm_magic            db 'CVPMIRQ!'
@@ -798,9 +802,15 @@ cv_if_disable proc
  mov fs:cv_saved_pic_slave,al
  mov dword ptr fs:cvdpmi_cli_stepping,1
 if_disable_saved:
- mov al,0FEh
+ ; A DPMI client's virtual CLI must not stop IRQ1/IRQ12 for the desktop VM.
+ ; HDPMI's physical handlers hand those bytes to CVSESSION while the client
+ ; runs. Keep their original mask bits, plus IRQ2's cascade, and mask the
+ ; remaining device lines until this client's virtual IF is enabled again.
+ mov al,fs:cv_saved_pic_master
+ or al,0F8h
  out 21h,al
- mov al,0FFh
+ mov al,fs:cv_saved_pic_slave
+ or al,0EFh
  out 0A1h,al
  mov dword ptr fs:cv_if_enabled,0
  or dword ptr ss:[ebp+8],200h
@@ -852,6 +862,29 @@ if_irq_pass:
  stc
  ret
 cvdpmi_if_irq0 endp
+
+; EAX=physical IRQ line (1 or 12) at HDPMI's handler, with IF clear.
+; CF=0 if CVSESSION took or routed the controller byte.  Its V86 IRQ filter
+; cannot see this interrupt while a protected-mode DOS/4GW client owns it.
+cvdpmi_physical_irq proc near public
+	pushad
+	cmp byte ptr ss:cvdpmi_client_active,0
+	je irq_pass
+	mov ebx,eax
+	mov eax,CV_OP_DEV_PHYSICAL_IRQ
+	call cv_bridge_call
+	test eax,eax
+	jnz irq_pass
+	test ebx,ebx
+	jz irq_pass
+	popad
+	clc
+	ret
+irq_pass:
+	popad
+	stc
+	ret
+cvdpmi_physical_irq endp
 
 ; The DPMI 0900/0901/0902 path passes its return IRET32 in ECX and AL=op.
 ; Returns previous state in AL, clears client CF, leaves physical IF enabled.

@@ -30,6 +30,7 @@ int ui_measure(const char *s)
     return svc(7, &a);
 }
 void ui_repaint(void) { call5(8, 0, 0, 0, 0, "", 0); }
+void ui_repaint_win(int w) { call5(8, 0, 0, 0, 0, "", w); }
 void app_command(const char *c) { call5(9, 0, 0, 0, 0, c, 0); }
 void app_open(int window, const char *arg) { call5(10, 0, 0, 0, 0, arg, window); }
 void app_close(void) { call5(11, 0, 0, 0, 0, "", 0); }
@@ -48,6 +49,46 @@ void app_window_cmd(int window, int command)
 }
 int app_idle(void) { struct sargs a; a.s = ""; return svc(15, &a); }
 void ui_mono(int x, int y, const char *s, int c, int cell) { call5(16, x, y, cell, 0, s, c); }
+int win_open(int x, int y, int w, int h, const char *title, int style)
+{
+    struct sargs a;
+    a.x = x; a.y = y; a.w = w; a.h = h; a.s = title; a.v = style; a.v2 = 0; a.v3 = 0;
+    return svc(17, &a);
+}
+void win_close(int window) { call5(18, 0, 0, 0, 0, "", window); }
+void ui_damage(int x, int y, int w, int h) { call5(19, x, y, w, h, "", 0); }
+void shell_action(int code) { call5(20, 0, 0, 0, 0, "", code); }
+void ui_overlay(int on) { call5(21, 0, 0, 0, 0, "", on); }
+int app_font(const char *path, int slot)
+{
+    struct sargs a;
+    a.x = a.y = a.w = a.h = 0; a.s = path; a.v = slot; a.v2 = 0; a.v3 = 0;
+    return svc(22, &a);
+}
+void app_settings(void) { call5(23, 0, 0, 0, 0, "", 0); }
+void ui_palette(const u8 *c) { call5(24, 0, 0, 0, 0, (const char *)c, 0); }
+void ui_bitmap(int x, int y, int w, int h, unsigned seg, unsigned off, int stride, int zoom)
+{
+    struct sargs a;
+    a.x = x; a.y = y; a.w = w; a.h = h; a.s = ""; a.v = (int)seg; a.v2 = (int)off;
+    a.v3 = (stride & 0x0FFF) | ((zoom & 15) << 12);
+    svc(26, &a);
+}
+unsigned fs_changes(void) { struct sargs a; a.s = ""; a.v = 0; return (unsigned)svc(25, &a); }
+int app_band_info(void *out19)
+{
+    struct sargs a;
+    a.x = a.y = a.w = a.h = 0; a.s = (const char *)out19;
+    a.v = a.v2 = a.v3 = 0;
+    return svc(27, &a);
+}
+int app_desktop_focus(void)
+{
+    struct sargs a;
+    a.s = "";
+    return svc(28, &a);
+}
+static void fs_changed(void) { struct sargs a; a.s = ""; a.v = 1; svc(25, &a); }
 
 u16 app_seg(void) { return my_ds(); }
 
@@ -108,6 +149,12 @@ void mem_move(void *d, const void *s, int n)
     char *dd = d; const char *ss = s;
     if (dd < ss) { while (n-- > 0) *dd++ = *ss++; }
     else { dd += n; ss += n; while (n-- > 0) *--dd = *--ss; }
+}
+int mem_cmp(const void *a, const void *b, int n)
+{
+    const u8 *p = a, *q = b;
+    while (n-- > 0) { if (*p != *q) return *p - *q; p++; q++; }
+    return 0;
 }
 void mem_set(void *d, int v, int n) { char *dd = d; while (n-- > 0) *dd++ = (char)v; }
 
@@ -173,15 +220,65 @@ void fmt_time(char *d, u16 ftime)
 static struct regs R;
 static void r_clear(void) { mem_set(&R, 0, sizeof R); R.ds = R.es = my_ds(); }
 static int dos(void) { return intr(0x21, &R) ? -(int)R.ax : (int)R.ax; }
+/* A call that changes the file system: views are told (fs_changes). */
+static int dosm(void) { int r = dos(); if (r >= 0) fs_changed(); return r; }
 
 void dos_set_dta(void *dta) { r_clear(); R.ax = 0x1A00; R.dx = (u16)dta; dos(); }
 int dos_find_first(const char *p, int attr) { r_clear(); R.ax = 0x4E00; R.cx = attr; R.dx = (u16)p; return dos(); }
 int dos_find_next(void) { r_clear(); R.ax = 0x4F00; return dos(); }
-int dos_open(const char *p, int mode) { r_clear(); R.ax = 0x3D00 | mode; R.dx = (u16)p; return dos(); }
-int dos_create(const char *p) { r_clear(); R.ax = 0x3C00; R.dx = (u16)p; return dos(); }
+
+/* Long file names: the Windows 95 API (INT 21h AX=71xxh) of LFN.COM, the
+ * kernel's resident extension. Each call below uses it when it is there
+ * and falls back to the 8.3 call when it reports itself absent (7100h). */
+#define LFN_ABSENT (-0x7100)
+static int lfn_state = -1;
+int dos_lfn(void)
+{
+    char fs[8];
+    if (lfn_state < 0) {
+        r_clear(); R.ax = 0x71A0; R.dx = (u16)"C:\\"; R.di = (u16)fs; R.cx = sizeof fs;
+        lfn_state = !intr(0x21, &R) && (R.bx & 0x4000) != 0;
+    }
+    return lfn_state;
+}
+/* The LFN call in R: its result, or LFN_ABSENT (then R is set again). */
+static int lfn(u16 ax, int modifies)
+{
+    int r;
+    /* The first capability query uses R itself. Preserve the registers that
+     * the caller prepared for its actual 71xxh operation. */
+    struct regs requested = R;
+    if (!dos_lfn()) { R = requested; return LFN_ABSENT; }
+    R = requested;
+    R.ax = ax;
+    r = modifies ? dosm() : dos();
+    return r;
+}
+static int lfn_open(const char *p, u16 mode, u16 attr, u16 action)
+{
+    r_clear(); R.bx = mode; R.cx = attr; R.dx = action; R.si = (u16)p; R.di = 1;
+    return lfn(0x716C, action & 0x12);
+}
+int dos_open(const char *p, int mode)
+{
+    int r = lfn_open(p, mode, 0, 1);
+    if (r != LFN_ABSENT) return r;
+    r_clear(); R.ax = 0x3D00 | mode; R.dx = (u16)p; return dos();
+}
+int dos_create(const char *p)
+{
+    int r = lfn_open(p, 2, 0, 0x12), h;
+    if (r != LFN_ABSENT) return r;
+    r_clear(); R.ax = 0x3C00; R.dx = (u16)p;
+    h = dosm();
+    if (h >= 0) dos_write(h, "", 0);            /* an older kernel did not truncate */
+    return h;
+}
 int dos_create_new(const char *p)
 {
-    int h = dos_open(p, 0);
+    int h = lfn_open(p, 2, 0, 0x10);
+    if (h != LFN_ABSENT) return h;
+    h = dos_open(p, 0);
     if (h >= 0) { dos_close(h); return -80; }
     return dos_create(p);
 }
@@ -202,20 +299,133 @@ long dos_seek(int h, long pos, int whence)
     if (intr(0x21, &R)) return -(long)R.ax;
     return ((long)R.dx << 16) | R.ax;
 }
-int dos_mkdir(const char *p) { r_clear(); R.ax = 0x3900; R.dx = (u16)p; return dos(); }
-int dos_rmdir(const char *p) { r_clear(); R.ax = 0x3A00; R.dx = (u16)p; return dos(); }
-int dos_delete(const char *p) { r_clear(); R.ax = 0x4100; R.dx = (u16)p; return dos(); }
-int dos_rename(const char *f, const char *t) { r_clear(); R.ax = 0x5600; R.dx = (u16)f; R.di = (u16)t; return dos(); }
+/* A call on DS:DX (and ES:DI): the LFN function, else the 8.3 one. */
+static int path_call(u16 lfn_ax, u16 ax, const char *p, const char *p2, int modifies)
+{
+    int r;
+    r_clear(); R.dx = (u16)p; R.di = (u16)p2;
+    r = lfn(lfn_ax, modifies);
+    if (r != LFN_ABSENT) return r;
+    r_clear(); R.ax = ax; R.dx = (u16)p; R.di = (u16)p2;
+    return modifies ? dosm() : dos();
+}
+int dos_mkdir(const char *p) { return path_call(0x7139, 0x3900, p, 0, 1); }
+int dos_rmdir(const char *p) { return path_call(0x713A, 0x3A00, p, 0, 1); }
+int dos_delete(const char *p) { return path_call(0x7141, 0x4100, p, 0, 1); }
+int dos_rename(const char *f, const char *t) { return path_call(0x7156, 0x5600, f, t, 1); }
 int dos_get_attr(const char *p)
 {
-    r_clear(); R.ax = 0x4300; R.dx = (u16)p;
-    if (intr(0x21, &R)) return -(int)R.ax;
-    return R.cx;
+    int r;
+    r_clear(); R.dx = (u16)p; R.bx = 0;
+    r = lfn(0x7143, 0);
+    if (r == LFN_ABSENT) { r_clear(); R.ax = 0x4300; R.dx = (u16)p; r = dos(); }
+    return r < 0 ? r : (int)R.cx;
 }
-int dos_set_attr(const char *p, int a) { r_clear(); R.ax = 0x4301; R.cx = a; R.dx = (u16)p; return dos(); }
+int dos_set_attr(const char *p, int a)
+{
+    int r;
+    r_clear(); R.dx = (u16)p; R.bx = 1; R.cx = a;
+    r = lfn(0x7143, 1);
+    if (r != LFN_ABSENT) return r;
+    r_clear(); R.ax = 0x4301; R.cx = a; R.dx = (u16)p; return dosm();
+}
+/* The 8.3 form of a path (for programs run by name, and the kernel's own
+ * calls), and its long form. out holds SYS_PATH bytes. */
+static int truename(const char *p, char *out, int form)
+{
+    int r;
+    r_clear(); R.si = (u16)p; R.di = (u16)out; R.cx = form;
+    r = lfn(0x7160, 0);
+    if (r == LFN_ABSENT) { str_ncopy(out, p, SYS_PATH); return 0; }
+    return r < 0 ? r : 0;
+}
+int dos_short_path(const char *p, char *out) { return truename(p, out, 1); }
+int dos_long_path(const char *p, char *out) { return truename(p, out, 2); }
+
+/* Folder listings with long names: a search handle each (they nest). */
+static u8 fdata[318];                   /* Win32 find data */
+static struct dos_find fdta;
+static void ent_from_find(struct dir_ent *e)
+{
+    e->attr = fdata[0];
+    e->time = *(u16 *)(fdata + 20);
+    e->date = *(u16 *)(fdata + 22);
+    e->size = *(u32 *)(fdata + 32);
+    str_ncopy(e->name, (char *)fdata + 44, LFN_NAME);
+    str_ncopy(e->alias, (char *)fdata + 304, 13);
+}
+static void ent_from_dta(struct dir_ent *e)
+{
+    e->attr = fdta.attr; e->time = fdta.time; e->date = fdta.date; e->size = fdta.size;
+    str_copy(e->name, fdta.name);
+    e->alias[0] = 0;
+}
+int dir_first(const char *pattern, int attr, struct dir_ent *e)
+{
+    int r;
+    r_clear(); R.dx = (u16)pattern; R.di = (u16)fdata; R.cx = attr; R.si = 1;
+    e->h = 0;
+    r = lfn(0x714E, 0);
+    if (r != LFN_ABSENT) {
+        if (r < 0) return r;
+        e->h = r;
+        ent_from_find(e);
+        return 0;
+    }
+    dos_set_dta(&fdta);
+    r_clear(); R.ax = 0x4E00; R.cx = attr; R.dx = (u16)pattern;
+    r = dos();
+    if (r < 0) return r;
+    e->h = -1;
+    ent_from_dta(e);
+    return 0;
+}
+int dir_next(struct dir_ent *e)
+{
+    int r;
+    if (!e->h) return -18;
+    if (e->h < 0) {
+        dos_set_dta(&fdta);
+        r_clear(); R.ax = 0x4F00;
+        if ((r = dos()) < 0) { e->h = 0; return r; }
+        ent_from_dta(e);
+        return 0;
+    }
+    r_clear(); R.ax = 0x714F; R.bx = e->h; R.di = (u16)fdata; R.si = 1;
+    if ((r = dos()) < 0) { dir_close(e); return r; }
+    ent_from_find(e);
+    return 0;
+}
+void dir_close(struct dir_ent *e)
+{
+    if (e->h > 0) { r_clear(); R.ax = 0x71A1; R.bx = e->h; dos(); }
+    e->h = 0;
+}
+/* A name Windows accepts for a file or folder. */
+int valid_file_name(const char *s)
+{
+    int n = str_len(s);
+    int base = 0, ext = -1;
+    if (!n || n > 255 || s[n - 1] == '.' || s[n - 1] == ' ' || s[0] == ' ') return 0;
+    if (!dos_lfn()) {                   /* 8.3 only */
+        const char *t;
+        for (t = s; *t; t++) {
+            if (*t == ' ' || *t == '+' || *t == ',' || *t == ';' || *t == '=' || *t == '[' || *t == ']') return 0;
+            if (*t == '.') { if (ext >= 0) return 0; ext = 0; }
+            else if (ext >= 0) { if (++ext > 3) return 0; }
+            else if (++base > 8) return 0;
+        }
+        if (!base) return 0;
+    }
+    for (; *s; s++) {
+        if ((u8)*s < 32) return 0;
+        switch (*s) { case '\\': case '/': case ':': case '*': case '?': case '"': case '<': case '>': case '|': return 0; }
+    }
+    return 1;
+}
 int dos_get_drive(void) { r_clear(); R.ax = 0x1900; dos(); return R.ax & 0xFF; }
 void dos_set_drive(int d) { r_clear(); R.ax = 0x0E00; R.dx = d; dos(); }
-int dos_chdir(const char *p) { r_clear(); R.ax = 0x3B00; R.dx = (u16)p; return dos(); }
+int dos_chdir(const char *p) { return path_call(0x713B, 0x3B00, p, 0, 0); }
 int dos_getcwd(int drive, char *buf) { r_clear(); R.ax = 0x4700; R.dx = drive; R.si = (u16)buf; return dos(); }
 int dos_set_file_time(int h, u16 t, u16 d)
 {

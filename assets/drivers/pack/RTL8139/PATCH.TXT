@@ -1,0 +1,6 @@
+RTL8139.COM is derived from RTLPKT.COM in SOURCE.ZIP (GPL version 1).
+The only binary change is offset 12033 (zero based): 36h -> 39h.
+This changes the PCI device ID comparison from 8136h to 8139h. The same
+constant is in rtlpkt/src/PCI.INC and rtlpkt/src/SKELETON.ASM.
+The upstream source and unmodified ORIGINAL.COM are kept with this package.
+This adaptation does not prove support for every RTL8139 revision.

@@ -5,17 +5,18 @@ ui_draw_dialog:
     mov [ui_dialog_x],bx
     mov dx,[ui_window_y+si]
     mov [ui_dialog_y],dx
+    mov si,[ui_window_height+si]
+    mov [ui_dialog_h],si
     mov cx,466
-    mov si,226
     mov ax,70
     call ui_hit_add
     add bx,4
     add dx,5
-    U_RECT bx,dx,466,226,0
+    U_RECT bx,dx,466,word [ui_dialog_h],0
     mov bx,[ui_dialog_x]
     mov dx,[ui_dialog_y]
     mov cx,466
-    mov si,226
+    mov si,[ui_dialog_h]
     mov al,7
     call ui_bevel
     add bx,3
@@ -62,30 +63,85 @@ ui_draw_dialog:
     je .power
     cmp byte [ui_dialog],4
     je .error
-    ; Display the approved portrait at 64 native pixels, compiled from the
-    ; exact master image. Leave room for the original details and pose.
+    ; The portrait is the visual anchor; quiet section rules give the credits
+    ; and Ciuk's dedication their own space.
     mov bx,[ui_dialog_x]
     add bx,22
     mov dx,[ui_dialog_y]
     add dx,40
     call ciuki_logo64
     mov bx,[ui_dialog_x]
-    add bx,100
+    add bx,106
     mov dx,[ui_dialog_y]
     add dx,44
-    U_TEXT bx,dx,ut_tagline,1,1
+    U_TEXT bx,dx,ut_brand,1,1
     add dx,23
     U_TEXT bx,dx,ut_about_version,0
+    add dx,20
+    U_TEXT bx,dx,ut_tagline,8
     mov bx,[ui_dialog_x]
     add bx,22
-    add dx,43
-    U_TEXT bx,dx,ut_about_keys,0
+    mov dx,[ui_dialog_y]
+    add dx,114
+    U_RECT bx,dx,422,1,8
+    add dx,9
+    U_TEXT bx,dx,ut_about_system,1,1
     add dx,20
-    U_TEXT bx,dx,ut_about_dos,0
-    add dx,20
-    U_TEXT bx,dx,ut_about_apps,8
-    add dx,20
-    U_TEXT bx,dx,ui_mode_text,0
+    U_RECT bx,dx,422,98,15
+    add bx,10
+    add dx,3
+    U_TEXT bx,dx,ut_about_core,1
+    add bx,126
+    U_TEXT bx,dx,ut_about_core_detail,0
+    sub bx,126
+    add dx,16
+    U_TEXT bx,dx,ut_about_vm,1
+    add bx,126
+    U_TEXT bx,dx,ut_about_vm_detail,0
+    sub bx,126
+    add dx,16
+    U_TEXT bx,dx,ut_about_input,1
+    add bx,126
+    U_TEXT bx,dx,ut_about_input_detail,0
+    sub bx,126
+    add dx,16
+    U_TEXT bx,dx,ut_about_audio,1
+    add bx,126
+    U_TEXT bx,dx,ut_about_audio_detail,0
+    sub bx,126
+    add dx,16
+    U_TEXT bx,dx,ut_about_art,1
+    add bx,126
+    U_TEXT bx,dx,ut_about_art_detail,0
+    sub bx,126
+    add dx,16
+    U_TEXT bx,dx,ut_about_graphics,1
+    add bx,126
+    U_TEXT bx,dx,ut_about_graphics_detail,0
+    mov bx,[ui_dialog_x]
+    add bx,22
+    mov dx,[ui_dialog_y]
+    add dx,244
+    U_RECT bx,dx,422,1,8
+    add dx,8
+    U_TEXT bx,dx,ut_about_project,1,1
+    add dx,19
+    U_TEXT bx,dx,ut_about_owner,0
+    add dx,18
+    U_TEXT bx,dx,ut_about_license,0
+    mov bx,[ui_dialog_x]
+    add bx,22
+    mov dx,[ui_dialog_y]
+    add dx,309
+    U_RECT bx,dx,422,1,8
+    add dx,8
+    U_TEXT bx,dx,ut_about_memory,1,1
+    add dx,19
+    U_TEXT bx,dx,ut_about_ciuk1,1
+    add dx,18
+    U_TEXT bx,dx,ut_about_ciuk2,1
+    add dx,18
+    U_TEXT bx,dx,ut_about_ciuk3,1
     jmp .ok
 .run:
     mov bx,[ui_dialog_x]
@@ -107,7 +163,7 @@ ui_draw_dialog:
     add dx,188
     U_BUTTON bx,dx,96,26,ut_window,58
     add bx,104
-    U_BUTTON bx,dx,84,26,ut_run,40
+    U_BUTTON bx,dx,84,26,ut_run_ok,40
     add bx,92
     U_BUTTON bx,dx,88,26,ut_cancel,41
     ret
@@ -144,7 +200,13 @@ ui_draw_dialog:
     mov bx,[ui_dialog_x]
     add bx,355
     mov dx,[ui_dialog_y]
+    cmp byte [ui_dialog],2
+    jne .ok_regular
+    add dx,386
+    jmp .ok_draw
+.ok_regular:
     add dx,188
+.ok_draw:
     U_BUTTON bx,dx,88,26,ut_ok,41
     ret
 
@@ -268,13 +330,32 @@ ui_clock_read:
     add di,2
     ret
 
-ut_about_version db 'CiukiOS 0.7.1  /  Native desktop',0
-ut_about_keys db 'F1 Help    F2 Programs    F3 Run    F4 DOS    F10 Power',0
-ut_about_dos db 'In DOS, type EXIT or DESKTOP to return here.',0
-ut_about_apps db 'DOS windows currently support BIOS text programs.',0
+ut_about_version db 'Version 0.8.0',0
+ut_about_system db 'SYSTEM',0
+ut_about_core db 'Core',0
+ut_about_core_detail db 'CiukiDOS kernel and desktop',0
+ut_about_vm db 'DOS windows',0
+ut_about_vm_detail db 'Jemm386, CVSESSION and HDPMI',0
+ut_about_input db 'Input',0
+ut_about_input_detail db 'CuteMouse',0
+ut_about_audio db 'Audio',0
+ut_about_audio_detail db 'SBEMU and VSBHDA',0
+ut_about_art db 'Icons / build',0
+ut_about_art_detail db 'Tango (Public Domain) / Open Watcom',0
+ut_about_graphics db 'Graphics',0
+ut_about_graphics_detail db 'TinyGL software OpenGL subset',0
+ut_about_project db 'PROJECT',0
+ut_about_memory db 'IN MEMORY OF CIUK',0
+ut_about_owner db 'Copyright (c) 2026 Alberto Lopez / Alcybercloud.it',0
+ut_about_license db 'CiukiOS code: GNU GPL v2. See LICENSE and README.',0
+ut_about_ciuk1 db 'In loving memory of Ciuk (Ciuki), the beloved dog',0
+ut_about_ciuk2 db 'behind CiukiOS. Though you are no longer here,',0
+ut_about_ciuk3 db 'your memory lives on every time this system starts.',0
+ui_dialog_h dw 0
 ut_run_help db 'Enter a program name or a DOS command.',0
 ut_run_example db 'Examples: dir   |   edit notes.txt',0
-ut_run_output db 'Window: BIOS text. Run: full-screen DOS.',0
+ut_run_output db 'Run: in a DOS window.   Full screen: the whole screen.',0
+ut_run_ok db 'Run',0
 ut_window db 'Full screen',0
 ut_power_help db 'Choose how to leave CiukiOS.',0
 ut_power_live db 'Changes made on the live CD are kept in RAM only.',0

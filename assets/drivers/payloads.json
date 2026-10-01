@@ -1,10 +1,227 @@
 {
-  "schema": 1,
+  "schema": 2,
   "payloads": [
-    {"source": "assets/drivers/CATALOG.TXT", "target": "DRIVERS/CATALOG.TXT"},
-    {"source": "assets/drivers/ctmouse/CTMOUSE.EXE", "target": "DRIVERS/MOUSE/CTMOUSE.EXE", "sha256": "54269b90198f3ad4390e8454ca24bba6ea775adea34f009ab8fd74c5981c49ff"},
-    {"source": "assets/drivers/ctmouse/CTMOUSE.TXT", "target": "DRIVERS/MOUSE/CTMOUSE.TXT"},
-    {"source": "assets/drivers/ctmouse/COPYING", "target": "DRIVERS/MOUSE/COPYING"},
-    {"source": "assets/drivers/ctmouse/CTMSRC.ZIP", "target": "DRIVERS/MOUSE/CTMSRC.ZIP", "sha256": "83c578487a1a53c986a40f4b1354510ce300a6d4e515a44e364c137387199ec2"}
+    {
+      "source": "assets/drivers/CATALOG.TXT",
+      "target": "DRIVERS/CATALOG.TXT"
+    },
+    {
+      "source": "assets/drivers/ctmouse/CTMOUSE.EXE",
+      "target": "DRIVERS/MOUSE/CTMOUSE.EXE",
+      "sha256": "54269b90198f3ad4390e8454ca24bba6ea775adea34f009ab8fd74c5981c49ff"
+    },
+    {
+      "source": "assets/drivers/ctmouse/CTMOUSE.TXT",
+      "target": "DRIVERS/MOUSE/CTMOUSE.TXT"
+    },
+    {
+      "source": "assets/drivers/ctmouse/COPYING",
+      "target": "DRIVERS/MOUSE/COPYING"
+    },
+    {
+      "source": "assets/drivers/ctmouse/CTMSRC.ZIP",
+      "target": "DRIVERS/MOUSE/CTMSRC.ZIP",
+      "sha256": "83c578487a1a53c986a40f4b1354510ce300a6d4e515a44e364c137387199ec2"
+    },
+    {
+      "source": "assets/drivers/pack/NE2000/DRIVER.INF",
+      "target": "DRIVERS/NET/NE2000/DRIVER.INF",
+      "sha256": "bd51c10c273f9957efd6d3d41e4404661e42087b34be37737bc3f30d465e43ae",
+      "license": "GPL-1.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/crynwr.zip",
+      "archive_sha256": "b5761639a1bf4ad4fa93bfa4643ca62ae46d08412c78d45ae1b5e10d91d0b9c8"
+    },
+    {
+      "source": "assets/drivers/pack/NE2000/NE2000.COM",
+      "target": "DRIVERS/NET/NE2000/NE2000.COM",
+      "sha256": "f8b4cb8d1b93210045c591e23d21f8043a5397a5769e52ca68ffdadc7a85a5cd",
+      "license": "GPL-1.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/crynwr.zip",
+      "archive_sha256": "b5761639a1bf4ad4fa93bfa4643ca62ae46d08412c78d45ae1b5e10d91d0b9c8"
+    },
+    {
+      "source": "assets/drivers/pack/PCNET/NE2100.COM",
+      "target": "DRIVERS/NET/PCNET/NE2100.COM",
+      "sha256": "255fe14984b2376deba5345db0aae2fd677c77579aaafdc51476d301e2129363",
+      "license": "GPL-1.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/crynwr.zip",
+      "archive_sha256": "b5761639a1bf4ad4fa93bfa4643ca62ae46d08412c78d45ae1b5e10d91d0b9c8"
+    },
+    {
+      "source": "assets/drivers/pack/3C509/3C509.COM",
+      "target": "DRIVERS/NET/3C509/3C509.COM",
+      "sha256": "fd3d5ba9725c53ef53fd3d132e641bec41ee8f445ed631faa0b20ea4ddec9dc7",
+      "license": "GPL-1.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/crynwr.zip",
+      "archive_sha256": "b5761639a1bf4ad4fa93bfa4643ca62ae46d08412c78d45ae1b5e10d91d0b9c8"
+    },
+    {
+      "source": "assets/drivers/pack/RTL8139/README.TXT",
+      "target": "DRIVERS/NET/RTL8139/README.TXT",
+      "sha256": "d77f1075043aaf47e797c91618a283fe1c6143f87ebf84bbd91fd131fd632d06",
+      "license": "GPL-1.0",
+      "source_url": "https://sourceforge.net/projects/rtl8101packetdr/files/",
+      "archive_sha256": "6f89fbd08d3aa68199a6a7744309f31a80c0108c2d41152ec24e1d7a6ad65de9"
+    },
+    {
+      "source": "assets/drivers/pack/RTL8139/RTL8139.COM",
+      "target": "DRIVERS/NET/RTL8139/RTL8139.COM",
+      "sha256": "7a99a0edeb390af8a65b8d05d0ef72c443713a99537b8e8ca445e749fca9a537",
+      "license": "GPL-1.0",
+      "source_url": "https://sourceforge.net/projects/rtl8101packetdr/files/",
+      "archive_sha256": "6f89fbd08d3aa68199a6a7744309f31a80c0108c2d41152ec24e1d7a6ad65de9"
+    },
+    {
+      "source": "assets/drivers/pack/RTL8139/SOURCE.ZIP",
+      "target": "DRIVERS/NET/RTL8139/SOURCE.ZIP",
+      "sha256": "6f89fbd08d3aa68199a6a7744309f31a80c0108c2d41152ec24e1d7a6ad65de9",
+      "license": "GPL-1.0",
+      "source_url": "https://sourceforge.net/projects/rtl8101packetdr/files/",
+      "archive_sha256": "6f89fbd08d3aa68199a6a7744309f31a80c0108c2d41152ec24e1d7a6ad65de9"
+    },
+    {
+      "source": "assets/drivers/pack/E1000/E1000.COM",
+      "target": "DRIVERS/NET/E1000/E1000.COM",
+      "sha256": "e803d9888ed0f1df6ea64c11f053ffa7fc37886c1be26e5d52f0d83fcbd9d2b8",
+      "license": "GPL-2.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/e1000pkt.zip",
+      "archive_sha256": "bf8eb1972bea3579010a919a7cf80343ef6c99cc468601d7238ed2cf1b1835b4"
+    },
+    {
+      "source": "assets/drivers/pack/E1000/README.TXT",
+      "target": "DRIVERS/NET/E1000/README.TXT",
+      "sha256": "8e367608e43742e64296e77d024b28739201d10282bbbf9bef05f3872509f635",
+      "license": "GPL-2.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/e1000pkt.zip",
+      "archive_sha256": "bf8eb1972bea3579010a919a7cf80343ef6c99cc468601d7238ed2cf1b1835b4"
+    },
+    {
+      "source": "assets/drivers/pack/E1000/SOURCE.ZIP",
+      "target": "DRIVERS/NET/E1000/SOURCE.ZIP",
+      "sha256": "bf8eb1972bea3579010a919a7cf80343ef6c99cc468601d7238ed2cf1b1835b4",
+      "license": "GPL-2.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/e1000pkt.zip",
+      "archive_sha256": "bf8eb1972bea3579010a919a7cf80343ef6c99cc468601d7238ed2cf1b1835b4"
+    },
+    {
+      "source": "assets/drivers/pack/E100/COPYING.TXT",
+      "target": "DRIVERS/NET/E100/COPYING.TXT",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "license": "GPL-3.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/e100pkt.zip",
+      "archive_sha256": "901a0df1111bc0eceec57894e6d20e44c5f5653e96ab7c368f94c6bd36dc8a21"
+    },
+    {
+      "source": "assets/drivers/pack/E100/E100.COM",
+      "target": "DRIVERS/NET/E100/E100.COM",
+      "sha256": "bd4d6ad63134a45de3f5ab8b5d9b273b174e6f4fda736ad0cd27f0ed165bfe1a",
+      "license": "GPL-3.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/e100pkt.zip",
+      "archive_sha256": "901a0df1111bc0eceec57894e6d20e44c5f5653e96ab7c368f94c6bd36dc8a21"
+    },
+    {
+      "source": "assets/drivers/pack/E100/SOURCE.ZIP",
+      "target": "DRIVERS/NET/E100/SOURCE.ZIP",
+      "sha256": "901a0df1111bc0eceec57894e6d20e44c5f5653e96ab7c368f94c6bd36dc8a21",
+      "license": "GPL-3.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/e100pkt.zip",
+      "archive_sha256": "901a0df1111bc0eceec57894e6d20e44c5f5653e96ab7c368f94c6bd36dc8a21"
+    },
+    {
+      "source": "assets/drivers/pack/FDAPM/FDAPM.COM",
+      "target": "DRIVERS/POWER/FDAPM/FDAPM.COM",
+      "sha256": "8e670866c16c9cfb10796f33a785aa55e4ae94f4eabcff3fea0cfd5449a8ac73",
+      "license": "GPL-2.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/base/fdapm.zip",
+      "archive_sha256": "d4e8e05a170fc543327e194808bc0dfffdcb9b4fc5d7c0d51c8d612118373b2e"
+    },
+    {
+      "source": "assets/drivers/pack/FDAPM/README.TXT",
+      "target": "DRIVERS/POWER/FDAPM/README.TXT",
+      "sha256": "29fe2bf7a93c4f2600b3194f4d02363a26b2adf36ef2c2aaabb6eda1404d7d2e",
+      "license": "GPL-2.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/base/fdapm.zip",
+      "archive_sha256": "d4e8e05a170fc543327e194808bc0dfffdcb9b4fc5d7c0d51c8d612118373b2e"
+    },
+    {
+      "source": "assets/drivers/pack/FDAPM/SOURCE.ZIP",
+      "target": "DRIVERS/POWER/FDAPM/SOURCE.ZIP",
+      "sha256": "d4e8e05a170fc543327e194808bc0dfffdcb9b4fc5d7c0d51c8d612118373b2e",
+      "license": "GPL-2.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/base/fdapm.zip",
+      "archive_sha256": "d4e8e05a170fc543327e194808bc0dfffdcb9b4fc5d7c0d51c8d612118373b2e"
+    },
+    {
+      "source": "assets/drivers/pack/CRYNWR-GPL.TXT",
+      "target": "DRIVERS/NET/CRYNWR-GPL.TXT",
+      "sha256": "f541954a8dbfd9ce08c032f213a3409db69663f8db3cbea080ad96d80d743096",
+      "license": "GPL-1.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/crynwr.zip",
+      "archive_sha256": "b5761639a1bf4ad4fa93bfa4643ca62ae46d08412c78d45ae1b5e10d91d0b9c8"
+    },
+    {
+      "source": "assets/drivers/pack/CRYNWR-SOURCE.ZIP",
+      "target": "DRIVERS/NET/CRYNWR-SOURCE.ZIP",
+      "sha256": "704071c7198853ef2510498223470ce6471f73f3d0e3943c1e15a8b8b1391935",
+      "license": "GPL-1.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/crynwr.zip",
+      "archive_sha256": "b5761639a1bf4ad4fa93bfa4643ca62ae46d08412c78d45ae1b5e10d91d0b9c8"
+    },
+    {
+      "source": "assets/drivers/pack/PCNET/DRIVER.INF",
+      "target": "DRIVERS/NET/PCNET/DRIVER.INF",
+      "sha256": "c8c4fda29aa1717dd8a2a99e31b70303b42fbb285e37cde9320ffb1ce43e5205",
+      "license": "GPL-1.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/crynwr.zip",
+      "archive_sha256": "b5761639a1bf4ad4fa93bfa4643ca62ae46d08412c78d45ae1b5e10d91d0b9c8"
+    },
+    {
+      "source": "assets/drivers/pack/3C509/DRIVER.INF",
+      "target": "DRIVERS/NET/3C509/DRIVER.INF",
+      "sha256": "da11b194372c46567fe58668e3d3409ecfaf7ab40a99761a5d31132d5b81dfe1",
+      "license": "GPL-1.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/crynwr.zip",
+      "archive_sha256": "b5761639a1bf4ad4fa93bfa4643ca62ae46d08412c78d45ae1b5e10d91d0b9c8"
+    },
+    {
+      "source": "assets/drivers/pack/RTL8139/DRIVER.INF",
+      "target": "DRIVERS/NET/RTL8139/DRIVER.INF",
+      "sha256": "99e15e9e8a2f16d912044a1c8fdafe6c2bf5c4656934466b0a35248aaf474880",
+      "license": "GPL-1.0",
+      "source_url": "https://sourceforge.net/projects/rtl8101packetdr/files/",
+      "archive_sha256": "6f89fbd08d3aa68199a6a7744309f31a80c0108c2d41152ec24e1d7a6ad65de9"
+    },
+    {
+      "source": "assets/drivers/pack/E1000/DRIVER.INF",
+      "target": "DRIVERS/NET/E1000/DRIVER.INF",
+      "sha256": "9e74ae5f639bf2d00ddec84b00c29f726e422a924ece83c86ce9b9899752af01",
+      "license": "GPL-2.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/e1000pkt.zip",
+      "archive_sha256": "bf8eb1972bea3579010a919a7cf80343ef6c99cc468601d7238ed2cf1b1835b4"
+    },
+    {
+      "source": "assets/drivers/pack/E100/DRIVER.INF",
+      "target": "DRIVERS/NET/E100/DRIVER.INF",
+      "sha256": "673fcf71699a9961fc6493d870b2ed42314d5791693a32fee835bd0032750e4a",
+      "license": "GPL-3.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/e100pkt.zip",
+      "archive_sha256": "901a0df1111bc0eceec57894e6d20e44c5f5653e96ab7c368f94c6bd36dc8a21"
+    },
+    {
+      "source": "assets/drivers/pack/FDAPM/DRIVER.INF",
+      "target": "DRIVERS/POWER/FDAPM/DRIVER.INF",
+      "sha256": "53e5c89b5aabe094ed8fbfbfdce56e9e0a6e6176a760024471d8ac7d696470e5",
+      "license": "GPL-2.0",
+      "source_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/base/fdapm.zip",
+      "archive_sha256": "d4e8e05a170fc543327e194808bc0dfffdcb9b4fc5d7c0d51c8d612118373b2e"
+    },
+    {
+      "source": "assets/drivers/pack/RTL8139/PATCH.TXT",
+      "target": "DRIVERS/NET/RTL8139/PATCH.TXT",
+      "sha256": "0557f98895af7679a5d6734d32c16fd4d3bcf2384be74ad4d27bb25ef8604325",
+      "license": "GPL-1.0",
+      "source_url": "https://sourceforge.net/projects/rtl8101packetdr/files/",
+      "archive_sha256": "6f89fbd08d3aa68199a6a7744309f31a80c0108c2d41152ec24e1d7a6ad65de9"
+    }
   ]
 }

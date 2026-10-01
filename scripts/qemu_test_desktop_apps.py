@@ -12,7 +12,7 @@ QEMU keyboard/mouse events. Parts:
            Go To, Open (Ctrl+O) of a .LOG file (time stamp appended), Save,
            Alt+F4.
   tasks    all four tabs; End Task closes Files.
-The modules log state on COM1 ("[FILES] ...", "[NOTEPAD] ...", "[TASKS] ...",
+The modules log state on COM1 ("[FILES] ...", "[CIUKNOTE] ...", "[TASKS] ...",
 "[DESKTOP] WINDOW nn OPEN/CLOSE"). After shutdown the disk image is checked
 with an independent FAT16 parser. QEMU evidence only.
 """
@@ -112,8 +112,8 @@ def main():
         vm.shot('keys')
         # ---- files ----
         g.act('Run: explorer c:\\qa', ['meta_l-r', 'type:explorer c:\\qa', 'ret'], '[FILES] list C:\\QA 4')
-        g.act('New folder, rename in place', ['ctrl-shift-n'], '[FILES] created NEWFOLDR')
-        g.act('Rename to DOCS', ['type:docs', 'ret'], ['[FILES] renamed DOCS', '[FILES] list C:\\QA 5'])
+        g.act('New folder, rename in place', ['ctrl-shift-n'], '[FILES] created New Folder')
+        g.act('Rename to DOCS', ['type:DOCS', 'ret'], ['[FILES] renamed DOCS', '[FILES] list C:\\QA 5'])
         vm.shot('files-renamed')
         g.act('Copy A.TXT', ['type:a', 'ctrl-c'], [], 5)
         g.act('Open DOCS', ['type:d', 'ret'], '[FILES] list C:\\QA\\DOCS 0')
@@ -123,8 +123,8 @@ def main():
         g.act('Open DOCS again', ['type:d', 'ret'], '[FILES] list C:\\QA\\DOCS 1')
         g.act('Paste moves B.TXT', ['ctrl-v'], ['[FILES] job 1 item(s) moved.', '[FILES] list C:\\QA\\DOCS 2'], 60)
         g.act('Alt+Left: back', ['alt-left'], '[FILES] list C:\\QA 4')
-        g.act('Delete SUB asks', ['type:s', 'delete'], "[FILES] confirm Are you sure you want to permanently delete 'SUB'")
-        g.act('Yes deletes SUB and its files', ['ret'], ['[FILES] job 2 item(s) deleted.', '[FILES] list C:\\QA 3'], 60)
+        g.act('Delete SUB asks', ['type:s', 'delete'], "[FILES] confirm Are you sure you want to send 'SUB' to the Recycle Bin?")
+        g.act('Yes moves SUB to the Recycle Bin', ['ret'], ['[FILES] recycled 1', '[FILES] list C:\\QA 3'], 60)
         vm.shot('files-after-ops')
 
         def background_menu():
@@ -137,29 +137,29 @@ def main():
             vm.hmp('mouse_button 0')
         g.act('Right click: background menu', background_menu, '[FILES] menu background')
         vm.shot('files-context-menu')
-        g.act('New Text Document from the menu', ['type:t'], '[FILES] created NEWTEXT.TXT')
-        g.act('Rename to NOTES.TXT', ['type:notes.txt', 'ret'], '[FILES] renamed NOTES.TXT')
+        g.act('New Text Document from the menu', ['type:t'], '[FILES] created New Text Document.txt')
+        g.act('Rename to NOTES.TXT', ['type:NOTES.TXT', 'ret'], '[FILES] renamed NOTES.TXT')
         g.act('Properties of DOCS', ['type:d', 'alt-ret'], '[FILES] properties Size: ')
         vm.shot('files-properties')
         g.act('Close Properties', ['esc'], [], 5)
         # ---- notepad ----
         g.act('Enter opens NOTES.TXT in Notepad', ['type:n', 'ret'],
-              ['[FILES] open C:\\QA\\NOTES.TXT', '[DESKTOP] WINDOW 12 OPEN', '[NOTEPAD] opened C:\\QA\\NOTES.TXT'])
+              ['[FILES] open C:\\QA\\NOTES.TXT', '[DESKTOP] WINDOW 12 OPEN', '[CIUKNOTE] opened C:\\QA\\NOTES.TXT'])
         g.act('Type and save', ['type:Hello from Notepad', 'ret', 'type:second line', 'ctrl-s'],
-              '[NOTEPAD] saved C:\\QA\\NOTES.TXT')
-        g.act('Replace dialog', ['ctrl-h'], '[NOTEPAD] dialog Replace')
-        g.act('Replace All', ['type:Notepad', 'tab', 'type:CiukiOS', 'alt-a'], '[NOTEPAD] replaced 1')
-        g.act('Undo', ['ctrl-z'], '[NOTEPAD] undo')
-        g.act('Undo again (toggles back)', ['ctrl-z'], '[NOTEPAD] undo')
-        g.act('Find dialog', ['ctrl-f'], '[NOTEPAD] dialog Find')
+              '[CIUKNOTE] saved C:\\QA\\NOTES.TXT')
+        g.act('Replace dialog', ['ctrl-h'], '[CIUKNOTE] dialog Replace')
+        g.act('Replace All', ['type:Notepad', 'tab', 'type:CiukiOS', 'alt-a'], '[CIUKNOTE] replaced 1')
+        g.act('Undo', ['ctrl-z'], '[CIUKNOTE] undo')
+        g.act('Undo again (toggles back)', ['ctrl-z'], '[CIUKNOTE] undo')
+        g.act('Find dialog', ['ctrl-f'], '[CIUKNOTE] dialog Find')
         g.act('Find closes on Cancel', ['type:second', 'ret', 'esc'], [], 5)
-        g.act('Go To dialog', ['ctrl-g'], '[NOTEPAD] dialog Go To Line')
+        g.act('Go To dialog', ['ctrl-g'], '[CIUKNOTE] dialog Go To Line')
         g.act('Go To line 1', ['ret'], [], 5)
-        g.act('Time/Date and save', ['ctrl-end', 'ret', 'f5', 'ctrl-s'], '[NOTEPAD] saved C:\\QA\\NOTES.TXT')
+        g.act('Time/Date and save', ['ctrl-end', 'ret', 'f5', 'ctrl-s'], '[CIUKNOTE] saved C:\\QA\\NOTES.TXT')
         vm.shot('notepad-saved')
-        g.act('Open dialog', ['ctrl-o'], '[NOTEPAD] dialog Open')
-        g.act('Open LOG.TXT (.LOG stamps it)', ['type:log.txt', 'ret'], '[NOTEPAD] opened C:\\QA\\LOG.TXT')
-        g.act('Save the stamped log', ['ctrl-s'], '[NOTEPAD] saved C:\\QA\\LOG.TXT')
+        g.act('Open dialog', ['ctrl-o'], '[CIUKNOTE] dialog Open')
+        g.act('Open LOG.TXT (.LOG stamps it)', ['type:log.txt', 'ret'], '[CIUKNOTE] opened C:\\QA\\LOG.TXT')
+        g.act('Save the stamped log', ['ctrl-s'], '[CIUKNOTE] saved C:\\QA\\LOG.TXT')
         vm.shot('notepad-log')
         g.act('Alt+F4 closes Notepad', ['alt-f4'], '[DESKTOP] WINDOW 12 CLOSE')
         # ---- tasks ----
@@ -192,12 +192,14 @@ def main():
         vm.shot('files-dropped')
 
         def tree_click():
-            # The tree: disk, then C:'s folders ... QA2 is open; click the disk.
+            # The tree: the disk, then C:'s folders (it scrolls to keep QA2
+            # in view); the first row shown is another folder than QA2.
             vm.position(tree_x + 10, tree_y + 9)
             vm.hmp('mouse_button 1')
             time.sleep(0.2)
             vm.hmp('mouse_button 0')
-        g.act('Folders tree: the disk', tree_click, '[FILES] list C:\\ ')
+        tree = g.act('Folders tree: another folder', tree_click, '[FILES] list C:\\')
+        assert '[FILES] list C:\\QA2 ' not in tree, 'the tree click stayed in QA2'
         g.act('Win+D shows the desktop', ['meta_l-d'], '[DESKTOP] SHOW DESKTOP')
         vm.shot('final')
         report['steps'] = g.steps
@@ -223,6 +225,8 @@ def main():
             'move_removed_source': 'B.TXT' not in qa,
             'move_in_docs': fs.read('QA/DOCS/B.TXT') == source['B.TXT'],
             'folder_deleted': 'SUB' not in qa,
+            'folder_in_bin': any(fs.read('RECYCLED/' + n) == source['SUB/C.TXT']
+                                 for n in [f'DC1/C.TXT']),
             'drag_moved': fs.read('QA2/TARGET/E.TXT') == b'echo file\r\n'
                           and 'E.TXT' not in fs.entries(fs.entry('QA2')[1]),
             'notes_text': notes.startswith(b'Hello from CiukiOS\r\nsecond line\r\n') and b'/' in notes[33:],

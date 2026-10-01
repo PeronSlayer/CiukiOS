@@ -136,6 +136,12 @@ static void test_mouse(cvgp_state &s, uint32_t owner)
     std::vector<uint8_t> bytes;
     uint8_t vector;
     CHECK(cvgp_set_focus(&s, owner, 1) == CVGP_OK);
+    /* A forked DOS VM can inherit an already-initialized INT 33h driver;
+     * the model must accept its explicit desktop event before F4 replay. */
+    CHECK(cvgp_mouse_event(&s, owner, 3, -2, 0) == CVGP_OK);
+    bytes = drain_kbc(s, owner);
+    CHECK(bytes.size() == 3 && bytes[1] == 3 &&
+          bytes[2] == static_cast<uint8_t>(-2));
     outb(s, owner, 0x64, 0xd4);
     outb(s, owner, 0x60, 0xf4);
     bytes = drain_kbc(s, owner);

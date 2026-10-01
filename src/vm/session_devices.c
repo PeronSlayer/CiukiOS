@@ -8,6 +8,10 @@
 extern uint32_t CVDEV_CALL cvdev_in(uint32_t port, uint32_t size);
 extern void CVDEV_CALL cvdev_out(uint32_t port, uint32_t value, uint32_t size);
 extern int CVDEV_CALL cvdev_raise_irq(uint32_t vm, uint32_t irq);
+/* A physical byte this model leaves in the controller belongs to another VM
+ * (session_vmm.inc): its line pends there. Its IRQ may have reached a DPMI
+ * host's IDT in this VM instead of the monitor, which would have routed it. */
+extern void CVDEV_CALL cvdev_route_line(uint32_t irq);
 /* Linear address of the session VM's guest byte (session_vmm.inc); 0 if none. */
 extern uint8_t *CVDEV_CALL cvdev_guest_linear(uint32_t vm, uint32_t physical);
 extern uint32_t CVDEV_CALL cvdev_pm_state(void);
@@ -193,7 +197,10 @@ static int pull_physical(void)
     uint32_t status = cvdev_in(KBC_STATUS, 1);
     if (!(status & 1)) return 0;
     /* A byte for another VM stays in the controller for that VM to read. */
-    if (status & 0x20 ? !I->pull_mouse : !I->pull_keyboard) return 0;
+    if (status & 0x20 ? !I->pull_mouse : !I->pull_keyboard) {
+        cvdev_route_line(status & 0x20 ? 12u : 1u);
+        return 0;
+    }
     route_byte((uint8_t)cvdev_in(KBC_DATA, 1), (status & 0x20) != 0);
     return 1;
 }
@@ -455,7 +462,9 @@ static uint8_t read_byte(uint32_t port)
     if (dma_physical_only(port)) return (uint8_t)cvdev_in(port, 1);
     if (cvgp_io_read(&I->devices, I->generation, (uint16_t)port, 1, 0, &value) != CVGP_IO_OK) {
         ++I->stats.unclaimed_io;
-        value = cvdev_in(port, 1);
+        /* A guest with a virtual 8042 must never consume the desktop's
+         * physical keyboard or mouse byte on an unsupported command. */
+        value = (port == KBC_DATA || port == KBC_STATUS) ? 0xff : cvdev_in(port, 1);
     } else if (port == 0x08) {
         value |= cvdev_in(0x08, 1) & 0x44;  /* channel 2 TC/request bits */
     }
@@ -490,7 +499,9 @@ static void write_byte(uint32_t port, uint8_t value)
         ++I->stats.dsp_commands;
     if (cvgp_io_write(&I->devices, I->generation, (uint16_t)port, 1, 0, value) != CVGP_IO_OK) {
         ++I->stats.unclaimed_io;
-        cvdev_out(port, value, 1);
+        /* Forwarding an unknown 8042 command can disable the desktop's
+         * physical mouse or keyboard for every VM. Keep it in this guest. */
+        if (port != KBC_DATA && port != KBC_STATUS) cvdev_out(port, value, 1);
     }
     pump();
 }
@@ -713,6 +724,13 @@ void cvdev_audio_poll(void)
         last_lo = lo;
         last_hi = hi;
         audio_service();
+        /* PCM rendering can finish an SB16 DMA block. Deliver its virtual
+         * IRQ before a protected-mode guest can time out waiting for it. */
+        if (A && A->active) {
+            I = A;
+            pump();
+            I = current;
+        }
     }
 }
 

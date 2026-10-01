@@ -196,7 +196,7 @@ build_hdpmi_iopl0() {
 			"virtual_vga.c:CVGA"; do
 			local source_name="${source_object%%:*}"
 			local object_name="${source_object##*:}"
-			"$WCC386" -zq -bt=nt -mf -3r -ecc -zl -zc -s -ox -os -w4 -we \
+			"$WCC386" -zq -bt=nt -mf -3r -ecc -zl -zc -s -os -w4 -we \
 				"-i=$WATCOM_ROOT/h" "-i=$ROOT_DIR/src/vm" \
 				"-fo=$variant_dir/$object_name.obj" "$ROOT_DIR/src/vm/$source_name"
 			c_objects+=("$object_name")

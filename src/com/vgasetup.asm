@@ -1506,7 +1506,7 @@ setup_tail_text db ' \WINDOWS'
 setup_tail_end:
 empty_tail      db 0
 
-msg_header db 'CiukiOS VGA setup 0.7.1', 13, 10, '$'
+msg_header db 'CiukiOS VGA setup 0.8.0', 13, 10, '$'
 msg_safe_status db 'Safe status: no BIOS VBE or embedded-controller probe executed', 13, 10, '$'
 msg_vbe db 'VBE BIOS version 0x', '$'
 msg_memory db ', video memory ', '$'

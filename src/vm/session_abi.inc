@@ -50,10 +50,12 @@ VM_OP_SCHED_INFO       equ 0Bh
 ; VMM_STATE  BX = VMs, CX = current, ECX high word = the VM with the keyboard,
 ;            EDX = switches, ESI = gated ticks,
 ;            EDI = last exit code (FFFFh until one ends).
-; VMM_FOCUS  BX = the VM that receives the keyboard (the mouse stays with the
-;            system VM). When it is the VM that owns the DOS window session,
-;            the device model takes the physical keys for it; Ctrl+Esc there
-;            gives the keyboard back to the system VM (not seen by the VM).
+; VMM_FOCUS  BX = the VM that receives the keyboard. When it is the VM that
+;            owns a DOS window session, the device model takes the physical
+;            keys for it; Ctrl+Esc there gives the keyboard back to the system
+;            VM (not seen by the VM). The physical mouse goes with the focus to
+;            a session with a mouse, unless CX bit 0 is set: then the system
+;            VM (the desktop) keeps it and feeds the session with DEV_MOUSE.
 ; VMM_KILL   BX = another VM (not the system VM): ends it at once, with its
 ;            DOS window session; VMM_STATE then reports exit code FFFEh.
 ; VMM_IVT    ES:DI <- 1024 bytes: the interrupt vectors as they were when the
@@ -67,6 +69,16 @@ VM_OP_SCHED_INFO       equ 0Bh
 ;            1 running, 2 ended), SESS_* flags of its DOS window session
 ;            (1 video, 2 devices, 4 audio, 8 keyboard, 10h mouse), 1 when it
 ;            has the focus, 1 when it runs now (Task Manager).
+; VMM_YIELD  From a VM's own V86 IRQ0 handler (after the BIOS tick): a timer
+;            tick its DPMI host reflected to it. A host in protected mode owns
+;            the IDT, so that tick never entered the monitor's IRQ0 path; it
+;            is counted and the time slice ends here as it would there.
+;            Ticks the monitor reflected itself are not counted twice. Not
+;            for a nested execution (a VM idling in HLT). Returns AX = 0.
+; VMM_EXIT_CODE BX = a VM: BX = its state (0 free, 1 running, 2 ended),
+;            DX = its exit code (FFFFh while it runs; FFFEh killed) and CX =
+;            the creations of that slot, kept until the slot is reused (the
+;            desktop's DOS windows tell their VM from a later one).
 ; Each VM can own one DOS window session (BEGIN), with its own VGA and
 ; device model; its traps and hooks act for it while it runs.
 ; A VM that began the DOS window session (BEGIN) owns it: its traps and hooks
@@ -80,6 +92,8 @@ VM_OP_VMM_KILL         equ 45h
 VM_OP_VMM_IVT          equ 46h
 VM_OP_VMM_TARGET       equ 47h
 VM_OP_VMM_LIST         equ 48h
+VM_OP_VMM_YIELD        equ 49h
+VM_OP_VMM_EXIT_CODE    equ 4Ah
 VM_IF_AVAILABLE        equ 1
 VM_IF_REQUESTED        equ 2
 VM_IF_ACTIVE           equ 4

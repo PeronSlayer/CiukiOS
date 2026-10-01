@@ -232,7 +232,7 @@ static void refresh_all(void)
 
 /* ---- Menus ---- */
 enum { T_NEW = 1, T_EXIT, T_REFRESH, T_HIGH, T_NORMAL, T_LOW, T_PAUSED, T_ABOUT,
-       T_END, T_SWITCH, T_KILLVM, T_FOCUSVM };
+       T_END, T_SWITCH, T_KILLVM, T_FOCUSVM, T_MINIMIZE, T_MAXIMIZE };
 static struct menu_item m_file[] = { { "&New Task (Run...)", 0, T_NEW, 0 }, { "", 0, 0, MI_SEP },
                                      { "E&xit Task Manager", 0, T_EXIT, 0 } };
 static struct menu_item m_view[] = { { "&Refresh Now", "F5", T_REFRESH, 0 }, { "", 0, 0, MI_SEP },
@@ -241,6 +241,13 @@ static struct menu_item m_view[] = { { "&Refresh Now", "F5", T_REFRESH, 0 }, { "
 static struct menu_item m_help[] = { { "&About Task Manager", 0, T_ABOUT, 0 } };
 static struct menu menus[] = { { "&File", m_file, 3 }, { "&View", m_view, 6 }, { "&Help", m_help, 1 } };
 static struct menubar bar = { menus, 3, 0, 0, 0, -1, 0 };
+/* Right-click menus, as in Windows' Task Manager. */
+static struct menu_item m_app[] = { { "&Switch To", 0, T_SWITCH, 0 }, { "Mi&nimize", 0, T_MINIMIZE, 0 },
+                                    { "Ma&ximize", 0, T_MAXIMIZE, 0 }, { "", 0, 0, MI_SEP },
+                                    { "&End Task", 0, T_END, 0 } };
+static struct menu_item m_vm[] = { { "&Give Focus", 0, T_FOCUSVM, 0 }, { "", 0, 0, MI_SEP }, { "&End VM", 0, T_KILLVM, 0 } };
+static struct menu_item m_rest[] = { { "&Refresh Now", 0, T_REFRESH, 0 }, { "&New Task (Run...)", 0, T_NEW, 0 } };
+static struct popup ctx;
 static struct dialog dlg;
 static struct dctl dc[6];
 
@@ -422,10 +429,12 @@ static void paint(void)
     ui_inset(X0 + 2, y, W - 4, 19);
     ui_text(X0 + 8, y + 1, status_line[0] ? status_line : t, C_INK);
     menubar_draw(&bar);
-    if (dlg.open) {
-        dialog_draw(&dlg);
-        ui_icon(dlg.x + 8, dlg.y + DIALOG_TITLE_H + 4, ICON_COMPUTER);
-    }
+    if (ctx.open) popup_draw(&ctx);
+}
+static void paint_dialog(void)
+{
+    dialog_draw(&dlg);
+    ui_icon(dlg.x + 8, dlg.y + DIALOG_TITLE_H + 4, ICON_MONITOR);
 }
 
 /* ---- Commands and input ---- */
@@ -449,12 +458,18 @@ static void command(int id)
     case T_HIGH: case T_NORMAL: case T_LOW: case T_PAUSED: speed = id - T_HIGH; break;
     case T_ABOUT:
         dc[0].type = DC_LABEL; dc[0].x = 50; dc[0].y = 0; dc[0].text = "CiukiOS Task Manager"; dc[0].disabled = 0;
-        dc[1].type = DC_LABEL; dc[1].x = 50; dc[1].y = 20; dc[1].text = "Version 1.0 - A modern Retro OS"; dc[1].disabled = 0;
+        dc[1].type = DC_LABEL; dc[1].x = 50; dc[1].y = 20; dc[1].text = "Version 0.8.0 - A modern Retro OS"; dc[1].disabled = 0;
         dc[2].type = DC_BUTTON; dc[2].x = 130; dc[2].y = 52; dc[2].w = 80; dc[2].h = 24; dc[2].text = "OK"; dc[2].id = 1; dc[2].disabled = 0;
         dialog_show(&dlg, "About Task Manager", dc, 3, 340, 82, 1, 1);
         break;
     case T_END:
         if (tab == 0 && i < nwin) { app_log("[TASKS] end", winbuf + app_ids[i] * 25 + 1); app_window_cmd(app_ids[i], 2); str_copy(status_line, "Task ended."); }
+        break;
+    case T_MINIMIZE:
+        if (tab == 0 && i < nwin && app_ids[i]) app_window_cmd(app_ids[i], 3);
+        break;
+    case T_MAXIMIZE:
+        if (tab == 0 && i < nwin) app_window_cmd(app_ids[i], 4);
         break;
     case T_SWITCH:
         if (tab == 0 && i < nwin) app_window_cmd(app_ids[i], 1);
@@ -482,18 +497,41 @@ static int on_mouse(int kind, int x, int y)
     int sx = HOST.x + x, sy = HOST.y + TITLE_H + y, r, i, w, tx;
     layout();
     if (dlg.open) { if (dialog_mouse(&dlg, kind, sx, sy) >= 0) dlg.open = 0; return 1; }
+    if (ctx.open) { r = popup_mouse(&ctx, kind, sx, sy); if (r >= 0) command(r); return 1; }
     r = menubar_mouse(&bar, kind, sx, sy);
     if (r >= 0) { command(r); return 1; }
     if (r == -1) return 1;
-    if (kind != MOUSE_DOWN) return 0;
-    if (sy >= tab_y && sy < tab_y + 24) {
+    if (kind != MOUSE_DOWN && kind != MOUSE_RIGHT) return 0;
+    if (kind == MOUSE_DOWN && sy >= tab_y && sy < tab_y + 24) {
         for (i = 0; i < 4; i++) { tx = tab_x(i, &w); if (sx >= tx && sx < tx + w) { tab = i; refresh_all(); log_tab(); return 1; } }
     }
-    if (sy >= body_y + 2 && sy < body_y + 22 && tab == 1) {
+    if (kind == MOUSE_DOWN && sy >= body_y + 2 && sy < body_y + 22 && tab == 1) {
         int c = sx < body_x + (int)((long)body_w * 45 / 100) ? 0 : sx < body_x + (int)((long)body_w * 62 / 100) ? 1 :
                 sx < body_x + (int)((long)body_w * 82 / 100) ? 2 : 3;
         if (c == sort_col) sort_desc = !sort_desc; else { sort_col = c; sort_desc = c >= 2; }
         load_processes();
+        return 1;
+    }
+    if (kind == MOUSE_RIGHT) {
+        if (sy >= body_y + 24 && sy < body_y + body_h && sx >= body_x && sx < body_x + body_w) {
+            i = (sy - body_y - 24) / 18;
+            if (i < rows_count()) sel_row[tab] = i;
+            if (tab == 0 && i < nwin) {
+                int w = app_ids[i], mod = w == 8 || w == 9 || (w >= 12 && w <= 15);
+                if (mod) m_app[2].flags &= ~MI_DISABLED; else m_app[2].flags |= MI_DISABLED;
+                if (w) m_app[1].flags &= ~MI_DISABLED; else m_app[1].flags |= MI_DISABLED;
+                popup_open(&ctx, m_app, 5, sx, sy, HOST.x + HOST.w - 4, HOST.y + HOST.h - 4);
+                app_log("[TASKS] menu", "application");
+                return 1;
+            }
+            if (tab == 2 && i < rows_count()) {
+                popup_open(&ctx, m_vm, 3, sx, sy, HOST.x + HOST.w - 4, HOST.y + HOST.h - 4);
+                app_log("[TASKS] menu", "virtual machine");
+                return 1;
+            }
+        }
+        popup_open(&ctx, m_rest, 2, sx, sy, HOST.x + HOST.w - 4, HOST.y + HOST.h - 4);
+        app_log("[TASKS] menu", "window");
         return 1;
     }
     if (sy >= body_y + 24 && sy < body_y + body_h && sx >= body_x && sx < body_x + body_w) {
@@ -523,6 +561,7 @@ static int on_key(int key)
     int s = KEY_SCAN(key), ch = KEY_CHAR(key), r;
     layout();
     if (dlg.open) { if (dialog_key(&dlg, key, HOST.shift) >= 0) dlg.open = 0; return 1; }
+    if (ctx.open) { r = popup_key(&ctx, key); if (r >= 0) command(r); return 1; }
     r = menubar_key(&bar, key, HOST.shift);
     if (r >= 0) { command(r); return 1; }
     if (r == -1) return 1;
@@ -545,7 +584,28 @@ static int on_key(int key)
     return 0;
 }
 
+static int tasks_event(int ev, int a, int b, int c);
 int app_event(int ev, int a, int b, int c)
+{
+    int r, orig = ev;
+    if (ev == EV_OPEN && a == 2) { dlg.win = 0; dialog_sync(&dlg); return 1; }
+    r = dialog_pre(&dlg, WIN_TASKS, &ev, &a);
+    if (r >= 0) return r;
+    if (dialog_mine(&dlg) && ev == EV_PAINT) { paint_dialog(); return 0; }
+    if (ev == EV_MOUSE && a == MOUSE_HOVER) {
+        int sx = HOST.x + b, sy = HOST.y + TITLE_H + c;
+        ui_dirty = 0;
+        layout();
+        if (dialog_mine(&dlg)) dialog_hover(&dlg, sx, sy);
+        else if (!dlg.open && ctx.open) popup_mouse(&ctx, MOUSE_HOVER, sx, sy);
+        else if (!dlg.open && menubar_open(&bar)) menubar_mouse(&bar, MOUSE_HOVER, sx, sy);
+        return ui_dirty;
+    }
+    r = tasks_event(ev, a, b, c);
+    r = dialog_post(&dlg, WIN_TASKS, ev, r);
+    return orig == EV_CLOSE && ev != EV_CLOSE ? 0 : r;   /* a dialog's close box */
+}
+static int tasks_event(int ev, int a, int b, int c)
 {
     static const unsigned periods[] = { 9, 18, 72, 0 };
     switch (ev) {

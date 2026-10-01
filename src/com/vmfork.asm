@@ -110,7 +110,8 @@ start:
     int 21h
 
 child:
-    ; Ancestors: the parent PSP chain, without the root (its own parent).
+    ; Ancestors: the parent PSP chain, including the shell root. Its PSP
+    ; block stays; its extra allocations are unused in this child VM.
     mov ah,62h
     int 21h
     mov di,ancestors
@@ -122,11 +123,11 @@ child:
     jz .top
     cmp ax,bx
     je .top
-    mov es,ax
-    cmp [es:16h],ax                     ; the root is its own parent
-    je .top
     mov [di],ax
     add di,2
+    mov es,ax
+    cmp [es:16h],ax                     ; include the root as an owner, too:
+    je .top                             ; its module blocks belong to the desktop
     mov bx,ax
     loop .up
 .top:
@@ -154,9 +155,17 @@ child:
     add si,2
     jmp .check
 .free:
+    ; Keep each ancestor's own PSP block: DOS still needs the parent chain.
+    ; Other blocks with that owner (desktop modules, compositor, files) are
+    ; unused in this VM and must be returned before a game asks for memory.
+    push ax
     inc ax
-    mov es,ax
-    mov ah,49h
+    cmp ax,bx
+    pop ax
+    je .next
+    inc ax
+    mov es,ax                            ; data segment of the block
+    mov ax,0F149h                        ; fork-only free by MCB owner BX
     int 21h
     push cs
     pop es

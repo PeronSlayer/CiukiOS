@@ -8,7 +8,7 @@
     32,
     32
   ],
-  "count": 18,
+  "count": 36,
   "palette_indices": [
     80,
     143
@@ -140,12 +140,120 @@
         0,
         16
       ]
+    },
+    {
+      "id": 18,
+      "name": "Recycle Bin",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/places/user-trash.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 19,
+      "name": "Recycle Bin (full)",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/status/user-trash-full.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 20,
+      "name": "Control Panel",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/categories/preferences-system.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 21,
+      "name": "Appearance",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/preferences-desktop-theme.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 22,
+      "name": "Fonts",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/preferences-desktop-font.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 23,
+      "name": "Mouse",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/input-mouse.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 24,
+      "name": "Keyboard",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/input-keyboard.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 25,
+      "name": "Date and Time",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/office-calendar.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 26,
+      "name": "Device Manager",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/categories/preferences-desktop-peripherals.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 27,
+      "name": "Drivers",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/mimetypes/package-x-generic.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 28,
+      "name": "Wallpaper",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/preferences-desktop-wallpaper.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 29,
+      "name": "Text document",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/mimetypes/text-x-generic.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 30,
+      "name": "Audio device",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/audio-card.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 31,
+      "name": "Font file",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/mimetypes/font-x-generic.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 32,
+      "name": "Network",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/devices/network-wired.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 33,
+      "name": "Task Manager",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/utilities-system-monitor.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 34,
+      "name": "CiukPaint",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/categories/applications-graphics.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 35,
+      "name": "CiukWeb",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/internet-web-browser.png",
+      "ciuki_overlay": null
     }
   ],
   "files": {
     "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz": "6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e",
     "assets/brand/ciuki-logo.png": "17210ac9cfe07c54d6b0069a1502a036d52cb6340715ad47bdd54fa4dd386620",
-    "scripts/build_ui_icons.py": "41caf630539a8d5a578c4ab98adc833e95cba0005ed4f9f79f372d8d8bbfbb48",
+    "scripts/build_ui_icons.py": "e1079632ed1ba586b0d5eaed76c04a5819375bab48825bff0a782ee5a5d04e6b",
     "scripts/build_ciuki_logo.py": "a2d943206c7ac62b13438700e7643bc564fd8705bede4e02ee60b723035de40a",
     "assets/icons/upstream/COPYING": "4f740497cf8ad0e564de90d3416a06c3d6b1d69d6883fe539925e3353d68a466",
     "assets/icons/upstream/AUTHORS": "5e8f8f713c5436e76acaf9c5b4be0be9426fea2225444c6ecdaa37519f67d0b5",
@@ -166,30 +274,66 @@
     "assets/icons/sources/devices-drive-removable-media.png": "6f022b38145426647d365db046b215117b04d71590f3a4386aed400cc8214b2d",
     "assets/icons/sources/devices-media-optical.png": "ab2f8791d632e5cc4c1d95763a7b210d2f6dc1100a59ef281df3d8179cb48e4b",
     "assets/icons/sources/apps-system-installer.png": "8c7ef5fc4bc2a6c412f867f98be7580c13483a0f20a32ca6c6226d1697e8c5a3",
+    "assets/icons/sources/places-user-trash.png": "4ef6194f0ca9883b38945faf8e6bedb48f7b056e059fc1515d198fd7fcd0dba2",
+    "assets/icons/sources/status-user-trash-full.png": "4a9edbc1d86d791b684d865803c4e4c07590417c9ee2c3b332275082d1e1b98a",
+    "assets/icons/sources/categories-preferences-system.png": "9181c67d3ad988ef583dff1933d2d7f707f40697a8df6b5c265f25280161cc12",
+    "assets/icons/sources/apps-preferences-desktop-theme.png": "ba474d3c05db1fbe57342ef3fc9a7d2277fc3a188f9278f35c34c7a5d4d5cba8",
+    "assets/icons/sources/apps-preferences-desktop-font.png": "8c175e51ee347b40ceb60b700ec525645bfb9b32810a7b1f7d2c3613d2b21eee",
+    "assets/icons/sources/devices-input-mouse.png": "eec54a53f5bd86437cd7c134aaaa52fab299e3397c2f8b1794b8ed9b2321f20e",
+    "assets/icons/sources/devices-input-keyboard.png": "1435b0cb3460b33da5f481a3d946d9783c50d219221b610fafe21afc9a9ccf41",
+    "assets/icons/sources/apps-office-calendar.png": "3193b3d68412e8bb2194de0bd7e1aa8774298a3b86d4b4d63c91294c6af6a0de",
+    "assets/icons/sources/categories-preferences-desktop-peripherals.png": "557a16d72642a9bbd6a0958bfbe522c5ae94d394940e7f41479a65fa9b9c402a",
+    "assets/icons/sources/mimetypes-package-x-generic.png": "a9260acc619d7aaeb857e2597b4beaf3aec68bbb618888afad452bb493177b63",
+    "assets/icons/sources/apps-preferences-desktop-wallpaper.png": "e615a83d478a45dc29ffafc488b05270cd2c40af804c3738129de8725bcaba30",
+    "assets/icons/sources/mimetypes-text-x-generic.png": "255a00b077ad727842fb6f3a212a4adab8ccb2384b6a6e1824c8f0d244cbe087",
+    "assets/icons/sources/devices-audio-card.png": "d9c1fb214076629fda252ed20e7853c56ae02a3410be0dae8ef25db4472447b8",
+    "assets/icons/sources/mimetypes-font-x-generic.png": "4be37c8c4a95c3cec2f9b702335a95d4137860425940fc52d5b7595ad149f675",
+    "assets/icons/sources/devices-network-wired.png": "ee8a3e304fd10d72fe9f50540d9fe20e33a3dea1f359ecff27aa0c7f3b31e949",
+    "assets/icons/sources/apps-utilities-system-monitor.png": "79620bc5f7dec37cce87d0c62c7a247ca5650daf752278c506d6ba48bf398c02",
+    "assets/icons/sources/categories-applications-graphics.png": "67db1adccac32b2b04b5d20e5c139b0e37a66b80c1be7e2268b73d188520f0c7",
+    "assets/icons/sources/apps-internet-web-browser.png": "9750d3c79f83ab17c8b139fa1027b2ecd30debbad534499f1729922bb96c9625",
     "src/com/ciuki_logo_palette.inc": "1dcee7af6e9df17513250281ab762eb4316dbf5883de9884ed8baa725f2a7d2f",
     "assets/brand/native/ciuki-16.bin": "e4bf73becba9eee3009f2135dfc016eb3bf6c75fd8f97a03a92d07572ea76010",
-    "assets/icons/native/00.png": "e48b9c8421231516e4ab84bba8ed1e575f5102e440e6d1efe6ca4b613b434588",
-    "assets/icons/native/01.png": "ba731e9d8edea4cc925c1b754cd4cbbd6d31e6590342148f3677db03d3c6a792",
-    "assets/icons/native/02.png": "9f1cc8924632dc781f86ea3820ad137e5daba7b7b739477ff84ca07a825af725",
-    "assets/icons/native/03.png": "f5e23f116b67786b1226166b981db407e6f29faf4625805282ff9dbe83d79f7b",
-    "assets/icons/native/04.png": "30e6522edad2454d6b63dca614a7e71e442a3610fb6ec6530769208d5ae6f546",
-    "assets/icons/native/05.png": "d50290d118fd6b362fc30947bf83b1e2fa74c534063fa2dffd5f7b8e79a0ad46",
-    "assets/icons/native/06.png": "ac86ae56b1231fd8ab40668e4f74b0cdd74fef0902db94a5b367f0facf8f937e",
-    "assets/icons/native/07.png": "162fc17e6812e3aaa1eedf07573825dc5bedfa8deb089d3b7aeed23906df869e",
-    "assets/icons/native/08.png": "8ba85ccd5606932b1aa898d8a8b53fdedff2a2f3035a02a39ae9554644725200",
-    "assets/icons/native/09.png": "d7d1168d13a69bba82cf6c4df17ee1de93a229e52b2569a2c1b7a4405b8f4831",
-    "assets/icons/native/10.png": "3d1076b5e9f2634e0ed84a6e08751b42f75ff13b1ec7112e2d12d0d48266bfa8",
+    "assets/icons/native/00.png": "f2b15f78ae76257774a3e81bb2f0edd07156277b2e2988516532c7a65e6c6b3e",
+    "assets/icons/native/01.png": "de836d63d21b7f6f6dfb3b9da3d7c9c81ffd3ebd52c883f97698d4d68a1ddf5e",
+    "assets/icons/native/02.png": "028415322070cba122090161315d2942e2b8ffb547289ed7241fbf0709fe93f1",
+    "assets/icons/native/03.png": "5b752c81f60aceff875ce337ac42ebe768ccdac02d84378cb3be3b94d256021a",
+    "assets/icons/native/04.png": "4dd7543c7d1508782caf0292258a2ccdfc83193fc0b59e03c4f582185bc6524b",
+    "assets/icons/native/05.png": "af14e4b0fb4b47e7edd0730e1d4ad976ee50b13049679e077e77b89de99022c4",
+    "assets/icons/native/06.png": "d48de919bec655837c9d51cdaf3747414dea9457e61db2ca95b8f56fdb8a3d5b",
+    "assets/icons/native/07.png": "0ca1afc1f32dda0d81a7970d0e701e82ea1fd7dac00180810beb98581452f9bb",
+    "assets/icons/native/08.png": "ac81fd24a6cca9bc90b88dd4b400ea77058741da250a996120645ab195d05568",
+    "assets/icons/native/09.png": "b37fbf4e8f38c3084322f26f145b5a99921498c496b295e8e900ed4c0b538bb2",
+    "assets/icons/native/10.png": "e47eff599dc4b16c165c5a2be06339d483a93c94ddb264b43ebf59602f36118b",
     "assets/brand/native/ciuki-24.bin": "de394da89d0c0ffb2a0717d8e2f653800c71293fd81862b4cf2250327c5c0bf9",
     "assets/icons/native/11.png": "bd38039867a76070fa146547fa34af96f8afec67b51e2566ffb6fa5bf10dd0c5",
-    "assets/icons/native/12.png": "09100be2376e24271fdf7c666b72e36a461edb99768412b7e6bafa1f428e3f13",
-    "assets/icons/native/13.png": "ece88572cdba263d650d657a23efe951407babff6bffb9569268c6099df24fe8",
-    "assets/icons/native/14.png": "1eb42806015f72a516fbc1b689ea2e1098c5785cda8d84237197e871f95c6b52",
-    "assets/icons/native/15.png": "762010f19936ab2edb6570114ac7e08e08b1c91e92a2b01a9775496d880c0803",
-    "assets/icons/native/16.png": "3c4652049efa507d434e12d8b7d83a7c69022756657245ce0c463e2d8ce8d683",
-    "assets/icons/native/17.png": "51cf9ce6c36dead4dc76d243caa59e000168b7a67abe1556a9affd39cbcf9e93",
-    "assets/icons/native/ICONS.DAT": "7676fb9647230f6a8c2956983b1502c9586456727a8f111bc779f38749dcf3fe",
-    "assets/icons/native/fallback.bin": "ec76651fb253f39884f1f712619c7583e1805e529568cc877bf8b1244187cc1b",
-    "src/com/ui_icons_palette.inc": "f77407a347846fd7218bdf3958006743c504ae2ac5272213d4bd3a788e5fb9f0",
-    "assets/icons/preview.png": "faeb2b9a1061fe39f4017ff3416f90d2fc14a187ad270fe4abe94651fb41f1a6"
+    "assets/icons/native/12.png": "f3a2e2b14175e4b2a213aac93f676bcc43560569e8a56d802256c1f29d28dd12",
+    "assets/icons/native/13.png": "aaade6903605cab8de1ade79fd42e710c52b6a7a401b3cea1f514fb2ba7b862a",
+    "assets/icons/native/14.png": "d45cc10372b84050aad1062f100c77b38fd24a2073234dca6abea4572e881a44",
+    "assets/icons/native/15.png": "2e6804cfebc66950ada5bc144a78affa8124a9c3131f9ecd72d75768fa0ae684",
+    "assets/icons/native/16.png": "09184b65141c7fde045b01713c6522085fe67d9be3e3f49e479b27a728534470",
+    "assets/icons/native/17.png": "abd688a7053ee428ee1409cdb256bb6d2d9c71612e8e67deef4e024cd51ce8a3",
+    "assets/icons/native/18.png": "2f2aa8ae3040e79be266090ff3672c64517032c8a32a513ee6a726440a02d4f3",
+    "assets/icons/native/19.png": "6f3c9c924269e2ae4297e3ed0cbc6f46ccee7f31914b9783895e5627a1f87f5e",
+    "assets/icons/native/20.png": "742a5d1f8caae85499337497fd5d5bb6d85a99229a4f34d0aa3f9d16da921fae",
+    "assets/icons/native/21.png": "06e32ded7e47f114561fce88cbe99460ddf647c6b08a8e607176b48f325a4264",
+    "assets/icons/native/22.png": "30bb0495da9c373e5a9d7437302e216ebec3fe519bfd618f8630d56a429b47c2",
+    "assets/icons/native/23.png": "227228d2e260452ac366ac1b4eb680e06d117ba02850aacc3d9cbad6700de970",
+    "assets/icons/native/24.png": "b6e7535b74790fe5bbf8505fb7f986bc2befce5d19459f67592867b2e55ebb08",
+    "assets/icons/native/25.png": "d24a45b43c5f9d819fdc73561cdb8ff37a683f378cdf8ae4b4989e5d7feddc3a",
+    "assets/icons/native/26.png": "bff9c02b11d3d3a041a3c1805075571f379b233348e09bed6e0d12d68cffab01",
+    "assets/icons/native/27.png": "fd40f5b09cc0ca5b09eeed945ee80ed9abf5ba98754c1736bf17da4c1609af51",
+    "assets/icons/native/28.png": "0b11733650887e5f6e8e3609c4d896ab8a358ce48803f7c6029ee33fef011f3c",
+    "assets/icons/native/29.png": "9693b0025d6e2221e9dba0c3ba44702897b04b83240e8eaf70853e24254d3fb4",
+    "assets/icons/native/30.png": "d8e55f5923be208e7d876c92ec3693628f27a5c135890f8325c83c18260e969e",
+    "assets/icons/native/31.png": "055aa57053e6ba95f0f1fda660b57952850639c2c108a37208cfe54701d4a4ae",
+    "assets/icons/native/32.png": "404e11687f21f6e8f5aea5c9c1a5afeed2e49fa361a7430e53f346500d1db2a7",
+    "assets/icons/native/33.png": "12ba79ba2063172ec594670ea3bb1f034fa19d85ed1e7b347c47caa6842d12d1",
+    "assets/icons/native/34.png": "7c45880147cff784621d078c18bb7720aeaa6cfe68d941d49183d61cc4341ee4",
+    "assets/icons/native/35.png": "516c32792176d08c48582a55a2a8a7b755c3cd4b7bac40953c53f4a0a8d1dece",
+    "assets/icons/native/ICONS.DAT": "19581f86deaa791d635508a1078baacb0a2a7337df69e62376e4370f2705ec39",
+    "assets/icons/native/fallback.bin": "73f5cd5a954efa2d2a6d0aa7a95450346874fc1c207956b7a3ff2d157bd38117",
+    "src/com/ui_icons_palette.inc": "04e3dbe4d5156c4585e770ef0225a2789b67d6d994d637e7d45a2fcd402c6b39",
+    "assets/icons/preview.png": "91e66d7a55cee965924e98c90b05358acba3f64da9e27a6432394c9ec215691c"
   }
 }

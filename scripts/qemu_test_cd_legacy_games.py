@@ -7,7 +7,7 @@ sys.path.insert(0,str(Path('scripts').resolve()))
 from qemu_test_native_desktop import DesktopVM
 from analyze_audio_wav import pcm_payload
 ap=argparse.ArgumentParser(description='Exercise Wolf3D and DoomVan gameplay, audio and return from the release CD.')
-ap.add_argument('--iso',type=Path,default=Path('build/full/CiukiOS_full_cd_0-7-1.iso'))
+ap.add_argument('--iso',type=Path,default=Path('build/full/CiukiOS_full_cd_0-8-0.iso'))
 ap.add_argument('--output',type=Path,required=True)
 args=ap.parse_args()
 os.environ.setdefault('CIUKIOS_SETUP_QEMU_ACCEL','kvm')

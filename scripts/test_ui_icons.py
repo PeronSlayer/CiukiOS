@@ -15,12 +15,14 @@ import subprocess
 
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_READ
 from unicorn.x86_const import *
+from build_ui_icons import ICONS
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = 0x10000
 ALLOC_SEG = 0x3000
 ALLOC = ALLOC_SEG * 16
-PACK_SIZE = 16 + 18 * 32 * 32
+ICON_COUNT = len(ICONS)
+PACK_SIZE = 16 + ICON_COUNT * 32 * 32
 PARAGRAPHS = (PACK_SIZE + 15) // 16
 GUARD = b'ICON_GUARD_01234'
 SYMBOLS = ('begin', 'end', 'draw', 'rect', 'segment', 'handle', 'vbe',
@@ -240,7 +242,7 @@ def loader_cases(binary, pack):
 
 def reader_cases(binary, pack, fallback):
     results = []
-    for icon in range(18):
+    for icon in range(ICON_COUNT):
         source = pack[16+icon*1024:16+(icon+1)*1024]
         for packed in (False, True):
             for x, y in ((5, 2), (-18, -12), (2510, 1408)):
@@ -286,8 +288,8 @@ def reader_cases(binary, pack, fallback):
 
 def reader_edges(binary, pack, fallback):
     results = []
-    for loaded, icon in ((False, 0), (False, 17), (False, 18), (False, 255),
-                         (True, 18), (True, 255)):
+    for loaded, icon in ((False, 0), (False, ICON_COUNT - 1), (False, ICON_COUNT), (False, 255),
+                         (True, ICON_COUNT), (True, 255)):
         test = Icons(binary, pack)
         if loaded:
             test.call('begin')
@@ -337,7 +339,7 @@ def main():
     binary = target.read_bytes()
     pack = (ROOT/'assets/icons/native/ICONS.DAT').read_bytes()
     assert len(pack) == PACK_SIZE
-    assert struct.unpack_from('<8s4H', pack) == (b'CIUKICO1', 18, 32, 32, 0)
+    assert struct.unpack_from('<8s4H', pack) == (b'CIUKICO1', ICON_COUNT, 32, 32, 0)
     assert all(color < 144 or color == 255 for color in pack[16:])
     fallback = (ROOT/'assets/icons/native/fallback.bin').read_bytes()
     assert len(fallback) == 128 and max(fallback) < 16

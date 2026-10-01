@@ -1,0 +1,154 @@
+{
+  "google_fonts_commit": "23e54b51ddffbc7713c583748e3bd86f62b1fa4a",
+  "dejavu_release": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
+  "dejavu_zip_sha256": "7576310b219e04159d35ff61dd4a4ec4cdba4f35c00e002a136f00e96a908b0a",
+  "sources": {
+    "upstream/GOOGLE_FONTS_COMMIT": "652815c355a085e0fdd9404cceb9c5e615fed0110b728b69d116a2169a0b7571",
+    "upstream/atkinson/AtkinsonHyperlegible-Bold.ttf": "5a3b0c8cc8ca545155150b4512a1fa248298df121c50d6557e651e61fbdab92f",
+    "upstream/atkinson/AtkinsonHyperlegible-Regular.ttf": "7fb917c89019896d0b52ee84b7cbb3304c18cb90b19a62f5e32712bd23e97669",
+    "upstream/atkinson/OFL.txt": "f32d22b3908fcad2c86a74000614ec22e6a7f66ea7e867e616026a27aebdc143",
+    "upstream/dejavu/AUTHORS": "915a742f0b242ea43fcbef934b6d24353b51351470f71d8a8d00c751892fad50",
+    "upstream/dejavu/DejaVuSans-Bold.ttf": "e6476c1b80502924294eed40894c5b18e06c181444ca953e5334262df9c27724",
+    "upstream/dejavu/DejaVuSans.ttf": "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954",
+    "upstream/dejavu/LICENSE": "7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93",
+    "upstream/firasans/FiraSans-Bold.ttf": "a4d8e149ecdd4874a0726eb0af894488b3b31c423d6b0017c8f415ed1b795b45",
+    "upstream/firasans/FiraSans-Regular.ttf": "c29556a2719bf613ef3d5e070e40d903a8965d9c081beca1375dc1e6e0f93c23",
+    "upstream/firasans/OFL.txt": "8f24842e9174beda18a556c2ae7d54f5dc444340c19a3a9ef77e23bca366adbd",
+    "upstream/inconsolata/Inconsolata[wdth,wght].ttf": "23ded25b447074d00659392bf9b1123d89df55cb07b0ad9bfef3366d199b5fcb",
+    "upstream/inconsolata/OFL.txt": "29bd0cfd0fb2a45f9b057c834a057724bae1f63b525a8ac83d3e7525706d9f80",
+    "upstream/inter/Inter[opsz,wght].ttf": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+    "upstream/inter/OFL.txt": "5b9321a4298cfeb6b34354164a1c3afc3db114569984c502b9b35d988fd58c57",
+    "upstream/notosans/NotoSans[wdth,wght].ttf": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d",
+    "upstream/notosans/OFL.txt": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a",
+    "upstream/notoserif/NotoSerif[wdth,wght].ttf": "4d8e6761424656867019081a1a01336f3cb086982682698714054fc33f782713",
+    "upstream/notoserif/OFL.txt": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a",
+    "upstream/opensans/OFL.txt": "fbbbcfef55318de350562559b671360de6d597112ecc5c73881b05092db89602",
+    "upstream/opensans/OpenSans[wdth,wght].ttf": "36643644f318a812aab2d2ed3bb98f8cf0872527f835fe9398d95fe6b9adb878",
+    "upstream/roboto/OFL.txt": "061402327a96aadb0bfb694a960ed289ecd38d383e396243831ab81feb109c41",
+    "upstream/roboto/Roboto[wdth,wght].ttf": "d7598e12c5dbef095ff8272cfc55da0250bd07fbdecbac8a530b9b277872a134",
+    "upstream/worksans/OFL.txt": "749aca05078664ce682dce1b1b10096ac397cb088c1a6df4e1bb56f0092a9272",
+    "upstream/worksans/WorkSans[wght].ttf": "f50f61f2ba738e239442d40bf1069adb195c224b6a5a73a581fc2f3ed62a9f63"
+  },
+  "fonts": [
+    {
+      "file": "CIUKIOS.CFN",
+      "name": "CiukiOS Sans (default)",
+      "size": 13,
+      "source": "src/com/setup_font.bin (Liberation Sans, OFL-1.1)",
+      "sha256": "a341b5b0a9021c3c6b10f606ef83247d3264b7c4aa890db51bcca8d4f8f41dfe"
+    },
+    {
+      "file": "NOTOSANS.CFN",
+      "name": "Noto Sans",
+      "size": 14,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/notosans/OFL.txt",
+      "sources": [
+        "upstream/notosans/NotoSans[wdth,wght].ttf"
+      ],
+      "sha256": "758dfddb0e472aeb804c92ab0459046a94b59aa1152b2d1c52ed5aeb369fd400"
+    },
+    {
+      "file": "NOTOSERF.CFN",
+      "name": "Noto Serif",
+      "size": 14,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/notoserif/OFL.txt",
+      "sources": [
+        "upstream/notoserif/NotoSerif[wdth,wght].ttf"
+      ],
+      "sha256": "7e18ae6b1c186cb7641ab5da11c10737010748f20229ec69b62b1dbf61f01242"
+    },
+    {
+      "file": "ROBOTO.CFN",
+      "name": "Roboto",
+      "size": 14,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/roboto/OFL.txt",
+      "sources": [
+        "upstream/roboto/Roboto[wdth,wght].ttf"
+      ],
+      "sha256": "8e9181b0b5eb117d0ab007091f39d941c6e75575b7ec09c4d080d0cd33d2f6ee"
+    },
+    {
+      "file": "OPENSANS.CFN",
+      "name": "Open Sans",
+      "size": 14,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/opensans/OFL.txt",
+      "sources": [
+        "upstream/opensans/OpenSans[wdth,wght].ttf"
+      ],
+      "sha256": "70a249edb363511551b98b6df47e55c3ae6d85f1856f7de036e6f4017ee54673"
+    },
+    {
+      "file": "FIRASANS.CFN",
+      "name": "Fira Sans",
+      "size": 12,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/firasans/OFL.txt",
+      "sources": [
+        "upstream/firasans/FiraSans-Regular.ttf",
+        "upstream/firasans/FiraSans-Bold.ttf"
+      ],
+      "sha256": "7640290f4cb24f9b067cc5c52e5c93af28fae5b7444a9b3b00ede451cbd0d54a"
+    },
+    {
+      "file": "INTER.CFN",
+      "name": "Inter",
+      "size": 12,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inter/OFL.txt",
+      "sources": [
+        "upstream/inter/Inter[opsz,wght].ttf"
+      ],
+      "sha256": "e8267a24e3077ecf89dc4759ec8179a1f0d42cb820b68cf1941b31a3bdbe1163"
+    },
+    {
+      "file": "WORKSANS.CFN",
+      "name": "Work Sans",
+      "size": 15,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/worksans/OFL.txt",
+      "sources": [
+        "upstream/worksans/WorkSans[wght].ttf"
+      ],
+      "sha256": "6699b378f537d21f872f51387a42a4574b6f375369eccb2cbfdc2b8b0f17dd07"
+    },
+    {
+      "file": "ATKINSON.CFN",
+      "name": "Atkinson Hyperlegible",
+      "size": 13,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/atkinson/OFL.txt",
+      "sources": [
+        "upstream/atkinson/AtkinsonHyperlegible-Regular.ttf",
+        "upstream/atkinson/AtkinsonHyperlegible-Bold.ttf"
+      ],
+      "sha256": "f9e8a5a00217c0b1e0aa28926ed732ccddb9346e2c7b7e13a37368dbdd73ccf4"
+    },
+    {
+      "file": "INCONSOL.CFN",
+      "name": "Inconsolata",
+      "size": 13,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inconsolata/OFL.txt",
+      "sources": [
+        "upstream/inconsolata/Inconsolata[wdth,wght].ttf"
+      ],
+      "sha256": "974688291f5ff5e4587c5f3ac11be280f6d53ba3d62145469bb26faa2c9c4ace"
+    },
+    {
+      "file": "DEJAVU.CFN",
+      "name": "DejaVu Sans",
+      "size": 14,
+      "licence": "Bitstream-Vera",
+      "licence_file": "upstream/dejavu/LICENSE",
+      "sources": [
+        "upstream/dejavu/DejaVuSans.ttf",
+        "upstream/dejavu/DejaVuSans-Bold.ttf"
+      ],
+      "sha256": "1f9b866334bb4d37e2d863b1804ec34215b1ac0512bc40741edf867184be6208"
+    }
+  ]
+}

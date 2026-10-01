@@ -6,6 +6,9 @@
 #define ITEM_H 20
 #define SEP_H  8
 
+int ui_dirty;
+static void place(struct dialog *d);
+
 /* Label without '&'; *mn = mnemonic (upper case) and *at = its index. */
 static void strip_amp(const char *s, char *out, char *mn, int *at)
 {
@@ -171,11 +174,17 @@ int popup_mouse(struct popup *p, int kind, int sx, int sy)
     inside = sx >= p->x && sx < p->x + p->w && sy >= p->y && sy < p->y + p->h;
     if (!inside) {
         if (kind == MOUSE_DOWN || kind == MOUSE_RIGHT) { p->open = 0; return -2; }
-        if (kind == MOUSE_MOVE) p->hover = -1;
+        if ((kind == MOUSE_MOVE || kind == MOUSE_HOVER) && p->hover >= 0) {
+            p->hover = -1;
+            ui_dirty = 1;
+        }
         return -1;
     }
     i = popup_item_at(p, sy);
+    if (i >= 0 && (p->items[i].flags & MI_DISABLED)) i = -1;
+    if (p->hover != i) ui_dirty = 1;
     p->hover = i;
+    if (kind == MOUSE_HOVER) return -1;
     if ((kind == MOUSE_UP || kind == MOUSE_DOWN) && i >= 0 &&
         !(p->items[i].flags & MI_DISABLED)) {
         p->open = 0;
@@ -279,8 +288,10 @@ int menubar_mouse(struct menubar *m, int kind, int sx, int sy)
                 if (kind == MOUSE_DOWN) {
                     if (m->active == i) { m->active = -1; m->pop.open = 0; }
                     else { m->keyboard = 0; open_menu(m, i); }
-                } else if (kind == MOUSE_MOVE && m->active >= 0 && m->active != i) {
+                } else if ((kind == MOUSE_MOVE || kind == MOUSE_HOVER) &&
+                           m->active >= 0 && m->active != i) {
                     open_menu(m, i);
+                    ui_dirty = 1;
                 }
                 return -1;
             }
@@ -333,25 +344,26 @@ int menubar_key(struct menubar *m, int key, int shift)
 }
 
 /* ---------------- scroll bar (vertical, 16 px) ---------------- */
-static void arrow(int x, int y, int up)
+static void arrow(int x, int y, int up, int color)
 {
     int i;
     for (i = 0; i < 4; i++) {
         int w = up ? 1 + 2 * i : 7 - 2 * i;
-        ui_rect(x + 7 - w / 2, y + 6 + i, w, 1, C_INK);
+        ui_rect(x + 7 - w / 2, y + 6 + i, w, 1, color);
     }
 }
 
 void draw_scroll(int x, int y, int h, long pos, long total, long page)
 {
-    int track = h - 32, th, ty;
+    int track = h - 32, th, ty, idle = total <= page || track < 8;
     ui_rect(x, y, 16, h, C_FACE);
-    ui_rect(x, y + 16, 16, h - 32, C_LIGHT);
+    /* Nothing to scroll: a plain, disabled bar (grey arrows). */
+    if (!idle) ui_rect(x, y + 16, 16, h - 32, C_LIGHT);
     ui_bevel(x, y, 16, 16, C_FACE);
-    arrow(x, y, 1);
+    arrow(x, y, 1, idle ? C_SHADOW : C_INK);
     ui_bevel(x, y + h - 16, 16, 16, C_FACE);
-    arrow(x, y + h - 16, 0);
-    if (total <= page || track < 8) return;
+    arrow(x, y + h - 16, 0, idle ? C_SHADOW : C_INK);
+    if (idle) return;
     th = (int)((long)track * page / total);
     if (th < 12) th = 12;
     if (th > track) th = track;
@@ -394,6 +406,7 @@ int field_key(struct field *f, int key, int shift)
 {
     int s = KEY_SCAN(key), c = KEY_CHAR(key);
     (void)shift;
+    if (c == 1) { f->sel = f->len > 0; f->cursor = f->len; return 1; }     /* Ctrl+A */
     if (f->sel && ((c >= ' ' && c < 127) || c == 8 || s == K_DEL)) {
         f->len = 0; f->cursor = 0; f->text[0] = 0; f->sel = 0;
         if (c == 8 || s == K_DEL) return 1;
@@ -478,6 +491,7 @@ void dialog_show(struct dialog *d, const char *title, struct dctl *c, int n,
     if (d->y < HOST.y + TITLE_H) d->y = HOST.y + TITLE_H;
     d->def_id = def_id; d->cancel_id = cancel_id;
     d->focus = -1;
+    d->hot = -1;
     for (i = 0; i < n; i++) {
         if (c[i].type == DC_FIELD || c[i].type == DC_CHECK || c[i].type == DC_RADIO ||
             c[i].type == DC_BUTTON) {
@@ -499,10 +513,16 @@ void dialog_draw(struct dialog *d)
     char t[64], mn;
     int at;
     if (!d->open) return;
-    ui_rect(d->x + 4, d->y + 4, d->w, d->h, C_INK);
-    ui_bevel(d->x, d->y, d->w, d->h, C_FACE);
-    ui_rect(d->x + 3, d->y + 3, d->w - 6, DIALOG_TITLE_H - 3, C_TITLE);
-    ui_text(d->x + 8, d->y + 4, d->title, C_PAPER | BOLD);
+    if (d->win) {
+        /* The shell drew the frame and the title of its window. */
+        if (HOST.window != d->win) return;
+        place(d);
+    } else {
+        ui_rect(d->x + 4, d->y + 4, d->w, d->h, C_INK);
+        ui_bevel(d->x, d->y, d->w, d->h, C_FACE);
+        ui_rect(d->x + 3, d->y + 3, d->w - 6, DIALOG_TITLE_H - 3, C_TITLE);
+        ui_text(d->x + 8, d->y + 4, d->title, C_PAPER | BOLD);
+    }
     ox = d->x + 8;
     oy = d->y + DIALOG_TITLE_H + 6;
     for (i = 0; i < d->n; i++) {
@@ -541,13 +561,77 @@ void dialog_draw(struct dialog *d)
         case DC_BUTTON: {
             int tx = x + (c->w - ui_measure(t)) / 2;
             if (c->id == d->def_id) ui_rect(x - 1, y - 1, c->w + 2, c->h + 2, C_INK);
-            ui_bevel(x, y, c->w, c->h, C_FACE);
+            ui_bevel(x, y, c->w, c->h, i == d->hot && !c->disabled ? C_PAPER : C_FACE);
             ui_text(tx, y + (c->h - 16) / 2, t, fg);
             underline(tx, y + (c->h - 16) / 2, t, at, fg);
             if (i == d->focus) draw_focus(x + 3, y + 3, c->w - 6, c->h - 6);
             break;
         }
         }
+    }
+}
+
+/* A windowed dialog follows its window: the client area is below the
+ * shell's title rail, inside the 3-pixel frame. */
+static void place(struct dialog *d)
+{
+    d->x = HOST.x + 3;
+    d->y = HOST.y + TITLE_H - DIALOG_TITLE_H;
+}
+
+static int control_at(struct dialog *d, int sx, int sy)
+{
+    int i, ox = d->x + 8, oy = d->y + DIALOG_TITLE_H + 6;
+    for (i = 0; i < d->n; i++) {
+        struct dctl *c = &d->c[i];
+        int x = ox + c->x, y = oy + c->y, w = c->w, h = c->h ? c->h : 17;
+        if (c->type == DC_GROUP || c->type == DC_LABEL) continue;
+        if (c->type == DC_CHECK || c->type == DC_RADIO) w = 20 + ui_measure(c->text) + 4;
+        if (c->type == DC_FIELD) h = 22;
+        if (sx >= x && sx < x + w && sy >= y && sy < y + h) return i;
+    }
+    return -1;
+}
+
+int dialog_hover(struct dialog *d, int sx, int sy)
+{
+    int i;
+    if (!d->open || (d->win && HOST.window != d->win)) return 0;
+    if (d->win) place(d);
+    i = control_at(d, sx, sy);
+    if (i >= 0 && (d->c[i].type != DC_BUTTON || d->c[i].disabled)) i = -1;
+    if (i == d->hot) return 0;
+    d->hot = i;
+    ui_dirty = 1;
+    return 1;
+}
+
+void dialog_place(struct dialog *d)
+{
+    if (d->open && d->win && HOST.window == d->win) place(d);
+}
+
+int dialog_mine(struct dialog *d)
+{
+    return d->open && d->win && HOST.window == d->win;
+}
+
+void dialog_sync(struct dialog *d)
+{
+    int ww, wh;
+    if (!d->open) {
+        if (d->win) win_close(d->win);
+        d->win = 0;
+        return;
+    }
+    ww = d->w + 6;
+    wh = d->h - DIALOG_TITLE_H + TITLE_H + 3;
+    if (d->win && (ww != d->ww || wh != d->wh)) { win_close(d->win); d->win = 0; }
+    if (!d->win) {
+        d->win = win_open(-1, -1, ww, wh, d->title, WS_DIALOG);
+        d->ww = ww; d->wh = wh;
+        d->hot = -1;
+        ui_repaint();
     }
 }
 
@@ -573,16 +657,22 @@ static int activate(struct dialog *d, int i)
 
 int dialog_mouse(struct dialog *d, int kind, int sx, int sy)
 {
-    int i, ox = d->x + 8, oy = d->y + DIALOG_TITLE_H + 6;
-    if (!d->open || kind != MOUSE_DOWN) return -1;
-    for (i = 0; i < d->n; i++) {
+    int i;
+    if (!d->open) return -1;
+    if (d->win && HOST.window != d->win) {
+        /* Modal: a click on its owner brings the dialog forward. */
+        if (kind == MOUSE_DOWN || kind == MOUSE_RIGHT) app_window_cmd(d->win, 1);
+        return -1;
+    }
+    if (d->win) place(d);
+    if (kind == MOUSE_HOVER || kind == MOUSE_MOVE) { dialog_hover(d, sx, sy); return -1; }
+    if (kind != MOUSE_DOWN) return -1;
+    i = control_at(d, sx, sy);
+    if (i < 0) return -1;
+    {
         struct dctl *c = &d->c[i];
-        int x = ox + c->x, y = oy + c->y, w = c->w, h = c->h ? c->h : 17;
-        if (c->type == DC_CHECK || c->type == DC_RADIO) w = 20 + ui_measure(c->text) + 4;
-        if (c->type == DC_FIELD) h = 22;
-        if (sx < x || sx >= x + w || sy < y || sy >= y + h) continue;
         if (c->type == DC_FIELD) {
-            if (!c->disabled) { d->focus = i; field_click(c->field, x, w, sx); }
+            if (!c->disabled) { d->focus = i; field_click(c->field, d->x + 8 + c->x, c->w, sx); }
             return -1;
         }
         if (focusable(c)) return activate(d, i);
@@ -700,4 +790,29 @@ void msgbox(struct dialog *d, const char *title, const char *text, const char *b
     dialog_show(d, title, mb_c, n, w + 76, h + 36, ids[0],
                 nb > 1 ? ids[nb - 1] : ids[0]);
     d->focus = lines;                            /* the first button */
+}
+
+/* ---------------- a module's modal dialog window ---------------- */
+/* Before the module handles an event: -1 go on (ev and a may now be an Esc
+ * key: the dialog's close box), else the answer. */
+int dialog_pre(struct dialog *d, int main_win, int *ev, int *a)
+{
+    if (dialog_mine(d)) {
+        if (*ev == EV_CLOSE) { d->win = 0; *ev = EV_KEY; *a = K_ESC; }
+        return -1;
+    }
+    if (*ev == EV_CLOSE && d->open && d->win && HOST.window == main_win) {
+        app_window_cmd(d->win, 1);             /* answer the dialog first */
+        return 1;
+    }
+    return -1;
+}
+
+/* After it: the owner shows what the dialog changed; the window follows. */
+int dialog_post(struct dialog *d, int main_win, int ev, int r)
+{
+    if (r && ev != EV_PAINT && ev != EV_CLOSE && HOST.window != main_win)
+        ui_repaint_win(main_win);
+    dialog_sync(d);
+    return r;
 }

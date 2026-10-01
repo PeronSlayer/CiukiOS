@@ -244,12 +244,16 @@ static int CVGA_CALL bios_write(void *context, uint32_t linear, uint8_t value)
 static const cvx_bus guest_bus = {guest_read, guest_write, guest_fetch, 0};
 static const cvx_bus firmware_bus = {bios_read, bios_write, bios_read, 0};
 
-/* A conventional-memory extent the caller owns: 10000h-9FFFFh, present,
- * user and (for output) writable pages, no wrap. */
+/* A caller's packet or buffer: conventional memory (10000h-9FFFFh) or an
+ * upper memory block (C0000h-EFFFFh: the desktop's modules live there),
+ * present, user and (for output) writable pages, no wrap. */
 static int conventional(uint32_t linear, uint32_t bytes, int write)
 {
     uint32_t page, last;
-    if (!bytes || linear < 0x10000UL || linear + bytes < linear || linear + bytes > 0xa0000UL)
+    if (!bytes || linear < 0x10000UL || linear + bytes < linear)
+        return 0;
+    if (linear + bytes > 0xa0000UL &&
+        (linear < 0xc0000UL || linear + bytes > 0xf0000UL))
         return 0;
     last = (linear + bytes - 1) >> 12;
     for (page = linear >> 12; page <= last; ++page)
@@ -774,7 +778,18 @@ static uint32_t present(cvvid_client *c, const cvvid_fb *fb, int band)
             !band_memory(target, packet.band_bytes))
             return CVVID_E_ADDRESS;
         surface = (uint8_t *)(uintptr_t)target;
-        /* Screen coordinates become band-relative. */
+        /* Screen coordinates become band-relative. The compositor can hold
+         * only a damaged horizontal span; older callers leave band_left 0. */
+        {
+            uint16_t left = (uint16_t)packet.reserved[0] |
+                            ((uint16_t)packet.reserved[1] << 8);
+            packet.request.window.left = (int16_t)(packet.request.window.left - left);
+            packet.request.window.right = (int16_t)(packet.request.window.right - left);
+            for (i = 0; i < packet.request.clip_count && i < CVP_MAX_CLIPS; ++i) {
+                packet.request.clip[i].left = (int16_t)(packet.request.clip[i].left - left);
+                packet.request.clip[i].right = (int16_t)(packet.request.clip[i].right - left);
+            }
+        }
         packet.request.window.top = (int16_t)(packet.request.window.top - packet.band_top);
         packet.request.window.bottom = (int16_t)(packet.request.window.bottom - packet.band_top);
         for (i = 0; i < packet.request.clip_count && i < CVP_MAX_CLIPS; ++i) {

@@ -3,7 +3,70 @@
 All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task should update `Unreleased` unless the task cuts a release section.
 
-## Unreleased
+## Unreleased (2026-10-01)
+
+- Chose C/OpenWatcom for native `.APP` modules and 32-bit DOS/4GW programs.
+  Added CiukWeb as a native desktop browser with mTCP `HTGET` transport and
+  an HTTP text/link view. Bundled a pinned TinyGL static library, headers,
+  license and a software-rendered triangle demo; full OpenGL conformance and
+  guest GPU acceleration remain open.
+- Presented queued desktop damage before VM polling so CiukPaint strokes
+  appear while dragging. Narrowed DOS-window repaint to changed video bands,
+  corrected forked-VM timer calibration and delivered virtual SB16 completion
+  IRQs in the same audio pass. Focused DOOM, Paint, browser, OpenGL and cursor
+  gates pass. The current image has 26/26 VM-window gates passing across
+  resource-bounded serial recovery runs after a host reboot; the automated
+  profile was interrupted and is not recorded as one uninterrupted pass.
+- Added a fixed-size QEMU recording runner with KVM, NE2000 Internet NAT,
+  preferred guest EDID and optional host OpenGL presentation. A QEMU gate
+  checks the 1280×800 window across desktop, DOS and VGA preview modes. The
+  opt-in VGA-fast Doom-vanille timedemo passed at 194 realtics for 350
+  gametics after the benchmark learned to enter DOS from the desktop.
+- Added mTCP HTGET. A GPL MicroWeb prototype was adapted and tested in an M4
+  DOS window, then removed from the current image when CiukWeb took over the
+  desktop browser role. The experiment and its source/license record remain
+  in the dated validation notes.
+- Refined the desktop top bar into five aligned, clickable readings for sound,
+  network, CPU, free conventional memory and disk activity. The Ciuki portrait
+  now opens the system menu; duplicate lower-bar buttons and wallpaper status
+  overlays were removed.
+- Reworked About into separate system, project and dedication sections. Added
+  an IPv4 network panel that saves its profile and updates the running Ciuki
+  network service. Captured fresh QEMU screenshots for the README.
+- Expanded Network with host name and MTU settings, subnet-mask validation,
+  PCI adapter details, packet-driver/MAC status and direct Device Manager and
+  Drivers controls. DHCP can start the network service, obtain a lease and
+  return to the desktop. Fixed grouped controls swallowing clicks and restored
+  command execution from module windows. The focused QEMU gate covers static
+  settings, invalid input, adapter navigation, an NE2000 PCI DHCP lease and
+  driver disable across reboot. A compact layout keeps the panel usable at
+  640×480.
+
+## pre-Alpha v0.8.0 (in development; 2026-09-30)
+
+- The current development image reports 0.8.0 in the kernel, shell, setup,
+  editor and About window. The system About now includes open-source credits,
+  GPLv2 copyright, Alcybercloud.it attribution and the owner's approved
+  dedication to Ciuk.
+- Added long FAT16 names through the resident LFN extension, CiukNote,
+  CiukPaint, refreshed desktop controls, Device Manager and a licensed era
+  driver catalog. Their focused QEMU gates passed on the feature builds.
+- M4 complete for its tested QEMU scope: DOS windows own forked VMs. The focused QEMU gate on the
+  final development image passed original DOOM and doom-vanille with Files
+  open, bounded close, two
+  text VMs, click focus, keyboard routing and independent close. The desktop
+  event loop now handles input before continuous guest-video damage, avoiding
+  a redraw loop that starved mouse clicks. The DOS-window harnesses now test
+  behavior through the module interface; the final 0.8.0 VM-window profile
+  passes **26/26** gates. The HDPMI lifetime gate also passes after its
+  unhandled physical IRQ path was corrected.
+- A DOS guest I/O gate now verifies INT 33h movement and clicks, SB16 DMA,
+  OPL and captured PCM audio inside an M4 window. The original DOOM gate
+  passed again after the PS/2 packet delivery fix.
+- The README now has a dated history and QEMU screenshots, including DOOM
+  and two DOS windows from the passing focused M4 gate.
+
+### 27–29 September increments (state at the time)
 
 - Completed the three items the integration audit left open. QEMU only:
   - **Runtime negotiation of the V86 IF profile.** Jemm's new versioned `Host_Scheduler_Profile` service (query/request/release, virtual IRQ raise, IRQ1/12 filter, state, poll) replaces selection by build hash. There is one Jemm build. CVSESSION requests the profile when its scheduler is armed unless the owner declines (op 0Ah), and reports `VM_CAP_V86_VIRTUAL_IF`.

@@ -3,7 +3,7 @@
 ; on desktop return so child programs retain their conventional memory.
 UI_ASSET_BYTES equ 11214
 ui_hits equ UI_ASSET_BYTES
-ui_mouse_state equ ui_hits+1920
+ui_mouse_state equ ui_hits+2560
 UI_ASSET_ALLOC equ ui_mouse_state+512
 UI_ASSET_FONT equ 16
 UI_ASSET_LOGO16 equ (UI_ASSET_FONT+6270)
@@ -24,7 +24,7 @@ ui_assets_begin:
     jc .fail
     mov [ui_assets_handle],ax
     mov bx,(UI_ASSET_ALLOC+15)/16
-    mov ah,0x48
+    mov ah,0x48                        ; conventional: the UI gates read it
     int 0x21
     jc .close_fail
     mov [ui_assets_seg],ax

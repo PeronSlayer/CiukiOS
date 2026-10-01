@@ -42,3 +42,27 @@ Compatibility paths
 -------------------
 Existing SYSTEM\DRIVERS and SBEMU paths are retained for older launchers.
 Windows VxD/WDM packages are not DOS or CiukiOS kernel drivers.
+
+Preinstalled era pack
+---------------------
+All packaged third-party files have SHA-256 entries, original archive URLs,
+and license records in assets/drivers/payloads.json. Original source archives
+ship beside the drivers as SOURCE.ZIP; the Crynwr source is shared at
+NET\CRYNWR-SOURCE.ZIP. The Control Panel can enable or disable each entry.
+
+Family              Driver       License   Load rule
+NE2000 / RTL8029    NE2000       GPL v1    PCI 10EC:8029 or 1050:0940
+AMD PCnet           PCNET        GPL v1    PCI 1022:2000
+Realtek RTL8139     RTL8139      GPL v1    PCI 10EC:8139
+Intel PRO/1000      E1000        GPL v2    Disabled; QEMU PCI BIOS failure
+Intel PRO/100       E100         GPL v3    Disabled; QEMU transmit unverified
+3Com 3C509 ISA      3C509        GPL v1    Disabled; manual ISA setup
+APM power           FDAPM        GPL v2    Disabled; opt in
+
+LOADDRV uses Hardware= from DRIVER.INF for @PCI lines. %PKT% selects a free
+packet interrupt; %IO% and %IRQ% come from the matching PCI device. Missing
+hardware is skipped and logged, rather than probing the wrong controller.
+The RTL8139 binary has a one-byte device-ID adaptation documented in
+NET\RTL8139\PATCH.TXT. USB storage, CD-ROM redirectors, and further vendor
+NICs still require validated loading paths or redistributable drivers.
+Tests are on QEMU only; no physical-PC qualification is implied.

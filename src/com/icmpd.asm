@@ -27,6 +27,8 @@ virtual_entry:
 virtual_dispatch:
     push bp
     mov bp, sp
+    cmp ah, 0x04                 ; mTCP transmit through the bridge
+    je .count_send
     cmp ah, 0x02
     je .access_type
     cmp ah, 0x03
@@ -39,6 +41,10 @@ virtual_dispatch:
     ; Driver information, send, address, reset and receive-mode operations
     ; are valid on the physical handle as well, so preserve the caller's
     ; interrupt frame and let the Crynwr driver complete the request.
+    pop bp
+    jmp far [cs:physical_vector]
+.count_send:
+    inc word [cs:tx_packets]
     pop bp
     jmp far [cs:physical_vector]
 
@@ -71,6 +77,8 @@ virtual_dispatch:
     je .private_status
     cmp al, 0x01                 ; update IPv4 from DS:SI (four bytes)
     je .private_set_ip
+    cmp al, 0x02                 ; live RX/TX packet counters
+    je .private_counters
     mov dh, 11                   ; BAD_COMMAND
     jmp .failure
 .private_status:
@@ -95,6 +103,10 @@ virtual_dispatch:
     pop di
     pop cx
     pop ax
+    jmp .success
+.private_counters:
+    mov bx, [cs:rx_packets]
+    mov cx, [cs:tx_packets]
     jmp .success
 
 .no_class:
@@ -149,6 +161,7 @@ physical_receiver:
     pop es
     cmp cx, RX_BUFFER_SIZE
     ja .done
+    inc word [rx_packets]
     mov [rx_length], cx
     call classify_service_packet
     or al, al
@@ -301,6 +314,7 @@ timer_handler:
     mov si, service_buffer
     mov cx, [service_send_length]
     mov ah, 0x04
+    inc word [tx_packets]
     pushf
     cli
     call far [physical_vector]
@@ -456,6 +470,8 @@ client_dest_off       dw 0
 client_dest_seg       dw 0
 client_active         db 0
 service_pending       db 0
+rx_packets            dw 0
+tx_packets            dw 0
 configured_ip         db 10, 0, 2, 15
 local_mac             times 6 db 0
 rx_length             dw 0

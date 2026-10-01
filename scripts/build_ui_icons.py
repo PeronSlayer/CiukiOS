@@ -42,7 +42,29 @@ ICONS = [
     ('USB', 'devices/drive-removable-media', None),
     ('CD-ROM', 'devices/media-optical', None),
     ('Install CiukiOS', 'apps/system-installer', (16, 0, 16)),
+    ('Recycle Bin', 'places/user-trash', None),
+    ('Recycle Bin (full)', 'status/user-trash-full', None),
+    ('Control Panel', 'categories/preferences-system', None),
+    ('Appearance', 'apps/preferences-desktop-theme', None),
+    ('Fonts', 'apps/preferences-desktop-font', None),
+    ('Mouse', 'devices/input-mouse', None),
+    ('Keyboard', 'devices/input-keyboard', None),
+    ('Date and Time', 'apps/office-calendar', None),
+    ('Device Manager', 'categories/preferences-desktop-peripherals', None),
+    ('Drivers', 'mimetypes/package-x-generic', None),
+    ('Wallpaper', 'apps/preferences-desktop-wallpaper', None),
+    ('Text document', 'mimetypes/text-x-generic', None),
+    ('Audio device', 'devices/audio-card', None),
+    ('Font file', 'mimetypes/font-x-generic', None),
+    ('Network', 'devices/network-wired', None),
+    ('Task Manager', 'apps/utilities-system-monitor', None),
+    ('CiukPaint', 'categories/applications-graphics', None),
+    ('CiukWeb', 'apps/internet-web-browser', None),
 ]
+ICON_COUNT = len(ICONS)
+# Keep the 0.8.0 desktop/paint palette stable when adding new Tango sprites.
+# New icons are mapped to these existing colours instead of requantizing UI.
+PALETTE_SOURCE_COUNT = 35
 
 
 def sha(path):
@@ -56,11 +78,11 @@ def check():
     for name, expected in m['files'].items():
         assert sha(ROOT / name) == expected, f'Stale or modified icon asset: {name}'
     data = (OUTPUT / 'ICONS.DAT').read_bytes()
-    assert data[:16] == struct.pack('<8s4H', b'CIUKICO1', 18, 32, 32, 0)
-    assert len(data) == 16 + 18 * 1024
+    assert data[:16] == struct.pack('<8s4H', b'CIUKICO1', ICON_COUNT, 32, 32, 0)
+    assert len(data) == 16 + ICON_COUNT * 1024
     assert all(x < 144 or x == 255 for x in data[16:])
     assert len((OUTPUT / 'fallback.bin').read_bytes()) == 128
-    print('[ui-icons] pinned Tango archive, Ciuki master and 18 native sprites match')
+    print(f'[ui-icons] pinned Tango archive, Ciuki master and {ICON_COUNT} native sprites match')
 
 
 def generate():
@@ -92,7 +114,8 @@ def generate():
                             'ciuki_overlay': badge})
     def pixels(im):
         return getattr(im, 'get_flattened_data', im.getdata)()
-    opaque = [p[:3] for im in images for p in pixels(im) if p[3] >= 128]
+    opaque = [p[:3] for im in images[:PALETTE_SOURCE_COUNT]
+              for p in pixels(im) if p[3] >= 128]
     sample = Image.new('RGB', (len(opaque), 1))
     sample.putdata(opaque)
     q = sample.quantize(colors=64, method=Image.Quantize.MEDIANCUT,
@@ -109,7 +132,7 @@ def generate():
     assert len(logo_palette) == 64
     colors = [tuple((v << 2) | (v >> 4) for v in c)
               for c in list(UI_DAC) + logo_palette + dac]
-    payload = bytearray(struct.pack('<8s4H', b'CIUKICO1', 18, 32, 32, 0))
+    payload = bytearray(struct.pack('<8s4H', b'CIUKICO1', ICON_COUNT, 32, 32, 0))
     previews = []
     for n, im in enumerate(images):
         data = bytearray(255 if p[3] < 128 else 80 + min(range(64), key=lambda i:
@@ -148,7 +171,7 @@ def generate():
     lines += ['%endmacro', '%endif', '']
     PALETTE.write_text('\n'.join(lines))
     files.append(PALETTE)
-    sheet = Image.new('RGB', (864, 364), '#cbd0d4')
+    sheet = Image.new('RGB', (864, 34 + 108 * ((ICON_COUNT + 5) // 6)), '#cbd0d4')
     draw = ImageDraw.Draw(sheet)
     draw.text((18, 12), 'CiukiOS / Official icons / Tango + Ciuki', fill='#202733')
     for i, im in enumerate(previews):

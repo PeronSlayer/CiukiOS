@@ -78,6 +78,8 @@ vid_inst dd ?                           ; its C video instance block (0: none)
 dev_inst dd ?                           ; its C device instance block (0: none)
 target dd ?                             ; VM its video/device operations address
 pull_lines dd ?                         ; IRQ1/IRQ12 bytes its model is to take
+exit_code dd ?                          ; FFFFh running, FFFEh killed, else its code
+generation dd ?                         ; creations of this slot (VMM_EXIT_CODE)
 ctx db VMM_CTX_BYTES dup (?)            ; its per-session variables when not live
 block dd ?                              ; linear of its private pages (0: VM 0)
 frame db VMM_FRAME dup (?)
@@ -95,12 +97,19 @@ vmm_current dd 0
 vmm_live dd 0                           ; VM whose interrupt state is Jemm's live one
 vmm_installed dd 0
 vmm_cmos_trapped dd 0
+vmm_stat_magic db 'CVMMSTAT'              ; counters, found in RAM by the gates
 vmm_ticks dd 0
 vmm_switches dd 0
 vmm_gated dd 0
+vmm_yields dd 0                         ; switches from VMM_YIELD
+vmm_yield_calls dd 0                    ; VMM_YIELD calls
+vmm_yield_seen dd 0                     ; ... for ticks the monitor had counted
 vmm_last_exit dd 0FFFFh
 vmm_idle dd 0                           ; this tick interrupted the HLT wait
 vmm_focus dd 0                          ; VM that receives the keyboard
+vmm_mouse_home dd 0                     ; 1: the system VM keeps the mouse (M4)
+vmm_seen dd 0                           ; bit per VM: the monitor reflects the
+                                        ; IRQ0 it gets next (VMM_YIELD)
 tick_owners dd 0                        ; TICK_SCHEDULER | TICK_VMM
 ivt_snapshot dd 256 dup (0)             ; interrupt vectors at module load (VMSTART)
 guest_window dd 0                       ; linear page mapped onto another VM's page
@@ -255,8 +264,11 @@ pte_live:
  pop esi
  mov [ebx].VMREC.sess,0
  mov [ebx].VMREC.pull_lines,0
+ mov [ebx].VMREC.exit_code,0FFFFh
+ inc [ebx].VMREC.generation
  mov eax,[esp]
  mov [ebx].VMREC.target,eax
+ btr vmm_seen,eax
  ; Its registers: this very call returning the child answer (the dispatcher
  ; simulated the far return already; success is AX=0 with CF clear).
  mov esi,ebp
@@ -471,6 +483,7 @@ no_session:
  push esi
  call vmm_record
  mov [esi].VMREC.state,VM_SLOT_DEAD
+ mov [esi].VMREC.exit_code,ecx
  pop esi
  xor eax,eax
  ret
@@ -516,6 +529,7 @@ focus_kept:
  call vmm_free_instances
  mov [ebx].VMREC.state,VM_SLOT_FREE
  mov [ebx].VMREC.cv_valid,0
+ mov [ebx].VMREC.exit_code,0FFFEh
  pop ebx
  dec vmm_count
  mov vmm_last_exit,0FFFEh               ; killed
@@ -1076,6 +1090,31 @@ other_vm:
 line_flag:
  test [esi].VMREC.sess,ecx
  jz pend_line
+ ; The target model lives in system pages and can take the controller byte
+ ; now. Leaving it in the 8042 until the target's next slice loses rapid
+ ; Ctrl+Esc and mouse packets while another VM is executing.
+ cmp dev_busy,0
+ jne defer_model
+ pushad
+ mov eax,[esi].VMREC.dev_inst
+ mov dev_args,eax
+ mov [dev_args+4],edx
+ mov eax,offset cvdev_select
+ mov ecx,2
+ call dev_call
+ mov eax,[esp+28]                    ; IRQ line saved by PUSHAD
+ mov dev_args,eax
+ mov eax,offset cvdev_irq_filter
+ mov ecx,1
+ call dev_call
+ call dev_hotkey_check
+ mov eax,vmm_current
+ call vmm_select
+ popad
+ pop esi
+ stc
+ ret
+defer_model:
  bts [esi].VMREC.pull_lines,eax
  pop esi
  stc
@@ -1092,11 +1131,69 @@ pass:
  ret
 jlm_filter endp
 
+; Called from HDPMI's physical IRQ1/IRQ12 path while a protected-mode DOS
+; client is active.  Jemm's V86 IRQ filter is bypassed in that path.  Route
+; the byte through the same owner decision and report whether HDPMI should
+; acknowledge the hardware IRQ itself.  EBP is the V86 bridge client frame.
+vmm_physical_irq proc
+ movzx eax,word ptr [ebp].Client_Reg_Struc.Client_EBX
+ cmp eax,1
+ je line_ok
+ cmp eax,12
+ jne invalid
+line_ok:
+ cmp vmm_installed,0
+ je invalid
+ call jlm_filter
+ mov word ptr [ebp].Client_Reg_Struc.Client_EBX,0
+ jnc routed
+ mov word ptr [ebp].Client_Reg_Struc.Client_EBX,1
+routed:
+ xor eax,eax
+ ret
+invalid:
+ mov eax,VM_ERROR_OPERATION
+ ret
+vmm_physical_irq endp
+
+; A controller byte the running session's model left there (another VM owns
+; its line): that VM gets the line, as jlm_filter would have given it had
+; the IRQ not reached a DPMI host's IDT. cdecl for the device model.
+cvdev_route_line proc c public irq:dword
+ pushad
+ mov eax,irq
+ call vmm_line_target
+ cmp edx,vmm_current
+ je done
+ push eax
+ mov eax,edx
+ call vmm_record
+ pop eax
+ mov ecx,SESS_KBD
+ cmp eax,12
+ jne line_flag
+ mov ecx,SESS_MOUSE
+line_flag:
+ test [esi].VMREC.sess,ecx
+ jz pend_line
+ bts [esi].VMREC.pull_lines,eax
+ jmp done
+pend_line:
+ mov ecx,eax
+ mov eax,edx
+ call vmm_pend
+done:
+ popad
+ ret
+cvdev_route_line endp
+
 ; EAX = 1 or 12: EDX = the VM that owns that line now. Preserves the rest.
 vmm_line_target proc
  mov edx,vmm_focus
  cmp eax,12
  jne done
+ cmp vmm_mouse_home,0                   ; the desktop feeds it (DEV_MOUSE)
+ jne home
  push esi
  push eax
  mov eax,edx
@@ -1105,6 +1202,7 @@ vmm_line_target proc
  test [esi].VMREC.sess,SESS_MOUSE
  pop esi
  jnz done
+home:
  xor edx,edx
 done:
  ret
@@ -1240,7 +1338,7 @@ set_owner:
 vmm_pick_audio endp
 
 ; VMM_FOCUS: BX = VM for the keyboard (and the mouse when its session has
-; one).
+; one, unless CX bit 0 keeps the mouse with the system VM).
 vmm_set_focus proc
  movzx eax,word ptr [ebp].Client_Reg_Struc.Client_EBX
  cmp eax,VMM_MAX
@@ -1251,6 +1349,9 @@ vmm_set_focus proc
  pop esi
  jne bad
  mov vmm_focus,eax
+ movzx ecx,word ptr [ebp].Client_Reg_Struc.Client_ECX
+ and ecx,1
+ mov vmm_mouse_home,ecx
  call vmm_input_route
  xor eax,eax
  ret
@@ -1344,8 +1445,11 @@ vmm_irq proc
  cli
  pushad
  inc vmm_ticks
+ xor ebx,ebx                            ; 1: V86 frame, the IRQ0 is reflected
+ cmp ebp,vmm_client_frame               ; into the VM that runs after this
+ sete bl
  cmp vmm_count,2
- jb irq_done
+ jb irq_seen
  call vmm_owe_tick
  ; Jemm also calls this for an IRQ0 that arrived in ring 0 (EBP is not the
  ; V86 client frame then). Switch from the canonical frame at the top of the
@@ -1353,8 +1457,8 @@ vmm_irq proc
  ; waits in its HLT emulation: that frame is then the #GP of the guest's HLT
  ; with EIP already past the F4h opcode, and Jemm returns to V86 through it.
  mov vmm_idle,0
- cmp ebp,vmm_client_frame
- je irq_frame
+ test ebx,ebx
+ jnz irq_frame
  mov ebp,vmm_client_frame
  test ebp,ebp
  jz irq_done
@@ -1366,16 +1470,53 @@ vmm_irq proc
  cmp byte ptr [eax-1],0F4h
  jne irq_done
  mov vmm_idle,1
+ jmp irq_switch                         ; an idle VM gives its slice away now
 irq_frame:
  mov eax,vmm_ticks
  and eax,VMM_SLICE-1
- jnz irq_done
+ jnz irq_seen
+irq_switch:
+ push ebx
  call vmm_switch
+ pop ebx
+irq_seen:
+ ; Its V86 IRQ0 handler (VMM_YIELD) must not count this tick again.
+ test ebx,ebx
+ jz irq_done
+ mov eax,vmm_current
+ bts vmm_seen,eax
 irq_done:
  popad
  popfd
  ret
 vmm_irq endp
+
+; VMM_YIELD (EBP = the API frame, its result already stored): an IRQ0 that
+; the VM's DPMI host reflected to it, the monitor's IRQ0 path having never
+; seen it (the host owned the IDT). Counted, and the slice ends, as there.
+vmm_dpmi_tick proc
+ inc vmm_yield_calls
+ cmp vmm_installed,0
+ je done
+ mov eax,vmm_current
+ btr vmm_seen,eax                       ; reflected by the monitor: counted
+ jc seen
+ inc vmm_ticks
+ cmp vmm_count,2
+ jb done
+ call vmm_owe_tick
+ mov vmm_idle,0
+ mov eax,vmm_ticks
+ and eax,VMM_SLICE-1
+ jnz done
+ inc vmm_yields
+ call vmm_switch
+done:
+ ret
+seen:
+ inc vmm_yield_seen
+ ret
+vmm_dpmi_tick endp
 
 ; CMOS/RTC ports 70h/71h under the VM manager: the index register is shared
 ; hardware, so each VM keeps its own. An access to 71h selects that VM's index
@@ -1490,6 +1631,8 @@ no_stream:
  je owed_none
  mov eax,5
  @VMMCall Host_Scheduler_Profile        ; EDX in service, ECX pending
+ test ecx,(1 shl 1) or (1 shl 12)       ; input before owed timer ticks
+ jnz owed_none
  test ecx,1
  jnz owed_none
  test edx,1
@@ -1499,6 +1642,8 @@ no_stream:
  @VMMCall Host_Scheduler_Profile
  jc owed_none
  dec [esi].VMREC.missed
+ mov eax,vmm_live
+ bts vmm_seen,eax                       ; not a DPMI-host tick (VMM_YIELD)
 owed_none:
  popad
 done:
@@ -1671,6 +1816,25 @@ vmm_dispatch proc
  je op_target
  cmp eax,VM_OP_VMM_LIST
  je op_list
+ cmp eax,VM_OP_VMM_EXIT_CODE
+ je op_exit_code
+ mov eax,VM_ERROR_OPERATION
+ ret
+; VMM_EXIT_CODE: BX = VM -> AX state, DX exit code, CX its generation.
+op_exit_code:
+ movzx eax,word ptr [ebp].Client_Reg_Struc.Client_EBX
+ cmp eax,VMM_MAX
+ jae exit_code_bad
+ call vmm_record
+ mov eax,[esi].VMREC.exit_code
+ mov word ptr [ebp].Client_Reg_Struc.Client_EDX,ax
+ mov eax,[esi].VMREC.generation
+ mov word ptr [ebp].Client_Reg_Struc.Client_ECX,ax
+ mov eax,[esi].VMREC.state
+ mov word ptr [ebp].Client_Reg_Struc.Client_EBX,ax
+ xor eax,eax
+ ret
+exit_code_bad:
  mov eax,VM_ERROR_OPERATION
  ret
 op_focus:

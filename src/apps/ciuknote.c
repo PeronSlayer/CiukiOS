@@ -1,6 +1,6 @@
-/* Notepad for the CiukiOS desktop: the classic Windows Notepad (menus,
+/* CiukNote for the CiukiOS desktop: a classic text editor (menus,
  * shortcuts, dialogs and behaviour) over DOS files. The text lives in its own
- * block of at most 60 KB (Windows 9x Notepad stopped at 64 KB), with CR LF
+ * block of at most 60 KB (Windows 9x CiukNote stopped at 64 KB), with CR LF
  * line ends. Undo is one level and toggles, as in the original. */
 #include "app.h"
 
@@ -19,6 +19,8 @@ static u16 caret, anchor, top, hcol, goal = NONE;
 static u16 ucaret, uanchor;
 static int undo_valid, typing_group;
 static int wrap, status_bar = 1, bold;
+static char np_font[13];                     /* Format > Font: "" the desktop font */
+static int text_style(void) { return (bold ? BOLD : 0) | (np_font[0] ? ALTFONT : 0); }
 static int dirty, closing, dragging;
 static char path[PATH_MAX];
 static char find_text[64], replace_text[64];
@@ -207,7 +209,7 @@ static void undo(void)
     t = tlen; tlen = ulen; ulen = t;
     t = caret; caret = ucaret; ucaret = t;
     t = anchor; anchor = uanchor; uanchor = t;
-    app_log("[NOTEPAD] undo", 0);
+    app_log("[CIUKNOTE] undo", 0);
     if (caret > tlen) caret = tlen;
     if (anchor > tlen) anchor = tlen;
     typing_group = 0;
@@ -359,7 +361,7 @@ static const char *file_name(const char *p)
 static void update_title(void)
 {
     str_copy(app_title, path[0] ? file_name(path) : "Untitled");
-    str_cat(app_title, " - Notepad");
+    str_cat(app_title, " - CiukNote");
 }
 static void time_date(char *out)       /* "6:34 PM 9/29/2026" */
 {
@@ -412,7 +414,7 @@ static int load_file(const char *p)
     undo_valid = 0; typing_group = 0; dirty = 0;
     str_ncopy(path, p, PATH_MAX);
     update_title();
-    app_log("[NOTEPAD] opened", p);
+    app_log("[CIUKNOTE] opened", p);
     /* .LOG: each opening appends the time and date (as in Windows). */
     if (tlen >= 4 && CH(0) == '.' && CH(1) == 'L' && CH(2) == 'O' && CH(3) == 'G') {
         char stamp[40];
@@ -439,7 +441,7 @@ static int save_file(const char *p)
     str_ncopy(path, p, PATH_MAX);
     dirty = 0;
     update_title();
-    app_log("[NOTEPAD] saved", p);
+    app_log("[CIUKNOTE] saved", p);
     return 0;
 }
 
@@ -467,7 +469,7 @@ static struct menu_item format_items[] = {
     { "&Word Wrap", 0, M_WRAP, 0 }, { "&Font...", 0, M_FONT, 0 } };
 static struct menu_item view_items[] = { { "&Status Bar", 0, M_STATUS, 0 } };
 static struct menu_item help_items[] = {
-    { "&Help Topics", "F1", M_HELP, 0 }, { "", 0, 0, MI_SEP }, { "&About Notepad", 0, M_ABOUT, 0 } };
+    { "&Help Topics", "F1", M_HELP, 0 }, { "", 0, 0, MI_SEP }, { "&About CiukNote", 0, M_ABOUT, 0 } };
 static struct menu menus[] = {
     { "&File", file_items, 9 }, { "&Edit", edit_items, 14 }, { "F&ormat", format_items, 2 },
     { "&View", view_items, 1 }, { "&Help", help_items, 3 } };
@@ -520,7 +522,7 @@ static void message(const char *title, const char *text)
 {
     msgbox(&dlg, title, text, "OK");
     dlg_kind = D_MSG;
-    app_log("[NOTEPAD] message", text);
+    app_log("[CIUKNOTE] message", text);
 }
 static void ctl(int i, int type, int x, int y, int w, int h, const char *text, int id)
 {
@@ -534,9 +536,9 @@ static void save_prompt(int action)
     str_copy(msg_buf, "The text in the ");
     str_cat(msg_buf, path[0] ? file_name(path) : "Untitled");
     str_cat(msg_buf, " file has changed.\n\nDo you want to save the changes?");
-    msgbox(&dlg, "Notepad", msg_buf, "Yes|No|Cancel");
+    msgbox(&dlg, "CiukNote", msg_buf, "Yes|No|Cancel");
     dlg_kind = D_SAVE_PROMPT;
-    app_log("[NOTEPAD] dialog", "save changes");
+    app_log("[CIUKNOTE] dialog", "save changes");
     pending = action;
 }
 
@@ -555,7 +557,7 @@ static void find_dialog(int replace)
         ctl(7, DC_BUTTON, 304, 34, 90, 24, "Cancel", 2);
         dialog_show(&dlg, "Find", dc, 8, 410, 92, 1, 2);
         dlg_kind = D_FIND;
-        app_log("[NOTEPAD] dialog", "Find");
+        app_log("[CIUKNOTE] dialog", "Find");
     } else {
         field_set(&f2, b2, 60, replace_text);
         ctl(2, DC_LABEL, 0, 40, 0, 16, "Re&place with:", 0);
@@ -567,7 +569,7 @@ static void find_dialog(int replace)
         ctl(8, DC_BUTTON, 304, 94, 96, 24, "Cancel", 2);
         dialog_show(&dlg, "Replace", dc, 9, 416, 124, 1, 2);
         dlg_kind = D_REPLACE;
-        app_log("[NOTEPAD] dialog", "Replace");
+        app_log("[CIUKNOTE] dialog", "Replace");
     }
     dlg.focus = 1;
 }
@@ -606,7 +608,7 @@ static void not_found(void)
     str_copy(msg_buf, "Cannot find \"");
     str_cat(msg_buf, find_text);
     str_cat(msg_buf, "\"");
-    message("Notepad", msg_buf);
+    message("CiukNote", msg_buf);
 }
 static void do_find_next(int up)
 {
@@ -629,7 +631,7 @@ static void replace_all(void)
         } else o++;
     }
     caret = anchor = 0;
-    { char n[8]; fmt_u32(n, (u32)count); app_log("[NOTEPAD] replaced", n); }
+    { char n[8]; fmt_u32(n, (u32)count); app_log("[CIUKNOTE] replaced", n); }
     if (!count) { undo_valid = 0; not_found(); }
     ensure_visible();
 }
@@ -647,7 +649,7 @@ static void goto_dialog(void)
     ctl(2, DC_BUTTON, 20, 56, 80, 24, "OK", 1);
     ctl(3, DC_BUTTON, 110, 56, 80, 24, "Cancel", 2);
     dialog_show(&dlg, "Go To Line", dc, 4, 230, 86, 1, 2);
-    app_log("[NOTEPAD] dialog", "Go To Line");
+    app_log("[CIUKNOTE] dialog", "Go To Line");
     dlg.focus = 1;
     dlg_kind = D_GOTO;
 }
@@ -658,26 +660,87 @@ static void goto_line(u16 line)
         if (CH(o) == '\n') l++;
         o++;
     }
-    if (l < line) { message("Notepad - Goto Line", "The line number is beyond the total number of lines"); return; }
+    if (l < line) { message("CiukNote - Goto Line", "The line number is beyond the total number of lines"); return; }
     move_caret(o, 0);
     goal = NONE;
     ensure_visible();
 }
 
+/* Font: the desktop's fixed-pitch font, or an installed font (\SYSTEM\FONTS)
+ * drawn through the alternate font slot. */
+#define NP_FONTS 12
+static char font_files[NP_FONTS][13], font_names[NP_FONTS][32];
+static int nfonts, font_first;
+static void font_path(char *out, const char *file)
+{
+    str_copy(out, "C:\\SYSTEM\\FONTS\\");
+    str_cat(out, file);
+}
+static void use_font(void)
+{
+    char p[40];
+    if (!np_font[0]) return;
+    font_path(p, np_font);
+    if (app_font(p, 1)) np_font[0] = 0;       /* gone: the desktop font */
+}
 static void font_dialog(void)
 {
-    ctl(0, DC_LABEL, 0, 0, 0, 16, "Font:", 0);
-    ctl(1, DC_LABEL, 0, 20, 0, 16, "Fixedsys (the desktop font, fixed pitch)", 0);
-    ctl(2, DC_GROUP, 0, 44, 300, 64, "Font style", 0);
-    ctl(3, DC_RADIO, 12, 64, 0, 17, "&Regular", 0); dc[3].group = 1; dc[3].value = !bold;
-    ctl(4, DC_RADIO, 12, 84, 0, 17, "&Bold", 0); dc[4].group = 1; dc[4].value = bold;
-    ctl(5, DC_LABEL, 150, 64, 0, 16, "Size: 10", 0);
-    ctl(6, DC_LABEL, 0, 118, 0, 16, "Sample: AaBbYyZz", 0);
-    ctl(7, DC_BUTTON, 110, 146, 80, 24, "OK", 1);
-    ctl(8, DC_BUTTON, 200, 146, 80, 24, "Cancel", 2);
-    dialog_show(&dlg, "Font", dc, 9, 316, 176, 1, 2);
-    app_log("[NOTEPAD] dialog", "Font");
+    struct dos_find f;
+    char p[40], h[64];
+    int r, i, k;
+    nfonts = 1;
+    str_copy(font_files[0], "");
+    str_copy(font_names[0], "Fixedsys (fixed pitch)");
+    dos_set_dta(&f);
+    for (r = dos_find_first("C:\\SYSTEM\\FONTS\\*.CFN", A_ARCH | A_RDONLY); r >= 0 && nfonts < NP_FONTS; r = dos_find_next())
+        str_ncopy(font_files[nfonts++], f.name, 13);
+    for (i = 1; i < nfonts; i++) {
+        int fh;
+        font_path(p, font_files[i]);
+        fh = dos_open(p, 0);
+        str_copy(font_names[i], font_files[i]);
+        if (fh >= 0) {
+            if (dos_read(fh, h, 64) == 64 && !str_nicmp(h, "CIUKFNT1", 8)) str_ncopy(font_names[i], h + 8, 32);
+            dos_close(fh);
+        }
+    }
+    k = 0;
+    ctl(k++, DC_LABEL, 0, 0, 0, 16, "&Font:", 0);
+    font_first = k;
+    for (i = 0; i < nfonts; i++) {
+        ctl(k, DC_RADIO, (i % 2) * 220, 22 + (i / 2) * 22, 0, 17, font_names[i], 0);
+        dc[k].group = 2;
+        dc[k].value = !str_icmp(np_font, font_files[i]);
+        k++;
+    }
+    r = 22 + ((nfonts + 1) / 2) * 22 + 6;
+    ctl(k++, DC_GROUP, 0, r, 440, 48, "Font style", 0);
+    ctl(k, DC_RADIO, 12, r + 22, 0, 17, "&Regular", 0); dc[k].group = 1; dc[k].value = !bold; k++;
+    ctl(k, DC_RADIO, 132, r + 22, 0, 17, "&Bold", 0); dc[k].group = 1; dc[k].value = bold; k++;
+    ctl(k++, DC_GROUP, 0, r + 58, 440, 52, "Sample", 0);
+    ctl(k++, DC_BUTTON, 264, r + 122, 84, 26, "OK", 1);
+    ctl(k++, DC_BUTTON, 356, r + 122, 84, 26, "Cancel", 2);
+    dialog_show(&dlg, "Font", dc, k, 456, r + 152, 1, 2);
+    app_log("[CIUKNOTE] dialog", "Font");
     dlg_kind = D_FONT;
+}
+static int font_choice(void)
+{
+    int i;
+    for (i = 0; i < nfonts; i++) if (dc[font_first + i].value) return i;
+    return 0;
+}
+static void font_sample(void)
+{
+    int i = font_choice(), b = dc[font_first + nfonts + 2].value, y;
+    int x = dlg.x + 8 + 12, gy = 0;
+    char p[40];
+    for (y = 0; y < dlg.n; y++) if (dc[y].type == DC_GROUP) gy = dc[y].y;
+    y = dlg.y + DIALOG_TITLE_H + 6 + gy + 22;
+    if (!i) { ui_mono(x, y, "AaBbYyZz 0123", C_INK | (b ? BOLD : 0), CELL); return; }
+    font_path(p, font_files[i]);
+    app_font(p, 1);
+    ui_text(x, y, "AaBbYyZz 0123 The quick brown fox", C_INK | ALTFONT | (b ? BOLD : 0));
 }
 
 static void page_dialog(void)
@@ -707,20 +770,20 @@ static void page_dialog(void)
     ctl(16, DC_BUTTON, 250, 142, 80, 24, "OK", 1);
     ctl(17, DC_BUTTON, 340, 142, 80, 24, "Cancel", 2);
     dialog_show(&dlg, "Page Setup", dc, 18, 436, 172, 1, 2);
-    app_log("[NOTEPAD] dialog", "Page Setup");
+    app_log("[CIUKNOTE] dialog", "Page Setup");
     dlg_kind = D_PAGE;
 }
 
 static void about_dialog(void)
 {
-    ctl(0, DC_LABEL, 50, 0, 0, 16, "CiukiOS Notepad", 0);
-    ctl(1, DC_LABEL, 50, 20, 0, 16, "Version 1.0", 0);
+    ctl(0, DC_LABEL, 50, 0, 0, 16, "CiukiOS CiukNote", 0);
+    ctl(1, DC_LABEL, 50, 20, 0, 16, "Version 0.8.0", 0);
     ctl(2, DC_LABEL, 50, 40, 0, 16, "A modern Retro OS", 0);
     ctl(3, DC_LABEL, 50, 66, 0, 16, "Text limit: 61,440 bytes (as Windows 9x: 64 KB).", 0);
     ctl(4, DC_LABEL, 50, 86, 0, 16, "Printing goes to LPT1.", 0);
     ctl(5, DC_BUTTON, 150, 116, 80, 24, "OK", 1);
-    dialog_show(&dlg, "About Notepad", dc, 6, 380, 146, 1, 1);
-    app_log("[NOTEPAD] dialog", "About Notepad");
+    dialog_show(&dlg, "About CiukNote", dc, 6, 380, 146, 1, 1);
+    app_log("[CIUKNOTE] dialog", "About CiukNote");
     dlg_kind = D_ABOUT;
 }
 static const char *help_lines[] = {
@@ -738,7 +801,7 @@ static void help_dialog(void)
     int i;
     for (i = 0; i < 8; i++) ctl(i, DC_LABEL, 0, i * 18, 0, 16, help_lines[i], 0);
     ctl(8, DC_BUTTON, 210, 8 * 18 + 10, 80, 24, "OK", 1);
-    dialog_show(&dlg, "Notepad Help", dc, 9, 500, 8 * 18 + 40, 1, 1);
+    dialog_show(&dlg, "CiukNote Help", dc, 9, 500, 8 * 18 + 40, 1, 1);
     dlg_kind = D_HELP;
 }
 
@@ -820,7 +883,7 @@ static void fd_open(int save)
     ctl(8, DC_BUTTON, 360, FD_LIST_Y + FD_ROWS * 18 + 6, 80, 24, save ? "&Save" : "&Open", 1);
     ctl(9, DC_BUTTON, 360, FD_LIST_Y + FD_ROWS * 18 + 64, 80, 24, "Cancel", 2);
     dialog_show(&dlg, save ? "Save As" : "Open", dc, 10, 456, FD_LIST_Y + FD_ROWS * 18 + 94, 1, 2);
-    app_log("[NOTEPAD] dialog", save ? "Save As" : "Open");
+    app_log("[CIUKNOTE] dialog", save ? "Save As" : "Open");
     dlg.focus = 4;
     dlg_kind = save ? D_SAVEAS : D_OPEN;
 }
@@ -902,8 +965,8 @@ static void fd_accept(void)
         }
         dlg.open = 0;
         r = load_file(full);
-        if (r == 1) message("Notepad", "This file is too large for Notepad.\nNotepad opens files of up to 61,440 bytes.");
-        else if (r) message("Notepad", dos_error_text(r));
+        if (r == 1) message("CiukNote", "This file is too large for CiukNote.\nCiukNote opens files of up to 61,440 bytes.");
+        else if (r) message("CiukNote", dos_error_text(r));
         dlg_kind = dlg.open ? dlg_kind : D_NONE;
         return;
     }
@@ -921,7 +984,7 @@ static void fd_accept(void)
     dlg_kind = D_NONE;
     {
         int r = save_file(full);
-        if (r) { pending = A_NONE; message("Notepad", dos_error_text(r)); return; }
+        if (r) { pending = A_NONE; message("CiukNote", dos_error_text(r)); return; }
     }
     if (pending) run_pending();
 }
@@ -1047,8 +1110,8 @@ static void run_pending(void)
     else if (p == A_EXIT) { closing = 1; app_close(); }
     else if (p == A_OPEN_PATH) {
         int r = load_file(pending_path);
-        if (r == 1) message("Notepad", "This file is too large for Notepad.\nNotepad opens files of up to 61,440 bytes.");
-        else if (r) message("Notepad", dos_error_text(r));
+        if (r == 1) message("CiukNote", "This file is too large for CiukNote.\nCiukNote opens files of up to 61,440 bytes.");
+        else if (r) message("CiukNote", dos_error_text(r));
     }
 }
 static void ask_then(int action)
@@ -1061,7 +1124,7 @@ static void save(void)
     int r;
     if (!path[0]) { fd_open(1); return; }
     r = save_file(path);
-    if (r) message("Notepad", dos_error_text(r));
+    if (r) message("CiukNote", dos_error_text(r));
 }
 static void command(int id)
 {
@@ -1109,7 +1172,7 @@ static void dialog_result(int r)
         if (!path[0]) { fd_open(1); return; }          /* pending stays */
         {
             int e = save_file(path);
-            if (e) { pending = A_NONE; message("Notepad", dos_error_text(e)); return; }
+            if (e) { pending = A_NONE; message("CiukNote", dos_error_text(e)); return; }
         }
         run_pending();
         return;
@@ -1142,7 +1205,12 @@ static void dialog_result(int r)
     }
     if (kind == D_FONT) {
         dlg_kind = D_NONE;
-        if (r == 1) bold = dc[4].value;
+        if (r == 1) {
+            bold = dc[font_first + nfonts + 2].value;
+            str_copy(np_font, font_files[font_choice()]);
+            app_log("[CIUKNOTE] font", np_font[0] ? np_font : "Fixedsys");
+        }
+        use_font();
         return;
     }
     if (kind == D_PAGE) {
@@ -1168,7 +1236,7 @@ static void dialog_result(int r)
         if (r == MB_YES) {
             int e = save_file(pending_path);
             dlg_kind = D_NONE;
-            if (e) { message("Notepad", dos_error_text(e)); return; }
+            if (e) { message("CiukNote", dos_error_text(e)); return; }
             if (pending) run_pending();
         } else fd_open(1);
     }
@@ -1205,16 +1273,16 @@ static void draw_row(u16 s, int y)
         if (x0 < 0) x0 = 0;
         if (x1 > cols) x1 = cols;
         if (x1 > x0) ui_rect(x + x0 * CELL, y, (x1 - x0) * CELL, LINE_H, C_TITLE);
-        ui_mono(x, y, buf, C_INK | (bold ? BOLD : 0), CELL);
+        ui_mono(x, y, buf, C_INK | text_style(), CELL);
         if (x1 > x0) {
             char sel[160];
             int k = 0;
             while (x0 + k < x1 && x0 + k < n) { sel[k] = buf[x0 + k]; k++; }
             sel[k] = 0;
-            ui_mono(x + x0 * CELL, y, sel, C_PAPER | (bold ? BOLD : 0), CELL);
+            ui_mono(x + x0 * CELL, y, sel, C_PAPER | text_style(), CELL);
         }
     } else {
-        ui_mono(x, y, buf, C_INK | (bold ? BOLD : 0), CELL);
+        ui_mono(x, y, buf, C_INK | text_style(), CELL);
     }
 }
 static void hscroll_draw(int x, int y, int w, int pos, int total, int page)
@@ -1234,11 +1302,13 @@ static void hscroll_draw(int x, int y, int w, int pos, int total, int page)
     tx = (int)((long)(track - tw) * pos / (total - page));
     ui_bevel(x + 16 + tx, y, tw, 16, C_FACE);
 }
+static void use_font(void);
 static void paint(void)
 {
     int i, y;
     u16 r;
     layout();
+    use_font();                                  /* the alternate slot is shared */
     update_menus();
     bar.x = HOST.x + 3; bar.y = HOST.y + TITLE_H; bar.w = HOST.w - 6;
     ui_rect(ex - 1, ey - 1, ew + 18, eh + 2, C_FACE);
@@ -1282,11 +1352,13 @@ static void paint(void)
     }
     menubar_draw(&bar);
     if (context.open) popup_draw(&context);
-    if (dlg.open) {
-        dialog_draw(&dlg);
-        if (dlg_kind == D_OPEN || dlg_kind == D_SAVEAS) fd_draw();
-        if (dlg_kind == D_ABOUT) ui_icon(dlg.x + 10, dlg.y + DIALOG_TITLE_H + 8, ICON_EDITOR);
-    }
+}
+static void paint_dialog(void)
+{
+    dialog_draw(&dlg);
+    if (dlg_kind == D_OPEN || dlg_kind == D_SAVEAS) fd_draw();
+    if (dlg_kind == D_FONT) font_sample();
+    if (dlg_kind == D_ABOUT) ui_icon(dlg.x + 10, dlg.y + DIALOG_TITLE_H + 8, ICON_EDITOR);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1322,7 +1394,8 @@ static int on_mouse(int kind, int x, int y)
     int sx = HOST.x + x, sy = HOST.y + TITLE_H + y, r;
     layout();
     if (dlg.open) {
-        if ((dlg_kind == D_OPEN || dlg_kind == D_SAVEAS) && fd_mouse(kind, sx, sy)) return 1;
+        dialog_place(&dlg);
+        if (dialog_mine(&dlg) && (dlg_kind == D_OPEN || dlg_kind == D_SAVEAS) && fd_mouse(kind, sx, sy)) return 1;
         r = dialog_mouse(&dlg, kind, sx, sy);
         if (r >= 0) dialog_result(r);
         return 1;
@@ -1509,7 +1582,28 @@ static void release_memory(void)
     tseg = useg = cseg = 0;
 }
 
+static int notepad_event(int ev, int a, int b, int c);
 int app_event(int ev, int a, int b, int c)
+{
+    int r, orig = ev;
+    if (ev == EV_OPEN && a == 2) { dlg.win = 0; dialog_sync(&dlg); return 1; }
+    r = dialog_pre(&dlg, WIN_NOTEPAD, &ev, &a);
+    if (r >= 0) return r;
+    if (dialog_mine(&dlg) && ev == EV_PAINT) { paint_dialog(); return 0; }
+    if (ev == EV_MOUSE && a == MOUSE_HOVER) {
+        int sx = HOST.x + b, sy = HOST.y + TITLE_H + c;
+        ui_dirty = 0;
+        if (dialog_mine(&dlg)) dialog_hover(&dlg, sx, sy);
+        else if (dlg.open) return 0;
+        else if (context.open) popup_mouse(&context, MOUSE_HOVER, sx, sy);
+        else if (menubar_open(&bar)) { layout(); menubar_mouse(&bar, MOUSE_HOVER, sx, sy); }
+        return ui_dirty;
+    }
+    r = notepad_event(ev, a, b, c);
+    r = dialog_post(&dlg, WIN_NOTEPAD, ev, r);
+    return orig == EV_CLOSE && ev != EV_CLOSE ? 0 : r;   /* a dialog's close box */
+}
+static int notepad_event(int ev, int a, int b, int c)
 {
     switch (ev) {
     case EV_OPEN:
@@ -1526,7 +1620,12 @@ int app_event(int ev, int a, int b, int c)
             APP_ARG[0] = 0;
             if (a == 1 || !dirty) {
                 int r = load_file(arg);
-                if (r == 1) message("Notepad", "This file is too large for Notepad.\nNotepad opens files of up to 61,440 bytes.");
+                if (r < 0) {
+                    char error_code[8];
+                    fmt_u32(error_code, (u32)-r);
+                    app_log("[CIUKNOTE] open error", error_code);
+                }
+                if (r == 1) message("CiukNote", "This file is too large for CiukNote.\nCiukNote opens files of up to 61,440 bytes.");
                 else if (r && a != 1) {
                     /* A new name: an empty document that will be saved there. */
                     new_document();

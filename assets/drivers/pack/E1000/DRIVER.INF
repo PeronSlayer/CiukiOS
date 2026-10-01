@@ -1,0 +1,8 @@
+[Driver]
+Name=E1000
+Class=NET
+Version=1
+Description=Intel PRO/1000 82540EM packet driver
+Files=E1000.COM
+Load=E1000.COM %PKT%
+Hardware=8086:100E

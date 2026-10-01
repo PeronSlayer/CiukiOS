@@ -1,0 +1,8 @@
+[Driver]
+Name=PCNET
+Class=NET
+Version=1
+Description=Crynwr NE2100 / AMD PCnet PCI
+Files=NE2100.COM
+Load=NE2100.COM %PKT% %IRQ% %IO%
+Hardware=1022:2000

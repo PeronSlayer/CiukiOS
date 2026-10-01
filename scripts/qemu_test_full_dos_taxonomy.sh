@@ -515,12 +515,19 @@ shell_prompt_seen() {
 wait_for_shell_prompt() {
   local file="$1"
   local timeout_sec="$2"
-  local start now
+  local start now dos_key_sent=0
   start="$(date +%s)"
 
   while true; do
     if shell_prompt_seen "$file"; then
       return 0
+    fi
+
+    if [[ "${DOS_TAXONOMY_ENTER_DOS_ON_DESKTOP:-0}" == "1" \
+      && "$dos_key_sent" == "0" ]] \
+      && normalized_log_matches_fixed "$file" '[DESKTOP] READY'; then
+      send_key "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" f4 || true
+      dos_key_sent=1
     fi
 
     now="$(date +%s)"

@@ -1,0 +1,8 @@
+[Driver]
+Name=FDAPM
+Class=POWER
+Version=1
+Description=FreeDOS advanced power management
+Files=FDAPM.COM
+Load=FDAPM.COM APMDOS
+Hardware=

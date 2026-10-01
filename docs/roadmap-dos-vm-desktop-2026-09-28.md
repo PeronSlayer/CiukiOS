@@ -10,6 +10,12 @@ CVSESSION) is resident from boot. The desktop is the system VM. Every DOS
 program is a VM in its own window with the virtual VGA, keyboard, mouse,
 Sound Blaster 16/OPL3 and a DPMI host. Nothing is started by hand.
 
+QEMU is only the external PC used for development and repeatable tests; no
+QEMU component runs inside CiukiOS. On an x86 PC, DOS instructions run on the
+processor in virtual 8086 mode, and DOS extenders use the DPMI host. The VMM
+provides the device behavior needed while the desktop and other DOS programs
+remain active.
+
 ## Phase 1 — resident VM manager, seamless single DOS window
 
 1. Remove Windows 3.1 from the build, the desktop and the tests.
@@ -59,6 +65,13 @@ OpenGL is software rendering: Mesa built for 32-bit DOS clients, exposed as
 a system library, with conformance tests. Complete API coverage is the goal;
 speed is bounded by the CPU.
 
+**2026-10-01 first implementation:** the image now packages a pinned,
+OpenWatcom-built TinyGL 0.4.1 static library and a DOS/4GW demo. A QEMU M4
+window displays a coloured software-rendered triangle and exits on Escape.
+This is an OpenGL-style subset, not a completed Mesa port or a claim of full
+OpenGL conformance. The native application decision and limits are in
+[the implementation record](native-apps-and-opengl-2026-10-01.md).
+
 ## Status
 
 - 2026-09-28: DOS/4GW games with devices in the DOS window (launcher based)
@@ -92,10 +105,22 @@ speed is bounded by the CPU.
   reproducible. Both are in the profile (23/23) — same record, section 6.
 - 2026-09-29 (later): desktop applications as modules hosted by SHELL.COM
   — [record](desktop-apps-2026-09-29.md):
-  - Files (Explorer/Dolphin style), a complete Windows Notepad and a
+  - Files (Explorer/Dolphin style), CiukNote and CiukPaint, and a
     detailed Task Manager (with the VMs);
   - the Windows key shortcuts, and Ctrl+Alt+Del opening Task Manager;
   - kernel date and time read from the RTC.
 
   This covers phase 4: the folder tree, drag and drop, copy/move/delete/
   rename, new folder, properties and open-with.
+- 2026-09-30: M4 complete for its QEMU scope. `DOSVM.APP` now owns native DOS
+  windows and presents each guest's video into the desktop compositor. In
+  QEMU, DOOM reaches gameplay while Files stays open, and two text DOS VMs
+  remain independent when one window closes. The old in-shell callback
+  manager is no longer linked into `SHELL.COM`. A focused QEMU run passed
+  DOOM rendering, direct bounded close, two text VMs and independent close.
+  The stronger click-focus gate passed on the final clean image. Replacement
+  behavioral gates for the module cover text, VGA, guest mouse/audio, DPMI,
+  Task Manager VM controls and both DOOM variants. The full 0.8.0 profile
+  passes **26/26** gates, including HDPMI lifetime. The full-screen DOS prompt
+  works on the shipped resident-manager image; see the
+  [M4 evidence](validation/2026-09-30-m4/README.md).

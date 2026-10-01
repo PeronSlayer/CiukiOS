@@ -1,0 +1,15 @@
+CiukWeb in CiukiOS 0.8.0
+
+Start networking once after boot: NETSTART
+Open Application Library > Applications > CiukWeb, enter an HTTP URL,
+then select Go. Files also opens .HTM and .HTML with CiukWeb.
+
+CiukWeb is a native CiukiOS desktop module written in C. It renders simple
+HTML text and absolute HTTP links. The bundled mTCP HTGET.EXE supplies the
+HTTP download until CiukiOS has a native TCP client service. HTGET is also
+available directly:
+  HTGET -o C:\SHARE\PAGE.HTM http://example.com/
+
+This first browser does not support HTTPS, CSS, JavaScript or images.
+HTTP traffic is not encrypted. The earlier MicroWeb DOS prototype is no
+longer preinstalled.

@@ -1,0 +1,10 @@
+{
+  "image": "/home/peronslayer/Desktop/CiukiOS/build/full/ciukios-full.img",
+  "checks": {
+    "save": true,
+    "valid_disk_record_save": true,
+    "read_after_reboot": true,
+    "delete": true,
+    "valid_disk_record_read-delete": true
+  }
+}

@@ -40,6 +40,7 @@ start:
     call startup_display_services
     call startup_driver_services
     call startup_select_session
+    call startup_long_names
     test al,al
     jnz main_loop
     call startup_vm_manager
@@ -3157,7 +3158,7 @@ apm_shutdown_system:
     pop bx
     ret
 
-msg_title_bar db 'CiukiOS pre-Alpha v0.7.1', 0x0D, 0x0A, '$'
+msg_title_bar db 'CiukiOS pre-Alpha v0.8.0', 0x0D, 0x0A, '$'
 msg_banner_body db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
                 db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
@@ -3180,7 +3181,7 @@ msg_help    db '+------------------------ CiukiOS command guide ----------------
             db '|    ICMP remains active after FTPSRV stops; TAP enables host ping       |', 0x0D, 0x0A
             db '+------------------------------------------------------------------------+', 0x0D, 0x0A
             db 'Power queue: SHUTDOWN/REBOOT <seconds|STATUS|CANCEL>. EXIT is disabled.', 0x0D, 0x0A, '$'
-msg_ver     db 'CiukiOS pre-Alpha v0.7.1', 0x0D, 0x0A, '$'
+msg_ver     db 'CiukiOS pre-Alpha v0.8.0', 0x0D, 0x0A, '$'
 msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
 msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
                   db 'use reboot or shutdown', 0x0D, 0x0A, '$'

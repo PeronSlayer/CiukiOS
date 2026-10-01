@@ -1,0 +1,8 @@
+[Driver]
+Name=HELLO
+Class=SAMPLE
+Version=1.0
+Description=Sample resident driver (INT 2Fh AX=C000h).
+Files=HELLO.COM,README.TXT
+Load=HELLO.COM
+Hardware=

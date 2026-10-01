@@ -2,8 +2,9 @@
 
 # CiukiOS
 
-CiukiOS is dedicated to **Ciuki**, the dog in the boot splash. Its logo is a
-stylized portrait of him; see the [Ciuki visual identity](assets/brand/README.md).
+CiukiOS is dedicated to **Ciuki**, the dog in the boot splash. Its logo uses
+the owner's approved portrait of him, converted deterministically for the
+renderer; see the [Ciuki visual identity](assets/brand/README.md).
 The [official system icons](assets/icons/README.md) use the Public Domain
 Tango 0.8.90 family, with Ciuki's approved portrait on identity icons.
 
@@ -15,26 +16,40 @@ CiukiOS is not a finished operating system. It is an active learning and researc
 
 ## Current Milestone
 
-Current public version: `CiukiOS pre-Alpha v0.7.1`.
+Current development version: `CiukiOS pre-Alpha v0.8.0`.
 
-**DOS windows as virtual machines (2026-09-29).** The development image starts
-a resident VM manager at boot, and several DOS programs run at once, each in
-its own V86 virtual machine:
+The [current project status](docs/project-status-2026-10-01.md) separates
+working features, QEMU evidence and open work. In particular, Windows 95/98
+PE programs are detected but cannot run, CiukWeb is an early HTTP browser,
+and the OpenGL path currently renders in software.
+
+**DOS windows as virtual machines (M4 complete in QEMU, 2026-09-30).** The development
+image starts a resident VM manager at boot. The current implementation runs DOS
+programs in separate V86 virtual machines:
 - Each VM has private conventional memory and BIOS RAM, and its own virtual
   VGA, keyboard, mouse, PIC/PIT, DMA, SB16 and OPL model.
-- The keyboard and the mouse follow the focus. Ctrl+Esc gives the keyboard
-  back to the desktop.
+- Ctrl+Esc returns keyboard focus to the desktop. The focused QEMU M4 gate
+  also passes click focus between two DOS VMs after closing DOOM.
 - One AC'97 stream plays the focused session's sound. The other sessions keep
   running muted in real time.
 - Clocks, file I/O from several VMs, and ending or killing a VM are covered by
   gates.
 
-Phase 2 milestones M1-M3 pass on QEMU. The complete VM profile passes 21/21,
+Phase 2 milestones M1-M3 pass on QEMU. Their complete VM profile passed 21/21,
 and the VM-manager gate passes 10/10 parts
 ([evidence](docs/validation/2026-09-29-boot-and-m3/README.md),
 [design](docs/design-multi-vm-2026-09-28.md),
-[roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md)). The desktop does not yet
-paint each VM's session in its own window: that is M4.
+[roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md)). M4 now paints each VM
+session in a desktop window, including DOOM with Files open. Its focused
+multi-window QEMU gate passes rendering, focus, input and bounded close for
+both original DOOM and doom-vanille on the final development image. The last
+guest I/O gate passed real DOS INT 33h mouse movement and clicks,
+SB16/OPL output and captured PCM audio
+([evidence](docs/validation/2026-09-30-m4/README.md)). The updated full
+VM-window profile passes **26/26** gates on the 0.8.0 image, including text,
+VGA, guest I/O, DPMI, Task Manager VM controls, original DOOM,
+doom-vanille, DOS memory and desktop applications. This completes M4's
+tested QEMU scope; physical hardware remains unqualified.
 
 The boot now goes from the splash straight to the desktop, with the startup
 melody and no text screen. Windows 3.1 support was removed on 28 September
@@ -44,8 +59,10 @@ melody and no text screen. Windows 3.1 support was removed on 28 September
 - **Files:** Explorer/Dolphin style, with Places, address bar, Details,
   Icons and List views, right-click menus, new folder, cut/copy/paste,
   rename, delete, properties and removable media.
-- **Notepad:** the Windows Notepad, with every menu, Find/Replace, Go To,
+- **CiukNote:** a classic desktop text editor with Find/Replace, Go To,
   Time/Date, `.LOG`, Page Setup and Print to LPT1.
+- **CiukPaint:** an original bitmap editor with drawing tools, selections,
+  undo and BMP import/export.
 - **Task Manager:** Applications, Processes, Virtual Machines and
   Performance with CPU history.
 
@@ -59,7 +76,9 @@ Shortcuts:
 
 See [the record](docs/desktop-apps-2026-09-29.md).
 
-Selected desktop image, **2026-09-26**: the native desktop includes Files, Tasks,
+### Historical desktop snapshot — 26 September 2026
+
+The selected desktop image from **2026-09-26** includes Files, Tasks,
 Display, Sound and Wallpaper windows. CD-ROM, floppy and BIOS-exposed disks
 open in Files for read-only browsing, text preview and file import. USB must be
 exposed by firmware before boot; there is no native USB hot-plug stack.
@@ -69,10 +88,10 @@ patterns; the owner's Windows wallpapers remain an optional personal payload.
 Kenney CC0 event sounds play through native ICH AC97 or supported Sound Blaster
 hardware, with graphical previews, mute and explicit failure messages.
 
-The DOS window runs one restricted BIOS-text foreground process through the
+At that date, the DOS window ran one restricted BIOS-text foreground process through the
 actual DOS kernel. The Doom and Wolf3D window previews are cooperative source
-ports, with no game audio. **Original DOS graphics programs with audio do not
-yet run in native windows.** Ctrl/Space qualification concerns the Doom preview;
+ports, with no game audio. Original DOS graphics programs with audio did not
+yet run in native windows. Ctrl/Space qualification concerns the Doom preview;
 it is not evidence for the original game. An isolated monitor experiment now
 provides shadow video, bounded DPMI port/memory probes and protected framebuffer
 copying; complete desktop presentation and peripheral ownership remain open. F4 retains the
@@ -150,8 +169,8 @@ Validation snapshot (2026-09-01): the Phase 5 loader/kernel ownership boundary a
 
 Current work follows the [DOS-window roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md), phase 2 (several DOS windows at once):
 
-1. M4: the desktop paints each VM's session in its own window and sets the focus with a click; the DOS-window manager moves out of SHELL.COM
-2. M5: a DPMI host per VM
+1. M4 completed on QEMU: the desktop paints each VM's session in its own window and sets the focus with a click; the DOS-window manager moved out of SHELL.COM
+2. M5: broaden and qualify the DPMI host across simultaneous protected-mode VM workloads
 3. qualify original-binary video/audio, clean return and measured performance, followed by separate T23/E500 checks
 
 The wider compatibility backlog remains:
@@ -163,6 +182,208 @@ The wider compatibility backlog remains:
 5. retaining the verified original Doom OPL2/PC-speaker and doom-vanille OPL2/SB16 paths while keeping the unresolved original Doom SB16/DMX behavior explicitly separate
 6. keeping the bounded Packet Driver/IPv4/FTP lane green while DHCP, other NICs, encrypted protocols, and physical networking remain explicit Phase 8 follow-ups
 7. DOS applications in desktop windows, Windows 95/98 style (resident VM manager, several DOS windows, control panel, file manager): see `docs/roadmap-dos-vm-desktop-2026-09-28.md`
+
+## Development changelog and QEMU screenshots
+
+This record follows the dated commits and validation runs. Development time was
+not logged in hours, so the dates and debugging detours below describe the
+effort without inventing a total. All screenshots are unedited QEMU captures;
+[capture provenance](docs/screenshots/0.8.0/README.md) lists the source run for
+each one. Physical PCs have not been qualified by these images.
+
+### 1 October 2026 — desktop top bar
+
+The Ciuki portrait and name now open the system menu from the upper left.
+The lower bar is reserved for the Application Library and running windows;
+the duplicate CiukiOS and DOS buttons were removed. The upper right uses
+one aligned strip for volume, network, CPU, free conventional memory and disk
+activity. Each section is clickable: volume opens Sound, network opens its
+IP configurator, and the three system readings open Task Manager's
+Performance page. The indicators use small meters and change colour on
+activity; `--` means that no supported volume mixer was found. The wallpaper
+no longer carries a resolution label or tagline overlay.
+
+About now separates the system components, project credits and approved
+dedication into readable sections. Network settings can save IPv4, DNS,
+host name and Ethernet MTU; invalid masks, names and MTUs are rejected before
+the profile is changed. The adapter section shows detected PCI hardware,
+resources, packet API and MAC address. Its buttons rescan devices, open the
+matching Network adapters view in Device Manager, open installed network
+drivers for enable/disable, or request DHCP. Driver changes take effect after
+a restart. The DHCP action starts the Ciuki network service when needed and
+returns to the desktop after saving the lease. These are QEMU captures of the
+current development image; [network settings and limits](docs/network-settings-2026-10-01.md)
+describes the controls and their runtime behavior.
+
+| Refined desktop and system menu | About and network settings |
+| --- | --- |
+| ![Desktop with ordered system readings](docs/screenshots/0.8.0/desktop.png)<br>Unified top bar with separate activity and resource readings. | ![CiukiOS system menu](docs/screenshots/0.8.0/ciuki-menu.png)<br>The Ciuki portrait and name open the system menu. |
+| ![About CiukiOS](docs/screenshots/0.8.0/about.png)<br>Version, component credits, GPL notice and dedication. | ![Network settings](docs/screenshots/0.8.0/network-settings.png)<br>IPv4, advanced fields and the detected adapter. |
+| ![Network adapter in Device Manager](docs/screenshots/0.8.0/network-adapter.png)<br>The Network button selects the detected adapter. | ![Installed network drivers](docs/screenshots/0.8.0/network-drivers.png)<br>NE2000 disabled; the next QEMU boot omits its load. |
+
+### 1 October 2026 — fixed recording window and native web page
+
+The recording runner sizes QEMU before CiukiOS boots, then keeps a 1280×800
+client window while the guest switches between its 1024×768 desktop, DOS text
+and VGA modes. It uses
+KVM, QEMU's user-mode Internet NAT, NE2000, sound and GTK OpenGL display
+presentation. The OpenGL setting uses the host graphics path; DOS software
+still sees an emulated VGA card. The existing `--vga-fast` profile remains an
+optional experiment for verified Doom-vanille workloads. Its current
+sound-off fullscreen timedemo passed at 194 realtics for 350 gametics; that
+result does not measure original Doom or a windowed game.
+
+The full image includes `HTGET` and **CiukWeb**, a native C desktop module.
+In QEMU, it fetched `http://example.com/` through the existing mTCP utility
+and displayed the page in its own desktop window. Application Library opens
+CiukWeb directly; MicroWeb is no longer preinstalled. CiukWeb handles its
+window and simple HTML text in native code while TCP retrieval still uses
+HTGET. [Recording and web instructions](docs/qemu-recording-and-web-2026-10-01.md)
+describe the first HTTP-only workflow and its limits.
+
+![CiukWeb showing a public HTTP page](docs/screenshots/0.8.0/ciukweb.png)
+
+### 1 October 2026 — native C applications and software OpenGL
+
+C/OpenWatcom is the selected language for desktop `.APP` modules and 32-bit
+DOS/4GW programs. The image now includes a SHA-256-pinned TinyGL static
+library, header, license and a demo under `C:\SYSTEM\GL` and
+`C:\PROGRAMS\CiukGL`. In QEMU, the software renderer drew a coloured
+triangle inside an M4 DOS window, then returned on Escape. This is an
+OpenGL-style subset for DOS programs, with no guest GPU acceleration or
+Win32 DLL compatibility. The [native app and graphics plan](docs/native-apps-and-opengl-2026-10-01.md)
+records the current executable formats and remaining SDK work.
+
+![TinyGL software triangle in a DOS window](docs/screenshots/0.8.0/opengl-triangle.png)
+
+### 1 October 2026 — live drawing and DOS window repaint
+
+The desktop now presents a module's queued damage before it polls a DOS VM
+or sleeps. CiukPaint's QEMU gate captures a pencil mark while the mouse
+button remains pressed. DOSVM also redraws only the horizontal range of
+video bands reported as changed by CVSESSION, which reduces unnecessary
+painting for quieter DOS screens. With a text DOS window open, QEMU consumed
+a visible pointer move in 0.122 s, versus 0.063 s on the idle desktop in
+the same gate. A second QEMU gate launched DOOM directly into level 1 and
+measured 0.185 s with the game rendering versus 0.058 s on the desktop in
+that run; its capture and measurements are in
+[the validation notes](docs/validation/2026-10-01-native-app-gl/README.md).
+
+Forked DOS windows now calibrate their TSC against the firmware timer before
+starting virtual video and audio. A BIOS-tick-only measurement could report
+an impossible rate when virtual ticks arrived late, making some COM/MZ
+programs exit before their first instruction. The corrected QEMU text,
+mouse/audio and VGA-window gates pass; the complete VM profile is recorded
+as 26/26 combined gates on the current image in
+[the validation notes](docs/validation/2026-10-01-native-app-gl/README.md).
+The SB16 path also now delivers a virtual DMA-completion IRQ in the same
+audio service pass that renders the PCM buffer; the DOOM Vanille SFX gate
+passes with a recorded non-silent WAV stream.
+
+![CiukPaint stroke visible during the drag](docs/screenshots/0.8.0/ciukpaint-live-stroke.png)
+
+### 0.8.0 development work — 30 September 2026
+
+- **Desktop and identity.** The current desktop has drawn window controls,
+  hover and disabled states, context menus, customizable settings, a Recycle
+  Bin and the approved Ciuki portrait. The About window identifies the native
+  CiukiDOS kernel, desktop and VM manager, credits key open-source components,
+  names [Alcybercloud.it](https://www.alcybercloud.it/it), states the project's GPLv2 license and carries
+  the dedication to Ciuk approved by the owner.
+- **Files and long names.** A resident FAT16 long-name extension implements
+  `INT 21h` 71xxh calls; Files and the desktop can create, rename, copy,
+  recycle and restore names beyond 8.3. The former 8.3-only path is no longer
+  the UI limit. QEMU long-name and filesystem checks passed on the final M4
+  integration image.
+- **Creative tools.** Notepad became **CiukNote**. **CiukPaint** was added as
+  an original bitmap editor with drawing tools, selections, undo, text and BMP
+  import/export. Its focused QEMU gate passed on the final image.
+- **Devices.** Device Manager, driver installation UI and a packaged catalog
+  of licensed era drivers were added. The QEMU driver-pack checks cover
+  supported virtual NICs and failure handling on the final image; the catalog records the load
+  rules and redistribution terms. QEMU coverage is not a claim about every
+  physical PC from that era.
+- **DOS windows (M4).** Original DOOM and doom-vanille reach
+  gameplay in their own forked VMs while Files stays open. The focused QEMU
+  gate passes bounded close,
+  two text VMs, click focus, keyboard routing and independent close; Run
+  responded 0.74 s after the click in that gate. The replacement behavioral
+  harnesses and full 0.8.0 profile now pass **26/26** gates. QEMU runs
+  native x86/V86 DOS execution in
+  CiukiOS; QEMU is the external test machine, not an emulator inside the OS.
+  A separate DOS guest I/O gate passed INT 33h mouse movement and clicks,
+  SB16/OPL playback and measurable PCM capture.
+
+| Desktop and applications | More of the 0.8.0 work |
+| --- | --- |
+| ![Long names in Files](docs/screenshots/0.8.0/long-names.png)<br>Long file and folder names on FAT16. | ![CiukPaint](docs/screenshots/0.8.0/ciukpaint.png)<br>Original drawing tools and a test drawing. |
+| ![Files Properties](docs/screenshots/0.8.0/files.png)<br>Files remains usable with an independent Properties window. | ![Desktop context menu](docs/screenshots/0.8.0/desktop-menu.png)<br>Desktop context menu with New Folder and New Text Document. |
+| ![Device Manager](docs/screenshots/0.8.0/device-manager.png)<br>Detected devices and driver-management entry points. | ![Task Manager](docs/screenshots/0.8.0/task-manager.png)<br>Virtual Machines tab with a selected DOS guest and focus/end controls. |
+
+| DOS applications in their own VMs | Two simultaneous DOS windows |
+| --- | --- |
+| ![DOOM running in a DOS window with Files open](docs/screenshots/0.8.0/doom-window.png)<br>DOOM gameplay while Files stays open; its VM closes independently. | ![Two native DOS VMs](docs/screenshots/0.8.0/two-dos-vms.png)<br>Two DOS prompts with separate VM focus and memory. |
+
+These captures accompany the passing focused
+[M4 gates and full 26/26 profile](docs/validation/2026-09-30-m4/README.md).
+
+### After M4: TestGames and settings storage
+
+The desktop now has a **TestGames** folder with launchers for the DOS games
+used in the QEMU profiles. Files opens those programs in M4 DOS windows; the
+game data remains in its existing installation directory. Application Library
+shows system applications and an Installed page leading to `C:\PROGRAMS`,
+which starts empty; automatic registration of installed programs is pending.
+New image directories place configuration under
+`C:\SYSTEM\CONFIG` and optional probes under `C:\SYSTEM\TEST`.
+Wolf4GW currently reaches its sign-on screen but loses desktop mouse input in
+QEMU; this compatibility defect remains open.
+The extended game check exposed the problem after DOOM had passed M4. We
+removed two obsolete desktop-port launchers when their older adapter failed
+inside M4, contained unknown guest PS/2 commands inside the virtual controller,
+and kept Wolf4GW as an explicit open case. No unrecorded development hours are
+assigned to this detour.
+
+Control Panel gained **Settings Registry**, an original CiukiOS editor for
+persistent string, DWORD and binary values. A QEMU test saves a value, reboots,
+reads it and deletes it. This storage is a foundation for future installer
+work. General Windows 95/98 EXE and installer support is still open: a free
+PE32 test program is recognized and shown as unsupported without hanging a
+DOS VM. The [compatibility and layout note](docs/windows-compatibility-and-layout-2026-09-30.md)
+records the missing runtime pieces and the free tests selected for them.
+
+| TestGames and DOS launch | Settings Registry |
+| --- | --- |
+| ![TestGames folder in Files](docs/screenshots/0.8.0/testgames-folder.png)<br>Launchers for DOOM, DOOM Vanille and Wolfenstein 3D in one desktop folder. Wolfenstein still has an M4 mouse and close defect. | ![Ciuki Settings Registry](docs/screenshots/0.8.0/settings-registry.png)<br>A saved value read back after a reboot. |
+| ![DOOM launched from TestGames](docs/screenshots/0.8.0/doom-from-testgames.png)<br>DOOM starts in a native DOS VM from Files, which stays open. | ![Win32 compatibility status](docs/screenshots/0.8.0/win32-status.png)<br>A free PE32 probe is recognized and receives an honest unsupported message; Win32 APIs remain to be implemented. |
+
+### How the project reached this point
+
+- **May–July 2026:** CiukiDOS gained FAT16 file creation, shell and program
+  execution checks, VBE banked graphics and game timer/keyboard services.
+  WOLF3D and DOOM regressions exposed loader, video and DOS memory faults.
+  In July, tracing a DOOM launch failure found a leaked trap flag in the
+  `INT 21h` allocation search; fixing the cause restored that path.
+- **1 September 2026 — v0.7.1:** the first documented compatibility release
+  closed its selected milestones. The older [changelog](CHANGELOG.md) retains
+  detailed entries and their original dates.
+- **26–27 September:** the native graphical desktop, media access, wallpaper
+  and sounds arrived. Jemm386/CVSESSION gained monitored V86 video, a
+  negotiated virtual-interrupt profile and guest keyboard, mouse and audio
+  devices. QEMU tests caught lost IRQ1, extra timer interrupts and video
+  frames painted to a hidden page; each required a separate fix.
+- **29 September:** phase 2 M1–M3 gave several DOS VMs private conventional
+  memory and sessions. Files, the text editor and Task Manager moved into
+  desktop modules. M4 then moved DOS-window ownership out of SHELL.COM so
+  each window could display its own forked VM.
+- **30 September:** the long-name work hit both the 43,264-byte kernel ceiling
+  and the 64 KiB module group limit. The resident extension and module-memory
+  changes made the feature fit. M4 also exposed a narrow HDPMI image-size
+  boundary and a physical IRQ path that overwrote the game's EAX register;
+  the build now checks that boundary and the IRQ handler saves the register.
+  The subsequent input fix restored click focus between DOS windows and
+  forwarded desktop mouse packets into an inherited DOS INT 33h driver;
+  original DOOM, doom-vanille and the guest I/O gate now pass that path.
 
 ## Quick Start
 
@@ -191,11 +412,23 @@ At the CiukiOS prompt, type `costa`. Set `CIUKIOS_FETCH_COSTA=0` only when inten
 
 For a Doom-vanille performance session, use `bash scripts/build_run_full.sh --vga-fast`. On QEMU 11.1 this opt-in profile must not be used for the local original Doom binary; the normal command keeps the stable KVM default.
 
+For a fixed-size video recording window after building the image:
+
+```bash
+bash scripts/qemu_record_full.sh
+```
+
+Use `--build` to rebuild first, or `--size 1440x900` to choose another fixed
+client size. `--vga-fast` is available only for the measured Doom-vanille
+experiment; original Doom stays on KVM. The runner needs an X11/XWayland
+display and `xdotool`.
+
 To share files with the host, run `NETSTART` and `FTPSRV`, then connect from Linux or Windows to `ftp://127.0.0.1:8021/` with `ciukios` / `ciukios`. See the network section below for exact commands.
 
 Build the main FAT16 disk image:
 
 ```bash
+make fetch-network-stack fetch-microweb
 make build-full
 ```
 
@@ -229,7 +462,7 @@ Run the active aggregate validation lane:
 make qemu-test-all
 ```
 
-Generated images are written under `build/full/`. The main full-profile disk image is `build/full/ciukios-full.img`; the primary Live/install CD image is also emitted with its release version (for v0.7.1: `build/full/CiukiOS_full_cd_0-7-1.iso`), while `build/full/ciukios-full-cd.iso` remains the stable alias. The release CD uses GRUB4DOS to load a compressed 44.5 MiB image into a 96 MiB RAM disk before CiukiOS starts, so `SETUP.COM` clones RAM to HDD. Its recovery menu loads the uncompressed image through GRUB. `build/full/ciukios-full-cd-isolinux.iso` retains the original loader for diagnostics; `build/full/ciukios-full-cd-direct.iso` retains the direct-ATAPI diagnostic path.
+Generated images are written under `build/full/`. The main full-profile disk image is `build/full/ciukios-full.img`; the primary Live/install CD image is also emitted with its version (`build/full/CiukiOS_full_cd_0-8-0.iso`), while `build/full/ciukios-full-cd.iso` remains the stable alias. The release CD uses GRUB4DOS to load a compressed 44.5 MiB image into a 96 MiB RAM disk before CiukiOS starts, so `SETUP.COM` clones RAM to HDD. Its recovery menu loads the uncompressed image through GRUB. `build/full/ciukios-full-cd-isolinux.iso` retains the original loader for diagnostics; `build/full/ciukios-full-cd-direct.iso` retains the direct-ATAPI diagnostic path.
 
 ## Active Profiles
 
@@ -373,6 +606,13 @@ ipconfig
 ping 1.1.1.1
 ftpsrv
 ```
+
+For first HTTP browsing, start `NETSTART`, open Application Library →
+Applications → CiukWeb, then select Go. `HTGET` is also available for direct
+HTTP downloads and currently supplies CiukWeb's transport. The native
+browser supports HTTP text and absolute HTTP links; it does not implement
+HTTPS, CSS, JavaScript or images. See the
+[web and recording guide](docs/qemu-recording-and-web-2026-10-01.md).
 
 Static IPv4 values are configurable and persistent:
 

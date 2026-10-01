@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the desktop application modules (src/apps: Files, Notepad, Tasks)
+# Build the desktop application modules (src/apps: Files, Notepad, Tasks, the
+# desktop, the Recycle Bin, the Control Panel and Devices)
 # with OpenWatcom into flat CAPP images for \SYSTEM\APPS.
 #   scripts/build_apps.sh [output-dir]      (default build/full/obj/apps)
 set -euo pipefail
@@ -10,18 +11,23 @@ export WATCOM="${WATCOM:-/opt/watcom}"
 export PATH="$WATCOM/binl64:$PATH"
 export INCLUDE="$WATCOM/h"
 mkdir -p "$OUT"
-CFLAGS=(-q -2 -ms -s -zl -os -d0 -wx -we -zq -i=src/apps)
+CFLAGS=(-q -2 -ms -s -zl -os -d0 -wx -we -zq -zm -i=src/apps)
 nasm -f obj src/apps/app_start.asm -o "$OUT/app_start.obj"
-for unit in rt ui; do
+for unit in rt ui sys regstore; do
 	wcc "${CFLAGS[@]}" -fo="$OUT/$unit.obj" "src/apps/$unit.c"
 done
-for app in files notepad tasks; do
+for app in files ciuknote tasks desktop recycle control devices paint dosvm browser; do
 	[[ -f "src/apps/$app.c" ]] || continue
 	name="${app^^}.APP"
+	units="$OUT/app_start.obj,$OUT/$app.obj,$OUT/rt.obj,$OUT/ui.obj"
+	case "$app" in
+	files|desktop|recycle|control|devices) units="$units,$OUT/sys.obj" ;;
+	esac
+	[[ "$app" != control ]] || units="$units,$OUT/regstore.obj"
 	wcc "${CFLAGS[@]}" -fo="$OUT/$app.obj" "src/apps/$app.c"
-	wlink option quiet format raw bin option offset=0x100 option start=app_entry \
+	wlink option quiet format raw bin option offset=0x100 option start=app_entry option eliminate \
 		option map="$OUT/$app.map" name "$OUT/$name" \
-		file "$OUT/app_start.obj","$OUT/$app.obj","$OUT/rt.obj","$OUT/ui.obj"
+		file "$units"
 	# The memory the module needs: from its PSP-like base to the stack top.
 	python3 - "$OUT/$name" "$OUT/$app.map" <<'PY'
 import re, sys

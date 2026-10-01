@@ -267,7 +267,7 @@ kernel_runtime_record_termination_service:
     retf
 
 kernel_entry_default_drive db 0
-kernel_runtime_version db 'CIUKIDOS kernel v0.7.1', 0
+kernel_runtime_version db 'CIUKIDOS kernel v0.8.0', 0
 kernel_runtime_stage2_ready_marker db '[S2] ready', 13, 10, 0
 
 ; Keep this structure byte-for-byte compatible with the legacy CDOSSTAT

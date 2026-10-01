@@ -1,0 +1,8 @@
+[Driver]
+Name=RTL8139
+Class=NET
+Version=1
+Description=Realtek RTL8139 packet driver (8136 ID patch)
+Files=RTL8139.COM
+Load=RTL8139.COM %PKT%
+Hardware=10EC:8139

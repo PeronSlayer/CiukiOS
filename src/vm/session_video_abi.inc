@@ -130,6 +130,7 @@ VM_VP_TICKS             equ 216        ; ARM: timer ticks observed (written back
 VM_VP_PRESENTS          equ 220        ; ARM: presents performed (written back)
 VM_VP_LAST_TSC          equ 224        ; ARM: cycles of the last present
 VM_VP_MAX_TSC           equ 228        ; ARM: maximum cycles of one present
+VM_VP_BAND_LEFT         equ 232        ; word: compositor span's screen X
 
 ; HOST_ENTER packet (16 bytes)
 VM_VHOST_MAGIC          equ 048565643h ; bytes CVVH

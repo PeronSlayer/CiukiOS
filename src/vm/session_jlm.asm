@@ -82,7 +82,8 @@ check_context endp
 
 ; Validate a guest copy destination without touching any guest memory.
 ; ECX=count <=4096, ES:DI from the client frame. EDI=linear destination.
-; Only conventional user pages at 10000h..9FFFFh, no 16-bit offset wrap.
+; Only user pages at 10000h..9FFFFh (conventional) or C0000h..EFFFFh (upper
+; memory blocks, where the desktop keeps its modules), no 16-bit offset wrap.
 guest_destination proc uses esi ebx edx
  test ecx,ecx
  jz bad
@@ -102,7 +103,12 @@ guest_destination proc uses esi ebx edx
  add edx,ecx
  jc bad
  cmp edx,0A0000h
+ jbe range_ok
+ cmp edi,0C0000h                        ; an upper memory block
+ jb bad
+ cmp edx,0F0000h
  ja bad
+range_ok:
  dec edx
  shr edx,12
  mov esi,edi
@@ -593,15 +599,35 @@ not_video:
  call dev_dispatch
  jmp checked_result
 not_device:
+ cmp eax,VM_OP_DEV_PHYSICAL_IRQ
+ je physical_irq
+ cmp eax,VM_OP_VMM_YIELD
+ je yield
  cmp eax,VM_OP_VMM_INIT
  jb not_vmm
- cmp eax,VM_OP_VMM_LIST
+ cmp eax,VM_OP_VMM_EXIT_CODE
  ja not_vmm
  call vmm_dispatch
  jmp checked_result
+; VMM_YIELD may switch to another VM, whose frame then sits at EBP: the
+; result goes into this VM's frame first.
+yield:
+ and [ebp].Client_Reg_Struc.Client_EFlags,not 1
+ mov word ptr [ebp].Client_Reg_Struc.Client_EAX,0
+ call vmm_target_leave
+ mov vmm_client_frame,ebp
+ pushfd
+ cli
+ call vmm_dpmi_tick
+ popfd
+ popad
+ ret
 not_vmm:
  mov eax,VM_ERROR_OPERATION
  jmp error
+physical_irq:
+ call vmm_physical_irq
+ jmp checked_result
 bind_scheduler:
  call vm_scheduler_bind
  jmp checked_result

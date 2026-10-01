@@ -75,7 +75,16 @@ dhcp_command:
     call next_token
     jnc usage_error
     call require_resident
+    jnc .service_ready
+    ; The graphical Network panel invokes DHCP directly. Start the packet
+    ; service on demand so a fitted adapter needs no prior DOS command.
+    mov dx, netstart_path
+    mov bx, empty_param_block
+    call exec_child
     jc network_not_started
+    call require_resident
+    jc network_not_started
+.service_ready:
     mov dx, dhcp_path
     mov bx, empty_param_block
     call exec_child
@@ -556,7 +565,7 @@ msg_save_error db 'NETCFG: cannot safely replace C:\NET\MTCP.CFG', 13, 10, '$'
 msg_saved db 'NETCFG: static IPv4 configuration saved (backup: MTCP.BAK)', 13, 10, '$'
 msg_start_hint db 'NETCFG: run NETSTART to activate networking and permanent ICMP', 13, 10, '$'
 msg_resident_updated db 'NETCFG: resident ICMP address updated immediately', 13, 10, '$'
-msg_network_not_started db 'NETCFG: run NETSTART before requesting DHCP', 13, 10, '$'
+msg_network_not_started db 'NETCFG: network service could not start; check adapter and driver', 13, 10, '$'
 msg_dhcp_error db 'NETCFG: DHCP failed', 13, 10, '$'
 msg_dhcp_done db 'NETCFG: DHCP lease saved and resident ICMP address reloaded', 13, 10, '$'
 msg_apply_error db 'NETCFG: cannot start/reload the resident network service', 13, 10, '$'
@@ -589,6 +598,7 @@ config_path db 'C:\NET\MTCP.CFG', 0
 new_path db 'C:\NET\MTCP.NEW', 0
 backup_path db 'C:\NET\MTCP.BAK', 0
 dhcp_path db 'C:\NET\DHCP.EXE', 0
+netstart_path db 'C:\NET\NETSTART.COM', 0
 icmpd_path db 'C:\NET\ICMPD.COM', 0
 empty_tail db 0, 0x0D
 empty_param_block times 14 db 0

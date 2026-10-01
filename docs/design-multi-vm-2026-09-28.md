@@ -4,7 +4,7 @@ Status: M1 and M2 complete and passing on QEMU
 ([evidence](validation/2026-09-28-multi-vm/README.md)). M3 complete and
 passing on QEMU: every item below passes its gate, and the complete profile
 passes 21/21 ([evidence](validation/2026-09-29-boot-and-m3/README.md),
-section 5). M4 and M5 are open. Part of
+section 5). M4 passed its QEMU profile on 30 September; M5 remains open. Part of
 [the roadmap](roadmap-dos-vm-desktop-2026-09-28.md), phase 2.
 
 ## Implemented (M1, M2)
@@ -217,7 +217,7 @@ Found and fixed on the way:
   most 200 ms at a time: 0.86 of real time. They now advance from the
   shared audio poll, as the owner does.
 
-## Still open after M3
+## Scope after M3 (historical plan)
 
 - **M4.** The desktop paints each VM's session into its window
   (`VIDEO_BAND` from the system VM), sets the focus on clicks, and the
@@ -234,6 +234,29 @@ Found and fixed on the way:
   - in a VM forked by VMFORK after it freed its ancestors' blocks.
 
   All three pass on the M3 image.
+
+## M4 integration state on 30 September 2026
+
+The desktop now loads `DOSVM.APP` as its DOS-window manager. It creates a
+forked VM with `VMFORK.COM` for each window and starts `DPMIRUN.COM /V` inside
+that VM, where the session and DPMI host belong to the guest. `DOSVM.APP`
+targets each guest through CVSESSION and presents its video into compositor
+bands. Its video-damage poll queues only the client rectangle, then asks the
+shell module host to paint that rectangle. Input focus is set through
+`VMM_FOCUS`; the desktop remains VM 0. The former synchronous callback DOS
+window manager has been removed from the shell image.
+
+The focused QEMU gate passed on the final clean image: DOOM gameplay while
+Files is open, two live text VMs, click focus, keyboard routing, and a
+bounded close that leaves Files and the other VM alive. The shipped
+full-screen DOS path also returned to its prompt in QEMU. The older
+16/25 profile was a development snapshot with harnesses tied to removed
+shell symbols. The replacement behavioral gates cover text, VGA, mouse,
+audio, DPMI, Task Manager and two simultaneous VMs. The complete 0.8.0
+profile passes **26/26** gates at
+`build/tests/vm-window-profile-080-final-20260930/SUMMARY.json`.
+M4 is complete for its QEMU scope. The evidence and limitations are in
+`docs/validation/2026-09-30-m4/README.md`.
 
 ## Where we start
 

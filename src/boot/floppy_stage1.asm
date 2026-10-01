@@ -1065,6 +1065,10 @@ int21_handler:
     je .fn_68
     cmp ah, 0x66
     je .fn_66
+%if FAT_TYPE == 16
+    cmp ah, 0xF1
+    je .fn_f1
+%endif
     jmp .unsupported
 
 .fn_02:
@@ -1478,8 +1482,23 @@ int21_handler:
     mov di, [ss:bp + 6]
     jmp .error
 
+%if FAT_TYPE == 16
+; VMFORK uses this only in the newly forked VM.  BX is the owner PSP from
+; the copied MCB chain and ES is the block to release.  AH=49h normally
+; requires the caller's EXEC identity, which AH=50h cannot change.
+.fn_f1:
+    cmp al, 0x49
+    jne .unsupported
+    push word [cs:dos_exec_identity_psp]
+    mov [cs:dos_exec_identity_psp], bx
+    call int21_free
+    pop word [cs:dos_exec_identity_psp]
+    jmp .fn_49_result
+%endif
+
 .fn_49:
     call int21_free
+.fn_49_result:
     jc .fn_49_error
     mov bp, sp
     mov bx, [ss:bp + 14]
@@ -5059,6 +5078,57 @@ int21_get_time:
     clc
     ret
 
+%if FAT_TYPE == 16
+; Read the RTC directly while already handling INT 21h. Calling the BIOS
+; INT 1Ah service recursively here breaks file creates under the V86 monitor.
+; AX = DOS time, DX = DOS date (BX, CX changed).
+dos_now_stamp:
+    mov al, 4                       ; hours
+    call .read_bcd
+    xor ah, ah
+    shl ax, 6
+    mov bx, ax
+    mov al, 2                       ; minutes
+    call .read_bcd
+    xor ah, ah
+    or bx, ax
+    shl bx, 5
+    mov al, 0                       ; seconds
+    call .read_bcd
+    shr al, 1
+    or bl, al
+    push bx
+    mov al, 0x32                    ; century
+    call .read_bcd
+    mov bl, 100
+    mul bl
+    mov cx, ax
+    mov al, 9                       ; year
+    call .read_bcd
+    xor ah, ah
+    add cx, ax
+    sub cx, 1980
+    mov ax, cx
+    shl ax, 4
+    mov bx, ax
+    mov al, 8                       ; month
+    call .read_bcd
+    xor ah, ah
+    or bx, ax
+    shl bx, 5
+    mov al, 7                       ; day
+    call .read_bcd
+    or bl, al
+    mov dx, bx
+    pop ax
+    ret
+.read_bcd:
+    out 0x70, al
+    in al, 0x71
+    call rtc_bcd
+    ret
+%endif
+
 ; AL (BCD) -> AL binary, AH = 0: AAM 16 splits the nibbles, AAD joins them.
 rtc_bcd:
     aam 16
@@ -7104,12 +7174,36 @@ int21_get_set_attr:
 
 .set_attr:
 %if FAT_TYPE == 16
-    ; Compatibility no-op: validate target exists, then report success.
+    ; The read-only, hidden, system and archive bits of CX go to the entry;
+    ; the directory and volume bits cannot be changed (access denied).
+    test cl, 0x18
+    jnz .denied
     mov si, dx
     call int21_resolve_and_find_path
     jc .not_found
+    mov ax, DOS_META_BUF_SEG
+    mov es, ax
+    mov ax, [cs:search_found_root_lba]
+    mov dx, [cs:search_found_root_lba_hi]
+    xor bx, bx
+    call read_sector_lba32
+    jc .denied
+    mov di, [cs:search_found_root_off]
+    mov al, cl
+    and al, 0x27
+    mov ah, [es:di + 11]
+    and ah, 0x18
+    or al, ah
+    mov [es:di + 11], al
+    mov ax, [cs:search_found_root_lba]
+    call write_sector_lba32
+    jc .denied
     xor ax, ax
     clc
+    jmp .return
+.denied:
+    mov ax, 0x0005
+    stc
     jmp .return
 %else
     mov si, dx
@@ -7806,6 +7900,7 @@ int21_create:
 int21_create_impl:
     push dx
     push ds
+    push cx
 
 
     call int21_normalize_leading_drive_designator
@@ -7836,9 +7931,21 @@ int21_create_impl:
     call int21_lookup_in_dir
 %if FAT_TYPE == 16 || FAT_TYPE == 12
     jc .create_missing
+%if FAT_TYPE == 16
+    ; DOS: AH=3Ch on an existing file truncates it to 0 bytes (its chain is
+    ; freed and its entry rewritten below, as for a new file). A directory,
+    ; a volume label or a read-only file is access denied.
+    test byte [cs:search_found_attr], 0x19
+    jnz .io_error
+    call int21_free_found_chain
+    jc .io_error
+    mov ax, [cs:search_found_root_lba]
+    jmp .write_entry
+%else
     test byte [cs:search_found_attr], 0x10
     jnz .io_error
     jmp .open_created
+%endif
 
 .create_missing:
 %else
@@ -7852,6 +7959,7 @@ int21_create_impl:
     jc .io_error
 
     mov ax, [cs:search_found_root_lba]
+.write_entry:
     mov [cs:tmp_next_cluster], ax
     mov ax, [cs:search_found_root_off]
     mov [cs:tmp_cluster], ax
@@ -7869,12 +7977,37 @@ int21_create_impl:
 %endif
     jc .io_error
 
+%if FAT_TYPE == 16
+    mov bp, sp
+    push word [ss:bp]               ; caller's attributes, above saved DS/DX
+    call dos_now_stamp
+    push dx
+    push ax
+%endif
     mov di, [cs:tmp_cluster]
     mov si, path_fat_name
     mov cx, 11
     rep movsb
 
+%if FAT_TYPE == 16
+    ; Created now (the fields held a deleted entry's bytes), with the
+    ; read-only/hidden/system bits of CX.
+    pop ax
+    mov [es:di - 11 + 14], ax
+    mov [es:di - 11 + 22], ax
+    pop ax
+    mov [es:di - 11 + 16], ax
+    mov [es:di - 11 + 18], ax
+    mov [es:di - 11 + 24], ax
+    pop ax
+    and al, 0x07
+    or al, 0x20
+    mov [es:di - 11 + 11], al
+    mov word [es:di - 11 + 12], 0
+    mov word [es:di - 11 + 20], 0
+%else
     mov byte [es:di - 11 + 11], 0x20
+%endif
     mov word [es:di - 11 + 26], 0
     mov word [es:di - 11 + 28], 0
     mov word [es:di - 11 + 30], 0
@@ -7905,6 +8038,7 @@ int21_create_impl:
     jmp .done
 
 .open_created:
+    pop cx
     pop ds
     pop dx
     mov al, 2
@@ -7978,6 +8112,7 @@ int21_create_impl:
     stc
 
 .done:
+    pop cx
     pop ds
     pop dx
     ret
@@ -9943,7 +10078,12 @@ int21_delete:
 
     ; AH=41h deletes files, never directory trees. RMDIR performs its own
     ; emptiness/current-directory checks before using the common FAT release.
+    ; A read-only file is access denied, as in DOS.
+%if FAT_TYPE == 16
+    test byte [cs:search_found_attr], 0x11
+%else
     test byte [cs:search_found_attr], 0x10
+%endif
     jnz .io_error
     call int21_free_found_chain
     jc .io_error
@@ -14811,6 +14951,9 @@ run_stage1_selftest:
 
 %endif
 
+; The VGA demo is reachable only from the self-test and the debug commands of
+; the legacy interactive Stage1 shell; the kernel build leaves it out.
+%if STAGE1_SELFTEST_AUTORUN || (STAGE1_INTERACTIVE_SHELL && STAGE1_DEBUG_COMMANDS)
 run_gfx_demo:
     push ax
     push bx
@@ -14841,6 +14984,8 @@ run_gfx_demo:
     pop bx
     pop ax
     ret
+
+%endif
 
 %if FAT_TYPE == 16
 stage1_show_boot_splash:
@@ -15510,6 +15655,7 @@ stage1_splash_advance_progress:
 
 %endif
 
+%if STAGE1_SELFTEST_AUTORUN || (STAGE1_INTERACTIVE_SHELL && STAGE1_DEBUG_COMMANDS)
 gfx_demo_run:
     push ax
     push bx
@@ -15639,11 +15785,14 @@ vdi_enter_graphics:
     int 0x10
     ret
 
+%endif
+
 vdi_leave_graphics:
     mov ax, 0x0003
     int 0x10
     ret
 
+%if STAGE1_SELFTEST_AUTORUN || (STAGE1_INTERACTIVE_SHELL && STAGE1_DEBUG_COMMANDS)
 vdi_clear_screen:
     push bx
     push dx
@@ -15676,11 +15825,14 @@ vdi_gtext:
     call gfx_draw_text8
     ret
 
+%endif
+
 gfx_get_tick_count:
     mov ah, 0x00
     int 0x1A
     ret
 
+%if STAGE1_SELFTEST_AUTORUN || (STAGE1_INTERACTIVE_SHELL && STAGE1_DEBUG_COMMANDS)
 gfx_try_read_key:
     push ax
     mov ah, 0x01
@@ -16033,6 +16185,7 @@ gfx_draw_glyph8:
     pop ax
     ret
 
+%endif
 %if STAGE1_SELFTEST_AUTORUN || STAGE1_INTERACTIVE_SHELL
 run_com_demo:
     mov si, msg_com_begin
@@ -24281,7 +24434,7 @@ msg_runtime_probe_call db "[RTP] C", 13, 10
 msg_runtime_probe_ok db "[RTP] OK", 13, 10, 0
 %endif
 
-msg_banner_title db "CiukiOS pre-Alpha v0.7.1 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.8.0 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
@@ -24577,6 +24730,7 @@ mouse_release_x dw 320,320,320
 mouse_release_y dw 240,240,240
 mouse_gfx_cursor_mask times 32 dw 0
 
+%if STAGE1_SELFTEST_AUTORUN || (STAGE1_INTERACTIVE_SHELL && STAGE1_DEBUG_COMMANDS)
 gfx_font8_table:
     db 'A', 0x18,0x24,0x42,0x7E,0x42,0x42,0x42,0x00
     db 'B', 0x7C,0x42,0x42,0x7C,0x42,0x42,0x7C,0x00
@@ -24596,6 +24750,7 @@ gfx_font8_table:
     db 'X', 0x42,0x24,0x18,0x18,0x18,0x24,0x42,0x00
     db 'Y', 0x41,0x22,0x14,0x08,0x08,0x08,0x08,0x00
     db 0
+%endif
 
 ; Stage2 Extended Services Messages
 msg_stage2_ready db 0

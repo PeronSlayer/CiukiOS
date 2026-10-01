@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 SERIAL_NORMALIZER="$ROOT_DIR/scripts/serial_log_normalize.py"
-CIUKIOS_VERSION="${CIUKIOS_VERSION:-0.7.1}"
+CIUKIOS_VERSION="${CIUKIOS_VERSION:-0.8.0}"
 ISO_VERSION_TAG="${CIUKIOS_VERSION//./-}"
 VERSIONED_ISO_IMG="build/full/CiukiOS_full_cd_${ISO_VERSION_TAG}.iso"
 

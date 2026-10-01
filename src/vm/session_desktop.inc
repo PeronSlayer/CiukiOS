@@ -89,6 +89,8 @@ desk_map endp
 ; After a DOS-window session restored the aperture PTEs: follow the bank its
 ; host mode left selected (the desktop's bank cache holds that one).
 desk_resync proc
+ cmp vmm_current,0
+ jne resync_done
  cmp desk_mapped,0
  je resync_done
  pushad

@@ -35,6 +35,9 @@ VM_OP_DEV_IO           equ 34h
 VM_OP_DEV_KEY          equ 35h
 VM_OP_DEV_PM_IRQ       equ 36h
 VM_OP_DEV_MOUSE        equ 37h
+; HDPMI physical IRQ1/IRQ12 bridge while a DOS/4GW client runs. BX=line;
+; returns BX=1 when CVSESSION consumed/routed the controller byte.
+VM_OP_DEV_PHYSICAL_IRQ equ 38h
 
 VM_CAP_GUEST_INPUT     equ 1000h
 VM_CAP_GUEST_AUDIO     equ 2000h

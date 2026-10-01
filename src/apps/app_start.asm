@@ -18,6 +18,7 @@ global intr_
 global svc_
 global far_call_req_
 global far_regs_
+global cpu_vendor_
 global __U4M
 global __I4M
 global __U4D
@@ -292,6 +293,48 @@ far_regs_:
     pop si
     pop cx
     pop bx
+    ret
+
+; int cpu_vendor(char *out): the CPUID vendor string (13 bytes) and the
+; family, or "" and 3 on a CPU without CPUID.
+cpu_vendor_:
+    push ebx
+    push ecx
+    push edx
+    push di
+    mov di,ax
+    pushfd
+    pop eax
+    mov ecx,eax
+    xor eax,0x200000
+    push eax
+    popfd
+    pushfd
+    pop eax
+    push ecx
+    popfd
+    xor eax,ecx
+    test eax,0x200000
+    jz .none
+    xor eax,eax
+    db 0x0F,0xA2                      ; cpuid (the 386 target lacks it)
+    mov [di],ebx
+    mov [di+4],edx
+    mov [di+8],ecx
+    mov byte [di+12],0
+    mov eax,1
+    db 0x0F,0xA2                      ; cpuid (the 386 target lacks it)
+    shr eax,8
+    and ax,0x0F
+    jmp .done
+.none:
+    mov byte [di],0
+    mov ax,3
+.done:
+    pop di
+    pop edx
+    pop ecx
+    pop ebx
     ret
 
 fcr_target dw 0,0

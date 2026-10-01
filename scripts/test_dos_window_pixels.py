@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact CPU check of the production DOS cell blitter; not a frame-rate test."""
+"""Exact CPU check of the DOSWIN.DRV cell blitter; not a frame-rate test."""
 import argparse
 import hashlib
 import json
@@ -38,7 +38,9 @@ def main():
     source += ''.join(f'{name}: times {size} db 0\n' for name, size in fields.items())
     source += section('src/com/shell_gui_draw.inc', 'ui_rect:', '; Raised two-step')
     source += section('src/com/shell_gui_compositor.inc', 'ui_comp_rect:', 'ui_comp_present:')
-    source += section('src/com/shell_dos_window.inc', 'dw_opaque_cell:', 'ut_dos_window db')
+    # The in-shell manager was removed for M4.  Keep the same far-call ABI
+    # fixture so this test still checks DOSWIN.DRV's cell renderer directly.
+    source += 'dw_opaque_cell: call far [fs:DW_CELL_ENTRY]\n ret\n'
     # Equivalent original cell path, using the actual unchanged generic
     # background/glyph instructions rather than a simulated baseline.
     source += '''
@@ -146,7 +148,7 @@ db "DWEXT1"
     cases = [(96, 72, 24, 28), (103, 81, 3, 6), (98, 76, 7, 12),
              (109, 77, 8, 16), (100, 94, 8, 3), (100, 77, 0, 16)]
     report = {'scope': 'Exact CPU instructions and operation counts, not wall-clock FPS or GPU acceleration',
-              'source_sha256': hashlib.sha256(Path('src/com/shell_dos_window.inc').read_bytes()).hexdigest(),
+              'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
               'module_source_sha256': hashlib.sha256(Path('src/com/dos_window_cell.inc').read_bytes()).hexdigest(),
               'far_module_cs_differs_from_host_ds_ss': True,
               'cases': [], 'formats': []}

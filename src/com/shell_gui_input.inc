@@ -143,7 +143,7 @@ ui_event:
     mov ah,6
     cmp byte [ui_page],1
     jne .bound
-    mov ah,5
+    mov ah,1
 .bound:
     cmp al,ah
     jae .idle
@@ -195,15 +195,62 @@ ui_event:
     jne .idle
     mov ax,3
     int 0x33
+    push bx
+    mov ax,0x000B
+    int 0x33
+    pop bx
+    ; INT 33h keeps one-shot press/release counts. Preserve both edges when
+    ; a short click happens during a compositor repaint between UI polls.
+    push bx
+    push cx
+    push dx
+    mov ax,5
+    xor bx,bx
+    int 0x33
+    test bx,bx
+    jz .no_press
+    mov byte [ui_mouse_press_pending],1
+.no_press:
+    mov ax,6
+    xor bx,bx
+    int 0x33
+    test bx,bx
+    jz .no_release
+    mov byte [ui_mouse_release_pending],1
+.no_release:
+    pop dx
+    pop cx
+    pop bx
+    cmp byte [ui_mouse_press_pending],0
+    je .pending_release
+    mov byte [ui_mouse_press_pending],0
+    or bx,1
+    jmp .swap_buttons
+.pending_release:
+    cmp byte [ui_mouse_release_pending],0
+    je .swap_buttons
+    mov byte [ui_mouse_release_pending],0
+    and bx,0FFFEh
+.swap_buttons:
+    cmp byte [app_set_mouse+1],0      ; buttons swapped (Control Panel)
+    je .buttons
+    mov ax,bx
+    and bx,0xFFFC
+    shr al,1
+    rcl bl,1
+    and al,1
+    shl al,1
+    or bl,al
+.buttons:
     mov [ui_mouse_buttons],bx
     ; Own signed motion coordinates. The shared driver's absolute position
     ; can wrap at zero; consuming raw mickeys keeps this GUI independent.
-    mov ax,0x000B
-    int 0x33
+    ; Speed 2 (the default) doubles the mickeys.
     movsx ecx,cx
     movsx edx,dx
-    shl ecx,1
-    shl edx,1
+    movzx eax,byte [app_set_mouse]
+    imul ecx,eax
+    imul edx,eax
     movzx eax,word [ui_mouse_x]
     add ecx,eax
     movzx eax,word [ui_mouse_y]
@@ -264,10 +311,12 @@ ui_event:
     mov [ui_mouse_x],cx
     mov [ui_mouse_y],dx
     call ui_pointer_show
+    cmp byte [app_overlay],0
+    jne .overlay_move
     cmp byte [ui_dragging],0
     jne .drag
     cmp byte [app_capture],0
-    je .click
+    je .hover
     test byte [ui_mouse_buttons],1
     jz .click
     mov bl,[app_capture]
@@ -276,8 +325,20 @@ ui_event:
     call app_mouse
     test ax,ax
     jnz .out
+.hover:
+    ; No button: the window, desktop or menu under the pointer may highlight.
+    test byte [ui_mouse_buttons],3
+    jnz .click
+    call app_hover
+    test ax,ax
+    jnz .out
 .click:
-    ; Right button: the application under the pointer gets it (context menu).
+    cmp byte [app_overlay],0
+    jne .overlay_buttons
+    ; Right button, according to the context: an application window's
+    ; contents -> that application; a title bar or a shell window -> the
+    ; window menu; the desktop, the taskbar, the top bar -> the desktop's
+    ; menus (the desktop module).
     mov ax,[ui_mouse_buttons]
     and al,2
     cmp al,[app_previous_right]
@@ -288,18 +349,88 @@ ui_event:
     call ui_hit_find
     movzx bx,byte [ui_hit_target]
     test bx,bx
-    jz .left_button
+    jz .right_desktop
     dec bx
     cmp bl,[ui_active_window]
     je .right_raised
+    push ax
     call ui_windows_raise
+    pop ax
 .right_raised:
+    cmp ax,62
+    je .right_window_menu
+    cmp ax,60
+    je .right_window_menu
+    push si
+    call app_slot
+    pop si
+    jc .right_window_menu
     mov dx,4
     call app_mouse
     test ax,ax
     jnz .out
     mov ax,250
     ret
+.right_window_menu:
+    mov ax,bx
+    or ah,1                             ; context 1xxh: window xx
+    jmp .right_context
+.right_desktop:
+    mov byte [app_desktop_focus],1      ; the desktop takes the keyboard
+    call ui_damage_active
+.right_context:
+    mov [app_ev_context],ax
+    mov bl,APP_WIN_DESKTOP
+    mov dx,4
+    call app_mouse
+    mov word [app_ev_context],0
+    test ax,ax
+    jnz .out
+    mov ax,250
+    ret
+.overlay_move:
+    mov bl,APP_WIN_OVERLAY
+    mov dx,6
+    call app_mouse
+    mov [app_overlay_dirty],ax
+.overlay_buttons:
+    ; The desktop's open menu takes every button (a click outside closes it).
+    mov al,[ui_mouse_buttons]
+    and al,3
+    mov ah,[app_overlay_buttons]
+    mov [app_overlay_buttons],al
+    mov cl,al
+    and cl,1
+    mov [ui_previous_button],cl
+    mov cl,al
+    and cl,2
+    mov [app_previous_right],cl
+    xor ah,al
+    jz .overlay_quiet
+    mov dx,1
+    test ah,1
+    jz .overlay_right
+    test al,1
+    jnz .overlay_send
+    mov dx,3
+    jmp .overlay_send
+.overlay_right:
+    test al,2
+    jz .overlay_quiet
+    mov dx,4
+.overlay_send:
+    mov bl,APP_WIN_OVERLAY
+    call app_mouse
+    test ax,ax
+    jnz .out
+    mov ax,250
+    ret
+.overlay_quiet:
+    xor ax,ax
+    xchg ax,[app_overlay_dirty]
+    test ax,ax
+    jnz .out
+    jmp .idle
 .left_button:
     mov ax,[ui_mouse_buttons]
     and al,1
@@ -350,6 +481,11 @@ ui_event:
     mov byte [ui_window_repaint],1
 .focus_ready:
     pop ax
+    test ax,ax
+    jnz .not_desktop
+    cmp byte [ui_hit_target],0
+    je .desktop_press
+.not_desktop:
     cmp ax,70
     je .app_press
     cmp ax,65
@@ -546,6 +682,19 @@ ui_event:
     call ui_comp_damage_drag
     mov ax,250
     ret
+.desktop_press:
+    ; The desktop surface itself: its module takes the button (icons).
+    cmp word [app_segs+APP_DESKTOP*2],0
+    je .idle
+    mov byte [app_capture],0xFF         ; FFh - 1 = the desktop
+    mov byte [app_desktop_focus],1
+    call ui_damage_active               ; its title shows the focus left
+    mov bl,APP_WIN_DESKTOP
+    mov dx,1
+    call app_mouse
+    test ax,ax
+    jnz .out
+    jmp .idle
 .app_press:
     mov bl,[ui_active_window]
     push si
@@ -566,6 +715,9 @@ ui_event:
     mov [ui_window_drag],al
     jmp .idle
 .app_resize:
+    ; Invalidate the old footprint before changing the module window size.
+    ; The post-update invalidation below covers its new footprint.
+    call ui_comp_damage_drag
     movzx si,byte [ui_window_drag]
     shl si,1
     mov ax,[ui_mouse_x]
@@ -973,6 +1125,8 @@ ui_mouse_ready db 0
 ui_pointer_visible db 0
 ui_mouse_x dw 320
 ui_mouse_y dw 240
+ui_mouse_press_pending db 0
+ui_mouse_release_pending db 0
 ui_mouse_buttons dw 0
 ui_previous_button db 0
 ui_pressed dw 0

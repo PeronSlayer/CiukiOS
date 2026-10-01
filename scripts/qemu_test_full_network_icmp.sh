@@ -225,8 +225,14 @@ QEMU_PID=$!
 
 wait_for_socket 20 || fail MONITOR_SOCKET "QEMU monitor did not become ready"
 pass MONITOR_SOCKET_READY
-wait_for_serial_literal 'CCiiuukkiiOOSS  SSHHEELLLL  CC::\\AAPPPPSS>>' 90 \
-  || fail SHELL_READY "initial shell prompt not detected"
+wait_for_serial_literal '[DESKTOP] READY' 90 \
+  || fail DESKTOP_READY "graphical desktop did not become ready"
+pass DESKTOP_READY
+send_key f4
+wait_for_serial_literal '[DESKTOP] DOS' 20 \
+  || fail DOS_HANDOFF "F4 did not leave the desktop for DOS"
+wait_for_serial_literal 'CiukiOS SHELL C:\APPS>' 20 \
+  || fail SHELL_READY "DOS shell prompt not detected after F4"
 pass SHELL_READY
 
 send_command 'netstart'

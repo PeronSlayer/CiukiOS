@@ -1,0 +1,8 @@
+[Driver]
+Name=3C509
+Class=NET
+Version=1
+Description=Crynwr 3Com 3C509 ISA
+Files=3C509.COM
+Load=3C509.COM %PKT%
+Hardware=

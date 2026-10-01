@@ -1,7 +1,7 @@
 ; Official Tango/Ciuki system sprites. Source attribution and deterministic
 ; conversion are recorded in assets/icons/. No disk access occurs in paint.
 ; Allocate for each desktop video session, then release before DOS/EXEC.
-UI_ICONS_COUNT equ 18
+UI_ICONS_COUNT equ 36
 UI_ICONS_SIZE equ 32
 UI_ICONS_BYTES equ (16 + UI_ICONS_COUNT * UI_ICONS_SIZE * UI_ICONS_SIZE)
 

@@ -1,5 +1,5 @@
 diff --git a/Src/HDPMI/CLIENTS.ASM b/Src/HDPMI/CLIENTS.ASM
-index b383d2c..3fad0c2 100644
+index f5a3c66..3fad0c2 100644
 --- a/Src/HDPMI/CLIENTS.ASM
 +++ b/Src/HDPMI/CLIENTS.ASM
 @@ -12,7 +12,7 @@ externdef startcldata32:byte
@@ -12,10 +12,10 @@ index b383d2c..3fad0c2 100644
  
  ?SAVEHOSTSP equ 1	;std=1, 1=save ring 0 ESP from TSS for client
 diff --git a/Src/HDPMI/EXTERNAL.INC b/Src/HDPMI/EXTERNAL.INC
-index de4081f..0b4c86d 100644
+index de4081f..a7ba00a 100644
 --- a/Src/HDPMI/EXTERNAL.INC
 +++ b/Src/HDPMI/EXTERNAL.INC
-@@ -240,6 +240,36 @@ _exitclientEx5 proto near	 ;_exitclientEx with error code 5
+@@ -240,6 +240,37 @@ _exitclientEx5 proto near	 ;_exitclientEx with error code 5
  setpmstate proto near
  closeinterrupts proto near
  
@@ -33,6 +33,7 @@ index de4081f..0b4c86d 100644
 +cvdpmi_cli_exit proto near
 +cvdpmi_if_debug proto near
 +cvdpmi_if_irq0 proto near
++cvdpmi_physical_irq proto near
 +cvdpmi_if_api proto near
 +cvdpmi_if_return proto near
 +cvdpmi_irq_return proto near
@@ -52,7 +53,7 @@ index de4081f..0b4c86d 100644
  _rawjmp_pm proto near16		;raw jump to protected-mode, esp = dwHostStack
  _rawjmp_pm_savesegm proto near16
  _jmp_pm proto near16		;full switch to protected-mode
-@@ -452,6 +482,9 @@ endif
+@@ -452,6 +483,9 @@ endif
  if ?NMISAFE
  externdef rawjmp_rm_nmi:byte  ;v3.24
  endif
@@ -63,7 +64,7 @@ index de4081f..0b4c86d 100644
  
  _DATA16C segment
 diff --git a/Src/HDPMI/HDPMI.ASM b/Src/HDPMI/HDPMI.ASM
-index 2fe5efa..838a01a 100644
+index 1c6fd9d..1ea90bd 100644
 --- a/Src/HDPMI/HDPMI.ASM
 +++ b/Src/HDPMI/HDPMI.ASM
 @@ -95,7 +95,7 @@ endcldata32 label byte
@@ -187,7 +188,28 @@ index 2fe5efa..838a01a 100644
  	@simintlpms 08
  exc08:
  	@exception 08, TRUE
-@@ -2882,6 +2931,13 @@ intr0E proc
+@@ -2819,7 +2868,19 @@ intr09 proc public
+ 	align 4
+ intr09 endp
+ 
+-simint09 proc public
++simint09 proc public
++if ?32BIT
++	push eax
++	mov eax,1
++	call cvdpmi_physical_irq
++	jc @F
++	mov al,20h
++	out 20h,al
++	pop eax
++	iretd
++@@:
++	pop eax
++endif
+ 	@simintlpms 09
+ noint09::        
+ 	@exception 09
+@@ -2882,6 +2943,13 @@ intr0E proc
  	@testexception exc0E
  	@simintlpms 0E
  exc0E:
@@ -201,7 +223,29 @@ index 2fe5efa..838a01a 100644
  	@exception 0E, TRUE
  	@defaultexc 0E,1 
  intr0E endp
-@@ -3769,6 +3825,17 @@ ife ?PMIOPL
+@@ -2955,7 +3023,20 @@ intr72::
+ 	@simintlpms 72
+ intr73::
+ 	@simintlpms 73
+-intr74::
++intr74::
++if ?32BIT
++	push eax
++	mov eax,12
++	call cvdpmi_physical_irq
++	jc @F
++	mov al,20h
++	out 0A0h,al
++	out 20h,al
++	pop eax
++	iretd
++@@:
++	pop eax
++endif
+ 	@simintlpms 74
+ intr75::
+ 	@simintlpms 75
+@@ -3769,6 +3850,17 @@ ife ?PMIOPL
  emucli:
  	@dprintfxx ?LOG_CLISTI, "emulate cli eip=%lX", [esp].EMUINSFR.rIP
  	and byte ptr [esp].EMUINSFR.rFL+1, not 2	; reset IF
@@ -219,7 +263,7 @@ index 2fe5efa..838a01a 100644
   if ?TRAPCLISTI
  	cmp [clihdlr._Cs], 0
  	jnz clitrapped
-@@ -3823,6 +3890,17 @@ clitrapped:
+@@ -3823,6 +3915,17 @@ clitrapped:
  emusti:
  	@dprintfxx ?LOG_CLISTI, "emulate sti eip=%lX", [esp].EMUINSFR.rIP
  	or byte ptr [esp].EMUINSFR.rFL+1, 2	; set IF
@@ -237,7 +281,7 @@ index 2fe5efa..838a01a 100644
   if ?TRAPCLISTI
  	cmp [stihdlr._Cs], 0
  	jnz stitrapped
-@@ -3985,6 +4063,38 @@ ioinstr3: ; INS/OUTS
+@@ -3985,6 +4088,38 @@ ioinstr3: ; INS/OUTS
  	jnz @F
  	movzx edx, byte ptr [esp+4].EMUINSFR.rErr+1
  @@:
@@ -276,7 +320,7 @@ index 2fe5efa..838a01a 100644
  	call gettrapproc	; get trap proc for port in DX
  	pop edx
  	push _CSALIAS_
-@@ -5175,9 +5285,21 @@ endif
+@@ -5175,9 +5310,21 @@ endif
  	@dprintf "initclient: client: CS:IP=%X:%lX, SS:SP=%X:%lX, DS=%lX",[ebp].INITCLPM.rCS, [ebp].INITCLPM.rIP, [ebp].INITCLPM.rSS, [ebp].INITCLPM.rSP,[ebp].INITCLPM.rDS
  	@dprintf "initclient: GDT: %lX (%X), IDT: %lX (%X), LDT: %lX (%X)", pdGDT.dwBase, pdGDT.wLimit, pdIDT.dwBase, pdIDT.wLimit, dwLDTAddr, wLDTLimit
  
@@ -299,7 +343,7 @@ index 2fe5efa..838a01a 100644
  _TEXT32R3 segment
  r3exc3:
  	int 3
-@@ -5194,7 +5316,7 @@ _TEXT32R3 ends
+@@ -5194,7 +5341,7 @@ _TEXT32R3 ends
  	xchg ax,[ebp].INITCLPM.rCS
  	stosd
  	pop es
@@ -308,7 +352,7 @@ index 2fe5efa..838a01a 100644
  endif
  	popad
  if ?32BIT
-@@ -5243,6 +5365,12 @@ initclerr20:		;settlb_pm failed
+@@ -5243,6 +5390,12 @@ initclerr20:		;settlb_pm failed
  	jmp @F
   endif
  endif
@@ -321,7 +365,7 @@ index 2fe5efa..838a01a 100644
  initclerr21:		;cant alloc DS sel
  	@dprintf "init err21: can't alloc DS sel"
  if _LTRACE_
-@@ -5377,6 +5505,9 @@ endif
+@@ -5377,6 +5530,9 @@ endif
  
  _exitclientEx proc near public
  
@@ -331,7 +375,7 @@ index 2fe5efa..838a01a 100644
  if (?DOSOUTPUT eq 0) or (?FORCETEXTMODE eq 1)
  	call forcetextmode
  	@DebugBreak 0
-@@ -5410,6 +5541,10 @@ endif
+@@ -5410,6 +5566,10 @@ endif
  
  	push byte ptr _FLATSEL_
  	pop es
@@ -343,7 +387,7 @@ index 2fe5efa..838a01a 100644
  	call closeinterrupts
  	cmp [gbl.cApps],0			;fatal error on host initialization?
 diff --git a/Src/HDPMI/I2FHDPMI.ASM b/Src/HDPMI/I2FHDPMI.ASM
-index 3c7d992..26a586c 100644
+index d5b1e3e..26a586c 100644
 --- a/Src/HDPMI/I2FHDPMI.ASM
 +++ b/Src/HDPMI/I2FHDPMI.ASM
 @@ -214,7 +214,7 @@ checkrange endp

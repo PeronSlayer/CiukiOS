@@ -70,11 +70,13 @@ class DesktopVM(SetupVM):
 
     def _pointer(self):
         pixels = np.array(Image.open(self.shot('pointer')))
-        palettes=[getattr(self,'cursor_colors',((48,61,73),(247,247,239)))]
-        # Without an explicit palette, also accept the platinum theme shipped
-        # since 2026-09-25; legacy-only matching failed on the unchanged
-        # pre-LFB ISO with an intact platinum arrow on screen.
-        if not hasattr(self,'cursor_colors'):palettes.append(((36,40,48),(246,246,242)))
+        palettes=[getattr(self,'cursor_colors',((48,61,73),(247,247,239))),
+                  ((48,61,73),(247,247,239)),
+                  ((36,40,48),(246,246,242)),
+                  ((56,32,40),(255,247,247))]
+        # Theme settings can change the software cursor colours even when a
+        # gate boots a fresh copy of the image. Keep pointer detection tied to
+        # the exact 16x16 mask, while accepting the shipped theme palettes.
         for colors in palettes:
             try:return match_pointer(pixels,*colors)
             except AssertionError:
@@ -172,7 +174,7 @@ class DesktopVM(SetupVM):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--iso',type=Path,default=Path('build/full/CiukiOS_full_cd_0-7-1.iso'))
+    ap.add_argument('--iso',type=Path,default=Path('build/full/CiukiOS_full_cd_0-8-0.iso'))
     ap.add_argument('--output',type=Path,required=True)
     ap.add_argument('--case',choices=('desktop','safe','recovery','doom','costa','files'),default='desktop')
     args=ap.parse_args()

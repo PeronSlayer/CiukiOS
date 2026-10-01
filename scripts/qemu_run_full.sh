@@ -48,6 +48,8 @@ Environment:
                     planar-VGA workloads that are verified TCG-safe.
   QEMU_DISPLAY_TRANSPORT  Pointer transport: auto, x11, or native (default: auto).
                     auto forces verified X11/XWayland for reliable PS/2 grabs.
+  QEMU_VIDEO_SIZE  Optional preferred VGA EDID size, WIDTHxHEIGHT. The guest
+                   still chooses its own mode for DOS games.
   QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: on).
   QEMU_AUDIO_DEVICES Guest sound card: standard (SB16/AdLib, default) or ac97.
   QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
@@ -61,6 +63,7 @@ Environment:
   QEMU_KEYMAP_LAYOUT  Base QEMU keymap used for visual input (default: en-us).
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full.log).
+  QEMU_VISUAL_LOG  Visual run serial log (default: build/full/qemu-visual.log).
   STAGE0_MARKER    Marker 1 for test validation.
   STAGE1_MARKER    Stage1 readiness marker (default: external-shell banner).
   CIUKIOS_STAGE2_AUTORUN  Set 1 to trigger stage2 automatically.
@@ -85,6 +88,9 @@ QEMU_DISPLAY_TRANSPORT_DETAIL="native"
 QEMU_MOUSE_INPUT_DETAIL="display backend default"
 QEMU_CPU_MODEL="${QEMU_CPU_MODEL:-pentium3}"
 QEMU_MEMORY_MB="${QEMU_MEMORY_MB:-256}"
+VISUAL_LOG="${QEMU_VISUAL_LOG:-build/full/qemu-visual.log}"
+QEMU_VIDEO_ARGS=(-vga std)
+QEMU_VIDEO_DETAIL="std (automatic EDID)"
 
 if [[ -z "$QEMU_CPU_MODEL" ]]; then
   echo "[qemu-run-full] ERROR: QEMU_CPU_MODEL cannot be empty" >&2
@@ -94,6 +100,15 @@ if [[ ! "$QEMU_MEMORY_MB" =~ ^[0-9]+$ ]] \
   || (( QEMU_MEMORY_MB < 64 || QEMU_MEMORY_MB > 4096 )); then
   echo "[qemu-run-full] ERROR: QEMU_MEMORY_MB must be an integer from 64 to 4096" >&2
   exit 1
+fi
+
+if [[ -n "${QEMU_VIDEO_SIZE:-}" ]]; then
+  if [[ ! "$QEMU_VIDEO_SIZE" =~ ^([0-9]{3,4})x([0-9]{3,4})$ ]]; then
+    echo "[qemu-run-full] ERROR: QEMU_VIDEO_SIZE must be WIDTHxHEIGHT" >&2
+    exit 1
+  fi
+  QEMU_VIDEO_ARGS=(-vga none -device "VGA,xres=${BASH_REMATCH[1]},yres=${BASH_REMATCH[2]}")
+  QEMU_VIDEO_DETAIL="std VGA, preferred EDID ${QEMU_VIDEO_SIZE}"
 fi
 
 prepare_legacy_navigation_keymap() {
@@ -602,10 +617,10 @@ configure_display_environment "$RESOLVED_DISPLAY_BACKEND"
 
 QEMU_ARGS=(
   "${BASE_ARGS[@]}"
-  -vga std
+  "${QEMU_VIDEO_ARGS[@]}"
   -display "$RESOLVED_DISPLAY_BACKEND"
   -name CiukiOS
-  -chardev "file,id=ser0,path=build/full/qemu-visual.log"
+  -chardev "file,id=ser0,path=$VISUAL_LOG"
   -serial chardev:ser0
   "${QEMU_KEYBOARD_ARGS[@]}"
   "${QEMU_AUDIO_ARGS[@]}"
@@ -623,13 +638,13 @@ echo "[qemu-run-full] full profile FAT16 baseline boot"
 echo "[qemu-run-full] display backend: $RESOLVED_DISPLAY_BACKEND"
 echo "[qemu-run-full] display transport: $QEMU_DISPLAY_TRANSPORT_DETAIL"
 echo "[qemu-run-full] mouse input path: $QEMU_MOUSE_INPUT_DETAIL"
-echo "[qemu-run-full] vga device: std"
+echo "[qemu-run-full] vga device: $QEMU_VIDEO_DETAIL"
 echo "[qemu-run-full] keyboard: $QEMU_KEYBOARD_DETAIL"
 echo "[qemu-run-full] resources: 1 x $QEMU_CPU_MODEL, ${QEMU_MEMORY_MB} MiB RAM"
 echo "[qemu-run-full] accelerator: $QEMU_ACCEL_DETAIL"
 echo "[qemu-run-full] audio: $QEMU_AUDIO_DETAIL"
 echo "[qemu-run-full] network: $QEMU_NETWORK_DETAIL"
-echo "[qemu-run-full] serial log: build/full/qemu-visual.log"
+echo "[qemu-run-full] serial log: $VISUAL_LOG"
 echo "[qemu-run-full] guest mouse: standard PS/2 i8042; entering the window captures it; Ctrl+Alt+G releases it"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -639,4 +654,5 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
+mkdir -p "$(dirname "$VISUAL_LOG")"
 exec "$QEMU_CMD" "${QEMU_ARGS[@]}"

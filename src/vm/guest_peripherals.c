@@ -306,7 +306,10 @@ int cvgp_mouse_event(cvgp_state *s, uint32_t generation, int dx, int dy,
     if (!owns(s, generation)) return CVGP_ERR_OWNER;
     if (!(s->capabilities & CVGP_CAP_MOUSE))
         return fail(s, CVGP_ERR_MISSING_DEVICE, 0x60);
-    return mouse_packet(s, dx, dy, buttons, 0);
+    /* DEV_MOUSE is an explicit host event.  A forked DOS session can inherit
+     * an active INT 33h driver without replaying its PS/2 stream command. */
+    if (!s->focused) return CVGP_OK;
+    return mouse_packet(s, dx, dy, buttons, 1);
 }
 
 int cvgp_key_raw(cvgp_state *s, uint32_t generation, uint8_t value)

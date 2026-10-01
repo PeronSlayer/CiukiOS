@@ -370,6 +370,8 @@ dd if="$STAGE1_BIN" of="$STAGE1_SLOT_BIN" conv=notrunc status=none
 
 echo "[build-full] assembling application payloads"
 nasm -f bin src/com/hwdetect.asm -o build/full/obj/hwdetect.com
+nasm -f bin src/com/loaddrv.asm -o build/full/obj/loaddrv.com
+nasm -f bin assets/drivers/samples/hello/hello.asm -o build/full/obj/hello.com
 nasm -f bin src/com/inputinit.asm -o build/full/obj/inputini.com
 nasm -f bin src/com/dos_window_runtime.asm -o build/full/obj/doswin.drv
 nasm -f bin src/com/window_game_launch.asm -o build/full/obj/dwin.com
@@ -926,6 +928,27 @@ if [[ "${CIUKIOS_PERSONAL_WALLPAPERS:-0}" == "1" ]]; then
 fi
 python3 scripts/build_wallpapers.py "${wallpaper_args[@]}"
 mcopy -o -i "$IMG" build/full/obj/wallpapers/WALLS.DAT ::SYSTEM/UI/WALLS.DAT
+echo "[build-full] injecting the desktop fonts to ::SYSTEM/FONTS"
+python3 scripts/build_fonts.py --check
+mtools_ensure_dir "$IMG" ::SYSTEM/FONTS
+for font_file in assets/fonts/native/*.CFN; do
+	mcopy -o -i "$IMG" "$font_file" ::SYSTEM/FONTS/
+done
+mcopy -o -i "$IMG" assets/fonts/LICENSES.TXT ::SYSTEM/FONTS/LICENSES.TXT
+mtools_ensure_dir "$IMG" ::DESKTOP
+mtools_ensure_dir "$IMG" ::PROGRAMS
+mtools_ensure_dir "$IMG" ::SYSTEM/CONFIG
+mtools_ensure_dir "$IMG" ::SYSTEM/TEST
+echo "[build-full] injecting CiukiOS software OpenGL prototype"
+bash scripts/build_opengl.sh build/full/obj/gl
+mtools_ensure_dir "$IMG" ::SYSTEM/GL
+mtools_ensure_dir "$IMG" ::PROGRAMS/CiukGL
+for gl_file in TINYGL.LIB GL.H CIUKGL.H LICENSE.TXT; do
+    mcopy -o -i "$IMG" "build/full/obj/gl/$gl_file" "::SYSTEM/GL/$gl_file"
+done
+mcopy -o -i "$IMG" src/probes/gl/README.TXT ::SYSTEM/GL/README.TXT
+mcopy -o -i "$IMG" build/full/obj/gl/GLDEMO.EXE ::PROGRAMS/CiukGL/GLDEMO.EXE
+mcopy -o -i "$IMG" src/probes/gl/README.TXT ::PROGRAMS/CiukGL/README.TXT
 mcopy -o -i "$IMG" assets/wallpapers/LICENSE.txt ::SYSTEM/UI/WALLLIC.TXT
 mcopy -o -i "$IMG" assets/wallpapers/README.md ::SYSTEM/UI/WALLINFO.TXT
 for wallpaper_file in build/full/obj/wallpapers/WALL[0-9][0-9].CWP; do
@@ -942,6 +965,12 @@ mcopy -o -i "$IMG" src/com/media.txt ::APPS/MEDIA.TXT
 
 echo "[build-full] injecting CIUKIDOS kernel to ::SYSTEM/CIUKIDOS.SYS"
 mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/CIUKIDOS.SYS
+
+# Long file names: the kernel's resident LFN extension, built against this
+# kernel's listing (it calls the kernel's disk routines); the shell loads it.
+echo "[build-full] injecting the long file name extension to ::SYSTEM/LFN.COM"
+bash scripts/build_lfn.sh build/full/obj/ciukidos.lst build/full/obj/lfn
+mcopy -o -i "$IMG" build/full/obj/lfn/LFN.COM ::SYSTEM/LFN.COM
 
 echo "[build-full] injecting CIUKIDOS ownership probe to ::APPS/CIUKRTST.COM"
 mcopy -o -i "$IMG" "$CIUKRTST_BIN" ::APPS/CIUKRTST.COM
@@ -1209,6 +1238,7 @@ if [[ -d "$NETWORK_SRC_DIR" ]]; then
 		"MTCP/ftp.exe"
 		"MTCP/ftpsrv.exe"
 		"MTCP/ping.exe"
+		"MTCP/htget.exe"
 		"MTCP/pkttool.exe"
 		"MTCP/COPYING.TXT"
 		"MTCP/SOURCES.ZIP"
@@ -1240,6 +1270,7 @@ if [[ -d "$NETWORK_SRC_DIR" ]]; then
 	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/ftp.exe" "$NETWORK_IMAGE_DIR/FTP.EXE"
 	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/ftpsrv.exe" "$NETWORK_IMAGE_DIR/FTPSRV.EXE"
 	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/ping.exe" "$NETWORK_IMAGE_DIR/PING.EXE"
+	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/htget.exe" "$NETWORK_IMAGE_DIR/HTGET.EXE"
 	mcopy -o -i "$IMG" "$NETWORK_SRC_DIR/MTCP/pkttool.exe" "$NETWORK_IMAGE_DIR/PKTTOOL.EXE"
 	mcopy -o -i "$IMG" "$IPCONFIG_BIN" "$NETWORK_IMAGE_DIR/IPCONFIG.COM"
 	mcopy -o -i "$IMG" "$ICMPD_BIN" "$NETWORK_IMAGE_DIR/ICMPD.COM"
@@ -1314,6 +1345,24 @@ if [[ -f "$DOOMSFX_BIN" ]]; then
 	echo "[build-full] injecting DOOMSFX.LE controlled audio lane to ${DOOMAUD_IMAGE_DIR%/}/DOOMSFX.LE"
 	mcopy -o -i "$IMG" "$DOOMSFX_BIN" "${DOOMAUD_IMAGE_DIR%/}/DOOMSFX.LE"
 fi
+
+# Desktop launchers for the DOS games used by the QEMU compatibility lanes.
+# Keep the binaries and their data in their existing paths so game data and
+# historical test commands still resolve; the launchers give users one folder.
+mtools_ensure_dir "$IMG" "::DESKTOP/TestGames"
+test_game_specs=(
+	"0:DOOM.COM:APPS/DOOM/DOOMCORE.EXE"
+	"1:DOOMVAN.COM:APPS/DOOMVAN/PCDMCORE.EXE"
+	"2:WOLF3D.COM:APPS/WOLF3D/WOLF3D.EXE"
+)
+for test_game_spec in "${test_game_specs[@]}"; do
+	IFS=: read -r test_game_kind test_game_name test_game_target <<<"$test_game_spec"
+	if mdir -i "$IMG" "::$test_game_target" >/dev/null 2>&1; then
+		nasm -f bin -D "GAME_KIND=$test_game_kind" src/com/testgame_launch.asm \
+			-o "build/full/obj/$test_game_name"
+		mcopy -o -i "$IMG" "build/full/obj/$test_game_name" "::DESKTOP/TestGames/$test_game_name"
+	fi
+done
 
 if [[ ! -d "$DRIVERS_SRC_DIR" ]]; then
 	if [[ "$CIUKIOS_ALLOW_MISSING_DRIVERS" == "1" ]]; then

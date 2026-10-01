@@ -339,9 +339,9 @@ ut_keys_run db 'F3   Run',0
 ut_keys_dos db 'F4   DOS',0
 ut_open_hint db 'Double-click an item to open it.',0
 ut_dos_app db 'DOS application',0
-ui_item_types dw ut_desktop_app,ut_file_manager,ut_text_editor,ut_desktop_app,ut_commands,ut_commands
+ui_item_types dw ut_desktop_app,ut_file_manager,ut_web_browser,ut_desktop_app,ut_commands,ut_commands
 ut_file_manager db 'File manager',0
-ut_text_editor db 'Text editor',0
+ut_web_browser db 'Web browser',0
 ut_commands db 'Commands',0
 ut_system_tool db 'System tool',0
 ut_desktop_app db 'Desktop environment',0

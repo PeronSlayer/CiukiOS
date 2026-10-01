@@ -1,0 +1,8 @@
+[Driver]
+Name=NE2000
+Class=NET
+Version=1
+Description=Crynwr NE2000 / RTL8029 PCI
+Files=NE2000.COM
+Load=NE2000.COM %PKT% %IRQ% %IO%
+Hardware=10EC:8029,1050:0940

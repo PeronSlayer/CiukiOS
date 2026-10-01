@@ -85,6 +85,18 @@ startup_driver_services:
     jnc .done
     mov byte [driver_force_vga],1
 .done:
+    ; The drivers installed in the Control Panel (\DRIVERS\DRIVERS.CFG);
+    ; safe boot starts without them.
+    cmp byte [vc_force_safe],1
+    je .loaded
+    call setup_exec_block
+    mov byte [exec_tail],0
+    mov byte [exec_tail+1],13
+    mov dx,driver_loader_path
+    mov bx,exec_env_seg
+    mov ax,0x4B00
+    int 0x21
+.loaded:
     pop es
     pop ds
     popad
@@ -101,6 +113,28 @@ startup_vm_manager:
     mov byte [exec_tail],0
     mov byte [exec_tail+1],13
     mov dx,driver_vm_path
+    mov bx,exec_env_seg
+    mov ax,0x4B00
+    int 0x21
+    push cs
+    pop ds
+    push cs
+    pop es
+    popad
+.done:
+    ret
+
+; Long file names: the kernel's LFN extension (\SYSTEM\LFN.COM, a TSR that
+; hooks INT 21h AX=71xxh) is resident before the VM manager, so every DOS VM
+; has it too. Safe boot keeps the plain 8.3 system. Preserves every register.
+startup_long_names:
+    cmp byte [vc_force_safe],1
+    je .done
+    pushad
+    call setup_exec_block
+    mov byte [exec_tail],0
+    mov byte [exec_tail+1],13
+    mov dx,driver_lfn_path
     mov bx,exec_env_seg
     mov ax,0x4B00
     int 0x21
@@ -159,8 +193,10 @@ driver_profile_valid db 0
 driver_startup_audio db 1
 driver_force_vga db 0
 driver_detector_path db '\DRIVERS\HWDETECT.COM',0
+driver_loader_path db '\DRIVERS\LOADDRV.COM',0
 driver_input_path db '\DRIVERS\INPUTINI.COM',0
 driver_vm_path db '\VM\VMSTART.COM',0
+driver_lfn_path db '\SYSTEM\LFN.COM',0
 driver_profile_path db '\DRIVERS\ACTIVE.CFG',0
 driver_audio_ich db 'AUDIO=ICH_AC97',0
 driver_audio_sb db 'AUDIO=SB_NATIVE',0

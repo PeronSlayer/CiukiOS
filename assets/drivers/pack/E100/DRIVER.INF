@@ -1,0 +1,8 @@
+[Driver]
+Name=E100
+Class=NET
+Version=1
+Description=Intel PRO/100 packet driver
+Files=E100.COM
+Load=E100.COM /i %PKTH%
+Hardware=8086:1229

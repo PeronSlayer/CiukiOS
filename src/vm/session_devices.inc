@@ -290,7 +290,7 @@ dev_poll endp
 dev_port_handler proc
  cmp dev_active,0                       ; the running VM's device model
  jne dev_port_model
- @VMMCall Simulate_IO                   ; a VM without one: the real device
+ @VMMCall Simulate_IO
  ret
 dev_port_handler endp
 

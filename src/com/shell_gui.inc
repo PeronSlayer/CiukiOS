@@ -1,5 +1,5 @@
 %include "src/com/ui_theme.inc"
-%define UI_WINDOW_COUNT 13
+%define UI_WINDOW_COUNT 32
 %include "src/com/shell_assets.inc"
 ; CiukiOS native desktop. Single-tasking applications retain the DOS ABI.
 ; Optional BIOS-text sessions retain the desktop through a scoped runtime.
@@ -25,6 +25,7 @@ ui_enter:
     int 0x21
     jmp main_loop
 .assets_ready:
+    call app_settings_load    ; colours, mouse, keyboard, system font
     ; The startup melody is the event sound driver's first event: it starts
     ; with the first desktop frame and plays asynchronously.
     cmp byte [ui_sound_played],1
@@ -92,12 +93,15 @@ ui_loop:
     call ui_sfx_service
     call poll_pending_power_action
     call ui_motion_poll
-    call app_poll
-    test ax,ax
-    jnz ui_redraw
     call ui_event
     test ax,ax
-    jz .idle
+    jnz .event_action
+    ; Modules may queue a precise damage rectangle while returning zero.
+    ; Present it now, before a VM poll or HLT can delay a live brush stroke.
+    cmp byte [ui_comp_dirty],1
+    je ui_redraw
+    jmp .idle
+.event_action:
     cmp ax,251
     je ui_redraw_input
     cmp ax,250
@@ -108,6 +112,11 @@ ui_loop:
     jb ui_item_click
     jmp ui_action
 .idle:
+    call app_poll
+    test ax,ax
+    jnz ui_redraw
+    cmp byte [ui_comp_dirty],1
+    je ui_redraw
     call ui_clock_poll
     call ui_pages_sync
     cmp byte [app_busy],1
@@ -160,6 +169,11 @@ ui_redraw_input:
 
 ui_action:
     call ui_damage_active
+    cmp ax,249
+    jne .not_app_command
+    mov si,app_command
+    jmp ui_launch_command
+.not_app_command:
     cmp byte [ui_active_window],7
     jne .menu_closed
     cmp ax,9
@@ -172,14 +186,21 @@ ui_action:
     ja .non_files
     call app_action
     cmp ax,249
-    je ui_launch_command
+    jne .not_module_command
+    mov si,app_command
+    jmp ui_launch_command
+.not_module_command:
     test ax,ax
     jz ui_loop
     jmp ui_redraw
 .non_files:
+    mov bl,12                    ; CiukNote
     cmp ax,29
+    je .module
+    mov bl,16                    ; CiukPaint
+    cmp ax,28
     jne .non_notepad
-    mov bl,12
+.module:
     xor si,si
     call app_open
     jmp ui_redraw
@@ -257,8 +278,23 @@ ui_action:
     je .tasks
     cmp ax,24
     je .wallpaper
+    cmp ax,61
+    je .control_panel
+    cmp ax,62
+    je .installed_programs
+    cmp ax,63
+    je .browser
     cmp ax,13
     je .menu
+    cmp ax,80
+    je .top_sound
+    cmp ax,81
+    je .top_network
+    cmp ax,82
+    jb .top_done
+    cmp ax,84
+    jbe .top_performance
+.top_done:
     cmp ax,10
     je .minimize
     cmp ax,11
@@ -299,6 +335,36 @@ ui_action:
     jmp ui_redraw
 .tasks:
     mov bl,9
+    xor si,si
+    call app_open
+    jmp ui_redraw
+.control_panel:
+    mov bl,13
+    xor si,si
+    call app_open
+    jmp ui_redraw
+.top_sound:
+    mov bl,13
+    mov si,ui_arg_sound
+    call app_open
+    jmp ui_redraw
+.top_network:
+    mov bl,13
+    mov si,ui_arg_network
+    call app_open
+    jmp ui_redraw
+.top_performance:
+    mov bl,9
+    mov si,ui_arg_performance
+    call app_open
+    jmp ui_redraw
+.installed_programs:
+    mov bl,8
+    mov si,ui_installed_dir
+    call app_open
+    jmp ui_redraw
+.browser:
+    mov bl,17
     xor si,si
     call app_open
     jmp ui_redraw
@@ -434,11 +500,7 @@ ui_action:
 .run_commit:
     call app_run_builtin      ; notepad, explorer, taskmgr: desktop applications
     jc ui_redraw
-    ; Windows 95 style: a program started from Run opens in a DOS window
-    ; whenever the desktop can host one; otherwise it runs full screen.
-    call dos_host_prepare
-    jc .run_full_screen
-    call dos_host_finish
+    ; The VM-backed window runs from the normal desktop event loop.
     jmp ui_run_window
 .run_full_screen:
     cmp byte [ui_run_len],0
@@ -495,10 +557,9 @@ ui_item_open:
     ; can host one. Games start their own binary there (the window's devices
     ; replace the full-screen audio launchers, which stay the fallback).
     push si
-    call dos_host_prepare
+    call dw_vm_available
     pop si
     jc ui_launch_command
-    call dos_host_finish
     mov bx,ui_window_commands
 .window_command:
     mov ax,[bx]
@@ -530,7 +591,6 @@ ui_queue_command:
     push si
     call ui_video_end
     pop si
-    jc dw_retained_show
     push si
     call ui_assets_end
     pop si
@@ -581,7 +641,6 @@ ui_to_dos:
     mov byte [ui_dialog],0
     mov byte [ui_exec_error],0
     call ui_video_end
-    jc dw_retained_show
     call ui_assets_end
     call restore_shell_video_state
     call desktop_home
@@ -641,6 +700,10 @@ ui_video_begin:
     mov byte [ui_mouse_ready],0
     mov byte [ui_pointer_visible],0
     mov byte [ui_previous_button],0
+    mov byte [ui_mouse_press_pending],0
+    mov byte [ui_mouse_release_pending],0
+    mov word [ui_mouse_buttons],0
+    mov byte [app_capture],0
     mov byte [ui_button_down],0
     mov byte [ui_dragging],0
     mov byte [ui_full_redraw],1
@@ -807,8 +870,6 @@ ui_video_begin:
 
 ui_video_end:
     call ui_sfx_end
-    call dw_release
-    jc .retained
     call app_suspend
     call app_keys_end
     call wp_end
@@ -839,7 +900,6 @@ ui_draw:
     jne .done
     mov byte [ui_comp_recover],0
     call ui_video_end
-    jc .done
     call ui_video_begin
     mov byte [ui_full_redraw],0
     mov byte [ui_bar_dirty],0
@@ -852,7 +912,6 @@ ui_draw_scene:
     mov byte [ui_hit_owner],0
     U_RECT 0,0,[ui_width],[ui_height],3
     call wp_background
-    call ui_desktop_detail
     ; Ciuki's native portrait identifies the system dedicated to him.
     U_RECT 0,0,[ui_width],29,7
     U_RECT 0,28,[ui_width],1,8
@@ -860,13 +919,39 @@ ui_draw_scene:
     mov dx,2
     call ciuki_logo24
     U_TEXT 33,6,ut_brand,0,1
+    mov bx,4
+    mov dx,2
+    mov cx,125
+    mov si,25
+    mov ax,13
+    call ui_hit_add
     mov bx,[ui_width]
-    sub bx,236
-    U_BUTTON bx,3,88,23,ut_programs,1
-    add bx,91
-    U_BUTTON bx,3,65,23,ut_run,4
-    add bx,68
+    sub bx,576
+    mov di,100
+    cmp word [ui_width],800
+    jae .top_width_ready
+    add bx,120
+    mov di,76
+.top_width_ready:
+    mov ax,80
+.top_indicators:
+    push ax
+    mov dx,3
+    mov cx,di
+    mov si,23
+    call ui_hit_add
+    pop ax
+    add bx,di
+    inc ax
+    cmp ax,85
+    jb .top_indicators
+    mov bx,[ui_width]
+    sub bx,72
     U_BUTTON bx,3,66,23,ut_dos,3
+    ; The desktop module paints the desktop (icons, folders, Recycle Bin);
+    ; without it, the shell's own shortcuts.
+    call app_desktop_paint
+    jnc .shortcuts_done
     ; Desktop shortcuts remain usable with the library closed.
     mov bx,14
     mov dx,52
@@ -912,9 +997,7 @@ ui_draw_scene:
     mov di,ut_display
     mov bp,8
     call ui_shortcut
-    mov dx,[ui_height]
-    sub dx,54
-    U_TEXT 14,dx,ut_tagline,7
+.shortcuts_done:
     call ui_windows_draw
     call ui_motion_draw
 .bar:
@@ -923,16 +1006,13 @@ ui_draw_scene:
     U_RECT 0,dx,[ui_width],32,7
     U_RECT 0,dx,[ui_width],1,15
     add dx,4
-    U_BUTTON 5,dx,83,24,ut_brand,13
-    U_BUTTON 94,dx,147,24,ut_library,1
+    U_BUTTON 5,dx,147,24,ut_library,1
     call ui_windows_taskbar
-    mov bx,[ui_width]
-    sub bx,142
-    U_BUTTON bx,dx,62,24,ut_dos,3
     mov bx,[ui_width]
     sub bx,73
     add dx,4
     U_TEXT bx,dx,ui_clock_text,0
+    call app_overlay_paint    ; the desktop's menus, above everything
 .pointer:
     ret
 
@@ -1018,7 +1098,7 @@ ui_draw_window:
     jae .footer
     cmp byte [ui_page],1
     jne .item
-    cmp al,5
+    cmp al,1
     jae .footer
 .item:
     xor ah,ah
@@ -1375,6 +1455,8 @@ ui_button:
     pop si
     pop dx
 .label:
+    cmp byte [di],5                    ; 1-4: a drawn caption glyph
+    jb .glyph
     push cx
     push si
     mov si,di
@@ -1394,6 +1476,107 @@ ui_button:
     xor ax,ax
     call ui_text
     popad
+    ret
+.glyph:
+    ; Centre of the button face, then the glyph in ink, drawn in pixels
+    ; like the theme's bevels (no font characters).
+    shr cx,1
+    add bx,cx
+    shr si,1
+    add dx,si
+    mov al,0
+    mov ah,[di]
+    cmp ah,1
+    jne .maximize
+    sub bx,4                           ; minimize: a bar at the bottom
+    add dx,2
+    mov cx,8
+    mov si,2
+    call ui_rect
+    jmp .glyph_done
+.maximize:
+    cmp ah,4
+    je .close
+    cmp ah,3
+    jne .frame
+    ; restore: a back frame up and right, then the front frame
+    push bx
+    push dx
+    sub bx,2
+    sub dx,5
+    mov cx,7
+    call ui_glyph_frame
+    pop dx
+    pop bx
+    sub bx,5
+    sub dx,2
+    mov cx,7
+    mov si,6
+    mov al,7                           ; the front window hides the back one
+    call ui_rect
+    mov al,0
+    call ui_glyph_frame
+    jmp .glyph_done
+.frame:
+    sub bx,5                           ; maximize: a window frame
+    sub dx,5
+    mov cx,10
+    call ui_glyph_frame
+    jmp .glyph_done
+.close:
+    sub bx,4                           ; close: a two-pixel X
+    sub dx,4
+    mov bp,0
+.cross:
+    mov cx,2
+    mov si,1
+    push bx
+    add bx,bp
+    call ui_rect
+    pop bx
+    push bx
+    add bx,7
+    sub bx,bp
+    call ui_rect
+    pop bx
+    inc dx
+    inc bp
+    cmp bp,8
+    jb .cross
+.glyph_done:
+    popad
+    ret
+
+; BX, DX top left, CX size: a small window frame with a thick top (AL ink).
+ui_glyph_frame:
+    push si
+    mov si,2
+    call ui_rect                       ; title bar
+    push cx
+    push dx
+    mov si,cx
+    dec si
+    mov cx,1
+    call ui_rect                       ; left
+    pop dx
+    pop cx
+    push bx
+    add bx,cx
+    dec bx
+    push cx
+    mov si,cx
+    dec si
+    mov cx,1
+    call ui_rect                       ; right
+    pop cx
+    pop bx
+    push dx
+    add dx,cx
+    sub dx,2
+    mov si,1
+    call ui_rect                       ; bottom
+    pop dx
+    pop si
     ret
 
 ui_measure:
@@ -1428,7 +1611,7 @@ ui_hit_add:
     pushad
     push fs
     mov fs,[ui_assets_seg]
-    cmp word [ui_hit_count],192
+    cmp word [ui_hit_count],256
     jae .done
     mov di,[ui_hit_count]
     imul di,10
@@ -1478,6 +1661,51 @@ ui_hit_find:
 .done:
     mov [ui_last_hit_ptr],si
     call ui_windows_hit
+    cmp byte [app_overlay],0
+    jne .picked
+    push ax
+    call ui_window_pick_at_pointer
+    test al,al
+    jz .keep_hit
+    cmp al,[ui_hit_target]
+    je .same_hit
+    mov [ui_hit_target],al
+    pop ax
+    mov ax,70                  ; exposed window body: raise on first click
+    jmp .check_grip
+.same_hit:
+    pop ax
+.check_grip:
+    ; The last compositor band may omit a lower window's resize grip from
+    ; the hit list. Recover its control from current window geometry.
+    movzx si,byte [ui_hit_target]
+    dec si
+    cmp byte [app_win_slot+si],0xFF
+    je .picked
+    test byte [app_win_style+si],1
+    jnz .picked
+    shl si,1
+    mov bx,[ui_window_x+si]
+    add bx,[ui_window_width+si]
+    sub bx,14
+    cmp [ui_mouse_x],bx
+    jb .picked
+    add bx,12
+    cmp [ui_mouse_x],bx
+    jae .picked
+    mov bx,[ui_window_y+si]
+    add bx,[ui_window_height+si]
+    sub bx,14
+    cmp [ui_mouse_y],bx
+    jb .picked
+    add bx,12
+    cmp [ui_mouse_y],bx
+    jae .picked
+    mov ax,65                 ; module resize grip
+    jmp .picked
+.keep_hit:
+    pop ax
+.picked:
     pop si
     pop cx
     pop bx
@@ -1504,8 +1732,7 @@ ui_record:
 %include "src/com/shell_gui_dialogs.inc"
 %include "src/com/shell_apps.inc"
 %include "src/com/shell_wallpaper.inc"
-%include "src/com/shell_dos_window.inc"
-%include "src/com/shell_dos_window_host.inc"
+%include "src/com/shell_vm_window.inc"
 %include "src/com/shell_gui_detail.inc"
 %include "src/com/shell_system_sounds.inc"
 %define CIUKI_LOGO_RECT ui_rect
@@ -1523,25 +1750,17 @@ ui_items:
     db 4,0
     dw ut_files,ud_files,0,2
     db 1,0
-    dw ut_editor,ud_editor,uc_editor,0
-    db 2,0
-    dw ut_costa,ud_costa,uc_costa,0
-    db 14,0
+    dw ut_browser,ud_browser,0,63
+    db 35,0
+    dw ut_control,ud_control,0,61
+    db 20,0
     dw ut_notepad,ud_notepad,0,29
     db 2,0
-    dw ut_run,ud_run,0,4
-    db 5,0
-    dw ut_doom,ud_doom,uc_doom,0
-    db 6,0
-    dw ut_doomvan,ud_doomvan,uc_doomvan,0
-    db 6,0
-    dw ut_wolf,ud_wolf,uc_wolf,0
-    db 7,0
-    dw ut_doom_window,ud_game_window,0,59
-    db 6,0
-    dw ut_wolf_window,ud_game_window,0,60
-    db 7,0
-    times 10 db 0
+    dw ut_paint,ud_paint,0,28
+    db 34,0
+    dw ut_installed,ud_installed,0,62
+    db 1,0
+    times 50 db 0
     dw ut_display,ud_display,0,8
     db 8,0
     dw ut_sound,ud_sound,0,9
@@ -1557,17 +1776,26 @@ ui_items:
 
 ut_brand db 'CiukiOS',0
 ut_tagline db 'A modern Retro OS',0
+ui_arg_sound db 'sound',0
+ui_arg_network db 'network',0
+ui_arg_performance db 'performance',0
 ut_programs db 'Programs',0
 ut_library db 'Application Library',0
 ut_applications db 'Applications',0
-ut_games db 'Games',0
+ut_games db 'Installed',0
 ut_system db 'System',0
 ut_open db 'Open',0
 ut_dos db 'DOS',0
 ut_run db 'Run...',0
 ut_files db 'Files',0
 ut_tasks db 'Task Manager',0
-ut_notepad db 'Notepad',0
+ut_notepad db 'CiukNote',0
+ut_paint db 'CiukPaint',0
+ut_browser db 'CiukWeb',0
+ut_control db 'Control Panel',0
+ut_devices db 'Devices',0
+ut_recycle db 'Recycle Bin',0
+ut_modwin db 'Window',0
 ut_wallpaper db 'Wallpaper',0
 ud_tasks db 'Windows, programs and memory',0
 ud_wallpaper db 'Choose a desktop background',0
@@ -1585,14 +1813,20 @@ ut_wolf_window db 'Windowed Wolf3D',0
 ud_game_window db 'Source port; audio not available yet.',0
 ut_doomvan db 'Doom Vanille',0
 ut_wolf db 'Wolfenstein 3D',0
-ut_min db '_',0
-ut_max db '^',0
-ut_close db 'x',0
+ut_min db 1,0                  ; drawn glyphs (ui_button)
+ut_max db 2,0
+ut_close db 4,0
 ut_prompt db '>_',0
 ud_prompt db 'DOS programs in a window',0
 ud_files db 'Browse folders, copy, move and rename files',0
 ud_editor db 'Edit text files full screen (EDIT)',0
 ud_notepad db 'Write and edit text documents',0
+ud_paint db 'Draw and edit pictures',0
+ud_browser db 'Browse simple HTTP pages',0
+ud_control db 'Change system settings and inspect devices',0
+ut_installed db 'Installed Programs',0
+ud_installed db 'Applications installed in C:\PROGRAMS',0
+ui_installed_dir db 'C:\PROGRAMS',0
 ud_costa db 'Open the Costa desktop',0
 ud_dos db 'Full-screen DOS. Type EXIT to return here.',0
 ud_run db 'Run a program or a shell command',0

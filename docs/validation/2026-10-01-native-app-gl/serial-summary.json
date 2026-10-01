@@ -1,0 +1,193 @@
+{
+  "image_sha256": "a1a2ab8d5dd1b1d304b8ea65739d93ec180984d4679ad7547a7dc50dfe17f042",
+  "host": "QEMU/KVM",
+  "physical_hardware_qualified": false,
+  "method": "serial recovery after host reboot; one QEMU process at a time; same image hash",
+  "formal_profile_completed": false,
+  "passed": true,
+  "gates": [
+    {
+      "gate": "unit-peripherals",
+      "source": "build/tests/native-gl-final3-profile/unit-peripherals/report.json",
+      "exit": 0,
+      "report_passed": null,
+      "ok": true
+    },
+    {
+      "gate": "unit-virtual-vga",
+      "source": "build/tests/native-gl-final3-profile/logs/unit-virtual-vga.log",
+      "exit": 0,
+      "report_passed": null,
+      "ok": true
+    },
+    {
+      "gate": "unit-vga-x86",
+      "source": "build/tests/native-gl-final3-profile/logs/unit-vga-x86.log",
+      "exit": 0,
+      "report_passed": null,
+      "ok": true
+    },
+    {
+      "gate": "unit-scheduler",
+      "source": "build/tests/native-gl-final3-profile/unit-scheduler/report.json",
+      "exit": 0,
+      "report_passed": null,
+      "ok": true
+    },
+    {
+      "gate": "unit-device-link",
+      "source": "build/tests/native-gl-final3-profile/unit-device-link/report.json",
+      "exit": 0,
+      "report_passed": null,
+      "ok": true
+    },
+    {
+      "gate": "unit-jemm-query",
+      "source": "build/tests/native-gl-final3-profile/logs/unit-jemm-query.log",
+      "exit": 0,
+      "report_passed": null,
+      "ok": true
+    },
+    {
+      "gate": "vga-session",
+      "source": "build/tests/native-gl-final3-profile/vga-session/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "legacy-v86",
+      "source": "build/tests/native-gl-final3-profile/legacy-v86/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "legacy-dpmi",
+      "source": "build/tests/native-gl-final3-profile/legacy-dpmi/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "v86cli",
+      "source": "build/tests/native-gl-final3-profile/v86cli/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "devtest",
+      "source": "build/tests/native-gl-final3-profile/devtest/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "lifetime",
+      "source": "build/tests/native-gl-final3-profile/lifetime/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "vga-window",
+      "source": "build/tests/native-gl-final3-profile/vga-window/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "guest-io",
+      "source": "build/tests/native-gl-final3-profile/guest-io/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "dos-window-text",
+      "source": "build/tests/native-gl-final3-profile/dos-window-text/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "task-manager-vm",
+      "source": "build/tests/native-gl-final3-profile/task-manager-vm/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "dpmi-probe",
+      "source": "build/tests/native-gl-final3-profile/dpmi-probe/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "doom-vanille",
+      "source": "build/tests/native-gl-final2-profile/doom-vanille/report.json",
+      "exit": 0,
+      "report_passed": true,
+      "ok": true
+    },
+    {
+      "gate": "doom-original",
+      "source": "build/tests/native-gl-final4-original/report.json",
+      "report_passed": true,
+      "ok": true,
+      "exit": 0
+    },
+    {
+      "gate": "doom-vanille-sfx",
+      "source": "build/tests/native-gl-final4-vanille-sfx/report.json",
+      "report_passed": true,
+      "ok": true,
+      "exit": 0
+    },
+    {
+      "gate": "doom-original-sfx",
+      "source": "build/tests/native-gl-final4-original-sfx/report.json",
+      "report_passed": true,
+      "ok": true,
+      "exit": 0
+    },
+    {
+      "gate": "multi-vm",
+      "source": "build/tests/native-gl-final4-multi-vm/report.json",
+      "report_passed": true,
+      "ok": true,
+      "exit": 0
+    },
+    {
+      "gate": "startup-stack",
+      "source": "build/tests/native-gl-final4-startup-stack/result.json",
+      "report_passed": true,
+      "ok": true,
+      "exit": 0
+    },
+    {
+      "gate": "desktop-apps",
+      "source": "build/tests/native-gl-final4-desktop-apps/report.json",
+      "report_passed": true,
+      "ok": true,
+      "exit": 0
+    },
+    {
+      "gate": "native-media",
+      "source": "build/tests/native-gl-final4-native-media/report.json",
+      "report_passed": true,
+      "ok": true,
+      "exit": 0
+    },
+    {
+      "gate": "dos-memory",
+      "source": "build/tests/native-gl-final4-dos-memory/serial.log",
+      "exit": 0,
+      "report_passed": null,
+      "ok": true,
+      "note": "direct command exited zero; harness emits no JSON"
+    }
+  ]
+}

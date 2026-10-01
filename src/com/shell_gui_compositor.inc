@@ -44,6 +44,38 @@ ui_comp_begin:
     ret
 
 ; BX paragraphs -> AX segment of an XMS upper memory block; CF=1 if none.
+; BX = paragraphs: an upper memory block if there is one (Jemm), else DOS
+; memory. AX = segment, CF=1 when neither. The desktop's own blocks live
+; there, so a DOS program in a window keeps its conventional memory.
+hi_alloc:
+    call ui_umb_alloc
+    jnc .done
+    mov ah,0x48
+    int 0x21
+.done:
+    ret
+
+; ES = a block from hi_alloc: back to XMS (an upper block) or to DOS.
+hi_free:
+    push ax
+    push bx
+    push dx
+    mov ax,es
+    cmp ax,0xA000
+    jb .dos
+    mov dx,ax
+    mov ah,0x11
+    call far [ui_xms]
+    jmp .done
+.dos:
+    mov ah,0x49
+    int 0x21
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 ui_umb_alloc:
     push bx
     push dx
@@ -716,6 +748,8 @@ ui_comp_damage:
 ui_comp_damage_drag:
     pushad
     cmp byte [ui_dragging],3
+    je .native
+    cmp byte [ui_dragging],4
     je .native
     mov bx,[ui_wx]
     mov dx,[ui_wy]

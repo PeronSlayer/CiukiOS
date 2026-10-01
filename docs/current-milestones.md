@@ -1,7 +1,26 @@
 # Current Milestones
 
-Updated 2026-09-27 for `CiukiOS pre-Alpha v0.7.1`. The current desktop increment
-and the older cross-phase qualification records have separate evidence scopes.
+Updated 2026-10-01 for `CiukiOS pre-Alpha v0.8.0` development. M1–M3 passed
+their QEMU gates. M4 paints DOOM in a forked VM with Files open, gives each
+DOS window independent focus and close, and passes the complete **26/26**
+VM-window profile on the 0.8.0 image
+([evidence](validation/2026-09-30-m4/README.md)). M5 remains open.
+On 2026-10-01, CiukPaint received immediate damage presentation during a
+held stroke, DOS VM video damage was narrowed to changed horizontal bands,
+CiukWeb replaced the preinstalled MicroWeb browser, and the first TinyGL
+software OpenGL subset drew a triangle in an M4 window. On this newer image,
+the 26 VM-window gates each passed across serial recovery runs after a host
+reboot; the automated profile did not finish in one invocation. See the
+[current status](project-status-2026-10-01.md) and
+[combined evidence](validation/2026-10-01-native-app-gl/README.md).
+Post-M4 work adds a desktop TestGames folder and a persistent CiukiOS
+Settings Registry. The [post-M4 evidence](validation/2026-09-30-post-m4/README.md)
+is separate from the 26/26 baseline. Windows 95/98 PE applications and
+installers remain unsupported; the
+[compatibility plan](windows-compatibility-and-layout-2026-09-30.md)
+identifies free tests and the runtime work still required.
+The September 26 desktop increment documented below and the older cross-phase
+qualification records have separate evidence scopes.
 Dated investigation notes and files under `handoff/` remain historical evidence;
 when they disagree with this ledger, `Roadmap.md` and the current compatibility
 matrix govern.
@@ -169,10 +188,13 @@ make qemu-test-full-windows31
 
 The aggregate includes every locally available bundled game and Windows workflow. Networking and the long installer gates remain separate; use the affected focused lane whenever shared DOS, memory, disk, input, video, audio, network, or setup code changes.
 
-## Immediate Operational Order
+## Current Operational Order
 
-1. Attach protected-mode (HDPMI) clients to the device model: port bridge (`DEV_IO`), virtual IRQ delivery to protected-mode handlers and EOI routing to the profile's PIC. Runtime IF negotiation and the V86 device path are done (QEMU).
-2. Complete protected-mode window presentation.
-3. Qualify original Doom/Wolf binaries with actual video/audio, measured performance, cleanup and separate physical T23/E500 evidence. Cooperative ports cannot satisfy this gate.
-4. Preserve the historical DOS/Windows/audio gates while expanding the Phase 6 corpus and full-CD workflows; keep original Doom SB16/DMX and physical compatibility gaps explicit.
-5. Extend networking and Windows compatibility under their existing separate phase gates.
+1. Broaden M5 qualification for simultaneous protected-mode DPMI workloads;
+   M4 already covers a protected-mode probe and DOOM in separate desktop VMs.
+2. Expand the licensed driver catalog and test additional era hardware. The
+   current QEMU NIC set does not establish support for most physical PCs.
+3. Preserve the passing 26/26 M4 profile while expanding the Phase 6 corpus
+   and full-CD workflows. Keep original Doom SB16/DMX and physical
+   compatibility gaps explicit.
+4. Qualify physical T23/E500 input, audio and storage separately from QEMU.

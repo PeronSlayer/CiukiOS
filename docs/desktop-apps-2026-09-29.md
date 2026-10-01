@@ -5,13 +5,13 @@ Owner requests:
 - a more precise and detailed Task Manager;
 - a file manager like Explorer or Dolphin, with a right-click menu that
   creates folders and copies, cuts and pastes files;
-- the legacy Windows Notepad, identical and complete, next to the DOS editor.
+- a classic desktop text editor next to the DOS editor, now named CiukNote.
 
 ## Why modules
 
 SHELL.COM was full: 60,768 bytes against its 0xEF00 arena ceiling, with the
 built-in Files and Tasks inside. Those two moved out, and so did the
-removable-media code. Files, Tasks and Notepad are now separate programs in
+removable-media code. Files, Tasks and CiukNote are now separate programs in
 `\SYSTEM\APPS`, written in C (OpenWatcom), and SHELL.COM hosts them.
 
 The shell is now 55,856 bytes, host included.
@@ -39,14 +39,14 @@ The host is `src/com/shell_apps.inc`; the C side is in `src/apps/app.h`.
   Services run on the shell's own stack.
 - **Before a DOS program runs** (SUSPEND), each module either:
   - saves its state (Files: the folder) and is unloaded, freeing its memory;
-  - or stays resident, e.g. Notepad with unsaved text.
+  - or stays resident, e.g. CiukNote with unsaved text.
 
   Modules reopen after the program ends.
 
 | Module | Image | Memory | Window |
 | --- | --- | --- | --- |
-| `FILES.APP` | 34 KB | 62 KB (+ an 8 KB block while copying) | 8 |
-| `NOTEPAD.APP` | 27 KB | 36 KB (+ 60 KB text, undo and clipboard blocks) | 12 |
+| `FILES.APP` | 43 KB | 65 KB (+ far name/history and job blocks) | 8 |
+| `CIUKNOTE.APP` | 29 KB | 39 KB (+ far text, undo and clipboard blocks) | 12 |
 | `TASKS.APP` | 18 KB | 25 KB | 9 |
 
 Build: `scripts/build_apps.sh`, called by `scripts/build_full.sh`.
@@ -63,7 +63,7 @@ as before.
 | Keys | Action |
 | --- | --- |
 | Win (alone), Ctrl+Esc | Programs (the Start menu) |
-| Win+R | Run (also: `notepad [file]`, `explorer [folder]`, `taskmgr`) |
+| Win+R | Run (`ciuknote [file]`, legacy alias `notepad`, `explorer [folder]`, `taskmgr`) |
 | Win+E | Files |
 | Win+D, Win+M | show the desktop (minimize every window) |
 | Win+Tab, Alt+Tab | next window |
@@ -86,7 +86,7 @@ as before.
 - **Selection.** Click, Ctrl+click, Shift+click, Shift+arrows, Ctrl+A,
   Invert Selection, type to find.
 - **Context menu (right click).**
-  - On an item: Open, Open with Notepad, Edit (DOS Editor), Cut, Copy,
+  - On an item: Open, Open with CiukNote, Edit (DOS Editor), Cut, Copy,
     Paste into a folder, Delete, Rename, Properties.
   - On the background: views, sorting, Refresh, Paste, New Folder, New Text
     Document, Properties.
@@ -95,34 +95,35 @@ as before.
   - Copy, cut and paste, of folders too: a background job with progress and
     Cancel, replace prompt (Yes, Yes to All, No, Cancel), date and
     attributes kept.
-  - Delete with confirmation, recursive for folders. There is no Recycle
-    Bin: the dialog says "permanently".
+  - Delete moves files and folders to the Recycle Bin; Shift+Delete
+    removes them permanently.
   - Properties: type, location, size, contents, attributes (editable).
   - Drag and drop: selected items onto a folder, a place or a tree folder
     move there; with Ctrl they are copied, and from removable media they
     are imported. The pointer shows "Move n item(s)" or "Copy n item(s)".
-- **Opening files.** Text files open in Notepad; `.COM`/`.EXE` run from
+- **Opening files.** Text files open in CiukNote; `.COM`/`.EXE` run from
   their own folder.
 - **Keys.** Enter, Backspace, Alt+Left/Right/Up, F2, F5, Del, Alt+Enter,
   Alt+D or F4 (address bar), Ctrl+C/X/V.
 - **Removable media.** Through MEDIA.DRV, read-only: browse, preview text,
   and copy files, then paste them into a folder on C: (an import).
-- **Limits.** DOS 8.3 names, and one mounted drive (the kernel's).
+- **Limits.** Long names through the resident LFN extension, and one mounted
+  drive (the kernel's). The Folders tree still uses short aliases.
 
-## Notepad (classic Windows Notepad)
+## CiukNote
 
-- **File.** New, Open, Save, Save As (with the Windows file dialog, a type
+- **File.** New, Open, Save, Save As (with the desktop file dialog, a type
   filter and a replace prompt), Page Setup, Print, Exit. Unsaved changes
   give "The text in the X file has changed. Do you want to save the
   changes?"
-- **Edit.** Undo (one level, toggling as in Windows), Cut, Copy, Paste,
+- **Edit.** Undo (one level), Cut, Copy, Paste,
   Delete, Find, Find Next (F3), Replace (Find Next, Replace, Replace All,
-  Match case), Go To (off with Word Wrap, as in XP), Select All, Time/Date
+  Match case), Go To (off with Word Wrap), Select All, Time/Date
   (F5).
 - **Format.** Word Wrap, Font.
 - **View.** Status Bar (Ln, Col).
 - **Help.** Help Topics, About.
-- **Also as in Windows.**
+- **Additional editing.**
   - Right-click menu, shortcuts, F10 and Alt menus.
   - Double-click selects a word.
   - A file whose first line is `.LOG` gets the time and date appended on
@@ -170,7 +171,7 @@ as before.
 ## Gates
 
 - **`scripts/qemu_test_desktop_apps.py`.** Shortcuts, Files operations
-  (including a drag and drop and a click in the Folders tree), Notepad
+  (including a drag and drop and a click in the Folders tree), CiukNote
   editing, Tasks tabs and End Task. After shutdown the disk is checked with
   an independent FAT parser: copy, move, drag-and-drop move, recursive
   delete, the saved text, the `.LOG` stamp, and today's date from
@@ -182,5 +183,5 @@ as before.
 
 The first two run in `scripts/test_vm_window_profile.sh`; the media gate
 runs when its fixtures are built. Modules log their state on COM1
-(`[FILES]`, `[NOTEPAD]`, `[TASKS]`, `[DESKTOP] WINDOW nn OPEN/CLOSE`).
+(`[FILES]`, `[CIUKNOTE]`, `[TASKS]`, `[DESKTOP] WINDOW nn OPEN/CLOSE`).
 QEMU evidence only.

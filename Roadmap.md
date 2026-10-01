@@ -11,16 +11,22 @@ Build a simple, native x86 BIOS operating system that runs DOS and pre-NT worklo
 5. Phase 7 evidence boundary: `docs/legacy-audio-bring-up-plan-v0.1.md`
 6. Current cross-phase milestone ledger: `docs/current-milestones.md`
 
-## Current development priority — 2026-09-29
+## Current development priority — 2026-10-01
 
-DOS applications run in CiukiOS's own windows, Windows 95/98 style. The plan is
-[the DOS-window roadmap](docs/roadmap-dos-vm-desktop-2026-09-28.md). Phase 2
-(several DOS windows at once) has M1-M3 passing on QEMU: a resident VM manager
-runs several V86 VMs, each with its own DOS window session, and keyboard, mouse
-and AC'97 sound follow the focus. Profile 21/21, VM-manager gate 10/10 parts
-([evidence](docs/validation/2026-09-29-boot-and-m3/README.md)). Next is M4, the
-desktop painting each VM's session in its own window. Windows 3.1 support was
-removed on 28 September 2026 (Phase 9 below is history).
+M4 is complete for its QEMU scope: the desktop paints separate DOS VMs,
+including DOOM while Files stays open, and the 0.8.0 profile passed 26/26
+gates ([evidence](docs/validation/2026-09-30-m4/README.md)). The newer image
+adds CiukWeb as a native C browser module and a TinyGL software OpenGL subset
+([record](docs/native-apps-and-opengl-2026-10-01.md)). The 26 VM-window gates
+also pass on that newer image across serial recovery runs; the single-command
+profile was interrupted by a host reboot
+([evidence](docs/validation/2026-10-01-native-app-gl/README.md)). Next work is
+the Wolf4GW window input/close defect, M5's broader protected-mode
+qualification, a native TCP service for CiukWeb, and a stable third-party
+`.APP` loader. Windows 95/98 PE execution is still absent. The
+[current status and remaining work](docs/project-status-2026-10-01.md) is the
+operational summary. Windows 3.1 was removed on 28 September 2026; Phase 9
+below is history.
 
 ## Earlier priority — 2026-09-27
 

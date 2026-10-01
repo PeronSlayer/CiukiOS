@@ -1,6 +1,6 @@
-%define UI_WINDOW_COUNT 13
-; Independent native windows. DOS children still run exclusively, with this
-; shell's complete window state retained while their process owns the display.
+%define UI_WINDOW_COUNT 32
+; Independent native windows. DOSVM.APP owns each DOS guest in a separate VM;
+; closing or raising a window leaves the desktop event loop running normally.
 ui_windows_resume:
     ; ui_dialog is cleared for DOS dispatch. Restore the actual focused window
     ; without changing z-order or activating an invisible Programs window.
@@ -78,6 +78,12 @@ ui_windows_open:
     sub ax,[ui_window_width+di]
     shr ax,1
     mov dx,bx
+    cmp dx,APP_WIN_FIRST_DYNAMIC
+    jb .cascade
+    sub dx,APP_WIN_FIRST_DYNAMIC-2     ; module windows: a small cascade
+    and dx,3
+    shl dx,1
+.cascade:
     shl dx,3
     add ax,dx
     mov [ui_window_x+di],ax
@@ -95,6 +101,7 @@ ui_windows_open:
 ; BX = window number, zero is Programs. Preserve geometry and open contents.
 ui_windows_raise:
     pushad
+    mov byte [app_desktop_focus],0
     call ui_damage_active
     call ui_windows_save_focus
     mov [ui_active_window],bl
@@ -134,11 +141,6 @@ ui_windows_close:
     mov al,bl
     mov si,ui_window_closed
     call ui_window_log
-    cmp bx,11
-    jne .files
-    call dw_release
-    jc .retained
-.files:
     call app_close                    ; a module may keep unsaved work open
     jc .retained
 .close:
@@ -214,6 +216,17 @@ ui_windows_draw:
     inc bl
     mov [ui_hit_owner],bl
     dec bl
+    cmp byte [ui_composing],1
+    jne .visible_band
+    push si
+    call app_slot
+    pop si
+    jc .visible_band
+    call ui_window_band_covered
+    jnc .visible_band
+    call ui_window_hits_only
+    jmp .advance
+.visible_band:
     test bx,bx
     jnz .dialog
     cmp byte [ui_window_visible],1
@@ -230,11 +243,6 @@ ui_windows_draw:
     call app_draw
     jmp .advance
 .standard_dialog:
-    cmp bx,11
-    jne .regular
-    call dw_draw
-    jmp .advance
-.regular:
     call ui_draw_dialog
 .advance:
     inc byte [ui_window_paint]
@@ -245,11 +253,136 @@ ui_windows_draw:
     mov byte [ui_hit_owner],0
     ret
 
+; The compositor may omit a covered module's expensive paint, but its hit
+; regions must remain in the complete window stack. They can be exposed by
+; a click outside the covering client before the next full repaint.
+ui_window_hits_only:
+    pushad
+    test bx,bx
+    jz .done
+    cmp byte [ui_window_flags+bx],1
+    jne .done
+    shl bx,1
+    mov dx,[ui_window_y+bx]
+    mov cx,[ui_window_width+bx]
+    mov si,[ui_window_height+bx]
+    mov bx,[ui_window_x+bx]
+    mov ax,70
+    call ui_hit_add
+.done:
+    popad
+    ret
+
+ui_window_band_covered:
+    pushad
+    mov di,si
+.next:
+    inc di
+    cmp di,UI_WINDOW_COUNT
+    jae .uncovered
+    movzx bx,byte [ui_window_order+di]
+    test bx,bx
+    jz .next
+    cmp byte [ui_window_flags+bx],1
+    jne .next
+    shl bx,1
+    mov ax,[ui_window_x+bx]
+    add ax,3
+    cmp [ui_comp_left],ax
+    jb .next
+    mov ax,[ui_window_x+bx]
+    add ax,[ui_window_width+bx]
+    sub ax,3
+    cmp [ui_comp_right],ax
+    ja .next
+    mov ax,[ui_window_y+bx]
+    add ax,30
+    cmp [ui_comp_top],ax
+    jb .next
+    mov ax,[ui_window_y+bx]
+    add ax,[ui_window_height+bx]
+    sub ax,3
+    cmp [ui_comp_bottom],ax
+    ja .next
+    popad
+    stc
+    ret
+.uncovered:
+    popad
+    clc
+    ret
+
 ; Hit IDs include their owner. A body hit prevents clicks passing through a
 ; window to controls hidden underneath; title clicks raise then start a drag.
 ui_windows_hit:
     mov [ui_hit_target],ah
     xor ah,ah
+    ret
+
+; Hit records are rebuilt during a compositor band. A partly exposed lower
+; window can lie outside that band's last paint. Resolve window ownership
+; from the current stack, then keep the record's control ID when it agrees.
+; AL = owner (window number + 1), or zero outside all windows.
+ui_window_pick_at_pointer:
+    push bx
+    push cx
+    push dx
+    push si
+    mov si,UI_WINDOW_COUNT-1
+.next:
+    movzx bx,byte [ui_window_order+si]
+    test bx,bx
+    jz .desktop
+    cmp byte [ui_window_flags+bx],1
+    jne .advance
+    jmp .geometry
+.desktop:
+    cmp byte [ui_window_visible],1
+    jne .advance
+    ; Programs uses ui_wx/ui_wy, not the dialog geometry arrays. Reading
+    ; ui_window_x[0] here made an invisible 466x226 window over the top-left
+    ; bar, swallowing the CiukiOS menu and status controls.
+    mov cx,[ui_wx]
+    cmp [ui_mouse_x],cx
+    jb .advance
+    add cx,[ui_ww]
+    cmp [ui_mouse_x],cx
+    jae .advance
+    mov dx,[ui_wy]
+    cmp [ui_mouse_y],dx
+    jb .advance
+    add dx,[ui_wh]
+    cmp [ui_mouse_y],dx
+    jae .advance
+    mov al,1
+    jmp .done
+.geometry:
+    shl bx,1
+    mov cx,[ui_window_x+bx]
+    cmp [ui_mouse_x],cx
+    jb .advance
+    add cx,[ui_window_width+bx]
+    cmp [ui_mouse_x],cx
+    jae .advance
+    mov dx,[ui_window_y+bx]
+    cmp [ui_mouse_y],dx
+    jb .advance
+    add dx,[ui_window_height+bx]
+    cmp [ui_mouse_y],dx
+    jae .advance
+    shr bx,1
+    mov al,bl
+    inc al
+    jmp .done
+.advance:
+    dec si
+    jns .next
+    xor al,al
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ui_windows_cycle:
@@ -282,6 +415,9 @@ ui_windows_cycle:
     ret
 
 ui_windows_title_color:
+    mov al,8                            ; the desktop has the keyboard
+    cmp byte [app_desktop_focus],0
+    jne .done
     mov al,[ui_dialog]
     cmp al,[ui_active_window]
     mov al,1
@@ -301,11 +437,11 @@ ui_windows_taskbar:
     inc cx
 .skip_count:
     inc bp
-    cmp bp,9
+    cmp bp,UI_TASK_COUNT
     jb .count
     jcxz .done
     mov ax,[ui_width]
-    sub ax,397
+    sub ax,240
     xor dx,dx
     div cx
     cmp ax,76
@@ -315,7 +451,7 @@ ui_windows_taskbar:
     mov [ui_task_button_width],ax
     mov dx,[ui_height]
     sub dx,28
-    mov bx,247
+    mov bx,159
     xor bp,bp
 .next:
     movzx si,byte [ds:ui_task_windows+bp]
@@ -333,7 +469,7 @@ ui_windows_taskbar:
     add bx,[ui_task_button_width]
 .advance:
     inc bp
-    cmp bp,9
+    cmp bp,UI_TASK_COUNT
     jb .next
 .done:
     popad
@@ -476,24 +612,33 @@ ui_motion_poll:
 .done:
     ret
 
-ui_task_windows db 1,2,5,6,8,12,9,10,11
-ui_task_labels dw ui_task_run,ui_task_info,ui_task_video,ui_task_audio,ut_files,ut_notepad,ui_task_tasks,ui_task_bg,ut_dos
+ui_task_windows db 1,2,5,6,8,12,16,17,13,14,15,9,10,11
+UI_TASK_COUNT equ $-ui_task_windows
+ui_task_labels dw ui_task_run,ui_task_info,ui_task_video,ui_task_audio,ut_files,ut_notepad,ui_task_paint,ut_browser,ui_task_control,ut_devices,ui_task_recycle,ui_task_tasks,ui_task_bg,ut_dos
 ui_task_run db 'Run',0
 ui_task_info db 'Info',0
 ui_task_video db 'Video',0
 ui_task_audio db 'Audio',0
 ui_task_tasks db 'Tasks',0
 ui_task_bg db 'BG',0
+ui_task_control db 'Control',0
+ui_task_paint db 'Paint',0
+ui_task_recycle db 'Recycle',0
 ui_task_button_width dw 72
-ui_window_titles dw ut_programs,ut_run,ut_about,ut_power,ut_launch_error,ut_display,ut_sound,ut_brand,ut_files,ut_tasks,ut_wallpaper,ut_dos_window,ut_notepad
+ui_window_titles dw ut_programs,ut_run,ut_about,ut_power,ut_launch_error,ut_display,ut_sound,ut_brand,ut_files,ut_tasks,ut_wallpaper,ut_dos_window,ut_notepad,ut_control,ut_devices,ut_recycle,ut_paint,ut_browser
+                 times UI_WINDOW_COUNT-18 dw ut_modwin
 ui_window_flags times UI_WINDOW_COUNT db 0
 ui_default_focus dw 44,40,41,41,41,50,55,1,0,0,183,18,0
+                 times UI_WINDOW_COUNT-13 dw 0
 ui_window_focus dw 44,40,41,41,41,50,55,1,0,0,183,18,0
+                times UI_WINDOW_COUNT-13 dw 0
 ui_window_width dw 466,466,466,466,466,466,466,466,620,560,466,660,560
-ui_window_height dw 226,226,226,226,226,226,226,226,410,400,226,460,400
+                times UI_WINDOW_COUNT-13 dw 400
+ui_window_height dw 226,226,416,226,226,226,226,226,410,400,226,460,400
+                 times UI_WINDOW_COUNT-13 dw 300
 ui_window_x times UI_WINDOW_COUNT dw 0
 ui_window_y times UI_WINDOW_COUNT dw 0
-ui_window_order db 0,1,2,3,4,5,6,7,8,9,10,11,12
+ui_window_order db 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
 ui_active_window db 0
 ui_window_paint db 0
 ui_hit_owner db 0

@@ -28,9 +28,15 @@ def main():
         'vgasetup.com': 'DRIVERS/VIDEO/VGASETUP.COM',
         'drvload.com': 'DRIVERS/DRVLOAD.COM',
         'mouse.com': 'DRIVERS/MOUSE/MOUSE.COM',
+        'loaddrv.com': 'DRIVERS/LOADDRV.COM',
+        'hello.com': 'DRIVERS/SAMPLES/HELLO/HELLO.COM',
     }
     entries += [dict(source=str(args.objects / source), target=target)
                 for source, target in native.items()]
+    # Installed drivers (Control Panel > Drivers) and the sample package.
+    entries += [dict(source='assets/drivers/DRIVERS.CFG', target='DRIVERS/DRIVERS.CFG'),
+                dict(source='assets/drivers/samples/hello/DRIVER.INF', target='DRIVERS/SAMPLES/HELLO/DRIVER.INF'),
+                dict(source='assets/drivers/samples/hello/README.TXT', target='DRIVERS/SAMPLES/HELLO/README.TXT')]
     # The DOS VBE helpers of vbesvga.drv (its Win16 driver is not shipped).
     for name in ('AUXSTACK.COM', 'AUXCHECK.COM', 'VIDMODES.COM',
                  'VBESVGA.TXT', 'SOURCE.TXT'):

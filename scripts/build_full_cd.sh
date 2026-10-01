@@ -19,7 +19,7 @@ DIRECT_DISK_IMG="build/full/ciukios-full-cd-direct-disk.img"
 REDUNDANT_DISK_IMG="build/full/ciukios-full-cd-redundant.img"
 MBR_BIN="build/full/obj/full_cd_mbr.bin"
 ISO_ROOT="build/full/cd-iso-root"
-CIUKIOS_VERSION="${CIUKIOS_VERSION:-0.7.1}"
+CIUKIOS_VERSION="${CIUKIOS_VERSION:-0.8.0}"
 if [[ ! "$CIUKIOS_VERSION" =~ ^[0-9]+([.][0-9]+)*$ ]]; then
 	echo "[build-full-cd] ERROR: invalid CIUKIOS_VERSION=$CIUKIOS_VERSION" >&2
 	exit 2
