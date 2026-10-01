@@ -47,6 +47,8 @@ These are unedited QEMU captures from development builds. [Capture provenance](d
 | ![Network adapter and advanced IPv4 settings](docs/screenshots/0.8.0/network-settings.png) | ![Settings Registry value](docs/screenshots/0.8.0/settings-registry.png) |
 | IPv4, DHCP, host name, MTU and adapter details. | Persistent CiukiOS values; Win32 registry APIs are not implemented. |
 
+[See the refined date and time control](docs/validation/2026-10-01-clock-network/README.md), including its network time-zone setting.
+
 ## What works
 
 | Area | Current capability |
@@ -76,6 +78,12 @@ bash scripts/qemu_record_full.sh
 ```
 
 The build requirements, image profiles, lighter host settings and focused test commands are in the [build and run guide](docs/build-and-run.md). Commercial game data and other proprietary payloads are **not** published in this repository; local copies are optional for private testing.
+
+The full build also produces a [portable Windows ZIP](docs/windows-portable-release.md)
+with QEMU and a clean CiukiOS image, ready to extract and launch without an
+installer. Local pushes to `main` publish the ZIP as a dated, numbered GitHub
+Release through a Git hook; no GitHub Actions are used. The Windows launcher
+remains untested on Windows.
 
 ## What's next
 

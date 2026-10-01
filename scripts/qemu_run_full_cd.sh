@@ -49,6 +49,7 @@ Environment:
   QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: on).
   QEMU_AUDIO_DEVICES Guest sound card: standard (SB16/AdLib, default) or ac97.
   QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
+  QEMU_NETWORK_MODE  Network mode: auto/user (default, outbound NAT), tap or off.
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full-cd.log).
   STAGE0_MARKER    Marker 1 for test validation.
@@ -334,6 +335,13 @@ else
   configure_audio_args visual
 fi
 
+case "${QEMU_NETWORK_MODE:-auto}" in
+  auto|user) QEMU_NETWORK_ARGS=(-netdev user,id=ciuknet0 -device ne2k_isa,netdev=ciuknet0,irq=3,iobase=0x300,mac=52:54:00:12:34:56) ;;
+  tap) QEMU_NETWORK_ARGS=(-netdev "tap,id=ciuknet0,ifname=${QEMU_NET_TAP_IF:-ciukios0},script=no,downscript=no" -device ne2k_isa,netdev=ciuknet0,irq=3,iobase=0x300,mac=52:54:00:12:34:56) ;;
+  off) QEMU_NETWORK_ARGS=(-nic none) ;;
+  *) echo "[qemu-run-full-cd] ERROR: invalid QEMU_NETWORK_MODE" >&2; exit 1 ;;
+esac
+
 BASE_ARGS=(
   "${QEMU_ACCEL_ARGS[@]}"
   -machine "$QEMU_MACHINE_ARG"
@@ -341,6 +349,7 @@ BASE_ARGS=(
   -m "$QEMU_MEMORY_MB"
   -drive "file=$IMG,format=raw,if=ide,index=2,media=cdrom,readonly=on"
   -boot d
+  "${QEMU_NETWORK_ARGS[@]}"
 )
 
 if [[ "$MODE" == "test" ]]; then

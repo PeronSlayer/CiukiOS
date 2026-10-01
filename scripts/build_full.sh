@@ -1485,3 +1485,10 @@ ${README_OPTIONAL_PAYLOADS}
 TXT
 
 echo "[build-full] done: $IMG"
+
+# Refresh the distributable Windows bundle after canonical full-image builds.
+# Test variants can opt out; the packager strips private local game payloads.
+if [[ "${CIUKIOS_WINDOWS_PORTABLE:-1}" == "1" \
+	&& "$(cd "$(dirname "$IMG")" && pwd -P)/$(basename "$IMG")" == "$CIUKIOS_ROOT/build/full/ciukios-full.img" ]]; then
+	python3 scripts/package_windows_portable.py --image "$IMG"
+fi

@@ -23,6 +23,26 @@ the exact approved Ciuki portrait above. The portrait is a separate project
 asset, not part of Tango's Public Domain release. Do not replace this family
 with extracted Microsoft/Apple artwork or change the approved portrait.
 
+## Active build profile
+
+The main CiukiOS project now uses the full HDD image and, when relevant, the
+full CD image. Do not build, run, test, or maintain the standalone floppy
+profile as part of ongoing main-branch work. Existing floppy files may remain
+for history; this decision does not exclude work on the shared CiukiDOS kernel
+source (`src/boot/floppy_stage1.asm`) used by the full image. The owner is
+considering a separate CiukiDOS-only branch, but has not asked to create it.
+
+The canonical full build also refreshes `build/releases/CiukiOS-0.8.0-Windows-portable.zip`.
+Keep this Windows QEMU bundle current whenever changes affect the full image.
+It uses a pinned portable QEMU and a sanitized copy of the FAT16 image; local
+commercial game payloads must never enter the release. Verify the archive
+contents and integrity, but only the Linux full build/run profile requires a
+runtime QEMU test. Do not claim that the Windows launcher was tested on Windows.
+On this clone, a local `pre-push` hook publishes a dated, numbered GitHub
+prerelease for each clean `origin/main` push using `scripts/push_release.py`.
+Do not bypass that hook for normal main pushes. Other clones must run
+`bash scripts/install_release_push_hook.sh`. No GitHub Actions are used.
+
 ## Code Search Policy
 
 Use Semble before reading large files.

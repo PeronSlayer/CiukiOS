@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${CIUKIOS_RELEASE_INNER_PUSH:-0}" == "1" ]]; then
+    exit 0
+fi
+
+remote_name="${1:-}"
+if [[ "$remote_name" != "origin" ]]; then
+    exit 0
+fi
+
+release_main=0
+head_sha="$(git rev-parse HEAD)"
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [[ "$remote_ref" == "refs/heads/main" && "$local_sha" == "$head_sha" ]]; then
+        release_main=1
+    fi
+done
+
+if [[ "$release_main" == "1" ]]; then
+    repo_root="$(git rev-parse --show-toplevel)"
+    cd "$repo_root"
+    python3 scripts/push_release.py --from-hook
+fi

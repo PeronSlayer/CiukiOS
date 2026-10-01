@@ -521,6 +521,13 @@ app_poll:
     mov ax,dx
     pop dx
     pop si
+    ; An applet opened from a deferred argument may request a DOS helper
+    ; during EV_POLL. Deliver that request through the normal UI command path.
+    cmp byte [app_request],2
+    jne .return
+    mov byte [app_request],0
+    mov ax,249
+.return:
     ret
 
 ; BL = window: its whole rectangle, shadow included, is repainted.

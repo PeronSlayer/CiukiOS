@@ -46,3 +46,25 @@ checks invalid MTU rejection, static profile persistence, adapter and driver
 navigation, and a DHCP lease using a QEMU NE2000 PCI device. Its report and
 unedited screenshots are under `build/tests/network-advanced-final-20261001/`.
 See [validation record](validation/2026-10-01-network-advanced/README.md).
+
+## Date, time and network time zone
+
+The taskbar shows the current date and time in one compact control. A left or
+right click opens **Date and Time**. **Detect now** reads the time zone and
+local date/time from `http://worldtime.timezone.io/api/ip.txt` using the
+bundled mTCP `HTGET.EXE`; the panel then updates the RTC. Start networking
+first with `NETSTART` or the Network panel's DHCP button. When **Detect
+automatically when opened** is enabled, opening this panel performs the same
+lookup. The choice is stored in `C:\SYSTEM\UI\TIMEZONE.CFG`.
+
+The service infers a zone from the public IP, so VPNs and shared gateways may
+select another location. The current DOS HTTP transport is unencrypted; this
+is a convenience clock setting, not a trusted time source. CiukiOS does not
+yet resynchronize silently at boot or handle DST changes while the panel
+stays closed. Manual date/time editing remains available offline.
+
+The focused QEMU gate is `python3 scripts/qemu_test_datetime_network.py
+--output build/tests/datetime-network`. It uses one 128 MiB VM and checks
+the displayed clock, DHCP, lookup, saved option and automatic lookup on the
+next panel opening. [Screenshots and result](validation/2026-10-01-clock-network/README.md)
+come from one QEMU session.

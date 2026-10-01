@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "memory_mb": 128,
+  "qemu_instances": 1,
+  "detected_zone": "Europe/Rome",
+  "automatic_setting": "saved",
+  "automatic_on_reopen": "passed"
+}

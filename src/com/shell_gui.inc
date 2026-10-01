@@ -113,6 +113,8 @@ ui_loop:
     jmp ui_action
 .idle:
     call app_poll
+    cmp ax,249
+    je ui_action
     test ax,ax
     jnz ui_redraw
     cmp byte [ui_comp_dirty],1
@@ -290,6 +292,8 @@ ui_action:
     je .top_sound
     cmp ax,81
     je .top_network
+    cmp ax,85
+    je .top_datetime
     cmp ax,82
     jb .top_done
     cmp ax,84
@@ -351,6 +355,11 @@ ui_action:
 .top_network:
     mov bl,13
     mov si,ui_arg_network
+    call app_open
+    jmp ui_redraw
+.top_datetime:
+    mov bl,13
+    mov si,ui_arg_datetime
     call app_open
     jmp ui_redraw
 .top_performance:
@@ -1009,9 +1018,27 @@ ui_draw_scene:
     U_BUTTON 5,dx,147,24,ut_library,1
     call ui_windows_taskbar
     mov bx,[ui_width]
-    sub bx,73
+    sub bx,183
+    mov dx,[ui_height]
+    sub dx,29
+    mov ax,85
+    mov cx,177
+    mov si,25
+    call ui_hit_add
+    U_RECT bx,dx,177,25,8
+    inc bx
+    inc dx
+    U_RECT bx,dx,175,23,15
+    add bx,9
     add dx,4
-    U_TEXT bx,dx,ui_clock_text,0
+    U_TEXT bx,dx,ui_date_text,0
+    mov bx,[ui_width]
+    sub bx,70
+    mov dx,[ui_height]
+    sub dx,25
+    U_RECT bx,dx,1,16,7
+    add bx,9
+    U_TEXT bx,dx,ui_clock_text,1
     call app_overlay_paint    ; the desktop's menus, above everything
 .pointer:
     ret
@@ -1778,6 +1805,7 @@ ut_brand db 'CiukiOS',0
 ut_tagline db 'A modern Retro OS',0
 ui_arg_sound db 'sound',0
 ui_arg_network db 'network',0
+ui_arg_datetime db 'datetime',0
 ui_arg_performance db 'performance',0
 ut_programs db 'Programs',0
 ut_library db 'Application Library',0

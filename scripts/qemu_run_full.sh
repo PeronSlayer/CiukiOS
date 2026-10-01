@@ -53,7 +53,7 @@ Environment:
   QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: on).
   QEMU_AUDIO_DEVICES Guest sound card: standard (SB16/AdLib, default) or ac97.
   QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
-  QEMU_NETWORK_MODE  Network mode: auto, user, tap, off (default: auto; user in GUI).
+  QEMU_NETWORK_MODE  Network mode: auto, user, tap, off (default: auto; user NAT in every profile).
   QEMU_NET_HOST_FTP_PORT  Host port forwarded to CiukiOS FTP/21 (default: 8021).
                          Passive FTP data uses 127.0.0.1:2048.
   QEMU_NET_TAP_IF    Preconfigured TAP interface for tap mode (default: ciukios0).
@@ -64,8 +64,8 @@ Environment:
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full.log).
   QEMU_VISUAL_LOG  Visual run serial log (default: build/full/qemu-visual.log).
-  STAGE0_MARKER    Marker 1 for test validation.
-  STAGE1_MARKER    Stage1 readiness marker (default: external-shell banner).
+  STAGE0_MARKER    Boot handoff marker (default: [STAGE1] CIUKIDOS ABI2 valid).
+  STAGE1_MARKER    Readiness marker (default: [DESKTOP] READY).
   CIUKIOS_STAGE2_AUTORUN  Set 1 to trigger stage2 automatically.
 TXT
 }
@@ -322,11 +322,12 @@ configure_network_args() {
   QEMU_NETWORK_DETAIL="off"
 
   if [[ "$mode" == "auto" ]]; then
-    if [[ "$context" == "visual" ]]; then
-      mode="user"
-    else
-      mode="off"
-    fi
+    mode="user"
+  fi
+  # Smoke runs get outbound networking too, without reserving 257 host FTP
+  # ports. An explicit port override still takes precedence.
+  if [[ "$context" == "headless" && -z "${QEMU_NET_HOST_FTP_PORT+x}" ]]; then
+    host_ftp_port=0
   fi
 
   case "$mode" in
@@ -539,8 +540,8 @@ BASE_ARGS=(
 
 if [[ "$MODE" == "test" ]]; then
   TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-8}"
-  STAGE0_MARKER="${STAGE0_MARKER:-[BOOT0-FULL] CiukiOS full stage0 ready}"
-  STAGE1_MARKER="${STAGE1_MARKER:-CiukiOS SHELL}"
+  STAGE0_MARKER="${STAGE0_MARKER:-[STAGE1] CIUKIDOS ABI2 valid}"
+  STAGE1_MARKER="${STAGE1_MARKER:-[DESKTOP] READY}"
   LOG_FILE="${LOG_FILE:-build/full/qemu-full.log}"
   NORMALIZED_LOG="${LOG_FILE}.normalized"
   STDERR_FILE="${STDERR_FILE:-build/full/qemu-full.stderr.log}"
@@ -601,11 +602,11 @@ if [[ "$MODE" == "test" ]]; then
   fi
 
   if grep -aFq -- "$STAGE0_MARKER" "$NORMALIZED_LOG" && grep -aFq -- "$STAGE1_MARKER" "$NORMALIZED_LOG"; then
-    echo "[qemu-run-full] PASS (stage0 and Stage1 readiness markers detected)"
+    echo "[qemu-run-full] PASS (kernel handoff and desktop readiness markers detected)"
     exit 0
   fi
 
-  echo "[qemu-run-full] FAIL (stage0/Stage1 readiness marker not detected)" >&2
+  echo "[qemu-run-full] FAIL (kernel handoff or desktop readiness marker not detected)" >&2
   echo "[qemu-run-full] serial log size: $(wc -c < "$LOG_FILE" 2>/dev/null || echo 0) bytes" >&2
   tail -n 80 "$NORMALIZED_LOG" >&2 || true
   exit 1

@@ -346,6 +346,15 @@ ui_event:
     mov [app_previous_right],al
     test al,al
     jz .left_button
+    mov ax,[ui_width]
+    sub ax,183
+    cmp [ui_mouse_x],ax
+    jb .right_find
+    mov ax,[ui_height]
+    sub ax,32
+    cmp [ui_mouse_y],ax
+    jae .right_datetime
+.right_find:
     call ui_hit_find
     movzx bx,byte [ui_hit_target]
     test bx,bx
@@ -370,6 +379,9 @@ ui_event:
     test ax,ax
     jnz .out
     mov ax,250
+    ret
+.right_datetime:
+    mov ax,85
     ret
 .right_window_menu:
     mov ax,bx

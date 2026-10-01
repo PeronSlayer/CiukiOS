@@ -994,9 +994,79 @@ static void sound_save(void)
 
 /* ------------------------------------------------------------------ */
 /* Date and Time                                                       */
-static int dt_y, dt_m, dt_d, dt_h, dt_mi, dt_s, dt_fields;
+static int dt_y, dt_m, dt_d, dt_h, dt_mi, dt_s, dt_fields, dt_auto_at, dt_sync_pending;
 static struct field dt_field[6];
 static char dt_buf[6][6];
+static char dt_zone[48], dt_reply[768];
+#define DT_CFG "C:\\SYSTEM\\UI\\TIMEZONE.CFG"
+#define DT_REPLY "C:\\NET\\TIME.TXT"
+static int datetime_auto_enabled(void)
+{
+    int h, n;
+    char c = 0;
+    h = dos_open(DT_CFG, 0);
+    if (h < 0) return 0;
+    n = dos_read(h, &c, 1);
+    dos_close(h);
+    return n == 1 && c == '1';
+}
+static int datetime_auto_save(int enabled)
+{
+    int h = dos_create(DT_CFG);
+    char c = enabled ? '1' : '0';
+    int n;
+    if (h < 0) return 0;
+    n = dos_write(h, &c, 1);
+    dos_close(h);
+    return n == 1;
+}
+static int dt_digits(const char *p, int n)
+{
+    int v = 0;
+    while (n--) {
+        if (*p < '0' || *p > '9') return -1;
+        v = v * 10 + *p++ - '0';
+    }
+    return v;
+}
+static int datetime_network_read(void)
+{
+    int h, n, i = 0;
+    char *p, *q;
+    h = dos_open(DT_REPLY, 0);
+    if (h < 0) return 0;
+    n = dos_read(h, dt_reply, sizeof dt_reply - 1);
+    dos_close(h);
+    if (n < 0 || n >= sizeof dt_reply - 1) return 0;
+    dt_reply[n] = 0;
+    p = dt_reply;
+    while (*p) {
+        if (!str_nicmp(p, "datetime: ", 10)) {
+            q = p + 10;
+            if (q[4] != '-' || q[7] != '-' || q[10] != 'T' || q[13] != ':' || q[16] != ':') return 0;
+            dt_y = dt_digits(q, 4); dt_m = dt_digits(q + 5, 2); dt_d = dt_digits(q + 8, 2);
+            dt_h = dt_digits(q + 11, 2); dt_mi = dt_digits(q + 14, 2); dt_s = dt_digits(q + 17, 2);
+            i = 1;
+        }
+        if (!str_nicmp(p, "timezone: ", 10)) {
+            q = p + 10;
+            str_ncopy(dt_zone, q, sizeof dt_zone);
+            for (q = dt_zone; *q; q++) if (*q == '\r' || *q == '\n') { *q = 0; break; }
+        }
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    return i && dt_zone[0] && dt_y >= 1980 && dt_y <= 2099 &&
+           dt_m >= 1 && dt_m <= 12 && dt_d >= 1 && dt_d <= 31 &&
+           dt_h >= 0 && dt_h <= 23 && dt_mi >= 0 && dt_mi <= 59 && dt_s >= 0 && dt_s <= 59;
+}
+static void datetime_network_start(void)
+{
+    dos_delete(DT_REPLY);
+    dt_sync_pending = 1;
+    app_log("[CONTROL] time zone lookup", "worldtime.timezone.io");
+    app_command("C:\\NET\\HTGET.EXE -o C:\\NET\\TIME.TXT http://worldtime.timezone.io/api/ip.txt");
+}
 static const char *month_names[12] = { "January", "February", "March", "April", "May", "June", "July",
                                        "August", "September", "October", "November", "December" };
 static int days_in(int y, int m)
@@ -1026,6 +1096,7 @@ static void datetime_open(void)
     static const char *labels[6] = { "&Day", "&Month", "&Year", "&Hours", "M&inutes", "&Seconds" };
     dos_get_date(&dt_y, &dt_m, &dt_d, &wd);
     dos_get_time(&dt_h, &dt_mi, &dt_s);
+    dt_zone[0] = 0;
     dt_to_fields();
     an[k] = 0;
     add(k, DC_GROUP, 0, 0, 250, 232, "Date", 0);
@@ -1036,10 +1107,14 @@ static void datetime_open(void)
         add(k, DC_LABEL, x, y - 18, 0, 16, labels[i], 0);
         add(k, DC_FIELD, x, y, i == 2 ? 70 : 54, 22, 0, 0)->field = &dt_field[i];
     }
-    add(k, DC_BUTTON, 170, 244, 84, 26, "OK", 1);
-    add(k, DC_BUTTON, 258, 244, 84, 26, "Cancel", 2);
-    add(k, DC_BUTTON, 346, 244, 84, 26, "&Apply", 3);
-    show(k, "Date and Time", 450, 276);
+    dt_auto_at = an[k];
+    add(k, DC_CHECK, 12, 239, 0, 17, "Detect automatically when opened", 0)->value = datetime_auto_enabled();
+    add(k, DC_BUTTON, 12, 292, 142, 26, "Detect now", 10);
+    add(k, DC_BUTTON, 170, 292, 84, 26, "OK", 1);
+    add(k, DC_BUTTON, 258, 292, 84, 26, "Cancel", 2);
+    add(k, DC_BUTTON, 346, 292, 84, 26, "&Apply", 3);
+    show(k, "Date and Time", 450, 324);
+    if (ad[k].c[dt_auto_at].value) datetime_network_start();
 }
 static void dt_from_fields(void)
 {
@@ -1072,6 +1147,11 @@ static void datetime_paint(void)
     fmt_2(t, dt_h); str_cat(t, ":"); fmt_2(t + str_len(t), dt_mi); str_cat(t, ":"); fmt_2(t + str_len(t), dt_s);
     ui_inset(ox(k) + 274, oy(k) + 196, 144, 26);
     ui_text(ox(k) + 346 - ui_measure(t) / 2, oy(k) + 200, t, C_INK | BOLD);
+    if (dt_zone[0]) {
+        str_copy(t, "Time zone: ");
+        ui_text(ox(k) + 12, oy(k) + 264, t, C_SHADOW);
+        ui_text(ox(k) + 94, oy(k) + 264, dt_zone, C_INK);
+    } else ui_text(ox(k) + 12, oy(k) + 264, "Time zone: local clock (network not detected)", C_SHADOW);
     (void)x; (void)y;
 }
 static int datetime_mouse(int kind, int sx, int sy)
@@ -1122,6 +1202,10 @@ static int datetime_save(void)
     fmt_u32(t, (u32)dt_y); str_cat(t, "-"); fmt_2(t + str_len(t), dt_m); str_cat(t, "-"); fmt_2(t + str_len(t), dt_d);
     str_cat(t, " "); fmt_2(t + str_len(t), dt_h); str_cat(t, ":"); fmt_2(t + str_len(t), dt_mi);
     app_log("[CONTROL] date set", t);
+    if (!datetime_auto_save(ad[P_DATETIME].c[dt_auto_at].value)) {
+        message("Date and Time", "The automatic setting could not be saved.");
+        return 0;
+    }
     return 1;
 }
 
@@ -1355,6 +1439,7 @@ static void applet_result(int k, int r)
         if (r == 1) sound_save();
         break;
     case P_DATETIME:
+        if (r == 10) { datetime_network_start(); ad[k].open = 1; }
         if ((r == 1 || r == 3) && !datetime_save()) ad[k].open = 1;
         break;
     case P_SYSTEM:
@@ -1568,7 +1653,10 @@ int app_event(int ev, int a, int b, int c)
     if (ev == EV_OPEN) {
         char arg[APP_ARG_BYTES];
         if (a == 2) {
-            for (k = 0; k < P_COUNT; k++) { ad[k].win = 0; ad[k].open = 0; }
+            for (k = 0; k < P_COUNT; k++) {
+                if (k == P_DATETIME && dt_sync_pending) continue;
+                ad[k].win = 0; ad[k].open = 0;
+            }
             dlg.win = 0; dialog_sync(&dlg);
             return 1;
         }
@@ -1621,6 +1709,16 @@ int app_event(int ev, int a, int b, int c)
         for (k = 0; k < P_COUNT; k++) if (ad[k].open) return 1;      /* an applet is open */
         return 0;
     case EV_POLL:
+        if (dt_sync_pending) {
+            dt_sync_pending = 0;
+            if (datetime_network_read()) {
+                dt_to_fields();
+                datetime_save();
+                app_log("[CONTROL] time zone detected", dt_zone);
+            } else message("Date and Time", "Time zone lookup failed. Start networking and try again.");
+            dialog_sync(&dlg);
+            return 1;
+        }
         if (pending_arg[0]) {
             char arg[APP_ARG_BYTES];
             str_copy(arg, pending_arg);

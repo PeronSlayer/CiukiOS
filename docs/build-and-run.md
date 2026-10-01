@@ -3,6 +3,13 @@
 This guide is for the **pre-Alpha 0.8.0** development image on Linux. The
 main build creates a FAT16 disk image at `build/full/ciukios-full.img`.
 QEMU is the external test machine; it is not part of CiukiOS.
+All canonical GUI, recording and headless launch profiles attach an NE2000
+adapter to QEMU user NAT by default. CiukiOS has outbound Internet access
+when the host does; start its network service with `NETSTART` before using
+network applications. Set `QEMU_NETWORK_MODE=off` only for an explicit
+isolated run. Headless smoke runs omit host FTP port forwarding by default.
+The CD runner uses the same outbound NAT default. The standalone floppy
+profile is retired from ongoing main-branch builds and tests.
 
 ## Requirements
 
@@ -18,6 +25,18 @@ Verified downloads for optional Costa and the mTCP/Crynwr network stack are
 prepared by `scripts/build_run_full.sh`. Commercial DOS game data and other
 proprietary third-party binaries are not in the repository; keep local copies
 untracked. A base image can be built without them.
+
+## Windows portable ZIP
+
+The canonical full build also creates
+`build/releases/CiukiOS-0.8.0-Windows-portable.zip`. Extract it on 64-bit
+Windows and run `Start-CiukiOS.cmd`; the archive contains QEMU, its required
+Windows files, the FAT16 disk, and a short README. The packager removes local
+commercial game payloads and their shortcuts from its image copy. It checks
+the ZIP structure here; the Windows launcher has not been run on Windows.
+Run `python3 scripts/package_windows_portable.py` to refresh the ZIP from an
+already built full image. See [Windows portable release](windows-portable-release.md)
+for provenance and the local push-to-release hook; GitHub Actions are not used.
 
 ## One-command desktop
 

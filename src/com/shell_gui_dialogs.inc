@@ -281,12 +281,27 @@ ui_clock_poll:
     mov [ui_old_clock],eax
     mov al,[ui_clock_text+4]
     mov [ui_old_clock+4],al
+    mov eax,[ui_date_text]
+    mov [ui_old_date],eax
+    mov eax,[ui_date_text+4]
+    mov [ui_old_date+4],eax
+    mov eax,[ui_date_text+8]
+    mov [ui_old_date+8],eax
     call ui_clock_read
     mov eax,[ui_clock_text]
     cmp eax,[ui_old_clock]
     jne .draw
     mov al,[ui_clock_text+4]
     cmp al,[ui_old_clock+4]
+    jne .draw
+    mov eax,[ui_date_text]
+    cmp eax,[ui_old_date]
+    jne .draw
+    mov eax,[ui_date_text+4]
+    cmp eax,[ui_old_date+4]
+    jne .draw
+    mov eax,[ui_date_text+8]
+    cmp eax,[ui_old_date+8]
     je .done
 .draw:
     ; The BIOS tick lookup uses the BDA (0040), while scene helpers copy
@@ -294,11 +309,11 @@ ui_clock_poll:
     push cs
     pop es
     mov bx,[ui_width]
-    sub bx,74
+    sub bx,184
     mov dx,[ui_height]
-    sub dx,25
-    mov cx,69
-    mov si,21
+    sub dx,30
+    mov cx,180
+    mov si,27
     call ui_comp_damage
     call ui_draw
 .done:
@@ -310,13 +325,36 @@ ui_clock_read:
     pushad
     mov ah,2
     int 0x1A
-    jc .done
+    jc .date
     mov al,ch
     mov di,ui_clock_text
     call .bcd
     inc di
     mov al,cl
     call .bcd
+.date:
+    mov ah,0x2A
+    int 0x21
+    mov al,dl
+    mov di,ui_date_text
+    call .decimal
+    movzx bx,dh
+    cmp bx,1
+    jb .done
+    cmp bx,12
+    ja .done
+    dec bx
+    shl bx,2
+    mov eax,[ui_months+bx]
+    mov [ui_date_text+3],eax
+    mov ax,cx
+    mov bl,100
+    div bl
+    mov bh,ah
+    mov di,ui_date_text+7
+    call .decimal
+    mov al,bh
+    call .decimal
 .done:
     popad
     ret
@@ -327,6 +365,13 @@ ui_clock_read:
     add ax,0x3030
     mov [di],al
     mov [di+1],ah
+    add di,2
+    ret
+.decimal:
+    aam
+    add ax,0x3030
+    mov [di],ah
+    mov [di+1],al
     add di,2
     ret
 
@@ -379,3 +424,7 @@ ui_run_visible times 33 db 0
 ui_clock_tick dw 0
 ui_clock_text db '--:--',0
 ui_old_clock times 5 db 0
+ui_date_text db '-- --- ----',0
+ui_old_date times 12 db 0
+ui_months db 'Jan ','Feb ','Mar ','Apr ','May ','Jun '
+          db 'Jul ','Aug ','Sep ','Oct ','Nov ','Dec '

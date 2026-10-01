@@ -441,7 +441,7 @@ ui_windows_taskbar:
     jb .count
     jcxz .done
     mov ax,[ui_width]
-    sub ax,240
+    sub ax,343
     xor dx,dx
     div cx
     cmp ax,76
