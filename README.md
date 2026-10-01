@@ -1,3 +1,5 @@
+![Splashscreen CiukiOS](misc/CiukiOS_SplashScreen.png)
+
 # CiukiOS
 
 **A modern Retro OS · pre-Alpha 0.8.0**
