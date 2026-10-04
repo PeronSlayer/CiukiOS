@@ -1,18 +1,17 @@
 ; VMSTART.COM - load the CiukiOS VM session stack for the DOS window.
 ;
-;   VMSTART [Jemm386 options]
+;   VMSTART [Jemm options]
 ;
 ; The desktop runs it at the start of every normal session. Runs
-; \VM\JEMM386.EXE LOAD <options> (default: the options the DOS window
+; \VM\JEMMEX.EXE LOAD <options> (default: the options the DOS window
 ; profile is validated with, see below) and then \VM\JLOAD.EXE \VM\CVSESS.DLL,
 ; unless the session module is already resident. Messages are English; a
 ; failed step returns ERRORLEVEL 1. On a graphics screen (the boot splash at
-; startup) nothing is drawn: its messages and the console output of Jemm386
+; startup) nothing is drawn: its messages and the console output of Jemm
 ; and JLOAD go to COM1 only.
 ;
-; Default options: no EMS, UMBs only in C000-EFFF RAM that is free on QEMU/
-; SeaBIOS (the desktop compositor band moves there), a fixed 32 MiB XMS pool
-; and no VME. On other machines pass options that fit their upper memory.
+; Default options: no EMS, UMBs only in the qualified C000-EFFF region, and
+; no VME. JemmEx owns the BIOS-discovered RAM and allocates it on demand.
 bits 16
 cpu 386
 org 100h
@@ -163,18 +162,23 @@ print:
 %include "src/com/quiet_console.inc"
 
 load_word db ' LOAD ',0
+%ifdef VMSTART_JEMMEX
+default_options db 'NOEMS X=A000-CCFF I=CD00-EBFF X=EC00-FFFF NOVME',0
+jemm_path db '\VM\JEMMEX.EXE',0
+%else
 default_options db 'NOEMS NOHI X=A000-CCFF I=CD00-EBFF X=EC00-FFFF NODYN MAX=32M MIN=32M NOVME',0
 jemm_path db '\VM\JEMM386.EXE',0
+%endif
 jload_path db '\VM\JLOAD.EXE',0
 jload_tail db jload_tail_end-jload_tail-1
     db ' \VM\CVSESS.DLL'
 jload_tail_end:
     db 13
-msg_jemm db 'VMSTART: loading Jemm386 (V86 monitor)...',13,10,0
+msg_jemm db 'VMSTART: loading Jemm memory manager and V86 monitor...',13,10,0
 msg_jload db 'VMSTART: loading the CiukiOS session module (CVSESS.DLL)...',13,10,0
 msg_ready db 'VMSTART: ready.',13,10,0
 no_memory db 'VMSTART: cannot resize its memory block.',13,10,0
-jemm_failed db 'VMSTART: \VM\JEMM386.EXE failed (see its message).',13,10,0
+jemm_failed db 'VMSTART: Jemm memory manager failed (see its message).',13,10,0
 jload_failed db 'VMSTART: \VM\JLOAD.EXE failed (see its message).',13,10,0
 
 params dw 0,0,0,5Ch,0,6Ch,0

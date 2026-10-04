@@ -7,6 +7,7 @@
 struct bitem { int rec; u8 sel; char name[LFN_NAME]; };
 static struct bitem items[MAX_ITEMS];
 static struct binrec rec;                    /* the record being looked at */
+static int wheel_scroll;
 static int nitems, cur = -1, anchor = -1, top;
 static u32 total_bytes, bin_sig;
 static unsigned poll_tick, last_click;
@@ -368,7 +369,7 @@ static void paint(void)
             for (k = 0; k < 4; k++) ui_rect(ax + (sort_desc ? k : 3 - k), ly + 8 + k, 1 + 2 * (sort_desc ? 3 - k : k), 1, C_SHADOW);
         }
     }
-    ensure_visible();
+    if (!wheel_scroll) ensure_visible();
     for (i = top; i < nitems && i < top + rows_visible(); i++) {
         int y = ly + 24 + (i - top) * ROW_H, fg = C_INK;
         bin_get(items[i].rec, &rec);
@@ -517,8 +518,15 @@ static int bin_event(int ev, int a, int b, int c)
         load();
         return 1;
     case EV_PAINT: paint(); return 0;
-    case EV_KEY: return on_key(a);
-    case EV_MOUSE: return on_mouse(a, HOST.x + b, HOST.y + TITLE_H + c);
+    case EV_WHEEL:
+        if (dlg.open || c < 0) return 0;
+        wheel_scroll = 1;
+        top += a * 3;
+        if (top > nitems - rows_visible()) top = nitems - rows_visible();
+        if (top < 0) top = 0;
+        return 1;
+    case EV_KEY: wheel_scroll = 0; return on_key(a);
+    case EV_MOUSE: if (a == MOUSE_DOWN) wheel_scroll = 0; return on_mouse(a, HOST.x + b, HOST.y + TITLE_H + c);
     case EV_POLL:
         if ((unsigned)(HOST.ticks - poll_tick) >= 18 && !dlg.open && fs_changes() != seen_changes) {
             poll_tick = HOST.ticks;

@@ -12,16 +12,37 @@ import uuid
 
 class VM:
     def __init__(self, disk, output, qemu_args=(), memory=512):
+        output = Path(output)
+        output.mkdir(parents=True, exist_ok=True)
         self.output = output
         self.serial = output / 'serial.log'
         self.sock = Path(tempfile.gettempdir()) / f'ciukios-display-{uuid.uuid4().hex}.sock'
         self.err = (output / 'qemu.stderr.log').open('w')
+        qemu_args = list(qemu_args)
+        audio_selected = any(arg in ('-audiodev', '-audio', '-soundhw') for arg in qemu_args)
+        audio_selected |= any(arg.lower().startswith(('sb16', 'adlib', 'ac97'))
+                              for arg in qemu_args)
+        network_selected = any(arg in ('-netdev', '-nic', '-net') for arg in qemu_args)
+        network_selected |= any(arg.lower().startswith(('ne2k_', 'e1000', 'rtl8139'))
+                                for arg in qemu_args)
+        full_devices = []
+        if not audio_selected:
+            full_devices.extend([
+                '-audiodev', f'wav,id=ciuksnd0,path={output / "full-audio.wav"}',
+                '-device', 'sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=ciuksnd0',
+                '-device', 'adlib,audiodev=ciuksnd0',
+            ])
+        if not network_selected:
+            full_devices.extend([
+                '-netdev', 'user,id=ciuknet0',
+                '-device', 'ne2k_isa,netdev=ciuknet0,irq=3,iobase=0x300,mac=52:54:00:12:34:56',
+            ])
         self.process = subprocess.Popen([
             'qemu-system-i386', '-accel', 'kvm', '-machine', 'pc,vmport=off,i8042=on',
             '-cpu', 'pentium3', '-m', str(memory), '-drive', f'file={disk},format=raw,if=ide',
             '-boot', 'c', '-display', 'none', '-serial', f'file:{self.serial}',
             '-monitor', f'unix:{self.sock},server,nowait', '-no-reboot', '-no-shutdown',
-            *qemu_args,
+            *full_devices, *qemu_args,
         ], stdout=subprocess.DEVNULL, stderr=self.err)
         deadline = time.monotonic() + 10
         while not self.sock.exists():

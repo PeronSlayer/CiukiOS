@@ -11,7 +11,7 @@
 #define VMM_MAX 4
 
 static int tab;                         /* 0 apps, 1 processes, 2 VMs, 3 performance */
-static int sel_row[4];
+static int sel_row[4], top_row[4];
 static int speed = 1;                   /* 0 high, 1 normal, 2 low, 3 paused */
 static unsigned last_tick;
 static u8 cpu_hist[HIST];
@@ -200,9 +200,13 @@ static void load_performance(void)
     xms_free_kb = xms_largest_kb = -1;
     if (xms_seg) {
         mem_set(&r, 0, sizeof r);
-        r.ax = 0x0800; r.ds = r.es = app_seg();
+        /* XMS 2.x AH=08h clips a 128/256 MiB machine at 64 MiB. */
+        r.ax = 0x8800; r.ds = r.es = app_seg();
         far_regs(xms_seg, xms_off, &r);
-        xms_largest_kb = r.ax; xms_free_kb = r.dx;
+        if ((r.bx & 0xff) == 0) {
+            xms_largest_kb = ((u32)r.axh << 16) | r.ax;
+            xms_free_kb = ((u32)r.dxh << 16) | r.dx;
+        }
     }
     ems_free_kb = ems_total_kb = -1;
     if (peek16(0, 0x67 * 4 + 2)) {
@@ -366,12 +370,14 @@ static void paint(void)
     ui_inset(body_x, body_y, body_w, body_h);
     ui_rect(body_x + 2, body_y + 2, body_w - 4, body_h - 4, C_PAPER);
     rows = (body_h - 26) / 18;
+    if (top_row[tab] > rows_count() - rows) top_row[tab] = rows_count() - rows;
+    if (top_row[tab] < 0) top_row[tab] = 0;
     if (tab == 0) {
         header(body_x + 2, "Task", body_w * 2 / 3);
         header(body_x + 2 + body_w * 2 / 3, "Status", body_w - 4 - body_w * 2 / 3);
-        for (i = 0; i < nwin && i < rows; i++) {
+        for (i = top_row[tab]; i < nwin && i < top_row[tab] + rows; i++) {
             u8 st = (u8)winbuf[app_ids[i] * 25];
-            y = body_y + 24 + i * 18;
+            y = body_y + 24 + (i - top_row[tab]) * 18;
             row_bg(i, y, &fg);
             ui_text(body_x + 8, y + 1, winbuf + app_ids[i] * 25 + 1, fg);
             ui_text(body_x + 8 + body_w * 2 / 3, y + 1, (st & 0x7F) == 2 ? "Minimized" : (st & 0x80) ? "Running (active)" : "Running", fg);
@@ -386,8 +392,8 @@ static void paint(void)
         cx[0] = body_x + 2; cx[1] = body_x + (int)((long)body_w * 45 / 100); cx[2] = body_x + (int)((long)body_w * 62 / 100);
         cx[3] = body_x + (int)((long)body_w * 82 / 100); cx[4] = body_x + body_w - 2;
         for (i = 0; i < 4; i++) header(cx[i], cols[i], cx[i + 1] - cx[i]);
-        for (i = 0; i < nproc && i < rows; i++) {
-            y = body_y + 24 + i * 18;
+        for (i = top_row[tab]; i < nproc && i < top_row[tab] + rows; i++) {
+            y = body_y + 24 + (i - top_row[tab]) * 18;
             row_bg(i, y, &fg);
             ui_text(cx[0] + 6, y + 1, procs[i].name, fg);
             fmt_hex4(t, procs[i].psp); ui_text(cx[1] + 6, y + 1, t, fg);
@@ -405,7 +411,7 @@ static void paint(void)
         if (!vm_ok) ui_text(body_x + 10, body_y + 30, "The VM manager is not running (safe boot or no CVSESSION).", C_SHADOW);
         else for (i = 0; i < VMM_MAX; i++) {
             u8 st = vm_list[i * 4], s = vm_list[i * 4 + 1];
-            y = body_y + 24 + i * 18;
+            y = body_y + 24 + (i - top_row[tab]) * 18;
             row_bg(i, y, &fg);
             str_copy(t, i ? "VM " : "System VM");
             if (i) { fmt_u32(n, (u32)i); str_cat(t, n); }
@@ -424,7 +430,7 @@ static void paint(void)
     ui_rect(X0, y - 1, W, 21, C_FACE);
     str_copy(t, "Processes: "); fmt_u32(n, (u32)nproc); str_cat(t, n);
     str_cat(t, "    CPU Usage: "); fmt_u32(n, (u32)(hist_n ? cpu_hist[hist_n - 1] : 0)); str_cat(t, n); str_cat(t, "%");
-    str_cat(t, "    Free memory: "); kb_text(n, conv_largest_kb); str_cat(t, n);
+    str_cat(t, "    DOS free block: "); kb_text(n, conv_largest_kb); str_cat(t, n);
     if (vm_ok) { str_cat(t, "    VMs: "); fmt_u32(n, (u32)vm_count); str_cat(t, n); }
     ui_inset(X0 + 2, y, W - 4, 19);
     ui_text(X0 + 8, y + 1, status_line[0] ? status_line : t, C_INK);
@@ -458,7 +464,7 @@ static void command(int id)
     case T_HIGH: case T_NORMAL: case T_LOW: case T_PAUSED: speed = id - T_HIGH; break;
     case T_ABOUT:
         dc[0].type = DC_LABEL; dc[0].x = 50; dc[0].y = 0; dc[0].text = "CiukiOS Task Manager"; dc[0].disabled = 0;
-        dc[1].type = DC_LABEL; dc[1].x = 50; dc[1].y = 20; dc[1].text = "Version 0.8.0 - A modern Retro OS"; dc[1].disabled = 0;
+        dc[1].type = DC_LABEL; dc[1].x = 50; dc[1].y = 20; dc[1].text = "Version 0.8.3 - A modern Retro OS"; dc[1].disabled = 0;
         dc[2].type = DC_BUTTON; dc[2].x = 130; dc[2].y = 52; dc[2].w = 80; dc[2].h = 24; dc[2].text = "OK"; dc[2].id = 1; dc[2].disabled = 0;
         dialog_show(&dlg, "About Task Manager", dc, 3, 340, 82, 1, 1);
         break;
@@ -514,7 +520,7 @@ static int on_mouse(int kind, int x, int y)
     }
     if (kind == MOUSE_RIGHT) {
         if (sy >= body_y + 24 && sy < body_y + body_h && sx >= body_x && sx < body_x + body_w) {
-            i = (sy - body_y - 24) / 18;
+            i = top_row[tab] + (sy - body_y - 24) / 18;
             if (i < rows_count()) sel_row[tab] = i;
             if (tab == 0 && i < nwin) {
                 int w = app_ids[i], mod = w == 8 || w == 9 || (w >= 12 && w <= 15);
@@ -535,7 +541,7 @@ static int on_mouse(int kind, int x, int y)
         return 1;
     }
     if (sy >= body_y + 24 && sy < body_y + body_h && sx >= body_x && sx < body_x + body_w) {
-        i = (sy - body_y - 24) / 18;
+        i = top_row[tab] + (sy - body_y - 24) / 18;
         if (i < rows_count()) {
             if (i == sel_row[tab] && tab == 0 && (unsigned)(HOST.ticks - click_tick) < 9) command(T_SWITCH);
             sel_row[tab] = i;
@@ -624,7 +630,17 @@ static int tasks_event(int ev, int a, int b, int c)
         log_tab();
         return 1;
     case EV_PAINT: paint(); return 0;
-    case EV_KEY: return on_key(a);
+    case EV_WHEEL:
+        if (dlg.open || tab >= 2 || c < 0) return 0;
+        top_row[tab] += a * 3;
+        return 1;
+    case EV_KEY: {
+        int r = on_key(a), rows;
+        layout(); rows = (body_h - 26) / 18;
+        if (sel_row[tab] < top_row[tab]) top_row[tab] = sel_row[tab];
+        if (sel_row[tab] >= top_row[tab] + rows) top_row[tab] = sel_row[tab] - rows + 1;
+        return r;
+    }
     case EV_MOUSE: return on_mouse(a, b, c);
     case EV_POLL:
         if (!periods[speed]) return 0;

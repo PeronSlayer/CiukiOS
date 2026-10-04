@@ -777,7 +777,7 @@ static void page_dialog(void)
 static void about_dialog(void)
 {
     ctl(0, DC_LABEL, 50, 0, 0, 16, "CiukiOS CiukNote", 0);
-    ctl(1, DC_LABEL, 50, 20, 0, 16, "Version 0.8.0", 0);
+    ctl(1, DC_LABEL, 50, 20, 0, 16, "Version 0.8.3", 0);
     ctl(2, DC_LABEL, 50, 40, 0, 16, "A modern Retro OS", 0);
     ctl(3, DC_LABEL, 50, 66, 0, 16, "Text limit: 61,440 bytes (as Windows 9x: 64 KB).", 0);
     ctl(4, DC_LABEL, 50, 86, 0, 16, "Printing goes to LPT1.", 0);
@@ -1642,6 +1642,17 @@ static int notepad_event(int ev, int a, int b, int c)
     case EV_PAINT:
         paint();
         return 0;
+    case EV_WHEEL: {
+        int at, last;
+        if (dlg.open || c < 0) return 0;
+        layout();
+        at = row_index(row_of(top)) + a * 3;
+        last = (int)row_count() - rows;
+        if (at > last) at = last;
+        if (at < 0) at = 0;
+        top = row_at_index((u16)at);
+        return 1;
+    }
     case EV_KEY:
         return on_key(a);
     case EV_MOUSE:

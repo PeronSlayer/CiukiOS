@@ -159,7 +159,17 @@ def prepare(info: dict[str, str]) -> Path:
     env = dict(os.environ)
     env["CIUKIOS_VM_WINDOW"] = "1"
     env["CIUKIOS_WINDOWS_PORTABLE"] = "1"
-    subprocess.run(["bash", "scripts/build_full.sh"], cwd=ROOT, env=env, check=True)
+    # Keep the hook's rebuild under the same workstation cap as interactive
+    # builds. It must finish before the runtime smoke starts.
+    env["CIUKIOS_BUILD_JOBS"] = "1"
+    available_kib = next(int(line.split()[1]) for line in
+                         Path("/proc/meminfo").read_text().splitlines()
+                         if line.startswith("MemAvailable:"))
+    if available_kib < 4 * 1024 * 1024:
+        raise SystemExit("[push-release] less than 4 GiB host memory available; build deferred")
+    subprocess.run(["systemd-run", "--user", "--scope", "-p", "MemoryMax=3G",
+                    "-p", "MemorySwapMax=1G", "-p", "CPUQuota=100%", "--",
+                    "bash", "scripts/build_full.sh"], cwd=ROOT, env=env, check=True)
     clean_tree()
     bundle = RELEASE_DIR / f"{NAME}.zip"
     verify_bundle(bundle, info["commit"])

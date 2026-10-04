@@ -1,0 +1,192 @@
+{
+  "passed": true,
+  "device": "virtio-gl",
+  "physical_input_tested": false,
+  "gpu_physical": "0x18917c",
+  "desktop": {
+    "size": 52,
+    "version": 1,
+    "enabled": 1,
+    "width": 800,
+    "height": 600,
+    "pitch": 3200,
+    "device_status": 15,
+    "submits": 4,
+    "completions": 4,
+    "skipped": 2,
+    "error_stage": 0
+  },
+  "mouse_before_game": {
+    "vector": "0x3008bd4",
+    "shell": {
+      "samples": 0,
+      "last_delta": 0,
+      "target": 0,
+      "sent": 0,
+      "result": 0
+    },
+    "mouse_device_id": 3,
+    "mouse_packet_bytes": 4,
+    "mouse_diag_packets": 0,
+    "mouse_last_wheel_delta": 0,
+    "mouse_wheel_count": 0
+  },
+  "observed_cadence": {
+    "engine_loop": {
+      "samples": 348,
+      "missed": 0,
+      "median_ms": 30.871450999256922,
+      "p95_ms": 31.700192000789684,
+      "max_ms": 55.22125399875222,
+      "over_42ms": 2
+    },
+    "gpu_submit": {
+      "samples": 356,
+      "missed": 1,
+      "median_ms": 27.95755300030578,
+      "p95_ms": 31.39830099826213,
+      "max_ms": 65.9898880039691,
+      "over_42ms": 3
+    },
+    "gpu_completion": {
+      "samples": 354,
+      "missed": 2,
+      "median_ms": 28.130487000453286,
+      "p95_ms": 38.07219600312237,
+      "max_ms": 62.439956003800035,
+      "over_42ms": 8
+    }
+  },
+  "host_cpu_budget_delta": {
+    "usage_usec": 11494255,
+    "user_usec": 10740704,
+    "system_usec": 753552,
+    "nice_usec": 0,
+    "core_sched.force_idle_usec": 0,
+    "nr_periods": 100,
+    "nr_throttled": 0,
+    "throttled_usec": 0,
+    "nr_bursts": 0,
+    "burst_usec": 0
+  },
+  "game": {
+    "before": {
+      "size": 52,
+      "version": 1,
+      "enabled": 1,
+      "width": 800,
+      "height": 600,
+      "pitch": 3200,
+      "device_status": 15,
+      "submits": 904,
+      "completions": 904,
+      "skipped": 786,
+      "error_stage": 0
+    },
+    "after": {
+      "size": 52,
+      "version": 1,
+      "enabled": 1,
+      "width": 800,
+      "height": 600,
+      "pitch": 3200,
+      "device_status": 15,
+      "submits": 1620,
+      "completions": 1620,
+      "skipped": 1143,
+      "error_stage": 0
+    },
+    "elapsed": 10.004363981999632,
+    "engine_before": {
+      "gametic": 160,
+      "frameon": 146
+    },
+    "engine_after": {
+      "gametic": 508,
+      "frameon": 494
+    },
+    "engine_rates": {
+      "gametic": 34.78481996718028,
+      "frameon": 34.78481996718028
+    }
+  },
+  "after_game_exit": {
+    "size": 52,
+    "version": 1,
+    "enabled": 1,
+    "width": 800,
+    "height": 600,
+    "pitch": 3200,
+    "device_status": 15,
+    "submits": 1720,
+    "completions": 1720,
+    "skipped": 1885,
+    "error_stage": 0
+  },
+  "mouse_after_game": {
+    "vector": "0x3008bd4",
+    "shell": {
+      "samples": 0,
+      "last_delta": 0,
+      "target": 0,
+      "sent": 0,
+      "result": 0
+    },
+    "mouse_device_id": 3,
+    "mouse_packet_bytes": 4,
+    "mouse_diag_packets": 0,
+    "mouse_last_wheel_delta": 0,
+    "mouse_wheel_count": 0
+  },
+  "internet_http_dns": true,
+  "http_reload_reclaims_network": true,
+  "mouse_before_wheel": {
+    "vector": "0x3008bd4",
+    "shell": {
+      "samples": 0,
+      "last_delta": 0,
+      "target": 0,
+      "sent": 0,
+      "result": 0
+    },
+    "mouse_device_id": 3,
+    "mouse_packet_bytes": 4,
+    "mouse_diag_packets": 1,
+    "mouse_last_wheel_delta": 0,
+    "mouse_wheel_count": 0
+  },
+  "mouse_after_wheel_down": {
+    "vector": "0x3008bd4",
+    "shell": {
+      "samples": 1,
+      "last_delta": 1,
+      "target": 8,
+      "sent": 1,
+      "result": 250
+    },
+    "mouse_device_id": 3,
+    "mouse_packet_bytes": 4,
+    "mouse_diag_packets": 3,
+    "mouse_last_wheel_delta": 0,
+    "mouse_wheel_count": 0
+  },
+  "ps2_wheel_files": true,
+  "display_timeout_reverted": true,
+  "display_16bit_banked_reverted": true,
+  "native_operations_stay_graphical": true,
+  "display_profile_persisted": true,
+  "about_preference_persisted": true,
+  "after_video_release": {
+    "size": 52,
+    "version": 1,
+    "enabled": 0,
+    "width": 0,
+    "height": 0,
+    "pitch": 0,
+    "device_status": 0,
+    "submits": 0,
+    "completions": 0,
+    "skipped": 0,
+    "error_stage": 0
+  }
+}

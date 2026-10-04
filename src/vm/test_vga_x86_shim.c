@@ -59,6 +59,7 @@ int cvx_shim_execute(cvx_cpu *cpu, uint8_t *memory, uint32_t size, uint32_t budg
     bus.write = shim_write;
     bus.fetch = shim_fetch;
     bus.context = &b;
+    bus.segment_base = 0;
     status = cvx_execute(cpu, &bus, budget, result);
     *count = b.count;
     return status;

@@ -55,7 +55,11 @@ VMM_BIOS_END equ 0F0h
 VMM_BIOS_MAX equ VMM_BIOS_END-VMM_BIOS_FIRST
 VMM_FRAME equ 76                        ; sizeof Client_Reg_Struc
 VMM_CV_BYTES equ 64                     ; >= Jemm's CV_VM_STATE_BYTES (26)
+; Two ticks let a resumed BIOS INT 16h wait consume its queued key before
+; another VM switch. One tick reproducibly stranded VM2 after its prompt.
+; The return-to-V86 audio-urgent path below still schedules pending DMA IRQs.
 VMM_SLICE equ 2                         ; IRQ0 ticks per time slice
+VMM_BOOST equ 4                         ; ticks the system VM keeps after input
 VMM_MISSED_MAX equ 1092                 ; ticks owed to a VM at most (1 min)
 VMM_CTX_BYTES equ 2048                  ; >= the per-session variables (sess_ctx)
 SESS_VIDEO equ 1                        ; VMREC.sess: it owns a session
@@ -80,6 +84,8 @@ target dd ?                             ; VM its video/device operations address
 pull_lines dd ?                         ; IRQ1/IRQ12 bytes its model is to take
 exit_code dd ?                          ; FFFFh running, FFFEh killed, else its code
 generation dd ?                         ; creations of this slot (VMM_EXIT_CODE)
+umb_resident0 dd ?                      ; exact Jemm XMS UMBs owned by this VM
+umb_resident1 dd ?                      ; released at normal exit and forced kill
 ctx db VMM_CTX_BYTES dup (?)            ; its per-session variables when not live
 block dd ?                              ; linear of its private pages (0: VM 0)
 frame db VMM_FRAME dup (?)
@@ -107,6 +113,7 @@ vmm_yield_seen dd 0                     ; ... for ticks the monitor had counted
 vmm_last_exit dd 0FFFFh
 vmm_idle dd 0                           ; this tick interrupted the HLT wait
 vmm_focus dd 0                          ; VM that receives the keyboard
+vmm_audio_urgent dd -1                  ; background PM audio IRQ needs CPU time
 vmm_mouse_home dd 0                     ; 1: the system VM keeps the mouse (M4)
 vmm_seen dd 0                           ; bit per VM: the monitor reflects the
                                         ; IRQ0 it gets next (VMM_YIELD)
@@ -117,7 +124,30 @@ guest_window_pte dd 0                   ; its own PTE, restored on unload
 guest_window_frame dd 0                 ; frame mapped there now (0: its own)
 vmm_bios_count dd 0                     ; upper-memory pages of BIOS RAM
 vmm_bios_pages db VMM_BIOS_MAX dup (0)  ; their page numbers
+vmm_input_magic db 'CVINPUT1'            ; input scheduling state, found in RAM
+vmm_input_urgent dd -1                  ; VM with keyboard/mouse input pending
+vmm_boost_vm dd -1                      ; system VM handling input: no slice end
+vmm_boost_end dd 0                      ; vmm_ticks at which that boost ends
+vmm_halt_switches dd 0                  ; switches at a guest HLT
+vmm_halt_calls dd 0                     ; HLT callbacks
+vmm_resume_vm dd -1                     ; boosted VM urgent audio interrupted
+vmm_resume_tsc dd 0                     ; TSC (low) at that switch
+vmm_resuming dd 0                       ; input_urgent holds a resume
+vmm_idle_mask dd 0                      ; bit per VM: it gave the CPU away at HLT
+vmm_desk_tsc dd 0                       ; TSC (low) when the desktop yielded
+VMM_DESK_MS equ 8                       ; idle desktop looks for new frames
+vmm_tsc_khz dd 0                        ; from DEV_BEGIN (0: unknown)
+vmm_tsc_measured dd 0                   ; ring-0 PIT calibration at load
+vmm_poll_no_switch dd 0                 ; that API call's client steps a virtual CLI
+vmm_poll_input_skip dd 0                ; the return of DEV_PHYSICAL_IRQ: its
+                                        ; DPMI host has not acknowledged the IRQ
 vmm_table VMREC VMM_MAX dup (<>)
+; A regular slice that expired inside a DPMI host's physical ISR.  The
+; canonical V86 frame may switch only after that host has issued its EOI.
+vmm_defer_magic db 'CVDEFER1'
+vmm_defer_vm dd -1
+vmm_defer_irqs dd 0
+vmm_defer_switches dd 0
 
 .code
 
@@ -192,6 +222,7 @@ find_slot:
  inc eax
  jmp find_slot
 slot_found:
+ push eax                               ; preserve slot across CMOS copy
  mov ebx,esi                            ; EBX = new record
  mov [ebx].VMREC.missed,0
  push esi
@@ -200,7 +231,6 @@ slot_found:
  mov eax,vmm_table[esi].cmos_index
  pop esi
  mov [ebx].VMREC.cmos_index,eax
- push eax                               ; VM number
  mov ecx,vmm_bios_count
  add ecx,VMM_PAGES
  push 0
@@ -265,6 +295,8 @@ pte_live:
  mov [ebx].VMREC.sess,0
  mov [ebx].VMREC.pull_lines,0
  mov [ebx].VMREC.exit_code,0FFFFh
+ mov [ebx].VMREC.umb_resident0,0
+ mov [ebx].VMREC.umb_resident1,0
  inc [ebx].VMREC.generation
  mov eax,[esp]
  mov [ebx].VMREC.target,eax
@@ -298,6 +330,7 @@ cv_ready:
  test eax,eax
  jnz arm_error_pop
  pop eax
+ call clock_begin_vm
  mov [ebx].VMREC.state,VM_SLOT_READY
  inc vmm_count
  mov word ptr [ebp].Client_Reg_Struc.Client_EBX,ax
@@ -448,7 +481,29 @@ vmm_arm proc
  mov eax,TICK_VMM
  call tick_acquire
  jc busy
+ call clock_arm
+ jc clock_failed
  mov vmm_installed,1
+ call vmm_profile_start
+ call vmm_cmos_trap
+armed:
+ xor eax,eax
+ ret
+clock_failed:
+ mov eax,TICK_VMM
+ call tick_release
+busy:
+ mov eax,VM_ERROR_VMM_BUSY
+ ret
+vmm_arm endp
+
+; Install the profile callbacks together, also used to undo a failed park.
+; In the pinned profile, setters 1/4/6/11 unconditionally store their value
+; and return CF clear. Restoring them requires no new resource acquisition.
+vmm_profile_start proc
+ mov ecx,clock_enabled
+ mov eax,12
+ @VMMCall Host_Scheduler_Profile
  mov eax,1
  @VMMCall Host_Scheduler_Profile
  ; Keyboard and mouse routing between the VMs, owed timer ticks.
@@ -458,14 +513,192 @@ vmm_arm proc
  mov ecx,offset jlm_poll
  mov eax,6
  @VMMCall Host_Scheduler_Profile
- call vmm_cmos_trap
-armed:
+ mov ecx,offset vmm_halt
+ mov eax,11
+ @VMMCall Host_Scheduler_Profile
+ ret
+vmm_profile_start endp
+
+; Return the sole desktop to Jemm's ordinary V86 interrupt path. The first
+; fork/native start re-arms it; unloading CVSESSION is not required. Called
+; only from the canonical poll after owed ticks and native work are done.
+vmm_park proc
+ pushfd
+ cli
+ pushad
+ cmp vmm_installed,0
+ je keep
+ cmp vmm_count,1
+ jne keep
+ cmp vmm_current,0
+ jne keep
+ cmp vmm_live,0
+ jne keep
+ cmp vmm_borrowed,-1
+ jne keep
+ cmp ebp,vmm_client_frame
+ jne keep
+ cmp sessions,0
+ jne keep
+ cmp dev_sessions,0
+ jne keep
+ cmp dev_active,0
+ jne keep
+ cmp dev_busy,0
+ jne keep
+ cmp dev_stream,0
+ jne keep
+ cmp dev_audio_sessions,0
+ jne keep
+ cmp scheduler_installed,0
+ jne keep
+ cmp tick_owners,TICK_VMM
+ jne keep
+ cmp native_page_live,0                 ; native tasks still need jlm_poll
+ jne keep
+ cmp nproc_busy,0
+ jne keep
+ cmp [vmm_table].VMREC.missed,0
+ jne keep
+ test [ebp].Client_Reg_Struc.Client_EFlags,200h
+ jz keep                               ; do not withdraw a virtual CLI
+ call vmm_phys_idle
+ jnz keep
+ mov eax,5
+ @VMMCall Host_Scheduler_Profile
+ jc keep
+ or ecx,edx                            ; pending or in-service virtual IRQ
+ jnz keep                              ; its handler/EOI must finish first
+ mov eax,2
+ @VMMCall Host_Scheduler_Profile
+ jc keep
+ mov eax,TICK_VMM
+ call tick_release
+ jc profile_restore                    ; the tick owner is still retained
+ call clock_stop
+ mov vmm_installed,0
+ mov vmm_focus,0
+ mov vmm_mouse_home,0
+ mov vmm_audio_urgent,-1
+ mov vmm_input_urgent,-1
+ mov vmm_boost_vm,-1
+ mov vmm_boost_end,0
+ mov vmm_resume_vm,-1
+ mov vmm_resuming,0
+ mov vmm_idle,0
+ mov vmm_idle_mask,0
+ mov vmm_seen,0
+ mov vmm_poll_no_switch,0
+ mov vmm_poll_input_skip,0
+ mov vmm_defer_vm,-1
+ mov cvdev_release_request,0
+ mov [vmm_table].VMREC.target,0
+ mov [vmm_table].VMREC.pull_lines,0
+ mov [vmm_table].VMREC.cv_valid,0        ; next activation uses the live PIC
+ jmp keep
+profile_restore:
+ ; tick_release keeps the owner bit on error. Reinstall the profile hooks
+ ; while IF is still clear; the next canonical return can retry the park.
+ call vmm_profile_start
+keep:
+ popad
+ popfd
+ ret
+vmm_park endp
+
+; Claim and register one exact Jemm UMB in the same ring-0 operation.  A KILL
+; cannot intervene between allocation and ownership as it could with two
+; separate V86 calls.  The block is private by address: each VM gets a
+; distinct Jemm UMB segment even though upper-memory PTEs stay global.
+vmm_umb_alloc proc uses esi edx
+ mov eax,vmm_current
+ test eax,eax
+ jz reject
+ call vmm_record
+ cmp [esi].VMREC.state,VM_SLOT_READY
+ jne reject
+ movzx edx,word ptr [ebp].Client_Reg_Struc.Client_EBX
+ cmp edx,20h
+ jb reject
+ cmp edx,500h
+ ja reject
+ cmp [esi].VMREC.umb_resident0,0
+ je slot_ready
+ cmp [esi].VMREC.umb_resident1,0
+ jne reject
+slot_ready:
+ @VMMCall Claim_Ciuki_UMB
+ test eax,eax
+ jz reject
+ cmp eax,0CD00h
+ jb release_invalid
+ cmp eax,0EC00h
+ jae release_invalid
+ cmp [esi].VMREC.umb_resident0,0
+ jne store_second
+ mov [esi].VMREC.umb_resident0,eax
+ jmp publish
+store_second:
+ mov [esi].VMREC.umb_resident1,eax
+publish:
+ mov word ptr [ebp].Client_Reg_Struc.Client_EBX,ax
+ mov word ptr [ebp].Client_Reg_Struc.Client_ECX,cx
  xor eax,eax
  ret
-busy:
- mov eax,VM_ERROR_VMM_BUSY
+release_invalid:
+ mov edx,eax
+ @VMMCall Release_Ciuki_UMB
+reject:
+ mov eax,VM_ERROR_OPERATION
  ret
-vmm_arm endp
+vmm_umb_alloc endp
+
+; EBX = VM record.  The pinned Jemm service checks that each segment is a
+; currently allocated UMB and returns one only when it cleared that entry.
+; Keep a failed segment recorded so a later KILL can retry; never silently
+; discard ownership of a global UMB allocation.
+vmm_umb_release proc uses edx
+ mov edx,[ebx].VMREC.umb_resident1
+ test edx,edx
+ jz first
+ @VMMCall Release_Ciuki_UMB
+ cmp eax,1
+ jne failed
+ mov [ebx].VMREC.umb_resident1,0
+first:
+ mov edx,[ebx].VMREC.umb_resident0
+ test edx,edx
+ jz done
+ @VMMCall Release_Ciuki_UMB
+ cmp eax,1
+ jne failed
+ mov [ebx].VMREC.umb_resident0,0
+done:
+ xor eax,eax
+ ret
+failed:
+ mov eax,VM_ERROR_OPERATION
+ ret
+vmm_umb_release endp
+
+; Defensive unload check: a VM should have released both blocks before its
+; state becomes free, but JLOAD must never drop the owner table if it has not.
+vmm_umb_live proc uses esi ecx
+ mov esi,offset vmm_table
+ mov ecx,VMM_MAX
+scan:
+ cmp [esi].VMREC.umb_resident0,0
+ jne live
+ cmp [esi].VMREC.umb_resident1,0
+ jne live
+ add esi,sizeof VMREC
+ loop scan
+ xor eax,eax
+ ret
+live:
+ mov eax,1
+ ret
+vmm_umb_live endp
 
 vmm_exit proc
  mov eax,vmm_current
@@ -479,13 +712,23 @@ vmm_exit proc
  mov eax,vmm_current
 no_session:
  movzx ecx,word ptr [ebp].Client_Reg_Struc.Client_EBX
- mov vmm_last_exit,ecx
  push esi
+ push ebx
  call vmm_record
+ mov ebx,esi
+ call vmm_umb_release
+ test eax,eax
+ jnz release_failed
+ pop ebx
+ mov vmm_last_exit,ecx
  mov [esi].VMREC.state,VM_SLOT_DEAD
  mov [esi].VMREC.exit_code,ecx
  pop esi
  xor eax,eax
+ ret
+release_failed:
+ pop ebx
+ pop esi
  ret
 refuse:
  mov eax,VM_ERROR_OPERATION
@@ -516,6 +759,14 @@ vmm_kill proc uses esi ebx
  test eax,eax
  jnz failed
 no_session:
+ mov eax,ebx
+ call vmm_record
+ push ebx
+ mov ebx,esi
+ call vmm_umb_release
+ pop ebx
+ test eax,eax
+ jnz failed
  cmp ebx,vmm_focus
  jne focus_kept
  mov vmm_focus,0
@@ -727,6 +978,8 @@ sess_ctx dd offset shadow, 12                   ; shadow, active, mapped
  dd offset dev_ports, 8                         ; ports, trapped
  dd offset scheduler_descriptor, 16             ; descriptor .. if_flags
  dd 0
+; Position of dev_pm_claimed in VMREC.ctx, matching the byte spans above.
+VMM_CTX_PM_OFFSET equ 12+12+4+VGA_PAGES*4+(offset info_packet)-(offset port_bytes)+4+4
 sessions dd 0                           ; VMs that own a DOS window session
 .code
 
@@ -1072,6 +1325,7 @@ vmm_pend endp
 ; itself, so its line is only pended. CF=1 when the IRQ was taken here.
 jlm_filter proc
  call vmm_line_target                   ; EDX = VM for line EAX
+ call vmm_mark_input
  cmp edx,vmm_current
  jne other_vm
  cmp dev_active,0
@@ -1148,6 +1402,16 @@ line_ok:
  mov word ptr [ebp].Client_Reg_Struc.Client_EBX,0
  jnc routed
  mov word ptr [ebp].Client_Reg_Struc.Client_EBX,1
+ ; The host acknowledges the physical IRQ only after this call returns: no
+ ; VM switch at its return to V86. BX=2 asks it for VMM_INPUT_YIELD after
+ ; its EOI when the byte is for a VM that does not run.
+ mov vmm_poll_input_skip,1
+ mov eax,vmm_input_urgent
+ cmp eax,VMM_MAX
+ jae routed
+ cmp eax,vmm_current
+ je routed
+ mov word ptr [ebp].Client_Reg_Struc.Client_EBX,2
 routed:
  xor eax,eax
  ret
@@ -1445,12 +1709,16 @@ vmm_irq proc
  cli
  pushad
  inc vmm_ticks
+ inc clock_host_ticks
  xor ebx,ebx                            ; 1: V86 frame, the IRQ0 is reflected
  cmp ebp,vmm_client_frame               ; into the VM that runs after this
  sete bl
  cmp vmm_count,2
  jb irq_seen
+ cmp clock_enabled,0
+ jne @F
  call vmm_owe_tick
+@@:
  ; Jemm also calls this for an IRQ0 that arrived in ring 0 (EBP is not the
  ; V86 client frame then). Switch from the canonical frame at the top of the
  ; monitor stack (seen by every API call), or from ring 0 only while Jemm
@@ -1472,14 +1740,45 @@ vmm_irq proc
  mov vmm_idle,1
  jmp irq_switch                         ; an idle VM gives its slice away now
 irq_frame:
+ mov eax,vmm_audio_urgent
+ cmp eax,-1
+ je irq_regular_slice
+ cmp eax,vmm_current
+ jne irq_switch
+ mov vmm_audio_urgent,-1
+irq_regular_slice:
+ call vmm_input_due
+ jc irq_switch
+ jnz irq_seen
  mov eax,vmm_ticks
  and eax,VMM_SLICE-1
  jnz irq_seen
 irq_switch:
+ ; The monitor acknowledges this IRQ0 after its callback returns (or
+ ; before the callback for a ring-0 IRQ).  It does NOT acknowledge a
+ ; different physical ISR interrupted by this tick, e.g. HDPMI's IRQ12
+ ; bridge.  Giving that ISR's EOI to another VM strands its virtual PIC.
  push ebx
+ cmp vmm_poll_no_switch,0
+ jne irq_defer
+ call vmm_phys_idle
+ test ebx,ebx
+ jz irq_phys_checked
+ and ax,0FFFEh                         ; only this monitor IRQ0 is safe
+irq_phys_checked:
+ test ax,ax
+ jnz irq_defer
  call vmm_switch
  pop ebx
+ jmp irq_seen
+irq_defer:
+ mov eax,vmm_current
+ mov vmm_defer_vm,eax
+ inc vmm_defer_irqs
+ pop ebx
 irq_seen:
+ cmp clock_enabled,0
+ jne irq_done
  ; Its V86 IRQ0 handler (VMM_YIELD) must not count this tick again.
  test ebx,ebx
  jz irq_done
@@ -1504,13 +1803,39 @@ vmm_dpmi_tick proc
  inc vmm_ticks
  cmp vmm_count,2
  jb done
+ cmp clock_enabled,0
+ jne @F
  call vmm_owe_tick
+@@:
  mov vmm_idle,0
+ mov eax,vmm_audio_urgent
+ cmp eax,-1
+ je dpmi_regular_slice
+ cmp eax,vmm_current
+ jne dpmi_switch
+ mov vmm_audio_urgent,-1
+dpmi_regular_slice:
+ call vmm_input_due
+ jc dpmi_switch
+ jnz done
  mov eax,vmm_ticks
  and eax,VMM_SLICE-1
  jnz done
+dpmi_switch:
+ ; DPMIRUN normally chains to the BIOS EOI first.  A nested physical ISR
+ ; can still be outstanding; unlike the monitor callback none is ours to
+ ; acknowledge here.  Retain the slice request until a safe V86 return.
+ cmp vmm_poll_no_switch,0
+ jne dpmi_defer
+ call vmm_phys_idle
+ jnz dpmi_defer
  inc vmm_yields
  call vmm_switch
+ jmp done
+dpmi_defer:
+ mov eax,vmm_current
+ mov vmm_defer_vm,eax
+ inc vmm_defer_irqs
 done:
  ret
 seen:
@@ -1608,6 +1933,265 @@ skip:
  ret
 vmm_owe_tick endp
 
+; EDX = VM that receives a keyboard/mouse byte. Another VM runs it next at
+; the first safe boundary (return to V86 or IRQ0), as urgent audio; the
+; system VM (desktop) then keeps the CPU until it idles, at most VMM_BOOST
+; ticks, so a response is not cut by the slice end. Preserves every register.
+vmm_mark_input proc
+ pushad
+ cmp vmm_count,2
+ jb done
+ cmp edx,VMM_MAX
+ jae done
+ test edx,edx
+ jnz not_desktop
+ cmp edx,vmm_current
+ jne not_desktop
+ mov vmm_boost_vm,0                     ; the running desktop: boost only
+ mov eax,vmm_ticks
+ add eax,VMM_BOOST
+ mov vmm_boost_end,eax
+ jmp done
+not_desktop:
+ cmp edx,vmm_current
+ je done
+ mov eax,edx
+ call vmm_record
+ cmp [esi].VMREC.state,VM_SLOT_READY
+ jne done
+ mov vmm_input_urgent,edx
+ mov vmm_resuming,0                     ; real input: the desktop is boosted
+done:
+ popad
+ ret
+vmm_mark_input endp
+
+; At module load (one VM, ring 0, IRQs off for 20 ms): the TSC rate against
+; PIT channel 2 in mode 0, as Linux's pit_calibrate_tsc does. Speaker data
+; stays off; port 61h is restored. vmm_tsc_measured = kHz or 0.
+VMM_PIT_LATCH equ 23864                ; 1193182 Hz * 20 ms
+vmm_measure_tsc proc
+ pushfd
+ cli
+ pushad
+ in al,61h
+ mov bl,al
+ and al,not 2                           ; speaker data off
+ or al,1                                ; channel 2 gate on
+ out 61h,al
+ mov al,0B0h                            ; channel 2, lobyte/hibyte, mode 0
+ out 43h,al
+ mov al,VMM_PIT_LATCH and 0FFh
+ out 42h,al
+ mov al,VMM_PIT_LATCH shr 8
+ out 42h,al
+ db 0Fh,31h                             ; rdtsc
+ mov esi,eax
+ mov edi,edx
+ mov ecx,4000000h                       ; bounded: never hang on absent hardware
+wait_out2:
+ in al,61h
+ test al,20h
+ jnz counted
+ dec ecx
+ jnz wait_out2
+ jmp restore
+counted:
+ db 0Fh,31h
+ sub eax,esi
+ sbb edx,edi
+ mov ecx,20                             ; cycles per ms over 20 ms
+ cmp edx,ecx
+ jae restore
+ div ecx
+ cmp eax,1000                           ; 1 MHz .. 20 GHz
+ jb restore
+ cmp eax,20000000
+ ja restore
+ mov vmm_tsc_measured,eax
+ cmp vmm_tsc_khz,0
+ jne restore
+ mov vmm_tsc_khz,eax
+restore:
+ mov al,bl
+ out 61h,al
+ popad
+ popfd
+ ret
+vmm_measure_tsc endp
+
+; ZF=1 when no physical IRQ is in service on either 8259. A VM switch while
+; one is would hand its EOI to a VM that never took it: Jemm then completes a
+; virtual EOI on the physical PIC and the next VM's virtual IRQ (the mouse)
+; stays in service for good. Changes EAX; read mode restored to IRR.
+vmm_phys_idle proc
+ mov al,0Bh
+ out 0A0h,al
+ in al,0A0h
+ mov ah,al                              ; slave ISR
+ mov al,0Ah
+ out 0A0h,al
+ mov al,0Bh
+ out 20h,al
+ in al,20h                              ; master ISR
+ push eax
+ mov al,0Ah
+ out 20h,al
+ pop eax
+ test ax,ax
+ ret
+vmm_phys_idle endp
+
+; The VM that urgent audio interrupted runs again once the audio VM has run
+; for 3 ms (time to service its interrupt). Changes EAX, ECX, EDX.
+vmm_resume_due proc
+ mov eax,vmm_resume_vm
+ cmp eax,VMM_MAX
+ jae done
+ cmp eax,vmm_current
+ je clear
+ mov ecx,vmm_tsc_khz
+ jecxz done                             ; unknown rate: the next tick
+ db 0Fh,31h                             ; rdtsc
+ sub eax,vmm_resume_tsc
+ lea ecx,[ecx+ecx*2]
+ cmp eax,ecx
+ jb done
+ mov eax,vmm_resume_vm
+ mov vmm_input_urgent,eax
+ mov vmm_resuming,1                     ; a resume, not input: no boost
+clear:
+ mov vmm_resume_vm,-1
+done:
+ ret
+vmm_resume_due endp
+
+; The desktop (VM 0) gave the CPU away at HLT while another VM runs: let it
+; run again (no boost) to present that VM's new frames and answer timers.
+; A DOS window would otherwise update only at the 2-tick slice boundary.
+; Changes EAX.
+vmm_desk_wake proc
+ test vmm_idle_mask,1
+ jz done
+ cmp vmm_current,0
+ je done
+ cmp vmm_input_urgent,VMM_MAX
+ jb done
+ mov vmm_input_urgent,0
+ mov vmm_resuming,1
+done:
+ ret
+vmm_desk_wake endp
+
+; VMM_INPUT_YIELD (EBP = the API frame, its result already stored).
+vmm_input_switch proc
+ cmp vmm_installed,0
+ je done
+ cmp vmm_count,2
+ jb done
+ mov eax,vmm_input_urgent
+ cmp eax,VMM_MAX
+ jae done
+ cmp eax,vmm_current
+ je done
+ call vmm_phys_idle
+ jnz done
+ call vmm_switch
+done:
+ ret
+vmm_input_switch endp
+
+; At an IRQ0 time-slice boundary: CF=1 to switch now (input for another VM),
+; else ZF=0 when the system VM is boosted after input (no slice end yet),
+; ZF=1 for the regular slice. Changes EAX.
+vmm_input_due proc
+ call vmm_desk_wake
+ mov eax,vmm_resume_vm
+ cmp eax,VMM_MAX
+ jae no_resume
+ mov vmm_resume_vm,-1
+ cmp eax,vmm_current
+ je no_resume
+ mov vmm_input_urgent,eax
+ mov vmm_resuming,1
+no_resume:
+ mov eax,vmm_input_urgent
+ cmp eax,VMM_MAX
+ jae no_input
+ cmp eax,vmm_current
+ jne switch_now
+ mov vmm_input_urgent,-1
+no_input:
+ mov eax,vmm_boost_vm
+ cmp eax,vmm_current
+ jne regular
+ mov eax,vmm_ticks
+ cmp eax,vmm_boost_end
+ jb boosted
+ mov vmm_boost_vm,-1
+regular:
+ xor eax,eax                            ; ZF=1, CF=0
+ ret
+boosted:
+ or eax,1                               ; ZF=0, CF=0
+ ret
+switch_now:
+ stc
+ ret
+vmm_input_due endp
+
+; Jemm profile function 11: the running VM executed HLT (EBP = its client
+; frame, EIP past the HLT). Another ready VM runs now instead of the CPU
+; halting until the next interrupt. CF=1 when the frame belongs to that VM.
+; The DOS/FAT gates of vmm_switch apply (an idle keyboard wait may switch).
+; Preserves every register.
+vmm_halt proc
+ pushad
+ inc vmm_halt_calls
+ cmp vmm_installed,0
+ je keep
+ cmp vmm_count,2
+ jb keep
+ cmp vmm_borrowed,-1
+ jne keep
+ cmp ebp,vmm_client_frame
+ jne keep
+ mov eax,5
+ @VMMCall Host_Scheduler_Profile        ; ECX pending: this VM wakes at once
+ test ecx,ecx
+ jnz keep
+ call vmm_phys_idle
+ jnz keep
+ mov eax,vmm_current
+ cmp eax,vmm_boost_vm                   ; the desktop has answered its input
+ jne not_boosted
+ mov vmm_boost_vm,-1
+not_boosted:
+ push eax                               ; vmm_switch changes every register
+ mov vmm_idle,1
+ call vmm_switch
+ mov vmm_idle,0
+ pop eax
+ cmp eax,vmm_current
+ je keep
+ bts vmm_idle_mask,eax
+ test eax,eax
+ jnz halt_not_desktop
+ push edx
+ db 0Fh,31h                             ; rdtsc
+ mov vmm_desk_tsc,eax
+ pop edx
+halt_not_desktop:
+ inc vmm_halt_switches
+ popad
+ stc
+ ret
+keep:
+ popad
+ clc
+ ret
+vmm_halt endp
+
 ; Return-to-V86 callback (Jemm profile function 6), shared by the device
 ; model and the VM manager: the running VM gets the IRQ0 ticks it is owed,
 ; one at a time, whenever its virtual PIC has no IRQ0 pending or in service.
@@ -1624,7 +2208,84 @@ no_devices:
 no_stream:
  cmp vmm_installed,0
  je done
+ ; The audio model can raise a protected-mode IRQ for a different VM during
+ ; this return-to-V86 poll. Run that VM now, while this canonical Jemm frame
+ ; can be switched, instead of waiting for another physical IRQ0 time slice.
+ ; vmm_switch still enforces the DOS and FAT gates and checks READY state.
+ pushfd
+ cli
  pushad
+ cmp vmm_borrowed,-1
+ jne poll_switch_done
+ cmp ebp,vmm_client_frame
+ jne poll_switch_done
+ xor eax,eax
+ xchg eax,vmm_poll_no_switch
+ test eax,eax
+ jnz poll_switch_done
+ mov eax,vmm_audio_urgent
+ cmp eax,VMM_MAX
+ jb poll_urgent
+ ; Pending input: Jemm's V86 IRQ path acknowledged the IRQ before this
+ ; return; a DPMI host's DEV_PHYSICAL_IRQ call has not (VMM_INPUT_YIELD).
+ xor eax,eax
+ xchg eax,vmm_poll_input_skip
+ test eax,eax
+ jnz poll_switch_done
+ call vmm_resume_due
+ cmp vmm_input_urgent,VMM_MAX
+ jb poll_input_ready
+ mov eax,vmm_defer_vm
+ cmp eax,vmm_current
+ je poll_deferred_slice
+ db 0Fh,31h                             ; rdtsc
+ sub eax,vmm_desk_tsc
+ mov ecx,vmm_tsc_khz
+ jecxz poll_switch_done
+ imul ecx,ecx,VMM_DESK_MS
+ cmp eax,ecx
+ jb poll_switch_done
+ call vmm_desk_wake
+poll_input_ready:
+ cmp vmm_input_urgent,VMM_MAX
+ jae poll_switch_done
+ mov eax,vmm_input_urgent
+poll_urgent:
+ cmp eax,vmm_current
+ je poll_switch_done
+ ; Not inside an IRQ a DPMI host reflected to this VM before its EOI (the
+ ; BIOS IRQ0 handler): see vmm_phys_idle. Audio and input both wait.
+ call vmm_phys_idle
+ jnz poll_switch_done
+ mov eax,vmm_audio_urgent
+ cmp eax,VMM_MAX
+ jb poll_switch_now
+ mov eax,vmm_input_urgent
+poll_switch_now:
+ call vmm_switch
+ jmp poll_switch_done
+poll_deferred_slice:
+ ; Finish a regular time slice postponed by a physical ISR.  Urgent
+ ; audio/input above retain their priority, and vmm_switch retains all
+ ; DOS/FAT gates.  The pending request is cleared by an actual switch.
+ mov eax,vmm_boost_vm
+ cmp eax,vmm_current
+ jne poll_deferred_idle
+ mov eax,vmm_ticks
+ cmp eax,vmm_boost_end
+ jb poll_switch_done
+poll_deferred_idle:
+ call vmm_phys_idle
+ jnz poll_switch_done
+ inc vmm_yields
+ call vmm_switch
+poll_switch_done:
+ popad
+ popfd
+ call clock_poll
+ pushad
+ cmp clock_enabled,0
+ jne owed_none
  mov eax,vmm_live
  call vmm_record
  cmp [esi].VMREC.missed,0
@@ -1647,6 +2308,15 @@ no_stream:
 owed_none:
  popad
 done:
+ ; A retained native process receives at most one bounded quantum at this
+ ; canonical return-to-V86 boundary; nproc_poll applies DOS/audio gates.
+ pushfd
+ cli
+ pushad
+ call nproc_poll
+ call vmm_park
+ popad
+ popfd
  ret
 jlm_poll endp
 
@@ -1677,7 +2347,36 @@ vmm_switch proc
  cmp al,8
  ja gated
 gate_open:
+ mov eax,vmm_audio_urgent
+ cmp eax,VMM_MAX
+ jae regular_candidate
+ cmp eax,vmm_current
+ je clear_urgent
+ call vmm_record
+ cmp [esi].VMREC.state,VM_SLOT_READY
+ jne clear_urgent
+ mov eax,vmm_audio_urgent
+ dec eax                                 ; next_candidate increments first
+ jmp candidate_start
+clear_urgent:
+ mov vmm_audio_urgent,-1
+regular_candidate:
+ mov eax,vmm_input_urgent
+ cmp eax,VMM_MAX
+ jae plain_candidate
+ cmp eax,vmm_current
+ je clear_input
+ call vmm_record
+ cmp [esi].VMREC.state,VM_SLOT_READY
+ jne clear_input
+ mov eax,vmm_input_urgent
+ dec eax                                 ; next_candidate increments first
+ jmp candidate_start
+clear_input:
+ mov vmm_input_urgent,-1
+plain_candidate:
  mov eax,vmm_current
+candidate_start:
  mov edx,VMM_MAX
 next_candidate:
  inc eax
@@ -1698,6 +2397,41 @@ gated:
  ret
 switch_to:
  mov ebx,eax                            ; EBX = next VM number, ESI its record
+ mov eax,vmm_defer_vm
+ cmp eax,vmm_current
+ jne no_deferred_slice
+ mov vmm_defer_vm,-1
+ inc vmm_defer_switches
+no_deferred_slice:
+ btr vmm_idle_mask,ebx
+ cmp ebx,vmm_audio_urgent
+ jne not_audio_urgent
+ mov vmm_audio_urgent,-1
+ ; Urgent audio interrupts a VM: the audio VM services its IRQ, then that
+ ; VM comes back at the next safe point instead of losing the rest of its
+ ; time slice (a game's SB16 IRQ every 20-40 ms otherwise left the desktop
+ ; about a tenth of the processor).
+ mov eax,vmm_current
+ mov vmm_resume_vm,eax
+ push edx
+ db 0Fh,31h                             ; rdtsc
+ mov vmm_resume_tsc,eax
+ pop edx
+not_audio_urgent:
+ cmp ebx,vmm_input_urgent
+ jne not_input_urgent
+ mov vmm_input_urgent,-1
+ xor eax,eax
+ xchg eax,vmm_resuming
+ test eax,eax                            ; resumed after urgent audio
+ jnz not_input_urgent
+ test ebx,ebx                            ; the desktop finishes its response
+ jnz not_input_urgent
+ mov vmm_boost_vm,0
+ mov eax,vmm_ticks
+ add eax,VMM_BOOST
+ mov vmm_boost_end,eax
+not_input_urgent:
  push esi
  ; Save the running VM.
  push edi
@@ -1818,6 +2552,8 @@ vmm_dispatch proc
  je op_list
  cmp eax,VM_OP_VMM_EXIT_CODE
  je op_exit_code
+ cmp eax,VM_OP_VMM_UMB_ALLOC
+ je op_umb_alloc
  mov eax,VM_ERROR_OPERATION
  ret
 ; VMM_EXIT_CODE: BX = VM -> AX state, DX exit code, CX its generation.
@@ -1841,6 +2577,8 @@ op_focus:
  jmp vmm_set_focus
 op_kill:
  jmp vmm_kill
+op_umb_alloc:
+ jmp vmm_umb_alloc
 op_target:
  jmp vmm_set_target
 ; VMM_LIST: four bytes per VM (state, SESS_* flags, has the focus, runs).

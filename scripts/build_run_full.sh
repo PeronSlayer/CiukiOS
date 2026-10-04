@@ -88,7 +88,8 @@ if [[ "${CIUKIOS_FETCH_NETWORK:-1}" == "1" ]]; then
 fi
 
 echo "[build-run-full] 1/3 building the complete FAT16 full profile"
-bash scripts/build_full.sh
+systemd-run --user --scope -p MemoryMax=3G -p MemorySwapMax=1G \
+  -p CPUQuota=100% -- env CIUKIOS_BUILD_JOBS=1 bash scripts/build_full.sh
 
 echo "[build-run-full] 2/3 verifying the Phase 5 loader/kernel boundary"
 bash scripts/verify_phase5_runtime_ownership.sh --no-build

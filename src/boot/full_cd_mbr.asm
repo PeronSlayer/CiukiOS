@@ -32,6 +32,10 @@ relocated:
     mov ds, ax
     mov es, ax
 
+%ifdef BOOT_DISK_LOG
+    call bootlog_begin
+%endif
+
     mov si, RELOC_BASE + (vbr_dap - $$)
     mov dl, [RELOC_BASE + (boot_drive - $$)]
     mov ah, 0x42
@@ -80,6 +84,11 @@ bios_disk:
     ret
 
 disk_error:
+%ifdef BOOT_DISK_LOG
+    mov al, 0xE0
+    push cs
+    call bootlog_update
+%endif
     mov si, RELOC_BASE + (msg_disk_error - $$)
 .print:
     lodsb
@@ -112,6 +121,96 @@ vbr_dap:
     dd PARTITION_LBA
     dd 0
 msg_disk_error db "[CD-MBR] Disk read error", 13, 10, 0
+
+%ifdef BOOT_DISK_LOG
+; Four raw sectors in the unused pre-partition track (LBA 1..4).  A record
+; survives a reset without touching FAT.  Calls are best-effort: a BIOS that
+; refuses CHS writes can still boot through its EDD read path.
+%define BOOTLOG_BUFFER 0x7000
+%define BOOTLOG_API    0x06E0
+times (BOOTLOG_API - RELOC_BASE) - ($ - $$) db 0
+bootlog_update:
+    pushf
+    pushad
+    push ds
+    push es
+    xor bx, bx
+    mov ds, bx
+    mov es, bx
+    mov [BOOTLOG_BUFFER+6], al
+    mov byte [BOOTLOG_BUFFER+7], 0
+    call bootlog_write
+    pop es
+    pop ds
+    popad
+    popf
+    retf
+
+bootlog_begin:
+    mov word [RELOC_BASE + (bootlog_sequence - $$)], 0
+    mov byte [RELOC_BASE + (bootlog_slot - $$)], 0
+    mov byte [RELOC_BASE + (bootlog_found - $$)], 0
+    mov bp, 4
+.scan:
+    mov cx, bp
+    inc cl                         ; slots 1..4 are CHS sectors 2..5
+    mov bx, BOOTLOG_BUFFER
+    mov ax, 0x0201
+    xor dh, dh
+    mov dl, [RELOC_BASE + (boot_drive - $$)]
+    call bios_disk
+    jc .next
+    cmp dword [BOOTLOG_BUFFER], 'CKLG'
+    jne .next
+    mov ax, [BOOTLOG_BUFFER+4]
+    cmp ax, [RELOC_BASE + (bootlog_sequence - $$)]
+    jbe .next
+    mov [RELOC_BASE + (bootlog_sequence - $$)], ax
+    mov ax, bp
+    mov [RELOC_BASE + (bootlog_slot - $$)], al
+    mov byte [RELOC_BASE + (bootlog_found - $$)], 1
+.next:
+    dec bp
+    jnz .scan
+    cmp byte [RELOC_BASE + (bootlog_found - $$)], 0
+    je .first
+    mov al, [RELOC_BASE + (bootlog_slot - $$)]
+    and al, 3
+    inc al
+    mov [RELOC_BASE + (bootlog_slot - $$)], al
+    jmp .prepare
+.first:
+    mov byte [RELOC_BASE + (bootlog_slot - $$)], 1
+.prepare:
+    inc word [RELOC_BASE + (bootlog_sequence - $$)]
+    xor ax, ax
+    mov di, BOOTLOG_BUFFER
+    mov cx, 256
+    rep stosw
+    mov dword [BOOTLOG_BUFFER], 'CKLG'
+    mov ax, [RELOC_BASE + (bootlog_sequence - $$)]
+    mov [BOOTLOG_BUFFER+4], ax
+    mov byte [BOOTLOG_BUFFER+6], 1
+    mov al, [RELOC_BASE + (boot_drive - $$)]
+    mov [BOOTLOG_BUFFER+8], al
+    call bootlog_write
+    ret
+
+bootlog_write:
+    mov ax, 0x0301
+    mov bx, BOOTLOG_BUFFER
+    mov cl, [RELOC_BASE + (bootlog_slot - $$)]
+    inc cl
+    xor ch, ch
+    xor dh, dh
+    mov dl, [RELOC_BASE + (boot_drive - $$)]
+    call bios_disk
+    ret
+
+bootlog_sequence dw 0
+bootlog_slot db 0
+bootlog_found db 0
+%endif
 
 times 446 - ($ - $$) db 0
 

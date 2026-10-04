@@ -18,7 +18,7 @@ enum { P_DISPLAY, P_WALLPAPER, P_APPEARANCE, P_FONTS, P_SOUND, P_MOUSE, P_KEYBOA
        P_DATETIME, P_SYSTEM, P_DEVICES, P_DRIVERS, P_TASKS, P_REGISTRY, P_NETWORK, P_COUNT };
 struct appletdef { const char *label; const char *desc; int icon; const char *key; };
 static const struct appletdef applets[P_COUNT] = {
-    { "Display", "Screen resolution and colours.", ICON_DISPLAY, "display" },
+    { "Display", "Monitor, resolution and display drivers.", ICON_DISPLAY, "display" },
     { "Wallpaper", "The picture on the desktop.", ICON_WALLPAPER, "wallpaper" },
     { "Appearance", "Colour schemes and the desktop icons.", ICON_THEME, "appearance" },
     { "Fonts", "Installed fonts, the system font, new fonts.", ICON_FONTS, "fonts" },
@@ -1065,7 +1065,7 @@ static void datetime_network_start(void)
     dos_delete(DT_REPLY);
     dt_sync_pending = 1;
     app_log("[CONTROL] time zone lookup", "worldtime.timezone.io");
-    app_command("C:\\NET\\HTGET.EXE -o C:\\NET\\TIME.TXT http://worldtime.timezone.io/api/ip.txt");
+    app_helper("C:\\NET\\HTGET.EXE -o C:\\NET\\TIME.TXT http://worldtime.timezone.io/api/ip.txt");
 }
 static const char *month_names[12] = { "January", "February", "March", "April", "May", "June", "July",
                                        "August", "September", "October", "November", "December" };
@@ -1390,7 +1390,7 @@ static void open_applet(int k, const char *arg)
     if (k < 0 || k >= P_COUNT) return;
     app_log("[CONTROL] open", applets[k].label);
     switch (k) {
-    case P_DISPLAY: shell_action(8); return;
+    case P_DISPLAY: app_open(WIN_DISPLAY, ""); return;
     case P_WALLPAPER: shell_action(24); return;
     case P_TASKS: shell_action(23); return;
     case P_DEVICES: app_open(WIN_DEVICES, ""); return;
@@ -1452,7 +1452,8 @@ static void applet_result(int k, int r)
         if (r == 11) app_open(WIN_DEVICES, "network");
         if (r == 12) app_open(WIN_DEVICES, "drivers");
         if (r == 13) {
-            app_command("NETCFG DHCP");
+            app_helper("C:\\NET\\NETCFG.COM DHCP");
+            net_scan();
             app_log("[CONTROL] network DHCP requested", 0);
         }
         if (r >= 10 && r != 13) ad[k].open = 1;
@@ -1639,6 +1640,9 @@ static int main_key(int key)
     return 0;
 }
 static char pending_arg[APP_ARG_BYTES];      /* opened after the main window */
+/* Opened for one applet (the top bar, a desktop menu): that applet stands
+ * alone. The main window stays hidden and the module ends with the applet. */
+static int main_hidden, hide_main;
 static void open_argument(const char *arg)
 {
     int k;
@@ -1664,7 +1668,12 @@ int app_event(int ev, int a, int b, int c)
         if (!HDR_WIDTH) {
             HDR_WIDTH = 4 * CELL_W + 26;
             HDR_HEIGHT = TITLE_H + MENUBAR_H + 4 * CELL_H + 60;
+            main_hidden = 1;                 /* a fresh load: not shown yet */
         }
+        /* The shell shows the main window on every open. With an applet
+         * argument it goes back into hiding unless the user had it open. */
+        hide_main = APP_ARG[0] && main_hidden;
+        if (!APP_ARG[0]) main_hidden = 0;
         str_ncopy(pending_arg, APP_ARG, APP_ARG_BYTES);
         APP_ARG[0] = 0;
         (void)arg;
@@ -1724,8 +1733,17 @@ int app_event(int ev, int a, int b, int c)
             str_copy(arg, pending_arg);
             pending_arg[0] = 0;
             open_argument(arg);
+            if (hide_main) { hide_main = 0; app_window_cmd(WIN_CONTROL, 5); }
             dialog_sync(&dlg);
             return 1;
+        }
+        if (main_hidden && !dlg.open) {
+            for (k = 0; k < P_COUNT; k++) if (ad[k].open) return 0;
+            if (dt_sync_pending) return 0;
+            /* Its last applet closed: end with the hidden main window.
+             * app_close() would close whichever window is active instead. */
+            main_hidden = 0;
+            app_window_cmd(WIN_CONTROL, 2);
         }
         return 0;
     default: r = 0;

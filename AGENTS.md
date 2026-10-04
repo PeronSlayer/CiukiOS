@@ -32,7 +32,7 @@ for history; this decision does not exclude work on the shared CiukiDOS kernel
 source (`src/boot/floppy_stage1.asm`) used by the full image. The owner is
 considering a separate CiukiDOS-only branch, but has not asked to create it.
 
-The canonical full build also refreshes `build/releases/CiukiOS-0.8.0-Windows-portable.zip`.
+The canonical full build also refreshes `build/releases/CiukiOS-0.8.3-Windows-portable.zip`.
 Keep this Windows QEMU bundle current whenever changes affect the full image.
 It uses a pinned portable QEMU and a sanitized copy of the FAT16 image; local
 commercial game payloads must never enter the release. Verify the archive
@@ -42,6 +42,40 @@ On this clone, a local `pre-push` hook publishes a dated, numbered GitHub
 prerelease for each clean `origin/main` push using `scripts/push_release.py`.
 Do not bypass that hook for normal main pushes. Other clones must run
 `bash scripts/install_release_push_hook.sh`. No GitHub Actions are used.
+
+## Research before implementation
+
+Before changing CiukiOS code or architecture, research the relevant behavior
+on the internet. Prefer original specifications, vendor manuals, upstream
+source and official documentation. Check the actual implementation in this
+repository against those sources, record the links and the resulting decision
+in the relevant design or validation document, then implement and test it.
+For DOS compatibility, distinguish Windows 95/98 V86 DOS sessions from the
+unrelated Windows NT NTVDM architecture. Do not infer that the presence of
+VMs is itself a compatibility defect. Measure available and reserved memory
+on the supported hardware profile before changing memory limits.
+
+## Build memory safety on this workstation
+
+Run full image builds and other heavy jobs in a separate systemd user scope
+with memory and swap caps, rather than as unrestricted children of VS Code.
+On this 14 GiB Linux host, use:
+
+```bash
+systemd-run --user --scope -p MemoryMax=3G -p MemorySwapMax=1G -- make build-full
+```
+
+Check available host memory first. Run QEMU and full/CD builds sequentially.
+If a capped build exceeds its limit, investigate its memory use before
+changing the cap.
+
+## Working method
+
+For substantial CiukiOS work, use multiple agents on independent, clearly
+bounded tasks when this helps progress. Assign research, focused checks and
+simple tasks to less expensive available models, such as Luna. The main agent
+(Sol) owns the major implementation, integration and final validation. Avoid
+extra agents when the task is too small or cannot be split usefully.
 
 ## Code Search Policy
 

@@ -88,6 +88,13 @@ int app_desktop_focus(void)
     a.s = "";
     return svc(28, &a);
 }
+int app_display_mode(unsigned mode)
+{
+    struct sargs a;
+    a.x = a.y = a.w = a.h = 0; a.s = "";
+    a.v = mode; a.v2 = a.v3 = 0;
+    return svc(29, &a);
+}
 static void fs_changed(void) { struct sargs a; a.s = ""; a.v = 1; svc(25, &a); }
 
 u16 app_seg(void) { return my_ds(); }

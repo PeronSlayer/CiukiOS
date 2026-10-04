@@ -1375,7 +1375,7 @@ print_dos_string:
 ; ---------------------------------------------------------------------------
 ; UI text and state
 
-title_brand       db 'CiukiEDIT 0.8.0  |', 0
+title_brand       db 'CiukiEDIT 0.8.3  |', 0
 menu_text         db 'F1 Help   F2 Save   F3 Save as   Ins Insert/Overwrite   F10 Exit', 0
 footer_text       db 'Ctrl+S Save  Arrows Move  Home/End  PgUp/Dn', 0
 footer_ln         db 'Ln ', 0

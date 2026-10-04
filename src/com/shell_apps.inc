@@ -1,19 +1,22 @@
 ; Desktop applications as modules: Files (window 8), Tasks (9), CiukNote (12),
-; the desktop surface, Control Panel (13) and Devices (14) are separate
+; the desktop surface, Control Panel (13), Devices (14) and Display (18) are separate
 ; programs in \SYSTEM\APPS (built from src/apps). The shell loads one into its
 ; own memory block and draws the frames of its windows: its main window and
-; the windows it opens itself (ids 15-31: dialogs, properties). It forwards
+; the windows it opens itself (ids 19-31: dialogs, properties). It forwards
 ; paint, keys, the mouse (both buttons, hover) and actions 100-149 of the hits
 ; it registered, naming the window. The desktop module paints the desktop
 ; surface (window FEh) and an overlay above every window (FDh: its menus).
 ; Contract: src/apps/app.h.
-APP_COUNT equ 10
+APP_COUNT equ 12
 APP_DESKTOP equ 3                       ; slot of the desktop module
+APP_WIN_DISPLAY equ 18
 APP_WIN_DESKTOP equ 0xFE
 APP_WIN_OVERLAY equ 0xFD
-APP_WIN_FIRST_DYNAMIC equ 18
+APP_WIN_FIRST_DYNAMIC equ 19
 APP_EV_OPEN equ 1
 APP_EV_PAINT equ 2
+APP_EV_PAINT_TOPBAR equ 9
+APP_EV_TOPBAR equ 10
 APP_EV_KEY equ 3
 APP_EV_ACTION equ 4
 APP_EV_MOUSE equ 5
@@ -559,6 +562,7 @@ app_damage:
 ; is open, else the active window, else (no window has the focus) the
 ; desktop. AX = BIOS key. CF=1 with AX = the UI action when it used the key.
 app_key:
+    push ax                      ; an unhandled key must reach global shortcuts
     push si
     push bx
     mov bl,APP_WIN_OVERLAY
@@ -588,11 +592,13 @@ app_key:
     call app_after_action
     pop bx
     pop si
+    add sp,2                     ; handled: keep the module's action in AX
     stc
     ret
 .unused:
     pop bx
     pop si
+    pop ax
     clc
     ret
 
@@ -645,7 +651,7 @@ app_mouse:
     sub cx,APP_TITLE_H
 .screen:
     mov bx,di
-    mov ax,APP_EV_MOUSE
+    mov ax,[app_pointer_event]
     call app_call
     mov byte [app_ev_window],0xFF
     call app_after_action
@@ -657,6 +663,34 @@ app_mouse:
     pop cx
     pop bx
     pop si
+    ret
+
+; Signed wheel steps in DX. Deliver to the client under the pointer.
+app_wheel:
+    push bx
+    push si
+    push dx
+    call ui_hit_find
+    movzx bx,byte [ui_hit_target]
+    pop dx
+    test bx,bx
+    jz .none
+    dec bx
+    mov [ui_wheel_target],bx
+    mov [ui_wheel_sent],dx
+    mov byte [app_pointer_event],11
+    call app_mouse
+    mov [ui_wheel_result],ax
+    mov byte [app_pointer_event],APP_EV_MOUSE
+    test ax,ax
+    jz .done
+    call app_damage
+    jmp .done
+.none:
+    xor ax,ax
+.done:
+    pop si
+    pop bx
     ret
 
 ; Hover (no button): the overlay, else the module window or desktop under
@@ -841,8 +875,18 @@ app_draw:
     add bx,7
     add dx,4
     mov si,app_title
-    mov ax,0x010F
-    call ui_text
+    push bx
+    movzx bx,byte [ui_dialog]
+    shl bx,1
+    mov cx,[ui_window_width+bx]
+    sub cx,92
+    test byte [app_draw_style],1
+    jz .title_width
+    add cx,48
+.title_width:
+    pop bx
+    call ui_windows_title_color
+    call ui_title_text
     ; Minimize, maximize, close.
     movzx di,byte [ui_dialog]
     shl di,1
@@ -903,6 +947,44 @@ app_desktop_paint:
     stc
     ret
 
+; The VGA fallback updates its top indicators without repainting the whole
+; visible desktop. The normal scene still uses APP_EV_PAINT.
+app_desktop_topbar_paint:
+    cmp word [app_segs+APP_DESKTOP*2],0
+    je .done
+    pushad
+    mov byte [app_ev_window],APP_WIN_DESKTOP
+    mov si,APP_DESKTOP*2
+    mov ax,APP_EV_PAINT_TOPBAR
+    call app_call
+    mov byte [app_ev_window],0xFF
+    popad
+.done:
+    ret
+
+; AX = 1 the CiukiOS menu, 2 the volume control: popups of the desktop
+; module on the overlay. CF=1 when the desktop module is not loaded.
+app_desktop_topbar_click:
+    cmp word [app_segs+APP_DESKTOP*2],0
+    je .none
+    pushad
+    ; The menu or popup takes the keyboard (Esc, arrows), not the active
+    ; window: a game in a DOS window would otherwise receive those keys.
+    mov byte [app_desktop_focus],1
+    call ui_damage_active
+    mov dx,ax
+    mov byte [app_ev_window],APP_WIN_DESKTOP
+    mov si,APP_DESKTOP*2
+    mov ax,APP_EV_TOPBAR
+    call app_call
+    mov byte [app_ev_window],0xFF
+    popad
+    clc
+    ret
+.none:
+    stc
+    ret
+
 app_overlay_paint:
     cmp byte [app_overlay],0
     je .done
@@ -944,6 +1026,7 @@ app_maximize:
     mov ax,[app_saved_h+di]
     mov [ui_window_height+di],ax
     mov word [app_saved_w+di],0
+    call ui_windows_clamp         ; saved size may predate a resolution change
     jmp .done
 .maximize:
     mov ax,[ui_window_x+di]
@@ -1041,8 +1124,39 @@ app_services dw app_s_rect,app_s_text,app_s_bevel,app_s_inset,app_s_button
              dw app_s_open,app_s_close,app_s_sound,app_s_windows,app_s_window_cmd
              dw app_s_idle,app_s_mono,app_s_win_open,app_s_win_close,app_s_damage
              dw app_s_action,app_s_overlay,app_s_font,app_s_settings,app_s_palette
-             dw app_s_changes,app_s_bitmap,app_s_band_info,app_s_desktop_focus
+             dw app_s_changes,app_s_bitmap,app_s_band_info,app_s_desktop_focus,app_s_display_mode
 APP_SVC_COUNT equ ($-app_services)/2
+
+; Display module only. AX=0 queries; AX=100h..FFFh queues a graphics change.
+app_s_display_mode:
+    cmp word [app_cur_slot],20
+    jne .bad
+    test ax,ax
+    jz .query
+    cmp ax,0x12
+    je .queue
+    cmp ax,0x100
+    jb .bad
+    cmp ax,0xFFF
+    ja .bad
+.queue:
+    ; Only Display owns this service. A rollback before the next UI turn
+    ; supersedes its unconsumed preview instead of losing the restore.
+    mov [ui_mode_request],ax
+    ret
+.query:
+    mov ax,-1
+    cmp byte [ui_vbe],1
+    jne .done
+    mov ax,[vc_mode]
+    cmp word [ui_mode_request],0
+    je .done
+    xor ax,ax
+.done:
+    ret
+.bad:
+    mov ax,-1
+    ret
 
 app_s_desktop_focus:
     movzx ax,byte [app_desktop_focus]
@@ -1052,6 +1166,8 @@ app_s_desktop_focus:
 ; uses VIDEO_BAND while this band's EV_PAINT is running; the module never
 ; holds a pointer to the compositor's private memory between calls.
 app_s_band_info:
+    cmp byte [ui_vbe],1
+    jne .none
     mov ax,[ui_comp_seg]
     test ax,ax
     jz .none
@@ -1208,8 +1324,9 @@ app_s_windows:
     pop es
     mov ax,UI_WINDOW_COUNT
     ret
-; AL = window, value2 = 1 raise, 2 close, 3 minimize, 4 maximize/restore
-; (module windows).
+; AL = window, value2 = 1 raise, 2 close, 3 minimize, 4 maximize/restore,
+; 5 hide (module windows). A hidden window (flag 3) keeps its module loaded
+; but is neither drawn nor listed on the taskbar: its own dialogs stand alone.
 app_s_window_cmd:
     movzx bx,al
     cmp bx,UI_WINDOW_COUNT
@@ -1241,12 +1358,21 @@ app_s_window_cmd:
     jmp app_maximize
 .minimize_only:
     cmp al,3
-    jne .done
+    jne .hide
     test bx,bx
     jz .done
     mov byte [ui_window_flags+bx],2
     mov byte [ui_bar_dirty],1
 .done:
+    ret
+.hide:
+    cmp al,5
+    jne .done
+    test bx,bx
+    jz .done
+    mov byte [ui_window_flags+bx],3
+    mov byte [ui_bar_dirty],1
+    mov byte [ui_full_redraw],1
     ret
 ; Idle share of the last second in percent (desktop HLT time).
 app_s_idle:
@@ -1905,8 +2031,8 @@ app_idle_woke:
     pop es
     ret
 
-app_main db 8,9,12,APP_WIN_DESKTOP,13,14,15,16,11,17
-app_paths dw app_path_files,app_path_tasks,app_path_notepad,app_path_desktop,app_path_control,app_path_devices,app_path_recycle,app_path_paint,app_path_dosvm,app_path_browser
+app_main db 8,9,12,APP_WIN_DESKTOP,13,14,15,16,11,17,APP_WIN_DISPLAY,2
+app_paths dw app_path_files,app_path_tasks,app_path_notepad,app_path_desktop,app_path_control,app_path_devices,app_path_recycle,app_path_paint,app_path_dosvm,app_path_browser,app_path_display,app_path_about
 app_path_files db '\SYSTEM\APPS\FILES.APP',0
 app_path_tasks db '\SYSTEM\APPS\TASKS.APP',0
 app_path_notepad db '\SYSTEM\APPS\CIUKNOTE.APP',0
@@ -1917,12 +2043,14 @@ app_path_recycle db '\SYSTEM\APPS\RECYCLE.APP',0
 app_path_paint db '\SYSTEM\APPS\PAINT.APP',0
 app_path_dosvm db '\SYSTEM\APPS\DOSVM.APP',0
 app_path_browser db '\SYSTEM\APPS\BROWSER.APP',0
+app_path_about db '\SYSTEM\APPS\ABOUT.APP',0
+app_path_display db '\SYSTEM\APPS\DISPLAY.APP',0
 app_settings_path db '\SYSTEM\UI\DESKTOP.CFG',0
 app_settings_font_dir db '\SYSTEM\FONTS\',0
 ; Each window's module slot (FFh: the shell's), title offset in that module
 ; (0: its header title), style (bit 0: dialog frame).
-app_win_slot db 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0,1,0xFF,8,2,4,5,6,7,9
-             times UI_WINDOW_COUNT-18 db 0xFF
+app_win_slot db 0xFF,0xFF,11,0xFF,0xFF,0xFF,0xFF,0xFF,0,1,0xFF,8,2,4,5,6,7,9,10
+             times UI_WINDOW_COUNT-19 db 0xFF
 app_win_title times UI_WINDOW_COUNT dw 0
 app_win_style times UI_WINDOW_COUNT db 0
 app_ev_window db 0xFF
@@ -1937,6 +2065,7 @@ app_bm_stride dw 0
 app_bm_x dw 0
 app_bm_w dw 0
 app_alt_name times 64 db 0              ; the file in the alternate font slot
+app_pointer_event dw APP_EV_MOUSE
 app_hover_last db 0xFF
 app_overlay_dirty dw 0
 app_desktop_focus db 0             ; the desktop has the keyboard
@@ -1947,7 +2076,7 @@ app_settings times APP_SETTINGS_BYTES db 0
 app_set_mouse db 2,0,9                  ; speed (2 = normal), swap, double-click
 app_max_label db 2,0
 app_desktop_marker db '[DESKTOP] SHOW DESKTOP',13,10,0
-app_builtin_names db 12,'CIUKNOTE',0,12,'NOTEPAD',0,16,'CIUKPAINT',0,16,'MSPAINT',0,16,'PAINT',0,8,'EXPLORER',0,8,'FILES',0,9,'TASKMGR',0,13,'CONTROL',0,14,'DEVMGMT',0,0
+app_builtin_names db 12,'CIUKNOTE',0,12,'NOTEPAD',0,16,'CIUKPAINT',0,16,'MSPAINT',0,16,'PAINT',0,8,'EXPLORER',0,8,'FILES',0,9,'TASKMGR',0,13,'CONTROL',0,14,'DEVMGMT',0,18,'DISPLAY',0,17,'CIUKWEB',0,17,'BROWSER',0,2,'ABOUT',0,0
 app_media_floppy db 'media:1',0
 app_media_usb db 'media:2',0
 app_media_cd db 'media:3',0

@@ -16,5 +16,9 @@ int cvdpmi_video_execute(cvdpmi_fault_frame *frame, void *shared_block);
 uint8_t cvdpmi_video_port_read(void *shared_block, uint16_t port,
                                uint8_t status1);
 void cvdpmi_video_port_write(void *shared_block, uint16_t port, uint8_t value);
+/* Direct VGA plane window: harvest its dirty pages (timer tick), restore
+ * the trapping entries (before detach). */
+void cvdpmi_video_tick(void *shared_block);
+void cvdpmi_video_direct_off(void *shared_block);
 
 #endif

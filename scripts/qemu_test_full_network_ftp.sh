@@ -248,7 +248,7 @@ done
 
 QEMU_ARGS=(
   "${QEMU_ACCEL_ARGS[@]}"
-  -machine pc,vmport=off
+  -machine pc,vmport=off,pcspk-audiodev=snd0
   -cpu pentium3
   -m 128
   -drive "file=$TEST_IMG,format=raw,if=ide"
@@ -257,6 +257,9 @@ QEMU_ARGS=(
   -display none
   -serial "file:$SERIAL_LOG"
   -monitor "unix:$MON_SOCK,server,nowait"
+  -audiodev "wav,id=snd0,path=$TEST_DIR/network-full-audio.wav"
+  -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
+  -device "adlib,audiodev=snd0"
   -netdev "$NETDEV_SPEC"
   -device "ne2k_isa,netdev=ciuknet0,irq=3,iobase=0x300,mac=52:54:00:12:34:56"
   -no-reboot
@@ -270,9 +273,13 @@ QEMU_PID=$!
 wait_for_socket 20 || fail MONITOR_SOCKET "QEMU monitor did not become ready"
 pass MONITOR_SOCKET
 
-INITIAL_PROMPT='CCiiuukkiiOOSS  SSHHEELLLL  CC::\\AAPPPPSS>>'
-wait_for_serial_literal "$INITIAL_PROMPT" 90 \
-  || fail SHELL_READY "initial C:\\APPS prompt not detected"
+wait_for_serial_literal '[DESKTOP] READY' 90 \
+  || fail DESKTOP_READY "full-profile desktop did not become ready"
+pass DESKTOP_READY
+send_key f4
+INITIAL_PROMPT='CiukiOS SHELL C:\APPS>'
+wait_for_serial_literal "$INITIAL_PROMPT" 30 \
+  || fail SHELL_READY "F4 did not open the system C:\\APPS prompt"
 pass SHELL_READY
 
 send_command 'cd C:\NET'

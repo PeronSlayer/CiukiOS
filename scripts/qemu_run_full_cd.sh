@@ -46,14 +46,18 @@ Environment:
                     (default: kvm). vga-fast is an explicit JIT profile for
                     planar-VGA workloads that are verified TCG-safe.
   QEMU_DISPLAY_TRANSPORT  Pointer transport: auto, x11, or native (default: auto).
+  QEMU_VIDEO_DEVICE  std, virtio, virtio-gl, or ati-rage128 (default: std).
+  QEMU_VIDEO_SIZE  Optional preferred resolution, WIDTHxHEIGHT.
   QEMU_AUDIO_MODE  Audio mode: off, auto, on (default: on).
-  QEMU_AUDIO_DEVICES Guest sound card: standard (SB16/AdLib, default) or ac97.
+  QEMU_AUDIO_DEVICES Guest sound cards: standard (AC'97 for the desktop and DOS
+                     windows, plus SB16/AdLib for the full-screen DOS prompt;
+                     default), ac97 (AC'97 only) or legacy (SB16/AdLib only).
   QEMU_AUDIO_BACKEND  Force backend for -audiodev (pipewire,pa,pulse,alsa,sdl,none).
   QEMU_NETWORK_MODE  Network mode: auto/user (default, outbound NAT), tap or off.
   QEMU_TIMEOUT_SEC Timeout in test mode (default: 8).
   LOG_FILE         Test log path (default: build/full/qemu-full-cd.log).
   STAGE0_MARKER    Marker 1 for test validation.
-  STAGE1_MARKER    Stage1 readiness marker (default: external-shell banner).
+  STAGE1_MARKER    Desktop readiness marker (default: [DESKTOP] READY).
   CIUKIOS_STAGE2_AUTORUN  Set 1 to trigger stage2 automatically.
 TXT
 }
@@ -71,6 +75,9 @@ QEMU_MEMORY_MB="${QEMU_MEMORY_MB:-256}"
 QEMU_ACCEL_ARGS=()
 QEMU_ACCEL_DETAIL="default TCG"
 QEMU_DISPLAY_TRANSPORT_DETAIL="native"
+QEMU_VIDEO_DEVICE="${QEMU_VIDEO_DEVICE:-std}"
+QEMU_VIDEO_ARGS=()
+QEMU_VIDEO_DETAIL=""
 
 if [[ -z "$QEMU_CPU_MODEL" ]]; then
   echo "[qemu-run-full-cd] ERROR: QEMU_CPU_MODEL cannot be empty" >&2
@@ -142,6 +149,38 @@ configure_display_args() {
     *) echo "[qemu-run-full-cd] ERROR: QEMU_DISPLAY_TRANSPORT must be auto, x11 or native" >&2; exit 1 ;;
   esac
 
+  if [[ "$QEMU_VIDEO_DEVICE" == "virtio-gl" ]]; then
+    if [[ "$DISPLAY_BACKEND" == "auto" ]]; then
+      if "$QEMU_CMD" -display help 2>/dev/null | grep -Eq '(^|[[:space:]])sdl([[:space:]]|$)'; then
+        DISPLAY_BACKEND="sdl,gl=on,window-close=off"
+      elif "$QEMU_CMD" -display help 2>/dev/null | grep -Eq '(^|[[:space:]])gtk([[:space:]]|$)'; then
+        DISPLAY_BACKEND="gtk,gl=on,window-close=off"
+      else
+        echo "[qemu-run-full-cd] ERROR: virtio-gl requires an SDL or GTK OpenGL display backend" >&2
+        exit 1
+      fi
+    else
+      case "$DISPLAY_BACKEND" in
+        sdl) DISPLAY_BACKEND="sdl,gl=on,window-close=off" ;;
+        gtk) DISPLAY_BACKEND="gtk,gl=on,window-close=off" ;;
+        sdl,*|gtk,*)
+          case ",${DISPLAY_BACKEND}," in
+            *,gl=off,*)
+              echo "[qemu-run-full-cd] ERROR: virtio-gl cannot use QEMU_DISPLAY with gl=off" >&2
+              exit 1
+              ;;
+          esac
+          if [[ ",${DISPLAY_BACKEND}," != *,gl=* ]]; then
+            DISPLAY_BACKEND+=",gl=on"
+          fi
+          ;;
+        *)
+          echo "[qemu-run-full-cd] ERROR: virtio-gl requires an SDL or GTK display backend with OpenGL" >&2
+          exit 1
+          ;;
+      esac
+    fi
+  else
   if [[ "$DISPLAY_BACKEND" == "auto" ]]; then
     if "$QEMU_CMD" -display help 2>/dev/null | grep -Eq '(^|[[:space:]])sdl([[:space:]]|$)'; then
       DISPLAY_BACKEND="sdl,window-close=off"
@@ -155,6 +194,7 @@ configure_display_args() {
     DISPLAY_BACKEND="sdl,window-close=off"
   elif [[ "$DISPLAY_BACKEND" == "gtk" ]]; then
     DISPLAY_BACKEND="gtk,gl=off,window-close=off"
+  fi
   fi
   if [[ "$transport" == "native" ]]; then
     QEMU_DISPLAY_TRANSPORT_DETAIL="native (explicit override)"
@@ -247,12 +287,28 @@ configure_audio_args() {
         break
       fi
     done
-    [[ -n "$backend" ]] || backend="none"
+    if [[ -z "$backend" ]]; then
+      if [[ "$AUDIO_MODE" == "on" ]]; then
+        echo "[qemu-run-full-cd] ERROR: audio is required but no usable backend was found" >&2
+        exit 1
+      fi
+      backend="none"
+    fi
   fi
 
   QEMU_AUDIO_ARGS=(-audiodev "${backend},id=snd0")
   case "${QEMU_AUDIO_DEVICES:-standard}" in
     standard)
+      # CiukiOS plays through the AC'97 (desktop sounds, Control Panel and the
+      # SB16 model of every DOS window); the ISA SB16/AdLib serve programs run
+      # from the full-screen DOS prompt.
+      QEMU_AUDIO_ARGS+=(
+        -device "AC97,audiodev=snd0"
+        -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
+        -device "adlib,audiodev=snd0")
+      QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on ac97=8086:2415 sb16=iobase=0x220 irq=7 dma=1 hdma=5 adlib=opl2 ports=0x388"
+      ;;
+    legacy)
       QEMU_AUDIO_ARGS+=(
         -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0"
         -device "adlib,audiodev=snd0")
@@ -263,7 +319,7 @@ configure_audio_args() {
       QEMU_AUDIO_DETAIL="backend=${backend} pcspk=on ac97=8086:2415"
       ;;
     *)
-      echo "[qemu-run-full-cd] ERROR: QEMU_AUDIO_DEVICES must be standard or ac97" >&2
+      echo "[qemu-run-full-cd] ERROR: QEMU_AUDIO_DEVICES must be standard, ac97 or legacy" >&2
       exit 1
       ;;
   esac
@@ -308,6 +364,53 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+VIDEO_SIZE_X=""
+VIDEO_SIZE_Y=""
+if [[ -n "${QEMU_VIDEO_SIZE:-}" ]]; then
+  if [[ ! "$QEMU_VIDEO_SIZE" =~ ^([0-9]{3,4})x([0-9]{3,4})$ ]]; then
+    echo "[qemu-run-full-cd] ERROR: QEMU_VIDEO_SIZE must be WIDTHxHEIGHT" >&2
+    exit 1
+  fi
+  VIDEO_SIZE_X="${BASH_REMATCH[1]}"
+  VIDEO_SIZE_Y="${BASH_REMATCH[2]}"
+fi
+case "$QEMU_VIDEO_DEVICE" in
+  std)
+    if [[ -n "$VIDEO_SIZE_X" ]]; then
+      QEMU_VIDEO_ARGS=(-vga none -device "VGA,xres=${VIDEO_SIZE_X},yres=${VIDEO_SIZE_Y}")
+      QEMU_VIDEO_DETAIL="std VGA, preferred EDID ${QEMU_VIDEO_SIZE}"
+    else
+      QEMU_VIDEO_ARGS=(-vga std)
+      QEMU_VIDEO_DETAIL="std (automatic EDID)"
+    fi
+    ;;
+  virtio|virtio-gl)
+    if [[ "$MODE" == "test" && "$QEMU_VIDEO_DEVICE" == "virtio-gl" ]]; then
+      echo "[qemu-run-full-cd] ERROR: virtio-gl needs a visual OpenGL display; use virtio for headless tests" >&2
+      exit 1
+    fi
+    device_args="virtio-vga"
+    [[ "$QEMU_VIDEO_DEVICE" == "virtio-gl" ]] && device_args="virtio-vga-gl"
+    if [[ -n "$VIDEO_SIZE_X" ]]; then
+      device_args+=",xres=${VIDEO_SIZE_X},yres=${VIDEO_SIZE_Y}"
+    fi
+    QEMU_VIDEO_ARGS=(-vga none -device "$device_args")
+    QEMU_VIDEO_DETAIL="$QEMU_VIDEO_DEVICE${QEMU_VIDEO_SIZE:+, preferred ${QEMU_VIDEO_SIZE}}"
+    ;;
+  ati-rage128)
+    if [[ -n "$VIDEO_SIZE_X" ]]; then
+      echo "[qemu-run-full-cd] ERROR: QEMU_VIDEO_SIZE is not supported by the ati-rage128 device" >&2
+      exit 1
+    fi
+    QEMU_VIDEO_ARGS=(-vga none -device ati-vga,model=rage128p)
+    QEMU_VIDEO_DETAIL="ati-vga model=rage128p (Rage 128 Pro)"
+    ;;
+  *)
+    echo "[qemu-run-full-cd] ERROR: QEMU_VIDEO_DEVICE must be std, virtio, virtio-gl or ati-rage128" >&2
+    exit 1
+    ;;
+esac
+
 if ! QEMU_CMD="$(pick_qemu)"; then
   echo "[qemu-run-full-cd] ERROR: QEMU not found (set QEMU_BIN to override)." >&2
   exit 1
@@ -315,7 +418,8 @@ fi
 
 if [[ "$DO_BUILD" -eq 1 ]]; then
   echo "[qemu-run-full-cd] build step"
-  bash scripts/build_full_cd.sh
+  systemd-run --user --scope -p MemoryMax=3G -p MemorySwapMax=1G \
+    -p CPUQuota=100% -- env CIUKIOS_BUILD_JOBS=1 bash scripts/build_full_cd.sh
 fi
 
 IMG="build/full/ciukios-full-cd.iso"
@@ -336,8 +440,8 @@ else
 fi
 
 case "${QEMU_NETWORK_MODE:-auto}" in
-  auto|user) QEMU_NETWORK_ARGS=(-netdev user,id=ciuknet0 -device ne2k_isa,netdev=ciuknet0,irq=3,iobase=0x300,mac=52:54:00:12:34:56) ;;
-  tap) QEMU_NETWORK_ARGS=(-netdev "tap,id=ciuknet0,ifname=${QEMU_NET_TAP_IF:-ciukios0},script=no,downscript=no" -device ne2k_isa,netdev=ciuknet0,irq=3,iobase=0x300,mac=52:54:00:12:34:56) ;;
+  auto|user) QEMU_NETWORK_ARGS=(-netdev user,id=ciuknet0 -device ne2k_pci,netdev=ciuknet0,mac=52:54:00:12:34:56) ;;
+  tap) QEMU_NETWORK_ARGS=(-netdev "tap,id=ciuknet0,ifname=${QEMU_NET_TAP_IF:-ciukios0},script=no,downscript=no" -device ne2k_pci,netdev=ciuknet0,mac=52:54:00:12:34:56) ;;
   off) QEMU_NETWORK_ARGS=(-nic none) ;;
   *) echo "[qemu-run-full-cd] ERROR: invalid QEMU_NETWORK_MODE" >&2; exit 1 ;;
 esac
@@ -353,14 +457,15 @@ BASE_ARGS=(
 )
 
 if [[ "$MODE" == "test" ]]; then
-  TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-8}"
+  TIMEOUT_SEC="${QEMU_TIMEOUT_SEC:-25}"
   STAGE0_MARKER="${STAGE0_MARKER:-[BOOT0-FULL] CiukiOS full stage0 ready}"
-  STAGE1_MARKER="${STAGE1_MARKER:-CiukiOS SHELL}"
+  STAGE1_MARKER="${STAGE1_MARKER:-[DESKTOP] READY}"
   LOG_FILE="${LOG_FILE:-build/full/qemu-full-cd.log}"
   NORMALIZED_LOG="${LOG_FILE}.normalized"
   STDERR_FILE="${STDERR_FILE:-build/full/qemu-full-cd.stderr.log}"
   QEMU_ARGS=(
     "${BASE_ARGS[@]}"
+    "${QEMU_VIDEO_ARGS[@]}"
     -nographic
     -chardev "file,id=ser0,path=$LOG_FILE"
     -serial chardev:ser0
@@ -414,13 +519,12 @@ if [[ "$MODE" == "test" ]]; then
   fi
 
   if grep -aFq -- "$STAGE0_MARKER" "$NORMALIZED_LOG" \
-    && grep -aFq -- "$STAGE1_MARKER" "$NORMALIZED_LOG" \
-    && grep -Eaq "CiukiOS([[:space:]]+SHELL)?[[:space:]]+D:" "$NORMALIZED_LOG"; then
-    echo "[qemu-run-full-cd] PASS (stage0/readiness markers detected; Live CD prompt is D:)"
+    && grep -aFq -- "$STAGE1_MARKER" "$NORMALIZED_LOG"; then
+    echo "[qemu-run-full-cd] PASS (stage0 and desktop readiness markers detected)"
     exit 0
   fi
 
-  echo "[qemu-run-full-cd] FAIL (stage0/readiness marker or Live CD D: prompt not detected)" >&2
+  echo "[qemu-run-full-cd] FAIL (stage0 or desktop readiness marker not detected)" >&2
   echo "[qemu-run-full-cd] serial log size: $(wc -c < "$LOG_FILE" 2>/dev/null || echo 0) bytes" >&2
   tail -n 80 "$NORMALIZED_LOG" >&2 || true
   exit 1
@@ -430,6 +534,7 @@ configure_display_args
 
 QEMU_ARGS=(
   "${BASE_ARGS[@]}"
+  "${QEMU_VIDEO_ARGS[@]}"
   -display "$DISPLAY_BACKEND"
   -chardev "file,id=ser0,path=build/full/qemu-full-cd-visual.log"
   -serial chardev:ser0
@@ -445,6 +550,7 @@ fi
 echo "[qemu-run-full-cd] starting visual Live/install CD QEMU session"
 echo "[qemu-run-full-cd] Live/install CD boot"
 echo "[qemu-run-full-cd] display transport: $QEMU_DISPLAY_TRANSPORT_DETAIL"
+echo "[qemu-run-full-cd] video device: $QEMU_VIDEO_DETAIL"
 echo "[qemu-run-full-cd] resources: 1 x $QEMU_CPU_MODEL, ${QEMU_MEMORY_MB} MiB RAM"
 echo "[qemu-run-full-cd] accelerator: $QEMU_ACCEL_DETAIL"
 echo "[qemu-run-full-cd] audio: $QEMU_AUDIO_DETAIL"
@@ -453,9 +559,20 @@ echo "[qemu-run-full-cd] mouse: PS/2 i8042 enabled; entering the window captures
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '[qemu-run-full-cd] dry-run:'
-  printf ' %q' "$QEMU_CMD" "${QEMU_ARGS[@]}"
+  if [[ "${CIUKIOS_QEMU_SCOPED:-0}" != "1" ]]; then
+    printf ' %q' systemd-run --user --scope -p MemoryMax=768M -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=128 -- "$QEMU_CMD" "${QEMU_ARGS[@]}"
+  else
+    printf ' %q' "$QEMU_CMD" "${QEMU_ARGS[@]}"
+  fi
   printf '\n'
   exit 0
 fi
 
-exec "$QEMU_CMD" "${QEMU_ARGS[@]}"
+if [[ "${CIUKIOS_QEMU_SCOPED:-0}" == "1" ]]; then
+  exec "$QEMU_CMD" "${QEMU_ARGS[@]}"
+fi
+if ! command -v systemd-run >/dev/null 2>&1; then
+  echo "[qemu-run-full-cd] ERROR: visual QEMU requires systemd-run for memory and CPU caps; set CIUKIOS_QEMU_SCOPED=1 when already in a capped scope" >&2
+  exit 1
+fi
+exec systemd-run --user --scope -p MemoryMax=768M -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=128 -- "$QEMU_CMD" "${QEMU_ARGS[@]}"

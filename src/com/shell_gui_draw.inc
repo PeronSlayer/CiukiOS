@@ -131,6 +131,8 @@ ui_text:
     add ax,16
     cmp ax,[ui_height]
     ja .skip
+    cmp byte [ui_composing],1
+    je .packed
     cmp byte [ui_vbe],1
     je .packed
     call ug_glyph
@@ -323,6 +325,133 @@ ui_title_rail:
     popad
     ret
 
+; BX=x, DX=y, CX=maximum title advance, SI=title, AL=the rail color.
+; Keep captions out of the window controls and visually distinguish the
+; focused window. The title buffer is local to this single-threaded renderer.
+ui_title_text:
+    pushad
+    push ds
+    push es
+    push fs
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov [uit_x],bx
+    mov [uit_y],dx
+    mov [uit_max],cx
+    mov [uit_source],si
+    cmp al,1
+    jne .inactive
+    mov word [uit_attr],0x010F      ; bold paper text on the active rail
+    jmp .font
+.inactive:
+    mov word [uit_attr],0x000F      ; regular paper text on the inactive rail
+.font:
+    mov ax,[ui_assets_seg]
+    mov fs,ax
+    test word [uit_max],0x8000
+    jnz .empty
+    cmp word [uit_max],16
+    jb .empty
+
+    ; Measure exactly with the same proportional font advances as ui_text.
+    mov si,[uit_source]
+    xor cx,cx
+.measure:
+    lodsb
+    test al,al
+    jz .copy_full
+    cmp al,32
+    jb .measure
+    cmp al,126
+    ja .measure
+    movzx bp,al
+    sub bp,32
+    ; ui_text draws every glyph into a fixed 16-pixel cell, even when the
+    ; proportional advance is narrower. Bound the glyph extent, not just its
+    ; advance, so the final character cannot overlap window controls.
+    mov ax,cx
+    add ax,16
+    cmp ax,[uit_max]
+    ja .truncate
+    movzx ax,byte [fs:UI_ASSET_FONT+bp]
+    add cx,ax
+    jmp .measure
+.copy_full:
+    mov si,[uit_source]
+    mov di,uit_buffer
+    mov cx,63
+.copy:
+    lodsb
+    stosb
+    test al,al
+    jz .draw
+    loop .copy
+    mov byte [di],0
+    jmp .draw
+
+.truncate:
+    movzx ax,byte [fs:UI_ASSET_FONT+14] ; proportional width of '.'
+    imul ax,3
+    mov [uit_dots],ax
+    mov ax,[uit_max]
+    cmp ax,16
+    jb .empty
+    sub ax,16                        ; reserve the last dot's 16px glyph cell
+    cmp ax,[uit_dots]
+    jb .empty
+    sub ax,[uit_dots]
+    mov [uit_prefix_max],ax
+    mov word [uit_prefix_width],0
+    mov word [uit_length],0
+    mov si,[uit_source]
+    mov di,uit_buffer
+.prefix:
+    lodsb
+    test al,al
+    jz .ellipsis
+    cmp al,32
+    jb .prefix
+    cmp al,126
+    ja .prefix
+    push ax
+    movzx bp,al
+    sub bp,32
+    movzx ax,byte [fs:UI_ASSET_FONT+bp]
+    add [uit_prefix_width],ax
+    mov ax,[uit_prefix_width]
+    cmp ax,[uit_prefix_max]
+    ja .stop_prefix
+    cmp word [uit_length],60
+    jae .stop_prefix
+    pop ax
+    stosb
+    inc word [uit_length]
+    jmp .prefix
+.stop_prefix:
+    pop ax
+.ellipsis:
+    mov al,'.'
+    stosb
+    stosb
+    stosb
+    mov byte [di],0
+    jmp .draw
+.empty:
+    mov byte [uit_buffer],0
+.draw:
+    mov bx,[uit_x]
+    mov dx,[uit_y]
+    mov si,uit_buffer
+    mov ax,[uit_attr]
+    call ui_text
+    pop fs
+    pop es
+    pop ds
+    popad
+    ret
+
 ug_rect:
     pushad
     push es
@@ -493,3 +622,13 @@ ug_right_mask db 0
 ug_span dw 0
 ug_text_color db 0
 ug_glyph_shift db 0
+uit_x dw 0
+uit_y dw 0
+uit_max dw 0
+uit_source dw 0
+uit_attr dw 0
+uit_dots dw 0
+uit_prefix_max dw 0
+uit_prefix_width dw 0
+uit_length dw 0
+uit_buffer times 64 db 0

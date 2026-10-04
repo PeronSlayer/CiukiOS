@@ -172,6 +172,9 @@ runtime_service_table:
 %define XMS_PHYS_LIMIT_HI 0x0400
 %define XMS_FREE_KB_INITIAL 0xFBC0
 %define XMS_HANDLE_COUNT 16
+%ifndef CIUKIDOS_EXTERNAL_XMS
+%define CIUKIDOS_EXTERNAL_XMS 0
+%endif
 ; Large clients commonly claim the complete initial "largest" block while
 %define BIOS_EXTMEM_KB 0xFC00
 %define DOS_EXEC_STATE_BLOCK_COUNT_OFF (dos_mem_block_count - dos_mem_exec_state_begin)
@@ -1488,7 +1491,17 @@ int21_handler:
 ; requires the caller's EXEC identity, which AH=50h cannot change.
 .fn_f1:
     cmp al, 0x49
+    je .fn_f1_free
+    cmp al, 0x4A
     jne .unsupported
+    ; VMFORK's private DOS copy can resize a retained ancestor PSP after
+    ; abandoning that process. ES is the PSP; BX is the new paragraph count.
+    push word [cs:dos_exec_identity_psp]
+    mov [cs:dos_exec_identity_psp], es
+    call int21_resize
+    pop word [cs:dos_exec_identity_psp]
+    jmp .fn_4a_result
+.fn_f1_free:
     push word [cs:dos_exec_identity_psp]
     mov [cs:dos_exec_identity_psp], bx
     call int21_free
@@ -1518,6 +1531,7 @@ int21_handler:
 
 .fn_4a:
     call int21_resize
+.fn_4a_result:
 %if TRACE_CHILD_INT21 != 0
     pushf
     call child_trace_resize_log
@@ -5692,15 +5706,18 @@ int21_mem_strategy:
     je .get_umb
     cmp al, 0x03
     je .set_umb
-    ; Be permissive for unknown subfunctions used by TSRs.
-    xor ax, ax
-    clc
-    ret
+    jmp .unsupported
  .get_umb:
+    ; JemmEx LOAD offers UMBs through XMS, but DOS has not claimed a UMB
+    ; region or linked it to its MCB chain.  Do not advertise a link which
+    ; AH=48h cannot actually use.
     xor ax, ax
     clc
     ret
  .set_umb:
+    or bx, bx
+    jnz .unsupported
+    ; Unlinking an already-unlinked chain is harmless.
     xor ax, ax
     clc
     ret
@@ -5710,12 +5727,17 @@ int21_mem_strategy:
     clc
     ret
 .set:
-    cmp bx, 3
-    sbb ax, ax
-    and bx, ax
+    ; Strategies 40h..42h/80h..82h must fail until a DOS-owned UMB chain
+    ; exists.  Silently selecting low first fit would mislead LOADHIGH.
+    cmp bx, 2
+    ja .unsupported
     mov [cs:dos_mem_strategy], bx
     xor ax, ax
     clc
+    ret
+.unsupported:
+    mov ax, 1                     ; DOS invalid function / unsupported UMB
+    stc
     ret
 
 int21_set_vector:
@@ -12306,7 +12328,7 @@ int21_mem_find_free_gap:
 
 .tail:
     cmp dx, [cs:dos_mem_chain_limit_seg]
-    jae .not_found
+    jae .finish
     mov bx, [cs:dos_mem_chain_limit_seg]
     sub bx, dx
     call .consider_gap
@@ -12324,10 +12346,10 @@ int21_mem_find_free_gap:
     stc
     ret
 
-; DX/BX describe a free data interval.  First fit stops immediately, best
+; DX/BX describe a free data interval. First fit stops immediately, best
 ; fit retains the smallest adequate interval, and last fit retains the last
-; adequate interval while carving the allocation from its high end, matching
-; MS-DOS/FreeDOS MCB splitting semantics.  CF=0 asks the caller to return now.
+; adequate interval. First/best fit carve from the low end, last fit from
+; the high end, matching the FreeDOS MCB splitting rules.
 .consider_gap:
     cmp bx, [cs:dos_mem_block_req_size]
     jb .consider_continue
@@ -12339,13 +12361,7 @@ int21_mem_find_free_gap:
     cmp bp, 2
     je .consider_last
 
-    ; Keep the low EXEC window contiguous: the table-backed allocator already
-    ; splits a matching free block from its high edge, so do the same when the
-    ; free interval is implicit rather than materialised as a table entry.
-    mov ax, dx
-    add ax, bx
-    sub ax, [cs:dos_mem_block_req_size]
-    mov [cs:dos_mem_gap_candidate_seg], ax
+    mov [cs:dos_mem_gap_candidate_seg], dx
     mov [cs:dos_mem_gap_candidate_size], bx
     pop bp
     pop ax
@@ -12441,7 +12457,7 @@ int21_mem_table_alloc_from_free:
     mov dx, [cs:dos_mem_block_table + si + 2]
     sub dx, bx
     cmp dx, 1
-    ja .split_high
+    ja .split
 .use_whole:
     call int21_mem_current_owner
     mov [cs:dos_mem_block_table + si + 4], ax
@@ -12450,7 +12466,7 @@ int21_mem_table_alloc_from_free:
     clc
     jmp .done
 
-.split_high:
+.split:
     cmp byte [cs:dos_mem_block_count], DOS_MEM_BLOCK_TABLE_MAX
     jae .use_whole
     cmp word [cs:dos_exec_identity_psp], 0
@@ -12458,6 +12474,29 @@ int21_mem_table_alloc_from_free:
     cmp byte [cs:dos_mem_block_count], (DOS_MEM_BLOCK_TABLE_MAX - 1)
     jae .use_whole
 .split_capacity_ready:
+    cmp bp, 2
+    je .split_high
+    ; First/best fit keep the allocated MCB at the start of the free block.
+    ; The remainder gets a new free MCB immediately after the allocation.
+    mov ax, [cs:dos_mem_block_table + si]
+    push ax
+    mov bx, [cs:dos_mem_block_req_size]
+    mov [cs:dos_mem_block_table + si + 2], bx
+    call int21_mem_current_owner
+    mov [cs:dos_mem_block_table + si + 4], ax
+    mov word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_ALLOC
+    mov ax, [cs:dos_mem_block_table + si]
+    add ax, bx
+    inc ax
+    mov bx, dx
+    dec bx
+    xor cx, cx
+    mov dx, DOS_MEM_BLOCK_FREE
+    call int21_mem_table_insert
+    pop ax
+    clc
+    jmp .done
+.split_high:
     dec dx
     mov [cs:dos_mem_block_table + si + 2], dx
     mov ax, [cs:dos_mem_block_table + si]
@@ -20342,6 +20381,40 @@ ps2_mouse_init:
     mov al, 0xF6
     call ps2_mouse_write
     jc .fail
+    ; Negotiate the standard IntelliMouse wheel extension.  A device which
+    ; does not return ID 03h remains on the original three-byte packet path.
+    mov al, 0xF3
+    call ps2_mouse_write
+    jc .wheel_fallback
+    mov al, 200
+    call ps2_mouse_write
+    jc .wheel_fallback
+    mov al, 0xF3
+    call ps2_mouse_write
+    jc .wheel_fallback
+    mov al, 100
+    call ps2_mouse_write
+    jc .wheel_fallback
+    mov al, 0xF3
+    call ps2_mouse_write
+    jc .wheel_fallback
+    mov al, 80
+    call ps2_mouse_write
+    jc .wheel_fallback
+    mov al, 0xF2
+    call ps2_mouse_write
+    jc .wheel_fallback
+    call ps2_read_data
+    jc .wheel_fallback
+    cmp al, 3
+    jne .wheel_fallback
+    mov byte [cs:mouse_device_id],3
+    mov byte [cs:mouse_packet_bytes],4
+    jmp .wheel_done
+.wheel_fallback:
+    mov byte [cs:mouse_device_id],0
+    mov byte [cs:mouse_packet_bytes],3
+.wheel_done:
     mov al, 0xF4
     call ps2_mouse_write
     jc .fail
@@ -20475,9 +20548,13 @@ irq12_mouse_handler:
     mov [cs:mouse_packet + bx], al
     inc bl
     mov [cs:mouse_packet_index], bl
-    cmp bl, 3
+    cmp bl, [cs:mouse_packet_bytes]
     jne .eoi_fast       ; partial packet – EOI and return, no VGA work
     mov byte [cs:mouse_packet_index], 0
+    inc word [cs:mouse_diag_packets]
+    xor ah, ah
+    mov al, [cs:mouse_packet]
+    mov [cs:mouse_diag_last_raw], ax
 
     xor bp, bp
     cmp byte [cs:mouse_packet + 1], 0
@@ -20488,6 +20565,7 @@ irq12_mouse_handler:
     or bp, 0x0001
 
 .button_events:
+    mov word [cs:mouse_last_wheel_delta],0
     mov al, [cs:mouse_packet]
     mov bl, al
     mov ah, [cs:mouse_buttons]
@@ -20496,11 +20574,26 @@ irq12_mouse_handler:
     mov [cs:mouse_buttons], al
     mov bh, ah
 
+    ; ID 03h packets carry signed wheel Z in byte four.  Expose bit 7 as the
+    ; CuteMouse wheel callback event and accumulate down-positive movement.
+    cmp byte [cs:mouse_device_id],3
+    jne .wheel_done
+    mov al,[cs:mouse_packet+3]
+    cbw
+    or ax,ax
+    jz .wheel_done
+    or bp,0x0080
+    mov [cs:mouse_last_wheel_delta],ax
+    add [cs:mouse_wheel_count],ax
+.wheel_done:
+    mov al,[cs:mouse_packet]
+
     test al, 0x01
     jz .left_up
     test bh, 0x01
     jnz .left_done
     or bp, 0x0002
+    inc word [cs:mouse_diag_left_presses]
     jmp .left_done
 .left_up:
     test bh, 0x01
@@ -20513,6 +20606,7 @@ irq12_mouse_handler:
     test bh, 0x02
     jnz .right_done
     or bp, 0x0008
+    inc word [cs:mouse_diag_right_presses]
     jmp .right_done
 .right_up:
     test bh, 0x02
@@ -20588,6 +20682,11 @@ irq12_mouse_handler:
 .y_ok:
     mov [cs:mouse_pos_x], cx
     mov [cs:mouse_pos_y], dx
+    cmp word [cs:mouse_last_wheel_delta],0
+    je .wheel_position_done
+    mov [cs:mouse_wheel_x],cx
+    mov [cs:mouse_wheel_y],dx
+.wheel_position_done:
     mov [cs:mouse_last_event_mask], bp
 
     test bp, 0x0002
@@ -20662,7 +20761,15 @@ irq12_mouse_handler:
     mov al, [cs:mouse_packet + 2]
     push ax                         ; raw PS/2 Y delta
     xor ax, ax
-    push ax                         ; Z delta (standard three-byte mouse = 0)
+    cmp byte [cs:mouse_device_id],3
+    jne .bios_zero_z
+    mov al,[cs:mouse_packet+3]
+    cbw
+    jmp .bios_push_z
+.bios_zero_z:
+    xor ax,ax
+.bios_push_z:
+    push ax                         ; signed wheel Z (zero for ID 00h)
     call far [cs:mouse_bios_asr_off]
     add sp, 8
     pop es
@@ -20695,6 +20802,10 @@ irq12_mouse_handler:
 
     xor bx, bx
     mov bl, [cs:mouse_buttons]
+    cmp word [cs:mouse_last_wheel_delta],0
+    je .callback_bh_done
+    mov bh,[cs:mouse_last_wheel_delta]
+.callback_bh_done:
     mov cx, [cs:mouse_pos_x]
     mov dx, [cs:mouse_pos_y]
     mov si, [cs:mouse_last_mickey_x]
@@ -20719,6 +20830,10 @@ irq12_mouse_handler:
     mov [cs:mouse_cb_pending_y], dx
     mov [cs:mouse_cb_pending_dx], si
     mov [cs:mouse_cb_pending_dy], di
+    cmp word [cs:mouse_last_wheel_delta],0
+    je .eoi
+    mov ax,[cs:mouse_last_wheel_delta]
+    add [cs:mouse_cb_pending_wheel],ax
 
 .eoi:
     ; Full packet processed – refresh sprite, then EOI
@@ -21799,6 +21914,13 @@ int15_handler:
     jne .interface_error
     call ps2_read_data
     jc .interface_error
+    mov [cs:mouse_device_id],al
+    mov byte [cs:mouse_packet_bytes],3
+    cmp al,3
+    jne .reset_id_done
+    mov byte [cs:mouse_packet_bytes],4
+.reset_id_done:
+    mov byte [cs:mouse_rate_sequence],0
     mov byte [cs:mouse_bios_enabled], 0
     mov byte [cs:mouse_packet_index], 0
     mov byte [cs:mouse_vga_cursor_drawn], 0
@@ -21814,8 +21936,30 @@ int15_handler:
     call ps2_mouse_write
     jc .interface_error
     mov al, [cs:mouse_bios_sample_rates + bx]
+    mov [cs:mouse_rate_value],al
     call ps2_mouse_write
     jc .interface_error
+    cmp byte [cs:mouse_rate_value],200
+    je .rate_start
+    cmp byte [cs:mouse_rate_sequence],1
+    jne .rate_step_2
+    cmp byte [cs:mouse_rate_value],100
+    jne .rate_sequence_clear
+    mov byte [cs:mouse_rate_sequence],2
+    jmp .rate_sequence_done
+.rate_start:
+    mov byte [cs:mouse_rate_sequence],1
+    jmp .rate_sequence_done
+.rate_step_2:
+    cmp byte [cs:mouse_rate_sequence],2
+    jne .rate_sequence_clear
+    cmp byte [cs:mouse_rate_value],80
+    jne .rate_sequence_clear
+    mov byte [cs:mouse_rate_sequence],3
+    jmp .rate_sequence_done
+.rate_sequence_clear:
+    mov byte [cs:mouse_rate_sequence],0
+.rate_sequence_done:
     jmp .success
 
 .set_resolution:
@@ -21839,17 +21983,26 @@ int15_handler:
     call ps2_read_data
     jc .interface_error
     mov bh, al
+    mov [cs:mouse_device_id],al
+    mov byte [cs:mouse_packet_bytes],3
+    cmp al,3
+    jne .get_id_done
+    mov byte [cs:mouse_packet_bytes],4
+.get_id_done:
+    mov byte [cs:mouse_packet_index],0
     jmp .success
 
 .initialize:
-    ; This runtime consumes the standard three-byte packet.  Four-byte wheel
-    ; packets require a different IRQ framing contract and are rejected until
-    ; a client explicitly negotiates that protocol through the hardware path.
+    ; The IRQ reader supports standard three-byte and negotiated IntelliMouse
+    ; four-byte packets.
     cmp bh, 3
     jne .invalid_input
     mov al, 0xF6                  ; defaults also stop data reporting
     call ps2_mouse_write
     jc .interface_error
+    mov byte [cs:mouse_device_id],0
+    mov byte [cs:mouse_packet_bytes],3
+    mov byte [cs:mouse_rate_sequence],0
     mov byte [cs:mouse_bios_reporting_stopped], 1
     mov byte [cs:mouse_bios_enabled], 0
     mov byte [cs:mouse_packet_index], 0
@@ -22001,6 +22154,7 @@ mouse_reset_runtime_state:
     mov word [cs:mouse_cb_pending_y], 240
     mov word [cs:mouse_cb_pending_dx], 0
     mov word [cs:mouse_cb_pending_dy], 0
+    mov word [cs:mouse_cb_pending_wheel], 0
     mov word [cs:mouse_alt_mask], 0
     mov word [cs:mouse_alt_off], 0
     mov word [cs:mouse_alt_seg], 0
@@ -22047,6 +22201,10 @@ mouse_reset_runtime_state:
     mov word [cs:mouse_delta_y], 0
     mov word [cs:mouse_last_mickey_x], 0
     mov word [cs:mouse_last_mickey_y], 0
+    mov word [cs:mouse_wheel_count],0
+    mov word [cs:mouse_wheel_x],320
+    mov word [cs:mouse_wheel_y],240
+    mov word [cs:mouse_last_wheel_delta],0
 %if FAT_TYPE == 16
     call mouse_vga_cursor_seed
 %endif
@@ -22097,6 +22255,8 @@ mouse_flush_pending_callback:
     mov dx, [cs:mouse_cb_pending_y]
     mov si, [cs:mouse_cb_pending_dx]
     mov di, [cs:mouse_cb_pending_dy]
+    mov bh,byte [cs:mouse_cb_pending_wheel]
+    mov word [cs:mouse_cb_pending_wheel],0
     mov byte [cs:mouse_cb_busy], 1
     sti
     push ds
@@ -22427,6 +22587,8 @@ int33_handler:
     pop ax
     cmp byte [cs:shell_exec_external_mouse_disabled], 0
     jne .external_mouse_disabled
+    cmp ax, 0x7F00                 ; private, read-only hardware diagnostic
+    je .raw_button_diagnostic
     cmp ax, 0x0000
     je .reset
     cmp ax, 0x0001
@@ -22441,6 +22603,8 @@ int33_handler:
     je .button_press_info
     cmp ax, 0x0006
     je .button_release_info
+    cmp ax, 0x0011
+    je .wheel_capability
     cmp ax, 0x0007
     je .set_x_range
     cmp ax, 0x0008
@@ -22511,6 +22675,14 @@ int33_handler:
     xor dx, dx
     iret
 
+.raw_button_diagnostic:
+    mov ax, 0xC155                 ; CiukiDOS diagnostic signature
+    mov bx, [cs:mouse_diag_packets]
+    mov cx, [cs:mouse_diag_left_presses]
+    mov dx, [cs:mouse_diag_right_presses]
+    mov si, [cs:mouse_diag_last_raw]
+    iret
+
 .reset:
 %if FAT_TYPE == 16
     cmp byte [cs:mouse_hw_ready], 1
@@ -22566,7 +22738,8 @@ int33_handler:
 .status:
     cmp byte [cs:mouse_installed], 1
     jne .status_not_installed
-    xor bh, bh
+    mov bh, byte [cs:mouse_wheel_count]
+    mov word [cs:mouse_wheel_count],0
     mov bl, [cs:mouse_buttons]
     mov cx, [cs:mouse_pos_x]
     mov dx, [cs:mouse_pos_y]
@@ -22606,6 +22779,8 @@ int33_handler:
     iret
 
 .button_press_info:
+    cmp bx,0xFFFF
+    je .wheel_info
     cmp bx, 2
     ja .button_info_fail
     ; BX is both the input button number and the required output event
@@ -22625,6 +22800,8 @@ int33_handler:
     iret
 
 .button_release_info:
+    cmp bx,0xFFFF
+    je .wheel_info
     cmp bx, 2
     ja .button_info_fail
     push si
@@ -22644,6 +22821,26 @@ int33_handler:
     xor bx, bx
     xor cx, cx
     xor dx, dx
+    iret
+
+.wheel_info:
+    mov al,[cs:mouse_buttons]
+    mov ah,byte [cs:mouse_wheel_count]
+    mov bx,[cs:mouse_wheel_count]
+    mov word [cs:mouse_wheel_count],0
+    mov cx,[cs:mouse_wheel_x]
+    mov dx,[cs:mouse_wheel_y]
+    iret
+
+.wheel_capability:
+    mov ax,0x574D
+    xor cx,cx
+%if FAT_TYPE == 16
+    cmp byte [cs:mouse_device_id],3
+    jne .wheel_cap_done
+    inc cx
+%endif
+.wheel_cap_done:
     iret
 
 .set_x_range:
@@ -22964,10 +23161,12 @@ int2f_handler:
     je .fn_16xx_idle
     cmp ax, 0x1687
     je .fn_1687
+%if CIUKIDOS_EXTERNAL_XMS == 0
     cmp ax, 0x4300
     je .fn_4300
     cmp ax, 0x4310
     je .fn_4310
+%endif
 .chain:
     jmp far [cs:old_int2f_off]
 
@@ -23952,7 +24151,17 @@ mouse_hw_ready db 0
 ps2_command_saved db 0
 ps2_saved_command db 0
 mouse_packet_index db 0
-mouse_packet times 3 db 0
+mouse_packet_bytes db 3
+mouse_device_id db 0
+mouse_rate_sequence db 0
+mouse_rate_value db 0
+mouse_packet times 4 db 0
+mouse_last_wheel_delta dw 0
+mouse_cb_pending_wheel dw 0
+mouse_diag_packets dw 0
+mouse_diag_left_presses dw 0
+mouse_diag_right_presses dw 0
+mouse_diag_last_raw dw 0
 mouse_last_byte_tick dw 0
 mouse_delta_x dw 0
 mouse_delta_y dw 0
@@ -24434,7 +24643,7 @@ msg_runtime_probe_call db "[RTP] C", 13, 10
 msg_runtime_probe_ok db "[RTP] OK", 13, 10, 0
 %endif
 
-msg_banner_title db "CiukiOS pre-Alpha v0.8.0 (CiukiDOS Shell)", 0
+msg_banner_title db "CiukiOS pre-Alpha v0.8.3 (CiukiDOS Shell)", 0
 %if FAT_TYPE == 12
 msg_shell_sysinfo_prefix db "RAM:", 0
 %endif
@@ -24667,8 +24876,8 @@ gfx_line_sx dw 0
 gfx_line_sy dw 0
 gfx_line_err dw 0
 gfx_line_e2 dw 0
-MOUSE_STATE_VERSION equ 0x3301
-MOUSE_STATE_SIZE equ 190
+MOUSE_STATE_VERSION equ 0x3302
+MOUSE_STATE_SIZE equ 196
 mouse_state_begin:
 mouse_state_version dw MOUSE_STATE_VERSION
 mouse_state_size_field dw MOUSE_STATE_SIZE
@@ -24717,6 +24926,9 @@ mouse_sens_y dw 8
 mouse_double_threshold dw 64
 mouse_interrupt_rate dw 100
 mouse_last_event_mask dw 0
+mouse_wheel_count dw 0
+mouse_wheel_x dw 320
+mouse_wheel_y dw 240
 mouse_text_cursor_type dw 0
 mouse_text_screen_mask dw 0xFFFF
 mouse_text_cursor_mask dw 0x7700

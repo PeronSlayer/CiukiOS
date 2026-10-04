@@ -64,6 +64,11 @@ boot_start:
     mov [boot_drive], dl
     mov [bs_drive_num], dl
 
+%ifdef BOOT_DISK_LOG
+    mov al, 2                   ; partition boot sector entered
+    call 0x0000:0x06E0         ; logger in the relocated physical MBR
+%endif
+
     call serial_init
 
     mov si, msg_stage0
@@ -117,12 +122,20 @@ boot_start:
     jnz .read_stage1
 
     mov si, msg_disk_err
+%ifdef BOOT_DISK_LOG
+    mov al, 0xE1                ; Stage1 could not be read
+    call 0x0000:0x06E0
+%endif
     call print_bios_string
     mov si, msg_disk_err
     call print_serial_string
     jmp halt
 
 .stage1_ok:
+%ifdef BOOT_DISK_LOG
+    mov al, 3                   ; Stage1 image read
+    call 0x0000:0x06E0
+%endif
     mov si, msg_stage1_jump
     call print_bios_string
     mov si, msg_stage1_jump

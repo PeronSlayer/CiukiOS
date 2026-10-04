@@ -70,11 +70,9 @@ checks:
     int 0x21
     jc fail
     mov [allocation], ax
-    ; The block lies above this program's own (resized) block and its MCB.
-    mov dx, cs
-    add dx, (image_end - $$ + 0x100 + 15) >> 4
-    cmp ax, dx
-    jbe overlap
+    ; A DOS allocator may choose a free block on either side of this PSP.
+    ; Verify disjoint ranges instead of assuming an allocation direction.
+    call check_no_overlap
     mov es, ax
     xor di, di
     mov cx, 4096
@@ -95,7 +93,7 @@ checks:
     mov ah, 0x49
     int 0x21
     jc fail
-    ; The largest free block, too (it starts right above this program).
+    ; The largest free block, wherever the allocator places it.
     mov bx, 0xFFFF
     mov ah, 0x48
     int 0x21
@@ -105,10 +103,7 @@ checks:
     mov ah, 0x48
     int 0x21
     jc fail
-    mov dx, cs
-    add dx, (image_end - $$ + 0x100 + 15) >> 4
-    cmp ax, dx
-    jbe overlap
+    call check_no_overlap
     mov es, ax
     mov ah, 0x49
     int 0x21
@@ -123,6 +118,27 @@ checks:
 .passed:
     mov ax, 0x4C00
     int 0x21
+check_no_overlap:
+    push bx
+    push dx
+    push es
+    mov dx, cs
+    add dx, (image_end - $$ + 0x100 + 15) >> 4
+    cmp ax, dx
+    jae .disjoint
+    mov dx, ax
+    dec dx
+    mov es, dx
+    mov bx, [es:3]
+    add bx, ax
+    mov dx, cs
+    cmp bx, dx
+    ja overlap
+.disjoint:
+    pop es
+    pop dx
+    pop bx
+    ret
 overlap:
     push cs
     pop ds

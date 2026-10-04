@@ -2,8 +2,8 @@
  *
  * Linked into CVSESSION.DLL. Called only from session_video.inc with flat
  * DS=ES=SS, DF=0, interrupts disabled and a private stack. It owns no
- * allocation and no Jemm service: the assembler glue reserves the shared
- * block, installs traps and calls cvvid_attach/cvvid_detach.
+ * direct Jemm service: the assembler glue reserves the shared block and
+ * retained raster storage, installs traps and calls cvvid_attach/detach.
  *
  * Guest memory is reached through the pinned JLOAD page-table self-map
  * (FF800000h): conventional pages are touched only when their PTE is
@@ -33,7 +33,11 @@ typedef struct cvvid_shared {
     uint32_t magic, version, bytes, generation;
     uint32_t tsc_khz, tsc_base_lo, tsc_base_hi, fatal;
     uint32_t pm_faults, pm_instructions, pm_elements, pm_unsupported;
-    uint32_t pm_port_reads, pm_port_writes, pm_attached, reserved;
+    uint32_t pm_port_reads, pm_port_writes, pm_attached;
+    /* HDPMI adapter: bits 0-2 = plane + 1 mapped directly at A0000-AFFFF in
+     * its page table (0 none), bit 3 read-only, bit 4 read phase. Read by
+     * cv_guard_ptes (offset 60). */
+    uint32_t pm_direct;
     /* VIDEO_STATE layout, refreshed on every timer tick for observers. */
     uint32_t live[64];
     /* Device IRQ lines CVSESSION holds for the protected-mode client; the
@@ -71,7 +75,8 @@ typedef char cvp_stats_size[sizeof(cvp_stats) == 32 ? 1 : -1];
 
 /* Error codes mirror session_abi.inc / session_video_abi.inc. */
 enum {
-    CVVID_OK = 0, CVVID_E_OPERATION = 1, CVVID_E_INACTIVE = 4, CVVID_E_ADDRESS = 7,
+    CVVID_OK = 0, CVVID_E_OPERATION = 1, CVVID_E_INACTIVE = 4, CVVID_E_MEMORY = 5,
+    CVVID_E_ADDRESS = 7,
     CVVID_E_ABI = 9, CVVID_E_FB_UNBOUND = 11,
     CVVID_E_FORMAT = 0x20, CVVID_E_GEOMETRY = 0x21, CVVID_E_SHARED = 0x22,
     CVVID_E_FATAL = 0x23, CVVID_E_HOST = 0x24
@@ -93,11 +98,14 @@ typedef struct cvvid_fb {
 uint32_t CVGA_CALL cvvid_instance_bytes(void);
 void CVGA_CALL cvvid_select(void *instance);
 int CVGA_CALL cvvid_attach(cvvid_shared *block, uint32_t generation);
-/* Restores BDA/IVT video state; the caller restores PTEs and frees memory. */
-void CVGA_CALL cvvid_detach(void);
+/* Releases the retained raster and restores BDA/IVT video state. On failure
+ * ownership remains recorded; the caller must retain the instance and retry. */
+int CVGA_CALL cvvid_detach(void);
 void CVGA_CALL cvvid_note_device_irqs(uint32_t lines);
 uint32_t CVGA_CALL cvvid_host_offset(void);
 uint32_t CVGA_CALL cvvid_pm_attached(void);
+uint32_t CVGA_CALL cvvid_pm_attached_instance(void *instance);
+void CVGA_CALL cvvid_note_device_irqs_instance(void *instance, uint32_t lines);
 int CVGA_CALL cvvid_attached(void);
 int CVGA_CALL cvvid_share_count(void);
 /* 0: handled, RET to Jemm. 1: not ours or unsupported, chain. */
@@ -120,7 +128,12 @@ uint32_t CVGA_CALL cvvid_readback(uint32_t offset, uint32_t count, uint32_t dest
 
 /* Provided by session_video.inc (ring-0 glue). */
 extern void CVGA_CALL cvvid_rdtsc(uint32_t *low, uint32_t *high);
+extern void CVGA_CALL cvvid_fb_flush(void);
 extern uint32_t CVGA_CALL cvvid_io_in(uint32_t port, uint32_t size);
 extern void CVGA_CALL cvvid_io_out(uint32_t port, uint32_t value, uint32_t size);
+/* Narrow owner services implemented by the assembler glue. No guest pointer
+ * reaches these callbacks. Allocation is zero-filled and page-aligned. */
+extern void *CVGA_CALL cvvid_surface_alloc(uint32_t bytes);
+extern int CVGA_CALL cvvid_surface_free(void *storage);
 
 #endif

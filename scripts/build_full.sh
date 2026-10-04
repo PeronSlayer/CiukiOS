@@ -26,6 +26,7 @@ STAGE2_BIN="build/full/obj/full_stage2.bin"
 STAGE2_MAX_SIZE=512
 RUNTIME_SRC="src/runtime/ciukidos.asm"
 RUNTIME_BIN="build/full/obj/ciukidos.sys"
+CIUKIDOS_EXTERNAL_XMS="${CIUKIOS_VM_WINDOW:-1}"
 # The loader validates CIUKIDOS at 0x0900 and relocates its position-independent
 # image to 0x0300.  The bounded image may use the complete interval up to, but
 # never including, SYSVARS at 0x0D90.
@@ -83,6 +84,8 @@ VIDLEAVE_SRC="src/com/vidleave.asm"
 VIDLEAVE_BIN="build/full/obj/vidleave.com"
 MOUSE_SRC="src/com/mouse.asm"
 MOUSE_BIN="build/full/obj/mouse.com"
+MOUSEBTN_SRC="src/com/mouse_buttons_diag.asm"
+MOUSEBTN_BIN="build/full/obj/mousebtn.com"
 CIUKWIN_SRC="src/com/ciukwin.asm"
 CIUKWIN_BIN="build/full/obj/ciukwin.com"
 CIUKWIN_MAX_SIZE=4096
@@ -253,7 +256,7 @@ mtools_ensure_dir() {
 
 
 
-for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$CIUKRTST_SRC" "$MOUSECB_SRC" "$CIUKPST_SRC" "$CIUKPTRM_SRC" "$CIUKPCOM_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$VIDLEAVE_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AC97INIT_SRC" "$AUDIOAUTO_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC" "$DOOM_LAUNCH_SRC" "$WOLF3D_LAUNCH_SRC" "$VGASETUP_SRC" "$VBESVGA_BUILD_SCRIPT"; do
+for f in "$BOOT_SRC" "$STAGE1_SRC" "$STAGE2_SRC" "$RUNTIME_SRC" "$COMDEMO_SRC" "$CIUKRTST_SRC" "$MOUSECB_SRC" "$MOUSEBTN_SRC" "$CIUKPST_SRC" "$CIUKPTRM_SRC" "$CIUKPCOM_SRC" "$MZDEMO_SRC" "$FILEIO_SRC" "$DELTEST_SRC" "$CIUKEDIT_SRC" "$GFXRECT_SRC" "$GFXSTAR_SRC" "$VIDLEAVE_SRC" "$MOUSE_SRC" "$CIUKWIN_SRC" "$SETUP_SRC" "$FORMAT_SRC" "$SHELL_SRC" "$DRVLOAD_SRC" "$SB16INIT_SRC" "$AUDIOTST_SRC" "$AC97INIT_SRC" "$AUDIOAUTO_SRC" "$AUDIOKEY_SRC" "$DOOMSB_SRC" "$PMIRQSB_LAUNCH_SRC" "$PMIRQSB_SRC" "$DOOMSFX_LAUNCH_SRC" "$DOOMSFX_SRC" "$DOOMVAN_LAUNCH_SRC" "$DOOM_LAUNCH_SRC" "$WOLF3D_LAUNCH_SRC" "$VGASETUP_SRC" "$VBESVGA_BUILD_SCRIPT"; do
 	if [[ ! -f "$f" ]]; then
 		echo "[build-full] ERROR: source not found: $f" >&2
 		exit 1
@@ -380,6 +383,7 @@ python3 scripts/build_doom_window.py --output build/full/obj/doom-window
 python3 scripts/build_wolf_window.py --output build/full/obj/wolf-window
 nasm -f bin "$STAGE2_SRC" -o "$STAGE2_BIN"
 nasm -f bin "$RUNTIME_SRC" \
+	-D CIUKIDOS_EXTERNAL_XMS="$CIUKIDOS_EXTERNAL_XMS" \
 	-D FAT_SPT="$FAT_SPT" \
 	-D FAT_HEADS="$FAT_HEADS" \
 	-D FAT_RESERVED_SECTORS="$FAT_RESERVED_SECTORS" \
@@ -418,6 +422,7 @@ nasm -f bin "$GFXRECT_SRC" -o "$GFXRECT_BIN"
 nasm -f bin "$GFXSTAR_SRC" -o "$GFXSTAR_BIN"
 nasm -f bin "$VIDLEAVE_SRC" -o "$VIDLEAVE_BIN"
 nasm -f bin "$MOUSE_SRC" -o "$MOUSE_BIN"
+nasm -f bin "$MOUSEBTN_SRC" -o "$MOUSEBTN_BIN"
 nasm -f bin "$CIUKWIN_SRC" -o "$CIUKWIN_BIN"
 # Runtime logo bytes must originate from the owner's exact approved portrait.
 python3 scripts/build_ciuki_logo.py --check
@@ -427,6 +432,7 @@ nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL
 nasm -f bin "$FORMAT_SRC" -D MBR_PARTITION_SECTORS="$TOTAL_SECTORS" -o "$FORMAT_BIN"
 nasm -f bin "$SHELL_SRC" -D COMMAND_COMPAT=1 -o "$COMMAND_COMPAT_BIN"
 nasm -f bin "$SHELL_SRC" -o "$SHELL_BIN"
+nasm -f bin src/com/guiexec.asm -o build/full/obj/guiexec.com
 nasm -f bin "$IPCONFIG_SRC" -o "$IPCONFIG_BIN"
 nasm -f bin "$ICMPD_SRC" -o "$ICMPD_BIN"
 nasm -f bin "$NETCFG_SRC" -o "$NETCFG_BIN"
@@ -862,6 +868,7 @@ mcopy -o -i "$IMG" "$COMMAND_COMPAT_BIN" "$COMMAND_COMPAT_IMAGE_PATH"
 
 echo "[build-full] injecting external shell prototype to ::SYSTEM/SHELL.COM"
 mcopy -o -i "$IMG" "$SHELL_BIN" ::SYSTEM/SHELL.COM
+mcopy -o -i "$IMG" build/full/obj/guiexec.com ::SYSTEM/GUIEXEC.COM
 mcopy -o -i "$IMG" build/full/obj/doswin.drv ::SYSTEM/DOSWIN.DRV
 mcopy -o -i "$IMG" build/full/obj/dwin.com build/full/obj/wwin.com ::APPS/
 mcopy -o -i "$IMG" build/full/obj/doom-window/DOOMWIN.EXE build/full/obj/wolf-window/WOLFWIN.EXE ::APPS/
@@ -881,7 +888,7 @@ if [[ "${CIUKIOS_INCLUDE_DOS_WINDOW_PROBES:-0}" == "1" ]]; then
 fi
 if [[ "${CIUKIOS_VM_WINDOW:-1}" == "1" ]]; then
     # VM manager for the desktop's DOS windows (C:\VM), part of every build:
-    # Jemm386 V86 monitor + JLOAD + CVSESSION (VGA model, keyboard/mouse/
+    # JemmEx XMS/V86 monitor + JLOAD + CVSESSION (VGA model, keyboard/mouse/
     # SB16/OPL on AC'97), VMSTART (run by the desktop at boot), DPMIRUN
     # (each window's launcher and DPMI host) and VMFORK (a program in a DOS
     # VM of its own). DOS/4GW programs use the
@@ -896,12 +903,16 @@ if [[ "${CIUKIOS_VM_WINDOW:-1}" == "1" ]]; then
     rm -rf "$VM_WINDOW_DIR/session"
     bash scripts/build_vm_session.sh --output "$VM_WINDOW_DIR/session"
     nasm -f bin src/com/dpmirun.asm -o "$VM_WINDOW_DIR/DPMIRUN.COM"
-    nasm -f bin src/com/vmstart.asm -o "$VM_WINDOW_DIR/VMSTART.COM"
-    nasm -f bin src/com/vmfork.asm -o "$VM_WINDOW_DIR/VMFORK.COM"
+    nasm -f bin src/com/memmap.asm -o "$VM_WINDOW_DIR/MEMMAP.COM"
+    nasm -f bin -I ./ src/probes/vm/native_pages.asm -o "$VM_WINDOW_DIR/NATPAGE.COM"
+    nasm -f bin src/com/native_launch.asm -o "$VM_WINDOW_DIR/NATIVE.COM"
+    python3 scripts/build_native_image.py --output "$VM_WINDOW_DIR/NATIVE32.N32"
+    nasm -f bin -D VMSTART_JEMMEX=1 src/com/vmstart.asm -o "$VM_WINDOW_DIR/VMSTART.COM"
+    nasm -f bin -I "$VM_WINDOW_DIR/session/" src/com/vmfork.asm -o "$VM_WINDOW_DIR/VMFORK.COM"
     mtools_ensure_dir "$IMG" ::VM
-    mcopy -o -i "$IMG" "$vm_jemm/JEMM386.EXE" "$vm_jemm/JLOAD.EXE" ::VM/
+    mcopy -o -i "$IMG" "$vm_jemm/JEMM386.EXE" "$vm_jemm/JEMMEX.EXE" "$vm_jemm/JLOAD.EXE" ::VM/
     mcopy -o -i "$IMG" "$VM_WINDOW_DIR/session/CVSESSION.DLL" ::VM/CVSESS.DLL
-    mcopy -o -i "$IMG" "$VM_WINDOW_DIR/DPMIRUN.COM" "$VM_WINDOW_DIR/VMSTART.COM" \
+    mcopy -o -i "$IMG" "$VM_WINDOW_DIR/DPMIRUN.COM" "$VM_WINDOW_DIR/MEMMAP.COM" "$VM_WINDOW_DIR/NATPAGE.COM" "$VM_WINDOW_DIR/NATIVE.COM" "$VM_WINDOW_DIR/NATIVE32.N32" "$VM_WINDOW_DIR/VMSTART.COM" \
         "$VM_WINDOW_DIR/VMFORK.COM" ::VM/
     mcopy -o -i "$IMG" config/vm-window/README.TXT ::VM/README.TXT
     mcopy -o -i "$IMG" "$vm_jemm/ARTISTIC.TXT" ::VM/JEMM.TXT
@@ -977,6 +988,8 @@ mcopy -o -i "$IMG" "$CIUKRTST_BIN" ::APPS/CIUKRTST.COM
 
 echo "[build-full] injecting INT 33h callback probe to ::APPS/MOUSECB.COM"
 mcopy -o -i "$IMG" "$MOUSECB_BIN" ::APPS/MOUSECB.COM
+echo "[build-full] injecting physical mouse-button diagnostic to ::APPS/MOUSEBTN.COM"
+mcopy -o -i "$IMG" "$MOUSEBTN_BIN" ::APPS/MOUSEBTN.COM
 
 echo "[build-full] injecting CIUKIDOS nested process probes to ::APPS"
 mcopy -o -i "$IMG" "$CIUKPST_BIN" ::APPS/CIUKPST.COM

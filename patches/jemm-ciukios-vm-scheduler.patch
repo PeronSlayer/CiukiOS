@@ -107,7 +107,7 @@ new file mode 100644
 index 0000000..622b48d
 --- /dev/null
 +++ b/src/CVIRQ.INC
-@@ -0,0 +1,986 @@
+@@ -0,0 +1,1042 @@
 +; CiukiOS foreground V86 interrupt profile.
 +; Compiled with CIUKIOS_V86_INTERRUPTS and negotiated at run time through
 +; the versioned Host_Scheduler_Profile service: it is active only while the
@@ -116,6 +116,7 @@ index 0000000..622b48d
 +; immediately before returning to V86.  Not a separate VM.
 +align 4
 +CvRequested dd 0
++CvPitOwned dd 0              ; channel 0 supplied by the VM clock owner
 +CvFilter dd 0
 +CvPollProc dd 0
 +CvLinger dd 0
@@ -156,6 +157,8 @@ index 0000000..622b48d
 +CvEnter endp
 +
 +CvLeave proc public
++ pushfd
++ cli
 + pushad
 + push ds
 + push es
@@ -250,6 +253,15 @@ index 0000000..622b48d
 + cmp CvPollProc,0
 + je poll_done
 + call CvPollProc
++ ; The poll may release its last owner. Restore the ordinary V86 path
++ ; in this return rather than materializing IOPL=0 without a callback.
++ cmp CvRequested,0
++ jne poll_done
++ cmp CvPending,0
++ jne poll_done
++ cmp CvInService,0
++ jne poll_done
++ jmp leave_disable
 +poll_done:
 + or [ebp].Client_Reg_Struc.Client_EFlags,3000h
 + mov eax,[ebp].Client_Reg_Struc.Client_EFlags
@@ -277,6 +289,10 @@ index 0000000..622b48d
 +no_slave_request:
 + test eax,eax
 + jz materialize
++ ; Probe hardware only when there is a virtual request to inject. A DPMI
++ ; host may return before its physical EOI; keep that request pending.
++ call CvPhysicalBusy
++ jnz materialize
 + bsf ecx,eax
 + movzx edx,byte ptr CvInService
 + test edx,edx
@@ -329,6 +345,7 @@ index 0000000..622b48d
 + pop es
 + pop ds
 + popad
++ popfd
 + ret
 +CvLeave endp
 +
@@ -415,6 +432,13 @@ index 0000000..622b48d
 +; reads the 8042 before the physical EOI. CF=1: the owner consumed the byte
 +; and raises any virtual IRQ itself; CF=0: pend this IRQ as usual.
 +CvFilterIrq proc
++ test eax,eax
++ jnz filter_device
++ cmp CvPitOwned,0
++ je filter_pass
++ stc
++ ret
++filter_device:
 + cmp CvFilter,0
 + je filter_pass
 + cmp eax,1
@@ -451,6 +475,11 @@ index 0000000..622b48d
 +; CF=1 for an invalid function, a raise or PIC access while inactive, or a
 +; PIC operation the V86 broker does not support.
 +CvProfileService proc
++ cmp eax,12
++ jne profile_not_pit_owner
++ mov CvPitOwned,ecx
++ jmp profile_state
++profile_not_pit_owner:
 + cmp eax,1
 + jne profile_not_request
 + mov CvRequested,1
@@ -459,6 +488,7 @@ index 0000000..622b48d
 + cmp eax,2
 + jne profile_not_release
 + mov CvRequested,0
++ mov CvPitOwned,0
 + mov CvFilter,0
 + mov CvPollProc,0
 + jmp profile_state
@@ -558,6 +588,11 @@ index 0000000..622b48d
 + jae profile_error
 + cmp ecx,2
 + je profile_error
++ ; The protected-mode bridge shares the same physical EOI ownership.
++ pushfd
++ cli
++ call CvPhysicalBusy
++ jnz accept_busy
 + push ebx
 + push esi
 + movzx ebx,CvMask
@@ -610,10 +645,13 @@ index 0000000..622b48d
 + btr CvPending,ecx
 + pop esi
 + pop ebx
++ popfd
 + jmp profile_state
 +accept_refused:
 + pop esi
 + pop ebx
++accept_busy:
++ popfd
 + stc
 + ret
 +profile_not_accept:
@@ -908,6 +946,20 @@ index 0000000..622b48d
 + ret
 +CvPhysicalISR endp
 +
++; ZF=1 only when both physical PICs are idle. Preserve EAX and EDX.
++; Never start a virtual handler while a physical EOI is owed.
++CvPhysicalBusy proc
++ push edx
++ mov dx,20h
++ call CvPhysicalISR
++ jnz busy_done
++ mov dx,0A0h
++ call CvPhysicalISR
++busy_done:
++ pop edx
++ ret
++CvPhysicalBusy endp
++
 +; Pre-dispatch broker for the reserved PIC and PIT0 control ports. No
 +; unsupported guest operation is allowed to program the physical PIC/PIT.
 +; The full peripheral model is a later owner; this profile is fixed-priority.
@@ -1068,12 +1120,16 @@ index 0000000..622b48d
 + stc
 + ret
 +pit_counter:
++ cmp CvPitOwned,0
++ jne io_unclaimed
 + test cl,OUT_INSTR or STRING_IO or WORD_IO or DWORD_IO
 + jnz CvReject
 + in al,40h
 + stc
 + ret
 +pit_control:
++ cmp CvPitOwned,0
++ jne io_unclaimed
 + test cl,OUT_INSTR
 + jz CvReject
 + test cl,STRING_IO or WORD_IO or DWORD_IO

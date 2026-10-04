@@ -7,6 +7,7 @@ org 0x0100
 %define HISTORY_ENTRY_LEN 128
 %define TITLE_BAR_ATTR 0x1F
 %define TITLE_BAR_COL 29
+%define HELP_RLE 0x01
 
 start:
     ; COM programs enter with a stack near the end of their 64 KiB arena.
@@ -28,6 +29,13 @@ start:
     push ds
     pop es
 
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,0                    ; red: SHELL.COM entered
+    call boot_diag_palette
+    pop ax
+%endif
+
 %ifdef COMMAND_COMPAT
     call command_compat_init
     cmp byte [command_once_pending], 1
@@ -38,15 +46,52 @@ start:
     call history_allocate
     ; Protect BIOS video calls, then select Live/Setup before probing graphics.
     call startup_display_services
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,1                    ; orange: auxiliary video stack returned
+    call boot_diag_palette
+    pop ax
+%endif
     call startup_driver_services
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,2                    ; yellow: input, detection, drivers returned
+    call boot_diag_palette
+    pop ax
+%endif
     call startup_select_session
+    call startup_memory_map
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,3                    ; green: startup choice returned
+    call boot_diag_palette
+    pop ax
+%endif
     call startup_long_names
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,4                    ; cyan: LFN extension returned
+    call boot_diag_palette
+    pop ax
+%endif
     test al,al
     jnz main_loop
     call startup_vm_manager
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,5                    ; blue: VM manager returned
+    call boot_diag_palette
+    pop ax
+%endif
 %endif
 
 %ifndef COMMAND_COMPAT
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,6                    ; magenta: entering desktop
+    call boot_diag_palette
+    pop ax
+%endif
     jmp ui_enter
 %else
     call redraw_title_bar
@@ -132,7 +177,7 @@ main_loop:
     cmp byte [cmd_buf + 4], 0
     jne .unknown
     mov si, msg_help
-    call print_dual_dollar_string
+    call print_dual_rle_help
     jmp main_loop
 
 .check_ver:
@@ -2151,6 +2196,37 @@ print_dual_dollar_string:
 .done:
     ret
 
+; msg_help uses HELP_RLE,count,byte for runs of four or more identical bytes.
+; Keep BX intact across dual_putc, whose DOS/BIOS paths have different clobbers.
+print_dual_rle_help:
+    push bx
+.next:
+    lodsb
+    cmp al, '$'
+    je .done
+    cmp al, HELP_RLE
+    jne .emit
+    lodsb
+    mov bl, al
+    lodsb
+    mov bh, al
+.repeat:
+    mov al, bh
+    push bx
+    call dual_putc
+    pop bx
+    dec bl
+    jnz .repeat
+    jmp .next
+.emit:
+    push bx
+    call dual_putc
+    pop bx
+    jmp .next
+.done:
+    pop bx
+    ret
+
 print_dual_z_string:
 .next:
     lodsb
@@ -2791,6 +2867,147 @@ startup_display_services:
     pop ax
     ret
 
+%ifdef BOOT_DIAG_PALETTE
+; Diagnostic build only. The splash progress blocks use palette index 255.
+; Changing that DAC entry shows boot progress on machines without a serial
+; cable, without changing video mode or the normal startup path.
+boot_diag_palette:
+%ifdef BOOT_DISK_LOG
+    push ax
+    call boot_log_stage
+    pop ax
+%endif
+    pushf
+    cli
+    pushad
+    push ds
+    push cs
+    pop ds
+    movzx bx,al
+    mov ax,bx
+    shl bx,1
+    add bx,ax
+    add bx,boot_diag_rgb
+    mov dx,0x3C8
+    mov al,255
+    out dx,al
+    inc dx
+    mov al,[bx]
+    out dx,al
+    mov al,[bx+1]
+    out dx,al
+    mov al,[bx+2]
+    out dx,al
+    pop ds
+    popad
+    popf
+    ret
+boot_diag_rgb db 63,0,0, 63,24,0, 63,63,0, 0,63,0
+              db 0,63,63, 0,0,63, 63,0,63
+              db 63,20,45, 30,63,0, 63,63,63, 20,20,20
+              db 0,40,32, 30,45,63, 63,42,0
+
+%ifdef BOOT_DISK_LOG
+; The MBR logs the first four boot stages in raw sectors before the FAT16
+; partition.  Once DOS is running, append every shell phase to this file.
+; Closing each write makes the last completed phase survive a hard reset.
+boot_log_stage:
+    pushf
+    pushad
+    push ds
+    push es
+    push cs
+    pop ds
+    mov ah,al
+    and al,15
+    cmp al,10
+    jb .digit
+    add al,'A'-10
+    jmp .encoded
+.digit:
+    add al,'0'
+.encoded:
+    mov [boot_log_line+2],al
+    mov al,ah
+    shr al,4
+    cmp al,10
+    jb .high_digit
+    add al,'A'-10
+    jmp .high_encoded
+.high_digit:
+    add al,'0'
+.high_encoded:
+    mov [boot_log_line+1],al
+    mov dx,boot_log_path
+    mov ax,0x3D02
+    int 0x21
+    jc .done
+    mov bx,ax
+    mov ax,0x4202
+    xor cx,cx
+    xor dx,dx
+    int 0x21
+    jc .close
+    mov dx,boot_log_line
+    mov cx,5
+    mov ah,0x40
+    int 0x21
+.close:
+    mov ah,0x3E
+    int 0x21
+.done:
+    pop es
+    pop ds
+    popad
+    popf
+    ret
+boot_log_path db '\\SYSTEM\\BOOT.LOG',0
+boot_log_line db 'S00',13,10
+boot_log_key_seen db 0
+boot_log_mouse_seen db 0
+boot_log_legacy_seen db 0
+boot_log_event_entered db 0
+boot_log_event_returned db 0
+boot_log_halt_entered db 0
+boot_log_halt_returned db 0
+
+; One-time hardware state at the first desktop frame. These are observations,
+; never changes to PIC masks or to the shared i8042 data port.
+boot_log_input_state:
+    pushf
+    pushad
+    push es
+    in al,0x21
+    mov bl,0x1C               ; master PIC IRQ1 unmasked
+    test al,2
+    jz .master
+    mov bl,0x1D               ; master PIC IRQ1 masked
+.master:
+    mov al,bl
+    call boot_log_stage
+    in al,0xA1
+    mov bl,0x1E               ; slave PIC IRQ12 unmasked
+    test al,0x10
+    jz .slave
+    mov bl,0x1F               ; slave PIC IRQ12 masked
+.slave:
+    mov al,bl
+    call boot_log_stage
+    xor ax,ax
+    mov es,ax
+    mov al,0x21               ; external INT 33h mouse driver
+    cmp word [es:0x33*4+2],0x0300
+    jne .mouse_owner
+    mov al,0x20               ; CiukiDOS native INT 33h
+.mouse_owner:
+    call boot_log_stage
+    pop es
+    popad
+    popf
+    ret
+%endif
+%endif
+
 shell_apply_text_profile:
     push ax
     push bx
@@ -3158,30 +3375,30 @@ apm_shutdown_system:
     pop bx
     ret
 
-msg_title_bar db 'CiukiOS pre-Alpha v0.8.0', 0x0D, 0x0A, '$'
+msg_title_bar db 'CiukiOS pre-Alpha v0.8.3', 0x0D, 0x0A, '$'
 msg_banner_body db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
                 db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
-msg_help    db '+------------------------ CiukiOS command guide -------------------------+', 0x0D, 0x0A
-            db '| SYSTEM     HELP  VER  ECHO  CLS/CLEAR  REBOOT  SHUTDOWN                |', 0x0D, 0x0A
-            db '| NAVIGATION CD/CHDIR  DIR  PWD  PATH  WHERE <name>                      |', 0x0D, 0x0A
-            db '| FILES      TYPE  COPY  DEL/ERASE  REN/RENAME/MOVE                      |', 0x0D, 0x0A
-            db '| EDITOR     EDIT [file]       full-screen editor; F1 shows shortcuts    |', 0x0D, 0x0A
-            db '| DIRECTORIES MKDIR/MD  RMDIR/RD                                         |', 0x0D, 0x0A
-            db '| PROGRAMS   <name> [args] or RUN <name/path> [args]                     |', 0x0D, 0x0A
-            db '+------------------------------- Network --------------------------------+', 0x0D, 0x0A
-            db '| 1. NETSTART                start NIC + permanent ARP/ICMP service      |', 0x0D, 0x0A
-            db '| 2. IPCONFIG                show IPv4 values and resident ICMP status   |', 0x0D, 0x0A
-            db '| 3. NETCFG STATIC <ip> <mask> <gateway> <dns>                           |', 0x0D, 0x0A
-            db '|                            save; live-apply when NETSTART is active    |', 0x0D, 0x0A
-            db '| 4. NETCFG DHCP             request lease and reload resident ICMP     |', 0x0D, 0x0A
-            db '| 5. PING <host>             send ICMP echo (gateway or Internet)        |', 0x0D, 0x0A
-            db '| 6. FTP <host> / FTPSRV     FTP client / start C:\SHARE server         |', 0x0D, 0x0A
-            db '|    PKTCHK / PKTTOOL        Packet Driver diagnostics                   |', 0x0D, 0x0A
-            db '|    ICMP remains active after FTPSRV stops; TAP enables host ping       |', 0x0D, 0x0A
-            db '+------------------------------------------------------------------------+', 0x0D, 0x0A
+msg_help    db '+', HELP_RLE, 24, 0x2D, ' CiukiOS command guide ', HELP_RLE, 25, 0x2D, '+', 0x0D, 0x0A
+            db '| SYSTEM', HELP_RLE, 5, 0x20, 'HELP  VER  ECHO  CLS/CLEAR  REBOOT  SHUTDOWN', HELP_RLE, 16, 0x20, '|', 0x0D, 0x0A
+            db '| NAVIGATION CD/CHDIR  DIR  PWD  PATH  WHERE <name>', HELP_RLE, 22, 0x20, '|', 0x0D, 0x0A
+            db '| FILES', HELP_RLE, 6, 0x20, 'TYPE  COPY  DEL/ERASE  REN/RENAME/MOVE', HELP_RLE, 22, 0x20, '|', 0x0D, 0x0A
+            db '| EDITOR', HELP_RLE, 5, 0x20, 'EDIT [file]', HELP_RLE, 7, 0x20, 'full-screen editor; F1 shows shortcuts', HELP_RLE, 4, 0x20, '|', 0x0D, 0x0A
+            db '| DIRECTORIES MKDIR/MD  RMDIR/RD', HELP_RLE, 41, 0x20, '|', 0x0D, 0x0A
+            db '| PROGRAMS   <name> [args] or RUN <name/path> [args]', HELP_RLE, 21, 0x20, '|', 0x0D, 0x0A
+            db '+', HELP_RLE, 31, 0x2D, ' Network ', HELP_RLE, 32, 0x2D, '+', 0x0D, 0x0A
+            db '| 1. NETSTART', HELP_RLE, 16, 0x20, 'start NIC + permanent ARP/ICMP service', HELP_RLE, 6, 0x20, '|', 0x0D, 0x0A
+            db '| 2. IPCONFIG', HELP_RLE, 16, 0x20, 'show IPv4 values and resident ICMP status   |', 0x0D, 0x0A
+            db '| 3. NETCFG STATIC <ip> <mask> <gateway> <dns>', HELP_RLE, 27, 0x20, '|', 0x0D, 0x0A
+            db '|', HELP_RLE, 28, 0x20, 'save; live-apply when NETSTART is active', HELP_RLE, 4, 0x20, '|', 0x0D, 0x0A
+            db '| 4. NETCFG DHCP', HELP_RLE, 13, 0x20, 'request lease and reload resident ICMP', HELP_RLE, 5, 0x20, '|', 0x0D, 0x0A
+            db '| 5. PING <host>', HELP_RLE, 13, 0x20, 'send ICMP echo (gateway or Internet)', HELP_RLE, 8, 0x20, '|', 0x0D, 0x0A
+            db '| 6. FTP <host> / FTPSRV', HELP_RLE, 5, 0x20, 'FTP client / start C:\SHARE server', HELP_RLE, 9, 0x20, '|', 0x0D, 0x0A
+            db '|', HELP_RLE, 4, 0x20, 'PKTCHK / PKTTOOL', HELP_RLE, 8, 0x20, 'Packet Driver diagnostics', HELP_RLE, 19, 0x20, '|', 0x0D, 0x0A
+            db '|', HELP_RLE, 4, 0x20, 'ICMP remains active after FTPSRV stops; TAP enables host ping', HELP_RLE, 7, 0x20, '|', 0x0D, 0x0A
+            db '+', HELP_RLE, 72, 0x2D, '+', 0x0D, 0x0A
             db 'Power queue: SHUTDOWN/REBOOT <seconds|STATUS|CANCEL>. EXIT is disabled.', 0x0D, 0x0A, '$'
-msg_ver     db 'CiukiOS pre-Alpha v0.8.0', 0x0D, 0x0A, '$'
+msg_ver     db 'CiukiOS pre-Alpha v0.8.3', 0x0D, 0x0A, '$'
 msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
 msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
                   db 'use reboot or shutdown', 0x0D, 0x0A, '$'
@@ -3348,6 +3565,7 @@ file_buf times 512 db 0
 shell_output_color db 7
 %include "src/com/shell_desktop.inc"
 %include "src/com/ui_theme.inc"
+%define VC_POINTER_WORKSPACE_EXTERNAL 1
 %include "src/com/vbe_console.inc"
 %include "src/com/shell_gui.inc"
 %include "src/com/shell_drivers.inc"

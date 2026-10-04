@@ -265,12 +265,13 @@ far_regs_:
     call far [cs:fcr_target]
     pushf
     push ds
-    push ax
+    push eax
     mov ax,cs
     mov ds,ax
     mov bp,sp
-    mov bp,[bp+6]
+    mov bp,[bp+8]
     pop word [bp+0]
+    pop word [bp+22]
     mov [bp+2],bx
     mov [bp+4],cx
     mov [bp+6],dx

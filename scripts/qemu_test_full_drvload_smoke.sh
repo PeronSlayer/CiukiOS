@@ -373,6 +373,8 @@ QEMU_ARGS=(
   -serial chardev:ser0
   -monitor "unix:$MON_SOCK,server,nowait"
   "${QEMU_AUDIO_ARGS[@]}"
+  -netdev user,id=ciuknet0
+  -device ne2k_pci,netdev=ciuknet0,mac=52:54:00:12:34:56
   -no-reboot
   -no-shutdown
 )
@@ -395,8 +397,14 @@ if ! kill -0 "$QEMU_PID" >/dev/null 2>&1; then
   mark_fail "QEMU_EARLY_EXIT" "qemu exited before shell prompt"
 fi
 
-if ! wait_for_shell_prompt "$SERIAL_LOG" 0 "$PROMPT_TIMEOUT_SEC"; then
-  mark_fail "PROMPT" "shell prompt not detected"
+if ! wait_for_shell_prompt "$SERIAL_LOG" 0 3; then
+  if ! wait_for_regex_from_offset "$SERIAL_LOG" '\[DESKTOP\] READY' 0 "$PROMPT_TIMEOUT_SEC"; then
+    mark_fail "DESKTOP_READY" "neither a shell prompt nor the desktop appeared"
+  fi
+  send_key "$MON_SOCK" "$CMD_LOG" f4 || mark_fail "ENTER_DOS" "cannot send F4"
+  if ! wait_for_shell_prompt "$SERIAL_LOG" 0 25; then
+    mark_fail "PROMPT" "shell prompt not detected after F4"
+  fi
 fi
 mark_pass "PROMPT"
 

@@ -1,0 +1,55 @@
+{
+  "machine_reported_by_operator": "compaq-e500",
+  "captured_utc": "2026-10-02T07:57:26.751125+00:00",
+  "disk_serial": "TS64GMSA230S_H551120730",
+  "raw_sha256": "5135aaa2ff998cef568c77b842a84d121014fee2ffb2d0425d00e1f8cb67a2b6",
+  "status": "complete",
+  "conventional_kib": 639,
+  "ebda_segment": 40896,
+  "entries": [
+    {
+      "base": 0,
+      "length": 654336,
+      "end": 654336,
+      "type": 1,
+      "attributes": 1
+    },
+    {
+      "base": 654336,
+      "length": 1024,
+      "end": 655360,
+      "type": 2,
+      "attributes": 1
+    },
+    {
+      "base": 983040,
+      "length": 65536,
+      "end": 1048576,
+      "type": 2,
+      "attributes": 1
+    },
+    {
+      "base": 1048576,
+      "length": 267321344,
+      "end": 268369920,
+      "type": 1,
+      "attributes": 1
+    },
+    {
+      "base": 268369920,
+      "length": 14336,
+      "end": 268384256,
+      "type": 2,
+      "attributes": 1
+    },
+    {
+      "base": 268384256,
+      "length": 51200,
+      "end": 268435456,
+      "type": 4,
+      "attributes": 1
+    }
+  ],
+  "usable_above_1m_bytes": 267321344,
+  "overlapping_entries": []
+}

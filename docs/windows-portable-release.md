@@ -1,7 +1,7 @@
 # Windows portable release
 
 `bash scripts/build_full.sh` refreshes
-`build/releases/CiukiOS-0.8.0-Windows-portable.zip` after building the
+`build/releases/CiukiOS-0.8.3-Windows-portable.zip` after building the
 canonical FAT16 image. The ZIP contains `Start-CiukiOS.cmd`, `CiukiOS.img`,
 64-bit Windows QEMU, firmware, DLLs, and license notices. It can also be
 regenerated without rebuilding the image:
@@ -28,6 +28,11 @@ The first package build downloads the pinned installer (about 198 MB); later
 builds reuse it. Set `CIUKIOS_WINDOWS_PORTABLE=0` for an isolated development
 build that should skip ZIP refresh.
 
+On the supported Linux workstation, the pre-push build runs in a bounded
+systemd user scope (`MemoryMax=3G`, `MemorySwapMax=1G`, `CPUQuota=100%`). The
+Linux QEMU runner uses a separate scope (`MemoryMax=768M`, no swap,
+`CPUQuota=200%`, `TasksMax=128`). Full and full-CD builds/runs stay sequential.
+
 The ZIP is checked for integrity on Linux. Run-time testing is limited to the
 main Linux full-image profile, as requested; no Windows launch result is
 claimed. The ZIP is a generated file under `build/releases/`, so it is not
@@ -52,11 +57,15 @@ bash scripts/install_release_push_hook.sh
 ```
 
 GitHub CLI (`gh`) must be installed and authenticated with repository write
-access. The release tag includes `0.8.0`, the commit time in UTC, the Git
+access. The release tag includes `0.8.3`, the commit time in UTC, the Git
 commit count as build number, and the short commit ID. For example:
-`v0.8.0-20261001T103012Z-b829-g934830dd`. The ZIP asset carries the same
+`v0.8.3-20261004T103012Z-b829-g934830dd`. The ZIP asset carries the same
 version, timestamp and build number. The release notes state that Windows
 runtime execution was not tested.
 
 Run `python3 scripts/push_release.py --plan` to preview the next tag without
 building or publishing. Pushes to other branches do not create releases.
+
+See the [current project status](project-status-2026-10-04.md) for the 0.8.3
+feature and validation boundary. This bundle is checked on Linux for archive
+integrity; no Windows runtime launch is claimed.

@@ -7,7 +7,7 @@
 /* Services from session_devices.inc and session_video.inc (cdecl). */
 extern uint32_t CVDEV_CALL cvdev_in(uint32_t port, uint32_t size);
 extern void CVDEV_CALL cvdev_out(uint32_t port, uint32_t value, uint32_t size);
-extern int CVDEV_CALL cvdev_raise_irq(uint32_t vm, uint32_t irq);
+extern int CVDEV_CALL cvdev_raise_irq(uint32_t vm, uint32_t irq, uint32_t audio);
 /* A physical byte this model leaves in the controller belongs to another VM
  * (session_vmm.inc): its line pends there. Its IRQ may have reached a DPMI
  * host's IDT in this VM instead of the monitor, which would have routed it. */
@@ -45,6 +45,7 @@ struct cvdev_instance {
     uint32_t audio_elapsed_us;
     uint32_t vm, wants_audio;             /* its VM; it streams to the AC'97 */
     uint32_t muted_us, muted_frac;        /* time not yet played muted */
+    uint32_t pit_fraction;                /* fractional clocks, / 1000000 */
     uint16_t trap_ports[96];
 };
 
@@ -141,7 +142,8 @@ static void pump(void)
     while (guard-- && cvgp_irq_acknowledge(&I->devices, I->generation, 1, &vector)) {
         irq = vector >= 0x70 ? vector - 0x70u + 8u : vector - 0x08u;
         if (irq == 0 || irq == 2 || irq > 15) continue;  /* timer: physical */
-        if (cvdev_raise_irq(I->vm, irq)) ++I->stats.irqs_raised;
+        if (cvdev_raise_irq(I->vm, irq, irq == I->devices.sb.irq))
+            ++I->stats.irqs_raised;
         else ++I->stats.irq_failures;
         if (irq == I->devices.sb.irq) ++I->stats.sb_blocks;
     }
@@ -221,7 +223,7 @@ int cvdev_irq_filter(uint32_t irq)
  * emulated instructions make very frequent. */
 static uint32_t advance(void)
 {
-    uint32_t low, high, delta, us, pit;
+    uint32_t low, high, delta, us, pit, fraction;
     cvvid_rdtsc(&low, &high);
     delta = low - I->last_low;
     if (high - I->last_high > 1 || (high != I->last_high && low >= I->last_low))
@@ -231,7 +233,13 @@ static uint32_t advance(void)
     I->last_high = high;
     us = delta / I->tsc_per_us;
     if (us > 200000UL) us = 200000UL;
-    pit = us * 1193u + (us * 182u) / 1000u;         /* 1.193182 MHz */
+    /* 1.193182 clocks per microsecond, carrying the fractional clock.
+     * Splitting the product keeps every intermediate in 32 bits even at
+     * the 200 ms cap; multiplying us by the full PIT Hz would overflow. */
+    pit = us * 1193u;
+    fraction = (pit % 1000u) * 1000u + us * 182u + I->pit_fraction;
+    pit = pit / 1000u + fraction / 1000000u;
+    I->pit_fraction = fraction % 1000000u;
     cvgp_advance(&I->devices, I->generation, pit);
     return us;
 }
@@ -566,6 +574,7 @@ int cvdev_begin(uint32_t owner, uint32_t requested, uint32_t flags,
     I->focused = 0;
     I->a20_data_pending = I->a20_output_pending = 0;
     I->tsc_per_us = tsc_khz / 1000u;
+    I->pit_fraction = 0;
     cvvid_rdtsc(&I->last_low, &I->last_high);
     build_trap_list();
     I->active = 1;
@@ -640,12 +649,12 @@ int cvdev_key(uint32_t scan, uint32_t flags)
     return CVDEV_OK;
 }
 
-int cvdev_mouse(uint32_t dx, uint32_t dy, uint32_t buttons)
+int cvdev_mouse(uint32_t dx, uint32_t dy, uint32_t buttons, uint32_t wheel)
 {
     if (!I->active) return CVDEV_ERR_INACTIVE;
     if (!(I->caps & CVGP_CAP_MOUSE)) return CVDEV_ERR_ARGUMENT;
     cvgp_mouse_event(&I->devices, I->generation, (int)(int16_t)dx, (int)(int16_t)dy,
-                     (uint8_t)(buttons & 7));
+                     (uint8_t)(buttons & 7), (int)(int16_t)wheel);
     pump();
     return CVDEV_OK;
 }

@@ -68,6 +68,10 @@ stage1_loader_start:
     sti
 
     mov [boot_drive], dl
+%ifdef BOOT_DISK_LOG
+    mov al, 4                   ; Stage1 entered
+    call 0x0000:0x06E0
+%endif
     ; SETUP.COM patches this immediate in the raw installed Stage1 so a
     ; direct-CD D: build becomes an installed C: build without rewriting the
     ; FAT-resident CIUKIDOS image.
@@ -84,6 +88,10 @@ stage1_loader_start:
     call print_string_dual
     call validate_ciukidos
     jc stage1_loader_fatal
+%ifdef BOOT_DISK_LOG
+    mov al, 5                   ; kernel loaded and validated
+    call 0x0000:0x06E0
+%endif
     mov si, msg_loader_valid
     call print_string_dual
 
@@ -130,6 +138,10 @@ ciukidos_relocator:
 ciukidos_relocator_end:
 
 stage1_loader_fatal:
+%ifdef BOOT_DISK_LOG
+    mov al, 0xE2
+    call 0x0000:0x06E0
+%endif
     mov si, msg_loader_fatal
     call print_string_dual
 .halt:

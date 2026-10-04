@@ -158,6 +158,11 @@ vc_fb_xfer:
     cld
     movzx ecx,cx
     movzx esi,si
+    ; CVSESSION owns a protected mapping of the validated physical VRAM.
+    ; In V86 the desktop's BIOS layout is banked, but this transfer need not
+    ; remap its 64-KiB window for every bank or scanline.
+    call vc_session_xfer
+    jnc .done
     cmp byte [cs:vc_lfb],1
     jne .banked
     call vc_fb_linear
@@ -374,6 +379,9 @@ vc_fb_rows:
     pushad
     test dx,dx
     jz .done
+    call vc_session_rows
+    jnc .done
+.fallback:
 .row:
     call vc_fb_begin
     call vc_fb_xfer
@@ -409,7 +417,7 @@ vc_store_pixel:
     ret
 
 ; Software arrow for direct/indexed VBE modes, DS = CS. EDI = framebuffer
-; byte of its top-left corner, SI = 24x16 save area (24*vc_bytes per row).
+; byte of its top-left corner, FS:SI = 24x16 save area (24*vc_bytes per row).
 ; vc_pointer_draw also takes BX = 16 outline words followed by 16 fill words.
 vc_pointer_save:
     mov byte [cs:vc_fb_read],1
@@ -419,8 +427,6 @@ vc_pointer_restore:
 vc_pointer_xfer:
     pushad
     push fs
-    push ds
-    pop fs
     movzx cx,byte [cs:vc_bytes]
     imul cx,cx,24
     mov bx,cx
@@ -430,29 +436,34 @@ vc_pointer_xfer:
     popad
     ret
 
-; Composes each row from the save area in memory and writes it once.
+; Compose the whole arrow in RAM, then submit its rows in one transfer.
+; A cursor update must not pay sixteen monitor entries/bank operations.
 vc_pointer_draw:
     pushad
     push es
     push fs
-    push ds
-    pop fs
     cld
-    call vc_fb_begin
-    push ds                   ; a burst leaves ES undefined
-    pop es
-    mov bp,16
-.row:
     push edi
+%ifdef VC_POINTER_WORKSPACE_EXTERNAL
+    push fs
+%else
+    push ds
+%endif
+    pop es
     movzx cx,byte [cs:vc_bytes]
     imul cx,cx,24
-    push cx
+    shl cx,4
     mov di,vc_pointer_row
+    push ds
+    push fs
+    pop ds
     rep movsb
-    push si
+    pop ds
+    mov di,vc_pointer_row
+    mov bp,16
+.row:
     mov si,[bx]
     mov dx,[bx+32]
-    mov di,vc_pointer_row
     mov cx,16
 .pixel:
     shl si,1
@@ -470,19 +481,23 @@ vc_pointer_draw:
     call vc_store_pixel
 .next:
     loop .pixel
-    pop si
-    pop cx
-    pop edi
-    push si
-    mov si,vc_pointer_row
-    call vc_fb_put
-    pop si
-    movzx eax,word [cs:vc_pitch]
-    add edi,eax
+    movzx ax,byte [cs:vc_bytes]
+    shl ax,3                  ; eight transparent pixels at the row's end
+    add di,ax
     add bx,2
     dec bp
     jnz .row
-    call vc_fb_end
+    pop edi
+%ifndef VC_POINTER_WORKSPACE_EXTERNAL
+    push ds
+    pop fs
+%endif
+    mov si,vc_pointer_row
+    movzx cx,byte [cs:vc_bytes]
+    imul cx,cx,24
+    mov bx,cx
+    mov dx,16
+    call vc_fb_put_rows
     pop fs
     pop es
     popad
@@ -611,4 +626,8 @@ vc_fb_depth db 0
 vc_fb_read db 0
 vc_fb_flags dw 0
 vc_fb_es dw 0
-vc_pointer_row times 24*4 db 0
+%ifndef VC_POINTER_WORKSPACE_EXTERNAL
+vc_pointer_row times 24*16*4 db 0
+%endif
+
+%include "src/com/vbe_session_fb.inc"

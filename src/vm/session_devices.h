@@ -88,7 +88,8 @@ uint32_t CVDEV_CALL cvdev_wants_audio(void);
 extern uint32_t cvdev_release_request;
 int      CVDEV_CALL cvdev_key(uint32_t scan, uint32_t flags);
 /* Relative PS/2 movement (signed 16-bit) and buttons from the host. */
-int      CVDEV_CALL cvdev_mouse(uint32_t dx, uint32_t dy, uint32_t buttons);
+int      CVDEV_CALL cvdev_mouse(uint32_t dx, uint32_t dy, uint32_t buttons,
+                               uint32_t wheel);
 /* Port handlers. Return 1 when the port belongs to this session. */
 int      CVDEV_CALL cvdev_port_claimed(uint32_t port);
 uint32_t CVDEV_CALL cvdev_port_read(uint32_t port, uint32_t width);

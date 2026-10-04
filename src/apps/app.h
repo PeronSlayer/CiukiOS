@@ -16,9 +16,12 @@
 #define EV_KEY     3   /* a = BIOS key (AH scan, AL char)            */
 #define EV_ACTION  4   /* a = control id 0..49                        */
 #define EV_MOUSE   5   /* a = kind, b = x, c = y in the client area   */
-#define EV_POLL    6   /* return 1 repaint, 2 busy (no HLT)           */
+#define EV_POLL    6   /* 1 whole-window repaint, 2 busy, 3 queued damage only */
 #define EV_CLOSE   7   /* return 1 to keep the window open            */
 #define EV_SUSPEND 8   /* save state in APP_ARG; return 1 to stay     */
+#define EV_PAINT_TOPBAR 9 /* desktop indicators only, for VGA repaint */
+#define EV_WHEEL   11  /* a: signed steps (down positive), b/c: client coordinates */
+#define EV_TOPBAR  10  /* desktop: a = 1 the CiukiOS menu, 2 the volume  */
 
 #define MOUSE_DOWN  1
 #define MOUSE_MOVE  2
@@ -31,6 +34,7 @@
 /* Window ids of the desktop (shell_gui_windows.inc). */
 #define WIN_PROGRAMS 0
 #define WIN_RUN      1
+#define WIN_ABOUT    2
 #define WIN_FILES    8
 #define WIN_TASKS    9
 #define WIN_DOS      11
@@ -40,6 +44,7 @@
 #define WIN_RECYCLE  15
 #define WIN_PAINT    16
 #define WIN_BROWSER  17
+#define WIN_DISPLAY  18
 #define WIN_DESKTOP  0xFE   /* the desktop module's surface      */
 #define WIN_OVERLAY  0xFD   /* its menus, above every window     */
 
@@ -104,12 +109,14 @@ void ui_icon(int x, int y, int icon);                   /* 32x32 */
 int  ui_measure(const char *s);
 void ui_repaint(void);
 void ui_repaint_win(int window);                        /* another window */
+int app_helper(const char *command);                    /* trusted console utility, keep graphics */
 void app_command(const char *command);                  /* run a program */
 void app_open(int window, const char *arg);             /* open a module */
 void app_close(void);
 void app_sound(int event);                              /* 4 notice, 5 error */
 int  app_windows(char *buffer);                         /* 25 bytes each */
-void app_window_cmd(int window, int command);           /* 1 raise 2 close 3 min */
+void app_window_cmd(int window, int command);           /* 1 raise 2 close 3 min
+                                                           4 max/restore 5 hide */
 int  app_idle(void);                                    /* idle % last second */
 /* Windows of their own: x, y (-1: centred), size with the frame, title kept
  * in the module's memory, style WS_*. Returns the window id, 0 if none. */
@@ -131,6 +138,8 @@ void ui_palette(const unsigned char *colors48);                  /* show 16 colo
  * active. The VM presenter writes directly into this owned band. */
 int app_band_info(void *out19);
 int app_desktop_focus(void);
+/* Display module only: queue mode, or mode=0 query after deferred switch. */
+int app_display_mode(unsigned mode);
 
 #define ICON_COMPUTER 0
 #define ICON_FOLDER   1
@@ -197,7 +206,7 @@ void fmt_time(char *d, u16 ftime);                      /* HH:MM */
 /* Registers for intr (a software interrupt) and far_regs (a far call, as
  * CVSESSION's entry): in and out; cxh/dxh are the high words of ECX/EDX
  * after far_regs. Both return the carry flag. */
-struct regs { u16 ax, bx, cx, dx, si, di, ds, es, flags, cxh, dxh; };
+struct regs { u16 ax, bx, cx, dx, si, di, ds, es, flags, cxh, dxh, axh; };
 int intr(int n, struct regs *r);
 int far_regs(u16 seg, u16 off, struct regs *r);
 

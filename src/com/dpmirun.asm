@@ -530,6 +530,21 @@ vm_font:
 ; EAX = TSC kHz from a firmware wait, with BIOS-tick fallback (0 if neither
 ; measurement is plausible). Virtual BIOS ticks can arrive in bursts in a VM.
 vm_measure_tsc:
+    ; CVSESSION calibrated the TSC in ring 0 against the PIT when it loaded.
+    ; This VM's own wait is unreliable: other VMs run while it halts.
+    mov ax,VM_OP_TSC_KHZ
+    xor ecx,ecx
+    call far [entry]
+    push cs
+    pop ds
+    jc .own
+    cmp ecx,1000
+    jb .own
+    cmp ecx,20000000
+    ja .own
+    mov eax,ecx
+    ret
+.own:
     push es
     ; INT 15h/86h waits against the firmware timer. Virtual BIOS ticks can
     ; arrive in bursts while this VM is scheduled, overstating the TSC rate.

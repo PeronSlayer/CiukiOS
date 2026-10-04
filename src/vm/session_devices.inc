@@ -35,7 +35,8 @@ externdef c cvdev_note_bridge:near
 
 externdef c cvdev_port_claimed:near
 externdef c cvvid_note_device_irqs:near
-externdef c cvvid_pm_attached:near
+externdef c cvvid_note_device_irqs_instance:near
+externdef c cvvid_pm_attached_instance:near
 
 .data
 dev_block dd 0
@@ -127,49 +128,76 @@ dev_pm_publish proc
  ret
 dev_pm_publish endp
 
-; Raise virtual IRQ IRQ of the session in VM VM: in Jemm's profile PIC (or
-; pending in that VM's saved PIC), or held for the protected-mode client of
-; the running session (DEV_PM_IRQ). Returns 1 on success.
-cvdev_raise_irq proc c public vm:dword, irq:dword
- push ecx
- push edx
- mov ecx,irq
+; Raise an IRQ for VM in its own protected-mode pending set, even when another
+; VM runs or a different device instance owns the AC'97 polling context.
+; The current/borrowed VM has live dev_pm_* globals; other VMs have the same
+; fields in VMREC.ctx. The target video instance is queried directly instead
+; of using the caller's currently selected video instance.
+cvdev_raise_irq proc c public vm:dword, irq:dword, audio:dword
+ push esi
+ push edi
+ push ebx
  mov eax,vm
- cmp eax,vmm_current                    ; the held lines are this session's
- jne raise_v86
- cmp dev_pm_claimed,0
+ cmp eax,VMM_MAX
+ jae raise_failed
+ call vmm_record
+ mov ebx,[esi].VMREC.vid_inst
+ mov edi,offset dev_pm_claimed
+ mov eax,vmm_borrowed
+ cmp eax,-1
+ jne raise_selected
+ mov eax,vmm_current
+raise_selected:
+ cmp eax,vm
+ je raise_state_ready
+ lea edi,[esi].VMREC.ctx+VMM_CTX_PM_OFFSET
+raise_state_ready:
+ cmp dword ptr [edi],0
  je raise_v86
- ; The client that claimed the IRQs has exited (the window's DPMI host stays
- ; resident for the next one): device IRQs go back to the V86 programs.
- push ecx
- push edx
- call cvvid_pm_attached
- pop edx
- pop ecx
+ ; HDPMI maps the target VM's shared header until its PM client detaches.
+ push ebx
+ call cvvid_pm_attached_instance
+ add esp,4
  test eax,eax
  jnz raise_held
- call dev_pm_release
+ mov dword ptr [edi],0
+ mov dword ptr [edi+4],0
+ push 0
+ push ebx
+ call cvvid_note_device_irqs_instance
+ add esp,8
  jmp raise_v86
 raise_held:
+ mov ecx,irq
  cmp ecx,16
  jae raise_v86
- bts dev_pm_pending,ecx
- call dev_pm_publish
- pop edx
- pop ecx
- mov eax,1
- ret
-raise_v86:
- ; Into the session VM's virtual PIC, pending there if another VM runs.
+ bts dword ptr [edi+4],ecx
+ push dword ptr [edi+4]
+ push ebx
+ call cvvid_note_device_irqs_instance
+ add esp,8
+ cmp audio,0
+ je raise_success
  mov eax,vm
+ cmp eax,vmm_current
+ je raise_success
+ mov vmm_audio_urgent,eax
+raise_success:
+ mov eax,1
+ jmp raise_done
+raise_v86:
+ mov eax,vm
+ mov ecx,irq
  call vmm_pend
- pop edx
- pop ecx
  jc raise_failed
  mov eax,1
- ret
+ jmp raise_done
 raise_failed:
  xor eax,eax
+raise_done:
+ pop ebx
+ pop edi
+ pop esi
  ret
 cvdev_raise_irq endp
 
@@ -623,6 +651,10 @@ pages_ready:
  mov [dev_args+8],eax
  mov eax,[ebp].Client_Reg_Struc.Client_EDX
  mov [dev_args+12],eax
+ test eax,eax
+ jz tsc_unknown
+ mov vmm_tsc_khz,eax                    ; for the VM manager's short waits
+tsc_unknown:
  xor eax,eax
  cmp dev_block,0
  je pass_pages
@@ -748,6 +780,7 @@ dev_pm_irq proc
  xor eax,eax
  ret
 pm_accept:
+ call clock_poll
  call dev_poll_now
  mov dword ptr [ebp].Client_Reg_Struc.Client_EBX,-1
  xor esi,esi
@@ -810,8 +843,10 @@ op_mouse:
  mov [dev_args+4],eax
  movzx eax,byte ptr [ebp].Client_Reg_Struc.Client_EDX
  mov [dev_args+8],eax
+ movzx eax,word ptr [ebp].Client_Reg_Struc.Client_ESI
+ mov [dev_args+12],eax
  mov eax,offset cvdev_mouse
- mov ecx,3
+ mov ecx,4
  call dev_call
  test eax,eax
  jz mouse_done
@@ -873,6 +908,13 @@ op_io_any:
  ; Its client now owns delivery of the device IRQs (DEV_PM_IRQ).
  mov dev_pm_claimed,1
  movzx ebx,word ptr [ebp].Client_Reg_Struc.Client_EBX
+ cmp clock_enabled,0
+ je io_no_pit
+ cmp ebx,40h
+ je io_pit
+ cmp ebx,43h
+ je io_pit
+io_no_pit:
  cmp ebx,20h
  je io_pic
  cmp ebx,21h
@@ -884,6 +926,17 @@ op_io_any:
  cmp dev_active,0
  jne op_io
  jmp io_physical
+io_pit:
+ mov edx,ebx
+ xor ecx,ecx
+ test byte ptr [ebp].Client_Reg_Struc.Client_ECX+1,1
+ jz io_pit_call
+ mov ecx,OUTPUT
+io_pit_call:
+ mov eax,[ebp].Client_Reg_Struc.Client_EDX
+ call clock_port
+ mov [ebp].Client_Reg_Struc.Client_EDX,eax
+ jmp io_done
 io_pic:
  cmp byte ptr [ebp].Client_Reg_Struc.Client_ECX,1
  jne io_physical
@@ -900,6 +953,7 @@ io_pic_call:
  jnz io_done
  mov [ebp].Client_Reg_Struc.Client_EDX,edx
 io_done:
+ call clock_poll
  ; Report the held lines so the adapter knows when to ask for delivery.
  call dev_poll_now
  mov eax,dev_pm_pending

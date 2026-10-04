@@ -138,7 +138,7 @@ static void test_mouse(cvgp_state &s, uint32_t owner)
     CHECK(cvgp_set_focus(&s, owner, 1) == CVGP_OK);
     /* A forked DOS VM can inherit an already-initialized INT 33h driver;
      * the model must accept its explicit desktop event before F4 replay. */
-    CHECK(cvgp_mouse_event(&s, owner, 3, -2, 0) == CVGP_OK);
+    CHECK(cvgp_mouse_event(&s, owner, 3, -2, 0, 0) == CVGP_OK);
     bytes = drain_kbc(s, owner);
     CHECK(bytes.size() == 3 && bytes[1] == 3 &&
           bytes[2] == static_cast<uint8_t>(-2));
@@ -146,7 +146,7 @@ static void test_mouse(cvgp_state &s, uint32_t owner)
     outb(s, owner, 0x60, 0xf4);
     bytes = drain_kbc(s, owner);
     CHECK(bytes.size() == 1 && bytes[0] == 0xfa);
-    CHECK(cvgp_mouse_event(&s, owner, 17, -9, 3) == CVGP_OK);
+    CHECK(cvgp_mouse_event(&s, owner, 17, -9, 3, 0) == CVGP_OK);
     CHECK(cvgp_irq_acknowledge(&s, owner, 1, &vector) && vector == 0x74);
     eoi(s, owner, 12);
     CHECK(inb(s, owner, 0x64) & 0x20);
@@ -157,6 +157,36 @@ static void test_mouse(cvgp_state &s, uint32_t owner)
     CHECK(cvgp_set_focus(&s, owner, 0) == CVGP_OK);
     bytes = drain_kbc(s, owner);
     CHECK(bytes.size() == 3 && (bytes[0] & 7) == 0);
+
+    /* IntelliMouse negotiates with sample rates 200, 100, 80 and reports ID 3. */
+    CHECK(cvgp_set_focus(&s, owner, 1) == CVGP_OK);
+    const uint8_t rates[] = {200, 100, 80};
+    for (unsigned i = 0; i < 3; ++i) {
+        outb(s, owner, 0x64, 0xd4); outb(s, owner, 0x60, 0xf3);
+        bytes = drain_kbc(s, owner); CHECK(bytes.size() == 1 && bytes[0] == 0xfa);
+        outb(s, owner, 0x60, rates[i]);
+        bytes = drain_kbc(s, owner); CHECK(bytes.size() == 1 && bytes[0] == 0xfa);
+    }
+    outb(s, owner, 0x64, 0xd4); outb(s, owner, 0x60, 0xf2);
+    bytes = drain_kbc(s, owner);
+    CHECK(bytes.size() == 2 && bytes[0] == 0xfa && bytes[1] == 3);
+    CHECK(cvgp_mouse_event(&s, owner, 0, 0, 4, -2) == CVGP_OK);
+    bytes = drain_kbc(s, owner);
+    CHECK(bytes.size() == 4 && (bytes[0] & 7) == 4 && bytes[3] == 0xfe);
+
+    /* Failed capacity preflight cannot leave a partial packet in the queue. */
+    s.kbc_count = CVGP_KBC_QUEUE_BYTES - 2;
+    CHECK(cvgp_mouse_event(&s, owner, 1, 1, 4, 1) == CVGP_ERR_QUEUE_FULL);
+    CHECK(s.kbc_count == CVGP_KBC_QUEUE_BYTES - 2);
+    s.kbc_count = 0;
+    s.kbc_read = s.kbc_write = 0;
+
+    outb(s, owner, 0x64, 0xd4); outb(s, owner, 0x60, 0xf6);
+    bytes = drain_kbc(s, owner);
+    CHECK(bytes.size() == 1 && bytes[0] == 0xfa && s.mouse_id == 0);
+    CHECK(cvgp_mouse_event(&s, owner, 2, -1, 4, 1) == CVGP_OK);
+    bytes = drain_kbc(s, owner);
+    CHECK(bytes.size() == 3 && bytes[1] == 2 && bytes[2] == 0xff);
 }
 
 static void test_pic_pit(cvgp_state &s, uint32_t owner)
@@ -182,9 +212,167 @@ static void test_pic_pit(cvgp_state &s, uint32_t owner)
     CHECK(cvgp_irq_acknowledge(&s, owner, 1, &vector) && vector == 8);
     eoi(s, owner, 0);
 
-    outb(s, owner, 0x43, 0x38);       /* explicit unsupported mode 4 */
+    CHECK(cvgp_io_write(&s, owner, 0x43, 1, 0, 0x38) == CVGP_IO_REJECTED); /* unsupported mode 4 */
     CHECK(s.last_error == CVGP_ERR_UNSUPPORTED_PIT);
     CHECK(std::strstr(cvgp_error_message(s.last_error), "timer") != 0);
+}
+
+static uint32_t pit_irq0_pending(cvgp_state &s, uint32_t owner)
+{
+    uint32_t count = 0;
+    CHECK(cvgp_pit_irq0_pending(&s, owner, &count) == CVGP_OK);
+    return count;
+}
+
+static void program_pit0(cvgp_state &s, uint32_t owner, uint8_t control,
+                         uint16_t reload)
+{
+    outb(s, owner, 0x43, control);
+    outb(s, owner, 0x40, static_cast<uint8_t>(reload));
+    outb(s, owner, 0x40, static_cast<uint8_t>(reload >> 8));
+}
+
+static void test_pit_expiry_debt(void)
+{
+    cvgp_state s;
+    const uint32_t owner = 0x50495431UL;
+    uint32_t pending = 0;
+    cvgp_init(&s);
+    CHECK(cvgp_begin(&s, owner, CVGP_CAP_PIC_PIT, CVGP_CAP_PIC_PIT, 0) == CVGP_OK);
+    CHECK(cvgp_pit_irq0_pending(&s, owner, &pending) == CVGP_OK && pending == 0);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 0); /* empty queue */
+
+    /* Mode 0 expires once even when the host advance spans more clocks. */
+    program_pit0(s, owner, 0x30, 1000);
+    cvgp_advance(&s, owner, 999);
+    CHECK(pit_irq0_pending(s, owner) == 0);
+    cvgp_advance(&s, owner, 10001);
+    CHECK(pit_irq0_pending(s, owner) == 1);
+    CHECK(s.pit[0].running == 0 && s.pit[0].remaining == 0);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 1);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 0);
+
+    /* Mode 2 counts each period crossed and keeps the exact residual phase. */
+    program_pit0(s, owner, 0x34, 1000);
+    cvgp_advance(&s, owner, 3500);
+    CHECK(pit_irq0_pending(s, owner) == 3);
+    CHECK(s.pit[0].remaining == 500);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 1);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 1);
+    CHECK(pit_irq0_pending(s, owner) == 1);
+
+    /* Reprogramming the counter does not withdraw already matured IRQs. */
+    program_pit0(s, owner, 0x36, 7);
+    CHECK(pit_irq0_pending(s, owner) == 1);
+    cvgp_advance(&s, owner, 7);
+    CHECK(pit_irq0_pending(s, owner) == 2);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 1);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 1);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 0);
+
+    /* Mode 3 shares periodic terminal-count accounting and residual phase. */
+    program_pit0(s, owner, 0x36, 10);
+    cvgp_advance(&s, owner, 25);
+    CHECK(pit_irq0_pending(s, owner) == 2);
+    CHECK(s.pit[0].remaining == 5);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 1);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 1);
+    CHECK(pit_irq0_pending(s, owner) == 0);
+
+    /* A maximum 32-bit elapsed-clock batch is O(1), exact, and saturating. */
+    program_pit0(s, owner, 0x34, 1);
+    cvgp_advance(&s, owner, 0xffffffffUL);
+    CHECK(pit_irq0_pending(s, owner) == 0xffffffffUL);
+    cvgp_advance(&s, owner, 1);
+    CHECK(pit_irq0_pending(s, owner) == 0xffffffffUL);
+    CHECK(cvgp_pit_irq0_consume(&s, owner) == 1);
+    CHECK(pit_irq0_pending(s, owner) == 0xfffffffeUL);
+
+    CHECK(cvgp_pit_irq0_pending(&s, owner + 1, &pending) == CVGP_ERR_OWNER);
+    CHECK(cvgp_pit_irq0_consume(&s, owner + 1) == CVGP_ERR_OWNER);
+    CHECK(cvgp_pit_irq0_pending(&s, owner, 0) == CVGP_ERR_ARGUMENT);
+    CHECK(cvgp_end(&s, owner) == CVGP_OK);
+}
+
+static void test_pit_readback(void)
+{
+    cvgp_state s;
+    cvgp_state interleaved;
+    const uint32_t owner = 0x50495432UL;
+    cvgp_init(&s);
+    CHECK(cvgp_begin(&s, owner, CVGP_CAP_PIC_PIT, CVGP_CAP_PIC_PIT, 0) == CVGP_OK);
+
+    program_pit0(s, owner, 0x34, 1000);
+    cvgp_advance(&s, owner, 123);
+    outb(s, owner, 0x43, 0xc2);       /* read-back count + status, channel 0 */
+    cvgp_advance(&s, owner, 10);
+    outb(s, owner, 0x43, 0xc2);       /* unread latches must not be overwritten */
+    CHECK(inb(s, owner, 0x40) == 0xb4); /* status is returned before count */
+    CHECK(inb(s, owner, 0x40) == 0x6d); /* captured 877, not live 867 */
+    CHECK(inb(s, owner, 0x40) == 0x03);
+    CHECK(inb(s, owner, 0x40) == 0x63); /* live count resumes after latch read */
+    CHECK(inb(s, owner, 0x40) == 0x03);
+
+    /* Null Count remains set until both bytes of a word count arrive. */
+    outb(s, owner, 0x43, 0x34);
+    outb(s, owner, 0x43, 0xe2);       /* status-only read-back */
+    CHECK(inb(s, owner, 0x40) == 0xf4); /* OUT=1, NULL=1, RW=3, mode=2 */
+    outb(s, owner, 0x40, 0xe8);
+    outb(s, owner, 0x43, 0xe2);
+    CHECK(inb(s, owner, 0x40) == 0xf4);
+    outb(s, owner, 0x40, 0x03);
+    outb(s, owner, 0x43, 0xe2);
+    CHECK(inb(s, owner, 0x40) == 0xb4); /* count load clears NULL */
+
+    /* Read-back can select counters 0, 1 and 2 together. */
+    outb(s, owner, 0x43, 0x74);       /* channel 1, mode 2 */
+    outb(s, owner, 0x41, 20);
+    outb(s, owner, 0x41, 0);
+    outb(s, owner, 0x43, 0xb6);       /* channel 2, mode 3 */
+    outb(s, owner, 0x42, 10);
+    outb(s, owner, 0x42, 0);
+    cvgp_advance(&s, owner, 3);
+    outb(s, owner, 0x43, 0xce);       /* count + status, all counters */
+    CHECK(inb(s, owner, 0x40) == 0xb4);
+    CHECK(inb(s, owner, 0x40) == 0xe5); /* channel 0 elapsed three clocks */
+    CHECK(inb(s, owner, 0x40) == 0x03);
+    CHECK(inb(s, owner, 0x41) == 0xb4);
+    CHECK(inb(s, owner, 0x41) == 17);
+    CHECK(inb(s, owner, 0x41) == 0);
+    CHECK(inb(s, owner, 0x42) == 0xb6);
+    CHECK(inb(s, owner, 0x42) == 4);  /* mode 3: N - (2 * elapsed mod N) */
+    CHECK(inb(s, owner, 0x42) == 0);
+
+    /* Mode 3 status reflects its low half-cycle; its count follows QEMU's
+     * documented formula (including QEMU's odd-reload approximation). */
+    program_pit0(s, owner, 0x36, 10);
+    cvgp_advance(&s, owner, 1);
+    outb(s, owner, 0x43, 0x00);       /* counter-latch command, channel 0 */
+    CHECK(inb(s, owner, 0x40) == 8);
+    CHECK(inb(s, owner, 0x40) == 0);
+    cvgp_advance(&s, owner, 4);
+    outb(s, owner, 0x43, 0xe2);
+    CHECK(inb(s, owner, 0x40) == 0x36); /* OUT=0, NULL=0, RW=3, mode=3 */
+
+    CHECK(cvgp_end(&s, owner) == CVGP_OK);
+
+    /* The count-read latch and partial count-write latch are independent.
+     * Loading the new count must also leave the earlier read snapshot intact. */
+    {
+        const uint32_t interleaved_owner = 0x50495433UL;
+        cvgp_init(&interleaved);
+        CHECK(cvgp_begin(&interleaved, interleaved_owner,
+                         CVGP_CAP_PIC_PIT, CVGP_CAP_PIC_PIT, 0) == CVGP_OK);
+        outb(interleaved, interleaved_owner, 0x43, 0x34); /* mode 2, word */
+        outb(interleaved, interleaved_owner, 0x40, 0x34); /* partial write */
+        outb(interleaved, interleaved_owner, 0x43, 0x00); /* latch old count */
+        outb(interleaved, interleaved_owner, 0x40, 0x12); /* finish new count */
+        CHECK(inb(interleaved, interleaved_owner, 0x40) == 0x00);
+        CHECK(inb(interleaved, interleaved_owner, 0x40) == 0x00);
+        CHECK(inb(interleaved, interleaved_owner, 0x40) == 0x34);
+        CHECK(inb(interleaved, interleaved_owner, 0x40) == 0x12);
+        CHECK(cvgp_end(&interleaved, interleaved_owner) == CVGP_OK);
+    }
 }
 
 static void program_dma1(cvgp_state &s, uint32_t owner, uint32_t address,
@@ -231,9 +419,9 @@ static void test_sb_dma(cvgp_state &s, uint32_t owner, fixture &f,
     eoi(s, owner, 7);
     dsp(s, owner, 0xf3);              /* 16-bit interrupt request */
     CHECK(inb(s, owner, 0x225) == 2);
-    CHECK(cvgp_irq_acknowledge(&s, owner, 1, &vector) && vector == 0x0f);
-    inb(s, owner, 0x22f);
+    inb(s, owner, 0x22f);             /* DSP line drops; PIC keeps edge */
     CHECK(inb(s, owner, 0x225) == 0);
+    CHECK(cvgp_irq_acknowledge(&s, owner, 1, &vector) && vector == 0x0f);
     eoi(s, owner, 7);
     {                                 /* a stopped DSP outputs silence */
         std::vector<int16_t> after(64 * 2, 1);
@@ -328,6 +516,8 @@ int main(int argc, char **argv)
     test_keyboard_focus(state, owner);
     test_mouse(state, owner);
     test_pic_pit(state, owner);
+    test_pit_expiry_debt();
+    test_pit_readback();
     test_sb_dma(state, owner, f, sb_capture);
     test_opl(state, owner, opl_capture);
 
@@ -352,6 +542,6 @@ int main(int argc, char **argv)
     write_pcm(argv[1], sb_capture);
     write_pcm(argv[2], opl_capture);
     cvgp_dbopl_destroy(f.opl);
-    std::printf("guest peripherals: %u assertions; ownership, focus release, PS/2, PIC/PIT, DMA/SB and DBOPL passed\n", checks);
+    std::printf("guest peripherals: %u assertions; ownership, focus release, PS/2, PIC/PIT expiry and read-back, DMA/SB and DBOPL passed\n", checks);
     return 0;
 }

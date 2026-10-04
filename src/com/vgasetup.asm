@@ -252,6 +252,17 @@ windows_profile_command:
 desktop_profile_command:
     call skip_token
     call skip_spaces
+    cmp byte [si],'M'
+    jne .named
+    call vc_profile_mode
+    jc .invalid
+    cmp byte [si+4],0
+    jne .invalid
+    mov [vc_mode],ax
+    mov eax,[si]
+    mov [global_profile],eax
+    jmp .preview
+.named:
     xor bp,bp
 .find:
     mov bx,bp
@@ -262,6 +273,7 @@ desktop_profile_command:
     inc bp
     cmp bp,7
     jb .find
+.invalid:
     mov dx,msg_desktop_usage
     call print
     mov ax,0x4C02
@@ -1506,7 +1518,7 @@ setup_tail_text db ' \WINDOWS'
 setup_tail_end:
 empty_tail      db 0
 
-msg_header db 'CiukiOS VGA setup 0.8.0', 13, 10, '$'
+msg_header db 'CiukiOS VGA setup 0.8.3', 13, 10, '$'
 msg_safe_status db 'Safe status: no BIOS VBE or embedded-controller probe executed', 13, 10, '$'
 msg_vbe db 'VBE BIOS version 0x', '$'
 msg_memory db ', video memory ', '$'

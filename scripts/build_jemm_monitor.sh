@@ -15,7 +15,7 @@ import tarfile
 import tempfile
 
 root = Path(sys.argv[1])
-ap = argparse.ArgumentParser(description='Build pinned JEMM386 and JLOAD; no runtime installation.')
+ap = argparse.ArgumentParser(description='Build pinned JEMM386, JEMMEX and JLOAD; no runtime installation.')
 ap.add_argument('--output', type=Path, default=root/'build/external/jemm-monitor')
 ap.add_argument('--jobs', type=int, default=2)
 ap.add_argument('--offline', action='store_true', help='Require the verified tool archives in OUTPUT/downloads')
@@ -141,6 +141,12 @@ if args.ciukios_vm_scheduler:
     # Manager) instead of Jemm's own soft reboot.
     cad_patch = root/'patches/jemm-ciukios-ctrl-alt-del.patch'
     run(['patch', '--batch', '--forward', '-p1', '-i', str(cad_patch)], jemm)
+    umb_patch = root/'patches/jemm-ciukios-umb-release.patch'
+    (jemm/'src/UMB.ASM').write_text((jemm/'src/UMB.ASM').read_text())
+    run(['patch', '--batch', '--forward', '-p1', '-i', str(umb_patch)], jemm)
+    # An idle V86 context (HLT) gives the CPU to another ready VM at once.
+    hlt_patch = root/'patches/jemm-ciukios-hlt-yield.patch'
+    run(['patch', '--batch', '--forward', '-p1', '-i', str(hlt_patch)], jemm)
     adaptations.append({'name':'ciukios-ctrl-alt-del', 'patch_sha256':digest(cad_patch),
                         'scope':'INT 15h AX=4F53h is reflected to V86 like any key; the BIOS resets when no intercept takes it'})
     included_adaptation_files.append(cad_patch)
@@ -149,6 +155,14 @@ if args.ciukios_vm_scheduler:
                         'line_endings':'LF in the seven patched scheduler/profile integration units; CVIRQ.INC is a new LF include',
                         'scope':'One exact-owned IRQ0 callback before V86 IRQ reflection; no additional VM context'})
     included_adaptation_files.append(scheduler_patch)
+    adaptations.append({'name':'ciukios-umb-release',
+                        'patch_sha256':digest(umb_patch),
+                        'scope':'Atomic XMS UMB claim and exact release from CVSESSION VM ownership; Jemm UMB table remains authoritative'})
+    included_adaptation_files.append(umb_patch)
+    adaptations.append({'name':'ciukios-hlt-yield',
+                        'patch_sha256':digest(hlt_patch),
+                        'scope':'Profile function 11: the owner may switch V86 contexts at a V86 HLT instead of halting the CPU'})
+    included_adaptation_files.append(hlt_patch)
 if args.ciukios_v86_interrupts:
     adaptations.append({'name':'ciukios-v86-interrupts',
                         'negotiated':'Host_Scheduler_Profile service, version 1.0',
@@ -162,9 +176,11 @@ for directory in (jemm/'Include', jemm/'src', jemm/'Tools/JLOAD'):
 
 # The upstream explicit EXE target needs its output directory pre-created.
 (jemm/'build/JEMM386').mkdir(parents=True)
+(jemm/'build/JEMMEX').mkdir(parents=True)
 profile_options = (['AOPT=-c -nologo -IInclude -DCIUKIOS_V86_INTERRUPTS=1']
                    if args.ciukios_v86_interrupts else [])
 run(['make','-f','Linux.mak','DEBUG=0',*profile_options,'build/JEMM386/JEMM386.EXE'], jemm)
+run(['make','-f','Linux.mak','DEBUG=0',*profile_options,'build/JEMMEX/JEMMEX.EXE'], jemm)
 (jemm/'Tools/JLOAD/RELEASE').mkdir()
 run(['make','-f','Linux.mak','DEBUG=0','RELEASE/JLOAD32.bin'], jemm/'Tools/JLOAD')
 # The unmodified JLOAD.ASM incbins JLoad32.bin, while Linux.mak creates
@@ -172,6 +188,7 @@ run(['make','-f','Linux.mak','DEBUG=0','RELEASE/JLOAD32.bin'], jemm/'Tools/JLOAD
 (jemm/'Tools/JLOAD/RELEASE/JLoad32.bin').symlink_to('JLOAD32.bin')
 run(['make','-f','Linux.mak','DEBUG=0'], jemm/'Tools/JLOAD')
 payloads = {'JEMM386.EXE': jemm/'build/JEMM386/JEMM386.EXE',
+            'JEMMEX.EXE': jemm/'build/JEMMEX/JEMMEX.EXE',
             'JLOAD.EXE': jemm/'Tools/JLOAD/RELEASE/JLOAD.EXE'}
 for name, path in payloads.items():
     if path.read_bytes()[:2] != b'MZ':

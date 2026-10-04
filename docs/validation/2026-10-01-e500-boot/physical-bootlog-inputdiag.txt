@@ -1,0 +1,56 @@
+boot     1  slot 1  BIOS drive 0x80  stage 0x05: CiukiDOS loaded and validated
+
+SYSTEM/BOOT.LOG:
+S00  SHELL.COM entered
+S01  display services returned
+S02  input and startup drivers returned
+S03  HARD startup choice returned
+S04  long-name startup returned
+S05  VM startup returned
+S06  entering desktop
+S07  desktop assets loaded
+S08  desktop settings loaded
+S09  sound startup returned
+S0A  UI icons loaded
+S16  INT 33h mouse reset succeeded
+S0B  mouse reset returned
+S0C  video profile resolved
+S0D  VGA mode switch about to run
+S0E  video initialization returned
+S0F  applications and windows resumed
+S10  first desktop frame painted
+S1C  master PIC IRQ1 unmasked
+S1E  slave PIC IRQ12 unmasked
+S20  CiukiDOS owns INT 33h
+S13  first UI input poll about to run
+S14  first UI input poll returned
+S15  first idle HLT about to run
+S18  first idle HLT woke on an interrupt
+S12  first mouse motion read
+S11  first keyboard event read
+S07  desktop assets loaded
+S08  desktop settings loaded
+S09  sound startup returned
+S0A  UI icons loaded
+S16  INT 33h mouse reset succeeded
+S0B  mouse reset returned
+S0C  video profile resolved
+S0E  video initialization returned
+S0F  applications and windows resumed
+S10  first desktop frame painted
+S1C  master PIC IRQ1 unmasked
+S1E  slave PIC IRQ12 unmasked
+S20  CiukiDOS owns INT 33h
+S07  desktop assets loaded
+S08  desktop settings loaded
+S09  sound startup returned
+S0A  UI icons loaded
+S16  INT 33h mouse reset succeeded
+S0B  mouse reset returned
+S0C  video profile resolved
+S0E  video initialization returned
+S0F  applications and windows resumed
+S10  first desktop frame painted
+S1C  master PIC IRQ1 unmasked
+S1E  slave PIC IRQ12 unmasked
+S20  CiukiDOS owns INT 33h

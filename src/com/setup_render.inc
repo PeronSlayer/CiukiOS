@@ -1,5 +1,6 @@
-; Private 800x600 setup surface, composed in 60 KiB bands. Fonts stay at
-; their original pixel size. Only completed bands are written to VRAM.
+; Private Setup surface, composed in bands up to 60 KiB in VBE or VGA.
+; Fonts stay at their original pixel size. Only completed bands reach VRAM.
+%include "src/com/vga_band_present.inc"
 g_render_begin:
     mov word [vc_mode],0x103
     call vc_begin
@@ -10,11 +11,8 @@ g_render_begin:
     jne .close
     cmp word [vc_info+20],600
     jne .close
-    mov bx,3840
-    mov ah,0x48
-    int 0x21
+    call g_alloc_band
     jc .close
-    mov [g_comp_seg],ax
     mov byte [g_vbe],1
     mov word [g_screen_width],800
     mov word [g_screen_height],600
@@ -34,6 +32,34 @@ g_render_begin:
     stc
     ret
 
+; The recovery VGA mode uses the same indexed scratch representation as the
+; desktop. If conventional memory is exhausted, its original direct painter
+; remains available so Setup can still install the system.
+g_render_begin_vga:
+    call g_alloc_band
+    ret
+
+g_alloc_band:
+    mov bx,3840
+.try:
+    mov [g_comp_try_paras],bx
+    mov ah,0x48
+    int 0x21
+    jnc .allocated
+    mov bx,[g_comp_try_paras]
+    shr bx,1
+    cmp bx,256
+    jae .try
+    stc
+    ret
+.allocated:
+    mov [g_comp_seg],ax
+    mov ax,[g_comp_try_paras]
+    shl ax,4
+    mov [g_comp_capacity],ax
+    clc
+    ret
+
 g_render_end:
     mov ax,[g_comp_seg]
     test ax,ax
@@ -44,6 +70,9 @@ g_render_end:
     int 0x21
     pop es
     mov word [g_comp_seg],0
+    mov word [g_comp_capacity],0
+    cmp byte [g_vbe],1
+    jne .done
     call vc_end
 .done:
     ret
@@ -52,20 +81,46 @@ g_render_draw:
     pushad
     push es
     mov word [g_comp_left],0
-    mov word [g_comp_right],800
+    mov ax,[g_screen_width]
+    mov [g_comp_right],ax
     mov word [g_comp_top],0
-    mov word [g_comp_limit_bottom],600
+    mov ax,[g_screen_height]
+    mov [g_comp_limit_bottom],ax
     jmp g_render_bands
 
 g_render_progress:
     pushad
     push es
+    cmp byte [g_vbe],1
+    jne .vga
     mov word [g_comp_left],291
     mov word [g_comp_right],652
     mov word [g_comp_top],228
     mov word [g_comp_limit_bottom],324
+    jmp g_render_bands
+.vga:
+    mov word [g_comp_left],208
+    mov word [g_comp_right],576
+    mov word [g_comp_top],168
+    mov word [g_comp_limit_bottom],264
 g_render_bands:
-    mov word [g_comp_stride],800
+    mov ax,[g_comp_right]
+    sub ax,[g_comp_left]
+    cmp byte [g_vbe],1
+    jne .stride
+    movzx bx,byte [vc_bytes]
+    mul bx
+.stride:
+    mov [g_comp_stride],ax
+    mov bx,ax
+    mov ax,[g_comp_capacity]
+    xor dx,dx
+    div bx
+    cmp ax,64
+    jbe .rows
+    mov ax,64
+.rows:
+    mov [g_comp_rows],ax
     mov byte [g_pointer_band],0
     mov ax,[g_mouse_y]
     cmp ax,[g_comp_limit_bottom]
@@ -85,7 +140,7 @@ g_render_bands:
     mov byte [g_composing],1
 .band:
     mov ax,[g_comp_top]
-    add ax,64
+    add ax,[g_comp_rows]
     cmp ax,[g_comp_limit_bottom]
     jbe .bottom
     mov ax,[g_comp_limit_bottom]
@@ -170,23 +225,36 @@ g_comp_rect:
     mul word [g_comp_stride]
     mov di,ax
     mov ax,bx
+    sub ax,[g_comp_left]
+    cmp byte [g_vbe],1
+    jne .indexed_offset
     movzx cx,byte [vc_bytes]
     mul cx
+.indexed_offset:
     add di,ax
     mov ax,[g_comp_seg]
     mov es,ax
+    cmp byte [g_vbe],1
+    jne .indexed
     movzx bx,byte [g_fill_color]
     shl bx,2
     mov eax,[vc_colors+bx]
+    jmp .row
+.indexed:
+    mov al,[g_fill_color]
 .row:
     push di
     mov cx,[g_fill_width]
+    cmp byte [g_vbe],1
+    jne .bytes
     cmp byte [vc_bytes],4
     je .dwords
     cmp byte [vc_bytes],2
     je .words
     cmp byte [vc_bytes],3
     je .triples
+    jmp .bytes
+.bytes:
     rep stosb
     jmp .next
 .words:
@@ -230,8 +298,12 @@ g_comp_glyph:
     mul word [g_comp_stride]
     mov di,ax
     mov ax,bx
+    sub ax,[g_comp_left]
+    cmp byte [g_vbe],1
+    jne .indexed_offset
     movzx cx,byte [vc_bytes]
     mul cx
+.indexed_offset:
     add di,ax
     pop dx
     mov [g_comp_glyph_x],bx
@@ -247,6 +319,8 @@ g_comp_glyph:
     cmp ax,[g_comp_right]
     jae .next
     push bx
+    cmp byte [g_vbe],1
+    jne .indexed_pixel
     movzx bx,byte [g_text_color]
     shl bx,2
     mov eax,[vc_colors+bx]
@@ -266,10 +340,21 @@ g_comp_glyph:
     jmp .next
 .byte:
     mov [es:di],al
+    jmp .next
+.indexed_pixel:
+    mov al,[g_text_color]
+    mov [es:di],al
+    pop bx
 .next:
     inc word [g_comp_glyph_x]
+    cmp byte [g_vbe],1
+    jne .indexed_advance
     movzx ax,byte [vc_bytes]
     add di,ax
+    jmp .advance_done
+.indexed_advance:
+    inc di
+.advance_done:
     loop .pixel
     pop bx
 .skip:
@@ -283,6 +368,11 @@ g_comp_glyph:
     ret
 
 g_comp_present:
+    cmp byte [g_vbe],1
+    je .packed
+    call g_vga_present
+    ret
+.packed:
     ; Completed band rows are written once and never read back from VRAM.
     pushad
     push fs
@@ -290,7 +380,7 @@ g_comp_present:
     movzx ebx,byte [vc_bytes]
     movzx eax,word [g_comp_left]
     imul eax,ebx
-    mov si,ax
+    xor si,si
     movzx edi,word [g_comp_top]
     movzx edx,word [vc_pitch]
     imul edi,edx
@@ -305,6 +395,8 @@ g_comp_present:
     pop fs
     popad
     ret
+
+VGA_INDEXED_PRESENT g_vga_present, g_comp_seg, g_comp_left, g_comp_right, g_comp_top, g_comp_bottom, g_vga_row_bytes, g_vga_rows, g_vga_origin, g_vga_plane_bit
 
 g_vbe_pointer_hide:
     cmp byte [g_pointer_visible],1
@@ -349,7 +441,10 @@ g_screen_height dw 480
 g_origin_x dw 0
 g_origin_y dw 0
 g_comp_seg dw 0
+g_comp_capacity dw 0
+g_comp_try_paras dw 0
 g_comp_stride dw 800
+g_comp_rows dw 64
 g_comp_top dw 0
 g_comp_bottom dw 0
 g_comp_limit_bottom dw 600
@@ -360,6 +455,10 @@ g_fill_width dw 0
 g_comp_glyph_x dw 0
 g_comp_x_bytes dw 0
 g_comp_row_bytes dw 0
+g_vga_row_bytes dw 0
+g_vga_rows dw 0
+g_vga_origin dw 0
+g_vga_plane_bit db 0
 g_pointer_linear dd 0
 %define VC_GRAPHICS_ONLY
 %include "src/com/vbe_console.inc"

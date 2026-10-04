@@ -115,7 +115,14 @@ cdq_walk:
     cmp eax,500h
     jb cdq_not_found
     cmp eax,0A0000h-18
+    jbe cdq_header_ok
+    ; Jemm's NOHI-free resident header may live in the configured UMB.
+    ; Do not follow arbitrary ROM, VGA or other upper-memory pointers.
+    cmp eax,0CD000h
+    jb cdq_not_found
+    cmp eax,0EC000h-18
     ja cdq_not_found
+cdq_header_ok:
     mov ax,word ptr fs:[si+4]
     and ax,0C000h
     cmp ax,0C000h
@@ -176,7 +183,12 @@ cdq_check_entry proc near
     cmp eax,500h
     jb cdq_entry_bad
     cmp eax,0A0000h
+    jb cdq_entry_ok
+    cmp eax,0CD000h
+    jb cdq_entry_bad
+    cmp eax,0EC000h
     jae cdq_entry_bad
+cdq_entry_ok:
     clc
     jmp cdq_entry_done
 cdq_entry_bad:

@@ -255,8 +255,8 @@ static void paint(void)
         g->client_x = x; g->client_y = y;
         g->client_w = w; g->client_h = h;
     }
-    ui_rect(x, y, w, h, C_INK);
     if (g && band_present(g, x, y, w, h)) return;
+    ui_rect(x, y, w, h, C_INK);
     if (g && g->windows_exe) {
         ui_text(x + 14, y + 14, "Windows executable detected.", C_PAPER);
         ui_text(x + 14, y + 38, "Win32 application support is under development.", C_PAPER);
@@ -276,7 +276,7 @@ static void feed_mouse(struct guest_window *g, int x, int y, int buttons)
     r.ax = 0x37;
     r.bx = x - mouse_x;
     r.cx = mouse_y - y;                /* PS/2 Y is positive upward */
-    r.dx = buttons & 3;
+    r.dx = buttons & 7;
     vm_call(&r);
     mouse_x = x; mouse_y = y;
 }
@@ -319,7 +319,10 @@ static int poll(void)
             changed = 1;
         }
     }
-    if ((u16)(HOST.ticks - last_damage_tick) >= 2) {
+    /* Every desktop wake-up: the VM manager wakes the idle desktop every
+     * 8 ms while a DOS VM runs, so a game's frames are presented as they
+     * come rather than at a 2-tick (9 Hz) cadence. */
+    {
         last_damage_tick = HOST.ticks;
         for (i = 0; i < WIN_COUNT; i++) if (guest[i].live) {
             u32 mask;
@@ -370,6 +373,14 @@ int app_event(int ev, int a, int b, int c)
         return 1;
     case EV_PAINT: paint(); return 0;
     case EV_POLL: return poll();
+    case EV_WHEEL:
+        if (g && g->live && HOST.active && c >= 0 && !vm_target(g->vm)) {
+            struct regs r;
+            mem_set(&r, 0, sizeof r);
+            r.ax = 0x37; r.dx = HOST.buttons & 7; r.si = a;
+            vm_call(&r);
+        }
+        return 0;
     case EV_MOUSE:
         if (a == MOUSE_DOWN && g && g->live) vm_focus(g->vm);
         if (g && g->live && (a == MOUSE_MOVE || a == MOUSE_HOVER ||

@@ -60,6 +60,8 @@ static void pic_raise(cvgp_state *s, unsigned irq)
     }
 }
 
+/* The legacy 8042 route uses a level-like request while a data byte waits.
+ * Sound Blaster interrupts are edge-triggered and do not call this helper. */
 static void pic_clear_request(cvgp_state *s, unsigned irq)
 {
     if (irq < 8) s->pic[0].irr &= (uint8_t)~(1u << irq);
@@ -78,12 +80,15 @@ static void reset_pic(cvgp_state *s)
 
 static void reset_pit(cvgp_state *s)
 {
+    unsigned i;
     zero_bytes(s->pit, (uint32_t)sizeof(s->pit));
+    for (i = 0; i != 3; ++i) s->pit[i].null_count = 1;
     s->pit[0].reload = 65536UL;
     s->pit[0].remaining = 65536UL;
     s->pit[0].access = 3;
     s->pit[0].mode = 3;
     s->pit[0].running = 1;
+    s->pit[0].null_count = 0;
 }
 
 static void reset_dma(cvgp_state *s)
@@ -154,6 +159,8 @@ static void reset_kbc(cvgp_state *s)
     s->mouse_rate = 100;
     s->mouse_buttons = 0;
     s->mouse_pending_command = 0;
+    s->mouse_id = 0;
+    s->mouse_rate_step = 0;
 }
 
 void cvgp_init(cvgp_state *s)
@@ -280,9 +287,10 @@ int cvgp_key_event(cvgp_state *s, uint32_t generation, uint8_t scan,
 }
 
 static int mouse_packet(cvgp_state *s, int dx, int dy, uint8_t buttons,
-                        int force)
+                        int wheel, int force)
 {
-    uint8_t first;
+    uint8_t first, count, tail[4];
+    unsigned i;
     int rc;
     if (!force && (!s->focused || !s->mouse_enabled || !s->mouse_stream))
         return CVGP_OK;
@@ -293,15 +301,25 @@ static int mouse_packet(cvgp_state *s, int dx, int dy, uint8_t buttons,
     if (dy > 255) { dy = 255; first |= 0x80; }
     if (dx < 0) first |= 0x10;
     if (dy < 0) first |= 0x20;
-    rc = kbc_push(s, first, 1);
-    if (rc == CVGP_OK) rc = kbc_push(s, (uint8_t)dx, 1);
-    if (rc == CVGP_OK) rc = kbc_push(s, (uint8_t)dy, 1);
-    if (rc == CVGP_OK) s->mouse_buttons = buttons & 7;
-    return rc;
+    count = (s->mouse_id == 3) ? 4 : 3;
+    tail[0] = first; tail[1] = (uint8_t)dx; tail[2] = (uint8_t)dy;
+    if (count == 4) {
+        if (wheel < -127) wheel = -127;
+        if (wheel > 127) wheel = 127;
+        tail[3] = (uint8_t)(int8_t)wheel;
+    }
+    if ((unsigned)s->kbc_count + count > CVGP_KBC_QUEUE_BYTES)
+        return fail(s, CVGP_ERR_QUEUE_FULL, 0x60);
+    for (i = 0; i < count; ++i) {
+        rc = kbc_push(s, tail[i], 1);
+        if (rc != CVGP_OK) return rc;
+    }
+    s->mouse_buttons = buttons & 7;
+    return CVGP_OK;
 }
 
 int cvgp_mouse_event(cvgp_state *s, uint32_t generation, int dx, int dy,
-                    uint8_t buttons)
+                    uint8_t buttons, int wheel)
 {
     if (!owns(s, generation)) return CVGP_ERR_OWNER;
     if (!(s->capabilities & CVGP_CAP_MOUSE))
@@ -309,7 +327,7 @@ int cvgp_mouse_event(cvgp_state *s, uint32_t generation, int dx, int dy,
     /* DEV_MOUSE is an explicit host event.  A forked DOS session can inherit
      * an active INT 33h driver without replaying its PS/2 stream command. */
     if (!s->focused) return CVGP_OK;
-    return mouse_packet(s, dx, dy, buttons, 1);
+    return mouse_packet(s, dx, dy, buttons, wheel, 1);
 }
 
 int cvgp_key_raw(cvgp_state *s, uint32_t generation, uint8_t value)
@@ -385,7 +403,7 @@ int cvgp_set_focus(cvgp_state *s, uint32_t generation, int focused)
             set_key_bit(s, key, 0);
         }
         if (s->mouse_buttons && (s->capabilities & CVGP_CAP_MOUSE))
-            if (mouse_packet(s, 0, 0, 0, 1) != CVGP_OK) rc = CVGP_ERR_QUEUE_FULL;
+            if (mouse_packet(s, 0, 0, 0, 0, 1) != CVGP_OK) rc = CVGP_ERR_QUEUE_FULL;
     }
     s->focused = (uint8_t)focused;
     return rc;
@@ -467,7 +485,46 @@ int cvgp_irq_acknowledge(cvgp_state *s, uint32_t generation, int guest_if,
 
 static uint16_t pit_count(const cvgp_pit_channel *pit)
 {
+    uint32_t elapsed, count;
+    if (pit->mode == 3 && pit->reload) {
+        elapsed = pit->reload - pit->remaining;
+        count = pit->reload - ((2u * elapsed) % pit->reload);
+        return (uint16_t)count;
+    }
     return (uint16_t)(pit->remaining == 65536UL ? 0 : pit->remaining);
+}
+
+static uint8_t pit_output(const cvgp_pit_channel *pit)
+{
+    uint32_t elapsed, high_clocks;
+    if (pit->null_count) return pit->mode == 0 ? 0 : 1;
+    if (pit->mode == 0) return pit->running ? 0 : 1;
+    if (pit->mode == 2) return pit->mode2_low ? 0 : 1;
+    if (pit->mode == 3 && pit->reload) {
+        elapsed = pit->reload - pit->remaining;
+        high_clocks = (pit->reload + 1u) / 2u;
+        return elapsed < high_clocks ? 1 : 0;
+    }
+    return 1;
+}
+
+static void pit_latch_count(cvgp_pit_channel *pit)
+{
+    if (pit->latched) return;
+    pit->latch = pit_count(pit);
+    pit->latched = 1;
+    pit->latch_phase = 0;
+}
+
+static void pit_latch_status(cvgp_pit_channel *pit)
+{
+    if (pit->status_latched) return;
+    pit->status = (uint8_t)((pit_output(pit) << 7) |
+                            (pit->null_count << 6) |
+                            ((pit->access & 3u) << 4) |
+                            ((pit->mode & 7u) << 1) |
+                            (pit->bcd & 1u));
+    pit->status_latched = 1;
 }
 
 static void pit_load(cvgp_pit_channel *pit, uint16_t value)
@@ -475,7 +532,8 @@ static void pit_load(cvgp_pit_channel *pit, uint16_t value)
     pit->reload = value ? value : 65536UL;
     pit->remaining = pit->reload;
     pit->running = 1;
-    pit->latched = 0;
+    pit->null_count = 0;
+    pit->mode2_low = 0;
 }
 
 static int pit_control(cvgp_state *s, uint8_t value)
@@ -484,20 +542,30 @@ static int pit_control(cvgp_state *s, uint8_t value)
     unsigned access = (value >> 4) & 3;
     unsigned mode = (value >> 1) & 7;
     cvgp_pit_channel *pit;
-    if (channel == 3) return fail(s, CVGP_ERR_UNSUPPORTED_PIT, 0x43);
+    if (channel == 3) {
+        unsigned i;
+        for (i = 0; i != 3; ++i) {
+            if (!(value & (2u << i))) continue;
+            pit = &s->pit[i];
+            if (!(value & 0x20)) pit_latch_count(pit);
+            if (!(value & 0x10)) pit_latch_status(pit);
+        }
+        return CVGP_OK;
+    }
     pit = &s->pit[channel];
     if (!access) {
-        pit->latch = pit_count(pit);
-        pit->latched = 1;
-        pit->read_phase = 0;
+        pit_latch_count(pit);
         return CVGP_OK;
     }
     if (mode >= 6) mode -= 4;
-    if (mode != 0 && mode != 2 && mode != 3)
+    if ((value & 1u) || (mode != 0 && mode != 2 && mode != 3))
         return fail(s, CVGP_ERR_UNSUPPORTED_PIT, 0x43);
     pit->access = (uint8_t)access;
     pit->mode = (uint8_t)mode;
     pit->write_phase = pit->read_phase = 0;
+    pit->null_count = 1;
+    pit->mode2_low = 0;
+    pit->running = 0;
     return CVGP_OK;
 }
 
@@ -508,10 +576,10 @@ static void pit_write(cvgp_pit_channel *pit, uint8_t value)
     else if (pit->access == 2) pit_load(pit, (uint16_t)value << 8);
     else {
         if (!pit->write_phase) {
-            pit->latch = value;
+            pit->write_latch = value;
             pit->write_phase = 1;
         } else {
-            word = (uint16_t)(pit->latch | ((uint16_t)value << 8));
+            word = (uint16_t)(pit->write_latch | ((uint16_t)value << 8));
             pit->write_phase = 0;
             pit_load(pit, word);
         }
@@ -520,36 +588,65 @@ static void pit_write(cvgp_pit_channel *pit, uint8_t value)
 
 static uint8_t pit_read(cvgp_pit_channel *pit)
 {
-    uint16_t value = pit->latched ? pit->latch : pit_count(pit);
+    uint16_t value;
     uint8_t result;
+    if (pit->status_latched) {
+        pit->status_latched = 0;
+        return pit->status;
+    }
+    value = pit->latched ? pit->latch : pit_count(pit);
     if (pit->access == 2) result = (uint8_t)(value >> 8);
-    else if (pit->access == 3 && pit->read_phase) result = (uint8_t)(value >> 8);
+    else if (pit->access == 3 && (pit->latched ? pit->latch_phase : pit->read_phase))
+        result = (uint8_t)(value >> 8);
     else result = (uint8_t)value;
-    if (pit->access == 3) {
+    if (pit->access == 3 && pit->latched) {
+        pit->latch_phase ^= 1;
+        if (!pit->latch_phase) pit->latched = 0;
+    } else if (pit->access == 3) {
         pit->read_phase ^= 1;
-        if (!pit->read_phase) pit->latched = 0;
     } else pit->latched = 0;
     return result;
 }
 
-static void pit_advance(cvgp_state *s, uint32_t clocks)
+static uint32_t pit_advance_channel(cvgp_pit_channel *pit, uint32_t clocks)
 {
-    cvgp_pit_channel *pit = &s->pit[0];
-    uint32_t after;
-    if (!pit->running || !clocks) return;
+    uint32_t after, expiries;
+    if (!pit->running || pit->null_count || !clocks) return 0;
+    if (pit->mode == 2 && pit->mode2_low) pit->mode2_low = 0;
     if (clocks < pit->remaining) {
         pit->remaining -= clocks;
-        return;
+        return 0;
     }
     clocks -= pit->remaining;
-    pic_raise(s, 0);
     if (pit->mode == 0) {
         pit->remaining = 0;
         pit->running = 0;
-        return;
+        return 1;
     }
+    /* The first terminal count consumes the prior remainder; each complete
+     * reload after it is another expiry. Keep every expiry even though the
+     * 8259 IRR itself can represent only one pending edge. */
+    expiries = 1u + clocks / pit->reload;
     after = clocks % pit->reload;
     pit->remaining = after ? pit->reload - after : pit->reload;
+    if (pit->mode == 2) pit->mode2_low = after == 0;
+    return expiries;
+}
+
+static void pit_advance(cvgp_state *s, uint32_t clocks)
+{
+    unsigned channel;
+    uint32_t expiries;
+    if (!clocks) return;
+    for (channel = 0; channel != 3; ++channel) {
+        expiries = pit_advance_channel(&s->pit[channel], clocks);
+        if (channel != 0 || !expiries) continue;
+        pic_raise(s, 0);
+        if (expiries > 0xffffffffUL - s->pit0_pending_irqs)
+            s->pit0_pending_irqs = 0xffffffffUL;
+        else
+            s->pit0_pending_irqs += expiries;
+    }
 }
 
 static int page_channel(uint16_t port)
@@ -933,11 +1030,12 @@ static uint8_t sb_read_port(cvgp_state *s, uint16_t port)
     case 0x0c: return 0;               /* DSP write buffer ready */
     case 0x0e:
         sb->irq_status &= (uint8_t)~1u;
-        pic_clear_request(s, sb->irq);
+        /* The 8259A latches the IRQ's rising edge in IRR.  Reading this
+         * device register lowers the DSP line, but cannot erase an already
+         * latched request in the PIC. */
         return sb->response_count ? 0x80 : 0;
     case 0x0f:
         sb->irq_status &= (uint8_t)~2u;
-        pic_clear_request(s, sb->irq);
         return 0xff;
     default: return 0xff;
     }
@@ -1110,7 +1208,15 @@ static int keyboard_command(cvgp_state *s, uint8_t value)
     }
     if (s->mouse_pending_command) {
         if (s->mouse_pending_command == 0xe8) s->mouse_resolution = value & 3;
-        else s->mouse_rate = value;
+        else {
+            s->mouse_rate = value;
+            if (s->mouse_rate_step == 0 && value == 200) s->mouse_rate_step = 1;
+            else if (s->mouse_rate_step == 1 && value == 100) s->mouse_rate_step = 2;
+            else if (s->mouse_rate_step == 2 && value == 80) {
+                s->mouse_rate_step = 0;
+                s->mouse_id = 3;
+            } else s->mouse_rate_step = 0;
+        }
         s->mouse_pending_command = 0;
         return kbc_push(s, 0xfa, 1);
     }
@@ -1120,16 +1226,22 @@ static int keyboard_command(cvgp_state *s, uint8_t value)
         case 0xe6: s->mouse_scaling = 1; return kbc_push(s, 0xfa, 1);
         case 0xe7: s->mouse_scaling = 2; return kbc_push(s, 0xfa, 1);
         case 0xe8: s->mouse_pending_command = 0xe8; return kbc_push(s, 0xfa, 1);
-        case 0xf2: kbc_push(s, 0xfa, 1); return kbc_push(s, 0, 1);
+        case 0xf2:
+            if (s->kbc_count + 2u > CVGP_KBC_QUEUE_BYTES)
+                return fail(s, CVGP_ERR_QUEUE_FULL, 0x60);
+            kbc_push(s, 0xfa, 1); return kbc_push(s, s->mouse_id, 1);
         case 0xf3: s->mouse_pending_command = 0xf3; return kbc_push(s, 0xfa, 1);
         case 0xf4: s->mouse_stream = 1; return kbc_push(s, 0xfa, 1);
         case 0xf5: s->mouse_stream = 0; return kbc_push(s, 0xfa, 1);
         case 0xf6:
             s->mouse_stream = 0; s->mouse_scaling = 1;
             s->mouse_resolution = 2; s->mouse_rate = 100;
+            s->mouse_id = 0; s->mouse_rate_step = 0;
             return kbc_push(s, 0xfa, 1);
         case 0xff:
-            s->mouse_stream = 0;
+            s->mouse_stream = 0; s->mouse_id = 0; s->mouse_rate_step = 0;
+            if (s->kbc_count + 3u > CVGP_KBC_QUEUE_BYTES)
+                return fail(s, CVGP_ERR_QUEUE_FULL, 0x60);
             kbc_push(s, 0xfa, 1); kbc_push(s, 0xaa, 1); return kbc_push(s, 0, 1);
         default: return fail(s, CVGP_ERR_UNSUPPORTED_PORT, 0x60);
         }
@@ -1244,7 +1356,9 @@ int cvgp_io_write(cvgp_state *s, uint32_t generation, uint16_t port,
     else if (port == 0x20 || port == 0x21) pic_write(s, 0, port & 1, byte);
     else if (port == 0xa0 || port == 0xa1) pic_write(s, 1, port & 1, byte);
     else if (port >= 0x40 && port <= 0x42) pit_write(&s->pit[port - 0x40], byte);
-    else if (port == 0x43) pit_control(s, byte);
+    else if (port == 0x43) {
+        if (pit_control(s, byte) != CVGP_OK) return CVGP_IO_REJECTED;
+    }
     else if ((s->capabilities & CVGP_CAP_OPL3) &&
              (port >= 0x388 && port <= 0x38b)) opl_write_port(s, port, byte);
     else if ((s->capabilities & CVGP_CAP_OPL3) &&
@@ -1270,6 +1384,25 @@ unsigned cvgp_advance(cvgp_state *s, uint32_t generation, uint32_t pit_clocks)
     if (s->sb.active || (s->capabilities & CVGP_CAP_OPL3)) result |= CVGP_SERVICE_AUDIO;
     if (s->last_error) result |= CVGP_SERVICE_DIAGNOSTIC;
     return result;
+}
+
+int cvgp_pit_irq0_pending(cvgp_state *s, uint32_t generation, uint32_t *count)
+{
+    if (!s || !count) {
+        if (s) fail(s, CVGP_ERR_ARGUMENT, 0x40);
+        return CVGP_ERR_ARGUMENT;
+    }
+    if (!owns(s, generation)) return CVGP_ERR_OWNER;
+    *count = s->pit0_pending_irqs;
+    return CVGP_OK;
+}
+
+int cvgp_pit_irq0_consume(cvgp_state *s, uint32_t generation)
+{
+    if (!owns(s, generation)) return CVGP_ERR_OWNER;
+    if (!s->pit0_pending_irqs) return 0;
+    --s->pit0_pending_irqs;
+    return 1;
 }
 
 const char *cvgp_error_message(unsigned error)

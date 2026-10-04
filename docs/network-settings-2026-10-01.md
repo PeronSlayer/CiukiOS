@@ -38,6 +38,19 @@ The packet-driver API does not provide a common cable/link-state query, so
 the panel does not claim that an Ethernet cable or remote network is active.
 Device Manager lists other adapters when more than one is fitted.
 
+## Native WebNet service status
+
+CiukWeb uses the native WebNet service. DNS resolution, an HTTP 200 response
+with 577 body bytes, wrapped page rendering and Ctrl+R reload passed in the
+Linux QEMU/KVM NE2000 PCI NAT profile; see the [runtime record](validation/2026-10-04-web-network.md).
+This bounded result does not establish support for other adapters or physical
+networks. HTTPS, IPv6, CSS, JavaScript and images are unsupported. The adapter
+panel still reports PCI hardware and packet-driver presence separately; it
+does not claim a live cable or network link.
+
+The separate Date and Time lookup documented below continues to use bundled
+mTCP `HTGET.EXE`; it is not the CiukWeb transport.
+
 ## QEMU evidence
 
 `python3 scripts/qemu_test_network_advanced.py --image

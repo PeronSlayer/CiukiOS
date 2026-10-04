@@ -94,6 +94,7 @@ typedef struct cvgp_pit_channel {
     uint32_t reload, remaining;
     uint16_t latch;
     uint8_t access, mode, write_phase, read_phase, latched, running;
+    uint8_t latch_phase, write_latch, status, status_latched, null_count, bcd, mode2_low;
 } cvgp_pit_channel;
 
 typedef struct cvgp_dma_channel {
@@ -142,10 +143,13 @@ typedef struct cvgp_state {
     uint8_t keyboard_scanning, keyboard_enabled, mouse_enabled;
     uint8_t mouse_stream, mouse_scaling, mouse_resolution, mouse_rate;
     uint8_t mouse_buttons, mouse_pending_command;
+    uint8_t mouse_id, mouse_rate_step;
     uint8_t raw_prefix, raw_skip;     /* Set-1 E0 prefix / E1 bytes to skip */
 
     cvgp_pic_unit pic[2];
     cvgp_pit_channel pit[3];
+    /* Channel-0 expiries not yet handed to the VM's authoritative PIC. */
+    uint32_t pit0_pending_irqs;
     cvgp_dma_channel dma[8];
     uint8_t dma_flipflop[2], dma_status[2];
     cvgp_sb_state sb;
@@ -171,13 +175,22 @@ int CVGP_CALL cvgp_key_raw(cvgp_state *s, uint32_t generation, uint8_t value);
 int CVGP_CALL cvgp_aux_raw(cvgp_state *s, uint32_t generation, uint8_t value);
 /* Mouse deltas use PS/2 coordinates: right/up are positive. */
 int CVGP_CALL cvgp_mouse_event(cvgp_state *s, uint32_t generation,
-                             int dx, int dy, uint8_t buttons);
+                             int dx, int dy, uint8_t buttons, int wheel);
 
 /* Advance virtual hardware time in PIT input clocks.  The caller must invoke
  * this from a host-owned scheduling boundary even while guest IF is clear.
  */
 unsigned CVGP_CALL cvgp_advance(cvgp_state *s, uint32_t generation,
                               uint32_t pit_clocks);
+/* Channel-0 PIT expiries remain queued separately from the PIC's single IRR
+ * bit. The bridge checks its authoritative guest PIC state, queues one IRQ0,
+ * then consumes exactly one expiry. pending() returns CVGP_OK or an error;
+ * consume() returns 1 when it consumes one expiry, 0 when empty, or a CVGP
+ * error (notably CVGP_ERR_OWNER) when the generation is invalid.
+ */
+int CVGP_CALL cvgp_pit_irq0_pending(cvgp_state *s, uint32_t generation,
+                                  uint32_t *count);
+int CVGP_CALL cvgp_pit_irq0_consume(cvgp_state *s, uint32_t generation);
 /* Return one deliverable interrupt and enter its virtual ISR state.  A false
  * return means no unmasked request or guest_if==0.  Host work must still run.
  */

@@ -10,7 +10,7 @@ from qemu_test_installed_hdd import FAT16,listing_address
 from analyze_audio_wav import pcm_payload
 
 class WindowVM(DesktopVM):
-    def __init__(self,disk,output,vga,boot_capture=False,memory=512,video=None,palette='legacy'):
+    def __init__(self,disk,output,vga,boot_capture=False,memory=512,video=None,palette='legacy',extra_qemu_args=()):
         output.mkdir(parents=True,exist_ok=True)
         extra=['-vga',vga]
         if video:
@@ -22,6 +22,7 @@ class WindowVM(DesktopVM):
             self.cursor_colors=((36,40,48),(246,246,242))
         if boot_capture:
             extra+=['-audiodev',f'wav,id=snd,path={output}/audio.wav','-device','AC97,audiodev=snd']
+        extra.extend(extra_qemu_args)
         VM.__init__(self,disk,output,qemu_args=extra,memory=memory)
 
     def click(self):

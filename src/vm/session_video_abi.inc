@@ -109,12 +109,18 @@ VM_VS_STRING_IO         equ 224        ; INS/OUTS instructions executed on VGA p
 VM_VS_STRING_ELEMENTS   equ 228
 VM_VS_HOST_DISPLAY_SETS equ 232        ; host 4F07 set requests seen in host mode
 VM_VS_DAMAGE_QUERIES    equ 236
+VM_VS_CAPTURED_IMAGES   equ 240        ; retained VGA snapshots captured
+VM_VS_CONVERTED_ROWS    equ 244        ; unique rows converted in current snapshot
+VM_VS_SURFACE_BYTES     equ 248        ; owned retained raster storage capacity
+VM_VS_SURFACE_READY     equ 252
 
 ; PRESENT/BAND packet (256 bytes): cvp_format at 16, cvp_request at 32,
 ; cvp_stats returned at 180 (see vga_presenter.h; C asserts these sizes).
 ; BAND renders into the conventional compositor band instead of the LFB:
-; request coordinates are band-relative screen coordinates, format.height is
-; the band row capacity and the extent is checked against the owned pages.
+; request coordinates are absolute screen coordinates. BAND_TOP and BAND_LEFT
+; locate the scratch band; its dimensions never change the logical image's
+; palette/scale. A retained snapshot is captured on DAMAGE and reused across
+; bands. format.height is the band row capacity; its extent is page-checked.
 VM_VPRES_MAGIC          equ 050565643h ; bytes CVVP
 VM_VPRES_BYTES          equ 256
 VM_VP_VERSION           equ 4          ; word VM_ABI_VIDEO_VERSION

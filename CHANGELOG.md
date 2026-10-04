@@ -1,9 +1,28 @@
 # Changelog
 
+## 0.8.3 — 2026-10-04
+
+- Add native VirtIO GPU 2D presentation, retained VGA frames and independent VM
+  clocks; suppress identical uploads and transfer actual pixel damage.
+- Stop desktop meters from triggering a full-scene repaint every second; correct
+  the banked compositor's scratch capacity load to prevent 16-bit mode overruns.
+- Add physical/virtual PS/2 wheel support and scrolling in desktop applications.
+- Add Display Properties with adapter/driver/monitor details and graphical
+  resolution preview, confirmation and automatic rollback.
+- Start the resident network service automatically for a detected packet
+  driver; move Ciuki Web requests into a cooperative native HTTP client.
+- Open About at startup instead of Application Library, with a saved checkbox;
+  fit window captions to their available title space.
+- Keep trusted GUI utility output off the display; update release packaging,
+  memory-capped push builds, documentation and screenshots.
+
+Detailed qualification and limits: [current status](docs/project-status-2026-10-04.md).
+
+
 All notable project-level changes are tracked here.
 This changelog is intentionally concise. Every completed task should update `Unreleased` unless the task cuts a release section.
 
-## Unreleased (2026-10-01)
+## Earlier development snapshot — 2026-10-01
 
 - Reworked the README as a screenshot-led overview and split build steps,
   current status and compatibility details into short linked guides. Older

@@ -38,6 +38,7 @@ class Renderer:
             end = binary.index(0, cursor + 2)
             self.symbols[binary[cursor+2:end].decode()] = 0x10000 + address
             cursor = end + 1
+        self.set('ui_comp_capacity', 61440)
         self.vram = bytearray([0xC7]) * VRAM_SIZE
         self.linear_reads = 0
         self.low_writes = 0
@@ -294,6 +295,7 @@ def main():
         r.call('ui_comp_band_setup')
         r.uc.mem_write(0x50000,b'\xAD'*65536)
         r.uc.mem_write(0x1D000,b'\xFF'*32)
+        r.uc.reg_write(UC_X86_REG_FS,0x1000)
         r.set('ug_text_color',3,1)
         r.uc.mem_write(r.symbols['vc_colors']+12,struct.pack('<I',0x125599))
         r.call('ui_comp_glyph',bx=95,dx=18,si=0xD000)

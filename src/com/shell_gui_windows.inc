@@ -434,6 +434,8 @@ ui_windows_taskbar:
     movzx si,byte [ds:ui_task_windows+bp]
     cmp byte [ui_window_flags+si],0
     je .skip_count
+    cmp byte [ui_window_flags+si],3      ; hidden: no button
+    je .skip_count
     inc cx
 .skip_count:
     inc bp
@@ -457,6 +459,8 @@ ui_windows_taskbar:
     movzx si,byte [ds:ui_task_windows+bp]
     cmp byte [ui_window_flags+si],0
     je .advance
+    cmp byte [ui_window_flags+si],3
+    je .advance
     mov ax,si
     add ax,200
     mov di,bp
@@ -479,6 +483,21 @@ ui_windows_clamp:
     pushad
     mov si,2
 .next:
+    ; A saved/new window may exceed a newly selected screen mode. Bound its
+    ; size before unsigned position arithmetic, or e.g. 680px on 640px wraps
+    ; the origin to 32K and leaves the focused DOS window invisible.
+    mov ax,[ui_width]
+    sub ax,16
+    cmp [ui_window_width+si],ax
+    jbe .width_fits
+    mov [ui_window_width+si],ax
+.width_fits:
+    mov ax,[ui_height]
+    sub ax,69                  ; top rail 32 + bottom rail/shadow 37
+    cmp [ui_window_height+si],ax
+    jbe .height_fits
+    mov [ui_window_height+si],ax
+.height_fits:
     mov ax,[ui_width]
     sub ax,[ui_window_width+si]
     sub ax,8
@@ -612,11 +631,11 @@ ui_motion_poll:
 .done:
     ret
 
-ui_task_windows db 1,2,5,6,8,12,16,17,13,14,15,9,10,11
+ui_task_windows db 1,2,18,6,8,12,16,17,13,14,15,9,10,11
 UI_TASK_COUNT equ $-ui_task_windows
 ui_task_labels dw ui_task_run,ui_task_info,ui_task_video,ui_task_audio,ut_files,ut_notepad,ui_task_paint,ut_browser,ui_task_control,ut_devices,ui_task_recycle,ui_task_tasks,ui_task_bg,ut_dos
 ui_task_run db 'Run',0
-ui_task_info db 'Info',0
+ui_task_info db 'About',0
 ui_task_video db 'Video',0
 ui_task_audio db 'Audio',0
 ui_task_tasks db 'Tasks',0
@@ -625,8 +644,8 @@ ui_task_control db 'Control',0
 ui_task_paint db 'Paint',0
 ui_task_recycle db 'Recycle',0
 ui_task_button_width dw 72
-ui_window_titles dw ut_programs,ut_run,ut_about,ut_power,ut_launch_error,ut_display,ut_sound,ut_brand,ut_files,ut_tasks,ut_wallpaper,ut_dos_window,ut_notepad,ut_control,ut_devices,ut_recycle,ut_paint,ut_browser
-                 times UI_WINDOW_COUNT-18 dw ut_modwin
+ui_window_titles dw ut_programs,ut_run,ut_about,ut_power,ut_launch_error,ut_display,ut_sound,ut_brand,ut_files,ut_tasks,ut_wallpaper,ut_dos_window,ut_notepad,ut_control,ut_devices,ut_recycle,ut_paint,ut_browser,ut_display
+                 times UI_WINDOW_COUNT-19 dw ut_modwin
 ui_window_flags times UI_WINDOW_COUNT db 0
 ui_default_focus dw 44,40,41,41,41,50,55,1,0,0,183,18,0
                  times UI_WINDOW_COUNT-13 dw 0

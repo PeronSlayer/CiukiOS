@@ -1666,7 +1666,7 @@ static void help_dialog(void)
 static void about_dialog(void)
 {
     ctl(0, DC_LABEL, 50, 0, 0, 16, "CiukPaint", 0);
-    ctl(1, DC_LABEL, 50, 20, 0, 16, "Version 0.8.0", 0);
+    ctl(1, DC_LABEL, 50, 20, 0, 16, "Version 0.8.3", 0);
     ctl(2, DC_LABEL, 50, 40, 0, 16, "A modern Retro OS", 0);
     ctl(3, DC_LABEL, 50, 68, 0, 16, "Pictures up to 2048 x 1200 pixels, as memory allows.", 0);
     ctl(4, DC_LABEL, 50, 88, 0, 16, "Opens 1, 4, 8, 24 and 32-bit BMP files; saves 8-bit BMP.", 0);

@@ -349,6 +349,52 @@ static void test_modes(void)
     }
 }
 
+/* cvga_direct_plane promises that mapping its plane at A0000-AFFFF is exact
+ * for writes: an emulated store then changes exactly that plane's byte to
+ * the CPU value. Check that for Mode X, every single-plane mask, and random
+ * register states against the full write path. */
+static void test_direct_plane(void)
+{
+    static const unsigned seq_vals[] = {0x06, 0x0e, 0x02, 0x04, 0x07};
+    unsigned seed = 12345, n, p, i, at, before[4];
+    int plane;
+    cvga_init(&v); unchained();
+    for (p = 0; p < 4; ++p) { seq(2, 1u << p); EQ(cvga_direct_plane(&v), p); }
+    seq(2, 3); EQ(cvga_direct_plane(&v), -1);
+    seq(2, 1); gc(5, 1); EQ(cvga_direct_plane(&v), -1);
+    gc(5, 0); gc(8, 0x7f); EQ(cvga_direct_plane(&v), -1);
+    gc(8, 0xff); gc(1, 1); EQ(cvga_direct_plane(&v), -1);
+    gc(1, 0); gc(3, 0x08); EQ(cvga_direct_plane(&v), -1);
+    gc(3, 0); seq(4, 0x0e); EQ(cvga_direct_plane(&v), -1);   /* chain-4 */
+    for (n = 0; n < 4000; ++n) {
+        seed = seed * 1103515245u + 12345u;
+        cvga_init(&v); unchained();
+        seq(2, (seed >> 4) & 15);
+        seq(4, seq_vals[(seed >> 9) % 5]);
+        gc(1, (seed >> 12) & 1 ? (seed >> 13) & 15 : 0);
+        gc(3, (seed >> 17) & 1 ? (seed >> 18) & 31 : 0);
+        gc(5, (seed >> 23) & 1 ? (seed >> 24) & 0x13 : 0);
+        gc(8, (seed >> 27) & 1 ? (seed >> 5) & 255 : 0xff);
+        gc(6, (seed >> 28) & 1 ? 0x01 : 0x05);
+        plane = cvga_direct_read_plane(&v);
+        if (plane >= 0) {
+            gc(4, (seed >> 1) & 3);
+            plane = cvga_direct_read_plane(&v);
+            at = (seed >> 7) & 0xffff;
+            EQ(plane, (seed >> 1) & 3);
+            v.plane[plane][at] = (uint8_t)(seed >> 19);
+            EQ(cvga_peek_vram(&v, 0xa0000UL + at), (seed >> 19) & 255);
+        }
+        plane = cvga_direct_plane(&v);
+        if (plane < 0) continue;
+        at = (seed >> 3) & 0xffff;
+        for (i = 0; i < 4; ++i) before[i] = plane_read(i, at);
+        cvga_write_vram(&v, 0xa0000UL + at, (uint8_t)(seed >> 11));
+        for (i = 0; i < 4; ++i)
+            EQ(plane_read(i, at), i == (unsigned)plane ? ((seed >> 11) & 255) : before[i]);
+    }
+}
+
 static void test_dirty_and_peek(void)
 {
     uint32_t before;
@@ -434,7 +480,7 @@ static int ram_write(void *c, uint32_t a, uint8_t value)
     ram[a] = value;
     return 0;
 }
-static const cvx_bus ram_bus = {ram_read, ram_write, ram_read, 0};
+static const cvx_bus ram_bus = {ram_read, ram_write, ram_read, 0, 0};
 
 static cvbios bios;
 static cvbios_regs regs;
@@ -790,7 +836,7 @@ int main(int argc, char **argv)
     }
     test_registers(); test_latches(); test_apertures();
     test_packed(); test_modex(); test_text_and_planar();
-    test_modes(); test_dirty_and_peek(); test_row_damage();
+    test_modes(); test_direct_plane(); test_dirty_and_peek(); test_row_damage();
     test_bios(); test_bios_mode_matrix(); test_presenter();
     printf("PASS: %u independent VGA assertions; state %lu bytes\n", checks, (unsigned long)sizeof(v));
     return 0;

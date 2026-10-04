@@ -1,4 +1,4 @@
-CiukiOS 0.8.0 - Windows portable preview
+CiukiOS 0.8.3 - Windows portable preview
 ========================================
 
 1. Extract the entire ZIP to a writable folder on 64-bit Windows.

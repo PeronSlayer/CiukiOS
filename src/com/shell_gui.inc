@@ -25,7 +25,19 @@ ui_enter:
     int 0x21
     jmp main_loop
 .assets_ready:
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,7                    ; pink: desktop assets returned
+    call boot_diag_palette
+    pop ax
+%endif
     call app_settings_load    ; colours, mouse, keyboard, system font
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,8                    ; lime: desktop settings returned
+    call boot_diag_palette
+    pop ax
+%endif
     ; The startup melody is the event sound driver's first event: it starts
     ; with the first desktop frame and plays asynchronously.
     cmp byte [ui_sound_played],1
@@ -34,16 +46,31 @@ ui_enter:
     mov byte [ui_sfx_pending],7
 .sound_ready:
     call ui_sfx_begin
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,9                    ; white: sound driver returned
+    call boot_diag_palette
+    pop ax
+%endif
     sti
     cld
     mov byte [ui_command_running],0
     mov byte [ui_request],0
     call ui_video_begin
+%ifdef BOOT_DISK_LOG
+    mov al,0x0E                 ; video initialization returned
+    call boot_log_stage
+%endif
     cmp byte [ui_exec_error],0
     jne .error
     call app_keys_begin
     call app_resume
     call ui_windows_resume
+    call ui_welcome_start
+%ifdef BOOT_DISK_LOG
+    mov al,0x0F                 ; application/window resume returned
+    call boot_log_stage
+%endif
     jmp .ready
 .error:
     mov byte [ui_dialog],4
@@ -81,6 +108,11 @@ ui_redraw:
     call ui_serial
     cmp byte [ui_ready_pending],1
     jne ui_loop
+%ifdef BOOT_DISK_LOG
+    mov al,0x10                 ; first desktop frame painted
+    call boot_log_stage
+    call boot_log_input_state
+%endif
     mov byte [ui_ready_pending],0
     mov si,ui_mode_text
     call ui_serial
@@ -90,10 +122,34 @@ ui_redraw:
     call ui_serial
 ui_loop:
     sti
+    cmp word [ui_mode_request],0
+    je .mode_ready
+    call ui_mode_switch
+    jmp ui_redraw
+.mode_ready:
     call ui_sfx_service
     call poll_pending_power_action
     call ui_motion_poll
+    call ui_gpu_poll
+%ifdef BOOT_DISK_LOG
+    cmp byte [boot_log_event_entered],1
+    je .event_enter_logged
+    mov byte [boot_log_event_entered],1
+    mov al,0x13                 ; first UI input poll about to run
+    call boot_log_stage
+.event_enter_logged:
+%endif
     call ui_event
+%ifdef BOOT_DISK_LOG
+    cmp byte [boot_log_event_returned],1
+    je .event_return_logged
+    mov byte [boot_log_event_returned],1
+    push ax
+    mov al,0x14                 ; first UI input poll returned
+    call boot_log_stage
+    pop ax
+.event_return_logged:
+%endif
     test ax,ax
     jnz .event_action
     ; Modules may queue a precise damage rectangle while returning zero.
@@ -120,12 +176,30 @@ ui_loop:
     cmp byte [ui_comp_dirty],1
     je ui_redraw
     call ui_clock_poll
-    call ui_pages_sync
+    ; Catch up the hidden page only when it is reused for composition.
+    ; At that point current damage is known: pixels about to be replaced
+    ; need neither a VRAM read nor a copy of the previous game frame.
     cmp byte [app_busy],1
     je ui_loop
     call app_idle_tick
     sti
+%ifdef BOOT_DISK_LOG
+    cmp byte [boot_log_halt_entered],1
+    je .halt_enter_logged
+    mov byte [boot_log_halt_entered],1
+    mov al,0x15                 ; first idle HLT about to run
+    call boot_log_stage
+.halt_enter_logged:
+%endif
     hlt
+%ifdef BOOT_DISK_LOG
+    cmp byte [boot_log_halt_returned],1
+    je .halt_return_logged
+    mov byte [boot_log_halt_returned],1
+    mov al,0x18                 ; first idle HLT woke on an interrupt
+    call boot_log_stage
+.halt_return_logged:
+%endif
     call app_idle_woke
     jmp ui_loop
 
@@ -316,14 +390,20 @@ ui_action:
     mov word [ui_last_item],0
     jmp ui_redraw
 .display:
-    mov byte [ui_dialog],5
-    call ui_windows_open
+    mov bl,APP_WIN_DISPLAY
+    xor si,si
+    call app_open
     jmp ui_redraw
 .sound:
     mov byte [ui_dialog],6
     call ui_windows_open
     jmp ui_redraw
 .menu:
+    ; The brand opens a drop-down menu of the desktop module; the classic
+    ; centred window remains for a session without that module.
+    mov ax,1
+    call app_desktop_topbar_click
+    jnc ui_redraw
     mov byte [ui_dialog],7
     call ui_windows_open
     jmp ui_redraw
@@ -348,6 +428,10 @@ ui_action:
     call app_open
     jmp ui_redraw
 .top_sound:
+    ; The speaker: a small volume popup; its gear opens the Sound applet.
+    mov ax,2
+    call app_desktop_topbar_click
+    jnc ui_redraw
     mov bl,13
     mov si,ui_arg_sound
     call app_open
@@ -410,8 +494,9 @@ ui_action:
     call ui_windows_open
     jmp ui_redraw
 .about:
-    mov byte [ui_dialog],2
-    call ui_windows_open
+    mov bl,2
+    xor si,si
+    call app_open
     jmp ui_redraw
 .power:
     mov byte [ui_dialog],3
@@ -700,6 +785,12 @@ ui_video_begin:
     ; Settings are refreshed at entry, never from a paint/animation callback.
     call ui_sound_preference
     call ui_icons_begin
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,10                   ; grey: UI icon load returned
+    call boot_diag_palette
+    pop ax
+%endif
     mov ax,[ui_width]
     mov [ui_previous_width],ax
     mov ax,[ui_height]
@@ -737,6 +828,20 @@ ui_video_begin:
     jne .mode
     mov byte [ui_mouse_ready],1
 .mode:
+%ifdef BOOT_DISK_LOG
+    mov al,0x17                 ; INT 33h mouse reset unavailable
+    cmp byte [ui_mouse_ready],1
+    jne .mouse_logged
+    mov al,0x16                 ; INT 33h mouse reset succeeded
+.mouse_logged:
+    call boot_log_stage
+%endif
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,11                   ; teal: mouse initialization returned
+    call boot_diag_palette
+    pop ax
+%endif
     cmp byte [driver_force_vga],1
     jne .detected_video
     mov byte [vc_force_safe],1
@@ -747,6 +852,13 @@ ui_video_begin:
     je .console_clear
     call vc_end
 .console_clear:
+    cmp word [ui_mode_request],0
+    je .load_profile
+    mov ax,[ui_mode_request]
+    mov [vc_mode],ax
+    mov byte [vc_profile],'M'
+    jmp .profile_ready
+.load_profile:
     call vc_load_profile
     ; A saved DOS text/640 profile must not reduce the desktop below SVGA.
     ; Keep the explicit recovery switch available for firmware without VBE.
@@ -756,6 +868,8 @@ ui_video_begin:
     je .desktop_auto
     call vc_probe
     jc .desktop_auto
+    cmp byte [vc_profile],'M' ; an explicitly previewed mode may be 640x480
+    je .profile_ready
     cmp word [vc_info+18],800
     jb .desktop_auto
     cmp word [vc_info+20],600
@@ -763,6 +877,12 @@ ui_video_begin:
 .desktop_auto:
     call vc_auto
 .profile_ready:
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,12                   ; sky blue: video profile resolved
+    call boot_diag_palette
+    pop ax
+%endif
     mov byte [ui_vbe],0
     mov word [ui_width],640
     mov word [ui_height],480
@@ -777,6 +897,12 @@ ui_video_begin:
     mov [ui_height],ax
     jmp .palette
 .vga:
+%ifdef BOOT_DIAG_PALETTE
+    push ax
+    mov al,13                   ; amber: calling VGA mode 12h
+    call boot_diag_palette
+    pop ax
+%endif
     mov ax,0x12
     call vc_bios
     push cs
@@ -801,6 +927,17 @@ ui_video_begin:
 .palette_done:
     mov byte [ui_active],1
     call ui_comp_begin
+%ifdef BOOT_DISK_LOG
+    cmp byte [ui_vbe],1
+    je .band_logged
+    mov al,0x1A                 ; VGA scratch allocation failed: direct fallback
+    cmp word [ui_comp_seg],0
+    je .record_band
+    mov al,0x19                 ; VGA indexed scratch band allocated
+.record_band:
+    call boot_log_stage
+.band_logged:
+%endif
     cmp byte [ui_comp_recover],1
     jne .surface_ready
     mov byte [ui_comp_recover],0
@@ -877,6 +1014,46 @@ ui_video_begin:
     mov [ui_boot_drive],al
     ret
 
+; Deferred to the main loop: no module callback or modal window is unloaded.
+ui_mode_switch:
+    mov byte [vc_graphics_transition],1
+    call wp_end
+    call ui_pointer_hide
+    call ui_comp_end
+    call ui_video_begin
+    mov word [ui_mode_request],0
+    mov byte [vc_graphics_transition],0
+    ret
+
+; Run once per shell lifetime; missing/invalid preference shows the welcome.
+ui_welcome_start:
+    cmp byte [ui_welcome_done],1
+    je .done
+    mov byte [ui_welcome_done],1
+    mov dx,ui_welcome_path
+    mov ax,0x3D00
+    int 0x21
+    jc .show
+    mov bx,ax
+    mov dx,ui_welcome_value
+    mov cx,2
+    mov ah,0x3F
+    int 0x21
+    push ax
+    mov ah,0x3E
+    int 0x21
+    pop ax
+    cmp ax,1
+    jne .show
+    cmp byte [ui_welcome_value],'0'
+    je .done
+.show:
+    mov bl,2
+    xor si,si
+    call app_open
+.done:
+    ret
+
 ui_video_end:
     call ui_sfx_end
     call app_suspend
@@ -908,26 +1085,48 @@ ui_draw:
     cmp byte [ui_comp_recover],1
     jne .done
     mov byte [ui_comp_recover],0
-    call ui_video_end
-    call ui_video_begin
+    call ui_mode_switch
     mov byte [ui_full_redraw],0
     mov byte [ui_bar_dirty],0
     mov byte [ui_comp_dirty],0
     call ui_comp_draw
 .done:
     ret
-ui_draw_scene:
-    mov word [ui_hit_count],0
-    mov byte [ui_hit_owner],0
-    U_RECT 0,0,[ui_width],[ui_height],3
-    call wp_background
-    ; Ciuki's native portrait identifies the system dedicated to him.
+ui_draw_topbar_visuals:
     U_RECT 0,0,[ui_width],29,7
     U_RECT 0,28,[ui_width],1,8
     mov bx,5
     mov dx,2
     call ciuki_logo24
     U_TEXT 33,6,ut_brand,0,1
+    mov bx,[ui_width]
+    sub bx,72
+    U_BUTTON bx,3,66,23,ut_dos,3
+    ret
+ui_draw_scene:
+    mov word [ui_hit_count],0
+    mov byte [ui_hit_owner],0
+    ; A band inside a visible window's client area is painted entirely by
+    ; that window: skip the background, wallpaper, top bar and desktop icons
+    ; (a DOS window presenting a game composes only its own frame).
+    ; The hit table is rebuilt with every band, so the top bar's hit areas
+    ; are registered even when its pixels are not drawn.
+    mov byte [ui_scene_covered],0
+    cmp byte [ui_composing],1
+    jne .background
+    push si
+    mov si,-1
+    call ui_window_band_covered
+    pop si
+    jnc .background
+    mov byte [ui_scene_covered],1
+    jmp .top_hits
+.background:
+    U_RECT 0,0,[ui_width],[ui_height],3
+    call wp_background
+    ; Ciuki's native portrait identifies the system dedicated to him.
+    call ui_draw_topbar_visuals
+.top_hits:
     mov bx,4
     mov dx,2
     mov cx,125
@@ -954,11 +1153,10 @@ ui_draw_scene:
     inc ax
     cmp ax,85
     jb .top_indicators
-    mov bx,[ui_width]
-    sub bx,72
-    U_BUTTON bx,3,66,23,ut_dos,3
     ; The desktop module paints the desktop (icons, folders, Recycle Bin);
     ; without it, the shell's own shortcuts.
+    cmp byte [ui_scene_covered],1
+    je .shortcuts_done
     call app_desktop_paint
     jnc .shortcuts_done
     ; Desktop shortcuts remain usable with the library closed.
@@ -1074,7 +1272,11 @@ ui_draw_window:
     call ui_hit_add
     add bx,7
     add dx,4
-    U_TEXT bx,dx,ut_library,15,1
+    mov si,ut_library
+    mov cx,[ui_ww]
+    sub cx,91
+    call ui_windows_title_color
+    call ui_title_text
     mov bx,[ui_wx]
     add bx,[ui_ww]
     sub bx,76
@@ -1913,7 +2115,11 @@ ui_saved_wh dw 340
 ui_previous_width dw 640
 ui_previous_height dw 480
 ui_layout_ready db 0
-ui_window_visible db 1
+ui_mode_request dw 0
+ui_welcome_done db 0
+ui_welcome_value db '1',0
+ui_welcome_path db '\SYSTEM\UI\WELCOME.CFG',0
+ui_window_visible db 0
 ui_maximized db 0
 ui_page db 0
 ui_selection db 0

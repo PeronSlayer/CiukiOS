@@ -1,0 +1,18 @@
+Test order reported by owner: IBM T23, then Compaq Armada E500.
+Photos: docs/photo_2026-10-01_18-02-38.jpg (IBM) and
+docs/photo_2026-10-01_18-06-20.jpg (Compaq).
+
+Both raw MBR records reach stage 0x05: CiukiDOS loaded and validated.
+
+IBM:     S00 S01 S02 S03 S04 S05 S06 S07 S08 S09 S0A S16 S0B S0C
+         S0D S19 S0E S0F S10 S13 S14 S15 S18 S12
+Compaq:  S00 S01 S02 S03 S04 S05 S06 S07 S08 S09 S0A S16 S0B S0C
+         S0D S19 S0E S0F S10 S13 S14 S15 S18
+
+S16: the INT 33h reset returned ready. S19: the 32 KiB VGA band was
+allocated. S13/S14: the first input poll returned. S15/S18: idle HLT woke
+on an interrupt. Thus the Compaq desktop loop is alive, but no key or mouse
+motion was observed. The owner reports no usable keyboard or built-in
+touchpad on the Compaq. On the IBM, both work, but the experimental VGA band
+display is corrupted and flashes about once every 30 seconds. The band
+renderer must be withdrawn from the physical profile until repaired.

@@ -1,35 +1,56 @@
 ; Compose bounded horizontal bands in ordinary DOS memory, then copy only
 ; completed pixels to VRAM. No framebuffer clear is ever presented midway
-; through a normal redraw. Storage is 60 KiB regardless of video resolution.
+; through a normal redraw. Scratch is at most 60 KiB and may be smaller.
 ui_comp_begin:
     pushad
     push es
-    cmp byte [ui_vbe],1
-    jne .done
     cmp word [ui_comp_seg],0
     jne .done
+    cmp byte [ui_vbe],1
+    je .packed_stride
+    ; Mode 12h is indexed in the scratch band. One byte per pixel keeps the
+    ; painter independent of the four VGA planes and their latches.
+    movzx eax,word [ui_width]
+    jmp .check_stride
+.packed_stride:
     ; Compute the band before allocating: even one scanline must fit the
     ; private segment. Never accept a wrapped stride or a zero-height band.
     movzx eax,word [ui_width]
     movzx ebx,byte [vc_bytes]
     imul eax,ebx
+.check_stride:
     test eax,eax
     jz .done
     cmp eax,61440
     ja .done
     mov [ui_comp_stride],ax
     mov bx,3840
+.try_alloc:
+    mov [ui_comp_try_paras],bx
+    mov ax,bx
+    shl ax,4
+    cmp ax,[ui_comp_stride]
+    jb .done
     ; Under Jemm (I=) the band lives in an XMS upper memory block, leaving
     ; conventional memory to the programs a DOS window runs.
     call ui_umb_alloc
     jnc .allocated
+    mov bx,[ui_comp_try_paras]
     mov ah,0x48
     int 0x21
-    jc .done
+    jnc .allocated
+    mov bx,[ui_comp_try_paras]
+    shr bx,1
+    cmp bx,256
+    jae .try_alloc
+    jmp .done
 .allocated:
     mov [ui_comp_seg],ax
+    mov ax,[ui_comp_try_paras]
+    shl ax,4
+    mov [ui_comp_capacity],ax
     mov bx,[ui_comp_stride]
-    mov ax,61440
+    mov ax,[ui_comp_capacity]
     xor dx,dx
     div bx
     cmp ax,64
@@ -37,7 +58,10 @@ ui_comp_begin:
     mov ax,64
 .height:
     mov [ui_comp_rows],ax
+    cmp byte [ui_vbe],1
+    jne .done
     call ui_pages_begin
+    call vc_session_fb_bind
 .done:
     pop es
     popad
@@ -107,6 +131,7 @@ ui_umb_alloc:
 ui_comp_end:
     pushad
     push es
+    call vc_session_fb_release
     mov ax,[ui_comp_seg]
     test ax,ax
     jz .done
@@ -122,6 +147,7 @@ ui_comp_end:
     int 0x21
 .freed:
     mov word [ui_comp_seg],0
+    mov word [ui_comp_capacity],0
 .done:
     mov byte [ui_page_enabled],0
     mov byte [ui_page_pending],0
@@ -145,6 +171,13 @@ ui_comp_draw:
     mov [ui_comp_right],ax
     mov ax,[ui_height]
     mov [ui_comp_limit_bottom],ax
+    mov word [ui_dmg],0
+    mov word [ui_dmg+2],0
+    mov ax,[ui_width]
+    mov [ui_dmg+4],ax
+    mov ax,[ui_height]
+    mov [ui_dmg+6],ax
+    mov byte [ui_dmg_n],1
 .bounds:
     ; Damage is an exclusive rectangle. Empty/off-screen requests must not
     ; enter the band loop: a REP/LOOP count of zero can otherwise wrap.
@@ -164,18 +197,56 @@ ui_comp_draw:
 .bottom_limit:
     cmp ax,[ui_comp_limit_top]
     jbe .pointer
-    call ui_pages_prepare
+    cmp byte [ui_vbe],1
+    je .prepare
+    ; A planar write addresses a complete group of eight pixels. Expand
+    ; damage to byte boundaries so no neighbouring pixel is lost.
+    and word [ui_comp_left],0xFFF8
+    add word [ui_comp_right],7
+    and word [ui_comp_right],0xFFF8
+    cmp word [ui_comp_right],640
+    jbe .compose
+    mov word [ui_comp_right],640
+    jmp .compose
+.prepare:
+    call ui_comp_list
+    jmp .pointer
+.compose:
     call ui_comp_bands
     jmp .pointer
 .direct:
+    ; The VGA fallback has no off-screen page. Updating the top indicators
+    ; through the full scene exposed every intermediate paint on real CRT/LCD
+    ; hardware. A top-only damage rectangle can repaint its own surface.
+    cmp byte [ui_comp_dirty],1
+    jne .direct_scene
+    cmp word [ui_comp_limit_top],0
+    jne .direct_scene
+    cmp word [ui_comp_limit_bottom],29
+    ja .direct_scene
+    cmp byte [app_overlay],0
+    jne .direct_scene
+    call ui_pointer_hide
+    ; ui_button registers the DOS hit area while drawing it. Keep the hit
+    ; table from the last full scene instead of appending once per second.
+    push word [ui_hit_count]
+    call ui_draw_topbar_visuals
+    pop word [ui_hit_count]
+    call app_desktop_topbar_paint
+    jmp .pointer
+.direct_scene:
     call ui_pointer_hide
     call ui_draw_scene
 .pointer:
     mov byte [ui_comp_dirty],0
     call ui_pages_present
-    jc .done
+    jc .restore_pointer
     call ui_pointer_show
 .done:
+    ret
+.restore_pointer:
+    ; A failed flip disables page mode; restore a cursor hidden for syncing.
+    call ui_pointer_show
     ret
 
 ; Compose the damage rectangle band by band, presenting each finished band
@@ -229,41 +300,524 @@ ui_comp_bands:
     mov byte [ui_composing],0
     ret
 
-; Idle catch-up for two-page presentation. The hidden page lags the visible
-; one by the last presented damage; compose that area into it now, so the
-; next frame composes only its own damage instead of both.
-ui_pages_sync:
-    cmp byte [ui_page_enabled],1
-    jne .done
-    cmp byte [ui_comp_dirty],0
-    jne .done
+; Synchronize the hidden page from the visible page, then compose only this
+; frame's damage. Pixel copying preserves exact occlusion and avoids invoking
+; live window painters just to catch up the other page.
+ui_comp_list:
     pushad
-    mov ax,[ui_page_previous_left]
-    mov [ui_comp_left],ax
-    mov bx,[ui_page_previous_right]
-    mov [ui_comp_right],bx
-    cmp bx,ax
-    jbe .clean
-    mov ax,[ui_page_previous_top]
-    mov [ui_comp_limit_top],ax
-    mov bx,[ui_page_previous_bottom]
-    mov [ui_comp_limit_bottom],bx
-    cmp bx,ax
-    jbe .clean
+    mov byte [ui_page_pending],0
+    mov eax,[ui_front_base]
+    mov [ui_present_base],eax
+    cmp byte [ui_page_enabled],1
+    jne .current
+    cmp byte [ui_pdmg_n],0
+    je .current
+    call ui_page_copy_needed
+    ; Catch-up may have copied the front cursor. Substitute its background
+    ; on the hidden page; never erase the visible source to perform a copy.
+    cmp byte [ui_pointer_visible],1
+    jne .current
+    push fs
+    mov fs,[ui_assets_seg]
+    mov edi,[ui_pointer_linear]
+    call ui_pointer_buffer
+    sub edi,[ui_front_base]
+    add edi,[vc_frame_bytes]
+    sub edi,[ui_front_base]
+    call vc_pointer_restore
+    pop fs
+.current:
+    push es
+    push ds
+    pop es
+    mov si,ui_dmg
+    mov di,ui_cdmg
+    mov cx,UI_DMG_MAX*4
+    cld
+    rep movsw
+    pop es
+    mov al,[ui_dmg_n]
+    mov [ui_cdmg_n],al
+    cmp byte [ui_page_enabled],1
+    jne .compose
+    push es
+    push ds
+    pop es
+    mov di,ui_ndmg
+    mov si,ui_dmg
+    mov cx,UI_DMG_MAX*4
+    cld
+    rep movsw
+    pop es
+    mov al,[ui_dmg_n]
+    mov [ui_ndmg_n],al
     mov eax,[vc_frame_bytes]
     sub eax,[ui_front_base]
     mov [ui_present_base],eax
-    call ui_comp_bands
-.clean:
-    mov ax,[ui_width]
-    mov [ui_page_previous_left],ax
-    mov ax,[ui_height]
-    mov [ui_page_previous_top],ax
-    xor ax,ax
-    mov [ui_page_previous_right],ax
-    mov [ui_page_previous_bottom],ax
+    mov byte [ui_page_pending],1
+.compose:
+    mov si,ui_cdmg
+    mov cl,[ui_cdmg_n]
+    call ui_comp_rects
     popad
+    ret
+
+; The hidden page lacks previous damage, except where the new frame will
+; replace it anyway. Subtract current rectangles before touching VRAM.
+; With N=4 rectangles, all fragment edges lie on a (2N+1)^2 cell grid,
+; so the two bounded fragment lists can represent every possible result.
+ui_page_copy_needed:
+    pushad
+    push es
+    push fs
+    mov ax,[ui_assets_seg]
+    mov es,ax
+    mov fs,ax
+    mov word [ui_catch_previous],ui_pdmg
+    movzx ax,byte [ui_pdmg_n]
+    mov [ui_catch_previous_left],ax
+.previous:
+    cmp word [ui_catch_previous_left],0
+    je .done
+    mov si,[ui_catch_previous]
+    mov eax,[si]
+    mov [fs:ui_catch_a],eax
+    mov eax,[si+4]
+    mov [fs:ui_catch_a+4],eax
+    mov word [ui_catch_source],ui_catch_a
+    mov word [ui_catch_dest],ui_catch_b
+    mov word [ui_catch_count],1
+    mov word [ui_catch_cover],ui_dmg
+    movzx ax,byte [ui_dmg_n]
+    mov [ui_catch_covers_left],ax
+.cover:
+    cmp word [ui_catch_covers_left],0
+    je .copy
+    cmp word [ui_catch_count],0
+    je .next
+    mov word [ui_catch_out_count],0
+    mov ax,[ui_catch_source]
+    mov [ui_catch_fragment],ax
+    mov ax,[ui_catch_count]
+    mov [ui_catch_fragments_left],ax
+.fragment:
+    mov si,[ui_catch_fragment]
+    mov eax,[fs:si]
+    mov [ui_catch_rect],eax
+    mov eax,[fs:si+4]
+    mov [ui_catch_rect+4],eax
+    mov di,[ui_catch_cover]
+    ; Intersect this fragment with the current rectangle.
+    mov ax,[fs:si]
+    cmp ax,[di]
+    jae .left
+    mov ax,[di]
+.left:
+    mov [ui_catch_intersection],ax
+    mov ax,[fs:si+2]
+    cmp ax,[di+2]
+    jae .top
+    mov ax,[di+2]
+.top:
+    mov [ui_catch_intersection+2],ax
+    mov ax,[fs:si+4]
+    cmp ax,[di+4]
+    jbe .right
+    mov ax,[di+4]
+.right:
+    mov [ui_catch_intersection+4],ax
+    mov ax,[fs:si+6]
+    cmp ax,[di+6]
+    jbe .bottom
+    mov ax,[di+6]
+.bottom:
+    mov [ui_catch_intersection+6],ax
+    cmp ax,[ui_catch_intersection+2]
+    jbe .whole
+    mov ax,[ui_catch_intersection+4]
+    cmp ax,[ui_catch_intersection]
+    jbe .whole
+%macro UI_PAGE_FRAGMENT 4
+    mov ax,%1
+    mov bx,%2
+    mov cx,%3
+    mov dx,%4
+    call ui_page_fragment_emit
+    jc .copy_full
+%endmacro
+    UI_PAGE_FRAGMENT [ui_catch_rect], [ui_catch_rect+2], [ui_catch_rect+4], [ui_catch_intersection+2]
+    UI_PAGE_FRAGMENT [ui_catch_rect], [ui_catch_intersection+6], [ui_catch_rect+4], [ui_catch_rect+6]
+    UI_PAGE_FRAGMENT [ui_catch_rect], [ui_catch_intersection+2], [ui_catch_intersection], [ui_catch_intersection+6]
+    UI_PAGE_FRAGMENT [ui_catch_intersection+4], [ui_catch_intersection+2], [ui_catch_rect+4], [ui_catch_intersection+6]
+    jmp .fragment_next
+.whole:
+    UI_PAGE_FRAGMENT [ui_catch_rect], [ui_catch_rect+2], [ui_catch_rect+4], [ui_catch_rect+6]
+%unmacro UI_PAGE_FRAGMENT 4
+.fragment_next:
+    add word [ui_catch_fragment],8
+    dec word [ui_catch_fragments_left]
+    jnz .fragment
+    mov ax,[ui_catch_source]
+    xchg ax,[ui_catch_dest]
+    mov [ui_catch_source],ax
+    mov ax,[ui_catch_out_count]
+    mov [ui_catch_count],ax
+    add word [ui_catch_cover],8
+    dec word [ui_catch_covers_left]
+    jmp .cover
+.copy:
+    mov si,[ui_catch_source]
+    mov cx,[ui_catch_count]
+    call ui_page_copy_rects
+    jmp .next
+.copy_full:
+    ; Defensive fallback preserves pixels even if a damaged count is bad.
+    push fs
+    push ds
+    pop fs
+    mov si,[ui_catch_previous]
+    mov cl,1
+    call ui_page_copy_rects
+    pop fs
+.next:
+    add word [ui_catch_previous],8
+    dec word [ui_catch_previous_left]
+    jmp .previous
 .done:
+    pop fs
+    pop es
+    popad
+    ret
+
+ui_page_fragment_emit:
+    pushad
+    cmp cx,ax
+    jbe .empty
+    cmp dx,bx
+    jbe .empty
+    mov si,[ui_catch_out_count]
+    cmp si,UI_CATCH_MAX
+    jae .full
+    shl si,3
+    mov di,[ui_catch_dest]
+    add di,si
+    mov [es:di],ax
+    mov [es:di+2],bx
+    mov [es:di+4],cx
+    mov [es:di+6],dx
+    inc word [ui_catch_out_count]
+.empty:
+    clc
+    popad
+    ret
+.full:
+    stc
+    popad
+    ret
+
+; FS:SI = rectangle list (left,top,right,bottom), CL = count. Copy each
+; completed rectangle from the visible page into the hidden page. Prefer
+; CVSESSION's physical-LFB copy; otherwise use the compositor scratch band
+; and normal VBE get/put paths, which also cover banked modes.
+ui_page_copy_rects:
+    pushad
+    push es
+    push fs
+    movzx eax,cl
+    mov [ui_copy_rect_count],ax
+    mov [ui_copy_rect_ptr],si
+    mov ax,fs
+    mov [ui_copy_rect_seg],ax
+    mov eax,[ui_front_base]
+    mov [ui_copy_source_base],eax
+    mov eax,[vc_frame_bytes]
+    sub eax,[ui_front_base]
+    mov [ui_copy_dest_base],eax
+.rect:
+    cmp word [ui_copy_rect_count],0
+    je .done
+    mov si,[ui_copy_rect_ptr]
+    mov fs,[ui_copy_rect_seg]
+    mov ax,[fs:si]
+    mov [ui_copy_left],ax
+    mov ax,[fs:si+2]
+    mov [ui_copy_top],ax
+    mov ax,[fs:si+4]
+    mov [ui_copy_right],ax
+    mov ax,[fs:si+6]
+    mov [ui_copy_bottom],ax
+    mov ax,[ui_copy_right]
+    cmp ax,[ui_copy_left]
+    jbe .next
+    mov ax,[ui_copy_bottom]
+    cmp ax,[ui_copy_top]
+    jbe .next
+    movzx eax,word [ui_copy_right]
+    movzx edx,word [ui_copy_left]
+    sub eax,edx
+    movzx edx,byte [vc_bytes]
+    imul eax,edx
+    mov [ui_copy_row_bytes],ax
+    mov esi,[ui_copy_source_base]
+    movzx eax,word [ui_copy_top]
+    movzx edx,word [vc_pitch]
+    imul eax,edx
+    add esi,eax
+    movzx eax,word [ui_copy_left]
+    movzx edx,byte [vc_bytes]
+    imul eax,edx
+    add esi,eax
+    mov edi,[ui_copy_dest_base]
+    movzx eax,word [ui_copy_top]
+    movzx edx,word [vc_pitch]
+    imul eax,edx
+    add edi,eax
+    movzx eax,word [ui_copy_left]
+    movzx edx,byte [vc_bytes]
+    imul eax,edx
+    add edi,eax
+    mov cx,[ui_copy_row_bytes]
+    mov dx,[ui_copy_bottom]
+    sub dx,[ui_copy_top]
+    call vc_fb_copy_rows
+    jnc .next
+    ; Scratch fallback works for a bound-service miss and for banked VBE.
+    movzx ebx,word [ui_copy_row_bytes]
+    test ebx,ebx
+    jz .next
+    movzx eax,word [ui_comp_capacity]
+    xor edx,edx
+    div ebx
+    test eax,eax
+    jz .next
+    cmp eax,64
+    jbe .rows_ready
+    mov eax,64
+.rows_ready:
+    mov [ui_copy_rows],ax
+    mov ax,[ui_copy_top]
+    mov [ui_copy_y],ax
+.band:
+    mov ax,[ui_copy_bottom]
+    sub ax,[ui_copy_y]
+    cmp ax,[ui_copy_rows]
+    jbe .band_rows
+    mov ax,[ui_copy_rows]
+.band_rows:
+    test ax,ax
+    jz .next
+    mov [ui_copy_chunk_rows],ax
+    mov edi,[ui_copy_source_base]
+    movzx eax,word [ui_copy_y]
+    movzx edx,word [vc_pitch]
+    imul eax,edx
+    add edi,eax
+    movzx eax,word [ui_copy_left]
+    movzx edx,byte [vc_bytes]
+    imul eax,edx
+    add edi,eax
+    mov cx,[ui_copy_row_bytes]
+    mov dx,[ui_copy_chunk_rows]
+    mov bx,cx
+    xor si,si
+    mov ax,[ui_comp_seg]
+    mov fs,ax
+    call vc_fb_get_rows
+    mov edi,[ui_copy_dest_base]
+    movzx eax,word [ui_copy_y]
+    movzx edx,word [vc_pitch]
+    imul eax,edx
+    add edi,eax
+    movzx eax,word [ui_copy_left]
+    movzx edx,byte [vc_bytes]
+    imul eax,edx
+    add edi,eax
+    mov cx,[ui_copy_row_bytes]
+    mov dx,[ui_copy_chunk_rows]
+    mov bx,cx
+    xor si,si
+    call vc_fb_put_rows
+    mov ax,[ui_copy_y]
+    add ax,[ui_copy_chunk_rows]
+    mov [ui_copy_y],ax
+    jmp .band
+.next:
+    add word [ui_copy_rect_ptr],8
+    dec word [ui_copy_rect_count]
+    jmp .rect
+.done:
+    pop fs
+    pop es
+    popad
+    ret
+
+; SI = rectangle list (left, top, right, bottom words), CL = count: compose
+; each into ui_present_base.
+ui_comp_rects:
+    pushad
+    movzx cx,cl
+.rect:
+    jcxz .done
+    mov ax,[si]
+    mov [ui_comp_left],ax
+    mov ax,[si+2]
+    mov [ui_comp_limit_top],ax
+    mov ax,[si+4]
+    mov [ui_comp_right],ax
+    mov ax,[si+6]
+    mov [ui_comp_limit_bottom],ax
+    mov ax,[ui_comp_right]
+    cmp ax,[ui_comp_left]
+    jbe .skip
+    mov ax,[ui_comp_limit_bottom]
+    cmp ax,[ui_comp_limit_top]
+    jbe .skip
+    pusha
+    call ui_comp_bands
+    popa
+.skip:
+    add si,8
+    dec cx
+    jmp .rect
+.done:
+    popad
+    ret
+
+; [ui_ra_l..ui_ra_b] = rectangle (exclusive right/bottom). SI = list, BX = its
+; count byte, AL = capacity. The rectangle merges into an entry it overlaps
+; or nearly touches; else it is appended; a full list merges it into the
+; entry whose area grows least.
+ui_dmg_insert:
+    pushad
+    mov [ui_ra_count],bx
+    mov [ui_ra_cap],al
+    movzx cx,byte [bx]
+    mov di,si
+    xor bx,bx
+.find:
+    cmp bx,cx
+    jae .append
+    mov ax,[ui_ra_r]
+    add ax,UI_DMG_SLACK
+    cmp [di],ax
+    ja .next
+    mov ax,[di+4]
+    add ax,UI_DMG_SLACK
+    cmp ax,[ui_ra_l]
+    jb .next
+    mov ax,[ui_ra_b]
+    add ax,UI_DMG_SLACK
+    cmp [di+2],ax
+    ja .next
+    mov ax,[di+6]
+    add ax,UI_DMG_SLACK
+    cmp ax,[ui_ra_t]
+    jb .next
+    jmp .merge
+.next:
+    add di,8
+    inc bx
+    jmp .find
+.append:
+    cmp cl,[ui_ra_cap]
+    jae .least
+    mov ax,[ui_ra_l]
+    mov [di],ax
+    mov ax,[ui_ra_t]
+    mov [di+2],ax
+    mov ax,[ui_ra_r]
+    mov [di+4],ax
+    mov ax,[ui_ra_b]
+    mov [di+6],ax
+    mov bx,[ui_ra_count]
+    inc byte [bx]
+    jmp .done
+.least:
+    mov dword [ui_ra_best],0xFFFFFFFF
+    mov [ui_ra_best_at],si
+    mov di,si
+    xor bx,bx
+.scan:
+    cmp bx,cx
+    jae .take
+    call ui_dmg_growth
+    cmp eax,[ui_ra_best]
+    jae .scan_next
+    mov [ui_ra_best],eax
+    mov [ui_ra_best_at],di
+.scan_next:
+    add di,8
+    inc bx
+    jmp .scan
+.take:
+    mov di,[ui_ra_best_at]
+.merge:
+    mov ax,[ui_ra_l]
+    cmp ax,[di]
+    jae .merge_top
+    mov [di],ax
+.merge_top:
+    mov ax,[ui_ra_t]
+    cmp ax,[di+2]
+    jae .merge_right
+    mov [di+2],ax
+.merge_right:
+    mov ax,[ui_ra_r]
+    cmp ax,[di+4]
+    jbe .merge_bottom
+    mov [di+4],ax
+.merge_bottom:
+    mov ax,[ui_ra_b]
+    cmp ax,[di+6]
+    jbe .done
+    mov [di+6],ax
+.done:
+    popad
+    ret
+
+; DI = list entry: EAX = area of (entry + ui_ra) minus area of the entry.
+ui_dmg_growth:
+    push ebx
+    push ecx
+    push edx
+    mov ax,[di]
+    cmp ax,[ui_ra_l]
+    jbe .left
+    mov ax,[ui_ra_l]
+.left:
+    mov bx,[di+4]
+    cmp bx,[ui_ra_r]
+    jae .right
+    mov bx,[ui_ra_r]
+.right:
+    sub bx,ax
+    mov ax,[di+2]
+    cmp ax,[ui_ra_t]
+    jbe .top
+    mov ax,[ui_ra_t]
+.top:
+    mov cx,[di+6]
+    cmp cx,[ui_ra_b]
+    jae .bottom
+    mov cx,[ui_ra_b]
+.bottom:
+    sub cx,ax
+    movzx eax,bx
+    movzx ecx,cx
+    imul eax,ecx
+    mov ebx,eax
+    movzx eax,word [di+4]
+    movzx ecx,word [di]
+    sub eax,ecx
+    movzx ecx,word [di+6]
+    movzx edx,word [di+2]
+    sub ecx,edx
+    imul eax,ecx
+    sub ebx,eax
+    mov eax,ebx
+    pop edx
+    pop ecx
+    pop ebx
     ret
 
 ; Hardware pages are optional. Some firmware omits static image-page counts;
@@ -307,12 +861,13 @@ ui_pages_begin:
     shl eax,1
     mov [vc_access_bytes],eax
     mov byte [ui_page_enabled],1
-    mov word [ui_page_previous_left],0
-    mov word [ui_page_previous_top],0
+    mov word [ui_pdmg],0
+    mov word [ui_pdmg+2],0
     mov ax,[ui_width]
-    mov [ui_page_previous_right],ax
+    mov [ui_pdmg+4],ax
     mov ax,[ui_height]
-    mov [ui_page_previous_bottom],ax
+    mov [ui_pdmg+6],ax
+    mov byte [ui_pdmg_n],1
     jmp .done
 .unsupported:
     mov byte [ui_page_failed],1
@@ -329,6 +884,10 @@ ui_pages_begin:
 ; alone; a firmware may accept a request but retain the previous viewport.
 ui_pages_switch:
     pushad
+    call vc_session_fb_present
+    jnc .ready
+    cmp byte [vc_session_gpu],0
+    jne .fail                   ; an owned GPU error is not a VBE page flip
     mov [ui_page_scanline],dx
     xor bx,bx
     xor cx,cx
@@ -346,6 +905,7 @@ ui_pages_switch:
     mov ax,[ui_page_scanline]
     cmp ax,[vc_bios_dx]
     jne .fail
+.ready:
     popad
     clc
     ret
@@ -354,52 +914,20 @@ ui_pages_switch:
     stc
     ret
 
-ui_pages_prepare:
-    pushad
-    mov byte [ui_page_pending],0
-    ; Single-page presentation targets the visible page. dos_host_prepare
-    ; suspends paging without flipping, so that can be the second page.
-    mov eax,[ui_front_base]
-    mov [ui_present_base],eax
-    cmp byte [ui_page_enabled],1
+; Service native scanout after a complete pointer update, including idle
+; desktop iterations. Hidden-page writes alone never trigger a GPU upload.
+ui_gpu_poll:
+    cmp byte [vc_session_gpu],1 ; physical scanout changes only at page flips
     jne .done
-    ; The back page contains the scene from one presentation ago. Redraw
-    ; previous damage plus current damage, then retain ONLY current damage:
-    ; after swapping, the old front differs from the new scene by that area.
-    mov ax,[ui_comp_left]
-    mov [ui_page_next_left],ax
-    cmp ax,[ui_page_previous_left]
-    jbe .left
-    mov ax,[ui_page_previous_left]
-    mov [ui_comp_left],ax
-.left:
-    mov ax,[ui_comp_right]
-    mov [ui_page_next_right],ax
-    cmp ax,[ui_page_previous_right]
-    jae .right
-    mov ax,[ui_page_previous_right]
-    mov [ui_comp_right],ax
-.right:
-    mov ax,[ui_comp_limit_top]
-    mov [ui_page_next_top],ax
-    cmp ax,[ui_page_previous_top]
-    jbe .top
-    mov ax,[ui_page_previous_top]
-    mov [ui_comp_limit_top],ax
-.top:
-    mov ax,[ui_comp_limit_bottom]
-    mov [ui_page_next_bottom],ax
-    cmp ax,[ui_page_previous_bottom]
-    jae .bottom
-    mov ax,[ui_page_previous_bottom]
-    mov [ui_comp_limit_bottom],ax
-.bottom:
-    mov eax,[vc_frame_bytes]
-    sub eax,[ui_front_base]
-    mov [ui_present_base],eax
-    mov byte [ui_page_pending],1
-.done:
+    pushad
+    xor dx,dx
+    cmp dword [ui_front_base],0
+    je .present
+    mov dx,[ui_height]
+.present:
+    call vc_session_fb_present
     popad
+.done:
     ret
 
 ui_pages_present:
@@ -411,31 +939,48 @@ ui_pages_present:
     jne .ready
     pushad
     mov byte [ui_page_pending],0
-    ; Cursor save/restore belongs solely to the visible page. Restore it
-    ; before swapping so the next back page never contains a stale cursor.
-    call ui_pointer_hide
+    ; Both pages retain their own save-under. Prepare the new cursor while
+    ; hidden; only erase the old one after that page is no longer visible.
+    push dword [ui_pointer_linear]
+    push word [ui_pointer_visible]
+    mov eax,[ui_present_base]
+    mov [ui_front_base],eax
+    mov byte [ui_pointer_visible],0
+    call ui_pointer_show
     xor dx,dx
     cmp dword [ui_present_base],0
     je .flip
     mov dx,[ui_height]
 .flip:
     call ui_pages_switch
+    pop ax
+    pop edi
     jc .fail
-    mov eax,[ui_present_base]
-    mov [ui_front_base],eax
-    mov ax,[ui_page_next_left]
-    mov [ui_page_previous_left],ax
-    mov ax,[ui_page_next_right]
-    mov [ui_page_previous_right],ax
-    mov ax,[ui_page_next_top]
-    mov [ui_page_previous_top],ax
-    mov ax,[ui_page_next_bottom]
-    mov [ui_page_previous_bottom],ax
+    test al,al
+    jz .damage
+    push fs
+    mov fs,[ui_assets_seg]
+    call ui_pointer_buffer
+    call vc_pointer_restore
+    pop fs
+.damage:
+    push es
+    push ds
+    pop es
+    mov si,ui_ndmg
+    mov di,ui_pdmg
+    mov cx,UI_DMG_MAX*4
+    cld
+    rep movsw
+    pop es
+    mov al,[ui_ndmg_n]
+    mov [ui_pdmg_n],al
     popad
 .ready:
     clc
     ret
 .fail:
+    mov byte [ui_pointer_visible],0
     call ui_pages_failure
     popad
     stc
@@ -466,11 +1011,14 @@ ui_comp_band_setup:
     pushad
     mov ax,[ui_comp_right]
     sub ax,[ui_comp_left]
+    cmp byte [ui_vbe],1
+    jne .stride
     movzx bx,byte [vc_bytes]
     mul bx
+.stride:
     mov [ui_comp_stride],ax
     mov bx,ax
-    mov ax,61440
+    mov ax,[ui_comp_capacity]
     xor dx,dx
     div bx
     cmp ax,64
@@ -523,23 +1071,35 @@ ui_comp_rect:
     mov di,ax
     mov ax,bx
     sub ax,[ui_comp_left]
+    cmp byte [ui_vbe],1
+    jne .indexed_offset
     movzx cx,byte [vc_bytes]
     mul cx
+.indexed_offset:
     add di,ax
     mov ax,[ui_comp_seg]
     mov es,ax
+    cmp byte [ui_vbe],1
+    jne .indexed
     movzx bx,byte [ui_fill_color]
     shl bx,2
     mov eax,[vc_colors+bx]
+    jmp .row
+.indexed:
+    mov al,[ui_fill_color]
 .row:
     push di
     mov cx,[ui_fill_width]
+    cmp byte [ui_vbe],1
+    jne .bytes
     cmp byte [vc_bytes],4
     je .dwords
     cmp byte [vc_bytes],2
     je .words
     cmp byte [vc_bytes],3
     je .triples
+    jmp .bytes
+.bytes:
     rep stosb
     jmp .next
 .words:
@@ -598,8 +1158,11 @@ ui_comp_glyph:
     mov di,ax
     mov ax,bx
     sub ax,[ui_comp_left]
+    cmp byte [ui_vbe],1
+    jne .indexed_offset
     movzx cx,byte [vc_bytes]
     mul cx
+.indexed_offset:
     add di,ax
     pop dx
     mov [ui_comp_glyph_x],bx
@@ -615,6 +1178,8 @@ ui_comp_glyph:
     cmp ax,[ui_comp_right]
     jae .next
     push bx
+    cmp byte [ui_vbe],1
+    jne .indexed_pixel
     movzx bx,byte [ug_text_color]
     shl bx,2
     mov eax,[vc_colors+bx]
@@ -634,10 +1199,21 @@ ui_comp_glyph:
     jmp .next
 .byte:
     mov [es:di],al
+    jmp .next
+.indexed_pixel:
+    mov al,[ug_text_color]
+    mov [es:di],al
+    pop bx
 .next:
     inc word [ui_comp_glyph_x]
+    cmp byte [ui_vbe],1
+    jne .indexed_advance
     movzx ax,byte [vc_bytes]
     add di,ax
+    jmp .advance_done
+.indexed_advance:
+    inc di
+.advance_done:
     loop .pixel
     pop bx
 .skip:
@@ -651,6 +1227,11 @@ ui_comp_glyph:
     ret
 
 ui_comp_present:
+    cmp byte [ui_vbe],1
+    je .packed
+    call ui_vga_present
+    ret
+.packed:
     ; Write each completed band row once, sequentially, without reading VRAM.
     pushad
     push fs
@@ -681,6 +1262,9 @@ ui_comp_present:
     pop fs
     popad
     ret
+
+%include "src/com/vga_band_present.inc"
+VGA_INDEXED_PRESENT ui_vga_present, ui_comp_seg, ui_comp_left, ui_comp_right, ui_comp_top, ui_comp_bottom, ui_vga_row_bytes, ui_vga_rows, ui_vga_origin, ui_vga_plane_bit
 
 ; Extend the invalidated region with a physical rectangle. The previous and
 ; next bounds of a moving window are both included, including its shadow.
@@ -717,6 +1301,20 @@ ui_comp_damage:
     jbe .bottom
     mov si,[ui_height]
 .bottom:
+    mov [ui_ra_l],bx
+    mov [ui_ra_t],dx
+    mov [ui_ra_r],cx
+    mov [ui_ra_b],si
+    cmp byte [ui_comp_dirty],1
+    je .listed
+    mov byte [ui_dmg_n],0
+.listed:
+    pusha
+    mov si,ui_dmg
+    mov bx,ui_dmg_n
+    mov al,UI_DMG_MAX
+    call ui_dmg_insert
+    popa
     cmp byte [ui_comp_dirty],1
     je .extend
     mov [ui_comp_left],bx
@@ -768,12 +1366,36 @@ ui_comp_damage_drag:
     popad
     ret
 
+UI_DMG_MAX equ 4                ; separate damage rectangles per frame
+UI_CATCH_MAX equ (UI_DMG_MAX*2+1)*(UI_DMG_MAX*2+1)
+UI_CDMG_MAX equ 8               ; current plus the back page's previous ones
+UI_DMG_SLACK equ 16             ; nearer rectangles merge (fewer scene passes)
+ui_dmg_n db 0
+ui_ndmg_n db 0
+ui_pdmg_n db 0
+ui_cdmg_n db 0
+ui_ra_cap db 0
+    align 2
+ui_dmg times UI_DMG_MAX*4 dw 0  ; this frame's damage
+ui_ndmg times UI_DMG_MAX*4 dw 0 ; becomes the previous damage at the flip
+ui_pdmg times UI_DMG_MAX*4 dw 0 ; what the back page lacks
+ui_cdmg times UI_CDMG_MAX*4 dw 0 ; composed now
+ui_ra_l dw 0
+ui_ra_t dw 0
+ui_ra_r dw 0
+ui_ra_b dw 0
+ui_ra_count dw 0
+ui_ra_best_at dw 0
+ui_ra_best dd 0
 ui_comp_seg dw 0
+ui_comp_capacity dw 0
+ui_comp_try_paras dw 0
 ui_comp_stride dw 0
 ui_comp_rows dw 0
 ui_comp_top dw 0
 ui_comp_bottom dw 0
 ui_composing db 0
+ui_scene_covered db 0           ; this band lies in a window's client area
 ui_comp_dirty db 0
 ui_comp_left dw 0
 ui_comp_right dw 0
@@ -783,6 +1405,35 @@ ui_comp_x_bytes dw 0
 ui_comp_row_bytes dw 0
 ui_comp_glyph_x dw 0
 ui_comp_cursor_band db 0
+ui_vga_row_bytes dw 0
+ui_vga_rows dw 0
+ui_vga_origin dw 0
+ui_vga_plane_bit db 0
+ui_copy_rect_count dw 0
+ui_copy_rect_ptr dw 0
+ui_copy_rect_seg dw 0
+ui_copy_source_base dd 0
+ui_copy_dest_base dd 0
+ui_copy_left dw 0
+ui_copy_top dw 0
+ui_copy_right dw 0
+ui_copy_bottom dw 0
+ui_copy_row_bytes dw 0
+ui_copy_rows dw 0
+ui_copy_chunk_rows dw 0
+ui_copy_y dw 0
+ui_catch_previous dw 0
+ui_catch_previous_left dw 0
+ui_catch_source dw 0
+ui_catch_dest dw 0
+ui_catch_count dw 0
+ui_catch_cover dw 0
+ui_catch_covers_left dw 0
+ui_catch_fragment dw 0
+ui_catch_fragments_left dw 0
+ui_catch_out_count dw 0
+ui_catch_rect times 4 dw 0
+ui_catch_intersection times 4 dw 0
 ui_page_enabled db 0
 ui_page_pending db 0
 ui_page_failed db 0
@@ -791,11 +1442,3 @@ ui_front_base dd 0
 ui_xms dd 0
 ui_present_base dd 0
 ui_page_scanline dw 0
-ui_page_previous_left dw 0
-ui_page_previous_right dw 0
-ui_page_previous_top dw 0
-ui_page_previous_bottom dw 0
-ui_page_next_left dw 0
-ui_page_next_right dw 0
-ui_page_next_top dw 0
-ui_page_next_bottom dw 0

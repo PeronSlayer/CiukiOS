@@ -24,9 +24,12 @@ CV_FIRST_PORT equ 03B0h
 CV_PORT_COUNT equ 30h
 CV_LAST_VIDEO_PORT equ 03DFh
 CV_DEV_RANGES equ 7
+CV_OP_VMM_CLOCK equ 4Fh
 CV_OP_DEV_IO  equ 34h            ; VM_OP_DEV_IO (session_devices_abi.inc)
 CV_OP_DEV_PM_IRQ equ 36h         ; VM_OP_DEV_PM_IRQ
 CV_OP_DEV_PHYSICAL_IRQ equ 38h   ; IRQ1/IRQ12 while HDPMI owns the client
+CV_OP_VMM_INPUT_YIELD equ 4Ch    ; VM_OP_VMM_INPUT_YIELD (session_abi.inc)
+CV_OP_VMM_PRESENT equ 4Eh        ; VM_OP_VMM_PRESENT
 CV_SHARED_DEVICE_IRQS equ 320    ; cvvid_shared.device_irqs (session_video.h)
 CV_FIRST_PTE  equ 0A0h
 CV_VIDEO_PAGES equ 67
@@ -35,6 +38,8 @@ CV_VIDEO_BYTES equ CV_VIDEO_PAGES*4096
 _cvdpmi_video_execute proto near
 _cvdpmi_video_port_read proto near
 _cvdpmi_video_port_write proto near
+_cvdpmi_video_tick proto near
+_cvdpmi_video_direct_off proto near
 
 ; Four saved segment registers, PUSHAD, direction dword, then the official
 ; DPMI 0.9 exception frame supplied by HDPMI 3.24.
@@ -88,7 +93,7 @@ cv_jlm_entry           dd 0
 ; the keyboard controller's data and status ports: with several VMs a key
 ; belongs to the VM with the focus, and a client that reads the controller
 ; directly gets it from its session's model (the monitor routes the byte).
-cv_dev_ranges          dw 00h,22h, 80h,10h, 0A0h,40h, 220h,10h, 388h,4, 60h,1, 64h,1
+cv_dev_ranges          dw 40h,4, 00h,22h, 80h,10h, 0A0h,40h, 220h,10h, 388h,4, 60h,5
 ; Device IRQ lines CVSESSION holds for this client (last DEV_IO / DEV_PM_IRQ)
 ; and how many were delivered.
 cv_pm_magic            db 'CVPMIRQ!'
@@ -129,6 +134,7 @@ cv_callback_busy        db 0
 	cv_video_busy           db 0
 	align 4
 cv_video_shared        dd 0
+cv_aperture_pte        dd 0       ; linear HDPMI PTE of A0000h (C helpers)
 cv_saved_stack          dd 0
                         dw 0
 cv_fault_frame         dd 0
@@ -498,6 +504,9 @@ install_next:
 	mov eax,cr3
 	mov es:[edi+CVSCHED_RESERVED0],eax
 	mov cr3,eax
+	mov eax,ss:pPageTab0
+	add eax,CV_FIRST_PTE*4
+	mov fs:cv_aperture_pte,eax
 
 	mov esi,ss:pPageTab0
 	add esi,CV_FIRST_PTE*4
@@ -521,6 +530,7 @@ cv_install_ptes endp
 ; verify every entry.  This occurs only after the exact 3.24 callback handle
 ; has been removed, and before HDPMI frees client-specific state.
 cv_restore_ptes proc
+	mov dword ptr fs:cv_aperture_pte,0
 	mov esi,ss:pPageTab0
 	add esi,CV_FIRST_PTE*4
 	xor edx,edx
@@ -561,6 +571,16 @@ cv_guard_ptes proc
 	xor ebx,ebx
 	xor edx,edx
 	mov ecx,CVSCHED_PTE_COUNT
+	; A0000-AFFFF may expose one VGA plane directly (cvvid_shared.pm_direct
+	; at +60, see hdpmi_video_adapter.c): those entries are not the shadow's.
+	mov eax,fs:cv_video_shared
+	test eax,eax
+	jz guard_next
+	test byte ptr es:[eax+60],7
+	jz guard_next
+	add esi,16*4
+	mov edx,16*4
+	sub ecx,16
 guard_next:
 	mov eax,es:[ebp+edx]
 	cmp es:[esi],eax
@@ -611,6 +631,7 @@ cv_register_callback proc
 	inc dword ptr es:[edi+CVSCHED_INSTALLS]
 	mov dword ptr es:[edi+CVSCHED_CALLBACK_BYTES],CV_CALLBACK_BYTES
 	call cv_register_devices
+	jc register_bad
 register_ready:
 	clc
 	ret
@@ -619,8 +640,10 @@ register_bad:
 	ret
 cv_register_callback endp
 
-; Device bridge ranges.  A range another owner already traps stays theirs
-; (physical for this client); none is required for the video path.
+; HDPMI has eight range slots: VGA plus these seven. Keyboard 60h/64h
+; share one range; intervening ports retain physical DEV_IO semantics. PIT
+; is mandatory: a client must never reprogram the physical host clock.
+; Other ranges already held by another owner retain their prior behavior.
 cv_register_devices proc
 	pushad
 	mov eax,ss:cvdpmi_jlm_entry
@@ -648,6 +671,12 @@ register_device_skip:
 	jb register_device_next
 	pop ds
 	popad
+	cmp dword ptr fs:cv_dev_handles,0
+	je register_device_failed
+	clc
+	ret
+register_device_failed:
+	stc
 	ret
 cv_register_devices endp
 
@@ -864,7 +893,8 @@ if_irq_pass:
 cvdpmi_if_irq0 endp
 
 ; EAX=physical IRQ line (1 or 12) at HDPMI's handler, with IF clear.
-; CF=0 if CVSESSION took or routed the controller byte.  Its V86 IRQ filter
+; CF=0 if CVSESSION took or routed the controller byte; then ZF=1 when it
+; went to a VM that does not run (see cvdpmi_input_yield).  Its V86 IRQ filter
 ; cannot see this interrupt while a protected-mode DOS/4GW client owns it.
 cvdpmi_physical_irq proc near public
 	pushad
@@ -877,6 +907,7 @@ cvdpmi_physical_irq proc near public
 	jnz irq_pass
 	test ebx,ebx
 	jz irq_pass
+	cmp bl,2		; ZF=1: the byte is for a VM that does not run
 	popad
 	clc
 	ret
@@ -885,6 +916,31 @@ irq_pass:
 	stc
 	ret
 cvdpmi_physical_irq endp
+
+; At HDPMI's IRQ1/IRQ12 handler after its EOI, IF clear, with ZF still as
+; cvdpmi_physical_irq returned it (only MOV/OUT in between): ZF=1 lets the
+; VM the byte is for run now, not at the next timer tick (VMM_INPUT_YIELD).
+; HDPMI's protected image has about 32 bytes left below RVA 10000h.
+cvdpmi_input_yield proc near public
+	jnz input_done
+	pushad
+	push fs
+	push byte ptr _CSALIAS_
+	pop fs
+	; Never inside the client's virtual-CLI single-step region: like a
+	; deferred IRQ0 (cvdpmi_if_irq0), the VM switch waits. Switching VMs
+	; there would hand the stepping TF to the client (exception 01h).
+	cmp dword ptr fs:cvdpmi_cli_stepping,0
+	jne input_skip
+	push CV_OP_VMM_INPUT_YIELD
+	pop eax
+	call cv_bridge_call
+input_skip:
+	pop fs
+	popad
+input_done:
+	ret
+cvdpmi_input_yield endp
 
 ; The DPMI 0900/0901/0902 path passes its return IRET32 in ECX and AL=op.
 ; Returns previous state in AL, clears client CF, leaves physical IF enabled.
@@ -1807,6 +1863,83 @@ if_abort_exit:
  mov ax,0C10Fh
  jmp _exitclientEx
 
+; EAX = cdecl C procedure taking the shared video block. Runs it like the
+; fault path does: callback stack with flat SS/DS/ES and IF clear. FS = the
+; client alias. Skipped while that stack is in use. Preserves everything.
+cv_video_c_call proc
+	pushad
+	push ds
+	push es
+	mov ebx,eax
+	cmp dword ptr fs:cv_video_shared,0
+	je video_c_done
+	cmp byte ptr fs:cv_callback_busy,0
+	jne video_c_done
+	cmp byte ptr fs:cv_video_busy,0
+	jne video_c_done
+	push _CSALIAS_
+	call _cvdpmi_selector_base
+	add esp,4
+	add eax,offset cv_callback_stack_end
+	mov fs:cv_stack_pointer,eax
+	mov fs:cv_saved_stack,esp
+	mov ax,ss
+	mov word ptr fs:[cv_saved_stack+4],ax
+	pushfd
+	pop eax
+	mov fs:cv_saved_host_flags,eax
+	cli
+	push byte ptr _FLATSEL_
+	pop ds
+	push byte ptr _FLATSEL_
+	pop es
+	lss esp,fword ptr fs:cv_stack_pointer
+	push fs:cv_video_shared
+	call ebx
+	add esp,4
+	lss esp,fword ptr fs:cv_saved_stack
+	push byte ptr _CSALIAS_
+	pop fs
+	push dword ptr fs:cv_saved_host_flags
+	popfd
+video_c_done:
+	pop es
+	pop ds
+	popad
+	ret
+cv_video_c_call endp
+
+; Flat C helpers for the direct VGA plane window (hdpmi_video_adapter.c).
+; They run on the callback stack: only FS (client alias) addresses HDPMI.
+_cvdpmi_aperture_ptes proc near public
+	mov eax,fs:cv_aperture_pte
+	ret
+_cvdpmi_aperture_ptes endp
+
+_cvdpmi_shadow_ptes proc near public
+	mov eax,fs:cv_descriptor
+	test eax,eax
+	jz shadow_ptes_done
+	add eax,CVSCHED_PTES
+shadow_ptes_done:
+	ret
+_cvdpmi_shadow_ptes endp
+
+_cvdpmi_video_pages proc near public
+	mov eax,fs:cv_descriptor
+	test eax,eax
+	jz video_pages_done
+	add eax,CVSCHED_BYTES+8
+video_pages_done:
+	ret
+_cvdpmi_video_pages endp
+
+_cvdpmi_flush_tlb proc near public
+	mov eax,cr3
+	mov cr3,eax
+	ret
+_cvdpmi_flush_tlb endp
+
 ; C-callable selector helpers used by the freestanding instruction emulator.
 ; Client selectors may name either the LDT or GDT; the returned base is linear.
 _cvdpmi_selector_base proc near public
@@ -2076,6 +2209,8 @@ cvdpmi_detach proc near public
 	test edx,edx
 	jz detach_removed
 	; Keep the installed shadow authoritative until the exact callback is gone.
+	mov eax,offset _cvdpmi_video_direct_off
+	call cv_video_c_call
 	call cv_guard_ptes
 	; Flush callback accounting even if the client exits before the next
 	; physical timer tick.
@@ -2334,6 +2469,29 @@ note_io_called:
 	mov byte ptr fs:cv_callback_busy,0
 	push dword ptr fs:cv_saved_host_flags
 	popfd
+	; A VGA page flip (CRTC start address, pm_direct bit 5): the desktop VM
+	; presents the frame now instead of at its next time slice.
+	mov eax,fs:cv_video_shared
+	test eax,eax
+	jz note_io_frame_done
+	push es
+	push byte ptr _FLATSEL_
+	pop es
+	test byte ptr es:[eax+60],20h
+	jz note_io_frame_pop
+	and byte ptr es:[eax+60],not 20h
+	cmp dword ptr fs:cvdpmi_cli_stepping,0
+	jne note_io_frame_pop
+	pushad
+	push fs
+	push CV_OP_VMM_PRESENT
+	pop eax
+	call cv_bridge_call
+	pop fs
+	popad
+note_io_frame_pop:
+	pop es
+note_io_frame_done:
 	test bl,2
 	jnz note_io_handled
 	; Supply AL/AX/EAX in HDPMI's exact saved EMUINSFR.  The official ring-3
@@ -2429,6 +2587,17 @@ cv_bridge_call proc
 	push edi
 	pushfd
 	cli
+	; Inside the client's virtual-CLI single-step region the VM manager must
+	; not switch VMs at this call's return (VM_OP_NO_SWITCH, see
+	; session_abi.inc): the stepping TF belongs to this client.
+	push fs
+	push byte ptr _CSALIAS_
+	pop fs
+	cmp dword ptr fs:cvdpmi_cli_stepping,0
+	pop fs
+	je bridge_switch_ok
+	or eax,VM_OP_NO_SWITCH
+bridge_switch_ok:
 	; v86iret ESP, SS, ES, DS, FS, GS and the whole PMSTATE.
 	.errnz V86IRET.rGSd - V86IRET.rESP - 20
 	.errnz sizeof PMSTATE - 16
@@ -2583,6 +2752,18 @@ cvdpmi_irq_tick proc near public
 	push byte ptr _CSALIAS_
 	pop fs
 	lea ebp,[esp+4+32+4]
+	; Host PIT and guest IRQ0 have independent clocks. The bridge accrues
+	; guest deadlines and schedules, but never acknowledges physical IRQ0.
+	mov eax,CV_OP_VMM_CLOCK
+	call cv_bridge_call
+	test ebx,ebx
+	jz irq_tick_legacy
+	mov al,20h
+	out 20h,al
+	call cv_pm_irq_check
+	clc
+	jmp irq_tick_done
+irq_tick_legacy:
 	call cv_pm_irq_check
 	cmp dword ptr ss:cvdpmi_irq_proc,0
 	stc
@@ -2644,6 +2825,8 @@ tick_registered:
 	mov eax,fs:cv_last_port
 	mov es:[edi+CVSCHED_LAST_PORT],eax
 	call cv_guard_ptes
+	mov eax,offset _cvdpmi_video_tick
+	call cv_video_c_call
 	jmp tick_done_busy
 tick_register_failed:
 	mov dword ptr es:[edi+CVSCHED_LAST_ERROR],CVERR_REGISTER

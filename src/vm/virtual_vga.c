@@ -4,6 +4,7 @@
  * and addressing presets, not executable firmware. Palette and font policy
  * belongs to the virtual BIOS adapter. scripts/test_virtual_vga.py checks each
  * array byte-for-byte against QEMU's SeaVGABIOS ROM when it is installed. */
+#ifndef CVGA_DEVICE_ONLY  /* HDPMI's copy holds only the device: see virtual_vga.h */
 static const cvga_mode_params modes[] = {
     {0x01, 1, 40, 25, 16, 2, 0x0800, 0xb800, 360, 400,
      {0x08,0x03,0x00,0x02}, 0x67,
@@ -62,6 +63,7 @@ static const cvga_mode_params modes[] = {
       0x41,0x00,0x0f,0x00},
      {0x00,0x00,0x00,0x00,0x00,0x40,0x05,0x0f,0xff}},
 };
+#endif
 /* Writable bits of SR0-SR4 and GR0-GR8, as immediates rather than tables:
  * this model is also linked into HDPMI, whose ring-0 C calls run with a flat
  * DS while the image's own data offsets are relative to its code selector. */
@@ -77,6 +79,7 @@ static uint8_t gc_mask(unsigned index)
     return 0xff;
 }
 
+#ifndef CVGA_DEVICE_ONLY  /* HDPMI's copy holds only the device: see virtual_vga.h */
 static void zero_bytes(uint8_t *p, uint32_t count)
 {
     while (count--) *p++ = 0;
@@ -87,6 +90,7 @@ static void fill_bytes(uint8_t *p, uint8_t value, uint32_t count)
     while (count--) *p++ = value;
 }
 
+#endif
 static void mark_dirty(cvga_state *v, unsigned plane, unsigned at)
 {
     at /= CVGA_DIRTY_GRANULE;
@@ -100,6 +104,7 @@ static void store_plane(cvga_state *v, unsigned plane, unsigned at, uint8_t valu
     mark_dirty(v, plane, at);
 }
 
+#ifndef CVGA_DEVICE_ONLY  /* HDPMI's copy holds only the device: see virtual_vga.h */
 void cvga_store_plane(cvga_state *v, unsigned plane, unsigned at, uint8_t value)
 {
     store_plane(v, plane & 3, at & 0xffffu, value);
@@ -161,6 +166,7 @@ void cvga_load_font_8x16(cvga_state *v, const uint8_t *font4096)
     ++v->changes;
 }
 
+#endif
 static int port_active(const cvga_state *v, uint16_t port)
 {
     if ((port & 0xfff0) == 0x3b0) return !(v->misc & 1);
@@ -347,6 +353,31 @@ uint8_t cvga_peek_vram(const cvga_state *v, uint32_t address)
     return read_vram(v, address, 0);
 }
 
+static int direct_window(const cvga_state *v)
+{
+    return (v->seq[4] & 0x0e) == 0x06 && v->enable && (v->misc & 2) &&
+           (v->gc[6] & 0x0e) == 0x04 && !(v->gc[5] & 0x1b);
+}
+
+int cvga_direct_read_plane(const cvga_state *v)
+{
+    return direct_window(v) ? (int)(v->gc[4] & 3) : -1;
+}
+
+int cvga_direct_plane(const cvga_state *v)
+{
+    unsigned mask = v->seq[2] & 15u;
+    if (!direct_window(v)) return -1;
+    if ((v->gc[1] & 15u) || v->gc[3] || v->gc[8] != 0xff) return -1;
+    switch (mask) {
+    case 1: return 0;
+    case 2: return 1;
+    case 4: return 2;
+    case 8: return 3;
+    default: return -1;
+    }
+}
+
 void cvga_write_vram(cvga_state *v, uint32_t address, uint8_t value)
 {
     uint32_t offset;
@@ -385,6 +416,7 @@ void cvga_write_vram(cvga_state *v, uint32_t address, uint8_t value)
     if (mask) ++v->changes;
 }
 
+#ifndef CVGA_DEVICE_ONLY  /* HDPMI's copy holds only the device: see virtual_vga.h */
 int cvga_get_geometry(const cvga_state *v, cvga_geometry *g)
 {
     unsigned lines, shift, compare;
@@ -564,3 +596,4 @@ int cvga_row_phase_sensitive(const cvga_state *v, unsigned y)
     }
     return 0;
 }
+#endif

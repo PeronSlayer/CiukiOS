@@ -196,7 +196,11 @@ build_hdpmi_iopl0() {
 			"virtual_vga.c:CVGA"; do
 			local source_name="${source_object%%:*}"
 			local object_name="${source_object##*:}"
+			local device_only=()
+			# HDPMI needs only the VGA device (ports and aperture), not scanout.
+			[[ "$object_name" == CVGA ]] && device_only=(-dCVGA_DEVICE_ONLY)
 			"$WCC386" -zq -bt=nt -mf -3r -ecc -zl -zc -s -os -w4 -we \
+				"${device_only[@]}" \
 				"-i=$WATCOM_ROOT/h" "-i=$ROOT_DIR/src/vm" \
 				"-fo=$variant_dir/$object_name.obj" "$ROOT_DIR/src/vm/$source_name"
 			c_objects+=("$object_name")

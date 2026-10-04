@@ -38,9 +38,49 @@ static unsigned top_tick, top_disk_until, top_net_until;
 static u16 top_seen_fs;
 static u16 top_net_rx, top_net_tx;
 static u16 top_mixer;
-static int top_cpu, top_ram_kb, top_net, top_volume, top_mute;
+static u32 top_ram_total_kb;
+static int top_cpu, top_net, top_volume, top_mute;
 static u16 top_inw(u16 port);
 #pragma aux top_inw = "in ax,dx" parm [dx] value [ax];
+static void top_outw(u16 port, u16 v);
+#pragma aux top_outw = "out dx,ax" parm [dx] [ax];
+static u32 top_le32(const u8 *p)
+{
+    return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+/* MEMMAP.COM captures this complete E820 map before Jemm changes BIOS calls.
+ * It is a capacity reading, loaded once; the poll path never reads a file. */
+static void top_load_ram_total(void)
+{
+    static u8 map[16 + 64 * 24];
+    int h = dos_open("\\SYSTEM\\MEMMAP.BIN", 0), n, count, i;
+    u8 extra;
+    u32 total = 0;
+    top_ram_total_kb = 0;
+    if (h < 0) return;
+    n = dos_read(h, map, sizeof map);
+    if (dos_read(h, &extra, 1) != 0) n = -1;
+    dos_close(h);
+    if (n < 16 || map[0] != 'C' || map[1] != 'M' ||
+        map[2] != 'A' || map[3] != 'P' || map[4] != 1 || map[5] != 0 ||
+        map[12] != 24 || map[13] || map[14] || map[15]) return;
+    count = map[6] | ((int)map[7] << 8);
+    if (count < 1 || count > 64 || n != 16 + count * 24) return;
+    for (i = 0; i < count; ++i) {
+        const u8 *p = map + 16 + i * 24;
+        u32 base, length, cap, usable;
+        if (top_le32(p + 16) != 1 || !(top_le32(p + 20) & 1) ||
+            top_le32(p + 4)) continue;
+        base = top_le32(p);
+        length = top_le32(p + 8);
+        cap = ((0xFFFFFFFFUL - base) >> 10) + 1;
+        usable = top_le32(p + 12) || length > 0xFFFFFFFFUL - base
+               ? cap : length >> 10;
+        if (usable > 0xFFFFFFFFUL - total) return;
+        total += usable;
+    }
+    top_ram_total_kb = total;
+}
 static void top_find_mixer(void)
 {
     static const u16 ids[] = { 0x2415, 0x2425, 0x2445, 0x2485, 0x24C5, 0x24D5, 0x266E, 0x27DE, 0x7195, 0 };
@@ -70,7 +110,6 @@ static void top_sample(void)
     top_cpu = 100 - app_idle();
     if (top_cpu < 0) top_cpu = 0;
     if (top_cpu > 100) top_cpu = 100;
-    top_ram_kb = dos_largest() / 64;           /* largest free DOS block */
     top_volume = -1;
     top_mute = 0;
     if (top_mixer) {
@@ -148,15 +187,20 @@ static void top_paint(void)
             fmt_u32(n, top_cpu); str_cat(t, n); str_cat(t, "%");
         } else if (i == 3) {
             str_copy(t, cell == 76 ? "R " : "RAM ");
-            fmt_u32(n, top_ram_kb); str_cat(t, n); str_cat(t, "K");
+            if (top_ram_total_kb) {
+                fmt_u32(n, (top_ram_total_kb + 512) / 1024);
+                str_cat(t, n); str_cat(t, "M");
+            } else str_cat(t, "--");
         } else str_copy(t, cell == 76 ? (disk_busy ? "D BUSY" : "D IDLE") :
                                            (disk_busy ? "DISK BUSY" : "DISK IDLE"));
         ui_text(x + 23, 4, t, C_INK);
-        ui_rect(x + 23, 22, meter, 2, C_FACE);
+        /* E820 gives capacity, not live free pages. Do not draw a usage
+         * gauge from DOS or XMS counters, which cover different pools. */
+        if (i != 3) ui_rect(x + 23, 22, meter, 2, C_FACE);
         fill = i == 0 ? (top_volume < 0 || top_mute ? 0 : top_volume * meter / 31) :
                i == 1 ? (!top_net ? 0 : net_busy ? meter : 5) :
                i == 2 ? top_cpu * meter / 100 :
-               i == 3 ? top_ram_kb * meter / 640 : (disk_busy ? meter : 0);
+               i == 3 ? 0 : (disk_busy ? meter : 0);
         if (fill > meter) fill = meter;
         if (fill > 0) ui_rect(x + 23, 22, fill, 2, color);
     }
@@ -824,7 +868,7 @@ enum {
     M_OPEN = 1, M_NOTEPAD, M_EXPLORE, M_CUT, M_COPY, M_PASTE, M_DELETE, M_RENAME, M_PROPS,
     M_HIDE, M_EMPTY, M_ARR_NAME, M_ARR_TYPE, M_LINEUP, M_REFRESH, M_NEWFOLDER, M_NEWTEXT,
     M_DESK_PROPS, M_TASKS, M_SHOWDESK, M_CONTROL, M_RUN, M_PROGRAMS, M_DOS, M_FILES, M_ABOUT,
-    M_SHUTDOWN, M_W_RESTORE, M_W_MIN, M_W_MAX, M_W_CLOSE
+    M_SHUTDOWN, M_W_RESTORE, M_W_MIN, M_W_MAX, M_W_CLOSE, M_DISPLAY, M_SOUND, M_NETWORK
 };
 static struct menu_item m_back[] = {
     { "Arrange Icons by &Name", 0, M_ARR_NAME, 0 }, { "Arrange Icons by &Type", 0, M_ARR_TYPE, 0 },
@@ -854,6 +898,14 @@ static struct menu_item m_topbar[] = {
     { "", 0, 0, MI_SEP }, { "&Files", "Win+E", M_FILES, 0 }, { "&Control Panel", 0, M_CONTROL, 0 },
     { "&Task Manager", 0, M_TASKS, 0 }, { "", 0, 0, MI_SEP }, { "&About CiukiOS", "Win+F1", M_ABOUT, 0 },
     { "Shut Do&wn...", 0, M_SHUTDOWN, 0 } };
+/* The CiukiOS menu: drops from the brand in the top bar. */
+static struct menu_item m_start[] = {
+    { "&Programs", "Win", M_PROGRAMS, 0 }, { "&Files", "Win+E", M_FILES, 0 },
+    { "&Run...", "Win+R", M_RUN, 0 }, { "&DOS Prompt", 0, M_DOS, 0 }, { "", 0, 0, MI_SEP },
+    { "&Control Panel", 0, M_CONTROL, 0 }, { "D&isplay", 0, M_DISPLAY, 0 },
+    { "&Sound", 0, M_SOUND, 0 }, { "&Network", 0, M_NETWORK, 0 },
+    { "&Task Manager", "Ctrl+Shift+Esc", M_TASKS, 0 }, { "", 0, 0, MI_SEP },
+    { "&About CiukiOS", "Win+F1", M_ABOUT, 0 }, { "Shut Do&wn...", 0, M_SHUTDOWN, 0 } };
 static struct menu_item m_window[] = {
     { "&Restore", 0, M_W_RESTORE, 0 }, { "Mi&nimize", 0, M_W_MIN, 0 }, { "Ma&ximize", 0, M_W_MAX, 0 },
     { "", 0, 0, MI_SEP }, { "&Close", "Alt+F4", M_W_CLOSE, 0 } };
@@ -874,6 +926,95 @@ static void menu_open(struct menu_item *items, int count, int x, int y, const ch
     ui_overlay(1);
     damage_pop();
     app_log("[DESK] menu", what);
+}
+/* The speaker indicator's popup: the master volume only, and a gear for the
+ * Sound applet. It lives on the overlay like the menus. */
+#define VOL_W 220
+#define VOL_H 60
+#define VOL_TRACK_X 14
+#define VOL_TRACK_W 150
+static struct { int open, x, y, drag; } vol;
+static void vol_damage(void) { ui_damage(vol.x, vol.y, VOL_W + 4, VOL_H + 4); }
+static void vol_close(void)
+{
+    if (!vol.open) return;
+    vol.open = 0;
+    vol_damage();
+    ui_overlay(0);
+}
+static void vol_open(void)
+{
+    int cell = area_w >= 800 ? 100 : 76;
+    menu_close();
+    vol.x = area_w - 76 - cell * 5;
+    if (vol.x + VOL_W > area_w - 4) vol.x = area_w - 4 - VOL_W;
+    if (vol.x < 2) vol.x = 2;
+    vol.y = 29;
+    vol.drag = 0;
+    vol.open = 1;
+    top_sample();
+    ui_overlay(1);
+    vol_damage();
+    app_log("[DESK] volume", "open");
+}
+static void vol_set(int level)
+{
+    int cell = area_w >= 800 ? 100 : 76;
+    if (!top_mixer) return;
+    if (level < 0) level = 0;
+    if (level > 31) level = 31;
+    top_outw(top_mixer + 0x02, (u16)(((31 - level) << 8) | (31 - level)));   /* unmuted */
+    top_volume = level;
+    top_mute = 0;
+    vol_damage();
+    ui_damage(area_w - 76 - cell * 5, 0, cell, 29);
+}
+static void vol_draw(void)
+{
+    int x = vol.x, y = vol.y, t, gx = x + VOL_W - 38, gy = y + 26;
+    char n[16];
+    ui_bevel(x, y, VOL_W, VOL_H, C_FACE);
+    ui_text(x + VOL_TRACK_X, y + 7, "Volume", C_INK);
+    if (top_volume < 0) str_copy(n, "No device");
+    else if (top_mute) str_copy(n, "Muted");
+    else fmt_u32(n, top_volume);
+    ui_text(x + VOL_TRACK_X + VOL_TRACK_W - ui_measure(n), y + 7, n, C_INK);
+    ui_inset(x + VOL_TRACK_X, y + 37, VOL_TRACK_W, 5);
+    t = x + VOL_TRACK_X + (int)((long)(VOL_TRACK_W - 11) * (top_volume < 0 ? 0 : top_volume) / 31);
+    ui_bevel(t, y + 29, 11, 21, C_FACE);
+    /* The gear: advanced sound settings. */
+    ui_bevel(gx, gy, 26, 26, C_FACE);
+    ui_rect(gx + 11, gy + 4, 4, 18, C_INK);
+    ui_rect(gx + 4, gy + 11, 18, 4, C_INK);
+    ui_rect(gx + 7, gy + 7, 12, 12, C_INK);
+    ui_rect(gx + 6, gy + 6, 3, 3, C_INK);
+    ui_rect(gx + 17, gy + 6, 3, 3, C_INK);
+    ui_rect(gx + 6, gy + 17, 3, 3, C_INK);
+    ui_rect(gx + 17, gy + 17, 3, 3, C_INK);
+    ui_rect(gx + 10, gy + 10, 6, 6, C_FACE);
+}
+static int vol_level_at(int sx)
+{
+    return (int)((long)(sx - (vol.x + VOL_TRACK_X + 5)) * 31 / (VOL_TRACK_W - 11));
+}
+static int vol_mouse(int kind, int sx, int sy)
+{
+    int inside = sx >= vol.x && sx < vol.x + VOL_W && sy >= vol.y && sy < vol.y + VOL_H;
+    if (kind == MOUSE_HOVER) return 0;
+    if (kind == MOUSE_UP) { vol.drag = 0; return 1; }
+    if (kind == MOUSE_MOVE) { if (vol.drag) vol_set(vol_level_at(sx)); return 1; }
+    if (kind != MOUSE_DOWN) { vol_close(); return 1; }
+    if (!inside) { vol_close(); return 1; }
+    if (sx >= vol.x + VOL_W - 38 && sy >= vol.y + 26) {
+        vol_close();
+        app_open(WIN_CONTROL, "sound");
+        return 1;
+    }
+    if (sx < vol.x + VOL_TRACK_X + VOL_TRACK_W + 6 && sy >= vol.y + 26) {
+        vol.drag = 1;
+        vol_set(vol_level_at(sx));
+    }
+    return 1;
 }
 static int module_window(int w) { return w == WIN_FILES || w == WIN_TASKS || (w >= WIN_NOTEPAD && w <= WIN_BROWSER); }
 static void window_menu(int w, int x, int y)
@@ -986,6 +1127,9 @@ static void command(int id)
     case M_FILES: app_open(WIN_FILES, ""); break;
     case M_ABOUT: shell_action(6); break;
     case M_SHUTDOWN: shell_action(7); break;
+    case M_DISPLAY: app_open(WIN_CONTROL, "display"); break;
+    case M_SOUND: app_open(WIN_CONTROL, "sound"); break;
+    case M_NETWORK: app_open(WIN_CONTROL, "network"); break;
     case M_W_RESTORE: app_window_cmd(w, 1); break;
     case M_W_MIN: app_window_cmd(w, 3); break;
     case M_W_MAX: app_window_cmd(w, 4); break;
@@ -1037,7 +1181,11 @@ static void draw_icon(int i, int dx, int dy, int ghost)
 static void paint(void)
 {
     int i;
-    if (HOST.window == WIN_OVERLAY) { popup_draw(&pop); return; }
+    if (HOST.window == WIN_OVERLAY) {
+        if (vol.open) vol_draw();
+        else popup_draw(&pop);
+        return;
+    }
     top_paint();
     for (i = 0; i < nicons; i++) draw_icon(i, 0, 0, 0);
     if (dragging)
@@ -1070,6 +1218,7 @@ static int on_mouse(int kind, int sx, int sy)
     int i, r;
     if (dlg.open) return dialog_mouse(&dlg, kind, sx, sy) >= 0;   /* raises it */
     if (HOST.window == WIN_OVERLAY) {
+        if (vol.open) return vol_mouse(kind, sx, sy);
         if (!pop.open) { ui_overlay(0); return 1; }
         ui_dirty = 0;
         r = popup_mouse(&pop, kind, sx, sy);
@@ -1154,6 +1303,12 @@ static int on_key(int key)
         if (r >= 0) dialog_result(r);
         return 1;
     }
+    if (vol.open) {
+        if ((key >> 8) == 0x4B) vol_set(top_volume - 1);
+        else if ((key >> 8) == 0x4D) vol_set(top_volume + 1);
+        else vol_close();
+        return 1;
+    }
     if (HOST.window == WIN_OVERLAY || pop.open) {
         int r;
         ui_dirty = 0;
@@ -1219,10 +1374,13 @@ static int poll(void)
 {
     u16 now;
     if ((unsigned)(HOST.ticks - top_tick) >= 18) {
+        int cell = area_w >= 800 ? 100 : 76;
         top_tick = HOST.ticks;
         top_sample();
-        ui_damage(area_w - 456, 0, 380, 29);
-        return 1;
+        ui_damage(area_w - 76 - cell * 5, 0, cell * 5, 29);
+        /* Keep this damage precise. Return 1 asks the shell to repaint the
+         * desktop owner's entire surface, interrupting every running game. */
+        return 3;
     }
     if ((unsigned)(HOST.ticks - poll_tick) < 9 || renaming >= 0 || drag_i >= 0) return 0;
     poll_tick = HOST.ticks;
@@ -1240,12 +1398,26 @@ static int poll(void)
 int app_event(int ev, int a, int b, int c)
 {
     int r, orig = ev;
+    if (ev == EV_PAINT_TOPBAR) { top_paint(); return 0; }
+    if (ev == EV_TOPBAR) {
+        if (a == 1) {
+            vol_close();
+            if (pop.open) menu_close();
+            else menu_open(m_start, 13, 4, 29, "start");
+        } else if (a == 2) {
+            if (vol.open) vol_close();
+            else vol_open();
+        }
+        return 1;
+    }
     if (ev == EV_OPEN) {
         if (a == 2) { dlg.win = 0; pdlg.win = 0; pdlg.open = 0; dialog_sync(&dlg); return 1; }
         str_copy(app_title, "Desktop");
+        vol.open = 0; vol.drag = 0;
         seen_changes = fs_changes();
         reload();
         top_seen_fs = fs_changes();
+        top_load_ram_total();
         top_find_mixer();
         top_sample();
         return 1;
@@ -1267,7 +1439,7 @@ int app_event(int ev, int a, int b, int c)
         break;
     case EV_KEY: r = on_key(a); break;
     case EV_POLL: r = poll(); break;
-    case EV_SUSPEND: menu_close(); return 0;
+    case EV_SUSPEND: menu_close(); vol_close(); return 0;
     default: r = 0;
     }
     dialog_sync(&dlg);

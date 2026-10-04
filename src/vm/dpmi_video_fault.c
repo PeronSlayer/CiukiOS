@@ -167,7 +167,7 @@ static void report_chain(const char *reason, const cvpm_frame *f, const cvx_cpu 
 
 int cvpm_fault(void)
 {
-    static const cvx_bus bus = {bus_read, bus_write, bus_fetch, 0};
+    static const cvx_bus bus = {bus_read, bus_write, bus_fetch, 0, 0};
     cvpm_frame *f = &cvpm_frame_data;
     cvx_cpu cpu, probe;
     cvx_result result;

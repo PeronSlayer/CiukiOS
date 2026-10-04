@@ -38,6 +38,13 @@ fb_linear dd 0
 fb_physical dd 0
 fb_bytes dd 0
 fb_pages dd 0
+fb_copy_magic db 'CVFBTIME'
+fb_copy_calls dd 0
+fb_copy_cycles_low dd 0
+fb_copy_cycles_high dd 0
+fb_copy_max_cycles dd 0
+fb_copy_started_low dd 0
+fb_copy_started_high dd 0
 saved_ptes dd VGA_PAGES dup (0)
 port_bytes db PORT_COUNT dup (0)
 seq_regs db 256 dup (0)
@@ -54,14 +61,20 @@ dac_read_index dw 0
 dac_write_index dw 0
 info_packet dd VM_INFO_MAGIC
  dw VM_ABI_VERSION,VM_INFO_SIZE
- dd VM_CAPABILITIES
+ dd VM_CAPABILITIES_FULL
  dd 13 dup (0)
 
+cvvid_fb_flush proto c
 include session_scheduler.inc
 include session_video.inc
 include session_devices.inc
 include session_desktop.inc
 include session_vmm.inc
+include session_clock.inc
+include session_native_pages.inc
+include session_native_process.inc
+include session_framebuffer_cache.inc
+include session_gpu.inc
 
 .code
 
@@ -147,8 +160,31 @@ bind_framebuffer proc uses esi edi ebx
  jne bad_abi
  cmp word ptr [edi+VM_FB_PACKET_VERSION],VM_ABI_VERSION
  jne bad_abi
+ mov dword ptr gpu_mode,0
+ mov gpu_banked,0
  cmp word ptr [edi+VM_FB_PACKET_BYTES],VM_FB_PACKET_SIZE
+ je framebuffer_mode_ready
+ cmp word ptr [edi+VM_FB_PACKET_BYTES],VM_FB_MODE_PACKET_SIZE
  jne bad_abi
+ cmp word ptr [ebp].Client_Reg_Struc.Client_ECX,VM_FB_MODE_PACKET_SIZE
+ jb bad_address
+ mov ecx,VM_FB_MODE_PACKET_SIZE
+ call guest_destination
+ test eax,eax
+ jnz done
+ movzx eax,word ptr [edi+16]
+ mov gpu_mode,eax
+ movzx eax,word ptr [edi+18]
+ mov [gpu_mode+4],eax
+ movzx eax,word ptr [edi+20]
+ mov [gpu_mode+8],eax
+ movzx eax,word ptr [edi+22]
+ mov edx,eax
+ and edx,VM_FB_MODE_BANKED
+ mov gpu_banked,edx
+ and eax,7FFFh
+ mov [gpu_mode+12],eax
+framebuffer_mode_ready:
  mov ebx,[edi+VM_FB_PACKET_PHYSICAL]
  cmp ebx,VM_FB_MIN_PHYSICAL
  jb bad_address
@@ -170,6 +206,23 @@ bind_framebuffer proc uses esi edi ebx
  cmp eax,4000h
  ja bad_address
  mov fb_pages,eax
+ ; VirtIO VGA retains the VBE boot mode but presents native RAM resources.
+ ; Claim it before mapping the legacy VRAM; absent/unsupported GPUs use VBE.
+ mov dev_args,esi
+ mov eax,offset cvgpu_bind
+ mov ecx,1
+ call dev_call
+ test eax,eax
+ jz bind_vbe
+ mov fb_linear,eax
+ mov fb_physical,ebx
+ mov fb_bytes,esi
+ mov fb_gpu,1
+ mov gpu_dirty,1
+ xor eax,eax
+ ret
+bind_vbe:
+ mov eax,fb_pages
  push 0
  push eax
  push PR_SYSTEM
@@ -192,6 +245,28 @@ bind_framebuffer proc uses esi edi ebx
  jz map_failed
  mov eax,cr3
  mov cr3,eax
+ call fb_cache_snapshot
+ call fb_cache_enable
+ call gpu_legacy_bind
+ cmp gpu_banked,0
+ je framebuffer_accepted
+ cmp fb_legacy,0
+ jne framebuffer_accepted
+ ; A banked firmware mode may expose an LFB address without enabling its
+ ; alias. Only recognized native modes or QEMU's documented alias qualify.
+ mov eax,fb_physical
+ mov dev_args,eax
+ mov eax,offset cvlegacy_vbe_alias
+ mov ecx,1
+ call dev_call
+ test eax,eax
+ jnz framebuffer_accepted
+ call unbind_framebuffer
+ test eax,eax
+ jnz done
+ mov eax,VM_ERROR_MAPPING
+ ret
+framebuffer_accepted:
  xor eax,eax
  ret
 map_failed:
@@ -228,16 +303,40 @@ unbind_framebuffer proc
  mov eax,fb_linear
  test eax,eax
  jz not_bound
+ cmp fb_gpu,0
+ je free_vbe
+ mov eax,offset cvgpu_release
+ xor ecx,ecx
+ call dev_call
+ test eax,eax
+ jnz failed
+ mov fb_gpu,0
+ mov gpu_dirty,0
+ jmp freed
+free_vbe:
+ cmp fb_legacy,0
+ je free_vbe_pages
+ mov eax,offset cvlegacy_release
+ xor ecx,ecx
+ call dev_call
+ test eax,eax
+ jnz failed
+ mov fb_legacy,0
+free_vbe_pages:
+ mov eax,fb_linear
  push 0
  push eax
  @VMMCall _PageFree
  add esp,8
  test eax,eax
  jz failed
+ call fb_cache_disable
+freed:
  mov fb_linear,0
  mov fb_physical,0
  mov fb_bytes,0
  mov fb_pages,0
+ mov dword ptr [fb_cache_record+12],0
  xor eax,eax
  ret
 not_bound:
@@ -284,6 +383,8 @@ copy_pixels:
  mov ecx,edx
  and ecx,3
  rep movsb
+ call cvvid_fb_flush
+ call gpu_damage_all
  xor eax,eax
  ret
 bad_operation:
@@ -297,6 +398,385 @@ bad_address:
 done:
  ret
 framebuffer_copy endp
+
+; Validate a complete guest linear span for row transport. EDI=linear start,
+; ECX=byte count, EBX=PTE permission mask (5 readable, 7 writable). Returns
+; EAX=0 and preserves EDI on success. The span may only touch user RAM/UMBs.
+guest_span proc uses esi ebx edx
+ test ecx,ecx
+ jz bad
+ mov eax,edi
+ add eax,ecx
+ jc bad
+ cmp edi,10000h
+ jb bad
+ cmp eax,0A0000h
+ jbe range_ok
+ cmp edi,0C0000h
+ jb bad
+ cmp eax,0F0000h
+ ja bad
+range_ok:
+ dec eax
+ shr eax,12
+ mov edx,edi
+ shr edx,12
+pages:
+ mov esi,[PAGE_MAP+edx*4]
+ and esi,ebx
+ cmp esi,ebx
+ jne bad
+ inc edx
+ cmp edx,eax
+ jbe pages
+ xor eax,eax
+ ret
+bad:
+ mov eax,VM_ERROR_ADDRESS
+ ret
+guest_span endp
+
+; CVFR packet row transport. Packet fields are copied to this invocation's
+; stack before any output, so guest output may overlap ES:DI safely.
+; Copy timing excludes packet validation and VM scheduling. These counters
+; permit a bounded RAM read instead of instruction traces or full dumps.
+fb_copy_begin proc
+ push eax
+ push edx
+ db 0Fh,31h
+ mov fb_copy_started_low,eax
+ mov fb_copy_started_high,edx
+ pop edx
+ pop eax
+ ret
+fb_copy_begin endp
+
+fb_copy_account proc
+ call cvvid_fb_flush
+ push eax
+ push edx
+ db 0Fh,31h
+ sub eax,fb_copy_started_low
+ sbb edx,fb_copy_started_high
+ add fb_copy_cycles_low,eax
+ adc fb_copy_cycles_high,edx
+ inc fb_copy_calls
+ test edx,edx
+ jnz copy_time_done
+ cmp eax,fb_copy_max_cycles
+ jbe copy_time_done
+ mov fb_copy_max_cycles,eax
+copy_time_done:
+ pop edx
+ pop eax
+ ret
+fb_copy_account endp
+
+framebuffer_rows proc uses esi edi ebx edx
+ cmp vmm_current,0                     ; system VM only, even under VMM_TARGET
+ jne not_vmm
+ cmp fb_linear,0
+ je not_bound
+ cmp word ptr [ebp].Client_Reg_Struc.Client_ECX,VM_FB_ROWS_PACKET_SIZE
+ jb bad_address
+ movzx edi,word ptr [ebp].Client_Reg_Struc.Client_EDI
+ mov eax,edi
+ add eax,VM_FB_ROWS_PACKET_SIZE
+ cmp eax,10000h
+ ja bad_address
+ movzx eax,word ptr [ebp].Client_Reg_Struc.Client_ES
+ shl eax,4
+ add edi,eax
+ mov ecx,VM_FB_ROWS_PACKET_SIZE
+ mov ebx,5
+ call guest_span
+ test eax,eax
+ jnz done
+ sub esp,48
+ mov esi,edi
+ mov edi,esp
+ mov ecx,8
+ cld
+ rep movsd
+ cmp dword ptr [esp],VM_FB_ROWS_MAGIC
+ jne rows_abi
+ cmp word ptr [esp+4],VM_ABI_VERSION
+ jne rows_abi
+ cmp word ptr [esp+6],VM_FB_ROWS_PACKET_SIZE
+ jne rows_abi
+ cmp dword ptr [esp+VM_FB_ROWS_RESERVED],0
+ jne rows_abi
+ movzx eax,word ptr [esp+VM_FB_ROWS_DIRECTION]
+ cmp eax,1
+ ja rows_abi
+ movzx eax,word ptr [esp+VM_FB_ROWS_ROW_BYTES]
+ test eax,eax
+ jz rows_address
+ movzx ecx,word ptr [esp+VM_FB_ROWS_COUNT]
+ test ecx,ecx
+ jz rows_address
+ cmp ecx,VM_FB_ROWS_MAX_COUNT
+ ja rows_address
+ movzx edx,word ptr [esp+VM_FB_ROWS_SRC_STRIDE]
+ cmp edx,eax
+ jb rows_address
+ imul eax,ecx
+ jc rows_address
+ cmp eax,VM_FB_ROWS_MAX_BYTES
+ ja rows_address
+ ; Guest source/destination extent and 16-bit offset no-wrap check.
+ movzx eax,word ptr [esp+VM_FB_ROWS_COUNT]
+ dec eax
+ movzx ecx,word ptr [esp+VM_FB_ROWS_SRC_STRIDE]
+ imul eax,ecx
+ jc rows_address
+ movzx ecx,word ptr [esp+VM_FB_ROWS_ROW_BYTES]
+ add eax,ecx
+ jc rows_address
+ movzx edx,word ptr [esp+VM_FB_ROWS_OFF]
+ mov ecx,10000h
+ sub ecx,edx
+ cmp eax,ecx
+ ja rows_address
+ movzx edi,word ptr [esp+VM_FB_ROWS_SEG]
+ shl edi,4
+ add edi,edx
+ mov ecx,eax
+ mov ebx,5
+ cmp word ptr [esp+VM_FB_ROWS_DIRECTION],0
+ jne rows_guest_readable
+ mov ebx,7
+rows_guest_readable:
+ call guest_span
+ test eax,eax
+ jnz rows_fail
+ mov [esp+32],edi                   ; validated guest linear base
+ ; Framebuffer extent uses destination pitch for both transfer directions.
+ movzx eax,word ptr [esp+VM_FB_ROWS_COUNT]
+ dec eax
+ mov ecx,[esp+VM_FB_ROWS_DST_PITCH]
+ movzx edx,word ptr [esp+VM_FB_ROWS_ROW_BYTES]
+ cmp ecx,edx
+ jb rows_address
+ imul eax,ecx
+ jc rows_address
+ movzx ecx,word ptr [esp+VM_FB_ROWS_ROW_BYTES]
+ add eax,ecx
+ jc rows_address
+ mov edx,[esp+VM_FB_ROWS_DST_OFFSET]
+ cmp edx,fb_bytes
+ ja rows_address
+ mov ecx,fb_bytes
+ sub ecx,edx
+ cmp eax,ecx
+ ja rows_address
+ mov eax,fb_linear
+ add eax,edx
+ jc rows_address
+ mov [esp+36],eax                   ; framebuffer row base
+ movzx eax,word ptr [esp+VM_FB_ROWS_COUNT]
+ mov [esp+40],eax
+ movzx eax,word ptr [esp+VM_FB_ROWS_ROW_BYTES]
+    mov [esp+44],eax
+ call fb_copy_begin
+rows_copy_loop:
+ mov esi,[esp+32]
+ mov edi,[esp+36]
+ mov ecx,[esp+44]
+ cmp word ptr [esp+VM_FB_ROWS_DIRECTION],0
+ jne rows_put
+ xchg esi,edi                        ; direction 0: FB -> guest
+rows_put:
+ mov ebx,ecx
+ shr ecx,2
+ cld
+ rep movsd
+ mov ecx,ebx
+ and ecx,3
+ rep movsb
+ mov eax,[esp+32]
+ movzx edx,word ptr [esp+VM_FB_ROWS_SRC_STRIDE]
+ add eax,edx
+ mov [esp+32],eax
+ mov eax,[esp+36]
+ mov edx,[esp+VM_FB_ROWS_DST_PITCH]
+ add eax,edx
+ mov [esp+36],eax
+ dec dword ptr [esp+40]
+ jnz rows_copy_loop
+ call fb_copy_account
+ cmp word ptr [esp+VM_FB_ROWS_DIRECTION],0
+ je rows_clean
+ call gpu_damage_all
+rows_clean:
+ add esp,48
+ xor eax,eax
+ ret
+rows_abi:
+ mov eax,VM_ERROR_ABI
+ jmp rows_fail
+rows_address:
+ mov eax,VM_ERROR_ADDRESS
+rows_fail:
+ add esp,48
+ ret
+not_vmm:
+ mov eax,VM_ERROR_OPERATION
+ ret
+not_bound:
+ mov eax,VM_ERROR_FB_UNBOUND
+ ret
+bad_address:
+ mov eax,VM_ERROR_ADDRESS
+done:
+ ret
+framebuffer_rows endp
+
+; CVFC row copy between disjoint ranges in the bound framebuffer. Offsets
+; address the complete binding; only the transferred payload is capped at 16 KiB.
+framebuffer_page_copy proc uses esi edi ebx edx
+ cmp vmm_current,0
+ jne not_vmm
+ cmp fb_linear,0
+ je not_bound
+ cmp word ptr [ebp].Client_Reg_Struc.Client_ECX,VM_FB_PAGE_PACKET_SIZE
+ jb bad_address
+ movzx edi,word ptr [ebp].Client_Reg_Struc.Client_EDI
+ mov eax,edi
+ add eax,VM_FB_PAGE_PACKET_SIZE
+ cmp eax,10000h
+ ja bad_address
+ movzx eax,word ptr [ebp].Client_Reg_Struc.Client_ES
+ shl eax,4
+ add edi,eax
+ mov ecx,VM_FB_PAGE_PACKET_SIZE
+ mov ebx,5
+ call guest_span
+ test eax,eax
+ jnz done
+ sub esp,48
+ mov esi,edi
+ mov edi,esp
+ mov ecx,8
+ cld
+ rep movsd
+ cmp dword ptr [esp],VM_FB_PAGE_MAGIC
+ jne page_abi
+ cmp word ptr [esp+4],VM_ABI_VERSION
+ jne page_abi
+ cmp word ptr [esp+6],VM_FB_PAGE_PACKET_SIZE
+ jne page_abi
+ cmp dword ptr [esp+VM_FB_PAGE_RESERVED0],0
+ jne page_abi
+ cmp dword ptr [esp+VM_FB_PAGE_RESERVED1],0
+ jne page_abi
+ movzx eax,word ptr [esp+VM_FB_PAGE_ROW_BYTES]
+ test eax,eax
+ jz page_address
+ movzx ecx,word ptr [esp+VM_FB_PAGE_COUNT]
+ test ecx,ecx
+ jz page_address
+ cmp ecx,VM_FB_ROWS_MAX_COUNT
+ ja page_address
+ mov edx,[esp+VM_FB_PAGE_PITCH]
+ cmp edx,eax
+ jb page_address
+ imul eax,ecx
+ jc page_address
+ cmp eax,VM_FB_ROWS_MAX_BYTES
+ ja page_address
+ ; Validate one common pitched extent against both binding-relative offsets.
+ movzx eax,word ptr [esp+VM_FB_PAGE_COUNT]
+ dec eax
+ mov ecx,[esp+VM_FB_PAGE_PITCH]
+ imul eax,ecx
+ jc page_address
+ movzx ecx,word ptr [esp+VM_FB_PAGE_ROW_BYTES]
+ add eax,ecx
+ jc page_address
+ mov edx,[esp+VM_FB_PAGE_SRC_OFFSET]
+ cmp edx,fb_bytes
+ ja page_address
+ mov ecx,fb_bytes
+ sub ecx,edx
+ cmp eax,ecx
+ ja page_address
+ mov ebx,[esp+VM_FB_PAGE_DST_OFFSET]
+ cmp ebx,fb_bytes
+ ja page_address
+ mov ecx,fb_bytes
+ sub ecx,ebx
+ cmp eax,ecx
+ ja page_address
+ ; Reject any overlap of the full source/destination bounding spans.
+ mov ecx,edx
+ add ecx,eax
+ jc page_address
+ mov edi,ebx
+ add edi,eax
+ jc page_address
+ cmp edx,edi
+ jae page_disjoint
+ cmp ebx,ecx
+ jb page_address
+page_disjoint:
+ mov eax,fb_linear
+ add eax,edx
+ jc page_address
+ mov [esp+32],eax
+ mov eax,fb_linear
+ add eax,ebx
+ jc page_address
+ mov [esp+36],eax
+ movzx eax,word ptr [esp+VM_FB_PAGE_COUNT]
+ mov [esp+40],eax
+ movzx eax,word ptr [esp+VM_FB_PAGE_ROW_BYTES]
+    mov [esp+44],eax
+ call fb_copy_begin
+page_copy_loop:
+ mov esi,[esp+32]
+ mov edi,[esp+36]
+ mov ecx,[esp+44]
+ mov ebx,ecx
+ shr ecx,2
+ cld
+ rep movsd
+ mov ecx,ebx
+ and ecx,3
+ rep movsb
+ mov eax,[esp+32]
+ mov edx,[esp+VM_FB_PAGE_PITCH]
+ add eax,edx
+ mov [esp+32],eax
+ mov eax,[esp+36]
+ add eax,edx
+ mov [esp+36],eax
+ dec dword ptr [esp+40]
+ jnz page_copy_loop
+ call fb_copy_account
+ call gpu_damage_all
+ add esp,48
+ xor eax,eax
+ ret
+page_abi:
+ mov eax,VM_ERROR_ABI
+ jmp page_fail
+page_address:
+ mov eax,VM_ERROR_ADDRESS
+page_fail:
+ add esp,48
+ ret
+not_vmm:
+ mov eax,VM_ERROR_OPERATION
+ ret
+not_bound:
+ mov eax,VM_ERROR_FB_UNBOUND
+ ret
+bad_address:
+ mov eax,VM_ERROR_ADDRESS
+done:
+ ret
+framebuffer_page_copy endp
 
 clear_shadow proc uses edi ecx
  mov edi,shadow
@@ -560,6 +1040,10 @@ v86_dispatch proc
  test eax,eax
  jnz error
  movzx eax,word ptr [ebp].Client_Reg_Struc.Client_EAX
+ btr eax,8                              ; VM_OP_NO_SWITCH
+ jnc switch_allowed
+ mov vmm_poll_no_switch,1
+switch_allowed:
  call vmm_target_enter                  ; another VM's session (VMM_TARGET)
  cmp eax,VM_OP_QUERY
  je query
@@ -575,6 +1059,12 @@ v86_dispatch proc
  je unbind_fb
  cmp eax,VM_OP_FB_COPY
  je copy_fb
+ cmp eax,VM_OP_FB_ROWS
+ je copy_fb_rows
+ cmp eax,VM_OP_FB_PAGE_COPY
+ je copy_fb_pages
+ cmp eax,VM_OP_FB_PRESENT
+ je present_fb
  cmp eax,VM_OP_BIND_SCHED
  je bind_scheduler
  cmp eax,VM_OP_UNBIND_SCHED
@@ -585,6 +1075,18 @@ v86_dispatch proc
  je if_profile
  cmp eax,VM_OP_SCHED_INFO
  je sched_info
+ cmp eax,VM_OP_NATIVE_PAGE_PROBE
+ je native_page_probe_dispatch
+ cmp eax,VM_OP_NATIVE_RUN
+ je native_run_dispatch
+ cmp eax,VM_OP_NATIVE_START
+ je native_start_dispatch
+ cmp eax,VM_OP_NATIVE_STATE
+ je native_state_dispatch
+ cmp eax,VM_OP_NATIVE_STOP
+ je native_stop_dispatch
+ cmp eax,VM_OP_DISPLAY_INFO
+ je display_info
  cmp eax,VM_OP_VIDEO_CONFIG
  jb not_video
  cmp eax,VM_OP_VIDEO_DAMAGE
@@ -601,17 +1103,37 @@ not_video:
 not_device:
  cmp eax,VM_OP_DEV_PHYSICAL_IRQ
  je physical_irq
+ cmp eax,VM_OP_VMM_CLOCK
+ je clock_tick
  cmp eax,VM_OP_VMM_YIELD
  je yield
+ cmp eax,VM_OP_VMM_INPUT_YIELD
+ je input_yield
+ cmp eax,VM_OP_TSC_KHZ
+ je tsc_khz
+ cmp eax,VM_OP_VMM_PRESENT
+ je present_frame
  cmp eax,VM_OP_VMM_INIT
  jb not_vmm
- cmp eax,VM_OP_VMM_EXIT_CODE
+ cmp eax,VM_OP_VMM_UMB_ALLOC
  ja not_vmm
  call vmm_dispatch
  jmp checked_result
 ; VMM_YIELD may switch to another VM, whose frame then sits at EBP: the
 ; result goes into this VM's frame first.
 yield:
+ cmp clock_enabled,0
+ jne success
+ jmp yield_count
+clock_tick:
+ mov eax,clock_enabled
+ mov [ebp].Client_Reg_Struc.Client_EBX,eax
+ test eax,eax
+ jz success
+ inc clock_pm_ticks
+ mov dev_pm_claimed,1
+ call clock_poll
+yield_count:
  and [ebp].Client_Reg_Struc.Client_EFlags,not 1
  mov word ptr [ebp].Client_Reg_Struc.Client_EAX,0
  call vmm_target_leave
@@ -619,6 +1141,35 @@ yield:
  pushfd
  cli
  call vmm_dpmi_tick
+ popfd
+ popad
+ ret
+; VMM_PRESENT: as VMM_INPUT_YIELD, for the idle desktop.
+present_frame:
+ and [ebp].Client_Reg_Struc.Client_EFlags,not 1
+ mov word ptr [ebp].Client_Reg_Struc.Client_EAX,0
+ call vmm_target_leave
+ mov vmm_client_frame,ebp
+ pushfd
+ cli
+ call vmm_desk_wake
+ call vmm_input_switch
+ popfd
+ popad
+ ret
+tsc_khz:
+ mov eax,vmm_tsc_measured
+ mov [ebp].Client_Reg_Struc.Client_ECX,eax
+ jmp success
+; VMM_INPUT_YIELD: as VMM_YIELD, but no tick is counted.
+input_yield:
+ and [ebp].Client_Reg_Struc.Client_EFlags,not 1
+ mov word ptr [ebp].Client_Reg_Struc.Client_EAX,0
+ call vmm_target_leave
+ mov vmm_client_frame,ebp
+ pushfd
+ cli
+ call vmm_input_switch
  popfd
  popad
  ret
@@ -643,14 +1194,51 @@ if_profile:
 sched_info:
  call vm_scheduler_info
  jmp checked_result
+native_page_probe_dispatch:
+ cmp vmm_current,0                     ; only the system VM may request it
+ jne not_vmm
+ call native_page_probe
+ jmp checked_result
+native_run_dispatch:
+ call nproc_run
+ jc error
+ jmp success
+native_start_dispatch:
+ call nproc_start
+ jc error
+ jmp success
+native_state_dispatch:
+ call nproc_state
+ jc error
+ jmp success
+native_stop_dispatch:
+ call nproc_stop
+ jc error
+ jmp success
 bind_fb:
  call bind_framebuffer
+ mov ebx,fb_legacy
+ shl ebx,1
+ or ebx,fb_gpu
+ mov [ebp].Client_Reg_Struc.Client_EBX,ebx
  jmp checked_result
 unbind_fb:
  call unbind_framebuffer
  jmp checked_result
 copy_fb:
  call framebuffer_copy
+ jmp checked_result
+copy_fb_rows:
+ call framebuffer_rows
+ jmp checked_result
+copy_fb_pages:
+ call framebuffer_page_copy
+ jmp checked_result
+present_fb:
+ call gpu_present
+ jmp checked_result
+display_info:
+ call gpu_display_info
 checked_result:
  test eax,eax
  jnz error
@@ -707,6 +1295,7 @@ query:
  jnz error
  call vm_scheduler_capabilities
  or eax,VM_VIDEO_CAPABILITIES
+ or eax,VM_CAP_DESKTOP_ROWS
  test eax,VM_CAP_V86_VIRTUAL_IF
  jz @F
  or eax,VM_CAP_GUEST_INPUT or VM_CAP_GUEST_AUDIO
@@ -724,6 +1313,17 @@ query:
  mov [info_packet+VM_INFO_REJECT_COUNT],eax
  mov eax,owner_cr3
  mov [info_packet+VM_INFO_OWNER_CR3],eax
+ and dword ptr [info_packet+VM_INFO_CAPABILITIES],not (VM_CAP_GPU_PRESENT or VM_CAP_GPU_ASYNC)
+ cmp fb_gpu,0
+ je query_legacy_gpu
+ or dword ptr [info_packet+VM_INFO_CAPABILITIES],VM_CAP_GPU_ASYNC
+ jmp query_has_gpu
+query_legacy_gpu:
+ cmp fb_legacy,0
+ je query_no_gpu
+query_has_gpu:
+ or dword ptr [info_packet+VM_INFO_CAPABILITIES],VM_CAP_GPU_PRESENT
+query_no_gpu:
  mov dword ptr [info_packet+VM_INFO_SHADOW_BYTES],VGA_BYTES
  xor eax,eax
  cmp fb_linear,0
@@ -744,6 +1344,7 @@ query:
 query_regs:
  call vm_scheduler_capabilities
  or eax,VM_VIDEO_CAPABILITIES
+ or eax,VM_CAP_DESKTOP_ROWS
  test eax,VM_CAP_V86_VIRTUAL_IF
  jz @F
  or eax,VM_CAP_GUEST_INPUT or VM_CAP_GUEST_AUDIO
@@ -948,6 +1549,7 @@ DllMain proc stdcall public hModule:dword, dwReason:dword, dwRes:dword
  mov eax,cr3
  mov owner_cr3,eax
  call vmm_snapshot_ivt
+ call vmm_measure_tsc
  call desk_install
  mov eax,1
  ret
@@ -966,6 +1568,11 @@ detach:
  jne refuse
  cmp fb_linear,0
  jne refuse
+ mov eax,offset cvgpu_owned
+ xor ecx,ecx
+ call dev_call
+ test eax,eax
+ jnz refuse
  call video_owned
  test eax,eax
  jnz refuse
@@ -977,8 +1584,15 @@ detach:
  jne refuse
  cmp vmm_count,1                        ; DOS VMs still exist
  jne refuse
+ call vmm_umb_live                     ; no owner table may be dropped early
+ test eax,eax
+ jnz refuse
+ cmp native_page_live,0                ; a native owner still has pages
+ jne refuse
  call guest_window_free
  call vmm_cmos_untrap
+ call clock_stop
+ call clock_untrap
  cmp vmm_installed,0
  je allow
  mov eax,TICK_VMM

@@ -11,6 +11,9 @@ org 0x0100
 PHYSICAL_INT equ 0x60
 VIRTUAL_INT  equ 0x61
 RX_BUFFER_SIZE equ 1600
+RX_SLOT_BYTES equ RX_BUFFER_SIZE + 2
+NATIVE_SLOTS equ 4
+NATIVE_TOKEN equ 0xC161
 
 start:
     jmp installer
@@ -53,6 +56,8 @@ virtual_dispatch:
     jne .no_class
     cmp byte [cs:client_active], 0
     jne .type_in_use
+    cmp byte [cs:native_claimed], 0
+    jne .type_in_use
     mov [cs:client_receiver_off], di
     mov ax, es
     mov [cs:client_receiver_seg], ax
@@ -79,6 +84,16 @@ virtual_dispatch:
     je .private_set_ip
     cmp al, 0x02                 ; live RX/TX packet counters
     je .private_counters
+    cmp al, 0x03                 ; claim exclusive native client RX/TX
+    je .native_claim
+    cmp al, 0x04                 ; release native client claim
+    je .native_release
+    cmp al, 0x05                 ; native queue status + address snapshot
+    je .native_status
+    cmp al, 0x06                 ; transmit bounded Ethernet frame DS:SI/CX
+    je .native_send
+    cmp al, 0x07                 ; receive next frame ES:DI/CX capacity
+    je .native_poll
     mov dh, 11                   ; BAD_COMMAND
     jmp .failure
 .private_status:
@@ -108,6 +123,196 @@ virtual_dispatch:
     mov bx, [cs:rx_packets]
     mov cx, [cs:tx_packets]
     jmp .success
+.native_claim:
+    cmp byte [cs:client_active], 0
+    jne .type_in_use
+    cmp byte [cs:native_claimed], 0
+    jne .type_in_use
+    mov byte [cs:native_claimed], 1
+    mov byte [cs:native_head], 0
+    mov byte [cs:native_tail], 0
+    mov byte [cs:native_count], 0
+    mov word [cs:native_dropped], 0
+    mov bx, NATIVE_TOKEN
+    jmp .success
+.native_release:
+    cmp bx, NATIVE_TOKEN
+    jne .bad_handle
+    mov byte [cs:native_claimed], 0
+    mov byte [cs:native_count], 0
+    mov byte [cs:native_head], 0
+    mov byte [cs:native_tail], 0
+    jmp .success
+.native_status:
+    cld
+    cmp byte [cs:native_claimed], 1
+    jne .bad_handle
+    mov ax, di
+    add ax, 18
+    jc .bad_buffer
+    mov bx, NATIVE_TOKEN
+    mov cl, [cs:native_count]
+    xor ch, ch
+    mov dx, [cs:native_dropped]
+    push ds
+    push es
+    push si
+    push di
+    push cx
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, configured_ip
+    mov di, native_info + 6
+    mov cx, 4
+    rep movsb
+    mov si, local_mac
+    mov di, native_info + 10
+    mov cx, 6
+    rep movsb
+    mov ax, [native_dropped]
+    mov [native_info + 16], ax
+    pop cx
+    pop di
+    pop si
+    pop es
+    pop ds
+    push ds
+    push si
+    push cx
+    push cs
+    pop ds
+    mov si, native_info
+    mov cx, 18
+    rep movsb
+    pop cx
+    pop si
+    pop ds
+    jmp .success
+.native_send:
+    cmp bx, NATIVE_TOKEN
+    jne .bad_handle
+    cmp byte [cs:native_claimed], 1
+    jne .bad_handle
+    cmp cx, 14
+    jb .bad_buffer
+    cmp cx, RX_BUFFER_SIZE
+    ja .bad_buffer
+    mov ax, si
+    add ax, cx
+    jc .bad_buffer
+    ; Snapshot caller data before entering the physical driver. The private
+    ; TX buffer also prevents a caller from mutating a frame during send.
+    push ds
+    push si
+    push cx
+    push es
+    push di
+    push cs
+    pop es
+    mov di, native_tx_buffer
+    cld
+    rep movsb
+    pop di
+    pop es
+    pop cx
+    pop si
+    pop ds
+    push ds
+    push es
+    push si
+    push di
+    push cs
+    pop ds
+    mov si, native_tx_buffer
+    mov ah, 0x04
+    inc word [cs:tx_packets]
+    push bp
+    pushf
+    cli
+    call far [cs:physical_vector]
+    pop bp
+    pop di
+    pop si
+    pop es
+    pop ds
+    jc .failure
+    jmp .success
+.native_poll:
+    cld
+    cmp bx, NATIVE_TOKEN
+    jne .bad_handle
+    cmp byte [cs:native_claimed], 1
+    jne .bad_handle
+    cmp cx, RX_BUFFER_SIZE
+    ja .bad_buffer
+    mov ax, di
+    add ax, cx
+    jc .bad_buffer
+    mov [cs:native_capacity], cx
+    push ds
+    push es
+    push si
+    push di
+    push cx
+    push bp
+    push cs
+    pop ds
+    cli
+    cmp byte [native_count], 0
+    je .poll_empty
+    xor bx, bx
+    mov bl, [native_head]
+    mov ax, bx
+    mov dx, RX_SLOT_BYTES
+    mul dx
+    mov si, native_queue
+    add si, ax
+    mov ax, [si]                   ; length stored before slot payload
+    cmp ax, [cs:native_capacity]
+    ja .poll_too_small
+    mov [native_last_length], ax
+    mov cx, ax
+    add si, 2
+    rep movsb
+    inc byte [cs:native_head]
+    cmp byte [cs:native_head], NATIVE_SLOTS
+    jb .poll_decrement
+    mov byte [cs:native_head], 0
+.poll_decrement:
+    dec byte [cs:native_count]
+    jmp .poll_restore
+.poll_too_small:
+    ; Leave the packet queued so the caller can retry with a larger buffer.
+    pop bp
+    pop cx
+    pop di
+    pop si
+    pop es
+    pop ds
+    jmp .bad_buffer
+.poll_restore:
+    pop bp
+    pop cx
+    pop di
+    pop si
+    pop es
+    pop ds
+    mov cx, [cs:native_last_length]
+    jmp .success
+.poll_empty:
+    pop bp
+    pop cx
+    pop di
+    pop si
+    pop es
+    pop ds
+    xor cx, cx
+    jmp .success
+.bad_buffer:
+    mov dh, 9                    ; NO_SPACE / invalid bounded buffer
+    jmp .failure
 
 .no_class:
     mov dh, 2                    ; NO_CLASS
@@ -184,7 +389,35 @@ physical_receiver:
 
 .forward:
     cmp byte [client_active], 0
-    je .done
+    jne .forward_mtcp
+    cmp byte [native_claimed], 1
+    jne .done
+    cmp byte [native_count], NATIVE_SLOTS
+    jae .native_drop
+    xor bx, bx
+    mov bl, [native_tail]
+    mov ax, bx
+    mov dx, RX_SLOT_BYTES
+    mul dx
+    mov di, native_queue
+    add di, ax
+    mov ax, [rx_length]
+    mov [di], ax
+    add di, 2
+    mov si, rx_buffer
+    mov cx, ax
+    rep movsb
+    inc byte [native_tail]
+    cmp byte [native_tail], NATIVE_SLOTS
+    jb .native_count_up
+    mov byte [native_tail], 0
+.native_count_up:
+    inc byte [native_count]
+    jmp .done
+.native_drop:
+    inc word [native_dropped]
+    jmp .done
+.forward_mtcp:
 
     ; Ask the mTCP receiver for one of its buffers.
     xor ax, ax
@@ -469,6 +702,17 @@ client_receiver_seg   dw 0
 client_dest_off       dw 0
 client_dest_seg       dw 0
 client_active         db 0
+native_claimed        db 0
+native_head           db 0
+native_tail           db 0
+native_count          db 0
+native_dropped        dw 0
+native_last_length    dw 0
+native_capacity       dw 0
+native_info           db 'C','V','N','T',1,4
+                      times 12 db 0
+native_tx_buffer      times RX_BUFFER_SIZE db 0
+native_queue          times NATIVE_SLOTS * RX_SLOT_BYTES db 0
 service_pending       db 0
 rx_packets            dw 0
 tx_packets            dw 0
@@ -840,6 +1084,41 @@ parse_ipv4:
     ret
 
 print_dollar:
+    ; NETSTART can run during the graphical splash. Keep DOS text out of the
+    ; framebuffer in VBE modes; mirror those diagnostics to BIOS COM1 instead.
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push dx
+    push si
+    mov [cs:print_ptr], dx
+    mov ah, 0x0F
+    int 0x10
+    cmp al, 3
+    jbe .console
+    mov si, [cs:print_ptr]
+.serial:
+    lodsb
+    cmp al, '$'
+    je .serial_done
+    mov ah, 1
+    xor dx, dx
+    int 0x14
+    jmp .serial
+.serial_done:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    pop bp
+    ret
+.console:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    pop bp
     mov ah, 0x09
     int 0x21
     ret
@@ -860,8 +1139,7 @@ print_hex16:
     jbe .emit
     add dl, 7
 .emit:
-    mov ah, 0x02
-    int 0x21
+    call print_char
     loop .digit
     pop dx
     pop cx
@@ -869,7 +1147,33 @@ print_hex16:
     pop ax
     ret
 
+print_char:
+    mov [cs:print_char_byte], dl
+    push ax
+    push bx
+    push dx
+    mov ah, 0x0F
+    int 0x10
+    cmp al, 3
+    jbe .dos_char
+    mov al, [cs:print_char_byte]
+    mov ah, 1
+    xor dx, dx
+    int 0x14
+    jmp .char_done
+.dos_char:
+    mov dl, [cs:print_char_byte]
+    mov ah, 2
+    int 0x21
+.char_done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 msg_installed db 'NETSTART: ICMP resident active; mTCP Packet Driver is INT 61h', 13, 10, '$'
+print_ptr dw 0
+print_char_byte db 0
 msg_reloaded db 'ICMPD: resident IPv4 address reloaded from MTCP.CFG', 13, 10, '$'
 msg_config_error db 'NETSTART: invalid or unreadable C:\NET\MTCP.CFG IPADDR', 13, 10, '$'
 msg_driver_load_error db 'NETSTART: cannot execute C:\NET\NE2000.COM', '$'

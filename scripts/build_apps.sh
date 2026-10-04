@@ -13,17 +13,23 @@ export INCLUDE="$WATCOM/h"
 mkdir -p "$OUT"
 CFLAGS=(-q -2 -ms -s -zl -os -d0 -wx -we -zq -zm -i=src/apps)
 nasm -f obj src/apps/app_start.asm -o "$OUT/app_start.obj"
-for unit in rt ui sys regstore; do
+for unit in rt ui sys regstore display_probe helper; do
 	wcc "${CFLAGS[@]}" -fo="$OUT/$unit.obj" "src/apps/$unit.c"
 done
-for app in files ciuknote tasks desktop recycle control devices paint dosvm browser; do
+for app in files ciuknote tasks desktop recycle control devices paint dosvm browser display about; do
 	[[ -f "src/apps/$app.c" ]] || continue
 	name="${app^^}.APP"
 	units="$OUT/app_start.obj,$OUT/$app.obj,$OUT/rt.obj,$OUT/ui.obj"
 	case "$app" in
-	files|desktop|recycle|control|devices) units="$units,$OUT/sys.obj" ;;
+	files|desktop|recycle|control|devices|display) units="$units,$OUT/sys.obj" ;;
 	esac
 	[[ "$app" != control ]] || units="$units,$OUT/regstore.obj"
+	case "$app" in control|devices) units="$units,$OUT/helper.obj" ;; esac
+	[[ "$app" != display ]] || units="$units,$OUT/display_probe.obj"
+	if [[ "$app" == browser ]]; then
+		wcc "${CFLAGS[@]}" -fo="$OUT/webnet.obj" src/apps/webnet.c
+		units="$units,$OUT/webnet.obj"
+	fi
 	wcc "${CFLAGS[@]}" -fo="$OUT/$app.obj" "src/apps/$app.c"
 	wlink option quiet format raw bin option offset=0x100 option start=app_entry option eliminate \
 		option map="$OUT/$app.map" name "$OUT/$name" \

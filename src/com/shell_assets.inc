@@ -4,7 +4,13 @@
 UI_ASSET_BYTES equ 11214
 ui_hits equ UI_ASSET_BYTES
 ui_mouse_state equ ui_hits+2560
-UI_ASSET_ALLOC equ ui_mouse_state+512
+; Mutable renderer workspace belongs to the desktop resource block, not
+; SHELL.COM's 16-bit code arena. Artwork file bytes and its format stay fixed.
+ui_pointer_under equ ui_mouse_state+512
+ui_catch_a equ ui_pointer_under+2*24*16*4
+ui_catch_b equ ui_catch_a+UI_CATCH_MAX*8
+vc_pointer_row equ ui_catch_b+UI_CATCH_MAX*8
+UI_ASSET_ALLOC equ vc_pointer_row+24*16*4
 UI_ASSET_FONT equ 16
 UI_ASSET_LOGO16 equ (UI_ASSET_FONT+6270)
 UI_ASSET_LOGO24 equ (UI_ASSET_LOGO16+256)

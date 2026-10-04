@@ -42,19 +42,25 @@ typedef struct cvx_cpu {
     uint32_t seg_base[6];
     uint16_t sreg[6];
     uint8_t code32;                  /* CS default size is 32 bits */
-    uint8_t reserved[3];
+    uint8_t base_valid;              /* with bus segment_base: bit = seg_base valid */
+    uint8_t reserved[2];
 } cvx_cpu;
 
 /* Callbacks return 0 on success. A nonzero return aborts emulation with
  * CVX_BUS_FAULT; bytes already transferred remain transferred, so a monitor
  * must treat that as a fatal session error rather than retrying. */
 typedef int (CVGA_CALL *cvx_read_fn)(void *context, uint32_t linear, uint8_t *value);
+typedef uint32_t (CVGA_CALL *cvx_base_fn)(void *context, uint16_t selector);
 typedef int (CVGA_CALL *cvx_write_fn)(void *context, uint32_t linear, uint8_t value);
 typedef struct cvx_bus {
     cvx_read_fn read;
     cvx_write_fn write;
     cvx_read_fn fetch;               /* instruction bytes; may equal read */
     void *context;
+    /* Optional: the base of a segment whose base_valid bit is clear, looked
+     * up on first use (a protected-mode fault uses CS and one data segment;
+     * descriptor lookups for all six cost more than the emulation). */
+    cvx_base_fn segment_base;
 } cvx_bus;
 
 typedef struct cvx_result {

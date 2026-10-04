@@ -35,8 +35,9 @@ ui_draw_dialog:
 .title:
     add bx,7
     add dx,4
-    mov ax,0x010F
-    call ui_text
+    mov cx,394
+    call ui_windows_title_color
+    call ui_title_text
     mov bx,[ui_dialog_x]
     add bx,413
     mov dx,[ui_dialog_y]
@@ -63,85 +64,6 @@ ui_draw_dialog:
     je .power
     cmp byte [ui_dialog],4
     je .error
-    ; The portrait is the visual anchor; quiet section rules give the credits
-    ; and Ciuk's dedication their own space.
-    mov bx,[ui_dialog_x]
-    add bx,22
-    mov dx,[ui_dialog_y]
-    add dx,40
-    call ciuki_logo64
-    mov bx,[ui_dialog_x]
-    add bx,106
-    mov dx,[ui_dialog_y]
-    add dx,44
-    U_TEXT bx,dx,ut_brand,1,1
-    add dx,23
-    U_TEXT bx,dx,ut_about_version,0
-    add dx,20
-    U_TEXT bx,dx,ut_tagline,8
-    mov bx,[ui_dialog_x]
-    add bx,22
-    mov dx,[ui_dialog_y]
-    add dx,114
-    U_RECT bx,dx,422,1,8
-    add dx,9
-    U_TEXT bx,dx,ut_about_system,1,1
-    add dx,20
-    U_RECT bx,dx,422,98,15
-    add bx,10
-    add dx,3
-    U_TEXT bx,dx,ut_about_core,1
-    add bx,126
-    U_TEXT bx,dx,ut_about_core_detail,0
-    sub bx,126
-    add dx,16
-    U_TEXT bx,dx,ut_about_vm,1
-    add bx,126
-    U_TEXT bx,dx,ut_about_vm_detail,0
-    sub bx,126
-    add dx,16
-    U_TEXT bx,dx,ut_about_input,1
-    add bx,126
-    U_TEXT bx,dx,ut_about_input_detail,0
-    sub bx,126
-    add dx,16
-    U_TEXT bx,dx,ut_about_audio,1
-    add bx,126
-    U_TEXT bx,dx,ut_about_audio_detail,0
-    sub bx,126
-    add dx,16
-    U_TEXT bx,dx,ut_about_art,1
-    add bx,126
-    U_TEXT bx,dx,ut_about_art_detail,0
-    sub bx,126
-    add dx,16
-    U_TEXT bx,dx,ut_about_graphics,1
-    add bx,126
-    U_TEXT bx,dx,ut_about_graphics_detail,0
-    mov bx,[ui_dialog_x]
-    add bx,22
-    mov dx,[ui_dialog_y]
-    add dx,244
-    U_RECT bx,dx,422,1,8
-    add dx,8
-    U_TEXT bx,dx,ut_about_project,1,1
-    add dx,19
-    U_TEXT bx,dx,ut_about_owner,0
-    add dx,18
-    U_TEXT bx,dx,ut_about_license,0
-    mov bx,[ui_dialog_x]
-    add bx,22
-    mov dx,[ui_dialog_y]
-    add dx,309
-    U_RECT bx,dx,422,1,8
-    add dx,8
-    U_TEXT bx,dx,ut_about_memory,1,1
-    add dx,19
-    U_TEXT bx,dx,ut_about_ciuk1,1
-    add dx,18
-    U_TEXT bx,dx,ut_about_ciuk2,1
-    add dx,18
-    U_TEXT bx,dx,ut_about_ciuk3,1
     jmp .ok
 .run:
     mov bx,[ui_dialog_x]
@@ -375,27 +297,6 @@ ui_clock_read:
     add di,2
     ret
 
-ut_about_version db 'Version 0.8.0',0
-ut_about_system db 'SYSTEM',0
-ut_about_core db 'Core',0
-ut_about_core_detail db 'CiukiDOS kernel and desktop',0
-ut_about_vm db 'DOS windows',0
-ut_about_vm_detail db 'Jemm386, CVSESSION and HDPMI',0
-ut_about_input db 'Input',0
-ut_about_input_detail db 'CuteMouse',0
-ut_about_audio db 'Audio',0
-ut_about_audio_detail db 'SBEMU and VSBHDA',0
-ut_about_art db 'Icons / build',0
-ut_about_art_detail db 'Tango (Public Domain) / Open Watcom',0
-ut_about_graphics db 'Graphics',0
-ut_about_graphics_detail db 'TinyGL software OpenGL subset',0
-ut_about_project db 'PROJECT',0
-ut_about_memory db 'IN MEMORY OF CIUK',0
-ut_about_owner db 'Copyright (c) 2026 Alberto Lopez / Alcybercloud.it',0
-ut_about_license db 'CiukiOS code: GNU GPL v2. See LICENSE and README.',0
-ut_about_ciuk1 db 'In loving memory of Ciuk (Ciuki), the beloved dog',0
-ut_about_ciuk2 db 'behind CiukiOS. Though you are no longer here,',0
-ut_about_ciuk3 db 'your memory lives on every time this system starts.',0
 ui_dialog_h dw 0
 ut_run_help db 'Enter a program name or a DOS command.',0
 ut_run_example db 'Examples: dir   |   edit notes.txt',0

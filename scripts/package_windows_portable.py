@@ -28,7 +28,7 @@ QEMU_EXE_SHA256 = "0b98713bcdb4bc2467142d7f05b8d987cc52e1edbf0a1413e6faad5d581cc
 QEMU_DIR = ROOT / "build" / "external" / f"qemu-win64-{QEMU_DATE}"
 DOWNLOAD_DIR = ROOT / "build" / "downloads"
 RELEASE_DIR = ROOT / "build" / "releases"
-NAME = "CiukiOS-0.8.0-Windows-portable"
+NAME = "CiukiOS-0.8.3-Windows-portable"
 EXCLUDE_GUEST_DIRS = (
     "::APPS/DOOM",
     "::APPS/DOOMVAN",
@@ -186,7 +186,7 @@ def main() -> None:
         clean_image = Path(work) / "CiukiOS.img"
         guest_copy(image, clean_image)
         manifest = {
-            "ciukios_version": "0.8.0",
+            "ciukios_version": "0.8.3",
             "ciukios_image_sha256": digest(clean_image),
             "source_commit": source_commit,
             "source_dirty": source_dirty,

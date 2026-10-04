@@ -24,7 +24,11 @@ struct cvvid_instance {
     cvvid_shared *shared;
     cvga_state *vga;
     cvbios bios;
-    cvp_state presenter, band_presenter;
+    cvp_state presenter;
+    cvp_retained_state retained;
+    void *surface_storage;
+    uint32_t surface_capacity, surface_configured;
+    cvp_format surface_format;
     uint32_t attached, share_count, host_mode, host_offset, host_granule;
     const cvvid_fb *host_fb;
     cvvid_fb host_fb_copy;
@@ -33,7 +37,7 @@ struct cvvid_instance {
     uint8_t row_buffer[CVP_MAX_WIDTH];
     cvvid_present_packet armed;
     struct {
-        uint32_t valid, display_changes, phases;
+        uint32_t valid, display_changes, phases, height;
         cvga_geometry geometry;
     } damage;
     uint8_t damage_taken[4][CVGA_DIRTY_BYTES];
@@ -79,10 +83,15 @@ extern void CVGA_CALL cvvid_flush_tlb(void);
 static void host_unmap(void)
 {
     uint32_t i;
+    int changed = 0;
     if (!I->host_mapped) return;
-    for (i = 0; i < HOST_WINDOW_PAGES; ++i) APERTURE_PTES[i] = I->host_saved_ptes[i];
+    for (i = 0; i < HOST_WINDOW_PAGES; ++i) {
+        if (APERTURE_PTES[i] == I->host_saved_ptes[i]) continue;
+        APERTURE_PTES[i] = I->host_saved_ptes[i];
+        changed = 1;
+    }
     I->host_mapped = 0;
-    cvvid_flush_tlb();
+    if (changed) cvvid_flush_tlb();
 }
 
 /* In host mode the compositor's banked window A0000-AFFFF maps straight onto
@@ -94,6 +103,7 @@ static void host_unmap(void)
 static void host_map(void)
 {
     uint32_t i, linear, pte;
+    int changed = 0;
     if (!I->host_mode || !I->host_fb || (I->host_offset & 0xfffu) ||
         I->host_offset + HOST_WINDOW_PAGES * 4096UL > I->host_fb->bytes ||
         I->host_offset + HOST_WINDOW_PAGES * 4096UL < I->host_offset) {
@@ -112,10 +122,14 @@ static void host_map(void)
     for (i = 0; i < HOST_WINDOW_PAGES; ++i) {
         linear = (uint32_t)(uintptr_t)I->host_fb->linear + I->host_offset + i * 4096UL;
         pte = PAGE_MAP[linear >> 12];
-        APERTURE_PTES[i] = (pte & 0xfffff018UL) | 7u;     /* keep PWT/PCD */
+        pte = (pte & 0xfffff018UL) | 7u;                  /* keep PWT/PCD */
+        /* A/D are hardware-maintained and irrelevant to mapping identity. */
+        if ((APERTURE_PTES[i] & ~0x60UL) == pte) continue;
+        APERTURE_PTES[i] = pte;
+        changed = 1;
     }
     I->host_mapped = 1;
-    cvvid_flush_tlb();
+    if (changed) cvvid_flush_tlb();
 }
 
 /* ---- Guest memory ---- */
@@ -162,6 +176,7 @@ static void host_flush(void)
         n -= 4;
     }
     while (n--) *(volatile uint8_t *)dst++ = *src++;
+    cvvid_fb_flush();
     I->host_pending_bytes = 0;
 }
 
@@ -241,8 +256,8 @@ static int CVGA_CALL bios_write(void *context, uint32_t linear, uint8_t value)
     return 0;
 }
 
-static const cvx_bus guest_bus = {guest_read, guest_write, guest_fetch, 0};
-static const cvx_bus firmware_bus = {bios_read, bios_write, bios_read, 0};
+static const cvx_bus guest_bus = {guest_read, guest_write, guest_fetch, 0, 0};
+static const cvx_bus firmware_bus = {bios_read, bios_write, bios_read, 0, 0};
 
 /* A caller's packet or buffer: conventional memory (10000h-9FFFFh) or an
  * upper memory block (C0000h-EFFFFh: the desktop's modules live there),
@@ -422,6 +437,51 @@ static void snapshot(int restore)
     }
 }
 
+static int surface_release(void)
+{
+    if (I->surface_storage && !cvvid_surface_free(I->surface_storage))
+        return CVVID_E_MEMORY;
+    I->surface_storage = 0;
+    I->surface_capacity = 0;
+    I->surface_configured = 0;
+    zero(&I->retained, sizeof(I->retained));
+    return CVVID_OK;
+}
+
+extern void cvgpu_trace(uint32_t event, uint32_t value);
+static int surface_capture(const cvp_format *format, uint32_t phases,
+                           const uint8_t dirty[4][CVGA_DIRTY_BYTES], int force)
+{
+    size_t needed = cvp_retained_bytes(I->vga, format->width, format->bytes);
+    int result;
+    if (!needed) return CVVID_E_GEOMETRY;
+    if (needed > I->surface_capacity) {
+        /* Keep ownership until PageFree succeeds. A failed release cannot
+         * orphan the allocation or allow this instance to be destroyed. */
+        if (I->surface_storage && !cvvid_surface_free(I->surface_storage))
+            return CVVID_E_MEMORY;
+        I->surface_storage = 0;
+        I->surface_capacity = 0;
+        I->retained.initialised = 0;
+        I->surface_storage = cvvid_surface_alloc((uint32_t)needed);
+        if (!I->surface_storage) return CVVID_E_MEMORY;
+        I->surface_capacity = (uint32_t)needed;
+        force = 1;
+    }
+    cvgpu_trace(1U, I->vga->display_changes);
+    result = cvp_retained_capture(&I->retained, I->vga, format,
+                                 format->width, format->height, phases,
+                                 I->surface_storage, I->surface_capacity, dirty, force);
+    cvgpu_trace(2U, I->vga->display_changes);
+    if (result != CVP_OK) {
+        I->retained.initialised = 0;
+        return result == CVP_UNSUPPORTED ? CVVID_E_GEOMETRY : CVVID_E_FORMAT;
+    }
+    I->surface_format = *format;
+    I->surface_configured = 1;
+    return CVVID_OK;
+}
+
 int cvvid_attach(cvvid_shared *block, uint32_t generation)
 {
     cvbios_regs r;
@@ -440,7 +500,9 @@ int cvvid_attach(cvvid_shared *block, uint32_t generation)
     zero(&I->st, sizeof(I->st));
     zero(&I->timing, sizeof(I->timing));
     cvp_init(&I->presenter);
-    cvp_init(&I->band_presenter);
+    zero(&I->retained, sizeof(I->retained));
+    I->surface_configured = 0;
+    I->damage.valid = 0;
     I->host_mode = 0;
     I->host_mapped = 0;
     I->host_fb = 0;
@@ -471,15 +533,18 @@ int cvvid_share_count(void)
     return (int)I->share_count;
 }
 
-void cvvid_detach(void)
+int cvvid_detach(void)
 {
-    if (!I->attached) return;
+    int result = surface_release();
+    if (result != CVVID_OK) return result;
+    if (!I->attached) return CVVID_OK;
     I->armed_valid = 0;
     snapshot(1);
     host_unmap();
     I->host_mode = 0;
     I->host_fb = 0;
     I->attached = 0;
+    return CVVID_OK;
 }
 
 /* The host's current VBE window offset (its last 4F05 in host mode); the
@@ -488,6 +553,19 @@ void cvvid_detach(void)
 uint32_t cvvid_pm_attached(void)
 {
     return I->attached && I->shared->pm_attached;
+}
+
+uint32_t cvvid_pm_attached_instance(void *instance)
+{
+    const struct cvvid_instance *owner = (const struct cvvid_instance *)instance;
+    return owner && owner->attached && owner->shared && owner->shared->pm_attached;
+}
+
+void cvvid_note_device_irqs_instance(void *instance, uint32_t lines)
+{
+    struct cvvid_instance *owner = (struct cvvid_instance *)instance;
+    if (owner && owner->attached && owner->shared)
+        owner->shared->device_irqs = lines;
 }
 
 uint32_t cvvid_host_offset(void)
@@ -705,6 +783,10 @@ static void state_packet(uint32_t *p)
     p[55] = I->st.passes;
     p[56] = I->st.string_io; p[57] = I->st.string_elements;
     p[58] = I->st.host_display_sets; p[59] = I->st.damage_queries;
+    p[60] = I->retained.captured_images;
+    p[61] = I->retained.source_rows_converted;
+    p[62] = I->surface_capacity;
+    p[63] = I->retained.initialised;
 }
 
 static uint32_t text_phases(void)
@@ -748,6 +830,7 @@ void cvvid_timer(const cvvid_fb *fb)
     request = I->armed.request;
     request.flags = (request.flags & ~(CVP_BLINK_VISIBLE | CVP_CURSOR_VISIBLE)) | text_phases();
     cvp_present(&I->presenter, I->vga, &I->armed.format, &request, fb->linear, &I->armed.stats);
+    cvvid_fb_flush();
     cycles = elapsed(low, high);
     account_present(&I->armed.stats, cycles);
     ++I->armed.presents;
@@ -761,10 +844,12 @@ void cvvid_timer(const cvvid_fb *fb)
 static uint32_t present(cvvid_client *c, const cvvid_fb *fb, int band)
 {
     cvvid_present_packet packet;
-    cvp_state *state = band ? &I->band_presenter : &I->presenter;
-    uint32_t start_lo, start_hi, cycles, i, target, extent;
+    cvp_format logical;
+    uint32_t start_lo, start_hi, cycles, target, extent;
+    int32_t band_left = 0, width, height;
     int result;
     uint8_t *surface;
+    if (band && I->armed_valid) return CVVID_E_OPERATION;
     if (!client_extent(c, sizeof(packet), 1)) return CVVID_E_ADDRESS;
     copy_in(&packet, client_buffer(c), sizeof(packet));
     if (packet.magic != 0x50565643UL || packet.version != 0x0100 || packet.bytes != sizeof(packet))
@@ -778,36 +863,53 @@ static uint32_t present(cvvid_client *c, const cvvid_fb *fb, int band)
             !band_memory(target, packet.band_bytes))
             return CVVID_E_ADDRESS;
         surface = (uint8_t *)(uintptr_t)target;
-        /* Screen coordinates become band-relative. The compositor can hold
-         * only a damaged horizontal span; older callers leave band_left 0. */
-        {
-            uint16_t left = (uint16_t)packet.reserved[0] |
-                            ((uint16_t)packet.reserved[1] << 8);
-            packet.request.window.left = (int16_t)(packet.request.window.left - left);
-            packet.request.window.right = (int16_t)(packet.request.window.right - left);
-            for (i = 0; i < packet.request.clip_count && i < CVP_MAX_CLIPS; ++i) {
-                packet.request.clip[i].left = (int16_t)(packet.request.clip[i].left - left);
-                packet.request.clip[i].right = (int16_t)(packet.request.clip[i].right - left);
-            }
-        }
-        packet.request.window.top = (int16_t)(packet.request.window.top - packet.band_top);
-        packet.request.window.bottom = (int16_t)(packet.request.window.bottom - packet.band_top);
-        for (i = 0; i < packet.request.clip_count && i < CVP_MAX_CLIPS; ++i) {
-            packet.request.clip[i].top = (int16_t)(packet.request.clip[i].top - packet.band_top);
-            packet.request.clip[i].bottom = (int16_t)(packet.request.clip[i].bottom - packet.band_top);
+        /* Preserve absolute window coordinates. Band origin and dimensions
+         * are transport details, not a new scale/format for every call. */
+        logical = packet.format;
+        band_left = (uint16_t)packet.reserved[0] |
+                    ((uint16_t)packet.reserved[1] << 8);
+        width = (int32_t)packet.request.window.right - packet.request.window.left;
+        height = (int32_t)packet.request.window.bottom - packet.request.window.top;
+        if (width <= 0 || width > (int32_t)CVP_MAX_WIDTH ||
+            height <= 0 || height > (int32_t)CVP_MAX_HEIGHT)
+            return CVVID_E_FORMAT;
+        logical.width = (uint16_t)width;
+        logical.height = (uint16_t)height;
+        logical.pitch = (uint32_t)width * logical.bytes;
+        if (!I->retained.initialised || !I->surface_configured ||
+            logical.width != I->surface_format.width ||
+            logical.height != I->surface_format.height ||
+            logical.bytes != I->surface_format.bytes ||
+            logical.red_size != I->surface_format.red_size ||
+            logical.red_pos != I->surface_format.red_pos ||
+            logical.green_size != I->surface_format.green_size ||
+            logical.green_pos != I->surface_format.green_pos ||
+            logical.blue_size != I->surface_format.blue_size ||
+            logical.blue_pos != I->surface_format.blue_pos) {
+            result = surface_capture(&logical, text_phases(), 0, 1);
+            if (result != CVVID_OK) return result;
         }
     } else {
         if (!fb->linear) return CVVID_E_FB_UNBOUND;
         if (extent > fb->bytes) return CVVID_E_FORMAT;
         surface = fb->linear;
+        I->damage.valid = 0;             /* this path consumes live dirty bits */
+        I->retained.initialised = 0;
     }
     cvvid_rdtsc(&start_lo, &start_hi);
-    result = cvp_present(state, I->vga, &packet.format, &packet.request, surface, &packet.stats);
+    if (band)
+        result = cvp_retained_blit(&I->retained, &packet.format, &packet.request,
+                                   band_left, packet.band_top, surface, &packet.stats);
+    else
+        result = cvp_present(&I->presenter, I->vga, &packet.format,
+                             &packet.request, surface, &packet.stats);
+    if (!band) cvvid_fb_flush();
     cycles = elapsed(start_lo, start_hi);
-    if (!band) account_present(&packet.stats, cycles);
+    account_present(&packet.stats, cycles);
     copy_out(client_buffer(c) + 180, &packet.stats, sizeof(packet.stats));
     if (result == CVP_BAD_FORMAT || result == CVP_BAD_RECT) return CVVID_E_FORMAT;
     if (result == CVP_UNSUPPORTED) return CVVID_E_GEOMETRY;
+    if (result == CVP_BAD_STORAGE) return CVVID_E_MEMORY;
     return CVVID_OK;
 }
 
@@ -931,6 +1033,8 @@ uint32_t cvvid_operation(uint32_t op, cvvid_client *c, const cvvid_fb *fb)
     }
     case 0x2b:                                            /* DISARM */
         I->armed_valid = 0;
+        I->damage.valid = 0;
+        I->retained.initialised = 0;
         return CVVID_OK;
     case 0x2c: {                                          /* ACCESS */
         uint8_t entries[8 + 64 * 8];
@@ -970,6 +1074,7 @@ uint32_t cvvid_operation(uint32_t op, cvvid_client *c, const cvvid_fb *fb)
         uint32_t height = c->edx & 0xffff, band = c->ecx & 0xffff, mask = 0, y, row, i, j;
         uint32_t phases, full, physical;
         if (!I->attached) return CVVID_E_INACTIVE;
+        if (I->armed_valid) return CVVID_E_OPERATION;
         if (!height || height > CVP_MAX_HEIGHT || !band || (height + band - 1) / band > 32)
             return CVVID_E_FORMAT;
         ++I->st.damage_queries;
@@ -979,7 +1084,8 @@ uint32_t cvvid_operation(uint32_t op, cvvid_client *c, const cvvid_fb *fb)
             return CVVID_E_GEOMETRY;
         }
         phases = g.text ? text_phases() : 0;
-        full = !I->damage.valid || I->vga->display_changes != I->damage.display_changes ||
+        full = !I->damage.valid || I->damage.height != height ||
+               I->vga->display_changes != I->damage.display_changes ||
                g.width != I->damage.geometry.width || g.height != I->damage.geometry.height ||
                g.scan_repeat != I->damage.geometry.scan_repeat || g.text != I->damage.geometry.text ||
                g.blank != I->damage.geometry.blank;
@@ -998,7 +1104,22 @@ uint32_t cvvid_operation(uint32_t op, cvvid_client *c, const cvvid_fb *fb)
                 (phases != I->damage.phases && cvga_row_phase_sensitive(I->vga, row)))
                 mask |= 1UL << (y / band);
         }
+        /* Capture once per changed image, before any compositor band reads
+         * it. The guest may run between bands; cached scanout stays frozen. */
+        if (mask && I->surface_configured) {
+            cvp_format logical = I->surface_format;
+            int result;
+            logical.height = (uint16_t)height;
+            result = surface_capture(&logical, phases,
+                                     (const uint8_t (*)[CVGA_DIRTY_BYTES])I->damage_taken,
+                                     (int)full);
+            if (result != CVVID_OK) {
+                I->damage.valid = 0;
+                return result;
+            }
+        }
         I->damage.valid = 1;
+        I->damage.height = height;
         I->damage.display_changes = I->vga->display_changes;
         I->damage.geometry = g;
         I->damage.phases = phases;

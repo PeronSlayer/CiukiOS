@@ -1003,7 +1003,8 @@ static int item_at(int sx, int sy)
 enum { D_NONE, D_MSG, D_DELETE, D_REPLACE, D_PROGRESS, D_PROPS, D_ABOUT, D_HELP, D_PREVIEW };
 static struct dialog dlg;
 static int dlg_kind;
-static struct dctl dc[20];
+/* The largest dialog is the ten-line preview plus its OK button. */
+static struct dctl dc[11];
 static char dl[10][72];
 static void ctl(int i, int type, int x, int y, int w, int h, const char *text, int id)
 {
@@ -1055,8 +1056,9 @@ static int prop_files, prop_dirs, prop_index = -1;
 static int big_icon_id(const struct item *it);
 /* Properties: a window of its own, modeless (as in Explorer). */
 static struct dialog pdlg;
-static struct dctl pdc[14];
-static char pdl[7][72], ptitle[40], prop_path[PATH_LEN];
+/* Six labels, one group, three attribute checks and three buttons. */
+static struct dctl pdc[13];
+static char pdl[6][72], ptitle[40], prop_path[PATH_LEN];
 static int prop_icon = -1, prop_attr_ok;
 static void pctl(int i, int type, int x, int y, int w, int h, const char *text, int id)
 {
@@ -1195,7 +1197,7 @@ static void help_dialog(void)
 static void about_dialog(void)
 {
     ctl(0, DC_LABEL, 50, 0, 0, 16, "CiukiOS Files", 0);
-    ctl(1, DC_LABEL, 50, 20, 0, 16, "Version 0.8.0", 0);
+    ctl(1, DC_LABEL, 50, 20, 0, 16, "Version 0.8.3", 0);
     ctl(2, DC_LABEL, 50, 40, 0, 16, "A modern Retro OS", 0);
     ctl(3, DC_BUTTON, 130, 70, 80, 24, "OK", 1);
     dialog_show(&dlg, "About Files", dc, 4, 340, 100, 1, 1);
@@ -2269,6 +2271,12 @@ static int files_event(int ev, int a, int b, int c)
         return 0;
     case EV_KEY:
         return on_key(a);
+    case EV_WHEEL:
+        if (dlg.open || pdlg.open || c < 0) return 0;
+        top_row += a * 3;
+        if (top_row > total_units() - page_units()) top_row = total_units() - page_units();
+        if (top_row < 0) top_row = 0;
+        return 1;
     case EV_MOUSE:
         return on_mouse(a, b, c);
     case EV_POLL:

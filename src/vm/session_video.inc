@@ -2,7 +2,8 @@
 ; Included by session_jlm.asm after the core data. Assembled against the
 ; pinned Jemm/JLOAD ABI. C code in session_video.c runs on the private stack
 ; below with flat DS=ES=SS, DF=0 and interrupts disabled; it never calls
-; DOS, BIOS, firmware or Jemm services and never toggles CR0.
+; DOS, BIOS or firmware and never toggles CR0. Retained raster allocation
+; uses only the two bounded owner callbacks below, on this private stack.
 ;
 ; Memory trapping: BEGIN maps the 32 aperture PTEs to the private shadow with
 ; the USER bit clear. Every V86 access (and every access by a fresh HDPMI
@@ -44,6 +45,29 @@ video_stack_end label byte
 .code
 
 ; ---- Services for the C monitor (cdecl) ----
+
+; Retained scanout RAM owned by one video instance. Actual window/source
+; dimensions determine the allocation; no fixed multi-megabyte VM reserve.
+cvvid_surface_alloc proc c public uses ebx esi edi bytes:dword
+ mov ecx,bytes
+ test ecx,ecx
+ jz bad
+ cmp ecx,00900000h                      ; VGA snapshot + 2048*1024*4
+ ja bad
+ call vmm_alloc_block
+ ret
+bad:
+ xor eax,eax
+ ret
+cvvid_surface_alloc endp
+
+cvvid_surface_free proc c public uses ebx esi edi storage:dword
+ push 0
+ push storage
+ @VMMCall _PageFree
+ add esp,8
+ ret
+cvvid_surface_free endp
 
 cvvid_rdtsc proc c public low_ptr:dword, high_ptr:dword
  push edx
@@ -229,6 +253,8 @@ video_end proc uses esi edi ebx
  mov eax,offset cvvid_detach
  xor ecx,ecx
  call video_call
+ test eax,eax
+ jnz retained_failed
  cmp sessions,0                         ; another VM's session keeps them
  jne unhooked
  cmp video_timer_hooked,0
@@ -259,6 +285,9 @@ done:
  ret
 failed:
  mov eax,VM_ERROR_TRAP
+ ret
+retained_failed:
+ ; The C instance still owns its raster. Do not release its shared block.
  ret
 video_end endp
 

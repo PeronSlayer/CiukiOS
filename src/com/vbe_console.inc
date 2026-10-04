@@ -55,6 +55,14 @@ vc_load_profile:
     jc .done
     cmp ax, 4
     jne .done
+    cmp byte [vc_profile],'M'
+    jne .named_profile
+    mov si,vc_profile
+    call vc_profile_mode
+    jc .done
+    mov [vc_mode],ax
+    jmp .done
+.named_profile:
     cmp dword [vc_profile], 'AUTO'
     je .automatic
     cmp dword [vc_profile], '0640'
@@ -100,6 +108,43 @@ vc_load_profile:
 .done:
     pop ds
     popad
+    ret
+
+; DS:SI = M followed by three hexadecimal digits. The four-byte exact-mode
+; profile coexists with AUTO and the historical resolution preferences.
+; CF=0/AX=mode only for firmware VBE IDs 100h..FFFh; never accepts mode flags.
+vc_profile_mode:
+    push bx
+    push cx
+    push si
+    xor bx,bx
+    mov cx,3
+    inc si
+.digit:
+    lodsb
+    sub al,'0'
+    cmp al,9
+    jbe .add
+    sub al,7
+    cmp al,10
+    jb .bad
+    cmp al,15
+    ja .bad
+.add:
+    shl bx,4
+    or bl,al
+    loop .digit
+    cmp bx,0x100
+    jb .bad
+    mov ax,bx
+    clc
+    jmp .done
+.bad:
+    stc
+.done:
+    pop si
+    pop cx
+    pop bx
     ret
 
 ; Validate the requested standard mode and its writable 64 KiB bank window.
@@ -281,8 +326,11 @@ vc_end:
     pushad
     push es
     mov byte [cs:vc_active], 0
+    cmp byte [cs:vc_graphics_transition],0
+    jne .release
     mov ax, 3
     call vc_bios
+.release:
     mov byte [cs:vc_lfb], 0
     call vc_lfb_close
     mov ax, [cs:vc_cells_seg]
@@ -727,6 +775,7 @@ vc_redraw:
 vc_batch_reset:
     ret
 %endif
+vc_graphics_transition db 0
 vc_profile_path db '\SYSTEM\VIDEO\DISPLAY.CFG', 0
 vc_profile dd 'AUTO'
 vc_mode dw 0

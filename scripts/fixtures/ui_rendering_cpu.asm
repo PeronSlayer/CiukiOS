@@ -46,8 +46,10 @@ export test_comp_rect
 export ui_comp_glyph
 export ug_text_color
 export ui_width
+export ui_vbe
 export ui_height
 export ui_comp_seg
+export ui_comp_capacity
 export ui_comp_stride
 export ui_comp_rows
 export ui_comp_top
@@ -87,6 +89,9 @@ test_comp_rect:
 ui_sound_preference:
 ui_pointer_hide:
 ui_pointer_show:
+ui_draw_topbar_visuals:
+app_desktop_topbar_paint:
+ui_window_bounds:
     ret
 ui_draw_scene:
     pushad
@@ -120,6 +125,8 @@ ui_fill_color db 0
 ui_fill_width dw 0
 ug_text_color db 0
 ui_dragging db 0
+app_overlay db 0
+ui_hit_count dw 0
 ui_wx dw 0
 ui_wy dw 0
 ui_ww dw 0

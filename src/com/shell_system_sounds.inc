@@ -45,6 +45,8 @@ ui_sfx_begin:
     je .close
     cmp dword [boot_session_mode],'MUTE'
     je .close
+    cmp dword [boot_session_mode],'HARD'
+    je .close
     cmp byte [driver_startup_audio],0
     je .close
     xor ax,ax

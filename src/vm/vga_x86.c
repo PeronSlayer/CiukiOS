@@ -89,8 +89,13 @@ static void set_reg(cvx_cpu *c, unsigned r, unsigned size, uint32_t v)
 
 static uint32_t linear(const dec *d, unsigned seg, uint32_t offset)
 {
+    cvx_cpu *c = d->cpu;
     if (d->asize == 2) offset &= 0xffff;
-    return d->cpu->seg_base[seg] + offset;
+    if (d->bus->segment_base && !(c->base_valid & (1u << seg))) {
+        c->seg_base[seg] = d->bus->segment_base(d->bus->context, c->sreg[seg]);
+        c->base_valid |= (uint8_t)(1u << seg);
+    }
+    return c->seg_base[seg] + offset;
 }
 
 static int mem_read(dec *d, unsigned seg, uint32_t offset, unsigned size, uint32_t *value)

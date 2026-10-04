@@ -24,6 +24,10 @@
 
 #include <stdint.h>
 
+/* CVGA_DEVICE_ONLY builds only port and aperture emulation (cvga_read/
+ * write_port, cvga_read/write/peek_vram) for HDPMI's protected-mode fault
+ * path, whose image must stay below RVA 10000h. Mode tables, BIOS mode
+ * set-up, fonts, geometry and scanout belong to CVSESSION's full copy. */
 #define CVGA_PLANE_SIZE 65536UL
 #define CVGA_DIRTY_GRANULE 8u       /* plane bytes represented by one dirty bit */
 #define CVGA_DIRTY_BYTES 1024u      /* 65536 / 8 / 8 per plane */
@@ -100,6 +104,17 @@ void CVGA_CALL cvga_write_port(cvga_state *v, uint16_t port, uint8_t value);
  * return FF and writes are ignored. Read accesses load all four VGA latches.
  */
 uint8_t CVGA_CALL cvga_read_vram(cvga_state *v, uint32_t address);
+/* The plane (0..3) a CPU write to A0000-AFFFF stores unchanged, or -1: the map
+ * mask selects exactly one plane, write mode 0, no set/reset, rotate or logical
+ * operation, bit mask FFh, neither chain-4 nor odd/even, 64 KiB window at
+ * A0000h. Then mapping that plane's memory at the window is exact for writes
+ * (latches are unused); reads return that plane without loading the latches.
+ * Any register write must re-evaluate it, so a latch copy (write mode 1)
+ * traps again before its latch-loading reads. */
+int CVGA_CALL cvga_direct_plane(const cvga_state *v);
+/* The plane (0..3) a CPU read from A0000-AFFFF returns unchanged, or -1: the
+ * same window conditions, read mode 0 and write mode 0 (a latch copy traps). */
+int CVGA_CALL cvga_direct_read_plane(const cvga_state *v);
 void CVGA_CALL cvga_write_vram(cvga_state *v, uint32_t address, uint8_t value);
 /* The value cvga_read_vram would return, WITHOUT loading the latches or any
  * other side effect. For monitors/diagnostics only; guest reads must use

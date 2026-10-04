@@ -45,6 +45,8 @@
 g_rect:
     pushad
     push es
+    cmp byte [g_composing],1
+    je g_render_rect
     cmp byte [g_vbe],1
     je g_render_rect
     mov [g_color], al
@@ -178,6 +180,8 @@ g_text:
 ; Write up to three planar bytes per glyph row, rather than one BIOS/port
 ; transaction per pixel. Text redraw does not dominate disk progress updates.
 g_glyph:
+    cmp byte [g_composing],1
+    je g_render_glyph
     cmp byte [g_vbe],1
     je g_render_glyph
     pushad
@@ -407,8 +411,10 @@ g_init:
     jne .video
     mov byte [g_mouse_ready], 1
 .video:
+%ifndef SETUP_FORCE_VGA
     call g_render_begin
     jnc .video_ready
+%endif
     mov ax, 0x0012
     int 0x10
     push cs
@@ -425,6 +431,7 @@ g_init:
     mov cx, 16
     mov dx, g_palette
     int 0x10
+    call g_render_begin_vga
 .video_ready:
     mov byte [gui_active],1
     cmp byte [g_mouse_ready], 1
@@ -1126,8 +1133,8 @@ gui_draw:
     call serial_write_z
     call serial_write_hex_byte
     call serial_write_crlf
-    cmp byte [g_vbe],1
-    je g_render_draw
+    cmp word [g_comp_seg],0
+    jne g_render_draw
     jmp gui_draw_scene
 
 gui_draw_scene:
@@ -1346,8 +1353,8 @@ g_number:
 ; AL=percent, [gui_phase]=1 full format, 2 quick format, 3 install, 4 readback.
 gui_progress_update:
     mov [gui_percent],al
-    cmp byte [g_vbe],1
-    jne .paint
+    cmp word [g_comp_seg],0
+    je .paint
     cmp byte [g_composing],1
     je .paint
     jmp g_render_progress

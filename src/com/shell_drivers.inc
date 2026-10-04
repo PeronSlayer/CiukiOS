@@ -96,9 +96,46 @@ startup_driver_services:
     mov bx,exec_env_seg
     mov ax,0x4B00
     int 0x21
+    ; Start the resident network bridge only behind an installed packet driver.
+    ; LOADDRV already did hardware matching; never probe absent ISA ports here.
+    xor ax,ax
+    mov es,ax
+    les di,[es:0x60*4]
+    cmp dword [es:di+3],'PKT '
+    jne .loaded
+    cmp dword [es:di+7],'DRVR'
+    jne .loaded
+    push cs
+    pop es
+    call setup_exec_block
+    mov byte [exec_tail],0
+    mov byte [exec_tail+1],13
+    mov dx,driver_network_path
+    mov bx,exec_env_seg
+    mov ax,0x4B00
+    int 0x21
 .loaded:
     pop es
     pop ds
+    popad
+    ret
+
+; Capture the firmware map before any V86 monitor starts, even in HARD or SAFE.
+startup_memory_map:
+    ; BIOS E820 must be captured before JemmEx or another V86 monitor is
+    ; active. This also runs in HARD and SAFE profiles, which skip VMSTART.
+    pushad
+    call setup_exec_block
+    mov byte [exec_tail],0
+    mov byte [exec_tail+1],13
+    mov dx,driver_memmap_path
+    mov bx,exec_env_seg
+    mov ax,0x4B00
+    int 0x21
+    push cs
+    pop ds
+    push cs
+    pop es
     popad
     ret
 
@@ -193,9 +230,11 @@ driver_profile_valid db 0
 driver_startup_audio db 1
 driver_force_vga db 0
 driver_detector_path db '\DRIVERS\HWDETECT.COM',0
+driver_network_path db '\NET\NETSTART.COM',0
 driver_loader_path db '\DRIVERS\LOADDRV.COM',0
 driver_input_path db '\DRIVERS\INPUTINI.COM',0
 driver_vm_path db '\VM\VMSTART.COM',0
+driver_memmap_path db '\VM\MEMMAP.COM',0
 driver_lfn_path db '\SYSTEM\LFN.COM',0
 driver_profile_path db '\DRIVERS\ACTIVE.CFG',0
 driver_audio_ich db 'AUDIO=ICH_AC97',0

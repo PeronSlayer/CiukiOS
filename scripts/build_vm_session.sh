@@ -41,7 +41,8 @@ wcc=watcom/'binl64/wcc386'
 if not wcc.exists(): wcc=watcom/'binl/wcc386'
 if not wcc.exists(): raise SystemExit('OpenWatcom wcc386 is required for the video monitor objects')
 video_sources=['virtual_vga.c','virtual_vga_bios.c','vga_presenter.c','vga_x86.c','session_video.c',
-               'guest_peripherals.c','session_devices.c']
+               'guest_peripherals.c','session_devices.c','session_clock.c','session_gpu.c',
+               'session_gpu_legacy.c']
 # Guest OPL synthesis: DBOPL (GPL-2.0-or-later) from the pinned VSBHDA archive,
 # unmodified, plus the ring-0 adapter, compiled by clang to freestanding COFF.
 vsbhda=json.loads((root/'third_party/vsbhda/UPSTREAM.json').read_text())
@@ -49,13 +50,20 @@ vsbhda_archive=root/'third_party/vsbhda'/vsbhda['archive']
 opl_shim=root/'src/vm/opl_shim'
 clang=os.environ.get('CLANGXX','clang++')
 source_paths=[root/'src/vm'/name for name in
-              ['session_jlm.asm','session_abi.inc','session_scheduler.inc',
+              ['session_jlm.asm','session_abi.inc','session_vmm.inc','session_native_pages.inc',
+               'session_framebuffer_cache.inc','session_clock.inc','session_clock.h',
+               'session_gpu.inc','session_gpu.h',
+               'session_gpu_legacy.h',
+               'session_native_process.inc',
+               'session_scheduler.inc',
                'session_scheduler_abi.inc','session_scheduler.h',
                'session_video.inc','session_video_abi.inc','session_video.h',
                'vga_x86.h','virtual_vga.h','virtual_vga_bios.h','vga_presenter.h',
                'guest_peripherals.h','session_devices.h','session_devices.inc',
                'session_devices_abi.inc','session_opl.cpp',
-               *video_sources]]+[root/'scripts/build_vm_session.sh',vsbhda_archive,
+               *video_sources]]+[root/'src/native/native_entry.asm',
+               root/'src/native/native_entry_abi.inc',
+               root/'scripts/build_vm_session.sh',vsbhda_archive,
                *sorted(opl_shim.glob('*.h'))]
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def snapshot():
@@ -97,7 +105,8 @@ for name,source_path in (('dbopl',dbopl/'DBOPL.CPP'),('session_opl',root/'src/vm
 import re
 wanted={'dos_indos_flag':'KL_INDOS','fat_cache_valid':'KL_FAT_VALID','fat_cache_dirty':'KL_FAT_DIRTY',
         'fat_cache_sector':'KL_FAT_SECTOR','dos_mem_last_mcb_seg':'KL_LAST_MCB',
-        'int21_last_ah':'KL_LAST_AH'}
+        'int21_last_ah':'KL_LAST_AH',
+        'dos_exec_identity_psp':'KL_EXEC_PSP','current_psp_seg':'KL_CURRENT_PSP'}
 layout={}
 if a.kernel_listing.exists():
     for line in a.kernel_listing.read_text(errors='replace').splitlines():
@@ -107,8 +116,14 @@ present=len(layout)==len(wanted)
 lines=['; Generated from '+str(a.kernel_listing)+' by build_vm_session.sh','KL_PRESENT equ '+('1' if present else '0')]
 lines+=[f'{name} equ 0{layout.get(name,0):X}h' for name in wanted.values()]
 (out/'kernel_layout.inc').write_text('\n'.join(lines)+'\n')
-subprocess.run([str(tools['jwasm']),'-coff','-c','-nologo','-I'+str(include),'-I'+str(root/'src/vm'),'-I'+str(out),
+subprocess.run([str(tools['jwasm']),'-coff','-c','-nologo','-I'+str(include),'-I'+str(root/'src/vm'),
+                '-I'+str(root/'src/native'),'-I'+str(out),
                 '-Fo'+str(obj),'-Fl'+str(out/'session.lst'),str(root/'src/vm/session_jlm.asm')],check=True)
+native_obj=out/'native_entry.obj'
+subprocess.run([str(tools['jwasm']),'-coff','-c','-nologo','-I'+str(include),
+                '-I'+str(root/'src/native'),'-Fo'+str(native_obj),
+                '-Fl'+str(out/'native_entry.lst'),
+                str(root/'src/native/native_entry.asm')],check=True)
 video_objects=[]
 for name in video_sources:
     video_obj=out/(pathlib.Path(name).stem+'.obj')
@@ -119,6 +134,7 @@ for name in video_sources:
 # was cut once the device and OPL objects were added).
 relative=lambda items:[pathlib.Path(i).name if i!='file' else i for i in items]
 subprocess.run([str(tools['jwlink']),'format','win','nt','hx','dll','ru','native','file',obj.name,
+                'file',native_obj.name,
                 *relative(video_objects),*relative(opl_objects),'name',binary.name,
                 'op','q,nodefaultlibs,MAP=session.map','export','_ddb.1'],check=True,cwd=out)
 if {k:v for k,v in snapshot().items()}!={k:v for k,v in inputs.items() if k!='clang'}:

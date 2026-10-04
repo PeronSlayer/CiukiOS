@@ -10,6 +10,7 @@
  * \DRIVERS\LOADDRV.LOG. Each driver's files and its DRIVER.INF are kept in
  * \DRIVERS\<CLASS>\<NAME>. */
 #include "app.h"
+static int wheel_scroll;
 
 /* ------------------------------------------------------------------ */
 /* Devices                                                             */
@@ -50,7 +51,7 @@ static const struct known known[] = {
     { 0x1274, 0x5000, "Ensoniq AudioPCI ES1370" }, { 0x1274, 0x1371, "Ensoniq AudioPCI ES1371" },
     { 0x125D, 0x1978, "ESS Maestro-2E (ES1978)" }, { 0x1002, 0x4C4D, "ATI Rage Mobility P/M" },
     { 0x1B36, 0x000D, "QEMU xHCI USB controller" }, { 0x1AF4, 0x1000, "Virtio network device" },
-    { 0x1AF4, 0x1001, "Virtio block device" }, { 0, 0, 0 } };
+    { 0x1AF4, 0x1001, "Virtio block device" }, { 0x1AF4, 0x1050, "Virtio GPU" }, { 0, 0, 0 } };
 struct vendor { u16 id; const char *name; };
 static const struct vendor vendors[] = {
     { 0x8086, "Intel" }, { 0x1022, "AMD" }, { 0x1002, "ATI" }, { 0x10DE, "NVIDIA" }, { 0x10EC, "Realtek" },
@@ -681,7 +682,7 @@ static void command(int id)
         str_copy(status, "Hardware scan complete.");
         app_log("[DEVICES] scan", 0);
         break;
-    case C_HWDETECT: app_command("\\DRIVERS\\HWDETECT.COM /SAVE"); break;
+    case C_HWDETECT: app_helper("\\DRIVERS\\HWDETECT.COM /SAVE"); break;
     case C_ADD: add_dialog(0); break;
     case C_ENABLE: case C_DISABLE:
         if (sel_drv < 0 || sel_drv >= ndrv) break;
@@ -773,8 +774,8 @@ static void paint(void)
     if (tab == 0) {
         int vr = visible_rows();
         if (sel_row >= nrows) sel_row = nrows - 1;
-        if (sel_row >= 0 && sel_row < top_row) top_row = sel_row;
-        if (sel_row >= top_row + vr) top_row = sel_row - vr + 1;
+        if (!wheel_scroll && sel_row >= 0 && sel_row < top_row) top_row = sel_row;
+        if (!wheel_scroll && sel_row >= top_row + vr) top_row = sel_row - vr + 1;
         for (i = top_row; i < nrows && i < top_row + vr; i++) {
             int fg = C_INK, r = rows[i];
             y = ly + 2 + (i - top_row) * ROW_H;
@@ -804,8 +805,8 @@ static void paint(void)
         cx[0] = c1; cx[1] = c2; cx[2] = c3; cx[3] = c4; cx[4] = c5;
         for (i = 0; i < 4; i++) { ui_bevel(cx[i], ly + 2, cx[i + 1] - cx[i], 20, C_FACE); ui_text(cx[i] + 6, ly + 4, heads[i], C_INK); }
         if (sel_drv >= ndrv) sel_drv = ndrv - 1;
-        if (sel_drv >= 0 && sel_drv < top_drv) top_drv = sel_drv;
-        if (sel_drv >= top_drv + vr) top_drv = sel_drv - vr + 1;
+        if (!wheel_scroll && sel_drv >= 0 && sel_drv < top_drv) top_drv = sel_drv;
+        if (!wheel_scroll && sel_drv >= top_drv + vr) top_drv = sel_drv - vr + 1;
         for (i = top_drv; i < ndrv && i < top_drv + vr; i++) {
             int fg = C_INK;
             y = ly + 24 + (i - top_drv) * ROW_H;
@@ -998,8 +999,18 @@ static int dev_event(int ev, int a, int b, int c)
         return 1;
     }
     case EV_PAINT: paint(); return 0;
-    case EV_KEY: return on_key(a);
-    case EV_MOUSE: return on_mouse(a, HOST.x + b, HOST.y + TITLE_H + c);
+    case EV_WHEEL: {
+        int *at = tab ? &top_drv : &top_row;
+        int max = (tab ? ndrv : nrows) - visible_rows();
+        if (dlg.open || pdlg.open || c < 0) return 0;
+        wheel_scroll = 1;
+        *at += a * 3;
+        if (*at > max) *at = max;
+        if (*at < 0) *at = 0;
+        return 1;
+    }
+    case EV_KEY: wheel_scroll = 0; return on_key(a);
+    case EV_MOUSE: if (a == MOUSE_DOWN) wheel_scroll = 0; return on_mouse(a, HOST.x + b, HOST.y + TITLE_H + c);
     case EV_POLL:
         if (pending_install[0] && !dlg.open) {
             add_dialog(pending_install);

@@ -1,0 +1,53 @@
+--- a/src/CVIRQ.INC
++++ b/src/CVIRQ.INC
+@@ -8,7 +8,8 @@
+ CvRequested dd 0
+ CvPitOwned dd 0              ; channel 0 supplied by the VM clock owner
+ CvFilter dd 0
+ CvPollProc dd 0
++CvHaltProc dd 0                ; owner's V86 HLT procedure (function 11)
+ CvLinger dd 0
+ CvActive dd 0
+ CvGuestIF dd 0
+@@ -351,7 +352,8 @@
+  mov CvRequested,0
+  mov CvPitOwned,0
+  mov CvFilter,0
+  mov CvPollProc,0
++ mov CvHaltProc,0
+  jmp profile_state
+ profile_not_release:
+  cmp eax,3
+@@ -531,6 +533,14 @@
+  pop esi
+  jmp profile_state
+ profile_not_vm:
++ ; 11 set the V86 HLT procedure ECX (0 removes). It runs with EBP = the
++ ; client frame, EIP already past the HLT; CF=1 when it switched the frame
++ ; to another V86 context, which then resumes instead of halting the CPU.
++ cmp eax,11
++ jne profile_not_halt
++ mov CvHaltProc,ecx
++ jmp profile_state
++profile_not_halt:
+  test eax,eax
+  jnz profile_error
+ profile_state:
+--- a/src/JEMM32.ASM
++++ b/src/JEMM32.ASM
+@@ -1248,6 +1248,15 @@
+     @dprintf ?HLTDBG, <"True HLT occured at CS:IP=%X:%X",10>, [ebp].Client_Reg_Struc.Client_CS, [ebp].Client_Reg_Struc.Client_EIP
+ 
+     INC [EBP].Client_Reg_Struc.Client_EIP   ; Jump over the HLT instruction
++ifdef CIUKIOS_V86_INTERRUPTS
++;--- CiukiOS: an idle V86 context gives the CPU to another ready one at once
++;--- instead of halting until the next interrupt.
++    cmp CvHaltProc,0
++    jz @@Hlt_Physical
++    call CvHaltProc
++    jc exc_exit
++@@Hlt_Physical:
++endif
+ 
+ ;    mov esp,[dwStackCurr]     ; v5.87: in V86_Exception, register ESP is already setup correctly.
+ ;--- doing a HLT with interrupts disabled will freeze the machine

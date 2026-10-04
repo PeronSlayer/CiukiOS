@@ -6,9 +6,41 @@ ui_event:
     jnz app_hotkey_action
     mov ah,0x11
     int 0x16
+    jnz .enhanced_key
+    ; Some legacy notebook BIOSes only expose the original INT 16h queue.
+    ; Keep the enhanced path for normal sessions and try the old pair in
+    ; recovery mode when AH=11h reports no pending key.
+    cmp byte [vc_force_safe],1
+    jne .mouse
+    mov ah,0x01
+    int 0x16
     jz .mouse
+    mov ah,0x00
+    int 0x16
+%ifdef BOOT_DISK_LOG
+    cmp byte [boot_log_legacy_seen],1
+    je .key_received
+    mov byte [boot_log_legacy_seen],1
+    push ax
+    mov al,0x1B
+    call boot_log_stage
+    pop ax
+%endif
+    jmp .key_received
+.enhanced_key:
     mov ah,0x10
     int 0x16
+.key_received:
+%ifdef BOOT_DISK_LOG
+    cmp byte [boot_log_key_seen],1
+    je .key_logged
+    mov byte [boot_log_key_seen],1
+    push ax
+    mov al,0x11                ; first keyboard event read
+    call boot_log_stage
+    pop ax
+.key_logged:
+%endif
     cmp ah,0xA5             ; enhanced BIOS Alt+Tab, retained after Alt release
     je ui_windows_cycle
     cmp ah,0x6B
@@ -195,6 +227,14 @@ ui_event:
     jne .idle
     mov ax,3
     int 0x33
+    movsx ax,bh
+    add [ui_wheel_pending],ax
+    test ax,ax
+    jz .wheel_sampled
+    inc word [ui_wheel_samples]
+    mov [ui_wheel_last],ax
+.wheel_sampled:
+    and bx,7
     push bx
     mov ax,0x000B
     int 0x33
@@ -282,7 +322,16 @@ ui_event:
     cmp dx,[ui_mouse_y]
     je .click
 .move:
-    call ui_pointer_hide
+%ifdef BOOT_DISK_LOG
+    cmp byte [boot_log_mouse_seen],1
+    je .mouse_logged
+    mov byte [boot_log_mouse_seen],1
+    push ax
+    mov al,0x12                ; first mouse motion read
+    call boot_log_stage
+    pop ax
+.mouse_logged:
+%endif
     test cx,cx
     jns .positive_x
     xor cx,cx
@@ -308,6 +357,7 @@ ui_event:
     mov ax,4
     int 0x33
     pop bx
+    call ui_pointer_hide
     mov [ui_mouse_x],cx
     mov [ui_mouse_y],dx
     call ui_pointer_show
@@ -333,6 +383,14 @@ ui_event:
     test ax,ax
     jnz .out
 .click:
+    cmp word [ui_wheel_pending],0
+    je .no_wheel
+    xor dx,dx
+    xchg dx,[ui_wheel_pending]
+    call app_wheel
+    test ax,ax
+    jnz .out
+.no_wheel:
     cmp byte [app_overlay],0
     jne .overlay_buttons
     ; Right button, according to the context: an application window's
@@ -970,9 +1028,12 @@ ui_pointer_hide:
     cmp byte [ui_vbe],0
     je ui_vga_pointer_hide
     pushad
+    push fs
+    mov fs,[ui_assets_seg]
     mov edi,[ui_pointer_linear]
-    mov si,ui_pointer_under
+    call ui_pointer_buffer
     call vc_pointer_restore
+    pop fs
     popad
     mov byte [ui_pointer_visible],0
 .done:
@@ -986,6 +1047,8 @@ ui_pointer_show:
     cmp byte [ui_vbe],0
     je ui_vga_pointer_show
     pushad
+    push fs
+    mov fs,[ui_assets_seg]
     movzx edi,word [ui_mouse_y]
     movzx eax,word [vc_pitch]
     imul edi,eax
@@ -995,12 +1058,23 @@ ui_pointer_show:
     add edi,eax
     add edi,[ui_front_base]
     mov [ui_pointer_linear],edi
-    mov si,ui_pointer_under
+    call ui_pointer_buffer
     call vc_pointer_save
     mov bx,ui_pointer_black
     call vc_pointer_draw
     mov byte [ui_pointer_visible],1
+    pop fs
     popad
+.done:
+    ret
+
+; Each physical display page owns its cursor background. EDI is the pixel
+; offset on that page; FS already addresses the desktop resource block.
+ui_pointer_buffer:
+    mov si,ui_pointer_under
+    cmp edi,[vc_frame_bytes]
+    jb .done
+    add si,24*16*4
 .done:
     ret
 
@@ -1009,6 +1083,7 @@ ui_vga_pointer_hide:
     jne .done
     pushad
     push es
+    push ds
     mov ax, 0xA000
     mov es, ax
     mov dx, 0x3CE
@@ -1021,13 +1096,15 @@ ui_vga_pointer_hide:
     mov ax, 0xFF08
     out dx, ax
     mov si, ui_pointer_under
+    mov ax,[ui_assets_seg]
+    mov ds,ax
     mov ah, 1
 .plane:
     mov dx, 0x3C4
     mov al, 2
     out dx, ax
     push ax
-    mov di, [ui_pointer_offset]
+    mov di, [cs:ui_pointer_offset]
     mov bp, 16
 .row:
     mov cx, 3
@@ -1041,6 +1118,7 @@ ui_vga_pointer_hide:
     jb .plane
     mov ax, 0x0F02
     out dx, ax
+    pop ds
     pop es
     popad
     mov byte [ui_pointer_visible], 0
@@ -1052,6 +1130,8 @@ ui_vga_pointer_show:
     jne .done
     pushad
     push es
+    push fs
+    mov fs,[ui_assets_seg]
     mov ax, 0xA000
     mov es, ax
     mov ax, [ui_mouse_y]
@@ -1073,11 +1153,11 @@ ui_vga_pointer_show:
     mov bp, 16
 .row:
     mov al, [es:di]
-    mov [si], al
+    mov [fs:si], al
     mov al, [es:di+1]
-    mov [si+1], al
+    mov [fs:si+1], al
     mov al, [es:di+2]
-    mov [si+2], al
+    mov [fs:si+2], al
     add si, 3
     add di, 80
     dec bp
@@ -1095,6 +1175,7 @@ ui_vga_pointer_show:
     mov al, 15
     call ui_pointer_shape
     mov byte [ui_pointer_visible], 1
+    pop fs
     pop es
     popad
 .done:
@@ -1140,6 +1221,14 @@ ui_mouse_y dw 240
 ui_mouse_press_pending db 0
 ui_mouse_release_pending db 0
 ui_mouse_buttons dw 0
+ui_wheel_pending dw 0
+; Fixed-size input diagnostics, readable without logging every mouse IRQ.
+ui_wheel_trace db 'CWHEEL01'
+ui_wheel_samples dw 0
+ui_wheel_last dw 0
+ui_wheel_target dw 0
+ui_wheel_sent dw 0
+ui_wheel_result dw 0
 ui_previous_button db 0
 ui_pressed dw 0
 ui_dragging db 0
@@ -1152,6 +1241,5 @@ ui_focus_step dw 1
 ui_pointer_offset dw 0
 ui_pointer_linear dd 0
 ui_pointer_color db 0
-ui_pointer_under times 24*16*4 db 0
 ui_pointer_black dw 0x8000,0xC000,0xE000,0xF000,0xF800,0xFC00,0xFE00,0xFF00,0xFF80,0xFFC0,0xFE00,0xEF00,0xCF00,0x8780,0x0780,0x0300
 ui_pointer_white dw 0,0,0x4000,0x6000,0x7000,0x7800,0x7C00,0x7E00,0x7F00,0x7C00,0x6C00,0x4600,0x0600,0x0300,0x0300,0

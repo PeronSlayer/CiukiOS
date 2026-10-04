@@ -342,7 +342,13 @@ configure_audio_args() {
         break
       fi
     done
-    [[ -n "$backend" ]] || backend="none"
+    if [[ -z "$backend" ]]; then
+      if [[ "$QEMU_AUDIO_MODE" == "on" ]]; then
+        echo "[dos-taxonomy] ERROR: audio is required but no usable backend was found" >&2
+        exit 1
+      fi
+      backend="none"
+    fi
   fi
 
   local sb_irq="${QEMU_SB_IRQ:-7}"
@@ -523,7 +529,7 @@ wait_for_shell_prompt() {
       return 0
     fi
 
-    if [[ "${DOS_TAXONOMY_ENTER_DOS_ON_DESKTOP:-0}" == "1" \
+    if [[ "${DOS_TAXONOMY_ENTER_DOS_ON_DESKTOP:-1}" == "1" \
       && "$dos_key_sent" == "0" ]] \
       && normalized_log_matches_fixed "$file" '[DESKTOP] READY'; then
       send_key "$QEMU_MON_SOCK" "$QEMU_CMD_LOG" f4 || true
@@ -1044,10 +1050,13 @@ classify_runtime() {
       -no-reboot
       -no-shutdown
       "${QEMU_AUDIO_ARGS[@]}"
+      -netdev user,id=ciuknet0
+      -device ne2k_pci,netdev=ciuknet0,mac=52:54:00:12:34:56
     )
 
     echo "[QEMU_ACCEL] $QEMU_ACCEL_DETAIL" >> "$QEMU_CMD_LOG"
     echo "[QEMU_AUDIO] $QEMU_AUDIO_DETAIL" >> "$QEMU_CMD_LOG"
+    echo "[QEMU_NETWORK] user NAT ne2000=irq3/io300" >> "$QEMU_CMD_LOG"
 
     if [[ -n "${QEMU_EXTRA_ARGS:-}" ]]; then
       # shellcheck disable=SC2206

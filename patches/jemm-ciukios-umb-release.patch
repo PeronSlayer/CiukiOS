@@ -1,0 +1,198 @@
+--- a/src/UMB.ASM
++++ b/src/UMB.ASM
+@@ -206,6 +206,98 @@
+     align 4
+ UMB_findblock endp
+ 
++;--- CiukiOS: release an exact XMS UMB allocation from a ring-0 JLOAD
++;--- module after a V86 VM has been killed.  EDX is its 16-bit segment.
++;--- EAX=1 only when this segment names a currently allocated UMB.
++;--- The caller owns the segment registry; no client frame is touched.
++UMB_release_direct proc public
++    push esi
++    mov esi,offset UMBsegments
++@@scan:
++    cmp [esi].UMBBLK.wSegm,dx
++    jne @@next
++    test byte ptr [esi].UMBBLK.wSize+1,UMB_ALLOCATED
++    jz @@bad
++    and byte ptr [esi].UMBBLK.wSize+1,not UMB_ALLOCATED
++    mov eax,1
++    pop esi
++    ret
++@@next:
++    add esi,size UMBBLK
++    cmp esi,offset UMBend
++    jne @@scan
++@@bad:
++    xor eax,eax
++    pop esi
++    ret
++UMB_release_direct endp
++
++;--- CiukiOS: claim one UMB for a VM in ring 0 and publish it only after the
++;--- CVSESSION owner record exists. EDX = paragraphs; EAX = segment or 0,
++;--- ECX = actual paragraphs. The ordinary XMS table remains authoritative.
++UMB_claim_direct proc public
++    push esi
++    push edi
++    push ebx
++    test edx,edx
++    jz @@bad
++    cmp edx,7FFFh
++    ja @@bad
++    mov esi,offset UMBsegments
++@@find:
++    cmp [esi].UMBBLK.wSegm,0
++    je @@next
++    test byte ptr [esi].UMBBLK.wSize+1,UMB_ALLOCATED
++    jne @@next
++    movzx ecx,[esi].UMBBLK.wSize
++    cmp edx,ecx
++    jbe @@found
++@@next:
++    add esi,size UMBBLK
++    cmp esi,offset UMBend
++    jne @@find
++    jmp @@bad
++@@found:
++    mov eax,edx
++    add eax,7Fh
++    and eax,not 7Fh
++    mov ebx,ecx
++    sub ebx,eax
++    cmp ebx,80h
++    jb @@whole
++    mov edi,offset UMBsegments
++@@slot:
++    cmp [edi].UMBBLK.wSegm,0
++    je @@split
++    add edi,size UMBBLK
++    cmp edi,offset UMBend
++    jne @@slot
++    jmp @@whole
++@@split:
++    mov bx,[esi].UMBBLK.wSegm
++    add bx,ax
++    mov [edi].UMBBLK.wSegm,bx
++    mov ebx,ecx
++    sub ebx,eax
++    mov [edi].UMBBLK.wSize,bx
++    mov [esi].UMBBLK.wSize,ax
++    mov ecx,eax
++@@whole:
++    or byte ptr [esi].UMBBLK.wSize+1,UMB_ALLOCATED
++    movzx eax,[esi].UMBBLK.wSegm
++    pop ebx
++    pop edi
++    pop esi
++    ret
++@@bad:
++    xor eax,eax
++    xor ecx,ecx
++    pop ebx
++    pop edi
++    pop esi
++    ret
++UMB_claim_direct endp
++
+ .text$03 ends
+ 
+ .text$04 segment
+--- a/src/EXTERN32.INC
++++ b/src/EXTERN32.INC
+@@ -192,6 +192,8 @@
+ externdef EMS_Init2:near
+ externdef VDS_Init:near
+ externdef UMB_Init:near
++externdef UMB_release_direct:near
++externdef UMB_claim_direct:near
+ externdef Pool_Init1:near
+ externdef Pool_Init2:near
+ externdef InitMonitor:near
+--- a/src/JEMM32.ASM
++++ b/src/JEMM32.ASM
+@@ -2937,6 +2937,8 @@
+ else
+     dd 0                     ;no interrupt profile compiled into this Jemm
+ endif
++    dd offset UMB_release_direct ;CiukiOS exact UMB release for VM teardown
++    dd offset UMB_claim_direct   ;CiukiOS owned UMB allocation
+ 
+ endif
+ 
+--- a/Tools/JLOAD/VMM.ASM
++++ b/Tools/JLOAD/VMM.ASM
+@@ -49,6 +49,8 @@
+ lpV86Faults		dd 0	;v5.86: original address stored in vmm_service_table
+ ppHostScheduler	dD 0	;CiukiOS: address of exact-owned Jemm callback slot
+ ppProfileService dd 0	;CiukiOS: Jemm interrupt-profile service or 0
++ppUMBRelease     dd 0	;CiukiOS: exact Jemm XMS UMB release service
++ppUMBClaim       dd 0	;CiukiOS: claim UMB before publishing to a VM
+ 
+ ScratchPTE		dd 0	;PTE used to simplify page memory management
+ oldiohandler	dd 0	;saved Jemm's IO handler
+@@ -140,6 +142,8 @@
+ 					dd Install_Host_Scheduler
+ 					dd Remove_Host_Scheduler
+ 					dd Host_Scheduler_Profile
++					dd Release_Ciuki_UMB
++					dd Claim_Ciuki_UMB
+ 
+ ?NUMSERV0001 equ ($ - vmm_services)/4
+ 
+@@ -205,6 +209,10 @@
+ 	mov ppHostScheduler,eax
+ 	lodsd				;interrupt-profile service entry (0 if absent)
+ 	mov ppProfileService,eax
++	lodsd				;exact UMB release helper
++	mov ppUMBRelease,eax
++	lodsd				;direct UMB claim helper
++	mov ppUMBClaim,eax
+ if ?KD
+ 	mov ax, 4Fh
+ 	int 41h
+@@ -1369,6 +1377,32 @@
+ 	ret
+ Host_Scheduler_Profile endp
+ 
++;--- EDX = an exact UMB segment owned by CVSESSION's VM registry.
++;--- The Jemm helper returns EAX=1 on release, EAX=0 if absent/already free.
++Release_Ciuki_UMB proc
++    mov eax,[ppUMBRelease]
++    test eax,eax
++    jz short umb_release_absent
++    call eax
++    ret
++umb_release_absent:
++    xor eax,eax
++    ret
++Release_Ciuki_UMB endp
++
++;--- EDX = paragraphs; EAX = exact allocated segment or 0, ECX = size.
++Claim_Ciuki_UMB proc
++    mov eax,[ppUMBClaim]
++    test eax,eax
++    jz short umb_claim_absent
++    call eax
++    ret
++umb_claim_absent:
++    xor eax,eax
++    xor ecx,ecx
++    ret
++Claim_Ciuki_UMB endp
++
+ ;--- to simplify memory management,
+ ;--- a "mapping" page table is maintained which
+ ;--- maps all page tables in linear address space
+--- a/Include/JLM.INC
++++ b/Include/JLM.INC
+@@ -152,6 +152,8 @@
+ VMM_Service Install_Host_Scheduler
+ VMM_Service Remove_Host_Scheduler
+ VMM_Service Host_Scheduler_Profile
++VMM_Service Release_Ciuki_UMB
++VMM_Service Claim_Ciuki_UMB
+ 
+ ;--- equates for the page memory functions
+ 

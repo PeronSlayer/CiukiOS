@@ -13,6 +13,7 @@ bits 16
 cpu 386
 org 100h
 %include "src/vm/session_abi.inc"
+%include "kernel_layout.inc"
 
 start:
     cld
@@ -78,6 +79,7 @@ start:
     int 2Fh
     mov ax,es
     mov si,[es:bx+6]
+    mov [cs:kernel_seg],ax
     push ax
     mov ah,52h
     int 21h
@@ -134,6 +136,7 @@ child:
     push cs
     pop es
     call restore_vectors
+    call prepare_compaction
     ; Free every block they own in this VM's copy (the chain can merge
     ; while blocks are freed, so walk it again after each one).
 .again:
@@ -180,6 +183,11 @@ child:
 .freed:
     push cs
     pop es
+    cmp byte [compact_ready],0
+    je .launch
+    call compact_residents
+    jc .compact_failed
+.launch:
     ; The program.
     mov [params+4],cs
     mov [params+8],cs
@@ -204,6 +212,330 @@ child:
 .idle:
     hlt                                 ; the VM manager switches away
     jmp .idle
+.compact_failed:
+    mov dx,compaction_failed
+    mov ah,9
+    int 21h
+    ; Relocation requires a destination below each resident. Best fit can
+    ; pick a small hole above AUXSTACK when a packet driver is resident.
+    ; First fit takes the freed low PSP interval instead.
+    xor bx,bx
+    jmp .report
+
+; Reclaim the desktop's PSP in this private VM. The running VMFORK image is
+; still intact above it. The copied shell will never run in this VM.
+prepare_compaction:
+    mov byte [compact_ready],0
+    cmp word [ancestors],0
+    je .done
+    mov ah,62h
+    int 21h
+    mov [cs:old_psp],bx
+    mov ax,[cs:kernel_seg]
+    mov es,ax
+    cmp [es:KL_EXEC_PSP],bx
+    jne .done
+    cmp [es:KL_CURRENT_PSP],bx
+    jne .done
+    ; A nested launcher (for example VMCTEST -> VMFORK) keeps its immediate
+    ; parent's PSP above the resident hooks. Reclaim the root shell PSP,
+    ; which is the lowest ancestor and leaves a gap below AUXSTACK/LFN.
+    mov si,ancestors
+.root:
+    mov ax,[cs:si]
+    test ax,ax
+    jz .root_ready
+    mov dx,ax
+    add si,2
+    cmp si,ancestors+16
+    jb .root
+.root_ready:
+    mov ax,dx
+    mov [es:KL_EXEC_PSP],ax
+    mov [es:KL_CURRENT_PSP],ax
+    mov es,ax
+    mov bx,10h
+    mov ax,0F14Ah
+    int 21h
+    jnc .ready
+    mov ax,[cs:kernel_seg]
+    mov es,ax
+    mov ax,[cs:old_psp]
+    mov [es:KL_EXEC_PSP],ax
+    mov [es:KL_CURRENT_PSP],ax
+    jmp .done
+.ready:
+    mov byte [cs:compact_ready],1
+.done:
+    push cs
+    pop ds
+    push cs
+    pop es
+    ret
+
+; Move the two known resident COM images into the gap left by the desktop
+; PSP. Their IVT hooks are private to this VM. A partial move ends only this
+; private VM; it must never launch a game against a half-updated DOS arena.
+compact_residents:
+    mov ax,5800h
+    int 21h
+    mov [old_strategy],bx
+    xor bx,bx                           ; first fit: freed low PSP gap
+    mov ax,5801h
+    int 21h
+    mov bx,10h
+    mov word [vector_slot],bx
+    call move_vector_resident
+    jc .done
+    mov bx,21h
+    mov [vector_slot],bx
+    call move_vector_resident
+    jc .done
+
+    ; Allocate our own PSP immediately after the compacted residents. The
+    ; old PSP can then be released without losing the EXEC return context.
+    mov bx,(image_end-$$+100h+15)/16
+    mov ah,48h
+    int 21h
+    jc .done
+    mov [new_psp],ax
+    mov es,ax
+    push ds
+    push cs
+    pop ds
+    xor si,si
+    xor di,di
+    mov cx,(image_end-$$+100h+1)/2
+    rep movsw
+    pop ds
+    mov ax,[new_psp]
+    mov es,ax
+    mov [es:2],ax
+    add word [es:2],(image_end-$$+100h+15)/16
+    mov ax,[ancestors]
+    mov [es:16h],ax
+    mov ax,[kernel_seg]
+    mov es,ax
+    mov ax,[new_psp]
+    mov [es:KL_EXEC_PSP],ax
+    mov [es:KL_CURRENT_PSP],ax
+    cli
+    mov ss,ax
+    mov sp,stack_top
+    sti
+    mov ds,ax
+    mov es,ax
+    push ax
+    push word .rebased
+    retf
+.rebased:
+    mov bx,[old_psp]
+    mov es,bx
+    mov ax,0F149h
+    int 21h
+    pushf
+    push cs
+    pop es
+    push cs
+    pop ds
+    popf
+    jnc .old_psp_done
+    call old_psp_is_free
+    jc .fatal
+.old_psp_done:
+    mov bx,[old_strategy]
+    mov ax,5801h
+    int 21h
+    push cs
+    pop ds
+    push cs
+    pop es
+    jmp child.launch
+.done:
+    mov bx,[old_strategy]
+    mov ax,5801h
+    int 21h
+    push cs
+    pop ds
+    push cs
+    pop es
+    stc
+    ret
+.fatal:
+    mov bx,[old_strategy]
+    mov ax,5801h
+    int 21h
+    jmp child.compact_failed
+
+; A DOS allocator rebuild may already have coalesced the retired PSP into a
+; free MCB. Accept AH=F149h's "block not found" only after checking the
+; canonical MCB chain covers the old segment with a free block.
+old_psp_is_free:
+    mov ah,52h
+    int 21h
+    jc .bad
+    mov ax,[es:bx-2]
+    mov cx,64
+.next:
+    mov es,ax
+    mov dl,[es:0]
+    cmp dl,'M'
+    je .kind_ok
+    cmp dl,'Z'
+    jne .bad
+.kind_ok:
+    mov bx,ax
+    add bx,[es:3]
+    inc bx
+    cmp [cs:old_psp],ax
+    jb .bad
+    cmp [cs:old_psp],bx
+    jae .advance
+    cmp word [es:1],0
+    jne .bad
+    clc
+    ret
+.advance:
+    cmp dl,'Z'
+    je .bad
+    mov ax,bx
+    loop .next
+.bad:
+    stc
+    ret
+
+; BX = vector whose owner PSP is a low-memory resident COM image.
+move_vector_resident:
+    push ds
+    xor ax,ax
+    mov ds,ax
+    shl bx,1
+    shl bx,1
+    mov ax,[bx+2]
+    pop ds
+    cmp ax,1200h
+    jb .bad
+    cmp ax,0A000h
+    jae .bad
+    mov [old_resident],ax
+    dec ax
+    mov es,ax
+    mov ax,[old_resident]
+    cmp [es:1],ax
+    jne .bad
+    mov ax,[es:3]
+    cmp ax,20h
+    jb .bad
+    cmp ax,500h
+    ja .bad
+    mov [resident_paras],ax
+    ; Only the boot AUXSTACK and this build's LFN hook may be relocated.
+    mov bx,[vector_slot]
+    cmp bx,10h
+    jne .check_lfn
+    cmp ax,4Fh
+    jne .bad
+    mov ax,[old_resident]
+    mov es,ax
+    cmp word [es:100h],0E3E9h
+    jne .bad
+    jmp .checked
+.check_lfn:
+    cmp bx,21h
+    jne .bad
+    mov ax,[old_resident]
+    mov es,ax
+    cmp word [es:103h],0FC80h
+    jne .bad
+    cmp byte [es:105h],71h
+    jne .bad
+.checked:
+    ; CVSESSION claims a distinct Jemm UMB and records this VM as owner in
+    ; one ring-0 operation.  Its KILL path releases the block even if this
+    ; child never returns.  If no UMB fits, keep the proven low compaction.
+    mov bx,[resident_paras]
+    mov ax,VM_OP_VMM_UMB_ALLOC
+    call far [entry]
+    push cs
+    pop ds
+    push cs
+    pop es
+    jc .low_alloc
+    mov [new_resident],bx
+    mov byte [resident_high],1
+    jmp .copy
+.low_alloc:
+    mov byte [resident_high],0
+    mov ax,[resident_paras]
+    mov bx,ax
+    mov ah,48h
+    int 21h
+    jc .bad
+    mov [new_resident],ax
+    cmp ax,[old_resident]
+    jae .reject_alloc
+.copy:
+    mov ax,[new_resident]
+    mov es,ax
+    ; AH=48h assigns the block to VMFORK's old PSP. This relocated TSR
+    ; must own its block itself before that PSP is released below.
+    cmp byte [resident_high],1
+    je .owner_ready
+    push ax
+    dec ax
+    mov es,ax
+    pop ax
+    mov [es:1],ax
+    mov es,ax
+.owner_ready:
+    mov ax,[old_resident]
+    mov ds,ax
+    xor si,si
+    xor di,di
+    mov cx,[cs:resident_paras]
+    ; The MCB size already includes the resident's PSP and program image.
+    shl cx,3
+    rep movsw
+    push cs
+    pop ds
+    mov ax,[new_resident]
+    mov es,ax
+    mov bx,ax
+    add bx,[resident_paras]
+    mov [es:2],bx                     ; relocated PSP end segment
+    mov dx,[ancestors]
+    mov [es:16h],dx
+    push ds
+    xor dx,dx
+    mov ds,dx
+    mov bx,[cs:vector_slot]
+    shl bx,1
+    shl bx,1
+    cli
+    mov [bx+2],ax
+    sti
+    pop ds
+    mov bx,[old_resident]
+    mov es,bx
+    mov ax,0F149h
+    int 21h
+    push cs
+    pop ds
+    push cs
+    pop es
+    ret
+.reject_alloc:
+    mov es,ax
+    mov ah,49h
+    int 21h
+    jmp .bad
+.bad:
+    push cs
+    pop ds
+    push cs
+    pop es
+    stc
+    ret
 
 ; Vectors that point into a block an ancestor owns would run freed memory
 ; in this VM: they get the value they had when the VM manager loaded
@@ -326,6 +658,17 @@ fork_failed db 'VMFORK: a new virtual machine could not be created.',13,10,'$'
 entry dd 0
 ancestors times 9 dw 0
 first_mcb dw 0
+kernel_seg dw 0
+old_psp dw 0
+new_psp dw 0
+old_resident dw 0
+new_resident dw 0
+resident_paras dw 0
+resident_high db 0
+vector_slot dw 0
+compact_ready db 0
+old_strategy dw 0
+compaction_failed db 'VMFORK: DOS memory compaction failed.',13,10,'$'
 params dw 0,child_tail,0,5Ch,0,6Ch,0
 child_tail times 128 db 0
 program times 128 db 0

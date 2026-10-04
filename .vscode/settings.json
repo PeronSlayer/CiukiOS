@@ -15,6 +15,14 @@
     "C_Cpp.exclusionPolicy": "checkFilesAndFolders",
     "C_Cpp.workspaceParsingPriority": "low",
     "C_Cpp.intelliSenseCacheSize": 256,
+    "files.exclude": {
+        "**/build": true,
+        "**/third_party": true,
+        "**/handoff": true,
+        "**/handoffs": true,
+        "**/tmp": true,
+        "**/.ciukios-testlogs": true
+    },
     "files.watcherExclude": {
         "**/build/**": true,
         "**/third_party/**": true,

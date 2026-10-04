@@ -1,4 +1,4 @@
-# Native applications and software OpenGL
+# Native applications and graphics in 0.8.3
 
 **Chosen language: C with [OpenWatcom 2.0](https://open-watcom.github.io/open-watcom-v2-wikidocs/guitools.html).**
 NASM remains the choice for the boot path, kernel interfaces and VM assembly.
@@ -27,10 +27,10 @@ and `.HTML` to it. MicroWeb is not installed in the current image.
 
 | Works now | Missing |
 | --- | --- |
-| Simple HTTP text and absolute HTTP links; QEMU fetched `http://example.com/` through an NE2000 and showed it in the native window. | HTTPS, CSS, JavaScript, images, native TCP socket service, history and cache. |
+| Native DNS/HTTP, text and links, Back/Forward history, Reload/Stop and wheel scrolling; example.com and reload pass through NE2000 NAT. | HTTPS, CSS, JavaScript, images, persistent cache and a general socket API. |
 
-The first transport runs bundled mTCP `HTGET.EXE`, then CiukWeb reads the
-download. The desktop yields briefly during that step. The parser currently
+The cooperative native transport uses a resident packet bridge; Go and Reload
+keep the desktop visible while each poll advances bounded network work. The parser
 accepts up to 16 KiB, displays 128 lines and tracks 16 links. Larger pages
 need streaming and storage outside the module's near-data segment. See the
 [first-page guide](qemu-recording-and-web-2026-10-01.md).
@@ -54,14 +54,37 @@ presentation; it does not expose guest GPU acceleration. Wider framebuffers,
 a Mesa/OSMesa port and named free-program compatibility tests are future
 work, not current capabilities.
 
+## 0.8.3 display and graphics boundary
+
+The desktop now has a native **Display** settings app for adapter/monitor
+identification and a graphical mode preview. A preview must be confirmed
+before it is saved; adapter identification and preview do not establish
+physical-monitor compatibility. The native mouse wheel scrolls desktop
+controls. **About CiukiOS** is the first-start welcome page and can be
+reopened from the desktop; `WELCOME.CFG` records whether to show it at boot.
+
+The protected-mode VBE session path has a VirtIO-GPU 2D backend. QEMU's
+`virtio` uses a resource-backed 2D framebuffer; `virtio-gl` selects QEMU's
+OpenGL host renderer for that same 2D path. It is host-side presentation
+acceleration, not a guest 3D API or OpenGL driver. The legacy scanout backend
+recognizes bounded ATI Radeon device-ID families and NVIDIA RIVA TNT through
+GeForce4/NV25 families, alongside QEMU's standard VGA and VirtIO VGA aliases.
+These exact family checks are implemented, but physical ATI/NVIDIA cards have
+not been qualified. QEMU's `ati-rage128` profile models a Rage 128 Pro; it is
+not evidence for other cards or real hardware.
+
+The 0.8.3 implementation and final runtime gate are tracked separately in the
+[current project status](project-status-2026-10-04.md). QEMU visual results do
+not qualify physical PCs.
+
 ## Next steps
 
 1. Publish an installable `.APP` manifest/loader and a sample C application.
-2. Move CiukWeb's HTTP transfer into a resident native TCP service; add
-   bounded link/history/error tests. HTTPS also needs TLS, certificates and
+2. Extend the cooperative native HTTP client beyond its checked DNS/HTTP/reload
+   path with wider link/history/error coverage. HTTPS needs TLS, certificates and
    trustworthy time.
-3. Extend the 32-bit graphics presentation API and test named free workloads
-   before advertising a wider OpenGL version.
+3. Test named free workloads and real hardware before advertising a wider
+   graphics or driver compatibility boundary.
 4. Develop PE32/Win32 separately against the [free probes](windows-compatibility-and-layout-2026-09-30.md).
 
 All results here are from QEMU. Physical 2004-era PCs remain unqualified.

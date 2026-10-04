@@ -3,7 +3,9 @@
 startup_select_session:
     mov ah,0x19
     int 0x21
-    cmp al,3                    ; live D: only; an installed C: ignores the flag
+    cmp al,2                    ; installed C: can request persistent hardware mode
+    je .installed
+    cmp al,3                    ; live D: one-shot Setup/DOS/Safe/Mute choice
     jne .live
     mov dx,boot_session_path
     mov ax,0x3D02
@@ -108,12 +110,44 @@ startup_select_session:
     mov al,1
     ret
 
+.installed:
+    ; HARD is deliberately persistent on an installed disk. It leaves the
+    ; owner a bootable VGA/DOS desktop when a physical BIOS cannot enter the
+    ; Jemm386 V86 monitor or run its VBE services from V86 mode. Live-CD
+    ; SETU/DOS!/SAFE/MUTE choices still use the one-shot path above.
+    mov dx,boot_session_path
+    mov ax,0x3D00
+    int 0x21
+    jc .live
+    mov bx,ax
+    mov dx,boot_session_mode
+    mov cx,4
+    mov ah,0x3F
+    int 0x21
+    pushf
+    push ax
+    mov ah,0x3E
+    int 0x21
+    pop ax
+    popf
+    jc .live
+    cmp ax,4
+    jne .live
+    cmp dword [boot_session_mode],'HARD'
+    jne .live
+    mov byte [vc_force_safe],1
+    mov byte [ui_sound_played],1
+    mov si,boot_session_hard
+    call ui_serial
+    jmp .live
+
 boot_session_path db '\SYSTEM\STARTUP.CFG',0
 boot_session_setup_path db '\APPS\SETUP.COM',0
 boot_session_mode dd 0
 boot_session_live db 'LIVE'
 boot_session_marker db '[BOOT-SESSION] SETUP',13,10,0
 boot_session_safe db '[BOOT-SESSION] SAFE',13,10,0
+boot_session_hard db '[BOOT-SESSION] HARD',13,10,0
 boot_session_muted db '[BOOT-SESSION] MUTE',13,10,0
 boot_session_dos_marker db '[BOOT-SESSION] DOS',13,10,0
 boot_session_dos db 'DOS session. Type HELP for commands or EXIT for the desktop.',13,10,'$'
