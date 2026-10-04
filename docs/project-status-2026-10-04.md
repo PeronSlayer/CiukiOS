@@ -10,8 +10,8 @@ The active profile is the full FAT16 HDD image and its sanitized Windows bundle.
 | Presentation | Retained VirtIO staging, actual pixel damage, independent VM clocks; eliminate the desktop's periodic full-scene repaint. | 73 GPU protocol checks pass. Doom new game/exit pass; 34.78 loops/s, residual pacing spikes remain. |
 | Mouse | IntelliMouse negotiation, physical and virtual four-byte PS/2 packets, INT 33h wheel ABI and native window scrolling. | 1,285 peripheral-model assertions pass with ASan/UBSan; QEMU Files scroll down/up pixel check passes. |
 | Display | Native graphical preview, 12-second rollback, transactional profile save, adapter/driver/EDID tabs. | 32-bit timeout, 16-bit banked rollback, confirmation and saved mode across reset pass. |
-| Network/Web | Automatic resident bridge startup behind a detected packet driver; cooperative native IPv4/DNS/TCP/HTTP browsing. | Real example.com DNS/HTTP 200 and reload pass without a DOS launch. |
-| Desktop | About replaces the startup library; persistent startup checkbox; fitted active/inactive titles. | Startup preference survives reset; About reopens at 640×480; screenshots record rendered titles. |
+| Network/Web | Resident network bridge; cooperative HTTP streaming, script/style filtering and bounded redirects; physical network IRQ self-masking. | Google HTTP 301→200 renders 88,229 source bytes within the fixed document buffer. Browser→mode change→Doom new game/exit passes after fixing the reproduced IRQ stall. |
+| Desktop | About replaces the startup library; separate About/Credits pages; persistent startup checkbox; fitted titles. | Compact About/Credits capture and checkbox save/reopen pass; startup persistence across reset was qualified in the earlier release run. |
 
 ## Boundaries
 
@@ -36,6 +36,7 @@ absence of private payloads; Windows execution is not claimed.
 
 ## Evidence
 
+- [Post-release freeze, About and large-page fixes](validation/2026-10-04-post-release-fixes/README.md)
 - [Final runtime results and cadence](validation/2026-10-04-release-runtime/README.md)
 - [Actual release screenshots](screenshots/0.8.3/README.md)
 - [Graphical transitions and presentation](validation/2026-10-04-desktop-transitions.md)

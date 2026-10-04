@@ -5,6 +5,9 @@ Current development status is tracked in [milestones](current-milestones.md),
 describe particular artifacts and tests; their old PASS results do not qualify
 later images or physical hardware automatically.
 
+Current release: [0.8.3 status](project-status-2026-10-04.md) and
+[post-release Doom, About and Web fixes](validation/2026-10-04-post-release-fixes/README.md).
+
 ## Native desktop — 26 September 2026
 
 - [Integrated implementation and remaining original-DOS work](native-desktop-2026-09-26.md)

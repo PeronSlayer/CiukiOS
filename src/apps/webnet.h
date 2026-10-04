@@ -14,6 +14,10 @@ int webnet_start(const char *url, void *response, int capacity);
 int webnet_poll(void);
 void webnet_cancel(void);
 int webnet_read(void);
+int webnet_was_truncated(void);
+int webnet_redirect(char *target, int capacity);
+int webnet_redirect_target_supported(const char *target);
+u32 webnet_wire_bytes(void);
 const char *webnet_error(void);
 int webnet_http_status(void);
 

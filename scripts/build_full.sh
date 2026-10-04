@@ -898,10 +898,10 @@ if [[ "${CIUKIOS_VM_WINDOW:-1}" == "1" ]]; then
     VM_WINDOW_DIR="${CIUKIOS_VM_WINDOW_DIR:-$CIUKIOS_ROOT/build/full/obj/vm-window}"
     echo "[build-full] building the DOS-window VM session into $VM_WINDOW_DIR"
     bash scripts/build_jemm_monitor.sh --output "$VM_WINDOW_DIR/jemm" \
-        --ciukios-device-query --ciukios-vm-scheduler
+        --jobs "${CIUKIOS_BUILD_JOBS:-1}" --ciukios-device-query --ciukios-vm-scheduler
     vm_jemm="$VM_WINDOW_DIR/jemm/$(cat "$VM_WINDOW_DIR/jemm/CURRENT")"
     rm -rf "$VM_WINDOW_DIR/session"
-    bash scripts/build_vm_session.sh --output "$VM_WINDOW_DIR/session"
+    bash scripts/build_vm_session.sh --jemm-build "$VM_WINDOW_DIR/jemm" --output "$VM_WINDOW_DIR/session"
     nasm -f bin src/com/dpmirun.asm -o "$VM_WINDOW_DIR/DPMIRUN.COM"
     nasm -f bin src/com/memmap.asm -o "$VM_WINDOW_DIR/MEMMAP.COM"
     nasm -f bin -I ./ src/probes/vm/native_pages.asm -o "$VM_WINDOW_DIR/NATPAGE.COM"

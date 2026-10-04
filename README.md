@@ -30,7 +30,7 @@ These are actual Linux QEMU captures. [Capture details and validation limits](do
 
 - **Desktop:** Files with long FAT16 names, CiukNote, CiukPaint, Recycle Bin,
   Task Manager and Control Panel. Mouse-wheel scrolling, clipped window titles
-  and a welcome page with a saved startup preference.
+  and an About page with separate credits and a saved startup preference.
 - **DOS windows:** separate V86 machines with virtual VGA, input and sound,
   managed by Jemm, CVSESSION and HDPMI. QEMU runs on the development computer;
   CiukiOS itself does not run QEMU.
@@ -39,7 +39,8 @@ These are actual Linux QEMU captures. [Capture details and validation limits](do
   128/Radeon R100–R200 and NVIDIA TNT/GeForce through 4 have limited base-display
   backends; physical cards remain unqualified.
 - **Network:** automatic startup behind a detected packet driver, IPv4/DHCP,
-  FTP and a cooperative HTTP text browser. HTTPS, CSS and JavaScript remain open.
+  FTP and a cooperative HTTP text browser with bounded streaming and redirects.
+  HTTPS, CSS and JavaScript remain open.
 - **Development:** native C/OpenWatcom `.APP` modules, DOS/4GW and a TinyGL
   software library. General Win32 applications are not supported.
 

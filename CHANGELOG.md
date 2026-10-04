@@ -2,6 +2,12 @@
 
 ## 0.8.3 — 2026-10-04
 
+- Fix the permanent Doom launch stall after network traffic: preserve physical
+  IRQ self-masking and let level-triggered devices acknowledge their own IRQs.
+- Stream and filter large HTTP responses within the existing document buffer,
+  follow HTTP redirects and report partial pages without aborting the transfer.
+- Separate About and Credits, preserving Ciuki's dedication and the startup
+  preference; fit both pages at the compact desktop resolution.
 - Add native VirtIO GPU 2D presentation, retained VGA frames and independent VM
   clocks; suppress identical uploads and transfer actual pixel damage.
 - Stop desktop meters from triggering a full-scene repaint every second; correct

@@ -1,16 +1,23 @@
 /* Small cooperative IPv4/DNS/TCP/HTTP client for CiukWeb. It owns the private
  * INT 61 receive claim only during one fetch and never waits inside a call. */
+#ifdef WEBNET_HTTP_HOST_TEST
+#include "webnet_http_host.h"
+#else
 #include "webnet.h"
+#endif
 
 #define FRAME_MAX 1600
 #define TCP_PORT  49152
 #define DNS_PORT  53000
 #define DNS_ID    0xC17A
+#define WEBNET_MAX_BODY_BYTES 0x00100000UL
+#define WEBNET_TIMEOUT_TICKS  1092
 
 enum { S_IDLE, S_ARP_DNS, S_DNS, S_ARP_HOST, S_SYN, S_HTTP, S_DONE, S_FAIL };
 static u8 frame[FRAME_MAX], *response;
 static u8 status_buf[18];
 static char host[64], path[128], error_text[80];
+static char http_header[1024], html_tag[128], redirect_target[128];
 static u8 local_ip[4], mask_ip[4], gateway_ip[4], dns_ip[4], arp_ip[4];
 static u8 local_mac[6], peer_mac[6], peer_ip[4];
 static char http_request[320];
@@ -18,8 +25,40 @@ static u16 state, token, body_len, response_capacity, last_tick, tries, client_p
 static u16 request_len, http_status;
 static u32 isn, snd_nxt, rcv_nxt;
 static u32 request_seq;
-static int request_sent;
+static u32 chunk_remaining;
+static u32 wire_body_bytes, declared_body_bytes;
+static u16 http_header_len, html_tag_len, trailer_line_len, trailer_bytes, chunk_line_bytes;
+static u16 fetch_started_tick;
+static int request_sent, response_truncated, headers_done, chunked_body, has_content_length;
+static int filter_html, html_state, html_quote, comment_tail, skip_match, html_tag_overflow;
+static int chunk_state, chunk_digits, chunk_extension, trailer_cr;
+static u32 chunk_value;
+static void fail(const char *why);
 
+static int transfer_deadline_expired(u16 now)
+{ return (u16)(now-fetch_started_tick)>=WEBNET_TIMEOUT_TICKS; }
+
+enum { HTML_TEXT, HTML_TAG, HTML_COMMENT, HTML_SCRIPT, HTML_STYLE };
+enum { CH_SIZE, CH_SIZE_LF, CH_DATA, CH_DATA_CR, CH_DATA_LF, CH_TRAILERS, CH_DONE };
+
+static int lower(int c) { return c>='A'&&c<='Z'?c+32:c; }
+static int starts(const char *a,const char *b)
+{ while(*b) if(lower(*a++)!=lower(*b++)) return 0; return 1; }
+int webnet_redirect_target_supported(const char *target)
+{
+    int pos=7,start,len;
+    if(!starts(target,"http://")) return 0;
+    while(target[pos] && target[pos]!='/' && target[pos]!='?' && target[pos]!='#') ++pos;
+    if(target[pos]!='/') return 1;
+    ++pos;
+    while(target[pos] && target[pos]!='?' && target[pos]!='#') {
+        start=pos; while(target[pos] && target[pos]!='/' && target[pos]!='?' && target[pos]!='#') ++pos;
+        len=pos-start;
+        if((len==1 && target[start]=='.') || (len==2 && target[start]=='.' && target[start+1]=='.')) return 0;
+        if(target[pos]=='/') ++pos;
+    }
+    return 1;
+}
 static u16 be16(const u8 *p) { return (u16)(((u16)p[0] << 8) | p[1]); }
 static u32 be32(const u8 *p)
 { return ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3]; }
@@ -28,9 +67,6 @@ static void put32(u8 *p, u32 v)
 { p[0]=(u8)(v>>24); p[1]=(u8)(v>>16); p[2]=(u8)(v>>8); p[3]=(u8)v; }
 static int same4(const u8 *a, const u8 *b)
 { return !mem_cmp(a, b, 4); }
-static int starts(const char *a,const char *b)
-{ while(*b) if(*a++!=*b++) return 0; return 1; }
-static int lower(int c) { return c>='A'&&c<='Z'?c+32:c; }
 static u16 checksum(const u8 *p,u16 n)
 {
     u32 s=0;
@@ -124,7 +160,7 @@ static int tcp_send(u8 flags, const u8 *data, u16 bytes, u32 seq, u32 ack)
 static int request_send(void)
 {
     int n=0, i;
-    const char *a="GET ", *b=" HTTP/1.0\r\nHost: ", *c="\r\nConnection: close\r\n\r\n";
+    const char *a="GET ", *b=" HTTP/1.0\r\nHost: ", *c="\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
     if (!request_len) {
         static const char hex[]="0123456789ABCDEF";
         while(a[n]) { if(n>=315) return 0; http_request[n]=a[n]; ++n; }
@@ -148,21 +184,214 @@ static int request_send(void)
     if(!request_sent) { snd_nxt += request_len; request_sent=1; }
     return 1;
 }
+
+static void html_emit(int ch)
+{
+    if(body_len<(u16)(response_capacity-1)) response[body_len++]=(u8)ch;
+    else response_truncated=1;
+}
+static int html_tag_kind(void)
+{
+    int i=1, n=0; char name[8];
+    if(i<html_tag_len && html_tag[i]=='/') return 0;
+    while(i<html_tag_len && (html_tag[i]==' '||html_tag[i]=='\t')) ++i;
+    while(i<html_tag_len && n<7 && ((html_tag[i]>='a'&&html_tag[i]<='z')||
+          (html_tag[i]>='A'&&html_tag[i]<='Z'))) name[n++]=(char)lower(html_tag[i++]);
+    name[n]=0;
+    if(!str_cmp(name,"script")) return 1;
+    if(!str_cmp(name,"style")) return 2;
+    return 0;
+}
+static void html_byte(int ch)
+{
+    static const char script_end[]="</script", style_end[]="</style";
+    const char *ending;
+    int length;
+    if(wire_body_bytes>=WEBNET_MAX_BODY_BYTES) {
+        fail("HTTP response exceeds CiukWeb's 1 MiB download limit."); return;
+    }
+    ++wire_body_bytes;
+    if(!filter_html) { html_emit(ch); return; }
+    if(html_state==HTML_COMMENT) {
+        if(ch=='>' && comment_tail==2) html_state=HTML_TEXT;
+        if(ch=='-' && comment_tail<2) ++comment_tail;
+        else if(ch!='>' || comment_tail!=2) comment_tail=0;
+        return;
+    }
+    if(html_state==HTML_SCRIPT || html_state==HTML_STYLE) {
+        ending=html_state==HTML_SCRIPT?script_end:style_end;
+        length=html_state==HTML_SCRIPT?8:7;
+        if(skip_match<length) {
+            if(lower(ch)==ending[skip_match]) ++skip_match;
+            else skip_match=(ch=='<'?1:0);
+        } else if(ch=='>') { html_state=HTML_TEXT; skip_match=0; }
+        else if(ch!=' ' && ch!='\t' && ch!='\r' && ch!='\n') skip_match=(ch=='<'?1:0);
+        return;
+    }
+    if(html_state==HTML_TAG) {
+        if(html_tag_len<sizeof html_tag-1) html_tag[html_tag_len++]=(char)ch;
+        else html_tag_overflow=1;
+        if(html_tag_len==4 && !mem_cmp(html_tag,"<!--",4)) {
+            html_state=HTML_COMMENT; comment_tail=0; html_tag_len=0; return;
+        }
+        if(ch=='\'' || ch=='"') {
+            if(!html_quote) html_quote=ch;
+            else if(html_quote==ch) html_quote=0;
+        }
+        if(ch=='>' && !html_quote) {
+            int kind=html_tag_kind(), i;
+            if(kind) { html_state=kind==1?HTML_SCRIPT:HTML_STYLE; skip_match=0; }
+            else if(!html_tag_overflow) for(i=0;i<html_tag_len;++i) html_emit(html_tag[i]);
+            else response_truncated=1;
+            html_tag_len=0; html_state=kind?html_state:HTML_TEXT; html_quote=0;
+            html_tag_overflow=0;
+        }
+        return;
+    }
+    if(ch=='<') { html_state=HTML_TAG; html_tag[0]='<'; html_tag_len=1; html_quote=0; }
+    else html_emit(ch);
+}
+static int parse_http_headers(void)
+{
+    int i=0, line, end, p, status_seen=0;
+    if(http_header_len<4) return 0;
+    http_header[http_header_len]=0;
+    if(starts(http_header,"HTTP/")) {
+        while(i<http_header_len && http_header[i]!=' ') ++i;
+        if(i+3<http_header_len && http_header[i+1]>='0' && http_header[i+1]<='9' &&
+           http_header[i+2]>='0' && http_header[i+2]<='9' &&
+           http_header[i+3]>='0' && http_header[i+3]<='9') {
+            http_status=(u16)((http_header[i+1]-'0')*100+(http_header[i+2]-'0')*10+(http_header[i+3]-'0'));
+            status_seen=1;
+        }
+    }
+    if(!status_seen) { fail("Invalid HTTP status line."); return 0; }
+    line=0;
+    while(line<http_header_len) {
+        end=line; while(end+1<http_header_len && !(http_header[end]=='\r'&&http_header[end+1]=='\n')) ++end;
+        if(end<=line) break;
+        p=line;
+        if(p && starts(http_header+p,"location:")) {
+            int a=p+9,b=end,n;
+            while(a<b && (http_header[a]==' '||http_header[a]=='\t')) ++a;
+            while(b>a && (http_header[b-1]==' '||http_header[b-1]=='\t')) --b;
+            n=b-a;
+            if(n>127) { fail("HTTP redirect target exceeds CiukWeb's address limit."); return 0; }
+            if(n>0) { mem_copy(redirect_target,http_header+a,n); redirect_target[n]=0; }
+        }
+        if(p && starts(http_header+p,"transfer-encoding:")) {
+            int q=p+18, after;
+            while(q<end && (http_header[q]==' '||http_header[q]=='\t')) ++q;
+            after=q+7; while(after<end && (http_header[after]==' '||http_header[after]=='\t')) ++after;
+            if(q+7<=end && starts(http_header+q,"chunked") && after==end) chunked_body=1;
+            else { fail("Unsupported HTTP transfer coding."); return 0; }
+        }
+        if(p && starts(http_header+p,"content-type:")) {
+            int q=p+13; while(q<end && (http_header[q]==' '||http_header[q]=='\t')) ++q;
+            if(starts(http_header+q,"text/plain")) filter_html=0;
+        }
+        if(p && starts(http_header+p,"content-encoding:")) {
+            int q=p+17, after;
+            while(q<end && (http_header[q]==' '||http_header[q]=='\t')) ++q;
+            after=q+8; while(after<end && (http_header[after]==' '||http_header[after]=='\t')) ++after;
+            if(q>=end || !starts(http_header+q,"identity") || after!=end) { fail("Compressed HTTP content is not supported."); return 0; }
+        }
+        if(p && starts(http_header+p,"content-length:")) {
+            u32 value=0; int q=p+15, digits=0;
+            while(q<end && (http_header[q]==' '||http_header[q]=='\t')) ++q;
+            while(q<end && http_header[q]>='0'&&http_header[q]<='9') {
+                int digit=http_header[q++]-'0';
+                if(value>429496729UL || (value==429496729UL && digit>5)) { fail("HTTP Content-Length is out of range."); return 0; }
+                value=value*10+(u32)digit; ++digits;
+            }
+            while(q<end && (http_header[q]==' '||http_header[q]=='\t')) ++q;
+            if(!digits || q!=end) { fail("Invalid HTTP Content-Length."); return 0; }
+            if(value>WEBNET_MAX_BODY_BYTES) { fail("HTTP response exceeds CiukWeb's 1 MiB download limit."); return 0; }
+            if(has_content_length && declared_body_bytes!=value) { fail("Conflicting HTTP Content-Length fields."); return 0; }
+            declared_body_bytes=value; has_content_length=1;
+        }
+        line=end+2;
+    }
+    if(chunked_body && has_content_length) { fail("Conflicting HTTP response length headers."); return 0; }
+    headers_done=1;
+    return 1;
+}
+static void http_body_byte(int ch)
+{
+    int v;
+    if(!chunked_body) { html_byte(ch); return; }
+    switch(chunk_state) {
+    case CH_SIZE:
+        if(++chunk_line_bytes>256) { fail("HTTP chunk header is too long."); return; }
+        if(ch=='\r') chunk_state=CH_SIZE_LF;
+        else if(ch==';') chunk_extension=1;
+        else if(chunk_extension) { }
+        else if(ch>='0'&&ch<='9') { v=ch-'0'; if(chunk_value>0x0FFFFFFFUL) { fail("Invalid HTTP chunk size."); return; } chunk_value=(chunk_value<<4)|(u32)v; ++chunk_digits; }
+        else if(lower(ch)>='a'&&lower(ch)<='f') { v=lower(ch)-'a'+10; if(chunk_value>0x0FFFFFFFUL) { fail("Invalid HTTP chunk size."); return; } chunk_value=(chunk_value<<4)|(u32)v; ++chunk_digits; }
+        else { fail("Invalid HTTP chunk framing."); return; }
+        break;
+    case CH_SIZE_LF:
+        if(ch!='\n' || !chunk_digits) { fail("Invalid HTTP chunk framing."); return; }
+        chunk_remaining=chunk_value; chunk_value=0; chunk_digits=0; chunk_extension=0;
+        chunk_line_bytes=0;
+        if(!chunk_remaining) { chunk_state=CH_TRAILERS; trailer_line_len=0; trailer_cr=0; }
+        else chunk_state=CH_DATA;
+        break;
+    case CH_DATA:
+        html_byte(ch); if(state!=S_HTTP) return;
+        if(--chunk_remaining==0) chunk_state=CH_DATA_CR;
+        break;
+    case CH_DATA_CR:
+        if(ch!='\r') { fail("Invalid HTTP chunk framing."); return; }
+        chunk_state=CH_DATA_LF; break;
+    case CH_DATA_LF:
+        if(ch!='\n') { fail("Invalid HTTP chunk framing."); return; }
+        chunk_state=CH_SIZE; break;
+    case CH_TRAILERS:
+        if(++trailer_bytes>1024) { fail("HTTP trailers exceed 1 KiB."); return; }
+        if(ch=='\n' && trailer_cr) {
+            if(!trailer_line_len) chunk_state=CH_DONE;
+            else { trailer_line_len=0; trailer_cr=0; }
+        } else if(ch=='\r') trailer_cr=1;
+        else { trailer_cr=0; if(++trailer_line_len>1024) fail("HTTP trailers are too long."); }
+        break;
+    default: break;
+    }
+}
+static void http_consume(const u8 *data,u16 length)
+{
+    u16 i;
+    for(i=0;i<length && state==S_HTTP;++i) {
+        if(!headers_done) {
+            if(http_header_len>=sizeof http_header-1) { fail("HTTP response headers exceed 1 KiB."); return; }
+            http_header[http_header_len++]=(char)data[i];
+            if(http_header_len>=4 && http_header[http_header_len-4]=='\r' &&
+               http_header[http_header_len-3]=='\n' && http_header[http_header_len-2]=='\r' &&
+               http_header[http_header_len-1]=='\n') parse_http_headers();
+        } else http_body_byte(data[i]);
+    }
+}
+static int http_body_complete(void)
+{
+    return headers_done && (!chunked_body || chunk_state==CH_DONE) &&
+           (!has_content_length || wire_body_bytes==declared_body_bytes);
+}
 static int parse_url(const char *url)
 {
     int i=0,n=0;
     if (!starts(url,"http://")) return 0;
     i=7;
-    while(url[i] && url[i]!='/' && url[i]!=':' && n<63) {
+    while(url[i] && url[i]!='/' && url[i]!=':' && url[i]!='?' && url[i]!='#' && n<63) {
         int ch=(u8)url[i];
         if(!((ch>='a'&&ch<='z')||(ch>='A'&&ch<='Z')||(ch>='0'&&ch<='9')||ch=='.'||ch=='-')) return 0;
         host[n++]=url[i++];
     }
     host[n]=0;
     if (!n || url[i]==':' || host[0]=='.' || host[n-1]=='.') return 0;
-    if (!url[i]) str_copy(path,"/");
+    if (!url[i] || url[i]=='#') str_copy(path,"/");
     else {
         int j=0;
+        if(url[i]=='?') path[j++]='/';
         while(url[i] && url[i]!='#') {
             if((u8)url[i]<32 || j>=126) return 0;
             path[j++]=url[i++];
@@ -220,6 +449,11 @@ int webnet_start(const char *url, void *response_buffer, int capacity)
     struct regs r; u8 *info; int f,n;
     if (state!=S_IDLE && state!=S_DONE && state!=S_FAIL) webnet_cancel();
     state=S_IDLE; body_len=0; tries=0; response=0; response_capacity=0; http_status=0; str_copy(error_text,"");
+    http_header_len=html_tag_len=trailer_line_len=trailer_bytes=chunk_line_bytes=0; redirect_target[0]=0;
+    wire_body_bytes=declared_body_bytes=chunk_value=chunk_remaining=0;
+    has_content_length=response_truncated=headers_done=chunked_body=0;
+    filter_html=1; html_state=HTML_TEXT; html_quote=comment_tail=skip_match=html_tag_overflow=0;
+    chunk_state=CH_SIZE; chunk_digits=chunk_extension=trailer_cr=0;
     if(!response_buffer || capacity<256) {
         str_copy(error_text,"Browser response buffer is unavailable."); state=S_FAIL; return state;
     }
@@ -248,6 +482,7 @@ int webnet_start(const char *url, void *response_buffer, int capacity)
         config_ip(frame,n,"NAMESERVER",dns_ip);
     }
     client_port=(u16)(49152+(HOST.ticks&0x3FFF)); request_len=0; request_sent=0;
+    fetch_started_tick=(u16)HOST.ticks;
     isn=((u32)HOST.ticks<<16)|0xC1A0; snd_nxt=isn; rcv_nxt=0;
     last_tick=HOST.ticks;
     mem_copy(peer_ip,dns_ip,4);
@@ -331,12 +566,18 @@ static void process_packet(const u8 *p, u16 n)
         if(state==S_HTTP) {
             int accepted_fin=0;
             if(plen && seq==rcv_nxt) {
-                u16 room=(u16)(response_capacity-body_len), take;
-                if(plen>room) { fail("Page is larger than CiukWeb's memory limit."); return; }
-                take=plen<room?plen:room;
-                if(take) { mem_copy(response+body_len,t+th,take); body_len+=take; rcv_nxt+=take; tries=0; last_tick=HOST.ticks; }
+                http_consume(t+th,plen);
+                rcv_nxt+=plen;
+                if(state!=S_HTTP) return;
+                tries=0; last_tick=HOST.ticks;
             }
-            if((flags&1) && seq+(u32)plen==rcv_nxt) { ++rcv_nxt; accepted_fin=1; state=S_DONE; }
+            if((flags&1) && seq+(u32)plen==rcv_nxt) {
+                ++rcv_nxt; accepted_fin=1;
+                if(!http_body_complete()) {
+                    fail("HTTP response ended before its body was complete."); return;
+                }
+                state=S_DONE;
+            }
             if(accepted_fin) {
                 /* Close our half immediately. We release without waiting for
                    the peer's final ACK so the browser remains cooperative. */
@@ -351,6 +592,7 @@ int webnet_poll(void)
     struct regs r; u16 now=HOST.ticks;
     if(state==S_DONE) { if(token) { mem_set(&r,0,sizeof r); r.bx=token; call_private(4,&r); token=0; } return WEBNET_COMPLETE; }
     if(state==S_FAIL || state==S_IDLE) return state==S_FAIL?WEBNET_FAILED:WEBNET_IDLE;
+    if(transfer_deadline_expired(now)) { fail("Network transfer exceeded its 60-second time limit."); return WEBNET_FAILED; }
     { int drained;
       for(drained=0;drained<4;++drained) {
         mem_set(&r,0,sizeof r); r.bx=token; r.cx=FRAME_MAX; r.es=app_seg(); r.di=(u16)frame;
@@ -375,63 +617,21 @@ int webnet_poll(void)
 
 int webnet_read(void)
 {
-    int i,head=-1,n=0,body_start,chunked=0;
-    if(state!=S_DONE || !response || response_capacity==0) return -1;
-    for(i=0;i+3<(int)body_len;++i) if(response[i]=='\r'&&response[i+1]=='\n'&&response[i+2]=='\r'&&response[i+3]=='\n') {head=i;break;}
-    if(head<0) return -1;
-    if(body_len>=12 && starts((const char*)response,"HTTP/")) {
-        i=0; while(i<body_len && response[i]!=' ') ++i;
-        if(i+3<body_len && response[i+1]>='0' && response[i+1]<='9' &&
-           response[i+2]>='0' && response[i+2]<='9' &&
-           response[i+3]>='0' && response[i+3]<='9')
-            http_status=(u16)((response[i+1]-'0')*100+(response[i+2]-'0')*10+(response[i+3]-'0'));
-    }
-    body_start=head+4;
-    for(i=0;i<head;++i) {
-        static const char te[]="transfer-encoding:";
-        int j=0;
-        if(i!=0 && !(response[i-1]=='\n' && i>=2 && response[i-2]=='\r')) continue;
-        if(i+(int)(sizeof te-1)>head) continue;
-        while(te[j] && lower(response[i+j])==te[j]) ++j;
-        if(!te[j]) {
-            int k=i+j;
-            while(k<head && (response[k]==' '||response[k]=='\t')) ++k;
-            if(k+7<=head && lower(response[k])=='c' && lower(response[k+1])=='h' &&
-               lower(response[k+2])=='u' && lower(response[k+3])=='n' &&
-               lower(response[k+4])=='k' && lower(response[k+5])=='e' && lower(response[k+6])=='d')
-                chunked=1;
-            break;
-        }
-    }
-    if(chunked) {
-        int pos=body_start;
-        for(;;) {
-            u32 size=0; int digits=0;
-            while(pos<(int)body_len && response[pos]!='\r' && response[pos]!=';' && digits<8) {
-                int c=response[pos++],v;
-                if(c>='0'&&c<='9') v=c-'0';
-                else if(lower(c)>='a'&&lower(c)<='f') v=lower(c)-'a'+10;
-                else return -1;
-                size=(size<<4)|(u32)v; ++digits;
-            }
-            while(pos<(int)body_len && response[pos]!='\r') ++pos; /* bounded extensions */
-            if(!digits || pos+1>=(int)body_len || response[pos+1]!='\n') return -1;
-            pos+=2;
-            if(!size) break;
-            if(size>(u32)(body_len-pos) || pos+(int)size+1>=(int)body_len ||
-               response[pos+(int)size]!='\r' || response[pos+(int)size+1]!='\n') return -1;
-            while(size && n<response_capacity-1) { response[n++]=response[pos++]; --size; }
-            if(size) return -1;
-            pos+=2;
-        }
-        response[n]=0;
-        return n;
-    }
-    n=(int)body_len-body_start;
-    if(n>=response_capacity) n=response_capacity-1;
-    mem_move(response,response+body_start,n);
-    response[n]=0;
-    return n;
+    if(state!=S_DONE || !response || response_capacity==0 || !headers_done) return -1;
+    response[body_len]=0;
+    return body_len?body_len:-1;
+}
+int webnet_was_truncated(void) { return response_truncated; }
+u32 webnet_wire_bytes(void) { return wire_body_bytes; }
+int webnet_redirect(char *target,int capacity)
+{
+    int n;
+    if(state!=S_DONE || !target || capacity<2 || !redirect_target[0] ||
+       http_status<300 || http_status>=400 || http_status==304) return 0;
+    n=str_len(redirect_target);
+    if(n>=capacity) n=capacity-1;
+    mem_copy(target,redirect_target,n); target[n]=0;
+    return n>0;
 }
 void webnet_cancel(void)
 {

@@ -2038,6 +2038,21 @@ vmm_phys_idle proc
  mov al,0Ah
  out 20h,al
  pop eax
+ ; A real IRQ driver may have issued early EOI while its line is still
+ ; self-masked. Keep the owning VM until it finishes and unmasks the line.
+ push ebx
+ push ecx
+ push edx
+ mov ebx,eax
+ mov eax,13
+ @VMMCall Host_Scheduler_Profile
+ jc no_physical_mask_owner
+ or ebx,edx
+no_physical_mask_owner:
+ mov eax,ebx
+ pop edx
+ pop ecx
+ pop ebx
  test ax,ax
  ret
 vmm_phys_idle endp

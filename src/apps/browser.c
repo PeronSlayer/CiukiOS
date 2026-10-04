@@ -16,6 +16,7 @@ static u8 line_link[MAX_LINES];
 static int line_count, line_len, link_count, active_link, scroll, focused = 1;
 static int back_count, forward_count, caret, replace_address, loaded_once;
 static int loading;
+static int redirect_count;
 static int page_bytes, cached_width, wrap_width;
 
 static int lower(int ch) { return ch >= 'A' && ch <= 'Z' ? ch + 32 : ch; }
@@ -207,11 +208,68 @@ static void load_page(void)
     loaded_once=1; str_ncopy(page_url,url,sizeof page_url);
     app_log("[CIUKWEB] rendered", url);
 }
+static void fetch(void);
+static int resolve_redirect(const char *location,char *target,int capacity)
+{
+    int authority=7,base,end,n,loclen;
+    if(starts(location,"https://")) return -1;
+    if(starts(location,"http://")) {
+        n=str_len(location); if(n>=capacity) return 0;
+        str_copy(target,location); return 1;
+    }
+    for(n=0;location[n] && location[n]!='/' && location[n]!='?' && location[n]!='#';++n)
+        if(location[n]==':') return -2;
+    while(url[authority] && url[authority]!='/' && url[authority]!='?' && url[authority]!='#') ++authority;
+    if(location[0]=='/' && location[1]=='/') {
+        loclen=str_len(location); if(loclen+5>=capacity) return 0;
+        str_copy(target,"http:"); str_cat(target,location);
+    } else if(location[0]=='#') {
+        end=str_len(url); base=end; while(base>0 && url[base-1]!='#') --base;
+        if(base>0) end=base-1;
+        loclen=str_len(location); if(end+loclen>=capacity) return 0;
+        mem_copy(target,url,end); target[end]=0; str_cat(target,location);
+    } else if(location[0]=='/') {
+        loclen=str_len(location); if(authority+loclen>=capacity) return 0;
+        mem_copy(target,url,authority); target[authority]=0; str_cat(target,location);
+    } else if(location[0]=='?') {
+        end=authority; while(url[end] && url[end]!='?' && url[end]!='#') ++end;
+        loclen=str_len(location);
+        if(end==authority) {
+            if(end+1+loclen>=capacity) return 0;
+            mem_copy(target,url,end); target[end]='/'; target[end+1]=0; str_cat(target,location);
+        } else {
+            if(end+loclen>=capacity) return 0;
+            mem_copy(target,url,end); target[end]=0; str_cat(target,location);
+        }
+    } else {
+        base=authority;
+        while(url[base] && url[base]!='?' && url[base]!='#') ++base;
+        while(base>authority && url[base-1]!='/') --base;
+        loclen=str_len(location); if(base+loclen>=capacity) return 0;
+        if(base<=authority) {
+            if(authority+1+loclen>=capacity) return 0;
+            mem_copy(target,url,authority); target[authority]='/'; target[authority+1]=0;
+            str_cat(target,location);
+        } else { mem_copy(target,url,base); target[base]=0; str_cat(target,location); }
+    }
+    return str_len(target)<capacity;
+}
 static void load_download(void)
 {
-    int n=webnet_read();
-    char stats[40];
+    int n=webnet_read(), status=webnet_http_status(), redirect;
+    char stats[64], location[128];
     loading=0;
+    if((status==301||status==302||status==303||status==307||status==308) && webnet_redirect(location,sizeof location)) {
+        char target[128];
+        redirect=resolve_redirect(location,target,sizeof target);
+        if(redirect==-1) { str_copy(message,"Redirect target uses HTTPS; HTTPS is not available."); return; }
+        if(redirect==-2) { str_copy(message,"Redirect target uses an unsupported URL scheme."); return; }
+        if(!redirect) { str_copy(message,"Redirect target is too long or unsupported."); return; }
+        if(!webnet_redirect_target_supported(target)) { str_copy(message,"Redirect path uses unsupported dot segments."); return; }
+        if(redirect_count>=3) { str_copy(message,"Too many redirects; check for a redirect loop."); return; }
+        ++redirect_count; str_ncopy(url,target,sizeof url); caret=str_len(url); replace_address=0;
+        str_copy(message,"Following HTTP redirect..."); fetch(); return;
+    }
     if(n<=0) { str_copy(message,"The HTTP response was empty or could not be parsed."); return; }
     mem_set(page+n,0,1); page_bytes=n; render_page(0); loaded_once=1; str_ncopy(page_url,url,sizeof page_url);
     if(webnet_http_status()<200 || webnet_http_status()>=400) {
@@ -220,8 +278,10 @@ static void load_download(void)
         str_cat(message,"). Select a link or enter another address.");
     } else if(page_title[0]) str_ncopy(message,page_title,sizeof message);
     else str_copy(message,"Page loaded. Select a link, or enter another address.");
+    if(webnet_was_truncated()) str_copy(message,"Partial page shown (CiukWeb's bounded text capacity).");
     str_copy(stats,"status="); fmt_u32(stats+str_len(stats),(u32)webnet_http_status());
     str_cat(stats," bytes="); fmt_u32(stats+str_len(stats),(u32)n);
+    str_cat(stats," wire="); fmt_u32(stats+str_len(stats),webnet_wire_bytes());
     app_log("[CIUKWEB] HTTP",stats);
     app_log("[CIUKWEB] rendered",url);
 }
@@ -232,14 +292,13 @@ static void history_push(char hist[8][128],int *count,const char *value)
     if(*count==8) { for(i=1;i<8;++i) str_copy(hist[i-1],hist[i]); --*count; }
     str_ncopy(hist[*count],value,128); ++*count;
 }
-static void fetch(void);
 static void navigate(const char *target,int add_history)
 {
     if(add_history && loaded_once && str_cmp(page_url,target)) {
         history_push(back_history,&back_count,page_url); forward_count=0;
     }
     if(target!=url) str_ncopy(url,target,sizeof url);
-    caret=str_len(url); replace_address=0;
+    caret=str_len(url); replace_address=0; redirect_count=0;
     fetch();
 }
 static void history_go(int back)

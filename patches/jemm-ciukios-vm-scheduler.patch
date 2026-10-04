@@ -107,7 +107,7 @@ new file mode 100644
 index 0000000..622b48d
 --- /dev/null
 +++ b/src/CVIRQ.INC
-@@ -0,0 +1,1042 @@
+@@ -0,0 +1,1129 @@
 +; CiukiOS foreground V86 interrupt profile.
 +; Compiled with CIUKIOS_V86_INTERRUPTS and negotiated at run time through
 +; the versioned Host_Scheduler_Profile service: it is active only while the
@@ -117,6 +117,12 @@ index 0000000..622b48d
 +align 4
 +CvRequested dd 0
 +CvPitOwned dd 0              ; channel 0 supplied by the VM clock owner
++; A physical ISR may mask its line and EOI before servicing the device.
++; This ownership is global, never part of a forked VM's virtual PIC image.
++CvPhysicalMaskMagic db 'CVIRQMSK'
++CvPhysicalHeld dw 0
++dw 0
++CvPhysicalMaskOps dd 0
 +CvFilter dd 0
 +CvPollProc dd 0
 +CvLinger dd 0
@@ -363,8 +369,8 @@ index 0000000..622b48d
 + ret
 +CvVCPIFlags endp
 +
-+; ECX is the real physical vector. CF=1 consumed into pending; CF=0 is not
-+; a physical IRQ. Only the monitor touches the physical PIC here.
++; ECX is the real physical vector. CF=1 consumed; CF=0 leaves the vector
++; to upstream reflection, including level IRQs that still owe physical EOI.
 +CvIRQ proc
 + cmp CvActive,0
 + je not_irq
@@ -395,6 +401,8 @@ index 0000000..622b48d
 + add eax,8
 + call CvFilterIrq
 + jc slave_acknowledge
++ call CvLevelIRQ
++ jnz irq_unclaimed           ; device must clear a level source before EOI
 + bts CvPending,eax
 +slave_acknowledge:
 + mov al,20h
@@ -413,6 +421,8 @@ index 0000000..622b48d
 +master_real:
 + call CvFilterIrq
 + jc master_acknowledge
++ call CvLevelIRQ
++ jnz irq_unclaimed           ; device must clear a level source before EOI
 + bts CvPending,eax
 +master_acknowledge:
 + mov al,20h
@@ -427,6 +437,27 @@ index 0000000..622b48d
 + clc
 + ret
 +CvIRQ endp
++
++; EAX = real IRQ 0..15. ZF=0 for a level-triggered pass-through line.
++; Let upstream reflection retain its physical ISR until the driver EOIs it.
++; A premature monitor EOI can repeatedly re-enter before the device runs.
++CvLevelIRQ proc
++ push eax
++ push ecx
++ push edx
++ mov ecx,eax
++ shr eax,3
++ mov dx,4D0h
++ add dx,ax
++ in al,dx
++ and ecx,7
++ shr al,cl
++ test al,1
++ pop edx
++ pop ecx
++ pop eax
++ ret
++CvLevelIRQ endp
 +
 +; EAX=claimed physical IRQ. Only IRQ1/IRQ12 reach the owner's filter, which
 +; reads the 8042 before the physical EOI. CF=1: the owner consumed the byte
@@ -459,6 +490,7 @@ index 0000000..622b48d
 +; Returns EAX = 01000000h (version 1.0 in the high word) | state flags:
 +; bit0 available, bit1 requested, bit2 active, bit3 guest IF, bit4 filter,
 +; bit5 poll.
++;   13 EDX = temporary physical masks owned by the running ISR (global)
 +;   0 query   1 request   2 release   3 raise virtual IRQ ECX (active only)
 +;   4 set IRQ1/IRQ12 filter ECX (0 removes)   5 EDX = in-service, ECX = pending
 +;   6 set return-to-V86 poll procedure ECX (0 removes); it preserves all
@@ -475,6 +507,11 @@ index 0000000..622b48d
 +; CF=1 for an invalid function, a raise or PIC access while inactive, or a
 +; PIC operation the V86 broker does not support.
 +CvProfileService proc
++ cmp eax,13
++ jne profile_not_physical_mask
++ movzx edx,CvPhysicalHeld
++ jmp profile_state
++profile_not_physical_mask:
 + cmp eax,12
 + jne profile_not_pit_owner
 + mov CvPitOwned,ecx
@@ -929,8 +966,8 @@ index 0000000..622b48d
 +CvGP endp
 +
 +; DX=20h/A0h. ZF=0 when the physical PIC has a level in service. Profile
-+; claims acknowledge physically at once, so a set bit can only belong to an
-+; IRQ a VCPI client accepted and reflected to V86; its EOI is physical even
++; Edge claims acknowledge physically at once. A set bit belongs to normal
++; physical reflection or a VCPI client's reflected IRQ; its EOI is physical even
 +; if an injected virtual level is also open (its handler may have EOIed in
 +; protected mode through a DOS extender pass-up). Leaves IRR selected.
 +CvPhysicalISR proc
@@ -949,6 +986,8 @@ index 0000000..622b48d
 +; ZF=1 only when both physical PICs are idle. Preserve EAX and EDX.
 +; Never start a virtual handler while a physical EOI is owed.
 +CvPhysicalBusy proc
++ cmp CvPhysicalHeld,0
++ jne physical_held_busy
 + push edx
 + mov dx,20h
 + call CvPhysicalISR
@@ -958,7 +997,54 @@ index 0000000..622b48d
 +busy_done:
 + pop edx
 + ret
++physical_held_busy:
++ ret
 +CvPhysicalBusy endp
++
++; AL = guest IMR, EBX = PIC 0/1, DX = 21h/A1h. Only an actual in-service
++; hardware IRQ may acquire a physical self-mask. Its unmask releases it.
++; Virtual PIT/input/audio mask changes alone never touch host hardware.
++CvPhysicalMask proc
++ push eax
++ push ecx
++ push edx
++ mov ah,al
++ dec dx
++ mov al,0Bh
++ out dx,al
++ in al,dx
++ mov cl,al
++ mov al,0Ah
++ out dx,al
++ inc dx
++ test ebx,ebx
++ jnz physical_mask_slave
++ and cl,0F8h                 ; host timer, keyboard and cascade
++ jmp physical_mask_allowed
++physical_mask_slave:
++ and cl,0EFh                 ; mouse is consumed by the input broker
++physical_mask_allowed:
++ in al,dx                    ; preserve masks already owned by other code
++ mov ch,al
++ not ch
++ and cl,ch
++ or cl,byte ptr CvPhysicalHeld[ebx]
++ and cl,ah
++ cmp cl,byte ptr CvPhysicalHeld[ebx]
++ je physical_mask_done
++ mov ch,byte ptr CvPhysicalHeld[ebx]
++ not ch
++ and al,ch
++ or al,cl
++ mov byte ptr CvPhysicalHeld[ebx],cl
++ inc CvPhysicalMaskOps
++ out dx,al
++physical_mask_done:
++ pop edx
++ pop ecx
++ pop eax
++ ret
++CvPhysicalMask endp
 +
 +; Pre-dispatch broker for the reserved PIC and PIT0 control ports. No
 +; unsupported guest operation is allowed to program the physical PIC/PIT.
@@ -1114,6 +1200,7 @@ index 0000000..622b48d
 + mov byte ptr CvInitPhase[ebx],3
 + jmp pic_done
 +pic_mask_write:
++ call CvPhysicalMask
 + mov byte ptr CvMask[ebx],al
 +pic_done:
 + pop ebx
