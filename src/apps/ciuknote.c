@@ -1670,8 +1670,15 @@ static int notepad_event(int ev, int a, int b, int c)
         if (HOST.active && !dlg.open) {
             u16 phase = (HOST.ticks / 9) & 1;
             if (phase != last_blink) {
+                int r, c, r_idx;
                 last_blink = phase;
-                return 1;
+                r = row_of(caret);
+                c = col_of(r, caret) - (int)hcol;
+                r_idx = row_index(r) - row_index(row_of(top));
+                if (c >= 0 && c <= cols && r_idx >= 0 && r_idx < rows) {
+                    ui_damage(ex + 4 + c * CELL - 1, ey + r_idx * LINE_H, 4, LINE_H);
+                    return 3;
+                }
             }
         }
         return 0;

@@ -1081,8 +1081,19 @@ int app_event(int ev,int a,int b,int c)
                 else error(webio_error());return 1;}}
         if(phase!=last_caret_phase){
             last_caret_phase=phase;
-            if(focused||(field_focus>=0&&(fields[field_focus].type==0||fields[field_focus].type==5)))
-                return 1;
+            if(focused){
+                int x=HOST.x+4,y=HOST.y+TITLE_H,w=HOST.w-8;
+                int ax=x+208,ay=y+6,aw=w-258,ah=26;
+                ui_damage(ax+6,ay+2,aw-12,ah-4);
+                return 3;
+            }
+            if(field_focus>=0&&(fields[field_focus].type==0||fields[field_focus].type==5)){
+                int x=HOST.x+4,y=HOST.y+TITLE_H;
+                int px=x+10,py=y+40;
+                int fx=px+fields[field_focus].x,fy=py+fields[field_focus].y-scroll;
+                ui_damage(fx,fy,fields[field_focus].w,24);
+                return 3;
+            }
         }
         return 0;
     }
