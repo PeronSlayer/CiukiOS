@@ -20,13 +20,17 @@ the dog in the boot splash. Its identity uses the owner's
 | --- | --- |
 | ![About CiukiOS](docs/screenshots/0.8.3/about.png) | ![Display Properties](docs/screenshots/0.8.3/display.png) |
 
-| CiukWeb with HTTPS and images | A DOS game in its own window |
+| CiukWeb with HTTPS, CSS and images | Google over HTTPS (TLS 1.2) |
 | --- | --- |
-| ![CiukWeb with HTTPS](docs/screenshots/0.8.3/web.png) | ![Doom in a DOS window](docs/screenshots/0.8.3/doom.png) |
+| ![CiukWeb with HTTPS, CSS and images](docs/screenshots/0.8.3/web.png) | ![Google over HTTPS](docs/screenshots/0.8.3/google.png) |
 
 | Pointer scheme settings and preview | Dynamic window titles and CiukNote |
 | --- | --- |
 | ![Pointer schemes in Control Panel](docs/screenshots/0.8.3/mouse-scheme.png) | ![Dynamic window titles](docs/screenshots/0.8.3/window-title.png) |
+
+| A DOS game in its own window | Clean Desktop |
+| --- | --- |
+| ![Doom in a DOS window](docs/screenshots/0.8.3/doom.png) | ![Desktop workspace](docs/screenshots/0.8.3/desktop.png) |
 
 These are actual Linux QEMU captures. [Capture details and validation limits](docs/screenshots/0.8.3/README.md).
 

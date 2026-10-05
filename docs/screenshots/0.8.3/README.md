@@ -9,7 +9,8 @@ no artwork, screens or responses were generated or substituted.
 - `about.png`: separate About/Credits tabs and the inverse "Don't show this at
   startup" checkbox; see the [startup/focus verification](../../validation/2026-10-04-about-startup-focus.md).
 - `display.png`: detected virtual adapter and monitor, mode list.
-- `web.png`: CiukWeb loading Google over HTTPS (TLS 1.2 with BearSSL), demonstrating HTTP parsing, layout, and image decoding.
+- `web.png`: CiukWeb rendering HTTPS with CSS stylesheets, external JavaScript DOM manipulation, and inline PNG, JPEG, and GIF decoded images.
+- `google.png`: CiukWeb loading Google over HTTPS (TLS 1.2 with BearSSL), demonstrating HTTP parsing, layout, and image decoding.
 - `mouse-scheme.png`: Control Panel Mouse applet showing cursor scheme selection (Tango Default, Classic 95, 3D Contrast) and live cursor preview.
 - `window-title.png`: Dynamic window title tab wrapping long document titles seamlessly, bounded before window controls and transitioning into platinum pinstripe rails.
 - `doom.png`: a new game using the owner's local DOS Doom installation.
