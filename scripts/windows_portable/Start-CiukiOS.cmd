@@ -1,10 +1,16 @@
 @echo off
 setlocal
 set "ROOT=%~dp0"
-set "QEMU=%ROOT%qemu\qemu-system-i386w.exe"
 set "DISK=%ROOT%CiukiOS.img"
-if not exist "%QEMU%" goto missing
-if not exist "%DISK%" goto missing
+
+if not exist "%DISK%" (
+    echo.
+    echo ERROR: CiukiOS.img not found in "%ROOT%"!
+    echo Make sure the entire ZIP archive has been extracted into a normal folder.
+    echo.
+    pause
+    exit /b 1
+)
 
 echo ========================================================
 echo                  CiukiOS Portable Launcher
@@ -24,9 +30,3 @@ exit /b %ERRORLEVEL%
 :run_vga
 call "%ROOT%Start-CiukiOS-VGA.cmd"
 exit /b %ERRORLEVEL%
-
-:missing
-echo CiukiOS.img or qemu\qemu-system-i386w.exe is missing.
-echo Extract the entire ZIP before starting CiukiOS.
-pause
-exit /b 1

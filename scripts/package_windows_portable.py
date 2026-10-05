@@ -203,6 +203,7 @@ def main() -> None:
             def add(source: Path, destination: str) -> None:
                 archive.write(source, f"{NAME}/{destination}")
 
+            add(clean_image, "CiukiOS.img")
             for cmd_name in ("Start-CiukiOS.cmd", "Start-CiukiOS-VGA.cmd", "Start-CiukiOS-VirtIO.cmd"):
                 cmd_content = (ROOT / "scripts/windows_portable" / cmd_name).read_bytes()
                 archive.writestr(f"{NAME}/{cmd_name}",
