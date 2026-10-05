@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — 2026-10-04 integration (browser runtime checks pending)
+
+- Add a bounded CiukWeb pipeline: basic HTML, GET forms and XMS-backed
+  PNG/GIF/baseline-JPEG images; a CSS style worker; a BearSSL TLS 1.2 worker;
+  and an mQuickJS worker with a limited classic-script/DOM bridge. Target builds
+  and host parser/engine checks pass; browser-level TLS/CSS/JavaScript runtime
+  validation remains pending. This is not full CSS, a complete DOM, or Internet
+  Explorer equivalence. Adam7 PNG and progressive JPEG remain unsupported, and
+  GIF displays its first frame.
+- Reduce the AC'97 queue from eight 1,024-frame descriptors to eight 256-frame
+  descriptors: about 46 ms queued at 44.1 kHz versus about 186 ms. Post-change
+  Doom playback ran with 6–8 descriptors queued and no new underruns during
+  the sampled interval. The PCM capture does not qualify latency through the
+  final host speaker backend.
+- Show About at startup by default, with “Don't show this at startup” to
+  suppress it; redraw active titles after focus returns. Focused Linux QEMU
+  checks verified the default and saved preference across reset, plus title
+  reactivation after desktop focus.
+
 ## 0.8.3 — 2026-10-04
 
 - Fix the permanent Doom launch stall after network traffic: preserve physical

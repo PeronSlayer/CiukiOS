@@ -1,0 +1,10 @@
+BearSSL 0.6 upstream source subset
+
+Source archive: https://bearssl.org/bearssl-0.6.tar.gz
+SHA-256: 6705bba1714961b41a728dfc5debbe348d2966c117649392f8c8139efc83ff14
+Upstream project: https://bearssl.org/
+
+The upstream `inc/`, `src/`, and `LICENSE.txt` are kept verbatim. BearSSL is
+distributed under MIT; preserve its copyright/license notices in every source
+file. This copy contains the library needed by the 32-bit web worker. It does
+not include upstream command-line tools or test corpus.

@@ -159,6 +159,9 @@ VM_OP_TSC_KHZ          equ 4Dh
 VM_OP_VMM_PRESENT      equ 4Eh
 ; Physical host tick from HDPMI; BX reports independent-clock ownership.
 VM_OP_VMM_CLOCK        equ 4Fh
+; System-VM network owner: BX is a bitmap of hardware IRQ lines (3..15),
+; or zero to unregister. Lines are masked only while another VM runs.
+VM_OP_VMM_NET_IRQ      equ 50h
 ; Ored into an operation by a DPMI host whose client is single-stepping a
 ; virtual CLI region: no VM switch at that call's return to V86.
 VM_OP_NO_SWITCH        equ 100h

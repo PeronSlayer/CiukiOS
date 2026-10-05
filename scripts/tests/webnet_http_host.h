@@ -36,5 +36,11 @@ int dos_read(int handle,void *buffer,int bytes);
 int dos_close(int handle);
 u16 app_seg(void);
 void webnet_cancel(void);
+#include "../../src/web/worker_abi.h"
+int webwork_submit(u16 op,const void *data,u16 bytes,u32 aux);
+int webwork_poll(struct cww_header *reply,void *data,u16 capacity);
+int webwork_result(u16 offset,void *data,u16 bytes);
+int webwork_close(void);
+void webwork_debug(void);
 
 #endif

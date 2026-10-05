@@ -527,9 +527,18 @@ app_poll:
     ; An applet opened from a deferred argument may request a DOS helper
     ; during EV_POLL. Deliver that request through the normal UI command path.
     cmp byte [app_request],2
-    jne .return
+    jne .check_close
     mov byte [app_request],0
     mov ax,249
+    ret
+.check_close:
+    cmp byte [app_request],1
+    jne .return
+    mov byte [app_request],0
+    pushad
+    call ui_windows_close
+    popad
+    mov ax,250
 .return:
     ret
 
@@ -743,6 +752,8 @@ app_hover_leave:
     je .done
     cmp bl,0xFF
     je .done
+    xor ax,ax
+    call app_s_cursor
     mov dx,6
     call app_mouse
     test ax,ax
@@ -1125,7 +1136,20 @@ app_services dw app_s_rect,app_s_text,app_s_bevel,app_s_inset,app_s_button
              dw app_s_idle,app_s_mono,app_s_win_open,app_s_win_close,app_s_damage
              dw app_s_action,app_s_overlay,app_s_font,app_s_settings,app_s_palette
              dw app_s_changes,app_s_bitmap,app_s_band_info,app_s_desktop_focus,app_s_display_mode
+             dw app_s_cursor
 APP_SVC_COUNT equ ($-app_services)/2
+
+app_s_cursor:
+    cmp ax,2
+    jbe .ok
+    xor ax,ax
+.ok:
+    cmp al,[ui_cursor_type]
+    je .done
+    mov [ui_cursor_type],al
+    call ui_cursor_apply
+.done:
+    ret
 
 ; Display module only. AX=0 queries; AX=100h..FFFh queues a graphics change.
 app_s_display_mode:
@@ -1223,13 +1247,14 @@ app_s_measure:
     mov si,app_text
     test ah,2
     jz .measure
+    and ah,1
     call app_font_swap
-    call ui_measure
+    call ui_measure_styled
     call app_font_swap
     mov ax,cx
     ret
 .measure:
-    call ui_measure
+    call ui_measure_styled
     mov ax,cx
     ret
 
@@ -1591,8 +1616,9 @@ app_settings_load:
     mov dx,app_settings_path
     mov ax,0x3D00
     int 0x21
-    jc .done
+    jc .fallback
     mov bx,ax
+    mov byte [app_settings+72],0
     mov dx,app_settings
     mov cx,APP_SETTINGS_BYTES
     mov ah,0x3F
@@ -1603,11 +1629,11 @@ app_settings_load:
     int 0x21
     pop ax
     popf
-    jc .done
-    cmp ax,APP_SETTINGS_BYTES
-    jne .done
+    jc .fallback
+    cmp ax,72
+    jb .fallback
     cmp dword [app_settings],'CUI1'
-    jne .done
+    jne .fallback
     mov si,app_settings+4               ; 16 colours
     mov di,ui_palette
     mov cx,48
@@ -1625,7 +1651,7 @@ app_settings_load:
     call app_palette_apply
 .font:
     cmp byte [app_settings+57],0         ; the system font file name
-    je .redraw
+    je .scheme
     mov si,app_settings_font_dir
     mov di,app_text
     call copy_z_to_di                  ; DI stays on the NUL
@@ -1633,6 +1659,13 @@ app_settings_load:
     call copy_z_to_di
     mov byte [app_args+10],0
     call app_s_font
+.scheme:
+    mov al,[app_settings+72]
+    call ui_set_cursor_scheme
+    jmp .redraw
+.fallback:
+    xor al,al
+    call ui_set_cursor_scheme
 .redraw:
     mov byte [ui_full_redraw],1
 .done:
@@ -2071,7 +2104,7 @@ app_overlay_dirty dw 0
 app_desktop_focus db 0             ; the desktop has the keyboard
 app_action_code db 0
 app_alt_font dw 0
-APP_SETTINGS_BYTES equ 72                 ; CUI1, colours, mouse, keyboard, font
+APP_SETTINGS_BYTES equ 74                 ; CUI1, colours, mouse, keyboard, font, cursor scheme
 app_settings times APP_SETTINGS_BYTES db 0
 app_set_mouse db 2,0,9                  ; speed (2 = normal), swap, double-click
 app_max_label db 2,0

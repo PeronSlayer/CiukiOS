@@ -1320,7 +1320,8 @@ static void paint(void)
         if (HOST.active && !dlg.open && caret >= r && caret <= row_end(r) &&
             (row_of(caret) == r)) {
             int c = col_of(r, caret) - (int)hcol;
-            if (c >= 0 && c <= cols) ui_rect(ex + 4 + c * CELL, y + 1, 2, LINE_H - 2, C_INK);
+            if (c >= 0 && c <= cols && !((HOST.ticks / 9) & 1))
+                ui_rect(ex + 4 + c * CELL, y + 1, 2, LINE_H - 2, C_INK);
         }
         r = row_next(r);
         if (r == NONE) break;
@@ -1597,6 +1598,13 @@ int app_event(int ev, int a, int b, int c)
         else if (dlg.open) return 0;
         else if (context.open) popup_mouse(&context, MOUSE_HOVER, sx, sy);
         else if (menubar_open(&bar)) { layout(); menubar_mouse(&bar, MOUSE_HOVER, sx, sy); }
+        else {
+            layout();
+            if (sx >= ex && sx < ex + ew && sy >= ey && sy < ey + eh)
+                ui_cursor(CURSOR_IBEAM);
+            else
+                ui_cursor(CURSOR_ARROW);
+        }
         return ui_dirty;
     }
     r = notepad_event(ev, a, b, c);
@@ -1657,8 +1665,17 @@ static int notepad_event(int ev, int a, int b, int c)
         return on_key(a);
     case EV_MOUSE:
         return on_mouse(a, b, c);
-    case EV_POLL:
+    case EV_POLL: {
+        static u16 last_blink;
+        if (HOST.active && !dlg.open) {
+            u16 phase = (HOST.ticks / 9) & 1;
+            if (phase != last_blink) {
+                last_blink = phase;
+                return 1;
+            }
+        }
         return 0;
+    }
     case EV_CLOSE:
         if (dirty && !closing) { save_prompt(A_EXIT); return 1; }
         release_memory();

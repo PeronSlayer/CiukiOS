@@ -39,6 +39,9 @@ start:
     push cs
     pop es
     jz .load
+    call network_owner
+    mov si,network_failed
+    jc fail
     mov ax,4C00h
     int 21h
 .load:
@@ -98,6 +101,9 @@ start:
     jnz fail
 
     call speak
+    call network_owner
+    mov si,network_failed
+    jc fail
     mov si,msg_ready
     call print
     mov ax,4C00h
@@ -110,6 +116,56 @@ fail:
     call print
     mov ax,4C01h
     int 21h
+
+; Native networking starts before Jemm at boot. Bind its resident IRQ metadata
+; once CVSESSION exists, before any VM can inherit the packet driver's state.
+network_owner:
+    push ds
+    push es
+    mov ax,3561h
+    int 21h
+    cmp dword [es:bx+3],'PKT '
+    jne .absent
+    cmp dword [es:bx+7],'DRVR'
+    jne .absent
+    cmp dword [es:bx+11],'CIUK'
+    jne .absent
+    mov ax,0FE08h
+    int 61h
+    jc .error
+    cmp bx,4943h
+    jne .error
+    test cx,cx
+    jz .absent
+    mov [cs:network_mask],cx
+    mov ax,1684h
+    mov bx,VM_DEVICE_ID
+    xor di,di
+    mov es,di
+    int 2Fh
+    mov ax,es
+    test ax,ax
+    jz .error
+    mov [cs:network_entry],di
+    mov [cs:network_entry+2],es
+    mov eax,VM_OP_VMM_NET_IRQ
+    mov bx,[cs:network_mask]
+    call far [cs:network_entry]
+    jc .error
+    push cs
+    pop ds
+    mov si,network_ready
+    call print
+.absent:
+    pop es
+    pop ds
+    clc
+    ret
+.error:
+    pop es
+    pop ds
+    stc
+    ret
 
 
 ; DS:SI zero-terminated -> ES:DI (DI advanced).
@@ -162,6 +218,10 @@ print:
 %include "src/com/quiet_console.inc"
 
 load_word db ' LOAD ',0
+network_mask dw 0
+network_entry dw 0,0
+network_ready db 'VMSTART: NIC interrupts owned by the desktop VM.',13,10,0
+network_failed db 'VMSTART: cannot bind the network interrupt owner.',13,10,0
 %ifdef VMSTART_JEMMEX
 default_options db 'NOEMS X=A000-CCFF I=CD00-EBFF X=EC00-FFFF NOVME',0
 jemm_path db '\VM\JEMMEX.EXE',0

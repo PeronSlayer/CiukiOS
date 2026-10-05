@@ -19,6 +19,7 @@ profile is retired from ongoing main-branch builds and tests.
 | --- | --- |
 | Main build | `nasm`, `mtools`, `make`, `patch`, `ffmpeg`, a host C/C++ toolchain and the `ia16-elf-gcc`, `ia16-elf-ld`, `ia16-elf-objcopy` cross-tools. |
 | Desktop modules | OpenWatcom under `/opt/watcom`, or set `WATCOM` to its installation directory. |
+| HTTPS/JavaScript worker | DJGPP cross compiler `i586-pc-msdosdjgpp-gcc` (GCC 12.2.0 tested), installed under `build/external/djgpp`, or set `CIUKIOS_DJGPP_ROOT` / `DJGPP_CC`. |
 | Build scripts | Python 3.12+ with Pillow. The selected development environment uses Python 3.14. |
 | Boot and recording | `qemu-system-i386` or `qemu-system-x86_64`, KVM access; recording also needs GTK, X11/XWayland and `xdotool`. |
 | Live/install CD | `xorriso`; Syslinux BIOS files support the diagnostic ISO path. |
@@ -27,6 +28,14 @@ Verified downloads for optional Costa and the mTCP/Crynwr network stack are
 prepared by `scripts/build_run_full.sh`. Commercial DOS game data and other
 proprietary third-party binaries are not in the repository; keep local copies
 untracked. A base image can be built without them.
+
+The full build compiles `WEBWORK.EXE` from the vendored BearSSL and MicroQuickJS
+sources, and installs the pinned Mozilla-derived CA bundle with its notices.
+The HDD/CD and portable Windows launchers attach a transitional VirtIO RNG for
+TLS entropy. HTTPS fails closed without that source, a valid UTC guest clock,
+or a matching trusted certificate. The current protocol is TLS 1.2; physical
+machines need a supported entropy source before HTTPS is available. Browser
+HTML, CSS and DOM limits are listed in the [current status](project-status-2026-10-04.md).
 
 ## Windows portable ZIP
 

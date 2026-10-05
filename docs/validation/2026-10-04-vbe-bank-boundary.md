@@ -28,4 +28,4 @@ preview timed out and restored the desktop, and the 16-bit preview was
 cancelled with Escape and restored the desktop. The final runtime passed the
 full reboot flow, including persistence of the 640x480 display profile and
 About startup preference. The display-mode and reboot results are recorded in
-[`final-runtime/results.json`](../../build/tests/release-0.8.3-2026-10-04/final-runtime/results.json).
+[`final-runtime/results.json`](2026-10-04-release-runtime/results.json).

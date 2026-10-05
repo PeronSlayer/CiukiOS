@@ -565,6 +565,8 @@ void cfg_defaults(struct deskcfg *c)
     c->kbd_delay = 1;
     c->font[0] = 0;
     c->icons_hidden = 0;
+    c->cursor_scheme = 0;
+    c->reserved = 0;
 }
 int cfg_load(struct deskcfg *c)
 {
@@ -573,7 +575,7 @@ int cfg_load(struct deskcfg *c)
     if (f < 0) return 0;
     n = dos_read(f, c, sizeof *c);
     dos_close(f);
-    if (n != sizeof *c || str_nicmp(c->magic, "CUI1", 4)) { cfg_defaults(c); return 0; }
+    if (n < 72 || str_nicmp(c->magic, "CUI1", 4)) { cfg_defaults(c); return 0; }
     return 1;
 }
 int cfg_save(struct deskcfg *c)

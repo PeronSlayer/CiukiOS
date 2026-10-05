@@ -30,7 +30,9 @@ These are actual Linux QEMU captures. [Capture details and validation limits](do
 
 - **Desktop:** Files with long FAT16 names, CiukNote, CiukPaint, Recycle Bin,
   Task Manager and Control Panel. Mouse-wheel scrolling, clipped window titles
-  and an About page with separate credits and a saved startup preference.
+  and an About page that opens by default, with separate credits and a saved
+  “Don't show this at startup” preference. Active titles repaint when focus
+  returns to a window.
 - **DOS windows:** separate V86 machines with virtual VGA, input and sound,
   managed by Jemm, CVSESSION and HDPMI. QEMU runs on the development computer;
   CiukiOS itself does not run QEMU.
@@ -39,8 +41,14 @@ These are actual Linux QEMU captures. [Capture details and validation limits](do
   128/Radeon R100–R200 and NVIDIA TNT/GeForce through 4 have limited base-display
   backends; physical cards remain unqualified.
 - **Network:** automatic startup behind a detected packet driver, IPv4/DHCP,
-  FTP and a cooperative HTTP text browser with bounded streaming and redirects.
-  HTTPS, CSS and JavaScript remain open.
+  FTP and a cooperative HTTP browser with bounded streaming and redirects. Its
+  basic HTML view supports headings, links, tables, GET forms, inline color and
+  bold text. PNG, GIF and baseline JPEG images are decoded into XMS-backed
+  browser storage. A bounded TLS 1.2 worker, CSS subset and mQuickJS-based
+  JavaScript/DOM subset are implemented; end-to-end browser runtime checks are
+  pending. CiukWeb is not a full browser or Internet Explorer equivalent.
+  Adam7 PNG and progressive JPEG are unsupported, and animated GIF displays
+  its first frame.
 - **Development:** native C/OpenWatcom `.APP` modules, DOS/4GW and a TinyGL
   software library. General Win32 applications are not supported.
 

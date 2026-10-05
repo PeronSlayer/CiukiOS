@@ -11,6 +11,8 @@ ui_catch_a equ ui_pointer_under+2*24*16*4
 ui_catch_b equ ui_catch_a+UI_CATCH_MAX*8
 vc_pointer_row equ ui_catch_b+UI_CATCH_MAX*8
 UI_ASSET_ALLOC equ vc_pointer_row+24*16*4
+ui_cursor_table equ UI_ASSET_ALLOC
+UI_ASSET_TOTAL_ALLOC equ ui_cursor_table+512
 UI_ASSET_FONT equ 16
 UI_ASSET_LOGO16 equ (UI_ASSET_FONT+6270)
 UI_ASSET_LOGO24 equ (UI_ASSET_LOGO16+256)
@@ -29,7 +31,7 @@ ui_assets_begin:
     int 0x21
     jc .fail
     mov [ui_assets_handle],ax
-    mov bx,(UI_ASSET_ALLOC+15)/16
+    mov bx,(UI_ASSET_TOTAL_ALLOC+15)/16
     mov ah,0x48                        ; conventional: the UI gates read it
     int 0x21
     jc .close_fail

@@ -107,6 +107,7 @@ void ui_button(int x, int y, int w, int h, const char *label, int id);
 void ui_hit(int x, int y, int w, int h, int id);
 void ui_icon(int x, int y, int icon);                   /* 32x32 */
 int  ui_measure(const char *s);
+int  ui_measure_style(const char *s, int style);
 void ui_repaint(void);
 void ui_repaint_win(int window);                        /* another window */
 int app_helper(const char *command);                    /* trusted console utility, keep graphics */
@@ -140,6 +141,10 @@ int app_band_info(void *out19);
 int app_desktop_focus(void);
 /* Display module only: queue mode, or mode=0 query after deferred switch. */
 int app_display_mode(unsigned mode);
+#define CURSOR_ARROW     0
+#define CURSOR_IBEAM     1
+#define CURSOR_FORBIDDEN 2
+void ui_cursor(int type);
 
 #define ICON_COMPUTER 0
 #define ICON_FOLDER   1
@@ -483,6 +488,8 @@ struct deskcfg {
     u8 kbd_delay;              /* BH (0..3: 250..1000 ms) */
     char font[13];             /* \SYSTEM\FONTS\name, "" the built-in */
     u16 icons_hidden;          /* desktop icons, bit per DI_* */
+    u8 cursor_scheme;          /* 0 = Tango, 1 = Classic, 2 = 3D Contrast */
+    u8 reserved;
 };
 #pragma pack(pop)
 extern const u8 cfg_default_palette[48];

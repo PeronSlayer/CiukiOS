@@ -24,7 +24,6 @@ extern void CVDEV_CALL cvop_write(void *chip, unsigned reg, unsigned value);
 extern void CVDEV_CALL cvop_generate(void *chip, short *stereo, unsigned frames);
 
 #define AUDIO_RATE      44100u
-#define AUDIO_LEAD      8u        /* buffers queued ahead of the DMA engine */
 #define KBC_DATA        0x60u
 #define KBC_STATUS      0x64u
 
@@ -331,7 +330,7 @@ static void audio_service(void)
         next_fill = (civ + 1u) & 31u;
     }
     queued = (next_fill - civ) & 31u;
-    while (queued < AUDIO_LEAD) {
+    while (queued < CVDEV_AUDIO_LEAD) {
         render_buffer(next_fill);
         cvdev_out(nabm + 0x15, next_fill, 1);
         next_fill = (next_fill + 1u) & 31u;
@@ -372,7 +371,7 @@ static uint32_t audio_start(const cvdev_pages *pages)
     cvdev_out(nabm + 0x10, pages->physical[0], 4);
     next_fill = 0;
     audio_running = 1;
-    for (i = 0; i != AUDIO_LEAD; ++i) {
+    for (i = 0; i != CVDEV_AUDIO_LEAD; ++i) {
         render_buffer(next_fill);
         cvdev_out(nabm + 0x15, next_fill, 1);
         next_fill = (next_fill + 1u) & 31u;
@@ -703,7 +702,7 @@ void cvdev_poll(void)
  * advanced (their IRQs pend in the owner's VM) and, every 4 ms at most, the
  * stream is serviced; the other sessions that play go on muted (the running
  * one's in cvdev_poll). AC'97 register accesses leave the virtual machine;
- * eight queued buffers hold 186 ms of audio. */
+ * eight queued 256-frame buffers hold about 46 ms at 44.1 kHz. */
 void cvdev_audio_poll(void)
 {
     static uint32_t last_lo, last_hi;

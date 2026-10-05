@@ -54,7 +54,8 @@ VMM_BIOS_FIRST equ 0C0h                 ; BIOS RAM in upper memory: private too
 VMM_BIOS_END equ 0F0h
 VMM_BIOS_MAX equ VMM_BIOS_END-VMM_BIOS_FIRST
 VMM_FRAME equ 76                        ; sizeof Client_Reg_Struc
-VMM_CV_BYTES equ 64                     ; >= Jemm's CV_VM_STATE_BYTES (26)
+VMM_CV_BYTES equ 64                     ; >= Jemm's CV_VM_STATE_BYTES (30)
+VMM_CV_LEVEL_DEFERRED equ 26            ; per-VM physical level requests
 ; Two ticks let a resumed BIOS INT 16h wait consume its queued key before
 ; another VM switch. One tick reproducibly stranded VM2 after its prompt.
 ; The return-to-V86 audio-urgent path below still schedules pending DMA IRQs.
@@ -148,6 +149,13 @@ vmm_defer_magic db 'CVDEFER1'
 vmm_defer_vm dd -1
 vmm_defer_irqs dd 0
 vmm_defer_switches dd 0
+align 4
+; Dynamically registered physical NIC IRQs owned by the system VM. While a
+; different VM runs, mask only these PIC lines so requests remain pending
+; for VM0's packet driver. Appended to preserve existing diagnostic offsets.
+vmm_net_irq_mask dw 0
+vmm_net_irq_saved dw 0
+vmm_net_irq_held db 0
 
 .code
 
@@ -157,6 +165,144 @@ vmm_record proc
  add esi,offset vmm_table
  ret
 vmm_record endp
+
+; Mask every registered network line in the physical master/slave PIC IMRs.
+; IF must be clear at all call sites.
+vmm_net_irq_mask_pic proc
+ push eax
+ push edx
+ mov dx,21h
+ in al,dx
+ or al,byte ptr vmm_net_irq_mask
+ out dx,al
+ mov al,byte ptr vmm_net_irq_mask+1
+ mov dx,0A1h
+ in al,dx
+ or al,byte ptr vmm_net_irq_mask+1
+ out dx,al
+ pop edx
+ pop eax
+ ret
+vmm_net_irq_mask_pic endp
+
+; Restore only the registered bits to their exact pre-hold state. Preserve
+; every other physical PIC mask bit, including changes by other host code.
+vmm_net_irq_restore_pic proc
+ push eax
+ push ebx
+ push edx
+ mov dx,21h
+ in al,dx
+ mov bl,byte ptr vmm_net_irq_mask
+ not bl
+ and al,bl
+ or al,byte ptr vmm_net_irq_saved
+ out dx,al
+ mov dx,0A1h
+ in al,dx
+ mov bl,byte ptr vmm_net_irq_mask+1
+ not bl
+ and al,bl
+ or al,byte ptr vmm_net_irq_saved+1
+ out dx,al
+ pop edx
+ pop ebx
+ pop eax
+ ret
+vmm_net_irq_restore_pic endp
+
+; Before VM0 leaves, preserve the exact prior mask bit and block this IRQ.
+; Called by vmm_switch at a safe boundary with physical IF clear.
+vmm_net_irq_switch_out proc
+ pushad
+ cmp vmm_net_irq_mask,0
+ je net_irq_out_done
+ cmp vmm_current,0
+ jne net_irq_out_done
+ cmp ebx,0
+ je net_irq_out_done
+ cmp vmm_net_irq_held,0
+ jne net_irq_mask_now
+ movzx ebx,word ptr vmm_net_irq_mask
+ mov dx,21h
+ xor eax,eax
+ in al,dx
+ and al,bl
+ movzx eax,al
+ mov vmm_net_irq_saved,ax
+ mov dx,0A1h
+ xor eax,eax
+ in al,dx
+ mov ecx,ebx
+ shr ecx,8
+ and al,cl
+ movzx eax,al
+ shl eax,8
+ or vmm_net_irq_saved,ax
+ mov vmm_net_irq_held,1
+net_irq_mask_now:
+ call vmm_net_irq_mask_pic
+net_irq_out_done:
+ popad
+ ret
+vmm_net_irq_switch_out endp
+
+; Reapply after loading the target VM's virtual-PIC state, or restore the
+; exact saved physical bit as soon as VM0 becomes current again.
+vmm_net_irq_switch_in proc
+ pushad
+ cmp vmm_net_irq_mask,0
+ je net_irq_in_done
+ cmp vmm_current,0
+ jne net_irq_retain_mask
+ cmp vmm_net_irq_held,0
+ je net_irq_in_done
+ call vmm_net_irq_restore_pic
+ mov vmm_net_irq_held,0
+ jmp net_irq_in_done
+net_irq_retain_mask:
+ cmp vmm_net_irq_held,0
+ je net_irq_in_done
+ call vmm_net_irq_mask_pic
+net_irq_in_done:
+ popad
+ ret
+vmm_net_irq_switch_in endp
+
+; VM_OP_VMM_NET_IRQ: BX is a bitmap of dynamically discovered NIC IRQ lines.
+; Registration is global to CVSESSION and belongs only to system VM0.
+vmm_net_irq_register proc uses ebx
+ pushfd
+ cli
+ cmp vmm_current,0
+ jne net_irq_register_error
+ movzx ebx,word ptr [ebp].Client_Reg_Struc.Client_EBX
+ test ebx,ebx
+ jz net_irq_unregister
+ test ebx,1007h                     ; IRQ0-2 and the physical mouse IRQ12
+ jnz net_irq_register_error
+ cmp vmm_net_irq_held,0
+ jne net_irq_register_error
+ mov vmm_net_irq_mask,bx
+ xor eax,eax
+ popfd
+ ret
+net_irq_unregister:
+ cmp vmm_net_irq_held,0
+ je net_irq_clear_registration
+ call vmm_net_irq_restore_pic
+ mov vmm_net_irq_held,0
+net_irq_clear_registration:
+ mov vmm_net_irq_mask,0
+ mov vmm_net_irq_saved,0
+ xor eax,eax
+ popfd
+ ret
+net_irq_register_error:
+ mov eax,VM_ERROR_OPERATION
+ popfd
+ ret
+vmm_net_irq_register endp
 
 vmm_init proc uses esi edi ebx
  mov eax,VM_ERROR_VMM_LAYOUT
@@ -324,6 +470,7 @@ pte_live:
  jc cv_ready
  mov dword ptr [ebx].VMREC.cv+4,0       ; pending
  mov dword ptr [ebx].VMREC.cv+8,0       ; in service
+ mov dword ptr [ebx].VMREC.cv+VMM_CV_LEVEL_DEFERRED,0
  mov [ebx].VMREC.cv_valid,1
 cv_ready:
  call vmm_arm
@@ -357,6 +504,26 @@ vmm_create endp
 
 ; EBX = record: free its private pages.
 vmm_free_block proc
+ ; A dead VM cannot service its queued physical level IRQ. Release only the
+ ; mask held for those requests, then reapply the system NIC owner gate.
+ cmp [ebx].VMREC.cv_valid,0
+ je free_pages
+ pushad
+ pushfd
+ cli
+ mov ecx,dword ptr [ebx].VMREC.cv+VMM_CV_LEVEL_DEFERRED
+ mov dword ptr [ebx].VMREC.cv+VMM_CV_LEVEL_DEFERRED,0
+ test ecx,ecx
+ jz deferred_released
+ mov eax,14
+ @VMMCall Host_Scheduler_Profile
+ cmp vmm_current,0
+ je deferred_released
+ call vmm_net_irq_mask_pic
+deferred_released:
+ popfd
+ popad
+free_pages:
  mov eax,[ebx].VMREC.block
  test eax,eax
  jz freed
@@ -2412,6 +2579,7 @@ gated:
  ret
 switch_to:
  mov ebx,eax                            ; EBX = next VM number, ESI its record
+ call vmm_net_irq_switch_out
  mov eax,vmm_defer_vm
  cmp eax,vmm_current
  jne no_deferred_slice
@@ -2476,6 +2644,7 @@ not_input_urgent:
  pop esi
  mov dword ptr [esi].VMREC.cv+4,0
  mov dword ptr [esi].VMREC.cv+8,0
+ mov dword ptr [esi].VMREC.cv+VMM_CV_LEVEL_DEFERRED,0
  mov word ptr [esi].VMREC.cv+12,0
  mov [esi].VMREC.cv_valid,1
 cv_saved:
@@ -2523,6 +2692,7 @@ cv_saved:
  mov eax,vmm_current
  mov vmm_current,ebx
  mov vmm_live,ebx
+ call vmm_net_irq_switch_in
  inc vmm_switches
  push esi
  call vmm_record
@@ -2569,6 +2739,8 @@ vmm_dispatch proc
  je op_exit_code
  cmp eax,VM_OP_VMM_UMB_ALLOC
  je op_umb_alloc
+ cmp eax,VM_OP_VMM_NET_IRQ
+ je op_net_irq
  mov eax,VM_ERROR_OPERATION
  ret
 ; VMM_EXIT_CODE: BX = VM -> AX state, DX exit code, CX its generation.
@@ -2594,6 +2766,8 @@ op_kill:
  jmp vmm_kill
 op_umb_alloc:
  jmp vmm_umb_alloc
+op_net_irq:
+ jmp vmm_net_irq_register
 op_target:
  jmp vmm_set_target
 ; VMM_LIST: four bytes per VM (state, SESS_* flags, has the focus, runs).

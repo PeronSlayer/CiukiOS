@@ -793,41 +793,71 @@ static struct slider ms_speed, ms_dbl, kb_delay, kb_rate;
 static u8 kb_saved_delay, kb_saved_rate;
 static int ms_swap_at, ms_test_open;
 static unsigned ms_test_tick;
+static int ms_scheme_at[3];
 static struct field kb_test;
 static char kb_test_buf[40];
+static void mouse_action(int id)
+{
+    int k = P_MOUSE, i;
+    if (id >= 10 && id <= 12) {
+        for (i = 0; i < 3; i++) ac[k][ms_scheme_at[i]].value = (id - 10 == i);
+        cfg.cursor_scheme = (u8)(id - 10);
+        ui_dirty = 1;
+    }
+}
 static void mouse_open(void)
 {
     int k = P_MOUSE;
     cfg_load(&cfg);
     mem_copy(&saved_cfg, &cfg, sizeof cfg);
     an[k] = 0;
-    add(k, DC_GROUP, 0, 0, 380, 70, "Pointer speed", 0);
-    ms_speed.x = 20; ms_speed.y = 24; ms_speed.w = 250; ms_speed.min = 1; ms_speed.max = 4;
+    add(k, DC_GROUP, 0, 0, 380, 68, "Pointer speed", 0);
+    ms_speed.x = 20; ms_speed.y = 22; ms_speed.w = 250; ms_speed.min = 1; ms_speed.max = 4;
     ms_speed.value = cfg.mouse_speed ? cfg.mouse_speed : 2; ms_speed.left = "Slow"; ms_speed.right = "Fast";
-    add(k, DC_GROUP, 0, 80, 380, 92, "Double-click speed", 0);
-    ms_dbl.x = 20; ms_dbl.y = 104; ms_dbl.w = 250; ms_dbl.min = 0; ms_dbl.max = 14;
+    add(k, DC_GROUP, 0, 74, 380, 78, "Double-click speed", 0);
+    ms_dbl.x = 20; ms_dbl.y = 96; ms_dbl.w = 250; ms_dbl.min = 0; ms_dbl.max = 14;
     ms_dbl.value = 18 - (cfg.dblclick ? cfg.dblclick : 9); ms_dbl.left = "Slow"; ms_dbl.right = "Fast";
-    add(k, DC_LABEL, 20, 150, 0, 16, "Double-click the folder to test.", 0);
+    add(k, DC_LABEL, 20, 132, 0, 16, "Double-click the folder to test.", 0);
     ms_swap_at = an[k];
-    add(k, DC_CHECK, 0, 184, 0, 17, "&Switch primary and secondary buttons", 0)->value = cfg.mouse_swap;
-    add(k, DC_BUTTON, 116, 216, 84, 26, "OK", 1);
-    add(k, DC_BUTTON, 204, 216, 84, 26, "Cancel", 2);
-    add(k, DC_BUTTON, 292, 216, 84, 26, "&Apply", 3);
-    show(k, "Mouse", 400, 248);
+    add(k, DC_CHECK, 0, 158, 0, 17, "&Switch primary and secondary buttons", 0)->value = cfg.mouse_swap;
+    add(k, DC_GROUP, 0, 180, 380, 84, "Pointer scheme", 0);
+    ms_scheme_at[0] = an[k];
+    add(k, DC_RADIO, 16, 198, 0, 17, "&Tango (Default)", 10)->value = (cfg.cursor_scheme == 0);
+    ms_scheme_at[1] = an[k];
+    add(k, DC_RADIO, 16, 218, 0, 17, "&Classic 95", 11)->value = (cfg.cursor_scheme == 1);
+    ms_scheme_at[2] = an[k];
+    add(k, DC_RADIO, 16, 238, 0, 17, "&3D Contrast", 12)->value = (cfg.cursor_scheme == 2);
+    add(k, DC_BUTTON, 116, 274, 84, 26, "OK", 1);
+    add(k, DC_BUTTON, 204, 274, 84, 26, "Cancel", 2);
+    add(k, DC_BUTTON, 292, 274, 84, 26, "&Apply", 3);
+    show(k, "Mouse", 400, 308);
 }
 static void mouse_paint(void)
 {
-    int k = P_MOUSE;
+    int k = P_MOUSE, px, py;
     slider_draw(k, &ms_speed);
     slider_draw(k, &ms_dbl);
-    ui_icon(ox(k) + 300, oy(k) + 104, ms_test_open ? ICON_DESKTOP : ICON_FOLDER);
+    ui_icon(ox(k) + 300, oy(k) + 90, ms_test_open ? ICON_DESKTOP : ICON_FOLDER);
+    px = ox(k) + 180; py = oy(k) + 196;
+    ui_inset(px, py, 184, 60);
+    ui_rect(px + 1, py + 1, 182, 58, C_PAPER);
+    ui_text(px + 6, py + 4, "Preview:", C_SHADOW);
+    ui_text(px + 10, py + 24, "Arrow", C_INK);
+    ui_text(px + 68, py + 24, "Text", C_INK);
+    ui_text(px + 118, py + 24, "Blocked", C_INK);
 }
 static int mouse_mouse(int kind, int sx, int sy)
 {
     int k = P_MOUSE, r = slider_mouse(k, &ms_speed, kind, sx, sy);
+    int px = ox(k) + 180, py = oy(k) + 196;
     if (!r) r = slider_mouse(k, &ms_dbl, kind, sx, sy);
     if (r) return 1;
-    if (kind == MOUSE_DOWN && sx >= ox(k) + 300 && sx < ox(k) + 344 && sy >= oy(k) + 104 && sy < oy(k) + 146) {
+    if (sx >= px && sx < px + 184 && sy >= py && sy < py + 60) {
+        if (sx < px + 55) ui_cursor(CURSOR_ARROW);
+        else if (sx < px + 105) ui_cursor(CURSOR_IBEAM);
+        else ui_cursor(CURSOR_FORBIDDEN);
+    }
+    if (kind == MOUSE_DOWN && sx >= ox(k) + 300 && sx < ox(k) + 344 && sy >= oy(k) + 90 && sy < oy(k) + 132) {
         if ((unsigned)(HOST.ticks - ms_test_tick) < (unsigned)(18 - ms_dbl.value)) { ms_test_open = !ms_test_open; ms_test_tick = 0; }
         else ms_test_tick = HOST.ticks;
         return 1;
@@ -836,11 +866,13 @@ static int mouse_mouse(int kind, int sx, int sy)
 }
 static void mouse_save(void)
 {
-    char t[8];
+    char t[8]; int i;
     cfg_load(&cfg);
     cfg.mouse_speed = (u8)ms_speed.value;
     cfg.dblclick = (u8)(18 - ms_dbl.value);
     cfg.mouse_swap = (u8)ac[P_MOUSE][ms_swap_at].value;
+    for (i = 0; i < 3; i++)
+        if (ac[P_MOUSE][ms_scheme_at[i]].value) cfg.cursor_scheme = (u8)i;
     cfg_save(&cfg);
     fmt_u32(t, ms_speed.value);
     app_log("[CONTROL] mouse speed", t);
@@ -1423,7 +1455,10 @@ static void applet_result(int k, int r)
         if (r == 2) { ui_palette(saved_cfg.palette); app_log("[CONTROL] cancelled", "appearance"); }
         break;
     case P_FONTS: fonts_result(r); if (r >= 10) ad[k].open = 1; break;
-    case P_MOUSE: if (r == 1 || r == 3) mouse_save(); break;
+    case P_MOUSE:
+        if (r >= 10 && r <= 12) { mouse_action(r); ad[k].open = 1; }
+        else if (r == 1 || r == 3) mouse_save();
+        break;
     case P_KEYBOARD:
         if (r == 1 || r == 3) keyboard_save();
         if (r == 2) {

@@ -107,7 +107,7 @@ new file mode 100644
 index 0000000..622b48d
 --- /dev/null
 +++ b/src/CVIRQ.INC
-@@ -0,0 +1,1129 @@
+@@ -0,0 +1,1389 @@
 +; CiukiOS foreground V86 interrupt profile.
 +; Compiled with CIUKIOS_V86_INTERRUPTS and negotiated at run time through
 +; the versioned Host_Scheduler_Profile service: it is active only while the
@@ -123,6 +123,8 @@ index 0000000..622b48d
 +CvPhysicalHeld dw 0
 +dw 0
 +CvPhysicalMaskOps dd 0
++CvLevelMasked dw 0          ; physical lines masked while a level IRQ is deferred
++CvLevelActive dw 0          ; injected level handlers keep their VM selected
 +CvFilter dd 0
 +CvPollProc dd 0
 +CvLinger dd 0
@@ -138,6 +140,9 @@ index 0000000..622b48d
 +CvAutoEOI dw 0
 +CvInitPhase dw 0
 +CvBases dw 07008h
++; Per-VM bits owned by deferred/injected physical level IRQs. Appended so
++; existing offsets remain stable; included in CV_VM_STATE_BYTES.
++CvLevelDeferred dd 0
 +CvIopbSaved db 8 dup(0)
 +; Guest IF .. virtual PIC bases: the state a VM switch saves and restores.
 +CV_VM_STATE_BYTES equ offset CvIopbSaved - offset CvGuestIF
@@ -267,6 +272,10 @@ index 0000000..622b48d
 + jne poll_done
 + cmp CvInService,0
 + jne poll_done
++ cmp CvLevelDeferred,0
++ jne poll_done
++ cmp CvLevelActive,0
++ jne poll_done
 + jmp leave_disable
 +poll_done:
 + or [ebp].Client_Reg_Struc.Client_EFlags,3000h
@@ -321,6 +330,7 @@ index 0000000..622b48d
 +slave_eligible:
 + add ecx,8
 + btr CvPending,ecx
++ call CvLevelInject
 + cmp byte ptr CvAutoEOI,0
 + jne slave_no_master_isr
 + bts CvInService,2
@@ -335,6 +345,7 @@ index 0000000..622b48d
 + jmp inject_vector
 +inject_master:
 + btr CvPending,ecx
++ call CvLevelInject
 + cmp byte ptr CvAutoEOI,0
 + jne master_no_isr
 + bts CvInService,ecx
@@ -369,8 +380,8 @@ index 0000000..622b48d
 + ret
 +CvVCPIFlags endp
 +
-+; ECX is the real physical vector. CF=1 consumed; CF=0 leaves the vector
-+; to upstream reflection, including level IRQs that still owe physical EOI.
++; ECX is the real physical vector. Edge IRQs keep upstream's fast path;
++; level IRQs are masked, physically EOIed, then delivered through CvPending.
 +CvIRQ proc
 + cmp CvActive,0
 + je not_irq
@@ -402,7 +413,11 @@ index 0000000..622b48d
 + call CvFilterIrq
 + jc slave_acknowledge
 + call CvLevelIRQ
-+ jnz irq_unclaimed           ; device must clear a level source before EOI
++ jz slave_edge
++ call CvLevelDefer
++ jc irq_claimed
++ jmp irq_unclaimed
++slave_edge:
 + bts CvPending,eax
 +slave_acknowledge:
 + mov al,20h
@@ -422,7 +437,11 @@ index 0000000..622b48d
 + call CvFilterIrq
 + jc master_acknowledge
 + call CvLevelIRQ
-+ jnz irq_unclaimed           ; device must clear a level source before EOI
++ jz master_edge
++ call CvLevelDefer
++ jc irq_claimed
++ jmp irq_unclaimed
++master_edge:
 + bts CvPending,eax
 +master_acknowledge:
 + mov al,20h
@@ -438,9 +457,9 @@ index 0000000..622b48d
 + ret
 +CvIRQ endp
 +
-+; EAX = real IRQ 0..15. ZF=0 for a level-triggered pass-through line.
-+; Let upstream reflection retain its physical ISR until the driver EOIs it.
-+; A premature monitor EOI can repeatedly re-enter before the device runs.
++; EAX = real IRQ 0..15. ZF=0 for a level-triggered line (PIIX/ICH ELCR at
++; 4D0h/4D1h). A plain monitor EOI would re-enter at once while the device
++; still asserts, so CvLevelDefer masks the line before its specific EOI.
 +CvLevelIRQ proc
 + push eax
 + push ecx
@@ -458,6 +477,227 @@ index 0000000..622b48d
 + pop eax
 + ret
 +CvLevelIRQ endp
++
++; EAX=physical IRQ. Mask the asserted level before specific EOI so an
++; unserviced device cannot immediately re-enter Jemm. The held bit is global
++; because it describes the one physical PIC, while CvLevelDeferred is saved
++; per VM with the virtual PIC state. IRQ0-2 and IRQ12 retain their owners.
++CvLevelDefer proc
++ pushad
++ mov ebx,eax
++ mov esi,eax
++ cmp ebx,3
++ jb level_defer_no
++ cmp ebx,12
++ je level_defer_no
++ cmp ebx,16
++ jae level_defer_no
++ ; Auto-EOI guests never send the EOI that releases the deferred mask.
++ cmp CvAutoEOI,0
++ jne level_defer_no
++ mov ecx,ebx
++ mov edx,1
++ shl edx,cl
++ or CvLevelMasked,dx
++ cmp ebx,8
++ jb level_defer_master
++ sub ebx,8
++ mov cl,bl
++ mov ah,1
++ shl ah,cl
++ mov dx,0A1h
++ in al,dx
++ or al,ah
++ out dx,al
++ mov al,60h
++ add al,bl
++ out 0A0h,al
++ mov al,62h
++ out 20h,al
++ jmp level_defer_record
++level_defer_master:
++ mov cl,bl
++ mov ah,1
++ shl ah,cl
++ mov dx,21h
++ in al,dx
++ or al,ah
++ out dx,al
++ mov al,60h
++ add al,bl
++ out 20h,al
++level_defer_record:
++ bts CvPending,esi
++ bts CvLevelDeferred,esi
++ popad
++ stc
++ ret
++level_defer_no:
++ popad
++ clc
++ ret
++CvLevelDefer endp
++
++; ECX=IRQ index. Drop the broker's forced physical mask, preserving any
++; independent Crynwr/self-mask owner. Caller already cleared CvLevelMasked.
++CvLevelUnmask proc
++ push eax
++ push ebx
++ push ecx
++ push edx
++ bt CvPhysicalHeld,cx
++ jc level_unmask_done
++ mov ebx,ecx
++ cmp ebx,8
++ jb level_unmask_master
++ sub ebx,8
++ mov cl,bl
++ mov ah,1
++ shl ah,cl
++ not ah
++ mov dx,0A1h
++ in al,dx
++ and al,ah
++ out dx,al
++ jmp level_unmask_done
++level_unmask_master:
++ mov cl,bl
++ mov ah,1
++ shl ah,cl
++ not ah
++ mov dx,21h
++ in al,dx
++ and al,ah
++ out dx,al
++level_unmask_done:
++ pop edx
++ pop ecx
++ pop ebx
++ pop eax
++ ret
++CvLevelUnmask endp
++
++; ECX=IRQ being injected (or accepted by the protected-mode bridge). A
++; deferred level keeps its VM selected until the guest EOIs it. If the guest
++; switched to auto-EOI after the deferral, no EOI follows: release it now.
++CvLevelInject proc
++ bt CvLevelDeferred,ecx
++ jnc level_inject_done
++ cmp CvAutoEOI,0
++ jne level_inject_auto
++ bts CvLevelActive,cx
++ ret
++level_inject_auto:
++ btr CvLevelMasked,cx
++ btr CvLevelDeferred,ecx
++ call CvLevelUnmask
++level_inject_done:
++ ret
++CvLevelInject endp
++
++; ECX=bitmap of IRQ lines whose deferred owner died or whose profile owner
++; released it. A physical line has one deferred owner at a time, so drop
++; every global hold for those lines and unmask them. The caller reapplies
++; any other owner's mask (CVSESSION's NIC gate) afterwards.
++CvLevelDiscard proc
++ pushad
++ and ecx,0FFFFh
++ mov eax,ecx
++ not eax
++ and CvLevelMasked,ax
++ and CvLevelActive,ax
++ and CvPhysicalHeld,ax
++ and CvLevelDeferred,eax
++ mov edx,ecx
++ xor ecx,ecx
++level_discard_loop:
++ bt edx,ecx
++ jnc level_discard_next
++ call CvLevelUnmask
++level_discard_next:
++ inc ecx
++ cmp ecx,16
++ jb level_discard_loop
++ popad
++ ret
++CvLevelDiscard endp
++
++; ECX=virtual IRQ whose guest EOI just cleared CvInService.
++; Crynwr EOIs before draining the device, but first masks its PIC line. In
++; that case transfer the level hold to CvPhysicalHeld until guest IMR unmask.
++CvLevelEOI proc
++ push eax
++ push ebx
++ push ecx
++ push edx
++ bt CvLevelDeferred,ecx
++ jnc level_eoi_done
++ btr CvLevelActive,cx
++ jnc level_eoi_done
++ bt CvMask,cx
++ jc level_eoi_transfer
++ btr CvLevelMasked,cx
++ btr CvPhysicalHeld,cx
++ call CvLevelUnmask
++ jmp level_eoi_clear_owner
++level_eoi_transfer:
++ btr CvLevelMasked,cx
++ bts CvPhysicalHeld,cx
++level_eoi_clear_owner:
++ ; Keep the per-VM marker only while a physical mask still belongs to it.
++ bt CvLevelMasked,cx
++ jc level_eoi_done
++ bt CvPhysicalHeld,cx
++ jc level_eoi_done
++ btr CvLevelDeferred,ecx
++level_eoi_done:
++ pop edx
++ pop ecx
++ pop ebx
++ pop eax
++ ret
++CvLevelEOI endp
++
++; Update broker ownership for the guest's virtual PIC IMR write. AL contains
++; the requested mask for controller EBX; never let a different VM release a
++; deferred level source. CvPhysicalMask handles transferred self-masks.
++CvLevelMaskWrite proc
++ push eax
++ push ebx
++ push ecx
++ push edx
++ mov ah,al
++ shl ebx,3
++ xor ecx,ecx
++level_mask_write_loop:
++ mov dl,1
++ shl dl,cl
++ test ah,dl
++ jz level_mask_write_next
++ lea edx,[ebx+ecx]
++ bt CvLevelDeferred,edx
++ jnc level_mask_write_next
++ bt CvLevelActive,dx
++ jnc level_mask_write_next
++ btr CvLevelMasked,dx
++ bts CvPhysicalHeld,dx
++level_mask_write_next:
++ inc ecx
++ cmp ecx,8
++ jb level_mask_write_loop
++ ; An unmask releases a transferred hold through CvPhysicalMask. Clear only
++; per-VM markers with no remaining global owner.
++ movzx eax,CvLevelMasked
++ or ax,CvPhysicalHeld
++ or ax,CvLevelActive
++ and eax,CvLevelDeferred
++ mov CvLevelDeferred,eax
++ pop edx
++ pop ecx
++ pop ebx
++ pop eax
++ ret
++CvLevelMaskWrite endp
 +
 +; EAX=claimed physical IRQ. Only IRQ1/IRQ12 reach the owner's filter, which
 +; reads the 8042 before the physical EOI. CF=1: the owner consumed the byte
@@ -491,6 +731,7 @@ index 0000000..622b48d
 +; bit0 available, bit1 requested, bit2 active, bit3 guest IF, bit4 filter,
 +; bit5 poll.
 +;   13 EDX = temporary physical masks owned by the running ISR (global)
++;   14 discard deferred level IRQ lines ECX (their owner VM was freed)
 +;   0 query   1 request   2 release   3 raise virtual IRQ ECX (active only)
 +;   4 set IRQ1/IRQ12 filter ECX (0 removes)   5 EDX = in-service, ECX = pending
 +;   6 set return-to-V86 poll procedure ECX (0 removes); it preserves all
@@ -510,8 +751,16 @@ index 0000000..622b48d
 + cmp eax,13
 + jne profile_not_physical_mask
 + movzx edx,CvPhysicalHeld
++ or dx,CvLevelActive
 + jmp profile_state
 +profile_not_physical_mask:
++ cmp eax,14
++ jne profile_not_level_discard
++ cmp CvActive,0
++ je profile_error
++ call CvLevelDiscard
++ jmp profile_state
++profile_not_level_discard:
 + cmp eax,12
 + jne profile_not_pit_owner
 + mov CvPitOwned,ecx
@@ -525,6 +774,9 @@ index 0000000..622b48d
 + cmp eax,2
 + jne profile_not_release
 + mov CvRequested,0
++ movzx ecx,CvLevelMasked
++ or cx,CvLevelActive
++ call CvLevelDiscard
 + mov CvPitOwned,0
 + mov CvFilter,0
 + mov CvPollProc,0
@@ -680,6 +932,7 @@ index 0000000..622b48d
 + add edx,ecx
 +accept_done:
 + btr CvPending,ecx
++ call CvLevelInject
 + pop esi
 + pop ebx
 + popfd
@@ -988,6 +1241,8 @@ index 0000000..622b48d
 +CvPhysicalBusy proc
 + cmp CvPhysicalHeld,0
 + jne physical_held_busy
++ cmp CvLevelActive,0
++ jne physical_held_busy
 + push edx
 + mov dx,20h
 + call CvPhysicalISR
@@ -1030,6 +1285,7 @@ index 0000000..622b48d
 + and cl,ch
 + or cl,byte ptr CvPhysicalHeld[ebx]
 + and cl,ah
++ or cl,byte ptr CvLevelActive[ebx]
 + cmp cl,byte ptr CvPhysicalHeld[ebx]
 + je physical_mask_done
 + mov ch,byte ptr CvPhysicalHeld[ebx]
@@ -1153,7 +1409,10 @@ index 0000000..622b48d
 + add edi,8
 +pic_eoi_index:
 + btr CvInService,edi
-+ jc pic_done
++ jnc pic_eoi_physical
++ mov ecx,edi
++ call CvLevelEOI
++ jmp pic_done
 +pic_eoi_physical:
 + ; A physical level is still in service, or no virtual level is: the IRQ was
 + ; accepted by a VCPI client (HDPMI) and reflected here unacknowledged.
@@ -1201,6 +1460,7 @@ index 0000000..622b48d
 + jmp pic_done
 +pic_mask_write:
 + call CvPhysicalMask
++ call CvLevelMaskWrite
 + mov byte ptr CvMask[ebx],al
 +pic_done:
 + pop ebx

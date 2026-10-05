@@ -3,7 +3,7 @@
 #include "app.h"
 
 static const char welcome_path[] = "\\SYSTEM\\UI\\WELCOME.CFG";
-static int show_at_startup = 1;
+static int dont_show_at_startup;
 static int page;
 static int focus = 4;
 static int X, Y, W, H;
@@ -13,17 +13,18 @@ static void load_preference(void)
 {
     char value[2];
     int h = dos_open(welcome_path, 0), n;
-    show_at_startup = 1;
+    dont_show_at_startup = 0;
     if (h < 0) return;
     n = dos_read(h, value, sizeof value);
     dos_close(h);
     if (n == 1 && (value[0] == '0' || value[0] == '1'))
-        show_at_startup = value[0] == '1';
+        /* Keep WELCOME.CFG compatible: its byte records show (1) or hide (0). */
+        dont_show_at_startup = value[0] == '0';
 }
 
 static int save_preference(void)
 {
-    char value = show_at_startup ? '1' : '0';
+    char value = dont_show_at_startup ? '0' : '1';
     int h = dos_create(welcome_path), n;
     if (h < 0) return h;
     n = dos_write(h, &value, 1);
@@ -99,8 +100,8 @@ static void paint(void)
     draw_frame_text(X + 20, Y + H - 98, W - 40,
                     status[0] ? status : "F3 Run   Ctrl+Esc Programs   F4 Full-screen DOS", C_SHADOW);
     check_y = Y + H - 78;
-    draw_check(X + 20, check_y + 4, show_at_startup);
-    ui_text(X + 42, check_y + 3, "Show this page at startup", C_INK);
+    draw_check(X + 20, check_y + 4, dont_show_at_startup);
+    ui_text(X + 42, check_y + 3, "Don't show this at startup", C_INK);
     ui_hit(X + 16, check_y, 250, 24, 1);
     if (focus == 2) draw_focus(X + 16, check_y, 250, 24);
 
@@ -113,18 +114,18 @@ static void paint(void)
 
 static void toggle_startup(void)
 {
-    int old = show_at_startup;
-    show_at_startup = !show_at_startup;
+    int old = dont_show_at_startup;
+    dont_show_at_startup = !dont_show_at_startup;
     if (save_preference()) {
-        show_at_startup = old;
+        dont_show_at_startup = old;
         str_copy(status, "Could not save the startup preference.");
         app_sound(5);
         app_log("[ABOUT] preference error", "WELCOME.CFG");
         return;
     }
-    str_copy(status, show_at_startup ? "This page will appear at startup." :
-                                      "This page will not appear at startup.");
-    app_log("[ABOUT] show at startup", show_at_startup ? "1" : "0");
+    str_copy(status, dont_show_at_startup ? "This page will not appear at startup." :
+                                           "This page will appear at startup.");
+    app_log("[ABOUT] show at startup", dont_show_at_startup ? "0" : "1");
 }
 
 static int event(int ev, int a)

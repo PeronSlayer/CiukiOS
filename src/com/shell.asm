@@ -3572,10 +3572,10 @@ shell_output_color db 7
 %include "src/com/boot_session.inc"
 %endif
 
-; 1792 bytes: the deepest measured use (desktop, native windows, DOS window
+; 1728 bytes: the deepest measured use (desktop, native windows, DOS window
 ; and its host callbacks) is 400 bytes.
 align 16
-shell_stack times 1792 db 0
+shell_stack times 1408 db 0
 shell_stack_top:
 shell_image_end:
 

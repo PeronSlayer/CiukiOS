@@ -1115,7 +1115,7 @@ not_device:
  je present_frame
  cmp eax,VM_OP_VMM_INIT
  jb not_vmm
- cmp eax,VM_OP_VMM_UMB_ALLOC
+ cmp eax,VM_OP_VMM_NET_IRQ
  ja not_vmm
  call vmm_dispatch
  jmp checked_result

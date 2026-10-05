@@ -461,7 +461,7 @@ void field_draw(struct field *f, int x, int y, int w, int focused)
     } else {
         ui_text(x + 4, y + 3, t, C_INK);
     }
-    if (focused) {
+    if (focused && !((HOST.ticks / 9) & 1)) {
         cx = x + 4 + prefix_w(f->text + f->scroll, f->cursor - f->scroll);
         ui_rect(cx, y + 4, 1, 15, C_INK);
     }
@@ -595,10 +595,17 @@ static int control_at(struct dialog *d, int sx, int sy)
 
 int dialog_hover(struct dialog *d, int sx, int sy)
 {
-    int i;
+    int i, ci;
     if (!d->open || (d->win && HOST.window != d->win)) return 0;
     if (d->win) place(d);
-    i = control_at(d, sx, sy);
+    ci = control_at(d, sx, sy);
+    if (ci >= 0 && d->c[ci].type == DC_FIELD) {
+        if (!d->c[ci].disabled) ui_cursor(CURSOR_IBEAM);
+        else ui_cursor(CURSOR_FORBIDDEN);
+    } else {
+        ui_cursor(CURSOR_ARROW);
+    }
+    i = ci;
     if (i >= 0 && (d->c[i].type != DC_BUTTON || d->c[i].disabled)) i = -1;
     if (i == d->hot) return 0;
     d->hot = i;

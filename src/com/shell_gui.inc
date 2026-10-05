@@ -1810,9 +1810,23 @@ ui_glyph_frame:
 
 ui_measure:
     push ax
+    xor ax,ax
+    call ui_measure_styled
+    pop ax
+    ret
+
+; Match ui_text's glyph advances; AH bit 0 selects the bold font.
+ui_measure_styled:
+    push ax
     push si
     push bx
     push fs
+    push di
+    mov di,UI_ASSET_FONT
+    test ah,1
+    jz .font
+    add di,UI_FONT_BYTES
+.font:
     mov ax,[ui_assets_seg]
     mov fs,ax
     xor cx,cx
@@ -1826,10 +1840,11 @@ ui_measure:
     ja .next
     sub al,32
     movzx bx,al
-    movzx ax,byte [fs:UI_ASSET_FONT+bx]
+    movzx ax,byte [fs:di+bx]
     add cx,ax
     jmp .next
 .done:
+    pop di
     pop fs
     pop bx
     pop si

@@ -560,6 +560,15 @@ if [[ -n "${QEMU_VIDEO_SIZE:-}" ]]; then
   VIDEO_SIZE_X="${BASH_REMATCH[1]}"
   VIDEO_SIZE_Y="${BASH_REMATCH[2]}"
 fi
+
+# A caller that supplies its own virtio-rng-pci device can configure that
+# device/backend through QEMU_EXTRA_ARGS; otherwise provide the legacy PCI
+# transport used by the DOS/4GW worker. QEMU's built-in entropy backend is
+# the default, so no seed file is stored or reused.
+QEMU_RNG_ARGS=(-device "virtio-rng-pci,disable-modern=on,disable-legacy=off")
+if [[ "${QEMU_EXTRA_ARGS:-}" == *virtio-rng-pci* ]]; then
+  QEMU_RNG_ARGS=()
+fi
 case "$QEMU_VIDEO_DEVICE" in
   std)
     if [[ -n "$VIDEO_SIZE_X" ]]; then
@@ -630,6 +639,7 @@ BASE_ARGS=(
   -machine "$QEMU_MACHINE_ARG"
   -cpu "$QEMU_CPU_MODEL"
   -m "$QEMU_MEMORY_MB"
+  "${QEMU_RNG_ARGS[@]}"
   -drive "file=$IMG,format=raw,if=ide"
   -boot c
 )

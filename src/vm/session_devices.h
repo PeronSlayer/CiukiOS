@@ -20,7 +20,8 @@
 #endif
 
 #define CVDEV_AUDIO_BUFFERS      32u
-#define CVDEV_AUDIO_FRAMES       1024u   /* per 4 KiB page, 16-bit stereo */
+#define CVDEV_AUDIO_FRAMES       256u
+#define CVDEV_AUDIO_LEAD         8u     /* descriptors kept ahead of the AC'97 DMA engine */
 #define CVDEV_AUDIO_PAGES        (CVDEV_AUDIO_BUFFERS + 1u)
 #define CVDEV_STATE_BYTES        128u
 

@@ -212,7 +212,9 @@ static uint32_t gpu_find_caps(uint8_t bus, uint8_t dev, uint8_t fn)
         uint32_t address = 0x80000000UL | ((uint32_t)bus << 16) |
                            ((uint32_t)dev << 11) | ((uint32_t)fn << 8) | 4U;
         cvgpu_out32(PCI_ADDR, address);
-        cvgpu_out16(PCI_DATA, (uint16_t)((command & 0xFFFFU) | 0x0006U));
+        /* This driver polls its queues. NO_INTERRUPT in avail is advisory;
+           mask this function's INTx so a shared NIC line stays independent. */
+        cvgpu_out16(PCI_DATA, (uint16_t)((command & 0xFFFFU) | 0x0406U));
     }
     status = pci_read(bus, dev, fn, 4);
     if (!(status & 0x00100000UL)) return 0;
@@ -398,6 +400,7 @@ static int gpu_poll_frame(void)
 {
     volatile gpu_used *used = (volatile gpu_used *)(g_queue + 608U);
     uint16_t completed, i;
+    if (g_isr) (void)*(volatile uint8_t *)g_isr;
     if (!g_pending) return 1;
     completed = (uint16_t)(used->index - g_wait_used);
     if (completed < 2U) {

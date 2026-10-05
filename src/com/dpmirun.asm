@@ -4,6 +4,7 @@
 ;   DPMIRUN program [arguments]
 ;   DPMIRUN /W [/C command]      (the DOS window's command interpreter)
 ;   DPMIRUN /V [/Tkhz] [/C command]  (a DOS window that is its own VM)
+;   DPMIRUN /B [/Tkhz] [/C command]  (background worker, no input/audio devices)
 ;
 ; Window mode is how every desktop DOS window starts (Windows 95 style): the
 ; window's session gets its DPMI host for its whole life, then \COMMAND.COM
@@ -169,6 +170,11 @@ window_mode:
     or al,20h
     cmp al,'v'
     je vm_mode
+    cmp al,'b'
+    jne .window
+    mov byte [vm_background],1
+    jmp vm_mode
+.window:
     mov di,child_tail
     mov si,80h
     movzx cx,byte [si]
@@ -384,6 +390,8 @@ vm_begin:
 .begun:
     mov byte [vm_active],1
     ; Guest devices when Jemm's virtual-IF profile is there.
+    cmp byte [vm_background],1
+    je .no_devices
     xor cx,cx
     mov ax,VM_OP_QUERY
     call vm_call
@@ -444,6 +452,23 @@ vm_begin:
     sti
     pop es
     mov byte [vm_hooked],1
+    ; A background DPMI worker uses INT 2Fh/1680h while it waits on its
+    ; mailbox. The DOS kernel acknowledges that request but does not yield
+    ; the monitored VM, so translate it to the existing V86 HLT path.
+    cmp byte [vm_background],1
+    jne .no_idle_hook
+    push es
+    xor ax,ax
+    mov es,ax
+    cli
+    mov eax,[es:2Fh*4]
+    mov [vm_old2f],eax
+    mov word [es:2Fh*4],vm_yield2f
+    mov [es:2Fh*4+2],cs
+    sti
+    pop es
+    mov byte [vm_hooked2f],1
+.no_idle_hook:
     mov si,vm_log_session
     call log
     clc
@@ -465,6 +490,29 @@ vm_begin:
 ; End the session (the reverse of vm_begin). A refused step is left to
 ; VMM_EXIT, which ends a session its VM still owns.
 vm_end:
+    cmp byte [vm_hooked2f],0
+    je .yield_unhooked
+    push es
+    xor ax,ax
+    mov es,ax
+    cli
+    mov ax,cs
+    cmp [es:2Fh*4+2],ax
+    jne .yield_restored                 ; preserve a hook installed after us
+    mov eax,[cs:vm_old2f]
+    mov [es:2Fh*4],eax
+.yield_restored:
+    sti
+    pop es
+    mov byte [vm_hooked2f],0
+    push cs
+    pop es
+    mov ax,[vm_idle_count]
+    mov di,vm_idle_code
+    call hex4
+    mov si,vm_idle_log
+    call log
+.yield_unhooked:
     cmp byte [vm_hooked],0
     je .unhooked
     push es
@@ -636,6 +684,20 @@ vm_irq0:
     pop ebx
     pop eax
     iret
+
+; In /B only, convert the DPMI idle notification to the monitored V86 HLT
+; callback. Keep other multiplex calls chained to the vector we replaced.
+vm_yield2f:
+    cmp ax,1680h
+    jne .chain
+    mov al,0                            ; DPMI 1.0: function supported
+    inc word [cs:vm_idle_count]
+    sti
+    hlt                                 ; profile 11 switches to a ready VM
+.return:
+    iret
+.chain:
+    jmp far [cs:vm_old2f]
 
 ; The program named by "/C [RUN] path ..." in the window's tail -> [program].
 ; CF=1 when there is none or it has no directory part.
@@ -987,9 +1049,11 @@ window_host db 0
 host_vcpi db 0
 vm_active db 0
 vm_devices db 0
+vm_background db 0
 vm_shared db 0
 vm_sched_bound db 0
 vm_hooked db 0
+vm_hooked2f db 0
 vm_no_session db 'DPMIRUN: this VM has no DOS window session.',13,10,0
 vm_begin_fail db '[DPMIRUN] VM BEGIN FAIL '
 vm_begin_step db 'I', ' '
@@ -1007,6 +1071,11 @@ vm_log_end db '[DPMIRUN] VM END',13,10,0
 vm_tsc dd 0
 vm_entry_linear dd 0
 vm_old08 dd 0
+vm_old2f dd 0
+vm_idle_count dw 0
+vm_idle_log db '[DPMIRUN] background yields '
+vm_idle_code db '0000',13,10,0
+    align 4
 vm_scratch dd 0,0
 vm_config:
     dd VM_VCFG_MAGIC

@@ -288,23 +288,21 @@ ui_inset:
     popad
     ret
 
-; Platinum title rails with a compact indigo/slate title tab. Inputs match
-; ui_rect; AL is the active/inactive title color. Geometry is unchanged and
-; the final 70 pixels remain clear for window controls. Registers preserved.
+; Platinum title rails with dynamic indigo/slate title tab. Inputs match
+; ui_rect; AL is the active/inactive title color.
 ui_title_rail:
     pushad
     mov ah,al
     mov al,7
     call ui_rect
-    cmp cx,260
+    cmp cx,140
     jb .plain
     push cx
-    mov cx,180
-    mov al,ah
-    call ui_rect
-    pop cx
-    add bx,188
-    sub cx,258
+    push bx
+    push dx
+    add bx,6
+    sub cx,80                       ; leave clear space for window controls
+    jbe .no_rail
     add dx,7
     mov bp,3
 .rail:
@@ -317,6 +315,10 @@ ui_title_rail:
     add dx,3
     dec bp
     jnz .rail
+.no_rail:
+    pop dx
+    pop bx
+    pop cx
     jmp .done
 .plain:
     mov al,ah
@@ -341,6 +343,7 @@ ui_title_text:
     mov [uit_y],dx
     mov [uit_max],cx
     mov [uit_source],si
+    mov [uit_color],al
     cmp al,1
     jne .inactive
     mov word [uit_attr],0x010F      ; bold paper text on the active rail
@@ -379,6 +382,7 @@ ui_title_text:
     add cx,ax
     jmp .measure
 .copy_full:
+    mov [uit_text_width],cx
     mov si,[uit_source]
     mov di,uit_buffer
     mov cx,63
@@ -437,10 +441,54 @@ ui_title_text:
     stosb
     stosb
     mov byte [di],0
+    mov ax,[uit_prefix_width]
+    add ax,[uit_dots]
+    mov [uit_text_width],ax
     jmp .draw
 .empty:
     mov byte [uit_buffer],0
+    mov word [uit_text_width],0
 .draw:
+    ; Draw dynamic title tab following the title text extent.
+    mov cx,[uit_text_width]
+    add cx,19                       ; 7px left padding + 12px right padding
+    cmp cx,96
+    jae .tab_min_ok
+    mov cx,96
+.tab_min_ok:
+    mov ax,[uit_max]
+    add ax,12
+    cmp cx,ax
+    jbe .tab_max_ok
+    mov cx,ax
+.tab_max_ok:
+    test cx,cx
+    jle .draw_text
+    mov bx,[uit_x]
+    sub bx,7
+    mov dx,[uit_y]
+    sub dx,4
+    mov si,25
+    mov al,[uit_color]
+    call ui_rect
+
+    ; Clear 6px spacer between tab and rails if there is still room before controls.
+    mov bx,[uit_x]
+    sub bx,7
+    add bx,cx                       ; bx = right edge of tab
+    mov ax,[uit_max]
+    add ax,12
+    sub ax,cx                       ; ax = remaining margin before controls
+    cmp ax,6
+    jb .draw_text
+    push cx
+    mov cx,6
+    mov si,25
+    mov al,7
+    call ui_rect
+    pop cx
+
+.draw_text:
     mov bx,[uit_x]
     mov dx,[uit_y]
     mov si,uit_buffer
@@ -631,4 +679,6 @@ uit_dots dw 0
 uit_prefix_max dw 0
 uit_prefix_width dw 0
 uit_length dw 0
+uit_color db 0
+uit_text_width dw 0
 uit_buffer times 64 db 0

@@ -419,7 +419,10 @@ ui_event:
     jz .right_desktop
     dec bx
     cmp bl,[ui_active_window]
+    jne .right_activate
+    cmp byte [app_desktop_focus],0
     je .right_raised
+.right_activate:
     push ax
     call ui_windows_raise
     pop ax
@@ -546,7 +549,10 @@ ui_event:
     jz .focus_ready
     dec bx
     cmp bl,[ui_active_window]
+    jne .activate_window
+    cmp byte [app_desktop_focus],0
     je .focus_ready
+.activate_window:
     call ui_windows_raise
     mov byte [ui_window_repaint],1
 .focus_ready:
@@ -1049,10 +1055,20 @@ ui_pointer_show:
     pushad
     push fs
     mov fs,[ui_assets_seg]
-    movzx edi,word [ui_mouse_y]
+    mov ax,[ui_mouse_y]
+    sub ax,[ui_cursor_hotspot_y]
+    jnc .hy_ok
+    xor ax,ax
+.hy_ok:
+    movzx edi,ax
     movzx eax,word [vc_pitch]
     imul edi,eax
-    movzx eax,word [ui_mouse_x]
+    mov ax,[ui_mouse_x]
+    sub ax,[ui_cursor_hotspot_x]
+    jnc .hx_ok
+    xor ax,ax
+.hx_ok:
+    movzx eax,ax
     movzx ecx,byte [vc_bytes]
     imul eax,ecx
     add edi,eax
@@ -1135,8 +1151,19 @@ ui_vga_pointer_show:
     mov ax, 0xA000
     mov es, ax
     mov ax, [ui_mouse_y]
+    sub ax, [ui_cursor_hotspot_y]
+    jnc .vhy_ok
+    xor ax, ax
+.vhy_ok:
+    push ax
     imul ax, 80
-    mov di, [ui_mouse_x]
+    mov bx, [ui_mouse_x]
+    sub bx, [ui_cursor_hotspot_x]
+    jnc .vhx_ok
+    xor bx, bx
+.vhx_ok:
+    push bx
+    mov di, bx
     shr di, 3
     add di, ax
     mov [ui_pointer_offset], di
@@ -1166,8 +1193,8 @@ ui_vga_pointer_show:
     inc ah
     cmp ah, 4
     jb .plane
-    mov bx, [ui_mouse_x]
-    mov dx, [ui_mouse_y]
+    pop bx
+    pop dx
     mov si, ui_pointer_black
     xor al, al
     call ui_pointer_shape
@@ -1243,3 +1270,97 @@ ui_pointer_linear dd 0
 ui_pointer_color db 0
 ui_pointer_black dw 0x8000,0xC000,0xE000,0xF000,0xF800,0xFC00,0xFE00,0xFF00,0xFF80,0xFFC0,0xFE00,0xEF00,0xCF00,0x8780,0x0780,0x0300
 ui_pointer_white dw 0,0,0x4000,0x6000,0x7000,0x7800,0x7C00,0x7E00,0x7F00,0x7C00,0x6C00,0x4600,0x0600,0x0300,0x0300,0
+ui_cursor_type db 0
+ui_cursor_scheme db 0
+ui_cursor_hotspot_x dw 0
+ui_cursor_hotspot_y dw 0
+ui_cursors_path db '\SYSTEM\UI\CURSORS.DAT',0
+
+ui_set_cursor_scheme:
+    pushad
+    push ds
+    push es
+    push cs
+    pop ds
+    cmp al,2
+    jbe .scheme_ok
+    xor al,al
+.scheme_ok:
+    mov [ui_cursor_scheme],al
+    mov ax,[ui_assets_seg]
+    test ax,ax
+    jz .done
+    mov dx,ui_cursors_path
+    mov ax,0x3D00
+    int 0x21
+    jc .done
+    mov bx,ax
+    movzx ax,byte [ui_cursor_scheme]
+    imul ax,214
+    add ax,28
+    xor cx,cx
+    mov dx,ax
+    mov ax,0x4200
+    int 0x21
+    jc .close
+    mov ds,[cs:ui_assets_seg]
+    mov dx,ui_cursor_table
+    mov cx,198
+    mov ah,0x3F
+    int 0x21
+.close:
+    push cs
+    pop ds
+    mov ah,0x3E
+    int 0x21
+    call ui_cursor_apply
+.done:
+    pop es
+    pop ds
+    popad
+    ret
+
+ui_cursor_apply:
+    pushad
+    push ds
+    push es
+    push cs
+    pop ds
+    mov ax,[ui_assets_seg]
+    test ax,ax
+    jz .done
+    mov al,[ui_pointer_visible]
+    push ax
+    test al,al
+    jz .not_vis
+    call ui_pointer_hide
+.not_vis:
+    mov ds,[ui_assets_seg]
+    push cs
+    pop es
+    movzx bx,byte [cs:ui_cursor_type]
+    imul bx,66
+    add bx,ui_cursor_table
+    mov si,bx
+    mov di,ui_pointer_black
+    mov cx,32
+    cld
+    rep movsw
+    lodsb
+    movzx ax,al
+    mov [cs:ui_cursor_hotspot_x],ax
+    lodsb
+    movzx ax,al
+    mov [cs:ui_cursor_hotspot_y],ax
+    push cs
+    pop ds
+    pop ax
+    test al,al
+    jz .done
+    call ui_pointer_show
+.done:
+    pop es
+    pop ds
+    popad
+    ret
+

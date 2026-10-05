@@ -923,12 +923,26 @@ echo "[build-full] injecting official system icons and credits to ::SYSTEM/UI"
 mtools_ensure_dir "$IMG" ::SYSTEM/UI
 python3 scripts/build_desktop_assets.py
 mcopy -o -i "$IMG" assets/desktop/DESKTOP.DAT ::SYSTEM/UI/DESKTOP.DAT
+python3 scripts/build_cursors.py
+mcopy -o -i "$IMG" assets/cursors/CURSORS.DAT ::SYSTEM/UI/CURSORS.DAT
+mcopy -o -i "$IMG" assets/cursors/README.md ::SYSTEM/UI/CURSORS.TXT
 # Desktop applications (Files, Notepad, Tasks): modules hosted by SHELL.COM.
 bash scripts/build_apps.sh build/full/obj/apps
 mtools_ensure_dir "$IMG" ::SYSTEM/APPS
 for app_module in build/full/obj/apps/*.APP; do
 	mcopy -o -i "$IMG" "$app_module" ::SYSTEM/APPS/
 done
+# User-mode web engines exceed the 16-bit CAPP segment and run in a
+# preemptible HDPMI worker. Keep its trust store and license notices packaged.
+CIUKIOS_WEBWORKER_OUT="$CIUKIOS_ROOT/build/full/obj/webworker" bash scripts/build_webworker.sh
+mcopy -o -i "$IMG" build/full/obj/webworker/WEBWORK.EXE ::SYSTEM/APPS/WEBWORK.EXE
+mtools_ensure_dir "$IMG" ::SYSTEM/WEB
+mcopy -o -i "$IMG" third_party/cacert/CACERT.PEM ::SYSTEM/WEB/CACERT.PEM
+mcopy -o -i "$IMG" third_party/cacert/README.md ::SYSTEM/WEB/CAINFO.TXT
+mcopy -o -i "$IMG" third_party/cacert/MPL-2.0.txt ::SYSTEM/WEB/CA-LIC.TXT
+mcopy -o -i "$IMG" third_party/bearssl/LICENSE.txt ::SYSTEM/WEB/BEARSSL.TXT
+mcopy -o -i "$IMG" third_party/jsvendor/LICENSE ::SYSTEM/WEB/MQUICKJS.TXT
+mcopy -o -i "$IMG" third_party/tjpgd/README.md ::SYSTEM/WEB/JPEG.TXT
 mcopy -o -i "$IMG" assets/icons/native/ICONS.DAT ::SYSTEM/UI/ICONS.DAT
 mcopy -o -i "$IMG" assets/icons/CREDITS.TXT ::SYSTEM/UI/CREDITS.TXT
 mcopy -o -i "$IMG" assets/icons/upstream/COPYING ::SYSTEM/UI/TANGO.TXT

@@ -13,7 +13,7 @@ older phase details and debugging notes.
 | M4: a VM per DOS window | Complete for the tested QEMU scope; DOOM and two text windows pass. | Fix Wolf4GW's mouse/close defect without regressing other VMs. |
 | M5: protected-mode concurrency | Open. | Multiple demanding DPMI workloads, independent lifecycle and bounded close. |
 | Native desktop apps | Display preview/revert/accept, About preference and Files wheel round-trip passed the final runtime profile. | Broader app regression, then installable third-party module manifest, loader and SDK. |
-| Network and browser | Native WebNet powers CiukWeb; DNS and HTTP rendering/reload passed in the tested QEMU/KVM NE2000 PCI NAT profile. | Broader adapter and physical-network qualification. HTTPS, IPv6, CSS, JavaScript and images are unsupported. |
+| CiukWeb and networking | WebNet HTML/image renderer plus bounded CSS, TLS 1.2 and mQuickJS JavaScript/DOM worker code; target build and host checks pass. | Runtime-qualify HTTPS certificate handling, CSS, scripts and combined pages; broaden adapter/physical-network coverage. This remains a limited browser, not IE-equivalent; Adam7 PNG and progressive JPEG are unsupported, and GIF renders its first frame. |
 | Graphics | VBE desktop, TinyGL software subset and resource-backed VirtIO-GPU 2D presentation; `virtio-gl` uses QEMU host OpenGL. Bounded ATI/NVIDIA IDs are recognized. | Reduce residual frame pacing delays; qualify named free apps and physical adapters/monitors. No guest 3D API is provided. |
 | Windows 95/98 | Registry groundwork and PE detection only. | Free PE probes running through loader and Win32 APIs. |
 | Release and hardware | The final scoped 0.8.3 Linux QEMU/KVM runtime gate passed. Broader regressions and physical-PC qualification remain. | Full bounded regressions, license audit and real-PC evidence. |
@@ -33,6 +33,16 @@ and two gaps above 42 ms, with zero host CPU-quota throttling. These are softwar
 pipeline intervals, not physical monitor FPS. QEMU runs on the host, not inside
 CiukiOS; wider workloads and physical PCs remain unqualified.
 
+The October 4 integration also changes About to show by default and repairs
+active-title refresh after focus returns, adds the bounded HTML/image renderer,
+and reduces the AC'97 queue from eight 1,024-frame buffers to eight 256-frame
+buffers (~46 ms at 44.1 kHz instead of ~186 ms). Focused Linux QEMU checks now
+cover the About preference across reset and title reactivation; the Doom PCM
+capture showed continued playback without new underruns after its initial
+diagnostic sample. Perceived host-speaker latency remains unqualified, as do
+browser HTTPS/CSS/JS runtime behavior. See the current
+[project status](docs/project-status-2026-10-04.md).
+
 ## Next milestones
 
 1. **Reduce residual frame pacing delays.** Investigate the measured long
@@ -45,9 +55,11 @@ CiukiOS; wider workloads and physical PCs remain unqualified.
 3. **Make native apps installable.** Freeze a C/OpenWatcom `.APP` contract,
    publish a small SDK and independently built sample, then add a module
    loader that does not require editing the system build.
-4. **Qualify CiukWeb networking.** Extend adapter and physical-network
-   qualification beyond the tested QEMU/KVM NE2000 PCI NAT profile. HTTPS,
-   IPv6, CSS, JavaScript and images are outside the current browser feature set.
+4. **Qualify CiukWeb.** Run bounded HTTPS certificate and page fixtures for
+   HTML, GET forms, CSS, classic JavaScript/DOM operations and XMS-backed
+   PNG/GIF/JPEG rendering, then extend adapter and physical-network coverage
+   beyond the tested QEMU/KVM NE2000 PCI NAT profile. TLS 1.3, IPv6, full CSS,
+   a complete DOM and IE equivalence remain outside the current feature set.
 5. **Approach Win32 in stages.** Run the free `HELLO.EXE` probe with a PE32
    loader and `KERNEL32`; then run `SETUP.EXE` with file and registry APIs.
    Add GUI, installer and game APIs only against named tests. Recognition of
@@ -63,7 +75,7 @@ CiukiOS; wider workloads and physical PCs remain unqualified.
 | 0–5 | Foundation, boot, native DOS runtime, DOS graphics, installer MVP, DOOM gameplay and kernel ownership: historical milestones closed within their original scope. |
 | 6 | DOS application compatibility: active; corpus and full-CD matrix incomplete. |
 | 7 | Legacy audio compatibility: groundwork and bounded games pass; broader external-app and real-hardware qualification open. |
-| 8 | Legacy networking: bounded packet/IPv4/FTP and native WebNet DNS/HTTP browser milestones passed in their recorded QEMU scopes; wider devices and physical networking remain open. |
+| 8 | Legacy networking: bounded packet/IPv4/FTP and native WebNet DNS/HTTP passed in their recorded QEMU scopes. Basic HTML/images and bounded CSS, TLS 1.2, and JavaScript worker code are implemented; end-to-end browser runtime gates, wider devices and physical networking remain open. |
 | 9 | Windows 3.1 workflow was removed from the current image; Windows 95/98 execution has not begun. |
 | 10 | Build/release discipline: active; the scoped 0.8.3 runtime gate passed, while broader compatibility and physical-PC qualification remain open. |
 
@@ -77,6 +89,9 @@ narrow workload pass does not imply general DOS or Windows compatibility.
   [current-image QEMU evidence](docs/validation/2026-10-01-native-app-gl/README.md).
 - [Native app and software OpenGL plan](docs/native-apps-and-opengl-2026-10-01.md).
 - [0.8.3 project status](docs/project-status-2026-10-04.md) for the current implementation/runtime boundary.
+- [About startup and focus behavior](docs/validation/2026-10-04-about-startup-focus.md),
+  [AC'97 queue latency](docs/validation/2026-10-04-ac97-audio-latency.md), and
+  [CiukWeb image decoder](docs/validation/2026-10-04-webimg-codec.md) design notes.
 - [Build and run guide](docs/build-and-run.md), [DOS compatibility matrix](docs/dos-compatibility-matrix-v0.1.md)
   and [legacy audio plan](docs/legacy-audio-bring-up-plan-v0.1.md).
 - [Archived detailed roadmap](docs/history/roadmap-through-2026-10-01.md)

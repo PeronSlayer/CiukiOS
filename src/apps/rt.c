@@ -25,8 +25,13 @@ void ui_hit(int x, int y, int w, int h, int id) { call5(5, x, y, w, h, "", id); 
 void ui_icon(int x, int y, int icon) { call5(6, x, y, 0, 0, "", icon); }
 int ui_measure(const char *s)
 {
+    return ui_measure_style(s, 0);
+}
+int ui_measure_style(const char *s, int style)
+{
     struct sargs a;
-    a.s = s;
+    a.x = a.y = a.w = a.h = a.v2 = a.v3 = 0;
+    a.s = s; a.v = style;
     return svc(7, &a);
 }
 void ui_repaint(void) { call5(8, 0, 0, 0, 0, "", 0); }
@@ -94,6 +99,12 @@ int app_display_mode(unsigned mode)
     a.x = a.y = a.w = a.h = 0; a.s = "";
     a.v = mode; a.v2 = a.v3 = 0;
     return svc(29, &a);
+}
+void ui_cursor(int type)
+{
+    struct sargs a;
+    a.x = a.y = a.w = a.h = a.v2 = a.v3 = 0; a.s = ""; a.v = type;
+    svc(30, &a);
 }
 static void fs_changed(void) { struct sargs a; a.s = ""; a.v = 1; svc(25, &a); }
 

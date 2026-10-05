@@ -94,6 +94,8 @@ virtual_dispatch:
     je .native_send
     cmp al, 0x07                 ; receive next frame ES:DI/CX capacity
     je .native_poll
+    cmp al, 0x08                 ; resident PCI NIC IRQ mask, no native claim
+    je .native_irq_mask
     mov dh, 11                   ; BAD_COMMAND
     jmp .failure
 .private_status:
@@ -122,6 +124,10 @@ virtual_dispatch:
 .private_counters:
     mov bx, [cs:rx_packets]
     mov cx, [cs:tx_packets]
+    jmp .success
+.native_irq_mask:
+    mov bx,0x4943
+    mov cx,[cs:network_irq_mask]
     jmp .success
 .native_claim:
     cmp byte [cs:client_active], 0
@@ -724,6 +730,7 @@ reply_peer_ip         times 4 db 0
 rx_buffer             times RX_BUFFER_SIZE db 0
 service_buffer        times RX_BUFFER_SIZE db 0
 
+network_irq_mask dw 0
 resident_end:
 
 ; ---------------------------------------------------------------------------
@@ -759,6 +766,7 @@ installer:
     mov ax, 0xFE01
     mov si, loaded_ip
     int VIRTUAL_INT
+    call register_network_owner
     mov dx, msg_reloaded
     call print_dollar
     mov ax, 0x4C00
@@ -816,6 +824,8 @@ installer:
     cmp cx, 6
     jne address_error
 
+    call register_network_owner
+
     mov ax, 0x3561
     int 0x21
     mov [old_virtual_vector], bx
@@ -846,6 +856,112 @@ installer:
     mov cl, 4
     shr dx, cl
     int 0x21
+
+; The resident network stack belongs to VM 0. A fork has private copies of
+; its ISR data, so it must never service this physical NIC. Read the firmware
+; IRQ assignment (all PCI buses), then give the VM manager the ownership mask.
+; It masks only these lines while another VM runs and restores them on VM 0.
+; This is transient installer code: no PCI/DOS work in the receive callback.
+register_network_owner:
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+    mov word [cs:network_irq_mask],0
+    mov word [cs:network_pci_index],0
+    mov ax,0xB101
+    call network_pci_call
+    cmp byte [cs:network_pci_failed],0
+    jne .register
+    cmp dword [cs:network_pci_dx],0x20494350
+    jne .register
+.next:
+    mov ax,0xB103
+    mov ecx,0x020000                 ; Ethernet controller class
+    mov si,[cs:network_pci_index]
+    call network_pci_call
+    cmp byte [cs:network_pci_failed],0
+    jne .register
+    mov bx,[cs:network_pci_bx]
+    mov di,0x3C                     ; Interrupt Line configuration register
+    mov ax,0xB108
+    call network_pci_call
+    cmp byte [cs:network_pci_failed],0
+    jne .advance
+    mov cx,[cs:network_pci_cx]
+    and cx,255
+    cmp cx,3
+    jb .advance
+    cmp cx,15
+    ja .advance
+    cmp cx,12                       ; physical mouse belongs to its broker
+    je .advance
+    mov ax,1
+    shl ax,cl
+    or [cs:network_irq_mask],ax
+.advance:
+    inc word [cs:network_pci_index]
+    cmp word [cs:network_pci_index],32
+    jb .next
+.register:
+    cmp word [cs:network_irq_mask],0
+    je .done
+    mov ax,0x1684
+    mov bx,0x4349
+    xor di,di
+    mov es,di
+    int 0x2F
+    mov ax,es
+    or ax,ax
+    jz .done                        ; real-mode / safe profile has no VMM
+    mov [cs:network_vmm_entry],di
+    mov [cs:network_vmm_entry+2],es
+    mov bx,[cs:network_irq_mask]
+    mov eax,0x50                    ; VMM_NET_IRQ: register VM 0 hardware
+    call far [cs:network_vmm_entry]
+    jc .failed
+    push cs
+    pop ds
+    mov dx,msg_network_owner
+    call print_dollar
+    jmp .done
+.failed:
+    push cs
+    pop ds
+    mov dx,msg_network_owner_failed
+    call print_dollar
+.done:
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    ret
+
+network_pci_call:
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+    mov byte [cs:network_pci_failed],1
+    stc
+    int 0x1A
+    jc .done
+    test ah,ah
+    jnz .done
+    mov [cs:network_pci_bx],bx
+    mov [cs:network_pci_cx],ecx
+    mov [cs:network_pci_dx],edx
+    mov byte [cs:network_pci_failed],0
+.done:
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popad
+    ret
 
 config_error:
     mov dx, msg_config_error
@@ -1172,6 +1288,8 @@ print_char:
     ret
 
 msg_installed db 'NETSTART: ICMP resident active; mTCP Packet Driver is INT 61h', 13, 10, '$'
+msg_network_owner db 'NETSTART: NIC interrupts owned by the desktop VM',13,10,'$'
+msg_network_owner_failed db 'NETSTART: VM manager rejected NIC interrupt ownership',13,10,'$'
 print_ptr dw 0
 print_char_byte db 0
 msg_reloaded db 'ICMPD: resident IPv4 address reloaded from MTCP.CFG', 13, 10, '$'
@@ -1189,6 +1307,12 @@ ne2000_path db 'C:\NET\NE2000.COM', 0
 ne2000_tail db 13, ' 0X60 3 0X300', 0x0D
 exec_block times 14 db 0
 loaded_ip times 4 db 0
+network_pci_index dw 0
+network_pci_bx dw 0
+network_pci_cx dd 0
+network_pci_dx dd 0
+network_pci_failed db 0
+network_vmm_entry dw 0,0
 CONFIG_BUFFER_SIZE equ 4096
 config_buffer times CONFIG_BUFFER_SIZE db 0
 installer_stack times 512 db 0

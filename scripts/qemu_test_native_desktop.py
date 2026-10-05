@@ -69,7 +69,13 @@ class DesktopVM(SetupVM):
         self.pointer()  # A banked full repaint must complete before the next action.
 
     def _pointer(self):
-        pixels = np.array(Image.open(self.shot('pointer')))
+        for _attempt in range(5):
+            try:
+                pixels = np.array(Image.open(self.shot('pointer')))
+                break
+            except Exception:
+                if _attempt == 4: raise
+                time.sleep(.05)
         palettes=[getattr(self,'cursor_colors',((48,61,73),(247,247,239))),
                   ((48,61,73),(247,247,239)),
                   ((36,40,48),(246,246,242)),
@@ -272,7 +278,7 @@ def main():
         try:vm.library_rect()
         except AssertionError:pass
         else:raise AssertionError('minimize did not hide the library')
-        vm.click_at(160,boot_size[1]-19)
+        vm.click_at(75,boot_size[1]-19)
         assert vm.library_rect()==(wx,wy,ww)
         vm.click_at(wx+ww-40,wy+15)
         assert vm.library_rect()==(8,34,boot_size[0]-16),'maximize did not resize'

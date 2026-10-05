@@ -446,11 +446,21 @@ case "${QEMU_NETWORK_MODE:-auto}" in
   *) echo "[qemu-run-full-cd] ERROR: invalid QEMU_NETWORK_MODE" >&2; exit 1 ;;
 esac
 
+# A caller that supplies its own virtio-rng-pci device can configure that
+# device/backend through QEMU_EXTRA_ARGS; otherwise use the legacy PCI
+# transport required by the DOS/4GW worker. QEMU's built-in entropy backend
+# is the default and needs no persistent seed file.
+QEMU_RNG_ARGS=(-device "virtio-rng-pci,disable-modern=on,disable-legacy=off")
+if [[ "${QEMU_EXTRA_ARGS:-}" == *virtio-rng-pci* ]]; then
+  QEMU_RNG_ARGS=()
+fi
+
 BASE_ARGS=(
   "${QEMU_ACCEL_ARGS[@]}"
   -machine "$QEMU_MACHINE_ARG"
   -cpu "$QEMU_CPU_MODEL"
   -m "$QEMU_MEMORY_MB"
+  "${QEMU_RNG_ARGS[@]}"
   -drive "file=$IMG,format=raw,if=ide,index=2,media=cdrom,readonly=on"
   -boot d
   "${QEMU_NETWORK_ARGS[@]}"
