@@ -223,10 +223,10 @@ network_entry dw 0,0
 network_ready db 'VMSTART: NIC interrupts owned by the desktop VM.',13,10,0
 network_failed db 'VMSTART: cannot bind the network interrupt owner.',13,10,0
 %ifdef VMSTART_JEMMEX
-default_options db 'NOEMS X=A000-CCFF I=CD00-EBFF X=EC00-FFFF NOVME',0
+default_options db 'NOEMS X=A000-CCFF I=CD00-E7FF X=E800-FFFF NOVME',0
 jemm_path db '\VM\JEMMEX.EXE',0
 %else
-default_options db 'NOEMS NOHI X=A000-CCFF I=CD00-EBFF X=EC00-FFFF NODYN MAX=32M MIN=32M NOVME',0
+default_options db 'NOEMS NOHI X=A000-CCFF I=CD00-E7FF X=E800-FFFF NODYN MAX=32M MIN=32M NOVME',0
 jemm_path db '\VM\JEMM386.EXE',0
 %endif
 jload_path db '\VM\JLOAD.EXE',0

@@ -101,7 +101,7 @@ def main():
     parser.add_argument('--profile', type=int, default=0, help='register samples for a CPU profile')
     parser.add_argument('--stop-on', default=None, help='freeze on this serial text and dump RAM (debug)')
     parser.add_argument('--jemm-options',
-                        default='NOEMS NOHI X=A000-CCFF I=CD00-EBFF X=EC00-FFFF NODYN MAX=32M MIN=32M NOVME')
+                        default='NOEMS NOHI X=A000-CCFF I=CD00-E7FF X=E800-FFFF NODYN MAX=32M MIN=32M NOVME')
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
