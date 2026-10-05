@@ -2,9 +2,9 @@
 
 `bash scripts/build_full.sh` refreshes
 `build/releases/CiukiOS-0.8.3-Windows-portable.zip` after building the
-canonical FAT16 image. The ZIP contains `Start-CiukiOS.cmd`, `CiukiOS.img`,
-64-bit Windows QEMU, firmware, DLLs, and license notices. It can also be
-regenerated without rebuilding the image:
+canonical FAT16 image. The ZIP contains `Start-CiukiOS.cmd`, `Start-CiukiOS-VGA.cmd`,
+`Start-CiukiOS-VirtIO.cmd`, `CiukiOS.img`, 64-bit Windows QEMU, firmware, DLLs,
+and license notices. It can also be regenerated without rebuilding the image:
 
 ```bash
 python3 scripts/package_windows_portable.py

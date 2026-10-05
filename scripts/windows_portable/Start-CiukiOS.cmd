@@ -5,14 +5,26 @@ set "QEMU=%ROOT%qemu\qemu-system-i386w.exe"
 set "DISK=%ROOT%CiukiOS.img"
 if not exist "%QEMU%" goto missing
 if not exist "%DISK%" goto missing
-pushd "%ROOT%qemu"
-"%QEMU%" -L "%ROOT%qemu\share" -name CiukiOS -machine pc,vmport=off,i8042=on,pcspk-audiodev=snd0 -cpu pentium3 -m 256 -device "virtio-rng-pci,disable-modern=on,disable-legacy=off" -drive "file=%DISK%,format=raw,if=ide" -boot c -vga none -device "VGA,xres=1280,yres=800" -display "gtk,gl=off,zoom-to-fit=on,show-menubar=off,window-close=on" -audiodev "dsound,id=snd0" -device "sb16,iobase=0x220,irq=7,dma=1,dma16=5,audiodev=snd0" -device "adlib,audiodev=snd0" -netdev "user,id=ciuknet0" -device "ne2k_isa,netdev=ciuknet0,irq=3,iobase=0x300,mac=52:54:00:12:34:56" -no-reboot
-set "RC=%ERRORLEVEL%"
-popd
-if "%RC%"=="0" exit /b 0
-echo CiukiOS or QEMU exited with error %RC%.
-pause
-exit /b %RC%
+
+echo ========================================================
+echo                  CiukiOS Portable Launcher
+echo ========================================================
+echo  [1] Failsafe Standard VGA  (Universal compatibility)
+echo  [2] VirtIO-GPU             (Direct 2D presentation)
+echo ========================================================
+echo.
+choice /C 12 /N /T 5 /D 1 /M "Select display mode [1=VGA, 2=VirtIO] (default 1 in 5s): "
+if errorlevel 2 goto run_virtio
+goto run_vga
+
+:run_virtio
+call "%ROOT%Start-CiukiOS-VirtIO.cmd"
+exit /b %ERRORLEVEL%
+
+:run_vga
+call "%ROOT%Start-CiukiOS-VGA.cmd"
+exit /b %ERRORLEVEL%
+
 :missing
 echo CiukiOS.img or qemu\qemu-system-i386w.exe is missing.
 echo Extract the entire ZIP before starting CiukiOS.

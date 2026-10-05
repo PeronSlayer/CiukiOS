@@ -203,10 +203,10 @@ def main() -> None:
             def add(source: Path, destination: str) -> None:
                 archive.write(source, f"{NAME}/{destination}")
 
-            add(clean_image, "CiukiOS.img")
-            launcher = (ROOT / "scripts/windows_portable/Start-CiukiOS.cmd").read_bytes()
-            archive.writestr(f"{NAME}/Start-CiukiOS.cmd",
-                             launcher.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+            for cmd_name in ("Start-CiukiOS.cmd", "Start-CiukiOS-VGA.cmd", "Start-CiukiOS-VirtIO.cmd"):
+                cmd_content = (ROOT / "scripts/windows_portable" / cmd_name).read_bytes()
+                archive.writestr(f"{NAME}/{cmd_name}",
+                                 cmd_content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
             add(ROOT / "scripts/windows_portable/README.txt", "README.txt")
             add(ROOT / "LICENSE", "LICENSE.txt")
             add(ROOT / "assets/icons/README.md", "ICON-NOTICES.txt")

@@ -12,7 +12,7 @@ the dog in the boot splash. Its identity uses the owner's
 
 ![CiukiOS 0.8.3 desktop](docs/screenshots/0.8.3/desktop.png)
 
-[Build and run](docs/build-and-run.md) · [Current status](docs/project-status-2026-10-04.md) · [Changelog](CHANGELOG.md) · [Roadmap](Roadmap.md)
+[Releases](docs/windows-portable-release.md) · [Current status](docs/project-status-2026-10-04.md) · [Changelog](CHANGELOG.md) · [Roadmap](Roadmap.md)
 
 ## A look inside
 
@@ -60,29 +60,11 @@ These are actual Linux QEMU captures. [Capture details and validation limits](do
 - **Development:** native C/OpenWatcom `.APP` modules, DOS/4GW and a TinyGL
   software library. General Win32 applications are not supported.
 
-## Run it
+## Releases and execution
 
-Build and launch the full HDD image on Linux:
-
-```bash
-bash scripts/build_run_full.sh
-```
-
-For native VirtIO presentation through the host GL backend, after building:
-
-```bash
-QEMU_VIDEO_DEVICE=virtio-gl bash scripts/qemu_run_full.sh --no-build
-```
-
-Builds and QEMU run sequentially with host memory caps. See the
-[requirements and safe workflow](docs/build-and-run.md). Commercial game data
-is optional local test material and is excluded from releases.
-
-The full build also produces a [portable Windows ZIP](docs/windows-portable-release.md).
-The local push hook publishes a dated GitHub prerelease; no GitHub Actions
-are used. ZIP integrity is checked on Linux; the launcher remains untested
-on Windows. VirtIO presentation does not turn DOS Doom's software renderer
-into an accelerated 3D renderer.
+Pre-packaged releases including the [portable Windows ZIP](docs/windows-portable-release.md) provide standalone emulation with pinned QEMU, offering both failsafe standard VGA and VirtIO-GPU launch modes.
+Dated prereleases are published directly on GitHub Releases.
+VirtIO presentation does not turn DOS Doom's software renderer into an accelerated 3D renderer. Commercial game data is optional local test material and is excluded from releases.
 
 ## Project and license
 
