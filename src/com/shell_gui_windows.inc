@@ -429,21 +429,20 @@ ui_windows_title_color:
 ui_windows_taskbar:
     pushad
     xor cx,cx
-    xor bp,bp
+    mov bp,1
 .count:
-    movzx si,byte [ds:ui_task_windows+bp]
-    cmp byte [ui_window_flags+si],0
+    cmp byte [ui_window_flags+bp],0
     je .skip_count
-    cmp byte [ui_window_flags+si],3      ; hidden: no button
+    cmp byte [ui_window_flags+bp],3      ; hidden: no button
     je .skip_count
     inc cx
 .skip_count:
     inc bp
-    cmp bp,UI_TASK_COUNT
+    cmp bp,UI_WINDOW_COUNT
     jb .count
     jcxz .done
     mov ax,[ui_width]
-    sub ax,343
+    sub ax,188
     xor dx,dx
     div cx
     cmp ax,76
@@ -453,19 +452,18 @@ ui_windows_taskbar:
     mov [ui_task_button_width],ax
     mov dx,[ui_height]
     sub dx,28
-    mov bx,159
-    xor bp,bp
+    mov bx,5
+    mov bp,1
 .next:
-    movzx si,byte [ds:ui_task_windows+bp]
-    cmp byte [ui_window_flags+si],0
+    cmp byte [ui_window_flags+bp],0
     je .advance
-    cmp byte [ui_window_flags+si],3
+    cmp byte [ui_window_flags+bp],3
     je .advance
-    mov ax,si
+    mov ax,bp
     add ax,200
     mov di,bp
     shl di,1
-    mov di,[ui_task_labels+di]
+    mov di,[ui_window_titles+di]
     mov cx,[ui_task_button_width]
     sub cx,4
     mov si,24
@@ -473,7 +471,7 @@ ui_windows_taskbar:
     add bx,[ui_task_button_width]
 .advance:
     inc bp
-    cmp bp,UI_TASK_COUNT
+    cmp bp,UI_WINDOW_COUNT
     jb .next
 .done:
     popad

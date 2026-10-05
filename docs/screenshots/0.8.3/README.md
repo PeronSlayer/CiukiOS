@@ -1,7 +1,7 @@
 # CiukiOS 0.8.3 screenshots
 
 Actual Linux QEMU/KVM captures from the bounded release runs on 4 October
-2026: 800×600 desktop (About updated at 1280×800 after the startup correction), VirtIO GPU 2D with QEMU SDL/OpenGL, one virtual CPU and
+2026: 1280×800 desktop, VirtIO GPU 2D with QEMU SDL/OpenGL, one virtual CPU and
 256 MiB guest RAM. Captured only the VM client window through the host compositor;
 no artwork, screens or responses were generated or substituted.
 

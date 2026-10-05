@@ -1099,9 +1099,6 @@ ui_draw_topbar_visuals:
     mov dx,2
     call ciuki_logo24
     U_TEXT 33,6,ut_brand,0,1
-    mov bx,[ui_width]
-    sub bx,72
-    U_BUTTON bx,3,66,23,ut_dos,3
     ret
 ui_draw_scene:
     mov word [ui_hit_count],0
@@ -1213,7 +1210,7 @@ ui_draw_scene:
     U_RECT 0,dx,[ui_width],32,7
     U_RECT 0,dx,[ui_width],1,15
     add dx,4
-    U_BUTTON 5,dx,147,24,ut_library,1
+    mov bx,5
     call ui_windows_taskbar
     mov bx,[ui_width]
     sub bx,183

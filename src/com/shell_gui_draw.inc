@@ -353,6 +353,12 @@ ui_title_text:
 .font:
     mov ax,[ui_assets_seg]
     mov fs,ax
+    mov ax,UI_ASSET_FONT
+    cmp byte [uit_attr+1],0
+    je .save_ptr
+    add ax,UI_FONT_BYTES
+.save_ptr:
+    mov [uit_font_ptr],ax
     test word [uit_max],0x8000
     jnz .empty
     cmp word [uit_max],16
@@ -378,7 +384,8 @@ ui_title_text:
     add ax,16
     cmp ax,[uit_max]
     ja .truncate
-    movzx ax,byte [fs:UI_ASSET_FONT+bp]
+    add bp,[uit_font_ptr]
+    movzx ax,byte [fs:bp]
     add cx,ax
     jmp .measure
 .copy_full:
@@ -396,7 +403,9 @@ ui_title_text:
     jmp .draw
 
 .truncate:
-    movzx ax,byte [fs:UI_ASSET_FONT+14] ; proportional width of '.'
+    mov bp,[uit_font_ptr]
+    add bp,14
+    movzx ax,byte [fs:bp] ; proportional width of '.'
     imul ax,3
     mov [uit_dots],ax
     mov ax,[uit_max]
@@ -422,7 +431,8 @@ ui_title_text:
     push ax
     movzx bp,al
     sub bp,32
-    movzx ax,byte [fs:UI_ASSET_FONT+bp]
+    add bp,[uit_font_ptr]
+    movzx ax,byte [fs:bp]
     add [uit_prefix_width],ax
     mov ax,[uit_prefix_width]
     cmp ax,[uit_prefix_max]
@@ -675,6 +685,7 @@ uit_y dw 0
 uit_max dw 0
 uit_source dw 0
 uit_attr dw 0
+uit_font_ptr dw 0
 uit_dots dw 0
 uit_prefix_max dw 0
 uit_prefix_width dw 0

@@ -681,7 +681,7 @@ static void parse_begin(void)
     if(!bucket_seg){dos_close(source);source=-1;loading=0;error("Not enough conventional memory for page layout.");return;}
     for(i=0;i<2001;++i)bucket[i]=0;nodes=link_count=field_count=form_count=0;
     for(i=0;i<image_count;++i)images[i].x=65535u;
-    cached_width=HOST.w;left_margin=0;right_margin=HOST.w-50;lx=ly=0;line_height=18;doc_height=0;
+    cached_width=HOST.w;left_margin=0;right_margin=HOST.w-66;lx=ly=0;line_height=18;doc_height=0;
     style=C_INK;active_link=preformatted=table=partial=table_scans=0;current_bg=255;
     css_depth=css_hidden=0;current_form=-1;
     input_at=input_len=parse_state=tag_len=quote=word_len=skip=skip_match=parse_title=title_len=0;
@@ -915,7 +915,7 @@ static void fit(int x,int y,int width,const char *s,int color)
 static void paint(void)
 {
     int x=HOST.x+4,y=HOST.y+TITLE_H,w=HOST.w-8,h=HOST.h-TITLE_H-4;
-    int px=x+10,py=y+40,pw=w-20,ph=h-70,i,b,first,last,paint_top,paint_bottom;
+    int px=x+10,py=y+40,pw=w-36,ph=h-70,i,b,first,last,paint_top,paint_bottom;
     int ax=x+208,ay=y+6,aw=w-258,ah=26,sby=y+h-24,tx,badge_w;
     u16 at;char address[128];u8 band[19];
     if(cached_width&&cached_width!=HOST.w&&!loading&&page_url[0]){relayout=1;parse_begin();}
@@ -943,7 +943,8 @@ static void paint(void)
         str_ncopy(prefix,address,minimum(count+1,128));
         ui_text(tx+ui_measure(prefix),ay+6,"|",C_BLUE);
     }
-    ui_inset(x+6,y+36,w-12,h-64);ui_rect(x+7,y+37,w-14,h-66,C_PAPER);
+    ui_inset(x+6,y+36,w-28,h-64);ui_rect(x+7,y+37,w-30,h-66,C_PAPER);
+    draw_scroll(x+w-22,y+36,h-64,scroll,doc_height,ph);
     for(i=0;i<image_count;++i){
         struct picture *p=&images[i];int iy=py+p->y-scroll;
         if(p->x==65535u||iy+p->h<=py||iy>=py+ph)continue;
@@ -1121,11 +1122,21 @@ int app_event(int ev,int a,int b,int c)
             }else ui_cursor(CURSOR_ARROW);
             return 0;
         }
+        if(a==MOUSE_DOWN||a==MOUSE_MOVE){
+            int sx=HOST.x+b,sy=HOST.y+TITLE_H+c,scroll_x=HOST.x+HOST.w-22,scroll_y=HOST.y+TITLE_H+36,scroll_h=HOST.h-TITLE_H-68;
+            if(sx>=scroll_x&&sx<scroll_x+16&&sy>=scroll_y&&sy<scroll_y+scroll_h){
+                long p=scroll_hit(scroll_x,scroll_y,scroll_h,sy,doc_height,HOST.h-TITLE_H-70);
+                if(p==-1){scroll-=60;if(scroll<0)scroll=0;}
+                else if(p==-2){scroll+=60;if(scroll>doc_height)scroll=doc_height;}
+                else if(p>=16)scroll=p-16;
+                return 1;
+            }
+        }
         if(a==MOUSE_DOWN){
             int i;u16 at;
         if(c>=6&&c<33&&b>=212&&b<HOST.w-54){focused=1;field_focus=-1;caret=str_len(url);return 1;}
         focused=0;field_focus=-1;
-        if(c>=38&&c<HOST.h-TITLE_H-26){
+        if(c>=38&&c<HOST.h-TITLE_H-26&&b<HOST.w-28){
             int x=b-14,y=c-40+scroll;
             for(i=0;i<field_count;++i)if(fields[i].type!=1&&x>=fields[i].x&&x<fields[i].x+fields[i].w&&y>=fields[i].y&&y<fields[i].y+24){
                 field_focus=i;if(fields[i].type==2)fields[i].checked=!fields[i].checked;

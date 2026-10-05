@@ -21,9 +21,9 @@ static char status_line[96];
 static unsigned click_tick;
 
 /* ---- Applications ---- */
-static char winbuf[13 * 25];
+static char winbuf[32 * 25];
 static int nwin;
-static int app_ids[13];
+static int app_ids[32];
 static void load_windows(void)
 {
     int n = app_windows(winbuf), i;
