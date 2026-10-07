@@ -17,6 +17,7 @@ global app_entry
 global intr_
 global svc_
 global far_call_req_
+global far_call_req_far_
 global far_regs_
 global cpu_vendor_
 global __U4M
@@ -230,6 +231,30 @@ far_call_req_:
     push ds
     pop es
     mov di,bx
+    call far [cs:fcr_target]
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; void far_call_req_far(u16 seg, u16 off, u16 req_seg, u16 req_off):
+; far-request variant for packets allocated outside the module's DGROUP.
+far_call_req_far_:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [cs:fcr_target],dx
+    mov [cs:fcr_target+2],ax
+    mov es,bx
+    mov di,cx
     call far [cs:fcr_target]
     pop es
     pop bp

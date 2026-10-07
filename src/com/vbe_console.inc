@@ -65,15 +65,18 @@ vc_load_profile:
 .named_profile:
     cmp dword [vc_profile], 'AUTO'
     je .automatic
+    mov ax,640
+    mov dx,480
     cmp dword [vc_profile], '0640'
-    je .vga
+    je .resolve
+    mov ax,800
+    mov dx,600
     cmp dword [vc_profile], '0800'
-    je .svga
+    je .resolve
+    mov ax,1024
+    mov dx,768
     cmp dword [vc_profile], '1024'
-    jne .large
-    mov word [vc_mode], 0x105
-    jmp .done
-.large:
+    je .resolve
     mov ax,1280
     mov dx,1024
     cmp dword [vc_profile],'1280'
@@ -93,15 +96,10 @@ vc_load_profile:
     mov ax,2560
     mov dx,1440
     cmp dword [vc_profile],'2560'
-    jne .done
+    je .resolve
+    jmp .done
 .resolve:
     call vc_resolve_mode
-    jmp .done
-.svga:
-    mov word [vc_mode], 0x103
-    jmp .done
-.vga:
-    mov word [vc_mode], 0x101
     jmp .done
 .automatic:
     call vc_auto
@@ -247,7 +245,7 @@ vc_begin:
     jne .fail
 .mode_set:
     ; A successful set alone does not establish the framebuffer geometry.
-    ; Reject a BIOS that kept another mode, and use its active scanline pitch.
+    ; VBE 2.0/3.0 Function 4F03h D14 reports the active access model.
     mov ax,0x4F03
     call vc_bios
     cmp ax,0x004F
@@ -256,25 +254,30 @@ vc_begin:
     mov dx,ax
     shr dx,14
     and dl,1
-    cmp dl,[vc_lfb]          ; 4F03 D14 reports the actual access model
+    cmp dl,[vc_lfb]
     jne .fail
     and ax,0x3FFF
     cmp ax,[vc_mode]
     jne .fail
+    mov ax,[vc_info+20]
+    mov [vc_scan_lines],ax
+    ; Broken firmware may omit 4F06: retain the checked mode-info pitch and
+    ; only one visible frame's scanlines, preventing unverified page flips.
     mov ax,0x4F06
     mov bx,1
     call vc_bios
     cmp ax,0x004F
-    jne .fail
+    jne .skip_4f06
     mov ax,[vc_bios_cx]
     cmp ax,[vc_info+18]
-    jb .fail
+    jb .skip_4f06
     mov ax,[vc_bios_dx]
     cmp ax,[vc_info+20]
-    jb .fail
+    jb .skip_4f06
     mov [vc_scan_lines],ax
     mov ax,[vc_bios_bx]
     mov [vc_info+16],ax
+.skip_4f06:
     call vc_validate_active
     jc .fail
     mov al,[cs:vc_bank_ok]
@@ -284,13 +287,12 @@ vc_begin:
 .access_checked:
     cmp al,1
     jne .fail
+    ; A freshly cleared mode starts at page zero even if 4F07 is unavailable.
     mov ax,0x4F07
     xor bx,bx
     xor cx,cx
     xor dx,dx
     call vc_bios
-    cmp ax,0x004F
-    jne .fail
     mov byte [cs:vc_active], 1
     call vc_batch_reset
     mov word [cs:vc_bank], 0xFFFF

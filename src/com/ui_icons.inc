@@ -1,7 +1,7 @@
 ; Official Tango/Ciuki system sprites. Source attribution and deterministic
 ; conversion are recorded in assets/icons/. No disk access occurs in paint.
 ; Allocate for each desktop video session, then release before DOS/EXEC.
-UI_ICONS_COUNT equ 36
+UI_ICONS_COUNT equ 38
 UI_ICONS_SIZE equ 32
 UI_ICONS_BYTES equ (16 + UI_ICONS_COUNT * UI_ICONS_SIZE * UI_ICONS_SIZE)
 
@@ -182,6 +182,98 @@ ui_icons_draw:
 .next_row:
     inc word [bp-6]
     cmp word [bp-6],UI_ICONS_SIZE
+    jb .row
+    mov sp,bp
+    pop bp
+.done:
+    pop fs
+    popad
+    popfd
+    ret
+
+; Draw a 16x16 icon downsampled 2:1 from the 32x32 sprite.
+; AL = icon ID (0..UI_ICONS_COUNT-1), BX = X, DX = Y.
+ui_icons_draw_16:
+    pushfd
+    pushad
+    push fs
+    cmp al,UI_ICONS_COUNT
+    jae .done
+    movzx di,al
+    shl di,10                   ; 1024 bytes per 32x32 icon
+    add di,16                   ; skip 16-byte header
+    mov ax,[ui_icons_seg]
+    test ax,ax
+    jz .done
+    mov fs,ax
+    push bp
+    mov bp,sp
+    sub sp,8
+    mov [bp-2],bx               ; base X
+    mov [bp-4],dx               ; base Y
+    mov word [bp-6],0           ; row 0..15
+.row:
+    cmp byte [ui_composing],1
+    jne short .row_visible
+    mov ax,[bp-4]
+    add ax,[bp-6]
+    cmp ax,[ui_comp_top]
+    jl short .skip_row
+    cmp ax,[ui_comp_bottom]
+    jge short .skip_row
+.row_visible:
+    mov si,[bp-6]
+    shl si,6                    ; r * 64 = (r * 2) * 32
+    add si,di                   ; fs:si = start of source row in sprite
+    mov word [bp-8],0           ; col 0..15
+.pixel:
+    mov bx,[bp-8]
+    cmp bx,16
+    jae short .next_row
+    shl bx,1                    ; c * 2
+    mov al,[fs:si+bx]           ; source pixel
+    cmp al,255                  ; transparent
+    je short .skip_pixel
+    mov cx,1                    ; run length
+.merge:
+    mov dx,[bp-8]
+    add dx,cx
+    cmp dx,16
+    jae short .span
+    mov bx,dx
+    shl bx,1
+    cmp al,[fs:si+bx]
+    jne short .span
+    inc cx
+    jmp short .merge
+.span:
+    push di
+    push si
+    cmp byte [ui_vbe],1
+    je short .colour_ready
+    cmp al,16
+    jb short .colour_ready
+    movzx bx,al
+    sub bx,16
+    mov al,[ui_icons_fallback+bx]
+.colour_ready:
+    mov bx,[bp-8]
+    add bx,[bp-2]
+    mov dx,[bp-6]
+    add dx,[bp-4]
+    mov si,1
+    call ui_rect
+    pop si
+    pop di
+    add [bp-8],cx
+    jmp short .pixel
+.skip_pixel:
+    inc word [bp-8]
+    jmp short .pixel
+.skip_row:
+.next_row:
+    inc word [bp-6]
+    cmp word [bp-6],16
     jb .row
     mov sp,bp
     pop bp

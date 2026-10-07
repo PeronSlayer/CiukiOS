@@ -473,129 +473,6 @@ static void message(const char *title, const char *text)
 }
 
 /* ------------------------------------------------------------------ */
-/* Appearance                                                          */
-struct scheme { const char *name; u8 c[8][3]; };  /* ink, title, desktop, face, shadow, light, paper, blue */
-static const struct scheme schemes[] = {
-    { "CiukiOS Classic", { {9,10,12}, {13,18,30}, {13,23,24}, {51,52,53}, {28,30,34}, {39,49,48}, {61,61,60}, {27,36,48} } },
-    { "Ocean", { {5,8,14}, {6,22,40}, {8,26,38}, {48,52,56}, {26,31,38}, {36,48,56}, {60,62,63}, {12,30,52} } },
-    { "Rose", { {14,8,10}, {38,14,24}, {40,24,30}, {54,50,51}, {33,28,30}, {56,44,48}, {63,61,61}, {44,20,34} } },
-    { "Slate", { {8,9,11}, {22,26,32}, {20,23,28}, {46,47,49}, {26,27,30}, {38,40,43}, {60,60,60}, {30,34,42} } },
-    { "Forest", { {7,11,8}, {12,28,16}, {14,26,18}, {49,52,47}, {27,31,27}, {40,48,38}, {60,62,58}, {18,36,26} } },
-    { "Desert", { {14,10,6}, {40,24,10}, {44,34,22}, {56,52,44}, {36,31,24}, {58,50,36}, {63,62,57}, {42,30,16} } },
-    { "Lilac", { {10,8,14}, {28,18,42}, {30,26,40}, {52,50,55}, {30,28,34}, {46,42,54}, {62,61,63}, {34,26,50} } },
-    { "High Contrast", { {0,0,0}, {0,0,40}, {0,0,0}, {48,48,48}, {16,16,16}, {56,56,56}, {63,63,63}, {0,0,52} } } };
-#define NSCHEMES 8
-static const u8 slots[8] = { 0, 1, 3, 7, 8, 11, 15, 9 };      /* palette entries */
-/* Desktop colours: the default, then colours of the palette (a swatch
- * shows exactly the colour it gives). */
-static const u8 swatch_entry[8] = { 3, 9, 2, 12, 8, 13, 6, 1 };
-static struct list ap_list;
-static u8 ap_palette[48];
-static int ap_icons_at;
-static const char *icon_names[8] = { "&Computer", "&Programs", "&Recycle Bin", "Control &Panel",
-                                     "&DOS Prompt", "&Floppy", "&USB drive", "CD-R&OM" };
-static void appearance_open(void)
-{
-    int i, k = P_APPEARANCE;
-    cfg_load(&cfg);
-    mem_copy(&saved_cfg, &cfg, sizeof cfg);
-    mem_copy(ap_palette, cfg.palette, 48);
-    an[k] = 0;
-    ap_list.x = 0; ap_list.y = 22; ap_list.w = 200; ap_list.rows = 8; ap_list.top = 0; ap_list.count = NSCHEMES;
-    ap_list.sel = -1;
-    for (i = 0; i < NSCHEMES; i++) {
-        int s, match = 1;
-        for (s = 0; s < 8 && match; s++)
-            if (s != 2 && (ap_palette[slots[s] * 3] != schemes[i].c[s][0] || ap_palette[slots[s] * 3 + 1] != schemes[i].c[s][1] ||
-                ap_palette[slots[s] * 3 + 2] != schemes[i].c[s][2])) match = 0;
-        if (match) { ap_list.sel = i; break; }
-    }
-    add(k, DC_LABEL, 0, 0, 0, 16, "Colour &scheme:", 0);
-    add(k, DC_LABEL, 220, 0, 0, 16, "Desktop colour:", 0);
-    add(k, DC_LABEL, 220, 92, 0, 16, "Preview:", 0);
-    add(k, DC_GROUP, 0, 186, 452, 92, "Desktop icons", 0);
-    ap_icons_at = an[k];
-    for (i = 0; i < 8; i++) {
-        struct dctl *c = add(k, DC_CHECK, 12 + (i % 4) * 110, 210 + (i / 4) * 26, 0, 17, icon_names[i], 0);
-        c->value = !(cfg.icons_hidden & (1 << i));
-    }
-    add(k, DC_BUTTON, 196, 292, 84, 26, "OK", 1);
-    add(k, DC_BUTTON, 284, 292, 84, 26, "Cancel", 2);
-    add(k, DC_BUTTON, 372, 292, 84, 26, "&Apply", 3);
-    show(k, "Appearance", 476, 324);
-}
-static void appearance_paint(void)
-{
-    int k = P_APPEARANCE, i, x, y, ry;
-    list_frame(k, &ap_list);
-    for (i = 0; i < NSCHEMES; i++) {
-        if (!list_row(k, &ap_list, i, &ry)) continue;
-        if (i == ap_list.sel) ui_rect(ox(k) + 2, ry, ap_list.w - 4, 18, C_TITLE);
-        ui_text(ox(k) + 8, ry + 1, schemes[i].name, i == ap_list.sel ? C_PAPER : C_INK);
-    }
-    /* Desktop colour swatches. */
-    for (i = 0; i < 8; i++) {
-        x = ox(k) + 220 + (i % 4) * 58; y = oy(k) + 22 + (i / 4) * 32;
-        ui_inset(x, y, 52, 26);
-        ui_rect(x + 3, y + 3, 46, 20, C_SHADOW);
-        /* The swatch shows its colour's nearest palette entry name. */
-        ui_rect(x + 4, y + 4, 44, 18, i ? swatch_entry[i] : C_FACE);
-        if (i == 0) ui_text(x + 26 - ui_measure("Default") / 2, y + 5, "Default", C_INK);
-        if (i && !mem_cmp(ap_palette + 9, ap_palette + swatch_entry[i] * 3, 3)) draw_focus(x + 1, y + 1, 50, 24);
-    }
-    /* Preview: a window in the chosen colours (they are already shown). */
-    x = ox(k) + 220; y = oy(k) + 112;
-    ui_rect(x, y, 232, 66, C_TEAL);
-    ui_bevel(x + 16, y + 8, 200, 52, C_FACE);
-    ui_rect(x + 19, y + 11, 194, 16, C_TITLE);
-    ui_text(x + 24, y + 11, "Active window", C_PAPER | BOLD);
-    ui_inset(x + 22, y + 31, 120, 22);
-    ui_text(x + 28, y + 34, "Window text", C_INK);
-    ui_bevel(x + 150, y + 31, 58, 22, C_FACE);
-    ui_text(x + 162, y + 34, "OK", C_INK);
-}
-static void appearance_apply_scheme(int i)
-{
-    int s;
-    for (s = 0; s < 8; s++) {
-        if (s == 2) continue;                          /* the desktop keeps its colour */
-        ap_palette[slots[s] * 3] = schemes[i].c[s][0];
-        ap_palette[slots[s] * 3 + 1] = schemes[i].c[s][1];
-        ap_palette[slots[s] * 3 + 2] = schemes[i].c[s][2];
-    }
-    if (i == 7) { ap_palette[9] = 0; ap_palette[10] = 0; ap_palette[11] = 0; }
-    ui_palette(ap_palette);
-    app_log("[CONTROL] scheme", schemes[i].name);
-}
-static int appearance_mouse(int kind, int sx, int sy)
-{
-    int k = P_APPEARANCE, i, r = list_mouse(k, &ap_list, kind, sx, sy);
-    if (r == 2) appearance_apply_scheme(ap_list.sel);
-    if (r) return 1;
-    if (kind != MOUSE_DOWN) return 0;
-    for (i = 0; i < 8; i++) {
-        int x = ox(k) + 220 + (i % 4) * 58, y = oy(k) + 22 + (i / 4) * 32;
-        if (sx >= x && sx < x + 52 && sy >= y && sy < y + 26) {
-            mem_copy(ap_palette + 9, i ? ap_palette + swatch_entry[i] * 3 : cfg_default_palette + 9, 3);
-            ui_palette(ap_palette);
-            app_log("[CONTROL] desktop colour", 0);
-            return 1;
-        }
-    }
-    return 0;
-}
-static void appearance_save(void)
-{
-    int i;
-    mem_copy(cfg.palette, ap_palette, 48);
-    cfg.icons_hidden = 0;
-    for (i = 0; i < 8; i++) if (!ac[P_APPEARANCE][ap_icons_at + i].value) cfg.icons_hidden |= 1 << i;
-    cfg_save(&cfg);
-    mem_copy(&saved_cfg, &cfg, sizeof cfg);
-    app_log("[CONTROL] saved", "appearance");
-}
-
-/* ------------------------------------------------------------------ */
 /* Fonts                                                               */
 #define MAX_FONTS 32
 struct fontinfo { char file[13]; char name[32]; u8 size; };
@@ -1422,8 +1299,9 @@ static void open_applet(int k, const char *arg)
     if (k < 0 || k >= P_COUNT) return;
     app_log("[CONTROL] open", applets[k].label);
     switch (k) {
-    case P_DISPLAY: app_open(WIN_DISPLAY, ""); return;
-    case P_WALLPAPER: shell_action(24); return;
+    case P_DISPLAY: app_open(WIN_DISPLAY, "screen"); return;
+    case P_WALLPAPER: app_open(WIN_DISPLAY, "background"); return;
+    case P_APPEARANCE: app_open(WIN_DISPLAY, "appearance"); return;
     case P_TASKS: shell_action(23); return;
     case P_DEVICES: app_open(WIN_DEVICES, ""); return;
     case P_DRIVERS: app_open(WIN_DEVICES, "drivers"); return;
@@ -1434,7 +1312,6 @@ static void open_applet(int k, const char *arg)
         return;
     }
     switch (k) {
-    case P_APPEARANCE: appearance_open(); break;
     case P_FONTS: fonts_open(arg); break;
     case P_SOUND: sound_open(); break;
     case P_MOUSE: mouse_open(); break;
@@ -1450,10 +1327,6 @@ static void applet_result(int k, int r)
 {
     if (r < 0) return;
     switch (k) {
-    case P_APPEARANCE:
-        if (r == 1 || r == 3) appearance_save();
-        if (r == 2) { ui_palette(saved_cfg.palette); app_log("[CONTROL] cancelled", "appearance"); }
-        break;
     case P_FONTS: fonts_result(r); if (r >= 10) ad[k].open = 1; break;
     case P_MOUSE:
         if (r >= 10 && r <= 12) { mouse_action(r); ad[k].open = 1; }
@@ -1500,7 +1373,6 @@ static void applet_paint(int k)
 {
     dialog_draw(&ad[k]);
     switch (k) {
-    case P_APPEARANCE: appearance_paint(); break;
     case P_FONTS: fonts_paint(); break;
     case P_MOUSE: mouse_paint(); break;
     case P_SOUND: sound_paint(); break;
@@ -1526,7 +1398,6 @@ static int applet_event(int k, int ev, int a, int b, int c)
     if (ev == EV_MOUSE) {
         if (a == MOUSE_HOVER) { ui_dirty = 0; dialog_hover(d, sx, sy); return ui_dirty; }
         switch (k) {
-        case P_APPEARANCE: used = appearance_mouse(a, sx, sy); break;
         case P_FONTS: used = fonts_mouse(a, sx, sy); break;
         case P_MOUSE: used = mouse_mouse(a, sx, sy); break;
         case P_SOUND: used = sound_mouse(a, sx, sy); break;
@@ -1543,9 +1414,6 @@ static int applet_event(int k, int ev, int a, int b, int c)
             d->c[d->focus].type == DC_FIELD) return 0;
         if (k == P_FONTS && d->focus < fonts_install_at && (KEY_SCAN(a) == K_UP || KEY_SCAN(a) == K_DOWN) && !KEY_CHAR(a)) {
             list_key(&fn_list, a); fonts_buttons();
-        } else if (k == P_APPEARANCE && (KEY_SCAN(a) == K_UP || KEY_SCAN(a) == K_DOWN) && !KEY_CHAR(a)) {
-            list_key(&ap_list, a);
-            if (ap_list.sel >= 0) appearance_apply_scheme(ap_list.sel);
         } else r = dialog_key(d, a, HOST.shift);
     }
     applet_result(k, r);
@@ -1747,7 +1615,6 @@ int app_event(int ev, int a, int b, int c)
         r = main_mouse(a, HOST.x + b, HOST.y + TITLE_H + c);
         break;
     case EV_CLOSE:
-        for (k = 0; k < P_COUNT; k++) if (ad[k].open && k == P_APPEARANCE) ui_palette(saved_cfg.palette);
         return 0;
     case EV_SUSPEND:
         for (k = 0; k < P_COUNT; k++) if (ad[k].open) return 1;      /* an applet is open */

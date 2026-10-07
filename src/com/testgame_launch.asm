@@ -1,6 +1,6 @@
-; Desktop TestGames launcher.  Each copy is a small DOS program that changes
-; to the game's data directory before EXEC, so Files can start the real game
-; from C:\DESKTOP\TestGames without duplicating proprietary data files.
+; Desktop TestGames launcher. Each copy changes to the game's data directory
+; before EXEC. DOOM uses its installed COM wrapper so plain DOS and a native
+; CiukiOS DOS session both take the wrapper's supported audio/host path.
 bits 16
 org 0x100
 
@@ -62,7 +62,7 @@ start:
 
 %if GAME_KIND = 0
 game_dir db '\APPS\DOOM',0
-game_exe db '\APPS\DOOM\DOOMCORE.EXE',0
+game_exe db '\APPS\DOOM\DOOM.COM',0
 %elif GAME_KIND = 1
 game_dir db '\APPS\DOOMVAN',0
 game_exe db '\APPS\DOOMVAN\PCDMCORE.EXE',0

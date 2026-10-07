@@ -96,9 +96,12 @@ class Utilities:
             # Owner zero is the desktop; native window N is encoded as N+1.
             if encoded & 255 != action or (owner is not None and encoded >> 8 != owner + 1):
                 continue
+            width, height = self.w('ui_width'), self.w('ui_height')
             for px, py in (((x + right) // 2, (y + bottom) // 2),
                            (x + 3, y + 3), (right - 4, bottom - 4)):
-                if not (0 <= px < 776 and 0 <= py < 584):
+                # Leave the same 24x16 safety margin used by the old 800x600
+                # test, while allowing the current 1024x768 profile.
+                if not (0 <= px < width - 24 and 0 <= py < height - 16):
                     continue
                 front = next((i for i in range(count - 1, -1, -1)
                               if hits[i][0] <= px < hits[i][2]

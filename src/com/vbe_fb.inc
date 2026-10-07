@@ -8,7 +8,8 @@
 ; GDTR, IDTR, ES and flags, so no unreal segment outlives a burst and DOS children
 ; never inherit one. Bursts are nestable and callers bound them to one
 ; scanline, cell row or pointer, keeping interrupt latency short.
-; Inside a burst ES is scratch: reload it before using it.
+; Inside a burst ES is scratch. Reset its base to zero for linear accesses;
+; its cached limit is restored to 64 KiB only by the outer protected exit.
 ; Linear mode is never used in virtual-8086 mode or without a working A20.
 ; A temporary dual-format IDT defers NMI until the burst has restored normal
 ; CPU state. It never changes the hardware NMI mask or the CMOS index.
@@ -158,17 +159,20 @@ vc_fb_xfer:
     cld
     movzx ecx,cx
     movzx esi,si
+    ; V86 uses the banked transport; real LFB transfers use the local burst.
+    cmp byte [cs:vc_lfb],1
+    je .linear
     ; CVSESSION owns a protected mapping of the validated physical VRAM.
     ; In V86 the desktop's BIOS layout is banked, but this transfer need not
     ; remap its 64-KiB window for every bank or scanline.
     call vc_session_xfer
     jnc .done
-    cmp byte [cs:vc_lfb],1
-    jne .banked
+    jmp .banked
+.linear:
     call vc_fb_linear
     jc .done
     xor ax,ax
-    mov es,ax
+    mov es,ax                 ; callers may use ES for scratch during a burst
     cmp byte [cs:vc_fb_read],1
     je .linear_read
     VC_FB_COPY fs a32

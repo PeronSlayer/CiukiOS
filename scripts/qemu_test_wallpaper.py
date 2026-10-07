@@ -34,6 +34,28 @@ def palette(out):
     return np.frombuffer(target.read_bytes(), np.uint8).reshape(-1, 3)
 
 
+def cover_frame(source, screen_width, screen_height):
+    """Match WALLP's centered, aspect-preserving Fill geometry and sampling."""
+    source_height, source_width = source.shape[:2]
+    view_height = screen_height - 61
+    if screen_width * source_height >= view_height * source_width:
+        draw_width = screen_width
+        draw_height = (source_height * screen_width + source_width - 1) // source_width
+    else:
+        draw_height = view_height
+        draw_width = (source_width * view_height + source_height - 1) // source_height
+    delta_x, delta_y = screen_width - draw_width, view_height - draw_height
+    # The renderer divides signed coordinates with C truncation toward zero.
+    left = delta_x // 2 if delta_x >= 0 else -((-delta_x) // 2)
+    top_delta = delta_y // 2 if delta_y >= 0 else -((-delta_y) // 2)
+    top = 29 + top_delta
+    xs = np.arange(screen_width, dtype=np.int64) - left
+    ys = np.arange(29, 29 + view_height, dtype=np.int64) - top
+    sx = np.clip(xs * source_width // draw_width, 0, source_width - 1)
+    sy = np.clip(ys * source_height // draw_height, 0, source_height - 1)
+    return source[sy[:, None], sx[None, :]]
+
+
 def source_tiles(image, sources, report):
     """Prove every packaged tile round-trips to its owner-supplied BMP."""
     catalog = image.read('SYSTEM/UI/WALLS.DAT')
@@ -72,6 +94,7 @@ def main():
     shutil.copyfile(args.image, disk)
     filesystem = FAT16(disk)
     report = {'status': 'running', 'mode_requested': int(args.mode), 'memory_mib': 128,
+              'wallpaper_style': 'Fill (index/style pair)',
               'source_sha256': source_hash, 'binary_overrides': False,
               'ram_modifications': False, 'conversion': [], 'checks': [],
               'scope': 'Actual packaged QEMU input/screenshots, not physical GPU qualification',
@@ -106,8 +129,8 @@ def main():
         actual = frame(name)
         height, width = actual.shape[:2]
         tile = native[index]
-        yy, xx = np.indices((height, width))
-        expected = tile[yy % tile.shape[0], xx % tile.shape[1]]
+        expected = actual.copy()
+        expected[29:height-32] = cover_frame(tile, width, height)
         mask = np.zeros((height, width), bool)
         # Exclude chrome, desktop shortcuts and lower-right mode/clock text.
         mask[40:height-80, 150:width-15] = True
@@ -154,7 +177,7 @@ def main():
         vm.completed_control_click(x+285, y+46+(index-1)*24)
         vm.completed_control_click(x+386, y+201)
         vm.shot(f'panel-applied-{index}')
-        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([index]), 'Apply did not persist selection'
+        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([index, 0]), 'Apply did not persist index and Fill style'
         vm.repaint_key('alt-f4')
         compare(index, f'applied-{index}')
 

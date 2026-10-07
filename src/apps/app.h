@@ -45,6 +45,8 @@
 #define WIN_PAINT    16
 #define WIN_BROWSER  17
 #define WIN_DISPLAY  18
+#define WIN_VIEWER   19
+#define WIN_PLAYER   20
 #define WIN_DESKTOP  0xFE   /* the desktop module's surface      */
 #define WIN_OVERLAY  0xFD   /* its menus, above every window     */
 
@@ -141,6 +143,17 @@ int app_band_info(void *out19);
 int app_desktop_focus(void);
 /* Display module only: queue mode, or mode=0 query after deferred switch. */
 int app_display_mode(unsigned mode);
+#pragma pack(push,1)
+struct app_wallpaper_info {unsigned short bytes,generation;unsigned char index,kind;char filename[13];unsigned char style;};
+#pragma pack(pop)
+#define WP_FILL 0
+#define WP_FIT 1
+#define WP_STRETCH 2
+#define WP_CENTER 3
+#define WP_TILE 4
+int app_wallpaper(struct app_wallpaper_info *info);
+int app_wallpaper_apply(unsigned index,unsigned style); /* Display only, persisted */
+int app_wallpaper_count(void); /* Display only, discovers copied numbered files */
 #define CURSOR_ARROW     0
 #define CURSOR_IBEAM     1
 #define CURSOR_FORBIDDEN 2
@@ -180,6 +193,8 @@ void ui_cursor(int type);
 #define ICON_NETWORK  32
 #define ICON_MONITOR  33
 #define ICON_PAINT    34
+#define ICON_IMAGE    36
+#define ICON_MUSIC    37
 
 /* ---- runtime (rt.c) ---- */
 typedef unsigned char u8;
@@ -294,6 +309,7 @@ void app_log(const char *what, const char *detail);     /* COM1 line */
 u16  app_seg(void);                                     /* this module's segment */
 int  cpu_vendor(char *out13);                           /* CPUID: family */
 void far_call_req(u16 seg, u16 off, void *req);         /* ES:DI = req */
+void far_call_req_far(u16 seg, u16 off, u16 req_seg, u16 req_off);
 const char *dos_error_text(int error);
 
 /* ---- toolkit (ui.c) ---- */

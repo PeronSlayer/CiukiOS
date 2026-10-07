@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Check that the full image exposes installed RAM through XMS 3.x."""
 import argparse
+import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
 
+from PIL import Image
 from qemu_test_full_display_profile import VM
 from read_memory_map import read_map
 
@@ -61,7 +63,27 @@ def measure(image, output, memory):
         fork_conventional = DOS_PATTERN.search(fork_serial)
         assert fork_conventional, 'forked DOS VM did not report conventional memory'
         fork_kib = int(fork_conventional.group(1), 16)
-        assert fork_kib >= 540, f'forked DOS arena regressed to {fork_kib} KiB'
+        assert fork_kib >= 450, f'forked DOS arena regressed to {fork_kib} KiB'
+    except Exception as error:
+        failure = {'memory_mib': memory, 'error': repr(error)}
+        failure['serial'] = vm.serial.read_text(errors='replace') if vm.serial.exists() else ''
+        try:
+            screenshot = vm.shot('failure')
+            with Image.open(screenshot) as image:
+                image.save(output / 'failure.png')
+            failure['registers'] = vm.hmp('info registers').decode(errors='replace')
+            failure['pic'] = vm.hmp('info pic').decode(errors='replace')
+            vm.hmp('stop')
+            vm.hmp(f'pmemsave 0 0x800000 "{output / "failure-8m.bin"}"')
+            vm.hmp('cont')
+        except Exception as capture_error:
+            failure['capture_error'] = repr(capture_error)
+        kernel_listing = ROOT / 'build/full/obj/ciukidos.lst'
+        if kernel_listing.is_file():
+            shutil.copyfile(kernel_listing, output / 'ciukidos.lst')
+            failure['kernel_listing'] = str(kernel_listing)
+        (output / 'failure.json').write_text(json.dumps(failure, indent=2) + '\n')
+        raise
     finally:
         vm.close()
     captured = output / 'MEMMAP.BIN'

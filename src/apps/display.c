@@ -9,12 +9,47 @@ static struct dialog notice;
 static u8 native[192];
 static u16 vm_seg, vm_off;
 static int native_ok, page, selected, top, focus, pending_probe = 1;
+static int probe_require_banked;
 static int X, Y, W, H;
 static unsigned last_poll, preview_tick;
 static u16 previous_mode, preview_mode;
 static int preview;
 static char status[128];
-static const char *tabs[4] = { "Screen", "Adapter", "Monitor", "Advanced" };
+static const char *tabs[6] = { "Screen", "Adapter", "Monitor", "Advanced", "Background", "Appearance" };
+#define WP_SOLID 0
+#define WALL_MAX 99
+static struct app_wallpaper_info wall_info;
+static char wall_title[WALL_MAX + 1][31];
+static int wall_count, wall_selected, wall_top, wall_style, wall_saved_index, wall_saved_style;
+static int wall_changed;
+static u16 wall_width, wall_height;
+static int close_after_preview;
+static struct deskcfg theme_cfg, theme_saved;
+static u8 theme_palette[48];
+static u16 theme_icons;
+static int theme_scheme, theme_dirty;
+static const char *scheme_names[8] = {
+    "CiukiOS Classic", "Ocean", "Rose", "Slate", "Forest", "Desert", "Lilac", "High Contrast"
+};
+static const u8 scheme_colors[8][8][3] = {
+    { {9,10,12}, {13,18,30}, {13,23,24}, {51,52,53}, {28,30,34}, {39,49,48}, {61,61,60}, {27,36,48} },
+    { {5,8,14}, {6,22,40}, {8,26,38}, {48,52,56}, {26,31,38}, {36,48,56}, {60,62,63}, {12,30,52} },
+    { {14,8,10}, {38,14,24}, {40,24,30}, {54,50,51}, {33,28,30}, {56,44,48}, {63,61,61}, {44,20,34} },
+    { {8,9,11}, {22,26,32}, {20,23,28}, {46,47,49}, {26,27,30}, {38,40,43}, {60,60,60}, {30,34,42} },
+    { {7,11,8}, {12,28,16}, {14,26,18}, {49,52,47}, {27,31,27}, {40,48,38}, {60,62,58}, {18,36,26} },
+    { {14,10,6}, {40,24,10}, {44,34,22}, {56,52,44}, {36,31,24}, {58,50,36}, {62,62,57}, {42,30,16} },
+    { {10,8,14}, {28,18,42}, {30,26,40}, {52,50,55}, {30,28,34}, {46,42,54}, {62,61,63}, {34,26,50} },
+    { {0,0,0}, {0,0,40}, {0,0,0}, {48,48,48}, {16,16,16}, {56,56,56}, {63,63,63}, {0,0,52} }
+};
+static const u8 theme_slots[8] = { 0, 1, 3, 7, 8, 11, 15, 9 };
+static const u8 theme_swatches[8] = { 3, 9, 2, 12, 8, 13, 6, 1 };
+static const char *icon_names[8] = { "Computer", "Programs", "Recycle Bin", "Control Panel", "DOS Prompt", "Floppy", "USB drive", "CD-ROM" };
+#define DISPLAY_LOG_PATH "\\SYSTEM\\DISPLAY.LOG"
+#define DISPLAY_LOG_LIMIT 4096L
+
+static u16 display_msw(void);
+#pragma aux display_msw = "smsw ax" value [ax];
+static int display_in_v86(void) { return (display_msw() & 1) != 0; }
 
 static u32 nfield(int off) { return *(u32 *)(native + off); }
 static void native_read(void)
@@ -37,6 +72,106 @@ static void native_read(void)
     if (nfield(52) == 128 && disp_probe_parse_edid(native + 64, 128, &probe.monitor))
         probe.flags |= DISP_F_EDID;
 }
+static void diag_hex4(char **dst, u16 value)
+{
+    fmt_hex4(*dst, value);
+    *dst += 4;
+}
+static void diag_hex8(char **dst, u32 value)
+{
+    diag_hex4(dst, (u16)(value >> 16));
+    diag_hex4(dst, (u16)value);
+}
+static void diag_append(const char *record)
+{
+    const char *path = DISPLAY_LOG_PATH;
+    int attr, h, bytes = str_len(record);
+    long end;
+    char line[192];
+    if (!bytes || bytes > 180) return;
+    mem_copy(line, record, bytes);
+    line[bytes++] = '\r'; line[bytes++] = '\n';
+    attr = dos_get_attr(path);
+    if (attr == -2) h = dos_create(path);
+    else if (attr >= 0 && !(attr & 1)) h = dos_open(path, 2);
+    else return;
+    if (h < 0) return;
+    end = dos_seek(h, 0, 2);
+    if (end < 0) { dos_close(h); return; }
+    if (end + bytes > DISPLAY_LOG_LIMIT) {
+        if (dos_close(h) < 0) return;
+        h = dos_create(path);
+        if (h < 0) return;
+        if (dos_write(h, "RESET\r\n", 7) != 7) { dos_close(h); return; }
+    }
+    if (dos_write(h, line, bytes) != bytes) { dos_close(h); return; }
+    dos_close(h);
+}
+static int read_active_vbe(u16 *status_ax, u16 *mode_bx, u16 *pitch_bx,
+                           u16 *pixels_cx, u16 *lines_dx, u16 *scan_status)
+{
+    struct regs r;
+    mem_set(&r, 0, sizeof r); r.ax = 0x4F03; r.ds = app_seg();
+    intr(0x10, &r);
+    *status_ax = r.ax; *mode_bx = r.bx;
+    mem_set(&r, 0, sizeof r); r.ax = 0x4F06; r.bx = 1; r.ds = app_seg();
+    intr(0x10, &r);
+    *scan_status = r.ax; *pitch_bx = r.bx; *pixels_cx = r.cx; *lines_dx = r.dx;
+    return *status_ax == 0x004F;
+}
+static void diag_active(const char *event, int app_mode)
+{
+    char line[192], *p = line;
+    u16 ax, bx, pitch, pixels, lines, scan;
+    read_active_vbe(&ax, &bx, &pitch, &pixels, &lines, &scan);
+    str_copy(p, "ACTIVE event="); p += str_len(p); str_copy(p, event); p += str_len(p);
+    str_copy(p, " app="); p += str_len(p); diag_hex4(&p, (u16)app_mode);
+    str_copy(p, " 4F03="); p += str_len(p); diag_hex4(&p, ax); *p++ = '/'; diag_hex4(&p, bx);
+    str_copy(p, " 4F06="); p += str_len(p); diag_hex4(&p, scan); *p++ = '/'; diag_hex4(&p, pitch);
+    *p++ = '/'; diag_hex4(&p, pixels); *p++ = '/'; diag_hex4(&p, lines); *p = 0;
+    diag_append(line);
+}
+static void diag_mode(const char *event, u16 id)
+{
+    struct disp_mode_diag d;
+    char line[192], *p = line, h[5];
+    const u8 *masks;
+    u16 i;
+    if (!disp_probe_get_mode_diag(id, &d)) return;
+    str_copy(p, "MODE event="); p += str_len(p); str_copy(p, event); p += str_len(p);
+    str_copy(p, " id="); p += str_len(p); diag_hex4(&p, id);
+    str_copy(p, " attr="); p += str_len(p); diag_hex4(&p, d.attributes);
+    str_copy(p, " A="); p += str_len(p); diag_hex4(&p, d.window_a_attributes); *p++ = ':'; diag_hex4(&p, d.window_a_segment);
+    str_copy(p, " B="); p += str_len(p); diag_hex4(&p, d.window_b_attributes); *p++ = ':'; diag_hex4(&p, d.window_b_segment);
+    str_copy(p, " g/s="); p += str_len(p); diag_hex4(&p, d.granularity_kb); *p++ = '/'; diag_hex4(&p, d.window_kb);
+    str_copy(p, " pitch="); p += str_len(p); diag_hex4(&p, d.banked_pitch); *p++ = '/'; diag_hex4(&p, d.linear_pitch);
+    str_copy(p, " phys="); p += str_len(p); diag_hex8(&p, d.framebuffer_phys);
+    masks = (str_cmp(event, "current") == 0 && (probe.current_mode_flags & 0x4000)) ||
+        (!probe_require_banked && (d.attributes & 0x80)) ? d.linear_masks : d.bank_masks;
+    if (!probe_require_banked && (d.attributes & 0x80) && !masks[0]) masks = d.bank_masks;
+    str_copy(p, " rgb="); p += str_len(p);
+    for (i = 0; i < 6; ++i) { h[0] = "0123456789ABCDEF"[(masks[i] >> 4) & 15]; h[1] = "0123456789ABCDEF"[masks[i] & 15]; h[2] = 0; str_copy(p, h); p += 2; }
+    *p = 0;
+    diag_append(line);
+}
+static void diag_event(const char *event, u16 id, u16 result)
+{
+    char line[192], *p = line;
+    str_copy(p, "DISPLAY event="); p += str_len(p); str_copy(p, event); p += str_len(p);
+    str_copy(p, " id="); p += str_len(p); diag_hex4(&p, id);
+    str_copy(p, " result="); p += str_len(p); diag_hex4(&p, result);
+    str_copy(p, " current="); p += str_len(p); diag_hex4(&p, probe.current_mode);
+    str_copy(p, " access="); p += str_len(p); diag_hex4(&p, probe.current_mode_flags);
+    str_copy(p, " native="); p += str_len(p);
+    if (native_ok) {
+        diag_hex4(&p, (u16)nfield(8)); *p++ = '/'; diag_hex4(&p, (u16)nfield(12));
+        *p++ = '/'; diag_hex8(&p, nfield(56));
+    } else str_copy(p, "NONE");
+    p += str_len(p);
+    str_copy(p, " path="); p += str_len(p); str_copy(p, probe_require_banked ? "BANK" : "AUTO"); p += str_len(p);
+    *p = 0;
+    diag_append(line);
+}
 static const char *adapter_name(void)
 {
     if (!(probe.flags & DISP_F_PCI_MATCH)) return "VGA-compatible display adapter";
@@ -46,6 +181,32 @@ static const char *adapter_name(void)
     case DISP_ADAPTER_ATI: return "ATI / AMD display adapter";
     case DISP_ADAPTER_NVIDIA: return "NVIDIA display adapter";
     case DISP_ADAPTER_INTEL: return "Intel display adapter";
+    case DISP_ADAPTER_S3:
+        if (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)
+            return "S3 SuperSavage/IXC 16 (IBM ThinkPad T23)";
+        if (probe.pci_device == 0x8A25 || probe.pci_device == 0x8A26)
+            return "S3 Savage/IX";
+        if (probe.pci_device == 0x8A22)
+            return "S3 Savage4";
+        if (probe.pci_device == 0x8A20 || probe.pci_device == 0x8A21)
+            return "S3 Savage3D";
+        if ((probe.pci_device & 0xFF00) == 0x8C00 || (probe.pci_device & 0xFF00) == 0x8A00)
+            return "S3 Savage series";
+        if (probe.pci_device == 0x8811 || probe.pci_device == 0x8812 || probe.pci_device == 0x8814)
+            return "S3 Trio32/64";
+        if (probe.pci_device == 0x8901 || probe.pci_device == 0x8902)
+            return "S3 Trio64V2";
+        if (probe.pci_device == 0x8815)
+            return "S3 Aurora64V+";
+        if (probe.pci_device == 0x883D || probe.pci_device == 0x8A01)
+            return "S3 ViRGE series";
+        return "S3 Graphics display adapter";
+    case DISP_ADAPTER_MATROX: return "Matrox MGA display adapter";
+    case DISP_ADAPTER_SIS: return "SiS display adapter";
+    case DISP_ADAPTER_3DFX: return "3dfx Voodoo display adapter";
+    case DISP_ADAPTER_CIRRUS: return "Cirrus Logic display adapter";
+    case DISP_ADAPTER_TRIDENT: return "Trident display adapter";
+    case DISP_ADAPTER_NEOMAGIC: return "NeoMagic MagicGraph display adapter";
     }
     return "PCI display adapter";
 }
@@ -55,9 +216,14 @@ static const char *driver_name(void)
     if (native_ok && nfield(8) == 2) {
         if (probe.adapter_kind == DISP_ADAPTER_ATI) return "CiukiOS ATI base display";
         if (probe.adapter_kind == DISP_ADAPTER_NVIDIA) return "CiukiOS NVIDIA base display";
+        if (probe.adapter_kind == DISP_ADAPTER_S3) return "CiukiOS S3 Savage display";
         return "CiukiOS native base display";
     }
-    return probe.flags & DISP_F_VBE ? "CiukiOS VBE framebuffer" : "CiukiOS VGA compatibility";
+    if (probe.flags & DISP_F_VBE) {
+        if (probe.adapter_kind == DISP_ADAPTER_S3) return "CiukiOS VBE (S3 SuperSavage)";
+        return "CiukiOS VBE framebuffer";
+    }
+    return "CiukiOS VGA compatibility";
 }
 static const char *driver_state(void)
 {
@@ -79,26 +245,18 @@ static void geometry(char *out, u16 width, u16 height, u16 depth)
 }
 static void detect(void)
 {
-    int i, j;
-    struct disp_mode temp;
-    disp_probe_init(&probe);
+    int i;
+    probe_require_banked = display_in_v86();
+    disp_probe_init(&probe, probe_require_banked);
+    disp_probe_sort_modes(&probe);
     native_read();
-    /* Stable geometry/depth order; mode number breaks duplicate ties. */
-    for (i = 1; i < probe.mode_count; i++) {
-        temp = probe.modes[i]; j = i;
-        while (j > 0) {
-            struct disp_mode *p = &probe.modes[j - 1];
-            if (p->width < temp.width || (p->width == temp.width && p->height < temp.height) ||
-                (p->width == temp.width && p->height == temp.height && p->bpp <= temp.bpp)) break;
-            probe.modes[j] = *p; j--;
-        }
-        probe.modes[j] = temp;
-    }
     selected = 0;
     for (i = 0; i < probe.mode_count; i++)
         if (probe.modes[i].id == probe.current_mode) selected = i;
     top = selected > 6 ? selected - 6 : 0;
     str_copy(status, probe.mode_count ? "Select a mode, then Apply to preview it." : "No supported desktop modes were reported by the video BIOS.");
+    diag_event("probe", probe.current_mode, probe.flags);
+    if (probe.current_mode >= 0x100) diag_mode("current", probe.current_mode);
     app_log("[DISPLAY] adapter", adapter_name());
     app_log("[DISPLAY] driver", driver_name());
     app_log("[DISPLAY] monitor", probe.monitor.valid ? probe.monitor.name : "identification unavailable");
@@ -117,11 +275,260 @@ static void button(int x, int y, int w, const char *text, int id)
 {
     ui_button(X + x, Y + y, w, 25, text, id);
 }
+static void wallpaper_dimensions(void);
+static void wallpaper_catalog_load(void)
+{
+    static const char path[] = "\\SYSTEM\\UI\\WALLS.DAT";
+    u8 header[8], record[44];
+    char fallback[13];
+    int h, i, count, listed = 0;
+    count = app_wallpaper_count();
+    if (count < 0 || count > WALL_MAX) count = 0;
+    wall_count = 1;
+    str_copy(wall_title[0], "Solid colour");
+    mem_set(wall_title + 1, 0, sizeof wall_title - sizeof wall_title[0]);
+    h = dos_open(path, 0);
+    if (h >= 0) {
+        if (dos_read(h, header, sizeof header) == sizeof header &&
+            !mem_cmp(header, "CWC1", 4) && !header[5] && !header[6] && !header[7] &&
+            header[4] <= WALL_MAX) {
+            listed = header[4];
+            /* If the service cannot discover a catalog, retain its packaged entries. */
+            if (!count) count = listed;
+            if (listed > count) listed = count;
+            for (i = 0; i < listed; i++) {
+                if (dos_read(h, record, sizeof record) != sizeof record ||
+                    mem_cmp(record, "WALL", 4)) break;
+                mem_copy(wall_title[i + 1], record + 13, 30);
+                wall_title[i + 1][30] = 0;
+                wall_count++;
+            }
+        }
+        dos_close(h);
+    }
+    while (wall_count <= count && wall_count <= WALL_MAX) {
+        mem_copy(fallback, "WALL", 4);
+        fmt_2(fallback + 4, wall_count);
+        mem_copy(fallback + 6, ".CWP", 5);
+        str_copy(wall_title[wall_count], fallback);
+        wall_count++;
+    }
+}
+static void wallpaper_refresh(void)
+{
+    int selected = wall_selected, style = wall_style;
+    wallpaper_catalog_load();
+    if (selected >= wall_count) selected = wall_count - 1;
+    wall_selected = selected; wall_style = style;
+    if (wall_selected < wall_top) wall_top = wall_selected;
+    if (wall_selected >= wall_top + 9) wall_top = wall_selected - 8;
+    if (wall_top < 0) wall_top = 0;
+    if (wall_top > wall_count - 9) wall_top = wall_count > 9 ? wall_count - 9 : 0;
+    wall_changed = wall_selected != wall_saved_index || wall_style != wall_saved_style;
+    wallpaper_dimensions();
+    str_copy(status, "Wallpaper list refreshed.");
+}
+static void wallpaper_dimensions(void)
+{
+    char path[32], file[13];
+    u8 header[8];
+    int h;
+    wall_width = wall_height = 0;
+    if (!wall_selected) return;
+    mem_copy(file, "WALL", 4); fmt_2(file + 4, wall_selected); mem_copy(file + 6, ".CWP", 5);
+    str_copy(path, "\\SYSTEM\\UI\\"); str_cat(path, file);
+    h = dos_open(path, 0);
+    if (h < 0) return;
+    if (dos_read(h, header, sizeof header) == sizeof header &&
+        (!mem_cmp(header, "CWP1", 4) || !mem_cmp(header, "CWP2", 4))) {
+        wall_width = (u16)(header[4] | ((u16)header[5] << 8));
+        wall_height = (u16)(header[6] | ((u16)header[7] << 8));
+    }
+    dos_close(h);
+}
+static void wallpaper_geometry(char *out)
+{
+    u32 dw = (u32)HOST.screen_w, dh = HOST.screen_h > 61 ? (u32)HOST.screen_h - 61 : (u32)HOST.screen_h;
+    u32 iw = wall_width, ih = wall_height, rw, rh, x;
+    char n[16];
+    if (!iw || !ih) {
+        str_copy(out, "Solid colour across the desktop."); return;
+    }
+    str_copy(out, "Image: "); fmt_u32(n, iw); str_cat(out, n); str_cat(out, " x "); fmt_u32(n, ih); str_cat(out, n); str_cat(out, "; ");
+    if (wall_style == WP_STRETCH) {
+        fmt_u32(n, dw); str_cat(out, n); str_cat(out, " x "); fmt_u32(n, dh); str_cat(out, n); str_cat(out, " (stretched to fit).");
+    } else if (wall_style == WP_CENTER) {
+        if (iw > dw) { x = (iw - dw) / 2; str_cat(out, "centered; crops "); fmt_u32(n, x); str_cat(out, n); str_cat(out, " px each side."); }
+        else if (ih > dh) { x = (ih - dh) / 2; str_cat(out, "centered; crops "); fmt_u32(n, x); str_cat(out, n); str_cat(out, " px top and bottom."); }
+        else str_cat(out, "centered at original size.");
+    } else if (wall_style == WP_TILE) {
+        str_cat(out, "tiles "); fmt_u32(n, (dw + iw - 1) / iw); str_cat(out, n); str_cat(out, " x ");
+        fmt_u32(n, (dh + ih - 1) / ih); str_cat(out, n); str_cat(out, " from top left.");
+    } else if (wall_style == WP_FIT) {
+        if (iw * dh > ih * dw) { rw = dw; rh = ih * dw / iw; }
+        else { rh = dh; rw = iw * dh / ih; }
+        str_cat(out, "fits "); fmt_u32(n, rw); str_cat(out, n); str_cat(out, " x "); fmt_u32(n, rh); str_cat(out, n); str_cat(out, "; keeps aspect ratio.");
+    } else {
+        if (iw * dh > ih * dw) { rh = dh; rw = (iw * dh + ih - 1) / ih; }
+        else { rw = dw; rh = (ih * dw + iw - 1) / iw; }
+        str_cat(out, "fills "); fmt_u32(n, dw); str_cat(out, n); str_cat(out, " x "); fmt_u32(n, dh); str_cat(out, n); str_cat(out, "; centered crop ");
+        fmt_u32(n, (rw - dw) / 2); str_cat(out, n); str_cat(out, " x "); fmt_u32(n, (rh - dh) / 2); str_cat(out, n); str_cat(out, " px.");
+    }
+}
+static void theme_scheme_select(int i)
+{
+    int s;
+    if (i < 0 || i >= 8) return;
+    for (s = 0; s < 8; s++) {
+        if (s == 2) continue; /* Preserve the user's selected desktop colour. */
+        theme_palette[theme_slots[s] * 3] = scheme_colors[i][s][0];
+        theme_palette[theme_slots[s] * 3 + 1] = scheme_colors[i][s][1];
+        theme_palette[theme_slots[s] * 3 + 2] = scheme_colors[i][s][2];
+    }
+    if (i == 7) theme_palette[9] = theme_palette[10] = theme_palette[11] = 0;
+    theme_scheme = i;
+    theme_dirty = 1;
+    ui_palette(theme_palette);
+}
+static void theme_scheme_detect(void)
+{
+    int i, s, match;
+    theme_scheme = -1;
+    for (i = 0; i < 8; i++) {
+        match = 1;
+        for (s = 0; s < 8 && match; s++) if (s != 2 &&
+            (theme_palette[theme_slots[s] * 3] != scheme_colors[i][s][0] ||
+             theme_palette[theme_slots[s] * 3 + 1] != scheme_colors[i][s][1] ||
+             theme_palette[theme_slots[s] * 3 + 2] != scheme_colors[i][s][2])) match = 0;
+        if (match) { theme_scheme = i; break; }
+    }
+}
+static void properties_load(void)
+{
+    cfg_load(&theme_cfg);
+    mem_copy(&theme_saved, &theme_cfg, sizeof theme_cfg);
+    mem_copy(theme_palette, theme_cfg.palette, sizeof theme_palette);
+    theme_icons = theme_cfg.icons_hidden;
+    theme_scheme_detect();
+    theme_dirty = 0;
+    wallpaper_catalog_load();
+    mem_set(&wall_info, 0, sizeof wall_info);
+    app_wallpaper(&wall_info);
+    wall_selected = wall_info.index;
+    wall_style = wall_info.style;
+    if (wall_style > 4) wall_style = 0;
+    if (wall_selected >= wall_count) wall_selected = 0;
+    wallpaper_dimensions();
+    wall_top = 0;
+    wall_saved_index = wall_selected;
+    wall_saved_style = wall_style;
+    wall_changed = 0;
+}
+static void theme_restore(void)
+{
+    if (theme_dirty) ui_palette(theme_saved.palette);
+    mem_copy(theme_palette, theme_saved.palette, sizeof theme_palette);
+    theme_icons = theme_saved.icons_hidden;
+    theme_scheme_detect();
+    theme_dirty = 0;
+}
+static int properties_apply(void)
+{
+    int r;
+    if (wall_changed) {
+        r = app_wallpaper_apply((unsigned)wall_selected, (unsigned)wall_style);
+        if (!r) { str_copy(status, "The background could not be saved."); return 0; }
+        wall_saved_index = wall_selected; wall_saved_style = wall_style; wall_changed = 0;
+    }
+    if (theme_dirty || theme_icons != theme_cfg.icons_hidden) {
+        mem_copy(theme_cfg.palette, theme_palette, sizeof theme_palette);
+        theme_cfg.icons_hidden = theme_icons;
+        if (cfg_save(&theme_cfg)) { str_copy(status, "Appearance settings could not be saved."); return 0; }
+        mem_copy(&theme_saved, &theme_cfg, sizeof theme_cfg);
+        theme_dirty = 0;
+    }
+    str_copy(status, "Properties saved.");
+    return 1;
+}
+static void wallpaper_paint(void)
+{
+    int i, visible = 9, y, at;
+    char geometry[96];
+    static const char *styles[5] = { "Fill", "Fit", "Stretch", "Center", "Tile" };
+    ui_text(X + 18, Y + 43, "Background picture", C_INK | BOLD);
+    ui_inset(X + 18, Y + 62, 224, visible * 19 + 4);
+    ui_rect(X + 20, Y + 64, 220, visible * 19, C_PAPER);
+    for (i = 0; i < visible; i++) {
+        at = wall_top + i;
+        if (at >= wall_count) break;
+        y = Y + 64 + i * 19;
+        if (at == wall_selected) ui_rect(X + 20, y, 220, 19, C_TITLE);
+        draw_frame_text(X + 27, y + 2, 204, wall_title[at], at == wall_selected ? C_PAPER : C_INK);
+        /* Hit IDs are stored in one byte; encode the visible row, not the
+         * catalog index, then add wall_top when the action is dispatched. */
+        ui_hit(X + 20, y, 220, 19, 100 + i);
+    }
+    if (wall_count > visible) draw_scroll(X + 222, Y + 64, visible * 19, wall_top, wall_count, visible);
+    ui_text(X + 268, Y + 43, "Preview", C_INK | BOLD);
+    ui_bevel(X + 267, Y + 62, 286, 142, C_SHADOW);
+    ui_rect(X + 275, Y + 70, 270, 126, C_TEAL);
+    ui_rect(X + 289, Y + 82, 76, 91, C_FACE);
+    ui_rect(X + 293, Y + 87, 68, 15, C_TITLE);
+    ui_text(X + 298, Y + 88, "Desktop", C_PAPER | BOLD);
+    ui_rect(X + 297, Y + 111, 38, 45, C_BLUE);
+    ui_rect(X + 341, Y + 111, 38, 45, C_ROSE);
+    ui_rect(X + 379, Y + 82, 150, 90, C_FACE);
+    draw_frame_text(X + 386, Y + 88, 138, wall_title[wall_selected], C_INK | BOLD);
+    ui_text(X + 386, Y + 112, wall_selected ? "Photo or tile" : "Plain desktop colour", C_INK);
+    wallpaper_geometry(geometry);
+    draw_frame_text(X + 267, Y + 212, 286, geometry, C_INK);
+    ui_text(X + 18, Y + 240, "Picture position:", C_INK);
+    for (i = 0; i < 5; i++) {
+        int x = X + 18 + (i % 3) * 112, yy = Y + 260 + (i / 3) * 28;
+        ui_button(x, yy, 104, 24, styles[i], 50 + i);
+        if (wall_style == i) draw_focus(x + 1, yy + 1, 102, 22);
+    }
+}
+static void appearance_paint(void)
+{
+    int i, y, x;
+    ui_text(X + 18, Y + 43, "Colour scheme", C_INK | BOLD);
+    ui_inset(X + 18, Y + 62, 204, 8 * 22 + 4);
+    ui_rect(X + 20, Y + 64, 200, 8 * 22, C_PAPER);
+    for (i = 0; i < 8; i++) {
+        y = Y + 64 + i * 22;
+        if (i == theme_scheme) ui_rect(X + 20, y, 200, 22, C_TITLE);
+        draw_frame_text(X + 28, y + 3, 184, scheme_names[i], i == theme_scheme ? C_PAPER : C_INK);
+        ui_hit(X + 20, y, 200, 22, 60 + i);
+    }
+    ui_text(X + 244, Y + 43, "Desktop colour", C_INK | BOLD);
+    for (i = 0; i < 8; i++) {
+        x = X + 244 + (i % 4) * 64; y = Y + 64 + (i / 4) * 34;
+        ui_inset(x, y, 56, 28);
+        ui_rect(x + 4, y + 4, 48, 20, i ? theme_swatches[i] : C_FACE);
+        if (i && !mem_cmp(theme_palette + 9, theme_palette + theme_swatches[i] * 3, 3)) draw_focus(x + 1, y + 1, 54, 26);
+        ui_hit(x, y, 56, 28, 70 + i);
+    }
+    ui_rect(X + 244, Y + 145, 276, 54, C_TEAL);
+    ui_bevel(X + 260, Y + 153, 244, 38, C_FACE);
+    ui_rect(X + 263, Y + 156, 238, 14, C_TITLE);
+    ui_text(X + 269, Y + 157, "Active window", C_PAPER | BOLD);
+    ui_text(X + 270, Y + 174, "Window text     [   OK   ]", C_INK);
+    ui_text(X + 18, Y + 248, "Show these desktop icons:", C_INK | BOLD);
+    for (i = 0; i < 8; i++) {
+        x = X + 20 + (i % 4) * 137; y = Y + 268 + (i / 4) * 24;
+        draw_check(x, y, !(theme_icons & (1 << i)));
+        draw_frame_text(x + 19, y, 116, icon_names[i], C_INK);
+        ui_hit(x, y, 130, 18, 80 + i);
+    }
+}
 static void screen_paint(void)
 {
     int i, at, y, fg, rows = 7;
     char text[96], t[16];
-    const char *name = probe.monitor.valid && probe.monitor.name[0] ? probe.monitor.name : "Generic display";
+    const char *name = probe.monitor.valid && probe.monitor.name[0] ? probe.monitor.name :
+        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
+        "IBM ThinkPad 14.1\" TFT" : "Generic display";
     ui_icon(X + 18, Y + 47, ICON_DISPLAY);
     draw_frame_text(X + 62, Y + 46, W - 86, name, C_INK | BOLD);
     draw_frame_text(X + 62, Y + 66, W - 86, adapter_name(), C_INK);
@@ -185,16 +592,30 @@ static void monitor_paint(void)
 {
     struct disp_monitor *m = &probe.monitor;
     char t[96], n[20];
-    line(0, "Display", m->valid && m->name[0] ? m->name : "Generic display");
-    line(1, "Identification", m->valid ? "EDID verified" : "Not supplied by firmware / driver");
-    line(2, "Connection", virtual_display() ? "Virtual display" : !m->valid ? "Unknown" : m->input_digital ? "Digital (EDID)" : "Analog RGB (EDID)");
-    line(3, "Manufacturer", m->valid ? m->manufacturer : "Unknown");
+    const char *disp_name = m->valid && m->name[0] ? m->name :
+        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
+        "Internal Flat Panel (IBM ThinkPad T23)" : "Generic display";
+    line(0, "Display", disp_name);
+    line(1, "Identification", m->valid ? "EDID verified" :
+        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
+        "Internal LCD panel (Video BIOS)" : "Not supplied by firmware / driver");
+    line(2, "Connection", virtual_display() ? "Virtual display" :
+        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
+        "Internal LVDS flat panel" :
+        !m->valid ? "VGA / Internal display" : m->input_digital ? "Digital (EDID)" : "Analog RGB (EDID)");
+    line(3, "Manufacturer", m->valid ? m->manufacturer :
+        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
+        "IBM" : "Unknown");
     if (m->valid) { fmt_hex4(t, m->product); str_cat(t, "   Serial "); fmt_u32(n, m->serial); str_cat(t, n); }
+    else if (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F))
+        str_copy(t, "ThinkPad T23 14.1\" TFT");
     else str_copy(t, "Unknown");
     line(4, "Product", t);
     if (m->valid && m->width_cm && m->height_cm) {
         fmt_u32(t, m->width_cm); str_cat(t, " x "); fmt_u32(n, m->height_cm); str_cat(t, n); str_cat(t, " cm");
-    } else str_copy(t, "Not reported");
+    } else if (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F))
+        str_copy(t, "28 x 21 cm (14.1\" TFT)");
+    else str_copy(t, "Not reported");
     line(5, "Image size", t);
     str_copy(t, "Not reported");
     if (m->valid && m->preferred_width && m->preferred_height) {
@@ -203,11 +624,18 @@ static void monitor_paint(void)
             str_cat(t, "  "); fmt_u32(n, m->preferred_millihz / 1000UL); str_cat(t, n);
             str_cat(t, "."); fmt_2(n, (u16)((m->preferred_millihz % 1000UL) / 10UL)); str_cat(t, n); str_cat(t, " Hz");
         }
+    } else if (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) {
+        str_copy(t, "1024 x 768  60.00 Hz");
     }
     line(6, "Preferred timing", t);
-    line(7, "Active refresh", virtual_display() ? "Managed by the host display" : "Default video BIOS timing");
+    line(7, "Active refresh", virtual_display() ? "Managed by the host display" :
+        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
+        "60 Hz (Flat Panel timing)" : "Default video BIOS timing");
     draw_frame_text(X + 18, Y + 272, W - 36,
-        virtual_display() ? "This is the virtual screen exposed by QEMU." : "Preferred timing comes from EDID; active timing may differ.", C_INK);
+        virtual_display() ? "This is the virtual screen exposed by QEMU." :
+        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
+        "Internal TFT LCD panel detected on IBM ThinkPad T23." :
+        "Preferred timing comes from EDID; active timing may differ.", C_INK);
 }
 static void advanced_paint(void)
 {
@@ -235,26 +663,32 @@ static void paint(void)
     int i;
     layout();
     ui_rect(X, Y, W, H, C_FACE);
-    for (i = 0; i < 4; i++) {
-        ui_bevel(X + 8 + i * 116, Y + 5 + (i == page ? 0 : 3), 116, i == page ? 27 : 24, C_FACE);
-        ui_text(X + 20 + i * 116, Y + 10, tabs[i], C_INK | (i == page ? BOLD : 0));
-        ui_hit(X + 8 + i * 116, Y + 5, 116, 27, i);
+    for (i = 0; i < 6; i++) {
+        int x = X + 8 + i * 96;
+        ui_bevel(x, Y + 5 + (i == page ? 0 : 3), 95, i == page ? 27 : 24, C_FACE);
+        ui_text(x + 8, Y + 10, tabs[i], C_INK | (i == page ? BOLD : 0));
+        ui_hit(x, Y + 5, 95, 27, i);
     }
     ui_rect(X + 8, Y + 31, W - 16, 1, C_PAPER);
     if (page == 0) screen_paint();
     else if (page == 1) adapter_paint();
     else if (page == 2) monitor_paint();
-    else advanced_paint();
+    else if (page == 3) advanced_paint();
+    else if (page == 4) wallpaper_paint();
+    else appearance_paint();
     draw_frame_text(X + 18, Y + H - 62, W - 36,
         page == 0 ? status : page == 1 ? "The active driver is selected for the detected hardware." :
         page == 2 ? "Press F5 to detect the display again." :
-        "Built-in video drivers are updated with the system image.", C_INK);
+        page == 3 ? "Built-in video drivers are updated with the system image." : status, C_INK);
     if (page == 0) {
         button(18, H - 36, 129, "Detect displays", 10);
         button(158, H - 36, 141, "Advanced...", 3);
-        button(W - 222, H - 36, 98, "Apply...", 11);
+        button(W - 274, H - 36, 80, "Apply...", 11);
+    } else {
+        button(W - 274, H - 36, 80, "Apply", 11);
     }
-    button(W - 111, H - 36, 93, "Close", 14);
+    button(W - 184, H - 36, 80, "OK", 15);
+    button(W - 94, H - 36, 80, "Cancel", 14);
     if (focus >= 2) draw_focus(X + (focus == 2 ? W - 224 : W - 113), Y + H - 38, focus == 2 ? 102 : 97, 29);
 }
 static int profile_writable(const char *path)
@@ -287,83 +721,148 @@ static int save_mode(u16 mode)
 }
 static void finish_preview(int keep)
 {
+    int kept = 0;
     if (!preview) return;
+    diag_event(keep ? "keep" : "rollback", preview_mode, (u16)app_display_mode(0));
+    diag_active(keep ? "keep" : "rollback", (int)app_display_mode(0));
     notice.open = 0;
     dialog_sync(&notice);
     if (keep && save_mode(preview_mode)) {
+        kept = 1;
         str_copy(status, "Display mode saved.");
         app_log("[DISPLAY] kept", "graphics");
     } else {
         if (app_display_mode(previous_mode) < 0) {
             str_copy(status, "Could not restore the previous mode. Open Display again.");
+            diag_event("restore-fail", previous_mode, (u16)app_display_mode(0));
             app_log("[DISPLAY] restore failed", "graphics");
-            preview = 0; pending_probe = 1;
+            preview = 0; pending_probe = 1; close_after_preview = 0;
             ui_repaint_win(WIN_DISPLAY);
             return;
         }
         str_copy(status, keep ? "Profile could not be saved. Previous mode restored." : "Previous display mode restored.");
+        diag_event(keep ? "save-fail" : "restored", previous_mode, (u16)app_display_mode(0));
         app_log("[DISPLAY] reverted", "graphics");
     }
     preview = 0; pending_probe = 1;
+    if (!kept) close_after_preview = 0;
+    else if (close_after_preview) { close_after_preview = 0; ui_repaint_win(WIN_DISPLAY); app_close(); return; }
     ui_repaint_win(WIN_DISPLAY);
 }
 static void apply(void)
 {
-    if (!probe.mode_count) return;
+    if (!probe.mode_count) { diag_event("no-modes", 0, probe.flags); return; }
     native_read();
+    diag_event("apply", probe.modes[selected].id, probe.modes[selected].flags);
+    diag_mode("selected", probe.modes[selected].id);
     if (vm_seg && !native_ok) {
+        diag_event("native-unknown", probe.modes[selected].id, 0xFFFF);
         msgbox(&notice, "Display settings", "The session manager did not report its state.\nDisplay settings could not be changed safely.", "OK");
         return;
     }
     if (native_ok && nfield(56)) {
+        diag_event("blocked-dos", probe.modes[selected].id, (u16)nfield(56));
         msgbox(&notice, "Display settings", "Close DOS windows before changing the display mode.\nThe current game will keep running.", "OK");
         app_log("[DISPLAY] blocked", "DOS windows open");
         return;
     }
     if (probe.modes[selected].id == probe.current_mode) {
+        diag_event("already-active", probe.current_mode, probe.current_mode_flags);
         str_copy(status, "The selected display mode is already active."); return;
     }
     previous_mode = probe.current_mode;
     preview_mode = probe.modes[selected].id;
     if (app_display_mode(preview_mode) < 0) {
+        diag_event("queue-fail", preview_mode, (u16)app_display_mode(0));
         str_copy(status, "The display change could not be queued."); return;
     }
     preview = 1; preview_tick = HOST.ticks;
     str_copy(status, "Applying display mode...");
+    diag_event("queued", preview_mode, previous_mode);
     app_log("[DISPLAY] preview", "graphics");
+}
+static void accept_properties(void)
+{
+    if (!properties_apply()) return;
+    if (probe.mode_count && probe.modes[selected].id != probe.current_mode) {
+        close_after_preview = 1;
+        apply();
+        if (!preview) close_after_preview = 0;
+        return;
+    }
+    app_close();
 }
 static int action(int id)
 {
-    if (id >= 0 && id < 4) { page = id; focus = 0; return 1; }
+    int i;
+    if (id >= 0 && id < 6) { page = id; focus = 0; return 1; }
     if (id >= 20 && id < 27 && top + id - 20 < probe.mode_count) {
         selected = top + id - 20; focus = 1; return 1;
     }
+    if (id >= 100 && id < 109 && wall_top + id - 100 < wall_count) {
+        wall_selected = wall_top + id - 100; wallpaper_dimensions();
+        wall_changed = wall_selected != wall_saved_index || wall_style != wall_saved_style; return 1;
+    }
+    if (id >= 50 && id < 55) {
+        wall_style = id - 50; wall_changed = wall_selected != wall_saved_index || wall_style != wall_saved_style; return 1;
+    }
+    if (id >= 60 && id < 68) { theme_scheme_select(id - 60); return 1; }
+    if (id >= 70 && id < 78) {
+        i = id - 70;
+        mem_copy(theme_palette + 9, i ? theme_palette + theme_swatches[i] * 3 : cfg_default_palette + 9, 3);
+        theme_dirty = 1; ui_palette(theme_palette); return 1;
+    }
+    if (id >= 80 && id < 88) {
+        theme_icons ^= (u16)(1 << (id - 80)); return 1;
+    }
     if (id == 10) { pending_probe = 1; return 1; }
-    if (id == 11) { apply(); return 1; }
+    if (id == 11) {
+        if (page == 0) { if (properties_apply()) apply(); }
+        else properties_apply();
+        return 1;
+    }
     if (id == 12) app_open(WIN_DEVICES, "");
     if (id == 13) app_open(WIN_DEVICES, "drivers");
-    if (id == 14) app_close();
+    if (id == 14) { theme_restore(); app_close(); }
+    if (id == 15) { accept_properties(); return 1; }
     return 1;
 }
 int app_event(int ev, int a, int b, int c)
 {
-    int r, orig = ev, scan, ch, sx, sy, had_monitor, old_backend, old_phase;
+    int r, orig = ev, scan, ch, sx, sy, i, had_monitor, old_backend, old_phase;
     if (ev == EV_OPEN) {
         str_copy(app_title, "Display Properties");
         if (!HDR_WIDTH) { HDR_WIDTH = 606; HDR_HEIGHT = 414; }
-        if (!str_icmp(APP_ARG, "advanced")) page = 3;
+        if (!str_icmp(APP_ARG, "background") || !str_icmp(APP_ARG, "wallpaper")) page = 4;
+        else if (!str_icmp(APP_ARG, "appearance")) page = 5;
+        else if (!str_icmp(APP_ARG, "advanced")) page = 3;
         else if (!str_icmp(APP_ARG, "monitor")) page = 2;
+        else page = 0;
         APP_ARG[0] = 0;
+        properties_load();
         pending_probe = 1;
         app_log("[DISPLAY] open", "Display Properties");
         return 1;
     }
     if (ev == EV_POLL && preview) {
         if ((unsigned)(HOST.ticks - preview_tick) >= 219) {
+            diag_event("timeout", preview_mode, (u16)app_display_mode(0));
+            diag_active("timeout", (int)app_display_mode(0));
             finish_preview(0); return 1;
         }
         if (preview == 1 && app_display_mode(0) != 0) {
-            if (app_display_mode(0) != preview_mode) { finish_preview(0); return 1; }
+            int app_mode = app_display_mode(0), vbe_ok;
+            u16 vbe_ax, vbe_bx, pitch, pixels, lines, scan;
+            vbe_ok = read_active_vbe(&vbe_ax, &vbe_bx, &pitch, &pixels, &lines, &scan);
+            diag_active("preview", app_mode);
+            if (app_mode != preview_mode || !vbe_ok ||
+                (vbe_bx & 0x3FFF) != preview_mode ||
+                (probe_require_banked && (vbe_bx & 0x4000))) {
+                diag_event("verify-fail", preview_mode, vbe_bx);
+                finish_preview(0); return 1;
+            }
+            diag_event("preview-ok", preview_mode, vbe_bx);
+            diag_mode("preview", preview_mode);
             preview = 2;
             msgbox(&notice, "Keep display settings?", "Keep this display mode?\nThe previous mode returns automatically in 12 seconds.", "Yes|No");
             dialog_sync(&notice); return 1;
@@ -400,14 +899,36 @@ int app_event(int ev, int a, int b, int c)
     case EV_ACTION: r = action(a); break;
     case EV_KEY:
         scan = KEY_SCAN(a); ch = KEY_CHAR(a); r = 1;
-        if (ch == 27) { app_close(); break; }
-        if (ch >= '1' && ch <= '4') { page = ch - '1'; focus = 0; break; }
-        if (ch == 9) { focus = (focus + 1) % 4; break; }
-        if (scan == K_F5) { pending_probe = 1; break; }
-        if (ch == 13) { if (focus == 3) app_close(); else if (page == 0) apply(); break; }
+        if (ch == 27) { theme_restore(); app_close(); break; }
+        if (ch >= '1' && ch <= '6') { page = ch - '1'; focus = 0; break; }
+        if (ch == 9) { focus = (focus + 1) % 6; break; }
+        if (scan == K_F5) {
+            if (page == 4) wallpaper_refresh();
+            else pending_probe = 1;
+            break;
+        }
+        if (ch == 13) { accept_properties(); break; }
         if (!ch || ch == 0xE0) {
-            if (scan == K_LEFT) { page = (page + 3) % 4; break; }
-            if (scan == K_RIGHT) { page = (page + 1) % 4; break; }
+            if (scan == K_LEFT && page != 4) { page = (page + 5) % 6; break; }
+            if (scan == K_RIGHT && page != 4) { page = (page + 1) % 6; break; }
+            if (page == 4 && wall_count) {
+                if (scan == K_HOME) wall_selected = 0;
+                if (scan == K_END) wall_selected = wall_count - 1;
+                if (scan == K_UP && wall_selected > 0) wall_selected--;
+                if (scan == K_DOWN && wall_selected + 1 < wall_count) wall_selected++;
+                if (scan == K_LEFT && wall_style > 0) wall_style--;
+                if (scan == K_RIGHT && wall_style < 4) wall_style++;
+                if (wall_selected < wall_top) wall_top = wall_selected;
+                if (wall_selected >= wall_top + 9) wall_top = wall_selected - 8;
+                wall_changed = wall_selected != wall_saved_index || wall_style != wall_saved_style;
+                wallpaper_dimensions();
+                break;
+            }
+            if (page == 5 && (scan == K_UP || scan == K_DOWN) && theme_scheme >= 0) {
+                i = theme_scheme + (scan == K_UP ? -1 : 1);
+                if (i >= 0 && i < 8) theme_scheme_select(i);
+                break;
+            }
             if (page == 0 && probe.mode_count) {
                 if (scan == K_UP && selected > 0) selected--;
                 if (scan == K_DOWN && selected + 1 < probe.mode_count) selected++;
@@ -422,6 +943,12 @@ int app_event(int ev, int a, int b, int c)
         }
         break;
     case EV_WHEEL:
+        if (page == 4 && wall_count > 9 && !notice.open) {
+            wall_top += a * 3;
+            if (wall_top > wall_count - 9) wall_top = wall_count - 9;
+            if (wall_top < 0) wall_top = 0;
+            return 1;
+        }
         if (page != 0 || !probe.mode_count || notice.open) return 0;
         top += a * 3;
         if (top > probe.mode_count - 7) top = probe.mode_count - 7;
@@ -435,6 +962,14 @@ int app_event(int ev, int a, int b, int c)
             if (hit == -1 && top > 0) top--;
             else if (hit == -2 && top + 7 < probe.mode_count) top++;
             else if (hit >= 16) top = (int)(hit - 16);
+            r = 1;
+        }
+        if (page == 4 && a == MOUSE_DOWN && sx >= X + 222 && sx < X + 238 && sy >= Y + 64 && sy < Y + 235 && wall_count > 9) {
+            long hit = scroll_hit(X + 222, Y + 64, 171, sy, wall_count, 9);
+            if (hit == -1 && wall_top > 0) wall_top--;
+            else if (hit == -2 && wall_top + 9 < wall_count) wall_top++;
+            else if (hit >= 0) wall_top = (int)hit;
+            if (wall_top > wall_count - 9) wall_top = wall_count - 9;
             r = 1;
         }
         break;
@@ -454,7 +989,7 @@ int app_event(int ev, int a, int b, int c)
         }
         r = 0; break;
     case EV_SUSPEND: return 1;
-    case EV_CLOSE: finish_preview(0); return 0;
+    case EV_CLOSE: theme_restore(); finish_preview(0); return 0;
     default: r = 0; break;
     }
     r = dialog_post(&notice, WIN_DISPLAY, ev, r);

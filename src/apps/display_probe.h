@@ -6,6 +6,11 @@
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
+struct regs { u16 ax, bx, cx, dx, si, di, ds, es, flags, cxh, dxh, axh; };
+int intr(int n, struct regs *r);
+u16 app_seg(void);
+u16 peek16(u16 seg, u16 off);
+u16 disp_probe_host_ptr(const void *p);
 void mem_set(void *dst, int value, int bytes);
 #else
 #include "app.h"
@@ -28,11 +33,29 @@ void mem_set(void *dst, int value, int bytes);
 #define DISP_ADAPTER_ATI     3
 #define DISP_ADAPTER_NVIDIA  4
 #define DISP_ADAPTER_INTEL   5
+#define DISP_ADAPTER_S3      6
+#define DISP_ADAPTER_MATROX  7
+#define DISP_ADAPTER_SIS     8
+#define DISP_ADAPTER_3DFX    9
+#define DISP_ADAPTER_CIRRUS  10
+#define DISP_ADAPTER_TRIDENT 11
+#define DISP_ADAPTER_NEOMAGIC 12
 
 /* Exactly 16 bytes, suitable for the native desktop query's mode table. */
 struct disp_mode {
     u16 id, width, height, pitch, bpp, flags;
     u32 frame_bytes;
+};
+
+#define DISP_MODE_LINEAR 0x0001
+#define DISP_MODE_BANKED 0x0002
+
+struct disp_mode_diag {
+    u16 attributes, granularity_kb, window_kb, window_a_segment, window_b_segment;
+    u16 banked_pitch, linear_pitch, bpp;
+    u8 window_a_attributes, window_b_attributes, memory_model, reserved;
+    u32 framebuffer_phys;
+    u8 bank_masks[8], linear_masks[8];
 };
 
 struct disp_monitor {
@@ -59,6 +82,8 @@ struct disp_probe {
 int disp_probe_parse_edid(const u8 *edid, u16 bytes, struct disp_monitor *out);
 
 /* Probe VBE, current scanout, EDID and matching PCI display adapter. */
-int disp_probe_init(struct disp_probe *out);
+int disp_probe_init(struct disp_probe *out, int require_banked);
+int disp_probe_get_mode_diag(u16 id, struct disp_mode_diag *out);
+void disp_probe_sort_modes(struct disp_probe *probe);
 
 #endif

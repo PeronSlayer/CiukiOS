@@ -99,6 +99,8 @@ def main():
     g = Gate(vm)
     try:
         vm.ready()
+        # Dismiss the boot About window so Tasks sees only this test's apps.
+        vm.key('esc')
         # ---- keys ----
         g.act('Win+R opens Run', ['meta_l-r'], '[DESKTOP] WINDOW 01 OPEN')
         g.act('Esc closes Run', ['esc'], '[DESKTOP] WINDOW 01 CLOSE')

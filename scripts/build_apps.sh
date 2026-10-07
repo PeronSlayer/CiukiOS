@@ -16,7 +16,7 @@ nasm -f obj src/apps/app_start.asm -o "$OUT/app_start.obj"
 for unit in rt ui sys regstore display_probe helper; do
 	wcc "${CFLAGS[@]}" -fo="$OUT/$unit.obj" "src/apps/$unit.c"
 done
-for app in files ciuknote tasks desktop recycle control devices paint dosvm browser webnet_app webimg webstyle display about; do
+for app in files ciuknote tasks desktop recycle control devices paint dosvm browser webnet_app webimg webstyle display about viewer player wallp; do
 	[[ -f "src/apps/$app.c" ]] || continue
 	name="${app^^}.APP"
 	[[ "$app" != webnet_app ]] || name=WEBNET.APP
@@ -27,6 +27,24 @@ for app in files ciuknote tasks desktop recycle control devices paint dosvm brow
 	[[ "$app" != control ]] || units="$units,$OUT/regstore.obj"
 	case "$app" in control|devices) units="$units,$OUT/helper.obj" ;; esac
 	[[ "$app" != display ]] || units="$units,$OUT/display_probe.obj"
+	if [[ "$app" == desktop ]]; then
+		wcc "${CFLAGS[@]}" -fo="$OUT/webmodule.obj" src/apps/webmodule.c
+		units="$units,$OUT/webmodule.obj"
+	fi
+	if [[ "$app" == wallp ]]; then
+		wcc "${CFLAGS[@]}" -fo="$OUT/webstore.obj" src/apps/webstore.c
+		units="$units,$OUT/webstore.obj"
+	fi
+	if [[ "$app" == viewer ]]; then
+		wcc "${CFLAGS[@]}" -fo="$OUT/webmodule.obj" src/apps/webmodule.c
+		wcc "${CFLAGS[@]}" -fo="$OUT/webstore.obj" src/apps/webstore.c
+		units="$units,$OUT/webmodule.obj,$OUT/webstore.obj"
+	fi
+	if [[ "$app" == player ]]; then
+		wcc "${CFLAGS[@]}" -3 -fo="$OUT/mediawork.obj" src/apps/mediawork.c
+		wcc "${CFLAGS[@]}" -fo="$OUT/webstore.obj" src/apps/webstore.c
+		units="$units,$OUT/mediawork.obj,$OUT/webstore.obj"
+	fi
 	if [[ "$app" == browser ]]; then
 		wcc "${CFLAGS[@]}" -fo="$OUT/webio.obj" src/apps/webio.c
 		wcc "${CFLAGS[@]}" -fo="$OUT/webmodule.obj" src/apps/webmodule.c

@@ -93,6 +93,11 @@ The session (virtual VGA, device model) belongs to the VM that runs BEGIN
     to the system VM (the desktop); see "Several sessions at once" below.
   - `cvdev_set_pull` keeps the device model from taking bytes that belong
     to another VM. A VM that loses the focus has its held keys released.
+  - When a focused VM exits normally, the manager clears focus and reruns
+    `vmm_input_route`, matching `VMM_KILL`; otherwise device models could
+    retain that VM's physical IRQ1/IRQ12 ownership. `VMM_CREATE` does not
+    change focus: it initializes a free record while the manager-global
+    `vmm_focus` value remains unchanged.
 - **One IRQ0 callback** (`host_tick`) serves the session scheduler and the
   VM manager. Jemm has one host-scheduler slot, and `VM_ERROR_VMM_BUSY` no
   longer happens with a window open.

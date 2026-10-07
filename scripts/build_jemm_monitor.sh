@@ -23,6 +23,8 @@ ap.add_argument('--ciukios-device-query', action='store_true',
                 help='Opt in to CiukiOS device queries and the A20 IN AL register-preservation fix')
 ap.add_argument('--ciukios-vm-scheduler', action='store_true',
                 help='Opt in to the exact-owned physical IRQ scheduler callback used by CVSESSION')
+ap.add_argument('--farret-trace', action='store_true',
+                help='Add an optional memory-only 32-entry trace of Jemm simulated V86 far calls/returns')
 ap.add_argument('--ciukios-v86-interrupts', action='store_true',
                 help='Accepted for compatibility: the scheduler build always compiles the '
                      'V86 interrupt profile, which a session must negotiate at run time')
@@ -37,7 +39,7 @@ if not 1 <= args.jobs <= 8:
 out = args.output.resolve()
 if out == root or out == Path('/') or root/'build' not in out.parents:
     ap.error('--output must be a subdirectory of this repository\'s ignored build directory')
-for tool in ('make', 'gcc', 'ar', 'curl') + (('patch',) if (args.ciukios_device_query or args.ciukios_vm_scheduler) else ()):
+for tool in ('make', 'gcc', 'ar', 'curl') + (('patch',) if (args.ciukios_device_query or args.ciukios_vm_scheduler or args.farret_trace) else ()):
     if not shutil.which(tool):
         raise SystemExit(f'Missing host build tool: {tool}')
 meta = json.loads((root/'third_party/jemm/UPSTREAM.json').read_text())
@@ -147,6 +149,14 @@ if args.ciukios_vm_scheduler:
     # An idle V86 context (HLT) gives the CPU to another ready VM at once.
     hlt_patch = root/'patches/jemm-ciukios-hlt-yield.patch'
     run(['patch', '--batch', '--forward', '-p1', '-i', str(hlt_patch)], jemm)
+    xms_guard_patch = root/'patches/jemm-ciukios-xms-scheduler-guard.patch'
+    # XMS handlers may re-enable host interrupts while copying memory. The
+    # scheduler must defer every VM switch until the complete handler returns.
+    (jemm/'src/XMS.ASM').write_text((jemm/'src/XMS.ASM').read_text())
+    (jemm/'src/CVIRQ.INC').write_text((jemm/'src/CVIRQ.INC').read_text())
+    run(['patch', '--batch', '--forward', '-p1', '-i', str(xms_guard_patch)], jemm)
+    shadow_release_patch = root/'patches/jemm-ciukios-sti-shadow-release.patch'
+    run(['patch', '--batch', '--forward', '-p1', '-i', str(shadow_release_patch)], jemm)
     adaptations.append({'name':'ciukios-ctrl-alt-del', 'patch_sha256':digest(cad_patch),
                         'scope':'INT 15h AX=4F53h is reflected to V86 like any key; the BIOS resets when no intercept takes it'})
     included_adaptation_files.append(cad_patch)
@@ -163,6 +173,24 @@ if args.ciukios_vm_scheduler:
                         'patch_sha256':digest(hlt_patch),
                         'scope':'Profile function 11: the owner may switch V86 contexts at a V86 HLT instead of halting the CPU'})
     included_adaptation_files.append(hlt_patch)
+    adaptations.append({'name':'ciukios-xms-scheduler-guard',
+                        'patch_sha256':digest(xms_guard_patch),
+                        'scope':'Expose nested XMS-handler activity in Host_Scheduler_Profile state bit 6; wrap XMS handler entry/exit so the VM owner can defer context switches across interrupt-enabled XMS operations'})
+    included_adaptation_files.append(xms_guard_patch)
+    adaptations.append({'name':'ciukios-sti-shadow-release',
+                        'patch_sha256':digest(shadow_release_patch),
+                        'scope':'Retire only monitor-owned STI Trap Flag on profile withdrawal; preserve genuine guest single stepping'})
+    included_adaptation_files.append(shadow_release_patch)
+if args.farret_trace:
+    farret_patch = root/'patches/jemm-ciukios-farret-trace.patch'
+    # This patch only changes JEMM32.ASM; apply after other source adaptations.
+    source_file = jemm/'src/JEMM32.ASM'
+    source_file.write_text(source_file.read_text())
+    run(['patch', '--batch', '--forward', '-p1', '-i', str(farret_patch)], jemm)
+    adaptations.append({'name':'ciukios-farret-trace',
+                        'patch_sha256':digest(farret_patch),
+                        'scope':'Optional memory-only CVFRET01 ring (last 32 entries) for Simulate_Far_Ret and Simulate_Far_Call; no I/O or control-flow change'})
+    included_adaptation_files.append(farret_patch)
 if args.ciukios_v86_interrupts:
     adaptations.append({'name':'ciukios-v86-interrupts',
                         'negotiated':'Host_Scheduler_Profile service, version 1.0',
@@ -177,8 +205,13 @@ for directory in (jemm/'Include', jemm/'src', jemm/'Tools/JLOAD'):
 # The upstream explicit EXE target needs its output directory pre-created.
 (jemm/'build/JEMM386').mkdir(parents=True)
 (jemm/'build/JEMMEX').mkdir(parents=True)
-profile_options = (['AOPT=-c -nologo -IInclude -DCIUKIOS_V86_INTERRUPTS=1']
-                   if args.ciukios_v86_interrupts else [])
+assembler_defines = []
+if args.ciukios_v86_interrupts:
+    assembler_defines.append('-DCIUKIOS_V86_INTERRUPTS=1')
+if args.farret_trace:
+    assembler_defines.append('-DCIUKIOS_FARRET_TRACE=1')
+profile_options = ([f"AOPT=-c -nologo -IInclude {' '.join(assembler_defines)}"]
+                   if assembler_defines else [])
 run(['make','-f','Linux.mak','DEBUG=0',*profile_options,'build/JEMM386/JEMM386.EXE'], jemm)
 run(['make','-f','Linux.mak','DEBUG=0',*profile_options,'build/JEMMEX/JEMMEX.EXE'], jemm)
 (jemm/'Tools/JLOAD/RELEASE').mkdir()
@@ -222,6 +255,9 @@ if adaptations:
         'The optional scheduler extension owns one exact IRQ0 callback before V86 reflection.\n'
         'Its negotiated V86 interrupt profile keeps one virtual PIC; function 8 lets the owner accept\n'
         'a device IRQ for delivery to a protected-mode client with the same masking and priority rules.\n'
+        'The scheduler profile exposes XMS-handler activity in state bit 6 so its VM owner can defer\n'
+        'context switches while an interrupt-enabled XMS operation is in progress.\n'
+        'The optional CVFRET01 far-call/return trace is memory-only and records at most 32 entries.\n'
         'It services the one foreground DOS context and does not create an independent VM.\n'
         'Compilation does not prove device execution, unload or full DOS virtualization.\n')
 (result_dir/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')

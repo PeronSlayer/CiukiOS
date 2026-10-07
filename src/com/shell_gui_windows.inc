@@ -445,10 +445,14 @@ ui_windows_taskbar:
     sub ax,188
     xor dx,dx
     div cx
-    cmp ax,76
-    jbe .sized
-    mov ax,76
+    cmp ax,120
+    jbe short .sized
+    mov ax,120
 .sized:
+    cmp ax,36
+    jae short .min_ok
+    mov ax,36
+.min_ok:
     mov [ui_task_button_width],ax
     mov dx,[ui_height]
     sub dx,28
@@ -456,9 +460,9 @@ ui_windows_taskbar:
     mov bp,1
 .next:
     cmp byte [ui_window_flags+bp],0
-    je .advance
+    je short .advance
     cmp byte [ui_window_flags+bp],3
-    je .advance
+    je short .advance
     mov ax,bp
     add ax,200
     mov di,bp
@@ -467,13 +471,123 @@ ui_windows_taskbar:
     mov cx,[ui_task_button_width]
     sub cx,4
     mov si,24
-    call ui_button
+    call ui_task_button
     add bx,[ui_task_button_width]
 .advance:
     inc bp
     cmp bp,UI_WINDOW_COUNT
-    jb .next
+    jb short .next
 .done:
+    popad
+    ret
+
+; Draw a taskbar button with 16x16 window icon and title label.
+; AX = button id (200 + BP), BP = window id (1..31), BX = x, DX = y, CX = w, SI = 24, DI = title
+ui_task_button:
+    pushad
+    mov [ui_button_id],ax
+    call ui_hit_add
+
+    ; Check pressed or active window state
+    cmp byte [ui_button_down],1
+    jne short .check_active
+    cmp ax,[ui_pressed]
+    jne short .check_active
+    call ui_inset
+    inc bx
+    inc dx
+    jmp short .draw_content
+.check_active:
+    movzx ax,byte [ui_active_window]
+    cmp ax,bp
+    jne short .raised
+    call ui_inset
+    inc bx
+    inc dx
+    jmp short .draw_content
+.raised:
+    mov al,7
+    call ui_bevel
+
+.draw_content:
+    ; 1. Draw 16x16 icon at BX + 4, DX + 4
+    push bx
+    push dx
+    push cx
+    push si
+    push di
+    mov si,bp
+    cmp si,UI_WINDOW_COUNT
+    jae short .def_icon
+    mov al,[cs:ui_window_icons+si]
+    jmp short .got_icon
+.def_icon:
+    mov al,4                    ; ICON_DOS
+.got_icon:
+    add bx,4
+    add dx,4
+    call ui_icons_draw_16
+    pop di
+    pop si
+    pop cx
+    pop dx
+    pop bx
+
+    ; 2. Draw label at BX + 24, DX + 4
+    cmp cx,30
+    jb short .btn_done
+    push bx
+    push dx
+    add bx,24
+    add dx,4
+    mov ax,cx
+    sub ax,28                   ; AX = available width for text
+    cmp ax,6
+    jbe short .skip_text
+    mov [ui_task_avail_w],ax
+
+    ; Copy title into ui_task_buf and truncate to fit if needed
+    cld
+    push ds
+    pop es
+    mov si,di
+    mov di,ui_task_buf
+    xor cx,cx
+.copy_char:
+    lodsb
+    stosb
+    test al,al
+    jz short .measure
+    inc cx
+    cmp cx,28
+    jb short .copy_char
+    mov byte [di],0
+.measure:
+    mov si,ui_task_buf
+    call ui_measure             ; CX = measured width
+    cmp cx,[ui_task_avail_w]
+    jbe short .text_fits
+    ; Truncate by 1 char
+    mov si,ui_task_buf
+.find_null:
+    cmp byte [si],0
+    je short .at_null
+    inc si
+    jmp short .find_null
+.at_null:
+    cmp si,ui_task_buf
+    jbe short .text_fits
+    mov byte [si-1],0
+    jmp short .measure
+.text_fits:
+    mov si,ui_task_buf
+    xor ax,ax                   ; black text, regular font
+    call ui_text
+.skip_text:
+    pop dx
+    pop bx
+
+.btn_done:
     popad
     ret
 
@@ -642,8 +756,12 @@ ui_task_control db 'Control',0
 ui_task_paint db 'Paint',0
 ui_task_recycle db 'Recycle',0
 ui_task_button_width dw 72
+ui_task_buf times 32 db 0
+ui_task_avail_w dw 0
 ui_window_titles dw ut_programs,ut_run,ut_about,ut_power,ut_launch_error,ut_display,ut_sound,ut_brand,ut_files,ut_tasks,ut_wallpaper,ut_dos_window,ut_notepad,ut_control,ut_devices,ut_recycle,ut_paint,ut_browser,ut_display
                  times UI_WINDOW_COUNT-19 dw ut_modwin
+ui_window_icons db 13,5,11,12,5,8,9,11,1,33,28,4,2,20,26,18,34,32,8,36,37
+                times UI_WINDOW_COUNT-21 db 4
 ui_window_flags times UI_WINDOW_COUNT db 0
 ui_default_focus dw 44,40,41,41,41,50,55,1,0,0,183,18,0
                  times UI_WINDOW_COUNT-13 dw 0

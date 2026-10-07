@@ -19,6 +19,10 @@ start:
     push cs
     pop es
 
+    mov dx, wolf_dir
+    mov ah, 0x3B
+    int 0x21
+
     mov dx, msg_prepare
     call print_line
 
@@ -188,6 +192,7 @@ msg_prepare db '[WOLF3D] Preparing application',13,10,'$'
 msg_begin db '[WOLF3D] LAUNCH AC97 VSBHDA 2.0 TRANSIENT', 13, 10, '$'
 msg_cleanup db '[WOLF3D] AUDIO CLEANUP COMPLETE - RETURNING TO SHELL', 13, 10, '$'
 msg_fail db '[WOLF3D] EXEC FAIL', 13, 10, '$'
+wolf_dir db '\APPS\WOLF3D', 0
 child_failed db 0
 host_owned db 0
 

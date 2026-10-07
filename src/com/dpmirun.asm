@@ -986,11 +986,80 @@ print:
     ret
 
 log:
+    push si
+    call disk_log
+    pop si
+.next:
     lodsb
     test al,al
     jz print.done
     call serial
-    jmp log
+    jmp .next
+
+; Best-effort transition log. Preserve caller state; never called from IRQs.
+disk_log:
+    pushfd
+    pushad
+    push ds
+    push es
+    push cs
+    pop ds
+    xor cx,cx
+.length:
+    cmp byte [si],0
+    je .open
+    inc si
+    inc cx
+    cmp cx,160
+    jb .length
+.open:
+    test cx,cx
+    jz .done
+    sub si,cx
+    mov [disk_log_ptr],si
+    mov [disk_log_bytes],cx
+    mov dx,disk_log_path
+    mov ax,3D02h
+    int 21h
+    jnc .seek
+    jmp .create
+.seek:
+    mov bx,ax
+    xor cx,cx
+    xor dx,dx
+    mov ax,4202h
+    int 21h
+    jc .close
+    test dx,dx
+    jnz .rotate
+    add ax,[disk_log_bytes]
+    jc .rotate
+    cmp ax,4096
+    jbe .write
+.rotate:
+    mov ah,3Eh
+    int 21h
+.create:
+    mov dx,disk_log_path
+    xor cx,cx
+    mov ax,3C00h
+    int 21h
+    jc .done
+    mov bx,ax
+.write:
+    mov dx,[disk_log_ptr]
+    mov cx,[disk_log_bytes]
+    mov ah,40h
+    int 21h
+.close:
+    mov ah,3Eh
+    int 21h
+.done:
+    pop es
+    pop ds
+    popad
+    popfd
+    ret
 
 serial:
     push ax
@@ -1041,6 +1110,9 @@ unload_tail db 3,' -u',13
 entry dd 0
 exec_name dw program
 params dw 0,0,0,5Ch,0,6Ch,0
+disk_log_path db '\SYSTEM\DPMIRUN.LOG',0
+disk_log_ptr dw 0
+disk_log_bytes dw 0
 saved_sp dw 0
 saved_drive db 0
 exit_code db 0

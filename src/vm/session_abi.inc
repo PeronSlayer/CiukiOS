@@ -219,8 +219,8 @@ VM_FB_PACKET_VERSION   equ 4
 VM_FB_PACKET_BYTES     equ 6
 VM_FB_PACKET_PHYSICAL  equ 8
 VM_FB_PACKET_LENGTH    equ 12
-; Restricted first profile: reject lower MMIO, RAM and the native XMS pool.
-VM_FB_MIN_PHYSICAL     equ 80000000h
+; Restricted physical framebuffer profile: reject conventional memory below 1MB.
+VM_FB_MIN_PHYSICAL     equ 00100000h
 VM_FB_MAX_BYTES        equ 04000000h
 VM_FB_ROWS_PACKET_SIZE equ 32
 VM_FB_ROWS_MAGIC       equ 052465643h ; bytes CVFR

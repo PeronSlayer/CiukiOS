@@ -258,8 +258,15 @@ ui_action:
 .menu_closed:
     cmp ax,100
     jb .non_files
-    cmp ax,149
+    cmp ax,248
     ja .non_files
+    push si
+    push bx
+    mov bl,[ui_active_window]
+    call app_slot
+    pop bx
+    pop si
+    jc .non_files                    ; native windows keep their own controls
     call app_action
     cmp ax,249
     jne .not_module_command
@@ -1969,6 +1976,7 @@ ui_record:
 
 %include "src/com/shell_gui_input.inc"
 %include "src/com/shell_gui_compositor.inc"
+%include "src/com/ui_icons.inc"
 %include "src/com/shell_gui_windows.inc"
 %include "src/com/shell_gui_dialogs.inc"
 %include "src/com/shell_apps.inc"
@@ -1984,7 +1992,6 @@ ui_record:
 %define CIUKI_LOGO_ORIGIN_Y 0
 %define CIUKI_LOGO_EXTERNAL_SEG ui_assets_seg
 %include "src/com/ciuki_logo.inc"
-%include "src/com/ui_icons.inc"
 
 ui_items:
     dw ut_dosbox,ud_prompt,0,3

@@ -18,7 +18,7 @@ from PIL import Image
 from qemu_test_installed_hdd import FAT16
 from qemu_test_native_windows import WindowVM
 from qemu_test_native_utilities import Utilities
-from qemu_test_wallpaper import palette
+from qemu_test_wallpaper import cover_frame, palette
 
 
 def main():
@@ -87,12 +87,13 @@ def main():
         mapped = ui_palette[distances.argmin(1)]
         mapped = ((mapped << 2)|((mapped&1)*3)).astype(np.uint8)
         tile = mapped[indices]
-        yy,xx = np.indices(frame.shape[:2])
-        expected = tile[yy%h,xx%w]
+        expected = frame.copy()
+        expected[29:frame.shape[0]-32] = cover_frame(tile, frame.shape[1], frame.shape[0])
         mask = np.zeros(frame.shape[:2],bool)
         mask[40:frame.shape[0]-80,150:frame.shape[1]-15] = True
         mismatches = int(((frame != expected).any(2)&mask).sum())
-        report['events'].append({'name':name,'compared_pixels':int(mask.sum()),'mismatched_pixels':mismatches})
+        report['events'].append({'name':name,'position':'Fill',
+                                 'compared_pixels':int(mask.sum()),'mismatched_pixels':mismatches})
         save()
         assert mismatches == 0
     try:
@@ -125,11 +126,11 @@ def main():
         ui.until(lambda: ui.w('wp_count') == damaged,'Refresh discovers copied files')
         selected(valid)
         ui.until(lambda: ui.b('wp_selected') == valid,'Imported wallpaper applied')
-        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([valid])
+        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([valid, 0])
         selected(damaged)
         ui.until(lambda: 'could not be loaded' in ui.z_at(ui.w('wp_status')-256), 'Damaged tile has an English error')
         assert ui.b('wp_selected') == valid
-        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([valid])
+        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([valid, 0])
         vm.shot('damaged-file-error')
         hide_all()
         compare('imported-tile-after-failed-apply')

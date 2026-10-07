@@ -122,7 +122,11 @@ ui_text:
     shl di,5
     add si,95
     add si,di
-    ; A whole glyph must fit. Never let a planar glyph wrap onto a new row.
+    ; The compositor clips each glyph pixel to its owned band. Do not reject
+    ; visible right-edge characters using the planar writer's three-byte guard.
+    cmp byte [ui_composing],1
+    je .packed
+    ; The direct planar writer touches three bytes, so its footprint must fit.
     mov ax,bx
     add ax,24
     cmp ax,[ui_width]
@@ -131,8 +135,6 @@ ui_text:
     add ax,16
     cmp ax,[ui_height]
     ja .skip
-    cmp byte [ui_composing],1
-    je .packed
     cmp byte [ui_vbe],1
     je .packed
     call ug_glyph

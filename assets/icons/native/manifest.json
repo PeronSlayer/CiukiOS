@@ -8,7 +8,7 @@
     32,
     32
   ],
-  "count": 36,
+  "count": 38,
   "palette_indices": [
     80,
     143
@@ -248,12 +248,24 @@
       "name": "CiukWeb",
       "upstream_member": "tango-icon-theme-0.8.90/32x32/apps/internet-web-browser.png",
       "ciuki_overlay": null
+    },
+    {
+      "id": 36,
+      "name": "Image file",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/mimetypes/image-x-generic.png",
+      "ciuki_overlay": null
+    },
+    {
+      "id": 37,
+      "name": "Music file",
+      "upstream_member": "tango-icon-theme-0.8.90/32x32/mimetypes/audio-x-generic.png",
+      "ciuki_overlay": null
     }
   ],
   "files": {
     "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz": "6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e",
     "assets/brand/ciuki-logo.png": "17210ac9cfe07c54d6b0069a1502a036d52cb6340715ad47bdd54fa4dd386620",
-    "scripts/build_ui_icons.py": "e1079632ed1ba586b0d5eaed76c04a5819375bab48825bff0a782ee5a5d04e6b",
+    "scripts/build_ui_icons.py": "5f8dac91faa4c1f2a30fb097153324c9f128a3f07b3aba67038f81723afad7d0",
     "scripts/build_ciuki_logo.py": "a2d943206c7ac62b13438700e7643bc564fd8705bede4e02ee60b723035de40a",
     "assets/icons/upstream/COPYING": "4f740497cf8ad0e564de90d3416a06c3d6b1d69d6883fe539925e3353d68a466",
     "assets/icons/upstream/AUTHORS": "5e8f8f713c5436e76acaf9c5b4be0be9426fea2225444c6ecdaa37519f67d0b5",
@@ -292,6 +304,8 @@
     "assets/icons/sources/apps-utilities-system-monitor.png": "79620bc5f7dec37cce87d0c62c7a247ca5650daf752278c506d6ba48bf398c02",
     "assets/icons/sources/categories-applications-graphics.png": "67db1adccac32b2b04b5d20e5c139b0e37a66b80c1be7e2268b73d188520f0c7",
     "assets/icons/sources/apps-internet-web-browser.png": "9750d3c79f83ab17c8b139fa1027b2ecd30debbad534499f1729922bb96c9625",
+    "assets/icons/sources/mimetypes-image-x-generic.png": "bc3a72813290c67bd8166d04e07f55fb9bbd9387856982d7611215b278ec2d6d",
+    "assets/icons/sources/mimetypes-audio-x-generic.png": "5420e61e631fcad2ae4f2d3b1117a448b0a98acf305996b929d152d3bd6dc03a",
     "src/com/ciuki_logo_palette.inc": "1dcee7af6e9df17513250281ab762eb4316dbf5883de9884ed8baa725f2a7d2f",
     "assets/brand/native/ciuki-16.bin": "e4bf73becba9eee3009f2135dfc016eb3bf6c75fd8f97a03a92d07572ea76010",
     "assets/icons/native/00.png": "f2b15f78ae76257774a3e81bb2f0edd07156277b2e2988516532c7a65e6c6b3e",
@@ -331,9 +345,11 @@
     "assets/icons/native/33.png": "12ba79ba2063172ec594670ea3bb1f034fa19d85ed1e7b347c47caa6842d12d1",
     "assets/icons/native/34.png": "7c45880147cff784621d078c18bb7720aeaa6cfe68d941d49183d61cc4341ee4",
     "assets/icons/native/35.png": "516c32792176d08c48582a55a2a8a7b755c3cd4b7bac40953c53f4a0a8d1dece",
-    "assets/icons/native/ICONS.DAT": "19581f86deaa791d635508a1078baacb0a2a7337df69e62376e4370f2705ec39",
+    "assets/icons/native/36.png": "2d6849256082ac408759ea9b25c8cdba1b67d132dbdbe69875e493e0a7871361",
+    "assets/icons/native/37.png": "0d3edb54d58c6bc39670ce3f7a5a26e548409516a879f82728eab9d3f6e9ee7d",
+    "assets/icons/native/ICONS.DAT": "3e9f44625446b141254c93d3d901cffd53c42fd3d62e1b3b52f30012bcdbe1cf",
     "assets/icons/native/fallback.bin": "73f5cd5a954efa2d2a6d0aa7a95450346874fc1c207956b7a3ff2d157bd38117",
     "src/com/ui_icons_palette.inc": "04e3dbe4d5156c4585e770ef0225a2789b67d6d994d637e7d45a2fcd402c6b39",
-    "assets/icons/preview.png": "91e66d7a55cee965924e98c90b05358acba3f64da9e27a6432394c9ec215691c"
+    "assets/icons/preview.png": "138ced50ac142272ba7c50b0b16aad9cace3d7975dc243b9bc819feb6e3c06f3"
   }
 }

@@ -145,6 +145,8 @@ startup_memory_map:
 startup_vm_manager:
     cmp byte [vc_force_safe],1
     je .done
+    cmp byte [driver_skip_vm],1
+    je .done
     pushad
     call setup_exec_block
     mov byte [exec_tail],0
@@ -229,6 +231,7 @@ driver_has_line:
 driver_profile_valid db 0
 driver_startup_audio db 1
 driver_force_vga db 0
+driver_skip_vm db 0
 driver_detector_path db '\DRIVERS\HWDETECT.COM',0
 driver_network_path db '\NET\NETSTART.COM',0
 driver_loader_path db '\DRIVERS\LOADDRV.COM',0

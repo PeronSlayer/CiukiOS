@@ -78,7 +78,7 @@ cvgpu_clock_khz endp
 ; bound restricts mappings to small high-MMIO windows, never native RAM.
 cvgpu_map_mmio proc c public uses ebx esi edi physical:dword, bytes:dword
  mov ebx,physical
- cmp ebx,80000000h
+ cmp ebx,00100000h
  jb bad
  mov ecx,bytes
  test ecx,ecx

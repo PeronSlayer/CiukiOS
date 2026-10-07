@@ -80,7 +80,7 @@ def main():
         return video
 
     for label, data in (('DDC unsupported', None), ('Invalid EDID header', bytes([255])*128)):
-        select(label+' bounds AUTO to 800x600', data, 0x141, (800, 600))
+        select(label+' bounds AUTO to 1024x768', data, 0x142, (1024, 768))
     for offset, value, label, repair_checksum in (
         (127, 1, 'Invalid checksum', False), (18, 2, 'Unknown EDID version', True),
         (24, 0, 'No preferred timing flag', True), (54, 0, 'Zero preferred pixel clock', True)):
@@ -90,7 +90,7 @@ def main():
             data[55] = 0
         if repair_checksum:
             data[127] = 0; data[127] = (-sum(data)) & 255
-        select(label+' bounds AUTO to 800x600', data, 0x141, (800, 600))
+        select(label+' bounds AUTO to 1024x768', data, 0x142, (1024, 768))
     select('Valid 1024x768 EDID retains native bound', preferred_edid(), 0x142, (1024, 768))
     select('Valid 2K EDID retains high resolution', preferred_edid(2560, 1440), 0x143, (2560, 1440))
     for data in (None, preferred_edid()):
@@ -98,9 +98,9 @@ def main():
         video.call('vc_resolve_mode', ax=2560, dx=1440)
         assert video.get('vc_mode') == 0x143
     checks.append('Explicit 2K profile resolves above absent or smaller EDID preference')
-    select('Missing 800x600 mode retains an available safe lower mode', None, 0x140, (800, 600),
+    select('Missing 800x600 mode retains an available safe lower mode under XGA fallback', None, 0x140, (1024, 768),
            {0x140: (640, 480), 0x143: (2560, 1440)})
-    select('No mode within unknown-monitor bound returns zero for VGA fallback', None, 0, (800, 600),
+    select('No mode within XGA fallback bound returns zero for VGA fallback', None, 0, (1024, 768),
            {0x143: (2560, 1440)})
     report = dict(passed=True, checks=checks,
                   scope='Production CPU selection; BIOS descriptors and EDID supplied by the fixture',

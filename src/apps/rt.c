@@ -1,6 +1,7 @@
 /* Runtime of the desktop application modules: shell services, strings,
  * numbers and DOS calls (no C library). See app.h. */
 #include "app.h"
+#include "player_audio.h"
 
 struct sargs { int x, y, w, h; const char *s; int v, v2, v3; };
 int svc(int n, struct sargs *a);
@@ -100,11 +101,43 @@ int app_display_mode(unsigned mode)
     a.v = mode; a.v2 = a.v3 = 0;
     return svc(29, &a);
 }
+int app_wallpaper(struct app_wallpaper_info *info)
+{
+    struct sargs a;
+    info->bytes=sizeof *info;
+    a.x=a.y=a.w=a.h=a.v=a.v2=a.v3=0;
+    a.s=(const char *)info;
+    return svc(32,&a);
+}
+int app_wallpaper_apply(unsigned index,unsigned style)
+{
+    struct sargs a;
+    struct app_wallpaper_info info;
+    mem_set(&info,0,sizeof info);info.bytes=sizeof info;
+    info.index=(unsigned char)index;info.style=(unsigned char)style;
+    a.x=a.y=a.w=a.h=a.v2=a.v3=0;a.v=1;a.s=(const char *)&info;
+    return svc(32,&a);
+}
+int app_wallpaper_count(void)
+{
+    struct sargs a;
+    struct app_wallpaper_info info;
+    mem_set(&info,0,sizeof info);info.bytes=sizeof info;
+    a.x=a.y=a.w=a.h=a.v2=a.v3=0;a.v=2;a.s=(const char *)&info;
+    return svc(32,&a);
+}
 void ui_cursor(int type)
 {
     struct sargs a;
     a.x = a.y = a.w = a.h = a.v2 = a.v3 = 0; a.s = ""; a.v = type;
     svc(30, &a);
+}
+int app_audio(int op, struct app_audio_packet *packet)
+{
+    struct sargs a;
+    a.x = a.y = a.w = a.h = a.v2 = a.v3 = 0;
+    a.s = (const char *)packet; a.v = op;
+    return svc(31, &a);
 }
 static void fs_changed(void) { struct sargs a; a.s = ""; a.v = 1; svc(25, &a); }
 

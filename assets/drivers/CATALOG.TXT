@@ -54,6 +54,7 @@ Family              Driver       License   Load rule
 NE2000 / RTL8029    NE2000       GPL v1    PCI 10EC:8029 or 1050:0940
 AMD PCnet           PCNET        GPL v1    PCI 1022:2000
 Realtek RTL8139     RTL8139      GPL v1    PCI 10EC:8139
+S3 SuperSavage/Sav  S3VBEFIX     WTFPL     PCI 5333:8C2E / S3 series VBE fix
 Intel PRO/1000      E1000        GPL v2    Disabled; QEMU PCI BIOS failure
 Intel PRO/100       E100         GPL v3    Disabled; QEMU transmit unverified
 3Com 3C509 ISA      3C509        GPL v1    Disabled; manual ISA setup

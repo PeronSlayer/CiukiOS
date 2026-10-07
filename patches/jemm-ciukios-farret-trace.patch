@@ -1,0 +1,191 @@
+--- a/src/JEMM32.ASM
++++ b/src/JEMM32.ASM
+@@ -117,6 +117,26 @@
+ endif
+ dwMaxPhysMem    dd 0        ; XMS highest address (r/o)
+ bpstart         dd 0        ; linear address start of static bp array in Jemm16.RSEG
++ifdef CIUKIOS_FARRET_TRACE
++; Optional, memory-only trace of the last 32 simulated V86 far returns.
++; Header offsets: magic=0, next=8, count=12, sequence=16, frozen=20,
++; fault snapshot=24..48, reserved=52, records=56. Each record is 40 bytes.
++    public CvFarRetTrace
++CvFarRetTrace db "CVFRET01"
++CvFarRetTraceNext dd 0
++CvFarRetTraceCount dd 0
++CvFarRetTraceSequence dd 0
++CvFarRetTraceFrozen dd 0
++CvFarRetTraceFaultCS dd 0
++CvFarRetTraceFaultIP dd 0
++CvFarRetTraceFaultSS dd 0
++CvFarRetTraceFaultSP dd 0
++CvFarRetTraceFaultEAX dd 0
++CvFarRetTraceFaultEFlags dd 0
++CvFarRetTraceFaultInt dd 0
++CvFarRetTraceReserved dd 0
++CvFarRetTraceRecords dd 320 dup (0)
++endif
+ PageMapHeap     dd ?SYSBASE+?PAGETABSYS+6*4
+ 
+ ;--- address space heap for 4MB pages (PDEs).
+@@ -877,6 +897,34 @@
+     align 4
+ 
+ handle_exception_ebp::          ; <--- entry exc in v86
++ifdef CIUKIOS_FARRET_TRACE
++    ; Freeze the trace on the first V86 invalid-opcode exception, before the
++    ; normal formatter or abort path can issue additional simulated returns.
++    pushfd
++    pushad
++    cmp byte ptr [ebp].Client_Reg_Struc.Client_Int, 6
++    jne short CvFarRetTraceFaultDone
++    cmp CvFarRetTraceFrozen, 0
++    jne short CvFarRetTraceFaultDone
++    mov eax, [ebp].Client_Reg_Struc.Client_CS
++    mov CvFarRetTraceFaultCS, eax
++    mov eax, [ebp].Client_Reg_Struc.Client_EIP
++    mov CvFarRetTraceFaultIP, eax
++    mov eax, [ebp].Client_Reg_Struc.Client_SS
++    mov CvFarRetTraceFaultSS, eax
++    mov eax, [ebp].Client_Reg_Struc.Client_ESP
++    mov CvFarRetTraceFaultSP, eax
++    mov eax, [ebp].Client_Reg_Struc.Client_EAX
++    mov CvFarRetTraceFaultEAX, eax
++    mov eax, [ebp].Client_Reg_Struc.Client_EFlags
++    mov CvFarRetTraceFaultEFlags, eax
++    mov eax, [ebp].Client_Reg_Struc.Client_Int
++    mov CvFarRetTraceFaultInt, eax
++    inc CvFarRetTraceFrozen
++CvFarRetTraceFaultDone:
++    popad
++    popfd
++endif
+     mov esp,ebp
+ ;--- v5.87: handle segment registers similar to PL0
+ 	push [ebp].Client_Reg_Struc.Client_DS
+@@ -2048,6 +2096,18 @@
+ ;--- v5.87: take care of SP wrap
+ 
+ Simulate_Far_Ret proc public
++ifdef CIUKIOS_FARRET_TRACE
++    ; Snapshot the untouched client frame and monitor return address. The
++    ; recorder restores every register and flag before this routine proceeds.
++    pushfd
++    pushad
++    push 0                  ; target comes from the V86 stack
++    push 0                  ; kind: simulated far return
++    call CvFarRetTraceRecord
++    add esp, 8
++    popad
++    popfd
++endif
+     MOVZX edx, word ptr [EBP].Client_Reg_Struc.Client_ESP
+     MOVZX ecx, word ptr [EBP].Client_Reg_Struc.Client_SS
+     SHL ecx, 4
+@@ -2062,6 +2122,85 @@
+     align 4
+ Simulate_Far_Ret endp
+ 
++ifdef CIUKIOS_FARRET_TRACE
++; 40-byte record layout: sequence, kind (0=RETF, 1=CALL), SS:SP,
++; source CS, source IP, EAX, target CS:IP, protected-mode caller EIP,
++; Client_Int, Client_EFlags. Ring arithmetic is bounded.
++CvFarRetTraceRecord proc near
++    push ebx
++    push esi
++    push edi
++    cmp CvFarRetTraceFrozen, 0
++    jne CvFarRetTraceRecordDone
++    mov esi, ebp
++    mov eax, CvFarRetTraceNext
++    and eax, 31
++    imul eax, eax, 40
++    lea edi, CvFarRetTraceRecords[eax]
++
++    mov ecx, CvFarRetTraceSequence
++    inc ecx
++    mov CvFarRetTraceSequence, ecx
++    mov [edi], ecx
++    mov eax, [esp+16]        ; operation kind argument
++    mov [edi+4], eax
++
++    movzx eax, word ptr [esi].Client_Reg_Struc.Client_ESP
++    movzx ebx, word ptr [esi].Client_Reg_Struc.Client_SS
++    shl ebx, 16
++    or eax, ebx
++    mov [edi+8], eax
++    mov eax, [esi].Client_Reg_Struc.Client_CS
++    mov [edi+12], eax
++    mov eax, [esi].Client_Reg_Struc.Client_EIP
++    mov [edi+16], eax
++    mov eax, [esi].Client_Reg_Struc.Client_EAX
++    mov [edi+20], eax
++
++    cmp dword ptr [esp+16], 0
++    jne short CvFarRetTraceUseArgumentTarget
++    movzx ecx, word ptr [esi].Client_Reg_Struc.Client_SS
++    shl ecx, 4
++    movzx edx, word ptr [esi].Client_Reg_Struc.Client_ESP
++    movzx eax, word ptr [ecx+edx]
++    movzx ebx, word ptr [esi].Client_Reg_Struc.Client_ESP
++    add bx, 2
++    movzx edx, bx
++    movzx ebx, word ptr [ecx+edx]
++    shl ebx, 16
++    or eax, ebx
++    jmp short CvFarRetTraceStoreTarget
++CvFarRetTraceUseArgumentTarget:
++    mov eax, [esp+20]        ; packed target CS:IP argument
++CvFarRetTraceStoreTarget:
++    mov [edi+24], eax
++
++    ; Two arguments make helper ESP 60 bytes below either caller entry ESP.
++    mov eax, [esp+60]
++    mov [edi+28], eax
++    mov eax, [esi].Client_Reg_Struc.Client_Int
++    mov [edi+32], eax
++    mov eax, [esi].Client_Reg_Struc.Client_EFlags
++    mov [edi+36], eax
++
++    mov eax, CvFarRetTraceNext
++    inc eax
++    and eax, 31
++    mov CvFarRetTraceNext, eax
++    mov eax, CvFarRetTraceCount
++    cmp eax, 32
++    jae short CvFarRetTraceCountReady
++    inc eax
++    mov CvFarRetTraceCount, eax
++CvFarRetTraceCountReady:
++CvFarRetTraceRecordDone:
++    pop edi
++    pop esi
++    pop ebx
++    ret
++CvFarRetTraceRecord endp
++endif
++
+ ;--- simulate a far call in v86-mode
+ ;--- EBP -> client struct
+ ;--- cx: new CS -> client_reg_struct.cs
+@@ -2071,6 +2210,21 @@
+ ;--- v5.87: take care of SP wrap
+ 
+ Simulate_Far_Call proc public
++ifdef CIUKIOS_FARRET_TRACE
++    ; Record the incoming far-call target before the original routine mutates
++    ; the client frame; instrumentation leaves all inputs untouched.
++    pushfd
++    pushad
++    mov eax, ecx
++    shl eax, 16
++    mov ax, dx
++    push eax                ; packed target CS:IP
++    push 1                  ; kind: simulated far call
++    call CvFarRetTraceRecord
++    add esp, 8
++    popad
++    popfd
++endif
+     movzx ecx, cx
+     movzx edx, dx
+     sub word ptr [EBP].Client_Reg_Struc.Client_ESP, sizeof RETFWS ; if ESP is to decrease, adjust it first!

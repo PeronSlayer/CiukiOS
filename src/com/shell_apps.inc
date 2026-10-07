@@ -2,17 +2,17 @@
 ; the desktop surface, Control Panel (13), Devices (14) and Display (18) are separate
 ; programs in \SYSTEM\APPS (built from src/apps). The shell loads one into its
 ; own memory block and draws the frames of its windows: its main window and
-; the windows it opens itself (ids 19-31: dialogs, properties). It forwards
-; paint, keys, the mouse (both buttons, hover) and actions 100-149 of the hits
+; the windows it opens itself (ids 21-31: dialogs, properties). It forwards
+; paint, keys, the mouse (both buttons, hover) and actions 100-248 of the hits
 ; it registered, naming the window. The desktop module paints the desktop
 ; surface (window FEh) and an overlay above every window (FDh: its menus).
 ; Contract: src/apps/app.h.
-APP_COUNT equ 12
+APP_COUNT equ 14
 APP_DESKTOP equ 3                       ; slot of the desktop module
 APP_WIN_DISPLAY equ 18
 APP_WIN_DESKTOP equ 0xFE
 APP_WIN_OVERLAY equ 0xFD
-APP_WIN_FIRST_DYNAMIC equ 19
+APP_WIN_FIRST_DYNAMIC equ 21
 APP_EV_OPEN equ 1
 APP_EV_PAINT equ 2
 APP_EV_PAINT_TOPBAR equ 9
@@ -532,6 +532,16 @@ app_poll:
     mov ax,249
     ret
 .check_close:
+    cmp byte [app_close_window],0
+    je .own_close
+    pushad
+    movzx bx,byte [app_close_window]
+    mov byte [app_close_window],0
+    call ui_windows_raise
+    call ui_windows_close
+    popad
+    mov ax,250
+.own_close:
     cmp byte [app_request],1
     jne .return
     mov byte [app_request],0
@@ -611,7 +621,7 @@ app_key:
     clc
     ret
 
-; AX = 100..149: the active module's control. AX = UI action.
+; AX = 100..248: the active module's control. AX = UI action.
 app_action:
     push si
     push bx
@@ -1091,6 +1101,8 @@ app_service:
     mov di,app_args
     mov cx,8
     rep movsw
+    cmp bp,31                          ; PCM packet is binary, not UI text
+    je .binary
     mov si,[es:app_args+8]
     mov di,app_text
     mov cx,159
@@ -1100,6 +1112,7 @@ app_service:
     test al,al
     loopnz .text
     mov byte [es:di],0
+.binary:
     mov [es:app_caller],ds
     push cs
     pop ds
@@ -1124,11 +1137,81 @@ app_service:
     pop bx
     pop es
     pop ds
+%ifdef APP_RETURN_TRACE
+    call app_return_trace_capture
+%endif
     cli
     mov ss,[cs:app_module_ss]
     mov sp,[cs:app_module_sp]
     sti
     retf
+
+%ifdef APP_RETURN_TRACE
+; Snapshot the caller's far-return frame after the service has restored all
+; saved registers, but before RETF consumes the CAPP stack words. No I/O.
+app_return_trace_capture:
+    pushfd
+    cli
+    pushad
+    push es
+    cmp dword [cs:app_return_trace_frozen],0
+    jne .restore
+    mov ax,[cs:app_return_trace_next]
+    and ax,15
+    mov di,ax
+    shl ax,4
+    shl di,2
+    add di,ax
+    add di,app_return_trace_records
+
+    inc dword [cs:app_return_trace_sequence]
+    mov ax,[cs:app_return_trace_sequence]
+    mov [cs:di],ax
+    mov ax,[cs:app_module_ss]
+    mov [cs:di+2],ax
+    mov ax,[cs:app_module_sp]
+    mov [cs:di+4],ax
+    mov ax,[cs:app_caller]
+    mov [cs:di+6],ax
+
+    mov ax,[cs:app_module_ss]
+    mov es,ax
+    mov bx,[cs:app_module_sp]
+    mov ax,[es:bx]
+    mov [cs:di+8],ax
+    mov ax,[es:bx+2]
+    mov [cs:di+10],ax
+
+    mov ax,[cs:app_service_ax]
+    mov [cs:di+12],ax
+    mov ax,[cs:app_cur_slot]
+    mov [cs:di+14],ax
+    mov ax,ss
+    mov [cs:di+16],ax
+    mov ax,sp
+    add ax,40                          ; helper call + PUSHFD/PUSHAD/PUSH ES
+    mov [cs:di+18],ax
+
+    mov eax,[cs:app_return_trace_next]
+    inc eax
+    and eax,15
+    mov [cs:app_return_trace_next],eax
+    mov eax,[cs:app_return_trace_count]
+    cmp eax,16
+    jae .count_ready
+    inc eax
+    mov [cs:app_return_trace_count],eax
+.count_ready:
+    mov ax,[es:bx+2]
+    cmp ax,[cs:app_caller]
+    je .restore
+    mov dword [cs:app_return_trace_frozen],1
+.restore:
+    pop es
+    popad
+    popfd
+    ret
+%endif
 
 app_services dw app_s_rect,app_s_text,app_s_bevel,app_s_inset,app_s_button
              dw app_s_hit,app_s_icon,app_s_measure,app_s_repaint,app_s_command
@@ -1136,8 +1219,140 @@ app_services dw app_s_rect,app_s_text,app_s_bevel,app_s_inset,app_s_button
              dw app_s_idle,app_s_mono,app_s_win_open,app_s_win_close,app_s_damage
              dw app_s_action,app_s_overlay,app_s_font,app_s_settings,app_s_palette
              dw app_s_changes,app_s_bitmap,app_s_band_info,app_s_desktop_focus,app_s_display_mode
-             dw app_s_cursor
+             dw app_s_cursor,app_s_audio,app_s_wallpaper
 APP_SVC_COUNT equ ($-app_services)/2
+
+; Desktop/Display metadata, packed 20 bytes. Only Display may apply a choice.
+app_s_wallpaper:
+    cmp word [app_cur_slot],APP_DESKTOP*2
+    je .caller_ok
+    cmp word [app_cur_slot],20       ; Display slot 10
+    jne .bad
+.caller_ok:
+    mov es,[app_caller]
+    mov di,[app_args+8]
+    mov ax,di
+    add ax,20
+    jc .bad
+    mov cx,[es:APP_HDR_PARAS]
+    shl cx,4
+    jz .bounds_ok
+    cmp ax,cx
+    ja .bad
+.bounds_ok:
+    cmp word [es:di],20
+    jne .bad
+    cmp word [app_args+10],0
+    je .query
+    cmp word [app_args+10],2
+    je .catalog
+    cmp word [app_args+10],1
+    jne .bad
+    cmp word [app_cur_slot],20
+    jne .bad
+    movzx ax,byte [es:di+4]
+    cmp ax,[wp_count]
+    ja .bad
+    mov bl,[es:di+19]
+    cmp bl,4
+    ja .bad
+    mov [wp_choice],al
+    push bx
+    call wp_load
+    pop bx
+    jc .bad
+    mov [wp_style],bl
+    mov al,[wp_choice]
+    mov [wp_selected],al
+    call wp_save_config
+    mov byte [ui_full_redraw],1
+    jc .bad
+    mov ax,1
+    ret
+.catalog:
+    cmp word [app_cur_slot],20
+    jne .bad
+    cmp word [wp_catalog_seg],0
+    je .bad
+    call wp_discover
+    mov ax,[wp_count]
+    ret
+.query:
+    mov ax,[wp_generation]
+    mov [es:di+2],ax
+    mov al,[wp_selected]
+    mov [es:di+4],al
+    mov al,[wp_kind]
+    mov [es:di+5],al
+    mov al,[wp_style]
+    mov [es:di+19],al
+    add di,6
+    mov al,[wp_selected]
+    test al,al
+    jz .empty
+    call wp_path
+    mov si,wp_file_name
+    mov cx,13
+    rep movsb
+    mov ax,1
+    ret
+.empty:
+    mov byte [es:di],0
+    mov ax,1
+    ret
+.bad:
+    xor ax,ax
+    ret
+
+; Only Player owns a PCM stream. AX=suboperation, caller DS:packet in args.s.
+app_s_audio:
+    cmp word [app_cur_slot],26
+    jne .unavailable
+    cmp word [ui_sfx_entry+2],0
+    je .unavailable
+    mov es,[app_caller]
+    mov dx,es
+    cmp dx,[app_segs+26]
+    jne .unavailable
+    mov di,[app_args+8]
+    mov dx,di
+    add dx,30
+    jc .unavailable
+    cmp word [es:di],30
+    jne .unavailable
+    mov cx,[es:APP_HDR_PARAS]
+    shl cx,4
+    jz .packet_ok                     ; a complete 64 KiB module arena
+    cmp dx,cx
+    ja .unavailable
+.packet_ok:
+    test ax,ax
+    jnz .pcm
+    cmp dword [es:di+4],48000
+    jne .unavailable
+.pcm:
+    cmp ax,1
+    jne .call
+    mov bx,es
+    cmp [es:di+20],bx                  ; PCM belongs to Player's module
+    jne .unavailable
+    mov bx,[es:di+24]
+    cmp bx,2048
+    ja .unavailable
+    shl bx,2
+    add bx,[es:di+22]
+    jc .unavailable
+    jcxz .call
+    cmp bx,cx
+    ja .unavailable
+.call:
+    mov bx,ax
+    mov ax,8
+    call far [ui_sfx_entry]
+    ret
+.unavailable:
+    mov ax,3
+    ret
 
 app_s_cursor:
     cmp ax,2
@@ -2064,8 +2279,8 @@ app_idle_woke:
     pop es
     ret
 
-app_main db 8,9,12,APP_WIN_DESKTOP,13,14,15,16,11,17,APP_WIN_DISPLAY,2
-app_paths dw app_path_files,app_path_tasks,app_path_notepad,app_path_desktop,app_path_control,app_path_devices,app_path_recycle,app_path_paint,app_path_dosvm,app_path_browser,app_path_display,app_path_about
+app_main db 8,9,12,APP_WIN_DESKTOP,13,14,15,16,11,17,APP_WIN_DISPLAY,2,19,20
+app_paths dw app_path_files,app_path_tasks,app_path_notepad,app_path_desktop,app_path_control,app_path_devices,app_path_recycle,app_path_paint,app_path_dosvm,app_path_browser,app_path_display,app_path_about,app_path_viewer,app_path_player
 app_path_files db '\SYSTEM\APPS\FILES.APP',0
 app_path_tasks db '\SYSTEM\APPS\TASKS.APP',0
 app_path_notepad db '\SYSTEM\APPS\CIUKNOTE.APP',0
@@ -2078,12 +2293,14 @@ app_path_dosvm db '\SYSTEM\APPS\DOSVM.APP',0
 app_path_browser db '\SYSTEM\APPS\BROWSER.APP',0
 app_path_about db '\SYSTEM\APPS\ABOUT.APP',0
 app_path_display db '\SYSTEM\APPS\DISPLAY.APP',0
+app_path_viewer db '\SYSTEM\APPS\VIEWER.APP',0
+app_path_player db '\SYSTEM\APPS\PLAYER.APP',0
 app_settings_path db '\SYSTEM\UI\DESKTOP.CFG',0
 app_settings_font_dir db '\SYSTEM\FONTS\',0
 ; Each window's module slot (FFh: the shell's), title offset in that module
 ; (0: its header title), style (bit 0: dialog frame).
-app_win_slot db 0xFF,0xFF,11,0xFF,0xFF,0xFF,0xFF,0xFF,0,1,0xFF,8,2,4,5,6,7,9,10
-             times UI_WINDOW_COUNT-19 db 0xFF
+app_win_slot db 0xFF,0xFF,11,0xFF,0xFF,0xFF,0xFF,0xFF,0,1,0xFF,8,2,4,5,6,7,9,10,12,13
+             times UI_WINDOW_COUNT-21 db 0xFF
 app_win_title times UI_WINDOW_COUNT dw 0
 app_win_style times UI_WINDOW_COUNT db 0
 app_ev_window db 0xFF
@@ -2109,7 +2326,7 @@ app_settings times APP_SETTINGS_BYTES db 0
 app_set_mouse db 2,0,9                  ; speed (2 = normal), swap, double-click
 app_max_label db 2,0
 app_desktop_marker db '[DESKTOP] SHOW DESKTOP',13,10,0
-app_builtin_names db 12,'CIUKNOTE',0,12,'NOTEPAD',0,16,'CIUKPAINT',0,16,'MSPAINT',0,16,'PAINT',0,8,'EXPLORER',0,8,'FILES',0,9,'TASKMGR',0,13,'CONTROL',0,14,'DEVMGMT',0,18,'DISPLAY',0,17,'CIUKWEB',0,17,'BROWSER',0,2,'ABOUT',0,0
+app_builtin_names db 12,'CIUKNOTE',0,12,'NOTEPAD',0,16,'CIUKPAINT',0,16,'MSPAINT',0,16,'PAINT',0,8,'EXPLORER',0,8,'FILES',0,9,'TASKMGR',0,13,'CONTROL',0,14,'DEVMGMT',0,18,'DISPLAY',0,17,'CIUKWEB',0,17,'BROWSER',0,2,'ABOUT',0,19,'VIEWER',0,19,'IMAGE',0,20,'PLAYER',0,20,'MUSIC',0,0
 app_media_floppy db 'media:1',0
 app_media_usb db 'media:2',0
 app_media_cd db 'media:3',0
@@ -2127,6 +2344,15 @@ app_caller dw 0
 app_request db 0                       ; 1 close the window, 2 run app_command
 app_open_window db 0
 app_close_window db 0
+%ifdef APP_RETURN_TRACE
+align 4
+app_return_trace_magic db 'CAPPRET1'
+app_return_trace_next dd 0
+app_return_trace_count dd 0
+app_return_trace_sequence dd 0
+app_return_trace_frozen dd 0
+app_return_trace_records times 16*20 db 0
+%endif
 app_busy db 0
 app_capture db 0                        ; window+1 whose module has the left button
 app_previous_right db 0
@@ -2144,7 +2370,6 @@ app_saved_x times UI_WINDOW_COUNT dw 0
 app_saved_y times UI_WINDOW_COUNT dw 0
 app_saved_w times UI_WINDOW_COUNT dw 0
 app_saved_h times UI_WINDOW_COUNT dw 0
-app_state times APP_COUNT*APP_STATE_BYTES db 0
 app_header times 0x16 db 0
 app_args times 8 dw 0
 app_text times 160 db 0

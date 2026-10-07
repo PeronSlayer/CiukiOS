@@ -228,4 +228,5 @@ vc_access_bytes dd 0x100000
 vc_pitch dw 800
 vc_bytes db 1
 vc_colors times 256 dd 0
+vc_info times 256 db 0
 %include "src/com/vbe_fb.inc"

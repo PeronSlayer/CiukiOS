@@ -12,6 +12,11 @@ vc_session_find:
     pop ds
     cmp dword [vc_session_entry],0
     jne .found
+    ; INT 2Fh/1684h requires a null input pointer. Without a VMM the
+    ; multiplex chain may leave ES:DI unchanged; never cache caller scratch.
+    xor ax,ax
+    mov es,ax
+    xor di,di
     mov ax,0x1684
     mov bx,VM_DEVICE_ID
     int 0x2F

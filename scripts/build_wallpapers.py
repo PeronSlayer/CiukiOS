@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build CWP1 wallpaper tiles and a bounded CWC1 catalog.
+"""Build CWP1 tiles, owner CWP2 photos and a bounded CWC1 catalog.
 
 PNG and BMP inputs are losslessly indexed at their native tile size (1..256
 pixels per side, at most 256 distinct colors). Unsupported inputs fail clearly;
 no image is silently resized, recolored or excluded. Owner-supplied Windows
-artwork remains opt-in. Public builds contain original CC0 tiles.
+artwork remains opt-in. The three project-owned Ciuki photos are always
+appended after the selected CWP1 set.
 """
 from __future__ import annotations
 
@@ -20,6 +21,12 @@ from PIL import Image, UnidentifiedImageError
 MAX_WALLPAPERS = 99
 SUPPORTED_SUFFIXES = {".bmp", ".png"}
 PUBLIC_SOURCE = Path(__file__).resolve().parents[1] / "assets/wallpapers/tiles"
+PHOTO_SOURCE = Path(__file__).resolve().parents[1] / "misc/ciukios_bg"
+PHOTO_NAMES = ("Ciuk1.png", "Ciuk2.png", "Ciuk3.png")
+PHOTO_WIDTH = 1672
+PHOTO_HEIGHT = 941
+PHOTO_STRIDE = PHOTO_WIDTH * 3
+PHOTO_BYTES = PHOTO_STRIDE * PHOTO_HEIGHT
 
 
 def ascii_title(value: str) -> bytes:
@@ -52,6 +59,24 @@ def convert(source: Path) -> tuple[bytes, tuple[int, int]]:
         colors = b"".join(bytes(color) for color in palette).ljust(256 * 3, b"\0")
         header = struct.pack("<4sHHHHI", b"CWP1", width, height, 256, 0, len(pixels))
         return header + colors + pixels, (width, height)
+
+
+def convert_photo(source: Path) -> tuple[bytes, tuple[int, int], int]:
+    """Encode a project photo as exact row-major RGB888 without resampling."""
+    with Image.open(source) as original:
+        if original.format != "PNG" or original.mode != "RGB":
+            raise ValueError(f"{source}: project photos must be RGB PNGs")
+        if original.size != (PHOTO_WIDTH, PHOTO_HEIGHT):
+            raise ValueError(f"{source}: expected {PHOTO_WIDTH}x{PHOTO_HEIGHT}; no resizing is performed")
+        pixels = original.tobytes()
+    if len(pixels) != PHOTO_BYTES:
+        raise ValueError(f"{source}: decoded RGB payload has an unexpected size")
+    header = struct.pack("<4sHHHBBI", b"CWP2", PHOTO_WIDTH, PHOTO_HEIGHT,
+                         PHOTO_STRIDE, 1, 0, PHOTO_BYTES)
+    payload = header + pixels
+    if len(payload) != 16 + PHOTO_BYTES:
+        raise ValueError(f"{source}: encoded CWP2 size is invalid")
+    return payload, (PHOTO_WIDTH, PHOTO_HEIGHT), len(pixels)
 
 
 def read_catalog(data: bytes) -> list[tuple[str, bytes]]:
@@ -91,16 +116,19 @@ def discover(directory: Path) -> list[Path]:
     return inputs
 
 
-def build(output: Path, sources: list[Path], *, personal: bool) -> dict:
-    if len(sources) > MAX_WALLPAPERS:
-        raise ValueError(f"The wallpaper catalog supports at most {MAX_WALLPAPERS} tiles")
+def build(output: Path, sources: list[Path], *, personal: bool,
+          photo_sources: list[Path] | None = None) -> dict:
+    photo_sources = photo_sources or []
+    if len(sources) + len(photo_sources) > MAX_WALLPAPERS:
+        raise ValueError(f"The wallpaper catalog supports at most {MAX_WALLPAPERS} entries")
     # Validate every input before writing anything: a bad later input must not
     # leave a half-updated catalog or overwrite an earlier working texture.
     converted = [(source, *convert(source)) for source in sources]
+    converted_photos = [(source, *convert_photo(source)) for source in photo_sources]
     output.mkdir(parents=True, exist_ok=True)
     records = []
-    manifest = {"format": "CiukiOS wallpaper CWP1/CWC1", "personal_inputs_enabled": personal,
-                "conversion": "lossless RGB palette and unchanged native tile dimensions",
+    manifest = {"format": "CiukiOS wallpaper CWP1/CWP2/CWC1", "personal_inputs_enabled": personal,
+                "conversion": "CWP1 lossless RGB palette; CWP2 exact native RGB888 PNG samples",
                 "wallpapers": []}
     for index, (source, payload, dimensions) in enumerate(converted, 1):
         filename = f"WALL{index:02}.CWP"
@@ -111,9 +139,29 @@ def build(output: Path, sources: list[Path], *, personal: bool) -> dict:
             "filename": filename, "sha256": hashlib.sha256(payload).hexdigest(),
             "dimensions": dimensions,
             "license": "not supplied; owner-provided image" if personal else "CC0-1.0"})
+    for index, (source, payload, dimensions, rgb_bytes) in enumerate(
+            converted_photos, len(records) + 1):
+        filename = f"WALL{index:02}.CWP"
+        (output / filename).write_bytes(payload)
+        records.append((filename, ascii_title(source.stem)))
+        manifest["wallpapers"].append({
+            "source": str(source), "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "filename": filename, "sha256": hashlib.sha256(payload).hexdigest(),
+            "format": "CWP2", "dimensions": dimensions,
+            "header_bytes": 16, "rgb_payload_bytes": rgb_bytes,
+            "file_bytes": len(payload), "rgb_exact_match": True,
+            "license": "owner-provided CiukiOS project asset"})
+    photo_default = next((i for i, (_, title) in enumerate(records, 1)
+                          if title.split(b"\0", 1)[0] == b"Ciuk1"), None)
+    if photo_default is not None:
+        (output / "WALL.CFG").write_bytes(bytes([photo_default, 0]))
+        manifest["default_selection"] = {"file": "WALL.CFG", "entry": photo_default,
+                                         "title": "Ciuk1", "position": "Fill", "position_id": 0}
+    else:
+        (output / "WALL.CFG").unlink(missing_ok=True)
     (output / "WALLS.DAT").write_bytes(catalog_bytes(records))
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    for index in range(len(sources)+1, MAX_WALLPAPERS+1):
+    for index in range(len(records)+1, MAX_WALLPAPERS+1):
         (output / f"WALL{index:02}.CWP").unlink(missing_ok=True)
     return manifest
 
@@ -122,15 +170,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("build/wallpapers"))
     parser.add_argument("--source", type=Path, default=Path("third_party/win_bg"))
+    parser.add_argument("--photo-source", type=Path, default=PHOTO_SOURCE,
+                        help="directory containing Ciuk1.png, Ciuk2.png and Ciuk3.png")
     parser.add_argument("--include-user-wallpapers", action="store_true",
                         help="include owner-provided PNG/BMP tiles for a personal build")
     args = parser.parse_args()
     try:
         sources = discover(args.source if args.include_user_wallpapers else PUBLIC_SOURCE)
-        build(args.output, sources, personal=args.include_user_wallpapers)
+        photos = [args.photo_source / name for name in PHOTO_NAMES]
+        missing = [path for path in photos if not path.is_file()]
+        if missing:
+            raise ValueError("Missing required project photo(s): " + ", ".join(map(str, missing)))
+        manifest = build(args.output, sources, personal=args.include_user_wallpapers,
+                         photo_sources=photos)
     except (ValueError, OSError, UnidentifiedImageError) as error:
         raise SystemExit(str(error)) from error
-    print(f"[wallpapers] {len(sources)} tiles; catalog {args.output / 'WALLS.DAT'}")
+    print(f"[wallpapers] {len(manifest['wallpapers'])} entries; "
+          f"default {manifest.get('default_selection', {}).get('entry')}; "
+          f"catalog {args.output / 'WALLS.DAT'}")
 
 
 if __name__ == "__main__":

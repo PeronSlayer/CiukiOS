@@ -222,6 +222,34 @@
       "license": "GPL-1.0",
       "source_url": "https://sourceforge.net/projects/rtl8101packetdr/files/",
       "archive_sha256": "6f89fbd08d3aa68199a6a7744309f31a80c0108c2d41152ec24e1d7a6ad65de9"
+    },
+    {
+      "source": "assets/drivers/pack/S3VBEFIX/DRIVER.INF",
+      "target": "DRIVERS/VIDEO/S3VBEFIX/DRIVER.INF",
+      "sha256": "1a25ec058a83d099eb397d9659beb45b8b4b14334cf1ea777a3808c3e7754281",
+      "license": "WTFPL",
+      "source_url": "https://github.com/wbcbz7/S3VBEFIX"
+    },
+    {
+      "source": "assets/drivers/pack/S3VBEFIX/README.TXT",
+      "target": "DRIVERS/VIDEO/S3VBEFIX/README.TXT",
+      "sha256": "5144b77ffd498215b9c6f7b03ac724a258c4ad4a022514042e9ec13205ea3bfe",
+      "license": "WTFPL",
+      "source_url": "https://github.com/wbcbz7/S3VBEFIX"
+    },
+    {
+      "source": "assets/drivers/pack/S3VBEFIX/S3VBEFIX.COM",
+      "target": "DRIVERS/VIDEO/S3VBEFIX/S3VBEFIX.COM",
+      "sha256": "4072e46a340ae7d2c0f22d556857a74734b77e46134853d089af30a798d08f3f",
+      "license": "WTFPL",
+      "source_url": "https://github.com/wbcbz7/S3VBEFIX"
+    },
+    {
+      "source": "assets/drivers/pack/S3VBEFIX/LICENSE.txt",
+      "target": "DRIVERS/VIDEO/S3VBEFIX/LICENSE.TXT",
+      "sha256": "fd70cfb0384707eda7493e45b91c032fb233023b7779ca5ce4d0d1056d337a56",
+      "license": "WTFPL",
+      "source_url": "https://github.com/wbcbz7/S3VBEFIX/blob/master/LICENSE.txt"
     }
   ]
 }

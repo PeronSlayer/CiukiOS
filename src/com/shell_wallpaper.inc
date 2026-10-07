@@ -89,13 +89,33 @@ wp_begin:
     mov word [wp_status],wp_empty
 .read_config:
     mov byte [wp_selected],0
+    mov byte [wp_style],0            ; Fill, including legacy one-byte profiles
+    ; The owner's Ciuk1 photo is the default even without WALL.CFG.
+    xor bp,bp
+.default_photo:
+    cmp bp,[wp_count]
+    jae .config_open
+    imul si,bp,44
+    add si,8+13
+    cmp dword [fs:si],'Ciuk'
+    jne .default_next
+    cmp word [fs:si+4],'1'
+    jne .default_next
+    mov ax,bp
+    inc ax
+    mov [wp_selected],al
+    jmp .config_open
+.default_next:
+    inc bp
+    jmp .default_photo
+.config_open:
     mov dx,wp_config_path
     mov ax,0x3D00
     int 0x21
     jc .load
     mov bx,ax
     mov dx,wp_config_byte
-    mov cx,2
+    mov cx,3                       ; reject trailing bytes; support index/style
     mov ah,0x3F
     int 0x21
     pushf
@@ -106,7 +126,14 @@ wp_begin:
     popf
     jc .load
     cmp ax,1
+    je .config_index
+    cmp ax,2
     jne .load
+    cmp byte [wp_config_byte+1],4
+    ja .load
+    mov dl,[wp_config_byte+1]
+    mov [wp_style],dl
+.config_index:
     movzx ax,byte [wp_config_byte]
     cmp ax,[wp_count]
     ja .load
@@ -159,13 +186,11 @@ wp_load:
     cmp byte [wp_choice],0
     jne .image
     call wp_tile_end
+    mov byte [wp_kind],0
+    inc word [wp_generation]
     clc
     ret
 .image:
-    cmp byte [ui_vbe],1
-    jne .unsupported
-    cmp word [ui_comp_seg],0
-    je .unsupported
     mov al,[wp_choice]
     call wp_path
     mov word [wp_new_seg],0
@@ -182,6 +207,12 @@ wp_load:
     jc .cleanup
     cmp ax,16
     jne .cleanup
+    cmp dword [wp_header],'CWP2'
+    je .photo
+    cmp byte [ui_vbe],1
+    jne .close_unsupported
+    cmp word [ui_comp_seg],0
+    je .close_unsupported
     cmp dword [wp_header],'CWP1'
     jne .cleanup
     cmp dword [wp_header+8],256
@@ -266,10 +297,41 @@ wp_load:
     mov [wp_width],ax
     mov ax,[wp_header+6]
     mov [wp_height],ax
+    mov byte [wp_kind],1
+    inc word [wp_generation]
     push cs
     pop es
     clc
     ret
+.photo:
+    cmp dword [wp_header+4],(941 << 16) | 1672
+    jne .cleanup
+    cmp dword [wp_header+8],(1 << 16) | 5016
+    jne .cleanup
+    cmp dword [wp_header+12],4720056
+    jne .cleanup
+    mov bx,[wp_handle]
+    xor cx,cx
+    xor dx,dx
+    mov ax,0x4202
+    int 0x21
+    jc .cleanup
+    cmp dx,(4720072 >> 16)
+    jne .cleanup
+    cmp ax,(4720072 & 0xFFFF)
+    jne .cleanup
+    call wp_close
+    jc .fail
+    call wp_tile_end
+    mov byte [wp_kind],2
+    inc word [wp_generation]
+    push cs
+    pop es
+    clc
+    ret
+.close_unsupported:
+    call wp_close
+    jmp .unsupported
 .cleanup:
     call wp_close
 .cleanup_memory:
@@ -543,17 +605,33 @@ wp_action:
     jc .redraw
     mov al,[wp_choice]
     mov [wp_selected],al
-    mov [wp_config_byte],al
     mov word [wp_status],wp_applied
     mov byte [ui_full_redraw],1
+    call wp_save_config
+    jnc .redraw
+    mov word [wp_status],wp_save_error
+    jmp .redraw
+.redraw:
+    mov ax,250
+    ret
+.idle:
+    xor ax,ax
+    ret
+
+; Shared by the legacy panel and Display.APP. CF reports actual persistence.
+wp_save_config:
+    mov al,[wp_selected]
+    mov [wp_config_byte],al
+    mov al,[wp_style]
+    mov [wp_config_byte+1],al
     mov dx,wp_config_path
     xor cx,cx
     mov ah,0x3C
     int 0x21
-    jc .save_fail
+    jc .fail
     mov bx,ax
     mov dx,wp_config_byte
-    mov cx,1
+    mov cx,2
     mov ah,0x40
     int 0x21
     pushf
@@ -562,18 +640,15 @@ wp_action:
     int 0x21
     pop dx
     pop ax
-    jc .save_fail
+    jc .fail
     test ax,1
-    jnz .save_fail
-    cmp dx,1
-    je .redraw
-.save_fail:
-    mov word [wp_status],wp_save_error
-.redraw:
-    mov ax,250
+    jnz .fail
+    cmp dx,2
+    jne .fail
+    clc
     ret
-.idle:
-    xor ax,ax
+.fail:
+    stc
     ret
 
 ; Body only, called by generic frame painter with ui_dialog_x/y established.
@@ -699,6 +774,9 @@ wp_count dw 0
 wp_page dw 0
 wp_selected db 0
 wp_choice db 0
+wp_kind db 0                          ; 0 solid, 1 indexed tile, 2 RGB photo
+wp_style db 0                         ; Fill/Fit/Stretch/Center/Tile
+wp_generation dw 0
 wp_width dw 0
 wp_height dw 0
 wp_read_count dw 0
@@ -707,7 +785,7 @@ wp_column dw 0
 wp_rows dw 0
 wp_best_distance dw 0
 wp_best_index dw 0
-wp_config_byte times 2 db 0
+wp_config_byte times 3 db 0
 wp_header times 16 db 0
 wp_catalog_seg dw 0
 wp_label times 31 db 0

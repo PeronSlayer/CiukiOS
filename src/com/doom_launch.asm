@@ -1,5 +1,6 @@
 bits 16
 %include "src/com/audio_launcher.inc"
+%include "src/vm/session_abi.inc"
 
 ; Run the original bound DOOMCORE.EXE as a child of VSBHDA, then synchronously
 ; release the physical PCI controller, IRQ handler and all I/O traps.  Nothing
@@ -9,6 +10,8 @@ bits 16
 start:
     audio_launcher_enter
     jc .fail
+    call doom_session_active
+    jnc .session_native
     call doom_pvi_enter
 
     cld
@@ -16,6 +19,9 @@ start:
     pop ds
     push cs
     pop es
+    mov dx, doom_dir
+    mov ah, 0x3B
+    int 0x21
     mov dx, msg_prepare
     call print_line
 
@@ -85,9 +91,79 @@ start:
     mov ax, 0x4C01
     int 0x21
 
+.session_native:
+    ; DPMIRUN /V already owns the HDPMI host and virtual SB16/OPL devices.
+    ; Run the engine directly; do not install another host, probe port 22Ch,
+    ; or modify CR4.PVI in the session's guest.
+    mov dx, doom_dir
+    mov ah, 0x3B
+    int 0x21
+    mov dx, msg_session
+    call print_line
+    call build_native_tail
+    mov dx, native_path
+    mov bx, native_param_block
+    call exec_child
+    jc .fail
+    or al, al
+    jnz .fail
+    mov dx, msg_session_done
+    call print_line
+    mov ax, 0x4C00
+    int 0x21
+
 print_line:
     mov ah, 0x09
     int 0x21
+    ret
+
+; CF=0 only when this DOS process belongs to an active CiukiOS DOS session
+; with an installed 32-bit DPMI host. CVSESSION is the session discriminator;
+; DPMI presence alone also occurs in plain DOS with a resident host.
+doom_session_active:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    xor ax, ax
+    mov es, ax
+    xor di, di
+    mov ax, 0x1684
+    mov bx, VM_DEVICE_ID
+    int 0x2F
+    mov ax, es
+    or ax, di
+    jz .inactive
+    mov [cs:doom_session_entry], di
+    mov [cs:doom_session_entry + 2], es
+    push cs
+    pop es
+    xor cx, cx
+    mov ax, VM_OP_QUERY
+    call far [cs:doom_session_entry]
+    jc .inactive
+    or dx, dx
+    jz .inactive
+    ; The session launcher installs its protected-mode host before COMMAND.COM.
+    mov ax, 0x1687
+    int 0x2F
+    or ax, ax
+    jnz .inactive
+    test bx, 1                    ; the engine requires a 32-bit client host
+    jz .inactive
+    clc
+    jmp .done
+.inactive:
+    stc
+.done:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 %include "src/com/dos4gw_pvi.inc"
@@ -177,9 +253,12 @@ exec_child:
     ret
 
 msg_prepare db '[DOOM] Preparing application',13,10,'$'
+msg_session db '[DOOM] Using the active DOS session audio devices',13,10,'$'
+msg_session_done db '[DOOM] DOS session game returned',13,10,'$'
 msg_begin db '[DOOM] LAUNCH AC97 VSBHDA 2.0 TRANSIENT', 13, 10, '$'
 msg_cleanup db '[DOOM] AUDIO CLEANUP COMPLETE - RETURNING TO SHELL', 13, 10, '$'
 msg_fail db '[DOOM] EXEC FAIL', 13, 10, '$'
+doom_dir db '\APPS\DOOM', 0
 child_failed db 0
 host_owned db 0
 
@@ -199,6 +278,7 @@ hdpmi_uninstall_fcb1 db 0, '           ', 0, 0, 0, 0
 hdpmi_uninstall_fcb2 db 0, '           ', 0, 0, 0, 0
 hdpmi_uninstall_param_block:
     dw 0, hdpmi_uninstall_tail, 0, hdpmi_uninstall_fcb1, 0, hdpmi_uninstall_fcb2, 0
+doom_session_entry dd 0
 
 vsbhda_path db '\SBEMU\VSBHDA.EXE', 0
 ; The original DOS/4GW Professional engine intermittently stalls with IRQ0

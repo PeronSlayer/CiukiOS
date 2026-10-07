@@ -76,17 +76,35 @@ class DesktopVM(SetupVM):
             except Exception:
                 if _attempt == 4: raise
                 time.sleep(.05)
-        palettes=[getattr(self,'cursor_colors',((48,61,73),(247,247,239))),
-                  ((48,61,73),(247,247,239)),
-                  ((36,40,48),(246,246,242)),
-                  ((56,32,40),(255,247,247))]
+        base_palettes=[getattr(self,'cursor_colors',((48,61,73),(247,247,239))),
+                       ((48,61,73),(247,247,239)),
+                       ((36,40,48),(246,246,242)),
+                       ((56,32,40),(255,247,247))]
+        palettes=[]
+        for pair in base_palettes:
+            for colors in (pair,
+                           tuple(self._quantize_rgb(color, (5,5,5)) for color in pair),
+                           tuple(self._quantize_rgb(color, (5,6,5)) for color in pair)):
+                if colors not in palettes:
+                    palettes.append(colors)
         # Theme settings can change the software cursor colours even when a
-        # gate boots a fresh copy of the image. Keep pointer detection tied to
-        # the exact 16x16 mask, while accepting the shipped theme palettes.
+        # gate boots a fresh copy of the image. VBE 15/16-bit scanout rounds
+        # those palette colors to RGB555/RGB565; match those exact expansions
+        # without widening the per-pixel tolerance or changing the 16x16 mask.
+        last_error = None
         for colors in palettes:
             try:return match_pointer(pixels,*colors)
-            except AssertionError:
-                if colors is palettes[-1]:raise
+            except AssertionError as exc:
+                last_error = exc
+        raise last_error
+
+    @staticmethod
+    def _quantize_rgb(color, bits):
+        out=[]
+        for channel,depth in zip(color,bits):
+            value=channel >> (8-depth)
+            out.append((value << (8-depth)) | (value >> (2*depth-8)))
+        return tuple(out)
 
 
     def position(self, x, y):

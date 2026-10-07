@@ -181,6 +181,17 @@ set_model:
  jnz desk_pass
  test edx,edx
  jz desk_pass
+ ; PhysBasePtr only describes linear mode. A banked mode can bypass its
+ ; hardware window solely for a documented device/BAR alias; use the same
+ ; allowlist as CVSESSION binding, not CPUID or a fixed PCI bus/device.
+ pushad
+ mov dev_args,edx
+ mov eax,offset cvlegacy_vbe_alias
+ mov ecx,1
+ call dev_call
+ cmp eax,1                             ; a busy/reentered trampoline is not proof
+ popad
+ jne desk_pass
  mov desk_gran,eax
  mov desk_phys,edx
  mov desk_armed,ecx

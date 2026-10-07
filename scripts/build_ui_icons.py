@@ -60,6 +60,8 @@ ICONS = [
     ('Task Manager', 'apps/utilities-system-monitor', None),
     ('CiukPaint', 'categories/applications-graphics', None),
     ('CiukWeb', 'apps/internet-web-browser', None),
+    ('Image file', 'mimetypes/image-x-generic', None),
+    ('Music file', 'mimetypes/audio-x-generic', None),
 ]
 ICON_COUNT = len(ICONS)
 # Keep the 0.8.0 desktop/paint palette stable when adding new Tango sprites.

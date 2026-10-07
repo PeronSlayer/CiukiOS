@@ -6,6 +6,7 @@
  * through MEDIA.DRV: read-only, their files are pasted (imported) onto the
  * system disk. Local files use the resident VFAT long-name service. */
 #include "app.h"
+#include "iconlabel.h"
 
 #define MAX_ITEMS 172
 #define PATH_LEN  SYS_PATH
@@ -22,6 +23,9 @@ struct item {
     u16 date, time;
 };
 static struct item items[MAX_ITEMS];
+static u8 icon_label_lines[MAX_ITEMS];
+static u16 icon_label_width[MAX_ITEMS];
+static int icon_cell_h;
 static u16 name_seg;
 static char name_cache[2][LFN_NAME];
 static u8 name_cache_next;
@@ -75,7 +79,15 @@ static void history_get(int forward, int i, char *path)
 static unsigned last_click_tick;
 static int last_click_i = -1;
 static int focus_area;                     /* 0 list, 1 address, 2 places */
+static void icon_labels_layout(void);
 static int drag_i = -1, dragging, drag_x, drag_y, drop_i = -1, drop_place = -1, drop_tree = -1;
+static int marquee_state, marquee_x0, marquee_y0, marquee_x1, marquee_y1;
+static int marquee_prev_x1, marquee_prev_y1;
+static u8 marquee_base[(MAX_ITEMS + 7) / 8];
+static int marquee_was_selected(int i)
+{
+    return (marquee_base[i >> 3] >> (i & 7)) & 1;
+}
 static void tree_build(void);
 static int place_focus;
 
@@ -106,15 +118,32 @@ struct media_request {
     char preview[512];
 };
 #pragma pack(pop)
-static struct media_request mreq;
+static u16 mreq_seg;
+#define mreq (*(struct media_request __far *)((u32)mreq_seg << 16))
 static u16 media_seg;
+static void mreq_copy_to(char __far *dst, const char *src, u16 cap)
+{
+    while (cap > 1 && *src) { *dst++ = *src++; cap--; }
+    if (cap) *dst = 0;
+}
+static void mreq_copy_from(char *dst, const char __far *src, u16 cap)
+{
+    while (cap > 1 && *src) { *dst++ = *src++; cap--; }
+    if (cap) *dst = 0;
+}
+static void mreq_clear(void)
+{
+    char __far *p = (char __far *)((u32)mreq_seg << 16);
+    u16 n = sizeof(struct media_request);
+    while (n--) *p++ = 0;
+}
 
 static int media_load(void)
 {
     u8 head[32];
     int h, n;
     u16 paras;
-    if (media_seg) return 1;
+    if (media_seg) return mreq_seg != 0;
     h = dos_open("\\SYSTEM\\MEDIA.DRV", 0);
     if (h < 0) return 0;
     n = dos_read(h, head, 32);
@@ -122,10 +151,17 @@ static int media_load(void)
     paras = head[16] | (head[17] << 8);
     media_seg = dos_alloc(paras);
     if (!media_seg) { dos_close(h); return 0; }
+    mreq_seg = dos_alloc((u16)(((u32)sizeof(struct media_request) + 15) / 16));
+    if (!mreq_seg) { dos_free(media_seg); media_seg = 0; dos_close(h); return 0; }
+    mreq_clear();
     dos_seek(h, 0, 0);
     n = dos_read_far(h, media_seg, 0, 0xEF00);
     dos_close(h);
-    if (n < 32) { dos_free(media_seg); media_seg = 0; return 0; }
+    if (n < 32) {
+        dos_free(mreq_seg); mreq_seg = 0;
+        dos_free(media_seg); media_seg = 0;
+        return 0;
+    }
     return 1;
 }
 static int media_call_dev(int op, int device)
@@ -133,7 +169,7 @@ static int media_call_dev(int op, int device)
     mreq.version = 1;
     mreq.operation = op;
     mreq.device = device;
-    far_call_req(media_seg, 0, &mreq);
+    far_call_req_far(media_seg, 0, mreq_seg, 0);
     return mreq.status == 0;
 }
 static int media_call(int op) { return media_call_dev(op, media); }
@@ -220,8 +256,12 @@ static const char *type_name(const struct item *it, char *buf)
     if (ext_is(item_name(it), "SYS|DRV|DLL|386|VXD")) return "System file";
     if (ext_is(item_name(it), "LOG")) return "Log File";
     if (ext_is(item_name(it), "CFN")) return "CiukiOS Font";
-    if (ext_is(item_name(it), "BMP|PCX|PNG|GIF|JPG")) return "Image";
-    if (ext_is(item_name(it), "WAV|MID|VOC|PCM|MP3")) return "Sound";
+    if (ext_is(item_name(it), "BMP|PNG|GIF|JPG|JPEG")) return "Image File";
+    if (ext_is(item_name(it), "PCX")) return "PCX Image (not supported)";
+    if (ext_is(item_name(it), "WAV|MP3|OGG|FLAC")) return "Audio File";
+    if (ext_is(item_name(it), "MID|MIDI")) return "MIDI sequence (not supported)";
+    if (ext_is(item_name(it), "VOC")) return "VOC audio (not supported)";
+    if (ext_is(item_name(it), "PCM")) return "PCM audio (not supported)";
     if (ext_is(item_name(it), "ZIP|ARJ|LZH|RAR")) return "Compressed Archive";
     e = ext_of(item_name(it));
     if (!*e) return "File";
@@ -258,6 +298,7 @@ static void sort_items(void)
         mem_copy(&items[j], &t, sizeof t);
     }
     if (keep[0]) for (i = 0; i < nitems; i++) if (!str_cmp(item_name(&items[i]), keep)) { cur = i; break; }
+    icon_labels_layout();
 }
 
 /* ------------------------------------------------------------------ */
@@ -275,6 +316,7 @@ static void select_only(int i)
     if (i >= 0 && i < nitems) items[i].sel = 1;
     cur = i;
     anchor_i = i;
+    status_text[0] = 0;
 }
 static int load_local(void)
 {
@@ -304,15 +346,19 @@ static int load_local(void)
 static int load_media(void)
 {
     u16 first = 0;
-    str_ncopy(mreq.path, cwd, sizeof mreq.path);
+    mreq_copy_to(mreq.path, cwd, sizeof mreq.path);
     for (;;) {
         int i;
         mreq.first = first;
-        if (!media_call(MD_LIST)) { str_ncopy(status_text, mreq.message, sizeof status_text); return -1; }
+        if (!media_call(MD_LIST)) { mreq_copy_from(status_text, mreq.message, sizeof status_text); return -1; }
         for (i = 0; i < mreq.count && nitems < MAX_ITEMS; i++) {
             struct item *it = &items[nitems++];
             it->slot = (u16)(nitems - 1);
-            item_set_name(it, mreq.rows[i].name);
+            {
+                char name[40];
+                mreq_copy_from(name, mreq.rows[i].name, sizeof name);
+                item_set_name(it, name);
+            }
             it->attr = mreq.rows[i].directory ? A_DIR | A_RDONLY : A_RDONLY;
             it->size = mreq.rows[i].size;
             it->date = it->time = 0;
@@ -418,7 +464,7 @@ static int navigate(const char *path, int d, int record)
         if (d != media) {
             media = d;
             if (!media_call(MD_MOUNT)) {
-                str_ncopy(status_text, mreq.message, sizeof status_text);
+                mreq_copy_from(status_text, mreq.message, sizeof status_text);
                 app_log("[FILES] media error", status_text);
                 media = 0;
                 app_sound(5);
@@ -496,7 +542,6 @@ static void clip_refresh(void) { nclip = clip_count(&clip_cut); if (nclip > CLIP
 #define JOB_MOVE 2
 #define JOB_DELETE 3
 struct level {
-    char src[PATH_LEN], dst[PATH_LEN];
     struct dos_find dta;
     int started;
 };
@@ -533,6 +578,22 @@ static void job_source_put(int i, const char *path)
 static void job_source_get(int i, char *path)
 {
     const char __far *src = (const char __far *)(((u32)jsrc_seg << 16) | (u16)(i * PATH_LEN));
+    int n = PATH_LEN;
+    while (--n && *src) *path++ = *src++;
+    *path = 0;
+}
+static void job_level_path_put(int level, int destination, const char *path)
+{
+    char __far *dst = (char __far *)(((u32)jsrc_seg << 16) |
+             (u16)((CLIP_MAX + level * 2 + destination) * PATH_LEN));
+    int n = PATH_LEN;
+    while (--n && *path) *dst++ = *path++;
+    *dst = 0;
+}
+static void job_level_path_get(int level, int destination, char *path)
+{
+    const char __far *src = (const char __far *)(((u32)jsrc_seg << 16) |
+             (u16)((CLIP_MAX + level * 2 + destination) * PATH_LEN));
     int n = PATH_LEN;
     while (--n && *src) *path++ = *src++;
     *path = 0;
@@ -653,11 +714,11 @@ static int is_dot(const char *n) { return n[0] == '.' && (!n[1] || (n[1] == '.' 
 static void media_import(int dev, const char *src, const char *dst_dir)
 {
     char dst[PATH_LEN];
-    str_ncopy(mreq.path, src, sizeof mreq.path);
+    mreq_copy_to(mreq.path, src, sizeof mreq.path);
     local_join(dst, dst_dir, base_name(src));
     upper(dst);
-    str_ncopy(mreq.destination, dst, sizeof mreq.destination);
-    if (!media_call_dev(MD_IMPORT_FILE, dev)) { job.errors++; str_ncopy(job.message, mreq.message, sizeof job.message); }
+    mreq_copy_to(mreq.destination, dst, sizeof mreq.destination);
+    if (!media_call_dev(MD_IMPORT_FILE, dev)) { job.errors++; mreq_copy_from(job.message, mreq.message, sizeof job.message); }
     else job.files++;
 }
 
@@ -666,6 +727,7 @@ static void job_step(void)
 {
     struct level *l;
     struct dir_ent e;
+    char level_src[PATH_LEN], level_dst[PATH_LEN];
     const char *entry_name;
     u8 entry_attr;
     int r;
@@ -677,14 +739,18 @@ static void job_step(void)
     }
     if (job.src_h) { file_step(); return; }
     if (job.depth > 0) {
-        l = &lv[job.depth - 1];
+        int level = job.depth - 1;
+        l = &lv[level];
+        job_level_path_get(level, 0, level_src);
+        if (job.kind != JOB_DELETE) job_level_path_get(level, 1, level_dst);
+        else level_dst[0] = 0;
         if (dos_lfn()) {
             if (l->started) {
                 e.h = l->started;
                 r = dir_next(&e);
             } else {
                 char pat[PATH_LEN + 6];
-                path_join(pat, l->src, "*.*");
+                path_join(pat, level_src, "*.*");
                 r = dir_first(pat, A_DIR | A_HIDDEN | A_SYSTEM | A_RDONLY | A_ARCH, &e);
             }
             l->started = e.h;
@@ -695,7 +761,7 @@ static void job_step(void)
             r = l->started ? dos_find_next() : 0;
             if (!l->started) {
                 char pat[PATH_LEN + 6];
-                path_join(pat, l->src, "*.*");
+                path_join(pat, level_src, "*.*");
                 r = dos_find_first(pat, A_DIR | A_HIDDEN | A_SYSTEM | A_RDONLY | A_ARCH);
                 l->started = 1;
             }
@@ -706,16 +772,16 @@ static void job_step(void)
         if (r < 0) {                          /* this folder is done */
             job.depth--;
             if (job.kind != JOB_COPY) {
-                r = dos_rmdir(l->src);
-                if (r < 0) job_error(base_name(l->src), r);
+                r = dos_rmdir(level_src);
+                if (r < 0) job_error(base_name(level_src), r);
             }
             job.folders++;
             return;
         }
         {
             char s[PATH_LEN], d[PATH_LEN];
-            local_join(s, l->src, entry_name);
-            if (job.kind != JOB_DELETE) local_join(d, l->dst, entry_name);
+            local_join(s, level_src, entry_name);
+            if (job.kind != JOB_DELETE) local_join(d, level_dst, entry_name);
             str_copy(job.current, entry_name);
             if (entry_attr & A_DIR) {
                 if (job.depth >= 8) { job_error(entry_name, -3); return; }
@@ -723,9 +789,12 @@ static void job_step(void)
                     r = dos_mkdir(d);
                     if (r < 0 && dos_get_attr(d) < 0) { job_error(entry_name, r); return; }
                 }
-                l = &lv[job.depth++];
-                str_copy(l->src, s);
-                if (job.kind != JOB_DELETE) str_copy(l->dst, d);
+                {
+                    int next = job.depth++;
+                    l = &lv[next];
+                    job_level_path_put(next, 0, s);
+                    if (job.kind != JOB_DELETE) job_level_path_put(next, 1, d);
+                }
                 l->started = 0;
                 return;
             }
@@ -752,7 +821,7 @@ static void job_step(void)
             str_copy(job.current, base_name(src));
             if (attr >= 0 && (attr & A_DIR)) {
                 l = &lv[job.depth++];
-                str_copy(l->src, src);
+                job_level_path_put(job.depth - 1, 0, src);
                 l->started = 0;
             } else {
                 dos_set_attr(src, 0);
@@ -800,8 +869,8 @@ static void job_step(void)
             r = dos_mkdir(dst);
             if (r < 0 && dos_get_attr(dst) < 0) { job_error(base_name(src), r); job.index++; return; }
             l = &lv[job.depth++];
-            str_copy(l->src, src);
-            str_copy(l->dst, dst);
+            job_level_path_put(job.depth - 1, 0, src);
+            job_level_path_put(job.depth - 1, 1, dst);
             l->started = 0;
             job.index++;
             return;
@@ -821,7 +890,7 @@ static void job_start(int kind, const char *dest)
     job.kind = kind;
     job.active = 1;
     if (!jbuf) jbuf = dos_alloc(JBUF_BYTES / 16);
-    if (!jsrc_seg) jsrc_seg = dos_alloc((CLIP_MAX * PATH_LEN + 15) / 16);
+    if (!jsrc_seg) jsrc_seg = dos_alloc(((CLIP_MAX + 16) * PATH_LEN + 15) / 16);
     if (!jbuf || !jsrc_seg) {
         if (jbuf) { dos_free(jbuf); jbuf = 0; }
         if (jsrc_seg) { dos_free(jsrc_seg); jsrc_seg = 0; }
@@ -926,6 +995,7 @@ static void update_menus(void)
     flag(&m_back[10], MI_DISABLED, !nclip || ro);
     flag(&m_back[12], MI_DISABLED, ro); flag(&m_back[13], MI_DISABLED, ro);
     flag(&m_item[1], MI_DISABLED, is_dir || ro); flag(&m_item[2], MI_DISABLED, is_dir || ro);
+    m_item[2].label = any && !is_dir && ext_is(item_name(&items[cur]), "BMP") ? "&Edit with Paint" : "&Edit (DOS Editor)";
     flag(&m_item[4], MI_DISABLED, ro); flag(&m_item[6], MI_DISABLED, !nclip || !is_dir || ro);
     flag(&m_item[9], MI_DISABLED, ro); flag(&m_item[10], MI_DISABLED, ro);
 }
@@ -950,10 +1020,23 @@ static void layout(void)
     lw = W - places_w - 4 - 16;
     lh = body_h;
 }
+static void icon_labels_layout(void)
+{
+    int i;
+    icon_cell_h = CELL_H;
+    for (i = 0; i < nitems; i++) {
+        int width = 0, lines, height;
+        lines = ciuki_label_layout(item_name(&items[i]), CELL_W - 12, &width);
+        icon_label_lines[i] = (u8)lines;
+        icon_label_width[i] = (u16)width;
+        height = 48 + lines * 17 + 4;
+        if (height > icon_cell_h) icon_cell_h = height;
+    }
+}
 static int col_x(int percent) { return lx + (int)((long)lw * percent / 100); }
 static int details_rows(void) { return (lh - 22) / ROW_H; }
 static int icon_cols(void) { int c = lw / CELL_W; return c < 1 ? 1 : c; }
-static int icon_rows(void) { return lh / CELL_H; }
+static int icon_rows(void) { int r = lh / icon_cell_h; return r < 1 ? 1 : r; }
 static int list_rows(void) { int r = (lh - 4) / ROW_H; return r < 1 ? 1 : r; }
 static int list_cols(void) { int c = lw / LIST_COL_W; return c < 1 ? 1 : c; }
 /* Scroll unit: rows (details, icons) or columns (list). */
@@ -976,7 +1059,7 @@ static void item_rect(int i, int *x, int *y, int *w, int *h)
     if (view == 0) { *x = lx + 2; *y = ly + 22 + (i - top_row) * ROW_H; *w = lw - 4; *h = ROW_H; }
     else if (view == 1) {
         int c = icon_cols();
-        *x = lx + 4 + (i % c) * CELL_W; *y = ly + 4 + (i / c - top_row) * CELL_H; *w = CELL_W - 4; *h = CELL_H - 4;
+        *x = lx + 4 + (i % c) * CELL_W; *y = ly + 4 + (i / c - top_row) * icon_cell_h; *w = CELL_W - 4; *h = icon_cell_h - 4;
     } else {
         int r = list_rows();
         *x = lx + 4 + (i / r - top_row) * LIST_COL_W; *y = ly + 2 + (i % r) * ROW_H; *w = LIST_COL_W - 8; *h = ROW_H;
@@ -1294,11 +1377,11 @@ static void open_item(int i, int how)       /* how: 0 default, 1 Notepad, 2 EDIT
         return;
     }
     if (media) {
-        str_ncopy(mreq.path, cwd, sizeof mreq.path);
-        path_join(mreq.path, cwd, item_name(it));
+        path_join(p, cwd, item_name(it));
+        mreq_copy_to(mreq.path, p, sizeof mreq.path);
         if (media_call(MD_PREVIEW_FILE)) preview_dialog(item_name(it));
-        else message("Files", mreq.message);
-        str_ncopy(mreq.path, cwd, sizeof mreq.path);
+        else { mreq_copy_from(msg, mreq.message, sizeof msg); message("Files", msg); }
+        mreq_copy_to(mreq.path, cwd, sizeof mreq.path);
         return;
     }
     local_join(p, cwd, item_name(it));
@@ -1306,7 +1389,9 @@ static void open_item(int i, int how)       /* how: 0 default, 1 Notepad, 2 EDIT
     if (how == 0 && ext_is(item_name(it), "CFN")) {
         str_copy(cmd, "font:"); str_cat(cmd, p); app_open(WIN_CONTROL, cmd); return;
     }
-    if (how == 0 && ext_is(item_name(it), "BMP")) { app_log("[FILES] open", p); app_open(WIN_PAINT, p); return; }
+    if (how == 0 && ext_is(item_name(it), "BMP|PNG|JPG|JPEG|GIF")) { app_log("[FILES] open", p); app_open(WIN_VIEWER, p); return; }
+    if (how == 0 && ext_is(item_name(it), "WAV|MP3|OGG|FLAC")) { app_log("[FILES] open", p); app_open(WIN_PLAYER, p); return; }
+    if (how == 2 && ext_is(item_name(it), "BMP")) { app_log("[FILES] edit with Paint", p); app_open(WIN_PAINT, p); return; }
     if (how == 0 && ext_is(item_name(it), "HTM|HTML")) { app_log("[FILES] open", p); app_open(WIN_BROWSER, p); return; }
     if (how == 0 && !str_icmp(item_name(it), "DRIVER.INF")) {
         str_copy(cmd, "install:"); str_cat(cmd, cwd); app_open(WIN_DEVICES, cmd); return;
@@ -1445,8 +1530,8 @@ static void command(int id)
         }
         paste(cwd);
         break;
-    case C_SELALL: for (i = 0; i < nitems; i++) items[i].sel = 1; break;
-    case C_INVERT: for (i = 0; i < nitems; i++) items[i].sel = !items[i].sel; break;
+    case C_SELALL: for (i = 0; i < nitems; i++) items[i].sel = 1; status_text[0] = 0; break;
+    case C_INVERT: for (i = 0; i < nitems; i++) items[i].sel = !items[i].sel; status_text[0] = 0; break;
     case C_ICONS: view = 1; top_row = 0; ensure_visible(cur); break;
     case C_LIST: view = 2; top_row = 0; ensure_visible(cur); break;
     case C_DETAILS: view = 0; top_row = 0; ensure_visible(cur); break;
@@ -1579,6 +1664,21 @@ static void small_icon(int x, int y, const struct item *it)
         ui_rect(x + 2, y + 6, 12, 7, C_PAPER);
         return;
     }
+    if (ext_is(item_name(it), "BMP|PNG|JPG|JPEG|GIF")) {
+        ui_rect(x + 1, y + 2, 14, 12, C_BLUE);
+        ui_rect(x + 2, y + 3, 12, 10, C_PAPER);
+        ui_rect(x + 10, y + 4, 2, 2, C_YELLOW);
+        ui_rect(x + 4, y + 10, 4, 3, C_GREEN);
+        ui_rect(x + 7, y + 8, 5, 5, C_GREEN);
+        return;
+    }
+    if (ext_is(item_name(it), "WAV|MP3|OGG|FLAC|MID|MIDI|VOC|PCM")) {
+        ui_rect(x + 9, y + 2, 2, 9, C_BLUE);
+        ui_rect(x + 6, y + 3, 5, 2, C_BLUE);
+        ui_rect(x + 5, y + 10, 4, 3, C_BLUE);
+        ui_rect(x + 9, y + 9, 4, 3, C_BLUE);
+        return;
+    }
     ui_rect(x + 3, y + 1, 10, 14, C_PAPER);
     ui_rect(x + 3, y + 1, 10, 1, C_SHADOW);
     ui_rect(x + 3, y + 14, 10, 1, C_SHADOW);
@@ -1598,6 +1698,8 @@ static int big_icon_id(const struct item *it)
     if (ext_is(item_name(it), "COM|EXE")) return ICON_PROGRAM;
     if (ext_is(item_name(it), TEXT_TYPES)) return ICON_EDITOR;
     if (ext_is(item_name(it), "BAT")) return ICON_DOS;
+    if (ext_is(item_name(it), "BMP|PNG|JPG|JPEG|GIF")) return ICON_IMAGE;
+    if (ext_is(item_name(it), "WAV|MP3|OGG|FLAC|MID|MIDI|VOC|PCM")) return ICON_MUSIC;
     return -1;
 }
 static int tb_hot = -1;                    /* the button under the pointer */
@@ -1734,14 +1836,22 @@ static void draw_item(int i)
     sel = it->sel;
     if (view == 1) {
         int id = big_icon_id(it);
+        const char *name = item_name(it);
+        char line[LFN_NAME];
+        int k, pos = 0, lines = icon_label_lines[i], width = icon_label_width[i];
         if (id >= 0) ui_icon(x + (w - 44) / 2, y + 4, id);
         else { ui_rect(x + w / 2 - 12, y + 6, 24, 30, C_PAPER); ui_rect(x + w / 2 - 12, y + 6, 24, 1, C_SHADOW);
                ui_rect(x + w / 2 - 12, y + 35, 24, 1, C_SHADOW); ui_rect(x + w / 2 - 12, y + 6, 1, 30, C_SHADOW);
                ui_rect(x + w / 2 + 11, y + 6, 1, 30, C_SHADOW); }
-        text_fit(item_name(it), w - 4, t);
-        if (sel) { ui_rect(x + (w - ui_measure(t)) / 2 - 2, y + 48, ui_measure(t) + 4, 17, C_TITLE); fg = C_PAPER; }
+        if (sel) { ui_rect(x + (w - width) / 2 - 2, y + 48, width + 4, lines * 17, C_TITLE); fg = C_PAPER; }
         if (renaming == i) field_draw(&rename_field, x, y + 46, w, 1);
-        else ui_text(x + (w - ui_measure(t)) / 2, y + 48, t, fg);
+        else for (k = 0; k < lines; k++) {
+            int line_width, next = ciuki_label_next_line(name, pos, line,
+                                                          w - 8, &line_width);
+            ui_text(x + (w - line_width) / 2, y + 48 + k * 17, line, fg);
+            if (next <= pos) break;
+            pos = next;
+        }
         if (i == cur && HOST.active && focus_area == 0) draw_focus(x, y, w, h);
         return;
     }
@@ -1846,6 +1956,14 @@ static void paint(void)
         ui_rect(x, y, w, 1, C_TITLE); ui_rect(x, y + h - 1, w, 1, C_TITLE);
         ui_rect(x, y, 1, h, C_TITLE); ui_rect(x + w - 1, y, 1, h, C_TITLE);
     }
+    if (marquee_state == 2) {
+        int x0 = marquee_x0, y0 = marquee_y0, x1 = marquee_x1, y1 = marquee_y1;
+        int x = x0 < x1 ? x0 : x1, y = y0 < y1 ? y0 : y1;
+        int w = (x0 < x1 ? x1 - x0 : x0 - x1) + 1;
+        int h = (y0 < y1 ? y1 - y0 : y0 - y1) + 1;
+        ui_rect(x, y, w, 1, C_TITLE); ui_rect(x, y + h - 1, w, 1, C_TITLE);
+        ui_rect(x, y, 1, h, C_TITLE); ui_rect(x + w - 1, y, 1, h, C_TITLE);
+    }
     draw_scroll(lx + lw, ly, lh, top_row, total_units(), page_units());
     draw_status();
     if (dragging) {                               /* what a drop would do */
@@ -1903,15 +2021,16 @@ static void extend_to(int i)
     int a = anchor_i < 0 ? i : anchor_i, k;
     for (k = 0; k < nitems; k++) items[k].sel = (k >= (a < i ? a : i) && k <= (a < i ? i : a));
     cur = i;
+    status_text[0] = 0;
 }
 static void click_item(int i, int shift)
 {
     if (i < 0) {
-        if (!(shift & (SH_CTRL | SH_SHIFT))) { int k; for (k = 0; k < nitems; k++) items[k].sel = 0; }
+        if (!(shift & (SH_CTRL | SH_SHIFT))) select_only(-1);
         return;
     }
     if (shift & SH_SHIFT) extend_to(i);
-    else if (shift & SH_CTRL) { items[i].sel = !items[i].sel; cur = i; anchor_i = i; }
+    else if (shift & SH_CTRL) { items[i].sel = !items[i].sel; cur = i; anchor_i = i; status_text[0] = 0; }
     else select_only(i);
 }
 static int toolbar_at(int sx, int sy)
@@ -1991,6 +2110,55 @@ static int drag_drop(int sx, int sy)
     return 1;
 }
 
+static void marquee_damage(int x0, int y0, int x1, int y1)
+{
+    int x = x0 < x1 ? x0 : x1, y = y0 < y1 ? y0 : y1;
+    int w = (x0 < x1 ? x1 - x0 : x0 - x1) + 1;
+    int h = (y0 < y1 ? y1 - y0 : y0 - y1) + 1;
+    ui_damage(x, y, w, h);
+}
+static int marquee_hits_item(int x0, int y0, int x1, int y1, int i)
+{
+    int x, y, w, h, l = x0 < x1 ? x0 : x1, r = x0 < x1 ? x1 : x0;
+    int t = y0 < y1 ? y0 : y1, b = y0 < y1 ? y1 : y0;
+    item_rect(i, &x, &y, &w, &h);
+    return l < x + w && r + 1 > x && t < y + h && b + 1 > y;
+}
+static void marquee_update(int sx, int sy)
+{
+    int i;
+    if (marquee_state == 1) {
+        long dx = sx - marquee_x0, dy = sy - marquee_y0;
+        if (dx * dx + dy * dy < 36) return;
+        marquee_state = 2;
+    }
+    if (marquee_state != 2) return;
+    marquee_damage(marquee_x0, marquee_y0, marquee_prev_x1, marquee_prev_y1);
+    if (sx < lx + 2) sx = lx + 2;
+    if (sx >= lx + lw - 2) sx = lx + lw - 3;
+    if (sy < ly + (view == 0 ? 22 : 2)) sy = ly + (view == 0 ? 22 : 2);
+    if (sy >= ly + lh - 2) sy = ly + lh - 3;
+    marquee_x1 = marquee_prev_x1 = sx;
+    marquee_y1 = marquee_prev_y1 = sy;
+    for (i = 0; i < nitems; i++) {
+        int unit = unit_of(i), on, x, y, w, h;
+        if (unit < top_row || unit >= top_row + page_units()) continue;
+        on = marquee_was_selected(i) || marquee_hits_item(marquee_x0, marquee_y0, marquee_x1, marquee_y1, i);
+        if (items[i].sel != on) {
+            items[i].sel = (u8)on;
+            item_rect(i, &x, &y, &w, &h);
+            ui_damage(x, y, w, h);
+        }
+        if (on && !marquee_was_selected(i)) cur = i;
+    }
+    if (cur >= 0 && cur < nitems && !items[cur].sel) cur = -1;
+    if (cur < 0) for (i = 0; i < nitems; i++) if (items[i].sel) { cur = i; break; }
+    anchor_i = cur;
+    status_text[0] = 0;
+    marquee_damage(marquee_x0, marquee_y0, marquee_x1, marquee_y1);
+    ui_damage(X0, Y0 + H - 20, W, 20);            /* selection count */
+}
+
 static int on_mouse(int kind, int x, int y)
 {
     int sx = HOST.x + x, sy = HOST.y + TITLE_H + y, r, i;
@@ -2007,6 +2175,13 @@ static int on_mouse(int kind, int x, int y)
                 context_paste_into();
             else command(r);
         }
+        return 1;
+    }
+    if (marquee_state && kind == MOUSE_MOVE) { marquee_update(sx, sy); return 1; }
+    if (marquee_state && kind == MOUSE_UP) {
+        marquee_update(sx, sy);
+        if (marquee_state == 2) marquee_damage(marquee_x0, marquee_y0, marquee_x1, marquee_y1);
+        marquee_state = 0;
         return 1;
     }
     if (drag_i >= 0 && kind == MOUSE_MOVE) return drag_move(sx, sy);
@@ -2072,6 +2247,15 @@ static int on_mouse(int kind, int x, int y)
             last_click_tick = HOST.ticks;
             click_item(i, HOST.shift);
             if (i >= 0) { drag_i = i; drag_x = sx; drag_y = sy; dragging = 0; }
+            else {
+                int k;
+                marquee_x0 = marquee_x1 = marquee_prev_x1 = sx;
+                marquee_y0 = marquee_y1 = marquee_prev_y1 = sy;
+                marquee_state = 1;
+                mem_set(marquee_base, 0, sizeof marquee_base);
+                for (k = 0; k < nitems; k++) if (items[k].sel)
+                    marquee_base[k >> 3] |= (u8)(1u << (k & 7));
+            }
             return 1;
         }
         if (kind == MOUSE_RIGHT) {
@@ -2082,8 +2266,7 @@ static int on_mouse(int kind, int x, int y)
                 popup_open(&ctx, m_item, ITEM_MENU_COUNT, sx, sy, HOST.x + HOST.w - 4, HOST.y + HOST.h - 4);
                 app_log("[FILES] menu", "item");
             } else {
-                int k;
-                for (k = 0; k < nitems; k++) items[k].sel = 0;
+                select_only(-1);
                 update_menus();
                 popup_open(&ctx, m_back, 16, sx, sy, HOST.x + HOST.w - 4, HOST.y + HOST.h - 4);
                 app_log("[FILES] menu", "background");

@@ -61,14 +61,30 @@ class WindowVM(DesktopVM):
         for y in range(32,a.shape[0]-35):
             edges=np.diff(np.r_[False,ink[y],False].astype(np.int8))
             for x,end in zip(np.flatnonzero(edges==1),np.flatnonzero(edges==-1)):
-                if end-x<160:continue
+                if end-x<80:continue
                 # Locate the actual continuous top bevel. The active title can
                 # contain stripes or tabs; its first solid tab anchors the frame.
                 row=(np.abs(a[y-3].astype(int)-paper)<=4).all(axis=1)
                 left=int(x-3)
                 if left<0 or not row[left]:continue
-                stops=np.flatnonzero(~row[left:])
-                if len(stops) and stops[0]>=450:return left,y-3,int(stops[0]+1)
+                # A short focus accent may cross the otherwise continuous
+                # top bevel. Bridge only tiny gaps followed by a long bevel.
+                end=left
+                while end<len(row):
+                    stops=np.flatnonzero(~row[end:])
+                    if not len(stops):break
+                    end+=int(stops[0])
+                    next_paper=np.flatnonzero(row[end:end+25])
+                    if not len(next_paper):break
+                    resume=None
+                    for gap in next_paper:
+                        candidate=end+int(gap)
+                        run=np.flatnonzero(~row[candidate:])
+                        if not len(run) or run[0]>=32:
+                            resume=candidate;break
+                    if resume is None:break
+                    end=resume
+                if end-left>=300:return left,y-3,int(end-left+1)
         raise AssertionError('no complete active window title')
 
 def pixels(vm,name):return np.array(Image.open(vm.shot(name)))

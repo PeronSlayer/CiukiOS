@@ -70,6 +70,7 @@ include session_video.inc
 include session_devices.inc
 include session_desktop.inc
 include session_vmm.inc
+include session_switch_trace.inc
 include session_clock.inc
 include session_native_pages.inc
 include session_native_process.inc

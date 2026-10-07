@@ -1,0 +1,20 @@
+--- a/src/CVIRQ.INC
++++ b/src/CVIRQ.INC
+@@ -114,6 +114,17 @@
+  out 21h,al
+  mov al,byte ptr CvSavedMask+1
+  out 0A1h,al
++ ; Releasing the profile may happen from its return-to-V86 poll while
++ ; an STI boundary owns TF. Do not leak that synthetic debug flag into
++ ; the ordinary guest path; keep TF when it belonged to the guest.
++ cmp CvShadow,0
++ je release_shadow_done
++ cmp CvShadowTF,0
++ jne release_shadow_done
++ and [ebp].Client_Reg_Struc.Client_EFlags,not 100h
++release_shadow_done:
++ mov CvShadow,0
++ mov CvShadowTF,0
+  mov CvActive,0
+  mov CvPending,0
+  mov CvInService,0

@@ -36,6 +36,35 @@ static int pending_open, pending_slot = -1, pending_windows_exe;
 static int active_before = -1, buttons_before;
 static int mouse_x, mouse_y;
 static unsigned last_damage_tick;
+static char log_line[220];
+static int presenter_log_pending;
+
+/* Foreground transitions only: persist evidence on machines without COM1. */
+static void disk_log(const char *event, const char *detail, u16 code)
+{
+    char number[8];
+    int h = dos_open("\\SYSTEM\\DOSVM.LOG", 2);
+    long end;
+    if (h < 0) h = dos_create("\\SYSTEM\\DOSVM.LOG");
+    if (h < 0) return;
+    end = dos_seek(h, 0, 2);
+    if (end < 0) { dos_close(h); return; }
+    if (end >= 4096L) {
+        dos_close(h); h = dos_create("\\SYSTEM\\DOSVM.LOG");
+        if (h < 0) return;
+    }
+    str_ncopy(log_line, event, 40);
+    str_cat(log_line, " ");
+    if (detail) str_ncopy(log_line + str_len(log_line), detail, 150);
+    str_cat(log_line, " code="); fmt_hex4(number, code); str_cat(log_line, number);
+    str_cat(log_line, "\r\n");
+    if (end + str_len(log_line) > 4096L) {
+        dos_close(h); h = dos_create("\\SYSTEM\\DOSVM.LOG");
+        if (h < 0) return;
+    }
+    dos_write(h, log_line, str_len(log_line));
+    dos_close(h);
+}
 
 static void vm_find(void)
 {
@@ -146,7 +175,7 @@ static int spawn(const char *command)
             command = short_path;
         } else args = 0;
     }
-    if (vm_list(before)) return -1;
+    if (vm_list(before)) { disk_log("VM list failed", 0, 0); return -1; }
     while (*prefix && k < 125) tail[1 + k++] = *prefix++;
     if (*command) {
         const char *extra = " /C ";
@@ -159,6 +188,8 @@ static int spawn(const char *command)
         }
     }
     tail[0] = k; tail[1 + k] = 13;
+    tail[2 + k] = 0;
+    disk_log("EXEC", tail + 1, 0);
     params.env = 0;
     params.tail_off = (u16)tail; params.tail_seg = app_seg();
     params.fcb1_off = params.fcb2_off = (u16)fcb;
@@ -166,7 +197,7 @@ static int spawn(const char *command)
     mem_set(&r, 0, sizeof r);
     r.ax = 0x4B00; r.dx = (u16)fork_path; r.bx = (u16)&params;
     r.ds = r.es = app_seg();
-    if (intr(0x21, &r)) return -1;
+    if (intr(0x21, &r)) { disk_log("EXEC failed", fork_path, r.ax); return -1; }
     if (vm_list(after)) return -1;
     for (i = 1; i < VM_COUNT; i++)
         if (before[i * 4] == VM_FREE && after[i * 4] == VM_READY) return i;
@@ -193,11 +224,13 @@ static void begin_window(int slot, int window)
     if (vm < 0) {
         g->live = 0; g->finished = 1;
         app_log("[DOSVM] fork failed", 0);
+        disk_log("Fork failed", g->title, 0);
         app_sound(5);
     } else {
         g->vm = vm; g->live = 1;
         vm_status(vm, &g->exit_code, &g->generation);
         app_log("[DOSVM] fork", g->title);
+        disk_log("VM ready", g->title, g->generation);
     }
     ui_repaint_win(window);
 }
@@ -237,6 +270,7 @@ static int band_present(struct guest_window *g, int x, int y, int w, int h)
             fmt_hex4(number, r.ax);
             app_log("[DOSVM] video error", number);
             g->present_error = 1;
+            presenter_log_pending = r.ax;
         }
         return 0;
     }
@@ -249,7 +283,6 @@ static void paint(void)
     struct guest_window *g = by_window(HOST.window);
     int x = HOST.x + 3, y = HOST.y + TITLE_H;
     int w = HOST.w - 6, h = HOST.h - TITLE_H - 3;
-    char line[80];
     if (w < 4 || h < 4) return;
     if (g) {
         g->client_x = x; g->client_y = y;
@@ -260,11 +293,6 @@ static void paint(void)
     if (g && g->windows_exe) {
         ui_text(x + 14, y + 14, "Windows executable detected.", C_PAPER);
         ui_text(x + 14, y + 38, "Win32 application support is under development.", C_PAPER);
-    } else if (!g || !g->finished) ui_text(x + 14, y + 14, "Starting DOS virtual machine...", C_PAPER);
-    else {
-        str_copy(line, "Finished. Exit code ");
-        fmt_u32(line + str_len(line), g->exit_code);
-        ui_text(x + 14, y + 14, line, C_PAPER);
     }
 }
 static void feed_mouse(struct guest_window *g, int x, int y, int buttons)
@@ -285,6 +313,10 @@ static int poll(void)
     u8 windows[32 * 25];
     int active = -1, i, changed = 0;
     struct regs r;
+    if (presenter_log_pending) {
+        disk_log("Presenter failed", 0, (u16)presenter_log_pending);
+        presenter_log_pending = 0;
+    }
     if (pending_open) {
         int slot = pending_slot, win = WIN_DOS;
         pending_open = 0; pending_slot = -1;
@@ -315,6 +347,7 @@ static int poll(void)
             generation != guest[i].generation) {
             guest[i].live = 0; guest[i].finished = 1; guest[i].exit_code = code;
             app_log("[DOSVM] ended", guest[i].title);
+            disk_log("VM exited", guest[i].title, code);
             ui_repaint_win(guest[i].win);
             changed = 1;
         }
@@ -370,6 +403,7 @@ int app_event(int ev, int a, int b, int c)
         str_ncopy(pending, APP_ARG, sizeof pending);
         pending_slot = i; pending_open = 1;
         app_log("[DOSVM] open", guest[i].title);
+        disk_log("Requested", APP_ARG, 0);
         return 1;
     case EV_PAINT: paint(); return 0;
     case EV_POLL: return poll();

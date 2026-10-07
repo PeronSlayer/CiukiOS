@@ -936,6 +936,12 @@ done
 # preemptible HDPMI worker. Keep its trust store and license notices packaged.
 CIUKIOS_WEBWORKER_OUT="$CIUKIOS_ROOT/build/full/obj/webworker" bash scripts/build_webworker.sh
 mcopy -o -i "$IMG" build/full/obj/webworker/WEBWORK.EXE ::SYSTEM/APPS/WEBWORK.EXE
+bash scripts/build_mediaworker.sh "$CIUKIOS_ROOT/build/full/obj/mediaworker"
+mcopy -o -i "$IMG" build/full/obj/mediaworker/MEDIAWORK.EXE ::SYSTEM/APPS/MEDIAWORK.EXE
+mtools_ensure_dir "$IMG" ::SYSTEM/MEDIA
+mcopy -o -i "$IMG" third_party/audio/README.md ::SYSTEM/MEDIA/CODECS.TXT
+mcopy -o -i "$IMG" third_party/audio/dr_libs/LICENSE ::SYSTEM/MEDIA/DRLIBS.TXT
+mcopy -o -i "$IMG" third_party/audio/stb/LICENSE ::SYSTEM/MEDIA/STB.TXT
 mtools_ensure_dir "$IMG" ::SYSTEM/WEB
 mcopy -o -i "$IMG" third_party/cacert/CACERT.PEM ::SYSTEM/WEB/CACERT.PEM
 mcopy -o -i "$IMG" third_party/cacert/README.md ::SYSTEM/WEB/CAINFO.TXT
@@ -953,6 +959,7 @@ if [[ "${CIUKIOS_PERSONAL_WALLPAPERS:-0}" == "1" ]]; then
 fi
 python3 scripts/build_wallpapers.py "${wallpaper_args[@]}"
 mcopy -o -i "$IMG" build/full/obj/wallpapers/WALLS.DAT ::SYSTEM/UI/WALLS.DAT
+mcopy -o -i "$IMG" build/full/obj/wallpapers/WALL.CFG ::SYSTEM/UI/WALL.CFG
 echo "[build-full] injecting the desktop fonts to ::SYSTEM/FONTS"
 python3 scripts/build_fonts.py --check
 mtools_ensure_dir "$IMG" ::SYSTEM/FONTS
@@ -980,8 +987,10 @@ for wallpaper_file in build/full/obj/wallpapers/WALL[0-9][0-9].CWP; do
     [[ -f "$wallpaper_file" ]] || continue
     mcopy -o -i "$IMG" "$wallpaper_file" ::SYSTEM/UI/
 done
-printf 'LIVE' > build/full/obj/STARTUP.CFG
+printf '%s' "${CIUKIOS_DEFAULT_STARTUP_CFG:-LIVE}" > build/full/obj/STARTUP.CFG
 mcopy -o -i "$IMG" build/full/obj/STARTUP.CFG ::SYSTEM/STARTUP.CFG
+touch build/full/obj/BOOT.LOG
+mcopy -o -i "$IMG" build/full/obj/BOOT.LOG ::SYSTEM/BOOT.LOG
 mcopy -o -i "$IMG" src/com/setup_font.LICENSE ::APPS/SETUPFNT.TXT
 
 echo "[build-full] injecting removable-media reader to ::APPS/MEDIA.COM"
@@ -1352,6 +1361,8 @@ done
 # the boot splash (COM1 only on a graphics screen).
 nasm -f bin src/com/auxstart.asm -o build/full/obj/auxstart.com
 mcopy -o -i "$IMG" build/full/obj/auxstart.com ::SYSTEM/VIDEO/AUXSTART.COM
+printf '%s' "${CIUKIOS_DEFAULT_DISPLAY_CFG:-1024}" > build/full/obj/DISPLAY.CFG
+mcopy -o -i "$IMG" build/full/obj/DISPLAY.CFG ::SYSTEM/VIDEO/DISPLAY.CFG
 mcopy -o -i "$IMG" "$VGASETUP_BIN" "${DRIVERS_IMAGE_DIR%/}/VGASETUP.COM"
 
 if [[ -f "$PMIRQSB_BIN" ]]; then
@@ -1374,11 +1385,11 @@ if [[ -f "$DOOMSFX_BIN" ]]; then
 fi
 
 # Desktop launchers for the DOS games used by the QEMU compatibility lanes.
-# Keep the binaries and their data in their existing paths so game data and
-# historical test commands still resolve; the launchers give users one folder.
+# DOOM routes through its installed wrapper; the other launchers use their
+# engine binaries. Keep the user-facing entries together in one folder.
 mtools_ensure_dir "$IMG" "::DESKTOP/TestGames"
 test_game_specs=(
-	"0:DOOM.COM:APPS/DOOM/DOOMCORE.EXE"
+	"0:DOOM.COM:APPS/DOOM/DOOM.COM"
 	"1:DOOMVAN.COM:APPS/DOOMVAN/PCDMCORE.EXE"
 	"2:WOLF3D.COM:APPS/WOLF3D/WOLF3D.EXE"
 )

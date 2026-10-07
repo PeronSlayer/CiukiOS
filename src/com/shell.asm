@@ -17,10 +17,20 @@ start:
     mov ax, cs
     mov ss, ax
     mov sp, shell_stack_top
+    mov word [cs:shell_stack],0xA55A
     sti
 
     mov es, ax
-    mov bx, ((shell_image_end - $$ + 0x0100) + 15) >> 4
+%ifndef COMMAND_COMPAT
+    cld
+    xor ax,ax
+    mov di,app_state
+    mov cx,APP_COUNT*APP_STATE_BYTES/2
+    rep stosw
+%endif
+    mov bx, shell_stack_top
+    add bx, 15
+    shr bx, 4
     mov ah, 0x4A
     int 0x21
 
@@ -2432,6 +2442,9 @@ dual_putc:
     mov dl, al
     mov ah, 0x02
     int 0x21
+    pop dx
+    pop ax
+    ret
 
 .serial:
     pop dx
@@ -2439,9 +2452,22 @@ dual_putc:
 
     push ax
     push dx
-    xor dx, dx
-    mov ah, 0x01
-    int 0x14
+    push cx
+    mov ah, al
+    mov cx, 0x1000
+.wait_tx:
+    mov dx, 0x03F8 + 5
+    in al, dx
+    test al, 0x20
+    jnz .send_tx
+    loop .wait_tx
+    jmp .done_tx
+.send_tx:
+    mov dx, 0x03F8
+    mov al, ah
+    out dx, al
+.done_tx:
+    pop cx
     pop dx
     pop ax
     ret
@@ -2920,23 +2946,11 @@ boot_log_stage:
     pop ds
     mov ah,al
     and al,15
-    cmp al,10
-    jb .digit
-    add al,'A'-10
-    jmp .encoded
-.digit:
-    add al,'0'
-.encoded:
+    call .hex_nibble
     mov [boot_log_line+2],al
     mov al,ah
     shr al,4
-    cmp al,10
-    jb .high_digit
-    add al,'A'-10
-    jmp .high_encoded
-.high_digit:
-    add al,'0'
-.high_encoded:
+    call .hex_nibble
     mov [boot_log_line+1],al
     mov dx,boot_log_path
     mov ax,0x3D02
@@ -2961,7 +2975,12 @@ boot_log_stage:
     popad
     popf
     ret
-boot_log_path db '\\SYSTEM\\BOOT.LOG',0
+.hex_nibble:
+    cmp al,10
+    sbb al,0x69
+    das
+    ret
+boot_log_path db '\SYSTEM\BOOT.LOG',0
 boot_log_line db 'S00',13,10
 boot_log_key_seen db 0
 boot_log_mouse_seen db 0
@@ -2978,20 +2997,14 @@ boot_log_input_state:
     pushad
     push es
     in al,0x21
-    mov bl,0x1C               ; master PIC IRQ1 unmasked
-    test al,2
-    jz .master
-    mov bl,0x1D               ; master PIC IRQ1 masked
-.master:
-    mov al,bl
+    shr al,1
+    and al,1
+    add al,0x1C
     call boot_log_stage
     in al,0xA1
-    mov bl,0x1E               ; slave PIC IRQ12 unmasked
-    test al,0x10
-    jz .slave
-    mov bl,0x1F               ; slave PIC IRQ12 masked
-.slave:
-    mov al,bl
+    shr al,4
+    and al,1
+    add al,0x1E
     call boot_log_stage
     xor ax,ax
     mov es,ax
@@ -3572,13 +3585,22 @@ shell_output_color db 7
 %include "src/com/boot_session.inc"
 %endif
 
-; 1728 bytes: the deepest measured use (desktop, native windows, DOS window
-; and its host callbacks) is 400 bytes.
-align 16
-shell_stack times 1408 db 0
-shell_stack_top:
-shell_image_end:
-
 %if ($-$$+0x100) > 0xEF00
 %error "SHELL.COM overlaps its DOS arena ceiling"
 %endif
+
+; Runtime-only stack: measured callbacks use ~400 bytes. Keep 1728 bytes,
+; outside code/data, and include them in the PSP's retained allocation.
+; SS stays equal to CS/DS; the COM file does not contain unused stack bytes.
+%assign SHELL_STACK_BASE (($-$$+0x100+15) & ~15)
+section .bss nobits vstart=SHELL_STACK_BASE
+%ifndef COMMAND_COMPAT
+app_state resb APP_COUNT*APP_STATE_BYTES
+%assign SHELL_STACK_BASE (SHELL_STACK_BASE + APP_COUNT*APP_STATE_BYTES)
+%endif
+%if (SHELL_STACK_BASE + 1728) > 0x10000
+%error "SHELL.COM runtime state/stack exceeds its segment"
+%endif
+shell_stack resb 1728
+shell_stack_top:
+shell_image_end:

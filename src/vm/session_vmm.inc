@@ -108,6 +108,8 @@ vmm_stat_magic db 'CVMMSTAT'              ; counters, found in RAM by the gates
 vmm_ticks dd 0
 vmm_switches dd 0
 vmm_gated dd 0
+vmm_xms_guard_magic db 'CVXMSGD1'
+vmm_xms_gated dd 0                      ; nested callbacks kept in the XMS owner
 vmm_yields dd 0                         ; switches from VMM_YIELD
 vmm_yield_calls dd 0                    ; VMM_YIELD calls
 vmm_yield_seen dd 0                     ; ... for ticks the monitor had counted
@@ -131,6 +133,9 @@ vmm_boost_vm dd -1                      ; system VM handling input: no slice end
 vmm_boost_end dd 0                      ; vmm_ticks at which that boost ends
 vmm_halt_switches dd 0                  ; switches at a guest HLT
 vmm_halt_calls dd 0                     ; HLT callbacks
+ifdef VMM_DEBUG_NO_RING0_SWITCH
+vmm_dbg_ring0_switch_suppressed dd 0    ; diagnostic build only
+endif
 vmm_resume_vm dd -1                     ; boosted VM urgent audio interrupted
 vmm_resume_tsc dd 0                     ; TSC (low) at that switch
 vmm_resuming dd 0                       ; input_urgent holds a resume
@@ -1904,8 +1909,13 @@ vmm_irq proc
  add eax,[ebp].Client_Reg_Struc.Client_EIP
  cmp byte ptr [eax-1],0F4h
  jne irq_done
+ifdef VMM_DEBUG_NO_RING0_SWITCH
+ inc vmm_dbg_ring0_switch_suppressed
+ jmp irq_done                         ; diagnostic: retain the VM, finish ring-0 work
+else
  mov vmm_idle,1
  jmp irq_switch                         ; an idle VM gives its slice away now
+endif
 irq_frame:
  mov eax,vmm_audio_urgent
  cmp eax,-1
@@ -2504,6 +2514,25 @@ jlm_poll endp
 
 ; Round robin to the next ready VM. EBP = client frame.
 vmm_switch proc
+ ; XMS may enable physical interrupts inside its shared mover. A nested
+ ; canonical callback is still inside that operation; leave the client
+ ; frame and page mappings in place until the XMS handler returns.
+ pushad
+ xor eax,eax
+ @VMMCall Host_Scheduler_Profile
+ifdef VMM_SWITCH_TRACE
+ mov ecx,eax
+ and eax,8
+ shr eax,3
+ mov vmm_switch_trace_live_cvif,eax
+ mov eax,ecx
+endif
+ test eax,40h
+ popad
+ jz xms_idle
+ inc vmm_xms_gated
+ jmp gated
+xms_idle:
  mov eax,vmm_current
  call vmm_record
  mov edi,esi                            ; EDI = current record
@@ -2615,6 +2644,15 @@ not_audio_urgent:
  add eax,VMM_BOOST
  mov vmm_boost_end,eax
 not_input_urgent:
+ifdef VMM_SWITCH_TRACE
+ ; Record only a real switch, after urgent-selection metadata is final and
+ ; before the outgoing Jemm frame is copied into its VM record.
+ pushfd
+ pushad
+ call vmm_switch_trace_begin
+ popad
+ popfd
+endif
  push esi
  ; Save the running VM.
  push edi
@@ -2681,6 +2719,14 @@ cv_saved:
  mov edi,ebp
  mov ecx,VMM_FRAME/4
  rep movsd
+ifdef VMM_SWITCH_TRACE
+ ; Complete the same record from the newly loaded live Client_Reg_Struc.
+ pushfd
+ pushad
+ call vmm_switch_trace_loaded
+ popad
+ popfd
+endif
  pop esi
  mov [ebp].Client_Reg_Struc.Client_Int,eax
  mov [ebp].Client_Reg_Struc.Client_Error,edx
@@ -2701,6 +2747,7 @@ cv_saved:
  cmp eax,vmm_focus                      ; its keyboard goes back home
  jne focus_kept
  mov vmm_focus,0
+ call vmm_input_route                   ; return physical IRQ1/IRQ12 ownership
 focus_kept:
  push ebx
  mov ebx,esi

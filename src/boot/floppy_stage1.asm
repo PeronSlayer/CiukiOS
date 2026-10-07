@@ -12086,6 +12086,8 @@ int21_mem_table_insert:
     ; memory (and prevents Windows 3.x from meeting its startup minimum).
     test dx, DOS_MEM_BLOCK_PSP
     jnz .segment_ready
+    cmp byte [cs:dos_mem_global_alloc], 0
+    jne .segment_non_psp_ready
     push ax
     call int21_mem_arena_start
     mov di, ax
@@ -12289,107 +12291,160 @@ int21_mem_table_resize_limit:
     ret
 
 int21_mem_find_free_gap:
+    push es
     mov [cs:dos_mem_block_req_size], bx
     mov word [cs:dos_mem_gap_candidate_seg], 0
     mov word [cs:dos_mem_gap_candidate_size], 0
-    call int21_mem_arena_start
-    mov dx, ax
-    xor si, si
-    xor di, di
-    xor cx, cx
-    mov cl, [cs:dos_mem_block_count]
 
+    ; DOS/4GW requests are global. Start at the lowest live PSP rather than
+    ; the current PSP's end; find_next_alloc protects live PSPs and tracked
+    ; allocations while the gaps are considered.
+    call int21_mem_lowest_psp
+    or ax,ax
+    jnz .have_first_psp
+    mov ax,DOS_HEAP_USER_SEG
+    jmp .first_psp_ready
+.have_first_psp:
+    mov bx,ax
+    dec ax
+    mov es,ax
+    cmp byte [es:0],'M'
+    je .first_mcb_kind_ok
+    cmp byte [es:0],'Z'
+    jne .bad_first_psp
+.first_mcb_kind_ok:
+    cmp [es:1],bx
+    jne .bad_first_psp
+    mov ax,bx
+    cmp ax, COM_LOAD_SEG
+    jae .first_psp_ready
+    mov ax, COM_LOAD_SEG
+.first_psp_ready:
+    mov dx,ax
 .scan:
-    cmp di, cx
-    jae .tail
-    test word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_INUSE
-    jz .next
-    mov ax, [cs:dos_mem_block_table + si]
-    cmp ax, [cs:dos_mem_chain_limit_seg]
-    jae .tail
-    cmp ax, dx
+    call int21_mem_find_next_alloc
+    jc .tail
+    ; Keep the occupied extent's exclusive end in CX while BX is reused for
+    ; the gap size passed to .consider_gap.  That helper may overwrite BX.
+    mov cx,ax
+    add cx,bx
+    inc cx
+    cmp ax,dx
     jbe .consume
-    mov bx, ax
-    sub bx, dx
+    mov bx,ax
+    sub bx,dx
     dec bx
     call .consider_gap
     jnc .candidate_ready
 .consume:
-    mov ax, [cs:dos_mem_block_table + si]
-    add ax, [cs:dos_mem_block_table + si + 2]
-    inc ax
-    cmp ax, dx
-    jbe .next
-    mov dx, ax
-.next:
-    add si, DOS_MEM_BLOCK_ENTRY_SIZE
-    inc di
+    mov dx,cx
     jmp .scan
-
 .tail:
-    cmp dx, [cs:dos_mem_chain_limit_seg]
-    jae .finish
-    mov bx, [cs:dos_mem_chain_limit_seg]
-    sub bx, dx
+    cmp dx,[cs:dos_mem_chain_limit_seg]
+    jae .candidate_ready
+    mov bx,[cs:dos_mem_chain_limit_seg]
+    sub bx,dx
     call .consider_gap
-
-.finish:
 .candidate_ready:
-    mov ax, [cs:dos_mem_gap_candidate_seg]
-    or ax, ax
-    jz .not_found
-    mov bx, [cs:dos_mem_block_req_size]
+    cmp word [cs:dos_mem_gap_candidate_seg],0
+    je .not_found
+    mov ax,[cs:dos_mem_gap_candidate_seg]
+    mov bx,[cs:dos_mem_block_req_size]
+    or bx,bx
+    jnz .return
+    mov bx,[cs:dos_mem_gap_candidate_size]
+.return:
+    pop es
     clc
     ret
-
 .not_found:
+    pop es
+    stc
+    ret
+.bad_first_psp:
+    pop es
     stc
     ret
 
-; DX/BX describe a free data interval. First fit stops immediately, best
-; fit retains the smallest adequate interval, and last fit retains the last
-; adequate interval. First/best fit carve from the low end, last fit from
-; the high end, matching the FreeDOS MCB splitting rules.
+; DX/BX describe a free global interval. First fit returns immediately, best
+; fit retains the smallest adequate interval, and last fit retains the last.
 .consider_gap:
-    cmp bx, [cs:dos_mem_block_req_size]
+    cmp word [cs:dos_mem_block_req_size],0
+    je .consider_largest
+    cmp bx,[cs:dos_mem_block_req_size]
     jb .consider_continue
     push ax
     push bp
-    mov bp, [cs:dos_mem_strategy]
-    cmp bp, 1
+    mov bp,[cs:dos_mem_strategy]
+    cmp bp,1
     je .consider_best
-    cmp bp, 2
+    cmp bp,2
     je .consider_last
-
-    mov [cs:dos_mem_gap_candidate_seg], dx
-    mov [cs:dos_mem_gap_candidate_size], bx
+    mov [cs:dos_mem_gap_candidate_seg],dx
+    mov [cs:dos_mem_gap_candidate_size],bx
     pop bp
     pop ax
     clc
     ret
-
 .consider_best:
-    cmp word [cs:dos_mem_gap_candidate_seg], 0
-    je .consider_store_start
-    cmp bx, [cs:dos_mem_gap_candidate_size]
+    cmp word [cs:dos_mem_gap_candidate_seg],0
+    je .consider_store
+    cmp bx,[cs:dos_mem_gap_candidate_size]
     jae .consider_saved
-.consider_store_start:
-    mov [cs:dos_mem_gap_candidate_seg], dx
-    mov [cs:dos_mem_gap_candidate_size], bx
+.consider_store:
+    mov [cs:dos_mem_gap_candidate_seg],dx
+    mov [cs:dos_mem_gap_candidate_size],bx
     jmp .consider_saved
-
 .consider_last:
-    mov ax, dx
-    add ax, bx
-    sub ax, [cs:dos_mem_block_req_size]
-    mov [cs:dos_mem_gap_candidate_seg], ax
-    mov [cs:dos_mem_gap_candidate_size], bx
-
+    mov ax,dx
+    add ax,bx
+    sub ax,[cs:dos_mem_block_req_size]
+    mov [cs:dos_mem_gap_candidate_seg],ax
+    mov [cs:dos_mem_gap_candidate_size],bx
 .consider_saved:
     pop bp
     pop ax
 .consider_continue:
     stc
+    ret
+.consider_largest:
+    cmp bx,[cs:dos_mem_gap_candidate_size]
+    jbe .consider_continue
+    mov [cs:dos_mem_gap_candidate_seg],dx
+    mov [cs:dos_mem_gap_candidate_size],bx
+    stc
+    ret
+
+; Drop cached free intervals below the chain ceiling before carving a newly
+; coalesced MCB. Their bytes remain free in the authoritative MCB chain.
+int21_mem_table_clear_low_free:
+    push ax
+    push cx
+    push si
+    xor si,si
+.clear_scan:
+    xor cx,cx
+    mov cl,[cs:dos_mem_block_count]
+    mov ax,si
+    shr ax,1
+    shr ax,1
+    shr ax,1
+    cmp ax,cx
+    jae .clear_done
+    cmp word [cs:dos_mem_block_table + si + 6],DOS_MEM_BLOCK_FREE
+    jne .clear_next
+    mov ax,[cs:dos_mem_block_table + si]
+    cmp ax,[cs:dos_mem_chain_limit_seg]
+    jae .clear_next
+    call int21_mem_table_remove_at_si
+    jmp .clear_scan
+.clear_next:
+    add si,DOS_MEM_BLOCK_ENTRY_SIZE
+    jmp .clear_scan
+.clear_done:
+    pop si
+    pop cx
+    pop ax
     ret
 
 int21_mem_table_alloc_from_free:
@@ -12966,48 +13021,24 @@ int21_mem_largest_global:
     push dx
     push si
     push es
+    xor bx,bx
+    call int21_mem_find_free_gap
+    jnc .restore
+.failed:
+    xor bx,bx
 
-    call int21_mem_table_rebuild
-    call int21_mem_arena_start
-    mov dx, ax
-    xor si, si
-
-.scan_next:
-    call int21_mem_find_next_alloc
-    jc .tail
-    cmp ax, dx
-    jbe .consume_alloc
-    mov cx, ax
-    sub cx, dx
-    dec cx
-    cmp cx, si
-    jbe .consume_alloc
-    mov si, cx
-
-.consume_alloc:
-    mov dx, ax
-    add dx, bx
-    inc dx
-    jmp .scan_next
-
-.tail:
-    cmp dx, [cs:dos_mem_chain_limit_seg]
-    jae .largest_ready
-    mov cx, [cs:dos_mem_chain_limit_seg]
-    sub cx, dx
-    cmp cx, si
-    jbe .largest_ready
-    mov si, cx
-
-.largest_ready:
-    mov bx, si
-
-.done:
+.restore:
     pop es
     pop si
     pop dx
     pop cx
     pop ax
+    or bx,bx
+    jz .no_free
+    clc
+    ret
+.no_free:
+    stc
     ret
 
 int21_mem_trace_chain:
@@ -13073,6 +13104,7 @@ int21_alloc:
 
     call int21_mem_table_alloc_from_free
     jnc .alloc_from_table_ready
+    call int21_mem_table_clear_low_free
     cmp byte [cs:dos_mem_block_count], DOS_MEM_BLOCK_TABLE_MAX
     jae .no_memory
     cmp word [cs:dos_exec_identity_psp], 0
@@ -13087,7 +13119,9 @@ int21_alloc:
     mov cx, ax
     mov dx, DOS_MEM_BLOCK_ALLOC
     mov ax, [cs:dos_mem_block_tmp_seg]
+    mov byte [cs:dos_mem_global_alloc], 1
     call int21_mem_table_insert
+    mov byte [cs:dos_mem_global_alloc], 0
 .alloc_from_table_ready:
     mov [cs:dos_mem_block_tmp_seg], ax
     call int21_mem_sync_legacy
@@ -21320,22 +21354,26 @@ int10_handler:
     iret
 
 .vbe_set_mode:
-    push bx
-    pop bx
     call int10_call_original_vbe
     jc .vbe_set_mode_local
+    push dx
     mov dx, bx
     and dx, 0x3FFF
     call int10_vbe_set_mode_from_bios
+    pop dx
+    mov byte [cs:current_vbe_bios_mode], 1
     mov ax, 0x004F
     iret
 
 .vbe_set_mode_local:
+    test bx, 0x4000             ; local emulation has no linear framebuffer
+    jnz .vbe_unsupported
     mov ax, bx
     and ax, 0x3FFF
     call int10_vbe_find_mode
     jc .vbe_unsupported
     mov [cs:current_vbe_mode], ax
+    mov byte [cs:current_vbe_bios_mode], 0
     xor ax, ax
     mov [cs:current_vbe_bank_a], ax
     mov [cs:current_vbe_bank_b], ax
@@ -21353,7 +21391,11 @@ int10_handler:
     xor ah, ah
     mov [es:0x044A], ax
     pop es
+    mov ax, [cs:current_vbe_mode]
+    call int10_vbe_find_mode
+    push dx
     call int10_vbe_activate_local_mode
+    pop dx
     mov ax, 0x004F
     iret
 
@@ -21374,27 +21416,32 @@ int10_handler:
     iret
 
 .vbe_window:
-    cmp bl, 0x00
+    cmp bh, 0x00               ; BH operation, BL window (VBE Function 05h)
     je .vbe_window_set_try_bios
-    cmp bl, 0x01
+    cmp bh, 0x01
     je .vbe_window_get_try_bios
 
 .vbe_window_local:
+    ; A failed firmware bank switch must not become a successful RAM copy
+    ; into the unchanged hardware window. Only locally set modes own that
+    ; emulation; otherwise the caller must reject the framebuffer path.
+    cmp byte [cs:current_vbe_bios_mode], 1
+    je .vbe_unsupported
     mov ax, [cs:current_vbe_mode]
     or ax, ax
     jz .vbe_unsupported
-    cmp bl, 0x00
+    cmp bh, 0x00
     je .vbe_set_window
-    cmp bl, 0x01
+    cmp bh, 0x01
     je .vbe_get_window
     jmp .vbe_unsupported
 
 .vbe_window_set_try_bios:
     call int10_call_original_vbe
     jc .vbe_window_set_local
-    cmp bh, 0x00
+    cmp bl, 0x00
     je .vbe_bios_bank_a
-    cmp bh, 0x01
+    cmp bl, 0x01
     je .vbe_bios_bank_b
     iret
 
@@ -21404,9 +21451,9 @@ int10_handler:
 .vbe_window_get_try_bios:
     call int10_call_original_vbe
     jc .vbe_window_get_local
-    cmp bh, 0x00
+    cmp bl, 0x00
     je .vbe_bios_get_bank_a
-    cmp bh, 0x01
+    cmp bl, 0x01
     je .vbe_bios_get_bank_b
     iret
 
@@ -21437,9 +21484,9 @@ int10_handler:
     iret
 
 .vbe_set_window:
-    cmp bh, 0x00
+    cmp bl, 0x00
     je .vbe_set_bank_a
-    cmp bh, 0x01
+    cmp bl, 0x01
     je .vbe_set_bank_b
     jmp .vbe_unsupported
 
@@ -21452,9 +21499,9 @@ int10_handler:
     iret
 
 .vbe_get_window:
-    cmp bh, 0x00
+    cmp bl, 0x00
     je .vbe_get_bank_a
-    cmp bh, 0x01
+    cmp bl, 0x01
     je .vbe_get_bank_b
     jmp .vbe_unsupported
 
@@ -21516,6 +21563,7 @@ int10_vbe_reset_state:
     mov word [cs:current_vbe_visible_bank], 0xFFFF
     mov byte [cs:current_vbe_visible_window], 0xFF
     mov byte [cs:current_vbe_backing_ready], 0
+    mov byte [cs:current_vbe_bios_mode], 0
     pop ax
     ret
 
@@ -21740,7 +21788,7 @@ int10_vbe_save_visible_bank:
     ret
 
 int10_vbe_set_window_local_bank:
-    cmp bh, 0x01
+    cmp bl, 0x01
     ja .unsupported
     mov ax, [cs:current_vbe_mode_banks]
     or ax, ax
@@ -21753,7 +21801,7 @@ int10_vbe_set_window_local_bank:
     mov byte [cs:current_vbe_backing_ready], 1
 .save_visible:
     call int10_vbe_save_visible_bank
-    cmp bh, 0x00
+    cmp bl, 0x00
     jne .bank_b
     mov [cs:current_vbe_bank_a], dx
     jmp .load
@@ -21762,7 +21810,7 @@ int10_vbe_set_window_local_bank:
 .load:
     call int10_vbe_load_window_bank
     mov [cs:current_vbe_visible_bank], dx
-    mov [cs:current_vbe_visible_window], bh
+    mov [cs:current_vbe_visible_window], bl
     mov byte [cs:current_vbe_backing_ready], 1
     mov ax, 0x004F
     ret
@@ -24130,6 +24178,7 @@ current_vbe_backing_seg dw 0
 current_vbe_backing_banks dw 0
 current_vbe_visible_window db 0xFF
 current_vbe_backing_ready db 0
+current_vbe_bios_mode db 0
 vbe_mode_list dw 0x0100, 0x0101, 0x0103, 0xFFFF
 vbe_mode_table:
     dw 0x0100, 640, 400, 640
@@ -24403,6 +24452,7 @@ dos_mem_gap_candidate_seg dw 0
 dos_mem_gap_candidate_size dw 0
 dos_file_open_mask dw 0
 dos_mem_exec_state_end:
+dos_mem_global_alloc db 0
 dos21_saved_drive db 0
 dos_exec_saved_context_begin:
 saved_ss dw 0

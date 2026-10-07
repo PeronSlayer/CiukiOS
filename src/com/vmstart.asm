@@ -59,7 +59,14 @@ start:
     dec si
     cmp al,13
     jne .copy_tail
-    mov si,default_options
+    call detect_hypervisor
+    test al,al
+    jnz .is_qemu
+    mov si,bare_metal_options
+    jmp .copy_def
+.is_qemu:
+    mov si,qemu_options
+.copy_def:
     call copy_z
     jmp .tail_done
 .copy_tail:
@@ -223,12 +230,77 @@ network_entry dw 0,0
 network_ready db 'VMSTART: NIC interrupts owned by the desktop VM.',13,10,0
 network_failed db 'VMSTART: cannot bind the network interrupt owner.',13,10,0
 %ifdef VMSTART_JEMMEX
-default_options db 'NOEMS X=A000-CCFF I=CD00-E7FF X=E800-FFFF NOVME',0
+qemu_options db 'NOEMS X=A000-CCFF I=CD00-E7FF X=E800-FFFF NOVME',0
+bare_metal_options db 'NOEMS X=A000-CFFF I=D000-DBFF X=DC00-FFFF NOVME',0
 jemm_path db '\VM\JEMMEX.EXE',0
 %else
-default_options db 'NOEMS NOHI X=A000-CCFF I=CD00-E7FF X=E800-FFFF NODYN MAX=32M MIN=32M NOVME',0
+qemu_options db 'NOEMS NOHI X=A000-CCFF I=CD00-E7FF X=E800-FFFF NODYN MAX=32M MIN=32M NOVME',0
+bare_metal_options db 'NOEMS NOHI X=A000-CFFF I=D000-DBFF X=DC00-FFFF NODYN MAX=32M MIN=32M NOVME',0
 jemm_path db '\VM\JEMM386.EXE',0
 %endif
+
+detect_hypervisor:
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+
+    ; 1. Check CPUID.1:ECX bit 31
+    pushfd
+    pop eax
+    mov edx,eax
+    xor eax,00200000h
+    push eax
+    popfd
+    pushfd
+    pop eax
+    push edx
+    popfd
+    cmp eax,edx
+    je .check_pci
+    mov eax,1
+    db 0x0F,0xA2                ; cpuid
+    test ecx,80000000h
+    jnz .found
+
+.check_pci:
+    ; 2. Check PCI Bus 0 Device 2 Function 0 (VGA in QEMU: 11111234h)
+    mov eax,80001000h
+    mov dx,0CF8h
+    out dx,eax
+    mov dx,0CFCh
+    in eax,dx
+    cmp eax,11111234h
+    je .found
+
+.check_bios:
+    ; 3. Check for 'QEMU' or 'SeaB' in F000:E000 .. F000:FFFF
+    mov ax,0F000h
+    mov ds,ax
+    mov si,0E000h
+.bios_loop:
+    cmp dword [si],'QEMU'
+    je .found
+    cmp dword [si],'SeaB'
+    je .found
+    inc si
+    cmp si,0FFF0h
+    jb .bios_loop
+
+    xor al,al
+    jmp .done
+
+.found:
+    mov al,1
+
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
 jload_path db '\VM\JLOAD.EXE',0
 jload_tail db jload_tail_end-jload_tail-1
     db ' \VM\CVSESS.DLL'

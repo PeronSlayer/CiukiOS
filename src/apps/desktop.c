@@ -8,6 +8,115 @@
  * above everything). Icon positions are kept in \SYSTEM\UI\ICONPOS.DAT;
  * which system icons show is set in the Control Panel (DESKTOP.CFG). */
 #include "app.h"
+#include "iconlabel.h"
+#include "webmodule.h"
+
+static struct webmodule wallpaper_module;
+static struct app_wallpaper_info wallpaper_info;
+static u16 wallpaper_generation=0xFFFF;
+#define WALLPAPER_RETRY_TICKS 91 /* about five seconds at the BIOS tick rate */
+static u16 wallpaper_retry_generation=0xFFFF,wallpaper_retry_tick;
+static u16 wallpaper_reported_generation=0xFFFF,wallpaper_reported_error=0xFFFF;
+static u16 wallpaper_reported_dos_error=0xFFFF;
+static u16 wallpaper_request_reported_generation=0xFFFF;
+static int wallpaper_request_reported_result=-1;
+static int wallpaper_retry_pending;
+
+static void wallpaper_log_load_error(void)
+{
+    char detail[80],number[12];
+    str_copy(detail,"WALLP.APP: ");
+    str_cat(detail,webmodule_error_text(wallpaper_module.error));
+    if(wallpaper_module.dos_error) {
+        str_cat(detail," DOS ");fmt_hex4(number,wallpaper_module.dos_error);str_cat(detail,number);
+        str_cat(detail," ");str_cat(detail,dos_error_text(wallpaper_module.dos_error));
+    }
+    if(wallpaper_module.error==WEBMODULE_ALLOC) {
+        str_cat(detail," largest=");fmt_u32(number,wallpaper_module.largest_block);
+        str_cat(detail,number);str_cat(detail," paragraphs");
+    }
+    app_log("[DESK] wallpaper load failed",detail);
+}
+
+static int wallpaper_poll(void)
+{
+    int changed=0,generation_changed,retry_due,open_result;
+    u16 now=(u16)HOST.ticks;
+    if(!app_wallpaper(&wallpaper_info))return 0;
+    generation_changed=wallpaper_generation!=wallpaper_info.generation;
+    if(wallpaper_info.kind&&!wallpaper_module.segment) {
+        retry_due=!wallpaper_retry_pending||
+                  wallpaper_retry_generation!=wallpaper_info.generation||
+                  (u16)(now-wallpaper_retry_tick)>=WALLPAPER_RETRY_TICKS;
+        if(retry_due) {
+            if(webmodule_load(&wallpaper_module,"\\SYSTEM\\APPS\\WALLP.APP")) {
+                app_log("[DESK] wallpaper module","loaded");
+                wallpaper_reported_generation=0xFFFF;
+            } else {
+                if(wallpaper_reported_generation!=wallpaper_info.generation||
+                   wallpaper_reported_error!=wallpaper_module.error||
+                   wallpaper_reported_dos_error!=wallpaper_module.dos_error) {
+                    wallpaper_log_load_error();
+                    wallpaper_reported_generation=wallpaper_info.generation;
+                    wallpaper_reported_error=wallpaper_module.error;
+                    wallpaper_reported_dos_error=wallpaper_module.dos_error;
+                }
+                wallpaper_retry_pending=1;
+                wallpaper_retry_generation=wallpaper_info.generation;
+                wallpaper_retry_tick=now;
+            }
+        }
+    }
+    if(wallpaper_module.segment&&generation_changed) {
+        retry_due=!wallpaper_retry_pending||
+                  wallpaper_retry_generation!=wallpaper_info.generation||
+                  (u16)(now-wallpaper_retry_tick)>=WALLPAPER_RETRY_TICKS;
+        if(retry_due) {
+            open_result=webmodule_call(&wallpaper_module,EV_OPEN,&wallpaper_info);
+            /* WALLP.APP uses zero for an accepted photo request. A kind-zero
+             * request intentionally clears the image and returns one. */
+            if(!wallpaper_info.kind||!open_result) {
+                wallpaper_generation=wallpaper_info.generation;
+                wallpaper_retry_pending=0;
+                wallpaper_reported_generation=0xFFFF;
+                wallpaper_request_reported_generation=0xFFFF;
+                app_log("[DESK] wallpaper request","accepted");
+                changed=1;
+            } else {
+                if(wallpaper_request_reported_generation!=wallpaper_info.generation||
+                   wallpaper_request_reported_result!=open_result) {
+                    char detail[16];fmt_u32(detail,(u32)(u16)open_result);
+                    app_log("[DESK] wallpaper request failed",detail);
+                    wallpaper_request_reported_generation=wallpaper_info.generation;
+                    wallpaper_request_reported_result=open_result;
+                }
+                wallpaper_retry_pending=1;
+                wallpaper_retry_generation=wallpaper_info.generation;
+                wallpaper_retry_tick=now;
+            }
+        }
+    } else if(!wallpaper_module.segment&&!wallpaper_info.kind&&generation_changed) {
+        /* No selected wallpaper means there is no helper request to dispatch. */
+        wallpaper_generation=wallpaper_info.generation;
+        wallpaper_retry_pending=0;
+    }
+    if(wallpaper_module.segment&&wallpaper_generation==wallpaper_info.generation&&
+       webmodule_call(&wallpaper_module,EV_POLL,0))changed=1;
+    return changed;
+}
+static void wallpaper_close(void)
+{
+    if(wallpaper_module.segment) {
+        webmodule_call(&wallpaper_module,EV_CLOSE,0);
+        webmodule_free(&wallpaper_module);
+    }
+    wallpaper_generation=0xFFFF;
+    wallpaper_retry_pending=0;
+    wallpaper_retry_generation=0xFFFF;
+    wallpaper_reported_generation=0xFFFF;
+    wallpaper_request_reported_generation=0xFFFF;
+    wallpaper_request_reported_result=-1;
+}
 
 #define MAX_ICONS 48
 #define CELL_W 84
@@ -26,12 +135,18 @@ struct dicon {
     u16 date, time;
 };
 static struct dicon icons[MAX_ICONS];
+static u8 icon_label_lines[MAX_ICONS];
+static u16 icon_label_width[MAX_ICONS];
 static int nicons, cur = -1;
+static int select_anchor = -1;
+static int box_state, box_x0, box_y0, box_x1, box_y1, box_prev_x1, box_prev_y1;
+static u8 box_base[MAX_ICONS];
 static struct deskcfg cfg;
 static int bin_full;
 static u32 dir_sig;
 static unsigned poll_tick;
 static int area_w, area_h;
+static int grid_h = CELL_H;
 /* Compact top-bar readings. Polling uses only resident services: the disk
  * lamp follows filesystem changes, never a disk read in EV_POLL. */
 static unsigned top_tick, top_disk_until, top_net_until;
@@ -262,6 +377,8 @@ static int icon_id(const struct dicon *d)
     if (ext_is(d->name, "COM|EXE")) return ICON_PROGRAM;
     if (ext_is(d->name, "BAT")) return ICON_DOS;
     if (ext_is(d->name, "CFN")) return ICON_FONTFILE;
+    if (ext_is(d->name, "BMP|PNG|JPG|JPEG|GIF")) return ICON_IMAGE;
+    if (ext_is(d->name, "WAV|MP3|OGG|FLAC|MID|MIDI|VOC|PCM")) return ICON_MUSIC;
     return ICON_TEXT;
 }
 static const char *type_of(const struct dicon *d)
@@ -272,6 +389,8 @@ static const char *type_of(const struct dicon *d)
     if (ext_is(d->name, "COM|EXE")) return "Application";
     if (ext_is(d->name, "BAT")) return "MS-DOS Batch File";
     if (ext_is(d->name, "CFN")) return "CiukiOS Font";
+    if (ext_is(d->name, "BMP|PNG|JPG|JPEG|GIF")) return "Image File";
+    if (ext_is(d->name, "WAV|MP3|OGG|FLAC|MID|MIDI|VOC|PCM")) return "Audio File";
     return "File";
 }
 
@@ -321,21 +440,45 @@ static void pos_save(void)
     dos_write(h, pos, npos * (int)sizeof(struct posrec));
     dos_close(h);
 }
-static int rows(void) { int r = (area_h - 32 - 30 - TOP) / CELL_H; return r < 1 ? 1 : r; }
+static const char *icon_label(int i)
+{
+    return icons[i].sys ? icons[i].label : icons[i].name;
+}
+static int icon_label_height(int i)
+{
+    return 44 + icon_label_lines[i] * 17 + 1;
+}
+static void layout_height(void)
+{
+    int i;
+    grid_h = CELL_H;
+    for (i = 0; i < nicons; i++) {
+        int width = 0, lines, h;
+        const char *text = icon_label(i);
+        lines = ciuki_label_layout(text, CELL_W - 6, &width);
+        icon_label_lines[i] = (u8)lines;
+        icon_label_width[i] = (u16)width;
+        h = icon_label_height(i) + 3;
+        if (h > grid_h) grid_h = h;
+    }
+}
+static int rows(void) { int r = (area_h - 32 - 30 - TOP) / grid_h; return r < 1 ? 1 : r; }
 static int cols(void) { int c = (area_w - 8) / CELL_W; return c < 1 ? 1 : c; }
-static int cell_x(int c) { return 8 + c * CELL_W; }
-static int cell_y(int r) { return TOP + r * CELL_H; }
+/* Desktop columns start at the right edge and grow left, as requested for
+ * CiukiOS's default desktop layout. Saved user positions are untouched. */
+static int cell_x(int c) { return area_w - 8 - CELL_W - c * CELL_W; }
+static int cell_y(int r) { return TOP + r * grid_h; }
 static int occupied(int x, int y, int skip)
 {
     int i;
     for (i = 0; i < nicons; i++) {
         if (i == skip || icons[i].x < 0) continue;
         if (icons[i].x < x + CELL_W - 8 && icons[i].x + CELL_W - 8 > x &&
-            icons[i].y < y + CELL_H - 8 && icons[i].y + CELL_H - 8 > y) return 1;
+            icons[i].y < y + grid_h - 8 && icons[i].y + grid_h - 8 > y) return 1;
     }
     return 0;
 }
-/* The first free cell, down the columns from the top left. */
+/* The first free cell, down the columns from the top right. */
 static void auto_place(int i)
 {
     int c, r;
@@ -348,7 +491,7 @@ static void auto_place(int i)
 static void clamp_icon(int i)
 {
     if (icons[i].x > area_w - CELL_W) icons[i].x = area_w - CELL_W;
-    if (icons[i].y > area_h - 32 - CELL_H) icons[i].y = area_h - 32 - CELL_H;
+    if (icons[i].y > area_h - 32 - grid_h) icons[i].y = area_h - 32 - grid_h;
     if (icons[i].x < 0) icons[i].x = 0;
     if (icons[i].y < 32) icons[i].y = 32;
 }
@@ -419,6 +562,7 @@ static void reload(void)
     }
     dir_close(&f);
     dir_sig = list_sig();
+    layout_height();
     /* Saved positions first, then the new icons in free cells. */
     for (i = 0; i < nicons; i++) {
         char key[13];
@@ -431,6 +575,8 @@ static void reload(void)
     for (i = 0; i < nicons; i++) if (icons[i].x < 0) auto_place(i);
     cur = -1;
     if (keep[0]) for (i = 0; i < nicons; i++) if (!str_icmp(icons[i].name, keep)) { cur = i; icons[i].sel = 1; }
+    select_anchor = cur;
+    box_state = 0;
     log_icons();
 }
 static void arrange(int by_type)
@@ -463,8 +609,10 @@ static void line_up(void)
 {
     int i;
     for (i = 0; i < nicons; i++) {
-        int c = (icons[i].x - 8 + CELL_W / 2) / CELL_W, r = (icons[i].y - TOP + CELL_H / 2) / CELL_H;
+        int c = (area_w - 8 - CELL_W - icons[i].x + CELL_W / 2) / CELL_W;
+        int r = (icons[i].y - TOP + grid_h / 2) / grid_h;
         if (c < 0) c = 0;
+        if (c >= cols()) c = cols() - 1;
         if (r < 0) r = 0;
         if (r >= rows()) r = rows() - 1;
         icons[i].x = cell_x(c);
@@ -488,14 +636,16 @@ static int icon_at(int sx, int sy)
     int i;
     for (i = nicons - 1; i >= 0; i--) {
         int x = icons[i].x, y = icons[i].y;
+        int label_bottom = y + icon_label_height(i) - 1;
         if (sx >= x + 16 && sx < x + CELL_W - 16 && sy >= y && sy < y + 42) return i;
-        if (sx >= x + 2 && sx < x + CELL_W - 2 && sy >= y + 42 && sy < y + 78) return i;
+        if (label_bottom < y + 78) label_bottom = y + 78;
+        if (sx >= x + 2 && sx < x + CELL_W - 2 && sy >= y + 42 && sy < label_bottom) return i;
     }
     return -1;
 }
 static void damage_icon(int i)
 {
-    if (i >= 0 && i < nicons) ui_damage(icons[i].x - 2, icons[i].y - 2, CELL_W + 4, CELL_H + 2);
+    if (i >= 0 && i < nicons) ui_damage(icons[i].x - 2, icons[i].y - 2, CELL_W + 4, grid_h + 4);
 }
 static void select_only(int i)
 {
@@ -503,6 +653,16 @@ static void select_only(int i)
     for (k = 0; k < nicons; k++) { if (icons[k].sel) damage_icon(k); icons[k].sel = 0; }
     if (i >= 0) { icons[i].sel = 1; damage_icon(i); }
     if (cur >= 0) damage_icon(cur);
+    cur = i;
+    select_anchor = i;
+}
+static void select_range(int i)
+{
+    int k, a = select_anchor < 0 ? i : select_anchor;
+    for (k = 0; k < nicons; k++) {
+        int on = k >= (a < i ? a : i) && k <= (a < i ? i : a);
+        if (icons[k].sel != on) { icons[k].sel = (u8)on; damage_icon(k); }
+    }
     cur = i;
 }
 static int count_selected(void) { int i, n = 0; for (i = 0; i < nicons; i++) n += icons[i].sel; return n; }
@@ -675,6 +835,8 @@ static void open_icon(int i, int how)           /* how: 0 open, 1 Notepad, 2 exp
         app_open(WIN_CONTROL, t);
         return;
     }
+    if (how == 0 && ext_is(d->name, "BMP|PNG|JPG|JPEG|GIF")) { app_open(WIN_VIEWER, p); return; }
+    if (how == 0 && ext_is(d->name, "WAV|MP3|OGG|FLAC")) { app_open(WIN_PLAYER, p); return; }
     app_open(WIN_NOTEPAD, p);
 }
 static void new_item(int folder, int x, int y)
@@ -868,7 +1030,8 @@ enum {
     M_OPEN = 1, M_NOTEPAD, M_EXPLORE, M_CUT, M_COPY, M_PASTE, M_DELETE, M_RENAME, M_PROPS,
     M_HIDE, M_EMPTY, M_ARR_NAME, M_ARR_TYPE, M_LINEUP, M_REFRESH, M_NEWFOLDER, M_NEWTEXT,
     M_DESK_PROPS, M_TASKS, M_SHOWDESK, M_CONTROL, M_RUN, M_PROGRAMS, M_DOS, M_FILES, M_ABOUT,
-    M_SHUTDOWN, M_W_RESTORE, M_W_MIN, M_W_MAX, M_W_CLOSE, M_DISPLAY, M_SOUND, M_NETWORK
+    M_SHUTDOWN, M_W_RESTORE, M_W_MIN, M_W_MAX, M_W_CLOSE, M_DISPLAY, M_SOUND, M_NETWORK,
+    M_VIEWER, M_PLAYER
 };
 static struct menu_item m_back[] = {
     { "Arrange Icons by &Name", 0, M_ARR_NAME, 0 }, { "Arrange Icons by &Type", 0, M_ARR_TYPE, 0 },
@@ -904,6 +1067,7 @@ static struct menu_item m_start[] = {
     { "&Run...", "Win+R", M_RUN, 0 }, { "&DOS Prompt", 0, M_DOS, 0 }, { "", 0, 0, MI_SEP },
     { "&Control Panel", 0, M_CONTROL, 0 }, { "D&isplay", 0, M_DISPLAY, 0 },
     { "&Sound", 0, M_SOUND, 0 }, { "&Network", 0, M_NETWORK, 0 },
+    { "Image Viewer", 0, M_VIEWER, 0 }, { "Music Player", 0, M_PLAYER, 0 },
     { "&Task Manager", "Ctrl+Shift+Esc", M_TASKS, 0 }, { "", 0, 0, MI_SEP },
     { "&About CiukiOS", "Win+F1", M_ABOUT, 0 }, { "Shut Do&wn...", 0, M_SHUTDOWN, 0 } };
 static struct menu_item m_window[] = {
@@ -1016,7 +1180,7 @@ static int vol_mouse(int kind, int sx, int sy)
     }
     return 1;
 }
-static int module_window(int w) { return w == WIN_FILES || w == WIN_TASKS || (w >= WIN_NOTEPAD && w <= WIN_BROWSER); }
+static int module_window(int w) { return w == WIN_FILES || w == WIN_TASKS || (w >= WIN_NOTEPAD && w <= WIN_PLAYER); }
 static void window_menu(int w, int x, int y)
 {
     static char list[32 * 25];
@@ -1027,7 +1191,7 @@ static void window_menu(int w, int x, int y)
     if (!st) return;
     menu_window = w;
     flag(&m_window[0], MI_DISABLED, st != 2 && (list[w * 25] & 0x80));
-    flag(&m_window[1], MI_DISABLED, w == 0 || st == 2 || w > WIN_BROWSER);   /* dialogs */
+    flag(&m_window[1], MI_DISABLED, w == 0 || st == 2 || w > WIN_PLAYER);   /* dialogs */
     flag(&m_window[2], MI_DISABLED, !module_window(w));
     fmt_2(t, w);
     menu_open(m_window, 5, x, y, "window");
@@ -1117,7 +1281,7 @@ static void command(int id)
     case M_REFRESH: reload(); ui_repaint(); break;
     case M_NEWFOLDER: new_item(1, menu_x, menu_y); break;
     case M_NEWTEXT: new_item(0, menu_x, menu_y); break;
-    case M_DESK_PROPS: app_open(WIN_CONTROL, "appearance"); break;
+    case M_DESK_PROPS: app_open(WIN_DISPLAY, "background"); break;
     case M_TASKS: shell_action(23); break;
     case M_SHOWDESK: show_desktop(); break;
     case M_CONTROL: app_open(WIN_CONTROL, ""); break;
@@ -1130,6 +1294,8 @@ static void command(int id)
     case M_DISPLAY: app_open(WIN_CONTROL, "display"); break;
     case M_SOUND: app_open(WIN_CONTROL, "sound"); break;
     case M_NETWORK: app_open(WIN_CONTROL, "network"); break;
+    case M_VIEWER: app_open(WIN_VIEWER, ""); break;
+    case M_PLAYER: app_open(WIN_PLAYER, ""); break;
     case M_W_RESTORE: app_window_cmd(w, 1); break;
     case M_W_MIN: app_window_cmd(w, 3); break;
     case M_W_MAX: app_window_cmd(w, 4); break;
@@ -1143,7 +1309,6 @@ static void draw_icon(int i, int dx, int dy, int ghost)
 {
     struct dicon *d = &icons[i];
     int x = d->x + dx, y = d->y + dy, tx, tw;
-    char t[24];
     if (ghost) {
         ui_rect(x + 20, y, CELL_W - 40, 1, C_PAPER); ui_rect(x + 20, y + 41, CELL_W - 40, 1, C_PAPER);
         ui_rect(x + 20, y, 1, 42, C_PAPER); ui_rect(x + CELL_W - 21, y, 1, 42, C_PAPER);
@@ -1152,28 +1317,25 @@ static void draw_icon(int i, int dx, int dy, int ghost)
     if (drop_i == i) ui_rect(x + 18, y - 1, CELL_W - 36, 44, C_TITLE);
     ui_icon(x + (CELL_W - 44) / 2, y, icon_id(d));
     if (renaming == i) { field_draw(&rename_field, x + 2, y + 43, CELL_W - 4, 1); return; }
-    /* The label, on two lines when it is too wide (split at a space). */
+    /* Keep the complete name visible. Prefer word boundaries, then wrap a
+     * long filename at complete UTF-8 character boundaries. */
     {
-        char a[72], b[72];
-        int k, lines = 1, wa, wb = 0, top = y + 44, h;
-        str_ncopy(a, d->sys ? d->label : d->name, 64);
-        b[0] = 0;
-        if (ui_measure(a) > CELL_W - 6)
-            for (k = str_len(a) - 1; k > 0; k--)
-                if (a[k] == ' ') { a[k] = 0; if (ui_measure(a) <= CELL_W - 6) { str_copy(b, a + k + 1); lines = 2; break; } a[k] = ' '; }
-        text_fit(a, CELL_W - 6, t);
-        str_copy(a, t);
-        if (lines == 2) { text_fit(b, CELL_W - 6, t); str_copy(b, t); wb = ui_measure(b); }
-        wa = ui_measure(a);
-        tw = wa > wb ? wa : wb;
+        const char *text = icon_label(i);
+        char line[LFN_NAME];
+        int k, lines = icon_label_lines[i], pos = 0, top = y + 44, h;
+        tw = icon_label_width[i];
         h = lines * 17 + 1;
         if (d->sel) ui_rect(x + (CELL_W - tw) / 2 - 3, top, tw + 6, h, C_TITLE);
+        pos = 0;
         for (k = 0; k < lines; k++) {
-            const char *line = k ? b : a;
-            int lw = k ? wb : wa, ly = top + 1 + k * 17;
+            int lw, next = ciuki_label_next_line(text, pos, line,
+                                                  CELL_W - 6, &lw);
+            int ly = top + 1 + k * 17;
             tx = x + (CELL_W - lw) / 2;
             if (!d->sel) ui_text(tx + 1, ly + 1, line, C_INK);    /* legible on any wallpaper */
             ui_text(tx, ly, line, C_PAPER);
+            if (next <= pos) break;
+            pos = next;
         }
         if (i == cur && HOST.active) draw_focus(x + (CELL_W - tw) / 2 - 3, top, tw + 6, h);
     }
@@ -1190,6 +1352,14 @@ static void paint(void)
     for (i = 0; i < nicons; i++) draw_icon(i, 0, 0, 0);
     if (dragging)
         for (i = 0; i < nicons; i++) if (icons[i].sel) draw_icon(i, drag_dx, drag_dy, 1);
+    if (box_state == 2) {
+        int x = box_x0 < box_x1 ? box_x0 : box_x1;
+        int y = box_y0 < box_y1 ? box_y0 : box_y1;
+        int w = (box_x0 < box_x1 ? box_x1 - box_x0 : box_x0 - box_x1) + 1;
+        int h = (box_y0 < box_y1 ? box_y1 - box_y0 : box_y0 - box_y1) + 1;
+        ui_rect(x, y, w, 1, C_TITLE); ui_rect(x, y + h - 1, w, 1, C_TITLE);
+        ui_rect(x, y, 1, h, C_TITLE); ui_rect(x + w - 1, y, 1, h, C_TITLE);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1210,8 +1380,49 @@ static void damage_drag(void)
 {
     int i;
     for (i = 0; i < nicons; i++)
-        if (icons[i].sel) ui_damage(icons[i].x + drag_dx - 2, icons[i].y + drag_dy - 2, CELL_W + 4, CELL_H + 4);
+        if (icons[i].sel) ui_damage(icons[i].x + drag_dx - 2, icons[i].y + drag_dy - 2, CELL_W + 4, grid_h + 4);
     if (drop_i >= 0) damage_icon(drop_i);
+}
+static void damage_box(int x0, int y0, int x1, int y1)
+{
+    int x = x0 < x1 ? x0 : x1, y = y0 < y1 ? y0 : y1;
+    int w = (x0 < x1 ? x1 - x0 : x0 - x1) + 1;
+    int h = (y0 < y1 ? y1 - y0 : y0 - y1) + 1;
+    ui_damage(x, y, w, h);
+}
+static int box_hits_icon(int x0, int y0, int x1, int y1, int i)
+{
+    int l = x0 < x1 ? x0 : x1, r = x0 < x1 ? x1 : x0;
+    int t = y0 < y1 ? y0 : y1, b = y0 < y1 ? y1 : y0;
+    int ix = icons[i].x + 2, iy = icons[i].y, ir = ix + CELL_W - 4;
+    int ib = iy + icon_label_height(i) - 1;
+    return l < ir && r + 1 > ix && t < ib && b + 1 > iy;
+}
+static void box_update(int sx, int sy)
+{
+    int i;
+    if (box_state == 1) {
+        long dx = sx - box_x0, dy = sy - box_y0;
+        if (dx * dx + dy * dy < 36) return;
+        box_state = 2;
+    }
+    if (box_state != 2) return;
+    damage_box(box_x0, box_y0, box_prev_x1, box_prev_y1);
+    if (sy < 29) sy = 29;
+    if (sx < 0) sx = 0;
+    if (sx >= area_w) sx = area_w - 1;
+    if (sy >= area_h - 32) sy = area_h - 33;
+    box_x1 = box_prev_x1 = sx;
+    box_y1 = box_prev_y1 = sy;
+    for (i = 0; i < nicons; i++) {
+        int on = box_base[i] || box_hits_icon(box_x0, box_y0, box_x1, box_y1, i);
+        if (icons[i].sel != on) { icons[i].sel = (u8)on; damage_icon(i); }
+        if (on && !box_base[i]) cur = i;
+    }
+    if (cur >= 0 && cur < nicons && !icons[cur].sel) cur = -1;
+    if (cur < 0) for (i = nicons - 1; i >= 0; i--) if (icons[i].sel) { cur = i; break; }
+    select_anchor = cur;
+    damage_box(box_x0, box_y0, box_x1, box_y1);
 }
 static int on_mouse(int kind, int sx, int sy)
 {
@@ -1229,6 +1440,13 @@ static int on_mouse(int kind, int sx, int sy)
     }
     if (kind == MOUSE_HOVER) return 0;
     if (kind == MOUSE_RIGHT) { context_menu(sx, sy, HOST.context); return 1; }
+    if (box_state && kind == MOUSE_MOVE) { box_update(sx, sy); return 1; }
+    if (box_state && kind == MOUSE_UP) {
+        box_update(sx, sy);
+        if (box_state == 2) damage_box(box_x0, box_y0, box_x1, box_y1);
+        box_state = 0;
+        return 1;
+    }
     if (sy < 29 || sy >= area_h - 32) return 0;            /* the bars */
     if (kind == MOUSE_DOWN) {
         i = icon_at(sx, sy);
@@ -1244,9 +1462,20 @@ static int on_mouse(int kind, int sx, int sy)
         }
         last_click_i = i;
         last_click_tick = HOST.ticks;
-        if (i >= 0 && (HOST.shift & SH_CTRL)) { icons[i].sel = !icons[i].sel; cur = i; damage_icon(i); }
-        else if (i < 0 || !icons[i].sel) select_only(i);
-        else { damage_icon(cur); cur = i; damage_icon(i); }
+        if (i < 0) {
+            if (!(HOST.shift & SH_CTRL)) select_only(-1);
+            box_x0 = box_x1 = box_prev_x1 = sx;
+            box_y0 = box_y1 = box_prev_y1 = sy;
+            box_state = 1;
+            for (r = 0; r < nicons; r++) box_base[r] = icons[r].sel;
+            return 1;
+        }
+        if (HOST.shift & SH_SHIFT) select_range(i);
+        else if (HOST.shift & SH_CTRL) {
+            icons[i].sel = !icons[i].sel; cur = i; select_anchor = i; damage_icon(i);
+        }
+        else if (!icons[i].sel) select_only(i);
+        else { damage_icon(cur); cur = i; damage_icon(i); select_anchor = i; }
         if (i >= 0) { drag_i = i; drag_x = sx; drag_y = sy; dragging = 0; drag_dx = drag_dy = 0; }
         return 1;
     }
@@ -1397,13 +1626,13 @@ static int poll(void)
 
 int app_event(int ev, int a, int b, int c)
 {
-    int r, orig = ev;
+    int r, orig = ev, poll_result;
     if (ev == EV_PAINT_TOPBAR) { top_paint(); return 0; }
     if (ev == EV_TOPBAR) {
         if (a == 1) {
             vol_close();
             if (pop.open) menu_close();
-            else menu_open(m_start, 13, 4, 29, "start");
+            else menu_open(m_start, 15, 4, 29, "start");
         } else if (a == 2) {
             if (vol.open) vol_close();
             else vol_open();
@@ -1428,7 +1657,10 @@ int app_event(int ev, int a, int b, int c)
     switch (ev) {
     case EV_PAINT:
         if (dialog_mine(&dlg)) dialog_draw(&dlg);
-        else paint();
+        else {
+            if(wallpaper_module.segment)webmodule_call(&wallpaper_module,EV_PAINT,0);
+            paint();
+        }
         return 0;
     case EV_MOUSE:
         if (dialog_mine(&dlg)) {
@@ -1438,8 +1670,14 @@ int app_event(int ev, int a, int b, int c)
         } else r = on_mouse(a, HOST.x + b, HOST.y + TITLE_H + c);
         break;
     case EV_KEY: r = on_key(a); break;
-    case EV_POLL: r = poll(); break;
-    case EV_SUSPEND: menu_close(); vol_close(); return 0;
+    case EV_POLL:
+        r = wallpaper_poll(); poll_result = poll();
+        /* Poll results are modes: whole-desktop damage must take precedence
+         * over a simultaneous precise top-bar update (mode 3). */
+        if (r || poll_result == 1) r = 1;
+        else r = poll_result;
+        break;
+    case EV_SUSPEND: wallpaper_close(); menu_close(); vol_close(); return 0;
     default: r = 0;
     }
     dialog_sync(&dlg);

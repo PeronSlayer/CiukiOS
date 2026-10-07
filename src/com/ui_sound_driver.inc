@@ -12,6 +12,12 @@ sfx_entry:
     push es
     push fs
     push gs
+    cmp ax,8
+    jne .saved_packet
+    mov [cs:sfx_music_op],bx
+    mov [cs:sfx_music_packet_seg],es
+    mov [cs:sfx_music_packet_off],di
+.saved_packet:
     cli
     mov [cs:sfx_host_ss],ss
     mov [cs:sfx_host_sp],sp
@@ -35,19 +41,30 @@ sfx_entry:
     je .poll
     cmp ax,2
     je .release
+    cmp ax,8
+    je .music
     cmp ax,3
     jb .done
     cmp ax,7
     ja .done
     call sfx_play
     jmp .done
+.music:
+    call sfx_music_dispatch
+    jmp .done
 .init:
     call sfx_init
     jmp .done
 .poll:
+    cmp byte [sfx_music_owned],0
+    je .cue_poll
+    call sfx_music_poll
+    jmp .done
+.cue_poll:
     call sfx_poll
     jmp .done
 .release:
+    call sfx_music_close
     call sfx_release
 .done:
     cli
@@ -101,6 +118,11 @@ sfx_init:
     ret
 
 sfx_play:
+    cmp byte [sfx_music_owned],0
+    je .owner_free
+    mov word [sfx_result],5
+    ret
+.owner_free:
     cmp word [sfx_op],7
     jne .event
     cmp byte [sfx_available],1
@@ -466,6 +488,7 @@ sfx_release:
     ret
 
 %include "src/com/ui_sound_sb.inc"
+%include "src/com/ui_sound_music.inc"
 
 sfx_paths dw sfx_error,sfx_info,sfx_warning,sfx_confirm
 sfx_error db '\SYSTEM\SOUNDS\ERROR.PCM',0
@@ -486,6 +509,9 @@ align 4
 sfx_left dd 0
 sfx_setting db '1'
 sfx_op dw 0
+sfx_music_op dw 0
+sfx_music_packet_seg dw 0
+sfx_music_packet_off dw 0
 sfx_result dw 0
 sfx_file dw 0
 sfx_bytes dw 0

@@ -1,0 +1,59 @@
+--- a/src/XMS.ASM
++++ b/src/XMS.ASM
+@@ -66,7 +66,22 @@
+ 
+ ;--- registers EAX, ECX and ESI dont hold client values!
+ 
++ifdef CIUKIOS_V86_INTERRUPTS
++externdef CvXmsDepth:dword
++endif
++
+ xms_handler proc public
++ifdef CIUKIOS_V86_INTERRUPTS
++    inc CvXmsDepth
++endif
++    call xms_handler_body
++ifdef CIUKIOS_V86_INTERRUPTS
++    dec CvXmsDepth
++endif
++    ret
++xms_handler endp
++
++xms_handler_body proc
+     call Simulate_Far_Ret                       ; emulate a RETF in v86, modifies EDX
+     mov eax,[ebp].Client_Reg_Struc.Client_EAX   ; restore EAX
+     mov edx,[ebp].Client_Reg_Struc.Client_EDX   ; restore EDX
+@@ -163,7 +178,7 @@
+   endif
+ endif
+ 
+-xms_handler endp
++xms_handler_body endp
+ 
+ if ?INTEGRATED
+ 
+--- a/src/CVIRQ.INC
++++ b/src/CVIRQ.INC
+@@ -16,6 +16,8 @@
+ CvFilter dd 0
+ CvPollProc dd 0
+ CvHaltProc dd 0                ; owner's V86 HLT procedure (function 11)
++CvXmsDepth dd 0                    ; nonzero while the XMS V86 handler is active
++public CvXmsDepth
+ CvLinger dd 0
+ CvActive dd 0
+ CvGuestIF dd 0
+@@ -562,8 +564,12 @@
+  or eax,10h
+ profile_no_filter:
+  cmp CvPollProc,0
+- je profile_done
++ je profile_no_poll
+  or eax,20h
++profile_no_poll:
++ cmp CvXmsDepth,0
++ je profile_done
++ or eax,40h
+ profile_done:
+  clc
+  ret

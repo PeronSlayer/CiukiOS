@@ -9,6 +9,9 @@ start:
     pop ds
     push cs
     pop es
+    mov dx, doom_dir
+    mov ah, 0x3B
+    int 0x21
     mov dx, message
     mov ah, 9
     int 0x21
@@ -29,6 +32,7 @@ start:
     mov ax, 0x4C01
     int 0x21
 engine db 'DOOMCORE.EXE', 0
+doom_dir db '\APPS\DOOM', 0
 message db '[DOOM] SAFE: original engine, audio disabled',13,10,'$'
 tail db tail_end-tail-1
     db ' -nosound'

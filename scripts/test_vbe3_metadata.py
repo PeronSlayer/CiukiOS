@@ -36,7 +36,8 @@ def descriptor():
 
 class Video:
     def __init__(self, binary, info=None, version=0x300, open_ok=True, set_ok=True,
-                 reported_linear=None):
+                 reported_linear=None, reported_mode=None, mode_status=0x004F,
+                 msw_pe=None, session_present=False):
         self.cpu = Uc(UC_ARCH_X86, UC_MODE_16)
         self.cpu.mem_map(0, 0x100000)
         self.cpu.mem_write(BASE+0x100, binary)
@@ -54,6 +55,13 @@ class Video:
         self.version = version
         self.open_ok, self.set_ok = open_ok, set_ok
         self.reported_linear = reported_linear
+        self.reported_mode = reported_mode
+        self.mode_status = mode_status
+        self.msw_pe = msw_pe
+        self.session_present = session_present
+        self.session_queries = 0
+        self.smsw_calls = 0
+        self.bios_calls = []
         self.set_calls = []
         self.open_calls = self.close_calls = self.allocations = self.frees = 0
         self.linear = False
@@ -78,6 +86,13 @@ class Video:
         self.cpu.reg_write(UC_X86_REG_EFLAGS, flags | 1 if enabled else flags & ~1)
 
     def boundary(self, cpu, address, _size, _data):
+        if self.msw_pe is not None and cpu.mem_read(address, 3) == b'\x0f\x01\xe0':
+            # Exercise the PE branch without making Unicorn enter protected
+            # mode or requiring the fixture to install a GDT.
+            self.smsw_calls += 1
+            cpu.reg_write(UC_X86_REG_AX, self.msw_pe)
+            cpu.reg_write(UC_X86_REG_IP, (cpu.reg_read(UC_X86_REG_IP)+3) & 0xffff)
+            return
         if address not in (self.symbols['vc_lfb_open'], self.symbols['vc_lfb_close']):
             return
         if address == self.symbols['vc_lfb_open']:
@@ -92,6 +107,16 @@ class Video:
 
     def interrupt(self, cpu, number, _):
         ax = cpu.reg_read(UC_X86_REG_AX)
+        if number == 0x2F:
+            if ax == 0x1684:
+                self.session_queries += 1
+                assert cpu.reg_read(UC_X86_REG_ES) == 0
+                assert cpu.reg_read(UC_X86_REG_DI) == 0
+                if self.session_present:
+                    cpu.reg_write(UC_X86_REG_ES, 0xF000)
+                    cpu.reg_write(UC_X86_REG_DI, 0x0100)
+                return
+            return
         if number == 0x33:
             assert ax == 2
             return
@@ -107,6 +132,7 @@ class Video:
             self.carry(False)
             return
         assert number == 0x10, number
+        self.bios_calls.append(ax)
         buffer = cpu.reg_read(UC_X86_REG_ES)*16+cpu.reg_read(UC_X86_REG_DI)
         if ax == 0x4F00:
             cpu.mem_write(buffer, bytes(self.controller))
@@ -122,7 +148,10 @@ class Video:
             self.linear = bool(bx & 0x4000)
         elif ax == 0x4F03:
             linear = self.linear if self.reported_linear is None else self.reported_linear
-            cpu.reg_write(UC_X86_REG_BX, MODE | (0x4000 if linear else 0))
+            mode = MODE if self.reported_mode is None else self.reported_mode
+            cpu.reg_write(UC_X86_REG_BX, mode | (0x4000 if linear else 0))
+            cpu.reg_write(UC_X86_REG_AX, self.mode_status)
+            return
         elif ax == 0x4F06:
             # Active pitch is allowed to differ from the mode-info default.
             pitch = 3456 if self.linear else 3216
@@ -238,6 +267,82 @@ def main():
         assert video.allocations == video.frees == 1
     passed('4F03 access-model mismatch rejects both directions and cleans up before any rendering')
 
+    # INT 2F/1684 requires ES:DI=0. Without a provider, the multiplex chain
+    # leaves those input registers unchanged; nonzero caller scratch values
+    # must not be mistaken for a returned CVSESSION entry or cached.
+    absent = Video(code)
+    saved = {'ax': 0x1111, 'bx': 0x2222, 'cx': 0x3333,
+             'dx': 0x4444, 'si': 0x5555, 'bp': 0x6666}
+    for caller_es, caller_di in ((0x2345, 0x6789), (0x3456, 0x789A)):
+        assert absent.call('vc_session_find', **saved, es=caller_es, di=caller_di)
+        assert absent.cpu.reg_read(UC_X86_REG_ES) == caller_es
+        assert absent.cpu.reg_read(UC_X86_REG_DI) == caller_di
+        for name, value in saved.items():
+            assert absent.cpu.reg_read(globals()['UC_X86_REG_'+name.upper()]) == value
+    assert absent.session_queries == 2
+    assert absent.get('vc_session_entry', 4) == 0
+    passed('Absent INT 2F/1684 provider cannot cache caller ES:DI and preserves both registers')
+
+    # A present provider returns a valid far entry, which should be cached;
+    # the second lookup must use that cache and still preserve caller ES:DI.
+    present = Video(code, session_present=True)
+    for caller_es, caller_di in ((0x2345, 0x6789), (0x3456, 0x789A)):
+        assert not present.call('vc_session_find', **saved, es=caller_es, di=caller_di)
+        assert present.cpu.reg_read(UC_X86_REG_ES) == caller_es
+        assert present.cpu.reg_read(UC_X86_REG_DI) == caller_di
+        for name, value in saved.items():
+            assert present.cpu.reg_read(globals()['UC_X86_REG_'+name.upper()]) == value
+    assert present.session_queries == 1
+    assert present.get('vc_session_entry', 4) == 0xF0000100
+    passed('Present INT 2F/1684 far entry is cached and caller ES:DI remains intact')
+
+    # A V86 monitor may expose the CVSESSION far entry, but it cannot grant
+    # this real-mode caller permission to clear PE in CR0. Model both signals
+    # explicitly: INT 2F/1684 succeeds, while SMSW reports CR0.PE=1.
+    video = Video(code, msw_pe=1, session_present=True)
+    assert not video.call('vc_session_find')
+    assert video.session_queries == 1
+    assert not video.call('vc_validate')
+    assert video.smsw_calls >= 2
+    assert (video.get('vc_lfb_ok', 1), video.get('vc_bank_ok', 1)) == (0, 1)
+    passed('V86 PE=1 rejects LFB even when INT2F/1684 reports CVSESSION present')
+
+    # VBE reports image pages as an additional-page count, so zero is one
+    # usable image. The banked and linear VBE 3.0 fields are independent.
+    info = descriptor()
+    info[0] &= ~0x80             # force the checked banked layout
+    info[29], info[52], info[53] = 6, 0, 1
+    video = Video(code, info)
+    assert not video.call('vc_validate')
+    assert video.get('vc_bank_ok', 1) == 1 and video.pages() == 0
+
+    info = descriptor()
+    info[52], info[53] = 3, 0
+    video = Video(code, info)
+    assert not video.call('vc_validate')
+    assert video.get('vc_lfb_ok', 1) == 1 and video.pages() == 0
+    passed('Zero VBE3 banked and linear page counts each retain one usable page')
+
+    # A missing linear pitch means the linear-specific geometry is absent;
+    # keep the checked standard stride and banked page count instead.
+    info = descriptor()
+    info[29], info[52], info[53] = 2, 4, 7
+    struct.pack_into('<H', info, 50, 0)
+    video = Video(code, info)
+    assert not video.call('vc_validate')
+    assert video.get('vc_lfb_ok', 1) == 1
+    assert video.get('vc_pitch') == 3200 and video.pages() == 4
+    passed('Zero VBE3 linear pitch retains checked standard pitch and banked page count')
+
+    for status, mode in ((0x014F, MODE), (0x004F, MODE+1)):
+        video = Video(code, mode_status=status, reported_mode=mode)
+        assert video.call('vc_begin'), ('4F03 response accepted', hex(status), hex(mode))
+        assert video.get('vc_active', 1) == 0
+        assert video.allocations == video.frees == 1
+        assert 0x4F03 in video.bios_calls
+        assert 0x4F06 not in video.bios_calls and 0x4F07 not in video.bios_calls
+    passed('Failed 4F03 status and wrong active mode are rejected before page setup or rendering')
+
     info = descriptor()
     info[0] |= 0x40  # no bank window is available
     info[16:18] = bytes(2)
@@ -252,7 +357,8 @@ def main():
     result = {'status': 'passed', 'checks': checks,
               'fixture_sha256': hashlib.sha256(code).hexdigest(),
               'source_sha256': {path: hashlib.sha256((ROOT/path).read_bytes()).hexdigest()
-                                for path in ('src/com/vbe_modes.inc', 'src/com/vbe_console.inc')},
+                                for path in ('src/com/vbe_modes.inc', 'src/com/vbe_console.inc',
+                                             'src/com/vbe_session_fb.inc')},
               'scope': 'Production CPU instructions; BIOS mode data and LFB eligibility opening are supplied by the test'}
     (out/'results.json').write_text(json.dumps(result, indent=2)+'\n')
 

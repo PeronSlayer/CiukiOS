@@ -87,8 +87,8 @@ vc_auto:
     ; profiles still resolve against the full checked firmware mode list.
     cmp word [vc_max_width],0
     jne .bounded
-    mov word [vc_max_width],800
-    mov word [vc_max_height],600
+    mov word [vc_max_width],1024
+    mov word [vc_max_height],768
 .bounded:
     xor bp,bp
 .next:
@@ -98,7 +98,7 @@ vc_auto:
     shl bx,1
     mov ax,[vc_mode_list+bx]
     inc bp
-    test ax,0xFE00 ; mode IDs only; no linear/preserve flags
+    test ax,0xF000 ; mode IDs only (0100h..0FFFh); no linear/preserve flags
     jnz .next
     mov [vc_mode],ax
     call vc_probe
@@ -175,7 +175,7 @@ vc_resolve_mode:
     shl bx,1
     mov ax,[vc_mode_list+bx]
     inc bp
-    test ax,0xFE00
+    test ax,0xF000
     jnz .next
     mov [vc_mode],ax
     call vc_probe
@@ -253,9 +253,15 @@ vc_use_linear_layout:
     cmp word [vc_controller+4],0x0300
     jb .done                 ; VBE 2.0 has one shared format descriptor.
     mov ax,[vc_info+50]
+    test ax,ax
+    jz .check_masks
     mov [vc_info+16],ax
+    ; Zero means one page, not a missing VBE 3.0 field.
     mov al,[vc_info+53]
     mov [vc_info+29],al
+.check_masks:
+    cmp byte [vc_info+54],0
+    jz .done
     mov eax,[vc_info+54]
     mov [vc_info+31],eax
     mov eax,[vc_info+58]
@@ -302,19 +308,23 @@ vc_validate_layout:
     je .window
     smsw ax
     test al,1
-    jnz .window
+    jnz .window              ; CVSESSION discovery cannot authorize CR0 in V86.
     mov byte [vc_lfb_ok],1
 .window:
     test byte [vc_info],0x40 ; windowed access unavailable
     jnz .format
     mov al,[vc_info+2]
-    and al,7
-    cmp al,7 ; window A must be readable as well as writable (cursor save)
+    and al,5 ; window A must be relocatable (bit 0) and writable (bit 2)
+    cmp al,5
     jne .format
     cmp word [vc_info+6],64
     jb .format
-    cmp word [vc_info+8],0xA000
+    mov ax,[vc_info+8]
+    test ax,ax
+    jz .wina_seg_ok
+    cmp ax,0xA000
     jne .format
+.wina_seg_ok:
     mov cx,[vc_info+4]
     test cx,cx
     jz .format

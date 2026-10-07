@@ -3,14 +3,16 @@
 import argparse, json, shutil, subprocess
 from pathlib import Path
 from qemu_test_full_display_profile import VM
+from qemu_test_installed_hdd import FAT16
 p=argparse.ArgumentParser();p.add_argument('--image',type=Path,required=True)
 p.add_argument('--kernel',type=Path);p.add_argument('--output',type=Path,required=True)
 a=p.parse_args()
 o=a.output.resolve();o.mkdir(parents=True,exist_ok=True);d=o/'target.img';shutil.copyfile(a.image,d)
+volume=f'{d}@@{FAT16(d).start}'
 f=o/'vbecheck.com';subprocess.run(['nasm','-f','bin','scripts/fixtures/vbe_contract.asm','-o',str(f)],check=True)
 files=[(f,'APPS/VBECHECK.COM')]
 if a.kernel:files.append((a.kernel,'SYSTEM/CIUKIDOS.SYS'))
-for source,target in files:subprocess.run(['mcopy','-o','-i',f'{d}@@32256',str(source),'::'+target],check=True)
+for source,target in files:subprocess.run(['mcopy','-o','-i',volume,str(source),'::'+target],check=True)
 v=VM(d,o)
 try:
  v.wait('CiukiOS SHELL C:\\APPS>',timeout=90)

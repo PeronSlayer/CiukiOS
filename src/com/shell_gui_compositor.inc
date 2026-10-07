@@ -856,7 +856,7 @@ ui_pages_begin:
     jc .unsupported
     xor dx,dx
     call ui_pages_switch
-    jc .recover
+    jc .unsupported
     mov eax,[vc_frame_bytes]
     shl eax,1
     mov [vc_access_bytes],eax
@@ -871,11 +871,17 @@ ui_pages_begin:
     jmp .done
 .unsupported:
     mov byte [ui_page_failed],1
+    mov byte [ui_page_enabled],0
+    mov byte [ui_page_pending],0
+    mov dword [ui_front_base],0
+    mov dword [ui_present_base],0
+    mov eax,[vc_frame_bytes]
+    mov [vc_access_bytes],eax
+    xor bx,bx
+    xor cx,cx
     xor dx,dx
-    call ui_pages_switch
-    jnc .done
-.recover:
-    call ui_pages_failure
+    mov ax,0x4F07
+    call vc_bios
 .done:
     popad
     ret
@@ -899,12 +905,28 @@ ui_pages_switch:
     mov ax,0x4F07
     call vc_bios
     cmp ax,0x004F
-    jne .fail
+    jne .fail                  ; BL=1 not supported by firmware: cannot verify flip
     cmp word [vc_bios_cx],0
     jne .fail
     mov ax,[ui_page_scanline]
     cmp ax,[vc_bios_dx]
+    je .ready
+    ; Firmware may latch CRTC start address at next vertical retrace.
+    ; Give it a brief spin for retrace before treating as failure.
+    mov cx,4000
+.wait_retrace:
+    push cx
+    mov bx,1
+    mov ax,0x4F07
+    call vc_bios
+    pop cx
+    cmp ax,0x004F
     jne .fail
+    mov ax,[ui_page_scanline]
+    cmp ax,[vc_bios_dx]
+    je .ready
+    loop .wait_retrace
+    jmp .fail
 .ready:
     popad
     clc
@@ -996,11 +1018,17 @@ ui_pages_failure:
     mov byte [ui_page_failed],1
     mov byte [ui_page_enabled],0
     mov byte [ui_page_pending],0
-    mov byte [ui_comp_recover],1
+    mov byte [ui_comp_recover],0
     mov dword [ui_front_base],0
+    mov dword [ui_present_base],0
     mov eax,[vc_frame_bytes]
     mov [vc_access_bytes],eax
-    call vc_end
+    mov byte [ui_full_redraw],1
+    xor bx,bx
+    xor cx,cx
+    xor dx,dx
+    mov ax,0x4F07
+    call vc_bios
     ret
 
 ; Pack only the damaged horizontal span into the scratch segment. A narrow

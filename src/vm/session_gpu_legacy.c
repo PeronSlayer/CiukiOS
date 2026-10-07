@@ -108,31 +108,33 @@ static uint32_t pci_bar(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t index,
  */
 uint32_t cvlegacy_vbe_alias(uint32_t physical)
 {
-    uint8_t dev;
-    if (physical == 0U || physical < 0x80000000UL) return 0U;
-    for (dev = 0U; dev < 32U; ++dev) {
-        uint32_t id = pci_read(0U, dev, 0U, 0U);
-        uint32_t header;
-        uint8_t functions, fn;
-        if ((id & 0xffffU) == 0xffffU) continue;
-        header = pci_read(0U, dev, 0U, 0x0cU);
-        functions = ((header >> 23) & 1U) ? 8U : 1U;
-        for (fn = 0U; fn < functions; ++fn) {
-            uint32_t vendor_device = pci_read(0U, dev, fn, 0U);
-            uint32_t command, cls;
-            uint16_t vendor = (uint16_t)vendor_device;
-            uint16_t device = (uint16_t)(vendor_device >> 16);
-            uint8_t fb_bar;
-            uint32_t fb_base;
-            if (!((vendor == QEMU_VENDOR && device == QEMU_VGA_DEVICE) ||
-                  (vendor == VIRTIO_VENDOR && device == VIRTIO_GPU_DEVICE)))
-                continue;
-            command = pci_read(0U, dev, fn, 4U);
-            cls = (pci_read(0U, dev, fn, 0x08U) >> 16) & 0xffffU;
-            fb_bar = vendor == QEMU_VENDOR ? 0U : 2U;
-            if ((command & PCI_MEMORY_ENABLE) == 0U || cls != 0x0300U ||
-                !pci_bar(0U, dev, fn, fb_bar, &fb_base)) continue;
-            if (fb_base == physical) return 1U;
+    uint8_t bus, dev;
+    if (physical == 0U || physical < 0x00100000UL) return 0U;
+    for (bus = 0U; bus < 8U; ++bus) {
+        for (dev = 0U; dev < 32U; ++dev) {
+            uint32_t id = pci_read(bus, dev, 0U, 0U);
+            uint32_t header;
+            uint8_t functions, fn;
+            if ((id & 0xffffU) == 0xffffU) continue;
+            header = pci_read(bus, dev, 0U, 0x0cU);
+            functions = ((header >> 23) & 1U) ? 8U : 1U;
+            for (fn = 0U; fn < functions; ++fn) {
+                uint32_t vendor_device = pci_read(bus, dev, fn, 0U);
+                uint32_t command, cls;
+                uint16_t vendor = (uint16_t)vendor_device;
+                uint16_t device = (uint16_t)(vendor_device >> 16);
+                uint8_t fb_bar;
+                uint32_t fb_base;
+                if (!((vendor == QEMU_VENDOR && device == QEMU_VGA_DEVICE) ||
+                      (vendor == VIRTIO_VENDOR && device == VIRTIO_GPU_DEVICE)))
+                    continue;
+                command = pci_read(bus, dev, fn, 4U);
+                cls = (pci_read(bus, dev, fn, 0x08U) >> 16) & 0xffffU;
+                fb_bar = vendor == QEMU_VENDOR ? 0U : 2U;
+                if ((command & PCI_MEMORY_ENABLE) == 0U || cls != 0x0300U ||
+                    !pci_bar(bus, dev, fn, fb_bar, &fb_base)) continue;
+                if (fb_base == physical) return 1U;
+            }
         }
     }
     return 0U;
@@ -335,7 +337,7 @@ uint32_t cvlegacy_bind(uint32_t physical, uint32_t bytes,
     if (!pci_bar(s.bus, s.dev, s.fn, (uint8_t)fb_bar_index, &bar_fb) ||
         !pci_bar(s.bus, s.dev, s.fn, (uint8_t)(kind == LEGACY_ATI ? 2U : 0U),
                  &bar_mmio)) return 0;
-    if (physical != bar_fb || physical < 0x80000000UL) return 0;
+    if (physical != bar_fb || physical < 0x00100000UL) return 0;
     s.fb_phys = bar_fb; s.mmio_phys = bar_mmio; s.bytes = bytes;
     mmio_map_phys = bar_mmio;
     if (kind == LEGACY_NVIDIA) {

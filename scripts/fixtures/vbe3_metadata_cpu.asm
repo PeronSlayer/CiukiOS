@@ -28,6 +28,8 @@ export vc_mode
 export vc_active
 export vc_lfb_open
 export vc_lfb_close
+export vc_session_find
+export vc_session_entry
 dw 0
 stop: hlt
 %define VC_GRAPHICS_ONLY 1

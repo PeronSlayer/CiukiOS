@@ -9,6 +9,10 @@ p.add_argument('--jemm-build',type=pathlib.Path,default=root/'build/external/jem
 p.add_argument('--output',type=pathlib.Path,default=root/'build/full/vm-session')
 p.add_argument('--kernel-listing',type=pathlib.Path,default=root/'build/full/obj/ciukidos.lst',
                help='CiukiDOS kernel listing: VM manager offsets of InDOS and the FAT cache')
+p.add_argument('--debug-no-ring0-switch',action='store_true',
+               help='Diagnostic only: suppress ring-0 IRQ switches at a saved HLT frame and count them')
+p.add_argument('--switch-trace',action='store_true',
+               help='Diagnostic only: record/freeze actual VMM frame switches in CVSWTR01')
 a=p.parse_args(sys.argv[2:]);base=a.jemm_build.resolve();out=a.output.resolve()
 if root/'build' not in out.parents: p.error('--output must be inside the ignored build directory')
 current=(base/'CURRENT').read_text().strip();jemm_output=(base/current).resolve()
@@ -57,7 +61,8 @@ source_paths=[root/'src/vm'/name for name in
                'session_native_process.inc',
                'session_scheduler.inc',
                'session_scheduler_abi.inc','session_scheduler.h',
-               'session_video.inc','session_video_abi.inc','session_video.h',
+              'session_video.inc','session_video_abi.inc','session_video.h',
+              'session_switch_trace.inc',
                'vga_x86.h','virtual_vga.h','virtual_vga_bios.h','vga_presenter.h',
                'guest_peripherals.h','session_devices.h','session_devices.inc',
                'session_devices_abi.inc','session_opl.cpp',
@@ -72,7 +77,9 @@ def snapshot():
                                for path in sorted(include.rglob('*')) if path.is_file()},
             'tools':{name:{'path':str(path),'sha256':sha(path)}
                      for name,path in dict(tools,wcc386=wcc).items()},
-            'jemm_build_manifest_sha256':sha(jemm_output/'manifest.json')}
+            'jemm_build_manifest_sha256':sha(jemm_output/'manifest.json'),
+            'diagnostics':{'no_ring0_switch':bool(a.debug_no_ring0_switch),
+                           'switch_trace':bool(a.switch_trace)}}
 inputs=snapshot()
 if inputs['sources'][str(vsbhda_archive.relative_to(root))]!=vsbhda['sha256']:
     raise SystemExit('Pinned VSBHDA archive hash mismatch')
@@ -118,6 +125,8 @@ lines+=[f'{name} equ 0{layout.get(name,0):X}h' for name in wanted.values()]
 (out/'kernel_layout.inc').write_text('\n'.join(lines)+'\n')
 subprocess.run([str(tools['jwasm']),'-coff','-c','-nologo','-I'+str(include),'-I'+str(root/'src/vm'),
                 '-I'+str(root/'src/native'),'-I'+str(out),
+                *(['-D','VMM_DEBUG_NO_RING0_SWITCH=1'] if a.debug_no_ring0_switch else []),
+                *(['-D','VMM_SWITCH_TRACE=1'] if a.switch_trace else []),
                 '-Fo'+str(obj),'-Fl'+str(out/'session.lst'),str(root/'src/vm/session_jlm.asm')],check=True)
 native_obj=out/'native_entry.obj'
 subprocess.run([str(tools['jwasm']),'-coff','-c','-nologo','-I'+str(include),

@@ -161,7 +161,8 @@ def main():
     subprocess.run(['mcopy', '-o', '-i', str(disk), str(scroll), '::APPS/SCROLL.TXT'], check=True)
 
     def read_file(path):
-        return subprocess.check_output(['mtype', '-i', str(disk), '::' + path])
+        res = subprocess.run(['mtype', '-i', str(disk), '::' + path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return res.stdout if res.returncode == 0 else b''
 
     vm = VM(disk, output)
     try:
