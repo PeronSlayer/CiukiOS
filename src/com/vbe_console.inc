@@ -178,9 +178,11 @@ vc_probe:
 vc_begin:
     pushad
     push es
+    mov byte [vc_begin_stage],1
     call vc_controller_query
     call vc_probe
     jc .fail
+    mov byte [vc_begin_stage],2
     cmp word [cs:vc_cells_seg], 0
     jne .allocated
     mov ax, [cs:vc_cols]
@@ -214,6 +216,7 @@ vc_begin:
     ; Prefer the linear framebuffer: every bank switch is a BIOS call, and
     ; under hardware virtualization a costly guest memory remap.
     mov byte [cs:vc_lfb], 0
+    mov byte [vc_begin_stage],3
     mov bx, [cs:vc_mode]
     cmp byte [cs:vc_lfb_ok], 1
     jne .banked
@@ -231,6 +234,7 @@ vc_begin:
 .linear_refused:
     call vc_lfb_close
 .banked:
+    mov byte [vc_begin_stage],4
     ; A VBE 3.0 banked mode can have a different stride, page count and RGB
     ; layout. Restore its checked descriptor after either LFB-open/set failure.
     call vc_use_banked_layout
@@ -244,6 +248,7 @@ vc_begin:
     cmp ax, 0x004F
     jne .fail
 .mode_set:
+    mov byte [vc_begin_stage],5
     ; A successful set alone does not establish the framebuffer geometry.
     ; VBE 2.0/3.0 Function 4F03h D14 reports the active access model.
     mov ax,0x4F03
@@ -278,6 +283,7 @@ vc_begin:
     mov ax,[vc_bios_bx]
     mov [vc_info+16],ax
 .skip_4f06:
+    mov byte [vc_begin_stage],6
     call vc_validate_active
     jc .fail
     mov al,[cs:vc_bank_ok]
@@ -317,6 +323,11 @@ vc_begin:
     clc
     jmp .done
 .fail:
+    mov [vc_failed_status],ax
+    mov al,[vc_begin_stage]
+    mov [vc_last_failure],al
+    mov ax,[vc_mode]
+    mov [vc_failed_mode],ax
     call vc_end
     stc
 .done:

@@ -1361,7 +1361,7 @@ done
 # the boot splash (COM1 only on a graphics screen).
 nasm -f bin src/com/auxstart.asm -o build/full/obj/auxstart.com
 mcopy -o -i "$IMG" build/full/obj/auxstart.com ::SYSTEM/VIDEO/AUXSTART.COM
-printf '%s' "${CIUKIOS_DEFAULT_DISPLAY_CFG:-1024}" > build/full/obj/DISPLAY.CFG
+printf '%s' "${CIUKIOS_DEFAULT_DISPLAY_CFG:-AUTO}" > build/full/obj/DISPLAY.CFG
 mcopy -o -i "$IMG" build/full/obj/DISPLAY.CFG ::SYSTEM/VIDEO/DISPLAY.CFG
 mcopy -o -i "$IMG" "$VGASETUP_BIN" "${DRIVERS_IMAGE_DIR%/}/VGASETUP.COM"
 

@@ -92,16 +92,28 @@ sfx_init:
     mov byte [sfx_inited],1
     mov byte [sfx_available],0
     mov word [sfx_result],3
+    mov byte [sfx_audio_stage],1       ; PCI controller discovery
     call pci_find_intel_ac97
-    jc sfx_sb_init
+    jnc .ich
+    call sfx_sb_init
+    mov byte [sfx_audio_stage],8       ; legacy/SB fallback, no NAM reads
+    call sfx_audio_log_init
+    ret
+.ich:
+    mov byte [sfx_audio_stage],2
     call ac97_enable_io
     jc .restore
+    mov byte [sfx_audio_stage],3
     call ac97_all_streams_idle
     jc .restore
+    mov byte [sfx_audio_stage],4
     call ac97_wait_codec
     jc .restore
+    mov byte [sfx_audio_stage],5
     call ac97_prepare_codec
     jc .restore
+    call sfx_audio_snapshot_mixer     ; while PCI I/O is still enabled
+    mov byte [sfx_audio_stage],6
     mov bx,0x1000
     mov ah,0x48
     int 0x21
@@ -109,10 +121,16 @@ sfx_init:
     mov [sfx_buffer],ax
     mov byte [sfx_available],1
     mov word [sfx_result],0
+    mov byte [sfx_audio_stage],7
     jmp .restore
 .memory:
     mov word [sfx_result],6
+    mov bx,0xFFFF                    ; DOS reports the largest free block
+    mov ah,0x48
+    int 0x21
+    mov [sfx_audio_largest],bx
 .restore:
+    call sfx_audio_log_init
     call boot_restore_pci
 .done:
     ret
@@ -285,6 +303,8 @@ sfx_play:
 sfx_poll:
     cmp byte [sfx_available],2
     je sfx_sb_poll
+    cmp byte [sfx_boot_active],1
+    je sfx_boot_poll
     cmp byte [sfx_playing],1
     jne .done
     mov dx,[nabm_base]
@@ -312,145 +332,18 @@ sfx_stop:
     cmp byte [sfx_available],2
     je sfx_sb_stop
     cmp byte [sfx_playing],0
-    je .done
+    je .free
     call ac97_cleanup_output
     mov byte [sfx_playing],0
     jnc .free
     mov word [sfx_result],7
+    mov byte [sfx_boot_event],'F'
 .free:
     call sfx_boot_free
 .done:
     ret
 
-; The startup melody on the ICH: up to 32 descriptors of 16 KB, read from
-; \SYSTEM\BOOT.PCM into its own block (freed when it stops).
-sfx_boot_pcm:
-    mov dx,sfx_boot_path
-    mov ax,0x3D00
-    int 0x21
-    jc .done
-    mov [sfx_file],ax
-    mov bx,ax
-    xor cx,cx
-    xor dx,dx
-    mov ax,0x4202
-    int 0x21
-    jc .close
-    shl edx,16
-    mov dx,ax
-    test dl,3
-    jnz .close
-    test edx,edx
-    jz .close
-    cmp edx,32*16384
-    ja .close
-    mov [sfx_left],edx
-    mov eax,edx
-    add eax,15
-    shr eax,4
-    mov bx,ax
-    mov ah,0x48
-    int 0x21
-    jc .memory
-    mov [sfx_big],ax
-    mov [sfx_segment],ax
-    mov bx,[sfx_file]
-    xor cx,cx
-    xor dx,dx
-    mov ax,0x4200
-    int 0x21
-    jc .close
-    ; Descriptors while reading: 8192 samples each, the last one shorter.
-    movzx eax,word [sfx_big]
-    shl eax,4
-    mov di,ac97_bdl
-    xor bl,bl
-.read:
-    mov ecx,16384
-    cmp [sfx_left],ecx
-    jae .chunk
-    mov ecx,[sfx_left]
-.chunk:
-    mov [di],eax
-    add eax,ecx
-    push eax
-    push bx
-    mov ax,cx
-    shr ax,1
-    mov [di+4],ax
-    mov word [di+6],0
-    mov bx,[sfx_file]
-    xor dx,dx
-    push ds
-    mov ds,[cs:sfx_segment]
-    mov ah,0x3F
-    int 0x21
-    pop ds
-    pop bx
-    pop edx
-    jc .close
-    cmp ax,cx
-    jne .close
-    mov eax,edx
-    add word [sfx_segment],0x400
-    add di,8
-    sub [sfx_left],ecx
-    jz .loaded
-    inc bl
-    jmp .read
-.loaded:
-    push bx
-    mov bx,[sfx_file]
-    mov ah,0x3E
-    int 0x21
-    call ac97_enable_io
-    jc .device
-    call ac97_enable_pci
-    jc .device
-    mov dx,[nabm_base]
-    add dx,ICH_PO_CR
-    mov al,ICH_CR_RESET
-    out dx,al
-    mov cx,0xFFFF
-.reset:
-    in al,dx
-    test al,ICH_CR_RESET
-    jz .run
-    loop .reset
-    pop bx
-    mov word [sfx_result],7
-    call ac97_cleanup_output
-    jmp sfx_boot_free
-.run:
-    pop bx
-    mov word [sfx_timeout],90
-    jmp ..@sfx_dma_run
-.device:
-    pop bx
-    call ac97_cleanup_output
-    jmp sfx_boot_free
-.memory:
-    mov word [sfx_result],6
-.close:
-    mov bx,[sfx_file]
-    mov ah,0x3E
-    int 0x21
-    call sfx_boot_free
-.done:
-    ret
-
-sfx_boot_free:
-    mov ax,[sfx_big]
-    test ax,ax
-    jz .done
-    push es
-    mov es,ax
-    mov ah,0x49
-    int 0x21
-    pop es
-    mov word [sfx_big],0
-.done:
-    ret
+%include "src/com/ui_sound_startup.inc"
 
 ; No ICH: the startup program itself (Sound Blaster or PC speaker), which
 ; returns when the melody has played. EXEC does not keep SS:SP.
@@ -502,11 +395,7 @@ sfx_exec_tail db 3,' /Q',13
 sfx_exec dw 0,sfx_exec_tail,0,0x5C,0,0x6C,0
 sfx_exec_sp dw 0
 sfx_timeout dw 36
-sfx_big dw 0
-sfx_segment dw 0
 sfx_inited db 0
-align 4
-sfx_left dd 0
 sfx_setting db '1'
 sfx_op dw 0
 sfx_music_op dw 0

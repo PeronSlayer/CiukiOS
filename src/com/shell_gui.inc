@@ -104,6 +104,7 @@ ui_redraw:
     call ui_comp_damage
     call ui_draw
 .painted:
+    call ui_video_log
     mov si,ui_paint_marker
     call ui_serial
     cmp byte [ui_ready_pending],1
@@ -859,6 +860,12 @@ ui_video_begin:
     je .console_clear
     call vc_end
 .console_clear:
+    mov byte [vc_min_depth],15 ; AUTO desktop needs a direct RGB pixel format
+    mov byte [vc_start_attempts],0
+    mov byte [vc_last_failure],0
+    mov byte [ui_video_log_pending],1
+    mov byte [vc_transport_used],0
+    mov dword [vc_session_row_calls],0
     cmp word [ui_mode_request],0
     je .load_profile
     mov ax,[ui_mode_request]
@@ -875,6 +882,8 @@ ui_video_begin:
     je .desktop_auto
     call vc_probe
     jc .desktop_auto
+    cmp byte [vc_info+25],15
+    jb .desktop_auto
     cmp byte [vc_profile],'M' ; an explicitly previewed mode may be 640x480
     je .profile_ready
     cmp word [vc_info+18],800
@@ -895,7 +904,13 @@ ui_video_begin:
     mov word [ui_height],480
     cmp word [vc_mode],0
     je .vga
+    cmp word [ui_mode_request],0
+    jne .exact_mode
+    call vc_desktop_begin
+    jmp .mode_result
+.exact_mode:
     call vc_begin
+.mode_result:
     jc .vga
     mov byte [ui_vbe],1
     mov ax,[vc_info+18]
@@ -918,6 +933,7 @@ ui_video_begin:
     mov ax,0x1002
     call vc_bios
 .palette:
+    mov byte [vc_min_depth],8 ; DOS console profiles may still use indexed VBE
     push cs
     pop es
     mov dx,ui_palette
@@ -1099,6 +1115,93 @@ ui_draw:
     call ui_comp_draw
 .done:
     ret
+
+; One bounded foreground write after the first completed paint of each mode.
+; Raw firmware blocks preserve EDID and VBE layout details for hardware audits.
+; CVB1: 32-byte header, active ModeInfo(256), controller(512), EDID(128).
+ui_video_log:
+    cmp byte [ui_video_log_pending],0
+    je .done
+    mov byte [ui_video_log_pending],0
+    pushf
+    pushad
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov di,file_buf
+    mov eax,'CVB1'
+    stosd
+    mov ax,[ui_width]
+    stosw
+    mov ax,[ui_height]
+    stosw
+    mov al,[ui_vbe]
+    mov ah,[vc_info+25]
+    cmp al,1
+    je .depth
+    mov ah,4
+.depth:
+    stosw
+    mov al,[vc_lfb]
+    mov ah,[vc_transport_used]
+    stosw
+    mov ax,[vc_mode]
+    stosw
+    mov ax,[vc_info+16]
+    stosw
+    mov al,[vc_last_failure]
+    mov ah,[vc_start_attempts]
+    stosw
+    mov ax,[vc_failed_mode]
+    stosw
+    mov ax,[vc_failed_status]
+    stosw
+    mov al,[vc_session_bound]
+    mov ah,[vc_session_gpu]
+    stosw
+    mov eax,[vc_session_row_calls]
+    stosd
+    mov ax,0x4F03
+    call vc_bios
+    stosw
+    mov ax,[vc_bios_bx]
+    stosw
+    mov dx,ui_video_log_path
+    xor cx,cx
+    mov ah,0x3C
+    int 0x21
+    jc .restore
+    mov bx,ax
+    mov si,ui_video_log_parts
+    mov bp,4
+.write:
+    lodsw
+    mov dx,ax
+    lodsw
+    mov cx,ax
+    mov ah,0x40
+    int 0x21
+    jc .close
+    cmp ax,cx
+    jne .close
+    dec bp
+    jnz .write
+.close:
+    mov ah,0x3E
+    int 0x21
+.restore:
+    pop es
+    pop ds
+    popad
+    popf
+.done:
+    ret
+ui_video_log_pending db 0
+ui_video_log_path db '\SYSTEM\VIDEO\DISPLAY.LOG',0
+ui_video_log_parts dw file_buf,32,vc_info,256,vc_controller,512,vc_edid,128
 ui_draw_topbar_visuals:
     U_RECT 0,0,[ui_width],29,7
     U_RECT 0,28,[ui_width],1,8

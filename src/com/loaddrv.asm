@@ -501,6 +501,9 @@ do_driver:
     jmp .report
 .exec:
     call run_command                  ; SI = result text, BX = detail or 0
+    pushf
+    call video_hook_evidence
+    popf
     jc .report
     cmp byte [pkt_int],0
     je .report
@@ -552,6 +555,54 @@ match_keyword:
     add sp,2
     clc
     ret
+
+; Record actual INT10 installation separately from the child's exit status.
+; The pre-EXEC IVT copy already belongs to the watchdog's restore contract.
+; An unchanged vector is an observation, not an invented driver-load error.
+video_hook_evidence:
+    pushad
+    push es
+    mov si,[class_start]
+    mov ax,[class_end]
+    sub ax,si
+    cmp ax,5
+    jne .done
+    cmp dword [si],'VIDE'
+    jne .done
+    cmp byte [si+4],'O'
+    jne .done
+    xor ax,ax
+    mov es,ax
+    mov ebx,[es:0x10*4]
+    push cs
+    pop es
+    mov edx,[ivt_copy+0x10*4]
+    mov si,video_int_detail
+    call detail_text
+    mov eax,edx
+    call .pointer
+    mov si,video_arrow_detail
+    call detail_text
+    mov eax,ebx
+    call .pointer
+    mov si,video_unchanged_detail
+    cmp ebx,edx
+    je .text
+    mov si,video_hooked_detail
+.text:
+    call detail_text
+.done:
+    pop es
+    popad
+    ret
+.pointer:
+    push eax
+    shr eax,16
+    call detail_hex4
+    mov al,':'
+    call detail_char
+    pop eax
+    jmp detail_hex4
 
 ; Reads \DRIVERS\CLASS\NAME\DRIVER.INF; [pci_list] = its Hardware= value.
 ; CF set when the file or the key is missing.
@@ -1513,6 +1564,10 @@ pci_detail db ' PCI ',0
 int_detail db ' INT ',0
 io_detail db ' IO ',0
 irq_detail db ' IRQ 0x',0
+video_int_detail db ' INT10 ',0
+video_arrow_detail db '->',0
+video_hooked_detail db ' hooked',0
+video_unchanged_detail db ' unchanged',0
 mac_detail db ' MAC ',0
 pkt_signature db 'PKT DRVR'
 pkt_candidates db 0x60,0x61,0x62,0x63,0x64,0x65,0x66

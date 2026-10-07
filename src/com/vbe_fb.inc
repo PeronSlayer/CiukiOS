@@ -171,6 +171,7 @@ vc_fb_xfer:
 .linear:
     call vc_fb_linear
     jc .done
+    or byte [cs:vc_transport_used],2
     xor ax,ax
     mov es,ax                 ; callers may use ES for scratch during a burst
     cmp byte [cs:vc_fb_read],1
@@ -204,6 +205,7 @@ vc_fb_xfer:
     jecxz .done
     call vc_map
     jc .done
+    or byte [cs:vc_transport_used],1
     movzx eax,di
     mov edx,65536
     sub edx,eax
@@ -628,6 +630,7 @@ vc_bank_ok db 0
 vc_lfb_xms db 0
 vc_fb_depth db 0
 vc_fb_read db 0
+vc_transport_used db 0 ; validated renderer path entered: bank window=1, local LFB=2
 vc_fb_flags dw 0
 vc_fb_es dw 0
 %ifndef VC_POINTER_WORKSPACE_EXTERNAL

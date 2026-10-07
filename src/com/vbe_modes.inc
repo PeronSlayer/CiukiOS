@@ -34,10 +34,13 @@ vc_auto:
     mov ax,[fs:si]
     cmp ax,0xFFFF
     je .edid
+    test ax,0xF000             ; never retain malformed set-mode flags as IDs
+    jnz .skip_mode
     stosw
+    inc word [vc_mode_count]
+.skip_mode:
     add si,2
     jc .edid
-    inc word [vc_mode_count]
     loop .copy
 .edid:
     mov ax,0x4F15
@@ -83,17 +86,32 @@ vc_auto:
     mov [vc_max_height],dx
 .choose:
     ; A controller mode list does not identify the attached monitor's limit.
-    ; Without a valid preferred EDID timing, start within 800x600. Explicit
+    ; Without a valid preferred EDID timing, start within 1024x768. Explicit
     ; profiles still resolve against the full checked firmware mode list.
     cmp word [vc_max_width],0
     jne .bounded
     mov word [vc_max_width],1024
     mov word [vc_max_height],768
 .bounded:
+    call vc_choose_mode
+.cached:
+    mov ax,[vc_best_mode]
+    mov [vc_mode],ax
+    pop fs
+    pop es
+    popad
+    ret
+
+; Re-rank the cached firmware list. Bit 15 temporarily excludes failed mode
+; sets during desktop startup; the caller restores the list before returning.
+vc_choose_mode:
+    mov word [vc_best_mode],0
+    mov byte [vc_best_depth],0
+    mov dword [vc_best_area],0
     xor bp,bp
 .next:
     cmp bp,[vc_mode_count]
-    jae .cached
+    jae .done
     mov bx,bp
     shl bx,1
     mov ax,[vc_mode_list+bx]
@@ -103,6 +121,9 @@ vc_auto:
     mov [vc_mode],ax
     call vc_probe
     jc .next
+    mov al,[vc_info+25]
+    cmp al,[vc_min_depth]
+    jb .next
     mov ax,[vc_info+18]
     cmp ax,[vc_max_width]
     ja .next
@@ -125,11 +146,54 @@ vc_auto:
     mov ax,[vc_mode]
     mov [vc_best_mode],ax
     jmp .next
-.cached:
+.done:
     mov ax,[vc_best_mode]
     mov [vc_mode],ax
-    pop fs
-    pop es
+    ret
+
+; CF=1 only when every eligible startup candidate fails. Explicit previews
+; call vc_begin directly, so a selected mode is never silently substituted.
+vc_desktop_begin:
+    pushad
+    cmp byte [vc_force_safe],1
+    je .failed
+.try:
+    inc byte [vc_start_attempts]
+    mov di,[vc_mode]
+    call vc_begin
+    jnc .restore
+    call vc_auto               ; populate the list for saved exact profiles
+    xor bx,bx
+.exclude:
+    cmp bx,[vc_mode_count]
+    jae .choose
+    mov si,bx
+    shl si,1
+    cmp di,[vc_mode_list+si]
+    jne .next
+    or word [vc_mode_list+si],0x8000
+.next:
+    inc bx
+    jmp .exclude
+.choose:
+    call vc_choose_mode
+    cmp word [vc_mode],0
+    jne .try
+.failed:
+    stc
+.restore:
+    pushf
+    xor bx,bx
+.unmark:
+    cmp bx,[vc_mode_count]
+    jae .done
+    mov si,bx
+    shl si,1
+    and word [vc_mode_list+si],0x7FFF
+    inc bx
+    jmp .unmark
+.done:
+    popf
     popad
     ret
 
@@ -562,6 +626,12 @@ vc_span:
 
 vc_bytes db 1
 vc_auto_done db 0
+vc_min_depth db 8
+vc_start_attempts db 0
+vc_begin_stage db 0
+vc_last_failure db 0
+vc_failed_mode dw 0
+vc_failed_status dw 0
 vc_best_mode dw 0
 vc_best_depth db 0
 vc_best_area dd 0

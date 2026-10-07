@@ -9,6 +9,9 @@ db 'VBM1'
 %endmacro
 export stop
 export vc_auto
+export vc_choose_mode
+export vc_desktop_begin
+export vc_begin
 export vc_resolve_mode
 export vc_mode
 export vc_info
@@ -16,6 +19,23 @@ export vc_controller
 export vc_max_width
 export vc_max_height
 export vc_mode_count
+export vc_mode_list
+export vc_auto_done
+export vc_min_depth
+export vc_start_attempts
+export vc_begin_stage
+export vc_last_failure
+export vc_failed_mode
+export vc_failed_status
+export vc_best_mode
+export vc_best_depth
+export vc_best_area
+export vc_force_safe
+export vc_active
+export vc_lfb
+export vc_bank_ok
+export vc_cells_seg
+export vc_import_text
 export vc_lfb_open
 export vc_lfb_close
 dw 0

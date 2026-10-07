@@ -153,10 +153,13 @@ static unsigned top_tick, top_disk_until, top_net_until;
 static u16 top_seen_fs;
 static u16 top_net_rx, top_net_tx;
 static u16 top_mixer;
+static u16 top_nabm, top_audio_bdf;
 static u32 top_ram_total_kb;
 static int top_cpu, top_net, top_volume, top_mute;
 static u16 top_inw(u16 port);
 #pragma aux top_inw = "in ax,dx" parm [dx] value [ax];
+static u8 top_inb(u16 port);
+#pragma aux top_inb = "in al,dx" parm [dx] value [al];
 static void top_outw(u16 port, u16 v);
 #pragma aux top_outw = "out dx,ax" parm [dx] [ax];
 static u32 top_le32(const u8 *p)
@@ -201,21 +204,98 @@ static void top_find_mixer(void)
     static const u16 ids[] = { 0x2415, 0x2425, 0x2445, 0x2485, 0x24C5, 0x24D5, 0x266E, 0x27DE, 0x7195, 0 };
     struct regs r;
     int i;
-    top_mixer = 0;
+    top_mixer = top_nabm = top_audio_bdf = 0;
     for (i = 0; ids[i] && !top_mixer; i++) {
         mem_set(&r, 0, sizeof r);
         r.ax = 0xB102; r.cx = ids[i]; r.dx = 0x8086;
         r.ds = r.es = app_seg();
         if (intr(0x1A, &r) || (r.ax & 0xFF00)) continue;
         {
-            u16 bus = r.bx;
+            u16 bdf = r.bx;
+            u16 mixer, busmaster;
             mem_set(&r, 0, sizeof r);
-            r.ax = 0xB109; r.bx = bus; r.di = 0x10;
+            r.ax = 0xB109; r.bx = bdf; r.di = 0x10;
             r.ds = r.es = app_seg();
-            if (!intr(0x1A, &r) && !(r.ax & 0xFF00) && (r.cx & 1)) top_mixer = r.cx & 0xFFFC;
+            if (intr(0x1A, &r) || (r.ax & 0xFF00) || !(r.cx & 1)) continue;
+            mixer = r.cx & 0xFFFC;
+            mem_set(&r, 0, sizeof r);
+            r.ax = 0xB109; r.bx = bdf; r.di = 0x14;
+            r.ds = r.es = app_seg();
+            if (intr(0x1A, &r) || (r.ax & 0xFF00) || !(r.cx & 1)) continue;
+            busmaster = r.cx & 0xFFFC;
+            if (!mixer || !busmaster || busmaster > 0xFFCB) continue;
+            top_mixer = mixer;
+            top_nabm = busmaster;
+            top_audio_bdf = bdf;
         }
     }
 }
+
+static int top_pci_word(u16 offset, u16 *value)
+{
+    struct regs r;
+    mem_set(&r, 0, sizeof r);
+    r.ax = 0xB109; r.bx = top_audio_bdf; r.di = offset;
+    r.ds = r.es = app_seg();
+    if (intr(0x1A, &r) || (r.ax & 0xFF00)) return 0;
+    *value = r.cx;
+    return 1;
+}
+
+static int top_pci_write_word(u16 offset, u16 value)
+{
+    struct regs r;
+    mem_set(&r, 0, sizeof r);
+    r.ax = 0xB10C; r.bx = top_audio_bdf; r.di = offset; r.cx = value;
+    r.ds = r.es = app_seg();
+    return !intr(0x1A, &r) && !(r.ax & 0xFF00);
+}
+
+/* Claim ICH CAS (a successful clear-bit read acquires it), perform exactly
+ * one codec I/O, and restore PCI IOSE if this foreground access enabled it. */
+static int top_mixer_access(int write, u16 *value)
+{
+    u16 original_command, verify_command, level;
+    int restore_command = 0, tries, ok = 0;
+    if (!top_mixer || !top_nabm || !top_audio_bdf || !value) return 0;
+    if (!top_pci_word(0x04, &original_command)) return 0;
+    if (!(original_command & 1)) {
+        restore_command = 1;
+        if (top_pci_write_word(0x04, original_command | 1) &&
+            top_pci_word(0x04, &verify_command) && (verify_command & 1)) {
+            /* Keep bus-master and every unrelated command bit as found. */
+        } else goto done;
+    }
+    for (tries = 0; tries < 4096; ++tries) {
+        u8 cas = top_inb(top_nabm + 0x34);
+        if (cas == 0xFF || (cas & 0xFE)) goto done;
+        if (!(cas & 1)) break;
+    }
+    if (tries == 4096) goto done;
+    if (write) {
+        top_outw(top_mixer + 0x02, *value);
+        /* Acquire the next codec transaction and read back to drain the
+         * posted write. The read itself releases this second CAS claim. */
+        for (tries = 0; tries < 4096; ++tries) {
+            u8 cas = top_inb(top_nabm + 0x34);
+            if (cas == 0xFF || (cas & 0xFE)) goto done;
+            if (!(cas & 1)) break;
+        }
+        if (tries == 4096) goto done;
+    }
+    level = top_inw(top_mixer + 0x02);
+    if (level == 0xFFFF) goto done;
+    *value = level;
+    ok = 1;
+done:
+    if (restore_command) {
+        if (!top_pci_write_word(0x04, original_command) ||
+            !top_pci_word(0x04, &verify_command) ||
+            ((verify_command ^ original_command) & 1)) ok = 0;
+    }
+    return ok;
+}
+
 static void top_sample(void)
 {
     u16 v = fs_changes();
@@ -228,10 +308,12 @@ static void top_sample(void)
     top_volume = -1;
     top_mute = 0;
     if (top_mixer) {
-        u16 level = top_inw(top_mixer + 0x02);
-        int attenuation = (level >> 8) & 63;
-        top_volume = 31 - (attenuation > 31 ? 31 : attenuation);
-        top_mute = (level & 0x8000) != 0;
+        u16 level;
+        if (top_mixer_access(0, &level)) {
+            int attenuation = (level >> 8) & 63;
+            top_volume = 31 - (attenuation > 31 ? 31 : attenuation);
+            top_mute = (level & 0x8000) != 0;
+        }
     }
     top_net = seg && peek8(seg, off + 3) == 'P' &&
               peek8(seg, off + 4) == 'K' && peek8(seg, off + 5) == 'T';
@@ -1124,12 +1206,14 @@ static void vol_open(void)
 static void vol_set(int level)
 {
     int cell = area_w >= 800 ? 100 : 76;
+    u16 actual;
     if (!top_mixer) return;
     if (level < 0) level = 0;
     if (level > 31) level = 31;
-    top_outw(top_mixer + 0x02, (u16)(((31 - level) << 8) | (31 - level)));   /* unmuted */
-    top_volume = level;
-    top_mute = 0;
+    actual = (u16)(((31 - level) << 8) | (31 - level)); /* unmuted */
+    if (!top_mixer_access(1, &actual)) return;
+    top_volume = 31 - ((((actual >> 8) & 63) > 31) ? 31 : ((actual >> 8) & 63));
+    top_mute = (actual & 0x8000) != 0;
     vol_damage();
     ui_damage(area_w - 76 - cell * 5, 0, cell, 29);
 }
