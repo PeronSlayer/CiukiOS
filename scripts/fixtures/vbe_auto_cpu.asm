@@ -9,6 +9,7 @@ db 'VBM1'
 %endmacro
 export stop
 export vc_auto
+export vc_panel_bounds
 export vc_choose_mode
 export vc_desktop_begin
 export vc_begin
@@ -38,6 +39,15 @@ export vc_cells_seg
 export vc_import_text
 export vc_lfb_open
 export vc_lfb_close
+export vc_end
+export vc_session_entry
+export vc_session_owned
+export vc_session_bound
+export vc_session_packet
+export vc_session_bound_physical
+export vc_session_bound_bytes
+export vc_fb_limits
+export vc_map
 dw 0
 stop: hlt
 %define VC_GRAPHICS_ONLY 1

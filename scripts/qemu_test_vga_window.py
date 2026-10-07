@@ -526,12 +526,15 @@ def main():
         vm.ready(offset)
         shell = FAT16(disk).read('SYSTEM/SHELL.COM')
         ui = Session(vm, shell, args.listing, dict(events=record['events'], cases=[]))
-        assert ui.b('vc_lfb') == 0 and ui.b('vc_bank_ok') == 1, 'desktop under V86 must use the banked window'
-        event('desktop under the V86 monitor uses the banked window')
+        assert ui.b('ui_vbe') == 1 and ui.b('vc_lfb') == 2, (
+            'V86 desktop must complete a protected-LFB mode set and 4F03 D14 readback')
+        assert ui.b('vc_lfb_ok') == 1 and ui.b('vc_session_bound') == 1, (
+            'protected LFB needs validated CVSESSION row/fill capability and framebuffer binding')
+        assert ui.b('vc_bank_ok') == 1, 'validated banked fallback descriptor should remain available'
+        event('desktop uses protected LFB after CVSESSION capability, binding and VBE readback checks')
         vectors_before = ui.vectors()
-        # Launch from the real Run field. Outside a session the desktop under
-        # V86 bank-switches through the real VBE BIOS, so typing is rate
-        # limited and the field verified (a fast typist overflows the ring).
+        # Launch from the real Run field. Typing is rate limited because the
+        # V86 UI keyboard ring can overflow under rapid synthetic input.
         launch(ui, vm, 'run VGASEMW.COM \\VGAWIN.OUT', event)
         data, state = ui.module()
         assert state['installed'] and data[192] == 1, ('VGA session mode not installed', state)

@@ -163,16 +163,32 @@ bind_framebuffer proc uses esi edi ebx
  jne bad_abi
  mov dword ptr gpu_mode,0
  mov gpu_banked,0
+ mov gpu_usable_bytes,0
  cmp word ptr [edi+VM_FB_PACKET_BYTES],VM_FB_PACKET_SIZE
  je framebuffer_mode_ready
  cmp word ptr [edi+VM_FB_PACKET_BYTES],VM_FB_MODE_PACKET_SIZE
+ je mode_packet24
+ cmp word ptr [edi+VM_FB_PACKET_BYTES],VM_FB_ACCEL_PACKET_SIZE
  jne bad_abi
+ cmp word ptr [ebp].Client_Reg_Struc.Client_ECX,VM_FB_ACCEL_PACKET_SIZE
+ jb bad_address
+ mov ecx,VM_FB_ACCEL_PACKET_SIZE
+ call guest_destination
+ test eax,eax
+ jnz done
+ cmp dword ptr [edi+VM_FB_ACCEL_RESERVED],0
+ jne bad_abi
+ mov eax,[edi+VM_FB_ACCEL_USABLE_BYTES]
+ mov gpu_usable_bytes,eax
+ jmp mode_geometry
+mode_packet24:
  cmp word ptr [ebp].Client_Reg_Struc.Client_ECX,VM_FB_MODE_PACKET_SIZE
  jb bad_address
  mov ecx,VM_FB_MODE_PACKET_SIZE
  call guest_destination
  test eax,eax
  jnz done
+mode_geometry:
  movzx eax,word ptr [edi+16]
  mov gpu_mode,eax
  movzx eax,word ptr [edi+18]
@@ -268,7 +284,16 @@ bind_vbe:
  mov eax,VM_ERROR_MAPPING
  ret
 framebuffer_accepted:
+ call gpu_savage_bind
+ test eax,eax
+ jnz savage_failed
  xor eax,eax
+ ret
+savage_failed:
+ call unbind_framebuffer
+ test eax,eax
+ jnz done
+ mov eax,VM_ERROR_MAPPING
  ret
 map_failed:
  call unbind_framebuffer
@@ -315,6 +340,9 @@ unbind_framebuffer proc
  mov gpu_dirty,0
  jmp freed
 free_vbe:
+ call gpu_savage_release
+ test eax,eax
+ jnz failed
  cmp fb_legacy,0
  je free_vbe_pages
  mov eax,offset cvlegacy_release
@@ -341,7 +369,9 @@ freed:
  xor eax,eax
  ret
 not_bound:
- mov eax,VM_ERROR_FB_UNBOUND
+ ; Cleanup is idempotent while inactive. A caller may provisionally own a
+ ; BIND before it runs, then release safely even if allocation never began.
+ xor eax,eax
  ret
 still_active:
  mov eax,VM_ERROR_ACTIVE
@@ -376,6 +406,8 @@ framebuffer_copy proc uses esi edi edx
 get_pixels:
  mov esi,eax
 copy_pixels:
+ call gpu_savage_cpu_begin
+ jc mapping_failed
  ; Native protected-mode stores; no CR0 toggles or firmware calls. Max 4 KiB.
  mov edx,ecx
  shr ecx,2
@@ -396,6 +428,9 @@ not_bound:
  ret
 bad_address:
  mov eax,VM_ERROR_ADDRESS
+ jmp done
+mapping_failed:
+ mov eax,VM_ERROR_MAPPING
 done:
  ret
 framebuffer_copy endp
@@ -579,6 +614,8 @@ rows_guest_readable:
  mov [esp+40],eax
  movzx eax,word ptr [esp+VM_FB_ROWS_ROW_BYTES]
     mov [esp+44],eax
+ call gpu_savage_cpu_begin
+ jc rows_mapping
  call fb_copy_begin
 rows_copy_loop:
  mov esi,[esp+32]
@@ -618,6 +655,9 @@ rows_abi:
  jmp rows_fail
 rows_address:
  mov eax,VM_ERROR_ADDRESS
+ jmp rows_fail
+rows_mapping:
+ mov eax,VM_ERROR_MAPPING
 rows_fail:
  add esp,48
  ret
@@ -632,6 +672,9 @@ bad_address:
 done:
  ret
 framebuffer_rows endp
+
+include session_framebuffer_fill.inc
+include session_framebuffer_triangle.inc
 
 ; CVFC row copy between disjoint ranges in the bound framebuffer. Offsets
 ; address the complete binding; only the transferred payload is capped at 16 KiB.
@@ -732,7 +775,15 @@ page_disjoint:
  movzx eax,word ptr [esp+VM_FB_PAGE_COUNT]
  mov [esp+40],eax
  movzx eax,word ptr [esp+VM_FB_PAGE_ROW_BYTES]
-    mov [esp+44],eax
+ mov [esp+44],eax
+ mov esi,esp
+ call gpu_savage_page_copy
+ test eax,eax
+ jz page_hardware_written
+ cmp eax,1
+ jne page_mapping
+ call gpu_savage_cpu_begin
+ jc page_mapping
  call fb_copy_begin
 page_copy_loop:
  mov esi,[esp+32]
@@ -755,6 +806,7 @@ page_copy_loop:
  dec dword ptr [esp+40]
  jnz page_copy_loop
  call fb_copy_account
+page_hardware_written:
  call gpu_damage_all
  add esp,48
  xor eax,eax
@@ -764,6 +816,9 @@ page_abi:
  jmp page_fail
 page_address:
  mov eax,VM_ERROR_ADDRESS
+ jmp page_fail
+page_mapping:
+ mov eax,VM_ERROR_MAPPING
 page_fail:
  add esp,48
  ret
@@ -1066,6 +1121,10 @@ switch_allowed:
  je copy_fb_pages
  cmp eax,VM_OP_FB_PRESENT
  je present_fb
+ cmp eax,VM_OP_FB_FILL
+ je fill_fb
+ cmp eax,VM_OP_FB_TRIANGLE
+ je triangle_fb
  cmp eax,VM_OP_BIND_SCHED
  je bind_scheduler
  cmp eax,VM_OP_UNBIND_SCHED
@@ -1238,6 +1297,12 @@ copy_fb_pages:
 present_fb:
  call gpu_present
  jmp checked_result
+fill_fb:
+ call framebuffer_fill
+ jmp checked_result
+triangle_fb:
+ call framebuffer_triangle
+ jmp checked_result
 display_info:
  call gpu_display_info
 checked_result:
@@ -1296,7 +1361,11 @@ query:
  jnz error
  call vm_scheduler_capabilities
  or eax,VM_VIDEO_CAPABILITIES
- or eax,VM_CAP_DESKTOP_ROWS
+ or eax,VM_CAP_DESKTOP_ROWS or VM_CAP_DESKTOP_FILL
+ push eax
+ call gpu_savage_capabilities
+ pop edx
+ or eax,edx
  test eax,VM_CAP_V86_VIRTUAL_IF
  jz @F
  or eax,VM_CAP_GUEST_INPUT or VM_CAP_GUEST_AUDIO
@@ -1345,7 +1414,11 @@ query_no_gpu:
 query_regs:
  call vm_scheduler_capabilities
  or eax,VM_VIDEO_CAPABILITIES
- or eax,VM_CAP_DESKTOP_ROWS
+ or eax,VM_CAP_DESKTOP_ROWS or VM_CAP_DESKTOP_FILL
+ push eax
+ call gpu_savage_capabilities
+ pop edx
+ or eax,edx
  test eax,VM_CAP_V86_VIRTUAL_IF
  jz @F
  or eax,VM_CAP_GUEST_INPUT or VM_CAP_GUEST_AUDIO
@@ -1570,6 +1643,11 @@ detach:
  cmp fb_linear,0
  jne refuse
  mov eax,offset cvgpu_owned
+ xor ecx,ecx
+ call dev_call
+ test eax,eax
+ jnz refuse
+ mov eax,offset cvsavage_owned
  xor ecx,ecx
  call dev_call
  test eax,eax

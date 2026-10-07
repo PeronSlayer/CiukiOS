@@ -2209,6 +2209,7 @@ print_dual_dollar_string:
 ; msg_help uses HELP_RLE,count,byte for runs of four or more identical bytes.
 ; Keep BX intact across dual_putc, whose DOS/BIOS paths have different clobbers.
 print_dual_rle_help:
+%ifdef COMMAND_COMPAT
     push bx
 .next:
     lodsb
@@ -2236,6 +2237,82 @@ print_dual_rle_help:
 .done:
     pop bx
     ret
+
+%else
+    pushad
+    mov dx,si
+    mov ax,0x3D00
+    int 0x21
+    jc .missing
+    mov bp,ax
+    xor di,di
+.next:
+    call .byte
+    jc .close
+    cmp al,'$'
+    je .close
+    cmp al,HELP_RLE
+    jne .emit
+    call .byte
+    jc .close
+    mov bl,al
+    call .byte
+    jc .close
+    mov bh,al
+    test bl,bl
+    jz .close
+.repeat:
+    mov al,bh
+    push bx
+    call dual_putc
+    pop bx
+    dec bl
+    jnz .repeat
+    jmp .next
+.emit:
+    push bx
+    call dual_putc
+    pop bx
+    jmp .next
+.byte:
+    test di,di
+    jnz .loaded
+    push bx
+    push cx
+    push dx
+    mov bx,bp
+    mov cx,512
+    mov dx,file_buf
+    mov ah,0x3F
+    int 0x21
+    pop dx
+    pop cx
+    pop bx
+    jc .empty
+    test ax,ax
+    jz .empty
+    mov di,ax
+    mov si,file_buf
+.loaded:
+    lodsb
+    dec di
+    clc
+    ret
+.empty:
+    stc
+    ret
+.close:
+    mov bx,bp
+    mov ah,0x3E
+    int 0x21
+    jmp .done
+.missing:
+    mov si,msg_type_err
+    call print_dual_dollar_string
+.done:
+    popad
+    ret
+%endif
 
 print_dual_z_string:
 .next:
@@ -2328,6 +2405,23 @@ redraw_title_bar:
 ; Preserve an ordinary 80-column, page-zero text child's output. Graphics,
 ; nonstandard text modes and alternate pages require a fresh mode 03h.
 restore_shell_video_state:
+%ifndef COMMAND_COMPAT
+    ; A native client may have retained the shell's checked LFB binding.
+    ; Complete protected ownership cleanup before any firmware mode change.
+    push ax
+    cmp byte [vc_active],1
+    je .release_native
+    cmp byte [vc_session_owned],1
+    jne .native_released
+.release_native:
+    call vc_end
+    jnc .native_released
+    sti
+    hlt
+    jmp .release_native
+.native_released:
+    pop ax
+%endif
     push ax
     push bx
     push cx
@@ -3069,11 +3163,43 @@ shell_apply_text_profile:
 
 exec_run_candidate:
 %ifndef COMMAND_COMPAT
+    ; The shipped native GPU client uses the checked system-console mapping.
+    ; Preserve it across both the extensionless search and SAV3D.COM EXEC.
+    pushad
+    mov si,dst_path
+    mov di,si
+.basename:
+    lodsb
+    cmp al,'\'
+    je .separator
+    cmp al,':'
+    jne .next_name
+.separator:
+    mov di,si
+.next_name:
+    test al,al
+    jnz .basename
+    cmp dword [di],'SAV3'
+    jne .ordinary
+    cmp byte [di+4],'D'
+    jne .ordinary
+    cmp byte [di+5],0
+    je .gpu_client
+    cmp dword [di+5],'.COM'
+    jne .ordinary
+    cmp byte [di+9],0
+    jne .ordinary
+.gpu_client:
+    popad
+    jmp .exec
+.ordinary:
+    popad
     ; DOS children own their hardware mode. Restore the shared console once
     ; EXEC returns, including search failures; keep their text output.
     cmp byte [cs:vc_active], 1
     jne .native
     call vc_end
+    jc .retained
 .native:
     ; The return path redraws the title over row 0. On a fresh text screen
     ; start the child on row 1 so its first output line survives.
@@ -3096,6 +3222,7 @@ exec_run_candidate:
     pop bx
     pop ax
 %endif
+.exec:
     push ds
     push es
     push cs
@@ -3109,6 +3236,12 @@ exec_run_candidate:
     pop es
     pop ds
     ret
+%ifndef COMMAND_COMPAT
+.retained:
+    mov ax,5
+    stc
+    ret
+%endif
 
 exec_try_known_fallback:
     mov si, src_path
@@ -3392,25 +3525,11 @@ msg_title_bar db 'CiukiOS pre-Alpha v0.8.3', 0x0D, 0x0A, '$'
 msg_banner_body db 'HELP lists commands. WHERE shows launch targets.', 0x0D, 0x0A
                 db 'Try REBOOT 5 or SHUTDOWN 5 for queued power actions.', 0x0D, 0x0A, '$'
 msg_prompt_pre db 'CiukiOS SHELL ', '$'
-msg_help    db '+', HELP_RLE, 24, 0x2D, ' CiukiOS command guide ', HELP_RLE, 25, 0x2D, '+', 0x0D, 0x0A
-            db '| SYSTEM', HELP_RLE, 5, 0x20, 'HELP  VER  ECHO  CLS/CLEAR  REBOOT  SHUTDOWN', HELP_RLE, 16, 0x20, '|', 0x0D, 0x0A
-            db '| NAVIGATION CD/CHDIR  DIR  PWD  PATH  WHERE <name>', HELP_RLE, 22, 0x20, '|', 0x0D, 0x0A
-            db '| FILES', HELP_RLE, 6, 0x20, 'TYPE  COPY  DEL/ERASE  REN/RENAME/MOVE', HELP_RLE, 22, 0x20, '|', 0x0D, 0x0A
-            db '| EDITOR', HELP_RLE, 5, 0x20, 'EDIT [file]', HELP_RLE, 7, 0x20, 'full-screen editor; F1 shows shortcuts', HELP_RLE, 4, 0x20, '|', 0x0D, 0x0A
-            db '| DIRECTORIES MKDIR/MD  RMDIR/RD', HELP_RLE, 41, 0x20, '|', 0x0D, 0x0A
-            db '| PROGRAMS   <name> [args] or RUN <name/path> [args]', HELP_RLE, 21, 0x20, '|', 0x0D, 0x0A
-            db '+', HELP_RLE, 31, 0x2D, ' Network ', HELP_RLE, 32, 0x2D, '+', 0x0D, 0x0A
-            db '| 1. NETSTART', HELP_RLE, 16, 0x20, 'start NIC + permanent ARP/ICMP service', HELP_RLE, 6, 0x20, '|', 0x0D, 0x0A
-            db '| 2. IPCONFIG', HELP_RLE, 16, 0x20, 'show IPv4 values and resident ICMP status   |', 0x0D, 0x0A
-            db '| 3. NETCFG STATIC <ip> <mask> <gateway> <dns>', HELP_RLE, 27, 0x20, '|', 0x0D, 0x0A
-            db '|', HELP_RLE, 28, 0x20, 'save; live-apply when NETSTART is active', HELP_RLE, 4, 0x20, '|', 0x0D, 0x0A
-            db '| 4. NETCFG DHCP', HELP_RLE, 13, 0x20, 'request lease and reload resident ICMP', HELP_RLE, 5, 0x20, '|', 0x0D, 0x0A
-            db '| 5. PING <host>', HELP_RLE, 13, 0x20, 'send ICMP echo (gateway or Internet)', HELP_RLE, 8, 0x20, '|', 0x0D, 0x0A
-            db '| 6. FTP <host> / FTPSRV', HELP_RLE, 5, 0x20, 'FTP client / start C:\SHARE server', HELP_RLE, 9, 0x20, '|', 0x0D, 0x0A
-            db '|', HELP_RLE, 4, 0x20, 'PKTCHK / PKTTOOL', HELP_RLE, 8, 0x20, 'Packet Driver diagnostics', HELP_RLE, 19, 0x20, '|', 0x0D, 0x0A
-            db '|', HELP_RLE, 4, 0x20, 'ICMP remains active after FTPSRV stops; TAP enables host ping', HELP_RLE, 7, 0x20, '|', 0x0D, 0x0A
-            db '+', HELP_RLE, 72, 0x2D, '+', 0x0D, 0x0A
-            db 'Power queue: SHUTDOWN/REBOOT <seconds|STATUS|CANCEL>. EXIT is disabled.', 0x0D, 0x0A, '$'
+%ifdef COMMAND_COMPAT
+%include "src/com/shell_help_data.inc"
+%else
+msg_help db "\SYSTEM\HELP.RLE",0
+%endif
 msg_ver     db 'CiukiOS pre-Alpha v0.8.3', 0x0D, 0x0A, '$'
 msg_unknown db 'command: not found', 0x0D, 0x0A, '$'
 msg_exit_disabled db 'exit/quit is not available in loader-only mode', 0x0D, 0x0A
@@ -3579,6 +3698,7 @@ shell_output_color db 7
 %include "src/com/shell_desktop.inc"
 %include "src/com/ui_theme.inc"
 %define VC_POINTER_WORKSPACE_EXTERNAL 1
+%define VC_TRACE_DOS 1
 %include "src/com/vbe_console.inc"
 %include "src/com/shell_gui.inc"
 %include "src/com/shell_drivers.inc"

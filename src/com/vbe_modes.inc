@@ -1,7 +1,7 @@
 VC_MODE_LIMIT equ 256
 VC_ROW_LIMIT equ 256
-; VBE 2/3 banked and linear modes. Linear access is confined to the bursts
-; in vbe_fb.inc; no flat segment or protected-mode state outlives a burst.
+; VBE 2/3 banked and linear modes. Local flat segments last only one burst;
+; protected transport owns its checked mapping until foreground release.
 ; EDID preferred timing bounds an LCD's usable desktop when firmware supplies it.
 vc_auto:
     pushad
@@ -90,6 +90,11 @@ vc_auto:
     ; profiles still resolve against the full checked firmware mode list.
     cmp word [vc_max_width],0
     jne .bounded
+%if VC_PROTECTED_LFB
+    call vc_panel_bounds
+    cmp word [vc_max_width],0
+    jne .bounded
+%endif
     mov word [vc_max_width],1024
     mov word [vc_max_height],768
 .bounded:
@@ -101,6 +106,33 @@ vc_auto:
     pop es
     popad
     ret
+
+%if VC_PROTECTED_LFB
+; Only the protected driver can identify a known active native LCD.
+; Its panel limit bounds existing VBE modes; it does not invent a mode.
+vc_panel_bounds:
+    call vc_session_find
+    jc .done
+    mov di,vc_info
+    mov cx,VM_DISPLAY_INFO_SIZE
+    mov ax,VM_OP_DISPLAY_INFO | VM_OP_NO_SWITCH
+    call far [cs:vc_session_entry]
+    jc .done
+    cmp dword [vc_info],VM_DISPLAY_INFO_MAGIC
+    jne .done
+    test dword [vc_info+60],0x80000000
+    jz .done
+    cmp dword [vc_info+76],0x8C2E5333
+    jne .done
+    cmp dword [vc_info+184],1 ; checked active native LCD, stable geometry
+    jne .done
+    mov ax,[vc_info+176]
+    mov [vc_max_width],ax
+    mov ax,[vc_info+180]
+    mov [vc_max_height],ax
+.done:
+    ret
+%endif
 
 ; Re-rank the cached firmware list. Bit 15 temporarily excludes failed mode
 ; sets during desktop startup; the caller restores the list before returning.
@@ -162,6 +194,8 @@ vc_desktop_begin:
     mov di,[vc_mode]
     call vc_begin
     jnc .restore
+    cmp byte [vc_session_owned],1
+    je .failed                 ; failed engine cleanup forbids mode changes
     call vc_auto               ; populate the list for saved exact profiles
     xor bx,bx
 .exclude:
@@ -364,15 +398,18 @@ vc_validate_layout:
     and ax,0x0019 ; supported, color, graphics
     cmp ax,0x0019
     jne .fail
-    ; Linear framebuffer: attribute bit 7 and PhysBasePtr, from real mode
-    ; only (a virtual-8086 monitor would trap the burst's CR0 writes).
+    ; A real-mode client uses its local burst. V86 requires the protected
+    ; monitor's complete row/fill service; never authorize local CR0 writes.
     test byte [vc_info],0x80
     jz .window
     cmp dword [vc_info+40],0
     je .window
     smsw ax
     test al,1
-    jnz .window              ; CVSESSION discovery cannot authorize CR0 in V86.
+    jz .linear_ready
+    call vc_session_available
+    jc .window
+.linear_ready:
     mov byte [vc_lfb_ok],1
 .window:
     test byte [vc_info],0x40 ; windowed access unavailable

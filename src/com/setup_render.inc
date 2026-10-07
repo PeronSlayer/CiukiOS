@@ -461,5 +461,9 @@ g_vga_origin dw 0
 g_vga_plane_bit db 0
 g_pointer_linear dd 0
 %define VC_GRAPHICS_ONLY
+; Setup retains its real-mode LFB/banked transport within the COM arena.
+; The protected desktop transport belongs to the resident system shell.
+%define VC_PROTECTED_LFB 0
 %include "src/com/vbe_console.inc"
+%undef VC_PROTECTED_LFB
 %undef VC_GRAPHICS_ONLY

@@ -79,7 +79,15 @@ ui_enter:
 .ready:
     mov byte [ui_ready_pending],1
 ui_redraw:
+    cmp byte [ui_active],1
+    je .active
+    call ui_mode_switch
+.active:
+    ; Start the pending startup melody only after the first frame is visible.
+    cmp byte [ui_ready_pending],1
+    je .sound_after_paint
     call ui_sfx_service
+.sound_after_paint:
     mov byte [ui_window_repaint],0
     cmp byte [ui_full_redraw],1
     jne .partial
@@ -123,6 +131,8 @@ ui_redraw:
     call ui_serial
 ui_loop:
     sti
+    cmp byte [ui_active],1
+    jne ui_redraw
     cmp word [ui_mode_request],0
     je .mode_ready
     call ui_mode_switch
@@ -790,6 +800,7 @@ ui_serial:
     ret
 
 ui_video_begin:
+    call ui_video_wait_release
     ; Settings are refreshed at entry, never from a paint/animation callback.
     call ui_sound_preference
     call ui_icons_begin
@@ -919,6 +930,11 @@ ui_video_begin:
     mov [ui_height],ax
     jmp .palette
 .vga:
+    cmp byte [vc_session_owned],1
+    jne .vga_ready
+    call ui_video_wait_release
+    jmp .mode                  ; retry initialization only after safe cleanup
+.vga_ready:
 %ifdef BOOT_DIAG_PALETTE
     push ax
     mov al,13                   ; amber: calling VGA mode 12h
@@ -1040,8 +1056,9 @@ ui_video_begin:
 ; Deferred to the main loop: no module callback or modal window is unloaded.
 ui_mode_switch:
     mov byte [vc_graphics_transition],1
+    call ui_video_wait_release
+    mov byte [ui_pointer_visible],0 ; the next mode clears the old cursor
     call wp_end
-    call ui_pointer_hide
     call ui_comp_end
     call ui_video_begin
     mov word [ui_mode_request],0
@@ -1077,13 +1094,31 @@ ui_welcome_start:
 .done:
     ret
 
+; A pending hardware command owns its mapping. Only UNBIND may run during
+; this foreground quarantine; do not draw, enter DOS or free UI storage.
+ui_video_wait_release:
+    pushf
+    pushad
+.retry:
+    call vc_session_fb_release
+    jnc .released
+    mov byte [ui_active],0
+    sti
+    hlt
+    jmp .retry
+.released:
+    popad
+    popf
+    clc
+    ret
+
 ui_video_end:
     call ui_sfx_end
     call app_suspend
     call app_keys_end
     call wp_end
     mov byte [ui_motion_phase],0
-    call ui_pointer_hide
+    mov byte [ui_pointer_visible],0 ; vc_end clears the old graphical mode
     call ui_comp_end
     call ui_icons_end
     mov byte [ui_active],0
@@ -1131,6 +1166,9 @@ ui_video_log:
     pop ds
     push cs
     pop es
+%ifdef VC_TRACE_DOS
+    call vc_gpu_log
+%endif
     mov di,file_buf
     mov eax,'CVB1'
     stosd

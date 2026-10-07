@@ -37,7 +37,11 @@ def descriptor():
 class Video:
     def __init__(self, binary, info=None, version=0x300, open_ok=True, set_ok=True,
                  reported_linear=None, reported_mode=None, mode_status=0x004F,
-                 msw_pe=None, session_present=False):
+                 msw_pe=None, session_present=False, session_caps=0x90000,
+                 session_active=0, session_magic=0x534D5643,
+                 session_fail_bind_modes=(), session_retain=False,
+                 session_unbind_ok=True, session_io_ok=True,
+                 session_display_info=None, session_display_ok=True):
         self.cpu = Uc(UC_ARCH_X86, UC_MODE_16)
         self.cpu.mem_map(0, 0x100000)
         self.cpu.mem_write(BASE+0x100, binary)
@@ -59,6 +63,21 @@ class Video:
         self.mode_status = mode_status
         self.msw_pe = msw_pe
         self.session_present = session_present
+        self.session_caps = session_caps
+        self.session_active = session_active
+        self.session_magic = session_magic
+        self.session_fail_bind_modes = set(session_fail_bind_modes)
+        self.session_retain = session_retain
+        self.session_unbind_ok = session_unbind_ok
+        self.session_io_ok = session_io_ok
+        self.session_display_info = session_display_info
+        self.session_display_ok = session_display_ok
+        self.session_binding = None
+        self.session_calls = []
+        self.bind_packets = []
+        self.row_packets = []
+        self.fill_packets = []
+        self.local_limit_calls = self.bank_map_calls = 0
         self.session_queries = 0
         self.smsw_calls = 0
         self.bios_calls = []
@@ -86,6 +105,14 @@ class Video:
         self.cpu.reg_write(UC_X86_REG_EFLAGS, flags | 1 if enabled else flags & ~1)
 
     def boundary(self, cpu, address, _size, _data):
+        if address == 0xF0100:
+            self.monitor_call(cpu)
+            return
+        if address == self.symbols['vc_fb_limits']:
+            self.local_limit_calls += 1
+            assert not self.msw_pe, 'A V86 client attempted a local CR0 switch'
+        if address == self.symbols['vc_map']:
+            self.bank_map_calls += 1
         if self.msw_pe is not None and cpu.mem_read(address, 3) == b'\x0f\x01\xe0':
             # Exercise the PE branch without making Unicorn enter protected
             # mode or requiring the fixture to install a GDT.
@@ -104,6 +131,63 @@ class Video:
         target = int.from_bytes(cpu.mem_read(stack, 2), 'little')
         cpu.reg_write(UC_X86_REG_SP, cpu.reg_read(UC_X86_REG_SP)+2)
         cpu.reg_write(UC_X86_REG_IP, target)
+
+    def monitor_call(self, cpu):
+        """Supply the protected service boundary; execute every client instruction."""
+        operation = cpu.reg_read(UC_X86_REG_AX)
+        assert operation & 0x100, 'Desktop calls must preserve the system VM'
+        operation &= ~0x100
+        self.session_calls.append(operation)
+        pointer = cpu.reg_read(UC_X86_REG_ES)*16+cpu.reg_read(UC_X86_REG_DI)
+        failed = False
+        if operation == 0:  # CVMS
+            assert cpu.reg_read(UC_X86_REG_CX) == 64
+            packet = bytearray(64)
+            struct.pack_into('<IHHII', packet, 0, self.session_magic,
+                             0x100, 64, self.session_caps, self.session_active)
+            if self.session_binding is not None:
+                physical, extent = self.session_binding
+                struct.pack_into('<III', packet, 40, 1, extent, physical)
+            cpu.mem_write(pointer, bytes(packet))
+        elif operation == 4:  # CVFB
+            assert self.get('vc_session_owned', 1) == 1, 'BIND needs provisional ownership'
+            packet = bytes(cpu.mem_read(pointer, 32))
+            assert cpu.reg_read(UC_X86_REG_CX) == 32
+            assert struct.unpack_from('<IHH', packet) == (0x42465643, 0x100, 32)
+            self.bind_packets.append(packet)
+            failed = self.get('vc_mode') in self.session_fail_bind_modes
+            if not failed or self.session_retain:
+                self.session_binding = struct.unpack_from('<II', packet, 8)
+            cpu.reg_write(UC_X86_REG_BX, 0)  # software protected transport only
+        elif operation == 5:  # Idempotent UNBIND, or retained engine quarantine.
+            failed = not self.session_unbind_ok
+            if not failed:
+                self.session_binding = None
+        elif operation == 0x14:  # CVGD read-only diagnostics / panel contract.
+            assert cpu.reg_read(UC_X86_REG_CX) == 192
+            failed = not self.session_display_ok or self.session_active != 0
+            if not failed:
+                if self.session_display_info is None:
+                    packet = bytearray(192)
+                    struct.pack_into('<IHH', packet, 0, 0x44475643, 0x100, 192)
+                else:
+                    packet = self.session_display_info
+                assert len(packet) == 192
+                cpu.mem_write(pointer, bytes(packet))
+        elif operation in (0x11, 0x15):
+            packet = bytes(cpu.mem_read(pointer, 32))
+            assert cpu.reg_read(UC_X86_REG_CX) == 32
+            (self.row_packets if operation == 0x11 else self.fill_packets).append(packet)
+            failed = not self.session_io_ok or self.session_binding is None
+        else:
+            raise AssertionError(('CVSESSION operation', hex(operation)))
+        cpu.reg_write(UC_X86_REG_AX, 8 if failed else 0)
+        self.carry(failed)
+        stack = cpu.reg_read(UC_X86_REG_SS)*16+cpu.reg_read(UC_X86_REG_SP)
+        ip, cs = struct.unpack('<HH', cpu.mem_read(stack, 4))
+        cpu.reg_write(UC_X86_REG_SP, cpu.reg_read(UC_X86_REG_SP)+4)
+        cpu.reg_write(UC_X86_REG_CS, cs)
+        cpu.reg_write(UC_X86_REG_IP, ip)
 
     def interrupt(self, cpu, number, _):
         ax = cpu.reg_read(UC_X86_REG_AX)
@@ -296,16 +380,106 @@ def main():
     assert present.get('vc_session_entry', 4) == 0xF0000100
     passed('Present INT 2F/1684 far entry is cached and caller ES:DI remains intact')
 
-    # A V86 monitor may expose the CVSESSION far entry, but it cannot grant
-    # this real-mode caller permission to clear PE in CR0. Model both signals
-    # explicitly: INT 2F/1684 succeeds, while SMSW reports CR0.PE=1.
+    # Pointer discovery alone is insufficient. V86 clients need both complete
+    # pixel transports, a well-formed contract, and the system VM context.
+    for options in ({'session_caps': 0x10000}, {'session_caps': 0x80000},
+                    {'session_active': 1}, {'session_magic': 0}):
+        video = Video(code, msw_pe=1, session_present=True, **options)
+        assert not video.call('vc_validate')
+        assert (video.get('vc_lfb_ok', 1), video.get('vc_bank_ok', 1)) == (0, 1)
+        assert video.open_calls == video.local_limit_calls == 0
+    passed('V86 LFB eligibility rejects incomplete, malformed and non-system CVSESSION contracts')
+
     video = Video(code, msw_pe=1, session_present=True)
-    assert not video.call('vc_session_find')
-    assert video.session_queries == 1
     assert not video.call('vc_validate')
-    assert video.smsw_calls >= 2
-    assert (video.get('vc_lfb_ok', 1), video.get('vc_bank_ok', 1)) == (0, 1)
-    passed('V86 PE=1 rejects LFB even when INT2F/1684 reports CVSESSION present')
+    assert (video.get('vc_lfb_ok', 1), video.get('vc_bank_ok', 1)) == (1, 1)
+    assert not video.call('vc_begin')
+    assert video.get('vc_lfb', 1) == 2 and video.get('vc_active', 1) == 1
+    assert video.set_calls == [0x4140]
+    assert video.open_calls == video.local_limit_calls == 0
+    packet = video.bind_packets[-1]
+    assert struct.unpack_from('<IIHHHHII', packet, 8) == (
+        0xE0000000, video.get('vc_access_bytes', 4), 800, 600, 3456, 32,
+        32*1024*1024, 0)
+    assert video.get('vc_session_owned', 1) == video.get('vc_session_bound', 1) == 1
+    passed('Complete CVSESSION contract enables BIOS-verified true LFB in V86 without local CR0 or fake bank alias')
+
+    video.call('vc_fb_begin')
+    video.call('vc_fb_put', fs=0x4000, si=0x100, edi=64, cx=32)
+    video.call('vc_fb_get', fs=0x4000, si=0x100, edi=64, cx=32)
+    video.call('vc_fb_fill', eax=0x12345678, ecx=8, edi=128)
+    video.call('vc_fb_end')
+    assert len(video.row_packets) == 2 and len(video.fill_packets) == 1
+    for direction, packet in zip((1, 0), video.row_packets):
+        assert struct.unpack_from('<IHH', packet) == (0x52465643, 0x100, 32)
+        assert struct.unpack_from('<HHHHHHII', packet, 8) == (
+            0x4000, 0x100, 32, 1, 32, direction, 3456, 64)
+    assert struct.unpack('<IHHIIIIII', video.fill_packets[0]) == (
+        0x46465643, 0x100, 32, 128, 8, 0x12345678, 4, 0, 0)
+    assert video.local_limit_calls == video.bank_map_calls == 0
+    before = list(video.bios_calls)
+    assert video.call('vc_map', edi=0)
+    assert video.bios_calls == before, 'Protected LFB must reject even direct bank-map calls'
+    passed('Protected pointer read/write, row and exact-colour fill packets avoid BIOS banks and local CR0 switches')
+
+    # Cached bindings can be lost. Rebind on the next transfer must remain a
+    # true linear binding, with failure quarantined instead of banked writes.
+    video.session_binding = None
+    video.set('vc_session_bound', 0, 1)
+    video.call('vc_fb_put', fs=0x4000, si=0x100, edi=64, cx=32)
+    assert len(video.bind_packets) == 2 and len(video.row_packets) == 3
+    assert video.get('vc_active', 1) == 1
+    video.session_io_ok = False
+    video.call('vc_fb_get', fs=0x4000, si=0x100, edi=64, cx=32)
+    assert video.get('vc_active', 1) == 0
+    assert video.bank_map_calls == 1 and video.local_limit_calls == 0
+    assert not video.call('vc_end') and video.get('vc_session_owned', 1) == 0
+    passed('Lost protected binding rebinds safely; failed protected I/O disables painting without local or bank fallback')
+
+    for fail_rebind in (False, True):
+        fill = Video(code, msw_pe=1, session_present=True)
+        assert not fill.call('vc_begin')
+        if fail_rebind:
+            fill.set('vc_session_bound', 0, 1)
+            fill.session_binding = None
+            fill.session_fail_bind_modes = {MODE}
+        else:
+            fill.session_io_ok = False
+        assert fill.call('vc_fb_fill', eax=0x12345678, ecx=8, edi=128)
+        assert fill.get('vc_active', 1) == 0
+        calls = list(fill.session_calls)
+        fill.session_io_ok = True
+        assert fill.call('vc_fb_fill', eax=0x12345678, ecx=8, edi=128)
+        assert fill.call('vc_fb_put_rows', fs=0x4000, si=0x100,
+                         edi=128, cx=32, bx=32, dx=2)
+        assert fill.call('vc_fb_get_rows', fs=0x4000, si=0x100,
+                         edi=128, cx=32, bx=32, dx=2)
+        assert fill.session_calls == calls, 'Inactive protected fill must not paint or rebind'
+        assert fill.bank_map_calls == fill.local_limit_calls == 0
+        assert not fill.call('vc_end')
+    passed('Protected FILL and rebind failures block all fills and batched rows until a complete mode restart')
+
+    for retained in (False, True):
+        failed = Video(code, msw_pe=1, session_present=True,
+                       session_fail_bind_modes={MODE}, session_retain=retained,
+                       session_unbind_ok=not retained)
+        assert failed.call('vc_begin')
+        assert failed.get('vc_last_failure', 1) == 7
+        assert failed.set_calls == [0x4140] and failed.open_calls == 0
+        assert failed.get('vc_session_owned', 1) == int(retained)
+        if retained:
+            assert failed.get('vc_lfb', 1) == 2 and failed.frees == 0
+            before = list(failed.bios_calls)
+            assert failed.call('vc_end')
+            assert failed.bios_calls == before and failed.frees == 0
+            # Direct retry must not issue even descriptor/font BIOS calls.
+            assert failed.call('vc_begin')
+            assert failed.bios_calls == before and failed.set_calls == [0x4140]
+            failed.session_unbind_ok = True
+            assert not failed.call('vc_end')
+            assert failed.get('vc_session_owned', 1) == failed.get('vc_lfb', 1) == 0
+        assert failed.allocations == failed.frees == 1
+    passed('Failed BIND releases provisional ownership or retains quarantine until UNBIND succeeds, forbidding BIOS retries')
 
     # VBE reports image pages as an additional-page count, so zero is one
     # usable image. The banked and linear VBE 3.0 fields are independent.
@@ -357,9 +531,9 @@ def main():
     result = {'status': 'passed', 'checks': checks,
               'fixture_sha256': hashlib.sha256(code).hexdigest(),
               'source_sha256': {path: hashlib.sha256((ROOT/path).read_bytes()).hexdigest()
-                                for path in ('src/com/vbe_modes.inc', 'src/com/vbe_console.inc',
+                                for path in ('src/com/vbe_modes.inc', 'src/com/vbe_console.inc', 'src/com/vbe_fb.inc',
                                              'src/com/vbe_session_fb.inc')},
-              'scope': 'Production CPU instructions; BIOS mode data and LFB eligibility opening are supplied by the test'}
+              'scope': 'Production CPU instructions; BIOS mode data, native LFB opening and the CVSESSION service boundary are supplied by the test'}
     (out/'results.json').write_text(json.dumps(result, indent=2)+'\n')
 
 

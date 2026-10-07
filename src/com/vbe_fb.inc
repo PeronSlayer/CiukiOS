@@ -10,9 +10,13 @@
 ; scanline, cell row or pointer, keeping interrupt latency short.
 ; Inside a burst ES is scratch. Reset its base to zero for linear accesses;
 ; its cached limit is restored to 64 KiB only by the outer protected exit.
-; Linear mode is never used in virtual-8086 mode or without a working A20.
+; vc_lfb=1 local bursts require real mode and working A20. vc_lfb=2 is a
+; true LFB mapped by CVSESSION; V86 routes its pixels through protected calls.
 ; A temporary dual-format IDT defers NMI until the burst has restored normal
 ; CPU state. It never changes the hardware NMI mask or the CMOS index.
+%ifndef VC_PROTECTED_LFB
+%define VC_PROTECTED_LFB 1
+%endif
 
 %macro VC_FB_COPY 0-1
     push ecx
@@ -162,12 +166,26 @@ vc_fb_xfer:
     ; V86 uses the banked transport; real LFB transfers use the local burst.
     cmp byte [cs:vc_lfb],1
     je .linear
+    cmp byte [cs:vc_lfb],2
+    jne .protected_transfer
+    cmp byte [cs:vc_active],1
+    jne .protected_failed
+.protected_transfer:
     ; CVSESSION owns a protected mapping of the validated physical VRAM.
     ; In V86 the desktop's BIOS layout is banked, but this transfer need not
     ; remap its 64-KiB window for every bank or scanline.
     call vc_session_xfer
     jnc .done
-    jmp .banked
+    cmp byte [cs:vc_lfb],2
+    jne .banked
+    call vc_session_fb_bind
+    jc .protected_failed
+    call vc_session_xfer
+    jnc .done
+.protected_failed:
+    mov byte [cs:vc_active],0
+    stc
+    jmp .done                 ; a linear mode never falls into banked I/O
 .linear:
     call vc_fb_linear
     jc .done
@@ -266,6 +284,13 @@ vc_fb_fill:
     test ecx,ecx
     jz .done
     mov ebx,eax
+    cmp byte [cs:vc_lfb],2
+    jne .ordinary
+    cmp byte [cs:vc_active],1
+    jne .done
+    call vc_session_fill
+    jmp .done
+.ordinary:
     cmp byte [cs:vc_lfb],1
     jne .banked
     push ecx
@@ -383,6 +408,13 @@ vc_fb_get_rows:
     mov byte [cs:vc_fb_read],1
 vc_fb_rows:
     pushad
+    cmp byte [cs:vc_lfb],2
+    jne .active
+    cmp byte [cs:vc_active],1
+    je .active
+    stc
+    jmp .done
+.active:
     test dx,dx
     jz .done
     call vc_session_rows

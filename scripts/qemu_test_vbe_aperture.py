@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Gate full-HDD VBE scanout paths and visible damage below 64 KiB rows.
 
-Runs three isolated QEMU HDD boots: standard VGA with CVSESSION, Cirrus VGA
-without the alias binding, and standard VGA with STARTUP.CFG=NOVM so the real
-LFB path is selected. Emulator results do not qualify physical hardware.
+Runs three isolated QEMU HDD boots: standard and Cirrus VGA with CVSESSION's
+protected LFB row/fill transport, and standard
+VGA with STARTUP.CFG=NOVM using the real-mode LFB path. Emulator results do
+not qualify physical hardware.
 """
 import argparse
 import hashlib
@@ -23,8 +24,10 @@ from qemu_test_native_windows import WindowVM
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = b'1024'
 CASES = (
-    dict(name='std-vm', vga='std', startup=b'LIVE', lfb=0, bound=1),
-    dict(name='cirrus-vm', vga='cirrus', startup=b'LIVE', lfb=0, bound=0),
+    dict(name='std-vm', vga='std', startup=b'LIVE', lfb=2, bound=1, lfb_ok=1),
+    # Cirrus firmware also supplies a genuine linear mode. The new transport
+    # must prefer that verified mode over the previous banked aperture alias.
+    dict(name='cirrus-vm', vga='cirrus', startup=b'LIVE', lfb=2, bound=1, lfb_ok=1),
     dict(name='std-novm-lfb', vga='std', startup=b'NOVM', lfb=1, bound=0),
 )
 
@@ -151,11 +154,14 @@ def run_case(source_image, shell, listing, root_output, case):
     assert shipped_shell == shell.read_bytes(), (
         f'{case["name"]}: assembled SHELL.COM does not match the shipped FAT16 copy')
 
+    expected = {'vc_active': 1, 'ui_vbe': 1, 'ui_width': 1024,
+                'ui_height': 768, 'vc_lfb': case['lfb'],
+                'vc_session_bound': case['bound']}
+    if 'lfb_ok' in case:
+        expected['vc_lfb_ok'] = case['lfb_ok']
     record = dict(name=case['name'], vga=case['vga'], startup=case['startup'].decode(),
                   display_profile=PROFILE.decode(), shell_sha256=hashlib.sha256(shipped_shell).hexdigest(),
-                  expected={'vc_active': 1, 'ui_vbe': 1, 'ui_width': 1024,
-                            'ui_height': 768, 'vc_lfb': case['lfb'],
-                            'vc_session_bound': case['bound']})
+                  expected=expected)
     vm = WindowVM(disk, case_dir, case['vga'], memory=128, palette='platinum')
     ui = None
     try:
@@ -172,8 +178,9 @@ def run_case(source_image, shell, listing, root_output, case):
             'ui_height': ui.w('ui_height'),
             'vc_lfb': ui.b('vc_lfb'),
             'vc_session_bound': ui.b('vc_session_bound'),
+            'vc_lfb_ok': ui.b('vc_lfb_ok'),
         }
-        assert observed == record['expected'], (
+        assert all(observed.get(key) == value for key, value in record['expected'].items()), (
             f'{case["name"]}: framebuffer path mismatch', observed, record['expected'])
         desktop, desktop_png = save_frame(vm, 'desktop')
         record['desktop_png'] = desktop_png.name

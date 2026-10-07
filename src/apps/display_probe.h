@@ -51,11 +51,17 @@ struct disp_mode {
 #define DISP_MODE_BANKED 0x0002
 
 struct disp_mode_diag {
-    u16 attributes, granularity_kb, window_kb, window_a_segment, window_b_segment;
-    u16 banked_pitch, linear_pitch, bpp;
+    u16 status, attributes, granularity_kb, window_kb, window_a_segment, window_b_segment;
+    u16 width, height, planes, banked_pitch, linear_pitch, bpp;
     u8 window_a_attributes, window_b_attributes, memory_model, reserved;
     u32 framebuffer_phys;
     u8 bank_masks[8], linear_masks[8];
+};
+
+#define DISP_PROBE_DIAGS 24
+struct disp_probe_diag {
+    u16 id, status, attributes, planes, width, height, banked_pitch, linear_pitch;
+    u8 bpp, memory_model, accepted, reserved;
 };
 
 struct disp_monitor {
@@ -76,6 +82,8 @@ struct disp_probe {
     u16 pci_display_count, pci_unmatched_count, mode_count, modes_truncated;
     struct disp_monitor monitor;
     struct disp_mode modes[DISP_MAX_MODES];
+    u16 diag_count;
+    struct disp_probe_diag diagnostics[DISP_PROBE_DIAGS];
 };
 
 /* Parse and validate one base EDID block. Returns 1 when valid, else 0. */
@@ -84,6 +92,8 @@ int disp_probe_parse_edid(const u8 *edid, u16 bytes, struct disp_monitor *out);
 /* Probe VBE, current scanout, EDID and matching PCI display adapter. */
 int disp_probe_init(struct disp_probe *out, int require_banked);
 int disp_probe_get_mode_diag(u16 id, struct disp_mode_diag *out);
+int disp_probe_get_raw_diag(const struct disp_probe *probe, u16 index,
+                            struct disp_probe_diag *out);
 void disp_probe_sort_modes(struct disp_probe *probe);
 
 #endif

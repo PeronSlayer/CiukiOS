@@ -3,6 +3,7 @@
 import argparse
 import json
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -28,10 +29,14 @@ def main():
         before = vm.offset()
         vm.key('meta_l-r')
         vm.wait('WINDOW 01 OPEN', before, 20)
+        # VM.text submits the Run field with Enter. A second Enter can reach
+        # the new window's focused Close control before guest input owns it.
         vm.text('\\APPS\\DOOM\\DOOMCORE.EXE -warp 1 1 -nomusic')
-        vm.key('ret')
+        launched = time.monotonic()
+        vm.wait('[DOSVM] fork', before, 30)
         vm.wait('ST_Init: Init status bar.', before, 120)
         vm.wait('startmap: 1', before, 120)
+        report['doom_startup_seconds'] = round(time.monotonic() - launched, 3)
         time.sleep(5)  # sample while the first level is being rendered
         vm.position(220, 150)  # outside the DOS client, pointer still desktop-owned
         report['doom_window_seconds'] = moved(vm)
@@ -41,6 +46,10 @@ def main():
             raise AssertionError('pointer response while DOOM runs exceeded 0.5s')
     except Exception as error:
         report['error'] = repr(error)
+        if vm.serial.exists():
+            report['serial_tail'] = subprocess.check_output([
+                'scripts/serial_log_normalize.py', str(vm.serial)
+            ]).decode('cp437', 'replace')[-5000:]
         try:
             vm.shot('failure')
         except Exception:

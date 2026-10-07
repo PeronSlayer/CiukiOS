@@ -46,7 +46,7 @@ if not wcc.exists(): wcc=watcom/'binl/wcc386'
 if not wcc.exists(): raise SystemExit('OpenWatcom wcc386 is required for the video monitor objects')
 video_sources=['virtual_vga.c','virtual_vga_bios.c','vga_presenter.c','vga_x86.c','session_video.c',
                'guest_peripherals.c','session_devices.c','session_clock.c','session_gpu.c',
-               'session_gpu_legacy.c']
+               'session_gpu_legacy.c','session_gpu_savage.c']
 # Guest OPL synthesis: DBOPL (GPL-2.0-or-later) from the pinned VSBHDA archive,
 # unmodified, plus the ring-0 adapter, compiled by clang to freestanding COFF.
 vsbhda=json.loads((root/'third_party/vsbhda/UPSTREAM.json').read_text())
@@ -55,9 +55,11 @@ opl_shim=root/'src/vm/opl_shim'
 clang=os.environ.get('CLANGXX','clang++')
 source_paths=[root/'src/vm'/name for name in
               ['session_jlm.asm','session_abi.inc','session_vmm.inc','session_native_pages.inc',
-               'session_framebuffer_cache.inc','session_clock.inc','session_clock.h',
+               'session_framebuffer_cache.inc','session_framebuffer_fill.inc',
+               'session_framebuffer_triangle.inc',
+               'session_clock.inc','session_clock.h',
                'session_gpu.inc','session_gpu.h',
-               'session_gpu_legacy.h',
+               'session_gpu_legacy.h','session_gpu_savage.h',
                'session_native_process.inc',
                'session_scheduler.inc',
                'session_scheduler_abi.inc','session_scheduler.h',

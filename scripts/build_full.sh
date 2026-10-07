@@ -432,6 +432,8 @@ nasm -f bin "$SETUP_SRC" -D SETUP_ENABLE_RAW_HDD_INSTALL="$SETUP_RAW_HDD_INSTALL
 nasm -f bin "$FORMAT_SRC" -D MBR_PARTITION_SECTORS="$TOTAL_SECTORS" -o "$FORMAT_BIN"
 nasm -f bin "$SHELL_SRC" -D COMMAND_COMPAT=1 -o "$COMMAND_COMPAT_BIN"
 nasm -f bin "$SHELL_SRC" -o "$SHELL_BIN"
+nasm -f bin src/com/shell_help_data.asm -o build/full/obj/HELP.RLE
+nasm -f bin src/com/sav3d.asm -o build/full/obj/SAV3D.COM
 nasm -f bin src/com/guiexec.asm -o build/full/obj/guiexec.com
 nasm -f bin "$IPCONFIG_SRC" -o "$IPCONFIG_BIN"
 nasm -f bin "$ICMPD_SRC" -o "$ICMPD_BIN"
@@ -971,6 +973,7 @@ mtools_ensure_dir "$IMG" ::DESKTOP
 mtools_ensure_dir "$IMG" ::PROGRAMS
 mtools_ensure_dir "$IMG" ::SYSTEM/CONFIG
 mtools_ensure_dir "$IMG" ::SYSTEM/TEST
+mcopy -o -i "$IMG" build/full/obj/HELP.RLE ::SYSTEM/HELP.RLE
 echo "[build-full] injecting CiukiOS software OpenGL prototype"
 bash scripts/build_opengl.sh build/full/obj/gl
 mtools_ensure_dir "$IMG" ::SYSTEM/GL
@@ -980,6 +983,8 @@ for gl_file in TINYGL.LIB GL.H CIUKGL.H LICENSE.TXT; do
 done
 mcopy -o -i "$IMG" src/probes/gl/README.TXT ::SYSTEM/GL/README.TXT
 mcopy -o -i "$IMG" build/full/obj/gl/GLDEMO.EXE ::PROGRAMS/CiukGL/GLDEMO.EXE
+mcopy -o -i "$IMG" build/full/obj/SAV3D.COM ::APPS/SAV3D.COM
+mcopy -o -i "$IMG" build/full/obj/SAV3D.COM ::PROGRAMS/CiukGL/SAV3D.COM
 mcopy -o -i "$IMG" src/probes/gl/README.TXT ::PROGRAMS/CiukGL/README.TXT
 mcopy -o -i "$IMG" assets/wallpapers/LICENSE.txt ::SYSTEM/UI/WALLLIC.TXT
 mcopy -o -i "$IMG" assets/wallpapers/README.md ::SYSTEM/UI/WALLINFO.TXT

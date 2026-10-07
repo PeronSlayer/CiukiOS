@@ -42,6 +42,49 @@ def sample():
     return data
 
 
+def display_info(backend=3, status=True):
+    data = bytearray(inspect.DISPLAY_INFO_SIZE)
+    data[:4] = b'CVGD'
+    struct.pack_into('<HH', data, 4, 0x0100, inspect.DISPLAY_INFO_SIZE)
+    struct.pack_into('<IIIIIIIIIIII', data, 8, backend, 1, 1024, 768, 4096, 32,
+                     0, 32, 1, 0xE0000000, 4 * 1024 * 1024, 0)
+    if status:
+        struct.pack_into('<I', data, 60, 0x80000007)
+        # ready, capabilities, device, mapped addresses, memory and engine tests
+        values = [1, 7, 0, 0x8C2, 0xF0000000, 0xE0000000, 0xE0000000,
+                  4 * 1024 * 1024, 0, 65536, 4096, 32, 2, 1, 0, 0, 0, 1,
+                  1, 2, 1024, 768, 8, 1, 1, 0, 0, 0, 1024, 768, 1, 3]
+        struct.pack_into('<32I', data, 64, *values)
+    return data
+
+
+def cg3d(result=0, before=None, after=None):
+    data = bytearray(inspect.GPU_LOG_SIZE)
+    data[:4] = b'CG3D'
+    struct.pack_into('<HHII', data, 4, 0x0100, 16, result, 0x1234)
+    if before is not None:
+        data[16:208] = before
+    if after is not None:
+        data[208:400] = after
+    return data
+
+
+def cvt1(result=0):
+    data = bytearray(inspect.TRACE_RECORD_SIZE)
+    data[:4] = b'CVT1'
+    struct.pack_into('<HBBHBBH', data, 4, 0x118, 2, result, 0x004F, 1, 3, 0x0100)
+    mode = 16
+    data[mode] = 0x99
+    data[mode + 24] = 1
+    struct.pack_into('<HH', data, mode + 18, 1024, 768)
+    data[mode + 25] = 32
+    data[mode + 27] = 6
+    struct.pack_into('<H', data, mode + 16, 2048)
+    struct.pack_into('<H', data, mode + 50, 4096)
+    struct.pack_into('<I', data, mode + 40, 0xE0000000)
+    return data
+
+
 class InspectBootHardwareTests(unittest.TestCase):
     def test_rejects_truncated_and_wrong_magic(self):
         with self.assertRaisesRegex(ValueError, 'expected exactly 928'):
@@ -86,6 +129,100 @@ class InspectBootHardwareTests(unittest.TestCase):
         result = inspect.parse_log(data)
         self.assertIn('raw VBE ModeInfo is inactive', result['renderer']['active_path'])
         self.assertFalse(result['checks']['full_color_direct_mode'])
+
+    def test_cvgd_snapshot_qualifies_only_actual_owned_tested_backend(self):
+        result = inspect.parse_display_info(display_info())
+        self.assertTrue(result['s3_engine_qualified'])
+        self.assertTrue(result['s3_triangles_qualified'])
+        self.assertEqual(result['s3_status']['copy_selftests'], 3)
+        result = inspect.parse_display_info(display_info(backend=0))
+        self.assertFalse(result['s3_engine_qualified'])
+
+    def test_cvgd_separates_2d_from_triangle_qualification_and_uses_latest_probe(self):
+        data = display_info()
+        struct.pack_into('<I', data, 68, 1)  # fill capability only
+        result = inspect.parse_display_info(data)
+        self.assertTrue(result['s3_engine_qualified'])
+        self.assertFalse(result['s3_triangles_qualified'])
+
+        data = display_info()
+        struct.pack_into('<I', data, 64 + 25 * 4, 4)  # historical probe failures
+        result = inspect.parse_display_info(data)
+        self.assertTrue(result['s3_engine_qualified'])
+        self.assertTrue(result['s3_triangles_qualified'])
+
+    def test_cvgd_rejects_bad_size_abi_and_reserved_flags(self):
+        data = display_info()
+        with self.assertRaisesRegex(ValueError, 'expected exactly 192'):
+            inspect.parse_display_info(data[:-1])
+        bad = bytearray(data)
+        struct.pack_into('<H', bad, 4, 0x0200)
+        with self.assertRaisesRegex(ValueError, 'ABI version'):
+            inspect.parse_display_info(bad)
+        bad = bytearray(data)
+        struct.pack_into('<I', bad, 60, 0x80000008)
+        with self.assertRaisesRegex(ValueError, 'reserved CVGD flags'):
+            inspect.parse_display_info(bad)
+
+    def test_cg3d_log_parses_and_allows_zero_snapshots_only_for_errors(self):
+        complete = inspect.parse_gpu_log(cg3d(before=display_info(), after=display_info()))
+        self.assertEqual(complete['result_name'], 'completed')
+        self.assertTrue(complete['after']['data']['s3_engine_qualified'])
+        unavailable = inspect.parse_gpu_log(cg3d(result=1))
+        self.assertFalse(unavailable['before']['available'])
+        with self.assertRaisesRegex(ValueError, 'zero before.*completed'):
+            inspect.parse_gpu_log(cg3d())
+
+    def test_cg3d_rejects_truncated_bad_header_and_nonzero_bad_snapshot(self):
+        with self.assertRaisesRegex(ValueError, 'expected exactly'):
+            inspect.parse_gpu_log(bytes(inspect.GPU_LOG_SIZE - 1))
+        bad = cg3d(result=1)
+        bad[:4] = b'NOPE'
+        with self.assertRaisesRegex(ValueError, 'bad CG3D magic'):
+            inspect.parse_gpu_log(bad)
+        bad = cg3d(result=1)
+        struct.pack_into('<H', bad, 6, 15)
+        with self.assertRaisesRegex(ValueError, 'header size'):
+            inspect.parse_gpu_log(bad)
+        bad = cg3d(result=1, before=display_info())
+        bad[16] ^= 1
+        with self.assertRaisesRegex(ValueError, 'bad CVGD magic'):
+            inspect.parse_gpu_log(bad)
+
+    def test_cvt1_trace_fields_limits_and_malformed_records(self):
+        record = cvt1(result=1)
+        parsed = inspect.parse_trace(record)
+        self.assertEqual(parsed['record_count'], 1)
+        self.assertEqual(parsed['records'][0]['mode_info']['physical_base'], 0xE0000000)
+        self.assertEqual(parsed['records'][0]['mode_info']['attributes'], 0x0099)
+        self.assertEqual(parsed['records'][0]['mode_info']['banked_pitch'], 2048)
+        self.assertEqual(parsed['records'][0]['mode_info']['linear_pitch'], 4096)
+        self.assertEqual(parsed['records'][0]['framebuffer_path'], 'local')
+        self.assertEqual(parsed['records'][0]['failed_internal_status'], 0x0100)
+        self.assertIsNone(inspect.parse_trace(cvt1())['records'][0]['failed_internal_status'])
+        protected = bytearray(cvt1())
+        protected[10] = 2
+        self.assertEqual(inspect.parse_trace(protected)['records'][0]['framebuffer_path'], 'protected')
+        with self.assertRaisesRegex(ValueError, 'multiple of 272'):
+            inspect.parse_trace(record[:-1])
+        with self.assertRaisesRegex(ValueError, 'maximum is 128'):
+            inspect.parse_trace(bytes(inspect.TRACE_RECORD_SIZE * 129))
+        bad = bytearray(record)
+        bad[:4] = b'NOPE'
+        with self.assertRaisesRegex(ValueError, 'bad CVT1 magic'):
+            inspect.parse_trace(bad)
+        bad = bytearray(record)
+        struct.pack_into('<H', bad, 14, 1)
+        with self.assertRaisesRegex(ValueError, 'reserved field'):
+            inspect.parse_trace(bad)
+        bad = bytearray(record)
+        bad[7] = 2
+        with self.assertRaisesRegex(ValueError, 'result 2'):
+            inspect.parse_trace(bad)
+        bad = bytearray(record)
+        bad[10] = 3
+        with self.assertRaisesRegex(ValueError, 'LFB mode 3'):
+            inspect.parse_trace(bad)
 
 
 if __name__ == '__main__':

@@ -284,6 +284,8 @@ def main():
     parser.add_argument('--edid', choices=('off', '1024x768', '1280x800'), default='off')
     parser.add_argument('--audio', choices=('ac97', 'none'), default='ac97')
     parser.add_argument('--memory', type=int, default=128)
+    parser.add_argument('--exercise-native-client', action='store_true',
+                        help='exercise streamed HELP and the native 3D client unsupported path')
     args = parser.parse_args()
     source, output = args.image.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -400,6 +402,16 @@ def main():
         vm.key('f4')
         vm.wait('CiukiOS SHELL C:\\APPS>', keyboard_offset, 60)
         vm.command('echo INPUT READY', 'INPUT READY\r\nCiukiOS SHELL', timeout=30)
+        if args.exercise_native_client:
+            stage = 'streamed help and native 3D client in the system shell'
+            vm.command('help', 'CiukiOS SHELL C:\\APPS>', timeout=30)
+            vm.command('sav3d', 'Native S3 triangle unsupported on this active display.', timeout=30)
+            raw_3d = read_live(volume, 'SYSTEM/VIDEO/GPU3D.LOG')
+            assert len(raw_3d) == 400 and raw_3d[:4] == b'CG3D', (len(raw_3d), raw_3d[:4])
+            assert int.from_bytes(raw_3d[8:12], 'little') == 1, 'QEMU incorrectly reported native S3 3D'
+            (output / 'GPU3D.LOG').write_bytes(raw_3d)
+            report['native_client_result'] = 'unsupported on QEMU, logged without a GPU success claim'
+            report['checks'].append('streamed HELP and system-shell SAV3D returned; unsupported native 3D was logged')
         return_offset = vm.offset()
         vm.text('exit')
         vm.wait('[DESKTOP] READY', return_offset, 90)

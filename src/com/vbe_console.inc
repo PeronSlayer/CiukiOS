@@ -2,6 +2,9 @@
 ; linear framebuffer when firmware and CPU mode allow it, else banked.
 ; Private framebuffer rendering only: no resident hooks or DOS ABI changes.
 ; Public calls preserve general/segment registers unless documented otherwise.
+%ifndef VC_PROTECTED_LFB
+%define VC_PROTECTED_LFB 1
+%endif
 
 vc_bios:
     pushf
@@ -161,6 +164,9 @@ vc_probe:
     mov cx, [cs:vc_mode]
     mov ax, 0x4F01
     call vc_bios
+%ifdef VC_TRACE_DOS
+    mov [vc_probe_status],ax
+%endif
     cmp ax, 0x004F
     jne .fail
     call vc_validate
@@ -178,6 +184,12 @@ vc_probe:
 vc_begin:
     pushad
     push es
+    ; Existing native ownership must drain before even an attempted mode set.
+    cmp byte [vc_session_owned],1
+    jne .unbound
+    call vc_session_fb_release
+    jc .done
+.unbound:
     mov byte [vc_begin_stage],1
     call vc_controller_query
     call vc_probe
@@ -220,18 +232,27 @@ vc_begin:
     mov bx, [cs:vc_mode]
     cmp byte [cs:vc_lfb_ok], 1
     jne .banked
+    smsw ax
+    test al,1
+    jnz .protected_open
     call vc_lfb_open
     jc .banked
+    mov byte [cs:vc_lfb],1
+    jmp .linear_set
+.protected_open:
+    mov byte [cs:vc_lfb],2
+.linear_set:
     mov eax, [cs:vc_info+40]
     mov [cs:vc_lfb_base], eax
+    mov bx,[cs:vc_mode]
     or bx, 0x4000
     mov ax, 0x4F02
     call vc_bios
     cmp ax, 0x004F
     jne .linear_refused
-    mov byte [cs:vc_lfb], 1
     jmp .mode_set
 .linear_refused:
+    mov byte [cs:vc_lfb],0
     call vc_lfb_close
 .banked:
     mov byte [vc_begin_stage],4
@@ -259,7 +280,9 @@ vc_begin:
     mov dx,ax
     shr dx,14
     and dl,1
-    cmp dl,[vc_lfb]
+    cmp byte [vc_lfb],0
+    setne dh
+    cmp dl,dh
     jne .fail
     and ax,0x3FFF
     cmp ax,[vc_mode]
@@ -287,12 +310,18 @@ vc_begin:
     call vc_validate_active
     jc .fail
     mov al,[cs:vc_bank_ok]
-    cmp byte [cs:vc_lfb],1
-    jne .access_checked
+    cmp byte [cs:vc_lfb],0
+    je .access_checked
     mov al,[cs:vc_lfb_ok]
 .access_checked:
     cmp al,1
     jne .fail
+    cmp byte [cs:vc_lfb],2
+    jne .mapping_ready
+    mov byte [vc_begin_stage],7
+    call vc_session_fb_bind
+    jc .fail
+.mapping_ready:
     ; A freshly cleared mode starts at page zero even if 4F07 is unavailable.
     mov ax,0x4F07
     xor bx,bx
@@ -320,6 +349,10 @@ vc_begin:
     mov byte [cs:vc_import_text], 0
     cmp byte [cs:vc_active], 1
     jne .fail
+%ifdef VC_TRACE_DOS
+    xor dl,dl
+    call vc_trace
+%endif
     clc
     jmp .done
 .fail:
@@ -328,6 +361,11 @@ vc_begin:
     mov [vc_last_failure],al
     mov ax,[vc_mode]
     mov [vc_failed_mode],ax
+%ifdef VC_TRACE_DOS
+    mov dl,1
+    call vc_trace
+    call vc_gpu_log
+%endif
     call vc_end
     stc
 .done:
@@ -338,6 +376,8 @@ vc_begin:
 vc_end:
     pushad
     push es
+    call vc_session_fb_release
+    jc .done                   ; retain mode/mapping while an engine is busy
     mov byte [cs:vc_active], 0
     cmp byte [cs:vc_graphics_transition],0
     jne .release
@@ -353,18 +393,90 @@ vc_end:
     mov ah, 0x49
     int 0x21
     mov word [cs:vc_cells_seg], 0
+    clc
+    jmp .done
 .done:
     pop es
     popad
     ret
+
+%ifdef VC_TRACE_DOS
+; Preserve every attempted raw descriptor, including a rejected AUTO mode.
+; CVT1 records are16-byte headers plus256-byte ModeInfo; at most128 per boot.
+vc_trace:
+    pushf
+    pushad
+    push ds
+    push cs
+    pop ds
+    cmp byte [vc_trace_count],128
+    jae .done
+    mov [file_buf+7],dl
+    mov dword [file_buf],'CVT1'
+    mov ax,[vc_mode]
+    mov [file_buf+4],ax
+    mov al,[vc_begin_stage]
+    mov [file_buf+6],al
+    mov ax,[vc_probe_status]
+    mov [file_buf+8],ax
+    mov al,[vc_lfb]
+    mov ah,[vc_start_attempts]
+    mov [file_buf+10],ax
+    mov ax,[vc_failed_status]
+    mov [file_buf+12],ax
+    mov word [file_buf+14],0
+    mov dx,vc_trace_path
+    cmp byte [vc_trace_count],0
+    jne .open
+    xor cx,cx
+    mov ah,0x3C
+    jmp .request
+.open:
+    mov ax,0x3D02
+.request:
+    int 0x21
+    jc .done
+    mov bx,ax
+    xor cx,cx
+    xor dx,dx
+    mov ax,0x4202
+    int 0x21
+    jc .close
+    mov dx,file_buf
+    mov cx,16
+    mov ah,0x40
+    int 0x21
+    jc .close
+    cmp ax,cx
+    jne .close
+    mov dx,vc_info
+    mov cx,256
+    mov ah,0x40
+    int 0x21
+    jc .close
+    cmp ax,cx
+    jne .close
+    inc byte [vc_trace_count]
+.close:
+    mov ah,0x3E
+    int 0x21
+.done:
+    pop ds
+    popad
+    popf
+    ret
+vc_probe_status dw 0
+vc_trace_count db 0
+vc_trace_path db '\SYSTEM\VIDEO\VBE.TRC',0
+%endif
 
 ; EDI is the linear pixel offset. Map its 64 KiB page; preserve all registers.
 vc_map:
     pushad
     cmp byte [cs:vc_active],1
     jne .inactive
-    cmp byte [cs:vc_lfb],1
-    je .inactive
+    cmp byte [cs:vc_lfb],0
+    jne .inactive
     cmp edi,[cs:vc_access_bytes]
     jae .fail
     mov eax, edi

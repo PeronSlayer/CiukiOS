@@ -2,6 +2,7 @@
 ; framebuffer. Calls use the V86 far entry returned by INT 2Fh/1684h, and
 ; carry VM_OP_NO_SWITCH because the desktop may have its software pointer
 ; hidden while its two display pages are being synchronized.
+%if VC_PROTECTED_LFB
 %include "src/vm/session_abi.inc"
 
 vc_session_find:
@@ -35,6 +36,47 @@ vc_session_find:
     pop es
     popad
     ret
+
+; Eligibility is a checked service contract, not just a multiplex pointer.
+; V86 can select an actual LFB only if all pixel operations have a protected
+; implementation, and the caller remains the system VM.
+vc_session_available:
+%if VC_PROTECTED_LFB
+    pushad
+    push es
+    call vc_session_find
+    jc .done
+    push cs
+    pop es
+    mov di,vc_session_packet
+    mov ax,VM_OP_QUERY | VM_OP_NO_SWITCH
+    mov cx,VM_INFO_SIZE
+    call far [cs:vc_session_entry]
+    jc .done
+    cmp dword [cs:vc_session_packet],VM_INFO_MAGIC
+    jne .bad
+    cmp word [cs:vc_session_packet+VM_INFO_BYTES],VM_INFO_SIZE
+    jb .bad
+    cmp word [cs:vc_session_packet+VM_INFO_VERSION],VM_ABI_VERSION
+    jb .bad
+    cmp dword [cs:vc_session_packet+VM_INFO_ACTIVE],0
+    jne .bad
+    mov eax,[cs:vc_session_packet+VM_INFO_CAPABILITIES]
+    and eax,VM_CAP_DESKTOP_ROWS | VM_CAP_DESKTOP_FILL
+    cmp eax,VM_CAP_DESKTOP_ROWS | VM_CAP_DESKTOP_FILL
+    jne .bad
+    clc
+    jmp .done
+.bad:
+    stc
+.done:
+    pop es
+    popad
+    ret
+%else
+    stc
+    ret
+%endif
 
 ; Query CVMS and bind the physical base reported by VBE if it is not already
 ; bound. An existing binding is accepted only when both base and extent fit.
@@ -88,7 +130,7 @@ vc_session_fb_bind:
     jne .unavailable             ; never displace a binding for another LFB
     mov eax,[vc_session_packet+VM_INFO_FB_BYTES]
     cmp eax,[vc_session_wanted_bytes]
-    jb .unavailable              ; never unbind/rebind a short extent
+    jb .expand_owned             ; only our own mapping may be enlarged
     test dword [vc_session_packet+VM_INFO_CAPABILITIES],VM_CAP_GPU_PRESENT
     setnz byte [vc_session_gpu]
     jz .queried_gpu
@@ -103,9 +145,14 @@ vc_session_fb_bind:
     mov [vc_session_bound_bytes],eax
     clc
     jmp .done
+.expand_owned:
+    cmp byte [vc_session_owned],1
+    jne .unavailable
+    call vc_session_fb_release
+    jc .unavailable
 .bind:
     mov dword [vc_session_packet],VM_FB_PACKET_MAGIC
-    mov dword [vc_session_packet+VM_FB_PACKET_VERSION],(VM_FB_MODE_PACKET_SIZE << 16) | VM_ABI_VERSION
+    mov dword [vc_session_packet+VM_FB_PACKET_VERSION],(VM_FB_ACCEL_PACKET_SIZE << 16) | VM_ABI_VERSION
     mov eax,[vc_session_wanted_physical]
     mov [vc_session_packet+VM_FB_PACKET_PHYSICAL],eax
     mov eax,[vc_session_wanted_bytes]
@@ -118,19 +165,23 @@ vc_session_fb_bind:
     ; Reserve BPP bit15 as the current mode's banked-window marker. The host
     ; still requires a nonzero VBE PhysBasePtr and validates the reported BAR
     ; against a known QEMU VGA/virtio-vga alias before accepting banked mode.
-    cmp byte [vc_lfb],1
-    je .format_ready
+    cmp byte [vc_lfb],0
+    jne .format_ready
     or ax,0x8000
 .format_ready:
     mov [vc_session_packet+22],ax
+    movzx eax,word [vc_controller+18]
+    shl eax,16
+    mov [vc_session_packet+24],eax
+    mov dword [vc_session_packet+28],0
     mov ax,VM_OP_BIND_FB | VM_OP_NO_SWITCH
-    mov cx,VM_FB_MODE_PACKET_SIZE
+    mov cx,VM_FB_ACCEL_PACKET_SIZE
     push cs
     pop es
     mov di,vc_session_packet
+    mov byte [vc_session_owned],1 ; a failed bind may retain our mapping
     call far [vc_session_entry]
-    jc .unavailable
-    mov byte [vc_session_owned],1
+    jc .failed_bind
     mov [vc_session_gpu],bl
     mov byte [vc_session_bound],1
     mov eax,[vc_session_wanted_physical]
@@ -139,6 +190,8 @@ vc_session_fb_bind:
     mov [vc_session_bound_bytes],eax
     clc
     jmp .done
+.failed_bind:
+    call vc_session_fb_release
 .unavailable:
     stc
 .done:
@@ -160,6 +213,7 @@ vc_session_fb_release:
 .detached:
     mov byte [cs:vc_session_bound],0
     mov byte [cs:vc_session_gpu],0
+    clc
 .keep:
     popad
     ret
@@ -179,6 +233,47 @@ vc_session_fb_present:
     stc
     ret
 
+%ifdef VC_TRACE_DOS
+; Read-only runtime driver evidence, captured after the first completed paint.
+vc_gpu_log:
+    pushf
+    pushad
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    call vc_session_find
+    jc .done
+    mov di,file_buf
+    mov cx,VM_DISPLAY_INFO_SIZE
+    mov ax,VM_OP_DISPLAY_INFO | VM_OP_NO_SWITCH
+    call far [vc_session_entry]
+    jc .done
+    cmp dword [file_buf],VM_DISPLAY_INFO_MAGIC
+    jne .done
+    mov dx,vc_gpu_log_path
+    xor cx,cx
+    mov ah,0x3C
+    int 0x21
+    jc .done
+    mov bx,ax
+    mov dx,file_buf
+    mov cx,VM_DISPLAY_INFO_SIZE
+    mov ah,0x40
+    int 0x21
+    mov ah,0x3E
+    int 0x21
+.done:
+    pop es
+    pop ds
+    popad
+    popf
+    ret
+vc_gpu_log_path db '\SYSTEM\VIDEO\GPU.LOG',0
+%endif
+
 ; One-row vc_fb_xfer interface: FS:SI buffer, EDI framebuffer offset, CX
 ; byte count, direction from vc_fb_read. Reuses the multi-row packet path.
 vc_session_xfer:
@@ -190,6 +285,49 @@ vc_session_xfer:
     pop fs
     popad
     ret
+
+; EAX native colour, ECX pixel count, EDI framebuffer byte offset.
+; The shared 64-byte packet holds this bounded, exact 32-byte fill request.
+vc_session_fill:
+%if VC_PROTECTED_LFB
+    pushad
+    push es
+    push eax
+    call vc_session_guard
+    jnc .ready
+    call vc_session_fb_bind
+    jc .unavailable
+.ready:
+    pop eax
+    mov dword [cs:vc_session_packet],VM_FB_FILL_MAGIC
+    mov dword [cs:vc_session_packet+4],(VM_FB_FILL_PACKET_SIZE << 16) | VM_ABI_VERSION
+    mov [cs:vc_session_packet+8],edi
+    mov [cs:vc_session_packet+12],ecx
+    mov [cs:vc_session_packet+16],eax
+    movzx eax,byte [cs:vc_bytes]
+    mov [cs:vc_session_packet+20],eax
+    mov dword [cs:vc_session_packet+24],0
+    mov dword [cs:vc_session_packet+28],0
+    push cs
+    pop es
+    mov di,vc_session_packet
+    mov cx,VM_FB_FILL_PACKET_SIZE
+    mov ax,VM_OP_FB_FILL | VM_OP_NO_SWITCH
+    call far [cs:vc_session_entry]
+    jnc .done
+    mov byte [cs:vc_active],0
+    jmp .done
+.unavailable:
+    pop eax
+    mov byte [cs:vc_active],0
+.done:
+    pop es
+    popad
+    ret
+%else
+    stc
+    ret
+%endif
 
 ; row_bytes must be nonzero. Return CF for a row wider than one packet.
 vc_session_batch:
@@ -441,3 +579,26 @@ vc_session_rows_per_call dd 0
 vc_session_chunk_rows_left dd 0
 vc_session_call_rows dd 0
 vc_session_y dd 0
+
+%else
+; Setup keeps the conventional real-mode VBE transports and omits CVSESSION's
+; protected-mode client. Preserve the shared renderer's call sites with
+; minimal stubs; no protected mapping can be reported as available.
+vc_session_find:
+vc_session_available:
+vc_session_fb_bind:
+vc_session_xfer:
+vc_session_fill:
+vc_session_rows:
+    stc
+    ret
+
+vc_session_fb_release:
+    clc
+    ret
+
+vc_session_fb_present:
+    ret
+
+vc_session_owned db 0
+%endif

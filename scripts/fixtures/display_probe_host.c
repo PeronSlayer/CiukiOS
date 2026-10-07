@@ -8,7 +8,7 @@ static u16 mapped_off[8];
 static void *mapped_ptr[8];
 static int mapped_count;
 static u16 listed_modes[] = {0x101, 0x110, 0x111, 0x112, 0x118, 0x119,
-                             0x120, 0x122, 0xFFFF};
+                             0x120, 0x122, 0x123, 0xFFFF};
 static u16 current_mode = 0x121;
 static u16 current_flags = 0x4000;
 static u16 active_pitch = 4000;
@@ -52,6 +52,7 @@ static void set_mode(u8 *p, u16 id)
     p[37] = 8; p[38] = 24;
     put16(p + 16, pitch); put16(p + 18, width); put16(p + 20, height);
     p[24] = 1; p[25] = (u8)bpp; p[27] = (u8)model;
+    if (id == 0x123) p[24] = 0; /* Malformed direct-color planes descriptor. */
     if (id != 0x120) put32(p + 40, 0xE0000000UL);
     put16(p + 50, (id == 0x118 || id == 0x119 || id == 0x122) ? 3328 : pitch);
     /* The synthetic 800x600 modes retain a separate linear RGB layout. */
@@ -116,6 +117,14 @@ static const struct disp_mode *find_mode(const struct disp_probe *p, u16 id)
     for (i = 0; i < p->mode_count; ++i) if (p->modes[i].id == id) return &p->modes[i];
     return 0;
 }
+static const struct disp_probe_diag *find_diag(const struct disp_probe *p, u16 id)
+{
+    static struct disp_probe_diag d;
+    u16 i;
+    for (i = 0; i < p->diag_count; ++i)
+        if (disp_probe_get_raw_diag(p, i, &d) && d.id == id) return &d;
+    return 0;
+}
 static void require(int condition, const char *message)
 {
     if (!condition) { fprintf(stderr, "FAIL: %s\n", message); exit(1); }
@@ -141,6 +150,10 @@ int main(void)
     require(p.modes[0].id == 0x110,
             "DISPLAY's first selectable geometry/depth is direct-color 640x480x15");
     require(!find_mode(&p, 0x118), "V86 does not offer linear-only mode with unusable WinA");
+    require(!find_mode(&p, 0x123), "V86 omits malformed direct-color NumberOfPlanes");
+    require(find_diag(&p, 0x123) && find_diag(&p, 0x123)->planes == 0 &&
+            !find_diag(&p, 0x123)->accepted,
+            "raw probe keeps rejected plane count for hardware diagnosis");
     m = find_mode(&p, 0x119);
     require(m && m->pitch == 3200 && (m->flags & DISP_MODE_BANKED),
             "V86 uses the validated banked pitch for dual-access mode");

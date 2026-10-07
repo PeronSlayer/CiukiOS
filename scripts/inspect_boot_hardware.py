@@ -11,6 +11,11 @@ MODE_SIZE = 256
 CONTROLLER_SIZE = 512
 EDID_SIZE = 128
 TOTAL_SIZE = HEADER_SIZE + MODE_SIZE + CONTROLLER_SIZE + EDID_SIZE
+DISPLAY_INFO_SIZE = 192
+S3_STATUS_SIZE = 128
+GPU_LOG_SIZE = 16 + 2 * DISPLAY_INFO_SIZE
+TRACE_RECORD_SIZE = 16 + MODE_SIZE
+TRACE_MAX_RECORDS = 128
 
 
 def u16(buf, offset):
@@ -19,6 +24,134 @@ def u16(buf, offset):
 
 def u32(buf, offset):
     return struct.unpack_from('<I', buf, offset)[0]
+
+
+def parse_display_info(data):
+    if len(data) != DISPLAY_INFO_SIZE:
+        raise ValueError(f'expected exactly {DISPLAY_INFO_SIZE} bytes for CVGD, got {len(data)}')
+    if data[:4] != b'CVGD':
+        raise ValueError(f'bad CVGD magic {data[:4]!r}; expected b\'CVGD\'')
+    version, size = u16(data, 4), u16(data, 6)
+    if version != 0x0100:
+        raise ValueError(f'bad CVGD ABI version 0x{version:04X}; expected 0x0100')
+    if size != DISPLAY_INFO_SIZE:
+        raise ValueError(f'bad CVGD size {size}; expected {DISPLAY_INFO_SIZE}')
+    flags = u32(data, 60)
+    has_s3_status = bool(flags & 0x80000000)
+    if flags & 0x7FFFFFF8:
+        raise ValueError(f'nonzero reserved CVGD flags 0x{flags & 0x7FFFFFF8:08X}')
+    result = {
+        'format': 'CVGD', 'size_bytes': len(data), 'abi_version': version,
+        'backend': u32(data, 8), 'phase': u32(data, 12),
+        'width': u32(data, 16), 'height': u32(data, 20),
+        'pitch': u32(data, 24), 'bpp': u32(data, 28),
+        'error': u32(data, 32), 'command_words': u32(data, 36),
+        'completions': u32(data, 40), 'physical_address': u32(data, 44),
+        'framebuffer_bytes': u32(data, 48), 'edid_bytes': u32(data, 52),
+        'active_dos_count': u32(data, 56),
+        'flags': {'raw': flags, 'has_s3_status': has_s3_status,
+                  'capabilities': flags & 7},
+    }
+    if has_s3_status:
+        s3 = data[64:64 + S3_STATUS_SIZE]
+        names = (
+            'ready caps error_stage device_id mmio_physical framebuffer_physical '
+            'aperture_physical vram_bytes scratch_offset scratch_bytes pitch bpp '
+            'fills blits triangles fifo_timeouts idle_timeouts last_status binds '
+            'fill_selftests width height command_words owns_engine triangle_selftests '
+            'triangle_probe_failures triangle_probe_pixel triangle_probe_expected '
+            'panel_width panel_height panel_flags copy_selftests'
+        ).split()
+        status = {name: u32(s3, i * 4) for i, name in enumerate(names)}
+        result['s3_status'] = status
+        result['s3_engine_qualified'] = bool(
+            result['backend'] == 3 and status['ready'] == 1
+            and status['owns_engine'] == 1
+            and status['caps'] & 1
+            and status['fill_selftests'] > 0
+        )
+        result['s3_triangles_qualified'] = bool(
+            result['s3_engine_qualified'] and status['caps'] & 2 and status['caps'] & 4
+            and status['triangle_selftests'] > 0 and status['copy_selftests'] > 0
+            and status['triangle_probe_pixel'] == status['triangle_probe_expected']
+        )
+    else:
+        result['s3_status'] = None
+        result['s3_engine_qualified'] = False
+        result['s3_triangles_qualified'] = False
+    return result
+
+
+def parse_gpu_log(data):
+    if len(data) == DISPLAY_INFO_SIZE:
+        return {'format': 'CVGD snapshot', 'snapshot': parse_display_info(data)}
+    if len(data) != GPU_LOG_SIZE:
+        raise ValueError(f'expected exactly {DISPLAY_INFO_SIZE} (CVGD) or {GPU_LOG_SIZE} (CG3D) bytes, got {len(data)}')
+    if data[:4] != b'CG3D':
+        raise ValueError(f'bad CG3D magic {data[:4]!r}; expected b\'CG3D\'')
+    version, header_size = u16(data, 4), u16(data, 6)
+    if version != 0x0100:
+        raise ValueError(f'bad CG3D ABI version 0x{version:04X}; expected 0x0100')
+    if header_size != 16:
+        raise ValueError(f'bad CG3D header size {header_size}; expected 16')
+    result_code, error = u32(data, 8), u32(data, 12)
+    if result_code not in (0, 1, 2, 3):
+        raise ValueError(f'unknown CG3D result {result_code}')
+    snapshots = []
+    for label, offset in (('before', 16), ('after', 208)):
+        raw = data[offset:offset + DISPLAY_INFO_SIZE]
+        if raw == bytes(DISPLAY_INFO_SIZE):
+            if result_code == 0:
+                raise ValueError(f'zero {label} CG3D snapshot is invalid for a completed result')
+            snapshots.append({'available': False, 'reason': 'unavailable snapshot in error result'})
+        else:
+            snapshots.append({'available': True, 'data': parse_display_info(raw)})
+    return {'format': 'CG3D native client log', 'size_bytes': len(data),
+            'abi_version': version, 'header_size': header_size,
+            'result': result_code,
+            'result_name': ('completed', 'unsupported', 'session validation failed',
+                            'hardware/counter verification failed')[result_code],
+            'error': error, 'before': snapshots[0], 'after': snapshots[1]}
+
+
+def parse_trace(data):
+    if len(data) % TRACE_RECORD_SIZE:
+        raise ValueError(f'CVT1 trace size must be a multiple of {TRACE_RECORD_SIZE}, got {len(data)}')
+    count = len(data) // TRACE_RECORD_SIZE
+    if count > TRACE_MAX_RECORDS:
+        raise ValueError(f'CVT1 trace has {count} records; maximum is {TRACE_MAX_RECORDS}')
+    records = []
+    for index in range(count):
+        offset = index * TRACE_RECORD_SIZE
+        record = data[offset:offset + TRACE_RECORD_SIZE]
+        if record[:4] != b'CVT1':
+            raise ValueError(f'bad CVT1 magic in record {index}: {record[:4]!r}')
+        result_code = record[7]
+        if result_code not in (0, 1):
+            raise ValueError(f'bad CVT1 result {result_code} in record {index}; expected 0 or 1')
+        if record[10] not in (0, 1, 2):
+            raise ValueError(f'bad CVT1 LFB mode {record[10]} in record {index}; expected 0, 1, or 2')
+        reserved = u16(record, 14)
+        if reserved:
+            raise ValueError(f'nonzero CVT1 reserved field in record {index}: 0x{reserved:04X}')
+        mode = record[16:]
+        records.append({
+            'mode': u16(record, 4), 'stage': record[6],
+            'result': result_code, 'result_name': 'success' if result_code == 0 else 'failed',
+            'vbe_4f01_ax': u16(record, 8),
+            'lfb_mode': record[10],
+            'framebuffer_path': ('banked', 'local', 'protected')[record[10]],
+            'start_attempt': record[11],
+            'failed_internal_status': u16(record, 12) if result_code else None,
+            'mode_info': {'planes': mode[24], 'attributes': u16(mode, 0),
+                          'width': u16(mode, 18), 'height': u16(mode, 20),
+                          'bpp': mode[25], 'memory_model': mode[27],
+                          'banked_pitch': u16(mode, 16),
+                          'linear_pitch': u16(mode, 50),
+                          'physical_base': u32(mode, 40)},
+        })
+    return {'format': 'CVT1', 'record_size_bytes': TRACE_RECORD_SIZE,
+            'record_count': count, 'records': records}
 
 
 def parse_log(data):
@@ -114,10 +247,16 @@ def parse_log(data):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--video', required=True, type=Path, help='path to SYSTEM/VIDEO/DISPLAY.LOG')
+    parser.add_argument('--gpu', type=Path, help='path to a 192-byte CVGD snapshot or 400-byte CG3D log')
+    parser.add_argument('--trace', type=Path, help='path to a CVT1 mode-attempt trace')
     parser.add_argument('--output', type=Path, help='write JSON here instead of stdout')
     args = parser.parse_args(argv)
     try:
         result = parse_log(args.video.read_bytes())
+        if args.gpu:
+            result['gpu'] = parse_gpu_log(args.gpu.read_bytes())
+        if args.trace:
+            result['trace'] = parse_trace(args.trace.read_bytes())
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     rendered = json.dumps(result, indent=2, sort_keys=True) + '\n'

@@ -15,3 +15,18 @@ adaptations are in the CiukiOS repository at scripts/build_opengl.sh.
 
 This is a software renderer and an OpenGL subset. It does not enable
 GPU acceleration or Windows OpenGL DLL compatibility.
+
+Native SuperSavage 3D diagnostic
+
+SAV3D.COM uses the native CiukiOS BCI driver on supported S3 hardware.
+Press F4 for the system shell, then run SAV3D. It verifies hardware
+self-tests, draws a GPU Gouraud triangle, and saves before/after
+operation counters to C:\SYSTEM\VIDEO\GPU3D.LOG. Press a key to return.
+The system shell retains its checked framebuffer for this client.
+An independent DOS-window VM has no access to this system-only API.
+
+The native interface currently provides untextured screen-space
+triangles without a depth buffer. It is separate from the TinyGL
+software OpenGL library. Unsupported hardware reports that native
+triangles are unavailable; it does not report software drawing as GPU
+acceleration. Firmware still establishes display timings.

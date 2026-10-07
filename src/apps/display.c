@@ -7,8 +7,9 @@
 static struct disp_probe probe;
 static struct dialog notice;
 static u8 native[192];
+static u8 session_info[64];
 static u16 vm_seg, vm_off;
-static int native_ok, page, selected, top, focus, pending_probe = 1;
+static int native_ok, protected_lfb_ok, page, selected, top, focus, pending_probe = 1;
 static int probe_require_banked;
 static int X, Y, W, H;
 static unsigned last_poll, preview_tick;
@@ -52,6 +53,30 @@ static u16 display_msw(void);
 static int display_in_v86(void) { return (display_msw() & 1) != 0; }
 
 static u32 nfield(int off) { return *(u32 *)(native + off); }
+static int session_query_lfb(void)
+{
+    struct regs r;
+    u32 caps;
+    if (!vm_seg) {
+        mem_set(&r, 0, sizeof r);
+        r.ax = 0x1684; r.bx = 0x4349;
+        intr(0x2F, &r); vm_seg = r.es; vm_off = r.di;
+    }
+    if (!vm_seg) return 0;
+    mem_set(session_info, 0, sizeof session_info);
+    mem_set(&r, 0, sizeof r);
+    r.ax = 0x0100;                 /* VM_OP_QUERY | VM_OP_NO_SWITCH */
+    r.cx = sizeof session_info; r.di = (u16)session_info;
+    r.ds = r.es = app_seg();
+    if (far_regs(vm_seg, vm_off, &r) || (r.flags & 1)) return 0;
+    if (*(u32 *)session_info != 0x534D5643UL ||
+        *(u16 *)(session_info + 4) < 0x0100 ||
+        *(u16 *)(session_info + 6) < sizeof session_info ||
+        *(u32 *)(session_info + 12) != 0) return 0;
+    caps = *(u32 *)(session_info + 8);
+    return (caps & (0x00010000UL | 0x00080000UL)) ==
+        (0x00010000UL | 0x00080000UL);
+}
 static void native_read(void)
 {
     struct regs r;
@@ -136,8 +161,16 @@ static void diag_mode(const char *event, u16 id)
     struct disp_mode_diag d;
     char line[192], *p = line, h[5];
     const u8 *masks;
-    u16 i;
+    u16 i, active_ax = 0, active_bx = 0, active_pitch, active_pixels, active_lines, active_scan;
+    int use_linear;
     if (!disp_probe_get_mode_diag(id, &d)) return;
+    use_linear = !probe_require_banked && (d.attributes & 0x80);
+    if (str_cmp(event, "current") == 0 || str_cmp(event, "preview") == 0) {
+        read_active_vbe(&active_ax, &active_bx, &active_pitch, &active_pixels,
+                        &active_lines, &active_scan);
+        if (active_ax == 0x004F && (active_bx & 0x3FFF) == id)
+            use_linear = !!(active_bx & 0x4000);
+    }
     str_copy(p, "MODE event="); p += str_len(p); str_copy(p, event); p += str_len(p);
     str_copy(p, " id="); p += str_len(p); diag_hex4(&p, id);
     str_copy(p, " attr="); p += str_len(p); diag_hex4(&p, d.attributes);
@@ -145,14 +178,35 @@ static void diag_mode(const char *event, u16 id)
     str_copy(p, " B="); p += str_len(p); diag_hex4(&p, d.window_b_attributes); *p++ = ':'; diag_hex4(&p, d.window_b_segment);
     str_copy(p, " g/s="); p += str_len(p); diag_hex4(&p, d.granularity_kb); *p++ = '/'; diag_hex4(&p, d.window_kb);
     str_copy(p, " pitch="); p += str_len(p); diag_hex4(&p, d.banked_pitch); *p++ = '/'; diag_hex4(&p, d.linear_pitch);
+    str_copy(p, " st/pl="); p += str_len(p); diag_hex4(&p, d.status); *p++ = '/'; diag_hex4(&p, d.planes);
+    str_copy(p, " wh="); p += str_len(p); diag_hex4(&p, d.width); *p++ = 'x'; diag_hex4(&p, d.height);
+    str_copy(p, " b/m="); p += str_len(p); diag_hex4(&p, d.bpp); *p++ = '/'; diag_hex4(&p, d.memory_model);
+    str_copy(p, " path="); p += str_len(p); str_copy(p, use_linear ? "LFB" : "BANK"); p += str_len(p);
     str_copy(p, " phys="); p += str_len(p); diag_hex8(&p, d.framebuffer_phys);
-    masks = (str_cmp(event, "current") == 0 && (probe.current_mode_flags & 0x4000)) ||
-        (!probe_require_banked && (d.attributes & 0x80)) ? d.linear_masks : d.bank_masks;
-    if (!probe_require_banked && (d.attributes & 0x80) && !masks[0]) masks = d.bank_masks;
+    masks = use_linear ? d.linear_masks : d.bank_masks;
+    if (use_linear && !masks[0]) masks = d.bank_masks;
     str_copy(p, " rgb="); p += str_len(p);
     for (i = 0; i < 6; ++i) { h[0] = "0123456789ABCDEF"[(masks[i] >> 4) & 15]; h[1] = "0123456789ABCDEF"[masks[i] & 15]; h[2] = 0; str_copy(p, h); p += 2; }
     *p = 0;
     diag_append(line);
+}
+static void diag_raw_probes(void)
+{
+    u16 i;
+    struct disp_probe_diag d;
+    for (i = 0; i < probe.diag_count; ++i) {
+        char line[192], *p = line;
+        if (!disp_probe_get_raw_diag(&probe, i, &d)) continue;
+        str_copy(p, "PROBE id="); p += str_len(p); diag_hex4(&p, d.id);
+        str_copy(p, " st="); p += str_len(p); diag_hex4(&p, d.status);
+        str_copy(p, " attr="); p += str_len(p); diag_hex4(&p, d.attributes);
+        str_copy(p, " pl="); p += str_len(p); diag_hex4(&p, d.planes);
+        str_copy(p, " wh="); p += str_len(p); diag_hex4(&p, d.width); *p++ = 'x'; diag_hex4(&p, d.height);
+        str_copy(p, " pitch="); p += str_len(p); diag_hex4(&p, d.banked_pitch); *p++ = '/'; diag_hex4(&p, d.linear_pitch);
+        str_copy(p, " b/m="); p += str_len(p); diag_hex4(&p, d.bpp); *p++ = '/'; diag_hex4(&p, d.memory_model);
+        str_copy(p, d.accepted ? " ok=1" : " ok=0"); p += str_len(p);
+        *p = 0; diag_append(line);
+    }
 }
 static void diag_event(const char *event, u16 id, u16 result)
 {
@@ -168,7 +222,9 @@ static void diag_event(const char *event, u16 id, u16 result)
         *p++ = '/'; diag_hex8(&p, nfield(56));
     } else str_copy(p, "NONE");
     p += str_len(p);
-    str_copy(p, " path="); p += str_len(p); str_copy(p, probe_require_banked ? "BANK" : "AUTO"); p += str_len(p);
+    str_copy(p, " path="); p += str_len(p);
+    str_copy(p, probe_require_banked ? "BANK" : (protected_lfb_ok ? "LFB-OR-BANK" : "AUTO"));
+    p += str_len(p);
     *p = 0;
     diag_append(line);
 }
@@ -212,6 +268,8 @@ static const char *adapter_name(void)
 }
 static const char *driver_name(void)
 {
+    if (native_ok && nfield(8) == 3 && (nfield(60) & 0x80000000UL))
+        return "CiukiOS SuperSavage BCI";
     if (native_ok && nfield(8) == 1) return "CiukiOS VirtIO GPU 2D";
     if (native_ok && nfield(8) == 2) {
         if (probe.adapter_kind == DISP_ADAPTER_ATI) return "CiukiOS ATI base display";
@@ -246,10 +304,12 @@ static void geometry(char *out, u16 width, u16 height, u16 depth)
 static void detect(void)
 {
     int i;
-    probe_require_banked = display_in_v86();
+    protected_lfb_ok = display_in_v86() && session_query_lfb();
+    probe_require_banked = display_in_v86() && !protected_lfb_ok;
     disp_probe_init(&probe, probe_require_banked);
     disp_probe_sort_modes(&probe);
     native_read();
+    diag_raw_probes();
     selected = 0;
     for (i = 0; i < probe.mode_count; i++)
         if (probe.modes[i].id == probe.current_mode) selected = i;
@@ -592,29 +652,23 @@ static void monitor_paint(void)
 {
     struct disp_monitor *m = &probe.monitor;
     char t[96], n[20];
+    int panel_valid = native_ok && (nfield(60) & 0x80000000UL) &&
+        nfield(76) == 0x8C2E5333UL && nfield(184) == 1;
     const char *disp_name = m->valid && m->name[0] ? m->name :
-        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
-        "Internal Flat Panel (IBM ThinkPad T23)" : "Generic display";
+        panel_valid ? "Internal LCD panel (S3 firmware)" : "Generic display";
     line(0, "Display", disp_name);
     line(1, "Identification", m->valid ? "EDID verified" :
-        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
-        "Internal LCD panel (Video BIOS)" : "Not supplied by firmware / driver");
+        panel_valid ? "Native panel size verified" : "Not supplied by firmware / driver");
     line(2, "Connection", virtual_display() ? "Virtual display" :
-        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
-        "Internal LVDS flat panel" :
+        panel_valid ? "Internal LCD active" :
         !m->valid ? "VGA / Internal display" : m->input_digital ? "Digital (EDID)" : "Analog RGB (EDID)");
-    line(3, "Manufacturer", m->valid ? m->manufacturer :
-        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
-        "IBM" : "Unknown");
+    line(3, "Manufacturer", m->valid ? m->manufacturer : "Not reported");
     if (m->valid) { fmt_hex4(t, m->product); str_cat(t, "   Serial "); fmt_u32(n, m->serial); str_cat(t, n); }
-    else if (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F))
-        str_copy(t, "ThinkPad T23 14.1\" TFT");
-    else str_copy(t, "Unknown");
+    else str_copy(t, "Not reported");
     line(4, "Product", t);
     if (m->valid && m->width_cm && m->height_cm) {
         fmt_u32(t, m->width_cm); str_cat(t, " x "); fmt_u32(n, m->height_cm); str_cat(t, n); str_cat(t, " cm");
-    } else if (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F))
-        str_copy(t, "28 x 21 cm (14.1\" TFT)");
+    }
     else str_copy(t, "Not reported");
     line(5, "Image size", t);
     str_copy(t, "Not reported");
@@ -624,27 +678,24 @@ static void monitor_paint(void)
             str_cat(t, "  "); fmt_u32(n, m->preferred_millihz / 1000UL); str_cat(t, n);
             str_cat(t, "."); fmt_2(n, (u16)((m->preferred_millihz % 1000UL) / 10UL)); str_cat(t, n); str_cat(t, " Hz");
         }
-    } else if (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) {
-        str_copy(t, "1024 x 768  60.00 Hz");
+    } else if (panel_valid) {
+        geometry(t, (u16)nfield(176), (u16)nfield(180), 0);
     }
     line(6, "Preferred timing", t);
-    line(7, "Active refresh", virtual_display() ? "Managed by the host display" :
-        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
-        "60 Hz (Flat Panel timing)" : "Default video BIOS timing");
+    line(7, "Active refresh", virtual_display() ? "Managed by the host display" : "Video BIOS timing; rate not reported");
     draw_frame_text(X + 18, Y + 272, W - 36,
         virtual_display() ? "This is the virtual screen exposed by QEMU." :
-        (probe.adapter_kind == DISP_ADAPTER_S3 && (probe.pci_device == 0x8C2E || probe.pci_device == 0x8C2F)) ?
-        "Internal TFT LCD panel detected on IBM ThinkPad T23." :
+        panel_valid ? "Native LCD size comes from the active S3 panel registers." :
         "Preferred timing comes from EDID; active timing may differ.", C_INK);
 }
 static void advanced_paint(void)
 {
     char t[96], n[16];
     line(0, "Driver", driver_name());
-    line(1, "Provider / version", "CiukiOS / 0.8.0");
+    line(1, "Provider / version", "CiukiOS / 0.8.3");
     line(2, "Component", native_ok && nfield(8) ? "C:\\VM\\CVSESS.DLL" : "Built-in VGA / VBE framebuffer");
-    line(3, "Presentation", native_ok && nfield(8) == 1 ? "Native texture transfer and presentation" : native_ok && nfield(8) == 2 ? "Native scanout; CPU rendering" : "Firmware scanout; CPU rendering");
-    line(4, "3D interface", "Not implemented by this display driver");
+    line(3, "Presentation", native_ok && nfield(8) == 1 ? "Native texture transfer and presentation" : native_ok && nfield(8) == 3 ? "GPU 2D commands; protected framebuffer" : native_ok && nfield(8) == 2 ? "Native scanout; CPU rendering" : "Firmware scanout; CPU rendering");
+    line(4, "3D interface", native_ok && nfield(8) == 3 && (nfield(60) & 2) ? "Hardware Gouraud triangles (PIO)" : "Native triangles unavailable");
     line(5, "Refresh control", virtual_display() ? "Host compositor / QEMU" : "Video BIOS default; custom timing unavailable");
     if (native_ok) {
         fmt_u32(t, nfield(48) / 1024UL); str_cat(t, " KB   Error "); fmt_u32(n, nfield(32)); str_cat(t, n);
@@ -653,6 +704,11 @@ static void advanced_paint(void)
     str_copy(t, "Not applicable");
     if (native_ok && nfield(8) == 1) {
         fmt_u32(t, nfield(40)); str_cat(t, " / "); fmt_u32(n, nfield(36)); str_cat(t, n); str_cat(t, " commands completed / submitted");
+    } else if (native_ok && nfield(8) == 3 && (nfield(60) & 0x80000000UL)) {
+        str_copy(t, "2D "); fmt_u32(n, nfield(112)); str_cat(t, n);
+        str_cat(t, "   3D "); fmt_u32(n, nfield(120)); str_cat(t, n);
+        str_cat(t, "   Tests "); fmt_u32(n, nfield(140)); str_cat(t, n);
+        str_cat(t, "/"); fmt_u32(n, nfield(160)); str_cat(t, n);
     }
     line(7, "GPU status", t);
     button(18, 264, 162, "Driver manager...", 13);
@@ -781,6 +837,13 @@ static void apply(void)
     diag_event("queued", preview_mode, previous_mode);
     app_log("[DISPLAY] preview", "graphics");
 }
+static u16 mode_access_flags(u16 id)
+{
+    u16 i;
+    for (i = 0; i < probe.mode_count; ++i)
+        if (probe.modes[i].id == id) return probe.modes[i].flags;
+    return 0;
+}
 static void accept_properties(void)
 {
     if (!properties_apply()) return;
@@ -853,11 +916,15 @@ int app_event(int ev, int a, int b, int c)
         if (preview == 1 && app_display_mode(0) != 0) {
             int app_mode = app_display_mode(0), vbe_ok;
             u16 vbe_ax, vbe_bx, pitch, pixels, lines, scan;
+            int linear_active;
             vbe_ok = read_active_vbe(&vbe_ax, &vbe_bx, &pitch, &pixels, &lines, &scan);
             diag_active("preview", app_mode);
+            linear_active = !!(vbe_bx & 0x4000);
             if (app_mode != preview_mode || !vbe_ok ||
                 (vbe_bx & 0x3FFF) != preview_mode ||
-                (probe_require_banked && (vbe_bx & 0x4000))) {
+                (linear_active && ((display_in_v86() && !protected_lfb_ok) ||
+                    !(mode_access_flags(preview_mode) & DISP_MODE_LINEAR))) ||
+                (!linear_active && !(mode_access_flags(preview_mode) & DISP_MODE_BANKED))) {
                 diag_event("verify-fail", preview_mode, vbe_bx);
                 finish_preview(0); return 1;
             }

@@ -31,8 +31,8 @@ def preferred_edid(width=1024, height=768):
 
 
 class SelectionVideo(Video):
-    def __init__(self, binary, edid=None, modes=None):
-        super().__init__(binary)
+    def __init__(self, binary, edid=None, modes=None, **session_options):
+        super().__init__(binary, **session_options)
         self.edid = edid
         self.modes = MODES if modes is None else modes
         self.queries = []
@@ -71,6 +71,17 @@ STARTUP_MODES = {
 }
 
 
+def panel_info(width=1400, height=1050, *, flags=1, device=0x8C2E5333,
+               metadata=0x80000000, magic=0x44475643):
+    """The frozen 192-byte native diagnostics contract, without engine claims."""
+    data = bytearray(192)
+    struct.pack_into('<IHH', data, 0, magic, 0x100, 192)
+    struct.pack_into('<I', data, 60, metadata)
+    struct.pack_into('<I', data, 76, device)
+    struct.pack_into('<III', data, 176, width, height, flags)
+    return bytes(data)
+
+
 def mode_descriptor(width, height, depth):
     info = bytearray(descriptor())
     bpp = depth
@@ -101,8 +112,9 @@ def mode_descriptor(width, height, depth):
 class StartupVideo(Video):
     """Run the production startup path against a scripted VBE BIOS."""
     def __init__(self, binary, modes=None, edid=None, fail_set=(),
-                 fail_readback=(), fail_allocations=0, raw_mode_ids=None):
-        super().__init__(binary, msw_pe=1)
+                 fail_readback=(), fail_allocations=0, raw_mode_ids=None,
+                 **session_options):
+        super().__init__(binary, msw_pe=1, **session_options)
         self.modes = STARTUP_MODES if modes is None else modes
         self.descriptors = {
             mode: mode_descriptor(*details) for mode, details in self.modes.items()
@@ -343,8 +355,115 @@ def main():
     assert not set(flagged_ids).intersection(startup.mode_queries), startup.mode_queries
     checks.append('Flagged ROM mode IDs are filtered, never queried, and remain untouched across retry')
 
+    protected = StartupVideo(code, session_present=True)
+    assert run_startup(protected) is False
+    assert protected.get('vc_lfb', 1) == 2 and protected.get('vc_mode') == 0x11C
+    assert protected.mode_attempts == [(0x11C, True)]
+    assert protected.get('vc_start_attempts', 1) == 1
+    assert protected.open_calls == protected.local_limit_calls == 0
+    assert struct.unpack_from('<H', protected.bind_packets[0], 22)[0] == 32
+    assert not protected.call('vc_end')
+    checks.append('Protected AUTO uses true BIOS-linear full-colour mode without local CR0 opening or bank alias')
+
+    protected = StartupVideo(code, session_present=True,
+                             session_fail_bind_modes={0x11C})
+    assert run_startup(protected) is False
+    assert protected.get('vc_lfb', 1) == 2 and protected.get('vc_mode') == 0x11B
+    assert protected.mode_attempts == [(0x11C, True), (0x11B, True)]
+    assert protected.get('vc_start_attempts', 1) == 2
+    assert mode_list(protected) == list(STARTUP_MODES)
+    assert protected.session_calls.count(5) == 1
+    assert protected.text_restores == 1
+    assert not protected.call('vc_end')
+    checks.append('Failed protected BIND with safe cleanup retries the next ranked candidate without banked writes')
+
+    retained = StartupVideo(code, session_present=True,
+                            session_fail_bind_modes={0x11C}, session_retain=True,
+                            session_unbind_ok=False)
+    assert run_startup(retained) is True
+    assert retained.get('vc_session_owned', 1) == 1
+    assert retained.get('vc_lfb', 1) == 2 and retained.get('vc_last_failure', 1) == 7
+    assert retained.mode_attempts == [(0x11C, True)] and retained.text_restores == 0
+    assert retained.get('vc_start_attempts', 1) == 1
+    assert mode_list(retained) == list(STARTUP_MODES)
+    assert retained.call('vc_desktop_begin') is True
+    assert retained.mode_attempts == [(0x11C, True)] and retained.text_restores == 0
+    retained.session_unbind_ok = True
+    assert not retained.call('vc_end') and retained.get('vc_session_owned', 1) == 0
+    checks.append('Retained failed BIND halts AUTO retries and VGA restore until protected ownership drains')
+
+    incomplete = StartupVideo(code, session_present=True, session_caps=0x10000)
+    assert run_startup(incomplete) is False
+    assert incomplete.get('vc_lfb', 1) == 0
+    assert incomplete.mode_attempts == [(0x11C, False)]
+    assert incomplete.open_calls == incomplete.local_limit_calls == 0
+    assert not incomplete.bind_packets
+    checks.append('A discovered provider without complete fill support stays on checked banked BIOS mode')
+
+    explicit = StartupVideo(code, session_present=True,
+                            session_fail_bind_modes={0x11C})
+    explicit.set('vc_mode', 0x11C)
+    assert explicit.call('vc_begin') is True
+    assert explicit.mode_attempts == [(0x11C, True)]
+    assert explicit.get('vc_mode') == 0x11C and explicit.get('vc_start_attempts', 1) == 0
+    assert explicit.get('vc_session_owned', 1) == 0
+    checks.append('Explicit protected mode failure preserves the requested mode after idempotent cleanup')
+
+    panel_modes = STARTUP_MODES.copy()
+    panel_modes.update({0x121: (1400, 1050, 16), 0x122: (1400, 1050, 24),
+                        0x123: (1400, 1050, 32), 0x124: (1600, 1200, 32)})
+    for width, height, expected in ((1024, 768, 0x11C), (1400, 1050, 0x123)):
+        panel = StartupVideo(code, modes=panel_modes, session_present=True,
+                             session_display_info=panel_info(width, height))
+        panel.set('vc_min_depth', 15, 1)
+        panel.call('vc_auto')
+        assert (panel.get('vc_max_width'), panel.get('vc_max_height')) == (width, height)
+        assert panel.get('vc_mode') == expected and panel.get('vc_best_depth', 1) == 32
+        assert panel.session_calls.count(0x14) == 1
+        assert panel.get('vc_mode_count') == len(panel_modes)
+        assert set(panel.mode_queries) == set(panel_modes), 'Native bound must retain the full firmware list'
+        assert panel.get('vc_session_owned', 1) == 0 and not panel.bind_packets
+        checks.append(f'Native {width}x{height} panel bounds existing VBE modes and chooses greatest direct-colour depth')
+
+    for label, options in (
+        ('unsupported PCI ID', {'session_display_info': panel_info(device=0x8C2F5333)}),
+        ('malformed CVGD', {'session_display_info': panel_info(magic=0)}),
+        ('missing native status marker', {'session_display_info': panel_info(metadata=0)}),
+        ('inactive panel', {'session_display_info': panel_info(flags=0)}),
+        ('unstable panel flag', {'session_display_info': panel_info(flags=2)}),
+        ('all-FF diagnostics', {'session_display_info': bytes([255])*192}),
+        ('non-system VM', {'session_active': 1, 'session_display_info': panel_info()}),
+        ('unavailable service', {'session_display_ok': False, 'session_display_info': panel_info()}),
+        ('empty diagnostics', {}),
+    ):
+        panel = StartupVideo(code, modes=panel_modes, session_present=True, **options)
+        panel.set('vc_min_depth', 15, 1)
+        panel.call('vc_auto')
+        assert (panel.get('vc_max_width'), panel.get('vc_max_height')) == (1024, 768), label
+        assert panel.get('vc_mode') == 0x11C, label
+        assert panel.session_calls.count(0x14) == 1, label
+        assert panel.get('vc_session_owned', 1) == 0 and not panel.bind_packets
+        checks.append(f'Invalid native panel evidence keeps the checked XGA fallback: {label}')
+
+    absent_panel = StartupVideo(code, modes=panel_modes)
+    absent_panel.set('vc_min_depth', 15, 1)
+    absent_panel.call('vc_auto')
+    assert absent_panel.get('vc_mode') == 0x11C and not absent_panel.session_calls
+    checks.append('Absent protected provider makes no native panel service call')
+
+    for width, height, expected in ((1024, 768, 0x11C), (1280, 800, 0x120)):
+        override = StartupVideo(code, modes=panel_modes, session_present=True,
+                                edid=preferred_edid(width, height),
+                                session_display_info=panel_info(1400, 1050))
+        override.set('vc_min_depth', 15, 1)
+        override.call('vc_auto')
+        assert override.get('vc_mode') == expected
+        assert (override.get('vc_max_width'), override.get('vc_max_height')) == (width, height)
+        assert 0x14 not in override.session_calls, 'EDID must skip the native panel probe'
+        checks.append(f'Valid {width}x{height} EDID takes precedence without a native panel service call')
+
     report = dict(passed=True, checks=checks,
-                  scope='Production NASM selection/startup instructions; VBE descriptors, BIOS failures, and EDID supplied by the Unicorn fixture',
+                  scope='Production NASM selection/startup instructions; VBE descriptors, BIOS failures, EDID and the CVSESSION service boundary supplied by the Unicorn fixture',
                   source_sha256=digest(ROOT/'src/com/vbe_modes.inc'),
                   fixture_sha256=digest(binary))
     (out/'result.json').write_text(json.dumps(report, indent=2)+'\n')

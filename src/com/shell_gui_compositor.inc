@@ -62,6 +62,12 @@ ui_comp_begin:
     jne .done
     call ui_pages_begin
     call vc_session_fb_bind
+    jnc .done
+    cmp byte [vc_lfb],2
+    jne .done                  ; ordinary banked transport remains optional
+    mov byte [ui_active],0
+    call ui_video_wait_release
+    mov byte [ui_comp_recover],1 ; no wallpaper/pointer paint before mode retry
 .done:
     pop es
     popad
@@ -131,7 +137,7 @@ ui_umb_alloc:
 ui_comp_end:
     pushad
     push es
-    call vc_session_fb_release
+    call ui_video_wait_release
     mov ax,[ui_comp_seg]
     test ax,ax
     jz .done
@@ -161,6 +167,13 @@ ui_comp_end:
     ret
 
 ui_comp_draw:
+    cmp byte [ui_active],1
+    jne .inactive
+    cmp byte [ui_vbe],1
+    jne .surface
+    cmp byte [vc_active],1
+    jne .inactive
+.surface:
     cmp word [ui_comp_seg],0
     je .direct
     cmp byte [ui_comp_dirty],1
@@ -246,7 +259,13 @@ ui_comp_draw:
     ret
 .restore_pointer:
     ; A failed flip disables page mode; restore a cursor hidden for syncing.
+    cmp byte [ui_active],1
+    jne .done
     call ui_pointer_show
+    ret
+.inactive:
+    mov byte [ui_active],0
+    mov byte [ui_comp_recover],1
     ret
 
 ; Compose the damage rectangle band by band, presenting each finished band
@@ -842,8 +861,8 @@ ui_pages_begin:
     shl edx,16
     cmp eax,edx
     ja .done
-    cmp byte [vc_lfb],1
-    je .probe
+    cmp byte [vc_lfb],0
+    jne .probe
     dec eax
     shr eax,16
     movzx edx,word [vc_bank_step]
@@ -1015,6 +1034,12 @@ ui_pages_present:
     ret
 
 ui_pages_failure:
+    cmp byte [vc_lfb],2
+    jne .ordinary
+    mov byte [ui_active],0
+    mov byte [ui_comp_recover],1
+    ret                        ; retained page/mapping state belongs to cleanup
+.ordinary:
     mov byte [ui_page_failed],1
     mov byte [ui_page_enabled],0
     mov byte [ui_page_pending],0

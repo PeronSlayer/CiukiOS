@@ -19,6 +19,8 @@ VM_OP_READBACK         equ 3
 ; This is not arbitrary guest device discovery or a security boundary.
 VM_OP_BIND_FB          equ 4
 VM_OP_UNBIND_FB        equ 5
+; UNBIND is idempotent success when inactive and already unbound. Active
+; sessions or incomplete hardware cleanup retain ownership and return error.
 VM_OP_FB_COPY          equ 6
 ; Bounded row transport for the desktop compositor. ES:DI points to an
 ; exact 32-byte CVFR packet; CX must be at least 32. Packet sourceSeg:off
@@ -36,12 +38,23 @@ VM_OP_FB_PAGE_COPY     equ 12h
 VM_OP_FB_PRESENT       equ 13h
 ; System-VM read-only native display state. ES:DI destination, CX >=192.
 ; Header CVGD/version 0100h/size192; u32 fields at 8 backend (0 firmware,
-; 1 VirtIO, 2 legacy scanout), 12 phase, 16 width,20 height,24 pitch,28 bpp,
+; 1 VirtIO, 2 legacy scanout, 3 owned SuperSavage engine), 12 phase,
+; 16 width,20 height,24 pitch,28 bpp,
 ; 32 error,36 submits,40 completions,44 physical,48 bytes,52 EDID bytes,
-; 56 active DOS session; reserved60; optional base EDID128 at64.
+; 56 active DOS session;60 bit31 means native SuperSavage diagnostic128
+; at64, low bits are that driver's hardware caps. Otherwise optional base
+; EDID128 at64 when field52 says128. Backend3 counters36/40 are submitted
+; command words/completed engine operations; exact counts are in snapshot.
 VM_OP_DISPLAY_INFO     equ 14h
 VM_DISPLAY_INFO_SIZE   equ 192
 VM_DISPLAY_INFO_MAGIC  equ 044475643h
+; Bounded protected native-pixel fill, system VM only. ES:DI names an exact
+; 32-byte CVFF packet; CX >=32. No firmware call or guest CR0 switch occurs.
+VM_OP_FB_FILL          equ 15h
+; Native hardware triangle, system VM only. ES:DI points to the 64-byte
+; CVT3 packet below. Unsupported hardware returns an error, not a software
+; render falsely reported as native acceleration.
+VM_OP_FB_TRIANGLE      equ 16h
 ; Optional monitored-host scheduler. BIND_SCHED receives a 256-byte
 ; cvsched_descriptor at ES:DI while inactive. BEGIN arms the Jemm physical
 ; IRQ service; END refuses while HDPMI still reports host/client/callback
@@ -188,8 +201,13 @@ VM_CAP_DESKTOP_ROWS    equ 00010000h
 ; Runtime flag in QUERY's packet, set only for an active native GPU binding.
 VM_CAP_GPU_PRESENT    equ 00020000h
 VM_CAP_GPU_ASYNC      equ 00040000h
+VM_CAP_DESKTOP_FILL   equ 00080000h
+; Runtime engine capabilities, advertised only while the native binding is
+; ready. DESKTOP_FILL above also covers the protected CPU fallback.
+VM_CAP_NATIVE_TRIANGLES equ 00100000h
+VM_CAP_NATIVE_FILL    equ 00200000h
 VM_FB_MODE_BANKED     equ 8000h
-VM_CAPABILITIES_FULL   equ VM_CAPABILITIES + VM_CAP_DESKTOP_ROWS
+VM_CAPABILITIES_FULL   equ VM_CAPABILITIES + VM_CAP_DESKTOP_ROWS + VM_CAP_DESKTOP_FILL
 VM_INFO_SIZE           equ 64
 VM_INFO_MAGIC          equ 0534D5643h ; bytes CVMS
 VM_INFO_VERSION        equ 4
@@ -214,6 +232,11 @@ VM_FB_PACKET_SIZE      equ 16
 ; Optional extended BIND packet carries firmware mode geometry for native
 ; legacy scanout drivers. The original 16-byte form remains accepted.
 VM_FB_MODE_PACKET_SIZE equ 24
+; Adds firmware-reported usable VRAM for native offscreen ownership. The
+; original16/24-byte forms remain CPU-compatible, without native S3 scratch.
+VM_FB_ACCEL_PACKET_SIZE equ 32
+VM_FB_ACCEL_USABLE_BYTES equ 24
+VM_FB_ACCEL_RESERVED   equ 28
 VM_FB_PACKET_MAGIC     equ 042465643h ; bytes CVFB
 VM_FB_PACKET_VERSION   equ 4
 VM_FB_PACKET_BYTES     equ 6
@@ -244,6 +267,21 @@ VM_FB_PAGE_RESERVED0   equ 24
 VM_FB_PAGE_RESERVED1   equ 28
 VM_FB_ROWS_MAX_BYTES   equ 04000h
 VM_FB_ROWS_MAX_COUNT   equ 64
+VM_FB_FILL_PACKET_SIZE equ 32
+VM_FB_FILL_MAGIC       equ 046465643h ; bytes CVFF
+VM_FB_FILL_OFFSET      equ 8
+VM_FB_FILL_PIXELS      equ 12
+VM_FB_FILL_COLOUR      equ 16
+VM_FB_FILL_PIXEL_BYTES equ 20
+VM_FB_FILL_RESERVED0   equ 24
+VM_FB_FILL_RESERVED1   equ 28
+VM_FB_TRIANGLE_PACKET_SIZE equ 64
+VM_FB_TRIANGLE_MAGIC   equ 033545643h ; bytes CVT3
+VM_FB_TRIANGLE_SIZE    equ 4          ; u32 packet size, must be 64
+VM_FB_TRIANGLE_FLAGS   equ 8          ; u32, must be zero
+VM_FB_TRIANGLE_RESERVED equ 12        ; u32, must be zero
+; Three vertices at 16,32,48: IEEE754 binary32 x/y/z as stored bits, then
+; ARGB8888 colour. The chip-specific driver validates coordinates and depth.
 VM_ERROR_OPERATION     equ 1
 VM_ERROR_CONTEXT       equ 2
 VM_ERROR_ACTIVE        equ 3

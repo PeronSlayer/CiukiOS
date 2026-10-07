@@ -123,14 +123,17 @@ int disp_probe_parse_edid(const u8 *edid, u16 bytes, struct disp_monitor *out)
 }
 
 #if !defined(DISP_PROBE_HOST_TEST) || defined(DISP_PROBE_TEST_BIOS)
-static int get_mode_info(u16 id)
+static int get_mode_info(u16 id, u16 *status)
 {
     struct regs r;
+    int ok;
     mem_set(mode_info, 0, sizeof mode_info);
     mem_set(&r, 0, sizeof r);
     r.ax = 0x4F01; r.cx = id;
     r.es = app_seg(); r.di = PROBE_OFF(mode_info);
-    return bios_call(&r);
+    ok = bios_call(&r);
+    if (status) *status = r.ax;
+    return ok ? 1 : 0;
 }
 
 static int valid_pitch(u16 width, u16 height, u16 bpp, u16 pitch, u32 *frame_out)
@@ -159,10 +162,10 @@ static int valid_rgb_masks(const u8 *masks, u16 bpp)
     return 1;
 }
 
-static int mode_format_ok(u16 width, u16 height, u16 bpp, u8 model)
+static int mode_format_ok(u16 width, u16 height, u16 bpp, u8 model, u8 planes)
 {
     return width >= 640 && width <= 2560 && height >= 480 && height <= 1600 &&
-        (bpp == 15 || bpp == 16 || bpp == 24 || bpp == 32) && model == 6;
+        planes == 1 && (bpp == 15 || bpp == 16 || bpp == 24 || bpp == 32) && model == 6;
 }
 
 static int banked_access_ok(u16 attrs, u16 width, u16 height, u16 bpp, u16 pitch)
@@ -205,18 +208,34 @@ static int get_scanline(u16 *pitch, u16 *lines)
 static int add_mode(struct disp_probe *p, u16 id, int current, int require_banked)
 {
     u16 attrs, width, height, bank_pitch, linear_pitch, pitch, bpp, flags = 0;
+    u16 status = 0;
     u16 active_pitch = 0, active_lines = 0;
     u32 frame = 0;
     int banked_ok, linear_ok, current_linear;
     struct disp_mode *m;
-    if (!get_mode_info(id)) return 0;
+    struct disp_probe_diag *raw = 0;
+    if (p->diag_count < DISP_PROBE_DIAGS) {
+        raw = &p->diagnostics[p->diag_count++];
+        mem_set(raw, 0, sizeof *raw);
+        raw->id = id;
+    }
+    if (!get_mode_info(id, &status)) {
+        if (raw) raw->status = status;
+        return 0;
+    }
     attrs = rd16(mode_info);
     width = rd16(mode_info + 18); height = rd16(mode_info + 20);
     bpp = mode_info[25];
-    if (!mode_format_ok(width, height, bpp, mode_info[27])) return 0;
     bank_pitch = rd16(mode_info + 16);
     linear_pitch = p->vbe_version >= 0x0300 && rd16(mode_info + 50) ?
         rd16(mode_info + 50) : bank_pitch;
+    if (raw) {
+        raw->status = status; raw->attributes = attrs;
+        raw->planes = mode_info[24]; raw->width = width; raw->height = height;
+        raw->banked_pitch = bank_pitch; raw->linear_pitch = linear_pitch;
+        raw->bpp = mode_info[25]; raw->memory_model = mode_info[27];
+    }
+    if (!mode_format_ok(width, height, bpp, mode_info[27], mode_info[24])) return 0;
     banked_ok = (attrs & 0x19) == 0x19 &&
         banked_access_ok(attrs, width, height, bpp, bank_pitch);
     linear_ok = (attrs & 0x19) == 0x19 &&
@@ -259,6 +278,7 @@ static int add_mode(struct disp_probe *p, u16 id, int current, int require_banke
     m = &p->modes[p->mode_count++];
     m->id = id; m->width = width; m->height = height; m->pitch = pitch;
     m->bpp = bpp; m->flags = flags; m->frame_bytes = frame;
+    if (raw) raw->accepted = 1;
     return 1;
 }
 
@@ -407,8 +427,9 @@ int disp_probe_init(struct disp_probe *out, int require_banked)
 
 int disp_probe_get_mode_diag(u16 id, struct disp_mode_diag *out)
 {
-    if (!out || !get_mode_info(id)) return 0;
+    if (!out || !get_mode_info(id, &out->status)) return 0;
     mem_set(out, 0, sizeof *out);
+    out->status = 0x004F;
     out->attributes = rd16(mode_info);
     out->window_a_attributes = mode_info[2];
     out->window_b_attributes = mode_info[3];
@@ -418,6 +439,9 @@ int disp_probe_get_mode_diag(u16 id, struct disp_mode_diag *out)
     out->window_b_segment = rd16(mode_info + 10);
     out->banked_pitch = rd16(mode_info + 16);
     out->linear_pitch = rd16(mode_info + 50);
+    out->width = rd16(mode_info + 18);
+    out->height = rd16(mode_info + 20);
+    out->planes = mode_info[24];
     out->bpp = mode_info[25];
     out->memory_model = mode_info[27];
     out->framebuffer_phys = rd32(mode_info + 40);
@@ -427,6 +451,14 @@ int disp_probe_get_mode_diag(u16 id, struct disp_mode_diag *out)
         for (i = 0; i < 8; ++i) out->bank_masks[i] = mode_info[31 + i];
         for (i = 0; i < 8; ++i) out->linear_masks[i] = mode_info[54 + i];
     }
+    return 1;
+}
+
+int disp_probe_get_raw_diag(const struct disp_probe *probe, u16 index,
+                            struct disp_probe_diag *out)
+{
+    if (!probe || !out || index >= probe->diag_count) return 0;
+    *out = probe->diagnostics[index];
     return 1;
 }
 #endif
