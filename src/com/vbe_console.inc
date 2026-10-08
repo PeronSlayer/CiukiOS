@@ -296,15 +296,34 @@ vc_begin:
     call vc_bios
     cmp ax,0x004F
     jne .skip_4f06
-    mov ax,[vc_bios_cx]
+    ; All 4F06 outputs form one byte-addressed tuple. The T23 may return
+    ; a stride eight times too small despite AX=004F and plausible CX/DX.
+    ; Reject that reply without poisoning the validated 4F01 layout.
+    mov bx,[vc_bios_bx]
+    mov ax,bx
+    xor dx,dx
+    movzx cx,byte [vc_bytes]
+    div cx
+    cmp ax,[vc_bios_cx]
+    jne .skip_4f06
     cmp ax,[vc_info+18]
     jb .skip_4f06
     mov ax,[vc_bios_dx]
     cmp ax,[vc_info+20]
     jb .skip_4f06
+    ; TotalMemory is in 64 KiB units. DX:AX / byte pitch yields rows;
+    ; when its quotient would exceed 65535, every returned 16-bit DX fits.
+    mov dx,[vc_controller+18]
+    cmp dx,bx
+    jae .scanline_extent_ok
+    xor ax,ax
+    div bx
+    cmp ax,[vc_bios_dx]
+    jb .skip_4f06
+.scanline_extent_ok:
+    mov ax,[vc_bios_dx]
     mov [vc_scan_lines],ax
-    mov ax,[vc_bios_bx]
-    mov [vc_info+16],ax
+    mov [vc_info+16],bx
 .skip_4f06:
     mov byte [vc_begin_stage],6
     call vc_validate_active

@@ -2337,6 +2337,7 @@ print_dual_cx_string:
 ; EXEC caller. AX is the BIOS result; query-only BX/CX/DX outputs are captured
 ; separately, so setter calls cannot silently replace live shell registers.
 ; This path also exists in COMMAND.COM, which does not include the VBE UI.
+%ifdef COMMAND_COMPAT
 shell_bios:
     pushf
     pushad
@@ -2362,6 +2363,16 @@ shell_bios_ax dw 0
 shell_bios_bx dw 0
 shell_bios_cx dw 0
 shell_bios_dx dw 0
+%else
+; The desktop already supplies the identical preserved BIOS call contract.
+; Query snapshots are consumed immediately by both callers. Sharing it frees
+; resident space without changing the stack/COM limits or COMMAND.COM.
+shell_bios equ vc_bios
+shell_bios_ax equ vc_bios_result
+shell_bios_bx equ vc_bios_bx
+shell_bios_cx equ vc_bios_cx
+shell_bios_dx equ vc_bios_dx
+%endif
 
 redraw_title_bar:
 %ifndef COMMAND_COMPAT

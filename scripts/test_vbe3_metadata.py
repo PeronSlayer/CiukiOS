@@ -34,6 +34,17 @@ def descriptor():
     return info
 
 
+def xga_descriptor(depth=32):
+    """VBE2 geometry from the failing T23 profile, with its checked stride."""
+    info = descriptor()
+    struct.pack_into('<HHH', info, 16, 1024*((depth+7)//8), 1024, 768)
+    info[25] = depth
+    if depth == 16:
+        info[31:39] = bytes((5, 11, 6, 5, 5, 0, 0, 0))
+    info[50:62] = bytes(12)
+    return info
+
+
 class Video:
     def __init__(self, binary, info=None, version=0x300, open_ok=True, set_ok=True,
                  reported_linear=None, reported_mode=None, mode_status=0x004F,
@@ -41,7 +52,8 @@ class Video:
                  session_active=0, session_magic=0x534D5643,
                  session_fail_bind_modes=(), session_retain=False,
                  session_unbind_ok=True, session_io_ok=True,
-                 session_display_info=None, session_display_ok=True):
+                 session_display_info=None, session_display_ok=True,
+                 scanline_result=None):
         self.cpu = Uc(UC_ARCH_X86, UC_MODE_16)
         self.cpu.mem_map(0, 0x100000)
         self.cpu.mem_write(BASE+0x100, binary)
@@ -61,6 +73,7 @@ class Video:
         self.reported_linear = reported_linear
         self.reported_mode = reported_mode
         self.mode_status = mode_status
+        self.scanline_result = scanline_result
         self.msw_pe = msw_pe
         self.session_present = session_present
         self.session_caps = session_caps
@@ -238,10 +251,16 @@ class Video:
             return
         elif ax == 0x4F06:
             # Active pitch is allowed to differ from the mode-info default.
-            pitch = 3456 if self.linear else 3216
+            if self.scanline_result is None:
+                pitch = 3456 if self.linear else 3216
+                status, pixels, rows = 0x004F, pitch//4, 2048
+            else:
+                status, pitch, pixels, rows = self.scanline_result
             cpu.reg_write(UC_X86_REG_BX, pitch)
-            cpu.reg_write(UC_X86_REG_CX, pitch//4)
-            cpu.reg_write(UC_X86_REG_DX, 2048)
+            cpu.reg_write(UC_X86_REG_CX, pixels)
+            cpu.reg_write(UC_X86_REG_DX, rows)
+            cpu.reg_write(UC_X86_REG_AX, status)
+            return
         elif ax == 0x4F07:
             pass
         elif ax == 0x1130:
@@ -527,6 +546,71 @@ def main():
     assert video.call('vc_begin') and video.get('vc_active', 1) == 0
     assert video.set_calls == [0x4140] and video.allocations == video.frees == 1
     passed('Valid linear-only descriptor accepted; failed linear-only set frees memory and cannot fake bank fallback')
+
+    # The diskseq58 T23 firmware answered 4F06 with AX=004F and plausible
+    # pixels/rows but a stride equal to the checked byte pitch divided by 8.
+    # Such output is not byte-addressed as VBE specifies. Reject the entire
+    # query; neither scale a vendor-specific unit nor discard the valid mode.
+    for depth in (32, 16):
+        expected_pitch = 1024*((depth+7)//8)
+        for transport, options, marker in (
+            ('local', {}, 1), ('banked', {'msw_pe': 1}, 0),
+            ('protected', {'msw_pe': 1, 'session_present': True}, 2),
+        ):
+            response = (0x004F, expected_pitch//8, 1024, 1536)
+            video = Video(code, xga_descriptor(depth), version=0x200,
+                          scanline_result=response, **options)
+            assert not video.call('vc_begin'), (depth, transport, 'valid mode poisoned by malformed 4F06')
+            assert video.get('vc_lfb', 1) == marker
+            assert video.get('vc_pitch') == expected_pitch
+            assert video.get('vc_scan_lines') == 768
+            assert video.get('vc_frame_bytes', 4) == video.get('vc_access_bytes', 4) == expected_pitch*768
+            if marker == 2:
+                assert struct.unpack_from('<H', video.bind_packets[-1], 20)[0] == expected_pitch
+            assert not video.call('vc_end')
+            passed(f'T23 {depth}bpp factor-of-eight scanline response cannot poison checked {transport} stride or enable extra pages')
+
+    for transport, options in (
+        ('local', {}), ('banked', {'msw_pe': 1}),
+        ('protected', {'msw_pe': 1, 'session_present': True}),
+    ):
+        for label, response, expected_pitch, expected_rows in (
+            ('valid larger byte stride', (0x004F, 4352, 1088, 1024), 4352, 1024),
+            ('valid nonaligned byte stride', (0x004F, 4097, 1024, 768), 4097, 768),
+            ('query failure', (0x014F, 512, 1024, 1536), 4096, 768),
+            ('too few logical pixels', (0x004F, 4096, 1023, 1536), 4096, 768),
+            ('too few logical rows', (0x004F, 4096, 1024, 767), 4096, 768),
+            ('pixel count disagrees with byte stride', (0x004F, 4352, 1024, 1024), 4096, 768),
+            ('logical extent exceeds usable VRAM', (0x004F, 4096, 1024, 0xffff), 4096, 768),
+        ):
+            video = Video(code, xga_descriptor(), version=0x200,
+                          scanline_result=response, **options)
+            assert not video.call('vc_begin'), (label, transport)
+            assert (video.get('vc_pitch'), video.get('vc_scan_lines')) == (
+                expected_pitch, expected_rows), (label, transport)
+            assert video.get('vc_frame_bytes', 4) == expected_pitch*768
+            assert not video.call('vc_end')
+            passed(f'4F06 {label} handled atomically for {transport} framebuffer')
+
+    for label, memory_blocks, reported_pitch, reported_rows, expected_rows in (
+        ('zero byte pitch rejected without division trap', 512, 0, 768, 768),
+        ('unknown zero TotalMemory retains the checked visible frame', 0, 4352, 1024, 768),
+        ('capacity quotient 65520 rejects reported 65535 rows', 4095, 4096, 65535, 768),
+        ('capacity quotient 65536 accepts 65535 rows without overflow', 4096, 4096, 65535, 65535),
+    ):
+        pixels = reported_pitch//4
+        video = Video(code, xga_descriptor(), version=0x200, msw_pe=1,
+                      session_present=True,
+                      scanline_result=(0x004F, reported_pitch, pixels, reported_rows))
+        # vc_begin already has a cached controller, and the BIOS mock also
+        # retains the same TotalMemory if a later controller query is needed.
+        struct.pack_into('<H', video.controller, 18, memory_blocks)
+        video.cpu.mem_write(video.symbols['vc_controller'], bytes(video.controller))
+        assert not video.call('vc_begin'), label
+        assert video.get('vc_pitch') == 4096 and video.get('vc_scan_lines') == expected_rows, label
+        assert video.get('vc_access_bytes', 4) == 4096*768
+        assert not video.call('vc_end')
+        passed(f'4F06 integer-capacity boundary: {label}')
 
     result = {'status': 'passed', 'checks': checks,
               'fixture_sha256': hashlib.sha256(code).hexdigest(),

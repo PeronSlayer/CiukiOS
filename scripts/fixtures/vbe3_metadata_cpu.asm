@@ -19,6 +19,8 @@ export vc_controller
 export vc_palette
 export vc_colors
 export vc_pitch
+export vc_scan_lines
+export vc_frame_bytes
 export vc_lfb
 export vc_lfb_ok
 export vc_bank_ok

@@ -156,6 +156,33 @@ def audio_idle_snapshot(vm, output, name, shell_image, shell_listing, sfx_image,
         vm.hmp('cont')
 
 
+def video_layout_snapshot(vm, output, shell_image, shell_listing, expected_height):
+    """Read one-page scanline state from the live shell before entering DOS."""
+    path = output / 'vbe06-layout-ram-1m.bin'
+    vm.hmp('stop')
+    try:
+        vm.hmp(f'pmemsave 0 0x100000 "{path}"')
+        ram = path.read_bytes()
+        assert len(ram) == 0x100000, 'incomplete conventional RAM capture'
+        candidates = []
+        position = 0
+        while (position := ram.find(shell_image[:64], position)) >= 0:
+            candidates.append(position)
+            position += 1
+        assert len(candidates) == 1, f'ambiguous active shell candidates: {candidates}'
+        shell_at = candidates[0]
+        scan_addr = shell_at + listing_address(shell_listing, 'vc_scan_lines')
+        page_addr = shell_at + listing_address(shell_listing, 'ui_page_enabled')
+        scan_lines = int.from_bytes(ram[scan_addr:scan_addr + 2], 'little')
+        page_enabled = ram[page_addr]
+        snapshot = {'ram_capture': path.name, 'shell_physical': shell_at,
+                    'vc_scan_lines': scan_lines, 'ui_page_enabled': page_enabled}
+        assert scan_lines == expected_height and page_enabled == 0, snapshot
+        return snapshot
+    finally:
+        vm.hmp('cont')
+
+
 def verify_audio_idle(snapshot):
     fields = snapshot['fields']
     assert fields['sfx_available'] == 1 and fields['sfx_buffer'] != 0, snapshot
@@ -286,15 +313,23 @@ def main():
     parser.add_argument('--memory', type=int, default=128)
     parser.add_argument('--exercise-native-client', action='store_true',
                         help='exercise streamed HELP and the native 3D client unsupported path')
+    parser.add_argument('--vbe06-pitch-divisor8', action='store_true',
+                        help='install a test-only INT 10h TSR that divides successful 4F06 BX by 8')
     args = parser.parse_args()
+    if args.vbe06_pitch_divisor8 and args.edid != '1280x800':
+        parser.error('--vbe06-pitch-divisor8 requires --edid 1280x800')
     source, output = args.image.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     disk = output / 'disk.img'
     report_path = output / 'report.json'
     report = {'status': 'running', 'physical_hardware_qualified': False,
-              'scope': 'Pristine installed image; preboot VGA/audio devices; real keyboard and read-only RAM evidence',
+              'scope': ('Pristine installed image; preboot VGA/audio devices; real keyboard and read-only RAM evidence'
+                        if not args.vbe06_pitch_divisor8 else
+                        'Pristine source-image preflight, then a private HDD copy with test-only VBE 4F06 TSR override; read-only RAM evidence'),
               'image': str(source), 'image_sha256': file_sha256(source), 'edid': args.edid,
-              'audio_profile': args.audio, 'memory_mib': args.memory, 'guest_binary_overrides': False,
+              'audio_profile': args.audio, 'memory_mib': args.memory,
+              'guest_binary_overrides': bool(args.vbe06_pitch_divisor8),
+              'vbe06_pitch_divisor8': bool(args.vbe06_pitch_divisor8),
               'checks': []}
     expected = (1024, 768) if args.edid == 'off' else tuple(map(int, args.edid.split('x')))
     report['expected_geometry'] = list(expected)
@@ -307,6 +342,7 @@ def main():
         fs = FAT16(source)
         offset = fs.start
         shell_image, sfx_image = fs.read(SHELL_PATH), fs.read(SFX_PATH)
+        driver_cfg = fs.read('DRIVERS/DRIVERS.CFG')
         boot_pcm = fs.read('SYSTEM/BOOT.PCM')
         display_cfg = fs.read('SYSTEM/VIDEO/DISPLAY.CFG')
         assert display_cfg == b'AUTO', f'canonical default must be AUTO, got {display_cfg!r}'
@@ -340,12 +376,37 @@ def main():
             assert target.read_bytes() == installed, f'shipped {name} differs from fresh source assembly'
         shell_listing = (output / 'SHELL.lst').read_text().splitlines()
         sfx_listing = (output / 'SFX.lst').read_text().splitlines()
+        fault_tsr = None
+        if args.vbe06_pitch_divisor8:
+            fault_tsr = output / 'VBE06TSR.COM'
+            subprocess.run(['nasm', '-f', 'bin', '-l', str(output / 'VBE06TSR.lst'),
+                            '-o', str(fault_tsr), 'scripts/fixtures/vbe06_fault.asm'],
+                           cwd=ROOT, check=True)
         del fs
         shutil.copyfile(source, disk)
         assert file_sha256(disk) == report['image_sha256'], 'private test image changed before boot'
         report['volume_offset_bytes'] = offset
         volume = f'{disk}@@{offset}'
-        report['checks'].append('pristine image, AUTO default, and exact freshly assembled SHELL/SFX verified')
+        if args.vbe06_pitch_divisor8:
+            lines = driver_cfg.decode('ascii').splitlines()
+            assert not any('VBE06TSR' in line for line in lines), 'fault driver already exists in source image'
+            fault_line = r'1 VIDEO VBE06TSR \DRIVERS\VIDEO\VBE06TSR.COM'
+            s3_index = next((i for i, line in enumerate(lines) if 'S3VBEFIX' in line), None)
+            lines.insert(s3_index + 1 if s3_index is not None else len(lines), fault_line)
+            cfg_path = output / 'DRIVERS.CFG'
+            cfg_path.write_bytes(('\r\n'.join(lines) + '\r\n').encode('ascii'))
+            subprocess.run(['mcopy', '-o', '-i', volume, str(fault_tsr),
+                            '::DRIVERS/VIDEO/VBE06TSR.COM'], check=True)
+            subprocess.run(['mcopy', '-o', '-i', volume, str(cfg_path),
+                            '::DRIVERS/DRIVERS.CFG'], check=True)
+            report['vbe06_fault_tsr'] = {
+                'path': 'DRIVERS/VIDEO/VBE06TSR.COM',
+                'bytes': fault_tsr.stat().st_size,
+                'sha256': file_sha256(fault_tsr),
+                'private_driver_config_line': fault_line,
+            }
+            report['checks'].append('test-only VBE 4F06 fault TSR staged in private HDD after S3VBEFIX')
+        report['checks'].append('pristine source image hash, AUTO default, and exact freshly assembled SHELL/SFX verified before private-image test override')
         report_path.write_text(json.dumps(report, indent=2) + '\n')
 
         stage = 'AUTO desktop boot'
@@ -372,6 +433,11 @@ def main():
         report['wallpaper_initial_ready'] = wait_wallpaper(vm, photo['filename'])
         report['wallpaper_initial'] = verify_photo(vm, output, 'Ciuk1-initial', expected, photo)
         report['checks'].append('owner Ciuk1 ready and painted; all 36 initial RGB samples match exactly')
+        if args.vbe06_pitch_divisor8:
+            driver_log = read_live(volume, 'DRIVERS/LOADDRV.LOG')
+            assert b'VBE06TSR OK' in driver_log, driver_log
+            report['vbe06_fault_driver_log'] = driver_log.decode('ascii', 'replace')
+            report['checks'].append('fault TSR installed by the normal startup driver loader before VBE mode selection')
 
         stage = 'bounded native startup completion'
         time.sleep(5)
@@ -398,9 +464,35 @@ def main():
             report['audio_skip_reason'] = 'No audio device configured; native/legacy fallback is not qualified by this case'
 
         stage = 'real keyboard DOS entry and desktop return'
+        if args.vbe06_pitch_divisor8:
+            layout = video_layout_snapshot(vm, output, shell_image, shell_listing, expected[1])
+            report['vbe06_one_page_layout'] = layout
+            report['checks'].append('malformed VBE 4F06 query leaves one-page scanline layout and page flipping disabled')
         keyboard_offset = vm.offset()
         vm.key('f4')
         vm.wait('CiukiOS SHELL C:\\APPS>', keyboard_offset, 60)
+        if args.vbe06_pitch_divisor8:
+            vm.command(r'run \DRIVERS\VIDEO\VBE06TSR.COM Q', timeout=30)
+            fault_record = read_live(volume, 'SYSTEM/VIDEO/VBE06.LOG')
+            assert len(fault_record) == 10 and fault_record[:4] == b'V06Q', fault_record
+            hits = int.from_bytes(fault_record[4:6], 'little')
+            original_stride = int.from_bytes(fault_record[6:8], 'little')
+            damaged_stride = int.from_bytes(fault_record[8:10], 'little')
+            assert hits > 0 and damaged_stride == original_stride // 8, fault_record.hex()
+            video = report['video_before_dos']
+            expected_bytes = expected[0] * 4
+            assert video['renderer']['active_pitch'] >= expected_bytes, video
+            assert video['mode_info']['modeinfo_pitch_field'] == video['renderer']['active_pitch'], video
+            assert video['renderer']['active_pitch'] > damaged_stride, (video, fault_record.hex())
+            assert video['renderer']['vclfb_header'] == 2, video
+            report['vbe06_fault_observation'] = {
+                'successful_get_calls': hits, 'original_bx_bytes_per_scanline': original_stride,
+                'divided_reply_bx': damaged_stride,
+                'validated_descriptor_pitch': video['renderer']['active_pitch'],
+                'mode_info_descriptor_pitch': video['mode_info']['modeinfo_pitch_field'],
+                'record_hex': fault_record.hex(),
+            }
+            report['checks'].append('AUTO retained the valid 1280x800x32 descriptor pitch after the TSR divided 4F06 BX by 8')
         vm.command('echo INPUT READY', 'INPUT READY\r\nCiukiOS SHELL', timeout=30)
         if args.exercise_native_client:
             stage = 'streamed help and native 3D client in the system shell'
@@ -443,8 +535,11 @@ def main():
                 failure = failure or exc
         if disk.exists() and volume is not None:
             # Read after QEMU has closed/flushed the private writable image.
-            for path, destination in ((AUDIO_PATH, 'AUDIO.LOG'), (DISPLAY_LOG_PATH, 'DISPLAY.LOG'),
-                                      ('DRIVERS/LOADDRV.LOG', 'LOADDRV.LOG')):
+            captures = [(AUDIO_PATH, 'AUDIO.LOG'), (DISPLAY_LOG_PATH, 'DISPLAY.LOG'),
+                        ('DRIVERS/LOADDRV.LOG', 'LOADDRV.LOG')]
+            if args.vbe06_pitch_divisor8:
+                captures.append(('SYSTEM/VIDEO/VBE06.LOG', 'VBE06.LOG'))
+            for path, destination in captures:
                 try:
                     (output / destination).write_bytes(read_live(volume, path))
                 except Exception as exc:
@@ -477,7 +572,9 @@ def main():
     report_path.write_text(json.dumps(report, indent=2) + '\n')
     if failure is not None:
         raise failure
-    print(f'PASS pristine AUTO boot {expected[0]}x{expected[1]}x32, EDID={args.edid}, '
+    pass_kind = ('private-image VBE 4F06 fault boot' if args.vbe06_pitch_divisor8
+                 else 'pristine AUTO boot')
+    print(f'PASS {pass_kind} {expected[0]}x{expected[1]}x32, EDID={args.edid}, '
           f'audio={args.audio}, keyboard/desktop return; image={report["image_sha256"]}')
 
 
