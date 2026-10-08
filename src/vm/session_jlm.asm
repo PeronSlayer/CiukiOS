@@ -1147,6 +1147,8 @@ switch_allowed:
  je native_stop_dispatch
  cmp eax,VM_OP_DISPLAY_INFO
  je display_info
+ cmp eax,VM_OP_FB_DIAGNOSTICS
+ je fb_diagnostics_op
  cmp eax,VM_OP_VIDEO_CONFIG
  jb not_video
  cmp eax,VM_OP_VIDEO_DAMAGE
@@ -1305,6 +1307,9 @@ triangle_fb:
  jmp checked_result
 display_info:
  call gpu_display_info
+ jmp checked_result
+fb_diagnostics_op:
+ call gpu_fb_diagnostics
 checked_result:
  test eax,eax
  jnz error

@@ -8,6 +8,7 @@ malformed CWP2 fixtures are installed only into that private image before boot.
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import struct
 import subprocess
@@ -20,8 +21,9 @@ from PIL import Image
 from qemu_test_installed_hdd import FAT16
 from qemu_test_native_utilities import Utilities
 from qemu_test_native_windows import WindowVM
-from qemu_test_wallpaper import cover_frame, palette as ui_palette
+from qemu_test_wallpaper import palette as ui_palette
 
+WP_FIT = 1
 
 ROOT = Path(__file__).resolve().parent.parent
 PHOTO_ROOT = ROOT / 'misc/ciukios_bg'
@@ -78,11 +80,59 @@ def image_frame(vm, label):
     return np.asarray(Image.open(vm.shot(label)).convert('RGB'), dtype=np.uint8)
 
 
-def sample_points(width, height):
-    photo_h = height - 61
-    return [(int(width * fx), 29 + int(photo_h * fy))
-            for fy in (.11, .25, .39, .53, .67, .81)
-            for fx in (.33, .44, .55, .66, .77, .88)]
+def desktop_icon_boxes(vm, width, height):
+    serial = subprocess.check_output(['scripts/serial_log_normalize.py',
+                                      str(vm.serial)]).decode('cp437', 'replace')
+    boxes = []
+    for _, cx, cy in re.findall(r'\[DESK\] icon (\S+) (\d+) (\d+)', serial):
+        x, y = int(cx) - 42, int(cy) - 20
+        boxes.append((max(0, x - 4), max(0, y - 4), 92,
+                      min(270, height - y + 8)))
+    return boxes
+
+
+def fit_samples(left, top, draw_w, draw_h, icons, target=36):
+    candidates = []
+    for yi in range(17):
+        y = top + max(0, (draw_h - 1) * yi // 16)
+        for xi in range(17):
+            x = left + max(0, (draw_w - 1) * xi // 16)
+            if not any(ix <= x < ix + iw and iy <= y < iy + ih
+                       for ix, iy, iw, ih in icons):
+                candidates.append((x, y))
+    assert len(candidates) >= target, ('too many desktop icons obscure Fit sample area', len(candidates))
+    return [candidates[round(i * (len(candidates) - 1) / (target - 1))]
+            for i in range(target)]
+
+
+def fit_bar_samples(width, height, icons, fit_rect):
+    left, top, draw_w, draw_h = fit_rect
+    right, bottom = left + draw_w, top + draw_h
+    work_bottom = height - 32
+    margins = []
+    if left > 0:
+        margins.append(('left', (left // 2, max(30, top + draw_h // 3)),
+                        (left // 2, max(30, top + 2 * draw_h // 3))))
+    if right < width:
+        x = (right + width) // 2
+        margins.append(('right', (x, max(30, top + draw_h // 3)),
+                        (x, max(30, top + 2 * draw_h // 3))))
+    if top > 29:
+        y = (29 + top) // 2
+        margins.append(('top', (left + draw_w // 3, y),
+                        (left + 2 * draw_w // 3, y)))
+    if bottom < work_bottom:
+        y = (bottom + work_bottom) // 2
+        margins.append(('bottom', (left + draw_w // 3, y),
+                        (left + 2 * draw_w // 3, y)))
+    points = []
+    for name, *pair in margins:
+        visible = [point for point in pair if not any(
+            ix <= point[0] < ix + iw and iy <= point[1] < iy + ih
+            for ix, iy, iw, ih in icons)]
+        assert visible, ('desktop icons obscure a Fit margin', name, pair, icons)
+        points.extend(visible)
+    return points
 
 
 def compare_photo(vm, title, photo, output, label):
@@ -93,19 +143,20 @@ def compare_photo(vm, title, photo, output, label):
     source = photo['rgb']
     src_h, src_w = source.shape[:2]
     view_h = height - 61
-    scale = max(width / src_w, view_h / src_h)
-    draw_w, draw_h = src_w * scale, src_h * scale
-    left = (width - draw_w) / 2.0
-    top = 29.0 + (view_h - draw_h) / 2.0
+    if width * src_h <= view_h * src_w:
+        draw_w, draw_h = width, src_h * width // src_w
+    else:
+        draw_h, draw_w = view_h, src_w * view_h // src_h
+    left, top = (width - draw_w) // 2, 29 + (view_h - draw_h) // 2
+    assert draw_w <= width and draw_h <= view_h and (draw_w < width or draw_h < view_h), \
+        (left, top, draw_w, draw_h, width, view_h)
+    icons = desktop_icon_boxes(vm, width, height)
     samples = []
-    for x, y in sample_points(width, height):
-        sx = int(np.floor((x + .5 - left) / scale))
-        sy = int(np.floor((y + .5 - top) / scale))
-        sx = min(src_w - 1, max(0, sx))
-        sy = min(src_h - 1, max(0, sy))
-        # Permit the adjacent source sample for fixed-point scaling and either
-        # nearest-neighbour tie convention; this still strongly identifies a
-        # source photo and the centered cover crop.
+    for x, y in fit_samples(left, top, draw_w, draw_h, icons):
+        sx = min(src_w - 1, (x - left) * src_w // draw_w)
+        sy = min(src_h - 1, (y - top) * src_h // draw_h)
+        # Permit the adjacent source sample for fixed-point scaling and
+        # either nearest-neighbour tie convention.
         nearby = source[max(0, sy - 1):min(src_h, sy + 2),
                         max(0, sx - 1):min(src_w, sx + 2)].astype(np.int16)
         observed = actual[y, x].astype(np.int16)
@@ -113,13 +164,18 @@ def compare_photo(vm, title, photo, output, label):
         samples.append({'screen': [x, y], 'source': [sx, sy],
                         'max_channel_delta': int(delta.min())})
     deltas = [sample['max_channel_delta'] for sample in samples]
+    bar_points = fit_bar_samples(width, height, icons, (left, top, draw_w, draw_h))
+    bars = [actual[y, x].astype(np.int16) for x, y in bar_points]
+    bar_delta = max((int(np.max(np.abs(pixel - bars[0]))) for pixel in bars), default=0)
     report = {'name': label, 'photo': title, 'frame': [width, height],
-              'cover': {'scale': scale, 'left': left, 'top': top,
-                        'photo_rect': [0, 29, width, view_h]},
+              'fit': {'left': left, 'top': top, 'width': draw_w, 'height': draw_h,
+                      'photo_rect': [0, 29, width, view_h]},
+              'bar_samples': [list(point) for point in bar_points], 'bar_max_delta': bar_delta,
               'sample_count': len(samples), 'median_delta': float(np.median(deltas)),
               'max_delta': max(deltas), 'samples': samples}
     output.append(report)
-    assert len(samples) >= 30 and max(deltas) <= 48 and np.median(deltas) <= 24, report
+    assert len(samples) == 36 and max(deltas) <= 48 and np.median(deltas) <= 24, report
+    assert not bar_points or bar_delta <= 4, report
     return actual
 
 
@@ -147,7 +203,7 @@ def tile_candidates(rgb, palette_rgb):
     return candidates
 
 
-def compare_legacy_fill(vm, fs, record, palette_rgb, checks, label):
+def compare_legacy_fit(vm, fs, record, palette_rgb, checks, label):
     raw = fs.read('SYSTEM/UI/' + record[0])
     magic, width, height, colors, flags, size = struct.unpack_from('<4sHHHHI', raw)
     assert magic == b'CWP1' and colors == 256 and flags == 0 and size == width * height
@@ -158,17 +214,23 @@ def compare_legacy_fill(vm, fs, record, palette_rgb, checks, label):
     time.sleep(.25)
     actual = image_frame(vm, label)
     screen_h, screen_w = actual.shape[:2]
-    points = sample_points(screen_w, screen_h)
+    icons = desktop_icon_boxes(vm, screen_w, screen_h)
     values = []
     for candidate in tile_candidates(rgb, palette_rgb):
-        expected_frame = cover_frame(candidate, screen_w, screen_h)
+        view_h = screen_h - 61
+        if screen_w * height <= view_h * width:
+            draw_w, draw_h = screen_w, height * screen_w // width
+        else:
+            draw_h, draw_w = view_h, width * view_h // height
+        left, top = (screen_w - draw_w) // 2, 29 + (view_h - draw_h) // 2
         errors = []
-        for x, y in points:
-            expected = expected_frame[y - 29, x]
+        for x, y in fit_samples(left, top, draw_w, draw_h, icons):
+            sx, sy = (x - left) * width // draw_w, (y - top) * height // draw_h
+            expected = candidate[sy, sx]
             errors.append(int(np.max(np.abs(actual[y, x].astype(np.int16) - expected.astype(np.int16)))))
         values.append(errors)
     best = min(values, key=lambda errors: (sum(errors) / len(errors), max(errors)))
-    entry = {'name': label, 'wallpaper': record[0], 'position': 'Fill', 'frame': [screen_w, screen_h],
+    entry = {'name': label, 'wallpaper': record[0], 'position': 'Fit', 'frame': [screen_w, screen_h],
              'sample_count': len(best), 'median_delta': float(np.median(best)),
              'max_delta': max(best)}
     checks.append(entry)
@@ -315,7 +377,7 @@ def run_case(image_path, listing, shell_bytes, output, resolution, source_hash,
         choose(photo['index'])
         offset = vm.offset()
         ui.click(183, 10)
-        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([photo['index'], 0]), \
+        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([photo['index'], WP_FIT]), \
             f'{title} selection was not persisted'
         close_wallpaper()
         vm.wait(f'[WALLP] ready {photo["filename"]}', offset, 30)
@@ -329,8 +391,8 @@ def run_case(image_path, listing, shell_bytes, output, resolution, source_hash,
         ui = Utilities(vm, shell, listing)
         dismiss_default_about('initial')
         photo1 = photos['Ciuk1']
-        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([photo1['index'], 0]), \
-            'Fresh profile must default to the Ciuk1 entry'
+        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([photo1['index'], WP_FIT]), \
+            'Fresh profile must default to the Ciuk1 Fit entry'
         vm.wait(f'[WALLP] ready {photo1["filename"]}', 0, 45)
         compare_photo(vm, 'Ciuk1', photo1, report['checks'], f'{resolution}-default-Ciuk1')
         save()
@@ -346,7 +408,7 @@ def run_case(image_path, listing, shell_bytes, output, resolution, source_hash,
         ui = Utilities(vm, shell, listing)
         dismiss_default_about('restart')
         photo3 = photos['Ciuk3']
-        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([photo3['index'], 0])
+        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([photo3['index'], WP_FIT])
         vm.wait(f'[WALLP] ready {photo3["filename"]}', 0, 45)
         compare_photo(vm, 'Ciuk3', photo3, report['checks'], f'{resolution}-cold-restart')
         save()
@@ -359,7 +421,7 @@ def run_case(image_path, listing, shell_bytes, output, resolution, source_hash,
             ui.click(183, 10)
             ui.until(lambda: 'could not be loaded' in ui.z_at(ui.w('wp_status') - 256),
                      f'malformed CWP2 entry {index} rejected')
-            assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([photo3['index'], 0]), \
+            assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([photo3['index'], WP_FIT]), \
                 f'malformed CWP2 entry {index} changed persisted selection'
             close_wallpaper()
             compare_photo(vm, 'Ciuk3', photo3, report['checks'], f'{resolution}-retain-after-bad-{index}')
@@ -368,19 +430,19 @@ def run_case(image_path, listing, shell_bytes, output, resolution, source_hash,
                                      'rejected': True, 'retained_photo': 'Ciuk3'})
             save()
 
-        # Legacy CWP1 remains decodable and uses the persisted default Fill style.
+        # Legacy CWP1 remains decodable under the persisted default Fit style.
         legacy = next((i + 1, record) for i, record in enumerate(records)
                       if fs.read('SYSTEM/UI/' + record[0])[:4] == b'CWP1')
         index, record = legacy
         open_wallpaper()
         choose(index)
         ui.click(183, 10)
-        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([index, 0])
+        assert FAT16(disk).read('SYSTEM/UI/WALL.CFG') == bytes([index, WP_FIT])
         close_wallpaper()
-        compare_legacy_fill(vm, fs, record, ui_palette(case_dir).astype(np.uint8),
-                            report['checks'], f'{resolution}-legacy-cwp1-fill')
-        report['checks'].append({'name': f'{resolution}-legacy-cwp1-fill',
-                                 'position': 'Fill',
+        compare_legacy_fit(vm, fs, record, ui_palette(case_dir).astype(np.uint8),
+                            report['checks'], f'{resolution}-legacy-cwp1-fit')
+        report['checks'].append({'name': f'{resolution}-legacy-cwp1-fit',
+                                 'position': 'Fit',
                                  'filename': record[0], 'catalog_index': index,
                                  'catalog_unchanged': FAT16(disk).read('SYSTEM/UI/WALLS.DAT') == catalog_raw})
         assert FAT16(disk).read('SYSTEM/UI/WALLS.DAT') == catalog_raw

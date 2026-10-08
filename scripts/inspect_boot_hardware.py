@@ -14,6 +14,10 @@ TOTAL_SIZE = HEADER_SIZE + MODE_SIZE + CONTROLLER_SIZE + EDID_SIZE
 DISPLAY_INFO_SIZE = 192
 S3_STATUS_SIZE = 128
 GPU_LOG_SIZE = 16 + 2 * DISPLAY_INFO_SIZE
+CACHE_DIAG_HEADER_SIZE = 16
+CACHE_RECORD_SIZE = 576
+CACHE_TIME_SIZE = 32
+CACHE_DIAG_SIZE = CACHE_DIAG_HEADER_SIZE + CACHE_RECORD_SIZE + CACHE_TIME_SIZE
 TRACE_RECORD_SIZE = 16 + MODE_SIZE
 TRACE_MAX_RECORDS = 128
 
@@ -24,6 +28,10 @@ def u16(buf, offset):
 
 def u32(buf, offset):
     return struct.unpack_from('<I', buf, offset)[0]
+
+
+def u64(buf, offset):
+    return struct.unpack_from('<Q', buf, offset)[0]
 
 
 def parse_display_info(data):
@@ -63,6 +71,30 @@ def parse_display_info(data):
             'panel_width panel_height panel_flags copy_selftests'
         ).split()
         status = {name: u32(s3, i * 4) for i, name in enumerate(names)}
+        # Newer snapshots retain the low-byte stage and tag stage-1 rejects
+        # with one preflight predicate, without extending the 128-byte ABI.
+        stage = status['error_stage'] & 0xFF
+        reason = status['error_stage'] & 0x000FFF00
+        predicates = {
+            0x100: ('format', 'mapped_bytes'),
+            0x200: ('geometry', 'mapped_bytes'),
+            0x400: ('pitch', 'mapped_bytes'),
+            0x800: ('extent', 'mapped_bytes'),
+            0x1000: ('missing_device', 'requested_framebuffer_physical'),
+            0x2000: ('pci_class', 'raw_pci_class'),
+            0x4000: ('memory_decode', 'raw_pci_command'),
+            0x8000: ('mmio_bar', 'raw_bar0'),
+            0x10000: ('framebuffer_bar', 'raw_bar1'),
+            0x20000: ('aperture_bar', 'raw_bar2'),
+            0x40000: ('framebuffer_address', 'requested_framebuffer_physical'),
+            0x80000: ('mmio_span', 'mmio_base'),
+        }
+        status['stage'] = stage
+        status['preflight'] = None
+        if stage == 1 and reason:
+            name, detail = predicates.get(reason, ('unknown', 'raw_detail'))
+            status['preflight'] = {'reason_code': reason, 'reason': name,
+                                   detail: status['last_status']}
         result['s3_status'] = status
         result['s3_engine_qualified'] = bool(
             result['backend'] == 3 and status['ready'] == 1
@@ -112,6 +144,54 @@ def parse_gpu_log(data):
             'result_name': ('completed', 'unsupported', 'session validation failed',
                             'hardware/counter verification failed')[result_code],
             'error': error, 'before': snapshots[0], 'after': snapshots[1]}
+
+
+def parse_cache_diagnostics(data):
+    if len(data) != CACHE_DIAG_SIZE:
+        raise ValueError(f'expected exactly {CACHE_DIAG_SIZE} bytes for CVFD, got {len(data)}')
+    if data[:4] != b'CVFD':
+        raise ValueError(f'bad CVFD magic {data[:4]!r}; expected b\'CVFD\'')
+    version, size = u16(data, 4), u16(data, 6)
+    cache_size, timing_size = u32(data, 8), u32(data, 12)
+    if version != 0x0100:
+        raise ValueError(f'bad CVFD ABI version 0x{version:04X}; expected 0x0100')
+    if size != CACHE_DIAG_SIZE:
+        raise ValueError(f'bad CVFD size {size}; expected {CACHE_DIAG_SIZE}')
+    if cache_size != CACHE_RECORD_SIZE or timing_size != CACHE_TIME_SIZE:
+        raise ValueError('CVFD embedded record sizes do not match version 1')
+    cache = data[CACHE_DIAG_HEADER_SIZE:CACHE_DIAG_HEADER_SIZE + CACHE_RECORD_SIZE]
+    timing = data[CACHE_DIAG_HEADER_SIZE + CACHE_RECORD_SIZE:]
+    if cache[:8] != b'CVFBCACH':
+        raise ValueError(f'bad cache-record magic {cache[:8]!r}')
+    if u32(cache, 8) != CACHE_RECORD_SIZE:
+        raise ValueError(f'bad CVFBCACH size {u32(cache, 8)}')
+    if timing[:8] != b'CVFBTIME':
+        raise ValueError(f'bad copy-time magic {timing[:8]!r}')
+    variable_count = u64(cache, 48) & 0xff
+    if variable_count > 32:
+        raise ValueError(f'CVFBCACH reports {variable_count} variable MTRRs; maximum is 32')
+    ranges = []
+    for index in range(variable_count):
+        base = u64(cache, 64 + index * 16)
+        mask = u64(cache, 72 + index * 16)
+        ranges.append({'index': index, 'base': base, 'mask': mask,
+                       'type': base & 0xff, 'enabled': bool(mask & (1 << 11))})
+    cycles = u32(timing, 12) | (u32(timing, 16) << 32)
+    last_start = u32(timing, 24) | (u32(timing, 28) << 32)
+    return {
+        'format': 'CVFD framebuffer cache diagnostics', 'size_bytes': len(data),
+        'abi_version': version, 'header_size': CACHE_DIAG_HEADER_SIZE,
+        'cache_record': {
+            'live': u32(cache, 12), 'physical_address': u32(cache, 16),
+            'extent_bytes': u32(cache, 20), 'first_pte': u32(cache, 24),
+            'cpuid_edx': u32(cache, 28), 'cr0': u32(cache, 32),
+            'cr4': u32(cache, 36), 'pat': u64(cache, 40),
+            'mtrrcap': u64(cache, 48), 'mtrr_def_type': u64(cache, 56),
+            'variable_range_count': variable_count, 'variable_ranges': ranges,
+        },
+        'copy_timing': {'calls': u32(timing, 8), 'cycles': cycles,
+                        'max_cycles': u32(timing, 20), 'last_start_tsc': last_start},
+    }
 
 
 def parse_trace(data):
@@ -248,6 +328,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--video', required=True, type=Path, help='path to SYSTEM/VIDEO/DISPLAY.LOG')
     parser.add_argument('--gpu', type=Path, help='path to a 192-byte CVGD snapshot or 400-byte CG3D log')
+    parser.add_argument('--cache', type=Path, help='path to a 624-byte CVFD framebuffer cache snapshot')
     parser.add_argument('--trace', type=Path, help='path to a CVT1 mode-attempt trace')
     parser.add_argument('--output', type=Path, help='write JSON here instead of stdout')
     args = parser.parse_args(argv)
@@ -255,6 +336,8 @@ def main(argv=None):
         result = parse_log(args.video.read_bytes())
         if args.gpu:
             result['gpu'] = parse_gpu_log(args.gpu.read_bytes())
+        if args.cache:
+            result['cache_diagnostics'] = parse_cache_diagnostics(args.cache.read_bytes())
         if args.trace:
             result['trace'] = parse_trace(args.trace.read_bytes())
     except (OSError, ValueError) as exc:

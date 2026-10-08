@@ -17,10 +17,12 @@ import time
 
 import numpy as np
 from PIL import Image
-from doom_screen import menu_skulls, selected_row
+from doom_screen import gameplay_screen, menu_skulls, selected_row, statusbar_patterns
 from qemu_test_installed_hdd import FAT16
 from qemu_test_native_utilities import Utilities
 from qemu_test_native_windows import WindowVM
+from qemu_files_game_launch import launch_testgames_from_files
+from inspect_dosvm_snapshot import parse_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,10 +50,13 @@ def main():
     p.add_argument('--memory', type=int, default=512)
     p.add_argument('--game', default=r'C:\DESKTOP\TestGames\DOOM.COM')
     p.add_argument('--game-args', default='-warp 1 1 -nomusic')
+    p.add_argument('--launch-method', choices=('run', 'files'), default='run')
     p.add_argument('--skip-display', action='store_true')
     p.add_argument('--display-only', action='store_true')
     p.add_argument('--game-timeout', type=int, default=60)
     a = p.parse_args()
+    if a.launch_method == 'files' and a.game_args:
+        p.error('--launch-method files requires an empty --game-args value')
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     image = a.image.resolve()
@@ -65,7 +70,8 @@ def main():
         'freshly assembled SHELL.COM differs from the source image; refusing stale RAM offsets')
     vm = None
     report = dict(passed=False, vga=a.vga, memory_mib=a.memory,
-                  game=a.game, game_args=a.game_args, physical_tested=False,
+                  game=a.game, game_args=a.game_args, launch_method=a.launch_method,
+                  physical_tested=False,
                   shell_sha256=hashlib.sha256(shipped_shell).hexdigest(),
                   shell_listing=listing.name,
                   shell_listing_sha256=hashlib.sha256(listing.read_bytes()).hexdigest(),
@@ -133,11 +139,11 @@ def main():
         client.save(out / (name + '-client.png'))
         return client
 
-    def wait_menu_row(expected, name, timeout=8):
+    def wait_menu_row(expected, name, timeout=8, position=(97, 64), rows=6):
         deadline = time.monotonic() + timeout
         current = None
         while time.monotonic() < deadline:
-            current = selected_row(game_frame(name), sprites, (97, 64), 6)
+            current = selected_row(game_frame(name), sprites, position, rows)
             if current == expected:
                 report['events'].append(dict(name='DOOM menu row observed',
                                              screenshot=name, row=expected))
@@ -152,7 +158,12 @@ def main():
     def start_game(label):
         command = a.game + (' ' + a.game_args if a.game_args else '')
         report['game_commands'].append(command)
-        start = type_run(command)
+        if a.launch_method == 'files':
+            assert a.game.upper() == r'C:\DESKTOP\TESTGAMES\DOOM.COM', a.game
+            start, evidence = launch_testgames_from_files(vm, ui, disk, 'DOOM.COM')
+            report['events'].append(evidence)
+        else:
+            start = type_run(command)
         vm.wait('[DOSVM] open', start, 30)
         vm.wait('[DOSVM] fork', start, 30)
         ui.until(lambda: ui.b('ui_window_flags', 11) == 1
@@ -160,13 +171,47 @@ def main():
                  'DOOM native DOS window did not become active', 30)
         vm.wait('[DOOM] Using the active DOS session audio devices', start, 30)
         vm.wait('ST_Init: Init status bar.', start, a.game_timeout)
-        time.sleep(2)
-        first = game_frame(label + '-running')
-        assert selected_row(first, sprites, (97, 64), 6) is None, \
-            'DOOM remained in its title/menu screen instead of starting the requested level'
+        if '-warp' not in a.game_args.split():
+            # The shipping shortcut opens the title sequence, not a level.
+            # Wait for graphical pixels before navigating its real menus.
+            deadline = time.monotonic() + a.game_timeout
+            while True:
+                title = np.asarray(game_frame(label + '-title'))
+                colours = len(np.unique(title.reshape(-1, 3), axis=0))
+                visible = int(np.any(title > 20, axis=2).sum())
+                if colours > 32 and visible > 20000:
+                    break
+                assert time.monotonic() < deadline, 'DOOM title graphics never became visible'
+                time.sleep(.25)
+            game_key('esc')
+            wait_menu_row(0, label + '-title-menu', timeout=30)
+            game_key('ret')
+            wait_menu_row(0, label + '-episode-menu', position=(48, 63), rows=4)
+            game_key('ret')
+            wait_menu_row(2, label + '-skill-menu', position=(48, 63), rows=5)
+            game_key('ret')
+        # ST_Init precedes level loading and I_InitGraphics. A black client at
+        # that marker is not evidence of a hang, nor a valid gameplay baseline.
+        ready_start = time.monotonic()
+        deadline = ready_start + a.game_timeout
+        while True:
+            first = game_frame(label + '-running')
+            readiness = gameplay_screen(first, statusbar, sprites)
+            # A skill-menu Enter may still be queued. Require the actual WAD
+            # statusbar and disappearance of all three menus before input.
+            if readiness['matched']:
+                break
+            assert time.monotonic() < deadline, (
+                f'DOOM did not reach gameplay: {readiness}')
+            time.sleep(.25)
+        report['events'].append(dict(name='DOOM gameplay HUD ready', screenshot=label,
+                                    seconds=round(time.monotonic() - ready_start, 3),
+                                    evidence=readiness))
         vm.hmp('sendkey right 900')
         time.sleep(.6)
         moved = game_frame(label + '-after-input')
+        assert gameplay_screen(moved, statusbar, sprites)['matched'], \
+            'DOOM left its gameplay HUD or reopened a menu during the input check'
         a_pixels = np.asarray(first)[:300]
         b_pixels = np.asarray(moved)[:300]
         changed = int(np.any(a_pixels != b_pixels, axis=2).sum())
@@ -193,6 +238,12 @@ def main():
         ui.until(lambda: ui.b('ui_window_flags', 11) == 1
                  and ui.w('app_segs', 8) != 0 and ui.b('ui_active_window') == 11,
                  'finished DOOM window disappeared before the user closed it', 15)
+        finished = np.asarray(game_frame(label + '-finished-message'))
+        message_pixels = int(np.any(finished > 150, axis=2).sum())
+        assert message_pixels > 200, 'finished DOS window remained an empty black client'
+        report['events'].append(dict(name='finished DOS window shows status',
+                                     screenshot=label + '-finished-message',
+                                     message_pixels=message_pixels))
         shot(label + '-finished-window')
         vm.key('alt-f4')
         vm.wait('[DESKTOP] WINDOW 11 CLOSE', start, 20)
@@ -214,7 +265,9 @@ def main():
         report['qemu'] = vm.process.args
         vm.ready()
         shell = shipped_shell
-        sprites = menu_skulls(fat.read('APPS/DOOM/DOOM.WAD'))
+        wad = fat.read('APPS/DOOM/DOOM.WAD')
+        sprites = menu_skulls(wad)
+        statusbar = statusbar_patterns(wad)
         ui = Utilities(vm, shell, listing)
         report['initial_size'] = shot('initial')
         # Dismiss the initial About window using its public keyboard action.
@@ -274,7 +327,7 @@ def main():
                 report['pic'] = clean_hmp('info pic')
                 report['pit'] = clean_hmp('info qtree')
                 vm.hmp('stop')
-                vm.hmp(f'pmemsave 0 0x800000 "{out / "failure-8m.bin"}"')
+                vm.hmp(f'pmemsave 0 0x1000000 "{out / "failure-16m.bin"}"')
                 vm.hmp('cont')
             except Exception as capture_error:
                 report['capture_error'] = repr(capture_error)
@@ -287,6 +340,19 @@ def main():
                 (out / name).write_bytes(fs.read('SYSTEM/' + name))
             except KeyError:
                 pass
+        report['dosvm_snapshots'] = []
+        for slot in range(1, 4):
+            name = f'DOSVM{slot}.BIN'
+            try:
+                raw = fs.read('SYSTEM/' + name)
+            except KeyError:
+                continue
+            (out / name).write_bytes(raw)
+            try:
+                report['dosvm_snapshots'].append(parse_snapshot(raw))
+            except ValueError as error:
+                report['passed'] = False
+                report.setdefault('error', f'{name}: invalid physical diagnostic {error}')
         if not a.display_only:
             try:
                 dosvm_log = fs.read('SYSTEM/DOSVM.LOG').decode('cp437', 'replace')

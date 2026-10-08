@@ -41,6 +41,7 @@ PROFILES = {
                         '-device', 'virtio-vga,xres=1280,yres=800']},
 }
 STYLES = ('Fill', 'Fit', 'Stretch', 'Center', 'Tile')
+WP_FIT = 1
 
 
 def sha256(data):
@@ -115,7 +116,7 @@ def compare_pixels(frame, source_rgb, style, icons, label, report,
     src_h, src_w = source_rgb.shape[:2]
     x0, y0, dw, dh, left, top, right, bottom = wallpaper_shape(
         style, width, height, src_w, src_h)
-    deltas, blank_deltas = [], []
+    deltas, blank_deltas, fit_bars = [], [], []
     sx_step = max(19, width // 32)
     sy_step = max(17, height // 24)
     for y in range(max(31, top), min(height - 34, bottom), sy_step):
@@ -133,7 +134,7 @@ def compare_pixels(frame, source_rgb, style, icons, label, report,
             observed = frame[y, x].astype(np.int16)
             delta = np.max(np.abs(nearby - observed), axis=2)
             deltas.append(int(delta.min()))
-    if solid_frame is not None and style == 1:
+    if style == WP_FIT:
         for y in range(31, height - 34, sy_step):
             for x in range(5, width - 5, sx_step):
                 if left <= x < right and top <= y < bottom:
@@ -141,20 +142,29 @@ def compare_pixels(frame, source_rgb, style, icons, label, report,
                 if any(bx <= x < bx + bw and by <= y < by + bh
                        for bx, by, bw, bh in icons):
                     continue
-                blank_deltas.append(int(np.max(np.abs(
-                    frame[y, x].astype(np.int16) -
-                    solid_frame[y, x].astype(np.int16)))))
+                if solid_frame is not None:
+                    blank_deltas.append(int(np.max(np.abs(
+                        frame[y, x].astype(np.int16) -
+                        solid_frame[y, x].astype(np.int16)))))
+                fit_bars.append(frame[y, x].astype(np.int16))
     result = {'name': label, 'style': STYLES[style], 'screen': [width, height],
               'source': [src_w, src_h], 'shape': [x0, y0, dw, dh],
               'sample_count': len(deltas), 'max_source_delta': max(deltas) if deltas else None,
               'median_source_delta': float(np.median(deltas)) if deltas else None,
               'fit_background_samples': len(blank_deltas),
-              'fit_background_max_delta': max(blank_deltas) if blank_deltas else None}
+              'fit_background_max_delta': max(blank_deltas) if blank_deltas else None,
+              'fit_bar_samples': len(fit_bars), 'fit_shape_contained':
+                  style != WP_FIT or (dw <= width and dh <= height - 61)}
     report['checks'].append(result)
     assert len(deltas) >= 40, f'{label}: insufficient wallpaper samples: {result}'
     assert max(deltas) <= tolerance and np.median(deltas) <= 24, result
-    if style == 1 and solid_frame is not None:
-        assert len(blank_deltas) >= 10 and max(blank_deltas) <= 4, result
+    if style == WP_FIT:
+        assert dw <= width and dh <= height - 61 and (dw < width or dh < height - 61), result
+        assert len(fit_bars) >= 10, result
+        bar_deltas = np.max(np.abs(np.asarray(fit_bars) - fit_bars[0]), axis=1)
+        assert int(bar_deltas.max()) <= 4, result
+        if solid_frame is not None:
+            assert len(blank_deltas) >= 10 and max(blank_deltas) <= 4, result
 
 
 def read_image(disk, index):
@@ -391,13 +401,13 @@ def run_profile(source_image, shell_bytes, listing, listing_hash, profile_name,
         ui = Utilities(vm, shell_bytes, listing)
         dismiss_about(vm, ui)
         cfg = FAT16(disk).read('SYSTEM/UI/WALL.CFG')
-        assert cfg == bytes((indices['Ciuk1'], 0)), \
-            f'Fresh wallpaper config must default to Ciuk1 Fill: {cfg!r}'
+        assert cfg == bytes((indices['Ciuk1'], WP_FIT)), \
+            f'Fresh wallpaper config must default to Ciuk1 Fit: {cfg!r}'
         wait_wallpaper(vm, assets[1]["Ciuk1"]["filename"])
         icon_boxes = desktop_icon_boxes(vm)
-        frame = image_frame(vm, 'default-Ciuk1-Fill')
-        compare_pixels(frame, assets[1]['Ciuk1']['rgb'], 0, icon_boxes,
-                       f'{profile_name}-default-Ciuk1-Fill', report)
+        frame = image_frame(vm, 'default-Ciuk1-Fit')
+        compare_pixels(frame, assets[1]['Ciuk1']['rgb'], WP_FIT, icon_boxes,
+                       f'{profile_name}-default-Ciuk1-Fit', report)
         save()
 
         # Prove each owner photo is selectable from Desktop Properties and
@@ -574,11 +584,22 @@ def run_profile(source_image, shell_bytes, listing, listing_hash, profile_name,
                 old = (ui.w('ui_window_x', DISPLAY_WINDOW), ui.w('ui_window_y', DISPLAY_WINDOW),
                        ui.w('ui_window_width', DISPLAY_WINDOW), ui.w('ui_window_height', DISPLAY_WINDOW))
                 ox, oy, ow, oh = old
-                start_pt, end_pt = (ox + 38, oy + 14), (ox + 72, oy + 34)
+                # Properties may already sit against the right/bottom limits.
+                # Choose a move inside the actual work area instead of asking
+                # the window manager for a correctly clamped, unchanged position.
+                dx = 34 if ox + ow + 42 <= ui.w('ui_width') else -34
+                dy = 20 if oy + oh + 57 <= ui.w('ui_height') else -20
+                start_pt = (ox + 38, oy + 14)
+                end_pt = (start_pt[0] + dx, start_pt[1] + dy)
                 vm.position(*start_pt)
                 before_drag = image_frame(vm, 'before-properties-window-drag')
-                offset = vm.offset(); vm.hmp('mouse_button 1'); time.sleep(.12)
+                offset = vm.offset(); vm.hmp('mouse_button 1')
+                ui.until(lambda: ui.b('ui_dragging') == 3,
+                         'Properties title accepts the held mouse button')
                 vm.position(*end_pt)
+                ui.until(lambda: ui.w('ui_window_x', DISPLAY_WINDOW) != ox or
+                         ui.w('ui_window_y', DISPLAY_WINDOW) != oy,
+                         'Properties window moves while the button is held')
                 offset = vm.offset()
                 started = time.monotonic(); vm.hmp('mouse_button 0')
                 vm.wait('[DESKTOP] PAINT', offset, 20)
@@ -680,6 +701,15 @@ def run_profile(source_image, shell_bytes, listing, listing_hash, profile_name,
                            f'{profile_name}-cold-restart-wallpaper', report)
             report['checks'].append({'name': f'{profile_name}-cold-restart',
                                      'wall_cfg': list(current_wall), 'mode': [640, 480]})
+
+        if exercise_full:
+            from inspect_boot_hardware import parse_cache_diagnostics
+            cache = FAT16(disk).read('SYSTEM/VIDEO/CACHE.LOG')
+            decoded_cache = parse_cache_diagnostics(cache)
+            (case / 'CACHE.LOG').write_bytes(cache)
+            report['cache_diagnostics'] = decoded_cache
+            report['checks'].append({'name': 'display-persists-cache-diagnostics',
+                                     'bytes': len(cache), 'sha256': sha256(cache)})
 
         report['status'] = 'pass'
         save()

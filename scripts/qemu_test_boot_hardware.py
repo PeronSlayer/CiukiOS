@@ -23,7 +23,8 @@ from analyze_audio_wav import pcm_payload
 from inspect_boot_hardware import parse_log
 from qemu_test_full_display_profile import VM
 from qemu_test_installed_hdd import FAT16, listing_address
-from qemu_test_photo_wallpaper import check_assets, sample_points
+from qemu_test_photo_wallpaper import (check_assets, desktop_icon_boxes,
+                                       fit_bar_samples, fit_samples)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,7 @@ SHELL_PATH = 'SYSTEM/SHELL.COM'
 SFX_PATH = 'SYSTEM/DRIVERS/SFX.DRV'
 AUDIO_PATH = 'SYSTEM/AUDIO.LOG'
 DISPLAY_LOG_PATH = 'SYSTEM/VIDEO/DISPLAY.LOG'
+WP_FIT = 1
 
 
 def sha256(data):
@@ -227,35 +229,39 @@ def wait_wallpaper(vm, filename, offset=0, timeout=90):
     raise AssertionError(f'No completed desktop paint after {marker!r}; serial tail={latest[-1600:]!r}')
 
 
-def photo_samples(frame, photo):
-    """36 independent Ciuk1 RGB samples with the renderer's integer Fill crop."""
+def photo_samples(frame, photo, icons):
+    """36 independent RGB samples plus containment bars for the Fit layout."""
     height, width = frame.shape[:2]
     source = photo['rgb']
     source_h, source_w = source.shape[:2]
     view_h = height - 61
-    if width * source_h >= view_h * source_w:
+    if width * source_h <= view_h * source_w:
         draw_w = width
-        draw_h = (source_h * width + source_w - 1) // source_w
+        draw_h = source_h * width // source_w
     else:
         draw_h = view_h
-        draw_w = (source_w * view_h + source_h - 1) // source_h
-    # Signed integer division follows C's truncation toward zero.
-    left_delta, top_delta = width - draw_w, view_h - draw_h
-    left = left_delta // 2 if left_delta >= 0 else -((-left_delta) // 2)
-    top = 29 + (top_delta // 2 if top_delta >= 0 else -((-top_delta) // 2))
+        draw_w = source_w * view_h // source_h
+    left, top = (width - draw_w) // 2, 29 + (view_h - draw_h) // 2
+    assert draw_w <= width and draw_h <= view_h and (draw_w < width or draw_h < view_h), \
+        (draw_w, draw_h, width, view_h)
     samples = []
-    for x, y in sample_points(width, height):
-        sx = min(source_w - 1, max(0, (x - left) * source_w // draw_w))
-        sy = min(source_h - 1, max(0, (y - top) * source_h // draw_h))
+    for x, y in fit_samples(left, top, draw_w, draw_h, icons):
+        sx = min(source_w - 1, (x - left) * source_w // draw_w)
+        sy = min(source_h - 1, (y - top) * source_h // draw_h)
         expected, observed = source[sy, sx], frame[y, x]
         delta = int(np.max(np.abs(expected.astype(np.int16) - observed.astype(np.int16))))
         samples.append({'screen': [x, y], 'source': [sx, sy],
                         'expected_rgb': expected.tolist(), 'observed_rgb': observed.tolist(),
                         'max_channel_delta': delta})
+    bar_points = fit_bar_samples(width, height, icons, (left, top, draw_w, draw_h))
+    bar_pixels = [frame[y, x].astype(np.int16) for x, y in bar_points]
+    bar_delta = max((int(np.max(np.abs(pixel - bar_pixels[0]))) for pixel in bar_pixels), default=0)
     deltas = [sample['max_channel_delta'] for sample in samples]
     return {'photo': 'Ciuk1', 'filename': photo['filename'], 'cwp_sha256': photo['sha256'],
             'source_png_sha256': photo['source_sha256'], 'frame': [width, height],
-            'fill_rectangle': [left, top, draw_w, draw_h], 'sample_count': len(samples),
+            'style': 'Fit', 'fit_rectangle': [left, top, draw_w, draw_h],
+            'bar_samples': [list(point) for point in bar_points], 'bar_max_delta': bar_delta,
+            'sample_count': len(samples),
             'median_delta': float(np.median(deltas)), 'max_delta': max(deltas), 'samples': samples}
 
 
@@ -264,10 +270,12 @@ def verify_photo(vm, output, name, expected, photo):
     with Image.open(path) as image:
         image.save(output / (name + '.png'))
         frame = np.asarray(image.convert('RGB'), dtype=np.uint8)
-    evidence = photo_samples(frame, photo)
+    icons = desktop_icon_boxes(vm, frame.shape[1], frame.shape[0])
+    evidence = photo_samples(frame, photo, icons)
     # This gate requires 32-bit RGB transport, so no palette quantization or
     # nearby-source tolerance is needed. Each sampled owner pixel must match.
     assert evidence['sample_count'] == 36 and evidence['max_delta'] == 0, evidence
+    assert evidence['bar_max_delta'] <= 4, evidence
     return evidence
 
 
@@ -351,8 +359,8 @@ def main():
         wall_catalog, photos = check_assets(fs)
         photo = photos['Ciuk1']
         wall_cfg = fs.read('SYSTEM/UI/WALL.CFG')
-        assert wall_cfg == bytes((photo['index'], 0)), \
-            f'canonical wallpaper must be Ciuk1/Fill, got {wall_cfg.hex()}'
+        assert wall_cfg == bytes((photo['index'], WP_FIT)), \
+            f'canonical wallpaper must be Ciuk1/Fit, got {wall_cfg.hex()}'
         report['owner_wallpapers'] = {
             title: {key: value for key, value in details.items() if key != 'rgb'}
             for title, details in photos.items()}

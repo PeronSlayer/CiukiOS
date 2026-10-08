@@ -85,6 +85,25 @@ static uint32_t memory_bar(uint8_t bus, uint8_t dev, uint8_t fn,
     return *base >= 0x100000UL;
 }
 
+static uint32_t preflight_reject(uint32_t reason, uint32_t detail)
+{
+    cvsavage_status.error_stage = 1U | reason;
+    cvsavage_status.last_status = detail;
+    return 0U;
+}
+
+/* Preserve the raw BAR for a failed resource predicate without writing a
+ * sizing pattern or changing PCI decode. Prefetchable 32-bit memory passes. */
+static uint32_t preflight_bar(uint8_t bus, uint8_t dev, uint8_t fn,
+                              uint8_t index, uint32_t reason, uint32_t *base)
+{
+    uint32_t value = pci_read(bus, dev, fn, (uint8_t)(0x10U + 4U * index));
+    *base = value == 0xffffffffUL ? 0U : value & 0xfffffff0UL;
+    if (value == 0xffffffffUL || (value & 7U) != 0U || *base < 0x100000UL)
+        return preflight_reject(reason, value);
+    return 1U;
+}
+
 static uint8_t cr_read(uint8_t index)
 {
     uint8_t old = (uint8_t)cvdev_in(0x3d4U, 1U), value;
@@ -396,19 +415,29 @@ uint32_t cvsavage_bind(uint32_t physical, uint32_t bytes,
     static const uint8_t ram_megabytes[8] = {2U,8U,4U,16U,8U,16U,4U,16U};
     uint32_t i, bus, dev, fn, functions, mmio = 0U, framebuffer = 0U;
     uint32_t aperture = 0U, vram, tile_pitch, scratch_bytes, pixelbytes;
-    uint32_t old_stage, triangle_possible, result;
+    uint32_t old_stage, triangle_possible, result, value;
     if (g.saved_valid) return 2U;
     ++cvsavage_status.binds;
     cvsavage_status.ready = 0U; cvsavage_status.caps = 0U;
     cvsavage_status.error_stage = 1U;
-    if ((bpp != 16U && bpp != 32U) || !width || !height ||
-        width > 2048U || height > 2048U || !bytes || bytes > 0x01000000UL)
-        return 0U;
+    cvsavage_status.width = width; cvsavage_status.height = height;
+    cvsavage_status.pitch = pitch; cvsavage_status.bpp = bpp;
+    cvsavage_status.device_id = 0U; cvsavage_status.mmio_physical = 0U;
+    cvsavage_status.framebuffer_physical = 0U; cvsavage_status.aperture_physical = 0U;
+    cvsavage_status.vram_bytes = 0U;
+    cvsavage_status.scratch_offset = 0U; cvsavage_status.scratch_bytes = 0U;
+    if (bpp != 16U && bpp != 32U)
+        return preflight_reject(CVSAVAGE_PREFLIGHT_FORMAT, bytes);
+    if (!width || !height || width > 2048U || height > 2048U ||
+        !bytes || bytes > 0x01000000UL)
+        return preflight_reject(CVSAVAGE_PREFLIGHT_GEOMETRY, bytes);
     pixelbytes = bpp / 8U;
     if (!pitch || (pitch & 15U) || pitch % pixelbytes ||
-        pitch / pixelbytes > 4095U || pitch < width * pixelbytes ||
-        height > bytes / pitch || physical > 0xffffffffUL - bytes)
-        return 0U;
+        pitch / pixelbytes > 4095U || pitch < width * pixelbytes)
+        return preflight_reject(CVSAVAGE_PREFLIGHT_PITCH, bytes);
+    if (height > bytes / pitch || physical > 0xffffffffUL - bytes)
+        return preflight_reject(CVSAVAGE_PREFLIGHT_EXTENT, bytes);
+    preflight_reject(CVSAVAGE_PREFLIGHT_MISSING, physical);
     for (bus = 0U; bus < 256U && !mmio; ++bus) {
         for (dev = 0U; dev < 32U && !mmio; ++dev) {
             if ((pci_read((uint8_t)bus, (uint8_t)dev, 0U, 0U) & 0xffffU) == 0xffffU)
@@ -416,15 +445,37 @@ uint32_t cvsavage_bind(uint32_t physical, uint32_t bytes,
             functions = (pci_read((uint8_t)bus, (uint8_t)dev, 0U, 0x0cU) &
                          0x00800000UL) ? 8U : 1U;
             for (fn = 0U; fn < functions; ++fn) {
-                if (pci_read((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 0U) != SV_ID ||
-                    ((pci_read((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 8U) >> 16) &
-                      0xffffU) != 0x0300U ||
-                    !(pci_read((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 4U) & 2U))
+                if (pci_read((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 0U) != SV_ID)
                     continue;
-                if (!memory_bar((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 0U, &mmio) ||
-                    !memory_bar((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 1U, &framebuffer) ||
-                    !memory_bar((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 2U, &aperture) ||
-                    framebuffer != physical || mmio > 0xffffffffUL - SV_MMIO_BYTES) {
+                cvsavage_status.device_id = SV_ID;
+                value = pci_read((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 8U);
+                if (((value >> 16) & 0xffffU) != 0x0300U) {
+                    preflight_reject(CVSAVAGE_PREFLIGHT_CLASS, value); continue;
+                }
+                value = pci_read((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 4U);
+                if (!(value & 2U)) {
+                    preflight_reject(CVSAVAGE_PREFLIGHT_DECODE, value); continue;
+                }
+                if (!preflight_bar((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 0U,
+                                    CVSAVAGE_PREFLIGHT_BAR0, &mmio) ||
+                    !preflight_bar((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 1U,
+                                    CVSAVAGE_PREFLIGHT_BAR1, &framebuffer) ||
+                    !preflight_bar((uint8_t)bus, (uint8_t)dev, (uint8_t)fn, 2U,
+                                    CVSAVAGE_PREFLIGHT_BAR2, &aperture)) {
+                    cvsavage_status.mmio_physical = mmio;
+                    cvsavage_status.framebuffer_physical = framebuffer;
+                    cvsavage_status.aperture_physical = aperture;
+                    mmio = 0U; continue;
+                }
+                cvsavage_status.mmio_physical = mmio;
+                cvsavage_status.framebuffer_physical = framebuffer;
+                cvsavage_status.aperture_physical = aperture;
+                if (framebuffer != physical) {
+                    preflight_reject(CVSAVAGE_PREFLIGHT_PHYSICAL, physical);
+                    mmio = 0U; continue;
+                }
+                if (mmio > 0xffffffffUL - SV_MMIO_BYTES) {
+                    preflight_reject(CVSAVAGE_PREFLIGHT_MMIO_SPAN, mmio);
                     mmio = 0U; continue;
                 }
                 break;
@@ -437,6 +488,7 @@ uint32_t cvsavage_bind(uint32_t physical, uint32_t bytes,
     cvsavage_status.framebuffer_physical = framebuffer;
     cvsavage_status.aperture_physical = aperture;
     cvsavage_status.error_stage = 2U;
+    cvsavage_status.last_status = 0U;
     if (!(cvdev_in(0x3c3U, 1U) & 1U) || !(cvdev_in(0x3ccU, 1U) & 1U))
         return 0U; /* Already active VGA/color decode is required. */
     g.cr38 = cr_read(0x38U); g.cr39 = cr_read(0x39U);

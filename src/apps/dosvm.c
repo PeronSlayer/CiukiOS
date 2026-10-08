@@ -7,6 +7,18 @@
 #define WIN_COUNT 3
 #define VM_FREE 0
 #define VM_READY 1
+#define SNAP_MAGIC 0x53564443UL /* CDVS */
+#define SNAP_VERSION 0x0100
+#define SNAP_BYTES 448
+#define SNAP_VIDEO 1
+#define SNAP_DEVICES 2
+#define SNAP_TIMEOUT 1
+#define SNAP_EXIT 2
+#define SNAP_CLOSE 3
+#define SNAP_ABI_ERROR 0xFFFE
+#define SNAP_UNAVAILABLE 0xFFFF
+#define SNAP_INTERVAL 19        /* at least one second at the BIOS tick rate */
+#define SNAP_DEADLINE 219       /* approximately twelve seconds */
 
 static const char fork_path[] = "\\VM\\VMFORK.COM";
 static char tail[128], pending[96];
@@ -21,14 +33,27 @@ struct band_info {
     u8 bytes, red_size, red_pos, green_size, green_pos, blue_size, blue_pos;
     u16 left;
 };
+struct dosvm_snapshot {
+    u32 magic;
+    u16 version, bytes, vm, generation, host_ticks, valid_mask;
+    u16 reason, state, exit_code, video_error, device_error;
+    u16 sample_ticks, video_ticks, device_ticks;
+    char title[32];
+    u8 video[256], devices[128];
+};
 #pragma pack(pop)
+typedef char snapshot_size_check[sizeof(struct dosvm_snapshot) == SNAP_BYTES ? 1 : -1];
 static struct exec_params params;
 static u8 frame[256];
+static u8 snapshot_video[256], snapshot_devices[128];
 struct guest_window {
     u8 win, vm, live, finished, presented, present_error, windows_exe;
     u16 generation, exit_code;
     u16 client_x, client_y, client_w, client_h;
+    u16 snapshot_started, snapshot_polled;
+    u8 snapshot_sampled, snapshot_saved;
     char title[32];
+    struct dosvm_snapshot snapshot;
 };
 static struct guest_window guest[WIN_COUNT];
 static u16 vmm_seg, vmm_off;
@@ -115,9 +140,90 @@ static int vm_status(int vm, u16 *code, u16 *generation)
     struct regs r;
     mem_set(&r, 0, sizeof r);
     r.ax = 0x4A; r.bx = vm;
+    *code = 0xFFFF; *generation = 0;
     if (vm_call(&r)) return VM_FREE;
     *code = r.dx; *generation = r.cx;
     return r.bx;
+}
+/* Samples use fresh state packets, not the separately refreshed shared live[]
+ * header. Keep the last validated packet on failure, with its original tick. */
+static u16 snapshot_query(struct guest_window *g, u16 op, u8 *data,
+                          u16 bytes, u32 magic)
+{
+    struct regs r;
+    mem_set(data, 0, bytes);
+    if (vm_target(g->vm)) return SNAP_UNAVAILABLE;
+    mem_set(&r, 0, sizeof r);
+    r.ax = op; r.cx = bytes; r.di = (u16)data;
+    if (vm_call(&r)) return r.ax ? r.ax : SNAP_UNAVAILABLE;
+    if (*(u32 *)data != magic || *(u16 *)(data + 4) != SNAP_VERSION ||
+        *(u16 *)(data + 6) != bytes) return SNAP_ABI_ERROR;
+    return 0;
+}
+static void snapshot_begin(struct guest_window *g)
+{
+    struct dosvm_snapshot *s = &g->snapshot;
+    mem_set(s, 0, sizeof *s);
+    s->magic = SNAP_MAGIC; s->version = SNAP_VERSION; s->bytes = SNAP_BYTES;
+    s->vm = g->vm; s->generation = g->generation;
+    s->exit_code = SNAP_UNAVAILABLE;
+    s->video_error = s->device_error = SNAP_UNAVAILABLE;
+    str_ncopy(s->title, g->title, sizeof s->title);
+    g->snapshot_started = g->snapshot_polled = HOST.ticks;
+    g->snapshot_sampled = g->snapshot_saved = 0;
+}
+static void snapshot_sample(struct guest_window *g)
+{
+    struct dosvm_snapshot *s = &g->snapshot;
+    u16 code, generation, video_error, device_error;
+    if (!g->live || (g->snapshot_sampled &&
+        (u16)(HOST.ticks - g->snapshot_polled) < SNAP_INTERVAL)) return;
+    g->snapshot_sampled = 1; g->snapshot_polled = HOST.ticks;
+    s->sample_ticks = HOST.ticks;
+    s->video_error = s->device_error = SNAP_UNAVAILABLE;
+    if (vm_status(g->vm, &code, &generation) != VM_READY ||
+        generation != g->generation) return;
+    video_error = snapshot_query(g, 0x21, snapshot_video, 256, 0x53565643UL);
+    device_error = snapshot_query(g, 0x33, snapshot_devices, 128, 0x56445643UL);
+    /* A freed target falls back to the caller's session. Neither teardown
+     * nor slot reuse may replace this window's last validated packets. */
+    if (vm_status(g->vm, &code, &generation) != VM_READY ||
+        generation != g->generation) return;
+    s->video_error = video_error; s->device_error = device_error;
+    if (!video_error) {
+        mem_copy(s->video, snapshot_video, sizeof s->video);
+        s->valid_mask |= SNAP_VIDEO; s->video_ticks = HOST.ticks;
+    }
+    if (!device_error) {
+        mem_copy(s->devices, snapshot_devices, sizeof s->devices);
+        s->valid_mask |= SNAP_DEVICES; s->device_ticks = HOST.ticks;
+    }
+}
+/* Called only by foreground poll/close handling, never by the painter or an
+ * IRQ callback. One fixed file per VM; the live timeout is attempted once. */
+static void snapshot_save(struct guest_window *g, u16 reason, u16 state, u16 code)
+{
+    char path[] = "\\SYSTEM\\DOSVM1.BIN";
+    struct dosvm_snapshot *s = &g->snapshot;
+    int h, written;
+    if (g->vm < 1 || g->vm >= VM_COUNT || s->magic != SNAP_MAGIC) return;
+    path[13] = '0' + g->vm;
+    s->host_ticks = HOST.ticks; s->reason = reason;
+    s->state = state; s->exit_code = code;
+    h = dos_create(path);
+    if (h < 0) { disk_log("Snapshot failed", path, SNAP_UNAVAILABLE); return; }
+    written = dos_write(h, s, sizeof *s);
+    dos_close(h);
+    if (written != sizeof *s) disk_log("Snapshot failed", path, SNAP_UNAVAILABLE);
+}
+static void snapshot_close(struct guest_window *g)
+{
+    u16 code, generation;
+    int state;
+    snapshot_sample(g);
+    state = vm_status(g->vm, &code, &generation);
+    if (generation != g->generation) code = SNAP_UNAVAILABLE;
+    snapshot_save(g, SNAP_CLOSE, (u16)state, code);
 }
 static struct guest_window *by_window(int win)
 {
@@ -223,12 +329,14 @@ static void begin_window(int slot, int window)
     pending[0] = 0;
     if (vm < 0) {
         g->live = 0; g->finished = 1;
+        g->exit_code = 0xFFFF;
         app_log("[DOSVM] fork failed", 0);
         disk_log("Fork failed", g->title, 0);
         app_sound(5);
     } else {
         g->vm = vm; g->live = 1;
         vm_status(vm, &g->exit_code, &g->generation);
+        snapshot_begin(g);
         app_log("[DOSVM] fork", g->title);
         disk_log("VM ready", g->title, g->generation);
     }
@@ -293,6 +401,14 @@ static void paint(void)
     if (g && g->windows_exe) {
         ui_text(x + 14, y + 14, "Windows executable detected.", C_PAPER);
         ui_text(x + 14, y + 38, "Win32 application support is under development.", C_PAPER);
+    } else if (g && g->finished) {
+        char number[8], message[40];
+        ui_text(x + 14, y + 14, g->exit_code == 0xFFFF ?
+                "Unable to run the DOS session." : "Program finished.", C_PAPER);
+        str_copy(message, "Session return code: ");
+        fmt_hex4(number, g->exit_code); str_cat(message, number);
+        ui_text(x + 14, y + 38, message, C_PAPER);
+        ui_text(x + 14, y + 62, "Press Alt+F4 to close this window.", C_PAPER);
     }
 }
 static void feed_mouse(struct guest_window *g, int x, int y, int buttons)
@@ -343,13 +459,25 @@ static int poll(void)
     buttons_before = HOST.buttons;
     for (i = 0; i < WIN_COUNT; i++) if (guest[i].live) {
         u16 code, generation;
-        if (vm_status(guest[i].vm, &code, &generation) != VM_READY ||
+        int state = vm_status(guest[i].vm, &code, &generation);
+        if (state != VM_READY ||
             generation != guest[i].generation) {
+            disk_log("VM state", guest[i].title, (u16)state);
+            disk_log("VM generation", guest[i].title, generation);
+            if (generation != guest[i].generation) code = 0xFFFF;
+            snapshot_save(&guest[i], SNAP_EXIT, (u16)state, code);
             guest[i].live = 0; guest[i].finished = 1; guest[i].exit_code = code;
             app_log("[DOSVM] ended", guest[i].title);
             disk_log("VM exited", guest[i].title, code);
             ui_repaint_win(guest[i].win);
             changed = 1;
+        } else {
+            snapshot_sample(&guest[i]);
+            if (!guest[i].snapshot_saved &&
+                (u16)(HOST.ticks - guest[i].snapshot_started) >= SNAP_DEADLINE) {
+                guest[i].snapshot_saved = 1;
+                snapshot_save(&guest[i], SNAP_TIMEOUT, (u16)state, code);
+            }
         }
     }
     /* Every desktop wake-up: the VM manager wakes the idle desktop every
@@ -431,14 +559,20 @@ int app_event(int ev, int a, int b, int c)
         return 0;
     case EV_CLOSE:
         if (HOST.window == WIN_DOS) {
-            if (guest[0].live) vm_kill(guest[0].vm);
+            if (guest[0].live) {
+                snapshot_close(&guest[0]);
+                vm_kill(guest[0].vm);
+            }
             mem_set(&guest[0], 0, sizeof guest[0]);
             for (i = 1; i < WIN_COUNT; i++) if (guest[i].win) break;
             vm_focus(0);
             app_log("[DOSVM] closed", 0);
             return i < WIN_COUNT ? 2 : 0; /* keep the dynamic windows alive */
         } else if (g) {
-            if (g->live) vm_kill(g->vm);
+            if (g->live) {
+                snapshot_close(g);
+                vm_kill(g->vm);
+            }
             mem_set(g, 0, sizeof *g);
         }
         vm_focus(0);

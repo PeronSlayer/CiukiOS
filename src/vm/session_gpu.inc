@@ -318,6 +318,45 @@ done:
  ret
 gpu_display_info endp
 
+; Copy bind-time framebuffer cache state and current copy counters to the
+; system VM. This runs in the serialized JLM dispatcher and performs no
+; MSR, PTE, MMIO, or cache-policy operation.
+gpu_fb_diagnostics proc uses esi edi ebx
+ cmp vmm_current,0
+ jne fb_diag_unavailable
+ movzx ecx,word ptr [ebp].Client_Reg_Struc.Client_ECX
+ cmp ecx,VM_FB_DIAG_SIZE
+ jb fb_diag_bad_address
+ mov ecx,VM_FB_DIAG_SIZE
+ call guest_destination
+ test eax,eax
+ jnz fb_diag_done
+ mov ebx,edi
+ mov dword ptr [ebx],VM_FB_DIAG_MAGIC
+ mov word ptr [ebx+4],VM_FB_DIAG_VERSION
+ mov word ptr [ebx+6],VM_FB_DIAG_SIZE
+ mov dword ptr [ebx+8],VM_FB_DIAG_CACHE_SIZE
+ mov dword ptr [ebx+12],VM_FB_DIAG_TIME_SIZE
+ lea edi,[ebx+VM_FB_DIAG_HEADER_SIZE]
+ mov esi,offset fb_cache_record
+ mov ecx,VM_FB_DIAG_CACHE_SIZE
+ cld
+ rep movsb
+ mov esi,offset fb_copy_magic
+ mov ecx,VM_FB_DIAG_TIME_SIZE
+ rep movsb
+ xor eax,eax
+ ret
+fb_diag_unavailable:
+ mov eax,VM_ERROR_OPERATION
+ ret
+fb_diag_bad_address:
+ mov eax,VM_ERROR_ADDRESS
+ ret
+fb_diag_done:
+ ret
+gpu_fb_diagnostics endp
+
 gpu_legacy_bind proc
  mov eax,fb_physical
  mov dev_args,eax

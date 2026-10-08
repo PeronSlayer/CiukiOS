@@ -19,6 +19,7 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 
 MAX_WALLPAPERS = 99
+WP_FIT = 1
 SUPPORTED_SUFFIXES = {".bmp", ".png"}
 PUBLIC_SOURCE = Path(__file__).resolve().parents[1] / "assets/wallpapers/tiles"
 PHOTO_SOURCE = Path(__file__).resolve().parents[1] / "misc/ciukios_bg"
@@ -154,9 +155,9 @@ def build(output: Path, sources: list[Path], *, personal: bool,
     photo_default = next((i for i, (_, title) in enumerate(records, 1)
                           if title.split(b"\0", 1)[0] == b"Ciuk1"), None)
     if photo_default is not None:
-        (output / "WALL.CFG").write_bytes(bytes([photo_default, 0]))
+        (output / "WALL.CFG").write_bytes(bytes([photo_default, WP_FIT]))
         manifest["default_selection"] = {"file": "WALL.CFG", "entry": photo_default,
-                                         "title": "Ciuk1", "position": "Fill", "position_id": 0}
+                                         "title": "Ciuk1", "position": "Fit", "position_id": WP_FIT}
     else:
         (output / "WALL.CFG").unlink(missing_ok=True)
     (output / "WALLS.DAT").write_bytes(catalog_bytes(records))

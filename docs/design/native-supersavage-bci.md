@@ -51,6 +51,46 @@ runtime, IRQ, DRM, AGP or memory services exist in DOS.
 
 ## Ownership and usable memory
 
+### Preflight diagnostics (2026-10-08)
+
+The T23 diskseq59 capture reaches the protected 1024x768x32 CPU framebuffer,
+but the native driver reports stage 1 without any MMIO command or engine
+ownership. Stage 1 previously combined geometry and PCI-resource predicates,
+so that capture does not identify which predicate failed. A single visible
+frame is sufficient for this gate: private scratch and its readback mapping
+are separately bounded by usable VRAM after resource validation.
+
+The read-only PCI checks follow the primary
+[Linux v6.2 PCI register definitions](https://github.com/torvalds/linux/blob/v6.2/include/uapi/linux/pci_regs.h):
+command bit 1 enables memory decode, class is bits 31:16 of offset 08h,
+BAR bits 2:1 identify the memory-address type, bit 3 is prefetchability and
+bits 31:4 are the base. Prefetchable 32-bit BARs remain accepted. The pinned
+X.Org `SavageMapMem` selects BAR0 for SuperSavage MMIO, BAR1 for the linear
+framebuffer and BAR2 for its tiled apertures. Diagnostic changes retain all
+these predicates and perform no BAR sizing, PCI-command write or engine
+command before they pass.
+
+The fixed 128-byte status ABI retains stage in `error_stage & 0xff`.
+For stage 1, reason bits above the low byte distinguish format, dimensions,
+pitch, extent, missing PCI identity, class, memory decode, BAR0/1/2,
+framebuffer mismatch and MMIO overflow. Input width/height/pitch/bpp are
+recorded before validation. Discovered BAR bases are recorded before engine
+ownership. `last_status` is a preflight detail while these reason bits are
+present, rather than an alternate-status MMIO sample: it contains the mapped
+byte length for format/geometry/pitch/extent failures, raw class/command/BAR value for
+those failures, or requested physical base for a mismatch/missing device.
+Successful engine status and completion counters retain their meanings.
+
+The twelve reason flags occupy `0x000fff00`; their individual values are in
+`session_gpu_savage.h`. The production backend passed 45 host protocol
+scenarios, also under AddressSanitizer and UndefinedBehaviorSanitizer, and
+compiled with the canonical OpenWatcom flags. These include the captured
+1024x768, pitch4096, 3 MiB single-frame extent and 237x64 KiB usable-VRAM
+limit with T23-shaped 32-bit BARs (prefetchable framebuffer/aperture). The
+model qualifies all three native primitives without requiring a second front
+page. It does not qualify physical T23 acceleration. Evidence is in
+`build/tests/savage-preflight-20261008/report.json`.
+
 CVSESSION must establish and verify a real BIOS LFB mode first. A banked mode,
 including an unproven physical BAR alias, is never sufficient. Native bind
 accepts the mapped front-buffer extent and a separate firmware-reported usable

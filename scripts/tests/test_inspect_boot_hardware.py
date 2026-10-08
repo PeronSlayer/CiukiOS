@@ -138,6 +138,22 @@ class InspectBootHardwareTests(unittest.TestCase):
         result = inspect.parse_display_info(display_info(backend=0))
         self.assertFalse(result['s3_engine_qualified'])
 
+    def test_cvgd_decodes_preflight_without_changing_legacy_status(self):
+        data = display_info(backend=0)
+        struct.pack_into('<I', data, 64 + 8, 1 | 0x10000)
+        struct.pack_into('<I', data, 64 + 17 * 4, 0xE800000C)
+        result = inspect.parse_display_info(data)
+        self.assertEqual(result['s3_status']['error_stage'], 0x10001)
+        self.assertEqual(result['s3_status']['stage'], 1)
+        self.assertEqual(result['s3_status']['preflight'], {
+            'reason_code': 0x10000, 'reason': 'framebuffer_bar',
+            'raw_bar1': 0xE800000C})
+        self.assertFalse(result['s3_engine_qualified'])
+        struct.pack_into('<I', data, 64 + 8, 1)
+        self.assertIsNone(inspect.parse_display_info(data)['s3_status']['preflight'])
+        struct.pack_into('<I', data, 64 + 8, 8 | 0x10000)
+        self.assertIsNone(inspect.parse_display_info(data)['s3_status']['preflight'])
+
     def test_cvgd_separates_2d_from_triangle_qualification_and_uses_latest_probe(self):
         data = display_info()
         struct.pack_into('<I', data, 68, 1)  # fill capability only

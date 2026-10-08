@@ -22,7 +22,8 @@ from PIL import Image
 
 from qemu_test_full_display_profile import VM
 from qemu_test_installed_hdd import FAT16
-from qemu_test_photo_wallpaper import check_assets, sha256
+from qemu_test_photo_wallpaper import (check_assets, desktop_icon_boxes,
+                                       fit_bar_samples, fit_samples, sha256)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,30 +88,28 @@ def c_div2(value):
     return value // 2 if value >= 0 else -((-value) // 2)
 
 
-def marker_photo_check(frame, source):
+def marker_photo_check(frame, source, icons):
     height, width = frame.shape[:2]
     src_h, src_w = source.shape[:2]
     work_h = height - 61
     assert (width, height) in ((640, 480), (800, 600), (1024, 768), (1280, 800)), \
         f'unexpected native desktop geometry {(width, height)}'
-    # Independent Fill geometry: cover the desktop work area, then center-crop.
-    by_width = width * src_h >= work_h * src_w
+    # Independent Fit geometry: contain the complete photo in the work area.
+    by_width = width * src_h <= work_h * src_w
     if by_width:
         draw_w = width
-        draw_h = (src_h * width + src_w - 1) // src_w
+        draw_h = src_h * width // src_w
     else:
         draw_h = work_h
-        draw_w = (src_w * work_h + src_h - 1) // src_h
+        draw_w = src_w * work_h // src_h
     left = c_div2(width - draw_w)
     top = 29 + c_div2(work_h - draw_h)
+    assert draw_w <= width and draw_h <= work_h and (draw_w < width or draw_h < work_h), \
+        (left, top, draw_w, draw_h, width, work_h)
     reports = []
-    # Keep samples away from the initial pointer and the left-side desktop icons.
-    points = [(int(width * fx), 29 + int(work_h * fy))
-              for fy in (.13, .28, .43, .58, .73, .86)
-              for fx in (.34, .46, .58, .70, .82, .92)]
-    for x, y in points:
-        sx = min(src_w - 1, max(0, (x - left) * src_w // draw_w))
-        sy = min(src_h - 1, max(0, (y - top) * src_h // draw_h))
+    for x, y in fit_samples(left, top, draw_w, draw_h, icons):
+        sx = min(src_w - 1, (x - left) * src_w // draw_w)
+        sy = min(src_h - 1, (y - top) * src_h // draw_h)
         patch = source[max(0, sy - 1):min(src_h, sy + 2),
                        max(0, sx - 1):min(src_w, sx + 2)].astype(np.int16)
         observed = frame[y, x].astype(np.int16)
@@ -118,9 +117,13 @@ def marker_photo_check(frame, source):
         reports.append({'screen': [x, y], 'source': [sx, sy],
                         'max_channel_delta': int(delta.min())})
     deltas = [point['max_channel_delta'] for point in reports]
+    bar_points = fit_bar_samples(width, height, icons, (left, top, draw_w, draw_h))
+    bars = [frame[y, x].astype(np.int16) for x, y in bar_points]
+    bar_delta = max((int(np.max(np.abs(pixel - bars[0]))) for pixel in bars), default=0)
     return {
-        'frame': [width, height], 'style': 'Fill',
-        'photo_rect': [0, 29, width, work_h], 'draw_rect': [left, top, draw_w, draw_h],
+        'frame': [width, height], 'style': 'Fit',
+        'photo_rect': [0, 29, width, work_h], 'fit_rect': [left, top, draw_w, draw_h],
+        'bars': [list(point) for point in bar_points], 'bar_max_delta': bar_delta,
         'sample_count': len(reports), 'median_delta': float(np.median(deltas)),
         'max_delta': max(deltas), 'samples': reports,
     }
@@ -199,8 +202,8 @@ def main():
             f'CD WALLP.APP size/header mismatch: {len(wallp)} bytes, {wallp_paras} paragraphs'
         assert 0x116 <= wallp_entry < 0x100 + len(wallp), \
             f'CD WALLP.APP has an invalid entry offset 0x{wallp_entry:04X}'
-        assert selected[:1] == bytes([photo['index']]), \
-            f'fresh CD profile does not default to Ciuk1: {selected!r}'
+        assert selected == bytes([photo['index'], 1]), \
+            f'fresh CD profile does not default to Ciuk1/Fit: {selected!r}'
         report.update({
             'shell_sha256': sha256(shipped_shell),
             'fresh_shell_sha256': sha256(shell.read_bytes()),
@@ -250,11 +253,13 @@ def main():
         shot = vm.shot('desktop-Ciuk1')
         with Image.open(shot) as image:
             frame = np.asarray(image.convert('RGB'), dtype=np.uint8)
-        metrics = marker_photo_check(frame, photo['rgb'])
+        icons = desktop_icon_boxes(vm, frame.shape[1], frame.shape[0])
+        metrics = marker_photo_check(frame, photo['rgb'], icons)
         assert metrics['sample_count'] >= 30 and metrics['max_delta'] <= 48 and \
             metrics['median_delta'] <= 24, metrics
+        assert metrics['bar_max_delta'] <= 4, metrics
         report['rendered_Ciuk1'] = metrics
-        report['checks'].append('actual desktop screenshot matches centered Fill samples from Ciuk1 RGB')
+        report['checks'].append('actual desktop screenshot matches contained Fit samples from Ciuk1 RGB and uniform bars')
         report['desktop_screenshot'] = shot.name
         report['status'] = 'passed'
         save()

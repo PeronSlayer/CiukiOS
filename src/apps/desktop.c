@@ -1742,7 +1742,10 @@ int app_event(int ev, int a, int b, int c)
     case EV_PAINT:
         if (dialog_mine(&dlg)) dialog_draw(&dlg);
         else {
-            if(wallpaper_module.segment)webmodule_call(&wallpaper_module,EV_PAINT,0);
+            /* The overlay runs after window clients: its band must retain
+             * their pixels outside the popup. Wallpaper belongs below them. */
+            if(HOST.window==WIN_DESKTOP&&wallpaper_module.segment)
+                webmodule_call(&wallpaper_module,EV_PAINT,0);
             paint();
         }
         return 0;

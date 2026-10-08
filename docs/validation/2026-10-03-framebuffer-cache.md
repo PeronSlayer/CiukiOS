@@ -153,3 +153,42 @@ No simultaneous builds/QEMU runs, full guest-RAM dumps, host-wide indexing
 or unbounded tracing were used. The temporary candidate image and redundant
 PPMs are removed after verification; reports, PNGs, small diagnostics and
 the final matching SHELL listing remain available.
+
+## Read-only physical cache diagnostics (2026-10-08)
+
+The Linux v6.2 Savage driver maps the framebuffer and aperture write-combined
+while keeping its MMIO register mapping separate; its SuperSavage path relies
+on the platform's normal MTRR setup. Intel's SDM defines the effective type as
+the combination of the PTE's PAT index and the physical range's MTRR type, and
+requires cache/TLB coordination when changing those attributes. Linux's PAT
+documentation also warns against conflicting aliases and recommends paired
+attribute changes. Sources: [Linux v6.2 `savage_bci.c`](https://github.com/torvalds/linux/blob/v6.2/drivers/gpu/drm/savage/savage_bci.c),
+[Intel SDM volume 3A, §§4.9, 11.5.2 and 11.12.4](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf),
+[Linux 6.2 PAT documentation](https://docs.kernel.org/6.2/x86/pat.html), and
+[Linux 6.2 device-I/O documentation](https://docs.kernel.org/6.2/driver-api/device-io.html).
+
+Decision: export the existing `CVFBCACH` bind-time snapshot and `CVFBTIME`
+copy counters through a bounded, system-VM-only read API. The query reads
+already captured records; it performs no new MSR/MMIO/PTE access and changes
+no memory type. `DISPLAY.APP` persists one snapshot per process at first
+properties open in `SYSTEM/VIDEO/CACHE.LOG`, outside the desktop paint path.
+This provides physical evidence before considering any cache-policy change.
+After a valid packet, the process attempts persistence once even when the disk
+is full or read-only; a rejected write cannot create periodic diagnostic I/O.
+
+The new `VM_OP_FB_DIAGNOSTICS` (17h) packet is 624 bytes: `CVFD`, ABI
+version 0100h, total size, the 576-byte cache record size and 32-byte timing
+record size, followed by those two records byte-for-byte. A short caller
+buffer, a non-system VM, or an invalid destination is rejected by the JLM.
+`scripts/inspect_boot_hardware.py --cache CACHE.LOG` validates and decodes
+the packet. Physical log collection must retain `SYSTEM/VIDEO/CACHE.LOG` in
+addition to the existing display and GPU logs.
+
+The direct caller gate is `scripts/qemu_test_cache_diagnostics_api.py`. Its
+two NASM fixture variants test short length, invalid ES:DI, adjacent canaries,
+the exact valid 624-byte header and embedded record magics in the system VM,
+then repeat the rejection cases in a VMFORK child. It installs only into a
+private HDD copy. Assembly, Python syntax and the real QEMU protocol gate
+pass, including invalid destinations, short buffers and child isolation:
+[2026-10-08 report](../../build/full/t23-next/qemu-cache-api-20261008/report.json).
+The source image remains unchanged.

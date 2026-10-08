@@ -7,6 +7,24 @@
 #define CVSAVAGE_CAP_COPY 4U
 #define CVSAVAGE_TRIANGLE_MAGIC 0x33545643UL /* CVT3 */
 
+/* error_stage low byte remains the operation stage. Preflight reason bits
+ * apply only to stage 1; last_status then holds the failed predicate's detail
+ * (see native-supersavage-bci.md), not an MMIO status-register read. */
+#define CVSAVAGE_STAGE_MASK 0xffUL
+#define CVSAVAGE_PREFLIGHT_FORMAT 0x00000100UL
+#define CVSAVAGE_PREFLIGHT_GEOMETRY 0x00000200UL
+#define CVSAVAGE_PREFLIGHT_PITCH 0x00000400UL
+#define CVSAVAGE_PREFLIGHT_EXTENT 0x00000800UL
+#define CVSAVAGE_PREFLIGHT_MISSING 0x00001000UL
+#define CVSAVAGE_PREFLIGHT_CLASS 0x00002000UL
+#define CVSAVAGE_PREFLIGHT_DECODE 0x00004000UL
+#define CVSAVAGE_PREFLIGHT_BAR0 0x00008000UL
+#define CVSAVAGE_PREFLIGHT_BAR1 0x00010000UL
+#define CVSAVAGE_PREFLIGHT_BAR2 0x00020000UL
+#define CVSAVAGE_PREFLIGHT_PHYSICAL 0x00040000UL
+#define CVSAVAGE_PREFLIGHT_MMIO_SPAN 0x00080000UL
+#define CVSAVAGE_PREFLIGHT_MASK 0x000fff00UL
+
 typedef struct {
     uint32_t x, y, z, argb; /* IEEE754 screen coordinates, packed ARGB8888. */
 } cvsavage_vertex;

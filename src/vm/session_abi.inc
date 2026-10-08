@@ -48,6 +48,17 @@ VM_OP_FB_PRESENT       equ 13h
 VM_OP_DISPLAY_INFO     equ 14h
 VM_DISPLAY_INFO_SIZE   equ 192
 VM_DISPLAY_INFO_MAGIC  equ 044475643h
+; Read-only copy of the bind-time CVFBCACH record plus CVFBTIME counters.
+; System VM only; ES:DI output is validated by the JLM before copying.
+; Packet: CVFD, version:u16, total-size:u16, cache-bytes:u32,
+; timing-bytes:u32, then CVFBCACH[576] and CVFBTIME[32].
+VM_OP_FB_DIAGNOSTICS   equ 17h
+VM_FB_DIAG_MAGIC       equ 044465643h
+VM_FB_DIAG_VERSION     equ 0100h
+VM_FB_DIAG_HEADER_SIZE equ 16
+VM_FB_DIAG_CACHE_SIZE  equ 576
+VM_FB_DIAG_TIME_SIZE   equ 32
+VM_FB_DIAG_SIZE        equ 624
 ; Bounded protected native-pixel fill, system VM only. ES:DI names an exact
 ; 32-byte CVFF packet; CX >=32. No firmware call or guest CR0 switch occurs.
 VM_OP_FB_FILL          equ 15h

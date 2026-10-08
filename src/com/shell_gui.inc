@@ -267,6 +267,19 @@ ui_action:
     ja .menu_closed
     mov byte [ui_window_flags+7],0
 .menu_closed:
+    ; Owner zero identifies the shell taskbar, even with a module active.
+    ; Module controls may use the same numeric IDs with a window owner.
+    cmp byte [ui_hit_target],0
+    jne .module_controls
+    cmp ax,200
+    jb .module_controls
+    cmp ax,200+UI_WINDOW_COUNT-1
+    ja .module_controls
+    sub al,200
+    mov [ui_dialog],al
+    call ui_windows_open
+    jmp ui_redraw
+.module_controls:
     cmp ax,100
     jb .non_files
     cmp ax,248
@@ -314,23 +327,14 @@ ui_action:
     jmp ui_redraw
 .non_wallpaper:
     cmp ax,90
-    jb .native_task
+    jb .standard
     cmp ax,94
-    ja .native_task
+    ja .standard
     sub ax,90
     shl ax,1
     mov bx,ax
     mov si,[ui_display_commands+bx]
     jmp .apply_setting
-.native_task:
-    cmp ax,200
-    jb .standard
-    cmp ax,200+UI_WINDOW_COUNT-1
-    ja .standard
-    sub al,200
-    mov [ui_dialog],al
-    call ui_windows_open
-    jmp ui_redraw
 .standard:
     cmp ax,18
     je .close_dialog

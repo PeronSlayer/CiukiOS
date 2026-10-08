@@ -7,9 +7,10 @@
 static struct disp_probe probe;
 static struct dialog notice;
 static u8 native[192];
+static u8 cache_diagnostics[624];
 static u8 session_info[64];
 static u16 vm_seg, vm_off;
-static int native_ok, protected_lfb_ok, page, selected, top, focus, pending_probe = 1;
+static int native_ok, cache_log_attempted, protected_lfb_ok, page, selected, top, focus, pending_probe = 1;
 static int probe_require_banked;
 static int X, Y, W, H;
 static unsigned last_poll, preview_tick;
@@ -47,6 +48,34 @@ static const u8 theme_swatches[8] = { 3, 9, 2, 12, 8, 13, 6, 1 };
 static const char *icon_names[8] = { "Computer", "Programs", "Recycle Bin", "Control Panel", "DOS Prompt", "Floppy", "USB drive", "CD-ROM" };
 #define DISPLAY_LOG_PATH "\\SYSTEM\\DISPLAY.LOG"
 #define DISPLAY_LOG_LIMIT 4096L
+#define CACHE_LOG_PATH "\\SYSTEM\\VIDEO\\CACHE.LOG"
+
+static void cache_log_persist(void)
+{
+    struct regs r;
+    int h;
+    if (cache_log_attempted || !vm_seg) return;
+    mem_set(cache_diagnostics, 0, sizeof cache_diagnostics);
+    mem_set(&r, 0, sizeof r);
+    r.ax = 0x0117;                 /* VM_OP_FB_DIAGNOSTICS | NO_SWITCH */
+    r.cx = sizeof cache_diagnostics;
+    r.di = (u16)cache_diagnostics;
+    r.ds = r.es = app_seg();
+    if (far_regs(vm_seg, vm_off, &r) || (r.flags & 1)) return;
+    if (*(u32 *)(cache_diagnostics + 0) != 0x44465643UL ||
+        *(u16 *)(cache_diagnostics + 4) != 0x0100 ||
+        *(u16 *)(cache_diagnostics + 6) != sizeof cache_diagnostics ||
+        *(u32 *)(cache_diagnostics + 8) != 576 ||
+        *(u32 *)(cache_diagnostics + 12) != 32 ||
+        mem_cmp(cache_diagnostics + 16, "CVFBCACH", 8) ||
+        mem_cmp(cache_diagnostics + 592, "CVFBTIME", 8)) return;
+    /* A full or read-only disk must not turn diagnostics into periodic I/O. */
+    cache_log_attempted = 1;
+    h = dos_create(CACHE_LOG_PATH);
+    if (h < 0) return;
+    dos_write(h, cache_diagnostics, sizeof cache_diagnostics);
+    dos_close(h);
+}
 
 static u16 display_msw(void);
 #pragma aux display_msw = "smsw ax" value [ax];
@@ -96,6 +125,7 @@ static void native_read(void)
     native_ok = 1;
     if (nfield(52) == 128 && disp_probe_parse_edid(native + 64, 128, &probe.monitor))
         probe.flags |= DISP_F_EDID;
+    cache_log_persist();
 }
 static void diag_hex4(char **dst, u16 value)
 {

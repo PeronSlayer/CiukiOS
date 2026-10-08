@@ -21,6 +21,17 @@ static uint32_t draws, copies, fills, max_video_offset, tested;
 static uint32_t fifo_stuck_after_fill, busy_after_draw;
 static uint32_t suppress_copy, other_pci, seq_locked, seq_unstable, seq61_reads;
 static uint32_t cr_data_writes, seq_data_writes;
+static uint32_t pci_class, bar_flags[3], physical_profile, mmio_override;
+
+static uint32_t mmio_base(void)
+{
+    return mmio_override ? mmio_override : physical_profile ? 0xc0100000U : MMIO_PHYS;
+}
+
+static uint32_t framebuffer_base(void)
+{
+    return physical_profile ? 0xe8000000U : FB_PHYS;
+}
 
 static uint32_t pixel_address(uint32_t base, uint32_t descriptor,
                                uint32_t x, uint32_t y)
@@ -157,11 +168,11 @@ uint32_t cvdev_in(uint32_t port, uint32_t size)
     switch (pci_address & 0xfcU) {
     case 0U: return other_pci ? 0x8a225333U : 0x8c2e5333U;
     case 4U: return memory_disabled ? 1U : 3U;
-    case 8U: return 0x03000000U;
+    case 8U: return pci_class;
     case 0x0cU: return 0U;
-    case 0x10U: return MMIO_PHYS;
-    case 0x14U: return bad_bar ? FB_PHYS + 0x100000U : FB_PHYS;
-    case 0x18U: return AP_PHYS;
+    case 0x10U: return mmio_base() | bar_flags[0];
+    case 0x14U: return (framebuffer_base() + (bad_bar ? 0x100000U : 0U)) | bar_flags[1];
+    case 0x18U: return (physical_profile ? 0xe4000000U : AP_PHYS) | bar_flags[2];
     default: return 0U;
     }
 }
@@ -179,9 +190,9 @@ void cvdev_out(uint32_t port, uint32_t value, uint32_t size)
 uint32_t cvgpu_map_mmio(uint32_t physical, uint32_t bytes)
 {
     if (map_failure) return 0U;
-    if (physical == MMIO_PHYS) { assert(bytes == 0x80000U); return 1U; }
-    assert(physical >= FB_PHYS && physical + bytes <= FB_PHYS + USABLE_BYTES);
-    probe_physical = physical - FB_PHYS;
+    if (physical == mmio_base()) { assert(bytes == 0x80000U); return 1U; }
+    assert(physical >= framebuffer_base() && physical + bytes <= framebuffer_base() + USABLE_BYTES);
+    probe_physical = physical - framebuffer_base();
     return 2U;
 }
 
@@ -238,6 +249,8 @@ static void reset(void)
     fifo_stuck_after_fill = busy_after_draw = 0U;
     suppress_copy = other_pci = seq_locked = seq_unstable = seq61_reads = 0U;
     cr_data_writes = seq_data_writes = 0U;
+    pci_class = 0x03000000U; memset(bar_flags, 0, sizeof(bar_flags));
+    physical_profile = mmio_override = 0U;
     memset(sequencer, 0, sizeof(sequencer));
     sequencer[0x61] = 127U; sequencer[0x69] = 255U; sequencer[0x6e] = 0x20U;
     cr_index = 0x3fU; seq_index = 0x55U;
@@ -266,13 +279,62 @@ int main(void)
     uint32_t before, value, i;
     cvsavage_triangle_packet p;
     assert(sizeof(cvsavage_status_info) == 128U && sizeof(p) == 64U);
-    reset(); present = 0U; assert(bind(32U) == 0U && writes == 0U); ++tested;
-    reset(); bad_bar = 1U; assert(bind(32U) == 0U && writes == 0U); ++tested;
-    reset(); memory_disabled = 1U; assert(bind(32U) == 0U && writes == 0U); ++tested;
+    reset(); present = 0U; assert(bind(32U) == 0U && writes == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_MISSING));
+    assert(cvsavage_status.last_status == FB_PHYS && cvsavage_status.width == 640U);
+    assert(cvsavage_status.height == 480U && cvsavage_status.pitch == 2560U &&
+           cvsavage_status.bpp == 32U && cr_data_writes == 0U); ++tested;
+    reset(); bad_bar = 1U; assert(bind(32U) == 0U && writes == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_PHYSICAL));
+    assert(cvsavage_status.last_status == FB_PHYS &&
+           cvsavage_status.framebuffer_physical == FB_PHYS + 0x100000U); ++tested;
+    reset(); memory_disabled = 1U; assert(bind(32U) == 0U && writes == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_DECODE));
+    assert(cvsavage_status.last_status == 1U); ++tested;
     reset(); map_failure = 1U; assert(bind(32U) == 0U && !cvsavage_owned()); ++tested;
     reset(); assert(cvsavage_bind(FB_PHYS, 1228800U, 640U, 480U, 2560U, 32U, 0U) == 0U); ++tested;
     reset(); assert(cvsavage_bind(FB_PHYS, 1228800U, 640U, 480U, 2560U, 32U, VRAM_BYTES + 1U) == 0U); ++tested;
-    reset(); assert(bind(24U) == 0U && writes == 0U); ++tested;
+    reset(); assert(bind(24U) == 0U && writes == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_FORMAT));
+    assert(cvsavage_status.bpp == 24U && cvsavage_status.last_status == 921600U); ++tested;
+    reset(); assert(cvsavage_bind(FB_PHYS, 1228800U, 0U, 480U, 2560U, 32U,
+                                 USABLE_BYTES) == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_GEOMETRY));
+    assert(cvsavage_status.last_status == 1228800U && writes == 0U); ++tested;
+    reset(); assert(cvsavage_bind(FB_PHYS, 1228800U, 640U, 480U, 2559U, 32U,
+                                 USABLE_BYTES) == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_PITCH));
+    assert(cvsavage_status.pitch == 2559U && writes == 0U); ++tested;
+    reset(); assert(cvsavage_bind(FB_PHYS, 1228799U, 640U, 480U, 2560U, 32U,
+                                 USABLE_BYTES) == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_EXTENT));
+    assert(cvsavage_status.last_status == 1228799U && writes == 0U); ++tested;
+    reset(); assert(cvsavage_bind(0xfffff000U, 1228800U, 640U, 480U, 2560U, 32U,
+                                 USABLE_BYTES) == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_EXTENT) &&
+           writes == 0U && cr_data_writes == 0U); ++tested;
+    reset(); pci_class = 0x03800005U; assert(bind(32U) == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_CLASS));
+    assert(cvsavage_status.last_status == pci_class && writes == 0U); ++tested;
+    for (i = 0U; i < 3U; ++i) {
+        reset(); bar_flags[i] = 4U; assert(bind(32U) == 0U);
+        assert(cvsavage_status.error_stage == (1U | (CVSAVAGE_PREFLIGHT_BAR0 << i)));
+        assert((cvsavage_status.last_status & 7U) == 4U && writes == 0U &&
+               cr_data_writes == 0U && seq_data_writes == 0U); ++tested;
+    }
+    reset(); mmio_override = 0xfffffff0U; assert(bind(32U) == 0U);
+    assert(cvsavage_status.error_stage == (1U | CVSAVAGE_PREFLIGHT_MMIO_SPAN));
+    assert(cvsavage_status.last_status == 0xfffffff0U && writes == 0U); ++tested;
+    reset(); physical_profile = 1U; bar_flags[1] = bar_flags[2] = 8U;
+    assert(cvsavage_bind(0xe8000000U, 3145728U, 1024U, 768U, 4096U,
+                         32U, USABLE_BYTES) == 1U);
+    assert(cvsavage_status.caps == 7U && cvsavage_status.width == 1024U &&
+           cvsavage_status.height == 768U && cvsavage_status.pitch == 4096U);
+    assert(cvsavage_status.framebuffer_physical == 0xe8000000U &&
+           cvsavage_status.mmio_physical == 0xc0100000U &&
+           cvsavage_status.aperture_physical == 0xe4000000U);
+    assert(cvsavage_status.scratch_offset == 3145728U &&
+           max_video_offset < USABLE_BYTES && cvsavage_status.error_stage == 0U); ++tested;
     reset(); busy = 1U; assert(bind(32U) == 0U && !cvsavage_owned()); assert(reads < 70000U); ++tested;
     assert(memcmp(crtc, original_crtc, sizeof(crtc)) == 0);
     reset(); suppress_fill = 1U; assert(bind(32U) == 0U && !cvsavage_owned());

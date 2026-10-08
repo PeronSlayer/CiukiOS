@@ -89,7 +89,7 @@ wp_begin:
     mov word [wp_status],wp_empty
 .read_config:
     mov byte [wp_selected],0
-    mov byte [wp_style],0            ; Fill, including legacy one-byte profiles
+    mov byte [wp_style],1            ; Fit unless a valid two-byte profile selects a style
     ; The owner's Ciuk1 photo is the default even without WALL.CFG.
     xor bp,bp
 .default_photo:
@@ -775,7 +775,7 @@ wp_page dw 0
 wp_selected db 0
 wp_choice db 0
 wp_kind db 0                          ; 0 solid, 1 indexed tile, 2 RGB photo
-wp_style db 0                         ; Fill/Fit/Stretch/Center/Tile
+wp_style db 1                         ; Fit by default; Fill/Fit/Stretch/Center/Tile
 wp_generation dw 0
 wp_width dw 0
 wp_height dw 0
