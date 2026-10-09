@@ -5,8 +5,10 @@
 - **Implementer:** Codex, `gpt-6.1-sol`, effort `high`.
 - **Worktree:** `wt/f1-runner` (the f1-02 delivery, uncommitted), to be
   rebased by you onto current `main`, which now contains f0-01 (parser
-  hardening, NOT_RUN, canonical selector reconstruction) and f1-00
-  (kernel services). Files: those of f1-02 plus
+  hardening, NOT_RUN, canonical selector reconstruction), f1-00 (kernel
+  services) and f1-01 (filesystem code under `src/kernel/fs/`). The f1-02
+  delivery is committed on the branch as `72d0ab6`; merge `main` into it
+  (`git merge main`), resolve the conflicts and commit on this branch only. Files: those of f1-02 plus
   `src/kernel/include/ciuki/probe.h`, `src/kernel/linker.ld`,
   `src/kernel/probes/probes.c`, `src/boot/ciukldr/menu.inc`,
   `tests/host/kernel_lib_test.c` if a host check is useful. Nothing else.
@@ -40,7 +42,19 @@
    spaces or end of line; a malformed token is a selection error reported on
    screen and serial (`SELECT_ERROR` path), not silently ignored. Mirror the
    rule in `loader_model.py` with a test.
-5. **Contract note for the lead** (no file change needed from you): the
+5. **No fixture transport into the guest.** `ciuki_boot_info` v1 is frozen
+   and carries only the 64-byte selector, so the fw_cfg `fixture` item and
+   the manifest `file_id/size/sha256` fields of f1-02 are removed. Instead
+   the guest reports what it read (`lba=… sha256=…`, file names, sizes and
+   SHA-256 digests) and the runner compares those records with digests it
+   computes itself from the backing image or the overlay (`qemu-img`
+   read-only export, `mtools`, `hashlib`). Update the f1 suites' predicates
+   accordingly; the `ata-fault` subcases run inside one guest boot against
+   a scripted fake behind the driver's register boundary (directive f1-06),
+   so the suite has one `ata-fault` case plus one `ata-fault-blkdebug` case
+   that injects a real read error through blkdebug and expects `EIO`,
+   quarantine and zero further commands.
+6. **Contract note for the lead** (no file change needed from you): the
    kernel keeps `f1:all`/`f1:core` as aliases for photographed hardware
    runs; the runner still expands aliases into ordered single-probe boots.
 
