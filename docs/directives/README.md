@@ -28,7 +28,7 @@ evidence and merges.
 | [f2-06-sdk-newlib](f2-06-sdk-newlib.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (clean build 17 s; guest not_run) |
 | [f2-03-files-and-paths](f2-03-files-and-paths.md) | F2 | gpt-6-astra / xhigh | written; starts after f2-02 and f1-09 |
 | [f2-09-runner-f2-suites](f2-09-runner-f2-suites.md) | F2 | gpt-6.1-sol / high | written; starts after f1-03 |
+| [f2-07-lua-port-and-payloads](f2-07-lua-port-and-payloads.md) | F2 | gpt-6.1-sol / high | issued 2026-10-11 |
 
 Planned next (F2, after f2-02): f2-04 signals and faults, f2-05 desktop
-objects and the bootstrap supervisor, f2-07 Lua 5.4.8 port and tests,
-f2-08 ring-3 desktop.
+objects and the bootstrap supervisor, f2-08 ring-3 desktop.
