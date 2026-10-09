@@ -24,9 +24,12 @@ typedef unsigned long u32;
 struct regs { u16 ax, bx, cx, dx, si, di, ds, es, flags, bp; };
 struct kio { u32 lba; u16 off, seg, write; };
 extern struct regs R;
-extern u16 k_seg, kl_fat_valid, kl_fat_dirty, kl_fat_sector, kl_fat_buf, kl_indos;
 int kdos(struct regs *r);
 int kio(struct kio *q);
+int kflush(void);
+int kinvalidate(void);
+int kenter(void);
+int kleave(void);
 u32 mul16(u16 a, u16 b);
 #pragma aux mul16 parm [ax] [dx] value [dx ax] modify exact [ax dx];
 void com1(const char *s);
@@ -124,19 +127,10 @@ static int dload(u32 lba)
 static u8 fbuf[512];
 static u16 fsec = NONE;
 static u8 fdirty;
-static u8 __far *kvar(u16 off) { return FP(k_seg, off); }
 /* The kernel's dirty FAT sector, written back before the FAT is read. */
 static int ksync(void)
 {
-    u16 s = *(u16 __far *)kvar(kl_fat_sector), i;
-    if (*kvar(kl_fat_valid) == 1 && *kvar(kl_fat_dirty) == 1 && s != NONE) {
-        for (i = 0; i < g_nfats; i++) {
-            q.lba = (u32)g_fat + (u32)i * g_fatsz + s; q.off = 0; q.seg = kl_fat_buf; q.write = 1;
-            if (kio(&q)) return 5;
-        }
-        *kvar(kl_fat_dirty) = 0;
-    }
-    return 0;
+    return kflush() ? 5 : 0;
 }
 static int fflush(void)
 {
@@ -146,10 +140,7 @@ static int fflush(void)
     for (i = 0; i < g_nfats; i++)
         if (sec_io((u32)g_fat + (u32)i * g_fatsz + fsec, fbuf, 1)) return 5;
     /* The kernel re-reads what it had cached. */
-    *(u16 __far *)kvar(kl_fat_sector) = NONE;
-    *kvar(kl_fat_valid) = 0;
-    *kvar(kl_fat_dirty) = 0;
-    return 0;
+    return kinvalidate() ? 5 : 0;
 }
 static int ioerr;
 static u16 fat_get(u16 c)
@@ -1106,19 +1097,18 @@ static void op_end(void) { dflush(); fflush(); }
 int lfn_dispatch(void)
 {
     u8 ah = (u8)(R.ax >> 8), al = (u8)R.ax;
-    u8 __far *indos = FP(k_seg, kl_indos);
     int e = 0, i;
     if (ah == 0x4C || ah == 0) {
         u16 psp = cur_psp();
         for (i = 0; i < NFIND; i++) if (F[i].psp == psp) F[i].used = 0;
         return 1;
     }
-    (*indos)++;
+    if (kenter()) { R.ax = 5; R.flags |= 1; return 0; }
     op_begin();
     if (ah != 0x71) {
         e = hook83();
         op_end();
-        (*indos)--;
+        if (kleave() && e >= 0) { R.ax = 5; R.flags |= 1; return 0; }
         return e < 0 ? 1 : 0;
     }
     switch (al) {
@@ -1146,7 +1136,7 @@ int lfn_dispatch(void)
     }
     op_end();
     if (!e && ioerr) e = ioerr;
-    (*indos)--;
+    if (kleave() && !e) e = 5;
     if (e < 0) { R.ax = 0x7100; R.flags |= 1; }
     else if (e) { R.ax = (u16)e; R.flags |= 1; }
     else R.flags &= ~1;

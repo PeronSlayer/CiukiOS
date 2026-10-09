@@ -89,10 +89,14 @@ rg -q '^%define CIUKIDOS_KERNEL_BUILD 1$' "$KERNEL_SRC" \
 
 loader_size="$(stat -c%s "$LOADER_BIN")"
 kernel_size="$(stat -c%s "$KERNEL_BIN")"
+read -r expected_abi expected_service_count kernel_max runtime_seg \
+  < <(python3 scripts/ciukidos_image.py --build-parameters)
 (( loader_size > 0 && loader_size <= 0x1000 )) \
   || fail "loader size $loader_size is outside 1..4096 bytes"
-(( kernel_size >= 124 && kernel_size <= 0xA900 )) \
-  || fail "kernel size $kernel_size is outside 124..43264 bytes"
+(( kernel_size >= 124 && kernel_size <= kernel_max )) \
+  || fail "kernel size $kernel_size exceeds the shared ABI extent"
+python3 scripts/ciukidos_image.py --kernel "$KERNEL_BIN" --json \
+  > build/full/obj/kernel-layout.json
 
 if rg -n '^[[:space:]]*int[[:space:]]+(20h|21h|0x20|0x21)([[:space:]]|$)' "$LOADER_SRC" >/dev/null; then
   fail "loader-only Stage1 contains an INT 20h/21h instruction"
@@ -131,12 +135,12 @@ load_segment="$(read_u16_le "$KERNEL_BIN" 24)"
 [[ "$signature" == "4349554b49444f53" ]] || fail "bad CIUKIDOS image signature: $signature"
 (( header_size == 26 )) || fail "header size is $header_size, expected 26"
 (( abi_version == 2 )) || fail "ABI version is $abi_version, expected 2"
-(( service_count == 11 )) || fail "service count is $service_count, expected 11"
+(( service_count == expected_service_count )) || fail "service count disagrees with the shared ABI"
 (( descriptor_size == 8 )) || fail "descriptor size is $descriptor_size, expected 8"
 (( capabilities == 0x003f )) || fail "capabilities are $capabilities, expected 0x003f"
 (( declared_size == kernel_size )) \
   || fail "header image size $declared_size does not match artifact size $kernel_size"
-(( table_offset == 26 )) || fail "service table offset is $table_offset, expected 26"
+(( table_offset == 29 )) || fail "service table offset is $table_offset, expected 29"
 (( load_segment == 0x0900 )) || fail "load segment is $load_segment, expected 0x0900"
 
 table_magic="$(read_hex "$KERNEL_BIN" "$table_offset" 4)"
@@ -167,6 +171,6 @@ for ((index = 0; index < service_count; index++)); do
 done
 
 echo "[phase5-ownership] loader-only Stage1: PASS ($loader_size bytes, no DOS owner)"
-echo "[phase5-ownership] CIUKIDOS ABI2: PASS ($kernel_size bytes, 11 services, capabilities=0x003f)"
+echo "[phase5-ownership] CIUKIDOS ABI2: PASS ($kernel_size bytes, $service_count services, capabilities=0x003f)"
 echo "[phase5-ownership] INT21 chain isolation: PASS (no legacy far-chain target)"
 echo "[phase5-ownership] PASS"

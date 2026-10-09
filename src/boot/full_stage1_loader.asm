@@ -6,20 +6,12 @@ org 0x0000
 ; table, then transfers control.  No DOS interrupt, process, allocator, EXEC,
 ; handle or file-service implementation lives in this binary.
 
-%define CIUKIDOS_LOAD_SEG        0x0900
-%define CIUKIDOS_RUNTIME_SEG     0x0300
+%include "src/runtime/ciukidos_abi.inc"
 %define CIUKIDOS_RELOCATOR_SEG   0x0060
 %define LOADER_BUFFER_SEG        0x0500
-%define CIUKIDOS_HEADER_SIZE     26
-%define CIUKIDOS_ABI_VERSION     2
-%define CIUKIDOS_SERVICE_COUNT   11
-%define CIUKIDOS_DESCRIPTOR_SIZE 8
-%define CIUKIDOS_MIN_SIZE        (CIUKIDOS_HEADER_SIZE + 10 + (CIUKIDOS_SERVICE_COUNT * CIUKIDOS_DESCRIPTOR_SIZE))
-%define CIUKIDOS_CAPABILITIES    0x003F
-; The temporary validation window at 0900h has 0xA900 bytes available before
-; legacy scratch areas.  The final 0300h image uses the same bound and ends
-; immediately below the relocated SYSVARS region at 0D90h.
-%define CIUKIDOS_MAX_SIZE        0xA900
+; The temporary window permits a 60 KiB core. SYSVARS and process scratch
+; reservations follow the actual relocated image, not its maximum capacity.
+%define CIUKIDOS_MAX_SIZE CIUKIDOS_KERNEL_MAX_BYTES
 
 %ifndef FAT_SPT
 %define FAT_SPT 63
@@ -95,6 +87,15 @@ stage1_loader_start:
     mov si, msg_loader_valid
     call print_string_dual
 
+    ; Select the notebook input backend while this boot-only module exists.
+    ; The kernel relocation overwrites the loader, so pass only the decision
+    ; in DH. A magic value distinguishes it from ordinary BIOS scratch data.
+    call input_platform_firmware_first
+    mov dh, 0
+    jnc .input_policy_ready
+    mov dh, 0xE5
+.input_policy_ready:
+
     ; The loader occupies 0800h and therefore reads/validates the kernel at
     ; 0900h.  Once validation is complete, a tiny stub below the DOS arena
     ; moves the position-independent image to its final low-memory segment.
@@ -136,6 +137,8 @@ ciukidos_relocator:
     mov dl, bl
     jmp CIUKIDOS_RUNTIME_SEG:0x0000
 ciukidos_relocator_end:
+
+%include "src/boot/input_platform.inc"
 
 stage1_loader_fatal:
 %ifdef BOOT_DISK_LOG
@@ -558,7 +561,7 @@ validate_ciukidos:
     mov ax, [found_size_lo]
     cmp [es:20], ax
     jne .fail
-    cmp word [es:22], CIUKIDOS_HEADER_SIZE
+    cmp word [es:22], CIUKIDOS_TABLE_OFFSET
     jne .fail
     cmp word [es:24], CIUKIDOS_LOAD_SEG
     jne .fail

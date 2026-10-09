@@ -458,6 +458,40 @@ vc_store_pixel:
 ; byte of its top-left corner, FS:SI = 24x16 save area (24*vc_bytes per row).
 ; vc_pointer_draw also takes BX = 16 outline words followed by 16 fill words.
 vc_pointer_save:
+    ; Each displayed page owns its saved rectangle. Retain the transfer
+    ; geometry with the pixels: restore must not use a later pointer or
+    ; display size. Offset/pitch math also excludes framebuffer row padding.
+    pushad
+    mov bp,vc_pointer_clip
+    mov eax,edi
+    cmp eax,[cs:vc_frame_bytes]
+    jb .page
+    sub eax,[cs:vc_frame_bytes]
+    add bp,12
+.page:
+    mov [cs:bp],si                    ; source save area also identifies flips
+    movzx ecx,word [cs:vc_pitch]
+    mov [cs:bp+8],cx
+    xor edx,edx
+    div ecx
+    mov cx,[cs:vc_info+20]
+    sub cx,ax
+    cmp cx,16
+    jbe .rows
+    mov cx,16
+.rows:
+    mov [cs:bp+6],cx
+    movzx ax,byte [cs:vc_bytes]
+    imul cx,ax,24
+    mov [cs:bp+10],cx
+    imul ax,[cs:vc_info+18]
+    sub ax,dx
+    cmp cx,ax
+    jbe .columns
+    mov cx,ax
+.columns:
+    mov [cs:bp+4],cx
+    popad
     mov byte [cs:vc_fb_read],1
     jmp vc_pointer_xfer
 vc_pointer_restore:
@@ -465,14 +499,33 @@ vc_pointer_restore:
 vc_pointer_xfer:
     pushad
     push fs
-    movzx cx,byte [cs:vc_bytes]
-    imul cx,cx,24
-    mov bx,cx
-    mov dx,16
+    call vc_pointer_geometry
+    push word [cs:vc_pitch]
+    mov [cs:vc_pitch],ax
     call vc_fb_rows
+    pop word [cs:vc_pitch]
     pop fs
     popad
     ret
+
+vc_pointer_geometry:
+    mov bp,vc_pointer_clip
+    cmp si,[cs:vc_pointer_clip+12]
+    jne .first
+    add bp,12
+.first:
+    mov cx,[cs:bp+4]
+    mov dx,[cs:bp+6]
+    mov ax,[cs:bp+8]
+    mov bx,[cs:bp+10]
+    ret
+
+; RAM save-area offset + reserved, row bytes, rows, framebuffer pitch,
+; RAM stride. Use the source area for restore: page catch-up can restore
+; the front cursor's background onto the other physical display page.
+vc_pointer_clip times 2 dw 0,0,0,0,0,0
+vc_pointer_skip_x db 0
+vc_pointer_skip_y db 0
 
 ; Compose the whole arrow in RAM, then submit its rows in one transfer.
 ; A cursor update must not pay sixteen monitor entries/bank operations.
@@ -481,6 +534,7 @@ vc_pointer_draw:
     push es
     push fs
     cld
+    push si
     push edi
 %ifdef VC_POINTER_WORKSPACE_EXTERNAL
     push fs
@@ -499,10 +553,19 @@ vc_pointer_draw:
     pop ds
     mov di,vc_pointer_row
     mov bp,16
+    movzx ax,byte [cs:vc_pointer_skip_y]
+    sub bp,ax
+    shl ax,1
+    add bx,ax
 .row:
     mov si,[bx]
     mov dx,[bx+32]
+    mov cl,[cs:vc_pointer_skip_x]
+    shl si,cl
+    shl dx,cl
+    movzx ax,cl
     mov cx,16
+    sub cx,ax
 .pixel:
     shl si,1
     jc .outline
@@ -519,23 +582,26 @@ vc_pointer_draw:
     call vc_store_pixel
 .next:
     loop .pixel
-    movzx ax,byte [cs:vc_bytes]
-    shl ax,3                  ; eight transparent pixels at the row's end
+    movzx ax,byte [cs:vc_pointer_skip_x]
+    add ax,8                   ; transparent tail includes left-clipped pixels
+    movzx cx,byte [cs:vc_bytes]
+    imul ax,cx
     add di,ax
     add bx,2
     dec bp
     jnz .row
     pop edi
+    pop si
 %ifndef VC_POINTER_WORKSPACE_EXTERNAL
     push ds
     pop fs
 %endif
+    call vc_pointer_geometry
     mov si,vc_pointer_row
-    movzx cx,byte [cs:vc_bytes]
-    imul cx,cx,24
-    mov bx,cx
-    mov dx,16
+    push word [cs:vc_pitch]
+    mov [cs:vc_pitch],ax
     call vc_fb_put_rows
+    pop word [cs:vc_pitch]
     pop fs
     pop es
     popad

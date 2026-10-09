@@ -5,6 +5,7 @@
  * Settings are kept in \SYSTEM\UI\DESKTOP.CFG, which the shell applies at
  * once and at every start. */
 #include "app.h"
+#include "audio_settings.h"
 #include "regstore.h"
 
 static u8 inb(u16 port);
@@ -829,6 +830,7 @@ static int boot_sound(void)
 static void sound_open(void)
 {
     int k = P_SOUND;
+    int saved_level, saved_mute;
     u16 v;
     ac97_find();
     an[k] = 0;
@@ -857,6 +859,10 @@ static void sound_open(void)
     } else {
         snd_master.value = snd_pcm.value = 0;
         ac[k][snd_mute_at].disabled = 1;
+    }
+    if (audio_settings_load(&saved_level, &saved_mute)) {
+        snd_master.value = saved_level;
+        ac[k][snd_mute_at].value = saved_mute;
     }
     add(k, DC_BUTTON, 0, 242, 130, 26, "&Advanced...", 12);
     add(k, DC_BUTTON, 228, 242, 84, 26, "OK", 1);
@@ -898,6 +904,7 @@ static void sound_save(void)
     int f = dos_create("\\SYSTEM\\BOOT.SND");
     if (f >= 0) { dos_write(f, &c, 1); dos_close(f); }
     sound_mixer();
+    audio_settings_save(snd_master.value, ac[P_SOUND][snd_mute_at].value);
     app_log("[CONTROL] saved", c == '1' ? "sound startup on" : "sound startup off");
 }
 

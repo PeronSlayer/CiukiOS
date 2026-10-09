@@ -27,12 +27,10 @@ STAGE2_MAX_SIZE=512
 RUNTIME_SRC="src/runtime/ciukidos.asm"
 RUNTIME_BIN="build/full/obj/ciukidos.sys"
 CIUKIDOS_EXTERNAL_XMS="${CIUKIOS_VM_WINDOW:-1}"
-# The loader validates CIUKIDOS at 0x0900 and relocates its position-independent
-# image to 0x0300.  The bounded image may use the complete interval up to, but
-# never including, SYSVARS at 0x0D90.
-RUNTIME_MAX_SIZE=$((0xA900))
-CIUKIDOS_RUNTIME_SEG=0x0300
-CIUKIDOS_ABI_VERSION=2
+# Actual paragraph reservations follow the resident extent; unused growth
+# capacity is not reserved from the DOS arena.
+read -r CIUKIDOS_ABI_VERSION CIUKIDOS_SERVICE_COUNT RUNTIME_MAX_SIZE CIUKIDOS_RUNTIME_SEG \
+    < <(python3 scripts/ciukidos_image.py --build-parameters)
 
 IMG="${CIUKIOS_FULL_IMG:-build/full/ciukios-full.img}"
 TOTAL_SECTORS="${CIUKIOS_FULL_TOTAL_SECTORS:-262144}"
@@ -376,13 +374,15 @@ nasm -f bin src/com/hwdetect.asm -o build/full/obj/hwdetect.com
 nasm -f bin src/com/loaddrv.asm -o build/full/obj/loaddrv.com
 nasm -f bin assets/drivers/samples/hello/hello.asm -o build/full/obj/hello.com
 nasm -f bin src/com/inputinit.asm -o build/full/obj/inputini.com
+nasm -f bin src/com/inputstate.asm -o build/full/obj/inputst.com
 nasm -f bin src/com/dos_window_runtime.asm -o build/full/obj/doswin.drv
 nasm -f bin src/com/window_game_launch.asm -o build/full/obj/dwin.com
 nasm -f bin src/com/window_game_launch.asm -D WINDOW_WOLF=1 -o build/full/obj/wwin.com
 python3 scripts/build_doom_window.py --output build/full/obj/doom-window
 python3 scripts/build_wolf_window.py --output build/full/obj/wolf-window
 nasm -f bin "$STAGE2_SRC" -o "$STAGE2_BIN"
-nasm -f bin "$RUNTIME_SRC" \
+python3 scripts/build_kernel_component.py --record build/full/obj/kernel-build-command.json -- \
+	nasm -f bin "$RUNTIME_SRC" \
 	-D CIUKIDOS_EXTERNAL_XMS="$CIUKIDOS_EXTERNAL_XMS" \
 	-D FAT_SPT="$FAT_SPT" \
 	-D FAT_HEADS="$FAT_HEADS" \
@@ -407,6 +407,8 @@ nasm -f bin "$RUNTIME_SRC" \
 	-D ENABLE_PS2_MOUSE_INIT="$ENABLE_PS2_MOUSE_INIT" \
 	-D WOLF_RUNTIME_DIAG="$WOLF_RUNTIME_DIAG" \
 	-l build/full/obj/ciukidos.lst -o "$RUNTIME_BIN"
+python3 scripts/ciukidos_image.py --kernel "$RUNTIME_BIN" --json \
+    > build/full/obj/kernel-layout.json
 nasm -f bin "$COMDEMO_SRC" -o "$COMDEMO_BIN"
 bash scripts/build_media.sh build/full/obj
 nasm -f bin "$CIUKRTST_SRC" -D CIUKIDOS_RUNTIME_SEG="$CIUKIDOS_RUNTIME_SEG" -D CIUKIDOS_ABI_VERSION="$CIUKIDOS_ABI_VERSION" -o "$CIUKRTST_BIN"
@@ -911,11 +913,12 @@ if [[ "${CIUKIOS_VM_WINDOW:-1}" == "1" ]]; then
     python3 scripts/build_native_image.py --output "$VM_WINDOW_DIR/NATIVE32.N32"
     nasm -f bin -D VMSTART_JEMMEX=1 src/com/vmstart.asm -o "$VM_WINDOW_DIR/VMSTART.COM"
     nasm -f bin -I "$VM_WINDOW_DIR/session/" src/com/vmfork.asm -o "$VM_WINDOW_DIR/VMFORK.COM"
+    python3 scripts/build_vmfork_exe.py "$VM_WINDOW_DIR/VMFORK.COM" "$VM_WINDOW_DIR/VMFORK.EXE"
     mtools_ensure_dir "$IMG" ::VM
     mcopy -o -i "$IMG" "$vm_jemm/JEMM386.EXE" "$vm_jemm/JEMMEX.EXE" "$vm_jemm/JLOAD.EXE" ::VM/
     mcopy -o -i "$IMG" "$VM_WINDOW_DIR/session/CVSESSION.DLL" ::VM/CVSESS.DLL
     mcopy -o -i "$IMG" "$VM_WINDOW_DIR/DPMIRUN.COM" "$VM_WINDOW_DIR/MEMMAP.COM" "$VM_WINDOW_DIR/NATPAGE.COM" "$VM_WINDOW_DIR/NATIVE.COM" "$VM_WINDOW_DIR/NATIVE32.N32" "$VM_WINDOW_DIR/VMSTART.COM" \
-        "$VM_WINDOW_DIR/VMFORK.COM" ::VM/
+        "$VM_WINDOW_DIR/VMFORK.COM" "$VM_WINDOW_DIR/VMFORK.EXE" ::VM/
     mcopy -o -i "$IMG" config/vm-window/README.TXT ::VM/README.TXT
     mcopy -o -i "$IMG" "$vm_jemm/ARTISTIC.TXT" ::VM/JEMM.TXT
     mcopy -o -i "$IMG" "$vm_jemm/JLOAD-LICENSE.TXT" ::VM/JLOAD.TXT
@@ -1005,10 +1008,10 @@ mcopy -o -i "$IMG" src/com/media.txt ::APPS/MEDIA.TXT
 echo "[build-full] injecting CIUKIDOS kernel to ::SYSTEM/CIUKIDOS.SYS"
 mcopy -o -i "$IMG" "$RUNTIME_BIN" ::SYSTEM/CIUKIDOS.SYS
 
-# Long file names: the kernel's resident LFN extension, built against this
-# kernel's listing (it calls the kernel's disk routines); the shell loads it.
+# Long file names: the independently built resident extension binds the
+# kernel's validated public RTSV/CLFN ABI when the shell loads it.
 echo "[build-full] injecting the long file name extension to ::SYSTEM/LFN.COM"
-bash scripts/build_lfn.sh build/full/obj/ciukidos.lst build/full/obj/lfn
+bash scripts/build_lfn.sh build/full/obj/lfn
 mcopy -o -i "$IMG" build/full/obj/lfn/LFN.COM ::SYSTEM/LFN.COM
 
 echo "[build-full] injecting CIUKIDOS ownership probe to ::APPS/CIUKRTST.COM"
@@ -1339,6 +1342,7 @@ mcopy -o -i "$IMG" "$AC97INIT_BIN" "${DRIVERS_IMAGE_DIR%/}/AC97INIT.COM"
 mcopy -o -i "$IMG" build/full/obj/bootsnd.com "${DRIVERS_IMAGE_DIR%/}/SOUND.COM"
 mcopy -o -i "$IMG" build/full/obj/sbstart.com "${DRIVERS_IMAGE_DIR%/}/SBSTART.COM"
 mcopy -o -i "$IMG" build/full/obj/bootsnd.com ::SYSTEM/BOOTSND.COM
+mcopy -o -i "$IMG" build/full/obj/inputst.com ::SYSTEM/INPUTST.COM
 mcopy -o -i "$IMG" build/full/obj/sfx.drv "${DRIVERS_IMAGE_DIR%/}/SFX.DRV"
 mcopy -o -i "$IMG" build/full/obj/media-driver/media.drv ::SYSTEM/MEDIA.DRV
 mtools_ensure_dir "$IMG" ::SYSTEM/SOUNDS

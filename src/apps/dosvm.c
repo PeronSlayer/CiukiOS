@@ -15,12 +15,13 @@
 #define SNAP_TIMEOUT 1
 #define SNAP_EXIT 2
 #define SNAP_CLOSE 3
+#define SNAP_LAUNCH 4
 #define SNAP_ABI_ERROR 0xFFFE
 #define SNAP_UNAVAILABLE 0xFFFF
 #define SNAP_INTERVAL 19        /* at least one second at the BIOS tick rate */
 #define SNAP_DEADLINE 219       /* approximately twelve seconds */
 
-static const char fork_path[] = "\\VM\\VMFORK.COM";
+static const char fork_path[] = "\\VM\\VMFORK.EXE";
 static char tail[128], pending[96];
 static char raw_path[SYS_PATH], short_path[SYS_PATH];
 static u8 fcb[16];
@@ -45,15 +46,16 @@ struct dosvm_snapshot {
 typedef char snapshot_size_check[sizeof(struct dosvm_snapshot) == SNAP_BYTES ? 1 : -1];
 static struct exec_params params;
 static u8 frame[256];
-static u8 snapshot_video[256], snapshot_devices[128];
+static u8 snapshot_video[256], snapshot_devices[128], snapshot_audio[128];
 struct guest_window {
     u8 win, vm, live, finished, presented, present_error, windows_exe;
-    u16 generation, exit_code;
+    u16 generation, exit_code, launch_error;
     u16 client_x, client_y, client_w, client_h;
     u16 snapshot_started, snapshot_polled;
-    u8 snapshot_sampled, snapshot_saved;
+    u8 snapshot_sampled, snapshot_saved, trace_failed, launch_snapshot_saved;
     char title[32];
     struct dosvm_snapshot snapshot;
+    u8 audio_valid, audio_timing[128];
 };
 static struct guest_window guest[WIN_COUNT];
 static u16 vmm_seg, vmm_off;
@@ -63,6 +65,7 @@ static int mouse_x, mouse_y;
 static unsigned last_damage_tick;
 static char log_line[220];
 static int presenter_log_pending;
+static u16 spawn_error;
 
 /* Foreground transitions only: persist evidence on machines without COM1. */
 static void disk_log(const char *event, const char *detail, u16 code)
@@ -90,6 +93,8 @@ static void disk_log(const char *event, const char *detail, u16 code)
     dos_write(h, log_line, str_len(log_line));
     dos_close(h);
 }
+
+#include "dosvm_memory.inc"
 
 static void vm_find(void)
 {
@@ -171,11 +176,13 @@ static void snapshot_begin(struct guest_window *g)
     str_ncopy(s->title, g->title, sizeof s->title);
     g->snapshot_started = g->snapshot_polled = HOST.ticks;
     g->snapshot_sampled = g->snapshot_saved = 0;
+    g->audio_valid = 0;
+    mem_set(g->audio_timing, 0, sizeof g->audio_timing);
 }
 static void snapshot_sample(struct guest_window *g)
 {
     struct dosvm_snapshot *s = &g->snapshot;
-    u16 code, generation, video_error, device_error;
+    u16 code, generation, video_error, device_error, audio_error;
     if (!g->live || (g->snapshot_sampled &&
         (u16)(HOST.ticks - g->snapshot_polled) < SNAP_INTERVAL)) return;
     g->snapshot_sampled = 1; g->snapshot_polled = HOST.ticks;
@@ -185,6 +192,7 @@ static void snapshot_sample(struct guest_window *g)
         generation != g->generation) return;
     video_error = snapshot_query(g, 0x21, snapshot_video, 256, 0x53565643UL);
     device_error = snapshot_query(g, 0x33, snapshot_devices, 128, 0x56445643UL);
+    audio_error = snapshot_query(g, 0x59, snapshot_audio, 128, 0x54415643UL);
     /* A freed target falls back to the caller's session. Neither teardown
      * nor slot reuse may replace this window's last validated packets. */
     if (vm_status(g->vm, &code, &generation) != VM_READY ||
@@ -198,23 +206,51 @@ static void snapshot_sample(struct guest_window *g)
         mem_copy(s->devices, snapshot_devices, sizeof s->devices);
         s->valid_mask |= SNAP_DEVICES; s->device_ticks = HOST.ticks;
     }
+    if (!audio_error && *(u32 *)(snapshot_audio + 8) == (u32)g->generation) {
+        mem_copy(g->audio_timing, snapshot_audio, sizeof g->audio_timing);
+        g->audio_valid = 1;
+    }
 }
-/* Called only by foreground poll/close handling, never by the painter or an
- * IRQ callback. One fixed file per VM; the live timeout is attempted once. */
-static void snapshot_save(struct guest_window *g, u16 reason, u16 state, u16 code)
+/* Foreground only. Retain the per-VM file and eight generations per VM so
+ * launching Wolf after DOOM does not discard DOOM's audio/video counters. */
+static int snapshot_save(struct guest_window *g, u16 reason, u16 state, u16 code)
 {
     char path[] = "\\SYSTEM\\DOSVM1.BIN";
+    char history[] = "\\SYSTEM\\DOSR10.BIN";
+    char audio_path[] = "\\SYSTEM\\DOSA10.BIN";
     struct dosvm_snapshot *s = &g->snapshot;
-    int h, written;
-    if (g->vm < 1 || g->vm >= VM_COUNT || s->magic != SNAP_MAGIC) return;
+    int h, written, closed;
+    if (g->vm < 1 || g->vm >= VM_COUNT || s->magic != SNAP_MAGIC) return 0;
     path[13] = '0' + g->vm;
     s->host_ticks = HOST.ticks; s->reason = reason;
     s->state = state; s->exit_code = code;
     h = dos_create(path);
-    if (h < 0) { disk_log("Snapshot failed", path, SNAP_UNAVAILABLE); return; }
+    if (h < 0) { disk_log("Snapshot failed", path, SNAP_UNAVAILABLE); return 0; }
     written = dos_write(h, s, sizeof *s);
-    dos_close(h);
-    if (written != sizeof *s) disk_log("Snapshot failed", path, SNAP_UNAVAILABLE);
+    closed = dos_close(h);
+    if (written != sizeof *s || closed < 0) {
+        disk_log("Snapshot failed", path, SNAP_UNAVAILABLE); return 0;
+    }
+    history[12] = '0' + g->vm;
+    history[13] = '0' + (g->generation & 7);
+    h = dos_create(history);
+    if (h < 0) { disk_log("Snapshot failed", history, SNAP_UNAVAILABLE); return 1; }
+    written = dos_write(h, s, sizeof *s);
+    closed = dos_close(h);
+    if (written != sizeof *s || closed < 0)
+        disk_log("Snapshot failed", history, SNAP_UNAVAILABLE);
+    if (g->audio_valid) {
+        audio_path[12] = '0' + g->vm;
+        audio_path[13] = '0' + (g->generation & 7);
+        h = dos_create(audio_path);
+        if (h >= 0) {
+            written = dos_write(h, g->audio_timing, sizeof g->audio_timing);
+            closed = dos_close(h);
+            if (written != sizeof g->audio_timing || closed < 0)
+                disk_log("Audio snapshot failed", audio_path, SNAP_UNAVAILABLE);
+        }
+    }
+    return 1;
 }
 static void snapshot_close(struct guest_window *g)
 {
@@ -232,6 +268,8 @@ static struct guest_window *by_window(int win)
     for (i = 0; i < WIN_COUNT; i++) if (guest[i].win == win) return &guest[i];
     return 0;
 }
+
+#include "dosvm_launch_trace.inc"
 /* A PE/NE file is a Windows program, even though it starts with an MZ DOS
  * stub. Passing it to COMMAND.COM can leave a guest in the DOS stub forever.
  * The Win32 runtime is still under construction; report this before forking. */
@@ -265,8 +303,9 @@ static int spawn(const char *command)
     u8 before[VM_COUNT * 4], after[VM_COUNT * 4];
     struct regs r;
     int i, k = 0;
-    const char *prefix = " \\VM\\DPMIRUN.COM /V";
+    const char *prefix = " /P \\VM\\DPMIRUN.COM /P /V";
     const char *args = 0;
+    spawn_error = 0xFFFF;
     /* COMMAND.COM uses classic DOS EXEC. Convert a long pathname through the
      * resident LFN service before handing it to the forked VM. This also
      * makes programs inside C:\DESKTOP\TestGames launchable by double-click. */
@@ -300,10 +339,15 @@ static int spawn(const char *command)
     params.tail_off = (u16)tail; params.tail_seg = app_seg();
     params.fcb1_off = params.fcb2_off = (u16)fcb;
     params.fcb1_seg = params.fcb2_seg = app_seg();
+    launch_memory_log();
     mem_set(&r, 0, sizeof r);
     r.ax = 0x4B00; r.dx = (u16)fork_path; r.bx = (u16)&params;
     r.ds = r.es = app_seg();
-    if (intr(0x21, &r)) { disk_log("EXEC failed", fork_path, r.ax); return -1; }
+    if (intr(0x21, &r)) {
+        spawn_error = r.ax;
+        disk_log("EXEC failed", fork_path, r.ax);
+        return -1;
+    }
     if (vm_list(after)) return -1;
     for (i = 1; i < VM_COUNT; i++)
         if (before[i * 4] == VM_FREE && after[i * 4] == VM_READY) return i;
@@ -315,8 +359,11 @@ static void begin_window(int slot, int window)
     struct guest_window *g = &guest[slot];
     g->win = window;
     g->finished = 0; g->presented = 0; g->present_error = 0;
+    g->trace_failed = 0;
+    g->launch_snapshot_saved = 0;
     g->windows_exe = 0;
     g->exit_code = 0;
+    g->launch_error = 0xFFFF;
     if (pending_windows_exe) {
         g->live = 0; g->finished = 1; g->windows_exe = 1;
         pending_windows_exe = 0;
@@ -330,8 +377,9 @@ static void begin_window(int slot, int window)
     if (vm < 0) {
         g->live = 0; g->finished = 1;
         g->exit_code = 0xFFFF;
+        g->launch_error = spawn_error;
         app_log("[DOSVM] fork failed", 0);
-        disk_log("Fork failed", g->title, 0);
+        disk_log("Fork failed", g->title, spawn_error);
         app_sound(5);
     } else {
         g->vm = vm; g->live = 1;
@@ -403,10 +451,16 @@ static void paint(void)
         ui_text(x + 14, y + 38, "Win32 application support is under development.", C_PAPER);
     } else if (g && g->finished) {
         char number[8], message[40];
-        ui_text(x + 14, y + 14, g->exit_code == 0xFFFF ?
+        /* VMFORK reserves E000..EFFF for loader failures. Ordinary DOS
+         * termination codes are bytes and cannot overlap this range. */
+        int exec_failed = (g->exit_code & 0xF000) == 0xE000;
+        u16 dos_error = exec_failed ? (g->exit_code & 0x0FFF) : g->launch_error;
+        ui_text(x + 14, y + 14, g->exit_code == 0xFFFF || exec_failed ?
                 "Unable to run the DOS session." : "Program finished.", C_PAPER);
-        str_copy(message, "Session return code: ");
-        fmt_hex4(number, g->exit_code); str_cat(message, number);
+        str_copy(message, exec_failed || (g->exit_code == 0xFFFF && dos_error != 0xFFFF) ?
+                "DOS error code: " : "Session return code: ");
+        fmt_hex4(number, g->exit_code == 0xFFFF || exec_failed ? dos_error : g->exit_code);
+        str_cat(message, number);
         ui_text(x + 14, y + 38, message, C_PAPER);
         ui_text(x + 14, y + 62, "Press Alt+F4 to close this window.", C_PAPER);
     }
@@ -459,7 +513,9 @@ static int poll(void)
     buttons_before = HOST.buttons;
     for (i = 0; i < WIN_COUNT; i++) if (guest[i].live) {
         u16 code, generation;
-        int state = vm_status(guest[i].vm, &code, &generation);
+        int state;
+        launch_trace_poll(&guest[i]);
+        state = vm_status(guest[i].vm, &code, &generation);
         if (state != VM_READY ||
             generation != guest[i].generation) {
             disk_log("VM state", guest[i].title, (u16)state);

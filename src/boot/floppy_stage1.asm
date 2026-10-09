@@ -2,27 +2,31 @@ bits 16
 org 0x0000
 
 %ifdef CIUKIDOS_KERNEL_BUILD
+%include "src/runtime/ciukidos_abi.inc"
 ; Versioned CIUKIDOS kernel image header.  The full Stage1 loader validates
 ; every field and every descriptor before transferring control.  Keeping the
-; service table in the first 126 bytes also makes the ABI independently
-; discoverable by black-box children without relying on a build-time offset.
+; header declares the service table and actual extent. Modules discover
+; versioned services rather than importing private build-time offsets.
 ciukidos_image_start:
-    jmp short stage1_start
+    jmp short kernel_entry_trampoline
     db 'CIUKIDOS'
-    dw 26
-    dw 0x0002
-    dw 0x000B
-    dw 0x0008
-    dw 0x003F
+    dw CIUKIDOS_HEADER_SIZE
+    dw CIUKIDOS_ABI_VERSION
+    dw CIUKIDOS_SERVICE_COUNT
+    dw CIUKIDOS_DESCRIPTOR_SIZE
+    dw CIUKIDOS_CAPABILITIES
     dw ciukidos_image_end - ciukidos_image_start
     dw runtime_service_table - ciukidos_image_start
-    dw 0x0900
+    dw CIUKIDOS_LOAD_SEG
+
+kernel_entry_trampoline:
+    jmp near stage1_start
 
 runtime_service_table:
     db 'R', 'T', 'S', 'V'
-    dw 0x0002
-    dw 0x000B
-    dw 0x0008
+    dw CIUKIDOS_ABI_VERSION
+    dw CIUKIDOS_SERVICE_COUNT
+    dw CIUKIDOS_DESCRIPTOR_SIZE
     dw 0x0001, 0x0001, kernel_runtime_identity_service, 0x0000
     dw 0x0002, 0x0001, kernel_runtime_version_service, 0x0000
     dw 0x0003, 0x0001, kernel_runtime_stage2_ready_service, 0x0000
@@ -34,6 +38,8 @@ runtime_service_table:
     dw 0x0009, 0x0001, kernel_runtime_kernel_caps_service, 0x0000
     dw 0x000A, 0x0001, kernel_runtime_sync_process_state_service, 0x0000
     dw 0x000B, 0x0001, kernel_runtime_record_termination_service, 0x0000
+    dw 0x000C, 0x0001, kernel_runtime_memory_layout_service, 0x0000
+    dw 0x000D, 0x0001, kernel_runtime_lfn_api_service, 0x0000
 %endif
 
 %define CMD_BUF_LEN 64
@@ -72,23 +78,7 @@ runtime_service_table:
 ; area.  Its self-resize leaves the widest contiguous arena possible for
 ; large real-mode games such as Wolfenstein 3-D.
 %ifdef CIUKIDOS_KERNEL_BUILD
-%define COM_LOAD_SEG 0x1180
-%define MZ_LOAD_SEG 0x1200
-%define MZ2_LOAD_SEG 0x3200
-%define MZ3_LOAD_SEG 0x7200
-%define RUNTIME_LOAD_SEG 0x0300
-%define DOS_EXEC_STATE_BASE_SEG 0x0E00
-; Stage2 is a boot-only 512-byte handoff at 0E80h.  Once it returns, reuse its
-; complete 0E80h-0E9Fh window and the remaining gap below DOS_META_BUF_SEG for
-; EXEC snapshots.  Windows itself consumes four frames before Program Manager;
-; a DOS prompt plus a nested game already needs six, so the old limit of five
-; rejected a perfectly valid AH=4Bh with error 8 despite abundant EMS/XMS.
-%define DOS_EXEC_STATE_FRAME_MAX 11
-%define STAGE2_LOAD_SEG 0x0E80
-%define DOS_META_BUF_SEG 0x0F00
-%define DOS_FAT_BUF_SEG  0x1000
-%define DOS_IO_BUF_SEG   0x1100
-%define DOS_ENV_SEG      0x1130
+%include "src/runtime/kernel_memory_layout.inc"
 %else
 %define COM_LOAD_SEG 0x1780
 %define MZ_LOAD_SEG 0x1800
@@ -110,18 +100,14 @@ runtime_service_table:
 %ifndef DOS_EXEC_STATE_FRAME_MAX
 %define DOS_EXEC_STATE_FRAME_MAX 4
 %endif
-%ifdef CIUKIDOS_KERNEL_BUILD
-%define MZ_LOAD_LIMIT_SEG 0x5200
-%else
+%ifndef CIUKIDOS_KERNEL_BUILD
 %define MZ_LOAD_LIMIT_SEG 0x5800
 %endif
 ; AH=52h publishes a complete 20-entry DOS 5 SFT matching the PSP JFT.  Keep
 ; its 1792-byte image in the reserved gap below the EXEC-state frames: the old
 ; 1 KiB window at 1740h only fit five CON entries and made Windows interpret
 ; adjacent shell memory as the SFT records for handles 5..19.
-%ifdef CIUKIDOS_KERNEL_BUILD
-%define DOS_SYSVARS_SEG        0x0D90
-%else
+%ifndef CIUKIDOS_KERNEL_BUILD
 %define DOS_SYSVARS_SEG        0x1390
 %endif
 %define DOS_SYSVARS_ANCHOR_OFF 0x0000
@@ -340,6 +326,10 @@ stage1_start:
     sti
 
     mov [boot_drive], dl
+%ifdef CIUKIDOS_KERNEL_BUILD
+    ; Save the loader's boot-only input policy while startup calls use DX.
+    push dx
+%endif
 
     call serial_init
     mov si, msg_stage1_serial
@@ -364,6 +354,9 @@ stage1_start:
     call stage1_boot_mark_step
 %endif
 %endif
+%endif
+%ifdef CIUKIDOS_KERNEL_BUILD
+    pop dx
 %endif
     call init_stage2_services
 %if FAT_TYPE == 16 && STAGE1_BOOT_EXTERNAL_SHELL
@@ -875,6 +868,10 @@ pc_speaker_beep:
 
 
 int21_handler:
+%ifdef CIUKIDOS_KERNEL_BUILD
+    jmp kernel_int21_enter
+int21_dispatch:
+%endif
     push bx
     push cx
     push dx
@@ -1502,10 +1499,13 @@ int21_handler:
     pop word [cs:dos_exec_identity_psp]
     jmp .fn_4a_result
 .fn_f1_free:
-    push word [cs:dos_exec_identity_psp]
-    mov [cs:dos_exec_identity_psp], bx
-    call int21_free
-    pop word [cs:dos_exec_identity_psp]
+    ; Authorization is independent of the executing PSP. Substituting the
+    ; resident owner here also changes allocator ancestry/PSP-end caches and
+    ; rebuilds the arena around a terminated loader (VMFORK F011 on the T23).
+    mov ax, 0x0009
+    test bx, bx
+    jz .fn_49_error
+    call int21_free_impl
     jmp .fn_49_result
 %endif
 
@@ -1992,7 +1992,11 @@ int21_handler:
     pop cx
     pop bx
     cld
+%ifdef CIUKIDOS_KERNEL_BUILD
+    jmp kernel_int21_leave
+%else
     iret
+%endif
 
 int21_kbd_flush:
 .loop:
@@ -13152,6 +13156,9 @@ int21_alloc:
     ret
 
 int21_free:
+    xor bx, bx                     ; ordinary AH=49 ownership semantics
+int21_free_impl:
+    push bx                        ; F149 exact owner, not active PSP
     call int21_mem_init
     call int21_mem_refresh_owners
 %if TRACE_WIN_MEMORY != 0
@@ -13172,10 +13179,14 @@ int21_free:
 
     mov ax, es
     call int21_mem_table_find_exact
+    pop ax                         ; owner argument; preserve lookup CF
     jc .legacy_static
+    test ax, ax
+    jnz .check_owner
     test word [cs:dos_mem_block_table + si + 6], DOS_MEM_BLOCK_RESIDENT
     jnz .free_exact
     call int21_mem_active_psp
+.check_owner:
     cmp cx, ax
     jne .owner_invalid
 .free_exact:
@@ -19533,7 +19544,6 @@ init_stage2_services:
     call install_int33_vector
     call init_mouse
 %if FAT_TYPE == 16
-    nop
 %else
     mov si, msg_stage2_ready
     call print_string_serial
@@ -19806,7 +19816,11 @@ stage1_runtime_validate_cache:
     cmp word [es:bx + 4], 1
 %endif
     jne .fail
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp word [es:bx + 6], CIUKIDOS_SERVICE_COUNT
+%else
     cmp word [es:bx + 6], 11
+%endif
     jne .fail
     cmp word [es:bx + 8], 8
     jne .fail
@@ -20006,7 +20020,11 @@ stage1_runtime_probe:
     mov ax, [runtime_table_seg]
     mov es, ax
     mov bx, [runtime_table_off]
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp word [es:bx + 6], CIUKIDOS_SERVICE_COUNT
+%else
     cmp word [es:bx + 6], 11
+%endif
     jne .fail
 
     mov si, msg_runtime_probe_table
@@ -20119,8 +20137,11 @@ init_mouse:
     push bx
 %if FAT_TYPE == 16
 %if ENABLE_PS2_MOUSE_INIT
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp dh, 0xE5                ; explicit firmware-first loader handoff
+    je .no_mouse
+%endif
     call ps2_mouse_init
-    jc .reset_int33
 %endif
 %endif
 
@@ -20144,9 +20165,9 @@ init_mouse:
 .no_mouse:
     mov byte [cs:mouse_installed], 0
 %if FAT_TYPE == 16
-    ; Native initialization has quiesced AUX and restored IRQ1. Give a BIOS
-    ; PS/2 driver the original firmware IRQ12/C2 pair, rather than stacking
-    ; it above our unsuccessful direct-controller handler. Keep INT33 safe
+    ; Failed native init has restored IRQ1; firmware-first skipped takeover.
+    ; Give the BIOS PS/2 driver the original firmware IRQ12/C2 pair. Keep
+    ; INT33 safe
     ; to call: AX=0 against the inert IRET stub reports no installed driver.
     pushf
     cli
@@ -25049,8 +25070,15 @@ child_trace_bios_marker:
 
 %ifdef CIUKIDOS_KERNEL_BUILD
 %include "src/runtime/ciukidos_kernel_services.inc"
+%include "src/runtime/kernel_memory_services.inc"
+%include "src/runtime/ciukidos_lfn_services.inc"
+%include "src/runtime/kernel_interrupt_stack.inc"
+%ifdef CIUKIDOS_LAYOUT_GROWTH_TEST_BYTES
+    ; Non-shipping fixture proves scratch ownership beyond the former bound.
+    times CIUKIDOS_LAYOUT_GROWTH_TEST_BYTES db 0
+%endif
 ciukidos_image_end:
-%if (ciukidos_image_end - ciukidos_image_start) > 0xA900
-    %error "CIUKIDOS kernel overlaps the DOS SYSVARS boundary"
+%if (ciukidos_image_end - ciukidos_image_start) > CIUKIDOS_KERNEL_MAX_BYTES
+    %error "CIUKIDOS resident core exceeds its real-mode segment capacity; use a separately loaded module"
 %endif
 %endif

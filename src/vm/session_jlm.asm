@@ -70,6 +70,7 @@ include session_video.inc
 include session_devices.inc
 include session_desktop.inc
 include session_vmm.inc
+include session_disk.inc
 include session_switch_trace.inc
 include session_clock.inc
 include session_native_pages.inc
@@ -1147,6 +1148,8 @@ switch_allowed:
  je native_stop_dispatch
  cmp eax,VM_OP_DISPLAY_INFO
  je display_info
+ cmp eax,VM_OP_GPU_QUALIFY
+ je gpu_qualify_op
  cmp eax,VM_OP_FB_DIAGNOSTICS
  je fb_diagnostics_op
  cmp eax,VM_OP_VIDEO_CONFIG
@@ -1163,6 +1166,20 @@ not_video:
  call dev_dispatch
  jmp checked_result
 not_device:
+ cmp eax,VM_OP_DEV_AUDIO_STATE
+ jne not_audio_state
+ call dev_dispatch
+ jmp checked_result
+not_audio_state:
+ cmp eax,VM_OP_VMM_IVT_BASELINE
+ je baseline_ivt_dispatch
+ cmp eax,VM_OP_DISK_STATUS
+ jb not_disk
+ cmp eax,VM_OP_DISK_DISCOVER_END
+ ja not_disk
+ call disk_dispatch
+ jmp checked_result
+not_disk:
  cmp eax,VM_OP_DEV_PHYSICAL_IRQ
  je physical_irq
  cmp eax,VM_OP_VMM_CLOCK
@@ -1177,8 +1194,11 @@ not_device:
  je present_frame
  cmp eax,VM_OP_VMM_INIT
  jb not_vmm
- cmp eax,VM_OP_VMM_NET_IRQ
+ cmp eax,VM_OP_VMM_LAUNCH_TRACE
  ja not_vmm
+ call vmm_dispatch
+ jmp checked_result
+baseline_ivt_dispatch:
  call vmm_dispatch
  jmp checked_result
 ; VMM_YIELD may switch to another VM, whose frame then sits at EBP: the
@@ -1307,6 +1327,9 @@ triangle_fb:
  jmp checked_result
 display_info:
  call gpu_display_info
+ jmp checked_result
+gpu_qualify_op:
+ call gpu_savage_qualify
  jmp checked_result
 fb_diagnostics_op:
  call gpu_fb_diagnostics
@@ -1635,6 +1658,19 @@ DllMain proc stdcall public hModule:dword, dwReason:dword, dwRes:dword
 detach:
  cmp dwReason,0
  jne allow
+ ; Disk callbacks are persistent once installed. Until a dedicated disk
+ ; shutdown protocol unhooks both paths, their module cannot be unloaded.
+ ; Refuse before changing any other device/scheduler ownership.
+ cmp disk_hooked,0
+ jne refuse
+ cmp disk_trapped_port,0
+ jne refuse
+ cmp disk_discovery_traps,0
+ jne refuse
+ cmp disk_busy,0
+ jne refuse
+ cmp disk_firmware_active,0
+ jne refuse
  cmp sessions,0
  jne refuse
  cmp active,0
@@ -1653,6 +1689,11 @@ detach:
  test eax,eax
  jnz refuse
  mov eax,offset cvsavage_owned
+ xor ecx,ecx
+ call dev_call
+ test eax,eax
+ jnz refuse
+ mov eax,offset cvmach64_owned
  xor ecx,ecx
  call dev_call
  test eax,eax

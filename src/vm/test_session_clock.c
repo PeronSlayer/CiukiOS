@@ -77,11 +77,32 @@ int main(void)
     expect(cvclock_pending(0), 1);
     expect(cvclock_pending(1), 0);
 
-    /* A single half-second gap is not truncated to a 200 ms catch-up cap. */
+    /* Counter phase follows the whole gap, while the PIC sees one edge. */
     cvclock_end(2);
     cvclock_begin(2, 1000000UL);
     advance_cycles(500000000UL, 0);
-    expect(cvclock_pending(2), 9);
+    expect(cvclock_pending(2), 1);
+    expect(read_latched_count(2), 65536u - 2u * (596591u % 65536u));
+    expect(cvclock_consume(2), 1);
+    expect(cvclock_pending(2), 0);
+    expect(cvclock_consume(2), 0);
+
+    /* 1193 Hz over five seconds must not replay thousands of IRQ0s ahead
+     * of the keyboard/audio. Consuming does not alter the counter phase. */
+    (void)cvclock_port(2, 0x43, 1, 0x34);
+    (void)cvclock_port(2, 0x40, 1, 0xe8);
+    (void)cvclock_port(2, 0x40, 1, 0x03);
+    advance_cycles(705032704UL, 1);   /* 5,000,000,000 cycles = 5000 ms */
+    expect(cvclock_pending(2), 1);
+    expect(read_latched_count(2), 90u); /* 5*1193182 clocks, mod 1000 = 910 */
+    expect(cvclock_consume(2), 1);
+    expect(read_latched_count(2), 90u);
+    expect(cvclock_pending(2), 0);
+    for (i = 0; i < 10; ++i) expect(cvclock_consume(2), 0);
+    advance_cycles(1000000UL, 0);
+    expect(cvclock_pending(2), 1);
+    expect(cvclock_consume(2), 1);
+    expect(cvclock_pending(2), 0);
 
     /* Ending and beginning a VM discards the prior owner's expiry debt. */
     cvclock_end(2);
@@ -95,7 +116,10 @@ int main(void)
     fake_high = 1000000UL;
     fake_low = 0;
     long_pit_clocks = (((uint64_t)1u << 32) * 1193182u) / 1000u;
-    expect(cvclock_pending(3), (uint32_t)(long_pit_clocks / 65536u));
+    expect(cvclock_pending(3), 1);
+    expect(read_latched_count(3), (65536u - 2u * (uint32_t)(long_pit_clocks % 65536u)) & 0xffffu);
+    expect(cvclock_consume(3), 1);
+    expect(cvclock_consume(3), 0);
 
     cvclock_end(0);
     cvclock_end(1);

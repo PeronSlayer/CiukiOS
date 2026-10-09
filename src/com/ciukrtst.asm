@@ -39,7 +39,7 @@ start:
     cmp word [es:di + 4], CIUKIDOS_ABI_VERSION
     jne fail_services_table
     cmp word [es:di + 6], 11
-    jne fail_services_table
+    jb fail_services_table
     cmp word [es:di + 8], 8
     jne fail_services_table
     cmp word [es:di + 74], 9

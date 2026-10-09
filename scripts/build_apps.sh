@@ -16,7 +16,7 @@ nasm -f obj src/apps/app_start.asm -o "$OUT/app_start.obj"
 for unit in rt ui sys regstore display_probe helper; do
 	wcc "${CFLAGS[@]}" -fo="$OUT/$unit.obj" "src/apps/$unit.c"
 done
-for app in files ciuknote tasks desktop recycle control devices paint dosvm browser webnet_app webimg webstyle display about viewer player wallp; do
+for app in files ciuknote tasks desktop recycle control devices paint dosvm browser webnet_app webimg webstyle display about viewer player wallp run; do
 	[[ -f "src/apps/$app.c" ]] || continue
 	name="${app^^}.APP"
 	[[ "$app" != webnet_app ]] || name=WEBNET.APP

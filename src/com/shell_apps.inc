@@ -7,7 +7,7 @@
 ; it registered, naming the window. The desktop module paints the desktop
 ; surface (window FEh) and an overlay above every window (FDh: its menus).
 ; Contract: src/apps/app.h.
-APP_COUNT equ 14
+APP_COUNT equ 15
 APP_DESKTOP equ 3                       ; slot of the desktop module
 APP_WIN_DISPLAY equ 18
 APP_WIN_DESKTOP equ 0xFE
@@ -1355,7 +1355,7 @@ app_s_audio:
     ret
 
 app_s_cursor:
-    cmp ax,2
+    cmp ax,6
     jbe .ok
     xor ax,ax
 .ok:
@@ -1523,6 +1523,34 @@ app_s_close:
     mov byte [app_request],1
     ret
 app_s_sound:
+    ; 0100h..013Fh saves master level bits 0..4 and mute bit 5 in the
+    ; caller service. Ordinary values remain asynchronous sound events.
+    cmp ax,0x0100
+    jb .cue
+    cmp ax,0x013F
+    ja .cue
+    mov bl,al
+    and bl,31
+    test al,0x20
+    jz .save
+    or bl,0x80
+.save:
+    mov [ui_volume_preference_byte],bl
+    mov dx,ui_volume_preference_path
+    xor cx,cx
+    mov ah,0x3C
+    int 0x21
+    jc .done
+    mov bx,ax
+    mov dx,ui_volume_preference_byte
+    mov cx,1
+    mov ah,0x40
+    int 0x21
+    mov ah,0x3E
+    int 0x21
+.done:
+    ret
+.cue:
     mov [ui_sfx_pending],al
     ret
 ; Windows list into the caller's buffer (text offset): for each window
@@ -2014,60 +2042,6 @@ app_palette_apply:
     popad
     ret
 
-; Run dialog: "notepad [file]", "explorer [folder]" (or "files") and
-; "taskmgr" open the desktop applications, as in Windows. CF=1 when handled.
-app_run_builtin:
-    pushad
-    mov si,app_builtin_names
-.next:
-    lodsb                              ; window, then the name
-    test al,al
-    jz .none
-    mov bl,al
-    mov di,ui_run_text
-.compare:
-    lodsb
-    test al,al
-    jz .end_of_name
-    mov ah,[di]
-    cmp ah,'a'
-    jb .upper
-    cmp ah,'z'
-    ja .upper
-    sub ah,32
-.upper:
-    inc di
-    cmp al,ah
-    je .compare
-.skip:
-    lodsb
-    test al,al
-    jnz .skip
-    jmp .next
-.end_of_name:
-    mov al,[di]
-    test al,al
-    jz .match
-    cmp al,' '
-    jne .skip_after
-    inc di
-.match:
-    push bx
-    push di
-    call ui_windows_close              ; the Run window
-    pop si
-    pop bx
-    call app_open
-    popad
-    stc
-    ret
-.skip_after:
-    jmp .next
-.none:
-    popad
-    clc
-    ret
-
 ; Hotkey AL from the intercept -> UI action (ui_event's contract).
 app_hotkey_action:
     cmp al,0x5B
@@ -2279,8 +2253,8 @@ app_idle_woke:
     pop es
     ret
 
-app_main db 8,9,12,APP_WIN_DESKTOP,13,14,15,16,11,17,APP_WIN_DISPLAY,2,19,20
-app_paths dw app_path_files,app_path_tasks,app_path_notepad,app_path_desktop,app_path_control,app_path_devices,app_path_recycle,app_path_paint,app_path_dosvm,app_path_browser,app_path_display,app_path_about,app_path_viewer,app_path_player
+app_main db 8,9,12,APP_WIN_DESKTOP,13,14,15,16,11,17,APP_WIN_DISPLAY,2,19,20,1
+app_paths dw app_path_files,app_path_tasks,app_path_notepad,app_path_desktop,app_path_control,app_path_devices,app_path_recycle,app_path_paint,app_path_dosvm,app_path_browser,app_path_display,app_path_about,app_path_viewer,app_path_player,app_path_run
 app_path_files db '\SYSTEM\APPS\FILES.APP',0
 app_path_tasks db '\SYSTEM\APPS\TASKS.APP',0
 app_path_notepad db '\SYSTEM\APPS\CIUKNOTE.APP',0
@@ -2295,14 +2269,18 @@ app_path_about db '\SYSTEM\APPS\ABOUT.APP',0
 app_path_display db '\SYSTEM\APPS\DISPLAY.APP',0
 app_path_viewer db '\SYSTEM\APPS\VIEWER.APP',0
 app_path_player db '\SYSTEM\APPS\PLAYER.APP',0
+app_path_run db '\SYSTEM\APPS\RUN.APP',0
 app_settings_path db '\SYSTEM\UI\DESKTOP.CFG',0
 app_settings_font_dir db '\SYSTEM\FONTS\',0
 ; Each window's module slot (FFh: the shell's), title offset in that module
 ; (0: its header title), style (bit 0: dialog frame).
-app_win_slot db 0xFF,0xFF,11,0xFF,0xFF,0xFF,0xFF,0xFF,0,1,0xFF,8,2,4,5,6,7,9,10,12,13
+app_win_slot db 0xFF,14,11,0xFF,0xFF,0xFF,0xFF,0xFF,0,1,0xFF,8,2,4,5,6,7,9,10,12,13
              times UI_WINDOW_COUNT-21 db 0xFF
 app_win_title times UI_WINDOW_COUNT dw 0
-app_win_style times UI_WINDOW_COUNT db 0
+app_win_style db 0,1,1                ; Run and About have fixed dialog layouts
+              times 18-3 db 0
+              db 1                   ; Display Properties uses a fixed sheet
+              times UI_WINDOW_COUNT-19 db 0
 app_ev_window db 0xFF
 app_ev_context dw 0
 app_cur_slot dw 0
@@ -2326,7 +2304,6 @@ app_settings times APP_SETTINGS_BYTES db 0
 app_set_mouse db 2,0,9                  ; speed (2 = normal), swap, double-click
 app_max_label db 2,0
 app_desktop_marker db '[DESKTOP] SHOW DESKTOP',13,10,0
-app_builtin_names db 12,'CIUKNOTE',0,12,'NOTEPAD',0,16,'CIUKPAINT',0,16,'MSPAINT',0,16,'PAINT',0,8,'EXPLORER',0,8,'FILES',0,9,'TASKMGR',0,13,'CONTROL',0,14,'DEVMGMT',0,18,'DISPLAY',0,17,'CIUKWEB',0,17,'BROWSER',0,2,'ABOUT',0,19,'VIEWER',0,19,'IMAGE',0,20,'PLAYER',0,20,'MUSIC',0,0
 app_media_floppy db 'media:1',0
 app_media_usb db 'media:2',0
 app_media_cd db 'media:3',0

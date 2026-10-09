@@ -12,7 +12,7 @@ VIDEO_SIZE = 256
 DEVICE_SIZE = 128
 TOTAL_SIZE = HEADER_SIZE + VIDEO_SIZE + DEVICE_SIZE
 PIT_TICKS_PER_SECOND = 1193182 / 65536
-REASONS = {1: 'live_timeout', 2: 'observed_exit', 3: 'user_close'}
+REASONS = {1: 'live_timeout', 2: 'observed_exit', 3: 'user_close', 4: 'launch_held'}
 STATES = {0: 'free', 1: 'ready', 2: 'dead'}
 
 

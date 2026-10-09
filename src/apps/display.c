@@ -119,7 +119,7 @@ static void native_read(void)
     mem_set(&r, 0, sizeof r);
     r.ax = 0x0114; r.cx = sizeof native; r.di = (u16)native;
     r.ds = r.es = app_seg();
-    if (far_regs(vm_seg, vm_off, &r)) return;
+    if (far_regs(vm_seg, vm_off, &r) || (r.flags & 1)) return;
     if (*(u32 *)native != 0x44475643UL || *(u16 *)(native + 4) != 0x0100 ||
         *(u16 *)(native + 6) != sizeof native) return;
     native_ok = 1;
@@ -127,6 +127,7 @@ static void native_read(void)
         probe.flags |= DISP_F_EDID;
     cache_log_persist();
 }
+#include "display_qualify.inc"
 static void diag_hex4(char **dst, u16 value)
 {
     fmt_hex4(*dst, value);
@@ -298,6 +299,8 @@ static const char *adapter_name(void)
 }
 static const char *driver_name(void)
 {
+    if (native_ok && nfield(8) == 4 && (nfield(60) & 0x40000000UL))
+        return "CiukiOS ATI Mach64 hardware 2D";
     if (native_ok && nfield(8) == 3 && (nfield(60) & 0x80000000UL))
         return "CiukiOS SuperSavage BCI";
     if (native_ok && nfield(8) == 1) return "CiukiOS VirtIO GPU 2D";
@@ -724,7 +727,7 @@ static void advanced_paint(void)
     line(0, "Driver", driver_name());
     line(1, "Provider / version", "CiukiOS / 0.8.3");
     line(2, "Component", native_ok && nfield(8) ? "C:\\VM\\CVSESS.DLL" : "Built-in VGA / VBE framebuffer");
-    line(3, "Presentation", native_ok && nfield(8) == 1 ? "Native texture transfer and presentation" : native_ok && nfield(8) == 3 ? "GPU 2D commands; protected framebuffer" : native_ok && nfield(8) == 2 ? "Native scanout; CPU rendering" : "Firmware scanout; CPU rendering");
+    line(3, "Presentation", native_ok && nfield(8) == 1 ? "Native texture transfer and presentation" : native_ok && (nfield(8) == 3 || nfield(8) == 4) ? "GPU 2D commands; protected framebuffer" : native_ok && nfield(8) == 2 ? "Native scanout; CPU rendering" : "Firmware scanout; CPU rendering");
     line(4, "3D interface", native_ok && nfield(8) == 3 && (nfield(60) & 2) ? "Hardware Gouraud triangles (PIO)" : "Native triangles unavailable");
     line(5, "Refresh control", virtual_display() ? "Host compositor / QEMU" : "Video BIOS default; custom timing unavailable");
     if (native_ok) {
@@ -735,14 +738,24 @@ static void advanced_paint(void)
     if (native_ok && nfield(8) == 1) {
         fmt_u32(t, nfield(40)); str_cat(t, " / "); fmt_u32(n, nfield(36)); str_cat(t, n); str_cat(t, " commands completed / submitted");
     } else if (native_ok && nfield(8) == 3 && (nfield(60) & 0x80000000UL)) {
-        str_copy(t, "2D "); fmt_u32(n, nfield(112)); str_cat(t, n);
+        str_copy(t, (nfield(68) & 8) ? "MMIO 2D " : "BCI 2D "); fmt_u32(n, nfield(112)); str_cat(t, n);
         str_cat(t, "   3D "); fmt_u32(n, nfield(120)); str_cat(t, n);
         str_cat(t, "   Tests "); fmt_u32(n, nfield(140)); str_cat(t, n);
         str_cat(t, "/"); fmt_u32(n, nfield(160)); str_cat(t, n);
+    } else if (native_ok && nfield(8) == 4 && (nfield(60) & 0x40000000UL)) {
+        str_copy(t, "Fills "); fmt_u32(n, nfield(112)); str_cat(t, n);
+        str_cat(t, "   Copies "); fmt_u32(n, nfield(116)); str_cat(t, n);
+        str_cat(t, "   Tests "); fmt_u32(n, nfield(140)); str_cat(t, n);
     }
     line(7, "GPU status", t);
     button(18, 264, 162, "Driver manager...", 13);
     button(193, 264, 150, "Detect displays", 10);
+    if (qualify_adapter() && nfield(8) != 3 && nfield(8) != 4 && !qualify_step && !qualify_requested)
+        button(355, 264, W - 373, "Enable acceleration", 16);
+    else {
+        ui_bevel(X + 355, Y + 264, W - 373, 25, C_FACE);
+        draw_frame_text(X + 362, Y + 270, W - 387, "Enable acceleration", C_SHADOW);
+    }
 }
 static void paint(void)
 {
@@ -765,7 +778,8 @@ static void paint(void)
     draw_frame_text(X + 18, Y + H - 62, W - 36,
         page == 0 ? status : page == 1 ? "The active driver is selected for the detected hardware." :
         page == 2 ? "Press F5 to detect the display again." :
-        page == 3 ? "Built-in video drivers are updated with the system image." : status, C_INK);
+        page == 3 ? (qualify_status[0] ? qualify_status :
+            "Built-in video drivers are updated with the system image.") : status, C_INK);
     if (page == 0) {
         button(18, H - 36, 129, "Detect displays", 10);
         button(158, H - 36, 141, "Advanced...", 3);
@@ -876,6 +890,7 @@ static u16 mode_access_flags(u16 id)
 }
 static void accept_properties(void)
 {
+    if (qualify_step || qualify_requested) return;
     if (!properties_apply()) return;
     if (probe.mode_count && probe.modes[selected].id != probe.current_mode) {
         close_after_preview = 1;
@@ -888,6 +903,7 @@ static void accept_properties(void)
 static int action(int id)
 {
     int i;
+    if ((qualify_step || qualify_requested) && (id == 11 || id == 15)) return 1;
     if (id >= 0 && id < 6) { page = id; focus = 0; return 1; }
     if (id >= 20 && id < 27 && top + id - 20 < probe.mode_count) {
         selected = top + id - 20; focus = 1; return 1;
@@ -916,8 +932,9 @@ static int action(int id)
     }
     if (id == 12) app_open(WIN_DEVICES, "");
     if (id == 13) app_open(WIN_DEVICES, "drivers");
-    if (id == 14) { theme_restore(); app_close(); }
+    if (id == 14) { qualify_cancel(); theme_restore(); app_close(); }
     if (id == 15) { accept_properties(); return 1; }
+    if (id == 16) return qualify_begin(0);
     return 1;
 }
 int app_event(int ev, int a, int b, int c)
@@ -929,6 +946,7 @@ int app_event(int ev, int a, int b, int c)
         if (!str_icmp(APP_ARG, "background") || !str_icmp(APP_ARG, "wallpaper")) page = 4;
         else if (!str_icmp(APP_ARG, "appearance")) page = 5;
         else if (!str_icmp(APP_ARG, "advanced")) page = 3;
+        else if (!str_icmp(APP_ARG, "qualify")) { page = 3; qualify_requested = 1; }
         else if (!str_icmp(APP_ARG, "monitor")) page = 2;
         else page = 0;
         APP_ARG[0] = 0;
@@ -996,7 +1014,7 @@ int app_event(int ev, int a, int b, int c)
     case EV_ACTION: r = action(a); break;
     case EV_KEY:
         scan = KEY_SCAN(a); ch = KEY_CHAR(a); r = 1;
-        if (ch == 27) { theme_restore(); app_close(); break; }
+        if (ch == 27) { qualify_cancel(); theme_restore(); app_close(); break; }
         if (ch >= '1' && ch <= '6') { page = ch - '1'; focus = 0; break; }
         if (ch == 9) { focus = (focus + 1) % 6; break; }
         if (scan == K_F5) {
@@ -1071,7 +1089,9 @@ int app_event(int ev, int a, int b, int c)
         }
         break;
     case EV_POLL:
+        if (qualify_step) { r = qualify_poll(); break; }
         if (pending_probe) { pending_probe = 0; detect(); r = 1; break; }
+        if (qualify_requested) { r = qualify_begin(1); break; }
         if ((unsigned)(HOST.ticks - last_poll) >= 18) {
             had_monitor = probe.monitor.valid;
             old_backend = native_ok ? (int)nfield(8) : 0;
@@ -1085,8 +1105,8 @@ int app_event(int ev, int a, int b, int c)
             break;
         }
         r = 0; break;
-    case EV_SUSPEND: return 1;
-    case EV_CLOSE: theme_restore(); finish_preview(0); return 0;
+    case EV_SUSPEND: qualify_cancel(); return 1;
+    case EV_CLOSE: qualify_cancel(); theme_restore(); finish_preview(0); return 0;
     default: r = 0; break;
     }
     r = dialog_post(&notice, WIN_DISPLAY, ev, r);

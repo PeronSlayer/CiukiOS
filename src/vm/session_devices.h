@@ -59,10 +59,24 @@ typedef struct cvdev_report {
     uint32_t bridge_calls, rate, reserved[4];
 } cvdev_report;
 
+/* Optional transport timing query. CVDV and its consumer offsets stay fixed. */
+typedef struct cvdev_audio_report {
+    uint32_t magic;                 /* 'CVAT' */
+    uint16_t version, bytes;
+    uint32_t generation, active, dac_rate, source_rate;
+    uint32_t sb_rate, sb_block_units, sb_units_left, sb_format;
+    uint32_t services, buffers_rendered, sb_boundaries, boundary_yields;
+    uint32_t late_acks, wait_polls, dma_halts, fifo_errors;
+    uint32_t last_gap_us, max_gap_us, last_render_cycles, max_render_cycles;
+    uint32_t total_render_lo, total_render_hi, source_frames, output_frames;
+    uint32_t queued, partial_frames, irq_status, dma_address, dma_count, flags;
+} cvdev_audio_report;
+
 int      CVDEV_CALL cvdev_begin(uint32_t generation, uint32_t caps, uint32_t flags,
                                 uint32_t tsc_khz, const cvdev_pages *pages,
                                 uint32_t *granted, uint32_t *audio);
 int      CVDEV_CALL cvdev_end(void);
+void     CVDEV_CALL cvdev_report_audio(cvdev_audio_report *out);
 int      CVDEV_CALL cvdev_active(void);
 int      CVDEV_CALL cvdev_focus(uint32_t focused);
 /* Which physical 8042 bytes the model may take (both by default). With

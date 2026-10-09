@@ -27,8 +27,9 @@
 ; session is this VM's own: DPMIRUN begins it (virtual VGA in text mode 03h,
 ; keyboard, mouse, Sound Blaster 16 and OPL3 on the AC'97), binds the DPMI
 ; host to it with VCPI memory (-v: Jemm's pool is one for all VMs, while each
-; VM has its own copy of the kernel's XMS tables), runs \COMMAND.COM with the
-; tail, and ends the session. The desktop paints the session into the window
+; VM has its own copy of the kernel's XMS tables), directly EXECs plain
+; absolute COM/EXE commands (otherwise uses \COMMAND.COM), and ends the
+; session. The desktop paints the session into the window
 ; from the system VM. /T gives the TSC rate in kHz the desktop measured
 ; (measured here otherwise). While the program runs, the VM's IRQ0 handler
 ; hands timer ticks its DPMI host reflected to the VM manager (VMM_YIELD):
@@ -43,6 +44,18 @@ org 100h
 %include "src/vm/session_video_abi.inc"
 %include "src/vm/session_scheduler_abi.inc"
 
+%macro VM_CHECKPOINT 1
+    pushf
+    push ax
+    mov [cs:vm_launch_record+18],ax
+    pushf
+    pop word [cs:vm_launch_record+20]
+    mov ax,%1
+    call vm_launch_checkpoint
+    pop ax
+    popf
+%endmacro
+
 start:
     cld
     mov sp,stack_top
@@ -54,6 +67,14 @@ start:
     ; Program path and its arguments from the command tail.
     mov si,81h
     call skip_blanks
+    cmp word [si],0502Fh               ; explicit parent-persisted trace /P
+    jne .normal_tail
+    cmp byte [si+2],' '
+    jne .normal_tail
+    mov byte [vm_parent_trace],1
+    add si,3
+    call skip_blanks
+.normal_tail:
     cmp al,'/'
     je window_mode
     ; A host is already resident (a DOS window): just run the program.
@@ -268,6 +289,13 @@ vm_mode:
     mov byte [exit_code],1
     jmp .exit
 .session:
+    ; Launchers can explicitly declare a real-mode-only target. Keep the
+    ; virtual VGA/devices and checkpoints, while avoiding an unused resident
+    ; DPMI host in that target's conventional heap. Unknown files keep the
+    ; existing host path; never infer a mode from an MZ stub or game name.
+    call vm_launch_mode_probe
+    cmp byte [vm_real_mode],1
+    je .run
     call find_session
     jc .run
     mov byte [host_vcpi],1
@@ -277,18 +305,31 @@ vm_mode:
 .run:
     call command_program
     jc .exec
+    call vm_direct_command
     call save_directory
     call enter_program_dir
     mov byte [moved],1
 .exec:
+    push ax
+    mov al,[vm_direct]
+    mov [vm_launch_record+255],al
+    pop ax
+    VM_CHECKPOINT 75                   ; about to EXEC the command/game path
     mov word [params+2],child_tail
     mov dx,command_path
+    cmp byte [vm_direct],0
+    je .dispatch
+    mov word [params+2],vm_direct_tail
+    mov dx,program
+.dispatch:
     call exec
+    VM_CHECKPOINT 76
     mov byte [exit_code],1
     jc .end
     mov ah,4Dh
     int 21h
     mov [exit_code],al
+    VM_CHECKPOINT 77
 .end:
     cmp byte [moved],1
     jne .unload
@@ -327,6 +368,7 @@ vm_begin:
     movzx edx,word [entry]
     add eax,edx
     mov [vm_entry_linear],eax
+    VM_CHECKPOINT 64                   ; first DPMIRUN boundary with API found
     xor cx,cx
     mov byte [vm_begin_step],'Q'
     mov ax,VM_OP_QUERY
@@ -337,6 +379,7 @@ vm_begin:
     stc
     jne .done
     ; Firmware fonts before the session serves INT 10h.
+    VM_CHECKPOINT 65
     mov bh,3
     call vm_font
     mov [vm_config+VM_VCFG_FONT_8X8],eax
@@ -369,6 +412,7 @@ vm_begin:
     call log
     pop eax
     mov di,vm_config
+    VM_CHECKPOINT 66
     mov byte [vm_begin_step],'C'
     mov ax,VM_OP_VIDEO_CONFIG
     call vm_call
@@ -381,6 +425,7 @@ vm_begin:
     mov byte [vm_sched_bound],1
 .no_scheduler:
     mov byte [vm_begin_step],'B'
+    VM_CHECKPOINT 67
     mov ax,VM_OP_BEGIN
     call vm_call
     jnc .begun
@@ -388,6 +433,7 @@ vm_begin:
     stc
     jmp .done
 .begun:
+    VM_CHECKPOINT 68
     mov byte [vm_active],1
     ; Guest devices when Jemm's virtual-IF profile is there.
     cmp byte [vm_background],1
@@ -400,6 +446,7 @@ vm_begin:
     mov ebx,CVDEV_CAP_KEYBOARD|CVDEV_CAP_MOUSE|CVDEV_CAP_DMA_SB|CVDEV_CAP_OPL3
     mov ecx,CVDEV_FLAG_AUDIO_OUT
     mov edx,[vm_tsc]
+    VM_CHECKPOINT 69
     mov ax,VM_OP_DEV_BEGIN
     call vm_call
     jc .dev_failed
@@ -424,6 +471,7 @@ vm_begin:
     call log
     pop ax
 .no_devices:
+    VM_CHECKPOINT 70
     ; A protected-mode host maps the model through the packet after the
     ; scheduler descriptor (HDPMI -cSSSS:OOOO).
     cmp byte [vm_sched_bound],1
@@ -434,12 +482,14 @@ vm_begin:
     jc .no_share
     mov byte [vm_shared],1
 .no_share:
+    VM_CHECKPOINT 71
     mov ax,0003h                        ; the virtual VGA BIOS: text 80x25
     int 10h
     push cs
     pop ds
     push cs
     pop es
+    VM_CHECKPOINT 72
     ; Timer ticks the DPMI host reflects reach the VM manager.
     push es
     xor ax,ax
@@ -742,6 +792,8 @@ command_program:
     loop .copy
 .copied:
     mov byte [di],0
+    dec si
+    mov [vm_command_args],si
     test bx,bx
     jz .none
     ; Absolute paths only: a relative one is resolved by COMMAND from here.
@@ -757,6 +809,9 @@ command_program:
 .none:
     stc
     ret
+
+%include "src/com/dpmirun_direct.inc"
+%include "src/com/dpmirun_mode.inc"
 
 save_directory:
     mov ah,19h
@@ -812,6 +867,8 @@ find_session:
 
 ; Load the host resident, bound to the session. CF=1 on failure.
 load_host:
+    mov byte [vm_launch_record+254],1  ; host EXEC attempted
+    VM_CHECKPOINT 73
     mov si,log_host
     call log
     cmp byte [host_vcpi],0
@@ -822,9 +879,16 @@ load_host:
     mov word [params+2],host_tail
     mov dx,host_path
     call exec
+    VM_CHECKPOINT 74
+    mov [vm_launch_record+248],ax
+    pushf
+    pop word [vm_launch_record+250]
     jc .done
     mov ah,4Dh
     int 21h
+    mov [vm_launch_record+252],ax
+    mov byte [vm_launch_record+254],3  ; host exit status obtained
+    VM_CHECKPOINT 78
     cmp al,3                        ; 0-2 installed; 3 = an unbound host exists
     cmc
 .done:
@@ -998,6 +1062,13 @@ log:
 
 ; Best-effort transition log. Preserve caller state; never called from IRQs.
 disk_log:
+    pushf
+    cmp byte [cs:vm_parent_trace],1
+    jne .file
+    popf
+    ret
+.file:
+    popf
     pushfd
     pushad
     push ds
@@ -1060,6 +1131,56 @@ disk_log:
     popad
     popfd
     ret
+
+; A separate CVFL record marks DPMIRUN boundaries. VM0 owns persistence;
+; the manager assigns one monotonically increasing sequence across launchers.
+vm_launch_checkpoint:
+    pushfd
+    pushad
+    push ds
+    push es
+    cmp byte [cs:vm_parent_trace],1
+    jne .done
+    mov [cs:vm_launch_record+12],ax
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov ax,VM_OP_VMM_STATE
+    call far [entry]
+    jc launch_mailbox_failed
+    mov [cs:vm_launch_record+8],cx
+    mov bx,cx
+    mov ax,VM_OP_VMM_EXIT_CODE
+    call far [cs:entry]
+    jc launch_mailbox_failed
+    mov [cs:vm_launch_record+10],cx
+    mov [cs:vm_launch_record+22],cs
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov bx,cx
+    mov di,vm_launch_record
+    call launch_mailbox_publish
+.done:
+    pop es
+    pop ds
+    popad
+    popfd
+    ret
+
+%include "src/com/launch_mailbox.inc"
+vm_parent_trace db 0
+vm_launch_record:
+    db 'CVFL'
+    dw 1,256
+    times 56 db 0
+    db 'DPMIRUN'
+    times 175 db 0
+    db 'DP'
+    dw 0FFFFh,0,0FFFFh               ; host EXEC AX/FLAGS and exit AX
+    db 0,0                           ; host result flags, direct command
 
 serial:
     push ax

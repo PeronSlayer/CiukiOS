@@ -297,33 +297,50 @@ wp_load:
     mov [wp_width],ax
     mov ax,[wp_header+6]
     mov [wp_height],ax
-    mov byte [wp_kind],1
-    inc word [wp_generation]
-    push cs
-    pop es
-    clc
-    ret
+    mov al,1
+    jmp .commit_kind
 .photo:
-    cmp dword [wp_header+4],(941 << 16) | 1672
+    ; Positive bounded RGB rows; padding keeps every XMS transfer even.
+    mov ax,[wp_header+4]
+    dec ax
+    cmp ax,2047
+    ja .cleanup
+    inc ax
+    imul ax,3
+    inc ax
+    and al,0xFE
+    cmp ax,[wp_header+8]
     jne .cleanup
-    cmp dword [wp_header+8],(1 << 16) | 5016
+    mov bx,[wp_header+6]
+    dec bx
+    cmp bx,1535
+    ja .cleanup
+    inc bx
+    movzx eax,ax
+    movzx ebx,bx
+    imul eax,ebx
+    cmp eax,[wp_header+12]
     jne .cleanup
-    cmp dword [wp_header+12],4720056
+    cmp word [wp_header+10],1
     jne .cleanup
+    add eax,16
+    mov edi,eax
     mov bx,[wp_handle]
     xor cx,cx
     xor dx,dx
     mov ax,0x4202
     int 0x21
     jc .cleanup
-    cmp dx,(4720072 >> 16)
-    jne .cleanup
-    cmp ax,(4720072 & 0xFFFF)
+    shl edx,16
+    mov dx,ax
+    cmp edx,edi
     jne .cleanup
     call wp_close
     jc .fail
     call wp_tile_end
-    mov byte [wp_kind],2
+    mov al,2
+.commit_kind:
+    mov [wp_kind],al
     inc word [wp_generation]
     push cs
     pop es
@@ -753,10 +770,10 @@ wp_previous db 'Previous',0
 wp_next db 'Next',0
 wp_apply db 'Apply',0
 wp_chosen db '>',0
-wp_hint db 'Copy tiles to \SYSTEM\UI; then Refresh.',0
+wp_hint db 'Copy to \SYSTEM\UI; Refresh.',0
 wp_refresh db 'Refresh',0
 wp_catalog_error db 'Wallpaper catalog missing or damaged.',0
-wp_empty db 'No wallpaper tiles are installed.',0
+wp_empty db 'No wallpapers installed.',0
 wp_applied db 'Wallpaper applied.',0
 wp_load_error db 'Wallpaper could not be loaded.',0
 wp_save_error db 'Applied; preference could not be saved.',0

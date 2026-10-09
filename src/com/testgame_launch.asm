@@ -8,6 +8,15 @@ org 0x100
     %error "GAME_KIND must select a TestGames launcher"
 %endif
 
+%if GAME_KIND = 2
+    ; Explicit real-mode launch declaration. DPMIRUN recognizes only this
+    ; complete versioned header; DOS itself simply jumps over it. Original
+    ; Wolf uses Turbo C conventional heaps and never enters a DPMI client.
+    jmp short start
+    db 'CIUKILCH',1,1                 ; signature, version, real-mode-only
+    dw 16,0                          ; complete header size, reserved
+%endif
+
 start:
     cli
     mov ax, cs

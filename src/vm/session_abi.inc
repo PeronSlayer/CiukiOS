@@ -59,6 +59,10 @@ VM_FB_DIAG_HEADER_SIZE equ 16
 VM_FB_DIAG_CACHE_SIZE  equ 576
 VM_FB_DIAG_TIME_SIZE   equ 32
 VM_FB_DIAG_SIZE        equ 624
+; Explicit post-boot SuperSavage qualification. System VM, no DOS guests,
+; existing true LFB only; BX=1..4 (MMIO/setup/private 2D/private 3D+retain).
+; Stages must succeed in order. No packet or application physical address.
+VM_OP_GPU_QUALIFY      equ 18h
 ; Bounded protected native-pixel fill, system VM only. ES:DI names an exact
 ; 32-byte CVFF packet; CX >=32. No firmware call or guest CR0 switch occurs.
 VM_OP_FB_FILL          equ 15h
@@ -131,6 +135,10 @@ VM_OP_NATIVE_STOP      equ 10h
 ; VMM_IVT    ES:DI <- 1024 bytes: the interrupt vectors as they were when the
 ;            module loaded. VMFORK restores from them, in the new VM, every
 ;            vector that points into the blocks it frees there.
+;            With sealed pre-GUI ownership, unchanged targets originally in
+;            free DOS payloads use the fixed kernel IRET in this output only.
+;            BX=registered, CX=classified count, DX=substitutions,
+;            SI=first substituted IVT byte offset (FFFFh if none).
 ; VMM_TARGET BX = the VM whose DOS window session this VM's QUERY, READBACK,
 ;            VIDEO_STATE/READ/RENDER/PRESENT/BAND/DAMAGE, DEV_STATE,
 ;            DEV_KEY and DEV_MOUSE address (itself: its own). A VM that
@@ -186,6 +194,34 @@ VM_OP_VMM_CLOCK        equ 4Fh
 ; System-VM network owner: BX is a bitmap of hardware IRQ lines (3..15),
 ; or zero to unregister. Lines are masked only while another VM runs.
 VM_OP_VMM_NET_IRQ      equ 50h
+; Explicit opt-in fork; ordinary VMM_CREATE never waits for trace persistence.
+VM_OP_VMM_CREATE_TRACE equ 51h
+; Foreground launch mailbox. CX=0 publish own CVFL at ES:DI, BX=generation;
+; CX=1 system read, BX=VM/DX=generation, ES:DI <-256 bytes, CX=pending;
+; CX=2 system ACK, BX=VM/DX=generation, CX high:SI=sequence after close;
+; CX=3 child wait-state, BX=generation -> DX=pending. A pending child is
+; held out of scheduling and also waits in its foreground caller until ACK.
+VM_OP_VMM_LAUNCH_TRACE equ 52h
+; Native boot-disk module, distinct from the conventional DOS kernel.
+; STATUS: ES:DI <- CDS1/version1/size80 + cvata_status[72], BX=BIOS boot
+; drive. PREPARE: system VM, ES:DI -> ADP1[64] (EDD30 at8, DPTE16 at40,
+; AH08 heads/sectors/cylinders words at56). BIND: ES:DI -> BIOS LBA0[512].
+; A failed native request is final: neither EDD nor CHS chains to firmware.
+VM_OP_DISK_STATUS      equ 53h
+VM_OP_DISK_PREPARE     equ 54h
+VM_OP_DISK_BIND        equ 55h
+; Optional DPTE-independent mapping: VM0 observes the actual firmware
+; task-file writes during a reset/reference read. BEGIN/END take ADP1[64].
+; END supplies a validated mapping; it never identifies guessed devices.
+VM_OP_DISK_DISCOVER_BEGIN equ 56h
+VM_OP_DISK_DISCOVER_END   equ 57h
+; Register load-time ownership of the raw IVT before GUI allocation. VM0 only:
+; BX=kernel segment, CX=InDOS offset, DX=first MCB. No live IVT mutation.
+VM_OP_VMM_IVT_BASELINE    equ 58h
+VM_DISK_STATUS_SIZE    equ 80
+; VMFORK target EXEC refused: low12 bits carry DOS AX; full AX remains in
+; CVFL.last_dos_ax. Distinct from normal child exit values0..255.
+VM_EXIT_EXEC_ERROR     equ 0E000h
 ; Ored into an operation by a DPMI host whose client is single-stepping a
 ; virtual CLI region: no VM switch at that call's return to V86.
 VM_OP_NO_SWITCH        equ 100h

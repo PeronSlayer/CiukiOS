@@ -112,6 +112,7 @@ sfx_init:
     mov byte [sfx_audio_stage],5
     call ac97_prepare_codec
     jc .restore
+    call sfx_apply_master_preference
     call sfx_audio_snapshot_mixer     ; while PCI I/O is still enabled
     mov byte [sfx_audio_stage],6
     mov bx,0x1000
@@ -133,6 +134,64 @@ sfx_init:
     call sfx_audio_log_init
     call boot_restore_pci
 .done:
+    ret
+
+; The startup event is queued before the desktop app receives EV_OPEN. Apply
+; its saved master preference during sound-driver initialization so the first
+; melody uses the same level and mute state as later sounds.
+sfx_apply_master_preference:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ax,0x1A1A                    ; first-use level 5, unmuted
+    mov [sfx_audio_pref_value],ax
+    mov dx,sfx_audio_pref_path
+    mov ax,0x3D00
+    int 0x21
+    jc .apply
+    mov bx,ax
+    mov dx,sfx_audio_pref_data
+    mov cx,2
+    mov ah,0x3F
+    int 0x21
+    jc .read_failed
+    mov [sfx_audio_pref_bytes],ax
+    jmp .close_preference
+.read_failed:
+    mov word [sfx_audio_pref_bytes],0xFFFF
+.close_preference:
+    mov ah,0x3E
+    int 0x21
+    jc .apply
+    cmp word [sfx_audio_pref_bytes],1
+    jne .apply
+    test byte [sfx_audio_pref_data],0x60
+    jnz .apply
+    mov bl,[sfx_audio_pref_data]
+    xor ax,ax
+    mov al,bl
+    and al,31
+    mov si,ax
+    mov ax,31
+    sub ax,si
+    mov ah,al
+    test bl,0x80
+    jz .save_value
+    or ax,0x8000
+.save_value:
+    mov [sfx_audio_pref_value],ax
+.apply:
+    mov ax,[sfx_audio_pref_value]
+    mov dx,[nam_base]
+    add dx,AC97_MASTER_VOL
+    call ac97_codec_write
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 sfx_play:
@@ -389,6 +448,10 @@ sfx_info db '\SYSTEM\SOUNDS\INFO.PCM',0
 sfx_warning db '\SYSTEM\SOUNDS\WARN.PCM',0
 sfx_confirm db '\SYSTEM\SOUNDS\CONFIRM.PCM',0
 sfx_preference db '\SYSTEM\BOOT.SND',0
+sfx_audio_pref_path db '\SYSTEM\VOLUME.CFG',0
+sfx_audio_pref_data times 2 db 0
+sfx_audio_pref_bytes dw 0
+sfx_audio_pref_value dw 0x1A1A
 sfx_boot_path db '\SYSTEM\BOOT.PCM',0
 sfx_boot_program_path db '\SYSTEM\BOOTSND.COM',0
 sfx_exec_tail db 3,' /Q',13

@@ -618,8 +618,10 @@ static int tasks_event(int ev, int a, int b, int c)
     case EV_OPEN:
         str_copy(app_title, "Task Manager");
         if (!last_tick) {
-            HDR_WIDTH = HOST.screen_w - 60 > 620 ? 620 : HOST.screen_w - 60;
-            HDR_HEIGHT = HOST.screen_h - 100 > 470 ? 470 : HOST.screen_h - 100;
+            /* Keep all four tabs and Performance rows above the status bar,
+             * including the 640x480 desktop (600x400, centred in its work area). */
+            HDR_WIDTH = HOST.screen_w - 40 > 620 ? 620 : HOST.screen_w - 40;
+            HDR_HEIGHT = HOST.screen_h - 80 > 470 ? 470 : HOST.screen_h - 80;
             m_view[3].flags = MI_CHECKED;
         }
         if (!str_icmp(APP_ARG, "performance")) tab = 3;

@@ -30,6 +30,7 @@ externdef c cvdev_port_write:near
 externdef c cvdev_irq_filter:near
 externdef c cvdev_poll:near
 externdef c cvdev_report_state:near
+externdef c cvdev_report_audio:near
 externdef c cvdev_trap_ports:near
 externdef c cvdev_note_bridge:near
 
@@ -828,6 +829,8 @@ dev_dispatch proc uses esi edi ebx
  je op_focus
  cmp eax,VM_OP_DEV_STATE
  je op_state
+ cmp eax,VM_OP_DEV_AUDIO_STATE
+ je op_audio_state
  cmp eax,VM_OP_DEV_IO
  je op_io
  cmp eax,VM_OP_DEV_KEY
@@ -884,13 +887,20 @@ op_focus:
  xor eax,eax
  ret
 op_state:
+ mov eax,offset cvdev_report_state
+ jmp state_packet
+op_audio_state:
+ mov eax,offset cvdev_report_audio
+state_packet:
+ push eax
  mov ecx,CVDEV_REPORT_BYTES
  call guest_destination
+ pop edx
  test eax,eax
  jnz state_done
  push edi
  mov dev_args,offset dev_report
- mov eax,offset cvdev_report_state
+ mov eax,edx
  mov ecx,1
  call dev_call
  pop edi

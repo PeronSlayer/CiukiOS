@@ -82,6 +82,11 @@ static void advance_to_now(cvclock_state *s)
     }
     s->sub_ms_cycles = combined;
     add_milliseconds(s, q_high, q_low);
+    /* The PIT phase follows all elapsed time, but its IRQ output feeds one
+     * 8259 request bit. Replaying every elapsed period after a slow disk
+     * transfer/VM timeslice creates an IRQ0 storm and starves IRQ1/IRQ7.
+     * Keep one undelivered edge until clock_poll transfers it to the PIC. */
+    if (s->pit.pit0_pending_irqs > 1u) s->pit.pit0_pending_irqs = 1u;
 }
 
 void CVCLK_CALL cvclock_begin(uint32_t vm, uint32_t tsc_khz)

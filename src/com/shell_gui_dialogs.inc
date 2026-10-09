@@ -58,37 +58,11 @@ ui_draw_dialog:
     je wp_draw
     cmp byte [ui_dialog],5
     jae ui_draw_settings
-    cmp byte [ui_dialog],1
-    je .run
     cmp byte [ui_dialog],3
     je .power
     cmp byte [ui_dialog],4
     je .error
     jmp .ok
-.run:
-    mov bx,[ui_dialog_x]
-    add bx,22
-    mov dx,[ui_dialog_y]
-    add dx,45
-    U_TEXT bx,dx,ut_run_help,0
-    call ui_draw_run_field
-    mov bx,[ui_dialog_x]
-    add bx,22
-    mov dx,[ui_dialog_y]
-    add dx,118
-    U_TEXT bx,dx,ut_run_example,8
-    add dx,22
-    U_TEXT bx,dx,ut_run_output,0
-    mov bx,[ui_dialog_x]
-    add bx,159
-    mov dx,[ui_dialog_y]
-    add dx,188
-    U_BUTTON bx,dx,96,26,ut_window,58
-    add bx,104
-    U_BUTTON bx,dx,84,26,ut_run_ok,40
-    add bx,92
-    U_BUTTON bx,dx,88,26,ut_cancel,41
-    ret
 .power:
     mov bx,[ui_dialog_x]
     add bx,22
@@ -130,62 +104,6 @@ ui_draw_dialog:
     add dx,188
 .ok_draw:
     U_BUTTON bx,dx,88,26,ut_ok,41
-    ret
-
-ui_draw_run_field:
-    pushad
-    push es
-    push cs
-    pop es
-    cld
-    mov bx,[ui_dialog_x]
-    add bx,22
-    mov dx,[ui_dialog_y]
-    add dx,76
-    mov cx,420
-    mov si,28
-    call ui_inset
-    add bx,6
-    add dx,5
-    mov [ui_field_x],bx
-    mov [ui_field_y],dx
-    ; Scroll a 32-character viewport to keep the insertion point visible.
-    movzx si,byte [ui_run_cursor]
-    cmp si,32
-    jbe .view_start
-    sub si,32
-    jmp .view
-.view_start:
-    xor si,si
-.view:
-    mov [ui_run_view],si
-    add si,ui_run_text
-    mov di,ui_run_visible
-    mov cx,32
-.copy:
-    lodsb
-    stosb
-    test al,al
-    jz .visible
-    loop .copy
-    mov byte [di],0
-.visible:
-    U_TEXT bx,dx,ui_run_visible,0
-    movzx di,byte [ui_run_cursor]
-    sub di,[ui_run_view]
-    mov al,[ui_run_visible+di]
-    push ax
-    mov byte [ui_run_visible+di],0
-    mov si,ui_run_visible
-    call ui_measure
-    pop ax
-    mov [ui_run_visible+di],al
-    mov bx,[ui_field_x]
-    add bx,cx
-    mov dx,[ui_field_y]
-    U_RECT bx,dx,1,16,0
-    pop es
-    popad
     ret
 
 ui_clock_poll:
@@ -298,11 +216,6 @@ ui_clock_read:
     ret
 
 ui_dialog_h dw 0
-ut_run_help db 'Enter a program name or a DOS command.',0
-ut_run_example db 'Examples: dir   |   edit notes.txt',0
-ut_run_output db 'Run: in a DOS window.   Full screen: the whole screen.',0
-ut_run_ok db 'Run',0
-ut_window db 'Full screen',0
 ut_power_help db 'Choose how to leave CiukiOS.',0
 ut_power_live db 'Changes made on the live CD are kept in RAM only.',0
 ut_restart db 'Restart',0
@@ -315,13 +228,8 @@ ut_error_dos db 'Check the file name, location and available memory.',0
 ui_dialog db 0
 ui_dialog_x dw 0
 ui_dialog_y dw 0
-ui_field_x dw 0
-ui_field_y dw 0
 ui_run_len db 0
-ui_run_cursor db 0
-ui_run_view dw 0
 ui_run_text times 97 db 0
-ui_run_visible times 33 db 0
 ui_clock_tick dw 0
 ui_clock_text db '--:--',0
 ui_old_clock times 5 db 0

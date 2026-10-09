@@ -3,10 +3,8 @@
 #include "app.h"
 #include "webstore.h"
 
-#define PHOTO_W 1672
-#define PHOTO_H 941
-#define PHOTO_STRIDE 5016
-#define PHOTO_BYTES 4720056UL
+#define PHOTO_MAX_W 2048
+#define PHOTO_MAX_H 1536
 #define MAX_SCREEN_W 2560
 #pragma pack(push,1)
 struct band {u16 seg,top,bottom,stride,width;u8 bytes,rs,rp,gs,gp,bs,bp;u16 left;};
@@ -25,6 +23,22 @@ static struct geometry shape,cache_shape;
 static int format_known,format_w,format_h,dirty=1,cache_w,cache_h,prepare_row,prepare_previous=-1;
 static u16 native_stride,cache_stride;
 static u8 native_row[MAX_SCREEN_W*4+2];
+static u16 load_started,load_polls,load_max_ticks;
+static u16 prepare_started,prepare_polls,prepare_max_ticks;
+
+/* Read the live BIOS counter, not HOST.ticks (the event-entry snapshot).
+ * This read does not consume INT 1Ah's midnight rollover flag. */
+static u16 work_ticks(void) {return peek16(0x40,0x6C);}
+static void work_log(const char *phase,const char *name,u32 bytes,
+                     u16 polls,u16 started,u16 max_ticks)
+{
+    char detail[88],number[12];
+    str_copy(detail,name);str_cat(detail," bytes=");fmt_u32(number,bytes);str_cat(detail,number);
+    str_cat(detail," polls=");fmt_u32(number,polls);str_cat(detail,number);
+    str_cat(detail," ticks=");fmt_u32(number,(u16)(work_ticks()-started));str_cat(detail,number);
+    str_cat(detail," max_poll_ticks=");fmt_u32(number,max_ticks);str_cat(detail,number);
+    app_log(phase,detail);
+}
 
 static u16 word_at(int n) {return header[n]|((u16)header[n+1]<<8);}
 static u32 long_at(int n) {return (u32)word_at(n)|((u32)word_at(n+2)<<16);}
@@ -66,10 +80,12 @@ static int begin(int segment,int offset)
         rejected();return 1;
     }
     indexed=0;
-    if(!mem_cmp(header,"CWP2",4)&&word_at(4)==PHOTO_W&&word_at(6)==PHOTO_H&&
-       word_at(8)==PHOTO_STRIDE&&word_at(10)==1&&long_at(12)==PHOTO_BYTES&&
-       bytes==(long)(PHOTO_BYTES+16)) {
-        new_width=PHOTO_W;new_height=PHOTO_H;new_stride=PHOTO_STRIDE;
+    if(!mem_cmp(header,"CWP2",4)&&word_at(4)&&word_at(4)<=PHOTO_MAX_W&&
+       word_at(6)&&word_at(6)<=PHOTO_MAX_H&&
+       word_at(8)==((word_at(4)*3u+1u)&~1u)&&word_at(10)==1&&
+       long_at(12)==(u32)word_at(8)*word_at(6)&&
+       bytes==16L+(long)long_at(12)) {
+        new_width=word_at(4);new_height=word_at(6);new_stride=word_at(8);
     }else if(!mem_cmp(header,"CWP1",4)&&word_at(4)&&word_at(4)<=256&&
        word_at(6)&&word_at(6)<=256&&word_at(8)==256&&!word_at(10)&&
        long_at(12)==(u32)word_at(4)*word_at(6)&&
@@ -80,12 +96,14 @@ static int begin(int segment,int offset)
     }else {rejected();return 1;}
     total=(u32)new_stride*new_height;
     staging=webstore_alloc(total);if(!staging){rejected();return 1;}
+    load_started=work_ticks();load_polls=load_max_ticks=0;
     return 0;
 }
-static int load_step(void)
+static int load_step(u16 poll_started)
 {
-    int i,j,n;u16 chunk;
+    int i,j,n;u16 chunk,started,elapsed;
     if(file<0)return 0;
+    started=work_ticks();++load_polls;
     for(i=0;i<8&&loaded<total;++i) {
         if(indexed) {
             chunk=new_stride;
@@ -100,12 +118,19 @@ static int load_step(void)
         }
         if(!webstore_write(staging,loaded,webstore_pixels,chunk)){rejected();return 1;}
         loaded+=chunk;
+        if((u16)(work_ticks()-poll_started))break;
     }
+    elapsed=(u16)(work_ticks()-started);
+    if(elapsed>load_max_ticks)load_max_ticks=elapsed;
     if(loaded==total) {
         dos_close(file);file=-1;webstore_free(active);active=staging;staging=0;
         width=new_width;height=new_height;stride=new_stride;style=request.style;
         str_copy(active_name,filename);invalidate();
         app_log("[WALLP] loaded",filename);
+        work_log("[WALLP] load stats",filename,total,load_polls,load_started,load_max_ticks);
+        /* The palette-safe fallback paints the RGB source directly and has
+         * no native cache commit to request its first completed repaint. */
+        if(!format_known)return 1;
     }
     return 0;
 }
@@ -135,15 +160,17 @@ static int prepare_begin(void)
     geometry();native_stride=(shape.width*format.bytes+1u)&~1u;
     prepared=webstore_alloc((u32)native_stride*shape.height);
     if(!prepared){dirty=0;app_log("[WALLP] cache rejected","XMS allocation");return 0;}
-    prepare_row=0;prepare_previous=-1;dirty=0;return 1;
+    prepare_row=0;prepare_previous=-1;dirty=0;
+    prepare_started=work_ticks();prepare_polls=prepare_max_ticks=0;return 1;
 }
-static int prepare_step(void)
+static int prepare_step(u16 poll_started)
 {
     int batch,dx,sy,sx,step,direct;long rx,ry;
-    u8 *dest;u32 value,rem,err;u16 pixel;
+    u8 *dest;u32 value,rem,err;u16 pixel,started,elapsed;
     if(!prepared)return 0;
+    started=work_ticks();++prepare_polls;
     direct=format.rs==8&&format.gs==8&&format.bs==8&&format.rp==16&&format.gp==8&&format.bp==0;
-    for(batch=0;batch<8&&prepare_row<shape.height;++batch,++prepare_row) {
+    for(batch=0;batch<8&&prepare_row<shape.height;++batch) {
         ry=shape.top+prepare_row-shape.y;
         sy=style==WP_TILE?ry%height:(int)((u32)ry*height/shape.h);
         if(sy!=prepare_previous) {
@@ -177,11 +204,17 @@ static int prepare_step(void)
         if(!webstore_write(prepared,(u32)prepare_row*native_stride,native_row,native_stride)) {
             cancel_prepare();app_log("[WALLP] cache rejected","destination write");return 0;
         }
+        ++prepare_row;
+        if((u16)(work_ticks()-poll_started))break;
     }
+    elapsed=(u16)(work_ticks()-started);
+    if(elapsed>prepare_max_ticks)prepare_max_ticks=elapsed;
     if(prepare_row==shape.height) {
         webstore_free(cache);cache=prepared;prepared=0;
         cache_shape=shape;cache_format=format;cache_stride=native_stride;
         cache_w=HOST.screen_w;cache_h=HOST.screen_h;
+        work_log("[WALLP] cache stats",active_name,(u32)cache_stride*cache_shape.height,
+                 prepare_polls,prepare_started,prepare_max_ticks);
         app_log("[WALLP] ready",active_name);return 1;
     }
     return 0;
@@ -220,12 +253,19 @@ static void paint(void)
 }
 int app_event(int ev,int a,int b,int c)
 {
-    int r;(void)c;
+    int r;u16 started;(void)c;
     if(ev==EV_OPEN)return begin(a,b);
     if(ev==EV_POLL) {
-        r=load_step();
-        if(dirty)prepare_begin();
-        return prepare_step()||r;
+        started=work_ticks();r=load_step(started);
+        if(!(u16)(work_ticks()-started)) {
+            if(dirty)prepare_begin();
+            if(!(u16)(work_ticks()-started)&&prepare_step(started))r=1;
+        }
+        if(r)return 1;
+        /* The shell checks input between batches, then polls again without
+         * HLT. Returning idle here used to add one IRQ wait to every batch. */
+        return file>=0||prepared||
+            (dirty&&active&&format_known&&(u16)(work_ticks()-started))?2:0;
     }
     if(ev==EV_PAINT){paint();return 0;}
     if(ev==EV_CLOSE||ev==EV_SUSPEND) {

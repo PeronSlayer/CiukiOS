@@ -17,9 +17,10 @@ the whole screen). Nothing needs to be typed. The files:
   DPMIRUN.COM   the window's launcher: binds \SBEMU\HDPMI32I.EXE to the
                 window for DOS/4GW programs, runs the program from its own
                 directory and unloads the host afterwards.
-  VMFORK.COM    VMFORK <program> [arguments]: runs a program in a second DOS
-                virtual machine that is time-sliced with the first one
-                (experimental; the desktop does not use it yet).
+  VMFORK.EXE    the desktop's fork launcher, with an explicit MZ memory
+                requirement and its own stack. Creates the DOS window's VM.
+  VMFORK.COM    VMFORK <program> [arguments]: the same launcher for command-
+                line tools and compatibility probes using the COM format.
 
 Sound needs an AC'97 card (QEMU: -device AC97). The games' DEFAULT.CFG must
 select Sound Blaster (port 220h, IRQ 7, DMA 1) for effects and OPL/Adlib or

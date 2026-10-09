@@ -163,9 +163,9 @@ unsupported:
  ret
 clock_port endp
 
-; Current VM only: elapsed time accrues while other VMs run. One request
-; leaves the expiry queue only after the authoritative virtual PIC accepts
-; it as pending. Pending held PM IRQ0 is included in that check.
+; Current VM only: PIT phase advances while other VMs run. Elapsed periods
+; coalesce into one pending edge, transferred only after the authoritative
+; virtual PIC accepts it. Pending held PM IRQ0 is included in that check.
 clock_poll proc
  pushad
  cmp clock_enabled,0

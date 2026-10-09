@@ -27,6 +27,7 @@ static char find_text[64], replace_text[64];
 static int find_case, find_up;
 static unsigned last_click_tick;
 static u16 last_click_off = NONE;
+static u16 word_anchor_start, word_anchor_end;
 
 /* Page setup: margins in characters (left, right) and lines (top, bottom). */
 static char header_text[64] = "&f", footer_text[64] = "Page &p";
@@ -1414,6 +1415,19 @@ static int on_mouse(int kind, int x, int y)
         popup_open(&context, context_items, 8, sx, sy, HOST.x + HOST.w - 4, HOST.y + HOST.h - 4);
         return 1;
     }
+    if (kind == MOUSE_MOVE && dragging) {
+        if (sy < ey + 2) { u16 p = row_prev(row_of(top)); if (p != NONE) top = p; }
+        if (sy >= ey + eh - 2) { u16 p = row_next(row_of(top)); if (p != NONE) top = p; }
+        if (dragging == 2) {
+            u16 o = offset_at(sx, sy);
+            select_word(o);
+            if (o < word_anchor_start) { caret = anchor; anchor = word_anchor_end; }
+            else if (o >= word_anchor_end) anchor = word_anchor_start;
+            else { anchor = word_anchor_start; caret = word_anchor_end; }
+        } else caret = offset_at(sx, sy);
+        return 1;
+    }
+    if (kind == MOUSE_UP) { dragging = 0; return 1; }
     /* Scroll bars. */
     if (sx >= ex + ew && sx < ex + ew + 16 && sy >= ey && sy < ey + eh) {
         if (kind == MOUSE_DOWN || kind == MOUSE_MOVE) {
@@ -1440,8 +1454,11 @@ static int on_mouse(int kind, int x, int y)
         u16 o = offset_at(sx, sy);
         typing_group = 0;
         goal = NONE;
-        if (o == last_click_off && HOST.ticks - last_click_tick < 9) {
+        if (!(HOST.shift & SH_SHIFT) && o == last_click_off && (unsigned)(HOST.ticks - last_click_tick) <=
+            (unsigned)(HOST.dblclick > 0 ? HOST.dblclick : 9)) {
             select_word(o);
+            word_anchor_start = anchor; word_anchor_end = caret;
+            dragging = 2;
             last_click_off = NONE;
             return 1;
         }
@@ -1452,13 +1469,6 @@ static int on_mouse(int kind, int x, int y)
         dragging = 1;
         return 1;
     }
-    if (kind == MOUSE_MOVE && dragging) {
-        if (sy < ey + 2) { u16 p = row_prev(row_of(top)); if (p != NONE) top = p; }
-        if (sy >= ey + eh - 2) { u16 p = row_next(row_of(top)); if (p != NONE) top = p; }
-        caret = offset_at(sx, sy);
-        return 1;
-    }
-    if (kind == MOUSE_UP) { dragging = 0; return 1; }
     return 0;
 }
 

@@ -45,8 +45,8 @@ wcc=watcom/'binl64/wcc386'
 if not wcc.exists(): wcc=watcom/'binl/wcc386'
 if not wcc.exists(): raise SystemExit('OpenWatcom wcc386 is required for the video monitor objects')
 video_sources=['virtual_vga.c','virtual_vga_bios.c','vga_presenter.c','vga_x86.c','session_video.c',
-               'guest_peripherals.c','session_devices.c','session_clock.c','session_gpu.c',
-               'session_gpu_legacy.c','session_gpu_savage.c']
+               'guest_peripherals.c','session_devices.c','session_audio.c','session_clock.c','session_gpu.c',
+               'session_gpu_legacy.c','session_gpu_savage.c','session_gpu_mach64.c','session_disk_ata.c']
 # Guest OPL synthesis: DBOPL (GPL-2.0-or-later) from the pinned VSBHDA archive,
 # unmodified, plus the ring-0 adapter, compiled by clang to freestanding COFF.
 vsbhda=json.loads((root/'third_party/vsbhda/UPSTREAM.json').read_text())
@@ -54,19 +54,20 @@ vsbhda_archive=root/'third_party/vsbhda'/vsbhda['archive']
 opl_shim=root/'src/vm/opl_shim'
 clang=os.environ.get('CLANGXX','clang++')
 source_paths=[root/'src/vm'/name for name in
-              ['session_jlm.asm','session_abi.inc','session_vmm.inc','session_native_pages.inc',
+              ['session_jlm.asm','session_abi.inc','session_vmm.inc','session_ivt_baseline.inc','session_launch_trace.inc','session_native_pages.inc',
+               'session_disk.inc','session_disk_ata.h',
                'session_framebuffer_cache.inc','session_framebuffer_fill.inc',
                'session_framebuffer_triangle.inc',
                'session_clock.inc','session_clock.h',
                'session_gpu.inc','session_gpu.h',
-               'session_gpu_legacy.h','session_gpu_savage.h',
+               'session_gpu_legacy.h','session_gpu_savage.h','session_gpu_mach64.h','session_gpu_mach64.inc',
                'session_native_process.inc',
                'session_scheduler.inc',
                'session_scheduler_abi.inc','session_scheduler.h',
               'session_video.inc','session_video_abi.inc','session_video.h',
               'session_switch_trace.inc',
                'vga_x86.h','virtual_vga.h','virtual_vga_bios.h','vga_presenter.h',
-               'guest_peripherals.h','session_devices.h','session_devices.inc',
+               'guest_peripherals.h','session_devices.h','session_audio.h','session_devices.inc',
                'session_devices_abi.inc','session_opl.cpp',
                *video_sources]]+[root/'src/native/native_entry.asm',
                root/'src/native/native_entry_abi.inc',
@@ -115,10 +116,19 @@ import re
 wanted={'dos_indos_flag':'KL_INDOS','fat_cache_valid':'KL_FAT_VALID','fat_cache_dirty':'KL_FAT_DIRTY',
         'fat_cache_sector':'KL_FAT_SECTOR','dos_mem_last_mcb_seg':'KL_LAST_MCB',
         'int21_last_ah':'KL_LAST_AH',
-        'dos_exec_identity_psp':'KL_EXEC_PSP','current_psp_seg':'KL_CURRENT_PSP'}
+        'dos_exec_identity_psp':'KL_EXEC_PSP','current_psp_seg':'KL_CURRENT_PSP',
+        'boot_drive':'KL_BOOT_DRIVE','int_default_iret':'KL_DEFAULT_IRET'}
 layout={}
 if a.kernel_listing.exists():
+    pending_label=None
     for line in a.kernel_listing.read_text(errors='replace').splitlines():
+        if re.search(r'\bint_default_iret:\s*$',line):
+            pending_label='KL_DEFAULT_IRET'
+        elif pending_label:
+            code=re.match(r'\s*\d+\s+([0-9A-F]{8})\s+CF\b',line)
+            if code:
+                layout[pending_label]=int(code.group(1),16)
+                pending_label=None
         m=re.match(r'\s*\d+\s+([0-9A-F]{8})\s+\S+\s+(?:<\d+>\s+)?(\w+)\s+d[bw]\b',line)
         if m and m.group(2) in wanted: layout[wanted[m.group(2)]]=int(m.group(1),16)
 present=len(layout)==len(wanted)

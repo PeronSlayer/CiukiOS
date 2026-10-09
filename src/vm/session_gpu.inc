@@ -14,6 +14,7 @@ externdef c cvlegacy_present:near
 externdef c cvlegacy_release:near
 externdef c cvlegacy_vbe_alias:near
 externdef c cvsavage_bind:near
+externdef c cvsavage_bind_step:near
 externdef c cvsavage_release:near
 externdef c cvsavage_sync:near
 externdef c cvsavage_fill:near
@@ -22,15 +23,26 @@ externdef c cvsavage_triangle:near
 externdef c cvsavage_status:byte
 externdef c cvsavage_owned:near
 externdef c cvsavage_panel_probe:near
+externdef c cvmach64_bind:near
+externdef c cvmach64_bind_step:near
+externdef c cvmach64_release:near
+externdef c cvmach64_sync:near
+externdef c cvmach64_fill:near
+externdef c cvmach64_page_copy:near
+externdef c cvmach64_status:byte
+externdef c cvmach64_owned:near
 
 .data
 fb_gpu dd 0
 fb_legacy dd 0
 fb_savage dd 0
+fb_mach64 dd 0
+mach64_qualification dd 0
 gpu_dirty dd 0
 gpu_mode dd 4 dup (0) ; optional validated VBE width, height, pitch, bpp
 gpu_banked dd 0
 gpu_usable_bytes dd 0
+savage_qualification dd 0
 display_packet db VM_DISPLAY_INFO_SIZE dup (0)
 
 .code
@@ -275,6 +287,8 @@ legacy_or_firmware:
  je savage_diagnostics
  mov dword ptr [display_packet+8],2
 savage_diagnostics:
+ cmp dword ptr cvmach64_status[12],4C4D1002h
+ je mach64_diagnostics
  mov eax,offset cvsavage_panel_probe
  xor ecx,ecx
  call dev_call
@@ -282,6 +296,7 @@ savage_diagnostics:
  ; requires actual engine ownership; a compiled driver alone is backend 0.
  mov dword ptr [display_packet+60],80000000h
  mov eax,dword ptr cvsavage_status[4]
+ and eax,7                            ; extended chip hints live in status only
  or dword ptr [display_packet+60],eax
  cmp fb_savage,1
  jne copy_savage_snapshot
@@ -298,6 +313,28 @@ savage_diagnostics:
  mov dword ptr [display_packet+40],eax
 copy_savage_snapshot:
  mov esi,offset cvsavage_status
+ mov edi,offset display_packet+64
+ mov ecx,128
+ rep movsb
+ jmp copy_packet
+mach64_diagnostics:
+ mov dword ptr [display_packet+60],40000000h
+ mov eax,dword ptr cvmach64_status[4]
+ or dword ptr [display_packet+60],eax
+ cmp fb_mach64,1
+ jne copy_mach64_snapshot
+ mov dword ptr [display_packet+8],4
+ mov eax,dword ptr cvmach64_status
+ mov dword ptr [display_packet+12],eax
+ mov eax,dword ptr cvmach64_status[8]
+ mov dword ptr [display_packet+32],eax
+ mov eax,dword ptr cvmach64_status[88]
+ mov dword ptr [display_packet+36],eax
+ mov eax,dword ptr cvmach64_status[48]
+ add eax,dword ptr cvmach64_status[52]
+ mov dword ptr [display_packet+40],eax
+copy_mach64_snapshot:
+ mov esi,offset cvmach64_status
  mov edi,offset display_packet+64
  mov ecx,128
  rep movsb
@@ -381,6 +418,7 @@ gpu_legacy_bind endp
 ; linear framebuffer and CVSESSION mapped its validated extent. No banked
 ; alias, mode programming, application-owned physical pointer or CR0 burst.
 gpu_savage_bind proc
+ mov savage_qualification,0
  mov fb_savage,0
  cmp vmm_current,0
  jne done
@@ -409,7 +447,7 @@ gpu_savage_bind proc
  je retained_failure
  cmp eax,-1
  je failed
- xor eax,eax
+ call gpu_mach64_bind
  ret
 ready:
  mov fb_savage,1
@@ -425,7 +463,133 @@ done:
  ret
 gpu_savage_bind endp
 
+; Ordered proof, invoked only after the firmware desktop is usable. Bind or
+; mode changes reset progress. Never qualify while a guest can own VGA state.
+gpu_savage_qualify proc
+ cmp dword ptr cvmach64_status[12],4C4D1002h
+ je gpu_mach64_qualify
+ cmp vmm_current,0
+ jne bad
+ cmp vmm_count,1
+ ja bad
+ cmp active,0
+ jne bad
+ cmp fb_linear,0
+ je bad
+ cmp gpu_banked,0
+ jne bad
+ cmp fb_gpu,0
+ jne bad
+ cmp fb_legacy,0
+ jne bad
+ cmp fb_savage,0
+ jne bad
+ movzx eax,word ptr [ebp].Client_Reg_Struc.Client_EBX
+ cmp eax,1
+ je restart
+ mov edx,savage_qualification
+ cmp eax,5                            ; separate, proven packed-MMIO 2D bind
+ jne normal_order
+ cmp edx,4
+ jne bad
+ cmp dword ptr cvsavage_status[8],9
+ jne bad
+ cmp dword ptr cvsavage_status[92],0
+ jne bad
+ cmp dword ptr cvsavage_status[4],8    ; failed triangle retained hint only
+ jne bad
+ jmp run
+normal_order:
+ cmp edx,1
+ jne next_setup
+ cmp eax,2                            ; preserve SAV3D's four-phase ABI
+ je run
+ mov edx,101h                         ; first restored setup prefix
+ jmp ordered
+next_setup:
+ cmp edx,115h                         ; CVSAVAGE_SETUP_CHECKS = 21
+ jne next_phase
+ mov edx,2
+ jmp ordered
+next_phase:
+ cmp edx,2
+ je advance
+ cmp edx,3
+ je advance
+ cmp edx,101h
+ jb bad
+ cmp edx,115h
+ jae bad
+advance:
+ inc edx
+ordered:
+ cmp eax,edx
+ jne bad
+ jmp run
+restart:
+ mov savage_qualification,0
+run:
+ mov [dev_args+28],eax
+ mov eax,fb_physical
+ mov dev_args,eax
+ mov eax,fb_bytes
+ mov [dev_args+4],eax
+ mov eax,gpu_mode
+ mov [dev_args+8],eax
+ mov eax,[gpu_mode+4]
+ mov [dev_args+12],eax
+ mov eax,[gpu_mode+8]
+ mov [dev_args+16],eax
+ mov eax,[gpu_mode+12]
+ mov [dev_args+20],eax
+ mov eax,gpu_usable_bytes
+ mov [dev_args+24],eax
+ mov eax,offset cvsavage_bind_step
+ mov ecx,8
+ call dev_call
+ cmp eax,2
+ je retained
+ cmp eax,1
+ jne failed
+ movzx eax,word ptr [ebp].Client_Reg_Struc.Client_EBX
+ mov savage_qualification,eax
+ cmp eax,4
+ je qualified
+ cmp eax,5
+ jne success
+qualified:
+ mov fb_savage,1
+success:
+ xor eax,eax
+ ret
+retained:
+ mov fb_savage,1
+failed:
+ mov savage_qualification,0
+ cmp word ptr [ebp].Client_Reg_Struc.Client_EBX,4
+ jne mapping_error
+ cmp dword ptr cvsavage_status[8],9
+ jne mapping_error
+ cmp dword ptr cvsavage_status[92],0
+ jne mapping_error
+ cmp dword ptr cvsavage_status[4],8
+ jne mapping_error
+ cmp dword ptr cvsavage_status[76],0
+ je mapping_error
+ cmp dword ptr cvsavage_status[124],0
+ je mapping_error
+ mov savage_qualification,4           ; safe retry may retain qualified 2D
+mapping_error:
+ mov eax,VM_ERROR_MAPPING
+ ret
+bad:
+ mov eax,VM_ERROR_OPERATION
+ ret
+gpu_savage_qualify endp
+
 gpu_savage_capabilities proc uses ebx
+ cmp fb_mach64,1
+ je mach64_caps
  xor eax,eax
  cmp fb_savage,1
  jne done
@@ -441,12 +605,28 @@ gpu_savage_capabilities proc uses ebx
  or eax,VM_CAP_NATIVE_TRIANGLES
 done:
  ret
+mach64_caps:
+ xor eax,eax
+ cmp dword ptr cvmach64_status,1
+ jne done
+ test dword ptr cvmach64_status[4],1
+ jz done
+ mov eax,VM_CAP_NATIVE_FILL
+ ret
 gpu_savage_capabilities endp
 
 ; Preserve the CPU copy's complete register state. A timeout refuses all
 ; subsequent CPU access rather than racing an outstanding hardware command.
 gpu_savage_cpu_begin proc
  pushad
+ cmp fb_mach64,0
+ je savage_sync
+ mov eax,offset cvmach64_sync
+ xor ecx,ecx
+ call dev_call
+ test eax,eax
+ jnz failed
+savage_sync:
  cmp fb_savage,0
  je idle
  mov eax,offset cvsavage_sync
@@ -467,6 +647,8 @@ gpu_savage_cpu_begin endp
 ; ESI points to the snapshotted, validated CVFF packet. Returns 0 completed
 ; by the engine, 1 not applicable (use protected CPU stores), >1 fatal.
 gpu_savage_fill proc uses esi edi ebx ecx edx
+ cmp fb_mach64,0
+ jne mach64_fill
  cmp fb_savage,0
  je unsupported
  mov eax,[esi+VM_FB_FILL_OFFSET]
@@ -484,12 +666,17 @@ gpu_savage_fill proc uses esi edi ebx ecx edx
 unsupported:
  mov eax,1
  ret
+mach64_fill:
+ call gpu_mach64_fill
+ ret
 gpu_savage_fill endp
 
 ; ESI points to a validated, private CVFC packet. The backend can copy a
 ; rectangle between any two bound display pages without CPU VRAM traffic.
 ; Return 0 completed, 1 safely inapplicable, >1 retained hardware failure.
 gpu_savage_page_copy proc uses esi edi ebx ecx edx
+ cmp fb_mach64,0
+ jne mach64_copy
  cmp fb_savage,0
  je unsupported
  mov eax,[esi+VM_FB_PAGE_SRC_OFFSET]
@@ -509,9 +696,22 @@ gpu_savage_page_copy proc uses esi edi ebx ecx edx
 unsupported:
  mov eax,1
  ret
+mach64_copy:
+ call gpu_mach64_page_copy
+ ret
 gpu_savage_page_copy endp
 
 gpu_savage_release proc
+ cmp fb_mach64,0
+ je savage_release
+ mov eax,offset cvmach64_release
+ xor ecx,ecx
+ call dev_call
+ test eax,eax
+ jnz failed
+ mov fb_mach64,0
+ mov mach64_qualification,0
+savage_release:
  cmp fb_savage,0
  je released
  mov eax,offset cvsavage_release
@@ -527,3 +727,4 @@ failed:
  mov eax,VM_ERROR_MAPPING
  ret
 gpu_savage_release endp
+include session_gpu_mach64.inc

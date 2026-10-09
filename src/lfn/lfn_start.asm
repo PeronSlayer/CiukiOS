@@ -1,17 +1,16 @@
 ; LFN.COM - CiukiOS VFAT long file names (the INT 21h AX=71xxh API).
 ;
 ; A resident extension of the CiukiDOS kernel, run by the desktop shell at
-; startup (docs/design-long-file-names-2026-09-30.md). The kernel image has no
-; room left (43,257 of 43,264 bytes), so the long name API lives here:
+; startup (docs/long-file-names-2026-09-30.md). The long name API lives here:
 ;   - an INT 21h hook in the IVT (the kernel refuses AH=25h for its own
 ;     vector) takes AH=71h, plus AH=41h/56h/3Ah to drop the long name entries
 ;     of what DOS programs delete or rename through the 8.3 API, and AH=00h/4Ch
 ;     to free the terminating program's find handles; everything else goes
 ;     straight to the kernel;
 ;   - lfn.c does the work on the kernel's own sector I/O and 8.3 services.
-;     The kernel's routines and variables are found through the listing of
-;     the very kernel it was built with (lfn_kernel.inc, scripts/build_lfn.sh)
-;     and checked at install: another kernel leaves the extension out.
+;     Public RTSV service 0Dh exports a versioned CLFN bridge. Installation
+;     validates the kernel identity, declared extents and typed far entries.
+;     Neither a kernel listing nor private variable addresses are imported.
 ;
 ; Memory: a TSR in conventional memory, so every DOS VM (a copy of the first
 ; 640 KB) has its own copy and its own find handles. Install code (ITEXT) is
@@ -28,20 +27,22 @@ segment STACK class=STACK public align=16 use16
 segment ITEXT class=ICODE public align=16 use16
 group DGROUP _TEXT CONST CONST2 _DATA _BSS STACK ITEXT
 
-%include "lfn_kernel.inc"
+%include "src/runtime/ciukidos_lfn_abi.inc"
 
 extern lfn_dispatch_
 extern lfn_init_
 global start
 global _R
-global _k_seg
-global _kl_fat_valid
-global _kl_fat_dirty
-global _kl_fat_sector
-global _kl_fat_buf
-global _kl_indos
 global kdos_
 global kio_
+global kflush_
+global kinvalidate_
+global kenter_
+global kleave_
+; Public linker symbols also let bounded validation execute the complete
+; built module, rather than a hand-written model of its import checks.
+global lfn_bind_runtime
+global lfn_entries
 global mul16_
 global com1_
 global __U4M
@@ -211,8 +212,8 @@ kdos_:
 ; int kio(struct kio *q): one sector through the kernel's own disk routine
 ; (read_sector_lba32 / write_sector_lba32: EDD, CHS fallback, retries, its
 ; disk stack, the volume's LBA offset). q = { u32 lba; u16 off, seg, write }.
-; The routines are near procedures in the kernel segment: they return to a
-; RETF of the kernel, which returns here. AX = 0 done, 1 failed.
+; Validated public far bridges preserve the kernel's disk behavior.
+; AX = 0 done, 1 failed.
 kio_:
     push bx
     push cx
@@ -228,18 +229,45 @@ kio_:
     mov bx,[si+4]
     mov es,[si+6]
     mov di,[si+8]
-    push cs
-    push word .back
-    push word KL_RETF
-    push word [cs:_k_seg]
     test di,di
     jnz .write
-    push word KL_READ
-    retf
+    call far [cs:lfn_entries + (CLFN_READ_SECTOR-1)*4]
+    jmp .back
 .write:
-    push word KL_WRITE
-    retf
+    call far [cs:lfn_entries + (CLFN_WRITE_SECTOR-1)*4]
 .back:
+    mov ax,0
+    adc ax,0
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; Public cache and balanced InDOS operations: same C 0/1 result and register
+; preservation as kio. No C code can write kernel-private cache/state bytes.
+%macro LFN_BRIDGE_CALL 2
+%1:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ds
+    push es
+    call far [cs:lfn_entries + (%2-1)*4]
+    jmp kbridge_result
+%endmacro
+LFN_BRIDGE_CALL kflush_, CLFN_FLUSH_FAT
+LFN_BRIDGE_CALL kinvalidate_, CLFN_INVALIDATE_FAT
+LFN_BRIDGE_CALL kenter_, CLFN_ENTER_DOS
+LFN_BRIDGE_CALL kleave_, CLFN_LEAVE_DOS
+kbridge_result:
     mov ax,0
     adc ax,0
     pop es
@@ -372,12 +400,7 @@ __I4D:
 
 segment _DATA
 old21 dd 0
-_k_seg dw 0
-_kl_fat_valid dw KL_FAT_VALID
-_kl_fat_dirty dw KL_FAT_DIRTY
-_kl_fat_sector dw KL_FAT_SECTOR
-_kl_fat_buf dw KL_FAT_BUF_SEG
-_kl_indos dw KL_INDOS
+lfn_entries times CLFN_ENTRY_COUNT dd 0
 busy db 0
 align 2
 caller_sp dw 0
@@ -420,20 +443,12 @@ install:
     mov ax,4C00h
     int 21h
 .absent:
-    ; The kernel: its segment from AH=34h (the InDOS byte), which must sit
-    ; where this build's listing puts it, and the routines we call must be
-    ; the ones listed.
+    ; AH=34h supplies a candidate segment, not a trusted private offset.
+    ; Public ABI validation rejects incompatible or truncated kernels.
     mov ah,34h
     int 21h
-    cmp bx,KL_INDOS
-    jne .mismatch
-    mov [_k_seg],es
-    cmp dword [es:KL_READ],KL_READ_SIG
-    jne .mismatch
-    cmp dword [es:KL_WRITE],KL_WRITE_SIG
-    jne .mismatch
-    cmp byte [es:KL_RETF],0CBh
-    jne .mismatch
+    call lfn_bind_runtime
+    jc .mismatch
     push cs
     pop es
     ; Save the vector we will call (the kernel's) before any disk access.
@@ -486,7 +501,9 @@ install:
 
 msg_ok db '[LFN] long file names installed',0
 msg_present db '[LFN] already installed',0
-msg_kernel db '[LFN] not installed: unknown kernel build',0
+%include "src/lfn/lfn_runtime.inc"
+
+msg_kernel db '[LFN] not installed: incompatible kernel extension ABI',0
 msg_volume db '[LFN] not installed: no FAT16 volume',0
     align 2
     times 256 db 0

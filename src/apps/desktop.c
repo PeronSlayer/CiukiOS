@@ -40,7 +40,7 @@ static void wallpaper_log_load_error(void)
 
 static int wallpaper_poll(void)
 {
-    int changed=0,generation_changed,retry_due,open_result;
+    int changed=0,generation_changed,retry_due,open_result,work_result;
     u16 now=(u16)HOST.ticks;
     if(!app_wallpaper(&wallpaper_info))return 0;
     generation_changed=wallpaper_generation!=wallpaper_info.generation;
@@ -100,8 +100,11 @@ static int wallpaper_poll(void)
         wallpaper_generation=wallpaper_info.generation;
         wallpaper_retry_pending=0;
     }
-    if(wallpaper_module.segment&&wallpaper_generation==wallpaper_info.generation&&
-       webmodule_call(&wallpaper_module,EV_POLL,0))changed=1;
+    if(wallpaper_module.segment&&wallpaper_generation==wallpaper_info.generation) {
+        work_result=webmodule_call(&wallpaper_module,EV_POLL,0);
+        if(work_result==1)changed=1;
+        else if(!changed&&work_result==2)changed=2;
+    }
     return changed;
 }
 static void wallpaper_close(void)
@@ -131,12 +134,12 @@ struct dicon {
     int x, y;
     u8 sys;                 /* DI_* for a system icon, 0 for a file */
     u8 attr, sel;
+    u8 label_width;          /* 78px caption bound; occupies the alignment byte */
     u32 size;
     u16 date, time;
 };
 static struct dicon icons[MAX_ICONS];
 static u8 icon_label_lines[MAX_ICONS];
-static u16 icon_label_width[MAX_ICONS];
 static int nicons, cur = -1;
 static int select_anchor = -1;
 static int box_state, box_x0, box_y0, box_x1, box_y1, box_prev_x1, box_prev_y1;
@@ -327,6 +330,7 @@ static void top_sample(void)
         }
     }
 }
+
 static void top_paint(void)
 {
     int cell = area_w >= 800 ? 100 : 76;
@@ -539,7 +543,7 @@ static void layout_height(void)
         const char *text = icon_label(i);
         lines = ciuki_label_layout(text, CELL_W - 6, &width);
         icon_label_lines[i] = (u8)lines;
-        icon_label_width[i] = (u16)width;
+        icons[i].label_width = (u8)width;
         h = icon_label_height(i) + 3;
         if (h > grid_h) grid_h = h;
     }
@@ -1217,9 +1221,18 @@ static void vol_set(int level)
     vol_damage();
     ui_damage(area_w - 76 - cell * 5, 0, cell, 29);
 }
+static void vol_save(void)
+{
+    if (top_volume >= 0)
+        app_sound(0x100 | top_volume | (top_mute << 5));
+}
 static void vol_draw(void)
 {
-    int x = vol.x, y = vol.y, t, gx = x + VOL_W - 38, gy = y + 26;
+    static const u8 gear[][4] = {
+        {11,4,4,18}, {4,11,18,4}, {7,7,12,12},
+        {6,6,3,3}, {17,6,3,3}, {6,17,3,3}, {17,17,3,3}
+    };
+    int x = vol.x, y = vol.y, t, i, gx = x + VOL_W - 38, gy = y + 26;
     char n[16];
     ui_bevel(x, y, VOL_W, VOL_H, C_FACE);
     ui_text(x + VOL_TRACK_X, y + 7, "Volume", C_INK);
@@ -1232,13 +1245,8 @@ static void vol_draw(void)
     ui_bevel(t, y + 29, 11, 21, C_FACE);
     /* The gear: advanced sound settings. */
     ui_bevel(gx, gy, 26, 26, C_FACE);
-    ui_rect(gx + 11, gy + 4, 4, 18, C_INK);
-    ui_rect(gx + 4, gy + 11, 18, 4, C_INK);
-    ui_rect(gx + 7, gy + 7, 12, 12, C_INK);
-    ui_rect(gx + 6, gy + 6, 3, 3, C_INK);
-    ui_rect(gx + 17, gy + 6, 3, 3, C_INK);
-    ui_rect(gx + 6, gy + 17, 3, 3, C_INK);
-    ui_rect(gx + 17, gy + 17, 3, 3, C_INK);
+    for (i = 0; i < 7; ++i)
+        ui_rect(gx + gear[i][0], gy + gear[i][1], gear[i][2], gear[i][3], C_INK);
     ui_rect(gx + 10, gy + 10, 6, 6, C_FACE);
 }
 static int vol_level_at(int sx)
@@ -1249,7 +1257,7 @@ static int vol_mouse(int kind, int sx, int sy)
 {
     int inside = sx >= vol.x && sx < vol.x + VOL_W && sy >= vol.y && sy < vol.y + VOL_H;
     if (kind == MOUSE_HOVER) return 0;
-    if (kind == MOUSE_UP) { vol.drag = 0; return 1; }
+    if (kind == MOUSE_UP) { vol.drag = 0; vol_save(); return 1; }
     if (kind == MOUSE_MOVE) { if (vol.drag) vol_set(vol_level_at(sx)); return 1; }
     if (kind != MOUSE_DOWN) { vol_close(); return 1; }
     if (!inside) { vol_close(); return 1; }
@@ -1407,16 +1415,17 @@ static void draw_icon(int i, int dx, int dy, int ghost)
         const char *text = icon_label(i);
         char line[LFN_NAME];
         int k, lines = icon_label_lines[i], pos = 0, top = y + 44, h;
-        tw = icon_label_width[i];
+        tw = d->label_width;
         h = lines * 17 + 1;
-        if (d->sel) ui_rect(x + (CELL_W - tw) / 2 - 3, top, tw + 6, h, C_TITLE);
+        /* A solid compact backing keeps bitmap captions readable on bright,
+         * dark and detailed photos without extra glyph/shadow passes. */
+        ui_rect(x + (CELL_W - tw) / 2 - 3, top, tw + 6, h, d->sel ? C_TITLE : C_INK);
         pos = 0;
         for (k = 0; k < lines; k++) {
             int lw, next = ciuki_label_next_line(text, pos, line,
                                                   CELL_W - 6, &lw);
             int ly = top + 1 + k * 17;
             tx = x + (CELL_W - lw) / 2;
-            if (!d->sel) ui_text(tx + 1, ly + 1, line, C_INK);    /* legible on any wallpaper */
             ui_text(tx, ly, line, C_PAPER);
             if (next <= pos) break;
             pos = next;
@@ -1522,7 +1531,19 @@ static int on_mouse(int kind, int sx, int sy)
         if (ui_dirty) damage_pop();
         return ui_dirty;
     }
-    if (kind == MOUSE_HOVER) return 0;
+    if (renaming >= 0) {
+        int fx=icons[renaming].x+2,fy=icons[renaming].y+43;
+        int inside=sx>=fx&&sx<fx+CELL_W-4&&sy>=fy&&sy<fy+22;
+        if ((kind==MOUSE_DOWN&&inside)||
+            ((kind==MOUSE_MOVE||kind==MOUSE_UP)&&rename_field.drag)) {
+            field_mouse(&rename_field,kind,fx,CELL_W-4,sx,HOST.shift);
+            damage_icon(renaming);ui_cursor(CURSOR_IBEAM);return 1;
+        }
+        if (kind==MOUSE_HOVER) {
+            ui_cursor(inside?CURSOR_IBEAM:CURSOR_ARROW);return 0;
+        }
+    }
+    if (kind == MOUSE_HOVER) {ui_cursor(CURSOR_ARROW);return 0;}
     if (kind == MOUSE_RIGHT) { context_menu(sx, sy, HOST.context); return 1; }
     if (box_state && kind == MOUSE_MOVE) { box_update(sx, sy); return 1; }
     if (box_state && kind == MOUSE_UP) {
@@ -1617,8 +1638,11 @@ static int on_key(int key)
         return 1;
     }
     if (vol.open) {
-        if ((key >> 8) == 0x4B) vol_set(top_volume - 1);
-        else if ((key >> 8) == 0x4D) vol_set(top_volume + 1);
+        key >>= 8;
+        if (key == 0x4B || key == 0x4D) {
+            vol_set(top_volume + key - 0x4C);
+            vol_save();
+        }
         else vol_close();
         return 1;
     }
@@ -1761,8 +1785,9 @@ int app_event(int ev, int a, int b, int c)
         r = wallpaper_poll(); poll_result = poll();
         /* Poll results are modes: whole-desktop damage must take precedence
          * over a simultaneous precise top-bar update (mode 3). */
-        if (r || poll_result == 1) r = 1;
-        else r = poll_result;
+        if (r == 1 || poll_result == 1) r = 1;
+        else if (poll_result == 3) r = 3;
+        else if (r != 2) r = poll_result;
         break;
     case EV_SUSPEND: wallpaper_close(); menu_close(); vol_close(); return 0;
     default: r = 0;

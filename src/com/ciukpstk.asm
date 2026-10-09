@@ -253,7 +253,7 @@ find_runtime_service:
     jne .next
     mov bx, [es:di + 6]
     cmp bx, RTSV_SERVICE_COUNT
-    jne .not_found
+    jb .not_found
     mov si, [es:di + 8]
     cmp si, RTSV_DESCRIPTOR_SIZE
     jne .not_found

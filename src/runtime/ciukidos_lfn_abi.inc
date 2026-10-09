@@ -1,0 +1,15 @@
+; Public CiukiDOS resident-extension bridge. No kernel-private offsets.
+%ifndef CIUKIDOS_LFN_ABI_INCLUDED
+%define CIUKIDOS_LFN_ABI_INCLUDED 1
+%define CLFN_API_VERSION 1
+%define CLFN_HEADER_SIZE 16
+%define CLFN_ENTRY_SIZE 8
+%define CLFN_ENTRY_COUNT 6
+%define CLFN_TABLE_SIZE (CLFN_HEADER_SIZE + CLFN_ENTRY_SIZE * CLFN_ENTRY_COUNT)
+%define CLFN_READ_SECTOR 1
+%define CLFN_WRITE_SECTOR 2
+%define CLFN_FLUSH_FAT 3
+%define CLFN_INVALIDATE_FAT 4
+%define CLFN_ENTER_DOS 5
+%define CLFN_LEAVE_DOS 6
+%endif

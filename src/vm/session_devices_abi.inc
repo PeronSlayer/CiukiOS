@@ -38,6 +38,9 @@ VM_OP_DEV_MOUSE        equ 37h
 ; HDPMI physical IRQ1/IRQ12 bridge while a DOS/4GW client runs. BX=line;
 ; returns BX=1 when CVSESSION consumed/routed the controller byte.
 VM_OP_DEV_PHYSICAL_IRQ equ 38h
+; Read-only optional audio timing report for the selected session. Kept out
+; of the existing device opcode range and CVDV ABI; ES:DI <- CVAT[128].
+VM_OP_DEV_AUDIO_STATE  equ 59h
 
 VM_CAP_GUEST_INPUT     equ 1000h
 VM_CAP_GUEST_AUDIO     equ 2000h

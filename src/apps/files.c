@@ -24,7 +24,7 @@ struct item {
 };
 static struct item items[MAX_ITEMS];
 static u8 icon_label_lines[MAX_ITEMS];
-static u16 icon_label_width[MAX_ITEMS];
+static u8 icon_label_width[MAX_ITEMS]; /* fixed 80-pixel label width fits a byte */
 static int icon_cell_h;
 static u16 name_seg;
 static char name_cache[2][LFN_NAME];
@@ -1028,7 +1028,7 @@ static void icon_labels_layout(void)
         int width = 0, lines, height;
         lines = ciuki_label_layout(item_name(&items[i]), CELL_W - 12, &width);
         icon_label_lines[i] = (u8)lines;
-        icon_label_width[i] = (u16)width;
+        icon_label_width[i] = (u8)width;
         height = 48 + lines * 17 + 4;
         if (height > icon_cell_h) icon_cell_h = height;
     }
@@ -2159,6 +2159,27 @@ static void marquee_update(int sx, int sy)
     ui_damage(X0, Y0 + H - 20, W, 20);            /* selection count */
 }
 
+/* One edit rectangle for hover and captured selection in all three views. */
+static int rename_pointer(int kind, int sx, int sy)
+{
+    int rx, ry, rw, rh, inside;
+    if (renaming < 0) return 0;
+    item_rect(renaming, &rx, &ry, &rw, &rh);
+    if (view == 1) ry += 46;
+    else {
+        rx += 22; ry -= 2;
+        rw = view == 0 ? col_x(44) - rx - 4 : rw - 24;
+    }
+    inside = sx >= rx && sx < rx + rw && sy >= ry && sy < ry + 22;
+    if (kind == MOUSE_HOVER) return inside;
+    if (((kind == MOUSE_MOVE || kind == MOUSE_UP) && rename_field.drag) ||
+        (kind == MOUSE_DOWN && inside)) {
+        field_mouse(&rename_field, kind, rx, rw, sx, HOST.shift);
+        return 1;
+    }
+    return 0;
+}
+
 static int on_mouse(int kind, int x, int y)
 {
     int sx = HOST.x + x, sy = HOST.y + TITLE_H + y, r, i;
@@ -2177,6 +2198,9 @@ static int on_mouse(int kind, int x, int y)
         }
         return 1;
     }
+    if (focus_area == 1 && (kind == MOUSE_MOVE || kind == MOUSE_UP) &&
+        field_mouse(&address, kind, X0 + 66, W - 116, sx, HOST.shift)) return 1;
+    if (rename_pointer(kind, sx, sy)) return 1;
     if (marquee_state && kind == MOUSE_MOVE) { marquee_update(sx, sy); return 1; }
     if (marquee_state && kind == MOUSE_UP) {
         marquee_update(sx, sy);
@@ -2397,6 +2421,9 @@ static int files_hover(int sx, int sy)
     if (dlg.open) return 0;
     if (ctx.open) { popup_mouse(&ctx, MOUSE_HOVER, sx, sy); return ui_dirty; }
     if (menubar_open(&bar)) { menubar_mouse(&bar, MOUSE_HOVER, sx, sy); return ui_dirty; }
+    if (sy >= addr_y && sy < addr_y + 22 && sx >= X0 + 66 && sx < X0 + W - 50)
+        ui_cursor(CURSOR_IBEAM);
+    else ui_cursor(rename_pointer(MOUSE_HOVER, sx, sy) ? CURSOR_IBEAM : CURSOR_ARROW);
     i = toolbar_at(sx, sy);
     if (i >= 0 && tb[i].cmd >= 0 && !tb_enabled(tb[i].cmd)) i = -1;
     if (i == tb_hot) return 0;

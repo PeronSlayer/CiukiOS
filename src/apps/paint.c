@@ -196,7 +196,9 @@ static u16 tabs;
 static int nslots, op_open, op_ok, undo_kind, undone, dirty;
 /* The pool lives in XMS when there is some (one handle, a row for every
  * picture row, moved through rowbuf), else in DOS blocks of 16 KB. */
-static u8 rowbuf[3072];
+#define ROWBUF_BYTES 3072
+#define ROWBUF_OFF (MAX_H * 4)
+#define rowbuf FP(tabs, ROWBUF_OFF)
 static u16 xms_seg, xms_off, xms_h, xms_stride;
 static int xms_state;                        /* 0 unknown, 1 present, 2 none */
 #pragma pack(push, 1)
@@ -263,14 +265,14 @@ static int pool_grow(void)
 static void pool_put(int k, int y)
 {
     if (!xms_h) { fcopy(rseg(&pool, k), roff(&pool, k), rseg(&cv, y), roff(&cv, y), cv.w); return; }
-    fcopy(app_seg(), (u16)rowbuf, rseg(&cv, y), roff(&cv, y), cv.w);
-    xmove(1, k, app_seg(), (u16)rowbuf);
+    fcopy(tabs, ROWBUF_OFF, rseg(&cv, y), roff(&cv, y), cv.w);
+    xmove(1, k, tabs, ROWBUF_OFF);
 }
 static void pool_get(int k, int y)
 {
     if (!xms_h) { fcopy(rseg(&cv, y), roff(&cv, y), rseg(&pool, k), roff(&pool, k), cv.w); return; }
-    xmove(0, k, app_seg(), (u16)rowbuf);
-    fcopy(rseg(&cv, y), roff(&cv, y), app_seg(), (u16)rowbuf, cv.w);
+    xmove(0, k, tabs, ROWBUF_OFF);
+    fcopy(rseg(&cv, y), roff(&cv, y), tabs, ROWBUF_OFF, cv.w);
 }
 /* Give back the pool's blocks that hold no saved row. */
 static void pool_trim(void)
@@ -377,9 +379,9 @@ static void swap_rows(void)
     for (k = 0; k < nslots; k++) {
         y = row_of[k];
         if (xms_h) {
-            xmove(0, k, app_seg(), (u16)rowbuf);
+            xmove(0, k, tabs, ROWBUF_OFF);
             xmove(1, k, rseg(&cv, y), roff(&cv, y));   /* reads one byte past an odd row */
-            fcopy(rseg(&cv, y), roff(&cv, y), app_seg(), (u16)rowbuf, cv.w);
+            fcopy(rseg(&cv, y), roff(&cv, y), tabs, ROWBUF_OFF, cv.w);
         } else {
             fptr a = rowp(&cv, y), b = rowp(&pool, k);
             for (i = 0; i < (u16)cv.w; i++) { u8 t = a[i]; a[i] = b[i]; b[i] = t; }
@@ -615,7 +617,9 @@ static void spray(int x, int y, u8 c)
 /* assets/fonts/README.md), 16 rows a glyph, scaled 1-4 times.          */
 #define TEXT_MAX 200
 static char text[TEXT_MAX + 1];
-static int text_on, text_len, tx, ty, text_scale = 1, text_bold;
+static struct field text_edit;
+#define text_len text_edit.len
+static int text_on, tx, ty, text_scale = 1, text_bold;
 static int opaque = 1;                       /* selections and text cover what is below */
 static u16 fnt;                              /* the style: 95 widths, then 95 glyphs of 16 words */
 static char font_file[13];
@@ -666,6 +670,56 @@ static void text_extent(int *w, int *h, int *last_w)
     *w *= text_scale;
     *h = lines * 16 * text_scale;
     *last_w = lw * text_scale;
+}
+static void text_position(int p, int *x, int *y)
+{
+    int i;
+    *x = tx; *y = ty;
+    for (i = 0; i < p; i++) {
+        if (text[i] == '\n') { *x = tx; *y += 16 * text_scale; }
+        else *x += glyph_w(text[i]) * text_scale;
+    }
+}
+static int text_at(int x, int y)
+{
+    int p = 0, px = tx, py = ty, w;
+    if (y < ty) return 0;
+    while (p < text_len) {
+        if (y < py + 16 * text_scale) {
+            if (text[p] == '\n') return p;
+            w = glyph_w(text[p]) * text_scale;
+            if (x < px + (w + 1) / 2) return p;
+            px += w;
+        } else if (text[p] == '\n') { px = tx; py += 16 * text_scale; }
+        p++;
+    }
+    return p;
+}
+static int text_contains(int x, int y)
+{
+    int w, h, last;
+    text_extent(&w, &h, &last);
+    return x >= tx && x < tx + imax(w, 8) && y >= ty && y < ty + h;
+}
+static int text_key(int key)
+{
+    int s = KEY_SCAN(key), ch = KEY_CHAR(key), p, x, y;
+    if (ch == 13) return field_insert(&text_edit, "\n");
+    if ((!ch || ch == 0xE0) && !(HOST.shift & SH_CTRL) &&
+        (s == K_UP || s == K_DOWN || s == K_HOME || s == K_END)) {
+        p = text_edit.cursor;
+        if (s == K_HOME) while (p && text[p - 1] != '\n') p--;
+        else if (s == K_END) while (p < text_len && text[p] != '\n') p++;
+        else {
+            text_position(p, &x, &y);
+            p = text_at(x, y + (s == K_UP ? -16 : 16) * text_scale);
+        }
+        text_edit.click_valid = 0;
+        field_select(&text_edit, MOUSE_DOWN, p, HOST.shift);
+        text_edit.drag = text_edit.click_valid = 0;
+        return 1;
+    }
+    return field_key(&text_edit, key, HOST.shift);
 }
 static void draw_glyph(int x, int y, char ch, u8 c)
 {
@@ -962,12 +1016,12 @@ static int save_bmp(const char *p)
         rowbuf[n++] = dac8(pal[i * 3]);
         rowbuf[n++] = 0;
     }
-    if (!r && dos_write(f, rowbuf, n) != n) r = -112;
+    if (!r && dos_write_far(f, tabs, ROWBUF_OFF, n) != n) r = -112;
     for (y = cv.h - 1; y >= 0 && !r; y--) {
         row = rowp(&cv, y);
         for (x = 0; x < cv.w; x++) rowbuf[x] = row[x] < NCOL ? map[row[x]] : 0;
         for (; x < (int)rowbytes; x++) rowbuf[x] = 0;
-        i = dos_write(f, rowbuf, rowbytes);
+        i = dos_write_far(f, tabs, ROWBUF_OFF, rowbytes);
         if (i < 0) r = i;
         else if (i != (int)rowbytes) r = -112;
     }
@@ -1022,7 +1076,7 @@ static int load_bmp(const char *p)
         if (ncol <= 0 || ncol > (1 << bpp)) ncol = 1 << bpp;
         mem_set(pmap, WHITE, 256);
         dos_seek(f, 14 + hsize, 0);
-        if (dos_read(f, rowbuf, ncol * 4) != ncol * 4) { dos_close(f); return 1; }
+        if (dos_read_far(f, tabs, ROWBUF_OFF, ncol * 4) != ncol * 4) { dos_close(f); return 1; }
         for (i = 0; i < ncol; i++) pmap[i] = nearest(rowbuf[i * 4 + 2] >> 2, rowbuf[i * 4 + 1] >> 2, rowbuf[i * 4] >> 2);
     }
     if (!make_room()) { dos_close(f); return 3; }
@@ -1044,8 +1098,8 @@ static int load_bmp(const char *p)
         d = rowp(&n, y);
         x = 0;
         for (pos = 0; pos < rowbytes && !r; ) {
-            u16 chunk = (u16)(rowbytes - pos > sizeof rowbuf ? sizeof rowbuf : rowbytes - pos);
-            if (dos_read(f, rowbuf, chunk) != (int)chunk) { r = 4; break; }
+            u16 chunk = (u16)(rowbytes - pos > ROWBUF_BYTES ? ROWBUF_BYTES : rowbytes - pos);
+            if (dos_read_far(f, tabs, ROWBUF_OFF, chunk) != (int)chunk) { r = 4; break; }
             pos += chunk;
             if (bpp > 8) {
                 for (i = 0; i + step <= (int)chunk && x < w; i += step) d[x++] = map_rgb(rowbuf[i + 2], rowbuf[i + 1], rowbuf[i]);
@@ -2275,7 +2329,8 @@ static void tool_down(int x, int y, int btn)
         if (!fnt_loaded && !font_load()) { message("No font was found in C:\\SYSTEM\\FONTS."); return; }
         begin_op(1);
         final_render = text_render;
-        text_on = 1; text_len = 0; tx = x; ty = y;
+        field_set(&text_edit, text, sizeof text, "");
+        text_on = 1; tx = x; ty = y;
         ui_changed = 1;
         return;
     case T_LINE: case T_RECT: case T_ELLIPSE: case T_RRECT:
@@ -2433,10 +2488,34 @@ static void paint_canvas(void)
     }
     if (sel_on) marquee(i2sx(selx) - 1, i2sy(sely) - 1, selw * zoom + 2, selh * zoom + 2);
     if (text_on && fnt_loaded) {
-        int w, h, lw;
+        int w, h, lw, a, b, px = tx, py = ty, cell, r, col, gw;
+        u16 bits, base;
         text_extent(&w, &h, &lw);
         marquee(i2sx(tx) - 2, i2sy(ty) - 2, imax(w, 8) * zoom + 4, h * zoom + 4);
-        vrect(i2sx(tx + lw), i2sy(ty + h - 16 * text_scale), imax(1, zoom), 16 * text_scale * zoom, C_INK);
+        a = imin(text_edit.cursor, text_edit.anchor);
+        b = imax(text_edit.cursor, text_edit.anchor);
+        /* Selection is a UI overlay; never write these colours into cv. */
+        for (i = 0; i < text_len; i++) {
+            cell = text[i] == '\n' ? 4 : glyph_w(text[i]);
+            if (i >= a && i < b) {
+                vrect(i2sx(px), i2sy(py), cell * text_scale * zoom, 16 * text_scale * zoom, C_TITLE);
+                if (text[i] != '\n') {
+                    base = 95 + (u16)(text[i] - 32) * 32;
+                    gw = imin(16, cell);
+                    for (r = 0; r < 16; r++) {
+                        bits = peek16(fnt, base + r * 2);
+                        if (fnt_synth) bits |= bits >> 1;
+                        for (col = 0; col < gw; col++) if (bits & (0x8000u >> col))
+                            vrect(i2sx(px + col * text_scale), i2sy(py + r * text_scale),
+                                  text_scale * zoom, text_scale * zoom, C_PAPER);
+                    }
+                }
+            }
+            if (text[i] == '\n') { px = tx; py += 16 * text_scale; }
+            else px += cell * text_scale;
+        }
+        text_position(text_edit.cursor, &px, &py);
+        vrect(i2sx(px), i2sy(py), imax(1, zoom), 16 * text_scale * zoom, C_INK);
     }
 }
 static void hscroll_draw(int x, int y, int w, int pos, int total, int page)
@@ -2724,6 +2803,12 @@ static int on_mouse(int kind, int sx, int sy)
         if (r >= 0) dialog_result(r);
         return 1;
     }
+    if (text_on && text_edit.drag && (kind == MOUSE_MOVE || kind == MOUSE_UP)) {
+        to_img(sx, sy, &x, &y);
+        field_select(&text_edit, kind, text_at(x, y), HOST.shift);
+        ui_cursor(CURSOR_IBEAM);
+        return 1;
+    }
     if (drag == 1) {
         to_img(sx, sy, &x, &y);
         if (kind == MOUSE_MOVE) tool_move(x, y);
@@ -2774,6 +2859,11 @@ static int on_mouse(int kind, int sx, int sy)
     if (in_view(sx, sy)) {
         to_img(sx, sy, &x, &y);
         status[0] = 0;
+        if (text_on && btn == 1 && text_contains(x, y)) {
+            field_select(&text_edit, kind, text_at(x, y), HOST.shift);
+            ui_cursor(CURSOR_IBEAM);
+            return 1;
+        }
         if (btn == 2 && (tool == T_SELECT || inside_sel(x, y)) && !text_on) { context_menu(sx, sy); return 1; }
         tool_down(x, y, btn);
         flush();
@@ -2800,6 +2890,7 @@ static int on_hover(int b, int c)
         if (ui_dirty && bar.pop.open) ui_damage(bar.pop.x, bar.pop.y, bar.pop.w + 4, bar.pop.h + 4);
         return 0;
     }
+    ui_cursor(CURSOR_ARROW);
     t = tool_at(sx, sy);
     if (t != tool_hot) {
         int bx, by;
@@ -2809,6 +2900,7 @@ static int on_hover(int b, int c)
     }
     if (in_view(sx, sy) && HOST.window == WIN_PAINT) {
         to_img(sx, sy, &x, &y);
+        if (text_on && text_contains(x, y)) ui_cursor(CURSOR_IBEAM);
         if (x >= 0 && y >= 0 && x < cv.w && y < cv.h) {
             if (x != ptr_x || y != ptr_y) { ptr_x = x; ptr_y = y; damage_status(); }
             return 0;
@@ -2887,6 +2979,10 @@ static int on_key(int key)
     if (r == -1) return 1;
     if (drag) return 1;
     if (key == 0x5D00) { context_menu(vx + 40, vy + 40); return 1; }
+    if (text_on) {
+        if (key == K_ESC) { text_on = 0; cancel_op(); flush(); return 1; }
+        if (text_key(key)) { text_render(); flush(); return 1; }
+    }
     letter = (HOST.shift & SH_CTRL) ? key_ctrl_letter(key) : 0;
     if (letter) {
         switch (letter) {
@@ -2908,17 +3004,6 @@ static int on_key(int key)
         }
         flush();
         return 1;
-    }
-    if (text_on) {
-        if (key == K_ESC) { text_on = 0; cancel_op(); flush(); return 1; }
-        if (ch == 8) { if (text_len) text_len--; text_render(); flush(); return 1; }
-        if (ch == 13) ch = '\n';
-        if ((ch == '\n' || (ch >= ' ' && ch < 127)) && text_len < TEXT_MAX) {
-            text[text_len++] = (char)ch;
-            text_render();
-            flush();
-            return 1;
-        }
     }
     if (key == K_ESC) {
         if (npt) { npt = 0; cancel_op(); }
@@ -2974,7 +3059,7 @@ static int on_open(int a)
     app_log(msg_buf, 0);
     if (!font_file[0] && sys_font[0]) str_copy(font_file, sys_font);
     if (!tabs) {
-        tabs = dos_alloc(paras(MAX_H * 4));
+        tabs = dos_alloc(paras(ROWBUF_OFF + ROWBUF_BYTES));
         if (!tabs) { app_sound(5); app_close(); return 0; }
         ffill(tabs, 0, MAX_H * 4, 0);
     }

@@ -1,0 +1,49 @@
+{
+  "created": "2026-10-08",
+  "tool": "built-in image_gen edit",
+  "originals_preserved": true,
+  "validated_display_aspects": [
+    "4:3",
+    "16:10",
+    "16:9"
+  ],
+  "pixel_identical_to_original": false,
+  "files": [
+    {
+      "file": "Ciuk1.png",
+      "size": [
+        1448,
+        1086
+      ],
+      "mode": "RGB",
+      "sha256": "b6da7cf5863e99b26678f26a7ce79661ef97a251394d20b980572163afd6f2d1",
+      "original_source": "../Ciuk1.png",
+      "original_sha256": "ab48a5b348004a2ae315dc722f16c65556164d69a00f7f319ba216cf4733fe90",
+      "prompt": "Use case: identity-preserve / landscape outpainting. Edit target: the supplied Ciuk1 wallpaper. Produce an adaptive OS wallpaper master on a 4:3 canvas, preferably 2048x1536. Keep the ENTIRE existing original 1672x941 image intact as a centered, uniformly scaled rectangle about 70% of the output width, with exactly the original proportions. Extend the natural scenery seamlessly beyond ALL FOUR edges into the new canvas: continue the golden sunset sky above, the mountain lake and sunset reflections to the right, the autumn evergreen forest and rocks to the left, and foreground shore/lake/rocks below. New borders must look like a continuous landscape, with the original lighting, colors, detail and style. The whole original scene must remain inside the central safe rectangle so square, 4:3, 16:10, 16:9 and ultrawide crops remove ONLY the newly extended scenery. Strict invariants: preserve the full original German Shepherd Ciuki dog including exact face, pose, silhouette, colors, red collar, full body and feet; preserve original mountains, lake, island and sun; keep the original white 'CiukiOS' title and exact existing subtitle '...Classic computing, one woof at a time.' at their original relative position and typography inside the retained image. Do not regenerate, redraw, replace, crop or distort any original content. Do not add a second dog, duplicate the title, change any text, invent objects, create bands, frame, blur padding or vignette. Fill every pixel with seamless naturally extended scenery. This is an extension of the existing wallpaper, not a redesign."
+    },
+    {
+      "file": "Ciuk2.png",
+      "size": [
+        1448,
+        1086
+      ],
+      "mode": "RGB",
+      "sha256": "ec1938ba5204bf1145d56fe3126bd3b8a453e60829fb6ef32b01e961c066301d",
+      "original_source": "../Ciuk2.png",
+      "original_sha256": "e0c8a42ff797d909c3105a9762438fc6f695cbcb3b950e33373e182a58fe4794",
+      "prompt": "Use case: identity-preserve / landscape outpainting. Edit target: supplied ORIGINAL Ciuk2.png OS wallpaper. Produce a 4:3 adaptive wallpaper master, maximum 2048x1536. This is OUTPAINTING ONLY: do not redesign, repaint or recompose the existing wallpaper. Retain the WHOLE original scene at its existing 1672:941 proportions, uniformly scale it to occupy ONLY 70 percent of the final canvas width, centered horizontally and vertically. This means original dog, exact original white CiukiOS title, exact original subtitle '...Classic computing, one woof at a time.', mountains, original sun/sky and lake details must all remain WITHIN the rectangle x=15%..85%, y=24%..76% of the output. Extend the new margin at all four sides seamlessly with natural matching cool blue twilight sky above, lavender pink sunset cloud reflections and lake/shore below, evergreen woodland to the left and mountains/lake to the right. Preserve the original standing dog's exact face, body, pose, red collar, silhouette, colors, full body and all four paws. Preserve exact original text and font, preserve existing colors and time of day. NO moving original subjects toward the outer margins, NO cropping original elements, NO stretching, NO black or solid color bands, NO blurred padding or borders, NO duplicated dog or text. All new scenery must match the original perspective, lighting and photographic illustration detail. Keep core scene small enough that center crops to 1:1, 4:3, 16:10, 16:9 and 21:9 retain the entire original scene."
+    },
+    {
+      "file": "Ciuk3.png",
+      "size": [
+        1448,
+        1086
+      ],
+      "mode": "RGB",
+      "sha256": "062cdf83594cea426bb4eca2cbb0b3afa8b98a181d1b6c0c8acf50c7e1d9a71a",
+      "original_source": "../Ciuk3.png",
+      "original_sha256": "92bbeb879d08cfbaba3da485a2a49e09de2ef594178556bcee860c83568d544e",
+      "prompt": "Use case: identity-preserve / landscape outpainting. Edit target: supplied ORIGINAL Ciuk3.png winter wallpaper. Extend this existing composition naturally to a 4:3 adaptive OS wallpaper master, no more than2048x1536. OUTPAINTING ONLY. Preserve the original entire snowy mountain-lake landscape at its original proportions and retain original Ciuki dog's exact face, pose, silhouette, coat colors, red collar, full body and feet. Keep original white CiukiOS lettering and exact existing subtitle '...Classic computing, one woof at a time.' intact with their exact typography. Preserve original mountains, snowy island, sunset sun and reflections. Center the uniformly scaled original image with new natural landscape beyond ALL FOUR edges: more matching golden winter sky/clouds above, snowy woodland and rocks left, mountain lake right, and snow/shore/reflections below. Critical composition safe area: place all original identifying elements (dog INCLUDING tail and feet, title and subtitle, sun, main mountains/island) inside central x=20%..80% and y=30%..70% of the final4:3canvas; only newly extended natural landscape lies outside. This lets wide center crops keep every identifying element. The new scene must be seamless, match lighting/perspective/detail and retain winter colors. Do not repaint/redesign original subjects, deform proportions, introduce frames, solid color bands, blurred padding, duplicated dog/text or extra objects. Render full-bleed continuous scenery, no UI."
+    }
+  ]
+}

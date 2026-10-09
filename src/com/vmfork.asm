@@ -24,6 +24,14 @@ start:
     ; Program path and tail.
     mov si,81h
     call skip_blanks
+    cmp word [si],0502Fh               ; desktop-only /P followed by space
+    jne .ordinary
+    cmp byte [si+2],' '
+    jne .ordinary
+    mov byte [trace_parent],1
+    add si,3
+    call skip_blanks
+.ordinary:
     cmp al,13
     mov dx,usage
     je fail
@@ -98,7 +106,14 @@ start:
     pop es
     mov dx,no_layout
     jc fail
+    ; Bind the exact BIOS boot device while still in VM0. All native disk
+    ; code resides in CVSESSION, outside the constrained DOS kernel.
+    call disk_prepare_parent
     mov ax,VM_OP_VMM_CREATE
+    cmp byte [trace_parent],0
+    je .create
+    mov ax,VM_OP_VMM_CREATE_TRACE
+.create:
     call far [entry]
     push cs
     pop ds
@@ -112,8 +127,22 @@ start:
     int 21h
 
 child:
-    ; Ancestors: the parent PSP chain, including the shell root. Its PSP
-    ; block stays; its extra allocations are unused in this child VM.
+    mov [trace_vm],bx
+    mov ax,VM_OP_VMM_EXIT_CODE
+    call far [entry]
+    mov [cs:trace_generation],cx
+    push cs
+    pop ds
+    push cs
+    pop es
+    cmp byte [trace_parent],0
+    je .initial_memory
+    mov word [trace_stage],15           ; before BIOS INT12 / DOS arena walk
+    call trace_checkpoint
+.initial_memory:
+    call trace_initial_memory
+    ; Ancestors: the parent PSP chain, including the shell root. Retain their
+    ; PSP context and any extra allocation still referenced by an IVT entry.
     mov ah,62h
     int 21h
     mov di,ancestors
@@ -135,20 +164,61 @@ child:
 .top:
     push cs
     pop es
+    mov si,ancestors
+    xor ax,ax
+.count_ancestors:
+    cmp word [si],0
+    je .counted
+    inc ax
+    add si,2
+    jmp .count_ancestors
+.counted:
+    mov [trace_parent_count],ax
+    mov word [trace_stage],1
+    or word [trace_progress],1
+    call trace_checkpoint
     call restore_vectors
+    jc .prepare_failed
+    mov word [trace_stage],13
+    call trace_checkpoint
+    call detach_s3_guest
+    jc .prepare_failed
+    mov word [trace_stage],14
+    call trace_checkpoint
     call prepare_compaction
-    jc .compact_failed
+    jc .prepare_failed
+    mov word [trace_stage],2
+    or word [trace_progress],2
+    call trace_checkpoint
     cmp byte [compact_ready],0
     je .compaction_skipped
+    mov word [trace_reason],0
+    mov word [trace_stage],3
+    or word [trace_progress],4
+    call trace_checkpoint
     call compact_residents
     jc .compact_failed
 .compaction_skipped:
-    ; Free every block they own in this VM's copy (the chain can merge
-    ; while blocks are freed, so walk it again after each one).
+    ; Free unreferenced extra blocks in this VM's copy. The chain can merge
+    ; while blocks are freed, so validate and walk it again after each one.
 .again:
+    mov word [trace_stage],4
+    or word [trace_progress],8
+    ; Only persist once: each successful free starts this walk again.
+    test word [trace_progress],16
+    jnz .cleanup_walk
+    or word [trace_progress],16
+    call trace_checkpoint
+.cleanup_walk:
     mov ah,52h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],10h
+    jc .cleanup_failed
     mov ax,[es:bx-2]
+    mov [first_mcb],ax
+    call validate_mcb_chain
+    jc .cleanup_failed
     push cs
     pop es
 .walk:
@@ -165,22 +235,35 @@ child:
     jmp .check
 .free:
     ; Keep each ancestor's own PSP block: DOS still needs the parent chain.
-    ; Other blocks with that owner (desktop modules, compositor, files) are
-    ; unused in this VM and must be returned before a game asks for memory.
+    ; Other blocks with that owner (desktop modules, compositor, files) can
+    ; be returned before EXEC when no inherited vector still references them.
     push ax
     inc ax
     cmp ax,bx
     pop ax
     je .next
+    ; A live inherited vector keeps its complete allocation and owner PSP.
+    ; Reclaim only blocks with no IVT reference, including segment aliases.
+    call allocation_has_ivt_reference
+    jnc .free_unreferenced
+    call record_pinned_block
+    jmp .next
+.free_unreferenced:
     inc ax
     mov es,ax                            ; data segment of the block
+    mov word [trace_reason],70h
     mov ax,0F149h                        ; fork-only free by MCB owner BX
     int 21h
+    call trace_dos_result
     push cs
     pop es
     jnc .again
     cmp byte [compact_ready],0
-    jne .compact_failed
+    jne .cleanup_failed
+    mov word [trace_stage],9
+    or word [trace_progress],512
+    mov word [trace_cleanup_reason],70h
+    call trace_checkpoint
     jmp .freed                          ; refused: keep what is left
 .next:
     cmp dl,'Z'
@@ -191,8 +274,17 @@ child:
 .freed:
     push cs
     pop es
+    call trace_remaining_memory
     jmp .launch
 .launch:
+    mov word [trace_reason],0
+    mov word [trace_stage],5
+    or word [trace_progress],32
+    call trace_checkpoint
+    mov word [trace_reason],0
+    mov word [trace_stage],6
+    or word [trace_progress],64
+    call trace_checkpoint
     ; The program.
     mov [params+4],cs
     mov [params+8],cs
@@ -201,30 +293,74 @@ child:
     mov bx,params
     mov ax,4B00h
     int 21h
+    call trace_dos_result
     push cs
     pop ds
     push cs
     pop es
     mov bx,-1
-    jc .report
+    jc .exec_failed
     mov ah,4Dh
     int 21h
+    call trace_dos_result
     xor bh,bh
     mov bl,al
+    mov word [trace_stage],8
+    or word [trace_progress],256
+    mov [trace_exit],bx
+    call trace_checkpoint
+    jmp .report
+.exec_failed:
+    mov bx,[trace_dos_ax]               ; separate launch failure from exit2
+    and bx,0FFFh
+    or bx,VM_EXIT_EXEC_ERROR
+    mov word [trace_stage],7
+    or word [trace_progress],128
+    mov [trace_exit],bx
+    call trace_checkpoint
 .report:
     mov ax,VM_OP_VMM_EXIT
     call far [entry]
 .idle:
     hlt                                 ; the VM manager switches away
     jmp .idle
+.prepare_failed:
+    mov word [trace_stage],10
+    jmp .failure_trace
+.cleanup_failed:
+    mov word [trace_stage],12
+    jmp .failure_trace
 .compact_failed:
+    mov word [trace_stage],11
+.failure_trace:
+    mov bx,[trace_reason]
+    cmp bx,3Fh
+    je .ancestor_vector_exit
+    cmp bx,46h
+    je .lfn_immediate_exit
+    or bx,0F000h
+    jmp .failure_exit_ready
+.ancestor_vector_exit:
+    ; The parent persists this even when the child's CVFL file cannot be
+    ; written. F1xx identifies the exact unresolved interrupt number.
+    mov bx,[trace_vector_ref]
+    shr bx,2
+    or bx,0F100h
+    jmp .failure_exit_ready
+.lfn_immediate_exit:
+    ; F2xx preserves the actual failed byte of the LFN cmp ah,71h guard.
+    mov bx,[trace_lfn_immediate]
+    or bx,0F200h
+.failure_exit_ready:
+    mov [trace_exit],bx
+    call trace_checkpoint
     mov dx,compaction_failed
     mov ah,9
     int 21h
     ; Relocation requires a destination below each resident. Best fit can
     ; pick a small hole above AUXSTACK when a packet driver is resident.
     ; First fit takes the freed low PSP interval instead.
-    xor bx,bx
+    mov bx,[trace_exit]
     jmp .report
 
 ; Reclaim the desktop's PSP in this private VM. The running VMFORK image is
@@ -232,15 +368,19 @@ child:
 prepare_compaction:
     mov byte [compact_ready],0
     cmp word [ancestors],0
+    mov word [cs:trace_reason],01h
     je .skip
     mov ah,62h
     int 21h
+    call trace_dos_result
     mov [cs:old_psp],bx
     mov ax,[cs:kernel_seg]
     mov es,ax
     cmp [es:KL_EXEC_PSP],bx
+    mov word [cs:trace_reason],02h
     jne .skip
     cmp [es:KL_CURRENT_PSP],bx
+    mov word [cs:trace_reason],03h
     jne .skip
     ; A nested launcher (for example VMCTEST -> VMFORK) keeps its immediate
     ; parent's PSP above the resident hooks. Reclaim the root shell PSP,
@@ -259,12 +399,33 @@ prepare_compaction:
     mov [cs:root_psp],ax
     call validate_root_reclaim
     jc .unsafe
+    ; Preserve a referenced root tail before allocating a staging PSP or
+    ; changing any DOS execution identity. The original VMFORK stays live.
+    call root_tail_is_referenced
+    jnc .stage
+    or word [cs:trace_progress],800h
+    mov ax,[cs:root_psp]
+    dec ax
+    mov es,ax
+    call record_pinned_block
+    mov word [cs:trace_reason],04h
+    jmp .skip
+.stage:
+    ; A separately owned VMFORK PSP already provides a safe staging area.
+    ; Reuse it only after proving its entire image/stack is outside the root;
+    ; embedded launchers keep the existing allocate/copy/rebase path.
+    call use_owned_staging
+    jnc .stage_done
     ; VMFORK can itself be embedded in the shell's large PSP block. Copy its
     ; PSP, image, and stack into a separately allocated block before shrinking
-    ; that block. The staging PSP is also the live allocation owner for TSR
-    ; moves made before the shell tail is released.
+    ; that block. The staging PSP keeps execution outside the reclaimed tail
+    ; until the residents and VMFORK can move into the resulting low gap.
     jmp stage_vmfork
 .stage_done:
+    ; Check both recognized residents before releasing the root, but do not
+    ; allocate their destinations yet. The conventional fallback needs the
+    ; low hole that shrinking this validated, unreferenced root creates.
+    mov byte [resident_validate_only],1
     mov bx,10h
     mov word [cs:vector_slot],bx
     call move_vector_resident
@@ -273,7 +434,8 @@ prepare_compaction:
     mov [cs:vector_slot],bx
     call move_vector_resident
     jc .unsafe
-    call vectors_clear_ancestor_refs
+    mov byte [resident_validate_only],0
+    call root_tail_is_referenced
     jc .unsafe
     mov ax,[cs:kernel_seg]
     mov es,ax
@@ -284,16 +446,21 @@ prepare_compaction:
     mov bx,10h
     mov ax,0F14Ah
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],08h
     jc .restore_context
     call reparent_retained_ancestors
     ; The source PSP may have been inside the released shell tail, or it may
     ; have had its own surviving MCB. Release it if present before compacting.
     mov ax,[cs:source_psp]
     mov [cs:old_psp],ax
+    cmp ax,[cs:stage_psp]
+    je .source_released                ; in-place staging is still executing
     mov bx,ax
     mov es,bx
     mov ax,0F149h
     int 21h
+    call trace_dos_result
     jnc .source_released
     call old_psp_is_free
     jc .restore_context
@@ -314,6 +481,7 @@ prepare_compaction:
     mov [es:KL_CURRENT_PSP],ax
     jmp .unsafe
 .ready:
+    mov word [cs:trace_reason],0
     mov byte [cs:compact_ready],1
     clc
     jmp .done
@@ -327,6 +495,83 @@ prepare_compaction:
     pop ds
     push cs
     pop es
+    ret
+
+; CF=0: our existing conventional PSP is the staging block. No allocation,
+; ownership, stack, PSP, or IVT mutation occurs until every predicate passes.
+use_owned_staging:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    mov ax,cs
+    cmp ax,[cs:old_psp]
+    jne .copy
+    cmp ax,[cs:root_end]
+    jb .copy
+    mov dx,ss
+    cmp dx,ax
+    jne .copy
+    mov es,ax
+    cmp word [es:0],20CDh
+    jne .copy
+    mov dx,[es:2]
+    mov bx,ax
+    dec bx
+    mov es,bx
+    mov bl,[es:0]
+    cmp bl,'M'
+    je .kind_ok
+    cmp bl,'Z'
+    jne .copy
+.kind_ok:
+    cmp [es:1],ax
+    jne .copy
+    mov bx,[es:3]
+    cmp bx,(image_end-$$+100h+15)/16
+    jb .copy
+    add bx,ax
+    jc .copy
+    cmp bx,0A000h
+    ja .copy
+    ; PSP:2 is the initial EXEC ceiling; AH4A changes only the actual MCB.
+    cmp dx,bx
+    jb .copy
+    cmp dx,0A000h
+    ja .copy
+    ; A dependent allocation would keep this old PSP live after rebasing.
+    ; Such callers retain the established copied-staging path.
+    mov bx,[cs:first_mcb]
+    mov cx,64
+.owners:
+    mov es,bx
+    cmp [es:1],ax
+    jne .owner_next
+    mov dx,bx
+    inc dx
+    cmp dx,ax
+    jne .copy
+.owner_next:
+    cmp byte [es:0],'Z'
+    je .owned
+    add bx,[es:3]
+    inc bx
+    loop .owners
+    jmp .copy
+.owned:
+    mov [cs:source_psp],ax
+    mov [cs:stage_psp],ax
+    clc
+    jmp .done
+.copy:
+    stc
+.done:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; Stage a live copy before reclaiming an ancestor block. Entry is a jump from
@@ -343,6 +588,8 @@ stage_vmfork:
     mov bx,(image_end-$$+100h+15)/16
     mov ah,48h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],30h
     jc .failed
     mov [cs:stage_psp],ax
     mov es,ax
@@ -375,6 +622,7 @@ stage_vmfork:
     mov bx,ax
     mov ah,50h
     int 21h
+    call trace_dos_result
     mov ax,[cs:stage_psp]
     push ax
     push word .rebased
@@ -412,27 +660,36 @@ validate_root_reclaim:
     push es
     mov ah,52h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],10h
     jc .bad
     mov ax,[es:bx-2]
     mov [cs:first_mcb],ax
     inc ax
     cmp ax,[cs:root_psp]
+    mov word [cs:trace_reason],11h
     jne .bad
     mov ax,[cs:root_psp]
     mov es,ax
     cmp word [es:0],0x20CD
+    mov word [cs:trace_reason],12h
     jne .bad
     cmp [es:16h],ax
+    mov word [cs:trace_reason],13h
     jne .bad
     cmp byte [es:80h],0
+    mov word [cs:trace_reason],14h
     jne .bad
     ; SHELL.COM begins CLI / MOV AX,CS / MOV SS,AX. Combined with the
     ; authoritative first-MCB relationship, this excludes arbitrary PSPs.
     cmp word [es:100h],0x8CFA
+    mov word [cs:trace_reason],15h
     jne .bad
     cmp word [es:102h],0x8EC8
+    mov word [cs:trace_reason],16h
     jne .bad
     cmp word [es:104h],0xBCD0
+    mov word [cs:trace_reason],17h
     jne .bad
     mov ax,[cs:root_psp]
     dec ax
@@ -441,17 +698,22 @@ validate_root_reclaim:
     cmp al,'M'
     je .mcb_type_ok
     cmp al,'Z'
+    mov word [cs:trace_reason],18h
     jne .bad
 .mcb_type_ok:
     mov ax,[cs:root_psp]
     cmp [es:1],ax
+    mov word [cs:trace_reason],19h
     jne .bad
     mov dx,[es:3]
     cmp dx,10h
+    mov word [cs:trace_reason],1Ah
     jbe .bad
     add ax,dx
+    mov word [cs:trace_reason],1Bh
     jc .bad
     cmp ax,0A000h
+    mov word [cs:trace_reason],1Ch
     ja .bad
     mov [cs:root_end],ax
     call validate_mcb_chain
@@ -465,6 +727,7 @@ validate_root_reclaim:
     je .ancestors_valid
     mov es,ax
     cmp word [es:0],0x20CD
+    mov word [cs:trace_reason],1Eh
     jne .bad
     add si,2
     jmp .check_ancestor
@@ -505,23 +768,31 @@ validate_mcb_chain:
     mov ax,[cs:first_mcb]
     mov cx,64
 .next:
+    cmp ax,0A000h
+    mov word [cs:trace_reason],27h
+    jae .bad
     mov es,ax
     mov dl,[es:0]
     cmp dl,'M'
     je .kind_ok
     cmp dl,'Z'
+    mov word [cs:trace_reason],24h
     jne .bad
 .kind_ok:
     mov bx,[es:3]
     add ax,bx
+    mov word [cs:trace_reason],25h
     jc .bad
     inc ax
-    jc .bad
+    mov word [cs:trace_reason],26h
+    jz .bad
     cmp ax,0A000h
+    mov word [cs:trace_reason],27h
     ja .bad
     cmp dl,'Z'
     je .good
     loop .next
+    mov word [cs:trace_reason],28h
 .bad:
     stc
     jmp .exit
@@ -597,6 +868,10 @@ vectors_clear_ancestor_refs:
     clc
     jmp .exit
 .bad:
+    mov word [cs:trace_reason],3Fh
+    mov [cs:trace_vector_ref],bx
+    mov [cs:trace_vector_target],ax
+    mov [cs:trace_vector_target+2],dx
     stc
 .exit:
     pop ds
@@ -612,12 +887,16 @@ compact_residents:
     mov byte [strategy_saved],0
     mov ax,5800h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],50h
     jc .failed
     mov [old_strategy],bx
     mov byte [strategy_saved],1
     xor bx,bx                           ; first fit: freed low PSP gap
     mov ax,5801h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],51h
     jc .failed
     mov bx,10h
     mov word [vector_slot],bx
@@ -633,6 +912,8 @@ compact_residents:
     mov bx,(image_end-$$+100h+15)/16
     mov ah,48h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],54h
     jc .failed
     mov [new_psp],ax
     mov es,ax
@@ -652,6 +933,13 @@ compact_residents:
     mov [es:16h],ax
     mov word [es:38h],0
     mov [es:3Ah],ax
+    ; The final PSP must own its allocation before the old execution PSP is
+    ; retired. Otherwise an allocator rebuild retains that old owner PSP.
+    mov ax,[new_psp]
+    dec ax
+    mov es,ax
+    inc ax
+    mov [es:1],ax
     mov ax,[kernel_seg]
     mov es,ax
     mov ax,[new_psp]
@@ -667,10 +955,22 @@ compact_residents:
     push word .rebased
     retf
 .rebased:
+    ; Publish the rebased execution PSP's exact extent before retiring the
+    ; old one. A direct EXEC PSP has no heap-table entry for F149 to remove;
+    ; resize rebuilds the chain and drops that no-longer-active arena.
+    push cs
+    pop es
+    mov bx,(image_end-$$+100h+15)/16
+    mov ah,4Ah
+    int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],57h
+    jc .fatal
     mov bx,[old_psp]
     mov es,bx
     mov ax,0F149h
     int 21h
+    call trace_dos_result
     pushf
     push cs
     pop es
@@ -684,11 +984,14 @@ compact_residents:
     mov bx,[old_strategy]
     mov ax,5801h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],56h
     jc .fatal
     push cs
     pop ds
     push cs
     pop es
+    mov word [trace_reason],0
     clc
     jmp child.again
 .failed:
@@ -720,6 +1023,8 @@ compact_residents:
 old_psp_is_free:
     mov ah,52h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],60h
     jc .bad
     mov ax,[es:bx-2]
     mov cx,64
@@ -729,24 +1034,29 @@ old_psp_is_free:
     cmp dl,'M'
     je .kind_ok
     cmp dl,'Z'
+    mov word [cs:trace_reason],61h
     jne .bad
 .kind_ok:
     mov bx,ax
     add bx,[es:3]
     inc bx
     cmp [cs:old_psp],ax
+    mov word [cs:trace_reason],62h
     jb .bad
     cmp [cs:old_psp],bx
     jae .advance
     cmp word [es:1],0
+    mov word [cs:trace_reason],63h
     jne .bad
     clc
     ret
 .advance:
     cmp dl,'Z'
+    mov word [cs:trace_reason],64h
     je .bad
     mov ax,bx
     loop .next
+    mov word [cs:trace_reason],65h
 .bad:
     stc
     ret
@@ -758,7 +1068,10 @@ move_vector_resident:
     mov ds,ax
     shl bx,1
     shl bx,1
+    mov ax,[bx]
+    mov [cs:trace_vector_target],ax
     mov ax,[bx+2]
+    mov [cs:trace_vector_target+2],ax
     pop ds
     cmp ax,1200h
     jb .skip_resident
@@ -769,11 +1082,14 @@ move_vector_resident:
     mov es,ax
     mov ax,[old_resident]
     cmp [es:1],ax
+    mov word [cs:trace_reason],40h
     jne .bad
     mov ax,[es:3]
     cmp ax,20h
+    mov word [cs:trace_reason],41h
     jb .bad
     cmp ax,500h
+    mov word [cs:trace_reason],42h
     ja .bad
     mov [resident_paras],ax
     ; Only the boot AUXSTACK and this build's LFN hook may be relocated.
@@ -781,10 +1097,12 @@ move_vector_resident:
     cmp bx,10h
     jne .check_lfn
     cmp ax,4Fh
+    mov word [cs:trace_reason],43h
     jne .bad
     mov ax,[old_resident]
     mov es,ax
     cmp word [es:100h],0E3E9h
+    mov word [cs:trace_reason],44h
     jne .bad
     jmp .checked
 .check_lfn:
@@ -792,11 +1110,17 @@ move_vector_resident:
     jne .skip_resident
     mov ax,[old_resident]
     mov es,ax
+    movzx dx,byte [es:105h]
+    mov [cs:trace_lfn_immediate],dx
     cmp word [es:103h],0FC80h
+    mov word [cs:trace_reason],45h
     jne .bad
     cmp byte [es:105h],71h
+    mov word [cs:trace_reason],46h
     jne .bad
 .checked:
+    cmp byte [resident_validate_only],1
+    je .skip_resident
     ; CVSESSION claims a distinct Jemm UMB and records this VM as owner in
     ; one ring-0 operation.  Its KILL path releases the block even if this
     ; child never returns.  If no UMB fits, keep the proven low compaction.
@@ -817,9 +1141,12 @@ move_vector_resident:
     mov bx,ax
     mov ah,48h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],47h
     jc .bad
     mov [new_resident],ax
     cmp ax,[old_resident]
+    mov word [cs:trace_reason],48h
     jae .reject_alloc
 .copy:
     mov ax,[new_resident]
@@ -868,6 +1195,7 @@ move_vector_resident:
     mov es,bx
     mov ax,0F149h
     int 21h
+    call trace_dos_result
     push cs
     pop ds
     push cs
@@ -878,6 +1206,7 @@ move_vector_resident:
     mov es,ax
     mov ah,49h
     int 21h
+    call trace_dos_result
     jmp .bad
 .skip_resident:
     push cs
@@ -906,10 +1235,20 @@ restore_vectors:
     push cs
     pop es
     jc .done
+    mov word [trace_ivt_tag],'IV'
+    mov [trace_ivt_ready],bx
+    mov [trace_ivt_classified],cx
+    mov [trace_ivt_filtered],dx
+    mov [trace_ivt_first],si
     mov ah,52h
     int 21h
+    call trace_dos_result
+    mov word [cs:trace_reason],10h
+    jc .failed
     mov ax,[es:bx-2]
     mov [first_mcb],ax
+    call validate_mcb_chain
+    jc .failed
     push cs
     pop es
     xor bx,bx
@@ -941,6 +1280,14 @@ restore_vectors:
     cmp bx,1024
     jb .vector
 .done:
+    clc
+    ret
+.failed:
+    push cs
+    pop ds
+    push cs
+    pop es
+    stc
     ret
 
 ; DX:AX far pointer. CF=1 when it lies in a memory block owned by one of
@@ -993,6 +1340,12 @@ in_ancestor_block:
     pop ax
     ret
 
+%include "src/com/vmfork_trace.inc"
+%include "src/com/vmfork_disk.inc"
+%include "src/com/vmfork_s3_guest.inc"
+%include "src/com/vmfork_pins.inc"
+%include "src/com/launch_mailbox.inc"
+
 fail:
     mov ah,9
     int 21h
@@ -1028,6 +1381,7 @@ old_resident dw 0
 new_resident dw 0
 resident_paras dw 0
 resident_high db 0
+resident_validate_only db 0
 vector_slot dw 0
 compact_ready db 0
 old_strategy dw 0

@@ -157,6 +157,10 @@ int app_wallpaper_count(void); /* Display only, discovers copied numbered files 
 #define CURSOR_ARROW     0
 #define CURSOR_IBEAM     1
 #define CURSOR_FORBIDDEN 2
+#define CURSOR_SIZEWE    3
+#define CURSOR_SIZENS    4
+#define CURSOR_SIZENWSE  5
+#define CURSOR_SIZENESW  6
 void ui_cursor(int type);
 
 #define ICON_COMPUTER 0
@@ -363,11 +367,16 @@ void draw_focus(int x, int y, int w, int h);
 struct field {
     char *text;
     int max, len, cursor, sel, scroll;
+    int anchor, drag, click_pos, click_x, click_valid, word_a, word_b, password;
+    unsigned click_tick;
 };
 void field_set(struct field *f, char *buffer, int max, const char *init);
 int  field_key(struct field *f, int key, int shift);     /* 1 changed */
 void field_draw(struct field *f, int x, int y, int w, int focused);
 void field_click(struct field *f, int x, int w, int mx);
+int  field_mouse(struct field *f, int kind, int x, int w, int mx, int shift);
+int  field_select(struct field *f, int kind, int position, int shift);
+int  field_insert(struct field *f, const char *text);
 
 /* Modal dialogs drawn inside the window. Control coordinates are relative
  * to the dialog's client area (below its title bar). */

@@ -391,92 +391,7 @@ long scroll_hit(int x, int y, int h, int my, long total, long page)
 }
 
 /* ---------------- edit field ---------------- */
-void field_set(struct field *f, char *buffer, int max, const char *init)
-{
-    f->text = buffer;
-    f->max = max;
-    str_ncopy(buffer, init, max);
-    f->len = str_len(buffer);
-    f->cursor = f->len;
-    f->sel = 0;
-    f->scroll = 0;
-}
-
-int field_key(struct field *f, int key, int shift)
-{
-    int s = KEY_SCAN(key), c = KEY_CHAR(key);
-    (void)shift;
-    if (c == 1) { f->sel = f->len > 0; f->cursor = f->len; return 1; }     /* Ctrl+A */
-    if (f->sel && ((c >= ' ' && c < 127) || c == 8 || s == K_DEL)) {
-        f->len = 0; f->cursor = 0; f->text[0] = 0; f->sel = 0;
-        if (c == 8 || s == K_DEL) return 1;
-    }
-    f->sel = 0;
-    if (c >= ' ' && c < 127) {
-        if (f->len + 1 >= f->max) return 0;
-        mem_move(f->text + f->cursor + 1, f->text + f->cursor, f->len - f->cursor + 1);
-        f->text[f->cursor++] = (char)c;
-        f->len++;
-        return 1;
-    }
-    if (c == 8) {
-        if (!f->cursor) return 0;
-        mem_move(f->text + f->cursor - 1, f->text + f->cursor, f->len - f->cursor + 1);
-        f->cursor--; f->len--;
-        return 1;
-    }
-    if (c) return 0;
-    if (s == K_DEL && f->cursor < f->len) {
-        mem_move(f->text + f->cursor, f->text + f->cursor + 1, f->len - f->cursor);
-        f->len--;
-        return 1;
-    }
-    if (s == K_LEFT && f->cursor) { f->cursor--; return 1; }
-    if (s == K_RIGHT && f->cursor < f->len) { f->cursor++; return 1; }
-    if (s == K_HOME) { f->cursor = 0; return 1; }
-    if (s == K_END) { f->cursor = f->len; return 1; }
-    return 0;
-}
-
-static int prefix_w(const char *s, int n)
-{
-    char t[130];
-    if (n > 128) n = 128;
-    str_ncopy(t, s, n + 1);
-    return ui_measure(t);
-}
-
-void field_draw(struct field *f, int x, int y, int w, int focused)
-{
-    char t[130];
-    int cx;
-    ui_inset(x, y, w, 22);
-    if (f->cursor < f->scroll) f->scroll = f->cursor;
-    while (f->scroll < f->cursor && prefix_w(f->text + f->scroll, f->cursor - f->scroll) > w - 10)
-        f->scroll++;
-    text_fit(f->text + f->scroll, w - 8, t);
-    if (f->sel && f->len) {
-        ui_rect(x + 3, y + 3, ui_measure(t) + 2, 16, C_TITLE);
-        ui_text(x + 4, y + 3, t, C_PAPER);
-    } else {
-        ui_text(x + 4, y + 3, t, C_INK);
-    }
-    if (focused && !((HOST.ticks / 9) & 1)) {
-        cx = x + 4 + prefix_w(f->text + f->scroll, f->cursor - f->scroll);
-        ui_rect(cx, y + 4, 1, 15, C_INK);
-    }
-}
-
-void field_click(struct field *f, int x, int w, int mx)
-{
-    int i;
-    (void)w;
-    f->sel = 0;
-    for (i = f->scroll; i <= f->len; i++) {
-        if (x + 4 + prefix_w(f->text + f->scroll, i - f->scroll) > mx) { f->cursor = i > f->scroll ? i - 1 : i; return; }
-    }
-    f->cursor = f->len;
-}
+#include "ui_field.inc"
 
 /* ---------------- dialogs ---------------- */
 void dialog_show(struct dialog *d, const char *title, struct dctl *c, int n,
@@ -672,6 +587,13 @@ int dialog_mouse(struct dialog *d, int kind, int sx, int sy)
         return -1;
     }
     if (d->win) place(d);
+    if ((kind == MOUSE_MOVE || kind == MOUSE_UP) && d->focus >= 0) {
+        struct dctl *c = &d->c[d->focus];
+        if (c->type == DC_FIELD && !c->disabled &&
+            field_mouse(c->field, kind, d->x + 8 + c->x, c->w, sx, HOST.shift)) {
+            ui_cursor(CURSOR_IBEAM); ui_dirty = 1; return -1;
+        }
+    }
     if (kind == MOUSE_HOVER || kind == MOUSE_MOVE) { dialog_hover(d, sx, sy); return -1; }
     if (kind != MOUSE_DOWN) return -1;
     i = control_at(d, sx, sy);
@@ -679,7 +601,11 @@ int dialog_mouse(struct dialog *d, int kind, int sx, int sy)
     {
         struct dctl *c = &d->c[i];
         if (c->type == DC_FIELD) {
-            if (!c->disabled) { d->focus = i; field_click(c->field, d->x + 8 + c->x, c->w, sx); }
+            if (!c->disabled) {
+                if (d->focus != i && d->focus >= 0 && d->c[d->focus].type == DC_FIELD)
+                    d->c[d->focus].field->drag = d->c[d->focus].field->click_valid = 0;
+                d->focus = i; field_click(c->field, d->x + 8 + c->x, c->w, sx);
+            }
             return -1;
         }
         if (focusable(c)) return activate(d, i);

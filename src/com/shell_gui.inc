@@ -16,6 +16,9 @@
 %endmacro
 
 ui_enter:
+    ; A newly allocated asset block needs its cursor table loaded by settings.
+    ; Video-mode changes retain that block and must retain its loaded state.
+    mov byte [ui_cursor_loaded],0
     call ui_assets_begin
     jnc .assets_ready
     mov byte [ui_request],0
@@ -123,6 +126,8 @@ ui_redraw:
     call boot_log_input_state
 %endif
     mov byte [ui_ready_pending],0
+    mov al,2
+    call input_snapshot_save
     mov si,ui_mode_text
     call ui_serial
     mov si,ui_newline
@@ -169,8 +174,6 @@ ui_loop:
     je ui_redraw
     jmp .idle
 .event_action:
-    cmp ax,251
-    je ui_redraw_input
     cmp ax,250
     je ui_redraw
     cmp ax,30
@@ -213,46 +216,6 @@ ui_loop:
 %endif
     call app_idle_woke
     jmp ui_loop
-
-ui_redraw_input:
-    ; Coalesce queued editing keys before painting the field. Rapid typing
-    ; must not spend one full field repaint per already buffered character.
-.pending:
-    mov ah,0x11
-    int 0x16
-    jz .paint
-    cmp ah,0xA5
-    je .paint
-    cmp ah,0x94
-    je .paint
-    cmp ah,0x6B
-    je .paint
-    cmp ah,0x0F             ; Tab/Shift+Tab: ui_event reads the shift state
-    je .paint
-    cmp ah,0x3B
-    jb .edit
-    cmp ah,0x3E
-    jbe .paint
-.edit:
-    mov ah,0x10
-    int 0x16
-    call ui_run_key
-    cmp ax,251
-    je .pending
-    test ax,ax
-    jz .pending
-    cmp ax,250
-    je ui_redraw
-    jmp ui_action
-.paint:
-    mov bx,[ui_dialog_x]
-    add bx,22
-    mov dx,[ui_dialog_y]
-    add dx,76
-    mov cx,420
-    mov si,28
-    call ui_comp_damage
-    jmp ui_redraw
 
 ui_action:
     call ui_damage_active
@@ -354,8 +317,6 @@ ui_action:
     je ui_dos_window
     cmp ax,25
     je ui_to_dos
-    cmp ax,58
-    je .run_full_screen
     cmp ax,59
     je ui_window_game
     cmp ax,60
@@ -506,14 +467,9 @@ ui_action:
     call ui_windows_raise
     jmp ui_redraw
 .run:
-    mov byte [ui_dialog],1
-    cmp byte [ui_window_flags+1],0
-    jne .run_ready
-    mov byte [ui_run_len],0
-    mov byte [ui_run_cursor],0
-    mov byte [ui_run_text],0
-.run_ready:
-    call ui_windows_open
+    mov bl,1
+    xor si,si
+    call app_open
     jmp ui_redraw
 .about:
     mov bl,2
@@ -599,8 +555,6 @@ ui_action:
     mov al,'0'
     jmp ui_sound_set
 .regular_modal:
-    cmp ax,40
-    je .run_commit
     cmp ax,41
     je .close_dialog
     cmp ax,42
@@ -613,18 +567,6 @@ ui_action:
 .close_dialog:
     call ui_windows_close
     jmp ui_redraw
-.run_commit:
-    call app_run_builtin      ; notepad, explorer, taskmgr: desktop applications
-    jc ui_redraw
-    ; The VM-backed window runs from the normal desktop event loop.
-    jmp ui_run_window
-.run_full_screen:
-    cmp byte [ui_run_len],0
-    je ui_redraw             ; queued Backspace + Enter must paint the empty field
-    call ui_windows_close
-    mov si,ui_run_text
-    mov byte [ui_command_running],1
-    jmp ui_queue_command
 .restart:
     mov si,ui_cmd_restart
     jmp ui_launch_command
@@ -1029,12 +971,12 @@ ui_video_begin:
     mov ax,7
     xor cx,cx
     mov dx,[ui_width]
-    sub dx,24
+    dec dx
     int 0x33
     mov ax,8
     xor cx,cx
     mov dx,[ui_height]
-    sub dx,16
+    dec dx
     int 0x33
     mov ax,[ui_width]
     shr ax,1
@@ -2024,6 +1966,7 @@ ui_hit_add:
     ret
 
 ui_hit_find:
+    mov byte [ui_resize_edge],0
     push fs
     mov fs,[ui_assets_seg]
     push bx
@@ -2069,35 +2012,15 @@ ui_hit_find:
 .same_hit:
     pop ax
 .check_grip:
-    ; The last compositor band may omit a lower window's resize grip from
-    ; the hit list. Recover its control from current window geometry.
-    movzx si,byte [ui_hit_target]
-    dec si
-    cmp byte [app_win_slot+si],0xFF
-    je .picked
-    test byte [app_win_style+si],1
-    jnz .picked
-    shl si,1
-    mov bx,[ui_window_x+si]
-    add bx,[ui_window_width+si]
-    sub bx,14
-    cmp [ui_mouse_x],bx
-    jb .picked
-    add bx,12
-    cmp [ui_mouse_x],bx
-    jae .picked
-    mov bx,[ui_window_y+si]
-    add bx,[ui_window_height+si]
-    sub bx,14
-    cmp [ui_mouse_y],bx
-    jb .picked
-    add bx,12
-    cmp [ui_mouse_y],bx
-    jae .picked
-    mov ax,65                 ; module resize grip
+    ; Geometry and current z-order, independent of a partial paint band.
+    call ui_resize_hit
     jmp .picked
 .keep_hit:
     pop ax
+    cmp byte [ui_hit_target],0
+    je .picked
+    mov byte [ui_hit_target],0
+    xor ax,ax                         ; discard a stale covered window record
 .picked:
     pop si
     pop cx
@@ -2120,6 +2043,7 @@ ui_record:
     ret
 
 %include "src/com/shell_gui_input.inc"
+%include "src/com/shell_gui_resize.inc"
 %include "src/com/shell_gui_compositor.inc"
 %include "src/com/ui_icons.inc"
 %include "src/com/shell_gui_windows.inc"

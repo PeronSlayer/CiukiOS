@@ -14,6 +14,35 @@ start:
     push cs
     pop es
     mov sp,stack_top
+    mov si,81h
+.skip_space:
+    lodsb
+    cmp al,' '
+    je .skip_space
+    cmp al,13
+    je .arguments_done
+    dec si
+    mov di,qualify_option
+.option:
+    lodsb
+    cmp al,'a'
+    jb .compare
+    cmp al,'z'
+    ja .compare
+    sub al,32
+.compare:
+    scasb
+    jne usage
+    cmp byte [di],0
+    jne .option
+.option_end:
+    lodsb
+    cmp al,' '
+    je .option_end
+    cmp al,13
+    jne usage
+    mov byte [qualify_mode],1
+.arguments_done:
     mov bx,(image_end-$$+100h+15)/16
     mov ah,4Ah
     int 21h
@@ -43,6 +72,16 @@ start:
     jb session_failed
     cmp dword [query_packet+VM_INFO_ACTIVE],0
     jne session_failed
+    cmp byte [qualify_mode],0
+    je .capture
+    call qualify
+    jc qualification_failed
+    mov ax,VM_OP_QUERY | VM_OP_NO_SWITCH
+    mov cx,VM_INFO_SIZE
+    mov di,query_packet
+    call session_call
+    jc session_failed
+.capture:
     ; Capture the actual driver state even when its hardware probe failed.
     mov di,log_before
     call display_info
@@ -94,6 +133,61 @@ start:
     xor ah,ah
     int 16h
     mov ax,4C00h
+    int 21h
+
+; Persist the phase BEFORE entering hardware. If a physical engine wedges,
+; the next capture still identifies the last entered phase. The first three
+; phases restore the initial state. The fourth retains only verified caps.
+qualify:
+    mov word [log_file],qualify_path
+    mov word [qualify_stage],1
+.next:
+    mov di,log_before
+    call display_info
+    jc .failed
+    movzx eax,word [qualify_stage]
+    or eax,100h
+    mov [log_result],eax
+    call write_log
+    jc .failed
+    mov ax,VM_OP_GPU_QUALIFY | VM_OP_NO_SWITCH
+    mov bx,[qualify_stage]
+    call session_call
+    jc .failed
+    test ax,ax
+    jnz .failed
+    mov di,log_after
+    call display_info
+    jc .failed
+    movzx eax,word [qualify_stage]
+    or eax,200h
+    mov [log_result],eax
+    call write_log
+    jc .failed
+    inc word [qualify_stage]
+    cmp word [qualify_stage],4
+    jbe .next
+    mov word [log_file],log_path
+    clc
+    ret
+.failed:
+    mov [log_error],ax
+    movzx eax,word [qualify_stage]
+    or eax,300h
+    mov [log_result],eax
+    mov di,log_after
+    call display_info
+    call write_log
+    stc
+    ret
+qualification_failed:
+    ; A failed stage can retain a busy engine; disk evidence remains safe.
+    mov ax,4C04h
+    int 21h
+usage:
+    mov dx,usage_message
+    call print
+    mov ax,4C01h
     int 21h
 
 unsupported:
@@ -208,7 +302,7 @@ print:
     ret
 
 write_log:
-    mov dx,log_path
+    mov dx,[log_file]
     xor cx,cx
     mov ah,3Ch
     int 21h
@@ -231,6 +325,12 @@ write_log:
 .done:
     ret
 
+qualify_mode db 0
+qualify_stage dw 0
+qualify_option db '/QUALIFY',0
+qualify_path db '\SYSTEM\VIDEO\S3QUAL.LOG',0
+log_file dw log_path
+usage_message db 'Usage: SAV3D [/QUALIFY]',13,10,'$'
 entry dw 0,0
 query_packet times VM_INFO_SIZE db 0
 triangle_packet:

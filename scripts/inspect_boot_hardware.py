@@ -46,8 +46,11 @@ def parse_display_info(data):
         raise ValueError(f'bad CVGD size {size}; expected {DISPLAY_INFO_SIZE}')
     flags = u32(data, 60)
     has_s3_status = bool(flags & 0x80000000)
-    if flags & 0x7FFFFFF8:
-        raise ValueError(f'nonzero reserved CVGD flags 0x{flags & 0x7FFFFFF8:08X}')
+    has_mach64_status = bool(flags & 0x40000000)
+    if has_s3_status and has_mach64_status:
+        raise ValueError('ambiguous native GPU status flags')
+    if flags & 0x3FFFFFF8:
+        raise ValueError(f'nonzero reserved CVGD flags 0x{flags & 0x3FFFFFF8:08X}')
     result = {
         'format': 'CVGD', 'size_bytes': len(data), 'abi_version': version,
         'backend': u32(data, 8), 'phase': u32(data, 12),
@@ -58,8 +61,24 @@ def parse_display_info(data):
         'framebuffer_bytes': u32(data, 48), 'edid_bytes': u32(data, 52),
         'active_dos_count': u32(data, 56),
         'flags': {'raw': flags, 'has_s3_status': has_s3_status,
+                  'has_mach64_status': has_mach64_status,
                   'capabilities': flags & 7},
     }
+    if has_mach64_status:
+        names = (
+            'ready caps error_stage device_id mmio_physical framebuffer_physical '
+            'aperture_physical vram_bytes scratch_offset scratch_bytes pitch bpp '
+            'fills blits triangles fifo_timeouts idle_timeouts last_status binds '
+            'fill_selftests width height command_words owns_engine triangle_selftests '
+            'triangle_probe_failures probe_actual probe_expected '
+            'panel_width panel_height panel_flags copy_selftests'
+        ).split()
+        status = {name: u32(data, 64 + i * 4) for i, name in enumerate(names)}
+        result['mach64_status'] = status
+        result['mach64_engine_qualified'] = (
+            result['backend'] == 4 and status['ready'] == 1 and
+            status['owns_engine'] == 1 and status['caps'] == 5)
+        result['mach64_triangles_qualified'] = False
     if has_s3_status:
         s3 = data[64:64 + S3_STATUS_SIZE]
         names = (
@@ -91,16 +110,105 @@ def parse_display_info(data):
         }
         status['stage'] = stage
         status['preflight'] = None
+        status['setup_readback'] = None
+        status['fill_readback'] = None
+        status['release_readback'] = None
         if stage == 1 and reason:
             name, detail = predicates.get(reason, ('unknown', 'raw_detail'))
             status['preflight'] = {'reason_code': reason, 'reason': name,
                                    detail: status['last_status']}
+        if stage == 3 and status['error_stage'] >> 16:
+            check = status['error_stage'] >> 16
+            pixelbytes = status['bpp'] // 8
+            descriptor = (0x10000001 | (status['bpp'] << 16) |
+                          (status['pitch'] // pixelbytes)) if pixelbytes else None
+            readbacks = {
+                1: ('MM48C18 enabled', 0x0e, 8),
+                2: ('MM8168 GBD low', 0xffffffff, 0),
+                3: ('MM816C GBD high', 0xffffffff, descriptor),
+                4: ('CR50 execution width/depth', 0xf1,
+                    0xf1 if status['bpp'] == 32 else 0xd1),
+                5: ('CR31', 0x0d, 0x0c),
+                6: ('MM8128 plane write mask', 0xffffffff, 0xffffffff),
+                7: ('MM48C18 disabled', 0x0e, 0),
+                8: ('CR66 engine enable', 1, 1),
+                9: ('MM8170 initial PBD low', 0xffffffff, 0),
+                10: ('MM8174 initial PBD high', 0xffffffff,
+                     descriptor & ~1 if descriptor is not None else None),
+                11: ('MM8178 initial SBD low', 0xffffffff, 0),
+                12: ('MM817C initial SBD high', 0xffffffff,
+                     descriptor & ~1 if descriptor is not None else None),
+                13: ('MM8144 32-bit register access', 0x200, 0x200),
+            }
+            name, mask, expected = readbacks.get(check, ('unknown', 0xffffffff, None))
+            status['setup_readback'] = {
+                'id': check, 'register': name, 'mask': mask, 'expected': expected,
+                'observed': status['last_status'],
+                'masked_observed': status['last_status'] & mask,
+            }
+        fill_tag = status['error_stage'] & 0xf0000000
+        if stage == 8 and fill_tag in (0xd0000000, 0xe0000000):
+            check = (status['error_stage'] >> 24) & 0xf
+            names = {1: 'DWORD restore completion', 2: 'MM8144 write completion',
+                     3: 'MM8144 documented payload', 4: 'original CONTROL completion',
+                     5: 'original RSF replay completion'}
+            misc_mask = 0xbaf if fill_tag == 0xe0000000 else 0xbbf
+            if fill_tag == 0xe0000000:
+                names[3] = 'MM8144 persistent controls (RSF excluded)'
+            status['release_readback'] = {
+                'id': check, 'reason': names.get(check, 'unknown'),
+                'expected_misc_payload': (status['error_stage'] >> 12) & 0xbbf,
+                'observed': status['last_status'],
+                'mask': misc_mask if check == 3 else None,
+                'masked_observed': status['last_status'] & misc_mask if check == 3 else None,
+                'original_error_stage': status['triangle_probe_pixel'],
+                'original_last_status': status['triangle_probe_expected'],
+            }
+        status['packed_2d'] = bool(status['caps'] & 8)
+        if stage == 4 and fill_tag == 0xf0000000:
+            check = (status['error_stage'] >> 24) & 7
+            pixel = 1 <= check <= 5
+            predicate = (f'private packed fill DWORD {check - 1}' if check <= 4 else
+                         {5: 'private packed two-row copy', 6: 'packed fill completion',
+                          7: 'packed copy completion'}.get(check, 'unknown'))
+            mask = (0xffffff if status['bpp'] == 32 else 0xffffffff) if pixel else None
+            status['fill_readback'] = {
+                'id': check, 'predicate': predicate, 'interface': 'packed_mmio',
+                'pixel_proof_failed': pixel, 'completion_failed': not pixel,
+                'original_cr50': (status['error_stage'] >> 8) & 0xff,
+                'active_cr50': (status['error_stage'] >> 16) & 0xff,
+                'original_32bit_register_access': bool(status['error_stage'] & 0x08000000),
+                'observed': status['triangle_probe_pixel'] if pixel else status['last_status'],
+                'expected': status['triangle_probe_expected'] if pixel else None, 'mask': mask,
+                'masked_observed': status['triangle_probe_pixel'] & mask if pixel else None,
+                'foreground_color': status['last_status'] if pixel else None,
+            }
+        if stage == 4 and fill_tag in (0xa0000000, 0xb0000000, 0xc0000000):
+            check = (status['error_stage'] >> 24) & (7 if fill_tag == 0xc0000000 else 0xf)
+            predicate = {1: 'MM8170 PBD low', 2: 'MM8174 PBD high'}.get(
+                check, f'private fill DWORD {check - 3}' if 3 <= check <= 6 else 'unknown')
+            mask = 0xffffff if 3 <= check <= 6 and status['bpp'] == 32 else 0xffffffff
+            status['fill_readback'] = {
+                'id': check, 'predicate': predicate,
+                'pixel_proof_failed': True,
+                'original_cr50': (status['error_stage'] >> 8) & 0xff,
+                'active_cr50': (status['error_stage'] >> 16) & 0xff,
+                'observed': status['triangle_probe_pixel'],
+                'expected': status['triangle_probe_expected'], 'mask': mask,
+                'masked_observed': status['triangle_probe_pixel'] & mask,
+                'foreground_color': status['last_status']
+                    if fill_tag in (0xb0000000, 0xc0000000) else None,
+                'original_32bit_register_access': bool(status['error_stage'] & 0x08000000)
+                    if fill_tag == 0xc0000000 else None,
+            }
         result['s3_status'] = status
         result['s3_engine_qualified'] = bool(
             result['backend'] == 3 and status['ready'] == 1
             and status['owns_engine'] == 1
             and status['caps'] & 1
             and status['fill_selftests'] > 0
+            and status['fill_readback'] is None
+            and status['release_readback'] is None
         )
         result['s3_triangles_qualified'] = bool(
             result['s3_engine_qualified'] and status['caps'] & 2 and status['caps'] & 4
@@ -127,8 +235,17 @@ def parse_gpu_log(data):
     if header_size != 16:
         raise ValueError(f'bad CG3D header size {header_size}; expected 16')
     result_code, error = u32(data, 8), u32(data, 12)
-    if result_code not in (0, 1, 2, 3):
-        raise ValueError(f'unknown CG3D result {result_code}')
+    qualification = None
+    if result_code in (0, 1, 2, 3):
+        result_name = ('completed', 'unsupported', 'session validation failed',
+                       'hardware/counter verification failed')[result_code]
+    else:
+        phase, state, prefix = result_code & 0xff, (result_code >> 8) & 0xff, result_code >> 16
+        if (phase not in (1, 2, 3, 4, 5) or state not in (1, 2, 3) or
+                (prefix and (phase != 2 or not 1 <= prefix <= 21))):
+            raise ValueError(f'unknown CG3D result {result_code}')
+        result_name = ('before call', 'returned success', 'returned error')[state - 1]
+        qualification = {'phase': phase, 'setup_prefix': prefix, 'state': result_name}
     snapshots = []
     for label, offset in (('before', 16), ('after', 208)):
         raw = data[offset:offset + DISPLAY_INFO_SIZE]
@@ -141,8 +258,7 @@ def parse_gpu_log(data):
     return {'format': 'CG3D native client log', 'size_bytes': len(data),
             'abi_version': version, 'header_size': header_size,
             'result': result_code,
-            'result_name': ('completed', 'unsupported', 'session validation failed',
-                            'hardware/counter verification failed')[result_code],
+            'result_name': result_name, 'qualification': qualification,
             'error': error, 'before': snapshots[0], 'after': snapshots[1]}
 
 

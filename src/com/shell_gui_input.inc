@@ -8,10 +8,8 @@ ui_event:
     int 0x16
     jnz .enhanced_key
     ; Some legacy notebook BIOSes only expose the original INT 16h queue.
-    ; Keep the enhanced path for normal sessions and try the old pair in
-    ; recovery mode when AH=11h reports no pending key.
-    cmp byte [vc_force_safe],1
-    jne .mouse
+    ; Graphics/safe-mode choice does not determine which BIOS queue exists.
+    ; Try the original nonblocking pair whenever the enhanced queue is empty.
     mov ah,0x01
     int 0x16
     jz .mouse
@@ -31,6 +29,13 @@ ui_event:
     mov ah,0x10
     int 0x16
 .key_received:
+    cmp al,27
+    jne .key_resize_ready
+    cmp byte [ui_dragging],2
+    je ui_resize_cancel
+    cmp byte [ui_dragging],4
+    je ui_resize_cancel
+.key_resize_ready:
 %ifdef BOOT_DISK_LOG
     cmp byte [boot_log_key_seen],1
     je .key_logged
@@ -74,8 +79,6 @@ ui_event:
     je .tab
     cmp al,9
     je .tab
-    cmp byte [ui_dialog],1
-    je ui_run_key
     cmp al,9
     je .tab
     cmp al,13
@@ -305,14 +308,14 @@ ui_event:
 .raw_y_min:
     mov ax,[ui_width]
     movzx eax,ax
-    sub eax,24
+    dec eax
     cmp ecx,eax
     jbe .raw_x_max
     mov ecx,eax
 .raw_x_max:
     mov ax,[ui_height]
     movzx eax,ax
-    sub eax,16
+    dec eax
     cmp edx,eax
     jbe .raw_y_max
     mov edx,eax
@@ -341,13 +344,13 @@ ui_event:
     xor dx,dx
 .positive_y:
     mov ax,[ui_width]
-    sub ax,24
+    dec ax
     cmp cx,ax
     jbe .x
     mov cx,ax
 .x:
     mov ax,[ui_height]
-    sub ax,16
+    dec ax
     cmp dx,ax
     jbe .y
     mov dx,ax
@@ -380,6 +383,7 @@ ui_event:
     test byte [ui_mouse_buttons],3
     jnz .click
     call app_hover
+    call ui_resize_hover
     test ax,ax
     jnz .out
 .click:
@@ -599,14 +603,7 @@ ui_event:
     cmp byte [ui_maximized],1
     je .idle
     mov byte [ui_dragging],2
-    mov ax,[ui_mouse_x]
-    mov [ui_drag_dx],ax
-    mov ax,[ui_mouse_y]
-    mov [ui_drag_dy],ax
-    mov ax,[ui_ww]
-    mov [ui_resize_ww],ax
-    mov ax,[ui_wh]
-    mov [ui_resize_wh],ax
+    call ui_resize_begin
     jmp .idle
 .release:
     cmp byte [app_capture],0
@@ -646,6 +643,8 @@ ui_event:
     mov byte [ui_dragging],0
     mov byte [ui_button_down],0
     mov byte [ui_previous_button],0
+    call ui_hit_find
+    call ui_resize_hover
     call ui_pointer_show
     jmp .idle
 .drag:
@@ -724,37 +723,7 @@ ui_event:
     mov ax,250
     ret
 .resize:
-    mov ax,[ui_mouse_x]
-    sub ax,[ui_drag_dx]
-    add ax,[ui_resize_ww]
-    cmp ax,510
-    jge .resize_w_min
-    mov ax,510
-.resize_w_min:
-    mov bx,[ui_width]
-    sub bx,[ui_wx]
-    sub bx,12
-    cmp ax,bx
-    jle .resize_w_max
-    mov ax,bx
-.resize_w_max:
-    mov [ui_ww],ax
-    mov ax,[ui_mouse_y]
-    sub ax,[ui_drag_dy]
-    add ax,[ui_resize_wh]
-    cmp ax,370
-    jge .resize_h_min
-    mov ax,370
-.resize_h_min:
-    mov bx,[ui_height]
-    sub bx,[ui_wy]
-    sub bx,36
-    cmp ax,bx
-    jle .resize_h_max
-    mov ax,bx
-.resize_h_max:
-    mov [ui_wh],ax
-    call ui_library_focus_clamp
+    call ui_resize_apply
     call ui_comp_damage_drag
     mov ax,250
     ret
@@ -789,46 +758,12 @@ ui_event:
     mov byte [ui_dragging],4
     mov al,[ui_active_window]
     mov [ui_window_drag],al
+    call ui_resize_begin
     jmp .idle
 .app_resize:
     ; Invalidate the old footprint before changing the module window size.
     ; The post-update invalidation below covers its new footprint.
-    call ui_comp_damage_drag
-    movzx si,byte [ui_window_drag]
-    shl si,1
-    mov ax,[ui_mouse_x]
-    sub ax,[ui_window_x+si]
-    add ax,8
-    cmp ax,320
-    jge .app_w_min
-    mov ax,320
-.app_w_min:
-    mov bx,[ui_width]
-    sub bx,[ui_window_x+si]
-    sub bx,8
-    cmp ax,bx
-    jle .app_w_max
-    mov ax,bx
-.app_w_max:
-    mov [ui_window_width+si],ax
-    mov ax,[ui_mouse_y]
-    sub ax,[ui_window_y+si]
-    add ax,8
-    cmp ax,200
-    jge .app_h_min
-    mov ax,200
-.app_h_min:
-    mov bx,[ui_height]
-    sub bx,[ui_window_y+si]
-    sub bx,37
-    cmp ax,bx
-    jle .app_h_max
-    mov ax,bx
-.app_h_max:
-    mov [ui_window_height+si],ax
-    call ui_comp_damage_drag
-    mov ax,250
-    ret
+    jmp .resize
 .idle:
     cmp byte [ui_window_repaint],1
     jne .quiet
@@ -927,107 +862,6 @@ ui_damage_pressed:
 .done:
     ret
 
-ui_run_key:
-    cmp al,13
-    je .enter
-    cmp al,27
-    je .cancel
-    cmp al,9
-    je ui_focus_next
-    cmp al,8
-    je .backspace
-    test al,al
-    jz .editing
-    cmp al,0xE0
-    jne .printable
-.editing:
-    cmp ah,0x4B
-    je .left
-    cmp ah,0x4D
-    je .right
-    cmp ah,0x47
-    je .home
-    cmp ah,0x4F
-    je .end
-    cmp ah,0x53
-    je .delete
-.printable:
-    cmp al,32
-    jb .idle
-    cmp al,126
-    ja .idle
-    cmp byte [ui_run_len],95
-    jae .idle
-    mov dl,al
-    movzx bx,byte [ui_run_len]
-    movzx si,byte [ui_run_cursor]
-.shift:
-    mov al,[ui_run_text+bx]
-    mov [ui_run_text+bx+1],al
-    cmp bx,si
-    je .insert
-    dec bx
-    jmp .shift
-.insert:
-    mov [ui_run_text+si],dl
-    inc byte [ui_run_len]
-    inc byte [ui_run_cursor]
-    jmp .draw
-.enter:
-    mov ax,[ui_focus]
-    cmp ax,17
-    je .out
-    cmp ax,18
-    je .out
-    cmp ax,41
-    je .out
-    mov ax,40
-.out:
-    ret
-.cancel:
-    mov ax,41
-    ret
-.backspace:
-    cmp byte [ui_run_cursor],0
-    je .idle
-    dec byte [ui_run_cursor]
-.delete:
-    mov al,[ui_run_cursor]
-    cmp al,[ui_run_len]
-    jae .idle
-    movzx bx,al
-.remove:
-    mov al,[ui_run_text+bx+1]
-    mov [ui_run_text+bx],al
-    inc bx
-    test al,al
-    jnz .remove
-    dec byte [ui_run_len]
-    jmp .draw
-.left:
-    cmp byte [ui_run_cursor],0
-    je .idle
-    dec byte [ui_run_cursor]
-    jmp .draw
-.right:
-    mov al,[ui_run_cursor]
-    cmp al,[ui_run_len]
-    jae .idle
-    inc byte [ui_run_cursor]
-    jmp .draw
-.home:
-    mov byte [ui_run_cursor],0
-    jmp .draw
-.end:
-    mov al,[ui_run_len]
-    mov [ui_run_cursor],al
-.draw:
-    mov ax,251
-    ret
-.idle:
-    xor ax,ax
-    ret
-
 ui_pointer_hide:
     cmp byte [ui_pointer_visible],1
     jne .done
@@ -1055,9 +889,12 @@ ui_pointer_show:
     pushad
     push fs
     mov fs,[ui_assets_seg]
+    mov word [vc_pointer_skip_x],0
     mov ax,[ui_mouse_y]
     sub ax,[ui_cursor_hotspot_y]
     jnc .hy_ok
+    neg ax
+    mov [vc_pointer_skip_y],al
     xor ax,ax
 .hy_ok:
     movzx edi,ax
@@ -1066,6 +903,8 @@ ui_pointer_show:
     mov ax,[ui_mouse_x]
     sub ax,[ui_cursor_hotspot_x]
     jnc .hx_ok
+    neg ax
+    mov [vc_pointer_skip_x],al
     xor ax,ax
 .hx_ok:
     movzx eax,ax
@@ -1121,11 +960,12 @@ ui_vga_pointer_hide:
     out dx, ax
     push ax
     mov di, [cs:ui_pointer_offset]
-    mov bp, 16
+    mov bp,[cs:ui_vga_pointer_rows]
 .row:
-    mov cx, 3
+    mov cx,[cs:ui_vga_pointer_bytes]
     rep movsb
-    add di, 77
+    sub di,[cs:ui_vga_pointer_bytes]
+    add di,80
     dec bp
     jnz .row
     pop ax
@@ -1150,21 +990,40 @@ ui_vga_pointer_show:
     mov fs,[ui_assets_seg]
     mov ax, 0xA000
     mov es, ax
+    mov word [vc_pointer_skip_x],0
     mov ax, [ui_mouse_y]
     sub ax, [ui_cursor_hotspot_y]
     jnc .vhy_ok
+    neg ax
+    mov [vc_pointer_skip_y],al
     xor ax, ax
 .vhy_ok:
+    mov dx,480
+    sub dx,ax
+    cmp dx,16
+    jbe .vrows
+    mov dx,16
+.vrows:
+    mov [ui_vga_pointer_rows],dx
     push ax
     imul ax, 80
     mov bx, [ui_mouse_x]
     sub bx, [ui_cursor_hotspot_x]
     jnc .vhx_ok
+    neg bx
+    mov [vc_pointer_skip_x],bl
     xor bx, bx
 .vhx_ok:
     push bx
     mov di, bx
     shr di, 3
+    mov cx,80
+    sub cx,di
+    cmp cx,3
+    jbe .vbytes
+    mov cx,3
+.vbytes:
+    mov [ui_vga_pointer_bytes],cx
     add di, ax
     mov [ui_pointer_offset], di
     mov si, ui_pointer_under
@@ -1177,15 +1036,17 @@ ui_vga_pointer_show:
     out dx, ax
     push ax
     mov di, [ui_pointer_offset]
-    mov bp, 16
+    mov bp,[ui_vga_pointer_rows]
 .row:
-    mov al, [es:di]
-    mov [fs:si], al
-    mov al, [es:di+1]
-    mov [fs:si+1], al
-    mov al, [es:di+2]
-    mov [fs:si+2], al
-    add si, 3
+    mov cx,[ui_vga_pointer_bytes]
+    push di
+.byte:
+    mov al,[es:di]
+    mov [fs:si],al
+    inc di
+    inc si
+    loop .byte
+    pop di
     add di, 80
     dec bp
     jnz .row
@@ -1212,10 +1073,18 @@ ui_pointer_shape:
     pushad
     mov [ui_pointer_color], al
     mov bp, 16
+    movzx ax,byte [vc_pointer_skip_y]
+    sub bp,ax
+    shl ax,1
+    add si,ax
 .row:
     lodsw
+    mov cl,[vc_pointer_skip_x]
+    shl ax,cl
     push bx
     mov di, 16
+    movzx cx,cl
+    sub di,cx
 .bit:
     shl ax, 1
     jnc .clear
@@ -1266,12 +1135,15 @@ ui_resize_wh dw 0
 ui_focus_index dw 0
 ui_focus_step dw 1
 ui_pointer_offset dw 0
+ui_vga_pointer_rows dw 16
+ui_vga_pointer_bytes dw 3
 ui_pointer_linear dd 0
 ui_pointer_color db 0
 ui_pointer_black dw 0x8000,0xC000,0xE000,0xF000,0xF800,0xFC00,0xFE00,0xFF00,0xFF80,0xFFC0,0xFE00,0xEF00,0xCF00,0x8780,0x0780,0x0300
 ui_pointer_white dw 0,0,0x4000,0x6000,0x7000,0x7800,0x7C00,0x7E00,0x7F00,0x7C00,0x6C00,0x4600,0x0600,0x0300,0x0300,0
 ui_cursor_type db 0
 ui_cursor_scheme db 0
+ui_cursor_loaded db 0
 ui_cursor_hotspot_x dw 0
 ui_cursor_hotspot_y dw 0
 ui_cursors_path db '\SYSTEM\UI\CURSORS.DAT',0
@@ -1295,19 +1167,55 @@ ui_set_cursor_scheme:
     int 0x21
     jc .done
     mov bx,ax
-    movzx ax,byte [ui_cursor_scheme]
-    imul ax,214
+    ; Stage the header and records in the renderer's transient row scratch.
+    ; Commit only a complete, versioned theme; a missing or truncated file
+    ; leaves the last valid theme (or the built-in arrow) intact.
+    mov ds,[cs:ui_assets_seg]
+    mov dx,vc_pointer_row
+    mov cx,12
+    mov ah,0x3F
+    int 0x21
+    jc .close
+    cmp ax,12
+    jne .close
+    cmp dword [vc_pointer_row],'CIUK'
+    jne .close
+    cmp dword [vc_pointer_row+4],'CUR2'
+    jne .close
+    cmp dword [vc_pointer_row+8],(478 << 16) | 3
+    jne .close
+    movzx ax,byte [cs:ui_cursor_scheme]
+    imul ax,478
     add ax,28
     xor cx,cx
     mov dx,ax
     mov ax,0x4200
     int 0x21
     jc .close
-    mov ds,[cs:ui_assets_seg]
-    mov dx,ui_cursor_table
-    mov cx,198
+    mov dx,vc_pointer_row
+    mov cx,462
     mov ah,0x3F
     int 0x21
+    jc .close
+    cmp ax,462
+    jne .close
+    mov si,vc_pointer_row+64
+    mov cx,7
+.hotspots:
+    cmp byte [si],15
+    ja .close
+    cmp byte [si+1],15
+    ja .close
+    add si,66
+    loop .hotspots
+    push ds
+    pop es
+    mov si,vc_pointer_row
+    mov di,ui_cursor_table
+    mov cx,231
+    cld
+    rep movsw
+    mov byte [cs:ui_cursor_loaded],1
 .close:
     push cs
     pop ds
@@ -1329,6 +1237,8 @@ ui_cursor_apply:
     mov ax,[ui_assets_seg]
     test ax,ax
     jz .done
+    cmp byte [ui_cursor_loaded],0
+    je .done
     mov al,[ui_pointer_visible]
     push ax
     test al,al
@@ -1363,4 +1273,3 @@ ui_cursor_apply:
     pop ds
     popad
     ret
-

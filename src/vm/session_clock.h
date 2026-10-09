@@ -20,9 +20,9 @@ void CVCLK_CALL cvclock_end(uint32_t vm);
 /* Advance before access; writes return the supplied byte, reads its byte. */
 uint32_t CVCLK_CALL cvclock_port(uint32_t vm, uint32_t port,
                                 uint32_t write, uint32_t value);
-/* Advance this VM's PIT to now and return queued channel-0 expirations. */
+/* Advance the full elapsed time; return the one pending channel-0 edge. */
 uint32_t CVCLK_CALL cvclock_pending(uint32_t vm);
-/* Advance to now, then consume one queued expiration (1 consumed, 0 empty). */
+/* Advance to now, then transfer that edge to the PIC (1 consumed, 0 empty). */
 uint32_t CVCLK_CALL cvclock_consume(uint32_t vm);
 /* Packed root-physical restore: low word reload (65536 encoded as 0),
  * next byte normalized channel-0 lo/hi access plus current PIT mode. */

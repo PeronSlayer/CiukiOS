@@ -63,6 +63,8 @@ start:
     pop ax
 %endif
     call startup_driver_services
+    mov al,0
+    call input_snapshot_save
 %ifdef BOOT_DIAG_PALETTE
     push ax
     mov al,2                    ; yellow: input, detection, drivers returned
@@ -87,6 +89,8 @@ start:
     test al,al
     jnz main_loop
     call startup_vm_manager
+    mov al,1
+    call input_snapshot_save
 %ifdef BOOT_DIAG_PALETTE
     push ax
     mov al,5                    ; blue: VM manager returned
@@ -3713,6 +3717,7 @@ shell_output_color db 7
 %include "src/com/vbe_console.inc"
 %include "src/com/shell_gui.inc"
 %include "src/com/shell_drivers.inc"
+%include "src/com/shell_input_snapshot.inc"
 %include "src/com/boot_session.inc"
 %endif
 

@@ -19,15 +19,14 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 
 MAX_WALLPAPERS = 99
+WP_FILL = 0
 WP_FIT = 1
 SUPPORTED_SUFFIXES = {".bmp", ".png"}
 PUBLIC_SOURCE = Path(__file__).resolve().parents[1] / "assets/wallpapers/tiles"
 PHOTO_SOURCE = Path(__file__).resolve().parents[1] / "misc/ciukios_bg"
 PHOTO_NAMES = ("Ciuk1.png", "Ciuk2.png", "Ciuk3.png")
-PHOTO_WIDTH = 1672
-PHOTO_HEIGHT = 941
-PHOTO_STRIDE = PHOTO_WIDTH * 3
-PHOTO_BYTES = PHOTO_STRIDE * PHOTO_HEIGHT
+PHOTO_MAX_WIDTH = 2048
+PHOTO_MAX_HEIGHT = 1536
 
 
 def ascii_title(value: str) -> bytes:
@@ -67,17 +66,36 @@ def convert_photo(source: Path) -> tuple[bytes, tuple[int, int], int]:
     with Image.open(source) as original:
         if original.format != "PNG" or original.mode != "RGB":
             raise ValueError(f"{source}: project photos must be RGB PNGs")
-        if original.size != (PHOTO_WIDTH, PHOTO_HEIGHT):
-            raise ValueError(f"{source}: expected {PHOTO_WIDTH}x{PHOTO_HEIGHT}; no resizing is performed")
-        pixels = original.tobytes()
-    if len(pixels) != PHOTO_BYTES:
+        width, height = original.size
+        if not (1 <= width <= PHOTO_MAX_WIDTH and 1 <= height <= PHOTO_MAX_HEIGHT):
+            raise ValueError(f"{source}: photo dimensions must be 1..{PHOTO_MAX_WIDTH} by "
+                             f"1..{PHOTO_MAX_HEIGHT}; no resizing is performed")
+        rgb = original.tobytes()
+    if len(rgb) != width * height * 3:
         raise ValueError(f"{source}: decoded RGB payload has an unexpected size")
-    header = struct.pack("<4sHHHBBI", b"CWP2", PHOTO_WIDTH, PHOTO_HEIGHT,
-                         PHOTO_STRIDE, 1, 0, PHOTO_BYTES)
+    row_bytes = width * 3
+    stride = (row_bytes + 1) & ~1
+    pixels = rgb if stride == row_bytes else b"".join(
+        rgb[start:start + row_bytes] + b"\0" for start in range(0, len(rgb), row_bytes))
+    payload_bytes = stride * height
+    header = struct.pack("<4sHHHBBI", b"CWP2", width, height, stride, 1, 0, payload_bytes)
     payload = header + pixels
-    if len(payload) != 16 + PHOTO_BYTES:
+    if len(payload) != 16 + payload_bytes:
         raise ValueError(f"{source}: encoded CWP2 size is invalid")
-    return payload, (PHOTO_WIDTH, PHOTO_HEIGHT), len(pixels)
+    return payload, (width, height), len(pixels)
+
+
+def select_photos(directory: Path) -> tuple[list[Path], bool]:
+    originals = [directory / name for name in PHOTO_NAMES]
+    missing = [path for path in originals if not path.is_file()]
+    if missing:
+        raise ValueError("Missing required project photo(s): " + ", ".join(map(str, missing)))
+    adaptive = [directory / "adaptive" / name for name in PHOTO_NAMES]
+    present = [path.is_file() for path in adaptive]
+    if any(present) and not all(present):
+        raise ValueError("Incomplete adaptive photo set: " + ", ".join(
+            str(path) for path, exists in zip(adaptive, present) if not exists))
+    return (adaptive, True) if all(present) else (originals, False)
 
 
 def read_catalog(data: bytes) -> list[tuple[str, bytes]]:
@@ -118,7 +136,7 @@ def discover(directory: Path) -> list[Path]:
 
 
 def build(output: Path, sources: list[Path], *, personal: bool,
-          photo_sources: list[Path] | None = None) -> dict:
+          photo_sources: list[Path] | None = None, adaptive_photos: bool = False) -> dict:
     photo_sources = photo_sources or []
     if len(sources) + len(photo_sources) > MAX_WALLPAPERS:
         raise ValueError(f"The wallpaper catalog supports at most {MAX_WALLPAPERS} entries")
@@ -126,9 +144,15 @@ def build(output: Path, sources: list[Path], *, personal: bool,
     # leave a half-updated catalog or overwrite an earlier working texture.
     converted = [(source, *convert(source)) for source in sources]
     converted_photos = [(source, *convert_photo(source)) for source in photo_sources]
+    original_inputs = {}
+    if adaptive_photos:
+        for source in photo_sources:
+            original = source.parent.parent / source.name
+            original_inputs[source] = (original, hashlib.sha256(original.read_bytes()).hexdigest())
     output.mkdir(parents=True, exist_ok=True)
     records = []
     manifest = {"format": "CiukiOS wallpaper CWP1/CWP2/CWC1", "personal_inputs_enabled": personal,
+                "adaptive_photos_enabled": adaptive_photos,
                 "conversion": "CWP1 lossless RGB palette; CWP2 exact native RGB888 PNG samples",
                 "wallpapers": []}
     for index, (source, payload, dimensions) in enumerate(converted, 1):
@@ -149,15 +173,24 @@ def build(output: Path, sources: list[Path], *, personal: bool,
             "source": str(source), "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "filename": filename, "sha256": hashlib.sha256(payload).hexdigest(),
             "format": "CWP2", "dimensions": dimensions,
+            "stride": struct.unpack_from("<H", payload, 8)[0],
             "header_bytes": 16, "rgb_payload_bytes": rgb_bytes,
             "file_bytes": len(payload), "rgb_exact_match": True,
             "license": "owner-provided CiukiOS project asset"})
+        if adaptive_photos:
+            original, original_hash = original_inputs[source]
+            manifest["wallpapers"][-1].update({
+                "original_source": str(original),
+                "original_source_sha256": original_hash,
+                "adaptation": "extended scenery; centered aspect-preserving Fill"})
     photo_default = next((i for i, (_, title) in enumerate(records, 1)
                           if title.split(b"\0", 1)[0] == b"Ciuk1"), None)
     if photo_default is not None:
-        (output / "WALL.CFG").write_bytes(bytes([photo_default, WP_FIT]))
+        default_style = WP_FILL if adaptive_photos else WP_FIT
+        (output / "WALL.CFG").write_bytes(bytes([photo_default, default_style]))
         manifest["default_selection"] = {"file": "WALL.CFG", "entry": photo_default,
-                                         "title": "Ciuk1", "position": "Fit", "position_id": WP_FIT}
+                                         "title": "Ciuk1", "position": "Fill" if adaptive_photos else "Fit",
+                                         "position_id": default_style}
     else:
         (output / "WALL.CFG").unlink(missing_ok=True)
     (output / "WALLS.DAT").write_bytes(catalog_bytes(records))
@@ -178,12 +211,9 @@ def main() -> None:
     args = parser.parse_args()
     try:
         sources = discover(args.source if args.include_user_wallpapers else PUBLIC_SOURCE)
-        photos = [args.photo_source / name for name in PHOTO_NAMES]
-        missing = [path for path in photos if not path.is_file()]
-        if missing:
-            raise ValueError("Missing required project photo(s): " + ", ".join(map(str, missing)))
+        photos, adaptive = select_photos(args.photo_source)
         manifest = build(args.output, sources, personal=args.include_user_wallpapers,
-                         photo_sources=photos)
+                         photo_sources=photos, adaptive_photos=adaptive)
     except (ValueError, OSError, UnidentifiedImageError) as error:
         raise SystemExit(str(error)) from error
     print(f"[wallpapers] {len(manifest['wallpapers'])} entries; "

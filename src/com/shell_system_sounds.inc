@@ -157,6 +157,8 @@ ui_sound_set:
     jmp ui_redraw
 
 ui_sfx_path db '\SYSTEM\DRIVERS\SFX.DRV',0
+ui_volume_preference_path db '\SYSTEM\VOLUME.CFG',0
+ui_volume_preference_byte db 0
 ui_sfx_entry dw 0,0
 ui_sfx_handle dw 0
 ui_sfx_status dw 3

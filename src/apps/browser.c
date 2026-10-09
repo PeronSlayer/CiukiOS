@@ -21,12 +21,12 @@
 struct node {u16 next,x,y,w,style;u8 link,kind,bg;char text[68];};
 struct browser_css_frame {char tag[20];short old_left,old_right,bottom_gap;u16 old_bg;int old_style;u8 old_hidden,old_link,block;};
 struct picture {char url[128],alt[48];u16 handle,width,height,x,y,w,h;u8 state,link;};
-struct web_field {char name[40],value[80];u16 x,y,w;u8 type,form,checked;};
+struct web_field {char name[40],value[80];u16 x,y,w;u8 type,form,checked;struct field edit;};
 struct form {char action[128];u8 post;};
 static struct picture images[IMAGE_MAX];
 static struct web_field fields[FIELD_MAX];
 static struct form forms[FORM_MAX];
-static char links[LINK_MAX][128],history[8][128];
+static char history[8][128];
 static char cache_urls[CACHE_MAX][128];
 static u8 cache_valid[CACHE_MAX];
 static int cache_head;
@@ -50,7 +50,8 @@ static int input_at,input_len,parse_state,tag_len,quote,word_len,skip,skip_match
 static int css_scan_state,css_scan_quote,css_scan_skip_match,css_scan_comment;
 static int css_feed_file=-1,css_link_count,css_hidden,css_depth,css_inline_end,css_inline_match,css_inline_pending_len,css_feed_used;
 static int css_limited,css_top_gap,css_close_gap,css_close_block;
-static int parse_title,title_len,caret,replace_address,focused=1,field_focus=-1;
+static int parse_title,title_len,focused=1,field_focus=-1;
+static struct field address_field;
 static int scroll,doc_height,cached_width,lx,ly,line_height,left_margin,right_margin;
 static int style=C_INK,active_link,current_form=-1,preformatted,table,table_x,table_y,table_bottom,table_column,table_width;
 static int body_started,relayout,partial,last_space,table_columns,table_scans,current_bg=255,in_center;
@@ -195,11 +196,28 @@ static void navigate(const char *target,int remember)
         if(history_count==8){for(i=1;i<8;++i)str_copy(history[i-1],history[i]);--history_count;}
         str_copy(history[history_count++],next);history_at=history_count-1;
     }
-    release_page();str_copy(url,next);caret=str_len(url);replace_address=0;redirects=0;title[0]=0;field_focus=-1;
+    release_page();field_set(&address_field,url,sizeof url,next);redirects=0;title[0]=0;field_focus=-1;
     js_cache=js_warning=0;
     if(worker_stopping){loading=12;str_copy(message,"Finishing the previous request...");return;}
     if(next[1]==':'){str_copy(page_url,next);str_copy(base_url,next);relayout=0;loading=4;return;}
     download_start(1,next);app_log("[CIUKWEB] fetch",next);
+}
+/* URLs share the page's XMS handle, after its fixed-capacity node array. */
+static u32 link_offset(int index)
+{return (u32)NODE_MAX*sizeof item+(u32)index*128UL;}
+static int link_add(const char *relative)
+{
+    char target[128]={0};int index=link_count+1;
+    if(!node_handle||index>=LINK_MAX||!webio_resolve(base_url,relative,target,sizeof target))return 0;
+    if(!webstore_write(node_handle,link_offset(index),target,sizeof target)){partial=1;return 0;}
+    link_count=index;return index;
+}
+static void link_navigate(int index)
+{
+    char target[128];
+    if(!node_handle||index<=0||index>link_count||
+       !webstore_read(node_handle,link_offset(index),target,sizeof target))return;
+    target[127]=0;navigate(target,1);
 }
 static int attr(const char *name,char *out,int size)
 {
@@ -553,6 +571,7 @@ static void field_tag(const char *name)
     f->type=!str_icmp(value,"hidden")?1:!str_icmp(value,"checkbox")?2:!str_icmp(value,"radio")?3:
             !str_icmp(value,"submit")||!str_icmp(name,"button")?4:0;
     if(!str_icmp(value,"password"))f->type=5;f->checked=attr("checked",value,sizeof value);
+    if(f->type==0||f->type==5){field_set(&f->edit,f->value,sizeof f->value,f->value);f->edit.password=f->type==5;}
     n=dimension("size",20,60);
     if(f->type==2||f->type==3)f->w=16;
     else if(f->type==4){int mw=ui_measure_style(f->value,style)+16;f->w=minimum(mw>90?mw:90,right_margin-left_margin);}
@@ -596,8 +615,7 @@ static void handle_tag(void)
     is_void=css_is_void_tag(name);
     if(!closing&&body_started&&!str_cmp(name,"a")){
         active_link=0;
-        if(link_count<LINK_MAX-1&&attr("href",value,sizeof value)&&
-           webio_resolve(base_url,value,links[link_count+1],sizeof links[0]))active_link=++link_count;
+        if(attr("href",value,sizeof value))active_link=link_add(value);
     }
     hidden_before=closing?css_style_leave(name):css_style_enter(name,is_void);
     if(!closing&&!str_cmp(name,"a")&&!is_void&&css_depth)browser_css[css_depth-1].old_link=(u8)old_link;
@@ -674,7 +692,7 @@ static void parse_begin(void)
     if(source<0){loading=0;error("The page cache cannot be read.");return;}
     if(!node_handle){
         str_copy(stats,"XMS free KiB=");fmt_u32(stats+str_len(stats),webstore_available());app_log("[CIUKWEB] memory",stats);
-        node_handle=webstore_alloc((u32)NODE_MAX*sizeof item);
+        node_handle=webstore_alloc(link_offset(LINK_MAX));
     }
     if(!node_handle){dos_close(source);source=-1;loading=0;error("Not enough extended memory for this page.");return;}
     if(!bucket_seg){bucket_seg=dos_alloc(251);bucket=(u16 __far *)((u32)bucket_seg<<16);}
@@ -887,7 +905,7 @@ static void downloaded(void)
     loading=0;
     if((status==301||status==302||status==303||status==307||status==308)&&webio_redirect(location,sizeof location)){
         if(redirects++>=5||!webio_resolve(resource_url,location,target,sizeof target)){error("The redirect is invalid or repeats too often.");return;}
-        if(transfer_kind==1){str_copy(url,target);caret=str_len(url);}download_start(transfer_kind,target);return;
+        if(transfer_kind==1)field_set(&address_field,url,sizeof url,target);download_start(transfer_kind,target);return;
     }
     str_copy(stats,"status=");fmt_u32(stats+str_len(stats),status);str_cat(stats," wire=");fmt_u32(stats+str_len(stats),webio_wire_bytes());app_log("[CIUKWEB] HTTP",stats);
     if(transfer_kind==2){
@@ -905,19 +923,24 @@ static void downloaded(void)
         if(status>=200&&status<300&&webio_work(CWW_PAGE_RESOURCE,script_path,str_len(script_path)+1,scripts[js_at].index)){
             js_job=1;loading=9;
         }else{js_warning=1;++js_at;loading=11;}
-    } else{str_copy(page_url,resource_url);str_copy(url,page_url);caret=str_len(url);relayout=0;js_begin();}
+    } else{str_copy(page_url,resource_url);field_set(&address_field,url,sizeof url,page_url);relayout=0;js_begin();}
 }
 static void fit(int x,int y,int width,const char *s,int color)
 {
     char text[128];int n;str_ncopy(text,s,sizeof text);n=str_len(text);
     while(n&&ui_measure(text)>width)text[--n]=0;ui_text(x,y,text,color);
 }
+static void address_box(int *x,int *w)
+{
+    int offset=starts(url,"https://")?56:starts(url,"http://")||url[1]==':'?50:6;
+    *x=HOST.x+212+offset-4;*w=HOST.w-266-offset;
+}
 static void paint(void)
 {
     int x=HOST.x+4,y=HOST.y+TITLE_H,w=HOST.w-8,h=HOST.h-TITLE_H-4;
     int px=x+10,py=y+40,pw=w-36,ph=h-70,i,b,first,last,paint_top,paint_bottom;
     int ax=x+208,ay=y+6,aw=w-258,ah=26,sby=y+h-24,tx,badge_w;
-    u16 at;char address[128];u8 band[19];
+    u16 at;u8 band[19];
     if(cached_width&&cached_width!=HOST.w&&!loading&&page_url[0]){relayout=1;parse_begin();}
     ui_rect(x,y,w,h,C_FACE);
     ui_button(x+6,y+6,24,26,"<",2);ui_button(x+32,y+6,24,26,">",3);
@@ -935,14 +958,7 @@ static void paint(void)
         badge_w=42;ui_rect(ax+3,ay+3,badge_w,ah-6,C_FACE);
         ui_text(ax+6,ay+6,"FILE",C_BLUE);tx=ax+3+badge_w+5;
     }
-    i=0;str_copy(address,url);
-    while(i<caret&&ui_measure(address)>aw-(tx-ax)-10)str_copy(address,url+(++i));
-    fit(tx,ay+6,aw-(tx-ax)-10,address,C_INK);
-    if(focused&&!((HOST.ticks/9)&1)){
-        char prefix[128];int count=caret-i;if(count<0)count=0;
-        str_ncopy(prefix,address,minimum(count+1,128));
-        ui_text(tx+ui_measure(prefix),ay+6,"|",C_BLUE);
-    }
+    field_draw(&address_field,tx-4,ay+3,aw-(tx-ax),focused&&HOST.active);
     ui_inset(x+6,y+36,w-28,h-64);ui_rect(x+7,y+37,w-30,h-66,C_PAPER);
     draw_scroll(x+w-22,y+36,h-64,scroll,doc_height,ph);
     for(i=0;i<image_count;++i){
@@ -970,13 +986,10 @@ static void paint(void)
         struct web_field *f=&fields[i];int fy=py+f->y-scroll;if(f->type==1||fy<py||fy+24>py+ph)continue;
         if(f->type==2)draw_check(px+f->x,fy+3,f->checked);
         else if(f->type==3)draw_radio(px+f->x,fy+3,f->checked);
+        else if(f->type==0||f->type==5)field_draw(&f->edit,px+f->x,fy+1,f->w,field_focus==i&&HOST.active);
         else{ui_rect(px+f->x,fy,f->w,24,f->type==4?C_FACE:C_PAPER);ui_inset(px+f->x,fy,f->w,24);
              fit(px+f->x+4,fy+4,f->w-8,f->type==4?(f->value[0]?f->value:"Submit"):f->type==5?"********":f->value,C_INK);
              if(field_focus==i)draw_focus(px+f->x,fy,f->w,24);
-             if(field_focus==i&&(f->type==0||f->type==5)&&!((HOST.ticks/9)&1)){
-                 int tw=ui_measure(f->type==5?"********":f->value);
-                 if(tw<f->w-14)ui_text(px+f->x+4+tw,fy+4,"|",C_BLUE);
-             }
         }
     }
     ui_inset(x+6,sby,w-12,20);ui_rect(x+7,sby+1,w-14,18,C_FACE);
@@ -1013,26 +1026,28 @@ too_long:error("The form exceeds the supported address length.");
 }
 static int key(int keycode)
 {
-    int ch=KEY_CHAR(keycode),scan=KEY_SCAN(keycode),len=str_len(url),i;
+    int ch=KEY_CHAR(keycode),scan=KEY_SCAN(keycode);
     if(ch==27){if(loading){stop();str_copy(message,"Stopped.");return 1;}return 0;}
-    if(ch==12){focused=1;field_focus=-1;caret=str_len(url);replace_address=1;return 1;}
+    if(ch==12){focused=1;field_focus=-1;address_field.sel=1;return 1;}
     if(ch==18){navigate(page_url[0]?page_url:url,0);return 1;}
-    if(ch==9&&field_count){focused=0;field_focus=(field_focus+1)%field_count;return 1;}
+    if((ch==9||scan==0x0F)&&field_count){
+        int i,step=HOST.shift&SH_SHIFT?field_count-1:1;
+        focused=0;
+        if(field_focus<0)field_focus=HOST.shift&SH_SHIFT?0:field_count-1;
+        for(i=0;i<field_count;++i){field_focus=(field_focus+step)%field_count;if(fields[field_focus].type!=1)break;}
+        if(fields[field_focus].type==0||fields[field_focus].type==5)fields[field_focus].edit.sel=1;
+        return 1;
+    }
     if(!focused&&field_focus>=0){
-        struct web_field *f=&fields[field_focus];i=str_len(f->value);
+        struct web_field *f=&fields[field_focus];
         if(ch==13){submit(f->form,f->type==4?field_focus:-1);return 1;}
         if(ch==' '&&(f->type==2||f->type==3)){f->checked=!f->checked;return 1;}
-        if(f->type==0||f->type==5){if(ch==8&&i)f->value[i-1]=0;else if(ch>=32&&ch<127&&i<79){f->value[i++]=(char)ch;f->value[i]=0;}return 1;}
+        if(f->type==0||f->type==5)return field_key(&f->edit,keycode,HOST.shift);
     }
     if(scan==0x48||scan==0x49){scroll-=scan==0x49?HOST.h-150:24;if(scroll<0)scroll=0;return 1;}
     if(scan==0x50||scan==0x51){scroll+=scan==0x51?HOST.h-150:24;if(scroll>doc_height)scroll=doc_height;return 1;}
     if(!focused)return 0;if(ch==13){navigate(url,1);return 1;}
-    if(scan==0x4B&&caret>0){--caret;return 1;}if(scan==0x4D&&caret<len){++caret;return 1;}
-    if(scan==0x47){caret=0;return 1;}if(scan==0x4F){caret=len;return 1;}
-    if(ch==8&&caret>0){mem_move(url+caret-1,url+caret,len-caret+1);--caret;return 1;}
-    if(scan==0x53&&caret<len){mem_move(url+caret,url+caret+1,len-caret);return 1;}
-    if(ch>=32&&ch<127&&len<126){if(replace_address){url[0]=0;len=caret=0;replace_address=0;}for(i=len;i>=caret;--i)url[i+1]=url[i];url[caret++]=(char)ch;return 1;}
-    return 0;
+    return field_key(&address_field,keycode,HOST.shift);
 }
 static void browser_teardown(void)
 {
@@ -1051,7 +1066,7 @@ int app_event(int ev,int a,int b,int c)
 {
     if(ev==EV_OPEN){
         if(a==2)return 1;str_copy(app_title,"CiukWeb");HDR_WIDTH=800;HDR_HEIGHT=560;
-        str_copy(message,"Enter a web address and select Go.");str_copy(url,"https://example.com/");caret=str_len(url);
+        str_copy(message,"Enter a web address and select Go.");field_set(&address_field,url,sizeof url,"https://example.com/");
         if(APP_ARG[0])navigate(APP_ARG,0);return 1;
     }
     if(ev==EV_PAINT){paint();return 0;}
@@ -1110,6 +1125,17 @@ int app_event(int ev,int a,int b,int c)
     }
     if(ev==EV_WHEEL){scroll+=a*48;if(scroll<0)scroll=0;if(scroll>doc_height)scroll=doc_height;return 1;}
     if(ev==EV_MOUSE){
+        if(a==MOUSE_MOVE||a==MOUSE_UP){
+            int fx,fw,sx=HOST.x+b;
+            if(focused&&address_field.drag){
+                address_box(&fx,&fw);ui_cursor(CURSOR_IBEAM);
+                return field_mouse(&address_field,a,fx,fw,sx,HOST.shift);
+            }
+            if(field_focus>=0&&(fields[field_focus].type==0||fields[field_focus].type==5)&&fields[field_focus].edit.drag){
+                struct web_field *f=&fields[field_focus];ui_cursor(CURSOR_IBEAM);
+                return field_mouse(&f->edit,a,HOST.x+14+f->x,f->w,sx,HOST.shift);
+            }
+        }
         if(a==MOUSE_HOVER||a==MOUSE_MOVE){
             if(c>=6&&c<33&&b>=212&&b<HOST.w-54)ui_cursor(CURSOR_IBEAM);
             else if(c>=38&&c<HOST.h-TITLE_H-26){
@@ -1133,20 +1159,29 @@ int app_event(int ev,int a,int b,int c)
             }
         }
         if(a==MOUSE_DOWN){
-            int i;u16 at;
-        if(c>=6&&c<33&&b>=212&&b<HOST.w-54){focused=1;field_focus=-1;caret=str_len(url);return 1;}
+            int i,previous_field=field_focus;u16 at;
+        if(c>=6&&c<33&&b>=212&&b<HOST.w-54){
+            int fx,fw;focused=1;field_focus=-1;address_box(&fx,&fw);
+            if(previous_field>=0)fields[previous_field].edit.drag=fields[previous_field].edit.click_valid=0;
+            return field_mouse(&address_field,a,fx,fw,HOST.x+b,HOST.shift);
+        }
+        address_field.click_valid=address_field.drag=0;
         focused=0;field_focus=-1;
         if(c>=38&&c<HOST.h-TITLE_H-26&&b<HOST.w-28){
             int x=b-14,y=c-40+scroll;
             for(i=0;i<field_count;++i)if(fields[i].type!=1&&x>=fields[i].x&&x<fields[i].x+fields[i].w&&y>=fields[i].y&&y<fields[i].y+24){
                 field_focus=i;if(fields[i].type==2)fields[i].checked=!fields[i].checked;
+                if(fields[i].type==0||fields[i].type==5){
+                    if(previous_field!=i)fields[i].edit.click_valid=0;
+                    return field_mouse(&fields[i].edit,a,HOST.x+14+fields[i].x,fields[i].w,HOST.x+b,HOST.shift);
+                }
                 if(fields[i].type==3){int j;for(j=0;j<field_count;++j)if(fields[j].type==3&&fields[j].form==fields[i].form&&!str_cmp(fields[j].name,fields[i].name))fields[j].checked=0;fields[i].checked=1;}
                 if(fields[i].type==4)submit(fields[i].form,i);return 1;
             }
-            for(i=0;i<image_count;++i)if(images[i].link&&x>=images[i].x&&x<images[i].x+images[i].w&&y>=images[i].y&&y<images[i].y+images[i].h){navigate(links[images[i].link],1);return 1;}
+            for(i=0;i<image_count;++i)if(images[i].link&&x>=images[i].x&&x<images[i].x+images[i].w&&y>=images[i].y&&y<images[i].y+images[i].h){link_navigate(images[i].link);return 1;}
             for(i=y>15?(y-15)>>4:0;bucket&&i<2001&&i<=(y>>4);++i)for(at=bucket[i];at;at=item.next){
                 if(at>nodes||!webstore_read(node_handle,(u32)(at-1)*sizeof item,&item,sizeof item))break;
-                if(item.link&&x>=item.x&&x<item.x+item.w&&y>=item.y&&y<item.y+18){navigate(links[item.link],1);return 1;}
+                if(item.link&&x>=item.x&&x<item.x+item.w&&y>=item.y&&y<item.y+18){link_navigate(item.link);return 1;}
             }
             return 1;
         }

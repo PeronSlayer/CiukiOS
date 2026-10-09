@@ -87,6 +87,10 @@ exit_code dd ?                          ; FFFFh running, FFFEh killed, else its 
 generation dd ?                         ; creations of this slot (VMM_EXIT_CODE)
 umb_resident0 dd ?                      ; exact Jemm XMS UMBs owned by this VM
 umb_resident1 dd ?                      ; released at normal exit and forced kill
+launch_enabled dd ?                     ; explicit CREATE_TRACE only
+launch_pending dd ?                     ; parent must persist before ACK
+launch_sequence dd ?
+launch_record db 256 dup (?)            ; bounded CVFL v1, no child disk I/O
 ctx db VMM_CTX_BYTES dup (?)            ; its per-session variables when not live
 block dd ?                              ; linear of its private pages (0: VM 0)
 frame db VMM_FRAME dup (?)
@@ -375,6 +379,13 @@ find_slot:
 slot_found:
  push eax                               ; preserve slot across CMOS copy
  mov ebx,esi                            ; EBX = new record
+ mov [ebx].VMREC.launch_enabled,0
+ mov [ebx].VMREC.launch_pending,0
+ mov [ebx].VMREC.launch_sequence,0
+ cmp word ptr [ebp].Client_Reg_Struc.Client_EAX,VM_OP_VMM_CREATE_TRACE
+ jne trace_selected
+ mov [ebx].VMREC.launch_enabled,1
+trace_selected:
  mov [ebx].VMREC.missed,0
  push esi
  mov esi,vmm_current                    ; the creator's CMOS index
@@ -529,6 +540,9 @@ deferred_released:
  popfd
  popad
 free_pages:
+ mov [ebx].VMREC.launch_enabled,0
+ mov [ebx].VMREC.launch_pending,0
+ mov [ebx].VMREC.launch_sequence,0
  mov eax,[ebx].VMREC.block
  test eax,eax
  jz freed
@@ -1083,6 +1097,8 @@ vmm_target_enter proc
  je borrowable
  cmp eax,VM_OP_DEV_STATE
  je borrowable
+ cmp eax,VM_OP_DEV_AUDIO_STATE
+ je borrowable
  cmp eax,VM_OP_DEV_KEY
  je borrowable
  cmp eax,VM_OP_DEV_MOUSE
@@ -1400,6 +1416,8 @@ vmm_snapshot_ivt proc
  pop esi
  ret
 vmm_snapshot_ivt endp
+
+include session_ivt_baseline.inc
 
 ; One linear page for cvdev_guest_linear, taken at VMM_INIT. CF=1 on failure.
 guest_window_init proc
@@ -2514,6 +2532,10 @@ jlm_poll endp
 
 ; Round robin to the next ready VM. EBP = client frame.
 vmm_switch proc
+ cmp disk_firmware_active,0
+ jne gated
+ cmp disk_busy,0
+ jne gated
  ; XMS may enable physical interrupts inside its shared mover. A nested
  ; canonical callback is still inside that operation; leave the client
  ; frame and page mappings in place until the XMS handler returns.
@@ -2599,7 +2621,10 @@ candidate:
  call vmm_record
  pop eax
  cmp [esi].VMREC.state,VM_SLOT_READY
+ jne candidate_unavailable
+ cmp [esi].VMREC.launch_pending,0
  je switch_to
+candidate_unavailable:
  dec edx
  jnz next_candidate
  ret                                    ; nothing else to run
@@ -2768,6 +2793,10 @@ vmm_dispatch proc
  je op_init
  cmp eax,VM_OP_VMM_CREATE
  je op_create
+ cmp eax,VM_OP_VMM_CREATE_TRACE
+ je op_create
+ cmp eax,VM_OP_VMM_LAUNCH_TRACE
+ je op_launch_trace
  cmp eax,VM_OP_VMM_EXIT
  je op_exit
  cmp eax,VM_OP_VMM_STATE
@@ -2778,6 +2807,8 @@ vmm_dispatch proc
  je op_kill
  cmp eax,VM_OP_VMM_IVT
  je op_ivt
+ cmp eax,VM_OP_VMM_IVT_BASELINE
+ je op_ivt_baseline
  cmp eax,VM_OP_VMM_TARGET
  je op_target
  cmp eax,VM_OP_VMM_LIST
@@ -2815,6 +2846,8 @@ op_umb_alloc:
  jmp vmm_umb_alloc
 op_net_irq:
  jmp vmm_net_irq_register
+op_launch_trace:
+ jmp vmm_launch_trace
 op_target:
  jmp vmm_set_target
 ; VMM_LIST: four bytes per VM (state, SESS_* flags, has the focus, runs).
@@ -2855,9 +2888,19 @@ op_ivt:
  mov ecx,256
  cld
  rep movsd
+ sub edi,1024
+ call vmm_ivt_baseline_filter
+ mov word ptr [ebp].Client_Reg_Struc.Client_EDX,cx
+ mov word ptr [ebp].Client_Reg_Struc.Client_ESI,dx
+ mov eax,ivt_baseline_count
+ mov word ptr [ebp].Client_Reg_Struc.Client_ECX,ax
+ mov eax,ivt_baseline_ready
+ mov word ptr [ebp].Client_Reg_Struc.Client_EBX,ax
  xor eax,eax
 ivt_done:
  ret
+op_ivt_baseline:
+ jmp vmm_ivt_baseline_register
 op_init:
  jmp vmm_init
 op_create:
@@ -2867,6 +2910,8 @@ op_exit:
 op_state:
  jmp vmm_state
 vmm_dispatch endp
+
+include session_launch_trace.inc
 
 .data
 vmm_client_frame dd 0

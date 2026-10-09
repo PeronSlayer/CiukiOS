@@ -3,6 +3,7 @@
  */
 #include "session_devices.h"
 #include "guest_peripherals.h"
+#include "session_audio.h"
 
 /* Services from session_devices.inc and session_video.inc (cdecl). */
 extern uint32_t CVDEV_CALL cvdev_in(uint32_t port, uint32_t size);
@@ -44,6 +45,9 @@ struct cvdev_instance {
     uint32_t audio_elapsed_us;
     uint32_t vm, wants_audio;             /* its VM; it streams to the AC'97 */
     uint32_t muted_us, muted_frac;        /* time not yet played muted */
+    uint32_t audio_waiting, audio_wait_lo, audio_wait_hi, audio_wait_period_us;
+    uint32_t audio_service_lo, audio_service_hi;
+    cvdev_audio_report audio_timing;
     uint32_t pit_fraction;                /* fractional clocks, / 1000000 */
     uint16_t trap_ports[96];
 };
@@ -64,7 +68,9 @@ static uint32_t nam, nabm, audio_running, audio_rate;
 static uint32_t *bdl;
 static uint32_t buffer_linear[CVDEV_AUDIO_BUFFERS];
 static uint32_t next_fill;
-static uint16_t saved_master, saved_pcm, saved_ext, saved_rate;
+static uint32_t render_offset;
+static cvaudio_codec codec;
+static cvaudio_stream resampler;
 static uint32_t saved_bdbar;
 
 static void player_set(struct cvdev_instance *instance, int playing)
@@ -80,7 +86,6 @@ static void player_set(struct cvdev_instance *instance, int playing)
     if (playing && slot != CVDEV_PLAYERS) players[slot] = instance;
 }
 static uint8_t saved_lvi;
-static int16_t resample[CVDEV_AUDIO_FRAMES * 2 * 2];
 static int16_t discard[CVDEV_AUDIO_FRAMES * 2];
 
 
@@ -285,40 +290,134 @@ static void ac97_reset_output(void)
         if (!(cvdev_in(nabm + 0x1b, 1) & 2)) break;
 }
 
-static void render_buffer(uint32_t index)
+static uint32_t CVAUDIO_CALL codec_in(void *opaque, uint32_t port, uint32_t width)
 {
-    int16_t *out = (int16_t *)buffer_linear[index];
-    unsigned i, source, frames_in;
+    (void)opaque;
+    return cvdev_in(port, width);
+}
+static void CVAUDIO_CALL codec_out(void *opaque, uint32_t port, uint32_t value, uint32_t width)
+{
+    (void)opaque;
+    cvdev_out(port, value, width);
+}
+static unsigned CVAUDIO_CALL generate_audio(void *opaque, int16_t *out, unsigned frames)
+{
+    struct cvdev_instance *owner = (struct cvdev_instance *)opaque;
+    cvgp_sb_state *sb = &owner->devices.sb;
+    uint32_t boundary = 0, lo, hi;
+    unsigned n = frames;
+    if (owner->audio_waiting) return 0;
+    if (sb->active && !(sb->sample_bits == 16 ? sb->paused16 : sb->paused8)) {
+        boundary = cvaudio_dma_slice(sb->sample_rate, sb->resample_phase,
+                                     sb->units_left, sb->stereo ? 2u : 1u, 0xffffffffu);
+        if (boundary < n) n = (unsigned)boundary;
+    }
+    if (cvgp_render_audio(&owner->devices, owner->generation, out, n, AUDIO_RATE) != CVGP_OK)
+        return 0;
+    owner->audio_timing.source_frames += n;
+    if (boundary && boundary == n) {
+        uint32_t units = sb->block_units / (sb->stereo ? 2u : 1u);
+        uint32_t scaled;
+        if (sb->stereo && (sb->block_units & 1u)) ++units;
+        scaled = units * 1000u;
+        ++owner->audio_timing.sb_boundaries;
+        ++owner->audio_timing.boundary_yields;
+        owner->audio_waiting = 1;
+        cvvid_rdtsc(&lo, &hi);
+        owner->audio_wait_lo = lo;
+        owner->audio_wait_hi = hi;
+        owner->audio_wait_period_us = sb->sample_rate ?
+            (scaled / sb->sample_rate) * 1000u +
+            ((scaled % sb->sample_rate) * 1000u + sb->sample_rate - 1u) / sb->sample_rate : 0;
+    }
+    return n;
+}
+
+/* Do not cross the guest's refill boundary inside an unpublished hardware
+ * descriptor. The next call resumes its remaining frames after guest work. */
+static int render_buffer(uint32_t index)
+{
+    int16_t *out = (int16_t *)buffer_linear[index] + render_offset * 2u;
     struct cvdev_instance *current = I;
+    uint32_t start_lo, start_hi, end_lo, end_hi, cycles, old;
+    unsigned n, remaining = CVDEV_AUDIO_FRAMES - render_offset;
     if (!A) {                                   /* no session plays: silence */
-        zero(out, CVDEV_AUDIO_FRAMES * 4u);
-        return;
+        zero(out, remaining * 4u);
+        render_offset = 0;
+        return 1;
     }
     I = A;
+    cvvid_rdtsc(&start_lo, &start_hi);
     if (audio_rate == AUDIO_RATE) {
-        cvgp_render_audio(&I->devices, I->generation, out, CVDEV_AUDIO_FRAMES, AUDIO_RATE);
+        n = generate_audio(I, out, remaining);
     } else {
-        /* Fixed-rate codec: synthesise at 44.1 kHz, nearest-sample stretch. */
-        frames_in = (unsigned)((CVDEV_AUDIO_FRAMES * AUDIO_RATE) / audio_rate) + 1u;
-        if (frames_in > CVDEV_AUDIO_FRAMES * 2u) frames_in = CVDEV_AUDIO_FRAMES * 2u;
-        cvgp_render_audio(&I->devices, I->generation, resample, frames_in, AUDIO_RATE);
-        for (i = 0; i != CVDEV_AUDIO_FRAMES; ++i) {
-            source = (unsigned)((i * AUDIO_RATE) / audio_rate);
-            if (source >= frames_in) source = frames_in - 1u;
-            out[i * 2] = resample[source * 2];
-            out[i * 2 + 1] = resample[source * 2 + 1];
-        }
+        n = cvaudio_stream_convert(&resampler, out, remaining,
+                                   audio_rate, generate_audio, I);
     }
-    ++I->stats.buffers_rendered;
+    cvvid_rdtsc(&end_lo, &end_hi);
+    cycles = end_lo - start_lo;
+    I->audio_timing.last_render_cycles = cycles;
+    if (cycles > I->audio_timing.max_render_cycles) I->audio_timing.max_render_cycles = cycles;
+    old = I->audio_timing.total_render_lo;
+    I->audio_timing.total_render_lo += cycles;
+    I->audio_timing.total_render_hi += end_hi - start_hi - (end_lo < start_lo);
+    I->audio_timing.total_render_hi += I->audio_timing.total_render_lo < old;
+    I->audio_timing.output_frames += n;
+    render_offset += n;
+    if (render_offset == CVDEV_AUDIO_FRAMES) {
+        render_offset = 0;
+        ++I->stats.buffers_rendered;
+        ++I->audio_timing.buffers_rendered;
+        I = current;
+        return 1;
+    }
     I = current;
+    return 0;
+}
+
+static uint32_t elapsed_us(uint32_t lo, uint32_t hi, uint32_t old_lo, uint32_t old_hi)
+{
+    if (!I->tsc_per_us) return 0;
+    if (hi - old_hi > 1u || (hi - old_hi == 1u && lo >= old_lo)) return 0xffffffffu;
+    return (lo - old_lo) / I->tsc_per_us;
+}
+
+static int audio_waiting(uint32_t queued, uint32_t lo, uint32_t hi)
+{
+    cvgp_sb_state *sb = &I->devices.sb;
+    uint32_t waited;
+    if (!I->audio_waiting) return 0;
+    ++I->audio_timing.wait_polls;
+    if (!sb->irq_status) {
+        /* The acknowledgement IN can be the first instruction of the guest
+         * handler. Return once more so the rest of that handler can run. */
+        if (I->audio_waiting == 1u) { I->audio_waiting = 2; return 1; }
+        I->audio_waiting = 0;
+        return 0;
+    }
+    waited = elapsed_us(lo, hi, I->audio_wait_lo, I->audio_wait_hi);
+    /* Real auto-init DMA continues when its application masks interrupts.
+     * Bound the refill wait by its configured period and the actual queue. */
+    if (!sb->active || queued <= 1u || waited >= I->audio_wait_period_us) {
+        ++I->audio_timing.late_acks;
+        I->audio_waiting = 0;
+        return 0;
+    }
+    return 1;
 }
 
 static void audio_service(void)
 {
-    uint32_t civ, status, queued, halted;
+    uint32_t civ, status, queued, halted, lo, hi, gap;
     struct cvdev_instance *current = I;
     if (!audio_running) return;
     I = A ? A : &instance_none;              /* the stream's report fields */
+    cvvid_rdtsc(&lo, &hi);
+    ++I->audio_timing.services;
+    gap = elapsed_us(lo, hi, I->audio_service_lo, I->audio_service_hi);
+    I->audio_service_lo = lo; I->audio_service_hi = hi;
+    I->audio_timing.last_gap_us = gap;
+    if (gap > I->audio_timing.max_gap_us) I->audio_timing.max_gap_us = gap;
     civ = cvdev_in(nabm + 0x14, 1) & 31u;
     status = cvdev_in(nabm + 0x16, 2);
     halted = status & 1u;
@@ -327,15 +426,24 @@ static void audio_service(void)
     I->stats.reserved[2] = (next_fill - civ) & 31u;
     if (halted) {
         ++I->stats.underruns;
+        ++I->audio_timing.dma_halts;
         next_fill = (civ + 1u) & 31u;
+        render_offset = 0;
     }
+    if (status & 0x10u) ++I->audio_timing.fifo_errors;
     queued = (next_fill - civ) & 31u;
+    if (audio_waiting(queued, lo, hi)) goto serviced;
     while (queued < CVDEV_AUDIO_LEAD) {
-        render_buffer(next_fill);
-        cvdev_out(nabm + 0x15, next_fill, 1);
-        next_fill = (next_fill + 1u) & 31u;
-        ++queued;
+        if (render_buffer(next_fill)) {
+            cvdev_out(nabm + 0x15, next_fill, 1);
+            next_fill = (next_fill + 1u) & 31u;
+            ++queued;
+        } else break;
+        if (I->audio_waiting) break;
     }
+serviced:
+    I->audio_timing.queued = queued;
+    I->audio_timing.partial_frames = render_offset;
     cvdev_out(nabm + 0x16, 0x1c, 2);                /* clear LVBCI/BCIS/FIFOE */
     if (halted) cvdev_out(nabm + 0x1b, 1, 1);
     I = current;
@@ -345,23 +453,16 @@ static uint32_t audio_start(const cvdev_pages *pages)
 {
     uint32_t i;
     if (!ac97_find()) return CVDEV_AUDIO_NO_DEVICE;
-    saved_master = (uint16_t)cvdev_in(nam + 0x02, 2);
-    saved_pcm = (uint16_t)cvdev_in(nam + 0x18, 2);
-    saved_ext = (uint16_t)cvdev_in(nam + 0x2a, 2);
-    saved_rate = (uint16_t)cvdev_in(nam + 0x2c, 2);
     saved_bdbar = cvdev_in(nabm + 0x10, 4);
     saved_lvi = (uint8_t)cvdev_in(nabm + 0x15, 1);
     ac97_reset_output();
-    audio_rate = 48000u;
-    if (cvdev_in(nam + 0x28, 2) & 1u) {               /* variable rate audio */
-        cvdev_out(nam + 0x2a, saved_ext | 1u, 2);
-        cvdev_out(nam + 0x2c, AUDIO_RATE, 2);
-        audio_rate = cvdev_in(nam + 0x2c, 2);
-        if (audio_rate < 8000u || audio_rate > 48000u) audio_rate = 48000u;
+    if (!cvaudio_codec_prepare(&codec, nam, nabm, codec_in, codec_out, 0, &audio_rate)) {
+        I->stats.last_error = 0xa000u | codec.error;
+        I->stats.last_port = codec.last_port;
+        return CVDEV_AUDIO_NO_RATE;
     }
+    cvaudio_stream_reset(&resampler);
     I->stats.rate = audio_rate;
-    cvdev_out(nam + 0x02, 0x0000, 2);
-    cvdev_out(nam + 0x18, 0x0808, 2);
     bdl = (uint32_t *)pages->linear[0];
     for (i = 0; i != CVDEV_AUDIO_BUFFERS; ++i) {
         buffer_linear[i] = pages->linear[i + 1];
@@ -370,9 +471,11 @@ static uint32_t audio_start(const cvdev_pages *pages)
     }
     cvdev_out(nabm + 0x10, pages->physical[0], 4);
     next_fill = 0;
+    render_offset = 0;
+    cvvid_rdtsc(&I->audio_service_lo, &I->audio_service_hi);
     audio_running = 1;
     for (i = 0; i != CVDEV_AUDIO_LEAD; ++i) {
-        render_buffer(next_fill);
+        (void)render_buffer(next_fill); /* DSP is reset and inactive at DEV_BEGIN. */
         cvdev_out(nabm + 0x15, next_fill, 1);
         next_fill = (next_fill + 1u) & 31u;
     }
@@ -387,10 +490,11 @@ static void audio_stop(void)
     ac97_reset_output();
     cvdev_out(nabm + 0x10, saved_bdbar, 4);
     cvdev_out(nabm + 0x15, saved_lvi, 1);
-    cvdev_out(nam + 0x2a, saved_ext, 2);
-    cvdev_out(nam + 0x2c, saved_rate, 2);
-    cvdev_out(nam + 0x18, saved_pcm, 2);
-    cvdev_out(nam + 0x02, saved_master, 2);
+    if (!cvaudio_codec_restore(&codec)) {
+        I->stats.last_error = 0xa000u | codec.error;
+        I->stats.last_port = codec.last_port;
+    }
+    cvaudio_stream_reset(&resampler);
 }
 
 /* ---- Ports ---- */
@@ -502,7 +606,7 @@ static void write_byte(uint32_t port, uint8_t value)
         cvdev_out(port, value, 1);
         return;
     }
-    if (port == I->devices.sb.base + 0x0c && !I->devices.sb.argument_need)
+    if (port == I->devices.sb.base + 0x0cu && !I->devices.sb.argument_need)
         ++I->stats.dsp_commands;
     if (cvgp_io_write(&I->devices, I->generation, (uint16_t)port, 1, 0, value) != CVGP_IO_OK) {
         ++I->stats.unclaimed_io;
@@ -551,6 +655,8 @@ int cvdev_begin(uint32_t owner, uint32_t requested, uint32_t flags,
     if (!owner || !requested || (requested & ~available) || tsc_khz < 1000u)
         return CVDEV_ERR_ARGUMENT;
     zero(&I->stats, sizeof(I->stats));
+    zero(&I->audio_timing, sizeof(I->audio_timing));
+    I->audio_waiting = 0;
     I->stats.magic = 0x56445643UL;
     I->stats.version = 0x0100;
     I->stats.bytes = (uint16_t)sizeof(I->stats);
@@ -575,6 +681,7 @@ int cvdev_begin(uint32_t owner, uint32_t requested, uint32_t flags,
     I->tsc_per_us = tsc_khz / 1000u;
     I->pit_fraction = 0;
     cvvid_rdtsc(&I->last_low, &I->last_high);
+    I->audio_service_lo = I->last_low; I->audio_service_hi = I->last_high;
     build_trap_list();
     I->active = 1;
     /* One AC'97 stream for all sessions: the newest one that wants it plays
@@ -582,6 +689,7 @@ int cvdev_begin(uint32_t owner, uint32_t requested, uint32_t flags,
     I->wants_audio = (flags & CVDEV_FLAG_AUDIO_OUT) &&
                      (I->caps & (CVGP_CAP_DMA_SB | CVGP_CAP_OPL3)) && pages;
     if (I->wants_audio) {
+        if (A != I) { cvaudio_stream_reset(&resampler); render_offset = 0; }
         A = I;
         *audio = audio_running ? CVDEV_AUDIO_RUNNING : audio_start(pages);
         if (*audio != CVDEV_AUDIO_RUNNING) {
@@ -706,7 +814,7 @@ void cvdev_poll(void)
 void cvdev_audio_poll(void)
 {
     static uint32_t last_lo, last_hi;
-    uint32_t lo, hi, us;
+    uint32_t lo, hi, us, refill = 0;
     struct cvdev_instance *current = I;
     unsigned i;
     if (!audio_running) return;
@@ -728,7 +836,13 @@ void cvdev_audio_poll(void)
     }
     cvvid_rdtsc(&lo, &hi);
     us = A && A->tsc_per_us ? (lo - last_lo) / A->tsc_per_us : 4000u;
-    if (hi - last_hi > 1 || us >= 4000u) {
+    if (A && A->audio_waiting) {
+        if (!A->devices.sb.irq_status) refill = 1;
+        else if (A->tsc_per_us &&
+                 (lo - A->audio_wait_lo) / A->tsc_per_us >= A->audio_wait_period_us)
+            refill = 1;
+    }
+    if (hi - last_hi > 1 || us >= 4000u || refill) {
         last_lo = lo;
         last_hi = hi;
         audio_service();
@@ -752,7 +866,9 @@ uint32_t cvdev_audio_running(void)
 void cvdev_audio_owner(void *instance)
 {
     struct cvdev_instance *wanted = (struct cvdev_instance *)instance;
-    A = wanted && wanted->active && wanted->wants_audio ? wanted : 0;
+    struct cvdev_instance *owner = wanted && wanted->active && wanted->wants_audio ? wanted : 0;
+    if (A != owner) { cvaudio_stream_reset(&resampler); render_offset = 0; }
+    A = owner;
 }
 
 void cvdev_audio_stop(void)
@@ -800,4 +916,27 @@ void cvdev_report_state(cvdev_report *out)
     /* Protected-mode delivery: delivered | held lines << 16 | claimed << 31. */
     I->stats.reserved[3] = cvdev_pm_state();
     *out = I->stats;
+}
+
+void cvdev_report_audio(cvdev_audio_report *out)
+{
+    cvgp_sb_state *sb = &I->devices.sb;
+    cvgp_dma_channel *dma = &I->devices.dma[sb->sample_bits == 16 ? sb->dma16 : sb->dma8];
+    cvdev_audio_report *r = &I->audio_timing;
+    r->magic = 0x54415643UL;                     /* bytes CVAT */
+    r->version = 0x0100;
+    r->bytes = (uint16_t)sizeof(*r);
+    r->generation = I->generation; r->active = I->active;
+    r->dac_rate = audio_rate; r->source_rate = AUDIO_RATE;
+    r->sb_rate = sb->sample_rate; r->sb_block_units = sb->block_units;
+    r->sb_units_left = sb->units_left;
+    r->sb_format = sb->sample_bits | ((uint32_t)sb->stereo << 8) |
+                   ((uint32_t)sb->auto_init << 9) | ((uint32_t)sb->active << 10);
+    r->irq_status = sb->irq_status;
+    r->dma_address = ((uint32_t)dma->page << 16) |
+                     ((uint32_t)dma->current_address << (sb->sample_bits == 16));
+    r->dma_count = (uint32_t)dma->current_count + 1u;
+    r->flags = I->audio_waiting | (audio_running ? 0x100u : 0u) |
+               (A == I ? 0x200u : 0u);
+    *out = *r;
 }

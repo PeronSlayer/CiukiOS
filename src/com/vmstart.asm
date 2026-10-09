@@ -62,7 +62,13 @@ start:
     call detect_hypervisor
     test al,al
     jnz .is_qemu
+    call vm_platform_is_t23
+    test al,al
+    jz .other_physical
     mov si,bare_metal_options
+    jmp .copy_def
+.other_physical:
+    mov si,physical_discovery_options
     jmp .copy_def
 .is_qemu:
     mov si,qemu_options
@@ -107,6 +113,10 @@ start:
     test al,al
     jnz fail
 
+    call vm_memory_report
+    call baseline_ownership
+    mov si,baseline_failed
+    jc fail
     call speak
     call network_owner
     mov si,network_failed
@@ -123,6 +133,51 @@ fail:
     call print
     mov ax,4C01h
     int 21h
+
+; Register while the conventional arena still predates every GUI app heap.
+baseline_ownership:
+    pushad
+    push ds
+    push es
+    mov ax,1684h
+    mov bx,VM_DEVICE_ID
+    xor di,di
+    mov es,di
+    int 2Fh
+    mov ax,es
+    or ax,di
+    jz .error
+    mov [cs:baseline_entry],di
+    mov [cs:baseline_entry+2],es
+    mov ax,1607h
+    mov bx,15h
+    xor cx,cx
+    int 2Fh
+    mov ax,es
+    mov si,[es:bx+6]
+    push ax
+    mov ah,52h
+    int 21h
+    pop dx
+    jc .error
+    mov ax,[es:bx-2]
+    mov bx,dx
+    mov dx,ax
+    mov cx,si
+    mov ax,VM_OP_VMM_IVT_BASELINE
+    call far [cs:baseline_entry]
+    jc .error
+    pop es
+    pop ds
+    popad
+    clc
+    ret
+.error:
+    pop es
+    pop ds
+    popad
+    stc
+    ret
 
 ; Native networking starts before Jemm at boot. Bind its resident IRQ metadata
 ; once CVSESSION exists, before any VM can inherit the packet driver's state.
@@ -223,19 +278,25 @@ print:
     ret
 
 %include "src/com/quiet_console.inc"
+%include "src/com/vm_memory_report.inc"
+%include "src/com/vm_platform_options.inc"
 
 load_word db ' LOAD ',0
 network_mask dw 0
 network_entry dw 0,0
+baseline_entry dw 0,0
+baseline_failed db 'VMSTART: cannot validate baseline interrupt ownership.',13,10,0
 network_ready db 'VMSTART: NIC interrupts owned by the desktop VM.',13,10,0
 network_failed db 'VMSTART: cannot bind the network interrupt owner.',13,10,0
 %ifdef VMSTART_JEMMEX
 qemu_options db 'NOEMS X=A000-CCFF I=CD00-E7FF X=E800-FFFF NOVME',0
-bare_metal_options db 'NOEMS X=A000-CFFF I=D000-DBFF X=DC00-FFFF NOVME',0
+bare_metal_options db 'NOEMS X=A000-CFFF I=D000-DBFF X=DC00-FFFF MAX=4194303 NOVME',0
+physical_discovery_options db 'NOEMS X=A000-CFFF X=DC00-FFFF MAX=4194303 NOVME',0
 jemm_path db '\VM\JEMMEX.EXE',0
 %else
 qemu_options db 'NOEMS NOHI X=A000-CCFF I=CD00-E7FF X=E800-FFFF NODYN MAX=32M MIN=32M NOVME',0
 bare_metal_options db 'NOEMS NOHI X=A000-CFFF I=D000-DBFF X=DC00-FFFF NODYN MAX=32M MIN=32M NOVME',0
+physical_discovery_options db 'NOEMS NOHI X=A000-CFFF X=DC00-FFFF NODYN MAX=32M MIN=32M NOVME',0
 jemm_path db '\VM\JEMM386.EXE',0
 %endif
 
