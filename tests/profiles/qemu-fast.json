@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "qemu-fast",
+  "machine": "pc-i440fx-9.2",
+  "cpu": "pentium3",
+  "accelerator": "kvm",
+  "ram_mib": 256,
+  "ide": "PIIX",
+  "vga": "std",
+  "input": "i8042",
+  "serial": "COM1 file",
+  "serial_base": 1016
+}

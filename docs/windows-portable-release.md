@@ -1,6 +1,11 @@
-# Windows portable release
+# Windows portable release (0.8 line)
 
-`bash scripts/build_full.sh` refreshes
+This bundle belongs to the frozen 0.8 line (branch `legacy-0.8`, last
+release prerelease 0.8.3 build 849). On `main` it is rebuilt only with
+`make legacy-build-full`; a bundle for the new Ciuki VMM image returns when
+that image passes the F1 gate (`docs/design/foundations-transition.md`).
+
+On `legacy-0.8`, `bash scripts/build_full.sh` refreshes
 `build/releases/CiukiOS-0.8.3-Windows-portable.zip` after building the
 canonical FAT16 image. The ZIP contains `Start-CiukiOS.cmd`, `Start-CiukiOS-VGA.cmd`,
 `Start-CiukiOS-VirtIO.cmd`, `CiukiOS.img`, 64-bit Windows QEMU, firmware, DLLs,

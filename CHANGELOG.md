@@ -1,6 +1,48 @@
 # Changelog
 
-## Unreleased — 2026-10-04 integration (browser runtime checks pending)
+## Unreleased — Ciuki VMM foundations, phase F0 (`main`, from 2026-10-09)
+
+The 0.8 line is frozen on branch `legacy-0.8`; prerelease 0.8.3 build 849
+(`868cac9`) is its last release. `main` now builds the new 32-bit kernel.
+Main prereleases are suspended until the F1 gate (`config/release-policy.json`).
+
+- Decide, with a second AI agent's review and the owner's mandate, to move
+  to a 32-bit protected-mode kernel with Windows 95/98-class structure (dev
+  diary 2026-10-09-06); write and cross-review seven design contracts before
+  any code (`docs/design/`).
+- Archive the 0.8 documentation and about 370 obsolete scripts in
+  `legacy/*.zip`; reduce the tree from 121 GB to a few GB; add the
+  `dev_diary/` record and the one-image test architecture.
+- Add the F0 loader (MBR, `CIUKLDR` with fw_cfg test requests, E820
+  normalization, VBE selection, ELF32 loading) and the 512 MiB FAT32 image
+  builder with T1 checks and a build manifest.
+- Add the Ciuki VMM kernel: paging at `0xC0000000`, GDT/TSS/IDT with a
+  double-fault task, PIC with dispatcher-owned EOI, PIT at 1000 Hz, zoned
+  physical allocator, kernel stacks with guard pages, user address spaces,
+  priority scheduler with ring-3 preemption and a starvation boost, lazy
+  FPU switching, six frozen F0 system calls, serial and framebuffer console
+  (Inconsolata, OFL), allocation-free panic, resource registry with
+  read-only PCI inventory, and the ten embedded acceptance probes.
+- Add the test runner (`scripts/test/run.py`): shared lock, capped systemd
+  scopes, qcow2 overlays, QMP, evidence parser, `result.json`; QEMU twin
+  profiles for the T23 and E500; suites `f0-smoke`, `f0-core`, `f0-panic`,
+  `f0-runner`; hardware replay fixtures and a loader reference model.
+- Evidence on QEMU TCG (`docs/validation/2026-10-09-f0/`): all ten kernel
+  probes pass; warm restarts pass after two runner corrections; a QEMU
+  deviation (FLD rounded to the x87 precision control) is documented.
+  Physical T23/E500 runs remain open.
+- Replace the Makefile: `build-full`, `test-host`, `qemu-test-full` and
+  `qemu-run-full` target the new image; the 0.8 scripts stay as
+  `legacy-*` targets until each component is migrated or retired.
+
+## 0.8 line — final state (2026-10-09, branch `legacy-0.8`)
+
+- Commit the T23/E500 hardware work of test images R6–R17 (modular kernel
+  memory layout, VMFORK diagnostics, session disk ATA, Mach64 backend, S3
+  qualification logging); the physical findings are in dev diary
+  2026-10-09-01. Prerelease 0.8.3 build 849 closes the line.
+
+## 0.8.3 post-release integration — 2026-10-04 (browser runtime checks pending)
 
 - Add a bounded CiukWeb pipeline: basic HTML, GET forms and XMS-backed
   PNG/GIF/baseline-JPEG images; a CSS style worker; a BearSSL TLS 1.2 worker;

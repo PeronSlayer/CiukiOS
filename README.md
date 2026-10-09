@@ -2,73 +2,87 @@
 
 # CiukiOS
 
-**A modern Retro OS · pre-Alpha 0.8.3**
-
-CiukiOS is a DOS-based x86 operating system with its own CiukiDOS kernel,
-graphical desktop and independent DOS windows. It is dedicated to **Ciuki**,
-the dog in the boot splash. Its identity uses the owner's
+**A modern Retro OS** — an x86 operating system for late-1990s PCs, dedicated
+to **Ciuki**, the dog in the boot splash. Its identity uses the owner's
 [approved portrait](assets/brand/ciuki-logo.png) and the
-[Tango icon family](assets/icons/README.md).
+[Tango icon family](assets/icons/README.md). Code is [GNU GPLv2](LICENSE).
 
-![CiukiOS 0.8.3 desktop](docs/screenshots/0.8.3/desktop.png)
+## Where the project is (October 2026)
 
-[Releases](docs/windows-portable-release.md) · Current status · [Changelog](CHANGELOG.md) · [Roadmap](Roadmap.md)
+CiukiOS is being rebuilt on new foundations. There are two lines:
 
-## A look inside
+| Line | Branch | What it is | State |
+| --- | --- | --- | --- |
+| **0.8** | [`legacy-0.8`](https://github.com/PeronSlayer/CiukiOS/tree/legacy-0.8) | The DOS-based system shown in the screenshots below: CiukiDOS kernel, graphical desktop, DOS games in windows, CiukWeb browser. | Frozen. Last release: prerelease **0.8.3 build 849** with the [Windows portable bundle](docs/windows-portable-release.md). Only critical fixes. |
+| **Ciuki VMM** | `main` | A new 32-bit protected-mode kernel with Windows 95/98-class structure: native processes with private address spaces, FAT32, DOS programs in virtual machines, NTFS read-only later. | **Phase F0** (kernel foundations). Boots on QEMU and passes its ten acceptance probes; not yet usable as a desktop OS; not yet tested on real PCs. |
 
-| About and startup preference | Display and monitor settings |
+Why the rebuild: the 0.8 line ran a real-mode DOS kernel underneath a
+third-party V86 monitor and a 16-bit desktop, and it was stable on emulators
+but not on the real ThinkPad T23 and Compaq Armada E500 it targets. The
+owner decided to move to a 32-bit kernel that owns the machine, with DOS as
+a guest. The decision, the review by a second AI agent and the seven design
+contracts are recorded in the [development diary](dev_diary/README.md) and
+in [`docs/design/`](docs/README.md).
+
+### Phases
+
+| Phase | Content | Gate (QEMU, T23 and E500) | Status |
+| --- | --- | --- | --- |
+| F0 | Loader, kernel core, memory, scheduler, ring-3 isolation, FPU, syscalls, crash screen, test runner | 11 acceptance probes ([f0-acceptance](docs/design/f0-acceptance.md)) | QEMU: passes. Physical: open. |
+| F1 | Resource registry drivers, PS/2, VBE framebuffer, ATA, VFS with FAT32, safe mode | FAT32 integrity, safe-mode boot, input on both laptops | Not started |
+| F2 | ELF32 native processes, system calls, desktop as a ring-3 process, first ported application | An application crash leaves the desktop running | Not started |
+| F3 | DOS virtual machines (V86) with the CiukiDOS personality, virtual devices, kernel DPMI, DOS/4GW games | Named DOS workload matrix | Not started |
+| F4 | AC97 and ESS audio, DOS-to-VFS bridge, optional S3/ATI acceleration, ATAPI/ISO9660, NTFS read-only | Per-device qualification | Not started |
+
+Releases on `main` resume after F1 ([release policy](config/release-policy.json)).
+
+## The 0.8 line in pictures
+
+Actual Linux QEMU captures of 0.8.3 ([capture details](docs/screenshots/0.8.3/README.md)).
+
+| Desktop | DOS game in its own window |
 | --- | --- |
-| ![About CiukiOS](docs/screenshots/0.8.3/about.png) | ![Display Properties](docs/screenshots/0.8.3/display.png) |
+| ![CiukiOS 0.8.3 desktop](docs/screenshots/0.8.3/desktop.png) | ![Doom in a DOS window](docs/screenshots/0.8.3/doom.png) |
 
-| CiukWeb with HTTPS, CSS and images | Google over HTTPS (TLS 1.2) |
+| CiukWeb over HTTPS | Display and monitor settings |
 | --- | --- |
-| ![CiukWeb with HTTPS, CSS and images](docs/screenshots/0.8.3/web.png) | ![Google over HTTPS](docs/screenshots/0.8.3/google.png) |
+| ![CiukWeb](docs/screenshots/0.8.3/web.png) | ![Display Properties](docs/screenshots/0.8.3/display.png) |
 
-| Pointer scheme settings and preview | Dynamic window titles and CiukNote |
-| --- | --- |
-| ![Pointer schemes in Control Panel](docs/screenshots/0.8.3/mouse-scheme.png) | ![Dynamic window titles](docs/screenshots/0.8.3/window-title.png) |
+The 0.8 line includes Files with long names, CiukNote, CiukPaint, Task
+Manager, Control Panel, DOS windows as separate V86 machines, a VirtIO GPU
+2D presenter, IPv4/DHCP/FTP networking and a bounded HTML/CSS/TLS 1.2/
+JavaScript browser. Its exact limits are in the 0.8.3 documentation on the
+`legacy-0.8` branch and in `legacy/CiukiOS-docs-legacy-2026-10-09.zip`.
 
-| A DOS game in its own window | Clean Desktop |
-| --- | --- |
-| ![Doom in a DOS window](docs/screenshots/0.8.3/doom.png) | ![Desktop workspace](docs/screenshots/0.8.3/desktop.png) |
+## Build and test the new kernel (Linux)
 
-These are actual Linux QEMU captures. [Capture details and validation limits](docs/screenshots/0.8.3/README.md).
+```bash
+make build-full        # kernel build/f0/VMM.ELF + 512 MiB FAT32 image build/f0/ciukios.img
+make test-host         # host unit tests (kernel library, loader statics, runner, fixtures)
+make qemu-test-full    # boot smoke through the test runner (QEMU TCG, pentium3)
+make qemu-run-full     # boot interactively; scripts/run_f0.sh "f0:all run=00000001" runs every probe
+```
 
-## What it includes
+Tools: clang, ld.lld, nasm, mkfs.fat, mtools, qemu-system-i386 and a user
+systemd with a memory controller (every QEMU runs in a capped scope). Details
+and the physical-machine procedure: [Build and run](docs/build-and-run.md).
 
-- **Desktop:** Files with long FAT16 names, CiukNote, CiukPaint, Recycle Bin,
-  Task Manager and Control Panel. Mouse-wheel scrolling, clipped window titles
-  and an About page that opens by default, with separate credits and a saved
-  “Don't show this at startup” preference. Active titles repaint when focus
-  returns to a window.
-- **DOS windows:** separate V86 machines with virtual VGA, input and sound,
-  managed by Jemm, CVSESSION and HDPMI. QEMU runs on the development computer;
-  CiukiOS itself does not run QEMU.
-- **Display:** graphical mode confirmation and rollback, adapter/driver details,
-  monitor EDID when available, and a native VirtIO GPU 2D presenter. ATI Rage
-  128/Radeon R100–R200 and NVIDIA TNT/GeForce through 4 have limited base-display
-  backends; physical cards remain unqualified.
-- **Network:** automatic startup behind a detected packet driver, IPv4/DHCP,
-  FTP and a cooperative HTTP browser with bounded streaming and redirects. Its
-  basic HTML view supports headings, links, tables, GET forms, inline color and
-  bold text. PNG, GIF and baseline JPEG images are decoded into XMS-backed
-  browser storage. A bounded TLS 1.2 worker, CSS subset and mQuickJS-based
-  JavaScript/DOM subset are implemented; end-to-end browser runtime checks are
-  pending. CiukWeb is not a full browser or Internet Explorer equivalent.
-  Adam7 PNG and progressive JPEG are unsupported, and animated GIF displays
-  its first frame.
-- **Development:** native C/OpenWatcom `.APP` modules, DOS/4GW and a TinyGL
-  software library. General Win32 applications are not supported.
+## Documentation map
 
-## Releases and execution
+- [Development diary](dev_diary/README.md) — every essential decision and
+  change, one file each (Italian).
+- [Design contracts](docs/README.md) — foundations transition, boot and
+  memory, execution ABI, VFS and storage, DOS and DPMI, device and firmware
+  ownership, F0 acceptance, test architecture.
+- [Validation records](docs/validation/2026-10-09-f0/README.md) — what was
+  measured, on which image, with which limits.
+- [Changelog](CHANGELOG.md) · [Roadmap](Roadmap.md) · [Support the project](DONATIONS.md)
 
-Pre-packaged releases including the [portable Windows ZIP](docs/windows-portable-release.md) provide standalone emulation with pinned QEMU, offering both failsafe standard VGA and VirtIO-GPU launch modes.
-Dated prereleases are published directly on GitHub Releases.
-VirtIO presentation does not turn DOS Doom's software renderer into an accelerated 3D renderer. Commercial game data is optional local test material and is excluded from releases.
+## Working method
 
-## Project and license
-
-CiukiOS code is [GNU GPLv2](LICENSE). Bundled components retain their own
-notices. The approved Ciuki portrait is a separate project asset, not part
-of Tango's Public Domain artwork. See current milestones
-for evidence and remaining compatibility work. [Support the project](DONATIONS.md).
+The project is developed with two AI agents under the owner's direction:
+Claude Code leads implementation and integration, OpenAI Codex writes
+bounded parts and reviews every substantial change; disagreements are
+recorded and decided by the owner ([AGENTS.md](AGENTS.md)). Nothing is
+claimed without a recorded test, and a QEMU result never qualifies a
+physical PC.

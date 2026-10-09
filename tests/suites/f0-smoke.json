@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "cases": [
+    {
+      "id": "boot",
+      "probe": "boot",
+      "profile": "qemu-fast",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 30,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "boot",
+      "probe": "boot",
+      "profile": "qemu-t23",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 30,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
+    }
+  ]
+}

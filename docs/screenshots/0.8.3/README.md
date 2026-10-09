@@ -1,4 +1,4 @@
-# CiukiOS 0.8.3 screenshots
+# CiukiOS 0.8.3 screenshots (0.8 line, branch `legacy-0.8`)
 
 Actual Linux QEMU/KVM captures from the bounded release runs on 4 October
 2026: 1280×800 desktop, VirtIO GPU 2D with QEMU SDL/OpenGL, one virtual CPU and

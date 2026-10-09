@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "qemu-t23",
+  "machine": "pc-i440fx-9.2",
+  "cpu": "pentium3",
+  "accelerator": "tcg",
+  "ram_mib": 512,
+  "ide": "PIIX",
+  "vga": "std",
+  "input": "i8042",
+  "serial": "COM1 file",
+  "serial_base": 1016,
+  "audio": "AC97",
+  "icount": "shift=1,sleep=on"
+}

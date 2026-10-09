@@ -25,21 +25,23 @@ with extracted Microsoft/Apple artwork or change the approved portrait.
 
 ## Active build profile
 
-The main CiukiOS project now uses the full HDD image and, when relevant, the
-full CD image. Do not build, run, test, or maintain the standalone floppy
-profile as part of ongoing main-branch work. The floppy build scripts were
-archived on 2026-10-09; this decision does not exclude work on the shared CiukiDOS kernel
-source (`src/boot/floppy_stage1.asm`) used by the full image. The owner is
-considering a separate CiukiDOS-only branch, but has not asked to create it.
+Since the F0 switch (2026-10-09) the canonical build on `main` is the Ciuki
+VMM image: `make build-full` builds `build/f0/VMM.ELF` with
+`scripts/build_kernel.py` and the 512 MiB FAT32 image `build/f0/ciukios.img`
+with `scripts/build_image.py` (T1 checks, `build-manifest.json`). Tests go
+through `scripts/test/run.py` (`make qemu-test-full` = `f0-smoke`); see
+`docs/build-and-run.md`. The 0.8 image is built only on branch `legacy-0.8`;
+on `main` its scripts remain as `make legacy-*` targets until each component
+is migrated or retired (`docs/design/foundations-transition.md`). Do not
+build, run or test the floppy profile; the CiukiDOS kernel source
+(`src/boot/floppy_stage1.asm`) stays as the future DOS personality.
 
-The canonical full build also refreshes `build/releases/CiukiOS-0.8.3-Windows-portable.zip`.
-Keep this Windows QEMU bundle current whenever changes affect the full image.
-It uses a pinned portable QEMU and a sanitized copy of the FAT16 image; local
-commercial game payloads must never enter the release. Verify the archive
-contents and integrity, but only the Linux full build/run profile requires a
-runtime QEMU test. Do not claim that the Windows launcher was tested on Windows.
-On this clone, a local `pre-push` hook runs `scripts/push_release.py` for each
-`origin/main` push. Do not bypass that hook. Other clones must run
+The Windows portable bundle (`scripts/package_windows_portable.py`) belongs to
+the 0.8 line until the new image passes F1; it must never contain local
+commercial game payloads, and the Windows launcher is not runtime-tested on
+Windows. On this clone, a local `pre-push` hook runs `scripts/push_release.py`
+for each `origin/main` push (publication is suspended by
+`config/release-policy.json`). Do not bypass that hook. Other clones must run
 `bash scripts/install_release_push_hook.sh`. No GitHub Actions are used.
 
 ## Foundations transition (decided 2026-10-09)
@@ -192,7 +194,13 @@ Follow `docs/design/test-architecture.md`:
 - One QEMU at a time, each under
   `systemd-run --user --scope -p MemoryMax=1500M -p MemorySwapMax=0`; check
   free memory first, no RAM dumps unless a diagnosis needs them, and no
-  `qemu-system` process left running.
+  `qemu-system` process left running. Never rebuild `build/f0/ciukios.img`
+  while a runner suite is using it (overlays back onto it and its hash is
+  part of the evidence), and do not run the host runner tests
+  (`tests/host`) while a suite runs: they share the common lock.
+- QEMU TCG is not a Pentium III: known deviations are recorded in
+  `docs/validation/2026-10-09-f0/README.md` (for example FLD m64 is rounded
+  to the x87 precision-control setting under TCG, not on real hardware).
 - Cheapest tier first: host unit tests, then static image checks, then the
   `make qemu-test-full` boot smoke, then focused QEMU suites, then hardware.
 - A result is evidence only for the image SHA-256 it ran on.

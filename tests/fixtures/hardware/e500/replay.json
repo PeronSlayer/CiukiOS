@@ -1,0 +1,424 @@
+{
+  "schema_version": 1,
+  "machine": "e500",
+  "memory_maps": [
+    {
+      "entries": [
+        {
+          "base": 0,
+          "length": 654336,
+          "type": 1,
+          "ext": 1
+        },
+        {
+          "base": 654336,
+          "length": 1024,
+          "type": 2,
+          "ext": 1
+        },
+        {
+          "base": 983040,
+          "length": 65536,
+          "type": 2,
+          "ext": 1
+        },
+        {
+          "base": 1048576,
+          "length": 267321344,
+          "type": 1,
+          "ext": 1
+        },
+        {
+          "base": 268369920,
+          "length": 14336,
+          "type": 2,
+          "ext": 1
+        },
+        {
+          "base": 268384256,
+          "length": 51200,
+          "type": 4,
+          "ext": 1
+        }
+      ],
+      "conventional_kib": 639,
+      "ebda_segment": 40896,
+      "sources": [
+        {
+          "capture": "physical-logs-20261009-diskseq37-r15",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "5135aaa2ff998cef568c77b842a84d121014fee2ffb2d0425d00e1f8cb67a2b6"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq38-r16",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "5135aaa2ff998cef568c77b842a84d121014fee2ffb2d0425d00e1f8cb67a2b6"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq39-r17",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "5135aaa2ff998cef568c77b842a84d121014fee2ffb2d0425d00e1f8cb67a2b6"
+        }
+      ],
+      "expected": {
+        "normalized": [
+          {
+            "base": 0,
+            "length": 651264,
+            "type": 1,
+            "ext": 1
+          },
+          {
+            "base": 654336,
+            "length": 1024,
+            "type": 2,
+            "ext": 1
+          },
+          {
+            "base": 983040,
+            "length": 65536,
+            "type": 2,
+            "ext": 1
+          },
+          {
+            "base": 1048576,
+            "length": 267321344,
+            "type": 1,
+            "ext": 1
+          },
+          {
+            "base": 268369920,
+            "length": 14336,
+            "type": 2,
+            "ext": 1
+          },
+          {
+            "base": 268384256,
+            "length": 51200,
+            "type": 4,
+            "ext": 1
+          }
+        ],
+        "candidate_pages": 65264
+      }
+    }
+  ],
+  "pci": [
+    {
+      "vendor": 4098,
+      "device": 19533
+    },
+    {
+      "vendor": 4701,
+      "device": 6520,
+      "subsystem_vendor": 3601,
+      "subsystem_device": 45330
+    }
+  ],
+  "video_sets": [
+    {
+      "controller": {
+        "signature": "VESA",
+        "version": 512,
+        "total_memory_64k": 127,
+        "capabilities": 0,
+        "mode_list_far_pointer": 293620458
+      },
+      "modes": [
+        {
+          "mode": 280,
+          "attributes": 187,
+          "planes": 1,
+          "width": 1024,
+          "height": 768,
+          "bpp": 24,
+          "memory_model": 6,
+          "banked_pitch": 3072,
+          "linear_pitch": 0,
+          "physical_base": 1073741824,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "trace": [
+        {
+          "stage": 7,
+          "result": 0,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 1,
+          "internal_status": 0
+        }
+      ],
+      "edid": "invalid",
+      "sources": [
+        {
+          "capture": "physical-logs-20261009-diskseq37-r15",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "9c261163112ab3f1449de201af7c7f3c43fb5dd4c71bd3a29cf1a8810a47edf1"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq37-r15",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "212d8c3a69560525612dd8cd44c394d6d6b1a101ffe154a14bca22b3902016e0"
+        }
+      ],
+      "expected": {
+        "normal": {
+          "mode": 280,
+          "text": false,
+          "rejected": {}
+        },
+        "safe": {
+          "mode": 280,
+          "text": false,
+          "rejected": {}
+        }
+      }
+    },
+    {
+      "controller": {
+        "signature": "VESA",
+        "version": 512,
+        "total_memory_64k": 127,
+        "capabilities": 0,
+        "mode_list_far_pointer": 293620470
+      },
+      "modes": [
+        {
+          "mode": 280,
+          "attributes": 187,
+          "planes": 1,
+          "width": 1024,
+          "height": 768,
+          "bpp": 24,
+          "memory_model": 6,
+          "banked_pitch": 3072,
+          "linear_pitch": 0,
+          "physical_base": 1073741824,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "trace": [
+        {
+          "stage": 7,
+          "result": 0,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 1,
+          "internal_status": 0
+        }
+      ],
+      "edid": "invalid",
+      "sources": [
+        {
+          "capture": "physical-logs-20261009-diskseq38-r16",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "9c261163112ab3f1449de201af7c7f3c43fb5dd4c71bd3a29cf1a8810a47edf1"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq38-r16",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "f693e035a15788a007a3e994d4727d1c42fb4d20f51ce2df2ce0c2a0ebf45836"
+        }
+      ],
+      "expected": {
+        "normal": {
+          "mode": 280,
+          "text": false,
+          "rejected": {}
+        },
+        "safe": {
+          "mode": 280,
+          "text": false,
+          "rejected": {}
+        }
+      }
+    },
+    {
+      "controller": {
+        "signature": "VESA",
+        "version": 512,
+        "total_memory_64k": 127,
+        "capabilities": 0,
+        "mode_list_far_pointer": 320817910
+      },
+      "modes": [
+        {
+          "mode": 280,
+          "attributes": 187,
+          "planes": 1,
+          "width": 1024,
+          "height": 768,
+          "bpp": 24,
+          "memory_model": 6,
+          "banked_pitch": 3072,
+          "linear_pitch": 0,
+          "physical_base": 1073741824,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "trace": [
+        {
+          "stage": 7,
+          "result": 0,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 1,
+          "internal_status": 0
+        }
+      ],
+      "edid": "invalid",
+      "sources": [
+        {
+          "capture": "physical-logs-20261009-diskseq39-r17",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "9c261163112ab3f1449de201af7c7f3c43fb5dd4c71bd3a29cf1a8810a47edf1"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq39-r17",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "8d8fac2ac2b81ac893c94d53866df04399fe7846e1a8f5dd4571f5bfb346891e"
+        }
+      ],
+      "expected": {
+        "normal": {
+          "mode": 280,
+          "text": false,
+          "rejected": {}
+        },
+        "safe": {
+          "mode": 280,
+          "text": false,
+          "rejected": {}
+        }
+      }
+    }
+  ],
+  "pci_bios_ok": true,
+  "active_cfg_sources": [
+    {
+      "capture": "physical-logs-20261009-diskseq37-r15",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "866e0f1d865345ee743a06c9d06435aee5c0e28a38bdbd772e992028f1cab53a"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq38-r16",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "866e0f1d865345ee743a06c9d06435aee5c0e28a38bdbd772e992028f1cab53a"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq39-r17",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "866e0f1d865345ee743a06c9d06435aee5c0e28a38bdbd772e992028f1cab53a"
+    }
+  ],
+  "expected_input_policy": {
+    "policy": 1,
+    "forced": false
+  }
+}

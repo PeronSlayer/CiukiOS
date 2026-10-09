@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "qemu-e500",
+  "machine": "pc-i440fx-9.2",
+  "cpu": "pentium3",
+  "accelerator": "tcg",
+  "ram_mib": 256,
+  "ide": "PIIX",
+  "vga": "std",
+  "input": "i8042",
+  "serial": "COM1 file",
+  "serial_base": 1016,
+  "platform": "e500",
+  "icount": "shift=1,sleep=on"
+}

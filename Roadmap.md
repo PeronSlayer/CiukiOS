@@ -1,98 +1,52 @@
 # CiukiOS roadmap
 
-**Current build: pre-Alpha 0.8.3.** This page tracks the work ahead. The
-project status explains what works now;
-the historical roadmap keeps
-older phase details and debugging notes.
+**Current line: Ciuki VMM foundations, phase F0 on `main`.** The 0.8 line is
+frozen on `legacy-0.8` (last release: prerelease 0.8.3 build 849). The
+binding plan is the decision recorded in
+[dev diary 2026-10-09-06](dev_diary/2026-10-09-06-decisione-fondamenta-32bit.md)
+and the seven contracts in [`docs/design/`](docs/README.md).
 
-## Where the project stands
+## Goal
 
-| Track | State | Next proof needed |
-| --- | --- | --- |
-| Native DOS kernel and desktop | Working in the main FAT16 image. | Broader external-app regression and physical-PC trials. |
-| M4: a VM per DOS window | Complete for the tested QEMU scope; DOOM and two text windows pass. | Fix Wolf4GW's mouse/close defect without regressing other VMs. |
-| M5: protected-mode concurrency | Open. | Multiple demanding DPMI workloads, independent lifecycle and bounded close. |
-| Native desktop apps | Display preview/revert/accept, About preference and Files wheel round-trip passed the final runtime profile. | Broader app regression, then installable third-party module manifest, loader and SDK. |
-| CiukWeb and networking | WebNet HTML/image renderer plus bounded CSS, TLS 1.2 and mQuickJS JavaScript/DOM worker code; target build and host checks pass. | Runtime-qualify HTTPS certificate handling, CSS, scripts and combined pages; broaden adapter/physical-network coverage. This remains a limited browser, not IE-equivalent; Adam7 PNG and progressive JPEG are unsupported, and GIF renders its first frame. |
-| Graphics | VBE desktop, TinyGL software subset and resource-backed VirtIO-GPU 2D presentation; `virtio-gl` uses QEMU host OpenGL. Bounded ATI/NVIDIA IDs are recognized. | Reduce residual frame pacing delays; qualify named free apps and physical adapters/monitors. No guest 3D API is provided. |
-| Windows 95/98 | Registry groundwork and PE detection only. | Free PE probes running through loader and Win32 APIs. |
-| Release and hardware | The final scoped 0.8.3 Linux QEMU/KVM runtime gate passed. Broader regressions and physical-PC qualification remain. | Full bounded regressions, license audit and real-PC evidence. |
+A stable system on real late-1990s laptops (IBM ThinkPad T23, Compaq Armada
+E500) and on QEMU, with Windows 95/98-class structure: a 32-bit kernel that
+owns the machine, native processes with private address spaces, FAT32 (NTFS
+read-only later), DOS programs and games running in virtual machines with
+DPMI provided by the kernel, and a native desktop.
 
-M4's earlier automated 0.8.0 profile passed 26/26 QEMU gates. On the newer
-CiukWeb/TinyGL image, 26/26 gates passed across serial recovery runs after a
-host reboot; this is not one uninterrupted profile invocation. The
-validation record
-keeps the exact historical scope. The final 0.8.3 runtime profile passed:
-DOOM reached 34.78 loops/s and exited with GPU resources released; Files wheel
-input round-tripped by pixel; native CiukWeb completed HTTP 200 and reload;
-32-bit display preview timed out and reverted, 16-bit preview reverted on
-Escape, 640×480 was accepted, About was disabled, and a real reset preserved
-the selected mode and About preference. The final 9.9-second graphics sample
-still had a 30.87 ms 95th-percentile GPU submission interval, a 67.73 ms maximum
-and two gaps above 42 ms, with zero host CPU-quota throttling. These are software
-pipeline intervals, not physical monitor FPS. QEMU runs on the host, not inside
-CiukiOS; wider workloads and physical PCs remain unqualified.
+## Phases and gates
 
-The October 4 integration also changes About to show by default and repairs
-active-title refresh after focus returns, adds the bounded HTML/image renderer,
-and reduces the AC'97 queue from eight 1,024-frame buffers to eight 256-frame
-buffers (~46 ms at 44.1 kHz instead of ~186 ms). Focused Linux QEMU checks now
-cover the About preference across reset and title reactivation; the Doom PCM
-capture showed continued playback without new underruns after its initial
-diagnostic sample. Perceived host-speaker latency remains unqualified, as do
-browser HTTPS/CSS/JS runtime behavior. See the current
-project status.
+A phase is complete only when every item of its gate passes on the image it
+is claimed for, on QEMU **and** on both laptops. A QEMU pass never qualifies
+a physical PC.
 
-## Next milestones
+| Phase | Delivers | Gate | Status (2026-10-09) |
+| --- | --- | --- | --- |
+| **F0** | Loader and image, kernel core (paging, descriptors, PIC/PIT, allocator, scheduler, ring-3 isolation, lazy FPU, syscalls, crash screen), resource registry, test runner | The 11 probes of [f0-acceptance](docs/design/f0-acceptance.md): boot matrix, bootinfo, allocator, protection, isolation, preempt, localfault, syslife, panic, fpu, runner | QEMU: all probes pass ([evidence](docs/validation/2026-10-09-f0/README.md)). T23/E500: not yet run (needs an expendable disk; serial adapter optional). |
+| **F1** | Qualified drivers on the registry: PS/2 (native or firmware-first), VBE LFB, ATA PIO, MBR partitions, VFS with FAT32+LFN (read, then write), FAT12/16, safe mode, boot log on disk | FAT32 read/write integrity and crash tests, safe-mode boot, input on both laptops; **main prereleases resume** with a re-qualified Windows bundle | Not started |
+| **F2** | ELF32 loader, application syscalls, native processes, desktop/compositor as a ring-3 process, first ported application | An application crash leaves the desktop and other processes running | Not started |
+| **F3** | DOS VMs in V86 with the CiukiDOS personality on private FAT16 disks, virtual VGA/input/PIT/PIC/SB16-OPL state, A20/XMS/UMB, kernel DPMI 0.9, EMS, DOS/4GW workloads (DOOM, Wolf3D) | Named DOS workload matrix ("DOS parity") | Not started |
+| **F4** | AC97 (T23) and ESS Maestro-2E (E500) audio with audible SB16/OPL for VMs, DOS-to-VFS bridge for shared volumes, optional S3/Mach64 acceleration, ATAPI and ISO9660, NTFS read-only | Per-device qualification; acceleration stays off where unqualified | Not started |
+| later | Power management (ACPI/APM) with its own decision; Win32 compatibility personality (PE32) on named free programs | — | Not planned in detail |
 
-1. **Reduce residual frame pacing delays.** Investigate the measured long
-   frames without weakening the completed scoped runtime gate. Keep physical
-   ATI/NVIDIA compatibility open.
-2. **Stabilize DOS windows and M5.** Reproduce and fix Wolf4GW input and
-   close. Test multiple protected-mode guests with video, sound, focus and
-   clean exit. Continue Phase 6's external DOS corpus and full-CD matrix;
-   Phase 7 audio compatibility remains open.
-3. **Make native apps installable.** Freeze a C/OpenWatcom `.APP` contract,
-   publish a small SDK and independently built sample, then add a module
-   loader that does not require editing the system build.
-4. **Qualify CiukWeb.** Run bounded HTTPS certificate and page fixtures for
-   HTML, GET forms, CSS, classic JavaScript/DOM operations and XMS-backed
-   PNG/GIF/JPEG rendering, then extend adapter and physical-network coverage
-   beyond the tested QEMU/KVM NE2000 PCI NAT profile. TLS 1.3, IPv6, full CSS,
-   a complete DOM and IE equivalence remain outside the current feature set.
-5. **Approach Win32 in stages.** Run the free `HELLO.EXE` probe with a PE32
-   loader and `KERNEL32`; then run `SETUP.EXE` with file and registry APIs.
-   Add GUI, installer and game APIs only against named tests. Recognition of
-   an EXE is not execution. Compatibility plan.
-6. **Qualify graphics, devices and a release.** Test named free workloads,
-   license and test more drivers, address CD/USB support,
-   migrate old root directories safely, and validate on physical legacy PCs.
+## Next steps
 
-## Phase ledger
+1. **Close F0 on hardware:** write `build/f0/ciukios.img` to an expendable
+   disk, run the boot matrix and the probes on the T23 and E500 with screen
+   evidence (serial capture once an RS-232 adapter is available), and record
+   the results in `docs/validation/` and the diary.
+2. **Start F1** from the contracts: registry-driven device activation, the
+   ATA driver with the no-BIOS-retry rule, FAT32 read path qualified before
+   writes, the safe-mode menu.
+3. Keep the one-image discipline: tests never rebuild or copy the canonical
+   image; one QEMU at a time under a memory cap; latency evidence only with
+   an idle host ([test architecture](docs/design/test-architecture.md)).
 
-| Phase | Current boundary |
-| --- | --- |
-| 0–5 | Foundation, boot, native DOS runtime, DOS graphics, installer MVP, DOOM gameplay and kernel ownership: historical milestones closed within their original scope. |
-| 6 | DOS application compatibility: active; corpus and full-CD matrix incomplete. |
-| 7 | Legacy audio compatibility: groundwork and bounded games pass; broader external-app and real-hardware qualification open. |
-| 8 | Legacy networking: bounded packet/IPv4/FTP and native WebNet DNS/HTTP passed in their recorded QEMU scopes. Basic HTML/images and bounded CSS, TLS 1.2, and JavaScript worker code are implemented; end-to-end browser runtime gates, wider devices and physical networking remain open. |
-| 9 | Windows 3.1 workflow was removed from the current image; Windows 95/98 execution has not begun. |
-| 10 | Build/release discipline: active; the scoped 0.8.3 runtime gate passed, while broader compatibility and physical-PC qualification remain open. |
+## Reuse from the 0.8 line
 
-A phase is complete only when every required scope item has a fresh result
-on the relevant image. A QEMU pass does not qualify a physical PC, and a
-narrow workload pass does not imply general DOS or Windows compatibility.
-
-## Design and evidence
-
-- M4/M5 architecture and
-  current-image QEMU evidence.
-- Native app and software OpenGL plan.
-- 0.8.3 project status for the current implementation/runtime boundary.
-- About startup and focus behavior,
-  AC'97 queue latency, and
-  CiukWeb image decoder design notes.
-- [Build and run guide](docs/build-and-run.md), DOS compatibility matrix
-  and legacy audio plan.
-- Archived detailed roadmap
-  for dates, earlier decisions and closure evidence.
+Device models in `src/vm/` (virtual VGA, guest peripherals, audio mixer,
+OPL), the C applications in `src/apps/`, the LFN logic and CiukiDOS as the
+DOS personality are reused or ported in F2–F4 according to the inventory in
+[foundations-transition](docs/design/foundations-transition.md). Jemm,
+HDPMI, VMFORK and the 16-bit SHELL.COM desktop are retired when their
+replacements pass their gates.

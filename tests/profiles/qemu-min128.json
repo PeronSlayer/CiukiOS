@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "qemu-min128",
+  "machine": "pc-i440fx-9.2",
+  "cpu": "pentium3",
+  "accelerator": "tcg",
+  "ram_mib": 128,
+  "ide": "PIIX",
+  "vga": "std",
+  "input": "i8042",
+  "serial": "COM1 file",
+  "serial_base": 1016,
+  "icount": "shift=1,sleep=on"
+}

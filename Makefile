@@ -1,61 +1,67 @@
-.PHONY: help build-full build-full-cd build-kernel-module fetch-costa fetch-network-stack verify-full-drivers-payload verify-phase5-runtime-ownership test-serial-log-normalize qemu-run-full qemu-run-full-cd qemu-test-full qemu-test-full-cd clean
+.PHONY: help build-full kernel image test-host qemu-test-full qemu-run-full clean \
+        legacy-build-full legacy-build-full-cd legacy-qemu-run-full legacy-qemu-test-full \
+        fetch-costa fetch-network-stack
 
 # Heavy builds run in a capped scope (see AGENTS.md).
-CAP = systemd-run --user --scope -p MemoryMax=3G -p MemorySwapMax=1G --
+CAP = systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=1G --
+KERNEL = build/f0/VMM.ELF
+IMAGE = build/f0/ciukios.img
 
 help:
-	@echo "CiukiOS"
-	@echo "  make build-full          - build the full HDD image and refresh the Windows portable ZIP"
-	@echo "  make build-full-cd       - build the full Live/install CD image"
-	@echo "  make build-kernel-module - rebuild only the recorded CiukiDOS kernel"
-	@echo "  make fetch-costa         - download and verify Costa v1.8.0"
-	@echo "  make fetch-network-stack - download and verify mTCP plus Crynwr packet drivers"
-	@echo "  make verify-full-drivers-payload     - check the image's driver payload"
-	@echo "  make verify-phase5-runtime-ownership - check the loader/kernel boundary of the built image"
-	@echo "  make test-serial-log-normalize       - self-test the serial log normalizer"
-	@echo "  make qemu-run-full       - boot the full image in visual QEMU"
-	@echo "  make qemu-run-full-cd    - boot the Live/install CD in visual QEMU"
-	@echo "  make qemu-test-full      - headless boot smoke test of the built full image"
-	@echo "  make qemu-test-full-cd   - headless smoke test of the built CD image"
-	@echo "  make clean               - remove build outputs (keeps build/external, downloads, tools)"
-	@echo "Test architecture: docs/design/test-architecture.md"
+	@echo "CiukiOS - Ciuki VMM foundations (F0)"
+	@echo "  make build-full      - build the kernel and the canonical FAT32 image ($(IMAGE))"
+	@echo "  make kernel          - build only $(KERNEL)"
+	@echo "  make image           - build only the image from the existing kernel"
+	@echo "  make test-host       - T0 host tests (kernel library, loader statics, runner, fixtures)"
+	@echo "  make qemu-test-full  - T2 boot smoke of the built image through the runner"
+	@echo "  make qemu-run-full   - boot the image interactively (scripts/run_f0.sh [selector])"
+	@echo "  make clean           - remove F0 build outputs and test runs"
+	@echo "Legacy 0.8 image (branch legacy-0.8 is canonical for it): legacy-build-full, legacy-build-full-cd,"
+	@echo "  legacy-qemu-run-full, legacy-qemu-test-full"
+	@echo "Contracts: docs/design/foundations-transition.md, f0-acceptance.md, test-architecture.md"
 
-build-full:
+# The image needs the kernel: keep the order explicit even under make -j.
+build-full: kernel
+	@$(MAKE) --no-print-directory image
+
+kernel:
+	@python3 scripts/build_kernel.py
+
+image:
+	@$(CAP) python3 scripts/build_image.py --kernel $(KERNEL) --out $(IMAGE)
+
+test-host:
+	@bash scripts/test/host_kernel_tests.sh
+	@python3 tests/loader_stub/test_static.py
+	@python3 -m unittest discover -s tests/host
+
+qemu-test-full:
+	@python3 scripts/test/run.py f0-smoke --image $(IMAGE)
+
+qemu-run-full:
+	@bash scripts/run_f0.sh
+
+clean:
+	@rm -rf build/f0 build/test-runs build/host
+	@echo "F0 outputs removed; build/external, build/downloads, build/tools and build/releases kept"
+
+# ---- 0.8 line (kept buildable until its components are migrated or retired;
+# ---- the canonical 0.8 build is branch legacy-0.8) ------------------------
+
+legacy-build-full:
 	@$(CAP) bash scripts/build_full.sh
 
-build-full-cd:
+legacy-build-full-cd:
 	@$(CAP) bash scripts/build_full_cd.sh
 
-build-kernel-module:
-	@python3 scripts/build_kernel_component.py --rebuild build/full/obj/kernel-build-command.json
+legacy-qemu-run-full:
+	@bash scripts/qemu_run_full.sh --no-build
+
+legacy-qemu-test-full:
+	@bash scripts/qemu_run_full.sh --test --no-build
 
 fetch-costa:
 	@bash scripts/fetch_costa.sh
 
 fetch-network-stack:
 	@bash scripts/fetch_network_stack.sh
-
-verify-full-drivers-payload:
-	@bash scripts/verify_full_drivers_payload.sh
-
-verify-phase5-runtime-ownership:
-	@bash scripts/verify_phase5_runtime_ownership.sh --no-build
-
-test-serial-log-normalize:
-	@python3 scripts/serial_log_normalize.py --self-test
-
-qemu-run-full:
-	@bash scripts/qemu_run_full.sh --no-build
-
-qemu-run-full-cd:
-	@bash scripts/qemu_run_full_cd.sh
-
-qemu-test-full:
-	@bash scripts/qemu_run_full.sh --test --no-build
-
-qemu-test-full-cd:
-	@bash scripts/qemu_run_full_cd.sh --test
-
-clean:
-	@rm -rf build/full build/test-runs
-	@echo "build outputs removed; build/external, build/downloads, build/tools and build/releases kept"

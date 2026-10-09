@@ -187,8 +187,11 @@ is implemented, in an update to this contract.
   `TS`, saves the previous owner's state (`FXSAVE` when CPUID reports `FXSR`,
   else `FNSAVE`) into that owner's resident, correctly aligned (16-byte for
   `FXSAVE`) buffer, then restores the new owner's state; on first use it
-  restores a fully initialised state image (all registers, and for FXSR
-  also `MXCSR` and the XMM registers) — `FNINIT` alone is insufficient.
+  restores a fully initialised state image (all x87 registers, and, once
+  `CR4.OSFXSR` is enabled in a later phase, also `MXCSR` and the XMM
+  registers) — `FNINIT` alone is insufficient. In F0 `OSFXSR` stays clear:
+  SSE instructions raise `#UD` in ring 3, so no XMM state exists to
+  preserve, and `FXSAVE` is used only for the x87 part of the image.
   When the owner is destroyed, ownership is dropped without saving.
   `CR0.MP = 1` and `CR0.NE = 1`. From F0, an unmasked x87 exception
   (`#MF`, or `#XM` with SSE) in ring 3 terminates only the faulting process

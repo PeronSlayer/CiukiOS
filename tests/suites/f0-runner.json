@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "host_tests": true,
+  "physical_import_required": true,
+  "cases": [
+    {
+      "id": "runner-real-observation",
+      "probe": "boot",
+      "profile": "qemu-t23",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 30,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
+    }
+  ],
+  "probe": "runner"
+}

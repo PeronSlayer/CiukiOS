@@ -1,0 +1,1212 @@
+{
+  "schema_version": 1,
+  "machine": "t23",
+  "memory_maps": [
+    {
+      "entries": [
+        {
+          "base": 0,
+          "length": 651264,
+          "type": 1,
+          "ext": 1
+        },
+        {
+          "base": 651264,
+          "length": 4096,
+          "type": 2,
+          "ext": 1
+        },
+        {
+          "base": 901120,
+          "length": 147456,
+          "type": 2,
+          "ext": 1
+        },
+        {
+          "base": 1048576,
+          "length": 535166976,
+          "type": 1,
+          "ext": 1
+        },
+        {
+          "base": 536215552,
+          "length": 106496,
+          "type": 3,
+          "ext": 1
+        },
+        {
+          "base": 536322048,
+          "length": 8192,
+          "type": 4,
+          "ext": 1
+        },
+        {
+          "base": 536330240,
+          "length": 16384,
+          "type": 2,
+          "ext": 1
+        },
+        {
+          "base": 536346624,
+          "length": 524288,
+          "type": 2,
+          "ext": 1
+        },
+        {
+          "base": 4286578688,
+          "length": 4194304,
+          "type": 2,
+          "ext": 1
+        },
+        {
+          "base": 4290772992,
+          "length": 4194304,
+          "type": 2,
+          "ext": 1
+        }
+      ],
+      "conventional_kib": 636,
+      "ebda_segment": 40704,
+      "sources": [
+        {
+          "capture": "physical-logs-20261007-204040",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq58",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq59",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq59-recheck",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60-complete",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60-final",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq61",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq62",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq63",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq64",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq65",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq32-r10e",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq33-r11",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq34-r12",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq35-r13",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq36-r14",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq66",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq67",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        },
+        {
+          "capture": "physical-logs-20261007-1844",
+          "file": "SYSTEM/MEMMAP.BIN",
+          "sha256": "43d6a18a663b8322509ffd9d9e816c71b9a513caa802d3ac2bb20e921ba07e58"
+        }
+      ],
+      "expected": {
+        "normalized": [
+          {
+            "base": 0,
+            "length": 651264,
+            "type": 1,
+            "ext": 1
+          },
+          {
+            "base": 651264,
+            "length": 4096,
+            "type": 2,
+            "ext": 1
+          },
+          {
+            "base": 901120,
+            "length": 147456,
+            "type": 2,
+            "ext": 1
+          },
+          {
+            "base": 1048576,
+            "length": 535166976,
+            "type": 1,
+            "ext": 1
+          },
+          {
+            "base": 536215552,
+            "length": 106496,
+            "type": 3,
+            "ext": 1
+          },
+          {
+            "base": 536322048,
+            "length": 8192,
+            "type": 4,
+            "ext": 1
+          },
+          {
+            "base": 536330240,
+            "length": 540672,
+            "type": 2,
+            "ext": 1
+          },
+          {
+            "base": 4286578688,
+            "length": 8388608,
+            "type": 2,
+            "ext": 1
+          }
+        ],
+        "candidate_pages": 130656
+      }
+    }
+  ],
+  "pci": [
+    {
+      "vendor": 21299,
+      "device": 35886
+    },
+    {
+      "vendor": 32902,
+      "device": 9349,
+      "subsystem_vendor": 4116,
+      "subsystem_device": 546
+    }
+  ],
+  "video_sets": [
+    {
+      "controller": {
+        "signature": "VESA",
+        "version": 512,
+        "total_memory_64k": 237,
+        "capabilities": 0,
+        "mode_list_far_pointer": 293620474
+      },
+      "modes": [
+        {
+          "mode": 280,
+          "attributes": 155,
+          "planes": 1,
+          "width": 1024,
+          "height": 768,
+          "bpp": 32,
+          "memory_model": 6,
+          "banked_pitch": 512,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              8,
+              24
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 279,
+          "attributes": 155,
+          "planes": 1,
+          "width": 1024,
+          "height": 768,
+          "bpp": 16,
+          "memory_model": 6,
+          "banked_pitch": 256,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              5,
+              11
+            ],
+            "green": [
+              6,
+              5
+            ],
+            "blue": [
+              5,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 277,
+          "attributes": 155,
+          "planes": 1,
+          "width": 800,
+          "height": 600,
+          "bpp": 32,
+          "memory_model": 6,
+          "banked_pitch": 400,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              8,
+              24
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 276,
+          "attributes": 155,
+          "planes": 1,
+          "width": 800,
+          "height": 600,
+          "bpp": 16,
+          "memory_model": 6,
+          "banked_pitch": 200,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              5,
+              11
+            ],
+            "green": [
+              6,
+              5
+            ],
+            "blue": [
+              5,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 383,
+          "attributes": 155,
+          "planes": 1,
+          "width": 720,
+          "height": 576,
+          "bpp": 32,
+          "memory_model": 6,
+          "banked_pitch": 360,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              8,
+              24
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 382,
+          "attributes": 155,
+          "planes": 1,
+          "width": 720,
+          "height": 576,
+          "bpp": 16,
+          "memory_model": 6,
+          "banked_pitch": 180,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              5,
+              11
+            ],
+            "green": [
+              6,
+              5
+            ],
+            "blue": [
+              5,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 373,
+          "attributes": 155,
+          "planes": 1,
+          "width": 720,
+          "height": 480,
+          "bpp": 32,
+          "memory_model": 6,
+          "banked_pitch": 360,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              8,
+              24
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 371,
+          "attributes": 155,
+          "planes": 1,
+          "width": 720,
+          "height": 480,
+          "bpp": 16,
+          "memory_model": 6,
+          "banked_pitch": 180,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              5,
+              11
+            ],
+            "green": [
+              6,
+              5
+            ],
+            "blue": [
+              5,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 274,
+          "attributes": 155,
+          "planes": 1,
+          "width": 640,
+          "height": 480,
+          "bpp": 32,
+          "memory_model": 6,
+          "banked_pitch": 320,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              8,
+              24
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "mode": 273,
+          "attributes": 155,
+          "planes": 1,
+          "width": 640,
+          "height": 480,
+          "bpp": 16,
+          "memory_model": 6,
+          "banked_pitch": 160,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              5,
+              11
+            ],
+            "green": [
+              6,
+              5
+            ],
+            "blue": [
+              5,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "trace": [
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 1,
+          "internal_status": 4096
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 2,
+          "internal_status": 2048
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 3,
+          "internal_status": 3200
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 4,
+          "internal_status": 1600
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 5,
+          "internal_status": 2880
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 6,
+          "internal_status": 1440
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 7,
+          "internal_status": 2880
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 8,
+          "internal_status": 1440
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 9,
+          "internal_status": 2560
+        },
+        {
+          "stage": 6,
+          "result": 1,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 10,
+          "internal_status": 1280
+        }
+      ],
+      "edid": "absent",
+      "sources": [
+        {
+          "capture": "physical-logs-20261008-diskseq58",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "333daa4d2ccfc94018a5b9d8ea125fe046c7c24834ea49143b4f353f4d8d518b"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq58",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "7d68fc3168f4cb25bf40b632a7a940d4a0c0784e6397baa90d4c3b3dde3e6489"
+        }
+      ],
+      "expected": {
+        "normal": {
+          "mode": 3,
+          "text": true,
+          "rejected": {
+            "280": "scanline",
+            "279": "bpp",
+            "277": "scanline",
+            "276": "bpp",
+            "383": "scanline",
+            "382": "bpp",
+            "373": "scanline",
+            "371": "bpp",
+            "274": "scanline",
+            "273": "bpp"
+          }
+        },
+        "safe": {
+          "mode": 3,
+          "text": true,
+          "rejected": {
+            "280": "scanline",
+            "279": "bpp",
+            "277": "scanline",
+            "276": "bpp",
+            "383": "scanline",
+            "382": "bpp",
+            "373": "scanline",
+            "371": "bpp",
+            "274": "scanline",
+            "273": "bpp"
+          }
+        }
+      }
+    },
+    {
+      "controller": {
+        "signature": "VESA",
+        "version": 512,
+        "total_memory_64k": 237,
+        "capabilities": 0,
+        "mode_list_far_pointer": 293620458
+      },
+      "modes": [
+        {
+          "mode": 280,
+          "attributes": 155,
+          "planes": 1,
+          "width": 1024,
+          "height": 768,
+          "bpp": 32,
+          "memory_model": 6,
+          "banked_pitch": 4096,
+          "linear_pitch": 0,
+          "physical_base": 3892314112,
+          "masks": {
+            "red": [
+              8,
+              16
+            ],
+            "green": [
+              8,
+              8
+            ],
+            "blue": [
+              8,
+              0
+            ],
+            "reserved": [
+              8,
+              24
+            ]
+          },
+          "linear_masks": {
+            "red": [
+              0,
+              0
+            ],
+            "green": [
+              0,
+              0
+            ],
+            "blue": [
+              0,
+              0
+            ],
+            "reserved": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "trace": [
+        {
+          "stage": 7,
+          "result": 0,
+          "query_ax": 79,
+          "lfb_mode": 2,
+          "attempt": 1,
+          "internal_status": 0
+        }
+      ],
+      "edid": "absent",
+      "sources": [
+        {
+          "capture": "physical-logs-20261008-diskseq59",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "b0884d7ae67f2924e7045182bd33dd6a4d72334f1aeb551209f18ccf13388532"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq59",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "8a32cf2f4fd745d14040e09a48fd09ea30c5b0053e06f773327a61999cb7b8cd"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq59-recheck",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "b0884d7ae67f2924e7045182bd33dd6a4d72334f1aeb551209f18ccf13388532"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq59-recheck",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "8a32cf2f4fd745d14040e09a48fd09ea30c5b0053e06f773327a61999cb7b8cd"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "87115c17746ecfb8726220920c683034905b86c218d6ff846b1ee52913be25f0"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "60b80180f9e1e4f367e1e29c5eab0b41b7bb2b86c376e9df3119be44900a87b9"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60-complete",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "87115c17746ecfb8726220920c683034905b86c218d6ff846b1ee52913be25f0"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60-complete",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "60b80180f9e1e4f367e1e29c5eab0b41b7bb2b86c376e9df3119be44900a87b9"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60-final",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "87115c17746ecfb8726220920c683034905b86c218d6ff846b1ee52913be25f0"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq60-final",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "60b80180f9e1e4f367e1e29c5eab0b41b7bb2b86c376e9df3119be44900a87b9"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq62",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "87115c17746ecfb8726220920c683034905b86c218d6ff846b1ee52913be25f0"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq62",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "60b80180f9e1e4f367e1e29c5eab0b41b7bb2b86c376e9df3119be44900a87b9"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq63",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "645ee0c992c806e87098d9375fbb2fa8a5ca3cbad1b2943121adbf65be358e56"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq63",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "ef3f36d2c1f3d10e6b70d4cb03e74f03195d40664f720ac05eaa60c47890d9c2"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq64",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "645ee0c992c806e87098d9375fbb2fa8a5ca3cbad1b2943121adbf65be358e56"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq64",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "ef3f36d2c1f3d10e6b70d4cb03e74f03195d40664f720ac05eaa60c47890d9c2"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq65",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "645ee0c992c806e87098d9375fbb2fa8a5ca3cbad1b2943121adbf65be358e56"
+        },
+        {
+          "capture": "physical-logs-20261008-diskseq65",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "ef3f36d2c1f3d10e6b70d4cb03e74f03195d40664f720ac05eaa60c47890d9c2"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq32-r10e",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "b90c7f774be62ee1f165dee2f63d2c23ea76945fb01eba130fe11e9ed3fbe4a8"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq32-r10e",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "5ee96acf1d766faefb56c5d90a291d44a204140e910d58885606deafeddcf3ad"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq33-r11",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "b90c7f774be62ee1f165dee2f63d2c23ea76945fb01eba130fe11e9ed3fbe4a8"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq33-r11",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "5ee96acf1d766faefb56c5d90a291d44a204140e910d58885606deafeddcf3ad"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq34-r12",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "b90c7f774be62ee1f165dee2f63d2c23ea76945fb01eba130fe11e9ed3fbe4a8"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq34-r12",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "5ee96acf1d766faefb56c5d90a291d44a204140e910d58885606deafeddcf3ad"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq35-r13",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "b90c7f774be62ee1f165dee2f63d2c23ea76945fb01eba130fe11e9ed3fbe4a8"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq35-r13",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "5ee96acf1d766faefb56c5d90a291d44a204140e910d58885606deafeddcf3ad"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq36-r14",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "b90c7f774be62ee1f165dee2f63d2c23ea76945fb01eba130fe11e9ed3fbe4a8"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq36-r14",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "5ee96acf1d766faefb56c5d90a291d44a204140e910d58885606deafeddcf3ad"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq66",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "645ee0c992c806e87098d9375fbb2fa8a5ca3cbad1b2943121adbf65be358e56"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq66",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "ef3f36d2c1f3d10e6b70d4cb03e74f03195d40664f720ac05eaa60c47890d9c2"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq67",
+          "file": "SYSTEM/VIDEO/VBE.TRC",
+          "sha256": "b90c7f774be62ee1f165dee2f63d2c23ea76945fb01eba130fe11e9ed3fbe4a8"
+        },
+        {
+          "capture": "physical-logs-20261009-diskseq67",
+          "file": "SYSTEM/VIDEO/DISPLAY.LOG",
+          "sha256": "5ee96acf1d766faefb56c5d90a291d44a204140e910d58885606deafeddcf3ad"
+        }
+      ],
+      "expected": {
+        "normal": {
+          "mode": 280,
+          "text": false,
+          "rejected": {}
+        },
+        "safe": {
+          "mode": 280,
+          "text": false,
+          "rejected": {}
+        }
+      }
+    }
+  ],
+  "pci_bios_ok": true,
+  "active_cfg_sources": [
+    {
+      "capture": "physical-logs-20261007-204040",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq58",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq59",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq59-recheck",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq60",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq60-complete",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq60-final",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq61",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq62",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq63",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq64",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261008-diskseq65",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq32-r10e",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq33-r11",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq34-r12",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq35-r13",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq36-r14",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq66",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261009-diskseq67",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    },
+    {
+      "capture": "physical-logs-20261007-1844",
+      "file": "DRIVERS/ACTIVE.CFG",
+      "sha256": "488217259eecfed782c11c69d5ce94f04b2b7f35a42bc929e6690362c6bf51b7"
+    }
+  ],
+  "expected_input_policy": {
+    "policy": 0,
+    "forced": false
+  }
+}

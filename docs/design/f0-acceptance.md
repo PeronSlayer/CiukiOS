@@ -264,13 +264,37 @@ TCG is mandatory for evidence: under KVM the host CPU executes instructions
 a Pentium III lacks (for example SSE2) even when CPUID hides them, so such
 defects would pass silently.
 
-**[F0]** The optional selector key `platform=e500` (grammar above) is
-honoured only for a request read from validated QEMU fw_cfg, before any
-i8042 access (`boot-memory.md`, loader step 2); it sets `input_policy = 1`
-without the PCI BIOS detection and sets `ciuki_boot_info.flags` bit 7.
-Physical selection requires successful PCI BIOS calls, ATI `1002:4C4D`, and
-ESS `125D:1978` whose subsystem vendor/device is `0E11:B112`
-(`src/boot/input_platform.inc`); otherwise native-first is selected.
+**[F0]** Evidence profiles (`qemu-t23`, `qemu-e500`, `qemu-min128`) run TCG
+with `-icount shift=1,sleep=on`. Without it the guest's TSC and PIT follow
+host wall-clock time, so interrupt-disabled intervals measured by the
+kernel include host scheduling stalls and TCG translation work (observed on
+2026-10-09: 442 µs with concurrent host load, 976 µs on an idle host, against
+35–66 µs typical, all for the same code). With instruction counting:
+
+- during execution, guest time advances 2 ns per executed instruction
+  (shift 1: a synthetic 500 MIPS machine, not a Pentium III cycle count,
+  and QEMU disclaims cycle accuracy);
+- during `HLT`, `sleep=on` lets virtual time advance to the next timer
+  deadline paced to real time, so guest time does **not** advance only
+  through instructions; busy execution is not guaranteed to track real
+  time (`align=off` is the default), and the runner's host-monotonic
+  deadlines remain a separate limit that can still expire under host load;
+- host stalls during busy execution no longer appear in guest timing: they
+  are hidden, not measured. Synthetic (icount) timing and observed host
+  elapsed time are therefore distinct evidence and MUST be labelled as
+  such in records and validation documents.
+
+Under icount, `budget_violations = 0` and `critical_us ≤ 250` are a
+regression gate in instruction time (about 125,000 instructions for a
+non-halting section), not proof of the physical 250 µs requirement, which
+only the laptops can establish. The probe MUST report `critical_ns` beside
+`critical_us` (a `critical_us` of 0 is truncation below 1 µs, not a zero
+duration) and MUST report a nonzero `tsc_khz` calibration. `qemu-fast`
+(KVM) never uses icount and never produces latency evidence. Physical
+machines measure real time; a stall there is reported as unclassified and
+resolved during qualification.
+([QEMU icount documentation](https://www.qemu.org/docs/master/devel/tcg-icount.html),
+[QEMU invocation, `-icount`](https://www.qemu.org/docs/master/system/invocation.html))
 
 **[F0]** Hardware replay fixtures live in `tests/fixtures/hardware/t23/` and
 `tests/fixtures/hardware/e500/`: raw E820 maps (`MEMMAP.BIN` captures), VBE

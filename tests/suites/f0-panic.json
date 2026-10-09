@@ -1,0 +1,444 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "cases": [
+    {
+      "id": "panic",
+      "probe": "panic",
+      "profile": "qemu-t23",
+      "selector": "f0:panic run={run_id}",
+      "timeout": 45,
+      "expected": {
+        "terminal": "PANIC",
+        "predicates": [
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "expected_eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "expected_cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "expected_error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "storage_calls": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "PANIC"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "storage_delta": {
+                "eq": 0
+              },
+              "allocations": {
+                "eq": 0
+              },
+              "locks": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "uart-absent-qemu-t23",
+      "probe": "panic",
+      "profile": "qemu-t23",
+      "selector": "f0:panic run={run_id}",
+      "timeout": 45,
+      "expected": {
+        "terminal": "PANIC",
+        "predicates": [
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "expected_eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "expected_cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "expected_error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "storage_calls": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "PANIC"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "storage_delta": {
+                "eq": 0
+              },
+              "allocations": {
+                "eq": 0
+              },
+              "locks": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      },
+      "device_exceptions": {
+        "serial": "none"
+      },
+      "evidence_sink": "screen"
+    },
+    {
+      "id": "panic",
+      "probe": "panic",
+      "profile": "qemu-e500",
+      "selector": "f0:panic run={run_id} platform=e500",
+      "timeout": 45,
+      "expected": {
+        "terminal": "PANIC",
+        "predicates": [
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "expected_eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "expected_cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "expected_error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "storage_calls": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "PANIC"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "storage_delta": {
+                "eq": 0
+              },
+              "allocations": {
+                "eq": 0
+              },
+              "locks": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "uart-absent-qemu-e500",
+      "probe": "panic",
+      "profile": "qemu-e500",
+      "selector": "f0:panic run={run_id} platform=e500",
+      "timeout": 45,
+      "expected": {
+        "terminal": "PANIC",
+        "predicates": [
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "expected_eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "expected_cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "expected_error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "storage_calls": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "PANIC"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "storage_delta": {
+                "eq": 0
+              },
+              "allocations": {
+                "eq": 0
+              },
+              "locks": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      },
+      "device_exceptions": {
+        "serial": "none"
+      },
+      "evidence_sink": "screen"
+    },
+    {
+      "id": "panic",
+      "probe": "panic",
+      "profile": "qemu-min128",
+      "selector": "f0:panic run={run_id}",
+      "timeout": 45,
+      "expected": {
+        "terminal": "PANIC",
+        "predicates": [
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "expected_eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "expected_cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "expected_error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "storage_calls": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "PANIC"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "storage_delta": {
+                "eq": 0
+              },
+              "allocations": {
+                "eq": 0
+              },
+              "locks": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "uart-absent-qemu-min128",
+      "probe": "panic",
+      "profile": "qemu-min128",
+      "selector": "f0:panic run={run_id}",
+      "timeout": 45,
+      "expected": {
+        "terminal": "PANIC",
+        "predicates": [
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "expected_eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "expected_cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "expected_error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "storage_calls": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "PANIC"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4286578688
+              },
+              "storage_delta": {
+                "eq": 0
+              },
+              "allocations": {
+                "eq": 0
+              },
+              "locks": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      },
+      "device_exceptions": {
+        "serial": "none"
+      },
+      "evidence_sink": "screen"
+    }
+  ]
+}
