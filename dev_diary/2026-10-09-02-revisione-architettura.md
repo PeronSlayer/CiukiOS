@@ -3,7 +3,7 @@
 - **Data:** 2026-10-09
 - **Tipo:** decisione
 - **Versione/commit:** nessuno (nessun codice modificato)
-- **Stato:** proposta, in attesa della decisione del proprietario
+- **Stato:** superata dalla [decisione del 9 ottobre](2026-10-09-06-decisione-fondamenta-32bit.md) (qualificata dalla [revisione di Codex](2026-10-09-05-revisione-codex-architettura.md))
 
 ## Contesto
 

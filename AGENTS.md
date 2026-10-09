@@ -38,10 +38,29 @@ It uses a pinned portable QEMU and a sanitized copy of the FAT16 image; local
 commercial game payloads must never enter the release. Verify the archive
 contents and integrity, but only the Linux full build/run profile requires a
 runtime QEMU test. Do not claim that the Windows launcher was tested on Windows.
-On this clone, a local `pre-push` hook publishes a dated, numbered GitHub
-prerelease for each clean `origin/main` push using `scripts/push_release.py`.
-Do not bypass that hook for normal main pushes. Other clones must run
+On this clone, a local `pre-push` hook runs `scripts/push_release.py` for each
+`origin/main` push. Do not bypass that hook. Other clones must run
 `bash scripts/install_release_push_hook.sh`. No GitHub Actions are used.
+
+## Foundations transition (decided 2026-10-09)
+
+Claude and Codex decided, on the owner's mandate, to move CiukiOS to a new
+32-bit protected-mode kernel with Windows 95/98-class structure, native
+32-bit processes, FAT32 and later NTFS read-only. The binding record is
+`dev_diary/2026-10-09-06-decisione-fondamenta-32bit.md` (decisions D1–D11
+and the F0 acceptance criteria). In short:
+
+- Branch `legacy-0.8` (at `868cac9`) holds the 0.8 line; prerelease b849 is
+  its preserved release. Only critical fixes go there.
+- `config/release-policy.json` says whether main prereleases are published.
+  It is `suspended` until the new image passes the F1 gate; the hook still
+  runs and still requires a clean tree. Resuming publication needs a
+  re-qualified Windows bundle for the new image.
+- The 0.8 build/boot path on main is replaced atomically by a runnable F0
+  scaffold. Reusable models, applications, tests, assets, licenses and DOS
+  build dependencies stay until each is migrated or retired explicitly.
+- No F0 code before the seven design contracts listed in D11 exist in
+  `docs/design/` and have been reviewed by the other agent.
 
 ## Research before implementation
 
@@ -71,11 +90,49 @@ changing the cap.
 
 ## Working method
 
-For substantial CiukiOS work, use multiple agents on independent, clearly
-bounded tasks when this helps progress. Assign research, focused checks and
-simple tasks to less expensive available models, such as Luna. The main agent
-(Sol) owns the major implementation, integration and final validation. Avoid
-extra agents when the task is too small or cannot be split usefully.
+Owner directive, 2026-10-09: Claude Code and OpenAI Codex work together on
+this repository. Both read this file.
+
+**Roles.** The session the owner is talking to is the lead: it owns the plan,
+integration, commits, pushes and final validation, and reports disagreements
+between the two agents to the owner instead of silently picking one. The other
+agent is the teammate: research, independent reviews and bounded
+implementation tasks. Avoid extra agents when a task is too small or cannot be
+split usefully.
+
+**Codex models (checked 2026-10-09, `~/.codex/models_cache.json`).** Pick the
+cheapest model and effort that fits:
+
+| Model | Use | Effort |
+| --- | --- | --- |
+| `gpt-6-luna` | research, file searches, summaries, simple checks | `low`–`medium` |
+| `gpt-6.1-sol` | reviews of plans and diffs, bounded implementation | `high`–`xhigh` |
+| `gpt-6-astra` | hardest problems: architecture critique, deep debugging | `xhigh`–`max` |
+
+`ultra` only when the owner asks for it. Re-check the cache when models change.
+
+**How Claude calls Codex.** Prefer the CLI, which honours model and effort:
+
+```bash
+codex exec -m gpt-6.1-sol -c model_reasoning_effort=high \
+  --sandbox read-only --ephemeral -o <scratch>/answer.md "<prompt>"
+```
+
+The `codex` MCP bridge (claude-codex-bridge 0.3.1) is fine for quick questions,
+but it cannot set effort (it uses `~/.codex/config.toml`), its model list is
+stale (omit `model`), it times out after 10 minutes, and it resumes one shared
+Codex thread across calls without re-applying the sandbox.
+
+**Writes.** Only one agent writes to the main working tree at a time. A
+teammate implementation runs in its own git worktree
+(`git worktree add ../CiukiOS-wt-<task> -b wt/<task>`), and the lead reviews
+and merges it; remove the worktree and branch afterwards. The teammate never
+commits to `main` or pushes.
+
+**Cross-review.** Before an architecture decision or a substantial change, the
+lead asks the teammate for a plan review; before committing a substantial diff,
+for a code review. Resource rules still apply to both agents: one heavy build
+or QEMU at a time, capped as described above.
 
 ## Development diary
 

@@ -3,7 +3,7 @@
 - **Data:** 2026-10-09
 - **Tipo:** modifica
 - **Versione/commit:** 0.8.3 (stesso commit della pulizia)
-- **Stato:** completato in locale; GitHub in attesa di conferma
+- **Stato:** completato (GitHub: push 868cac9, prerelease b849, tenute b847 e b849, solo `main`)
 
 ## Contesto
 

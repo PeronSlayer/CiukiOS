@@ -69,3 +69,6 @@ Documenti di design, validazione, fonti esterne.
 | [Report log fisici diskseq 39](2026-10-09-01-report-log-fisici-diskseq39.md) | 9 ott | analisi |
 | [Revisione dell'architettura](2026-10-09-02-revisione-architettura.md) | 9 ott | decisione (proposta) |
 | [Pulizia di cartella locale e repository](2026-10-09-03-pulizia-repository.md) | 9 ott | modifica |
+| [Lavoro in simbiosi Claude–Codex](2026-10-09-04-lavoro-in-simbiosi-claude-codex.md) | 9 ott | decisione (processo) |
+| [Revisione di Codex sull'architettura](2026-10-09-05-revisione-codex-architettura.md) | 9 ott | analisi |
+| [Decisione: fondamenta a 32 bit](2026-10-09-06-decisione-fondamenta-32bit.md) | 9 ott | decisione |
