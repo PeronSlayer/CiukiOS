@@ -20,6 +20,12 @@ Ciuki VMM foundation contracts (approved 2026-10-09):
 8. [F1 acceptance](design/f1-acceptance.md) — drivers and disk
 9. [Network foundations (F6)](design/network-foundations.md) — decision record, contract to be written
 
+F2 contracts (revised after cross-review 2026-10-10; lead approval pending):
+
+- [Execution and ABI — F2 extension](design/execution-abi.md#f2-extension-native-abi-version-1) — syscall numbers, binary layouts and process model
+- [POSIX subset, libc and SDK](design/posix-subset.md) — newlib decision, paths, supported interfaces and application gate
+- [F2 acceptance](design/f2-acceptance.md) — native-process, desktop and upstream-application evidence
+
 Validation records: [F0 kernel, loader and runner on QEMU](validation/2026-10-09-f0/README.md),
 [F0 runner implementation](validation/f0-runner.md), [F0 loader](validation/2026-10-09-f0-loader.md).
 
