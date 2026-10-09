@@ -53,3 +53,8 @@ assert len(simd) == 8, simd
 assert not integer, integer
 print("audit classifier fixture: PASS")
 PY
+
+# F1 framebuffer presenter and probe with heap-backed LFB fixtures.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/fbdev_test.c" -o "$out/fbdev_test"
+"$out/fbdev_test"
