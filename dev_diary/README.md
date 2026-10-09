@@ -90,3 +90,4 @@ Documenti di design, validazione, fonti esterne.
 | [Direttive F1 a Codex: servizi del kernel, FAT/VFS, runner](2026-10-10-01-direttive-f1-codex.md) | 10 ott | decisione (processo) |
 | [Revisione del commit 2003adb e direttiva f0-01](2026-10-10-02-revisione-2003adb-e-direttiva-f0-01.md) | 10 ott | analisi e modifica |
 | [F1 e F2 si integrano su main; prova hardware unica](2026-10-10-03-integrazione-f1-f2-su-main.md) | 10 ott | decisione (processo) |
+| [Correzioni F0 integrate; primi moduli F1 su main](2026-10-10-04-f0-corretto-e-primi-moduli-f1.md) | 10 ott | modifica |
