@@ -57,9 +57,13 @@ written when the previous step closes. The F2 native API is a POSIX subset
 (`execution-abi.md`).
 
 A phase is complete only when every item of its gate passes on the image it
-is claimed for (AGENTS.md, test-architecture.md). Later phases MUST NOT start
-integration on `main` while the previous gate is open; research and isolated
-prototypes in worktrees MAY proceed.
+is claimed for (AGENTS.md, test-architecture.md). Owner decision of
+2026-10-10 (dev diary 2026-10-10-03): steps F1 and F2 are integrated on
+`main` as soon as their QEMU evidence passes, without waiting for the F0
+hardware run; the physical qualification (T4) of F0, F1 and F2 is done once,
+on the same image, when F2 closes on QEMU. Until then no step is claimed
+complete, and the QEMU gates of every earlier step must keep passing on each
+integrated image.
 
 ## Reuse inventory
 

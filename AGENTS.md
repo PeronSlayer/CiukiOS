@@ -63,6 +63,10 @@ and the F0 acceptance criteria). In short:
   build dependencies stay until each is migrated or retired explicitly.
 - No F0 code before the seven design contracts listed in D11 exist in
   `docs/design/` and have been reviewed by the other agent.
+- Owner decision 2026-10-10 (dev diary 2026-10-10-03): F1 and F2 land on
+  `main` as their QEMU evidence passes; the hardware qualification of F0,
+  F1 and F2 happens once, on one image, after F2 closes on QEMU. Earlier
+  QEMU gates must keep passing on every integrated image.
 - Scope (owner decision 2026-10-09, dev diary 2026-10-09-10): a modern
   retro gaming OS, not a Windows clone; F0 foundations followed by eight
   steps, F1–F8 (drivers and disk, native programs, DOS, sound and media,
