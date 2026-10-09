@@ -1,0 +1,29 @@
+--- a/newlib/libm/machine/shared_x86/fenv.c
++++ b/newlib/libm/machine/shared_x86/fenv.c
+@@ -51,6 +51,10 @@
+    be *that* WJM!  */
+ static inline bool use_sse(void)
+ {
++#ifdef __CIUKIOS__
++  /* F2 keeps CR4.OSFXSR clear even on SSE-capable processors. */
++  return false;
++#else
+   unsigned int edx, eax;
+ 
+   /* Check for presence of SSE: invoke CPUID #1, check EDX bit 25.  */
+@@ -61,6 +65,7 @@
+     return true;
+ 
+   return false;
++#endif
+ }
+ 
+ /* forward declaration */
+@@ -163,6 +168,7 @@
+   __asm__ volatile ("fnstenv %0\n\
+                      fldenv %0"
+ 		    : "=m" (envp->_fpu) : );
++  envp->_sse_mxcsr = 0;
+   if (use_sse())
+     __asm__ volatile ("stmxcsr %0" : "=m" (envp->_sse_mxcsr) : );
+   return 0;

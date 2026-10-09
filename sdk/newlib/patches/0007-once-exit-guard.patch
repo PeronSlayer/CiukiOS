@@ -1,0 +1,11 @@
+--- a/newlib/libc/stdlib/exit.c
++++ b/newlib/libc/stdlib/exit.c
+@@ -52,6 +52,8 @@
+ void
+ exit (int code)
+ {
++  extern void __ciuki_once_exit_check (void);
++  __ciuki_once_exit_check ();
+ #ifdef _LITE_EXIT
+   /* Refer to comments in __atexit.c for more details of lite exit.  */
+   void __call_exitprocs (int, void *) __attribute__((weak));

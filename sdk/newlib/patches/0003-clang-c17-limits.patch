@@ -1,0 +1,100 @@
+--- a/newlib/libc/stdlib/strtoll.c
++++ b/newlib/libc/stdlib/strtoll.c
+@@ -76,7 +76,7 @@
+ <<strtoll>>, <<strtoll_l>> return the converted value, if any. If no
+ conversion was made, 0 is returned.
+ 
+-<<strtoll>>, <<strtoll_l>> return <<LONG_LONG_MAX>> or <<LONG_LONG_MIN>>
++<<strtoll>>, <<strtoll_l>> return <<LLONG_MAX>> or <<LLONG_MIN>>
+ if the magnitude of the converted value is too large, and sets <<errno>>
+ to <<ERANGE>>.
+ 
+@@ -177,7 +177,7 @@
+ 	 * Set any if any `digits' consumed; make it negative to indicate
+ 	 * overflow.
+ 	 */
+-	cutoff = neg ? -(unsigned long long)LONG_LONG_MIN : LONG_LONG_MAX;
++	cutoff = neg ? -(unsigned long long)LLONG_MIN : LLONG_MAX;
+ 	cutlim = cutoff % (unsigned long long)base;
+ 	cutoff /= (unsigned long long)base;
+ 	for (acc = 0, any = 0;; c = *s++) {
+@@ -200,7 +200,7 @@
+ 		}
+ 	}
+ 	if (any < 0) {
+-		acc = neg ? LONG_LONG_MIN : LONG_LONG_MAX;
++		acc = neg ? LLONG_MIN : LLONG_MAX;
+ 		_REENT_ERRNO(rptr) = ERANGE;
+ 	} else if (neg)
+ 		acc = -acc;
+--- a/newlib/libc/stdlib/strtoull.c
++++ b/newlib/libc/stdlib/strtoull.c
+@@ -73,7 +73,7 @@
+ <<strtoull>>, <<strtoull_l>> return the converted value, if any. If no
+ conversion was made, <<0>> is returned.
+ 
+-<<strtoull>>, <<strtoull_l>> return <<ULONG_LONG_MAX>> if the magnitude
++<<strtoull>>, <<strtoull_l>> return <<ULLONG_MAX>> if the magnitude
+ of the converted value is too large, and sets <<errno>> to <<ERANGE>>.
+ 
+ PORTABILITY
+@@ -153,8 +153,8 @@
+ 	}
+ 	if (base == 0)
+ 		base = c == '0' ? 8 : 10;
+-	cutoff = (unsigned long long)ULONG_LONG_MAX / (unsigned long long)base;
+-	cutlim = (unsigned long long)ULONG_LONG_MAX % (unsigned long long)base;
++	cutoff = (unsigned long long)ULLONG_MAX / (unsigned long long)base;
++	cutlim = (unsigned long long)ULLONG_MAX % (unsigned long long)base;
+ 	for (acc = 0, any = 0;; c = *s++) {
+ 		if (c >= '0' && c <= '9')
+ 			c -= '0';
+@@ -175,7 +175,7 @@
+ 		}
+ 	}
+ 	if (any < 0) {
+-		acc = ULONG_LONG_MAX;
++		acc = ULLONG_MAX;
+ 		_REENT_ERRNO(rptr) = ERANGE;
+ 	} else if (neg)
+ 		acc = -acc;
+--- a/newlib/libc/stdlib/wcstoll.c
++++ b/newlib/libc/stdlib/wcstoll.c
+@@ -75,7 +75,7 @@
+ <<wcstoll>>, <<wcstoll_l>> return the converted value, if any. If no
+ conversion was made, 0 is returned.
+ 
+-<<wcstoll>>, <<wcstoll_l>> return <<LONG_LONG_MAX>> or <<LONG_LONG_MIN>>
++<<wcstoll>>, <<wcstoll_l>> return <<LLONG_MAX>> or <<LLONG_MIN>>
+ if the magnitude of the converted value is too large, and sets <<errno>>
+ to <<ERANGE>>.
+ 
+@@ -176,7 +176,7 @@
+ 	 * Set any if any `digits' consumed; make it negative to indicate
+ 	 * overflow.
+ 	 */
+-	cutoff = neg ? -(unsigned long long)LONG_LONG_MIN : LONG_LONG_MAX;
++	cutoff = neg ? -(unsigned long long)LLONG_MIN : LLONG_MAX;
+ 	cutlim = cutoff % (unsigned long long)base;
+ 	cutoff /= (unsigned long long)base;
+ 	for (acc = 0, any = 0;; c = *s++) {
+@@ -199,7 +199,7 @@
+ 		}
+ 	}
+ 	if (any < 0) {
+-		acc = neg ? LONG_LONG_MIN : LONG_LONG_MAX;
++		acc = neg ? LLONG_MIN : LLONG_MAX;
+ 		_REENT_ERRNO(rptr) = ERANGE;
+ 	} else if (neg)
+ 		acc = -acc;
+--- a/newlib/libc/stdlib/wcstoull.c
++++ b/newlib/libc/stdlib/wcstoull.c
+@@ -133,7 +133,7 @@
+ /* Make up for older non-compliant limits.h.  (This is a C99/POSIX function,
+  * and both require ULLONG_MAX in limits.h.)  */
+ #if !defined(ULLONG_MAX)
+-# define ULLONG_MAX	ULONG_LONG_MAX
++# define ULLONG_MAX	ULLONG_MAX
+ #endif
+ 
+ /*

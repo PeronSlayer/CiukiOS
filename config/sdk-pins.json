@@ -1,0 +1,68 @@
+{
+  "lua": {
+    "source": {
+      "archive": "lua-5.4.8.tar.gz",
+      "sha256": "4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae",
+      "url": "https://www.lua.org/ftp/lua-5.4.8.tar.gz"
+    },
+    "tests": {
+      "archive": "lua-5.4.8-tests.tar.gz",
+      "sha256": "9581d5a7c39ffbf29b8ccde2709083c380f7bbddbd968dcb15712d2f2e33f4e5",
+      "url": "https://www.lua.org/tests/lua-5.4.8-tests.tar.gz"
+    }
+  },
+  "newlib": {
+    "archive": "newlib-4.5.0.20241231.tar.gz",
+    "commit": "5e5e51f1dc56a99eb4648c28e00d73b6ea44a8b0",
+    "commit_source": "https://repo.or.cz/newlib-cygwin.mirror.git",
+    "directory": "newlib-4.5.0.20241231",
+    "patches": {
+      "0001-ciukios-configuration.patch": "eeb6bbcda2321b75e5e20be822a52db89e6d4189cb62adbc6753a8753b4f6033",
+      "0002-clock-header.patch": "db278269c41e335588a11f89f76f0092a001b0bfaea2a3aff77a49fbafadd780",
+      "0003-clang-c17-limits.patch": "2ab9fc8d039d1c37ca53c3438d67a073254e9165009a43362e3252fa65122dc1",
+      "0004-bsd-db-errno.patch": "b43a5fb4e8a30cf6e7b2d9551b089729d58b2a9ee3df79d7d8b1618d131d2619",
+      "0005-reent-wire-records.patch": "a5fe30eff9b4982d83b98a381a88f91485148d25823078efcc359183f5cf456e",
+      "0006-vfscanf-alloca.patch": "07ade98b5b5f6a2e1d0a8fda242b840c984c88c9f3f8e1062bcdc95cdcb06fad",
+      "0007-once-exit-guard.patch": "56902e9920f30eb6272121dbd54fbd34a9ee6ea8b662936f764c6a21875396da",
+      "0008-x87-only-fenv.patch": "317319a42b6006adbeeb6f298e0980c451eaa8e98eb33e7b27ea25aade0c1b9b"
+    },
+    "sha256": "33f12605e0054965996c25c1382b3e463b0af91799001f5bb8c0630f2ec8c852",
+    "source_date_epoch": 1735603200,
+    "tag": "newlib-4.5.0",
+    "url": "https://sourceware.org/pub/newlib/newlib-4.5.0.20241231.tar.gz"
+  },
+  "tools": {
+    "clang": {
+      "sha256": "28a1f30bfbb1c29f079f975043af5b627d4e625ec82d419a64f75e36d799d923",
+      "version": "clang version 23.1.1\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+    },
+    "ld.lld": {
+      "sha256": "c6f5310961879d0fca51441ea0ea9aab3c1bbf59110bbe260d857ca732863f3a",
+      "version": "LLD 23.1.1 (compatible with GNU linkers)"
+    },
+    "llvm-ar": {
+      "sha256": "7b341e84181e02ac0a88a1708622cd2c22ba729239704c2c57e741913b459973",
+      "version": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1\n  Optimized build."
+    },
+    "llvm-objdump": {
+      "sha256": "03aca855da1a31c0d33642292b25b769101a77d5d8639c548fde2afa41a2daee",
+      "version": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1\n  Optimized build.\n\n\n  Registered Targets:\n    aarch64     - AArch64 (little endian)\n    aarch64_32  - AArch64 (little endian ILP32)\n    aarch64_be  - AArch64 (big endian)\n    amdgcn      - legacy name for amdgpu\n    amdgpu      - AMDGPU gfx6+\n    arm         - ARM\n    arm64       - ARM64 (little endian)\n    arm64_32    - ARM64 (little endian ILP32)\n    armeb       - ARM (big endian)\n    avr         - Atmel AVR Microcontroller\n    bpf         - BPF (host endian)\n    bpfeb       - BPF (big endian)\n    bpfel       - BPF (little endian)\n    hexagon     - Hexagon\n    lanai       - Lanai\n    loongarch32 - 32-bit LoongArch\n    loongarch64 - 64-bit LoongArch\n    mips        - MIPS (32-bit big endian)\n    mips64      - MIPS (64-bit big endian)\n    mips64el    - MIPS (64-bit little endian)\n    mipsel      - MIPS (32-bit little endian)\n    msp430      - MSP430 [experimental]\n    nvptx       - NVIDIA PTX 32-bit\n    nvptx64     - NVIDIA PTX 64-bit\n    ppc32       - PowerPC 32\n    ppc32le     - PowerPC 32 LE\n    ppc64       - PowerPC 64\n    ppc64le     - PowerPC 64 LE\n    r600        - AMD GPUs HD2XXX-HD6XXX\n    riscv32     - 32-bit RISC-V\n    riscv32be   - 32-bit big endian RISC-V\n    riscv64     - 64-bit RISC-V\n    riscv64be   - 64-bit big endian RISC-V\n    sparc       - Sparc\n    sparcel     - Sparc LE\n    sparcv9     - Sparc V9\n    spirv       - SPIR-V Logical\n    spirv32     - SPIR-V 32-bit\n    spirv64     - SPIR-V 64-bit\n    systemz     - SystemZ\n    thumb       - Thumb\n    thumbeb     - Thumb (big endian)\n    ve          - VE\n    wasm32      - WebAssembly 32-bit\n    wasm64      - WebAssembly 64-bit\n    x86         - 32-bit X86: Pentium-Pro and above\n    x86-64      - 64-bit X86: EM64T and AMD64\n    xcore       - XCore"
+    },
+    "llvm-ranlib": {
+      "sha256": "7b341e84181e02ac0a88a1708622cd2c22ba729239704c2c57e741913b459973",
+      "version": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1\n  Optimized build."
+    },
+    "llvm-readelf": {
+      "sha256": "57b37dba10700c60a95e3da8cd0b7e6a7984306b85a3245c4d8fbfcc85eac674",
+      "version": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1\n  Optimized build."
+    },
+    "llvm-size": {
+      "sha256": "b4c469fd08b3ba7c364ed3da191e5238ba4777b1548a7bf99e31a34b9f149daf",
+      "version": "/usr/bin/llvm-size\nLLVM (http://llvm.org/):\n  LLVM version 23.1.1\n  Optimized build."
+    },
+    "nasm": {
+      "sha256": "f81db6b9731a8f55737cf4e64f8660b7d3e376cd624517176792434ebe1d0400",
+      "version": "NASM version 3.02 compiled on Jun 30 2026"
+    }
+  }
+}
