@@ -18,6 +18,7 @@ evidence and merges.
 | [f1-03-selector-dispatch-and-rebase](f1-03-selector-dispatch-and-rebase.md) | F1 | gpt-6.1-sol / high | written; starts when f0-01 is on main |
 | [f1-04-i8042-input](f1-04-i8042-input.md) | F1 | gpt-6.1-sol / high | issued 2026-10-10 |
 | [f1-05-framebuffer-device](f1-05-framebuffer-device.md) | F1 | gpt-6.1-sol / high | issued 2026-10-10 |
+| [f2-00-posix-contract](f2-00-posix-contract.md) | F2 | gpt-6-astra / xhigh | issued 2026-10-10 (contract, no code) |
 
 Planned next: ATA PIO and MBR on the frozen `blkdev` (after f1-01 lands);
 boot log on the VFS; serialized V86 BIOS service (E500 firmware-first
