@@ -12,9 +12,16 @@ import threading
 
 if '--version' in sys.argv:
     print('QEMU emulator version 11.0.0 (scripted host fixture)');sys.exit(0)
-scenario=json.loads(Path(os.environ['CIUKI_FAKE_SCRIPT']).read_text())
+scenario_path=Path(os.environ['CIUKI_FAKE_SCRIPT'])
+scenario=json.loads(scenario_path.read_text())
+if scenario.get('boot_records'):
+    counter=scenario_path.with_suffix('.count')
+    boot=int(counter.read_text()) if counter.exists() else 0
+    counter.write_text(str(boot+1))
+    scenario['records']=scenario['boot_records'][boot]
 selector=sys.argv[sys.argv.index('-fw_cfg')+1].split('string=',1)[1]
 run_id=selector.split('run=')[1][:8];probe=selector.split(':')[1].split()[0]
+Path('fake-arguments.json').write_text(json.dumps(sys.argv[1:]))
 commands=open('commands.fifo','rb',buffering=0)
 responses=open('responses.fifo','wb',buffering=0)
 class Connection:
@@ -29,10 +36,10 @@ if scenario.get('child'):
 serial=None
 seq=0
 
-def emit():
+def emit(items=None):
     global serial,seq
     if serial is None:serial=open('serial.fifo','wb',buffering=0)
-    for item in scenario.get('records',[]):
+    for item in (scenario.get('records',[]) if items is None else items):
         seq+=1
         if isinstance(item,str):line=item.replace('{run_id}',run_id).replace('{probe}',probe)
         else:
@@ -44,9 +51,11 @@ def emit():
 stream=conn.makefile('rb');started=False
 for raw in stream:
     request=json.loads(raw);cmd=request['execute'];reply={}
+    with Path('fake-qmp.jsonl').open('a') as log:log.write(json.dumps(request)+'\n')
     if cmd=='query-status':reply={'status':'running','running':True}
     elif cmd=='query-blockstats':reply=[{'device':'ide0','stats':{'wr_bytes':scenario.get('writes',0) if started else 0,'wr_operations':0,'flush_operations':0}}]
     elif cmd=='quit' and not scenario.get('ignore_quit'):
+        Path('fake-stopped').touch()
         conn.sendall(json.dumps({'return':{},'id':request['id']}).encode()+b'\n');break
     elif cmd=='screendump':Path(request['arguments']['filename']).write_bytes(b'P6\n1 1\n255\n\x00\x00\x00')
     conn.sendall(json.dumps({'return':reply,'id':request['id']}).encode()+b'\n')
@@ -58,6 +67,10 @@ for raw in stream:
         started=True
         if scenario.get('flood'):threading.Thread(target=emit,daemon=True).start()
         else:emit()
+    if cmd=='input-send-event':
+        count=scenario.setdefault('received_input',0)+1;scenario['received_input']=count
+        if count==scenario.get('finish_after_input'):emit(scenario.get('after_input',[]))
+    if cmd=='quit':Path('fake-stopped').touch()
     if scenario.get('reset') and cmd=='query-status':conn.sendall(('{"timestamp":{"seconds":%d,"microseconds":0},"event":"RESET","data":{"guest":true,"reason":"guest-reset"}}\n'%int(time.time())).encode())
 if scenario.get('child'):
     try:child.wait(timeout=.1)

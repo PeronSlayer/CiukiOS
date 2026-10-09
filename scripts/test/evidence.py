@@ -1,4 +1,4 @@
-"""Strict raw F0 evidence parser and declarative DATA predicates."""
+"""Strict raw F0/F1 evidence parser and declarative DATA predicates."""
 import re
 from loader_model import PROBES
 
@@ -62,14 +62,17 @@ class Parser:
         self.records.append(record)
 
     def check(self, expected):
-        if not self.terminal or self.terminal['event'] != expected['terminal']:
+        if expected['terminal']=='ARM':
+            if len([r for r in self.records if r['event']=='ARM'])!=1:
+                raise EvidenceError('cut requires exactly one ARM record')
+        elif not self.terminal or self.terminal['event'] != expected['terminal']:
             raise EvidenceError('missing or unexpected terminal event')
         if expected['terminal'] == 'END' and self.terminal['status'] != 'PASS':
             raise EvidenceError('kernel reported FAIL')
         for predicate in expected.get('predicates', []):
             matches = [r for r in self.records if all(r.get(k)==str(v) for k,v in predicate.get('where',{}).items())]
             minimum = predicate.get('count', 1)
-            if len(matches) < minimum:
+            if len(matches) < minimum or ('exact_count' in predicate and len(matches)!=predicate['exact_count']):
                 raise EvidenceError('missing evidence: '+str(predicate))
             unique=predicate.get('unique')
             if unique and len({r.get(unique) for r in matches})!=len(matches):
@@ -86,6 +89,8 @@ class Parser:
             # Every matching record must meet its predicate: a later good value
             # must not conceal an earlier violation.
             for r in matches:
+                for field in predicate.get('required_fields',[]):
+                    if field not in r:raise EvidenceError('missing field: '+field)
                 for field, rule in predicate.get('fields',{}).items():
                     if field not in r:
                         raise EvidenceError('missing field: '+field)

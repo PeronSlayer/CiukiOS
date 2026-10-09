@@ -1,0 +1,1375 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "prerequisites": [
+    "f0-smoke",
+    "f0-core",
+    "f0-panic",
+    "f0-runner"
+  ],
+  "cases": [
+    {
+      "id": "fat12-read",
+      "probe": "fat-read",
+      "profile": "qemu-t23",
+      "selector": "f1:fat-read run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fat-read"
+            },
+            "combine": true,
+            "fields": {
+              "fat_type": {
+                "eq": 12
+              },
+              "name_errors": {
+                "eq": 0
+              },
+              "alias_errors": {
+                "eq": 0
+              },
+              "size_errors": {
+                "eq": 0
+              },
+              "hash_errors": {
+                "eq": 0
+              },
+              "write_count": {
+                "eq": 0
+              },
+              "chain_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "valid-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "orphan-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bad-checksum-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boundary-chain"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "invalid-name"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "fat_type": 12,
+          "seed": 1,
+          "generator": "mkfs.fat",
+          "independent_names_and_hashes_required": true
+        }
+      ]
+    },
+    {
+      "id": "fat16-read",
+      "probe": "fat-read",
+      "profile": "qemu-t23",
+      "selector": "f1:fat-read run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fat-read"
+            },
+            "combine": true,
+            "fields": {
+              "fat_type": {
+                "eq": 16
+              },
+              "name_errors": {
+                "eq": 0
+              },
+              "alias_errors": {
+                "eq": 0
+              },
+              "size_errors": {
+                "eq": 0
+              },
+              "hash_errors": {
+                "eq": 0
+              },
+              "write_count": {
+                "eq": 0
+              },
+              "chain_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "valid-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "orphan-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bad-checksum-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boundary-chain"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "invalid-name"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "fat_type": 16,
+          "seed": 1,
+          "generator": "mkfs.fat",
+          "independent_names_and_hashes_required": true
+        }
+      ]
+    },
+    {
+      "id": "fat32-read",
+      "probe": "fat-read",
+      "profile": "qemu-t23",
+      "selector": "f1:fat-read run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fat-read"
+            },
+            "combine": true,
+            "fields": {
+              "fat_type": {
+                "eq": 32
+              },
+              "name_errors": {
+                "eq": 0
+              },
+              "alias_errors": {
+                "eq": 0
+              },
+              "size_errors": {
+                "eq": 0
+              },
+              "hash_errors": {
+                "eq": 0
+              },
+              "write_count": {
+                "eq": 0
+              },
+              "chain_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "valid-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "orphan-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bad-checksum-lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boundary-chain"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "invalid-name"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "fat_type": 32,
+          "seed": 1,
+          "generator": "mkfs.fat",
+          "independent_names_and_hashes_required": true
+        }
+      ]
+    },
+    {
+      "id": "cache",
+      "probe": "cache",
+      "profile": "qemu-t23",
+      "selector": "f1:cache run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "cache"
+            },
+            "combine": true,
+            "fields": {
+              "order_errors": {
+                "eq": 0
+              },
+              "writeback_ms": {
+                "le": 5000
+              },
+              "eviction_errors": {
+                "eq": 0
+              },
+              "coherence_errors": {
+                "eq": 0
+              },
+              "barrier_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "cache-unsupported-flush",
+      "probe": "cache",
+      "profile": "qemu-t23",
+      "selector": "f1:cache run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "cache"
+            },
+            "combine": true,
+            "fields": {
+              "error_observable": {
+                "eq": 1
+              },
+              "clean_marked": {
+                "eq": 0
+              },
+              "successful_unmount": {
+                "eq": 0
+              },
+              "read_only": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "cache-delayed-error",
+      "probe": "cache",
+      "profile": "qemu-t23",
+      "selector": "f1:cache run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "cache"
+            },
+            "combine": true,
+            "fields": {
+              "error_observable": {
+                "eq": 1
+              },
+              "clean_marked": {
+                "eq": 0
+              },
+              "successful_unmount": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fault": {
+        "layer": "host-block-backend",
+        "event": "write_aio",
+        "errno": 5
+      }
+    },
+    {
+      "id": "cache-flush-error",
+      "probe": "cache",
+      "profile": "qemu-t23",
+      "selector": "f1:cache run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "cache"
+            },
+            "combine": true,
+            "fields": {
+              "error_observable": {
+                "eq": 1
+              },
+              "clean_marked": {
+                "eq": 0
+              },
+              "successful_unmount": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fault": {
+        "layer": "host-block-backend",
+        "event": "flush_to_disk",
+        "errno": 5
+      }
+    },
+    {
+      "id": "fat-write",
+      "probe": "fat-write",
+      "profile": "qemu-t23",
+      "selector": "f1:fat-write run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fat-write"
+            },
+            "combine": true,
+            "fields": {
+              "operation_errors": {
+                "eq": 0
+              },
+              "hash_errors": {
+                "eq": 0
+              },
+              "directory_grown": {
+                "eq": 1
+              },
+              "alias_errors": {
+                "eq": 0
+              },
+              "durable_unmount": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "checks": {
+        "offset": 1048576,
+        "size": 535822336,
+        "fsck_exit_codes": [
+          0
+        ],
+        "listing_contains": [
+          "EMPTY",
+          "CLUSTER",
+          "LARGE",
+          "4194304"
+        ]
+      },
+      "fixtures": [
+        {
+          "seed": 1,
+          "sizes": [
+            0,
+            "cluster",
+            4194304
+          ],
+          "operations": [
+            "create",
+            "read",
+            "overwrite",
+            "truncate",
+            "rename",
+            "delete"
+          ],
+          "directory_clusters": 2
+        }
+      ],
+      "boots": [
+        {
+          "boot_kind": "cold"
+        },
+        {
+          "boot_kind": "cold",
+          "patches": [],
+          "actions": [],
+          "expected": {
+            "terminal": "END",
+            "predicates": [
+              {
+                "where": {
+                  "event": "DATA",
+                  "group": "fat-write"
+                },
+                "combine": true,
+                "fields": {
+                  "cold_reopen": {
+                    "eq": 1
+                  },
+                  "hash_errors": {
+                    "eq": 0
+                  }
+                }
+              },
+              {
+                "where": {
+                  "event": "DATA",
+                  "group": "metadata"
+                },
+                "combine": true,
+                "required_fields": [
+                  "subcase",
+                  "owner",
+                  "generation",
+                  "errors",
+                  "gate",
+                  "timing_domain"
+                ],
+                "fields": {
+                  "generation": {
+                    "ge": 1
+                  },
+                  "errors": {
+                    "ge": 0
+                  },
+                  "timing_domain": "icount"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "mount-bad-bpb",
+      "probe": "mount-crash",
+      "profile": "qemu-t23",
+      "selector": "f1:mount-crash run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mount-crash"
+            },
+            "combine": true,
+            "fields": {
+              "write_refusals": {
+                "ge": 1
+              },
+              "unexpected_writes": {
+                "eq": 0
+              },
+              "scan_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "injection": "postboot-driver-boundary",
+          "subcase": "bad-bpb"
+        }
+      ]
+    },
+    {
+      "id": "mount-dirty",
+      "probe": "mount-crash",
+      "profile": "qemu-t23",
+      "selector": "f1:mount-crash run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mount-crash"
+            },
+            "combine": true,
+            "fields": {
+              "write_refusals": {
+                "ge": 1
+              },
+              "unexpected_writes": {
+                "eq": 0
+              },
+              "scan_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "injection": "postboot-driver-boundary",
+          "subcase": "dirty"
+        }
+      ]
+    },
+    {
+      "id": "mount-error-flag",
+      "probe": "mount-crash",
+      "profile": "qemu-t23",
+      "selector": "f1:mount-crash run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mount-crash"
+            },
+            "combine": true,
+            "fields": {
+              "write_refusals": {
+                "ge": 1
+              },
+              "unexpected_writes": {
+                "eq": 0
+              },
+              "scan_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "injection": "postboot-driver-boundary",
+          "subcase": "error-flag"
+        }
+      ]
+    },
+    {
+      "id": "mount-fat-divergence",
+      "probe": "mount-crash",
+      "profile": "qemu-t23",
+      "selector": "f1:mount-crash run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mount-crash"
+            },
+            "combine": true,
+            "fields": {
+              "write_refusals": {
+                "ge": 1
+              },
+              "unexpected_writes": {
+                "eq": 0
+              },
+              "scan_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "injection": "postboot-driver-boundary",
+          "subcase": "fat-divergence"
+        }
+      ]
+    },
+    {
+      "id": "mount-chain-corruption",
+      "probe": "mount-crash",
+      "profile": "qemu-t23",
+      "selector": "f1:mount-crash run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mount-crash"
+            },
+            "combine": true,
+            "fields": {
+              "write_refusals": {
+                "ge": 1
+              },
+              "unexpected_writes": {
+                "eq": 0
+              },
+              "scan_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "injection": "postboot-driver-boundary",
+          "subcase": "chain-corruption"
+        }
+      ]
+    },
+    {
+      "id": "mount-torn-sector",
+      "probe": "mount-crash",
+      "profile": "qemu-t23",
+      "selector": "f1:mount-crash run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mount-crash"
+            },
+            "combine": true,
+            "fields": {
+              "write_refusals": {
+                "ge": 1
+              },
+              "unexpected_writes": {
+                "eq": 0
+              },
+              "scan_bounded": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "injection": "postboot-driver-boundary",
+          "subcase": "torn-sector"
+        }
+      ]
+    },
+    {
+      "id": "mount-crash-reboot",
+      "probe": "mount-crash",
+      "profile": "qemu-t23",
+      "selector": "f1:mount-crash run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mount-crash"
+            },
+            "combine": true,
+            "fields": {
+              "cross_links": {
+                "eq": 0
+              },
+              "scan_bounded": {
+                "eq": 1
+              },
+              "discrepancies_classified": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "boots": [
+        {
+          "actions": [
+            {
+              "type": "cut",
+              "after": {
+                "event": "ARM",
+                "cut": "directory-publication"
+              },
+              "mode": "guest-termination"
+            }
+          ],
+          "expected": {
+            "terminal": "ARM",
+            "predicates": [
+              {
+                "where": {
+                  "event": "ARM",
+                  "cut": "directory-publication"
+                },
+                "exact_count": 1
+              }
+            ]
+          }
+        },
+        {
+          "boot_kind": "cold",
+          "actions": [],
+          "checks": {
+            "offset": 1048576,
+            "size": 535822336,
+            "listing_path": "::/",
+            "fsck_exit_codes": [
+              0,
+              1
+            ],
+            "interrupted_patterns": [
+              "fsck\\.fat [0-9.]+ \\([0-9-]+\\)",
+              "Reclaiming unconnected clusters\\.",
+              "[0-9]+ unused clusters \\([0-9]+ bytes\\) in [0-9]+ chains\\.",
+              "Free cluster summary wrong \\([0-9]+ vs\\. really [0-9]+\\)",
+              "  Not automatically correcting this\\.",
+              "Leaving filesystem unchanged\\.",
+              ".*/check-volume\\.raw: [0-9]+ files, [0-9]+/[0-9]+ clusters"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bootlog",
+      "probe": "bootlog",
+      "profile": "qemu-t23",
+      "selector": "f1:bootlog run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "bootlog"
+            },
+            "combine": true,
+            "fields": {
+              "prequalification_writes": {
+                "eq": 0
+              },
+              "first_write_after_gate": {
+                "eq": 1
+              },
+              "log_bytes": {
+                "le": 131072
+              },
+              "reopen_errors": {
+                "eq": 0
+              },
+              "durable_flush": {
+                "eq": 1
+              },
+              "panic_storage_calls": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "bootlog-read-only",
+      "probe": "bootlog",
+      "profile": "qemu-t23",
+      "selector": "f1:bootlog run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "bootlog"
+            },
+            "combine": true,
+            "fields": {
+              "write_count": {
+                "eq": 0
+              },
+              "disk_log": "unavailable"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "injection": "driver-boundary",
+          "mount_mode": "read-only"
+        }
+      ]
+    }
+  ]
+}

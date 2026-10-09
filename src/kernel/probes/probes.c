@@ -775,13 +775,30 @@ static bool is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 
 /* f0:<probe-id|all> run=<8-hex> [platform=e500] */
 static bool parse_selector(const char *s, unsigned len, char *probe, unsigned probe_cap, char *run)
 {
-    if (len < 3 || strncmp(s, "f0:", 3) != 0)
+    if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1') || s[2] != ':')
         return false;
+    bool f1 = s[1] == '1';
     unsigned i = 3, k = 0;
     while (i < len && s[i] != ' ' && k + 1 < probe_cap)
         probe[k++] = s[i++];
     probe[k] = 0;
     if (!k || i >= len || s[i] != ' ')
+        return false;
+    static const char *const f0_names[] = {
+        "boot", "bootinfo", "allocator", "protection", "isolation", "preempt",
+        "localfault", "syslife", "panic", "fpu", "runner", "all", "core"
+    };
+    static const char *const f1_names[] = {
+        "registry", "input", "input-fault", "framebuffer", "ata", "ata-fault",
+        "partition", "fat-read", "fat-write", "cache", "mount-crash", "safe", "bootlog", "all", "core"
+    };
+    const char *const *names = f1 ? f1_names : f0_names;
+    unsigned count = f1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
+    bool known = false;
+    for (unsigned n = 0; n < count; n++)
+        if (!strncmp(probe, names[n], probe_cap))
+            known = true;
+    if (!known)
         return false;
     i++;
     if (len - i < 12 || strncmp(s + i, "run=", 4) != 0)
@@ -798,7 +815,29 @@ static bool parse_selector(const char *s, unsigned len, char *probe, unsigned pr
         i += 14;
     if (len - i >= 7 && strncmp(s + i, " safe=1", 7) == 0)
         i += 7;
-    return i == len;
+    if (i != len)
+        return false;
+    if (f1) {
+        /* F1 implementations are installed here by the driver directives.
+         * Keep dispatch local: this directive may only change this parser. */
+        static const struct probe_def f1_probes[] = {};
+        unsigned installed = ARRAY_SIZE(f1_probes);
+        rec_set_run(run);
+        rec_emit(probe, "BEGIN", 0);
+        rec_emit(probe, "READY", "table=f1 installed=%u", installed);
+        for (unsigned n = 0; n < installed; n++)
+            if (!strncmp(probe, f1_probes[n].name, probe_cap))
+                f1_probes[n].fn();
+        if (!installed)
+            rec_emit(probe, "ERROR", "status=not_run reason=missing_probe");
+        /* Namespace the result so F1 aliases cannot dispatch the F0 table. */
+        if (k + 4 > probe_cap)
+            return false;
+        for (unsigned n = k + 1; n > 0; n--)
+            probe[n + 2] = probe[n - 1];
+        memcpy(probe, "f1:", 3);
+    }
+    return true;
 }
 
 static __attribute__((noreturn)) void show_evidence_forever(void)

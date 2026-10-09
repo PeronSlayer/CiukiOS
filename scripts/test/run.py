@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Canonical-image F0 runner. Python standard library only; never builds images."""
+"""Canonical-image F0/F1 runner. Python standard library only; never builds images."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
+import struct
+from contextlib import contextmanager
 from pathlib import Path
 import secrets
 import select
@@ -16,7 +19,7 @@ import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from evidence import Parser, EvidenceError
-from loader_model import selector
+from loader_model import selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
 
@@ -48,6 +51,162 @@ def load(path):
     return data
 
 
+def digest_json(data):
+    return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def expand_cases(suite):
+    """An F1 all/core runner alias is always individual selectors across boots."""
+    expanded=[]
+    for case in suite['cases']:
+        if case['probe'] not in ('all','core'):
+            expanded.append(case);continue
+        templates=case.get('probe_cases')
+        if not templates or [c['probe'] for c in templates]!=list(F1_PROBES):
+            raise res.Refusal('F1 alias requires ordered individual probe_cases')
+        for template in templates:
+            selected={**case,**template};selected.pop('probe_cases',None)
+            selected['selector']='f1:'+selected['probe']+' run={run_id}'
+            expanded.append(selected)
+    return expanded
+
+
+def prepare_fixtures(host,case,directory):
+    manifests=[]
+    for index,fixture in enumerate(case.get('fixtures',[])):
+        item=dict(fixture)
+        if fixture.get('generator')=='mkfs.fat':
+            item.update(host.fat_fixture(fixture,directory,index))
+        elif 'path' in fixture:
+            path=(ROOT/fixture['path']).resolve()
+            if not path.is_relative_to(ROOT) or not path.is_file():raise res.Refusal('fixture missing/outside worktree')
+            actual=sha(path)
+            if actual!=fixture.get('sha256'):raise res.Refusal('fixture SHA-256 mismatch')
+            item.update(path=str(path),size=path.stat().st_size,sha256=actual)
+        manifests.append(item)
+    payload=json.dumps({'schema_version':1,'fixtures':manifests},sort_keys=True,separators=(',',':')).encode()
+    if len(payload)>65536:raise res.Refusal('fixture manifest exceeds 64 KiB')
+    path=directory/'fixtures.json';path.write_bytes(payload)
+    return {'sha256':hashlib.sha256(payload).hexdigest(),'declared':case.get('fixtures',[]),'manifest':manifests}
+
+
+def boot_cfg_extent(image):
+    """Locate existing short-name BOOT.CFG in the canonical FAT32 volume.
+    No allocation/metadata changes: patch only its existing bounded contents.
+    """
+    with Path(image).open('rb') as stream:
+        def read(offset,length):
+            stream.seek(offset);data=stream.read(length)
+            if len(data)!=length:raise res.Refusal('truncated BOOT.CFG fixture')
+            return data
+        mbr=read(0,512)
+        if mbr[510:]!=b'\x55\xaa':raise res.Refusal('BOOT.CFG fixture lacks MBR signature')
+        start,sectors=struct.unpack_from('<II',mbr,454);base=start*512
+        bpb=read(base,512);sector=struct.unpack_from('<H',bpb,11)[0];spc=bpb[13]
+        reserved=struct.unpack_from('<H',bpb,14)[0];fats=bpb[16];fat_sectors=struct.unpack_from('<I',bpb,36)[0]
+        root_cluster=struct.unpack_from('<I',bpb,44)[0];cluster_size=sector*spc
+        if sector!=512 or not spc or spc & (spc-1) or not reserved or not fats or not fat_sectors:
+            raise res.Refusal('invalid FAT32 fixture geometry')
+        data_base=base+(reserved+fats*fat_sectors)*sector
+        cluster_count=(sectors-reserved-fats*fat_sectors)//spc
+        def offset(cluster):
+            if not 2<=cluster<cluster_count+2:raise res.Refusal('BOOT.CFG cluster out of range')
+            return data_base+(cluster-2)*cluster_size
+        def find(cluster,name):
+            seen=set()
+            while cluster<0x0ffffff8:
+                if cluster in seen or len(seen)>=4096:raise res.Refusal('BOOT.CFG directory walk exceeds bound')
+                seen.add(cluster);block=read(offset(cluster),cluster_size)
+                for i in range(0,len(block),32):
+                    entry=block[i:i+32]
+                    if entry[0]==0:raise res.Refusal('BOOT.CFG fixture not found')
+                    if entry[:11]==name and entry[11]!=15:
+                        first=struct.unpack_from('<H',entry,26)[0] | struct.unpack_from('<H',entry,20)[0]<<16
+                        return first,struct.unpack_from('<I',entry,28)[0],entry[11]
+                cluster=struct.unpack('<I',read(base+reserved*sector+cluster*4,4))[0]&0x0fffffff
+            raise res.Refusal('BOOT.CFG fixture not found')
+        system,_,attr=find(root_cluster,b'SYSTEM     ')
+        if not attr & 16:raise res.Refusal('SYSTEM fixture is not a directory')
+        cluster,size,attr=find(system,b'BOOT    CFG')
+        if attr & 16 or not 1<=size<=127 or size>cluster_size:raise res.Refusal('invalid BOOT.CFG extent')
+        return offset(cluster),size
+
+
+def patch_overlay(host,image,overlay,directory,patches):
+    manifest=[]
+    for index,patch in enumerate(patches):
+        if patch.get('file')!='SYSTEM/BOOT.CFG':raise res.Refusal('only BOOT.CFG preboot patches are allowed')
+        base,size=boot_cfg_extent(image);relative=patch.get('offset',0)
+        before=bytes.fromhex(patch['before_hex']);after=bytes.fromhex(patch['after_hex'])
+        if type(relative) is not int or relative<0 or not before or len(before)!=len(after) or relative+len(after)>size:
+            raise res.Refusal('BOOT.CFG patch must preserve size and remain inside file')
+        offset=base+relative;actual=host.overlay_read(overlay,offset,len(before))
+        if actual!=before:raise res.Refusal('BOOT.CFG patch preimage mismatch')
+        payload=directory/f'patch-{index}.bin';payload.write_bytes(after)
+        host.overlay_write(overlay,offset,payload,len(after))
+        actual_after=host.overlay_read(overlay,offset,len(after))
+        if actual_after!=after:raise res.Refusal('BOOT.CFG patch readback mismatch')
+        manifest.append({'file':patch['file'],'offset':offset,'file_offset':relative,'length':len(after),
+                         'before_hex':before.hex(),'after_hex':after.hex(),
+                         'sha256_before':hashlib.sha256(actual).hexdigest(),'sha256_after':hashlib.sha256(actual_after).hexdigest()})
+    (directory/'patch-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    return manifest
+
+
+def blkdebug_config(case,directory):
+    fault=case.get('fault')
+    if not fault:return None
+    if fault.get('layer')!='host-block-backend':raise res.Refusal('blkdebug fault layer must be host-block-backend')
+    event=fault.get('event')
+    if event not in ('read_aio','write_aio','flush_to_os','flush_to_disk') or type(fault.get('errno')) is not int or not 1<=fault['errno']<=4095:
+        raise res.Refusal('invalid blkdebug event/errno')
+    # read failures need a postboot sector filter to preserve loader prerequisites.
+    if event=='read_aio' and 'sector' not in fault:raise res.Refusal('read fault requires a postboot fixture sector')
+    lines=['[inject-error]',f'event = "{event}"',f'errno = "{fault["errno"]}"','once = "on"']
+    if 'sector' in fault:
+        if type(fault['sector']) is not int or fault['sector']<0:raise res.Refusal('invalid fault sector')
+        lines.append(f'sector = "{fault["sector"]}"')
+    path=directory/'blkdebug.conf';path.write_text('\n'.join(lines)+'\n');return path
+
+
+class Actions:
+    """Nonblocking paced stimuli; QMP success is recorded, guest evidence is required."""
+    def __init__(self,declared):
+        self.declared=declared;self.index=0;self.batch=0;self.repeat=0;self.due=0;self.observed=[]
+        for action in declared:
+            if action.get('after',{}).get('event') not in ('READY','ARM'):
+                raise res.Refusal('actions require READY/ARM synchronization')
+            if action.get('type') not in ('input','cut'):raise res.Refusal('unknown runner action')
+            if action['type']=='input':
+                if not 1<=action.get('repeat',1)<=1000 or not action.get('batches'):
+                    raise res.Refusal('invalid input repetition/batches')
+                for batch in action['batches']:
+                    if not 1<=batch.get('pause_ms',0)<=100:raise res.Refusal('input pacing must be 1..100 ms')
+            elif action.get('mode') not in ('guest-termination',):
+                raise res.Refusal('device power loss requires a driver-boundary fixture; guest termination is distinct')
+    @property
+    def complete(self):return self.index==len(self.declared)
+    def step(self,parser,qmp,now):
+        if self.complete or not qmp or now<self.due:return None
+        action=self.declared[self.index]
+        matches=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['after'].items())]
+        if len(matches)>1:raise EvidenceError('duplicate action synchronization record')
+        if not matches:return None
+        if action['type']=='cut':
+            if parser.terminal:raise EvidenceError('cut point already passed before termination')
+            self.observed.append({'type':'cut','mode':action['mode'],'record':matches[0]})
+            self.index+=1;return action
+        batch=action['batches'][self.batch];qmp.input_events(batch['events'])
+        self.observed.append({'type':'input','batch':self.batch,'repeat':self.repeat,'events':batch['events'],
+                              'host_monotonic':now,'sync_seq':matches[0]['seq']})
+        self.due=now+batch['pause_ms']/1000
+        self.batch+=1
+        if self.batch==len(action['batches']):
+            self.batch=0;self.repeat+=1
+            if self.repeat==action.get('repeat',1):self.index+=1;self.repeat=0
+        return None
+
+
 class Host:
     """Production boundary; host tests substitute only this boundary."""
     def preflight(self,root): return res.preflight(root)
@@ -65,6 +224,66 @@ class Host:
             try:result.extend(int(v) for v in p.read_text().split())
             except FileNotFoundError:continue
         return sorted(set(result))
+
+    def fat_fixture(self,fixture,directory,index):
+        kind=fixture['fat_type'];sizes={12:4*1024**2,16:32*1024**2,32:64*1024**2}
+        if kind not in sizes or fixture.get('seed')!=1:raise res.Refusal('unsupported FAT fixture type/seed')
+        image=directory/f'fixture-{index}.img'
+        with image.open('wb') as stream:stream.truncate(sizes[kind])
+        geometry=self.checker(['mkfs.fat','--invariant','-v','-F',str(kind),'-i','00000001',str(image)],directory)
+        if geometry['returncode']:raise res.Refusal('mkfs.fat fixture generation failed')
+        source=directory/f'fixture-{index}.txt';source.write_bytes(b'Ciuki F1 independent fixture seed=1\n'*128)
+        os.utime(source,(946684800,946684800))
+        copied=self.checker(['mcopy','-i',str(image),str(source),'::/Ciuki long fixture.txt'],directory)
+        if copied['returncode']:raise res.Refusal('mtools fixture copy failed')
+        listing=self.checker(['mdir','-i',str(image),'::/'],directory)
+        if listing['returncode']:raise res.Refusal('mtools fixture listing failed')
+        checked=self.checker(['fsck.fat','-n',str(image)],directory)
+        if checked['returncode']:raise res.Refusal('independent fixture fsck failed')
+        return {'path':str(image),'sha256':sha(image),'size':image.stat().st_size,'geometry':geometry,
+                'listing':listing,'checker':checked,'files':[{'path':'/Ciuki long fixture.txt',
+                    'id':f'fixture-{index}-lfn','size':source.stat().st_size,'sha256':sha(source)}]}
+    def overlay_read(self,overlay,offset,length):
+        output=subprocess.check_output(['qemu-io','-r','-f','qcow2','-c',f'read -v {offset} {length}',str(overlay)],text=True,timeout=10)
+        data=bytearray()
+        for line in output.splitlines():
+            if re.match(r'^[0-9a-fA-F]+:',line):
+                data.extend(bytes.fromhex(line.split(':',1)[1].lstrip().split('  ',1)[0].strip()))
+        if len(data)!=length:raise res.Refusal('qemu-io readback length mismatch')
+        return bytes(data)
+    def overlay_write(self,overlay,offset,payload,length):
+        # qemu-io parses its -c string itself; use relative generated payload names.
+        subprocess.run(['qemu-io','-f','qcow2','-c',f'write -s {payload.name} {offset} {length}','-c','flush',str(overlay)],
+                       cwd=payload.parent,check=True,stdout=subprocess.DEVNULL,timeout=10)
+    @contextmanager
+    def export_readonly(self,overlay,directory,offset,size):
+        """A FUSE raw slice, never an image conversion or writable mount."""
+        target=directory/'check-volume.raw';target.touch()
+        args=['qemu-storage-daemon','--blockdev',json.dumps({'driver':'qcow2','node-name':'overlay','read-only':True,
+              'file':{'driver':'file','filename':str(overlay)}}),'--blockdev',json.dumps({'driver':'raw','node-name':'volume',
+              'file':'overlay','offset':offset,'size':size,'read-only':True}),
+              '--export',f'type=fuse,id=checker,node-name=volume,mountpoint={target},writable=off,allow-other=off']
+        with (directory/'export.log').open('wb') as log:
+            process=subprocess.Popen(args,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            try:
+                deadline=time.monotonic()+5
+                while target.stat().st_size!=size:
+                    if process.poll() is not None or time.monotonic()>=deadline:raise res.Refusal('read-only FUSE export unavailable')
+                    time.sleep(.025)
+                yield target
+            finally:
+                process.terminate()
+                try:process.wait(timeout=2)
+                except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)
+                target.unlink(missing_ok=True)
+    def checker(self,args,directory):
+        # Bound output on disk, using the same cap as the guest collector.
+        import resource
+        def limits():resource.setrlimit(resource.RLIMIT_FSIZE,(res.LOG_CAP,res.LOG_CAP))
+        with (directory/'checker.log').open('wb') as log:
+            checked=subprocess.run(args,stdout=log,stderr=subprocess.STDOUT,timeout=30,preexec_fn=limits)
+        output=(directory/'checker.log').read_text(errors='replace')
+        return {'arguments':args,'returncode':checked.returncode,'output':output,'output_sha256':sha(directory/'checker.log')}
 
 
 def teardown(host,unit,process,qmp,cgroup):
@@ -109,14 +328,23 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     request=case.get('selector',f"f0:{case['probe']} run={{run_id}}").format(run_id=run_id)
     requested=selector(request,'fw_cfg',True)
     if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
-    request=request.removesuffix(' platform=e500')
-    if profile.get('platform'): request+=' platform='+profile['platform']
+    request=request.split(' run=',1)[0]+' run='+requested['run']
+    platform=profile.get('platform') or requested['platform']
+    if platform:request+=' platform='+platform
+    if requested['safe']:request+=' safe=1'
+    cache=case.get('disk_cache','writeback')
+    if cache not in ('writeback','writethrough','none','directsync'):raise res.Refusal('unsafe/unknown disk cache mode forbidden')
+    disk={'driver':'qcow2','file':{'driver':'file','filename':str(overlay)}}
+    if case.get('fault'):
+        disk['file']={'driver':'blkdebug','config':str(overlay.parent/'blkdebug.conf'),
+                      'image':{'driver':'file','filename':str(overlay)}}
+    drive='file='+('json:'+json.dumps(disk,separators=(',',':')) if case.get('fault') else str(overlay))
     selector(request,'fw_cfg',True)
     devices=case.get('device_exceptions',{})
     args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
           '-monitor','none','-nic','none','-no-shutdown','-S',
-          '-drive','file='+str(overlay).replace(',',',,')+',format=qcow2,if=ide,index=0,media=disk',
+          '-drive',drive.replace(',',',,')+',format=qcow2,if=ide,index=0,media=disk,cache='+cache,
           '-vga',devices.get('vga',profile['vga']),'-qmp','unix:q,server=on,wait=off',
           '-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
@@ -133,6 +361,14 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     args+=['-serial','none' if devices.get('serial')=='none' else 'file:serial.fifo']
     if profile.get('audio') and not devices.get('audio')=='none':
         args+=['-audiodev','none,id=silent','-device',profile['audio']+',audiodev=silent']
+    if case.get('fixtures'):
+        args+=['-fw_cfg','name=opt/it.alcybercloud.ciukios/fixture,file=fixtures.json']
+        slot=1
+        for index,fixture in enumerate(case['fixtures']):
+            if fixture.get('generator')=='mkfs.fat':
+                if slot>3:raise res.Refusal('too many IDE fixture disks')
+                args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={slot},cache='+cache]
+                slot+=1
     return args,request
 
 
@@ -184,13 +420,13 @@ def manifest_identity(image):
     return {'path':'unknown','sha256':'unknown','revision':'unknown','dirty':'unknown'}
 
 
-def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img'):
+def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img',shared_overlay=None,retain_overlay=False):
     """Caller holds the common lock. Every failure after creation has result.json."""
+    case=json.loads(json.dumps(case))
     host=host or Host();runs=root/'build/test-runs';res.check_budget(runs)
     memory=host.preflight(runs)
     run_id=secrets.token_hex(4);directory=runs/suite/run_id
-    directory.mkdir(parents=True,exist_ok=False)
-    overlay=directory/'run.qcow2';fifo=directory/'serial.fifo';gate=directory/'gate'
+    overlay=shared_overlay or directory/'run.qcow2';fifo=directory/'serial.fifo';gate=directory/'gate'
     unit='ciuki-test-'+run_id+'.scope';identity=git_identity(root)
     args,request=qemu_args(executable,profile,case,run_id,overlay,firmware)
     scoped=['systemd-run','--user','--scope','--unit='+unit,'-p','MemoryMax=1500M','-p','MemorySwapMax=0','--',
@@ -208,11 +444,29 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
                     'firmware_sha256':sha(firmware),'devices':{'ide':'PIIX','i8042':True,'vga':case.get('device_exceptions',{}).get('vga',profile['vga']),
                         'com1':case.get('device_exceptions',{}).get('serial','file'),'audio':profile.get('audio','none')}}}
     result['build_git_revision']=result['build_manifest']['revision'];result['build_dirty']=result['build_manifest']['dirty']
+    actions=Actions(case.get('actions',[]))
+    result.update(stimulus={'sha256':digest_json(case.get('actions',[])),'declared':case.get('actions',[]),'observed':[]},
+                  fixtures={'sha256':digest_json(case.get('fixtures',[])),'declared':case.get('fixtures',[])},
+                  fault=case.get('fault'),cut_point=None,disk_cache_mode=case.get('disk_cache','writeback'),
+                  checkers=[],durability_observations=[],patch_manifest=[])
+    directory.mkdir(parents=True,exist_ok=False)
+    launched=None
     process=qmp=cgroup=None;parser=Parser(run_id,case['probe']);fd=None;dirfd=None;logs=[]
     pending=b'';panic_start=None;armed_stats=None;terminal_time=None
     restart_performed=False;expected_resets=0
     try:
-        subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(overlay)],check=True,stdout=subprocess.DEVNULL,timeout=10)
+        if shared_overlay is None:
+            subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(overlay)],check=True,stdout=subprocess.DEVNULL,timeout=10)
+        blkdebug_config(case,overlay.parent)
+        if case.get('patches'):
+            result['patch_manifest']=patch_overlay(host,image,overlay,directory,case['patches'])
+        result['overlay_path']=str(overlay)
+        result['fixtures']=prepare_fixtures(host,case,directory)
+        # Independently generated file digests are checked against guest DATA.
+        for fixture in result['fixtures']['manifest']:
+            for file in fixture.get('files',[]):
+                case['expected']['predicates'].append({'where':{'event':'DATA','file_id':file['id']},'exact_count':1,
+                                                      'fields':{'sha256':file['sha256'],'size':{'eq':file['size']}}})
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
         serial=(directory/'serial.log').open('wb');stderr=(directory/'stderr.log').open('wb');qlog=(directory/'qmp.log').open('wb');logs=[serial,stderr,qlog]
         launched=time.monotonic();deadline=launched+case['timeout']
@@ -274,7 +528,16 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
             now=time.monotonic()
             if now>=deadline:
                 result['timeout']['occurred']=True;raise EvidenceError('host monotonic deadline exceeded')
+            if parser.terminal and parser.terminal.get('status')=='not_run':
+                result['outcome']='not_run';raise EvidenceError('missing F1 probe: not_run')
+            cut=actions.step(parser,qmp,now)
+            if cut:
+                parser.check(case['expected']);result['cut_point']=actions.observed[-1]
+                host.kill_scope(unit,'SIGKILL')
+                result['durability_observations'].append({'mode':'guest-termination','device_power_loss':False})
+                break
             if parser.terminal:
+                if not actions.complete:raise EvidenceError('terminal evidence before declared stimuli completed')
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
                 if terminal_time is None:terminal_time=now
@@ -329,7 +592,7 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
         if not (directory/'serial.log').exists():(directory/'serial.log').touch()
         if not result['cleanup']['clean']:
             result['outcome']='fail';result['reason']='owned children survived teardown'
-        if result['outcome']=='pass' and result['cleanup'].get('wrapper_returncode')!=0:
+        if result['outcome']=='pass' and result['cut_point'] is None and result['cleanup'].get('wrapper_returncode')!=0:
             result['outcome']='fail';result['reason']='QEMU/scope exited abnormally after observation'
         if cgroup is not None:
             try:
@@ -338,10 +601,23 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
                 if any(int(l.split()[1]) for l in oom.splitlines() if l.split()[0] in ('oom','oom_kill')):
                     result['outcome']='fail';result['reason']='scope OOM'
             except OSError:result['host']['memory_events']='scope removed'
+        if (directory/'qmp.log').exists():result['qmp_transcript_sha256']=sha(directory/'qmp.log')
+        result['stimulus']['observed']=actions.observed
+        result['stimulus']['observed_sha256']=digest_json(actions.observed)
+        result['durability_observations'].extend(r for r in parser.records if r.get('group') in ('durability','barrier','persisted'))
         result['observed']=parser.records
+        if result['outcome']=='pass' and case.get('checks'):
+            try:
+                if not result['cleanup']['clean']:raise EvidenceError('QEMU must stop before overlay export')
+                check_overlay(host,overlay,directory,case['checks'],result)
+            except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e:
+                result['outcome']='fail';result['reason']=str(e)
         result['image']['sha256_after']=sha(image)
         if result['image']['sha256_after']!=result['image']['sha256']:
             result['outcome']='fail';result['reason']='canonical image changed during run'
+        result['timing']={'host_monotonic_elapsed_seconds':time.monotonic()-launched if launched is not None else None,
+                          'guest_domain':'icount' if profile.get('icount') else 'non-icount',
+                          'guest_records':[r for r in parser.records if 'timing_domain' in r]}
         result['utc_end']=utc()
         for p in directory.iterdir():
             if p.is_file() and p.name!='result.json':result['artifacts'][p.name]={'sha256':sha(p),'size':p.stat().st_size}
@@ -349,8 +625,8 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
         # all passing runs always retain exactly these two contract artifacts.
         if result['outcome']=='pass':
             for p in directory.iterdir():
-                if p.name!='serial.log':p.unlink()
-            result['artifacts']={k:v for k,v in result['artifacts'].items() if k=='serial.log'}
+                if p.name!='serial.log' and not (retain_overlay and p==overlay):p.unlink()
+            result['artifacts']={k:v for k,v in result['artifacts'].items() if k=='serial.log' or (retain_overlay and k=='run.qcow2')}
         else:
             for name in ('q','serial.fifo','gate','file-limit'):
                 (directory/name).unlink(missing_ok=True)
@@ -361,6 +637,72 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
     return result,directory
 
 
+def check_overlay(host,overlay,directory,checks,result):
+    """Called only after verified QEMU teardown. Export exactly one partition."""
+    offset=checks['offset'];size=checks['size']
+    if type(offset) is not int or type(size) is not int or offset<0 or size<=0 or offset+size>result['image']['size']:
+        raise res.Refusal('invalid checker partition extent')
+    with host.export_readonly(overlay,directory,offset,size) as volume:
+        for args in (['mdir','-V'],):
+            version=host.checker(args,directory);result['checkers'].append({'kind':'version',**version})
+            if version['returncode']!=0:raise EvidenceError('checker version unavailable')
+        checked=host.checker(['fsck.fat','-n',str(volume)],directory)
+        result['checkers'].append({'kind':'version','tool':'fsck.fat','version':checked['output'].splitlines()[0] if checked['output'] else 'unknown'})
+        result['checkers'].append({'kind':'fsck.fat',**checked})
+        allowed=checks.get('fsck_exit_codes',[0])
+        if checked['returncode'] not in allowed:raise EvidenceError('undeclared fsck.fat result')
+        if checked['returncode']!=0:
+            patterns=checks.get('interrupted_patterns',[])
+            lines=[line for line in checked['output'].splitlines() if line.strip()]
+            if not patterns or any(not any(re.fullmatch(p,line) for p in patterns) for line in lines):
+                raise EvidenceError('unclassified interrupted filesystem discrepancy')
+        listing=host.checker(['mdir','-i',str(volume),checks.get('listing_path','::/SYSTEM/TESTS')],directory)
+        result['checkers'].append({'kind':'mtools',**listing})
+        if listing['returncode']!=0:raise EvidenceError('mtools listing failed')
+        for expected in checks.get('listing_contains',[]):
+            if expected not in listing['output']:raise EvidenceError('mtools names/sizes mismatch')
+        for item in checks.get('files',[]):
+            checked=host.checker(['mtype','-i',str(volume),item['path']],directory)
+            result['checkers'].append({'kind':'mtools-hash',**checked})
+            if checked['returncode'] or checked['output_sha256']!=item['sha256']:
+                raise EvidenceError('mtools file digest mismatch')
+    result['durability_observations'].append({'read_only_export':True,'qemu_stopped':True,'checker_passed':True})
+
+
+def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img'):
+    boots=case.get('boots')
+    if not boots and any(a['type']=='cut' for a in case.get('actions',[])):
+        raise res.Refusal('crash cut requires a declared reboot sequence')
+    if not boots:return _run_boot(root,suite,case,profile,image,executable,firmware,host,keep,qemu_img)
+    if not 2<=len(boots)<=5:raise res.Refusal('declared reboot sequence needs 2..5 boots')
+    if any(a['type']=='cut' for a in boots[-1].get('actions',case.get('actions',[]))):
+        raise res.Refusal('reboot sequence must finish with independent observation')
+    shared=None;sequence=[];directories=[];baseline=sha(image)
+    for index,boot in enumerate(boots):
+        selected={**case,**boot};selected.pop('boots',None)
+        selected['id']=case['id']+f'-boot-{index+1}'
+        result,directory=_run_boot(root,suite,selected,profile,image,executable,firmware,host,keep,qemu_img,
+                                   shared_overlay=shared,retain_overlay=True)
+        directories.append(directory)
+        if shared is None:shared=directory/'run.qcow2'
+        sequence.append({'boot':index+1,'run_id':result['run_id'],'overlay':str(shared),
+                         'image_sha256':result['image']['sha256'],'outcome':result['outcome'],
+                         'observed':result['observed'],'cut_point':result['cut_point'],'cleanup':result['cleanup'],
+                         'stimulus':result['stimulus'],'fixtures':result['fixtures'],'fault':result['fault'],
+                         'disk_cache_mode':result['disk_cache_mode'],'patch_manifest':result['patch_manifest'],
+                         'checkers':result['checkers'],'durability_observations':result['durability_observations']})
+        if result['outcome']!='pass' or result['image']['sha256']!=baseline:break
+    if result['outcome']=='pass':shared.unlink(missing_ok=True)
+    if shared.exists() or result['outcome']=='pass':
+        first=json.loads((directories[0]/'result.json').read_text());first['artifacts'].pop('run.qcow2',None)
+        if shared.exists():first['artifacts']['run.qcow2']={'sha256':sha(shared),'size':shared.stat().st_size}
+        (directories[0]/'result.json').write_text(json.dumps(first,indent=2)+'\n')
+    result['case']=case['id'];result['reboot_sequence']=sequence
+    result['unattempted_boots']=len(boots)-len(sequence)
+    (directory/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+    return result,directory
+
+
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--physical-capture',type=Path,action='append',default=[])
@@ -368,33 +710,52 @@ def main(argv=None):
     options=ap.parse_args(argv)
     try:
         if not all(c.isalnum() or c in '-_' for c in options.suite):raise res.Refusal('invalid suite name')
-        suite=load(ROOT/'tests/suites'/f'{options.suite}.json')
+        if options.suite=='all':
+            names=['f0-smoke','f0-core','f0-panic','f0-runner','f1-input','f1-storage','f1-fat32','f1-safe']
+            suite={'schema_version':1,'image':'full','cases':[], 'host_tests':True}
+            for name in names:
+                part=load(ROOT/'tests/suites'/f'{name}.json')
+                if part.get('physical_import_required'):suite['physical_import_required']=True
+                suite.setdefault('physical_cases',[]).extend(part.get('physical_cases',[]))
+                additions=expand_cases(part)
+                if name=='f0-smoke':additions=[{**c,'_smoke':True} for c in additions]
+                suite['cases'].extend(additions)
+        else:suite=load(ROOT/'tests/suites'/f'{options.suite}.json')
         if suite.get('image')!='full':raise res.Refusal('only canonical full HDD suites are supported in F0')
-        host_evidence=None
-        if suite.get('host_tests'):
-            started=time.monotonic()
-            checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=180)
-            output=checked.stdout+checked.stderr
-            if len(output)>res.LOG_CAP:raise res.Refusal('host fixture evidence exceeds log cap')
-            print(output.decode(errors='replace'),end='',flush=True)
-            host_evidence={'outcome':'pass' if checked.returncode==0 else 'fail','returncode':checked.returncode,
-                           'duration_seconds':time.monotonic()-started,'output_sha256':hashlib.sha256(output).hexdigest(),
-                           'fixture_outcomes':output.decode(errors='replace')}
-            if checked.returncode:raise res.Refusal('host runner prerequisite failed')
-        image=(options.image or ROOT/'build/full/ciukios-full.img').resolve()
-        if not image.is_file():raise res.Refusal('canonical image missing; QEMU/physical runner qualification not_run')
-        executable=shutil.which('qemu-system-i386')
-        if not executable:raise res.Refusal('qemu-system-i386 unavailable')
-        toolchain=json.loads((ROOT/'config/toolchain.json').read_text())
-        firmware=find_firmware(executable)
-        cases=suite['cases'];summary=[]
         with res.ExclusiveLock(res.common_lock(ROOT)):
+            Host().preflight(ROOT/'build/test-runs')
+            host_evidence=None
+            if suite.get('host_tests') or options.suite.startswith('f1-'):
+                started=time.monotonic()
+                checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=180)
+                output=checked.stdout+checked.stderr
+                if len(output)>res.LOG_CAP:raise res.Refusal('host fixture evidence exceeds log cap')
+                print(output.decode(errors='replace'),end='',flush=True)
+                host_evidence={'outcome':'pass' if checked.returncode==0 else 'fail','returncode':checked.returncode,
+                               'duration_seconds':time.monotonic()-started,'output_sha256':hashlib.sha256(output).hexdigest(),
+                               'fixture_outcomes':output.decode(errors='replace')}
+                if checked.returncode:raise res.Refusal('host runner prerequisite failed')
+            image=(options.image or ROOT/'build/f0/ciukios.img').resolve()
+            if not image.is_file():raise res.Refusal('canonical image missing; QEMU/physical runner qualification not_run')
+            executable=shutil.which('qemu-system-i386')
+            if not executable:raise res.Refusal('qemu-system-i386 unavailable')
+            toolchain=json.loads((ROOT/'config/toolchain.json').read_text())
+            firmware=find_firmware(executable)
+            cases=expand_cases(suite);summary=[]
+            if options.suite.startswith('f1-'):
+                prerequisites=[]
+                for name in suite.get('prerequisites',[]):
+                    additions=expand_cases(load(ROOT/'tests/suites'/f'{name}.json'))
+                    if name=='f0-smoke':additions=[{**c,'_smoke':True} for c in additions]
+                    prerequisites.extend(additions)
+                cases=prerequisites+cases
             for index,case in enumerate(cases):
                 name=options.profile or case['profile']
                 if not all(c.isalnum() or c in '-_' for c in name):raise res.Refusal('invalid profile name')
                 profile=load(ROOT/'tests/profiles'/f'{name}.json')
                 if profile['machine']!=toolchain['qemu_machine']:raise res.Refusal('profile machine does not match pinned toolchain')
-                if options.suite!='f0-smoke' and profile['accelerator']!='tcg':raise res.Refusal('CPU correctness evidence requires TCG')
+                if case.get('selector','').startswith('f1:') and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1 evidence requires pinned icount profile')
+                if options.suite!='f0-smoke' and profile['accelerator']!='tcg' and not case.get('_smoke'):raise res.Refusal('CPU correctness evidence requires TCG')
                 result,directory=run_case(ROOT,options.suite,case,profile,image,executable,firmware,keep=options.keep)
                 if host_evidence is not None:
                     result['host_probe']=host_evidence
@@ -411,16 +772,32 @@ def main(argv=None):
                 from physical import import_evidence
                 imports=[]
                 for capture in options.physical_capture:
-                    metadata=json.loads((capture/'acquisition.json').read_text())
+                    acquisition=capture/'acquisition.json'
+                    if acquisition.stat().st_size>128*1024:raise res.Refusal('physical acquisition exceeds 128 KiB limit')
+                    metadata=json.loads(acquisition.read_text())
                     probe=selector(metadata['selector'],metadata.get('selector_source','menu'))['probe']
-                    expected=next((c['expected'] for c in suite['cases'] if c['probe']==probe),None)
+                    physical_cases=suite.get('physical_cases',[])
+                    selected=next((c for c in physical_cases if c['probe']==probe and
+                                   c['target'] in metadata.get('model','').lower()),None)
+                    if selected is None and physical_cases and probe=='safe':
+                        raise res.Refusal('physical safe capture does not match declared T23/E500 target')
+                    expected=selected['expected'] if selected else next((c['expected'] for c in suite['cases'] if c['probe']==probe),None)
                     if expected is None:raise res.Refusal('physical probe is not declared by the suite')
-                    imports.append(import_evidence(capture,sha(image),expected))
-                summary.append({'case':'physical-selector/evidence-import','outcome':'pass' if imports else 'not_run',
-                                'reason':'operator-confirmed evidence imported' if imports else 'operator-confirmed physical records required','imports':imports})
+                    imported=import_evidence(capture,sha(image),expected)
+                    imported['case']=selected['id'] if selected else 'physical-selector/evidence-import'
+                    imports.append(imported)
+                if suite.get('physical_cases'):
+                    for physical_case in suite['physical_cases']:
+                        matching=[r for r in imports if r['case']==physical_case['id']]
+                        summary.append({'case':physical_case['id'],'outcome':'pass' if matching else 'not_run',
+                                        'reason':'operator-confirmed menu capture imported' if matching else 'physical menu evidence required',
+                                        'imports':matching})
+                else:
+                    summary.append({'case':'physical-selector/evidence-import','outcome':'pass' if imports else 'not_run',
+                                    'reason':'operator-confirmed evidence imported' if imports else 'operator-confirmed physical records required','imports':imports})
             dest=ROOT/'build/test-runs'/options.suite/'summary.json'
             dest.write_text(json.dumps({'schema_version':1,'suite':options.suite,'cases':summary},indent=2)+'\n')
-        return 0 if all(r['outcome']=='pass' for r in summary) else 1
+            return 0 if all(r['outcome']=='pass' for r in summary) else 1
     except (res.Refusal,OSError,ValueError,subprocess.SubprocessError) as e:
         print('REFUSED: '+str(e),file=sys.stderr);return 2
 

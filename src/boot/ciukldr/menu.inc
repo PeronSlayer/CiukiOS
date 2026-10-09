@@ -12,12 +12,18 @@ selector_validate:
     mov di, si
     add di, cx
     mov [selector_end], di
-    cmp word [si], 'f0'
+    cmp byte [si], 'f'
     jne .bad
+    mov bx, probe_names
+    cmp byte [si+1], '0'
+    je .prefix
+    cmp byte [si+1], '1'
+    jne .bad
+    mov bx, f1_probe_names
+.prefix:
     cmp byte [si+2], ':'
     jne .bad
     add si, 3
-    mov bx, probe_names
 .probe:
     cmp byte [bx], 0
     je .bad
@@ -136,6 +142,9 @@ selector_accept:
 probe_names db 'all',0,'core',0,'boot',0,'bootinfo',0,'allocator',0,'protection',0
     db 'isolation',0,'preempt',0,'localfault',0,'syslife',0,'panic',0
     db 'fpu',0,'runner',0,0
+f1_probe_names db 'all',0,'core',0
+    db 'registry',0,'input',0,'input-fault',0,'framebuffer',0,'ata',0,'ata-fault',0
+    db 'partition',0,'fat-read',0,'fat-write',0,'cache',0,'mount-crash',0,'safe',0,'bootlog',0,0
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
 selector_fw db 0
