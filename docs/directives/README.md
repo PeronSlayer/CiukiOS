@@ -11,6 +11,7 @@ evidence and merges.
 
 | Directive | Step | Model / effort | State |
 | --- | --- | --- | --- |
+| [f0-01-review-fixes](f0-01-review-fixes.md) | F0 | gpt-6.1-sol / high | issued 2026-10-10 |
 | [f1-00-kernel-services](f1-00-kernel-services.md) | F1 | gpt-6-astra / xhigh | issued 2026-10-10 |
 | [f1-01-fat-vfs](f1-01-fat-vfs.md) | F1 | gpt-6-astra / xhigh | issued 2026-10-10 |
 | [f1-02-runner-and-selector](f1-02-runner-and-selector.md) | F1 | gpt-6.1-sol / high | issued 2026-10-10 |
