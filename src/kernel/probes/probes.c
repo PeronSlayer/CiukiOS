@@ -772,16 +772,25 @@ static const struct probe_def probes[] = {
 
 static bool is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 
-/* f0:<probe-id|all> run=<8-hex> [platform=e500] */
+/* f0:<probe-id|all|core> run=<8-hex> [platform=e500] [safe=1] */
 static bool parse_selector(const char *s, unsigned len, char *probe, unsigned probe_cap, char *run)
 {
-    if (len < 3 || strncmp(s, "f0:", 3) != 0)
+    if (len < 3 || len > 64 || strncmp(s, "f0:", 3) != 0)
         return false;
+    for (unsigned j = 0; j < len; j++)
+        if ((uint8_t)s[j] < 32 || (uint8_t)s[j] > 126)
+            return false;
     unsigned i = 3, k = 0;
     while (i < len && s[i] != ' ' && k + 1 < probe_cap)
         probe[k++] = s[i++];
     probe[k] = 0;
     if (!k || i >= len || s[i] != ' ')
+        return false;
+    bool known = !strncmp(probe, "all", 4) || !strncmp(probe, "core", 5) || !strncmp(probe, "panic", 6);
+    for (unsigned j = 0; j < ARRAY_SIZE(probes); j++)
+        if (!strncmp(probe, probes[j].name, probe_cap))
+            known = true;
+    if (!known)
         return false;
     i++;
     if (len - i < 12 || strncmp(s + i, "run=", 4) != 0)
@@ -794,10 +803,16 @@ static bool parse_selector(const char *s, unsigned len, char *probe, unsigned pr
     run[8] = 0;
     i += 12;
     /* optional suffixes, in order, each at most once */
-    if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0)
+    if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0) {
+        if (!(g_boot.flags & CBI_F_SMBIOS_QEMU) || !(g_boot.flags & CBI_F_INPUT_FORCED))
+            return false;
         i += 14;
-    if (len - i >= 7 && strncmp(s + i, " safe=1", 7) == 0)
+    }
+    if (len - i >= 7 && strncmp(s + i, " safe=1", 7) == 0) {
+        if (!(g_boot.flags & CBI_F_SMBIOS_QEMU) || !(g_boot.flags & CBI_F_SAFE_MODE))
+            return false;
         i += 7;
+    }
     return i == len;
 }
 
@@ -839,8 +854,15 @@ void probes_main(void *arg)
     int ran = 0;
     for (unsigned i = 0; i < ARRAY_SIZE(probes); i++) {
         if (all || core || !strncmp(probe, probes[i].name, 24)) {
-            probes[i].fn();
+            int failed = probes[i].fn();
             ran++;
+            if (failed && (all || core)) {
+                for (unsigned j = i + 1; j < ARRAY_SIZE(probes); j++)
+                    rec_emit(probes[j].name, "NOT_RUN", "reason=prerequisite_failed after=%s", probes[i].name);
+                if (all)
+                    rec_emit("panic", "NOT_RUN", "reason=prerequisite_failed after=%s", probes[i].name);
+                show_evidence_forever();
+            }
         }
     }
     if (all || !strncmp(probe, "panic", 6)) {

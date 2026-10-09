@@ -277,11 +277,15 @@ boot_menu:
     je .validate
     cmp al, 8
     je .backspace
+    cmp al, 32
+    jb .line_deadline
+    cmp al, 126
+    ja .line_deadline
     cmp di, 64
     jae .invalid
     mov [selector_buffer+di], al
     inc di
-    call uart_putc
+    call menu_echo
 .line_deadline:
     call deadline_expired
     jnc .line
@@ -290,6 +294,13 @@ boot_menu:
     test di, di
     jz .line
     dec di
+    mov byte [selector_buffer+di], 0
+    mov al, 8
+    call menu_echo
+    mov al, ' '
+    call menu_echo
+    mov al, 8
+    call menu_echo
     jmp .line
 .validate:
     mov cx, di
@@ -306,6 +317,22 @@ boot_menu:
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS: N Normal / S Safe mode / L Serial log / P Probe (3 s)',13,10,0
 probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0
+
+; INT 10h teletype AL character, BH page, BL colour (SeaBIOS vgabios.c).
+; https://github.com/coreboot/seabios/blob/master/vgasrc/vgabios.c
+; Preserve the command buffer index and BP deadline across both sinks.
+menu_echo:
+    pushad
+    push ds
+    push es
+    call uart_putc
+    mov ah, 0x0e
+    mov bx, 0x0007
+    int 0x10
+    pop es
+    pop ds
+    popad
+    ret
 
 menu_getc:
     mov ah, 1
