@@ -9,13 +9,13 @@
 ## Contesto
 
 Dopo F0 su QEMU (smoke superato, core 55/56; safe-mode automatico e
-qualificazione hardware ancora aperti) il proprietario ha chiesto un confronto
-sincero con ReactOS e ha chiarito l'obiettivo: non battere Windows 98 in
-compatibilità, ma **un sistema moderno per il retrogaming** che resti un
-progetto attivo, con una piccola comunità alle fiere del retro computing e
-LAN party con i giochi dell'epoca; con l'ambizione di arrivare ai giochi e
-alle applicazioni Win32 fino a Windows ME (Half-Life, Quake 3) e alla rete
-completa, e di "fare nostra" la forza di Windows 9x sull'hardware.
+qualificazione hardware ancora aperti) il proprietario ha fissato l'obiettivo
+del progetto: non battere Windows 98 in compatibilità, ma **un sistema
+moderno per il retrogaming** che resti un progetto attivo, con una piccola
+comunità alle fiere del retro computing e LAN party con i giochi dell'epoca;
+con l'ambizione di arrivare ai giochi e alle applicazioni Win32 fino a
+Windows ME (Half-Life, Quake 3), alla rete completa e a una base hardware
+solida come quella di Windows 9x.
 
 ## Confronto con ReactOS
 
@@ -51,11 +51,9 @@ native proprie. I progetti paragonabili sono Haiku, KolibriOS e SerenityOS.
    FreeBSD/Linux per le schede di rete) e si limita a una matrice di
    hardware scelta e qualificata.
 
-## Onestà sui tempi
+## Vincoli noti
 
-Lo scope è circa dieci volte quello di ieri; quasi tutto esiste come codice
-open da portare, ma è un lavoro di anni e il collo di bottiglia è la
-verifica sull'hardware. Parti difficili: F3 (monitor V86 e DPMI), F7
+Parti difficili: F3 (monitor V86 e DPMI), F7
 (driver 3D rimossi da Mesa: savage/mach64/r128/tdfx in Mesa 8.0 del 2012,
 nouveau_vieux in Mesa 22.0 del 2022; le prestazioni 3D del SuperSavage
 IX/C del T23 e della Rage Mobility dell'E500 non sono misurate), F8
@@ -64,36 +62,16 @@ il lavoro ma non garantisce Wine). Licenze: Quake 1/2 e ioquake3 sono
 GPL-2.0-or-later; Xash3D-FWGS è GPL-3.0-or-later e si distribuisce come
 programma separato; DevilutionX ha una "Sustainable Use License" con
 restrizioni commerciali e non è open source in senso stretto: candidato a
-parte. Per un LAN party
-con Half-Life e Quake 3 su hardware d'epoca Windows 98 funziona già: il
-valore di CiukiOS è essere aperto, verificabile, stabile e vivo.
+parte.
 
-## Sessione hardware di domani (10 ottobre)
+## Ruoli (10 ottobre)
 
-Il proprietario avrà un adattatore seriale–USB. Lista:
-- un **null-modem** (cavo o adattatore DB9 incrociato) tra la porta seriale
-  del portatile e l'adattatore: con un cavo dritto non si parlano;
-- porta seriale abilitata nel BIOS del portatile;
-- sul PC Linux (nessun emulatore di terminale installato; basta `stty`):
-  `scripts/test/serial_capture.sh <run-id>` imposta 38400 8N1 senza
-  controllo di flusso e salva in `legacy/local/physical/<run-id>/serial.log`;
-  va avviato prima di accendere il portatile;
-- un disco sacrificabile (il Transcend va bene se confermato): scrivere
-  `build/f0/ciukios.img` con `dd`, verificare con rilettura e SHA-256;
-- al menu del loader: `P` e scrivere `f0:all run=<8 esadecimali>`; oppure
-  `f0:boot run=…` per il solo avvio; lo schermo pagina le prove dopo il run;
-- raccogliere `serial.log`, foto dello schermo con il run id, modello e
-  BIOS della macchina; importare con `scripts/test/physical.py`.
-
-## Ruoli (direttiva del proprietario, 10 ottobre)
-
-Claude dirige: direttive scritte, criteri di accettazione, revisione,
-integrazione, prove su QEMU e hardware, commit. Codex scrive il codice,
-nel suo worktree, con modello ed effort scelti da Claude in base alla
-complessità (Luna per cose semplici, Sol per driver e strumenti, Astra per
-kernel, V86/DPMI e filesystem). Oggi il kernel F0 l'ha scritto Claude e il
-loader e il runner Codex; da qui in poi il codice è di Codex. Limite noto:
-Codex non può eseguire QEMU dalla sua sandbox.
+Claude dirige (direttive scritte, criteri di accettazione, revisione,
+integrazione, prove su QEMU e hardware, commit); Codex scrive il codice nel
+suo worktree, con modello ed effort scelti da Claude in base alla
+complessità. Il kernel F0 è stato scritto da Claude, loader e runner da
+Codex; da qui in poi il codice è di Codex. Dettagli in
+[2026-10-10-01](2026-10-10-01-direttive-f1-codex.md).
 
 ## Da fare prima del codice
 

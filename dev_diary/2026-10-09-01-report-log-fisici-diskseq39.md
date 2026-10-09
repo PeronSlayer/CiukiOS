@@ -31,6 +31,5 @@ sfondo.
 ## Riferimenti
 
 - Report completo: `docs/validation/2026-10-09-diskseq39-log-report.txt`
-- Log grezzi: `build/full/t23-next/physical-logs-20261009-diskseq39-r17/`, ora solo
-  nello zip locale `legacy/local/CiukiOS-local-legacy-2026-10-09.zip` (non pubblicato)
+- Log grezzi: conservati solo localmente, non pubblicati
 - Analisi architetturale che ne deriva: [revisione architettura](2026-10-09-02-revisione-architettura.md)

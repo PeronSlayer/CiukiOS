@@ -7,14 +7,12 @@
 
 ## Contesto
 
-Il proprietario vuole rivedere l'intera architettura per avere un sistema
-stabile anche su hardware reale, non solo su emulatore. Come riferimento ha
-indicato l'architettura di Windows 95
-([Adrian King, *Inside Windows 95*, 1994](https://vtda.org/books/Computing/OperatingSystems/Inside_Windows_95_Adrian_King_1994.pdf))
-e ha proposto di ripartire dalla 0.8.5 ristrutturando le fondamenta.
-Questa analisi si basa sul codice, sui documenti del repository e sul
-diagramma dell'architettura di Windows 95; il libro va ancora riletto
-capitolo per capitolo.
+Revisione dell'intera architettura con l'obiettivo di un sistema stabile
+anche su hardware reale, non solo su emulatore, prendendo come riferimento
+l'architettura di Windows 95
+([Adrian King, *Inside Windows 95*, 1994](https://vtda.org/books/Computing/OperatingSystems/Inside_Windows_95_Adrian_King_1994.pdf)).
+L'analisi si basa sul codice, sui documenti del repository e sul diagramma
+dell'architettura di Windows 95.
 
 ## Diagnosi: oggi CiukiOS somiglia a Windows 3.1 in modalità 386 avanzata
 
@@ -110,9 +108,8 @@ VMFORK e il collegamento CVSESSION–Jemm.
   consente.
 - Host DPMI integrato oppure HDPMI dentro ogni VM: rimandabile a F3.
 
-## Prossimo passo
+## Esito
 
-Se approvata, scrivere `docs/design/foundations-0.8.5.md` con la ricerca sulle
-fonti (capitoli del libro su VMM, IFS e Configuration Manager; Intel SDM;
-specifica DPMI), la mappatura componente per componente e i criteri di
-accettazione su hardware reale, prima di toccare il codice.
+Proposta rivista da Codex ([2026-10-09-05](2026-10-09-05-revisione-codex-architettura.md))
+e sostituita dalla [decisione sulle fondamenta a 32 bit](2026-10-09-06-decisione-fondamenta-32bit.md),
+che ha portato ai contratti di design in `docs/design/`.

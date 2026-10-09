@@ -7,8 +7,7 @@
 
 ## Contesto
 
-Il proprietario ha chiesto una situazione pulita: troppi documenti, script
-vecchi, build e test che occupavano spazio inutilmente. Ha chiesto anche una
+Pulizia di documenti, script vecchi, build e test non più usati, e una
 struttura di test che non crei un build diverso per ogni prova, per usare
 meglio le risorse della workstation (14 GiB di RAM, `/tmp` in RAM).
 
@@ -29,10 +28,8 @@ meglio le risorse della workstation (14 GiB di RAM, `/tmp` in RAM).
   `legacy/CiukiOS-scripts-legacy-2026-10-09.zip`.
 - **Makefile:** ridotto ai target validi; `build-full` e `build-full-cd`
   girano già nello scope con limiti di memoria.
-- **Materiale privato** (non pubblicato) in `legacy/local/`: log dei PC
-  fisici, vecchi handoff, video e foto, e i backup compressi dei primi
-  ~130 MB dei dischi Toshiba, Fujitsu e Transcend presi **prima** di
-  scriverci CiukiOS (unica copia dei dati originali).
+- **Materiale privato** (log dei PC fisici, vecchi handoff, backup) spostato
+  in `legacy/local/`, non pubblicato.
 - Eliminati i file temporanei di CiukiOS in `/tmp` e nella radice del repo.
 - **Nuova struttura dei test**
   ([`docs/design/test-architecture.md`](../docs/design/test-architecture.md)):

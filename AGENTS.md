@@ -160,6 +160,12 @@ release or hardware analysis gets its own new file in `dev_diary/`, named
 an earlier entry to change a decision; add a new entry that supersedes it.
 Diary entries are written in Italian. `CHANGELOG.md` remains the release
 record.
+Entries record facts (what was done, verified, measured) and decisions with
+their technical rationale, nothing else: no internal considerations,
+conversation narration, personal logistics (purchases, cable availability,
+plans for the day), personal configuration or details of private material.
+Operating procedures belong in `docs/`. Removing such details from an
+existing entry is allowed; changing its decisions is not.
 
 ## Legacy archive
 

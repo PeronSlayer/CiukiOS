@@ -8,7 +8,7 @@
 ## Cosa è stato fatto
 
 - **DOOM giocabile** (Fase 4, 4 maggio): DOS/4GW, WAD, rendering e gameplay
-  sul profilo FAT16; confermato manualmente dal proprietario.
+  sul profilo FAT16; confermato con una prova manuale.
   Correzioni a loader MZ, read/seek FAT16, PSP/MCB, strategia di memoria e XMS.
 - Installer chiuso nel suo perimetro (sezioni A–F) con matrice di scenari.
 - Profilo **full-CD** promosso a supporto live/install: avvio El Torito,

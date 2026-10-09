@@ -83,9 +83,8 @@ Dettagli in `docs/validation/2026-10-09-f0/README.md`.
   ora tollera un solo reset del firmware entro 3 s da ogni reset dell'host
   e richiede il conteggio esatto di quelli dell'host. Caso di riavvio
   verificato singolarmente: PASS.
-- **Decisioni di Claude in disaccordo con Codex**, approvate dal
-  proprietario il 9 ottobre insieme alla conferma dello screenshot del
-  panic senza UART (run `69573015`):
+- **Decisioni approvate il 9 ottobre** (insieme alla conferma manuale dello
+  screenshot del panic senza UART, run `69573015`):
   - i gap del timer senza causa software sono *riportati* come non
     classificati e non fanno fallire la sonda: dall'interno della VM non si
     può dimostrare chi ha fermato la macchina (un'attribuzione all'host via
@@ -115,7 +114,7 @@ Dettagli in `docs/validation/2026-10-09-f0/README.md`.
 
 **Esito delle suite sull'immagine finale (profili icount, immagine
 `5349514c…c8ac6`):** `f0-smoke` 2/2 PASS; `f0-panic` PASS (il caso senza
-UART è confermato dal proprietario dallo screenshot); `f0-core` 55/56 PASS:
+UART è confermato dallo screenshot); `f0-core` 55/56 PASS:
 30 avvii (a freddo e con riavvio a caldo) sui profili T23, E500 e 128 MiB,
 le otto sonde non distruttive su ogni profilo, il fallback video. L'unico
 caso non superato è `safe-mode`, che il runner dichiara non automatizzabile
@@ -124,6 +123,5 @@ fw_cfg nei contratti e nel loader).
 
 ## Aperto
 
-- T4: scrittura dell'immagine su un disco sacrificabile e prove su T23 ed
-  E500 con evidenza a schermo.
+- T4: prove su T23 ed E500 con evidenza a schermo.
 - Build dell'immagine deterministici.

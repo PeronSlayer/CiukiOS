@@ -9,8 +9,8 @@
 
 Primo lavoro comune Claude–Codex
 ([metodo](2026-10-09-04-lavoro-in-simbiosi-claude-codex.md)).
-Codex `gpt-6-astra`, effort `xhigh`, in sola lettura (circa 120.000 token),
-ha confrontato la proposta con il codice reale.
+Codex (`gpt-6-astra`, effort `xhigh`, sola lettura) ha confrontato la
+proposta con il codice reale.
 
 ## Esito
 
@@ -71,18 +71,11 @@ HDPMI, `src/runtime/`, SHELL e LFN richiedono port sostanziali.
    interrupt disabilitati, i tempi di risposta del guest e la calibrazione.
 4. Poi estendere in modo incrementale i processi nativi già esistenti.
 
-## Posizione di Claude dopo la revisione
+## Esito
 
-La diagnosi della proposta era esagerata nei punti sopra e va considerata
-superata su quei punti. Restano validi, e Codex non li contesta: la
-dipendenza dal BIOS a runtime sull'hardware reale, i margini esauriti (HDPMI,
-app a 64 KB) e il costo di mantenere 16 patch su codice di terzi. Codex stesso
-ritiene un VMM proprio giustificato se spazi di indirizzamento indipendenti e
-processi nativi sono requisiti del prodotto: è una decisione del proprietario.
-
-## Decisione richiesta al proprietario
-
-Scegliere tra:
-- stabilizzazione guidata dalle prove (proposta di Codex), con il reboot
-  rimandato a un prototipo;
-- reboot delle fondamenta, con la proposta corretta secondo le lacune sopra.
+La diagnosi della proposta è superata nei punti corretti sopra. Restano
+validi: la dipendenza dal BIOS a runtime sull'hardware reale, i margini
+esauriti (HDPMI, app a 64 KB) e il costo di mantenere 16 patch su codice di
+terzi. Un VMM proprio è giustificato se spazi di indirizzamento indipendenti
+e processi nativi sono requisiti del prodotto: la scelta è registrata nella
+[decisione sulle fondamenta a 32 bit](2026-10-09-06-decisione-fondamenta-32bit.md).
