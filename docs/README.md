@@ -5,6 +5,16 @@
 - [0.8.3 screenshots](screenshots/0.8.3/README.md)
 - [Test architecture](design/test-architecture.md)
 
+Ciuki VMM foundation contracts (approved 2026-10-09):
+
+1. [Foundations transition](design/foundations-transition.md)
+2. [Boot and memory](design/boot-memory.md)
+3. [Execution and ABI](design/execution-abi.md)
+4. [VFS and storage](design/vfs-storage-contract.md)
+5. [DOS VMs and DPMI](design/dos-dpmi-contract.md)
+6. [Device and firmware ownership](design/device-firmware-ownership.md)
+7. [F0 acceptance](design/f0-acceptance.md)
+
 The development diary is in [`dev_diary/`](../dev_diary/). Earlier design
 notes, validation records and history are archived in
 [`legacy/CiukiOS-docs-legacy-2026-10-09.zip`](../legacy/).
