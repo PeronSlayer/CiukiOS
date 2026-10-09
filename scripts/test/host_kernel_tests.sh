@@ -13,6 +13,10 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
 
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/i8042_test.c" -o "$out/i8042_test"
+"$out/i8042_test"
+
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.
 fx="$out/audit_fixture.asm"
