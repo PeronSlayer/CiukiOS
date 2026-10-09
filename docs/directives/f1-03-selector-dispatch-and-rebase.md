@@ -15,8 +15,9 @@
 
 ## What to do
 
-1. **Rebase.** Bring the f1-02 changes onto `main` (`git stash` / `git
-   rebase` or re-apply by hand; do not commit). Keep every f0-01 behaviour:
+1. **Merge.** Bring `main` into this branch (`git merge main`), resolve
+   every conflict and commit on this branch (never on `main`, never push).
+   Keep every f0-01 behaviour:
    printable bytes only, ≤64 bytes, known names, `platform=e500` and
    `safe=1` accepted only with their boot flags, stop-on-failure with
    `NOT_RUN`, canonical request reconstruction in `run.py`, `loader_options`
