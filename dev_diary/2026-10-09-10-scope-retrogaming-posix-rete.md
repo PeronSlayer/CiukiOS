@@ -85,6 +85,16 @@ Il proprietario avrà un adattatore seriale–USB. Lista:
 - raccogliere `serial.log`, foto dello schermo con il run id, modello e
   BIOS della macchina; importare con `scripts/test/physical.py`.
 
+## Ruoli (direttiva del proprietario, 10 ottobre)
+
+Claude dirige: direttive scritte, criteri di accettazione, revisione,
+integrazione, prove su QEMU e hardware, commit. Codex scrive il codice,
+nel suo worktree, con modello ed effort scelti da Claude in base alla
+complessità (Luna per cose semplici, Sol per driver e strumenti, Astra per
+kernel, V86/DPMI e filesystem). Oggi il kernel F0 l'ha scritto Claude e il
+loader e il runner Codex; da qui in poi il codice è di Codex. Limite noto:
+Codex non può eseguire QEMU dalla sua sandbox.
+
 ## Da fare prima del codice
 
 - `execution-abi.md`: sezione F2 con il sottoinsieme POSIX (tabella delle

@@ -102,21 +102,29 @@ changing the cap.
 Owner directive, 2026-10-09: Claude Code and OpenAI Codex work together on
 this repository. Both read this file.
 
-**Roles.** The session the owner is talking to is the lead: it owns the plan,
-integration, commits, pushes and final validation, and reports disagreements
-between the two agents to the owner instead of silently picking one. The other
-agent is the teammate: research, independent reviews and bounded
-implementation tasks. Avoid extra agents when a task is too small or cannot be
-split usefully.
+**Roles (owner directive, 2026-10-10).** Claude directs, Codex writes the
+code. Claude owns the plan, the directives (specification, acceptance
+criteria, interfaces, constraints), reviews, integration, QEMU and hardware
+validation, commits and pushes, and reports disagreements between the two
+agents to the owner instead of silently picking one. Codex implements every
+coding task from a written directive, in its own worktree, with host tests;
+it chooses nothing about scope. Claude writes code only for trivial glue or
+an urgent fix it can verify at once, and records it. Codex cannot run QEMU or
+systemd scopes from its sandbox: directives ask it for host-testable code and
+Claude runs the QEMU evidence. Avoid extra agents when a task is too small or
+cannot be split usefully.
 
 **Codex models (checked 2026-10-09, `~/.codex/models_cache.json`).** Pick the
 cheapest model and effort that fits:
 
 | Model | Use | Effort |
 | --- | --- | --- |
-| `gpt-6-luna` | research, file searches, summaries, simple checks | `low`–`medium` |
-| `gpt-6.1-sol` | reviews of plans and diffs, bounded implementation | `high`–`xhigh` |
-| `gpt-6-astra` | hardest problems: architecture critique, deep debugging | `xhigh`–`max` |
+| `gpt-6-luna` | research, file searches, summaries, simple checks, small mechanical code changes | `low`–`medium` |
+| `gpt-6.1-sol` | reviews of plans and diffs, ordinary implementation (drivers, tools, tests, runner) | `high`–`xhigh` |
+| `gpt-6-astra` | hardest problems: architecture critique, deep debugging, kernel core, V86/DPMI, filesystem write paths | `xhigh`–`max` |
+
+Claude picks the model and effort per task by its complexity and risk, and
+states both in the directive.
 
 `ultra` only when the owner asks for it. Re-check the cache when models change.
 
