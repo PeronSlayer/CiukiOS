@@ -212,7 +212,7 @@ END; host predicates/checkers determine aggregate acceptance.
 | `input-fault` / T0,T3 / K,U | Inject missing ACK, bounded RESEND, mixed AUX/key bytes, malformed packet and queue overflow. Each reaches its specified error/resynchronization, no blind reset or dual consumer; survivor advances 100 ticks afterward. Firmware overrun/disallowed I/O cannot mutate physical PIC/PIT. | Deadlines, errors, overflow count, controller reads by owner, quarantine and survivor progress. |
 | `framebuffer` / T0,T3,T4 / K | Present overlapping, clipped, empty and edge rectangles with 24/32-bit/padded-pitch fixtures. Pixels equal a reference renderer; surrounding canaries/padding unchanged; overflowing requests rejected. Live pattern is visible and mode identity unchanged; no-LFB boot succeeds. | Mode/pitch/masks, pixel digest, guard errors=0, mode-call count=0, screen observation. |
 | `ata` / T0,T3,T4 / K | IDENTIFY capacity agrees with profile; known sector/file reads match fixture hashes. Boundary/overflow requests issue no command. FAT workload below proves writes. | Identity/capacity, LBA/count, expected/actual digest, command trace. |
-| `ata-fault` / T0,T3 / K,U | Inject ERR, DF, stuck BSY/DRQ, missing device and failed IDENTIFY/flush, one fresh boot per quarantine. Issued failures yield EIO by deadline; next request issues zero commands; BIOS calls=0; survivor advances 100 ticks. | Status/error/issued flag, elapsed/deadline, retained claims, subsequent-command count. |
+| `ata-fault` / T0,T3 / K,U | Inject ERR, DF, stuck BSY/DRQ, missing device and failed IDENTIFY/flush against a scripted fake device behind the driver's register boundary, re-armed between subcases in one boot (lead decision 2026-10-10, directive f1-06); one further case injects a real read error through blkdebug on the real device. Issued failures yield EIO by deadline; the next request issues zero commands; the real device sees zero commands during the fake subcases; BIOS calls=0; survivor advances 100 ticks. | Status/error/issued flag, elapsed/deadline, retained claims, subsequent-command count, real-command count. |
 | `partition` / T0,T3 / K | Valid primary/extended fixtures enumerate exact starts/lengths; malformed signature, loop, overflow, out-of-range and illegal overlap reject without out-of-device I/O. | Fixture hash, bounded walk count, partition list or rejection reason. |
 | `fat-read` / T0,T3,T4 / K | FAT12/16/32 names, aliases, sizes and hashes match independent fixtures; orphan/bad-checksum LFNs use valid short names. Boundary chains and invalid names terminate correctly. Zero writes before read gate. | Fixture/list digest, file hashes, mount mode, write count=0. |
 | `fat-write` / T0,T3,T4 / K | Create/read/overwrite/truncate/rename/delete files of 0 bytes, one cluster and 4 MiB; grow directories beyond one cluster; collide LFN aliases. Reopen and cold-reboot reads match; clean run has `fsck.fat -n` exit 0 and matching mtools names/sizes. | Workload/seed, operation results, hashes, host checker output. |
@@ -248,7 +248,13 @@ CIUKI_TEST v=1 run=12ab34cd seq=000003 probe=ata-fault event=DATA issued=1 bios_
 `platform=e500` remains validated-QEMU-only. Physical selection uses the menu
 or bounded serial selector; safe mode there comes from menu/BOOT.CFG. Preserve
 the F0 grammar unchanged. A runner `all` alias MUST expand into ordered,
-individual selectors across boots; it is not a kernel F1 selector. Unknown,
+individual selectors across boots. The kernel ALSO accepts `f1:all` and
+`f1:core` (lead decision 2026-10-10, directive f1-03): they run every
+installed F1 probe in contract order within the F1 phase only, for
+photographed hardware runs; QEMU suites never use them. The guest receives
+no fixture data: `ciuki_boot_info` v1 carries only the selector, so probes
+report what they read (names, sizes, SHA-256 digests) and the runner compares
+those records with digests it computes from the image or overlay. Unknown,
 duplicate, oversized or malformed selectors MUST run no probe and report error;
 absent selection MUST perform ordinary boot without destructive tests.
 
