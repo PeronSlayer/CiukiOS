@@ -73,8 +73,11 @@ MUST fail within the measured allocator ledger without consuming existing
 kernel emergency reservations. These are measurement requirements; this
 contract MUST NOT be used to enlarge the existing physical-memory budgets.
 
-**[F2]** The import MUST retain every compiled file's notice and list it in
-the dependency manifest. Newlib and picolibc MUST NOT be labelled as having one
+**[F2]** The public ABI header `ciuki/abi.h`, the SDK overlay headers, crt0,
+libciuki and libpthread MUST be MIT-licensed (lead decision 2026-10-11), so a
+program of any licence can include and statically link them; the kernel stays
+GPL-2.0-only and is a separate executable. The import MUST retain every
+compiled file's notice and list it in the dependency manifest. Newlib and picolibc MUST NOT be labelled as having one
 blanket BSD license. The selected permissive user-library components MAY be
 statically linked with GPLv2 programs subject to their notices; the GPLv2 kernel
 MUST remain a separate executable. Tool/build licenses and excluded source

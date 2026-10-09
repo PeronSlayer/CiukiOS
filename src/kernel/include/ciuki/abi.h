@@ -7,7 +7,9 @@
  * https://gcc.gnu.org/onlinedocs/gcc/Structure-Layout-Pragmas.html
  * Decision: scoped pack(4) preserves the contracted i386 alignment even in
  * host checks; no packed(1), host POSIX types or host pointer widths.
- * SPDX-License-Identifier: GPL-2.0-only
+ * SPDX-License-Identifier: MIT
+ * This public ABI header is MIT-licensed so that programs of any licence can
+ * include it and link the SDK runtime; the kernel itself stays GPL-2.0-only.
  */
 #ifndef CIUKI_ABI_H
 #define CIUKI_ABI_H
