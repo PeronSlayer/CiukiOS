@@ -1,0 +1,5 @@
+{
+  "main": "suspended",
+  "reason": "Foundations transition to the 32-bit kernel: no main prereleases until the new image passes the F1 gate. The 0.8 line lives on branch legacy-0.8; b849 is its preserved release.",
+  "decision": "dev_diary/2026-10-09-06-decisione-fondamenta-32bit.md"
+}

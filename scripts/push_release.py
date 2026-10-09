@@ -47,6 +47,15 @@ def clean_tree() -> None:
                          "the ZIP must match the pushed commit")
 
 
+def main_publication_policy() -> dict[str, str]:
+    """Tracked policy for main prereleases (config/release-policy.json)."""
+    path = ROOT / "config" / "release-policy.json"
+    policy = json.loads(path.read_text(encoding="utf-8"))
+    if policy.get("main") not in ("active", "suspended"):
+        raise SystemExit(f"[push-release] {path}: 'main' must be 'active' or 'suspended'")
+    return policy
+
+
 def plan() -> dict[str, str]:
     commit = command("git", "rev-parse", "HEAD")
     version = NAME.split("-")[1]
@@ -249,6 +258,14 @@ def main() -> None:
                 encoding="utf-8")
             raise
         return
+    policy = main_publication_policy()
+    if policy["main"] == "suspended":
+        clean_tree()
+        print(f"[push-release] main publication suspended: {policy.get('reason', '')}",
+              flush=True)
+        if args.from_hook:
+            return
+        raise SystemExit("[push-release] no release published; push with plain git push")
     info = plan()
     if args.plan:
         print(json.dumps(info, indent=2))
