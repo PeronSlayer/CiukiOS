@@ -10,6 +10,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/registry.h>
 #include <ciuki/timing.h>
+#include <ciuki/work.h>
 
 extern const uint8_t payload_start[], payload_end[];
 extern char probe_write_insn[], probe_write_insn_end[], probe_write_resume[];
@@ -817,6 +818,7 @@ void probes_main(void *arg)
 {
     (void)arg;
     timing_calibrate();
+    kwork_init();                        /* device worker, before any driver IRQ producer */
     if (!(g_boot.flags & CBI_F_TEST_REQUEST)) {
         klog("Ciuki VMM F0 scaffold ready (no test request). Build %s.", CIUKI_BUILD_ID);
         for (;;)
