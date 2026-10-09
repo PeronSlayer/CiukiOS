@@ -92,10 +92,16 @@ request the system boots normally. The loader MUST, in this order:
    (`F0000h–FFFFFh`; type 1 identifies QEMU, T23 and E500), EDD parameters for
    the boot drive (`AH=48h`), APM installation check (`5300h`, record only),
    the ACPI RSDP address (EBDA first KiB, then `E0000h–FFFFFh`, record only).
-   Then decide the **input policy** with the existing evidence-based rule
+   Then, before any direct i8042 access: when the SMBIOS type 1
+   manufacturer string reads `QEMU`, verify the fw_cfg `QEMU` signature at
+   ports `510h`/`511h` and read and validate the test request
+   `opt/it.alcybercloud.ciukios/test` through the file directory (physical
+   machines never get fw_cfg port accesses). A valid `platform=e500` request
+   sets `input_policy = 1` and flag bit 7; otherwise decide the **input
+   policy** with the existing evidence-based rule
    (`src/boot/input_platform.inc`, `input_platform_firmware_first`: ATI
-   `1002:4C4D`, ESS `125D:1978`, subsystem `0E11:B112` select firmware-first)
-   before any direct i8042 access.
+   `1002:4C4D` and ESS `125D:1978` whose subsystem is `0E11:B112` select
+   firmware-first).
 3. Enable A20: test the wrap-around first; try `INT 15h AX=2401h`, then the
    keyboard-controller output port (skipped on firmware-first input profiles
    unless separately qualified), then port `92h` (preserving bit 0). All
@@ -113,11 +119,8 @@ request the system boots normally. The loader MUST, in this order:
 5. Read `BOOT.CFG`, then show a boot menu for 3 seconds (keyboard through
    `INT 16h`, and COM1 at 38400 8N1 with bounded polling when the port
    answers): Normal, Safe mode, Serial log on/off, and the probe selector
-   defined in `f0-acceptance.md`. On QEMU only, the test request comes from
-   the fw_cfg item `opt/it.alcybercloud.ciukios/test`: the loader touches the
-   fw_cfg ports (`510h`/`511h`) only after the SMBIOS type 1 manufacturer
-   string reads `QEMU`, then checks the `QEMU` signature and reads the item
-   through the file directory. Physical machines never get fw_cfg port
+   defined in `f0-acceptance.md`. A QEMU test request was already collected
+   in step 2 and is not read again; physical machines never get fw_cfg port
    accesses. The validated UART base and divisor are passed to the kernel.
 6. Select and set the video mode (below).
 7. Load `VMM.ELF`: require `ELFCLASS32`, `ELFDATA2LSB`, `ET_EXEC`, `EM_386`.
@@ -180,7 +183,7 @@ version is rejected; a later version is a new layout with its own size.
 | `0x000` | `magic` | u32 | `0x31494243` (`"CBI1"`) |
 | `0x004` | `version` | u16 | `1` |
 | `0x006` | `size` | u16 | `0x10F0` |
-| `0x008` | `flags` | u32 | bit 0 safe mode; 1 serial log selected; 2 EDID valid; 3 VBE controller info valid; 4 text mode (no LFB); 5 SMBIOS reports QEMU; 6 test request present; bits 8–10 A20 method (1 already on, 2 `INT 15h`, 3 keyboard controller, 4 port `92h`) |
+| `0x008` | `flags` | u32 | bit 0 safe mode; 1 serial log selected; 2 EDID valid; 3 VBE controller info valid; 4 text mode (no LFB); 5 SMBIOS reports QEMU; 6 test request present; 7 input policy forced by validated QEMU fw_cfg `platform=e500` (requires bits 5 and 6, `input_policy = 1` and the matching selector; zero otherwise); bits 8–10 A20 method (1 already on, 2 `INT 15h`, 3 keyboard controller, 4 port `92h`) |
 | `0x00C` | `boot_drive` | u8 | BIOS drive number |
 | `0x00D` | `memmap_source` | u8 | `1` = E820 (the only accepted value) |
 | `0x00E` | `input_policy` | u8 | `0` native i8042, `1` firmware-first |

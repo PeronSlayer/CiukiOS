@@ -66,7 +66,9 @@ Test state MUST remain supervisor-only. Narrow expected-fault fixups MUST match
 the exact instruction, vector and address; unrelated kernel faults MUST panic.
 
 **[F0]** The selector grammar MUST be
-`f0:<probe-id|all> run=<8-hex-digit-id>`, at most 64 ASCII bytes. Unknown,
+`f0:<probe-id|all> run=<8-hex-digit-id> [platform=e500]`, at most 64 ASCII
+bytes. `platform=e500` is accepted only through validated QEMU fw_cfg; other
+sources MUST reject it as a selection error. Unknown,
 oversized or malformed requests MUST emit a selection error and run no probe.
 When no request is present, boot MUST enter ordinary scaffold operation without
 destructive tests.
@@ -231,6 +233,70 @@ and payload checks, T2 smoke, then T3 `bootinfo`, `allocator`, `protection`,
 a fresh boot. T4 MUST repeat those probes on both laptops and complete the
 ten-boot matrix. A suite MUST stop on prerequisite failure and record later
 probes as not run. The identical order applies to menu-selected hardware tests.
+
+### Emulation profiles and hardware replay
+
+Added 2026-10-09 at the owner's request (no serial adapter available yet):
+no emulator reproduces the T23 or E500 (no S3 Savage, Mach64 Rage Mobility,
+ESS Maestro-2E, IBM/Compaq firmware or 830MP/ICH3-M model in QEMU, Bochs,
+86Box or PCem; research recorded in
+`dev_diary/2026-10-09-08-gemelli-t23-e500.md`). F0 therefore uses
+**twin profiles** that match what the new architecture actually exercises
+on those laptops (generic VBE LFB, i8042, ATA, PIT/PIC), plus replay of the
+real firmware data captured on them.
+
+**[F0]** Profiles live in `tests/profiles/*.json` and are referenced by
+suites. Every profile pins the QEMU machine version, uses `-cpu pentium3`
+and PIIX IDE for the canonical image (through its overlay). Profiles default
+to the standard VGA device (Bochs VBE LFB), i8042 PS/2 and COM1 at `0x3F8`
+logged to a file. Suites MUST declare runtime device exceptions for the
+video-fallback and UART-absent subcases and record the effective
+configuration:
+
+| Profile | Accelerator | RAM | Purpose |
+| --- | --- | --- | --- |
+| `qemu-t23` | TCG | 512 MiB | ThinkPad T23 twin: RAM as measured on the owner's unit (130,656 usable pages), AC97 `82801AA` (same programming model class as the T23's ICH3 AC97) |
+| `qemu-e500` | TCG | 256 MiB | Armada E500 twin: RAM as measured (65,264 usable pages); selector key `platform=e500` forces the firmware-first input policy (below) |
+| `qemu-min128` | TCG | 128 MiB | minimum supported RAM |
+| `qemu-fast` | KVM | 256 MiB | quick developer smoke only; never evidence of CPU-feature correctness |
+
+TCG is mandatory for evidence: under KVM the host CPU executes instructions
+a Pentium III lacks (for example SSE2) even when CPUID hides them, so such
+defects would pass silently.
+
+**[F0]** The optional selector key `platform=e500` (grammar above) is
+honoured only for a request read from validated QEMU fw_cfg, before any
+i8042 access (`boot-memory.md`, loader step 2); it sets `input_policy = 1`
+without the PCI BIOS detection and sets `ciuki_boot_info.flags` bit 7.
+Physical selection requires successful PCI BIOS calls, ATI `1002:4C4D`, and
+ESS `125D:1978` whose subsystem vendor/device is `0E11:B112`
+(`src/boot/input_platform.inc`); otherwise native-first is selected.
+
+**[F0]** Hardware replay fixtures live in `tests/fixtures/hardware/t23/` and
+`tests/fixtures/hardware/e500/`: raw E820 maps (`MEMMAP.BIN` captures), VBE
+controller and mode-information traces (`VBE.TRC`), PCI identities
+(`ACTIVE.CFG`) and EDID absence, extracted from the physical log captures
+archived in `legacy/local/` with their source capture name and SHA-256.
+They contain no disk serials or personal data. T0 host tests feed them to:
+
+- the kernel's `ciuki_boot_info` validator and E820-to-allocator
+  initialization (C, compiled for the host);
+- `scripts/test/loader_model.py`, a reference model of the loader rules in
+  `boot-memory.md` (E820 normalization, VBE mode eligibility and preference,
+  input-policy decision), whose output for QEMU's own data MUST match the
+  loader's real `ciuki_boot_info` from a `qemu-t23` boot (T2/T3 check).
+
+Expected results per fixture (for example: the T23 VBE trace includes the
+malformed-scanline mode that must be skipped) are stored beside it.
+
+**[F0]** A second emulator, Bochs, MAY be used for debugging (strict CPU
+checks, single-step debugger, different BIOS and VGA BIOS). It is not part
+of the F0 gate. 86Box is deferred: it needs separately sourced ROM sets and
+does not model either laptop.
+
+**[F0]** Twin profiles never replace T4: the F0 gate on physical machines
+still requires the T23 and E500 runs. Until a serial adapter exists, those
+runs use screen evidence with the paging rules above.
 
 ### Physical procedure and failure records
 

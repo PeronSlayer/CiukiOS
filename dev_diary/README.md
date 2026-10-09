@@ -73,3 +73,4 @@ Documenti di design, validazione, fonti esterne.
 | [Revisione di Codex sull'architettura](2026-10-09-05-revisione-codex-architettura.md) | 9 ott | analisi |
 | [Decisione: fondamenta a 32 bit](2026-10-09-06-decisione-fondamenta-32bit.md) | 9 ott | decisione |
 | [I sette contratti prima di F0](2026-10-09-07-contratti-f0.md) | 9 ott | decisione (design) |
+| [Gemelli virtuali T23 ed E500](2026-10-09-08-gemelli-t23-e500.md) | 9 ott | decisione (test) |
