@@ -5,6 +5,45 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 out="$root/build/host"
 mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
+
+# F2 ABI: always extract the actual i686 layout using the kernel's flags.
+python3 "$root/scripts/test/abi_layout_dump.py" --output "$out/abi-layout.json"
+cat > "$out/abi_m32_probe.c" <<'C'
+#include <stdint.h>
+#include <stdio.h>
+int main(void) { return sizeof(uintptr_t) != 4; }
+C
+abi_flags=(-std=c17 -O1 -g -Wall -Wextra -Werror)
+abi_m32=0
+if clang -m32 "${abi_flags[@]}" "$out/abi_m32_probe.c" -o "$out/abi_m32_probe" \
+        > "$out/abi_m32_probe.log" 2>&1; then
+    # Even if the sandbox cannot execute 32-bit Linux binaries, compile the
+    # complete test/header in that mode. A real ABI compile error must fail.
+    clang -m32 "${abi_flags[@]}" -I "$root/src/kernel/include" \
+        -c "$root/tests/host/abi_layout_test.c" -o "$out/abi_layout_test_m32.o"
+    if python3 - "$out/abi_m32_probe" <<'PY'
+import resource, subprocess, sys
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+result = subprocess.run([sys.argv[1]], capture_output=True)
+if result.returncode:
+    print(f"abi layout: -m32 runtime probe unavailable (status {result.returncode})")
+sys.exit(0 if result.returncode == 0 else 1)
+PY
+    then
+        abi_m32=1
+    fi
+fi
+if [[ "$abi_m32" == 1 ]]; then
+    abi_flags+=(-m32)
+    echo "abi layout: native -m32 available"
+else
+    abi_flags+=(-fsanitize=address,undefined)
+    echo "abi layout: native -m32 unavailable; checking target JSON with native fixed-width records"
+fi
+clang "${abi_flags[@]}" -I "$root/src/kernel/include" \
+    "$root/tests/host/abi_layout_test.c" -o "$out/abi_layout_test"
+"$out/abi_layout_test" "$out/abi-layout.json"
+
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_lib_test.c" -o "$out/kernel_lib_test"
 "$out/kernel_lib_test"
