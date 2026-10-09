@@ -1,0 +1,10 @@
+{
+  "comment": "Pinned toolchain for Ciuki VMM (docs/design/execution-abi.md). The build fails when a major version differs.",
+  "clang_major": 23,
+  "ld_lld_major": 23,
+  "nasm_major": 3,
+  "qemu_major": 11,
+  "qemu_machine": "pc-i440fx-9.2",
+  "target": "i686-unknown-elf",
+  "march": "pentiumpro"
+}
