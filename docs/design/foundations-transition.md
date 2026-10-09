@@ -43,9 +43,18 @@ during the transition, and how the build switches over without leaving
 | --- | --- | --- |
 | F0 | Loader handoff, kernel core (paging, IDT/GDT/TSS, PIC, PIT, physical allocator, kernel heap), resource reservation registry and read-only platform inventory, safe console selection, early serial and crash screen, probe syscalls, embedded ring-3 probes with preemption and fault containment, runner integration | F0 criteria in the decision entry and [`f0-acceptance.md`](f0-acceptance.md) |
 | F1 | Qualified device activation on the registry, input (native PS/2 or the firmware-first lease), VBE LFB framebuffer, ATA PIO, MBR partitions, VFS with FAT32+LFN (read first, then write), FAT12/16, complete safe mode, boot log on disk | FAT32 read/write integrity, safe-mode boot, input on both laptops; main prereleases resume |
-| F2 | ELF32 application loading and application syscalls, native processes, desktop/compositor as a ring-3 process, first ported application | an application crash leaves the desktop and other processes running |
+| F2 | ELF32 application loading and the POSIX-subset syscalls with a ported libc (`execution-abi.md`), native processes, desktop/compositor as a ring-3 process, first ported application | an application crash leaves the desktop and other processes running; an identified upstream application builds against the CiukiOS SDK and passes named runtime tests |
 | F3 | DOS VMs in V86 with CIUKIDOS personality on private FAT16 disks, virtual devices (VGA, input, PIT/PIC, SB16/OPL state), A20/XMS/UMB, then kernel DPMI 0.9, EMS and DOS/4GW workloads | named DOS workload matrix ("DOS parity", defined in `dos-dpmi-contract.md`) |
-| F4 | AC97 and ESS Maestro-2E audio (audible SB16/OPL output), DOS-to-VFS bridge for shared volumes, optional S3/Mach64 acceleration, ATAPI and ISO9660, NTFS read-only | per-device qualification; acceleration stays off where unqualified |
+| F4 | AC97 and ESS Maestro-2E audio (audible SB16/OPL output), DOS-to-VFS bridge for shared volumes, optional S3/Mach64 2D acceleration, ATAPI and ISO9660, NTFS read-only | per-device qualification; acceleration stays off where unqualified |
+| F5 | SDL port on the POSIX API, software OpenGL for 2D use, native builds of engines with public source (Quake 1/2, Xash3D-FWGS for Half-Life as a separate GPL-3.0 program, Doom ports, Descent, Duke Nukem 3D); DevilutionX is a separate candidate with licensing restrictions; commercial game data remains separately licensed and is supplied by the player | each named game starts, plays and exits on both laptops |
+| F6 | lwIP TCP/IP, DHCP, NIC drivers through a driver-compatibility layer, a virtual NE2000 for DOS VMs with selected, qualified DOS drivers, native sockets | a DOS LAN game (IPX) and a native LAN game (UDP) between the two laptops; automated Ethernet tests with one QEMU and a host frame peer |
+| F7 | Mesa and DRM port, 3D drivers for the chosen chips, hardware OpenGL | Quake 3 (ioquake3) playable on at least one chip, with the earlier gates still passing on both laptops |
+| F8 | Wine as the Win32 personality with a CiukiOS backend: DirectX over our graphics and audio, winsock over our sockets | original Half-Life, Quake 3, StarCraft and Age of Empires start, play and exit; a LAN game through winsock between the two laptops |
+
+Steps F5–F8 were added on 2026-10-09 with the scope decision (dev diary
+2026-10-09-10): F0 foundations followed by eight steps. Their contracts are
+written when the previous step closes. The F2 native API is a POSIX subset
+(`execution-abi.md`).
 
 A phase is complete only when every item of its gate passes on the image it
 is claimed for (AGENTS.md, test-architecture.md). Later phases MUST NOT start
@@ -82,6 +91,7 @@ gate passes; history stays on `legacy-0.8`).
 | DOS utilities in `src/com/` (`format.asm`, `drvload.asm`, game launchers, probes) | DOS-side or retire | F3 | Decided per file when DOS VMs land. |
 | `assets/` (Ciuki portrait, Tango icons, sounds, cursors, fonts), `wallpapers/`, `misc/` | keep | all | Identity rules in AGENTS.md apply unchanged. |
 | `third_party/` (bearssl, tjpgd, dr_libs/stb, jsvendor, doomgeneric, wolf4sdl, ctmouse, freedos, vsbhda) | keep | per user | Each keeps its own license file; local commercial payloads (`Doom/`, `WOLF3D/`, `win_bg/`) stay untracked. |
+| Planned imports (F5–F8): newlib or musl, SDL, lwIP, Mesa and DRM drivers of the era, FreeBSD/Linux NIC drivers behind a compatibility layer, Wine | later | F2–F8 | Each import is pinned to an upstream commit and reviewed for its exact licenses, dependencies, linking and redistribution requirements; kernel integration is reviewed separately from independently distributed user programs (a GPL-3.0 program such as Xash3D-FWGS can be shipped as a separate program but never linked into GPLv2 code). |
 | `third_party/jemm`, `patches/jemm-*`, `patches/hdpmi-*`, `patches/sbemu-*`, `patches/vsbhda-*` | retire | F3 | Not used by the new kernel. A Jemm file is reused only after a per-file license check recorded in this table. |
 | `scripts/build_full.sh` and its closure | retire | F0 switch | Replaced atomically (see below). |
 
@@ -94,9 +104,12 @@ feature; the deletion is recorded in a dev diary entry.
 
 - New Ciuki VMM code is GPL-2.0-only, like the project.
 - Reused third-party code MUST carry its notice and appear in the inventory
-  with its license. GPL-2.0-or-later, LGPL-2.1, MIT, BSD, zlib and Public
-  Domain code is acceptable. GPL-3.0-only or LGPL-3.0-only code is not.
-  Artistic-licensed Jemm parts need an explicit per-file check before reuse.
+  with its license. Each import is pinned to an upstream commit and reviewed
+  for its exact licenses, dependencies, linking and redistribution
+  requirements; kernel integration is reviewed separately from
+  independently distributed user programs. Code that is only available
+  under GPL-3.0 or LGPL-3.0 cannot be linked into GPLv2 code; Artistic-
+  licensed Jemm parts need an explicit per-file check before reuse.
 - NTFS support (F4) MUST choose a GPLv2-compatible source (for example the
   Linux `ntfs3` driver, GPL-2.0) or an independent implementation from the
   published on-disk format; GRUB's NTFS code is GPL-3.0 and is excluded.

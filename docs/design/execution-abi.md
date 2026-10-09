@@ -83,6 +83,45 @@ The kernel linker script defines `.text`, `.rodata`, `.data`, `.bss` with
 - Kernel stacks: 8 KiB per thread plus an unmapped guard page below, in the
   `F0000000` region (`boot-memory.md`).
 
+## Decision for F2: a POSIX-compatible native API (2026-10-09)
+
+The owner decided ([dev diary 2026-10-09-10](../../dev_diary/2026-10-09-10-scope-retrogaming-posix-rete.md))
+that native programs use a POSIX subset through a ported C library instead
+of a bespoke API. Reason: SDL, lwIP, Mesa, the open-source game engines and
+Wine (the planned Win32 personality, LGPL-2.1-or-later) are written against
+POSIX. A documented POSIX subset should reduce the porting work; it does
+not remove platform backends, and Wine will additionally need host
+services (signals with machine context, fine-grained `mmap`) and a CiukiOS
+backend of its own. F2 does not guarantee Wine compatibility. The kernel
+keeps its own system-call numbers (this contract); the library translates.
+Before F2 code this contract MUST:
+
+- select the libc (newlib, whose porting model is a board-support layer,
+  or musl, which is Linux-oriented and needs more adaptation) and the set
+  of supported interfaces;
+- specify `errno` values, fundamental types, descriptor inheritance,
+  process creation (`spawn`-style creation is the baseline; `fork` is
+  marked supported or excluded explicitly), `exec`, `exit`, `wait`;
+- specify threads (1:1 with kernel threads), TLS and pthreads, and any
+  futex-like wait/wake primitive as a separate CiukiOS extension (futex is
+  a Linux interface, not POSIX);
+- specify signal masks, delivery context and return, including
+  `SIGSEGV`/`SIGFPE`/`SIGILL` with the fault context;
+- specify memory mapping semantics (`mmap`, `munmap`, `mprotect`, `brk`),
+  blocking and interruption of system calls;
+- specify files and directories (`open`, `read`, `write`, `lseek` with
+  64-bit offsets, `stat`, `readdir`, `mkdir`, `rename`, `unlink`, `dup`,
+  `fcntl`), time (`clock_gettime`, `nanosleep`), and path mapping between
+  drive letters and POSIX paths;
+- state what is excluded (users and Unix permissions, terminals); sockets
+  arrive with F6.
+
+Static ELF32 stays the initial executable format; dynamic loading is a
+later decision. The F2 gate: an identified upstream application builds
+against the CiukiOS SDK and passes named runtime tests. The F0 calls below
+stay as the probe interface; the POSIX table extends the same numbering
+space.
+
 ## Address space of a native process
 
 | Range | Use |

@@ -321,6 +321,18 @@ legacy slots. These require integration, not an outer INT 21h interception.
 `kernel_lfn_flush_fat` and `kernel_lfn_invalidate_fat` MUST be bypassed for
 shared drives.
 
+## Network for DOS VMs (F6)
+
+**[F6]** Each VM MAY be given a virtual NE2000-compatible network card
+attached to the kernel's network stack, used with selected, qualified DOS
+drivers (packet driver and IPX). Guest IPX frames travel over an Ethernet
+bridge to the physical network, so DOS LAN games (DOOM through IPXSETUP,
+Duke Nukem 3D, Warcraft II, Quake through its network drivers) play against
+other machines; native TCP/IP uses lwIP. The exact contract (frame
+injection, virtual IRQ, PIO-only model with no guest bus-master DMA, MAC
+policy for several VMs on one card) is written with the F6 network
+contract; a guest never sees or programs the physical NIC.
+
 ## Virtual devices and reuse
 
 **[F3]** VGA text, planar modes, mode 13h/Mode X, keyboard focus, INT 33h

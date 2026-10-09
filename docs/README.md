@@ -17,6 +17,7 @@ Ciuki VMM foundation contracts (approved 2026-10-09):
 5. [DOS VMs and DPMI](design/dos-dpmi-contract.md)
 6. [Device and firmware ownership](design/device-firmware-ownership.md)
 7. [F0 acceptance](design/f0-acceptance.md)
+8. [Network foundations (F6)](design/network-foundations.md) — decision record, contract to be written
 
 Validation records: [F0 kernel, loader and runner on QEMU](validation/2026-10-09-f0/README.md),
 [F0 runner implementation](validation/f0-runner.md), [F0 loader](validation/2026-10-09-f0-loader.md).

@@ -63,6 +63,13 @@ and the F0 acceptance criteria). In short:
   build dependencies stay until each is migrated or retired explicitly.
 - No F0 code before the seven design contracts listed in D11 exist in
   `docs/design/` and have been reviewed by the other agent.
+- Scope (owner decision 2026-10-09, dev diary 2026-10-09-10): a modern
+  retro gaming OS, not a Windows clone; F0 foundations followed by eight
+  steps, F1–F8 (drivers and disk, native programs, DOS, sound and media,
+  native games, network, 3D, Windows games through Wine). The F2 native API is a POSIX
+  subset with a ported libc; networking is step F6 with lwIP, a NIC driver
+  compatibility layer and a virtual NE2000/IPX for DOS VMs. Each step's
+  contract is written and cross-reviewed before its code.
 
 ## Research before implementation
 

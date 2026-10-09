@@ -34,6 +34,11 @@ Main prereleases are suspended until the F1 gate (`config/release-policy.json`).
 - Replace the Makefile: `build-full`, `test-host`, `qemu-test-full` and
   `qemu-run-full` target the new image; the 0.8 scripts stay as
   `legacy-*` targets until each component is migrated or retired.
+- Declare the project scope (dev diary 2026-10-09-10): a modern retro
+  gaming OS, not a Windows clone; DOS games natively, open-source engines
+  built for CiukiOS, LAN play, later Windows 95/98 games through Wine and
+  3D on chosen chips. Decide a POSIX-compatible native API for F2 and a
+  network step (F6); extend the plan to F0 plus eight steps (F1–F8).
 
 ## 0.8 line — final state (2026-10-09, branch `legacy-0.8`)
 

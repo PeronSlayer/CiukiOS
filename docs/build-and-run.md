@@ -47,4 +47,8 @@ the kernel boots to its scaffold prompt on COM1 (38400 8N1) and the screen.
 
 Write `build/f0/ciukios.img` to an expendable disk; the procedure and the
 evidence rules are in `docs/design/f0-acceptance.md`. Screen evidence pages
-through the recorded records automatically after a probe run.
+through the recorded records automatically after a probe run. With an
+RS-232 to USB adapter and a null-modem cable on the laptop's serial port,
+`scripts/test/serial_capture.sh <run-id>` records COM1 (38400 8N1) into
+`legacy/local/physical/<run-id>/serial.log`; start it before power-on, then
+choose `P` in the loader menu and type `f0:all run=<run-id>`.
