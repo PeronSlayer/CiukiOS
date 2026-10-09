@@ -17,6 +17,17 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/i8042_test.c" -o "$out/i8042_test"
 "$out/i8042_test"
 
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DFS_HOST -pthread -I "$root/src/kernel/include" \
+    "$root/tests/host/ata_test.c" "$root/src/kernel/fs/partition.c" \
+    "$root/src/kernel/lib/sha256.c" -o "$out/ata_test"
+"$out/ata_test"
+
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/sha256_test.c" \
+    "$root/src/kernel/lib/sha256.c" -o "$out/sha256_test"
+"$out/sha256_test"
+
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.
 fx="$out/audit_fixture.asm"
