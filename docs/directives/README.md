@@ -24,6 +24,10 @@ evidence and merges.
 | [f1-08-runtime-integration](f1-08-runtime-integration.md) | F1 | gpt-6.1-sol / xhigh | written; starts after f1-03 and f1-07 |
 | [f1-09-storage-bringup](f1-09-storage-bringup.md) | F1 | gpt-6-astra / xhigh | written; starts after f1-03, f1-06 and f1-08 |
 | [f2-01-abi-header](f2-01-abi-header.md) | F2 | gpt-6.1-sol / high | issued 2026-10-10 |
+| [f2-02-processes-and-memory](f2-02-processes-and-memory.md) | F2 | gpt-6-astra / xhigh | written; starts after f2-01 |
+| [f2-06-sdk-newlib](f2-06-sdk-newlib.md) | F2 | gpt-6.1-sol / xhigh | written; starts after f2-01 |
 
-Planned next: F2 directives from the f2-00 contract (ELF loader and process
-model, syscall layer, libc port and SDK, desktop process, gate application).
+Planned next (F2, after f2-02): f2-03 files and paths over the VFS, f2-04
+signals and faults, f2-05 desktop objects and the bootstrap supervisor,
+f2-07 Lua 5.4.8 port and tests, f2-08 ring-3 desktop, f2-09 F2 runner
+suites and probes.
