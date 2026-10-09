@@ -64,7 +64,22 @@
                 "ge": 0
               }
             },
-            "combine": true
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
           }
         ]
       }
@@ -131,7 +146,22 @@
                 "ge": 0
               }
             },
-            "combine": true
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
           }
         ]
       }

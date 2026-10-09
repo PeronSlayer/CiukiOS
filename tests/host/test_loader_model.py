@@ -72,6 +72,8 @@ class LoaderModelTests(unittest.TestCase):
         self.assertEqual(model.select_video(c,[small,m])['mode'],m['mode'])
         self.assertEqual(model.select_video(c,[small,m],configured=small['mode'])['mode'],small['mode'])
         self.assertEqual(model.select_video(c,[small,m],safe=True)['mode'],small['mode'])
+        self.assertEqual((m['width'],m['height']),(1024,768))
+        self.assertEqual(model.select_video(c,[small,m],configured=m['mode'],safe=True)['mode'],small['mode'])
         m['readback_mode']=0x115;self.assertEqual(model.select_video(c,[small,m])['mode'],small['mode'])
         small['set_ok']=False;self.assertTrue(model.select_video(c,[small,m])['text'])
 

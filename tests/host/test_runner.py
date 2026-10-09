@@ -89,6 +89,30 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(set(p.name for p in directory.iterdir()),{'result.json','serial.log'})
         self.assertEqual(result['host']['effective_limits']['memory.swap.max'],'0')
         self.assertTrue(result['cleanup']['clean']);self.assertTrue(result['cleanup']['qmp_quit'])
+    def test_canonical_selector_safe_and_profile_platform(self):
+        profile=json.loads((ROOT/'tests/profiles/qemu-e500.json').read_text())
+        for suffix in (' safe=1',' platform=e500 safe=1'):
+            case={**self.case,'selector':'f0:boot run={run_id}'+suffix}
+            args,request=runner.qemu_args('fixture',profile,case,'12345678',self.image,self.firmware)
+            self.assertEqual(request,'f0:boot run=12345678 platform=e500 safe=1')
+            self.assertIn('name=opt/it.alcybercloud.ciukios/test,string='+request,args)
+        case={**self.case,'selector':'f0:boot run={run_id} platform=e500'}
+        self.assertEqual(runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)[1],
+                         'f0:boot run=12345678 platform=e500')
+    def test_duplicate_selector_keys_are_refused(self):
+        for suffix in (' platform=e500 platform=e500',' safe=1 safe=1',' run=12345678'):
+            case={**self.case,'selector':'f0:boot run={run_id}'+suffix}
+            with self.subTest(suffix=suffix),self.assertRaises(ValueError):
+                runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)
+    def test_legacy_loader_options_are_refused(self):
+        for options in ({'safe':True},{}):
+            case={**self.case,'loader_options':options}
+            with self.assertRaisesRegex(res.Refusal,'loader_options'):
+                runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)
+    def test_not_run_is_retained_and_never_passes(self):
+        result,directory=self.run_fake(records=[{'event':'NOT_RUN','reason':'prerequisite_failed','after':'bootinfo'}])
+        self.assertEqual(result['outcome'],'not_run');self.assertIn('bootinfo',result['reason'])
+        self.assertTrue((directory/'run.qcow2').exists());self.assertTrue(result['cleanup']['clean'])
     def test_missing_and_malformed_markers_retain_overlay(self):
         for records in ([{'event':'BEGIN'},{'event':'END','status':'PASS'}],['CIUKI_TEST v=1 v=1 run={run_id} seq=000001 probe=boot event=BEGIN']):
             with self.subTest(records=records):
@@ -164,6 +188,50 @@ class RunnerTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_not_run_is_a_standalone_terminal(self):
+        parser=Parser('12345678','allocator')
+        parser.feed(b'CIUKI_TEST v=1 run=12345678 seq=000010 probe=allocator event=NOT_RUN reason=prerequisite_failed after=bootinfo')
+        self.assertEqual(parser.outcome,'not_run')
+        with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check({'terminal':'END'})
+        with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check({'terminal':'NOT_RUN'})
+        with self.assertRaises(EvidenceError):
+            parser.feed(b'CIUKI_TEST v=1 run=12345678 seq=000011 probe=allocator event=END status=PASS')
+        for suffix in ('reason=other after=bootinfo','reason=prerequisite_failed','reason=prerequisite_failed after=unknown'):
+            with self.subTest(suffix=suffix),self.assertRaises(EvidenceError):
+                Parser('12345678','allocator').feed(('CIUKI_TEST v=1 run=12345678 seq=000010 probe=allocator event=NOT_RUN '+suffix).encode())
+        parser=Parser('12345678','allocator')
+        parser.feed(b'CIUKI_TEST v=1 run=12345678 seq=000001 probe=allocator event=BEGIN')
+        with self.assertRaises(EvidenceError):
+            parser.feed(b'CIUKI_TEST v=1 run=12345678 seq=000002 probe=allocator event=NOT_RUN reason=prerequisite_failed after=bootinfo')
+
+    def test_suite_timer_predicates_reject_fabricated_progress(self):
+        for path in sorted((ROOT/'tests/suites').glob('f0-*.json')):
+            for case in json.loads(path.read_text())['cases']:
+                for predicate in case['expected'].get('predicates',[]):
+                    fields=predicate.get('fields',{})
+                    if not {'ready_tick','final_tick','elapsed_pit_cycles'} <= fields.keys():continue
+                    # Populate the actual suite predicate's other fields with
+                    # valid values, so only its timing checks determine success.
+                    data={**predicate['where']}
+                    for field,rule in fields.items():
+                        value=rule.get('eq',rule.get('ge',0)) if isinstance(rule,dict) else rule
+                        if isinstance(value,str) and value.startswith('$'):value=0
+                        data[field]=f'{value:08x}' if isinstance(rule,dict) and rule.get('encoding')=='hex' else str(value)
+                    for ready,final,cycles,passes in ((0,0,11931820,False),(17,10026,10009*1193,False),
+                                                    (17,10027,10010*1193+1,False),(17,10027,10010*1193,True)):
+                        with self.subTest(suite=path.name,case=case['id'],ticks=(ready,final),cycles=cycles):
+                            parser=Parser('12345678','boot')
+                            data.update(ready_tick=str(ready),final_tick=str(final),elapsed_pit_cycles=str(cycles))
+                            records=['event=BEGIN']
+                            records.extend(f'event=DATA group=boot {k}={v}' for k,v in data.items() if k not in ('event','group'))
+                            records.append('event=END status=PASS')
+                            for seq,record in enumerate(records,1):
+                                parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=boot {record}'.encode())
+                            expected={'terminal':'END','predicates':[predicate]}
+                            if passes:self.assertTrue(parser.check(expected))
+                            else:
+                                with self.assertRaises(EvidenceError):parser.check(expected)
+
     def test_strict_grammar_sequence_terminal_and_length(self):
         for bad in [b'CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN v=1',b'CIUKI_TEST v=1 run=87654321 seq=000001 probe=boot event=BEGIN',b'CIUKI_TEST v=1 run=12345678 seq=1 probe=boot event=BEGIN',b'CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN x='+b'a'*200,b' CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN',b'CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN x=\xff']:
             with self.subTest(bad=bad[:80]),self.assertRaises(EvidenceError):Parser('12345678','boot').feed(bad)

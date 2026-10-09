@@ -106,11 +106,14 @@ def teardown(host,unit,process,qmp,cgroup):
 
 
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
+    if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
     request=case.get('selector',f"f0:{case['probe']} run={{run_id}}").format(run_id=run_id)
     requested=selector(request,'fw_cfg',True)
     if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
-    request=request.removesuffix(' platform=e500')
-    if profile.get('platform'): request+=' platform='+profile['platform']
+    request=f"f0:{requested['probe']} run={requested['run']}"
+    platform=profile.get('platform') or requested['platform']
+    if platform:request+=' platform='+platform
+    if requested['safe']:request+=' safe=1'
     selector(request,'fw_cfg',True)
     devices=case.get('device_exceptions',{})
     args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
@@ -275,6 +278,8 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
             if now>=deadline:
                 result['timeout']['occurred']=True;raise EvidenceError('host monotonic deadline exceeded')
             if parser.terminal:
+                if parser.terminal['event']=='NOT_RUN':
+                    result['outcome']='not_run';result['reason']='prerequisite failed: '+parser.terminal['after'];break
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
                 if terminal_time is None:terminal_time=now
@@ -312,7 +317,8 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
             host_resets=sum(1 for e in qmp.events if e.get('event')=='RESET' and e.get('data',{}).get('reason')=='host-qmp-system-reset') if qmp else 0
             if host_resets!=expected_resets:
                 raise EvidenceError(f'host reset count {host_resets} differs from expected {expected_resets}')
-        result['outcome']='pass';result['reason']='all declared predicates and host observations passed'
+        if result['outcome']!='not_run':
+            result['outcome']='pass';result['reason']='all declared predicates and host observations passed'
     except (OSError,ValueError,RuntimeError,subprocess.SubprocessError,KeyboardInterrupt) as e:
         result['reason']=str(e) or type(e).__name__
     finally:
