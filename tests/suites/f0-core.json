@@ -4846,7 +4846,7 @@
       "id": "safe-mode",
       "probe": "boot",
       "profile": "qemu-t23",
-      "selector": "f0:boot run={run_id}",
+      "selector": "f0:boot run={run_id} safe=1",
       "timeout": 180,
       "expected": {
         "terminal": "END",
@@ -4902,16 +4902,34 @@
                 "encoding": "hex",
                 "width": 8,
                 "ge": 0
+              },
+              "safe_mode": {
+                "eq": 1
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "video"
+            },
+            "fields": {
+              "text": {
+                "eq": 0
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 480
               }
             },
             "combine": true
           }
         ]
       },
-      "device_exceptions": {},
-      "loader_options": {
-        "safe": true
-      }
+      "device_exceptions": {}
     }
   ]
 }

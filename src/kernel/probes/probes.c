@@ -142,8 +142,8 @@ static int probe_boot(void)
     rec_emit("boot", "DATA", "group=boot cpuid=%08x vendor=%s build_id=%s build_dirty=%u boot_drive=%08x ram_bytes=%llu usable_bytes=%llu",
              g_cpu_signature, g_cpu_vendor, CIUKI_BUILD_HEX8, CIUKI_BUILD_DIRTY, g_boot.boot_drive,
              installed_ram_bytes(), (uint64_t)pmm_total_usable() * PAGE_SIZE);
-    rec_emit("boot", "DATA", "group=boot unexpected_resets=0 panics=0 boot_failures=0 input_policy=%u e820_entries=%u",
-             g_boot.input_policy, g_boot.e820_count);
+    rec_emit("boot", "DATA", "group=boot unexpected_resets=0 panics=0 boot_failures=0 input_policy=%u e820_entries=%u safe_mode=%u",
+             g_boot.input_policy, g_boot.e820_count, !!(g_boot.flags & CBI_F_SAFE_MODE));
     if (g_boot.flags & CBI_F_TEXT_MODE)
         rec_emit("boot", "DATA", "group=video text=1");
     else
@@ -793,11 +793,12 @@ static bool parse_selector(const char *s, unsigned len, char *probe, unsigned pr
     }
     run[8] = 0;
     i += 12;
-    if (i == len)
-        return true;
-    if (len - i == 14 && strncmp(s + i, " platform=e500", 14) == 0)
-        return true;
-    return false;
+    /* optional suffixes, in order, each at most once */
+    if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0)
+        i += 14;
+    if (len - i >= 7 && strncmp(s + i, " safe=1", 7) == 0)
+        i += 7;
+    return i == len;
 }
 
 static __attribute__((noreturn)) void show_evidence_forever(void)
@@ -823,16 +824,21 @@ void probes_main(void *arg)
     }
     char probe[24], run[9];
     if (!parse_selector(g_boot.test_request, g_boot.test_request_len, probe, sizeof(probe), run)) {
-        klog("[selector] malformed test request; no probe runs");
+        char shown[65];
+        unsigned n = g_boot.test_request_len < 64 ? g_boot.test_request_len : 64;
+        memcpy(shown, g_boot.test_request, n);
+        shown[n] = 0;
+        klog("[selector] malformed test request (len=%u): '%s'; no probe runs", g_boot.test_request_len, shown);
         show_evidence_forever();
     }
     rec_set_run(run);
     klog("[selector] probe=%s platform=%s tsc_khz=%u", probe,
          (g_boot.flags & CBI_F_INPUT_FORCED) ? "e500" : "native", (uint32_t)g_tsc_per_ms);
     bool all = !strncmp(probe, "all", 4);
+    bool core = !strncmp(probe, "core", 5);     /* every probe but panic */
     int ran = 0;
     for (unsigned i = 0; i < ARRAY_SIZE(probes); i++) {
-        if (all || !strncmp(probe, probes[i].name, 24)) {
+        if (all || core || !strncmp(probe, probes[i].name, 24)) {
             probes[i].fn();
             ran++;
         }

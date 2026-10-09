@@ -66,9 +66,18 @@ Test state MUST remain supervisor-only. Narrow expected-fault fixups MUST match
 the exact instruction, vector and address; unrelated kernel faults MUST panic.
 
 **[F0]** The selector grammar MUST be
-`f0:<probe-id|all> run=<8-hex-digit-id> [platform=e500]`, at most 64 ASCII
-bytes. `platform=e500` is accepted only through validated QEMU fw_cfg; other
-sources MUST reject it as a selection error. Unknown,
+`f0:<probe-id|all|core> run=<8-hex-digit-id> [platform=e500] [safe=1]`, at
+most 64 ASCII bytes, keys in that order and each at most once. `core` runs
+every probe except `panic` and then pages the evidence on screen: it is the
+selector for photographed hardware runs, where `all` would end in the halted
+panic screen and lose the earlier records (added 2026-10-10). `platform=e500`
+and `safe=1` are accepted only through validated QEMU fw_cfg; other sources
+MUST reject them as a selection error. `safe=1` has exactly the effect of
+`safe=1` in `BOOT.CFG` or of the menu's `S` key (flag `CBI_F_SAFE_MODE`,
+640×480 preferred, optional devices off); on physical machines safe mode
+is selected only through the menu or `BOOT.CFG`. The `boot` probe reports
+`safe_mode=<0|1>` in its `group=boot` record (added 2026-10-10 to automate
+the `safe-mode` case). Unknown,
 oversized or malformed requests MUST emit a selection error and run no probe.
 When no request is present, boot MUST enter ordinary scaffold operation without
 destructive tests.

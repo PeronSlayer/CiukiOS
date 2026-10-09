@@ -212,8 +212,6 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
     pending=b'';panic_start=None;armed_stats=None;terminal_time=None
     restart_performed=False;expected_resets=0
     try:
-        if case.get('loader_options'):
-            raise res.Refusal('safe-mode menu automation is not defined by the frozen selector contract')
         subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(overlay)],check=True,stdout=subprocess.DEVNULL,timeout=10)
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
         serial=(directory/'serial.log').open('wb');stderr=(directory/'stderr.log').open('wb');qlog=(directory/'qmp.log').open('wb');logs=[serial,stderr,qlog]

@@ -97,8 +97,9 @@ request the system boots normally. The loader MUST, in this order:
    ports `510h`/`511h` and read and validate the test request
    `opt/it.alcybercloud.ciukios/test` through the file directory (physical
    machines never get fw_cfg port accesses). A valid `platform=e500` request
-   sets `input_policy = 1` and flag bit 7; otherwise decide the **input
-   policy** with the existing evidence-based rule
+   sets `input_policy = 1` and flag bit 7; a valid `safe=1` request sets
+   flag bit 0 (safe mode) as `BOOT.CFG` or the menu would; otherwise decide
+   the **input policy** with the existing evidence-based rule
    (`src/boot/input_platform.inc`, `input_platform_firmware_first`: ATI
    `1002:4C4D` and ESS `125D:1978` whose subsystem is `0E11:B112` select
    firmware-first).

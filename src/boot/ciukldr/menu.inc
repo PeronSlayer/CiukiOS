@@ -2,6 +2,7 @@
 ; separate from request text; only fw_cfg may request platform=e500.
 selector_validate:
     mov byte [selector_force], 0
+    mov byte [selector_safe], 0
     cmp cx, 64
     ja .bad
     cmp cx, 16
@@ -60,17 +61,35 @@ selector_validate:
     loop .hex
     cmp si, [selector_end]
     je .good
+    ; Optional fw_cfg-only suffixes, in order: " platform=e500", " safe=1".
     cmp byte [selector_fw], 1
     jne .bad
     mov ax, [selector_end]
     sub ax, si
     cmp ax, 14
-    jne .bad
+    jb .try_safe
+    push si
     mov di, platform_suffix
     mov cx, 14
     repe cmpsb
-    jne .bad
+    pop di
+    jne .try_safe_from_di
     mov byte [selector_force], 1
+    cmp si, [selector_end]
+    je .good
+    jmp .try_safe
+.try_safe_from_di:
+    mov si, di
+.try_safe:
+    mov ax, [selector_end]
+    sub ax, si
+    cmp ax, 7
+    jne .bad
+    mov di, safe_suffix
+    mov cx, 7
+    repe cmpsb
+    jne .bad
+    mov byte [selector_safe], 1
 .good:
     mov si, [selector_start]
     mov cx, [selector_len]
@@ -104,18 +123,24 @@ selector_accept:
     mov di, B(test_request)
     rep movsb
     or dword [B(flags)], CBI_F_TEST_REQUEST
+    cmp byte [selector_safe], 1
+    jne .not_safe
+    or dword [B(flags)], CBI_F_SAFE_MODE
+.not_safe:
     cmp byte [selector_force], 1
     jne .done
     mov byte [B(input_policy)], 1
     or dword [B(flags)], CBI_F_INPUT_FORCED
 .done:
     ret
-probe_names db 'all',0,'boot',0,'bootinfo',0,'allocator',0,'protection',0
+probe_names db 'all',0,'core',0,'boot',0,'bootinfo',0,'allocator',0,'protection',0
     db 'isolation',0,'preempt',0,'localfault',0,'syslife',0,'panic',0
     db 'fpu',0,'runner',0,0
 platform_suffix db ' platform=e500'
+safe_suffix db ' safe=1'
 selector_fw db 0
 selector_force db 0
+selector_safe db 0
 selector_len dw 0
 selector_start dw 0
 selector_end dw 0

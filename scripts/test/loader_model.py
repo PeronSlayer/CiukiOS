@@ -8,13 +8,13 @@ PROBES = ('boot', 'bootinfo', 'allocator', 'protection', 'isolation', 'preempt',
 def selector(request, source='menu', validated_fw_cfg=False):
     if not isinstance(request, str) or not request.isascii() or len(request) > 64:
         raise ValueError('selector must be at most 64 ASCII bytes')
-    match = re.fullmatch(r'f0:([a-z]+) run=([0-9a-fA-F]{8})( platform=e500)?', request)
-    if not match or match[1] not in (*PROBES, 'all'):
+    match = re.fullmatch(r'f0:([a-z]+) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?', request)
+    if not match or match[1] not in (*PROBES, 'all', 'core'):
         raise ValueError('invalid selector grammar or probe')
-    forced = bool(match[3])
-    if forced and not (source == 'fw_cfg' and validated_fw_cfg):
-        raise ValueError('platform override requires validated QEMU fw_cfg')
-    return {'probe': match[1], 'run': match[2], 'platform': 'e500' if forced else None}
+    forced = bool(match[3]); safe = bool(match[4])
+    if (forced or safe) and not (source == 'fw_cfg' and validated_fw_cfg):
+        raise ValueError('platform override and safe mode require validated QEMU fw_cfg')
+    return {'probe': match[1], 'run': match[2], 'platform': 'e500' if forced else None, 'safe': safe}
 
 
 def normalize_e820(entries, complete=True, signature='SMAP'):
