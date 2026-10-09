@@ -23,6 +23,7 @@ evidence and merges.
 | [f1-07-bios-vm-firmware-input](f1-07-bios-vm-firmware-input.md) | F1 | gpt-6-astra / xhigh | issued 2026-10-10 |
 | [f1-08-runtime-integration](f1-08-runtime-integration.md) | F1 | gpt-6.1-sol / xhigh | written; starts after f1-03 and f1-07 |
 | [f1-09-storage-bringup](f1-09-storage-bringup.md) | F1 | gpt-6-astra / xhigh | written; starts after f1-03, f1-06 and f1-08 |
+| [f2-01-abi-header](f2-01-abi-header.md) | F2 | gpt-6.1-sol / high | issued 2026-10-10 |
 
 Planned next: F2 directives from the f2-00 contract (ELF loader and process
 model, syscall layer, libc port and SDK, desktop process, gate application).
