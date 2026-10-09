@@ -29,7 +29,12 @@
    **read gate**: the mount checks pass, the FSInfo/clean flags are
    consistent, and the device is durable (`blkdev_durable`: verified
    write-cache state or working `FLUSH CACHE`); otherwise it stays read-only
-   with the reason recorded. The 5-second write-back writer runs on the
+   with the reason recorded. Note from f1-06: `struct blkdev` fields are
+   scalars, so a `blkpart` view's `quarantined`/cache state is a snapshot
+   refreshed by `blkpart_device()` and by every callback; the mount layer
+   must consult the view through those calls, never a cached copy. Every
+   issued ATA failure quarantines the whole channel (both devices), per the
+   storage contract; FLUSH CACHE has a 60 s deadline, IDENTIFY and data 30 s. The 5-second write-back writer runs on the
    device worker (`kwork`) with the `cache_writeback_tick` hook.
 2. **Probes** (`fat_probes.c`; register with `CIUKI_F1_PROBE`; evidence
    fields exactly as the contract table; file digests are SHA-256 and the
