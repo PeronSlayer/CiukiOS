@@ -1,8 +1,8 @@
 # CiukiOS roadmap
 
 **Current build: pre-Alpha 0.8.3.** This page tracks the work ahead. The
-[project status](docs/project-status-2026-10-04.md) explains what works now;
-the [historical roadmap](docs/history/roadmap-through-2026-10-01.md) keeps
+project status explains what works now;
+the historical roadmap keeps
 older phase details and debugging notes.
 
 ## Where the project stands
@@ -21,7 +21,7 @@ older phase details and debugging notes.
 M4's earlier automated 0.8.0 profile passed 26/26 QEMU gates. On the newer
 CiukWeb/TinyGL image, 26/26 gates passed across serial recovery runs after a
 host reboot; this is not one uninterrupted profile invocation. The
-[validation record](docs/validation/2026-10-01-native-app-gl/README.md)
+validation record
 keeps the exact historical scope. The final 0.8.3 runtime profile passed:
 DOOM reached 34.78 loops/s and exited with GPU resources released; Files wheel
 input round-tripped by pixel; native CiukWeb completed HTTP 200 and reload;
@@ -41,7 +41,7 @@ cover the About preference across reset and title reactivation; the Doom PCM
 capture showed continued playback without new underruns after its initial
 diagnostic sample. Perceived host-speaker latency remains unqualified, as do
 browser HTTPS/CSS/JS runtime behavior. See the current
-[project status](docs/project-status-2026-10-04.md).
+project status.
 
 ## Next milestones
 
@@ -63,7 +63,7 @@ browser HTTPS/CSS/JS runtime behavior. See the current
 5. **Approach Win32 in stages.** Run the free `HELLO.EXE` probe with a PE32
    loader and `KERNEL32`; then run `SETUP.EXE` with file and registry APIs.
    Add GUI, installer and game APIs only against named tests. Recognition of
-   an EXE is not execution. [Compatibility plan](docs/windows-compatibility-and-layout-2026-09-30.md).
+   an EXE is not execution. Compatibility plan.
 6. **Qualify graphics, devices and a release.** Test named free workloads,
    license and test more drivers, address CD/USB support,
    migrate old root directories safely, and validate on physical legacy PCs.
@@ -85,14 +85,14 @@ narrow workload pass does not imply general DOS or Windows compatibility.
 
 ## Design and evidence
 
-- [M4/M5 architecture](docs/roadmap-dos-vm-desktop-2026-09-28.md) and
-  [current-image QEMU evidence](docs/validation/2026-10-01-native-app-gl/README.md).
-- [Native app and software OpenGL plan](docs/native-apps-and-opengl-2026-10-01.md).
-- [0.8.3 project status](docs/project-status-2026-10-04.md) for the current implementation/runtime boundary.
-- [About startup and focus behavior](docs/validation/2026-10-04-about-startup-focus.md),
-  [AC'97 queue latency](docs/validation/2026-10-04-ac97-audio-latency.md), and
-  [CiukWeb image decoder](docs/validation/2026-10-04-webimg-codec.md) design notes.
-- [Build and run guide](docs/build-and-run.md), [DOS compatibility matrix](docs/dos-compatibility-matrix-v0.1.md)
-  and [legacy audio plan](docs/legacy-audio-bring-up-plan-v0.1.md).
-- [Archived detailed roadmap](docs/history/roadmap-through-2026-10-01.md)
+- M4/M5 architecture and
+  current-image QEMU evidence.
+- Native app and software OpenGL plan.
+- 0.8.3 project status for the current implementation/runtime boundary.
+- About startup and focus behavior,
+  AC'97 queue latency, and
+  CiukWeb image decoder design notes.
+- [Build and run guide](docs/build-and-run.md), DOS compatibility matrix
+  and legacy audio plan.
+- Archived detailed roadmap
   for dates, earlier decisions and closure evidence.

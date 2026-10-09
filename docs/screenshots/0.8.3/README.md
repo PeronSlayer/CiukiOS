@@ -7,7 +7,7 @@ no artwork, screens or responses were generated or substituted.
 
 - `desktop.png`: initial desktop after closing the default About page.
 - `about.png`: separate About/Credits tabs and the inverse "Don't show this at
-  startup" checkbox; see the [startup/focus verification](../../validation/2026-10-04-about-startup-focus.md).
+  startup" checkbox; see the startup/focus verification.
 - `display.png`: detected virtual adapter and monitor, mode list.
 - `web.png`: CiukWeb's modern interface (navigation, Reload, Stop, Home, HTTPS badge, address bar, status bar) loading Google over HTTPS with decoded logo and form inputs on the 1280×800 desktop.
 - `google.png`: live HTTPS Google session in CiukWeb demonstrating BearSSL TLS 1.2, HTTP parsing, and image decoding.
@@ -17,4 +17,4 @@ no artwork, screens or responses were generated or substituted.
 
 Doom data is not redistributed. These still images do not measure frame pacing,
 physical mouse operation, physical ATI/NVIDIA support or Windows execution.
-See the [runtime report](../../validation/2026-10-04-release-runtime/README.md).
+See the runtime report.

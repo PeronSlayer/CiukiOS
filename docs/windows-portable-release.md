@@ -66,6 +66,6 @@ runtime execution was not tested.
 Run `python3 scripts/push_release.py --plan` to preview the next tag without
 building or publishing. Pushes to other branches do not create releases.
 
-See the [current project status](project-status-2026-10-04.md) for the 0.8.3
+See the current project status for the 0.8.3
 feature and validation boundary. This bundle is checked on Linux for archive
 integrity; no Windows runtime launch is claimed.

@@ -35,7 +35,7 @@ The HDD/CD and portable Windows launchers attach a transitional VirtIO RNG for
 TLS entropy. HTTPS fails closed without that source, a valid UTC guest clock,
 or a matching trusted certificate. The current protocol is TLS 1.2; physical
 machines need a supported entropy source before HTTPS is available. Browser
-HTML, CSS and DOM limits are listed in the [current status](project-status-2026-10-04.md).
+HTML, CSS and DOM limits are listed in the current status.
 
 ## Windows portable ZIP
 
@@ -82,7 +82,7 @@ path accelerates presentation, not Doom's rendering. The default VBE/standard
 VGA profile remains available when VirtIO is disabled or unsupported. Compiled
 base drivers for selected ATI Rage 128/Radeon R100–R200 and NVIDIA TNT/GeForce
 through GeForce 4 preserve the firmware mode and program the scanout address;
-their hardware 2D/3D engines are not implemented. See the [native GPU validation record](validation/2026-10-03-native-gpu-presentation.md)
+their hardware 2D/3D engines are not implemented. See the native GPU validation record
 for scope, sources and current results.
 
 Keep builds and runtime tests sequential and resource-capped. The full build
@@ -99,7 +99,7 @@ Linux SDL/OpenGL run entered a new Doom game, turned, exited and released the
 GPU for the DOS console. The final 0.8.3 run measured 34.78 game tics/render-loop
 iterations per second, not physical display FPS. Its integrated wheel, web,
 graphical mode-change and saved-preference checks passed; see the
-[runtime and pacing record](validation/2026-10-04-release-runtime/README.md).
+runtime and pacing record.
 Physical ATI/NVIDIA cards and Windows GL have
 not been runtime-tested. These results do not establish zero visual stutter.
 
@@ -110,41 +110,23 @@ setting. Close DOS windows before changing modes. Adapter, Monitor and Advanced
 show the detected PCI device, EDID identity, active display driver and its
 capabilities, with shortcuts to Device Manager and Drivers. In QEMU, the monitor
 identity belongs to the virtual screen. Custom refresh timings and a guest 3D
-API are not currently implemented. See the [display settings record](validation/2026-10-03-display-settings.md).
-
-## Record a fixed window
-
-```bash
-bash scripts/qemu_record_full.sh
-```
-
-The default client area is 1280×800. `--size 1440x900` changes that size;
-`--software-display` disables **host** OpenGL presentation. Neither setting
-gives the CiukiOS guest GPU acceleration. See [recording and first web page](qemu-recording-and-web-2026-10-01.md).
+API are not currently implemented. See the display settings record.
 
 ## Build or test a specific image
 
 | Purpose | Command |
 | --- | --- |
-| Build FAT16 full image | `bash scripts/build_full.sh` |
+| Build FAT16 full image | `make build-full` |
 | Check FAT16 structure | `fsck.fat -n build/full/ciukios-full.img` |
 | Check generated icons | `python3 scripts/build_ui_icons.py --check` |
 | Check generated fonts | `python3 scripts/build_fonts.py --check` |
 | Build Live/install CD | `make build-full-cd` |
 
-Run focused QEMU gates **sequentially**, each with a fresh `--output` directory.
-For example:
+| Boot smoke test of the built image | `make qemu-test-full` |
 
-```bash
-python3 scripts/qemu_test_ciukpaint.py \
-  --image build/full/ciukios-full.img \
-  --output build/tests/local-ciukpaint
-```
-
-The full `scripts/test_vm_window_profile.sh` runs some gates concurrently
-and puts much more load on the host. Use it on a dedicated, stable test host;
-the [current validation record](validation/2026-10-01-native-app-gl/README.md)
-explains the last serial recovery run and its exact scope.
+Tests use the single canonical image and never rebuild it or copy it; see
+[test architecture](design/test-architecture.md). The old focused QEMU gates
+are archived in `legacy/CiukiOS-scripts-legacy-2026-10-09.zip`.
 
 ## Image profiles and guides
 
@@ -154,6 +136,6 @@ explains the last serial recovery run and its exact scope.
 | `full-cd` | Live/install CD; also exercises `SETUP.COM`. |
 | `floppy` | Minimal historical loader scaffold, not the main desktop. |
 
-For network commands, FTP and CiukWeb, see [network settings](network-settings-2026-10-01.md)
-and [recording and web](qemu-recording-and-web-2026-10-01.md). For physical
-hardware and release limits, start with the [project status](project-status-2026-10-01.md).
+For network commands, FTP and CiukWeb, see network settings
+and recording and web. For physical
+hardware and release limits, start with the project status.

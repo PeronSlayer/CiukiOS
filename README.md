@@ -12,7 +12,7 @@ the dog in the boot splash. Its identity uses the owner's
 
 ![CiukiOS 0.8.3 desktop](docs/screenshots/0.8.3/desktop.png)
 
-[Releases](docs/windows-portable-release.md) · [Current status](docs/project-status-2026-10-04.md) · [Changelog](CHANGELOG.md) · [Roadmap](Roadmap.md)
+[Releases](docs/windows-portable-release.md) · Current status · [Changelog](CHANGELOG.md) · [Roadmap](Roadmap.md)
 
 ## A look inside
 
@@ -70,5 +70,5 @@ VirtIO presentation does not turn DOS Doom's software renderer into an accelerat
 
 CiukiOS code is [GNU GPLv2](LICENSE). Bundled components retain their own
 notices. The approved Ciuki portrait is a separate project asset, not part
-of Tango's Public Domain artwork. See [current milestones](docs/current-milestones.md)
+of Tango's Public Domain artwork. See current milestones
 for evidence and remaining compatibility work. [Support the project](DONATIONS.md).

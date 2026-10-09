@@ -1,8 +1,0 @@
-{
-  "image": "/home/peronslayer/Desktop/CiukiOS/build/full/ciukios-full.img",
-  "checks": {
-    "hello_bounded_response": true,
-    "setup_bounded_response": true,
-    "no_guest_fork": true
-  }
-}

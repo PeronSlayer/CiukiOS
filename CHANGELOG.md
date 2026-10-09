@@ -41,7 +41,7 @@
 - Keep trusted GUI utility output off the display; update release packaging,
   memory-capped push builds, documentation and screenshots.
 
-Detailed qualification and limits: [current status](docs/project-status-2026-10-04.md).
+Detailed qualification and limits: current status.
 
 
 All notable project-level changes are tracked here.
@@ -118,7 +118,7 @@ This changelog is intentionally concise. Every completed task should update `Unr
 The desktop, monitored VGA session, guest input/audio devices and M1–M3 VM
 manager converged. QEMU debugging found interrupt, memory, video and DOS
 return faults that were corrected before M4. The
-[detailed engineering record](docs/history/september-27-29-increments.md)
+detailed engineering record
 retains the individual fixes and evidence boundaries.
 
 ## pre-Alpha v0.7.1 (2026-09-01)
@@ -133,7 +133,7 @@ retains the individual fixes and evidence boundaries.
   return. A Windows 3.1 workflow was tested at the time; Windows 3.1 was
   subsequently removed from the current image.
 
-The [detailed 0.7.1 engineering record](docs/history/changelog-v0.7.1-2026-09-01.md)
+The detailed 0.7.1 engineering record
 keeps the original probes, timings, fixes and failure boundaries.
 
 ## pre-Alpha v0.6.7 (2026-05-08)

@@ -46,7 +46,7 @@ def main():
     with log.open('w') as fh:
         def compile_file(path):
             obj=objects/(path.stem+'.obj')
-            cmd=[str(compiler),*common,'-fo='+str(obj),str(path)]
+            cmd=[str(compiler),*common,'-fo='+str(obj),'-fr='+str(objects/(path.stem+'.err')),str(path)]
             fh.write(' '.join(cmd)+'\n');fh.flush()
             result=subprocess.run(cmd,env=env,stdout=fh,stderr=subprocess.STDOUT)
             if result.returncode:raise RuntimeError(f'Compilation failed: {path.name}; see {log}')

@@ -27,8 +27,8 @@ with extracted Microsoft/Apple artwork or change the approved portrait.
 
 The main CiukiOS project now uses the full HDD image and, when relevant, the
 full CD image. Do not build, run, test, or maintain the standalone floppy
-profile as part of ongoing main-branch work. Existing floppy files may remain
-for history; this decision does not exclude work on the shared CiukiDOS kernel
+profile as part of ongoing main-branch work. The floppy build scripts were
+archived on 2026-10-09; this decision does not exclude work on the shared CiukiDOS kernel
 source (`src/boot/floppy_stage1.asm`) used by the full image. The owner is
 considering a separate CiukiDOS-only branch, but has not asked to create it.
 
@@ -76,6 +76,69 @@ bounded tasks when this helps progress. Assign research, focused checks and
 simple tasks to less expensive available models, such as Luna. The main agent
 (Sol) owns the major implementation, integration and final validation. Avoid
 extra agents when the task is too small or cannot be split usefully.
+
+## Development diary
+
+Owner directive, recorded on 2026-10-09: every essential change, decision,
+release or hardware analysis gets its own new file in `dev_diary/`, named
+`YYYY-MM-DD-NN-short-title.md`, following the template and rules in
+`dev_diary/README.md`. Add the entry to that README's index. Never rewrite
+an earlier entry to change a decision; add a new entry that supersedes it.
+Diary entries are written in Italian. `CHANGELOG.md` remains the release
+record.
+
+## Legacy archive
+
+On 2026-10-09 the owner archived the old documentation and scripts:
+
+- `legacy/CiukiOS-docs-legacy-2026-10-09.zip`: the former `docs/` tree
+  (design notes, validation records, history, old logbook).
+- `legacy/CiukiOS-scripts-legacy-2026-10-09.zip`: about 370 old test, probe,
+  diagnosis, floppy and macOS scripts plus the old Makefile.
+- `legacy/local/` (untracked, never publish): physical-PC logs, old handoffs,
+  private media and compressed backups of original disk prefixes.
+
+Extract a single file from these archives when an old decision, marker or
+QMP sequence is needed. Do not restore archived files into the tree; rewrite
+what is still useful for the current structure. New design and validation
+documents go in `docs/design/` and `docs/validation/`.
+
+## Repository hygiene and resources
+
+The owner requires a clean tree and economical use of this workstation.
+
+- `scripts/` holds only what the build, run, release and physical-log
+  collection use. One-off diagnosis scripts are not committed; keep them in
+  the session scratchpad and delete them when the investigation ends.
+- `build/` keeps only `external/`, `downloads/`, `tools/`, `releases/`
+  (current release only) and the current `build/full` output. Never leave
+  dated variant directories, copied images, RAM dumps, `.ppm` captures or
+  hardware dumps there. Delete investigation artifacts when the
+  investigation closes; save the evidence that matters as a short text
+  record in `docs/validation/` or in a `dev_diary/` entry.
+- Never put large files in `/tmp`: it is a 7.4 GiB tmpfs (RAM).
+- Raw dumps of physical disks are not kept, except an explicitly requested
+  backup of original data, stored compressed in `legacy/local/`.
+- Do not add files to the repository root.
+
+## Testing
+
+Follow `docs/design/test-architecture.md`:
+
+- One canonical build per source state (`make build-full`, plus
+  `make build-full-cd` when the CD matters). Tests never rebuild, never use
+  build-time variant flags and never copy whole images. A build variant
+  needs the owner's approval and a `dev_diary/` entry.
+- Test behaviour is selected at run time (QEMU fw_cfg item
+  `opt/it.alcybercloud.ciukios/test`), and every run uses a qcow2
+  copy-on-write overlay under `build/test-runs/`, deleted when the run passes.
+- One QEMU at a time, each under
+  `systemd-run --user --scope -p MemoryMax=1500M -p MemorySwapMax=0`; check
+  free memory first, no RAM dumps unless a diagnosis needs them, and no
+  `qemu-system` process left running.
+- Cheapest tier first: host unit tests, then static image checks, then the
+  `make qemu-test-full` boot smoke, then focused QEMU suites, then hardware.
+- A result is evidence only for the image SHA-256 it ran on.
 
 ## Code Search Policy
 
