@@ -235,6 +235,22 @@ per-VM current drive and per-drive cwd separately; a DOS chdir MUST NOT alter a
 native process cwd. These rules extend the
 [VFS namespace and open descriptions](vfs-storage-contract.md).
 
+**[F2, f2-11 amendment]** Cwd references, including the supervisor's root
+reference and those inherited by live processes, MUST NOT block volume detach
+or `storage_sync`; their rmdir/replacement pinning rules remain binding.
+Structural `/`, `/mnt`, `/dev`, `/dev/null` and `/dev/console` nodes MUST NOT
+block detach merely because they exist or are retained. Open descriptions on
+volume-backed files or directories, including `/`, MUST still cause EBUSY;
+synthetic device/namespace descriptions do not belong to a FAT volume. A cwd
+on a detached volume MUST retain its identity until its process releases it,
+but relative resolution (including `.` and `..`) and `getcwd` MUST fail
+ENOENT without disk access. Reattaching the same volume MUST NOT revive that
+cwd. Absolute paths MAY use a still-attached system root, so an absolute chdir
+can recover; when the system root is detached, native path resolution and
+`getcwd` through its synthetic descendants MUST fail ENOENT. This is Ciuki's
+shutdown-specific departure from the busy/lazy-unmount policies described by
+the [upstream Linux unmount manual](https://kernel.googlesource.com/pub/scm/docs/man-pages/man-pages/+/refs/tags/man-pages-6.17/man/man2/umount.2).
+
 ### Files and departures from full POSIX
 
 **[F2]** Native opens MUST use VFS share mode deny-none and MUST honor existing

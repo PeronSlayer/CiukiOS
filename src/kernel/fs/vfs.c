@@ -2,7 +2,7 @@
 #include "vfs.h"
 #include "../include/ciuki/vfs_hooks.h"
 /* f2-03 integration notes: weak observers keep the F1 harness independent.
- * 1. Detach respects native pins and invalidates mount-lifetime identities.
+ * 1. Detach respects native opens and invalidates mount-lifetime identities.
  * 2. Native/legacy share claims use the same lock and bidirectional matrix.
  * 3. Legacy mutations update native cached metadata/identities under that lock.
  * 4. The final legacy close releases retained open-unlinked chains exactly once.
@@ -23,9 +23,9 @@ int vfs_attach(struct vfs *v, unsigned d, struct fat_volume *vol) {
     if (!e) { v->volumes[d]=vol; v->generation[d]++; }
     fs_lock_drop(&v->lock); return e;
 }
-int vfs_detach(struct vfs *v, unsigned d) {
+int vfs_detach_locked(struct vfs *v, unsigned d) {
     if (d>=26) return -FS_EINVAL;
-    fs_lock_take(&v->lock); int e=0; struct fat_volume *vol=v->volumes[d];
+    int e=0; struct fat_volume *vol=v->volumes[d];
     if (!vol) e=-FS_ENOENT;
     for (unsigned i=0;i<VFS_NODES;i++) if (v->nodes[i].refs && v->nodes[i].volume==vol) e=-FS_EBUSY;
     if (!e && px_volume_busy && px_volume_busy(v,vol)) e=-FS_EBUSY;
@@ -37,6 +37,11 @@ int vfs_detach(struct vfs *v, unsigned d) {
             v->tables[i]->cwd[d][0]='/'; v->tables[i]->cwd[d][1]=0; v->tables[i]->cwd_cluster[d]=0;
         }
     }
+    return e;
+}
+int vfs_detach(struct vfs *v, unsigned d) {
+    fs_lock_take(&v->lock);
+    int e=vfs_detach_locked(v,d);
     fs_lock_drop(&v->lock); return e;
 }
 int vfs_table_init(struct vfs *v, struct vfs_table *t, unsigned d) {

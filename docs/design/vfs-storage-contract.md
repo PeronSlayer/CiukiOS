@@ -85,6 +85,25 @@ the same VFS through the bridge defined in `dos-dpmi-contract.md`.
 
 ## Block cache and write ordering
 
+**[F2, f2-11 amendment]** Durable shutdown MUST preflight every attached
+volume under the shared VFS namespace lock for native volume-backed open
+descriptions and legacy VFS handles before stopping storage, committing or
+detaching any volume. A refusal MUST return `-EBUSY`, leave storage running
+and every volume attached with its mount generation unchanged, and permit a
+later `storage_sync()` after the final close to succeed, provided no I/O error
+intervenes. Duplicated/inherited fds retain their shared description until the
+last close, following the [POSIX open-description lifetime](https://pubs.opengroup.org/onlinepubs/009604499/functions/close.html).
+Cwd pins and structural/synthetic nodes MUST NOT count as open descriptions
+on a volume. The namespace lock MUST remain held from preflight through
+commit and durable detach, preventing concurrent opens from invalidating the
+preflight. Successful detach MUST invalidate native mount identities and
+reset legacy per-drive cwd to `/`; native cwd expiration follows
+`posix-subset.md`. Optional native hooks MUST remain weak for standalone F1
+storage. `storage_sync()` first drains/closes the boot-log sink; an EBUSY
+refusal keeps storage usable but does not reactivate that sink. Existing
+sticky write/flush errors remain errors and MUST NOT be converted into a
+successful clean shutdown.
+
 - Default size 8 MiB (`boot-memory.md` budget), adjustable at boot.
 - Dirty blocks are written by a `device`-priority writer thread no later than
   5 seconds after they become dirty, on explicit `flush`, before unmount, and

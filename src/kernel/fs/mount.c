@@ -5,6 +5,7 @@
 #include <ciuki/storage.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/init.h>
+#include <ciuki/vfs_hooks.h>
 #ifndef FS_HOST
 #include <ciuki/ata.h>
 #include <ciuki/work.h>
@@ -184,11 +185,18 @@ int storage_writeback(struct storage *s, uint32_t now)
 int storage_shutdown(struct storage *s)
 {
     if (!s || !s->ready) return -FS_EINVAL;
+    /* Refuse opens before stopping the writer, committing or detaching ANY
+     * volume. Keep the namespace lock through detach: an open may otherwise
+     * race between the preflight and a later per-volume lock acquisition. */
+    fs_lock_take(&s->vfs.lock);
+    bool busy = false;
+    for (unsigned i = 0; i < VFS_NODES; i++) if (s->vfs.nodes[i].refs) busy = true;
+    for (unsigned d = 2; d < 26; d++)
+        if (s->vfs.volumes[d] && px_volume_busy && px_volume_busy(&s->vfs, s->vfs.volumes[d])) busy = true;
+    if (busy) { fs_lock_drop(&s->vfs.lock); return -FS_EBUSY; }
     s->stopped = true;
     int result = s->writer_error;
     /* Preflight all volumes before setting ANY clean flag. */
-    fs_lock_take(&s->vfs.lock);
-    for (unsigned i = 0; i < VFS_NODES; i++) if (s->vfs.nodes[i].refs && !result) result = -FS_EBUSY;
     for (unsigned d = 2; d < 26; d++) {
         struct storage_volume *v = &s->volumes[d];
         if (!v->present || !v->fat.mounted) continue;
@@ -196,13 +204,12 @@ int storage_shutdown(struct storage *s)
         int e = fat_commit(&v->fat);
         if (e && !result) result = e;
     }
-    fs_lock_drop(&s->vfs.lock);
-    if (result) return result;
-    for (unsigned d = 2; d < 26; d++) if (s->vfs.volumes[d]) {
-        int e = vfs_detach(&s->vfs, d);
-        if (e) return e;
+    if (!result) for (unsigned d = 2; d < 26; d++) if (s->vfs.volumes[d]) {
+        result = vfs_detach_locked(&s->vfs, d);
+        if (result) break;
     }
-    return 0;
+    fs_lock_drop(&s->vfs.lock);
+    return result;
 }
 void storage_destroy(struct storage *s)
 {
