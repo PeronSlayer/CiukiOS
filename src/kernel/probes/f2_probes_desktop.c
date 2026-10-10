@@ -121,20 +121,22 @@ static void native_invalid(const char *check)
     native_reports.invalid=true;
 }
 
-static void native_report(struct process *p, const char *line, unsigned length)
+/* True means a desktop participant's report was consumed, even if invalid.
+ * Identity comes from the kernel process, never the report's text. */
+static bool native_report(struct process *p, const char *line, unsigned length)
 {
-    if (!native_reports.active || !p) return;
+    if (!native_reports.active || !p) return false;
     bool server = p->pid == native_reports.server;
     bool survivor = p->pid == native_reports.survivor;
     bool victim = p->pid == native_reports.victim;
-    if (!server && !survivor && !victim) return;
-    if (native_reports.invalid) return;
-    if (!length || length > CIUKI_PROBE_REPORT_MAX) { native_invalid("length"); return; }
+    if (!server && !survivor && !victim) return false;
+    if (native_reports.invalid) return true;
+    if (!length || length > CIUKI_PROBE_REPORT_MAX) { native_invalid("length"); return true; }
     if (server && !strncmp(line, "case=native-desktop ", 20)) {
         uint32_t control, generation, child, fault, cycle, replies, keys, motion, buttons;
         /* Preserve the first rejection, rather than overwriting it with a
          * subsequent report. Parsed identities remain visible on failure. */
-#define NATIVE_REQUIRE(test, check) do { if (!(test)) { native_invalid(check); return; } } while (0)
+#define NATIVE_REQUIRE(test, check) do { if (!(test)) { native_invalid(check); return true; } } while (0)
 #define NATIVE_FIELD(field) NATIVE_REQUIRE(report_unsigned(line,#field,&field), #field)
         NATIVE_FIELD(control); native_reports.reported_control=control;
         NATIVE_FIELD(generation);
@@ -176,6 +178,7 @@ static void native_report(struct process *p, const char *line, unsigned length)
     } else native_invalid("case");
 #undef NATIVE_FIELD
 #undef NATIVE_REQUIRE
+    return true;
 }
 static bool native_live(struct process *p)
 {
@@ -564,12 +567,12 @@ static bool report_unsigned(const char *line, const char *field, uint32_t *value
     }
     return false;
 }
-void probe_f2_libc_report(struct task *task, const char *line, uint32_t length)
+bool probe_f2_libc_report(struct task *task, const char *line, uint32_t length)
 {
     struct proc_thread *t = proc_thread_for(task);
-    if (t) native_report(t->process,line,length);
-    if (!libc_reports.pid || !t || t->process->pid != libc_reports.pid) return;
-    if (!length || length > CIUKI_PROBE_REPORT_MAX) { libc_reports.invalid = true; return; }
+    if (t && native_report(t->process,line,length)) return true;
+    if (!libc_reports.pid || !t || t->process->pid != libc_reports.pid) return false;
+    if (!length || length > CIUKI_PROBE_REPORT_MAX) { libc_reports.invalid = true; return false; }
     const char *cases[] = { "case=libc-smoke ", "case=atexit ", "case=destructor " };
     for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
         if (strncmp(line, cases[i], strlen(cases[i]))) continue;
@@ -577,14 +580,15 @@ void probe_f2_libc_report(struct task *task, const char *line, uint32_t length)
         if (libc_reports.stages != i || !report_unsigned(line, "failures", &failures) ||
             !report_unsigned(line, "checks", &checks) || !report_unsigned(line, "order", &order) ||
             !checks || checks < libc_reports.checks || order != i + 2) {
-            libc_reports.invalid = true; return;
+            libc_reports.invalid = true; return false;
         }
         libc_reports.stages++; libc_reports.checks = checks; libc_reports.failures |= failures;
-        return;
+        return false;
     }
     uint32_t observed;
     if (report_unsigned(line, "observed", &observed) && !observed)
         libc_reports.failures |= 1; /* a failed CHECK reports expected=1 observed=0 */
+    return false;
 }
 
 int probe_f2_libc_smoke(void)
