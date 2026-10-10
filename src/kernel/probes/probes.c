@@ -11,6 +11,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/timing.h>
 #include <ciuki/work.h>
+#include <ciuki/abi.h>
 
 extern const uint8_t payload_start[], payload_end[];
 extern char probe_write_insn[], probe_write_insn_end[], probe_write_resume[];
@@ -371,6 +372,15 @@ static int probe_protection(void)
     uint16_t tr;
     __asm__ volatile("sgdt %0; sidt %1; str %2" : "=m"(gdtr), "=m"(idtr), "=m"(tr));
     bool tss_valid = tr == SEL_TSS && g_tss.ss0 == SEL_KDATA && g_tss.iomap_base >= sizeof(struct tss);
+    const uint8_t *tls = (const uint8_t *)(uintptr_t)(gdtr.base + CIUKI_TLS_GDT_INDEX * 8);
+    uint32_t tls_base = (uint32_t)tls[2] | ((uint32_t)tls[3] << 8) |
+                        ((uint32_t)tls[4] << 16) | ((uint32_t)tls[7] << 24);
+    bool tls_valid = gdtr.limit == (CIUKI_TLS_GDT_INDEX + 1) * 8 - 1 &&
+                     ((uint32_t)tls[0] | ((uint32_t)tls[1] << 8)) == CIUKI_TLS_SIZE - 1 &&
+                     (tls[5] & 0xfe) == 0xf2 && tls[6] == 0x40 && tls_base == 0;
+    rec_emit("protection", "DATA", "case=tls_descriptor selector=%u base=%08x limit=%u valid=%u",
+             CIUKI_TLS_SELECTOR, tls_base, CIUKI_TLS_SIZE - 1, tls_valid);
+
 
     /* Every kernel PDE 768-1022 and every PTE below them is supervisor-only;
      * PDE 1023 is the recursive window of this directory. */
@@ -401,7 +411,7 @@ static int probe_protection(void)
              task_canary_errors());
     bool ok = (cr0 & 0x80010001u) == 0x80010001u && !(cr4 & CR4_PAE) && tss_valid && user_paths == 0 &&
               !(text_pte & PTE_W) && task_present_guards() == 0 && !transition_errors && !task_canary_errors() &&
-              idtr.limit == 256 * 8 - 1 && gdtr.limit == 7 * 8 - 1;
+              idtr.limit == 256 * 8 - 1 && tls_valid;
 
     /* Injection 1: ring-0 write to a read-only page must #PF (P=1 W=1 U=0). */
     uint32_t target = (uint32_t)ro_target;
