@@ -40,7 +40,11 @@ struct fake_bus {
     bool loop_next, loop_untagged, sticky_translation, ignore_enable_config;
     bool ignore_enable_commands, drop_irq_config, unstable_config, missing_aux;
     bool final_obf, obf_after_ack, bad_selftest_status;
+    bool silent_kbd_test, silent_aux_test, config_ack, t23;
     uint8_t missing_command;
+    uint8_t controller_ack_command, status_base;
+    uint32_t controller_ack_delay, iface_delay;
+    unsigned controller_ack_count;
     unsigned config_reads;
 };
 static struct fake_bus hw;
@@ -83,7 +87,7 @@ static uint8_t fake_read(void *arg, uint16_t port)
     struct fake_bus *b = arg;
     b->reads++;
     if (port == 0x64) {
-        uint8_t status = (b->stuck_ibf || b->now < b->ibf_until) ? 2 : 0;
+        uint8_t status = b->status_base | ((b->stuck_ibf || b->now < b->ibf_until) ? 2 : 0);
         if (b->stuck_obf) return status | 1;
         if (b->count && b->bytes[b->head].ready <= b->now) status |= b->bytes[b->head].status;
         return status;
@@ -104,8 +108,15 @@ static void fake_write(void *arg, uint16_t port, uint8_t data)
     b->ibf_until = b->now + b->write_delay;
     if (port == 0x64) {
         if (data == 0xD1 || data >= 0xF0) b->resets++;
+        if (data == b->controller_ack_command)
+            for (unsigned i = 0; i < b->controller_ack_count; i++)
+                fake_push(b, false, 0xFA, b->controller_ack_delay);
         switch (data) {
-        case 0xAD: b->config |= 0x10; if (b->stop_stuck) b->stuck_ibf = true; break;
+        case 0xAD:
+            b->config |= 0x10;
+            if (b->t23 && b->selftests) b->status_base = 0x1C;
+            if (b->stop_stuck) b->stuck_ibf = true;
+            break;
         case 0xA7: b->config |= 0x20; break;
         case 0xAE: if (!b->ignore_enable_commands) b->config &= ~0x10; break;
         case 0xA8: if (!b->ignore_enable_commands) b->config &= ~0x20; break;
@@ -116,12 +127,17 @@ static void fake_write(void *arg, uint16_t port, uint8_t data)
         case 0x60: b->config_next = true; break;
         case 0xAA:
             b->selftests++;
+            if (b->t23) b->status_base = 0x18;
             b->config = b->selftest_reenable ? 0x43 : 0x73;
             fake_push(b, false, b->bad_selftest ? 0xFC : 0x55, b->selftest_delay);
             if (b->bad_selftest_status) b->bytes[(b->head + b->count - 1) % ARRAY_SIZE(b->bytes)].status |= 0x80;
             break;
-        case 0xAB: fake_push(b, false, b->kbd_test_reply, 0); break;
-        case 0xA9: fake_push(b, false, b->aux_test_reply, 0); break;
+        case 0xAB:
+            if (!b->silent_kbd_test) fake_push(b, false, b->kbd_test_reply, b->iface_delay);
+            break;
+        case 0xA9:
+            if (!b->silent_aux_test) fake_push(b, false, b->aux_test_reply, b->iface_delay);
+            break;
         case 0xD3: b->loop_next = true; break;
         case 0xD4: b->aux = true; break;
         default: CHECK(false); break;
@@ -137,6 +153,8 @@ static void fake_write(void *arg, uint16_t port, uint8_t data)
         if (b->drop_irq_config) data &= ~0x03;
         b->config = data;
         b->config_writes++;
+        if (b->t23) b->status_base = b->config_writes == 1 ? 0x14 : 0x1C;
+        if (b->config_ack) fake_push(b, false, 0xFA, b->controller_ack_delay);
         return;
     }
     if (b->loop_next) {
@@ -654,9 +672,9 @@ static void test_init_diagnostics(void)
     CHECK(r.bytes == 10 && r.first != r.reply && hw.config_reads == 10 && !hw.selftests);
     reset_native();
     hw.kbd_test_reply = 0x01;
-    CHECK(i8042_init() == -I8042_EIO);
-    r = init_failure(I8042_INIT_IFACE_KBD, -I8042_EIO);
-    CHECK(r.command == 0xAB && r.reply == 0x01);
+    CHECK(i8042_init() == 0);
+    CHECK(i8042_init_record(5, &r) && r.step == I8042_INIT_IFACE_KBD && !r.result);
+    CHECK(r.command == 0xAB && r.reply == 0x01 && r.bytes == 1);
     reset_native();
     hw.aux_test_reply = 0x03;
     CHECK(i8042_init() == 0);          /* internal loopback + real ACK/ID qualify AUX */
@@ -722,6 +740,97 @@ static void test_init_diagnostics(void)
     printf("i8042 init trace/config/self-test/AUX/enable/drain/deadline replay: PASS\n");
 }
 
+static void t23_bus(void)
+{
+    hw.t23 = true;
+    hw.config = 0x77;
+    hw.status_base = 0x1C;
+    hw.kbd_test_reply = 0xFA;
+    hw.iface_delay = 1;
+}
+
+static void test_advisory_interfaces_and_controller_acks(void)
+{
+    reset_native();
+    t23_bus();
+    CHECK(i8042_init() == 0 && native.stats.active && !native.stats.quarantined);
+    CHECK(native.stats.initial_config == 0x77 && hw.last_config == 0x07);
+    CHECK(native.init_count == 15 && hw.sends == 10 && !hw.resets);
+    const uint8_t replies[] = { 0x00, 0x01, 0x03, 0x55, 0xFA, 0xFF };
+    for (unsigned i = 0; i < ARRAY_SIZE(replies); i++) {
+        reset_native();
+        hw.kbd_test_reply = hw.aux_test_reply = replies[i];
+        CHECK(i8042_init() == 0 && native.stats.active);
+        struct i8042_init_record r;
+        CHECK(i8042_init_record(5, &r) && !r.result && r.reply == replies[i] && r.bytes == 1);
+        CHECK(i8042_init_record(6, &r) && !r.result && r.first == replies[i]);
+        CHECK(r.bytes == (replies[i] ? 2u : 1u));
+    }
+    reset_native();
+    hw.silent_kbd_test = hw.silent_aux_test = true;
+    CHECK(i8042_init() == 0 && native.stats.last_elapsed_ms < I8042_SETUP_MS);
+    struct i8042_init_record r;
+    CHECK(i8042_init_record(5, &r) && !r.result && !r.bytes && r.elapsed_ms == I8042_REPLY_MS);
+    CHECK(i8042_init_record(6, &r) && !r.result && r.reply == 0x5A && r.bytes == 1);
+    CHECK(r.elapsed_ms >= I8042_REPLY_MS && hw.sends == 10);
+    reset_native();
+    hw.silent_kbd_test = hw.silent_aux_test = true;
+    hw.missing_command = 0xF5;
+    CHECK(i8042_init() == -I8042_ETIMEDOUT && native.stats.last_elapsed_ms == I8042_SETUP_MS);
+    r = init_failure(I8042_INIT_RESET_KBD, -I8042_ETIMEDOUT);
+    CHECK(r.command == 0xF5 && !r.bytes);
+    /* A late interface byte remains controller traffic, including at the
+     * diagnostic deadline; it cannot acknowledge the later F5. */
+    reset_native();
+    hw.iface_delay = I8042_REPLY_MS;
+    hw.kbd_test_reply = hw.aux_test_reply = 0xFA;
+    hw.missing_command = 0xF5;
+    CHECK(i8042_init() == -I8042_ETIMEDOUT);
+    r = init_failure(I8042_INIT_RESET_KBD, -I8042_ETIMEDOUT);
+    CHECK(r.command == 0xF5 && !r.bytes);
+    const uint8_t commands[] = { 0xAD, 0xA7, 0x60, 0xAE, 0xA8, 0xD3, 0xD4 };
+    for (unsigned i = 0; i < ARRAY_SIZE(commands); i++) {
+        reset_native();
+        t23_bus();
+        hw.aux_test_reply = 0xFA;     /* exercise D3 qualification too */
+        hw.controller_ack_command = commands[i];
+        hw.controller_ack_count = 1;
+        hw.controller_ack_delay = 1;
+        hw.config_ack = commands[i] == 0x60;
+        CHECK(i8042_init() == 0 && !hw.count && !native.queue.stats.pending);
+        unsigned stray = 0;
+        for (unsigned j = 0; j < native.init_count; j++) stray += native.init_records[j].stray_ack;
+        CHECK(stray && !native.queue.stats.errors && !native.queue.stats.state_lost);
+        CHECK(hw.sends == 10 && !hw.resets);
+        reset_native();
+        t23_bus();
+        hw.aux_test_reply = 0xFA;
+        hw.controller_ack_command = commands[i];
+        hw.controller_ack_count = 1;
+        hw.controller_ack_delay = 1;
+        hw.config_ack = commands[i] == 0x60;
+        hw.missing_command = 0xF5;
+        CHECK(i8042_init() == -I8042_ETIMEDOUT);
+        r = init_failure(I8042_INIT_RESET_KBD, -I8042_ETIMEDOUT);
+        CHECK(r.command == 0xF5 && !r.bytes);
+    }
+    reset_native();
+    hw.controller_ack_command = 0xD4;
+    hw.controller_ack_count = 1;
+    hw.controller_ack_delay = hw.write_delay = 5;
+    hw.missing_aux = true;
+    CHECK(i8042_init() == -I8042_ETIMEDOUT);
+    r = init_failure(I8042_INIT_RESET_AUX, -I8042_ETIMEDOUT);
+    CHECK(r.command == 0xF5 && r.stray_ack && r.bytes == 1 && r.reply == 0xFA);
+    reset_native();
+    hw.controller_ack_command = 0x60;
+    hw.controller_ack_count = 2;       /* only one stray per controller write */
+    CHECK(i8042_init() == -I8042_EPROTO);
+    r = init_failure(I8042_INIT_CONFIG_WRITE, -I8042_EPROTO);
+    CHECK(r.stray_ack && r.bytes == 2 && !hw.sends);
+    printf("i8042 T23/advisory interfaces/single stray ACK/device ACK isolation: PASS\n");
+}
+
 static void input_record_replay(const char *mode)
 {
     reset_native();
@@ -731,6 +840,18 @@ static void input_record_replay(const char *mode)
     else if (!strcmp(mode, "input-selftest-delayed")) hw.selftest_delay = 199;
     else if (!strcmp(mode, "input-selftest-late")) { hw.selftest_delay = 200; result = -I8042_ETIMEDOUT; }
     else if (!strcmp(mode, "input-aux-quirk")) hw.aux_test_reply = 3;
+    else if (!strcmp(mode, "input-t23")) t23_bus();
+    else if (!strcmp(mode, "input-t23-stray")) {
+        t23_bus(); hw.controller_ack_command = 0x60; hw.controller_ack_count = 1;
+        hw.controller_ack_delay = 1; hw.config_ack = true;
+    } else if (!strcmp(mode, "input-iface-silent")) hw.silent_kbd_test = hw.silent_aux_test = true;
+    else if (!strcmp(mode, "input-t23-no-device-ack")) {
+        t23_bus(); hw.missing_command = 0xF5; result = -I8042_ETIMEDOUT;
+    } else if (!strcmp(mode, "input-t23-stray-no-device-ack")) {
+        t23_bus(); hw.controller_ack_command = 0x60; hw.controller_ack_count = 1;
+        hw.controller_ack_delay = 1; hw.config_ack = true;
+        hw.missing_command = 0xF5; result = -I8042_ETIMEDOUT;
+    }
     else if (!strcmp(mode, "input-aux-badloop")) {
         hw.aux_test_reply = 3; hw.loop_reply = 0; result = -I8042_EIO;
     } else if (!strcmp(mode, "input-aux-missing")) {
@@ -742,12 +863,14 @@ static void input_record_replay(const char *mode)
     } else CHECK(!strcmp(mode, "input-records"));
     /* Emulate boot activation, then probe replay from active/quarantined state. */
     CHECK(i8042_init() == result);
+    if (print_records) printf("[init] input result=%s error=%d\n", result ? "failed" : "ready", result);
     unsigned reads = hw.reads, writes = hw.writes;
     if (result) strcpy(expected_end, "status=FAIL reason=setup");
     replay_input = !result;
     replay_cycles = 0;
     CHECK(probe_input() == !!result);
     CHECK(setup_records == native.init_count);
+    if (!result) CHECK(native.stats.active && record_ready && record_pass && !record_fail);
     if (result) CHECK(hw.reads == reads && hw.writes == writes && !record_ready);
     expected_end[0] = 0;
     replay_input = false;
@@ -1265,6 +1388,7 @@ int main(int argc, char **argv)
     test_policy_and_lifecycle();
     test_native_failures();
     test_init_diagnostics();
+    test_advisory_interfaces_and_controller_acks();
     test_hook_selection();
     test_commands();
     test_keyboard_and_mouse();
