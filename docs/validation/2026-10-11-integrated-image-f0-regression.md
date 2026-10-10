@@ -259,3 +259,6 @@ self-test: `timeout_result=-110 timeouts=1 disabled=1 later_result=-5`,
 `policy_result=0 denied_result=-1 disallowed=1`, PIC/PIT unchanged), and
 the eight `qemu-desktop-1998/2002` cases of `f1-input` (`registry`,
 `input-fault`, `input`, `framebuffer`) PASS. Host tests: 153 OK.
+On image `abaa1064…` the six stand-in `crash-isolation` cases of
+`f2-desktop` (`no-lfb` and `safe` on `qemu-t23`, `qemu-e500`,
+`qemu-min128`) PASS through the runner.
