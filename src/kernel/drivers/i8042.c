@@ -40,6 +40,18 @@
  * controller waits, but this capture supplies no evidence of a late reply.
  * Retain bounded raw traces, log after the timed transaction so serial I/O
  * cannot spend the setup budget. No new reset or timeout retry is qualified.
+ * f1-29 research/decision: T23 boot1 has AA=55, CTR=77->34, AB=FA.
+ * https://raw.githubusercontent.com/torvalds/linux/master/drivers/input/serio/i8042.c
+ * controller_check only flushes; check_aux documents FA on notebooks and
+ * qualifies external-test errors through loopback. AB/A9 are advisory here;
+ * device ACKs/ID remain mandatory, with f1-27's tagged AUX loopback retained.
+ * https://raw.githubusercontent.com/coreboot/seabios/master/src/hw/ps2port.c
+ * Contrary to the directive's source summary, current SeaBIOS gates on AB
+ * and Linux uses A9 as a loopback fallback. This change follows the directive,
+ * not an assertion that both upstreams omit all interface tests.
+ * A no-reply controller write gets a bounded 1 ms quiet interval after IBF
+ * clears, within the existing deadlines. Drain one EC FA there, record it,
+ * and complete that controller phase before arming a device ACK receiver.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -472,6 +484,39 @@ static int wait_reply(struct controller *c, struct poll_deadline *d, uint8_t *re
     return err;
 }
 
+/* No response is specified for these controller writes. During setup, finish
+ * their IBF/EC response phase before expecting a device reply. Never run this
+ * filter inside a device ACK wait, nor for AB/A9's diagnostic result byte. */
+static int controller_ack_drain(struct controller *c, struct poll_deadline *d)
+{
+    if (!c->init_recording) return 0;
+    bool seen = false, idle = false;
+    uint64_t quiet_end = 0;
+    for (;;) {
+        int err = poll_check(c, d);
+        if (err) return err;
+        uint32_t f = irq_save();
+        uint8_t status = read_port(c, STATUS_PORT);
+        if (status & OBF) {
+            uint8_t byte = read_port(c, DATA_PORT);
+            c->stats.drained++;
+            if (!(status & (AUX | BAD_STATUS)) && byte == 0xFA) {
+                c->init_records[c->init_count].stray_ack = 1;
+                if (seen) err = -I8042_EPROTO;
+                seen = true;
+            }
+        }
+        irq_restore(f);
+        if (err) return err;
+        if (!(status & IBF)) {
+            if (!idle) { quiet_end = c->io->now(c->io_arg) + 1; idle = true; }
+            if (!(status & OBF) && c->io->now(c->io_arg) - quiet_end < (1ull << 63))
+                return 0;
+        } else idle = false;
+        poll_pause(c, d);
+    }
+}
+
 static int device_exchange(struct controller *c, bool aux, uint8_t b, uint64_t outer, uint8_t *data)
 {
     if (c->stats.quarantined) return -I8042_EIO;
@@ -482,7 +527,10 @@ static int device_exchange(struct controller *c, bool aux, uint8_t b, uint64_t o
     c->stats.commands++;
     int err = drain(c, &d, false);
     for (unsigned attempt = 0; !err; attempt++) {
-        if (aux) err = write_when_ready(c, &d, STATUS_PORT, 0xD4);
+        if (aux) {
+            err = write_when_ready(c, &d, STATUS_PORT, 0xD4);
+            if (!err) err = controller_ack_drain(c, &d);
+        }
         if (err) break;
         expect_reply(c, aux, false);
         err = write_when_ready(c, &d, DATA_PORT, b);
@@ -533,13 +581,16 @@ static int controller_reply(struct controller *c, uint8_t cmd, uint8_t *out, uin
 static int controller_write(struct controller *c, uint8_t cmd, uint64_t outer)
 {
     struct poll_deadline d = limit(c, outer, I8042_REPLY_MS);
-    return write_when_ready(c, &d, STATUS_PORT, cmd);
+    int err = write_when_ready(c, &d, STATUS_PORT, cmd);
+    return err ? err : controller_ack_drain(c, &d);
 }
 static int config_write(struct controller *c, uint8_t cfg, uint64_t outer)
 {
     struct poll_deadline d = limit(c, outer, I8042_REPLY_MS);
     int err = write_when_ready(c, &d, STATUS_PORT, 0x60);
+    if (!err) err = controller_ack_drain(c, &d);
     if (!err) err = write_when_ready(c, &d, DATA_PORT, cfg);
+    if (!err) err = controller_ack_drain(c, &d);
     if (!err) c->stats.config = cfg;
     return err;
 }
@@ -562,9 +613,9 @@ void i8042_init_format(char out[I8042_INIT_LINE], unsigned index,
         ksnprintf(first, sizeof(first), "%02x", r->first);
     }
     ksnprintf(out, I8042_INIT_LINE,
-              "step=%s index=%u command=%02x reply=%s status_before=%02x status_after=%02x elapsed_ms=%u result=%d first=%s bytes=%u status_reply=%02x",
+              "step=%s index=%u command=%02x reply=%s status_before=%02x status_after=%02x elapsed_ms=%u result=%d first=%s bytes=%u status_reply=%02x stray_ack=%u",
               i8042_init_step_name(r->step), index + 1, r->command, reply,
-              r->status_before, r->status_after, r->elapsed_ms, r->result, first, r->bytes, r->status_reply);
+              r->status_before, r->status_after, r->elapsed_ms, r->result, first, r->bytes, r->status_reply, r->stray_ack);
 }
 
 bool i8042_init_record(unsigned index, struct i8042_init_record *out)
@@ -666,10 +717,28 @@ static int init_config_write(struct controller *c, uint8_t cfg, uint64_t end, bo
     return err;
 }
 
+static int init_iface_test(struct controller *c, uint8_t command, uint8_t *reply, uint64_t end)
+{
+    struct poll_deadline d = limit(c, end, I8042_REPLY_MS);
+    int err = drain(c, &d, true);
+    if (!err) {
+        expect_reply(c, false, true);
+        err = write_when_ready(c, &d, STATUS_PORT, command);
+        if (!err) {
+            err = wait_reply(c, &d, reply);
+            /* Only a missing diagnostic reply is advisory. Failure to issue
+             * the command, bad status or a stalled clock remains an error. */
+            if (err == -I8042_ETIMEDOUT) err = 0;
+        }
+    }
+    c->stats.pending_command = false;
+    return err;
+}
+
 static int init_aux_test(struct controller *c, uint64_t end)
 {
-    uint8_t reply = 0;
-    int err = controller_reply(c, 0xA9, &reply, end);
+    uint8_t reply = 0xFF;
+    int err = init_iface_test(c, 0xA9, &reply, end);
     if (err || !reply) return err;
     /* External line tests can fail on a functioning notebook AUX port.
      * Only a correctly tagged internal loopback qualifies that result.
@@ -677,6 +746,7 @@ static int init_aux_test(struct controller *c, uint64_t end)
      * Real device presence still requires every subsequent device ACK/ID. */
     struct poll_deadline d = limit(c, end, I8042_REPLY_MS);
     err = write_when_ready(c, &d, STATUS_PORT, 0xD3);
+    if (!err) err = controller_ack_drain(c, &d);
     if (!err) {
         expect_reply(c, true, true);
         err = write_when_ready(c, &d, DATA_PORT, 0x5A);
@@ -861,8 +931,7 @@ int i8042_init(void)
     }
     if (!err) {
         init_begin(&native, I8042_INIT_IFACE_KBD, 0xAB);
-        err = controller_reply(&native, 0xAB, &reply, end);
-        if (!err && reply) err = -I8042_EIO;
+        err = init_iface_test(&native, 0xAB, &reply, end);
         init_finish(&native, err);
     }
     if (!err) {

@@ -1,4 +1,4 @@
-"""Validate f1-23/f1-27 predicates with the production input probe's records.
+"""Validate f1-23/f1-27/f1-29 with the production input probe's records.
 
 Research: Intel SDM Vol. 1, 20.5.2 specifies V86 I/O bitmap protection:
 https://cdrdv2-public.intel.com/843827/253665-sdm-vol-1-dec-24.pdf
@@ -32,7 +32,7 @@ INIT_STAGES = (
 )
 
 
-def native_setup_predicates():
+def native_setup_predicates(silent_kbd=False):
     predicates = [{
         'where': {'event': 'DATA', 'case': 'setup'},
         'exact_count': len(INIT_STAGES), 'unique': 'index',
@@ -43,6 +43,7 @@ def native_setup_predicates():
             'index': {'ge': 1, 'le': len(INIT_STAGES)},
             'elapsed_ms': {'ge': 0, 'le': 500},
             'result': {'encoding': 'signed', 'eq': 0}, 'bytes': {'ge': 0},
+            'stray_ack': {'ge': 0, 'le': 1},
         },
     }]
     for index, (step, command) in enumerate(INIT_STAGES, 1):
@@ -55,7 +56,8 @@ def native_setup_predicates():
         if step == 'self_test':
             fields['reply']['eq'] = 0x55
             fields['elapsed_ms'] = {'ge': 0, 'le': 200}
-        if step == 'iface_kbd': fields['reply']['eq'] = 0
+        if step == 'iface_kbd' and silent_kbd:
+            fields.update({'reply': 'none', 'first': 'none', 'bytes': {'eq': 0}})
         if step in ('reset_kbd', 'reset_aux'): fields['reply']['eq'] = 0xfa
         predicates.append({
             'where': {'event': 'DATA', 'case': 'setup', 'step': step, 'index': str(index)},
@@ -117,7 +119,8 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeo
         return parser
 
     def test_native_setup_records_match_boot_logs_and_predicates(self):
-        for mode in ('input-records', 'input-selftest-delayed', 'input-aux-quirk'):
+        for mode in ('input-records', 'input-selftest-delayed', 'input-aux-quirk',
+                     'input-t23', 'input-t23-stray', 'input-iface-silent'):
             parser = self.records(mode)
             steps = [r for r in parser.records if r.get('case') == 'setup' and 'step' in r]
             self.assertEqual(len(steps), 15)
@@ -133,15 +136,34 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeo
             probe = [line.split(b'case=setup ', 1)[1] for line in result.stdout.splitlines()
                      if line.startswith(b'CIUKI_TEST ') and b'case=setup step=' in line]
             self.assertEqual(boot, probe)
+            self.assertIn(b'[init] input result=ready error=0', result.stdout.splitlines())
             for case in self.input_cases:
+                expected = copy.deepcopy(case['expected'])
+                if mode == 'input-iface-silent':
+                    count = len(native_setup_predicates())
+                    expected['predicates'][-count:] = native_setup_predicates(silent_kbd=True)
                 with self.subTest(mode=mode, case=case['id']):
-                    self.assertTrue(parser.check(case['expected']))
+                    self.assertTrue(parser.check(expected))
             if mode == 'input-selftest-delayed':
                 self.assertEqual(steps[3]['elapsed_ms'], '199')
                 self.assertEqual(steps[3]['reply'], '55')
             if mode == 'input-aux-quirk':
                 self.assertEqual((steps[6]['first'], steps[6]['reply'], steps[6]['bytes']),
                                  ('03', '5a', '2'))
+            if mode.startswith('input-t23'):
+                self.assertEqual((steps[1]['first'], steps[1]['reply']), ('77', '77'))
+                self.assertEqual((steps[3]['reply'], steps[4]['reply'], steps[5]['reply']),
+                                 ('55', '34', 'fa'))
+                self.assertEqual(steps[5]['stray_ack'], '0')  # AB reply stays diagnostic
+                self.assertEqual((steps[8]['reply'], steps[12]['reply']), ('fa', 'fa'))
+            if mode == 'input-t23-stray':
+                self.assertEqual(steps[2]['stray_ack'], '1')
+                self.assertEqual(steps[4]['stray_ack'], '1')
+                self.assertEqual(steps[2]['reply'], 'fa')
+            if mode == 'input-iface-silent':
+                self.assertEqual((steps[5]['reply'], steps[5]['bytes'], steps[5]['elapsed_ms']),
+                                 ('none', '0', '200'))
+                self.assertEqual((steps[6]['reply'], steps[6]['bytes']), ('5a', '1'))
 
     def test_each_native_setup_predicate_rejects_changed_or_missing_evidence(self):
         parser = self.records('input-records')
@@ -191,6 +213,8 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeo
             'input-stuck-obf': ('flush', '-110', 'ad', '00'),
             'input-final-obf': ('flush', '-110', '00', '00'),
             'input-enable-failed': ('enable', '-5', '20', None),
+            'input-t23-no-device-ack': ('reset_kbd', '-110', 'f5', 'none'),
+            'input-t23-stray-no-device-ack': ('reset_kbd', '-110', 'f5', 'none'),
         }
         for mode, (step, error, command, reply) in modes.items():
             parser = self.records(mode)

@@ -27,6 +27,7 @@ struct i8042_init_record {
     uint32_t elapsed_ms, bytes;
     int result;
     uint8_t command, reply, first, status_before, status_after, status_reply;
+    uint8_t stray_ack;                  /* controller ACK drained before device I/O */
 };
 /* Read-only replay: a boot-time quarantine must never be retried by a probe.
  * Records exist only for attempted hardware stages. No live port reads. */
