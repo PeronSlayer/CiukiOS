@@ -78,6 +78,7 @@ int main(void)
 }
 #else
 static unsigned failures, calls, records, consoles, optional_records, logs;
+bool probes_operator_mode;
 static unsigned sequence, frame_count, max_activation_length;
 static char frames[64][512];
 static char log_lines[64][256];
@@ -223,6 +224,7 @@ static int verdict(const char *probe, bool ok, const char *reason)
 
 static void reset(uint32_t flags, bool firmware, bool lfb)
 {
+    probes_operator_mode = false;
     state = (struct drivers_state){ 0 };
     memset(activation_ledger, 0, sizeof(activation_ledger));
     activation_count = 0; initialized = false;
@@ -330,9 +332,39 @@ static int safe_run(void)
     return result;
 }
 
+static void safe_sweep_tests(void)
+{
+    reset(0, false, true); disk = true;
+    verify("FNA", 2, "ready", "ready", "ready", 0);
+    probes_operator_mode = true;
+    unsigned before = calls;
+    CHECK(safe_run() == -ECANCELED && calls == before && consoles == 1);
+    CHECK(strstr(provenance, "safe_mode=0 fw_cfg=0 boot_cfg=0 menu=0"));
+    CHECK(strstr(frames[frame_count - 3], "event=READY console=1 input=1 optional_activations=2"));
+    CHECK(strstr(frames[frame_count - 2], "event=DATA subcase=required status=not_run reason=safe_mode_not_selected"));
+    CHECK(strstr(frames[frame_count - 1], "event=END status=NOT_RUN reason=safe_mode_not_selected"));
+    CHECK(strstr(frames[frame_count - 4], "errors=1")); /* original observations retained */
+    probes_operator_mode = false; fail_expected = true;
+    CHECK(safe_run() == 1 && strstr(frames[frame_count - 1], "status=FAIL reason=safe_contract"));
+    /* A positive source with a missing flag is a broken safe boot, even
+     * during a sweep; it must not be mistaken for unselected mode. */
+    probes_operator_mode = true;
+    memcpy(g_boot.options, "safe=1", 7);
+    CHECK(safe_run() == 1 && strstr(frames[frame_count - 1], "status=FAIL"));
+    reset(CBI_F_SAFE_MODE, false, true);
+    verify("FN", 0, "ready", "ready", "disabled", 0);
+    probes_operator_mode = true;
+    CHECK(!safe_run() && strstr(frames[frame_count - 1], "status=PASS"));
+    reset(CBI_F_SAFE_MODE, false, false); input_result = -5; fail_expected = true;
+    verify("N", 0, "disabled", "failed", "disabled", 1);
+    probes_operator_mode = true;
+    CHECK(safe_run() == 1 && strstr(frames[frame_count - 1], "status=FAIL"));
+}
+
 int main(void)
 {
     CHECK(CIUKI_BUILD_EPOCH == 0); /* the host build uses the header fallback */
+    safe_sweep_tests();
     reset(0, false, true); disk = true; verify("FNA", 2, "ready", "ready", "ready", 0);
     reset(CBI_F_TEXT_MODE, false, false); verify("FNA", 2, "ready", "ready", "absent", 0);
     reset(0, false, true); fb_result = -EINVAL; input_result = -5; ata_result = -5; verify("FNA", 2, "failed", "failed", "failed", 3);

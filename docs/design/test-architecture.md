@@ -86,6 +86,19 @@ the prompt's first 16 pixel rows so the prompt cannot qualify as a desktop redra
 No input events are synthesized and
 no QEMU qualification or hardware success is inferred from the host tests.
 
+F1-36 distinguishes an unselected safe-mode sweep step from a failed safe
+boot: the required subcase and END are NOT_RUN with
+`reason=safe_mode_not_selected`, and SWEEP/SWEEP_END count it as not_run.
+Import retains the original observations and reason without blocking later
+cases solely for this absent mode; a failed earlier prerequisite still applies.
+The separate `safe-menu-<target>` case requires a single menu acquisition with
+`selector_source: menu`, all existing safe predicates and the case's operator
+confirmation. A sweep cannot qualify that physical case. The QEMU parser and
+safe suites retain their PASS/FAIL rules. Source comparison and transport
+research are recorded in [F1 acceptance](f1-acceptance.md#f1-28-hardware-sweeps);
+the current loader's inability to combine safe selection with a hardware probe
+is documented in [build and run](../build-and-run.md#operator-safe-mode-boot-after-a-sweep).
+
 ## Migration
 
 The pre-cleanup test scripts were archived in
