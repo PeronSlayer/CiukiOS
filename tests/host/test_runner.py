@@ -158,7 +158,8 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual([c['boot_kind'] for c in boots],['cold']*5+['restart']*5)
             probes=[c['probe'] for c in core if c['profile']==profile and c['probe']!='boot']
             self.assertEqual(probes,[c['probe'] for c in core if c['profile']=='qemu-min128' and c['probe']!='boot'])
-            selected=[c for c in inputs if c['profile']==profile]
+            selected=[c for c in inputs if c['profile']==profile and
+                      not c['id'].startswith(('firmware_overrun','disallowed_io'))]
             self.assertEqual([c['probe'] for c in selected],['registry','input-fault','input','framebuffer'])
             for c in selected:
                 original=next(t for t in inputs if t['profile']=='qemu-t23' and t['probe']==c['probe'])
@@ -174,6 +175,14 @@ class RunnerTests(unittest.TestCase):
                 self.assertIsNone(request['platform'])
                 self.assertNotIn('device_exceptions',c)
                 self.assertNotIn('patches',c)
+            firmware=[c for c in inputs if c['profile']==profile and
+                      c['id'].startswith(('firmware_overrun','disallowed_io'))]
+            self.assertEqual(len(firmware),2)
+            for c in firmware:
+                self.assertEqual(c['probe'],'input-fault')
+                self.assertEqual(c['timeout'],120)
+                request=selector(c['selector'].format(run_id='12345678'),'fw_cfg',True)
+                self.assertEqual(request['platform'],'e500')
     def test_duplicate_selector_keys_are_refused(self):
         for suffix in (' platform=e500 platform=e500',' safe=1 safe=1',' run=12345678'):
             case={**self.case,'selector':'f0:boot run={run_id}'+suffix}

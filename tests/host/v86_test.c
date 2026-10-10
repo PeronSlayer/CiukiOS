@@ -57,7 +57,13 @@ static void write_cr3(uint32_t x) { cr3 = x; }
 static uint32_t read_cr4(void) { return cr4_fake; }
 static uint32_t read_cr2(void) { return 0xDEAD000; }
 static uint8_t inb(uint16_t p) { hw_reads++; return physical[p]; }
-static void outb(uint16_t p, uint8_t b) { hw_writes++; physical[p] = b; }
+static void outb(uint16_t p, uint8_t b)
+{
+    hw_writes++;
+    /* Status-only readback is a latch, not PIT reprogramming. */
+    if (p == 0x43 && b == 0xE2) return;
+    physical[p] = b;
+}
 static uint32_t inl(uint16_t p) { (void)p; CHECK(false); return UINT32_MAX; }
 static void outl(uint16_t p, uint32_t value) { (void)p; (void)value; CHECK(false); }
 
@@ -780,10 +786,34 @@ static void test_worker(void)
     g_boot.flags = CBI_F_SMBIOS_QEMU | CBI_F_TEST_REQUEST | CBI_F_INPUT_FORCED;
     struct biosvm_selftest_report report;
     physical[0x40] = 0x34; physical[0x21] = 0xF9; physical[0xA1] = 0xEF;
+    struct v86_pic saved_pic[2];
+    memcpy(saved_pic, firmware.pic, sizeof(saved_pic));
+    uint16_t saved_latch[3];
+    uint8_t saved_phase[3], saved_latched[3];
+    memcpy(saved_latch, firmware.pit_latch, sizeof(saved_latch));
+    memcpy(saved_phase, firmware.pit_phase, sizeof(saved_phase));
+    memcpy(saved_latched, firmware.pit_latched, sizeof(saved_latched));
+    uint8_t saved_physical[sizeof(physical)];
+    memcpy(saved_physical, physical, sizeof(physical));
+    uint32_t saved_vector;
+    memcpy(&saved_vector, ram + 0x1C * 4, sizeof(saved_vector));
+    unsigned reads = hw_reads, writes = hw_writes, entries = enters;
     CHECK(!biosvm_selftest(&report));
+    CHECK(report.policy_result == 0 && report.denied_result == -V86_EPERM &&
+          report.timeout_result == -V86_ETIMEDOUT && report.later_result == -V86_EIO);
+    CHECK(report.pic_unchanged && report.pit_unchanged && report.pic_before[0] == 0xF9 &&
+          report.pic_before[1] == 0xEF && report.pit_before == 0x34);
+    CHECK(!memcmp(saved_pic, firmware.pic, sizeof(saved_pic)));
+    CHECK(!memcmp(saved_latch, firmware.pit_latch, sizeof(saved_latch)));
+    CHECK(!memcmp(saved_phase, firmware.pit_phase, sizeof(saved_phase)));
+    CHECK(!memcmp(saved_latched, firmware.pit_latched, sizeof(saved_latched)));
+    CHECK(!memcmp(saved_physical, physical, sizeof(physical)));
+    CHECK(!memcmp(&saved_vector, ram + 0x1C * 4, sizeof(saved_vector)));
+    CHECK(hw_reads == reads + 6 && hw_writes == writes + 2 && enters == entries + 3);
     CHECK(report.disabled && report.timeouts == 1 && report.disallowed == 1 && !counters.quarantines);
     CHECK(report.mappings_ok && report.mappings[4].end == 0xF0000);
     CHECK(biosvm_backend_state() == BIOSVM_READY);
+    printf("biosvm synthetic fault report: PASS (0/-1/-110/-5, PIC/physical ports/IVT restored, 6 reads/2 status latches)\n");
     CHECK(!fwinput_init()); /* fake BIOS returns unsupported C205 */
     struct fwinput_backend_state state;
     fwinput_backend_state(&state);

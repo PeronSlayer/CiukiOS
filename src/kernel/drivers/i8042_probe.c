@@ -1,8 +1,8 @@
 /* F1 input evidence through the shared native/firmware queue.
  * Protocol references and production decisions are recorded in i8042.c.
  * Fault fixtures below never read/write physical ports or PIC/PIT state.
- * Mediated-I/O fault evidence is supplied by biosvm_selftest (f1-07);
- * the native fault PASS does not qualify those firmware fault cases.
+ * Mediated-I/O fault evidence uses biosvm_selftest's synthetic execution;
+ * an absent BIOS VM is explicitly outside the native fault PASS.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -319,6 +319,38 @@ int probe_input_fault(void)
         i8042_fault_end();
         bool alive = survivor_progress(&survivor, "queue_overflow");
         ok = ok && c_ok && alive;
+    }
+    if (biosvm_backend_state() == BIOSVM_OFF) {
+        rec_emit("input-fault", "DATA", "case=firmware_overrun status=not_run reason=firmware_backend_absent");
+        rec_emit("input-fault", "DATA", "case=disallowed_io status=not_run reason=firmware_backend_absent");
+    } else {
+        /* device-firmware-ownership.md: IOPL=0 and trapped PIC/PIT I/O.
+         * Intel SDM Vol. 1, 20.5.2 (V86 I/O bitmap checks):
+         * https://cdrdv2-public.intel.com/843827/253665-sdm-vol-1-dec-24.pdf
+         * Use only the existing synthetic self-test, never a live BIOS call
+         * or a reset of real quarantine. It restores the virtual PIC/IVT;
+         * its PIC/PIT snapshots are the sole physical accesses here. */
+        struct biosvm_selftest_report report = { 0 };
+        int result = biosvm_selftest(&report);
+        bool qemu = (g_boot.flags & CBI_F_SMBIOS_QEMU) != 0;
+        bool qemu_only_refusal = result == -V86_EPERM && !qemu;
+        if (qemu_only_refusal) {
+            rec_emit("input-fault", "DATA", "case=firmware_overrun status=not_run reason=firmware_selftest_qemu_only");
+            rec_emit("input-fault", "DATA", "case=disallowed_io status=not_run reason=firmware_selftest_qemu_only");
+        } else {
+            rec_emit("input-fault", "DATA", "case=firmware_overrun result=%d timeout_result=%d timeouts=%u disabled=%u later_result=%d",
+                     result, report.timeout_result, report.timeouts, report.disabled, report.later_result);
+            rec_emit("input-fault", "DATA", "case=disallowed_io result=%d policy_result=%d denied_result=%d disallowed=%u pic_unchanged=%u pit_unchanged=%u mappings_ok=%u",
+                     result, report.policy_result, report.denied_result, report.disallowed,
+                     report.pic_unchanged, report.pit_unchanged, report.mappings_ok);
+            /* Packed PIC masks: master first, slave second, fixed-width hex. */
+            rec_emit("input-fault", "DATA", "case=disallowed_io pic_before=%02x%02x pic_after=%02x%02x pit_before=%02x pit_after=%02x",
+                     report.pic_before[0], report.pic_before[1], report.pic_after[0], report.pic_after[1],
+                     report.pit_before, report.pit_after);
+        }
+        bool overrun_alive = survivor_progress(&survivor, "firmware_overrun");
+        bool io_alive = survivor_progress(&survivor, "disallowed_io");
+        ok = ok && (!result || qemu_only_refusal) && overrun_alive && io_alive;
     }
     survivor_finish(&survivor);
     return input_verdict("input-fault", ok, "fault_or_survivor");
