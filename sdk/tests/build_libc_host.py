@@ -7,6 +7,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tarfile
 
 sys.dont_write_bytecode=True
 ROOT=Path(__file__).resolve().parents[2]
@@ -14,17 +15,45 @@ SDK=ROOT/'build/tools/ciuki-sdk'
 OUT=SDK/'tests/native-libc'
 
 
-def build():
+def build(lua_files=False):
     OUT.mkdir(parents=True,exist_ok=True)
     source=SDK/'work/newlib-4.5.0.20241231'
     if not source.is_dir():raise RuntimeError('build the SDK before the native libc reference')
     inputs=[ROOT/'sdk/newlib/recipe.json',ROOT/'sdk/crt/start.c',ROOT/'sdk/libpthread/pthread.c',
             ROOT/'sdk/tests/libc_host.c',ROOT/'sdk/tests/libc_smoke.c',ROOT/'sdk/tests/libc_start64.S',
             ROOT/'sdk/tests/host_runtime.h',Path(__file__),*sorted((ROOT/'sdk/libciuki').glob('*.c'))]
+    program='lua-files-host' if lua_files else 'libc-host'
+    lua_source=None
+    if lua_files:
+        inputs.append(ROOT/'sdk/tests/lua_files_host.c')
+        pins=json.loads((ROOT/'config/sdk-pins.json').read_text())['lua']
+        lua=OUT/'lua-files';lua.mkdir(exist_ok=True)
+        for kind,top in (('source','lua-5.4.8'),('tests','lua-5.4.8-tests')):
+            archive=ROOT/'build/downloads/newlib'/f'{top}.tar.gz'
+            if hashlib.sha256(archive.read_bytes()).hexdigest()!=pins[kind]['sha256']:
+                raise RuntimeError(f'Lua {kind} archive digest mismatch')
+            inputs.append(archive)
+            # Use a fresh, verified import. Never patch upstream files.
+            with tarfile.open(archive) as bundle:
+                for member in bundle.getmembers():
+                    path=Path(member.name)
+                    if (path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0]!=top
+                            or not (member.isfile() or member.isdir())):
+                        raise RuntimeError('unexpected Lua archive member')
+                bundle.extractall(lua,filter='data')
+        lua_source=lua/'lua-5.4.8/src'
+        all_lua=(lua/'lua-5.4.8-tests/all.lua').read_text()
+        # Execute upstream's exact switch setup with the gate's initial state.
+        setup='_U=true; assert(_port==nil);\n'+all_lua[all_lua.index('_soft ='):all_lua.index('-- tests should require debug')]
+        setup+='\nassert(_U and _port and _soft and _nomsg)\n'
+        data={'setup':setup.encode(),'files':(lua/'lua-5.4.8-tests/files.lua').read_bytes()}
+        (OUT/'lua_files_data.h').write_text('\n'.join(
+            f'static const unsigned char {name}_lua[]={{'+','.join(map(str,value))+',0};'
+            for name,value in data.items())+'\n')
     hashes={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     hashes['sdk-manifest']=hashlib.sha256((SDK/'manifest.json').read_bytes()).hexdigest()
-    evidence=OUT/'inputs.json'
-    if evidence.is_file() and json.loads(evidence.read_text())==hashes and (OUT/'libc-host').is_file():return OUT/'libc-host'
+    evidence=OUT/('lua-files-inputs.json' if lua_files else 'inputs.json')
+    if evidence.is_file() and json.loads(evidence.read_text())==hashes and (OUT/program).is_file():return OUT/program
     tools=json.loads((SDK/'manifest.json').read_text())['tools']
     clang=tools['clang']['path'];lld=tools['ld.lld']['path']
     resource=subprocess.check_output([clang,'-print-resource-dir'],text=True).strip()
@@ -59,23 +88,27 @@ def build():
         # Native function pointers are 64-bit; this model never sends its
         # native sigaction to CiukiOS. Target check_sdk/layout retains the assert.
         (OUT/'signals.c').write_text(signals.replace(old,''))
-        sources=[OUT/'start.c',ROOT/'sdk/tests/libc_start64.S',ROOT/'sdk/tests/libc_smoke.c',
+        sources=[OUT/'start.c',ROOT/'sdk/tests/libc_start64.S',ROOT/'sdk/tests'/('lua_files_host.c' if lua_files else 'libc_smoke.c'),
                  ROOT/'sdk/tests/libc_host.c',ROOT/'sdk/libpthread/pthread.c',
                  *[OUT/'signals.c' if p.name=='signals.c' else p for p in sorted((ROOT/'sdk/libciuki').glob('*.c'))]]
+        if lua_files:
+            sources += [p for p in sorted(lua_source.glob('*.c')) if p.name not in ('lua.c','luac.c')]
         objects=[]
         for index,path in enumerate(sources):
             obj=OUT/f'{index}.o';objects.append(obj)
             compile_flags=[*flags,'-I',str(native),'-I',str(SDK/'sysroot/include'),
                            '-include',str(ROOT/'sdk/tests/host_runtime.h')] if path.suffix=='.c' else ['-m64']
+            if lua_files and path.suffix=='.c':
+                compile_flags += ['-DLUA_COMPAT_5_3','-I',str(lua_source),'-I',str(OUT)]
             subprocess.run([clang,*compile_flags,'-c',str(path),'-o',str(obj)],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
         ld=(ROOT/'sdk/ciuki.ld').read_text().replace('elf32-i386','elf64-x86-64').replace('OUTPUT_ARCH(i386)','OUTPUT_ARCH(i386:x86-64)')
         (OUT/'host.ld').write_text(ld)
         subprocess.run([lld,'-m','elf_x86_64','-static','--gc-sections','-L',str(SDK/'sysroot/lib'),'-T',str(OUT/'host.ld'),
-            '--wrap=__ciuki_start','--wrap=__getreent','--wrap=ciuki_syscall','--wrap=ciuki_raw_probe_report','-o',str(OUT/'libc-host'),
+            '--wrap=__ciuki_start','--wrap=__getreent','--wrap=ciuki_syscall','--wrap=ciuki_raw_probe_report','-o',str(OUT/program),
             *map(str,objects),'--start-group',str(native/'libc.a'),str(native/'libm.a'),'--end-group'],
             env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
     evidence.write_text(json.dumps(hashes,indent=2)+'\n')
-    return OUT/'libc-host'
+    return OUT/program
 
 
 if __name__=='__main__':print(build())

@@ -28,6 +28,9 @@ are supplied. Complete and internal modes are `excluded_by_contract`.
 notice ships under `/system/licenses/lua-5.4.8.txt`, and the test archive's
 notice ships unmodified in `all.lua`.
 
+The [f2-18 files.lua audit](F2-18-REPORT.md) records the gate environment,
+active file/time coverage, declared upstream exclusions and host evidence.
+
 ## Build and payloads
 
 See [the SDK guide](../../docs/sdk.md) for the capped offline build commands.
@@ -50,7 +53,7 @@ are retained.
 ## Supplement interface
 
 The controller starts a separate run of `/bin/lua /system/tests/ciuki-f2.lua`
-with `LC_ALL=C`, `TZ=UTC0`, `HOME=/home`, `TMPDIR=/tmp`. The script emits bounded
+with `LC_ALL=C`, `TZ=UTC0`, `HOME=/home`, `TMPDIR=/tmp`, `PATH=/bin`. The script emits bounded
 printable `case=<name> ok=1|0` lines for `file-roundtrip`, `allocation`,
 `time-utc` and `console`, then exits zero only if all four succeed. It emits
 no controller BEGIN/DATA/END framing or sequence numbers.

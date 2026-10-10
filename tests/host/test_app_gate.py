@@ -146,7 +146,63 @@ class AppGateTests(unittest.TestCase):
         self.assertEqual(len(result["application_output"]["guest_console_captures"]), 4)
         self.assertTrue(all(item["match"] for item in result["payload_hash_comparisons"]))
         self.assertEqual(result["argv"], ["lua", "-e", "_U=true", "all.lua"])
+        self.assertEqual(result["env"], {"LC_ALL":"C", "TZ":"UTC0", "HOME":"/home",
+                                      "TMPDIR":"/tmp", "PATH":"/bin"})
         self.assertEqual(result["declared_exclusions"]["complete"], "excluded_by_contract")
+
+    def test_gate_launch_environment_matches_metadata(self):
+        source = (ROOT / "src/kernel/proc/supervisor.c").read_text()
+        # Execute production argv/env construction up to the private ELF
+        # preparation boundary; fake only file lookup and string storage.
+        first = source.index("int supervisor_spawn(")
+        spawn = source[first:source.index("    /* Prepare privately;", first)]
+        first = source.index("int supervisor_spawn_gate(")
+        gate = source[first:source.index("\n}", first)+3]
+        harness = self.work / "environment.c"
+        harness.write_text('''#include <ciuki/kernel.h>
+#include <ciuki/supervisor.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static struct process parent;
+static struct proc_strings strings;
+struct process *proc_supervisor(void) { return &parent; }
+static int lookup(void *cwd, const char *path, struct ciuki_file *out) {
+    (void)cwd; (void)out;
+    if (strcmp(path, "/bin/lua")) abort();
+    return 0;
+}
+const struct ciuki_file_ops *proc_get_file_ops(void) {
+    static const struct ciuki_file_ops ops = { lookup }; return &ops;
+}
+struct proc_strings *proc_strings_new(void) { return &strings; }
+int proc_strings_add(struct proc_strings *s, const char *text, uint32_t bytes, bool env) {
+    if (s != &strings || bytes != strlen(text)+1) abort();
+    printf("%s %s\\n", env ? "env" : "argv", text); return 0;
+}
+''' + spawn + '    (void)cwd; (void)desktop; (void)out; return err;\n}\n' + gate + '''
+int main(void) {
+    struct process *p = 0;
+    if (supervisor_spawn_gate(false, &p)) return 1;
+    puts("supplement");
+    return supervisor_spawn_gate(true, &p);
+}
+''')
+        binary = self.work / "environment"
+        compiled = subprocess.run(["clang", "-std=c17", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=address,undefined", "-I", str(ROOT / "src/kernel/include"),
+                        str(harness), "-o", str(binary)], env=self.env,
+                       capture_output=True, text=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        result = subprocess.run([str(binary)], check=True, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.stderr, "")
+        metadata = runner.f2_metadata(self.parse(self.output()).records)
+        for lines, argv in zip(result.stdout.split("supplement\n"),
+                               (["lua", "-e", "_U=true", "all.lua"], ["lua", "ciuki-f2.lua"])):
+            self.assertEqual([s[5:] for s in lines.splitlines() if s.startswith("argv ")], argv)
+            assignments = [s[4:].split("=", 1) for s in lines.splitlines() if s.startswith("env ")]
+            self.assertEqual(len(assignments), 5)
+            self.assertEqual(dict(assignments), metadata["env"])
 
     def test_each_real_record_predicate_rejects_missing_or_bad_fields(self):
         # Mutate records emitted by production C. No hand-built PASS fixtures.

@@ -351,7 +351,7 @@ int probe_f2_app_gate(void)
         pass = gate_live(desktop->pid) && gate_progress(desktop,native) && gate_provenance();
     }
     gate_metadata("argv","json","[\"lua\",\"-e\",\"_U=true\",\"all.lua\"]");
-    gate_metadata("env","json","{\"LC_ALL\":\"C\",\"TZ\":\"UTC0\",\"HOME\":\"/home\",\"TMPDIR\":\"/tmp\"}");
+    gate_metadata("env","json","{\"LC_ALL\":\"C\",\"TZ\":\"UTC0\",\"HOME\":\"/home\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/bin\"}");
     gate_metadata("cwd","utf8",GATE_CWD);
     gate_metadata("fd_setup","json","{\"inherited\":[0,1,2],\"stdin\":\"/dev/null\",\"stdout\":\"bounded\",\"stderr\":\"bounded\"}");
     struct proc_ledger baseline, final; struct desktop_ledger objects_before, objects_after;
