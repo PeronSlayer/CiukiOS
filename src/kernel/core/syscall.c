@@ -7,6 +7,7 @@
 #include <ciuki/task.h>
 #include <ciuki/probe.h>
 #include <ciuki/process.h>
+#include <ciuki/supervisor.h>
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
 
@@ -44,7 +45,8 @@ static int32_t sys_probe_report(uint32_t buf, uint32_t len)
     for (uint32_t i = 0; i < len; i++)
         if (kbuf[i] < 32 || kbuf[i] > 126)
             return -EINVAL;
-    probe_user_report(g_current, kbuf, len);
+    if (!supervisor_report(g_current, kbuf, len))
+        probe_user_report(g_current, kbuf, len);
     return 0;
 }
 
@@ -109,8 +111,14 @@ void syscall_dispatch(struct trap_frame *tf)
     case 5:
         r = sys_probe_query(tf->ebx, tf->ecx);
         break;
+    case CIUKI_SYS_SURFACE_CREATE: case CIUKI_SYS_SURFACE_MAP:
+    case CIUKI_SYS_SURFACE_INFO: case CIUKI_SYS_PRESENT: case CIUKI_SYS_INPUT_READ:
+    case CIUKI_SYS_CHANNEL_PAIR: case CIUKI_SYS_CHANNEL_SEND: case CIUKI_SYS_CHANNEL_RECV:
+    case CIUKI_SYS_DISPLAY_INFO:
+        r = desktop_syscall(tf);
+        break;
     default:
-        r = proc_syscall(tf);
+        r = desktop_fd_syscall(tf) ? (int32_t)tf->eax : proc_syscall(tf);
         break;
     }
     if (nr != 1 && nr != 4) {

@@ -5,12 +5,23 @@
 #include <ciuki/abi.h>
 #include <ciuki/mm.h>
 
-enum ua_kind { UA_ANON, UA_IMAGE, UA_HEAP, UA_STACK, UA_GUARD, UA_TLS };
+enum ua_kind { UA_ANON, UA_IMAGE, UA_HEAP, UA_STACK, UA_GUARD, UA_TLS, UA_SHARED };
+/* Shared backing callbacks never block; every split extent owns one ref.
+ * ua_map_shared is supplied by the uaddr integration patch (f2-05).
+ * A weak import lets the lead build before installing that out-of-scope hook;
+ * surface_map fails closed while it is absent. */
+struct ua_shared {
+    void *object;
+    void (*retain)(void *object);
+    void (*release)(void *object);
+    uint32_t (*page)(void *object, uint32_t index);
+};
 struct ua_extent {
     uint32_t base, end, prot, maximum, owner;
     uint64_t generation;
     enum ua_kind kind;
     struct ua_extent *next;
+    struct ua_shared shared;
 };
 struct ua_pin {
     uint32_t base, end;
@@ -29,6 +40,9 @@ void ua_destroy(struct uaddr *u);
 int ua_protection(uint32_t prot);
 int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
               uint32_t maximum, enum ua_kind kind, uint32_t owner);
+int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
+                       uint32_t prot, uint32_t maximum, const struct ua_shared *shared)
+    __attribute__((weak));
 int32_t ua_mmap(struct uaddr *u, const struct ciuki_mmap_args *args);
 int ua_munmap(struct uaddr *u, uint32_t base, uint32_t bytes);
 int ua_mprotect(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot);
