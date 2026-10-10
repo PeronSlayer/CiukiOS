@@ -59,9 +59,10 @@ static void expected_pixels(const struct fb_device *d, uint8_t *out, unsigned la
 
 static int fixtures(uint32_t *digest, unsigned *guards, unsigned *errors)
 {
-    uint8_t *source = kmalloc(SP * SH);
-    if (!source)
-        return -ENOMEM;
+    enum { MAX_PITCH = FW * 4 + 7, MAX_SIZE = MAX_PITCH * FH };
+    static uint8_t source[SP * SH];
+    static uint8_t raw[MAX_SIZE + 2 * GUARD];
+    static uint8_t expected[MAX_SIZE];
     memset(source, SENTINEL, SP * SH);
     for (unsigned y = 0; y < SH; y++)
         for (unsigned x = 0; x < SW; x++) {
@@ -72,13 +73,6 @@ static int fixtures(uint32_t *digest, unsigned *guards, unsigned *errors)
     for (unsigned bpp = 24; bpp <= 32; bpp += 8) {
         for (unsigned pad = 0; pad <= 7; pad += 7) {
             uint32_t pitch = FW * (bpp / 8) + pad, size = pitch * FH;
-            uint8_t *raw = kmalloc(size + 2 * GUARD), *expected = kmalloc(size);
-            if (!raw || !expected) {
-                kfree(raw);
-                kfree(expected);
-                kfree(source);
-                return -ENOMEM;
-            }
             memset(raw, SENTINEL, size + 2 * GUARD);
             memset(expected, SENTINEL, size);
             struct fb_device d = {
@@ -123,11 +117,8 @@ static int fixtures(uint32_t *digest, unsigned *guards, unsigned *errors)
             *digest = fnv1a32(&actual, sizeof(actual), *digest);
             rec_emit("framebuffer", "DATA", "group=fixture bpp=%u pitch=%u digest=%08x reference=%08x guard_errors=%u errors=%u",
                      bpp, pitch, actual, reference, *guards, *errors);
-            kfree(expected);
-            kfree(raw);
         }
     }
-    kfree(source);
     return 0;
 }
 

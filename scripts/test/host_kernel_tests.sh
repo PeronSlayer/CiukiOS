@@ -7,6 +7,7 @@ mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
 python3 "$root/tests/host/record_scope_test.py"
+python3 "$root/tests/host/fbdev_fixture_size_test.py"
 
 # F2 ABI: always extract the actual i686 layout using the kernel's flags.
 python3 "$root/scripts/test/abi_layout_dump.py" --output "$out/abi-layout.json"

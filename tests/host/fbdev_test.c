@@ -369,7 +369,7 @@ static void boot_tests(void)
     CHECK(probe_framebuffer() != 0 && ends == 1 && !passes && !map_calls);
     boot_fixture(true);
     fail_alloc = true;
-    CHECK(probe_framebuffer() != 0 && ends == 1 && !passes && !map_calls);
+    CHECK(probe_framebuffer() == 0 && ends == 1 && passes == 1 && map_calls == 1);
     free(fake_lfb);
 }
 
