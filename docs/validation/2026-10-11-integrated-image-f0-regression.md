@@ -214,3 +214,8 @@ status 256: the gate setup fails at the survivor spawn with `EBADF`
 (directive f2-16, second round). Host tests on commit `cd32ee6`: 131 OK
 after the alignment fixture and the SDK smoke test were updated for the
 passing `signals-fault` capture and the three clock reports.
+On image `a4806d0c…` the remaining `qemu-t23` cases of `f2-process` and
+`f2-runtime` pass through the runner without prefix: `fd-table` (with its
+FAT16 fixture, ARM, durable export and host checker), `threads-wait` and
+`libc-smoke`; together with `elf-load`, `spawn-wait`, `mmap` and
+`signals-fault` all seven cases of the two suites pass on `qemu-t23`.
