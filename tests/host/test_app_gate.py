@@ -42,15 +42,15 @@ class AppGateTests(unittest.TestCase):
                            + f'\n#include "{ROOT / "tests/host/proc/app_gate_test.c"}"\n')
         cls.binary = cls.work / "probe"
         subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
-                        "-fsanitize=address,undefined", "-I", str(ROOT / "src/kernel/include"),
-                        str(harness), str(ROOT / "src/kernel/lib/sha256.c"),
+                        "-fsanitize=address,undefined", "-DFS_HOST", "-D_POSIX_C_SOURCE=200809L", "-pthread",
+                        "-I", str(ROOT / "src/kernel/include"), str(harness), str(ROOT / "src/kernel/lib/sha256.c"),
                         str(ROOT / "src/kernel/lib/fmt.c"), "-o", str(cls.binary)],
                        check=True, env=cls.env, capture_output=True, text=True)
         cls.stack_binary = cls.work / "probe-kernel-stack"
         # Resolve host libc symbols before entering the bounded stack: the
         # dynamic linker's vector-register save frame is not kernel work.
         subprocess.run(["clang", "-std=c17", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
-                        "-fno-omit-frame-pointer", "-D_GNU_SOURCE", "-DAPP_GATE_KERNEL_STACK_TEST", "-pthread",
+                        "-fno-omit-frame-pointer", "-DFS_HOST", "-D_GNU_SOURCE", "-DAPP_GATE_KERNEL_STACK_TEST", "-pthread",
                         "-Wl,-z,now",
                         "-I", str(ROOT / "src/kernel/include"), str(harness),
                         str(ROOT / "src/kernel/lib/sha256.c"), str(ROOT / "src/kernel/lib/fmt.c"),
@@ -97,7 +97,7 @@ class AppGateTests(unittest.TestCase):
     def test_probe_on_guarded_kernel_size_stack(self):
         # The bounded binary uses production C without ASan stack inflation;
         # the normal harness retains ASan/UBSan for every controller case.
-        for mode in (0, 3, 12, 16):
+        for mode in (0, 3, 12, 16, 21, 28):
             with self.subTest(mode=mode):
                 result = subprocess.run([str(self.stack_binary), str(self.work), str(mode)],
                                         capture_output=True, text=True, env=self.env, timeout=20)
@@ -107,7 +107,7 @@ class AppGateTests(unittest.TestCase):
                 self.assertGreater(high_water, 0)
                 self.assertLess(high_water, 8192)
                 parser = self.parse(result.stdout.splitlines())
-                self.assertEqual(parser.outcome, "fail" if mode == 3 else "pass")
+                self.assertEqual(parser.outcome, "fail" if mode in (3, 28) else "pass")
                 if mode == 0:
                     self.assertTrue(parser.check(self.expected))
                     launches = [r["run_case"] for r in parser.records if r.get("case") == "launch"]
@@ -149,6 +149,49 @@ class AppGateTests(unittest.TestCase):
         self.assertEqual(result["env"], {"LC_ALL":"C", "TZ":"UTC0", "HOME":"/home",
                                       "TMPDIR":"/tmp", "PATH":"/bin"})
         self.assertEqual(result["declared_exclusions"]["complete"], "excluded_by_contract")
+
+    def test_named_identity_growth_is_exactly_attributed(self):
+        parser = self.parse(self.output(21))
+        for case in self.suite["cases"]:
+            self.assertTrue(parser.check(case["expected"]))
+        resources = {k: v for r in parser.records if r.get("group") == "resources" for k, v in r.items()}
+        self.assertEqual(resources["cache_nodes_before"], "59")
+        self.assertEqual(resources["cache_nodes_after"], "60")
+        self.assertEqual(resources["identity_bytes_delta"], "1024")
+        self.assertEqual(resources["kernel_bytes_delta"], "1024")
+        self.assertEqual(resources["kernel_bytes_remainder"], "0")
+        self.assertEqual(resources["pages_remainder"], "0")
+        self.assertEqual(resources["cache_accounted"], "1")
+        metadata = runner.f2_metadata(parser.records)["resource_ledgers"]
+        self.assertEqual(metadata["final"]["identities"], [60, 61440])
+        self.assertEqual(metadata["final"]["storage"], [13440, 128])
+
+    def test_observed_physical_growth_is_not_falsely_credited_to_preallocated_cache(self):
+        parser = self.parse(self.output(28))
+        resources = {k: v for r in parser.records if r.get("group") == "resources" for k, v in r.items()}
+        self.assertEqual(parser.outcome, "fail")
+        self.assertEqual(resources["pages_delta"], "32")
+        self.assertEqual(resources["pages_remainder"], "32")
+        self.assertEqual(resources["kernel_bytes_delta"], resources["identity_bytes_delta"])
+        self.assertEqual(resources["kernel_bytes_remainder"], "0")
+        self.assertEqual(resources["cache_accounted"], "0")
+        self.assertEqual(resources["cache_bounded"], "1")
+        with self.assertRaises(EvidenceError): parser.check(self.expected)
+
+    def test_production_mount_namespace_teardown_releases_named_identities(self):
+        binary = self.work / "namespace-teardown"
+        result = subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                        "-DFS_HOST", "-D_POSIX_C_SOURCE=200809L", "-DAPP_GATE_NAMESPACE_TEARDOWN_TEST", "-pthread",
+                        "-I", str(ROOT / "src/kernel/include"),
+                        str(ROOT / "tests/host/proc/app_gate_test.c"),
+                        str(ROOT / "src/kernel/fs/vfs.c"), "-o", str(binary)],
+                        capture_output=True, text=True, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, env=self.env)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(result.stdout, "namespace teardown: gate_nodes_before=5 gate_nodes_after=6 "
+                                      "detached_nodes=6 freed_nodes=6 live_allocations=0\n")
 
     def test_gate_launch_environment_matches_metadata(self):
         source = (ROOT / "src/kernel/proc/supervisor.c").read_text()
@@ -219,7 +262,7 @@ int main(void) {
                 broken = self.parse(lines)
                 record = next(r for r in broken.records if all(r.get(k)==str(v) for k,v in predicate["where"].items()) and field in r)
                 if isinstance(rule, dict):
-                    bound = rule.get("ge",rule.get("eq"))
+                    bound = rule.get("ge", rule.get("eq", rule.get("le")))
                     if isinstance(bound,str) and bound.startswith("$"):
                         bound = int(next(r[bound[1:]] for r in broken.records if all(r.get(k)==str(v) for k,v in predicate["where"].items()) and bound[1:] in r))
                     bad = bound-1 if "ge" in rule else bound+1
@@ -227,9 +270,23 @@ int main(void) {
                 else: record[field] = "incorrect"
                 with self.subTest(where=predicate["where"], field=field), self.assertRaises(EvidenceError):
                     broken.check(self.expected)
+            for field in predicate.get("required_fields", []):
+                broken = self.parse(lines)
+                for record in broken.records:
+                    if all(record.get(k) == str(v) for k, v in predicate["where"].items()):
+                        record.pop(field, None)
+                with self.subTest(missing_field=field), self.assertRaises(EvidenceError):
+                    broken.check(self.expected)
+            for relation in predicate.get("relations", []):
+                broken = self.parse(lines)
+                field = relation["left"]
+                record = next(r for r in broken.records if all(r.get(k)==str(v) for k,v in predicate["where"].items()) and field in r)
+                record[field] = str(int(record[field]) + 1)
+                with self.subTest(relation=relation), self.assertRaises(EvidenceError):
+                    broken.check(self.expected)
 
     def test_failed_applications_never_qualify(self):
-        for mode in (1, 2, 3, 4, 5, 6, 8, 10, 11, 13, 14, 18, 19):
+        for mode in (1, 2, 3, 4, 5, 6, 8, 10, 11, 13, 14, 18, 19, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34):
             with self.subTest(mode=mode):
                 parser = self.parse(self.output(mode))
                 self.assertEqual(parser.outcome, "fail")
@@ -272,6 +329,9 @@ int main(void) {
     def test_maximum_width_record_formatting_and_truncated_frame_offsets(self):
         parser = self.parse(self.output(16))
         self.assertEqual(parser.outcome, "pass")
+        metadata = runner.f2_metadata(parser.records)["resource_ledgers"]
+        self.assertEqual(metadata["baseline"], metadata["final"])
+        self.assertEqual(metadata["final"]["identities"], [2**32-1, 2**32-1])
         capture = parser.bounded_captures[(str(2**32-1), "stdout")]
         self.assertEqual(capture["bytes"], 3072)
         self.assertEqual(capture["retained"], 2048)

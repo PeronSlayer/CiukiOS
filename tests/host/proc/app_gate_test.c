@@ -1,3 +1,48 @@
+#ifdef APP_GATE_NAMESPACE_TEARDOWN_TEST
+#include <stdio.h>
+#include <stdlib.h>
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
+#include <ciuki/kernel.h>
+#include <ciuki/files.h>
+static unsigned allocations, freed_nodes;
+void *kzalloc(size_t bytes) { void *p = calloc(1,bytes); if (p) allocations++; return p; }
+void kfree(void *p) { if (p) { if (!allocations) abort(); allocations--; freed_nodes++; free(p); } }
+void panic(const char *fmt, ...) { (void)fmt; abort(); }
+bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds)
+{ (void)date; (void)time; *seconds=0; return false; }
+int fat_unmount(struct fat_volume *volume) { volume->mounted=false; return 0; }
+#include "../../../src/kernel/proc/posixpath.c"
+int main(void)
+{
+    struct vfs vfs; struct fat_volume volume = {.mounted=true,.type=32,.root=2};
+    struct px_namespace *space;
+    vfs_init(&vfs);
+    if (vfs_attach(&vfs,2,&volume) || files_attach(&vfs,&space)) abort();
+    struct file_ledger before, after, detached;
+    files_snapshot(space,&before);
+    /* Same node creation/reuse used by a file lookup in the gate; no open
+     * references survive. Repeated lookups must reuse the named identity. */
+    struct fat_entry entry = {.parent=2,.index=7};
+    struct px_node *named = node_entry(space,space->root,&entry);
+    if (!named || named->refs || node_entry(space,space->root,&entry) != named) abort();
+    files_snapshot(space,&after);
+    if (after.nodes != before.nodes+1 || after.pins || after.descriptions) abort();
+    if (vfs_detach(&vfs,2)) abort();
+    files_snapshot(space,&detached);
+    /* Current volume detach expires nodes. Actual allocation release is
+     * in files_detach via vfs_destroy, after every cwd pin is dropped. */
+    if (named->linked || detached.nodes != after.nodes || !allocations) abort();
+    unsigned retained=detached.nodes, released=freed_nodes;
+    vfs_destroy(&vfs);
+    if (spaces || allocations || freed_nodes-released != retained+1) abort();
+    printf("namespace teardown: gate_nodes_before=%u gate_nodes_after=%u detached_nodes=%u freed_nodes=%u live_allocations=%u\n",
+           before.nodes,after.nodes,retained,freed_nodes-released-1,allocations);
+    return 0;
+}
+#else
 /* Fake Lua scheduling; records/captures/parsing are the production C code.
  * This is host controller validation, never guest application evidence. */
 #include <stdio.h>
@@ -29,6 +74,14 @@ static struct process *running, *server;
 static unsigned seq, mode, run_number, run_step, next_pid=1;
 static const char *directory;
 static uint32_t server_ticks;
+static struct storage test_storage;
+static struct px_namespace test_space;
+static struct px_node test_nodes[60];
+static struct fat_volume test_volume;
+static bool ledger_changed;
+static struct file_description ledger_description;
+static struct proc_thread ledger_thread;
+static bool identity_growth(void) { return mode == 21 || mode == 22 || mode == 28; }
 
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
@@ -77,11 +130,12 @@ void proc_snapshot(struct proc_ledger *l)
 {
     memset(l,0,sizeof(*l));
     for (unsigned i=0;i<8;i++) if (ps[i].pid) { l->processes++; l->zombies+=ps[i].state==PROC_ZOMBIE; }
+    if (ledger_changed && mode == 27) l->tables++;
 }
-void desktop_snapshot(struct desktop_ledger *l) { memset(l,0,sizeof(*l)); }
+void desktop_snapshot(struct desktop_ledger *l) { memset(l,0,sizeof(*l)); if (ledger_changed && mode == 29) l->grants++; }
 void desktop_activity_snapshot(struct desktop_activity *a) { *a=activity; }
 const struct fb_device *fbdev_get(void) { return &framebuffer; }
-struct storage *storage_get(void) { return 0; }
+struct storage *storage_get(void) { return &test_storage; }
 int storage_enable_write(struct storage *s, unsigned drive) { (void)s; return drive==2 && mode!=13 ? 0 : -EIO; }
 struct proc_thread *proc_thread_for(const struct task *task) { return task==&app_task ? &app_thread : 0; }
 int ua_read(const struct uaddr *u, void *dst, uint32_t va, uint32_t bytes)
@@ -109,11 +163,22 @@ const struct ciuki_file_ops *proc_get_file_ops(void)
 {
     static const struct ciuki_file_ops ops={.open=file_open_snapshot}; return &ops;
 }
-uint32_t pmm_free_count(void) { return mode==18 && run_number==2 ? 999 : 1000; }
-size_t kheap_in_use(void) { return 1024; }
-uint32_t file_description_count(void) { return 2; }
+uint32_t pmm_free_count(void) {
+    if (ledger_changed && mode == 28) return 968;
+    return mode==18 && run_number==2 ? 999 : 1000;
+}
+size_t kheap_in_use(void) {
+    return 1024 + (ledger_changed && identity_growth() ? gate_identity_size() : 0) +
+        (ledger_changed && mode == 22 ? 32 : 0);
+}
+uint32_t file_description_count(void) { return 2 + (ledger_changed && mode == 30); }
 void files_snapshot(struct px_namespace *space, struct file_ledger *l) { (void)space; memset(l,0,sizeof(*l)); }
-struct proc_thread *proc_thread_slot(unsigned slot) { (void)slot; return 0; }
+struct proc_thread *proc_thread_slot(unsigned slot) {
+    if (!ledger_changed || slot || mode < 32 || mode > 34) return 0;
+    ledger_thread.stopped = mode != 32; ledger_thread.retained = mode == 33;
+    ledger_thread.word_wait.queued = mode == 34;
+    return &ledger_thread;
+}
 int supervisor_spawn(const char *path, const char *const argv[], const char *cwd, bool desktop, struct process **out)
 {
     if (mode==14 && !desktop) return -ENOENT;
@@ -181,6 +246,17 @@ void task_sleep_ms(uint32_t ms)
     if (run_step==3) {
         if (mode==19 && run_number==2) g_ticks+=900000;
         int code=mode==1 && run_number==1 ? 37 : 0;
+        if (run_number == 2) {
+            ledger_changed = true;
+            if (identity_growth() || mode == 26) {
+                test_nodes[59] = (struct px_node){.space=&test_space,.volume=&test_volume,.linked=mode != 26};
+                test_nodes[58].next = &test_nodes[59];
+            }
+            if (mode == 23) test_storage.cache.blocks++;
+            if (mode == 24) test_storage.cache.workspace_pages++;
+            if (mode == 25) test_nodes[0].refs++;
+            if (mode == 31) test_space.descriptions = &ledger_description;
+        }
         proc_stop(running,code,mode==11 && run_number==1 ? SIGSEGV : 0);
         if (mode==11 && run_number==1) running->fault_vector=14;
         if (mode==8 && run_number==1) proc_stop(server,1,0);
@@ -194,8 +270,13 @@ static int gate_test_run(void)
         gate_memory_record("lua-supplement",UINT32_MAX,&peak);
         struct proc_ledger p; struct desktop_ledger d; struct gate_resources r;
         memset(&p,255,sizeof(p)); memset(&d,255,sizeof(d)); memset(&r,255,sizeof(r));
-        static char ledger[512];
-        if (gate_ledger_format(ledger,sizeof(ledger),&p,&d,&r)>=sizeof(ledger)) abort();
+        static char ledger[1024];
+        unsigned used = (unsigned)ksnprintf(ledger,sizeof(ledger),"{\"baseline\":");
+        used += gate_ledger_format(ledger+used,sizeof(ledger)-used,&p,&d,&r);
+        used += (unsigned)ksnprintf(ledger+used,sizeof(ledger)-used,",\"final\":");
+        used += gate_ledger_format(ledger+used,sizeof(ledger)-used,&p,&d,&r);
+        used += (unsigned)ksnprintf(ledger+used,sizeof(ledger)-used,",\"restored\":1}");
+        if (used >= sizeof(ledger)) abort();
         gate_metadata("resource_ledgers","json",ledger);
         ps[0].pid=UINT32_MAX; app_thread.process=&ps[0]; app_thread.tid=UINT32_MAX;
         supervisor_observe("app-gate",UINT32_MAX);
@@ -205,10 +286,19 @@ static int gate_test_run(void)
         supervisor_observe_end(); rec_emit("app-gate","END","status=PASS");
         return 0;
     }
-    ps[0]=(struct process){.pid=1,.state=PROC_LIVE}; framebuffer.present=mode!=12;
+    fs_lock_init(&test_storage.cache.lock); fs_lock_init(&test_storage.vfs.lock);
+    test_storage.cache.blocks = 13440; test_storage.cache.workspace_pages = 128;
+    test_space.vfs = &test_storage.vfs; test_space.nodes = test_nodes;
+    for (unsigned i = 0; i < 59; i++) {
+        test_nodes[i] = (struct px_node){.space=&test_space,.volume=&test_volume,.linked=true,
+                                       .next=i == 58 ? 0 : &test_nodes[i+1]};
+    }
+    test_nodes[0].refs = 1;
+    ps[0]=(struct process){.pid=1,.state=PROC_LIVE,.cwd=&test_nodes[0]}; framebuffer.present=mode!=12;
     if (mode==12) g_boot.flags=CBI_F_SAFE_MODE;
     (void)probe_f2_app_gate();
     if (running || ps[1].pid || ps[2].pid || ps[3].pid) { fputs("controller leaked processes\n",stderr); return 3; }
+    fs_lock_destroy(&test_storage.cache.lock); fs_lock_destroy(&test_storage.vfs.lock);
     return 0;
 }
 
@@ -292,3 +382,5 @@ int main(int argc, char **argv)
     return gate_test_run();
 #endif
 }
+
+#endif

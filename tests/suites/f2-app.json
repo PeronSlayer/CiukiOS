@@ -564,11 +564,13 @@
               "restored": {
                 "eq": 1
               },
-              "pages_delta": {
-                "eq": 0
+              "pages_remainder": {
+                "eq": 0,
+                "encoding": "signed"
               },
-              "kernel_bytes_delta": {
-                "eq": 0
+              "kernel_bytes_remainder": {
+                "eq": 0,
+                "encoding": "signed"
               },
               "file_descriptions_delta": {
                 "eq": 0
@@ -585,13 +587,84 @@
               "cache_accounted": {
                 "eq": 1
               },
-              "cache_nodes_after": {
-                "eq": "$cache_nodes_before"
+              "pages_delta": {
+                "eq": "$pages_remainder",
+                "encoding": "signed"
+              },
+              "kernel_bytes_delta": {
+                "eq": "$identity_bytes_delta",
+                "encoding": "signed"
+              },
+              "namespace_nodes_delta": {
+                "eq": "$identity_nodes_delta",
+                "encoding": "signed"
+              },
+              "cache_blocks_before": {
+                "eq": "$cache_blocks_bound"
+              },
+              "cache_bounded": {
+                "eq": 1
+              },
+              "cache_blocks_after": {
+                "eq": "$cache_blocks_bound"
+              },
+              "cache_workspace_after": {
+                "eq": "$cache_workspace_before"
+              },
+              "cache_pages_delta": {
+                "eq": 0
+              },
+              "cache_bytes_delta": {
+                "eq": 0
+              },
+              "namespace_pins_delta": {
+                "eq": 0,
+                "encoding": "signed"
+              },
+              "tables_delta": {
+                "eq": 0
+              },
+              "desktop_pages_delta": {
+                "eq": 0
+              },
+              "channels_delta": {
+                "eq": 0
+              },
+              "grants_delta": {
+                "eq": 0
+              },
+              "namespace_descriptions_delta": {
+                "eq": 0
               }
             },
             "combine": true,
+            "relations": [
+              {
+                "left": "identity_nodes_delta",
+                "op": "eq",
+                "right": "identities_after",
+                "subtract": "identities_before"
+              },
+              {
+                "left": "namespace_nodes_delta",
+                "op": "eq",
+                "right": "cache_nodes_after",
+                "subtract": "cache_nodes_before"
+              }
+            ],
             "required_fields": [
-              "cache_nodes_before"
+              "identity_nodes_delta",
+              "cache_workspace_before",
+              "identity_unit_bytes",
+              "cache_nodes_before",
+              "cache_nodes_after",
+              "cache_blocks_before",
+              "cache_blocks_bound",
+              "identities_before",
+              "identities_after",
+              "identity_bytes_delta",
+              "pages_delta",
+              "kernel_bytes_delta"
             ]
           },
           {
@@ -1166,11 +1239,13 @@
               "restored": {
                 "eq": 1
               },
-              "pages_delta": {
-                "eq": 0
+              "pages_remainder": {
+                "eq": 0,
+                "encoding": "signed"
               },
-              "kernel_bytes_delta": {
-                "eq": 0
+              "kernel_bytes_remainder": {
+                "eq": 0,
+                "encoding": "signed"
               },
               "file_descriptions_delta": {
                 "eq": 0
@@ -1187,13 +1262,84 @@
               "cache_accounted": {
                 "eq": 1
               },
-              "cache_nodes_after": {
-                "eq": "$cache_nodes_before"
+              "pages_delta": {
+                "eq": "$pages_remainder",
+                "encoding": "signed"
+              },
+              "kernel_bytes_delta": {
+                "eq": "$identity_bytes_delta",
+                "encoding": "signed"
+              },
+              "namespace_nodes_delta": {
+                "eq": "$identity_nodes_delta",
+                "encoding": "signed"
+              },
+              "cache_blocks_before": {
+                "eq": "$cache_blocks_bound"
+              },
+              "cache_bounded": {
+                "eq": 1
+              },
+              "cache_blocks_after": {
+                "eq": "$cache_blocks_bound"
+              },
+              "cache_workspace_after": {
+                "eq": "$cache_workspace_before"
+              },
+              "cache_pages_delta": {
+                "eq": 0
+              },
+              "cache_bytes_delta": {
+                "eq": 0
+              },
+              "namespace_pins_delta": {
+                "eq": 0,
+                "encoding": "signed"
+              },
+              "tables_delta": {
+                "eq": 0
+              },
+              "desktop_pages_delta": {
+                "eq": 0
+              },
+              "channels_delta": {
+                "eq": 0
+              },
+              "grants_delta": {
+                "eq": 0
+              },
+              "namespace_descriptions_delta": {
+                "eq": 0
               }
             },
             "combine": true,
+            "relations": [
+              {
+                "left": "identity_nodes_delta",
+                "op": "eq",
+                "right": "identities_after",
+                "subtract": "identities_before"
+              },
+              {
+                "left": "namespace_nodes_delta",
+                "op": "eq",
+                "right": "cache_nodes_after",
+                "subtract": "cache_nodes_before"
+              }
+            ],
             "required_fields": [
-              "cache_nodes_before"
+              "identity_nodes_delta",
+              "cache_workspace_before",
+              "identity_unit_bytes",
+              "cache_nodes_before",
+              "cache_nodes_after",
+              "cache_blocks_before",
+              "cache_blocks_bound",
+              "identities_before",
+              "identities_after",
+              "identity_bytes_delta",
+              "pages_delta",
+              "kernel_bytes_delta"
             ]
           },
           {
@@ -1768,11 +1914,13 @@
               "restored": {
                 "eq": 1
               },
-              "pages_delta": {
-                "eq": 0
+              "pages_remainder": {
+                "eq": 0,
+                "encoding": "signed"
               },
-              "kernel_bytes_delta": {
-                "eq": 0
+              "kernel_bytes_remainder": {
+                "eq": 0,
+                "encoding": "signed"
               },
               "file_descriptions_delta": {
                 "eq": 0
@@ -1789,13 +1937,84 @@
               "cache_accounted": {
                 "eq": 1
               },
-              "cache_nodes_after": {
-                "eq": "$cache_nodes_before"
+              "pages_delta": {
+                "eq": "$pages_remainder",
+                "encoding": "signed"
+              },
+              "kernel_bytes_delta": {
+                "eq": "$identity_bytes_delta",
+                "encoding": "signed"
+              },
+              "namespace_nodes_delta": {
+                "eq": "$identity_nodes_delta",
+                "encoding": "signed"
+              },
+              "cache_blocks_before": {
+                "eq": "$cache_blocks_bound"
+              },
+              "cache_bounded": {
+                "eq": 1
+              },
+              "cache_blocks_after": {
+                "eq": "$cache_blocks_bound"
+              },
+              "cache_workspace_after": {
+                "eq": "$cache_workspace_before"
+              },
+              "cache_pages_delta": {
+                "eq": 0
+              },
+              "cache_bytes_delta": {
+                "eq": 0
+              },
+              "namespace_pins_delta": {
+                "eq": 0,
+                "encoding": "signed"
+              },
+              "tables_delta": {
+                "eq": 0
+              },
+              "desktop_pages_delta": {
+                "eq": 0
+              },
+              "channels_delta": {
+                "eq": 0
+              },
+              "grants_delta": {
+                "eq": 0
+              },
+              "namespace_descriptions_delta": {
+                "eq": 0
               }
             },
             "combine": true,
+            "relations": [
+              {
+                "left": "identity_nodes_delta",
+                "op": "eq",
+                "right": "identities_after",
+                "subtract": "identities_before"
+              },
+              {
+                "left": "namespace_nodes_delta",
+                "op": "eq",
+                "right": "cache_nodes_after",
+                "subtract": "cache_nodes_before"
+              }
+            ],
             "required_fields": [
-              "cache_nodes_before"
+              "identity_nodes_delta",
+              "cache_workspace_before",
+              "identity_unit_bytes",
+              "cache_nodes_before",
+              "cache_nodes_after",
+              "cache_blocks_before",
+              "cache_blocks_bound",
+              "identities_before",
+              "identities_after",
+              "identity_bytes_delta",
+              "pages_delta",
+              "kernel_bytes_delta"
             ]
           },
           {
