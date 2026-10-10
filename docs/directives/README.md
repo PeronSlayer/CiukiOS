@@ -58,5 +58,5 @@ evidence and merges.
 | [f2-18-app-gate-upstream-run](f2-18-app-gate-upstream-run.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (`PATH=/bin` in the gate environment; `files.lua` audited against a native reference harness, no further gap found); QEMU evidence pending |
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
-| [f2-19-app-gate-resource-ledger](f2-19-app-gate-resource-ledger.md) | F2 | gpt-6.1-sol / high | in progress 2026-10-11 (both Lua runs pass; verdict fails on unattributed cache/identity growth: `pages_delta=32`, one cache node) |
-| [f1-24-crash-reboot-outcome](f1-24-crash-reboot-outcome.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (`fat_create` publishes the long-name entry before the short entry; the orphan after the cut is a declared interrupted outcome, classified by the runner, both boots verified); QEMU evidence pending |
+| [f2-19-app-gate-resource-ledger](f2-19-app-gate-resource-ledger.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 in two rounds (identity bytes and heap-pool pages attributed through a read-only kernel heap ledger; remainders fail); QEMU evidence pending |
+| [f1-24-crash-reboot-outcome](f1-24-crash-reboot-outcome.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (declared interrupted outcome, classification, both boots); `mount-crash-reboot` PASS on `qemu-t23`, image `9ae41b27…` |

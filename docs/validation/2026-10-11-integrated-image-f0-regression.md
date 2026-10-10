@@ -290,3 +290,12 @@ unclassified interrupted-state outcome and boot 2 is not attempted
 `f0-core` on image `33a68c43…`: 92 of 92 PASS on the five profiles
 (`qemu-t23`, `qemu-e500`, `qemu-min128`, `qemu-desktop-1998`,
 `qemu-desktop-2002`).
+
+## Eighteenth image: `9ae41b27…` (commit `6084e21`, f1-24)
+
+Runner case `mount-crash-reboot` PASS on `qemu-t23`: boot 1 cut at the
+declared index 2 with the orphaned long-name part classified as the
+declared interrupted outcome; boot 2 on the same overlay reports
+`case=crash_reboot reasons=5 lost=0 scan_corrupt=0`, `crash_refusal
+write_refusal=-30 writes=0`, `coverage cut_selected=1 cut_reboot=1`. Host
+tests: 170 OK.
