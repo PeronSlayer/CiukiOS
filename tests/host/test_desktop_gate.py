@@ -226,6 +226,14 @@ void klog(const char *f,...) {(void)f;}
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('five fault kinds',result.stdout)
         self.assertIn('production channel_pair/fcntl/proc_spawn',result.stdout)
+        result=subprocess.run([str(binary),'--burst'],capture_output=True,text=True,env=env,timeout=10)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('dense interaction keys=200 motion=3000 buttons=74',result.stdout)
+        print(next(line for line in result.stdout.splitlines() if line.startswith('dense interaction ')))
+        for mode,path in (('--flush-timeout','flush_timeout'),('--bad-command','command')):
+            result=subprocess.run([str(binary),mode],capture_output=True,text=True,env=env,timeout=10)
+            self.assertEqual(result.returncode,1,result.stdout+result.stderr)
+            self.assertIn(f'desktop: gate failure path={path} ',result.stderr)
         for mode in ('--normal-spawn','--capacity'):
             result=subprocess.run([str(binary),mode],capture_output=True,text=True,env=env,timeout=10)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
@@ -307,17 +315,20 @@ void klog(const char *f,...) {(void)f;}
         from evidence import Parser
         suite=runner.load(ROOT/'tests/suites/f2-desktop.json')
         normal=[c for c in suite['cases'] if '-normal-' in c['id']]
+        shell=[c for c in suite['cases'] if c['id'].startswith('desktop-shell-')] # f2-30: real desktop, scripted shell actions
         self.assertEqual({c['profile'] for c in normal},{'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-1998','qemu-desktop-2002'})
-        self.assertEqual(len(suite['cases']),11)
+        self.assertEqual({c['profile'] for c in shell},{'qemu-t23','qemu-e500'})
+        self.assertEqual(len(suite['cases']),13) # f2-30 added two desktop-shell cases
         for case in suite['cases']:
-            native=case in normal;server='desktop' if native else 'standin'
+            native=case in normal or case in shell;server='desktop' if native else 'standin'
             profile=runner.load(ROOT/'tests/profiles'/f"{case['profile']}.json")
             _,request=runner.qemu_args('fake',profile,case,'12345678',self.folder/'overlay',self.folder/'bios')
             selected=runner.selector(request,'fw_cfg',True)
             self.assertEqual(selected.get('server','standin'),server)
             self.assertEqual(case['timeout'],300)
             self.assertEqual(case.get('desktop_screen',False),native)
-            self.assertEqual(case.get('actions',[]),runner.desktop_stimulus() if native else [])
+            if case in shell: self.assertTrue(case.get('actions'))
+            else: self.assertEqual(case.get('actions',[]),runner.desktop_stimulus() if native else [])
             rows=[dict(event='BEGIN'),dict(event='END',status='PASS')]
             for predicate in case['expected']['predicates']:
                 for i in range(predicate['exact_count']):

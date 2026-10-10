@@ -1012,7 +1012,8 @@ static __attribute__((noreturn)) void sweep_main(struct sweep_cursor cursor,
     else if (result) failed++;
     else passed++;
     rec_emit(step.name, "SWEEP", "step=%u result=%s%s task=%s size=%u high_water=%u",
-             current, outcome, result == -ECANCELED ? " reason=operator_absent" : "",
+             current, outcome, result == -ECANCELED ?
+                 (!strncmp(step.name, "safe", 5) ? " reason=safe_mode_not_selected" : " reason=operator_absent") : "",
              g_current->name, KSTACK_SIZE, task_stack_high_water(g_current));
     cursor.state = passed | (failed << 6) | (not_run << 12);
     e = sweep_checkpoint(storage, &cursor);

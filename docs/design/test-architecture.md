@@ -86,6 +86,19 @@ the prompt's first 16 pixel rows so the prompt cannot qualify as a desktop redra
 No input events are synthesized and
 no QEMU qualification or hardware success is inferred from the host tests.
 
+F1-36 distinguishes an unselected safe-mode sweep step from a failed safe
+boot: the required subcase and END are NOT_RUN with
+`reason=safe_mode_not_selected`, and SWEEP/SWEEP_END count it as not_run.
+Import retains the original observations and reason without blocking later
+cases solely for this absent mode; a failed earlier prerequisite still applies.
+The separate `safe-menu-<target>` case requires a single menu acquisition with
+`selector_source: menu`, all existing safe predicates and the case's operator
+confirmation. A sweep cannot qualify that physical case. The QEMU parser and
+safe suites retain their PASS/FAIL rules. Source comparison and transport
+research are recorded in [F1 acceptance](f1-acceptance.md#f1-28-hardware-sweeps);
+the current loader's inability to combine safe selection with a hardware probe
+is documented in [build and run](../build-and-run.md#operator-safe-mode-boot-after-a-sweep).
+
 ## Migration
 
 The pre-cleanup test scripts were archived in
@@ -137,6 +150,25 @@ panic observations. Disk/screen checker requirements cannot be satisfied by
 serial alone. `--physical-capture` imports evidence without launching QEMU or
 requiring its executable. One summary retains later observations even when a
 failed prerequisite makes their qualification not_run.
+
+F1-35 physical import accepts damaged cfg provenance only through adjacent
+sweep boots with the same run/phase and a step increment of exactly one (or
+the repeated step of an armed two-boot probe); it records the raw line,
+`provenance: damaged` and `provenance_inferred_from: sweep continuity`.
+A missing line needs serial damage, including a damaged loader provenance
+marker, damaged records or an initial sequence gap. Without continuity the
+boot is `not_run reason=provenance_damaged`; an intact alternate source refuses
+the acquisition. QEMU-only device exceptions and machine variants require
+matching operator acquisition metadata, otherwise their cases are separately
+identified as `not_run reason=device_exception_not_applicable:<key>=<value>`
+without blocking later cases. Research: the official
+[QEMU invocation documentation](https://www.qemu.org/docs/master/system/invocation.html)
+defines `-vga none` as disabling VGA and `-serial none` as suppressing default
+serial devices, and blkdebug/cache options describe host block configuration.
+Comparison with run.py's command construction and the real T23 startup bytes
+therefore requires explicit physical configuration matching, unchanged
+predicates and byte-preserving provenance evidence, never an inferred device
+absence from a suite profile.
 
 
 Before either reset mechanism, a bounded UART drain waits for LSR bit 6

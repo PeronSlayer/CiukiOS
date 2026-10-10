@@ -37,6 +37,25 @@ static int fault_kind(const char *s)
            !strcmp(s,"forged-fd") || !strcmp(s,"grant-fd") || !strcmp(s,"handler-fault");
 }
 static unsigned gate_keys,gate_motion,gate_buttons;
+#define GATE_REPORT_NS 100000000ull
+#define GATE_BARRIER_NS 1000000000ull
+static int gate_error(const char *path, int error, unsigned generation)
+{
+    fprintf(stderr,"desktop: gate failure path=%s error=%d generation=%u\n",path,error,generation);
+    return 1;
+}
+static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
+{
+    desk_input(d,event);
+    if (event->type==CIUKI_INPUT_KEY && event->code==0x1e &&
+        (event->value==0 || event->value==1) &&
+        (!d->shell_test || d->shell_stage==6)) gate_keys++; /* f2-30: shell sequence first */
+    if (event->type==CIUKI_INPUT_MOTION) gate_motion++;
+    /* The input grant delivers separate button edges, not a motion mask.
+     * Count consumption even when the click focuses the background/title. */
+    if (event->type==CIUKI_INPUT_BUTTON && event->code>=1 && event->code<=3 &&
+        (event->value==0 || event->value==1)) gate_buttons++;
+}
 static int gate_setup_error(int gate, unsigned step, int error)
 {
     if (gate) {
@@ -64,6 +83,7 @@ static int gate_send(struct desktop *d, int pid, unsigned command, unsigned gene
         desk_put32(m.data,GATE_MAGIC); desk_put32(m.data+4,command); desk_put32(m.data+8,generation);
         return ciuki_channel_send(d->clients[i].channel,&m,DONTWAIT);
     }
+    errno=ESRCH;
     return -1;
 }
 static int spawn_demo(struct desktop *d, const char *kind, int gate)
@@ -222,6 +242,9 @@ int main(int argc, char **argv)
     int victim_pid = -1, completed = 0;
     uint64_t next_victim = 0;
     int input_reported = 0, display_reported = 0;
+    int report=0, input_dirty=0;
+    unsigned report_send=0;
+    uint64_t report_deadline=0, next_input_report=0;
     for (;;) {
         uint64_t now = monotonic();
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
@@ -234,30 +257,32 @@ int main(int argc, char **argv)
                 desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
             }
         }
-        int report=0;
         if (gate && control->command) {
             unsigned command=control->command; generation=control->generation;
             control->command=0;
+            report_send=0;
+            report_deadline=now+GATE_BARRIER_NS;
             switch (command) {
             case GATE_SPAWN:
-                if (gate_victim || gate_cycle>=100) return 1;
+                if (gate_victim || gate_cycle>=100) return gate_error("spawn_state",EINVAL,generation);
                 gate_victim=spawn_demo(d,gate_faults[gate_cycle%5],1);
-                if (gate_victim<0) return 1;
+                if (gate_victim<0) return gate_error("spawn_victim",errno,generation);
                 /* Register the PID before any CONFIGURE send can schedule
                  * the child and let its armed report reach the controller. */
                 gate_report(d,CU_PTR(control),generation,survivor_pid,gate_victim,(unsigned)gate_cycle);
                 report=1; break;
-            case GATE_RELEASE: if (gate_send(d,gate_victim,GATE_RELEASE,generation)) return 1; report=1; break;
+            case GATE_RELEASE: report_send=GATE_RELEASE; report=1; break;
             case GATE_REAP: {
                 int status;
-                if (waitpid(gate_victim,&status,WNOHANG)!=gate_victim) return 1;
+                int reaped=waitpid(gate_victim,&status,WNOHANG);
+                if (reaped!=gate_victim) return gate_error("reap_victim",reaped<0 ? errno : EAGAIN,generation);
                 for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].pid==(uint32_t)gate_victim) desk_drop_client(d,i);
                 gate_victim=0; gate_cycle++; report=1; break;
             }
-            case GATE_RUN: if (gate_send(d,survivor_pid,GATE_RUN,generation)) return 1; report=1; break;
-            case GATE_SNAPSHOT: report=2; break;
+            case GATE_RUN: report_send=GATE_RUN; report=1; break;
+            case GATE_SNAPSHOT: report_send=GATE_SNAPSHOT; report=1; break;
             case GATE_INTERACT: interaction=1; report=1; break;
-            default: return 1;
+            default: return gate_error("command",EINVAL,generation);
             }
         }
         for (int i=0; i<DESK_CLIENTS; i++) {
@@ -282,16 +307,12 @@ int main(int argc, char **argv)
             }
             if (gate && d->shell_test && events[i].type==CIUKI_INPUT_KEY &&
                 events[i].code==0x58 && events[i].value==0) {
-                d->shell_keys++; report=1; continue;
+                d->shell_keys++; input_dirty=1; continue;
             }
-            desk_input(d,&events[i]);
             if (gate && interaction) {
-                if (events[i].type==CIUKI_INPUT_KEY && events[i].code==0x1e &&
-                    (!d->shell_test || d->shell_stage==6)) gate_keys++;
-                if (events[i].type==CIUKI_INPUT_MOTION) gate_motion++;
-                if (events[i].type==CIUKI_INPUT_BUTTON) gate_buttons++;
-                report=1;
-            }
+                gate_input(d,&events[i]);
+                input_dirty=1;
+            } else desk_input(d,&events[i]);
         } input_reported=0; }
         else if (n<0 && errno!=EAGAIN && errno!=EINTR && !input_reported) {
             fprintf(stderr,"desktop: input unavailable (errno=%d)\n",errno); input_reported=1;
@@ -312,17 +333,35 @@ int main(int argc, char **argv)
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
         if (report) {
+            int pending=0;
             if (control->command==0) {
                 for (int i=0;i<DESK_CLIENTS;i++) {
                     desk_flush(d,i);
-                    if (d->clients[i].tx_count) return 1;
+                    if (d->clients[i].tx_count) pending=1;
                 }
             }
-            if (report==2 && gate_send(d,survivor_pid,GATE_SNAPSHOT,generation)) return 1;
+            /* Command snapshots retain their flush barrier. A full
+             * nonblocking channel needs another frame, not a server exit. */
+            if (pending && now>=report_deadline) return gate_error("flush_timeout",EAGAIN,generation);
+            if (!pending && report_send) {
+                if (gate_send(d,report_send==GATE_RELEASE ? gate_victim : survivor_pid,report_send,generation)) {
+                    int error=errno;
+                    if (error!=EAGAIN && error!=EINTR) return gate_error("command_send",error,generation);
+                    if (now>=report_deadline) return gate_error("send_timeout",error,generation);
+                    pending=1;
+                } else report_send=0;
+            }
+            if (!pending) { report=0; input_dirty=1; next_input_report=0; }
+        }
+        /* Coalesce interaction evidence across input batches. Unlike command
+         * barriers it measures desktop consumption, not client queue drain. */
+        if (gate && input_dirty && !report && now>=next_input_report) {
             gate_report(d,CU_PTR(control),generation,survivor_pid,gate_victim,(unsigned)gate_cycle);
+            input_dirty=0;
+            next_input_report=monotonic()+GATE_REPORT_NS;
             /* Reports use the console too; restore the complete frame. */
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
-            if (desk_redraw(d)) return 1;
+            if (desk_redraw(d) && errno!=EINTR) return gate_error("report_redraw",errno,generation);
         }
         if (victim_pid>0) {
             int status;

@@ -56,6 +56,14 @@ static bool host_page_used[4];
 static struct task *host_survivor;
 static uint32_t host_survivor_data;
 static bool replay_input;
+static struct {
+    bool enabled, armed, repeat, hold_key, hold_button, loss, lose_lease, continuous, late, capture;
+    unsigned a, other, clicks, at;
+    int dx, dy;
+    uint64_t start, last_event;
+} operator_script;
+static void operator_replay_step(void);
+static char input_arm[256], input_counts[256], input_motion[256], input_queue_record[256];
 static unsigned replay_cycles, record_count, record_pass, record_deferred, record_ready;
 static size_t longest_record;
 static bool print_records;
@@ -340,6 +348,7 @@ void task_sleep_ms(uint32_t ms)
     for (unsigned n = 0; n < ms; n++) {
         hw.now++;
         g_ticks = hw.now;
+        if (operator_script.enabled && operator_script.armed) operator_replay_step();
         if (host_survivor && host_survivor_data && task_alive(host_survivor)) {
             uint32_t *data = host_p2v(host_survivor_data);
             data[0]++;
@@ -384,6 +393,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     CHECK(len <= 240);
     if (len > 240) printf("oversized record: %s\n", record);
     if (print_records) puts(record);
+    if (!strcmp(probe, "input")) {
+        if (!strcmp(event, "ARM")) { strcpy(input_arm, extra); operator_script.armed = true; }
+        if (!strncmp(extra, "case=counts ", 12)) strcpy(input_counts, extra);
+        if (!strncmp(extra, "case=motion ", 12)) strcpy(input_motion, extra);
+        if (!strncmp(extra, "case=queue ", 11)) strcpy(input_queue_record, extra);
+    }
     if (!strcmp(probe, "input") && !strncmp(extra, "case=setup step=", 16)) setup_records++;
     if (strstr(extra, "case=firmware_overrun ") || strstr(extra, "case=disallowed_io ")) {
         firmware_records++;
@@ -468,6 +483,68 @@ static void reset_native(void)
     g_ticks = 0;
     pic_changes = 0;
     registry_init();
+}
+static void operator_motion(int dx, int dy)
+{
+    if (g_boot.input_policy == CBI_INPUT_FIRMWARE) {
+        fw_push(FWINPUT_REL, FWINPUT_X, dx);
+        fw_push(FWINPUT_REL, FWINPUT_Y, dy);
+        fwinput_adapter_step();
+    } else {
+        int raw_y = -dy;
+        replay_byte(true, 0x08 | native.queue.stats.buttons | (dx < 0 ? 0x10 : 0) | (raw_y < 0 ? 0x20 : 0));
+        replay_byte(true, (uint8_t)dx); replay_byte(true, (uint8_t)raw_y);
+    }
+    operator_script.last_event = hw.now;
+}
+static void operator_cycle(bool a, bool repeat, bool release_key, bool click, bool release_button)
+{
+    if (g_boot.input_policy == CBI_INPUT_FIRMWARE) {
+        unsigned code = a ? INPUT_KEY_A : 0x30;
+        fw_push(FWINPUT_KEY, code, 1); fw_push(FWINPUT_TEXT, 0, a ? 'a' : 'b');
+        /* Firmware typematic yields another TEXT opportunity without another
+         * KEY event (fwinput.c, held-state change only). */
+        if (repeat) fw_push(FWINPUT_TEXT, 0, a ? 'a' : 'b');
+        if (release_key) fw_push(FWINPUT_KEY, code, 0);
+        if (click) {
+            fw_push(FWINPUT_BUTTON, INPUT_LEFT, 1);
+            if (release_button) fw_push(FWINPUT_BUTTON, INPUT_LEFT, 0);
+        }
+        fwinput_adapter_step();
+    } else {
+        uint8_t scan = a ? 0x1c : 0x32;
+        replay_byte(false, scan);
+        if (repeat) replay_byte(false, scan);
+        if (release_key) { replay_byte(false, 0xf0); replay_byte(false, scan); }
+        if (click) {
+            replay_byte(true, 0x09); replay_byte(true, 0); replay_byte(true, 0);
+            if (release_button) { replay_byte(true, 0x08); replay_byte(true, 0); replay_byte(true, 0); }
+        }
+    }
+    operator_script.last_event = hw.now;
+}
+static void operator_replay_step(void)
+{
+    if (!operator_script.start) operator_script.start = hw.now;
+    unsigned total = operator_script.a + operator_script.other;
+    uint64_t elapsed = hw.now - operator_script.start;
+    if (operator_script.at < total && elapsed >= 100 * operator_script.at) {
+        unsigned at = operator_script.at++;
+        operator_cycle(at < operator_script.a,
+                       operator_script.capture ? at < 13 : operator_script.repeat && !at,
+                       !operator_script.hold_key || at + 1 < total,
+                       at < operator_script.clicks,
+                       !operator_script.hold_button || at + 1 < operator_script.clicks);
+        operator_motion(operator_script.capture ? (at == 99 ? 4 : 37) : operator_script.dx,
+                        operator_script.capture ? (at == 99 ? -8 : -48) : operator_script.dy);
+        if (at + 1 == total) {
+            if (operator_script.loss) native.queue.stats.overflow++;
+            if (operator_script.lose_lease) native.stats.active = false;
+        }
+    }
+    if (operator_script.late && elapsed == total * 100 + 500)
+        operator_cycle(false, false, true, false, true);
+    if (operator_script.continuous && elapsed % 500 == 0) operator_motion(1, 0);
 }
 static void select_fault(const char *selector)
 {
@@ -1178,6 +1255,8 @@ static void test_probe_records(void)
     CHECK(probe_input() == 0);
     replay_input = false;
     CHECK(replay_cycles == 100 && record_ready == 1 && record_pass == 1 && !record_deferred);
+    CHECK(strstr(input_arm, "criteria=exact keys=100 moves=100 buttons=10 x=2 y=-1"));
+    CHECK(strstr(input_counts, "criteria=exact") && strstr(input_counts, "characters=100 key_transitions=200 button_transitions=20"));
     CHECK(native.stats.active && !native.stats.quarantined);
     reset_native();
     g_boot.input_policy = CBI_INPUT_FIRMWARE;
@@ -1209,6 +1288,67 @@ static void test_probe_records(void)
     for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
     printf("i8042 probe orchestration/records: PASS (%u records, maximum %zu bytes, native PASS/firmware PASS/fault PASS)\n",
            record_count, longest_record);
+}
+
+static void test_operator_criteria(void)
+{
+    /* Drive the real probe through native decoding and the firmware adapter.
+     * Low totals must pass only after an answered operator prompt, with the
+     * first retained event, arbitrary signed motion and other text counted. */
+    for (unsigned firmware = 0; firmware < 2; firmware++) {
+        for (unsigned variant = 0; variant < 11; variant++) {
+            reset_native();
+            probes_operator_mode = variant != 10;
+            if (firmware) g_boot.input_policy = CBI_INPUT_FIRMWARE;
+            memset(&operator_script, 0, sizeof(operator_script));
+            operator_script.enabled = true;
+            operator_script.a = 10; operator_script.other = 3; operator_script.clicks = 1;
+            operator_script.dx = -3; operator_script.dy = -2;
+            if (variant == 1) operator_script.a = 9;
+            if (variant == 2) operator_script.clicks = 0;
+            if (variant == 3) { operator_script.dx = -1; operator_script.dy = 0; }
+            if (variant == 4) operator_script.repeat = true;
+            if (variant == 5) operator_script.hold_key = true;
+            if (variant == 6) { operator_script.clicks = 2; operator_script.hold_button = true; }
+            if (variant == 7) operator_script.loss = true;
+            if (variant == 8) operator_script.lose_lease = true;
+            if (variant == 9) operator_script.late = true;
+            bool pass = variant == 0 || variant == 4 || variant == 9; /* 4: typematic repeats tolerated (lead amendment) */
+            strcpy(expected_end, "status=FAIL reason=stimulus_or_lease");
+            CHECK(probe_input() == !pass);
+            CHECK(operator_script.at == operator_script.a + operator_script.other);
+            CHECK(strstr(input_arm, probes_operator_mode ? "criteria=operator" : "criteria=exact"));
+            CHECK(strstr(input_counts, probes_operator_mode ? "criteria=operator" : "criteria=exact"));
+            if (pass && variant == 4) CHECK(firmware ? strstr(input_queue_record, "repeats=0") != NULL :
+                                            strstr(input_queue_record, "repeats=") && !strstr(input_queue_record, "repeats=0"));
+            if (pass && variant != 4) {
+                CHECK(hw.now - operator_script.last_event == 1000);
+                CHECK(hw.now - operator_script.start < 120000);
+                CHECK(strstr(input_counts, variant == 9 ? "characters=14 a_characters=10" : "characters=13 a_characters=10"));
+                CHECK(strstr(input_counts, "a_min=10 key_min=20 button_min=2 motion_min=50"));
+                CHECK(strstr(input_motion, "x=-39 y=-26"));
+            }
+            operator_script.enabled = false;
+        }
+    }
+    reset_native(); probes_operator_mode = true;
+    memset(&operator_script, 0, sizeof(operator_script));
+    operator_script.enabled = operator_script.continuous = true;
+    operator_script.a = 10; operator_script.clicks = 1; operator_script.dx = -5;
+    CHECK(probe_input() == 0);
+    CHECK(hw.now - operator_script.start >= 120000 && hw.now - operator_script.last_event < 1000);
+    operator_script.enabled = false;
+    /* Reproduce the capture's aggregate stimulus, including its 13 typematic
+     * repeats: under operator criteria they are recorded and the probe passes. */
+    reset_native();
+    memset(&operator_script, 0, sizeof(operator_script));
+    operator_script.enabled = operator_script.capture = true;
+    operator_script.a = 100; operator_script.clicks = 37;
+    CHECK(probe_input() == 0);
+    CHECK(strstr(input_counts, "characters=113 a_characters=113 key_transitions=200 button_transitions=74"));
+    CHECK(strstr(input_motion, "x=3667 y=-4760") && strstr(input_queue_record, "repeats=13"));
+    operator_script.enabled = false; probes_operator_mode = false; expected_end[0] = 0;
+    printf("operator input criteria: PASS (native/firmware, first event, other text, negative motion, quiet/tail/deadline, missing stimulus, repeats/loss/stuck/lease rejection, T23 aggregates)\n");
 }
 
 static void test_native_fault_probe(void)
@@ -1413,6 +1553,7 @@ int main(int argc, char **argv)
     test_keyboard_and_mouse();
     test_queue_and_stimulus();
     test_probe_records();
+    test_operator_criteria();
     test_native_fault_probe();
     test_firmware_fault_probe(false, false, false);
     test_firmware_fault_probe(true, false, false);
