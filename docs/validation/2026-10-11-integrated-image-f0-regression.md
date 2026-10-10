@@ -222,3 +222,9 @@ FAT16 fixture, ARM, durable export and host checker), `threads-wait` and
 The same seven cases also pass through the runner on `qemu-e500` and
 `qemu-min128` (14 of 14), so `f2-process` and `f2-runtime` are green on the
 three laptop/minimum profiles for image `a4806d0c…`.
+F1 cases of `f1-input` through the runner without prefix on image
+`a4806d0c…`: `registry`, `input-fault`, `input-qemu-t23`, `input-qemu-e500`,
+`framebuffer` (after f1-21) and `framebuffer-no-lfb` PASS; `firmware_overrun`
+ends `NOT_RUN` by the suite's own declaration (the BIOS VM self-test has no
+record emitter) and the runner marks the later `qemu-desktop-*` cases
+prerequisite-failed (directive f1-23).
