@@ -9,6 +9,7 @@
 
 #define PTE_OWN 0x200u
 #define PTE_NEW 0x400u
+#define PTE_SHARED 0x800u
 static uint64_t next_generation;
 
 static bool span(uint32_t base, uint32_t bytes, uint32_t *end)
@@ -74,7 +75,8 @@ static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_n
         if (!p || (only_new && !(*p & PTE_NEW)))
             continue;
         if (*p & PTE_OWN) {
-            pmm_free(*p & ~(PAGE_SIZE - 1));
+            if (!(*p & PTE_SHARED))
+                pmm_free(*p & ~(PAGE_SIZE - 1));
             u->backing--;
         }
         set_pte(u, va, p, 0);
@@ -124,7 +126,7 @@ static void protect_pages(struct uaddr *u, uint32_t base, uint32_t end, uint32_t
         uint32_t *p = pte(u, va, false);
         if (!p || !(*p & PTE_OWN))
             continue;
-        uint32_t value = (*p & ~(PAGE_SIZE - 1)) | PTE_OWN;
+        uint32_t value = (*p & ~(PAGE_SIZE - 1)) | PTE_OWN | (*p & PTE_SHARED);
         if (prot != PROT_NONE)
             value |= PTE_P | PTE_U | ((prot & PROT_WRITE) ? PTE_W : 0);
         set_pte(u, va, p, value);
@@ -272,6 +274,7 @@ static void split(struct uaddr *u, uint32_t at, struct ua_extent *fresh)
         return;
     struct ua_extent *e = ua_find(u, at);
     *fresh = *e;
+    if (fresh->shared.object) fresh->shared.retain(fresh->shared.object);
     fresh->base = at;
     e->end = at;
     e->next = fresh;
@@ -288,6 +291,7 @@ static void remove_range(struct uaddr *u, uint32_t base, uint32_t end)
         if (e->base >= base && e->end <= end) {
             ww_cancel(u->identity, e->generation, e->base, e->end);
             free_pages(u, e->base, e->end, false);
+            if (e->shared.object) e->shared.release(e->shared.object);
             *at = e->next;
             u->extents--;
             if (arena(e))
@@ -531,4 +535,32 @@ int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
     if (!p || !ua_range(p->memory, dst, bytes, PROT_READ | PROT_WRITE))
         return -EFAULT;
     return copy_user((void *)(uintptr_t)dst, src, bytes);
+}
+
+/* Every mapped extent holds a ref; splitting preserves maximum rights and
+ * backing identity. Failed page-table preparation rolls back the whole map. */
+int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
+                       uint32_t prot, uint32_t maximum, const struct ua_shared *shared)
+{
+    if (!bytes || (bytes & (PAGE_SIZE - 1)) || !shared ||
+        !shared->object || !shared->retain || !shared->release || !shared->page ||
+        (prot != PROT_READ && prot != (PROT_READ | PROT_WRITE)) ||
+        (maximum != PROT_READ && maximum != (PROT_READ | PROT_WRITE))) return -EINVAL;
+    if (prot & ~maximum) return -EACCES;
+    uint32_t base = first_fit(u, bytes);
+    if (!base) return -ENOMEM;
+    int err = ua_map_at(u, base, bytes, PROT_NONE, maximum, UA_SHARED, 0);
+    if (err) return err;
+    struct ua_extent *e = ua_find(u, base);
+    e->shared = *shared;
+    e->shared.retain(e->shared.object);
+    for (uint32_t off = 0; off < bytes; off += PAGE_SIZE) {
+        uint32_t *p = pte(u, base + off, true);
+        if (!p) { remove_range(u, base, base + bytes); return -ENOMEM; }
+        *p = shared->page(shared->object, off / PAGE_SIZE) | PTE_OWN | PTE_SHARED;
+        u->backing++;
+    }
+    protect_pages(u, base, base + bytes, prot);
+    e->prot = prot;
+    return (int32_t)base;
 }

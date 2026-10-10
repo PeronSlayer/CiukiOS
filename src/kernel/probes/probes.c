@@ -17,6 +17,7 @@
 #include <ciuki/sha256.h>
 #include <ciuki/sync.h>
 #include <ciuki/process.h>
+#include <ciuki/supervisor.h>
 
 /* Reuse process.h's existing CIUKI_F2_PROBE layout and registration macro. */
 extern const struct ciuki_f2_probe __f2probes_start[], __f2probes_end[];
@@ -884,6 +885,7 @@ void probes_main(void *arg)
     kwork_init();                        /* device worker, before any driver IRQ producer */
     if (!(g_boot.flags & CBI_F_TEST_REQUEST)) {
         drivers_init();
+        supervisor_bootstrap();
         klog("Ciuki VMM F0 scaffold ready (no test request). Build %s.", CIUKI_BUILD_ID);
         for (;;)
             task_sleep_ms(60000);

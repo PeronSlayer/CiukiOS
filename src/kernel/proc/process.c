@@ -5,6 +5,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
 #include <ciuki/signal.h>
+#include <ciuki/supervisor.h>
 
 static struct process *processes[CIUKI_PROCESS_MAX];
 static struct process supervisor;
@@ -421,6 +422,7 @@ static void supervisor_main(void *arg)
 {
     (void)arg;
     for (;;) {
+        supervisor_poll();
         proc_collect();
         uint32_t flags = irq_save();
         if (collect_pending) {

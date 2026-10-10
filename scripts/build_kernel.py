@@ -154,6 +154,9 @@ def main() -> int:
     signal_payload = OUT / "signal-payload.elf"
     run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
          str(ROOT / "tests/host/proc/signal_payload.asm"), "-o", str(signal_payload)])
+    desktop_payload = OUT / "desktop-payload.elf"
+    run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
+         str(ROOT / "tests/host/proc/desktop_payload.asm"), "-o", str(desktop_payload)])
     objs = []
     for asm in sorted((SRC / "arch").glob("*.asm")) + sorted((SRC / "vm").glob("*.asm")) + [SRC / "probes" / "payload_blob.asm"]:
         o = OBJ / (asm.stem + ".o")
@@ -168,6 +171,7 @@ def main() -> int:
         run(["clang", *CFLAGS, f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
              f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',
              f'-DCIUKI_SIGNAL_PAYLOAD_BIN="{signal_payload}"',
+             f'-DCIUKI_DESKTOP_PAYLOAD_BIN="{desktop_payload}"',
              f"-DCIUKI_BUILD_DIRTY={bdirty}", "-I", str(SRC / "include"),
              "-c", str(c), "-o", str(o)])
         objs.append(o)
