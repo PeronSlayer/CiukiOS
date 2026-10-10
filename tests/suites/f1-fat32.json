@@ -1348,9 +1348,15 @@
             "exact_count": 1,
             "fields": {
               "fixtures": {
-                "ge": 1
+                "eq": 1
               },
-              "checker": "host_required"
+              "checker": "host_required",
+              "cut_selected": {
+                "eq": 0
+              },
+              "cut_reboot": {
+                "eq": 0
+              }
             }
           },
           {
@@ -1378,8 +1384,10 @@
       },
       "fixtures": [
         {
-          "injection": "postboot-driver-boundary",
-          "subcase": "bad-bpb"
+          "generator": "mkfs.fat",
+          "fat_type": 32,
+          "seed": 1,
+          "corruption": "bad-bpb"
         }
       ]
     },
@@ -1410,6 +1418,10 @@
               "write_refusal": {
                 "encoding": "signed",
                 "eq": -30
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
               }
             }
           },
@@ -1421,9 +1433,15 @@
             "exact_count": 1,
             "fields": {
               "fixtures": {
-                "ge": 1
+                "eq": 1
               },
-              "checker": "host_required"
+              "checker": "host_required",
+              "cut_selected": {
+                "eq": 0
+              },
+              "cut_reboot": {
+                "eq": 0
+              }
             }
           },
           {
@@ -1451,8 +1469,10 @@
       },
       "fixtures": [
         {
-          "injection": "postboot-driver-boundary",
-          "subcase": "dirty"
+          "generator": "mkfs.fat",
+          "fat_type": 32,
+          "seed": 1,
+          "corruption": "dirty"
         }
       ]
     },
@@ -1483,6 +1503,10 @@
               "write_refusal": {
                 "encoding": "signed",
                 "eq": -30
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
               }
             }
           },
@@ -1494,9 +1518,15 @@
             "exact_count": 1,
             "fields": {
               "fixtures": {
-                "ge": 1
+                "eq": 1
               },
-              "checker": "host_required"
+              "checker": "host_required",
+              "cut_selected": {
+                "eq": 0
+              },
+              "cut_reboot": {
+                "eq": 0
+              }
             }
           },
           {
@@ -1524,8 +1554,10 @@
       },
       "fixtures": [
         {
-          "injection": "postboot-driver-boundary",
-          "subcase": "error-flag"
+          "generator": "mkfs.fat",
+          "fat_type": 32,
+          "seed": 1,
+          "corruption": "error-flag"
         }
       ]
     },
@@ -1556,6 +1588,10 @@
               "write_refusal": {
                 "encoding": "signed",
                 "eq": -30
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
               }
             }
           },
@@ -1567,9 +1603,15 @@
             "exact_count": 1,
             "fields": {
               "fixtures": {
-                "ge": 1
+                "eq": 1
               },
-              "checker": "host_required"
+              "checker": "host_required",
+              "cut_selected": {
+                "eq": 0
+              },
+              "cut_reboot": {
+                "eq": 0
+              }
             }
           },
           {
@@ -1597,8 +1639,10 @@
       },
       "fixtures": [
         {
-          "injection": "postboot-driver-boundary",
-          "subcase": "fat-divergence"
+          "generator": "mkfs.fat",
+          "fat_type": 32,
+          "seed": 1,
+          "corruption": "fat-divergence"
         }
       ]
     },
@@ -1629,6 +1673,10 @@
               "write_refusal": {
                 "encoding": "signed",
                 "eq": -30
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
               }
             }
           },
@@ -1640,9 +1688,15 @@
             "exact_count": 1,
             "fields": {
               "fixtures": {
-                "ge": 1
+                "eq": 1
               },
-              "checker": "host_required"
+              "checker": "host_required",
+              "cut_selected": {
+                "eq": 0
+              },
+              "cut_reboot": {
+                "eq": 0
+              }
             }
           },
           {
@@ -1670,8 +1724,10 @@
       },
       "fixtures": [
         {
-          "injection": "postboot-driver-boundary",
-          "subcase": "chain-corruption"
+          "generator": "mkfs.fat",
+          "fat_type": 32,
+          "seed": 1,
+          "corruption": "chain-corruption"
         }
       ]
     },
@@ -1697,11 +1753,15 @@
                 "eq": 0
               },
               "reasons": {
-                "mask": 16
+                "mask": 32
               },
               "write_refusal": {
                 "encoding": "signed",
                 "eq": -30
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
               }
             }
           },
@@ -1713,9 +1773,15 @@
             "exact_count": 1,
             "fields": {
               "fixtures": {
-                "ge": 1
+                "eq": 1
               },
-              "checker": "host_required"
+              "checker": "host_required",
+              "cut_selected": {
+                "eq": 0
+              },
+              "cut_reboot": {
+                "eq": 0
+              }
             }
           },
           {
@@ -1743,8 +1809,10 @@
       },
       "fixtures": [
         {
-          "injection": "postboot-driver-boundary",
-          "subcase": "torn-sector"
+          "generator": "mkfs.fat",
+          "fat_type": 32,
+          "seed": 1,
+          "corruption": "torn-sector"
         }
       ]
     },
@@ -1770,7 +1838,31 @@
               "writes": {
                 "eq": 0
               },
-              "checker": "host_required"
+              "checker": "host_required",
+              "reasons": {
+                "mask": 4,
+                "clear": 32
+              },
+              "lost": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "crash_refusal",
+              "drive": "C"
+            },
+            "exact_count": 1,
+            "fields": {
+              "write_refusal": {
+                "encoding": "signed",
+                "eq": -30
+              },
+              "writes": {
+                "eq": 0
+              }
             }
           },
           {
@@ -1785,7 +1877,11 @@
               },
               "cut_reboot": {
                 "eq": 1
-              }
+              },
+              "fixtures": {
+                "eq": 0
+              },
+              "checker": "host_required"
             }
           },
           {
@@ -1831,8 +1927,72 @@
                   "event": "ARM",
                   "action": "crash_cut"
                 },
-                "exact_count": 1
+                "exact_count": 1,
+                "fields": {
+                  "marker": "F109CUT.ARM",
+                  "workload": "replace_rename",
+                  "bytes": {
+                    "eq": 8192
+                  }
+                }
+              },
+              {
+                "where": {
+                  "event": "DATA",
+                  "case": "cut"
+                },
+                "exact_count": 2,
+                "unique": "index",
+                "fields": {
+                  "result": {
+                    "encoding": "signed",
+                    "eq": 0
+                  },
+                  "durable": {
+                    "eq": 1
+                  },
+                  "action": "write",
+                  "barrier": {
+                    "eq": 0
+                  },
+                  "lba": {
+                    "ge": 0
+                  }
+                },
+                "required_fields": [
+                  "index",
+                  "lba"
+                ]
               }
+            ]
+          },
+          "preboot_marker": "F109CUT.ARM",
+          "crash_cut": {
+            "index": 2
+          },
+          "checks": {
+            "offset": 1048576,
+            "size": 535822336,
+            "listing_path": "::/",
+            "fsck_exit_codes": [
+              0,
+              1
+            ],
+            "interrupted_patterns": [
+              "fsck\\.fat [0-9.]+ \\([0-9-]+\\)",
+              "Dirty bit is set\\. Fs was not properly unmounted and some data may be corrupt\\.",
+              " Automatically removing dirty bit\\.",
+              "Leaving filesystem unchanged\\.",
+              ".*/check-volume\\.raw: [0-9]+ files, [0-9]+/[0-9]+ clusters"
+            ],
+            "classify_all_output": true,
+            "listing_contains": [
+              "F109CUT",
+              "ARM"
+            ],
+            "empty_files": [
+              "::/F109CUT.ARM",
+              "::/F109CUT.BIN"
             ]
           }
         },
@@ -1849,16 +2009,30 @@
             ],
             "interrupted_patterns": [
               "fsck\\.fat [0-9.]+ \\([0-9-]+\\)",
-              "Reclaiming unconnected clusters\\.",
-              "[0-9]+ unused clusters \\([0-9]+ bytes\\) in [0-9]+ chains\\.",
-              "Free cluster summary wrong \\([0-9]+ vs\\. really [0-9]+\\)",
-              "  Not automatically correcting this\\.",
+              "Dirty bit is set\\. Fs was not properly unmounted and some data may be corrupt\\.",
+              " Automatically removing dirty bit\\.",
               "Leaving filesystem unchanged\\.",
               ".*/check-volume\\.raw: [0-9]+ files, [0-9]+/[0-9]+ clusters"
+            ],
+            "classify_all_output": true,
+            "listing_contains": [
+              "F109CUT",
+              "ARM"
+            ],
+            "empty_files": [
+              "::/F109CUT.ARM",
+              "::/F109CUT.BIN"
             ]
           }
         }
-      ]
+      ],
+      "disk_cache": "writethrough",
+      "crash_sequence": {
+        "index": 2
+      },
+      "crash_observation": {
+        "marker_sector": true
+      }
     },
     {
       "id": "bootlog",

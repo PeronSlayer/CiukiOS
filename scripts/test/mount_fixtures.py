@@ -1,0 +1,116 @@
+"""Mount/crash fixture support, without a writable host mount or image copy."""
+import hashlib
+import struct
+
+from evidence import EvidenceError
+from resources import Refusal
+from fat_fixtures import geometry
+
+
+def place_marker(host, overlay, directory, image_size, name):
+    """Create a zero-byte short entry through qemu-io in the overlay only.
+
+    No allocation is needed. Refuse a full root instead of growing it, so the
+    only write is one directory sector; FATs/FSInfo/boot fingerprints survive.
+    The Microsoft FAT specification's pp. 22-23 define this directory format.
+    """
+    if name != 'F109CUT.ARM':raise Refusal('unknown mount/crash marker')
+    mbr = host.overlay_read(overlay, 0, 512)
+    start, count = struct.unpack_from('<II', mbr, 454)
+    if mbr[510:512] != b'\x55\xaa' or not start or not count or (start+count)*512 > image_size:
+        raise Refusal('invalid marker boot partition')
+    boot = host.overlay_read(overlay, start*512, 512); g = geometry(boot)
+    if g['kind'] != 32 or struct.unpack_from('<I', boot, 32)[0] > count:
+        raise Refusal('marker requires the canonical FAT32 boot partition')
+    cluster = g['root_cluster']; seen = set(); free = None; alias = b'F109CUT ARM'
+    ended = False
+    while not ended:
+        if cluster in seen or len(seen) >= 128 or not 2 <= cluster <= g['clusters']+1:
+            raise Refusal('invalid/budget-exceeding marker root chain')
+        seen.add(cluster)
+        for sector in range(g['data']+(cluster-2)*g['spc'], g['data']+(cluster-1)*g['spc']):
+            offset = (start+sector)*512
+            data = host.overlay_read(overlay, offset, 512)
+            for slot in range(0, 512, 32):
+                if data[slot] == 0:
+                    if free is None:free = offset, slot, data
+                    ended = True; break
+                if data[slot] == 0xe5:
+                    if free is None:free = offset, slot, data
+                elif data[slot:slot+11] == alias:
+                    raise Refusal('crash marker already exists')
+            if ended:break
+        if not ended:
+            entry = host.overlay_read(overlay, (start+g['reserved'])*512+cluster*4, 4)
+            cluster = int.from_bytes(entry, 'little')&0x0fffffff
+            if cluster >= 0x0ffffff8:break
+    if free is None:raise Refusal('marker root has no free slot')
+    offset, slot, before = free
+    after = bytearray(before); after[slot:slot+32] = bytes(32)
+    after[slot:slot+11] = alias; after[slot+11] = 32
+    for field in (16, 18, 24):struct.pack_into('<H', after, slot+field, 0x2821)
+    payload = directory/'crash-marker-sector.bin'; payload.write_bytes(after)
+    host.overlay_write(overlay, offset, payload, 512)
+    if host.overlay_read(overlay, offset, 512) != after:raise Refusal('crash marker readback mismatch')
+    return dict(file=name, sector=offset//512, offset=slot, bytes=32, size=0,
+                before_hex=before[slot:slot+32].hex(), after_hex=after[slot:slot+32].hex(),
+                sector_sha256_before=hashlib.sha256(before).hexdigest(),
+                sector_sha256_after=hashlib.sha256(after).hexdigest())
+
+
+class WriteGate:
+    """Suspend each guest write before qcow2, then cut a completed trace prefix.
+
+    QEMU v11 block/io.c emits pwritev on the addressed blkdebug node; its
+    one-shot breakpoint yields BEFORE forwarding the write. Re-arm it before
+    resuming the previous request. Writethrough bypasses volatile device cache
+    and makes each returned write durable. Stdout must be line-buffered so
+    blkdebug's suspension notice is observable. No qcow2 metadata I/O is gated.
+    https://www.qemu.org/docs/master/devel/testing/blkdebug.html
+    https://github.com/qemu/qemu/blob/v11.0.0/block/io.c
+    https://github.com/qemu/qemu/blob/v11.0.0/block/blkdebug.c
+    Do not issue QMP stop: do_vm_stop() drains/flushes block requests and
+    cannot finish with a suspended breakpoint (system/cpus.c in that tag).
+    """
+    def __init__(self, index):
+        if type(index) is not int or not 1 <= index <= 100000:raise Refusal('invalid declared cut index')
+        self.index = index; self.pending = b''; self.suspended = False
+        self.observations = []
+
+    def command(self, qmp, text):
+        reply = qmp.command('human-monitor-command', {'command-line':f'qemu-io ciuki-cut "{text}"'})
+        if not isinstance(reply,str) or reply.strip():raise EvidenceError('blkdebug gate command failed: '+str(reply))
+
+    def arm(self, qmp):self.command(qmp, 'break pwritev ciuki-write')
+
+    def feed(self, chunk, now):
+        self.pending += chunk
+        while b'\n' in self.pending:
+            line, self.pending = self.pending.split(b'\n', 1)
+            if line.strip() == b"blkdebug: Suspended request 'ciuki-write'":
+                if self.suspended:raise EvidenceError('multiple suspended cut requests')
+                self.suspended = True
+        if len(self.pending) > 4096:raise EvidenceError('unterminated blkdebug notice')
+
+    def step(self, parser, qmp, now):
+        if not self.suspended:return False
+        arms = [r for r in parser.records if r.get('event') == 'ARM' and r.get('action') == 'crash_cut']
+        cuts = [r for r in parser.records if r.get('case') == 'cut']
+        if cuts and not arms:raise EvidenceError('cut trace before crash ARM')
+        if len(arms) > 1:raise EvidenceError('duplicate crash ARM')
+        if [r.get('index') for r in cuts] != [str(i) for i in range(1, len(cuts)+1)]:
+            raise EvidenceError('noncontiguous cut trace')
+        if any(r.get('action') != 'write' or r.get('result') != '0' or r.get('durable') != '1' for r in cuts):
+            raise EvidenceError('writethrough cut lacks durable successful sector writes')
+        if len(cuts) > self.index:raise EvidenceError('declared cut index already passed')
+        self.observations.append(dict(completed_index=len(cuts), armed=bool(arms), suspended=True))
+        if len(cuts) == self.index:return True
+        self.arm(qmp); self.command(qmp, 'resume ciuki-write'); self.suspended = False
+        return False
+
+    def evidence(self, records, partition_start):
+        cuts = [r for r in records if r.get('case') == 'cut']
+        if len(cuts) != self.index:raise EvidenceError('cut does not match declared trace prefix')
+        return dict(index=self.index, record=cuts[-1], mode='guest-termination', gate='blkdebug-pwritev',
+                    next_write_suspended=True, durable_sectors=sorted({partition_start+int(r['lba']) for r in cuts}),
+                    sector_domain='disk-lba', trace=cuts, gate_observations=self.observations)

@@ -588,6 +588,11 @@ int probe_mount_crash(void)
              * host checker remains mandatory after power-cut/export. */
             rec_emit(probe, "DATA", "case=crash_reboot reasons=%u lost=%u scan_corrupt=%u checker=host_required writes=%llu",
                      v->fat.ro_reasons, v->fat.lost_clusters, !!(v->fat.ro_reasons & FAT_RO_CORRUPT), v->writes);
+            int refusal = vfs_open(&probe_table, "C:/F109REF.BIN", VFS_WRITE | VFS_CREATE, VFS_DENY_NONE, 0);
+            if (refusal >= 0) vfs_close(&probe_table, refusal);
+            rec_emit(probe, "DATA", "case=crash_refusal drive=C write_refusal=%d writes=%llu",
+                     refusal, v->writes);
+            if (refusal != -FS_EROFS || v->writes) result = -FS_EIO;
             if (v->fat.ro_reasons & FAT_RO_CORRUPT) result = -FS_EUCLEAN;
         } else {
             e = storage_enable_write(s, 2);
