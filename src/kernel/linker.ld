@@ -31,6 +31,14 @@ SECTIONS
     {
         __rodata_start = .;
         *(.rodata .rodata.*)
+        . = ALIGN(4);
+        __f1probes_start = .;
+        KEEP(*(.f1probes))
+        __f1probes_end = .;
+        . = ALIGN(4);
+        __f2probes_start = .;
+        KEEP(*(.f2probes))
+        __f2probes_end = .;
         __rodata_end = .;
     } :rodata
 

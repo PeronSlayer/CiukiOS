@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""CiukiOS static C wrapper. All target inputs come from this installed SDK."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+SDK=Path(__file__).resolve().parent.parent
+m=json.loads((SDK/'manifest.json').read_text())
+for name in ('clang','ld.lld'):
+    p=Path(m['tools'][name]['path'])
+    if hashlib.sha256(p.read_bytes()).hexdigest()!=m['tools'][name]['sha256']:
+        raise SystemExit(f'ciuki-cc: changed pinned tool {name}')
+clang=m['tools']['clang']['path']; lld=m['tools']['ld.lld']['path']
+lib=SDK/'sysroot/lib'; inc=SDK/'sysroot/include'
+env=os.environ.copy(); temp=SDK/'work/temp'; temp.mkdir(parents=True,exist_ok=True); env['TMPDIR']=str(temp)
+for key in ('CPATH','C_INCLUDE_PATH','CPLUS_INCLUDE_PATH','LIBRARY_PATH'): env.pop(key,None)
+args=sys.argv[1:]
+if args==['--self-test']:
+    # Repository and installed wrapper both use the same host inspection program.
+    check=Path(m['sdk_repository'])/'sdk/tests/check_sdk.py' if 'sdk_repository' in m else SDK.parents[2]/'sdk/tests/check_sdk.py'
+    subprocess.run([sys.executable,str(check),'--self-test'],check=True,env=env); sys.exit(0)
+if any(x in args for x in ('-shared','-pie','-fPIC','-fpic','-fPIE','-fpie','-pthread')):
+    raise SystemExit('ciuki-cc: shared/PIE/compiler TLS unsupported; pthread library is linked automatically')
+for x in args:
+    if (x.startswith('-m') and x!='-m32') or x.startswith(('--target=','-march=','-mcpu=','-mstack-alignment=','--sysroot=','-msse','-mmmx','-ftls-model=')):
+        raise SystemExit('ciuki-cc: ABI flags cannot be overridden')
+base=[clang,*m['flags'],'--sysroot='+str(SDK/'sysroot'),'-nostdinc','-isystem',inc,'-isystem',subprocess.check_output([clang,'-print-resource-dir'],text=True).strip()+'/include']
+if any(x in args for x in ('-c','-S','-E','--version','-fsyntax-only')):
+    sys.exit(subprocess.run([*base,*args],env=env).returncode)
+# Compile sources explicitly, then invoke lld; never let a host driver select CRT/libraries.
+output=Path('a.out'); inputs=[]; compile_args=[]; libraries=[]; i=0
+while i<len(args):
+    a=args[i]
+    if a=='-o': output=Path(args[i+1]); i+=2; continue
+    if a in ('-I','-isystem','-D','-U','-include','-L'):
+        (libraries if a=='-L' else compile_args).extend(args[i:i+2]); i+=2; continue
+    if a.startswith(('-l','-L')): libraries.append(a)
+    elif a.startswith('-Wl,'): libraries.extend(a[4:].split(','))
+    elif a.startswith('-'): compile_args.append(a)
+    else: inputs.append(Path(a))
+    i+=1
+import tempfile
+with tempfile.TemporaryDirectory(prefix='cc-',dir=temp) as directory:
+    objs=[]
+    for i,p in enumerate(inputs):
+        if p.suffix in ('.c','.S','.s'):
+            o=Path(directory)/f'{i}.o'; subprocess.run([*base,*compile_args,'-c',p,'-o',o],check=True,env=env); objs.append(o)
+        else: objs.append(p)
+    subprocess.run([lld,'-m','elf_i386','-static','--no-undefined','--gc-sections','-z','max-page-size=4096',
+        '-L',lib,'-T',lib/'ciuki.ld','-Map',str(output)+'.map','-o',output,lib/'crt0.o',*objs,'--start-group',
+        '-lpthread','-lciuki','-lc','-lm','-lcompiler',*libraries,'--end-group'],check=True,env=env)

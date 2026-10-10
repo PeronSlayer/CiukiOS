@@ -9,7 +9,9 @@ outside the FPU state-management routines.
 from __future__ import annotations
 
 import json
+import os
 import re
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -127,9 +129,27 @@ def audit(elf: Path) -> None:
 def main() -> int:
     check_toolchain()
     OBJ.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = str(OUT)
     bid, bhex, bdirty = build_id()
     payload = OUT / "payload.bin"
     run(["nasm", "-f", "bin", str(SRC / "probes" / "payload.asm"), "-o", str(payload)])
+    # The interim native fixture is a NASM ELF file, with every public value
+    # extracted from abi.h by the existing target-layout compiler boundary.
+    sys.dont_write_bytecode = True
+    layout = runpy.run_path(str(ROOT / "scripts/test/abi_layout_dump.py"))["dump"]()
+    definitions = []
+    for key, value in layout.items():
+        if key.startswith("constant."):
+            name = key.removeprefix("constant.")
+        elif key.startswith(("sizeof.ciuki_", "offsetof.ciuki_")):
+            name = "ABI_" + re.sub(r"[^A-Za-z0-9_]", "_", key).upper()
+        else:
+            continue
+        definitions.append(f"%define {name} {value}\n")
+    (OUT / "proc_abi.inc").write_text("".join(definitions))
+    proc_payload = OUT / "proc-payload.elf"
+    run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
+         str(ROOT / "tests/host/proc/payload.asm"), "-o", str(proc_payload)])
     objs = []
     for asm in sorted((SRC / "arch").glob("*.asm")) + sorted((SRC / "vm").glob("*.asm")) + [SRC / "probes" / "payload_blob.asm"]:
         o = OBJ / (asm.stem + ".o")
@@ -138,9 +158,11 @@ def main() -> int:
         objs.append(o)
     for c in sorted(list((SRC / "core").glob("*.c")) + list((SRC / "lib").glob("*.c")) +
                     list((SRC / "arch").glob("*.c")) + list((SRC / "probes").glob("*.c")) +
-                    list((SRC / "drivers").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
+                    list((SRC / "drivers").glob("*.c")) + list((SRC / "fs").glob("*.c")) +
+                    list((SRC / "proc").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
         run(["clang", *CFLAGS, f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
+             f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',
              f"-DCIUKI_BUILD_DIRTY={bdirty}", "-I", str(SRC / "include"),
              "-c", str(c), "-o", str(o)])
         objs.append(o)

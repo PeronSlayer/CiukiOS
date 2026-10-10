@@ -1,0 +1,20 @@
+--- a/newlib/libc/stdio/vfscanf.c
++++ b/newlib/libc/stdio/vfscanf.c
+@@ -81,6 +81,7 @@
+ #include <wctype.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <alloca.h>
+ #include <stdint.h>
+ #include <limits.h>
+ #include <wchar.h>
+--- a/newlib/libc/stdio/vfwscanf.c
++++ b/newlib/libc/stdio/vfwscanf.c
+@@ -81,6 +81,7 @@
+ #include <wctype.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <alloca.h>
+ #include <stdint.h>
+ #include <limits.h>
+ #include <wchar.h>

@@ -386,8 +386,9 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
         }
         if (op == 0xCE && !(f->tf.eflags & 0x800))
             break;
-        if (v->ops.interrupt && !v->ops.interrupt(v->ops.arg, vector, f))
-            return v86_abort(v, f, -V86_EPERM);
+        /* Firmware-internal INTs use the IVT, including INT15/4F keyboard
+         * hooks. biosvm_call enforces the kernel-entry allowlist; the call
+         * deadline, mapped memory and I/O policy still bound this execution. */
         v->stats.insn[V86_INT]++;
         f->tf.eip = next;
         return v86_reflect(v, f, vector);

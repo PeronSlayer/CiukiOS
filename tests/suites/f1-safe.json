@@ -1,0 +1,534 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "prerequisites": [
+    "f0-smoke",
+    "f0-core",
+    "f0-panic",
+    "f0-runner"
+  ],
+  "cases": [
+    {
+      "id": "safe-fw-cfg-qemu-t23",
+      "probe": "safe",
+      "profile": "qemu-t23",
+      "selector": "f1:safe run={run_id} safe=1",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              },
+              "source": "fw-cfg"
+            }
+          },
+          {
+            "where": {
+              "event": "READY"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "safe-boot-cfg-qemu-t23",
+      "probe": "safe",
+      "profile": "qemu-t23",
+      "selector": "f1:safe run={run_id}",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              },
+              "source": "boot-cfg"
+            }
+          },
+          {
+            "where": {
+              "event": "READY"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "patches": [
+        {
+          "file": "SYSTEM/BOOT.CFG",
+          "offset": 0,
+          "before_hex": "736166653d30",
+          "after_hex": "736166653d31"
+        }
+      ]
+    },
+    {
+      "id": "safe-fw-cfg-qemu-e500",
+      "probe": "safe",
+      "profile": "qemu-e500",
+      "selector": "f1:safe run={run_id} safe=1",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              },
+              "source": "fw-cfg"
+            }
+          },
+          {
+            "where": {
+              "event": "READY"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "safe-boot-cfg-qemu-e500",
+      "probe": "safe",
+      "profile": "qemu-e500",
+      "selector": "f1:safe run={run_id}",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              },
+              "source": "boot-cfg"
+            }
+          },
+          {
+            "where": {
+              "event": "READY"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "patches": [
+        {
+          "file": "SYSTEM/BOOT.CFG",
+          "offset": 0,
+          "before_hex": "736166653d30",
+          "after_hex": "736166653d31"
+        }
+      ]
+    },
+    {
+      "id": "safe-no-storage",
+      "probe": "safe",
+      "profile": "qemu-t23",
+      "selector": "f1:safe run={run_id} safe=1",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fixtures": [
+        {
+          "injection": "driver-boundary",
+          "storage": "unavailable"
+        }
+      ]
+    },
+    {
+      "id": "safe-no-lfb",
+      "probe": "safe",
+      "profile": "qemu-t23",
+      "selector": "f1:safe run={run_id} safe=1",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "device_exceptions": {
+        "vga": "none"
+      }
+    }
+  ],
+  "physical_import_required": true,
+  "physical_cases": [
+    {
+      "id": "safe-menu-t23",
+      "probe": "safe",
+      "target": "t23",
+      "selector": "f1:safe run={run_id}",
+      "timeout": 90,
+      "firmware_allowance": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "source": "menu",
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "safe-menu-e500",
+      "probe": "safe",
+      "target": "e500",
+      "selector": "f1:safe run={run_id}",
+      "timeout": 90,
+      "firmware_allowance": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "source": "menu",
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

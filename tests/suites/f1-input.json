@@ -1,0 +1,2323 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "prerequisites": [
+    "f0-smoke",
+    "f0-core",
+    "f0-panic",
+    "f0-runner"
+  ],
+  "cases": [
+    {
+      "id": "registry",
+      "probe": "registry",
+      "profile": "qemu-t23",
+      "selector": "f1:registry run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "registry"
+            },
+            "combine": true,
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "claim_delta": {
+                "eq": 0
+              },
+              "mapping_delta": {
+                "eq": 0
+              },
+              "buffer_delta": {
+                "eq": 0
+              },
+              "conflict_writes": {
+                "eq": 0
+              },
+              "stale_writes": {
+                "eq": 0
+              },
+              "unknown_size_writes": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              },
+              "second_claim_refused": {
+                "eq": 1
+              },
+              "irq_owner_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "input-fault",
+      "probe": "input-fault",
+      "profile": "qemu-t23",
+      "selector": "f1:input-fault run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "input-fault"
+            },
+            "combine": true,
+            "fields": {
+              "bios_pic_pit_mutations": {
+                "eq": 0
+              },
+              "blind_resets": {
+                "eq": 0
+              },
+              "dual_consumers": {
+                "eq": 0
+              },
+              "survivor_ticks": {
+                "ge": 100
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing-ack"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "resynchronized": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resend"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "resynchronized": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixed-aux-key"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "resynchronized": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed-packet"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "resynchronized": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "queue-overflow"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "resynchronized": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware-overrun"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "resynchronized": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed-io"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "resynchronized": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "input-qemu-t23",
+      "probe": "input",
+      "profile": "qemu-t23",
+      "selector": "f1:input run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "input"
+            },
+            "combine": true,
+            "fields": {
+              "text_count": {
+                "eq": 100
+              },
+              "key_transitions": {
+                "eq": 200
+              },
+              "button_transitions": {
+                "eq": 20
+              },
+              "motion_x": {
+                "eq": 200
+              },
+              "motion_y": {
+                "encoding": "signed",
+                "eq": -100
+              },
+              "loss": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "stuck": {
+                "eq": 0
+              },
+              "backend": "native",
+              "owner_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "input-qemu-e500",
+      "probe": "input",
+      "profile": "qemu-e500",
+      "selector": "f1:input run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "input"
+            },
+            "combine": true,
+            "fields": {
+              "text_count": {
+                "eq": 100
+              },
+              "key_transitions": {
+                "eq": 200
+              },
+              "button_transitions": {
+                "eq": 20
+              },
+              "motion_x": {
+                "eq": 200
+              },
+              "motion_y": {
+                "encoding": "signed",
+                "eq": -100
+              },
+              "loss": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "stuck": {
+                "eq": 0
+              },
+              "backend": "firmware",
+              "owner_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "framebuffer",
+      "probe": "framebuffer",
+      "profile": "qemu-t23",
+      "selector": "f1:framebuffer run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "framebuffer"
+            },
+            "combine": true,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "padding_errors": {
+                "eq": 0
+              },
+              "pixel_errors": {
+                "eq": 0
+              },
+              "mode_calls": {
+                "eq": 0
+              },
+              "overflow_rejected": {
+                "eq": 1
+              },
+              "mode_unchanged": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "24-bit"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "32-bit"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "padded-pitch"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "overlap"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clipped"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "empty"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "edge"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "framebuffer-no-lfb",
+      "probe": "framebuffer",
+      "profile": "qemu-t23",
+      "selector": "f1:framebuffer run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "framebuffer"
+            },
+            "combine": true,
+            "fields": {
+              "text_fallback": {
+                "eq": 1
+              },
+              "mode_calls": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "device_exceptions": {
+        "vga": "none"
+      }
+    }
+  ]
+}

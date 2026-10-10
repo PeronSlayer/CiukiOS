@@ -1,0 +1,39 @@
+--- a/newlib/libc/include/time.h
++++ b/newlib/libc/include/time.h
+@@ -22,7 +22,10 @@
+ #define _CLOCKS_PER_SEC_ 1000
+ #endif
+ 
++#include <sys/types.h>
++#ifndef CLOCKS_PER_SEC
+ #define CLOCKS_PER_SEC _CLOCKS_PER_SEC_
++#endif
+ #define CLK_TCK CLOCKS_PER_SEC
+ 
+ #include <sys/types.h>
+@@ -237,10 +240,14 @@
+ /* Manifest Constants, P1003.1b-1993, p. 262 */
+ 
+ #if __GNU_VISIBLE
++#ifndef CLOCK_REALTIME
+ #define CLOCK_REALTIME_COARSE	(0)
+ #endif
+-
++#endif
++
++#ifndef CLOCK_REALTIME
+ #define CLOCK_REALTIME		(1)
++#endif
+ 
+ /* Manifest Constants, P1003.4b/D8, p. 55 */
+ 
+@@ -282,7 +289,9 @@
+ 
+ #define CLOCK_BOOTTIME		(7)
+ 
++#ifndef CLOCK_REALTIME
+ #define CLOCK_REALTIME_ALARM	(8)
++#endif
+ 
+ #define CLOCK_BOOTTIME_ALARM	(9)
+ 

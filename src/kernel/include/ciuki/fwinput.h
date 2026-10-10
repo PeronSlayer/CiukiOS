@@ -10,6 +10,8 @@ enum fwinput_axis { FWINPUT_X, FWINPUT_Y };
 struct fwinput_event { uint16_t type, code; int32_t value; uint64_t tick; };
 struct fwinput_stats {
     uint64_t loss, resyncs, keys, text, packets, malformed;
+    uint64_t observed_bytes, aux_bytes, scan_bytes, makes;
+    uint64_t text_matched, text_unmatched, agreement_overflow;
     uint32_t mouse_functions; /* bit AL records successful INT15/C2 subfunctions */
 };
 struct fwinput_backend_state {
@@ -23,6 +25,11 @@ struct fwinput_decoder {
     uint8_t mouse_bytes[3], buttons;
     bool e0, held[256], extended_held[128], resync_pending;
     uint64_t last_tick, resync_tick;
+    /* Pending make observations, including typematic, indexed by set-1
+     * position. INT16 text consumes a match even if the key was released.
+     * Cleared on resync and after draining the BIOS queue. This compares
+     * positions, not a second ASCII/modifier translation implementation. */
+    uint16_t pending_makes[128];
     struct fwinput_stats stats;
 };
 void fwinput_decode_scan(struct fwinput_decoder *d, uint8_t byte, uint64_t tick);

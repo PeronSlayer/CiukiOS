@@ -1,0 +1,29 @@
+--- a/newlib/configure.host
++++ b/newlib/configure.host
+@@ -887,7 +887,7 @@
+ 	syscall_dir=syscalls
+ 	;;
+   *)
+-	newlib_cflags="${newlib_cflags} -DMISSING_SYSCALL_NAMES"
++	test "x${CIUKI_NEWLIB_PORT}" = xyes || newlib_cflags="${newlib_cflags} -DMISSING_SYSCALL_NAMES"
+ 	syscall_dir=
+ 	;;
+ esac
+@@ -965,3 +965,17 @@
+ 	fi
+ 	;;
+ esac
++
++# CiukiOS equivalent system port: hooks live in the separate libciuki archive.
++# Triple stays the contracted i686-unknown-elf; never select libgloss/sys stubs.
++if test "x${CIUKI_NEWLIB_PORT}" = xyes; then
++  sys_dir=
++  syscall_dir=
++  signal_dir=
++  posix_dir=
++  unix_dir=
++  have_crt0=no
++  have_init_fini=no
++  newlib_cflags="${newlib_cflags% -D_HAVE_INIT_FINI}"
++  newlib_cflags="${newlib_cflags} -D__DYNAMIC_REENT__ -DREENTRANT_SYSCALLS_PROVIDED -DHAVE_RENAME -DHAVE_FCNTL -DHAVE_BLKSIZE -DCLOCK_PROVIDED"
++fi

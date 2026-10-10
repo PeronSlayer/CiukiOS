@@ -31,6 +31,10 @@ static struct biosvm_regs request_regs;
 static uint32_t request_ms;
 static int request_result;
 static void (*input_service)(void);
+static void (*input_observer)(uint8_t status, uint8_t byte, bool keyboard_irq);
+static uint8_t controller_status;
+static bool controller_status_valid;
+static struct biosvm_mapping mappings[BIOSVM_MAP_COUNT];
 static struct { int handle; gen_t generation; } leases[4];
 static unsigned lease_count;
 static uint16_t mouse_lost;
@@ -54,26 +58,24 @@ static void *vm_memory(void *arg, uint32_t linear, unsigned bytes, bool write)
 static uint8_t vm_in(void *arg, uint16_t port)
 {
     (void)arg;
-    return inb(port);
+    uint8_t byte = inb(port);
+    if (port == 0x64) {
+        controller_status = byte;
+        controller_status_valid = true;
+    } else if (port == 0x60) {
+        if (input_observer && !synthetic)
+            input_observer(controller_status_valid ? controller_status : 0, byte,
+                           !!(firmware.pic[0].isr & (1u << 1)));
+        controller_status_valid = false;
+    }
+    return byte;
 }
 
 static void vm_out(void *arg, uint16_t port, uint8_t value)
 {
     (void)arg;
+    controller_status_valid = false;
     outb(port, value);
-}
-
-static bool allowed_interrupt(void *arg, uint8_t vector, const struct v86_frame *f)
-{
-    (void)arg;
-    unsigned ah = (f->tf.eax >> 8) & 0xFF;
-    if (synthetic)
-        return vector == 0x1C;
-    if (vector == 0x16)
-        return ah == 0x10 || ah == 0x11;
-    if (vector == 0x15 && ah == 0xC2)
-        return (f->tf.eax & 0xFF) <= 7;
-    return false;
 }
 
 static void quarantine(void)
@@ -213,18 +215,19 @@ static int map_firmware(void)
     pd[0] = low_pt | PTE_P | PTE_W | PTE_U;
     /* Page granularity exposes 500-FFF too. These remain reserved firmware
      * state, not user/allocator data. Ordinary tasks never get this PDE. */
-    pt[0] = PTE_P | PTE_W | PTE_U;
-    pt[BIOSVM_SCRATCH >> 12] = BIOSVM_SCRATCH | PTE_P | PTE_W | PTE_U;
-    pt[BIOSVM_STACK >> 12] = BIOSVM_STACK | PTE_P | PTE_W | PTE_U;
-    for (uint32_t p = PAGE_ALIGN_DOWN(ebda); p < PAGE_ALIGN_UP(end); p += PAGE_SIZE)
-        pt[p >> 12] = p | PTE_P | PTE_W | PTE_U;
-    /* Qualification blocker, not permission to map all UMA writable:
-     * SeaBIOS rel-1.16.3 MALLOC_UPPERMEMORY defaults to y (C0000-EFFFF).
+    uint32_t rw = PTE_P | PTE_W | PTE_U, rom = PTE_P | PTE_U | PTE_PCD | PTE_PWT;
+    mappings[0] = (struct biosvm_mapping){0, PAGE_SIZE, rw};
+    mappings[1] = (struct biosvm_mapping){BIOSVM_SCRATCH, BIOSVM_SCRATCH + PAGE_SIZE, rw};
+    mappings[2] = (struct biosvm_mapping){BIOSVM_STACK, BIOSVM_STACK + PAGE_SIZE, rw};
+    mappings[3] = (struct biosvm_mapping){PAGE_ALIGN_DOWN(ebda), PAGE_ALIGN_UP(end), rw};
+    /* f1-07b: SeaBIOS VARLOW/extra stack are reserved firmware workspace.
      * https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/Kconfig
-     * f1-07 calls this ROM/read-only. A writable VARLOW/extra-stack access
-     * therefore faults until the lead specifies qualified firmware extents. */
-    for (uint32_t p = 0xC0000; p < 0x100000; p += PAGE_SIZE)
-        pt[p >> 12] = p | PTE_P | PTE_U | PTE_PCD | PTE_PWT;
+     * Only this private PDE exposes their physical identity as user RW. */
+    mappings[4] = (struct biosvm_mapping){0xC0000, 0xF0000, rom | PTE_W};
+    mappings[5] = (struct biosvm_mapping){0xF0000, 0x100000, rom};
+    for (unsigned i = 0; i < BIOSVM_MAP_COUNT; i++)
+        for (uint32_t p = mappings[i].start; p < mappings[i].end; p += PAGE_SIZE)
+            pt[p >> 12] = p | mappings[i].flags;
     memset(P2V(BIOSVM_SCRATCH), 0, PAGE_SIZE);
     memset(P2V(BIOSVM_STACK), 0, PAGE_SIZE);
     size_t stub_bytes = (size_t)(biosvm_mouse_stub_end - biosvm_mouse_stub);
@@ -401,7 +404,7 @@ int biosvm_init(void)
         return -V86_EPERM;
     if (read_cr4() & 3)
         return -V86_EPERM; /* no alternate VME/PVI monitor path */
-    const struct v86_ops ops = {vm_memory, vm_in, vm_out, allowed_interrupt, 0};
+    const struct v86_ops ops = {vm_memory, vm_in, vm_out, 0};
     v86_init(&firmware, &ops);
     int rc = map_firmware();
     if (rc)
@@ -528,6 +531,30 @@ int biosvm_set_rtc_cache(const uint8_t values[128])
 
 void biosvm_set_input_service(void (*service)(void)) { input_service = service; }
 
+void biosvm_set_input_observer(void (*observer)(uint8_t status, uint8_t byte, bool keyboard_irq))
+{
+    input_observer = observer;
+}
+
+static bool check_mappings(struct biosvm_selftest_report *r)
+{
+    memcpy(r->mappings, mappings, sizeof(mappings));
+    const uint32_t *pd = P2V(vm_as.pd_phys);
+    if ((pd[0] & ~0x20u) != (low_pt | PTE_P | PTE_U | PTE_W))
+        return false;
+    const uint32_t *pt = P2V(low_pt);
+    for (unsigned page = 0; page < 1024; page++) {
+        uint32_t address = page * PAGE_SIZE, expected = 0;
+        for (unsigned i = 0; i < BIOSVM_MAP_COUNT; i++)
+            if (address >= mappings[i].start && address < mappings[i].end)
+                expected = address | mappings[i].flags;
+        /* Hardware sets accessed/dirty; neither changes the permissions. */
+        if ((pt[page] & ~0x60u) != expected)
+            return false;
+    }
+    return true;
+}
+
 unsigned biosvm_mouse_packets(uint8_t (*out)[3], unsigned max, unsigned *lost)
 {
     if (!initialized || g_current != vm_thread)
@@ -586,6 +613,7 @@ int biosvm_selftest(struct biosvm_selftest_report *r)
         return -V86_EPERM;
     kmutex_lock(&request_mutex);
     memset(r, 0, sizeof(*r));
+    r->mappings_ok = check_mappings(r);
     /* Synthetic code never consumes the controller or calls real firmware.
      * INT1C temporarily targets a private IRET; restore the physical IVT.
      * No registry reset is involved; production faults still quarantine. */
@@ -621,5 +649,6 @@ int biosvm_selftest(struct biosvm_selftest_report *r)
     kmutex_unlock(&request_mutex);
     return !r->policy_result && r->denied_result == -V86_EPERM &&
            r->timeout_result == -V86_ETIMEDOUT && r->later_result == -V86_EIO &&
-           r->pic_unchanged && r->pit_unchanged && r->disabled && r->disallowed == 1 && r->timeouts == 1 ? 0 : -EFAULT;
+           r->pic_unchanged && r->pit_unchanged && r->disabled && r->mappings_ok &&
+           r->disallowed == 1 && r->timeouts == 1 ? 0 : -EFAULT;
 }

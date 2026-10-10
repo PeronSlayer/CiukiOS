@@ -42,7 +42,6 @@ struct v86_ops {
     void *(*memory)(void *arg, uint32_t linear, unsigned bytes, bool write);
     uint8_t (*in)(void *arg, uint16_t port);
     void (*out)(void *arg, uint16_t port, uint8_t value);
-    bool (*interrupt)(void *arg, uint8_t vector, const struct v86_frame *f);
     void *arg;
 };
 struct v86 {

@@ -6,6 +6,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/probe.h>
+#include <ciuki/process.h>
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
 
@@ -109,7 +110,7 @@ void syscall_dispatch(struct trap_frame *tf)
         r = sys_probe_query(tf->ebx, tf->ecx);
         break;
     default:
-        r = -ENOSYS;
+        r = proc_syscall(tf);
         break;
     }
     if (nr != 1 && nr != 4) {

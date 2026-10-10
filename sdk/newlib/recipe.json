@@ -1,0 +1,19 @@
+{
+  "configure": [
+    "--host=i686-unknown-elf",
+    "--disable-multilib",
+    "--enable-newlib-multithread",
+    "--enable-newlib-retargetable-locking",
+    "--enable-newlib-io-float",
+    "--enable-newlib-io-long-long",
+    "--enable-newlib-io-long-double",
+    "--enable-newlib-io-c99-formats",
+    "--disable-newlib-nano-formatted-io",
+    "--disable-newlib-nano-malloc",
+    "--disable-newlib-reent-small",
+    "--disable-newlib-reent-thread-local",
+    "--disable-newlib-supplied-syscalls",
+    "--disable-newlib-long-time_t",
+    "--disable-newlib-mb"
+  ]
+}

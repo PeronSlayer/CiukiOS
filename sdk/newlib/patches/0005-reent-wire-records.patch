@@ -1,0 +1,11 @@
+--- a/newlib/libc/include/reent.h
++++ b/newlib/libc/include/reent.h
+@@ -92,6 +92,8 @@
+ 
+ #include <sys/reent.h>
+ #include <sys/_types.h>
++#include <sys/stat.h>
++#include <sys/time.h>
+ 
+ #define __need_size_t
+ #define __need_ptrdiff_t

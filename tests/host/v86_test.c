@@ -10,6 +10,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/fwinput.h>
+#include <ciuki/process.h>
 
 static unsigned checks, failures;
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); failures++; } } while (0)
@@ -17,7 +18,9 @@ static uint8_t ram[4 * 1024 * 1024];
 static uint8_t physical[65536];
 static unsigned hw_reads, hw_writes, enters, quarantines;
 static uint32_t flags = V86_IF, cr3, esp0, alloc_page = 0x200000;
-static struct task caller, worker_fake;
+static struct task caller, worker_fake, native_fake;
+static unsigned proc_switches, vm_preemptions;
+static bool native_tls;
 static irq_handler_t irq_fake[16];
 static struct resource resources[4];
 static unsigned resource_count;
@@ -51,7 +54,36 @@ void kwait_wake_all(struct kwait *q) { (void)q; }
 void kmutex_init(struct kmutex *m) { m->owner = 0; }
 void kmutex_lock(struct kmutex *m) { CHECK(flags & V86_IF); CHECK(!m->owner); m->owner = g_current; }
 void kmutex_unlock(struct kmutex *m) { CHECK(m->owner == g_current); m->owner = 0; }
-void schedule(void) { CHECK(flags & V86_IF); g_need_resched = false; }
+/* The real process/TLS hook is exercised by proc_test. This scheduler fake
+ * checks its composition with the real BIOS VM hooks across both directions
+ * of a preemption, including the suspended worker's continuation stack. */
+void proc_task_switch(struct task *next)
+{
+    proc_switches++;
+    native_tls = next == &native_fake;
+    CHECK(cr3 == biosvm_task_cr3(next, next->user ? next->as.pd_phys : 0));
+    CHECK(esp0 == biosvm_task_esp0(next, (uint32_t)(uintptr_t)next->kstack + KSTACK_SIZE));
+}
+static void switch_fake(struct task *next)
+{
+    g_current = next;
+    write_cr3(biosvm_task_cr3(next, next->user ? next->as.pd_phys : 0));
+    tss_set_kernel_stack(biosvm_task_esp0(next, (uint32_t)(uintptr_t)next->kstack + KSTACK_SIZE));
+    proc_task_switch(next);
+}
+void schedule(void)
+{
+    CHECK(flags & V86_IF);
+    struct task *old = g_current;
+    uint32_t old_cr3 = cr3, old_esp0 = esp0;
+    switch_fake(&native_fake);
+    CHECK(native_tls && cr3 == native_fake.as.pd_phys);
+    CHECK(esp0 == (uint32_t)(uintptr_t)native_fake.kstack + KSTACK_SIZE);
+    switch_fake(old);
+    CHECK(!native_tls && cr3 == old_cr3 && esp0 == old_esp0);
+    vm_preemptions++;
+    g_need_resched = false;
+}
 uint32_t pmm_alloc(void) { uint32_t p = alloc_page; alloc_page += PAGE_SIZE; CHECK(alloc_page < sizeof(ram)); return p; }
 void pmm_free(uint32_t p) { CHECK(p >= 0x200000 && p < alloc_page); }
 bool pmm_is_reserved(uint32_t p) { return p < 0x100000; }
@@ -108,6 +140,8 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
     CHECK(cr3 == vm_as.pd_phys);
     enters++;
     *saved = 0x12345678;
+    tss_set_kernel_stack(*saved);
+    g_need_resched = true;
     struct v86_frame live = *initial;
     if (setjmp(leave_env)) {
         sti();
@@ -130,6 +164,10 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
             live.tf.eax = (live.tf.eax & ~0xFFu) | code[1];
             live.tf.eip += 2;
             continue;
+        } else if (code[0] == 0xB8) {
+            live.tf.eax = (live.tf.eax & ~0xFFFFu) | getword(code + 1, 2);
+            live.tf.eip += 3;
+            continue;
         } else if (code[0] == 0x90) {
             live.tf.eip++;
             if (!firmware.shadow)
@@ -139,6 +177,8 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
             live.tf.vector = 13;
         }
         biosvm_trap(&live.tf);
+        if (!execution_fault && code[0] == 0xE4)
+            CHECK((live.tf.eax & 0xFF) == physical[code[1]]);
         sti();
     }
     CHECK(false);
@@ -150,11 +190,11 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d
     CHECK(flags & V86_IF);
     if (q == &completion && request_pending) {
         struct task *old = g_current;
-        g_current = vm_thread;
+        switch_fake(vm_thread);
         request_result = run_vm(&request_regs, request_ms, request_test);
         request_pending = false;
         request_done = true;
-        g_current = old;
+        switch_fake(old);
     } else if (!cond(arg)) {
         g_ticks = d;
     }
@@ -181,7 +221,7 @@ static void fixture(const uint8_t *code, unsigned n)
 {
     memset(ram, 0, 0x100000);
     memset(permissions, 3, sizeof(permissions));
-    const struct v86_ops ops = {test_memory, test_in, test_out, 0, 0};
+    const struct v86_ops ops = {test_memory, test_in, test_out, 0};
     v86_init(&v, &ops);
     CHECK(v86_begin(&v, 0, 100) == 0);
     f = (struct v86_frame){.tf = {.cs = 0x2000, .eip = 0x100, .eflags = V86_VM | V86_IF | 2,
@@ -408,6 +448,152 @@ static void test_input_decoders(void)
     fwinput_decode_scan(&d, 0x1E, 13); fwinput_decode_scan(&d, 0x9E, 14);
     CHECK(fwinput_decode_poll(&d, ev, 10) == 3 && ev[0].type == FWINPUT_RESYNC &&
           ev[0].tick == 13 && ev[1].value == 1 && ev[2].value == 0);
+    uint64_t matched = d.stats.text_matched;
+    fwinput_decode_bios(&d, 0x1E61, 15);
+    CHECK(d.stats.text_matched == matched + 1); /* make survived event overflow */
+    d.pending_makes[0x1E] = UINT16_MAX;
+    fwinput_decode_scan(&d, 0x1E, 16);
+    CHECK(d.pending_makes[0x1E] == UINT16_MAX && d.stats.agreement_overflow == 1);
+}
+
+static void firmware_byte(uint8_t status, uint8_t byte, unsigned irq)
+{
+    /* Execute the production reflection/trap path: one firmware status read,
+     * one data read, then virtual EOI and IRET. No observer-side port read. */
+    static const uint8_t key[] = {0xE4,0x64,0xE4,0x60,0xB0,0x20,0xE6,0x20,0xCF};
+    static const uint8_t aux[] = {0xE4,0x64,0xE4,0x60,0xB0,0x20,0xE6,0xA0,0xE6,0x20,0xCF};
+    memcpy(ram + 0xF0200, key, sizeof(key));
+    memcpy(ram + 0xF0300, aux, sizeof(aux));
+    ivt(9, 0xF000, 0x200); ivt(0x74, 0xF000, 0x300);
+    physical[0x64] = status; physical[0x60] = byte;
+    struct trap_frame input = {.vector = 0x20 + irq};
+    irq_fake[irq](&input);
+    struct task *old = g_current;
+    switch_fake(vm_thread);
+    unsigned reads = hw_reads, writes = hw_writes;
+    struct biosvm_regs r = {0};
+    CHECK(!run_vm(&r, 100, 0));
+    CHECK(hw_reads == reads + 2 && hw_writes == writes);
+    CHECK(!firmware.pic[0].isr && !firmware.pic[1].isr);
+    switch_fake(old);
+}
+
+static void test_observed_input(void)
+{
+    struct fwinput_event ev[FWINPUT_CAPACITY + 1];
+    memset(&decoder, 0, sizeof(decoder));
+    g_ticks = 200;
+    firmware_byte(1, 0x1E, 1);
+    firmware_byte(1, 0x1E, 1); /* typematic make: one transition, two texts */
+    firmware_byte(1, 0x9E, 1);
+    firmware_byte(1, 0xE0, 1);
+    firmware_byte(0x21, 0x1E, 12); /* AUX must neither produce keys nor lose E0 */
+    firmware_byte(1, 0x1D, 1);
+    firmware_byte(1, 0xE0, 1);
+    firmware_byte(1, 0x9D, 1);
+    CHECK(fwinput_poll(ev, ARRAY_SIZE(ev)) == 4);
+    CHECK(ev[0].type == FWINPUT_KEY && ev[0].code == 0x1E && ev[0].value == 1 && ev[0].tick == 200);
+    CHECK(ev[1].code == 0x1E && ev[1].value == 0);
+    CHECK(ev[2].code == 0x11D && ev[2].value == 1 && ev[3].code == 0x11D && !ev[3].value);
+    fwinput_decode_bios(&decoder, 0x1E61, 201);
+    fwinput_decode_bios(&decoder, 0x1E61, 201);
+    fwinput_decode_bios(&decoder, 0x3062, 201); /* unmatched BIOS text stays visible */
+    CHECK(fwinput_poll(ev, ARRAY_SIZE(ev)) == 3 && ev[0].value == 'a' && ev[2].value == 'b');
+    struct fwinput_stats stats;
+    fwinput_stats(&stats);
+    CHECK(stats.observed_bytes == 8 && stats.aux_bytes == 1 && stats.scan_bytes == 7);
+    CHECK(stats.makes == 3 && stats.keys == 4 && stats.text_matched == 2 && stats.text_unmatched == 1);
+    CHECK(!stats.loss && !stats.resyncs && !stats.packets && !stats.agreement_overflow);
+
+    /* Normal command polling (no IRQ1 in service) must not generate keys,
+     * including reply data that looks like a scan or Shift break. */
+    static const uint8_t read[] = {0xE4,0x64,0xE4,0x60,0xCF};
+    memcpy(ram + 0xF0100, read, sizeof(read));
+    static const uint8_t replies[] = {0xFA,0xFE,0xAA,0x1E};
+    for (unsigned i = 0; i < sizeof(replies); i++) {
+        physical[0x64] = 1; physical[0x60] = replies[i];
+        struct biosvm_regs r = {.eax = 0x1100, .interrupt = 0x16};
+        unsigned reads = hw_reads;
+        CHECK(!biosvm_call(&r, 100) && hw_reads == reads + 2);
+    }
+    CHECK(!fwinput_poll(ev, ARRAY_SIZE(ev)) && decoder.stats.scan_bytes == 7);
+    ram[0xF0100] = 0xCF;
+
+    /* E0 keypad Enter uses BIOS AH=E0; compare its raw position, not AH. */
+    firmware_byte(1, 0xE0, 1); firmware_byte(1, 0x1C, 1);
+    firmware_byte(1, 0xE0, 1); firmware_byte(1, 0x9C, 1);
+    fwinput_decode_bios(&decoder, 0xE00D, 202);
+    CHECK(fwinput_poll(ev, ARRAY_SIZE(ev)) == 3 && ev[0].code == 0x11C && ev[2].value == '\r');
+    CHECK(decoder.stats.text_matched == 3);
+
+    /* AUX bytes that resemble key/error/ACK bytes do not enter the scan or
+     * mouse decoder. Publish one callback packet, and consume it only once. */
+    firmware_byte(0x21, 0xFA, 12);
+    firmware_byte(0x21, 0x29, 12); firmware_byte(0x21, 2, 12); firmware_byte(0x21, 0xFF, 12);
+    CHECK(!fwinput_poll(ev, ARRAY_SIZE(ev)) && !decoder.stats.packets);
+    volatile struct biosvm_mouse_ring *ring = P2V(BIOSVM_SCRATCH + BIOSVM_MOUSE_RING);
+    ring->packets[0][0] = 0x29; ring->packets[0][1] = 2; ring->packets[0][2] = 0xFF;
+    ring->head = 1;
+    backend.mouse = true;
+    switch_fake(vm_thread);
+    service_input();
+    service_input();
+    switch_fake(&caller);
+    CHECK(fwinput_poll(ev, ARRAY_SIZE(ev)) == 3 && decoder.stats.packets == 1);
+    CHECK(ev[0].type == FWINPUT_REL && ev[0].value == 2 && ev[1].value == 1 && ev[2].type == FWINPUT_BUTTON);
+    backend.mouse = false;
+
+    /* Status errors and malformed sequences reset held state; a fresh make
+     * is delivered after the explicit resync. Overflow is observable too. */
+    firmware_byte(1, 0xE1, 1); firmware_byte(1, 0x20, 1);
+    CHECK(fwinput_poll(ev, ARRAY_SIZE(ev)) == 1 && ev[0].type == FWINPUT_RESYNC);
+    firmware_byte(0x81, 0x1E, 1);
+    firmware_byte(1, 0x1E, 1); firmware_byte(1, 0x9E, 1);
+    CHECK(fwinput_poll(ev, ARRAY_SIZE(ev)) == 3 && ev[0].type == FWINPUT_RESYNC && ev[1].value == 1 && !ev[2].value);
+    CHECK(decoder.stats.resyncs == 2 && decoder.stats.loss == 2);
+    for (unsigned i = 0; i < FWINPUT_CAPACITY + 2; i++)
+        firmware_byte(1, i & 1 ? 0x9E : 0x1E, 1);
+    CHECK(fwinput_poll(ev, ARRAY_SIZE(ev)) == 3 && ev[0].type == FWINPUT_RESYNC);
+    CHECK(decoder.stats.loss == FWINPUT_CAPACITY + 2);
+
+    /* Missing/freshly consumed status must not reuse an old AUX decision. */
+    memcpy(ram + 0xF0200, (uint8_t[]){0xE4,0x60,0xB0,0x20,0xE6,0x20,0xCF}, 7);
+    pending_irqs = 2;
+    switch_fake(vm_thread);
+    struct biosvm_regs r = {0};
+    CHECK(!run_vm(&r, 100, 0));
+    switch_fake(&caller);
+    CHECK(fwinput_poll(ev, ARRAY_SIZE(ev)) == 1 && ev[0].type == FWINPUT_RESYNC);
+    CHECK(decoder.stats.resyncs == 4);
+}
+
+static void test_runtime_mappings(void)
+{
+    const uint32_t *pt = P2V(low_pt), *pd = P2V(vm_as.pd_phys);
+    CHECK(pd[0] == (low_pt | PTE_P | PTE_U | PTE_W));
+    for (unsigned i = 0; i < 1024; i++) {
+        bool rw = i == 0 || i == 0x10 || i == 0x11 || i == 0x9F || (i >= 0xC0 && i < 0xF0);
+        bool ro = i >= 0xF0 && i < 0x100;
+        uint32_t expected = rw || ro ? i * PAGE_SIZE | PTE_P | PTE_U | (rw ? PTE_W : 0) : 0;
+        if (i >= 0xC0 && i < 0x100)
+            expected |= PTE_PCD | PTE_PWT;
+        CHECK(pt[i] == expected);
+    }
+    CHECK(vm_memory(0, 0xC0000, 0x30000, true) == ram + 0xC0000);
+    CHECK(!vm_memory(0, 0xEFFFF, 2, true) && vm_memory(0, 0xEFFFF, 2, false));
+    CHECK(vm_memory(0, 0xFFFFF, 1, false) && !vm_memory(0, 0xFFFFF, 1, true));
+    struct biosvm_selftest_report report;
+    CHECK(check_mappings(&report));
+    ((uint32_t *)pd)[0] &= ~PTE_W;
+    CHECK(!check_mappings(&report));
+    ((uint32_t *)pd)[0] |= PTE_W;
+    CHECK(report.mappings[4].start == 0xC0000 && report.mappings[4].end == 0xF0000 &&
+          (report.mappings[4].flags & PTE_W) && !(report.mappings[5].flags & PTE_W));
+    ((uint32_t *)pt)[0xF0] |= PTE_W;
+    CHECK(!check_mappings(&report));
+    ((uint32_t *)pt)[0xF0] &= ~PTE_W;
+    ((uint32_t *)pt)[0xC0] |= 0x60;
+    CHECK(check_mappings(&report)); /* accessed/dirty are normal hardware state */
 }
 
 static void test_worker(void)
@@ -418,6 +604,9 @@ static void test_worker(void)
     ivt(0x16, 0xF000, 0x100); ram[0xF0100] = 0xCF;
     ivt(0x15, 0xF000, 0x100); ivt(9, 0xF000, 0x100); ivt(0x74, 0xF000, 0x100);
     g_current = &caller; caller.state = T_RUNNING; flags = V86_IF;
+    caller.kstack = (void *)(uintptr_t)0xE0001000;
+    native_fake = (struct task){.user = true, .as = {.pd_phys = 0x330000},
+                                .kstack = (void *)(uintptr_t)0xD0001000};
     g_boot.e820_count = 1;
     g_boot.e820[0] = (struct ciuki_e820){0, 0x9FC00, CBI_E820_RAM, 1};
     resources[0] = (struct resource){RES_PORT,0x60,0x61,"input",1,RS_FIRMWARE,false};
@@ -426,6 +615,7 @@ static void test_worker(void)
     CHECK(biosvm_init() == -V86_EPERM);
     g_boot.input_policy = CBI_INPUT_FIRMWARE;
     CHECK(!biosvm_init() && biosvm_backend_state() == BIOSVM_READY);
+    test_runtime_mappings();
     CHECK(vm_memory(0, 0, 4, true) == ram);
     CHECK(!vm_memory(0, 0x12000, 1, false) && !vm_memory(0, 0xF0000, 1, true));
     CHECK(vm_memory(0, 0x9FC00, 1, true) == ram + 0x9FC00);
@@ -440,6 +630,19 @@ static void test_worker(void)
     continuation = 0xABC;
     CHECK(biosvm_task_cr3(vm_thread, 0) == vm_as.pd_phys && biosvm_task_esp0(vm_thread, 0) == 0xABC);
     continuation = 0;
+    /* Kernel initiation still rejects these services; the same INT inside
+     * an allowed call reflects and returns through the IVT. */
+    r.interrupt = 0x15; r.eax = 0x4F00;
+    previous = enters;
+    CHECK(biosvm_call(&r, 100) == -V86_EPERM && enters == previous);
+    static const uint8_t internal[] = {0xB8,0x00,0x4F,0xCD,0x15,0xCD,0x13,0xCF};
+    memcpy(ram + 0xF0100, internal, sizeof(internal));
+    ivt(0x15, 0xF000, 0x400); ivt(0x13, 0xF000, 0x400); ram[0xF0400] = 0xCF;
+    r.interrupt = 0x16; r.eax = 0x1100;
+    uint64_t ints = firmware.stats.insn[V86_INT];
+    CHECK(!biosvm_call(&r, 100) && firmware.stats.insn[V86_INT] == ints + 2 && r.eax == 0x4F00);
+    ram[0xF0100] = 0xCF;
+    ivt(0x15, 0xF000, 0x100);
     static const char selector[] = "f1:input-fault run=12345678 platform=e500";
     memcpy(g_boot.test_request, selector, sizeof(selector)); g_boot.test_request_len = sizeof(selector) - 1;
     g_boot.flags = CBI_F_SMBIOS_QEMU | CBI_F_TEST_REQUEST | CBI_F_INPUT_FORCED;
@@ -447,14 +650,27 @@ static void test_worker(void)
     physical[0x40] = 0x34; physical[0x21] = 0xF9; physical[0xA1] = 0xEF;
     CHECK(!biosvm_selftest(&report));
     CHECK(report.disabled && report.timeouts == 1 && report.disallowed == 1 && !quarantines);
+    CHECK(report.mappings_ok && report.mappings[4].end == 0xF0000);
     CHECK(biosvm_backend_state() == BIOSVM_READY);
     CHECK(!fwinput_init()); /* fake BIOS returns unsupported C205 */
     struct fwinput_backend_state state;
     fwinput_backend_state(&state);
-    CHECK(state.keyboard && !state.mouse && !state.key_releases && state.setup_error == -ENOSYS);
+    CHECK(state.keyboard && !state.mouse && state.key_releases && state.setup_error == -ENOSYS);
+    test_observed_input();
     /* #PF and #UD terminate only a synthetic execution. Real faults below
      * retain all four leases and cannot be reset through the test hook. */
     synthetic = true;
+    /* Internal reflection never widens I/O permissions or the deadline. */
+    memcpy(ram + 0xF0100, internal, sizeof(internal));
+    ivt(0x15, 0xF000, 0x400); ram[0xF0400] = 0xE4; ram[0xF0401] = 0x80;
+    r.interrupt = 0x16; r.eax = 0x1100;
+    CHECK(biosvm_call(&r, 100) == -V86_EPERM && firmware.fault.cs == 0xF000 && firmware.fault.ip == 0x400);
+    CHECK(!biosvm_reset_for_test());
+    ram[0xF0400] = 0xF4;
+    r.eax = 0x1100;
+    CHECK(biosvm_call(&r, 100) == -V86_ETIMEDOUT);
+    CHECK(!biosvm_reset_for_test());
+    ram[0xF0100] = 0xCF;
     execution_fault = 1; r.eax = 0x1100;
     CHECK(biosvm_call(&r, 100) == -EFAULT && firmware.fault.address == 0xDEAD000);
     CHECK(!biosvm_reset_for_test());
@@ -476,7 +692,9 @@ static void test_worker(void)
     CHECK(fwinput_poll(&event, 1) == 1 && event.type == FWINPUT_RESYNC && !fwinput_poll(&event, 1));
     for (unsigned i = 0; i < 4; i++) CHECK(resources[i].state == RS_QUARANTINED);
     CHECK(firmware.fault.cs == 0xF000 && firmware.fault.ip == 0x100);
-    CHECK(esp0 == 0xF0003000);
+    CHECK(esp0 == 0xE0003000 && proc_switches > 0 && vm_preemptions > 0 && !native_tls);
+    fwinput_backend_state(&state);
+    CHECK(state.disabled && !state.keyboard && !state.mouse && !state.key_releases);
 }
 
 int main(void)

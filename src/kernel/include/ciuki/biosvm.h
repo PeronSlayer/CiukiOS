@@ -30,6 +30,11 @@ void biosvm_stats(struct v86_stats *out);
  * No native CMOS reads, NMI-mask changes or fabricated time in this VM. */
 int biosvm_set_rtc_cache(const uint8_t values[128]);
 void biosvm_set_input_service(void (*service)(void));
+/* Observes the single trapped physical read, never consumes the controller.
+ * status=0 if no unconsumed status read exists. keyboard_irq identifies the
+ * reflected IRQ1 handler, excluding ordinary command/reply polling. The
+ * callback must not block, allocate or enter firmware. AUX stays callback-fed. */
+void biosvm_set_input_observer(void (*observer)(uint8_t status, uint8_t byte, bool keyboard_irq));
 unsigned biosvm_mouse_packets(uint8_t (*out)[3], unsigned max, unsigned *lost);
 
 /* V86-only arch/scheduler hooks. Defaults preserve every F0 frame/path. */
@@ -37,11 +42,15 @@ void biosvm_trap(struct trap_frame *tf);
 uint32_t biosvm_task_cr3(const struct task *t, uint32_t normal);
 uint32_t biosvm_task_esp0(const struct task *t, uint32_t normal);
 
+#define BIOSVM_MAP_COUNT 6u
+struct biosvm_mapping { uint32_t start, end, flags; }; /* page-aligned, end exclusive */
 struct biosvm_selftest_report {
     uint8_t pic_before[2], pic_after[2], pit_before, pit_after;
     uint32_t disallowed, timeouts;
     int policy_result, denied_result, timeout_result, later_result;
     bool pic_unchanged, pit_unchanged, disabled;
+    struct biosvm_mapping mappings[BIOSVM_MAP_COUNT];
+    bool mappings_ok;
 };
 int biosvm_selftest(struct biosvm_selftest_report *r);
 /* Test-only reset of synthetic execution state; NEVER reclaims quarantined

@@ -8,6 +8,7 @@
 #include <ciuki/timing.h>
 #include <ciuki/sync.h>
 #include <ciuki/biosvm.h>
+#include <ciuki/process.h>
 
 extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
 extern void task_first_entry(void);
@@ -180,6 +181,31 @@ void task_start(struct task *t)
     irq_restore(f);
 }
 
+struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp)
+{
+    struct task *t = task_alloc("native", P_NORMAL, true);
+    if (!t)
+        return 0;
+    t->as = p->memory->as;           /* borrowed directory, never destroyed by task */
+    struct trap_frame tf;
+    memset(&tf, 0, sizeof(tf));
+    tf.gs = CIUKI_TLS_SELECTOR;
+    tf.fs = tf.es = tf.ds = SEL_UDATA;
+    tf.eip = entry;
+    tf.cs = SEL_UCODE;
+    tf.eflags = CIUKI_INITIAL_EFLAGS;
+    tf.user_esp = esp;
+    tf.user_ss = SEL_UDATA;
+    prepare_stack(t, &tf, true);
+    return t;
+}
+
+void task_native_frame(struct task *t, uint32_t esp)
+{
+    struct trap_frame *tf = (struct trap_frame *)((uint8_t *)t->kstack + KSTACK_SIZE - sizeof(*tf));
+    tf->user_esp = esp;
+}
+
 void schedule(void)
 {
     uint32_t f = irq_save();
@@ -235,6 +261,7 @@ void schedule(void)
      * Both hooks return the unmodified F0 values for all other tasks. */
     write_cr3(biosvm_task_cr3(next, next->user ? next->as.pd_phys : vmm_kernel_pd()));
     tss_set_kernel_stack(biosvm_task_esp0(next, (uint32_t)next->kstack + KSTACK_SIZE));
+    proc_task_switch(next);
     fpu_task_switch(next);
     crit_end();                 /* a switch suspends the caller's critical section */
     switch_context(&prev->saved_esp, next->saved_esp);
@@ -289,9 +316,11 @@ void task_exit(int code)
 {
     cli();
     struct task *t = g_current;
+    bool native = proc_task_exiting(t, code);
     t->exit_code = code;
     ksync_task_exit(t);                 /* held mutex here is a kernel bug */
-    fpu_task_release(t);
+    if (!native)
+        fpu_task_release(t);
     t->state = T_ZOMBIE;
     schedule();
     panic("task_exit: zombie %s was scheduled", t->name);
@@ -301,14 +330,21 @@ void task_kill(struct task *t, int code)
 {
     if (t == g_current)
         task_exit(code);
+    struct proc_thread *native_thread = proc_thread_for(t);
+    if (native_thread && native_thread->in_syscall && task_alive(t)) {
+        proc_stop(native_thread->process, code, 0);
+        return;
+    }
     uint32_t f = irq_save();
     if (t->state == T_READY)
         rq_remove(t);
     if (t->state != T_ZOMBIE && t->state != T_DEAD) {
+        bool native = proc_task_exiting(t, code);
         t->exit_code = code;
         ksync_task_exit(t);
         t->state = T_ZOMBIE;
-        fpu_task_release(t);
+        if (!native)
+            fpu_task_release(t);
     }
     irq_restore(f);
 }
@@ -373,6 +409,7 @@ void sched_init(void)
     idle_task = task_create_kernel("idle", idle_fn, 0, P_IDLE);
     if (!idle_task)
         panic("sched: cannot create the idle task");
+    proc_init();
 }
 
 /* Leave the boot stack for the first task; never returns. */
@@ -387,6 +424,7 @@ __attribute__((noreturn)) void sched_start(void)
     g_current = first;
     slice_left = g_quantum_ticks;
     tss_set_kernel_stack((uint32_t)first->kstack + KSTACK_SIZE);
+    proc_task_switch(first);
     fpu_task_switch(first);
     switch_context(&boot_esp, first->saved_esp);
     panic("sched_start returned");

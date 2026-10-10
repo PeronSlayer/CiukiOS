@@ -4,10 +4,9 @@
  * 496 enhanced flags, 497 LEDs. INT16 AH=11 sets ZF; AH=10 consumes a
  * translated word only. Ordinary releases are discarded by firmware.
  * Mouse protocol reference: mouse_15c2*, invoke_mouse_handler,
- * https://raw.githubusercontent.com/coreboot/seabios/master/src/mouse.c
- * https://raw.githubusercontent.com/coreboot/seabios/master/src/std/bda.h
- * (Pinned rel-1.16.3 mouse.c/bda.h could not be retrieved by the research
- * service; pinned-source confirmation and QEMU evidence remain lead gates.)
+ * https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/mouse.c
+ * https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/std/bda.h
+ * Verified against the supplied rel-1.16.3 sources for f1-07b.
  * EBDA: far handler +22h, packet flags +26h/+27h, packet bytes +28h.
  * No SeaBIOS implementation is copied.
  * SPDX-License-Identifier: GPL-2.0-only */
@@ -32,6 +31,7 @@ void fwinput_decoder_loss(struct fwinput_decoder *d, unsigned lost)
     d->buttons = 0;
     memset(d->held, 0, sizeof(d->held));
     memset(d->extended_held, 0, sizeof(d->extended_held));
+    memset(d->pending_makes, 0, sizeof(d->pending_makes));
 }
 
 static void event(struct fwinput_decoder *d, unsigned type, unsigned code, int32_t value, uint64_t tick)
@@ -46,8 +46,7 @@ static void event(struct fwinput_decoder *d, unsigned type, unsigned code, int32
 void fwinput_decode_scan(struct fwinput_decoder *d, uint8_t byte, uint64_t tick)
 {
     d->last_tick = tick;
-    /* This consumes an already-observed byte, never reads 60/64 itself.
-     * The live INT16-only path cannot supply breaks; do not fabricate them. */
+    /* This consumes an already-observed byte, never reads 60/64 itself. */
     static const uint8_t pause[] = {0x1D, 0x45, 0xE1, 0x9D, 0xC5};
     if (d->pause) {
         if (byte != pause[d->pause - 1]) {
@@ -61,6 +60,7 @@ void fwinput_decode_scan(struct fwinput_decoder *d, uint8_t byte, uint64_t tick)
             event(d, FWINPUT_KEY, 0x145, 1, tick);
             event(d, FWINPUT_KEY, 0x145, 0, tick);
             d->stats.keys += 2;
+            d->stats.makes++;
         }
         return;
     }
@@ -76,8 +76,11 @@ void fwinput_decode_scan(struct fwinput_decoder *d, uint8_t byte, uint64_t tick)
     /* ACK/RESEND/error bytes are never key transitions. AA is also left
      * Shift's break, so BAT responses require command-context classification
      * by the qualified observer before this scan-only entry point. */
-    if (byte == 0xFA || byte == 0xFE || byte == 0xFC || byte == 0xFD || byte == 0xFF || !byte) {
-        d->e0 = false;
+    if (byte == 0xFA || byte == 0xFE)
+        return;
+    if (byte == 0xFC || byte == 0xFD || byte == 0xFF || !byte) {
+        d->stats.malformed++;
+        fwinput_decoder_loss(d, 1);
         return;
     }
     unsigned code = byte & 0x7F;
@@ -87,11 +90,20 @@ void fwinput_decode_scan(struct fwinput_decoder *d, uint8_t byte, uint64_t tick)
         return; /* extended PrintScreen fake shift */
     bool *held = e0 ? &d->extended_held[code] : &d->held[code];
     bool down = !(byte & 0x80);
-    if (*held == down)
-        return; /* typematic is supplied as TEXT by INT16 */
-    event(d, FWINPUT_KEY, code | (e0 ? 0x100 : 0), down, tick);
-    *held = down; /* event overflow can have cleared the held-state arrays */
-    d->stats.keys++;
+    if (*held != down) {
+        event(d, FWINPUT_KEY, code | (e0 ? 0x100 : 0), down, tick);
+        *held = down; /* event overflow can have cleared the held-state arrays */
+        d->stats.keys++;
+    }
+    /* Record after event(): a resync must not erase this surviving make.
+     * Typematic supplies another text opportunity, without another KEY. */
+    if (down) {
+        d->stats.makes++;
+        if (d->pending_makes[code] != UINT16_MAX)
+            d->pending_makes[code]++;
+        else
+            d->stats.agreement_overflow++;
+    }
 }
 
 void fwinput_decode_bios(struct fwinput_decoder *d, uint16_t ax, uint64_t tick)
@@ -99,9 +111,19 @@ void fwinput_decode_bios(struct fwinput_decoder *d, uint16_t ax, uint64_t tick)
     d->last_tick = tick;
     unsigned ascii = ax & 0xFF;
     /* AH is a BIOS-translated code, NOT a raw scan byte: e.g. F11=85h
-     * is a make, not an 05h release. INT16 cannot establish transitions.
-     * Keep text truthful until a qualified IRQ observer supplies scans. */
+     * is a make, not an 05h release. INT16 cannot establish transitions. */
     if (ascii && ascii != 0xE0 && ascii != 0xF0) {
+        unsigned scan = ax >> 8;
+        /* SeaBIOS uses AH=E0 for keypad Enter and slash. Other translated
+         * AH values without a raw position are counted as unmatched. */
+        if (scan == 0xE0)
+            scan = ascii == '/' ? 0x35 : (ascii == '\r' || ascii == '\n') ? 0x1C : scan;
+        if (scan < ARRAY_SIZE(d->pending_makes) && d->pending_makes[scan]) {
+            d->pending_makes[scan]--;
+            d->stats.text_matched++;
+        } else {
+            d->stats.text_unmatched++;
+        }
         event(d, FWINPUT_TEXT, 0, (int32_t)ascii, tick);
         d->stats.text++;
     }
@@ -162,6 +184,25 @@ unsigned fwinput_decode_poll(struct fwinput_decoder *d, struct fwinput_event *ou
     return n;
 }
 
+static void observe_input(uint8_t status, uint8_t byte, bool keyboard_irq)
+{
+    decoder.stats.observed_bytes++;
+    if (status & 0x20) {
+        decoder.stats.aux_bytes++;
+        return; /* Mouse packets arrive once, via the firmware far callback. */
+    }
+    if (!keyboard_irq)
+        return; /* INT16 LED command replies / controller replies, not scans. */
+    decoder.last_tick = deadline_after_ms(0);
+    if (!(status & 1) || (status & 0xC0)) {
+        decoder.stats.malformed++;
+        fwinput_decoder_loss(&decoder, 1);
+        return;
+    }
+    decoder.stats.scan_bytes++;
+    fwinput_decode_scan(&decoder, byte, decoder.last_tick);
+}
+
 static void service_input(void)
 {
     /* Bounded drain: BIOS buffer is 16 words on SeaBIOS. Every status and
@@ -169,8 +210,16 @@ static void service_input(void)
     if (backend.keyboard) {
         for (unsigned n = 0; n < 16; n++) {
             struct biosvm_regs r = {.eax = 0x1100, .interrupt = 0x16};
-            if (biosvm_call(&r, 100) || (r.flags & V86_ZF))
+            uint64_t makes = decoder.stats.makes;
+            if (biosvm_call(&r, 100))
                 break;
+            if (r.flags & V86_ZF) {
+                /* An IRQ may arrive after BIOS computed ZF but before its
+                 * IRET: keep any newly observed make for the next drain. */
+                if (makes == decoder.stats.makes)
+                    memset(decoder.pending_makes, 0, sizeof(decoder.pending_makes));
+                break;
+            }
             r.eax = 0x1000;
             if (biosvm_call(&r, 100))
                 break;
@@ -210,7 +259,8 @@ int fwinput_init(void)
         return rc;
     started = true;
     backend.keyboard = true;
-    backend.key_releases = false; /* directive's INT16 release premise is false */
+    backend.key_releases = true;
+    biosvm_set_input_observer(observe_input);
     /* C205/BH=3 initializes packet length AND performs the documented reset.
      * C201 alone leaves packet length unspecified. One 500ms setup budget,
      * not a fresh 500ms per step. Unsupported mouse service leaves keyboard. */
@@ -237,8 +287,8 @@ int fwinput_init(void)
 
 unsigned fwinput_poll(struct fwinput_event *out, unsigned max)
 {
-    /* The producer is the same non-preemptible kernel worker. It only
-     * switches in V86, before returning and publishing decoded events. */
+    /* The worker publishes either from the trapped-read observer or after a
+     * firmware call. Neither decoder path blocks or schedules midway. */
     if (!backend.disabled && biosvm_backend_state() == BIOSVM_DISABLED_BACKEND) {
         backend.disabled = true;
         decoder.last_tick = deadline_after_ms(0);
@@ -254,5 +304,5 @@ void fwinput_backend_state(struct fwinput_backend_state *out)
     *out = backend;
     out->disabled = biosvm_backend_state() == BIOSVM_DISABLED_BACKEND;
     if (out->disabled)
-        out->keyboard = out->mouse = false;
+        out->keyboard = out->mouse = out->key_releases = false;
 }

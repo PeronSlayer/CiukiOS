@@ -40,7 +40,8 @@ v86_leave:
     ret
 
 ; Copied as data into the reserved scratch page; never executes in ring 0.
-; SeaBIOS invoke_mouse_handler pushes words status, X, Y, Z then far CALL.
+; SeaBIOS rel-1.16.3 invoke_mouse_handler: status, X, Y, zero Z then far CALL.
+; https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/mouse.c
 ; At entry [SP+10]=status, [SP+8]=X, [SP+6]=Y. Preserve all caller state.
 section .rodata
 bits 16
