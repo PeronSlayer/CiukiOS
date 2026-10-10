@@ -129,6 +129,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
         build = re.search(rb'Ciuki VMM F0 build ([A-Za-z0-9_.+-]+) - CiukiOS', boot)
         records = []
         fat_read_not_run = False
+        fd_table_not_run = []
         for line in boot.splitlines(keepends=True):
             if panic and line.strip(): raise EvidenceError('output after terminal panic')
             try:
@@ -180,6 +181,31 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                     raise EvidenceError('duplicate or late fd-table second-volume outcome')
                 p.records.append(r); p.seq = seq; p.not_run_reason = 'second_volume_absent'
                 continue
+            if r['event'] == 'DATA' and r.get('reason') == 'operator_absent':
+                subcase = {'input': 'stimulus', 'crash-isolation': 'interaction'}.get(r['probe'])
+                if (not sweep or r.get('status') != 'not_run' or not subcase or
+                    r.get('subcase') != subcase or not p.started or p.terminal or
+                    getattr(p, 'operator_subcases', []) or
+                    (r['probe'] == 'crash-isolation' and r.get('server') != 'desktop')):
+                    raise EvidenceError('invalid operator_absent subcase')
+                p.operator_subcases = [{'subcase': subcase, 'reason': 'operator_absent'}]
+            if r['event'] == 'END' and r.get('status') == 'NOT_RUN' and r.get('reason') == 'operator_absent':
+                if not sweep or not p.started or p.terminal or not getattr(p, 'operator_subcases', []):
+                    raise EvidenceError('invalid operator_absent terminal')
+                p.records.append(r); p.terminal = r; p.outcome = 'not_run'
+                p.not_run_reason = 'operator_absent'
+                continue
+            if r['event'] == 'END' and getattr(p, 'operator_subcases', []) and r.get('status') != 'FAIL':
+                raise EvidenceError('operator_absent requires NOT_RUN or independent FAIL')
+            if (r['probe'] == 'fd-table' and r['event'] == 'DATA'
+                    and r.get('case') in ('exdev', 'readonly')
+                    and r.get('status') == 'not_run'
+                    and r.get('reason') == 'second_volume_absent'):
+                if any(item['subcase'] == r['case'] for item in fd_table_not_run):
+                    raise EvidenceError('duplicate fd-table absent-volume subcase')
+                fd_table_not_run.append({'subcase': r['case'], 'reason': r['reason']})
+                p.records.append(r)
+                continue
             if r['probe'] == 'fat-read' and r['event'] == 'ERROR' and r.get('status') == 'not_run' and r.get('reason') == 'fixtures_absent':
                 if fat_read_not_run or not p.started or p.terminal:
                     raise EvidenceError('duplicate or late fat-read fixtures_absent outcome')
@@ -214,6 +240,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                               'parser_errors':{probe:p.capture_error for probe,p in parsers.items()
                                                if hasattr(p, 'capture_error')}})
         for probe, parser in parsers.items():
+            if probe == 'fd-table': parser.physical_not_run_subcases = fd_table_not_run
             groups.setdefault(probe, []).append((number, parser))
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (meta, log)}
     results = []; blocked = None
@@ -236,6 +263,9 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
         observations = groups.get(probe, [])
         if not observations and result['not_run_reasons']:
             result['reason'] = result['not_run_reasons'][0]
+        result['not_run_subcases'] = [s for _, p in observations for s in getattr(p, 'operator_subcases', [])]
+        operator_absent = bool(result['not_run_subcases']) or 'operator_absent' in result['not_run_reasons']
+        result['operator_confirmation_required'] = bool(operator_absent or case.get('operator_confirmation') or operator_confirmation_case(case))
         if observations:
             result['observed'] = [r for _, p in observations for r in p.records]
             result['boots'] = [n + 1 for n, _ in observations]
@@ -260,7 +290,17 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                             raise EvidenceNotRun(getattr(parser, 'not_run_reason', 'probe marked NOT_RUN'))
                         if not parser.terminal and part.get('expected', expected)['terminal'] != 'ARM' and 'reset_before_completion' in result['not_run_reasons']:
                             raise EvidenceNotRun('reset_before_completion')
-                        parser.check(part.get('expected', expected))
+                        part_expected = part.get('expected', expected)
+                        absent_subcases = getattr(parser, 'physical_not_run_subcases', []) if probe == 'fd-table' else []
+                        if absent_subcases:
+                            if {item['subcase'] for item in absent_subcases} != {'exdev', 'readonly'}:
+                                raise EvidenceError('fd-table needs both absent-volume subcases')
+                            part_expected = dict(part_expected)
+                            part_expected['predicates'] = [p for p in part_expected.get('predicates', [])
+                                                           if p.get('where', {}).get('operation') not in ('exdev', 'readonly')]
+                        parser.check(part_expected)
+                        if absent_subcases:
+                            result['not_run_subcases'] = absent_subcases
                         if parser.terminal and parser.terminal['event'] == 'PANIC':
                             observation = metadata.get('panic_observations', {}).get(str(number + 1), metadata)
                             if observation.get('external_halt_seconds', 0) < 5 or observation.get('resumed', True):
@@ -271,10 +311,12 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                         result['outcome'] = 'fail'; result['reason'] = str(e); break
                 if result['outcome'] == 'pass' and any(case.get(k) for k in ('checks', 'digests', 'crash_sequence', 'desktop_screen')):
                     result['outcome'] = 'not_run'; result['reason'] = 'independent disk/screen observation required'
-        if case.get('operator_confirmation') or operator_confirmation_case(case):
+        if result['operator_confirmation_required']:
             confirmed = metadata.get('case_confirmations', {}).get(result['case']) is True
             result['operator_confirmation'] = confirmed
-            if not confirmed:
+            if not confirmed and result['outcome'] != 'fail':
+                result['outcome'] = 'not_run'; result['reason'] = 'operator_absent'
+            if not confirmed and result['outcome'] != 'fail':
                 result['outcome'] = 'not_run'; result['reason'] = 'operator_absent'
         result['evidence_outcome'] = result['outcome']; result['evidence_reason'] = result['reason']
         if result['outcome'] == 'not_run' and result['reason'] not in result['not_run_reasons']:
@@ -282,7 +324,9 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
         result['prerequisite'] = {'satisfied':not bool(blocked), 'failed_case':blocked}
         if blocked:
             result['outcome'] = 'not_run'; result['reason'] = 'prerequisite failed: ' + blocked
-        elif failed_prerequisite(case, result) and not (probe == 'fat-read' and result['reason'] == 'fixtures_absent'):
+        elif failed_prerequisite(case, result) and not (
+                probe == 'fat-read' and result['reason'] == 'fixtures_absent' or
+                result['outcome'] == 'not_run' and result['reason'] == 'operator_absent' and operator_absent):
             blocked = result['case']
         results.append(result)
     return results

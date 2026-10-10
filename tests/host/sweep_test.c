@@ -7,6 +7,37 @@
 #include "selector.h"
 
 static unsigned calls, begins, ends;
+extern bool probes_operator_mode;
+extern bool probes_operator_wait(bool (*)(void *), uint64_t (*)(uint32_t),
+                                void (*)(uint32_t), void (*)(bool), void *);
+static uint64_t operator_clock, event_at;
+static unsigned announcements, redraws, events;
+static uint64_t operator_now(uint32_t ms) { return operator_clock + ms; }
+static void operator_sleep(uint32_t ms) { operator_clock += ms; }
+static bool operator_event(void *arg)
+{
+    assert(arg == &events);
+    if (operator_clock != event_at) return false;
+    events++; return true;
+}
+static void operator_prompt(bool announce) { if (announce) announcements++; else redraws++; }
+static void operator_tests(void)
+{
+    assert(!probes_operator_mode);
+    const unsigned arrival[] = { 0, 10, 59990, 60000, 60010 };
+    for (unsigned wrap = 0; wrap < 2; wrap++) {
+        for (unsigned i = 0; i < sizeof(arrival)/sizeof(*arrival); i++) {
+            operator_clock = wrap ? UINT64_MAX - 100 : 0;
+            uint64_t start = operator_clock;
+            event_at = start + arrival[i]; announcements = redraws = events = 0;
+            bool normal = probes_operator_wait(operator_event, operator_now, operator_sleep, operator_prompt, &events);
+            assert(normal == (arrival[i] < 60000));
+            assert(announcements == 1 && events == (unsigned)normal);
+            assert(operator_clock - start == (normal ? arrival[i] : 60000));
+            assert(redraws <= 599);
+        }
+    }
+}
 static int pass(void) { calls++; return 0; }
 static int fail(void) { calls++; return 1; }
 static void panic_probe(void) { calls++; }
@@ -62,7 +93,7 @@ static void delay(void *c) { (void)c; assert(stage==1 || stage==2); delays++; }
 static void triple(void *c) { (void)c; assert(stage==(stuck ? 1u : 2u)); assert(delays>=100); stage=3; }
 int main(void)
 {
-    selection_tests(); order_tests();
+    selection_tests(); order_tests(); operator_tests();
     const struct reboot_ops ops = {disable,status,pulse,delay,triple};
     reboot_sequence(&ops,0); assert(stage==3 && polls==1 && delays==100);
     stuck=true; stage=delays=polls=0; reboot_sequence(&ops,0);

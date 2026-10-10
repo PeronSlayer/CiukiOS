@@ -6,6 +6,11 @@
 #include <ciuki/probe.h>
 #include <ciuki/storage.h>
 
+extern bool probes_operator_mode;
+extern bool probes_operator_wait(bool (*)(void *), uint64_t (*)(uint32_t),
+                                void (*)(uint32_t), void (*)(bool), void *);
+extern void console_operator_prompt(bool);
+
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
 __asm__(".pushsection .rodata.desktop_payload,\"a\"\n"
         ".balign 4\n"
@@ -184,6 +189,20 @@ static bool native_live(struct process *p)
 {
     return p && p->state==PROC_LIVE && p->memory && !native_reports.invalid && !native_reports.setup_step;
 }
+struct operator_desktop_input {
+    struct process *server, *survivor;
+    uint64_t events;
+};
+static bool operator_desktop_event(void *arg)
+{
+    struct operator_desktop_input *wait = arg;
+    struct desktop_activity activity;
+    desktop_activity_snapshot(&activity);
+    /* A dead participant/invalid report must take the ordinary failure path,
+     * rather than disguising a desktop fault as an absent operator. */
+    return !native_live(wait->server) || !native_live(wait->survivor) ||
+           activity.input_events > wait->events;
+}
 static void native_reason(char reason[64], const char *fallback)
 {
     struct process *server=proc_find(native_reports.server), *survivor=proc_find(native_reports.survivor);
@@ -232,7 +251,12 @@ static bool native_command(struct process *server, unsigned command, uint32_t *g
 static uint32_t native_digest(void)
 {
     const struct fb_device *d=fbdev_get();
-    return d->present && d->mapped ? fnv1a32(d->mapped,d->size,2166136261u) : 0;
+    if (!d->present || !d->mapped) return 0;
+    /* The cfg-only console prompt occupies the first 16 pixel rows. Its
+     * pixels cannot supply evidence that the desktop responded to input.
+     * Ordinary runner boots still hash the complete framebuffer. */
+    uint32_t first=probes_operator_mode && d->pitch && d->size/d->pitch>16 ? 16*d->pitch : 0;
+    return fnv1a32(d->mapped+first,d->size-first,2166136261u);
 }
 static bool native_payload_present(void)
 {
@@ -255,6 +279,7 @@ static int native_crash_isolation(void)
     desktop_snapshot(&initial); proc_snapshot(&before);
     struct process *owner=0,*server=0,*survivor=0;
     uint32_t deaths=supervisor_desktop_deaths(), generation=0, cycles=0;
+    bool operator_absent=false;
     uint64_t launch_start=g_ticks;
     memset(&native_reports,0,sizeof(native_reports));
     bool pass=!proc_prepare(proc_supervisor(),&owner);
@@ -346,6 +371,16 @@ static int native_crash_isolation(void)
         struct desktop_activity a,b;
         desktop_activity_snapshot(&a); uint32_t digest=native_digest();
         rec_emit(name,"ARM","server=desktop action=post_fault_input presents=%llu input_events=%llu pixel_digest=%08x",a.presents,a.input_events,digest);
+        if (probes_operator_mode) {
+            struct operator_desktop_input wait={server,survivor,a.input_events};
+            operator_absent=!probes_operator_wait(operator_desktop_event,deadline_after_ms,
+                                                  task_sleep_ms,console_operator_prompt,&wait);
+            if (operator_absent) {
+                rec_emit(name,"DATA","case=interaction server=desktop subcase=interaction status=not_run reason=operator_absent");
+                pass=native_live(server) && native_live(survivor) && supervisor_desktop_deaths()==deaths;
+                goto cleanup;
+            }
+        }
         uint64_t start=g_ticks; deadline=start+15000;
         do { task_sleep_ms(10); desktop_activity_snapshot(&b); }
         while (native_live(server) && g_ticks<deadline && (native_reports.keys<2 || native_reports.motion<1 || native_reports.buttons<2 || b.presents<=a.presents || g_ticks-start<500));
@@ -378,6 +413,10 @@ finished:
     pass=pass && objects && processes;
     rec_emit(name,"DATA","case=ledger server=desktop objects_equal=%u processes_equal=%u descriptions=%u surfaces=%u pages=%u channels=%u messages=%u grants=%u",
         objects,processes,final.descriptions,final.surfaces,final.pages,final.channels,final.messages,final.grants);
+    if (pass && operator_absent) {
+        rec_emit(name,"END","server=desktop status=NOT_RUN reason=operator_absent");
+        return -ECANCELED;
+    }
     rec_emit(name,"END",pass ? "server=desktop status=PASS" : "server=desktop status=FAIL reason=desktop_contract");
     return pass ? 0 : 1;
 }

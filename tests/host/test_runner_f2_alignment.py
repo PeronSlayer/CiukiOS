@@ -72,6 +72,15 @@ def captured_records(probe, data):
 
 
 class F2AlignmentTests(unittest.TestCase):
+    def test_fd_table_absent_second_volume_is_nonfatal_subcase_evidence(self):
+        source = (ROOT / 'src/kernel/probes/f2_probes_files.c').read_text()
+        self.assertIn('case=exdev status=not_run reason=second_volume_absent', source)
+        self.assertIn('case=readonly status=not_run reason=second_volume_absent', source)
+        absent_branch = source.split('else {\n        rec_emit("fd-table", "DATA", "case=exdev', 1)[1].split('\n    }', 1)[0]
+        self.assertNotIn('pass = false', absent_branch)
+        self.assertIn("pass &= observed(\"exdev\", -EXDEV", source)
+        self.assertIn("pass &= observed(\"readonly\", -EROFS", source)
+
     def test_source_derived_supplement_output_is_not_controller_evidence(self):
         if not any('stdout_cases' in c['expected'] or 'application_reports' in c['expected']
                    for c in cases() if c['probe'] == 'app-gate'):

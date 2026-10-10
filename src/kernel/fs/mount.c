@@ -14,7 +14,16 @@
 #endif
 
 static struct storage system_storage;
+/* The canonical storage instance owns the hardware sweep. Keep its cursor
+ * ledger private here, without changing the frozen storage/VFS interfaces. */
+static uint64_t system_sweep_writes;
+static struct storage_volume *cursor_volume;
 static int volume_flush(struct blkdev *);
+
+uint64_t storage_sweep_writes(const struct storage_volume *v)
+{
+    return v == &system_storage.volumes[2] ? system_sweep_writes : 0;
+}
 
 static struct blkdev *refresh_volume(struct storage_volume *v)
 {
@@ -50,6 +59,8 @@ static int volume_write(struct blkdev *dev, uint64_t lba, uint32_t count, const 
     if (!e && (!v->read_gate || !blkdev_durable(p))) e = -FS_EROFS;
     if (!e) {
         v->writes += count;
+        if (v == cursor_volume && v == &system_storage.volumes[2])
+            system_sweep_writes += count;
         e = p->write(p, lba, count, buf);
     } else v->refused++;
     refresh_volume(v);
@@ -72,6 +83,7 @@ static int volume_flush(struct blkdev *dev)
 int storage_setup(struct storage *s, size_t bytes)
 {
     if (!s) return -FS_EINVAL;
+    if (s == &system_storage) system_sweep_writes = 0;
     memset(s, 0, sizeof(*s));
     int e = cache_init(&s->cache, bytes);
     if (e) return e;
@@ -265,6 +277,10 @@ int storage_boot_cfg(struct storage *s, const char *request)
             output[used++] = '\n';
         }
     }
+    /* Drain a prior writable workload before attributing any writes to the
+     * cursor. This barrier is outside the cursor ledger, even on failure. */
+    if (!e && mounted && !readonly) e = fat_commit(&v->fat);
+    if (!e) cursor_volume = v;
     if (!e) e = fat_enable_write(&v->fat);
     bool recovered = v->fat.dirty_recovered;
     if (!e && used) {
@@ -281,6 +297,7 @@ int storage_boot_cfg(struct storage *s, const char *request)
     } else if (e && readonly) {
         v->fat.readonly = true;
     }
+    cursor_volume = 0;
     fs_lock_drop(&s->vfs.lock);
     return e;
 }

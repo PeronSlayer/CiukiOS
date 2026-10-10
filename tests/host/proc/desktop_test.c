@@ -41,6 +41,9 @@ static uint8_t frame_bytes[8192];
 static unsigned frame_length;
 static char frame_probe[24];
 void klog(const char *fmt, ...) { (void)fmt; }
+static unsigned operator_prompts;
+void console_operator_prompt(bool announce) { if (announce) operator_prompts++; }
+uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[241] = { 0 };
@@ -593,6 +596,7 @@ static void test_libc_write_gate(void)
 static struct process *gate_server, *gate_survivor;
 static uint32_t gate_control_address, gate_replies, gate_turns, gate_cycle;
 static bool gate_bad_status;
+static bool gate_input_absent;
 static unsigned gate_failure;
 static int gate_fixture_spawn(struct process **out)
 {
@@ -606,7 +610,10 @@ static void gate_server_summary(unsigned generation,unsigned victim)
 {
     char line[241];
     int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=%u survivor=%u victim=%u cycle=%u replies=%u keys=%u motion=%u buttons=%u",
-        gate_control_address,generation,gate_survivor->pid,victim,gate_cycle,gate_replies,gate_cycle==100 ? 2u : 0u,gate_cycle==100 ? 1u : 0u,gate_cycle==100 ? 2u : 0u);
+        gate_control_address,generation,gate_survivor->pid,victim,gate_cycle,gate_replies,
+        gate_cycle==100 && !gate_input_absent ? 2u : 0u,
+        gate_cycle==100 && !gate_input_absent ? 1u : 0u,
+        gate_cycle==100 && !gate_input_absent ? 2u : 0u);
     native_report(gate_server,line,n);
 }
 static void gate_demo_summary(struct process *p,unsigned stage,unsigned generation)
@@ -651,10 +658,23 @@ static void gate_schedule(void)
         }
         gate_server_summary(c.generation,victim);
     }
-    if (gate_cycle==100) { activity.presents++; activity.input_events+=5; device.mapped[0]++; }
+    if (gate_cycle==100) {
+        activity.presents++;
+        if (!gate_input_absent) { activity.input_events+=5; device.mapped[0]++; }
+    }
 }
 static void test_native_controller(void)
 {
+    uint8_t prompt_pixels[68]={0};
+    struct fb_device saved=device;
+    device.present=true;device.mapped=prompt_pixels;device.size=sizeof(prompt_pixels);device.pitch=4;
+    probes_operator_mode=true;
+    uint32_t baseline=native_digest();prompt_pixels[0]=1;
+    CHECK(native_digest()==baseline);prompt_pixels[64]=1;
+    CHECK(native_digest()!=baseline);
+    probes_operator_mode=false;baseline=native_digest();prompt_pixels[0]=2;
+    CHECK(native_digest()!=baseline);
+    device=saved;
     uint8_t pixels[4]={0}; device.present=true;device.mapped=pixels;device.size=sizeof(pixels);
     for (unsigned bad=0;bad<2;bad++) {
         gate_bad_status=bad; gate_replies=gate_turns=gate_cycle=0;
@@ -666,6 +686,18 @@ static void test_native_controller(void)
         CHECK(gate_restored==gate_progress && gate_interactions==(bad ? 0u : 2u));
         CHECK(!native_reports.active && !native_reports.invalid);
     }
+    for (unsigned absent=0;absent<2;absent++) {
+        probes_operator_mode=true; gate_input_absent=absent; gate_bad_status=false;
+        gate_replies=gate_turns=gate_cycle=0;
+        gate_progress=gate_victims=gate_restored=gate_interactions=0;
+        gate_simulation=true; g_current=&controller; on_schedule=gate_schedule;
+        unsigned prompts=operator_prompts;
+        CHECK(native_crash_isolation()==(absent ? -ECANCELED : 0));
+        CHECK(operator_prompts==prompts+1 && gate_progress==100 && gate_victims==100 && gate_restored==100);
+        CHECK(gate_interactions==(absent ? 1u : 2u) && !native_reports.active);
+        on_schedule=0;gate_simulation=false;
+    }
+    probes_operator_mode=false;gate_input_absent=false;
     device.present=false;device.mapped=0;device.size=0;
     puts("native controller: 100 cycles/five kinds, counters, ticks, PID/CR3/pgid, ledgers, interaction, wrong-signal refusal PASS (fake scheduling)");
 }

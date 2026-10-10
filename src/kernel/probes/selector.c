@@ -9,6 +9,29 @@ static bool is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 
 #define SELECT_SERVER_STANDIN (1u << 30)
 #define SELECT_SERVER_DESKTOP (1u << 31)
 
+/* Set before the sweep controller replaces the cfg-only sweep request with
+ * its ordinary per-probe selector. No boot-info or process ABI extension. */
+bool probes_operator_mode;
+
+/* Callback seam keeps the bounded first-event wait host-testable. The event
+ * callback retains/observes the first event; it must not discard stimulus.
+ * Check the deadline before polling so an event at 60 s is too late. */
+bool probes_operator_wait(bool (*event)(void *), uint64_t (*now)(uint32_t),
+                          void (*sleep)(uint32_t), void (*prompt)(bool), void *arg)
+{
+    uint64_t start = now(0), shown = start;
+    prompt(true);
+    while (now(0) - start < 60000) {
+        if (event(arg)) return true;
+        if (now(0) - shown >= 100) {
+            prompt(false);
+            shown = now(0);
+        }
+        sleep(10);
+    }
+    return false;
+}
+
 
 /* F2 crash-isolation additionally accepts [server=desktop|standin] last. */
 bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, struct probe_selection *selection)

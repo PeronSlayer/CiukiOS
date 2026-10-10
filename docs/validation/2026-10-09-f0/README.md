@@ -291,6 +291,69 @@ time. `qemu-fast` (KVM) never produces latency evidence.
   (`build/test-runs`, last five runs per suite).
 
 
+## T23 fault-repair controller deadline (f2-22)
+
+The supplied second T23 sweep (`66666666`, image `90477716…`, recorded
+2026-10-11) reports indices 1–5 only. Index 4 is the correctly delivered
+#DE/SIGFPE. Missing records are index 6 (#AC/SIGBUS) and index 7 (#MF/SIGFPE).
+The status record has `raw_vector=17`, while the last sampled handler has
+`entries=5 returns=4` and still describes #GP. The same sweep's F0 `fpu`
+probe passes with `mf_vector=16`. These facts do not establish two absent
+processor exceptions or a successful exit: `signal_case` prints the process's
+default status zero even when `signal_wait_zombie` timed out.
+
+Research: [Intel SDM Vol. 3A](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf),
+section 2.5 (CR0 AM/NE/MP/EM/TS), section 9.2.1 (x87 initialization), and
+Chapter 6's Interrupt 0 (#DE), Interrupt 7 (#NM), Interrupt 16 (#MF), and
+Interrupt 17 (#AC) entries. NE selects native vector 16 instead of legacy
+FERR# external reporting; AM and user EFLAGS.AC together enable alignment
+checks at CPL3. MP makes FWAIT honor TS; EM must be clear for native x87.
+Repository comparison: `fpu_init` already sets MP/NE/AM, clears EM/TS before
+initialization, then sets TS for lazy #NM ownership. `fpu_handle_nm` clears TS
+before saving/restoring. The #DE/#MF/#AC signal mappings and handler flag
+clearing already match the contract. No control-register change is warranted.
+Host assertions now cover all 32 combinations of inherited MP/NE/AM/EM/TS,
+for both FXSR and FNSAVE, including the values before first hardware use,
+the final lazy TS, and preservation of unrelated CR0/CR4 bits.
+
+The controller emitted four records before acknowledging each waiting
+handler, within one two-second PIT deadline. `rec_emit` calls synchronous
+UART output and the console; the LFB console redraws its full visible
+history on scrolling. Slow physical output therefore consumes execution
+time while the handler waits. A host replay of the original production
+controller with a simulated 100 ms sink delay per record reproduces exactly
+`observed=0 raw_vector=17 corruption=0 entries=5 returns=4`, missing indices
+6 and 7, and FAIL. This reproduces the failure mechanism; the supplied
+capture does not measure the T23's individual output durations.
+
+Decision: save up to seven individual handler snapshots and acknowledge
+them immediately, retaining the existing deadline. Emit those snapshots
+after completion and the zombie wait. Require all seven snapshots in order,
+seven entries/returns, completion and successful exit. An additional
+`part=completion` record exposes completion, zombie state and snapshot count,
+so a default status zero cannot be mistaken for an exit. The payload and
+the exact TCG CPUID fallback remain unchanged; no fault is skipped and no
+new CPU feature is required.
+
+`test_signal_fault_records.py` compiles the production controller and tests
+slow output with both real #AC and TCG's #PF fallback handshakes, partial
+delivery, duplicate indices, buffer overflow attempts, and early completion
+claiming 7/7 despite missing records. Existing suite predicates reject the
+partial delivery independently of the terminal FAIL. These are host boundary
+tests, not native payload execution or new hardware/QEMU qualification.
+Worktree validation: `python3 scripts/build_kernel.py` passes, including
+the FPU/SIMD audit and 4 KiB compiler frame limit; `VMM.ELF` is 1,553,720
+bytes. `ASAN_OPTIONS=detect_leaks=0 bash scripts/test/host_kernel_tests.sh`
+passes (signal fixture: 5,709 checks; unchanged NASM ELF: 20,484 bytes,
+production parser/load only). `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest
+discover -s tests/host` passes: 204 tests, 8 skips, no failures/errors.
+Logs are in `build/host/f2-22-kernel-build.log`,
+`build/host/f2-22-host-kernel-tests.log`, and
+`build/host/f2-22-host-unittest.log`. Scratch compilation files from the
+original-controller reproduction were deleted after recording its result.
+The lead must rerun QEMU `signals-fault` and the T23 sweep on the integrated
+image before accepting the hardware result.
+
 ## Open items for F0 closure
 
 - Safe-mode automation: amend the selector grammar (for example a
