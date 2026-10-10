@@ -113,6 +113,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/fbdev_test.c" -o "$out/fbdev_test"
 "$out/fbdev_test"
 
+# F1 V86 decoder, device models, worker aborts and firmware event adapter.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/v86_test.c" -o "$out/v86_test"
+"$out/v86_test"
+
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \

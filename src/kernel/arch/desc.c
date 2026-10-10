@@ -42,6 +42,9 @@ void gdt_init(void)
     memset(&g_tss, 0, sizeof(g_tss));
     g_tss.ss0 = SEL_KDATA;
     g_tss.iomap_base = sizeof(struct tss);  /* beyond the limit: no bitmap */
+    /* F1 V86 also checks this absent bitmap for EVERY IN/OUT, even at
+     * IOPL=3 (which we never grant). Intel SDM Vol. 3B 23.2.8.1:
+     * https://cdrdv2-public.intel.com/874250/253669-090-sdm-vol-3b.pdf */
     set_gdt(5, (uint32_t)&g_tss, sizeof(g_tss) - 1, 0x89, 0x00);
     set_gdt(6, (uint32_t)&df_tss, sizeof(df_tss) - 1, 0x89, 0x00);
     set_gdt(CIUKI_TLS_GDT_INDEX, 0, CIUKI_TLS_SIZE - 1, 0xF2, 0x40);

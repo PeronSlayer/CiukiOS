@@ -154,7 +154,7 @@ def main() -> int:
     run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
          str(ROOT / "tests/host/proc/signal_payload.asm"), "-o", str(signal_payload)])
     objs = []
-    for asm in sorted((SRC / "arch").glob("*.asm")) + [SRC / "probes" / "payload_blob.asm"]:
+    for asm in sorted((SRC / "arch").glob("*.asm")) + sorted((SRC / "vm").glob("*.asm")) + [SRC / "probes" / "payload_blob.asm"]:
         o = OBJ / (asm.stem + ".o")
         run(["nasm", "-f", "elf32", "-I", str(ROOT) + "/", f"-DPAYLOAD_BIN='{payload}'",
              str(asm), "-o", str(o)], cwd=ROOT)
@@ -162,7 +162,7 @@ def main() -> int:
     for c in sorted(list((SRC / "core").glob("*.c")) + list((SRC / "lib").glob("*.c")) +
                     list((SRC / "arch").glob("*.c")) + list((SRC / "probes").glob("*.c")) +
                     list((SRC / "drivers").glob("*.c")) + list((SRC / "fs").glob("*.c")) +
-                    list((SRC / "proc").glob("*.c"))):
+                    list((SRC / "proc").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
         run(["clang", *CFLAGS, f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
              f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',

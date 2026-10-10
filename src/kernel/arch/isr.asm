@@ -70,6 +70,11 @@ isr_common:
     add esp, 4
 global trap_return
 trap_return:
+    ; F1 V86: hardware cleared the protected-mode segment registers on
+    ; entry. Real-mode ES/DS/FS/GS are in the extended IRET frame, not in
+    ; these four selector saves. Do not load real-mode values as selectors.
+    test dword [esp + 64], 0x20000
+    jnz .v86
     ; Includes first task activation. Kernel IRQ returns have no user tail;
     ; the C hook checks CS before touching it. No locks survive this boundary.
     push esp
@@ -82,6 +87,11 @@ trap_return:
     popa
     add esp, 8
     iret
+.v86:
+    add esp, 16
+    popa
+    add esp, 8
+    iretd
 
 section .rodata
 global isr_table
