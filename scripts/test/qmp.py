@@ -32,7 +32,10 @@ class QMP:
         self.counter+=1;identifier=self.counter
         data={'execute':name,'id':identifier}
         if arguments is not None:data['arguments']=arguments
-        self.socket.sendall(json.dumps(data).encode()+b'\n')
+        payload=json.dumps(data).encode()+b'\n'
+        if self.log.tell()+len(payload)>LOG_CAP:raise RuntimeError('QMP log exceeds cap')
+        self.log.write(payload);self.log.flush()
+        self.socket.sendall(payload)
         deadline=time.monotonic()+1
         while time.monotonic()<deadline:
             result=self.read()
@@ -40,6 +43,24 @@ class QMP:
                 if 'error' in result: raise RuntimeError('QMP command failed: '+str(result['error']))
                 return result.get('return')
         raise RuntimeError('QMP response deadline')
+
+    def input_events(self,events):
+        """QAPI InputEvent, qcode keys and PS/2 relative motion only."""
+        if not isinstance(events,list) or not 1<=len(events)<=64:
+            raise ValueError('input batch must contain 1..64 events')
+        for event in events:
+            kind=event.get('type');data=event.get('data',{})
+            if kind=='key':
+                key=data.get('key',{})
+                valid=(type(data.get('down')) is bool and key.get('type')=='qcode'
+                       and isinstance(key.get('data'),str) and key['data'].isascii())
+            elif kind=='rel':
+                valid=data.get('axis') in ('x','y') and type(data.get('value')) is int and abs(data['value'])<=32767
+            elif kind=='btn':
+                valid=data.get('button') in ('left','middle','right') and type(data.get('down')) is bool
+            else:valid=False
+            if not valid:raise ValueError('invalid input-send-event batch')
+        return self.command('input-send-event',{'events':events})
 
     def close(self): self.socket.close()
 

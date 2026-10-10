@@ -1,0 +1,537 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "prerequisites": [
+    "f0-smoke",
+    "f0-core",
+    "f0-panic",
+    "f0-runner"
+  ],
+  "cases": [
+    {
+      "id": "ata",
+      "probe": "ata",
+      "profile": "qemu-t23",
+      "selector": "f1:ata run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata"
+            },
+            "combine": true,
+            "fields": {
+              "identity_match": {
+                "eq": 1
+              },
+              "capacity_match": {
+                "eq": 1
+              },
+              "invalid_commands": {
+                "eq": 0
+              },
+              "sector_bytes": {
+                "eq": 512
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "digests": [
+        {
+          "kind": "sector",
+          "source": "backing",
+          "lba": 0,
+          "where": {
+            "event": "DATA",
+            "lba": "0"
+          }
+        },
+        {
+          "kind": "sector",
+          "source": "backing",
+          "lba": 2048,
+          "where": {
+            "event": "DATA",
+            "lba": "2048"
+          }
+        }
+      ]
+    },
+    {
+      "id": "partition",
+      "probe": "partition",
+      "profile": "qemu-t23",
+      "selector": "f1:partition run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "partition"
+            },
+            "combine": true,
+            "fields": {
+              "out_of_device_io": {
+                "eq": 0
+              },
+              "walk_bounded": {
+                "eq": 1
+              },
+              "partition_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "primary"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "extended"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bad-signature"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycle"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "overflow"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "out-of-range"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "overlap"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "protective-gpt"
+            },
+            "exact_count": 1,
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "ata-fault",
+      "probe": "ata-fault",
+      "profile": "qemu-t23",
+      "selector": "f1:ata-fault run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
+              "subcase": "err"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
+              "subcase": "df"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
+              "subcase": "stuck-bsy"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
+              "subcase": "stuck-drq"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
+              "subcase": "missing-device"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
+              "subcase": "identify"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
+              "subcase": "flush"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault-summary"
+            },
+            "combine": true,
+            "fields": {
+              "real_commands": {
+                "eq": 0
+              },
+              "survivor_ticks": {
+                "ge": 100
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "ata-fault-blkdebug",
+      "probe": "ata",
+      "profile": "qemu-t23",
+      "selector": "f1:ata run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault-blkdebug"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "quarantine_retained": {
+                "eq": 1
+              },
+              "lba": {
+                "eq": 1048575
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "ge": 0
+              },
+              "timing_domain": "icount"
+            }
+          }
+        ]
+      },
+      "fault": {
+        "layer": "host-block-backend",
+        "event": "read_aio",
+        "sector": 1048575,
+        "errno": 5
+      }
+    }
+  ]
+}
