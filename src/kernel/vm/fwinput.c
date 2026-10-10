@@ -15,10 +15,13 @@
 #include <ciuki/sync.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/fwinput.h>
+#include <ciuki/timing.h>
 
 static struct fwinput_decoder decoder;
 static struct fwinput_backend_state backend;
 static bool started;
+static bool keyboard_ready;
+static uint64_t service_reflections;
 
 void fwinput_decoder_loss(struct fwinput_decoder *d, unsigned lost)
 {
@@ -205,36 +208,62 @@ static void observe_input(uint8_t status, uint8_t byte, bool keyboard_irq)
 
 static void service_input(void)
 {
-    /* Bounded drain: BIOS buffer is 16 words on SeaBIOS. Every status and
-     * consume is a separate bounded V86 call; AH=10 requires nonempty BDA. */
-    if (backend.keyboard) {
-        for (unsigned n = 0; n < 16; n++) {
-            struct biosvm_regs r = {.eax = 0x1100, .interrupt = 0x16};
+    uint64_t reflected = biosvm_input_reflections();
+    bool keyboard = backend.keyboard && biosvm_keyboard_pending();
+    bool mouse = backend.mouse && biosvm_mouse_pending();
+    if (!keyboard && !mouse && reflected == service_reflections) return;
+    service_reflections = reflected; /* preserve IRQs arriving during a drain */
+    uint64_t start = ktime_cycles(), tick = deadline_after_ms(0);
+    unsigned produced = 0;
+    /* The mapped BDA prevents an empty status call. Preserve a successful
+     * AH=11 across steps if that single firmware call consumed the budget.
+     * Firmware itself retains its 100ms deadline; it cannot be preempted by
+     * this cooperative 1ms budget. Never start another call after expiry. */
+    while (keyboard && produced < 16 && decoder.count < 16) {
+        if (ktime_elapsed_us(start, 1000) || deadline_after_ms(0) - tick >= 1) break;
+        struct biosvm_regs r = {.eax = 0x1100, .interrupt = 0x16};
+        if (!keyboard_ready) {
             uint64_t makes = decoder.stats.makes;
-            if (biosvm_call(&r, 100))
-                break;
+            if (biosvm_call(&r, 100)) break;
             if (r.flags & V86_ZF) {
-                /* An IRQ may arrive after BIOS computed ZF but before its
-                 * IRET: keep any newly observed make for the next drain. */
                 if (makes == decoder.stats.makes)
                     memset(decoder.pending_makes, 0, sizeof(decoder.pending_makes));
                 break;
             }
-            r.eax = 0x1000;
-            if (biosvm_call(&r, 100))
-                break;
-            fwinput_decode_bios(&decoder, (uint16_t)r.eax, deadline_after_ms(0));
+            keyboard_ready = true;
+            if (ktime_elapsed_us(start, 1000) || deadline_after_ms(0) - tick >= 1) break;
         }
+        if (!biosvm_keyboard_pending()) { keyboard_ready = false; break; }
+        r.eax = 0x1000;
+        if (biosvm_call(&r, 100)) break;
+        keyboard_ready = false;
+        fwinput_decode_bios(&decoder, (uint16_t)r.eax, deadline_after_ms(0));
+        produced++;
+        keyboard = biosvm_keyboard_pending();
     }
-    if (backend.mouse) {
-        uint8_t packets[BIOSVM_MOUSE_CAP][3];
+    /* One packet can publish five events. Leave later packets in the callback
+     * ring rather than overflowing or splitting a packet at the step limit. */
+    while (mouse && produced <= 11 && decoder.count <= 11) {
+        if (ktime_elapsed_us(start, 1000) || deadline_after_ms(0) - tick >= 1) break;
+        uint8_t packet[1][3];
         unsigned lost = 0;
-        unsigned n = biosvm_mouse_packets(packets, BIOSVM_MOUSE_CAP, &lost);
-        if (lost)
-            fwinput_decoder_loss(&decoder, lost);
-        for (unsigned i = 0; i < n; i++)
-            for (unsigned j = 0; j < 3; j++)
-                fwinput_decode_mouse(&decoder, packets[i][j], deadline_after_ms(0));
+        unsigned n = biosvm_mouse_packets(packet, 1, &lost);
+        if (lost) fwinput_decoder_loss(&decoder, lost);
+        if (!n) break;
+        for (unsigned j = 0; j < 3; j++)
+            fwinput_decode_mouse(&decoder, packet[0][j], deadline_after_ms(0));
+        produced += 5;
+        mouse = biosvm_mouse_pending();
+    }
+    if (!biosvm_keyboard_pending() && !keyboard_ready)
+        memset(decoder.pending_makes, 0, sizeof(decoder.pending_makes));
+    uint64_t us = g_cpu_tsc && g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms :
+                                           (deadline_after_ms(0) - tick) * 1000;
+    if (us > decoder.stats.max_service_us) decoder.stats.max_service_us = us;
+    if (us > 1000) {
+        decoder.stats.service_budget_violations++;
+        klog("[fwinput] budget exceeded site=service us=%llu pending=%u violations=%llu",
+             us, decoder.count, decoder.stats.service_budget_violations);
     }
 }
 
@@ -277,6 +306,8 @@ int fwinput_init(void)
         return rc;
     }
     started = true;
+    keyboard_ready = false;
+    service_reflections = biosvm_input_reflections();
     backend.keyboard = true;
     backend.key_releases = true;
     biosvm_set_input_observer(observe_input);
@@ -308,6 +339,12 @@ int fwinput_init(void)
          disabled ? -V86_EIO : 0, rc, !disabled, backend.mouse && !disabled, disabled,
          decoder.stats.mouse_functions, deadline_after_ms(0) - (end - 500));
     return disabled ? -V86_EIO : 0;
+}
+
+bool fwinput_pending(void)
+{
+    return decoder.count || decoder.resync_pending ||
+           (!backend.disabled && biosvm_backend_state() == BIOSVM_DISABLED_BACKEND);
 }
 
 unsigned fwinput_poll(struct fwinput_event *out, unsigned max)

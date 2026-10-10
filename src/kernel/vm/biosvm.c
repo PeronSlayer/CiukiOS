@@ -38,6 +38,19 @@ static struct biosvm_mapping mappings[BIOSVM_MAP_COUNT];
 static struct { int handle; gen_t generation; } leases[4];
 static unsigned lease_count;
 static uint16_t mouse_lost;
+static struct kwait *input_wait;
+static uint64_t input_reflections;
+
+static int reflect_input_irq(struct v86_frame *f)
+{
+    int rc = v86_irq_deliver(&firmware, f);
+    if (rc > 0 && !synthetic &&
+        ((firmware.pic[0].isr & 2) || (firmware.pic[1].isr & 0x10))) {
+        input_reflections++;
+        if (input_wait) kwait_wake_all(input_wait);
+    }
+    return rc;
+}
 
 static int init_error(const char *step, int error)
 {
@@ -173,7 +186,7 @@ void biosvm_trap(struct trap_frame *tf)
             v86_abort(&firmware, f, rc);
             break;
         }
-        rc = v86_irq_deliver(&firmware, f);
+        rc = reflect_input_irq(f);
         if (rc < 0 || firmware.state != V86_HALTED)
             break;
         kwait_wait_until(&wake, vm_woken, 0, firmware.deadline);
@@ -378,7 +391,7 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
         rc = v86_reflect(&firmware, &frame, regs->interrupt);
     } else {
         capture_pending();
-        rc = v86_irq_deliver(&firmware, &frame);
+        rc = reflect_input_irq(&frame);
         if (!rc) {
             firmware.state = V86_DONE;
             return 0;
@@ -439,6 +452,7 @@ static void worker_main(void *arg)
         input_irq |= firmware.stats.reflected_irqs != reflected;
         if (!quarantined && !synthetic && input_service && (input_irq || deadline_passed(poll))) {
             input_service();
+            if (input_wait) kwait_wake_all(input_wait);
             poll = deadline_after_ms(10);
         }
         if (deadline_passed(poll))
@@ -595,6 +609,33 @@ int biosvm_set_rtc_cache(const uint8_t values[128])
 }
 
 void biosvm_set_input_service(void (*service)(void)) { input_service = service; }
+
+void biosvm_set_input_wait(struct kwait *wait) { input_wait = wait; }
+
+uint64_t biosvm_input_reflections(void)
+{
+    uint32_t f = irq_save();
+    uint64_t count = input_reflections;
+    irq_restore(f);
+    return count;
+}
+
+bool biosvm_keyboard_pending(void)
+{
+    if (!initialized || quarantined || firmware.state == V86_DISABLED) return false;
+    /* Same borrowed physical BDA page as run_vm, with volatile loads because
+     * the firmware producer writes it outside the C abstract machine. */
+    volatile uint16_t *head = P2V(0x41A), *tail = P2V(0x41C);
+    return *head != *tail;
+}
+
+bool biosvm_mouse_pending(void)
+{
+    if (!initialized || quarantined || firmware.state == V86_DISABLED) return false;
+    volatile struct biosvm_mouse_ring *r = P2V(BIOSVM_SCRATCH + BIOSVM_MOUSE_RING);
+    return r->head != r->tail || r->lost != mouse_lost ||
+           r->head >= BIOSVM_MOUSE_CAP || r->tail >= BIOSVM_MOUSE_CAP;
+}
 
 void biosvm_set_input_observer(void (*observer)(uint8_t status, uint8_t byte, bool keyboard_irq))
 {

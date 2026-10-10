@@ -11,30 +11,56 @@
 #include <ciuki/input.h>
 #include <ciuki/fwinput.h>
 #include <ciuki/biosvm.h>
+#include <ciuki/timing.h>
 
 static struct task *adapter;
 static gen_t generation;
-static uint64_t loss_seen;
+static uint64_t loss_seen, reflected_seen, poll_deadline;
+static uint64_t budget_violations;
+static struct kwait available;
 
 gen_t fwinput_adapter_generation(void) { return generation; }
 
 unsigned fwinput_adapter_step(void)
 {
     if (!generation || !(read_eflags() & 0x200) || !g_current) return 0;
-    struct fwinput_event events[16];
-    unsigned n = fwinput_poll(events, ARRAY_SIZE(events));
+    reflected_seen = biosvm_input_reflections();
+    if (!fwinput_pending()) return 0;
+    uint64_t start = ktime_cycles(), tick = deadline_after_ms(0);
     struct fwinput_stats stats;
     fwinput_stats(&stats);
     if (stats.loss > loss_seen) input_firmware_loss(stats.loss - loss_seen);
     loss_seen = stats.loss;
-    for (unsigned i = 0; i < n; i++) {
+    unsigned n = 0;
+    while (n < 16 && !ktime_elapsed_us(start, 1000) && deadline_after_ms(0) - tick < 1) {
+        struct fwinput_event e;
+        if (!fwinput_poll(&e, 1)) break;
         /* f1-07's synthetic Pause position precedes the public F2 contract. */
-        if (events[i].type == FWINPUT_KEY && events[i].code == 0x145)
-            events[i].code = INPUT_KEY_PAUSE;
-        input_firmware_event(&events[i], generation);
+        if (e.type == FWINPUT_KEY && e.code == 0x145) e.code = INPUT_KEY_PAUSE;
+        input_firmware_event(&e, generation);
+        n++;
     }
+    fwinput_stats(&stats);
+    if (stats.loss > loss_seen) input_firmware_loss(stats.loss - loss_seen);
+    loss_seen = stats.loss;
     if (biosvm_backend_state() == BIOSVM_DISABLED_BACKEND) input_firmware_disable(generation);
+    uint64_t us = g_cpu_tsc && g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms :
+                                           (deadline_after_ms(0) - tick) * 1000;
+    if (us > 1000) {
+        budget_violations++;
+        klog("[fwinput-adapter] budget exceeded site=queue us=%llu pending=%u violations=%llu",
+             us, fwinput_pending(), budget_violations);
+    }
     return n;
+}
+
+static bool adapter_ready(void *arg)
+{
+    (void)arg;
+    /* A reflection bypasses the poll deadline. Backlog alone waits for the
+     * next period, giving lower priorities a dispatch between bounded steps. */
+    return biosvm_input_reflections() != reflected_seen ||
+           (deadline_passed(poll_deadline) && fwinput_pending());
 }
 
 static void adapter_main(void *arg)
@@ -42,7 +68,8 @@ static void adapter_main(void *arg)
     (void)arg;
     for (;;) {
         fwinput_adapter_step();
-        task_sleep_ms(1);             /* bounded batch, host timer stays live */
+        poll_deadline = deadline_after_ms(10);
+        kwait_wait_until(&available, adapter_ready, 0, poll_deadline);
     }
 }
 
@@ -59,7 +86,7 @@ int fwinput_adapter_init(void)
         return adapter_error("input_policy", -ENOSYS);
     if (biosvm_backend_state() == BIOSVM_DISABLED_BACKEND) return adapter_error("disabled", -V86_EIO);
     if (adapter) return 0;
-    struct task *t = task_create_kernel("firmware-queue", adapter_main, 0, P_DEVICE);
+    struct task *t = task_create_kernel("firmware-queue", adapter_main, 0, P_INTERACTIVE);
     if (!t) return adapter_error("worker_create", -ENOMEM);
     int err = fwinput_init();
     const char *step = "fwinput_init";
@@ -77,6 +104,9 @@ int fwinput_adapter_init(void)
         task_reap(t);
         return adapter_error(step, err);
     }
+    kwait_init(&available);
+    biosvm_set_input_wait(&available);
+    reflected_seen = biosvm_input_reflections();
     generation = next;
     adapter = t;
     task_start(t);                    /* queue and generation published first */

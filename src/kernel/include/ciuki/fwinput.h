@@ -13,6 +13,7 @@ struct fwinput_stats {
     uint64_t observed_bytes, aux_bytes, scan_bytes, makes;
     uint64_t text_matched, text_unmatched, agreement_overflow;
     uint32_t mouse_functions; /* bit AL records successful INT15/C2 subfunctions */
+    uint64_t service_budget_violations, max_service_us;
 };
 struct fwinput_backend_state {
     bool keyboard, mouse, disabled, key_releases;
@@ -39,6 +40,8 @@ void fwinput_decoder_loss(struct fwinput_decoder *d, unsigned lost);
 unsigned fwinput_decode_poll(struct fwinput_decoder *d, struct fwinput_event *out, unsigned max);
 int fwinput_init(void);
 unsigned fwinput_poll(struct fwinput_event *out, unsigned max);
+/* Decoded work or a backend-disable transition. Safe as a kwait condition. */
+bool fwinput_pending(void);
 void fwinput_stats(struct fwinput_stats *out);
 void fwinput_backend_state(struct fwinput_backend_state *out);
 #endif
