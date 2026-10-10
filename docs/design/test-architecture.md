@@ -77,3 +77,75 @@ for the runner as features are rebuilt; because of the planned architecture
 reboot (see `dev_diary/2026-10-09-02-revisione-architettura.md`), the fw_cfg
 hook and the runner should be part of foundation phase F0, so every later
 phase is tested this way from its first boot.
+
+
+### F1-28: unattended hardware sweep and reset research
+
+A hardware sweep uses one verified image, one run id and one serial capture.
+QEMU qualification suites retain one boot per declared case; sweep evidence
+is a separate hardware traversal and cannot replace missing stimuli, external
+panic observations, fixture coverage or independent disk checkers.
+
+Reset decision (researched before implementation): the production path first
+waits a bounded time for 8042 input-buffer bit 1 to clear, sends command 0xFE
+at port 0x64 and allows a short port-I/O delay. It then loads a zero-limit IDT
+and executes INT3. Intel describes failure delivering #DF as processor shutdown;
+a platform reset after shutdown is a board behaviour, not an architectural
+promise. If neither mechanism resets the board, the owner power-cycles it.
+The durable cursor has already advanced. No storage call follows the crash reset boundary or
+panic ARM. An ordinary reboot follows production write/barrier completion.
+
+Sources: [Linux v6.12 x86 reset implementation](https://github.com/torvalds/linux/blob/v6.12/arch/x86/kernel/reboot.c)
+(8042 pulse and invalid-IDT INT3 fallback),
+[Intel SDM Volume 3A, Interrupt 8 / Double Fault](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf),
+[QEMU v9.2 i8042 source](https://github.com/qemu/qemu/blob/v9.2.0/hw/input/pckbd.c)
+(command 0xFE pulses CPU-reset bit 0), and
+[QEMU invocation](https://www.qemu.org/docs/master/system/invocation.html)
+(`-no-reboot` exits instead of rebooting; `-no-shutdown` pauses on shutdown).
+The sweep-smoke runner retains -no-reboot, omits -no-shutdown, and relaunches
+only its existing overlay, with a bounded boot count. Panic is observed for
+five seconds before the runner simulates the owner's recovery power-cycle.
+
+
+Sweep captures are bounded to 4 MiB (acquisition metadata stays <=128 KiB).
+Import splits on L:CPU loader banners, including the leading UART noise seen
+in the real T23 capture; SELECT_READY is the historical fallback. It validates
+original record bytes, run identity, monotonic sequences within each boot and
+the build identity of every boot. Sequence resets are permitted only at a new
+loader banner. Failed menu boots contribute no probe evidence. It routes each
+probe to the unchanged suite-case predicates with profile physical, retaining
+missing subcases, prerequisites, per-case operator confirmations and five-second
+panic observations. Disk/screen checker requirements cannot be satisfied by
+serial alone. `--physical-capture` imports evidence without launching QEMU or
+requiring its executable. One summary retains later observations even when a
+failed prerequisite makes their qualification not_run.
+
+
+Before either reset mechanism, a bounded UART drain waits for LSR bit 6
+(TEMT). The existing serial writer waits only for THRE (bit 5), so the final
+CRLF might otherwise still be in the shift register at reset. Source:
+[Texas Instruments PC16550D SNLS378C, section 8.6.4 LSR](https://www.mouser.com/datasheet/2/405/pc16550d-443503.pdf)
+(original vendor datasheet mirrored by its distributor). A disabled serial
+sink is not accessed. Each sweep boot first emits `probe=sweep event=BEGIN`
+after driver activation, opening the existing production record guard; this
+is required even on a recovery-only boot that emits only SWEEP/SWEEP_END.
+
+
+F1-28 implementer validation (host evidence only):
+
+- `python3 scripts/build_kernel.py`: PASS, ELF link and FPU/SIMD audit.
+- `ASAN_OPTIONS=detect_leaks=0 bash scripts/test/host_kernel_tests.sh`: PASS;
+  production storage harness 44,305 checks, 253 records, max 209 bytes,
+  failures=0; BOOT.CFG post-shutdown round trip/refusal/removal and record
+  guard recovery-only scope included.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/host`:
+  189 tests, OK, 7 skips; synthetic three-boot/panic import, actual local T23
+  boundary validation, cfg provenance, bounded relaunch and reset order.
+- Full image builder requires its existing `--kernel build/f0/VMM.ELF`;
+  construction is unavailable in this worktree because
+  `build/tools/ciuki-sdk/manifest.json` is missing. No alternate image was made.
+- NASM plus the unchanged `build_image.prepare_loader` T1 check: PASS,
+  24,576 bytes / 48 sectors (limit 1,023), loader header and CRC32 valid.
+  This is loader-only evidence, not a full image/geometry/fsck T1 result.
+- No QEMU or physical sweep validation was run by the implementer. The lead
+  still owes f0-smoke, f1-safe, sweep-smoke and the T23 sweep/import evidence.

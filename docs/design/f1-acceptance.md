@@ -266,9 +266,10 @@ CIUKI_TEST v=1 run=12ab34cd seq=000003 probe=ata-fault event=DATA issued=1 bios_
 
 **[F1]** Requests remain at most 64 ASCII bytes through
 `opt/it.alcybercloud.ciukios/test`. Optional keys are unique and ordered as above;
-`platform=e500` remains validated-QEMU-only. Physical selection uses the menu
-or bounded serial selector; safe mode there comes from menu/BOOT.CFG. Preserve
-the F0 grammar unchanged. A runner `all` alias MUST expand into ordered,
+`platform=e500` remains validated-QEMU-only. Physical selection uses the menu,
+bounded serial selector or BOOT.CFG probe line; safe mode there comes from
+menu/BOOT.CFG. Preserve the existing ordinary F0 grammar; F1-28 adds the
+cfg-only sweep/cursor grammar. A runner `all` alias MUST expand into ordered,
 individual selectors across boots. The kernel ALSO accepts `f1:all` and
 `f1:core` (lead decision 2026-10-10, directive f1-03): they run every
 installed F1 probe in contract order within the F1 phase only, for
@@ -383,3 +384,65 @@ success is not Windows runtime qualification.
 | `execution-abi.md` | **F1:** kernel workers, cancellation, pinned requests, boot-time stack-protector guard and unchanged six probe syscalls; **F2:** public VFS/input/display ABI. |
 | `test-architecture.md`, `f0-acceptance.md` | **F1:** selector extension review, regressions, evidence, profiles, overlays, resources and physical collection. |
 | `foundations-transition.md` | **F1:** cross-review, migration/license audit, installer-layout qualification and Windows/release resumption evidence. |
+
+
+### F1-28 hardware sweeps
+
+Selectors can originate in menu P, validated QEMU fw_cfg or a bounded
+BOOT.CFG `probe=` line. Ordinary selectors and safe-boot-cfg retain their
+existing behaviour. See boot-memory.md for the cfg-only sweep/cursor grammar.
+A configured request boots automatically after the existing three-second
+N/S override window; it requires no typed selector. This resolves the
+f1-28 wording conflict between skipping the prompt and retaining countdown
+keys by retaining only the override window, not interactive command entry.
+
+Production table traversal, one run id, fresh boot per step:
+
+| Phase | Sweep order |
+| --- | --- |
+| F0 | boot, bootinfo, allocator, protection, isolation, preempt, localfault, syslife, fpu, panic |
+| F1 | registry, input, input-fault, framebuffer, ata, ata-fault, partition, fat-read, cache, safe, fat-write (write/reopen), mount-crash (cut/recovery), bootlog (write/reopen) |
+| F2 | elf-load, spawn-wait, mmap, threads-wait, crash-isolation, libc-smoke, fd-table, signals-fault, app-gate |
+
+F2 follows the linked production registry rather than inventing a second
+registration order. F1 keeps table order within ordinary and multi-boot groups;
+F0 panic is last. `runner` is a host probe, not a production kernel table entry.
+Each boot emits its ordinary probe records and `event=SWEEP step=<n>
+result=pass|fail|not_run`, with the probe in the existing envelope (no duplicate
+`probe` key). Final `probe=sweep event=SWEEP_END` reports durable totals over
+boot steps (10/16/9 for F0/F1/F2, 35 for all). A panic/hang without a returning
+completion remains not_run in sweep totals; its actual panic evidence can
+still pass the dedicated imported panic case. Failed steps do not stop dispatch.
+
+The cursor helper writes only the existing SYSTEM/BOOT.CFG, preserves other
+option lines, uses production FAT write/commit barriers, then restores a
+previously closed gate. It can temporarily remount that same volume/cache
+after a probe's storage shutdown, without restarting the writer or disk sink.
+Unqualified durability, hardware quarantine or corrupt mounts refuse the
+cursor: `result=not_run reason=readonly` halts without attempting reset.
+
+The mount-crash first boot arms the existing marker and resets after the first
+recorded post-ARM directory-publication write is made durable (LFN precedes
+the owning short entry; explicit production flush if cached).
+It never cleans or unmounts at the cut. The next boot uses the same volume and
+existing recovery probe. This is a bounded guest-reset cut at one boundary,
+not exhaustive cut coverage or actual loss of drive power. Independent export
+and checker evidence remains required for qualification.
+
+Open contract conflict: the safe criterion requires zero optional ATA
+activation, while every sweep boot must durably update BOOT.CFG through ATA.
+Those conditions cannot both hold for the safe step with the permitted files.
+The current sweep does not force safe mode or hide ATA activation: the
+ordinary safe probe reports the unmet condition and traversal continues.
+A diskless safe-continuation protocol needs a lead-reviewed contract amendment;
+the dedicated f1-safe suites and safe-boot-cfg are unchanged.
+
+
+Additional contract conflict: the bootlog cold-reopen predicate requires the
+whole boot-volume write count to equal zero, while F1-28 mandates a durable
+cursor write before that same probe. The sweep preserves real write counters;
+it does not subtract cursor I/O or weaken the existing QEMU/import predicates.
+Consequently the hardware cold-reopen import cannot pass that predicate until
+a reviewed contract distinguishes cursor persistence from workload writes.
+FAT write/read qualification and panic write baselines likewise must account
+for the explicit cursor writer without concealing its I/O.

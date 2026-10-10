@@ -18,6 +18,8 @@
 #include <ciuki/sync.h>
 #include <ciuki/process.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/reboot.h>
+#include <ciuki/storage.h>
 
 /* Reuse process.h's existing CIUKI_F2_PROBE layout and registration macro. */
 extern const struct ciuki_f2_probe __f2probes_start[], __f2probes_end[];
@@ -898,6 +900,133 @@ static void app_begin(const struct probe_selection *selection)
 
 static void app_end(void) { app_probe[0] = 0; }
 
+static int sweep_checkpoint(struct storage *storage, const struct sweep_cursor *c)
+{
+    char request[65], phase[4];
+    if (c->phase == 3) memcpy(phase, "all", 4);
+    else ksnprintf(phase, sizeof(phase), "f%u", c->phase);
+    ksnprintf(request, sizeof(request), "%s:sweep run=%s step=%u state=%08x",
+              phase, c->run, c->step, c->state);
+    return storage_boot_cfg(storage, request);
+}
+
+static int (*sweep_write)(struct blkdev *, uint64_t, uint32_t, const void *);
+static int sweep_cut_write(struct blkdev *dev, uint64_t lba, uint32_t count, const void *bytes)
+{
+    int e = sweep_write(dev, lba, count, bytes);
+    struct storage_volume *v = dev->ctx;
+    if (!e && v->trace) {
+        /* The first post-ARM write starts directory publication (LFN first).
+         * Stabilize that completed write through the production flush path;
+         * cut_trace records both operations. Never clean/unmount at the cut. */
+        if (dev->write_cache_state != BLKDEV_CACHE_DISABLED)
+            e = dev->flush ? dev->flush(dev) : -FS_EROFS;
+        if (!e) kernel_reboot();
+    }
+    return e;
+}
+static int sweep_crash_prepare(struct storage *storage, unsigned boot)
+{
+    struct storage_volume *v = storage_volume(storage, 2);
+    if (!v) return -FS_EROFS;
+    if (boot) return v->fat.dirty_recovered ? storage_enable_write(storage, 2) : 0;
+    int e = storage_enable_write(storage, 2);
+    static struct vfs_table table;
+    if (!e) e = vfs_table_init(&storage->vfs, &table, 2);
+    if (e) return e;
+    int handle = vfs_open(&table, "C:/F109CUT.ARM", VFS_WRITE | VFS_CREATE, VFS_DENY_NONE, 0);
+    if (handle < 0) e = handle;
+    else {
+        e = vfs_commit(&table, handle);
+        int closed = vfs_close(&table, handle); if (!e) e = closed;
+    }
+    vfs_table_destroy(&table);
+    if (!e) {
+        sweep_write = v->io.write;
+        v->io.write = sweep_cut_write;
+    }
+    return e;
+}
+
+static __attribute__((noreturn)) void sweep_stop(const struct sweep_step *step, unsigned n, int e)
+{
+    rec_emit(step->name, "SWEEP", "step=%u result=not_run reason=%s error=%d",
+             n, e == -FS_EROFS ? "readonly" : "cursor_io", e);
+    show_evidence_forever();
+}
+
+static int sweep_finish(struct storage *storage)
+{
+    /* Quiesce a last native workload before clearing its recovery cursor.
+     * The bounded helper can then remount only BOOT.CFG and leave it clean. */
+    int e = storage->stopped ? 0 : storage_sync();
+    return e ? e : storage_boot_cfg(storage, 0);
+}
+
+static __attribute__((noreturn)) void sweep_main(struct sweep_cursor cursor,
+                        const struct probe_tables *tables, const struct probe_hooks *hooks)
+{
+    /* Open the controller's evidence scope even on a recovery-only/final boot.
+     * Production output intentionally drops every pre-BEGIN record. */
+    rec_emit("sweep", "BEGIN", "phase=%u step=%u", cursor.phase, cursor.step);
+    unsigned count = sweep_count(cursor.phase, tables);
+    unsigned passed = cursor.state & 63, failed = (cursor.state >> 6) & 63;
+    unsigned not_run = (cursor.state >> 12) & 63;
+    struct sweep_step step = { .name = "sweep" };
+    if (cursor.step > count || passed + failed + not_run != cursor.step ||
+        ((cursor.state & SWEEP_PENDING) && (!cursor.step || !not_run))) {
+        rec_emit("sweep", "SWEEP", "step=%u result=not_run reason=invalid_cursor", cursor.step);
+        show_evidence_forever();
+    }
+    if (cursor.state & SWEEP_PENDING) {
+        sweep_at(cursor.phase, cursor.step - 1, tables, &step);
+        rec_emit(step.name, "SWEEP", "step=%u result=not_run reason=reset_before_completion", cursor.step - 1);
+        cursor.state &= ~SWEEP_PENDING;
+    }
+    struct storage *storage = storage_get();
+    if (cursor.step == count) {
+        int e = sweep_finish(storage);
+        if (e) sweep_stop(&step, cursor.step, e);
+        rec_emit("sweep", "SWEEP_END", "passed=%u failed=%u not_run=%u", passed, failed, not_run);
+        show_evidence_forever();
+    }
+    sweep_at(cursor.phase, cursor.step, tables, &step);
+    unsigned current = cursor.step++;
+    /* A missing completion stays NOT_RUN after a human power-cycle. Never
+     * invent a PASS for a probe whose END/PANIC was not observed here. */
+    cursor.state = passed | (failed << 6) | ((not_run + 1) << 12) | SWEEP_PENDING;
+    int e = sweep_checkpoint(storage, &cursor);
+    if (e) sweep_stop(&step, current, e);
+    bool crash = step.phase == 1 && !strncmp(step.name, "mount-crash", 12);
+    int result = crash ? sweep_crash_prepare(storage, step.boot) : 0;
+    if (!result) result = sweep_dispatch(&step, &cursor, tables, hooks);
+    if (crash && !step.boot && sweep_write) {
+        struct storage_volume *v = storage_volume(storage, 2);
+        v->io.write = sweep_write;
+    }
+    const char *outcome = result < 0 ? "not_run" : result ? "fail" : "pass";
+    if (result < 0) not_run++;
+    else if (result) failed++;
+    else passed++;
+    rec_emit(step.name, "SWEEP", "step=%u result=%s", current, outcome);
+    cursor.state = passed | (failed << 6) | (not_run << 12);
+    e = sweep_checkpoint(storage, &cursor);
+    if (e) sweep_stop(&step, current, e);
+    if (cursor.step == count) {
+        e = sweep_finish(storage);
+        if (e) sweep_stop(&step, current, e);
+        rec_emit("sweep", "SWEEP_END", "passed=%u failed=%u not_run=%u", passed, failed, not_run);
+        show_evidence_forever();
+    }
+    /* Some probes already unmounted. Fresh boots isolate each probe and keep
+     * the next cold-reopen step on the exact same physical volume. */
+    if (!storage->stopped) {
+        e = storage_sync();
+        if (e) sweep_stop(&step, current, e);
+    }
+    kernel_reboot();
+}
+
 void probes_main(void *arg)
 {
     (void)arg;
@@ -921,15 +1050,27 @@ void probes_main(void *arg)
     }
     const char *probe = selection.probe;
     rec_set_run(selection.run);
-    drivers_init();
-    klog("[selector] probe=%s platform=%s tsc_khz=%u", probe,
-         (g_boot.flags & CBI_F_INPUT_FORCED) ? "e500" : "native", (uint32_t)g_tsc_per_ms);
     const struct probe_tables tables = {
         .f0 = probes, .f0_count = ARRAY_SIZE(probes),
         .f1 = __f1probes_start, .f1_count = (unsigned)(__f1probes_end - __f1probes_start),
         .f2 = __f2probes_start, .f2_count = (unsigned)(__f2probes_end - __f2probes_start),
     };
     const struct probe_hooks hooks = { app_begin, app_end, probe_panic };
+    struct sweep_cursor cursor;
+    bool sweep = sweep_parse(g_boot.test_request, g_boot.test_request_len, &cursor);
+    if (sweep) {
+        struct sweep_step step;
+        if (sweep_at(cursor.phase, cursor.step, &tables, &step)) {
+            /* Existing probes/supervisor see their exact ordinary selector.
+             * Provenance and the durable cursor stay in the loader/cursor. */
+            g_boot.test_request_len = ksnprintf(g_boot.test_request, sizeof(g_boot.test_request),
+                                               "f%u:%s run=%s", step.phase, step.name, cursor.run);
+        }
+    }
+    drivers_init();
+    klog("[selector] probe=%s platform=%s tsc_khz=%u", probe,
+         (g_boot.flags & CBI_F_INPUT_FORCED) ? "e500" : "native", (uint32_t)g_tsc_per_ms);
+    if (sweep) sweep_main(cursor, &tables, &hooks);
     probes_dispatch(&selection, &tables, &hooks);
     show_evidence_forever();
 }

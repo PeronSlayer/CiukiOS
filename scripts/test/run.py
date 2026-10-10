@@ -230,8 +230,46 @@ class Parser(EvidenceParser):
 
 
 
+class SweepParser:
+    """Live sweep boot: strict per-probe parsing plus cursor completion events."""
+    def __init__(self, run_id, probe='sweep'):
+        self.run_id = run_id; self.records = []; self.parsers = {}; self.seq = 0
+        self.terminal = None; self.completed = False; self.not_run_subcases = []
+        self.source_cfg = False
+    def feed(self, line):
+        from physical import wire_record
+        if line.rstrip(b'\r\n') == b'L:SELECT_SOURCE=cfg': self.source_cfg = True
+        r = wire_record(line)
+        if r is None: return
+        if r['run'] != self.run_id or int(r['seq']) <= self.seq:
+            raise EvidenceError('sweep run/sequence mismatch')
+        if self.terminal: raise EvidenceError('record after terminal sweep boot')
+        self.seq = int(r['seq'])
+        if r['probe'] == 'sweep' and r['event'] == 'BEGIN': pass
+        elif r['event'] == 'SWEEP': self.completed = True
+        elif r['event'] == 'SWEEP_END': self.terminal = r
+        else:
+            parser = self.parsers.setdefault(r['probe'], Parser(self.run_id, r['probe']))
+            parser.feed(line)
+            if r['event'] == 'PANIC': self.terminal = r
+        self.records.append(r); return r
+    def check(self, expected):
+        if not self.source_cfg: raise EvidenceError('sweep boot lacks BOOT.CFG provenance')
+        if self.terminal and self.terminal['event'] == 'PANIC':
+            self.parsers['panic'].check({'terminal':'PANIC'})
+            return True
+        if not self.terminal or self.terminal['event'] != 'SWEEP_END':
+            raise EvidenceError('missing sweep end')
+        for key in ('passed', 'failed', 'not_run'):
+            if int(self.terminal[key]) != expected[key]: raise EvidenceError('unexpected sweep total: ' + key)
+        return True
+
+
 def selector(request, source='menu', validated_fw_cfg=False):
     """Runner extension without altering the frozen F0/F1 loader model."""
+    if source == 'cfg' or isinstance(request, str) and ':sweep' in request:
+        from physical import cfg_selector
+        return cfg_selector(request, source)
     server = re.search(r' server=(desktop|standin)$',request) if isinstance(request,str) else None
     if not server:return base_selector(request,source,validated_fw_cfg)
     if source != 'fw_cfg' or not validated_fw_cfg:raise ValueError('server requires validated QEMU fw_cfg')
@@ -244,6 +282,12 @@ def selector(request, source='menu', validated_fw_cfg=False):
 
 def load_suite(name):
     """Resolve runner aliases and prerequisites once, in declared order."""
+    if name == 'sweep-smoke':
+        return {'schema_version':1, 'image':'full', 'cases':[{
+            'id':'sweep-smoke', 'probe':'sweep', 'profile':'qemu-t23',
+            'selector':'f0:sweep run={run_id}', 'selector_source':'cfg',
+            'timeout':300, 'sweep':True, 'max_boots':11,
+            'expected':{'terminal':'SWEEP_END','passed':9,'failed':0,'not_run':1}}]}
     names = REGRESSION_SUITES if name == 'all' else (*REGRESSION_SUITES, *F2_SUITES) if name == 'f2-all' else (name,)
     suite = {'schema_version':1, 'image':'full', 'cases':[]}
     seen = set()
@@ -422,7 +466,7 @@ def prepare_fixtures(host,case,directory):
     return {'sha256':digest_json(manifests),'declared':case.get('fixtures',[]),'manifest':manifests}
 
 
-def boot_cfg_extent(image):
+def boot_cfg_extent(image, details=False):
     """Locate existing short-name BOOT.CFG in the canonical FAT32 volume.
     No allocation/metadata changes: patch only its existing bounded contents.
     """
@@ -454,14 +498,34 @@ def boot_cfg_extent(image):
                     if entry[0]==0:raise res.Refusal('BOOT.CFG fixture not found')
                     if entry[:11]==name and entry[11]!=15:
                         first=struct.unpack_from('<H',entry,26)[0] | struct.unpack_from('<H',entry,20)[0]<<16
-                        return first,struct.unpack_from('<I',entry,28)[0],entry[11]
+                        return first,struct.unpack_from('<I',entry,28)[0],entry[11],offset(cluster)+i
                 cluster=struct.unpack('<I',read(base+reserved*sector+cluster*4,4))[0]&0x0fffffff
             raise res.Refusal('BOOT.CFG fixture not found')
-        system,_,attr=find(root_cluster,b'SYSTEM     ')
+        system,_,attr,_=find(root_cluster,b'SYSTEM     ')
         if not attr & 16:raise res.Refusal('SYSTEM fixture is not a directory')
-        cluster,size,attr=find(system,b'BOOT    CFG')
+        cluster,size,attr,entry_offset=find(system,b'BOOT    CFG')
         if attr & 16 or not 1<=size<=127 or size>cluster_size:raise res.Refusal('invalid BOOT.CFG extent')
-        return offset(cluster),size
+        return (offset(cluster),size,entry_offset) if details else (offset(cluster),size)
+
+
+def patch_sweep_cfg(host, image, overlay, directory, request):
+    """One allocated cluster, no FAT edits or image copy; record both preimages."""
+    selector(request, 'cfg')
+    base, size, entry = boot_cfg_extent(image, details=True)
+    original = host.overlay_read(overlay, base, size)
+    if b'probe=' in original: raise res.Refusal('sweep BOOT.CFG already contains a selector')
+    after = original.rstrip(b'\r\n') + b'\nprobe=' + request.encode('ascii') + b'\n'
+    if len(after) > 127: raise res.Refusal('sweep BOOT.CFG exceeds 127 bytes')
+    manifest = []
+    for index, (offset, payload) in enumerate(((base, after), (entry+28, struct.pack('<I', len(after))))):
+        before = host.overlay_read(overlay, offset, len(payload))
+        path = directory / f'sweep-patch-{index}.bin'; path.write_bytes(payload)
+        host.overlay_write(overlay, offset, path, len(payload))
+        if host.overlay_read(overlay, offset, len(payload)) != payload:
+            raise res.Refusal('sweep BOOT.CFG patch readback mismatch')
+        manifest.append({'file':'SYSTEM/BOOT.CFG','offset':offset,'before_hex':before.hex(),
+                         'after_hex':payload.hex(),'sha256_after':hashlib.sha256(payload).hexdigest()})
+    return manifest
 
 
 def patch_overlay(host,image,overlay,directory,patches):
@@ -796,10 +860,11 @@ def teardown(host,unit,process,qmp,cgroup):
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
     request=case.get('selector',f"f0:{case['probe']} run={{run_id}}").format(run_id=run_id)
-    requested=selector(request,'fw_cfg',True)
+    source = case.get('selector_source', 'fw_cfg')
+    requested=selector(request,source,True)
     if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
     request=f"f{requested['phase']}:{requested['probe']} run={requested['run']}"
-    platform=profile.get('platform') or requested['platform']
+    platform=None if source == 'cfg' else profile.get('platform') or requested['platform']
     if platform:request+=' platform='+platform
     if requested['safe']:request+=' safe=1'
     if requested.get('server'):request+=' server='+requested['server']
@@ -819,7 +884,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         disk_format='blkdebug'
     drive='file='+('json:'+json.dumps(disk,separators=(',',':')) if case.get('fault') or case.get('crash_cut') else str(overlay))
     drive_id=',id=ciuki-cut-drive' if case.get('crash_cut') else ''
-    selector(request,'fw_cfg',True)
+    selector(request,source,True)
     devices=case.get('device_exceptions',{})
     args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
@@ -827,6 +892,9 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
           '-drive',drive.replace(',',',,')+',format='+disk_format+',if=ide,index=0,media=disk,cache='+cache+',rerror=report,werror=report'+drive_id,
           '-vga',devices.get('vga',profile['vga']),'-qmp','unix:q,server=on,wait=off',
           '-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
+    if source == 'cfg':
+        args = args[:-2]
+        if case.get('sweep'): args.remove('-no-shutdown')
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
     # reason=host-qmp-system-reset'), so warm-restart cases omit it; guest
     # resets are still caught by the RESET event count against expected_resets.
@@ -900,7 +968,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     case=json.loads(json.dumps(case))
     host=host or Host();runs=root/'build/test-runs';res.check_budget(runs)
     memory=host.preflight(runs)
-    run_id=secrets.token_hex(4);directory=runs/suite/run_id
+    run_id=case.get('_run_id') or secrets.token_hex(4)
+    directory=runs/suite/run_id
+    if case.get('sweep'): directory /= 'boot-' + str(case.get('_sweep_boot', 1))
     overlay=shared_overlay or directory/'run.qcow2';fifo=directory/'serial.fifo';gate=directory/'gate'
     unit='ciuki-test-'+run_id+'.scope';identity=git_identity(root)
     args,request=qemu_args(executable,profile,case,run_id,overlay,firmware)
@@ -929,7 +999,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     result['operator_confirmation_required'] = case.get('operator_confirmation',False)
     directory.mkdir(parents=True,exist_ok=False)
     launched=None
-    process=qmp=cgroup=None;parser=Parser(run_id,case['probe']);fd=None;dirfd=None;logs=[]
+    process=qmp=cgroup=None;parser=(SweepParser if case.get('sweep') else Parser)(run_id,case['probe']);fd=None;dirfd=None;logs=[]
     pending=b'';panic_start=None;armed_stats=None;terminal_time=None
     screen_before = directory/'desktop-before.ppm'
     screen_after = directory/'desktop-after.ppm'
@@ -941,6 +1011,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         blkdebug_config(case,overlay.parent)
         if case.get('patches'):
             result['patch_manifest']=patch_overlay(host,image,overlay,directory,case['patches'])
+        if case.get('sweep') and case.get('_sweep_boot', 1) == 1:
+            result['patch_manifest']=patch_sweep_cfg(host,image,overlay,directory,request)
         if case.get('preboot_marker'):
             if shared_overlay is not None:raise res.Refusal('crash marker is placed only before the first boot')
             result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
@@ -1018,9 +1090,16 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 # Catch ARM received in the same batch before QMP connected.
                 if any(r['event']=='ARM' for r in parser.records) and armed_stats is None:
                     armed_stats=writes(qmp.command('query-blockstats'));result['observed_blockstats_armed']=armed_stats
-            if qmp:
-                status=qmp.command('query-status')
-                if unexpected_resets(qmp.events,expected_resets) or any(e.get('event')=='SHUTDOWN' and e.get('data',{}).get('reason')=='guest-reset' for e in qmp.events):
+            if qmp and not (case.get('sweep') and process.poll() is not None):
+                try: status=qmp.command('query-status')
+                except (OSError,RuntimeError):
+                    # -no-reboot closes QMP at the reset. Only a completed
+                    # cfg-sourced step and a clean process exit permit relaunch.
+                    if not case.get('sweep') or not parser.completed or not parser.source_cfg: raise
+                    if process.wait(timeout=1) != 0: raise
+                    result['sweep_continue'] = True
+                    break
+                if unexpected_resets(qmp.events,expected_resets) or not case.get('sweep') and any(e.get('event')=='SHUTDOWN' and e.get('data',{}).get('reason')=='guest-reset' for e in qmp.events):
                     raise EvidenceError('unexpected reset')
                 result['observed_qemu_status']=status
             now=time.monotonic()
@@ -1077,7 +1156,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         final=writes(qmp.command('query-blockstats'));result['observed_blockstats_final']=final
                         if final!=armed_stats:raise EvidenceError('block I/O changed after panic arm')
                         before=result['initial_blockstats']
-                        if any(final[device][key]!=values[key] for device,values in before.items() for key in ('wr_bytes','wr_operations','flush_operations')):
+                        if not case.get('sweep') and any(final[device][key]!=values[key] for device,values in before.items() for key in ('wr_bytes','wr_operations','flush_operations')):
                             raise EvidenceError('block writes/flushes changed after CPU start')
                         result['panic_observation_seconds']=now-panic_start
                         break
@@ -1091,6 +1170,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         break
             if process.poll() is not None:
                 if pending:parser.feed(pending)
+                if case.get('sweep') and parser.completed and parser.source_cfg and process.returncode == 0:
+                    result['sweep_continue'] = True
+                    break
                 raise EvidenceError('QEMU exited before observation completed')
             if case.get('evidence_sink')=='screen' and now-launched>=case.get('screen_capture_after',10) and not (directory/'screen.ppm').exists() and qmp:
                 qmp.command('screendump',{'filename':str(directory/'screen.ppm')})
@@ -1320,6 +1402,8 @@ def check_overlay(host,overlay,directory,checks,result):
 
 
 def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img'):
+    if case.get('sweep'):
+        return run_sweep(root,suite,case,profile,image,executable,firmware,host,keep,qemu_img)
     boots=case.get('boots')
     if not boots and any(a['type']=='cut' for a in case.get('actions',[])):
         raise res.Refusal('crash cut requires a declared reboot sequence')
@@ -1384,6 +1468,37 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
     return result,directory
 
 
+def run_sweep(root, suite, case, profile, image, executable, firmware, host=None, keep=False, qemu_img='qemu-img'):
+    """Bounded relaunches, one overlay/run id; never rebuild the backing image."""
+    host = host or Host(); run_id = secrets.token_hex(4); baseline = sha(image)
+    maximum = case.get('max_boots', 11)
+    if type(maximum) is not int or not 1 <= maximum <= 40: raise res.Refusal('invalid sweep boot bound')
+    parent = root / 'build/test-runs' / suite / run_id
+    host.preflight(root / 'build/test-runs'); parent.mkdir(parents=True, exist_ok=False)
+    shared = parent / 'run.qcow2'
+    subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(shared)],
+                   check=True,stdout=subprocess.DEVNULL,timeout=10)
+    sequence = []; ended = False
+    for number in range(1, maximum + 1):
+        selected = {**case, '_run_id':run_id, '_sweep_boot':number}
+        result, directory = _run_boot(root,suite,selected,profile,image,executable,firmware,host,keep,qemu_img,
+                                      shared_overlay=shared,retain_overlay=True)
+        sequence.append(result)
+        if sha(image) != baseline:
+            result['outcome'] = 'fail'; result['reason'] = 'sweep backing image changed'; break
+        if result['outcome'] != 'pass': break
+        if any(r['event'] == 'SWEEP_END' for r in result['observed']): ended = True; break
+        if not result.get('sweep_continue') and not any(r['event'] == 'PANIC' for r in result['observed']):
+            result['outcome'] = 'fail'; result['reason'] = 'sweep boot did not request continuation'; break
+    if not ended and result['outcome'] == 'pass':
+        result['outcome'] = 'fail'; result['reason'] = 'sweep exceeded bounded boot count'
+    aggregate = {**result, 'sweep_boots':sequence, 'case':case['id'], 'run_id':run_id,
+                 'overlay_path':str(shared), 'image_sha256':baseline}
+    (directory / 'result.json').write_text(json.dumps(aggregate,indent=2)+'\n')
+    if aggregate['outcome'] == 'pass' and not keep: shared.unlink(missing_ok=True)
+    return aggregate, directory
+
+
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--physical-capture',type=Path,action='append',default=[])
@@ -1395,6 +1510,25 @@ def main(argv=None):
         if suite.get('image')!='full':raise res.Refusal('only canonical full HDD suites are supported in F0')
         with res.ExclusiveLock(res.common_lock(ROOT)):
             Host().preflight(ROOT/'build/test-runs')
+            if options.physical_capture:
+                from physical import import_sweep
+                image=(options.image or ROOT/'build/f0/ciukios.img').resolve()
+                if not image.is_file(): raise res.Refusal('canonical image missing')
+                imported = [import_sweep(capture,sha(image),suite['cases'],suite.get('physical_cases',[]))
+                            for capture in options.physical_capture]
+                summary = []
+                for index, case in enumerate(suite['cases']):
+                    matches = [items[index] for items in imported if items[index]['observed']]
+                    result = matches[0] if matches else imported[0][index]
+                    if len(matches) > 1: raise res.Refusal('duplicate physical evidence for case: ' + case['id'])
+                    summary.append(result)
+                dest=ROOT/'build/test-runs'/options.suite/'summary.json'
+                dest.parent.mkdir(parents=True,exist_ok=True)
+                complete = all(r['sweep_complete'] for r in summary)
+                dest.write_text(json.dumps({'schema_version':1,'suite':options.suite,'profile':'physical',
+                                            'sweep_complete':complete,'cases':summary},indent=2)+'\n')
+                for result in summary: print(result['outcome'].upper()+': '+result['case']+' — '+result['reason'],flush=True)
+                return 0 if complete and all(r['outcome']=='pass' for r in summary) else 1
             host_evidence=None
             if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-')):
                 started=time.monotonic()
