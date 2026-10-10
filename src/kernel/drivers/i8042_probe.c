@@ -26,6 +26,17 @@ int probe_input(void)
     int err = i8042_init();
     bool firmware = g_boot.input_policy == CBI_INPUT_FIRMWARE || (g_boot.flags & CBI_F_INPUT_FORCED);
     const char *backend = firmware ? "firmware" : "native";
+    const char *failed_step = "none";
+    if (!firmware) {
+        struct i8042_init_record record;
+        for (unsigned i = 0; i < I8042_INIT_STEPS && i8042_init_record(i, &record); i++) {
+            char line[I8042_INIT_LINE];
+            i8042_init_format(line, i, &record);
+            rec_emit("input", "DATA", "case=setup %s", line);
+            if (record.result && !strncmp(failed_step, "none", 5))
+                failed_step = i8042_init_step_name(record.step);
+        }
+    }
     if (firmware && err == -ENOSYS) err = fwinput_adapter_init();
     struct fwinput_backend_state fw = { 0 };
     if (firmware) {
@@ -33,7 +44,8 @@ int probe_input(void)
         if (!err && (!fw.keyboard || !fw.mouse || !fw.key_releases || fw.disabled)) err = -ENOSYS;
     }
     if (err) {
-        rec_emit("input", "DATA", "case=setup backend=%s error=%d", backend, err);
+        if (firmware) rec_emit("input", "DATA", "case=setup backend=%s error=%d", backend, err);
+        else rec_emit("input", "DATA", "case=setup backend=%s error=%d failed_step=%s", backend, err, failed_step);
         return input_verdict("input", false, "setup");
     }
     struct input_event event;

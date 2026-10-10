@@ -12,6 +12,28 @@
 #define I8042_EIO 5
 #define I8042_ETIMEDOUT 110
 #define I8042_EPROTO 71
+/* Bounded, retained native activation evidence. Repeated step names describe
+ * separate sequence phases; index is their chronological order. reset_* are
+ * device configuration stages, never an unqualified FF/BAT reset. */
+#define I8042_INIT_STEPS 16u
+#define I8042_INIT_LINE 192u
+enum i8042_init_step {
+    I8042_INIT_SELF_TEST, I8042_INIT_IFACE_KBD, I8042_INIT_IFACE_AUX,
+    I8042_INIT_CONFIG_READ, I8042_INIT_CONFIG_WRITE, I8042_INIT_FLUSH,
+    I8042_INIT_ENABLE, I8042_INIT_RESET_KBD, I8042_INIT_RESET_AUX,
+};
+struct i8042_init_record {
+    enum i8042_init_step step;
+    uint32_t elapsed_ms, bytes;
+    int result;
+    uint8_t command, reply, first, status_before, status_after, status_reply;
+};
+/* Read-only replay: a boot-time quarantine must never be retried by a probe.
+ * Records exist only for attempted hardware stages. No live port reads. */
+bool i8042_init_record(unsigned index, struct i8042_init_record *out);
+const char *i8042_init_step_name(enum i8042_init_step step);
+void i8042_init_format(char out[I8042_INIT_LINE], unsigned index,
+                      const struct i8042_init_record *record);
 struct i8042_stats {
     uint64_t reads, writes, commands, resends, timeouts, stalled, drained;
     uint32_t last_elapsed_ms;
