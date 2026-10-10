@@ -8,6 +8,13 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/storage.h>
 #include <ciuki/probe.h>
+#ifdef APP_GATE_KERNEL_STACK_TEST
+#include <pthread.h>
+#include <sys/auxv.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <ucontext.h>
+#endif
 
 struct ciuki_boot_info g_boot;
 volatile uint64_t g_ticks;
@@ -25,18 +32,14 @@ static uint32_t server_ticks;
 
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
-    char line[1024];
-    int n = snprintf(line,sizeof(line),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s",++seq,probe,event);
+    char line[256];
+    int n = ksnprintf(line,sizeof(line),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s",++seq,probe,event);
     if (fmt) {
         line[n++] = ' ';
-        va_list ap; va_start(ap,fmt); n += vsnprintf(line+n,sizeof(line)-(size_t)n,fmt,ap); va_end(ap);
+        va_list ap; va_start(ap,fmt); n += kvsnprintf(line+n,sizeof(line)-(size_t)n,fmt,ap); va_end(ap);
     }
     if (n>240) { fprintf(stderr,"oversize record: %d %s\n",n,line); exit(2); }
     puts(line);
-}
-int ksnprintf(char *dst, size_t capacity, const char *fmt, ...)
-{
-    va_list ap; va_start(ap,fmt); int n=vsnprintf(dst,capacity,fmt,ap); va_end(ap); return n;
 }
 struct process *proc_supervisor(void) { return &ps[0]; }
 struct process *proc_find(uint32_t pid)
@@ -157,9 +160,11 @@ void task_sleep_ms(uint32_t ms)
         if (run_number==1) {
             /* Nonzero call-3 report offset must not shift console offsets. */
             if (!supervisor_report(&app_task,"case=lua-host-fixture",20)) abort();
-            if (mode==7) { struct task foreign={0}; if (supervisor_output(&foreign,1,"assertion failed!",17)) abort(); }
+            if (mode==7) { static struct task foreign; if (supervisor_output(&foreign,1,"assertion failed!",17)) abort(); }
             output(1,"Starting Tests\n");
-            if (mode==3) { char padding[2600]; memset(padding,'x',sizeof(padding)-1); padding[sizeof(padding)-1]=0;
+            /* Fake application output has no place on the controller's
+             * stack: the guest obtains it from the application's memory. */
+            if (mode==3) { static char padding[2600]; memset(padding,'x',sizeof(padding)-1); padding[sizeof(padding)-1]=0;
                 output(1,padding); output(1,"assertion failed!"); output(1,padding); }
             if (mode!=2) output(1,"total time: 2.00s (wall time: 3s)\nfinal OK !!!\n");
             if (mode==4) output(1,"final OK\n");
@@ -181,22 +186,20 @@ void task_sleep_ms(uint32_t ms)
         if (mode==8 && run_number==1) proc_stop(server,1,0);
     }
 }
-int main(int argc, char **argv)
+static int gate_test_run(void)
 {
-    if (argc!=3) return 2;
-    directory=argv[1]; mode=(unsigned)strtoul(argv[2],0,10);
     if (mode==16) {
         rec_emit("app-gate","BEGIN",0);
         struct gate_memory peak={UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX};
         gate_memory_record("lua-supplement",UINT32_MAX,&peak);
         struct proc_ledger p; struct desktop_ledger d; struct gate_resources r;
         memset(&p,255,sizeof(p)); memset(&d,255,sizeof(d)); memset(&r,255,sizeof(r));
-        char ledger[512];
+        static char ledger[512];
         if (gate_ledger_format(ledger,sizeof(ledger),&p,&d,&r)>=sizeof(ledger)) abort();
         gate_metadata("resource_ledgers","json",ledger);
         ps[0].pid=UINT32_MAX; app_thread.process=&ps[0]; app_thread.tid=UINT32_MAX;
         supervisor_observe("app-gate",UINT32_MAX);
-        char text[3073]; memset(text,'x',sizeof(text)-1); text[sizeof(text)-1]=0;
+        static char text[3073]; memset(text,'x',sizeof(text)-1); text[sizeof(text)-1]=0;
         output(1,text);
         if (!supervisor_report(&app_task,text,240)) abort();
         supervisor_observe_end(); rec_emit("app-gate","END","status=PASS");
@@ -207,4 +210,85 @@ int main(int argc, char **argv)
     (void)probe_f2_app_gate();
     if (running || ps[1].pid || ps[2].pid || ps[3].pid) { fputs("controller leaked processes\n",stderr); return 3; }
     return 0;
+}
+
+#ifdef APP_GATE_KERNEL_STACK_TEST
+/* Linux rejects pthread_attr_setstacksize(8192): PTHREAD_STACK_MIN is at
+ * least 16384. Use a minimum-sized pthread for bootstrap/TLS, then execute
+ * the actual probe (including metadata and both fake Lua runs) in that
+ * thread on an exact KSTACK_SIZE mapping with inaccessible pages around it.
+ * This binary is separate from the ASan harness: instrumentation and libc
+ * thread startup are not part of the kernel's 8 KiB stack budget.
+ * https://man7.org/linux/man-pages/man3/pthread_attr_setstacksize.3.html
+ * https://sourceware.org/glibc/manual/latest/html_node/System-V-contexts.html */
+static ucontext_t stack_caller, stack_probe;
+static uint8_t *stack_mapping;
+static size_t stack_guard;
+static int stack_result;
+
+/* Negative control: touch every frame, so the compiler cannot optimize away
+ * the allocation or jump over the guard in one large subtraction. */
+static __attribute__((noinline)) unsigned gate_stack_overflow(unsigned depth)
+{
+    volatile uint8_t bytes[512];
+    for (unsigned i=0;i<sizeof(bytes);i++) bytes[i]=(uint8_t)depth;
+    unsigned value=depth ? gate_stack_overflow(depth-1) : 0;
+    return value+bytes[depth % sizeof(bytes)];
+}
+static void gate_stack_entry(void)
+{
+    uint8_t marker;
+    uintptr_t address=(uintptr_t)&marker, bottom=(uintptr_t)stack_mapping+stack_guard;
+    if (address < bottom || address >= bottom+KSTACK_SIZE) abort();
+    if (mode==20) { (void)gate_stack_overflow(32); abort(); }
+    stack_result=gate_test_run();
+}
+static void *gate_stack_thread(void *unused)
+{
+    (void)unused;
+    if (getcontext(&stack_probe)) abort();
+    stack_probe.uc_stack.ss_sp=stack_mapping+stack_guard;
+    stack_probe.uc_stack.ss_size=KSTACK_SIZE;
+    stack_probe.uc_stack.ss_flags=0;
+    stack_probe.uc_link=&stack_caller;
+    makecontext(&stack_probe,gate_stack_entry,0);
+    if (swapcontext(&stack_caller,&stack_probe)) abort();
+    return 0;
+}
+static int gate_test_bounded(void)
+{
+    /* Overflow controls must not leave a core dump in the worktree. */
+    const struct rlimit no_core={0,0};
+    if (setrlimit(RLIMIT_CORE,&no_core)) abort();
+    unsigned long page=getauxval(AT_PAGESZ);
+    if (!page || KSTACK_SIZE % (size_t)page) abort();
+    stack_guard=(size_t)page;
+    size_t bytes=KSTACK_SIZE+2*stack_guard;
+    stack_mapping=mmap(0,bytes,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    if (stack_mapping==MAP_FAILED || mprotect(stack_mapping+stack_guard,KSTACK_SIZE,PROT_READ|PROT_WRITE)) abort();
+    memset(stack_mapping+stack_guard,0xa5,KSTACK_SIZE);
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) || pthread_attr_setguardsize(&attr,stack_guard)) abort();
+    int err=pthread_attr_setstacksize(&attr,KSTACK_SIZE);
+    if (err && (err!=EINVAL || pthread_attr_setstacksize(&attr,PTHREAD_STACK_MIN))) abort();
+    pthread_t thread;
+    if (pthread_create(&thread,&attr,gate_stack_thread,0) || pthread_attr_destroy(&attr) ||
+        pthread_join(thread,0)) abort();
+    size_t untouched=0;
+    while (untouched<KSTACK_SIZE && stack_mapping[stack_guard+untouched]==0xa5) untouched++;
+    fprintf(stderr,"app-gate stack: usable=%u guard=%zu high_water=%zu\n",KSTACK_SIZE,stack_guard,KSTACK_SIZE-untouched);
+    if (munmap(stack_mapping,bytes)) abort();
+    return stack_result;
+}
+#endif
+
+int main(int argc, char **argv)
+{
+    if (argc!=3) return 2;
+    directory=argv[1]; mode=(unsigned)strtoul(argv[2],0,10);
+#ifdef APP_GATE_KERNEL_STACK_TEST
+    return gate_test_bounded();
+#else
+    return gate_test_run();
+#endif
 }

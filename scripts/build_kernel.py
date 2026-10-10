@@ -23,6 +23,13 @@ SRC = ROOT / "src" / "kernel"
 OUT = ROOT / "build" / "f0"
 OBJ = OUT / "obj"
 
+# No individual kernel frame may exceed half an 8 KiB task stack. The app
+# controller and supervisor get a stricter 1 KiB bound, leaving room for
+# the existing storage frames, formatters and interrupt frames.
+# Clang measures optimized frames, including inlined callees:
+# https://clang.llvm.org/docs/DiagnosticsReference.html#wframe-larger-than
+KERNEL_FRAME_LIMIT = 4096
+APP_GATE_FRAME_LIMIT = 1024
 CFLAGS = [
     "--target=i686-unknown-elf", "-march=pentiumpro", "-ffreestanding", "-fno-pic",
     "-fno-pie", "-fno-builtin", "-nostdlib", "-mno-sse", "-mno-sse2", "-mno-mmx",
@@ -30,10 +37,17 @@ CFLAGS = [
     "-fstack-protector-strong", "-mstack-protector-guard=global",
     "-mstack-alignment=4", "-std=c17", "-O2", "-g",
     "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter",
+    f"-Wframe-larger-than={KERNEL_FRAME_LIMIT}",
 ]
 # Only these routines may contain FPU/SIMD instructions.
 FPU_ALLOWED = {"fpu_fxsave", "fpu_fxrstor", "fpu_fnsave", "fpu_frstor", "fpu_reset_state", "trap_dispatch"}
 FPU_ALLOWED_MNEMONICS = {"fxsave", "fxrstor", "fnsave", "frstor", "fninit", "ldmxcsr", "xorps", "fnclex"}
+
+
+def frame_flags(source: Path) -> list[str]:
+    if source in (SRC / "probes" / "f2_probes_app.c", SRC / "proc" / "supervisor.c"):
+        return [f"-Wframe-larger-than={APP_GATE_FRAME_LIMIT}"]
+    return []
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -176,7 +190,7 @@ def main() -> int:
                     list((SRC / "drivers").glob("*.c")) + list((SRC / "fs").glob("*.c")) +
                     list((SRC / "proc").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
-        run(["clang", *CFLAGS, f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
+        run(["clang", *CFLAGS, *frame_flags(c), f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
              f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',
              f'-DCIUKI_SIGNAL_PAYLOAD_BIN="{signal_payload}"',
              f'-DCIUKI_DESKTOP_PAYLOAD_BIN="{desktop_payload}"',

@@ -14,6 +14,10 @@
 #define GATE_PROVENANCE "/system/tests/app-gate.meta"
 #define GATE_BUDGET_MS 870000u /* leave boot/cleanup room inside the 900 s boot */
 
+/* The controller runs once per boot on one 8 KiB task stack. Its large
+ * scratch buffers are static and distinct: provenance parsing calls the
+ * payload digester while the provenance read buffer is still live. Small
+ * format/chunk buffers stay on the stack; evidence and bounds are unchanged. */
 static const char *const gate_cases[] = { "file-roundtrip", "allocation", "time-utc", "console" };
 static const char *const gate_fields[] = {
     "sdk_manifest_sha256", "newlib_source_sha256", "newlib_patch_hashes",
@@ -74,7 +78,8 @@ static int gate_digest(const char *path, char hex[65])
     int err = ops->open(proc_supervisor()->cwd,path,&file);
     if (err) return err;
     struct sha256_ctx ctx; sha256_init(&ctx);
-    uint8_t bytes[512], digest[32];
+    static uint8_t bytes[512];
+    uint8_t digest[32];
     for (uint32_t off = 0; !err && off < file.bytes;) {
         uint32_t n = file.bytes - off; if (n > sizeof(bytes)) n = sizeof(bytes);
         err = file.read(file.cookie,off,bytes,n);
@@ -128,7 +133,8 @@ static bool gate_provenance(void)
     }
     bool ok = file.bytes && file.bytes <= 65536;
     uint32_t next[6] = {0}, total[6] = {0}, payloads = 0;
-    uint8_t bytes[512]; char line[192]; unsigned used = 0;
+    static uint8_t bytes[512];
+    char line[192]; unsigned used = 0;
     for (uint32_t off = 0; ok && off < file.bytes;) {
         unsigned n = file.bytes - off; if (n > sizeof(bytes)) n = sizeof(bytes);
         if (file.read(file.cookie,off,bytes,n)) { ok = false; break; }
@@ -184,7 +190,7 @@ static bool gate_capture_text(unsigned stream, char *text, unsigned capacity)
 }
 static bool gate_supplement(uint32_t pid, int status)
 {
-    char out[SUPERVISOR_CAPTURE_BYTES+1], err[SUPERVISOR_CAPTURE_BYTES+1];
+    static char out[SUPERVISOR_CAPTURE_BYTES+1], err[SUPERVISOR_CAPTURE_BYTES+1];
     bool valid = gate_capture_text(1,out,sizeof(out)) && gate_capture_text(2,err,sizeof(err));
     static const char *const details[] = {
         "bytes=65536 rewritten=4096 fnv1a32=f6671c1c rename=1 remove=1",
@@ -382,7 +388,7 @@ int probe_f2_app_gate(void)
              (int)resources_after.waiters-(int)resources_before.waiters);
     rec_emit(GATE_NAME,"DATA","group=resources cache_nodes_before=%u cache_nodes_after=%u cache_accounted=%u",
              resources_before.files.nodes,resources_after.files.nodes,resources_before.files.nodes == resources_after.files.nodes);
-    char ledgers[1024];
+    static char ledgers[1024];
     unsigned used = (unsigned)ksnprintf(ledgers,sizeof(ledgers),"{\"baseline\":");
     used += gate_ledger_format(ledgers+used,sizeof(ledgers)-used,&baseline,&objects_before,&resources_before);
     used += (unsigned)ksnprintf(ledgers+used,sizeof(ledgers)-used,",\"final\":");

@@ -196,7 +196,9 @@ const struct supervisor_capture *supervisor_captured(unsigned stream)
 void supervisor_observe_end(void)
 {
     if (!observed_probe[0]) return;
-    uint8_t tail[SUPERVISOR_CAPTURE_BYTES];
+    /* One controller owns the observer; finalization cannot be re-entered.
+     * Keep the bounded tail off its 8 KiB kernel stack, like captures[]. */
+    static uint8_t tail[SUPERVISOR_CAPTURE_BYTES];
     for (unsigned i = 0; i < 2; i++) {
         const struct supervisor_capture *c = &captures[i];
         const char *stream = i ? "stderr" : "stdout";

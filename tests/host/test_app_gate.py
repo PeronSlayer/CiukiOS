@@ -5,6 +5,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import runpy
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,8 +43,20 @@ class AppGateTests(unittest.TestCase):
         cls.binary = cls.work / "probe"
         subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                         "-fsanitize=address,undefined", "-I", str(ROOT / "src/kernel/include"),
-                        str(harness), str(ROOT / "src/kernel/lib/sha256.c"), "-o", str(cls.binary)],
+                        str(harness), str(ROOT / "src/kernel/lib/sha256.c"),
+                        str(ROOT / "src/kernel/lib/fmt.c"), "-o", str(cls.binary)],
                        check=True, env=cls.env, capture_output=True, text=True)
+        cls.stack_binary = cls.work / "probe-kernel-stack"
+        # Resolve host libc symbols before entering the bounded stack: the
+        # dynamic linker's vector-register save frame is not kernel work.
+        subprocess.run(["clang", "-std=c17", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
+                        "-fno-omit-frame-pointer", "-D_GNU_SOURCE", "-DAPP_GATE_KERNEL_STACK_TEST", "-pthread",
+                        "-Wl,-z,now",
+                        "-I", str(ROOT / "src/kernel/include"), str(harness),
+                        str(ROOT / "src/kernel/lib/sha256.c"), str(ROOT / "src/kernel/lib/fmt.c"),
+                        "-o", str(cls.stack_binary)],
+                       check=True, env=cls.env, capture_output=True, text=True)
+        cls.kernel_build = runpy.run_path(str(ROOT / "scripts/build_kernel.py"))
         spec = importlib.util.spec_from_file_location("app_gate_image", ROOT / "scripts/build_image.py")
         cls.image = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.image)
         cls.suite = json.loads((ROOT / "tests/suites/f2-app.json").read_text())
@@ -79,6 +93,48 @@ class AppGateTests(unittest.TestCase):
             self.assertLessEqual(len(line), 240)
             parser.feed(line.encode("ascii"))
         return parser
+
+    def test_probe_on_guarded_kernel_size_stack(self):
+        # The bounded binary uses production C without ASan stack inflation;
+        # the normal harness retains ASan/UBSan for every controller case.
+        for mode in (0, 3, 12, 16):
+            with self.subTest(mode=mode):
+                result = subprocess.run([str(self.stack_binary), str(self.work), str(mode)],
+                                        capture_output=True, text=True, env=self.env, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertRegex(result.stderr, r"^app-gate stack: usable=8192 guard=\d+ high_water=\d+\n$")
+                high_water = int(result.stderr.split("high_water=")[1])
+                self.assertGreater(high_water, 0)
+                self.assertLess(high_water, 8192)
+                parser = self.parse(result.stdout.splitlines())
+                self.assertEqual(parser.outcome, "fail" if mode == 3 else "pass")
+                if mode == 0:
+                    self.assertTrue(parser.check(self.expected))
+                    launches = [r["run_case"] for r in parser.records if r.get("case") == "launch"]
+                    self.assertEqual(launches, ["lua-basic", "lua-supplement"])
+
+    def test_bounded_stack_overflow_hits_guard(self):
+        result = subprocess.run([str(self.stack_binary), str(self.work), "20"],
+                                capture_output=True, text=True, env=self.env, timeout=20)
+        self.assertEqual(result.returncode, -signal.SIGSEGV, result.stderr)
+
+    def test_kernel_frame_guard_rejects_large_frames(self):
+        build = self.kernel_build
+        for source, limit in ((build["SRC"] / "probes/f2_probes_app.c", build["APP_GATE_FRAME_LIMIT"]),
+                              (build["SRC"] / "proc/supervisor.c", build["APP_GATE_FRAME_LIMIT"]),
+                              (build["SRC"] / "core/output.c", build["KERNEL_FRAME_LIMIT"])):
+            with self.subTest(source=source):
+                fixture = self.work / "large-frame.c"
+                fixture.write_text(f"unsigned large_frame(unsigned index) {{\n"
+                                   f"  volatile unsigned char bytes[{limit + 512}];\n"
+                                   "  for (unsigned i=0; i<sizeof(bytes); i++) bytes[i]=(unsigned char)i;\n"
+                                   "  return bytes[index % sizeof(bytes)];\n}\n")
+                result = subprocess.run(["clang", *build["CFLAGS"], *build["frame_flags"](source),
+                                         "-c", str(fixture), "-o", str(self.work / "large-frame.o")],
+                                        capture_output=True, text=True, env=self.env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"exceeds limit ({limit})", result.stderr)
+                self.assertIn("-Werror,-Wframe-larger-than", result.stderr)
 
     def test_production_records_satisfy_all_three_profiles(self):
         parser = self.parse(self.output())
