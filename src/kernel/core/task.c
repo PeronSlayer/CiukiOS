@@ -7,6 +7,7 @@
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
 #include <ciuki/sync.h>
+#include <ciuki/biosvm.h>
 
 extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
 extern void task_first_entry(void);
@@ -230,8 +231,10 @@ void schedule(void)
     }
     next->state = T_RUNNING;
     g_current = next;
-    write_cr3(next->user ? next->as.pd_phys : vmm_kernel_pd());
-    tss_set_kernel_stack((uint32_t)next->kstack + KSTACK_SIZE);
+    /* F1 V86 worker: preserve its private directory and live C continuation.
+     * Both hooks return the unmodified F0 values for all other tasks. */
+    write_cr3(biosvm_task_cr3(next, next->user ? next->as.pd_phys : vmm_kernel_pd()));
+    tss_set_kernel_stack(biosvm_task_esp0(next, (uint32_t)next->kstack + KSTACK_SIZE));
     fpu_task_switch(next);
     crit_end();                 /* a switch suspends the caller's critical section */
     switch_context(&prev->saved_esp, next->saved_esp);

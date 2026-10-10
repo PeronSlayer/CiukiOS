@@ -7,6 +7,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
+#include <ciuki/biosvm.h>
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 
@@ -75,6 +76,18 @@ static bool try_expected(struct trap_frame *tf)
 
 void trap_dispatch(struct trap_frame *tf)
 {
+    /* F1: VM has CPL3 regardless of the low bits in real-mode CS.
+     * Dispatch/EOI physical IRQs exactly once before firmware reflection.
+     * Non-V86 frames retain the original F0 path below. */
+    if (tf->eflags & V86_VM) {
+        if (tf->vector >= 0x20 && tf->vector < 0x30) {
+            crit_begin();
+            handle_irq(tf);
+            crit_end();
+        }
+        biosvm_trap(tf);
+        return;
+    }
     bool from_user = (tf->cs & 3) == 3;
 
     if (tf->vector >= 0x20 && tf->vector < 0x30) {
