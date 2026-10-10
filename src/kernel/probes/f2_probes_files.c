@@ -278,7 +278,10 @@ static bool kernel_cases(struct process *p)
             pass &= observed("readonly", -EROFS, file_open(p, "/mnt/d/f2-denied.bin", O_CREAT | O_WRONLY, 0666));
         else { rec_emit("fd-table", "ERROR", "case=readonly status=not_run reason=missing_readonly_volume"); pass = false; }
     }
-    else { rec_emit("fd-table", "ERROR", "case=exdev status=not_run reason=missing_second_volume"); pass = false; }
+    else {
+        rec_emit("fd-table", "DATA", "case=exdev status=not_run reason=second_volume_absent");
+        rec_emit("fd-table", "DATA", "case=readonly status=not_run reason=second_volume_absent");
+    }
     int dir = file_open(p, "/tmp/F2Dest", O_DIRECTORY, 0);
     if (dir < 0) pass = false;
     else {

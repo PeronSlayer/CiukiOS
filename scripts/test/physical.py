@@ -111,6 +111,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
         build = re.search(rb'Ciuki VMM F0 build ([A-Za-z0-9_.+-]+) - CiukiOS', boot)
         records = []
         fat_read_not_run = False
+        fd_table_not_run = []
         for line in boot.splitlines(keepends=True):
             if panic and line.strip(): raise EvidenceError('output after terminal panic')
             r = wire_record(line)
@@ -138,6 +139,14 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
                     raise EvidenceError('invalid fat-read fixtures_absent terminal')
                 p.records.append(r); p.terminal = r; p.outcome = 'not_run'
                 continue
+            if (r['probe'] == 'fd-table' and r['event'] == 'DATA'
+                    and r.get('case') in ('exdev', 'readonly')
+                    and r.get('status') == 'not_run'
+                    and r.get('reason') == 'second_volume_absent'):
+                if any(item['subcase'] == r['case'] for item in fd_table_not_run):
+                    raise EvidenceError('duplicate fd-table absent-volume subcase')
+                fd_table_not_run.append({'subcase': r['case'], 'reason': r['reason']})
+                continue
             p.feed(line); panic = r['event'] == 'PANIC'
         if not records: continue # failed menu attempts in the real T23 capture
         if sweep and b'L:SELECT_SOURCE=cfg' not in boot.splitlines():
@@ -147,6 +156,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
         elif not any(r.get('build_id') == metadata['build_id'] for r in records):
             raise EvidenceError('physical boot does not identify verified build')
         for probe, parser in parsers.items():
+            if probe == 'fd-table': parser.physical_not_run_subcases = fd_table_not_run
             groups.setdefault(probe, []).append((number, parser))
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (meta, log)}
     results = []; blocked = None
@@ -174,7 +184,17 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
                     try:
                         if parser.outcome == 'not_run':
                             raise EvidenceNotRun(getattr(parser, 'not_run_reason', 'probe marked NOT_RUN'))
-                        parser.check(part.get('expected', expected))
+                        part_expected = part.get('expected', expected)
+                        absent_subcases = getattr(parser, 'physical_not_run_subcases', []) if probe == 'fd-table' else []
+                        if absent_subcases:
+                            if {item['subcase'] for item in absent_subcases} != {'exdev', 'readonly'}:
+                                raise EvidenceError('fd-table needs both absent-volume subcases')
+                            part_expected = dict(part_expected)
+                            part_expected['predicates'] = [p for p in part_expected.get('predicates', [])
+                                                           if p.get('where', {}).get('operation') not in ('exdev', 'readonly')]
+                        parser.check(part_expected)
+                        if absent_subcases:
+                            result['not_run_subcases'] = absent_subcases
                         if parser.terminal and parser.terminal['event'] == 'PANIC':
                             observation = metadata.get('panic_observations', {}).get(str(number + 1), metadata)
                             if observation.get('external_halt_seconds', 0) < 5 or observation.get('resumed', True):
