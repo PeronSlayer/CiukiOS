@@ -81,20 +81,80 @@ Do not edit step/state counters by hand. Completion removes only the probe line.
 Read-only cursor refusal leaves evidence on screen and does not reset.
 
 For the `input` and real-desktop `crash-isolation` steps, stay at the machine
-and watch for `[operator] press A, move the pointer, click (60 s)` on screen
-and serial. The first event must arrive within 60 seconds. For `input`, then
-complete the normal 120-second stimulus: 100 unshifted A press/release cycles,
-100 pointer moves and ten left-button press/release cycles. The probe retains
-its existing count/digest/motion checks; being present alone does not pass it.
-For the desktop interaction, press and release A, move the pointer and click
-and release the left button within its normal 15-second window; observe that
-the desktop redraws. With no first event, only `stimulus` or `interaction` is
+and watch for the `[operator]` prompt on screen and serial. The first event
+must arrive within 60 seconds. For `input` (f1-34, `criteria=operator`): press
+and release A at least ten times, move the pointer, click and release the
+left button at least once, then release everything and pause for one second;
+the probe stops after the thresholds and one quiet second, or at its
+120-second deadline. Loss, duplicates, stuck keys and the input lease are
+still checked; typematic repeats from a held key are recorded, not failures;
+being present alone does not pass it. For the desktop interaction, press and
+release A, move the pointer and click and release the left button within its
+normal 15-second window; observe that the desktop redraws. With no first event, only `stimulus` or `interaction` is
 `status=not_run reason=operator_absent`; setup/lease, completed isolation cycles
 and cleanup keep their verdicts. The sweep counts the incomplete step as
 not_run and continues. Physical import preserves this reason and marks
 `operator_confirmation_required: true`; a case confirmation cannot turn an
 absent stimulus into a pass. Record real operator observations in
 `case_confirmations` and keep the existing independent screen/disk evidence.
+
+### Operator safe-mode boot after a sweep
+
+The sweep's `safe` step normally boots with `safe=0`: its durable cursor needs
+volume writes. It preserves its observations but records the required subcase,
+END and SWEEP as not_run with `reason=safe_mode_not_selected`. It does not
+qualify `safe-menu-t23` or `safe-menu-e500`, and the importer does not treat
+this absent mode as a failed prerequisite for later cases.
+
+After SWEEP_END, the on-disk `probe=` line has been removed; keep the disk and
+the same image. Start a **separate** capture with a fresh eight-hex-digit run id
+before powering on. In the three-second `SELECT_READY` window, press **S**
+(upper- or lowercase, laptop keyboard or COM1). The current loader immediately
+boots safe mode and cancels any configured probe request. This boots the safe
+scaffold without rewriting the disk, but it runs no `safe` probe and has no
+test run identity. It therefore cannot qualify the physical menu case.
+
+There is currently **no supported key sequence** that combines safe mode and
+a hardware probe selector on that unchanged disk. S then P does not work:
+`ciukldr/menu.inc:boot_menu` `.safe` jumps directly to `.done`; P cannot be read
+afterward. P alone accepts `f1:safe run=12345678` followed by Enter within its
+30-second entry deadline, but does not set the safe flag. Appending ` safe=1`
+is rejected on hardware: `selector_validate` admits that suffix only when
+`selector_fw=1`, and the kernel's `selector.c` also requires validated QEMU
+flags. `.cancel_cfg` clears the request, not the safe flag, and
+`selector_accept` preserves an already-set safe flag. The loader order in
+`ciukldr.asm` is config_read → boot_menu → video_select → elf_load; there is
+no second menu or disk write in this path. These are repository control-flow
+facts; [SeaBIOS 1.16.3 INT16 source](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c)
+confirms AH=01 polls and AH=00 consumes a keyboard character, while
+[QEMU fw_cfg documentation](https://www.qemu.org/docs/master/specs/fw_cfg.html)
+describes the separate virtual-machine selector transport. Neither supplies
+a second menu on hardware.
+
+**Open loader change for the lead (not implemented by f1-36):** after S sets
+the safe flag, return to the existing bounded menu poll instead of `.done`.
+The smallest change is that branch alone, allowing P during the remainder of
+the original three-second window; restarting the three-second deadline would
+give the operator a full entry window. Expiry still boots safe mode. With that
+change reviewed and qualified, the intended sequence is **S, P,
+`f1:safe run=<fresh-id>`, Enter**, with no suffix. Observe `[safe] Console
+ready.` and the input/console evidence, then retain the original serial bytes
+in that run's own capture directory as `f0.log`. Its `acquisition.json` must
+contain the verified image/build identity, `selector: "f1:safe run=<fresh-id>"`,
+`selector_source: "menu"`, `operator_confirmed: true`, and
+`case_confirmations: {"safe-menu-t23": true}` (or the E500 id), confirming the
+actual operator observation. Qualification requires END PASS, `safe_mode=1`,
+`source=menu`, zero optional activations and mounts, and working console/input;
+an operator confirmation cannot replace those records. A synthetic acquisition
+can exercise the importer now, but establishes no physical qualification.
+
+The scoped importer can evaluate the declared physical case by passing it in
+the `cases` argument of `physical.import_sweep`, together with the suite's
+`physical_cases`. The current `run.py --physical-capture` summary enumerates
+only the suite's QEMU `cases`; the lead must route/retain the separate physical
+menu case there before the command-line procedure can qualify it. Do not merge
+the operator boot into the sweep acquisition or relabel a QEMU safe case as
+menu evidence.
 
 Place the serial bytes as `f0.log` beside `acquisition.json` in the capture
 folder (copy `serial.log` byte for byte; keep CRLF and UART noise). The JSON
@@ -119,7 +179,9 @@ verified, never inferred from the importer's current checkout.
 
 | Optional or conditional key | Value |
 | --- | --- |
-| `selector_source` | Multi-boot import defaults to `"cfg"`, single-probe import to `"menu"`. A sweep requires `"cfg"` and each recorded boot must retain `L:SELECT_SOURCE=cfg`. |
+| `selector_source` | Multi-boot import defaults to `"cfg"`, single-probe import to `"menu"`. A sweep requires `"cfg"`; damaged boot provenance follows the continuity rule below. |
+| `devices` | Optional object declaring the physical configuration, e.g. `{"vga":"none"}`. Every case `device_exceptions` key/value must match explicitly; an absent declaration does not prove an absent device. |
+| `machine_variants` | Optional object declaring matching case `fault` or `disk_cache` configuration. Values must match exactly, including all fields of a fault object. Never copy QEMU settings into acquisition metadata without physical evidence. |
 | `selectors` | Nonempty array of explicitly approved requests for historical mixed-run captures; replaces `selector`. |
 | `panic_observations` | Required to qualify each intentional panic: object keyed by the one-based boot number in the complete capture, e.g. `{"10":{"external_halt_seconds":10,"resumed":false}}`. Halt duration must be at least 5 seconds; `resumed:false` means no spontaneous execution resumed before the power-cycle. |
 | `external_halt_seconds`, `resumed` | Legacy single-panic observation, or sweep fallback when no per-boot entry exists. |
@@ -162,8 +224,37 @@ the loss count is at least the number of unusable records; no missing identity
 or sequence is invented. Such boots remain unqualified; duplicate/decreasing
 sequences and identifiable wrong identities refuse
 the acquisition. The anonymous host fixtures retain original controller,
-startup and console lines; unrelated diagnostic lines are omitted, and the
-historical fixture keeps only boots 1, 10 and 33.
+startup and console lines; the earlier fixtures omit unrelated diagnostic
+lines, and the historical fixture keeps only boots 1, 10 and 33. The local
+`77777777` fixture retains all 35 boots byte for byte; its ignored `f0.log`
+is not published, and the real-capture tests skip when the log is absent.
+
+An intact `L:SELECT_SOURCE=cfg` retains the existing provenance rule. A damaged
+value such as `fg`, or a damaged marker such as `L:ELECT_SOURCE=cfg`, qualifies
+only when the immediately previous verified sweep boot has the same run id
+and phase and the intact `probe=sweep event=BEGIN step=<n>` advances by exactly
+one. A repeated step qualifies only for the same two-boot probe (`fat-write`,
+`mount-crash`, `bootlog`) after its prior reboot/cut ARM. A completely missing
+line additionally requires a damaged controller record or a sequence gap
+starting at 1. Import retains `provenance: "damaged"`, the raw line and its
+hex bytes (null if absent), and `provenance_inferred_from: "sweep continuity"`
+in `boot_evidence`. Without continuity, that boot's results remain
+`not_run reason=provenance_damaged`. An intact alternate source (`menu`,
+`fw_cfg`, `none`), or a clean boot missing provenance, refuses the acquisition.
+Record loss still prevents qualification even when provenance is inferred.
+
+Cases requiring an undeclared or different physical device/machine variant
+are listed separately by `device_exceptions_not_applicable` and
+`not_run reason=device_exception_not_applicable:<key>=<value>` in the summary's
+case entries. For example, `video-fallback` requires `devices: {"vga":"none"}`;
+a T23 with an LFB does not satisfy its QEMU text-mode predicates. Matching
+acquisition declarations enable the unchanged predicates; they do not supply
+missing operator, disk or screen evidence. Inapplicable variants do not block
+later cases as failed prerequisites. Sources and implementation comparison:
+[QEMU invocation](https://www.qemu.org/docs/master/system/invocation.html)
+defines the VGA/serial absence and host block settings used by run.py;
+[Python bytes.splitlines](https://docs.python.org/3/library/stdtypes.html#bytes.splitlines)
+supports retaining the original damaged loader line bytes without text repair.
 
 The command imports only and writes one profile=physical summary at
 `build/test-runs/<suite>/summary.json`. Each case retains direct
@@ -175,8 +266,8 @@ they are not a claim that suite predicates or physical qualification passed.
 Exit 0 means all cases qualify and the sweep completed, 1 means evidence was
 imported with failed/not_run cases or an incomplete sweep, and 2 means refusal.
 Missing
-fixture/disk checker/screen/operator evidence remains not_run. The safe-mode
-cursor conflict is recorded in f1-acceptance.md; a sweep is not yet a substitute
-for the dedicated safe qualification. QEMU suites remain unchanged; the lead
+fixture/disk checker/screen/operator evidence remains not_run. The normal sweep
+safe step is `not_run reason=safe_mode_not_selected`; dedicated safe menu
+qualification uses a separate acquisition as described above. QEMU suites remain unchanged; the lead
 can run `python3 scripts/test/run.py sweep-smoke` to traverse F0 on one bounded,
 reused overlay under -no-reboot and recover its final panic.

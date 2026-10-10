@@ -10,6 +10,11 @@
 #include <ciuki/fwinput.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/probe.h>
+#include <ciuki/abi.h>
+
+/* Retained by the controller when it replaces the cfg sweep cursor with
+ * this step's ordinary selector (the same provenance used by operator waits). */
+extern bool probes_operator_mode;
 
 static bool safe_option(const char *text, unsigned length)
 {
@@ -81,6 +86,13 @@ int probe_safe(void)
              state.firmware ? "firmware-input" : "i8042", input.generation, !ok,
              (g_boot.flags & CBI_F_SMBIOS_QEMU) ? "icount" : "hardware");
     rec_emit("safe", "READY", "console=%u input=%u optional_activations=%u", console, input_ok, state.optional_activations);
+    if (probes_operator_mode && !(g_boot.flags & CBI_F_SAFE_MODE) && !fw_cfg && !config && !menu) {
+        /* A normal cursor boot cannot test the safe contract. Keep every
+         * observation above, including console/input and activation errors. */
+        rec_emit("safe", "DATA", "subcase=required status=not_run reason=safe_mode_not_selected");
+        rec_emit("safe", "END", "status=NOT_RUN reason=safe_mode_not_selected");
+        return -ECANCELED;
+    }
     rec_emit("safe", "END", "status=%s reason=%s", ok ? "PASS" : "FAIL", ok ? "required_devices" : "safe_contract");
     return ok ? 0 : 1;
 }

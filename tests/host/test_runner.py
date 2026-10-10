@@ -1464,6 +1464,48 @@ class F1RecordTests(unittest.TestCase):
             with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check(case['expected'])
 
 class PhysicalHistoricalImportTests(unittest.TestCase):
+    def test_video_fallback_physical_mapping_requires_declared_absent_vga(self):
+        from physical import inapplicable_variants
+        case = next(c for c in runner.load_suite('f0-core')['cases'] if c['id'] == 'video-fallback')
+        self.assertEqual(case['device_exceptions'], {'vga': 'none'})
+        self.assertEqual(inapplicable_variants(case, {}), ['device_exception_not_applicable:vga=none'])
+        self.assertEqual(inapplicable_variants(case, {'devices': {'vga': 'std'}}),
+                         ['device_exception_not_applicable:vga=none'])
+        self.assertEqual(inapplicable_variants(case, {'devices': {'vga': 'none'}}), [])
+
+    @unittest.skipUnless((ROOT/'tests/host/fixtures/physical/77777777/f0.log').exists(), 'real T23 capture fixture is local only (never published)')
+    def test_cli_damaged_sweep_writes_physical_summary_without_qemu(self):
+        folder = ROOT/'build/runner-host-tests'; folder.mkdir(parents=True, exist_ok=True)
+        suite = runner.load_suite('f2-all')
+        for run_id in ('77777777', '66666666'):
+            capture = ROOT/'tests/host/fixtures/physical'/run_id
+            if not (capture/'f0.log').exists(): continue
+            with self.subTest(run_id=run_id), tempfile.TemporaryDirectory(dir=folder) as scratch:
+                root = Path(scratch); image = root/'canonical.img'; image.write_bytes(b'current canonical')
+                metadata = json.loads((capture/'acquisition.json').read_text())
+                with patch.object(runner, 'ROOT', root), patch.object(runner, 'load_suite', return_value=suite), \
+                     patch.object(runner.res, 'common_lock', return_value=root/'.runner.lock'), \
+                     patch.object(runner.Host, 'preflight'), patch.object(runner, 'run_case') as launch, \
+                     patch.object(runner.shutil, 'which', side_effect=AssertionError('QEMU discovery during import')), \
+                     patch('sys.stdout', new_callable=io.StringIO):
+                    code = runner.main(['f2-all', '--image', str(image), '--physical-capture', str(capture),
+                                        '--image-sha256', metadata['write_sha256']])
+                self.assertEqual(code, 1)  # imported, with unqualified cases
+                launch.assert_not_called()
+                summary = json.loads((root/'build/test-runs/f2-all/summary.json').read_text())
+                self.assertEqual(summary['profile'], 'physical')
+                self.assertTrue(summary['sweep_complete'])
+                self.assertEqual(len(summary['cases']), len(suite['cases']))
+                self.assertEqual(len(summary['cases'][0]['boot_evidence']), 35)
+                video = next(c for c in summary['cases'] if c['case'] == 'video-fallback')
+                self.assertEqual(video['outcome'], 'not_run')
+                self.assertEqual(video['reason'], 'device_exception_not_applicable:vga=none')
+                self.assertEqual(video['device_exceptions_not_applicable'], [video['reason']])
+                if run_id == '77777777':
+                    damaged = [b for b in summary['cases'][0]['boot_evidence'] if b['provenance'] == 'damaged']
+                    self.assertEqual([b['boot'] for b in damaged], [14, 20])
+                    self.assertTrue(all(b['provenance_inferred_from'] == 'sweep continuity' for b in damaged))
+
     @unittest.skipUnless((ROOT/'tests/host/fixtures/physical/44444444/f0.log').exists(), 'real T23 capture fixture is local only (legacy/local, never published)')
     def test_cli_override_retains_historical_identity_without_qemu(self):
         folder = ROOT/'build/runner-host-tests'; folder.mkdir(parents=True,exist_ok=True)

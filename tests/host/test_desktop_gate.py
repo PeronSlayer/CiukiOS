@@ -226,6 +226,14 @@ void klog(const char *f,...) {(void)f;}
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('five fault kinds',result.stdout)
         self.assertIn('production channel_pair/fcntl/proc_spawn',result.stdout)
+        result=subprocess.run([str(binary),'--burst'],capture_output=True,text=True,env=env,timeout=10)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('dense interaction keys=200 motion=3000 buttons=74',result.stdout)
+        print(next(line for line in result.stdout.splitlines() if line.startswith('dense interaction ')))
+        for mode,path in (('--flush-timeout','flush_timeout'),('--bad-command','command')):
+            result=subprocess.run([str(binary),mode],capture_output=True,text=True,env=env,timeout=10)
+            self.assertEqual(result.returncode,1,result.stdout+result.stderr)
+            self.assertIn(f'desktop: gate failure path={path} ',result.stderr)
         for mode in ('--normal-spawn','--capacity'):
             result=subprocess.run([str(binary),mode],capture_output=True,text=True,env=env,timeout=10)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)

@@ -340,6 +340,8 @@ summaries in result.json before deleting passing overlays; retain bounded failur
 
 ## Physical procedure and exit condition
 
+**[F1/T4, f1-34 amendment]** An answered sweep prompt selects `criteria=operator`: at least ten lowercase `a` characters (other text is counted and retained), 20 key transitions, two button transitions including press/release, and `|x| + |y| >= 50` in measured signed motion totals. Sampling ends after these thresholds and 1000 ms without events, or at the unchanged 120 s stimulus deadline; zero loss, resynchronization, duplicates and errors, released keys/buttons and retained ownership remain mandatory; typematic repeats (a make code while the key is already down) are recorded and are not a failure under `criteria=operator`, because a human holding a key produces them (lead amendment at review). ARM and counts retain the criteria and thresholds; QEMU remains `criteria=exact` with its existing totals, text digest and 50 ms quiet period. Research (2026-10-11): Linux v6.12's [PS/2 packet decoder](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/input/mouse/psmouse-base.c) reports button bits separately from relative motion; Ciuki's `input_digest_add` counts the resulting `INPUT_BTN` edges separately. These thresholds are the directive's hardware acceptance policy, not PS/2 protocol requirements; the historical sweep also recorded `repeats=13`, which the operator criteria tolerate.
+
 **[F1/T4]** Follow F0's explicitly authorized expendable-disk procedure, stable
 identity checks, canonical write/readback SHA-256 and servicing manuals. Capture
 BIOS, RAM, PCI, ATA identity, input policy and firmware dependencies for both
@@ -429,13 +431,21 @@ existing recovery probe. This is a bounded guest-reset cut at one boundary,
 not exhaustive cut coverage or actual loss of drive power. Independent export
 and checker evidence remains required for qualification.
 
-Open contract conflict: the safe criterion requires zero optional ATA
-activation, while every sweep boot must durably update BOOT.CFG through ATA.
-Those conditions cannot both hold for the safe step with the permitted files.
-The current sweep does not force safe mode or hide ATA activation: the
-ordinary safe probe reports the unmet condition and traversal continues.
-A diskless safe-continuation protocol needs a lead-reviewed contract amendment;
-the dedicated f1-safe suites and safe-boot-cfg are unchanged.
+**[F1, f1-36 amendment]** A sweep's `safe` step without the boot safe flag
+and without any safe-mode source retains its observations, then emits
+`DATA subcase=required status=not_run reason=safe_mode_not_selected` and
+`END status=NOT_RUN reason=safe_mode_not_selected`; SWEEP and durable totals
+count it as not_run. Such a boot has not tested safe mode: the cursor needs
+ATA writes, while safe qualification requires zero optional activations and
+no mounts. Physical import preserves this reason for the QEMU safe cases;
+`safe-menu-t23`/`safe-menu-e500` require a separate single-boot menu acquisition,
+their unchanged predicates and per-case operator confirmation. Ordinary/QEMU
+safe verdicts remain unchanged. Research: the [QEMU fw_cfg specification](https://www.qemu.org/docs/master/specs/fw_cfg.html)
+defines a QEMU-supplied item transport, not a hardware menu option; comparison
+with `selector.c` and `ciukldr/menu.inc` confirms that physical `safe=1` selector
+suffixes are rejected and S currently exits the menu, cancelling the request.
+The loader cannot yet combine S with P; the bounded loader change proposed in
+`build-and-run.md` remains an open point, outside f1-36 implementation scope.
 
 
 Additional contract conflict: the bootlog cold-reopen predicate requires the

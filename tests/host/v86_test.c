@@ -41,6 +41,7 @@ struct task *g_current;
 volatile uint64_t g_ticks;
 volatile bool g_need_resched;
 struct ciuki_boot_info g_boot;
+bool probes_operator_mode;
 bool g_cpu_tsc;
 uint64_t g_tsc_per_ms;
 

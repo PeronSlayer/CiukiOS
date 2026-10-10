@@ -70,7 +70,11 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         }
         if (strstr(extra,"case=victim ")) { CHECK(strstr(extra,"server=desktop") && strstr(extra,"kind=")); gate_victims++; }
         if (strstr(extra,"case=restored ")) { CHECK(strstr(extra,"equal=1 processes_equal=1")); gate_restored++; }
-        if (strstr(extra,"case=interaction ")) gate_interactions++;
+        if (strstr(extra,"case=interaction ") || !strcmp(event,"ARM")) {
+            extern bool probes_operator_mode;
+            CHECK(strstr(extra,probes_operator_mode ? "criteria=operator" : "criteria=exact"));
+            if (strstr(extra,"case=interaction ")) gate_interactions++;
+        }
     }
     strcpy(frame_probe, probe);
     const char *data = strstr(extra, "data_hex=");
@@ -920,6 +924,10 @@ uint32_t desktop_spawn_host_control(void)
     int32_t address=ua_mmap(spawn_host_server->memory,&a);
     CHECK(address==CIUKI_MMAP_BASE+CIUKI_TLS_SIZE+320*320*4);
     return (uint32_t)address;
+}
+void desktop_spawn_host_input(const struct input_event *in, struct ciuki_input_event *out)
+{
+    desktop_input_event(in, (uint32_t)in->lost_count, (uint32_t)in->value, out);
 }
 int desktop_spawn_host_pair(int32_t pair[2])
 {

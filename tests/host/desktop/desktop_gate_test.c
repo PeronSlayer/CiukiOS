@@ -4,6 +4,7 @@
 #define _DEFAULT_SOURCE 1
 #include "desktop.h"
 #include "gate.h"
+#include <ciuki/input.h>
 #include <stdbool.h>
 #include <assert.h>
 #include <errno.h>
@@ -46,11 +47,16 @@ static uint32_t client_pixels[(240*160*4+4095)/4096*1024];
 static bool handshake;
 static bool input_error, report_error;
 static bool inherit_error, spawn_error, normal_spawn;
+static bool burst, burst_started, flush_timeout, bad_command;
+static unsigned burst_at, blocked_sends, configure_attempts, interaction_reports;
+static uint64_t host_now=1000000, burst_end, last_interaction_report;
+#define BURST_EVENTS (3000+200+74)
 static FILE *client_messages, *server_messages;
 static int pair_client[64],client_pid[64],hello[64];
 void desktop_spawn_host_init(int);
 int desktop_spawn_host_output(void);
 uint32_t desktop_spawn_host_control(void);
+void desktop_spawn_host_input(const struct input_event *,struct ciuki_input_event *);
 int desktop_spawn_host_pair(int32_t [2]);
 int desktop_spawn_host_fcntl(int,int,uint32_t);
 int desktop_spawn_host_close(int);
@@ -92,6 +98,28 @@ static uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,u
     const char *published=strstr(line," victim=");assert(published);
     registered_victim=atoi(published+8);
     summary_count++;
+    if (bad_command && strstr(line,"generation=0 ")) { command(99); return 0; }
+    if (burst && interact_ready) {
+        interaction_reports++;
+        assert(interaction_reports==1 || host_now-last_interaction_report>=GATE_REPORT_NS);
+        last_interaction_report=host_now;
+        /* Match the probe: stimulus starts only after GATE_INTERACT is
+         * acknowledged and ARM can be emitted, never during its barrier. */
+        if (!burst_started) {
+            assert(!gate_keys && !gate_motion && !gate_buttons);
+            burst_started=true;
+            return 0;
+        }
+        if (gate_keys==200 && gate_motion==3000 && gate_buttons==74 && burst_at==BURST_EVENTS &&
+            host_now>=burst_end+20000000ull) {
+            assert(blocked_sends>0 && configure_attempts>=4 && interaction_reports>=2);
+            assert(host_now<burst_end+250000000ull); /* report with a blocked client */
+            printf("dense interaction keys=%u motion=%u buttons=%u reports=%u blocked_sends=%u presents=%u PASS\n",
+                gate_keys,gate_motion,gate_buttons,interaction_reports,blocked_sends,presents);
+            longjmp(done,1);
+        }
+        return 0;
+    }
     if (strstr(line,"generation=0 ")) command(GATE_SPAWN);
     else if (victim_live && !victim_dead) command(GATE_RELEASE);
     else if (victim_dead) command(GATE_REAP);
@@ -127,6 +155,13 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],co
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 {
     assert(flags==DONTWAIT && fd>=6 && fd<64);
+    if (burst && m->data[1]==DESK_CONFIGURE && configure_attempts++<4) {
+        errno=EAGAIN; blocked_sends++; return -1;
+    }
+    if (burst && burst_started && burst_at && (!burst_end || host_now<burst_end+250000000ull)) {
+        errno=blocked_sends++%2 ? EAGAIN : EINTR; return -1;
+    }
+    if (flush_timeout && m->data[1]==DESK_CONFIGURE) { errno=EAGAIN; return -1; }
     if (handshake) {
         struct ciuki_message delivered=*m; delivered.sender_pid=41;
         assert(fwrite(&delivered,sizeof(delivered),1,server_messages)==1);
@@ -150,6 +185,12 @@ int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
     }
     if(client_pid[fd]!=42) assert(client_pid[fd]==registered_victim);
     if (!hello[fd]++) desk_message(m,DESK_HELLO,4);
+    else if ((burst || flush_timeout) && client_pid[fd]==42 && hello[fd]==2) {
+        desk_message(m,DESK_CREATE_WINDOW,17);
+        desk_put32(m->data+4,240); desk_put32(m->data+8,160);
+        desk_put32(m->data+12,1); m->data[16]='T';
+        m->fd_count=1; m->fds[0]=127;
+    }
     else if (client_pid[fd]==42 && remaining) {desk_message(m,DESK_PING,8);desk_put32(m->data+4,101-remaining--);}
     else {errno=EAGAIN;return -1;}
     m->sender_pid=client_pid[fd];return 1;
@@ -159,17 +200,30 @@ int ciuki_display_info(int fd,struct ciuki_display_info *s)
 int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f)
 {assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return desktop_spawn_host_output();}
 void *ciuki_surface_map(int fd,int prot) {
-    if (handshake && fd==7) { assert(prot==PROT_READ); return client_pixels; }
+    if ((handshake && fd==7) || ((burst || flush_timeout) && fd==127)) { assert(prot==PROT_READ); return client_pixels; }
     assert(fd==5 && prot==(PROT_READ|PROT_WRITE));return output_pixels;
 }
 int ciuki_surface_info(int fd,struct ciuki_surface_info *s) {
-    assert(handshake && fd==7);
+    assert((handshake && fd==7) || ((burst || flush_timeout) && fd==127));
     *s=(struct ciuki_surface_info){sizeof(*s),240,160,240*4,CIUKI_SURFACE_XRGB8888,sizeof(client_pixels)};return 0;
 }
 int ciuki_present(int display,int surface,const struct ciuki_rect *r) {assert(display==3 && surface==5 && r);presents++;return 0;}
 int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
 {
     assert(fd==4 && capacity==CIUKI_INPUT_READ_MAX);
+    if (burst && !burst_started) { errno=EAGAIN; return -1; }
+    if (burst && burst_started) {
+        unsigned n=0;
+        while (n<capacity && burst_at<BURST_EVENTS) {
+            struct input_event in={.source=INPUT_NATIVE,.generation=23,.sequence=burst_at+1};
+            if (burst_at<3000) { in.type=INPUT_REL; in.code=INPUT_X; in.value=burst_at%2 ? -1 : 1; }
+            else if (burst_at<3200) { in.type=INPUT_KEY; in.code=INPUT_KEY_A; in.value=burst_at%2 ? 0 : 1; }
+            else { in.type=INPUT_BTN; in.code=INPUT_LEFT; in.value=burst_at%2 ? 0 : 1; }
+            desktop_spawn_host_input(&in,&events[n++]); burst_at++;
+        }
+        if (n) { if (burst_at==BURST_EVENTS) burst_end=host_now; return (int)n; }
+        errno=EAGAIN; return -1;
+    }
     if (interact_ready && !interaction_sent++) {
         events[0]=(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=0x1e,.value=1};
         events[1]=(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=0x1e,.value=0};
@@ -190,6 +244,7 @@ int fcntl(int fd,int cmd,...) {
     return result;
 }
 int close(int fd) {
+    if ((burst || flush_timeout) && fd==127) return 0;
     int result=desktop_spawn_host_close(fd);
     /* Cleanup must preserve the original setup error, even if close changes
      * errno. Native report files use stdio and bypass this guest-fd seam. */
@@ -199,9 +254,9 @@ int close(int fd) {
 }
 int munmap(void *p,size_t n) { (void)p;(void)n;return 0; }
 pid_t waitpid(pid_t pid,int *status,int flags) {assert(pid==victim_live && victim_dead && flags==WNOHANG);*status=(faults%5==2) ? SIGPIPE : SIGSEGV;desktop_spawn_host_reap(pid);victim_live=victim_dead=0;reaped++;return pid;}
-int clock_gettime(clockid_t clock,struct timespec *out) {assert(clock==CLOCK_MONOTONIC);out->tv_sec=0;out->tv_nsec=1000000;return 0;}
+int clock_gettime(clockid_t clock,struct timespec *out) {assert(clock==CLOCK_MONOTONIC);out->tv_sec=host_now/1000000000ull;out->tv_nsec=host_now%1000000000ull;return 0;}
 int nanosleep(const struct timespec *t,struct timespec *rest)
-{ (void)rest;assert(t->tv_nsec==1000000);if (running && !remaining && pongs==running*100 && !page.command) command(GATE_SNAPSHOT);return 0; }
+{ (void)rest;assert(t->tv_nsec==1000000);host_now+=1000000;assert(host_now<10000000000ull);if (running && !remaining && pongs==running*100 && !page.command && !interact_ready) command(GATE_SNAPSHOT);return 0; }
 int main(int argc,char **argv)
 {
     if (argc==4 && !strcmp(argv[1],"--handshake")) {
@@ -212,6 +267,9 @@ int main(int argc,char **argv)
     else if (argc==2 && !strcmp(argv[1],"--report-error")) report_error=true;
     else if (argc==2 && !strcmp(argv[1],"--inherit-error")) inherit_error=true;
     else if (argc==2 && !strcmp(argv[1],"--spawn-error")) spawn_error=true;
+    else if (argc==2 && !strcmp(argv[1],"--burst")) burst=true;
+    else if (argc==2 && !strcmp(argv[1],"--flush-timeout")) flush_timeout=true;
+    else if (argc==2 && !strcmp(argv[1],"--bad-command")) bad_command=true;
     else if (argc==2 && (!strcmp(argv[1],"--normal-spawn") || !strcmp(argv[1],"--capacity"))) normal_spawn=true;
     else assert(argc==1);
     desktop_spawn_host_init(!normal_spawn);
@@ -233,7 +291,7 @@ int main(int argc,char **argv)
     char *args[]={"desktop","--test=crash-isolation","--gate",NULL};
     if (!setjmp(done)) {
         int result=desktop_main(3,args);
-        if (input_error || inherit_error || spawn_error) { assert(result==1); desktop_spawn_host_finish(); return result; }
+        if (input_error || inherit_error || spawn_error || flush_timeout || bad_command) { assert(result==1); desktop_spawn_host_finish(); return result; }
         fprintf(stderr,"desktop_main returned %d errno=%d\n",result,errno);
         assert(0);
     }
