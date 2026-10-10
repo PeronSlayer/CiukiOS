@@ -299,3 +299,17 @@ declared interrupted outcome; boot 2 on the same overlay reports
 `case=crash_reboot reasons=5 lost=0 scan_corrupt=0`, `crash_refusal
 write_refusal=-30 writes=0`, `coverage cut_selected=1 cut_reboot=1`. Host
 tests: 170 OK.
+
+## Nineteenth image: `593b18b5…` (commit `e85e0be`, f2-19)
+
+Runner case `app-gate-qemu-t23` PASS: both Lua runs exit zero and the
+resource ledger attributes the growth (`identity_bytes_delta=1024`,
+`identity_nodes_delta=1`, heap pool pages, `pages_remainder=0`,
+`kernel_bytes_remainder=0`, `cache_bounded=1`). First combined `f2-all`
+batch (one runner invocation, 191 cases): 142 PASS through `f0-smoke`,
+`f0-core`, `f0-panic`, `f0-runner`, `f1-input`, `f1-storage`, `f1-safe` and
+`f1-fat32` up to `bootlog`, including every case that had failed earlier in
+the day; 4 FAIL = the three `uart-absent-*` operator-confirmation cases
+and `bootlog-read-only` (its `driver-boundary read-only` fixture
+declaration is not implemented by the runner, directive f1-25), which left
+the 45 F2 cases `not_run` by prerequisite in that invocation.
