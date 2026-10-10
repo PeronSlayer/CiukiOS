@@ -35,8 +35,7 @@ int probe_safe(void)
     bool menu = state.safe && !fw_cfg && !config;
     rec_emit("safe", "DATA", "case=option safe_mode=%u fw_cfg=%u boot_cfg=%u menu=%u menu_inferred=%u boot_flags=%08x",
              state.safe, fw_cfg, config, menu, menu, state.boot_flags);
-    bool ordered = state.initialized && state.flag_sequence < state.fb_sequence &&
-                   state.fb_sequence < state.input_sequence && state.input_sequence < state.ata_sequence;
+    bool ordered = drivers_activation_ordered();
     rec_emit("safe", "DATA", "case=activation flag_sequence=%u framebuffer_sequence=%u input_sequence=%u ata_sequence=%u flag_before_activation=%u optional_activations=%u",
              state.flag_sequence, state.fb_sequence, state.input_sequence, state.ata_sequence,
              ordered, state.optional_activations);

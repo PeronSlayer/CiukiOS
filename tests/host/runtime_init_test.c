@@ -13,8 +13,72 @@
 #include <ciuki/ata.h>
 #include <ciuki/probe.h>
 
-static unsigned failures, calls, records, consoles, optional_records;
+/* Compile the actual boot-only section of probes.c with host boundaries.
+ * The rest of that TU contains privileged instructions and unrelated probes.
+ * Generate only under build/host, and inherit the same sanitizer flags. */
+#ifndef RUNTIME_BOOT_TEST
+#include <unistd.h>
+#include <sys/wait.h>
+
+static int child_status(pid_t child)
+{
+    int status;
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status)) return 1;
+    return WEXITSTATUS(status);
+}
+
+int main(void)
+{
+    char root[1024], source[1200], include[1200], output[1200], headers[1200];
+    if (snprintf(root, sizeof(root), "%s", __FILE__) >= (int)sizeof(root)) return 1;
+    char *suffix = strstr(root, "/tests/host/runtime_init_test.c");
+    if (!suffix) return 1; /* host_kernel_tests.sh supplies the absolute path */
+    *suffix = 0;
+    snprintf(source, sizeof(source), "%s/src/kernel/probes/probes.c", root);
+    snprintf(include, sizeof(include), "%s/build/host/runtime_boot_probe.inc", root);
+    snprintf(output, sizeof(output), "%s/build/host/runtime_boot_test", root);
+    snprintf(headers, sizeof(headers), "%s/src/kernel/include", root);
+    FILE *in = fopen(source, "r"), *out = fopen(include, "w");
+    if (!in || !out) { perror("boot fixture"); return 1; }
+    char line[1024];
+    bool copying = false, boot = false, complete = false;
+    while (fgets(line, sizeof(line), in)) {
+        if (!strcmp(line, "static uint64_t installed_ram_bytes(void)\n")) copying = true;
+        if (!strcmp(line, "static int probe_boot(void)\n")) boot = true;
+        if (copying && fputs(line, out) == EOF) break;
+        if (boot && !strcmp(line, "}\n")) { complete = true; break; }
+    }
+    bool read_ok = !ferror(in);
+    fclose(in);
+    if (fclose(out) || !read_ok || !complete) return 1;
+    pid_t child = fork();
+    if (!child) {
+        execlp("clang", "clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+               "-fsanitize=address,undefined", "-DRUNTIME_BOOT_TEST", "-I", headers,
+               __FILE__, "-o", output, (char *)0);
+        _exit(1);
+    }
+    int status = child_status(child);
+    if (status) return status;
+    child = fork();
+    if (!child) { execl(output, output, (char *)0); _exit(1); }
+    return child_status(child);
+}
+#else
+static unsigned failures, calls, records, consoles, optional_records, logs;
+static unsigned sequence, frame_count, max_activation_length;
+static char frames[64][512];
+static char log_lines[4][256];
+volatile uint64_t g_ticks;
+char g_cpu_vendor[13] = "GenuineIntel";
+uint32_t g_cpu_signature = 0x000006B1u;
+#define CIUKI_BUILD_HEX8 "12345678"
+#define CIUKI_BUILD_DIRTY 1
+#define PIT_DIVISOR 1193u
+uint32_t pmm_total_usable(void) { return 32768; }
+
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
+void task_sleep_ms(uint32_t ms) { CHECK(ms == 10010); g_ticks += ms; }
 static char order[16], provenance[256];
 static uint32_t expected_flags;
 static int fb_result, input_result, bios_result, adapter_result, ata_result;
@@ -27,6 +91,7 @@ static void called(char id)
     CHECK(g_boot.flags == expected_flags && calls + 1 < sizeof(order));
     order[calls++] = id;
     order[calls] = 0;
+    g_ticks += 7;
 }
 int fbdev_init(void) { called('F'); display.present = !fb_result && !!g_boot.fb_phys; return fb_result; }
 const struct fb_device *fbdev_get(void) { return &display; }
@@ -55,6 +120,20 @@ void fwinput_backend_state(struct fwinput_backend_state *out)
     *out = (struct fwinput_backend_state){ .keyboard = true, .mouse = true, .key_releases = true };
 }
 void console_write(const char *s, size_t n) { CHECK(s && n); consoles++; }
+void klog(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    CHECK(logs < ARRAY_SIZE(log_lines));
+    if (logs < ARRAY_SIZE(log_lines)) vsnprintf(log_lines[logs], sizeof(log_lines[logs]), fmt, ap);
+    va_end(ap);
+    logs++;
+}
+void rec_set_run(const char *run8)
+{
+    CHECK(!strcmp(run8, "12ab34cd"));
+    sequence = frame_count = optional_records = 0;
+}
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[512] = { 0 };
@@ -62,11 +141,21 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     va_start(ap, fmt);
     if (fmt) vsnprintf(extra, sizeof(extra), fmt, ap);
     va_end(ap);
-    size_t length = 55 + strlen(probe) + strlen(event) + strlen(extra);
+    if (!frame_count) CHECK(!strcmp(event, "BEGIN"));
+    CHECK(frame_count < ARRAY_SIZE(frames));
+    char line[512];
+    int n = snprintf(line, sizeof(line), "CIUKI_TEST v=1 run=12ab34cd seq=%06u probe=%s event=%s%s%s",
+                     ++sequence, probe, event, *extra ? " " : "", extra);
+    CHECK(n > 0 && n < (int)sizeof(line));
+    if (frame_count < ARRAY_SIZE(frames)) strcpy(frames[frame_count++], line);
+    size_t length = (size_t)n;
     CHECK(length <= 240);
     if (length > 240) printf("oversized %s %s %s\n", probe, event, extra);
     if (strstr(extra, "case=option")) snprintf(provenance, sizeof(provenance), "%s", extra);
-    if (!strcmp(probe, "boot") && strstr(extra, "group=activation device=")) optional_records++;
+    if (!strcmp(probe, "boot") && strstr(extra, "group=activation device=")) {
+        optional_records++;
+        if (length > max_activation_length) max_activation_length = (unsigned)length;
+    }
     if (!strcmp(event, "END")) CHECK(!!strstr(extra, "status=FAIL") == fail_expected);
     records++;
 }
@@ -74,55 +163,153 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 #include "../../src/kernel/core/init.c"
 #include "../../src/kernel/probes/safe_probe.c"
 
+static int verdict(const char *probe, bool ok, const char *reason)
+{
+    if (ok) rec_emit(probe, "END", "status=PASS");
+    else rec_emit(probe, "END", "status=FAIL reason=%s", reason);
+    return ok ? 0 : 1;
+}
+#include "../../build/host/runtime_boot_probe.inc"
+
 static void reset(uint32_t flags, bool firmware, bool lfb)
 {
     state = (struct drivers_state){ 0 };
+    memset(activation_ledger, 0, sizeof(activation_ledger));
+    activation_count = 0;
+    g_ticks = 100;
+    CHECK(!drivers_activation_ordered() && !drivers_activation_get(0));
+    rec_set_run("12ab34cd");
     g_boot = (struct ciuki_boot_info){ .flags = flags, .input_policy = firmware ? CBI_INPUT_FIRMWARE : CBI_INPUT_NATIVE,
                                      .fb_phys = lfb ? 0xE0000000u : 0 };
     expected_flags = flags;
     fb_result = input_result = bios_result = adapter_result = ata_result = 0;
     disk = quarantined = fail_expected = false;
-    calls = optional_records = consoles = 0;
+    calls = optional_records = consoles = logs = 0;
     order[0] = provenance[0] = 0;
     display = (struct fb_device){ 0 };
 }
-static void verify(const char *expected, unsigned optional)
+static void verify(const char *expected, unsigned optional, const char *fb, const char *input, const char *ata, unsigned failed)
 {
+    unsigned before = records;
     drivers_init();
+    CHECK(records == before && !frame_count && !sequence); /* ordinary boot: klog only */
+    CHECK(logs == 4 && strstr(log_lines[0], "[init] flag "));
+    CHECK(strstr(log_lines[1], "[init] framebuffer ") && strstr(log_lines[2], "[init] input ") &&
+          strstr(log_lines[3], "[init] ata "));
     CHECK(!strcmp(order, expected));
     struct drivers_state s;
     drivers_snapshot(&s);
     CHECK(s.initialized && s.boot_flags == expected_flags && s.optional_activations == optional);
     CHECK(s.flag_sequence < s.fb_sequence && s.fb_sequence < s.input_sequence && s.input_sequence < s.ata_sequence);
-    CHECK(optional_records == 3);
+    CHECK(drivers_activation_count() == 3 && drivers_activation_ordered());
+    CHECK(!drivers_activation_get(3) && !drivers_activation_get(UINT32_MAX));
+    const char *devices[] = { "framebuffer", "input", "ata" };
+    const char *results[] = { fb, input, ata };
+    const int errors[] = { fb_result, input_result ? input_result : bios_result ? bios_result : adapter_result, ata_result };
+    struct activation_entry saved[3];
+    uint64_t previous = 100;
+    for (unsigned i = 0; i < ARRAY_SIZE(saved); i++) {
+        const struct activation_entry *e = drivers_activation_get(i);
+        CHECK(e && e->seq == i + 2 && !strcmp(e->device, devices[i]) && !strcmp(e->result, results[i]));
+        CHECK(e->tick >= previous && e->tick <= g_ticks && e->safe_flag_before == s.safe);
+        CHECK(e->error == errors[i] && e->reason && *e->reason);
+        saved[i] = *e;
+        previous = e->tick;
+    }
+    CHECK(!strcmp(saved[0].reason, state.fb_called ? "boot_console" : "safe_text_console"));
+    CHECK(saved[0].required == state.safe && saved[1].required);
+    CHECK(!strcmp(saved[1].reason, state.firmware ? "firmware" : "native"));
+    CHECK(!strcmp(saved[2].reason, state.safe ? "safe_mode" : "native_discovery"));
+    CHECK(saved[2].present == (disk && state.ata_called) && saved[2].quarantined == (quarantined && state.ata_called));
     unsigned n = calls, r = records;
     drivers_init();
-    CHECK(calls == n && records == r); /* failures also get only one attempt */
+    CHECK(calls == n && records == r && logs == 4 && drivers_activation_count() == 3);
+    for (unsigned i = 0; i < ARRAY_SIZE(saved); i++)
+        CHECK(!memcmp(&saved[i], drivers_activation_get(i), sizeof(saved[i])));
+    bool safe_failure = fail_expected;
+    fail_expected = false; /* boot tests timer progress even if a driver failed */
+    CHECK(!probe_boot());
+    fail_expected = safe_failure;
+    CHECK(frame_count == 12 && optional_records == 3 && sequence == frame_count);
+    CHECK(!strcmp(frames[0], "CIUKI_TEST v=1 run=12ab34cd seq=000001 probe=boot event=BEGIN"));
+    CHECK(strstr(frames[1], "group=activation_flag activation_seq=1"));
+    for (unsigned i = 0; i < ARRAY_SIZE(saved); i++) {
+        char fields[128];
+        snprintf(fields, sizeof(fields), "group=activation device=%s result=%s error=%d activation_seq=%u",
+                 devices[i], results[i], saved[i].error, saved[i].seq);
+        CHECK(strstr(frames[i + 2], fields));
+    }
+    char summary[128];
+    snprintf(summary, sizeof(summary), "group=activation_summary devices=3 failures=%u optional_activations=%u", failed, optional);
+    CHECK(strstr(frames[5], summary));
+    CHECK(strstr(frames[6], "group=boot cpuid=") && strstr(frames[7], "group=boot unexpected_resets="));
+    CHECK(strstr(frames[8], "group=video ") && strstr(frames[9], "event=READY ") &&
+          strstr(frames[10], "ready_tick=") && strstr(frames[11], "event=END status=PASS"));
+    CHECK(calls == n && logs == 4); /* replay never reactivates hardware */
 }
+static int safe_run(void)
+{
+    rec_set_run("12ab34cd");
+    int result = probe_safe();
+    CHECK(strstr(frames[0], "seq=000001 probe=safe event=BEGIN"));
+    CHECK(!optional_records);
+    for (unsigned i = 0; i < frame_count; i++) CHECK(!strstr(frames[i], "probe=boot"));
+    return result;
+}
+
 int main(void)
 {
-    reset(0, false, true); disk = true; verify("FNA", 2);
-    reset(CBI_F_TEXT_MODE, false, false); verify("FNA", 2);
-    reset(0, false, true); fb_result = -EINVAL; input_result = -5; ata_result = -5; verify("FNA", 2);
+    reset(0, false, true); disk = true; verify("FNA", 2, "ready", "ready", "ready", 0);
+    reset(CBI_F_TEXT_MODE, false, false); verify("FNA", 2, "ready", "ready", "absent", 0);
+    reset(0, false, true); fb_result = -EINVAL; input_result = -5; ata_result = -5; verify("FNA", 2, "failed", "failed", "failed", 3);
     CHECK(state.fb_error == -EINVAL && state.input_error == -5 && state.ata_error == -5);
-    reset(0, true, true); verify("FBWA", 2);
-    reset(0, true, true); bios_result = -5; verify("FBA", 2);
-    reset(CBI_F_SAFE_MODE, false, true); verify("FN", 0); CHECK(!probe_safe() && consoles == 1);
+    reset(0, false, true); quarantined = true; verify("FNA", 2, "ready", "ready", "failed", 1);
+    reset(0, false, true); disk = quarantined = true; verify("FNA", 2, "ready", "ready", "failed", 1);
+    reset(0, true, true); adapter_result = -5; verify("FBWA", 2, "ready", "failed", "absent", 1);
+    reset(0, false, true); fb_result = input_result = ata_result = INT32_MIN;
+    verify("FNA", 2, "failed", "failed", "failed", 3);
+    reset(0, true, true); verify("FBWA", 2, "ready", "ready", "absent", 0);
+    reset(0, true, true); bios_result = -5; verify("FBA", 2, "ready", "failed", "absent", 1);
+    reset(CBI_F_SAFE_MODE, false, true); verify("FN", 0, "ready", "ready", "disabled", 0); CHECK(!safe_run() && consoles == 1);
     CHECK(strstr(provenance, "menu=1 menu_inferred=1"));
     reset(CBI_F_SAFE_MODE | CBI_F_TEXT_MODE, false, false);
     memcpy(g_boot.options, "video=640x480\nsafe=1\n", sizeof("video=640x480\nsafe=1\n"));
-    verify("N", 0); CHECK(!probe_safe() && consoles == 1 && strstr(provenance, "boot_cfg=1 menu=0"));
+    verify("N", 0, "disabled", "ready", "disabled", 0); CHECK(!safe_run() && consoles == 1 && strstr(provenance, "boot_cfg=1 menu=0"));
     reset(CBI_F_SAFE_MODE | CBI_F_TEXT_MODE | CBI_F_SMBIOS_QEMU | CBI_F_TEST_REQUEST | CBI_F_INPUT_FORCED,
           true, false);
     const char *selector = "f1:safe run=12ab34cd platform=e500 safe=1";
     g_boot.test_request_len = (uint16_t)strlen(selector);
     memcpy(g_boot.test_request, selector, g_boot.test_request_len);
-    verify("BW", 0); CHECK(!probe_safe() && strstr(provenance, "fw_cfg=1"));
-    reset(CBI_F_SAFE_MODE, false, false); verify("N", 0); CHECK(!probe_safe()); /* no LFB/no storage */
+    verify("BW", 0, "disabled", "ready", "disabled", 0); CHECK(!safe_run() && strstr(provenance, "fw_cfg=1"));
+    reset(CBI_F_SAFE_MODE, false, false); verify("N", 0, "disabled", "ready", "disabled", 0); CHECK(!safe_run()); /* no LFB/no storage */
     reset(CBI_F_SAFE_MODE, false, false); input_result = -5; fail_expected = true;
-    verify("N", 0); CHECK(probe_safe() == 1);
+    verify("N", 0, "disabled", "failed", "disabled", 1); CHECK(safe_run() == 1);
     CHECK(!safe_option("nosafe=1", 8) && !safe_option("safe=10", 7) && safe_option("safe=1", 6));
+    /* A corrupt ordering/flag cannot pass the safe evidence. */
+    reset(CBI_F_SAFE_MODE, false, true); verify("FN", 0, "ready", "ready", "disabled", 0);
+    activation_ledger[1].safe_flag_before = false;
+    fail_expected = true;
+    CHECK(!drivers_activation_ordered() && safe_run() == 1);
+    activation_ledger[1].safe_flag_before = true;
+    activation_ledger[1].seq = activation_ledger[0].seq;
+    CHECK(!drivers_activation_ordered());
+    activation_ledger[1].seq = 3;
+    activation_ledger[1].tick = activation_ledger[0].tick - 1;
+    CHECK(!drivers_activation_ordered());
+    /* Even overflow is bounded: no overwrite beyond the 32-entry ledger. */
+    activation_count = ACTIVATION_LEDGER_MAX - 1;
+    logs = 0;
+    struct activation_entry tail = { .seq = 33, .device = "fixture", .result = "ready", .reason = "bound" };
+    activation_add(tail);
+    CHECK(drivers_activation_count() == ACTIVATION_LEDGER_MAX && drivers_activation_get(31)->seq == 33);
+    tail.seq = 34;
+    activation_add(tail);
+    CHECK(drivers_activation_count() == ACTIVATION_LEDGER_MAX && drivers_activation_get(31)->seq == 33 &&
+          !drivers_activation_get(ACTIVATION_LEDGER_MAX));
+    printf("activation records: max=%u bytes (limit 240); boot BEGIN/ledger/summary/existing records: PASS\n", max_activation_length);
     printf("runtime init/safe: %s (%u failures, %u records; ordering, flags, gating, fallbacks, failures)\n",
            failures ? "FAIL" : "PASS", failures, records);
     return failures ? 1 : 0;
 }
+
+#endif
