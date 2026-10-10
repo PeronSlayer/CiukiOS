@@ -30,7 +30,9 @@ int ciuki_libc_host_tests(uintptr_t *stack_pointer) {
     read_only=!strcmp(mode,"original");fail_uname=read_only||!strcmp(mode,"fail-uname");
     tcbs[0].tcb=(struct ciuki_tcb){.self=CU_PTR(&tcbs[0].tcb),.tid=1};select_tcb(0);
     static char arg[]="libc_smoke";
-    struct __attribute__((packed,aligned(4))) { uint32_t argc;char *argv[2];char *env[1];uint32_t aux[4]; } stack={1,{arg,NULL},{NULL},{AT_CIUKI_TLS,CU_PTR(&tcbs[0].tcb),AT_NULL,0}};
+    struct __attribute__((packed,aligned(4))) { uint32_t argc;char *argv[2];char *env[6];uint32_t aux[4]; } stack={1,{arg,NULL},
+        {"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",NULL},
+        {AT_CIUKI_TLS,CU_PTR(&tcbs[0].tcb),AT_NULL,0}};
     __real___ciuki_start(&stack.argc);host_exit(123);
 }
 uint32_t __wrap_ciuki_raw_probe_report(uint32_t b,uint32_t n,uint32_t d,uint32_t s,uint32_t i,uint32_t p) {
@@ -38,9 +40,12 @@ uint32_t __wrap_ciuki_raw_probe_report(uint32_t b,uint32_t n,uint32_t d,uint32_t
     for(unsigned j=0;j<n;++j)if(((char *)(uintptr_t)b)[j]<32||((char *)(uintptr_t)b)[j]>126)return -EINVAL;
     output((void *)(uintptr_t)b,n);output("\n",1);return 0;
 }
-static unsigned char heap[1024*1024] __attribute__((aligned(4096)));
+static unsigned char heap[8*1024*1024] __attribute__((aligned(4096)));
 static uint32_t heap_end;
-struct host_file { char name[128];unsigned char data[8192];unsigned size; };
+/* Only the syscall boundary is modeled. Match the production file contract:
+ * access modes, truncate, append-at-write, holes, EOF and open-unlink lifetime.
+ * No modeled /tmp path is ever passed to a Linux filesystem syscall. */
+struct host_file { char name[128];unsigned char data[65536];unsigned size,refs; };
 struct host_fd { int used,file;uint64_t position;unsigned flags,cookie; };
 static struct host_file files[8];
 static struct host_fd fds[128]={{1,-1,0,O_RDONLY,0},{1,-2,0,O_WRONLY,0},{1,-2,0,O_WRONLY,0}};
@@ -102,10 +107,13 @@ uint32_t __wrap_ciuki_syscall(uint32_t nr,uint32_t b,uint32_t c,uint32_t d,uint3
         if(!strcmp(name,"/tmp"))file=-3;
         else {
             for(int j=0;j<8;++j)if(!strcmp(files[j].name,name))file=j;
-            if(file>=0&&(c&O_EXCL))return -EEXIST;
+            if(file>=0&&(c&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL))return -EEXIST;
             if(file<0&&!(c&O_CREAT))return -ENOENT;
-            if(file<0)for(int j=0;j<8;++j)if(!files[j].name[0]) { file=j;strcpy(files[j].name,name);files[j].size=0;break; }
+            if(file<0&&strncmp(name,"/tmp/",5))return -ENOENT;
+            if(file<0)for(int j=0;j<8;++j)if(!files[j].name[0]&&!files[j].refs) { file=j;strcpy(files[j].name,name);files[j].size=0;break; }
             if(file<0)return -ENOSPC;
+            if(c&O_TRUNC)files[file].size=0;
+            files[file].refs++;
         }
         fds[fd]=(struct host_fd){1,file,0,c,0};return fd;
     }
@@ -126,8 +134,8 @@ uint32_t __wrap_ciuki_syscall(uint32_t nr,uint32_t b,uint32_t c,uint32_t d,uint3
     case CIUKI_SYS_FSTAT: {
         struct stat *st=(void *)(uintptr_t)c;memset(st,0,sizeof(*st));st->st_mode=file?S_IFREG|0666:fd->file==-3?S_IFDIR|0777:S_IFCHR|0666;st->st_blksize=4096;st->st_size=file?file->size:0;return 0;
     }
-    case CIUKI_SYS_CLOSE:fd->used=0;return 0;
-    case CIUKI_SYS_DUP: { int n=fd_slot();if(n>=0)fds[n]=*fd;return n; }
+    case CIUKI_SYS_CLOSE:if(file)file->refs--;fd->used=0;return 0;
+    case CIUKI_SYS_DUP: { int n=fd_slot();if(n>=0) { fds[n]=*fd;if(file)file->refs++; }return n; }
     case CIUKI_SYS_FSYNC:return 0;
     case CIUKI_SYS_FCNTL:return c==F_GETFL?fd->flags&~(O_CREAT|O_EXCL):0;
     case CIUKI_SYS_LSEEK64: {
@@ -137,17 +145,25 @@ uint32_t __wrap_ciuki_syscall(uint32_t nr,uint32_t b,uint32_t c,uint32_t d,uint3
         if(off<0)return -EINVAL;fd->position=off;*(int64_t *)(uintptr_t)i=off;return 0;
     }
     case CIUKI_SYS_FTRUNCATE:
-        if(!file||scalar(c,d)>8192)return -EFBIG;
+        if(!file||scalar(c,d)>sizeof(file->data))return -EFBIG;
         if(c>file->size)memset(file->data+file->size,0,c-file->size);file->size=c;return 0;
     case CIUKI_SYS_READ:case CIUKI_SYS_WRITE:case CIUKI_SYS_PREAD:case CIUKI_SYS_PWRITE: {
         int wr=nr==CIUKI_SYS_WRITE||nr==CIUKI_SYS_PWRITE,positioned=nr==CIUKI_SYS_PREAD||nr==CIUKI_SYS_PWRITE;
+        unsigned access=fd->flags&O_ACCMODE;
+        if(wr?access==O_RDONLY:access==O_WRONLY)return -EBADF;
         if(fd->file==-1)return wr?d:0;
         if(fd->file==-2) { output((void *)(uintptr_t)c,d);return d; }
         if(!file)return -EISDIR;
-        uint64_t off=positioned?(uint64_t)scalar(s,i):fd->position;if(off>8192||d>8192-off)return -EFBIG;
-        unsigned count=d;if(!wr&&off+count>file->size)count=off>=file->size?0:file->size-off;
-        if(wr) { memcpy(file->data+off,(void *)(uintptr_t)c,count);if(off+count>file->size)file->size=off+count; }
-        else memcpy((void *)(uintptr_t)c,file->data+off,count);
+        uint64_t off=positioned?(uint64_t)scalar(s,i):wr&&(fd->flags&O_APPEND)?file->size:fd->position;
+        unsigned count=d;
+        if(wr) {
+            if(off>sizeof(file->data)||d>sizeof(file->data)-off)return -EFBIG;
+            if(off>file->size)memset(file->data+file->size,0,off-file->size);
+            memcpy(file->data+off,(void *)(uintptr_t)c,count);if(off+count>file->size)file->size=off+count;
+        } else {
+            if(off>=file->size)count=0;else if(count>file->size-off)count=file->size-off;
+            if(count)memcpy((void *)(uintptr_t)c,file->data+off,count);
+        }
         if(!positioned)fd->position=off+count;return count;
     }
     case CIUKI_SYS_GETDENTS: {

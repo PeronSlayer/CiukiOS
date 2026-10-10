@@ -68,7 +68,7 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     if (!strings) { if (file.close) file.close(file.cookie); return -ENOMEM; }
     for (unsigned i = 0; argv[i] && !err; i++)
         err = proc_strings_add(strings, argv[i], (uint32_t)strlen(argv[i]) + 1, false);
-    const char *env[] = { "LC_ALL=C", "TZ=UTC0", "HOME=/home", "TMPDIR=/tmp" };
+    const char *env[] = { "LC_ALL=C", "TZ=UTC0", "HOME=/home", "TMPDIR=/tmp", "PATH=/bin" };
     for (unsigned i = 0; i < ARRAY_SIZE(env) && !err; i++)
         err = proc_strings_add(strings, env[i], (uint32_t)strlen(env[i]) + 1, true);
     /* Prepare privately; stdio/cwd can block, so proc_spawn_file's immediate
