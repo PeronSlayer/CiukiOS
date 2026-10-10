@@ -228,3 +228,18 @@ F1 cases of `f1-input` through the runner without prefix on image
 ends `NOT_RUN` by the suite's own declaration (the BIOS VM self-test has no
 record emitter) and the runner marks the later `qemu-desktop-*` cases
 prerequisite-failed (directive f1-23).
+
+## Fourteenth image: `3933d34f…` (commit `5205433`, f2-16 both rounds, f2-17 merged)
+
+Runner case `crash-isolation-normal-qemu-t23` with `server=desktop`: the
+launch handshake now completes (`case=launch … survivor=4 control=20301000
+stage=2 ticks=1059 reason=ok`, identity record with distinct PIDs and
+process groups) and 62 victim cycles run before the runner stops the case
+with `application stream identity limit exceeded`: every victim's call-3
+report is also framed as an application stream (`group=app … stream=report`)
+and the evidence parser caps distinct (pid, tid, stream) identities at 64
+(f2-16 third round). On image `d3db42dd…` (commit `0147f99`, f2-17) the
+`app-gate` probe no longer double-faults: both Lua programs run in the
+guest; the supplement passes in 128 s, the upstream run reaches `files.lua`
+after 68.7 s and fails its first assertion (`os.getenv"PATH"`, directive
+f2-18).
