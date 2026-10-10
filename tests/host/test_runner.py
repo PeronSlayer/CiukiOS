@@ -130,6 +130,49 @@ class RunnerTests(unittest.TestCase):
         case={**self.case,'selector':'f0:boot run={run_id} platform=e500'}
         self.assertEqual(runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)[1],
                          'f0:boot run=12345678 platform=e500')
+    def test_desktop_profile_arguments_and_same_backing_image(self):
+        for name,cpu,ram,vga in (('qemu-desktop-1998','pentium2',128,'cirrus'),
+                                 ('qemu-desktop-2002','athlon',512,'std')):
+            profile=runner.load(ROOT/'tests/profiles'/f'{name}.json')
+            args,request=runner.qemu_args('fixture',profile,self.case,'12345678',self.image,self.firmware)
+            with self.subTest(profile=name):
+                for option,value in (('-machine','pc-i440fx-9.2'),('-cpu',cpu),('-accel','tcg'),
+                                     ('-m',str(ram)),('-vga',vga),('-icount','shift=1,sleep=on')):
+                    self.assertEqual(args[args.index(option)+1],value)
+                self.assertEqual(profile['ide'],'PIIX');self.assertEqual(profile['input'],'i8042')
+                self.assertEqual(profile['serial_base'],0x3f8)
+                self.assertEqual(request,'f0:boot run=12345678')
+                drive=args[args.index('-drive')+1]
+                self.assertIn('file='+str(self.image)+',format=qcow2,if=ide,index=0,',drive)
+                self.assertNotIn('-kernel',args);self.assertNotIn('-usb',args)
+                self.assertNotIn('-device',args)
+
+    def test_desktop_suite_bounds_and_native_path_predicates(self):
+        core=runner.load(ROOT/'tests/suites/f0-core.json')['cases']
+        inputs=runner.load(ROOT/'tests/suites/f1-input.json')['cases']
+        safe=runner.load(ROOT/'tests/suites/f1-safe.json')['cases']
+        for profile in ('qemu-desktop-1998','qemu-desktop-2002'):
+            boots=[c for c in core if c['profile']==profile and c['probe']=='boot']
+            self.assertEqual([c['attempt'] for c in boots],list(range(1,11)))
+            self.assertEqual([c['boot_kind'] for c in boots],['cold']*5+['restart']*5)
+            probes=[c['probe'] for c in core if c['profile']==profile and c['probe']!='boot']
+            self.assertEqual(probes,[c['probe'] for c in core if c['profile']=='qemu-min128' and c['probe']!='boot'])
+            selected=[c for c in inputs if c['profile']==profile]
+            self.assertEqual([c['probe'] for c in selected],['registry','input-fault','input','framebuffer'])
+            for c in selected:
+                original=next(t for t in inputs if t['profile']=='qemu-t23' and t['probe']==c['probe'])
+                self.assertEqual(c['expected'],original['expected'])
+                self.assertEqual(c.get('actions'),original.get('actions'))
+                self.assertEqual(c['timeout'],120)
+            selected_safe=[c for c in safe if c['profile']==profile]
+            self.assertEqual(len(selected_safe),1)
+            self.assertEqual(selected_safe[0]['expected'],safe[0]['expected'])
+            self.assertEqual(selected_safe[0]['timeout'],90)
+            for c in [*boots,*selected,*selected_safe]:
+                request=selector(c['selector'].format(run_id='12345678'),'fw_cfg',True)
+                self.assertIsNone(request['platform'])
+                self.assertNotIn('device_exceptions',c)
+                self.assertNotIn('patches',c)
     def test_duplicate_selector_keys_are_refused(self):
         for suffix in (' platform=e500 platform=e500',' safe=1 safe=1',' run=12345678'):
             case={**self.case,'selector':'f0:boot run={run_id}'+suffix}
@@ -1077,6 +1120,9 @@ class F1RecordTests(unittest.TestCase):
 
     def test_actual_f1_records_and_each_predicate_violation(self):
         fixtures=self.fixtures()
+        for profile in ('qemu-desktop-1998','qemu-desktop-2002'):
+            for probe in ('registry','input-fault','input','framebuffer'):
+                fixtures[probe+'-'+profile]=fixtures['input-qemu-t23' if probe=='input' else probe]
         for name in ('f1-input','f1-storage','f1-fat32'):
             for case in runner.load(ROOT/'tests/suites'/f'{name}.json')['cases']:
                 if name=='f1-input' and case['id'] not in fixtures:continue

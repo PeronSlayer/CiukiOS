@@ -10,6 +10,55 @@ import loader_model as model
 
 
 class LoaderModelTests(unittest.TestCase):
+    def test_cpu_minimum_features_and_signatures(self):
+        for signature,expected in ((0x652,(6,5,2)), (0x623,(6,2,3)),
+                                   (0xf29,(15,2,9)), (0x000106a5,(6,26,5)),
+                                   (0x00230f12,(17,49,2))):
+            with self.subTest(signature=hex(signature)):
+                result=model.cpu_minimum(True,1,signature,1<<15)
+                self.assertEqual((result['family'],result['model'],result['stepping']),expected)
+                self.assertEqual(result['signature'],signature)
+        # No FXSR or SSE is necessary; neither compensates for absent CMOV.
+        for present,leaf,features in ((False,1,1<<15),(True,0,1<<15),
+                                     (True,1,0),(True,1,(1<<24)|(1<<25))):
+            with self.subTest(present=present,leaf=leaf,features=features):
+                with self.assertRaisesRegex(ValueError,'i686 CPU with CMOV'):
+                    model.cpu_minimum(present,leaf,0x543,features)
+
+    def test_pre_disk_firmware_minimum_and_recovery(self):
+        cpu=dict(cpuid_present=True,max_basic_leaf=1,signature=0x652,features_edx=1<<15)
+        memory=[dict(base=0x100000,length=127*1024**2,type=1)]
+        for version in (0x200,0x300):
+            result=model.boot_minimum(cpu,memory,dict(signature='VESA',version=version))
+            self.assertTrue(result['vbe_present'])
+            self.assertEqual(result['memory'],model.normalize_e820(memory))
+        for controller in (None,dict(query_ax=0x14f,signature='VESA',version=0x100)):
+            self.assertFalse(model.boot_minimum(cpu,memory,controller)['vbe_present'])
+        for controller in (dict(signature='VESA',version=0x102),dict(signature='bad',version=0x300)):
+            with self.assertRaisesRegex(ValueError,'VBE 2.0'):
+                model.boot_minimum(cpu,memory,controller)
+        for entries,options in (([],{}),(memory,{'complete':False}),(memory,{'signature':'bad'}),
+                                ([dict(base=2**64-1,length=2,type=1)],{})):
+            with self.assertRaisesRegex(ValueError,'valid BIOS E820'):
+                model.boot_minimum(cpu,entries,**options)
+        # Refusal order matches assembly: no VBE/disk work after a CPU/map failure.
+        with self.assertRaisesRegex(ValueError,'i686 CPU'):
+            model.boot_minimum(dict(cpuid_present=False),[],dict(version=0x100))
+
+    def test_production_minimum_gate_precedes_disk_and_halts(self):
+        loader=(ROOT/'src/boot/ciukldr.asm').read_text()
+        entry=loader.split('entry:',1)[1].split('; All errors',1)[0]
+        calls=['call uart_init','call cpu_minimum','call memory_collect','call vbe_minimum',
+               'call platform_collect','call fat_mount','call config_read','call elf_load']
+        self.assertEqual([entry.index(c) for c in calls],sorted(entry.index(c) for c in calls))
+        platform=(ROOT/'src/boot/ciukldr/platform.inc').read_text()
+        halt=platform.split('minimum_halt:',1)[1].split('; Optional firmware',1)[0]
+        self.assertIn('cli',halt);self.assertIn('hlt',halt)
+        self.assertNotIn('int 0x16',halt);self.assertNotIn('int 0x13',halt)
+        for message in (model.CPU_MINIMUM_ERROR,model.VBE_MINIMUM_ERROR):
+            self.assertIn(message,platform)
+        self.assertIn(model.E820_MINIMUM_ERROR,(ROOT/'src/boot/ciukldr/memory.inc').read_text())
+
     def test_menu_safe_sources_are_monotonic(self):
         config = model.boot_options('safe=1 safe=0')
         self.assertTrue(model.menu_choice('N', config['safe']))

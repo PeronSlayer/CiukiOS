@@ -5410,6 +5410,3478 @@
         ]
       },
       "device_exceptions": {}
+    },
+    {
+      "id": "qemu-desktop-1998-boot-1",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 1
+    },
+    {
+      "id": "qemu-desktop-1998-boot-2",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 2
+    },
+    {
+      "id": "qemu-desktop-1998-boot-3",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 3
+    },
+    {
+      "id": "qemu-desktop-1998-boot-4",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 4
+    },
+    {
+      "id": "qemu-desktop-1998-boot-5",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 5
+    },
+    {
+      "id": "qemu-desktop-1998-boot-6",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 6
+    },
+    {
+      "id": "qemu-desktop-1998-boot-7",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 7
+    },
+    {
+      "id": "qemu-desktop-1998-boot-8",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 8
+    },
+    {
+      "id": "qemu-desktop-1998-boot-9",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 9
+    },
+    {
+      "id": "qemu-desktop-1998-boot-10",
+      "probe": "boot",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 10
+    },
+    {
+      "id": "qemu-desktop-1998-bootinfo",
+      "probe": "bootinfo",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:bootinfo run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "totals"
+            },
+            "fields": {
+              "usable_pages": {
+                "ge": 1
+              },
+              "reserved_pages": {
+                "ge": 1
+              },
+              "free_pages": {
+                "ge": 1
+              },
+              "ledger_pages": {
+                "eq": "$usable_pages"
+              },
+              "digest": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "e820"
+            },
+            "fields": {
+              "base": {
+                "encoding": "hex",
+                "width": 16,
+                "ge": 0
+              },
+              "length": {
+                "encoding": "hex",
+                "width": 16,
+                "ge": 1
+              },
+              "type": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "normalized"
+            },
+            "fields": {
+              "base": {
+                "encoding": "hex",
+                "width": 16,
+                "ge": 0
+              },
+              "length": {
+                "encoding": "hex",
+                "width": 16,
+                "ge": 1
+              },
+              "type": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "reservation"
+            },
+            "fields": {
+              "pages": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bad_version"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bad_length"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "overflow"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed_entry"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "illegal_overlap"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-1998-allocator",
+      "probe": "allocator",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:allocator run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "allocator"
+            },
+            "fields": {
+              "baseline_free": {
+                "ge": 1
+              },
+              "exhausted_free": {
+                "eq": 0
+              },
+              "final_free": {
+                "eq": "$baseline_free"
+              },
+              "cycles": {
+                "eq": 100
+              },
+              "allocation_error": {
+                "ge": 1
+              },
+              "partial_allocations": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "reserved_violations": {
+                "eq": 0
+              },
+              "pattern_errors": {
+                "eq": 0
+              },
+              "resource_delta": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-1998-protection",
+      "probe": "protection",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:protection run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "protection"
+            },
+            "fields": {
+              "cr0": {
+                "encoding": "hex",
+                "width": 8,
+                "mask": 2147549185
+              },
+              "cr3": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 4096
+              },
+              "cr4": {
+                "encoding": "hex",
+                "width": 8,
+                "clear": 32
+              },
+              "gdt_limit": {
+                "ge": 1
+              },
+              "idt_limit": {
+                "ge": 1
+              },
+              "tr": {
+                "ge": 1
+              },
+              "tss_valid": {
+                "eq": 1
+              },
+              "kernel_user_paths": {
+                "eq": 0
+              },
+              "present_guards": {
+                "eq": 0
+              },
+              "transition_stack_errors": {
+                "eq": 0
+              },
+              "stack_canary_errors": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "readonly"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 3
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "data_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "guard"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-1998-isolation",
+      "probe": "isolation",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:isolation run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "isolation"
+            },
+            "fields": {
+              "va": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4194304
+              },
+              "pfn_a": {
+                "ge": 256
+              },
+              "pfn_b": {
+                "ne": "$pfn_a"
+              },
+              "cr3_a": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 4096
+              },
+              "cr3_b": {
+                "encoding": "hex",
+                "width": 8,
+                "ne": "$cr3_a"
+              },
+              "switches": {
+                "ge": 100
+              },
+              "sentinel_a_final": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": "$sentinel_a_initial"
+              },
+              "sentinel_b_final": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": "$sentinel_b_initial"
+              },
+              "null_present": {
+                "eq": 0
+              },
+              "shared_kernel_errors": {
+                "eq": 0
+              },
+              "recursive_errors": {
+                "eq": 0
+              },
+              "sentinel_b_initial": {
+                "encoding": "hex",
+                "width": 8,
+                "ne": "$sentinel_a_initial"
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-1998-preempt",
+      "probe": "preempt",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:preempt run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "preempt"
+            },
+            "fields": {
+              "switches": {
+                "eq": 10000
+              },
+              "timer_switches": {
+                "eq": 10000
+              },
+              "non_timer_switches": {
+                "eq": 0
+              },
+              "dispatch_a": {
+                "ge": 4000
+              },
+              "dispatch_b": {
+                "ge": 4000
+              },
+              "progress_a": {
+                "ge": 1
+              },
+              "progress_b": {
+                "ge": 1
+              },
+              "quantum_ticks": {
+                "ge": 1
+              },
+              "max_wait_a": {
+                "le": "$twice_quantum"
+              },
+              "max_wait_b": {
+                "le": "$twice_quantum"
+              },
+              "register_errors": {
+                "eq": 0
+              },
+              "flags_errors": {
+                "eq": 0
+              },
+              "selector_errors": {
+                "eq": 0
+              },
+              "stack_errors": {
+                "eq": 0
+              },
+              "pit_irqs": {
+                "ge": 10000
+              },
+              "ticks": {
+                "ge": 10000
+              },
+              "unclassified_gaps": {
+                "ge": 0
+              },
+              "budget_violations": {
+                "eq": 0
+              },
+              "critical_us": {
+                "le": 250
+              },
+              "timer_gaps_over_2ms": {
+                "ge": 0
+              },
+              "tsc_khz": {
+                "ge": 1
+              },
+              "critical_ns": {
+                "ge": 0
+              }
+            },
+            "relations": [
+              {
+                "left": "twice_quantum",
+                "op": "eq",
+                "right": "quantum_ticks",
+                "multiply": 2
+              }
+            ],
+            "combine": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-1998-localfault",
+      "probe": "localfault",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:localfault run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "kernel_read"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 5
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "kernel_write"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 7
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cli"
+            },
+            "fields": {
+              "vector": {
+                "eq": 13
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "in"
+            },
+            "fields": {
+              "vector": {
+                "eq": 13
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "out"
+            },
+            "fields": {
+              "vector": {
+                "eq": 13
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-1998-syslife",
+      "probe": "syslife",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:syslife run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "unmapped"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "kernel"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "wrapping"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "straddling"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "unreadable"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "unwritable"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "syslife"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "normal_exits": {
+                "ge": 1
+              },
+              "fault_exits": {
+                "ge": 1
+              },
+              "page_delta": {
+                "eq": 0
+              },
+              "task_delta": {
+                "eq": 0
+              },
+              "mapping_delta": {
+                "eq": 0
+              },
+              "handle_delta": {
+                "eq": 0
+              },
+              "bad_cycle_ledgers": {
+                "eq": 0
+              },
+              "survivor_damage": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "cycle"
+            },
+            "count": 100,
+            "unique": "cycle",
+            "fields": {
+              "cycle": {
+                "ge": 1,
+                "le": 100
+              },
+              "page_delta": {
+                "eq": 0
+              },
+              "task_delta": {
+                "eq": 0
+              },
+              "mapping_delta": {
+                "eq": 0
+              },
+              "handle_delta": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-1998-fpu",
+      "probe": "fpu",
+      "profile": "qemu-desktop-1998",
+      "selector": "f0:fpu run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fpu"
+            },
+            "fields": {
+              "policy": "lazy",
+              "switches": {
+                "ge": 1000
+              },
+              "state_errors": {
+                "eq": 0
+              },
+              "destroy_errors": {
+                "eq": 0
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "kernel_audit_errors": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "sse_enabled": {
+                "eq": 0
+              },
+              "mf_vector": {
+                "eq": 16
+              },
+              "offender_terminated": {
+                "eq": 1
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-2002-boot-1",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 1
+    },
+    {
+      "id": "qemu-desktop-2002-boot-2",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 2
+    },
+    {
+      "id": "qemu-desktop-2002-boot-3",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 3
+    },
+    {
+      "id": "qemu-desktop-2002-boot-4",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 4
+    },
+    {
+      "id": "qemu-desktop-2002-boot-5",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "cold",
+      "attempt": 5
+    },
+    {
+      "id": "qemu-desktop-2002-boot-6",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 6
+    },
+    {
+      "id": "qemu-desktop-2002-boot-7",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 7
+    },
+    {
+      "id": "qemu-desktop-2002-boot-8",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 8
+    },
+    {
+      "id": "qemu-desktop-2002-boot-9",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 9
+    },
+    {
+      "id": "qemu-desktop-2002-boot-10",
+      "probe": "boot",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:boot run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "tick": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "boot"
+            },
+            "fields": {
+              "ram_bytes": {
+                "ge": 134217728
+              },
+              "ready_tick": {
+                "ge": 0
+              },
+              "final_tick": {
+                "ge": "$ready_tick"
+              },
+              "elapsed_pit_cycles": {
+                "ge": 11931820
+              },
+              "unexpected_resets": {
+                "eq": 0
+              },
+              "panics": {
+                "eq": 0
+              },
+              "boot_failures": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "boot_drive": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "build_id": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              }
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "final_tick",
+                "op": "ge",
+                "right": "ready_tick",
+                "add": 10010
+              },
+              {
+                "left": "elapsed_pit_cycles",
+                "op": "eq",
+                "right": "final_tick",
+                "subtract": "ready_tick",
+                "multiply": 1193
+              }
+            ]
+          }
+        ]
+      },
+      "boot_kind": "restart",
+      "attempt": 10
+    },
+    {
+      "id": "qemu-desktop-2002-bootinfo",
+      "probe": "bootinfo",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:bootinfo run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "totals"
+            },
+            "fields": {
+              "usable_pages": {
+                "ge": 1
+              },
+              "reserved_pages": {
+                "ge": 1
+              },
+              "free_pages": {
+                "ge": 1
+              },
+              "ledger_pages": {
+                "eq": "$usable_pages"
+              },
+              "digest": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "e820"
+            },
+            "fields": {
+              "base": {
+                "encoding": "hex",
+                "width": 16,
+                "ge": 0
+              },
+              "length": {
+                "encoding": "hex",
+                "width": 16,
+                "ge": 1
+              },
+              "type": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "normalized"
+            },
+            "fields": {
+              "base": {
+                "encoding": "hex",
+                "width": 16,
+                "ge": 0
+              },
+              "length": {
+                "encoding": "hex",
+                "width": 16,
+                "ge": 1
+              },
+              "type": {
+                "ge": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "reservation"
+            },
+            "fields": {
+              "pages": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bad_version"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bad_length"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "overflow"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed_entry"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "illegal_overlap"
+            },
+            "fields": {
+              "rejected": {
+                "eq": 1
+              },
+              "error": {
+                "ge": 1
+              },
+              "live_map_changed": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-2002-allocator",
+      "probe": "allocator",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:allocator run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "allocator"
+            },
+            "fields": {
+              "baseline_free": {
+                "ge": 1
+              },
+              "exhausted_free": {
+                "eq": 0
+              },
+              "final_free": {
+                "eq": "$baseline_free"
+              },
+              "cycles": {
+                "eq": 100
+              },
+              "allocation_error": {
+                "ge": 1
+              },
+              "partial_allocations": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "reserved_violations": {
+                "eq": 0
+              },
+              "pattern_errors": {
+                "eq": 0
+              },
+              "resource_delta": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-2002-protection",
+      "probe": "protection",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:protection run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "protection"
+            },
+            "fields": {
+              "cr0": {
+                "encoding": "hex",
+                "width": 8,
+                "mask": 2147549185
+              },
+              "cr3": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 4096
+              },
+              "cr4": {
+                "encoding": "hex",
+                "width": 8,
+                "clear": 32
+              },
+              "gdt_limit": {
+                "ge": 1
+              },
+              "idt_limit": {
+                "ge": 1
+              },
+              "tr": {
+                "ge": 1
+              },
+              "tss_valid": {
+                "eq": 1
+              },
+              "kernel_user_paths": {
+                "eq": 0
+              },
+              "present_guards": {
+                "eq": 0
+              },
+              "transition_stack_errors": {
+                "eq": 0
+              },
+              "stack_canary_errors": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "readonly"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 3
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "data_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "guard"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-2002-isolation",
+      "probe": "isolation",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:isolation run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "isolation"
+            },
+            "fields": {
+              "va": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4194304
+              },
+              "pfn_a": {
+                "ge": 256
+              },
+              "pfn_b": {
+                "ne": "$pfn_a"
+              },
+              "cr3_a": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 4096
+              },
+              "cr3_b": {
+                "encoding": "hex",
+                "width": 8,
+                "ne": "$cr3_a"
+              },
+              "switches": {
+                "ge": 100
+              },
+              "sentinel_a_final": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": "$sentinel_a_initial"
+              },
+              "sentinel_b_final": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": "$sentinel_b_initial"
+              },
+              "null_present": {
+                "eq": 0
+              },
+              "shared_kernel_errors": {
+                "eq": 0
+              },
+              "recursive_errors": {
+                "eq": 0
+              },
+              "sentinel_b_initial": {
+                "encoding": "hex",
+                "width": 8,
+                "ne": "$sentinel_a_initial"
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-2002-preempt",
+      "probe": "preempt",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:preempt run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "preempt"
+            },
+            "fields": {
+              "switches": {
+                "eq": 10000
+              },
+              "timer_switches": {
+                "eq": 10000
+              },
+              "non_timer_switches": {
+                "eq": 0
+              },
+              "dispatch_a": {
+                "ge": 4000
+              },
+              "dispatch_b": {
+                "ge": 4000
+              },
+              "progress_a": {
+                "ge": 1
+              },
+              "progress_b": {
+                "ge": 1
+              },
+              "quantum_ticks": {
+                "ge": 1
+              },
+              "max_wait_a": {
+                "le": "$twice_quantum"
+              },
+              "max_wait_b": {
+                "le": "$twice_quantum"
+              },
+              "register_errors": {
+                "eq": 0
+              },
+              "flags_errors": {
+                "eq": 0
+              },
+              "selector_errors": {
+                "eq": 0
+              },
+              "stack_errors": {
+                "eq": 0
+              },
+              "pit_irqs": {
+                "ge": 10000
+              },
+              "ticks": {
+                "ge": 10000
+              },
+              "unclassified_gaps": {
+                "ge": 0
+              },
+              "budget_violations": {
+                "eq": 0
+              },
+              "critical_us": {
+                "le": 250
+              },
+              "timer_gaps_over_2ms": {
+                "ge": 0
+              },
+              "tsc_khz": {
+                "ge": 1
+              },
+              "critical_ns": {
+                "ge": 0
+              }
+            },
+            "relations": [
+              {
+                "left": "twice_quantum",
+                "op": "eq",
+                "right": "quantum_ticks",
+                "multiply": 2
+              }
+            ],
+            "combine": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-2002-localfault",
+      "probe": "localfault",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:localfault run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "kernel_read"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 5
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "kernel_write"
+            },
+            "fields": {
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 7
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              },
+              "cr2": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 3221225472
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cli"
+            },
+            "fields": {
+              "vector": {
+                "eq": 13
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "in"
+            },
+            "fields": {
+              "vector": {
+                "eq": 13
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "out"
+            },
+            "fields": {
+              "vector": {
+                "eq": 13
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "offender_terminated": {
+                "eq": 1
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "survivor_changed": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-2002-syslife",
+      "probe": "syslife",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:syslife run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "unmapped"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "kernel"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "wrapping"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "straddling"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "unreadable"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "unwritable"
+            },
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "syslife"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "normal_exits": {
+                "ge": 1
+              },
+              "fault_exits": {
+                "ge": 1
+              },
+              "page_delta": {
+                "eq": 0
+              },
+              "task_delta": {
+                "eq": 0
+              },
+              "mapping_delta": {
+                "eq": 0
+              },
+              "handle_delta": {
+                "eq": 0
+              },
+              "bad_cycle_ledgers": {
+                "eq": 0
+              },
+              "survivor_damage": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "cycle"
+            },
+            "count": 100,
+            "unique": "cycle",
+            "fields": {
+              "cycle": {
+                "ge": 1,
+                "le": 100
+              },
+              "page_delta": {
+                "eq": 0
+              },
+              "task_delta": {
+                "eq": 0
+              },
+              "mapping_delta": {
+                "eq": 0
+              },
+              "handle_delta": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "qemu-desktop-2002-fpu",
+      "probe": "fpu",
+      "profile": "qemu-desktop-2002",
+      "selector": "f0:fpu run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fpu"
+            },
+            "fields": {
+              "policy": "lazy",
+              "switches": {
+                "ge": 1000
+              },
+              "state_errors": {
+                "eq": 0
+              },
+              "destroy_errors": {
+                "eq": 0
+              },
+              "survivor_samples": {
+                "ge": 100
+              },
+              "kernel_audit_errors": {
+                "eq": 0
+              },
+              "cpuid": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "sse_enabled": {
+                "eq": 0
+              },
+              "mf_vector": {
+                "eq": 16
+              },
+              "offender_terminated": {
+                "eq": 1
+              }
+            },
+            "combine": true
+          }
+        ]
+      }
     }
   ]
 }
