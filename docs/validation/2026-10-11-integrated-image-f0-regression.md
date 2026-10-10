@@ -157,3 +157,19 @@ and the F2 busy hook treats that pin as an open description. The host
 storage test does not link the namespace, so it never saw it. Directive
 f2-11 fixes the shutdown rule; the `fd-table` durable checker of
 `f2-process` calls `storage_sync()` the same way.
+
+## Eleventh image: `3d79e6a7…` (commit `5e6b2a4`, f2-10, f1-19 and f1-20 merged)
+
+Five QEMU profiles (`qemu-t23`, `qemu-e500`, `qemu-min128`,
+`qemu-desktop-1998`, `qemu-desktop-2002`). `f1-input` 102 pass: the F0
+prefix on every profile, `registry`, `input-fault`, `input-qemu-t23` and
+`input-qemu-e500` PASS (the E500 firmware backend delivers the QMP stimulus
+after f1-19); `framebuffer` FAIL with `error=-12` before any drawing: the
+probe's 2,247-byte fixture exceeds the kernel heap's 2 KiB class (directive
+f1-21), which left `framebuffer-no-lfb`, `firmware_overrun`, `disallowed_io`
+and the eight `qemu-desktop-*` cases `not_run`. `f1-safe` 106 pass: every
+QEMU case on all five profiles, including `safe-fw-cfg` and `safe-boot-cfg`
+on the two desktop profiles; only the two physical `safe-menu-*` cases stay
+`not_run`. The three `uart-absent-*` operator-confirmation cases count as
+failures and gate nothing. Host tests on this tree: 102 OK after the SDK
+rebuild that the f2-10 change to `sdk/tests/libc_smoke.c` required.
