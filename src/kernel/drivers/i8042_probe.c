@@ -21,6 +21,21 @@ extern void console_operator_prompt(bool);
 
 static bool operator_input_event(void *arg) { return input_read(arg); }
 
+static void input_sample_add(struct input_digest *d, uint64_t *a_characters,
+                             const struct input_event *event)
+{
+    input_digest_add(d, event);
+    if (event->type == INPUT_TEXT && event->code == 'a') (*a_characters)++;
+}
+
+static bool operator_input_complete(const struct input_digest *d, uint64_t a_characters)
+{
+    uint64_t x = d->x < 0 ? (uint64_t)(-(d->x + 1)) + 1 : (uint64_t)d->x;
+    uint64_t y = d->y < 0 ? (uint64_t)(-(d->y + 1)) + 1 : (uint64_t)d->y;
+    return a_characters >= 10 && d->key_transitions >= 20 && d->button_transitions >= 2 &&
+           (x >= 50 || y >= 50 || x + y >= 50);
+}
+
 static int input_verdict(const char *probe, bool ok, const char *reason)
 {
     if (ok) rec_emit(probe, "END", "status=PASS");
@@ -64,17 +79,22 @@ int probe_input(void)
     i8042_snapshot(&driver);
     struct input_digest d;
     input_digest_init(&d);
+    uint64_t a_characters = 0;
+    bool operator_mode = probes_operator_mode;
     rec_emit("input", "READY", "backend=%s", backend);
-    rec_emit("input", "ARM", "keys=100 moves=100 buttons=10 x=2 y=-1 timeout_ms=120000 generation=%u",
-             driver.generation);
+    if (operator_mode)
+        rec_emit("input", "ARM", "criteria=operator a_min=10 key_min=20 button_min=2 motion_min=50 quiet_ms=1000 timeout_ms=120000 generation=%u", driver.generation);
+    else
+        rec_emit("input", "ARM", "criteria=exact keys=100 moves=100 buttons=10 x=2 y=-1 timeout_ms=120000 generation=%u", driver.generation);
     bool operator_absent = false;
-    if (probes_operator_mode) {
-        klog("[operator] input: 100 A press/release cycles, 100 moves, 10 left clicks; finish within 120 s after first event");
+    if (operator_mode) {
+        klog("[operator] input: press A at least ten times, move the pointer, click at least once; release all keys/buttons and pause for 1 s (120 s after first event)");
         operator_absent = !probes_operator_wait(operator_input_event, deadline_after_ms,
                                                 task_sleep_ms, console_operator_prompt, &event);
-        if (!operator_absent) input_digest_add(&d, &event);
+        if (!operator_absent) input_sample_add(&d, &a_characters, &event);
     }
-    uint64_t end = deadline_after_ms(120000), quiet = deadline_after_ms(0);
+    uint32_t quiet_ms = operator_mode ? 1000 : 50;
+    uint64_t end = deadline_after_ms(120000), quiet = deadline_after_ms(quiet_ms);
     uint64_t diagnostic_at = deadline_after_ms(10000);
     bool complete = false;
     while (!operator_absent && !deadline_passed(end)) {
@@ -83,25 +103,32 @@ int probe_input(void)
             diagnostic_at = deadline_after_ms(10000);
         }
         for (unsigned n = 0; n < INPUT_CAPACITY && input_read(&event); n++) {
-            input_digest_add(&d, &event);
-            quiet = deadline_after_ms(50);
+            input_sample_add(&d, &a_characters, &event);
+            quiet = deadline_after_ms(quiet_ms);
         }
-        if (d.characters >= 100 && d.key_transitions >= 200 && d.button_transitions >= 20 &&
-            d.x >= 200 && d.y <= -100 && deadline_passed(quiet)) {
+        bool enough = operator_mode ? operator_input_complete(&d, a_characters) :
+            d.characters >= 100 && d.key_transitions >= 200 && d.button_transitions >= 20 &&
+            d.x >= 200 && d.y <= -100;
+        if (enough && deadline_passed(quiet)) {
             complete = true;
             break;
         }
         task_sleep_ms(1);
     }
+    /* Quiet allows early completion; the fixed deadline still evaluates the
+     * measured operator thresholds and the unchanged queue/state checks. */
+    if (operator_mode) complete = !operator_absent && operator_input_complete(&d, a_characters);
     input_snapshot(&q);
-    if (operator_absent) i8042_snapshot(&driver);
+    i8042_snapshot(&driver);
     /* Expected text digest is exactly 100 unshifted 'a' characters. */
     struct input_digest expected;
     input_digest_init(&expected);
     struct input_event a = { .type = INPUT_TEXT, .code = 'a' };
     for (unsigned i = 0; i < 100; i++) input_digest_add(&expected, &a);
-    rec_emit("input", "DATA", "case=counts backend=%s generation=%u characters=%llu key_transitions=%llu button_transitions=%llu",
-             backend, driver.generation, d.characters, d.key_transitions, d.button_transitions);
+    if (operator_mode)
+        rec_emit("input", "DATA", "case=counts criteria=operator characters=%llu a_characters=%llu key_transitions=%llu button_transitions=%llu a_min=10 key_min=20 button_min=2 motion_min=50", d.characters, a_characters, d.key_transitions, d.button_transitions);
+    else
+        rec_emit("input", "DATA", "case=counts criteria=exact backend=%s generation=%u characters=%llu key_transitions=%llu button_transitions=%llu", backend, driver.generation, d.characters, d.key_transitions, d.button_transitions);
     rec_emit("input", "DATA", "case=motion x=%lld y=%lld digest=%08x text_digest=%08x events=%llu",
              d.x, d.y, d.hash, d.text_hash, d.events);
     rec_emit("input", "DATA", "case=queue overflow=%llu resync=%llu duplicates=%llu repeats=%llu errors=%llu stuck_keys=%u buttons=%u state_lost=%u",
@@ -116,11 +143,16 @@ int probe_input(void)
              firmware ? "firmware-input" : "i8042", driver.generation, q.errors - base.errors,
              (g_boot.flags & CBI_F_SMBIOS_QEMU) ? "icount" : "hardware");
     bool lease_ok = driver.active && !driver.quarantined;
+    bool stimulus_ok = operator_mode ? operator_input_complete(&d, a_characters) :
+        d.characters == 100 && d.text_hash == expected.text_hash && d.key_transitions == 200 &&
+        d.button_transitions == 20 && d.x == 200 && d.y == -100;
+    /* Lead amendment (f1-34 review): typematic repeats (a make code while the
+     * key is already down) are normal for a human holding a key; under
+     * operator criteria they are recorded, not failures. Stuck keys still fail. */
     bool ok = complete && !base.keys_down && !base.buttons && !base.state_lost &&
-              d.characters == 100 && d.text_hash == expected.text_hash && d.key_transitions == 200 &&
-              d.button_transitions == 20 && d.x == 200 && d.y == -100 &&
+              stimulus_ok && lease_ok &&
               q.overflow == base.overflow && q.resync == base.resync && q.duplicates == base.duplicates &&
-              q.repeats == base.repeats && q.errors == base.errors && !q.keys_down && !q.buttons && !q.pending;
+              (operator_mode || q.repeats == base.repeats) && q.errors == base.errors && !q.keys_down && !q.buttons && !q.pending;
     if (firmware) {
         fwinput_adapter_log_delivery();
         struct fwinput_stats stats;

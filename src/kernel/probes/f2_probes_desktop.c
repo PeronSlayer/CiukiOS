@@ -370,13 +370,14 @@ static int native_crash_isolation(void)
         task_sleep_ms(20);
         struct desktop_activity a,b;
         desktop_activity_snapshot(&a); uint32_t digest=native_digest();
-        rec_emit(name,"ARM","server=desktop action=post_fault_input presents=%llu input_events=%llu pixel_digest=%08x",a.presents,a.input_events,digest);
+        const char *criteria=probes_operator_mode ? "operator" : "exact";
+        rec_emit(name,"ARM","server=desktop action=post_fault_input criteria=%s presents=%llu input_events=%llu pixel_digest=%08x",criteria,a.presents,a.input_events,digest);
         if (probes_operator_mode) {
             struct operator_desktop_input wait={server,survivor,a.input_events};
             operator_absent=!probes_operator_wait(operator_desktop_event,deadline_after_ms,
                                                   task_sleep_ms,console_operator_prompt,&wait);
             if (operator_absent) {
-                rec_emit(name,"DATA","case=interaction server=desktop subcase=interaction status=not_run reason=operator_absent");
+                rec_emit(name,"DATA","case=interaction server=desktop criteria=operator subcase=interaction status=not_run reason=operator_absent");
                 pass=native_live(server) && native_live(survivor) && supervisor_desktop_deaths()==deaths;
                 goto cleanup;
             }
@@ -387,8 +388,8 @@ static int native_crash_isolation(void)
         uint32_t next_digest=native_digest();
         pass=pass && native_live(server) && native_live(survivor) && b.input_events>a.input_events && b.presents>a.presents &&
             next_digest!=digest && native_reports.keys>=2 && native_reports.motion>=1 && native_reports.buttons>=2 && server->pid==server_pid && survivor->pid==survivor_pid && supervisor_desktop_deaths()==deaths;
-        rec_emit(name,"DATA","case=interaction server=desktop stage=before presents=%llu input_events=%llu pixel_digest=%08x",a.presents,a.input_events,digest);
-        rec_emit(name,"DATA","case=interaction server=desktop stage=after presents=%llu input_events=%llu pixel_digest=%08x changed=%u keys=%u motion=%u buttons=%u",b.presents,b.input_events,next_digest,pass,native_reports.keys,native_reports.motion,native_reports.buttons);
+        rec_emit(name,"DATA","case=interaction server=desktop criteria=%s stage=before presents=%llu input_events=%llu pixel_digest=%08x",criteria,a.presents,a.input_events,digest);
+        rec_emit(name,"DATA","case=interaction server=desktop criteria=%s stage=after presents=%llu input_events=%llu pixel_digest=%08x changed=%u keys=%u motion=%u buttons=%u",criteria,b.presents,b.input_events,next_digest,pass,native_reports.keys,native_reports.motion,native_reports.buttons);
         if (!pass) native_step_record(GATE_INTERACT,generation,"interaction_contract");
         /* Runner observes the frame while its owning desktop is still live.
          * Capture failure/deadline cannot be turned into guest qualification. */
