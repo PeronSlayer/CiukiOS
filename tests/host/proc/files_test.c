@@ -9,6 +9,14 @@
 #include <ciuki/desktop.h>
 #include <ciuki/supervisor.h>
 #include "../fs/fake.h"
+#include <stdarg.h>
+
+extern bool f2_files_post_commit_fault(void);
+void rec_emit(const char *probe, const char *event, const char *format, ...)
+{
+    CHECK(!strcmp(probe, "fd-table") && !strcmp(event, "DATA"));
+    va_list args; va_start(args, format); vprintf(format, args); va_end(args); putchar('\n');
+}
 
 static char serial_bytes[16384], console_bytes[16384];
 static unsigned serial_count, console_count;
@@ -496,6 +504,27 @@ static void test_clocks(void)
     on_schedule=0; client_thread->interrupted=false;
     puts("files clocks: RTC/build selection, UTC leap days, 1ms CPU accounting, rounding/overflow, sleep/EINTR remainder PASS");
 }
+static void test_uname(void)
+{
+    CHECK(sizeof(struct ciuki_utsname) == 336 && offsetof(struct ciuki_utsname, abi_version) == 328 &&
+          offsetof(struct ciuki_utsname, realtime_source) == 332);
+    for (unsigned rtc = 0; rtc < 2; rtc++) {
+        file_clock_init(42, rtc, rtc, (20u << 9) | (1u << 5) | 1, 0, 0, 1000);
+        uint8_t canary[sizeof(struct ciuki_utsname) + 2]; memset(canary, 0xa5, sizeof(canary));
+        CHECK(!ua_write(client->memory, USER, canary, sizeof(canary)));
+        CHECK(!call(CIUKI_SYS_UNAME, USER + 1, 0, 0, 0, 0));
+        CHECK(!ua_read(client->memory, canary, USER, sizeof(canary)) && canary[0] == 0xa5 && canary[sizeof(canary)-1] == 0xa5);
+        struct ciuki_utsname u; memcpy(&u, canary + 1, sizeof(u));
+        CHECK(!strcmp(u.sysname, "CiukiOS") && !strcmp(u.nodename, "ciuki") && !strcmp(u.machine, "i686"));
+        CHECK(!strcmp(u.release, "unknown") && !strcmp(u.version, "unknown") && u.abi_version == 1 && u.realtime_source == rtc);
+        CHECK(!u.reserved[0] && !u.reserved[1] && !u.reserved[2]);
+        CHECK(!u.sysname[64] && !u.nodename[64] && !u.release[64] && !u.version[64] && !u.machine[64]);
+    }
+    CHECK(call(CIUKI_SYS_UNAME, CIUKI_IMAGE_BASE, 0, 0, 0, 0) == -EFAULT);
+    CHECK(call(CIUKI_SYS_UNAME, UINT32_MAX - 8, 0, 0, 0, 0) == -EFAULT);
+    CHECK(call(CIUKI_SYS_UNAME, USER + 2 * PAGE_SIZE - 8, 0, 0, 0, 0) == -EFAULT);
+    puts("files uname: 336-byte layout, identity/build, RTC/fallback agreement, zero padding, bad ranges PASS");
+}
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4);
@@ -509,6 +538,11 @@ int main(int argc, char **argv)
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks();
+    test_uname();
+    unsigned prior_pages = pages_used, prior_heap = heap_blocks;
+    CHECK(f2_files_post_commit_fault());
+    CHECK(pages_used == prior_pages && heap_blocks == prior_heap);
+    puts("files guest fault boundary: production sparse FAT32/cache/fd positive count, sticky fsync and teardown PASS");
     if (argc == 4) {
         FILE *file = fopen(argv[3], "rb"); CHECK(file);
         CHECK(!fseek(file, 0, SEEK_END)); long size = ftell(file); CHECK(size == 12292);

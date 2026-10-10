@@ -7,6 +7,21 @@
 #include <ciuki/clock.h>
 #include <ciuki/signal.h>
 
+#ifndef CIUKI_BUILD_ID
+#define CIUKI_BUILD_ID "unknown"
+#endif
+
+static int file_uname(uint32_t address)
+{
+    struct ciuki_utsname out = { .sysname = "CiukiOS", .nodename = "ciuki",
+        .release = CIUKI_BUILD_ID, .version = CIUKI_BUILD_ID, .machine = "i686",
+        .abi_version = CIUKI_ABI_VERSION };
+    struct clock_seed seed;
+    file_clock_snapshot(&seed);
+    out.realtime_source = seed.source;
+    return copy_to_user(address, &out, sizeof(out));
+}
+
 struct file_operation {
     struct process *process;
     struct px_node *cwd;
@@ -33,7 +48,8 @@ bool file_read_cancelled(void)
     struct proc_thread *t = proc_thread_for(g_current);
     if (!t || t->cleanup != operation_free) return false;
     struct file_operation *op = t->operation;
-    return op && op->reading && (t->process->state == PROC_STOPPING || proc_signal_caught(t));
+    return op && op->reading && (t->process->state == PROC_STOPPING ||
+        proc_signal_wait(t, SIGNAL_WAIT_I, false, false, 0) == SIGNAL_WAIT_EINTR);
 }
 static int path_copy(struct file_operation *op, unsigned which, uint32_t address)
 {
@@ -221,6 +237,7 @@ static int pathname_call(struct file_operation *op, const struct trap_frame *tf)
 static int file_dispatch(struct process *p, struct trap_frame *tf)
 {
     uint32_t nr = tf->eax;
+    if (nr == CIUKI_SYS_UNAME) return file_uname(tf->ebx);
     /* Flags/structure checks precede descriptor and pointer validation. */
     if (nr == CIUKI_SYS_OPEN) { int err = file_open_flags(tf->ecx, tf->edx); if (err) return err; }
     if (nr == CIUKI_SYS_MKDIR && (tf->ecx & ~0777u)) return -EINVAL;
@@ -274,7 +291,7 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
 }
 bool file_syscall(struct trap_frame *tf)
 {
-    if (tf->eax < CIUKI_SYS_OPEN || tf->eax > CIUKI_SYS_NANOSLEEP) return false;
+    if ((tf->eax < CIUKI_SYS_OPEN || tf->eax > CIUKI_SYS_NANOSLEEP) && tf->eax != CIUKI_SYS_UNAME) return false;
     struct process *p = proc_current();
     tf->eax = (uint32_t)(p ? file_dispatch(p, tf) : -ENOSYS);
     return true;

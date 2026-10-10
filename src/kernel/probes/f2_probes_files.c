@@ -11,6 +11,112 @@
 #include <ciuki/probe.h>
 #include <ciuki/sha256.h>
 
+/* Sparse, fresh FAT32 block boundary, following Microsoft's FAT specification:
+ * https://www.cs.fsu.edu/~cop4610t/assignments/project3/spec/fatspec.pdf
+ * Only touched sectors consume RAM. Fail the first write after the owning
+ * entry's durability barrier; it never affects the canonical disk/controller. */
+static struct file_fault_disk {
+    struct blkdev dev;
+    struct { uint64_t lba; uint8_t bytes[512]; } sectors[32];
+    unsigned used, failures;
+    uint32_t first_before;
+    bool armed;
+} fault_disk;
+static struct block_cache fault_cache;
+static struct fat_volume fault_volume;
+static struct vfs fault_vfs;
+static struct px_namespace fault_space;
+static struct px_node fault_node;
+
+static uint8_t *fault_sector(uint64_t lba, bool create)
+{
+    for (unsigned i = 0; i < fault_disk.used; i++)
+        if (fault_disk.sectors[i].lba == lba) return fault_disk.sectors[i].bytes;
+    if (!create || fault_disk.used == ARRAY_SIZE(fault_disk.sectors)) return 0;
+    unsigned i = fault_disk.used++;
+    fault_disk.sectors[i].lba = lba;
+    memset(fault_disk.sectors[i].bytes, 0, 512);
+    return fault_disk.sectors[i].bytes;
+}
+static int fault_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *bytes)
+{
+    int err = blkdev_range(dev, lba, count);
+    if (err) return err;
+    for (unsigned i = 0; i < count; i++) {
+        uint8_t *sector = fault_sector(lba + i, false);
+        if (sector) memcpy((uint8_t *)bytes + i * 512, sector, 512);
+        else memset((uint8_t *)bytes + i * 512, 0, 512);
+    }
+    return 0;
+}
+static int fault_write(struct blkdev *dev, uint64_t lba, uint32_t count, const void *bytes)
+{
+    int err = blkdev_range(dev, lba, count);
+    if (err) return err;
+    /* FAT replace publishes this entry only after update's durable barrier.
+     * The next callback is the first issued write in its retirement suffix. */
+    if (fault_disk.armed && fault_node.entry.first != fault_disk.first_before) {
+        fault_disk.armed = false; fault_disk.failures++;
+        dev->quarantined = true;
+        return -FS_EIO;
+    }
+    for (unsigned i = 0; i < count; i++) {
+        uint8_t *sector = fault_sector(lba + i, true);
+        if (!sector) return -FS_EIO;
+        memcpy(sector, (const uint8_t *)bytes + i * 512, 512);
+    }
+    return 0;
+}
+static int fault_flush(struct blkdev *dev) { return dev->quarantined ? -FS_EIO : 0; }
+
+/* Also called by T0 against the identical production FAT/cache/fd path. */
+bool f2_files_post_commit_fault(void)
+{
+    memset(&fault_disk, 0, sizeof(fault_disk));
+    fault_disk.dev = (struct blkdev){ .read = fault_read, .write = fault_write, .flush = fault_flush,
+        .capacity = 66039, .sector_size = 512, .write_cache_state = BLKDEV_CACHE_DISABLED };
+    uint8_t *b = fault_sector(0, true);
+    b[0] = 0xeb; b[2] = 0x90; fs_wr16(b + 11, 512); b[13] = 1;
+    fs_wr16(b + 14, 2); b[16] = 1; b[21] = 0xf8;
+    fs_wr32(b + 32, 66039); fs_wr32(b + 36, 512); fs_wr32(b + 44, 2);
+    fs_wr16(b + 48, 1); fs_wr16(b + 510, 0xaa55);
+    b = fault_sector(1, true);
+    fs_wr32(b, 0x41615252); fs_wr32(b + 484, 0x61417272);
+    fs_wr32(b + 488, UINT32_MAX); fs_wr32(b + 492, UINT32_MAX); fs_wr32(b + 508, 0xaa550000);
+    b = fault_sector(2, true);
+    fs_wr32(b, 0x0ffffff8); fs_wr32(b + 4, 0x0fffffff); fs_wr32(b + 8, 0x0fffffff);
+    /* Mount scans 65,525 clusters: the cache's 1/16 workspace needs 16 pages.
+     * This temporary 1 MiB cache is released before the durable shutdown. */
+    int err = cache_init(&fault_cache, 1024 * 1024);
+    if (err) return false;
+    err = fat_mount(&fault_volume, &fault_cache, &fault_disk.dev, 0, fault_disk.dev.capacity, true);
+    vfs_init(&fault_vfs);
+    fault_space = (struct px_namespace){ .vfs = &fault_vfs };
+    memset(&fault_node, 0, sizeof(fault_node));
+    fault_node.space = &fault_space; fault_node.volume = &fault_volume; fault_node.kind = PX_FILE;
+    fault_node.linked = true;
+    if (!err) err = fat_create(&fault_volume, 2, "fault.bin", 0, &fault_node.entry);
+    struct file_description d = { .node = &fault_node, .flags = O_RDWR };
+    size_t done = 0;
+    if (!err) err = file_io_locked(&d, "old", 3, true, false, 0, &done);
+    uint32_t old_first = fault_node.entry.first;
+    if (!err && done != 3) err = -EIO;
+    if (!err) {
+        fault_disk.first_before = old_first;
+        fault_disk.armed = true;
+        err = file_io_locked(&d, "new", 3, true, true, 0, &done);
+    }
+    int sync = file_sync_locked(&d), again = file_sync_locked(&d);
+    bool pass = err == -EIO && done == 3 && fault_disk.failures == 1 &&
+        fault_node.entry.first != old_first && d.position == 3 && fault_volume.readonly &&
+        sync == -EIO && again == -EIO && fault_disk.dev.quarantined;
+    rec_emit("fd-table", "DATA", "case=post-commit-fault owner=synthetic_block issued_errors=%u count=%u error=%d fsync=%d sticky=%d committed=%u quarantined=%u",
+             fault_disk.failures, (unsigned)done, err, sync, again, fault_node.entry.first != old_first, fault_disk.dev.quarantined);
+    /* Destroy discards only this disposable device's dirty/error state. */
+    cache_destroy(&fault_cache);
+    return pass;
+}
+
 #ifdef CIUKI_FILES_PAYLOAD_BIN
 __asm__(".pushsection .rodata.files_payload,\"a\"\n"
         ".balign 4\n"
@@ -182,6 +288,29 @@ static int64_t milliseconds(const struct ciuki_timespec *t)
 {
     return t->tv_sec * 1000 + t->tv_nsec / 1000000;
 }
+static bool durable_cases(struct process *owner)
+{
+    static const char path[] = "/tmp/f2-durable.bin", content[] = "CiukiOS F2 durable\n";
+    int fd = file_open(owner, path, O_CREAT | O_EXCL | O_RDWR, 0666);
+    if (fd < 0) return observed("durable-create", 0, fd);
+    bool pass = observed("durable-write", sizeof(content) - 1,
+                         kernel_io(owner, fd, (void *)content, sizeof(content) - 1, true, false, 0));
+    fs_lock_take(&file_fd(owner, fd)->node->space->vfs->lock);
+    int err = file_sync_locked(file_fd(owner, fd));
+    fs_lock_drop(&file_fd(owner, fd)->node->space->vfs->lock);
+    pass = observed("durable-fsync", 0, err) && pass;
+    pass = !file_close(owner, fd) && pass;
+    fd = file_open(owner, path, O_RDONLY, 0);
+    if (fd < 0) return false;
+    char bytes[sizeof(content) - 1] = { 0 };
+    pass = observed("durable-reopen", sizeof(bytes), kernel_io(owner, fd, bytes, sizeof(bytes), false, false, 0)) && pass;
+    pass = !memcmp(bytes, content, sizeof(bytes)) && pass;
+    uint8_t digest[32]; char hex[65];
+    sha256(bytes, sizeof(bytes), digest); sha256_hex(digest, hex);
+    rec_emit("fd-table", "DATA", "case=durable-file name_hex=2f746d702f66322d64757261626c652e62696e size=%u sha256=%s",
+             (unsigned)sizeof(bytes), hex);
+    return !file_close(owner, fd) && pass;
+}
 static bool user_cases(struct process *owner)
 {
     struct proc_strings *args = proc_strings_new();
@@ -204,17 +333,25 @@ static bool user_cases(struct process *owner)
         task_sleep_ms(1);
     }
     struct clock_seed seed; file_clock_snapshot(&seed);
+    struct ciuki_utsname uts = { 0 };
+    bool uname_read = p->state == PROC_LIVE && !ua_read(p->memory, &uts, FILES_RESULT + 1280, sizeof(uts));
     int64_t offset = milliseconds(&r.realtime) - milliseconds(&r.monotonic);
     int64_t expected = seed.utc * 1000 - (int64_t)seed.tick;
     int64_t busy = milliseconds(&r.busy_after) - milliseconds(&r.busy_before);
     int64_t sleeping = milliseconds(&r.sleep_cpu_after) - milliseconds(&r.sleep_cpu_before);
     int64_t elapsed = milliseconds(&r.sleep_end) - milliseconds(&r.sleep_begin);
     int64_t remain = milliseconds(&r.remaining);
-    bool pass = r.done && !r.errors && r.reads == 10000 && !r.decreases && r.io_cases == 1 &&
+    bool pass = uname_read && !strncmp(uts.sysname, "CiukiOS", sizeof("CiukiOS")) &&
+        !strncmp(uts.nodename, "ciuki", sizeof("ciuki")) &&
+        !strncmp(uts.machine, "i686", sizeof("i686")) &&
+        uts.abi_version == CIUKI_ABI_VERSION && uts.realtime_source == seed.source &&
+        r.done && !r.errors && r.reads == 10000 && !r.decreases && r.io_cases == 1 &&
         offset >= expected - 1 && offset <= expected + 1 && busy > 0 && sleeping >= 0 && sleeping <= 2 &&
         !r.sleep_result && elapsed >= 20 && sent && r.interrupted_result == -EINTR && remain >= 0 && remain <= 20;
     rec_emit("fd-table", "DATA", "case=user checks=%u errors=%u io_cases=%u reads=%u decreases=%u", r.checks, r.errors, r.io_cases, r.reads, r.decreases);
     rec_emit("fd-table", "DATA", "case=clock-source realtime_source=%u source=%s qualified=%u valid=%u utc=%lld sample=%llu", seed.source, seed.source ? "rtc" : "build", seed.qualified, seed.valid, seed.utc, seed.tick);
+    rec_emit("fd-table", "DATA", "case=clock-uname abi_version=%u realtime_source=%u clock_source=%u matched=%u",
+             uts.abi_version, uts.realtime_source, seed.source, uname_read && uts.realtime_source == seed.source);
     rec_emit("fd-table", "DATA", "case=clock-offset expected_ms=%lld observed_ms=%lld resolution_ns=1000000", expected, offset);
     rec_emit("fd-table", "DATA", "case=cpu-clock busy_ms=%lld sleeping_ms=%lld sleep_ms=%lld scheduling_delay_ms=%lld", busy, sleeping, elapsed, elapsed - 20);
     rec_emit("fd-table", "DATA", "case=sleep-interrupt result=%d remaining_ms=%lld handlers=%u sent=%u", r.interrupted_result, remain, r.signal_entries, sent);
@@ -258,17 +395,17 @@ int probe_f2_fd_table(void)
         proc_publish(owner, 0);
         pass = kernel_cases(owner);
         pass &= user_cases(owner);
+        pass &= durable_cases(owner);
         proc_stop(owner, 0, 0); proc_collect();
     }
     files_snapshot(space, &after);
     pass &= before.descriptions == after.descriptions && before.pins == after.pins;
     rec_emit("fd-table", "DATA", "case=ledger descriptions_before=%u descriptions_after=%u pins_before=%u pins_after=%u", before.descriptions, after.descriptions, before.pins, after.pins);
-    /* These mandatory checks need lead-owned runner/core integration. Host
-     * injection and a source snapshot cannot stand in for guest evidence. */
-    rec_emit("fd-table", "ERROR", "case=post-commit-fault status=not_run reason=guest_fault_controller_not_wired");
-    rec_emit("fd-table", "ERROR", "case=clock-uname status=not_run reason=uname_not_implemented");
-    rec_emit("fd-table", "ERROR", "case=durable-checker status=not_run reason=runner_checker_not_wired");
-    pass = false;
+    pass &= f2_files_post_commit_fault();
+    err = storage_sync();
+    pass = !err && pass;
+    rec_emit("fd-table", "DATA", "case=durable-checker flush_result=%d checker=host_required", err);
+    if (pass) rec_emit("fd-table", "ARM", "action=durable_shutdown checker=host_required");
     rec_emit("fd-table", "END", pass ? "status=PASS" : "status=FAIL reason=files_contract");
     return pass ? 0 : 1;
 #endif

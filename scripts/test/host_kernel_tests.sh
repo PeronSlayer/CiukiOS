@@ -220,6 +220,7 @@ nasm -f bin -I "$out/" "$root/tests/host/proc/signal_payload.asm" -o "$out/signa
 # to the lead's canonical build hook; host validation does not execute it.
 nasm -f bin -I "$out/" "$root/tests/host/proc/desktop_payload.asm" -o "$out/desktop-payload.elf"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$root/src/kernel/include" "$root/tests/host/proc/desktop_test.c" \
     "$root/tests/host/proc/signal_legacy.c" "$root/src/kernel/lib/sha256.c" -o "$out/desktop_test"
 "$out/desktop_test" "$out/desktop-payload.elf"
@@ -229,9 +230,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 python3 "$root/tests/host/fs/fixtures.py"
 nasm -f bin -I "$out/" "$root/tests/host/proc/files_payload.asm" -o "$out/files-payload.elf"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
     "$root/tests/host/proc/files_test.c" "$root/tests/host/proc/signal_legacy.c" \
     "$root/tests/host/proc/desktop_legacy.c" "$root/src/kernel/fs/fs_port.c" \
     "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
-    "$root/src/kernel/fs/vfs.c" "$root/tests/host/fs/fake.c" -o "$out/files_test"
+    "$root/src/kernel/fs/vfs.c" "$root/tests/host/fs/fake.c" \
+    "$root/src/kernel/probes/f2_probes_files.c" -o "$out/files_test"
 "$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf"

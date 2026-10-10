@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/probe.h>
+#include <ciuki/storage.h>
 
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
 __asm__(".pushsection .rodata.desktop_payload,\"a\"\n"
@@ -252,10 +253,59 @@ finished:
 #endif
 }
 
+/* Call 3 remains bounded ASCII and is framed by the existing supervisor.
+ * Observe the trusted payload's three summaries as well as its exit status. */
+static struct { uint32_t pid, stages, checks, failures; bool invalid; } libc_reports;
+static bool report_unsigned(const char *line, const char *field, uint32_t *value)
+{
+    size_t length = strlen(field);
+    for (const char *p = line; *p; p++) {
+        if ((p == line || p[-1] == ' ') && !strncmp(p, field, length) && p[length] == '=') {
+            p += length + 1;
+            if (*p < '0' || *p > '9') return false;
+            uint32_t n = 0;
+            do {
+                unsigned digit = (unsigned)(*p++ - '0');
+                if (n > (UINT32_MAX - digit) / 10) return false;
+                n = n * 10 + digit;
+            } while (*p >= '0' && *p <= '9');
+            if (*p && *p != ' ') return false;
+            *value = n; return true;
+        }
+    }
+    return false;
+}
+void probe_f2_libc_report(struct task *task, const char *line, uint32_t length)
+{
+    struct proc_thread *t = proc_thread_for(task);
+    if (!libc_reports.pid || !t || t->process->pid != libc_reports.pid) return;
+    if (!length || length > CIUKI_PROBE_REPORT_MAX) { libc_reports.invalid = true; return; }
+    const char *cases[] = { "case=libc-smoke ", "case=atexit ", "case=destructor " };
+    for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
+        if (strncmp(line, cases[i], strlen(cases[i]))) continue;
+        uint32_t failures, checks, order;
+        if (libc_reports.stages != i || !report_unsigned(line, "failures", &failures) ||
+            !report_unsigned(line, "checks", &checks) || !report_unsigned(line, "order", &order) ||
+            !checks || checks < libc_reports.checks || order != i + 2) {
+            libc_reports.invalid = true; return;
+        }
+        libc_reports.stages++; libc_reports.checks = checks; libc_reports.failures |= failures;
+        return;
+    }
+    uint32_t observed;
+    if (report_unsigned(line, "observed", &observed) && !observed)
+        libc_reports.failures |= 1; /* a failed CHECK reports expected=1 observed=0 */
+}
+
 int probe_f2_libc_smoke(void)
 {
     const char *name = "libc-smoke";
     rec_emit(name, "BEGIN", 0);
+    /* Test selectors start read-only. Temporary-file assertions require the
+     * existing F1 write qualification, as does the fd-table controller. */
+    int setup = storage_enable_write(storage_get(), 2);
+    rec_emit(name, "DATA", "case=write-gate expected=0 observed=%d", setup);
+    if (setup) { rec_emit(name, "END", "status=FAIL reason=write_gate"); return 1; }
     const char *argv[] = { "libc_smoke", 0 };
     struct process *app = 0;
     int result = supervisor_spawn("/bin/libc_smoke", argv, 0, false, &app);
@@ -273,11 +323,17 @@ int probe_f2_libc_smoke(void)
     if (err) { proc_stop(app, 1, 0); proc_collect(); rec_emit(name, "END", "status=FAIL reason=controller_memory"); return 1; }
     proc_publish(owner, 0);
     app->ppid = owner->pid;
+    memset(&libc_reports, 0, sizeof(libc_reports)); libc_reports.pid = pid;
     supervisor_observe(name, pid);
     rec_emit(name, "DATA", "case=launch pid=%u pgid=%u abi_version=%u", pid, app->pgid, CIUKI_ABI_VERSION);
     uint64_t deadline = g_ticks + 180000;
     while (app->state != PROC_ZOMBIE && g_ticks < deadline) task_sleep_ms(1);
-    bool pass = app->state == PROC_ZOMBIE && app->status == 0;
+    bool pass = app->state == PROC_ZOMBIE && app->status == 0 && libc_reports.stages == 3 &&
+        !libc_reports.failures && !libc_reports.invalid;
+    rec_emit(name, "DATA", "group=libc-smoke checks=%u failures=%u callback_order=%u report_stages=%u invalid_reports=%u",
+             libc_reports.checks, libc_reports.failures, libc_reports.stages ? libc_reports.stages + 1 : 0,
+             libc_reports.stages, libc_reports.invalid);
+    libc_reports.pid = 0;
     rec_emit(name, "DATA", "case=wait pid=%u status=%d timeout=%u", pid, app->state == PROC_ZOMBIE ? app->status : -1, g_ticks >= deadline);
     supervisor_observe_end();
     if (app->state != PROC_ZOMBIE) {

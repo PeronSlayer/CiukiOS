@@ -9,6 +9,7 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/i8042.h>
 #include <ciuki/registry.h>
+#include <ciuki/storage.h>
 
 struct ciuki_boot_info g_boot;
 static struct resource desktop_resource = { .generation = 1, .state = RS_ACTIVE };
@@ -22,13 +23,14 @@ static char frame_probe[24];
 void klog(const char *fmt, ...) { (void)fmt; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
-    char extra[241];
+    char extra[241] = { 0 };
     va_list ap; va_start(ap, fmt);
     int n = fmt ? vsnprintf(extra, sizeof(extra), fmt, ap) : 0;
     va_end(ap);
     CHECK(n >= 0 && n < 155); /* conservative allowance for fixed record prefix */
     frame_count++;
-    CHECK(!strcmp(event, "DATA"));
+    CHECK(!strcmp(event, "DATA") || (!strcmp(probe, "libc-smoke") &&
+          (!strcmp(event, "BEGIN") || !strcmp(event, "END") || !strcmp(event, "ERROR"))));
     strcpy(frame_probe, probe);
     const char *data = strstr(extra, "data_hex=");
     if (data) {
@@ -75,6 +77,26 @@ int supervisor_spawn_standin(struct process *parent, struct process **out) { (vo
 #include "../../../src/kernel/proc/grants.c"
 #include "../../../src/kernel/proc/supervisor.c"
 #include "../../../src/kernel/proc/syscalls_desktop.c"
+static struct storage libc_storage;
+static int libc_gate_error;
+static unsigned libc_gate_calls, libc_spawn_calls;
+struct storage *storage_get(void) { return &libc_storage; }
+int storage_enable_write(struct storage *s, unsigned drive)
+{
+    CHECK(s == &libc_storage && drive == 2); libc_gate_calls++; return libc_gate_error;
+}
+static int report_fixture_spawn(const char *path, const char *const argv[], const char *cwd,
+                                bool desktop, struct process **out)
+{
+    CHECK(libc_gate_calls == 1 && !libc_gate_error && !strcmp(path, "/bin/libc_smoke"));
+    CHECK(argv && !strcmp(argv[0], "libc_smoke") && !argv[1] && !cwd && !desktop && out);
+    libc_spawn_calls++; return -ENOENT;
+}
+#define supervisor_spawn_standin report_fixture_standin
+#define supervisor_spawn report_fixture_spawn
+#include "../../../src/kernel/probes/f2_probes_desktop.c"
+#undef supervisor_spawn
+#undef supervisor_spawn_standin
 
 #define BUFFER (CIUKI_IMAGE_BASE + PAGE_SIZE)
 static void desktop_select(struct proc_thread *t) { g_current = t->task; g_current->state = T_RUNNING; }
@@ -486,12 +508,54 @@ static void test_desktop_capture(void)
     desktop_clean(p);
     puts("desktop supervisor: forged record framing, PID association, bounded head/tail and streaming SHA-256 PASS");
 }
+static void test_libc_reports(void)
+{
+    struct process *p; struct proc_thread *t = make_process(proc_supervisor(), &p); desktop_select(t);
+    const char *summaries[] = {
+        "case=libc-smoke expected=0 observed=0 checks=100 failures=0 order=2",
+        "case=atexit expected=0 observed=0 checks=101 failures=0 order=3",
+        "case=destructor expected=0 observed=0 checks=102 failures=0 order=4"
+    };
+    memset(&libc_reports, 0, sizeof(libc_reports)); libc_reports.pid = p->pid;
+    probe_f2_libc_report(&controller, summaries[0], strlen(summaries[0]));
+    CHECK(!libc_reports.stages);
+    for (unsigned i = 0; i < ARRAY_SIZE(summaries); i++)
+        probe_f2_libc_report(t->task, summaries[i], strlen(summaries[i]));
+    CHECK(libc_reports.stages == 3 && libc_reports.checks == 102 && !libc_reports.failures && !libc_reports.invalid);
+    const char failed[] = "case=uname expected=1 observed=0 line=120 errno=38";
+    probe_f2_libc_report(t->task, failed, sizeof(failed)-1); CHECK(libc_reports.failures == 1);
+    probe_f2_libc_report(t->task, summaries[2], strlen(summaries[2])); CHECK(libc_reports.invalid);
+    const char *bad[] = {
+        "case=libc-smoke checks=0 failures=0 order=2",
+        "case=libc-smoke checks=4294967296 failures=0 order=2",
+        "case=libc-smoke checks=100x failures=0 order=2",
+        "case=libc-smoke checks=100 failures=0 order=4",
+        "case=libc-smoke checks=100 order=2"
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(bad); i++) {
+        memset(&libc_reports, 0, sizeof(libc_reports)); libc_reports.pid = p->pid;
+        probe_f2_libc_report(t->task, bad[i], strlen(bad[i])); CHECK(libc_reports.invalid);
+    }
+    libc_reports.pid = 0;
+    desktop_clean(p);
+    puts("libc controller: PID-bound ordered summaries, failures survive exit zero, invalid/missing fields PASS");
+}
+static void test_libc_write_gate(void)
+{
+    libc_gate_error = -EROFS; libc_gate_calls = libc_spawn_calls = 0;
+    CHECK(probe_f2_libc_smoke() == 1 && libc_gate_calls == 1 && !libc_spawn_calls);
+    libc_gate_error = 0; libc_gate_calls = libc_spawn_calls = 0;
+    CHECK(probe_f2_libc_smoke() == 1 && libc_gate_calls == 1 && libc_spawn_calls == 1);
+    puts("libc controller: qualified write gate before payload launch, refusal never spawns PASS");
+}
 int main(int argc, char **argv)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     controller.state = T_RUNNING; g_current = &controller;
     proc_init();
     test_desktop_surfaces(); test_desktop_channels(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
+    test_libc_reports();
+    test_libc_write_gate();
     if (argc == 2) {
         FILE *file = fopen(argv[1], "rb"); CHECK(file);
         CHECK(!fseek(file, 0, SEEK_END)); long size = ftell(file); CHECK(size == 8196);

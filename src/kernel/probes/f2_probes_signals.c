@@ -24,8 +24,37 @@ struct signal_result {
     int32_t sleep_result;
     uint32_t first_tick, last_tick, order, saved_eax, resumed_eax, progress;
     uint32_t saved_mask, fp_digest, tls, release, peer_tid;
+    uint32_t release_count, completion, handler_completion;
+    int32_t handler_remaining;
 };
 _Static_assert(offsetof(struct signal_result, peer_tid) == 144, "private NASM result layout");
+_Static_assert(offsetof(struct signal_result, handler_completion) == 156, "private release result layout");
+_Static_assert(offsetof(struct signal_result, handler_remaining) == 160, "private remainder result layout");
+
+/* Fresh supervisor-owned descriptors; the final-release boundary posts a
+ * catcher while close/dup2 is executing, then yields before completing. No
+ * fault/recovery hook is installed on a real device or in the public ABI. */
+static struct signal_release {
+    struct proc_object object;
+    unsigned references;
+    bool inject;
+} release_objects[2];
+static void signal_release_retain(struct proc_object *object)
+{
+    ((struct signal_release *)object)->references++;
+}
+static void signal_release_drop(struct proc_object *object)
+{
+    struct signal_release *r = (struct signal_release *)object;
+    if (--r->references || !r->inject) return;
+    struct proc_thread *t = proc_thread_for(g_current);
+    if (!t) return;
+    proc_signal_thread_kill(t->process, t->tid, SIGUSR1);
+    task_sleep_ms(1);
+    uint32_t one = 1;
+    ua_write(t->process->memory, SIGNAL_RESULT + offsetof(struct signal_result, release_count), &one, sizeof(one));
+    ua_write(t->process->memory, SIGNAL_RESULT + offsetof(struct signal_result, completion), &one, sizeof(one));
+}
 
 static int signal_image_read(void *cookie, uint32_t off, void *dst, uint32_t bytes)
 {
@@ -52,6 +81,14 @@ static struct process *signal_payload(struct process *parent, unsigned mode, uin
         return 0;
     /* The UP kernel has not yielded since publication. */
     ua_write(p->memory, SIGNAL_RESULT, &mode, sizeof(uint32_t));
+    if (mode == 16 || mode == 17) {
+        for (unsigned i = 0; i < (mode == 17 ? 2u : 1u); i++) {
+            release_objects[i] = (struct signal_release){
+                .object = { signal_release_retain, signal_release_drop, true },
+                .references = 1, .inject = i == 0 };
+            p->fds[8 + i] = (struct proc_fd){ &release_objects[i].object, 0 };
+        }
+    }
     return p;
 }
 
@@ -85,6 +122,8 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
     signal_result_word(p, offsetof(struct signal_result, peer), survivor->pid);
     signal_result_word(p, offsetof(struct signal_result, other_group), other->pid);
     struct signal_result r = { 0 }, before = { 0 }, after = { 0 };
+    struct ciuki_timespec remaining = { 0 };
+    bool remaining_read = false;
     signal_result_read(survivor, &before);
     uint64_t deadline = g_ticks + 2000;
     bool injected = false, completed = false;
@@ -103,6 +142,7 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
             }
             if (!injected && r.tid && (mode == 9 || (mode >= 10 && mode <= 13)) &&
                 r.stage == (mode == 9 ? 1u : 2u) &&
+                (mode != 13 || proc_thread_find(p, r.tid)->task->state == T_BLOCKED) &&
                 (mode == 9 || g_ticks >= (uint64_t)r.first_tick + 10)) {
                 uint32_t sig = mode == 9 || mode == 12 ? SIGKILL : mode == 11 ? SIGTERM : mode == 13 ? SIGUSR1 : SIGUSR2;
                 int err = proc_signal_thread_kill(p, r.tid, sig);
@@ -115,7 +155,12 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
                 rec_emit("signals-fault", "DATA", "case=%s part=inject pid=%u tid=%u main_tid=%u signal=%u expected=0 observed=%d",
                          name, p->pid, r.peer_tid, r.tid, SIGUSR2, injected ? 0 : -ESRCH);
             }
+            if (!injected && mode == 15 && r.stage == 2 && r.tid &&
+                proc_thread_find(p, r.tid)->task->state == T_BLOCKED)
+                injected = !proc_signal_thread_kill(p, r.tid, SIGUSR1);
             if (r.stage == 100) {
+                if (mode == 13)
+                    remaining_read = !ua_read(p->memory, &remaining, SIGNAL_RESULT + 320, sizeof(remaining));
                 completed = true;
                 signal_result_word(p, offsetof(struct signal_result, release), 1);
                 break;
@@ -138,6 +183,12 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
                r.resumed_eax == (uint32_t)-EINTR;
     if (mode == 14)
         pass = pass && injected && r.entries == 1 && r.order == 1;
+    if (mode == 15)
+        pass = pass && injected && r.sleep_result == -EINTR && r.entries == 1 && r.returns == 1 &&
+               r.saved_eax == (uint32_t)-EINTR && r.resumed_eax == (uint32_t)-EINTR;
+    if (mode == 16 || mode == 17)
+        pass = pass && r.entries == 1 && r.returns == 1 && r.release_count == 1 && r.handler_completion == 1 &&
+               r.sleep_result == (mode == 16 ? 0 : 8) && r.saved_eax == r.resumed_eax;
     rec_emit("signals-fault", "DATA", "case=%s part=identity pid=%u tid=%u sender=%u",
              name, p->pid, r.tid, r.sender);
     rec_emit("signals-fault", "DATA", "case=%s part=fault signal=%u vector=%u code=%u trap_error=%08x address=%08x eip=%08x",
@@ -150,6 +201,16 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
              name, r.sleep_result, r.last_tick - r.first_tick, r.saved_eax, r.resumed_eax);
     rec_emit("signals-fault", "DATA", "case=%s part=context mask=%08x x87_digest=%08x",
              name, r.saved_mask, r.fp_digest);
+    if (mode == 13) {
+        pass = pass && remaining_read && !remaining.tv_sec && remaining.tv_nsec >= 0 && remaining.tv_nsec <= 20000000 &&
+               !remaining.reserved && r.handler_remaining == remaining.tv_nsec;
+        rec_emit("signals-fault", "DATA", "case=syscall-interruption syscall=nanosleep remainder_ns=%d handler_remainder_ns=%d result=%d saved_eax=%08x resumed_eax=%08x",
+                 remaining.tv_nsec, r.handler_remaining, r.sleep_result, r.saved_eax, r.resumed_eax);
+    }
+    if (mode >= 15 && mode <= 17)
+        rec_emit("signals-fault", "DATA", "case=syscall-interruption syscall=%s result=%d saved_eax=%08x resumed_eax=%08x releases=%u handler_completion=%u",
+                 mode == 15 ? "channel_recv" : mode == 16 ? "close" : "dup2",
+                 r.sleep_result, r.saved_eax, r.resumed_eax, r.release_count, r.handler_completion);
     if (!zombie) {
         proc_stop(p, 99, 0);
         zombie = signal_wait_zombie(p);
@@ -196,7 +257,8 @@ static int probe_f2_signals_fault(void)
             { "inactive-sigreturn", 8, SIGSEGV }, { "sigkill", 9, SIGKILL },
             { "handler-blocking", 10, 0 }, { "handler-blocking-term", 11, SIGTERM },
             { "handler-blocking-kill", 12, SIGKILL }, { "nanosleep-eintr", 13, 0 },
-            { "thread-kill-target", 14, 0 }
+            { "thread-kill-target", 14, 0 }, { "channel-eintr", 15, 0 },
+            { "close-deferred", 16, 0 }, { "dup2-deferred", 17, 0 }
         };
         for (unsigned i = 0; i < ARRAY_SIZE(cases); i++)
             pass = signal_case(parent, survivor, other, cases[i].name, cases[i].mode, cases[i].status) && pass;
@@ -206,9 +268,26 @@ static int probe_f2_signals_fault(void)
     proc_stop(parent, 0, 0);
     /* PID 1 owns parent; the reaper adopts and reaps its children. */
     task_sleep_ms(20);
-    rec_emit("signals-fault", "DATA", "case=syscall-interruption status=not_run reason=f2_03_backend_required");
-    rec_emit("signals-fault", "END", "status=FAIL reason=%s", pass ? "f2_03_interruption_evidence_pending" : "signal_contract");
-    return 1;
+    unsigned decisions = 0;
+    for (unsigned caught = 0; caught < 2; caught++)
+        for (unsigned kind = SIGNAL_WAIT_I; kind <= SIGNAL_WAIT_DEFER; kind++)
+            for (unsigned committed = 0; committed < 2; committed++)
+                for (unsigned issued = 0; issued < 2; issued++)
+                    for (unsigned progress = 0; progress < 2; progress++) {
+                        enum signal_wait_decision expected = SIGNAL_WAIT_CONTINUE;
+                        if (caught && !progress && kind != SIGNAL_WAIT_DEFER) {
+                            if (kind == SIGNAL_WAIT_I) expected = issued ? SIGNAL_WAIT_DRAIN : SIGNAL_WAIT_EINTR;
+                            else if (!committed && !issued) expected = SIGNAL_WAIT_EINTR;
+                        }
+                        enum signal_wait_decision actual = proc_signal_decide(caught, kind, committed, issued, progress);
+                        rec_emit("signals-fault", "DATA", "case=syscall-interruption layer=decision class=%u caught=%u committed=%u issued=%u progress=%u expected=%u observed=%u",
+                                 kind, caught, committed, issued, progress, expected, actual);
+                        pass = pass && actual == expected;
+                        decisions++;
+                    }
+    rec_emit("signals-fault", "DATA", "case=syscall-interruption layer=decision rows=%u close=defer dup2=defer issued_read=drain partial=positive", decisions);
+    rec_emit("signals-fault", "END", pass ? "status=PASS" : "status=FAIL reason=signal_contract");
+    return pass ? 0 : 1;
 #endif
 }
 CIUKI_F2_PROBE("signals-fault", probe_f2_signals_fault);

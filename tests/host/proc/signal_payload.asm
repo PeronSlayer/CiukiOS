@@ -42,6 +42,12 @@ org CIUKI_IMAGE_BASE - CIUKI_PAGE_SIZE
 %define EXPECT_TLS (DATA + 136)
 %define RELEASE (DATA + 140)
 %define PEER_TID (DATA + 144)
+%define RELEASE_COUNT (DATA + 148)
+%define COMPLETION (DATA + 152)
+%define HANDLER_COMPLETION (DATA + 156)
+%define HANDLER_REMAIN (DATA + 160)
+%define PAIR (DATA + 176)
+%define MESSAGE (DATA + 640)
 %define ACTION (DATA + 256)
 %define MASK (DATA + 288)
 %define REQUEST (DATA + 304)
@@ -132,6 +138,12 @@ entry:
     je sleep_interrupted
     cmp dword [MODE], 14
     je thread_target
+    cmp dword [MODE], 15
+    je channel_interrupted
+    cmp dword [MODE], 16
+    je close_deferred
+    cmp dword [MODE], 17
+    je dup2_deferred
     jmp fail_exit
 faults:
     fld1
@@ -323,6 +335,7 @@ handler_blocking:
     EQ dword [ORDER], 3
     jmp done
 sleep_interrupted:
+    mov dword [REMAIN + ABI_OFFSETOF_CIUKI_TIMESPEC_TV_NSEC], 0x7f7f7f7f
     mov dword [STAGE], 2
     call sample_start
     call sleep20
@@ -335,6 +348,50 @@ sleep_interrupted:
     inc dword [ERRORS]
 .remaining_ok:
     call sample_end
+    jmp done
+channel_interrupted:
+    mov ebx, PAIR
+    CALL CIUKI_SYS_CHANNEL_PAIR
+    EQ eax, 0
+    mov dword [STAGE], 2
+    mov ebx, [PAIR]
+    mov ecx, MESSAGE
+    xor edx, edx
+    CALL CIUKI_SYS_CHANNEL_RECV
+    mov [SLEEP_RESULT], eax
+    mov [RESUMED_EAX], eax
+    EQ eax, -EINTR
+    EQ dword [SAVED_EAX], -EINTR
+    mov ebx, [PAIR]
+    CALL CIUKI_SYS_CLOSE
+    EQ eax, 0
+    mov ebx, [PAIR+4]
+    CALL CIUKI_SYS_CLOSE
+    EQ eax, 0
+    jmp done
+close_deferred:
+    mov ebx, 8
+    CALL CIUKI_SYS_CLOSE
+    mov [SLEEP_RESULT], eax
+    mov [RESUMED_EAX], eax
+    EQ eax, 0
+    EQ dword [SAVED_EAX], 0
+    EQ dword [RELEASE_COUNT], 1
+    EQ dword [HANDLER_COMPLETION], 1
+    mov ebx, 8
+    CALL CIUKI_SYS_CLOSE
+    EQ eax, -EBADF
+    jmp done
+dup2_deferred:
+    mov ebx, 9
+    mov ecx, 8
+    CALL CIUKI_SYS_DUP2
+    mov [SLEEP_RESULT], eax
+    mov [RESUMED_EAX], eax
+    EQ eax, 8
+    EQ dword [SAVED_EAX], 8
+    EQ dword [RELEASE_COUNT], 1
+    EQ dword [HANDLER_COMPLETION], 1
     jmp done
 thread_target:
     ; A second real thread installs the same process disposition and waits.
@@ -427,6 +484,13 @@ handler:
     mov [LAST_EIP], eax
     mov eax, [edi + CREG(CIUKI_REG_EAX)]
     mov [SAVED_EAX], eax
+    mov eax, [COMPLETION]
+    mov [HANDLER_COMPLETION], eax
+    cmp dword [MODE], 13
+    jne .no_remainder
+    mov eax, [REMAIN + ABI_OFFSETOF_CIUKI_TIMESPEC_TV_NSEC]
+    mov [HANDLER_REMAIN], eax
+.no_remainder:
     mov eax, [edi + ABI_OFFSETOF_CIUKI_UCONTEXT_MASK]
     mov [SAVED_MASK], eax
     ; Handler x87 must start reset even after a pending unmasked exception.
