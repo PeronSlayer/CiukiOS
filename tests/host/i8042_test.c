@@ -49,6 +49,9 @@ static uint32_t host_survivor_data;
 static bool replay_input;
 static unsigned replay_cycles, record_count, record_pass, record_deferred, record_ready;
 static size_t longest_record;
+static bool print_records;
+static unsigned firmware_selftests, firmware_records, absent_records;
+static int fake_selftest_result;
 static unsigned host_allocations;
 static char last_log[256], expected_end[128];
 static unsigned record_fail;
@@ -318,6 +321,11 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     if ((size_t)len > longest_record) longest_record = (size_t)len;
     CHECK(len <= 240);
     if (len > 240) printf("oversized record: %s\n", record);
+    if (print_records) puts(record);
+    if (strstr(extra, "case=firmware_overrun ") || strstr(extra, "case=disallowed_io ")) {
+        firmware_records++;
+        if (strstr(extra, "status=not_run reason=firmware_backend_absent")) absent_records++;
+    }
     if (!strcmp(event, "READY")) record_ready++;
     if (!strcmp(event, "END")) {
         if (!strcmp(extra, "status=PASS")) record_pass++;
@@ -351,6 +359,21 @@ int udelay(uint32_t us)
 #include "../../src/kernel/drivers/i8042.c"
 #include "../../src/kernel/drivers/fwinput_adapter.c"
 #include "../../src/kernel/drivers/i8042_probe.c"
+
+int biosvm_selftest(struct biosvm_selftest_report *out)
+{
+    CHECK(fake_fw_state == BIOSVM_READY && !fixture && host_survivor);
+    firmware_selftests++;
+    *out = (struct biosvm_selftest_report){
+        .pic_before = { 0xF9, 0xEF }, .pic_after = { 0xF9, 0xEF },
+        .pit_before = 0x34, .pit_after = 0x34,
+        .policy_result = 0, .denied_result = -V86_EPERM,
+        .timeout_result = -V86_ETIMEDOUT, .later_result = -V86_EIO,
+        .disallowed = 1, .timeouts = 1, .disabled = true,
+        .pic_unchanged = true, .pit_unchanged = true, .mappings_ok = true,
+    };
+    return fake_selftest_result;
+}
 
 static void reset_native(void)
 {
@@ -849,7 +872,10 @@ static void test_native_fault_probe(void)
      * An unrestricted libc calloc hid the guest's oversized fixture request. */
     CHECK(sizeof(struct controller) > 2048 - 8 && !kzalloc(sizeof(struct controller)));
     unsigned allocations = host_allocations;
+    fake_fw_state = BIOSVM_OFF;
+    unsigned calls = firmware_selftests, absent = absent_records;
     CHECK(probe_input_fault() == 0);
+    CHECK(firmware_selftests == calls && absent_records == absent + 2);
     CHECK(host_allocations == allocations);
     registry_snapshot(&after);
     CHECK(record_pass == passes + 1 && !fixture && !host_survivor);
@@ -859,6 +885,32 @@ static void test_native_fault_probe(void)
     for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
     printf("i8042 native-active fault probe with kernel heap limit: %s (controller=%zu heap_max=2040)\n",
            record_pass == passes + 1 ? "PASS" : "FAIL", sizeof(struct controller));
+}
+
+static void test_firmware_fault_probe(bool absent, bool failed)
+{
+    reset_native();
+    select_fault("f1:input-fault run=12ab34cd platform=e500");
+    g_boot.flags |= CBI_F_SMBIOS_QEMU | CBI_F_INPUT_FORCED;
+    g_boot.input_policy = CBI_INPUT_FIRMWARE;
+    fake_fw_state = absent ? BIOSVM_OFF : BIOSVM_READY;
+    fake_selftest_result = failed ? -EFAULT : 0;
+    unsigned calls = firmware_selftests, records = firmware_records, skipped = absent_records;
+    struct registry_stats before, after;
+    registry_snapshot(&before);
+    if (failed) snprintf(expected_end, sizeof(expected_end), "status=FAIL reason=fault_or_survivor");
+    CHECK(probe_input_fault() == (failed ? 1 : 0));
+    expected_end[0] = 0;
+    fake_selftest_result = 0;
+    registry_snapshot(&after);
+    CHECK(firmware_selftests == calls + !absent);
+    CHECK(firmware_records == records + (absent ? 2 : 5));
+    CHECK(absent_records == skipped + (absent ? 2 : 0));
+    CHECK(!fixture && !host_survivor && !hw.reads && !hw.writes && !pic_changes);
+    CHECK(before.claims == after.claims && before.live == after.live && before.quarantines == after.quarantines);
+    for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
+    printf("i8042 firmware fault records: PASS (backend=%s selftest=%s, survivor and lease cleanup)\n",
+           absent ? "absent" : "ready", failed ? "failed" : "passed");
 }
 
 static void test_fault_probe_refusals(void)
@@ -977,8 +1029,16 @@ static void test_firmware_mapping(void)
     printf("firmware queue bridge: PASS (set-1/E0/Pause/text/motion/buttons, generation/source/sequence, loss, quarantine)\n");
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2) {
+        bool absent = !strcmp(argv[1], "firmware-absent");
+        bool failed = !strcmp(argv[1], "firmware-failed");
+        CHECK(absent || failed || !strcmp(argv[1], "firmware-records"));
+        print_records = true;
+        test_firmware_fault_probe(absent, failed);
+        return failures ? 1 : 0;
+    }
     test_policy_and_lifecycle();
     test_native_failures();
     test_hook_selection();
@@ -987,6 +1047,9 @@ int main(void)
     test_queue_and_stimulus();
     test_probe_records();
     test_native_fault_probe();
+    test_firmware_fault_probe(false, false);
+    test_firmware_fault_probe(true, false);
+    test_firmware_fault_probe(false, true);
     test_fault_probe_refusals();
     test_firmware_mapping();
     i8042_fault_end();

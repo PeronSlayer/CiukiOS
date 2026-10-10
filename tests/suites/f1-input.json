@@ -2864,7 +2864,7 @@
       "id": "firmware_overrun",
       "probe": "input-fault",
       "profile": "qemu-e500",
-      "selector": "f1:input-fault run={run_id}",
+      "selector": "f1:input-fault run={run_id} platform=e500",
       "timeout": 120,
       "expected": {
         "terminal": "END",
@@ -3225,12 +3225,46 @@
                 "ge": 1
               }
             }
-          }
-        ],
-        "not_run_subcases": [
+          },
           {
-            "subcase": "firmware_overrun",
-            "reason": "biosvm_selftest_has_no_record_emitter"
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "timeout_result": {
+                "encoding": "signed",
+                "eq": -110
+              },
+              "timeouts": {
+                "eq": 1
+              },
+              "disabled": {
+                "eq": 1
+              },
+              "later_result": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
           }
         ]
       }
@@ -3239,7 +3273,7 @@
       "id": "disallowed_io",
       "probe": "input-fault",
       "profile": "qemu-e500",
-      "selector": "f1:input-fault run={run_id}",
+      "selector": "f1:input-fault run={run_id} platform=e500",
       "timeout": 120,
       "expected": {
         "terminal": "END",
@@ -3600,12 +3634,82 @@
                 "ge": 1
               }
             }
-          }
-        ],
-        "not_run_subcases": [
+          },
           {
-            "subcase": "disallowed_io",
-            "reason": "biosvm_selftest_has_no_record_emitter"
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "policy_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "denied_result": {
+                "encoding": "signed",
+                "eq": -1
+              },
+              "disallowed": {
+                "eq": 1
+              },
+              "pic_unchanged": {
+                "eq": 1
+              },
+              "pit_unchanged": {
+                "eq": 1
+              },
+              "mappings_ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io"
+            },
+            "count": 1,
+            "combine": true,
+            "fields": {
+              "pic_before": {
+                "encoding": "hex",
+                "width": 4,
+                "ge": 0
+              },
+              "pic_after": {
+                "encoding": "hex",
+                "width": 4,
+                "eq": "$pic_before"
+              },
+              "pit_before": {
+                "encoding": "hex",
+                "width": 2,
+                "ge": 0
+              },
+              "pit_after": {
+                "encoding": "hex",
+                "width": 2,
+                "eq": "$pit_before"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
           }
         ]
       }
@@ -7012,6 +7116,566 @@
               },
               "absent": {
                 "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "firmware_overrun-qemu-min128",
+      "probe": "input-fault",
+      "profile": "qemu-min128",
+      "selector": "f1:input-fault run={run_id} platform=e500",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "timeout_result": {
+                "encoding": "signed",
+                "eq": -110
+              },
+              "timeouts": {
+                "eq": 1
+              },
+              "disabled": {
+                "eq": 1
+              },
+              "later_result": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "disallowed_io-qemu-min128",
+      "probe": "input-fault",
+      "profile": "qemu-min128",
+      "selector": "f1:input-fault run={run_id} platform=e500",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "policy_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "denied_result": {
+                "encoding": "signed",
+                "eq": -1
+              },
+              "disallowed": {
+                "eq": 1
+              },
+              "pic_unchanged": {
+                "eq": 1
+              },
+              "pit_unchanged": {
+                "eq": 1
+              },
+              "mappings_ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io"
+            },
+            "count": 1,
+            "combine": true,
+            "fields": {
+              "pic_before": {
+                "encoding": "hex",
+                "width": 4,
+                "ge": 0
+              },
+              "pic_after": {
+                "encoding": "hex",
+                "width": 4,
+                "eq": "$pic_before"
+              },
+              "pit_before": {
+                "encoding": "hex",
+                "width": 2,
+                "ge": 0
+              },
+              "pit_after": {
+                "encoding": "hex",
+                "width": 2,
+                "eq": "$pit_before"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "firmware_overrun-qemu-t23",
+      "probe": "input-fault",
+      "profile": "qemu-t23",
+      "selector": "f1:input-fault run={run_id} platform=e500",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "timeout_result": {
+                "encoding": "signed",
+                "eq": -110
+              },
+              "timeouts": {
+                "eq": 1
+              },
+              "disabled": {
+                "eq": 1
+              },
+              "later_result": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "disallowed_io-qemu-t23",
+      "probe": "input-fault",
+      "profile": "qemu-t23",
+      "selector": "f1:input-fault run={run_id} platform=e500",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "policy_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "denied_result": {
+                "encoding": "signed",
+                "eq": -1
+              },
+              "disallowed": {
+                "eq": 1
+              },
+              "pic_unchanged": {
+                "eq": 1
+              },
+              "pit_unchanged": {
+                "eq": 1
+              },
+              "mappings_ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io"
+            },
+            "count": 1,
+            "combine": true,
+            "fields": {
+              "pic_before": {
+                "encoding": "hex",
+                "width": 4,
+                "ge": 0
+              },
+              "pic_after": {
+                "encoding": "hex",
+                "width": 4,
+                "eq": "$pic_before"
+              },
+              "pit_before": {
+                "encoding": "hex",
+                "width": 2,
+                "ge": 0
+              },
+              "pit_after": {
+                "encoding": "hex",
+                "width": 2,
+                "eq": "$pit_before"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "firmware_overrun-qemu-desktop-1998",
+      "probe": "input-fault",
+      "profile": "qemu-desktop-1998",
+      "selector": "f1:input-fault run={run_id} platform=e500",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "timeout_result": {
+                "encoding": "signed",
+                "eq": -110
+              },
+              "timeouts": {
+                "eq": 1
+              },
+              "disabled": {
+                "eq": 1
+              },
+              "later_result": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "disallowed_io-qemu-desktop-1998",
+      "probe": "input-fault",
+      "profile": "qemu-desktop-1998",
+      "selector": "f1:input-fault run={run_id} platform=e500",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "policy_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "denied_result": {
+                "encoding": "signed",
+                "eq": -1
+              },
+              "disallowed": {
+                "eq": 1
+              },
+              "pic_unchanged": {
+                "eq": 1
+              },
+              "pit_unchanged": {
+                "eq": 1
+              },
+              "mappings_ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io"
+            },
+            "count": 1,
+            "combine": true,
+            "fields": {
+              "pic_before": {
+                "encoding": "hex",
+                "width": 4,
+                "ge": 0
+              },
+              "pic_after": {
+                "encoding": "hex",
+                "width": 4,
+                "eq": "$pic_before"
+              },
+              "pit_before": {
+                "encoding": "hex",
+                "width": 2,
+                "ge": 0
+              },
+              "pit_after": {
+                "encoding": "hex",
+                "width": 2,
+                "eq": "$pit_before"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "firmware_overrun-qemu-desktop-2002",
+      "probe": "input-fault",
+      "profile": "qemu-desktop-2002",
+      "selector": "f1:input-fault run={run_id} platform=e500",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "timeout_result": {
+                "encoding": "signed",
+                "eq": -110
+              },
+              "timeouts": {
+                "eq": 1
+              },
+              "disabled": {
+                "eq": 1
+              },
+              "later_result": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "firmware_overrun",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "disallowed_io-qemu-desktop-2002",
+      "probe": "input-fault",
+      "profile": "qemu-desktop-2002",
+      "selector": "f1:input-fault run={run_id} platform=e500",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "result": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "policy_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "denied_result": {
+                "encoding": "signed",
+                "eq": -1
+              },
+              "disallowed": {
+                "eq": 1
+              },
+              "pic_unchanged": {
+                "eq": 1
+              },
+              "pit_unchanged": {
+                "eq": 1
+              },
+              "mappings_ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io"
+            },
+            "count": 1,
+            "combine": true,
+            "fields": {
+              "pic_before": {
+                "encoding": "hex",
+                "width": 4,
+                "ge": 0
+              },
+              "pic_after": {
+                "encoding": "hex",
+                "width": 4,
+                "eq": "$pic_before"
+              },
+              "pit_before": {
+                "encoding": "hex",
+                "width": 2,
+                "ge": 0
+              },
+              "pit_after": {
+                "encoding": "hex",
+                "width": 2,
+                "eq": "$pit_before"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disallowed_io",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
               }
             }
           }
