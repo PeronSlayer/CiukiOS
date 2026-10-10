@@ -1,0 +1,694 @@
+/* T0: production controller/decoders and registry with fake hardware/time.
+ * scripts/test/host_kernel_tests.sh, ASan/UBSan.
+ * SPDX-License-Identifier: GPL-2.0-only */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ciuki/kernel.h>
+#include <ciuki/task.h>
+#include <ciuki/sync.h>
+#include <ciuki/work.h>
+#include <ciuki/registry.h>
+#include <ciuki/i8042.h>
+
+static unsigned failures, checks;
+#define CHECK(c) do { checks++; if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
+
+/* Substitute only privileged hardware and scheduler boundaries. The queue,
+ * command engine, mutexes, generations and registry are production sources. */
+#define CIUKI_CPU_H
+static uint32_t host_flags = 0x200;
+static uint32_t read_eflags(void) { return host_flags; }
+static uint32_t irq_save(void) { uint32_t f = host_flags; host_flags = 0; return f; }
+static void irq_restore(uint32_t f) { host_flags = f; }
+static void outl(uint16_t port, uint32_t v) { (void)port; (void)v; }
+static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
+
+struct fake_byte { uint8_t status, data; uint64_t ready; };
+struct fake_bus {
+    struct fake_byte bytes[64];
+    unsigned head, count, writes, reads, sends, resets, config_writes, selftests;
+    uint64_t now, ibf_until;
+    uint32_t pause_step, ack_delay;
+    uint8_t config, last_config, mouse_id;
+    unsigned resend_count;
+    bool aux, config_next, missing, stuck_ibf, stuck_obf, stalled, bad_selftest;
+    bool wrong_aux, mixed, irq_reply, stop_stuck, selftest_reenable, bad_ack;
+};
+static struct fake_bus hw;
+static irq_handler_t host_handlers[16];
+static unsigned pic_changes, host_yields;
+static bool host_masked[16];
+static uint8_t host_pages[4][PAGE_SIZE];
+static bool host_page_used[4];
+static struct task *host_survivor;
+static uint32_t host_survivor_data;
+static bool replay_input;
+static unsigned replay_cycles, record_count, record_pass, record_deferred, record_ready;
+static size_t longest_record;
+static struct task host_task = { .state = T_RUNNING };
+struct task *g_current = &host_task;
+volatile uint64_t g_ticks;
+volatile bool g_need_resched;
+uint64_t g_tsc_per_ms;
+bool g_cpu_tsc;
+struct ciuki_boot_info g_boot;
+
+static void fake_push(struct fake_bus *b, bool aux, uint8_t data, uint32_t delay)
+{
+    CHECK(b->count < ARRAY_SIZE(b->bytes));
+    if (b->count == ARRAY_SIZE(b->bytes)) return;
+    unsigned n = (b->head + b->count++) % ARRAY_SIZE(b->bytes);
+    b->bytes[n] = (struct fake_byte){ aux ? 0x21 : 0x01, data, b->now + delay };
+}
+static uint8_t fake_read(void *arg, uint16_t port)
+{
+    struct fake_bus *b = arg;
+    b->reads++;
+    if (port == 0x64) {
+        uint8_t status = (b->stuck_ibf || b->now < b->ibf_until) ? 2 : 0;
+        if (b->stuck_obf) return status | 1;
+        if (b->count && b->bytes[b->head].ready <= b->now) status |= b->bytes[b->head].status;
+        return status;
+    }
+    if (b->stuck_obf) return 0;
+    CHECK(b->count && b->bytes[b->head].ready <= b->now);
+    if (!b->count) return 0;
+    uint8_t data = b->bytes[b->head].data;
+    b->head = (b->head + 1) % ARRAY_SIZE(b->bytes);
+    b->count--;
+    return data;
+}
+static void fake_write(void *arg, uint16_t port, uint8_t data)
+{
+    struct fake_bus *b = arg;
+    b->writes++;
+    if (port == 0x64) {
+        if (data == 0xD1 || data >= 0xF0) b->resets++;
+        switch (data) {
+        case 0xAD: b->config |= 0x10; if (b->stop_stuck) b->stuck_ibf = true; break;
+        case 0xA7: b->config |= 0x20; break;
+        case 0xAE: b->config &= ~0x10; break;
+        case 0xA8: b->config &= ~0x20; break;
+        case 0x20: fake_push(b, false, b->config, 0); break;
+        case 0x60: b->config_next = true; break;
+        case 0xAA:
+            b->selftests++;
+            b->config = b->selftest_reenable ? 0x43 : 0x73;
+            fake_push(b, false, b->bad_selftest ? 0xFC : 0x55, 0);
+            break;
+        case 0xAB: case 0xA9: fake_push(b, false, 0, 0); break;
+        case 0xD4: b->aux = true; break;
+        default: CHECK(false); break;
+        }
+        return;
+    }
+    if (data == 0xFF) b->resets++;
+    if (b->config_next) {
+        b->config_next = false;
+        b->last_config = b->config = data;
+        b->config_writes++;
+        return;
+    }
+    b->sends++;
+    if (!b->missing) {
+        if (b->mixed) {
+            fake_push(b, false, 0x1C, 0);
+            fake_push(b, true, 0x08, 0);
+            fake_push(b, true, 0x02, 0);
+            fake_push(b, true, 0x01, 0);
+            fake_push(b, false, 0xF0, 0);
+            fake_push(b, false, 0x1C, 0);
+        }
+        uint8_t reply = b->sends <= b->resend_count ? 0xFE : 0xFA;
+        fake_push(b, b->aux ^ b->wrong_aux, reply, b->ack_delay);
+        if (b->bad_ack) b->bytes[(b->head + b->count - 1) % ARRAY_SIZE(b->bytes)].status |= 0x80;
+        if (b->aux && data == 0xF2 && reply == 0xFA)
+            fake_push(b, true, b->mouse_id, b->ack_delay);
+    }
+    b->aux = false;
+}
+static uint64_t fake_now(void *arg) { return ((struct fake_bus *)arg)->now; }
+static void fake_pause(void *arg)
+{
+    struct fake_bus *b = arg;
+    CHECK(host_flags & 0x200);
+    if (!b->stalled) b->now += b->pause_step;
+    if (b == &hw) {
+        g_ticks = b->now;
+        if (b->irq_reply && host_handlers[1] && b->count && b->bytes[b->head].ready <= b->now) {
+            uint32_t f = irq_save();
+            struct trap_frame tf = { .vector = 0x21 };
+            host_handlers[1](&tf);
+            irq_restore(f);
+        }
+    }
+}
+static const struct i8042_test_io fake_io = { fake_read, fake_write, fake_now, fake_pause };
+static uint8_t inb(uint16_t port) { return fake_read(&hw, port); }
+static void outb(uint16_t port, uint8_t data)
+{
+    if (port == 0x60 || port == 0x64) fake_write(&hw, port, data);
+}
+
+void pic_mask(unsigned irq) { CHECK(irq < 16); host_masked[irq] = true; pic_changes++; }
+void pic_unmask(unsigned irq)
+{
+    CHECK(irq < 16 && host_handlers[irq]);
+    host_masked[irq] = false;
+    if (irq >= 8) host_masked[2] = false;
+    pic_changes++;
+}
+void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); host_handlers[irq] = h; }
+void klog(const char *fmt, ...) { (void)fmt; }
+__attribute__((noreturn)) void panic(const char *fmt, ...) { fprintf(stderr, "panic: %s\n", fmt); exit(2); }
+void *kzalloc(size_t n) { return calloc(1, n); }
+void kfree(void *p) { free(p); }
+void task_start(struct task *t) { t->state = T_READY; }
+void schedule(void) { CHECK(false); }   /* all tested command mutexes are uncontended */
+void task_yield(void) { CHECK(host_flags & 0x200); host_yields++; }
+static void *host_p2v(uint32_t p)
+{
+    CHECK(p && p <= sizeof(host_pages) && !(p % PAGE_SIZE));
+    return host_pages[p / PAGE_SIZE - 1];
+}
+#define P2V(p) host_p2v(p)
+uint32_t pmm_alloc(void)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++)
+        if (!host_page_used[i]) { host_page_used[i] = true; return (i + 1) * PAGE_SIZE; }
+    return 0;
+}
+void pmm_free(uint32_t p) { CHECK(host_page_used[p / PAGE_SIZE - 1]); host_page_used[p / PAGE_SIZE - 1] = false; }
+int as_map(struct aspace *as, uint32_t va, uint32_t p, uint32_t fl)
+{
+    (void)fl;
+    CHECK(as == &host_survivor->as);
+    as->pages++;
+    if (va == 0x00400000) host_survivor_data = p;
+    return 0;
+}
+struct task *task_create_user(const char *name, enum task_prio prio, uint32_t entry, uint32_t esp,
+                              uint32_t eax, uint32_t ebx, uint32_t ecx)
+{
+    (void)name; (void)prio; (void)ecx;
+    CHECK(!host_survivor && entry == 0x00401000 && esp == 0xBFFFFFF0 && eax == 7 && ebx == 0x5EED5EED);
+    host_survivor = calloc(1, sizeof(*host_survivor));
+    return host_survivor;
+}
+bool task_alive(const struct task *t) { return t->state != T_ZOMBIE && t->state != T_DEAD; }
+void task_kill(struct task *t, int code) { t->exit_code = code; t->state = T_ZOMBIE; }
+void task_reap(struct task *t)
+{
+    CHECK(t == host_survivor && t->state == T_ZOMBIE);
+    /* All three pages are owned by this one fake address space. */
+    memset(host_page_used, 0, sizeof(host_page_used));
+    free(t);
+    host_survivor = 0;
+    host_survivor_data = 0;
+}
+static void replay_byte(bool aux, uint8_t byte)
+{
+    fake_push(&hw, aux, byte, 0);
+    CHECK(host_handlers[1] != 0);
+    uint32_t f = irq_save();
+    struct trap_frame tf = { .vector = 0x21 };
+    host_handlers[1](&tf);
+    irq_restore(f);
+}
+void task_sleep_ms(uint32_t ms)
+{
+    CHECK(host_flags & 0x200);
+    for (unsigned n = 0; n < ms; n++) {
+        hw.now++;
+        g_ticks = hw.now;
+        if (host_survivor && host_survivor_data && task_alive(host_survivor)) {
+            uint32_t *data = host_p2v(host_survivor_data);
+            data[0]++;
+            data[2] = 0x5EED5EED;
+        }
+        if (replay_input && replay_cycles < 100) {
+            replay_byte(false, 0x1C);
+            replay_byte(true, 0x08); replay_byte(true, 2); replay_byte(true, 1);
+            replay_byte(false, 0xF0); replay_byte(false, 0x1C);
+            if (replay_cycles % 10 == 0) {
+                replay_byte(true, 0x09); replay_byte(true, 0); replay_byte(true, 0);
+                replay_byte(true, 0x08); replay_byte(true, 0); replay_byte(true, 0);
+            }
+            replay_cycles++;
+        }
+    }
+}
+void rec_emit(const char *probe, const char *event, const char *fmt, ...)
+{
+    char extra[512] = { 0 }, record[768];
+    va_list ap;
+    va_start(ap, fmt);
+    if (fmt) vsnprintf(extra, sizeof(extra), fmt, ap);
+    va_end(ap);
+    int len = snprintf(record, sizeof(record), "CIUKI_TEST v=1 run=12ab34cd seq=%06u probe=%s event=%s%s%s",
+                       ++record_count, probe, event, *extra ? " " : "", extra);
+    if ((size_t)len > longest_record) longest_record = (size_t)len;
+    CHECK(len <= 240);
+    if (len > 240) printf("oversized record: %s\n", record);
+    if (!strcmp(event, "READY")) record_ready++;
+    if (!strcmp(event, "END")) {
+        if (!strcmp(extra, "status=PASS")) record_pass++;
+        else if (strstr(extra, "status=not_run")) record_deferred++;
+        else { printf("probe failure: %s\n", record); CHECK(false); }
+    }
+}
+/* Linked symbols stand in for the existing payload blob; fake scheduling
+ * above models its progress, while QEMU must execute the real ring-3 code. */
+__asm__(".pushsection .rodata\n"
+        ".global payload_start\npayload_start:\n.byte 0\n"
+        ".global payload_end\npayload_end:\n.popsection\n");
+int kwork_init(void) { return 0; }
+bool kwork_queue(kwork_fn fn, void *arg) { (void)fn; (void)arg; CHECK(false); return false; }
+void kwork_yield(void) { CHECK(false); }
+
+/* sync.c contains RDTSC, never executed: g_cpu_tsc is false in this test.
+ * Replace ONLY udelay: privileged native pacing becomes fake PIT time. */
+#define udelay sync_udelay
+#include "../../src/kernel/core/sync.c"
+#undef udelay
+int udelay(uint32_t us)
+{
+    CHECK(us <= 1000 && ((host_flags & 0x200) || us <= 50));
+    if (host_flags & 0x200) fake_pause(&hw);
+    return 0;
+}
+#include "../../src/kernel/core/registry.c"
+#include "../../src/kernel/drivers/i8042.c"
+#include "../../src/kernel/drivers/i8042_probe.c"
+
+static void reset_native(void)
+{
+    i8042_fault_end();
+    memset(&native, 0, sizeof(native));
+    memset(&hw, 0, sizeof(hw));
+    hw.pause_step = 1;
+    hw.config = 0x47;                 /* preserve system flag, disable translation/IRQs */
+    hw.selftest_reenable = true;
+    memset(host_handlers, 0, sizeof(host_handlers));
+    memset(host_masked, 1, sizeof(host_masked));
+    memset(&g_boot, 0, sizeof(g_boot));
+    host_flags = 0x200;
+    g_ticks = 0;
+    pic_changes = 0;
+    registry_init();
+}
+static void select_fault(const char *selector)
+{
+    memset(g_boot.test_request, 0, sizeof(g_boot.test_request));
+    g_boot.flags = CBI_F_TEST_REQUEST;
+    g_boot.test_request_len = (uint32_t)strlen(selector);
+    memcpy(g_boot.test_request, selector, g_boot.test_request_len);
+}
+static void begin_fixture(struct fake_bus *b)
+{
+    memset(b, 0, sizeof(*b));
+    b->pause_step = 1;
+    select_fault("f1:input-fault run=12ab34cd");
+    CHECK(i8042_fault_begin(&fake_io, b) == 0);
+}
+static void feed(bool aux, uint8_t byte) { CHECK(i8042_fault_capture(aux ? 0x21 : 1, byte) == 0); }
+static struct input_digest fixture_digest(void)
+{
+    struct input_digest d;
+    struct input_event e;
+    uint64_t seq = 0;
+    input_digest_init(&d);
+    while (i8042_fault_read(&e)) {
+        CHECK(e.sequence > seq && e.generation && e.source == INPUT_NATIVE);
+        seq = e.sequence;
+        input_digest_add(&d, &e);
+    }
+    return d;
+}
+
+static void test_policy_and_lifecycle(void)
+{
+    reset_native();
+    unsigned count = registry_count(), reads = hw.reads, writes = hw.writes;
+    g_boot.input_policy = CBI_INPUT_FIRMWARE;
+    CHECK(i8042_init() == -ENOSYS);
+    CHECK(hw.reads == reads && hw.writes == writes && !pic_changes && registry_count() == count);
+    CHECK(!strcmp(i8042_backend(), "firmware"));
+    reset_native();
+    g_boot.flags = CBI_F_INPUT_FORCED;
+    CHECK(i8042_init() == -ENOSYS && !hw.reads && !hw.writes && !pic_changes);
+    reset_native();
+    CHECK(registry_claim(RES_IRQ, 12, 13, "other", false) >= 0);
+    reads = hw.reads; writes = hw.writes;
+    CHECK(i8042_init() == -EINVAL);
+    CHECK(hw.reads == reads && hw.writes == writes && !pic_changes);
+    for (unsigned i = 0; i < registry_count(); i++)
+        CHECK(strcmp(registry_get(i)->owner, "i8042"));
+
+    reset_native();
+    unsigned owners = 0;
+    CHECK(i8042_init() == 0);
+    struct i8042_stats s;
+    i8042_snapshot(&s);
+    CHECK(s.active && !s.pending_command && !s.quarantined && s.generation);
+    CHECK(!(hw.config & 0x70) && (hw.config & 7) == 7 && !hw.resets && hw.selftests == 1);
+    CHECK(s.last_elapsed_ms <= I8042_SETUP_MS && !host_masked[1] && !host_masked[12] && !host_masked[2]);
+    CHECK(host_handlers[1] && host_handlers[12]);
+    for (unsigned i = 0; i < registry_count(); i++) {
+        const struct resource *r = registry_get(i);
+        if (!strcmp(r->owner, "i8042")) { owners++; CHECK(r->state == RS_ACTIVE && !r->shareable); }
+    }
+    CHECK(owners == 4);
+    reads = hw.reads; writes = hw.writes;
+    CHECK(i8042_init() == 0 && hw.reads == reads && hw.writes == writes);
+    CHECK(i8042_stop(s.generation + 1) == -EINVAL && hw.reads == reads && hw.writes == writes);
+    /* The interrupt's IRQ number is not used to guess the byte's source. */
+    fake_push(&hw, false, 0x1C, 0);
+    fake_push(&hw, false, 0xF0, 0);
+    fake_push(&hw, false, 0x1C, 0);
+    struct trap_frame tf = { .vector = 0x2C };
+    for (unsigned i = 0; i < 3; i++) {
+        unsigned before = hw.count;
+        uint32_t f = irq_save();
+        host_handlers[12](&tf);
+        irq_restore(f);
+        CHECK(hw.count + 1 == before);
+    }
+    struct input_event event;
+    CHECK(input_read(&event) && event.type == INPUT_KEY && event.code == INPUT_KEY_A && event.value == 1);
+    CHECK(input_read(&event) && event.value == 0 && !input_read(&event));
+    hw.ack_delay = 1;
+    hw.irq_reply = true;
+    CHECK(device_command(&native, false, 0xF4, hw.now + 100) == 0);
+    CHECK(!native.stats.pending_command && !hw.count && !input_read(&event));
+    hw.ack_delay = 0;
+    hw.irq_reply = false;
+    /* A stale generation must prevent both IRQ reads and shutdown writes. */
+    res[native.handle[0]].generation++;
+    reads = hw.reads; writes = hw.writes;
+    host_handlers[1](&tf);
+    CHECK(hw.reads == reads && i8042_stop(s.generation) == -EINVAL && hw.writes == writes);
+    res[native.handle[0]].generation--;
+    CHECK(i8042_stop(s.generation) == 0);
+    CHECK((hw.config & 0x33) == 0x30 && host_masked[1] && host_masked[12]);
+    CHECK(!host_handlers[1] && !host_handlers[12] && !hw.count && !hw.resets);
+    for (unsigned i = 0; i < registry_count(); i++)
+        if (!strcmp(registry_get(i)->owner, "i8042")) CHECK(registry_get(i)->state == RS_RELEASED);
+    CHECK(i8042_init() == 0);
+    i8042_snapshot(&s);
+    CHECK(s.generation && i8042_stop(s.generation) == 0);
+    printf("i8042 policy/claims/IRQ/quiescence: PASS\n");
+}
+
+static void test_native_failures(void)
+{
+    reset_native();
+    hw.missing = true;
+    CHECK(i8042_init() == -I8042_ETIMEDOUT);
+    struct i8042_stats s;
+    i8042_snapshot(&s);
+    CHECK(s.quarantined && !s.active && !s.pending_command && s.last_elapsed_ms <= 500);
+    unsigned reads = hw.reads, writes = hw.writes;
+    CHECK(i8042_init() == -I8042_EIO && hw.reads == reads && hw.writes == writes);
+    unsigned owners = 0;
+    for (unsigned i = 0; i < registry_count(); i++)
+        if (!strcmp(registry_get(i)->owner, "i8042")) { owners++; CHECK(registry_get(i)->state == RS_QUARANTINED); }
+    CHECK(owners == 4 && !hw.resets && host_masked[1] && host_masked[12]);
+    reset_native();
+    hw.ack_delay = 60;                   /* cumulative setup must stop at 500, not 9*100 */
+    CHECK(i8042_init() == -I8042_ETIMEDOUT);
+    i8042_snapshot(&s);
+    CHECK(s.last_elapsed_ms == 500 && s.quarantined && !hw.resets);
+    reset_native();
+    hw.stuck_ibf = true;
+    CHECK(i8042_init() == -I8042_ETIMEDOUT && hw.now == 100 && !hw.writes);
+    reset_native();
+    hw.stuck_obf = true;
+    CHECK(i8042_init() == -I8042_ETIMEDOUT && hw.now == 100 && !hw.writes);
+    reset_native();
+    hw.bad_selftest = true;
+    CHECK(i8042_init() == -I8042_EIO && !hw.resets && hw.selftests == 1);
+    reset_native();
+    hw.mouse_id = 3;                    /* F6 does not undo IntelliMouse negotiation */
+    CHECK(i8042_init() == -I8042_EPROTO && !hw.resets);
+    reset_native();
+    CHECK(i8042_init() == 0);
+    i8042_snapshot(&s);
+    hw.stop_stuck = true;
+    CHECK(i8042_stop(s.generation) == -I8042_ETIMEDOUT);
+    i8042_snapshot(&s);
+    CHECK(s.quarantined && !host_handlers[1] && !host_handlers[12]);
+    printf("i8042 native setup/timeout/quarantine: PASS\n");
+}
+
+static void test_commands(void)
+{
+    struct fake_bus b;
+    begin_fixture(&b);
+    CHECK(i8042_fault_command(false, 0xF4) == 0 && b.sends == 1);
+    CHECK(i8042_fault_command(true, 0xF4) == 0 && b.sends == 2);
+    CHECK(!b.resets);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.resend_count = 2;
+    CHECK(i8042_fault_command(true, 0xF4) == 0 && b.sends == 3);
+    struct i8042_stats s;
+    i8042_fault_snapshot(&s, 0);
+    CHECK(s.resends == 2 && !s.quarantined && s.last_elapsed_ms <= 100);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.resend_count = 100;
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_EPROTO && b.sends == 3);
+    i8042_fault_snapshot(&s, 0);
+    CHECK(s.resends == 2 && s.quarantined && !s.pending_command);
+    unsigned writes = b.writes, reads = b.reads;
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_EIO && b.writes == writes && b.reads == reads);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.resend_count = 2; b.ack_delay = 45;
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT && b.now == 100);
+    i8042_fault_snapshot(&s, 0);
+    CHECK(s.resends == 2 && s.last_elapsed_ms == 100 && s.quarantined);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.missing = true;
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT && b.now == 100);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.ack_delay = 100;                   /* arriving at deadline is too late */
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.ack_delay = 99;
+    CHECK(i8042_fault_command(false, 0xF4) == 0);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.wrong_aux = true;
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.bad_ack = true;
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_EIO);
+    struct input_stats queue;
+    i8042_fault_snapshot(&s, &queue);
+    CHECK(s.quarantined && !s.pending_command && queue.errors == 1 && queue.state_lost);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.stalled = b.missing = true;
+    unsigned yields = host_yields;
+    CHECK(i8042_fault_command(false, 0xF4) == -EFAULT);
+    i8042_fault_snapshot(&s, 0);
+    CHECK(s.stalled == 1 && s.last_elapsed_ms == 0 && s.quarantined && host_yields > yields);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.mixed = true;
+    CHECK(i8042_fault_command(false, 0xF4) == 0);
+    struct input_digest d = fixture_digest();
+    CHECK(d.characters == 1 && d.key_transitions == 2 && d.x == 2 && d.y == -1 && d.events == 4);
+    i8042_fault_end();
+    begin_fixture(&b);
+    b.mixed = true;
+    CHECK(i8042_fault_command(true, 0xF4) == 0);
+    d = fixture_digest();
+    CHECK(d.characters == 1 && d.key_transitions == 2 && d.x == 2 && d.y == -1 && d.events == 4);
+    i8042_fault_end();
+    begin_fixture(&b);
+    writes = b.writes;
+    CHECK(i8042_fault_command(false, 0xFF) == -EINVAL && b.writes == writes);
+    i8042_fault_end();
+    /* Modulo deadline arithmetic survives wrapping ticks. */
+    begin_fixture(&b);
+    b.now = UINT64_MAX - 20; b.missing = true;
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT);
+    i8042_fault_snapshot(&s, 0);
+    CHECK(s.last_elapsed_ms == 100);
+    i8042_fault_end();
+    printf("i8042 ACK/RESEND/deadlines/stalled-clock/mixed bytes: PASS\n");
+}
+
+static void test_keyboard_and_mouse(void)
+{
+    struct fake_bus b;
+    begin_fixture(&b);
+    feed(false, 0xE0); feed(false, 0x75); /* up arrow */
+    struct input_stats q;
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.keys_down == 1);
+    feed(false, 0xE0); feed(false, 0xF0); feed(false, 0x75);
+    struct input_event e;
+    CHECK(i8042_fault_read(&e) && e.code == 0x175 && e.value == 1);
+    CHECK(i8042_fault_read(&e) && e.code == 0x175 && e.value == 0);
+    feed(false, 0x1C); feed(false, 0x1C); /* typematic does not duplicate a transition */
+    feed(false, 0xF0); feed(false, 0x1C); feed(false, 0xF0); feed(false, 0x1C);
+    struct input_digest d = fixture_digest();
+    CHECK(d.characters == 1 && d.key_transitions == 2);
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.repeats == 1 && q.duplicates == 1 && !q.keys_down);
+    const uint8_t pause_bytes[] = { 0xE1, 0x14, 0x77, 0xE1, 0xF0, 0x14, 0xF0, 0x77 };
+    for (unsigned i = 0; i < ARRAY_SIZE(pause_bytes); i++) feed(false, pause_bytes[i]);
+    CHECK(i8042_fault_read(&e) && e.code == INPUT_KEY_PAUSE && e.value == 1);
+    CHECK(i8042_fault_read(&e) && e.code == INPUT_KEY_PAUSE && e.value == 0);
+    const uint8_t print_bytes[] = { 0xE0, 0x12, 0xE0, 0x7C, 0xE0, 0xF0, 0x7C, 0xE0, 0xF0, 0x12 };
+    for (unsigned i = 0; i < ARRAY_SIZE(print_bytes); i++) feed(false, print_bytes[i]);
+    d = fixture_digest();
+    CHECK(d.key_transitions == 2);
+    CHECK(input_unshifted(0x45) == '0' && input_unshifted(0x16) == '1' && !input_unshifted(0x175));
+    /* Invalid headers, overflow header, then valid negative 9-bit x/y. */
+    feed(true, 0); feed(true, 0xC8); feed(true, 0);
+    feed(true, 0x38); feed(true, 0xFE); feed(true, 0xFF);
+    d = fixture_digest();
+    CHECK(d.x == -2 && d.y == 1 && !d.button_transitions);
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.resync == 3);
+    feed(true, 0x0F); feed(true, 200); feed(true, 200); /* positive >127 */
+    feed(true, 0x08); feed(true, 0); feed(true, 0);
+    d = fixture_digest();
+    CHECK(d.x == 200 && d.y == -200 && d.button_transitions == 6);
+    feed(false, 0x1C);
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.keys_down == 1);             /* stuck-key evidence is independent of drain */
+    fixture_digest();
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.keys_down == 1);
+    CHECK(i8042_fault_capture(0xC1, 0xF0) == 0);
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.errors == 1 && q.state_lost);
+    i8042_fault_end();
+    printf("i8042 set-2/E0/F0/Pause/PrintScreen/stuck keys/mouse resync: PASS\n");
+}
+
+static void test_queue_and_stimulus(void)
+{
+    struct fake_bus b;
+    begin_fixture(&b);
+    for (unsigned i = 0; i < 130; i++) { feed(false, 0x1C); feed(false, 0xF0); feed(false, 0x1C); }
+    struct input_stats q;
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.pending == INPUT_CAPACITY && q.overflow == 4 && q.state_lost && !q.keys_down);
+    struct input_event e;
+    for (unsigned i = 0; i < INPUT_CAPACITY; i++) {
+        CHECK(i8042_fault_read(&e));
+        CHECK(e.sequence == i + 1 && e.value == (i % 2 ? 0 : 1));
+    }
+    CHECK(!i8042_fault_read(&e));
+    feed(false, 0x1C);
+    CHECK(i8042_fault_read(&e) && e.sequence == 261 && (e.flags & INPUT_F_RESYNC));
+    i8042_fault_end();
+
+    begin_fixture(&b);
+    struct input_digest d;
+    input_digest_init(&d);
+    unsigned changes = 0;
+    for (unsigned i = 0; i < 100; i++) {
+        b.now++;
+        feed(false, 0x1C);
+        feed(true, 0x08); feed(true, 2); feed(true, 1);
+        feed(false, 0xF0); feed(false, 0x1C);
+        if (i % 10 == 0) {
+            feed(true, 0x09); feed(true, 0); feed(true, 0);
+            feed(true, 0x08); feed(true, 0); feed(true, 0);
+            changes += 2;
+        }
+        while (i8042_fault_read(&e)) {
+            CHECK(e.tick == b.now && !e.flags);
+            input_digest_add(&d, &e);
+        }
+    }
+    i8042_fault_snapshot(0, &q);
+    CHECK(d.characters == 100 && d.key_transitions == 200 && d.button_transitions == 20);
+    CHECK(changes == 20 && d.x == 200 && d.y == -100 && d.events == 420);
+    CHECK(!q.overflow && !q.resync && !q.duplicates && !q.repeats && !q.keys_down && !q.buttons && !q.pending);
+    printf("i8042 stimulus: characters=%llu keys=%llu buttons=%llu x=%lld y=%lld overflow=%llu resync=%llu digest=%08x text_digest=%08x PASS\n",
+           (unsigned long long)d.characters, (unsigned long long)d.key_transitions,
+           (unsigned long long)d.button_transitions, (long long)d.x, (long long)d.y,
+           (unsigned long long)q.overflow, (unsigned long long)q.resync, d.hash, d.text_hash);
+    i8042_fault_end();
+}
+
+static void test_hook_selection(void)
+{
+    struct fake_bus b = { .pause_step = 1 };
+    g_boot.flags = 0;
+    CHECK(i8042_fault_begin(&fake_io, &b) == -ENOSYS);
+    CHECK(i8042_fault_command(false, 0xF4) == -ENOSYS && i8042_fault_capture(1, 0x1C) == -ENOSYS);
+    static const char *bad[] = {
+        "f1:input run=12ab34cd", "f1:input-fault run=1234567", "f1:input-fault run=1234567g",
+        "f1:input-fault run=12ab34cd safe=1 safe=1", "f1:input-fault run=12ab34cd unknown=1",
+        "f1:input-fault run=12ab34cd platform=e500",
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(bad); i++) {
+        select_fault(bad[i]);
+        CHECK(i8042_fault_begin(&fake_io, &b) == -ENOSYS);
+    }
+    select_fault("f1:input-fault run=12ab34cd safe=1");
+    CHECK(i8042_fault_begin(&fake_io, &b) == 0);
+    CHECK(i8042_fault_begin(&fake_io, &b) == -EINVAL);
+    i8042_fault_end();
+    select_fault("f1:input-fault run=12ab34cd platform=e500 safe=1");
+    g_boot.flags |= CBI_F_INPUT_FORCED;
+    CHECK(i8042_fault_begin(&fake_io, &b) == 0);
+    i8042_fault_end();
+    CHECK(!b.writes && !b.reads);
+    printf("i8042 runtime fault-hook selection: PASS\n");
+}
+
+static void test_probe_records(void)
+{
+    reset_native();
+    replay_cycles = 0;
+    replay_input = true;
+    CHECK(probe_input() == 0);
+    replay_input = false;
+    CHECK(replay_cycles == 100 && record_ready == 1 && record_pass == 1 && !record_deferred);
+    CHECK(!native.stats.active && !native.stats.quarantined);
+    reset_native();
+    g_boot.input_policy = CBI_INPUT_FIRMWARE;
+    CHECK(probe_input() == 2 && record_deferred == 1 && record_pass == 1);
+    CHECK(!hw.reads && !hw.writes && !pic_changes);
+    reset_native();
+    select_fault("f1:input-fault run=12ab34cd");
+    struct registry_stats before, after;
+    registry_snapshot(&before);
+    CHECK(probe_input_fault() == 0);
+    registry_snapshot(&after);
+    CHECK(record_pass == 2 && !host_survivor && !fixture && !hw.reads && !hw.writes && !pic_changes);
+    CHECK(before.claims == after.claims && before.live == after.live && before.quarantines == after.quarantines);
+    for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
+    printf("i8042 probe orchestration/records: PASS (%u records, maximum %zu bytes, native PASS/firmware not_run/fault PASS)\n",
+           record_count, longest_record);
+}
+
+int main(void)
+{
+    test_policy_and_lifecycle();
+    test_native_failures();
+    test_hook_selection();
+    test_commands();
+    test_keyboard_and_mouse();
+    test_queue_and_stimulus();
+    test_probe_records();
+    i8042_fault_end();
+    printf("i8042: %u checks, %u failures\n", checks, failures);
+    return failures ? 1 : 0;
+}

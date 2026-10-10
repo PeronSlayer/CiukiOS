@@ -63,6 +63,10 @@ and the F0 acceptance criteria). In short:
   build dependencies stay until each is migrated or retired explicitly.
 - No F0 code before the seven design contracts listed in D11 exist in
   `docs/design/` and have been reviewed by the other agent.
+- Owner decision 2026-10-10 (dev diary 2026-10-10-03): F1 and F2 land on
+  `main` as their QEMU evidence passes; the hardware qualification of F0,
+  F1 and F2 happens once, on one image, after F2 closes on QEMU. Earlier
+  QEMU gates must keep passing on every integrated image.
 - Scope (owner decision 2026-10-09, dev diary 2026-10-09-10): a modern
   retro gaming OS, not a Windows clone; F0 foundations followed by eight
   steps, F1–F8 (drivers and disk, native programs, DOS, sound and media,
@@ -160,6 +164,12 @@ release or hardware analysis gets its own new file in `dev_diary/`, named
 an earlier entry to change a decision; add a new entry that supersedes it.
 Diary entries are written in Italian. `CHANGELOG.md` remains the release
 record.
+Entries record facts (what was done, verified, measured) and decisions with
+their technical rationale, nothing else: no internal considerations,
+conversation narration, personal logistics (purchases, cable availability,
+plans for the day), personal configuration or details of private material.
+Operating procedures belong in `docs/`. Removing such details from an
+existing entry is allowed; changing its decisions is not.
 
 ## Legacy archive
 

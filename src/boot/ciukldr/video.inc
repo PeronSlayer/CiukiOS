@@ -297,9 +297,12 @@ mode_validate:
     ret
 
 mode_rank:
+    test dword [B(flags)], CBI_F_SAFE_MODE
+    jnz .resolution
     mov ax, [candidate_mode]
     cmp ax, [preferred_mode]
     je .preferred
+.resolution:
     mov ax, [mode_buffer+18]
     mov dx, [mode_buffer+20]
     xor bx, bx

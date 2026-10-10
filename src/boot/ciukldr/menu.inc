@@ -169,67 +169,97 @@ config_read:
     mov cx, [file_size]
     mov di, B(options)
     call file_read
-    ; Options are bounded and NUL-terminated by the zeroed handoff.
+    ; Parse exact tokens within the file extent, never match an option prefix.
     mov si, B(options)
+    mov bp, si
+    add bp, [file_size]
 .token:
-    cmp byte [si], 0
-    je .done
+    cmp si, bp
+    jae .done
+    mov al, [si]
+    cmp al, ' '
+    je .space
+    cmp al, 13
+    je .space
+    cmp al, 10
+    je .space
+    mov di, si
+.scan:
+    cmp di, bp
+    jae .option
+    mov al, [di]
+    cmp al, ' '
+    je .option
+    cmp al, 13
+    je .option
+    cmp al, 10
+    je .option
+    cmp al, 33
+    jb .invalid
+    cmp al, 126
+    ja .invalid
+    inc di
+    jmp .scan
+.option:
+    mov dx, di
+    sub dx, si
+    cmp dx, 6
+    jne .serial
     cmp dword [si], 'safe'
-    jne .serial
-    cmp word [si+4], '=1'
-    jne .serial
-    or dword [B(flags)], CBI_F_SAFE_MODE
-.serial:
-    cmp dword [si], 'seri'
-    jne .mode
-    cmp dword [si+4], 'al=0'
-    jne .mode
-    and dword [B(flags)], ~CBI_F_SERIAL_LOG
-.mode:
-    cmp dword [si], 'mode'
-    jne .skip
-    ; Accept mode=0x followed by four hex digits (including any first digit).
+    jne .invalid
     cmp word [si+4], '=0'
-    jne .skip
+    je .next ; A normal option never clears a positive safe-mode source.
+    cmp word [si+4], '=1'
+    jne .invalid
+    or dword [B(flags)], CBI_F_SAFE_MODE
+    jmp .next
+.serial:
+    cmp dx, 8
+    jne .mode
+    cmp dword [si], 'seri'
+    jne .invalid
+    cmp dword [si+4], 'al=1'
+    je .next
+    cmp dword [si+4], 'al=0'
+    jne .invalid
+    and dword [B(flags)], ~CBI_F_SERIAL_LOG
+    jmp .next
+.mode:
+    cmp dx, 11
+    jne .invalid
+    cmp dword [si], 'mode'
+    jne .invalid
+    cmp word [si+4], '=0'
+    jne .invalid
     cmp byte [si+6], 'x'
-    jne .skip
-    push si
+    jne .invalid
     add si, 7
     xor bx, bx
     mov cx, 4
 .digit:
     lodsb
     call hex_digit
-    jc .bad_mode
+    jc .invalid
     shl bx, 4
     movzx ax, al
     or bx, ax
     loop .digit
     cmp bx, 0x3fff
-    ja .bad_mode
+    ja .invalid
     mov [preferred_mode], bx
-.bad_mode:
-    pop si
-.skip:
-    ; Move to the next whitespace-delimited option, never inspect past 128.
-    cmp byte [si], 0
-    je .done
-    cmp byte [si], ' '
-    je .space
-    cmp byte [si], 10
-    je .space
-    inc si
-    jmp .skip
+.next:
+    mov si, di
+    jmp .token
 .space:
     inc si
     jmp .token
 .warning:
-    mov si, cfg_warning
-    call print
+.invalid:
+    mov si, selection_error
+    jmp fatal
 .done:
     ret
 preferred_mode dw 0xffff
-cfg_warning db 'L:CFG_IGNORED',13,10,0
 
 boot_menu:
     test dword [B(flags)], CBI_F_TEST_REQUEST
@@ -286,11 +316,15 @@ boot_menu:
     je .validate
     cmp al, 8
     je .backspace
+    cmp al, 32
+    jb .line_deadline
+    cmp al, 126
+    ja .line_deadline
     cmp di, 64
     jae .invalid
     mov [selector_buffer+di], al
     inc di
-    call uart_putc
+    call menu_echo
 .line_deadline:
     call deadline_expired
     jnc .line
@@ -299,6 +333,13 @@ boot_menu:
     test di, di
     jz .line
     dec di
+    mov byte [selector_buffer+di], 0
+    mov al, 8
+    call menu_echo
+    mov al, ' '
+    call menu_echo
+    mov al, 8
+    call menu_echo
     jmp .line
 .validate:
     mov cx, di
@@ -315,6 +356,22 @@ boot_menu:
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS: N Normal / S Safe mode / L Serial log / P Probe (3 s)',13,10,0
 probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0
+
+; INT 10h teletype AL character, BH page, BL colour (SeaBIOS vgabios.c).
+; https://github.com/coreboot/seabios/blob/master/vgasrc/vgabios.c
+; Preserve the command buffer index and BP deadline across both sinks.
+menu_echo:
+    pushad
+    push ds
+    push es
+    call uart_putc
+    mov ah, 0x0e
+    mov bx, 0x0007
+    int 0x10
+    pop es
+    pop ds
+    popad
+    ret
 
 menu_getc:
     mov ah, 1

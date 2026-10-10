@@ -36,9 +36,6 @@
               "size_errors": {
                 "eq": 0
               },
-              "hash_errors": {
-                "eq": 0
-              },
               "write_count": {
                 "eq": 0
               },
@@ -140,6 +137,18 @@
           "generator": "mkfs.fat",
           "independent_names_and_hashes_required": true
         }
+      ],
+      "digests": [
+        {
+          "kind": "file",
+          "source": "fixture",
+          "fixture": 0,
+          "path": "/Ciuki long fixture.txt",
+          "where": {
+            "event": "DATA",
+            "name_hex": "2f4369756b69206c6f6e6720666978747572652e747874"
+          }
+        }
       ]
     },
     {
@@ -168,9 +177,6 @@
                 "eq": 0
               },
               "size_errors": {
-                "eq": 0
-              },
-              "hash_errors": {
                 "eq": 0
               },
               "write_count": {
@@ -274,6 +280,18 @@
           "generator": "mkfs.fat",
           "independent_names_and_hashes_required": true
         }
+      ],
+      "digests": [
+        {
+          "kind": "file",
+          "source": "fixture",
+          "fixture": 0,
+          "path": "/Ciuki long fixture.txt",
+          "where": {
+            "event": "DATA",
+            "name_hex": "2f4369756b69206c6f6e6720666978747572652e747874"
+          }
+        }
       ]
     },
     {
@@ -302,9 +320,6 @@
                 "eq": 0
               },
               "size_errors": {
-                "eq": 0
-              },
-              "hash_errors": {
                 "eq": 0
               },
               "write_count": {
@@ -407,6 +422,18 @@
           "seed": 1,
           "generator": "mkfs.fat",
           "independent_names_and_hashes_required": true
+        }
+      ],
+      "digests": [
+        {
+          "kind": "file",
+          "source": "fixture",
+          "fixture": 0,
+          "path": "/Ciuki long fixture.txt",
+          "where": {
+            "event": "DATA",
+            "name_hex": "2f4369756b69206c6f6e6720666978747572652e747874"
+          }
         }
       ]
     },
@@ -664,9 +691,6 @@
               "operation_errors": {
                 "eq": 0
               },
-              "hash_errors": {
-                "eq": 0
-              },
               "directory_grown": {
                 "eq": 1
               },
@@ -787,6 +811,41 @@
                 }
               }
             ]
+          }
+        }
+      ],
+      "digests": [
+        {
+          "kind": "file",
+          "source": "overlay",
+          "path": "/SYSTEM/TESTS/EMPTY",
+          "offset": 1048576,
+          "size": 535822336,
+          "where": {
+            "event": "DATA",
+            "name_hex": "2f53595354454d2f54455354532f454d505459"
+          }
+        },
+        {
+          "kind": "file",
+          "source": "overlay",
+          "path": "/SYSTEM/TESTS/CLUSTER",
+          "offset": 1048576,
+          "size": 535822336,
+          "where": {
+            "event": "DATA",
+            "name_hex": "2f53595354454d2f54455354532f434c5553544552"
+          }
+        },
+        {
+          "kind": "file",
+          "source": "overlay",
+          "path": "/SYSTEM/TESTS/LARGE",
+          "offset": 1048576,
+          "size": 535822336,
+          "where": {
+            "event": "DATA",
+            "name_hex": "2f53595354454d2f54455354532f4c41524745"
           }
         }
       ]
@@ -1314,7 +1373,20 @@
             }
           }
         ]
-      }
+      },
+      "digests": [
+        {
+          "kind": "file",
+          "source": "overlay",
+          "path": "/SYSTEM/LOGS/BOOT.LOG",
+          "offset": 1048576,
+          "size": 535822336,
+          "where": {
+            "event": "DATA",
+            "name_hex": "2f53595354454d2f4c4f47532f424f4f542e4c4f47"
+          }
+        }
+      ]
     },
     {
       "id": "bootlog-read-only",

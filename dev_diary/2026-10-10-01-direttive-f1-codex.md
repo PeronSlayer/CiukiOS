@@ -7,16 +7,12 @@
 
 ## Contesto
 
-Il proprietario ha fissato i ruoli: Claude dà le direttive, rivede, integra
-e produce le evidenze su QEMU e hardware; Codex scrive il codice, con modello
+Ruoli fissati dal proprietario: Claude dà le direttive, rivede, integra e
+produce le evidenze su QEMU e hardware; Codex scrive il codice, con modello
 ed effort scelti da Claude secondo la complessità. Il contratto di
 accettazione F1 scritto da Codex (`docs/design/f1-acceptance.md`) è stato
 rivisto dal lead, allineato alla grammatica `safe=1`/`core` già in F0 e
 integrato in `main`.
-
-Nel frattempo il proprietario scrive l'immagine F0 (`ciukios-2003adb0.img`)
-sul disco Transcend e la prova sul T23 o sull'E500; i risultati avranno una
-voce propria.
 
 ## Decisioni
 
@@ -52,6 +48,6 @@ voce propria.
 - Direttive successive: ATA PIO + MBR con ciclo di vita del registro; coda
   di input i8042 nativa; dispositivo framebuffer, presenter e boot log;
   servizio BIOS V86 serializzato (input firmware-first sull'E500).
-- Analisi delle foto della prova hardware F0 e voce di diario dedicata.
-- Revisione Codex del commit `2003adb` (safe mode e `core`), integrato senza
-  revisione per urgenza: da fare nella prima revisione incrociata F1.
+- Prova hardware F0 (T4) e voce di diario dedicata.
+- Revisione Codex del commit `2003adb`: vedi
+  [2026-10-10-02](2026-10-10-02-revisione-2003adb-e-direttiva-f0-01.md).

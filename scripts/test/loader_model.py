@@ -19,7 +19,24 @@ def selector(request, source='menu', validated_fw_cfg=False):
     forced = bool(match[4]); safe = bool(match[5])
     if (forced or safe) and not (source == 'fw_cfg' and validated_fw_cfg):
         raise ValueError('platform override and safe mode require validated QEMU fw_cfg')
-    return {'probe': match[2], 'run': match[3], 'platform': 'e500' if forced else None, 'safe': safe}
+    return {'phase': int(match[1]), 'probe': match[2], 'run': match[3], 'platform': 'e500' if forced else None, 'safe': safe}
+
+
+def boot_options(options, safe=False, serial=True):
+    """BOOT.CFG exact tokens, spaces/line endings; positive safe sources persist."""
+    if not isinstance(options,str) or not options.isascii() or len(options)>127:
+        raise ValueError('SELECT_ERROR: invalid BOOT.CFG extent')
+    mode=None
+    for token in re.split(r'[ \r\n]+',options):
+        if not token:continue
+        if token in ('safe=0','safe=1'):
+            safe=safe or token=='safe=1'
+        elif token in ('serial=0','serial=1'):
+            serial=serial and token=='serial=1'
+        elif re.fullmatch(r'mode=0x[0-9a-fA-F]{4}',token) and int(token[7:],16)<=0x3fff:
+            mode=int(token[7:],16)
+        else:raise ValueError('SELECT_ERROR: malformed BOOT.CFG token')
+    return {'safe':safe,'serial':serial,'mode':mode}
 
 
 def normalize_e820(entries, complete=True, signature='SMAP'):

@@ -8,21 +8,13 @@
 
 ## Contesto
 
-Requisito del proprietario: "io voglio avere un'architettura stabile e
-funzionale come windows 95/98 e passare definitivamente al 32bit (e al FAT32,
-NTFS ecc)". Il proprietario ha chiesto a Claude e Codex di discuterne e
-decidere insieme.
-
-La discussione si è svolta in tre turni sullo stesso thread Codex
-(`gpt-6-astra`, effort `xhigh`, sola lettura):
-1. bozza di decisione di Claude (D1–D11);
-2. risposta di Codex: d'accordo con modifiche su tutti i punti, disaccordo
-   su D10;
-3. Claude ha accettato le modifiche; Codex ha confermato **"FINAL: AGREE"**.
-
-Con questo requisito Codex supera la sua raccomandazione precedente
+Requisito: un'architettura stabile e funzionale come Windows 95/98, il
+passaggio definitivo a 32 bit, FAT32 e in seguito NTFS. La decisione è stata
+presa da Claude e Codex (`gpt-6-astra`, effort `xhigh`, sola lettura) su
+mandato del proprietario: bozza D1–D11 di Claude, modifiche di Codex accolte,
+accordo finale di Codex. Supera la raccomandazione precedente
 ([2026-10-09-05](2026-10-09-05-revisione-codex-architettura.md)). La decisione
-non stabilisce però le cause dei guasti osservati sul T23.
+non stabilisce le cause dei guasti osservati sul T23.
 
 ## Decisione
 

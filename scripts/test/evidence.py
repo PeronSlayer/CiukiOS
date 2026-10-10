@@ -14,6 +14,7 @@ class Parser:
         self.seq = 0
         self.started = False
         self.terminal = None
+        self.outcome = None
 
     def feed(self, raw):
         # Line endings are framing, never normalization of marker contents.
@@ -52,16 +53,22 @@ class Parser:
             if self.started:
                 raise EvidenceError('duplicate BEGIN')
             self.started = True
+        elif event == 'NOT_RUN':
+            if self.started or record.get('reason') != 'prerequisite_failed' or record.get('after') not in PROBES:
+                raise EvidenceError('invalid NOT_RUN record')
         elif not self.started or event not in ('DATA','READY','ARM','END','PANIC','ERROR'):
             raise EvidenceError('unknown event or missing BEGIN')
         if event == 'END' and record.get('status') not in ('PASS','FAIL'):
             raise EvidenceError('END requires PASS or FAIL')
-        if event in ('END','PANIC','ERROR'):
+        if event in ('END','PANIC','ERROR','NOT_RUN'):
             self.terminal = record
+            self.outcome = 'not_run' if event == 'NOT_RUN' else 'pass' if event == 'END' and record['status'] == 'PASS' else 'fail'
         self.seq = seq
         self.records.append(record)
 
     def check(self, expected):
+        if self.outcome == 'not_run':
+            raise EvidenceError('probe not_run: prerequisite failed after '+self.terminal['after'])
         if expected['terminal']=='ARM':
             if len([r for r in self.records if r['event']=='ARM'])!=1:
                 raise EvidenceError('cut requires exactly one ARM record')
@@ -115,7 +122,12 @@ class Parser:
                             raise EvidenceError('unknown predicate operator')
                 for relation in predicate.get('relations',[]):
                     try:
-                        left=int(r[relation['left']]);right=int(r[relation['right']])*relation.get('multiply',1)
+                        left=int(r[relation['left']]);right=int(r[relation['right']])
+                        if 'subtract' in relation:right-=int(r[relation['subtract']])
+                        right+=relation.get('add',0)
+                        right*=relation.get('multiply',1)
                     except (ValueError,KeyError) as e:raise EvidenceError('invalid relation fields') from e
-                    if relation['op']!='eq' or left!=right:raise EvidenceError('numeric relation failed')
+                    op=relation['op']
+                    if op=='eq' and left!=right or op=='ge' and left<right or op not in ('eq','ge'):
+                        raise EvidenceError('numeric relation failed')
         return True

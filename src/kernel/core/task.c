@@ -6,6 +6,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
+#include <ciuki/sync.h>
 
 extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
 extern void task_first_entry(void);
@@ -286,6 +287,7 @@ void task_exit(int code)
     cli();
     struct task *t = g_current;
     t->exit_code = code;
+    ksync_task_exit(t);                 /* held mutex here is a kernel bug */
     fpu_task_release(t);
     t->state = T_ZOMBIE;
     schedule();
@@ -301,6 +303,7 @@ void task_kill(struct task *t, int code)
         rq_remove(t);
     if (t->state != T_ZOMBIE && t->state != T_DEAD) {
         t->exit_code = code;
+        ksync_task_exit(t);
         t->state = T_ZOMBIE;
         fpu_task_release(t);
     }

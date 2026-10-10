@@ -45,10 +45,15 @@ the kernel boots to its scaffold prompt on COM1 (38400 8N1) and the screen.
 
 ## Physical machines
 
-Write `build/f0/ciukios.img` to an expendable disk; the procedure and the
-evidence rules are in `docs/design/f0-acceptance.md`. Screen evidence pages
-through the recorded records automatically after a probe run. With an
-RS-232 to USB adapter and a null-modem cable on the laptop's serial port,
-`scripts/test/serial_capture.sh <run-id>` records COM1 (38400 8N1) into
-`legacy/local/physical/<run-id>/serial.log`; start it before power-on, then
-choose `P` in the loader menu and type `f0:all run=<run-id>`.
+Write `build/f0/ciukios.img` to an expendable disk with
+`sudo scripts/test/write_physical.sh /dev/disk/by-id/<stable-name> [image]`:
+it refuses the root disk, partitions and mounted disks, asks for the disk's
+exact serial number, writes with `dd`, reads the image back and compares
+SHA-256, and leaves a JSON record beside the image. The evidence rules are
+in `docs/design/f0-acceptance.md`. For a screen-only run choose `P` in the
+loader menu and type `f0:core run=<8 hex>`: every probe but `panic` runs,
+then the screen pages through the recorded records (8 s per page) for
+photographs. With an RS-232 to USB adapter and a null-modem cable on the
+laptop's serial port, `scripts/test/serial_capture.sh <run-id>` records
+COM1 (38400 8N1) into `legacy/local/physical/<run-id>/serial.log`; start
+it before power-on, then `f0:all run=<run-id>` also covers `panic`.

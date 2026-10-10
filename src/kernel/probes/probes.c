@@ -10,6 +10,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/registry.h>
 #include <ciuki/timing.h>
+#include <ciuki/work.h>
 
 extern const uint8_t payload_start[], payload_end[];
 extern char probe_write_insn[], probe_write_insn_end[], probe_write_resume[];
@@ -763,7 +764,6 @@ void probe_user_report(struct task *t, const char *msg, uint32_t len)
     klog("[user %u report] %s", t->id, msg);
 }
 
-struct probe_def { const char *name; int (*fn)(void); };
 static const struct probe_def probes[] = {
     { "boot", probe_boot }, { "bootinfo", probe_bootinfo }, { "allocator", probe_allocator },
     { "protection", probe_protection }, { "isolation", probe_isolation }, { "preempt", probe_preempt },
@@ -772,16 +772,25 @@ static const struct probe_def probes[] = {
 
 static bool is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 
-/* f0:<probe-id|all> run=<8-hex> [platform=e500] */
-static bool parse_selector(const char *s, unsigned len, char *probe, unsigned probe_cap, char *run)
+struct probe_selection {
+    unsigned phase;
+    char probe[24], run[9];
+    uint32_t flags;
+};
+
+/* f[01]:<probe-id|all|core> run=<8-hex> [platform=e500] [safe=1] */
+static bool parse_selector(const char *s, unsigned len, struct probe_selection *selection)
 {
     if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1') || s[2] != ':')
         return false;
-    bool f1 = s[1] == '1';
+    for (unsigned j = 0; j < len; j++)
+        if ((uint8_t)s[j] < 32 || (uint8_t)s[j] > 126)
+            return false;
+    struct probe_selection parsed = { .phase = (unsigned)(s[1] - '0') };
     unsigned i = 3, k = 0;
-    while (i < len && s[i] != ' ' && k + 1 < probe_cap)
-        probe[k++] = s[i++];
-    probe[k] = 0;
+    while (i < len && s[i] != ' ' && k + 1 < sizeof(parsed.probe))
+        parsed.probe[k++] = s[i++];
+    parsed.probe[k] = 0;
     if (!k || i >= len || s[i] != ' ')
         return false;
     static const char *const f0_names[] = {
@@ -792,11 +801,11 @@ static bool parse_selector(const char *s, unsigned len, char *probe, unsigned pr
         "registry", "input", "input-fault", "framebuffer", "ata", "ata-fault",
         "partition", "fat-read", "fat-write", "cache", "mount-crash", "safe", "bootlog", "all", "core"
     };
-    const char *const *names = f1 ? f1_names : f0_names;
-    unsigned count = f1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
+    const char *const *names = parsed.phase ? f1_names : f0_names;
+    unsigned count = parsed.phase ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
     bool known = false;
     for (unsigned n = 0; n < count; n++)
-        if (!strncmp(probe, names[n], probe_cap))
+        if (!strncmp(parsed.probe, names[n], sizeof(parsed.probe)))
             known = true;
     if (!known)
         return false;
@@ -806,37 +815,26 @@ static bool parse_selector(const char *s, unsigned len, char *probe, unsigned pr
     for (unsigned j = 0; j < 8; j++) {
         if (!is_hex(s[i + 4 + j]))
             return false;
-        run[j] = s[i + 4 + j];
+        parsed.run[j] = s[i + 4 + j];
     }
-    run[8] = 0;
+    parsed.run[8] = 0;
     i += 12;
     /* optional suffixes, in order, each at most once */
-    if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0)
+    if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0) {
+        if (!(g_boot.flags & CBI_F_SMBIOS_QEMU) || !(g_boot.flags & CBI_F_INPUT_FORCED))
+            return false;
+        parsed.flags |= CBI_F_INPUT_FORCED;
         i += 14;
-    if (len - i >= 7 && strncmp(s + i, " safe=1", 7) == 0)
+    }
+    if (len - i >= 7 && strncmp(s + i, " safe=1", 7) == 0) {
+        if (!(g_boot.flags & CBI_F_SMBIOS_QEMU) || !(g_boot.flags & CBI_F_SAFE_MODE))
+            return false;
+        parsed.flags |= CBI_F_SAFE_MODE;
         i += 7;
+    }
     if (i != len)
         return false;
-    if (f1) {
-        /* F1 implementations are installed here by the driver directives.
-         * Keep dispatch local: this directive may only change this parser. */
-        static const struct probe_def f1_probes[] = {};
-        unsigned installed = ARRAY_SIZE(f1_probes);
-        rec_set_run(run);
-        rec_emit(probe, "BEGIN", 0);
-        rec_emit(probe, "READY", "table=f1 installed=%u", installed);
-        for (unsigned n = 0; n < installed; n++)
-            if (!strncmp(probe, f1_probes[n].name, probe_cap))
-                f1_probes[n].fn();
-        if (!installed)
-            rec_emit(probe, "ERROR", "status=not_run reason=missing_probe");
-        /* Namespace the result so F1 aliases cannot dispatch the F0 table. */
-        if (k + 4 > probe_cap)
-            return false;
-        for (unsigned n = k + 1; n > 0; n--)
-            probe[n + 2] = probe[n - 1];
-        memcpy(probe, "f1:", 3);
-    }
+    *selection = parsed;
     return true;
 }
 
@@ -856,13 +854,14 @@ void probes_main(void *arg)
 {
     (void)arg;
     timing_calibrate();
+    kwork_init();                        /* device worker, before any driver IRQ producer */
     if (!(g_boot.flags & CBI_F_TEST_REQUEST)) {
         klog("Ciuki VMM F0 scaffold ready (no test request). Build %s.", CIUKI_BUILD_ID);
         for (;;)
             task_sleep_ms(60000);
     }
-    char probe[24], run[9];
-    if (!parse_selector(g_boot.test_request, g_boot.test_request_len, probe, sizeof(probe), run)) {
+    struct probe_selection selection;
+    if (!parse_selector(g_boot.test_request, g_boot.test_request_len, &selection)) {
         char shown[65];
         unsigned n = g_boot.test_request_len < 64 ? g_boot.test_request_len : 64;
         memcpy(shown, g_boot.test_request, n);
@@ -870,16 +869,45 @@ void probes_main(void *arg)
         klog("[selector] malformed test request (len=%u): '%s'; no probe runs", g_boot.test_request_len, shown);
         show_evidence_forever();
     }
-    rec_set_run(run);
+    const char *probe = selection.probe;
+    rec_set_run(selection.run);
     klog("[selector] probe=%s platform=%s tsc_khz=%u", probe,
          (g_boot.flags & CBI_F_INPUT_FORCED) ? "e500" : "native", (uint32_t)g_tsc_per_ms);
     bool all = !strncmp(probe, "all", 4);
     bool core = !strncmp(probe, "core", 5);     /* every probe but panic */
+    if (selection.phase == 1) {
+        unsigned installed = (unsigned)(__f1probes_end - __f1probes_start);
+        bool ran = false;
+        for (const struct probe_def *p = __f1probes_start; p < __f1probes_end; p++) {
+            if (all || core || !strncmp(probe, p->name, sizeof(selection.probe))) {
+                int failed = p->fn();
+                ran = true;
+                if (failed && (all || core)) {
+                    for (const struct probe_def *next = p + 1; next < __f1probes_end; next++)
+                        rec_emit(next->name, "NOT_RUN", "reason=prerequisite_failed after=%s", p->name);
+                    show_evidence_forever();
+                }
+            }
+        }
+        if (!ran) {
+            rec_emit(probe, "BEGIN", 0);
+            rec_emit(probe, "READY", "table=f1 installed=%u", installed);
+            rec_emit(probe, "ERROR", "status=not_run reason=missing_probe");
+        }
+        show_evidence_forever();
+    }
     int ran = 0;
     for (unsigned i = 0; i < ARRAY_SIZE(probes); i++) {
         if (all || core || !strncmp(probe, probes[i].name, 24)) {
-            probes[i].fn();
+            int failed = probes[i].fn();
             ran++;
+            if (failed && (all || core)) {
+                for (unsigned j = i + 1; j < ARRAY_SIZE(probes); j++)
+                    rec_emit(probes[j].name, "NOT_RUN", "reason=prerequisite_failed after=%s", probes[i].name);
+                if (all)
+                    rec_emit("panic", "NOT_RUN", "reason=prerequisite_failed after=%s", probes[i].name);
+                show_evidence_forever();
+            }
         }
     }
     if (all || !strncmp(probe, "panic", 6)) {

@@ -84,10 +84,7 @@ def prepare_fixtures(host,case,directory):
             if actual!=fixture.get('sha256'):raise res.Refusal('fixture SHA-256 mismatch')
             item.update(path=str(path),size=path.stat().st_size,sha256=actual)
         manifests.append(item)
-    payload=json.dumps({'schema_version':1,'fixtures':manifests},sort_keys=True,separators=(',',':')).encode()
-    if len(payload)>65536:raise res.Refusal('fixture manifest exceeds 64 KiB')
-    path=directory/'fixtures.json';path.write_bytes(payload)
-    return {'sha256':hashlib.sha256(payload).hexdigest(),'declared':case.get('fixtures',[]),'manifest':manifests}
+    return {'sha256':digest_json(manifests),'declared':case.get('fixtures',[]),'manifest':manifests}
 
 
 def boot_cfg_extent(image):
@@ -162,7 +159,12 @@ def blkdebug_config(case,directory):
         raise res.Refusal('invalid blkdebug event/errno')
     # read failures need a postboot sector filter to preserve loader prerequisites.
     if event=='read_aio' and 'sector' not in fault:raise res.Refusal('read fault requires a postboot fixture sector')
-    lines=['[inject-error]',f'event = "{event}"',f'errno = "{fault["errno"]}"','once = "on"']
+    # A read filter above qcow2 sees guest LBAs (including backing reads).
+    # Activate at open, but restrict both sector and I/O type; no metadata offsets.
+    injected_event='none' if event=='read_aio' else event
+    lines=['[inject-error]',f'event = "{injected_event}"',
+           f'errno = "{fault["errno"]}"','once = "on"']
+    if event=='read_aio':lines.append('iotype = "read"')
     if 'sector' in fault:
         if type(fault['sector']) is not int or fault['sector']<0:raise res.Refusal('invalid fault sector')
         lines.append(f'sector = "{fault["sector"]}"')
@@ -241,8 +243,34 @@ class Host:
         checked=self.checker(['fsck.fat','-n',str(image)],directory)
         if checked['returncode']:raise res.Refusal('independent fixture fsck failed')
         return {'path':str(image),'sha256':sha(image),'size':image.stat().st_size,'geometry':geometry,
-                'listing':listing,'checker':checked,'files':[{'path':'/Ciuki long fixture.txt',
-                    'id':f'fixture-{index}-lfn','size':source.stat().st_size,'sha256':sha(source)}]}
+                'listing':listing,'checker':checked}
+    def sector_digest(self,image,directory,lba,count,fmt):
+        # qemu-img dd opens its input read-only; export only the measured sectors.
+        if type(lba) is not int or type(count) is not int or lba<0 or not 1<=count<=128:
+            raise res.Refusal('invalid digest sector range')
+        info=json.loads(subprocess.check_output(['qemu-img','info','-f',fmt,'--output=json',str(image)],timeout=10))
+        if (lba+count)*512>info['virtual-size']:raise res.Refusal('digest sector range outside image')
+        target=directory/'digest-sectors.raw'
+        try:
+            view={'driver':'raw','offset':lba*512,'size':count*512,
+                  'file':{'driver':fmt,'file':{'driver':'file','filename':str(image)}}}
+            subprocess.run(['qemu-img','dd','bs=512',f'count={count}',
+                            'if=json:'+json.dumps(view,separators=(',',':')),'of='+str(target)],
+                           check=True,capture_output=True,timeout=10)
+            if target.stat().st_size!=count*512:raise res.Refusal('short digest sector export')
+            return {'size':target.stat().st_size,'sha256':sha(target)}
+        finally:target.unlink(missing_ok=True)
+    def file_digest(self,volume,directory,path):
+        # Hash bytes, including NUL/non-UTF8, without decoding or logging content.
+        import resource
+        def limits():resource.setrlimit(resource.RLIMIT_FSIZE,(16*1024**2,16*1024**2))
+        target=directory/'digest-file.bin'
+        try:
+            with target.open('wb') as output:
+                subprocess.run(['mtype','-i',str(volume),'::'+path],stdout=output,stderr=subprocess.PIPE,
+                               check=True,timeout=30,preexec_fn=limits)
+            return {'size':target.stat().st_size,'sha256':sha(target)}
+        finally:target.unlink(missing_ok=True)
     def overlay_read(self,overlay,offset,length):
         output=subprocess.check_output(['qemu-io','-r','-f','qcow2','-c',f'read -v {offset} {length}',str(overlay)],text=True,timeout=10)
         data=bytearray()
@@ -325,26 +353,31 @@ def teardown(host,unit,process,qmp,cgroup):
 
 
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
+    if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
     request=case.get('selector',f"f0:{case['probe']} run={{run_id}}").format(run_id=run_id)
     requested=selector(request,'fw_cfg',True)
     if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
-    request=request.split(' run=',1)[0]+' run='+requested['run']
+    request=f"f{requested['phase']}:{requested['probe']} run={requested['run']}"
     platform=profile.get('platform') or requested['platform']
     if platform:request+=' platform='+platform
     if requested['safe']:request+=' safe=1'
     cache=case.get('disk_cache','writeback')
     if cache not in ('writeback','writethrough','none','directsync'):raise res.Refusal('unsafe/unknown disk cache mode forbidden')
     disk={'driver':'qcow2','file':{'driver':'file','filename':str(overlay)}}
-    if case.get('fault'):
+    read_fault=case.get('fault',{}).get('event')=='read_aio'
+    if read_fault:
+        disk={'driver':'raw','file':{'driver':'blkdebug','config':str(overlay.parent/'blkdebug.conf'),'image':disk}}
+    elif case.get('fault'):
         disk['file']={'driver':'blkdebug','config':str(overlay.parent/'blkdebug.conf'),
                       'image':{'driver':'file','filename':str(overlay)}}
+    disk_format='raw' if read_fault else 'qcow2'
     drive='file='+('json:'+json.dumps(disk,separators=(',',':')) if case.get('fault') else str(overlay))
     selector(request,'fw_cfg',True)
     devices=case.get('device_exceptions',{})
     args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
           '-monitor','none','-nic','none','-no-shutdown','-S',
-          '-drive',drive.replace(',',',,')+',format=qcow2,if=ide,index=0,media=disk,cache='+cache,
+          '-drive',drive.replace(',',',,')+',format='+disk_format+',if=ide,index=0,media=disk,cache='+cache+',rerror=report,werror=report',
           '-vga',devices.get('vga',profile['vga']),'-qmp','unix:q,server=on,wait=off',
           '-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
@@ -362,7 +395,6 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if profile.get('audio') and not devices.get('audio')=='none':
         args+=['-audiodev','none,id=silent','-device',profile['audio']+',audiodev=silent']
     if case.get('fixtures'):
-        args+=['-fw_cfg','name=opt/it.alcybercloud.ciukios/fixture,file=fixtures.json']
         slot=1
         for index,fixture in enumerate(case['fixtures']):
             if fixture.get('generator')=='mkfs.fat':
@@ -448,7 +480,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     result.update(stimulus={'sha256':digest_json(case.get('actions',[])),'declared':case.get('actions',[]),'observed':[]},
                   fixtures={'sha256':digest_json(case.get('fixtures',[])),'declared':case.get('fixtures',[])},
                   fault=case.get('fault'),cut_point=None,disk_cache_mode=case.get('disk_cache','writeback'),
-                  checkers=[],durability_observations=[],patch_manifest=[])
+                  checkers=[],durability_observations=[],patch_manifest=[],digests=[])
     directory.mkdir(parents=True,exist_ok=False)
     launched=None
     process=qmp=cgroup=None;parser=Parser(run_id,case['probe']);fd=None;dirfd=None;logs=[]
@@ -462,11 +494,6 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['patch_manifest']=patch_overlay(host,image,overlay,directory,case['patches'])
         result['overlay_path']=str(overlay)
         result['fixtures']=prepare_fixtures(host,case,directory)
-        # Independently generated file digests are checked against guest DATA.
-        for fixture in result['fixtures']['manifest']:
-            for file in fixture.get('files',[]):
-                case['expected']['predicates'].append({'where':{'event':'DATA','file_id':file['id']},'exact_count':1,
-                                                      'fields':{'sha256':file['sha256'],'size':{'eq':file['size']}}})
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
         serial=(directory/'serial.log').open('wb');stderr=(directory/'stderr.log').open('wb');qlog=(directory/'qmp.log').open('wb');logs=[serial,stderr,qlog]
         launched=time.monotonic();deadline=launched+case['timeout']
@@ -537,6 +564,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 result['durability_observations'].append({'mode':'guest-termination','device_power_loss':False})
                 break
             if parser.terminal:
+                if parser.terminal['event']=='NOT_RUN':
+                    result['outcome']='not_run';result['reason']='prerequisite failed: '+parser.terminal['after'];break
                 if not actions.complete:raise EvidenceError('terminal evidence before declared stimuli completed')
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
@@ -575,7 +604,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             host_resets=sum(1 for e in qmp.events if e.get('event')=='RESET' and e.get('data',{}).get('reason')=='host-qmp-system-reset') if qmp else 0
             if host_resets!=expected_resets:
                 raise EvidenceError(f'host reset count {host_resets} differs from expected {expected_resets}')
-        result['outcome']='pass';result['reason']='all declared predicates and host observations passed'
+        if result['outcome']!='not_run':
+            result['outcome']='pass';result['reason']='all declared predicates and host observations passed'
     except (OSError,ValueError,RuntimeError,subprocess.SubprocessError,KeyboardInterrupt) as e:
         result['reason']=str(e) or type(e).__name__
     finally:
@@ -606,10 +636,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         result['stimulus']['observed_sha256']=digest_json(actions.observed)
         result['durability_observations'].extend(r for r in parser.records if r.get('group') in ('durability','barrier','persisted'))
         result['observed']=parser.records
-        if result['outcome']=='pass' and case.get('checks'):
+        if result['outcome']=='pass' and (case.get('checks') or case.get('digests')):
             try:
                 if not result['cleanup']['clean']:raise EvidenceError('QEMU must stop before overlay export')
-                check_overlay(host,overlay,directory,case['checks'],result)
+                if case.get('digests'):check_digests(host,overlay,directory,case['digests'],result)
+                if case.get('checks'):check_overlay(host,overlay,directory,case['checks'],result)
             except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e:
                 result['outcome']='fail';result['reason']=str(e)
         result['image']['sha256_after']=sha(image)
@@ -635,6 +666,46 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         (directory/'result.json').write_text(json.dumps(result,indent=2)+'\n')
         res.prune(directory.parent)
     return result,directory
+
+
+def check_digests(host,overlay,directory,declarations,result):
+    """Independently compare guest measurements after verified teardown."""
+    for item in declarations:
+        matches=[r for r in result['observed'] if all(r.get(k)==str(v) for k,v in item['where'].items())]
+        if len(matches)!=1:raise EvidenceError('missing or duplicate digest evidence')
+        record=matches[0]
+        source=item.get('source','overlay')
+        if source=='fixture':
+            index=item['fixture'];manifest=result['fixtures']['manifest']
+            if type(index) is not int or not 0<=index<len(manifest):raise res.Refusal('invalid digest fixture')
+            image=Path(manifest[index]['path']);fmt='raw'
+            if sha(image)!=manifest[index]['sha256']:raise EvidenceError('fixture image changed during boot')
+        elif source=='overlay':image=overlay;fmt='qcow2'
+        elif source=='backing':image=Path(result['image']['path']);fmt='raw'
+        else:raise res.Refusal('unknown digest source')
+        if item['kind']=='sector':
+            lba=item['lba'];count=item.get('count',1)
+            if record.get('lba')!=str(lba) or record.get('count',str(count))!=str(count):
+                raise EvidenceError('guest digest sector range mismatch')
+            measured=host.sector_digest(image,directory,lba,count,fmt)
+        elif item['kind']=='file':
+            path=item['path']
+            if not path.startswith('/') or record.get('name_hex')!=path.encode('utf-8').hex():
+                raise EvidenceError('guest digest file name mismatch')
+            if source=='fixture':measured=host.file_digest(image,directory,path)
+            else:
+                offset=item['offset'];size=item['size']
+                if type(offset) is not int or type(size) is not int or offset<0 or size<=0 or offset+size>result['image']['size']:
+                    raise res.Refusal('invalid digest partition extent')
+                # Existing FUSE export exposes only a read-only partition view.
+                if source=='backing':volume=str(image)+'@@'+str(offset);measured=host.file_digest(volume,directory,path)
+                else:
+                    with host.export_readonly(image,directory,offset,size) as volume:
+                        measured=host.file_digest(volume,directory,path)
+        else:raise res.Refusal('unknown digest kind')
+        result['digests'].append({'declaration':item,'measured':measured,'guest':record})
+        if record.get('size',str(measured['size']) if item['kind']=='sector' else None)!=str(measured['size']) or record.get('sha256')!=measured['sha256']:
+            raise EvidenceError('guest digest mismatch')
 
 
 def check_overlay(host,overlay,directory,checks,result):
@@ -690,7 +761,7 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
                          'observed':result['observed'],'cut_point':result['cut_point'],'cleanup':result['cleanup'],
                          'stimulus':result['stimulus'],'fixtures':result['fixtures'],'fault':result['fault'],
                          'disk_cache_mode':result['disk_cache_mode'],'patch_manifest':result['patch_manifest'],
-                         'checkers':result['checkers'],'durability_observations':result['durability_observations']})
+                         'checkers':result['checkers'],'digests':result['digests'],'durability_observations':result['durability_observations']})
         if result['outcome']!='pass' or result['image']['sha256']!=baseline:break
     if result['outcome']=='pass':shared.unlink(missing_ok=True)
     if shared.exists() or result['outcome']=='pass':

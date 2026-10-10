@@ -24,6 +24,17 @@ storia: [`CHANGELOG.md`](../CHANGELOG.md) e, dentro
 Le correzioni minori (refusi, piccoli ritocchi) non richiedono una voce
 propria: confluiscono nella voce del cambiamento a cui appartengono.
 
+## Che cosa non va nel diario
+
+Il diario registra fatti (cose fatte, verifiche, misure) e decisioni con la
+loro motivazione tecnica. Non contiene considerazioni interne, cronaca delle
+conversazioni, logistica personale (acquisti, disponibilità di cavi o
+adattatori, programmi della giornata), configurazioni personali né dettagli
+del materiale privato. Le procedure operative stanno nella documentazione
+(`docs/`), non nel diario. Togliere da una voce esistente dettagli di questo
+tipo è ammesso (fatto il 10 ottobre 2026 su tutte le voci); cambiarne le
+decisioni no.
+
 ## Nome dei file
 
 `AAAA-MM-GG-NN-titolo-breve.md`, dove `NN` è il numero progressivo nella
@@ -77,3 +88,6 @@ Documenti di design, validazione, fonti esterne.
 | [F0: kernel, loader e runner su QEMU](2026-10-09-09-f0-kernel-loader-runner.md) | 9 ott | modifica |
 | [Scope: retrogaming, API POSIX, rete](2026-10-09-10-scope-retrogaming-posix-rete.md) | 9 ott | decisione (scope) |
 | [Direttive F1 a Codex: servizi del kernel, FAT/VFS, runner](2026-10-10-01-direttive-f1-codex.md) | 10 ott | decisione (processo) |
+| [Revisione del commit 2003adb e direttiva f0-01](2026-10-10-02-revisione-2003adb-e-direttiva-f0-01.md) | 10 ott | analisi e modifica |
+| [F1 e F2 si integrano su main; prova hardware unica](2026-10-10-03-integrazione-f1-f2-su-main.md) | 10 ott | decisione (processo) |
+| [Correzioni F0 integrate; primi moduli F1 su main](2026-10-10-04-f0-corretto-e-primi-moduli-f1.md) | 10 ott | modifica |

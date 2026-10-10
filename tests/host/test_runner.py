@@ -16,10 +16,10 @@ import time
 import unittest
 from unittest.mock import patch
 from contextlib import contextmanager
-from loader_model import selector, F1_PROBES, SELECTOR_RE
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts/test'))
+from loader_model import selector, boot_options, F0_PROBES, F1_PROBES, SELECTOR_RE
 import run as runner
 import resources as res
 from evidence import Parser,EvidenceError
@@ -96,6 +96,30 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(set(p.name for p in directory.iterdir()),{'result.json','serial.log'})
         self.assertEqual(result['host']['effective_limits']['memory.swap.max'],'0')
         self.assertTrue(result['cleanup']['clean']);self.assertTrue(result['cleanup']['qmp_quit'])
+    def test_canonical_selector_safe_and_profile_platform(self):
+        profile=json.loads((ROOT/'tests/profiles/qemu-e500.json').read_text())
+        for suffix in (' safe=1',' platform=e500 safe=1'):
+            case={**self.case,'selector':'f0:boot run={run_id}'+suffix}
+            args,request=runner.qemu_args('fixture',profile,case,'12345678',self.image,self.firmware)
+            self.assertEqual(request,'f0:boot run=12345678 platform=e500 safe=1')
+            self.assertIn('name=opt/it.alcybercloud.ciukios/test,string='+request,args)
+        case={**self.case,'selector':'f0:boot run={run_id} platform=e500'}
+        self.assertEqual(runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)[1],
+                         'f0:boot run=12345678 platform=e500')
+    def test_duplicate_selector_keys_are_refused(self):
+        for suffix in (' platform=e500 platform=e500',' safe=1 safe=1',' run=12345678'):
+            case={**self.case,'selector':'f0:boot run={run_id}'+suffix}
+            with self.subTest(suffix=suffix),self.assertRaises(ValueError):
+                runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)
+    def test_legacy_loader_options_are_refused(self):
+        for options in ({'safe':True},{}):
+            case={**self.case,'loader_options':options}
+            with self.assertRaisesRegex(res.Refusal,'loader_options'):
+                runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)
+    def test_not_run_is_retained_and_never_passes(self):
+        result,directory=self.run_fake(records=[{'event':'NOT_RUN','reason':'prerequisite_failed','after':'bootinfo'}])
+        self.assertEqual(result['outcome'],'not_run');self.assertIn('bootinfo',result['reason'])
+        self.assertTrue((directory/'run.qcow2').exists());self.assertTrue(result['cleanup']['clean'])
     def test_missing_and_malformed_markers_retain_overlay(self):
         for records in ([{'event':'BEGIN'},{'event':'END','status':'PASS'}],['CIUKI_TEST v=1 v=1 run={run_id} seq=000001 probe=boot event=BEGIN']):
             with self.subTest(records=records):
@@ -285,44 +309,207 @@ class RunnerTests(unittest.TestCase):
 
     def test_independent_fat_fixture_hashes_and_guest_mismatch(self):
         self.case['fixtures']=[{'generator':'mkfs.fat','fat_type':32,'seed':1}]
-        fixture={'files':[{'id':'fixture-0-lfn','path':'/Ciuki long fixture.txt','size':8,'sha256':'a'*64}],
-                 'sha256':'b'*64,'path':'fixture-0.img'}
-        with patch.object(FakeHost,'fat_fixture',return_value=fixture):
-            result,_=self.run_fake()
-        self.assertEqual(result['outcome'],'fail');self.assertIn('missing evidence',result['reason'])
-        self.assertEqual(result['fixtures']['manifest'][0]['sha256'],'b'*64)
-        self.assertIn('name=opt/it.alcybercloud.ciukios/fixture,file=fixtures.json',result['qemu']['arguments'])
+        path='/Ciuki long fixture.txt'
+        self.case['digests']=[{'kind':'file','source':'fixture','fixture':0,'path':path,
+                              'where':{'event':'DATA','name_hex':path.encode().hex()}}]
+        fixture_image=self.root/'fixture.img';fixture_image.write_bytes(b'fixture')
+        fixture={'sha256':runner.sha(fixture_image),'path':str(fixture_image)}
+        measured={'size':8,'sha256':'a'*64}
+        records=[{'event':'BEGIN'},{'event':'DATA','tick':'10000','name_hex':path.encode().hex(),
+                  'size':'8','sha256':'a'*64},{'event':'END','status':'PASS'}]
+        with patch.object(FakeHost,'fat_fixture',return_value=fixture),patch.object(FakeHost,'file_digest',return_value=measured):
+            result,_=self.run_fake(records)
+            self.assertEqual(result['outcome'],'pass',result['reason'])
+            self.assertFalse(any('/fixture,' in arg for arg in result['qemu']['arguments']))
+            self.assertEqual(result['digests'][0]['measured'],measured)
+            records[1]['sha256']='b'*64
+            result,_=self.run_fake(records)
+        self.assertEqual(result['outcome'],'fail');self.assertIn('guest digest mismatch',result['reason'])
+        self.assertEqual(result['fixtures']['manifest'][0]['sha256'],fixture['sha256'])
 
+    def test_sector_digests_require_stopped_guest_and_exact_measurement(self):
+        self.case['digests']=[{'kind':'sector','lba':0,'where':{'event':'DATA','lba':'0'}}]
+        records=[{'event':'BEGIN'},{'event':'DATA','tick':'10000','lba':'0','sha256':'a'*64},
+                 {'event':'END','status':'PASS'}]
+        def measured(host,image,directory,lba,count,fmt):
+            self.assertTrue((directory/'fake-stopped').exists())
+            self.assertEqual((lba,count,fmt),(0,1,'qcow2'))
+            return {'size':512,'sha256':'a'*64}
+        with patch.object(FakeHost,'sector_digest',measured):
+            result,_=self.run_fake(records)
+            self.assertEqual(result['outcome'],'pass',result['reason'])
+            records[1]['sha256']='b'*64
+            result,_=self.run_fake(records)
+            self.assertEqual(result['outcome'],'fail');self.assertIn('digest mismatch',result['reason'])
+            records[1]['sha256']='a'*64;records.insert(2,dict(records[1]))
+            result,_=self.run_fake(records)
+            self.assertEqual(result['outcome'],'fail');self.assertIn('duplicate digest',result['reason'])
 
-    def test_production_kernel_selector_names_and_empty_dispatch(self):
+    def test_real_readonly_sector_export_file_digest_and_blkdebug(self):
+        if not all(shutil.which(tool) for tool in ('qemu-img','qemu-io','mkfs.fat','mcopy','mtype')):
+            self.skipTest('qemu image/FAT host tools unavailable')
+        image=self.root/'digest.img'
+        with image.open('wb') as stream:stream.truncate(4*1024**2)
+        subprocess.run(['mkfs.fat','--invariant','-F','12',str(image)],check=True,capture_output=True)
+        content=self.root/'binary.bin';content.write_bytes(b'\x00\xffCiuki\r\n'*64)
+        subprocess.run(['mcopy','-i',str(image),str(content),'::/binary.bin'],check=True,capture_output=True)
+        before=runner.sha(image);host=runner.Host()
+        self.assertEqual(host.file_digest(image,self.root,'/binary.bin'),
+                         {'size':content.stat().st_size,'sha256':runner.sha(content)})
+        with image.open('rb') as stream:stream.seek(512);sector=stream.read(512)
+        self.assertEqual(host.sector_digest(image,self.root,1,1,'raw')['sha256'],runner.hashlib.sha256(sector).hexdigest())
+        overlay=self.root/'digest.qcow2'
+        subprocess.run(['qemu-img','create','-f','qcow2','-b',str(image),'-F','raw',str(overlay)],check=True,capture_output=True)
+        payload=self.root/'sector.bin';payload.write_bytes(b'X'*512)
+        host.overlay_write(overlay,512,payload,512)
+        self.assertEqual(host.sector_digest(overlay,self.root,1,1,'qcow2')['sha256'],runner.sha(payload))
+        self.assertEqual(runner.sha(image),before)
+        with self.assertRaisesRegex(res.Refusal,'outside image'):host.sector_digest(image,self.root,100000,1,'raw')
+        self.assertFalse((self.root/'digest-file.bin').exists());self.assertFalse((self.root/'digest-sectors.raw').exists())
+        case={**self.case,'fault':{'layer':'host-block-backend','event':'read_aio','sector':1,'errno':5}}
+        runner.blkdebug_config(case,self.root)
+        args,_=runner.qemu_args('fake',self.profile,case,'12345678',overlay,self.firmware)
+        drive=args[args.index('-drive')+1]
+        disk=drive.split(',format=',1)[0][5:].replace(',,',',')
+        checked=subprocess.run(['qemu-io','-r','-f','raw','-c','read 0 512','-c','read 512 512',disk],capture_output=True,text=True)
+        self.assertNotEqual(checked.returncode,0)
+        self.assertIn('Input/output error',checked.stdout+checked.stderr)
+        self.assertIn('read 512/512 bytes',checked.stdout+checked.stderr)
+        suite=runner.load(ROOT/'tests/suites/f1-storage.json')
+        self.assertEqual([c['id'] for c in suite['cases'] if c['id'].startswith('ata-fault')],
+                         ['ata-fault','ata-fault-blkdebug'])
+
+    def test_kernel_map_f1probes_within_rodata(self):
+        path=ROOT/'build/f0/VMM.map'
+        if not path.exists():self.skipTest('kernel map checked after the mandatory kernel build')
+        rows=path.read_text().splitlines()
+        # lld map lines include "symbol = ." as three separate tokens.
+        def address(symbol):
+            return int(next(line.split()[0] for line in rows if symbol+' = .' in line),16)
+        start=address('__f1probes_start');end=address('__f1probes_end')
+        self.assertLessEqual(address('__rodata_start'),start)
+        self.assertLessEqual(start,end)
+        self.assertLessEqual(end,address('__rodata_end'))
+        sections=[line for line in rows if ':(.f1probes)' in line]
+        self.assertTrue(sections)
+        for line in sections:
+            columns=line.split();vma=int(columns[0],16);size=int(columns[2],16)
+            self.assertGreaterEqual(vma,start);self.assertLessEqual(vma+size,end)
+
+    def test_production_kernel_selector_names_and_phase_dispatch(self):
         if not shutil.which('clang'):self.skipTest('host clang unavailable')
         source=(ROOT/'src/kernel/probes/probes.c').read_text()
-        first=source.index('static bool parse_selector(');last=source.index('\nstatic __attribute__',first)
+        first=source.index('static const struct probe_def probes[]');last=source.index('\nstatic __attribute__',first)
         harness=self.root/'selector.c'
-        harness.write_text('#include <stdbool.h>\n#include <string.h>\n'
-            '#define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))\n'
-            'struct probe_def { const char *name; int (*fn)(void); };\n'
-            'static int emitted;\nstatic void rec_set_run(const char *run) {}\n'
-            'static void rec_emit(const char *p,const char *event,const char *fmt,...) { emitted++; }\n'
-            "static bool is_hex(char c) { return (c>='0' && c<='9') || (c>='a' && c<='f') || (c>='A' && c<='F'); }\n"
-            +source[first:last]+'\nint validate(const char *s,unsigned len,char *probe) { char run[9]; emitted=0; return parse_selector(s,len,probe,24,run); }\n'
-            'int records(void) { return emitted; }\n')
+        stubs="""
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <setjmp.h>
+#include <ciuki/boot_info.h>
+#include <ciuki/probe.h>
+#define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))
+#define CIUKI_BUILD_ID "host"
+static struct ciuki_boot_info g_boot;
+static uint64_t g_tsc_per_ms;
+static jmp_buf done;
+static char evidence[4096];
+static int calls0, calls1, failing;
+static int f0(void) { calls0++; return failing; }
+static int f1(void) { calls1++; return failing; }
+#define probe_boot f0
+#define probe_bootinfo f0
+#define probe_allocator f0
+#define probe_protection f0
+#define probe_isolation f0
+#define probe_preempt f0
+#define probe_localfault f0
+#define probe_syslife f0
+#define probe_fpu f0
+static void probe_panic(void) { calls0++; }
+void rec_set_run(const char *s) { (void)s; }
+void rec_emit(const char *p,const char *event,const char *fmt,...) {
+    unsigned n=(unsigned)strlen(evidence);
+    n+=(unsigned)snprintf(evidence+n,sizeof(evidence)-n,"%s %s ",p,event);
+    if (fmt) { va_list ap; va_start(ap,fmt); vsnprintf(evidence+n,sizeof(evidence)-n,fmt,ap); va_end(ap); }
+    strcat(evidence,"\\n");
+}
+static void timing_calibrate(void) {}
+static void kwork_init(void) {}
+static void task_sleep_ms(unsigned n) { (void)n; longjmp(done,1); }
+static void klog(const char *fmt,...) { (void)fmt; }
+static __attribute__((noreturn)) void show_evidence_forever(void) { longjmp(done,1); }
+static const struct probe_def fixture_table[] = {{"input",f1},{"framebuffer",f1}};
+static const struct probe_def *table_end;
+#define __f1probes_start fixture_table
+#define __f1probes_end table_end
+"""
+        wrappers="""
+int validate(const char *s,unsigned len,unsigned flags) {
+    struct probe_selection selection;
+    g_boot.flags=flags;
+    evidence[0]=0;
+    if (!parse_selector(s,len,&selection)) return 0;
+    return (int)selection.phase+1;
+}
+int dispatch(const char *s,unsigned flags,unsigned count,int fail) {
+    memset(&g_boot,0,sizeof(g_boot));
+    g_boot.flags=flags|CBI_F_TEST_REQUEST;
+    g_boot.test_request_len=(uint16_t)strlen(s);
+    memcpy(g_boot.test_request,s,g_boot.test_request_len);
+    table_end=fixture_table+count;calls0=calls1=0;evidence[0]=0;failing=fail;
+    if (!setjmp(done)) probes_main(0);
+    return calls0*100+calls1;
+}
+const char *records(void) { return evidence; }
+"""
+        # Compile the production parser and probes_main; only hardware/probe bodies are mocked.
+        harness.write_text(stubs+source[first:last]+'\n'+source[source.index('void probes_main(void *arg)'):]+wrappers)
         library=self.root/'selector.so'
-        subprocess.run(['clang','-shared','-fPIC','-std=c17','-Wall','-Werror',str(harness),'-o',str(library)],check=True,capture_output=True)
-        native=ctypes.CDLL(str(library));native.validate.argtypes=[ctypes.c_char_p,ctypes.c_uint,ctypes.c_void_p]
-        for name in (*F1_PROBES,'all','core'):
-            text=('f1:'+name+' run=12ab34cd').encode();probe=ctypes.create_string_buffer(24)
-            self.assertEqual(native.validate(text,len(text),probe),1)
-            self.assertEqual(probe.value,b'f1:'+name.encode());self.assertEqual(native.records(),3)
+        compiled=subprocess.run(['clang','-shared','-fPIC','-std=c17','-Wall','-Werror','-I',str(ROOT/'src/kernel/include'),
+                                str(harness),'-o',str(library)],capture_output=True,text=True)
+        self.assertEqual(compiled.returncode,0,compiled.stderr)
+        native=ctypes.CDLL(str(library));native.validate.argtypes=[ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint]
+        native.dispatch.argtypes=[ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_int]
+        native.records.restype=ctypes.c_char_p
+        # Boot flags use the real shared definitions (safe=bit 0, QEMU=bit 5, forced=bit 7).
+        trusted=1|32|128
+        for phase,names in ((0,F0_PROBES),(1,F1_PROBES)):
+            for name in (*names,'all','core'):
+                text=(f'f{phase}:'+name+' run=12ab34cd').encode()
+                self.assertEqual(native.validate(text,len(text),0),phase+1)
+                self.assertEqual(native.records(),b'')
+                suffix=text+b' platform=e500 safe=1'
+                self.assertEqual(native.validate(suffix,len(suffix),trusted),phase+1)
+                self.assertEqual(native.records(),b'')
         for text in (b'f1:unknown run=12ab34cd',b'f1:input run=12ab34cd run=12345678',
                      b'f1:input run=12ab34cd safe=1 safe=1',b'f1:input run=12ab34cd '+b'x'*64,
-                     b'f0:input run=12ab34cd',b'f1:boot run=12ab34cd'):
-            self.assertEqual(native.validate(text,len(text),ctypes.create_string_buffer(24)),0)
-            self.assertEqual(native.records(),0)
-        text=b'f0:all run=12ab34cd';probe=ctypes.create_string_buffer(24)
-        self.assertEqual(native.validate(text,len(text),probe),1);self.assertEqual(probe.value,b'all')
-        self.assertEqual(native.records(),0)
-
+                     b'f0:input run=12ab34cd',b'f1:boot run=12ab34cd',
+                     b'f1:input run=12ab34cd\0',b'f1:input run=12ab34cd\n',b'f1:input run=12ab34cd\x7f'):
+            self.assertEqual(native.validate(text,len(text),trusted),0)
+            self.assertEqual(native.records(),b'')
+        for suffix,required in ((b' safe=1',1),(b' platform=e500',128)):
+            text=b'f1:input run=12ab34cd'+suffix
+            for flags in (0,32,required):self.assertEqual(native.validate(text,len(text),flags),0)
+            self.assertEqual(native.validate(text,len(text),32|required),2)
+        for alias in ('all','core'):
+            self.assertEqual(native.dispatch(f'f1:{alias} run=12ab34cd'.encode(),0,2,0),2)
+            self.assertEqual(native.dispatch(f'f1:{alias} run=12ab34cd'.encode(),0,2,1),1)
+            self.assertIn(b'framebuffer NOT_RUN reason=prerequisite_failed after=input',native.records())
+        self.assertEqual(native.dispatch(b'f0:core run=12ab34cd',0,2,0),900)
+        self.assertEqual(native.dispatch(b'f0:all run=12ab34cd',0,2,0),1000)
+        self.assertEqual(native.dispatch(b'f0:all run=12ab34cd',0,2,1),100)
+        self.assertIn(b'panic NOT_RUN',native.records())
+        self.assertEqual(native.dispatch(b'f1:input run=12ab34cd',0,2,0),1)
+        self.assertEqual(native.dispatch(b'f1:ata run=12ab34cd',0,2,0),0)
+        self.assertIn(b'ata READY table=f1 installed=2',native.records())
+        self.assertIn(b'ata ERROR status=not_run reason=missing_probe',native.records())
+        for name in (*F1_PROBES,'all','core'):
+            self.assertEqual(native.dispatch(f'f1:{name} run=12ab34cd'.encode(),0,0,0),0)
+            self.assertIn(b'installed=0',native.records())
+            self.assertIn(b'ERROR status=not_run reason=missing_probe',native.records())
 
     def test_main_holds_shared_lock_for_host_prerequisite_and_boot(self):
         lock=self.root/'common.lock';directory=self.root/'build/test-runs/f1-input/12345678'
@@ -366,6 +553,19 @@ class RunnerTests(unittest.TestCase):
 
 
 class F1SelectorTests(unittest.TestCase):
+    def test_boot_cfg_whole_tokens(self):
+        self.assertEqual(boot_options('safe=1 serial=0 mode=0x0118\r\n'),
+                         {'safe':True,'serial':False,'mode':0x118})
+        self.assertTrue(boot_options('safe=0',safe=True)['safe'])
+        self.assertTrue(boot_options('safe=1 safe=0')['safe'])
+        self.assertEqual(boot_options('  safe=0\nserial=1 '),
+                         {'safe':False,'serial':True,'mode':None})
+        for text in ('safe=1junk','safe=10','safe=2','serial=0junk','mode=0x0118junk',
+                     'mode=0x4000','mode=0x00xz','unknown=1','safe=1\tserial=0',
+                     'safe=1\0','x'*128,'sáfe=1'):
+            with self.subTest(text=text),self.assertRaisesRegex(ValueError,'SELECT_ERROR'):
+                boot_options(text)
+
     def test_f1_names_aliases_trust_duplicates_oversize(self):
         for name in (*F1_PROBES,'all','core'):
             with self.subTest(name=name):
@@ -394,6 +594,50 @@ class F1SelectorTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_not_run_is_a_standalone_terminal(self):
+        parser=Parser('12345678','allocator')
+        parser.feed(b'CIUKI_TEST v=1 run=12345678 seq=000010 probe=allocator event=NOT_RUN reason=prerequisite_failed after=bootinfo')
+        self.assertEqual(parser.outcome,'not_run')
+        with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check({'terminal':'END'})
+        with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check({'terminal':'NOT_RUN'})
+        with self.assertRaises(EvidenceError):
+            parser.feed(b'CIUKI_TEST v=1 run=12345678 seq=000011 probe=allocator event=END status=PASS')
+        for suffix in ('reason=other after=bootinfo','reason=prerequisite_failed','reason=prerequisite_failed after=unknown'):
+            with self.subTest(suffix=suffix),self.assertRaises(EvidenceError):
+                Parser('12345678','allocator').feed(('CIUKI_TEST v=1 run=12345678 seq=000010 probe=allocator event=NOT_RUN '+suffix).encode())
+        parser=Parser('12345678','allocator')
+        parser.feed(b'CIUKI_TEST v=1 run=12345678 seq=000001 probe=allocator event=BEGIN')
+        with self.assertRaises(EvidenceError):
+            parser.feed(b'CIUKI_TEST v=1 run=12345678 seq=000002 probe=allocator event=NOT_RUN reason=prerequisite_failed after=bootinfo')
+
+    def test_suite_timer_predicates_reject_fabricated_progress(self):
+        for path in sorted((ROOT/'tests/suites').glob('f0-*.json')):
+            for case in json.loads(path.read_text())['cases']:
+                for predicate in case['expected'].get('predicates',[]):
+                    fields=predicate.get('fields',{})
+                    if not {'ready_tick','final_tick','elapsed_pit_cycles'} <= fields.keys():continue
+                    # Populate the actual suite predicate's other fields with
+                    # valid values, so only its timing checks determine success.
+                    data={**predicate['where']}
+                    for field,rule in fields.items():
+                        value=rule.get('eq',rule.get('ge',0)) if isinstance(rule,dict) else rule
+                        if isinstance(value,str) and value.startswith('$'):value=0
+                        data[field]=f'{value:08x}' if isinstance(rule,dict) and rule.get('encoding')=='hex' else str(value)
+                    for ready,final,cycles,passes in ((0,0,11931820,False),(17,10026,10009*1193,False),
+                                                    (17,10027,10010*1193+1,False),(17,10027,10010*1193,True)):
+                        with self.subTest(suite=path.name,case=case['id'],ticks=(ready,final),cycles=cycles):
+                            parser=Parser('12345678','boot')
+                            data.update(ready_tick=str(ready),final_tick=str(final),elapsed_pit_cycles=str(cycles))
+                            records=['event=BEGIN']
+                            records.extend(f'event=DATA group=boot {k}={v}' for k,v in data.items() if k not in ('event','group'))
+                            records.append('event=END status=PASS')
+                            for seq,record in enumerate(records,1):
+                                parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=boot {record}'.encode())
+                            expected={'terminal':'END','predicates':[predicate]}
+                            if passes:self.assertTrue(parser.check(expected))
+                            else:
+                                with self.assertRaises(EvidenceError):parser.check(expected)
+
     def test_strict_grammar_sequence_terminal_and_length(self):
         for bad in [b'CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN v=1',b'CIUKI_TEST v=1 run=87654321 seq=000001 probe=boot event=BEGIN',b'CIUKI_TEST v=1 run=12345678 seq=1 probe=boot event=BEGIN',b'CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN x='+b'a'*200,b' CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN',b'CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN x=\xff']:
             with self.subTest(bad=bad[:80]),self.assertRaises(EvidenceError):Parser('12345678','boot').feed(bad)

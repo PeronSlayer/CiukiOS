@@ -12,7 +12,14 @@ extern const uint8_t font_cfn_regular[];   /* 95 widths + 95 * 16 rows (u16 LE) 
 #define CELL_W 8
 #define CELL_H 16
 #define MAX_COLS 160
-#define HIST_LINES 512
+/* Worst-case core records (including BEGIN/END): boot 7; bootinfo
+ * 2 + 2*128 E820/normalized + 16 PMM reservations + 32 PCI + 1 summary
+ * + 7 negatives + 2 totals = 316; allocator 4; protection 6; isolation 5;
+ * preempt 6; localfault 7; syslife 2 + 12 buffers + 1 summary + 100 cycles
+ * + 1 ledger = 116; fpu 5. Total 472 * ceil(240/80) = 1416 lines.
+ * 1536 leaves 120 lines for boot/selector logs and margin. The history
+ * uses 1536*161 = 247296 bytes; all console static storage is < 256 KiB. */
+#define HIST_LINES 1536
 
 enum { CON_NONE, CON_TEXT, CON_LFB };
 static int con_kind;

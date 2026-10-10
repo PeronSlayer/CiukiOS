@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# T0: kernel library and ciuki_boot_info validator on the host.
+# T0: kernel library, boot-info validator and driver services on the host.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 out="$root/build/host"
 mkdir -p "$out"
+export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_lib_test.c" -o "$out/kernel_lib_test"
 "$out/kernel_lib_test"
+
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
+"$out/kernel_sync_test"
+
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/i8042_test.c" -o "$out/i8042_test"
+"$out/i8042_test"
 
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.
@@ -48,3 +57,8 @@ assert len(simd) == 8, simd
 assert not integer, integer
 print("audit classifier fixture: PASS")
 PY
+
+# F1 framebuffer presenter and probe with heap-backed LFB fixtures.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/fbdev_test.c" -o "$out/fbdev_test"
+"$out/fbdev_test"

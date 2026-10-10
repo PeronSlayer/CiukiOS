@@ -23,6 +23,10 @@ if lsblk -no MOUNTPOINTS "$dev" | grep -q .; then
 fi
 size=$(blockdev --getsize64 "$dev"); image_size=$(stat -c %s "$image")
 (( size >= image_size )) || { echo "[write] disk ($size bytes) smaller than the image ($image_size)" >&2; exit 1; }
+[[ "$(lsblk -dno TYPE "$dev")" == "disk" ]] || { echo "[write] $dev is not a whole disk: refused" >&2; exit 1; }
+serial="$(lsblk -dno SERIAL "$dev" | tr -d '[:space:]')"
+[[ -n "$serial" ]] || { echo "[write] $dev reports no serial number: refused" >&2; exit 1; }
+[[ "$target" == *"$serial"* ]] || { echo "[write] serial $serial of $dev is not part of $target: refused" >&2; exit 1; }
 model="$(lsblk -dno MODEL,SERIAL,SIZE "$dev" | tr -s ' ')"
 echo "[write] target: $dev ($model), stable name $target"
 echo "[write] image : $image ($image_size bytes)"
@@ -30,7 +34,7 @@ image_sha="$(sha256sum "$image" | cut -d' ' -f1)"
 echo "[write] image SHA-256: $image_sha"
 echo "[write] ALL DATA ON $dev WILL BE DESTROYED. Type the disk's serial to continue:"
 read -r answer
-[[ -n "$answer" && "$target" == *"$answer"* ]] || { echo "[write] serial mismatch: aborted" >&2; exit 1; }
+[[ "$answer" == "$serial" ]] || { echo "[write] serial mismatch (expected the full serial $serial): aborted" >&2; exit 1; }
 dd if="$image" of="$dev" bs=1M conv=fsync status=progress
 sync
 blockdev --flushbufs "$dev"

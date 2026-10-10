@@ -30,9 +30,6 @@
               "capacity_match": {
                 "eq": 1
               },
-              "digest_match": {
-                "eq": 1
-              },
               "invalid_commands": {
                 "eq": 0
               },
@@ -66,7 +63,27 @@
             }
           }
         ]
-      }
+      },
+      "digests": [
+        {
+          "kind": "sector",
+          "source": "backing",
+          "lba": 0,
+          "where": {
+            "event": "DATA",
+            "lba": "0"
+          }
+        },
+        {
+          "kind": "sector",
+          "source": "backing",
+          "lba": 2048,
+          "where": {
+            "event": "DATA",
+            "lba": "2048"
+          }
+        }
+      ]
     },
     {
       "id": "partition",
@@ -219,7 +236,7 @@
       }
     },
     {
-      "id": "ata-fault-err",
+      "id": "ata-fault",
       "probe": "ata-fault",
       "profile": "qemu-t23",
       "selector": "f1:ata-fault run={run_id}",
@@ -230,77 +247,8 @@
           {
             "where": {
               "event": "DATA",
-              "group": "ata-fault"
-            },
-            "combine": true,
-            "fields": {
-              "eio": {
-                "eq": 1
-              },
-              "deadline_met": {
-                "eq": 1
-              },
-              "subsequent_commands": {
-                "eq": 0
-              },
-              "bios_calls": {
-                "eq": 0
-              },
-              "survivor_ticks": {
-                "ge": 100
-              },
-              "quarantine_retained": {
-                "eq": 1
-              },
+              "group": "ata-fault",
               "subcase": "err"
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
-                "ge": 1
-              },
-              "errors": {
-                "ge": 0
-              },
-              "timing_domain": "icount"
-            }
-          }
-        ]
-      },
-      "fixtures": [
-        {
-          "injection": "driver-boundary",
-          "subcase": "err"
-        }
-      ]
-    },
-    {
-      "id": "ata-fault-df",
-      "probe": "ata-fault",
-      "profile": "qemu-t23",
-      "selector": "f1:ata-fault run={run_id}",
-      "timeout": 180,
-      "expected": {
-        "terminal": "END",
-        "predicates": [
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault"
             },
             "combine": true,
             "fields": {
@@ -316,61 +264,16 @@
               "bios_calls": {
                 "eq": 0
               },
-              "survivor_ticks": {
-                "ge": 100
-              },
               "quarantine_retained": {
                 "eq": 1
-              },
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
               "subcase": "df"
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
-                "ge": 1
-              },
-              "errors": {
-                "ge": 0
-              },
-              "timing_domain": "icount"
-            }
-          }
-        ]
-      },
-      "fixtures": [
-        {
-          "injection": "driver-boundary",
-          "subcase": "df"
-        }
-      ]
-    },
-    {
-      "id": "ata-fault-stuck-bsy",
-      "probe": "ata-fault",
-      "profile": "qemu-t23",
-      "selector": "f1:ata-fault run={run_id}",
-      "timeout": 180,
-      "expected": {
-        "terminal": "END",
-        "predicates": [
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault"
             },
             "combine": true,
             "fields": {
@@ -386,61 +289,16 @@
               "bios_calls": {
                 "eq": 0
               },
-              "survivor_ticks": {
-                "ge": 100
-              },
               "quarantine_retained": {
                 "eq": 1
-              },
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
               "subcase": "stuck-bsy"
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
-                "ge": 1
-              },
-              "errors": {
-                "ge": 0
-              },
-              "timing_domain": "icount"
-            }
-          }
-        ]
-      },
-      "fixtures": [
-        {
-          "injection": "driver-boundary",
-          "subcase": "stuck-bsy"
-        }
-      ]
-    },
-    {
-      "id": "ata-fault-stuck-drq",
-      "probe": "ata-fault",
-      "profile": "qemu-t23",
-      "selector": "f1:ata-fault run={run_id}",
-      "timeout": 180,
-      "expected": {
-        "terminal": "END",
-        "predicates": [
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault"
             },
             "combine": true,
             "fields": {
@@ -456,61 +314,16 @@
               "bios_calls": {
                 "eq": 0
               },
-              "survivor_ticks": {
-                "ge": 100
-              },
               "quarantine_retained": {
                 "eq": 1
-              },
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
               "subcase": "stuck-drq"
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
-                "ge": 1
-              },
-              "errors": {
-                "ge": 0
-              },
-              "timing_domain": "icount"
-            }
-          }
-        ]
-      },
-      "fixtures": [
-        {
-          "injection": "driver-boundary",
-          "subcase": "stuck-drq"
-        }
-      ]
-    },
-    {
-      "id": "ata-fault-missing-device",
-      "probe": "ata-fault",
-      "profile": "qemu-t23",
-      "selector": "f1:ata-fault run={run_id}",
-      "timeout": 180,
-      "expected": {
-        "terminal": "END",
-        "predicates": [
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault"
             },
             "combine": true,
             "fields": {
@@ -526,61 +339,16 @@
               "bios_calls": {
                 "eq": 0
               },
-              "survivor_ticks": {
-                "ge": 100
-              },
               "quarantine_retained": {
                 "eq": 1
-              },
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
               "subcase": "missing-device"
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
-                "ge": 1
-              },
-              "errors": {
-                "ge": 0
-              },
-              "timing_domain": "icount"
-            }
-          }
-        ]
-      },
-      "fixtures": [
-        {
-          "injection": "driver-boundary",
-          "subcase": "missing-device"
-        }
-      ]
-    },
-    {
-      "id": "ata-fault-identify",
-      "probe": "ata-fault",
-      "profile": "qemu-t23",
-      "selector": "f1:ata-fault run={run_id}",
-      "timeout": 180,
-      "expected": {
-        "terminal": "END",
-        "predicates": [
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault"
             },
             "combine": true,
             "fields": {
@@ -596,13 +364,59 @@
               "bios_calls": {
                 "eq": 0
               },
-              "survivor_ticks": {
-                "ge": 100
-              },
               "quarantine_retained": {
                 "eq": 1
-              },
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
               "subcase": "identify"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault",
+              "subcase": "flush"
+            },
+            "combine": true,
+            "fields": {
+              "eio": {
+                "eq": 1
+              },
+              "deadline_met": {
+                "eq": 1
+              },
+              "subsequent_commands": {
+                "eq": 0
+              },
+              "bios_calls": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              }
             }
           },
           {
@@ -628,21 +442,30 @@
               },
               "timing_domain": "icount"
             }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "ata-fault-summary"
+            },
+            "combine": true,
+            "fields": {
+              "real_commands": {
+                "eq": 0
+              },
+              "survivor_ticks": {
+                "ge": 100
+              }
+            }
           }
         ]
-      },
-      "fixtures": [
-        {
-          "injection": "driver-boundary",
-          "subcase": "identify"
-        }
-      ]
+      }
     },
     {
-      "id": "ata-fault-flush",
-      "probe": "ata-fault",
+      "id": "ata-fault-blkdebug",
+      "probe": "ata",
       "profile": "qemu-t23",
-      "selector": "f1:ata-fault run={run_id}",
+      "selector": "f1:ata run={run_id}",
       "timeout": 180,
       "expected": {
         "terminal": "END",
@@ -650,7 +473,7 @@
           {
             "where": {
               "event": "DATA",
-              "group": "ata-fault"
+              "group": "ata-fault-blkdebug"
             },
             "combine": true,
             "fields": {
@@ -672,7 +495,9 @@
               "quarantine_retained": {
                 "eq": 1
               },
-              "subcase": "flush"
+              "lba": {
+                "eq": 1048575
+              }
             }
           },
           {
@@ -703,7 +528,8 @@
       },
       "fault": {
         "layer": "host-block-backend",
-        "event": "flush_to_disk",
+        "event": "read_aio",
+        "sector": 1048575,
         "errno": 5
       }
     }
