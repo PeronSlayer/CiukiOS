@@ -80,3 +80,15 @@ defect). The drivers and the mount itself come up (`[init]` lines show
 framebuffer, input and ATA ready; the storage record reports the read gate).
 Directive f1-13 routes storage evidence through the activation ledger and adds
 a static guard against `rec_emit` outside probe files, plus a runtime counter.
+
+## Sixth image: `b0cb346a…` (commit `5e7eaee`, 53 payloads incl. the desktop)
+
+F1 and F2 suites, 03:05–04:46 UTC. F0 regressions pass in every suite.
+First F1 probes passing in the guest: `registry`, `safe` on the native
+profile (`safe-fw-cfg-qemu-t23`, `safe-boot-cfg-qemu-t23`), `ata`,
+`partition`, `ata-fault` (`ata-fault-blkdebug` declared `not_run`).
+Failures: `input-fault` (fixture allocation above the 2,040-byte kmalloc
+limit — fixed by f1-14), `safe-fw-cfg-qemu-e500` (firmware input backend
+init `error=-5`, directive f1-15), `fat12-read` (superfloppy fixture disk not
+mounted, directive f1-16). The F2 cases were not reached because every F2
+suite repeats the F1 regressions and stops at `input-fault`.

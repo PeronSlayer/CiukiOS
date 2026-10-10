@@ -26,7 +26,7 @@ evidence and merges.
 | [f2-01-abi-header](f2-01-abi-header.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (687 layout checks) |
 | [f2-02-processes-and-memory](f2-02-processes-and-memory.md) | F2 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (94,456 host checks; QEMU probes pending f2-09) |
 | [f2-06-sdk-newlib](f2-06-sdk-newlib.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (clean build 17 s; guest not_run) |
-| [f2-03-files-and-paths](f2-03-files-and-paths.md) | F2 | gpt-6-astra / xhigh | issued 2026-10-11 |
+| [f2-03-files-and-paths](f2-03-files-and-paths.md) | F2 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 with its integration patch (14,837 file checks) |
 | [f2-09-runner-f2-suites](f2-09-runner-f2-suites.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (74 runner tests; 33 F2 cases) |
 | [f2-07-lua-port-and-payloads](f2-07-lua-port-and-payloads.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (50 payloads; host-reference suite OK) |
 | [f2-04-signals-and-faults](f2-04-signals-and-faults.md) | F2 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (4,344 signal checks; QEMU pending f2-09) |
@@ -37,7 +37,9 @@ evidence and merges.
 | [f1-11-activation-records](f1-11-activation-records.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11; F0 56/56 on image acd8af37 |
 | [f1-12-integration-followups](f1-12-integration-followups.md) | F1/F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (probe order per contract; 82 runner tests) |
 | [f1-13-boot-time-records](f1-13-boot-time-records.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (runtime guard patch applied; supervisor framing allowed) |
-| [f1-14-input-fault-guest-fix](f1-14-input-fault-guest-fix.md) | F1 | gpt-6.1-sol / high | issued 2026-10-11 (guest-only failure) |
+| [f1-14-input-fault-guest-fix](f1-14-input-fault-guest-fix.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (root cause: 10 KiB kmalloc over the 2,040-byte limit) |
+| [f1-15-firmware-input-qemu](f1-15-firmware-input-qemu.md) | F1 | gpt-6-astra / xhigh | issued 2026-10-11 (safe fails on qemu-e500: firmware input init EIO) |
+| [f1-16-fixture-disks](f1-16-fixture-disks.md) | F1 | gpt-6.1-sol / high | issued 2026-10-11 (fat12-read: superfloppy fixture not mounted) |
 
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
