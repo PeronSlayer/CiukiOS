@@ -52,5 +52,6 @@ evidence and merges.
 | [f2-14-signals-fault-regression](f2-14-signals-fault-regression.md) | F2 | gpt-6.1-sol / xhigh | first delivery merged 2026-10-11 (TCG omits #AC: payload falls back by CPUID signature, hardware still requires vector 17); `nanosleep-eintr` still fails on QEMU (`elapsed_ms=40 result=0`), second Sol attempt in progress |
 | [f2-15-app-gate-probe](f2-15-app-gate-probe.md) | F2 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (no `app-gate` probe was ever registered: `installed=8`, `missing_probe`) |
 
+| [f1-22-mount-crash-fixtures](f1-22-mount-crash-fixtures.md) | F1 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (runner attaches no fixture for the `mount-*` injection declarations; crash cut never implemented) |
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).

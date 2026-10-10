@@ -173,3 +173,23 @@ on the two desktop profiles; only the two physical `safe-menu-*` cases stay
 `not_run`. The three `uart-absent-*` operator-confirmation cases count as
 failures and gate nothing. Host tests on this tree: 102 OK after the SDK
 rebuild that the f2-10 change to `sdk/tests/libc_smoke.c` required.
+
+## Twelfth image: `2a457bb8…` (commit `92da010`, f2-11, f1-21, f2-12 and the first f2-14 delivery merged)
+
+`f1-fat32` on `qemu-t23`, `qemu-e500` and `qemu-min128`: 106 pass. With
+the storage shutdown fixed by f2-11 the write cases run for the first time
+in suite context: `cache`, `cache-unsupported-flush`, `cache-delayed-error`,
+`cache-flush-error`, `fat-write`, `bootlog` and `bootlog-read-only` PASS;
+`mount-bad-bpb` FAIL (`corrupt_fixtures status=not_run reason=absent`: the
+runner attaches no fixture for the `injection` declarations, directive
+f1-22), leaving the six later `mount-*` cases `not_run`. Single boots on
+`qemu-t23` of the same image: `f2:signals-fault` now passes `fault-repair`
+(`tcg_fallback=1`) but still fails `nanosleep-eintr` (`elapsed_ms=40
+result=0`; second f2-14 delivery pending), and the runner case
+`crash-isolation-normal-qemu-t23` with `server=desktop` fails at the launch
+handshake without a diagnostic record (directive f2-16). Earlier image
+`a9550f04…` (commit `3619267`): `fat-write`, `cache`, `bootlog`,
+`framebuffer`, `elf-load`, `spawn-wait`, `mmap`, `threads-wait`,
+`libc-smoke`, `crash-isolation` (stand-in) and `fd-table` (kernel verdict,
+with the FAT16 fixture) PASS in single boots; `app-gate` reports
+`missing_probe` (no probe was registered, directive f2-15).
