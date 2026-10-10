@@ -41,6 +41,12 @@ MiB is never handed to the general allocator.
   PSE/PGE.
 - [ELF specification (System V ABI, i386 supplement)](https://refspecs.linuxfoundation.org/elf/elf.pdf):
   `ET_EXEC`, `EM_386`, `PT_LOAD`, `p_paddr`/`p_vaddr`.
+- SeaBIOS 1.16.3 [keyboard services](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c)
+  and [BIOS clock](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/clock.c)
+  (F1-37 research, 2026-10-11): INT16 AH=01 polls without consuming,
+  AH=00 consumes, and the BDA timer wraps daily at 18.2 Hz; comparison with
+  `menu_getc`, `deadline_start` and `deadline_expired` supports reusing the
+  existing keyboard/COM1 poll and restarting both tick and stalled-clock bounds.
 - Repository facts: the 0.8 disk is an unpartitioned FAT16 volume of 262,144
   sectors whose boot sector reserves 73 sectors for Stage1
   (`src/boot/full_boot.asm`, `bpb_reserved_secs = 1 + 72`); Stage1 loads
@@ -127,6 +133,11 @@ request the system boots normally. The loader MUST, in this order:
    safe-mode sources still persist). A validated fw_cfg request outranks cfg
    and bypasses the menu. The loader emits L:SELECT_SOURCE=cfg|menu|fw_cfg.
    The validated UART base and divisor are passed to the kernel.
+   S cancels the configured request, adds the safe flag, confirms it with
+   `Safe mode selected; P for a probe, or wait` and `L:SAFE=1`, and restarts
+   the bounded three-second menu window so P can enter a selector (without
+   a `safe=1` suffix), L can toggle logging, and N or expiry boots with the
+   safe flag preserved and `L:SELECT_SOURCE=menu`.
 6. Select and set the video mode (below).
 7. Load `VMM.ELF`: require `ELFCLASS32`, `ELFDATA2LSB`, `ET_EXEC`, `EM_386`.
    For each `PT_LOAD` segment, the whole extent `[p_paddr, p_paddr + p_memsz)`
