@@ -2236,7 +2236,7 @@
       "id": "bootlog-read-only",
       "probe": "bootlog",
       "profile": "qemu-t23",
-      "selector": "f1:bootlog run={run_id}",
+      "selector": "f1:bootlog run={run_id} safe=1",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -2289,7 +2289,7 @@
             "exact_count": 1,
             "fields": {
               "generation": {
-                "ge": 1
+                "eq": 0
               },
               "errors": {
                 "eq": 0
@@ -2303,13 +2303,7 @@
             ]
           }
         ]
-      },
-      "fixtures": [
-        {
-          "injection": "driver-boundary",
-          "mount_mode": "read-only"
-        }
-      ]
+      }
     }
   ]
 }

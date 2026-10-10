@@ -299,6 +299,18 @@ The three safe-mode sources are covered as follows: `safe=1` through fw_cfg
 loader menu on the physical machines (T4); QMP key injection into the menu
 window MAY be added later but is not required.
 
+The `bootlog-read-only` failure-path case uses the existing fw_cfg selector
+`f1:bootlog run=<id> safe=1`; QEMU's [fw_cfg specification](https://www.qemu.org/docs/master/specs/fw_cfg.html)
+defines the `-fw_cfg name=...,string=...` transport. In production `drivers_init`
+skips ATA discovery in safe mode, while `storage_init` still sets up storage;
+there is no C: volume, so `probe_bootlog` takes its `!v` branch and reports
+`result=-30 write_count=0 storage_calls=0 disk_log=unavailable`. The VFS metadata
+has `generation=0` because C: was never attached. The storage host harness
+checks that path through production activation, mount setup, and probe code,
+with an ordinary read-only but durable mount as a negative control. No image
+mutation or block-property inference is needed: `FAT_RO_REQUEST` alone leaves
+the read gate open, and `blkdev_durable` tests write/cache/flush capabilities.
+
 **[F1]** Tests MUST never rebuild or copy the canonical image. Every boot uses
 a qcow2 overlay under `build/test-runs/`; a declared crash/reboot sequence reuses
 its overlay sequentially. BOOT.CFG/corruption mutations affect only overlays,
