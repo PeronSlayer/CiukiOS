@@ -6,6 +6,16 @@
 #include <stdbool.h>
 #include "sync.h"
 
+#define ACTIVATION_LEDGER_MAX 32u
+struct activation_entry {
+    uint32_t seq;
+    const char *device, *result, *reason;
+    uint64_t tick;
+    bool safe_flag_before;
+    int error;
+    bool required, present, quarantined;
+};
+
 struct drivers_state {
     uint32_t boot_flags, flag_sequence, fb_sequence, input_sequence, ata_sequence;
     unsigned optional_activations;
@@ -14,6 +24,11 @@ struct drivers_state {
 };
 void drivers_init(void);
 void drivers_snapshot(struct drivers_state *out);
+/* Boot-task-owned, append-only ledger; immutable after drivers_init returns.
+ * The flag snapshot precedes its driver entries in activation sequence. */
+unsigned drivers_activation_count(void);
+const struct activation_entry *drivers_activation_get(unsigned index);
+bool drivers_activation_ordered(void);
 /* Called before the scheduler creates any resumable protected frames. */
 void stackprot_init(void);
 

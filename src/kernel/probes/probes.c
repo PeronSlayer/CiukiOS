@@ -148,6 +148,26 @@ static uint64_t installed_ram_bytes(void)
 static int probe_boot(void)
 {
     rec_emit("boot", "BEGIN", 0);
+    struct drivers_state state;
+    drivers_snapshot(&state);
+    rec_emit("boot", "DATA", "group=activation_flag activation_seq=%u safe_mode=%u boot_flags=%08x",
+             state.flag_sequence, state.safe, state.boot_flags);
+    unsigned devices = drivers_activation_count(), failures = 0;
+    for (unsigned i = 0; i < devices; i++) {
+        const struct activation_entry *e = drivers_activation_get(i);
+        if (!strncmp(e->result, "failed", 7)) failures++;
+        if (!strncmp(e->device, "framebuffer", 12))
+            rec_emit("boot", "DATA", "group=activation device=%s result=%s error=%d activation_seq=%u required=%u reason=%s",
+                     e->device, e->result, e->error, e->seq, e->required, e->reason);
+        else if (!strncmp(e->device, "input", 6))
+            rec_emit("boot", "DATA", "group=activation device=%s result=%s error=%d activation_seq=%u backend=%s required=%u",
+                     e->device, e->result, e->error, e->seq, e->reason, e->required);
+        else
+            rec_emit("boot", "DATA", "group=activation device=%s result=%s error=%d activation_seq=%u present=%u quarantined=%u reason=%s",
+                     e->device, e->result, e->error, e->seq, e->present, e->quarantined, e->reason);
+    }
+    rec_emit("boot", "DATA", "group=activation_summary devices=%u failures=%u optional_activations=%u",
+             devices, failures, state.optional_activations);
     rec_emit("boot", "DATA", "group=boot cpuid=%08x vendor=%s build_id=%s build_dirty=%u boot_drive=%08x ram_bytes=%llu usable_bytes=%llu",
              g_cpu_signature, g_cpu_vendor, CIUKI_BUILD_HEX8, CIUKI_BUILD_DIRTY, g_boot.boot_drive,
              installed_ram_bytes(), (uint64_t)pmm_total_usable() * PAGE_SIZE);
