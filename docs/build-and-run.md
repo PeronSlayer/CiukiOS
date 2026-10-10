@@ -96,6 +96,64 @@ not_run and continues. Physical import preserves this reason and marks
 absent stimulus into a pass. Record real operator observations in
 `case_confirmations` and keep the existing independent screen/disk evidence.
 
+### Operator safe-mode boot after a sweep
+
+The sweep's `safe` step normally boots with `safe=0`: its durable cursor needs
+volume writes. It preserves its observations but records the required subcase,
+END and SWEEP as not_run with `reason=safe_mode_not_selected`. It does not
+qualify `safe-menu-t23` or `safe-menu-e500`, and the importer does not treat
+this absent mode as a failed prerequisite for later cases.
+
+After SWEEP_END, the on-disk `probe=` line has been removed; keep the disk and
+the same image. Start a **separate** capture with a fresh eight-hex-digit run id
+before powering on. In the three-second `SELECT_READY` window, press **S**
+(upper- or lowercase, laptop keyboard or COM1). The current loader immediately
+boots safe mode and cancels any configured probe request. This boots the safe
+scaffold without rewriting the disk, but it runs no `safe` probe and has no
+test run identity. It therefore cannot qualify the physical menu case.
+
+There is currently **no supported key sequence** that combines safe mode and
+a hardware probe selector on that unchanged disk. S then P does not work:
+`ciukldr/menu.inc:boot_menu` `.safe` jumps directly to `.done`; P cannot be read
+afterward. P alone accepts `f1:safe run=12345678` followed by Enter within its
+30-second entry deadline, but does not set the safe flag. Appending ` safe=1`
+is rejected on hardware: `selector_validate` admits that suffix only when
+`selector_fw=1`, and the kernel's `selector.c` also requires validated QEMU
+flags. `.cancel_cfg` clears the request, not the safe flag, and
+`selector_accept` preserves an already-set safe flag. The loader order in
+`ciukldr.asm` is config_read → boot_menu → video_select → elf_load; there is
+no second menu or disk write in this path. These are repository control-flow
+facts; [SeaBIOS 1.16.3 INT16 source](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c)
+confirms AH=01 polls and AH=00 consumes a keyboard character, while
+[QEMU fw_cfg documentation](https://www.qemu.org/docs/master/specs/fw_cfg.html)
+describes the separate virtual-machine selector transport. Neither supplies
+a second menu on hardware.
+
+**Open loader change for the lead (not implemented by f1-36):** after S sets
+the safe flag, return to the existing bounded menu poll instead of `.done`.
+The smallest change is that branch alone, allowing P during the remainder of
+the original three-second window; restarting the three-second deadline would
+give the operator a full entry window. Expiry still boots safe mode. With that
+change reviewed and qualified, the intended sequence is **S, P,
+`f1:safe run=<fresh-id>`, Enter**, with no suffix. Observe `[safe] Console
+ready.` and the input/console evidence, then retain the original serial bytes
+in that run's own capture directory as `f0.log`. Its `acquisition.json` must
+contain the verified image/build identity, `selector: "f1:safe run=<fresh-id>"`,
+`selector_source: "menu"`, `operator_confirmed: true`, and
+`case_confirmations: {"safe-menu-t23": true}` (or the E500 id), confirming the
+actual operator observation. Qualification requires END PASS, `safe_mode=1`,
+`source=menu`, zero optional activations and mounts, and working console/input;
+an operator confirmation cannot replace those records. A synthetic acquisition
+can exercise the importer now, but establishes no physical qualification.
+
+The scoped importer can evaluate the declared physical case by passing it in
+the `cases` argument of `physical.import_sweep`, together with the suite's
+`physical_cases`. The current `run.py --physical-capture` summary enumerates
+only the suite's QEMU `cases`; the lead must route/retain the separate physical
+menu case there before the command-line procedure can qualify it. Do not merge
+the operator boot into the sweep acquisition or relabel a QEMU safe case as
+menu evidence.
+
 Place the serial bytes as `f0.log` beside `acquisition.json` in the capture
 folder (copy `serial.log` byte for byte; keep CRLF and UART noise). The JSON
 object has the following schema. Inventory fields may contain `"unknown"`
@@ -206,8 +264,8 @@ they are not a claim that suite predicates or physical qualification passed.
 Exit 0 means all cases qualify and the sweep completed, 1 means evidence was
 imported with failed/not_run cases or an incomplete sweep, and 2 means refusal.
 Missing
-fixture/disk checker/screen/operator evidence remains not_run. The safe-mode
-cursor conflict is recorded in f1-acceptance.md; a sweep is not yet a substitute
-for the dedicated safe qualification. QEMU suites remain unchanged; the lead
+fixture/disk checker/screen/operator evidence remains not_run. The normal sweep
+safe step is `not_run reason=safe_mode_not_selected`; dedicated safe menu
+qualification uses a separate acquisition as described above. QEMU suites remain unchanged; the lead
 can run `python3 scripts/test/run.py sweep-smoke` to traverse F0 on one bounded,
 reused overlay under -no-reboot and recover its final panic.

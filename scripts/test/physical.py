@@ -236,6 +236,25 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                 active[0].terminal = r; active[0].outcome = 'fail'; panic = True
                 continue
             p = parsers.setdefault(r['probe'], ControllerParser(run, r['probe']))
+            if r['probe'] == 'safe' and r.get('reason') == 'safe_mode_not_selected':
+                if r['event'] == 'DATA':
+                    if (not sweep or r.get('status') != 'not_run' or r.get('subcase') != 'required'
+                            or not p.started or p.terminal or getattr(p, 'safe_not_selected', False)
+                            or any(observed.get('case') == 'option' and any(
+                                observed.get(key, '0') != '0' for key in ('safe_mode', 'fw_cfg', 'boot_cfg', 'menu'))
+                                or observed.get('group') == 'safe' and observed.get('source', 'none') != 'none'
+                                for observed in p.records)):
+                        raise EvidenceError('invalid safe_mode_not_selected subcase')
+                    p.safe_not_selected = True
+                elif r['event'] == 'END':
+                    if (not sweep or r.get('status') != 'NOT_RUN' or not p.started or p.terminal
+                            or not getattr(p, 'safe_not_selected', False)):
+                        raise EvidenceError('invalid safe_mode_not_selected terminal')
+                    p.records.append(r); p.terminal = r; p.outcome = 'not_run'
+                    p.not_run_reason = 'safe_mode_not_selected'
+                    continue
+            if r['probe'] == 'safe' and r['event'] == 'END' and getattr(p, 'safe_not_selected', False):
+                raise EvidenceError('safe_mode_not_selected requires its NOT_RUN terminal')
             if r['probe'] == 'fd-table' and r['event'] == 'ERROR' and r.get('status') == 'not_run' and r.get('reason') == 'missing_second_volume' and r.get('case') == 'exdev':
                 if not p.started or p.terminal or getattr(p, 'not_run_reason', None):
                     raise EvidenceError('duplicate or late fd-table second-volume outcome')
@@ -312,7 +331,16 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
         probe = case['probe']; expected = case['expected']
         # Physical target declarations replace only their corresponding case.
         target = next((c for c in physical_cases if c['probe'] == probe and c['target'] in metadata['model'].lower()), None)
-        if target: expected = target['expected']
+        safe_menu_case = probe == 'safe' and case.get('id', '').startswith('safe-menu-')
+        # QEMU safe cases cannot stand in for the separate physical menu case.
+        if target and probe != 'safe': expected = target['expected']
+        if safe_menu_case:
+            target = case if case.get('target') and case['target'] in metadata['model'].lower() else None
+            # The ordinary safe probe already reports storage; verify the
+            # no-mount contract explicitly without changing QEMU predicates.
+            expected = {**expected, 'predicates': [*expected.get('predicates', []),
+                {'where': {'event': 'DATA', 'case': 'storage'}, 'exact_count': 1,
+                 'fields': {'mounts': {'eq': 0}, 'writes': {'eq': 0}}}]}
         result = {'schema_version': 1, 'case': case.get('id', probe), 'probe': probe,
                   'profile': 'physical', 'image_sha256': verified_hash, 'physical': metadata,
                   'image_identity': {'canonical_sha256':canonical_hash, 'override_sha256':image_sha256,
@@ -333,8 +361,15 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
         if not observations and result['not_run_reasons']:
             result['reason'] = result['not_run_reasons'][0]
         result['not_run_subcases'] = [s for _, p in observations for s in getattr(p, 'operator_subcases', [])]
+        if probe == 'safe':
+            result['not_run_subcases'].extend(
+                {'subcase': 'required', 'reason': 'safe_mode_not_selected'}
+                for _, p in observations if getattr(p, 'safe_not_selected', False))
         operator_absent = bool(result['not_run_subcases']) or 'operator_absent' in result['not_run_reasons']
-        result['operator_confirmation_required'] = bool(operator_absent or case.get('operator_confirmation') or operator_confirmation_case(case))
+        # Mode absence does not mean operator absence. Only the separate menu
+        # acquisition needs a safe-case operator confirmation.
+        if probe == 'safe': operator_absent = False
+        result['operator_confirmation_required'] = bool(safe_menu_case or operator_absent or case.get('operator_confirmation') or operator_confirmation_case(case))
         if observations:
             result['observed'] = [r for _, p in observations for r in p.records]
             result['boots'] = [n + 1 for n, _ in observations]
@@ -346,6 +381,11 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                 result['reason'] = variants[0]
             elif unproven:
                 result['reason'] = 'provenance_damaged'
+            elif safe_menu_case and (sweep or metadata.get('selector_source') != 'menu'
+                    or len(selections) != 1 or selections[0]['phase'] != 1
+                    or selections[0]['probe'] != 'safe' or len(boots) != 1
+                    or not target or case.get('id') != target['id']):
+                result['reason'] = 'physical menu evidence required'
             elif absent_fixtures:
                 result['reason'] = 'fixtures_absent'
             elif len(observations) != len(declared):
@@ -391,7 +431,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
         if result['operator_confirmation_required']:
             confirmed = metadata.get('case_confirmations', {}).get(result['case']) is True
             result['operator_confirmation'] = confirmed
-            if not confirmed and result['outcome'] != 'fail' and not (variants or unproven):
+            if not confirmed and result['outcome'] != 'fail' and not (variants or unproven) and result['reason'] != 'safe_mode_not_selected':
                 result['outcome'] = 'not_run'; result['reason'] = 'operator_absent'
         result['evidence_outcome'] = result['outcome']; result['evidence_reason'] = result['reason']
         if result['outcome'] == 'not_run' and result['reason'] not in result['not_run_reasons']:
@@ -401,6 +441,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
             result['outcome'] = 'not_run'; result['reason'] = 'prerequisite failed: ' + blocked
         elif not blocked and not variants and failed_prerequisite(case, result) and not (
                 probe == 'fat-read' and result['reason'] == 'fixtures_absent' or
+                probe == 'safe' and result['outcome'] == 'not_run' and result['reason'] == 'safe_mode_not_selected' or
                 result['outcome'] == 'not_run' and result['reason'] == 'operator_absent' and operator_absent):
             blocked = result['case']
         results.append(result)

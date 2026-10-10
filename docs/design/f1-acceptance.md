@@ -429,13 +429,21 @@ existing recovery probe. This is a bounded guest-reset cut at one boundary,
 not exhaustive cut coverage or actual loss of drive power. Independent export
 and checker evidence remains required for qualification.
 
-Open contract conflict: the safe criterion requires zero optional ATA
-activation, while every sweep boot must durably update BOOT.CFG through ATA.
-Those conditions cannot both hold for the safe step with the permitted files.
-The current sweep does not force safe mode or hide ATA activation: the
-ordinary safe probe reports the unmet condition and traversal continues.
-A diskless safe-continuation protocol needs a lead-reviewed contract amendment;
-the dedicated f1-safe suites and safe-boot-cfg are unchanged.
+**[F1, f1-36 amendment]** A sweep's `safe` step without the boot safe flag
+and without any safe-mode source retains its observations, then emits
+`DATA subcase=required status=not_run reason=safe_mode_not_selected` and
+`END status=NOT_RUN reason=safe_mode_not_selected`; SWEEP and durable totals
+count it as not_run. Such a boot has not tested safe mode: the cursor needs
+ATA writes, while safe qualification requires zero optional activations and
+no mounts. Physical import preserves this reason for the QEMU safe cases;
+`safe-menu-t23`/`safe-menu-e500` require a separate single-boot menu acquisition,
+their unchanged predicates and per-case operator confirmation. Ordinary/QEMU
+safe verdicts remain unchanged. Research: the [QEMU fw_cfg specification](https://www.qemu.org/docs/master/specs/fw_cfg.html)
+defines a QEMU-supplied item transport, not a hardware menu option; comparison
+with `selector.c` and `ciukldr/menu.inc` confirms that physical `safe=1` selector
+suffixes are rejected and S currently exits the menu, cancelling the request.
+The loader cannot yet combine S with P; the bounded loader change proposed in
+`build-and-run.md` remains an open point, outside f1-36 implementation scope.
 
 
 Additional contract conflict: the bootlog cold-reopen predicate requires the
