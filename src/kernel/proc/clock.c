@@ -116,7 +116,8 @@ int file_nanosleep(uint32_t request_va, uint32_t remaining_va)
         return err;
     flags = irq_save();
     while (g_ticks < deadline) {
-        if (t->process->state == PROC_STOPPING || proc_signal_caught(t)) {
+        if (t->process->state == PROC_STOPPING ||
+            proc_signal_wait(t, SIGNAL_WAIT_I, false, false, 0) == SIGNAL_WAIT_EINTR) {
             uint64_t ticks = deadline - g_ticks;
             remaining.tv_sec = (int64_t)(ticks / 1000);
             remaining.tv_nsec = (int32_t)(ticks % 1000) * 1000000;

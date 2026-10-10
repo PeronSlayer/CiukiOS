@@ -762,9 +762,14 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             try:record_f2_result(result,parser)
             except (OSError,ValueError,RuntimeError) as e:
                 result['outcome']='fail';result['reason']=str(e)
-        if result['outcome']=='pass' and (case.get('checks') or case.get('digests')):
+        if result['outcome']=='pass' and (case['probe']=='fd-table' or case.get('checks') or case.get('digests')):
             try:
                 if not result['cleanup']['clean']:raise EvidenceError('QEMU must stop before overlay export')
+                if case['probe']=='fd-table':
+                    arms=[r for r in parser.records if r.get('event')=='ARM' and r.get('action')=='durable_shutdown']
+                    if len(arms)!=1:raise EvidenceError('fd-table requires one durable shutdown ARM')
+                    if not case.get('checks') or not case.get('digests'):
+                        raise EvidenceError('fd-table requires filesystem checker and guest digest declarations')
                 if case.get('digests'):check_digests(host,overlay,directory,case['digests'],result)
                 if case.get('checks'):check_overlay(host,overlay,directory,case['checks'],result)
             except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e:

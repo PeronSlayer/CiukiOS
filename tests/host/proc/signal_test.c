@@ -263,8 +263,16 @@ static void test_fault_mapping(void)
 }
 static void test_decisions(void)
 {
+    struct process *p;
+    struct proc_thread *t = signal_process(proc_supervisor(), &p);
+    select_task(t); catch_signal(p, SIGUSR1);
     unsigned cases = 0;
-    for (unsigned caught = 0; caught < 2; caught++)
+    for (unsigned caught = 0; caught < 2; caught++) {
+        t->pending = 0; t->task->state = T_BLOCKED;
+        if (caught) {
+            proc_signal_post(p, t, SIGUSR1, p->pid);
+            CHECK(t->task->state == T_READY);
+        }
         for (unsigned kind = SIGNAL_WAIT_I; kind <= SIGNAL_WAIT_DEFER; kind++)
             for (unsigned commit = 0; commit < 2; commit++)
                 for (unsigned issued = 0; issued < 2; issued++)
@@ -275,13 +283,23 @@ static void test_decisions(void)
                             if (kind == SIGNAL_WAIT_D && !commit && !issued) expect = SIGNAL_WAIT_EINTR;
                         }
                         CHECK(proc_signal_decide(caught, kind, commit, issued, progress) == expect);
+                        CHECK(proc_signal_wait(t, kind, commit, issued, progress) == expect);
                         cases++;
                     }
+    }
+    for (unsigned kind = SIGNAL_WAIT_I; kind <= SIGNAL_WAIT_DEFER; kind++) {
+        t->mask = CIUKI_SIGBIT(SIGUSR1);
+        CHECK(proc_signal_wait(t, kind, false, false, 0) == SIGNAL_WAIT_CONTINUE);
+        t->mask = 0; t->in_handler = true;
+        CHECK(proc_signal_wait(t, kind, false, false, 0) == SIGNAL_WAIT_CONTINUE);
+        t->in_handler = false;
+    }
     CHECK(proc_signal_read_result(17, true, false, -EIO) == 17);
     CHECK(proc_signal_read_result(0, true, true, 4096) == -EINTR);
     CHECK(proc_signal_read_result(0, true, false, 4096) == -EIO);
     CHECK(proc_signal_read_result(0, false, true, 4096) == 4096);
-    printf("signal interruption: %u decision rows, close/dup2 deferral, issued-read drain/result priority PASS\n", cases);
+    destroy_signal_process(p);
+    printf("signal interruption: %u decision rows and pending-signal helper rows, fake scheduler wake, masked/handler suppression, close/dup2 deferral, issued-read drain/result priority PASS\n", cases);
 }
 static struct proc_thread *wait_target;
 static unsigned wait_steps;

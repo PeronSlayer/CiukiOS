@@ -348,6 +348,44 @@ class RunnerTests(unittest.TestCase):
         self.assertLess(order.index('export-readonly'),order.index('fsck.fat -n'))
         self.assertEqual(order[-1],'export-closed');self.assertEqual(len(result['checkers']),4)
 
+    def test_fd_table_checker_requires_arm_and_compares_the_guest_digest(self):
+        import hashlib
+        content=b'CiukiOS F2 durable\n';digest=hashlib.sha256(content).hexdigest()
+        self.case.update(probe='fd-table',selector='f2:fd-table run={run_id}',
+                         expected={'terminal':'END','predicates':[]})
+        self.case['checks']={'offset':0,'size':len(self.image.read_bytes()),'listing_path':'::/tmp',
+                             'listing_contains':['f2-durable.bin'],'files':[{'path':'::/tmp/f2-durable.bin','sha256':digest}]}
+        self.case['digests']=[{'kind':'file','path':'/tmp/f2-durable.bin','offset':0,
+                              'size':len(self.image.read_bytes()),'where':{'event':'DATA','case':'durable-file'}}]
+        records=[{'event':'BEGIN'},{'event':'DATA','case':'durable-file','name_hex':'/tmp/f2-durable.bin'.encode().hex(),
+                  'size':str(len(content)),'sha256':digest},
+                 {'event':'ARM','action':'durable_shutdown'},{'event':'END','status':'PASS'}]
+        order=[]
+        @contextmanager
+        def export(host,overlay,directory,offset,size):
+            self.assertIsNotNone(host.process.poll());self.assertEqual(host.scope_pids(host.cgroup),[])
+            order.append('export-readonly');yield self.image
+        def check(host,args,directory):
+            order.append(args[0]+(' -n' if '-n' in args else ''))
+            return {'arguments':args,'returncode':0,'output':'f2-durable.bin','output_sha256':digest}
+        def file_digest(host,image,directory,path):
+            self.assertEqual(path,'/tmp/f2-durable.bin');return {'size':len(content),'sha256':digest}
+        with patch.object(FakeHost,'export_readonly',export),patch.object(FakeHost,'checker',check), \
+             patch.object(FakeHost,'file_digest',file_digest):
+            result,_=self.run_fake(records=records)
+            self.assertEqual(result['outcome'],'pass',result['reason'])
+            self.assertLess(order.index('export-readonly'),order.index('fsck.fat -n'))
+            self.assertIn('mtype',order);self.assertEqual(result['digests'][0]['measured']['sha256'],digest)
+            self.assertTrue(result['durability_observations'][-1]['checker_passed'])
+            result,_=self.run_fake(records=[r for r in records if r['event']!='ARM'])
+            self.assertEqual(result['outcome'],'fail');self.assertIn('ARM',result['reason'])
+            changed=[{**r,'sha256':'0'*64} if r.get('case')=='durable-file' else r for r in records]
+            result,_=self.run_fake(records=changed)
+            self.assertEqual(result['outcome'],'fail');self.assertIn('digest mismatch',result['reason'])
+        self.case.pop('checks');self.case.pop('digests')
+        result,_=self.run_fake(records=records)
+        self.assertEqual(result['outcome'],'fail');self.assertIn('declarations',result['reason'])
+
     def test_cut_is_guest_termination_and_reboot_uses_same_overlay(self):
         self.case['boots']=[{'actions':[{'type':'cut','after':{'event':'ARM','cut':'directory-publication'},'mode':'guest-termination'}],
                              'expected':{'terminal':'ARM','predicates':[]}},

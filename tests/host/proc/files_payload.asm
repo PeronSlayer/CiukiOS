@@ -33,6 +33,7 @@ org CIUKI_IMAGE_BASE-CIUKI_PAGE_SIZE
 %define FD (R+900)
 %define DUPFD (R+904)
 %define OFF (R+912)
+%define UTS (R+1280)
 %macro CALL 1
     mov eax,%1
     int 0x80
@@ -60,6 +61,13 @@ phdr:
     dd 1,3*CIUKI_PAGE_SIZE,R,0,4,2*CIUKI_PAGE_SIZE,6,CIUKI_PAGE_SIZE
     times CIUKI_PAGE_SIZE-($-$$) db 0
 entry:
+    mov ebx,CIUKI_IMAGE_BASE
+    CALL CIUKI_SYS_UNAME
+    EQ eax,-EFAULT
+    mov ebx,UTS
+    CALL CIUKI_SYS_UNAME
+    EQ eax,0
+    EQ dword [UTS+ABI_OFFSETOF_CIUKI_UTSNAME_ABI_VERSION],CIUKI_ABI_VERSION
     mov eax,[gs:4]
     mov [TID],eax
     ; Register a persistent catcher for the controller's selected-thread kill.

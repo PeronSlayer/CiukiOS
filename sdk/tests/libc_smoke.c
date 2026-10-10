@@ -28,7 +28,16 @@ static void report(const char *name) {
     int n=snprintf(record,sizeof(record),"case=%s pid=%ld tid=%lu expected=0 observed=%u checks=%u failures=%u heap_peak=%u reent_bytes=%u tcb_bytes=%u order=%d",name,(long)getpid(),(unsigned long)pthread_self(),failures,checks,failures,heap_peak,(unsigned)sizeof(struct _reent),(unsigned)sizeof(struct ciuki_tcb),callback_order);
     if(n<=0||n>CIUKI_PROBE_REPORT_MAX||ciuki_error(ciuki_raw_probe_report(CU_PTR(record),n,0,0,0,0)))_exit(126);
 }
-#define CHECK(x) do { __atomic_add_fetch(&checks,1,__ATOMIC_RELAXED);if(!(x))__atomic_add_fetch(&failures,1,__ATOMIC_RELAXED); } while(0)
+static void failed_check(const char *expression,unsigned line,int error) {
+    char name[81],record[CIUKI_PROBE_REPORT_MAX+1];unsigned i=0;
+    for(;expression[i]&&i<sizeof(name)-1;++i) {
+        char c=expression[i];name[i]=(c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')?c:'_';
+    }
+    name[i]=0;
+    int n=snprintf(record,sizeof(record),"case=%s expected=1 observed=0 line=%u errno=%d",name,line,error);
+    if(n<=0||n>CIUKI_PROBE_REPORT_MAX||ciuki_error(ciuki_raw_probe_report(CU_PTR(record),n,0,0,0,0)))_exit(126);
+}
+#define CHECK(x) do { __atomic_add_fetch(&checks,1,__ATOMIC_RELAXED);if(!(x)) { int error=errno;__atomic_add_fetch(&failures,1,__ATOMIC_RELAXED);failed_check(#x,__LINE__,error);errno=error; } } while(0)
 __attribute__((constructor)) static void construct(void) { callback_order=1; }
 static void smoke_atexit(void) { CHECK(callback_order==2);callback_order=3;report("atexit"); }
 __attribute__((destructor)) static void destruct(void) { CHECK(callback_order==3);callback_order=4;report("destructor");if(failures)_exit(1); }
