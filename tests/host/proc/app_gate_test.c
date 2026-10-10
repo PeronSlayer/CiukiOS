@@ -1,4 +1,49 @@
-#ifdef APP_GATE_NAMESPACE_TEARDOWN_TEST
+#ifdef APP_GATE_KHEAP_LEDGER_TEST
+#include <stdio.h>
+#include <stdlib.h>
+#include <ciuki/kernel.h>
+#include <ciuki/mm.h>
+/* Replace only privileged IRQ instructions and the physical direct map.
+ * Allocation, free-list reuse and ledger updates are production kheap.c. */
+#define CIUKI_CPU_H
+static _Alignas(PAGE_SIZE) uint8_t heap_pages[33][PAGE_SIZE];
+static unsigned allocated_pages, page_limit = 32, irq_depth;
+#define P2V(p) ((void *)heap_pages[(p) / PAGE_SIZE - 1])
+static uint32_t irq_save(void) { return irq_depth++; }
+static void irq_restore(uint32_t f) { if (irq_depth != f+1) abort(); irq_depth=f; }
+uint32_t pmm_alloc(void) { return allocated_pages == page_limit ? 0 : ++allocated_pages * PAGE_SIZE; }
+void panic(const char *fmt, ...) { (void)fmt; abort(); }
+#include "../../../src/kernel/core/kheap.c"
+static void check_heap(unsigned pages, size_t bytes, size_t high)
+{
+    struct kheap_ledger first, second;
+    kheap_snapshot(&first); kheap_snapshot(&second);
+    if (first.pages != pages || first.in_use != bytes || first.peak != high ||
+        second.pages != pages || second.in_use != bytes || second.peak != high ||
+        kheap_in_use() != bytes || irq_depth || allocated_pages != pages) abort();
+}
+int main(void)
+{
+    kheap_init(); check_heap(0,0,0);
+    void *blocks[64];
+    for (unsigned i=0; i<64; i++) {
+        blocks[i]=kmalloc(2040); if (!blocks[i]) abort();
+        check_heap((i+2)/2,(i+1)*2048,(i+1)*2048);
+    }
+    if (kmalloc(2040) || kmalloc(2041)) abort();
+    check_heap(32,131072,131072);
+    for (unsigned i=0; i<64; i++) kfree(blocks[i]);
+    kfree(0); check_heap(32,0,131072);
+    void *reused=kmalloc(2040); if (!reused) abort();
+    check_heap(32,2048,131072); kfree(reused);
+    page_limit++;
+    uint8_t *small=kzalloc(24); if (!small) abort();
+    for (unsigned i=0; i<24; i++) if (small[i]) abort();
+    check_heap(33,32,131072); kfree(small); check_heap(33,0,131072);
+    puts("heap ledger: retained_pages=33 bytes_in_use=0 peak=131072 refill_failure=unchanged reuse=ok");
+    return 0;
+}
+#elif defined(APP_GATE_NAMESPACE_TEARDOWN_TEST)
 #include <stdio.h>
 #include <stdlib.h>
 #undef WIFEXITED
@@ -81,7 +126,7 @@ static struct fat_volume test_volume;
 static bool ledger_changed;
 static struct file_description ledger_description;
 static struct proc_thread ledger_thread;
-static bool identity_growth(void) { return mode == 21 || mode == 22 || mode == 28; }
+static bool identity_growth(void) { return mode == 21 || mode == 22 || mode == 28 || mode == 35; }
 
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
@@ -164,12 +209,21 @@ const struct ciuki_file_ops *proc_get_file_ops(void)
     static const struct ciuki_file_ops ops={.open=file_open_snapshot}; return &ops;
 }
 uint32_t pmm_free_count(void) {
-    if (ledger_changed && mode == 28) return 968;
+    if (ledger_changed && (mode == 28 || mode == 35)) return 968;
+    if (ledger_changed && mode == 36) return 999;
     return mode==18 && run_number==2 ? 999 : 1000;
 }
 size_t kheap_in_use(void) {
     return 1024 + (ledger_changed && identity_growth() ? gate_identity_size() : 0) +
         (ledger_changed && mode == 22 ? 32 : 0);
+}
+void kheap_snapshot(struct kheap_ledger *l) {
+    *l=(struct kheap_ledger){.pages=64,.in_use=kheap_in_use(),.peak=4096};
+    if (ledger_changed && (mode == 28 || mode == 35)) {
+        l->pages += mode == 28 ? 32 : 31;
+        l->peak=131072;
+    }
+    if (ledger_changed && mode == 37) l->pages++;
 }
 uint32_t file_description_count(void) { return 2 + (ledger_changed && mode == 30); }
 void files_snapshot(struct px_namespace *space, struct file_ledger *l) { (void)space; memset(l,0,sizeof(*l)); }

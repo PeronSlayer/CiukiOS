@@ -314,11 +314,22 @@ and unmount](https://docs.kernel.org/filesystems/vfs.html), checked against
 `fs/cache.c`, `core/kheap.c` and `proc/posixpath.c`. In this source state,
 `vfs_detach()` expires identities; quiescent `vfs_destroy()` calls
 `files_detach()` to free them and the namespace, as the host teardown check
-proves. Physical slab pages retained by `kfree()` have no exported owner/page
-ledger: the recorded 32-page growth therefore remains unattributed and MUST
-fail until independently measured; it MUST NOT be credited to the already
-allocated block cache. Ledger metadata arrays `storage` and `identities` are
-respectively `[blocks, workspace_pages]` and `[live_named_nodes, class_bytes]`.
+proves. Report `heap_pages_before/after`, their delta, heap bytes in use
+and peak before/after from the read-only `kheap_snapshot()` ledger: class-pool
+pages are counted only on successful `refill()` allocations and retained by
+`kfree()` for reuse. Subtract only this measured pool-page delta from
+`pages_delta`; it does not excuse kernel bytes in use beyond retained named
+identities. This separates backing pages from live objects, consistent with
+[slab allocation](https://kernel.org/doc/html/latest/mm/slab.html) and
+[kernel memory accounting](https://www.kernel.org/doc/html/v6.8/filesystems/proc.html#meminfo),
+checked against `core/kheap.c`. The supplied 32-page growth passes only when
+the heap pool independently grows by 32 pages; any remainder MUST fail.
+Process tables/backing MUST restore: `release_threads()` calls `ua_destroy()`
+and `as_destroy()` frees the page directory and user tables. ELF snapshots
+are temporary and closed after load; the storage pool remains preallocated.
+Ledger metadata arrays `storage`, `identities` and `heap` are respectively
+`[blocks, workspace_pages]`, `[live_named_nodes, class_bytes]` and
+`[pool_pages, bytes_in_use, peak_bytes_in_use]`.
 
 ### Lua application evidence
 

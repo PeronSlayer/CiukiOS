@@ -243,13 +243,14 @@ static uint64_t gate_progress(struct process *desktop, bool native)
 struct gate_outcome { int status; uint32_t assertions; };
 struct gate_resources {
     uint32_t free_pages, kernel_bytes, descriptions, live_threads, retained_threads, waiters;
+    struct kheap_ledger heap;
     struct file_ledger files;
     uint32_t identities, identity_bytes, cache_blocks, cache_workspace_pages;
 };
 /* Match core/kheap.c: in-use bytes include the eight-byte allocation header
  * and are charged to the 32..2048 power-of-two class, not sizeof(px_node).
- * Physical slab pages are retained by kfree and have no exported ledger;
- * never infer their ownership from a change in in-use bytes. */
+ * Physical class-pool pages have their own measured heap ledger; never
+ * infer their ownership from a change in in-use bytes. */
 static uint32_t gate_identity_size(void)
 {
     uint32_t bytes = 32;
@@ -259,7 +260,8 @@ static uint32_t gate_identity_size(void)
 static void gate_resources_snapshot(struct gate_resources *r)
 {
     memset(r,0,sizeof(*r));
-    r->free_pages = pmm_free_count(); r->kernel_bytes = (uint32_t)kheap_in_use();
+    r->free_pages = pmm_free_count();
+    kheap_snapshot(&r->heap); r->kernel_bytes = (uint32_t)r->heap.in_use;
     r->descriptions = file_description_count();
     struct px_node *cwd = proc_supervisor()->cwd;
     if (cwd) {
@@ -292,6 +294,7 @@ static void gate_resources_snapshot(struct gate_resources *r)
 }
 struct gate_attribution {
     int32_t pages_delta, kernel_bytes_delta, identity_bytes_delta;
+    int32_t heap_pages_delta;
     int32_t pages_remainder, kernel_bytes_remainder;
     bool cache_bounded, cache_accounted;
 };
@@ -302,15 +305,15 @@ static struct gate_attribution gate_attribute(const struct gate_resources *befor
     a.pages_delta = (int32_t)before->free_pages - (int32_t)after->free_pages;
     a.kernel_bytes_delta = (int32_t)after->kernel_bytes - (int32_t)before->kernel_bytes;
     a.identity_bytes_delta = (int32_t)after->identity_bytes - (int32_t)before->identity_bytes;
+    a.heap_pages_delta = (int32_t)after->heap.pages - (int32_t)before->heap.pages;
     /* cache_init allocates every block and workspace page before the gate;
      * cache_read/write reuse slots. Its configured bound is the baseline
      * block count. No runtime physical-page or heap-byte growth is possible
-     * in this implementation, so crediting the observed 32 pages to it
-     * would conceal unexplained growth. A future exported slab ledger can establish their
-     * ownership; until then any physical remainder fails closed. */
+     * in this implementation. Heap class pools retain pages after kfree;
+     * credit only growth measured by their allocation-site ledger. */
     a.cache_bounded = before->cache_blocks == after->cache_blocks &&
                       before->cache_workspace_pages == after->cache_workspace_pages;
-    a.pages_remainder = a.pages_delta;
+    a.pages_remainder = a.pages_delta - a.heap_pages_delta;
     a.kernel_bytes_remainder = a.kernel_bytes_delta - a.identity_bytes_delta;
     a.cache_accounted = a.cache_bounded && !a.pages_remainder && !a.kernel_bytes_remainder &&
         (int32_t)after->files.nodes - (int32_t)before->files.nodes ==
@@ -334,12 +337,13 @@ static unsigned gate_ledger_format(char *out, unsigned capacity, const struct pr
     return (unsigned)ksnprintf(out,capacity,
         "{\"proc\":[%u,%u,%u,%u,%u,%u,%u],\"desktop\":[%u,%u,%u,%u,%u,%u],"
         "\"free_pages\":%u,\"kernel_bytes\":%u,\"files\":[%u,%u,%u,%u],\"native\":[%u,%u,%u],"
-        "\"storage\":[%u,%u],\"identities\":[%u,%u]}",
+        "\"storage\":[%u,%u],\"identities\":[%u,%u],\"heap\":[%u,%u,%u]}",
         p->processes,p->threads,p->zombies,p->handles,p->extents,p->backing,p->tables,
         d->descriptions,d->surfaces,d->pages,d->channels,d->messages,d->grants,
         r->free_pages,r->kernel_bytes,r->files.nodes,r->files.descriptions,r->files.pins,r->descriptions,
         r->live_threads,r->retained_threads,r->waiters,
-        r->cache_blocks,r->cache_workspace_pages,r->identities,r->identity_bytes);
+        r->cache_blocks,r->cache_workspace_pages,r->identities,r->identity_bytes,
+        r->heap.pages,(unsigned)r->heap.in_use,(unsigned)r->heap.peak);
 }
 static bool gate_run(struct process *owner, struct process *desktop, bool native, bool supplement,
                      uint64_t deadline, struct gate_memory *peak, struct gate_outcome *outcome)
@@ -455,6 +459,11 @@ int probe_f2_app_gate(void)
     rec_emit(GATE_NAME,"DATA","group=resources pages_delta=%d kernel_bytes_delta=%d file_descriptions_delta=%d",
              attribution.pages_delta,attribution.kernel_bytes_delta,
              (int)resources_after.descriptions-(int)resources_before.descriptions);
+    rec_emit(GATE_NAME,"DATA","group=resources heap_pages_before=%u heap_pages_after=%u heap_pages_delta=%d",
+             resources_before.heap.pages,resources_after.heap.pages,attribution.heap_pages_delta);
+    rec_emit(GATE_NAME,"DATA","group=resources heap_bytes_before=%u heap_bytes_after=%u heap_peak_before=%u heap_peak_after=%u",
+             (unsigned)resources_before.heap.in_use,(unsigned)resources_after.heap.in_use,
+             (unsigned)resources_before.heap.peak,(unsigned)resources_after.heap.peak);
     rec_emit(GATE_NAME,"DATA","group=resources live_threads_delta=%d retained_threads_delta=%d waiters_delta=%d",
              (int)resources_after.live_threads-(int)resources_before.live_threads,
              (int)resources_after.retained_threads-(int)resources_before.retained_threads,

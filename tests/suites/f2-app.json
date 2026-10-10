@@ -587,10 +587,6 @@
               "cache_accounted": {
                 "eq": 1
               },
-              "pages_delta": {
-                "eq": "$pages_remainder",
-                "encoding": "signed"
-              },
               "kernel_bytes_delta": {
                 "eq": "$identity_bytes_delta",
                 "encoding": "signed"
@@ -635,6 +631,12 @@
               },
               "namespace_descriptions_delta": {
                 "eq": 0
+              },
+              "heap_pages_after": {
+                "ge": "$heap_pages_before"
+              },
+              "heap_peak_after": {
+                "ge": "$heap_peak_before"
               }
             },
             "combine": true,
@@ -650,6 +652,29 @@
                 "op": "eq",
                 "right": "cache_nodes_after",
                 "subtract": "cache_nodes_before"
+              },
+              {
+                "left": "heap_pages_delta",
+                "op": "eq",
+                "right": "heap_pages_after",
+                "subtract": "heap_pages_before"
+              },
+              {
+                "left": "heap_bytes_before",
+                "op": "eq",
+                "right": "heap_bytes_after",
+                "subtract": "kernel_bytes_delta"
+              },
+              {
+                "left": "pages_delta",
+                "op": "eq",
+                "right": "heap_pages_after",
+                "subtract": "heap_pages_before"
+              },
+              {
+                "left": "heap_peak_after",
+                "op": "ge",
+                "right": "heap_bytes_after"
               }
             ],
             "required_fields": [
@@ -664,7 +689,14 @@
               "identities_after",
               "identity_bytes_delta",
               "pages_delta",
-              "kernel_bytes_delta"
+              "kernel_bytes_delta",
+              "heap_pages_before",
+              "heap_pages_after",
+              "heap_pages_delta",
+              "heap_bytes_before",
+              "heap_bytes_after",
+              "heap_peak_before",
+              "heap_peak_after"
             ]
           },
           {
@@ -1262,10 +1294,6 @@
               "cache_accounted": {
                 "eq": 1
               },
-              "pages_delta": {
-                "eq": "$pages_remainder",
-                "encoding": "signed"
-              },
               "kernel_bytes_delta": {
                 "eq": "$identity_bytes_delta",
                 "encoding": "signed"
@@ -1310,6 +1338,12 @@
               },
               "namespace_descriptions_delta": {
                 "eq": 0
+              },
+              "heap_pages_after": {
+                "ge": "$heap_pages_before"
+              },
+              "heap_peak_after": {
+                "ge": "$heap_peak_before"
               }
             },
             "combine": true,
@@ -1325,6 +1359,29 @@
                 "op": "eq",
                 "right": "cache_nodes_after",
                 "subtract": "cache_nodes_before"
+              },
+              {
+                "left": "heap_pages_delta",
+                "op": "eq",
+                "right": "heap_pages_after",
+                "subtract": "heap_pages_before"
+              },
+              {
+                "left": "heap_bytes_before",
+                "op": "eq",
+                "right": "heap_bytes_after",
+                "subtract": "kernel_bytes_delta"
+              },
+              {
+                "left": "pages_delta",
+                "op": "eq",
+                "right": "heap_pages_after",
+                "subtract": "heap_pages_before"
+              },
+              {
+                "left": "heap_peak_after",
+                "op": "ge",
+                "right": "heap_bytes_after"
               }
             ],
             "required_fields": [
@@ -1339,7 +1396,14 @@
               "identities_after",
               "identity_bytes_delta",
               "pages_delta",
-              "kernel_bytes_delta"
+              "kernel_bytes_delta",
+              "heap_pages_before",
+              "heap_pages_after",
+              "heap_pages_delta",
+              "heap_bytes_before",
+              "heap_bytes_after",
+              "heap_peak_before",
+              "heap_peak_after"
             ]
           },
           {
@@ -1937,10 +2001,6 @@
               "cache_accounted": {
                 "eq": 1
               },
-              "pages_delta": {
-                "eq": "$pages_remainder",
-                "encoding": "signed"
-              },
               "kernel_bytes_delta": {
                 "eq": "$identity_bytes_delta",
                 "encoding": "signed"
@@ -1985,6 +2045,12 @@
               },
               "namespace_descriptions_delta": {
                 "eq": 0
+              },
+              "heap_pages_after": {
+                "ge": "$heap_pages_before"
+              },
+              "heap_peak_after": {
+                "ge": "$heap_peak_before"
               }
             },
             "combine": true,
@@ -2000,6 +2066,29 @@
                 "op": "eq",
                 "right": "cache_nodes_after",
                 "subtract": "cache_nodes_before"
+              },
+              {
+                "left": "heap_pages_delta",
+                "op": "eq",
+                "right": "heap_pages_after",
+                "subtract": "heap_pages_before"
+              },
+              {
+                "left": "heap_bytes_before",
+                "op": "eq",
+                "right": "heap_bytes_after",
+                "subtract": "kernel_bytes_delta"
+              },
+              {
+                "left": "pages_delta",
+                "op": "eq",
+                "right": "heap_pages_after",
+                "subtract": "heap_pages_before"
+              },
+              {
+                "left": "heap_peak_after",
+                "op": "ge",
+                "right": "heap_bytes_after"
               }
             ],
             "required_fields": [
@@ -2014,7 +2103,14 @@
               "identities_after",
               "identity_bytes_delta",
               "pages_delta",
-              "kernel_bytes_delta"
+              "kernel_bytes_delta",
+              "heap_pages_before",
+              "heap_pages_after",
+              "heap_pages_delta",
+              "heap_bytes_before",
+              "heap_bytes_after",
+              "heap_peak_before",
+              "heap_peak_after"
             ]
           },
           {

@@ -97,7 +97,7 @@ class AppGateTests(unittest.TestCase):
     def test_probe_on_guarded_kernel_size_stack(self):
         # The bounded binary uses production C without ASan stack inflation;
         # the normal harness retains ASan/UBSan for every controller case.
-        for mode in (0, 3, 12, 16, 21, 28):
+        for mode in (0, 3, 12, 16, 21, 28, 35):
             with self.subTest(mode=mode):
                 result = subprocess.run([str(self.stack_binary), str(self.work), str(mode)],
                                         capture_output=True, text=True, env=self.env, timeout=20)
@@ -107,7 +107,7 @@ class AppGateTests(unittest.TestCase):
                 self.assertGreater(high_water, 0)
                 self.assertLess(high_water, 8192)
                 parser = self.parse(result.stdout.splitlines())
-                self.assertEqual(parser.outcome, "fail" if mode in (3, 28) else "pass")
+                self.assertEqual(parser.outcome, "fail" if mode in (3, 35) else "pass")
                 if mode == 0:
                     self.assertTrue(parser.check(self.expected))
                     launches = [r["run_case"] for r in parser.records if r.get("case") == "launch"]
@@ -166,17 +166,49 @@ class AppGateTests(unittest.TestCase):
         self.assertEqual(metadata["final"]["identities"], [60, 61440])
         self.assertEqual(metadata["final"]["storage"], [13440, 128])
 
-    def test_observed_physical_growth_is_not_falsely_credited_to_preallocated_cache(self):
+    def test_observed_physical_growth_is_attributed_to_measured_heap_pool(self):
         parser = self.parse(self.output(28))
         resources = {k: v for r in parser.records if r.get("group") == "resources" for k, v in r.items()}
-        self.assertEqual(parser.outcome, "fail")
+        self.assertEqual(parser.outcome, "pass")
         self.assertEqual(resources["pages_delta"], "32")
-        self.assertEqual(resources["pages_remainder"], "32")
+        self.assertEqual(resources["heap_pages_before"], "64")
+        self.assertEqual(resources["heap_pages_after"], "96")
+        self.assertEqual(resources["heap_pages_delta"], "32")
+        self.assertEqual(resources["pages_remainder"], "0")
         self.assertEqual(resources["kernel_bytes_delta"], resources["identity_bytes_delta"])
         self.assertEqual(resources["kernel_bytes_remainder"], "0")
-        self.assertEqual(resources["cache_accounted"], "0")
+        self.assertEqual(resources["cache_accounted"], "1")
         self.assertEqual(resources["cache_bounded"], "1")
-        with self.assertRaises(EvidenceError): parser.check(self.expected)
+        self.assertEqual(resources["cache_pages_delta"], "0")
+        for case in self.suite["cases"]:
+            self.assertTrue(parser.check(case["expected"]))
+        metadata = runner.f2_metadata(parser.records)["resource_ledgers"]
+        self.assertEqual(metadata["baseline"]["heap"], [64, 1024, 4096])
+        self.assertEqual(metadata["final"]["heap"], [96, 2048, 131072])
+
+    def test_unattributed_pages_still_fail_with_or_without_heap_growth(self):
+        for mode, remainder in ((35, 1), (36, 1), (37, -1)):
+            with self.subTest(mode=mode):
+                parser = self.parse(self.output(mode))
+                resources = {k: v for r in parser.records if r.get("group") == "resources" for k, v in r.items()}
+                self.assertEqual(parser.outcome, "fail")
+                self.assertEqual(int(resources["pages_remainder"]), remainder)
+                self.assertEqual(resources["kernel_bytes_remainder"], "0")
+                self.assertEqual(resources["cache_accounted"], "0")
+                with self.assertRaises(EvidenceError): parser.check(self.expected)
+
+    def test_production_heap_ledger_tracks_refill_reuse_failure_and_peak(self):
+        binary = self.work / "heap-ledger"
+        result = subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=address,undefined", "-DAPP_GATE_KHEAP_LEDGER_TEST",
+                        "-I", str(ROOT / "src/kernel/include"),
+                        str(ROOT / "tests/host/proc/app_gate_test.c"), "-o", str(binary)],
+                        capture_output=True, text=True, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, env=self.env)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(result.stdout, "heap ledger: retained_pages=33 bytes_in_use=0 peak=131072 "
+                                      "refill_failure=unchanged reuse=ok\n")
 
     def test_production_mount_namespace_teardown_releases_named_identities(self):
         binary = self.work / "namespace-teardown"
@@ -281,12 +313,17 @@ int main(void) {
                 broken = self.parse(lines)
                 field = relation["left"]
                 record = next(r for r in broken.records if all(r.get(k)==str(v) for k,v in predicate["where"].items()) and field in r)
-                record[field] = str(int(record[field]) + 1)
+                bad = int(record[field]) + 1
+                if relation["op"] == "ge":
+                    right = next(r[relation["right"]] for r in broken.records
+                                 if all(r.get(k)==str(v) for k,v in predicate["where"].items()) and relation["right"] in r)
+                    bad = int(right) - 1
+                record[field] = str(bad)
                 with self.subTest(relation=relation), self.assertRaises(EvidenceError):
                     broken.check(self.expected)
 
     def test_failed_applications_never_qualify(self):
-        for mode in (1, 2, 3, 4, 5, 6, 8, 10, 11, 13, 14, 18, 19, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34):
+        for mode in (1, 2, 3, 4, 5, 6, 8, 10, 11, 13, 14, 18, 19, 22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 33, 34, 35, 36, 37):
             with self.subTest(mode=mode):
                 parser = self.parse(self.output(mode))
                 self.assertEqual(parser.outcome, "fail")
@@ -332,6 +369,7 @@ int main(void) {
         metadata = runner.f2_metadata(parser.records)["resource_ledgers"]
         self.assertEqual(metadata["baseline"], metadata["final"])
         self.assertEqual(metadata["final"]["identities"], [2**32-1, 2**32-1])
+        self.assertEqual(metadata["final"]["heap"], [2**32-1]*3)
         capture = parser.bounded_captures[(str(2**32-1), "stdout")]
         self.assertEqual(capture["bytes"], 3072)
         self.assertEqual(capture["retained"], 2048)
