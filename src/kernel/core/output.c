@@ -7,6 +7,7 @@
 #include <ciuki/arch.h>
 #include <ciuki/task.h>
 #include <ciuki/probe.h>
+#include <ciuki/bootlog.h>
 
 static char run_id[9] = "00000000";
 static uint32_t seq;
@@ -33,6 +34,7 @@ void klog(const char *fmt, ...)
         n = sizeof(buf) - 2;
     buf[n] = '\n';
     buf[n + 1] = 0;
+    bootlog_capture(buf, (size_t)n + 1);
     kputs_raw(buf);
 }
 
@@ -53,7 +55,7 @@ static uint32_t next_seq(void)
 
 /* A record above 240 bytes is never truncated silently: an ERROR record
  * replaces it so the evidence fails loudly. */
-static void emit_line(const char *probe, const char *event, const char *extra)
+static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary)
 {
     char buf[256];
     uint32_t s = next_seq();
@@ -64,6 +66,7 @@ static void emit_line(const char *probe, const char *event, const char *extra)
                       run_id, s, probe, n);
     buf[n] = '\n';
     buf[n + 1] = 0;
+    if (ordinary) bootlog_capture(buf, (size_t)n + 1);
     kputs_raw(buf);
 }
 
@@ -77,12 +80,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         kvsnprintf(extra, sizeof(extra), fmt, ap);
         va_end(ap);
     }
-    emit_line(probe, event, extra);
+    emit_line(probe, event, extra, true);
 }
 
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
 {
-    emit_line(probe, event, extra);
+    emit_line(probe, event, extra, false);
 }
 
 static volatile int in_panic;

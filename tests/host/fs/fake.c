@@ -30,7 +30,7 @@ static int drain(struct fake *f, bool loss) {
     f->pending_count=0; return 0;
 }
 static int event(struct fake *f, char kind, uint64_t lba) {
-    if (f->events>=FAKE_LIMIT) abort();
+    if (f->events>=FAKE_TRACE_LIMIT) abort();
     f->trace[f->events]=(struct fake_event){lba,kind}; f->events++;
     if (f->cut_at && f->events==f->cut_at) { if (kind=='W' && drain(f,true)) abort(); f->cut=true; return -FS_EIO; }
     return 0;
@@ -75,7 +75,7 @@ int fake_open(struct fake *f, const char *path) {
     f->dev=(struct blkdev){.read=read_dev,.write=write_dev,.flush=flush_dev,.capacity=(uint64_t)st.st_size/512,.sector_size=512,.write_cache_state=BLKDEV_CACHE_ENABLED,.ctx=f};
     f->fail_read=f->fail_write=f->torn_lba=UINT64_MAX;
     f->undo=calloc(FAKE_LIMIT,sizeof(*f->undo)); f->pending=calloc(FAKE_LIMIT,sizeof(*f->pending));
-    f->trace=calloc(FAKE_LIMIT,sizeof(*f->trace));
+    f->trace=calloc(FAKE_TRACE_LIMIT,sizeof(*f->trace));
     if (!f->undo || !f->pending || !f->trace) abort(); return 0;
 }
 void fake_close(struct fake *f) { close(f->fd); free(f->undo); free(f->pending); free(f->trace); }

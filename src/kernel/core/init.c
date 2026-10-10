@@ -10,6 +10,7 @@
 #include <ciuki/ata.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/registry.h>
+#include <ciuki/storage.h>
 
 static struct drivers_state state;
 static struct activation_entry activation_ledger[ACTIVATION_LEDGER_MAX];
@@ -109,4 +110,5 @@ void drivers_init(void)
         .result = !state.ata_called ? "disabled" : (state.ata_error || quarantine) ? "failed" : storage ? "ready" : "absent",
         .reason = state.safe ? "safe_mode" : "native_discovery", .error = state.ata_error,
         .tick = tick, .safe_flag_before = safe_flag_before, .present = storage, .quarantined = quarantine });
+    storage_init();
 }

@@ -61,6 +61,24 @@ static inline uint32_t fs_now_ms(void) { return ticks_lo(); }
 typedef bool (*fs_calendar_clock)(uint16_t *date, uint16_t *time, uint8_t *tenths);
 void fs_set_calendar_clock(fs_calendar_clock);
 void fs_timestamp(uint16_t *date, uint16_t *time, uint8_t *tenths);
+/* Read-only MC146818 boundary. begin/end serialize a single sample, never
+ * the timeout; read must not acknowledge register C or write CMOS data. */
+struct fs_rtc_ops {
+    void (*begin)(void *);
+    void (*end)(void *);
+    uint8_t (*read)(void *, uint8_t);
+    uint32_t (*now_ms)(void *);
+    bool (*pause)(void *);
+};
+struct fs_rtc_sample { uint8_t second, minute, hour, day, month, year, control, valid; };
+bool fs_rtc_decode(const struct fs_rtc_sample *, uint16_t *, uint16_t *, uint8_t *);
+bool fs_rtc_read(const struct fs_rtc_ops *, void *, uint16_t *, uint16_t *, uint8_t *);
+void fs_calendar_init(void);
+/* Long cache/scan loops cooperate with the scheduler. Only the storage
+ * callback brackets worker context; ordinary VFS callers use task_yield. */
+void fs_worker_enter(void);
+void fs_worker_leave(void);
+void fs_service(void);
 /* No dependency on the host's errno ABI. All public failures are NEGATIVE. */
 enum fs_error {
     FS_EIO=5, FS_ENOENT=2, FS_EBADF=9, FS_ENOMEM=12, FS_EACCES=13,

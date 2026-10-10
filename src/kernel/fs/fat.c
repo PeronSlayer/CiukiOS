@@ -122,16 +122,16 @@ int fat_next(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_en
     if (limit>UINT32_MAX) limit=UINT32_MAX;
     while (*cursor<limit) {
         uint8_t b[32]; uint32_t i=(*cursor)++; int e=dir_read(v,dir,i,b); if (e) return e;
-        if (!b[0]) return -FS_ENOENT;
-        if (b[0]==0xe5) { expected=total=0; continue; }
+        if (!b[0]) { if (total) v->lfn_orphans++; return -FS_ENOENT; }
+        if (b[0]==0xe5) { if (total) v->lfn_orphans++; expected=total=0; continue; }
         if (b[11]==15) {
             unsigned ord=b[0]&31;
-            if (b[0]&64) { total=expected=ord; sum=b[13]; start=i; memset(name,0xff,sizeof(name)); }
-            if (!ord || ord>20 || ord!=expected || b[0]&(0x80|0x20) || b[12] || fs_rd16(b+26) || b[13]!=sum) { expected=total=0; continue; }
+            if (b[0]&64) { if (total) v->lfn_orphans++; total=expected=ord; sum=b[13]; start=i; memset(name,0xff,sizeof(name)); }
+            if (!ord || ord>20 || ord!=expected || b[0]&(0x80|0x20) || b[12] || fs_rd16(b+26) || b[13]!=sum) { v->lfn_invalid++; expected=total=0; continue; }
             for (unsigned k=0;k<13;k++) name[(ord-1)*13+k]=fs_rd16(b+lfn_offsets[k]);
             expected--; continue;
         }
-        if (b[11]&FAT_ATTR_VOLUME) { expected=total=0; continue; }
+        if (b[11]&FAT_ATTR_VOLUME) { if (total) v->lfn_orphans++; expected=total=0; continue; }
         memset(entry,0,sizeof(*entry)); entry->parent=dir; entry->index=i; entry->lfn_index=i;
         if ((e=alias_decode(b,entry->alias))) return corrupt(v);
         memcpy(entry->name,entry->alias,strlen(entry->alias)+1);
@@ -140,7 +140,9 @@ int fat_next(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_en
             bool ok=n>0 && n<=255;
             if (n<total*13) { if (name[n]!=0) ok=false; for (unsigned k=n+1;k<total*13;k++) if (name[k]!=0xffff) ok=false; }
             if (ok && !path_from_ucs2(name,n,entry->name,sizeof(entry->name)) && !path_validate_name(entry->name,name,&n)) { entry->lfn_index=start; entry->lfn_count=(uint8_t)total; }
-            else memcpy(entry->name,entry->alias,strlen(entry->alias)+1);
+            else { v->lfn_invalid++; memcpy(entry->name,entry->alias,strlen(entry->alias)+1); }
+        } else if (total) {
+            if (expected) v->lfn_orphans++; else v->lfn_bad_checksum++;
         }
         decode_entry(v,b,entry); return 0;
     }
@@ -511,8 +513,11 @@ int fat_scan(struct fat_volume *v) {
     bool more=true;
     while (more) {
         more=false;
-        for (uint32_t c=2;c<v->clusters+2;c++) if ((*scan_byte(v,c)&6)==2) {
-            *scan_byte(v,c)|=4; more=true; if ((e=scan_dir(v,c))) goto out;
+        for (uint32_t c=2;c<v->clusters+2;c++) {
+            if (!(c&127)) fs_service();
+            if ((*scan_byte(v,c)&6)==2) {
+                *scan_byte(v,c)|=4; more=true; if ((e=scan_dir(v,c))) goto out;
+            }
         }
     }
     for (uint32_t c=2;c<v->clusters+2;c++) {
@@ -577,6 +582,19 @@ int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *de
         v->writable_session=true;
         if (cleanbit(v) && ((e=set_cluster(v,1,one&~cleanbit(v))) || (e=barrier(v)))) return e;
     }
+    return 0;
+}
+int fat_enable_write(struct fat_volume *v) {
+    if (!v || !v->mounted) return -FS_EINVAL;
+    int e=cache_error(v->cache,v->dev); if (e) return write_error(v,e);
+    if (!v->readonly) return 0;
+    if (!blkdev_durable(v->dev)) { v->ro_reasons|=FAT_RO_DURABILITY; return -FS_EROFS; }
+    if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DURABILITY)) return -FS_EROFS;
+    uint32_t one;
+    if ((e=fat_get_cluster(v,1,&one))) return e;
+    v->ro_reasons=0; v->readonly=false; v->writable_session=true;
+    if (cleanbit(v) && ((e=set_cluster(v,1,one&~cleanbit(v))) || (e=barrier(v)))) return e;
+    v->diagnostic="read gate passed; writable";
     return 0;
 }
 int fat_commit(struct fat_volume *v) {

@@ -15,6 +15,12 @@ struct block_cache {
     void *workspace[256];
     uint32_t workspace_pages, blocks;
     uint64_t hits, misses, writes;
+    /* f1-09: refresh frozen block-view scalars even on cache hits. The
+     * callback must be short, nonblocking and must not enter the cache. */
+    void (*refresh)(void *, struct blkdev *);
+    void *refresh_ctx;
+    uint32_t next_writeback;
+    bool writeback_pending;
 };
 /* Allocate only at init. bytes includes metadata and scan workspace. One
  * instance is shared by ALL mounted devices. Destroy requires quiescence and
@@ -25,6 +31,7 @@ int cache_read(struct block_cache *, struct blkdev *, uint64_t lba, void *sector
 int cache_write(struct block_cache *, struct blkdev *, uint64_t lba, const void *sector);
 int cache_barrier(struct block_cache *, struct blkdev *);
 int cache_writeback_tick(struct block_cache *, uint32_t now_ms);
+bool cache_writeback_due(const struct block_cache *, uint32_t now_ms);
 int cache_error(struct block_cache *, struct blkdev *);
 /* Invalidate only after durable unmount or externally established media loss.
  * forget_error is for a new media generation, never automatic error recovery. */
