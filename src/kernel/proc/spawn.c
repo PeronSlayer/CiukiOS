@@ -5,6 +5,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/signal.h>
 
 static const struct ciuki_file_ops *file_ops;
 void proc_set_file_ops(const struct ciuki_file_ops *ops) { file_ops = ops; }
@@ -280,7 +281,7 @@ int proc_spawn(uint32_t args_va)
         goto out;
     if ((err = proc_inherit(op->child, self->process, fds, a.fd_count)))
         goto out;
-    if (self->interrupted && !self->in_handler) {
+    if (proc_signal_caught(self)) {
         err = -EINTR;
         goto out;
     }
@@ -297,7 +298,7 @@ int proc_spawn(uint32_t args_va)
         goto out;
     }
     err = prepare_image(op->child, &op->file, strings, mask);
-    if (!err && (self->process->state != PROC_LIVE || (self->interrupted && !self->in_handler)))
+    if (!err && (self->process->state != PROC_LIVE || proc_signal_caught(self)))
         err = -EINTR;
     if (!err) {
         /* Release the immutable file snapshot before publication. */

@@ -7,6 +7,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
+#include <ciuki/signal.h>
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 
@@ -86,7 +87,8 @@ void trap_dispatch(struct trap_frame *tf)
         return;
     } else if (tf->vector == 0x80) {
         sti();                          /* frame saved: interrupts may resume */
-        syscall_dispatch(tf);
+        if (!proc_signal_syscall(tf))
+            syscall_dispatch(tf);
         cli();
     } else if (tf->vector == 7) {
         fpu_handle_nm();
@@ -94,6 +96,13 @@ void trap_dispatch(struct trap_frame *tf)
         if (!try_expected(tf))
             panic_frame(tf, "kernel_exception");
     } else {
+        if (proc_thread_for(g_current)) {
+            uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
+            sti();
+            proc_signal_fault(tf, cr2);
+            cli();
+            return;
+        }
         /* Ring-3 fault: terminate only the offending task. */
         struct task *t = g_current;
         t->fault_vector = tf->vector;
