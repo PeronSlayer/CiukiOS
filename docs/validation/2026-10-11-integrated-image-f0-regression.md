@@ -272,3 +272,18 @@ the five fault kinds with `desktop_restarts=0`, post-fault interaction
 consumed (`input_events` 0 → 8, `presents` 924 → 931, pixel digest changed,
 keys=2 motion=3 buttons=2) and the runner's screen observation (portrait
 region and cursor change) passed. Host tests: 155 OK.
+
+## Seventeenth image: `33a68c43…` (commit `62bd77f`, f2-18 and the f1-22 follow-up merged)
+
+Runner case `app-gate-qemu-t23`: the unmodified upstream Lua suite with
+`_U=true` exits zero in the guest (`case=lua-basic exit=0 final_ok=1
+assertion_failures=0`, 72.9 s) and the supplement passes (127.8 s, four
+cases); the desktop stays alive and advances; every process-level ledger
+is balanced; the verdict fails only on unattributed storage-cache and
+namespace growth (`pages_delta=32 kernel_bytes_delta=1024`, cache nodes 59
+→ 60, `cache_accounted=0`), directive f2-19. Runner case
+`mount-crash-reboot`: the gate arms after ARM and cuts at the declared
+index 2; the exported volume shows an orphaned long-name part of
+`F109CUT.BIN` and the dirty bit, which the runner reports as an
+unclassified interrupted-state outcome and boot 2 is not attempted
+(directive f1-24). Host tests: 160 OK.

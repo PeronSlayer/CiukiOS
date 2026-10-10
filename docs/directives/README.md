@@ -58,3 +58,5 @@ evidence and merges.
 | [f2-18-app-gate-upstream-run](f2-18-app-gate-upstream-run.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (`PATH=/bin` in the gate environment; `files.lua` audited against a native reference harness, no further gap found); QEMU evidence pending |
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
+| [f2-19-app-gate-resource-ledger](f2-19-app-gate-resource-ledger.md) | F2 | gpt-6.1-sol / high | in progress 2026-10-11 (both Lua runs pass; verdict fails on unattributed cache/identity growth: `pages_delta=32`, one cache node) |
+| [f1-24-crash-reboot-outcome](f1-24-crash-reboot-outcome.md) | F1 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (cut at index 2 leaves an orphaned long-name entry of the workload file; checker classification or driver write order) |
