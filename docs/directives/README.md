@@ -88,3 +88,6 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f3-03-vm-memory-services](f3-03-vm-memory-services.md) | F3 | gpt-6.1-sol / xhigh | draft 2026-10-11, launch after f3-00 merges (A20/HMA, XMS 3.0, UMB, EMS 4.0, admission arithmetic) |
 | [f3-05-vm-sb16-opl-state](f3-05-vm-sb16-opl-state.md) | F3 | gpt-6.1-sol / xhigh | draft 2026-10-11, launch after f3-00 and f3-01 merge (per-VM SB16 DSP/mixer, 8237, OPL3 register state and event queue for F4) |
 | [f3-04-kernel-dpmi](f3-04-kernel-dpmi.md) | F3 | gpt-6.1-sol / xhigh | draft 2026-10-11, launch after f3-00, f3-01 and f3-03 merge (complete DPMI 0.9 host in stages; DOS/4GW pinned probe as first client) |
+| [f2-31-deskui-toolkit-files](f2-31-deskui-toolkit-files.md) | F2+ | gpt-6.1-sol / xhigh | draft 2026-10-11, launch after f2-30 merges (`libdeskui` widgets, Files application, `apps/build_apps.py`, `files-qemu-t23`) |
+| [f2-32-ciuknote](f2-32-ciuknote.md) | F2+ | gpt-6.1-sol / high | draft 2026-10-11, launch after f2-31 merges (CiukNote editor on `libdeskui`) |
+| [f2-33-task-manager](f2-33-task-manager.md) | F2+ | gpt-6.1-sol / xhigh | draft 2026-10-11, launch after f2-31 merges (syscall 70 `proc_list`, termination authority, Task Manager) |
