@@ -69,11 +69,21 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
     char *argv[] = {"demo","--channel-fd=3",fault,gate ? "--test=crash-isolation" : NULL,NULL};
     char *env[] = {"LC_ALL=C","TZ=UTC0",NULL};
     struct ciuki_spawn_fd mapping = {pair[1],3};
-    int i = desk_add_client(d,pair[0]);
-    ciuki_pid_t pid = i < 0 ? -1 : ciuki_spawn("/bin/demo",argv,env,&mapping,1,CIUKI_SPAWN_NEW_GROUP);
+    int i = -1;
+    ciuki_pid_t pid = -1;
+    /* channel_pair creates CLOEXEC endpoints. Ciuki's explicit spawn mapping
+     * rejects CLOEXEC sources, so admit only the child's channel endpoint;
+     * display/input grants and the desktop endpoint keep their flags. */
+    if (!fcntl(pair[1],F_SETFD,0)) {
+        i = desk_add_client(d,pair[0]);
+        if (i >= 0) pid = ciuki_spawn("/bin/demo",argv,env,&mapping,1,CIUKI_SPAWN_NEW_GROUP);
+        else errno = ENOSPC;
+    }
+    int error = errno;
     close(pair[1]);
     if (pid < 0) {
         if (i >= 0) desk_drop_client(d,i); else close(pair[0]);
+        errno = error;
         return -1;
     }
     return (int)pid;

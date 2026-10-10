@@ -822,6 +822,156 @@ static void test_captured_handshake(const char *path, const char *setup_path)
     puts("captured production desktop/demo -> probe_f2_libc_report -> native_report: reparenting, new spawn group, first generation/cycle, mmap after TLS/surface, CONFIGURE and snapshot PASS");
 }
 
+#ifdef CIUKI_DESKTOP_SPAWN_HOST
+/* Native desktop syscall seam: use production channel_pair, descriptor flags,
+ * supervisor preparation and proc_spawn, including the copied 32-bit args.
+ * Physical RAM, scheduling and executable file I/O remain host fixtures. */
+static struct process *spawn_host_owner, *spawn_host_server;
+static struct proc_thread *spawn_host_thread;
+static struct test_object spawn_host_stdio[3];
+static int spawn_host_open(void *cwd, const char *path, struct ciuki_file *file)
+{
+    (void)cwd;
+    CHECK(!strcmp(path,"/bin/desktop") || !strcmp(path,"/bin/demo"));
+    *file=fixture_file(); return 0;
+}
+static int spawn_host_install_stdio(struct process *p)
+{
+    for (unsigned i=0;i<3;i++) {
+        spawn_host_stdio[i]=(struct test_object){ .object={obj_retain,obj_release,true}, .id=i };
+        object_refs[i]=1; p->fds[i].object=&spawn_host_stdio[i].object;
+    }
+    return 0;
+}
+static struct proc_thread *spawn_host_find_thread(struct process *p)
+{
+    for (unsigned i=0;i<CIUKI_THREAD_MAX;i++) {
+        struct proc_thread *t=proc_thread_slot(i);
+        if (t && t->process==p) return t;
+    }
+    CHECK(false); return 0;
+}
+void desktop_spawn_host_init(int gate)
+{
+    ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    controller.state=T_RUNNING; g_current=&controller; proc_init();
+    next_pid=40; CHECK(!proc_prepare(proc_supervisor(),&spawn_host_owner)); proc_publish(spawn_host_owner,0);
+    static const struct ciuki_file_ops files={ .open=spawn_host_open };
+    static const struct supervisor_io_ops io={ .stdio=spawn_host_install_stdio };
+    proc_set_file_ops(&files); supervisor_set_io_ops(&io);
+    if (gate) CHECK(supervisor_spawn_desktop_probe(&spawn_host_server)==41);
+    else {
+        const char *argv[]={"desktop",0};
+        CHECK(supervisor_spawn("/bin/desktop",argv,0,true,&spawn_host_server)==41);
+    }
+    if (gate) spawn_host_server->ppid=spawn_host_owner->pid;
+    CHECK(desktop_fd(spawn_host_server,3)->kind==DESKTOP_DISPLAY && desktop_fd(spawn_host_server,4)->kind==DESKTOP_INPUT);
+    spawn_host_thread=spawn_host_find_thread(spawn_host_server); desktop_select(spawn_host_thread);
+}
+int desktop_spawn_host_output(void)
+{
+    int fd=surface_create(spawn_host_server,320,320,CIUKI_SURFACE_XRGB8888);
+    CHECK(fd==5);
+    CHECK(surface_map(spawn_host_server,fd,PROT_READ|PROT_WRITE)==CIUKI_MMAP_BASE+CIUKI_TLS_SIZE);
+    return fd;
+}
+uint32_t desktop_spawn_host_control(void)
+{
+    struct ciuki_mmap_args a={.size=sizeof(a),.length=PAGE_SIZE,.prot=PROT_READ|PROT_WRITE,.flags=MAP_PRIVATE|MAP_ANONYMOUS,.fd=-1};
+    int32_t address=ua_mmap(spawn_host_server->memory,&a);
+    CHECK(address==CIUKI_MMAP_BASE+CIUKI_TLS_SIZE+320*320*4);
+    return (uint32_t)address;
+}
+int desktop_spawn_host_pair(int32_t pair[2])
+{
+    int err=channel_pair(spawn_host_server,pair);
+    if (!err) {
+        CHECK(desktop_fcntl(spawn_host_server,pair[0],F_GETFD,0)==FD_CLOEXEC);
+        CHECK(desktop_fcntl(spawn_host_server,pair[1],F_GETFD,0)==FD_CLOEXEC);
+        struct ciuki_spawn_fd mapping={pair[1],3};
+        CHECK(proc_fd_validate(spawn_host_server,&mapping,1)==-EBADF);
+    }
+    return err;
+}
+int desktop_spawn_host_fcntl(int fd,int cmd,uint32_t arg)
+{ return desktop_fcntl(spawn_host_server,fd,(uint32_t)cmd,arg); }
+int desktop_spawn_host_close(int fd)
+{ return desktop_close(spawn_host_server,fd); }
+static uint32_t spawn_host_text(const char *text,uint32_t *at)
+{
+    uint32_t address=*at, length=(uint32_t)strlen(text)+1;
+    CHECK(address+length<=BUFFER+PAGE_SIZE);
+    CHECK(!ua_write(spawn_host_server->memory,address,text,length)); *at+=length;
+    return address;
+}
+static unsigned spawn_host_vector(char *const text[],uint32_t vector,uint32_t *at)
+{
+    unsigned count=0;
+    while (text[count]) {
+        CHECK(count<8);
+        put_word(spawn_host_server->memory,vector+4*count,spawn_host_text(text[count],at)); count++;
+    }
+    put_word(spawn_host_server->memory,vector+4*count,0); return count;
+}
+int desktop_spawn_host_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
+{
+    desktop_select(spawn_host_thread);
+    uint32_t text=BUFFER+256;
+    struct ciuki_spawn_args args={.size=sizeof(args),.path=spawn_host_text(path,&text),
+        .argv=BUFFER+64,.envp=BUFFER+104,.fd_list=BUFFER+144,.fd_count=count,.flags=flags};
+    unsigned argc=spawn_host_vector(argv,args.argv,&text), envc=spawn_host_vector(env,args.envp,&text);
+    CHECK(count==1 && !ua_write(spawn_host_server->memory,args.fd_list,mapping,sizeof(*mapping)));
+    CHECK(!ua_write(spawn_host_server->memory,BUFFER,&args,sizeof(args)));
+    int pid=proc_spawn(BUFFER);
+    if (pid<0) return pid;
+    struct process *child=proc_find((uint32_t)pid); CHECK(child);
+    CHECK(child->ppid==spawn_host_server->pid && child->pgid==child->pid);
+    CHECK(child->fds[3].object==spawn_host_server->fds[mapping->source].object && !child->fds[3].flags);
+    CHECK(desktop_fd(child,3)->kind==DESKTOP_CHANNEL);
+    struct desktop_description *source=desktop_fd(spawn_host_server,mapping->source);
+    for (unsigned i=0;i<CIUKI_OPEN_MAX;i++) {
+        struct desktop_description *d=desktop_fd(spawn_host_server,(int32_t)i);
+        if (d && d!=source && d->kind==DESKTOP_CHANNEL && d->u.endpoint.channel==source->u.endpoint.channel)
+            CHECK(spawn_host_server->fds[i].flags==FD_CLOEXEC);
+    }
+    for (unsigned i=0;i<3;i++) CHECK(child->fds[i].object==spawn_host_server->fds[i].object);
+    for (unsigned i=4;i<CIUKI_OPEN_MAX;i++) CHECK(!child->fds[i].object);
+    CHECK(spawn_host_server->fds[3].flags==FD_CLOEXEC && spawn_host_server->fds[4].flags==FD_CLOEXEC);
+    CHECK(!desktop_fd(spawn_host_server,3)->object.inheritable && !desktop_fd(spawn_host_server,4)->object.inheritable);
+    struct proc_thread *t=spawn_host_find_thread(child); uint32_t at=t->task->saved_esp;
+    CHECK(get_word(child->memory,at)==argc); at+=4;
+    for (unsigned group=0;group<2;group++) {
+        char *const *expected=group ? env : argv; unsigned n=group ? envc : argc;
+        for (unsigned i=0;i<n;i++,at+=4) {
+            char actual[128]; size_t length=strlen(expected[i])+1; CHECK(length<=sizeof(actual));
+            CHECK(!ua_read(child->memory,actual,get_word(child->memory,at),length) && !strcmp(actual,expected[i]));
+        }
+        CHECK(!get_word(child->memory,at)); at+=4;
+    }
+    return pid;
+}
+void desktop_spawn_host_reap(int pid)
+{
+    struct process *child=proc_find((uint32_t)pid); CHECK(child);
+    desktop_remove(spawn_host_server,child); desktop_select(spawn_host_thread);
+}
+void desktop_spawn_host_finish(void)
+{
+    g_current=&controller;
+    for (unsigned i=1;i<CIUKI_PROCESS_MAX;i++) {
+        struct process *p=processes[i];
+        if (p && p->ppid==spawn_host_server->pid) desktop_remove(spawn_host_server,p);
+    }
+    desktop_remove(spawn_host_server->ppid==spawn_host_owner->pid ? spawn_host_owner : proc_supervisor(),spawn_host_server);
+    desktop_remove(proc_supervisor(),spawn_host_owner);
+    CHECK(!pages_used && !g_user_mappings && heap_blocks==1);
+    CHECK(!desktop_objects.descriptions && !desktop_objects.channels && !desktop_objects.grants);
+    for (unsigned i=0;i<3;i++) CHECK(!object_refs[i]);
+    free(ram);
+    puts("native desktop -> production channel_pair/fcntl/proc_spawn: CLOEXEC rejection, explicit fd 3, argv/env, new group, grants excluded, zero resources PASS");
+}
+#define main desktop_kernel_fixture_main
+#endif
 int main(int argc, char **argv)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);

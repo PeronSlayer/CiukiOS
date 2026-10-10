@@ -6,6 +6,15 @@ first-fit arena remains the authority, including preceding TLS/surface maps.
 Positive signed-decimal PIDs also satisfy the unsigned report parser
 (https://pubs.opengroup.org/onlinepubs/9799919799/functions/fprintf.html).
 Capture production text and protocol packets without rewriting their fields.
+
+Spawn follow-up: POSIX processes file actions before CLOEXEC closure
+(https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_spawn.html).
+Ciuki's explicit-inheritance extension instead rejects a CLOEXEC source in
+proc_fd_validate; channel_pair sets that flag on both endpoints. Keep those
+kernel rules and opt only the child's endpoint into inheritance with F_SETFD
+(https://pubs.opengroup.org/onlinepubs/007904875/basedefs/fcntl.h.html).
+Link the native desktop to production channel_pair/fcntl/proc_spawn so a
+permissive fake cannot conceal that rejection or grant inheritance.
 """
 import ctypes
 import hashlib
@@ -33,6 +42,16 @@ class DesktopGateTests(unittest.TestCase):
         self.folder = Path(self.temp.name)
 
     def tearDown(self):self.temp.cleanup()
+
+    def kernel_spawn_bridge(self,env):
+        binary=self.folder/'kernel-spawn.o'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                        '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections',
+                        '-DCIUKI_DESKTOP_SPAWN_HOST','-I',str(ROOT/'src/kernel/include'),
+                        '-c',str(ROOT/'tests/host/proc/desktop_test.c'),'-o',str(binary)],check=True,env=env)
+        return [str(binary),str(ROOT/'tests/host/proc/signal_legacy.c'),
+                str(ROOT/'src/kernel/lib/sha256.c'),str(ROOT/'src/kernel/lib/fmt.c'),
+                str(ROOT/'src/kernel/probes/selector.c')]
 
     def test_selector_server_and_policy(self):
         harness = self.folder/'selector.c'
@@ -194,15 +213,26 @@ void klog(const char *f,...) {(void)f;}
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* declarations supplied by harness */\n')
         binary=self.folder/'desktop-gate-test'
-        env=dict(os.environ,TMPDIR=str(self.folder))
+        env=dict(os.environ,TMPDIR=str(self.folder),ASAN_OPTIONS='detect_leaks=0')
+        bridge=self.kernel_spawn_bridge(env)
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+            '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
             '-I',str(self.folder/'desktop-include'),'-I',str(ROOT/'apps/desktop'),
             '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
             *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+            *bridge,
             '-o',str(binary)],check=True,env=env)
         result=subprocess.run([str(binary)],capture_output=True,text=True,env=env,timeout=10)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('five fault kinds',result.stdout)
+        self.assertIn('production channel_pair/fcntl/proc_spawn',result.stdout)
+        for mode in ('--normal-spawn','--capacity'):
+            result=subprocess.run([str(binary),mode],capture_output=True,text=True,env=env,timeout=10)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        for mode,error in (('--inherit-error',13),('--spawn-error',9)):
+            result=subprocess.run([str(binary),mode],capture_output=True,text=True,env=env,timeout=10)
+            self.assertEqual(result.returncode,1,result.stdout+result.stderr)
+            self.assertIn(f'case=native-setup step=9 error={error}',result.stdout)
 
     def test_native_handshake_reports_through_kernel_hook(self):
         include=self.folder/'handshake-include/ciuki';include.mkdir(parents=True)
@@ -220,6 +250,8 @@ void klog(const char *f,...) {(void)f;}
                         '-o',str(demo)],check=True,env=env)
         subprocess.run([*common,str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
                         *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+                        '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+                        *self.kernel_spawn_bridge(env),
                         '-o',str(desktop)],check=True,env=env)
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
                         '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
@@ -245,7 +277,8 @@ void klog(const char *f,...) {(void)f;}
         reports.write_text('\n'.join((desk[0],peer[0],desk[1],peer[1]))+'\n')
         failure=subprocess.run([str(desktop),'--input-error'],capture_output=True,text=True,env=env,timeout=10)
         self.assertEqual(failure.returncode,1,failure.stdout+failure.stderr)
-        setup=self.folder/'setup.report'; setup.write_text(failure.stdout)
+        setup=self.folder/'setup.report'
+        setup.write_text('\n'.join(line for line in failure.stdout.splitlines() if line.startswith('case=native-setup '))+'\n')
         output=execute(kernel,'--native-handshake',reports,setup)
         self.assertIn('CONFIGURE and snapshot PASS',output)
         self.assertIn('case=launch server=desktop pid=41 survivor=42 control=20065000 stage=2',output)
