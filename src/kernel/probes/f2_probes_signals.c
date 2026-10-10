@@ -113,6 +113,19 @@ static bool signal_wait_zombie(struct process *p)
     return p->state == PROC_ZOMBIE;
 }
 
+static void signal_fault_record(const struct signal_result *r, uint32_t pid)
+{
+    unsigned index = r->stage - 50;
+    rec_emit("signals-fault", "DATA", "case=fault-repair part=observed index=%u signal=%u vector=%u code=%u error=%08x",
+             index, r->signo, r->vector, r->code, r->error);
+    rec_emit("signals-fault", "DATA", "case=fault-repair part=expected index=%u signal=%u vector=%u code=%u error=%08x",
+             index, r->expect_signo, r->expect_vector, r->expect_code, r->expect_error);
+    rec_emit("signals-fault", "DATA", "case=fault-repair part=addresses index=%u address=%08x expected_addr=%08x eip=%08x expected_eip=%08x",
+             index, r->address, r->expect_address, r->eip, r->expect_eip);
+    rec_emit("signals-fault", "DATA", "case=fault-repair part=context index=%u pid=%u tid=%u mask=%08x x87_digest=%08x",
+             index, pid, r->tid, r->saved_mask, r->fp_digest);
+}
+
 static bool signal_case(struct process *parent, struct process *survivor, struct process *other,
                          const char *name, unsigned mode, uint32_t expected_status)
 {
@@ -124,6 +137,9 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
     signal_result_word(p, offsetof(struct signal_result, peer), survivor->pid);
     signal_result_word(p, offsetof(struct signal_result, other_group), other->pid);
     struct signal_result r = { 0 }, before = { 0 }, after = { 0 };
+    struct signal_result faults[7];
+    unsigned fault_count = 0;
+    bool fault_order = true;
     struct ciuki_timespec remaining = { 0 };
     bool remaining_read = false;
     signal_result_read(survivor, &before);
@@ -134,14 +150,14 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
     while (g_ticks < deadline && p->state != PROC_ZOMBIE) {
         if (signal_result_read(p, &r)) {
             if (mode == 0 && r.stage > 50 && r.stage <= 57) {
-                rec_emit("signals-fault", "DATA", "case=fault-repair part=observed index=%u signal=%u vector=%u code=%u error=%08x",
-                         r.stage - 50, r.signo, r.vector, r.code, r.error);
-                rec_emit("signals-fault", "DATA", "case=fault-repair part=expected index=%u signal=%u vector=%u code=%u error=%08x",
-                         r.stage - 50, r.expect_signo, r.expect_vector, r.expect_code, r.expect_error);
-                rec_emit("signals-fault", "DATA", "case=fault-repair part=addresses index=%u address=%08x expected_addr=%08x eip=%08x expected_eip=%08x",
-                         r.stage - 50, r.address, r.expect_address, r.eip, r.expect_eip);
-                rec_emit("signals-fault", "DATA", "case=fault-repair part=context index=%u pid=%u tid=%u mask=%08x x87_digest=%08x",
-                         r.stage - 50, p->pid, r.tid, r.saved_mask, r.fp_digest);
+                /* The handler waits for this acknowledgement. UART polling
+                 * and full LFB console redraws must not spend its deadline:
+                 * snapshot now, print after completion (f2-22 hardware). */
+                fault_order = fault_order && r.stage - 50 == fault_count + 1;
+                if (fault_count < ARRAY_SIZE(faults))
+                    faults[fault_count++] = r;
+                else
+                    fault_order = false;
                 signal_result_word(p, offsetof(struct signal_result, stage), 0);
             }
             if (!injected && r.tid && (mode == 9 || (mode >= 10 && mode <= 13)) &&
@@ -185,7 +201,12 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
     bool pass = zombie && (uint32_t)p->status == expected_status && !r.errors &&
                 (expected_status || completed);
     if (mode == 0) {
-        pass = pass && r.entries == 7 && r.returns == 7;
+        pass = pass && fault_order && fault_count == ARRAY_SIZE(faults) &&
+               r.entries == 7 && r.returns == 7;
+        for (unsigned i = 0; i < fault_count; i++)
+            signal_fault_record(&faults[i], p->pid);
+        rec_emit("signals-fault", "DATA", "case=fault-repair part=completion completed=%u zombie=%u records=%u state=%u",
+                 completed, zombie, fault_count, p->state);
         rec_emit("signals-fault", "DATA", "case=fault-repair part=alignment tcg_fallback=%u hardware_required_vector=17",
                  r.ac_fallback);
     }
