@@ -41,6 +41,12 @@ static int finish(const char *probe, int error)
     rec_emit(probe, "END", "status=%s error=%d", error ? "FAIL" : "PASS", error);
     return error ? 1 : 0;
 }
+static int finish_not_run(const char *probe, const char *reason)
+{
+    rec_emit(probe, "ERROR", "status=not_run reason=%s", reason);
+    rec_emit(probe, "END", "status=NOT_RUN");
+    return 0;
+}
 static void name_record(const char *probe, unsigned id, const char *field, const char *text)
 {
     static const char digits[] = "0123456789abcdef";
@@ -160,6 +166,9 @@ int probe_fat_read(void)
     int e = vfs_table_init(&s->vfs, &probe_table, 2); if (e) return finish(probe, e);
     e = vfs_stat(&probe_table, "C:/SYSTEM", &entry);
     if (!e && !(entry.attr & FAT_ATTR_DIR)) e = -FS_ENOTDIR;
+    bool fixtures = false;
+    for (unsigned disk = 1; disk < STORAGE_DISKS; disk++)
+        if (s->disks[disk]) fixtures = true;
     unsigned id = 0;
     for (unsigned disk = 1; disk < STORAGE_DISKS; disk++)
         rec_emit(probe, "DATA", "case=fixture disk=%u status=%s", disk, s->disks[disk] ? "present" : "absent");
@@ -170,6 +179,7 @@ int probe_fat_read(void)
         rec_emit(probe, "DATA", "case=mount drive=%c disk=%u type=%u mode=%s reasons=%u writes=%llu read_gate=%u",
                  'A' + d, mount->disk, mount->type, mount->readonly ? "ro" : "rw", mount->reasons, mount->writes, mount->read_gate);
         if (v->error || !v->fat.readonly || v->writes) { e = v->error ? v->error : -FS_EIO; break; }
+        if (!fixtures) continue;
         e = list_volume(probe, v, &id);
         rec_emit(probe, "DATA", "case=lfn drive=%c orphan_observations=%u bad_checksum_observations=%u invalid_observations=%u handling=short_fallback",
                  'A' + d, v->fat.lfn_orphans, v->fat.lfn_bad_checksum, v->fat.lfn_invalid);
@@ -181,6 +191,7 @@ int probe_fat_read(void)
     rec_emit(probe, "DATA", "case=invalid_name invalid=%d unmappable=%d writes=0", invalid, unmappable);
     if (invalid != -FS_EINVAL || unmappable != -FS_EILSEQ) e = -FS_EIO;
     vfs_table_destroy(&probe_table);
+    if (!e && !fixtures) return finish_not_run(probe, "fixtures_absent");
     return finish(probe, e);
 }
 
