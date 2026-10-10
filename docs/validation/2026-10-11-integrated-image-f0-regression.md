@@ -399,3 +399,15 @@ path is never reached), `safe` (cursor not persisted in safe mode).
 Everything else as in the first sweep. The import of this capture with
 the runner was refused (`build_id` field, then the per-boot sequence
 check): directive f1-33.
+
+## Twenty-second image: `5fe9446d…` (commit `96440d6`, f1-31, f1-32, f2-21, f2-22 merged)
+
+`f2-all` in one invocation (21:10–21:57): 186 PASS, the three
+`uart-absent-*` operator-confirmation cases, two physical `safe-menu-*`
+`not_run`; host tests 211 OK. Targeted QEMU checks before the batch:
+`input` (T23/E500), `fat16-read`, `fat-write`, `bootlog`,
+`bootlog-read-only`, `fd-table`, `signals-fault` (T23/E500) and
+`crash-isolation` with the real desktop all PASS. The hardware image for
+the third T23 sweep is the same tree with `BOOT.CFG`
+`probe=all:sweep run=77777777` (`build/f0/ciukios-hw.img`,
+SHA-256 `6ed146ab…`).
