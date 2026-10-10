@@ -2,6 +2,7 @@
 import copy
 from contextlib import contextmanager
 import hashlib
+import json
 from pathlib import Path
 import shutil
 import struct
@@ -151,7 +152,10 @@ class CrashRunnerTests(unittest.TestCase):
         for record in cuts[1:]:record['lba']='1'
         reboot=[{'event':'BEGIN'},*[{'event':'DATA',**body(r)} for r in records['mount-crash-reboot']],{'event':'END','status':'PASS'}]
         return {'boot_records':[[],reboot],
-                'boot_gates':[[[{'event':'BEGIN'}], [cuts[0]], [{'event':'DATA',**cuts[1]}], [{'event':'DATA',**cuts[2]}]],[]]}
+                'boot_gates':[[[{'event':'BEGIN'},
+                                {'event':'DATA','group':'storage','mode':'ro','writes':'0'},
+                                {'event':'DATA','case':'corrupt_fixtures','status':'not_run','reason':'absent'},
+                                cuts[0]], [{'event':'DATA',**cuts[1]}], [{'event':'DATA',**cuts[2]}]],[]]}
 
     def run_sequence(self, scenario, bad_checker=False, bad_digest=False, bad_file=False):
         order=[]
@@ -187,9 +191,64 @@ class CrashRunnerTests(unittest.TestCase):
         self.assertEqual(boots[0]['marker_manifest'][0]['file'],'F109CUT.ARM')
         self.assertEqual(boots[1]['marker_manifest'],[])
         self.assertTrue(boots[0]['cut_point']['next_write_suspended'])
+        observations=boots[0]['cut_point']['gate_observations']
+        self.assertEqual([o['completed_index'] for o in observations],[0,1,2])
+        self.assertTrue(all(o['armed'] for o in observations))
         self.assertTrue(all(b['cleanup']['clean'] for b in boots))
         self.assertFalse(Path(boots[0]['overlay']).exists())
         self.assertEqual(set(p.name for p in directory.iterdir()),{'serial.log','result.json'})
+
+    def test_breakpoint_follows_setup_and_arm_and_targets_drive(self):
+        result,directory,_=self.run_sequence(self.scenario())
+        self.assertEqual(result['outcome'],'pass',result['reason'])
+        boot=json.loads((Path(result['reboot_sequence'][0]['overlay']).parent/'result.json').read_text())
+        drive=boot['qemu']['arguments'][boot['qemu']['arguments'].index('-drive')+1]
+        self.assertIn('id=ciuki-cut-drive',drive)
+        self.assertEqual(boot['observed_blockstats_armed']['ide0']['wr_operations'],5)
+        self.assertEqual(boot['initial_blockstats']['ide0']['wr_operations'],0)
+
+    def test_arm_receipt_lag_preserves_exact_prefix_or_rejects_overshoot(self):
+        for lag in (1,2,3):
+            with self.subTest(lag=lag):
+                self.script.with_suffix('.count').unlink(missing_ok=True)
+                scenario=self.scenario();scenario['gate_arm_lag_writes']=lag
+                last=scenario['boot_gates'][0][-1][0]
+                scenario['boot_gates'][0].append([{**last,'index':'3'}])
+                result,_,_=self.run_sequence(scenario)
+                if lag<=2:
+                    self.assertEqual(result['outcome'],'pass',result['reason'])
+                    self.assertEqual(result['crash_comparison']['index'],2)
+                else:
+                    self.assertEqual(result['outcome'],'fail')
+                    self.assertIn('declared cut index already passed',result['reason'])
+                    self.assertIsNone(result['cut_point'])
+
+    def test_timeout_identifies_pending_cut_and_arm(self):
+        for phase in ('arm','index','suspension','qmp'):
+            with self.subTest(phase=phase):
+                self.script.with_suffix('.count').unlink(missing_ok=True)
+                scenario=self.scenario();self.case['timeout']=.5
+                gates=scenario['boot_gates'][0]
+                if phase=='arm':gates[0]=gates[0][:-1]
+                elif phase=='index':scenario['boot_gates'][0]=gates[:1]
+                elif phase=='suspension':
+                    scenario.pop('boot_gates');scenario['boot_records'][0]=[r for batch in gates for r in batch]
+                else:scenario['gate_qmp_timeout']=True
+                result,_,_=self.run_sequence(scenario)
+                self.assertEqual(result['outcome'],'fail')
+                self.assertTrue(result['timeout']['occurred'])
+                pending=result['timeout']['pending_stimulus']
+                self.assertEqual(pending['action']['type'],'cut')
+                self.assertEqual(pending['action']['after'],{'event':'ARM','action':'crash_cut'})
+                self.assertEqual(pending['declared_cut_index'],2)
+                expected=('waiting_for_arm' if phase=='arm' else 'arming_gate' if phase=='qmp' else
+                          'waiting_for_cut_index' if phase=='index' else 'waiting_for_write_suspension')
+                self.assertEqual(pending['phase'],expected)
+                self.assertIn('pending declared stimulus',result['reason'])
+                self.assertIn(expected,result['reason'])
+                self.assertEqual(result['stimulus']['pending'],pending)
+                self.assertEqual(result['stimulus']['observed'],[])
+                self.assertTrue(result['cleanup']['clean'])
 
     def test_cross_link_and_file_outcome_stop_before_reboot(self):
         for option in ('bad_checker','bad_file'):
@@ -215,11 +274,13 @@ class CrashRunnerTests(unittest.TestCase):
             with self.subTest(option=option):
                 self.script.with_suffix('.count').unlink(missing_ok=True)
                 scenario=self.scenario();gates=scenario['boot_gates'][0]
-                if option=='arm':gates[1]=[]
-                if option=='index':gates[2][0]['index']='2'
-                if option=='overshoot':gates[3].append({**gates[3][0],'index':'3'})
-                if option=='durable':gates[2][0]['durable']='0'
-                if option=='suspension':scenario.pop('boot_gates');scenario['boot_records'][0]=[{'event':'BEGIN'},*gates[1],*gates[2],*gates[3]]
+                if option=='arm':gates[0]=gates[0][:-1];self.case['timeout']=.5
+                if option=='index':gates[1][0]['index']='2'
+                if option=='overshoot':gates[2].append({**gates[2][0],'index':'3'})
+                if option=='durable':gates[1][0]['durable']='0'
+                if option=='suspension':
+                    scenario.pop('boot_gates');scenario['boot_records'][0]=[r for batch in gates for r in batch]
+                    self.case['timeout']=.5
                 result,_,_=self.run_sequence(scenario)
                 self.assertEqual(result['outcome'],'fail')
                 self.assertEqual(result['unattempted_boots'],1)

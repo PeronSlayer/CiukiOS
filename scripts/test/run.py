@@ -526,6 +526,12 @@ class Actions:
                 raise res.Refusal('device power loss requires a driver-boundary fixture; guest termination is distinct')
     @property
     def complete(self):return self.index==len(self.declared)
+    def pending_stimulus(self,parser):
+        if self.complete:return None
+        action=self.declared[self.index]
+        matched=any(all(r.get(k)==str(v) for k,v in action['after'].items()) for r in parser.records)
+        return {'index':self.index,'action':action,'synchronization_observed':matched,
+                'batch':self.batch,'repeat':self.repeat}
     def step(self,parser,qmp,now):
         if self.complete or not qmp or now<self.due:return None
         action=self.declared[self.index]
@@ -812,12 +818,13 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         disk={'driver':'blkdebug','node-name':'ciuki-cut','image':disk}
         disk_format='blkdebug'
     drive='file='+('json:'+json.dumps(disk,separators=(',',':')) if case.get('fault') or case.get('crash_cut') else str(overlay))
+    drive_id=',id=ciuki-cut-drive' if case.get('crash_cut') else ''
     selector(request,'fw_cfg',True)
     devices=case.get('device_exceptions',{})
     args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
           '-monitor','none','-nic','none','-no-shutdown','-S',
-          '-drive',drive.replace(',',',,')+',format='+disk_format+',if=ide,index=0,media=disk,cache='+cache+',rerror=report,werror=report',
+          '-drive',drive.replace(',',',,')+',format='+disk_format+',if=ide,index=0,media=disk,cache='+cache+',rerror=report,werror=report'+drive_id,
           '-vga',devices.get('vga',profile['vga']),'-qmp','unix:q,server=on,wait=off',
           '-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
@@ -985,6 +992,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         if not record or record.get('group') not in ('app','app_digest'):
                             if serial.tell()+len(line)>res.LOG_CAP:raise EvidenceError('serial/stderr log cap reached')
                             serial.write(line);serial.flush()
+                        if write_gate and qmp:write_gate.synchronize(record,qmp)
                         if parser.records and parser.records[-1]['event']=='ARM' and armed_stats is None and qmp:
                             armed_stats=writes(qmp.command('query-blockstats'));result['observed_blockstats_armed']=armed_stats
                     if serial.tell()+len(pending)>res.LOG_CAP:
@@ -1004,7 +1012,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 result['initial_blockstats']=writes(qmp.command('query-blockstats'))
                 if case['probe']=='panic':
                     result['blockstats_baseline']='ARM receipt for all I/O; before CPU start for writes'
-                if write_gate:write_gate.arm(qmp)
+                if write_gate:
+                    for record in parser.records:write_gate.synchronize(record,qmp)
                 qmp.command('cont')
                 # Catch ARM received in the same batch before QMP connected.
                 if any(r['event']=='ARM' for r in parser.records) and armed_stats is None:
@@ -1095,6 +1104,15 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['outcome']='pass';result['reason']='all declared predicates and host observations passed'
     except (OSError,ValueError,RuntimeError,subprocess.SubprocessError,KeyboardInterrupt) as e:
         result['reason']=str(e) or type(e).__name__
+        if isinstance(e,(TimeoutError,subprocess.TimeoutExpired)) or result['timeout']['occurred']:
+            result['timeout']['occurred']=True
+            result['timeout']['source']=type(e).__name__
+            pending_stimulus=actions.pending_stimulus(parser)
+            result['stimulus']['pending']=pending_stimulus
+            if pending_stimulus:
+                if write_gate:pending_stimulus.update(write_gate.pending_stimulus(parser.records))
+                result['timeout']['pending_stimulus']=pending_stimulus
+                result['reason']+='; pending declared stimulus '+json.dumps(pending_stimulus,sort_keys=True)
         if isinstance(e,EvidenceNotRun):
             result['outcome']='not_run';result['not_run_subcases']=parser.not_run_subcases
     finally:

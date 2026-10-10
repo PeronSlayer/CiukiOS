@@ -59,7 +59,7 @@ def place_marker(host, overlay, directory, image_size, name):
 
 
 class WriteGate:
-    """Suspend each guest write before qcow2, then cut a completed trace prefix.
+    """After crash ARM, suspend guest writes and cut a completed trace prefix.
 
     QEMU v11 block/io.c emits pwritev on the addressed blkdebug node; its
     one-shot breakpoint yields BEFORE forwarding the write. Re-arm it before
@@ -71,17 +71,29 @@ class WriteGate:
     https://github.com/qemu/qemu/blob/v11.0.0/block/blkdebug.c
     Do not issue QMP stop: do_vm_stop() drains/flushes block requests and
     cannot finish with a suspended breakpoint (system/cpus.c in that tag).
+    HMP must address the persistent -drive backend, not the blkdebug node:
+    hmp_qemu_io() creates/drains a temporary backend for node names, which
+    deadlocks when re-arming with a request suspended on that node.
     """
     def __init__(self, index):
         if type(index) is not int or not 1 <= index <= 100000:raise Refusal('invalid declared cut index')
         self.index = index; self.pending = b''; self.suspended = False
-        self.observations = []
+        self.observations = []; self.arm_record = None; self.started = False
 
     def command(self, qmp, text):
-        reply = qmp.command('human-monitor-command', {'command-line':f'qemu-io ciuki-cut "{text}"'})
+        reply = qmp.command('human-monitor-command', {'command-line':f'qemu-io ciuki-cut-drive "{text}"'})
         if not isinstance(reply,str) or reply.strip():raise EvidenceError('blkdebug gate command failed: '+str(reply))
 
     def arm(self, qmp):self.command(qmp, 'break pwritev ciuki-write')
+
+    def synchronize(self, record, qmp):
+        if not record or record.get('event') != 'ARM' or record.get('action') != 'crash_cut':return
+        if self.arm_record is not None:
+            if record != self.arm_record:raise EvidenceError('duplicate crash ARM')
+            return
+        # storage_enable_write() performs untraced setup writes before ARM.
+        # Install immediately on receipt, before blockstats/status round trips.
+        self.arm_record = record; self.arm(qmp); self.started = True
 
     def feed(self, chunk, now):
         self.pending += chunk
@@ -93,20 +105,31 @@ class WriteGate:
         if len(self.pending) > 4096:raise EvidenceError('unterminated blkdebug notice')
 
     def step(self, parser, qmp, now):
-        if not self.suspended:return False
         arms = [r for r in parser.records if r.get('event') == 'ARM' and r.get('action') == 'crash_cut']
         cuts = [r for r in parser.records if r.get('case') == 'cut']
-        if cuts and not arms:raise EvidenceError('cut trace before crash ARM')
+        if cuts and (not arms or parser.records.index(cuts[0]) < parser.records.index(arms[0])):
+            raise EvidenceError('cut trace before crash ARM')
         if len(arms) > 1:raise EvidenceError('duplicate crash ARM')
+        if arms:self.synchronize(arms[0], qmp)
         if [r.get('index') for r in cuts] != [str(i) for i in range(1, len(cuts)+1)]:
             raise EvidenceError('noncontiguous cut trace')
         if any(r.get('action') != 'write' or r.get('result') != '0' or r.get('durable') != '1' for r in cuts):
             raise EvidenceError('writethrough cut lacks durable successful sector writes')
         if len(cuts) > self.index:raise EvidenceError('declared cut index already passed')
+        if not self.suspended:return False
+        if not self.started:raise EvidenceError('write suspended before crash ARM')
         self.observations.append(dict(completed_index=len(cuts), armed=bool(arms), suspended=True))
         if len(cuts) == self.index:return True
         self.arm(qmp); self.command(qmp, 'resume ciuki-write'); self.suspended = False
         return False
+
+    def pending_stimulus(self, records):
+        completed = len([r for r in records if r.get('case') == 'cut'])
+        phase = ('waiting_for_arm' if self.arm_record is None else
+                 'arming_gate' if not self.started else
+                 'waiting_for_cut_index' if completed < self.index else 'waiting_for_write_suspension')
+        return dict(declared_cut_index=self.index, completed_index=completed,
+                    gate_armed=self.started, next_write_suspended=self.suspended, phase=phase)
 
     def evidence(self, records, partition_start):
         cuts = [r for r in records if r.get('case') == 'cut']
