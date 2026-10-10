@@ -81,14 +81,16 @@ Do not edit step/state counters by hand. Completion removes only the probe line.
 Read-only cursor refusal leaves evidence on screen and does not reset.
 
 For the `input` and real-desktop `crash-isolation` steps, stay at the machine
-and watch for `[operator] press A, move the pointer, click (60 s)` on screen
-and serial. The first event must arrive within 60 seconds. For `input`, then
-complete the normal 120-second stimulus: 100 unshifted A press/release cycles,
-100 pointer moves and ten left-button press/release cycles. The probe retains
-its existing count/digest/motion checks; being present alone does not pass it.
-For the desktop interaction, press and release A, move the pointer and click
-and release the left button within its normal 15-second window; observe that
-the desktop redraws. With no first event, only `stimulus` or `interaction` is
+and watch for the `[operator]` prompt on screen and serial. The first event
+must arrive within 60 seconds. For `input` (f1-34, `criteria=operator`): press
+and release A at least ten times, move the pointer, click and release the
+left button at least once, then release everything and pause for one second;
+the probe stops after the thresholds and one quiet second, or at its
+120-second deadline. Loss, duplicates, stuck keys and the input lease are
+still checked; typematic repeats from a held key are recorded, not failures;
+being present alone does not pass it. For the desktop interaction, press and
+release A, move the pointer and click and release the left button within its
+normal 15-second window; observe that the desktop redraws. With no first event, only `stimulus` or `interaction` is
 `status=not_run reason=operator_absent`; setup/lease, completed isolation cycles
 and cleanup keep their verdicts. The sweep counts the incomplete step as
 not_run and continues. Physical import preserves this reason and marks
