@@ -28,11 +28,16 @@ struct fat_volume {
     uint16_t fsinfo, backup; uint8_t type, spc, fats, media, active_fat;
     bool mounted, readonly, writable_session;
     const char *diagnostic;
+    /* Read observations, possibly repeated by lookups; never on-disk counts. */
+    uint32_t lfn_orphans, lfn_bad_checksum, lfn_invalid;
     struct fat_entry alias_scratch; /* serialized alias collision walk; saves kernel stack */
 };
 /* Mount does not write unless requested AND validation and durability pass.
  * requested RO always issues zero writes/flushes. why is retained in volume. */
 int fat_mount(struct fat_volume *, struct block_cache *, struct blkdev *, uint64_t start, uint64_t sectors, bool writable);
+/* f1-09: upgrade an already scanned RO mount; caller refreshes its view and
+ * serializes against VFS. Never clears dirty/corruption/error reasons. */
+int fat_enable_write(struct fat_volume *);
 int fat_unmount(struct fat_volume *);
 int fat_commit(struct fat_volume *);
 int fat_scan(struct fat_volume *); /* bounded read-only ownership scan */

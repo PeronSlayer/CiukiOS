@@ -10,6 +10,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/task.h>
 #include <ciuki/work.h>
+#include <ciuki/storage.h>
 
 static unsigned failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -630,9 +631,24 @@ static void test_probe_fixtures(void)
     printf("ata-fault production probe/time boundary/record bounds; partition fixtures: PASS\n");
 }
 
+static void cache_inject(void *ctx, bool flush) { ((struct fake *)ctx)->fault = flush ? BAD_FLUSH : ERR; }
+static void test_storage_cache_faults(void)
+{
+    struct block_cache c;
+    CHECK(!cache_init(&c,8192));
+    for (unsigned i=0;i<2;i++) {
+        struct fake f; struct blkdev *d=qualify(&f,false);
+        CHECK(!storage_cache_fault(&c,d,cache_inject,&f,!!i));
+        unsigned before=f.commands; uint8_t bytes[512];
+        CHECK(d->quarantined && d->read(d,0,1,bytes)==-FS_EQUARANTINED && before==f.commands);
+    }
+    cache_destroy(&c);
+    puts("storage cache/ATA: PASS (register-boundary write/flush faults, delayed EIO, sticky unmount, quarantine/no further command)");
+}
 int main(void)
 {
     test_identify(); test_data(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
+    test_storage_cache_faults();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
     return failures ? 1 : 0;

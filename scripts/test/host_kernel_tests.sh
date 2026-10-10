@@ -53,6 +53,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 "$out/runtime_init_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \
+    "$root/tests/host/rtc_test.c" "$root/src/kernel/fs/fs_port.c" -o "$out/rtc_test"
+"$out/rtc_test"
+
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
 
@@ -61,9 +66,13 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 "$out/i8042_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -DFS_HOST -pthread -I "$root/src/kernel/include" \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \
     "$root/tests/host/ata_test.c" "$root/src/kernel/fs/partition.c" \
-    "$root/src/kernel/lib/sha256.c" -o "$out/ata_test"
+    "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c" \
+    "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/path.c" \
+    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/mount.c" \
+    "$root/src/kernel/core/bootlog.c" "$root/src/kernel/probes/fat_probes.c" \
+    "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" -o "$out/ata_test"
 "$out/ata_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \

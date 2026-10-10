@@ -34,6 +34,7 @@ int i8042_init(void) { called('N'); return input_result; }
 int biosvm_init(void) { called('B'); return bios_result; }
 int fwinput_adapter_init(void) { called('W'); return adapter_result; }
 int ata_init(void) { called('A'); return ata_result; }
+void storage_init(void) { called('S'); }
 struct ata_device *ata_device_get(unsigned c, unsigned u)
 {
     static struct ata_device d;
@@ -89,7 +90,8 @@ static void reset(uint32_t flags, bool firmware, bool lfb)
 static void verify(const char *expected, unsigned optional)
 {
     drivers_init();
-    CHECK(!strcmp(order, expected));
+    char with_storage[16]; snprintf(with_storage,sizeof(with_storage),"%sS",expected);
+    CHECK(!strcmp(order, with_storage));
     struct drivers_state s;
     drivers_snapshot(&s);
     CHECK(s.initialized && s.boot_flags == expected_flags && s.optional_activations == optional);

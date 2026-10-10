@@ -3,6 +3,7 @@
 #define FS_FAKE_H
 #include "blkdev.h"
 #define FAKE_LIMIT 32768u
+#define FAKE_TRACE_LIMIT 131072u
 struct fake_sector { uint64_t lba; uint8_t data[512]; };
 struct fake_event { uint64_t lba; char kind; };
 struct fake {

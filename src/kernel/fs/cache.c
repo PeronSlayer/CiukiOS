@@ -24,6 +24,7 @@ static int remember(struct block_cache *c, struct blkdev *d, int e) {
 }
 static int write_block(struct block_cache *c, struct cache_block *b) {
     if (!b->dirty) return 0;
+    if (c->refresh) c->refresh(c->refresh_ctx,b->dev);
     struct cache_device *s=device(c,b->dev);
     if (!s) return -FS_ENOSPC;
     if (s->error) return s->error;
@@ -48,6 +49,8 @@ static void newest(struct block_cache *c, struct cache_block *b) {
     c->newest=b; if (!c->oldest) c->oldest=b;
 }
 static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read, struct cache_block **out) {
+    fs_service();
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
     int e=blkdev_range(d,lba,1); if (e) return e;
     if (!d->read) return -FS_EINVAL;
     struct cache_device *s=device(c,d); if (!s) return -FS_ENOSPC;
@@ -103,18 +106,30 @@ int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf)
     fs_lock_drop(&c->lock); return e;
 }
 int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const void *buf) {
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
     if (!buf || !blkdev_durable(d)) return d && d->quarantined ? -FS_EQUARANTINED : -FS_EROFS;
     fs_lock_take(&c->lock); struct cache_device *s=device(c,d); struct cache_block *b;
     int e=!s ? -FS_ENOSPC : s->error;
     if (!e) e=get(c,d,lba,false,&b);
-    if (!e) { memcpy(b->data,buf,512); if (!b->dirty) b->since=fs_now_ms(); b->dirty=true; }
+    if (!e) {
+        memcpy(b->data,buf,512);
+        if (!b->dirty) {
+            b->since=fs_now_ms();
+            uint32_t due=b->since+5000;
+            if (!c->writeback_pending || (int32_t)(due-c->next_writeback)<0) c->next_writeback=due;
+            c->writeback_pending=true;
+        }
+        b->dirty=true;
+    }
     fs_lock_drop(&c->lock); return e;
 }
 static int barrier(struct block_cache *c, struct blkdev *d) {
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
     struct cache_device *s=device(c,d); if (!s) return -FS_ENOSPC;
     if (s->error) return s->error;
     if (!blkdev_durable(d)) return remember(c,d,d->quarantined ? -FS_EQUARANTINED : -FS_EROFS);
     for (struct cache_block *b=c->oldest;b;b=b->next) if (b->dev==d) {
+        fs_service();
         int e=write_block(c,b); if (e) return e;
     }
     if (d->write_cache_state!=BLKDEV_CACHE_DISABLED) {
@@ -125,18 +140,34 @@ static int barrier(struct block_cache *c, struct blkdev *d) {
 int cache_barrier(struct block_cache *c, struct blkdev *d) {
     fs_lock_take(&c->lock); int e=barrier(c,d); fs_lock_drop(&c->lock); return e;
 }
+bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
+    return c->writeback_pending && (int32_t)(now-c->next_writeback)>=0;
+}
 int cache_writeback_tick(struct block_cache *c, uint32_t now) {
+    if (!cache_writeback_due(c,now)) return 0;
     fs_lock_take(&c->lock); int result=0;
     for (unsigned i=0;i<CACHE_DEVICES;i++) {
         struct blkdev *d=c->devices[i].dev; if (!d) continue;
         bool due=false;
         for (struct cache_block *b=c->oldest;b;b=b->next)
-            if (b->dev==d && b->dirty && (uint32_t)(now-b->since)>=5000) { due=true; break; }
+            { fs_service(); if (b->dev==d && b->dirty && (uint32_t)(now-b->since)>=5000) { due=true; break; } }
         if (due) { int e=barrier(c,d); if (e && !result) result=e; }
+    }
+    c->writeback_pending=false;
+    for (struct cache_block *b=c->oldest;b;b=b->next) {
+        fs_service();
+        struct cache_device *owner=b->dirty ? device(c,b->dev) : 0;
+        if (owner && !owner->error) {
+            uint32_t due=b->since+5000;
+            if (!c->writeback_pending || (int32_t)(due-c->next_writeback)<0) c->next_writeback=due;
+            c->writeback_pending=true;
+        }
     }
     fs_lock_drop(&c->lock); return result;
 }
 int cache_error(struct block_cache *c, struct blkdev *d) {
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
+    if (d && d->quarantined) return -FS_EIO;
     fs_lock_take(&c->lock); struct cache_device *s=device(c,d);
     int e=s ? s->error : -FS_ENOSPC; fs_lock_drop(&c->lock); return e;
 }

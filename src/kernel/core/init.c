@@ -11,6 +11,7 @@
 #include <ciuki/ata.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/registry.h>
+#include <ciuki/storage.h>
 
 static struct drivers_state state;
 
@@ -72,4 +73,5 @@ void drivers_init(void)
              !state.ata_called ? "disabled" : (state.ata_error || quarantine) ? "failed" : storage ? "ready" : "absent",
              state.ata_error, state.ata_sequence, storage, quarantine,
              state.safe ? "safe_mode" : "native_discovery");
+    storage_init();
 }
