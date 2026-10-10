@@ -1975,7 +1975,6 @@
             "size": 535822336,
             "listing_path": "::/",
             "fsck_exit_codes": [
-              0,
               1
             ],
             "interrupted_patterns": [
@@ -1991,7 +1990,9 @@
               "ARM"
             ],
             "empty_files": [
-              "::/F109CUT.ARM",
+              "::/F109CUT.ARM"
+            ],
+            "interrupted_files": [
               "::/F109CUT.BIN"
             ]
           }
@@ -2004,7 +2005,6 @@
             "size": 535822336,
             "listing_path": "::/",
             "fsck_exit_codes": [
-              0,
               1
             ],
             "interrupted_patterns": [
@@ -2020,7 +2020,9 @@
               "ARM"
             ],
             "empty_files": [
-              "::/F109CUT.ARM",
+              "::/F109CUT.ARM"
+            ],
+            "interrupted_files": [
               "::/F109CUT.BIN"
             ]
           }

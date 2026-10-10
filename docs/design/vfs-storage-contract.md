@@ -130,6 +130,40 @@ successful clean shutdown.
   defect. Torn sectors or diverging FAT copies are detected on mount and
   lead to read-only handling.
 
+**[F1, f1-24 amendment]** In addition to the interrupted states above, an
+atomic-sector crash during directory publication may leave nonowning orphan
+long-name entries: the [Microsoft FAT specification, version 1.03, pp.
+26–28](https://www.cs.fsu.edu/~cop4610t/assignments/project3/spec/fatspec.pdf)
+requires contiguous LFN slots immediately before their short entry, with
+ordinal/checksum validation and a zero LFN first-cluster field, and defines
+unpaired slots as orphans. Ciuki's `fat_create()` always preserves the exact
+spelling in an LFN, including `F109CUT.BIN` (one slot); `slots()` durably
+clears the future short slot and terminator before `publish()` makes the LFN
+durable, then publishes the sole owning short entry. Entries can span sectors;
+separate barriers also permit an orphan within one sector. In the supplied
+image `33a68c43a8a9488c275cb983b0aaabef05e7c5f3fb31a7b6b3478ff488c66797`
+at `62bd77f`, the marker occupies byte 160 of disk sector 4120 (volume
+sector 2072), the workload LFN byte 192, its short entry byte 224, and the
+new terminator byte 256: cut write 1 persists slot preparation and write 2
+persists the LFN; write 3 publishing the short entry is suspended. The
+device cache is disabled, so these barriers need no traced flush
+(`barrier=0`); dirty flags were made durable before ARM. The short entry,
+allocation, 8192-byte data, replacement and rename have not become durable.
+This ordering preserves ownership and requires no driver change. For
+`mount-crash-reboot`, the declared workload outcomes are an empty
+`F109CUT.BIN` with no orphan diagnostic, or an absent `F109CUT.BIN` with
+exactly its orphan-LFN diagnostic paired with `Auto-deleting.`; the marker
+MUST remain empty, the dirty diagnostic MUST occur, and cross-links, lost
+chains and every other discrepancy MUST fail. [dosfstools 4.2
+`lfn_check_orphaned()`](https://github.com/dosfstools/dosfstools/blob/v4.2/src/lfn.c#L483)
+proposes deleting only those slots; [`fsck.fat -n`](https://github.com/dosfstools/dosfstools/blob/v4.2/src/fsck.fat.c#L163)
+does not apply the deletion or dirty-bit removal and returns 1 for pending
+changes. Both boots MUST classify all checker output and independently
+verify the corresponding absent/empty file state through mtools; boot 2
+MUST reuse the unrepaired overlay, preserve the directory-sector digest and
+checker report, mount read-only with `lost=0`, `scan_corrupt=0`, and reject
+writes with `EROFS` and zero issued writes.
+
 ## Mount, errors and corruption
 
 - Mount checks: BPB values and signature, FAT count, cluster count matching

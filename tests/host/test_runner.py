@@ -20,6 +20,15 @@ from unittest.mock import patch
 from contextlib import contextmanager
 
 ROOT=Path(__file__).resolve().parents[2]
+# Captured fsck.fat 4.2 diagnostics from f1-24, image 33a68c43…;
+# only the per-boot export path is parameterized.
+CRASH_ORPHAN_FSCK = ('fsck.fat 4.2 (2021-01-31)\n'
+                     'Orphaned long file name part "F109CUT.BIN"\n'
+                     '  Auto-deleting.\n'
+                     'Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.\n'
+                     ' Automatically removing dirty bit.\n\n'
+                     'Leaving filesystem unchanged.\n'
+                     '{volume}: 69 files, 1465/130557 clusters\n')
 sys.path.insert(0,str(ROOT/'scripts/test'))
 from loader_model import selector, boot_options, F0_PROBES, F1_PROBES, F2_PROBES, SELECTOR_RE
 import run as runner
@@ -1168,6 +1177,16 @@ class F1RecordTests(unittest.TestCase):
                             record=next(r for r in broken.records if all(r.get(k)==str(v) for k,v in predicate['where'].items()))
                             record[field]='invalid'
                             with self.subTest(field=field),self.assertRaises(EvidenceError):broken.check(expected)
+
+    def test_crash_reboot_keeps_dirty_scan_and_write_refusal_strict(self):
+        case=next(c for c in runner.load(ROOT/'tests/suites/f1-fat32.json')['cases'] if c['id']=='mount-crash-reboot')
+        bodies=self.fat_fixtures()['mount-crash-reboot']
+        for before,after in [('reasons=5','reasons=1'),('reasons=5','reasons=37'),
+                             ('lost=0','lost=1'),('scan_corrupt=0','scan_corrupt=1'),
+                             ('write_refusal=-30','write_refusal=0'),('writes=0','writes=1')]:
+            with self.subTest(field=before):
+                broken=[body.replace(before,after) for body in bodies]
+                with self.assertRaises(EvidenceError):self.records('mount-crash',broken).check(case['expected'])
 
     def test_actual_f1_records_and_each_predicate_violation(self):
         fixtures=self.fixtures()
