@@ -42,6 +42,7 @@ evidence and merges.
 | [f1-16-fixture-disks](f1-16-fixture-disks.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (43,674 storage checks) |
 | [f1-17-fat-suite-alignment](f1-17-fat-suite-alignment.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (93 runner tests) |
 | [f1-18-firmware-queue-starvation](f1-18-firmware-queue-starvation.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 |
+| [f2-10-probe-completion](f2-10-probe-completion.md) | F2 | gpt-6.1-sol / xhigh | issued 2026-10-11 (first F2 guest results: 5 PASS, 3 FAIL with named gaps) |
 
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).

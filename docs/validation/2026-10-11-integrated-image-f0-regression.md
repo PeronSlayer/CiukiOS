@@ -111,3 +111,20 @@ driver with the expected counts; `input-qemu-e500` FAIL (firmware backend,
 fixed by f1-15 after this run), so `framebuffer` and the firmware subcases
 stayed `not_run`. The F2 suites of this batch were stopped by the lead once
 their F1 prefix hit the same e500 case; no F2 case ran.
+
+## Ninth image: `f76ab59e…` (commit `5ccc80fd`, f1-15 and f1-16 merged)
+
+Suite batch: `f0-smoke` 2/2; `f1-input` and `f1-safe` stopped in their F0
+prefix at `preempt` on `qemu-e500` (`switches=0 … dispatch_a=0`): the firmware
+queue thread introduced by f1-08 and now active after f1-15 polled the BIOS VM
+every millisecond at `P_DEVICE` and starved ring-3 tasks (directive f1-18,
+merged). Manual single-probe boots of the F2 probes on the `qemu-t23`
+configuration (diagnostic signal, not suite evidence): `elf-load` PASS (31
+records), `spawn-wait` PASS (157), `mmap` PASS, `threads-wait` PASS,
+`crash-isolation` with the stand-in server PASS (100 cycles, ledger zero);
+`signals-fault` FAIL only because `syscall-interruption` was marked not_run
+pending f2-03; `fd-table` FAIL on three unwired subcases (`uname`, post-commit
+fault, durable checker); `libc-smoke` FAIL: the SDK newlib program
+`/bin/libc_smoke` ran in the guest for the first time (11,240 checks, 3
+failures, exit 1, stdout `CiukiOS libc smoke: 4294967297 1.25`). Directive
+f2-10 completes these probes.
