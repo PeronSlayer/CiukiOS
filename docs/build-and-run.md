@@ -34,6 +34,34 @@ suites in `tests/suites/` (`docs/design/test-architecture.md`,
 Interactive runs use TCG by default; KVM is only for the `qemu-fast`
 developer profile and never for evidence.
 
+## NTFS host fixtures (f4-03)
+
+Install ntfs-3g's `mkntfs`, `ntfscp`, `ntfsls`, `ntfscat`, `ntfstruncate`
+and `ntfsinfo`, plus its shared `libntfs-3g`. No root privileges or filesystem
+mounts are required. The library is used only by the generator for mkdir,
+unlink, interleaved writes and DOS aliases, which the installed CLI lacks;
+it is never linked into the Ciuki kernel.
+
+```bash
+python3 scripts/test/ntfs_fixtures.py --out build/host/ntfs
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/host -p test_ntfs_ro.py -v
+```
+
+The test creates fixtures when the generator changes; cached inputs must match
+their SHA-256 manifest. It compiles the production parser for the host and
+runs a separate ASan/UBSan walk. Listings and streamed file hashes come from
+independent ntfs-3g tools, including the >4-GiB file (no whole-file allocation).
+A second generation verifies deterministic image hashes and is deleted.
+`--entries` accepts 1000–10000; the canonical host set uses 2048 entries in
+one directory. Images, temporary inputs, binaries and manifests stay under
+`build/host/ntfs/`; the generator refuses output outside a build subdirectory.
+Delete that directory when its investigation closes; tests regenerate it.
+
+These are generated nonboot data volumes, separate from the canonical Ciuki
+image. The parser currently has no VFS integration or runtime selector.
+Bounds, refusal reasons, license references and qualification limits are in
+[F4 acceptance, f4-03](design/f4-acceptance.md#f4-03).
+
 ## Test requests
 
 The loader reads the QEMU fw_cfg item `opt/it.alcybercloud.ciukios/test`
