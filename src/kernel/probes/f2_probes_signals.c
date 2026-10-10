@@ -40,6 +40,8 @@ static struct signal_release {
     struct proc_object object;
     unsigned references;
     bool inject;
+    uint32_t inject_tid, inject_mask;
+    int inject_error;
 } release_objects[2];
 static void signal_release_retain(struct proc_object *object)
 {
@@ -51,7 +53,9 @@ static void signal_release_drop(struct proc_object *object)
     if (--r->references || !r->inject) return;
     struct proc_thread *t = proc_thread_for(g_current);
     if (!t) return;
-    proc_signal_thread_kill(t->process, t->tid, SIGUSR1);
+    r->inject_tid = t->tid;
+    r->inject_mask = (uint32_t)t->mask;
+    r->inject_error = proc_signal_thread_kill(t->process, t->tid, SIGUSR1);
     task_sleep_ms(1);
     uint32_t one = 1;
     ua_write(t->process->memory, SIGNAL_RESULT + offsetof(struct signal_result, release_count), &one, sizeof(one));
@@ -99,6 +103,16 @@ static bool signal_result_read(struct process *p, struct signal_result *r)
     return p->state == PROC_LIVE && p->memory && !ua_read(p->memory, r, SIGNAL_RESULT, sizeof(*r));
 }
 
+static bool signal_channel_waiting(const struct signal_result *r, const struct proc_thread *t)
+{
+    /* The one-tick channel wait can expire before this controller wakes.
+     * READY still owns the suspended receive; stage alone also matches the
+     * userspace interval before entry, so require its syscall operation. */
+    return r->stage == 2 && !r->errors && r->tid && t && t->task &&
+           t->in_syscall && t->operation &&
+           (t->task->state == T_BLOCKED || t->task->state == T_READY);
+}
+
 static void signal_result_word(struct process *p, uint32_t offset, uint32_t value)
 {
     if (p->state == PROC_LIVE)
@@ -143,12 +157,18 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
     struct ciuki_timespec remaining = { 0 };
     bool remaining_read = false;
     signal_result_read(survivor, &before);
-    uint64_t deadline = g_ticks + 2000;
+    uint64_t started = g_ticks, deadline = started + 2000;
     bool injected = false, completed = false;
     uint32_t inject_tid = 0, inject_mask = 0, inject_signal = 0;
     int inject_error = 0;
+    int wait_state = -1;
     while (g_ticks < deadline && p->state != PROC_ZOMBIE) {
         if (signal_result_read(p, &r)) {
+            struct proc_thread *wait_thread = 0;
+            if (mode >= 15 && mode <= 17) {
+                wait_thread = r.tid ? proc_thread_find(p, r.tid) : 0;
+                wait_state = wait_thread && wait_thread->task ? (int)wait_thread->task->state : -1;
+            }
             if (mode == 0 && r.stage > 50 && r.stage <= 57) {
                 /* The handler waits for this acknowledgement. UART polling
                  * and full LFB console redraws must not spend its deadline:
@@ -181,9 +201,13 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
                 rec_emit("signals-fault", "DATA", "case=%s part=inject pid=%u tid=%u main_tid=%u signal=%u expected=0 observed=%d",
                          name, p->pid, r.peer_tid, r.tid, SIGUSR2, injected ? 0 : -ESRCH);
             }
-            if (!injected && mode == 15 && r.stage == 2 && r.tid &&
-                proc_thread_find(p, r.tid)->task->state == T_BLOCKED)
-                injected = !proc_signal_thread_kill(p, r.tid, SIGUSR1);
+            if (!injected && mode == 15 && signal_channel_waiting(&r, wait_thread)) {
+                inject_tid = r.tid;
+                inject_mask = (uint32_t)wait_thread->mask;
+                inject_signal = SIGUSR1;
+                inject_error = proc_signal_thread_kill(p, r.tid, SIGUSR1);
+                injected = !inject_error;
+            }
             if (r.stage == 100) {
                 if (mode == 13)
                     remaining_read = !ua_read(p->memory, &remaining, SIGNAL_RESULT + 320, sizeof(remaining));
@@ -194,8 +218,23 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
         }
         task_sleep_ms(1);
     }
+    if (mode == 16 || mode == 17) {
+        inject_tid = release_objects[0].inject_tid;
+        inject_mask = release_objects[0].inject_mask;
+        inject_signal = SIGUSR1;
+        inject_error = release_objects[0].inject_error;
+        injected = inject_tid && !inject_error;
+    }
+    if (mode >= 15 && mode <= 17) {
+        if (!injected && g_ticks >= deadline)
+            rec_emit("signals-fault", "DATA", "case=%s part=wait stage=%u tid=%u state=%d ticks=%llu",
+                     name, r.stage, r.tid, wait_state, (unsigned long long)(g_ticks - started));
+        rec_emit("signals-fault", "DATA", "case=%s part=inject pid=%u tid=%u signal=%u mask=%08x attempted=%u expected=0 observed=%d",
+                 name, p->pid, inject_tid, SIGUSR1, inject_mask, inject_tid != 0,
+                 inject_tid ? inject_error : -ESRCH);
+    }
     bool zombie = signal_wait_zombie(p);
-    if (inject_tid)
+    if (inject_tid && mode < 15)
         rec_emit("signals-fault", "DATA", "case=%s part=inject pid=%u tid=%u signal=%u mask=%08x expected=0 observed=%d",
                  name, p->pid, inject_tid, inject_signal, inject_mask, inject_error);
     bool pass = zombie && (uint32_t)p->status == expected_status && !r.errors &&
@@ -224,7 +263,7 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
         pass = pass && injected && r.sleep_result == -EINTR && r.entries == 1 && r.returns == 1 &&
                r.saved_eax == (uint32_t)-EINTR && r.resumed_eax == (uint32_t)-EINTR;
     if (mode == 16 || mode == 17)
-        pass = pass && r.entries == 1 && r.returns == 1 && r.release_count == 1 && r.handler_completion == 1 &&
+        pass = pass && injected && r.entries == 1 && r.returns == 1 && r.release_count == 1 && r.handler_completion == 1 &&
                r.sleep_result == (mode == 16 ? 0 : 8) && r.saved_eax == r.resumed_eax;
     rec_emit("signals-fault", "DATA", "case=%s part=identity pid=%u tid=%u sender=%u",
              name, p->pid, r.tid, r.sender);
