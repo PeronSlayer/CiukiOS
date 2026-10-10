@@ -55,7 +55,8 @@ static void demo_report(unsigned stage, unsigned turns, unsigned unauthorized, u
 {
     char line[CIUKI_PROBE_REPORT_MAX+1];
     int n=snprintf(line,sizeof(line),"case=native-demo stage=%u turns=%u unauthorized=%u generation=%u",stage,turns,unauthorized,generation);
-    if (n<=0 || n>CIUKI_PROBE_REPORT_MAX || ciuki_error(ciuki_raw_probe_report(CU_PTR(line),n,0,0,0,0))) _exit(126);
+    int error=n<=0 || n>CIUKI_PROBE_REPORT_MAX ? EINVAL : ciuki_error(ciuki_raw_probe_report(CU_PTR(line),n,0,0,0,0));
+    if (error) { fprintf(stderr,"demo: gate report failed length=%d error=%d\n",n,error); _exit(126); }
 }
 static void fault(int channel, int surface, const char *kind, int gate)
 {

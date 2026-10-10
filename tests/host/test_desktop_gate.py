@@ -1,4 +1,12 @@
-"""Desktop gate's independent QMP pixels/stimuli and production selector seam."""
+"""Desktop gate's independent pixels/stimuli and production report seam.
+
+f2-16 research/validation: NULL mmap placement is implementation-selected
+(https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html); Ciuki's
+first-fit arena remains the authority, including preceding TLS/surface maps.
+Positive signed-decimal PIDs also satisfy the unsigned report parser
+(https://pubs.opengroup.org/onlinepubs/9799919799/functions/fprintf.html).
+Capture production text and protocol packets without rewriting their fields.
+"""
 import ctypes
 import hashlib
 import importlib.util
@@ -195,6 +203,63 @@ void klog(const char *f,...) {(void)f;}
         result=subprocess.run([str(binary)],capture_output=True,text=True,env=env,timeout=10)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('five fault kinds',result.stdout)
+
+    def test_native_handshake_reports_through_kernel_hook(self):
+        include=self.folder/'handshake-include/ciuki';include.mkdir(parents=True)
+        for name in ('channel.h','surface.h','spawn.h'):
+            (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
+        for name in ('raw.h','runtime.h'):
+            (include/name).write_text('/* declarations supplied by host harness */\n')
+        env=dict(os.environ,TMPDIR=str(self.folder),ASAN_OPTIONS='detect_leaks=0')
+        common=['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                '-I',str(self.folder/'handshake-include'),'-I',str(ROOT/'apps/desktop'),
+                '-I',str(ROOT/'src/kernel/include')]
+        desktop=self.folder/'desktop';demo=self.folder/'demo';kernel=self.folder/'kernel'
+        subprocess.run([*common,str(ROOT/'tests/host/desktop/demo_gate_test.c'),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('protocol.c','compositor.c')),
+                        '-o',str(demo)],check=True,env=env)
+        subprocess.run([*common,str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+                        '-o',str(desktop)],check=True,env=env)
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                        '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+                        '-I',str(ROOT/'src/kernel/include'),
+                        str(ROOT/'tests/host/proc/desktop_test.c'),str(ROOT/'tests/host/proc/signal_legacy.c'),
+                        str(ROOT/'src/kernel/lib/sha256.c'),str(ROOT/'src/kernel/lib/fmt.c'),
+                        str(ROOT/'src/kernel/probes/selector.c'),'-o',str(kernel)],check=True,env=env)
+        def execute(program,*args):
+            result=subprocess.run([str(program),*map(str,args)],capture_output=True,text=True,env=env,timeout=10)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            return result.stdout
+        client=self.folder/'client.messages';server=self.folder/'server.messages'
+        execute(demo,'--hello',client)
+        desktop_output=execute(desktop,'--handshake',client,server)
+        demo_output=execute(demo,'--handshake',server)
+        desk=[line for line in desktop_output.splitlines() if line.startswith('case=native-desktop ')]
+        peer=[line for line in demo_output.splitlines() if line.startswith('case=native-demo ')]
+        self.assertEqual(len(desk),2,desktop_output);self.assertEqual(len(peer),2,demo_output)
+        self.assertIn('generation=0 survivor=42 victim=0 cycle=0',desk[0])
+        self.assertEqual(peer[0],'case=native-demo stage=2 turns=0 unauthorized=0 generation=0')
+        self.assertEqual(peer[1],'case=native-demo stage=2 turns=0 unauthorized=0 generation=1')
+        reports=self.folder/'handshake.reports'
+        reports.write_text('\n'.join((desk[0],peer[0],desk[1],peer[1]))+'\n')
+        failure=subprocess.run([str(desktop),'--input-error'],capture_output=True,text=True,env=env,timeout=10)
+        self.assertEqual(failure.returncode,1,failure.stdout+failure.stderr)
+        setup=self.folder/'setup.report'; setup.write_text(failure.stdout)
+        output=execute(kernel,'--native-handshake',reports,setup)
+        self.assertIn('CONFIGURE and snapshot PASS',output)
+        self.assertIn('case=launch server=desktop pid=41 survivor=42 control=20065000 stage=2',output)
+        self.assertIn('reason=ok',output)
+        for check in ('survivor_parent','survivor_group','control_range'):
+            self.assertIn('reason=invalid_report:'+check,output)
+        self.assertIn('case=step server=desktop command=5 generation=2 reached=0 live=1 survivor=1',output)
+        self.assertIn('reason=control_write',output)
+        self.assertIn('reason=setup:input:5',output)
+        for program in (desktop,demo):
+            failure=subprocess.run([str(program),'--report-error'],capture_output=True,text=True,env=env,timeout=10)
+            self.assertEqual(failure.returncode,126,failure.stdout+failure.stderr)
+            self.assertIn('gate report failed length=',failure.stderr)
+            self.assertIn('error=14',failure.stderr)
 
     def test_guest_interaction_binding_and_failures(self):
         rows=self.interaction_records();runner.desktop_interaction(rows)

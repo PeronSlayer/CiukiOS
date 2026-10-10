@@ -26,6 +26,8 @@
 #undef strncmp
 struct ciuki_boot_info g_boot;
 static bool gate_simulation;
+static bool print_diagnostics;
+static char last_launch[241], last_step[241];
 static unsigned gate_progress, gate_victims, gate_restored, gate_interactions;
 
 static struct resource desktop_resource = { .generation = 1, .state = RS_ACTIVE };
@@ -41,9 +43,14 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[241] = { 0 };
     va_list ap; va_start(ap, fmt);
-    int n = fmt ? vsnprintf(extra, sizeof(extra), fmt, ap) : 0;
+    int n = fmt ? kvsnprintf(extra, sizeof(extra), fmt, ap) : 0;
     va_end(ap);
-    CHECK(n >= 0 && n <= 155); /* conservative allowance for fixed record prefix */
+    CHECK(n >= 0 && n < (int)sizeof(extra));
+    char record[256];
+    CHECK(ksnprintf(record,sizeof(record),"CIUKI_TEST v=1 run=00000000 seq=4294967295 probe=%s event=%s%s%s",probe,event,n ? " " : "",extra)<=240);
+    if (print_diagnostics) puts(record);
+    if (strstr(extra,"case=launch ")) strcpy(last_launch,extra);
+    if (strstr(extra,"case=step ")) strcpy(last_step,extra);
     frame_count++;
     CHECK(!strcmp(event, "DATA") || ((!strcmp(probe, "libc-smoke") || !strcmp(probe,"crash-isolation")) &&
           (!strcmp(event, "BEGIN") || !strcmp(event, "END") || !strcmp(event, "ARM") || !strcmp(event, "ERROR"))));
@@ -579,6 +586,7 @@ static void test_libc_write_gate(void)
 static struct process *gate_server, *gate_survivor;
 static uint32_t gate_control_address, gate_replies, gate_turns, gate_cycle;
 static bool gate_bad_status;
+static unsigned gate_failure;
 static int gate_fixture_spawn(struct process **out)
 {
     make_process(proc_supervisor(),out); gate_server=*out; gate_server->pgid=gate_server->pid;
@@ -605,13 +613,22 @@ static void gate_schedule(void)
 {
     if (!native_reports.active) return;
     CHECK(g_current==&controller);
-    if (!native_reports.control) { gate_server_summary(0,0); gate_demo_summary(gate_survivor,2,0); }
+    if (!native_reports.control) {
+        if (gate_failure==4) {
+            desktop_remove(gate_server,gate_survivor);
+            proc_stop(gate_server,126,0); proc_collect(); return;
+        }
+        gate_server_summary(0,0);
+        if (gate_failure==5) { proc_stop(gate_survivor,126,0); proc_collect(); return; }
+        if (gate_failure!=2) gate_demo_summary(gate_survivor,2,0);
+    }
     struct gate_control c; CHECK(!ua_read(gate_server->memory,&c,gate_control_address,sizeof(c)));
     if (c.command) {
         CHECK(!ua_write(gate_server->memory,gate_control_address,&(struct gate_control){0},sizeof(c)));
         unsigned victim=native_reports.victim;
         switch(c.command) {
         case GATE_SPAWN: {
+            if (gate_failure==6) return;
             struct process *v; make_process(gate_server,&v); v->pgid=v->pid;
             gate_server_summary(c.generation,v->pid); gate_demo_summary(v,1,0); return;
         }
@@ -621,7 +638,7 @@ static void gate_schedule(void)
         }
         case GATE_REAP: { struct process *v=proc_find(victim); CHECK(v && v->state==PROC_ZOMBIE); proc_reap(gate_server,v); victim=0; gate_cycle++; break; }
         case GATE_RUN: gate_turns+=100; gate_replies+=100; gate_demo_summary(gate_survivor,2,0); break;
-        case GATE_SNAPSHOT: gate_demo_summary(gate_survivor,2,c.generation); break;
+        case GATE_SNAPSHOT: if (gate_failure!=3) gate_demo_summary(gate_survivor,2,c.generation); break;
         case GATE_INTERACT: break;
         default: CHECK(false);
         }
@@ -644,6 +661,31 @@ static void test_native_controller(void)
     }
     device.present=false;device.mapped=0;device.size=0;
     puts("native controller: 100 cycles/five kinds, counters, ticks, PID/CR3/pgid, ledgers, interaction, wrong-signal refusal PASS (fake scheduling)");
+}
+static void test_native_diagnostics(void)
+{
+    const char *reasons[]={"survivor_timeout","snapshot_timeout","server_exit:32256","survivor_exit:32256","command_timeout"};
+    for (unsigned i=0;i<ARRAY_SIZE(reasons);i++) {
+        gate_failure=i+2; gate_bad_status=false; gate_replies=gate_turns=gate_cycle=0;
+        last_launch[0]=last_step[0]=0;
+        g_current=&controller; on_schedule=gate_schedule; print_diagnostics=true;
+        CHECK(native_crash_isolation()==1);
+        on_schedule=0; print_diagnostics=false;
+        CHECK(strstr(gate_failure==6 ? last_step : last_launch,reasons[i]));
+        CHECK(gate_failure==6 ? strstr(last_step,"command=1 generation=2 reached=1 live=1 survivor=1 victim=0")!=0 : !last_step[0]);
+        CHECK(!native_reports.active && !native_reports.invalid && !pages_used && !desktop_objects.channels);
+    }
+    gate_failure=0;
+    /* Use the production formatter and maximum-width IDs, sequence and tick
+     * counts, including the longest rejection name: no silent truncation. */
+    memset(&native_reports,0,sizeof(native_reports));
+    native_reports.server=CIUKI_ID_MAX; native_reports.reported_survivor=UINT32_MAX;
+    native_reports.reported_control=CIUKI_MMAP_LIMIT-PAGE_SIZE; native_reports.reported_stage=UINT32_MAX;
+    native_reports.generation=UINT32_MAX; native_invalid("generation_order");
+    uint64_t ticks=g_ticks; g_ticks=UINT64_MAX;
+    native_launch_record(0,"survivor_timeout"); native_step_record(GATE_INTERACT,UINT32_MAX,"command_timeout");
+    g_ticks=ticks;
+    puts("native diagnostics: survivor/snapshot deadlines, server/survivor exit 126, command/generation/liveness, first rejection and maximum-width records <=240 bytes PASS");
 }
 
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
@@ -695,13 +737,102 @@ static void test_native_reports(void)
     puts("native summaries: emitting PID, stage, monotonic turns, overflow, unauthorized/missing fields, barrier generation PASS");
 }
 
+static struct proc_thread *native_group(struct process *parent, struct process **out)
+{
+    struct ciuki_file file=fixture_file(); struct proc_strings *strings=proc_strings_new();
+    CHECK(strings && !proc_strings_add(strings,"test",5,false));
+    CHECK(proc_spawn_file(parent,&file,strings,0,0,CIUKI_SPAWN_NEW_GROUP,0,out)>0);
+    proc_strings_free(strings);
+    for (unsigned i=0;i<CIUKI_THREAD_MAX;i++) {
+        struct proc_thread *t=proc_thread_slot(i);
+        if (t && t->process==*out) return t;
+    }
+    CHECK(false); return 0;
+}
+static FILE *captured_reports;
+static struct proc_thread *captured_server, *captured_survivor;
+static char captured_first[241];
+static void captured_report(void)
+{
+    char line[242]; CHECK(fgets(line,sizeof(line),captured_reports));
+    size_t length=strlen(line); CHECK(length && line[length-1]=='\n'); line[--length]=0;
+    CHECK(length<=CIUKI_PROBE_REPORT_MAX);
+    struct proc_thread *t=!strncmp(line,"case=native-demo ",17) ? captured_survivor : captured_server;
+    if (!captured_first[0]) strcpy(captured_first,line);
+    probe_f2_libc_report(t->task,line,(uint32_t)length);
+}
+static void captured_snapshot(void) { captured_report(); captured_report(); }
+static void test_captured_handshake(const char *path, const char *setup_path)
+{
+    struct process *owner,*server,*survivor;
+    next_pid=40; CHECK(!proc_prepare(proc_supervisor(),&owner)); proc_publish(owner,0);
+    captured_server=native_group(proc_supervisor(),&server);
+    server->ppid=owner->pid; /* the production controller re-parents its desktop */
+    captured_survivor=native_group(server,&survivor);
+    CHECK(server->pid==41 && survivor->pid==42 && survivor->ppid==server->pid && server->ppid==owner->pid);
+    CHECK(server->pgid==server->pid && survivor->pgid==survivor->pid);
+    int output=surface_create(server,320,320,CIUKI_SURFACE_XRGB8888); CHECK(output>=0);
+    int32_t pixels=surface_map(server,output,PROT_READ|PROT_WRITE); CHECK(pixels>=0);
+    CHECK((uint32_t)pixels==CIUKI_MMAP_BASE+CIUKI_TLS_SIZE);
+    struct ciuki_mmap_args a={.size=sizeof(a),.length=PAGE_SIZE,.prot=PROT_READ|PROT_WRITE,.flags=MAP_PRIVATE|MAP_ANONYMOUS,.fd=-1};
+    int32_t control=ua_mmap(server->memory,&a); CHECK(control>=0);
+    CHECK((uint32_t)control==(uint32_t)pixels+320*320*4 && (uint32_t)control>=CIUKI_MMAP_BASE);
+    CHECK(ua_range(server->memory,(uint32_t)control,PAGE_SIZE,PROT_READ|PROT_WRITE));
+    CHECK(ua_find(server->memory,(uint32_t)control)->kind==UA_ANON);
+    struct gate_control initial; CHECK(!ua_read(server->memory,&initial,(uint32_t)control,sizeof(initial)) && !initial.command && !initial.generation);
+    memset(&native_reports,0,sizeof(native_reports)); native_reports.active=true; native_reports.server=server->pid;
+    captured_reports=fopen(path,"rb"); CHECK(captured_reports); captured_first[0]=0;
+    captured_report(); captured_report();
+    CHECK(!native_reports.invalid && native_reports.control==(uint32_t)control && native_reports.survivor==survivor->pid && native_reports.survivor_stage==2);
+    CHECK(!native_reports.generation && !native_reports.cycles && !native_reports.survivor_turns);
+    g_current=&controller; on_schedule=captured_snapshot; uint32_t generation=0;
+    CHECK(native_command(server,GATE_SNAPSHOT,&generation)); on_schedule=0;
+    CHECK(!native_reports.invalid && generation==1 && native_reports.survivor_snapshot==1 && fgetc(captured_reports)==EOF);
+    CHECK(!fclose(captured_reports));
+    print_diagnostics=true; native_launch_record(g_ticks,0);
+    if (setup_path) {
+        memset(&native_reports,0,sizeof(native_reports)); native_reports.active=true; native_reports.server=server->pid;
+        captured_reports=fopen(setup_path,"rb"); CHECK(captured_reports); captured_report();
+        CHECK(!native_reports.invalid && native_reports.setup_step==GATE_SETUP_INPUT && native_reports.setup_error==EIO);
+        CHECK(fgetc(captured_reports)==EOF && !fclose(captured_reports));
+        native_launch_record(g_ticks,"survivor_timeout");
+    }
+    /* Reject actual captured text against changed production process/mapping
+     * state, rather than inventing a report the payload could never emit. */
+    const char *rejections[]={"survivor_parent","survivor_group","control_range"};
+    for (unsigned i=0;i<ARRAY_SIZE(rejections);i++) {
+        memset(&native_reports,0,sizeof(native_reports)); native_reports.active=true; native_reports.server=server->pid;
+        if (i==0) survivor->ppid=owner->pid;
+        if (i==1) survivor->pgid=server->pgid;
+        if (i==2) CHECK(!ua_mprotect(server->memory,(uint32_t)control,PAGE_SIZE,PROT_READ));
+        probe_f2_libc_report(captured_server->task,captured_first,strlen(captured_first));
+        CHECK(native_reports.invalid && !strcmp(native_reports.invalid_check,rejections[i]));
+        native_launch_record(g_ticks,"survivor_timeout");
+        probe_f2_libc_report(captured_server->task,"bad",3);
+        CHECK(!strcmp(native_reports.invalid_check,rejections[i]));
+        survivor->ppid=server->pid; survivor->pgid=survivor->pid;
+    }
+    native_reports.invalid=false; native_reports.invalid_check=0; native_reports.control=(uint32_t)control;
+    native_reports.survivor=survivor->pid;
+    CHECK(!ua_munmap(server->memory,(uint32_t)control,PAGE_SIZE));
+    CHECK(!native_command(server,GATE_SNAPSHOT,&generation) && !strcmp(native_command_failure,"control_write"));
+    native_step_record(GATE_SNAPSHOT,generation,native_command_failure);
+    print_diagnostics=false; native_reports.active=false;
+    desktop_remove(server,survivor); desktop_remove(owner,server); desktop_remove(proc_supervisor(),owner);
+    puts("captured production desktop/demo -> probe_f2_libc_report -> native_report: reparenting, new spawn group, first generation/cycle, mmap after TLS/surface, CONFIGURE and snapshot PASS");
+}
+
 int main(int argc, char **argv)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     controller.state = T_RUNNING; g_current = &controller;
     proc_init();
+    if ((argc==3 || argc==4) && !strcmp(argv[1],"--native-handshake")) {
+        test_captured_handshake(argv[2],argc==4 ? argv[3] : 0);
+        CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
+    }
     test_desktop_surfaces(); test_desktop_channels(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
-    test_native_reports(); test_native_controller();
+    test_native_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();
 #endif

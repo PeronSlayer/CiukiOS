@@ -132,9 +132,10 @@ void supervisor_poll(void)
     if (desktop_pid) {
         struct process *p = proc_find(desktop_pid);
         if (!p || p->state == PROC_STOPPING || p->state == PROC_ZOMBIE) {
+            uint32_t pid=desktop_pid;
             desktop_pid = 0;
             desktop_deaths++;
-            klog("[supervisor] desktop stopped; console ready deaths=%u", desktop_deaths);
+            klog("[supervisor] desktop stopped; console ready pid=%u status=%d deaths=%u", pid, p ? p->status : -1, desktop_deaths);
         }
     }
 }

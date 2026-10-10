@@ -225,6 +225,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$root/src/kernel/include" "$root/tests/host/proc/desktop_test.c" \
     "$root/tests/host/proc/signal_legacy.c" "$root/src/kernel/lib/sha256.c" \
+    "$root/src/kernel/lib/fmt.c" \
     "$root/src/kernel/probes/selector.c" \
     "-DCIUKI_DESKTOP_PAYLOAD_BIN=\"$out/desktop-payload.elf\"" -o "$out/desktop_test"
 "$out/desktop_test" "$out/desktop-payload.elf"
