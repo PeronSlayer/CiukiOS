@@ -243,3 +243,19 @@ and the evidence parser caps distinct (pid, tid, stream) identities at 64
 guest; the supplement passes in 128 s, the upstream run reaches `files.lua`
 after 68.7 s and fails its first assertion (`os.getenv"PATH"`, directive
 f2-18).
+
+## Fifteenth image: `622e1632…` (commit `3d969fb`, f1-22) and `abaa1064…` (commit `deb43ca`, f1-23)
+
+Runner cases without prefix on `qemu-t23`, image `622e1632…`: the six
+corruption cases `mount-bad-bpb`, `mount-dirty`, `mount-error-flag`,
+`mount-fat-divergence`, `mount-chain-corruption` and `mount-torn-sector`
+PASS with the deterministic FAT32 fixtures (mount refused with `-22`, or
+read-only with the expected reason and `EROFS` refusal, zero writes);
+`mount-crash-reboot` FAIL: boot 1 placed the marker but the write
+suspension was armed from launch, so the guest never reached `ARM
+action=crash_cut` (f1-22 follow-up). Image `abaa1064…`: `firmware_overrun`
+and `disallowed_io` PASS on all five profiles (records from the BIOS VM
+self-test: `timeout_result=-110 timeouts=1 disabled=1 later_result=-5`,
+`policy_result=0 denied_result=-1 disallowed=1`, PIC/PIT unchanged), and
+the eight `qemu-desktop-1998/2002` cases of `f1-input` (`registry`,
+`input-fault`, `input`, `framebuffer`) PASS. Host tests: 153 OK.
