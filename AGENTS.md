@@ -128,7 +128,11 @@ cheapest model and effort that fits:
 | `gpt-6-astra` | hardest problems: architecture critique, deep debugging, kernel core, V86/DPMI, filesystem write paths | `xhigh`–`max` |
 
 Claude picks the model and effort per task by its complexity and risk, and
-states both in the directive.
+states both in the directive. Owner directive, 2026-10-11: prefer
+`gpt-6.1-sol` (usually `xhigh` for kernel work) over `gpt-6-astra`, which
+costs much more; use Astra only when Sol has failed twice on the same
+problem or for a contract/architecture review the owner asks for, and say
+so in the directive.
 
 `ultra` only when the owner asks for it. Re-check the cache when models change.
 
