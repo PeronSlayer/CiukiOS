@@ -340,3 +340,15 @@ the tagline. On one boot the PS/2 input initialisation reported
 `input result=failed error=-5` and the desktop did not start; the next
 boot succeeded. Serial capture of these boots was not available, so the
 T4 records are still to be collected.
+
+## Twenty-first image: `9218d595…` (commit `6da9b9c`, f1-26 dirty-volume recovery)
+
+`f2-all` in one invocation (15:37–16:27): 186 PASS, the three
+`uart-absent-*` operator-confirmation cases, two physical `safe-menu-*`
+`not_run`; `mount-dirty` and `mount-crash-reboot` now pass with the
+recovery predicates. On the ThinkPad T23 (serial capture `a1b2c3d6`): the
+boot after an unclean power-off mounts C: read/write with
+`reason=dirty_recovered writes=4` and the boot log on disk; `f0:all`
+passes every F0 probe up to the deliberate `panic`; `f1:all` passes
+`registry` and stops at `input` (`case=setup backend=native error=-5`,
+directive f1-27).
