@@ -28,8 +28,12 @@ class LibcSmokeTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout)
         self.assertIn('CiukiOS libc smoke: 4294967297 1.25',result.stdout)
         self.assertIn('CiukiOS stderr smoke',result.stdout)
-        self.assertEqual(len(lines),3)
-        for line,name,order in zip(lines,['libc-smoke','atexit','destructor'],[2,3,4]):
+        # f2-13 added three clock reports (clock-monotonic, clock-cpu, sleep-interrupt).
+        clocks=[line.split()[0] for line in lines if line.split()[0] in ('case=clock-monotonic','case=clock-cpu','case=sleep-interrupt')]
+        self.assertEqual(sorted(clocks),['case=clock-cpu','case=clock-monotonic','case=sleep-interrupt'])
+        summaries=[line for line in lines if line.split()[0] in ('case=libc-smoke','case=atexit','case=destructor')]
+        self.assertEqual(len(lines),6);self.assertEqual(len(summaries),3)
+        for line,name,order in zip(summaries,['libc-smoke','atexit','destructor'],[2,3,4]):
             fields=dict(item.split('=',1) for item in line.split())
             self.assertEqual(fields['case'],name);self.assertEqual(fields['failures'],'0')
             self.assertEqual(fields['order'],str(order));self.assertGreater(int(fields['checks']),10000)
