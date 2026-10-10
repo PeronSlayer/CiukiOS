@@ -27,6 +27,8 @@
 struct ciuki_boot_info g_boot;
 static bool gate_simulation;
 static bool print_diagnostics;
+static bool routing_records;
+static unsigned record_seq;
 static char last_launch[241], last_step[241];
 static unsigned gate_progress, gate_victims, gate_restored, gate_interactions;
 
@@ -48,6 +50,11 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     CHECK(n >= 0 && n < (int)sizeof(extra));
     char record[256];
     CHECK(ksnprintf(record,sizeof(record),"CIUKI_TEST v=1 run=00000000 seq=4294967295 probe=%s event=%s%s%s",probe,event,n ? " " : "",extra)<=240);
+    if (routing_records) {
+        CHECK(ksnprintf(record,sizeof(record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s%s%s",++record_seq,probe,event,n ? " " : "",extra)<=240);
+        puts(record);
+        return;
+    }
     if (print_diagnostics) puts(record);
     if (strstr(extra,"case=launch ")) strcpy(last_launch,extra);
     if (strstr(extra,"case=step ")) strcpy(last_step,extra);

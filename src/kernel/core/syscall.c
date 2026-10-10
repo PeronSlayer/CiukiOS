@@ -11,7 +11,7 @@
 #include <ciuki/supervisor.h>
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
-extern void probe_f2_libc_report(struct task *, const char *, uint32_t) __attribute__((weak));
+extern bool probe_f2_libc_report(struct task *, const char *, uint32_t) __attribute__((weak));
 
 static int32_t sys_debug_write(uint32_t buf, uint32_t len)
 {
@@ -47,7 +47,11 @@ static int32_t sys_probe_report(uint32_t buf, uint32_t len)
     for (uint32_t i = 0; i < len; i++)
         if (kbuf[i] < 32 || kbuf[i] > 126)
             return -EINVAL;
-    if (probe_f2_libc_report) probe_f2_libc_report(g_current, kbuf, len);
+    /* Desktop call-3 summaries are controller input, not application streams.
+     * The hook consumes them by kernel task identity, including rejections;
+     * libc-smoke/app-gate still use their existing untrusted framing below. */
+    if (probe_f2_libc_report && probe_f2_libc_report(g_current, kbuf, len))
+        return 0;
     if (!supervisor_report(g_current, kbuf, len))
         probe_user_report(g_current, kbuf, len);
     return 0;
