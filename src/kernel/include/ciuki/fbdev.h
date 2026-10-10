@@ -7,6 +7,10 @@
 #include <stdbool.h>
 #include <ciuki/sync.h>
 
+#ifndef EBUSY
+#define EBUSY 16
+#endif
+
 #ifndef ENODEV
 #define ENODEV 19
 #endif
@@ -41,7 +45,18 @@ bool fbdev_rect_valid(const struct fb_rect *rect);
  * Source storage must remain readable and disjoint from the destination.
  * Live calls require thread context with IF=1 and serialize presenters
  * with a sleeping mutex, keeping IF=1.
- * Console synchronization needs lead plumbing (console.c is out of scope). */
+ * Console owns pixel rows [0, rows), registered once during console setup
+ * before live presentation by fbdev_console_region.
+ * On this uniprocessor, console_begin/end bracket a short irq_save section
+ * per text line; they never sleep or spin. Present/fill atomically claim
+ * overlapping rows while IF=1 and return -EBUSY if the console is drawing.
+ * Console skips pixels (retaining history) while a presenter owns its rows.
+ * Private shadow renderers are independent. Panic stays lock-free: no mutex,
+ * allocation or waiting is introduced; a preempted present may suppress pixels. */
+void fbdev_console_region(unsigned rows);
+bool fbdev_console_begin(void);
+void fbdev_console_end(void);
+/* Live damage operations: */
 int fbdev_present(const struct fb_surface *src, const struct fb_rect *dst);
 int fbdev_fill(const struct fb_rect *rect, uint32_t colour);
 /* Same production renderer for private shadow fixtures. These do not claim

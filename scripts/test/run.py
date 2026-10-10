@@ -18,7 +18,7 @@ import sys
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from evidence import Parser, EvidenceError, f2_metadata
+from evidence import Parser, EvidenceError, EvidenceNotRun, f2_metadata
 from loader_model import selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
@@ -33,7 +33,7 @@ def load_suite(name):
     """Resolve runner aliases and prerequisites once, in declared order."""
     names = REGRESSION_SUITES if name == 'all' else (*REGRESSION_SUITES, *F2_SUITES) if name == 'f2-all' else (name,)
     suite = {'schema_version':1, 'image':'full', 'cases':[]}
-    seen = set(); confirmations = set()
+    seen = set()
     def add(part_name, prerequisites=True):
         if part_name in seen:return
         part = load(ROOT/'tests/suites'/f'{part_name}.json')
@@ -41,7 +41,6 @@ def load_suite(name):
         if prerequisites:
             for required in part.get('prerequisites',[]):add(required)
         seen.add(part_name)
-        confirmations.update(part.get('operator_confirmation_cases',[]))
         additions = expand_cases(part)
         if part_name == 'f0-smoke':additions = [{**c, '_smoke':True} for c in additions]
         suite['cases'].extend(additions)
@@ -53,13 +52,20 @@ def load_suite(name):
             suite.setdefault('physical_cases',[]).extend(part.get('physical_cases',[]))
     for part_name in names:add(part_name, name != 'all')
     for case in suite['cases']:
-        if case.get('id') in confirmations:case['operator_confirmation'] = True
+        if operator_confirmation_case(case):case['operator_confirmation'] = True
     return suite
+
+
+def operator_confirmation_case(case):
+    """F0 panic without serial requires external screen evidence on any profile."""
+    return (case.get('probe') == 'panic' and case.get('evidence_sink') == 'screen' and
+            case.get('device_exceptions',{}).get('serial') == 'none')
 
 
 def failed_prerequisite(case, result):
     return result['outcome'] != 'pass' and not (
-        case.get('operator_confirmation') is True and result.get('operator_confirmation') is True)
+        (operator_confirmation_case(case) or case.get('operator_confirmation') is True) and
+        result.get('operator_confirmation') is True)
 
 
 def record_f2_result(result, parser):
@@ -714,6 +720,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['outcome']='pass';result['reason']='all declared predicates and host observations passed'
     except (OSError,ValueError,RuntimeError,subprocess.SubprocessError,KeyboardInterrupt) as e:
         result['reason']=str(e) or type(e).__name__
+        if isinstance(e,EvidenceNotRun):
+            result['outcome']='not_run';result['not_run_subcases']=parser.not_run_subcases
     finally:
         # Ownership is held until this sequence finishes, including verification.
         result['cleanup']=teardown(host,unit,process,qmp,cgroup)
@@ -900,7 +908,8 @@ def main(argv=None):
             host_evidence=None
             if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-')):
                 started=time.monotonic()
-                checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=180)
+                checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=180,
+                                       env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
                 output=checked.stdout+checked.stderr
                 if len(output)>res.LOG_CAP:raise res.Refusal('host fixture evidence exceeds log cap')
                 print(output.decode(errors='replace'),end='',flush=True)

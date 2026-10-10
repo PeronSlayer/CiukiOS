@@ -9,6 +9,11 @@ class EvidenceError(ValueError):
     pass
 
 
+class EvidenceNotRun(EvidenceError):
+    """Required subcases have no evidence; observed failures still fail."""
+    pass
+
+
 class ApplicationCapture:
     """Scan/hash the complete stream, retaining a bounded head and tail only.
 
@@ -131,6 +136,7 @@ class Parser:
         self.started = False
         self.terminal = None
         self.outcome = None
+        self.not_run_subcases = []
         self.application = ApplicationCapture()
 
     def feed(self, raw):
@@ -218,10 +224,14 @@ class Parser:
             raise EvidenceError('missing or unexpected terminal event')
         if expected['terminal'] == 'END' and self.terminal['status'] != 'PASS':
             raise EvidenceError('kernel reported FAIL')
+        self.not_run_subcases = []
         for predicate in expected.get('predicates', []):
             matches = [r for r in self.records if all(r.get(k)==str(v) for k,v in predicate.get('where',{}).items())]
             minimum = predicate.get('count', 1)
             if len(matches) < minimum or ('exact_count' in predicate and len(matches)!=predicate['exact_count']):
+                if not matches and predicate.get('missing') == 'not_run':
+                    self.not_run_subcases.append({'subcase':predicate['subcase'],'reason':'missing_required_record'})
+                    continue
                 raise EvidenceError('missing evidence: '+str(predicate))
             unique=predicate.get('unique')
             if unique and len({r.get(unique) for r in matches})!=len(matches):
@@ -272,4 +282,7 @@ class Parser:
                     op=relation['op']
                     if op=='eq' and left!=right or op=='ge' and left<right or op not in ('eq','ge'):
                         raise EvidenceError('numeric relation failed')
+        self.not_run_subcases.extend(expected.get('not_run_subcases',[]))
+        if self.not_run_subcases:
+            raise EvidenceNotRun('required subcases not_run: '+str(self.not_run_subcases))
         return True

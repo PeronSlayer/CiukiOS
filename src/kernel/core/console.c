@@ -6,6 +6,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
+#include <ciuki/fbdev.h>
 
 extern const uint8_t font_cfn_regular[];   /* 95 widths + 95 * 16 rows (u16 LE) */
 
@@ -33,6 +34,21 @@ static char hist[HIST_LINES][MAX_COLS + 1];
 static unsigned hist_head, hist_count;
 static char linebuf[MAX_COLS + 1];
 static unsigned linelen;
+static bool draw_enabled;
+
+static uint32_t line_begin(void)
+{
+    uint32_t flags = irq_save();
+    draw_enabled = con_kind != CON_LFB || fbdev_console_begin();
+    return flags;
+}
+
+static void line_end(uint32_t flags)
+{
+    if (con_kind == CON_LFB && draw_enabled)
+        fbdev_console_end();
+    irq_restore(flags);
+}
 
 static uint32_t pack(uint32_t rgb)
 {
@@ -62,6 +78,8 @@ static void draw_cell(unsigned col, unsigned row, char ch)
         vga[row * cols + col] = (uint16_t)(uint8_t)ch | 0x1F00;
         return;
     }
+    if (!draw_enabled)
+        return;
     uint32_t cf = pack(fg), cb = pack(bg);
     const uint8_t *rowsp = font_cfn_regular + 95;
     unsigned idx = (ch >= 32 && ch <= 126) ? (unsigned)(ch - 32) : ('?' - 32);
@@ -75,9 +93,12 @@ static void draw_cell(unsigned col, unsigned row, char ch)
 
 static void clear_screen(void)
 {
-    for (unsigned r = 0; r < rows; r++)
+    for (unsigned r = 0; r < rows; r++) {
+        uint32_t flags = line_begin();
         for (unsigned c = 0; c < cols; c++)
             draw_cell(c, r, ' ');
+        line_end(flags);
+    }
     cur_col = cur_row = 0;
 }
 
@@ -87,6 +108,7 @@ static void scroll(void)
     unsigned shown = rows - 1;
     unsigned n = hist_count < shown ? hist_count : shown;
     for (unsigned r = 0; r < rows; r++) {
+        uint32_t flags = line_begin();
         const char *s = "";
         if (r < n) {
             unsigned idx = (hist_head + HIST_LINES - n + r) % HIST_LINES;
@@ -97,6 +119,7 @@ static void scroll(void)
             draw_cell(c, r, s[c]);
         for (; c < cols; c++)
             draw_cell(c, r, ' ');
+        line_end(flags);
     }
     cur_row = n;
     cur_col = 0;
@@ -140,6 +163,7 @@ bool console_init_lfb(void)
     if (cols > MAX_COLS)
         cols = MAX_COLS;
     rows = height / CELL_H;
+    fbdev_console_region(rows * CELL_H);
     con_kind = CON_LFB;
     clear_screen();
     return true;
@@ -151,21 +175,27 @@ void console_write(const char *s, size_t n)
 {
     if (con_kind == CON_NONE)
         return;
-    for (size_t i = 0; i < n; i++) {
-        char ch = s[i];
-        if (ch == '\r')
-            continue;
-        if (ch == '\n' || cur_col >= cols) {
+    size_t i = 0;
+    while (i < n) {
+        if (cur_col >= cols || s[i] == '\n') {
+            uint32_t flags = irq_save();
             commit_line();
             cur_col = 0;
-            if (++cur_row >= rows)
-                scroll();
-            if (ch == '\n')
-                continue;
+            bool redraw = ++cur_row >= rows;
+            if (s[i] == '\n') i++;
+            irq_restore(flags);
+            if (redraw) scroll();
+            continue;
         }
-        if (linelen < MAX_COLS)
-            linebuf[linelen++] = ch;
-        draw_cell(cur_col++, cur_row, ch);
+        uint32_t flags = line_begin();
+        while (i < n && cur_col < cols && s[i] != '\n') {
+            char ch = s[i++];
+            if (ch == '\r') continue;
+            if (linelen < MAX_COLS)
+                linebuf[linelen++] = ch;
+            draw_cell(cur_col++, cur_row, ch);
+        }
+        line_end(flags);
     }
 }
 
@@ -183,12 +213,15 @@ void console_show_page(unsigned page, const char *header)
         return;
     unsigned per = rows - 1;
     unsigned first = (hist_head + HIST_LINES - hist_count) % HIST_LINES;
+    uint32_t flags = line_begin();
     unsigned c = 0;
     for (; c < cols && header[c]; c++)
         draw_cell(c, 0, header[c]);
     for (; c < cols; c++)
         draw_cell(c, 0, ' ');
+    line_end(flags);
     for (unsigned r = 0; r < per; r++) {
+        flags = line_begin();
         unsigned li = page * per + r;
         const char *s = li < hist_count ? hist[(first + li) % HIST_LINES] : "";
         unsigned k = 0;
@@ -196,5 +229,6 @@ void console_show_page(unsigned page, const char *header)
             draw_cell(k, r + 1, s[k]);
         for (; k < cols; k++)
             draw_cell(k, r + 1, ' ');
+        line_end(flags);
     }
 }

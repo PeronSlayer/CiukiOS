@@ -3,6 +3,7 @@
  * The host-side `runner` probe lives in scripts/test/.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include "selector.h"
 #include <ciuki/cpu.h>
 #include <ciuki/arch.h>
 #include <ciuki/mm.h>
@@ -854,78 +855,6 @@ static const struct probe_def probes[] = {
     { "localfault", probe_localfault }, { "syslife", probe_syslife }, { "fpu", probe_fpu },
 };
 
-static bool is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
-
-struct probe_selection {
-    unsigned phase;
-    char probe[24], run[9];
-    uint32_t flags;
-};
-
-/* f[012]:<probe-id> run=<8-hex> [platform=e500] [safe=1]; aliases only F0/F1. */
-static bool parse_selector(const char *s, unsigned len, struct probe_selection *selection)
-{
-    if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1' && s[1] != '2') || s[2] != ':')
-        return false;
-    for (unsigned j = 0; j < len; j++)
-        if ((uint8_t)s[j] < 32 || (uint8_t)s[j] > 126)
-            return false;
-    struct probe_selection parsed = { .phase = (unsigned)(s[1] - '0') };
-    unsigned i = 3, k = 0;
-    while (i < len && s[i] != ' ' && k + 1 < sizeof(parsed.probe))
-        parsed.probe[k++] = s[i++];
-    parsed.probe[k] = 0;
-    if (!k || i >= len || s[i] != ' ')
-        return false;
-    static const char *const f0_names[] = {
-        "boot", "bootinfo", "allocator", "protection", "isolation", "preempt",
-        "localfault", "syslife", "panic", "fpu", "runner", "all", "core"
-    };
-    static const char *const f1_names[] = {
-        "registry", "input", "input-fault", "framebuffer", "ata", "ata-fault",
-        "partition", "fat-read", "fat-write", "cache", "mount-crash", "safe", "bootlog", "all", "core"
-    };
-    static const char *const f2_names[] = {
-        "elf-load", "spawn-wait", "fd-table", "mmap", "signals-fault",
-        "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
-    };
-    const char *const *names = parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
-    unsigned count = parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
-    bool known = false;
-    for (unsigned n = 0; n < count; n++)
-        if (!strncmp(parsed.probe, names[n], sizeof(parsed.probe)))
-            known = true;
-    if (!known)
-        return false;
-    i++;
-    if (len - i < 12 || strncmp(s + i, "run=", 4) != 0)
-        return false;
-    for (unsigned j = 0; j < 8; j++) {
-        if (!is_hex(s[i + 4 + j]))
-            return false;
-        parsed.run[j] = s[i + 4 + j];
-    }
-    parsed.run[8] = 0;
-    i += 12;
-    /* optional suffixes, in order, each at most once */
-    if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0) {
-        if (!(g_boot.flags & CBI_F_SMBIOS_QEMU) || !(g_boot.flags & CBI_F_INPUT_FORCED))
-            return false;
-        parsed.flags |= CBI_F_INPUT_FORCED;
-        i += 14;
-    }
-    if (len - i >= 7 && strncmp(s + i, " safe=1", 7) == 0) {
-        if (!(g_boot.flags & CBI_F_SMBIOS_QEMU) || !(g_boot.flags & CBI_F_SAFE_MODE))
-            return false;
-        parsed.flags |= CBI_F_SAFE_MODE;
-        i += 7;
-    }
-    if (i != len)
-        return false;
-    *selection = parsed;
-    return true;
-}
-
 static __attribute__((noreturn)) void show_evidence_forever(void)
 {
     unsigned pages = console_pages();
@@ -937,6 +866,16 @@ static __attribute__((noreturn)) void show_evidence_forever(void)
         task_sleep_ms(8000);
     }
 }
+
+static void app_begin(const struct probe_selection *selection)
+{
+    memcpy(app_probe, selection->probe, sizeof(app_probe));
+    sha256_init(&app_digest);
+    kmutex_init(&app_lock);
+    app_bytes = 0;
+}
+
+static void app_end(void) { app_probe[0] = 0; }
 
 void probes_main(void *arg)
 {
@@ -950,7 +889,7 @@ void probes_main(void *arg)
             task_sleep_ms(60000);
     }
     struct probe_selection selection;
-    if (!parse_selector(g_boot.test_request, g_boot.test_request_len, &selection)) {
+    if (!probes_parse_selector(g_boot.test_request, g_boot.test_request_len, g_boot.flags, &selection)) {
         char shown[65];
         unsigned n = g_boot.test_request_len < 64 ? g_boot.test_request_len : 64;
         memcpy(shown, g_boot.test_request, n);
@@ -963,70 +902,12 @@ void probes_main(void *arg)
     drivers_init();
     klog("[selector] probe=%s platform=%s tsc_khz=%u", probe,
          (g_boot.flags & CBI_F_INPUT_FORCED) ? "e500" : "native", (uint32_t)g_tsc_per_ms);
-    bool all = !strncmp(probe, "all", 4);
-    bool core = !strncmp(probe, "core", 5);     /* every probe but panic */
-    if (selection.phase == 2) {
-        unsigned installed = (unsigned)(__f2probes_end - __f2probes_start);
-        bool ran = false;
-        for (const struct ciuki_f2_probe *p = __f2probes_start; p < __f2probes_end; p++) {
-            if (!strncmp(probe, p->name, sizeof(selection.probe))) {
-                memcpy(app_probe, selection.probe, sizeof(app_probe));
-                sha256_init(&app_digest);
-                kmutex_init(&app_lock);
-                app_bytes = 0;
-                p->run();
-                app_probe[0] = 0;
-                ran = true;
-                break;
-            }
-        }
-        if (!ran) {
-            rec_emit(probe, "BEGIN", 0);
-            rec_emit(probe, "READY", "table=f2 installed=%u", installed);
-            rec_emit(probe, "ERROR", "status=not_run reason=missing_probe");
-        }
-        show_evidence_forever();
-    }
-    if (selection.phase == 1) {
-        unsigned installed = (unsigned)(__f1probes_end - __f1probes_start);
-        bool ran = false;
-        for (const struct probe_def *p = __f1probes_start; p < __f1probes_end; p++) {
-            if (all || core || !strncmp(probe, p->name, sizeof(selection.probe))) {
-                int failed = p->fn();
-                ran = true;
-                if (failed && (all || core)) {
-                    for (const struct probe_def *next = p + 1; next < __f1probes_end; next++)
-                        rec_emit(next->name, "NOT_RUN", "reason=prerequisite_failed after=%s", p->name);
-                    show_evidence_forever();
-                }
-            }
-        }
-        if (!ran) {
-            rec_emit(probe, "BEGIN", 0);
-            rec_emit(probe, "READY", "table=f1 installed=%u", installed);
-            rec_emit(probe, "ERROR", "status=not_run reason=missing_probe");
-        }
-        show_evidence_forever();
-    }
-    int ran = 0;
-    for (unsigned i = 0; i < ARRAY_SIZE(probes); i++) {
-        if (all || core || !strncmp(probe, probes[i].name, 24)) {
-            int failed = probes[i].fn();
-            ran++;
-            if (failed && (all || core)) {
-                for (unsigned j = i + 1; j < ARRAY_SIZE(probes); j++)
-                    rec_emit(probes[j].name, "NOT_RUN", "reason=prerequisite_failed after=%s", probes[i].name);
-                if (all)
-                    rec_emit("panic", "NOT_RUN", "reason=prerequisite_failed after=%s", probes[i].name);
-                show_evidence_forever();
-            }
-        }
-    }
-    if (all || !strncmp(probe, "panic", 6)) {
-        probe_panic();
-        ran++;
-    }
-    if (!ran)
-        klog("[selector] unknown probe '%s'; no probe runs", probe);
+    const struct probe_tables tables = {
+        .f0 = probes, .f0_count = ARRAY_SIZE(probes),
+        .f1 = __f1probes_start, .f1_count = (unsigned)(__f1probes_end - __f1probes_start),
+        .f2 = __f2probes_start, .f2_count = (unsigned)(__f2probes_end - __f2probes_start),
+    };
+    const struct probe_hooks hooks = { app_begin, app_end, probe_panic };
+    probes_dispatch(&selection, &tables, &hooks);
     show_evidence_forever();
 }

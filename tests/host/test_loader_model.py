@@ -10,6 +10,14 @@ import loader_model as model
 
 
 class LoaderModelTests(unittest.TestCase):
+    def test_menu_safe_sources_are_monotonic(self):
+        config = model.boot_options('safe=1 safe=0')
+        self.assertTrue(model.menu_choice('N', config['safe']))
+        fw_cfg = model.selector('f1:safe run=12345678 safe=1', 'fw_cfg', True)
+        self.assertTrue(model.menu_choice('n', fw_cfg['safe']))
+        self.assertTrue(model.menu_choice('S'))
+        self.assertFalse(model.menu_choice('N'))
+
     def test_hardware_replay(self):
         for machine in ('t23','e500'):
             data=json.loads((ROOT/'tests/fixtures/hardware'/machine/'replay.json').read_text())
