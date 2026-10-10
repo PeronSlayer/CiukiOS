@@ -287,3 +287,6 @@ index 2; the exported volume shows an orphaned long-name part of
 `F109CUT.BIN` and the dirty bit, which the runner reports as an
 unclassified interrupted-state outcome and boot 2 is not attempted
 (directive f1-24). Host tests: 160 OK.
+`f0-core` on image `33a68c43…`: 92 of 92 PASS on the five profiles
+(`qemu-t23`, `qemu-e500`, `qemu-min128`, `qemu-desktop-1998`,
+`qemu-desktop-2002`).
