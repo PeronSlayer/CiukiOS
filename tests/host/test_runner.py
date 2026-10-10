@@ -140,6 +140,71 @@ class RunnerTests(unittest.TestCase):
         case={**self.case,'selector':'f0:boot run={run_id} platform=e500'}
         self.assertEqual(runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)[1],
                          'f0:boot run=12345678 platform=e500')
+
+    def test_bootlog_readonly_selector_and_real_record_predicates(self):
+        self.case=copy.deepcopy(next(c for c in runner.load(ROOT/'tests/suites/f1-fat32.json')['cases']
+                                     if c['id']=='bootlog-read-only'))
+        self.case['timeout']=2
+        self.assertFalse(self.case.get('fixtures'))
+        before={'event':'DATA','group':'bootlog','case':'before','prequalification_writes':'0',
+                'storage_calls':'0','queued':'106','limit':'131072'}
+        readonly={'event':'DATA','group':'bootlog','case':'readonly','disk_log':'unavailable',
+                  'result':'-30','write_count':'0','storage_calls':'0'}
+        metadata={'event':'DATA','group':'metadata','subcase':'complete','owner':'vfs',
+                  'generation':'0','errors':'0','gate':'complete','timing_domain':'icount'}
+        records=[{'event':'BEGIN'},before,readonly,metadata,{'event':'END','status':'PASS','error':'0'}]
+        result,directory=self.run_fake(records=records)
+        self.assertEqual(result['outcome'],'pass',result['reason'])
+        self.assertEqual(result['selector'],f"f1:bootlog run={result['run_id']} safe=1")
+        self.assertIn('name=opt/it.alcybercloud.ciukios/test,string='+result['selector'],result['qemu']['arguments'])
+        self.assertEqual(result['fixtures']['manifest'],[])
+        self.assertEqual(result['image']['sha256'],result['image']['sha256_after'])
+        self.assertFalse((directory/'run.qcow2').exists())
+        # An ordinary successful boot (as in f1-25) cannot satisfy readonly.
+        result,_=self.run_fake(records=[records[0],before,metadata,records[-1]])
+        self.assertEqual(result['outcome'],'fail')
+        self.assertTrue(runner.failed_prerequisite(self.case,result))
+        for index,field,value in ((1,'prequalification_writes','1'),(1,'storage_calls','1'),
+                                  (2,'result','0'),(2,'write_count','1'),(2,'storage_calls','1'),
+                                  (2,'disk_log','available'),(3,'generation','1'),(3,'errors','1')):
+            with self.subTest(field=field,index=index):
+                parser=Parser('12345678','bootlog')
+                broken=copy.deepcopy(records);broken[index][field]=value
+                for seq,record in enumerate(broken,1):
+                    parser.feed(('CIUKI_TEST v=1 run=12345678 seq=%06d probe=bootlog '%seq+
+                                 ' '.join(f'{k}={v}' for k,v in record.items())).encode())
+                with self.assertRaises(EvidenceError):parser.check(self.case['expected'])
+
+    def test_bootlog_readonly_position_operator_skip_and_f2_failure_gate(self):
+        cases=runner.load_suite('f2-all')['cases']
+        index=next(i for i,c in enumerate(cases) if c['id']=='bootlog-read-only')
+        first_f2=next(i for i,c in enumerate(cases) if c['selector'].startswith('f2:'))
+        operator=next(c for c in cases[:index] if c.get('operator_confirmation'))
+        readonly=cases[index];f2=cases[first_f2]
+        self.assertLess(index,first_f2)
+        self.assertFalse(readonly.get('operator_confirmation'))
+        self.assertFalse(runner.failed_prerequisite(operator,{'outcome':'not_run','operator_confirmation':True}))
+        self.assertTrue(runner.failed_prerequisite(readonly,{'outcome':'not_run','operator_confirmation':False}))
+        lock=self.root/'common.lock'
+        (self.root/'config').mkdir();(self.root/'config/toolchain.json').write_text(json.dumps({'qemu_machine':self.profile['machine']}))
+        profile={**self.profile,'icount':'shift=1,sleep=on'}
+        for outcome in ('pass','fail'):
+            calls=[];suite='fixture-'+outcome
+            def boot(root,suite,case,*args,**kwargs):
+                calls.append(case['id']);directory=self.root/'build/test-runs'/suite/case['id'];directory.mkdir(parents=True)
+                skipped=case['id']==operator['id']
+                return {'run_id':case['id'],'outcome':'not_run' if skipped else outcome if case['id']==readonly['id'] else 'pass',
+                        'reason':'operator evidence required' if skipped else 'fixture','operator_confirmation':skipped},directory
+            with self.subTest(outcome=outcome),patch.object(runner,'ROOT',self.root), \
+                 patch.object(runner,'load_suite',return_value={'image':'full','cases':[operator,readonly,f2]}), \
+                 patch.object(runner,'load',return_value=profile),patch.object(res,'common_lock',return_value=lock), \
+                 patch.object(runner.Host,'preflight',return_value=3*res.GIB),patch.object(runner,'run_case',side_effect=boot), \
+                 patch.object(runner.shutil,'which',return_value='fake'),patch.object(runner,'find_firmware',return_value=self.firmware), \
+                 patch('sys.stdout',new_callable=io.StringIO):
+                self.assertEqual(runner.main([suite,'--image',str(self.image)]),1)
+            self.assertEqual(calls,[operator['id'],readonly['id']]+([f2['id']] if outcome=='pass' else []))
+            summary=json.loads((self.root/'build/test-runs'/suite/'summary.json').read_text())
+            self.assertEqual([r['outcome'] for r in summary['cases']],['not_run',outcome,'pass' if outcome=='pass' else 'not_run'])
     def test_desktop_profile_arguments_and_same_backing_image(self):
         for name,cpu,ram,vga in (('qemu-desktop-1998','pentium2',128,'cirrus'),
                                  ('qemu-desktop-2002','athlon',512,'std')):
@@ -1158,7 +1223,8 @@ class F1RecordTests(unittest.TestCase):
         result['bootlog-cold']=[before,log,'case=cold_reboot writes=0 result=0',
                                 'case=qualification qualified_seq=0 first_log_write_seq=0 size=106 writes=0 flush_result=0',meta]
         result['bootlog-read-only']=[before,
-            'group=bootlog case=readonly disk_log=unavailable result=-30 write_count=0 storage_calls=0',meta]
+            'group=bootlog case=readonly disk_log=unavailable result=-30 write_count=0 storage_calls=0',
+            meta.replace('generation=1','generation=0')]
         return result
 
     def test_fat_cold_boot_and_crash_cut_predicates(self):

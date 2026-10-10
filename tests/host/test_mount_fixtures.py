@@ -3,6 +3,7 @@ import copy
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import struct
@@ -19,6 +20,129 @@ import resources as res
 
 ROOT = existing.ROOT
 EMPTY = {'size':0, 'sha256':hashlib.sha256(b'').hexdigest()}
+
+
+class BootlogSafeStorageTests(unittest.TestCase):
+    def test_safe_activation_reaches_real_unavailable_probe_without_storage_calls(self):
+        if not all(shutil.which(tool) for tool in ('clang', 'mkfs.fat', 'mcopy', 'mdir', 'fsck.fat')):
+            self.skipTest('storage host harness tools unavailable')
+        scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
+        case=next(c for c in runner.load(ROOT/'tests/suites/f1-fat32.json')['cases']
+                  if c['id']=='bootlog-read-only')
+        request=case['selector'].format(run_id='12345678')
+        self.assertTrue(runner.selector(request,'fw_cfg',True)['safe'])
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            directory=Path(directory)
+            manifest=runner.Host().fat_fixture({'fat_type':32,'seed':1},directory,0)
+            # Retain the existing fake-media storage harness, including its
+            # bounded record checks. Link production activation and mount code.
+            # The boot-only storage_init body is compiled unchanged, as in
+            # runtime_init_test.c; privileged timer/driver calls are host seams.
+            mount=(ROOT/'src/kernel/fs/mount.c').read_text()
+            begin=mount.index('void storage_init(void)\n')
+            end=mount.index('\n}\n',begin)+3
+            source=directory/'bootlog-safe.c'
+            source.write_text(r'''
+#define main storage_regression_main
+#define drivers_mount_get fixture_mount_get
+#define rec_emit fixture_rec_emit
+#include "tests/host/fs/test_storage.c"
+#undef main
+#undef drivers_mount_get
+#undef rec_emit
+#define storage_init unused_host_storage_init
+#include "src/kernel/fs/mount.c"
+#undef storage_init
+#include <ciuki/ata.h>
+#include <ciuki/work.h>
+#include <ciuki/task.h>
+#undef CLOCKS_PER_SEC
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
+#include <ciuki/files.h>
+#include <ciuki/clock.h>
+volatile uint64_t g_ticks;
+static unsigned ata_calls, ata_lookups, sequence;
+static bool initialized;
+static void storage_timer(void *arg) { (void)arg; CHECK(false); }
+int kwork_init(void) { CHECK(false); return -FS_EIO; }
+struct task *task_create_kernel(const char *n, void (*fn)(void *), void *arg, enum task_prio p)
+{ (void)n; (void)fn; (void)arg; (void)p; CHECK(false); return 0; }
+void task_start(struct task *t) { (void)t; CHECK(false); }
+int ata_init(void) { ata_calls++; return 0; }
+struct ata_device *ata_device_get(unsigned c, unsigned u)
+{ CHECK(c < 2 && u < 2); ata_lookups++; CHECK(!ata_calls); return 0; }
+int fbdev_init(void) { CHECK(false); return 0; }
+int i8042_init(void) { return 0; }
+int biosvm_init(void) { CHECK(false); return 0; }
+int fwinput_adapter_init(void) { CHECK(false); return 0; }
+unsigned registry_count(void) { CHECK(false); return 0; }
+const struct resource *registry_get(unsigned i) { (void)i; CHECK(false); return 0; }
+void file_clock_start(int64_t epoch, bool rtc) { (void)epoch; CHECK(rtc); }
+int files_bootstrap(struct vfs *vfs) { CHECK(vfs == &storage_get()->vfs); return 0; }
+void rec_emit(const char *probe, const char *event, const char *fmt, ...)
+{
+    char text[1024] = {0}; va_list ap; va_start(ap,fmt);
+    if (fmt) vsnprintf(text,sizeof(text),fmt,ap);
+    va_end(ap); fixture_rec_emit(probe,event,fmt ? "%s" : 0,text);
+    printf("CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s%s%s\n",
+           ++sequence,probe,event,fmt ? " " : "",text);
+}
+#include "src/kernel/core/init.c"
+''' + mount[begin:end] + r'''
+int main(int argc, char **argv)
+{
+    CHECK(argc == 3);
+    OK(fake_open(&media[0],argv[1]));
+    struct storage *s = start();
+    struct storage_volume *v = storage_volume(s,2);
+    /* A normal probe mount is read-only but does NOT enter readonly. */
+    CHECK(v && !v->error && v->fat.readonly && v->read_gate);
+    CHECK(v->fat.ro_reasons == FAT_RO_REQUEST);
+    CHECK(blkdev_durable(blkpart_device(&v->part)));
+    CHECK(!media[0].writes && !media[0].flushes);
+    stop(s,true); fake_close(&media[0]); bootlog_reset();
+    g_boot.flags = CBI_F_SAFE_MODE | CBI_F_TEXT_MODE | CBI_F_TEST_REQUEST | CBI_F_SMBIOS_QEMU;
+    g_boot.test_request_len = (uint16_t)strlen(argv[2]);
+    memcpy(g_boot.test_request,argv[2],g_boot.test_request_len);
+    drivers_init();
+    CHECK(state.safe && !state.ata_called && !state.optional_activations);
+    CHECK(!ata_calls && ata_lookups == STORAGE_DISKS);
+    CHECK(s->ready && !storage_volume(s,2) && !drivers_mount_get(2));
+    CHECK(s->vfs.generation[2] == 0);
+    OK(probe_bootlog());
+    struct bootlog_stats log; bootlog_snapshot(&log);
+    CHECK(!log.active && !log.writes && !log.storage_calls);
+    storage_destroy(s);
+    puts("PASS safe bootlog: ATA skipped, C absent, EROFS, zero writes/storage calls");
+    return 0;
+}
+''')
+            sources=['fs/fs_port.c','fs/cache.c','fs/partition.c','fs/path.c',
+                     'fs/fat.c','fs/vfs.c','core/bootlog.c','drivers/blkpart.c',
+                     'probes/fat_probes.c','lib/sha256.c','lib/fmt.c']
+            executable=directory/'bootlog-safe'
+            env={**os.environ,'TMPDIR':str(directory),'ASAN_OPTIONS':'detect_leaks=0'}
+            command=['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                     '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections',
+                     '-Wl,--gc-sections','-DFS_HOST','-D_POSIX_C_SOURCE=200809L','-pthread',
+                     '-I',str(ROOT),'-I',str(ROOT/'src/kernel/include'),'-I',str(ROOT/'src/kernel/fs'),
+                     str(source),*[str(ROOT/'src/kernel'/p) for p in sources],
+                     str(ROOT/'tests/host/fs/fake.c'),str(ROOT/'tests/host/fs/scan.c'),
+                     '-o',str(executable)]
+            built=subprocess.run(command,capture_output=True,text=True,env=env,timeout=60)
+            self.assertEqual(built.returncode,0,built.stdout+built.stderr)
+            ran=subprocess.run([str(executable),manifest['path'],request],
+                               capture_output=True,text=True,env=env,timeout=30)
+            self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
+            parser=runner.Parser('12345678','bootlog')
+            for line in ran.stdout.splitlines():
+                if line.startswith('CIUKI_TEST '):parser.feed(line.encode())
+            self.assertTrue(parser.check(case['expected']))
+            self.assertIn('PASS safe bootlog: ATA skipped, C absent, EROFS, zero writes/storage calls',ran.stdout)
+            self.assertEqual(runner.sha(manifest['path']),manifest['sha256'])
 
 
 class CrashCheckerTests(unittest.TestCase):
