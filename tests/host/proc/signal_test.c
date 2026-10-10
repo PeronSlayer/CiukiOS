@@ -14,6 +14,7 @@
 #define CR0_EM (1u << 2)
 #define CR0_TS (1u << 3)
 #define CR0_NE (1u << 5)
+#define CR0_AM (1u << 18)
 #define CR4_OSFXSR (1u << 9)
 #define CR4_OSXMMEXCPT (1u << 10)
 static uint32_t fake_cr0, fake_cr4;
@@ -29,7 +30,13 @@ void fpu_fxsave(void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(p, hardware_fp, 5
 void fpu_fxrstor(const void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(hardware_fp, p, 512); hardware_restores++; }
 void fpu_fnsave(void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(p, hardware_fp, 108); hardware_saves++; memset(hardware_fp, 0, 108); }
 void fpu_frstor(const void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(hardware_fp, p, 108); hardware_restores++; }
-void fpu_reset_state(int sse) { CHECK(!sse); memset(hardware_fp, 0, sizeof(hardware_fp)); }
+void fpu_reset_state(int sse)
+{
+    CHECK(!sse);
+    CHECK((fake_cr0 & (CR0_MP | CR0_NE | CR0_AM | CR0_EM | CR0_TS)) ==
+          (CR0_MP | CR0_NE | CR0_AM));
+    memset(hardware_fp, 0, sizeof(hardware_fp));
+}
 #include "../../../src/kernel/proc/sigframe.c"
 #include "../../../src/kernel/core/fpu.c"
 #include "../../../src/kernel/proc/signal.c"
@@ -246,8 +253,22 @@ static void test_fp(void)
         for (unsigned i = 0; i < 8; i++) CHECK(!memcmp(back + 32 + i * 16, fx + 32 + i * 16, 10));
     }
     for (unsigned mode = 0; mode < 2; mode++) {
-        g_cpu_fxsr = mode; fpu_init();
-        CHECK((fake_cr0 & (1u << 18)) && !(fake_cr4 & (CR4_OSFXSR | CR4_OSXMMEXCPT)));
+        /* Intel SDM Vol. 3A sections 2.5, 9.2.1 and Chapter 6's #NM/#MF/#AC
+         * entries: normalize firmware state before first x87 use,
+         * then arm TS for lazy ownership. Preserve paging/WP/other bits. */
+        for (unsigned flags = 0; flags < 32; flags++) {
+            uint32_t firmware = 0x80010011u;
+            if (flags & 1) firmware |= CR0_MP;
+            if (flags & 2) firmware |= CR0_NE;
+            if (flags & 4) firmware |= CR0_AM;
+            if (flags & 8) firmware |= CR0_EM;
+            if (flags & 16) firmware |= CR0_TS;
+            fake_cr0 = firmware;
+            fake_cr4 = (1u << 7) | CR4_OSFXSR | CR4_OSXMMEXCPT;
+            g_cpu_fxsr = mode; fpu_init();
+            CHECK(fake_cr0 == ((firmware & ~CR0_EM) | CR0_MP | CR0_NE | CR0_AM | CR0_TS));
+            CHECK(fake_cr4 == (1u << 7));
+        }
         struct task a = { .fpu_area = task_fp[0] }, b = { .fpu_area = task_fp[1] };
         g_current = &a; fpu_handle_nm(); CHECK(fpu_is_owner(&a));
         hardware_fp[mode ? 32 : 28] = 0x5a;
