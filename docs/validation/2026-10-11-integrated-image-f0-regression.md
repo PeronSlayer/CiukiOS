@@ -193,3 +193,24 @@ handshake without a diagnostic record (directive f2-16). Earlier image
 `libc-smoke`, `crash-isolation` (stand-in) and `fd-table` (kernel verdict,
 with the FAT16 fixture) PASS in single boots; `app-gate` reports
 `missing_probe` (no probe was registered, directive f2-15).
+
+## Thirteenth image: `dae098ef…` (commit `b09a614`, f2-13 and f2-15 merged) and `a4806d0c…` (commit `2326aee`, f2-16 diagnostics)
+
+Runner cases on `qemu-t23` without prefix (diagnostic signal for the
+aligned F2 suites, image `dae098ef…`): `elf-load` PASS, `mmap` PASS;
+`spawn-wait` and `signals-fault` ended with the kernel `END status=PASS`
+but failed two predicates written against older captures (`fault`
+`address ge 1` while the null-pointer victims fault at address 0; the
+`fault-repair` indices shifted by one after the f2-14 TCG `#AC` fallback,
+index 6 = alignment step, index 7 = `#MF`). With the predicates corrected
+(commit `13f96e2`) both cases PASS through the runner on the same image;
+`fd-table`, `threads-wait` and `libc-smoke` were not reached in those
+partial runs. `app-gate` double-faults in the probe task while building the
+metadata records (`PANIC vector=8 esp=f0007000 cr2=f0006ffc`: kernel stack
+overflow, directive f2-17). On image `a4806d0c…` the desktop-mode
+`crash-isolation` run reports `case=launch … survivor=0 control=00000000
+stage=0 ticks=360 reason=setup:survivor:9` and the desktop exits with
+status 256: the gate setup fails at the survivor spawn with `EBADF`
+(directive f2-16, second round). Host tests on commit `cd32ee6`: 131 OK
+after the alignment fixture and the SDK smoke test were updated for the
+passing `signals-fault` capture and the three clock reports.
