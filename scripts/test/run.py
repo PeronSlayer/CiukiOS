@@ -23,6 +23,8 @@ from evidence import Parser as RecordParser
 from loader_model import selector as base_selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
+import fat_fixtures
+from mount_fixtures import place_marker, WriteGate
 
 ROOT=Path(__file__).resolve().parents[2]
 REGRESSION_SUITES = ('f0-smoke','f0-core','f0-panic','f0-runner',
@@ -663,12 +665,20 @@ class Host:
         os.utime(source,(946684800,946684800))
         copied=self.checker(['mcopy','-i',str(image),str(source),'::/Ciuki long fixture.txt'],directory)
         if copied['returncode']:raise res.Refusal('mtools fixture copy failed')
+        fat_fixtures.normalize_seed(image, fixture.get('corruption')=='torn-sector')
         listing=self.checker(['mdir','-i',str(image),'::/'],directory)
         if listing['returncode']:raise res.Refusal('mtools fixture listing failed')
         checked=self.checker(['fsck.fat','-n',str(image)],directory)
         if checked['returncode']:raise res.Refusal('independent fixture fsck failed')
-        return {'path':str(image),'sha256':sha(image),'size':image.stat().st_size,'geometry':geometry,
-                'listing':listing,'checker':checked}
+        manifest={'path':str(image),'size':image.stat().st_size,'geometry':geometry,
+                  'listing':listing,'checker':checked,'seed_sha256':sha(image)}
+        if fixture.get('corruption'):
+            manifest['corruption']=fat_fixtures.corrupt(image,fixture['corruption'])
+            manifest['patched_sectors']=manifest['corruption']['patched_sectors']
+            manifest['corruption_checker']=self.checker(['fsck.fat','-n',str(image)],directory)
+            manifest['checker_classification']=fat_fixtures.validate_checker(fixture['corruption'],manifest['corruption_checker'])
+        manifest['sha256']=sha(image)
+        return manifest
     def sector_digest(self,image,directory,lba,count,fmt):
         # qemu-img dd opens its input read-only; export only the measured sectors.
         if type(lba) is not int or type(count) is not int or lba<0 or not 1<=count<=128:
@@ -797,7 +807,11 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         disk['file']={'driver':'blkdebug','config':str(overlay.parent/'blkdebug.conf'),
                       'image':{'driver':'file','filename':str(overlay)}}
     disk_format='raw' if read_fault else 'qcow2'
-    drive='file='+('json:'+json.dumps(disk,separators=(',',':')) if case.get('fault') else str(overlay))
+    if case.get('crash_cut'):
+        if cache!='writethrough' or case.get('fault'):raise res.Refusal('gated cut requires writethrough and no injected I/O error')
+        disk={'driver':'blkdebug','node-name':'ciuki-cut','image':disk}
+        disk_format='blkdebug'
+    drive='file='+('json:'+json.dumps(disk,separators=(',',':')) if case.get('fault') or case.get('crash_cut') else str(overlay))
     selector(request,'fw_cfg',True)
     devices=case.get('device_exceptions',{})
     args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
@@ -822,6 +836,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         args+=['-audiodev','none,id=silent','-device',profile['audio']+',audiodev=silent']
     for index,disk in fixture_disks(case):
         args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache]
+    if case.get('crash_cut'):args=['stdbuf','-oL',*args]
     return args,request
 
 
@@ -898,10 +913,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         'com1':case.get('device_exceptions',{}).get('serial','file'),'audio':profile.get('audio','none')}}}
     result['build_git_revision']=result['build_manifest']['revision'];result['build_dirty']=result['build_manifest']['dirty']
     actions=Actions(case.get('actions',[]))
+    write_gate=WriteGate(case['crash_cut']['index']) if case.get('crash_cut') else None
     result.update(stimulus={'sha256':digest_json(case.get('actions',[])),'declared':case.get('actions',[]),'observed':[]},
                   fixtures={'sha256':digest_json(case.get('fixtures',[])),'declared':case.get('fixtures',[])},
                   fault=case.get('fault'),cut_point=None,disk_cache_mode=case.get('disk_cache','writeback'),
-                  checkers=[],durability_observations=[],patch_manifest=[],digests=[])
+                  checkers=[],durability_observations=[],patch_manifest=[],marker_manifest=[],digests=[])
     result['operator_confirmation'] = False
     result['operator_confirmation_required'] = case.get('operator_confirmation',False)
     directory.mkdir(parents=True,exist_ok=False)
@@ -918,6 +934,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         blkdebug_config(case,overlay.parent)
         if case.get('patches'):
             result['patch_manifest']=patch_overlay(host,image,overlay,directory,case['patches'])
+        if case.get('preboot_marker'):
+            if shared_overlay is not None:raise res.Refusal('crash marker is placed only before the first boot')
+            result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
         result['overlay_path']=str(overlay)
         result['fixtures']=prepare_fixtures(host,case,directory)
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
@@ -975,6 +994,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     remaining=res.LOG_CAP-target.tell()
                     target.write(chunk[:remaining]);target.flush()
                     if len(chunk)>remaining:raise EvidenceError('serial/stderr log cap reached')
+                    if write_gate:write_gate.feed(chunk,time.monotonic())
             if qmp is None and (directory/'q').exists():
                 qmp=host.connect_qmp(Path('/proc/self/fd')/str(dirfd)/'q',qlog)
                 version=qmp.greeting['QMP']['version']
@@ -984,6 +1004,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 result['initial_blockstats']=writes(qmp.command('query-blockstats'))
                 if case['probe']=='panic':
                     result['blockstats_baseline']='ARM receipt for all I/O; before CPU start for writes'
+                if write_gate:write_gate.arm(qmp)
                 qmp.command('cont')
                 # Catch ARM received in the same batch before QMP connected.
                 if any(r['event']=='ARM' for r in parser.records) and armed_stats is None:
@@ -1012,9 +1033,17 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     result['desktop_interaction']=desktop_interaction(parser.records)
                     result['desktop_screen']=observe_desktop_screen(screen_before,screen_after)
                     screen_before.unlink();screen_after.unlink()
-            cut=None if case.get('desktop_screen') and screen_armed_at is not None and not screen_before.exists() and 'desktop_screen' not in result else actions.step(parser,qmp,now)
+            # A trace is serialized before the subsequent request can reach
+            # blkdebug. Drain the FIFO before resuming that suspended request;
+            # never select a prefix from a partially collected serial batch.
+            serial_pending=write_gate and (pending or select.select([fd],[],[],0)[0])
+            gate_ready=write_gate.step(parser,qmp,now) if write_gate and qmp and not serial_pending else not write_gate
+            cut=None if not gate_ready or case.get('desktop_screen') and screen_armed_at is not None and not screen_before.exists() and 'desktop_screen' not in result else actions.step(parser,qmp,now)
             if cut:
                 parser.check(case['expected']);result['cut_point']=actions.observed[-1]
+                if write_gate:
+                    start=case['checks']['offset']//512
+                    result['cut_point']={'type':'cut',**write_gate.evidence(parser.records,start)}
                 host.kill_scope(unit,'SIGKILL')
                 result['durability_observations'].append({'mode':'guest-termination','device_power_loss':False})
                 break
@@ -1096,11 +1125,16 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         result['stimulus']['observed_sha256']=digest_json(actions.observed)
         result['durability_observations'].extend(r for r in parser.records if r.get('group') in ('durability','barrier','persisted'))
         result['observed']=parser.records
+        for fixture in result['fixtures'].get('manifest',[]):
+            if fixture.get('corruption') and fixture.get('path'):
+                fixture['sha256_after']=sha(fixture['path'])
+                if fixture['sha256_after']!=fixture['sha256']:
+                    result['outcome']='fail';result['reason']='corrupted fixture changed during read-only mount case'
         if request.startswith('f2:'):
             try:record_f2_result(result,parser)
             except (OSError,ValueError,RuntimeError) as e:
                 result['outcome']='fail';result['reason']=str(e)
-        if result['outcome']=='pass' and (case['probe']=='fd-table' or case.get('checks') or case.get('digests')):
+        if result['outcome']=='pass' and (case['probe']=='fd-table' or case.get('checks') or case.get('digests') or case.get('crash_observation')):
             try:
                 if not result['cleanup']['clean']:raise EvidenceError('QEMU must stop before overlay export')
                 if case['probe']=='fd-table':
@@ -1110,6 +1144,12 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         raise EvidenceError('fd-table requires filesystem checker and guest digest declarations')
                 if case.get('digests'):check_digests(host,overlay,directory,case['digests'],result)
                 if case.get('checks'):check_overlay(host,overlay,directory,case['checks'],result)
+                if case.get('crash_observation'):
+                    extent=case['crash_observation']
+                    if extent.get('marker_sector'):
+                        sectors=sorted({result['marker_manifest'][0]['sector'],*result['cut_point']['durable_sectors']})
+                    else:sectors=extent['sectors']
+                    result['crash_overlay']=[{'lba':lba,**host.sector_digest(overlay,directory,lba,1,'qcow2')} for lba in sectors]
             except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e:
                 result['outcome']='fail';result['reason']=str(e)
         result['image']['sha256_after']=sha(image)
@@ -1227,7 +1267,7 @@ def check_overlay(host,overlay,directory,checks,result):
         result['checkers'].append({'kind':'fsck.fat',**checked})
         allowed=checks.get('fsck_exit_codes',[0])
         if checked['returncode'] not in allowed:raise EvidenceError('undeclared fsck.fat result')
-        if checked['returncode']!=0:
+        if checked['returncode']!=0 or checks.get('classify_all_output'):
             patterns=checks.get('interrupted_patterns',[])
             lines=[line for line in checked['output'].splitlines() if line.strip()]
             if not patterns or any(not any(re.fullmatch(p,line) for p in patterns) for line in lines):
@@ -1242,6 +1282,11 @@ def check_overlay(host,overlay,directory,checks,result):
             result['checkers'].append({'kind':'mtools-hash',**checked})
             if checked['returncode'] or checked['output_sha256']!=item['sha256']:
                 raise EvidenceError('mtools file digest mismatch')
+        for path in checks.get('empty_files',[]):
+            measured=host.file_digest(volume,directory,path.removeprefix('::'))
+            result['checkers'].append({'kind':'mtools-empty','path':path,**measured})
+            if measured!={'size':0,'sha256':hashlib.sha256(b'').hexdigest()}:
+                raise EvidenceError('undeclared interrupted file outcome: '+path)
     result['durability_observations'].append({'read_only_export':True,'qemu_stopped':True,'checker_passed':True})
 
 
@@ -1256,6 +1301,8 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
     shared=None;sequence=[];directories=[];baseline=sha(image)
     for index,boot in enumerate(boots):
         selected={**case,**boot};selected.pop('boots',None)
+        if index and case.get('crash_sequence') and sequence[0]['marker_manifest']:
+            selected['crash_observation']={'sectors':[r['lba'] for r in sequence[0]['crash_overlay']]}
         selected['id']=case['id']+f'-boot-{index+1}'
         result,directory=_run_boot(root,suite,selected,profile,image,executable,firmware,host,keep,qemu_img,
                                    shared_overlay=shared,retain_overlay=True)
@@ -1266,8 +1313,28 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
                          'observed':result['observed'],'cut_point':result['cut_point'],'cleanup':result['cleanup'],
                          'stimulus':result['stimulus'],'fixtures':result['fixtures'],'fault':result['fault'],
                          'disk_cache_mode':result['disk_cache_mode'],'patch_manifest':result['patch_manifest'],
+                         'marker_manifest':result['marker_manifest'],'crash_overlay':result.get('crash_overlay'),
                          'checkers':result['checkers'],'digests':result['digests'],'durability_observations':result['durability_observations']})
         if result['outcome']!='pass' or result['image']['sha256']!=baseline:break
+    if result['outcome']=='pass' and case.get('crash_sequence'):
+        try:
+            first,last=sequence[0],sequence[-1]
+            point=first['cut_point'];reboot=[r for r in last['observed'] if r.get('case')=='crash_reboot']
+            if not point or point.get('index')!=case['crash_sequence']['index'] or not point.get('next_write_suspended'):
+                raise EvidenceError('missing exact gated crash cut')
+            if len(reboot)!=1 or reboot[0].get('lost')!='0' or reboot[0].get('scan_corrupt')!='0' or reboot[0].get('writes')!='0':
+                raise EvidenceError('undeclared crash reboot scan outcome')
+            if first['crash_overlay']!=last['crash_overlay'] or not first['crash_overlay']:
+                raise EvidenceError('reboot changed the interrupted directory sector')
+            reports=[[r for r in b['checkers'] if r.get('kind')=='fsck.fat'] for b in (first,last)]
+            if any(len(r)!=1 for r in reports) or reports[0][0]['output']!=reports[1][0]['output']:
+                # Export paths differ between boots; compare classified lines.
+                normalized=[[re.sub(r'^.*check-volume\.raw:', 'volume:', line) for line in r[0]['output'].splitlines()] for r in reports if len(r)==1]
+                if len(normalized)!=2 or normalized[0]!=normalized[1]:raise EvidenceError('crash checker outcomes differ between boots')
+            result['crash_comparison']={'index':point['index'],'durable_sectors':point['durable_sectors'],
+                                        'scan_corrupt':0,'lost':0,'reboot_writes':0,'directory_unchanged':True,'checkers_match':True}
+        except (KeyError,ValueError,RuntimeError) as e:
+            result['outcome']='fail';result['reason']=str(e)
     if result['outcome']=='pass':shared.unlink(missing_ok=True)
     if shared.exists() or result['outcome']=='pass':
         first=json.loads((directories[0]/'result.json').read_text());first['artifacts'].pop('run.qcow2',None)

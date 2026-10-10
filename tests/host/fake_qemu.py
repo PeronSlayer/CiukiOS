@@ -15,11 +15,14 @@ if '--version' in sys.argv:
     print('QEMU emulator version 11.0.0 (scripted host fixture)');sys.exit(0)
 scenario_path=Path(os.environ['CIUKI_FAKE_SCRIPT'])
 scenario=json.loads(scenario_path.read_text())
+boot=0
 if scenario.get('boot_records'):
     counter=scenario_path.with_suffix('.count')
     boot=int(counter.read_text()) if counter.exists() else 0
     counter.write_text(str(boot+1))
     scenario['records']=scenario['boot_records'][boot]
+gates=scenario.get('boot_gates',[[]]*(boot+1))[boot]
+gate_index=0;gate_armed=False
 selector=sys.argv[sys.argv.index('-fw_cfg')+1].split('string=',1)[1]
 run_id=selector.split('run=')[1][:8];probe=selector.split(':')[1].split()[0]
 Path('fake-arguments.json').write_text(json.dumps(sys.argv[1:]))
@@ -62,10 +65,23 @@ def emit(items=None):
               *scenario.get('after_application',[])])
 
 stream=conn.makefile('rb');started=False
+
+def suspend_gate():
+    emit(gates[gate_index])
+    print("blkdebug: Suspended request 'ciuki-write'",flush=True)
+
 for raw in stream:
     request=json.loads(raw);cmd=request['execute'];reply={}
     with Path('fake-qmp.jsonl').open('a') as log:log.write(json.dumps(request)+'\n')
     if cmd=='query-status':reply={'status':'running','running':True}
+    elif cmd=='stop' and gates:raise AssertionError('QMP stop drains suspended requests')
+    elif cmd=='human-monitor-command':
+        text=request['arguments']['command-line'];reply=''
+        if 'break pwritev ciuki-write' in text:gate_armed=True
+        elif 'resume ciuki-write' in text:
+            assert gate_armed, 'next breakpoint must precede resume'
+            gate_armed=False;gate_index+=1
+        else:raise AssertionError(text)
     elif cmd=='query-blockstats':reply=[{'device':'ide0','stats':{'wr_bytes':scenario.get('writes',0) if started else 0,'wr_operations':0,'flush_operations':0}}]
     elif cmd=='quit' and not scenario.get('ignore_quit'):
         Path('fake-stopped').touch()
@@ -80,8 +96,14 @@ for raw in stream:
             # Real firmware answers a host reset with one hard reboot of its own.
             conn.sendall(('{"timestamp":{"seconds":%d,"microseconds":500000},"event":"RESET","data":{"guest":true,"reason":"guest-reset"}}\n'%int(time.time())).encode())
         started=True
-        if scenario.get('flood') or scenario.get('application_bytes'):threading.Thread(target=emit,daemon=True).start()
+        if gates and gate_index==0 and not scenario.get('gate_started'):
+            scenario['gate_started']=True
+            assert gate_armed;gate_armed=False;suspend_gate()
+        elif gates:pass
+        elif scenario.get('flood') or scenario.get('application_bytes'):threading.Thread(target=emit,daemon=True).start()
         else:emit()
+    if cmd=='human-monitor-command' and 'resume ciuki-write' in request['arguments']['command-line']:
+        if gate_index<len(gates):suspend_gate()
     if cmd=='input-send-event':
         count=scenario.setdefault('received_input',0)+1;scenario['received_input']=count
         if count==scenario.get('finish_after_input'):

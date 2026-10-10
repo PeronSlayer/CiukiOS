@@ -1121,14 +1121,17 @@ class F1RecordTests(unittest.TestCase):
         result['fat-write']=write
         result['fat-write-cold']=['case=cold_reboot flush_result=0 checker=host_required',*files,meta]
         for name,error,reason in [('bad-bpb',-22,0),('dirty',0,5),('error-flag',0,9),
-                                  ('fat-divergence',0,17),('chain-corruption',0,33),('torn-sector',0,17)]:
+                                  ('fat-divergence',0,17),('chain-corruption',0,33),('torn-sector',0,33)]:
             result['mount-'+name]=[
                 'case=partition disk=1 error=0',
                 f'case=mount drive=D error={error} reasons={reason} mode={"rw" if error else "ro"} lost=0 write_refusal={error or -30} writes=0',
                 'case=coverage fixtures=1 cut_selected=0 cut_reboot=0 checker=host_required',meta]
         result['mount-crash-reboot']=['case=crash_reboot reasons=5 lost=0 scan_corrupt=0 checker=host_required writes=0',
+                                      'case=crash_refusal drive=C write_refusal=-30 writes=0',
                                       'case=coverage fixtures=0 cut_selected=1 cut_reboot=1 checker=host_required',meta]
-        result['mount-crash-cut']=['event=ARM action=crash_cut marker=F109CUT.ARM workload=replace_rename bytes=8192']
+        result['mount-crash-cut']=['event=ARM action=crash_cut marker=F109CUT.ARM workload=replace_rename bytes=8192',
+                                 'case=cut index=1 barrier=0 action=write lba=2050 result=0 durable=1',
+                                 'case=cut index=2 barrier=0 action=write lba=2050 result=0 durable=1']
         before='group=bootlog case=before prequalification_writes=0 storage_calls=0 queued=106 limit=131072'
         log='case=file id=0 name_hex=2f53595354454d2f4c4f47532f424f4f542e4c4f47 size=106 sha256='+'d'*64
         result['bootlog']=[before,'case=capture source=klog connected=1 captured=200',log,
