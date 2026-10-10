@@ -112,3 +112,9 @@ PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/fbdev_test.c" -o "$out/fbdev_test"
 "$out/fbdev_test"
+
+# F2 production parser, mappings, wait queues, stack and lifecycle with fake
+# physical memory/scheduling; no guest execution or host runner lock.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/proc/proc_test.c" -o "$out/proc_test"
+"$out/proc_test"
