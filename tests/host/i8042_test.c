@@ -50,7 +50,7 @@ static bool replay_input;
 static unsigned replay_cycles, record_count, record_pass, record_deferred, record_ready;
 static size_t longest_record;
 static bool print_records;
-static unsigned firmware_selftests, firmware_records, absent_records;
+static unsigned firmware_selftests, firmware_records, absent_records, refused_records;
 static int fake_selftest_result;
 static unsigned host_allocations;
 static char last_log[256], expected_end[128];
@@ -325,6 +325,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     if (strstr(extra, "case=firmware_overrun ") || strstr(extra, "case=disallowed_io ")) {
         firmware_records++;
         if (strstr(extra, "status=not_run reason=firmware_backend_absent")) absent_records++;
+        if (strstr(extra, "status=not_run reason=firmware_selftest_qemu_only")) refused_records++;
     }
     if (!strcmp(event, "READY")) record_ready++;
     if (!strcmp(event, "END")) {
@@ -364,6 +365,7 @@ int biosvm_selftest(struct biosvm_selftest_report *out)
 {
     CHECK(fake_fw_state == BIOSVM_READY && !fixture && host_survivor);
     firmware_selftests++;
+    if (!(g_boot.flags & CBI_F_SMBIOS_QEMU)) return -V86_EPERM;
     *out = (struct biosvm_selftest_report){
         .pic_before = { 0xF9, 0xEF }, .pic_after = { 0xF9, 0xEF },
         .pit_before = 0x34, .pit_after = 0x34,
@@ -887,15 +889,17 @@ static void test_native_fault_probe(void)
            record_pass == passes + 1 ? "PASS" : "FAIL", sizeof(struct controller));
 }
 
-static void test_firmware_fault_probe(bool absent, bool failed)
+static void test_firmware_fault_probe(bool absent, bool failed, bool refused)
 {
     reset_native();
     select_fault("f1:input-fault run=12ab34cd platform=e500");
-    g_boot.flags |= CBI_F_SMBIOS_QEMU | CBI_F_INPUT_FORCED;
+    g_boot.flags |= CBI_F_INPUT_FORCED;
+    if (!refused) g_boot.flags |= CBI_F_SMBIOS_QEMU;
     g_boot.input_policy = CBI_INPUT_FIRMWARE;
     fake_fw_state = absent ? BIOSVM_OFF : BIOSVM_READY;
     fake_selftest_result = failed ? -EFAULT : 0;
     unsigned calls = firmware_selftests, records = firmware_records, skipped = absent_records;
+    unsigned refused_before = refused_records;
     struct registry_stats before, after;
     registry_snapshot(&before);
     if (failed) snprintf(expected_end, sizeof(expected_end), "status=FAIL reason=fault_or_survivor");
@@ -904,13 +908,14 @@ static void test_firmware_fault_probe(bool absent, bool failed)
     fake_selftest_result = 0;
     registry_snapshot(&after);
     CHECK(firmware_selftests == calls + !absent);
-    CHECK(firmware_records == records + (absent ? 2 : 5));
+    CHECK(firmware_records == records + (absent ? 2 : refused ? 4 : 5));
     CHECK(absent_records == skipped + (absent ? 2 : 0));
+    CHECK(refused_records == refused_before + (refused ? 2 : 0));
     CHECK(!fixture && !host_survivor && !hw.reads && !hw.writes && !pic_changes);
     CHECK(before.claims == after.claims && before.live == after.live && before.quarantines == after.quarantines);
     for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
     printf("i8042 firmware fault records: PASS (backend=%s selftest=%s, survivor and lease cleanup)\n",
-           absent ? "absent" : "ready", failed ? "failed" : "passed");
+           absent ? "absent" : refused ? "selftest-refused" : "ready", failed ? "failed" : "passed");
 }
 
 static void test_fault_probe_refusals(void)
@@ -1034,9 +1039,10 @@ int main(int argc, char **argv)
     if (argc == 2) {
         bool absent = !strcmp(argv[1], "firmware-absent");
         bool failed = !strcmp(argv[1], "firmware-failed");
-        CHECK(absent || failed || !strcmp(argv[1], "firmware-records"));
+        bool refused = !strcmp(argv[1], "firmware-refused");
+        CHECK(absent || failed || refused || !strcmp(argv[1], "firmware-records"));
         print_records = true;
-        test_firmware_fault_probe(absent, failed);
+        test_firmware_fault_probe(absent, failed, refused);
         return failures ? 1 : 0;
     }
     test_policy_and_lifecycle();
@@ -1047,9 +1053,10 @@ int main(int argc, char **argv)
     test_queue_and_stimulus();
     test_probe_records();
     test_native_fault_probe();
-    test_firmware_fault_probe(false, false);
-    test_firmware_fault_probe(true, false);
-    test_firmware_fault_probe(false, true);
+    test_firmware_fault_probe(false, false, false);
+    test_firmware_fault_probe(true, false, false);
+    test_firmware_fault_probe(false, true, false);
+    test_firmware_fault_probe(false, false, true);
     test_fault_probe_refusals();
     test_firmware_mapping();
     i8042_fault_end();

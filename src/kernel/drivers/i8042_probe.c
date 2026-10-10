@@ -332,18 +332,25 @@ int probe_input_fault(void)
          * its PIC/PIT snapshots are the sole physical accesses here. */
         struct biosvm_selftest_report report = { 0 };
         int result = biosvm_selftest(&report);
-        rec_emit("input-fault", "DATA", "case=firmware_overrun result=%d timeout_result=%d timeouts=%u disabled=%u later_result=%d",
-                 result, report.timeout_result, report.timeouts, report.disabled, report.later_result);
-        rec_emit("input-fault", "DATA", "case=disallowed_io result=%d policy_result=%d denied_result=%d disallowed=%u pic_unchanged=%u pit_unchanged=%u mappings_ok=%u",
-                 result, report.policy_result, report.denied_result, report.disallowed,
-                 report.pic_unchanged, report.pit_unchanged, report.mappings_ok);
-        /* Packed PIC masks: master first, slave second, fixed-width hex. */
-        rec_emit("input-fault", "DATA", "case=disallowed_io pic_before=%02x%02x pic_after=%02x%02x pit_before=%02x pit_after=%02x",
-                 report.pic_before[0], report.pic_before[1], report.pic_after[0], report.pic_after[1],
-                 report.pit_before, report.pit_after);
+        bool qemu = (g_boot.flags & CBI_F_SMBIOS_QEMU) != 0;
+        bool qemu_only_refusal = result == -V86_EPERM && !qemu;
+        if (qemu_only_refusal) {
+            rec_emit("input-fault", "DATA", "case=firmware_overrun status=not_run reason=firmware_selftest_qemu_only");
+            rec_emit("input-fault", "DATA", "case=disallowed_io status=not_run reason=firmware_selftest_qemu_only");
+        } else {
+            rec_emit("input-fault", "DATA", "case=firmware_overrun result=%d timeout_result=%d timeouts=%u disabled=%u later_result=%d",
+                     result, report.timeout_result, report.timeouts, report.disabled, report.later_result);
+            rec_emit("input-fault", "DATA", "case=disallowed_io result=%d policy_result=%d denied_result=%d disallowed=%u pic_unchanged=%u pit_unchanged=%u mappings_ok=%u",
+                     result, report.policy_result, report.denied_result, report.disallowed,
+                     report.pic_unchanged, report.pit_unchanged, report.mappings_ok);
+            /* Packed PIC masks: master first, slave second, fixed-width hex. */
+            rec_emit("input-fault", "DATA", "case=disallowed_io pic_before=%02x%02x pic_after=%02x%02x pit_before=%02x pit_after=%02x",
+                     report.pic_before[0], report.pic_before[1], report.pic_after[0], report.pic_after[1],
+                     report.pit_before, report.pit_after);
+        }
         bool overrun_alive = survivor_progress(&survivor, "firmware_overrun");
         bool io_alive = survivor_progress(&survivor, "disallowed_io");
-        ok = ok && !result && overrun_alive && io_alive;
+        ok = ok && (!result || qemu_only_refusal) && overrun_alive && io_alive;
     }
     survivor_finish(&survivor);
     return input_verdict("input-fault", ok, "fault_or_survivor");

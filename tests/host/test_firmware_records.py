@@ -130,6 +130,24 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeo
             with self.subTest(case=case['id']), self.assertRaises(EvidenceError):
                 parser.check(case['expected'])
 
+    def test_qemu_only_selftest_refusal_is_not_run_and_survivors_continue(self):
+        parser = self.records('firmware-refused')
+        self.assertEqual(parser.terminal['status'], 'PASS')
+        refused = [r for r in parser.records
+                   if r.get('reason') == 'firmware_selftest_qemu_only']
+        self.assertEqual({r['case'] for r in refused}, {'firmware_overrun', 'disallowed_io'})
+        self.assertEqual(len(refused), 2)
+        self.assertTrue(all(r['status'] == 'not_run' for r in refused))
+        survivors = [r for r in parser.records if 'survivor_progress' in r and
+                     r.get('case') in {'firmware_overrun', 'disallowed_io'}]
+        self.assertEqual({r['case'] for r in survivors},
+                         {'firmware_overrun', 'disallowed_io'})
+        self.assertTrue(all(int(r['survivor_progress']) > 0 and r['survivor_ok'] == '1'
+                            for r in survivors))
+        for case in self.cases:
+            with self.subTest(case=case['id']), self.assertRaises(EvidenceError):
+                parser.check(case['expected'])
+
     def test_selftest_failure_reaches_probe_verdict(self):
         parser = self.records('firmware-failed')
         self.assertEqual(parser.terminal['status'], 'FAIL')
