@@ -26,10 +26,12 @@ struct signal_result {
     uint32_t saved_mask, fp_digest, tls, release, peer_tid;
     uint32_t release_count, completion, handler_completion;
     int32_t handler_remaining;
+    uint32_t ac_fallback;
 };
 _Static_assert(offsetof(struct signal_result, peer_tid) == 144, "private NASM result layout");
 _Static_assert(offsetof(struct signal_result, handler_completion) == 156, "private release result layout");
 _Static_assert(offsetof(struct signal_result, handler_remaining) == 160, "private remainder result layout");
+_Static_assert(offsetof(struct signal_result, ac_fallback) == 164, "private alignment result layout");
 
 /* Fresh supervisor-owned descriptors; the final-release boundary posts a
  * catcher while close/dup2 is executing, then yields before completing. No
@@ -127,6 +129,8 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
     signal_result_read(survivor, &before);
     uint64_t deadline = g_ticks + 2000;
     bool injected = false, completed = false;
+    uint32_t inject_tid = 0, inject_mask = 0, inject_signal = 0;
+    int inject_error = 0;
     while (g_ticks < deadline && p->state != PROC_ZOMBIE) {
         if (signal_result_read(p, &r)) {
             if (mode == 0 && r.stage > 50 && r.stage <= 57) {
@@ -145,9 +149,14 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
                 (mode != 13 || proc_thread_find(p, r.tid)->task->state == T_BLOCKED) &&
                 (mode == 9 || g_ticks >= (uint64_t)r.first_tick + 10)) {
                 uint32_t sig = mode == 9 || mode == 12 ? SIGKILL : mode == 11 ? SIGTERM : mode == 13 ? SIGUSR1 : SIGUSR2;
+                inject_tid = r.tid;
+                inject_mask = (uint32_t)proc_thread_find(p, r.tid)->mask;
+                inject_signal = sig;
                 int err = proc_signal_thread_kill(p, r.tid, sig);
-                rec_emit("signals-fault", "DATA", "case=%s part=inject pid=%u tid=%u signal=%u mask=%08x expected=0 observed=%d",
-                         name, p->pid, r.tid, sig, (uint32_t)proc_thread_find(p, r.tid)->mask, err);
+                inject_error = err;
+                /* Yield without serial output: at 38400 baud this record
+                 * outlasts the remaining 10 ms of a 20 ms nanosleep. The
+                 * UP waiter must observe the pending signal before expiry. */
                 injected = !err;
             }
             if (!injected && mode == 14 && r.stage == 3 && r.peer_tid) {
@@ -169,10 +178,16 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
         task_sleep_ms(1);
     }
     bool zombie = signal_wait_zombie(p);
+    if (inject_tid)
+        rec_emit("signals-fault", "DATA", "case=%s part=inject pid=%u tid=%u signal=%u mask=%08x expected=0 observed=%d",
+                 name, p->pid, inject_tid, inject_signal, inject_mask, inject_error);
     bool pass = zombie && (uint32_t)p->status == expected_status && !r.errors &&
                 (expected_status || completed);
-    if (mode == 0)
+    if (mode == 0) {
         pass = pass && r.entries == 7 && r.returns == 7;
+        rec_emit("signals-fault", "DATA", "case=fault-repair part=alignment tcg_fallback=%u hardware_required_vector=17",
+                 r.ac_fallback);
+    }
     if (mode == 1)
         pass = pass && r.entries == 2 && r.returns == 2;
     if (mode == 10)

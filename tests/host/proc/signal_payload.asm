@@ -46,6 +46,7 @@ org CIUKI_IMAGE_BASE - CIUKI_PAGE_SIZE
 %define COMPLETION (DATA + 152)
 %define HANDLER_COMPLETION (DATA + 156)
 %define HANDLER_REMAIN (DATA + 160)
+%define AC_FALLBACK (DATA + 164)
 %define PAIR (DATA + 176)
 %define MESSAGE (DATA + 640)
 %define ACTION (DATA + 256)
@@ -204,6 +205,32 @@ faults:
     popfd
 .ac:
     mov eax, [DATA + 1]
+    ; Intel requires #AC here. QEMU 11 TCG's scalar loads omit the check.
+    ; Accept that omission only for its exact CPUID signature, and exercise
+    ; another real fault with AC set so the seven-delivery checks stay strict.
+    ; Evidence/limitations: docs/validation/2026-10-09-f0/README.md (f2-14).
+    pushad
+    mov eax, 0x40000000
+    xor ecx, ecx
+    cpuid
+    cmp eax, 0x40000001
+    jb .ac_missing
+    cmp ebx, 0x54474354             ; "TCGT"
+    jne .ac_missing
+    cmp ecx, 0x43544743             ; "CGTC"
+    jne .ac_missing
+    cmp edx, 0x47435447             ; "GTCG"
+    jne .ac_missing
+    mov dword [AC_FALLBACK], 1
+    jmp .ac_fallback
+.ac_missing:
+    inc dword [ERRORS]             ; hardware must deliver SIGBUS/#AC
+.ac_fallback:
+    popad
+    FAULT 14, SIGSEGV, 4, SEGV_MAPERR, .ac_page_fault, CIUKI_MMAP_LIMIT - CIUKI_PAGE_SIZE
+    mov dword [RESUME], .ac_done
+.ac_page_fault:
+    mov eax, [CIUKI_MMAP_LIMIT - CIUKI_PAGE_SIZE]
 .ac_done:
     pushfd
     pop eax
