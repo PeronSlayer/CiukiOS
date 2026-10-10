@@ -298,6 +298,39 @@ MUST be explicitly accounted for; unexplained growth MUST fail. Physical RAM,
 reserved/free totals and application commitments MUST reconcile with boot-memory's
 ledger on every target. No allocation probe MUST write into reserved memory.
 
+**[F2, f2-19 ledger rule]** For `app-gate`, processes, zombies, all thread
+counts, fds, mappings, backing credits, open descriptions, surfaces, messages,
+grants, channels, page tables and namespace pins/waiters MUST return to their
+baseline. Live volume-backed named identities MAY survive close: report their
+before/after counts and allocator-class bytes (including the heap header),
+and subtract only this measured byte delta from kernel in-use growth. Report
+storage blocks before/after, their configured baseline bound and workspace
+pages; the current `cache_init()` preallocates the entire pool and runtime I/O
+reuses its blocks, so its physical-page and heap-byte deltas MUST be zero.
+`cache_accounted=1` and `restored=1` require zero unexplained physical-page and
+kernel-byte remainders and no other namespace-node growth. This follows the
+[VFS lifetime distinction between last close, cached identity deallocation
+and unmount](https://docs.kernel.org/filesystems/vfs.html), checked against
+`fs/cache.c`, `core/kheap.c` and `proc/posixpath.c`. In this source state,
+`vfs_detach()` expires identities; quiescent `vfs_destroy()` calls
+`files_detach()` to free them and the namespace, as the host teardown check
+proves. Report `heap_pages_before/after`, their delta, heap bytes in use
+and peak before/after from the read-only `kheap_snapshot()` ledger: class-pool
+pages are counted only on successful `refill()` allocations and retained by
+`kfree()` for reuse. Subtract only this measured pool-page delta from
+`pages_delta`; it does not excuse kernel bytes in use beyond retained named
+identities. This separates backing pages from live objects, consistent with
+[slab allocation](https://kernel.org/doc/html/latest/mm/slab.html) and
+[kernel memory accounting](https://www.kernel.org/doc/html/v6.8/filesystems/proc.html#meminfo),
+checked against `core/kheap.c`. The supplied 32-page growth passes only when
+the heap pool independently grows by 32 pages; any remainder MUST fail.
+Process tables/backing MUST restore: `release_threads()` calls `ua_destroy()`
+and `as_destroy()` frees the page directory and user tables. ELF snapshots
+are temporary and closed after load; the storage pool remains preallocated.
+Ledger metadata arrays `storage`, `identities` and `heap` are respectively
+`[blocks, workspace_pages]`, `[live_named_nodes, class_bytes]` and
+`[pool_pages, bytes_in_use, peak_bytes_in_use]`.
+
 ### Lua application evidence
 
 **[F2]** `app-gate` MUST first run the SDK-built Lua executable with argv

@@ -243,15 +243,47 @@ static uint64_t gate_progress(struct process *desktop, bool native)
 struct gate_outcome { int status; uint32_t assertions; };
 struct gate_resources {
     uint32_t free_pages, kernel_bytes, descriptions, live_threads, retained_threads, waiters;
+    struct kheap_ledger heap;
     struct file_ledger files;
+    uint32_t identities, identity_bytes, cache_blocks, cache_workspace_pages;
 };
+/* Match core/kheap.c: in-use bytes include the eight-byte allocation header
+ * and are charged to the 32..2048 power-of-two class, not sizeof(px_node).
+ * Physical class-pool pages have their own measured heap ledger; never
+ * infer their ownership from a change in in-use bytes. */
+static uint32_t gate_identity_size(void)
+{
+    uint32_t bytes = 32;
+    while (bytes < sizeof(struct px_node) + 2 * sizeof(uint32_t)) bytes <<= 1;
+    return bytes;
+}
 static void gate_resources_snapshot(struct gate_resources *r)
 {
     memset(r,0,sizeof(*r));
-    r->free_pages = pmm_free_count(); r->kernel_bytes = (uint32_t)kheap_in_use();
+    r->free_pages = pmm_free_count();
+    kheap_snapshot(&r->heap); r->kernel_bytes = (uint32_t)r->heap.in_use;
     r->descriptions = file_description_count();
     struct px_node *cwd = proc_supervisor()->cwd;
-    if (cwd) files_snapshot(cwd->space,&r->files);
+    if (cwd) {
+        struct px_namespace *space = cwd->space;
+        fs_lock_take(&space->vfs->lock);
+        for (struct px_node *n = space->nodes; n; n = n->next) {
+            r->files.nodes++; r->files.pins += n->refs;
+            /* Only live volume names have the contract's retained lifetime.
+             * Unlinked/expired or synthetic-node growth is not exempt. */
+            r->identities += n->linked && n->volume;
+        }
+        for (struct file_description *d = space->descriptions; d; d = d->next) r->files.descriptions++;
+        r->identity_bytes = r->identities * gate_identity_size();
+        fs_lock_drop(&space->vfs->lock);
+    }
+    struct storage *storage = storage_get();
+    if (storage) {
+        fs_lock_take(&storage->cache.lock);
+        r->cache_blocks = storage->cache.blocks;
+        r->cache_workspace_pages = storage->cache.workspace_pages;
+        fs_lock_drop(&storage->cache.lock);
+    }
     for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) {
         struct proc_thread *t = proc_thread_slot(i);
         if (!t) continue;
@@ -260,6 +292,43 @@ static void gate_resources_snapshot(struct gate_resources *r)
         r->waiters += t->word_wait.queued || (t->task && t->task->state == T_BLOCKED && !t->task->wake_tick);
     }
 }
+struct gate_attribution {
+    int32_t pages_delta, kernel_bytes_delta, identity_bytes_delta;
+    int32_t heap_pages_delta;
+    int32_t pages_remainder, kernel_bytes_remainder;
+    bool cache_bounded, cache_accounted;
+};
+static struct gate_attribution gate_attribute(const struct gate_resources *before,
+                                               const struct gate_resources *after)
+{
+    struct gate_attribution a = {0};
+    a.pages_delta = (int32_t)before->free_pages - (int32_t)after->free_pages;
+    a.kernel_bytes_delta = (int32_t)after->kernel_bytes - (int32_t)before->kernel_bytes;
+    a.identity_bytes_delta = (int32_t)after->identity_bytes - (int32_t)before->identity_bytes;
+    a.heap_pages_delta = (int32_t)after->heap.pages - (int32_t)before->heap.pages;
+    /* cache_init allocates every block and workspace page before the gate;
+     * cache_read/write reuse slots. Its configured bound is the baseline
+     * block count. No runtime physical-page or heap-byte growth is possible
+     * in this implementation. Heap class pools retain pages after kfree;
+     * credit only growth measured by their allocation-site ledger. */
+    a.cache_bounded = before->cache_blocks == after->cache_blocks &&
+                      before->cache_workspace_pages == after->cache_workspace_pages;
+    a.pages_remainder = a.pages_delta - a.heap_pages_delta;
+    a.kernel_bytes_remainder = a.kernel_bytes_delta - a.identity_bytes_delta;
+    a.cache_accounted = a.cache_bounded && !a.pages_remainder && !a.kernel_bytes_remainder &&
+        (int32_t)after->files.nodes - (int32_t)before->files.nodes ==
+        (int32_t)after->identities - (int32_t)before->identities;
+    return a;
+}
+static bool gate_resources_restored(const struct gate_resources *before,
+                                    const struct gate_resources *after,
+                                    const struct gate_attribution *a)
+{
+    return a->cache_accounted && before->descriptions == after->descriptions &&
+        before->files.descriptions == after->files.descriptions && before->files.pins == after->files.pins &&
+        before->live_threads == after->live_threads && before->retained_threads == after->retained_threads &&
+        before->waiters == after->waiters;
+}
 static unsigned gate_ledger_format(char *out, unsigned capacity, const struct proc_ledger *p,
                                   const struct desktop_ledger *d, const struct gate_resources *r)
 {
@@ -267,11 +336,14 @@ static unsigned gate_ledger_format(char *out, unsigned capacity, const struct pr
      * actual snapshots; maximum-width values still fit the 1024-byte JSON. */
     return (unsigned)ksnprintf(out,capacity,
         "{\"proc\":[%u,%u,%u,%u,%u,%u,%u],\"desktop\":[%u,%u,%u,%u,%u,%u],"
-        "\"free_pages\":%u,\"kernel_bytes\":%u,\"files\":[%u,%u,%u,%u],\"native\":[%u,%u,%u]}",
+        "\"free_pages\":%u,\"kernel_bytes\":%u,\"files\":[%u,%u,%u,%u],\"native\":[%u,%u,%u],"
+        "\"storage\":[%u,%u],\"identities\":[%u,%u],\"heap\":[%u,%u,%u]}",
         p->processes,p->threads,p->zombies,p->handles,p->extents,p->backing,p->tables,
         d->descriptions,d->surfaces,d->pages,d->channels,d->messages,d->grants,
         r->free_pages,r->kernel_bytes,r->files.nodes,r->files.descriptions,r->files.pins,r->descriptions,
-        r->live_threads,r->retained_threads,r->waiters);
+        r->live_threads,r->retained_threads,r->waiters,
+        r->cache_blocks,r->cache_workspace_pages,r->identities,r->identity_bytes,
+        r->heap.pages,(unsigned)r->heap.in_use,(unsigned)r->heap.peak);
 }
 static bool gate_run(struct process *owner, struct process *desktop, bool native, bool supplement,
                      uint64_t deadline, struct gate_memory *peak, struct gate_outcome *outcome)
@@ -367,8 +439,9 @@ int probe_f2_app_gate(void)
     if (pass && gate_live(desktop->pid) && g_ticks < deadline) supplement = gate_run(owner,desktop,native,true,deadline,&extra,&extra_result);
     proc_snapshot(&final); desktop_snapshot(&objects_after);
     gate_resources_snapshot(&resources_after);
+    struct gate_attribution attribution = gate_attribute(&resources_before,&resources_after);
     bool restored = !memcmp(&baseline,&final,sizeof(baseline)) && !memcmp(&objects_before,&objects_after,sizeof(objects_before)) &&
-                    !memcmp(&resources_before,&resources_after,sizeof(resources_before));
+                    gate_resources_restored(&resources_before,&resources_after,&attribution);
     rec_emit(GATE_NAME,"DATA","group=resources processes_delta=%d zombies_delta=%d threads_delta=%d fds_delta=%d",
              (int)final.processes-(int)baseline.processes,(int)final.zombies-(int)baseline.zombies,
              (int)final.threads-(int)baseline.threads,(int)final.handles-(int)baseline.handles);
@@ -378,16 +451,37 @@ int probe_f2_app_gate(void)
     rec_emit(GATE_NAME,"DATA","group=resources descriptions_delta=%d surfaces_delta=%d messages_delta=%d",
              (int)objects_after.descriptions-(int)objects_before.descriptions,(int)objects_after.surfaces-(int)objects_before.surfaces,
              (int)objects_after.messages-(int)objects_before.messages);
+    rec_emit(GATE_NAME,"DATA","group=resources tables_delta=%d desktop_pages_delta=%d channels_delta=%d grants_delta=%d",
+             (int)final.tables-(int)baseline.tables,(int)objects_after.pages-(int)objects_before.pages,
+             (int)objects_after.channels-(int)objects_before.channels,(int)objects_after.grants-(int)objects_before.grants);
+    rec_emit(GATE_NAME,"DATA","group=resources namespace_descriptions_delta=%d",
+             (int)resources_after.files.descriptions-(int)resources_before.files.descriptions);
     rec_emit(GATE_NAME,"DATA","group=resources pages_delta=%d kernel_bytes_delta=%d file_descriptions_delta=%d",
-             (int)resources_before.free_pages-(int)resources_after.free_pages,
-             (int)resources_after.kernel_bytes-(int)resources_before.kernel_bytes,
+             attribution.pages_delta,attribution.kernel_bytes_delta,
              (int)resources_after.descriptions-(int)resources_before.descriptions);
+    rec_emit(GATE_NAME,"DATA","group=resources heap_pages_before=%u heap_pages_after=%u heap_pages_delta=%d",
+             resources_before.heap.pages,resources_after.heap.pages,attribution.heap_pages_delta);
+    rec_emit(GATE_NAME,"DATA","group=resources heap_bytes_before=%u heap_bytes_after=%u heap_peak_before=%u heap_peak_after=%u",
+             (unsigned)resources_before.heap.in_use,(unsigned)resources_after.heap.in_use,
+             (unsigned)resources_before.heap.peak,(unsigned)resources_after.heap.peak);
     rec_emit(GATE_NAME,"DATA","group=resources live_threads_delta=%d retained_threads_delta=%d waiters_delta=%d",
              (int)resources_after.live_threads-(int)resources_before.live_threads,
              (int)resources_after.retained_threads-(int)resources_before.retained_threads,
              (int)resources_after.waiters-(int)resources_before.waiters);
     rec_emit(GATE_NAME,"DATA","group=resources cache_nodes_before=%u cache_nodes_after=%u cache_accounted=%u",
-             resources_before.files.nodes,resources_after.files.nodes,resources_before.files.nodes == resources_after.files.nodes);
+             resources_before.files.nodes,resources_after.files.nodes,attribution.cache_accounted);
+    rec_emit(GATE_NAME,"DATA","group=resources cache_blocks_before=%u cache_blocks_after=%u cache_blocks_bound=%u cache_bounded=%u",
+             resources_before.cache_blocks,resources_after.cache_blocks,resources_before.cache_blocks,attribution.cache_bounded);
+    rec_emit(GATE_NAME,"DATA","group=resources cache_workspace_before=%u cache_workspace_after=%u cache_pages_delta=0 cache_bytes_delta=0",
+             resources_before.cache_workspace_pages,resources_after.cache_workspace_pages);
+    rec_emit(GATE_NAME,"DATA","group=resources identities_before=%u identities_after=%u identity_bytes_delta=%d",
+             resources_before.identities,resources_after.identities,attribution.identity_bytes_delta);
+    rec_emit(GATE_NAME,"DATA","group=resources identity_nodes_delta=%d namespace_nodes_delta=%d identity_unit_bytes=%u",
+             (int)resources_after.identities-(int)resources_before.identities,
+             (int)resources_after.files.nodes-(int)resources_before.files.nodes,gate_identity_size());
+    rec_emit(GATE_NAME,"DATA","group=resources pages_remainder=%d kernel_bytes_remainder=%d namespace_pins_delta=%d",
+             attribution.pages_remainder,attribution.kernel_bytes_remainder,
+             (int)resources_after.files.pins-(int)resources_before.files.pins);
     static char ledgers[1024];
     unsigned used = (unsigned)ksnprintf(ledgers,sizeof(ledgers),"{\"baseline\":");
     used += gate_ledger_format(ledgers+used,sizeof(ledgers)-used,&baseline,&objects_before,&resources_before);

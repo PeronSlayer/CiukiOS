@@ -65,5 +65,12 @@ void *kmalloc(size_t size);
 void *kzalloc(size_t size);
 void kfree(void *p);
 size_t kheap_in_use(void);
+/* Class-pool pages retained for reuse; class bytes include headers/padding.
+ * Peak is the maximum bytes in use since kheap_init(). Read-only snapshot. */
+struct kheap_ledger {
+    uint32_t pages;
+    size_t in_use, peak;
+};
+void kheap_snapshot(struct kheap_ledger *out);
 
 #endif
