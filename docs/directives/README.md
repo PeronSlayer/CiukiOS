@@ -53,7 +53,7 @@ evidence and merges.
 | [f2-15-app-gate-probe](f2-15-app-gate-probe.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (probe registered last in the F2 order through the build list, provenance sidecar, supplement path reconciled); QEMU evidence by the lead pending |
 
 | [f1-22-mount-crash-fixtures](f1-22-mount-crash-fixtures.md) | F1 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (runner attaches no fixture for the `mount-*` injection declarations; crash cut never implemented) |
-| [f2-17-app-gate-double-fault](f2-17-app-gate-double-fault.md) | F2 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (kernel stack overflow in the probe task while building the metadata records: double fault at the stack guard) |
+| [f2-17-app-gate-double-fault](f2-17-app-gate-double-fault.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (frames 2,180/2,348/1,280 → 668/276/256 bytes; `-Wframe-larger-than` 4 KiB kernel-wide, 1 KiB for the probe and supervisor; guarded 8 KiB stack host regression); QEMU evidence pending |
 | [f1-23-firmware-overrun-records](f1-23-firmware-overrun-records.md) | F1 | gpt-6.1-sol / high | in progress 2026-10-11 (`firmware_overrun`/`disallowed_io` declared not_run: `biosvm_selftest` has no record emitter; gates the desktop-profile cases) |
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
