@@ -34,6 +34,7 @@ evidence and merges.
 | [f1-07b-bios-vm-followup](f1-07b-bios-vm-followup.md) | F1 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (71,160 V86 checks) |
 | [f2-08-desktop-process](f2-08-desktop-process.md) | F2 | gpt-6.1-sol / xhigh | written; starts after f2-05 |
 | [f1-10-suite-alignment-and-loader-safe](f1-10-suite-alignment-and-loader-safe.md) | F1 | gpt-6.1-sol / high | written; starts when QEMU is free |
+| [f1-11-activation-records](f1-11-activation-records.md) | F1 | gpt-6.1-sol / high | issued 2026-10-11 (f0-smoke regression on the f1-08 image) |
 
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
