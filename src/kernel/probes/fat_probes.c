@@ -66,7 +66,9 @@ static int digest_record(const char *probe, unsigned id, struct vfs_table *table
     int e = storage_file_digest(table, path, digest, &size);
     if (e) return e;
     sha256_hex(digest, hex);
-    rec_emit(probe, "DATA", "case=file id=%u size=%u sha256=%s", id, size, hex);
+    if (path_equal(path, BOOTLOG_PATH))
+        rec_emit(probe, "DATA", "case=file id=%u name_hex=2f53595354454d2f4c4f47532f424f4f542e4c4f47 size=%u sha256=%s", id, size, hex);
+    else rec_emit(probe, "DATA", "case=file id=%u size=%u sha256=%s", id, size, hex);
     return 0;
 }
 static int list_volume(const char *probe, struct storage_volume *v, unsigned *id)
@@ -603,13 +605,15 @@ int probe_bootlog(void)
     const char *probe = "bootlog"; rec_emit(probe, "BEGIN", 0);
     struct storage *s = storage_get(); struct bootlog_stats before, after;
     bootlog_snapshot(&before);
-    rec_emit(probe, "DATA", "case=before writes=%llu storage_calls=%llu queued=%u", before.writes, before.storage_calls, before.queued);
+    rec_emit(probe, "DATA", "group=bootlog case=before prequalification_writes=%llu storage_calls=%llu queued=%u limit=%u",
+             before.writes, before.storage_calls, before.queued, BOOTLOG_LIMIT);
     if (before.writes || before.storage_calls || !s->ready) return finish(probe, -FS_EIO);
     struct storage_volume *v = storage_volume(s, 2);
     if (!v || v->error || !v->read_gate || !blkdev_durable(blkpart_device(&v->part))) {
         int unavailable = bootlog_activate(&s->vfs, false, 0);
         bootlog_snapshot(&after);
-        rec_emit(probe, "DATA", "case=readonly disk_log=unavailable result=%d writes=%llu storage_calls=%llu", unavailable, after.writes, after.storage_calls);
+        rec_emit(probe, "DATA", "group=bootlog case=readonly disk_log=unavailable result=%d write_count=%llu storage_calls=%llu",
+                 unavailable, after.writes, after.storage_calls);
         return finish(probe, unavailable == -FS_EROFS && !after.storage_calls ? 0 : -FS_EIO);
     }
     klog("[bootlog] ordinary output capture check");
@@ -639,8 +643,16 @@ int probe_bootlog(void)
         if (!e) e = log_marker(&probe_table, true);
     }
     bootlog_snapshot(&after);
+    uint32_t log_bytes = after.size;
+    if (!e && reboot) {
+        e = vfs_stat(&probe_table, BOOTLOG_PATH, &entry);
+        if (!e) log_bytes = entry.size;
+    }
     rec_emit(probe, "DATA", "case=qualification qualified_seq=%u first_log_write_seq=%u size=%u writes=%llu flush_result=%d",
-             after.qualification_sequence, after.first_write_sequence, after.size, after.writes, e);
+             after.qualification_sequence, after.first_write_sequence, log_bytes, after.writes, e);
+    rec_emit(probe, "DATA", "group=bootlog first_write_after_gate=%u log_bytes=%u reopen_errors=%u durable_flush=%u",
+             !reboot && after.first_write_sequence > after.qualification_sequence,
+             log_bytes, e != 0, !e);
     vfs_table_destroy(&probe_table);
     if (!e) e = storage_sync();
     if (!e && !reboot) rec_emit(probe, "ARM", "action=cold_reboot overlay=reuse marker=F109LOG.OK");
@@ -650,7 +662,6 @@ int probe_bootlog(void)
     return finish(probe, e);
 }
 CIUKI_F1_PROBE("fat-read", probe_fat_read);
-CIUKI_F1_PROBE("cache", probe_cache);
 CIUKI_F1_PROBE("fat-write", probe_fat_write);
+CIUKI_F1_PROBE("cache", probe_cache);
 CIUKI_F1_PROBE("mount-crash", probe_mount_crash);
-CIUKI_F1_PROBE("bootlog", probe_bootlog);

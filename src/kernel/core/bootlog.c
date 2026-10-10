@@ -1,4 +1,4 @@
-/* f1-09: 64 KiB log at SYSTEM/BOOT.LOG, ring by durable truncation.
+/* F1: 128 KiB log at SYSTEM/LOGS/BOOT.LOG, ring by durable truncation.
  * Deliberately no output calls: a disk failure must never recurse into logs.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/bootlog.h>

@@ -110,35 +110,48 @@ static const char us[0x59] = {
 char input_unshifted(uint16_t code) { return code < sizeof(us) ? us[code] : 0; }
 
 /* All decoder/queue helpers below run under the caller's short irq_save.
- * One byte has constant work (at most five events), no allocation/logging,
+ * One byte has constant work (at most five events plus RESYNC), no allocation/logging,
  * port polling, sleeps or deferred callbacks requiring shutdown fences. */
-static void enqueue(struct controller *c, uint16_t type, uint16_t code, int32_t value, uint64_t tick)
+static void queue_event(struct controller *c, uint16_t type, uint16_t code, int32_t value,
+                        uint64_t tick, uint64_t lost)
 {
     struct input_queue *q = &c->queue;
-    uint64_t seq = ++q->sequence;
-    if (q->stats.pending == INPUT_CAPACITY) {
-        q->stats.overflow++;
-        q->stats.state_lost = true;
-        return;
-    }
-    q->ring[q->tail] = (struct input_event){ type, code, value, tick, seq,
-        c->stats.generation, c->stats.firmware ? INPUT_FIRMWARE : INPUT_NATIVE, q->stats.state_lost ? INPUT_F_RESYNC : 0 };
+    q->ring[q->tail] = (struct input_event){ .type = type, .code = code, .value = value,
+        .tick = tick, .sequence = ++q->sequence, .generation = c->stats.generation,
+        .source = c->stats.firmware ? INPUT_FIRMWARE : INPUT_NATIVE,
+        .flags = type == INPUT_RESYNC ? INPUT_F_RESYNC : 0, .lost_count = lost };
     q->tail = (q->tail + 1) % INPUT_CAPACITY;
     q->stats.pending++;
+}
+static void queue_resync(struct controller *c, uint64_t tick)
+{
+    struct input_queue *q = &c->queue;
+    q->stats.overflow += q->stats.pending;
+    q->stats.resync++;
+    q->stats.state_lost = true;
+    q->head = q->tail = q->stats.pending = 0;
+    queue_event(c, INPUT_RESYNC, 0, (int32_t)q->stats.buttons, tick, q->stats.overflow);
+}
+static void enqueue(struct controller *c, uint16_t type, uint16_t code, int32_t value, uint64_t tick)
+{
+    if (c->queue.stats.pending == INPUT_CAPACITY) queue_resync(c, tick);
+    queue_event(c, type, code, value, tick, 0);
 }
 
 static void key_transition(struct controller *c, uint16_t code, bool down, uint64_t tick)
 {
     struct input_queue *q = &c->queue;
+    int32_t value = down;
     if (q->down[code] == down) {
-        if (down) q->stats.repeats++;
-        else q->stats.duplicates++;
-        return;
+        if (!down) { q->stats.duplicates++; return; }
+        q->stats.repeats++;
+        value = 2;
+    } else {
+        q->down[code] = down;
+        if (down) q->stats.keys_down++;
+        else q->stats.keys_down--;
     }
-    q->down[code] = down;
-    if (down) q->stats.keys_down++;
-    else q->stats.keys_down--;
-    enqueue(c, INPUT_KEY, code, down, tick);
+    enqueue(c, INPUT_KEY, code, value, tick);
     if (down && !c->stats.firmware) {
         char ch = input_unshifted(code);
         if (ch) enqueue(c, INPUT_TEXT, (uint8_t)ch, 0, tick);
@@ -195,13 +208,13 @@ static void mouse_byte(struct controller *c, uint8_t b, uint64_t tick)
      * zero (Linux standard-packet convention), not an artificial -256. */
     int x = q->packet[1] ? (int)q->packet[1] - ((h & 0x10) ? 256 : 0) : 0;
     int y = q->packet[2] ? (int)q->packet[2] - ((h & 0x20) ? 256 : 0) : 0;
+    unsigned buttons = h & 7, changed = buttons ^ q->stats.buttons;
+    q->stats.buttons = buttons;        /* RESYNC snapshots this complete packet */
     if (x) enqueue(c, INPUT_REL, INPUT_X, x, tick);
     if (y) enqueue(c, INPUT_REL, INPUT_Y, -y, tick);
-    unsigned buttons = h & 7, changed = buttons ^ q->stats.buttons;
     for (unsigned i = 0; i < 3; i++)
         if (changed & (1u << i))
             enqueue(c, INPUT_BTN, (uint16_t)i, !!(buttons & (1u << i)), tick);
-    q->stats.buttons = buttons;
 }
 
 static bool dequeue(struct controller *c, struct input_event *out)
@@ -245,7 +258,7 @@ void input_digest_add(struct input_digest *d, const struct input_event *e)
         for (unsigned j = 0; j < 4; j++)
             d->hash = hash_byte(d->hash, (uint8_t)(fields[i] >> (8 * j)));
     if (e->type == INPUT_KEY) {
-        d->key_transitions++;
+        if (e->value != 2) d->key_transitions++;
     } else if (e->type == INPUT_TEXT) {
         d->characters++;
         d->text_hash = hash_byte(d->text_hash, (uint8_t)e->code);
@@ -823,11 +836,9 @@ void input_firmware_event(const struct fwinput_event *e, gen_t generation)
         } else q->stats.errors++;
         break;
     case FWINPUT_RESYNC:
-        q->stats.resync++;
-        q->stats.state_lost = true;
-        q->stats.keys_down = q->stats.buttons = 0;
+        q->stats.keys_down = 0;
         memset(q->down, 0, sizeof(q->down));
-        enqueue(&native, INPUT_RESYNC, 0, 0, e->tick);
+        queue_resync(&native, e->tick);
         break;
     default: q->stats.errors++; break;
     }

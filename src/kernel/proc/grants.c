@@ -9,7 +9,6 @@
 #include <ciuki/signal.h>
 
 static uint32_t grant_owner, grant_descriptions;
-static uint64_t input_lost_seen;
 static struct desktop_activity activity;
 void desktop_activity_snapshot(struct desktop_activity *out) { *out = activity; }
 
@@ -43,7 +42,6 @@ int grants_install(struct process *p, int32_t fds[2])
     p->fds[a] = (struct proc_fd){ &display->object, FD_CLOEXEC };
     p->fds[b] = (struct proc_fd){ &input->object, FD_CLOEXEC };
     fds[0] = a; fds[1] = b;
-    input_lost_seen = 0;
     return 0;
 }
 
@@ -209,25 +207,10 @@ int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t ca
         if (p->state == PROC_STOPPING) { err = -EINTR; break; }
         if ((err = input_live(&state))) break;
         struct input_event in;
-        struct input_stats stats;
-        uint32_t saved = irq_save();
-        input_snapshot(&stats);
         bool have = input_read(&in);
-        /* Compatibility with the F1 drop-new queue: discard stale events
-         * atomically when its cumulative loss changes, then expose RESYNC.
-         * F1 must still move recovery to enqueue to retain fresh transitions. */
-        if (stats.overflow != input_lost_seen) {
-            while (input_read(&in)) { }
-            input_lost_seen = stats.overflow;
-            in = (struct input_event){ .type = INPUT_RESYNC, .tick = g_ticks,
-                .sequence = have ? in.sequence : 0, .generation = state.generation,
-                .source = state.firmware ? INPUT_FIRMWARE : INPUT_NATIVE };
-            have = true;
-        }
-        irq_restore(saved);
         if (have) {
             struct ciuki_input_event out;
-            desktop_input_event(&in, (uint32_t)stats.overflow, stats.buttons, &out);
+            desktop_input_event(&in, (uint32_t)in.lost_count, (uint32_t)in.value, &out);
             err = copy_to_user(events + count * sizeof(out), &out, sizeof(out));
             if (err) break;
             if (++count == capacity) break;

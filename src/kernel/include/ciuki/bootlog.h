@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#define BOOTLOG_LIMIT (64u * 1024u)
+#define BOOTLOG_LIMIT (128u * 1024u)
 #define BOOTLOG_RAM 8192u
-#define BOOTLOG_PATH "C:/SYSTEM/BOOT.LOG"
+#define BOOTLOG_PATH "C:/SYSTEM/LOGS/BOOT.LOG"
 struct vfs;
 struct bootlog_stats {
     uint32_t size, queued, dropped, rotations, qualification_sequence, first_write_sequence;

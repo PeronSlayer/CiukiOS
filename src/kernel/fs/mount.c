@@ -123,6 +123,20 @@ struct storage_volume *storage_volume(struct storage *s, unsigned d)
     refresh_volume(v);
     return v;
 }
+static int log_directory(struct fat_volume *fat)
+{
+    /* The image supplies SYSTEM. Create LOGS only after the write gate,
+     * under the namespace lock; never put a full VFS table on the stack. */
+    struct fat_entry directory;
+    int e = fat_lookup(fat, fat->type == 32 ? fat->root : 0, "SYSTEM", &directory);
+    if (e) return e;
+    if (!(directory.attr & FAT_ATTR_DIR)) return -FS_ENOTDIR;
+    uint32_t parent = directory.first;
+    e = fat_lookup(fat, parent, "LOGS", &directory);
+    if (e == -FS_ENOENT) return fat_create(fat, parent, "LOGS", FAT_ATTR_DIR, &directory);
+    if (!e && !(directory.attr & FAT_ATTR_DIR)) e = -FS_ENOTDIR;
+    return e;
+}
 int storage_enable_write(struct storage *s, unsigned d)
 {
     struct storage_volume *v = storage_volume(s, d);
@@ -134,6 +148,7 @@ int storage_enable_write(struct storage *s, unsigned d)
     refresh_volume(v);
     int e = fat_enable_write(&v->fat);
     if (!e && !v->write_sequence) v->write_sequence = ++s->sequence;
+    if (!e && d == 2) e = log_directory(&v->fat);
     fs_lock_drop(&s->vfs.lock);
     return e;
 }
@@ -254,8 +269,8 @@ void storage_init(void)
                  'A' + d, v->disk, v->partition, v->fat.type, v->fat.readonly ? "ro" : "rw",
                  v->fat.ro_reasons, v->error, v->read_sequence, v->writes_before_gate);
     }
-    /* CBI1 has no loader sector fingerprints. Fixed slot mapping above is
-     * f1-09's rule; identity qualification remains explicitly unproven. */
+    /* The F1 boot-identity amendment accepts disk 0, primary partition 1
+     * for CBI1. Loader fingerprints remain a boot-info v2 requirement. */
     rec_emit("boot", "DATA", "group=storage_identity binding=disk0_partition1 qualified=0 reason=loader_fingerprints_absent");
     if (!probe) {
         struct storage_volume *boot = storage_volume(s, 2);

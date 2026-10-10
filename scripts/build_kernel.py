@@ -182,7 +182,7 @@ def main() -> int:
     f1_order = {
         name: i for i, name in enumerate((
             "probes_registry_probe", "drivers_i8042_probe", "drivers_fbdev_probe",
-            "drivers_ata_probe", "probes_safe_probe",
+            "drivers_ata_probe", "probes_fat_probes", "probes_safe_probe",
         ))
     }
     objs.sort(key=lambda obj: f1_order.get(obj.stem, -1))

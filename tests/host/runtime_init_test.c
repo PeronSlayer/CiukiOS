@@ -162,6 +162,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 }
 
 #include "../../src/kernel/core/init.c"
+int probe_bootlog(void) { CHECK(false); return 1; } /* registration only */
 #include "../../src/kernel/probes/safe_probe.c"
 
 static int verdict(const char *probe, bool ok, const char *reason)

@@ -25,6 +25,7 @@ struct input_event {
     uint64_t tick, sequence;
     gen_t generation;
     uint16_t source, flags;
+    uint64_t lost_count; /* RESYNC only; cumulative discarded events */
 };
 struct input_stats {
     uint64_t overflow, resync, duplicates, repeats, bytes, errors;
@@ -37,10 +38,12 @@ struct input_digest {
     int64_t x, y;
 };
 
-/* One consumer in thread context; never reads the controller. Overflow
- * drops the new event, counts loss, and marks subsequent events RESYNC.
- * state_lost stays latched until a new activation; consumers must treat
- * their reconstructed state as incomplete after loss. */
+/* One consumer in thread context; never reads the controller. KEY value is
+ * 0=up, 1=down, 2=repeat. Overflow discards stale queued events, counts them,
+ * and queues one RESYNC before the triggering event and fresh transitions.
+ * RESYNC carries lost_count and the current button bitmap in value (bits
+ * 0-2); consumers release remembered keys. state_lost is latched telemetry,
+ * not a flag on subsequent events. */
 bool input_read(struct input_event *out);
 void input_snapshot(struct input_stats *out);
 char input_unshifted(uint16_t code);
