@@ -1456,6 +1456,35 @@ class F1RecordTests(unittest.TestCase):
             self.assertEqual(parser.outcome,'not_run')
             with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check(case['expected'])
 
+class PhysicalHistoricalImportTests(unittest.TestCase):
+    def test_cli_override_retains_historical_identity_without_qemu(self):
+        folder = ROOT/'build/runner-host-tests'; folder.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=folder) as scratch:
+            root = Path(scratch); image = root/'canonical.img'; image.write_bytes(b'current canonical')
+            capture = ROOT/'tests/host/fixtures/physical/44444444'
+            metadata = json.loads((capture/'acquisition.json').read_text())
+            suite = {'image':'full','cases':[{'id':'fd-table','probe':'fd-table','expected':{'terminal':'END'}}]}
+            with patch.object(runner,'ROOT',root), patch.object(runner,'load_suite',return_value=suite), \
+                 patch.object(runner.res,'common_lock',return_value=root/'.runner.lock'), \
+                 patch.object(runner.Host,'preflight'), patch.object(runner,'run_case') as launch, \
+                 patch.object(runner.shutil,'which',side_effect=AssertionError('QEMU discovery during import')), \
+                 patch('sys.stdout',new_callable=io.StringIO), patch('sys.stderr',new_callable=io.StringIO):
+                args = ['historical-host','--image',str(image),'--physical-capture',str(capture)]
+                self.assertEqual(runner.main(args),2)
+                self.assertFalse((root/'build/test-runs/historical-host/summary.json').exists())
+                self.assertEqual(runner.main(args + ['--image-sha256',metadata['write_sha256']]),1)
+                launch.assert_not_called()
+                summary = json.loads((root/'build/test-runs/historical-host/summary.json').read_text())
+                self.assertTrue(summary['historical_image'])
+                self.assertEqual(summary['canonical_image_sha256'],hashlib.sha256(image.read_bytes()).hexdigest())
+                self.assertEqual(summary['image_sha256'],metadata['write_sha256'])
+                self.assertFalse(summary['sweep_complete'])
+                self.assertEqual(summary['cases'][0]['outcome'],'fail')
+                self.assertIn('double_fault',summary['cases'][0]['reason'])
+                self.assertEqual(runner.main(['historical-host','--image-sha256',metadata['write_sha256']]),2)
+                self.assertEqual(runner.main(args + ['--image-sha256','invalid']),2)
+
+
 class F2EvidenceTests(unittest.TestCase):
     def test_f2_grammar_phase_separation_and_loader_registry(self):
         model=(ROOT/'src/boot/ciukldr/menu.inc').read_text()

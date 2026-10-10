@@ -1,0 +1,26 @@
+{
+  "model": "IBM ThinkPad T23",
+  "unit_identity": "anonymous fixture unit",
+  "bios_version": "unknown",
+  "cpuid": "unknown",
+  "installed_ram": "unknown",
+  "pci_ids": "unknown",
+  "target_disk_identity": "unknown",
+  "write_sha256": "cb33aec38d502e57b966bca55ab0bad59a90f429b8d841e76ba85f9b93481a09",
+  "readback_sha256": "cb33aec38d502e57b966bca55ab0bad59a90f429b8d841e76ba85f9b93481a09",
+  "capture_settings": "38400 8N1, no flow control",
+  "operator_confirmed": true,
+  "build_id": "f7286ca64c5f",
+  "selector": "all:sweep run=44444444",
+  "selector_source": "cfg",
+  "panic_observations": {
+    "2": {
+      "external_halt_seconds": 10,
+      "resumed": false
+    },
+    "3": {
+      "external_halt_seconds": 10,
+      "resumed": false
+    }
+  }
+}
