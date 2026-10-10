@@ -32,7 +32,7 @@ evidence and merges.
 | [f2-04-signals-and-faults](f2-04-signals-and-faults.md) | F2 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (4,344 signal checks; QEMU pending f2-09) |
 | [f2-05-desktop-objects-and-supervisor](f2-05-desktop-objects-and-supervisor.md) | F2 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 with its integration patch (35,965 checks) |
 | [f1-07b-bios-vm-followup](f1-07b-bios-vm-followup.md) | F1 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (71,160 V86 checks) |
-| [f2-08-desktop-process](f2-08-desktop-process.md) | F2 | gpt-6.1-sol / xhigh | issued 2026-10-11 |
+| [f2-08-desktop-process](f2-08-desktop-process.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (portrait conversion checked visually by the lead; guest run pending) |
 | [f1-10-suite-alignment-and-loader-safe](f1-10-suite-alignment-and-loader-safe.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (82 runner tests) |
 | [f1-11-activation-records](f1-11-activation-records.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11; F0 56/56 on image acd8af37 |
 | [f1-12-integration-followups](f1-12-integration-followups.md) | F1/F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (probe order per contract; 82 runner tests) |
