@@ -2,8 +2,8 @@
 
 - **Data:** 2026-10-11
 - **Tipo:** modifica (integrazione) e analisi (regressioni)
-- **Versione/commit:** immagine finale indicata in fondo; sequenza di commit su `main` da `aa6009e` in poi
-- **Stato:** in corso (batch finale `f2-all` in esecuzione); la qualifica su hardware reale F0→F2 resta da fare dal proprietario su questa immagine
+- **Versione/commit:** immagine `b9c052cd75a8b8e5…` (commit `ac20b25`); sequenza di commit su `main` da `aa6009e` in poi
+- **Stato:** completato su QEMU; qualifica su hardware reale F0→F2 iniziata sul T23 (primo avvio riuscito), cattura seriale da raccogliere
 
 ## Contesto
 
@@ -108,9 +108,21 @@ Evidenze per immagine in
   zero in guest (72,9 s) e il supplemento passa (127,8 s).
 - Test host: 170 OK sull'albero `6084e21`.
 
-Il batch finale `f2-all` (tutte le suite in ordine, cinque profili)
-sull'immagine finale e il suo esito sono riportati nell'aggiornamento di
-questa voce.
+Batch finale `f2-all` sull'immagine `b9c052cd…` (commit `ac20b25`, test
+host 178 OK), una sola invocazione del runner, 191 casi sui cinque
+profili: **186 superati, 0 falliti** oltre ai tre casi `uart-absent-*`
+che richiedono conferma esterna dello schermo, 2 `not_run` fisici
+(`safe-menu-*`). Prima di arrivarci il batch si era fermato una volta su
+`bootlog-read-only` (fixture mai implementata nel runner: ora il caso
+avvia con `safe=1`, direttiva f1-25).
+
+Primo avvio dell'immagine sul ThinkPad T23 dal disco Transcend scritto
+con `write_physical.sh`: il kernel avvia, vede 512 MiB, registro PCI,
+framebuffer, ATA, monta C: in lettura/scrittura con boot log su disco, e
+il desktop con il ritratto compare. In un avvio l'inizializzazione
+dell'input PS/2 ha riportato `error=-5` e il desktop non è partito;
+l'avvio successivo è riuscito. I record T4 su seriale sono ancora da
+raccogliere.
 
 ## Decisioni
 

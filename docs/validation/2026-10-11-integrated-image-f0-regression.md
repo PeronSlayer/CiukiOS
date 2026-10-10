@@ -313,3 +313,30 @@ the day; 4 FAIL = the three `uart-absent-*` operator-confirmation cases
 and `bootlog-read-only` (its `driver-boundary read-only` fixture
 declaration is not implemented by the runner, directive f1-25), which left
 the 45 F2 cases `not_run` by prerequisite in that invocation.
+
+## Twentieth image: `b9c052cd…` (commit `ac20b25`, f1-25) — final `f2-all` batch
+
+SHA-256 `b9c052cd75a8b8e51680d35de9834894f0c7372d37f3c0eca269e319ae726c41`,
+build manifest clean at `ac20b25`, host tests 178 OK. One runner
+invocation `f2-all` (14:10–14:59, `-icount shift=1`), 191 cases over
+`qemu-t23`, `qemu-e500`, `qemu-min128`, `qemu-desktop-1998` and
+`qemu-desktop-2002`: **186 PASS, 0 FAIL apart from the three
+`uart-absent-*` operator-confirmation cases (screen captured, external
+confirmation required by contract), 2 `not_run` = the two physical
+`safe-menu-*` cases.** Every suite passed in order: `f0-smoke`, `f0-core`,
+`f0-panic`, `f0-runner`, `f1-input`, `f1-storage`, `f1-fat32` (including
+`bootlog-read-only` through `safe=1`), `f1-safe`, `f2-process`,
+`f2-runtime`, `f2-desktop` (five desktop and six stand-in cases) and
+`f2-app` (three profiles). This image is the single i686 image handed to
+the hardware qualification.
+
+First hardware boot of this image on the ThinkPad T23 (Transcend
+TS64GMSA230S written with `write_physical.sh`, SHA verified on write):
+the kernel boots from the disk, reports 523 260 KiB usable RAM, 16
+registry reservations and 15 PCI functions, framebuffer ready, ATA disk 0
+identified, C: mounted read/write with the boot log on disk
+(`disk_log=available`); the ring-3 desktop appears with the portrait and
+the tagline. On one boot the PS/2 input initialisation reported
+`input result=failed error=-5` and the desktop did not start; the next
+boot succeeded. Serial capture of these boots was not available, so the
+T4 records are still to be collected.
