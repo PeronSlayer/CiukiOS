@@ -262,3 +262,13 @@ the eight `qemu-desktop-1998/2002` cases of `f1-input` (`registry`,
 On image `abaa1064…` the six stand-in `crash-isolation` cases of
 `f2-desktop` (`no-lfb` and `safe` on `qemu-t23`, `qemu-e500`,
 `qemu-min128`) PASS through the runner.
+
+## Sixteenth image: `da10a7ad…` (commit `2d6d07d`, f2-16 third round)
+
+`crash-isolation` with `server=desktop` PASS through the runner on all five
+profiles (`qemu-t23`, `qemu-e500`, `qemu-min128`, `qemu-desktop-1998`,
+`qemu-desktop-2002`): launch handshake `reason=ok`, 100 victim cycles over
+the five fault kinds with `desktop_restarts=0`, post-fault interaction
+consumed (`input_events` 0 → 8, `presents` 924 → 931, pixel digest changed,
+keys=2 motion=3 buttons=2) and the runner's screen observation (portrait
+region and cursor change) passed. Host tests: 155 OK.
