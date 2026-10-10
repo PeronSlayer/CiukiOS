@@ -120,7 +120,7 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         e = fat_mount(&v->fat, &s->cache, &v->io, 0, part->count, false);
         v->writes_before_gate = v->writes;
         if (!e) {
-            v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY));
+            v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY));
             if (v->read_gate) v->read_sequence = ++s->sequence;
             e = vfs_attach(&s->vfs, d, &v->fat);
         }
@@ -289,7 +289,8 @@ void storage_init(void)
             .readonly = v->fat.readonly, .reasons = v->fat.ro_reasons, .error = v->error,
             .read_gate = v->read_gate, .read_sequence = v->read_sequence,
             .writes = v->writes, .writes_before_gate = v->writes_before_gate,
-            .reason = "mount", .qualified = false });
+            .reason = v->fat.dirty_recovered && !v->fat.readonly ? "dirty_recovered" :
+                (v->fat.ro_reasons & FAT_RO_IO_FLAG) ? "error-flag" : "mount", .qualified = false });
         if (!v->partition)
             klog("[storage] kind=%u disk=%u part=0 layout=superfloppy drive=%c mode=%s error=%d",
                  ACTIVATION_MOUNT, v->disk, 'A' + d, v->fat.readonly ? "ro" : "rw", v->error);

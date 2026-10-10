@@ -181,7 +181,8 @@ static void crash_tests(struct fake *f) {
             if (s.crosslinks || second.crosslinks || s.corrupt || second.corrupt) fprintf(stderr,"crash details mode=%u cut=%u/%u cross=%u/%u corrupt=%u/%u\n",mode,cut,events,s.crosslinks,second.crosslinks,s.corrupt,second.corrupt);
             CHECK(!s.crosslinks && !second.crosslinks && !s.corrupt && !second.corrupt);
             OK(cache_init(&cache,2*1024*1024)); OK(fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true));
-            if (s.divergent || s.dirty || s.lost) CHECK(vol.readonly);
+            if (s.divergent || s.lost) CHECK(vol.readonly);
+            else if (s.dirty) CHECK(!vol.readonly && vol.dirty_recovered);
             if (s.divergent) { CHECK(vol.ro_reasons&FAT_RO_COPIES); divergent++; }
             if (s.dirty) dirty++; if (s.lost) lost++;
             cache_destroy(&cache); fake_reset(f); trials++;
@@ -237,7 +238,9 @@ static void fault_tests(struct fake *f) {
         for (unsigned flag=0;flag<2;flag++) {
             unsigned m=bits==16 ? 0xffffu : 0xfffffffu, bit=bits==16 ? 0x8000u : 0x8000000u; if (flag) bit>>=1;
             for (unsigned copy=0;copy<2;copy++) patch_fat(f,&geometry,copy,1,m&~bit);
-            assert_ro(f,flag ? FAT_RO_IO_FLAG : FAT_RO_DIRTY); fake_reset(f);
+            if(flag) assert_ro(f,FAT_RO_IO_FLAG);
+            else { mounted(f,true); CHECK(!vol.readonly && vol.dirty_recovered); unmounted(); }
+            fake_reset(f);
         }
     }
     patch_fat(f,&geometry,1,entry.first,bits==12 ? 0xfff : bits==16 ? 0xffff : 0xfffffff); assert_ro(f,FAT_RO_COPIES); fake_reset(f);

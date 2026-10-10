@@ -24,7 +24,7 @@ from loader_model import selector as base_selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
 import fat_fixtures
-from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files
+from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
 REGRESSION_SUITES = ('f0-smoke','f0-core','f0-panic','f0-runner',
@@ -1146,7 +1146,13 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         for fixture in result['fixtures'].get('manifest',[]):
             if fixture.get('corruption') and fixture.get('path'):
                 fixture['sha256_after']=sha(fixture['path'])
-                if fixture['sha256_after']!=fixture['sha256']:
+                if case['id']=='mount-dirty' and fixture['corruption']['defect']=='dirty' and result['outcome']=='pass':
+                    try:
+                        if not result['cleanup']['clean']:raise EvidenceError('guest must stop before recovery checker')
+                        fixture['recovery']=check_recovered_fixture(host,fixture,directory,result['checkers'])
+                    except (OSError,ValueError,RuntimeError) as e:
+                        result['outcome']='fail';result['reason']=str(e)
+                elif fixture['sha256_after']!=fixture['sha256']:
                     result['outcome']='fail';result['reason']='corrupted fixture changed during read-only mount case'
         if request.startswith('f2:'):
             try:record_f2_result(result,parser)
@@ -1287,7 +1293,7 @@ def check_overlay(host,overlay,directory,checks,result):
         if checked['returncode'] not in allowed:raise EvidenceError('undeclared fsck.fat result')
         if checks.get('interrupted_files'):
             fsck_report['interrupted_outcomes']=classify_crash_checker(
-                checked,checks['interrupted_files'],checks.get('interrupted_patterns',[]))
+                checked,checks['interrupted_files'],checks.get('interrupted_patterns',[]),checks.get('dirty',True))
         elif checked['returncode']!=0 or checks.get('classify_all_output'):
             patterns=checks.get('interrupted_patterns',[])
             lines=[line for line in checked['output'].splitlines() if line.strip()]
@@ -1345,17 +1351,26 @@ def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=Fa
             point=first['cut_point'];reboot=[r for r in last['observed'] if r.get('case')=='crash_reboot']
             if not point or point.get('index')!=case['crash_sequence']['index'] or not point.get('next_write_suspended'):
                 raise EvidenceError('missing exact gated crash cut')
-            if len(reboot)!=1 or reboot[0].get('lost')!='0' or reboot[0].get('scan_corrupt')!='0' or reboot[0].get('writes')!='0':
+            if len(reboot)!=1 or reboot[0].get('lost')!='0' or reboot[0].get('scan_corrupt')!='0' or \
+                    reboot[0].get('recovered')!='1' or reboot[0].get('reasons')!='0' or \
+                    reboot[0].get('mode')!='rw' or reboot[0].get('reason')!='dirty_recovered' or int(reboot[0]['writes'])<4:
                 raise EvidenceError('undeclared crash reboot scan outcome')
             if first['crash_overlay']!=last['crash_overlay'] or not first['crash_overlay']:
                 raise EvidenceError('reboot changed the interrupted directory sector')
             reports=[[r for r in b['checkers'] if r.get('kind')=='fsck.fat'] for b in (first,last)]
-            if any(len(r)!=1 for r in reports) or reports[0][0]['output']!=reports[1][0]['output']:
-                # Export paths differ between boots; compare classified lines.
-                normalized=[[re.sub(r'^.*check-volume\.raw:', 'volume:', line) for line in r[0]['output'].splitlines()] for r in reports if len(r)==1]
-                if len(normalized)!=2 or normalized[0]!=normalized[1]:raise EvidenceError('crash checker outcomes differ between boots')
+            if any(len(r)!=1 for r in reports):raise EvidenceError('missing crash checker report')
+            outcomes=[r[0]['interrupted_outcomes'] for r in reports]
+            if outcomes[0]['dirty'] is not True or outcomes[1]['dirty'] is not False or outcomes[0]['files']!=outcomes[1]['files']:
+                raise EvidenceError('crash checker outcomes differ between boots')
+            # Only the dirty diagnostic and its no-repair proposal may vanish.
+            removed={'Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.',
+                     ' Automatically removing dirty bit.','Leaving filesystem unchanged.'}
+            normalized=[[re.sub(r'^.*check-volume\.raw:', 'volume:', line) for line in r[0]['output'].splitlines()
+                         if line.strip() and line not in removed] for r in reports]
+            if normalized[0]!=normalized[1]:raise EvidenceError('crash checker outcomes differ between boots')
             result['crash_comparison']={'index':point['index'],'durable_sectors':point['durable_sectors'],
-                                        'scan_corrupt':0,'lost':0,'reboot_writes':0,'directory_unchanged':True,'checkers_match':True}
+                                        'scan_corrupt':0,'lost':0,'reboot_writes':int(reboot[0]['writes']),
+                                        'dirty_recovered':True,'directory_unchanged':True,'checkers_match':True}
         except (KeyError,ValueError,RuntimeError) as e:
             result['outcome']='fail';result['reason']=str(e)
     if result['outcome']=='pass':shared.unlink(missing_ok=True)

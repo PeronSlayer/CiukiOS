@@ -11,6 +11,7 @@
 
 static unsigned checks, records, max_record;
 static unsigned fixture_present, fixture_absent;
+static bool cut_probe_after_arm;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr,"STORAGE line %d: %s\n",__LINE__,#x); exit(1); } } while (0)
 #define OK(x) CHECK((x)==0)
 struct ciuki_boot_info g_boot;
@@ -29,6 +30,9 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...) {
     if (length>max_record) max_record=length;
     if (length>240) fprintf(stderr,"oversized: %s %s %s (%u)\n",probe,event,line,length);
     CHECK(n>=0 && length<=240); records++;
+    if (!strcmp(probe,"mount-crash") && !strcmp(event,"ARM") && cut_probe_after_arm) {
+        media[0].cut_at=media[0].events+4;
+    }
     if (!strcmp(probe,"fat-read") && !strcmp(event,"DATA") && !strncmp(line,"case=fixture ",13)) {
         unsigned disk; char status[16];
         CHECK(sscanf(line,"case=fixture disk=%u status=%15s",&disk,status)==2 && disk>0 && disk<STORAGE_DISKS);
@@ -150,7 +154,7 @@ static void mount_tests(void) {
     OK(storage_writeback(s,age+4999)); CHECK(media[0].writes==writes);
     OK(storage_writeback(s,age+5001)); CHECK(media[0].writes==writes+1);
     stop(s,true); reset();
-    /* Dirty flags, divergent FAT and bad BPB all preserve zero writes. */
+    /* Dirty-only opens the gate; divergence and bad BPB preserve zero writes. */
     for(unsigned fault=0;fault<3;fault++) {
         uint8_t bpb[512]; OK(fake_raw_read(&media[0],0,bpb));
         uint32_t reserved=fs_rd16(bpb+14), fat=fs_rd32(bpb+36);
@@ -161,8 +165,8 @@ static void mount_tests(void) {
         }
         s=start(); v=storage_volume(s,2);
         CHECK(v && (fault==2 ? v->error!=0 : v->fat.readonly));
-        CHECK(storage_enable_write(s,2)<0 && !media[0].writes);
-        if(!fault) CHECK(v->fat.ro_reasons&FAT_RO_DIRTY);
+        if(!fault) { CHECK(v->read_gate); OK(storage_enable_write(s,2)); CHECK(v->fat.dirty_recovered && !v->fat.readonly); }
+        else CHECK(storage_enable_write(s,2)<0 && !media[0].writes);
         if(fault==1) CHECK(v->fat.ro_reasons&FAT_RO_COPIES);
         stop(s,false); reset();
     }
@@ -172,6 +176,83 @@ static void mount_tests(void) {
     CHECK(bootlog_activate(&s->vfs,true,s->sequence)==-FS_ENOTDIR);
     CHECK(bootlog_shutdown()==-FS_ENOTDIR); stop(s,true); reset();
     printf("PASS storage mounts: RO-first, gate/durability, refreshed quarantine/cache hits, dirty/divergent/BPB, writer hook\n");
+}
+static void patch_entry(struct fake *f, const struct fat_volume *g, unsigned copy, uint32_t cluster, uint32_t value) {
+    uint32_t off=cluster*(g->type/8), sec=g->reserved+copy*g->fat_sectors+off/512;
+    uint8_t b[512]; OK(fake_raw_read(f,sec,b));
+    if(g->type==32) fs_wr32(b+off%512,value); else fs_wr16(b+off%512,(uint16_t)value);
+    OK(fake_raw_write(f,sec,b));
+}
+static struct storage *recovery_start(unsigned i, struct storage_volume **v) {
+    struct storage *s=start();
+    if(i) { disk_init(i); OK(storage_add_disk(s,1,&disks[i].dev)); }
+    *v=storage_volume(s,i ? 3 : 2); CHECK(*v && !(*v)->error); return s;
+}
+static void dirty_recovery_tests(void) {
+    for(unsigned i=0;i<3;i+=2) {
+        struct fake *f=&media[i]; f->undo_enabled=true;
+        struct storage_volume *v; struct storage *s=recovery_start(i,&v);
+        struct fat_volume g=v->fat; unsigned d=v->drive; stop(s,true); reset();
+        uint32_t bit=g.type==32 ? 0x08000000u : 0x8000u;
+        uint32_t clean=g.type==32 ? 0xafffffffu : 0xffffu; /* reserved upper bits survive */
+        for(unsigned fault=0;fault<5;fault++) {
+            uint32_t one=fault==4 ? clean&~(bit>>1) : clean&~bit;
+            if(fault==3) one&=~(bit>>1);
+            for(unsigned copy=0;copy<2;copy++) patch_entry(f,&g,copy,1,fault==2 && copy ? clean : one);
+            if(fault==1) for(unsigned copy=0;copy<2;copy++) patch_entry(f,&g,copy,g.next_free,0x0fffffff);
+            s=recovery_start(i,&v);
+            CHECK(v->fat.readonly && !v->fat.dirty_recovered && !v->writes && !f->flushes && !v->writes_before_gate);
+            if(!fault) {
+                CHECK(v->read_gate); f->reorder=true;
+                OK(storage_enable_write(s,d));
+                CHECK(v->fat.dirty_recovered && !v->fat.readonly && !v->fat.ro_reasons && !v->refused);
+                CHECK(v->write_sequence>v->read_sequence && !v->writes_before_gate);
+                /* Recovery sets clean, then writable-session setup clears it.
+                 * Each copy persists and flushes before the next is issued. */
+                for(unsigned phase=0;phase<2;phase++) for(unsigned copy=0;copy<2;copy++) {
+                    unsigned j=phase*6+copy*3;
+                    CHECK(f->trace[j].kind=='W' && f->trace[j].lba==g.reserved+copy*g.fat_sectors);
+                    CHECK(f->trace[j+1].kind=='P' && f->trace[j+1].lba==f->trace[j].lba);
+                    CHECK(f->trace[j+2].kind=='B');
+                    uint8_t b[512]; OK(fake_raw_read(f,f->trace[j].lba,b));
+                    CHECK((g.type==32 ? fs_rd32(b+4) : fs_rd16(b+2))==(clean&~bit));
+                }
+                stop(s,true);
+                for(unsigned copy=0;copy<2;copy++) {
+                    uint8_t b[512]; OK(fake_raw_read(f,g.reserved+copy*g.fat_sectors,b));
+                    CHECK((g.type==32 ? fs_rd32(b+4) : fs_rd16(b+2))==clean);
+                    struct scan_result scan=independent_scan(f->fd,copy);
+                    CHECK(!scan.dirty && !scan.divergent && !scan.lost && !scan.crosslinks && !scan.corrupt);
+                }
+                f->reorder=false;
+            } else {
+                CHECK(!v->read_gate && storage_enable_write(s,d)==-FS_EROFS && !f->writes && !f->flushes);
+                CHECK(v->fat.ro_reasons&(fault==1 ? FAT_RO_LOST : fault==2 ? FAT_RO_COPIES : FAT_RO_IO_FLAG));
+                CHECK(!v->fat.dirty_recovered); stop(s,true);
+            }
+            fake_reset(f); reset();
+        }
+        /* Fail at every issuance/persistence/flush in recovery. Loss of the
+         * first copy before its barrier leaves a consistent dirty volume;
+         * a cut after its persistence leaves divergence and MUST be refused. */
+        for(unsigned cut=1;cut<=6;cut++) {
+            for(unsigned copy=0;copy<2;copy++) patch_entry(f,&g,copy,1,clean&~bit);
+            s=recovery_start(i,&v); f->reorder=true; f->cut_at=cut;
+            CHECK(storage_enable_write(s,d)==-FS_EIO && f->cut && v->fat.readonly && !v->fat.dirty_recovered);
+            CHECK(v->fat.ro_reasons&FAT_RO_WRITE_ERROR); stop(s,false); fake_power_loss(f);
+            unsigned writes=f->writes;
+            s=recovery_start(i,&v);
+            if(cut>=2 && cut<=4) {
+                CHECK(v->fat.ro_reasons&FAT_RO_COPIES);
+                CHECK(!v->read_gate && storage_enable_write(s,d)==-FS_EROFS && f->writes==writes && !v->fat.dirty_recovered);
+            } else {
+                CHECK(v->read_gate); OK(storage_enable_write(s,d));
+                CHECK(!v->fat.readonly && v->fat.dirty_recovered==(cut==1));
+            }
+            stop(s,true); f->reorder=false; fake_reset(f); reset();
+        }
+        printf("PASS FAT%u dirty recovery: RO-first/gate, clean scan, lost/divergence/error refusal, reserved bits, per-copy W/P/B, six recovery cuts\n",g.type);
+    }
 }
 static void log_tests(void) {
     struct storage *s=start(); struct bootlog_stats st;
@@ -224,21 +305,21 @@ int probe_cache(void);
 int probe_bootlog(void);
 int probe_mount_crash(void);
 static void mount_probe_tests(void) {
-    /* A dirty FAT16 fixture on a nonboot slot must be refused with no write. */
+    /* A dirty FAT16 fixture on a nonboot slot recovers after the read gate. */
     struct fake *f=&media[2]; f->undo_enabled=true;
     uint8_t bpb[512],sector[512]; OK(fake_raw_read(f,0,bpb));
     uint32_t reserved=fs_rd16(bpb+14), fat=fs_rd16(bpb+22);
-    for(unsigned i=0;i<2;i++) {
-        OK(fake_raw_read(f,reserved+i*fat,sector)); fs_wr16(sector+2,fs_rd16(sector+2)&~0x8000u);
-        OK(fake_raw_write(f,reserved+i*fat,sector));
-    }
     for(unsigned layout=0;layout<2;layout++) {
+        for(unsigned i=0;i<2;i++) {
+            OK(fake_raw_read(f,reserved+i*fat,sector)); fs_wr16(sector+2,fs_rd16(sector+2)&~0x8000u);
+            OK(fake_raw_write(f,reserved+i*fat,sector));
+        }
         struct storage *s=start(); disk_init(2);
         OK(storage_add_disk(s,1,layout ? &f->dev : &disks[2].dev));
-        CHECK(!s->volumes[3].read_gate && s->volumes[3].fat.ro_reasons&FAT_RO_DIRTY);
-        CHECK(storage_enable_write(s,3)==-FS_EROFS);
+        CHECK(s->volumes[3].read_gate && s->volumes[3].fat.ro_reasons&FAT_RO_DIRTY);
         host_mount_snapshot(s);
-        OK(probe_mount_crash()); CHECK(!f->writes && !media[0].writes); stop(s,true); reset();
+        OK(probe_mount_crash()); CHECK(f->writes && !media[0].writes && s->volumes[3].fat.dirty_recovered);
+        stop(s,true); fake_reset(f); reset();
     }
     fake_reset(f);
     /* Driver failure stands in for termination at an issued sector, followed
@@ -246,14 +327,15 @@ static void mount_probe_tests(void) {
     struct storage *s=start(); OK(storage_enable_write(s,2));
     int h=vfs_open(&table,"C:/F109CUT.ARM",VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,0,0); CHECK(h>=0); OK(vfs_close(&table,h));
     stop(s,true);
-    s=start(); media[0].cut_at=media[0].events+8;
+    s=start(); cut_probe_after_arm=true;
     CHECK(probe_mount_crash()!=0 && media[0].cut);
+    cut_probe_after_arm=false;
     stop(s,false); fake_power_loss(&media[0]);
     for(unsigned i=0;i<2;i++) { struct scan_result scan=independent_scan(media[0].fd,i); CHECK(!scan.crosslinks && !scan.corrupt); }
     unsigned writes=media[0].writes;
-    s=start(); OK(probe_mount_crash()); CHECK(media[0].writes==writes);
+    s=start(); OK(probe_mount_crash()); CHECK(media[0].writes>writes && s->volumes[2].fat.dirty_recovered);
     stop(s,true); reset();
-    printf("PASS mount-crash probe: dirty fixture refusal, ARM/write cut trace, cache-loss reboot, independent copies crosslinks=0\n");
+    printf("PASS mount-crash probe: dirty fixture recovery, ARM/write cut trace, cache-loss reboot recovery, independent copies crosslinks=0\n");
 }
 static void probe_tests(void) {
     struct storage *s=start();
@@ -280,7 +362,7 @@ static void probe_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); log_tests(); failure_tests(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); log_tests(); failure_tests(); probe_tests(); mount_probe_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;

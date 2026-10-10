@@ -1408,19 +1408,29 @@
             },
             "exact_count": 1,
             "fields": {
-              "mode": "ro",
+              "mode": "rw",
               "writes": {
-                "eq": 0
+                "ge": 4
               },
               "reasons": {
-                "mask": 4
+                "eq": 0
               },
               "write_refusal": {
                 "encoding": "signed",
-                "eq": -30
+                "eq": 0
               },
               "error": {
                 "encoding": "signed",
+                "eq": 0
+              },
+              "recovered": {
+                "eq": 1
+              },
+              "refusals": {
+                "eq": 0
+              },
+              "reason": "dirty_recovered",
+              "lost": {
                 "eq": 0
               }
             }
@@ -1836,16 +1846,20 @@
                 "eq": 0
               },
               "writes": {
-                "eq": 0
+                "ge": 4
               },
               "checker": "host_required",
               "reasons": {
-                "mask": 4,
-                "clear": 32
+                "eq": 0
               },
               "lost": {
                 "eq": 0
-              }
+              },
+              "recovered": {
+                "eq": 1
+              },
+              "mode": "rw",
+              "reason": "dirty_recovered"
             }
           },
           {
@@ -1858,9 +1872,12 @@
             "fields": {
               "write_refusal": {
                 "encoding": "signed",
-                "eq": -30
+                "eq": 0
               },
               "writes": {
+                "ge": 4
+              },
+              "refusals": {
                 "eq": 0
               }
             }
@@ -1994,7 +2011,8 @@
             ],
             "interrupted_files": [
               "::/F109CUT.BIN"
-            ]
+            ],
+            "dirty": true
           }
         },
         {
@@ -2005,12 +2023,11 @@
             "size": 535822336,
             "listing_path": "::/",
             "fsck_exit_codes": [
+              0,
               1
             ],
             "interrupted_patterns": [
               "fsck\\.fat [0-9.]+ \\([0-9-]+\\)",
-              "Dirty bit is set\\. Fs was not properly unmounted and some data may be corrupt\\.",
-              " Automatically removing dirty bit\\.",
               "Leaving filesystem unchanged\\.",
               ".*/check-volume\\.raw: [0-9]+ files, [0-9]+/[0-9]+ clusters"
             ],
@@ -2024,7 +2041,8 @@
             ],
             "interrupted_files": [
               "::/F109CUT.BIN"
-            ]
+            ],
+            "dirty": false
           }
         }
       ],

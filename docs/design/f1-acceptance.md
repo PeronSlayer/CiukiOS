@@ -169,12 +169,20 @@ its later phase.
 
 **[F1]** Mount validation MUST check BPB/signatures, geometry, FAT capacity,
 cluster-derived type, root, FSInfo signatures and reserved FAT entries. Invalid
-geometry refuses mount. Dirty/error flags, detected chain corruption or diverging
-mirrored FATs require read-only handling and a bounded kernel scan; repair remains
-host-side. FSInfo counts are hints. Chain walks MUST terminate within cluster
+geometry refuses mount. Per the owner's decision of 2026-10-11 (f1-26), a
+dirty-only FAT16/32 volume MUST recover automatically after the bounded mount
+scan reports `lost=0`, no corruption and no FAT-copy divergence, subject to the
+usual read gate and qualified durability. Recovery sets `ClnShutBitMask` in
+each FAT copy, with a barrier after each copy, before enabling a writable
+session; activation records `reason=dirty_recovered` and mount evidence
+`recovered=1`. `HrdErrBitMask=0`, lost clusters, detected chain corruption or
+diverging mirrored FATs retain read-only handling; repair remains host-side.
+The hardware-error flag MUST NOT be cleared automatically. FSInfo counts are
+hints. Chain walks MUST terminate within cluster
 count. Read failures return EIO; metadata failures revoke writing immediately.
-FAT16/32 writable mounts MUST clear their type-specific clean flag before use
-and restore it only after durable unmount; FAT12 has no equivalent flag.
+FAT16/32 writable sessions MUST clear their type-specific clean flag before use
+and restore it only after durable unmount; the pre-session recovery above is
+the explicit exception. FAT12 has no equivalent flag.
 
 **[F1]** The shared cache defaults to 8 MiB. A device-priority writer MUST
 write dirty blocks within five seconds and service explicit flush/unmount/
@@ -230,7 +238,7 @@ END; host predicates/checkers determine aggregate acceptance.
 | `fat-read` / T0,T3,T4 / K | FAT12/16/32 names, aliases, sizes and hashes match independent fixtures; orphan/bad-checksum LFNs use valid short names. Boundary chains and invalid names terminate correctly. Zero writes before read gate. | Fixture/list digest, file hashes, mount mode, write count=0. |
 | `fat-write` / T0,T3,T4 / K | Create/read/overwrite/truncate/rename/delete files of 0 bytes, one cluster and 4 MiB; grow directories beyond one cluster; collide LFN aliases. Reopen and cold-reboot reads match; clean run has `fsck.fat -n` exit 0 and matching mtools names/sizes. | Workload/seed, operation results, hashes, host checker output. |
 | `cache` / T0,T3 / K | Trace exact durability order, five-second writeback, eviction and shared-handle coherence. Unsupported flush without verified cache disablement keeps volume read-only; injected delayed/flush error reaches caller and prevents successful unmount/clean marking. | Barrier IDs, persisted-write trace, dirty ages, handle positions, errors. |
-| `mount-crash` / T0,T3 / K | Bad BPB refuses; dirty/error flags, mirrored-copy divergence and detected corruption force read-only and reject writes. Crash cuts produce no cross-links; checker reports only declared interrupted-state outcomes. | Cut index, durable-sector set, scan/checker results, write-refusal counters. |
+| `mount-crash` / T0,T3 / K | Bad BPB refuses; dirty-only volumes with a clean bounded scan recover after the read gate (`recovered=1`, `reason=dirty_recovered`, mode `rw`); hardware-error flags, lost clusters, mirrored-copy divergence and detected corruption force read-only and reject writes. Crash cuts produce no cross-links; checker reports only declared interrupted-state outcomes, with the dirty diagnostic absent after recovered boot 2 and durable unmount (owner decision 2026-10-11, f1-26). | Cut index, durable-sector set, scan/checker results, recovery fields and write-refusal counters. |
 | `safe` / T3,T4 / K | Each entry source sets flag before activation; required input/console works, optional activation count=0. Repeat without writable storage and without LFB; no hang or fallback ATA retry. | Option provenance, disabled-device reasons, active-owner list, READY. |
 | `bootlog` / T3,T4 / K | Before qualification log writes=0; afterward bounded log reopens with matching records after durable shutdown. Read-only/failure path reports unavailable; F0 panic adds zero storage calls. | Qualification sequence, first-log-write sequence, size/hash, flush result and panic counters. |
 

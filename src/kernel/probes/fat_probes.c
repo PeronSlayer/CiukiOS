@@ -26,9 +26,10 @@ static void mount_records(const char *probe)
     for (unsigned d = 2; d < 26; d++) {
         const struct activation_entry *e = drivers_mount_get(d);
         if (!e) continue;
-        rec_emit(probe, "DATA", "group=storage drive=%c disk=%u part=%u layout=%s mode=%s gate=%s writes=%llu qualified=%u reason=%s",
+        rec_emit(probe, "DATA", "group=storage drive=%c disk=%u part=%u layout=%s mode=%s gate=%s writes=%llu qualified=%u reason=%s recovered=%u",
                  'A' + d, e->disk, e->partition, e->partition ? "mbr" : "superfloppy", e->readonly ? "ro" : "rw",
-                 e->read_gate ? "read" : "closed", e->writes, e->qualified, e->reason);
+                 e->read_gate ? "read" : "closed", e->writes, e->qualified, e->reason,
+                 !strncmp(e->reason, "dirty_recovered", sizeof("dirty_recovered")));
     }
 }
 
@@ -550,7 +551,7 @@ int probe_mount_crash(void)
     mount_records(probe);
     struct storage *s = storage_get();
     if (!s->ready) return finish(probe, -FS_ENOENT);
-    int result = 0; unsigned fixtures = 0; bool cut_reboot = false, cut_selected = false;
+    int result = 0; unsigned fixtures = 0; bool cut_reboot = false, cut_selected = false, recovered = false;
     for (unsigned disk = 1; disk < STORAGE_DISKS; disk++) {
         if (!s->disks[disk]) continue;
         fixtures++;
@@ -558,18 +559,25 @@ int probe_mount_crash(void)
         for (unsigned d = 3; d < 26; d++) {
             struct storage_volume *v = storage_volume(s, d); if (!v || v->disk != disk) continue;
             int refusal = v->error;
+            if (!refusal && v->read_gate && (v->fat.ro_reasons & FAT_RO_DIRTY))
+                refusal = storage_enable_write(s, d);
             if (!refusal) {
                 int open = vfs_table_init(&s->vfs, &probe_table, d);
                 if (!open) {
                     char path[] = "D:/F109REF.BIN"; path[0] = (char)('A' + d);
                     refusal = vfs_open(&probe_table, path, VFS_WRITE | VFS_CREATE, VFS_DENY_NONE, 0);
-                    if (refusal >= 0) vfs_close(&probe_table, refusal);
+                    if (refusal >= 0) { vfs_close(&probe_table, refusal); refusal = 0; }
                     vfs_table_destroy(&probe_table);
                 } else refusal = open;
             }
-            rec_emit(probe, "DATA", "case=mount drive=%c error=%d reasons=%u mode=%s lost=%u write_refusal=%d writes=%llu",
-                     'A' + d, v->error, v->fat.ro_reasons, v->fat.readonly ? "ro" : "rw", v->fat.lost_clusters, refusal, v->writes);
-            if (v->error ? v->fat.mounted : (!v->fat.readonly || refusal != -FS_EROFS || v->writes ||
+            rec_emit(probe, "DATA", "case=mount drive=%c error=%d reasons=%u mode=%s lost=%u write_refusal=%d writes=%llu recovered=%u refusals=%llu reason=%s",
+                     'A' + d, v->error, v->fat.ro_reasons, v->fat.readonly ? "ro" : "rw", v->fat.lost_clusters, refusal, v->writes,
+                     v->fat.dirty_recovered, v->refused, v->fat.dirty_recovered ? "dirty_recovered" : "mount");
+            if (v->fat.dirty_recovered) {
+                recovered = true;
+                if (v->error || v->fat.readonly || v->fat.ro_reasons || v->fat.lost_clusters || refusal || v->refused || !v->writes)
+                    result = -FS_EIO;
+            } else if (v->error ? v->fat.mounted : (!v->fat.readonly || refusal != -FS_EROFS || v->writes ||
                 !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY)))) result = -FS_EIO;
         }
     }
@@ -582,17 +590,26 @@ int probe_mount_crash(void)
     if (!e) {
         cut_selected = true;
         struct storage_volume *v = storage_volume(s, 2);
-        if (v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY)) {
+        if (v->fat.dirty_recovered || (v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY))) {
             cut_reboot = true;
+            bool recover = v->read_gate && (v->fat.ro_reasons & FAT_RO_DIRTY);
+            int enabled = recover ? storage_enable_write(s, 2) : 0;
             /* The mount scan has already inspected owners; the independent
              * host checker remains mandatory after power-cut/export. */
-            rec_emit(probe, "DATA", "case=crash_reboot reasons=%u lost=%u scan_corrupt=%u checker=host_required writes=%llu",
-                     v->fat.ro_reasons, v->fat.lost_clusters, !!(v->fat.ro_reasons & FAT_RO_CORRUPT), v->writes);
-            int refusal = vfs_open(&probe_table, "C:/F109REF.BIN", VFS_WRITE | VFS_CREATE, VFS_DENY_NONE, 0);
-            if (refusal >= 0) vfs_close(&probe_table, refusal);
-            rec_emit(probe, "DATA", "case=crash_refusal drive=C write_refusal=%d writes=%llu",
-                     refusal, v->writes);
-            if (refusal != -FS_EROFS || v->writes) result = -FS_EIO;
+            rec_emit(probe, "DATA", "case=crash_reboot reasons=%u lost=%u scan_corrupt=%u checker=host_required writes=%llu recovered=%u mode=%s reason=%s",
+                     v->fat.ro_reasons, v->fat.lost_clusters, !!(v->fat.ro_reasons & FAT_RO_CORRUPT), v->writes,
+                     v->fat.dirty_recovered, v->fat.readonly ? "ro" : "rw", v->fat.dirty_recovered ? "dirty_recovered" : "mount");
+            /* Opening the existing marker for writing proves the gate without
+             * changing the interrupted directory sector or orphan LFN. */
+            int refusal = vfs_open(&probe_table, "C:/F109CUT.ARM", VFS_WRITE, VFS_DENY_NONE, 0);
+            if (refusal >= 0) { vfs_close(&probe_table, refusal); refusal = 0; }
+            rec_emit(probe, "DATA", "case=crash_refusal drive=C write_refusal=%d writes=%llu refusals=%llu",
+                     refusal, v->writes, v->refused);
+            if (v->fat.dirty_recovered) {
+                recovered = true;
+                if (enabled || v->fat.readonly || v->fat.ro_reasons || v->fat.lost_clusters || refusal || v->refused || !v->writes)
+                    result = -FS_EIO;
+            } else if (refusal != -FS_EROFS || v->writes) result = -FS_EIO;
             if (v->fat.ro_reasons & FAT_RO_CORRUPT) result = -FS_EUCLEAN;
         } else {
             e = storage_enable_write(s, 2);
@@ -610,6 +627,8 @@ int probe_mount_crash(void)
     } else if (e == -FS_ENOENT) rec_emit(probe, "DATA", "case=crash_cut status=not_run reason=marker_absent");
     else result = e;
     vfs_table_destroy(&probe_table);
+    /* Export after this barrier/unmount sees the recovered clean flag. */
+    if (recovered && !result) result = storage_sync();
     /* Missing fixture/cut evidence must never become a complete PASS. */
     if (!fixtures && !cut_reboot && !result) result = -FS_ENOENT;
     rec_emit(probe, "DATA", "case=coverage fixtures=%u cut_selected=%u cut_reboot=%u checker=host_required", fixtures, cut_selected, cut_reboot);
