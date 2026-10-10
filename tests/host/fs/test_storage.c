@@ -11,6 +11,7 @@
 
 static unsigned checks, records, max_record;
 static unsigned fixture_present, fixture_absent;
+static unsigned fat_read_not_run, fat_read_terminal_not_run;
 static bool cut_probe_after_arm;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr,"STORAGE line %d: %s\n",__LINE__,#x); exit(1); } } while (0)
 #define OK(x) CHECK((x)==0)
@@ -40,6 +41,11 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...) {
         unsigned *mask=!strcmp(status,"present") ? &fixture_present : &fixture_absent;
         CHECK(!((fixture_present|fixture_absent)&(1u<<disk))); *mask|=1u<<disk;
     }
+    if (!strcmp(probe,"fat-read") && !strcmp(event,"ERROR")) {
+        CHECK(strstr(line,"status=not_run reason=fixtures_absent")); fat_read_not_run++;
+    }
+    if (!strcmp(probe,"fat-read") && !strcmp(event,"END") && strstr(line,"status=NOT_RUN"))
+        fat_read_terminal_not_run++;
 }
 static int disk_read(struct blkdev *dev, uint64_t lba, uint32_t n, void *buf) {
     struct disk *d=dev->ctx; int e=blkdev_range(dev,lba,n); if(e) return e;
@@ -367,12 +373,14 @@ static void probe_tests(void) {
     for(unsigned i=1;i<3;i++) OK(storage_add_disk(s,i,&media[i].dev));
     host_mount_snapshot(s);
     CHECK(s->volumes[3].fat.type==12 && s->volumes[4].fat.type==16);
-    fixture_present=fixture_absent=0;
+    fixture_present=fixture_absent=fat_read_not_run=fat_read_terminal_not_run=0;
     OK(probe_fat_read()); CHECK(fixture_present==6 && fixture_absent==8);
+    CHECK(!fat_read_not_run && !fat_read_terminal_not_run);
     CHECK(!media[0].writes && !media[1].writes && !media[2].writes);
     stop(s,true); reset();
-    s=start(); fixture_present=fixture_absent=0;
+    s=start(); fixture_present=fixture_absent=fat_read_not_run=fat_read_terminal_not_run=0;
     OK(probe_fat_read()); CHECK(!fixture_present && fixture_absent==14);
+    CHECK(fat_read_not_run==1 && fat_read_terminal_not_run==1);
     CHECK(!media[0].writes); stop(s,true); reset();
     s=start(); bool reboot=true; OK(storage_write_workload(s,&table,&reboot)); CHECK(!reboot);
     stop(s,true); unsigned writes=media[0].writes;

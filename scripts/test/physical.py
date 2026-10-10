@@ -110,6 +110,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
         seq = 0; run = None; parsers = {}; panic = False
         build = re.search(rb'Ciuki VMM F0 build ([A-Za-z0-9_.+-]+) - CiukiOS', boot)
         records = []
+        fat_read_not_run = False
         for line in boot.splitlines(keepends=True):
             if panic and line.strip(): raise EvidenceError('output after terminal panic')
             r = wire_record(line)
@@ -125,6 +126,18 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
                 if r['event'] == 'SWEEP_END': summaries.append(r)
                 continue
             p = parsers.setdefault(r['probe'], ControllerParser(run, r['probe']))
+            if r['probe'] == 'fat-read' and r['event'] == 'ERROR' and r.get('status') == 'not_run' and r.get('reason') == 'fixtures_absent':
+                if fat_read_not_run or not p.started or p.terminal:
+                    raise EvidenceError('duplicate or late fat-read fixtures_absent outcome')
+                fat_read_not_run = True
+                p.records.append(r)
+                p.not_run_reason = 'fixtures_absent'
+                continue
+            if r['probe'] == 'fat-read' and r['event'] == 'END' and r.get('status') == 'NOT_RUN' and fat_read_not_run:
+                if p.terminal or getattr(p, 'not_run_reason', None) != 'fixtures_absent':
+                    raise EvidenceError('invalid fat-read fixtures_absent terminal')
+                p.records.append(r); p.terminal = r; p.outcome = 'not_run'
+                continue
             p.feed(line); panic = r['event'] == 'PANIC'
         if not records: continue # failed menu attempts in the real T23 capture
         if sweep and b'L:SELECT_SOURCE=cfg' not in boot.splitlines():
@@ -159,7 +172,8 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
                 result['outcome'] = 'pass'; result['reason'] = 'original per-boot predicates passed'
                 for (number, parser), part in zip(observations, declared):
                     try:
-                        if parser.outcome == 'not_run': raise EvidenceNotRun('probe marked NOT_RUN')
+                        if parser.outcome == 'not_run':
+                            raise EvidenceNotRun(getattr(parser, 'not_run_reason', 'probe marked NOT_RUN'))
                         parser.check(part.get('expected', expected))
                         if parser.terminal and parser.terminal['event'] == 'PANIC':
                             observation = metadata.get('panic_observations', {}).get(str(number + 1), metadata)
@@ -178,7 +192,8 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
                 result['outcome'] = 'not_run'; result['reason'] = 'case requires operator confirmation'
         if blocked:
             result['outcome'] = 'not_run'; result['reason'] = 'prerequisite failed: ' + blocked
-        elif failed_prerequisite(case, result): blocked = result['case']
+        elif failed_prerequisite(case, result) and not (probe == 'fat-read' and result['reason'] == 'fixtures_absent'):
+            blocked = result['case']
         results.append(result)
     return results
 
