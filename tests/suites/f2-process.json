@@ -1087,6 +1087,13 @@
             "case": "durable-file"
           }
         }
+      ],
+      "fixtures": [
+        {
+          "fat_type": 16,
+          "seed": 1,
+          "generator": "mkfs.fat"
+        }
       ]
     },
     {
@@ -1298,6 +1305,13 @@
             "case": "durable-file"
           }
         }
+      ],
+      "fixtures": [
+        {
+          "fat_type": 16,
+          "seed": 1,
+          "generator": "mkfs.fat"
+        }
       ]
     },
     {
@@ -1508,6 +1522,13 @@
             "event": "DATA",
             "case": "durable-file"
           }
+        }
+      ],
+      "fixtures": [
+        {
+          "fat_type": 16,
+          "seed": 1,
+          "generator": "mkfs.fat"
         }
       ]
     }
