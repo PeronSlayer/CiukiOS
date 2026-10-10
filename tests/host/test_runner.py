@@ -1,4 +1,5 @@
 import fcntl
+import errno
 import copy
 import hashlib
 import ctypes
@@ -459,6 +460,121 @@ class RunnerTests(unittest.TestCase):
         self.assertNotEqual(boots[0]['run_id'],boots[1]['run_id'])
         self.assertTrue(all(b['cleanup']['clean'] for b in boots))
         self.assertFalse(Path(boots[0]['overlay']).exists())
+
+    def run_fake_sweep(self, *, removal_race=False, **scenario):
+        case={**runner.load_suite('sweep-smoke')['cases'][0], 'timeout':2,
+              'max_boots':3, 'expected':{'terminal':'SWEEP_END','passed':2,'failed':0,'not_run':0}}
+        def step(probe, number):
+            return ['L:SELECT_SOURCE=cfg', {'probe':probe,'event':'BEGIN'},
+                    {'probe':probe,'event':'END','status':'PASS'},
+                    {'probe':probe,'event':'SWEEP','step':str(number),'result':'pass'}]
+        records=[step('boot',0),step('bootinfo',1),
+                 ['L:SELECT_SOURCE=cfg',{'event':'BEGIN'},
+                  {'event':'SWEEP_END','passed':'2','failed':'0','not_run':'0'}]]
+        self.script.write_text(json.dumps({'boot_records':records,
+                                          'boot_reboots':[True,True,False],**scenario}))
+        test=self
+        class SweepHost(FakeHost):
+            def __init__(self):
+                super().__init__(test.cgroup)
+                self.launches=[];self.races=0
+            def launch(self,args,cwd):
+                test.assertFalse((cwd/'gate').exists())
+                test.assertFalse((cwd/'file-limit').exists())
+                test.assertFalse((cwd/'q').exists())
+                test.assertTrue((cwd/'serial.fifo').is_fifo())
+                test.assertFalse((cwd/'blkdebug.conf').exists())
+                drive=args[args.index('-drive')+1].split(',format=',1)[0][5:]
+                self.launches.append({'directory':cwd,'scope':next(a for a in args if a.startswith('--unit=')),
+                                      'overlay':drive,'cfg':Path(drive).read_text()})
+                return super().launch(args,cwd)
+            def scope_pids(self,path):
+                runner.Host.scope_pids(self,path)
+                return super().scope_pids(path)
+        host=SweepHost();(self.cgroup/'cgroup.procs').write_text('')
+        original_read=Path.read_text
+        def read(path,*args,**kwargs):
+            if removal_race and path==self.cgroup/'cgroup.procs' and len(host.launches)==2 and host.process.poll() is not None:
+                host.races+=1
+                raise OSError(errno.ENODEV,os.strerror(errno.ENODEV))
+            return original_read(path,*args,**kwargs)
+        def patch_cfg(host,image,overlay,directory,request):
+            overlay.write_text('safe=0 serial=1\nprobe='+request+'\n')
+            return [{'file':'SYSTEM/BOOT.CFG','selector':request}]
+        with res.ExclusiveLock(self.root/'shared.lock'), \
+             patch.object(runner,'patch_sweep_cfg',side_effect=patch_cfg) as cfg_patch, \
+             patch.object(Path,'read_text',read):
+            result,directory=runner.run_case(self.root,'sweep-fixture',case,self.profile,self.image,
+                                           str(ROOT/'tests/host/fake_qemu.py'),self.firmware,host=host,qemu_img=str(self.img))
+        self.assertEqual(cfg_patch.call_count,1)
+        self.assertEqual(host.scope_pids(self.cgroup),[])
+        return result,directory,host
+
+    def test_sweep_relaunches_three_real_processes_through_scope_removal(self):
+        result,directory,host=self.run_fake_sweep(removal_race=True)
+        self.assertEqual(result['outcome'],'pass',result['reason'])
+        self.assertEqual(len(result['sweep_boots']),3);self.assertGreater(host.races,0)
+        self.assertEqual(len({l['overlay'] for l in host.launches}),1)
+        self.assertEqual(len({l['scope'] for l in host.launches}),3)
+        self.assertIn(' step=1',host.launches[1]['cfg']);self.assertIn(' step=2',host.launches[2]['cfg'])
+        self.assertEqual(len({b['run_id'] for b in result['sweep_boots']}),1)
+        self.assertTrue(all(b['cleanup']['clean'] for b in result['sweep_boots']))
+        self.assertTrue(all(l['directory'].joinpath('result.json').is_file() for l in host.launches))
+        self.assertTrue(all(not l['directory'].joinpath('serial.fifo').exists() for l in host.launches))
+        self.assertEqual(json.loads((directory/'result.json').read_text())['outcome'],'pass')
+        self.assertFalse(Path(result['overlay_path']).exists())
+        self.assertEqual(self.image.read_bytes(),b'canonical immutable image')
+
+    def test_sweep_rejects_abnormal_self_reboot_and_preserves_overlay(self):
+        result,directory,host=self.run_fake_sweep(boot_exit_codes=[0,7,0])
+        self.assertEqual(result['outcome'],'fail');self.assertEqual(len(host.launches),2)
+        self.assertEqual(result['sweep_boot'],2)
+        self.assertTrue(Path(result['overlay_path']).exists())
+        self.assertTrue((directory/'result.json').is_file())
+
+    def test_sweep_finalization_exception_records_boot_and_keeps_evidence(self):
+        prune=runner.res.prune
+        def fail_second_boot(path,*args,**kwargs):
+            if any(path.glob('*/boot-2/result.json')):
+                raise OSError(errno.EIO,'fixture finalization failed')
+            return prune(path,*args,**kwargs)
+        with patch.object(runner.res,'prune',side_effect=fail_second_boot):
+            result,directory,host=self.run_fake_sweep()
+        self.assertEqual(result['outcome'],'fail');self.assertEqual(len(host.launches),2)
+        self.assertEqual(result['sweep_boot'],2)
+        self.assertIn('sweep boot 2',result['reason'])
+        self.assertIn('fixture finalization failed',result['reason'])
+        self.assertEqual(result['runner_exception']['type'],'OSError')
+        self.assertEqual(len(result['sweep_boots']),2)
+        self.assertTrue(result['cleanup']['clean'])
+        self.assertTrue(any(r['probe']=='bootinfo' for r in result['observed']))
+        saved=json.loads((directory/'result.json').read_text())
+        self.assertEqual(saved['runner_exception'],result['runner_exception'])
+        self.assertTrue(Path(result['overlay_path']).exists())
+
+    def test_sweep_without_end_stops_at_max_boots(self):
+        records=['L:SELECT_SOURCE=cfg',{'probe':'boot','event':'BEGIN'},
+                 {'probe':'boot','event':'END','status':'PASS'},
+                 {'probe':'boot','event':'SWEEP','step':'0','result':'pass'}]
+        result,directory,host=self.run_fake_sweep(boot_records=[records]*3,boot_reboots=[True]*3)
+        self.assertEqual(result['outcome'],'fail');self.assertEqual(len(host.launches),3)
+        self.assertIn('bounded boot count',result['reason'])
+        self.assertTrue(Path(result['overlay_path']).exists())
+        self.assertTrue((directory/'result.json').is_file())
+
+    def test_scope_pid_read_only_ignores_removed_cgroups(self):
+        (self.cgroup/'cgroup.procs').write_text('123\n')
+        nested=self.cgroup/'nested';nested.mkdir();(nested/'cgroup.procs').write_text('456\n')
+        original_read=Path.read_text
+        for code in (errno.ENOENT,errno.ENODEV,errno.EACCES,errno.EIO):
+            def read(path,*args,**kwargs):
+                if path==self.cgroup/'cgroup.procs':raise OSError(code,os.strerror(code))
+                return original_read(path,*args,**kwargs)
+            with self.subTest(errno=code),patch.object(Path,'read_text',read):
+                if code in (errno.ENOENT,errno.ENODEV):
+                    self.assertEqual(runner.Host().scope_pids(self.cgroup),[456])
+                else:
+                    with self.assertRaises(OSError):runner.Host().scope_pids(self.cgroup)
 
     def test_readonly_export_after_stop_before_fsck_and_mtools(self):
         self.case['checks']={'offset':0,'size':len(self.image.read_bytes()),'listing_contains':['EMPTY']}

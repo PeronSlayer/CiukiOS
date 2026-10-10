@@ -24,15 +24,23 @@ if scenario.get('boot_records'):
     scenario['records']=scenario['boot_records'][boot]
 gates=scenario.get('boot_gates',[[]]*(boot+1))[boot]
 gate_index=0;gate_armed=False;gate_suspended=False;crash_arm_emitted=False;setup_writes=0
-selector=sys.argv[sys.argv.index('-fw_cfg')+1].split('string=',1)[1]
+if '-fw_cfg' in sys.argv:
+    selector=sys.argv[sys.argv.index('-fw_cfg')+1].split('string=',1)[1]
+else:
+    # The sweep fixture stores a tiny BOOT.CFG in the shared fake overlay.
+    overlay=Path(sys.argv[sys.argv.index('-drive')+1].split(',format=',1)[0][5:])
+    cfg=overlay.read_text()
+    selector=next(line[6:] for line in cfg.splitlines() if line.startswith('probe='))
+    assert '-no-reboot' in sys.argv and '-no-shutdown' not in sys.argv
 run_id=selector.split('run=')[1][:8];probe=selector.split(':')[1].split()[0]
 Path('fake-arguments.json').write_text(json.dumps(sys.argv[1:]))
 commands=open('commands.fifo','rb',buffering=0)
 responses=open('responses.fifo','wb',buffering=0)
+Path('q').touch()
 class Connection:
     def sendall(self,data):responses.write(data)
     def makefile(self,mode):return commands
-conn=Connection();Path('q').touch()
+conn=Connection()
 conn.sendall(b'{"QMP":{"version":{"qemu":{"major":11,"minor":0,"micro":0}},"capabilities":[]}}\n')
 if scenario.get('child'):
     child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)'])
@@ -119,6 +127,12 @@ for raw in stream:
         elif gates:pass
         elif scenario.get('flood') or scenario.get('application_bytes'):threading.Thread(target=emit,daemon=True).start()
         else:emit()
+        if scenario.get('boot_reboots', [False]*(boot+1))[boot]:
+            # Persist the guest cursor before -no-reboot ends this process.
+            overlay.write_text('safe=0 serial=1\nprobe=f0:sweep run='+run_id+' step='+str(boot+1)+'\n')
+            conn.sendall(b'{"event":"SHUTDOWN","data":{"guest":true,"reason":"guest-reset"}}\n')
+            serial.close()
+            sys.exit(scenario.get('boot_exit_codes',[0]*(boot+1))[boot])
     if cmd=='human-monitor-command' and gates:
         if text=='resume ciuki-write' and gate_index<len(gates):emit(gates[gate_index])
         if gate_index<len(gates) and not gate_suspended:suspend_gate()

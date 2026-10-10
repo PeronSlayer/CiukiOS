@@ -89,3 +89,21 @@ class SweepTests(unittest.TestCase):
                  patch.object(runner.secrets, 'token_hex', return_value='87654321'):
                 result, _ = runner.run_sweep(root,'sweep-smoke',{**case,'max_boots':2},{},image,'qemu','bios',host)
             self.assertEqual(result['outcome'],'fail');self.assertIn('bounded',result['reason'])
+
+    def test_relaunch_setup_exception_is_a_failed_boot_result(self):
+        folder = ROOT / 'build/host/sweep'; folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=folder) as temp:
+            root=Path(temp);image=root/'image.img';image.write_bytes(b'canonical')
+            case=runner.load_suite('sweep-smoke')['cases'][0]
+            host=type('Host',(),{'preflight':lambda self,path:None})()
+            first={'outcome':'pass','sweep_continue':True,'observed':[{'event':'SWEEP'}]}
+            with patch.object(runner,'_run_boot',side_effect=[(first,root/'first'),OSError(19,'No such device')]), \
+                 patch.object(runner.subprocess,'run'):
+                result,directory=runner.run_sweep(root,'sweep-smoke',case,{},image,'qemu','bios',host)
+            self.assertEqual(result['outcome'],'fail')
+            self.assertEqual(result['sweep_boot'],2)
+            self.assertEqual(len(result['sweep_boots']),2)
+            self.assertIn('sweep boot 2',result['reason'])
+            self.assertIn('[Errno 19] No such device',result['reason'])
+            self.assertEqual(result['runner_exception'],{'type':'OSError','text':'[Errno 19] No such device'})
+            self.assertTrue((directory/'result.json').is_file())

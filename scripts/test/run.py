@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Canonical-image F0/F1 runner. Python standard library only; never builds images."""
 import argparse
+import errno
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -721,7 +722,12 @@ class Host:
         result=[]
         for p in [path/'cgroup.procs',*path.glob('**/cgroup.procs')]:
             try:result.extend(int(v) for v in p.read_text().split())
-            except FileNotFoundError:continue
+            except OSError as error:
+                # A scope may vanish between lookup/open/read after QEMU's
+                # self-reset. kernfs reports ENODEV for an inactive node:
+                # https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/kernfs/file.c
+                if error.errno not in (errno.ENOENT,errno.ENODEV): raise
+                continue
         return sorted(set(result))
 
     def fat_fixture(self,fixture,directory,index):
@@ -827,7 +833,14 @@ def teardown(host,unit,process,qmp,cgroup):
         result['qmp_quit_requested']=True
         try:qmp.command('quit');result['qmp_quit']=True
         except (OSError,RuntimeError,ValueError):pass
-    def finished(): return process.poll() is not None and not host.scope_pids(cgroup)
+    def scope_pids():
+        try:return host.scope_pids(cgroup)
+        except (OSError,ValueError,RuntimeError) as error:
+            message=str(error) or type(error).__name__
+            errors=result.setdefault('pid_inspection_errors',[])
+            if message not in errors:errors.append(message)
+            return None  # Unknown ownership must fail closed and trigger kills.
+    def finished(): return process.poll() is not None and scope_pids()==[]
     def wait_for(seconds):
         until=time.monotonic()+seconds
         while time.monotonic()<until:
@@ -851,9 +864,9 @@ def teardown(host,unit,process,qmp,cgroup):
             wait_for(2)
     try:process.wait(timeout=1)
     except subprocess.TimeoutExpired:pass
-    result['remaining_children']=host.scope_pids(cgroup)
+    result['remaining_children']=scope_pids()
     result['wrapper_returncode']=process.poll()
-    result['clean']=finished()
+    result['clean']=finished() and not result.get('pid_inspection_errors')
     return result
 
 
@@ -972,7 +985,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     directory=runs/suite/run_id
     if case.get('sweep'): directory /= 'boot-' + str(case.get('_sweep_boot', 1))
     overlay=shared_overlay or directory/'run.qcow2';fifo=directory/'serial.fifo';gate=directory/'gate'
-    unit='ciuki-test-'+run_id+'.scope';identity=git_identity(root)
+    unit='ciuki-test-'+run_id+('-boot-'+str(case.get('_sweep_boot',1)) if case.get('sweep') else '')+'.scope';identity=git_identity(root)
     args,request=qemu_args(executable,profile,case,run_id,overlay,firmware)
     scoped=['systemd-run','--user','--scope','--unit='+unit,'-p','MemoryMax=1500M','-p','MemorySwapMax=0','--',
             sys.executable,str(ROOT/'scripts/test/scope_exec.py'),str(gate),*args]
@@ -989,6 +1002,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     'firmware_sha256':sha(firmware),'devices':{'ide':'PIIX','i8042':True,'vga':case.get('device_exceptions',{}).get('vga',profile['vga']),
                         'com1':case.get('device_exceptions',{}).get('serial','file'),'audio':profile.get('audio','none')}}}
     result['build_git_revision']=result['build_manifest']['revision'];result['build_dirty']=result['build_manifest']['dirty']
+    if case.get('sweep'):result['sweep_boot']=case.get('_sweep_boot',1)
     actions=Actions(case.get('actions',[]))
     write_gate=WriteGate(case['crash_cut']['index']) if case.get('crash_cut') else None
     result.update(stimulus={'sha256':digest_json(case.get('actions',[])),'declared':case.get('actions',[]),'observed':[]},
@@ -1038,43 +1052,63 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         (directory/'file-limit').write_text(str(remaining))
         gate.write_text('verified')
         dirfd=os.open(directory,os.O_RDONLY)
+        def collect(source, observe_qmp=True):
+            nonlocal pending, armed_stats
+            chunk=os.read(source,65536)
+            if not chunk:return
+            target=serial if source==fd else stderr
+            if source==fd:
+                pending+=chunk
+                while b'\n' in pending:
+                    line,pending=pending.split(b'\n',1);line+=b'\n'
+                    try:record=parser.feed(line)
+                    except EvidenceError:
+                        # Retain the first malformed controller line for
+                        # diagnosis too; never silently repair its bytes.
+                        serial.write(line[:max(0,res.LOG_CAP-serial.tell())]);serial.flush()
+                        raise
+                    # Application frames are hashed/scanned in full and
+                    # retained as bounded head/tail in result.json. The
+                    # serial log budget is reserved for controller evidence.
+                    if not record or record.get('group') not in ('app','app_digest'):
+                        if serial.tell()+len(line)>res.LOG_CAP:raise EvidenceError('serial/stderr log cap reached')
+                        serial.write(line);serial.flush()
+                    if observe_qmp and write_gate and qmp:write_gate.synchronize(record,qmp)
+                    if observe_qmp and parser.records and parser.records[-1]['event']=='ARM' and armed_stats is None and qmp:
+                        armed_stats=writes(qmp.command('query-blockstats'));result['observed_blockstats_armed']=armed_stats
+                if serial.tell()+len(pending)>res.LOG_CAP:
+                    serial.write(pending[:max(0,res.LOG_CAP-serial.tell())]);serial.flush()
+                    raise EvidenceError('unterminated serial line exceeds cap')
+            else:
+                remaining=res.LOG_CAP-target.tell()
+                target.write(chunk[:remaining]);target.flush()
+                if len(chunk)>remaining:raise EvidenceError('serial/stderr log cap reached')
+                if write_gate:write_gate.feed(chunk,time.monotonic())
+
+        def sweep_exit():
+            # QMP can close before the final UART bytes are collected. Wait
+            # for the wrapper, then drain the FIFO before judging the boot.
+            if process.wait(timeout=1) != 0:
+                raise EvidenceError('sweep QEMU/scope exited abnormally')
+            while select.select([fd],[],[],0)[0]: collect(fd,observe_qmp=False)
+            if pending: raise EvidenceError('incomplete serial line at sweep exit')
+            if qmp is None: raise EvidenceError('sweep exit without QMP observation')
+            if parser.terminal:
+                if parser.terminal['event'] != 'SWEEP_END':
+                    raise EvidenceError('QEMU exited before terminal observation completed')
+                parser.check(case['expected'])
+            elif parser.completed and parser.source_cfg:
+                result['sweep_continue'] = True
+            else:
+                raise EvidenceError('QEMU exited before sweep step completed')
+
         while True:
             now=time.monotonic()
             if now>=deadline:
                 result['timeout']['occurred']=True;raise EvidenceError('host monotonic deadline exceeded')
             res.check_budget(runs)
             ready,_,_=select.select([fd,process.stdout.fileno()],[],[],.025)
-            for source in ready:
-                chunk=os.read(source,65536)
-                if not chunk:continue
-                target=serial if source==fd else stderr
-                if source==fd:
-                    pending+=chunk
-                    while b'\n' in pending:
-                        line,pending=pending.split(b'\n',1);line+=b'\n'
-                        try:record=parser.feed(line)
-                        except EvidenceError:
-                            # Retain the first malformed controller line for
-                            # diagnosis too; never silently repair its bytes.
-                            serial.write(line[:max(0,res.LOG_CAP-serial.tell())]);serial.flush()
-                            raise
-                        # Application frames are hashed/scanned in full and
-                        # retained as bounded head/tail in result.json. The
-                        # serial log budget is reserved for controller evidence.
-                        if not record or record.get('group') not in ('app','app_digest'):
-                            if serial.tell()+len(line)>res.LOG_CAP:raise EvidenceError('serial/stderr log cap reached')
-                            serial.write(line);serial.flush()
-                        if write_gate and qmp:write_gate.synchronize(record,qmp)
-                        if parser.records and parser.records[-1]['event']=='ARM' and armed_stats is None and qmp:
-                            armed_stats=writes(qmp.command('query-blockstats'));result['observed_blockstats_armed']=armed_stats
-                    if serial.tell()+len(pending)>res.LOG_CAP:
-                        serial.write(pending[:max(0,res.LOG_CAP-serial.tell())]);serial.flush()
-                        raise EvidenceError('unterminated serial line exceeds cap')
-                else:
-                    remaining=res.LOG_CAP-target.tell()
-                    target.write(chunk[:remaining]);target.flush()
-                    if len(chunk)>remaining:raise EvidenceError('serial/stderr log cap reached')
-                    if write_gate:write_gate.feed(chunk,time.monotonic())
+            for source in ready:collect(source)
             if qmp is None and (directory/'q').exists():
                 qmp=host.connect_qmp(Path('/proc/self/fd')/str(dirfd)/'q',qlog)
                 version=qmp.greeting['QMP']['version']
@@ -1095,9 +1129,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 except (OSError,RuntimeError):
                     # -no-reboot closes QMP at the reset. Only a completed
                     # cfg-sourced step and a clean process exit permit relaunch.
-                    if not case.get('sweep') or not parser.completed or not parser.source_cfg: raise
-                    if process.wait(timeout=1) != 0: raise
-                    result['sweep_continue'] = True
+                    if not case.get('sweep'): raise
+                    sweep_exit()
                     break
                 if unexpected_resets(qmp.events,expected_resets) or not case.get('sweep') and any(e.get('event')=='SHUTDOWN' and e.get('data',{}).get('reason')=='guest-reset' for e in qmp.events):
                     raise EvidenceError('unexpected reset')
@@ -1169,10 +1202,10 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     else:
                         break
             if process.poll() is not None:
-                if pending:parser.feed(pending)
-                if case.get('sweep') and parser.completed and parser.source_cfg and process.returncode == 0:
-                    result['sweep_continue'] = True
+                if case.get('sweep'):
+                    sweep_exit()
                     break
+                if pending:parser.feed(pending)
                 raise EvidenceError('QEMU exited before observation completed')
             if case.get('evidence_sink')=='screen' and now-launched>=case.get('screen_capture_after',10) and not (directory/'screen.ppm').exists() and qmp:
                 qmp.command('screendump',{'filename':str(directory/'screen.ppm')})
@@ -1186,6 +1219,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['outcome']='pass';result['reason']='all declared predicates and host observations passed'
     except (OSError,ValueError,RuntimeError,subprocess.SubprocessError,KeyboardInterrupt) as e:
         result['reason']=str(e) or type(e).__name__
+        if case.get('sweep'):
+            result['runner_exception']={'type':type(e).__name__,'text':str(e)}
         if isinstance(e,(TimeoutError,subprocess.TimeoutExpired)) or result['timeout']['occurred']:
             result['timeout']['occurred']=True
             result['timeout']['source']=type(e).__name__
@@ -1210,7 +1245,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         for log in logs:log.close()
         if not (directory/'serial.log').exists():(directory/'serial.log').touch()
         if not result['cleanup']['clean']:
-            result['outcome']='fail';result['reason']='owned children survived teardown'
+            result['outcome']='fail'
+            errors=result['cleanup'].get('pid_inspection_errors')
+            result['reason']='scope PID inspection failed: '+'; '.join(errors) if errors else 'owned children survived teardown'
         if result['outcome']=='pass' and result['cut_point'] is None and result['cleanup'].get('wrapper_returncode')!=0:
             result['outcome']='fail';result['reason']='QEMU/scope exited abnormally after observation'
         if cgroup is not None:
@@ -1281,7 +1318,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         result['artifacts']={k:v for k,v in result['artifacts'].items() if (directory/k).is_file()}
         result['retention']={'keep_requested':keep,'passing_files':['result.json','serial.log']}
         (directory/'result.json').write_text(json.dumps(result,indent=2)+'\n')
-        res.prune(directory.parent)
+        res.prune(directory.parent.parent if case.get('sweep') else directory.parent)
     return result,directory
 
 
@@ -1476,22 +1513,43 @@ def run_sweep(root, suite, case, profile, image, executable, firmware, host=None
     parent = root / 'build/test-runs' / suite / run_id
     host.preflight(root / 'build/test-runs'); parent.mkdir(parents=True, exist_ok=False)
     shared = parent / 'run.qcow2'
-    subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(shared)],
-                   check=True,stdout=subprocess.DEVNULL,timeout=10)
-    sequence = []; ended = False
-    for number in range(1, maximum + 1):
-        selected = {**case, '_run_id':run_id, '_sweep_boot':number}
-        result, directory = _run_boot(root,suite,selected,profile,image,executable,firmware,host,keep,qemu_img,
-                                      shared_overlay=shared,retain_overlay=True)
-        sequence.append(result)
-        if sha(image) != baseline:
-            result['outcome'] = 'fail'; result['reason'] = 'sweep backing image changed'; break
-        if result['outcome'] != 'pass': break
-        if any(r['event'] == 'SWEEP_END' for r in result['observed']): ended = True; break
-        if not result.get('sweep_continue') and not any(r['event'] == 'PANIC' for r in result['observed']):
-            result['outcome'] = 'fail'; result['reason'] = 'sweep boot did not request continuation'; break
+    sequence = []; ended = False; number = 1; result = None
+    directory = parent / 'boot-1'
+    try:
+        subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(shared)],
+                       check=True,stdout=subprocess.DEVNULL,timeout=10)
+        for number in range(1, maximum + 1):
+            selected = {**case, '_run_id':run_id, '_sweep_boot':number}
+            directory = parent / ('boot-' + str(number)); result = None
+            result, directory = _run_boot(root,suite,selected,profile,image,executable,firmware,host,keep,qemu_img,
+                                          shared_overlay=shared,retain_overlay=True)
+            result['sweep_boot'] = number
+            sequence.append(result)
+            if sha(image) != baseline:
+                result['outcome'] = 'fail'; result['reason'] = 'sweep backing image changed'; break
+            if result['outcome'] != 'pass': break
+            if any(r['event'] == 'SWEEP_END' for r in result['observed']): ended = True; break
+            if not result.get('sweep_continue') and not any(r['event'] == 'PANIC' for r in result['observed']):
+                result['outcome'] = 'fail'; result['reason'] = 'sweep boot did not request continuation'; break
+    except (Exception, KeyboardInterrupt) as error:
+        # Boot setup and finalization can fail outside _run_boot's collector
+        # try block. Preserve any completed evidence and attribute the error
+        # to this boot, so main writes a failed case instead of bare REFUSED.
+        if result is None:
+            try: result = load(directory / 'result.json')
+            except (OSError,ValueError): result = {}
+        result.update(schema_version=1,suite=suite,probe=case['probe'],case=case['id'],
+                      run_id=run_id,sweep_boot=number,outcome='fail',utc_end=utc(),
+                      reason=type(error).__name__ + ': ' + (str(error) or type(error).__name__),
+                      runner_exception={'type':type(error).__name__,'text':str(error)})
+        result.setdefault('observed',[])
+        result.setdefault('cleanup',{'clean':False,'reason':'boot did not finish'})
+        directory.mkdir(parents=True,exist_ok=True)
+        if sequence and sequence[-1].get('sweep_boot') == number: sequence[-1] = result
+        else: sequence.append(result)
     if not ended and result['outcome'] == 'pass':
         result['outcome'] = 'fail'; result['reason'] = 'sweep exceeded bounded boot count'
+    if result['outcome'] != 'pass': result['reason'] = f"sweep boot {number}: " + result['reason']
     aggregate = {**result, 'sweep_boots':sequence, 'case':case['id'], 'run_id':run_id,
                  'overlay_path':str(shared), 'image_sha256':baseline}
     (directory / 'result.json').write_text(json.dumps(aggregate,indent=2)+'\n')
