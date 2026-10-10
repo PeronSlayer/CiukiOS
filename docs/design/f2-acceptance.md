@@ -372,6 +372,8 @@ native execution, without special allocator, parser or scheduler variants.
 
 ### Desktop qualification and stretch
 
+**[F2/T4, f1-34 amendment]** Post-fault ARM/interaction records identify `criteria=operator` for an answered sweep prompt and `criteria=exact` for runner input; both retain `keys >= 2`, `motion >= 1`, `buttons >= 2` and all liveness/redraw requirements. Research (2026-10-11): Linux v6.12's [PS/2 decoder](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/input/mouse/psmouse-base.c) separates button state from motion; Ciuki's `desktop_input_event` likewise maps `INPUT_BTN` to `CIUKI_INPUT_BUTTON`, with no button mask in motion events. The capture's desktop exit preceded any counted button edge; a type mismatch is not established. Linux's [nonblocking message send](https://raw.githubusercontent.com/torvalds/linux/v6.12/ipc/msg.c) returns EAGAIN on a full queue, as does Ciuki's `channel_send`, so pending replies are retried across gate frames with a 1000 ms command-barrier deadline, below the controller's 3000 ms deadline. Interaction summaries coalesce at 100 ms intervals and do not require drained client queues; fatal gate paths name their reason on stderr. The native harness must consume 3000 motion, 200 key and 74 button events with transient backpressure and remain alive through the last release.
+
 **[F2]** An early stand-in server MAY establish isolation during implementation,
 but `server=standin` MUST NOT close the final F2 gate. On LFB-equipped evidence
 profiles and both laptops the final run MUST use the actual ring-3 desktop,

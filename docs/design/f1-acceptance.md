@@ -340,6 +340,8 @@ summaries in result.json before deleting passing overlays; retain bounded failur
 
 ## Physical procedure and exit condition
 
+**[F1/T4, f1-34 amendment]** An answered sweep prompt selects `criteria=operator`: at least ten lowercase `a` characters (other text is counted and retained), 20 key transitions, two button transitions including press/release, and `|x| + |y| >= 50` in measured signed motion totals. Sampling ends after these thresholds and 1000 ms without events, or at the unchanged 120 s stimulus deadline; zero loss, resynchronization, duplicates and errors, released keys/buttons and retained ownership remain mandatory; typematic repeats (a make code while the key is already down) are recorded and are not a failure under `criteria=operator`, because a human holding a key produces them (lead amendment at review). ARM and counts retain the criteria and thresholds; QEMU remains `criteria=exact` with its existing totals, text digest and 50 ms quiet period. Research (2026-10-11): Linux v6.12's [PS/2 packet decoder](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/input/mouse/psmouse-base.c) reports button bits separately from relative motion; Ciuki's `input_digest_add` counts the resulting `INPUT_BTN` edges separately. These thresholds are the directive's hardware acceptance policy, not PS/2 protocol requirements; the historical sweep also recorded `repeats=13`, which the operator criteria tolerate.
+
 **[F1/T4]** Follow F0's explicitly authorized expendable-disk procedure, stable
 identity checks, canonical write/readback SHA-256 and servicing manuals. Capture
 BIOS, RAM, PCI, ATA identity, input policy and firmware dependencies for both
