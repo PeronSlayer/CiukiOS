@@ -80,8 +80,37 @@ The kernel linker script defines `.text`, `.rodata`, `.data`, `.bss` with
   clear (`dos-dpmi-contract.md`).
   Double fault uses a task gate to a dedicated TSS and stack so a kernel
   stack overflow still reaches the crash screen.
-- Kernel stacks: 8 KiB per thread plus an unmapped guard page below, in the
-  `F0000000` region (`boot-memory.md`).
+- Kernel stacks: 16 KiB per thread plus an unmapped guard page below, in the `F0000000`
+  region (`boot-memory.md`), superseding F0's 8 KiB bound for f2-20. The T23 sweep
+  `44444444` (boot 33, image `cb33aec3…`, commit `f7286ca`) exhausted that bound after
+  `inherit-cloexec` (ESP 8204 bytes below the top, faulting CR2 access at depth 8208).
+  The capture reports 523260 KiB usable RAM, 3276 free DMA pages and 126816 free NORMAL
+  pages; the pre-change build/map at `6c6dfc471aa1` places `c01139a0` inside `fat_next`
+  (an operand, so the historical instruction needs the matching historical ELF). The
+  next source operation is the legacy share test, with the identifiable chain
+  `probe_f2_fd_table` (inlined `kernel_cases`) → `vfs_open` → `resolve` → `fat_lookup` →
+  `fat_next` → directory/cache/device I/O; the first five compiler stack-usage entries
+  alone total 7104 bytes before directory reads, callers and interrupts. Before
+  enlargement, the production fd cases, FAT executable snapshot/load, inherited-fd spawn
+  and durable cases measured 8208 touched bytes on a diagnostic host stack; a guarded
+  8192-byte host stack faulted with and without a simulated IRQ (host x86-64 is not T23
+  evidence). Choose four mapped pages rather than two for every thread, because native
+  threads also run spawn/VFS syscalls: cost +2 physical pages (8 KiB) per live task, +2
+  virtual pages per slot, no new page tables in the preallocated kernel region, same
+  guard and dedicated double-fault TSS. Preserve the 4096-byte single-frame guard and
+  stricter 1024-byte app/supervisor guard. [Intel SDM Vol. 3A
+  §6.12.1](https://www.sra.uni-hannover.de/Lehre/SS22/V_BSB/doc/intel_manual_vol3.pdf)
+  confirms same-CPL IRQ entry uses the current stack; [FreeRTOS's upstream
+  fill/scan](https://github.com/FreeRTOS/FreeRTOS-Kernel/blob/main/tasks.c) informs the
+  bounded, on-demand byte watermark: fill before the first frame, skip the reserved
+  canary, report full size if it is damaged. This measures touched bytes, can
+  underestimate untouched reservations/pattern collisions, and adds O(stack size)
+  creation/scan work without scheduler/IRQ instrumentation; fd-table DATA and completed
+  sweep SWEEP records carry task, size and high_water. Host regression reserves the
+  68-byte IA-32 entry frame plus 512 handler bytes at every storage callback and keeps
+  overflow negative controls; the guarded 16 KiB run passes with 8208 touched bytes,
+  8176 bytes of headroom and 230 simulated interrupts; QEMU and T23 requalification
+  remain the lead's acceptance gate.
 
 ## Decision for F2: a POSIX-compatible native API (2026-10-09)
 

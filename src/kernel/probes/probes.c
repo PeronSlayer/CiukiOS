@@ -1008,7 +1008,8 @@ static __attribute__((noreturn)) void sweep_main(struct sweep_cursor cursor,
     if (result < 0) not_run++;
     else if (result) failed++;
     else passed++;
-    rec_emit(step.name, "SWEEP", "step=%u result=%s", current, outcome);
+    rec_emit(step.name, "SWEEP", "step=%u result=%s task=%s size=%u high_water=%u",
+             current, outcome, g_current->name, KSTACK_SIZE, task_stack_high_water(g_current));
     cursor.state = passed | (failed << 6) | (not_run << 12);
     e = sweep_checkpoint(storage, &cursor);
     if (e) sweep_stop(&step, current, e);

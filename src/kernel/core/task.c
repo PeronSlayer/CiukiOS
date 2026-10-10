@@ -81,6 +81,25 @@ static bool rq_any(void)
     return false;
 }
 
+void task_stack_init(void *base)
+{
+    memset(base, KSTACK_FILL, KSTACK_SIZE);
+    *(volatile uint32_t *)base = KSTACK_CANARY;
+}
+
+unsigned task_stack_high_water(const struct task *t)
+{
+    if (!t || !t->kstack)
+        return 0;                       /* boot/host tasks have no owned stack */
+    const volatile uint8_t *bytes = t->kstack;
+    if (*(const volatile uint32_t *)bytes != KSTACK_CANARY)
+        return KSTACK_SIZE;
+    unsigned untouched = sizeof(uint32_t);
+    while (untouched < KSTACK_SIZE && bytes[untouched] == KSTACK_FILL)
+        untouched++;
+    return KSTACK_SIZE - untouched;
+}
+
 static struct task *task_alloc(const char *name, enum task_prio prio, bool user)
 {
     struct task *t = kzalloc(sizeof(*t));
@@ -98,7 +117,7 @@ static struct task *task_alloc(const char *name, enum task_prio prio, bool user)
         return 0;
     }
     t->fpu_area = (uint8_t *)(((uintptr_t)t->fpu_alloc + 15) & ~(uintptr_t)15);
-    *(volatile uint32_t *)t->kstack = KSTACK_CANARY;
+    task_stack_init(t->kstack);
     t->id = next_id++;
     t->generation = 1;
     t->prio = prio;

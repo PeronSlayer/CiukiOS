@@ -13,6 +13,13 @@ enum task_prio { P_DEVICE, P_INTERACTIVE, P_NORMAL, P_IDLE, P_COUNT };
 
 #define EXIT_FAULT_BASE 0x100      /* exit code = 0x100 + vector for faults */
 #define KSTACK_CANARY   0xC1A0CA7Au /* lowest word of every kernel stack */
+#define KSTACK_FILL     0xA5u
+struct task;
+void task_stack_init(void *base);  /* unused stack only, before its first frame */
+/* Bytes touched since creation, excluding the reserved canary word. A damaged
+ * canary reports KSTACK_SIZE. Scan only a live, unreaped task's stack; this is
+ * a watermark of writes, not a bound on untouched local reservations. */
+unsigned task_stack_high_water(const struct task *t);
 unsigned task_canary_errors(void);
 unsigned task_present_guards(void);
 extern uint64_t g_task_switches_other;   /* user -> user switches not caused by the timer */
@@ -28,7 +35,7 @@ struct task {
     bool user;
     bool measured;                 /* counted by the preemption measurement */
     bool boosted;                  /* starvation boost applied (once per episode) */
-    void *kstack;                  /* lowest address of the 8 KiB stack */
+    void *kstack;                  /* lowest address of the KSTACK_SIZE stack */
     uint32_t saved_esp;
     struct aspace as;              /* user tasks only */
     uint8_t *fpu_area;             /* 16-byte aligned, 512 bytes */

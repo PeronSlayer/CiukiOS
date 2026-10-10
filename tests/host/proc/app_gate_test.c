@@ -362,7 +362,7 @@ static int gate_test_run(void)
  * the actual probe (including metadata and both fake Lua runs) in that
  * thread on an exact KSTACK_SIZE mapping with inaccessible pages around it.
  * This binary is separate from the ASan harness: instrumentation and libc
- * thread startup are not part of the kernel's 8 KiB stack budget.
+ * thread startup are not part of the kernel's stack budget.
  * https://man7.org/linux/man-pages/man3/pthread_attr_setstacksize.3.html
  * https://sourceware.org/glibc/manual/latest/html_node/System-V-contexts.html */
 static ucontext_t stack_caller, stack_probe;
@@ -384,7 +384,7 @@ static void gate_stack_entry(void)
     uint8_t marker;
     uintptr_t address=(uintptr_t)&marker, bottom=(uintptr_t)stack_mapping+stack_guard;
     if (address < bottom || address >= bottom+KSTACK_SIZE) abort();
-    if (mode==20) { (void)gate_stack_overflow(32); abort(); }
+    if (mode==20) { (void)gate_stack_overflow(KSTACK_SIZE/512+8); abort(); }
     stack_result=gate_test_run();
 }
 static void *gate_stack_thread(void *unused)

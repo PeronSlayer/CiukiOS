@@ -525,6 +525,9 @@ static void test_uname(void)
     CHECK(call(CIUKI_SYS_UNAME, USER + 2 * PAGE_SIZE - 8, 0, 0, 0, 0) == -EFAULT);
     puts("files uname: 336-byte layout, identity/build, RTC/fallback agreement, zero padding, bad ranges PASS");
 }
+#ifdef FD_TABLE_STACK_TEST
+#define main files_fixture_main
+#endif
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4);
@@ -564,3 +567,6 @@ int main(int argc, char **argv)
     printf("files final: descriptors=0 pins=0 pages=0 checks=%u PASS\n",checks);
     free(ram); return 0;
 }
+#ifdef FD_TABLE_STACK_TEST
+#undef main
+#endif

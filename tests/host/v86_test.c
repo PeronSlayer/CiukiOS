@@ -854,7 +854,7 @@ static void test_worker(void)
     CHECK(fwinput_poll(&event, 1) == 1 && event.type == FWINPUT_RESYNC && !fwinput_poll(&event, 1));
     for (unsigned i = 0; i < 4; i++) CHECK(registry_get(leases[i].handle)->state == RS_QUARANTINED);
     CHECK(firmware.fault.cs == 0xF000 && firmware.fault.ip == 0x100);
-    CHECK(esp0 == 0xE0003000 && proc_switches > 0 && vm_preemptions > 0 && !native_tls);
+    CHECK(esp0 == 0xE0001000 + KSTACK_SIZE && proc_switches > 0 && vm_preemptions > 0 && !native_tls);
     fwinput_backend_state(&state);
     CHECK(state.disabled && !state.keyboard && !state.mouse && !state.key_releases);
 }

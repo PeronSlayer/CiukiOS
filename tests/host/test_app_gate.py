@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import signal
 import subprocess
@@ -57,6 +58,8 @@ class AppGateTests(unittest.TestCase):
                         "-o", str(cls.stack_binary)],
                        check=True, env=cls.env, capture_output=True, text=True)
         cls.kernel_build = runpy.run_path(str(ROOT / "scripts/build_kernel.py"))
+        cls.stack_size = int(re.search(r"#define KSTACK_SIZE (\d+)u",
+                             (ROOT / "src/kernel/include/ciuki/mm.h").read_text())[1])
         spec = importlib.util.spec_from_file_location("app_gate_image", ROOT / "scripts/build_image.py")
         cls.image = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.image)
         cls.suite = json.loads((ROOT / "tests/suites/f2-app.json").read_text())
@@ -102,10 +105,10 @@ class AppGateTests(unittest.TestCase):
                 result = subprocess.run([str(self.stack_binary), str(self.work), str(mode)],
                                         capture_output=True, text=True, env=self.env, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertRegex(result.stderr, r"^app-gate stack: usable=8192 guard=\d+ high_water=\d+\n$")
+                self.assertRegex(result.stderr, rf"^app-gate stack: usable={self.stack_size} guard=\d+ high_water=\d+\n$")
                 high_water = int(result.stderr.split("high_water=")[1])
                 self.assertGreater(high_water, 0)
-                self.assertLess(high_water, 8192)
+                self.assertLess(high_water, self.stack_size)
                 parser = self.parse(result.stdout.splitlines())
                 self.assertEqual(parser.outcome, "fail" if mode in (3, 35) else "pass")
                 if mode == 0:

@@ -439,6 +439,8 @@ int probe_f2_fd_table(void)
     err = storage_sync();
     pass = !err && pass;
     rec_emit("fd-table", "DATA", "case=durable-checker flush_result=%d checker=host_required", err);
+    rec_emit("fd-table", "DATA", "case=stack task=%s size=%u high_water=%u",
+             g_current->name, KSTACK_SIZE, task_stack_high_water(g_current));
     if (pass) rec_emit("fd-table", "ARM", "action=durable_shutdown checker=host_required");
     rec_emit("fd-table", "END", pass ? "status=PASS" : "status=FAIL reason=files_contract");
     return pass ? 0 : 1;

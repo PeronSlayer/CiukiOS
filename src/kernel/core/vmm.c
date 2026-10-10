@@ -9,10 +9,13 @@ extern char __text_start[], __rodata_end[];
 
 #define DIRECT_LIMIT   0x30000000u          /* 768 MiB direct map */
 #define STACK_REGION   0xF0000000u
-#define STACK_SLOT     (3u * PAGE_SIZE)     /* guard + 2 pages */
+#define STACK_SLOT     (PAGE_SIZE + KSTACK_SIZE) /* guard + usable pages */
 #define STACK_SLOTS    1360u
 #define MMIO_REGION    0xF8000000u
 #define MMIO_END       0xFF800000u
+
+_Static_assert(KSTACK_SIZE % PAGE_SIZE == 0, "kernel stack must contain whole pages");
+_Static_assert(STACK_REGION + STACK_SLOTS * STACK_SLOT <= MMIO_REGION, "kernel stack region");
 
 static uint32_t kpd_phys;
 static uint32_t *kpd;                        /* via direct map */
@@ -128,32 +131,35 @@ void *kstack_alloc(void)
         if (stack_slot_used[s])
             continue;
         uint32_t base = STACK_REGION + s * STACK_SLOT;
-        uint32_t p1 = pmm_alloc(), p2 = p1 ? pmm_alloc() : 0;
-        if (!p2) {
-            if (p1)
-                pmm_free(p1);
-            return 0;
+        uint32_t pages[KSTACK_SIZE / PAGE_SIZE];
+        for (unsigned i = 0; i < ARRAY_SIZE(pages); i++) {
+            pages[i] = pmm_alloc();
+            if (!pages[i]) {
+                while (i) pmm_free(pages[--i]);
+                return 0;
+            }
         }
         stack_slot_used[s] = 1;
         kunmap(base);                         /* guard page stays unmapped */
-        kmap(base + PAGE_SIZE, p1, PTE_W);
-        kmap(base + 2 * PAGE_SIZE, p2, PTE_W);
-        invlpg(base + PAGE_SIZE);
-        invlpg(base + 2 * PAGE_SIZE);
-        return (void *)(base + PAGE_SIZE);
+        for (unsigned i = 0; i < ARRAY_SIZE(pages); i++) {
+            uint32_t va = base + (i + 1) * PAGE_SIZE;
+            kmap(va, pages[i], PTE_W);
+            invlpg(va);
+        }
+        return (void *)(uintptr_t)(base + PAGE_SIZE);
     }
     return 0;
 }
 
-uint32_t kstack_guard_va(void *base) { return (uint32_t)base - PAGE_SIZE; }
+uint32_t kstack_guard_va(void *base) { return (uint32_t)(uintptr_t)base - PAGE_SIZE; }
 
 void kstack_free(void *base)
 {
-    uint32_t b = (uint32_t)base - PAGE_SIZE;
+    uint32_t b = (uint32_t)(uintptr_t)base - PAGE_SIZE;
     unsigned s = (b - STACK_REGION) / STACK_SLOT;
     if (b < STACK_REGION || s >= STACK_SLOTS || !stack_slot_used[s])
         panic("kstack_free: bad stack %p", base);
-    for (unsigned i = 1; i <= 2; i++) {
+    for (unsigned i = 1; i <= KSTACK_SIZE / PAGE_SIZE; i++) {
         uint32_t pte = vmm_kernel_pte(b + i * PAGE_SIZE);
         kunmap(b + i * PAGE_SIZE);
         pmm_free(pte & ~0xFFFu);
