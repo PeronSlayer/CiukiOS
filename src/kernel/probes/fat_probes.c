@@ -6,6 +6,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/storage.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/init.h>
 #include <ciuki/sha256.h>
 #ifndef FS_HOST
 #include <ciuki/task.h>
@@ -16,6 +17,19 @@ static struct vfs_table probe_table;
 static struct fat_entry entry;
 static char walk_path[FS_PATH_BYTES];
 static struct { uint32_t directory, cursor; unsigned length; } walk[32];
+
+/* Mount facts are the immutable boot snapshot; live counters below belong
+ * to the selected workload and may change after it opens the write gate. */
+static void mount_records(const char *probe)
+{
+    for (unsigned d = 2; d < 26; d++) {
+        const struct activation_entry *e = drivers_mount_get(d);
+        if (!e) continue;
+        rec_emit(probe, "DATA", "group=storage drive=%c disk=%u part=%u mode=%s gate=%s writes=%llu qualified=%u reason=%s",
+                 'A' + d, e->disk, e->partition, e->readonly ? "ro" : "rw",
+                 e->read_gate ? "read" : "closed", e->writes, e->qualified, e->reason);
+    }
+}
 
 static int finish(const char *probe, int error)
 {
@@ -131,6 +145,7 @@ static int list_volume(const char *probe, struct storage_volume *v, unsigned *id
 int probe_fat_read(void)
 {
     const char *probe = "fat-read"; rec_emit(probe, "BEGIN", 0);
+    mount_records(probe);
     struct storage *s = storage_get();
     if (!s->ready || !s->vfs.volumes[2]) return finish(probe, -FS_ENOENT);
     int e = vfs_table_init(&s->vfs, &probe_table, 2); if (e) return finish(probe, e);
@@ -141,8 +156,10 @@ int probe_fat_read(void)
         if (!s->disks[slot]) rec_emit(probe, "DATA", "case=fixture slot=%u status=absent", slot);
     for (unsigned d = 2; d < 26 && !e; d++) {
         struct storage_volume *v = storage_volume(s, d); if (!v) continue;
+        const struct activation_entry *mount = drivers_mount_get(d);
+        if (!mount) { e = -FS_EIO; break; }
         rec_emit(probe, "DATA", "case=mount drive=%c disk=%u type=%u mode=%s reasons=%u writes=%llu read_gate=%u",
-                 'A' + d, v->disk, v->fat.type, v->fat.readonly ? "ro" : "rw", v->fat.ro_reasons, v->writes, v->read_gate);
+                 'A' + d, mount->disk, mount->type, mount->readonly ? "ro" : "rw", mount->reasons, mount->writes, mount->read_gate);
         if (v->error || !v->fat.readonly || v->writes) { e = v->error ? v->error : -FS_EIO; break; }
         e = list_volume(probe, v, &id);
         rec_emit(probe, "DATA", "case=lfn drive=%c orphan_observations=%u bad_checksum_observations=%u invalid_observations=%u handling=short_fallback",
@@ -271,6 +288,7 @@ int storage_write_workload(struct storage *s, struct vfs_table *t, bool *reboot)
 int probe_fat_write(void)
 {
     const char *probe = "fat-write"; rec_emit(probe, "BEGIN", 0);
+    mount_records(probe);
     struct storage *s = storage_get();
     if (!s->ready || !s->vfs.volumes[2]) return finish(probe, -FS_ENOENT);
     int e = vfs_table_init(&s->vfs, &probe_table, 2); if (e) return finish(probe, e);
@@ -447,6 +465,7 @@ static int cache_ata_faults(struct block_cache *c)
 int probe_cache(void)
 {
     rec_emit("cache", "BEGIN", 0);
+    mount_records("cache");
     struct storage *s = storage_get();
     if (!s->ready || !s->vfs.volumes[2]) return finish("cache", -FS_ENOENT);
     /* Isolated tiny cache solely to force deterministic eviction; real
@@ -520,6 +539,7 @@ static void cut_trace(struct storage_volume *v, char action, uint64_t lba, int r
 int probe_mount_crash(void)
 {
     const char *probe = "mount-crash"; rec_emit(probe, "BEGIN", 0);
+    mount_records(probe);
     struct storage *s = storage_get();
     if (!s->ready) return finish(probe, -FS_ENOENT);
     int result = 0; unsigned fixtures = 0; bool cut_reboot = false, cut_selected = false;
@@ -603,6 +623,7 @@ static int log_marker(struct vfs_table *t, bool write)
 int probe_bootlog(void)
 {
     const char *probe = "bootlog"; rec_emit(probe, "BEGIN", 0);
+    mount_records(probe);
     struct storage *s = storage_get(); struct bootlog_stats before, after;
     bootlog_snapshot(&before);
     rec_emit(probe, "DATA", "group=bootlog case=before prequalification_writes=%llu storage_calls=%llu queued=%u limit=%u",

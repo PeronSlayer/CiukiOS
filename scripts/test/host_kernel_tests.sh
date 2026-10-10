@@ -6,6 +6,8 @@ out="$root/build/host"
 mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
+python3 "$root/tests/host/record_scope_test.py"
+
 # F2 ABI: always extract the actual i686 layout using the kernel's flags.
 python3 "$root/scripts/test/abi_layout_dump.py" --output "$out/abi-layout.json"
 cat > "$out/abi_m32_probe.c" <<'C'
@@ -50,7 +52,15 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/runtime_init_test.c" -o "$out/runtime_init_test"
+
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/record_guard_test.c" -o "$out/record_guard_test"
+"$out/record_guard_test"
 "$out/runtime_init_test"
+
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/record_guard_test.c" -o "$out/record_guard_test"
+"$out/record_guard_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \

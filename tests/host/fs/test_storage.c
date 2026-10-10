@@ -7,6 +7,7 @@
 #include "fake.h"
 #include "scan.h"
 #include <stdio.h>
+#include "../storage_ledger_fixture.h"
 
 static unsigned checks, records, max_record;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr,"STORAGE line %d: %s\n",__LINE__,#x); exit(1); } } while (0)
@@ -52,6 +53,7 @@ static void disk_init(unsigned i) {
 }
 static struct storage *start(void) {
     struct storage *s=storage_get(); disk_init(0); OK(storage_setup(s,0)); OK(storage_add_disk(s,0,&disks[0].dev));
+    host_mount_snapshot(s);
     OK(vfs_table_init(&s->vfs,&table,2)); return s;
 }
 static void stop(struct storage *s,bool clean) {
@@ -174,6 +176,7 @@ static void mount_probe_tests(void) {
         OK(fake_raw_write(f,reserved+i*fat,sector));
     }
     struct storage *s=start(); disk_init(2); OK(storage_add_disk(s,1,&disks[2].dev));
+    host_mount_snapshot(s);
     OK(probe_mount_crash()); CHECK(!f->writes && !media[0].writes); stop(s,true); fake_reset(f); reset();
     /* Driver failure stands in for termination at an issued sector, followed
      * by loss of all caches. Actual QEMU process termination remains T3. */
@@ -192,6 +195,7 @@ static void mount_probe_tests(void) {
 static void probe_tests(void) {
     struct storage *s=start();
     for(unsigned i=1;i<3;i++) { disk_init(i); OK(storage_add_disk(s,i,&disks[i].dev)); }
+    host_mount_snapshot(s);
     CHECK(s->volumes[3].fat.type==12 && s->volumes[4].fat.type==16);
     OK(probe_fat_read()); CHECK(!media[0].writes && !media[1].writes && !media[2].writes);
     stop(s,true); reset();

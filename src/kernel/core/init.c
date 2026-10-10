@@ -25,7 +25,7 @@ const struct activation_entry *drivers_activation_get(unsigned index)
 
 bool drivers_activation_ordered(void)
 {
-    if (!state.initialized || activation_count != 3 || state.flag_sequence != 1) return false;
+    if (!state.initialized || activation_count < 3 || state.flag_sequence != 1) return false;
     uint32_t seq = state.flag_sequence;
     uint64_t tick = 0;
     for (unsigned i = 0; i < activation_count; i++) {
@@ -44,8 +44,29 @@ static void activation_add(struct activation_entry entry)
     /* No allocation and no evidence sink at device activation time. */
     if (activation_count < ARRAY_SIZE(activation_ledger))
         activation_ledger[activation_count++] = entry;
-    klog("[init] %s result=%s error=%d reason=%s activation_seq=%u tick=%llu safe_flag_before=%u",
-         entry.device, entry.result, entry.error, entry.reason, entry.seq, entry.tick, entry.safe_flag_before);
+    if (entry.kind == ACTIVATION_DEVICE)
+        klog("[init] %s result=%s error=%d reason=%s activation_seq=%u tick=%llu safe_flag_before=%u",
+             entry.device, entry.result, entry.error, entry.reason, entry.seq, entry.tick, entry.safe_flag_before);
+    else
+        klog("[storage] kind=%u disk=%u part=%u mode=%s error=%d writes=%llu qualified=%u reason=%s activation_seq=%u",
+             entry.kind, entry.disk, entry.partition, entry.readonly ? "ro" : "rw", entry.error,
+             entry.writes, entry.qualified, entry.reason, entry.seq);
+}
+
+void drivers_storage_add(struct activation_entry entry)
+{
+    entry.seq = activation_count + 2;
+    entry.tick = g_ticks;
+    entry.safe_flag_before = state.safe;
+    activation_add(entry);
+}
+
+const struct activation_entry *drivers_mount_get(unsigned drive)
+{
+    for (unsigned i = 0; i < activation_count; i++)
+        if (activation_ledger[i].kind == ACTIVATION_MOUNT && activation_ledger[i].drive == drive)
+            return &activation_ledger[i];
+    return 0;
 }
 
 void drivers_init(void)

@@ -7,13 +7,19 @@
 #include "sync.h"
 
 #define ACTIVATION_LEDGER_MAX 32u
+enum activation_kind { ACTIVATION_DEVICE, ACTIVATION_STORAGE, ACTIVATION_MOUNT, ACTIVATION_STORAGE_IDENTITY };
 struct activation_entry {
+    enum activation_kind kind;
     uint32_t seq;
     const char *device, *result, *reason;
     uint64_t tick;
     bool safe_flag_before;
     int error;
     bool required, present, quarantined;
+    unsigned disk, partition, drive, type;
+    uint32_t reasons, read_sequence;
+    uint64_t writes, writes_before_gate;
+    bool readonly, read_gate, qualified;
 };
 
 struct drivers_state {
@@ -29,6 +35,9 @@ void drivers_snapshot(struct drivers_state *out);
 unsigned drivers_activation_count(void);
 const struct activation_entry *drivers_activation_get(unsigned index);
 bool drivers_activation_ordered(void);
+void drivers_storage_add(struct activation_entry entry);
+const struct activation_entry *drivers_mount_get(unsigned drive);
+uint32_t rec_premature_records(void);
 /* Called before the scheduler creates any resumable protected frames. */
 void stackprot_init(void);
 

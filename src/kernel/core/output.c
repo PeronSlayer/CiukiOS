@@ -10,7 +10,10 @@
 #include <ciuki/bootlog.h>
 
 static char run_id[9] = "00000000";
-static uint32_t seq;
+static uint32_t seq, premature_records;
+static bool run_selected, run_begun, premature_noted;
+
+uint32_t rec_premature_records(void) { return premature_records; }
 
 void kputs_raw(const char *s)
 {
@@ -43,6 +46,8 @@ void rec_set_run(const char *run8)
     for (int i = 0; i < 8; i++)
         run_id[i] = run8[i];
     run_id[8] = 0;
+    run_selected = true;
+    run_begun = false;
 }
 
 static uint32_t next_seq(void)
@@ -72,6 +77,15 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
 
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
+    if (!run_selected || (!run_begun && strncmp(event, "BEGIN", sizeof("BEGIN")))) {
+        premature_records++;
+        if (!premature_noted) {
+            premature_noted = true;
+            klog("[records] dropped premature evidence record");
+        }
+        return;
+    }
+    run_begun = true;
     char extra[240];
     extra[0] = 0;
     if (fmt) {
