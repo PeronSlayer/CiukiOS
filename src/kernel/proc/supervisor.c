@@ -104,6 +104,13 @@ int supervisor_spawn_gate(bool supplement, struct process **out)
                              "/system/tests/lua-5.4.8-tests", false, out);
 }
 
+/* The canonical builder links supervisor after the existing F2 controllers.
+ * Keep the gate's registration here, through its owning source, so app-gate
+ * is last without changing the other probes or the build/linker contract. */
+#define CIUKI_APP_GATE_REGISTRATION
+#include "../probes/f2_probes_app.c"
+#undef CIUKI_APP_GATE_REGISTRATION
+
 /* Probe entry reuses the normal payload/grants/group preparation. Tracking
  * here makes unexpected desktop death visible through the production ledger. */
 int supervisor_spawn_desktop_probe(struct process **out)

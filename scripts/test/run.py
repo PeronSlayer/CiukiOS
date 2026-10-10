@@ -18,7 +18,7 @@ import sys
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from evidence import Parser, EvidenceError, EvidenceNotRun, f2_metadata
+from evidence import Parser as EvidenceParser, ApplicationCapture, EvidenceError, EvidenceNotRun, f2_metadata
 from loader_model import selector as base_selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
@@ -27,6 +27,92 @@ ROOT=Path(__file__).resolve().parents[2]
 REGRESSION_SUITES = ('f0-smoke','f0-core','f0-panic','f0-runner',
                      'f1-input','f1-storage','f1-fat32','f1-safe')
 F2_SUITES = ('f2-process','f2-runtime','f2-desktop','f2-app')
+
+
+class Parser(EvidenceParser):
+    """Accept supervisor captures with offsets scoped to (PID, stream).
+
+    f2-09's generic live framing uses one cumulative offset. The production
+    supervisor instead sends each console's bounded head/tail, after its byte
+    count, complete-stream scan and digest. A discarded middle is legal only
+    when the controller explicitly declared that capture truncated.
+    """
+    def __init__(self, run_id, probe):
+        super().__init__(run_id, probe)
+        self.bounded_captures = {}
+        self.report_offsets = {}
+
+    def _check_captures(self):
+        for capture in self.bounded_captures.values():
+            if capture['next'] != capture['bytes'] or 'sha256' not in capture or 'final_ok' not in capture:
+                raise EvidenceError('incomplete supervisor capture')
+            if not capture['truncated']:
+                if capture['digest'].hexdigest() != capture['sha256']:
+                    raise EvidenceError('supervisor console digest mismatch')
+                if capture['scan'].final_success_indication != bool(capture['final_ok']) or capture['scan'].assertion_indications != capture['assertion_failures']:
+                    raise EvidenceError('supervisor console scan mismatch')
+
+    def capture_result(self):
+        return [{'pid':pid, 'stream':stream,
+                 **{k:c[k] for k in ('bytes','truncated','sha256','final_ok','assertion_failures') if k in c},
+                 'retained_bytes':c['retained']}
+                for (pid,stream),c in self.bounded_captures.items()]
+
+    def feed(self, raw):
+        # Generic f2-09 records keep their existing cumulative-offset parser.
+        if self.probe not in ('app-gate','libc-smoke'):
+            return super().feed(raw)
+        line = raw.removesuffix(b'\n').removesuffix(b'\r')
+        if b' group=app ' in line:
+            try:
+                fields = dict(token.split(b'=',1) for token in line.split(b' ')[1:])
+                pid, stream = fields[b'pid'].decode('ascii'), fields[b'stream'].decode('ascii')
+                if not re.fullmatch(rb'[0-9]+',fields[b'offset']):raise ValueError()
+                offset = int(fields[b'offset']); data = bytes.fromhex(fields[b'data_hex'].decode('ascii'))
+                if stream == 'report':
+                    if offset != self.report_offsets.get(pid,0):raise ValueError()
+                    self.report_offsets[pid] = offset + len(data)
+                else:
+                    capture = self.bounded_captures[(pid,stream)]
+                    if offset != capture['next']:
+                        if not (capture['truncated'] and capture['next'] == 1024 and offset == capture['bytes']-1024):raise ValueError()
+                    if offset+len(data)>capture['bytes']:raise ValueError()
+                    capture['next'] = offset+len(data); capture['retained'] += len(data)
+                    if capture['retained']>2048:raise ValueError()
+                    capture['digest'].update(data); capture['scan'].feed(data)
+            except (KeyError, ValueError, UnicodeError) as error:
+                raise EvidenceError('invalid supervisor application frame') from error
+            # The base parser still validates every framing field and length;
+            # its aggregate digest describes delivered bytes, not the omitted
+            # console middle. The full guest digests are retained separately.
+            packed = re.sub(rb' offset=[0-9]+',b' offset='+str(self.application.total_bytes).encode(),line,count=1)
+            return super().feed(packed)
+        record = super().feed(raw)
+        if record is None:return record
+        group = record.get('group')
+        if group in ('capture','capture_scan','capture_digest'):
+            try:
+                pid, stream = record['pid'], record['stream']; key = (pid,stream)
+                if not re.fullmatch('[0-9]+',pid) or stream not in ('stdout','stderr'):raise ValueError()
+                if group == 'capture':
+                    size, truncated = int(record['bytes']), int(record['truncated'])
+                    if key in self.bounded_captures or size<0 or truncated != int(size>2048):raise ValueError()
+                    self.bounded_captures[key] = {'bytes':size, 'truncated':bool(truncated), 'next':0,
+                                                 'retained':0, 'digest':hashlib.sha256(),
+                                                 'scan':ApplicationCapture(retention=32)}
+                elif group == 'capture_scan':
+                    capture = self.bounded_captures[key]
+                    if 'final_ok' in capture:raise ValueError()
+                    capture['final_ok'], capture['assertion_failures'] = int(record['final_ok']),int(record['assertion_failures'])
+                    if min(capture['final_ok'],capture['assertion_failures'])<0:raise ValueError()
+                else:
+                    capture = self.bounded_captures[key]
+                    if 'sha256' in capture or not re.fullmatch('[0-9a-f]{64}',record['sha256']):raise ValueError()
+                    capture['sha256'] = record['sha256']
+            except (KeyError, ValueError) as error:
+                raise EvidenceError('invalid supervisor capture descriptor') from error
+        if record.get('event') == 'END':self._check_captures()
+        return record
 
 
 def selector(request, source='menu', validated_fw_cfg=False):
@@ -89,6 +175,8 @@ def record_f2_result(result, parser):
     result.update({k:v for k,v in metadata.items() if k != 'missing_fields'})
     result['missing_f2_fields'] = metadata['missing_fields']
     result['application_output'] = parser.application.result()
+    if hasattr(parser,'capture_result'):
+        result['application_output']['guest_console_captures'] = parser.capture_result()
     result['payload_hash_comparisons'] = []
     manifest_path = result['build_manifest'].get('path')
     manifest = json.loads(Path(manifest_path).read_text()) if manifest_path != 'unknown' else {}

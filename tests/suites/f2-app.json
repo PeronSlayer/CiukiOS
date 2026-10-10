@@ -34,8 +34,15 @@
               "event": "DATA",
               "group": "app-gate"
             },
-            "combine": true,
             "fields": {
+              "application": "Lua",
+              "version": "5.4.8",
+              "abi_version": {
+                "eq": 1
+              },
+              "extra_skips": {
+                "eq": 0
+              },
               "final_ok": {
                 "eq": 1
               },
@@ -44,20 +51,58 @@
               },
               "application_wait_status": {
                 "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "extra_skips": {
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "expected": {
                 "eq": 0
+              },
+              "observed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "provenance"
+            },
+            "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
+              "payloads": {
+                "ge": 3
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "desktop"
+            },
+            "fields": {
+              "server": "desktop",
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
               }
             },
             "required_fields": [
-              "application",
-              "version",
-              "console_digest",
-              "heap_high_water",
-              "stack_high_water"
+              "pid",
+              "pgid"
             ]
           },
           {
@@ -76,7 +121,209 @@
                 "eq": 0
               }
             },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "wait",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "status": {
+                "eq": 0
+              },
+              "timeout": {
+                "eq": 0
+              },
+              "fault_vector": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "elapsed_ms"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "survivor",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "alive": {
+                "eq": 1
+              },
+              "pid_unchanged": {
+                "eq": 1
+              },
+              "progress": {
+                "ge": 1
+              },
+              "after": {
+                "ge": "$before"
+              },
+              "metric": "presents"
+            },
+            "required_fields": [
+              "pid",
+              "before",
+              "after"
+            ],
             "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "memory",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "measurement": "sampled",
+              "heap_high_water": {
+                "ge": 1
+              },
+              "stack_high_water": {
+                "ge": 4096
+              },
+              "resident_high_water": {
+                "ge": 1
+              },
+              "committed_high_water": {
+                "ge": 1
+              },
+              "samples": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "setup",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "cwd_text": "/system/tests/lua-5.4.8-tests",
+              "argv_text": "lua,-e,_U:true,all.lua"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lua-supplement"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "wait",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "status": {
+                "eq": 0
+              },
+              "timeout": {
+                "eq": 0
+              },
+              "fault_vector": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "elapsed_ms"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "survivor",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "alive": {
+                "eq": 1
+              },
+              "pid_unchanged": {
+                "eq": 1
+              },
+              "progress": {
+                "ge": 1
+              },
+              "after": {
+                "ge": "$before"
+              },
+              "metric": "presents"
+            },
+            "required_fields": [
+              "pid",
+              "before",
+              "after"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "memory",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "measurement": "sampled",
+              "heap_high_water": {
+                "ge": 1
+              },
+              "stack_high_water": {
+                "ge": 4096
+              },
+              "resident_high_water": {
+                "ge": 1
+              },
+              "committed_high_water": {
+                "ge": 1
+              },
+              "samples": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "setup",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "cwd_text": "/system/tests/lua-5.4.8-tests",
+              "argv_text": "lua,ciuki-f2.lua"
+            }
           },
           {
             "where": {
@@ -84,13 +331,39 @@
               "case": "file-roundtrip"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "bytes": {
+                "eq": 65536
+              },
+              "rewritten": {
+                "eq": 4096
+              },
+              "fnv1a32": {
+                "eq": 4133952540,
+                "encoding": "hex",
+                "width": 8
+              },
+              "rename": {
+                "eq": 1
+              },
+              "remove": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -99,13 +372,34 @@
               "case": "allocation"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "cycles": {
+                "eq": 100
+              },
+              "live_strings": {
+                "eq": 4096
+              },
+              "string_bytes": {
+                "eq": 128
+              },
+              "reference_errors": {
+                "eq": 0
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -114,13 +408,34 @@
               "case": "time-utc"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "dates": {
+                "eq": 2
+              },
+              "epoch_2000": {
+                "eq": 951782400
+              },
+              "epoch_2040": {
+                "eq": 2208988800
+              },
+              "clock_nonnegative": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -129,31 +444,96 @@
               "case": "console"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "lines": {
+                "eq": 4
+              },
+              "ordered": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "supplement"
+            },
+            "fields": {
+              "cases": {
+                "eq": 4
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "console_order": "per_stream"
+            },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture"
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "bytes",
+              "truncated"
+            ],
+            "count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture_digest"
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "sha256"
+            ],
+            "count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture_scan"
+            },
+            "fields": {
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "final_ok"
+            ],
+            "count": 4
           },
           {
             "where": {
               "event": "DATA",
               "group": "resources"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
-              },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
               "processes_delta": {
                 "eq": 0
               },
@@ -163,10 +543,13 @@
               "threads_delta": {
                 "eq": 0
               },
+              "fds_delta": {
+                "eq": 0
+              },
               "mappings_delta": {
                 "eq": 0
               },
-              "fds_delta": {
+              "backing_delta": {
                 "eq": 0
               },
               "descriptions_delta": {
@@ -178,18 +561,63 @@
               "messages_delta": {
                 "eq": 0
               },
+              "restored": {
+                "eq": 1
+              },
+              "pages_delta": {
+                "eq": 0
+              },
+              "kernel_bytes_delta": {
+                "eq": 0
+              },
+              "file_descriptions_delta": {
+                "eq": 0
+              },
+              "live_threads_delta": {
+                "eq": 0
+              },
+              "retained_threads_delta": {
+                "eq": 0
+              },
               "waiters_delta": {
                 "eq": 0
               },
-              "leaked": {
-                "eq": 0
+              "cache_accounted": {
+                "eq": 1
+              },
+              "cache_nodes_after": {
+                "eq": "$cache_nodes_before"
               }
             },
+            "combine": true,
             "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
+              "cache_nodes_before"
             ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "payload"
+            },
+            "required_fields": [
+              "path",
+              "sha256"
+            ],
+            "count": 3
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "exclusions"
+            },
+            "fields": {
+              "switch": "_U",
+              "nonportable": "excluded_by_contract",
+              "large_memory": "excluded_by_contract",
+              "complete": "excluded_by_contract",
+              "internal": "excluded_by_contract"
+            },
+            "combine": true
           }
         ]
       }
@@ -208,8 +636,15 @@
               "event": "DATA",
               "group": "app-gate"
             },
-            "combine": true,
             "fields": {
+              "application": "Lua",
+              "version": "5.4.8",
+              "abi_version": {
+                "eq": 1
+              },
+              "extra_skips": {
+                "eq": 0
+              },
               "final_ok": {
                 "eq": 1
               },
@@ -218,20 +653,58 @@
               },
               "application_wait_status": {
                 "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "extra_skips": {
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "expected": {
                 "eq": 0
+              },
+              "observed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "provenance"
+            },
+            "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
+              "payloads": {
+                "ge": 3
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "desktop"
+            },
+            "fields": {
+              "server": "desktop",
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
               }
             },
             "required_fields": [
-              "application",
-              "version",
-              "console_digest",
-              "heap_high_water",
-              "stack_high_water"
+              "pid",
+              "pgid"
             ]
           },
           {
@@ -250,7 +723,209 @@
                 "eq": 0
               }
             },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "wait",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "status": {
+                "eq": 0
+              },
+              "timeout": {
+                "eq": 0
+              },
+              "fault_vector": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "elapsed_ms"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "survivor",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "alive": {
+                "eq": 1
+              },
+              "pid_unchanged": {
+                "eq": 1
+              },
+              "progress": {
+                "ge": 1
+              },
+              "after": {
+                "ge": "$before"
+              },
+              "metric": "presents"
+            },
+            "required_fields": [
+              "pid",
+              "before",
+              "after"
+            ],
             "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "memory",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "measurement": "sampled",
+              "heap_high_water": {
+                "ge": 1
+              },
+              "stack_high_water": {
+                "ge": 4096
+              },
+              "resident_high_water": {
+                "ge": 1
+              },
+              "committed_high_water": {
+                "ge": 1
+              },
+              "samples": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "setup",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "cwd_text": "/system/tests/lua-5.4.8-tests",
+              "argv_text": "lua,-e,_U:true,all.lua"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lua-supplement"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "wait",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "status": {
+                "eq": 0
+              },
+              "timeout": {
+                "eq": 0
+              },
+              "fault_vector": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "elapsed_ms"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "survivor",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "alive": {
+                "eq": 1
+              },
+              "pid_unchanged": {
+                "eq": 1
+              },
+              "progress": {
+                "ge": 1
+              },
+              "after": {
+                "ge": "$before"
+              },
+              "metric": "presents"
+            },
+            "required_fields": [
+              "pid",
+              "before",
+              "after"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "memory",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "measurement": "sampled",
+              "heap_high_water": {
+                "ge": 1
+              },
+              "stack_high_water": {
+                "ge": 4096
+              },
+              "resident_high_water": {
+                "ge": 1
+              },
+              "committed_high_water": {
+                "ge": 1
+              },
+              "samples": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "setup",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "cwd_text": "/system/tests/lua-5.4.8-tests",
+              "argv_text": "lua,ciuki-f2.lua"
+            }
           },
           {
             "where": {
@@ -258,13 +933,39 @@
               "case": "file-roundtrip"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "bytes": {
+                "eq": 65536
+              },
+              "rewritten": {
+                "eq": 4096
+              },
+              "fnv1a32": {
+                "eq": 4133952540,
+                "encoding": "hex",
+                "width": 8
+              },
+              "rename": {
+                "eq": 1
+              },
+              "remove": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -273,13 +974,34 @@
               "case": "allocation"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "cycles": {
+                "eq": 100
+              },
+              "live_strings": {
+                "eq": 4096
+              },
+              "string_bytes": {
+                "eq": 128
+              },
+              "reference_errors": {
+                "eq": 0
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -288,13 +1010,34 @@
               "case": "time-utc"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "dates": {
+                "eq": 2
+              },
+              "epoch_2000": {
+                "eq": 951782400
+              },
+              "epoch_2040": {
+                "eq": 2208988800
+              },
+              "clock_nonnegative": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -303,31 +1046,96 @@
               "case": "console"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "lines": {
+                "eq": 4
+              },
+              "ordered": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "supplement"
+            },
+            "fields": {
+              "cases": {
+                "eq": 4
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "console_order": "per_stream"
+            },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture"
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "bytes",
+              "truncated"
+            ],
+            "count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture_digest"
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "sha256"
+            ],
+            "count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture_scan"
+            },
+            "fields": {
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "final_ok"
+            ],
+            "count": 4
           },
           {
             "where": {
               "event": "DATA",
               "group": "resources"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
-              },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
               "processes_delta": {
                 "eq": 0
               },
@@ -337,10 +1145,13 @@
               "threads_delta": {
                 "eq": 0
               },
+              "fds_delta": {
+                "eq": 0
+              },
               "mappings_delta": {
                 "eq": 0
               },
-              "fds_delta": {
+              "backing_delta": {
                 "eq": 0
               },
               "descriptions_delta": {
@@ -352,18 +1163,63 @@
               "messages_delta": {
                 "eq": 0
               },
+              "restored": {
+                "eq": 1
+              },
+              "pages_delta": {
+                "eq": 0
+              },
+              "kernel_bytes_delta": {
+                "eq": 0
+              },
+              "file_descriptions_delta": {
+                "eq": 0
+              },
+              "live_threads_delta": {
+                "eq": 0
+              },
+              "retained_threads_delta": {
+                "eq": 0
+              },
               "waiters_delta": {
                 "eq": 0
               },
-              "leaked": {
-                "eq": 0
+              "cache_accounted": {
+                "eq": 1
+              },
+              "cache_nodes_after": {
+                "eq": "$cache_nodes_before"
               }
             },
+            "combine": true,
             "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
+              "cache_nodes_before"
             ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "payload"
+            },
+            "required_fields": [
+              "path",
+              "sha256"
+            ],
+            "count": 3
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "exclusions"
+            },
+            "fields": {
+              "switch": "_U",
+              "nonportable": "excluded_by_contract",
+              "large_memory": "excluded_by_contract",
+              "complete": "excluded_by_contract",
+              "internal": "excluded_by_contract"
+            },
+            "combine": true
           }
         ]
       }
@@ -382,8 +1238,15 @@
               "event": "DATA",
               "group": "app-gate"
             },
-            "combine": true,
             "fields": {
+              "application": "Lua",
+              "version": "5.4.8",
+              "abi_version": {
+                "eq": 1
+              },
+              "extra_skips": {
+                "eq": 0
+              },
               "final_ok": {
                 "eq": 1
               },
@@ -392,20 +1255,58 @@
               },
               "application_wait_status": {
                 "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "extra_skips": {
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "expected": {
                 "eq": 0
+              },
+              "observed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "provenance"
+            },
+            "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
+              "payloads": {
+                "ge": 3
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "desktop"
+            },
+            "fields": {
+              "server": "desktop",
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
               }
             },
             "required_fields": [
-              "application",
-              "version",
-              "console_digest",
-              "heap_high_water",
-              "stack_high_water"
+              "pid",
+              "pgid"
             ]
           },
           {
@@ -424,7 +1325,209 @@
                 "eq": 0
               }
             },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "wait",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "status": {
+                "eq": 0
+              },
+              "timeout": {
+                "eq": 0
+              },
+              "fault_vector": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "elapsed_ms"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "survivor",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "alive": {
+                "eq": 1
+              },
+              "pid_unchanged": {
+                "eq": 1
+              },
+              "progress": {
+                "ge": 1
+              },
+              "after": {
+                "ge": "$before"
+              },
+              "metric": "presents"
+            },
+            "required_fields": [
+              "pid",
+              "before",
+              "after"
+            ],
             "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "memory",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "measurement": "sampled",
+              "heap_high_water": {
+                "ge": 1
+              },
+              "stack_high_water": {
+                "ge": 4096
+              },
+              "resident_high_water": {
+                "ge": 1
+              },
+              "committed_high_water": {
+                "ge": 1
+              },
+              "samples": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "setup",
+              "run_case": "lua-basic"
+            },
+            "fields": {
+              "cwd_text": "/system/tests/lua-5.4.8-tests",
+              "argv_text": "lua,-e,_U:true,all.lua"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lua-supplement"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "wait",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "status": {
+                "eq": 0
+              },
+              "timeout": {
+                "eq": 0
+              },
+              "fault_vector": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "elapsed_ms"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "survivor",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "alive": {
+                "eq": 1
+              },
+              "pid_unchanged": {
+                "eq": 1
+              },
+              "progress": {
+                "ge": 1
+              },
+              "after": {
+                "ge": "$before"
+              },
+              "metric": "presents"
+            },
+            "required_fields": [
+              "pid",
+              "before",
+              "after"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "memory",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "measurement": "sampled",
+              "heap_high_water": {
+                "ge": 1
+              },
+              "stack_high_water": {
+                "ge": 4096
+              },
+              "resident_high_water": {
+                "ge": 1
+              },
+              "committed_high_water": {
+                "ge": 1
+              },
+              "samples": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid"
+            ],
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "setup",
+              "run_case": "lua-supplement"
+            },
+            "fields": {
+              "cwd_text": "/system/tests/lua-5.4.8-tests",
+              "argv_text": "lua,ciuki-f2.lua"
+            }
           },
           {
             "where": {
@@ -432,13 +1535,39 @@
               "case": "file-roundtrip"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "bytes": {
+                "eq": 65536
+              },
+              "rewritten": {
+                "eq": 4096
+              },
+              "fnv1a32": {
+                "eq": 4133952540,
+                "encoding": "hex",
+                "width": 8
+              },
+              "rename": {
+                "eq": 1
+              },
+              "remove": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -447,13 +1576,34 @@
               "case": "allocation"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "cycles": {
+                "eq": 100
+              },
+              "live_strings": {
+                "eq": 4096
+              },
+              "string_bytes": {
+                "eq": 128
+              },
+              "reference_errors": {
+                "eq": 0
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -462,13 +1612,34 @@
               "case": "time-utc"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "dates": {
+                "eq": 2
+              },
+              "epoch_2000": {
+                "eq": 951782400
+              },
+              "epoch_2040": {
+                "eq": 2208988800
+              },
+              "clock_nonnegative": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
           },
           {
@@ -477,31 +1648,96 @@
               "case": "console"
             },
             "fields": {
+              "expected": {
+                "eq": 1
+              },
+              "observed": {
+                "eq": 1
+              },
               "exit": {
                 "eq": 0
               },
               "failures": {
                 "eq": 0
+              },
+              "lines": {
+                "eq": 4
+              },
+              "ordered": {
+                "eq": 1
               }
             },
+            "required_fields": [
+              "pid"
+            ],
             "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "supplement"
+            },
+            "fields": {
+              "cases": {
+                "eq": 4
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "console_order": "per_stream"
+            },
+            "required_fields": [
+              "pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture"
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "bytes",
+              "truncated"
+            ],
+            "count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture_digest"
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "sha256"
+            ],
+            "count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "capture_scan"
+            },
+            "fields": {
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "pid",
+              "stream",
+              "final_ok"
+            ],
+            "count": 4
           },
           {
             "where": {
               "event": "DATA",
               "group": "resources"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
-              },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
               "processes_delta": {
                 "eq": 0
               },
@@ -511,10 +1747,13 @@
               "threads_delta": {
                 "eq": 0
               },
+              "fds_delta": {
+                "eq": 0
+              },
               "mappings_delta": {
                 "eq": 0
               },
-              "fds_delta": {
+              "backing_delta": {
                 "eq": 0
               },
               "descriptions_delta": {
@@ -526,18 +1765,63 @@
               "messages_delta": {
                 "eq": 0
               },
+              "restored": {
+                "eq": 1
+              },
+              "pages_delta": {
+                "eq": 0
+              },
+              "kernel_bytes_delta": {
+                "eq": 0
+              },
+              "file_descriptions_delta": {
+                "eq": 0
+              },
+              "live_threads_delta": {
+                "eq": 0
+              },
+              "retained_threads_delta": {
+                "eq": 0
+              },
               "waiters_delta": {
                 "eq": 0
               },
-              "leaked": {
-                "eq": 0
+              "cache_accounted": {
+                "eq": 1
+              },
+              "cache_nodes_after": {
+                "eq": "$cache_nodes_before"
               }
             },
+            "combine": true,
             "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
+              "cache_nodes_before"
             ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "payload"
+            },
+            "required_fields": [
+              "path",
+              "sha256"
+            ],
+            "count": 3
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "exclusions"
+            },
+            "fields": {
+              "switch": "_U",
+              "nonportable": "excluded_by_contract",
+              "large_memory": "excluded_by_contract",
+              "complete": "excluded_by_contract",
+              "internal": "excluded_by_contract"
+            },
+            "combine": true
           }
         ]
       }

@@ -127,7 +127,7 @@ class ImagePayloadTests(unittest.TestCase):
                 self.skipTest(f"{label} build not present")
         sources, directories, metadata = image.application_payloads()
         manifest = json.loads((lua.OUT / "manifest.json").read_text())
-        expected = {image.TEST_PATH + "/" + n for n in manifest["test_files"]}
+        expected = {image.TEST_PATH + "/" + n for n in manifest["test_files"]} | {image.TEST_PATH + "/ciuki-f2.lua"}
         self.assertEqual({n for n in sources if n.startswith(image.TEST_PATH + "/")}, expected)
         self.assertTrue({"/bin", "/tmp", "/home", "/system",
                          image.TEST_PATH + "/libs/P1"}.issubset(directories))
@@ -135,6 +135,8 @@ class ImagePayloadTests(unittest.TestCase):
                          json.loads((ROOT / "config/sdk-pins.json").read_text())["lua"])
         for name in ("/bin/lua", "/bin/hello", "/bin/libc_smoke", "/system/tests/ciuki-f2.lua"):
             self.assertIn(name, sources)
+        self.assertIn(image.TEST_PATH + "/ciuki-f2.lua", sources)
+        self.assertIn("/system/tests/app-gate.meta", sources)
         # An extra edited upstream test must not be silently copied onto the volume.
         extra = lua.OUT / lua.TEST_DIR / "unexpected.lua"
         extra.write_text("error('unexpected')\n")

@@ -44,7 +44,8 @@ def linked_probe_names(rows, phase):
     if (end-start)%8:raise AssertionError('invalid target probe table extent')
     names=[]
     for va in range(start,end,8):
-        pointer=struct.unpack('<I',read(va,4))[0]
+        pointer,callback=struct.unpack('<II',read(va,8))
+        if not callback:raise AssertionError('probe registration has no implementation')
         names.append(read(pointer,24).split(b'\0',1)[0].decode('ascii'))
     return names
 
@@ -1384,17 +1385,17 @@ class F2EvidenceTests(unittest.TestCase):
         start,end=addr('__f2probes_start'),addr('__f2probes_end')
         self.assertLessEqual(addr('__rodata_start'),start);self.assertLessEqual(start,end)
         self.assertLessEqual(end,addr('__rodata_end'))
-        # Registration order follows the linked source files (desktop, files,
-        # process, signals); app-gate has no CIUKI_F2_PROBE registration yet.
+        # Existing source order is retained; the gate registration belongs to
+        # the supervisor gate path, linked after all other F2 controllers.
         self.assertEqual(linked_probe_names(rows,2),[
-            'crash-isolation','libc-smoke','fd-table','elf-load','spawn-wait','mmap','threads-wait','signals-fault'])
+            'crash-isolation','libc-smoke','fd-table','elf-load','spawn-wait','mmap','threads-wait','signals-fault','app-gate'])
         registrations=[line.split()[-1] for line in rows if ' f2_registration_' in line]
         self.assertEqual(registrations,[
             'f2_registration_probe_f2_crash_isolation','f2_registration_probe_f2_libc_smoke',
             'f2_registration_probe_f2_fd_table',
             'f2_registration_probe_f2_elf_load','f2_registration_probe_f2_spawn_wait',
             'f2_registration_probe_f2_mmap','f2_registration_probe_f2_threads_wait',
-            'f2_registration_probe_f2_signals_fault'])
+            'f2_registration_probe_f2_signals_fault','f2_registration_probe_f2_app_gate'])
         self.assertEqual(end-start,8*len(registrations))
         sections=[r for r in rows if ':(.f2probes)' in r];self.assertTrue(sections)
         for row in sections:
