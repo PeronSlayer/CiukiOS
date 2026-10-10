@@ -33,12 +33,23 @@ static int fault_kind(const char *s)
            !strcmp(s,"forged-fd") || !strcmp(s,"grant-fd") || !strcmp(s,"handler-fault");
 }
 static unsigned gate_keys,gate_motion,gate_buttons;
+static int gate_setup_error(int gate, unsigned step, int error)
+{
+    if (gate) {
+        char line[96];
+        int n=snprintf(line,sizeof(line),"case=native-setup step=%u error=%u",step,(unsigned)error);
+        if (n>0 && n<(int)sizeof(line)) (void)ciuki_raw_probe_report(CU_PTR(line),n,0,0,0,0);
+        fprintf(stderr,"desktop: gate setup failed step=%u error=%d\n",step,error);
+    }
+    return 1;
+}
 static void gate_report(struct desktop *d, uint32_t control, unsigned generation, int survivor, int victim, unsigned cycle)
 {
     char line[CIUKI_PROBE_REPORT_MAX+1];
     int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=%u survivor=%d victim=%d cycle=%u replies=%llu keys=%u motion=%u buttons=%u",
         control,generation,survivor,victim,cycle,(unsigned long long)d->replied,gate_keys,gate_motion,gate_buttons);
-    if (n<=0 || n>CIUKI_PROBE_REPORT_MAX || ciuki_error(ciuki_raw_probe_report(CU_PTR(line),n,0,0,0,0))) _exit(126);
+    int error=n<=0 || n>CIUKI_PROBE_REPORT_MAX ? EINVAL : ciuki_error(ciuki_raw_probe_report(CU_PTR(line),n,0,0,0,0));
+    if (error) { fprintf(stderr,"desktop: gate report failed length=%d error=%d\n",n,error); _exit(126); }
 }
 static int gate_send(struct desktop *d, int pid, unsigned command, unsigned generation)
 {
@@ -69,8 +80,6 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
 }
 int main(int argc, char **argv)
 {
-    /* Kernel channel_send posts SIGPIPE as well as returning EPIPE. */
-    if (desk_ignore_sigpipe()) return 1;
     int display = 3, input = 4, test = 0, gate = 0, cycles = 1, demo_count = 0;
     int channels[DESK_CLIENTS], channel_count = 0;
     const char *demos[DESK_CLIENTS], *victim = NULL;
@@ -95,24 +104,26 @@ int main(int argc, char **argv)
     if (display < 3 || input < 3 || display == input || cycles < 1 ||
         channel_count+demo_count+(victim != NULL) > DESK_CLIENTS) return 2;
     for (int i=0; i<channel_count; i++) if (channels[i]==display || channels[i]==input) return 2;
+    /* Kernel channel_send posts SIGPIPE as well as returning EPIPE. */
+    if (desk_ignore_sigpipe()) return gate_setup_error(gate,GATE_SETUP_SIGPIPE,errno);
     struct ciuki_display_info info = {.size=sizeof(info)};
     if (ciuki_display_info(display,&info)) {
         fprintf(stderr,"desktop: display unavailable (errno=%d); console ready\n",errno);
-        return 1; /* Lead uses the contracted stand-in on no-LFB profiles. */
+        return gate_setup_error(gate,GATE_SETUP_DISPLAY,errno); /* no-LFB profiles use the stand-in */
     }
-    if (!info.width || !info.height || info.width>2048 || info.height>2048) return 1;
+    if (!info.width || !info.height || info.width>2048 || info.height>2048) return gate_setup_error(gate,GATE_SETUP_GEOMETRY,EINVAL);
     struct desktop *d = calloc(1,sizeof(*d));
     uint32_t *portrait = malloc(DESK_PORTRAIT_SIZE*DESK_PORTRAIT_SIZE*4);
-    if (!d || !portrait) { free(d); free(portrait); return 1; }
+    if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
-    if (desk_load_portrait(portrait)) { fprintf(stderr,"desktop: approved Ciuki asset unavailable\n"); free(portrait); free(d); return 1; }
+    if (desk_load_portrait(portrait)) { fprintf(stderr,"desktop: approved Ciuki asset unavailable\n"); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_PORTRAIT,EIO); }
     d->portrait=portrait;
     d->output=ciuki_surface_create(info.width,info.height,CIUKI_SURFACE_XRGB8888);
     d->pixels=d->output < 0 ? MAP_FAILED : ciuki_surface_map(d->output,PROT_READ|PROT_WRITE);
-    if (d->pixels==MAP_FAILED) { if (d->output>=0) close(d->output); free(portrait); free(d); return 1; }
+    if (d->pixels==MAP_FAILED) { int error=errno; if (d->output>=0) close(d->output); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_OUTPUT,error); }
     int flags = fcntl(input,F_GETFL);
-    if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return 1;
+    if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     /* The ABI has no timed input read or poll/select. A bounded nonblocking
      * drain followed by an interruptible 10 ms sleep keeps IPC/time moving. */
     for (int i=0; i<channel_count; i++) desk_add_client(d,channels[i]);
@@ -122,7 +133,8 @@ int main(int argc, char **argv)
     unsigned generation=0;
     if (gate) {
         control=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
-        if (control==MAP_FAILED || (survivor_pid=spawn_demo(d,"none",1))<0) return 1;
+        if (control==MAP_FAILED) return gate_setup_error(gate,GATE_SETUP_CONTROL,errno);
+        if ((survivor_pid=spawn_demo(d,"none",1))<0) return gate_setup_error(gate,GATE_SETUP_SURVIVOR,errno);
         gate_report(d,CU_PTR(control),0,survivor_pid,0,0);
     }
     int victim_pid = -1, completed = 0;

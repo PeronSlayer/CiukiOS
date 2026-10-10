@@ -31,6 +31,26 @@
           {
             "where": {
               "event": "DATA",
+              "case": "launch",
+              "server": "desktop"
+            },
+            "fields": {
+              "reason": "ok",
+              "stage": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "pid",
+              "survivor",
+              "control",
+              "ticks"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
               "case": "identity",
               "server": "desktop"
             },
@@ -313,6 +333,26 @@
       "expected": {
         "terminal": "END",
         "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "server": "desktop"
+            },
+            "fields": {
+              "reason": "ok",
+              "stage": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "pid",
+              "survivor",
+              "control",
+              "ticks"
+            ]
+          },
           {
             "where": {
               "event": "DATA",
@@ -601,6 +641,26 @@
           {
             "where": {
               "event": "DATA",
+              "case": "launch",
+              "server": "desktop"
+            },
+            "fields": {
+              "reason": "ok",
+              "stage": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "pid",
+              "survivor",
+              "control",
+              "ticks"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
               "case": "identity",
               "server": "desktop"
             },
@@ -886,6 +946,26 @@
           {
             "where": {
               "event": "DATA",
+              "case": "launch",
+              "server": "desktop"
+            },
+            "fields": {
+              "reason": "ok",
+              "stage": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "pid",
+              "survivor",
+              "control",
+              "ticks"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
               "case": "identity",
               "server": "desktop"
             },
@@ -1168,6 +1248,26 @@
       "expected": {
         "terminal": "END",
         "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "server": "desktop"
+            },
+            "fields": {
+              "reason": "ok",
+              "stage": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "pid",
+              "survivor",
+              "control",
+              "ticks"
+            ]
+          },
           {
             "where": {
               "event": "DATA",
