@@ -1457,6 +1457,7 @@ class F1RecordTests(unittest.TestCase):
             with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check(case['expected'])
 
 class PhysicalHistoricalImportTests(unittest.TestCase):
+    @unittest.skipUnless((ROOT/'tests/host/fixtures/physical/44444444/f0.log').exists(), 'real T23 capture fixture is local only (legacy/local, never published)')
     def test_cli_override_retains_historical_identity_without_qemu(self):
         folder = ROOT/'build/runner-host-tests'; folder.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=folder) as scratch:

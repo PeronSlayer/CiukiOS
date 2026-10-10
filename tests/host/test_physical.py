@@ -97,6 +97,7 @@ class PhysicalImportTests(unittest.TestCase):
         self.assertEqual(result[1]['outcome'],'not_run')
         self.assertIn('independent',result[1]['reason'])
 
+    @unittest.skipUnless((FIXTURES/'66666666'/'f0.log').exists(), 'real T23 capture fixture is local only (legacy/local, never published)')
     def test_real_sweep_fixture_imports_every_f2_all_case(self):
         import run as runner
         capture = FIXTURES/'66666666'
@@ -156,6 +157,7 @@ class PhysicalImportTests(unittest.TestCase):
                 if replacement:
                     self.assertEqual(results[0]['boot_evidence'][0]['damaged_records'][0]['raw_hex'],replacement.hex())
 
+    @unittest.skipUnless((FIXTURES/'66666666'/'f0.log').exists(), 'real T23 capture fixture is local only (legacy/local, never published)')
     def test_historical_real_fixture_requires_verified_hash_override(self):
         import run as runner
         capture = FIXTURES/'44444444'; metadata = json.loads((capture/'acquisition.json').read_text())

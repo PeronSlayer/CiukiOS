@@ -411,3 +411,13 @@ check): directive f1-33.
 the third T23 sweep is the same tree with `BOOT.CFG`
 `probe=all:sweep run=77777777` (`build/f0/ciukios-hw.img`,
 SHA-256 `6ed146ab…`).
+Physical import of capture `66666666` with the f1-33 importer
+(`run.py f2-all --physical-capture … --image-sha256 90477716…`): 35 boots,
+`sweep_complete=True`, physical summary 56 PASS, 1 FAIL (`video-fallback`:
+its `text eq 1` predicate describes the QEMU `-vga none` boot; on a machine
+with an LFB the case must map to `not_run`, hardware-tier follow-up),
+132 `not_run` by the prerequisite rule and the hardware-tier reasons
+(`fixtures_absent`, `second_volume_absent`, operator cases). The real
+captures serve as local test fixtures (`tests/host/fixtures/physical/`,
+log files ignored by git, tests skip without them) because physical logs
+are never published.
