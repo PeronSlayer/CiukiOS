@@ -88,18 +88,29 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
     s->disks[disk] = true;
     struct partition_table table;
     int e = partition_scan(dev, &table);
-    if (e) return s->disk_errors[disk] = e;
+    if (e && (!disk || e != -FS_EINVAL)) return s->disk_errors[disk] = e;
     uint8_t mbr[512];
-    if ((e = dev->read(dev, 0, 1, mbr))) return s->disk_errors[disk] = e;
+    int read = dev->read(dev, 0, 1, mbr);
+    if (read) return s->disk_errors[disk] = read;
+    /* Nonboot whole-disk FAT volumes have no partition table. The header
+     * only selects the candidate; fat_mount performs every BPB/scan check.
+     * Never hide GPT, EBR limits or issued I/O errors behind this fallback.
+     * Microsoft FAT spec: Boot Sector/BPB and FAT Type Determination. */
+    bool superfloppy = disk && !table.count && !table.ebr_reads && fs_rd16(mbr + 510) == 0xaa55 &&
+        fs_rd16(mbr + 11) == 512 && (mbr[0] == 0xe9 || (mbr[0] == 0xeb && mbr[2] == 0x90));
+    if (superfloppy) {
+        table.count = 1;
+        table.entries[0] = (struct partition){ .start = 0, .count = dev->capacity };
+    } else if (e) return s->disk_errors[disk] = e;
     uint32_t boot_start = fs_rd32(mbr + 454), boot_count = fs_rd32(mbr + 458);
     for (unsigned i = 0; i < table.count; i++) {
         struct partition *part = &table.entries[i];
-        if (!fat_partition(part->type)) continue;
+        if (!superfloppy && !fat_partition(part->type)) continue;
         bool boot = !disk && !part->logical && part->start == boot_start && part->count == boot_count;
         unsigned d = boot ? 2 : s->next_drive++;
         if (d >= 26) return s->disk_errors[disk] = -FS_ENOSPC;
         struct storage_volume *v = &s->volumes[d];
-        v->present = true; v->drive = d; v->disk = disk; v->partition = i + 1;
+        v->present = true; v->drive = d; v->disk = disk; v->partition = superfloppy ? 0 : i + 1;
         e = blkpart_init(&v->part, dev, part);
         if (e) { v->error = e; continue; }
         v->io = (struct blkdev){ .read = volume_read, .write = volume_write,
@@ -272,6 +283,9 @@ void storage_init(void)
             .read_gate = v->read_gate, .read_sequence = v->read_sequence,
             .writes = v->writes, .writes_before_gate = v->writes_before_gate,
             .reason = "mount", .qualified = false });
+        if (!v->partition)
+            klog("[storage] kind=%u disk=%u part=0 layout=superfloppy drive=%c mode=%s error=%d",
+                 ACTIVATION_MOUNT, v->disk, 'A' + d, v->fat.readonly ? "ro" : "rw", v->error);
     }
     /* The F1 boot-identity amendment accepts disk 0, primary partition 1
      * for CBI1. Loader fingerprints remain a boot-info v2 requirement. */

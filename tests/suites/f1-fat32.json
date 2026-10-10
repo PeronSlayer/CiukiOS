@@ -127,6 +127,37 @@
               },
               "timing_domain": "icount"
             }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture",
+              "disk": 1
+            },
+            "exact_count": 1,
+            "fields": {
+              "status": "present"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mount",
+              "disk": 1
+            },
+            "exact_count": 1,
+            "fields": {
+              "type": {
+                "eq": 12
+              },
+              "mode": "ro",
+              "writes": {
+                "eq": 0
+              },
+              "read_gate": {
+                "eq": 1
+              }
+            }
           }
         ]
       },
@@ -270,6 +301,37 @@
               },
               "timing_domain": "icount"
             }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture",
+              "disk": 1
+            },
+            "exact_count": 1,
+            "fields": {
+              "status": "present"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mount",
+              "disk": 1
+            },
+            "exact_count": 1,
+            "fields": {
+              "type": {
+                "eq": 16
+              },
+              "mode": "ro",
+              "writes": {
+                "eq": 0
+              },
+              "read_gate": {
+                "eq": 1
+              }
+            }
           }
         ]
       },
@@ -412,6 +474,37 @@
                 "ge": 0
               },
               "timing_domain": "icount"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture",
+              "disk": 1
+            },
+            "exact_count": 1,
+            "fields": {
+              "status": "present"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mount",
+              "disk": 0
+            },
+            "exact_count": 1,
+            "fields": {
+              "type": {
+                "eq": 32
+              },
+              "mode": "ro",
+              "writes": {
+                "eq": 0
+              },
+              "read_gate": {
+                "eq": 1
+              }
             }
           }
         ]

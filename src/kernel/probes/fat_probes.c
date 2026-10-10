@@ -25,8 +25,8 @@ static void mount_records(const char *probe)
     for (unsigned d = 2; d < 26; d++) {
         const struct activation_entry *e = drivers_mount_get(d);
         if (!e) continue;
-        rec_emit(probe, "DATA", "group=storage drive=%c disk=%u part=%u mode=%s gate=%s writes=%llu qualified=%u reason=%s",
-                 'A' + d, e->disk, e->partition, e->readonly ? "ro" : "rw",
+        rec_emit(probe, "DATA", "group=storage drive=%c disk=%u part=%u layout=%s mode=%s gate=%s writes=%llu qualified=%u reason=%s",
+                 'A' + d, e->disk, e->partition, e->partition ? "mbr" : "superfloppy", e->readonly ? "ro" : "rw",
                  e->read_gate ? "read" : "closed", e->writes, e->qualified, e->reason);
     }
 }
@@ -152,8 +152,8 @@ int probe_fat_read(void)
     e = vfs_stat(&probe_table, "C:/SYSTEM", &entry);
     if (!e && !(entry.attr & FAT_ATTR_DIR)) e = -FS_ENOTDIR;
     unsigned id = 0;
-    for (unsigned slot = 1; slot <= 2; slot++)
-        if (!s->disks[slot]) rec_emit(probe, "DATA", "case=fixture slot=%u status=absent", slot);
+    for (unsigned disk = 1; disk < STORAGE_DISKS; disk++)
+        rec_emit(probe, "DATA", "case=fixture disk=%u status=%s", disk, s->disks[disk] ? "present" : "absent");
     for (unsigned d = 2; d < 26 && !e; d++) {
         struct storage_volume *v = storage_volume(s, d); if (!v) continue;
         const struct activation_entry *mount = drivers_mount_get(d);

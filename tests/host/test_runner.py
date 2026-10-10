@@ -135,6 +135,37 @@ class RunnerTests(unittest.TestCase):
             case={**self.case,'selector':'f0:boot run={run_id}'+suffix}
             with self.subTest(suffix=suffix),self.assertRaises(ValueError):
                 runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)
+    def test_fixture_disk_connector_numbers_and_manifest(self):
+        for count in range(4):
+            fixtures=[{'generator':'mkfs.fat','fat_type':bits,'seed':1} for bits in (12,16,32)[:count]]
+            # A nondisk fixture's ordinal must not leave a gap in IDE indices.
+            fixtures.insert(0,{'label':'nondisk'})
+            case={**self.case,'fixtures':fixtures}
+            args,_=runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)
+            drives=[args[i+1] for i,arg in enumerate(args) if arg=='-drive']
+            self.assertEqual(len(drives),count+1)
+            self.assertIn('if=ide,index=0,',drives[0])
+            self.assertEqual(drives[1:],[f'file=fixture-{disk}.img,format=raw,if=ide,index={disk},cache=writeback' for disk in range(1,count+1)])
+            with patch.object(FakeHost,'fat_fixture',return_value={'sha256':'a'*64}):
+                manifest=runner.prepare_fixtures(FakeHost(self.cgroup),case,self.root)['manifest']
+            self.assertNotIn('ide_index',manifest[0])
+            self.assertEqual([item['ide_index'] for item in manifest[1:]],list(range(1,count+1)))
+        case={**self.case,'fixtures':[{'generator':'mkfs.fat'}]*4}
+        with self.assertRaisesRegex(res.Refusal,'too many IDE'):
+            runner.qemu_args('fixture',self.profile,case,'12345678',self.image,self.firmware)
+        with patch.object(FakeHost,'fat_fixture') as generate,self.assertRaisesRegex(res.Refusal,'too many IDE'):
+            runner.prepare_fixtures(FakeHost(self.cgroup),case,self.root)
+        generate.assert_not_called()
+
+    def test_fat_read_suite_uses_kernel_disk_numbers(self):
+        cases=runner.load(ROOT/'tests/suites/f1-fat32.json')['cases']
+        for name,bits,disk in [('fat12-read',12,1),('fat16-read',16,1),('fat32-read',32,0)]:
+            case=next(case for case in cases if case['id']==name)
+            predicates=case['expected']['predicates']
+            self.assertIn({'where':{'event':'DATA','case':'fixture','disk':1},'exact_count':1,
+                           'fields':{'status':'present'}},predicates)
+            self.assertIn({'where':{'event':'DATA','case':'mount','disk':disk},'exact_count':1,
+                           'fields':{'type':{'eq':bits},'mode':'ro','writes':{'eq':0},'read_gate':{'eq':1}}},predicates)
     def test_legacy_loader_options_are_refused(self):
         for options in ({'safe':True},{}):
             case={**self.case,'loader_options':options}
@@ -350,6 +381,7 @@ class RunnerTests(unittest.TestCase):
             result,_=self.run_fake(records)
         self.assertEqual(result['outcome'],'fail');self.assertIn('guest digest mismatch',result['reason'])
         self.assertEqual(result['fixtures']['manifest'][0]['sha256'],fixture['sha256'])
+        self.assertEqual(result['fixtures']['manifest'][0]['ide_index'],1)
 
     def test_sector_digests_require_stopped_guest_and_exact_measurement(self):
         self.case['digests']=[{'kind':'sector','lba':0,'where':{'event':'DATA','lba':'0'}}]
