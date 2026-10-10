@@ -241,22 +241,41 @@ static void service_input(void)
 static int mouse_setup(uint8_t function, uint16_t bx, uint16_t es, uint32_t ms)
 {
     struct biosvm_regs r = {.eax = 0xC200u | function, .ebx = bx, .es = es, .interrupt = 0x15};
+    uint64_t start = deadline_after_ms(0);
     int rc = biosvm_call(&r, ms);
+    uint64_t elapsed = deadline_after_ms(0) - start;
+    /* Log failures only inside the shared budget: successful serial output
+     * at 38400 baud must not consume the next setup function's deadline. */
+    if (rc || (r.flags & V86_CF) || (r.eax & 0xFF00)) {
+        klog("[fwinput] step=mouse_setup regs=in int=15 function=%04x bx=%04x es=%04x deadline_ms=%u",
+             0xC200u | function, bx, es, ms);
+        klog("[fwinput] step=mouse_setup regs=out int=15 function=%04x eax=%08x ebx=%08x ecx=%08x edx=%08x es=%04x flags=%04x result=%d elapsed=%llu",
+             0xC200u | function, r.eax, r.ebx, r.ecx, r.edx, r.es, r.flags, rc, elapsed);
+    }
     if (rc)
         return rc;
-    if ((r.flags & V86_CF) || (r.eax & 0xFF00))
+    if ((r.flags & V86_CF) || (r.eax & 0xFF00)) {
+        klog("[fwinput] step=mouse_service int=15 function=%04x error=%d ah=%02x cf=%u keyboard=kept",
+             0xC200u | function, -ENOSYS, (r.eax >> 8) & 0xFF, !!(r.flags & V86_CF));
         return -ENOSYS;
+    }
     decoder.stats.mouse_functions |= 1u << function;
     return 0;
 }
 
 int fwinput_init(void)
 {
-    if (started)
-        return biosvm_backend_state() == BIOSVM_DISABLED_BACKEND ? -V86_EIO : 0;
+    if (started) {
+        if (biosvm_backend_state() != BIOSVM_DISABLED_BACKEND)
+            return 0;
+        klog("[fwinput] step=already_disabled error=%d setup_error=%d", -V86_EIO, backend.setup_error);
+        return -V86_EIO;
+    }
     int rc = biosvm_init();
-    if (rc)
+    if (rc) {
+        klog("[fwinput] step=biosvm_init error=%d", rc);
         return rc;
+    }
     started = true;
     backend.keyboard = true;
     backend.key_releases = true;
@@ -273,6 +292,8 @@ int fwinput_init(void)
         uint64_t now = deadline_after_ms(0);
         if (now - end < (1ull << 63)) {
             rc = -V86_ETIMEDOUT;
+            klog("[fwinput] step=setup_budget int=15 function=%04x error=%d elapsed=%llu deadline_ms=500",
+                 0xC200u | setup[i].fn, rc, now - (end - 500));
             break;
         }
         rc = mouse_setup(setup[i].fn, setup[i].bx, setup[i].es, (uint32_t)(end - now));
@@ -282,7 +303,11 @@ int fwinput_init(void)
     backend.mouse = !rc;
     backend.setup_error = rc;
     biosvm_set_input_service(service_input);
-    return biosvm_backend_state() == BIOSVM_DISABLED_BACKEND ? -V86_EIO : 0;
+    bool disabled = biosvm_backend_state() == BIOSVM_DISABLED_BACKEND;
+    klog("[fwinput] step=setup_done error=%d setup_error=%d keyboard=%u mouse=%u disabled=%u functions=%02x elapsed=%llu deadline_ms=500",
+         disabled ? -V86_EIO : 0, rc, !disabled, backend.mouse && !disabled, disabled,
+         decoder.stats.mouse_functions, deadline_after_ms(0) - (end - 500));
+    return disabled ? -V86_EIO : 0;
 }
 
 unsigned fwinput_poll(struct fwinput_event *out, unsigned max)

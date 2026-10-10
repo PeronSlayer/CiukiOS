@@ -39,6 +39,20 @@ static struct { int handle; gen_t generation; } leases[4];
 static unsigned lease_count;
 static uint16_t mouse_lost;
 
+static int init_error(const char *step, int error)
+{
+    klog("[biosvm] step=%s error=%d leases=%u", step, error, lease_count);
+    return error;
+}
+
+static void log_regs(const char *step, const char *direction, const struct biosvm_regs *r)
+{
+    klog("[biosvm] step=%s regs=%s int=%02x eax=%08x ebx=%08x ecx=%08x edx=%08x flags=%04x",
+         step, direction, r->interrupt, r->eax, r->ebx, r->ecx, r->edx, r->flags);
+    klog("[biosvm] step=%s regs=%s esi=%08x edi=%08x ebp=%08x ds=%04x es=%04x fs=%04x gs=%04x",
+         step, direction, r->esi, r->edi, r->ebp, r->ds, r->es, r->fs, r->gs);
+}
+
 static void *vm_memory(void *arg, uint32_t linear, unsigned bytes, bool write)
 {
     (void)arg;
@@ -85,8 +99,11 @@ static void quarantine(void)
     quarantined = true;
     /* Do not touch PIC/PIT here: physical dispatcher retains EOI ownership.
      * Disabled callbacks consume nothing and the lease stays pinned. */
-    for (unsigned i = 0; i < lease_count; i++)
-        registry_quarantine(leases[i].handle, leases[i].generation);
+    for (unsigned i = 0; i < lease_count; i++) {
+        int rc = registry_quarantine(leases[i].handle, leases[i].generation);
+        klog("[biosvm] step=quarantine handle=%d generation=%u result=%d",
+             leases[i].handle, leases[i].generation, rc);
+    }
 }
 
 static void capture_pending(void)
@@ -190,25 +207,29 @@ static int map_firmware(void)
      * PMM already excludes ALL low pages; no general LOW allocation exists.
      * Reuse two pages of that explicit reservation, never allocator RAM. */
     if (!reserved_ram(BIOSVM_SCRATCH, BIOSVM_STACK + PAGE_SIZE))
-        return -EFAULT;
+        return init_error("scratch_reservation", -EFAULT);
     uint16_t ebda_seg, conventional_kib;
     memcpy(&ebda_seg, P2V(0x40E), 2);
     memcpy(&conventional_kib, P2V(0x413), 2);
     uint32_t ebda = (uint32_t)ebda_seg << 4;
     if (ebda < 0x80000 || ebda >= 0xA0000 || conventional_kib > 640 ||
-        (uint32_t)conventional_kib * 1024 > ebda)
+        (uint32_t)conventional_kib * 1024 > ebda) {
+        klog("[biosvm] step=ebda_base error=%d segment=%04x conventional_kib=%u", -EFAULT, ebda_seg, conventional_kib);
         return -EFAULT;
+    }
     uint32_t end = ebda + *(const uint8_t *)P2V(ebda) * 1024u;
-    if (end <= ebda || end > 0xA0000)
+    if (end <= ebda || end > 0xA0000) {
+        klog("[biosvm] step=ebda_size error=%d start=%08x end=%08x", -EFAULT, ebda, end);
         return -EFAULT;
+    }
     int rc = as_create(&vm_as);
     if (rc)
-        return rc;
+        return init_error("address_space", rc);
     low_pt = pmm_alloc();
     if (!low_pt) {
         pmm_free(vm_as.pd_phys);
         vm_as.pd_phys = 0;
-        return -ENOMEM;
+        return init_error("page_table", -ENOMEM);
     }
     uint32_t *pt = P2V(low_pt), *pd = P2V(vm_as.pd_phys);
     memset(pt, 0, PAGE_SIZE);
@@ -232,7 +253,7 @@ static int map_firmware(void)
     memset(P2V(BIOSVM_STACK), 0, PAGE_SIZE);
     size_t stub_bytes = (size_t)(biosvm_mouse_stub_end - biosvm_mouse_stub);
     if (stub_bytes > BIOSVM_MOUSE_RING - BIOSVM_MOUSE_OFFSET)
-        return -EFAULT;
+        return init_error("mouse_stub_size", -EFAULT);
     memcpy(P2V(BIOSVM_SCRATCH + BIOSVM_MOUSE_OFFSET), biosvm_mouse_stub, stub_bytes);
     *(uint8_t *)P2V(BIOSVM_SCRATCH) = 0xF4;
     return 0;
@@ -240,43 +261,58 @@ static int map_firmware(void)
 
 static int claim_input(void)
 {
-    int ports[2] = {-1, -1};
+    static const struct { enum res_type type; uint32_t start; } wanted[] = {
+        {RES_PORT, 0x60}, {RES_PORT, 0x64}, {RES_IRQ, 1}, {RES_IRQ, 12},
+    };
+    int handles[4] = {-1, -1, -1, -1};
+    gen_t generations[4] = {0};
+    /* Preflight all resources before transferring anything. Firmware IRQ
+     * reservations, when published, belong to the same input parent lease.
+     * registry_init currently publishes only the two port reservations;
+     * absent IRQs still require a new claim, never an overlapping claim. */
     for (unsigned i = 0; i < registry_count(); i++) {
         const struct resource *r = registry_get(i);
         if (r->state == RS_RELEASED)
             continue;
-        if (r->type == RES_IRQ && (r->start == 1 || r->start == 12))
-            return -V86_EPERM;
-        if (r->type != RES_PORT)
-            continue;
-        for (unsigned n = 0; n < 2; n++) {
-            uint32_t port = n ? 0x64 : 0x60;
-            if (r->start <= port && r->end > port) {
-                if (r->state != RS_FIRMWARE || r->start != port || r->end != port + 1 ||
-                    strncmp(r->owner, "input", 6))
+        for (unsigned n = 0; n < ARRAY_SIZE(wanted); n++) {
+            uint32_t start = wanted[n].start;
+            if (r->type == wanted[n].type && r->start <= start && r->end > start) {
+                if (r->state != RS_FIRMWARE || r->start != start || r->end != start + 1 ||
+                    r->shareable || !r->owner || strncmp(r->owner, "input", 6) || handles[n] >= 0) {
+                    klog("[biosvm] step=lease_conflict error=%d owner=firmware-input type=%u start=%x end=%x handle=%u state=%u",
+                         -V86_EPERM, r->type, r->start, r->end, i, r->state);
+                    char owner[64];
+                    unsigned j = 0;
+                    if (r->owner)
+                        for (; j < sizeof(owner) - 1 && r->owner[j]; j++) owner[j] = r->owner[j];
+                    owner[j] = 0;
+                    klog("[biosvm] step=lease_conflict held_by=%s generation=%u", owner, r->generation);
                     return -V86_EPERM;
-                ports[n] = (int)i;
+                }
+                handles[n] = (int)i;
+                generations[n] = r->generation;
             }
         }
     }
-    if (ports[0] < 0 || ports[1] < 0)
-        return -V86_EPERM;
-    for (unsigned n = 0; n < 4; n++) {
-        int h, rc;
-        if (n < 2) {
-            h = ports[n];
-            rc = registry_claim_reserved(h, registry_get(h)->generation, "firmware-input");
-            if (rc)
-                return rc;
+    if (handles[0] < 0 || handles[1] < 0)
+        return init_error("input_reservations_missing", -V86_EPERM);
+    for (unsigned n = 0; n < ARRAY_SIZE(wanted); n++) {
+        int h = handles[n], rc;
+        if (h >= 0) {
+            rc = registry_claim_reserved(h, generations[n], "firmware-input");
         } else {
-            unsigned irq = n == 2 ? 1 : 12;
+            unsigned irq = wanted[n].start;
             h = registry_claim(RES_IRQ, irq, irq + 1, "firmware-input", false);
-            if (h < 0)
-                return h;
+            rc = h < 0 ? h : 0;
         }
+        klog("[biosvm] step=lease_%s type=%u start=%x handle=%d old_generation=%u result=%d",
+             handles[n] >= 0 ? "transfer" : "claim", wanted[n].type, wanted[n].start, h, generations[n], rc);
+        if (rc)
+            return rc;
         leases[lease_count].handle = h;
         leases[lease_count++].generation = registry_get(h)->generation;
         rc = registry_activate(h, registry_get(h)->generation);
+        klog("[biosvm] step=lease_activate handle=%d generation=%u result=%d", h, registry_get(h)->generation, rc);
         if (rc)
             return rc;
     }
@@ -306,16 +342,22 @@ static void save_regs(struct biosvm_regs *r)
 
 static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
 {
+    struct biosvm_regs input = *regs;
+    uint64_t start = deadline_after_ms(0);
     if (!test && regs->interrupt == 0x16 && ((regs->eax >> 8) & 0xFF) == 0x10) {
         uint16_t head, tail;
         memcpy(&head, P2V(0x41A), 2);
         memcpy(&tail, P2V(0x41C), 2);
-        if (head == tail)
+        if (head == tail) {
+            klog("[biosvm] step=keyboard_empty int=16 function=10 error=%d", -EINVAL);
             return -EINVAL; /* recheck at execution, after mailbox scheduling */
+        }
     }
     int rc = v86_begin(&firmware, deadline_after_ms(0), ms);
-    if (rc)
-        return rc;
+    if (rc) {
+        log_regs("begin", "in", regs);
+        return init_error("begin", rc);
+    }
     load_regs(regs);
     if (test) {
         /* Separate scripted entries: a refusal terminates that call, so the
@@ -351,8 +393,19 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
         write_cr3(old_cr3);
         tss_set_kernel_stack((uint32_t)(uintptr_t)vm_thread->kstack + KSTACK_SIZE);
         sti();
-        save_regs(regs);
         rc = firmware.result;
+    }
+    save_regs(regs);
+    if (rc < 0) {
+        uint64_t elapsed = deadline_after_ms(0) - start;
+        log_regs("execute", "in", &input);
+        log_regs("execute", "out", regs);
+        klog("[biosvm] step=execute error=%d vector=%u cs=%04x ip=%04x address=%08x elapsed=%llu deadline_ms=%u",
+             rc, firmware.fault.vector, firmware.fault.cs, firmware.fault.ip, firmware.fault.address,
+             elapsed, ms);
+        klog("[biosvm] step=fault bytes=%02x%02x%02x%02x count=%u state=%u",
+             firmware.fault.bytes[0], firmware.fault.bytes[1], firmware.fault.bytes[2], firmware.fault.bytes[3],
+             firmware.fault.count, firmware.state);
     }
     if (firmware.state == V86_DISABLED && !synthetic)
         quarantine();
@@ -396,22 +449,25 @@ static void worker_main(void *arg)
 
 int biosvm_init(void)
 {
-    if (initialized)
-        return quarantined ? -V86_EIO : 0;
     if (quarantined)
-        return -V86_EIO;
-    if (!g_current || !(read_eflags() & V86_IF) || g_boot.input_policy != CBI_INPUT_FIRMWARE)
-        return -V86_EPERM;
+        return init_error("already_quarantined", -V86_EIO);
+    if (initialized)
+        return 0;
+    if (!g_current || !(read_eflags() & V86_IF))
+        return init_error("thread_context", -V86_EPERM);
+    if (g_boot.input_policy != CBI_INPUT_FIRMWARE)
+        return init_error("input_policy", -V86_EPERM);
     if (read_cr4() & 3)
-        return -V86_EPERM; /* no alternate VME/PVI monitor path */
+        return init_error("vme_pvi", -V86_EPERM); /* no alternate VME/PVI monitor path */
     const struct v86_ops ops = {vm_memory, vm_in, vm_out, 0};
     v86_init(&firmware, &ops);
+    firmware.qemu_pmtimer = !!(g_boot.flags & CBI_F_SMBIOS_QEMU);
     int rc = map_firmware();
     if (rc)
         goto failed;
     vm_thread = task_create_kernel("bios-input", worker_main, 0, P_DEVICE);
     if (!vm_thread) {
-        rc = -ENOMEM;
+        rc = init_error("worker_create", -ENOMEM);
         goto failed;
     }
     rc = claim_input();
@@ -428,6 +484,7 @@ int biosvm_init(void)
     pic_unmask(1);
     pic_unmask(12);
     irq_restore(f);
+    klog("[biosvm] step=ready leases=%u qemu_pmtimer=%u", lease_count, firmware.qemu_pmtimer);
     return 0;
 failed:
     /* No firmware ran. Free only privately allocated pages, not borrowed
@@ -469,22 +526,30 @@ static int submit(struct biosvm_regs *regs, uint32_t ms, unsigned test)
     return request_result;
 }
 
+static int reject_call(const char *step, const struct biosvm_regs *regs, int rc)
+{
+    if (regs)
+        log_regs(step, "in", regs);
+    klog("[biosvm] step=%s error=%d state=%u quarantined=%u", step, rc, firmware.state, quarantined);
+    return rc;
+}
+
 int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms)
 {
     if (!initialized || quarantined || firmware.state == V86_DISABLED)
-        return -V86_EIO;
+        return reject_call("call_disabled", regs, -V86_EIO);
     if (!regs || !g_current || !(read_eflags() & V86_IF) || !deadline_ms)
-        return -EINVAL;
+        return reject_call("call_context", regs, -EINVAL);
     uint8_t ah = regs->eax >> 8;
     bool keyboard = regs->interrupt == 0x16 && (ah == 0x10 || ah == 0x11);
     bool mouse = regs->interrupt == 0x15 && ah == 0xC2 && (regs->eax & 0xFF) <= 7;
     if ((!keyboard && !mouse) || deadline_ms > (mouse ? 500u : 100u))
-        return -V86_EPERM;
+        return reject_call("call_policy", regs, -V86_EPERM);
     if (g_current != vm_thread)
         kmutex_lock(&request_mutex);
     int rc;
     if (quarantined || firmware.state == V86_DISABLED) {
-        rc = -V86_EIO;
+        rc = reject_call("call_quarantined", regs, -V86_EIO);
         goto done;
     }
     if (keyboard && ah == 0x10) {
@@ -494,7 +559,7 @@ int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms)
         memcpy(&head, P2V(0x41A), 2);
         memcpy(&tail, P2V(0x41C), 2);
         if (head == tail) {
-            rc = -EINVAL;
+            rc = reject_call("call_keyboard_empty", regs, -EINVAL);
             goto done;
         }
     }
