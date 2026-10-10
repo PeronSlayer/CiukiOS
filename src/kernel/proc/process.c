@@ -358,7 +358,7 @@ void proc_collect(void)
             p->state = PROC_ZOMBIE;
             struct process *parent = proc_find(p->ppid);
             if (parent) {
-                parent->pending |= CIUKI_SIGBIT(SIGCHLD);
+                proc_signal_child(parent, p->pid);
                 kwait_wake_all(&parent->changed);
             }
         }
