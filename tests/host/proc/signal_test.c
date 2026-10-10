@@ -36,6 +36,34 @@ void fpu_reset_state(int sse) { CHECK(!sse); memset(hardware_fp, 0, sizeof(hardw
 #include "../../../src/kernel/proc/syscalls_signal.c"
 #include "../../../src/kernel/proc/clock.c"
 
+/* The host script extracts these unmodified production scheduler functions.
+ * Only switching CPU stacks/CR3 and the BIOS worker's architecture hooks are
+ * stubbed. The ordinary process fixture still owns allocation and lifecycle. */
+uint32_t g_quantum_ticks = 10, g_starvation_boosts;
+uint64_t g_task_switches, g_task_switches_other, g_switch_target;
+volatile bool g_measure_stop;
+#define schedule timing_schedule
+#define sched_tick timing_tick
+#define task_sleep_ms timing_sleep_ms
+#define write_cr3(value) (host_cr3 = (value))
+#define biosvm_task_cr3(task, normal) ((void)(task), (normal))
+#define vmm_kernel_pd() 0u
+#define tss_set_kernel_stack(value) ((void)0)
+#define crit_begin() ((void)0)
+#define crit_end() ((void)0)
+#define switch_context(old, next) ((void)(old), (void)(next))
+#include <signal_scheduler.inc>
+#undef switch_context
+#undef crit_end
+#undef crit_begin
+#undef tss_set_kernel_stack
+#undef vmm_kernel_pd
+#undef biosvm_task_cr3
+#undef write_cr3
+#undef task_sleep_ms
+#undef sched_tick
+#undef schedule
+
 static uint8_t task_fp[CIUKI_THREAD_MAX][512];
 static struct proc_thread *signal_process(struct process *parent, struct process **p)
 {
@@ -355,21 +383,80 @@ static void test_delivery(void)
     destroy_signal_process(p);
     puts("signal delivery: frame copy, handler wait no EINTR/nesting, deferred catcher, outside wait EINTR, sigreturn EAX PASS");
 }
-static bool sleep_slow_record;
+static bool sleep_paced_peers;
 static uint64_t sleep_started;
+static unsigned sleep_injections;
 static void interrupt_sleep(void)
 {
     CHECK(wait_target->task->state == T_BLOCKED);
-    /* The probe posts at ~10 ms, but its original serial record keeps the
-     * UP kernel running past the waiter's 20 ms deadline before dispatch. */
-    g_ticks = sleep_started + 10;
-    proc_signal_post(wait_target->process, wait_target, SIGUSR1, wait_target->process->pid);
-    CHECK(wait_target->task->state == T_READY);
-    if (sleep_slow_record) g_ticks += 50;
+    /* Reproduce the production probe's P_INTERACTIVE 1 ms polling, three
+     * P_NORMAL background peers and first_tick+10 injection into a blocked
+     * 20 ms nanosleep. Start at the actual block, undoing the fixture's
+     * schedule() increment; all subsequent 1 ms ticks use sched_tick().
+     *
+     * POSIX permits delayed dispatch after expiry to finish the sleep:
+     * https://pubs.opengroup.org/onlinepubs/9799919799/functions/nanosleep.html
+     * Icount measures guest instruction time, not host serial wall time:
+     * https://www.qemu.org/docs/master/devel/tcg-icount.html
+     * Decision: pace the probe's peers, retaining the 20 ms/EINTR contract. */
+    g_ticks = sleep_started;
+    uint32_t saved_cr3 = host_cr3, saved_tls = tls_base;
+    struct task peers[3] = { 0 }, probe = { 0 }, idle = { 0 };
+    struct task *sleeper = wait_target->task;
+    struct task *old_next = sleeper->all_next;
+    idle.prio = P_IDLE;
+    idle.state = T_BLOCKED;
+    idle_task = &idle;
+    probe.prio = P_INTERACTIVE;
+    probe.state = T_BLOCKED;
+    probe.wake_tick = g_ticks + 1;
+    all_tasks = &probe;
+    probe.all_next = sleeper;
+    sleeper->all_next = &peers[0];
+    for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) {
+        peers[i].prio = P_NORMAL;
+        peers[i].state = T_READY;
+        peers[i].user = true;
+        peers[i].all_next = i + 1 < ARRAY_SIZE(peers) ? &peers[i + 1] : 0;
+        rq_push(&peers[i]);
+    }
+    sleep_injections = 0;
+    timing_schedule();
+    unsigned turns = 0;
+    while (g_current != sleeper) {
+        CHECK(++turns < 1000 && g_ticks < sleep_started + 100);
+        if (g_current == &probe) {
+            if (!sleep_injections && sleeper->state == T_BLOCKED && g_ticks >= sleep_started + 10) {
+                CHECK(g_ticks == sleep_started + 10);
+                CHECK(proc_signal_thread_kill(wait_target->process, wait_target->tid, SIGUSR1) == 0);
+                CHECK(sleeper->state == T_READY && !sleeper->wake_tick);
+                /* proc_test.c's task_start changes the state only. Enqueue
+                 * exactly as production task_start does after that change. */
+                rq_push(sleeper);
+                sleep_injections++;
+            }
+            timing_sleep_ms(1);
+        } else if (g_current != &idle && sleep_paced_peers) {
+            timing_sleep_ms(1);
+        } else {
+            /* A spinning peer consumes its real 10-tick quantum. Sleeping
+             * peers voluntarily switch before a timer quantum elapses. */
+            do { g_ticks++; timing_tick(); } while (!g_need_resched);
+            timing_schedule();
+        }
+    }
+    CHECK(sleep_injections == 1);
+    CHECK(g_ticks - sleep_started == (sleep_paced_peers ? 10u : 40u));
+    for (unsigned i = 0; i < P_COUNT; i++) rq_head[i] = rq_tail[i] = 0;
+    all_tasks = idle_task = 0;
+    sleeper->all_next = old_next;
+    host_cr3 = saved_cr3;
+    tls_base = saved_tls;
+    g_need_resched = false;
 }
-static void test_nanosleep_reporting(void)
+static void test_nanosleep_reporting(bool payload_paces_peers)
 {
-    for (unsigned delayed = 0; delayed < 2; delayed++) {
+    for (unsigned paced = 0; paced < 2; paced++) {
         struct process *p;
         struct proc_thread *t = signal_process(proc_supervisor(), &p);
         select_task(t); catch_signal(p, SIGUSR1);
@@ -377,14 +464,15 @@ static void test_nanosleep_reporting(void)
         uint32_t remaining_va = request_va + sizeof(struct ciuki_timespec);
         struct ciuki_timespec request = { .tv_nsec = 20000000 }, remaining;
         CHECK(!ua_write(p->memory, request_va, &request, sizeof(request)));
-        wait_target = t; sleep_started = g_ticks; sleep_slow_record = delayed;
+        wait_target = t; sleep_started = g_ticks;
+        sleep_paced_peers = paced && payload_paces_peers;
         on_schedule = interrupt_sleep;
         int result = file_nanosleep(request_va, remaining_va);
         on_schedule = 0;
-        CHECK(result == (delayed ? 0 : -EINTR));
+        CHECK(result == (paced ? -EINTR : 0));
         CHECK(!ua_read(p->memory, &remaining, remaining_va, sizeof(remaining)));
         CHECK(!remaining.tv_sec && !remaining.reserved);
-        CHECK(remaining.tv_nsec == (delayed ? 0 : 10000000));
+        CHECK(remaining.tv_nsec == (paced ? 10000000 : 0));
         /* Mirror the dispatcher's completed-result assignment, then use
          * production handler delivery and sigreturn, with no context edit. */
         struct trap_frame tf = user_frame(t);
@@ -396,11 +484,12 @@ static void test_nanosleep_reporting(void)
         CHECK(!ua_read(p->memory, &frame, address, sizeof(frame)));
         CHECK(frame.context.gregs[CIUKI_REG_EAX] == (uint32_t)result);
         CHECK(!ua_read(p->memory, &remaining, remaining_va, sizeof(remaining)));
-        CHECK(remaining.tv_nsec == (delayed ? 0 : 10000000));
+        CHECK(remaining.tv_nsec == (paced ? 10000000 : 0));
         proc_signal_sigreturn(&tf, address);
         CHECK(!t->in_handler && tf.eax == (uint32_t)result);
-        printf("signal nanosleep reporting: delay_ms=%u result=%d saved_eax=%08x resumed_eax=%08x remainder_ns=%d PASS\n",
-               delayed ? 50 : 0, result, frame.context.gregs[CIUKI_REG_EAX], tf.eax, remaining.tv_nsec);
+        printf("signal nanosleep timing: peers=%s inject_ms=10 resume_ms=%u serial_bytes=0 result=%d saved_eax=%08x resumed_eax=%08x remainder_ns=%d PASS\n",
+               paced ? "payload" : "legacy-spin", (unsigned)(g_ticks - sleep_started),
+               result, frame.context.gregs[CIUKI_REG_EAX], tf.eax, remaining.tv_nsec);
         destroy_signal_process(p);
     }
 }
@@ -477,6 +566,70 @@ static void test_fatal(void)
     }
     puts("signal fatal: default/blocked/ignored/handler fault, bad stack, forged return, handler TERM/KILL PASS");
 }
+static uint32_t payload_u32(const uint8_t *data, size_t size, size_t offset)
+{
+    uint32_t value;
+    CHECK(offset <= size && size - offset >= sizeof(value));
+    memcpy(&value, data + offset, sizeof(value));
+    return value;
+}
+static bool payload_paces_survivors(const uint8_t *data, size_t size)
+{
+    /* Interpret only mode 20's tiny progress loop in the assembled ELF.
+     * This connects the timing regression to the delivered payload rather
+     * than assuming that peers yield. It is not a ring-3/x87 emulator. */
+    uint32_t result_va = CIUKI_IMAGE_BASE + 4 * PAGE_SIZE;
+    size_t ip = 0;
+    for (size_t i = PAGE_SIZE; i + 13 <= size; i++) {
+        if (data[i] != 0x83 || data[i + 1] != 0x3d || data[i + 6] != 20)
+            continue;
+        if (payload_u32(data, size, i + 2) != result_va) continue;
+        size_t branch = i + 7;
+        CHECK(data[branch] == 0x0f && data[branch + 1] == 0x84);
+        int64_t target = (int64_t)branch + 6 + (int32_t)payload_u32(data, size, branch + 2);
+        CHECK(target >= PAGE_SIZE && (uint64_t)target < size);
+        ip = (size_t)target;
+        break;
+    }
+    CHECK(ip);
+    uint32_t eax = 0, ebx = 0;
+    unsigned progress = 0, sleeps = 0;
+    bool zero = false;
+    for (unsigned steps = 0; steps < 64; steps++) {
+        CHECK(ip + 10 <= size);
+        if (data[ip] == 0xc7 && data[ip + 1] == 5) {
+            CHECK(payload_u32(data, size, ip + 2) == result_va + 4);
+            CHECK(payload_u32(data, size, ip + 6) == 1);
+            ip += 10;
+        } else if (data[ip] == 0xff && data[ip + 1] == 5) {
+            CHECK(payload_u32(data, size, ip + 2) == result_va + 124);
+            progress++;
+            ip += 6;
+        } else if (data[ip] == 0xb8 || data[ip] == 0xbb) {
+            uint32_t value = payload_u32(data, size, ip + 1);
+            if (data[ip] == 0xb8) eax = value; else ebx = value;
+            ip += 5;
+        } else if (data[ip] == 0xcd && data[ip + 1] == 0x80) {
+            CHECK(eax == CIUKI_SYS_SLEEP_MS && ebx == 1);
+            CHECK(progress == ++sleeps);
+            if (sleeps == 2) return true;
+            eax = 0;
+            ip += 2;
+        } else if (data[ip] == 0x83 && data[ip + 1] == 0x3d) {
+            CHECK(payload_u32(data, size, ip + 2) == result_va + 140);
+            zero = data[ip + 6] == 0; /* RELEASE remains zero while probing. */
+            ip += 7;
+        } else if (data[ip] == 0x74) {
+            int8_t displacement = (int8_t)data[ip + 1];
+            ip += 2;
+            if (zero) ip = (size_t)((int64_t)ip + displacement);
+        } else {
+            CHECK(false);
+        }
+    }
+    CHECK(progress > 1 && !sleeps);
+    return false; /* Original tight loop consumes complete timer quanta. */
+}
 static void test_signal_payload(const char *path)
 {
     FILE *f = fopen(path, "rb"); CHECK(f);
@@ -491,7 +644,9 @@ static void test_signal_payload(const char *path)
     CHECK(ua_range(&u, image.entry, 1, PROT_EXEC));
     CHECK(ua_range(&u, CIUKI_IMAGE_BASE + 4 * PAGE_SIZE, PAGE_SIZE, PROT_READ | PROT_WRITE));
     CHECK(!get_word(&u, CIUKI_IMAGE_BASE + 4 * PAGE_SIZE));
-    ua_destroy(&u); free(data);
+    ua_destroy(&u);
+    test_nanosleep_reporting(payload_paces_survivors(data, (size_t)size));
+    free(data);
     printf("signal NASM ELF: bytes=%ld production parser/load PASS (execution not run)\n", size);
 }
 int main(int argc, char **argv)
@@ -500,7 +655,7 @@ int main(int argc, char **argv)
     controller.state = T_RUNNING; g_current = &controller; proc_init();
     g_cpu_fxsr = true; fpu_init();
     test_pending(); test_frames(); test_fp(); test_fault_mapping(); test_decisions();
-    test_delivery(); test_nanosleep_reporting(); test_syscalls(); test_fatal();
+    test_delivery(); test_syscalls(); test_fatal();
     if (argc == 2) test_signal_payload(argv[1]);
     g_current = &controller;
     struct proc_ledger l; proc_snapshot(&l);

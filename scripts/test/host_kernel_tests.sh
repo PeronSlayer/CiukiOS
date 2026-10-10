@@ -196,8 +196,31 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/proc_test"
 "$out/proc_test"
 
+# Replay signal-probe timing with the production run queues/dispatch/timer.
+# Extract only these functions: architectural stack creation cannot run on
+# the host. No scheduler policy or function body is replaced by a test model.
+python3 - "$root" "$out" <<'PY'
+from pathlib import Path
+import re, sys
+root, out = map(Path, sys.argv[1:])
+source = (root / "src/kernel/core/task.c").read_text()
+declarations = source[source.index("static struct task *rq_head"):
+                      source.index("static void rq_push")]
+functions = []
+for name in ("rq_push", "rq_pop", "rq_remove", "rq_any", "schedule", "sched_tick", "task_sleep_ms"):
+    match = re.search(r"^(?:static )?[^\n]+\b" + name + r"\([^\n]*\)\n\{", source, re.M)
+    assert match, name
+    depth = 1
+    end = match.end()
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    functions.append(source[match.start():end] + "\n")
+(out / "signal_scheduler.inc").write_text(declarations + "\n".join(functions))
+PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/proc/signal_test.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/signal_test"
+    -I "$root/src/kernel/include" -I "$out" \
+    "$root/tests/host/proc/signal_test.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/signal_test"
 # Assemble the new fixture even before the lead integrates its canonical
 # build hook. Values are target-generated from the one public ABI header.
 python3 - "$out" <<'PY'
