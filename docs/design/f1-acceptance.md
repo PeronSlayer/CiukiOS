@@ -143,6 +143,13 @@ commands or BIOS fallback until separately qualified recovery or reboot.
 Boot-disk binding MUST compare native identity and sector fingerprints with
 loader evidence before mounting `C:`; BIOS drive number alone is insufficient.
 
+Amendment (lead decision 2026-10-11, directive f1-12): `ciuki_boot_info` v1
+carries no loader sector fingerprints, so for F1 the boot volume is bound to
+ATA disk 0, primary partition 1, and the mount record states
+`qualified=0 reason=loader_fingerprints_absent`. The fingerprint comparison
+above becomes mandatory with boot-info v2; until then this binding is the
+accepted F1 behaviour on QEMU and on the two laptops.
+
 **[F1]** MBR parsing MUST validate `55AA`, four primary entries, extended/EBR
 links, bounds, overlaps and arithmetic against identified capacity and LBA28.
 Logical-partition starts are relative to their EBR; chain links use the extended
