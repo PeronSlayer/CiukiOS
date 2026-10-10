@@ -44,7 +44,7 @@ evidence and merges.
 | [f1-18-firmware-queue-starvation](f1-18-firmware-queue-starvation.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 |
 | [f2-10-probe-completion](f2-10-probe-completion.md) | F2 | gpt-6.1-sol / xhigh | delivered 2026-10-11 (uname; libc-smoke failures were EROFS before the write gate and ENOSYS); merge after the current batch |
 | [f1-19-firmware-input-delivery](f1-19-firmware-input-delivery.md) | F1 | gpt-6-astra / xhigh | delivered 2026-10-11 (retained virtual-PIC IRQs); merge after the current batch; last Astra task before the Sol-first rule |
-| [f1-20-generic-pc-baseline](f1-20-generic-pc-baseline.md) | F1 | gpt-6.1-sol / high | issued 2026-10-11 (owner: generic assembled desktops are targets) |
+| [f1-20-generic-pc-baseline](f1-20-generic-pc-baseline.md) | F1 | gpt-6.1-sol / high | delivered 2026-10-11 (baseline doc, two desktop profiles, loader checks; 98 runner tests); merge after the current batch |
 
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
