@@ -67,6 +67,13 @@ and the F0 acceptance criteria). In short:
   `main` as their QEMU evidence passes; the hardware qualification of F0,
   F1 and F2 happens once, on one image, after F2 closes on QEMU. Earlier
   QEMU gates must keep passing on every integrated image.
+- Hardware targets (owner decision 2026-10-11): one image for every
+  machine, detection at boot. Besides the two qualified laptops (T23, E500)
+  the targets are generic assembled desktop PCs with the common
+  configurations of 1998–2004 (i686 CPU with CMOV, BIOS with E820 and
+  VBE 2.0+, PS/2, parallel ATA, FAT32); the baseline and the compatibility
+  matrix live in `docs/design/hardware-baseline.md`, with QEMU twins
+  `qemu-desktop-1998` and `qemu-desktop-2002` beside `qemu-t23`/`qemu-e500`.
 - Scope (owner decision 2026-10-09, dev diary 2026-10-09-10): a modern
   retro gaming OS, not a Windows clone; F0 foundations followed by eight
   steps, F1–F8 (drivers and disk, native programs, DOS, sound and media,
