@@ -46,22 +46,36 @@ static void adapter_main(void *arg)
     }
 }
 
+static int adapter_error(const char *step, int error)
+{
+    klog("[fwinput-adapter] step=%s error=%d backend=%u", step, error, biosvm_backend_state());
+    return error;
+}
+
 int fwinput_adapter_init(void)
 {
-    if (!(read_eflags() & 0x200) || !g_current) return -EINVAL;
+    if (!(read_eflags() & 0x200) || !g_current) return adapter_error("thread_context", -EINVAL);
     if (g_boot.input_policy != CBI_INPUT_FIRMWARE && !(g_boot.flags & CBI_F_INPUT_FORCED))
-        return -ENOSYS;
-    if (adapter) return biosvm_backend_state() == BIOSVM_DISABLED_BACKEND ? -V86_EIO : 0;
-    if (biosvm_backend_state() == BIOSVM_DISABLED_BACKEND) return -V86_EIO;
+        return adapter_error("input_policy", -ENOSYS);
+    if (biosvm_backend_state() == BIOSVM_DISABLED_BACKEND) return adapter_error("disabled", -V86_EIO);
+    if (adapter) return 0;
     struct task *t = task_create_kernel("firmware-queue", adapter_main, 0, P_DEVICE);
-    if (!t) return -ENOMEM;
+    if (!t) return adapter_error("worker_create", -ENOMEM);
     int err = fwinput_init();
+    const char *step = "fwinput_init";
     gen_t next = err ? 0 : gen_alloc();
-    if (!err && (!next || !input_firmware_begin(next))) err = next ? -EINVAL : -ENOSPC;
+    if (!err && !next) {
+        step = "generation";
+        err = -ENOSPC;
+    }
+    if (!err && !input_firmware_begin(next)) {
+        step = "queue_begin";
+        err = -EINVAL;
+    }
     if (err) {
         task_kill(t, err);
         task_reap(t);
-        return err;
+        return adapter_error(step, err);
     }
     generation = next;
     adapter = t;

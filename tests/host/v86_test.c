@@ -16,24 +16,34 @@ static unsigned checks, failures;
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); failures++; } } while (0)
 static uint8_t ram[4 * 1024 * 1024];
 static uint8_t physical[65536];
-static unsigned hw_reads, hw_writes, enters, quarantines;
+static unsigned hw_reads, hw_writes, enters;
 static uint32_t flags = V86_IF, cr3, esp0, alloc_page = 0x200000;
-static struct task caller, worker_fake, native_fake;
+static struct task caller, worker_fake, native_fake, adapter_fake;
 static unsigned proc_switches, vm_preemptions;
 static bool native_tls;
 static irq_handler_t irq_fake[16];
-static struct resource resources[4];
-static unsigned resource_count;
 static unsigned execution_fault;
 static jmp_buf leave_env;
+static char diagnostic[128][240];
+static unsigned diagnostic_count, diagnostic_max;
+static gen_t next_generation;
+static bool fail_alloc, fail_task;
+static bool fail_low_pt, reject_queue;
+static uint32_t cr4_fake, setup_ticks, completion_delay;
+static int mouse_error_function = -1;
+static uint16_t mouse_error_ax, mouse_error_flags;
+static unsigned mouse_calls;
 
 struct task *g_current;
 volatile uint64_t g_ticks;
 volatile bool g_need_resched;
 struct ciuki_boot_info g_boot;
+bool g_cpu_tsc;
+uint64_t g_tsc_per_ms;
 
 #define CIUKI_CPU_H
 #define P2V(p) ((void *)(ram + (p)))
+#define V2P(p) ((uint32_t)((uint8_t *)(p) - ram))
 static uint32_t read_eflags(void) { return flags; }
 static uint32_t irq_save(void) { uint32_t f = flags; flags = 0; return f; }
 static void irq_restore(uint32_t f) { flags = f; }
@@ -41,10 +51,38 @@ static void cli(void) { flags = 0; }
 static void sti(void) { flags = V86_IF; }
 static uint32_t read_cr3(void) { return cr3; }
 static void write_cr3(uint32_t x) { cr3 = x; }
-static uint32_t read_cr4(void) { return 0; }
+static uint32_t read_cr4(void) { return cr4_fake; }
 static uint32_t read_cr2(void) { return 0xDEAD000; }
 static uint8_t inb(uint16_t p) { hw_reads++; return physical[p]; }
 static void outb(uint16_t p, uint8_t b) { hw_writes++; physical[p] = b; }
+static uint32_t inl(uint16_t p) { (void)p; CHECK(false); return UINT32_MAX; }
+static void outl(uint16_t p, uint32_t value) { (void)p; (void)value; CHECK(false); }
+
+void klog(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    unsigned slot = diagnostic_count++ % ARRAY_SIZE(diagnostic);
+    int n = vsnprintf(diagnostic[slot], sizeof(diagnostic[slot]), fmt, ap);
+    va_end(ap);
+    CHECK(n >= 0 && n < 240);
+    if (n > 0 && (unsigned)n > diagnostic_max) diagnostic_max = (unsigned)n;
+}
+static bool logged(const char *text)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(diagnostic); i++)
+        if (strstr(diagnostic[i], text)) return true;
+    return false;
+}
+void panic(const char *fmt, ...) { (void)fmt; CHECK(false); exit(2); }
+void stackprot_init(void) {}
+gen_t gen_alloc(void) { return next_generation == UINT32_MAX ? 0 : ++next_generation; }
+bool gen_matches(gen_t a, gen_t b) { return a && a == b; }
+uint64_t ktime_cycles(void) { return 0; }
+bool ktime_elapsed_us(uint64_t start, uint32_t us) { (void)start; (void)us; return false; }
+int kwork_init(void) { return 0; }
+void kwork_yield(void) { CHECK(false); }
+bool kwork_queue(void (*fn)(void *), void *arg) { (void)fn; (void)arg; CHECK(false); return false; }
 
 void tss_set_kernel_stack(uint32_t x) { esp0 = x; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
@@ -84,48 +122,86 @@ void schedule(void)
     vm_preemptions++;
     g_need_resched = false;
 }
-uint32_t pmm_alloc(void) { uint32_t p = alloc_page; alloc_page += PAGE_SIZE; CHECK(alloc_page < sizeof(ram)); return p; }
+uint32_t pmm_alloc(void)
+{
+    if (fail_alloc || (fail_low_pt && alloc_page == 0x201000)) return 0;
+    uint32_t p = alloc_page; alloc_page += PAGE_SIZE; CHECK(alloc_page < sizeof(ram)); return p;
+}
 void pmm_free(uint32_t p) { CHECK(p >= 0x200000 && p < alloc_page); }
 bool pmm_is_reserved(uint32_t p) { return p < 0x100000; }
-int as_create(struct aspace *as) { as->pd_phys = pmm_alloc(); memset(P2V(as->pd_phys), 0, PAGE_SIZE); return 0; }
+int as_create(struct aspace *as) { as->pd_phys = pmm_alloc(); if (!as->pd_phys) return -ENOMEM; memset(P2V(as->pd_phys), 0, PAGE_SIZE); return 0; }
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *a, enum task_prio p)
 {
-    (void)n; (void)fn; (void)a;
-    worker_fake = (struct task){.state = T_BLOCKED, .prio = p, .kstack = (void *)(uintptr_t)0xF0001000};
-    return &worker_fake;
+    (void)fn; (void)a;
+    if (fail_task) return 0;
+    struct task *t = !strcmp(n, "firmware-queue") ? &adapter_fake : &worker_fake;
+    *t = (struct task){.state = T_BLOCKED, .prio = p, .kstack = (void *)(uintptr_t)0xF0001000};
+    return t;
 }
 void task_start(struct task *t) { CHECK(t->state == T_BLOCKED); t->state = T_READY; }
 void task_kill(struct task *t, int c) { (void)c; t->state = T_ZOMBIE; }
 void task_reap(struct task *t) { CHECK(t->state == T_ZOMBIE); }
 void irq_set_handler(unsigned n, irq_handler_t h) { CHECK(n < 16); irq_fake[n] = h; }
 void pic_unmask(unsigned n) { CHECK(irq_fake[n] != 0); }
+void pic_mask(unsigned n) { CHECK(n < 16); }
 void panic_frame(struct trap_frame *tf, const char *s) { (void)tf; fprintf(stderr, "PANIC %s\n", s); exit(2); }
-unsigned registry_count(void) { return resource_count; }
-const struct resource *registry_get(unsigned i) { CHECK(i < resource_count); return &resources[i]; }
-int registry_claim_reserved(int h, gen_t g, const char *o)
-{
-    CHECK(resources[h].state == RS_FIRMWARE && resources[h].generation == g);
-    resources[h].state = RS_CLAIMED; resources[h].generation++; resources[h].owner = o;
-    return 0;
-}
-int registry_claim(enum res_type t, uint32_t s, uint32_t e, const char *o, bool shared)
-{
-    CHECK(resource_count < 4);
-    unsigned n = resource_count++;
-    resources[n] = (struct resource){t, s, e, o, n + 1, RS_CLAIMED, shared};
-    return (int)n;
-}
-int registry_activate(int h, gen_t g) { CHECK(resources[h].generation == g); resources[h].state = RS_ACTIVE; return 0; }
-int registry_quarantine(int h, gen_t g)
-{
-    CHECK(resources[h].generation == g); resources[h].state = RS_QUARANTINED; quarantines++;
-    return 0;
-}
 __asm__(".pushsection .rodata\n.globl biosvm_mouse_stub, biosvm_mouse_stub_end\nbiosvm_mouse_stub:\n.byte 0xcb\nbiosvm_mouse_stub_end:\n.popsection\n");
 
+#include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/vm/v86.c"
 #include "../../src/kernel/vm/biosvm.c"
 #include "../../src/kernel/vm/fwinput.c"
+
+/* Exercise the real boot/adapter/safe path. Only the public input queue and
+ * unrelated storage/display boundaries are fake; i8042_test covers the queue. */
+#include <ciuki/input.h>
+#include <ciuki/i8042.h>
+#include <ciuki/fbdev.h>
+#include <ciuki/storage.h>
+static struct i8042_stats public_input;
+static unsigned public_events;
+static bool safe_input, safe_backend, safe_pass;
+void task_sleep_ms(uint32_t ms) { g_ticks += ms; }
+bool input_firmware_begin(gen_t gen)
+{
+    CHECK(gen && !public_input.active);
+    if (reject_queue) return false;
+    public_input = (struct i8042_stats){.active = true, .firmware = true, .generation = gen};
+    return true;
+}
+void input_firmware_event(const struct fwinput_event *e, gen_t gen)
+{ CHECK(e && gen == public_input.generation); public_events++; }
+void input_firmware_loss(uint64_t lost) { (void)lost; }
+void input_firmware_disable(gen_t gen)
+{ CHECK(gen == public_input.generation); public_input.active = false; public_input.quarantined = true; }
+void i8042_snapshot(struct i8042_stats *out) { *out = public_input; }
+int i8042_init(void) { CHECK(false); return -ENOSYS; }
+int fbdev_init(void) { CHECK(false); return -ENOSYS; }
+const struct fb_device *fbdev_get(void) { static struct fb_device fb; return &fb; }
+int ata_init(void) { CHECK(false); return -ENOSYS; }
+struct ata_device *ata_device_get(unsigned c, unsigned u) { (void)c; (void)u; CHECK(false); return 0; }
+void storage_init(void) {}
+struct storage *storage_get(void) { static struct storage s; return &s; }
+void file_clock_start(int64_t epoch, bool qualified) { (void)epoch; (void)qualified; }
+int files_bootstrap(struct vfs *vfs) { CHECK(vfs); return 0; }
+void console_write(const char *s, size_t n) { CHECK(s && n); }
+int probe_bootlog(void) { CHECK(false); return 1; }
+void rec_emit(const char *probe, const char *event, const char *fmt, ...)
+{
+    char line[240];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = fmt ? vsnprintf(line, sizeof(line), fmt, ap) : 0;
+    va_end(ap);
+    CHECK(n >= 0 && n < 240 && !strcmp(probe, "safe"));
+    if (!fmt) return;
+    safe_input |= strstr(line, "input_works=1") != 0;
+    safe_backend |= strstr(line, "input=1 backend=firmware") != 0;
+    safe_pass |= !strcmp(event, "END") && strstr(line, "status=PASS") != 0;
+}
+#include "../../src/kernel/drivers/fwinput_adapter.c"
+#include "../../src/kernel/core/init.c"
+#include "../../src/kernel/probes/safe_probe.c"
 
 void v86_leave(uint32_t saved)
 {
@@ -143,6 +219,10 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
     tss_set_kernel_stack(*saved);
     g_need_resched = true;
     struct v86_frame live = *initial;
+    unsigned function = initial->tf.eax & 0xFF;
+    bool mouse_setup_call = initial->tf.cs == 0xF000 && initial->tf.eip == 0x400 &&
+                            (initial->tf.eax & 0xFF00) == 0xC200;
+    if (mouse_setup_call) mouse_calls++;
     if (setjmp(leave_env)) {
         sti();
         return;
@@ -152,6 +232,15 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
         CHECK(code != 0);
         if (!code)
             exit(2);
+        if (mouse_setup_call && code[0] == 0xCF) {
+            g_ticks += setup_ticks;
+            if ((int)function == mouse_error_function) {
+                live.tf.eax = mouse_error_ax;
+                uint8_t *saved_flags = vm_memory(0, (live.tf.user_ss << 4) + live.tf.user_esp + 4, 2, true);
+                CHECK(saved_flags);
+                putword(saved_flags, 2, getword(saved_flags, 2) | mouse_error_flags);
+            }
+        }
         if (execution_fault == 1) {
             live.tf.vector = 14;
         } else if (execution_fault == 3) {
@@ -164,8 +253,9 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
             live.tf.eax = (live.tf.eax & ~0xFFu) | code[1];
             live.tf.eip += 2;
             continue;
-        } else if (code[0] == 0xB8) {
-            live.tf.eax = (live.tf.eax & ~0xFFFFu) | getword(code + 1, 2);
+        } else if (code[0] == 0xB8 || code[0] == 0xBA) {
+            uint32_t *reg = code[0] == 0xB8 ? &live.tf.eax : &live.tf.edx;
+            *reg = (*reg & ~0xFFFFu) | getword(code + 1, 2);
             live.tf.eip += 3;
             continue;
         } else if (code[0] == 0x90) {
@@ -195,6 +285,7 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d
         request_pending = false;
         request_done = true;
         switch_fake(old);
+        if (request_regs.interrupt == 0x15) g_ticks += completion_delay;
     } else if (!cond(arg)) {
         g_ticks = d;
     }
@@ -609,9 +700,7 @@ static void test_worker(void)
                                 .kstack = (void *)(uintptr_t)0xD0001000};
     g_boot.e820_count = 1;
     g_boot.e820[0] = (struct ciuki_e820){0, 0x9FC00, CBI_E820_RAM, 1};
-    resources[0] = (struct resource){RES_PORT,0x60,0x61,"input",1,RS_FIRMWARE,false};
-    resources[1] = (struct resource){RES_PORT,0x64,0x65,"input",2,RS_FIRMWARE,false};
-    resource_count = 2;
+    registry_init();
     CHECK(biosvm_init() == -V86_EPERM);
     g_boot.input_policy = CBI_INPUT_FIRMWARE;
     CHECK(!biosvm_init() && biosvm_backend_state() == BIOSVM_READY);
@@ -649,7 +738,7 @@ static void test_worker(void)
     struct biosvm_selftest_report report;
     physical[0x40] = 0x34; physical[0x21] = 0xF9; physical[0xA1] = 0xEF;
     CHECK(!biosvm_selftest(&report));
-    CHECK(report.disabled && report.timeouts == 1 && report.disallowed == 1 && !quarantines);
+    CHECK(report.disabled && report.timeouts == 1 && report.disallowed == 1 && !counters.quarantines);
     CHECK(report.mappings_ok && report.mappings[4].end == 0xF0000);
     CHECK(biosvm_backend_state() == BIOSVM_READY);
     CHECK(!fwinput_init()); /* fake BIOS returns unsupported C205 */
@@ -684,17 +773,237 @@ static void test_worker(void)
     ram[0xF0100] = 0xCF;
     synthetic = false;
     execution_fault = 2; r.eax = 0x1100;
-    CHECK(biosvm_call(&r, 100) == -V86_ETIMEDOUT && quarantines == 4);
+    CHECK(biosvm_call(&r, 100) == -V86_ETIMEDOUT && counters.quarantines == 4);
     previous = enters;
     CHECK(biosvm_call(&r, 100) == -V86_EIO && enters == previous);
     CHECK(biosvm_backend_state() == BIOSVM_DISABLED_BACKEND && biosvm_reset_for_test() == -V86_EPERM);
     struct fwinput_event event;
     CHECK(fwinput_poll(&event, 1) == 1 && event.type == FWINPUT_RESYNC && !fwinput_poll(&event, 1));
-    for (unsigned i = 0; i < 4; i++) CHECK(resources[i].state == RS_QUARANTINED);
+    for (unsigned i = 0; i < 4; i++) CHECK(registry_get(leases[i].handle)->state == RS_QUARANTINED);
     CHECK(firmware.fault.cs == 0xF000 && firmware.fault.ip == 0x100);
     CHECK(esp0 == 0xE0003000 && proc_switches > 0 && vm_preemptions > 0 && !native_tls);
     fwinput_backend_state(&state);
     CHECK(state.disabled && !state.keyboard && !state.mouse && !state.key_releases);
+}
+
+static void boot_fixture(bool irq_reservations)
+{
+    memset(ram, 0, sizeof(ram));
+    memset(&firmware, 0, sizeof(firmware));
+    memset(&decoder, 0, sizeof(decoder));
+    memset(&backend, 0, sizeof(backend));
+    memset(&state, 0, sizeof(state));
+    memset(&public_input, 0, sizeof(public_input));
+    memset(diagnostic, 0, sizeof(diagnostic));
+    diagnostic_count = 0;
+    safe_input = safe_backend = safe_pass = false;
+    initialized = quarantined = synthetic = started = false;
+    request_pending = request_done = controller_status_valid = false;
+    vm_thread = adapter = 0;
+    input_service = 0; input_observer = 0;
+    low_pt = vm_as.pd_phys = continuation = 0;
+    lease_count = pending_irqs = mouse_lost = generation = 0;
+    activation_count = execution_fault = public_events = 0;
+    alloc_page = 0x200000;
+    fail_alloc = fail_task = false;
+    fail_low_pt = reject_queue = false;
+    cr4_fake = setup_ticks = completion_delay = mouse_calls = next_generation = 0;
+    mouse_error_function = -1;
+    mouse_error_ax = mouse_error_flags = 0;
+    flags = V86_IF; g_ticks = 100; g_current = &caller;
+    g_boot = (struct ciuki_boot_info){.input_policy = CBI_INPUT_FIRMWARE,
+        .flags = CBI_F_SAFE_MODE | CBI_F_TEXT_MODE | CBI_F_SMBIOS_QEMU |
+                 CBI_F_TEST_REQUEST | CBI_F_INPUT_FORCED, .e820_count = 1};
+    g_boot.e820[0] = (struct ciuki_e820){0, 0x9FC00, CBI_E820_RAM, 1};
+    static const char selector[] = "f1:safe run=12345678 platform=e500 safe=1";
+    memcpy(g_boot.test_request, selector, sizeof(selector));
+    g_boot.test_request_len = sizeof(selector) - 1;
+    putword(ram + 0x40E, 2, 0x9FC0); putword(ram + 0x413, 2, 639); ram[0x9FC00] = 1;
+    putword(ram + 0x41A, 2, 0x1E); putword(ram + 0x41C, 2, 0x1E);
+    ivt(0x16, 0xF000, 0x100); ram[0xF0100] = 0xCF;
+    /* The SeaBIOS timer_read I/O used by PS/2 reply waits, then success.
+     * This executes monitor traps, not the complete SeaBIOS ROM. */
+    static const uint8_t mouse[] = {0xBA,0x08,0x06,0x66,0xED,0xB8,0,0,0xCF};
+    ivt(0x15, 0xF000, 0x400); memcpy(ram + 0xF0400, mouse, sizeof(mouse));
+    registry_init();
+    if (irq_reservations) {
+        CHECK(claim(RES_IRQ, 1, 2, "input", false, RS_FIRMWARE) >= 0);
+        CHECK(claim(RES_IRQ, 12, 13, "input", false, RS_FIRMWARE) >= 0);
+    }
+    hw_reads = hw_writes = enters = 0;
+}
+
+static void test_firmware_boot(void)
+{
+    for (unsigned reserved = 0; reserved < 2; reserved++) {
+        boot_fixture(reserved);
+        unsigned count = registry_count();
+        drivers_init();
+        CHECK(logged("[init] input"));
+        CHECK(!state.input_error && public_input.active);
+        CHECK(registry_count() == count + (reserved ? 0 : 2));
+        CHECK(!counters.conflicts && !hw_reads && !hw_writes);
+        CHECK(!probe_safe() && safe_input && safe_backend && safe_pass);
+        if (state.input_error) {
+            printf("firmware boot reproduction: IRQ reservations=%u input_error=%d VM result=%d\n",
+                   reserved, state.input_error, firmware.result);
+            continue;
+        }
+        CHECK(backend.mouse && backend.keyboard && !backend.setup_error);
+        CHECK(mouse_calls == 5 && firmware.stats.io[V86_PMTIMER] == 5);
+        CHECK(decoder.stats.mouse_functions == ((1u << 5) | (1u << 2) | (1u << 3) | (1u << 7) | 1));
+        for (unsigned i = 0; i < 4; i++) {
+            const struct resource *r = registry_get(leases[i].handle);
+            CHECK(r->state == RS_ACTIVE && !strcmp(r->owner, "firmware-input") && !r->shareable);
+        }
+        unsigned before = enters;
+        drivers_init();
+        CHECK(enters == before);
+        firmware_byte(1, 0x1E, 1); firmware_byte(1, 0x9E, 1);
+        CHECK(fwinput_adapter_step() == 2 && public_events == 2);
+    }
+    printf("firmware boot/safe: input_works=1 backend=firmware (current registry and reserved IRQs)\n");
+}
+
+static void test_setup_failures(void)
+{
+    static const unsigned functions[] = {5, 2, 3, 7, 0};
+    for (unsigned i = 0; i < ARRAY_SIZE(functions); i++) {
+        for (unsigned carry = 0; carry < 2; carry++) {
+            boot_fixture(true);
+            mouse_error_function = (int)functions[i];
+            mouse_error_ax = carry ? 0 : 0x0400;
+            mouse_error_flags = carry ? V86_CF : 0;
+            drivers_init();
+            CHECK(!state.input_error && backend.keyboard && !backend.mouse && backend.setup_error == -ENOSYS);
+            CHECK(mouse_calls == i + 1 && !counters.quarantines && biosvm_backend_state() == BIOSVM_READY);
+            CHECK(!probe_safe() && safe_input && safe_backend && safe_pass);
+            CHECK(logged("step=mouse_service") && logged("regs=in int=15") && logged("regs=out int=15"));
+            firmware_byte(1, 0x1E, 1); firmware_byte(1, 0x9E, 1);
+            CHECK(fwinput_adapter_step() == 2 && public_events == 2);
+        }
+    }
+    boot_fixture(true);
+    setup_ticks = 101; /* one total 500-tick budget, never 500 per function */
+    drivers_init();
+    CHECK(state.input_error == -V86_EIO && backend.setup_error == -V86_ETIMEDOUT && mouse_calls == 5);
+    CHECK(counters.quarantines == 4 && probe_safe() == 1 && !safe_input && !safe_pass);
+    CHECK(logged("error=-110 vector=13") && logged("deadline_ms=96") && logged("elapsed=101"));
+    unsigned before = enters;
+    CHECK(fwinput_init() == -V86_EIO && biosvm_init() == -V86_EIO && enters == before);
+    CHECK(logged("step=already_disabled") && logged("step=already_quarantined"));
+
+    boot_fixture(true);
+    completion_delay = 500; /* completed call, then scheduling consumes budget */
+    drivers_init();
+    CHECK(!state.input_error && backend.setup_error == -V86_ETIMEDOUT && !backend.mouse && mouse_calls == 1);
+    CHECK(!counters.quarantines && !probe_safe() && safe_input);
+    CHECK(logged("step=setup_budget") && logged("elapsed=500"));
+
+    boot_fixture(true);
+    g_boot.flags &= ~CBI_F_SMBIOS_QEMU;
+    drivers_init();
+    CHECK(state.input_error == -V86_EIO && counters.quarantines == 4 && !hw_reads && !hw_writes);
+    CHECK(logged("port=0608 width=4 write=0") && logged("cs=f000 ip=0403") && logged("regs=in int=15 eax=0000c205"));
+    CHECK(!public_input.active && !safe_input && probe_safe() == 1);
+
+    boot_fixture(true);
+    fail_task = true;
+    CHECK(fwinput_adapter_init() == -ENOMEM && logged("step=worker_create"));
+    boot_fixture(true);
+    CHECK(!fwinput_init());
+    next_generation = UINT32_MAX;
+    CHECK(fwinput_adapter_init() == -ENOSPC && logged("step=generation") && !adapter && !generation);
+    boot_fixture(true);
+    reject_queue = true;
+    CHECK(fwinput_adapter_init() == -EINVAL && logged("step=queue_begin") && !adapter && !generation);
+    CHECK(biosvm_backend_state() == BIOSVM_READY); /* leases never released on adapter failure */
+    boot_fixture(true);
+    g_boot.input_policy = CBI_INPUT_NATIVE; g_boot.flags &= ~CBI_F_INPUT_FORCED;
+    CHECK(fwinput_adapter_init() == -ENOSYS && logged("step=input_policy") && !enters);
+}
+
+static void test_lease_failures(void)
+{
+    for (unsigned resource = 0; resource < 4; resource++) {
+        for (unsigned bad = 0; bad < 5; bad++) {
+            boot_fixture(true);
+            unsigned h = resource < 2 ? 6 + resource : nres - 4 + resource;
+            CHECK(res[h].type == (resource < 2 ? RES_PORT : RES_IRQ));
+            if (!bad) res[h].owner = "native-owner";
+            if (bad == 1) res[h].state = RS_ACTIVE;
+            if (bad == 2) res[h].state = RS_QUARANTINED;
+            if (bad == 3) res[h].shareable = true;
+            if (bad == 4) res[h].end++;
+            struct resource saved[MAX_RES];
+            memcpy(saved, res, sizeof(saved));
+            CHECK(biosvm_init() == -V86_EPERM && !lease_count);
+            CHECK(!memcmp(saved, res, sizeof(saved)) && !hw_reads && !hw_writes && !enters);
+            CHECK(logged("step=lease_conflict") && !vm_thread && !low_pt && !vm_as.pd_phys);
+        }
+    }
+    boot_fixture(true);
+    next_generation = UINT32_MAX - 1; /* first transfer succeeds, next fails */
+    CHECK(biosvm_init() == -ENOSPC && lease_count == 1 && counters.quarantines == 1);
+    CHECK(registry_get(leases[0].handle)->state == RS_QUARANTINED && !enters);
+    CHECK(logged("step=lease_transfer") && logged("result=-28"));
+    boot_fixture(true);
+    res[6].state = RS_RELEASED;
+    CHECK(fwinput_init() == -V86_EPERM && !lease_count && !enters);
+    CHECK(logged("step=input_reservations_missing") && logged("[fwinput] step=biosvm_init"));
+
+    boot_fixture(true);
+    gen_t old = res[6].generation;
+    CHECK(!biosvm_init());
+    CHECK(registry_claim_reserved(6, old, "intruder") == -EINVAL && !strcmp(res[6].owner, "firmware-input"));
+    CHECK(registry_claim(RES_IRQ, 12, 13, "intruder", false) == -EINVAL && !enters);
+
+    boot_fixture(true);
+    flags = 0;
+    CHECK(biosvm_init() == -V86_EPERM && logged("step=thread_context"));
+    CHECK(fwinput_adapter_init() == -EINVAL && logged("[fwinput-adapter] step=thread_context"));
+    flags = V86_IF; cr4_fake = 1;
+    CHECK(biosvm_init() == -V86_EPERM && logged("step=vme_pvi"));
+    boot_fixture(true);
+    g_boot.e820_count = 0;
+    CHECK(biosvm_init() == -EFAULT && logged("step=scratch_reservation"));
+    boot_fixture(true);
+    ram[0x40F] = 0;
+    CHECK(biosvm_init() == -EFAULT && logged("step=ebda_base"));
+    boot_fixture(true);
+    ram[0x9FC00] = 0;
+    CHECK(biosvm_init() == -EFAULT && logged("step=ebda_size"));
+    boot_fixture(true);
+    fail_alloc = true;
+    CHECK(biosvm_init() == -ENOMEM && logged("step=address_space"));
+    boot_fixture(true);
+    fail_low_pt = true;
+    CHECK(biosvm_init() == -ENOMEM && logged("step=page_table"));
+    boot_fixture(true);
+    fail_task = true;
+    CHECK(biosvm_init() == -ENOMEM && logged("step=worker_create"));
+    CHECK(!low_pt && !vm_as.pd_phys && !lease_count);
+}
+
+static void test_pm_timer(void)
+{
+    FIX(0x66,0xED);
+    f.tf.edx = 0x608;
+    CHECK(v86_emulate(&v, &f) == -V86_EPERM && !hw_reads && !hw_writes);
+    FIX(0x66,0xED);
+    f.tf.edx = 0x608; v.qemu_pmtimer = true; v.ticks = 123;
+    CHECK(!v86_emulate(&v, &f) && f.tf.eax == 123 * 3579u && !hw_reads && !hw_writes);
+    uint32_t value = 0;
+    v.ticks = UINT32_MAX;
+    CHECK(!v86_io(&v, 0x608, 4, false, &value) && value == ((UINT32_MAX * 3579u) & 0xFFFFFFu));
+    v.ticks++;
+    CHECK(!v86_io(&v, 0x608, 4, false, &value) && !value);
+    CHECK(v86_io(&v, 0x608, 1, false, &value) == -V86_EPERM);
+    CHECK(v86_io(&v, 0x608, 2, false, &value) == -V86_EPERM);
+    CHECK(v86_io(&v, 0x608, 4, true, &value) == -V86_EPERM);
+    CHECK(v86_io(&v, 0x609, 4, false, &value) == -V86_EPERM);
+    CHECK(v86_io(&v, 0x604, 2, true, &value) == -V86_EPERM);
+    CHECK(!hw_reads && !hw_writes);
 }
 
 int main(void)
@@ -704,6 +1013,11 @@ int main(void)
     test_devices_deadline();
     test_input_decoders();
     test_worker();
+    test_firmware_boot();
+    test_setup_failures();
+    test_lease_failures();
+    test_pm_timer();
+    printf("firmware diagnostics: max=%u bytes (strictly below 240)\n", diagnostic_max);
     printf("v86/firmware host tests: %s (%u checks, %u failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;
 }

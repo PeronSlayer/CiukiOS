@@ -41,6 +41,7 @@ int v86_begin(struct v86 *v, uint64_t now, uint32_t ticks)
     v->vif = true;
     v->shadow = false;
     v->result = 0;
+    memset(&v->fault, 0, sizeof(v->fault));
     v->stats.calls++;
     return 0;
 }
@@ -201,6 +202,20 @@ static uint8_t pit_io(struct v86 *v, uint16_t port, bool write, uint8_t value)
 
 int v86_io(struct v86 *v, uint16_t port, unsigned width, bool write, uint32_t *value)
 {
+    /* SeaBIOS rel-1.16.3 qemu_cfg_init selects PMBASE=0600h for QEMU's
+     * etc/table-loader; piix4_pm_setup uses PMBASE+8, timer_read does INL.
+     * PS/2 reply waits need this port even when no power service is enabled.
+     * https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/fw/paravirt.c
+     * https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/fw/pciinit.c
+     * https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/hw/timer.c
+     * Virtual counter ONLY: 24 bits, 3 PM cycles per PIT cycle, 1193 PIT
+     * cycles per host tick. No physical ACPI access, writes or adjacent ports.
+     * Physical notebooks and ordinary VMs never enable this QEMU policy. */
+    if (v->qemu_pmtimer && port == 0x608 && width == 4 && !write) {
+        *value = ((uint32_t)v->ticks * 3579u) & 0xFFFFFFu;
+        v->stats.io[V86_PMTIMER]++;
+        return 0;
+    }
     /* 8042/8259/PIT/CMOS are byte devices. Decode all CPU widths, but refuse
      * a multi-byte bus transaction rather than split it across device owners. */
     if (width != 1)
@@ -225,8 +240,11 @@ int v86_io(struct v86 *v, uint16_t port, unsigned width, bool write, uint32_t *v
                 if (port == 0x70)
                     v->rtc_index = b; /* virtual index only, including NMI bit */
             } else {
-                if (!v->rtc_valid)
+                if (!v->rtc_valid) {
+                    klog("[v86] step=io error=%d port=%04x width=%u write=0 reason=rtc_cache_missing index=%02x",
+                         -V86_EIO, port, width, v->rtc_index);
                     return -V86_EIO; /* no fabricated cached RTC */
+                }
                 b = port == 0x70 ? v->rtc_index : v->rtc[v->rtc_index & 0x7F];
             }
             break;
@@ -238,6 +256,8 @@ int v86_io(struct v86 *v, uint16_t port, unsigned width, bool write, uint32_t *v
     }
 denied:
     v->stats.disallowed_io++;
+    klog("[v86] step=io error=%d port=%04x width=%u write=%u value=%08x reason=policy",
+         -V86_EPERM, port, width, write, *value);
     return -V86_EPERM;
 }
 

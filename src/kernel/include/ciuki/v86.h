@@ -23,7 +23,7 @@ struct v86_frame {
 _Static_assert(offsetof(struct v86_frame, es) == 76, "V86 extended frame");
 _Static_assert(sizeof(struct v86_frame) == 92, "V86 frame size");
 
-enum v86_port_class { V86_CONTROLLER, V86_PIC, V86_PIT, V86_RTC, V86_PORT_CLASSES };
+enum v86_port_class { V86_CONTROLLER, V86_PIC, V86_PIT, V86_RTC, V86_PMTIMER, V86_PORT_CLASSES };
 struct v86_port_rule { uint16_t first, last; enum v86_port_class kind; };
 struct v86_pic {
     uint8_t irr, isr, imr, base, priority, init, icw1;
@@ -57,6 +57,7 @@ struct v86 {
     uint16_t pit_latch[3];
     uint8_t pit_phase[3], pit_latched[3], rtc_index, rtc[128];
     bool rtc_valid;
+    bool qemu_pmtimer; /* validated QEMU: virtual read-only INL 0608h */
     int result;
     struct { uint32_t cs, ip, vector, address; uint8_t bytes[15], count; } fault;
 };
