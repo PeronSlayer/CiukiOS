@@ -74,6 +74,9 @@ and the F0 acceptance criteria). In short:
   VBE 2.0+, PS/2, parallel ATA, FAT32); the baseline and the compatibility
   matrix live in `docs/design/hardware-baseline.md`, with QEMU twins
   `qemu-desktop-1998` and `qemu-desktop-2002` beside `qemu-t23`/`qemu-e500`.
+  Owner limit: at most one additional build and image for the oldest
+  baseline (i586 without CMOV: Pentium MMX, AMD K6), only if later
+  requested; never per-machine images.
 - Scope (owner decision 2026-10-09, dev diary 2026-10-09-10): a modern
   retro gaming OS, not a Windows clone; F0 foundations followed by eight
   steps, F1–F8 (drivers and disk, native programs, DOS, sound and media,

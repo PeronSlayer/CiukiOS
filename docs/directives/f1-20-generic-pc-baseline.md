@@ -29,9 +29,10 @@
    - CPU: i686 class with CPUID and CMOV (Pentium Pro/II/III/4, Celeron,
      Athlon/Duron/XP, VIA C3 Nehemiah); FXSR optional; no SSE required;
      explicitly **not** supported: Pentium/MMX and AMD K6 family (no CMOV;
-     the kernel and SDK are built with `-march=pentiumpro`). State this as
-     a decision the owner can revisit (it would need a `-march=i586` build
-     variant, which the one-image rule forbids).
+     the kernel and SDK are built with `-march=pentiumpro`). State the owner's rule
+     of 2026-10-11: the main image stays i686; at most one additional
+     build and image for the oldest baseline (i586, no CMOV) may be made
+     later if requested, never per-machine images.
    - Firmware: BIOS with E820 (1997+), VBE 2.0+ with a linear framebuffer
      mode at 640×480 or better, A20 via keyboard controller or port 92h,
      INT 13h extensions for the disk; PCI configuration mechanism #1.
