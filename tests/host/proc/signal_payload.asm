@@ -628,6 +628,11 @@ survivor:
     mov dword [STAGE], 1
 .loop:
     inc dword [PROGRESS]
+    ; Three P_NORMAL peers must keep progressing without consuming three
+    ; 10 ms quanta between the probe's SIGUSR1 post and nanosleep redispatch.
+    ; A 1 ms probe poll alone cannot bound that dispatch latency to 1 ms.
+    mov ebx, 1
+    CALL CIUKI_SYS_SLEEP_MS
     cmp dword [RELEASE], 0
     je .loop
     jmp exit_ok

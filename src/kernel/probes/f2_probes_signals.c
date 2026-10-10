@@ -154,9 +154,10 @@ static bool signal_case(struct process *parent, struct process *survivor, struct
                 inject_signal = sig;
                 int err = proc_signal_thread_kill(p, r.tid, sig);
                 inject_error = err;
-                /* Yield without serial output: at 38400 baud this record
-                 * outlasts the remaining 10 ms of a 20 ms nanosleep. The
-                 * UP waiter must observe the pending signal before expiry. */
+                /* Record after completion. The payload's background peers
+                 * sleep between progress updates: our 1 ms polling sleep
+                 * alone cannot dispatch an awakened P_NORMAL waiter before
+                 * its deadline when three peers consume 10 ms quanta. */
                 injected = !err;
             }
             if (!injected && mode == 14 && r.stage == 3 && r.peer_tid) {
