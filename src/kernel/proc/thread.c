@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/signal.h>
 
 static struct proc_thread *threads[CIUKI_THREAD_MAX];
 static uint32_t next_tid = 1;
@@ -242,7 +243,7 @@ int proc_thread_join(uint32_t tid, uint32_t value_va)
         return err;
     target->joiner = self;
     while (!target->retained) {
-        if (self->process->state == PROC_STOPPING || (self->interrupted && !self->in_handler)) {
+        if (self->process->state == PROC_STOPPING || proc_signal_caught(self)) {
             err = -EINTR;
             break;
         }

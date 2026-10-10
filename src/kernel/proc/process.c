@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/signal.h>
 
 static struct process *processes[CIUKI_PROCESS_MAX];
 static struct process supervisor;
@@ -399,7 +400,7 @@ int proc_waitpid(int32_t pid, uint32_t status_va, uint32_t options)
         }
         if (err < 0 || (options & WNOHANG))
             break;
-        if (p->state == PROC_STOPPING || (t->interrupted && !t->in_handler)) {
+        if (p->state == PROC_STOPPING || proc_signal_caught(t)) {
             err = -EINTR;
             break;
         }

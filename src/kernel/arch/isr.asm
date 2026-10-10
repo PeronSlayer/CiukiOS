@@ -6,6 +6,7 @@ bits 32
 section .text
 
 extern proc_trap_dispatch
+extern proc_signal_return_to_user
 extern df_handler
 
 %macro ISR_NOERR 1
@@ -69,6 +70,11 @@ isr_common:
     add esp, 4
 global trap_return
 trap_return:
+    ; Includes first task activation. Kernel IRQ returns have no user tail;
+    ; the C hook checks CS before touching it. No locks survive this boundary.
+    push esp
+    call proc_signal_return_to_user
+    add esp, 4
     pop gs
     pop fs
     pop es

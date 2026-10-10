@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/signal.h>
 
 static struct ww_waiter *head, *tail;
 static int64_t seed_seconds;
@@ -157,7 +158,7 @@ int proc_wait_word(uint32_t word, uint32_t expected, uint32_t deadline_va, uint3
         err = -EAGAIN;
     if (!err && deadline_va && proc_deadline_passed(&deadline, clock))
         err = -ETIMEDOUT;
-    if (!err && t->interrupted && !t->in_handler)
+    if (!err && proc_signal_caught(t))
         err = -EINTR;
     if (err) {
         irq_restore(flags);
@@ -170,7 +171,7 @@ int proc_wait_word(uint32_t word, uint32_t expected, uint32_t deadline_va, uint3
             ww_interrupt(w, -ETIMEDOUT);
             break;
         }
-        if (t->process->state == PROC_STOPPING || (t->interrupted && !t->in_handler)) {
+        if (t->process->state == PROC_STOPPING || proc_signal_caught(t)) {
             ww_interrupt(w, -EINTR);
             break;
         }

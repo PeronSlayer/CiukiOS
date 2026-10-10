@@ -116,5 +116,28 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/proc/proc_test.c" -o "$out/proc_test"
+    -I "$root/src/kernel/include" "$root/tests/host/proc/proc_test.c" \
+    "$root/tests/host/proc/signal_legacy.c" -o "$out/proc_test"
 "$out/proc_test"
+
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/proc/signal_test.c" -o "$out/signal_test"
+# Assemble the new fixture even before the lead integrates its canonical
+# build hook. Values are target-generated from the one public ABI header.
+python3 - "$out" <<'PY'
+import json, re, sys
+from pathlib import Path
+out = Path(sys.argv[1])
+definitions = []
+for key, value in json.loads((out / "abi-layout.json").read_text()).items():
+    if key.startswith("constant."):
+        name = key.removeprefix("constant.")
+    elif key.startswith(("sizeof.ciuki_", "offsetof.ciuki_")):
+        name = "ABI_" + re.sub(r"[^A-Za-z0-9_]", "_", key).upper()
+    else:
+        continue
+    definitions.append(f"%define {name} {value}\n")
+(out / "proc_abi.inc").write_text("".join(definitions))
+PY
+nasm -f bin -I "$out/" "$root/tests/host/proc/signal_payload.asm" -o "$out/signal-payload.elf"
+"$out/signal_test" "$out/signal-payload.elf"
