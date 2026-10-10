@@ -3,6 +3,7 @@
  * Every buffer is validated completely before any visible side effect.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/files.h>
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/probe.h>
@@ -118,7 +119,7 @@ void syscall_dispatch(struct trap_frame *tf)
         r = desktop_syscall(tf);
         break;
     default:
-        r = desktop_fd_syscall(tf) ? (int32_t)tf->eax : proc_syscall(tf);
+        r = file_syscall(tf) ? (int32_t)tf->eax : desktop_fd_syscall(tf) ? (int32_t)tf->eax : proc_syscall(tf);
         break;
     }
     if (nr != 1 && nr != 4) {

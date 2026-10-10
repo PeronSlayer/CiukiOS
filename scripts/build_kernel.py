@@ -14,6 +14,8 @@ import re
 import runpy
 import subprocess
 import sys
+import time
+import hashlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -132,6 +134,9 @@ def main() -> int:
     OBJ.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = str(OUT)
     bid, bhex, bdirty = build_id()
+    epoch = int(os.environ.get("SOURCE_DATE_EPOCH", str(int(time.time()))))
+    if epoch < 0 or epoch > 0x7fffffffffffffff:
+        raise SystemExit("invalid build epoch")
     payload = OUT / "payload.bin"
     run(["nasm", "-f", "bin", str(SRC / "probes" / "payload.asm"), "-o", str(payload)])
     # The interim native fixture is a NASM ELF file, with every public value
@@ -157,6 +162,9 @@ def main() -> int:
     desktop_payload = OUT / "desktop-payload.elf"
     run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
          str(ROOT / "tests/host/proc/desktop_payload.asm"), "-o", str(desktop_payload)])
+    files_payload = OUT / "files-payload.elf"
+    run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
+         str(ROOT / "tests/host/proc/files_payload.asm"), "-o", str(files_payload)])
     objs = []
     for asm in sorted((SRC / "arch").glob("*.asm")) + sorted((SRC / "vm").glob("*.asm")) + [SRC / "probes" / "payload_blob.asm"]:
         o = OBJ / (asm.stem + ".o")
@@ -172,6 +180,8 @@ def main() -> int:
              f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',
              f'-DCIUKI_SIGNAL_PAYLOAD_BIN="{signal_payload}"',
              f'-DCIUKI_DESKTOP_PAYLOAD_BIN="{desktop_payload}"',
+             f'-DCIUKI_FILES_PAYLOAD_BIN="{files_payload}"',
+             f"-DCIUKI_BUILD_EPOCH={epoch}LL",
              f"-DCIUKI_BUILD_DIRTY={bdirty}", "-I", str(SRC / "include"),
              "-c", str(c), "-o", str(o)])
         objs.append(o)
@@ -189,6 +199,8 @@ def main() -> int:
     run(["ld.lld", "-m", "elf_i386", "-T", str(SRC / "linker.ld"), "--no-undefined",
          "-Map", str(OUT / "VMM.map"), "-o", str(elf), *map(str, objs)])
     audit(elf)
+    clock_record = {"utc_epoch": epoch, "kernel_sha256": hashlib.sha256(elf.read_bytes()).hexdigest()}
+    (OUT / "build-clock.json").write_text(json.dumps(clock_record, indent=2) + "\n")
     size = elf.stat().st_size
     print(f"[build-kernel] {elf.relative_to(ROOT)} ({size} bytes), build {bid}")
     return 0
