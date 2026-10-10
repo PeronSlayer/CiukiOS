@@ -35,5 +35,5 @@ evidence and merges.
 | [f2-08-desktop-process](f2-08-desktop-process.md) | F2 | gpt-6.1-sol / xhigh | written; starts after f2-05 |
 | [f1-10-suite-alignment-and-loader-safe](f1-10-suite-alignment-and-loader-safe.md) | F1 | gpt-6.1-sol / high | written; starts when QEMU is free |
 
-Planned next (F2, after f2-02): f2-04 signals and faults, f2-05 desktop
-objects and the bootstrap supervisor, f2-08 ring-3 desktop.
+All F1 and F2 directives are written; launches follow their prerequisites
+(f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
