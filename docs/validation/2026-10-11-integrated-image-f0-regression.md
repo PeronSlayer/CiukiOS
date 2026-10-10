@@ -34,3 +34,18 @@ and the runner treats it as a failed prerequisite: the 11 F1 cases end
 this run. Decision: operator-confirmation cases must not gate later cases
 (directive f2-09 corrects the suite prerequisite rule); the F1 suites run for
 evidence after directive f1-08 starts the drivers.
+
+## Second image: `17524054e5950312…` (commit `a946a92`, with f2-09 and the f2: selector)
+
+Built after the f1-03/f2-02/f2-04/f2-07/f1-07b/f2-09 merges (f1-08 not yet
+included). `f0-smoke` 2/2 PASS. `f2-process`: the F0 regression prefix passed
+(62 cases incl. `panic` on three profiles, `safe-mode`, `video-fallback`), but
+the three `uart-absent-*` operator-confirmation cases still counted as failed
+prerequisites, so the F1 regressions and the F2 cases (`elf-load`, `spawn-wait`,
+`fd-table`) ended `not_run`: the rule introduced by f2-09 does not cover the
+imported F0 regression cases. `f2-runtime` did not start: the runner's host
+prerequisite (`tests/host`) failed in
+`test_production_kernel_selector_names_and_phase_dispatch` because f1-08 had
+been merged in the meantime and registers eight F1 probes where the test
+expected the earlier table. Both defects go to directive f1-10. No F2 probe
+has run in the guest yet.
