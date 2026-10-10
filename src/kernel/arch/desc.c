@@ -1,17 +1,18 @@
 /* GDT, TSS, double-fault TSS and IDT.
  * GDT: null, kcode 0x08, kdata 0x10, ucode 0x1B, udata 0x23, TSS 0x28,
- * double-fault TSS 0x30. All segments flat; protection is by paging.
+ * double-fault TSS 0x30, native GS TLS 0x3B. Ordinary segments remain flat.
  * The TSS has no I/O bitmap, so every port is denied to ring 3 (IOPL 0).
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/arch.h>
 #include <ciuki/cpu.h>
+#include <ciuki/abi.h>
 
 struct gdt_entry { uint16_t lim0, base0; uint8_t base1, access, gran, base2; } __attribute__((packed));
 struct idt_entry { uint16_t off0, sel; uint8_t zero, type; uint16_t off1; } __attribute__((packed));
 struct dtr { uint16_t limit; uint32_t base; } __attribute__((packed));
 
-static struct gdt_entry gdt[7];
+static struct gdt_entry gdt[CIUKI_TLS_GDT_INDEX + 1];
 static struct idt_entry idt[256];
 struct tss g_tss;
 static struct tss df_tss;
@@ -43,6 +44,7 @@ void gdt_init(void)
     g_tss.iomap_base = sizeof(struct tss);  /* beyond the limit: no bitmap */
     set_gdt(5, (uint32_t)&g_tss, sizeof(g_tss) - 1, 0x89, 0x00);
     set_gdt(6, (uint32_t)&df_tss, sizeof(df_tss) - 1, 0x89, 0x00);
+    set_gdt(CIUKI_TLS_GDT_INDEX, 0, CIUKI_TLS_SIZE - 1, 0xF2, 0x40);
 
     struct dtr d = { sizeof(gdt) - 1, (uint32_t)gdt };
     __asm__ volatile(
@@ -56,6 +58,15 @@ void gdt_init(void)
 }
 
 void tss_set_kernel_stack(uint32_t esp0) { g_tss.esp0 = esp0; }
+
+void arch_tls_switch(uint32_t base, bool native)
+{
+    /* Intel SDM Vol. 3: replacing a GDT entry does not invalidate a segment
+     * register's hidden cache. Reload even when the selector is unchanged. */
+    set_gdt(CIUKI_TLS_GDT_INDEX, base, CIUKI_TLS_SIZE - 1, 0xF2, 0x40);
+    uint16_t selector = native ? CIUKI_TLS_SELECTOR : SEL_KDATA;
+    __asm__ volatile("mov %0, %%gs" :: "r"(selector) : "memory");
+}
 
 void df_tss_init(uint32_t cr3)
 {

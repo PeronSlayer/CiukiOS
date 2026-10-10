@@ -5,7 +5,7 @@
 bits 32
 section .text
 
-extern trap_dispatch
+extern proc_trap_dispatch
 extern df_handler
 
 %macro ISR_NOERR 1
@@ -65,7 +65,7 @@ isr_common:
     mov gs, ax
     cld
     push esp
-    call trap_dispatch
+    call proc_trap_dispatch
     add esp, 4
 global trap_return
 trap_return:
