@@ -33,6 +33,9 @@ static uint32_t cr4_fake, setup_ticks, completion_delay;
 static int mouse_error_function = -1;
 static uint16_t mouse_error_ax, mouse_error_flags;
 static unsigned mouse_calls;
+static bool worker_until_idle;
+static jmp_buf worker_idle_env;
+static unsigned worker_waits, worker_sleeps, reflection_ticks;
 
 struct task *g_current;
 volatile uint64_t g_ticks;
@@ -142,7 +145,12 @@ void task_start(struct task *t) { CHECK(t->state == T_BLOCKED); t->state = T_REA
 void task_kill(struct task *t, int c) { (void)c; t->state = T_ZOMBIE; }
 void task_reap(struct task *t) { CHECK(t->state == T_ZOMBIE); }
 void irq_set_handler(unsigned n, irq_handler_t h) { CHECK(n < 16); irq_fake[n] = h; }
-void pic_unmask(unsigned n) { CHECK(irq_fake[n] != 0); }
+void pic_unmask(unsigned n)
+{
+    CHECK(irq_fake[n] != 0);
+    physical[n < 8 ? 0x21 : 0xA1] &= (uint8_t)~(1u << (n & 7));
+    if (n >= 8) physical[0x21] &= (uint8_t)~4u;
+}
 void pic_mask(unsigned n) { CHECK(n < 16); }
 void panic_frame(struct trap_frame *tf, const char *s) { (void)tf; fprintf(stderr, "PANIC %s\n", s); exit(2); }
 __asm__(".pushsection .rodata\n.globl biosvm_mouse_stub, biosvm_mouse_stub_end\nbiosvm_mouse_stub:\n.byte 0xcb\nbiosvm_mouse_stub_end:\n.popsection\n");
@@ -160,8 +168,9 @@ __asm__(".pushsection .rodata\n.globl biosvm_mouse_stub, biosvm_mouse_stub_end\n
 #include <ciuki/storage.h>
 static struct i8042_stats public_input;
 static unsigned public_events;
+static struct fwinput_event public_delivered[16];
 static bool safe_input, safe_backend, safe_pass;
-void task_sleep_ms(uint32_t ms) { g_ticks += ms; }
+void task_sleep_ms(uint32_t ms) { g_ticks += ms; if (worker_until_idle) worker_sleeps++; }
 bool input_firmware_begin(gen_t gen)
 {
     CHECK(gen && !public_input.active);
@@ -170,7 +179,11 @@ bool input_firmware_begin(gen_t gen)
     return true;
 }
 void input_firmware_event(const struct fwinput_event *e, gen_t gen)
-{ CHECK(e && gen == public_input.generation); public_events++; }
+{
+    CHECK(e && gen == public_input.generation);
+    if (public_events < ARRAY_SIZE(public_delivered)) public_delivered[public_events] = *e;
+    public_events++;
+}
 void input_firmware_loss(uint64_t lost) { (void)lost; }
 void input_firmware_disable(gen_t gen)
 { CHECK(gen == public_input.generation); public_input.active = false; public_input.quarantined = true; }
@@ -232,6 +245,8 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
         CHECK(code != 0);
         if (!code)
             exit(2);
+        if (code[0] == 0xCF && !request_regs.interrupt)
+            g_ticks += reflection_ticks;
         if (mouse_setup_call && code[0] == 0xCF) {
             g_ticks += setup_ticks;
             if ((int)function == mouse_error_function) {
@@ -258,6 +273,28 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
             *reg = (*reg & ~0xFFFFu) | getword(code + 1, 2);
             live.tf.eip += 3;
             continue;
+        } else if (code[0] == 0x8E && code[1] == 0xD8) {
+            live.ds = (uint16_t)live.tf.eax;
+            live.tf.eip += 2;
+            continue;
+        } else if (code[0] == 0xA3) {
+            /* Ordinary guest MOV [moffs16],AX; the V86 CPU executes this
+             * without a trap. Use the production VM mapping permission. */
+            uint8_t *p = vm_memory(0, (live.ds << 4) + getword(code + 1, 2), 2, true);
+            CHECK(p != 0);
+            if (!p) exit(2);
+            putword(p, 2, live.tf.eax);
+            live.tf.eip += 3;
+            continue;
+        } else if (code[0] == 0x80 && code[1] == 0xFC) {
+            live.tf.eflags &= ~V86_ZF;
+            if (((live.tf.eax >> 8) & 0xFF) == code[2]) live.tf.eflags |= V86_ZF;
+            live.tf.eip += 3;
+            continue;
+        } else if (code[0] == 0x74) {
+            live.tf.eip += 2;
+            if (live.tf.eflags & V86_ZF) live.tf.eip += (int8_t)code[1];
+            continue;
         } else if (code[0] == 0x90) {
             live.tf.eip++;
             if (!firmware.shadow)
@@ -278,6 +315,12 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d)
 {
     CHECK(flags & V86_IF);
+    if (q == &wake && worker_until_idle) {
+        CHECK(++worker_waits <= 4); /* stuck readiness must fail, not hang */
+        if (worker_waits > 4) exit(2);
+        if (!cond(arg)) longjmp(worker_idle_env, 1);
+        return true;
+    }
     if (q == &completion && request_pending) {
         struct task *old = g_current;
         switch_fake(vm_thread);
@@ -795,6 +838,15 @@ static void boot_fixture(bool irq_reservations)
     memset(&state, 0, sizeof(state));
     memset(&public_input, 0, sizeof(public_input));
     memset(diagnostic, 0, sizeof(diagnostic));
+    memset(&delivery, 0, sizeof(delivery));
+    memset(irq_fake, 0, sizeof(irq_fake));
+    memset(public_delivered, 0, sizeof(public_delivered));
+    physical[0x21] = physical[0xA1] = 0xFF;
+    input_wait = 0; input_reflections = 0;
+    reflected_seen = loss_seen = poll_deadline = budget_violations = 0;
+    adapter_wakes = adapter_polls = adapter_drains = adapter_events = 0;
+    worker_until_idle = false;
+    worker_waits = worker_sleeps = reflection_ticks = 0;
     diagnostic_count = 0;
     safe_input = safe_backend = safe_pass = false;
     initialized = quarantined = synthetic = started = false;
@@ -863,6 +915,127 @@ static void test_firmware_boot(void)
         CHECK(fwinput_adapter_step() == 2 && public_events == 2);
     }
     printf("firmware boot/safe: input_works=1 backend=firmware (current registry and reserved IRQs)\n");
+}
+
+static void test_retained_irq(void)
+{
+    boot_fixture(true);
+    CHECK(!fwinput_adapter_init());
+    /* Both edges arrive before the worker runs. IRQ1 wins fixed priority;
+     * its IRET must not strand IRQ12 already captured into the virtual PIC. */
+    static const uint8_t key[] = {0xB0,0x20,0xE6,0x20,0xCF};
+    static const uint8_t aux[] = {0xB0,0x20,0xE6,0xA0,0xE6,0x20,0xCF};
+    ivt(9, 0xF000, 0x200); memcpy(ram + 0xF0200, key, sizeof(key));
+    ivt(0x74, 0xF000, 0x300); memcpy(ram + 0xF0300, aux, sizeof(aux));
+    struct trap_frame irq = {.vector = 0x21};
+    irq_fake[1](&irq);
+    irq.vector = 0x2C; irq_fake[12](&irq);
+    CHECK(worker_ready(0));
+    switch_fake(vm_thread);
+    struct biosvm_regs r = {0};
+    CHECK(!run_vm(&r, 100, 0));
+    CHECK(!pending_irqs && (firmware.pic[1].irr & 0x10));
+    CHECK(worker_ready(0));
+    CHECK(!run_vm(&r, 100, 0));
+    CHECK(!firmware.pic[1].irr && !firmware.pic[0].isr && !firmware.pic[1].isr);
+    CHECK(!worker_ready(0));
+    /* Masking either the slave source or the master cascade parks it.
+     * Eligibility ignores a finished call's VIF but retains IMR/ISR rules. */
+    v86_irq_raise(&firmware, 12);
+    firmware.pic[1].imr |= 0x10;
+    CHECK(!worker_ready(0) && (firmware.pic[1].irr & 0x10));
+    firmware.pic[1].imr &= ~0x10u; firmware.pic[0].imr |= 4;
+    CHECK(!worker_ready(0));
+    firmware.pic[0].imr &= ~4u; firmware.pic[0].isr |= 2;
+    CHECK(!worker_ready(0));
+    firmware.pic[0].isr = 0; firmware.vif = false;
+    CHECK(worker_ready(0));
+    /* Exercise the real worker loop, including a >1ms first ISR and its
+     * mandatory block before the retained slave reflection. */
+    pending_irqs = 2;
+    reflection_ticks = 2;
+    request_regs.interrupt = 0;
+    worker_until_idle = true;
+    if (!setjmp(worker_idle_env)) worker_main(0);
+    worker_until_idle = false;
+    CHECK(worker_waits == 2 && worker_sleeps == 1 && delivery.budget_yields == 1);
+    CHECK(delivery.entries[0] == 2 && delivery.entries[1] == 2);
+    CHECK(delivery.done[0] == 2 && delivery.done[1] == 2 && !worker_ready(0));
+    switch_fake(&caller);
+}
+
+static void fake_physical_irq(unsigned irq)
+{
+    /* Dispatcher boundary fake: device handler before specific physical EOI.
+     * Production trap.c is inspected/build-tested; CPU entry is not emulated. */
+    struct trap_frame tf = {.vector = 0x20 + irq};
+    uint32_t saved = irq_save();
+    biosvm_account_irq(irq, false, irq_fake[irq] != 0);
+    if (irq_fake[irq]) irq_fake[irq](&tf);
+    if (irq >= 8) outb(0xA0, 0x60 | (irq - 8));
+    outb(0x20, 0x60 | (irq >= 8 ? 2 : irq));
+    biosvm_account_irq(irq, true, irq_fake[irq] != 0);
+    irq_restore(saved);
+}
+
+static void test_irq_bda_delivery(void)
+{
+    boot_fixture(true);
+    CHECK(!fwinput_adapter_init());
+    CHECK(!(physical[0x21] & 6) && !(physical[0xA1] & 0x10));
+    /* Scripted ISR consumes port60 through the production #GP path, writes
+     * the actual BDA buffer/producer, EOIs only the virtual PIC, and IRETs. */
+    static const uint8_t key[] = {
+        0xE4,0x64,0xE4,0x60,0xB8,0x40,0,0x8E,0xD8,
+        0xB8,0x61,0x1E,0xA3,0x1E,0,0xB8,0x20,0,0xA3,0x1C,0,
+        0xB0,0x20,0xE6,0x20,0xCF,
+    };
+    /* AH=11 returns the word; AH=10 additionally advances the BDA head.
+     * Neither function reads the physical controller. */
+    static const uint8_t keyboard[] = {
+        0x80,0xFC,0x11,0x74,0x0B,0xB8,0x40,0,0x8E,0xD8,
+        0xB8,0x20,0,0xA3,0x1A,0,0xB8,0x61,0x1E,0xCF,
+    };
+    ivt(9, 0xF000, 0x200); memcpy(ram + 0xF0200, key, sizeof(key));
+    memcpy(ram + 0xF0100, keyboard, sizeof(keyboard));
+    physical[0x64] = 1; physical[0x60] = 0x1E;
+    fake_physical_irq(1);
+    CHECK(pending_irqs == 2 && !biosvm_keyboard_pending());
+    unsigned writes = hw_writes, reads = hw_reads, before = enters;
+    switch_fake(vm_thread);
+    struct biosvm_regs r = {0};
+    CHECK(!run_vm(&r, 100, 0));
+    CHECK(biosvm_keyboard_pending() && getword(ram + 0x41E, 2) == 0x1E61);
+    CHECK(getword(ram + 0x41A, 2) == 0x1E && getword(ram + 0x41C, 2) == 0x20);
+    service_input();
+    CHECK(!biosvm_keyboard_pending() && enters == before + 3);
+    CHECK(hw_reads == reads + 2 && hw_writes == writes && physical[0x20] == 0x61);
+    switch_fake(&caller);
+    CHECK(adapter_ready(0) && fwinput_adapter_step() == 2 && public_events == 2);
+    CHECK(public_delivered[0].type == FWINPUT_KEY && public_delivered[0].code == 0x1E &&
+          public_delivered[0].value == 1);
+    CHECK(public_delivered[1].type == FWINPUT_TEXT && public_delivered[1].value == 'a');
+    CHECK(decoder.stats.text_matched == 1 && !decoder.stats.loss);
+    before = enters;
+    switch_fake(vm_thread); service_input(); switch_fake(&caller);
+    CHECK(enters == before && !fwinput_adapter_step());
+    struct biosvm_input_diag d;
+    biosvm_input_snapshot(&d);
+    CHECK(d.arrivals[0] == 1 && d.dispatched[0] == 1 && d.eois[0] == 1 && d.queued[0] == 1);
+    CHECK(d.reflected[0] == 1 && d.entries[0] == 1 && d.done[0] == 1 && d.port60 == 1);
+    CHECK(d.bda_head == 0x20 && d.bda_tail == 0x20 && !d.disabled && !d.active);
+    CHECK(d.last_status == 1 && d.last_byte == 0x1E && adapter_events == 2 && adapter_drains == 1);
+    /* Diagnostics do not consume data, enter firmware or mutate either PIC. */
+    writes = hw_writes; reads = hw_reads;
+    fwinput_adapter_log_delivery();
+    CHECK(hw_reads == reads + 2 && hw_writes == writes && enters == before);
+    CHECK(logged("irq=1 arrivals=1 dispatched=1 eoi=1 queued=1") && logged("drains=1 events=2"));
+    /* Even the largest counter values fit the bounded klog line size. */
+    memset(&delivery, 0xFF, sizeof(delivery));
+    memset(&decoder.stats, 0xFF, sizeof(decoder.stats));
+    adapter_wakes = adapter_polls = adapter_drains = adapter_events = budget_violations = UINT64_MAX;
+    fwinput_adapter_log_delivery();
+    printf("firmware IRQ delivery: PASS (physical IRQ1 -> trapped IN -> BDA -> INT16 -> adapter key/text)\n");
 }
 
 static void test_setup_failures(void)
@@ -1014,6 +1187,8 @@ int main(void)
     test_input_decoders();
     test_worker();
     test_firmware_boot();
+    test_retained_irq();
+    test_irq_bda_delivery();
     test_setup_failures();
     test_lease_failures();
     test_pm_timer();

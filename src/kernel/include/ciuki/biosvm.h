@@ -45,6 +45,22 @@ uint64_t biosvm_input_reflections(void);
  * completed input service wake it; conditions still decide whether to run. */
 void biosvm_set_input_wait(struct kwait *wait);
 
+/* Cumulative delivery evidence. Slots 0/1 are IRQ1/IRQ12. entries/done
+ * count standalone ISR entries/IRETs to the sentinel; reflected also counts
+ * IRQs nested in an INT16/C2 call. Snapshots never read controller ports. */
+struct biosvm_input_diag {
+    uint64_t arrivals[2], dispatched[2], eois[2], queued[2], reflected[2];
+    uint64_t entries[2], done[2], port60, signals, budget_yields;
+    uint16_t pending, bda_head, bda_tail, mouse_head, mouse_tail, mouse_lost;
+    uint8_t physical_imr[2], imr[2], irr[2], isr[2], base[2];
+    uint8_t last_status, last_byte;
+    enum v86_state state;
+    bool active, disabled;
+};
+/* Dispatcher accounting only: called with IF clear, without port access. */
+void biosvm_account_irq(unsigned irq, bool eoi, bool handled);
+void biosvm_input_snapshot(struct biosvm_input_diag *out);
+
 /* V86-only arch/scheduler hooks. Defaults preserve every F0 frame/path. */
 void biosvm_trap(struct trap_frame *tf);
 uint32_t biosvm_task_cr3(const struct task *t, uint32_t normal);

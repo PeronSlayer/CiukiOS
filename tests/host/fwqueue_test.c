@@ -205,6 +205,7 @@ unsigned fwinput_poll(struct fwinput_event *out, unsigned max)
 void fwinput_stats(struct fwinput_stats *out) { memset(out, 0, sizeof(*out)); }
 enum biosvm_backend biosvm_backend_state(void) { return fake_backend; }
 uint64_t biosvm_input_reflections(void) { return reflections; }
+void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeof(*out)); }
 void biosvm_set_input_wait(struct kwait *q) { reflection_wait = q; }
 bool input_firmware_begin(gen_t gen) { CHECK(gen == 1); return true; }
 void input_firmware_event(const struct fwinput_event *e, gen_t gen)
@@ -282,6 +283,7 @@ int main(void)
     run_until(1030000, 1003000);
     CHECK(max_wake_us < 10000 && delivered == 20 && !pending);
     CHECK(normal_task.dispatches == waits); /* dispatched between every step */
+    CHECK(adapter_wakes == 2 && adapter_polls >= 100 && adapter_drains == 2 && adapter_events == 20);
     g_current = &queue_task;
     pending = 40;
     CHECK(fwinput_adapter_step() == 16 && pending == 24);

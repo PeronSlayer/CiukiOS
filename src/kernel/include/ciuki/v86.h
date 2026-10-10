@@ -67,6 +67,8 @@ int v86_check_deadline(struct v86 *v, uint64_t now);
 int v86_abort(struct v86 *v, const struct v86_frame *f, int error);
 int v86_io(struct v86 *v, uint16_t port, unsigned width, bool write, uint32_t *value);
 void v86_irq_raise(struct v86 *v, unsigned irq);
+/* PIC arbitration only, independent of the current call's virtual IF. */
+int v86_irq_pending(const struct v86 *v);
 int v86_irq_deliver(struct v86 *v, struct v86_frame *f);
 int v86_reflect(struct v86 *v, struct v86_frame *f, uint8_t vector);
 /* 0: resume, 1: sentinel complete, 2: halted, negative: disabled. */

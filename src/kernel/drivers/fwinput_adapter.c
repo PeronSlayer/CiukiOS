@@ -17,6 +17,7 @@ static struct task *adapter;
 static gen_t generation;
 static uint64_t loss_seen, reflected_seen, poll_deadline;
 static uint64_t budget_violations;
+static uint64_t adapter_wakes, adapter_polls, adapter_drains, adapter_events;
 static struct kwait available;
 
 gen_t fwinput_adapter_generation(void) { return generation; }
@@ -26,6 +27,7 @@ unsigned fwinput_adapter_step(void)
     if (!generation || !(read_eflags() & 0x200) || !g_current) return 0;
     reflected_seen = biosvm_input_reflections();
     if (!fwinput_pending()) return 0;
+    adapter_drains++;
     uint64_t start = ktime_cycles(), tick = deadline_after_ms(0);
     struct fwinput_stats stats;
     fwinput_stats(&stats);
@@ -38,6 +40,7 @@ unsigned fwinput_adapter_step(void)
         /* f1-07's synthetic Pause position precedes the public F2 contract. */
         if (e.type == FWINPUT_KEY && e.code == 0x145) e.code = INPUT_KEY_PAUSE;
         input_firmware_event(&e, generation);
+        adapter_events++;
         n++;
     }
     fwinput_stats(&stats);
@@ -69,8 +72,37 @@ static void adapter_main(void *arg)
     for (;;) {
         fwinput_adapter_step();
         poll_deadline = deadline_after_ms(10);
-        kwait_wait_until(&available, adapter_ready, 0, poll_deadline);
+        if (kwait_wait_until(&available, adapter_ready, 0, poll_deadline)) adapter_wakes++;
+        else adapter_polls++;
     }
+}
+
+void fwinput_adapter_log_delivery(void)
+{
+    struct biosvm_input_diag d;
+    struct fwinput_stats s;
+    biosvm_input_snapshot(&d);
+    fwinput_stats(&s);
+    /* Fixed line count, each <240 bytes even with 20-digit counters. No
+     * logging or extra controller reads in IRQ/trap/observer paths. */
+    for (unsigned i = 0; i < 2; i++) {
+        klog("[fwdelivery] irq=%u arrivals=%llu dispatched=%llu eoi=%llu queued=%llu",
+             i ? 12 : 1, d.arrivals[i], d.dispatched[i], d.eois[i], d.queued[i]);
+        klog("[fwdelivery] irq=%u reflected=%llu entries=%llu sentinel=%llu",
+             i ? 12 : 1, d.reflected[i], d.entries[i], d.done[i]);
+    }
+    klog("[fwdelivery] pending=%04x physical_imr=%02x/%02x virtual_imr=%02x/%02x irr=%02x/%02x isr=%02x/%02x base=%02x/%02x state=%u active=%u disabled=%u",
+         d.pending, d.physical_imr[0], d.physical_imr[1], d.imr[0], d.imr[1],
+         d.irr[0], d.irr[1], d.isr[0], d.isr[1], d.base[0], d.base[1], d.state, d.active, d.disabled);
+    klog("[fwdelivery] bda_head=%04x bda_tail=%04x mouse_head=%u mouse_tail=%u mouse_lost=%u port60=%llu last_status=%02x last_byte=%02x",
+         d.bda_head, d.bda_tail, d.mouse_head, d.mouse_tail, d.mouse_lost,
+         d.port60, d.last_status, d.last_byte);
+    klog("[fwdelivery] observed=%llu scans=%llu aux=%llu text=%llu packets=%llu",
+         s.observed_bytes, s.scan_bytes, s.aux_bytes, s.text, s.packets);
+    klog("[fwdelivery] signals=%llu wakes=%llu polls=%llu drains=%llu events=%llu",
+         d.signals, adapter_wakes, adapter_polls, adapter_drains, adapter_events);
+    klog("[fwdelivery] loss=%llu resync=%llu service_overruns=%llu queue_overruns=%llu worker_yields=%llu",
+         s.loss, s.resyncs, s.service_budget_violations, budget_violations, d.budget_yields);
 }
 
 static int adapter_error(const char *step, int error)

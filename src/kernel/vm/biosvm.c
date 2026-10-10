@@ -40,14 +40,24 @@ static unsigned lease_count;
 static uint16_t mouse_lost;
 static struct kwait *input_wait;
 static uint64_t input_reflections;
+static struct biosvm_input_diag delivery;
+
+static void notify_input(void)
+{
+    if (input_wait) {
+        delivery.signals++;
+        kwait_wake_all(input_wait);
+    }
+}
 
 static int reflect_input_irq(struct v86_frame *f)
 {
+    int irq = v86_irq_pending(&firmware);
     int rc = v86_irq_deliver(&firmware, f);
-    if (rc > 0 && !synthetic &&
-        ((firmware.pic[0].isr & 2) || (firmware.pic[1].isr & 0x10))) {
+    if (rc > 0 && !synthetic && (irq == 1 || irq == 12)) {
+        delivery.reflected[irq == 12]++;
         input_reflections++;
-        if (input_wait) kwait_wake_all(input_wait);
+        notify_input();
     }
     return rc;
 }
@@ -90,6 +100,11 @@ static uint8_t vm_in(void *arg, uint16_t port)
         controller_status = byte;
         controller_status_valid = true;
     } else if (port == 0x60) {
+        if (!synthetic) {
+            delivery.port60++;
+            delivery.last_status = controller_status_valid ? controller_status : 0;
+            delivery.last_byte = byte;
+        }
         if (input_observer && !synthetic)
             input_observer(controller_status_valid ? controller_status : 0, byte,
                            !!(firmware.pic[0].isr & (1u << 1)));
@@ -140,7 +155,9 @@ static void irq_input(struct trap_frame *tf)
 {
     if (!initialized || quarantined || synthetic)
         return;
-    pending_irqs |= 1u << (tf->vector - 0x20);
+    unsigned irq = tf->vector - 0x20;
+    delivery.queued[irq == 12]++;
+    pending_irqs |= 1u << irq;
     kwait_wake_all(&wake);
 }
 
@@ -355,6 +372,7 @@ static void save_regs(struct biosvm_regs *r)
 
 static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
 {
+    int entry_irq = -1;
     struct biosvm_regs input = *regs;
     uint64_t start = deadline_after_ms(0);
     if (!test && regs->interrupt == 0x16 && ((regs->eax >> 8) & 0xFF) == 0x10) {
@@ -391,6 +409,7 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
         rc = v86_reflect(&firmware, &frame, regs->interrupt);
     } else {
         capture_pending();
+        entry_irq = v86_irq_pending(&firmware);
         rc = reflect_input_irq(&frame);
         if (!rc) {
             firmware.state = V86_DONE;
@@ -398,6 +417,8 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
         }
     }
     if (rc >= 0) {
+        if (!synthetic && (entry_irq == 1 || entry_irq == 12))
+            delivery.entries[entry_irq == 12]++;
         uint32_t old_cr3 = read_cr3();
         write_cr3(vm_as.pd_phys);
         v86_enter(&frame, &continuation);
@@ -407,6 +428,8 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
         tss_set_kernel_stack((uint32_t)(uintptr_t)vm_thread->kstack + KSTACK_SIZE);
         sti();
         rc = firmware.result;
+        if (!synthetic && firmware.state == V86_DONE && (entry_irq == 1 || entry_irq == 12))
+            delivery.done[entry_irq == 12]++;
     }
     save_regs(regs);
     if (rc < 0) {
@@ -425,10 +448,20 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
     return rc;
 }
 
+static bool input_irq_pending(void)
+{
+    /* capture_pending transfers edges into the virtual PIC. At an ISR's
+     * IRET to the sentinel another line can still be waiting there, even
+     * though the physical mailbox is empty. Honor IMR/ISR/cascade priority;
+     * checking raw IRR would spin forever on a firmware-masked request.
+     * SeaBIOS rel-1.16.3 src/hw/ps2port.c: handle_09/74 issue virtual EOIs. */
+    return pending_irqs || v86_irq_pending(&firmware) >= 0;
+}
+
 static bool worker_ready(void *arg)
 {
     (void)arg;
-    return request_pending || (!quarantined && pending_irqs);
+    return request_pending || (!quarantined && !synthetic && input_irq_pending());
 }
 
 static void worker_main(void *arg)
@@ -444,7 +477,7 @@ static void worker_main(void *arg)
             request_done = true;
             kwait_wake_all(&completion);
         }
-        if (!quarantined && !synthetic && pending_irqs) {
+        if (!quarantined && !synthetic && input_irq_pending()) {
             struct biosvm_regs r = {0};
             run_vm(&r, 100, 0);
             input_irq = true;
@@ -452,11 +485,18 @@ static void worker_main(void *arg)
         input_irq |= firmware.stats.reflected_irqs != reflected;
         if (!quarantined && !synthetic && input_service && (input_irq || deadline_passed(poll))) {
             input_service();
-            if (input_wait) kwait_wake_all(input_wait);
+            notify_input();
             poll = deadline_after_ms(10);
         }
         if (deadline_passed(poll))
             poll = deadline_after_ms(10);
+        /* Bound each batch to one standalone reflection. Even a stream of
+         * individually short ISRs must let lower priorities run. Firmware
+         * calls retain their own deadline; backlog blocks for one tick. */
+        if (!quarantined && !synthetic && input_irq_pending()) {
+            delivery.budget_yields++;
+            task_sleep_ms(1);
+        }
         kwait_wait_until(&wake, worker_ready, 0, quarantined ? deadline_after_ms(1000) : poll);
     }
 }
@@ -618,6 +658,42 @@ uint64_t biosvm_input_reflections(void)
     uint64_t count = input_reflections;
     irq_restore(f);
     return count;
+}
+
+void biosvm_account_irq(unsigned irq, bool eoi, bool handled)
+{
+    if (irq != 1 && irq != 12) return;
+    unsigned slot = irq == 12;
+    if (eoi) delivery.eois[slot]++;
+    else {
+        delivery.arrivals[slot]++;
+        if (handled) delivery.dispatched[slot]++;
+    }
+}
+
+void biosvm_input_snapshot(struct biosvm_input_diag *out)
+{
+    uint32_t f = irq_save();
+    *out = delivery;
+    out->pending = pending_irqs;
+    out->state = firmware.state;
+    out->active = continuation != 0;
+    out->disabled = quarantined || firmware.state == V86_DISABLED;
+    for (unsigned i = 0; i < 2; i++) {
+        out->imr[i] = firmware.pic[i].imr;
+        out->irr[i] = firmware.pic[i].irr;
+        out->isr[i] = firmware.pic[i].isr;
+        out->base[i] = firmware.pic[i].base;
+    }
+    out->physical_imr[0] = inb(0x21);
+    out->physical_imr[1] = inb(0xA1);
+    if (initialized) {
+        out->bda_head = *(volatile uint16_t *)P2V(0x41A);
+        out->bda_tail = *(volatile uint16_t *)P2V(0x41C);
+        volatile struct biosvm_mouse_ring *r = P2V(BIOSVM_SCRATCH + BIOSVM_MOUSE_RING);
+        out->mouse_head = r->head; out->mouse_tail = r->tail; out->mouse_lost = r->lost;
+    }
+    irq_restore(f);
 }
 
 bool biosvm_keyboard_pending(void)

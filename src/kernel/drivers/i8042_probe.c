@@ -48,8 +48,13 @@ int probe_input(void)
     rec_emit("input", "ARM", "keys=100 moves=100 buttons=10 x=2 y=-1 timeout_ms=120000 generation=%u",
              driver.generation);
     uint64_t end = deadline_after_ms(120000), quiet = deadline_after_ms(0);
+    uint64_t diagnostic_at = deadline_after_ms(10000);
     bool complete = false;
     while (!deadline_passed(end)) {
+        if (firmware && deadline_passed(diagnostic_at)) {
+            fwinput_adapter_log_delivery();
+            diagnostic_at = deadline_after_ms(10000);
+        }
         for (unsigned n = 0; n < INPUT_CAPACITY && input_read(&event); n++) {
             input_digest_add(&d, &event);
             quiet = deadline_after_ms(50);
@@ -88,6 +93,7 @@ int probe_input(void)
               q.overflow == base.overflow && q.resync == base.resync && q.duplicates == base.duplicates &&
               q.repeats == base.repeats && q.errors == base.errors && !q.keys_down && !q.buttons && !q.pending;
     if (firmware) {
+        fwinput_adapter_log_delivery();
         struct fwinput_stats stats;
         fwinput_stats(&stats);
         fwinput_backend_state(&fw);
