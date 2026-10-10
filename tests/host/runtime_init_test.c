@@ -162,6 +162,13 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 }
 
 #include "../../src/kernel/core/init.c"
+static struct storage host_storage;
+struct storage *storage_get(void) { return &host_storage; }
+void file_clock_start(int64_t build_epoch, bool rtc_qualified)
+{
+    CHECK(build_epoch == 0 && rtc_qualified);
+}
+int files_bootstrap(struct vfs *vfs) { CHECK(vfs); return 0; }
 int probe_bootlog(void) { CHECK(false); return 1; } /* registration only */
 #include "../../src/kernel/probes/safe_probe.c"
 
@@ -262,6 +269,7 @@ static int safe_run(void)
 
 int main(void)
 {
+    CHECK(CIUKI_BUILD_EPOCH == 0); /* the host build uses the header fallback */
     reset(0, false, true); disk = true; verify("FNA", 2, "ready", "ready", "ready", 0);
     reset(CBI_F_TEXT_MODE, false, false); verify("FNA", 2, "ready", "ready", "absent", 0);
     reset(0, false, true); fb_result = -EINVAL; input_result = -5; ata_result = -5; verify("FNA", 2, "failed", "failed", "failed", 3);

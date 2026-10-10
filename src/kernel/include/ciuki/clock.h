@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_CLOCK_H
 #define CIUKI_CLOCK_H
+#ifndef CIUKI_BUILD_EPOCH
+#define CIUKI_BUILD_EPOCH 0 /* host tests; the kernel build passes the recorded UTC epoch */
+#endif
 #include <ciuki/process.h>
 struct clock_seed {
     int64_t utc;
