@@ -101,3 +101,13 @@ tests (`test_records_and_manifest_include_every_payload` needs the
 expects the F2 probe order without `fd-table`). Fix in progress; the
 summaries left under `build/test-runs/` for this image are the previous
 batch's and carry no evidence for it.
+
+## Eighth image: `a2c89862…` (commit `09b4ecb`, f1-14 and f2-03 merged, host tests green)
+
+`f0-smoke` 2/2 PASS. `f1-input`: `registry` PASS, `input-fault` PASS (after
+f1-14), `input-qemu-t23` PASS — the contract stimulus through QMP (100 `a`
+make/break cycles, 100 relative moves, 10 button cycles) reached the native
+driver with the expected counts; `input-qemu-e500` FAIL (firmware backend,
+fixed by f1-15 after this run), so `framebuffer` and the firmware subcases
+stayed `not_run`. The F2 suites of this batch were stopped by the lead once
+their F1 prefix hit the same e500 case; no F2 case ran.
