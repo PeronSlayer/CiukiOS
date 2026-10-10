@@ -49,3 +49,16 @@ prerequisite (`tests/host`) failed in
 been merged in the meantime and registers eight F1 probes where the test
 expected the earlier table. Both defects go to directive f1-10. No F2 probe
 has run in the guest yet.
+
+## Third image: `0ba29b3e…` (commit `9a09809`, drivers started at boot by f1-08)
+
+`f0-smoke` FAIL at once: `drivers_init` emits `probe=boot event=DATA
+group=activation…` records before the boot probe's BEGIN, which the evidence
+grammar forbids ("unknown event or missing BEGIN"). A manual 45 s boot with a
+plain serial capture (`qemu-t23` settings, selector `f0:boot run=00000001`)
+shows the drivers themselves come up: framebuffer `result=ready` (boot
+console), input `backend=native result=ready`, `[ata0] identified=1`,
+`[ata1] identified=0`, ATA `result=ready present=1`; then BEGIN, the usual
+boot records, READY at tick 112, `END status=PASS`. Directive f1-11 moves the
+activation evidence after BEGIN (ledger in the kernel, records from the boot
+probe).
