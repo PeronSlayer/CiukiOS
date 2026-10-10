@@ -421,3 +421,46 @@ with an LFB the case must map to `not_run`, hardware-tier follow-up),
 captures serve as local test fixtures (`tests/host/fixtures/physical/`,
 log files ignored by git, tests skip without them) because physical logs
 are never published.
+
+## Hardware: third unattended sweep on the ThinkPad T23 (image `6ed146ab…`, commit `96440d6`, capture `77777777`, operator at the prompts)
+
+`BOOT.CFG` `safe=0 serial=1` and `probe=all:sweep run=77777777`
+(`build/f0/ciukios-hw.img`, the `5fe9446d…` tree with a different
+`BOOT.CFG`); 35 boots, one operator power cycle after the F0 `panic`,
+`SWEEP_END passed=29 failed=4 not_run=2`. Changes against the second
+sweep: `fat-read` PASS with the `fixtures_absent` `not_run` subcase (the
+cursor write is no longer counted, f1-32); `fd-table` PASS with
+`exdev`/`readonly` `not_run reason=second_volume_absent` (f2-21);
+`signals-fault` `fault-repair` `entries=7 returns=7` with the real `#AC`
+(f2-22 confirmed on hardware); `app-gate` PASS; the operator prompts of
+f1-31 appeared and were answered. Still failing:
+
+- `input`: the operator produced `characters=113 key_transitions=200
+  button_transitions=74 events=3150 x=3667 y=-4760`, queue `overflow=0
+  resync=0 duplicates=0 repeats=0 errors=0 stuck_keys=0`, lease retained;
+  FAIL `stimulus_or_lease` because the verdict requires the exact QEMU
+  totals (100 `a`, 20 button transitions, `x=200 y=-100`): directive f1-34.
+- `crash-isolation`: 100 victim cycles PASS (`desktop_restarts=0`); the
+  interaction counted `keys=8 motion=61 buttons=0`, then `case=step
+  command=6 … live=0 reason=server_exit:256`: the desktop exited with
+  status 1 under the operator's event stream (the gate loop fails a
+  report when a client still has pending transmissions); the driver saw
+  74 button transitions in the same sweep: directive f1-34.
+- `signals-fault`: the only non-conforming subcase is `channel-eintr`
+  (`entries=0 returns=0 result=0 releases=0 handler_completion=0`,
+  survivor progress `382→3403`): the injection predicate never held
+  within the 2 s deadline and the probe stopped the payload: directive
+  f2-23.
+- `safe`: as in the earlier sweeps the step runs with `safe_mode=0`
+  (the cursor is not persisted in safe mode); `optional_activations=2`,
+  `subcase=required owner=i8042 errors=1`, FAIL `safe_contract`.
+
+`panic` and the first `mount-crash` boot are `not_run
+reason=reset_before_completion` as designed. The import of this capture
+was refused with `sweep boot lacks BOOT.CFG provenance`: the boot after
+step 18 (`cache`) carries `L:SELECT_SOURCE=fg` after a byte loss at the
+self-reboot (34 intact provenance lines out of 35 boots). The
+`video-fallback` FAIL of the `66666666` import is a QEMU-only case
+(`device_exceptions` `vga: none`). Both import rules are directive
+f1-35; the results above are read from the capture until the import
+lands.
