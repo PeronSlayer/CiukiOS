@@ -136,8 +136,14 @@ states both in the directive.
 
 ```bash
 codex exec -m gpt-6.1-sol -c model_reasoning_effort=high \
-  --sandbox read-only --ephemeral -o <scratch>/answer.md "<prompt>"
+  --sandbox read-only --ephemeral -o <scratch>/answer.md "<prompt>" </dev/null
 ```
+
+Always redirect stdin from `/dev/null`: `codex exec` also reads its prompt
+from a non-TTY stdin and blocks forever when the harness keeps that pipe
+open (no session file appears, 0 % CPU). `--search` goes before `exec`.
+Codex cannot write a worktree's shared `.git`: the lead runs `git merge`
+and commits; Codex resolves conflict markers and edits files only.
 
 The `codex` MCP bridge (claude-codex-bridge 0.3.1) is fine for quick questions,
 but it cannot set effort (it uses `~/.codex/config.toml`), its model list is

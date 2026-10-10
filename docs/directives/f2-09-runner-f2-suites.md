@@ -34,7 +34,13 @@
    status, exclusions and resident/committed high-water fields (values are
    supplied by the probes; the runner records what it receives and marks
    missing fields).
-3. **Suites**: `f2-process.json` (elf-load, spawn-wait, fd-table; 180/180/
+3. **Prerequisite rule**: a case whose outcome is the operator-confirmation
+   FAIL (`uart-absent-*`: screen evidence confirmed outside the runner) MUST
+   NOT count as a failed prerequisite for later cases; mark such cases
+   `operator_confirmation` in the suite JSON and let the runner record them
+   without stopping (observed on 2026-10-11: `f1-input` left its 11 F1 cases
+   `not_run` because of it). Apply this to the F1 suites too.
+4. **Suites**: `f2-process.json` (elf-load, spawn-wait, fd-table; 180/180/
    300 s), `f2-runtime.json` (mmap, signals-fault, threads-wait, libc-smoke;
    180/180/300/180 s), `f2-desktop.json` (crash-isolation normal, no-LFB
    and safe fallback; 300 s), `f2-app.json` (app-gate; 900 s) on the icount
