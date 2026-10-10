@@ -94,6 +94,65 @@ def split_boots(raw):
     return [raw[a:b] for a, b in zip(starts, [*starts[1:], len(raw)])]
 
 
+def sweep_provenance(boot, records, damaged, gaps, previous):
+    """Infer only damaged loader provenance from adjacent verified cursors."""
+    startup = boot.split(b'Ciuki VMM F0 build ', 1)[0].splitlines()
+    lines = [line for line in startup if line.startswith(b'L:SELECT_SOURCE=')]
+    # These are valid loader sources, not damaged spellings of cfg.
+    if any(line in (b'L:SELECT_SOURCE=menu', b'L:SELECT_SOURCE=fw_cfg',
+                    b'L:SELECT_SOURCE=none') for line in lines):
+        raise EvidenceError('sweep boot has non-BOOT.CFG provenance')
+    begins = [r for r in records if r['probe'] == 'sweep' and r['event'] == 'BEGIN']
+    cursor = begins[0] if len(begins) == 1 and re.fullmatch(
+        '[0-9]{1,2}', begins[0].get('step', '')) and begins[0].get('phase') in ('0', '1', '2', '3') else None
+    if lines == [b'L:SELECT_SOURCE=cfg']:
+        return {'provenance': 'cfg', 'provenance_raw_line': 'L:SELECT_SOURCE=cfg'}, cursor
+    # A truncated loader marker is itself serial damage (T23: ELECT_SOURCE).
+    fragments = [line for line in startup if re.match(rb'L:[A-Z_]*SOURCE=', line)
+                 and not line.startswith(b'L:SELECT_SOURCE=')]
+    if not lines and not (fragments or damaged or any(g['first'] == 1 for g in gaps)):
+        raise EvidenceError('sweep boot lacks BOOT.CFG provenance')
+    raw_line = (lines or fragments or [None])[0]
+    detail = {'provenance': 'damaged',
+              'provenance_raw_line': raw_line.decode('ascii', errors='backslashreplace') if raw_line else None,
+              'provenance_raw_hex': raw_line.hex() if raw_line else None}
+    continuous = False
+    if previous and cursor:
+        prior, prior_records = previous
+        if prior and (cursor['run'], cursor.get('phase')) == (prior['run'], prior.get('phase')):
+            step, last = int(cursor['step']), int(prior['step'])
+            repeated = step == last and any(
+                r['event'] == 'ARM' and r['probe'] in ('fat-write', 'mount-crash', 'bootlog')
+                and r.get('action') == {'fat-write': 'cold_reboot', 'mount-crash': 'crash_cut',
+                                        'bootlog': 'cold_reboot'}[r['probe']]
+                and any(c['event'] == 'BEGIN' and c['probe'] == r['probe'] for c in records)
+                and not any(c['probe'] == r['probe'] and c['event'] in ('END', 'PANIC')
+                            for c in prior_records)
+                for r in prior_records)
+            continuous = step == last + 1 or repeated
+    if continuous:
+        detail['provenance_inferred_from'] = 'sweep continuity'
+        return detail, cursor
+    detail['reason'] = 'provenance_damaged'
+    return detail, None
+
+
+def inapplicable_variants(case, metadata):
+    """Physical configuration must explicitly match case machine overrides."""
+    mismatches = []
+    devices = metadata.get('devices', {})
+    if not isinstance(devices, dict): raise EvidenceError('devices must be an object')
+    variants = metadata.get('machine_variants', {})
+    if not isinstance(variants, dict): raise EvidenceError('machine_variants must be an object')
+    requirements = [(k, v, devices) for k, v in case.get('device_exceptions', {}).items()]
+    requirements += [(k, case[k], variants) for k in ('fault', 'disk_cache') if k in case]
+    for key, value, declared in requirements:
+        if key not in declared or declared[key] != value:
+            rendered = value if isinstance(value, str) else json.dumps(value, sort_keys=True, separators=(',', ':'))
+            mismatches.append(f'device_exception_not_applicable:{key}={rendered}')
+    return mismatches
+
+
 def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256=None):
     """Import all boots once, then apply each case's unchanged predicates."""
     # The runner parser also verifies bounded supervisor console framing.
@@ -124,6 +183,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
         if selection['probe'] not in ('all', 'core', 'sweep'): names = (selection['probe'],)
         approved.setdefault(selection['run'], set()).update((*names, 'sweep'))
     groups = {}; summaries = []; completions = {}; boot_evidence = []; boots = split_boots(log.read_bytes())
+    previous = None
     for number, boot in enumerate(boots):
         seq = 0; run = None; parsers = {}; panic = False; gaps = []; damaged = []
         build = re.search(rb'Ciuki VMM F0 build ([A-Za-z0-9_.+-]+) - CiukiOS', boot)
@@ -228,14 +288,18 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                 p.capture_error = str(e)
                 if r not in p.records: p.records.append(r)
             panic = r['event'] == 'PANIC'
-        if not records and not damaged: continue # failed menu attempts in the real T23 capture
-        if sweep and b'L:SELECT_SOURCE=cfg' not in boot.splitlines():
-            raise EvidenceError('sweep boot lacks BOOT.CFG provenance')
+        if not records and not damaged:
+            previous = None
+            continue # failed menu attempts cannot establish sweep continuity
+        provenance = {}
+        if sweep:
+            provenance, cursor = sweep_provenance(boot, records, damaged, gaps, previous)
+            previous = (cursor, records) if cursor else None
         if build is not None:
             if build[1].decode() != metadata['build_id']: raise EvidenceError('physical boot build mismatch')
         elif not any(r.get('build_id') == metadata['build_id'] for r in records):
             raise EvidenceError('physical boot does not identify verified build')
-        boot_evidence.append({'boot':number + 1, 'records_lost':max(len(damaged), sum(g['last'] - g['first'] + 1 for g in gaps)),
+        boot_evidence.append({'boot':number + 1, **provenance, 'records_lost':max(len(damaged), sum(g['last'] - g['first'] + 1 for g in gaps)),
                               'sequence_gaps':gaps, 'last_seq':seq, 'damaged_records':damaged,
                               'parser_errors':{probe:p.capture_error for probe,p in parsers.items()
                                                if hasattr(p, 'capture_error')}})
@@ -261,6 +325,11 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                   'outcome': 'not_run', 'reason': 'probe absent from capture',
                   'operator_confirmation': False}
         observations = groups.get(probe, [])
+        variants = inapplicable_variants(case, metadata)
+        unproven = any(b.get('reason') == 'provenance_damaged' and (
+            b['boot'] in [n + 1 for n, _ in observations] or
+            any(r['boot'] == b['boot'] for r in result['sweep_records'])) for b in boot_evidence)
+        result['device_exceptions_not_applicable'] = variants
         if not observations and result['not_run_reasons']:
             result['reason'] = result['not_run_reasons'][0]
         result['not_run_subcases'] = [s for _, p in observations for s in getattr(p, 'operator_subcases', [])]
@@ -273,7 +342,11 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
             absent_fixtures = probe == 'mount-crash' and any(
                 r.get('case') == 'corrupt_fixtures' and r.get('status') == 'not_run'
                 for _, p in observations for r in p.records) and not case.get('crash_sequence')
-            if absent_fixtures:
+            if variants:
+                result['reason'] = variants[0]
+            elif unproven:
+                result['reason'] = 'provenance_damaged'
+            elif absent_fixtures:
                 result['reason'] = 'fixtures_absent'
             elif len(observations) != len(declared):
                 result['reason'] = 'capture boot count differs from case declaration'
@@ -311,20 +384,22 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                         result['outcome'] = 'fail'; result['reason'] = str(e); break
                 if result['outcome'] == 'pass' and any(case.get(k) for k in ('checks', 'digests', 'crash_sequence', 'desktop_screen')):
                     result['outcome'] = 'not_run'; result['reason'] = 'independent disk/screen observation required'
+        if variants or unproven:
+            result['outcome'] = 'not_run'
+            result['reason'] = variants[0] if variants else 'provenance_damaged'
+            result['not_run_reasons'].extend(r for r in variants if r not in result['not_run_reasons'])
         if result['operator_confirmation_required']:
             confirmed = metadata.get('case_confirmations', {}).get(result['case']) is True
             result['operator_confirmation'] = confirmed
-            if not confirmed and result['outcome'] != 'fail':
-                result['outcome'] = 'not_run'; result['reason'] = 'operator_absent'
-            if not confirmed and result['outcome'] != 'fail':
+            if not confirmed and result['outcome'] != 'fail' and not (variants or unproven):
                 result['outcome'] = 'not_run'; result['reason'] = 'operator_absent'
         result['evidence_outcome'] = result['outcome']; result['evidence_reason'] = result['reason']
         if result['outcome'] == 'not_run' and result['reason'] not in result['not_run_reasons']:
             result['not_run_reasons'].append(result['reason'])
         result['prerequisite'] = {'satisfied':not bool(blocked), 'failed_case':blocked}
-        if blocked:
+        if blocked and not (variants or unproven):
             result['outcome'] = 'not_run'; result['reason'] = 'prerequisite failed: ' + blocked
-        elif failed_prerequisite(case, result) and not (
+        elif not blocked and not variants and failed_prerequisite(case, result) and not (
                 probe == 'fat-read' and result['reason'] == 'fixtures_absent' or
                 result['outcome'] == 'not_run' and result['reason'] == 'operator_absent' and operator_absent):
             blocked = result['case']

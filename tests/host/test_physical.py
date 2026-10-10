@@ -117,7 +117,11 @@ class PhysicalImportTests(unittest.TestCase):
         self.assertIn('second_volume_absent',fd['not_run_reasons'])
         self.assertTrue(fd['observed']); self.assertFalse(fd['prerequisite']['satisfied'])
         self.assertEqual(next(r for r in results if r['case'] == 'mount-bad-bpb')['evidence_reason'],'fixtures_absent')
-        self.assertEqual(next(r for r in results if r['case'] == 'uart-absent-qemu-t23')['evidence_reason'],'operator_absent')
+        for name, key in (('video-fallback', 'vga'), ('uart-absent-qemu-t23', 'serial')):
+            result = next(r for r in results if r['case'] == name)
+            self.assertEqual(result['outcome'], 'not_run')
+            self.assertEqual(result['evidence_outcome'], 'not_run')
+            self.assertEqual(result['reason'], f'device_exception_not_applicable:{key}=none')
         panic = next(r for r in results if r['case'] == 'panic')
         self.assertEqual(panic['boots'],[10]); self.assertEqual(panic['evidence_outcome'],'pass')
         self.assertIn('reset_before_completion',panic['not_run_reasons'])
@@ -126,6 +130,137 @@ class PhysicalImportTests(unittest.TestCase):
         self.assertEqual(next(r for r in results if r['case'] == 'mount-crash-reboot')['boots'],[23,24])
         self.assertEqual(next(r for r in results if r['case'] == 'bootlog')['boots'],[25,26])
         self.assertEqual(next(r for r in results if r['case'] == 'app-gate-qemu-t23')['evidence_outcome'],'pass')
+
+    @unittest.skipUnless((FIXTURES/'77777777'/'f0.log').exists(), 'real T23 capture fixture is local only (never published)')
+    def test_real_damaged_provenance_fixture_imports_all_boots(self):
+        import run as runner
+        capture = FIXTURES/'77777777'
+        metadata = json.loads((capture/'acquisition.json').read_text())
+        cases = runner.load_suite('f2-all')['cases']
+        results = import_sweep(capture, self.hash, cases, image_sha256=metadata['write_sha256'])
+        self.assertEqual(len(results), len(cases))
+        evidence = results[0]['boot_evidence']
+        self.assertEqual(len(evidence), 35)
+        self.assertTrue(all(b['records_lost'] == 0 for b in evidence))
+        damaged = [b for b in evidence if b['provenance'] == 'damaged']
+        self.assertEqual([b['boot'] for b in damaged], [14, 20])
+        self.assertEqual([b['provenance_raw_line'] for b in damaged],
+                         ['L:ELECT_SOURCE=cfg', 'L:SELECT_SOURCE=fg'])
+        for boot in damaged:
+            self.assertEqual(boot['provenance_inferred_from'], 'sweep continuity')
+            self.assertEqual(bytes.fromhex(boot['provenance_raw_hex']).decode(), boot['provenance_raw_line'])
+        self.assertEqual({k: results[0]['sweep_summary'][0][k] for k in ('passed', 'failed', 'not_run')},
+                         {'passed': '29', 'failed': '4', 'not_run': '2'})
+        self.assertEqual(next(r for r in results if r['case'] == 'app-gate-qemu-t23')['evidence_outcome'], 'pass')
+
+    def cursor_capture(self, source=b'L:SELECT_SOURCE=fg', step=1, first_step=0, probe='fpu', arm=False):
+        self.sweep_capture()
+        banner = b'L:CPU signature=000006b1\n%s\nCiuki VMM F0 build 12ab34cd - CiukiOS\n'
+        def record(p, seq, event, extra=''):
+            return f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe={p} event={event}{extra}\n'.encode()
+        first_probe = probe if arm else 'boot'
+        first = banner % b'L:SELECT_SOURCE=cfg'
+        first += record('sweep', 1, 'BEGIN', f' phase=3 step={first_step}')
+        first += record(first_probe, 2, 'BEGIN')
+        action = 'crash_cut' if probe == 'mount-crash' else 'cold_reboot'
+        first += record(first_probe, 3, 'ARM' if arm else 'END', f' action={action}' if arm else ' status=PASS')
+        second = banner % source
+        second += record('sweep', 1, 'BEGIN', f' phase=3 step={step}')
+        second += record(probe, 2, 'BEGIN') + record(probe, 3, 'END', ' status=PASS')
+        (self.capture/'f0.log').write_bytes(first + second)
+        return [{'id': probe, 'probe': probe, 'expected': {'terminal': 'END', 'predicates': []}}], first, second
+
+    def test_damaged_provenance_requires_adjacent_same_run_cursor(self):
+        cases, first, second = self.cursor_capture()
+        result = import_sweep(self.capture, self.hash, cases)[0]
+        self.assertEqual(result['outcome'], 'pass')
+        self.assertEqual(result['boot_evidence'][1]['provenance_inferred_from'], 'sweep continuity')
+        for raw in (second, first + second.replace(b'step=1', b'step=3'),
+                    first.replace(b'phase=3', b'phase=2') + second):
+            with self.subTest(raw=raw):
+                (self.capture/'f0.log').write_bytes(raw)
+                result = import_sweep(self.capture, self.hash, cases)[0]
+                self.assertEqual(result['outcome'], 'not_run')
+                self.assertEqual(result['evidence_reason'], 'provenance_damaged')
+                self.assertNotIn('provenance_inferred_from', result['boot_evidence'][-1])
+        self.metadata['selectors'] = ['all:sweep run=12345678', 'all:sweep run=87654321']
+        (self.capture/'acquisition.json').write_text(json.dumps(self.metadata))
+        (self.capture/'f0.log').write_bytes(first.replace(b'run=12345678', b'run=87654321') + second)
+        self.assertEqual(import_sweep(self.capture, self.hash, cases)[0]['reason'], 'provenance_damaged')
+
+    def test_intact_alternate_provenance_refuses_even_with_continuity(self):
+        for source in (b'menu', b'fw_cfg', b'none'):
+            cases, _, _ = self.cursor_capture(b'L:SELECT_SOURCE=' + source)
+            with self.subTest(source=source), self.assertRaisesRegex(EvidenceError, 'non-BOOT.CFG'):
+                import_sweep(self.capture, self.hash, cases)
+
+    def test_damaged_non_ascii_source_retains_original_bytes(self):
+        cases, _, _ = self.cursor_capture(b'L:SELECT_SOURCE=\xffg')
+        result = import_sweep(self.capture, self.hash, cases)[0]
+        self.assertEqual(result['outcome'], 'pass')
+        self.assertEqual(bytes.fromhex(result['boot_evidence'][1]['provenance_raw_hex']), b'L:SELECT_SOURCE=\xffg')
+
+    def test_missing_source_with_damaged_record_retains_loss_refusal(self):
+        cases, first, second = self.cursor_capture(b'')
+        second = second.replace(b'probe=fpu event=END', b'probe=fpu event=EN D')
+        (self.capture/'f0.log').write_bytes(first + second)
+        result = import_sweep(self.capture, self.hash, cases)[0]
+        self.assertEqual(result['reason'], 'records_lost=1')
+        self.assertEqual(result['boot_evidence'][1]['provenance_inferred_from'], 'sweep continuity')
+
+    def test_missing_provenance_requires_damage_and_continuity(self):
+        cases, first, second = self.cursor_capture(b'')
+        with self.assertRaisesRegex(EvidenceError, 'lacks BOOT.CFG'):
+            import_sweep(self.capture, self.hash, cases)
+        # Loss of the first record is evidence of damage at the boot start.
+        second = second.replace(b'seq=000001 probe=sweep', b'seq=000002 probe=sweep')
+        second = second.replace(b'seq=000002 probe=fpu', b'seq=000003 probe=fpu')
+        second = second.replace(b'seq=000003 probe=fpu event=END', b'seq=000004 probe=fpu event=END')
+        (self.capture/'f0.log').write_bytes(first + second)
+        result = import_sweep(self.capture, self.hash, cases)[0]
+        self.assertEqual(result['reason'], 'records_lost=1')
+        self.assertEqual(result['boot_evidence'][1]['provenance_inferred_from'], 'sweep continuity')
+        self.assertIsNone(result['boot_evidence'][1]['provenance_raw_line'])
+        (self.capture/'f0.log').write_bytes(second)
+        self.assertEqual(import_sweep(self.capture, self.hash, cases)[0]['reason'], 'provenance_damaged')
+
+    def test_repeated_cursor_is_only_allowed_for_armed_two_boot_probe(self):
+        for probe, arm, inferred in (('fat-write', True, True), ('bootlog', True, True), ('mount-crash', True, True),
+                                     ('fpu', True, False), ('fat-write', False, False)):
+            cases, _, _ = self.cursor_capture(step=0, probe=probe, arm=arm)
+            if arm and probe in ('fat-write', 'bootlog', 'mount-crash'):
+                cases[0]['boots'] = [{'expected': {'terminal': 'ARM'}}, {'expected': {'terminal': 'END'}}]
+            result = import_sweep(self.capture, self.hash, cases)[0]
+            self.assertEqual('provenance_inferred_from' in result['boot_evidence'][1], inferred)
+            if not inferred: self.assertEqual(result['reason'], 'provenance_damaged')
+
+    def test_device_exception_metadata_controls_predicates_and_prerequisites(self):
+        cases = self.sweep_capture()
+        cases[0]['device_exceptions'] = {'vga': 'none'}
+        cases[0]['expected']['predicates'] = [{'where': {'event': 'DATA'}, 'fields': {'tick': {'eq': 1}}}]
+        for devices, outcome in (({}, 'not_run'), ({'vga': 'std'}, 'not_run'), ({'vga': 'none'}, 'fail')):
+            self.metadata['devices'] = devices
+            (self.capture/'acquisition.json').write_text(json.dumps(self.metadata))
+            result = import_sweep(self.capture, self.hash, cases)
+            self.assertEqual(result[0]['outcome'], outcome)
+            if outcome == 'not_run':
+                self.assertEqual(result[0]['reason'], 'device_exception_not_applicable:vga=none')
+                self.assertEqual(result[0]['device_exceptions_not_applicable'], [result[0]['reason']])
+                self.assertEqual(result[1]['outcome'], 'pass')
+            else: self.assertEqual(result[1]['outcome'], 'not_run')
+        cases[0]['expected']['predicates'] = []
+        (self.capture/'acquisition.json').write_text(json.dumps(self.metadata))
+        self.assertEqual(import_sweep(self.capture, self.hash, cases)[0]['outcome'], 'pass')
+
+    def test_qemu_block_variants_require_explicit_physical_configuration(self):
+        for key, value in (('disk_cache', 'writethrough'), ('fault', {'layer': 'host-block-backend', 'errno': 5})):
+            cases = self.sweep_capture(); cases[1][key] = value
+            result = import_sweep(self.capture, self.hash, cases)[1]
+            self.assertEqual(result['outcome'], 'not_run')
+            self.assertTrue(result['reason'].startswith('device_exception_not_applicable:' + key + '='))
+            self.metadata['machine_variants'] = {key: value}
+            (self.capture/'acquisition.json').write_text(json.dumps(self.metadata))
+            self.assertEqual(import_sweep(self.capture, self.hash, cases)[1]['outcome'], 'pass')
 
     def test_startup_fallbacks_are_per_boot_and_do_not_split_twice(self):
         cases = self.sweep_capture(); path = self.capture/'f0.log'; raw = path.read_bytes()
