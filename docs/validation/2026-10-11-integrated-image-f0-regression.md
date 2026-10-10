@@ -378,3 +378,24 @@ f1-27 named the failing keyboard step on the first boot. Image
 `dfa78c3e…` (commit `f86f350`, f1-29): QEMU input cases PASS and the
 runner's `sweep-smoke` case PASS (ten boots under `-icount`, final panic
 recovered).
+
+## Hardware: second unattended sweep on the ThinkPad T23 (image `90477716…`, commit `abcd677`, capture `66666666`)
+
+35 boots, one operator power cycle after the F0 `panic`, `SWEEP_END
+passed=27 failed=6 not_run=2`. Changes against the first sweep: the
+native input driver initialises (`input result=ready`, all 15 setup
+steps `result=0`, `iface_kbd` reply `0xFA` accepted); `fd-table` no
+longer double-faults (`case=stack task=probes size=16384
+high_water=8356`) and matches every operation except the fixture-backed
+`exdev`/`readonly` pair (`missing_second_volume`); `signals-fault` now
+runs to its verdict with the real `#AC` (`raw_vector=17`) but
+`fault-repair` counts `entries=5 returns=4`; `app-gate` PASS on hardware
+(`lua-basic exit=0 final_ok=1`, `lua-supplement exit=0 final_ok=1`);
+`crash-isolation` with the real desktop: 100 cycles PASS, interaction
+`input_events=0` (no operator). Still failing for infrastructure
+reasons: `input` (`stimulus_or_lease`, no operator), `fat-read` (the
+sweep's cursor write counts as a volume write, so the `fixtures_absent`
+path is never reached), `safe` (cursor not persisted in safe mode).
+Everything else as in the first sweep. The import of this capture with
+the runner was refused (`build_id` field, then the per-boot sequence
+check): directive f1-33.
