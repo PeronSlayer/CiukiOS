@@ -67,7 +67,8 @@ int desk_parse(const struct ciuki_message *m, int client,
                const struct ciuki_surface_info *s, struct desk_packet *p)
 {
     if (m->length < 4 || m->length > 256 || m->fd_count > 4 || m->reserved ||
-        m->data[0] != DESK_VERSION || m->data[2] || m->data[3]) return 0;
+        (m->data[0] != DESK_VERSION && m->data[0] != DESK_SHELL_VERSION) ||
+        m->data[2] || m->data[3]) return 0;
     for (unsigned i = m->length; i < 256; i++) if (m->data[i]) return 0;
     for (unsigned i = m->fd_count; i < 4; i++) if (m->fds[i]) return 0;
     for (unsigned i = 0; i < m->fd_count; i++) if (m->fds[i] < 0) return 0;
@@ -81,6 +82,9 @@ int desk_parse(const struct ciuki_message *m, int client,
         break;
     case DESK_CLOSED:
         if (client) return 0;
+        break;
+    case DESK_CLOSE_REQUEST:
+        if (client || m->data[0] != DESK_SHELL_VERSION) return 0;
         break;
     case DESK_PING: case DESK_PONG:
         n = 8;

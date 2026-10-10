@@ -2356,6 +2356,1740 @@
           }
         ]
       }
+    },
+    {
+      "id": "desktop-shell-qemu-t23",
+      "probe": "crash-isolation",
+      "profile": "qemu-t23",
+      "selector": "f2:crash-isolation run={run_id} server=desktop",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "server": "desktop"
+            },
+            "fields": {
+              "reason": "ok",
+              "stage": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "pid",
+              "survivor",
+              "control",
+              "ticks"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid",
+              "server_pgid",
+              "survivor_pgid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "desktop"
+            },
+            "fields": {
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "pgid",
+              "kind",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "desktop"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
+              "replies": {
+                "ge": 100
+              },
+              "ticks": {
+                "ge": 100
+              },
+              "unauthorized_access": {
+                "eq": 0
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restored",
+              "server": "desktop"
+            },
+            "fields": {
+              "equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "desktop"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "desktop"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "spaces",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_cr3",
+              "survivor_cr3"
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "post_fault_input",
+              "server": "desktop"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "changed": {
+                "eq": 1
+              },
+              "keys": {
+                "eq": 4
+              }
+            },
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          }
+        ]
+      },
+      "desktop_screen": true,
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f12"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f12"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -2048
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 2048
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 40
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -16
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -142
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -2048
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -2048
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 60
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 80
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 60
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 60
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 212
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 2
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -160
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 120
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "desktop-shell-qemu-e500",
+      "probe": "crash-isolation",
+      "profile": "qemu-e500",
+      "selector": "f2:crash-isolation run={run_id} server=desktop",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "server": "desktop"
+            },
+            "fields": {
+              "reason": "ok",
+              "stage": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "pid",
+              "survivor",
+              "control",
+              "ticks"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid",
+              "server_pgid",
+              "survivor_pgid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "desktop"
+            },
+            "fields": {
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "pgid",
+              "kind",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "desktop"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
+              "replies": {
+                "ge": 100
+              },
+              "ticks": {
+                "ge": 100
+              },
+              "unauthorized_access": {
+                "eq": 0
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restored",
+              "server": "desktop"
+            },
+            "fields": {
+              "equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "desktop"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "desktop"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "spaces",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_cr3",
+              "survivor_cr3"
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "post_fault_input",
+              "server": "desktop"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "changed": {
+                "eq": 1
+              },
+              "keys": {
+                "eq": 4
+              }
+            },
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          }
+        ]
+      },
+      "desktop_screen": true,
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f12"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f12"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -2048
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 2048
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 40
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -16
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -142
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -2048
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -2048
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 60
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 80
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 60
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 60
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 212
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 2
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -160
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 120
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        }
+      ]
     }
   ],
   "contract": "docs/design/f2-acceptance.md",

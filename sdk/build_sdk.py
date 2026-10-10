@@ -29,6 +29,7 @@ def flags():
 
 def generate(inc,lib,work):
     abi=ABI.read_text(); shutil.copy2(ABI,inc/'ciuki/abi.h')
+    shutil.copy2(ROOT/'apps/desktop/protocol.h',inc/'ciuki/desktop.h')
     calls=re.findall(r'CIUKI_SYS_(\w+)\s*=\s*(\d+)',abi)
     defs=['/* Generated from ciuki/abi.h. */']
     for n,v in calls: defs.append(f'#define CIUKI_SYS_{n} {v}')

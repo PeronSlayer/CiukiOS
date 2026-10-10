@@ -1,16 +1,17 @@
 /* SPDX-License-Identifier: MIT
- * F2 desktop protocol v1. Byte encoding, independent of C alignment/padding.
- * Install as ciuki/desktop.h when the lead extends the SDK overlay. */
+ * F2 desktop protocol v1, with negotiated v2 close requests.
+ * Byte encoding, independent of C alignment/padding. SDK: ciuki/desktop.h. */
 #ifndef CIUKI_APP_DESKTOP_PROTOCOL_H
 #define CIUKI_APP_DESKTOP_PROTOCOL_H
 #include <ciuki/abi.h>
 #include <stdint.h>
 #define DESK_VERSION 1u
+#define DESK_SHELL_VERSION 2u
 #define DESK_TITLE_MAX 63u
 enum desk_opcode {
     DESK_HELLO = 1, DESK_CREATE_WINDOW, DESK_DAMAGE, DESK_MOVE, DESK_CLOSE,
     DESK_PING, DESK_CONFIGURE, DESK_KEY, DESK_MOTION, DESK_BUTTON,
-    DESK_FOCUS, DESK_PONG, DESK_CLOSED
+    DESK_FOCUS, DESK_PONG, DESK_CLOSED, DESK_CLOSE_REQUEST
 };
 struct desk_packet {
     unsigned opcode;

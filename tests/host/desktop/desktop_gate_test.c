@@ -3,6 +3,11 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE 1
 #include "desktop.h"
+#undef DT_UNKNOWN
+#undef DT_CHR
+#undef DT_DIR
+#undef DT_REG
+#include <dirent.h>
 #include "gate.h"
 #include <stdbool.h>
 #include <assert.h>
@@ -199,7 +204,11 @@ int close(int fd) {
 }
 int munmap(void *p,size_t n) { (void)p;(void)n;return 0; }
 pid_t waitpid(pid_t pid,int *status,int flags) {assert(pid==victim_live && victim_dead && flags==WNOHANG);*status=(faults%5==2) ? SIGPIPE : SIGSEGV;desktop_spawn_host_reap(pid);victim_live=victim_dead=0;reaped++;return pid;}
-int clock_gettime(clockid_t clock,struct timespec *out) {assert(clock==CLOCK_MONOTONIC);out->tv_sec=0;out->tv_nsec=1000000;return 0;}
+int clock_gettime(clockid_t clock,struct timespec *out)
+{
+    assert(clock==CLOCK_MONOTONIC || clock==CLOCK_REALTIME);
+    out->tv_sec=clock==CLOCK_REALTIME ? 43210 : 0;out->tv_nsec=1000000;return 0;
+}
 int nanosleep(const struct timespec *t,struct timespec *rest)
 { (void)rest;assert(t->tv_nsec==1000000);if (running && !remaining && pongs==running*100 && !page.command) command(GATE_SNAPSHOT);return 0; }
 int main(int argc,char **argv)

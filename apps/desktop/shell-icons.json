@@ -1,0 +1,18 @@
+{
+  "archive_sha256": "6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e",
+  "conversion": "original 16x16 PNG RGBA8, no resizing; AARRGGBB",
+  "header_sha256": "e97593f917b83b006bb0904164e41351d9d082c305f0521d50edaefc60347cd2",
+  "icons": {
+    "restart": {
+      "rgba_sha256": "f12e062acd693ec2661b474cf41350a01663b906b99a567fe3a080e1a1869527",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/system-shutdown.png",
+      "source_sha256": "2709c131860a13ba3dc6dcc3d598a628ec5141875049054a7512a17792d0dd9e"
+    },
+    "run": {
+      "rgba_sha256": "8bacf757eafe0d637b10cf4380e6dab275769ab00895d68b8b1e4ea7e732a6ae",
+      "source": "tango-icon-theme-0.8.90/16x16/mimetypes/application-x-executable.png",
+      "source_sha256": "21a8ff4472d9a9ae2a67dbe89603cb724e8ca0c0fae80a7e0a7ec399fb5aed76"
+    }
+  },
+  "license": "Tango 0.8.90 Public Domain"
+}

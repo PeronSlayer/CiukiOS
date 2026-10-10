@@ -1,6 +1,95 @@
 # F2 ring-3 desktop and client protocol
 
-This is the f2-08 implementation handoff, not QEMU or hardware acceptance.
+## f2-30 decisions (2026-10-11)
+
+Research precedes the shell implementation. The [POSIX spawn specification](https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_spawn.html)
+inherits eligible descriptors; this repository's `ciuki_spawn` admits explicit
+fd mappings and the POSIX subset expressly excludes `posix_spawn`. The shell
+uses `ciuki_spawn`, rather than adding a conflicting SDK wrapper. Ordinary menu
+children inherit the desktop's supervisor-created process group (flags=0), so
+the existing group-local `kill` can send SIGTERM after a two-second close grace.
+The crash gate retains NEW_GROUP and its original transport and pacing.
+
+Choose a sorted `/bin` scan, bounded to 16 regular i386 ELF candidates, excluding
+`desktop` itself. Validate printable, bounded basenames and an ELF32 little-endian
+ET_EXEC/i386 prefix before admitting a menu entry; the kernel loader remains the
+authority on executable validity. Children receive only stdio and an explicit
+channel at fd 3; graphical clients use `--channel-fd=3`. Non-graphical programs
+receive no graphical option and can exit without creating a window. No image
+manifest or extra payload is needed. The menu uses the generic Tango executable
+icon, an About entry with the exact Ciuki portrait, and a disabled Restart row.
+
+`proc/supervisor.c` and the public syscall registry expose no reboot request to
+userspace. `core/reboot.c` is kernel-only. Wiring Restart requires a lead-owned
+supervisor interface outside this directive's allowed files; the row is disabled
+and power-off is absent. No privileged operation or invented syscall is used.
+
+The [Wayland input specification](https://wayland.freedesktop.org/docs/html/apa.html)
+describes focus enter/leave and surface-local pointer coordinates; the existing
+Ciuki input model already uses local coordinates and synthetic releases. Keep
+those rules for click focus, title dragging, minimisation and menu focus. The
+close request is a negotiated protocol-v2 extension; v1 clients receive their
+existing CLOSED event, with the same bounded grace before termination of an
+owned child. No v1 wire layout changes.
+HELLO chooses version 1 or 2 and binds that version for the channel's lifetime;
+every later message uses it. Version 2 adds `CLOSE_REQUEST=14`, desktop to
+client, four header bytes and zero fds. The client acknowledges with CLOSE and
+exits. Mixing versions or sending this opcode in v1 disconnects that peer.
+The exact shared `protocol.h` is installed as `ciuki/desktop.h` by the SDK build.
+
+Use [POSIX clocks](https://pubs.opengroup.org/onlinepubs/000095399/functions/clock_getres.html):
+MONOTONIC for deadlines and REALTIME in UTC for the taskbar; label the build-seed
+fallback in About, using the kernel's existing `uname` release/version/source.
+Keep the existing font. Taskbar and About portrait sizes sample the existing
+pinned conversion deterministically; generic icons come from the pinned Tango
+0.8.90 archive with its existing notices, and remain separate from Ciuki's asset.
+
+Existing `--gate` boots retain the plain compositor. The new shell case uses
+the existing crash-isolation selector and an F12 input at its interaction ARM
+to enable shell test mode; no selector, kernel probe or runner API is added.
+The script opens the menu, launches Demo, drags its title and closes it, then
+sends the existing A/motion/button stimulus. The desktop publishes the A edges
+to the controller only after the observed menu/launch/drag/close/reap sequence.
+The shell case requires `keys=4`, counting both F12 edges and both A edges only
+after completion; the controller sees zero qualifying key edges before then.
+Omission or failure therefore cannot pass the shell interaction predicate.
+Paced zero-delta input batches provide waits within the existing 1–100 ms limit.
+The [QMP input API](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event)
+supplies ordered key, relative-motion and button edges. Existing cases and their
+portrait/cursor checks remain unchanged. QEMU and owner screenshots remain
+lead-owned evidence.
+
+### f2-30 host/build handoff
+
+Nine desktop host tests pass, with ASan/UBSan on the production modules and
+launcher. Coverage adds menu/ELF admission, stable sorting/capacity, taskbar
+layout/restore, hidden-window hit-testing, focus releases, About lifecycle,
+incremental/full shell redraw equivalence, close-request backpressure and
+timeout after EOF, launcher rollback/group/fd mapping, and shell milestones.
+The plain 640x480 portrait/clock/cursor fixture was independently compared with
+the pre-change compositor: both raw XRGB arrays have SHA-256
+`6755f9a40f4b0ee69c1253145fe53ebd75f5f1948c2429c70da1a90923f82426`.
+The unchanged approved portrait conversion retains its original pinned hash.
+
+Kernel, SDK, Lua and desktop builds pass. The compositor integer audit passes;
+the image passes loader/geometry/fsck and all 55 payload read-back checks.
+Image SHA-256:
+`26967a98c9c25950ead6ae1a6efae5d0b4dc87473a2feb31b14e9638c5ca2621`.
+This is host/static evidence only. Runtime footprint, QEMU timing/input/digests,
+the two shell cases and the runner screenshot remain unqualified until the lead
+runs them. The 11 pre-existing suite case objects remain byte-equivalent as JSON
+values; two cases are appended.
+
+Lead action: `tests/host/test_desktop_gate.py:test_all_suite_cases_and_predicates`
+hard-codes 11 cases and treats every case outside the five normal cases as a
+stand-in. Its case count, native-case classification and action expectations
+need to include the two shell cases. That file is outside f2-30's allowed
+`tests/host/desktop/*` scope; the implementer leaves its assertions unchanged.
+The Italian development diary and QEMU/owner evidence remain lead-owned.
+
+The following sections preserve the f2-08 handoff and its historical evidence;
+f2-30 supersedes its ordinary launch, close-button and SDK-header boundaries.
+Neither handoff claims QEMU or hardware acceptance.
 All authored application code is within `apps/desktop/` and `apps/demo/`;
 kernel and SDK files are unchanged. The lead owns integration, the development
 diary and `server=desktop` evidence for the image it actually runs.

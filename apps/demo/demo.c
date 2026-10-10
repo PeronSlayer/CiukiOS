@@ -15,6 +15,7 @@
 #include <unistd.h>
 #define WIDTH 240u
 #define HEIGHT 160u
+static unsigned protocol_version=DESK_VERSION;
 static void handler(int signal_number)
 {
     (void)signal_number;
@@ -24,7 +25,9 @@ static int send_wait(int fd, const struct ciuki_message *m)
 {
     /* Ordinary client may block; only the desktop must isolate backpressure. */
     int r;
-    do { r=ciuki_channel_send(fd,m,0); } while (r<0 && errno==EINTR);
+    struct ciuki_message out=*m;
+    out.data[0]=(uint8_t)protocol_version;
+    do { r=ciuki_channel_send(fd,&out,0); } while (r<0 && errno==EINTR);
     return r;
 }
 static void damage(int channel)
@@ -131,6 +134,7 @@ int main(int argc, char **argv)
     }
     if (strcmp(kind,"none") && strcmp(kind,"bad-pointer") && strcmp(kind,"closed-peer") &&
         strcmp(kind,"forged-fd") && strcmp(kind,"grant-fd") && strcmp(kind,"handler-fault")) return 2;
+    if (!gate) protocol_version=DESK_SHELL_VERSION;
     int surface=ciuki_surface_create(WIDTH,HEIGHT,CIUKI_SURFACE_XRGB8888);
     uint32_t *pixels=surface<0 ? MAP_FAILED : ciuki_surface_map(surface,PROT_READ|PROT_WRITE);
     if (pixels==MAP_FAILED) return 1;
@@ -161,9 +165,15 @@ int main(int argc, char **argv)
                 continue;
             }
             struct desk_packet p;
-            if (!m.sender_pid || (server_pid && m.sender_pid!=server_pid) || !desk_parse(&m,0,NULL,&p)) return 1;
+            if (!m.sender_pid || m.data[0]!=protocol_version ||
+                (server_pid && m.sender_pid!=server_pid) || !desk_parse(&m,0,NULL,&p)) return 1;
             server_pid=m.sender_pid;
             if (p.opcode==DESK_CLOSED) break;
+            if (p.opcode==DESK_CLOSE_REQUEST) {
+                desk_message(&m,DESK_CLOSE,4);
+                if (send_wait(channel,&m)) return 1;
+                break;
+            }
             if (p.opcode==DESK_CONFIGURE) {
                 if (p.width!=WIDTH || p.height!=HEIGHT) return 1;
                 configured=1; damage(channel);

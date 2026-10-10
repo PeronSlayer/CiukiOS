@@ -32,6 +32,9 @@ def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.append(ROOT / "assets/brand/ciuki-logo.png")
+    files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
+    if (SDK / "sysroot/include/ciuki/desktop.h").read_bytes() != (ROOT / "apps/desktop/protocol.h").read_bytes():
+        raise ValueError("SDK desktop header is stale; rebuild SDK")
     return {"sdk_manifest_sha256": digest(SDK / "manifest.json"),
             "sources": {str(p.relative_to(ROOT)): digest(p) for p in sorted(files)},
             "cflags": CFLAGS}
@@ -50,6 +53,7 @@ def current_build(expected):
 def validate_payloads():
     lua = module("desktop_sdk_validator", ROOT / "apps/lua/build_lua.py")
     lua.validate_sdk()
+    module("desktop_icon_check", ROOT / "apps/desktop/convert_icons.py").check()
     if not current_build(inputs()):
         raise ValueError("missing/stale desktop payloads; run make desktop")
     m = json.loads((OUT / "manifest.json").read_text())
@@ -75,6 +79,7 @@ def portrait_record(c):
 def build():
     lua = module("desktop_sdk_build", ROOT / "apps/lua/build_lua.py")
     lua.validate_sdk()
+    module("desktop_icon_build", ROOT / "apps/desktop/convert_icons.py").check()
     c = module("desktop_portrait", ROOT / "apps/desktop/convert_portrait.py")
     data = c.convert(ROOT / "assets/brand/ciuki-logo.png")
     if hashlib.sha256(data).hexdigest() != c.ARRAY_SHA256:
@@ -107,6 +112,7 @@ def build():
     obj.unlink()
     (OUT / "ciuki-portrait.xrgb").write_bytes(data)
     m = {"schema_version": 1, "application": "Ciuki desktop", "protocol_version": 1,
+         "protocol_extensions": [2],
          "inputs": expected, "commands": commands, "elf": evidence,
          "files": {name: digest(OUT / name) for name in (*sources, "ciuki-portrait.xrgb")},
          "portrait": portrait_record(c), "integer_compositor_audit": "PASS",

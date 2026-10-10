@@ -1,6 +1,7 @@
 """Native production desktop tests with fake surfaces/channels; never boots QEMU."""
 # SPDX-License-Identifier: MIT
 import hashlib
+import json
 import importlib.util
 import os
 import shutil
@@ -23,6 +24,89 @@ def load(name, path):
 
 
 class DesktopTests(unittest.TestCase):
+    def test_shell_suite_uses_existing_runner(self):
+        path = str(ROOT / "scripts/test")
+        sys.path.insert(0, path)
+        try:
+            runner = load("desktop_shell_runner_test", ROOT / "scripts/test/run.py")
+            suite = json.loads((ROOT / "tests/suites/f2-desktop.json").read_text())
+            shell = [c for c in suite["cases"] if c["id"].startswith("desktop-shell-")]
+            self.assertEqual({c["profile"] for c in shell}, {"qemu-t23", "qemu-e500"})
+            self.assertEqual(len(shell), 2)
+            for case in shell:
+                self.assertTrue(case["desktop_screen"])
+                runner.Actions(case["actions"])
+                batches = case["actions"][0]["batches"]
+                keys = [e["data"] for b in batches for e in b["events"] if e["type"] == "key"]
+                self.assertEqual([(k["key"]["data"], k["down"]) for k in keys],
+                                 [("f12", True), ("f12", False), ("a", True), ("a", False)])
+                predicate = next(p for p in case["expected"]["predicates"] if p.get("where", {}).get("stage") == "after")
+                self.assertEqual(predicate["fields"]["keys"], {"eq": 4})
+        finally:
+            sys.path.remove(path)
+
+    def test_plain_screen_digest_and_shell_portrait(self):
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="desktop-screen-", dir=parent) as temp:
+            folder = Path(temp)
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = folder / "capture"
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c")]
+            sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
+            subprocess.run(["clang", "-std=c17", "-O1", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                            "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            *(str(p) for p in sources), "-o", str(binary)], check=True, env=env)
+            c = load("capture_portrait", ROOT / "apps/desktop/convert_portrait.py")
+            portrait = c.convert(ROOT / "assets/brand/ciuki-logo.png")
+            source = folder / "portrait.xrgb"
+            source.write_bytes(portrait)
+            for mode in ("plain", "shell", "about"):
+                target = folder / (mode + ".xrgb")
+                subprocess.run([str(binary), str(source), str(target), mode], check=True, env=env)
+                pixels = target.read_bytes()
+                self.assertEqual(len(pixels), 640*480*4)
+                if mode == "plain":
+                    # Independently compared with HEAD's f2-08 compositor before
+                    # recording this fixture; unchanged font/clock/cursor/portrait.
+                    self.assertEqual(hashlib.sha256(pixels).hexdigest(),
+                                     "6755f9a40f4b0ee69c1253145fe53ebd75f5f1948c2429c70da1a90923f82426")
+                else:
+                    for y in range(20):
+                        for x in range(20):
+                            offset = ((454+y)*640+8+x)*4
+                            src = ((y*256//20)*256+x*256//20)*4
+                            self.assertEqual(pixels[offset:offset+4], portrait[src:src+4])
+
+    def test_shell_launcher(self):
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="desktop-launch-", dir=parent) as temp:
+            folder = Path(temp)
+            inc = folder / "include/ciuki"
+            inc.mkdir(parents=True)
+            for name in ("channel.h", "surface.h", "spawn.h"):
+                shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
+            for name in ("runtime.h", "raw.h"):
+                (inc / name).write_text("/* supplied by host harness */\n")
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = folder / "launch-test"
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c")]
+            sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                            "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),
+                            "-I", str(ROOT / "src/kernel/include"), *(str(p) for p in sources), "-o", str(binary)],
+                           check=True, env=env)
+            subprocess.run([str(binary)], check=True, env=env)
+
+    def test_tango_icon_provenance(self):
+        c = load("shell_icon_test", ROOT / "apps/desktop/convert_icons.py")
+        record = c.check()
+        self.assertEqual(set(record["icons"]), {"run", "restart"})
+        self.assertEqual(record["archive_sha256"], c.ARCHIVE_SHA)
+
     def test_native_production_model(self):
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)

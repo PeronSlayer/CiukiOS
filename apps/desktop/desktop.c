@@ -7,12 +7,16 @@
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/utsname.h>
+#include <signal.h>
 #include <time.h>
 #include <unistd.h>
 static uint64_t monotonic(void)
@@ -46,8 +50,10 @@ static int gate_setup_error(int gate, unsigned step, int error)
 static void gate_report(struct desktop *d, uint32_t control, unsigned generation, int survivor, int victim, unsigned cycle)
 {
     char line[CIUKI_PROBE_REPORT_MAX+1];
+    unsigned keys=gate_keys;
+    if (d->shell_test) keys=d->shell_stage==6 && gate_keys>=2 ? gate_keys+d->shell_keys : 0;
     int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=%u survivor=%d victim=%d cycle=%u replies=%llu keys=%u motion=%u buttons=%u",
-        control,generation,survivor,victim,cycle,(unsigned long long)d->replied,gate_keys,gate_motion,gate_buttons);
+        control,generation,survivor,victim,cycle,(unsigned long long)d->replied,keys,gate_motion,gate_buttons);
     int error=n<=0 || n>CIUKI_PROBE_REPORT_MAX ? EINVAL : ciuki_error(ciuki_raw_probe_report(CU_PTR(line),n,0,0,0,0));
     if (error) { fprintf(stderr,"desktop: gate report failed length=%d error=%d\n",n,error); _exit(126); }
 }
@@ -87,6 +93,71 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
         return -1;
     }
     return (int)pid;
+}
+static void scan_programs(struct desktop *d)
+{
+    d->program_count=0;
+    DIR *dir=opendir("/bin");
+    if (!dir) { strcpy(d->notice,"Programs are unavailable"); return; }
+    struct dirent *entry;
+    while ((entry=readdir(dir))) {
+        char path[70];
+        int len=snprintf(path,sizeof(path),"/bin/%s",entry->d_name);
+        if (len<=0 || len>=(int)sizeof(path)) continue;
+        struct stat st;
+        if (stat(path,&st) || !S_ISREG(st.st_mode)) continue;
+        FILE *file=fopen(path,"rb");
+        if (!file) continue;
+        uint8_t header[52]; size_t n=fread(header,1,sizeof(header),file);
+        int ok=!ferror(file); if (fclose(file)) ok=0;
+        if (ok) desk_program_add(d,entry->d_name,header,n);
+    }
+    closedir(dir);
+}
+static int terminate_child(uint32_t pid, int sig)
+{ return kill((pid_t)pid,sig); }
+static int launch_program(struct desktop *d, const struct desk_program *program)
+{
+    int child=-1;
+    for (int j=0; j<DESK_CLIENTS; j++) if (!d->children[j].pid) { child=j; break; }
+    if (child<0) { errno=EAGAIN; return -1; }
+    int pair[2];
+    if (ciuki_channel_pair(pair)) return -1;
+    int index=-1;
+    ciuki_pid_t pid=-1;
+    char *argv[]={(char *)program->name,strcmp(program->name,"demo") ? NULL : "--channel-fd=3",NULL};
+    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",NULL};
+    struct ciuki_spawn_fd mapping={pair[1],3};
+    if (!fcntl(pair[1],F_SETFD,0)) {
+        index=desk_add_client(d,pair[0]);
+        if (index>=0) pid=ciuki_spawn(program->path,argv,env,&mapping,1,0);
+        else errno=ENOSPC;
+    }
+    int error=errno;
+    close(pair[1]);
+    if (pid<0) {
+        if (index>=0) desk_drop_client(d,index); else close(pair[0]);
+        errno=error; return -1;
+    }
+    /* Bind launch ownership before accepting the first kernel-stamped message.
+     * This also permits cleanup if a child exits without ever sending HELLO. */
+    d->clients[index].pid=(uint32_t)pid;
+    d->children[child].pid=(uint32_t)pid;
+    return pid;
+}
+static void shell_setup(struct desktop *d)
+{
+    d->launch=launch_program; d->terminate=terminate_child;
+    struct utsname u;
+    strcpy(d->build_identity,"unavailable");
+    if (!uname(&u)) {
+        snprintf(d->build_identity,sizeof(d->build_identity),"%.64s",u.release);
+#ifdef __i386__
+        d->realtime_source=(int)u.realtime_source;
+#endif
+    }
+    scan_programs(d);
+    desk_shell_enable(d);
 }
 int main(int argc, char **argv)
 {
@@ -134,6 +205,7 @@ int main(int argc, char **argv)
     if (d->pixels==MAP_FAILED) { int error=errno; if (d->output>=0) close(d->output); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_OUTPUT,error); }
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
+    if (!gate) shell_setup(d);
     /* The ABI has no timed input read or poll/select. A bounded nonblocking
      * drain followed by an interruptible 10 ms sleep keeps IPC/time moving. */
     for (int i=0; i<channel_count; i++) desk_add_client(d,channels[i]);
@@ -155,6 +227,13 @@ int main(int argc, char **argv)
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
+        if (d->shell) {
+            struct timespec rtc;
+            if (!clock_gettime(CLOCK_REALTIME,&rtc) && rtc.tv_sec>=0 && d->realtime_second!=(uint64_t)rtc.tv_sec) {
+                d->realtime_second=(uint64_t)rtc.tv_sec;
+                desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
+            }
+        }
         int report=0;
         if (gate && control->command) {
             unsigned command=control->command; generation=control->generation;
@@ -194,9 +273,21 @@ int main(int argc, char **argv)
         struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
         int n=ciuki_input_read(input,events,CIUKI_INPUT_READ_MAX);
         if (n>0) { for (int i=0; i<n; i++) {
+            /* Runtime-only shell case extension: old gates never send F12.
+             * Keep it behind the controller's post-fault interaction stage. */
+            if (gate && interaction && !d->shell && events[i].type==CIUKI_INPUT_KEY &&
+                events[i].code==0x58 && events[i].value==1) {
+                d->shell_test=1; d->shell_keys=1; shell_setup(d);
+                continue;
+            }
+            if (gate && d->shell_test && events[i].type==CIUKI_INPUT_KEY &&
+                events[i].code==0x58 && events[i].value==0) {
+                d->shell_keys++; report=1; continue;
+            }
             desk_input(d,&events[i]);
             if (gate && interaction) {
-                if (events[i].type==CIUKI_INPUT_KEY && events[i].code==0x1e) gate_keys++;
+                if (events[i].type==CIUKI_INPUT_KEY && events[i].code==0x1e &&
+                    (!d->shell_test || d->shell_stage==6)) gate_keys++;
                 if (events[i].type==CIUKI_INPUT_MOTION) gate_motion++;
                 if (events[i].type==CIUKI_INPUT_BUTTON) gate_buttons++;
                 report=1;
@@ -205,6 +296,16 @@ int main(int argc, char **argv)
         else if (n<0 && errno!=EAGAIN && errno!=EINTR && !input_reported) {
             fprintf(stderr,"desktop: input unavailable (errno=%d)\n",errno); input_reported=1;
             struct ciuki_input_event resync={.type=CIUKI_INPUT_RESYNC}; desk_input(d,&resync);
+        }
+        if (d->action>=0) {
+            unsigned selected=(unsigned)d->action; d->action=-1;
+            int pid=selected<d->program_count && d->launch ? d->launch(d,&d->programs[selected]) : -1;
+            if (pid<0) {
+                snprintf(d->notice,sizeof(d->notice),"Program could not start (error %d)",errno);
+                desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
+            } else if (d->shell_test && d->shell_stage==1 && !strcmp(d->programs[selected].name,"demo")) {
+                d->shell_pid=(uint32_t)pid; d->shell_stage=2;
+            }
         }
         if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         if (desk_redraw(d) && errno!=EINTR && !display_reported) {
@@ -234,7 +335,14 @@ int main(int argc, char **argv)
         }
         /* Reap test demo children without keeping zombies. The kernel controller
          * owns evidence/ticks/ledgers; these lines are application output only. */
-        if (!gate && victim_pid<0) { int status; while (waitpid(-1,&status,WNOHANG)>0) {} }
+        if (!gate && victim_pid<0) {
+            int status, pid;
+            while ((pid=waitpid(-1,&status,WNOHANG))>0) desk_child_exited(d,(uint32_t)pid,status);
+        }
+        if (gate && d->shell) for (int i=0; i<DESK_CLIENTS; i++) if (d->children[i].pid) {
+            int status, pid=(int)d->children[i].pid;
+            if (waitpid(pid,&status,WNOHANG)==pid) desk_child_exited(d,(uint32_t)pid,status);
+        }
         if (test && victim && victim_pid<0 && completed<cycles && now>=next_victim)
             victim_pid=spawn_demo(d,victim,0);
         struct timespec pause={.tv_sec=0,.tv_nsec=gate ? 1000000 : 10000000}; nanosleep(&pause,NULL);
