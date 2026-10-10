@@ -87,6 +87,18 @@ static void release_payload(struct process *p)
         ww_wake(&key, UINT32_MAX);
 }
 
+static void record_fault(const char *name, const struct process *p)
+{
+    rec_emit(name, "DATA", "case=fault pid=%u vector=%u error=%08x address=%08x eip=%08x",
+             p->pid, p->fault_vector, p->fault_error, p->fault_address, p->fault_eip);
+}
+
+static void record_thread_ids(const char *name, const struct payload_result *r)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(r->tids); i++)
+        rec_emit(name, "DATA", "case=thread index=%u tid=%u", i, r->tids[i]);
+}
+
 static bool run_payload(const char *name, struct process *parent, const char *mode,
                          uint32_t *switches_out)
 {
@@ -141,12 +153,16 @@ static bool run_payload(const char *name, struct process *parent, const char *mo
         pass = pass && preemptions >= 1000 && r.increments == 80000 && r.completed == 8 && r.tokens == 10000;
     rec_emit(name, "DATA", "case=%s pid=%u ppid=%u pgid=%u expected=%u observed=%d raw=%d vector=%u errors=%u",
              mode, pid, p->ppid, p->pgid, fault ? SIGSEGV : 9472, p->status, p->raw_exit, p->fault_vector, r.errors);
+    if (fault)
+        record_fault(name, p);
     if (!fault)
         rec_emit(name, "DATA", "case=entry pid=%u esp=%08x flags=%08x gs=%08x tls=%08x argc=%u bss_register_errors=%u",
                  pid, r.esp, r.flags, r.gs, r.tls, r.argc, r.errors);
-    if (mode[0] == 't')
+    if (mode[0] == 't') {
         rec_emit(name, "DATA", "case=threads pid=%u threads=%u preemptions=%u increments=%u expected_increments=80000 tokens=%u expected_tokens=10000",
                  pid, r.completed, preemptions, r.increments, r.tokens);
+        record_thread_ids(name, &r);
+    }
     if (switches_out)
         *switches_out = preemptions;
     if (p->state != PROC_ZOMBIE) {

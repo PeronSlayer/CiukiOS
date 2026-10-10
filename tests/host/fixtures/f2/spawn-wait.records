@@ -1,0 +1,159 @@
+CIUKI_TEST v=1 run=79351e3d seq=000001 probe=spawn-wait event=BEGIN
+CIUKI_TEST v=1 run=79351e3d seq=000002 probe=spawn-wait event=DATA case=s pid=3 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000003 probe=spawn-wait event=DATA case=entry pid=3 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000004 probe=spawn-wait event=DATA case=memory_ledger stage=baseline pages_free=127904 heap_bytes=18304 maps=5 backing=260 tables=3
+CIUKI_TEST v=1 run=79351e3d seq=000005 probe=spawn-wait event=DATA case=object_ledger stage=baseline processes=2 threads=1 zombies=0 handles=6
+CIUKI_TEST v=1 run=79351e3d seq=000006 probe=spawn-wait event=DATA case=e pid=5 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000007 probe=spawn-wait event=DATA case=entry pid=5 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000008 probe=spawn-wait event=DATA case=f pid=6 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000009 probe=spawn-wait event=DATA case=e pid=7 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000010 probe=spawn-wait event=DATA case=entry pid=7 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000011 probe=spawn-wait event=DATA case=f pid=8 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000012 probe=spawn-wait event=DATA case=e pid=9 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000013 probe=spawn-wait event=DATA case=entry pid=9 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000014 probe=spawn-wait event=DATA case=f pid=10 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000015 probe=spawn-wait event=DATA case=e pid=11 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000016 probe=spawn-wait event=DATA case=entry pid=11 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000017 probe=spawn-wait event=DATA case=f pid=12 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000018 probe=spawn-wait event=DATA case=e pid=13 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000019 probe=spawn-wait event=DATA case=entry pid=13 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000020 probe=spawn-wait event=DATA case=f pid=14 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000021 probe=spawn-wait event=DATA case=e pid=15 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000022 probe=spawn-wait event=DATA case=entry pid=15 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000023 probe=spawn-wait event=DATA case=f pid=16 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000024 probe=spawn-wait event=DATA case=e pid=17 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000025 probe=spawn-wait event=DATA case=entry pid=17 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000026 probe=spawn-wait event=DATA case=f pid=18 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000027 probe=spawn-wait event=DATA case=e pid=19 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000028 probe=spawn-wait event=DATA case=entry pid=19 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000029 probe=spawn-wait event=DATA case=f pid=20 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000030 probe=spawn-wait event=DATA case=e pid=21 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000031 probe=spawn-wait event=DATA case=entry pid=21 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000032 probe=spawn-wait event=DATA case=f pid=22 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000033 probe=spawn-wait event=DATA case=e pid=23 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000034 probe=spawn-wait event=DATA case=entry pid=23 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000035 probe=spawn-wait event=DATA case=f pid=24 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000036 probe=spawn-wait event=DATA case=e pid=25 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000037 probe=spawn-wait event=DATA case=entry pid=25 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000038 probe=spawn-wait event=DATA case=f pid=26 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000039 probe=spawn-wait event=DATA case=e pid=27 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000040 probe=spawn-wait event=DATA case=entry pid=27 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000041 probe=spawn-wait event=DATA case=f pid=28 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000042 probe=spawn-wait event=DATA case=e pid=29 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000043 probe=spawn-wait event=DATA case=entry pid=29 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000044 probe=spawn-wait event=DATA case=f pid=30 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000045 probe=spawn-wait event=DATA case=e pid=31 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000046 probe=spawn-wait event=DATA case=entry pid=31 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000047 probe=spawn-wait event=DATA case=f pid=32 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000048 probe=spawn-wait event=DATA case=e pid=33 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000049 probe=spawn-wait event=DATA case=entry pid=33 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000050 probe=spawn-wait event=DATA case=f pid=34 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000051 probe=spawn-wait event=DATA case=e pid=35 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000052 probe=spawn-wait event=DATA case=entry pid=35 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000053 probe=spawn-wait event=DATA case=f pid=36 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000054 probe=spawn-wait event=DATA case=e pid=37 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000055 probe=spawn-wait event=DATA case=entry pid=37 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000056 probe=spawn-wait event=DATA case=f pid=38 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000057 probe=spawn-wait event=DATA case=e pid=39 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000058 probe=spawn-wait event=DATA case=entry pid=39 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000059 probe=spawn-wait event=DATA case=f pid=40 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000060 probe=spawn-wait event=DATA case=e pid=41 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000061 probe=spawn-wait event=DATA case=entry pid=41 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000062 probe=spawn-wait event=DATA case=f pid=42 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000063 probe=spawn-wait event=DATA case=e pid=43 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000064 probe=spawn-wait event=DATA case=entry pid=43 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000065 probe=spawn-wait event=DATA case=f pid=44 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000066 probe=spawn-wait event=DATA case=e pid=45 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000067 probe=spawn-wait event=DATA case=entry pid=45 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000068 probe=spawn-wait event=DATA case=f pid=46 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000069 probe=spawn-wait event=DATA case=e pid=47 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000070 probe=spawn-wait event=DATA case=entry pid=47 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000071 probe=spawn-wait event=DATA case=f pid=48 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000072 probe=spawn-wait event=DATA case=e pid=49 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000073 probe=spawn-wait event=DATA case=entry pid=49 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000074 probe=spawn-wait event=DATA case=f pid=50 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000075 probe=spawn-wait event=DATA case=e pid=51 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000076 probe=spawn-wait event=DATA case=entry pid=51 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000077 probe=spawn-wait event=DATA case=f pid=52 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000078 probe=spawn-wait event=DATA case=e pid=53 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000079 probe=spawn-wait event=DATA case=entry pid=53 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000080 probe=spawn-wait event=DATA case=f pid=54 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000081 probe=spawn-wait event=DATA case=e pid=55 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000082 probe=spawn-wait event=DATA case=entry pid=55 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000083 probe=spawn-wait event=DATA case=f pid=56 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000084 probe=spawn-wait event=DATA case=e pid=57 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000085 probe=spawn-wait event=DATA case=entry pid=57 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000086 probe=spawn-wait event=DATA case=f pid=58 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000087 probe=spawn-wait event=DATA case=e pid=59 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000088 probe=spawn-wait event=DATA case=entry pid=59 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000089 probe=spawn-wait event=DATA case=f pid=60 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000090 probe=spawn-wait event=DATA case=e pid=61 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000091 probe=spawn-wait event=DATA case=entry pid=61 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000092 probe=spawn-wait event=DATA case=f pid=62 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000093 probe=spawn-wait event=DATA case=e pid=63 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000094 probe=spawn-wait event=DATA case=entry pid=63 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000095 probe=spawn-wait event=DATA case=f pid=64 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000096 probe=spawn-wait event=DATA case=e pid=65 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000097 probe=spawn-wait event=DATA case=entry pid=65 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000098 probe=spawn-wait event=DATA case=f pid=66 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000099 probe=spawn-wait event=DATA case=e pid=67 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000100 probe=spawn-wait event=DATA case=entry pid=67 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000101 probe=spawn-wait event=DATA case=f pid=68 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000102 probe=spawn-wait event=DATA case=e pid=69 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000103 probe=spawn-wait event=DATA case=entry pid=69 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000104 probe=spawn-wait event=DATA case=f pid=70 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000105 probe=spawn-wait event=DATA case=e pid=71 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000106 probe=spawn-wait event=DATA case=entry pid=71 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000107 probe=spawn-wait event=DATA case=f pid=72 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000108 probe=spawn-wait event=DATA case=e pid=73 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000109 probe=spawn-wait event=DATA case=entry pid=73 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000110 probe=spawn-wait event=DATA case=f pid=74 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000111 probe=spawn-wait event=DATA case=e pid=75 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000112 probe=spawn-wait event=DATA case=entry pid=75 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000113 probe=spawn-wait event=DATA case=f pid=76 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000114 probe=spawn-wait event=DATA case=e pid=77 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000115 probe=spawn-wait event=DATA case=entry pid=77 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000116 probe=spawn-wait event=DATA case=f pid=78 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000117 probe=spawn-wait event=DATA case=e pid=79 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000118 probe=spawn-wait event=DATA case=entry pid=79 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000119 probe=spawn-wait event=DATA case=f pid=80 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000120 probe=spawn-wait event=DATA case=e pid=81 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000121 probe=spawn-wait event=DATA case=entry pid=81 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000122 probe=spawn-wait event=DATA case=f pid=82 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000123 probe=spawn-wait event=DATA case=e pid=83 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000124 probe=spawn-wait event=DATA case=entry pid=83 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000125 probe=spawn-wait event=DATA case=f pid=84 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000126 probe=spawn-wait event=DATA case=e pid=85 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000127 probe=spawn-wait event=DATA case=entry pid=85 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000128 probe=spawn-wait event=DATA case=f pid=86 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000129 probe=spawn-wait event=DATA case=e pid=87 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000130 probe=spawn-wait event=DATA case=entry pid=87 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000131 probe=spawn-wait event=DATA case=f pid=88 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000132 probe=spawn-wait event=DATA case=e pid=89 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000133 probe=spawn-wait event=DATA case=entry pid=89 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000134 probe=spawn-wait event=DATA case=f pid=90 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000135 probe=spawn-wait event=DATA case=e pid=91 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000136 probe=spawn-wait event=DATA case=entry pid=91 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000137 probe=spawn-wait event=DATA case=f pid=92 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000138 probe=spawn-wait event=DATA case=e pid=93 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000139 probe=spawn-wait event=DATA case=entry pid=93 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000140 probe=spawn-wait event=DATA case=f pid=94 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000141 probe=spawn-wait event=DATA case=e pid=95 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000142 probe=spawn-wait event=DATA case=entry pid=95 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000143 probe=spawn-wait event=DATA case=f pid=96 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000144 probe=spawn-wait event=DATA case=e pid=97 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000145 probe=spawn-wait event=DATA case=entry pid=97 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000146 probe=spawn-wait event=DATA case=f pid=98 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000147 probe=spawn-wait event=DATA case=e pid=99 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000148 probe=spawn-wait event=DATA case=entry pid=99 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000149 probe=spawn-wait event=DATA case=f pid=100 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000150 probe=spawn-wait event=DATA case=e pid=101 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000151 probe=spawn-wait event=DATA case=entry pid=101 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000152 probe=spawn-wait event=DATA case=f pid=102 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000153 probe=spawn-wait event=DATA case=e pid=103 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000154 probe=spawn-wait event=DATA case=entry pid=103 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000155 probe=spawn-wait event=DATA case=f pid=104 ppid=2 pgid=1 expected=11 observed=11 raw=270 vector=14 errors=0
+CIUKI_TEST v=1 run=79351e3d seq=000156 probe=spawn-wait event=DATA case=memory_ledger stage=final pages_free=127904 heap_bytes=18304 maps=5 backing=260 tables=3
+CIUKI_TEST v=1 run=79351e3d seq=000157 probe=spawn-wait event=DATA case=object_ledger stage=final processes=2 threads=1 zombies=0 handles=6
+CIUKI_TEST v=1 run=79351e3d seq=000158 probe=spawn-wait event=DATA case=cycles cycles=100 bad_cycles=0 leaked=0
+CIUKI_TEST v=1 run=79351e3d seq=000159 probe=spawn-wait event=END status=PASS

@@ -77,6 +77,7 @@ def application_payloads():
                "/bin/hello": SDK / "tests/hello.elf",
                "/bin/libc_smoke": SDK / "tests/libc_smoke.elf",
                "/system/tests/ciuki-f2.lua": LUA / "ciuki-f2.lua",
+               f"{TEST_PATH}/ciuki-f2.lua": LUA / "ciuki-f2.lua",
                "/system/licenses/lua-5.4.8.txt": LUA / "LUA-LICENSE.txt",
                "/system/licenses/COPYING.NEWLIB": SDK / "licenses/COPYING.NEWLIB",
                "/system/licenses/SDK-MIT.txt": SDK / "licenses/SDK-MIT.txt"}
@@ -101,7 +102,45 @@ def application_payloads():
                         "supplement_sha256": manifest["files"]["ciuki-f2.lua"],
                         "upstream_mode": manifest["upstream_mode"], "patches": manifest["patches"]}}
     metadata["desktop"] = desktop_metadata
+    # The gate's relative supplement argv uses TEST_PATH. Retain the f2-07
+    # absolute path as an alias; both copies are separately verified in T1.
+    # Runtime provenance cannot be recovered from a host-only build manifest.
+    # Supply its application fields and immutable inventory in a small sidecar.
+    provenance = LUA / "app-gate.meta"
+    provenance.write_text(application_provenance(sources, manifest, sdk), encoding="ascii")
+    sources["/system/tests/app-gate.meta"] = provenance
     return sources, directories, metadata
+
+
+def application_provenance(sources, manifest, sdk):
+    """Bounded wire format read/validated by f2_probes_app.c, never guest code.
+
+    Lua's official procedure (https://www.lua.org/tests/) requires _U as the
+    only supplied switch. The pinned all.lua derives the four omissions below;
+    we retain every archive member and hash its actual image bytes in the guest.
+    """
+    fields = {
+        "sdk_manifest_sha256": ("sha256", manifest["inputs"]["sdk_manifest_sha256"]),
+        "newlib_source_sha256": ("sha256", sdk["newlib"]["sha256"]),
+        "newlib_patch_hashes": ("json", sdk["newlib"]["patches"]),
+        "application_source_sha256": ("sha256", manifest["inputs"]["archives"]["source"]["sha256"]),
+        "application_tests_sha256": ("sha256", manifest["inputs"]["archives"]["tests"]["sha256"]),
+        "declared_exclusions": ("json", {"_U": True, "_soft": True, "_port": True,
+                                          "_nomsg": True, "T": None,
+                                          "complete": "excluded_by_contract",
+                                          "internal": "excluded_by_contract"}),
+    }
+    lines = []
+    for name, (encoding, value) in fields.items():
+        encoded = value if encoding == "sha256" else json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii").hex()
+        parts = (len(encoded) + 31) // 32
+        for part in range(parts):
+            lines.append(f"M {name} {part + 1} {parts} {encoding} {encoded[part*32:(part+1)*32]}\n")
+    for path, source in sorted(sources.items()):
+        if path == "/bin/lua" or path == "/system/tests/ciuki-f2.lua" or path.startswith(TEST_PATH + "/"):
+            require(len(path) <= 80, "app-gate payload path exceeds evidence bound")
+            lines.append(f"P {path} {sha256(source)}\n")
+    return "".join(lines)
 
 
 def payload_records(sources):

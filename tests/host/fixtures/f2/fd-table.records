@@ -1,0 +1,56 @@
+CIUKI_TEST v=1 run=54f1990f seq=000001 probe=fd-table event=BEGIN
+CIUKI_TEST v=1 run=54f1990f seq=000002 probe=fd-table event=DATA operation=exclusive expected=-17 observed=-17
+CIUKI_TEST v=1 run=54f1990f seq=000003 probe=fd-table event=DATA operation=append-a expected=4 observed=4
+CIUKI_TEST v=1 run=54f1990f seq=000004 probe=fd-table event=DATA operation=append-b expected=4 observed=4
+CIUKI_TEST v=1 run=54f1990f seq=000005 probe=fd-table event=DATA operation=pwrite expected=1 observed=1
+CIUKI_TEST v=1 run=54f1990f seq=000006 probe=fd-table event=DATA operation=offset expected=4 observed=4
+CIUKI_TEST v=1 run=54f1990f seq=000007 probe=fd-table event=DATA operation=pread expected=8 observed=8
+CIUKI_TEST v=1 run=54f1990f seq=000008 probe=fd-table event=DATA operation=content size=8 sha256=96fd04d4bad3dffae1303cfbcedd6b5dac6528c949356581fd1364c4332679f7
+CIUKI_TEST v=1 run=54f1990f seq=000009 probe=fd-table event=DATA operation=dup2-self expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000010 probe=fd-table event=DATA operation=dup2-replace expected=1 observed=1
+CIUKI_TEST v=1 run=54f1990f seq=000011 probe=fd-table event=DATA operation=cloexec expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000012 probe=fd-table event=DATA operation=cloexec-read expected=1 observed=1
+CIUKI_TEST v=1 run=54f1990f seq=000013 probe=fd-table event=DATA operation=status expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000014 probe=fd-table event=DATA operation=status-shared expected=2 observed=2
+CIUKI_TEST v=1 run=54f1990f seq=000015 probe=fd-table event=DATA operation=efbig expected=-27 observed=-27
+CIUKI_TEST v=1 run=54f1990f seq=000016 probe=fd-table event=DATA operation=grown-read expected=64 observed=64
+CIUKI_TEST v=1 run=54f1990f seq=000017 probe=fd-table event=DATA operation=inherit expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000018 probe=fd-table event=DATA operation=inherit-cloexec expected=-9 observed=-9
+CIUKI_TEST v=1 run=54f1990f seq=000019 probe=fd-table event=DATA operation=share-denied expected=-13 observed=-13
+CIUKI_TEST v=1 run=54f1990f seq=000020 probe=fd-table event=DATA operation=invalid-path expected=-22 observed=-22
+CIUKI_TEST v=1 run=54f1990f seq=000021 probe=fd-table event=DATA operation=invalid-path expected=-22 observed=-22
+CIUKI_TEST v=1 run=54f1990f seq=000022 probe=fd-table event=DATA operation=invalid-path expected=-84 observed=-84
+CIUKI_TEST v=1 run=54f1990f seq=000023 probe=fd-table event=DATA operation=invalid-path expected=-2 observed=-2
+CIUKI_TEST v=1 run=54f1990f seq=000024 probe=fd-table event=DATA operation=validation-writes expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000025 probe=fd-table event=DATA operation=mkdir-a expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000026 probe=fd-table event=DATA operation=mkdir-b expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000027 probe=fd-table event=DATA operation=mkdir-child expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000028 probe=fd-table event=DATA operation=file-over-dir expected=-21 observed=-21
+CIUKI_TEST v=1 run=54f1990f seq=000029 probe=fd-table event=DATA operation=dir-over-file expected=-20 observed=-20
+CIUKI_TEST v=1 run=54f1990f seq=000030 probe=fd-table event=DATA operation=descendant expected=-22 observed=-22
+CIUKI_TEST v=1 run=54f1990f seq=000031 probe=fd-table event=DATA operation=chdir expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000032 probe=fd-table event=DATA operation=pinned-rmdir expected=-16 observed=-16
+CIUKI_TEST v=1 run=54f1990f seq=000033 probe=fd-table event=DATA operation=identical expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000034 probe=fd-table event=DATA operation=case-rename expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000035 probe=fd-table event=DATA operation=cross-directory expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000036 probe=fd-table event=DATA operation=cwd expected=/tmp/F2Dest/Moved observed=/tmp/F2Dest/Moved
+CIUKI_TEST v=1 run=54f1990f seq=000037 probe=fd-table event=ERROR case=exdev status=not_run reason=missing_second_volume
+CIUKI_TEST v=1 run=54f1990f seq=000038 probe=fd-table event=DATA operation=getdents records=3 record_bytes=792 rewind_cookie=1
+CIUKI_TEST v=1 run=54f1990f seq=000039 probe=fd-table event=DATA operation=replace expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000040 probe=fd-table event=DATA operation=unlink-open expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000041 probe=fd-table event=DATA operation=fstat-unlinked inode=7 links=0 size=64
+CIUKI_TEST v=1 run=54f1990f seq=000042 probe=fd-table event=DATA operation=emfile expected=-24 observed=-24
+CIUKI_TEST v=1 run=54f1990f seq=000043 probe=fd-table event=DATA case=user checks=10208 errors=0 io_cases=1 reads=10000 decreases=0
+CIUKI_TEST v=1 run=54f1990f seq=000044 probe=fd-table event=DATA case=clock-source realtime_source=1 source=rtc qualified=1 valid=1 utc=1791622551 sample=2146
+CIUKI_TEST v=1 run=54f1990f seq=000045 probe=fd-table event=DATA case=clock-uname abi_version=1 realtime_source=1 clock_source=1 matched=1
+CIUKI_TEST v=1 run=54f1990f seq=000046 probe=fd-table event=DATA case=clock-offset expected_ms=1791622548854 observed_ms=1791622548854 resolution_ns=1000000
+CIUKI_TEST v=1 run=54f1990f seq=000047 probe=fd-table event=DATA case=cpu-clock busy_ms=170 sleeping_ms=0 sleep_ms=20 scheduling_delay_ms=0
+CIUKI_TEST v=1 run=54f1990f seq=000048 probe=fd-table event=DATA case=sleep-interrupt result=-4 remaining_ms=9 handlers=1 sent=1
+CIUKI_TEST v=1 run=54f1990f seq=000049 probe=fd-table event=DATA operation=durable-write expected=19 observed=19
+CIUKI_TEST v=1 run=54f1990f seq=000050 probe=fd-table event=DATA operation=durable-fsync expected=0 observed=0
+CIUKI_TEST v=1 run=54f1990f seq=000051 probe=fd-table event=DATA operation=durable-reopen expected=19 observed=19
+CIUKI_TEST v=1 run=54f1990f seq=000052 probe=fd-table event=DATA case=durable-file name_hex=2f746d702f66322d64757261626c652e62696e size=19 sha256=47d9886dde2a044526d1fa3420a8a0c096692a88db38fe0764bbd3f522ef67ab
+CIUKI_TEST v=1 run=54f1990f seq=000053 probe=fd-table event=DATA case=ledger descriptions_before=3 descriptions_after=3 pins_before=4 pins_after=4
+CIUKI_TEST v=1 run=54f1990f seq=000054 probe=fd-table event=DATA case=post-commit-fault owner=synthetic_block issued_errors=1 count=3 error=-5 fsync=-5 sticky=-5 committed=1 quarantined=1
+CIUKI_TEST v=1 run=54f1990f seq=000055 probe=fd-table event=DATA case=durable-checker flush_result=0 checker=host_required
+CIUKI_TEST v=1 run=54f1990f seq=000056 probe=fd-table event=END status=FAIL reason=files_contract

@@ -44,7 +44,8 @@ def linked_probe_names(rows, phase):
     if (end-start)%8:raise AssertionError('invalid target probe table extent')
     names=[]
     for va in range(start,end,8):
-        pointer=struct.unpack('<I',read(va,4))[0]
+        pointer,callback=struct.unpack('<II',read(va,8))
+        if not callback:raise AssertionError('probe registration has no implementation')
         names.append(read(pointer,24).split(b'\0',1)[0].decode('ascii'))
     return names
 
@@ -1340,7 +1341,15 @@ class F2EvidenceTests(unittest.TestCase):
                             if isinstance(value,str) and value.startswith('$'):record[field]=record[value[1:]]
                         if rule.get('encoding')=='hex':record[field]=f"{int(record[field]):0{rule.get('width',8)}x}"
                 for relation in predicate.get('relations',[]):
-                    record.setdefault(relation['right'],'1');record[relation['left']]=record[relation['right']]
+                    record.setdefault(relation['right'],'1')
+                    bound=int(record[relation['right']])
+                    if 'subtract' in relation:
+                        record.setdefault(relation['subtract'],'0');bound-=int(record[relation['subtract']])
+                    bound=(bound+relation.get('add',0))*relation.get('multiply',1)
+                    record[relation['left']]=str(max(int(record.get(relation['left'],bound)),bound) if relation['op']=='ge' else bound)
+                if predicate.get('unique'):
+                    key=predicate['unique']
+                    record[key]=str(predicate.get('fields',{}).get(key,{}).get('ge',0)+index)
                 matches.append(record)
             return matches
         def check(probe,predicate,records):
@@ -1371,7 +1380,7 @@ class F2EvidenceTests(unittest.TestCase):
                             value=rule.get('eq',rule.get('ge')) if isinstance(rule,dict) else rule
                             if isinstance(rule,dict):
                                 old=int(broken[0][field],16 if rule.get('encoding')=='hex' else 10)
-                                bad=rule['le']+1 if 'le' in rule else old-1 if 'ge' in rule else old+1
+                                bad=rule['le']+1 if 'le' in rule else min(old,rule['ge'])-1 if isinstance(rule.get('ge'),int) else old-1 if 'ge' in rule else old+1
                                 broken[0][field]=f'{bad:08x}' if rule.get('encoding')=='hex' else str(bad)
                             else:broken[0][field]='incorrect'
                             with self.subTest(field=field),self.assertRaises(EvidenceError):check(case['probe'],predicate,broken)
@@ -1384,17 +1393,17 @@ class F2EvidenceTests(unittest.TestCase):
         start,end=addr('__f2probes_start'),addr('__f2probes_end')
         self.assertLessEqual(addr('__rodata_start'),start);self.assertLessEqual(start,end)
         self.assertLessEqual(end,addr('__rodata_end'))
-        # Registration order follows the linked source files (desktop, files,
-        # process, signals); app-gate has no CIUKI_F2_PROBE registration yet.
+        # app-gate owns its registration in its own translation unit and is
+        # the final F2 registration in the explicit builder source order.
         self.assertEqual(linked_probe_names(rows,2),[
-            'crash-isolation','libc-smoke','fd-table','elf-load','spawn-wait','mmap','threads-wait','signals-fault'])
+            'elf-load','spawn-wait','mmap','threads-wait','crash-isolation','libc-smoke','fd-table','signals-fault','app-gate'])
         registrations=[line.split()[-1] for line in rows if ' f2_registration_' in line]
         self.assertEqual(registrations,[
-            'f2_registration_probe_f2_crash_isolation','f2_registration_probe_f2_libc_smoke',
-            'f2_registration_probe_f2_fd_table',
             'f2_registration_probe_f2_elf_load','f2_registration_probe_f2_spawn_wait',
             'f2_registration_probe_f2_mmap','f2_registration_probe_f2_threads_wait',
-            'f2_registration_probe_f2_signals_fault'])
+            'f2_registration_probe_f2_crash_isolation','f2_registration_probe_f2_libc_smoke',
+            'f2_registration_probe_f2_fd_table',
+            'f2_registration_probe_f2_signals_fault','f2_registration_probe_f2_app_gate'])
         self.assertEqual(end-start,8*len(registrations))
         sections=[r for r in rows if ':(.f2probes)' in r];self.assertTrue(sections)
         for row in sections:

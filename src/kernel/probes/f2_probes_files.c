@@ -137,6 +137,31 @@ static bool observed(const char *operation, int64_t expected, int64_t actual)
     rec_emit("fd-table", "DATA", "operation=%s expected=%lld observed=%lld", operation, expected, actual);
     return expected == actual;
 }
+static void record_slots(const struct process *p)
+{
+    unsigned slots = 0;
+    for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++)
+        slots += p->fds[i].object != 0;
+    rec_emit("fd-table", "DATA", "operation=fd-slots slots=%u limit=%u", slots, CIUKI_OPEN_MAX);
+}
+static unsigned record_growth(const char *bytes, unsigned size)
+{
+    unsigned errors = 0;
+    for (unsigned i = 8; i < size; i++) errors += bytes[i] != 0;
+    rec_emit("fd-table", "DATA", "operation=growth size=%u zero_errors=%u", size, errors);
+    return errors;
+}
+static void record_seek(int64_t position, int error, uint32_t before, uint32_t after)
+{
+    rec_emit("fd-table", "DATA", "operation=seek expected=%llu observed=%lld error=%d free_before=%u free_after=%u",
+             (uint64_t)UINT32_MAX + 10, position, error, before, after);
+}
+static void record_directory_digest(struct sha256_ctx *names)
+{
+    uint8_t digest[32]; char hex[65];
+    sha256_final(names, digest); sha256_hex(digest, hex);
+    rec_emit("fd-table", "DATA", "operation=directory-digest encoding=names_nul sha256=%s", hex);
+}
 static int kernel_io(struct process *p, int fd, void *b, unsigned bytes, bool wr, bool positioned, uint64_t off)
 {
     struct file_description *d = file_fd(p, fd);
@@ -185,9 +210,13 @@ static bool kernel_cases(struct process *p)
     pass &= observed("status-shared", O_RDWR, file_fcntl(p, b, F_GETFL, 0));
     struct px_namespace *s = ((struct px_node *)p->cwd)->space;
     fs_lock_take(&s->vfs->lock);
-    int64_t position;
-    pass &= !file_seek_locked(file_fd(p, a), (int64_t)UINT32_MAX + 10, SEEK_SET, &position);
+    int64_t position = 0;
+    struct fat_volume *seek_volume = file_fd(p, a)->node->volume;
+    uint32_t free_before = seek_volume->free_clusters;
+    int seek_result = file_seek_locked(file_fd(p, a), (int64_t)UINT32_MAX + 10, SEEK_SET, &position);
+    pass &= !seek_result;
     pass &= position == (int64_t)UINT32_MAX + 10;
+    record_seek(position, seek_result, free_before, seek_volume->free_clusters);
     fs_lock_drop(&s->vfs->lock);
     pass &= observed("efbig", -EFBIG, kernel_io(p, a, "x", 1, true, false, 0));
     fs_lock_take(&s->vfs->lock);
@@ -195,7 +224,7 @@ static bool kernel_cases(struct process *p)
     pass &= !file_sync_locked(file_fd(p, a));
     fs_lock_drop(&s->vfs->lock);
     pass &= observed("grown-read", sizeof(bytes), kernel_io(p, a, bytes, sizeof(bytes), false, true, 0));
-    for (unsigned i = 8; i < sizeof(bytes); i++) pass &= bytes[i] == 0;
+    pass &= !record_growth(bytes, sizeof(bytes));
     struct process *child = 0;
     int err = proc_prepare(p, &child);
     if (!err) {
@@ -254,13 +283,17 @@ static bool kernel_cases(struct process *p)
     if (dir < 0) pass = false;
     else {
         struct ciuki_dirent ent; uint64_t cookie = 0; int n;
+        struct sha256_ctx names; sha256_init(&names);
         fs_lock_take(&s->vfs->lock);
-        while ((n = px_getdents_locked(file_fd(p, dir), &ent)) > 0)
+        while ((n = px_getdents_locked(file_fd(p, dir), &ent)) > 0) {
             pass &= n == 792 && ent.d_reclen == 792 && ent.d_off == (int64_t)++cookie && ent.d_namlen == strlen(ent.d_name);
+            sha256_update(&names, ent.d_name, strlen(ent.d_name) + 1);
+        }
         pass &= !n && !file_seek_locked(file_fd(p, dir), 0, SEEK_SET, &position);
         pass &= px_getdents_locked(file_fd(p, dir), &ent) == 792 && ent.d_off == 1 && !strncmp(ent.d_name, ".", 2);
         fs_lock_drop(&s->vfs->lock);
         rec_emit("fd-table", "DATA", "operation=getdents records=%llu record_bytes=792 rewind_cookie=%lld", cookie, ent.d_off);
+        record_directory_digest(&names);
         file_close(p, dir);
     }
     int replaced = file_open(p, "/tmp/f2-replaced.bin", O_CREAT | O_EXCL | O_RDWR, 0666);
@@ -277,8 +310,9 @@ static bool kernel_cases(struct process *p)
     fs_lock_drop(&s->vfs->lock);
     rec_emit("fd-table", "DATA", "operation=fstat-unlinked inode=%llu links=%u size=%lld", st.st_ino, st.st_nlink, st.st_size);
     while ((result = file_dup(p, a, 0, false, 0)) >= 0) { }
+    record_slots(p);
     pass &= observed("emfile", -EMFILE, result);
-    pass &= !file_close(p, 73) && file_dup(p, a, 0, false, 0) == 73;
+    pass &= !file_close(p, 73) && observed("fd-reuse", 73, file_dup(p, a, 0, false, 0));
     for (int i = 0; i < CIUKI_OPEN_MAX; i++) if (p->fds[i].object) pass &= !file_close(p, i);
     pass &= !namespace_op(p, 2, "/tmp/F2Dest/Moved/Child", 0);
     pass &= !namespace_op(p, 2, "/tmp/F2Dest/Moved", 0) && !namespace_op(p, 2, "/tmp/F2Dest", 0);

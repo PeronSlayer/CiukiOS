@@ -1,0 +1,5 @@
+CIUKI_TEST v=1 run=9949580d seq=000001 probe=threads-wait event=BEGIN
+CIUKI_TEST v=1 run=9949580d seq=000002 probe=threads-wait event=DATA case=t pid=3 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=9949580d seq=000003 probe=threads-wait event=DATA case=entry pid=3 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=9949580d seq=000004 probe=threads-wait event=DATA case=threads pid=3 threads=8 preemptions=1002 increments=80000 expected_increments=80000 tokens=10000 expected_tokens=10000
+CIUKI_TEST v=1 run=9949580d seq=000005 probe=threads-wait event=END status=PASS

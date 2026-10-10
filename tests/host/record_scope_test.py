@@ -16,6 +16,7 @@ ALLOWED = {
     'probes/f2_probes_process.c',
     'probes/f2_probes_signals.c',
     'probes/f2_probes_desktop.c',
+    'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
     'drivers/ata_probe.c',
     'drivers/fbdev_probe.c',
