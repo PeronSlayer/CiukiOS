@@ -192,6 +192,4 @@ int probe_framebuffer(void)
     return pass ? 0 : -EFAULT;
 }
 
-#ifdef CIUKI_F1_PROBE
 CIUKI_F1_PROBE("framebuffer", probe_framebuffer);
-#endif

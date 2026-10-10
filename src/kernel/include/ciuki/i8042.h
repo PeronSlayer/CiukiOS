@@ -5,7 +5,7 @@
 
 #include "input.h"
 
-#define I8042_REPLY_MS 100u
+#define I8042_REPLY_MS 200u
 #define I8042_SETUP_MS 500u
 #define I8042_RESENDS 2u
 /* Driver-local errors; no additions to the frozen F0 syscall ABI. */

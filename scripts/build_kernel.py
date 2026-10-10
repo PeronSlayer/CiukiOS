@@ -25,7 +25,8 @@ CFLAGS = [
     "--target=i686-unknown-elf", "-march=pentiumpro", "-ffreestanding", "-fno-pic",
     "-fno-pie", "-fno-builtin", "-nostdlib", "-mno-sse", "-mno-sse2", "-mno-mmx",
     "-mno-80387", "-mno-red-zone", "-fno-omit-frame-pointer", "-fno-strict-aliasing",
-    "-fno-stack-protector", "-mstack-alignment=4", "-std=c17", "-O2", "-g",
+    "-fstack-protector-strong", "-mstack-protector-guard=global",
+    "-mstack-alignment=4", "-std=c17", "-O2", "-g",
     "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter",
 ]
 # Only these routines may contain FPU/SIMD instructions.
@@ -171,6 +172,16 @@ def main() -> int:
              "-c", str(c), "-o", str(o)])
         objs.append(o)
     elf = OUT / "VMM.ELF"
+    # .f1probes is append-only in the linker script. Its objects must follow
+    # the acceptance table, rather than the source filenames. Keep the
+    # dispatcher unchanged; each registration remains in its owning file.
+    f1_order = {
+        name: i for i, name in enumerate((
+            "probes_registry_probe", "drivers_i8042_probe", "drivers_fbdev_probe",
+            "drivers_ata_probe", "probes_safe_probe",
+        ))
+    }
+    objs.sort(key=lambda obj: f1_order.get(obj.stem, -1))
     run(["ld.lld", "-m", "elf_i386", "-T", str(SRC / "linker.ld"), "--no-undefined",
          "-Map", str(OUT / "VMM.map"), "-o", str(elf), *map(str, objs)])
     audit(elf)

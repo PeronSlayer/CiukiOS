@@ -49,6 +49,10 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 "$out/kernel_lib_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/runtime_init_test.c" -o "$out/runtime_init_test"
+"$out/runtime_init_test"
+
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
 
@@ -105,7 +109,19 @@ simd = [b for b in bad if b.startswith("simd_fixture")]
 integer = [b for b in bad if b.startswith("integer_fixture")]
 assert len(simd) == 8, simd
 assert not integer, integer
+assert "-fstack-protector-strong" in bk.CFLAGS
+assert "-fno-stack-protector" not in bk.CFLAGS
+assert "-mstack-protector-guard=global" in bk.CFLAGS
+out = bk.ROOT / "build/host"
+source = out / "stackprot_fixture.c"
+source.write_text("extern void consume(char *); void guarded(void) { char b[64]; consume(b); }\n")
+obj = out / "stackprot_fixture.o"
+subprocess.run(["clang", *bk.CFLAGS, "-c", str(source), "-o", str(obj)], check=True)
+fixture = subprocess.run(["llvm-objdump", "-dr", "--no-show-raw-insn", str(obj)], capture_output=True, text=True, check=True).stdout
+assert "__stack_chk_guard" in fixture and "__stack_chk_fail" in fixture, fixture
+assert not bk.audit_disassembly(fixture, {}), fixture
 print("audit classifier fixture: PASS")
+print("stack protector build flag/instrumentation/integer audit: PASS")
 PY
 
 # F1 framebuffer presenter and probe with heap-backed LFB fixtures.

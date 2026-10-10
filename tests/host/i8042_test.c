@@ -10,6 +10,9 @@
 #include <ciuki/work.h>
 #include <ciuki/registry.h>
 #include <ciuki/i8042.h>
+#include <ciuki/fwinput.h>
+#include <ciuki/biosvm.h>
+#include <ciuki/init.h>
 
 static unsigned failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -216,6 +219,42 @@ static void replay_byte(bool aux, uint8_t byte)
     host_handlers[1](&tf);
     irq_restore(f);
 }
+static struct fwinput_event fw_events[64];
+static unsigned fw_head, fw_count;
+static uint64_t fake_fw_loss;
+static enum biosvm_backend fake_fw_state = BIOSVM_READY;
+static void fw_push(unsigned type, unsigned code, int32_t value)
+{
+    CHECK(fw_count < ARRAY_SIZE(fw_events));
+    fw_events[(fw_head + fw_count++) % ARRAY_SIZE(fw_events)] =
+        (struct fwinput_event){type, code, value, g_ticks};
+}
+int fwinput_init(void) { return 0; }
+unsigned fwinput_poll(struct fwinput_event *out, unsigned max)
+{
+    unsigned n = 0;
+    while (n < max && fw_count) {
+        out[n++] = fw_events[fw_head];
+        fw_head = (fw_head + 1) % ARRAY_SIZE(fw_events);
+        fw_count--;
+    }
+    return n;
+}
+void fwinput_stats(struct fwinput_stats *out) { *out = (struct fwinput_stats){ .loss = fake_fw_loss }; }
+void fwinput_backend_state(struct fwinput_backend_state *out)
+{
+    *out = (struct fwinput_backend_state){ .keyboard = true, .mouse = true, .key_releases = true,
+                                         .disabled = fake_fw_state == BIOSVM_DISABLED_BACKEND };
+}
+enum biosvm_backend biosvm_backend_state(void) { return fake_fw_state; }
+struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
+{
+    static struct task t;
+    CHECK(!strcmp(name, "firmware-queue") && fn && !arg && prio == P_DEVICE);
+    t = (struct task){ .state = T_BLOCKED };
+    return &t;
+}
+
 void task_sleep_ms(uint32_t ms)
 {
     CHECK(host_flags & 0x200);
@@ -228,6 +267,20 @@ void task_sleep_ms(uint32_t ms)
             data[2] = 0x5EED5EED;
         }
         if (replay_input && replay_cycles < 100) {
+            if (g_boot.input_policy == CBI_INPUT_FIRMWARE) {
+                fw_push(FWINPUT_KEY, 0x1E, 1);
+                fw_push(FWINPUT_TEXT, 0, 'a');
+                fw_push(FWINPUT_REL, FWINPUT_X, 2);
+                fw_push(FWINPUT_REL, FWINPUT_Y, -1);
+                fw_push(FWINPUT_KEY, 0x1E, 0);
+                if (replay_cycles % 10 == 0) {
+                    fw_push(FWINPUT_BUTTON, 0, 1);
+                    fw_push(FWINPUT_BUTTON, 0, 0);
+                }
+                fwinput_adapter_step();
+                replay_cycles++;
+                continue;
+            }
             replay_byte(false, 0x1C);
             replay_byte(true, 0x08); replay_byte(true, 2); replay_byte(true, 1);
             replay_byte(false, 0xF0); replay_byte(false, 0x1C);
@@ -278,14 +331,19 @@ int udelay(uint32_t us)
     if (host_flags & 0x200) fake_pause(&hw);
     return 0;
 }
+#include "../../src/kernel/lib/stackprot.c"
 #include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/drivers/i8042.c"
+#include "../../src/kernel/drivers/fwinput_adapter.c"
 #include "../../src/kernel/drivers/i8042_probe.c"
 
 static void reset_native(void)
 {
     i8042_fault_end();
     memset(&native, 0, sizeof(native));
+    adapter = 0; generation = 0; loss_seen = 0;
+    fw_head = fw_count = 0; fake_fw_loss = 0;
+    fake_fw_state = BIOSVM_READY;
     memset(&hw, 0, sizeof(hw));
     hw.pause_step = 1;
     hw.config = 0x47;                 /* preserve system flag, disable translation/IRQs */
@@ -377,6 +435,7 @@ static void test_policy_and_lifecycle(void)
     }
     struct input_event event;
     CHECK(input_read(&event) && event.type == INPUT_KEY && event.code == INPUT_KEY_A && event.value == 1);
+    CHECK(input_read(&event) && event.type == INPUT_TEXT && event.code == 'a');
     CHECK(input_read(&event) && event.value == 0 && !input_read(&event));
     hw.ack_delay = 1;
     hw.irq_reply = true;
@@ -422,10 +481,10 @@ static void test_native_failures(void)
     CHECK(s.last_elapsed_ms == 500 && s.quarantined && !hw.resets);
     reset_native();
     hw.stuck_ibf = true;
-    CHECK(i8042_init() == -I8042_ETIMEDOUT && hw.now == 100 && !hw.writes);
+    CHECK(i8042_init() == -I8042_ETIMEDOUT && hw.now == I8042_REPLY_MS && !hw.writes);
     reset_native();
     hw.stuck_obf = true;
-    CHECK(i8042_init() == -I8042_ETIMEDOUT && hw.now == 100 && !hw.writes);
+    CHECK(i8042_init() == -I8042_ETIMEDOUT && hw.now == I8042_REPLY_MS && !hw.writes);
     reset_native();
     hw.bad_selftest = true;
     CHECK(i8042_init() == -I8042_EIO && !hw.resets && hw.selftests == 1);
@@ -455,7 +514,7 @@ static void test_commands(void)
     CHECK(i8042_fault_command(true, 0xF4) == 0 && b.sends == 3);
     struct i8042_stats s;
     i8042_fault_snapshot(&s, 0);
-    CHECK(s.resends == 2 && !s.quarantined && s.last_elapsed_ms <= 100);
+    CHECK(s.resends == 2 && !s.quarantined && s.last_elapsed_ms <= I8042_REPLY_MS);
     i8042_fault_end();
     begin_fixture(&b);
     b.resend_count = 100;
@@ -466,21 +525,21 @@ static void test_commands(void)
     CHECK(i8042_fault_command(false, 0xF4) == -I8042_EIO && b.writes == writes && b.reads == reads);
     i8042_fault_end();
     begin_fixture(&b);
-    b.resend_count = 2; b.ack_delay = 45;
-    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT && b.now == 100);
+    b.resend_count = 2; b.ack_delay = 75;
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT && b.now == I8042_REPLY_MS);
     i8042_fault_snapshot(&s, 0);
-    CHECK(s.resends == 2 && s.last_elapsed_ms == 100 && s.quarantined);
+    CHECK(s.resends == 2 && s.last_elapsed_ms == I8042_REPLY_MS && s.quarantined);
     i8042_fault_end();
     begin_fixture(&b);
     b.missing = true;
-    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT && b.now == 100);
+    CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT && b.now == I8042_REPLY_MS);
     i8042_fault_end();
     begin_fixture(&b);
-    b.ack_delay = 100;                   /* arriving at deadline is too late */
+    b.ack_delay = I8042_REPLY_MS;        /* arriving at deadline is too late */
     CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT);
     i8042_fault_end();
     begin_fixture(&b);
-    b.ack_delay = 99;
+    b.ack_delay = I8042_REPLY_MS - 1;
     CHECK(i8042_fault_command(false, 0xF4) == 0);
     i8042_fault_end();
     begin_fixture(&b);
@@ -505,13 +564,13 @@ static void test_commands(void)
     b.mixed = true;
     CHECK(i8042_fault_command(false, 0xF4) == 0);
     struct input_digest d = fixture_digest();
-    CHECK(d.characters == 1 && d.key_transitions == 2 && d.x == 2 && d.y == -1 && d.events == 4);
+    CHECK(d.characters == 1 && d.key_transitions == 2 && d.x == 2 && d.y == -1 && d.events == 5);
     i8042_fault_end();
     begin_fixture(&b);
     b.mixed = true;
     CHECK(i8042_fault_command(true, 0xF4) == 0);
     d = fixture_digest();
-    CHECK(d.characters == 1 && d.key_transitions == 2 && d.x == 2 && d.y == -1 && d.events == 4);
+    CHECK(d.characters == 1 && d.key_transitions == 2 && d.x == 2 && d.y == -1 && d.events == 5);
     i8042_fault_end();
     begin_fixture(&b);
     writes = b.writes;
@@ -522,7 +581,7 @@ static void test_commands(void)
     b.now = UINT64_MAX - 20; b.missing = true;
     CHECK(i8042_fault_command(false, 0xF4) == -I8042_ETIMEDOUT);
     i8042_fault_snapshot(&s, 0);
-    CHECK(s.last_elapsed_ms == 100);
+    CHECK(s.last_elapsed_ms == I8042_REPLY_MS);
     i8042_fault_end();
     printf("i8042 ACK/RESEND/deadlines/stalled-clock/mixed bytes: PASS\n");
 }
@@ -537,8 +596,8 @@ static void test_keyboard_and_mouse(void)
     CHECK(q.keys_down == 1);
     feed(false, 0xE0); feed(false, 0xF0); feed(false, 0x75);
     struct input_event e;
-    CHECK(i8042_fault_read(&e) && e.code == 0x175 && e.value == 1);
-    CHECK(i8042_fault_read(&e) && e.code == 0x175 && e.value == 0);
+    CHECK(i8042_fault_read(&e) && e.code == 0x148 && e.value == 1);
+    CHECK(i8042_fault_read(&e) && e.code == 0x148 && e.value == 0);
     feed(false, 0x1C); feed(false, 0x1C); /* typematic does not duplicate a transition */
     feed(false, 0xF0); feed(false, 0x1C); feed(false, 0xF0); feed(false, 0x1C);
     struct input_digest d = fixture_digest();
@@ -553,7 +612,7 @@ static void test_keyboard_and_mouse(void)
     for (unsigned i = 0; i < ARRAY_SIZE(print_bytes); i++) feed(false, print_bytes[i]);
     d = fixture_digest();
     CHECK(d.key_transitions == 2);
-    CHECK(input_unshifted(0x45) == '0' && input_unshifted(0x16) == '1' && !input_unshifted(0x175));
+    CHECK(input_unshifted(0x0B) == '0' && input_unshifted(0x02) == '1' && !input_unshifted(0x148));
     /* Invalid headers, overflow header, then valid negative 9-bit x/y. */
     feed(true, 0); feed(true, 0xC8); feed(true, 0);
     feed(true, 0x38); feed(true, 0xFE); feed(true, 0xFF);
@@ -585,15 +644,16 @@ static void test_queue_and_stimulus(void)
     for (unsigned i = 0; i < 130; i++) { feed(false, 0x1C); feed(false, 0xF0); feed(false, 0x1C); }
     struct input_stats q;
     i8042_fault_snapshot(0, &q);
-    CHECK(q.pending == INPUT_CAPACITY && q.overflow == 4 && q.state_lost && !q.keys_down);
+    CHECK(q.pending == INPUT_CAPACITY && q.overflow == 130 * 3 - INPUT_CAPACITY && q.state_lost && !q.keys_down);
     struct input_event e;
     for (unsigned i = 0; i < INPUT_CAPACITY; i++) {
         CHECK(i8042_fault_read(&e));
-        CHECK(e.sequence == i + 1 && e.value == (i % 2 ? 0 : 1));
+        CHECK(e.sequence == i + 1);
+        CHECK(e.type == (i % 3 == 1 ? INPUT_TEXT : INPUT_KEY) && e.value == (i % 3 == 0));
     }
     CHECK(!i8042_fault_read(&e));
     feed(false, 0x1C);
-    CHECK(i8042_fault_read(&e) && e.sequence == 261 && (e.flags & INPUT_F_RESYNC));
+    CHECK(i8042_fault_read(&e) && e.sequence == 391 && (e.flags & INPUT_F_RESYNC));
     i8042_fault_end();
 
     begin_fixture(&b);
@@ -617,7 +677,7 @@ static void test_queue_and_stimulus(void)
     }
     i8042_fault_snapshot(0, &q);
     CHECK(d.characters == 100 && d.key_transitions == 200 && d.button_transitions == 20);
-    CHECK(changes == 20 && d.x == 200 && d.y == -100 && d.events == 420);
+    CHECK(changes == 20 && d.x == 200 && d.y == -100 && d.events == 520);
     CHECK(!q.overflow && !q.resync && !q.duplicates && !q.repeats && !q.keys_down && !q.buttons && !q.pending);
     printf("i8042 stimulus: characters=%llu keys=%llu buttons=%llu x=%lld y=%lld overflow=%llu resync=%llu digest=%08x text_digest=%08x PASS\n",
            (unsigned long long)d.characters, (unsigned long long)d.key_transitions,
@@ -661,10 +721,13 @@ static void test_probe_records(void)
     CHECK(probe_input() == 0);
     replay_input = false;
     CHECK(replay_cycles == 100 && record_ready == 1 && record_pass == 1 && !record_deferred);
-    CHECK(!native.stats.active && !native.stats.quarantined);
+    CHECK(native.stats.active && !native.stats.quarantined);
     reset_native();
     g_boot.input_policy = CBI_INPUT_FIRMWARE;
-    CHECK(probe_input() == 2 && record_deferred == 1 && record_pass == 1);
+    replay_input = true;
+    replay_cycles = 0;
+    CHECK(probe_input() == 0 && !record_deferred && record_pass == 2);
+    replay_input = false;
     CHECK(!hw.reads && !hw.writes && !pic_changes);
     reset_native();
     select_fault("f1:input-fault run=12ab34cd");
@@ -672,11 +735,73 @@ static void test_probe_records(void)
     registry_snapshot(&before);
     CHECK(probe_input_fault() == 0);
     registry_snapshot(&after);
-    CHECK(record_pass == 2 && !host_survivor && !fixture && !hw.reads && !hw.writes && !pic_changes);
+    CHECK(record_pass == 3 && !host_survivor && !fixture && !hw.reads && !hw.writes && !pic_changes);
     CHECK(before.claims == after.claims && before.live == after.live && before.quarantines == after.quarantines);
     for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
-    printf("i8042 probe orchestration/records: PASS (%u records, maximum %zu bytes, native PASS/firmware not_run/fault PASS)\n",
+    printf("i8042 probe orchestration/records: PASS (%u records, maximum %zu bytes, native PASS/firmware PASS/fault PASS)\n",
            record_count, longest_record);
+}
+
+static void test_firmware_mapping(void)
+{
+    reset_native();
+    CHECK(fwinput_adapter_init() == -ENOSYS && !hw.reads && !hw.writes);
+    g_boot.input_policy = CBI_INPUT_FIRMWARE;
+    CHECK(!fwinput_adapter_init());
+    gen_t saved = fwinput_adapter_generation();
+    CHECK(saved && !fwinput_adapter_init() && saved == fwinput_adapter_generation());
+    struct input_event e;
+    fw_push(FWINPUT_KEY, 0x1E, 1);
+    fw_push(FWINPUT_TEXT, 0, 'a');
+    fw_push(FWINPUT_KEY, 0x1E, 0);
+    fw_push(FWINPUT_KEY, 0x148, 1);
+    fw_push(FWINPUT_KEY, 0x148, 0);
+    fw_push(FWINPUT_KEY, 0x145, 1);
+    fw_push(FWINPUT_KEY, 0x145, 0);
+    fw_push(FWINPUT_REL, FWINPUT_X, 2);
+    fw_push(FWINPUT_REL, FWINPUT_Y, -1);
+    fw_push(FWINPUT_BUTTON, INPUT_LEFT, 1);
+    fw_push(FWINPUT_BUTTON, INPUT_LEFT, 0);
+    CHECK(fwinput_adapter_step() == 11);
+    struct input_digest d;
+    input_digest_init(&d);
+    unsigned n = 0;
+    while (input_read(&e)) {
+        CHECK(e.sequence == ++n && e.source == INPUT_FIRMWARE && e.generation == saved && !e.flags);
+        if (n == 6 || n == 7) CHECK(e.code == INPUT_KEY_PAUSE);
+        input_digest_add(&d, &e);
+    }
+    CHECK(d.characters == 1 && d.key_transitions == 6 && d.button_transitions == 2 && d.x == 2 && d.y == -1);
+    struct input_stats q;
+    input_snapshot(&q);
+    CHECK(!q.keys_down && !q.buttons && !q.errors && !q.overflow && !q.pending);
+    struct fwinput_event stale = { .type = FWINPUT_KEY, .code = INPUT_KEY_A, .value = 1 };
+    input_firmware_event(&stale, saved + 1);
+    CHECK(!input_read(&e));
+    fake_fw_loss = 7;
+    fw_push(FWINPUT_RESYNC, 0, 0);
+    CHECK(fwinput_adapter_step() == 1 && input_read(&e) && e.type == INPUT_RESYNC && (e.flags & INPUT_F_RESYNC));
+    input_snapshot(&q);
+    CHECK(q.overflow == 7 && q.resync == 1 && q.state_lost);
+    fw_push(FWINPUT_KEY, INPUT_KEY_A, 1);
+    fwinput_adapter_step();
+    CHECK(input_read(&e) && (e.flags & INPUT_F_RESYNC));
+    for (unsigned i = 0; i < 130; i++) {
+        struct fwinput_event press = { .type = FWINPUT_KEY, .code = 0x148, .value = 1 };
+        input_firmware_event(&press, saved);
+        press.value = 0;
+        input_firmware_event(&press, saved);
+    }
+    input_snapshot(&q);
+    CHECK(q.pending == INPUT_CAPACITY && q.overflow == 11);
+    fake_fw_state = BIOSVM_DISABLED_BACKEND;
+    CHECK(fwinput_adapter_init() == -V86_EIO);
+    fwinput_adapter_step();
+    struct i8042_stats driver;
+    i8042_snapshot(&driver);
+    CHECK(driver.quarantined && !driver.active && i8042_init() == -I8042_EIO);
+    CHECK(!hw.reads && !hw.writes && !pic_changes);
+    printf("firmware queue bridge: PASS (set-1/E0/Pause/text/motion/buttons, generation/source/sequence, loss, quarantine)\n");
 }
 
 int main(void)
@@ -688,6 +813,7 @@ int main(void)
     test_keyboard_and_mouse();
     test_queue_and_stimulus();
     test_probe_records();
+    test_firmware_mapping();
     i8042_fault_end();
     printf("i8042: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
