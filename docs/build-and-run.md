@@ -81,12 +81,38 @@ Do not edit step/state counters by hand. Completion removes only the probe line.
 Read-only cursor refusal leaves evidence on screen and does not reset.
 
 Place the serial bytes as `f0.log` beside `acquisition.json` in the capture
-folder. Record the verified write/readback hashes, embedded build id and all
-existing physical identity fields, `operator_confirmed: true`,
-`selector_source: "cfg"`, the initial selector, and per-boot
-`panic_observations` keyed by one-based boot number (external_halt_seconds,
-resumed=false means no spontaneous execution resumed before the power-cycle).
-Historical mixed-run captures may explicitly list approved `selectors`.
+folder (copy `serial.log` byte for byte; keep CRLF and UART noise). The JSON
+object has the following schema. Inventory fields may contain `"unknown"`
+when unmeasured; hashes, selectors, confirmation and build identity must be
+verified, never inferred from the importer's current checkout.
+
+| Required key | Value |
+| --- | --- |
+| `model` | Machine model, string; used for physical target predicates. |
+| `unit_identity` | Operator-recorded identity of the particular unit, string. |
+| `bios_version` | BIOS version, string. |
+| `cpuid` | Measured CPU signature, hex string. |
+| `installed_ram` | Installed memory, string with units. |
+| `pci_ids` | Array of PCI identity strings, or `"unknown"`. |
+| `target_disk_identity` | Identity of the disk written and read back, string. |
+| `write_sha256`, `readback_sha256` | Matching 64-character lowercase SHA-256 strings for the exact image extent. |
+| `capture_settings` | Serial/screen acquisition settings, string; serial uses 38400 8N1. |
+| `operator_confirmed` | Boolean `true`, confirming model/unit and acquisition identity. |
+| `build_id` | Exact embedded human build identity, e.g. `abcd67745e5f`; match every kernel banner, including any `-dirty` suffix. `embedded_build_id` is not an alias. |
+| `selector` | Initial request, e.g. `all:sweep run=66666666`; alternatively supply `selectors`. |
+
+| Optional or conditional key | Value |
+| --- | --- |
+| `selector_source` | Multi-boot import defaults to `"cfg"`, single-probe import to `"menu"`. A sweep requires `"cfg"` and each recorded boot must retain `L:SELECT_SOURCE=cfg`. |
+| `selectors` | Nonempty array of explicitly approved requests for historical mixed-run captures; replaces `selector`. |
+| `panic_observations` | Required to qualify each intentional panic: object keyed by the one-based boot number in the complete capture, e.g. `{"10":{"external_halt_seconds":10,"resumed":false}}`. Halt duration must be at least 5 seconds; `resumed:false` means no spontaneous execution resumed before the power-cycle. |
+| `external_halt_seconds`, `resumed` | Legacy single-panic observation, or sweep fallback when no per-boot entry exists. |
+| `case_confirmations` | Object mapping suite case ids to boolean `true`; required for operator-confirmation cases. Model confirmation does not confirm a case. |
+| `disk_log` | Defaults to `"unavailable"`. Any other value requires `storage_qualified:true`; serial import still cannot replace independent disk/screen checks. |
+| `storage_qualified` | Boolean, defaults to `false`. |
+| `suite`, `utc_start`, `utc_end`, `image_size`, `build_manifest_hash`, `build_git_revision`, `build_dirty`, `runner_revision`, `external_seconds` | Optional single-probe provenance fields retained in its result; omitted values are `"unknown"`. Sweep import retains the entire acquisition object. |
+
+Metadata is bounded to 128 KiB and sweep captures to 4 MiB.
 Never infer an operator observation or checker result from the serial stream.
 Import once with:
 
@@ -94,7 +120,45 @@ Import once with:
 python3 scripts/test/run.py f2-all --physical-capture legacy/local/physical/12345678
 ```
 
-The command imports only and writes one profile=physical summary. Missing
+For a historical image, explicitly select its verified hash:
+
+```bash
+python3 scripts/test/run.py f2-all --physical-capture legacy/local/physical/44444444 \
+  --image-sha256 cb33aec38d502e57b966bca55ab0bad59a90f429b8d841e76ba85f9b93481a09
+```
+
+`--image` can locate the current canonical image in another worktree. The
+override must match both acquisition hashes; it preserves the current canonical
+hash, selected historical hash and mismatch in the summary, and does not relax
+build/run/probe verification. It applies only to physical import.
+
+The splitter uses the earliest surviving startup stage in each boot: `L:CPU`
+(even if its diagnostic fields lost bytes), `SELECT_READY`, selector provenance,
+then the kernel build banner. Later stages in that startup do not split again;
+a sequence reset alone never establishes a boot boundary. Import uses original
+bytes and CR/LF framing. Research: Python's
+[bytes.splitlines documentation](https://docs.python.org/3/library/stdtypes.html#bytes.splitlines)
+defines CR, LF and CRLF boundaries; unlike `str.splitlines`, it does not split
+at form feed. This preserves the real capture's serial bytes and boot numbering.
+Sequence gaps and damaged controller records become per-boot `records_lost`,
+sequence ranges and original damaged bytes in hex. If an envelope is damaged,
+the loss count is at least the number of unusable records; no missing identity
+or sequence is invented. Such boots remain unqualified; duplicate/decreasing
+sequences and identifiable wrong identities refuse
+the acquisition. The anonymous host fixtures retain original controller,
+startup and console lines; unrelated diagnostic lines are omitted, and the
+historical fixture keeps only boots 1, 10 and 33.
+
+The command imports only and writes one profile=physical summary at
+`build/test-runs/<suite>/summary.json`. Each case retains direct
+`evidence_outcome`/`evidence_reason`, original sweep completions and
+`not_run_reasons`, plus the prerequisite decision used for its qualification
+`outcome`. A failing prerequisite marks subsequent cases not_run while keeping
+their direct results. The sweep's reported totals are retained separately;
+they are not a claim that suite predicates or physical qualification passed.
+Exit 0 means all cases qualify and the sweep completed, 1 means evidence was
+imported with failed/not_run cases or an incomplete sweep, and 2 means refusal.
+Missing
 fixture/disk checker/screen/operator evidence remains not_run. The safe-mode
 cursor conflict is recorded in f1-acceptance.md; a sweep is not yet a substitute
 for the dedicated safe qualification. QEMU suites remain unchanged; the lead

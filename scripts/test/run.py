@@ -1560,9 +1560,12 @@ def run_sweep(root, suite, case, profile, image, executable, firmware, host=None
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--physical-capture',type=Path,action='append',default=[])
+    ap.add_argument('--image-sha256',help='verified historical image hash (physical import only)')
     ap.add_argument('suite');ap.add_argument('--image',type=Path);ap.add_argument('--profile');ap.add_argument('--keep',action='store_true')
     options=ap.parse_args(argv)
     try:
+        if options.image_sha256 and (not options.physical_capture or not re.fullmatch('[0-9a-f]{64}',options.image_sha256)):
+            raise res.Refusal('--image-sha256 requires physical capture and 64 lowercase hex digits')
         if not all(c.isalnum() or c in '-_' for c in options.suite):raise res.Refusal('invalid suite name')
         suite=load_suite(options.suite)
         if suite.get('image')!='full':raise res.Refusal('only canonical full HDD suites are supported in F0')
@@ -1572,7 +1575,8 @@ def main(argv=None):
                 from physical import import_sweep
                 image=(options.image or ROOT/'build/f0/ciukios.img').resolve()
                 if not image.is_file(): raise res.Refusal('canonical image missing')
-                imported = [import_sweep(capture,sha(image),suite['cases'],suite.get('physical_cases',[]))
+                canonical_hash = sha(image)
+                imported = [import_sweep(capture,canonical_hash,suite['cases'],suite.get('physical_cases',[]),options.image_sha256)
                             for capture in options.physical_capture]
                 summary = []
                 for index, case in enumerate(suite['cases']):
@@ -1584,7 +1588,10 @@ def main(argv=None):
                 dest.parent.mkdir(parents=True,exist_ok=True)
                 complete = all(r['sweep_complete'] for r in summary)
                 dest.write_text(json.dumps({'schema_version':1,'suite':options.suite,'profile':'physical',
-                                            'sweep_complete':complete,'cases':summary},indent=2)+'\n')
+                                            'sweep_complete':complete,'image_sha256':options.image_sha256 or canonical_hash,
+                                            'canonical_image_sha256':canonical_hash,
+                                            'historical_image':bool(options.image_sha256 and options.image_sha256 != canonical_hash),
+                                            'cases':summary},indent=2)+'\n')
                 for result in summary: print(result['outcome'].upper()+': '+result['case']+' — '+result['reason'],flush=True)
                 return 0 if complete and all(r['outcome']=='pass' for r in summary) else 1
             host_evidence=None
