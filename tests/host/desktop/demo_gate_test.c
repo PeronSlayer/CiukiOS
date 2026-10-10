@@ -100,8 +100,8 @@ int main(int argc,char **argv)
         if (!strcmp(argv[1],"--hello")) client_messages=fopen(argv[2],"wb");
         else server_messages=fopen(argv[2],"rb");
         assert(client_messages || server_messages);
-        char *args[]={"demo","--test=crash-isolation","--channel-fd=5","--fault=none",NULL};
-        expected_fd=5; int result=demo_main(4,args);
+        char *args[]={"demo","--channel-fd=3","--fault=none","--test=crash-isolation",NULL};
+        expected_fd=3; int result=demo_main(4,args);
         assert(!result && !last_serial && !grant_checks && !forged_checks);
         assert(!fclose(client_messages ? client_messages : server_messages));return 0;
     }

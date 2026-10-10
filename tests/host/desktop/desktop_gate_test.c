@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+#include <stdarg.h>
 #undef ILL_ILLOPC
 #undef FPE_INTDIV
 #undef SEGV_MAPERR
@@ -44,8 +45,18 @@ static uint32_t output_pixels[320*320];
 static uint32_t client_pixels[(240*160*4+4095)/4096*1024];
 static bool handshake;
 static bool input_error, report_error;
+static bool inherit_error, spawn_error, normal_spawn;
 static FILE *client_messages, *server_messages;
-static int fd_next=10,pair_client[64],client_pid[64],hello[64],next_pid=42;
+static int pair_client[64],client_pid[64],hello[64];
+void desktop_spawn_host_init(int);
+int desktop_spawn_host_output(void);
+uint32_t desktop_spawn_host_control(void);
+int desktop_spawn_host_pair(int32_t [2]);
+int desktop_spawn_host_fcntl(int,int,uint32_t);
+int desktop_spawn_host_close(int);
+int desktop_spawn_host_spawn(const char *,char *const [],char *const [],const struct ciuki_spawn_fd *,uint32_t,uint32_t);
+void desktop_spawn_host_reap(int);
+void desktop_spawn_host_finish(void);
 static unsigned faults, pongs, remaining, running, reaped, presents, summary_count, interaction_sent;
 static int victim_live, victim_dead, registered_victim;
 static unsigned generation=1;
@@ -54,12 +65,12 @@ static void command(unsigned cmd) { page.generation=generation++;page.command=cm
 static void *gate_mmap(void *addr,size_t n,int prot,int flags,int fd,off_t off)
 {
     assert(!addr && n==4096 && prot==(PROT_READ|PROT_WRITE) && flags==(MAP_PRIVATE|MAP_ANONYMOUS) && fd==-1 && !off);
+    uintptr_t base=desktop_spawn_host_control();
     if (handshake) {
         /* Match the kernel's first-fit placement after TLS and the output
          * surface; the kernel harness checks this with ua_mmap/surface_map.
          * POSIX chooses placement for NULL, rather than promising the arena
          * base: https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html */
-        uintptr_t base=CIUKI_MMAP_BASE+CIUKI_TLS_SIZE+sizeof(output_pixels);
         control_page=mmap((void *)base,n,prot,flags|MAP_FIXED_NOREPLACE,fd,off);
         assert(control_page==(void *)base);
     }
@@ -69,7 +80,8 @@ static uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,u
 {
     (void)a;(void)b;(void)c;(void)e;
     const char *line=(void *)address;assert(n==strlen(line) && n<=CIUKI_PROBE_REPORT_MAX);
-    if (input_error) { puts(line); return 0; }
+    if (!strncmp(line,"case=native-setup ",18)) { puts(line); fflush(stdout); return 0; }
+    if (input_error || inherit_error || spawn_error) { puts(line); return 0; }
     if (report_error) return (uint32_t)-EFAULT;
     if (handshake) {
         puts(line);
@@ -90,13 +102,22 @@ static uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,u
     if (strstr(line,"keys=2 motion=1 buttons=2")) longjmp(done,1);
     return 0;
 }
-int ciuki_channel_pair(int pair[2]) { pair[0]=fd_next++;pair[1]=fd_next++;assert(fd_next<64);pair_client[pair[1]]=pair[0];return 0; }
+int ciuki_channel_pair(int pair[2]) {
+    int result=desktop_spawn_host_pair(pair);
+    if (result<0) { errno=-result; return -1; }
+    assert(pair[0]>=6 && pair[1]<64);
+    pair_client[pair[1]]=pair[0]; hello[pair[0]]=0; return 0;
+}
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
     assert(!strcmp(path,"/bin/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") &&
-        !strcmp(argv[3],"--test=crash-isolation") && !argv[4]);
-    assert(env && !strcmp(env[0],"LC_ALL=C") && mapping && count==1 && mapping->target==3 && flags==CIUKI_SPAWN_NEW_GROUP);
-    int pid=next_pid++;client_pid[pair_client[mapping->source]]=pid;
+        (normal_spawn ? !argv[3] : !strcmp(argv[3],"--test=crash-isolation")) && !argv[4]);
+    assert(env && !strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !env[2] &&
+        mapping && count==1 && mapping->target==3 && flags==CIUKI_SPAWN_NEW_GROUP);
+    if (spawn_error) assert(!desktop_spawn_host_fcntl(mapping->source,F_SETFD,FD_CLOEXEC));
+    int pid=desktop_spawn_host_spawn(path,argv,env,mapping,count,flags);
+    if (pid<0) { errno=-pid; return -1; }
+    client_pid[pair_client[mapping->source]]=pid;
     if (strcmp(argv[2],"--fault=none")) {
         char expected[64];snprintf(expected,sizeof(expected),"--fault=%s",gate_faults[faults%5]);
         assert(!strcmp(argv[2],expected));faults++;victim_live=pid;
@@ -105,7 +126,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],co
 }
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 {
-    assert(flags==DONTWAIT && fd>=10 && fd<64);
+    assert(flags==DONTWAIT && fd>=6 && fd<64);
     if (handshake) {
         struct ciuki_message delivered=*m; delivered.sender_pid=41;
         assert(fwrite(&delivered,sizeof(delivered),1,server_messages)==1);
@@ -121,7 +142,8 @@ int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 }
 int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
 {
-    assert(flags==DONTWAIT && fd>=10 && fd<64);
+    assert(flags==DONTWAIT && fd>=6 && fd<64);
+    if (normal_spawn) { assert(client_pid[fd]==42); longjmp(done,1); }
     if (handshake) {
         if (fread(m,sizeof(*m),1,client_messages)==1) return 1;
         assert(feof(client_messages)); errno=EAGAIN; return -1;
@@ -135,16 +157,16 @@ int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
 int ciuki_display_info(int fd,struct ciuki_display_info *s)
 { assert(fd==3);s->width=s->height=320;return 0; }
 int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f)
-{assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return 6;}
+{assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return desktop_spawn_host_output();}
 void *ciuki_surface_map(int fd,int prot) {
     if (handshake && fd==7) { assert(prot==PROT_READ); return client_pixels; }
-    assert(fd==6 && prot==(PROT_READ|PROT_WRITE));return output_pixels;
+    assert(fd==5 && prot==(PROT_READ|PROT_WRITE));return output_pixels;
 }
 int ciuki_surface_info(int fd,struct ciuki_surface_info *s) {
     assert(handshake && fd==7);
     *s=(struct ciuki_surface_info){sizeof(*s),240,160,240*4,CIUKI_SURFACE_XRGB8888,sizeof(client_pixels)};return 0;
 }
-int ciuki_present(int display,int surface,const struct ciuki_rect *r) {assert(display==3 && surface==6 && r);presents++;return 0;}
+int ciuki_present(int display,int surface,const struct ciuki_rect *r) {assert(display==3 && surface==5 && r);presents++;return 0;}
 int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
 {
     assert(fd==4 && capacity==CIUKI_INPUT_READ_MAX);
@@ -159,13 +181,24 @@ int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
 }
 int desk_load_portrait(uint32_t *out) {memset(out,0,256*256*4);return 0;}
 int fcntl(int fd,int cmd,...) {
-    assert(fd==4 && (cmd==F_GETFL || cmd==F_SETFL));
+    uint32_t arg=0;
+    if (cmd==F_SETFL || cmd==F_SETFD) { va_list ap; va_start(ap,cmd); arg=(uint32_t)va_arg(ap,int); va_end(ap); }
     if (input_error && cmd==F_SETFL) { errno=EIO; return -1; }
-    return 0;
+    if (inherit_error && cmd==F_SETFD) { errno=EACCES; return -1; }
+    int result=desktop_spawn_host_fcntl(fd,cmd,arg);
+    if (result<0) { errno=-result; return -1; }
+    return result;
 }
-int close(int fd) { (void)fd;return 0; }
+int close(int fd) {
+    int result=desktop_spawn_host_close(fd);
+    /* Cleanup must preserve the original setup error, even if close changes
+     * errno. Native report files use stdio and bypass this guest-fd seam. */
+    if (inherit_error || spawn_error) errno=EIO;
+    if (result<0) { errno=-result; return -1; }
+    return result;
+}
 int munmap(void *p,size_t n) { (void)p;(void)n;return 0; }
-pid_t waitpid(pid_t pid,int *status,int flags) {assert(pid==victim_live && victim_dead && flags==WNOHANG);*status=(faults%5==2) ? SIGPIPE : SIGSEGV;victim_live=victim_dead=0;reaped++;return pid;}
+pid_t waitpid(pid_t pid,int *status,int flags) {assert(pid==victim_live && victim_dead && flags==WNOHANG);*status=(faults%5==2) ? SIGPIPE : SIGSEGV;desktop_spawn_host_reap(pid);victim_live=victim_dead=0;reaped++;return pid;}
 int clock_gettime(clockid_t clock,struct timespec *out) {assert(clock==CLOCK_MONOTONIC);out->tv_sec=0;out->tv_nsec=1000000;return 0;}
 int nanosleep(const struct timespec *t,struct timespec *rest)
 { (void)rest;assert(t->tv_nsec==1000000);if (running && !remaining && pongs==running*100 && !page.command) command(GATE_SNAPSHOT);return 0; }
@@ -177,19 +210,40 @@ int main(int argc,char **argv)
         assert(client_messages && server_messages);
     } else if (argc==2 && !strcmp(argv[1],"--input-error")) input_error=true;
     else if (argc==2 && !strcmp(argv[1],"--report-error")) report_error=true;
+    else if (argc==2 && !strcmp(argv[1],"--inherit-error")) inherit_error=true;
+    else if (argc==2 && !strcmp(argv[1],"--spawn-error")) spawn_error=true;
+    else if (argc==2 && (!strcmp(argv[1],"--normal-spawn") || !strcmp(argv[1],"--capacity"))) normal_spawn=true;
     else assert(argc==1);
+    desktop_spawn_host_init(!normal_spawn);
+    if (normal_spawn) {
+        if (!strcmp(argv[1],"--capacity")) {
+            struct desktop *d=calloc(1,sizeof(*d)); assert(d);
+            const struct desk_ops ops={.close=close}; desk_init(d,&ops,320,320);
+            assert(ciuki_surface_create(320,320,CIUKI_SURFACE_XRGB8888)==5);
+            for (int i=0;i<DESK_CLIENTS;i++) d->clients[i].channel=64+i;
+            errno=EBADF; assert(spawn_demo(d,"none",0)==-1 && errno==ENOSPC);
+            free(d);
+        } else {
+            char *args[]={"desktop","--test=crash-isolation","--demo=none",NULL};
+            if (!setjmp(done)) { (void)desktop_main(3,args); assert(0); }
+        }
+        desktop_spawn_host_finish(); return 0;
+    }
     char *invalid[]={"desktop","--gate",NULL};assert(desktop_main(2,invalid)==2);
     char *args[]={"desktop","--test=crash-isolation","--gate",NULL};
     if (!setjmp(done)) {
         int result=desktop_main(3,args);
-        if (input_error) { assert(result==1); return result; }
+        if (input_error || inherit_error || spawn_error) { assert(result==1); desktop_spawn_host_finish(); return result; }
+        fprintf(stderr,"desktop_main returned %d errno=%d\n",result,errno);
         assert(0);
     }
     if (handshake) {
         assert(!fclose(client_messages) && !fclose(server_messages));
+        desktop_spawn_host_finish();
         puts("desktop production HELLO/CREATE_WINDOW -> CONFIGURE/FOCUS/snapshot PASS");return 0;
     }
     assert(faults==5 && reaped==5 && running==5 && pongs==500 && presents>0 && summary_count>=26);
+    desktop_spawn_host_finish();
     puts("desktop production gate: five fault kinds, spawn mappings/groups, controller pacing, flush barriers, input summaries PASS");
     return 0;
 }
