@@ -94,3 +94,4 @@ Documenti di design, validazione, fonti esterne.
 | [Contratto F2: sottoinsieme POSIX, ABI nativa v1, accettazione](2026-10-10-05-contratto-f2-posix.md) | 10 ott | decisione (design) |
 | [SDK F2: header ABI, port di newlib, crt0, pthread, ciuki-cc](2026-10-11-01-sdk-newlib-e-abi.md) | 11 ott | modifica |
 | [Integrazione notturna: dispatch F1, driver, processi F2, segnali, BIOS VM, Lua](2026-10-11-02-integrazione-f1-f2-notte.md) | 11 ott | modifica |
+| [Driver avviati al boot, storage FAT montato, oggetti del desktop, suite F1 allineate](2026-10-11-03-driver-al-boot-storage-desktop.md) | 11 ott | modifica |
