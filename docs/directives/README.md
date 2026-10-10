@@ -40,7 +40,7 @@ evidence and merges.
 | [f1-14-input-fault-guest-fix](f1-14-input-fault-guest-fix.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (root cause: 10 KiB kmalloc over the 2,040-byte limit) |
 | [f1-15-firmware-input-qemu](f1-15-firmware-input-qemu.md) | F1 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (root cause: SeaBIOS PM timer INL 0x608 refused by the port policy) |
 | [f1-16-fixture-disks](f1-16-fixture-disks.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (43,674 storage checks) |
-| [f1-17-fat-suite-alignment](f1-17-fat-suite-alignment.md) | F1 | gpt-6.1-sol / high | issued 2026-10-11 |
+| [f1-17-fat-suite-alignment](f1-17-fat-suite-alignment.md) | F1 | gpt-6.1-sol / high | delivered 2026-10-11 (93 runner tests); merge after the current batch |
 
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
