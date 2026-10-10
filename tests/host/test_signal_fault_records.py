@@ -1,10 +1,12 @@
-"""f2-22: production fault controller with a slow output sink and partial delivery.
+"""f2-22/f2-23: production signal controller, timed waits and slow output.
 
 Intel SDM Vol. 3A sections 2.5, 9.2.1 and Chapter 6's #DE/#NM/#MF/#AC:
 https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf
 The control-register policy already matches these requirements. Exercise the
 actual controller; fake only payload handshakes, memory, time and record output.
 The NASM payload is still validated by the unchanged host script, not executed.
+F2-23 replays production sched_tick() and the final-release signal boundary;
+payload/syscall completion is modeled here, not claimed as guest execution.
 """
 import copy
 import json
@@ -42,12 +44,60 @@ static struct signal_result result[2];
 static unsigned next_index = 1, limit = 7, seq, slow_ms;
 static bool fallback, duplicate, early_done;
 volatile uint64_t g_ticks;
+static struct task subject_task;
+static struct proc_thread subject_thread = { .tid = 4, .process = &subject, .task = &subject_task };
+static unsigned payload_mode, signal_posts;
+static int post_error;
+static bool missing_thread, missing_task, preentry, release_done, ready_poll;
+struct task *g_current;
+static struct task *all_tasks, *idle_task;
+static uint32_t slice_left;
+uint32_t g_starvation_boosts;
+volatile bool g_need_resched;
+static unsigned queued;
+void file_clock_tick(void) { }
+static bool rq_any(void) { return queued != 0; }
+static void rq_push(struct task *t) { CHECK(t == &subject_task); queued++; }
+static void rq_remove(struct task *t) { (void)t; CHECK(false); }
+SCHED_TICK
+RELEASE_INJECTION
 
 static void payload_step(void)
 {
     if (subject.state != PROC_LIVE) return;
     struct signal_result *r = &result[0];
     if (r->stage == 100 && r->release) { subject.state = PROC_ZOMBIE; return; }
+    if (payload_mode >= 15) {
+        if (payload_mode == 15) {
+            if (preentry && g_ticks >= 2) {
+                subject_thread.in_syscall = true;
+                subject_thread.operation = r;
+            }
+            if (ready_poll && !signal_posts) {
+                /* Replay the production timer's expiry before each poll.
+                 * The receive operation is still outstanding at READY. */
+                subject_task.state = T_BLOCKED;
+                subject_task.wake_tick = g_ticks;
+                sched_tick();
+                CHECK(subject_task.state == T_READY && !subject_task.wake_tick);
+            }
+            if (!signal_posts || post_error) return;
+            r->sleep_result = -EINTR;
+            r->saved_eax = r->resumed_eax = (uint32_t)-EINTR;
+        } else {
+            if (release_done) return;
+            release_done = true;
+            signal_release_drop(&release_objects[0].object);
+            r->release_count = r->completion = r->handler_completion = 1;
+            r->sleep_result = payload_mode == 16 ? 0 : 8;
+            r->saved_eax = r->resumed_eax = r->sleep_result;
+        }
+        r->entries = r->returns = 1;
+        r->stage = 100;
+        subject_thread.in_syscall = false;
+        subject_thread.operation = 0;
+        return;
+    }
     if (r->stage) return;               /* handler awaits the production ACK */
     if (next_index > limit) {
         if (limit >= 7 || early_done) {
@@ -96,15 +146,35 @@ int ua_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t byte
 }
 static struct process *signal_payload(struct process *p, unsigned mode, uint32_t flags)
 {
-    (void)p; CHECK(!mode && !flags); payload_step(); return &subject;
+    (void)p; CHECK(mode == payload_mode && !flags);
+    if (mode >= 15) {
+        result[0].tid = subject_thread.tid;
+        result[0].stage = 2;
+        subject_thread.in_syscall = !preentry;
+        subject_thread.operation = preentry ? 0 : &result[0];
+        release_objects[0] = (struct signal_release){
+            .object = { signal_release_retain, signal_release_drop, true },
+            .references = 1, .inject = true };
+        if (ready_poll) payload_step();
+        return &subject;
+    }
+    payload_step(); return &subject;
 }
 struct proc_thread *proc_thread_find(struct process *p, uint32_t tid)
 {
-    (void)p; (void)tid; CHECK(false); return 0;
+    CHECK(p == &subject && tid == subject_thread.tid);
+    return missing_thread ? 0 : &subject_thread;
+}
+struct proc_thread *proc_thread_for(const struct task *t)
+{
+    CHECK(t == &subject_task); return &subject_thread;
 }
 int proc_signal_thread_kill(struct process *p, uint32_t tid, uint32_t sig)
 {
-    (void)p; (void)tid; (void)sig; CHECK(false); return 0;
+    CHECK(p == &subject && tid == subject_thread.tid && sig == SIGUSR1);
+    CHECK(subject_thread.in_syscall && subject_thread.operation);
+    signal_posts++;
+    return post_error;
 }
 void proc_stop(struct process *p, int code, uint32_t sig)
 {
@@ -126,6 +196,53 @@ CONTROLLER
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
+    if (!strcmp(argv[1], "predicate")) {
+        struct signal_result r = { .stage = 2, .tid = 4 };
+        subject_thread.in_syscall = true; subject_thread.operation = &r;
+        for (unsigned state = T_READY; state <= T_DEAD; state++) {
+            subject_task.state = state;
+            CHECK(signal_channel_waiting(&r, &subject_thread) == (state == T_READY || state == T_BLOCKED));
+        }
+        subject_task.state = T_READY;
+        CHECK(!signal_channel_waiting(&r, 0));
+        subject_thread.task = 0;
+        CHECK(!signal_channel_waiting(&r, &subject_thread));
+        subject_thread.task = &subject_task;
+        subject_thread.in_syscall = false;
+        CHECK(!signal_channel_waiting(&r, &subject_thread));
+        subject_thread.in_syscall = true; subject_thread.operation = 0;
+        CHECK(!signal_channel_waiting(&r, &subject_thread));
+        subject_thread.operation = &r;
+        r.errors = 1; CHECK(!signal_channel_waiting(&r, &subject_thread)); r.errors = 0;
+        r.tid = 0; CHECK(!signal_channel_waiting(&r, &subject_thread)); r.tid = 4;
+        for (unsigned stage = 0; stage <= 100; stage++) {
+            r.stage = stage;
+            CHECK(signal_channel_waiting(&r, &subject_thread) == (stage == 2));
+        }
+        return 0;
+    }
+    if (!strncmp(argv[1], "channel-", 8) || !strncmp(argv[1], "close", 5) || !strncmp(argv[1], "dup2", 4)) {
+        payload_mode = !strncmp(argv[1], "close", 5) ? 16 : !strncmp(argv[1], "dup2", 4) ? 17 : 15;
+        missing_thread = !strcmp(argv[1], "channel-missing-thread");
+        missing_task = !strcmp(argv[1], "channel-missing-task");
+        preentry = !strcmp(argv[1], "channel-preentry");
+        ready_poll = !strcmp(argv[1], "channel-ready");
+        release_done = !strcmp(argv[1], "close-missing") || !strcmp(argv[1], "dup2-missing");
+        if (missing_task) subject_thread.task = 0;
+        subject_task.state = !strcmp(argv[1], "channel-running") ? T_RUNNING :
+            !strcmp(argv[1], "channel-zombie") ? T_ZOMBIE :
+            !strcmp(argv[1], "channel-dead") ? T_DEAD : T_BLOCKED;
+        if (!strcmp(argv[1], "channel-errors")) result[0].errors = 1;
+        if (strstr(argv[1], "failed-post")) post_error = -ESRCH;
+        g_current = &subject_task; all_tasks = &subject_task;
+        slow_ms = 100;                  /* records must not spend the wait deadline */
+        rec_emit("signals-fault", "BEGIN", 0);
+        const char *name = payload_mode == 15 ? "channel-eintr" : payload_mode == 16 ? "close-deferred" : "dup2-deferred";
+        bool pass = signal_case(&parent, &survivor, &other, name, payload_mode, 0);
+        if (ready_poll) CHECK(queued > 0);
+        rec_emit("signals-fault", "END", pass ? "status=PASS" : "status=FAIL reason=signal_contract");
+        return 0;
+    }
     slow_ms = 100;
     fallback = !strcmp(argv[1], "tcg");
     duplicate = !strcmp(argv[1], "duplicate");
@@ -143,7 +260,11 @@ int main(int argc, char **argv)
 def controller_source(source):
     layout = 'struct signal_result {' + source.split('struct signal_result {', 1)[1].split('/* Fresh supervisor', 1)[0]
     controller = 'static bool signal_result_read' + source.split('static bool signal_result_read', 1)[1].split('#endif', 1)[0]
-    return HARNESS.replace('RESULT_LAYOUT', layout).replace('CONTROLLER', controller)
+    release = 'static struct signal_release' + source.split('static struct signal_release', 1)[1].split('static int signal_image_read', 1)[0]
+    scheduler = (ROOT / 'src/kernel/core/task.c').read_text()
+    tick = 'void sched_tick(void)' + scheduler.split('void sched_tick(void)', 1)[1].split('void task_yield(void)', 1)[0]
+    return (HARNESS.replace('RESULT_LAYOUT', layout).replace('CONTROLLER', controller)
+            .replace('RELEASE_INJECTION', release).replace('SCHED_TICK', tick))
 
 
 class SignalFaultRecordTests(unittest.TestCase):
@@ -158,16 +279,19 @@ class SignalFaultRecordTests(unittest.TestCase):
         source = scratch / 'controller.c'
         source.write_text(controller_source((ROOT / 'src/kernel/probes/f2_probes_signals.c').read_text()))
         cls.program = scratch / 'controller'
-        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+        compiled = subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                         '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
-                        str(source), '-o', str(cls.program)], env=cls.env, check=True,
+                        str(source), '-o', str(cls.program)], env=cls.env,
                        capture_output=True, text=True, timeout=60)
+        if compiled.returncode:
+            raise RuntimeError(compiled.stderr)
         suite = json.loads((ROOT / 'tests/suites/f2-runtime.json').read_text())
         cls.cases = [c for c in suite['cases'] if c['probe'] == 'signals-fault']
 
     def records(self, mode):
         result = subprocess.run([str(self.program), mode], env=self.env,
-                                check=True, capture_output=True, timeout=30)
+                                capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(result.stderr, b'')
         parser = Parser('66666666', 'signals-fault')
         for line in result.stdout.splitlines():
@@ -211,6 +335,82 @@ class SignalFaultRecordTests(unittest.TestCase):
             elif mode == 'overrun':
                 completion = next(r for r in parser.records if r.get('part') == 'completion')
                 self.assertEqual(completion['records'], '7')  # bounded storage, failed order/count
+
+    def test_channel_predicate_checks_every_task_state_and_precondition(self):
+        result = subprocess.run([str(self.program), 'predicate'], env=self.env,
+                                check=True, capture_output=True, timeout=30)
+        self.assertEqual(result.stdout, b'')
+        self.assertEqual(result.stderr, b'')
+
+    def test_channel_blocked_and_timer_ready_inject_with_final_eintr_context(self):
+        for mode in ('channel-blocked', 'channel-ready', 'channel-preentry'):
+            with self.subTest(mode=mode):
+                parser = self.records(mode)
+                self.assertEqual(parser.terminal['status'], 'PASS')
+                parser.check({'terminal': 'END', 'predicates': [
+                    {'where': {'case': 'channel-eintr', 'part': 'inject'}, 'exact_count': 1,
+                     'fields': {'pid': {'eq': 5}, 'tid': {'eq': 4}, 'signal': {'eq': 10},
+                                'mask': {'encoding': 'hex', 'eq': 0}, 'attempted': {'eq': 1},
+                                'expected': {'encoding': 'signed', 'eq': 0},
+                                'observed': {'encoding': 'signed', 'eq': 0}}},
+                    {'where': {'case': 'channel-eintr', 'part': 'handlers'},
+                     'exact_count': 1, 'fields': {'entries': {'eq': 1}, 'returns': {'eq': 1}}},
+                    {'where': {'case': 'syscall-interruption', 'syscall': 'channel_recv'},
+                     'exact_count': 1, 'fields': {'result': {'encoding': 'signed', 'eq': -4},
+                        'saved_eax': {'encoding': 'hex', 'eq': 0xfffffffc},
+                        'resumed_eax': {'encoding': 'hex', 'eq': 0xfffffffc}}},
+                ]})
+                self.assertFalse(any(r.get('part') == 'wait' for r in parser.records))
+
+    def test_timeout_reports_last_state_without_claiming_an_injection(self):
+        for mode, state in (('channel-running', '1'), ('channel-zombie', '3'),
+                            ('channel-dead', '4'), ('channel-missing-thread', '-1'),
+                            ('channel-missing-task', '-1'), ('channel-errors', '2')):
+            with self.subTest(mode=mode):
+                parser = self.records(mode)
+                self.assertEqual(parser.terminal['status'], 'FAIL')
+                wait = [r for r in parser.records if r.get('part') == 'wait']
+                self.assertEqual(len(wait), 1)
+                self.assertEqual((wait[0]['stage'], wait[0]['tid'], wait[0]['state'], wait[0]['ticks']),
+                                 ('2', '4', state, '2000'))
+                injection = next(r for r in parser.records if r.get('part') == 'inject')
+                self.assertEqual((injection['tid'], injection['attempted'], injection['observed']),
+                                 ('0', '0', '-3'))
+
+    def test_failed_injection_retains_error_and_timeout(self):
+        parser = self.records('channel-failed-post')
+        self.assertEqual(parser.terminal['status'], 'FAIL')
+        injection = next(r for r in parser.records if r.get('part') == 'inject')
+        self.assertEqual((injection['tid'], injection['attempted'], injection['observed']), ('4', '1', '-3'))
+        self.assertEqual(len([r for r in parser.records if r.get('part') == 'wait']), 1)
+
+    def test_close_and_dup2_record_the_production_release_injection(self):
+        for mode in ('close', 'dup2'):
+            with self.subTest(mode=mode):
+                parser = self.records(mode)
+                self.assertEqual(parser.terminal['status'], 'PASS')
+                injection = next(r for r in parser.records if r.get('part') == 'inject')
+                self.assertEqual((injection['tid'], injection['signal'], injection['attempted'], injection['observed']),
+                                 ('4', '10', '1', '0'))
+                result = next(r for r in parser.records if r.get('syscall') == mode)
+                self.assertEqual((result['result'], result['releases'], result['handler_completion']),
+                                 ('0' if mode == 'close' else '8', '1', '1'))
+
+    def test_close_and_dup2_missing_or_failed_injection_remains_a_failure(self):
+        for mode in ('close', 'dup2'):
+            with self.subTest(mode=mode):
+                parser = self.records(mode + '-missing')
+                self.assertEqual(parser.terminal['status'], 'FAIL')
+                wait = [r for r in parser.records if r.get('part') == 'wait']
+                self.assertEqual(len(wait), 1)
+                self.assertEqual((wait[0]['stage'], wait[0]['tid'], wait[0]['state'], wait[0]['ticks']),
+                                 ('2', '4', '2', '2000'))
+                injection = next(r for r in parser.records if r.get('part') == 'inject')
+                self.assertEqual((injection['attempted'], injection['observed']), ('0', '-3'))
+                parser = self.records(mode + '-failed-post')
+                self.assertEqual(parser.terminal['status'], 'FAIL')
+                injection = next(r for r in parser.records if r.get('part') == 'inject')
+                self.assertEqual((injection['tid'], injection['attempted'], injection['observed']), ('4', '1', '-3'))
 
 
 if __name__ == '__main__':
