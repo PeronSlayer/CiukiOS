@@ -22,7 +22,7 @@ evidence and merges.
 | [f1-06-ata-pio](f1-06-ata-pio.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-10 |
 | [f1-07-bios-vm-firmware-input](f1-07-bios-vm-firmware-input.md) | F1 | gpt-6-astra / xhigh | partial delivery 2026-10-11 (65,900 host checks); completed by f1-07b |
 | [f1-08-runtime-integration](f1-08-runtime-integration.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (drivers start at boot; F1 QEMU suites pending f1-10) |
-| [f1-09-storage-bringup](f1-09-storage-bringup.md) | F1 | gpt-6-astra / xhigh | issued 2026-10-11 |
+| [f1-09-storage-bringup](f1-09-storage-bringup.md) | F1 | gpt-6-astra / xhigh | delivered 2026-10-11 (39,944 storage checks); merging |
 | [f2-01-abi-header](f2-01-abi-header.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (687 layout checks) |
 | [f2-02-processes-and-memory](f2-02-processes-and-memory.md) | F2 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (94,456 host checks; QEMU probes pending f2-09) |
 | [f2-06-sdk-newlib](f2-06-sdk-newlib.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (clean build 17 s; guest not_run) |
@@ -30,11 +30,11 @@ evidence and merges.
 | [f2-09-runner-f2-suites](f2-09-runner-f2-suites.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (74 runner tests; 33 F2 cases) |
 | [f2-07-lua-port-and-payloads](f2-07-lua-port-and-payloads.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (50 payloads; host-reference suite OK) |
 | [f2-04-signals-and-faults](f2-04-signals-and-faults.md) | F2 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (4,344 signal checks; QEMU pending f2-09) |
-| [f2-05-desktop-objects-and-supervisor](f2-05-desktop-objects-and-supervisor.md) | F2 | gpt-6-astra / xhigh | issued 2026-10-11 |
+| [f2-05-desktop-objects-and-supervisor](f2-05-desktop-objects-and-supervisor.md) | F2 | gpt-6-astra / xhigh | partial delivery 2026-10-11 (31,813 checks); merging with its integration patch |
 | [f1-07b-bios-vm-followup](f1-07b-bios-vm-followup.md) | F1 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (71,160 V86 checks) |
 | [f2-08-desktop-process](f2-08-desktop-process.md) | F2 | gpt-6.1-sol / xhigh | written; starts after f2-05 |
-| [f1-10-suite-alignment-and-loader-safe](f1-10-suite-alignment-and-loader-safe.md) | F1 | gpt-6.1-sol / high | written; starts when QEMU is free |
-| [f1-11-activation-records](f1-11-activation-records.md) | F1 | gpt-6.1-sol / high | issued 2026-10-11 (f0-smoke regression on the f1-08 image) |
+| [f1-10-suite-alignment-and-loader-safe](f1-10-suite-alignment-and-loader-safe.md) | F1 | gpt-6.1-sol / high | delivered 2026-10-11 (82 runner tests); merging |
+| [f1-11-activation-records](f1-11-activation-records.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11; F0 56/56 on image acd8af37 |
 | [f1-12-integration-followups](f1-12-integration-followups.md) | F1/F2 | gpt-6.1-sol / xhigh | written; starts after the lead merges f1-10, f1-09 and f2-05 |
 
 All F1 and F2 directives are written; launches follow their prerequisites

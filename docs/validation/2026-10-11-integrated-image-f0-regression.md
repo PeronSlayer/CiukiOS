@@ -62,3 +62,12 @@ console), input `backend=native result=ready`, `[ata0] identified=1`,
 boot records, READY at tick 112, `END status=PASS`. Directive f1-11 moves the
 activation evidence after BEGIN (ledger in the kernel, records from the boot
 probe).
+
+## Fourth image: `acd8af37…` (commit `b6c1562`, f1-11: activation records after BEGIN)
+
+`f0-smoke` 2/2 PASS, `f0-core` 56/56 PASS, `f0-panic` `panic` PASS plus the
+operator-confirmation subcase; run 01:42–01:55 UTC. The boot probe now emits
+the activation records after BEGIN (`[init]` klog lines, then
+`group=activation_flag`, `group=activation device=framebuffer|input|ata
+result=ready`). This is the first image on which the F0 gate passes with the
+F1 drivers started at boot.
