@@ -26,12 +26,165 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","case": "image"},"fields": {"entry": {"encoding": "hex","width": 8,"eq": 4194304},"file_bytes": {"ge": 1},"load_bytes": {"ge": 1},"sha256": {"encoding": "hex","width": 64,"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "reject"},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"},"index": {"ge": 0,"le": 25},"offset": {"ge": 0}},"exact_count": 26,"unique": "index"},
-          {"where": {"event": "DATA","case": "size","bytes": 51},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "size","bytes": 33554433},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "e"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "entry"},"fields": {"bss_register_errors": {"eq": 0},"esp": {"encoding": "hex","width": 8,"eq": 3221225384},"gs": {"encoding": "hex","width": 8,"eq": 59},"flags": {"encoding": "hex","width": 8,"eq": 514},"tls": {"encoding": "hex","width": 8,"eq": 536870912},"argc": {"eq": 2},"pid": {"ge": 1}},"exact_count": 1}
+          {
+            "where": {
+              "event": "DATA",
+              "case": "image"
+            },
+            "fields": {
+              "entry": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4194304
+              },
+              "file_bytes": {
+                "ge": 1
+              },
+              "load_bytes": {
+                "ge": 1
+              },
+              "sha256": {
+                "encoding": "hex",
+                "width": 64,
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reject"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              },
+              "index": {
+                "ge": 0,
+                "le": 25
+              },
+              "offset": {
+                "ge": 0
+              }
+            },
+            "exact_count": 26,
+            "unique": "index"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "size",
+              "bytes": 51
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "size",
+              "bytes": 33554433
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "e"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 3221225384
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 59
+              },
+              "flags": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 514
+              },
+              "tls": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 536870912
+              },
+              "argc": {
+                "eq": 2
+              },
+              "pid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          }
         ]
       },
       "digests": [
@@ -54,12 +207,165 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","case": "image"},"fields": {"entry": {"encoding": "hex","width": 8,"eq": 4194304},"file_bytes": {"ge": 1},"load_bytes": {"ge": 1},"sha256": {"encoding": "hex","width": 64,"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "reject"},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"},"index": {"ge": 0,"le": 25},"offset": {"ge": 0}},"exact_count": 26,"unique": "index"},
-          {"where": {"event": "DATA","case": "size","bytes": 51},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "size","bytes": 33554433},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "e"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "entry"},"fields": {"bss_register_errors": {"eq": 0},"esp": {"encoding": "hex","width": 8,"eq": 3221225384},"gs": {"encoding": "hex","width": 8,"eq": 59},"flags": {"encoding": "hex","width": 8,"eq": 514},"tls": {"encoding": "hex","width": 8,"eq": 536870912},"argc": {"eq": 2},"pid": {"ge": 1}},"exact_count": 1}
+          {
+            "where": {
+              "event": "DATA",
+              "case": "image"
+            },
+            "fields": {
+              "entry": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4194304
+              },
+              "file_bytes": {
+                "ge": 1
+              },
+              "load_bytes": {
+                "ge": 1
+              },
+              "sha256": {
+                "encoding": "hex",
+                "width": 64,
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reject"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              },
+              "index": {
+                "ge": 0,
+                "le": 25
+              },
+              "offset": {
+                "ge": 0
+              }
+            },
+            "exact_count": 26,
+            "unique": "index"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "size",
+              "bytes": 51
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "size",
+              "bytes": 33554433
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "e"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 3221225384
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 59
+              },
+              "flags": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 514
+              },
+              "tls": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 536870912
+              },
+              "argc": {
+                "eq": 2
+              },
+              "pid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          }
         ]
       },
       "digests": [
@@ -82,12 +388,165 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","case": "image"},"fields": {"entry": {"encoding": "hex","width": 8,"eq": 4194304},"file_bytes": {"ge": 1},"load_bytes": {"ge": 1},"sha256": {"encoding": "hex","width": 64,"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "reject"},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"},"index": {"ge": 0,"le": 25},"offset": {"ge": 0}},"exact_count": 26,"unique": "index"},
-          {"where": {"event": "DATA","case": "size","bytes": 51},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "size","bytes": 33554433},"fields": {"expected": {"encoding": "signed","eq": -8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "e"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "entry"},"fields": {"bss_register_errors": {"eq": 0},"esp": {"encoding": "hex","width": 8,"eq": 3221225384},"gs": {"encoding": "hex","width": 8,"eq": 59},"flags": {"encoding": "hex","width": 8,"eq": 514},"tls": {"encoding": "hex","width": 8,"eq": 536870912},"argc": {"eq": 2},"pid": {"ge": 1}},"exact_count": 1}
+          {
+            "where": {
+              "event": "DATA",
+              "case": "image"
+            },
+            "fields": {
+              "entry": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4194304
+              },
+              "file_bytes": {
+                "ge": 1
+              },
+              "load_bytes": {
+                "ge": 1
+              },
+              "sha256": {
+                "encoding": "hex",
+                "width": 64,
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reject"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              },
+              "index": {
+                "ge": 0,
+                "le": 25
+              },
+              "offset": {
+                "ge": 0
+              }
+            },
+            "exact_count": 26,
+            "unique": "index"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "size",
+              "bytes": 51
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "size",
+              "bytes": 33554433
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "e"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 3221225384
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 59
+              },
+              "flags": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 514
+              },
+              "tls": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 536870912
+              },
+              "argc": {
+                "eq": 2
+              },
+              "pid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          }
         ]
       },
       "digests": [
@@ -110,20 +569,335 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","case": "s"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "e"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 50,"unique": "pid"},
-          {"where": {"event": "DATA","case": "f"},"fields": {"expected": {"eq": 11},"observed": {"encoding": "signed","eq": 11},"raw": {"encoding": "signed","eq": 270},"vector": {"eq": 14},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 50,"unique": "pid"},
-          {"where": {"event": "DATA","case": "entry"},"fields": {"bss_register_errors": {"eq": 0},"esp": {"encoding": "hex","width": 8,"eq": 3221225384},"gs": {"encoding": "hex","width": 8,"eq": 59},"flags": {"encoding": "hex","width": 8,"eq": 514},"tls": {"encoding": "hex","width": 8,"eq": 536870912},"argc": {"eq": 2},"pid": {"ge": 1}},"exact_count": 51,"unique": "pid"},
-          {"where": {"event": "DATA","case": "cycles"},"fields": {"cycles": {"eq": 100},"bad_cycles": {"eq": 0},"leaked": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "memory_ledger","stage": "baseline"},"fields": {"pages_free": {"ge": 0},"heap_bytes": {"ge": 0},"maps": {"ge": 0},"backing": {"ge": 0},"tables": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "object_ledger","stage": "baseline"},"fields": {"processes": {"ge": 0},"threads": {"ge": 0},"zombies": {"ge": 0},"handles": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "memory_ledger","stage": "final"},"fields": {"pages_free": {"ge": 0},"heap_bytes": {"ge": 0},"maps": {"ge": 0},"backing": {"ge": 0},"tables": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "object_ledger","stage": "final"},"fields": {"processes": {"ge": 0},"threads": {"ge": 0},"zombies": {"ge": 0},"handles": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "fault"},"fields": {"pid": {"ge": 1},"vector": {"eq": 14},"error": {"encoding": "hex","width": 8,"ge": 0},"address": {"encoding": "hex","width": 8,"ge": 1},"eip": {"encoding": "hex","width": 8,"ge": 4194304,"le": 3221225471}},"exact_count": 50,"unique": "pid"}
+          {
+            "where": {
+              "event": "DATA",
+              "case": "s"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "e"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "f"
+            },
+            "fields": {
+              "expected": {
+                "eq": 11
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 11
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 270
+              },
+              "vector": {
+                "eq": 14
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 3221225384
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 59
+              },
+              "flags": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 514
+              },
+              "tls": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 536870912
+              },
+              "argc": {
+                "eq": 2
+              },
+              "pid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 51,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "bad_cycles": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "baseline"
+            },
+            "fields": {
+              "pages_free": {
+                "ge": 0
+              },
+              "heap_bytes": {
+                "ge": 0
+              },
+              "maps": {
+                "ge": 0
+              },
+              "backing": {
+                "ge": 0
+              },
+              "tables": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "baseline"
+            },
+            "fields": {
+              "processes": {
+                "ge": 0
+              },
+              "threads": {
+                "ge": 0
+              },
+              "zombies": {
+                "ge": 0
+              },
+              "handles": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "pages_free": {
+                "ge": 0
+              },
+              "heap_bytes": {
+                "ge": 0
+              },
+              "maps": {
+                "ge": 0
+              },
+              "backing": {
+                "ge": 0
+              },
+              "tables": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "processes": {
+                "ge": 0
+              },
+              "threads": {
+                "ge": 0
+              },
+              "zombies": {
+                "ge": 0
+              },
+              "handles": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fault"
+            },
+            "fields": {
+              "pid": {
+                "ge": 1
+              },
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "address": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 4194304,
+                "le": 3221225471
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          }
         ],
         "comparisons": [
-          {"left": {"event": "DATA","case": "memory_ledger","stage": "baseline"},"right": {"event": "DATA","case": "memory_ledger","stage": "final"},"fields": {"pages_free": "pages_free","heap_bytes": "heap_bytes","maps": "maps","backing": "backing","tables": "tables"}},
-          {"left": {"event": "DATA","case": "object_ledger","stage": "baseline"},"right": {"event": "DATA","case": "object_ledger","stage": "final"},"fields": {"processes": "processes","threads": "threads","zombies": "zombies","handles": "handles"}}
+          {
+            "left": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "baseline"
+            },
+            "right": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "pages_free": "pages_free",
+              "heap_bytes": "heap_bytes",
+              "maps": "maps",
+              "backing": "backing",
+              "tables": "tables"
+            }
+          },
+          {
+            "left": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "baseline"
+            },
+            "right": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "processes": "processes",
+              "threads": "threads",
+              "zombies": "zombies",
+              "handles": "handles"
+            }
+          }
         ]
       }
     },
@@ -136,20 +910,335 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","case": "s"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "e"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 50,"unique": "pid"},
-          {"where": {"event": "DATA","case": "f"},"fields": {"expected": {"eq": 11},"observed": {"encoding": "signed","eq": 11},"raw": {"encoding": "signed","eq": 270},"vector": {"eq": 14},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 50,"unique": "pid"},
-          {"where": {"event": "DATA","case": "entry"},"fields": {"bss_register_errors": {"eq": 0},"esp": {"encoding": "hex","width": 8,"eq": 3221225384},"gs": {"encoding": "hex","width": 8,"eq": 59},"flags": {"encoding": "hex","width": 8,"eq": 514},"tls": {"encoding": "hex","width": 8,"eq": 536870912},"argc": {"eq": 2},"pid": {"ge": 1}},"exact_count": 51,"unique": "pid"},
-          {"where": {"event": "DATA","case": "cycles"},"fields": {"cycles": {"eq": 100},"bad_cycles": {"eq": 0},"leaked": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "memory_ledger","stage": "baseline"},"fields": {"pages_free": {"ge": 0},"heap_bytes": {"ge": 0},"maps": {"ge": 0},"backing": {"ge": 0},"tables": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "object_ledger","stage": "baseline"},"fields": {"processes": {"ge": 0},"threads": {"ge": 0},"zombies": {"ge": 0},"handles": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "memory_ledger","stage": "final"},"fields": {"pages_free": {"ge": 0},"heap_bytes": {"ge": 0},"maps": {"ge": 0},"backing": {"ge": 0},"tables": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "object_ledger","stage": "final"},"fields": {"processes": {"ge": 0},"threads": {"ge": 0},"zombies": {"ge": 0},"handles": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "fault"},"fields": {"pid": {"ge": 1},"vector": {"eq": 14},"error": {"encoding": "hex","width": 8,"ge": 0},"address": {"encoding": "hex","width": 8,"ge": 1},"eip": {"encoding": "hex","width": 8,"ge": 4194304,"le": 3221225471}},"exact_count": 50,"unique": "pid"}
+          {
+            "where": {
+              "event": "DATA",
+              "case": "s"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "e"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "f"
+            },
+            "fields": {
+              "expected": {
+                "eq": 11
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 11
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 270
+              },
+              "vector": {
+                "eq": 14
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 3221225384
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 59
+              },
+              "flags": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 514
+              },
+              "tls": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 536870912
+              },
+              "argc": {
+                "eq": 2
+              },
+              "pid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 51,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "bad_cycles": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "baseline"
+            },
+            "fields": {
+              "pages_free": {
+                "ge": 0
+              },
+              "heap_bytes": {
+                "ge": 0
+              },
+              "maps": {
+                "ge": 0
+              },
+              "backing": {
+                "ge": 0
+              },
+              "tables": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "baseline"
+            },
+            "fields": {
+              "processes": {
+                "ge": 0
+              },
+              "threads": {
+                "ge": 0
+              },
+              "zombies": {
+                "ge": 0
+              },
+              "handles": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "pages_free": {
+                "ge": 0
+              },
+              "heap_bytes": {
+                "ge": 0
+              },
+              "maps": {
+                "ge": 0
+              },
+              "backing": {
+                "ge": 0
+              },
+              "tables": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "processes": {
+                "ge": 0
+              },
+              "threads": {
+                "ge": 0
+              },
+              "zombies": {
+                "ge": 0
+              },
+              "handles": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fault"
+            },
+            "fields": {
+              "pid": {
+                "ge": 1
+              },
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "address": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 4194304,
+                "le": 3221225471
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          }
         ],
         "comparisons": [
-          {"left": {"event": "DATA","case": "memory_ledger","stage": "baseline"},"right": {"event": "DATA","case": "memory_ledger","stage": "final"},"fields": {"pages_free": "pages_free","heap_bytes": "heap_bytes","maps": "maps","backing": "backing","tables": "tables"}},
-          {"left": {"event": "DATA","case": "object_ledger","stage": "baseline"},"right": {"event": "DATA","case": "object_ledger","stage": "final"},"fields": {"processes": "processes","threads": "threads","zombies": "zombies","handles": "handles"}}
+          {
+            "left": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "baseline"
+            },
+            "right": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "pages_free": "pages_free",
+              "heap_bytes": "heap_bytes",
+              "maps": "maps",
+              "backing": "backing",
+              "tables": "tables"
+            }
+          },
+          {
+            "left": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "baseline"
+            },
+            "right": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "processes": "processes",
+              "threads": "threads",
+              "zombies": "zombies",
+              "handles": "handles"
+            }
+          }
         ]
       }
     },
@@ -162,20 +1251,335 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","case": "s"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "e"},"fields": {"expected": {"eq": 9472},"observed": {"encoding": "signed","eq": 9472},"raw": {"encoding": "signed","eq": 37},"vector": {"eq": 0},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 50,"unique": "pid"},
-          {"where": {"event": "DATA","case": "f"},"fields": {"expected": {"eq": 11},"observed": {"encoding": "signed","eq": 11},"raw": {"encoding": "signed","eq": 270},"vector": {"eq": 14},"errors": {"eq": 0},"pid": {"ge": 1},"ppid": {"ge": 1},"pgid": {"ge": 1}},"exact_count": 50,"unique": "pid"},
-          {"where": {"event": "DATA","case": "entry"},"fields": {"bss_register_errors": {"eq": 0},"esp": {"encoding": "hex","width": 8,"eq": 3221225384},"gs": {"encoding": "hex","width": 8,"eq": 59},"flags": {"encoding": "hex","width": 8,"eq": 514},"tls": {"encoding": "hex","width": 8,"eq": 536870912},"argc": {"eq": 2},"pid": {"ge": 1}},"exact_count": 51,"unique": "pid"},
-          {"where": {"event": "DATA","case": "cycles"},"fields": {"cycles": {"eq": 100},"bad_cycles": {"eq": 0},"leaked": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "memory_ledger","stage": "baseline"},"fields": {"pages_free": {"ge": 0},"heap_bytes": {"ge": 0},"maps": {"ge": 0},"backing": {"ge": 0},"tables": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "object_ledger","stage": "baseline"},"fields": {"processes": {"ge": 0},"threads": {"ge": 0},"zombies": {"ge": 0},"handles": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "memory_ledger","stage": "final"},"fields": {"pages_free": {"ge": 0},"heap_bytes": {"ge": 0},"maps": {"ge": 0},"backing": {"ge": 0},"tables": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "object_ledger","stage": "final"},"fields": {"processes": {"ge": 0},"threads": {"ge": 0},"zombies": {"ge": 0},"handles": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "fault"},"fields": {"pid": {"ge": 1},"vector": {"eq": 14},"error": {"encoding": "hex","width": 8,"ge": 0},"address": {"encoding": "hex","width": 8,"ge": 1},"eip": {"encoding": "hex","width": 8,"ge": 4194304,"le": 3221225471}},"exact_count": 50,"unique": "pid"}
+          {
+            "where": {
+              "event": "DATA",
+              "case": "s"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "e"
+            },
+            "fields": {
+              "expected": {
+                "eq": 9472
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 9472
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 37
+              },
+              "vector": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "f"
+            },
+            "fields": {
+              "expected": {
+                "eq": 11
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 11
+              },
+              "raw": {
+                "encoding": "signed",
+                "eq": 270
+              },
+              "vector": {
+                "eq": 14
+              },
+              "errors": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 1
+              },
+              "ppid": {
+                "ge": 1
+              },
+              "pgid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 3221225384
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 59
+              },
+              "flags": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 514
+              },
+              "tls": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 536870912
+              },
+              "argc": {
+                "eq": 2
+              },
+              "pid": {
+                "ge": 1
+              }
+            },
+            "exact_count": 51,
+            "unique": "pid"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "bad_cycles": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "baseline"
+            },
+            "fields": {
+              "pages_free": {
+                "ge": 0
+              },
+              "heap_bytes": {
+                "ge": 0
+              },
+              "maps": {
+                "ge": 0
+              },
+              "backing": {
+                "ge": 0
+              },
+              "tables": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "baseline"
+            },
+            "fields": {
+              "processes": {
+                "ge": 0
+              },
+              "threads": {
+                "ge": 0
+              },
+              "zombies": {
+                "ge": 0
+              },
+              "handles": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "pages_free": {
+                "ge": 0
+              },
+              "heap_bytes": {
+                "ge": 0
+              },
+              "maps": {
+                "ge": 0
+              },
+              "backing": {
+                "ge": 0
+              },
+              "tables": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "processes": {
+                "ge": 0
+              },
+              "threads": {
+                "ge": 0
+              },
+              "zombies": {
+                "ge": 0
+              },
+              "handles": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fault"
+            },
+            "fields": {
+              "pid": {
+                "ge": 1
+              },
+              "vector": {
+                "eq": 14
+              },
+              "error": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "address": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 0
+              },
+              "eip": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 4194304,
+                "le": 3221225471
+              }
+            },
+            "exact_count": 50,
+            "unique": "pid"
+          }
         ],
         "comparisons": [
-          {"left": {"event": "DATA","case": "memory_ledger","stage": "baseline"},"right": {"event": "DATA","case": "memory_ledger","stage": "final"},"fields": {"pages_free": "pages_free","heap_bytes": "heap_bytes","maps": "maps","backing": "backing","tables": "tables"}},
-          {"left": {"event": "DATA","case": "object_ledger","stage": "baseline"},"right": {"event": "DATA","case": "object_ledger","stage": "final"},"fields": {"processes": "processes","threads": "threads","zombies": "zombies","handles": "handles"}}
+          {
+            "left": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "baseline"
+            },
+            "right": {
+              "event": "DATA",
+              "case": "memory_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "pages_free": "pages_free",
+              "heap_bytes": "heap_bytes",
+              "maps": "maps",
+              "backing": "backing",
+              "tables": "tables"
+            }
+          },
+          {
+            "left": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "baseline"
+            },
+            "right": {
+              "event": "DATA",
+              "case": "object_ledger",
+              "stage": "final"
+            },
+            "fields": {
+              "processes": "processes",
+              "threads": "threads",
+              "zombies": "zombies",
+              "handles": "handles"
+            }
+          }
         ]
       }
     },
@@ -188,66 +1592,1073 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","operation": "exclusive"},"fields": {"expected": {"encoding": "signed","eq": -17},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "append-a"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "append-b"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pwrite"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "offset"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pread"},"fields": {"expected": {"encoding": "signed","eq": 8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dup2-self"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dup2-replace"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cloexec"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cloexec-read"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "status"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "status-shared"},"fields": {"expected": {"encoding": "signed","eq": 2},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "efbig"},"fields": {"expected": {"encoding": "signed","eq": -27},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "grown-read"},"fields": {"expected": {"encoding": "signed","eq": 64},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "inherit"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "inherit-cloexec"},"fields": {"expected": {"encoding": "signed","eq": -9},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "share-denied"},"fields": {"expected": {"encoding": "signed","eq": -13},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "validation-writes"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-a"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-b"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-child"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "file-over-dir"},"fields": {"expected": {"encoding": "signed","eq": -21},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dir-over-file"},"fields": {"expected": {"encoding": "signed","eq": -20},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "descendant"},"fields": {"expected": {"encoding": "signed","eq": -22},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "chdir"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pinned-rmdir"},"fields": {"expected": {"encoding": "signed","eq": -16},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "identical"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "case-rename"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cross-directory"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "exdev"},"fields": {"expected": {"encoding": "signed","eq": -18},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "readonly"},"fields": {"expected": {"encoding": "signed","eq": -30},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "replace"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "unlink-open"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "emfile"},"fields": {"expected": {"encoding": "signed","eq": -24},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-write"},"fields": {"expected": {"encoding": "signed","eq": 19},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-fsync"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-reopen"},"fields": {"expected": {"encoding": "signed","eq": 19},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -22},"fields": {"observed": {"encoding": "signed","eq": -22}},"exact_count": 2},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -84},"fields": {"observed": {"encoding": "signed","eq": -84}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -2},"fields": {"observed": {"encoding": "signed","eq": -2}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "content"},"fields": {"size": {"eq": 8},"sha256": "96fd04d4bad3dffae1303cfbcedd6b5dac6528c949356581fd1364c4332679f7"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cwd"},"fields": {"expected": "/tmp/F2Dest/Moved","observed": "/tmp/F2Dest/Moved"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "getdents"},"fields": {"records": {"eq": 3},"record_bytes": {"eq": 792},"rewind_cookie": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fstat-unlinked"},"fields": {"inode": {"ge": 1},"links": {"eq": 0},"size": {"encoding": "signed","eq": 64}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "user"},"fields": {"checks": {"ge": 10000},"errors": {"eq": 0},"io_cases": {"eq": 1},"reads": {"eq": 10000},"decreases": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "clock-source"},"fields": {"realtime_source": {"ge": 0,"le": 1},"qualified": {"ge": 0,"le": 1},"valid": {"ge": 0,"le": 1},"utc": {"encoding": "signed","ge": 0},"sample": {"ge": 0}},"exact_count": 1,"required_fields": ["source"]},
-          {"where": {"event": "DATA","case": "clock-uname"},"fields": {"abi_version": {"eq": 1},"matched": {"eq": 1},"realtime_source": {"ge": 0,"le": 1},"clock_source": {"eq": "$realtime_source"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "clock-offset"},"fields": {"observed_ms": {"encoding": "signed","ge": 0},"resolution_ns": {"eq": 1000000}},"exact_count": 1,"required_fields": ["expected_ms"],"relations": [{"left": "observed_ms","op": "ge","right": "expected_ms","add": -1},{"left": "expected_ms","op": "ge","right": "observed_ms","add": -1}]},
-          {"where": {"event": "DATA","case": "cpu-clock"},"fields": {"busy_ms": {"encoding": "signed","ge": 1},"sleeping_ms": {"encoding": "signed","ge": 0,"le": 2},"sleep_ms": {"encoding": "signed","ge": 20},"scheduling_delay_ms": {"encoding": "signed","ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "sleep-interrupt"},"fields": {"result": {"encoding": "signed","eq": -4},"remaining_ms": {"encoding": "signed","ge": 0,"le": 20},"handlers": {"eq": 1},"sent": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "durable-file"},"fields": {"name_hex": "2f746d702f66322d64757261626c652e62696e","size": {"eq": 19},"sha256": "47d9886dde2a044526d1fa3420a8a0c096692a88db38fe0764bbd3f522ef67ab"},"exact_count": 1},
-          {"where": {"event": "DATA","case": "ledger"},"fields": {"descriptions_after": {"eq": "$descriptions_before"},"pins_after": {"eq": "$pins_before"}},"exact_count": 1,"required_fields": ["descriptions_before","pins_before"]},
-          {"where": {"event": "DATA","case": "post-commit-fault"},"fields": {"owner": "synthetic_block","issued_errors": {"eq": 1},"count": {"eq": 3},"error": {"encoding": "signed","eq": -5},"fsync": {"encoding": "signed","eq": -5},"sticky": {"encoding": "signed","eq": -5},"committed": {"eq": 1},"quarantined": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "durable-checker"},"fields": {"flush_result": {"encoding": "signed","eq": 0},"checker": "host_required"},"exact_count": 1},
-          {"where": {"event": "ARM"},"fields": {"action": "durable_shutdown","checker": "host_required"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "seek"},"fields": {"expected": {"eq": 4294967305},"observed": {"encoding": "signed","eq": "$expected"},"error": {"encoding": "signed","eq": 0},"free_after": {"eq": "$free_before"},"free_before": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "growth"},"fields": {"size": {"eq": 64},"zero_errors": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fd-slots"},"fields": {"slots": {"eq": 128},"limit": {"eq": 128}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fd-reuse"},"fields": {"expected": {"encoding": "signed","eq": 73},"observed": {"encoding": "signed","eq": 73}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "directory-digest"},"fields": {"encoding": "names_nul","sha256": "da1901aeadfe2781b0f9c8f8a853d2026e9a7dcd8c83514484982c48381dc428"},"exact_count": 1}
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "exclusive"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -17
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "append-a"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "append-b"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pwrite"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "offset"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pread"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dup2-self"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dup2-replace"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cloexec"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cloexec-read"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "status"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "status-shared"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 2
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "efbig"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -27
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "grown-read"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 64
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "inherit"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "inherit-cloexec"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -9
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "share-denied"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -13
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "validation-writes"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-a"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-b"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-child"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "file-over-dir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -21
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dir-over-file"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -20
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "descendant"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "chdir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pinned-rmdir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -16
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "identical"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "case-rename"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cross-directory"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "exdev"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -18
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "readonly"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -30
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "replace"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "unlink-open"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "emfile"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -24
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-write"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 19
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-fsync"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-reopen"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 19
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -22
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -22
+              }
+            },
+            "exact_count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -84
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -84
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -2
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "content"
+            },
+            "fields": {
+              "size": {
+                "eq": 8
+              },
+              "sha256": "96fd04d4bad3dffae1303cfbcedd6b5dac6528c949356581fd1364c4332679f7"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cwd"
+            },
+            "fields": {
+              "expected": "/tmp/F2Dest/Moved",
+              "observed": "/tmp/F2Dest/Moved"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "getdents"
+            },
+            "fields": {
+              "records": {
+                "eq": 3
+              },
+              "record_bytes": {
+                "eq": 792
+              },
+              "rewind_cookie": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fstat-unlinked"
+            },
+            "fields": {
+              "inode": {
+                "ge": 1
+              },
+              "links": {
+                "eq": 0
+              },
+              "size": {
+                "encoding": "signed",
+                "eq": 64
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "user"
+            },
+            "fields": {
+              "checks": {
+                "ge": 10000
+              },
+              "errors": {
+                "eq": 0
+              },
+              "io_cases": {
+                "eq": 1
+              },
+              "reads": {
+                "eq": 10000
+              },
+              "decreases": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-source"
+            },
+            "fields": {
+              "realtime_source": {
+                "ge": 0,
+                "le": 1
+              },
+              "qualified": {
+                "ge": 0,
+                "le": 1
+              },
+              "valid": {
+                "ge": 0,
+                "le": 1
+              },
+              "utc": {
+                "encoding": "signed",
+                "ge": 0
+              },
+              "sample": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "source"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-uname"
+            },
+            "fields": {
+              "abi_version": {
+                "eq": 1
+              },
+              "matched": {
+                "eq": 1
+              },
+              "realtime_source": {
+                "ge": 0,
+                "le": 1
+              },
+              "clock_source": {
+                "eq": "$realtime_source"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-offset"
+            },
+            "fields": {
+              "observed_ms": {
+                "encoding": "signed",
+                "ge": 0
+              },
+              "resolution_ns": {
+                "eq": 1000000
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "expected_ms"
+            ],
+            "relations": [
+              {
+                "left": "observed_ms",
+                "op": "ge",
+                "right": "expected_ms",
+                "add": -1
+              },
+              {
+                "left": "expected_ms",
+                "op": "ge",
+                "right": "observed_ms",
+                "add": -1
+              }
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cpu-clock"
+            },
+            "fields": {
+              "busy_ms": {
+                "encoding": "signed",
+                "ge": 1
+              },
+              "sleeping_ms": {
+                "encoding": "signed",
+                "ge": 0,
+                "le": 2
+              },
+              "sleep_ms": {
+                "encoding": "signed",
+                "ge": 20
+              },
+              "scheduling_delay_ms": {
+                "encoding": "signed",
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "sleep-interrupt"
+            },
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -4
+              },
+              "remaining_ms": {
+                "encoding": "signed",
+                "ge": 0,
+                "le": 20
+              },
+              "handlers": {
+                "eq": 1
+              },
+              "sent": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "durable-file"
+            },
+            "fields": {
+              "name_hex": "2f746d702f66322d64757261626c652e62696e",
+              "size": {
+                "eq": 19
+              },
+              "sha256": "47d9886dde2a044526d1fa3420a8a0c096692a88db38fe0764bbd3f522ef67ab"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "descriptions_after": {
+                "eq": "$descriptions_before"
+              },
+              "pins_after": {
+                "eq": "$pins_before"
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "descriptions_before",
+              "pins_before"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "post-commit-fault"
+            },
+            "fields": {
+              "owner": "synthetic_block",
+              "issued_errors": {
+                "eq": 1
+              },
+              "count": {
+                "eq": 3
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "fsync": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "sticky": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "committed": {
+                "eq": 1
+              },
+              "quarantined": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "durable-checker"
+            },
+            "fields": {
+              "flush_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "checker": "host_required"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "action": "durable_shutdown",
+              "checker": "host_required"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "seek"
+            },
+            "fields": {
+              "expected": {
+                "eq": 4294967305
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "free_after": {
+                "eq": "$free_before"
+              },
+              "free_before": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "growth"
+            },
+            "fields": {
+              "size": {
+                "eq": 64
+              },
+              "zero_errors": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fd-slots"
+            },
+            "fields": {
+              "slots": {
+                "eq": 128
+              },
+              "limit": {
+                "eq": 128
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fd-reuse"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 73
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 73
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "directory-digest"
+            },
+            "fields": {
+              "encoding": "names_nul",
+              "sha256": "da1901aeadfe2781b0f9c8f8a853d2026e9a7dcd8c83514484982c48381dc428"
+            },
+            "exact_count": 1
+          }
         ],
         "clock_seed": true
       },
@@ -297,66 +2708,1073 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","operation": "exclusive"},"fields": {"expected": {"encoding": "signed","eq": -17},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "append-a"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "append-b"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pwrite"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "offset"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pread"},"fields": {"expected": {"encoding": "signed","eq": 8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dup2-self"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dup2-replace"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cloexec"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cloexec-read"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "status"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "status-shared"},"fields": {"expected": {"encoding": "signed","eq": 2},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "efbig"},"fields": {"expected": {"encoding": "signed","eq": -27},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "grown-read"},"fields": {"expected": {"encoding": "signed","eq": 64},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "inherit"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "inherit-cloexec"},"fields": {"expected": {"encoding": "signed","eq": -9},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "share-denied"},"fields": {"expected": {"encoding": "signed","eq": -13},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "validation-writes"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-a"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-b"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-child"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "file-over-dir"},"fields": {"expected": {"encoding": "signed","eq": -21},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dir-over-file"},"fields": {"expected": {"encoding": "signed","eq": -20},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "descendant"},"fields": {"expected": {"encoding": "signed","eq": -22},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "chdir"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pinned-rmdir"},"fields": {"expected": {"encoding": "signed","eq": -16},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "identical"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "case-rename"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cross-directory"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "exdev"},"fields": {"expected": {"encoding": "signed","eq": -18},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "readonly"},"fields": {"expected": {"encoding": "signed","eq": -30},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "replace"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "unlink-open"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "emfile"},"fields": {"expected": {"encoding": "signed","eq": -24},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-write"},"fields": {"expected": {"encoding": "signed","eq": 19},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-fsync"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-reopen"},"fields": {"expected": {"encoding": "signed","eq": 19},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -22},"fields": {"observed": {"encoding": "signed","eq": -22}},"exact_count": 2},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -84},"fields": {"observed": {"encoding": "signed","eq": -84}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -2},"fields": {"observed": {"encoding": "signed","eq": -2}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "content"},"fields": {"size": {"eq": 8},"sha256": "96fd04d4bad3dffae1303cfbcedd6b5dac6528c949356581fd1364c4332679f7"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cwd"},"fields": {"expected": "/tmp/F2Dest/Moved","observed": "/tmp/F2Dest/Moved"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "getdents"},"fields": {"records": {"eq": 3},"record_bytes": {"eq": 792},"rewind_cookie": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fstat-unlinked"},"fields": {"inode": {"ge": 1},"links": {"eq": 0},"size": {"encoding": "signed","eq": 64}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "user"},"fields": {"checks": {"ge": 10000},"errors": {"eq": 0},"io_cases": {"eq": 1},"reads": {"eq": 10000},"decreases": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "clock-source"},"fields": {"realtime_source": {"ge": 0,"le": 1},"qualified": {"ge": 0,"le": 1},"valid": {"ge": 0,"le": 1},"utc": {"encoding": "signed","ge": 0},"sample": {"ge": 0}},"exact_count": 1,"required_fields": ["source"]},
-          {"where": {"event": "DATA","case": "clock-uname"},"fields": {"abi_version": {"eq": 1},"matched": {"eq": 1},"realtime_source": {"ge": 0,"le": 1},"clock_source": {"eq": "$realtime_source"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "clock-offset"},"fields": {"observed_ms": {"encoding": "signed","ge": 0},"resolution_ns": {"eq": 1000000}},"exact_count": 1,"required_fields": ["expected_ms"],"relations": [{"left": "observed_ms","op": "ge","right": "expected_ms","add": -1},{"left": "expected_ms","op": "ge","right": "observed_ms","add": -1}]},
-          {"where": {"event": "DATA","case": "cpu-clock"},"fields": {"busy_ms": {"encoding": "signed","ge": 1},"sleeping_ms": {"encoding": "signed","ge": 0,"le": 2},"sleep_ms": {"encoding": "signed","ge": 20},"scheduling_delay_ms": {"encoding": "signed","ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "sleep-interrupt"},"fields": {"result": {"encoding": "signed","eq": -4},"remaining_ms": {"encoding": "signed","ge": 0,"le": 20},"handlers": {"eq": 1},"sent": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "durable-file"},"fields": {"name_hex": "2f746d702f66322d64757261626c652e62696e","size": {"eq": 19},"sha256": "47d9886dde2a044526d1fa3420a8a0c096692a88db38fe0764bbd3f522ef67ab"},"exact_count": 1},
-          {"where": {"event": "DATA","case": "ledger"},"fields": {"descriptions_after": {"eq": "$descriptions_before"},"pins_after": {"eq": "$pins_before"}},"exact_count": 1,"required_fields": ["descriptions_before","pins_before"]},
-          {"where": {"event": "DATA","case": "post-commit-fault"},"fields": {"owner": "synthetic_block","issued_errors": {"eq": 1},"count": {"eq": 3},"error": {"encoding": "signed","eq": -5},"fsync": {"encoding": "signed","eq": -5},"sticky": {"encoding": "signed","eq": -5},"committed": {"eq": 1},"quarantined": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "durable-checker"},"fields": {"flush_result": {"encoding": "signed","eq": 0},"checker": "host_required"},"exact_count": 1},
-          {"where": {"event": "ARM"},"fields": {"action": "durable_shutdown","checker": "host_required"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "seek"},"fields": {"expected": {"eq": 4294967305},"observed": {"encoding": "signed","eq": "$expected"},"error": {"encoding": "signed","eq": 0},"free_after": {"eq": "$free_before"},"free_before": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "growth"},"fields": {"size": {"eq": 64},"zero_errors": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fd-slots"},"fields": {"slots": {"eq": 128},"limit": {"eq": 128}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fd-reuse"},"fields": {"expected": {"encoding": "signed","eq": 73},"observed": {"encoding": "signed","eq": 73}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "directory-digest"},"fields": {"encoding": "names_nul","sha256": "da1901aeadfe2781b0f9c8f8a853d2026e9a7dcd8c83514484982c48381dc428"},"exact_count": 1}
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "exclusive"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -17
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "append-a"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "append-b"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pwrite"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "offset"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pread"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dup2-self"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dup2-replace"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cloexec"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cloexec-read"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "status"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "status-shared"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 2
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "efbig"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -27
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "grown-read"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 64
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "inherit"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "inherit-cloexec"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -9
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "share-denied"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -13
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "validation-writes"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-a"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-b"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-child"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "file-over-dir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -21
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dir-over-file"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -20
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "descendant"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "chdir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pinned-rmdir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -16
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "identical"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "case-rename"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cross-directory"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "exdev"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -18
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "readonly"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -30
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "replace"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "unlink-open"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "emfile"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -24
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-write"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 19
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-fsync"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-reopen"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 19
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -22
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -22
+              }
+            },
+            "exact_count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -84
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -84
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -2
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "content"
+            },
+            "fields": {
+              "size": {
+                "eq": 8
+              },
+              "sha256": "96fd04d4bad3dffae1303cfbcedd6b5dac6528c949356581fd1364c4332679f7"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cwd"
+            },
+            "fields": {
+              "expected": "/tmp/F2Dest/Moved",
+              "observed": "/tmp/F2Dest/Moved"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "getdents"
+            },
+            "fields": {
+              "records": {
+                "eq": 3
+              },
+              "record_bytes": {
+                "eq": 792
+              },
+              "rewind_cookie": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fstat-unlinked"
+            },
+            "fields": {
+              "inode": {
+                "ge": 1
+              },
+              "links": {
+                "eq": 0
+              },
+              "size": {
+                "encoding": "signed",
+                "eq": 64
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "user"
+            },
+            "fields": {
+              "checks": {
+                "ge": 10000
+              },
+              "errors": {
+                "eq": 0
+              },
+              "io_cases": {
+                "eq": 1
+              },
+              "reads": {
+                "eq": 10000
+              },
+              "decreases": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-source"
+            },
+            "fields": {
+              "realtime_source": {
+                "ge": 0,
+                "le": 1
+              },
+              "qualified": {
+                "ge": 0,
+                "le": 1
+              },
+              "valid": {
+                "ge": 0,
+                "le": 1
+              },
+              "utc": {
+                "encoding": "signed",
+                "ge": 0
+              },
+              "sample": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "source"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-uname"
+            },
+            "fields": {
+              "abi_version": {
+                "eq": 1
+              },
+              "matched": {
+                "eq": 1
+              },
+              "realtime_source": {
+                "ge": 0,
+                "le": 1
+              },
+              "clock_source": {
+                "eq": "$realtime_source"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-offset"
+            },
+            "fields": {
+              "observed_ms": {
+                "encoding": "signed",
+                "ge": 0
+              },
+              "resolution_ns": {
+                "eq": 1000000
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "expected_ms"
+            ],
+            "relations": [
+              {
+                "left": "observed_ms",
+                "op": "ge",
+                "right": "expected_ms",
+                "add": -1
+              },
+              {
+                "left": "expected_ms",
+                "op": "ge",
+                "right": "observed_ms",
+                "add": -1
+              }
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cpu-clock"
+            },
+            "fields": {
+              "busy_ms": {
+                "encoding": "signed",
+                "ge": 1
+              },
+              "sleeping_ms": {
+                "encoding": "signed",
+                "ge": 0,
+                "le": 2
+              },
+              "sleep_ms": {
+                "encoding": "signed",
+                "ge": 20
+              },
+              "scheduling_delay_ms": {
+                "encoding": "signed",
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "sleep-interrupt"
+            },
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -4
+              },
+              "remaining_ms": {
+                "encoding": "signed",
+                "ge": 0,
+                "le": 20
+              },
+              "handlers": {
+                "eq": 1
+              },
+              "sent": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "durable-file"
+            },
+            "fields": {
+              "name_hex": "2f746d702f66322d64757261626c652e62696e",
+              "size": {
+                "eq": 19
+              },
+              "sha256": "47d9886dde2a044526d1fa3420a8a0c096692a88db38fe0764bbd3f522ef67ab"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "descriptions_after": {
+                "eq": "$descriptions_before"
+              },
+              "pins_after": {
+                "eq": "$pins_before"
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "descriptions_before",
+              "pins_before"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "post-commit-fault"
+            },
+            "fields": {
+              "owner": "synthetic_block",
+              "issued_errors": {
+                "eq": 1
+              },
+              "count": {
+                "eq": 3
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "fsync": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "sticky": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "committed": {
+                "eq": 1
+              },
+              "quarantined": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "durable-checker"
+            },
+            "fields": {
+              "flush_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "checker": "host_required"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "action": "durable_shutdown",
+              "checker": "host_required"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "seek"
+            },
+            "fields": {
+              "expected": {
+                "eq": 4294967305
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "free_after": {
+                "eq": "$free_before"
+              },
+              "free_before": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "growth"
+            },
+            "fields": {
+              "size": {
+                "eq": 64
+              },
+              "zero_errors": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fd-slots"
+            },
+            "fields": {
+              "slots": {
+                "eq": 128
+              },
+              "limit": {
+                "eq": 128
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fd-reuse"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 73
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 73
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "directory-digest"
+            },
+            "fields": {
+              "encoding": "names_nul",
+              "sha256": "da1901aeadfe2781b0f9c8f8a853d2026e9a7dcd8c83514484982c48381dc428"
+            },
+            "exact_count": 1
+          }
         ],
         "clock_seed": true
       },
@@ -406,66 +3824,1073 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {"where": {"event": "DATA","operation": "exclusive"},"fields": {"expected": {"encoding": "signed","eq": -17},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "append-a"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "append-b"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pwrite"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "offset"},"fields": {"expected": {"encoding": "signed","eq": 4},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pread"},"fields": {"expected": {"encoding": "signed","eq": 8},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dup2-self"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dup2-replace"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cloexec"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cloexec-read"},"fields": {"expected": {"encoding": "signed","eq": 1},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "status"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "status-shared"},"fields": {"expected": {"encoding": "signed","eq": 2},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "efbig"},"fields": {"expected": {"encoding": "signed","eq": -27},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "grown-read"},"fields": {"expected": {"encoding": "signed","eq": 64},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "inherit"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "inherit-cloexec"},"fields": {"expected": {"encoding": "signed","eq": -9},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "share-denied"},"fields": {"expected": {"encoding": "signed","eq": -13},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "validation-writes"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-a"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-b"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "mkdir-child"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "file-over-dir"},"fields": {"expected": {"encoding": "signed","eq": -21},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "dir-over-file"},"fields": {"expected": {"encoding": "signed","eq": -20},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "descendant"},"fields": {"expected": {"encoding": "signed","eq": -22},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "chdir"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "pinned-rmdir"},"fields": {"expected": {"encoding": "signed","eq": -16},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "identical"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "case-rename"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cross-directory"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "exdev"},"fields": {"expected": {"encoding": "signed","eq": -18},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "readonly"},"fields": {"expected": {"encoding": "signed","eq": -30},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "replace"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "unlink-open"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "emfile"},"fields": {"expected": {"encoding": "signed","eq": -24},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-write"},"fields": {"expected": {"encoding": "signed","eq": 19},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-fsync"},"fields": {"expected": {"encoding": "signed","eq": 0},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "durable-reopen"},"fields": {"expected": {"encoding": "signed","eq": 19},"observed": {"encoding": "signed","eq": "$expected"}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -22},"fields": {"observed": {"encoding": "signed","eq": -22}},"exact_count": 2},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -84},"fields": {"observed": {"encoding": "signed","eq": -84}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "invalid-path","expected": -2},"fields": {"observed": {"encoding": "signed","eq": -2}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "content"},"fields": {"size": {"eq": 8},"sha256": "96fd04d4bad3dffae1303cfbcedd6b5dac6528c949356581fd1364c4332679f7"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "cwd"},"fields": {"expected": "/tmp/F2Dest/Moved","observed": "/tmp/F2Dest/Moved"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "getdents"},"fields": {"records": {"eq": 3},"record_bytes": {"eq": 792},"rewind_cookie": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fstat-unlinked"},"fields": {"inode": {"ge": 1},"links": {"eq": 0},"size": {"encoding": "signed","eq": 64}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "user"},"fields": {"checks": {"ge": 10000},"errors": {"eq": 0},"io_cases": {"eq": 1},"reads": {"eq": 10000},"decreases": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "clock-source"},"fields": {"realtime_source": {"ge": 0,"le": 1},"qualified": {"ge": 0,"le": 1},"valid": {"ge": 0,"le": 1},"utc": {"encoding": "signed","ge": 0},"sample": {"ge": 0}},"exact_count": 1,"required_fields": ["source"]},
-          {"where": {"event": "DATA","case": "clock-uname"},"fields": {"abi_version": {"eq": 1},"matched": {"eq": 1},"realtime_source": {"ge": 0,"le": 1},"clock_source": {"eq": "$realtime_source"}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "clock-offset"},"fields": {"observed_ms": {"encoding": "signed","ge": 0},"resolution_ns": {"eq": 1000000}},"exact_count": 1,"required_fields": ["expected_ms"],"relations": [{"left": "observed_ms","op": "ge","right": "expected_ms","add": -1},{"left": "expected_ms","op": "ge","right": "observed_ms","add": -1}]},
-          {"where": {"event": "DATA","case": "cpu-clock"},"fields": {"busy_ms": {"encoding": "signed","ge": 1},"sleeping_ms": {"encoding": "signed","ge": 0,"le": 2},"sleep_ms": {"encoding": "signed","ge": 20},"scheduling_delay_ms": {"encoding": "signed","ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "sleep-interrupt"},"fields": {"result": {"encoding": "signed","eq": -4},"remaining_ms": {"encoding": "signed","ge": 0,"le": 20},"handlers": {"eq": 1},"sent": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "durable-file"},"fields": {"name_hex": "2f746d702f66322d64757261626c652e62696e","size": {"eq": 19},"sha256": "47d9886dde2a044526d1fa3420a8a0c096692a88db38fe0764bbd3f522ef67ab"},"exact_count": 1},
-          {"where": {"event": "DATA","case": "ledger"},"fields": {"descriptions_after": {"eq": "$descriptions_before"},"pins_after": {"eq": "$pins_before"}},"exact_count": 1,"required_fields": ["descriptions_before","pins_before"]},
-          {"where": {"event": "DATA","case": "post-commit-fault"},"fields": {"owner": "synthetic_block","issued_errors": {"eq": 1},"count": {"eq": 3},"error": {"encoding": "signed","eq": -5},"fsync": {"encoding": "signed","eq": -5},"sticky": {"encoding": "signed","eq": -5},"committed": {"eq": 1},"quarantined": {"eq": 1}},"exact_count": 1},
-          {"where": {"event": "DATA","case": "durable-checker"},"fields": {"flush_result": {"encoding": "signed","eq": 0},"checker": "host_required"},"exact_count": 1},
-          {"where": {"event": "ARM"},"fields": {"action": "durable_shutdown","checker": "host_required"},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "seek"},"fields": {"expected": {"eq": 4294967305},"observed": {"encoding": "signed","eq": "$expected"},"error": {"encoding": "signed","eq": 0},"free_after": {"eq": "$free_before"},"free_before": {"ge": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "growth"},"fields": {"size": {"eq": 64},"zero_errors": {"eq": 0}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fd-slots"},"fields": {"slots": {"eq": 128},"limit": {"eq": 128}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "fd-reuse"},"fields": {"expected": {"encoding": "signed","eq": 73},"observed": {"encoding": "signed","eq": 73}},"exact_count": 1},
-          {"where": {"event": "DATA","operation": "directory-digest"},"fields": {"encoding": "names_nul","sha256": "da1901aeadfe2781b0f9c8f8a853d2026e9a7dcd8c83514484982c48381dc428"},"exact_count": 1}
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "exclusive"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -17
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "append-a"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "append-b"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pwrite"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "offset"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 4
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pread"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dup2-self"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dup2-replace"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cloexec"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cloexec-read"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 1
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "status"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "status-shared"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 2
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "efbig"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -27
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "grown-read"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 64
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "inherit"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "inherit-cloexec"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -9
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "share-denied"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -13
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "validation-writes"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-a"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-b"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "mkdir-child"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "file-over-dir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -21
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "dir-over-file"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -20
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "descendant"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "chdir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "pinned-rmdir"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -16
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "identical"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "case-rename"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cross-directory"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "exdev"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -18
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "readonly"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -30
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "replace"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "unlink-open"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "emfile"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -24
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-write"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 19
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-fsync"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "durable-reopen"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 19
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -22
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -22
+              }
+            },
+            "exact_count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -84
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -84
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "invalid-path",
+              "expected": -2
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": -2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "content"
+            },
+            "fields": {
+              "size": {
+                "eq": 8
+              },
+              "sha256": "96fd04d4bad3dffae1303cfbcedd6b5dac6528c949356581fd1364c4332679f7"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "cwd"
+            },
+            "fields": {
+              "expected": "/tmp/F2Dest/Moved",
+              "observed": "/tmp/F2Dest/Moved"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "getdents"
+            },
+            "fields": {
+              "records": {
+                "eq": 3
+              },
+              "record_bytes": {
+                "eq": 792
+              },
+              "rewind_cookie": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fstat-unlinked"
+            },
+            "fields": {
+              "inode": {
+                "ge": 1
+              },
+              "links": {
+                "eq": 0
+              },
+              "size": {
+                "encoding": "signed",
+                "eq": 64
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "user"
+            },
+            "fields": {
+              "checks": {
+                "ge": 10000
+              },
+              "errors": {
+                "eq": 0
+              },
+              "io_cases": {
+                "eq": 1
+              },
+              "reads": {
+                "eq": 10000
+              },
+              "decreases": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-source"
+            },
+            "fields": {
+              "realtime_source": {
+                "ge": 0,
+                "le": 1
+              },
+              "qualified": {
+                "ge": 0,
+                "le": 1
+              },
+              "valid": {
+                "ge": 0,
+                "le": 1
+              },
+              "utc": {
+                "encoding": "signed",
+                "ge": 0
+              },
+              "sample": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "source"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-uname"
+            },
+            "fields": {
+              "abi_version": {
+                "eq": 1
+              },
+              "matched": {
+                "eq": 1
+              },
+              "realtime_source": {
+                "ge": 0,
+                "le": 1
+              },
+              "clock_source": {
+                "eq": "$realtime_source"
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock-offset"
+            },
+            "fields": {
+              "observed_ms": {
+                "encoding": "signed",
+                "ge": 0
+              },
+              "resolution_ns": {
+                "eq": 1000000
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "expected_ms"
+            ],
+            "relations": [
+              {
+                "left": "observed_ms",
+                "op": "ge",
+                "right": "expected_ms",
+                "add": -1
+              },
+              {
+                "left": "expected_ms",
+                "op": "ge",
+                "right": "observed_ms",
+                "add": -1
+              }
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cpu-clock"
+            },
+            "fields": {
+              "busy_ms": {
+                "encoding": "signed",
+                "ge": 1
+              },
+              "sleeping_ms": {
+                "encoding": "signed",
+                "ge": 0,
+                "le": 2
+              },
+              "sleep_ms": {
+                "encoding": "signed",
+                "ge": 20
+              },
+              "scheduling_delay_ms": {
+                "encoding": "signed",
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "sleep-interrupt"
+            },
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -4
+              },
+              "remaining_ms": {
+                "encoding": "signed",
+                "ge": 0,
+                "le": 20
+              },
+              "handlers": {
+                "eq": 1
+              },
+              "sent": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "durable-file"
+            },
+            "fields": {
+              "name_hex": "2f746d702f66322d64757261626c652e62696e",
+              "size": {
+                "eq": 19
+              },
+              "sha256": "47d9886dde2a044526d1fa3420a8a0c096692a88db38fe0764bbd3f522ef67ab"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "descriptions_after": {
+                "eq": "$descriptions_before"
+              },
+              "pins_after": {
+                "eq": "$pins_before"
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "descriptions_before",
+              "pins_before"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "post-commit-fault"
+            },
+            "fields": {
+              "owner": "synthetic_block",
+              "issued_errors": {
+                "eq": 1
+              },
+              "count": {
+                "eq": 3
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "fsync": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "sticky": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "committed": {
+                "eq": 1
+              },
+              "quarantined": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "durable-checker"
+            },
+            "fields": {
+              "flush_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "checker": "host_required"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "ARM"
+            },
+            "fields": {
+              "action": "durable_shutdown",
+              "checker": "host_required"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "seek"
+            },
+            "fields": {
+              "expected": {
+                "eq": 4294967305
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "free_after": {
+                "eq": "$free_before"
+              },
+              "free_before": {
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "growth"
+            },
+            "fields": {
+              "size": {
+                "eq": 64
+              },
+              "zero_errors": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fd-slots"
+            },
+            "fields": {
+              "slots": {
+                "eq": 128
+              },
+              "limit": {
+                "eq": 128
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "fd-reuse"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": 73
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": 73
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "operation": "directory-digest"
+            },
+            "fields": {
+              "encoding": "names_nul",
+              "sha256": "da1901aeadfe2781b0f9c8f8a853d2026e9a7dcd8c83514484982c48381dc428"
+            },
+            "exact_count": 1
+          }
         ],
         "clock_seed": true
       },

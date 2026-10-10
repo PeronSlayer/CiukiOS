@@ -53,5 +53,6 @@ evidence and merges.
 | [f2-15-app-gate-probe](f2-15-app-gate-probe.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (probe registered last in the F2 order through the build list, provenance sidecar, supplement path reconciled); QEMU evidence by the lead pending |
 
 | [f1-22-mount-crash-fixtures](f1-22-mount-crash-fixtures.md) | F1 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (runner attaches no fixture for the `mount-*` injection declarations; crash cut never implemented) |
+| [f2-17-app-gate-double-fault](f2-17-app-gate-double-fault.md) | F2 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (kernel stack overflow in the probe task while building the metadata records: double fault at the stack guard) |
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
