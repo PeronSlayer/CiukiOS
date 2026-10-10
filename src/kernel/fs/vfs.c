@@ -1,8 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vfs.h"
+#include "../include/ciuki/vfs_hooks.h"
+/* f2-03 integration notes: weak observers keep the F1 harness independent.
+ * 1. Detach respects native pins and invalidates mount-lifetime identities.
+ * 2. Native/legacy share claims use the same lock and bidirectional matrix.
+ * 3. Legacy mutations update native cached metadata/identities under that lock.
+ * 4. The final legacy close releases retained open-unlinked chains exactly once.
+ * 5. Legacy namespace mutations respect native cwd/open-directory pins.
+ * 6. Native rmdir/replacement also honors legacy per-drive cwd pins. */
 struct resolved { unsigned drive; uint32_t parent; char name[FS_NAME_BYTES]; };
 void vfs_init(struct vfs *v) { memset(v,0,sizeof(*v)); fs_lock_init(&v->lock); }
-void vfs_destroy(struct vfs *v) { fs_lock_destroy(&v->lock); }
+void vfs_destroy(struct vfs *v) { if (files_detach) files_detach(v); fs_lock_destroy(&v->lock); }
 int vfs_attach(struct vfs *v, unsigned d, struct fat_volume *vol) {
     if (d>=26 || !vol || !vol->mounted) return -FS_EINVAL;
     fs_lock_take(&v->lock); int e=0;
@@ -20,8 +28,10 @@ int vfs_detach(struct vfs *v, unsigned d) {
     fs_lock_take(&v->lock); int e=0; struct fat_volume *vol=v->volumes[d];
     if (!vol) e=-FS_ENOENT;
     for (unsigned i=0;i<VFS_NODES;i++) if (v->nodes[i].refs && v->nodes[i].volume==vol) e=-FS_EBUSY;
+    if (!e && px_volume_busy && px_volume_busy(v,vol)) e=-FS_EBUSY;
     if (!e) e=fat_unmount(vol);
     if (!e) {
+        if (px_volume_detached) px_volume_detached(v,d);
         v->volumes[d]=0; v->generation[d]++;
         for (unsigned i=0;i<VFS_TABLES;i++) if (v->tables[i]) {
             v->tables[i]->cwd[d][0]='/'; v->tables[i]->cwd[d][1]=0; v->tables[i]->cwd_cluster[d]=0;
@@ -38,10 +48,18 @@ int vfs_table_init(struct vfs *v, struct vfs_table *t, unsigned d) {
     for (unsigned i=0;i<26;i++) { t->cwd[i][0]='/'; t->cwd[i][1]=0; }
     v->tables[slot]=t; fs_lock_drop(&v->lock); return 0;
 }
-static void close_handle(struct vfs_table *t, unsigned h) {
-    struct vfs_description *d=t->handles[h]; if (!d) return;
+static int close_handle(struct vfs_table *t, unsigned h) {
+    struct vfs_description *d=t->handles[h]; if (!d) return 0;
+    int e=0;
     t->handles[h]=0;
-    if (!--d->refs) { if (!--d->node->refs) memset(d->node,0,sizeof(*d->node)); memset(d,0,sizeof(*d)); }
+    if (!--d->refs) {
+        if (!--d->node->refs) {
+            if (px_legacy_closed) e=px_legacy_closed(t->vfs,d->node);
+            memset(d->node,0,sizeof(*d->node));
+        }
+        memset(d,0,sizeof(*d));
+    }
+    return e;
 }
 void vfs_table_destroy(struct vfs_table *t) {
     struct vfs *v=t->vfs; fs_lock_take(&v->lock);
@@ -93,6 +111,7 @@ int vfs_open(struct vfs_table *t, const char *path, unsigned flags, enum vfs_sha
     struct fat_volume *vol=v->volumes[r.drive];
     if (!create && (ent.attr&FAT_ATTR_DIR)) { e=-FS_EISDIR; goto out; }
     if ((flags&VFS_WRITE) && (vol->readonly || (!create && (ent.attr&FAT_ATTR_RO)))) { e=vol->readonly ? -FS_EROFS : -FS_EACCES; goto out; }
+    if (!create && px_legacy_share && (e=px_legacy_share(v,vol,&ent,flags&3,(unsigned)deny))) goto out;
     int h=handle_free(t); if (h<0) { e=h; goto out; }
     struct vfs_description *d=0; for (unsigned i=0;i<VFS_DESCRIPTIONS;i++) if (!v->descriptions[i].refs) { d=&v->descriptions[i]; break; }
     if (!d) { e=-FS_EMFILE; goto out; }
@@ -108,13 +127,18 @@ int vfs_open(struct vfs_table *t, const char *path, unsigned flags, enum vfs_sha
     }
     if (create) { if (attr&FAT_ATTR_DIR) { e=-FS_EISDIR; goto out; } if ((e=fat_create(vol,r.parent,r.name,attr,&ent))) goto out; }
     if (!node->refs) { node->volume=vol; node->entry=ent; }
-    if ((flags&VFS_TRUNCATE) && (e=fat_truncate(vol,&node->entry,0))) goto out;
+    if (flags&VFS_TRUNCATE) {
+        struct fat_entry before=node->entry;
+        e=fat_truncate(vol,&node->entry,0);
+        if (px_legacy_changed) px_legacy_changed(v,vol,&before,&node->entry);
+        if (e) goto out;
+    }
     node->refs++; d->refs=1; d->node=node; d->position=0; d->access=flags&3; d->deny=(unsigned)deny; t->handles[h]=d; e=h;
 out: fs_lock_drop(&v->lock); return e;
 }
 static struct vfs_description *get(struct vfs_table *t, int h) { return h>=0 && h<(int)VFS_HANDLES ? t->handles[h] : 0; }
 int vfs_close(struct vfs_table *t, int h) {
-    fs_lock_take(&t->vfs->lock); int e=get(t,h) ? 0 : -FS_EBADF; if (!e) close_handle(t,(unsigned)h); fs_lock_drop(&t->vfs->lock); return e;
+    fs_lock_take(&t->vfs->lock); int e=get(t,h) ? 0 : -FS_EBADF; if (!e) e=close_handle(t,(unsigned)h); fs_lock_drop(&t->vfs->lock); return e;
 }
 int vfs_dup(struct vfs_table *src, int h, struct vfs_table *dst, int target) {
     if (src->vfs!=dst->vfs || target< -1 || target>=(int)VFS_HANDLES) return -FS_EINVAL;
@@ -137,7 +161,11 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
     if (!done) return -FS_EINVAL; *done=0;
     fs_lock_take(&t->vfs->lock); struct vfs_description *d=get(t,h); int e;
     if (!d) e=-FS_EBADF; else if (!(d->access&VFS_WRITE)) e=-FS_EACCES;
-    else { e=fat_write(d->node->volume,&d->node->entry,d->position,buf,n,done); d->position+=*done; }
+    else {
+        struct fat_entry before=d->node->entry;
+        e=fat_write(d->node->volume,&d->node->entry,d->position,buf,n,done); d->position+=*done;
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+    }
     fs_lock_drop(&t->vfs->lock); return e;
 }
 int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, uint64_t *position) {
@@ -155,7 +183,12 @@ int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, ui
 }
 int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
     fs_lock_take(&t->vfs->lock); struct vfs_description *d=get(t,h);
-    int e=!d ? -FS_EBADF : !(d->access&VFS_WRITE) ? -FS_EACCES : fat_truncate(d->node->volume,&d->node->entry,size);
+    int e=!d ? -FS_EBADF : !(d->access&VFS_WRITE) ? -FS_EACCES : 0;
+    if (!e) {
+        struct fat_entry before=d->node->entry;
+        e=fat_truncate(d->node->volume,&d->node->entry,size);
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+    }
     fs_lock_drop(&t->vfs->lock); return e;
 }
 int vfs_commit(struct vfs_table *t, int h) {
@@ -173,7 +206,9 @@ static int metadata(struct vfs_table *t, const char *path, int attr, const struc
     if (!e) {
         struct fat_volume *vol=t->vfs->volumes[r.drive]; struct vfs_node *n=node_find(t->vfs,vol,&ent);
         if (n) ent=n->entry;
+        struct fat_entry before=ent;
         e=fat_set_metadata(vol,&ent,attr<0 ? ent.attr : (uint8_t)attr,times);
+        if (!e && px_legacy_changed) px_legacy_changed(t->vfs,vol,&before,&ent);
         if (!e && n) n->entry=ent;
     }
     fs_lock_drop(&t->vfs->lock); return e;
@@ -208,8 +243,19 @@ static __attribute__((noinline)) int contains(struct fat_volume *v, uint32_t anc
     }
     return -FS_ELOOP;
 }
+/* Caller already holds v->lock; shared with the native path view. */
+int vfs_directory_pinned(struct vfs *v, struct fat_volume *vol, uint32_t directory) {
+    for (unsigned i=0;i<VFS_TABLES;i++) if (v->tables[i])
+        for (unsigned d=0;d<26;d++) if (v->volumes[d]==vol) {
+            uint32_t cwd=v->tables[i]->cwd_cluster[d];
+            int e=contains(vol,directory,cwd ? cwd : root(vol));
+            if (e) return e;
+        }
+    return 0;
+}
 static int busy(struct vfs *v, struct fat_volume *vol, const struct fat_entry *ent) {
     if (node_find(v,vol,ent)) return -FS_EBUSY;
+    if (px_legacy_busy && px_legacy_busy(v,vol,ent)) return -FS_EBUSY;
     if (!(ent->attr&FAT_ATTR_DIR)) return 0;
     for (unsigned i=0;i<VFS_NODES;i++) if (v->nodes[i].refs && v->nodes[i].volume==vol) {
         int e=contains(vol,ent->first,v->nodes[i].entry.parent); if (e) return e<0 ? e : -FS_EBUSY;
@@ -226,7 +272,11 @@ static int busy(struct vfs *v, struct fat_volume *vol, const struct fat_entry *e
 static int remove_path(struct vfs_table *t, const char *path, bool dir) {
     fs_lock_take(&t->vfs->lock); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
     if (!e && !r.name[0]) e=-FS_EACCES;
-    if (!e) { struct fat_volume *v=t->vfs->volumes[r.drive]; if (!(e=busy(t->vfs,v,&ent))) e=fat_remove(v,&ent,dir); }
+    if (!e) {
+        struct fat_volume *v=t->vfs->volumes[r.drive];
+        if (!(e=busy(t->vfs,v,&ent))) e=fat_remove(v,&ent,dir);
+        if (!e && px_legacy_changed) px_legacy_changed(t->vfs,v,&ent,0);
+    }
     fs_lock_drop(&t->vfs->lock); return e;
 }
 int vfs_delete(struct vfs_table *t, const char *p) { return remove_path(t,p,false); }
@@ -245,7 +295,11 @@ int vfs_rename(struct vfs_table *t, const char *from, const char *to) {
     if (!e) {
         struct fat_volume *v=t->vfs->volumes[a.drive]; e=busy(t->vfs,v,&ent);
         if (!e && (ent.attr&FAT_ATTR_DIR)) { e=contains(v,ent.first,b.parent); if (e>0) e=-FS_EINVAL; }
-        if (!e) e=fat_rename(v,&ent,b.parent,b.name);
+        if (!e) {
+            struct fat_entry before=ent;
+            e=fat_rename(v,&ent,b.parent,b.name);
+            if (!e && px_legacy_changed) px_legacy_changed(t->vfs,v,&before,&ent);
+        }
     }
     fs_lock_drop(&t->vfs->lock); return e;
 }
