@@ -352,3 +352,29 @@ boot after an unclean power-off mounts C: read/write with
 passes every F0 probe up to the deliberate `panic`; `f1:all` passes
 `registry` and stops at `input` (`case=setup backend=native error=-5`,
 directive f1-27).
+
+## Hardware: first unattended sweep on the ThinkPad T23 (image `cb33aec3…`, commit `f7286ca`, capture `44444444`)
+
+`BOOT.CFG` with `probe=all:sweep run=44444444`; 33 boots driven by the
+cursor and the kernel's self-reboot, two power cycles by the operator
+(after the deliberate F0 `panic` and after a double fault). Results:
+F0 `boot`, `bootinfo`, `allocator`, `protection`, `isolation`, `preempt`,
+`localfault`, `syslife`, `fpu` PASS, `panic` `not_run
+reason=reset_before_completion` (intentional halt, recovered by power
+cycle). F1 `registry`, `input-fault`, `framebuffer`, `ata`, `ata-fault`,
+`partition`, `cache`, `fat-write` (two boots), `mount-crash` (boot 2),
+`bootlog` (two boots) PASS; `input` FAIL (`iface_kbd` `0xAB` → `0xFA`,
+directive f1-29, merged after this run); `fat-read` FAIL `error=-5` with
+no fixture disk present (directive f1-30); `safe` FAIL (the cursor cannot
+be persisted in safe mode, documented limit); `mount-crash` boot 1
+`not_run reason=reset_before_completion` (the cut needs the runner). F2
+`elf-load`, `spawn-wait`, `mmap`, `threads-wait`, `libc-smoke` PASS;
+`crash-isolation` with the real desktop: 100 victim cycles PASS, desktop
+and survivor alive, then the post-fault interaction FAIL with
+`input_events=0` (no input driver on this image); `fd-table` double fault
+after `inherit-cloexec` (`esp=f0006ff4`, directive f2-20); `signals-fault`
+and `app-gate` not reached before the halt. The i8042 step records of
+f1-27 named the failing keyboard step on the first boot. Image
+`dfa78c3e…` (commit `f86f350`, f1-29): QEMU input cases PASS and the
+runner's `sweep-smoke` case PASS (ten boots under `-icount`, final panic
+recovered).
