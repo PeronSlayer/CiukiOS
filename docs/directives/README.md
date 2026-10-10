@@ -39,7 +39,8 @@ evidence and merges.
 | [f1-13-boot-time-records](f1-13-boot-time-records.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (runtime guard patch applied; supervisor framing allowed) |
 | [f1-14-input-fault-guest-fix](f1-14-input-fault-guest-fix.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (root cause: 10 KiB kmalloc over the 2,040-byte limit) |
 | [f1-15-firmware-input-qemu](f1-15-firmware-input-qemu.md) | F1 | gpt-6-astra / xhigh | issued 2026-10-11 (safe fails on qemu-e500: firmware input init EIO) |
-| [f1-16-fixture-disks](f1-16-fixture-disks.md) | F1 | gpt-6.1-sol / high | issued 2026-10-11 (fat12-read: superfloppy fixture not mounted) |
+| [f1-16-fixture-disks](f1-16-fixture-disks.md) | F1 | gpt-6.1-sol / high | delivered 2026-10-11 (43,674 storage checks); merge after the current batch |
+| [f1-17-fat-suite-alignment](f1-17-fat-suite-alignment.md) | F1 | gpt-6.1-sol / high | written; starts after f1-16 is merged |
 
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
