@@ -128,3 +128,32 @@ fault, durable checker); `libc-smoke` FAIL: the SDK newlib program
 `/bin/libc_smoke` ran in the guest for the first time (11,240 checks, 3
 failures, exit 1, stdout `CiukiOS libc smoke: 4294967297 1.25`). Directive
 f2-10 completes these probes.
+
+## Tenth image: `aee7f539…` (commit `408d056`, f1-17 and f1-18 merged)
+
+Suite batch on `qemu-t23`, `qemu-e500` and `qemu-min128`: `f0-smoke` 2/2;
+`f0-core` 56/56 (the `preempt` starvation of the ninth image is gone after
+f1-18); `f1-input`: `registry`, `input-fault`, `input-qemu-t23` PASS,
+`input-qemu-e500` FAIL (no events after ARM through the firmware backend:
+retained virtual-PIC IRQs, fixed by f1-19 after this run), so `framebuffer`,
+`framebuffer-no-lfb`, `firmware_overrun` and `disallowed_io` stayed
+`not_run`; `f1-safe`: every QEMU case PASS on both laptop profiles plus
+`safe-no-storage` and `safe-no-lfb` (the two `safe-menu-*` cases need
+physical menu evidence); `f1-storage`: `ata`, `partition`, `ata-fault` and
+`ata-fault-blkdebug` PASS on every profile; `f1-fat32`: `fat12-read`,
+`fat16-read`, `fat32-read` PASS, `cache` FAIL with `END error=-16` after all
+its subcases passed, which left the 13 later cases `not_run`. The three
+`uart-absent-*` operator-confirmation cases count as failures in the
+summaries and gate nothing. The F2 suites were stopped by the lead at their
+F1 prefix.
+
+Single diagnostic boots of the write probes on the same image (`qemu-t23`,
+not suite evidence): `f1:fat-write` (workload and digests `result=0`, then
+`flush_result=-16`), `f1:cache` and `f1:bootlog` (`qualification … writes=1
+flush_result=0`) all end `FAIL error=-16`. The error is `storage_sync()` →
+`storage_shutdown()` → `vfs_detach(C:)` → `px_volume_busy()`: since f2-03
+`files_bootstrap` pins the supervisor's cwd on the root node at every boot,
+and the F2 busy hook treats that pin as an open description. The host
+storage test does not link the namespace, so it never saw it. Directive
+f2-11 fixes the shutdown rule; the `fd-table` durable checker of
+`f2-process` calls `storage_sync()` the same way.
