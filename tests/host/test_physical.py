@@ -262,6 +262,46 @@ class PhysicalImportTests(unittest.TestCase):
             (self.capture/'acquisition.json').write_text(json.dumps(self.metadata))
             self.assertEqual(import_sweep(self.capture, self.hash, cases)[1]['outcome'], 'pass')
 
+    def test_qemu_only_safe_selector_flag_is_not_applicable_on_hardware(self):
+        # Lead amendment to f1-35: ` safe=1` is accepted by the kernel only under QEMU.
+        cases = self.sweep_capture(); cases[0]['selector'] = 'f0:boot run={run_id} safe=1'
+        result = import_sweep(self.capture, self.hash, cases)
+        self.assertEqual(result[0]['outcome'], 'not_run')
+        self.assertEqual(result[0]['reason'], 'selector_flag_not_applicable:safe=1')
+        self.assertEqual(result[1]['outcome'], 'pass')
+        self.metadata['machine_variants'] = {'safe': 1}
+        (self.capture/'acquisition.json').write_text(json.dumps(self.metadata))
+        self.assertEqual(import_sweep(self.capture, self.hash, cases)[0]['outcome'], 'pass')
+
+    def test_qemu_timing_domain_literal_means_hardware_on_physical_boots(self):
+        # Lead amendment to f1-35: records say icount under QEMU and hardware otherwise.
+        cases = self.sweep_capture()
+        raw = (self.capture/'f0.log').read_bytes().replace(b' tick=10000', b' tick=10000 timing_domain=hardware')
+        (self.capture/'f0.log').write_bytes(raw)
+        for literal, outcome in (('icount', 'pass'), ('hardware', 'pass'), ('tcg', 'fail')):
+            cases[0]['expected']['predicates'] = [{'where': {'event': 'DATA'}, 'fields': {'timing_domain': literal}}]
+            self.assertEqual(import_sweep(self.capture, self.hash, cases)[0]['outcome'], outcome, literal)
+
+    def test_operator_input_records_replace_exact_stimulus_totals(self):
+        # Lead amendment to f1-34: criteria=operator records are judged by thresholds.
+        cases = self.sweep_capture()
+        banner = 'L:CPU signature=000006b1 family=00000006\r\nL:SELECT_SOURCE=cfg\r\nCiuki VMM F0 build 12ab34cd - CiukiOS\r\n'
+        def record(seq, event, extra=''):
+            return f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=input event={event}{extra}\r\n'
+        def capture(criteria):
+            raw = banner + record(1, 'BEGIN') + record(2, 'DATA', f' case=counts criteria={criteria} characters=113')
+            raw += record(3, 'DATA', ' group=input text_count=113 key_transitions=200 button_transitions=74 motion_x=3667 motion_y=-4760')
+            raw += record(4, 'DATA', ' group=input loss=0 duplicates=0 stuck=0 owner_errors=0') + record(5, 'END', ' status=PASS')
+            (self.capture/'f0.log').write_bytes(raw.encode())
+        exact = {'terminal': 'END', 'predicates': [{'where': {'event': 'DATA', 'group': 'input'}, 'combine': True, 'fields': {
+            'text_count': {'eq': 100}, 'key_transitions': {'eq': 200}, 'button_transitions': {'eq': 20},
+            'motion_x': {'eq': 200}, 'motion_y': {'eq': -100}}}]}
+        cases = [{'id': 'input-qemu-t23', 'probe': 'input', 'expected': exact}]
+        capture('operator')
+        self.assertEqual(import_sweep(self.capture, self.hash, cases)[0]['outcome'], 'pass')
+        capture('exact')
+        self.assertEqual(import_sweep(self.capture, self.hash, cases)[0]['outcome'], 'fail')
+
     def test_startup_fallbacks_are_per_boot_and_do_not_split_twice(self):
         cases = self.sweep_capture(); path = self.capture/'f0.log'; raw = path.read_bytes()
         cpu = b'L:CPU signature=000006b1 family=00000006\r\n'

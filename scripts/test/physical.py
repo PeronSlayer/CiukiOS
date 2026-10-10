@@ -137,6 +137,44 @@ def sweep_provenance(boot, records, damaged, gaps, previous):
     return detail, None
 
 
+def physical_timing_domain(expected):
+    """Lead amendment (f1-35 acceptance): records state their timing domain
+    as `icount` under QEMU and `hardware` otherwise (`CBI_F_SMBIOS_QEMU`), so a
+    QEMU predicate `timing_domain == icount` means `hardware` on a physical
+    boot. Only that literal is rewritten; every other field is unchanged."""
+    import copy
+    expected = copy.deepcopy(expected)
+    for predicate in expected.get('predicates', []):
+        fields = predicate.get('fields', {})
+        if fields.get('timing_domain') == 'icount': fields['timing_domain'] = 'hardware'
+        if isinstance(fields.get('timing_domain'), dict) and fields['timing_domain'].get('eq') == 'icount':
+            fields['timing_domain']['eq'] = 'hardware'
+    return expected
+
+
+def physical_operator_criteria(expected, records):
+    """Lead amendment (f1-34 acceptance): when the kernel's `input` records say
+    `criteria=operator` (sweep prompt answered by a human), the QEMU stimulus
+    totals of the `group=input` predicate become the operator thresholds of
+    directive f1-34 (text >= 10, key transitions >= 20, button transitions
+    >= 2); the signed motion totals are judged by the kernel verdict and left
+    out. Loss, duplicate, stuck-key and owner-error predicates are unchanged;
+    `criteria=exact` records keep every exact total."""
+    if not any(r.get('probe') == 'input' and r.get('criteria') == 'operator' for r in records):
+        return expected
+    import copy
+    expected = copy.deepcopy(expected)
+    for predicate in expected.get('predicates', []):
+        if predicate.get('where', {}).get('group') != 'input': continue
+        fields = predicate.get('fields', {})
+        for key, minimum in (('text_count', 10), ('key_transitions', 20), ('button_transitions', 2)):
+            if key in fields: fields[key] = {'ge': minimum}
+        for key in ('motion_x', 'motion_y'):
+            fields.pop(key, None)
+        predicate['operator_criteria'] = True
+    return expected
+
+
 def inapplicable_variants(case, metadata):
     """Physical configuration must explicitly match case machine overrides."""
     mismatches = []
@@ -150,6 +188,13 @@ def inapplicable_variants(case, metadata):
         if key not in declared or declared[key] != value:
             rendered = value if isinstance(value, str) else json.dumps(value, sort_keys=True, separators=(',', ':'))
             mismatches.append(f'device_exception_not_applicable:{key}={rendered}')
+    # Lead amendment (f1-35 acceptance): the selector flag ` safe=1` is accepted
+    # by the kernel only under QEMU (selector.c); on hardware safe mode comes
+    # from the loader menu and is qualified by the separate safe-menu
+    # acquisition (f1-36), so such a case cannot hold on a sweep boot. The
+    # `safe` probe keeps its own f1-36 mapping (safe_mode_not_selected).
+    if case.get('probe') != 'safe' and ' safe=1' in case.get('selector', '') and variants.get('safe') not in (1, '1', True):
+        mismatches.append('selector_flag_not_applicable:safe=1')
     return mismatches
 
 
@@ -411,7 +456,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                             part_expected = dict(part_expected)
                             part_expected['predicates'] = [p for p in part_expected.get('predicates', [])
                                                            if p.get('where', {}).get('operation') not in ('exdev', 'readonly')]
-                        parser.check(part_expected)
+                        parser.check(physical_operator_criteria(physical_timing_domain(part_expected), parser.records))
                         if absent_subcases:
                             result['not_run_subcases'] = absent_subcases
                         if parser.terminal and parser.terminal['event'] == 'PANIC':
