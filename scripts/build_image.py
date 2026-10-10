@@ -24,6 +24,7 @@ DEFAULT_CONFIG = b"safe=0 serial=1\n"
 sys.dont_write_bytecode = True
 SDK = ROOT / "build/tools/ciuki-sdk"
 LUA = ROOT / "build/apps/lua"
+DESKTOP = ROOT / "build/apps/desktop"
 TEST_PATH = "/system/tests/lua-5.4.8-tests"
 
 
@@ -44,8 +45,22 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def desktop_payloads():
+    """Validate desktop/demo ELFs and the exact converted portrait independently."""
+    spec = importlib.util.spec_from_file_location("build_desktop", ROOT / "apps/desktop/build_desktop.py")
+    desktop_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(desktop_build)
+    desktop = desktop_build.validate_payloads()
+    sources = {"/bin/desktop": DESKTOP / "desktop", "/bin/demo": DESKTOP / "demo",
+               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
+    metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
+                "protocol_version": desktop["protocol_version"],
+                "elf": desktop["elf"], "portrait": desktop["portrait"]}
+    return sources, {"/bin", "/system", "/system/assets"}, metadata
+
+
 def application_payloads():
-    """Validate the current SDK/Lua provenance before creating an image."""
+    """Validate SDK/Lua/desktop provenance before creating an image."""
     spec = importlib.util.spec_from_file_location("build_lua", ROOT / "apps/lua/build_lua.py")
     lua_build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lua_build)
@@ -73,15 +88,19 @@ def application_payloads():
         require(all(actual[k] == recorded[k] for k in actual), f"SDK ELF evidence: {name}")
     for name in manifest["test_files"]:
         sources[f"{TEST_PATH}/{name}"] = LUA / "lua-5.4.8-tests" / name
+    desktop_sources, desktop_directories, desktop_metadata = desktop_payloads()
+    sources.update(desktop_sources)
     directories = {"/bin", "/tmp", "/home", "/system", "/system/tests",
-                   "/system/licenses", TEST_PATH}
+                   "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
+    directories.update(desktop_directories)
     metadata = {"sdk_manifest_sha256": expected["sdk_manifest_sha256"],
                 "lua": {"version": manifest["version"],
                         "manifest_sha256": sha256(LUA / "manifest.json"),
                         "archives": expected["archives"], "elf": manifest["elf"],
                         "supplement_sha256": manifest["files"]["ciuki-f2.lua"],
                         "upstream_mode": manifest["upstream_mode"], "patches": manifest["patches"]}}
+    metadata["desktop"] = desktop_metadata
     return sources, directories, metadata
 
 
