@@ -219,3 +219,6 @@ On image `a4806d0c…` the remaining `qemu-t23` cases of `f2-process` and
 FAT16 fixture, ARM, durable export and host checker), `threads-wait` and
 `libc-smoke`; together with `elf-load`, `spawn-wait`, `mmap` and
 `signals-fault` all seven cases of the two suites pass on `qemu-t23`.
+The same seven cases also pass through the runner on `qemu-e500` and
+`qemu-min128` (14 of 14), so `f2-process` and `f2-runtime` are green on the
+three laptop/minimum profiles for image `a4806d0c…`.
