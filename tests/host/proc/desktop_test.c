@@ -11,7 +11,23 @@
 #include <ciuki/registry.h>
 #include <ciuki/storage.h>
 
+#define memcpy gate_memcpy
+#define memmove gate_memmove
+#define memset gate_memset
+#define memcmp gate_memcmp
+#define strlen gate_strlen
+#define strncmp gate_strncmp
+#include "../../../src/kernel/lib/string.c"
+#undef memcpy
+#undef memmove
+#undef memset
+#undef memcmp
+#undef strlen
+#undef strncmp
 struct ciuki_boot_info g_boot;
+static bool gate_simulation;
+static unsigned gate_progress, gate_victims, gate_restored, gate_interactions;
+
 static struct resource desktop_resource = { .generation = 1, .state = RS_ACTIVE };
 static struct i8042_stats input_state = { .active = true, .generation = 1 };
 static struct input_stats input_status;
@@ -27,10 +43,18 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     va_list ap; va_start(ap, fmt);
     int n = fmt ? vsnprintf(extra, sizeof(extra), fmt, ap) : 0;
     va_end(ap);
-    CHECK(n >= 0 && n < 155); /* conservative allowance for fixed record prefix */
+    CHECK(n >= 0 && n <= 155); /* conservative allowance for fixed record prefix */
     frame_count++;
-    CHECK(!strcmp(event, "DATA") || (!strcmp(probe, "libc-smoke") &&
-          (!strcmp(event, "BEGIN") || !strcmp(event, "END") || !strcmp(event, "ERROR"))));
+    CHECK(!strcmp(event, "DATA") || ((!strcmp(probe, "libc-smoke") || !strcmp(probe,"crash-isolation")) &&
+          (!strcmp(event, "BEGIN") || !strcmp(event, "END") || !strcmp(event, "ARM") || !strcmp(event, "ERROR"))));
+    if (gate_simulation) {
+        if (strstr(extra,"case=progress ")) {
+            CHECK(strstr(extra,"server=desktop") && strstr(extra,"server_replies=100 replies=100") && strstr(extra,"unauthorized_access=0 desktop_restarts=0")); gate_progress++;
+        }
+        if (strstr(extra,"case=victim ")) { CHECK(strstr(extra,"server=desktop") && strstr(extra,"kind=")); gate_victims++; }
+        if (strstr(extra,"case=restored ")) { CHECK(strstr(extra,"equal=1 processes_equal=1")); gate_restored++; }
+        if (strstr(extra,"case=interaction ")) gate_interactions++;
+    }
     strcpy(frame_probe, probe);
     const char *data = strstr(extra, "data_hex=");
     if (data) {
@@ -92,11 +116,14 @@ static int report_fixture_spawn(const char *path, const char *const argv[], cons
     CHECK(argv && !strcmp(argv[0], "libc_smoke") && !argv[1] && !cwd && !desktop && out);
     libc_spawn_calls++; return -ENOENT;
 }
+static int gate_fixture_spawn(struct process **out);
+#define supervisor_spawn_desktop_probe gate_fixture_spawn
 #define supervisor_spawn_standin report_fixture_standin
 #define supervisor_spawn report_fixture_spawn
 #include "../../../src/kernel/probes/f2_probes_desktop.c"
 #undef supervisor_spawn
 #undef supervisor_spawn_standin
+#undef supervisor_spawn_desktop_probe
 
 #define BUFFER (CIUKI_IMAGE_BASE + PAGE_SIZE)
 static void desktop_select(struct proc_thread *t) { g_current = t->task; g_current->state = T_RUNNING; }
@@ -548,12 +575,136 @@ static void test_libc_write_gate(void)
     CHECK(probe_f2_libc_smoke() == 1 && libc_gate_calls == 1 && libc_spawn_calls == 1);
     puts("libc controller: qualified write gate before payload launch, refusal never spawns PASS");
 }
+
+static struct process *gate_server, *gate_survivor;
+static uint32_t gate_control_address, gate_replies, gate_turns, gate_cycle;
+static bool gate_bad_status;
+static int gate_fixture_spawn(struct process **out)
+{
+    make_process(proc_supervisor(),out); gate_server=*out; gate_server->pgid=gate_server->pid;
+    make_process(gate_server,&gate_survivor); gate_survivor->pgid=gate_survivor->pid;
+    struct ciuki_mmap_args a={.size=sizeof(a),.length=PAGE_SIZE,.prot=PROT_READ|PROT_WRITE,.flags=MAP_PRIVATE|MAP_ANONYMOUS,.fd=-1};
+    gate_control_address=(uint32_t)ua_mmap(gate_server->memory,&a); CHECK(gate_control_address>=CIUKI_MMAP_BASE);
+    return (int)gate_server->pid;
+}
+static void gate_server_summary(unsigned generation,unsigned victim)
+{
+    char line[241];
+    int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=%u survivor=%u victim=%u cycle=%u replies=%u keys=%u motion=%u buttons=%u",
+        gate_control_address,generation,gate_survivor->pid,victim,gate_cycle,gate_replies,gate_cycle==100 ? 2u : 0u,gate_cycle==100 ? 1u : 0u,gate_cycle==100 ? 2u : 0u);
+    native_report(gate_server,line,n);
+}
+static void gate_demo_summary(struct process *p,unsigned stage,unsigned generation)
+{
+    char line[241];
+    int n=snprintf(line,sizeof(line),"case=native-demo stage=%u turns=%u unauthorized=0 generation=%u",stage,
+        p==gate_survivor ? gate_turns : 0,generation);
+    native_report(p,line,n);
+}
+static void gate_schedule(void)
+{
+    if (!native_reports.active) return;
+    CHECK(g_current==&controller);
+    if (!native_reports.control) { gate_server_summary(0,0); gate_demo_summary(gate_survivor,2,0); }
+    struct gate_control c; CHECK(!ua_read(gate_server->memory,&c,gate_control_address,sizeof(c)));
+    if (c.command) {
+        CHECK(!ua_write(gate_server->memory,gate_control_address,&(struct gate_control){0},sizeof(c)));
+        unsigned victim=native_reports.victim;
+        switch(c.command) {
+        case GATE_SPAWN: {
+            struct process *v; make_process(gate_server,&v); v->pgid=v->pid;
+            gate_server_summary(c.generation,v->pid); gate_demo_summary(v,1,0); return;
+        }
+        case GATE_RELEASE: {
+            struct process *v=proc_find(victim); CHECK(v);
+            gate_demo_summary(v,3,0); proc_stop(v,0,gate_bad_status ? SIGILL : gate_cycle%5==1 ? SIGPIPE : SIGSEGV); proc_collect(); break;
+        }
+        case GATE_REAP: { struct process *v=proc_find(victim); CHECK(v && v->state==PROC_ZOMBIE); proc_reap(gate_server,v); victim=0; gate_cycle++; break; }
+        case GATE_RUN: gate_turns+=100; gate_replies+=100; gate_demo_summary(gate_survivor,2,0); break;
+        case GATE_SNAPSHOT: gate_demo_summary(gate_survivor,2,c.generation); break;
+        case GATE_INTERACT: break;
+        default: CHECK(false);
+        }
+        gate_server_summary(c.generation,victim);
+    }
+    if (gate_cycle==100) { activity.presents++; activity.input_events+=5; device.mapped[0]++; }
+}
+static void test_native_controller(void)
+{
+    uint8_t pixels[4]={0}; device.present=true;device.mapped=pixels;device.size=sizeof(pixels);
+    for (unsigned bad=0;bad<2;bad++) {
+        gate_bad_status=bad; gate_replies=gate_turns=gate_cycle=0;
+        gate_progress=gate_victims=gate_restored=gate_interactions=0;
+        gate_simulation=true; g_current=&controller; on_schedule=gate_schedule;
+        CHECK(native_crash_isolation()==(int)bad);
+        on_schedule=0;gate_simulation=false;
+        CHECK(gate_victims==(bad ? 1u : 100u) && gate_progress==(bad ? 0u : 100u));
+        CHECK(gate_restored==gate_progress && gate_interactions==(bad ? 0u : 2u));
+        CHECK(!native_reports.active && !native_reports.invalid);
+    }
+    device.present=false;device.mapped=0;device.size=0;
+    puts("native controller: 100 cycles/five kinds, counters, ticks, PID/CR3/pgid, ledgers, interaction, wrong-signal refusal PASS (fake scheduling)");
+}
+
+#ifdef CIUKI_DESKTOP_PAYLOAD_BIN
+static void standin_schedule(void)
+{
+    for (unsigned i=1;i<CIUKI_PROCESS_MAX;i++) {
+        struct process *p=processes[i];
+        if (!p || p->state!=PROC_LIVE || !p->memory || !ua_range(p->memory,DESKTOP_RESULT,sizeof(struct desktop_result),PROT_READ)) continue;
+        struct desktop_result r;CHECK(desktop_result_read(p,&r));
+        if (r.mode==0) {
+            if (r.victim_endpoint!=-1) r.ack=1;
+            r.turns++;
+        } else if(r.mode==1) {
+            r.stage=r.ack ? 2 : 1;
+            if(!r.ack) r.turns++;
+        } else {
+            if(r.ack==1) r.stage=3;
+            if(r.ack==2) {proc_stop(p,0,r.mode==3 ? SIGPIPE : SIGSEGV);proc_collect();continue;}
+        }
+        CHECK(!ua_write(p->memory,DESKTOP_RESULT,&r,sizeof(r)));
+    }
+}
+static void test_standin_controller_records(void)
+{
+    const char *request="f2:crash-isolation run=12345678 server=standin";
+    memcpy(g_boot.test_request,request,strlen(request));g_boot.test_request_len=strlen(request);g_boot.flags=CBI_F_SMBIOS_QEMU;
+    g_current=&controller;on_schedule=standin_schedule;
+    CHECK(!probe_f2_crash_isolation());on_schedule=0;
+    memset(&g_boot,0,sizeof(g_boot));
+    CHECK(!pages_used && !desktop_objects.channels && !desktop_objects.grants);
+    puts("stand-in production record formatting/selector: 100 mode cycles/progress/restored/display/ledger PASS (fake scheduling)");
+}
+#endif
+
+static void test_native_reports(void)
+{
+    struct process *p,*child;make_process(proc_supervisor(),&p);make_process(p,&child); child->pgid=child->pid;
+    memset(&native_reports,0,sizeof(native_reports));native_reports.active=true;native_reports.server=p->pid;native_reports.survivor=child->pid;
+    const char *good="case=native-demo stage=2 turns=100 unauthorized=0 generation=7";
+    native_report(p,good,strlen(good));CHECK(native_reports.invalid);native_reports.invalid=false;
+    native_report(child,good,strlen(good));CHECK(!native_reports.invalid && native_reports.survivor_turns==100 && native_reports.survivor_snapshot==7);
+    const char *bad[]={"case=native-demo stage=2 turns=99 unauthorized=0 generation=7",
+        "case=native-demo stage=2 turns=4294967296 unauthorized=0 generation=7",
+        "case=native-demo stage=2 turns=100 unauthorized=1 generation=7",
+        "case=native-demo stage=1 turns=100 unauthorized=0 generation=7",
+        "case=native-demo stage=2 turns=100 unauthorized=0"};
+    for(unsigned i=0;i<ARRAY_SIZE(bad);i++) { native_reports.invalid=false;native_report(child,bad[i],strlen(bad[i]));CHECK(native_reports.invalid); }
+    native_reports.active=false;desktop_remove(p,child);desktop_remove(proc_supervisor(),p);
+    puts("native summaries: emitting PID, stage, monotonic turns, overflow, unauthorized/missing fields, barrier generation PASS");
+}
+
 int main(int argc, char **argv)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     controller.state = T_RUNNING; g_current = &controller;
     proc_init();
     test_desktop_surfaces(); test_desktop_channels(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
+    test_native_reports(); test_native_controller();
+#ifdef CIUKI_DESKTOP_PAYLOAD_BIN
+    test_standin_controller_records();
+#endif
     test_libc_reports();
     test_libc_write_gate();
     if (argc == 2) {

@@ -70,7 +70,9 @@ for raw in stream:
     elif cmd=='quit' and not scenario.get('ignore_quit'):
         Path('fake-stopped').touch()
         conn.sendall(json.dumps({'return':{},'id':request['id']}).encode()+b'\n');break
-    elif cmd=='screendump':Path(request['arguments']['filename']).write_bytes(b'P6\n1 1\n255\n\x00\x00\x00')
+    elif cmd=='screendump':
+        screen=scenario.get('desktop_screens',{}).get('after' if scenario.get('received_input') else 'before')
+        Path(request['arguments']['filename']).write_bytes(Path(screen).read_bytes() if screen else b'P6\n1 1\n255\n\x00\x00\x00')
     conn.sendall(json.dumps({'return':reply,'id':request['id']}).encode()+b'\n')
     if cmd in ('cont','system_reset'):
         if cmd=='system_reset':
@@ -82,7 +84,12 @@ for raw in stream:
         else:emit()
     if cmd=='input-send-event':
         count=scenario.setdefault('received_input',0)+1;scenario['received_input']=count
-        if count==scenario.get('finish_after_input'):emit(scenario.get('after_input',[]))
+        if count==scenario.get('finish_after_input'):
+            emit(scenario.get('after_input',[]))
+            if scenario.get('delayed_terminal'):
+                def finish():
+                    time.sleep(.5);emit(scenario['delayed_terminal'])
+                threading.Thread(target=finish,daemon=True).start()
     if cmd=='quit':Path('fake-stopped').touch()
     if scenario.get('reset') and cmd=='query-status':conn.sendall(('{"timestamp":{"seconds":%d,"microseconds":0},"event":"RESET","data":{"guest":true,"reason":"guest-reset"}}\n'%int(time.time())).encode())
 if scenario.get('child'):

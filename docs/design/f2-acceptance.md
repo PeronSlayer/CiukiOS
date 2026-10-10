@@ -50,14 +50,15 @@ f2:<probe-id> run=<8-hex-digit-id> [platform=e500] [safe=1] [server=desktop|stan
 ```
 
 **[F2, f2-12 amendment]** `server` MUST apply only to `crash-isolation`,
-occur last and appear at most once. Automatic selection MUST use the actual
+occur last, appear at most once and require validated QEMU fw_cfg provenance. Automatic selection MUST use the actual
 desktop when a qualified LFB and `/bin/desktop` are available. Safe mode and
 no-LFB operation MUST retain the stand-in, including with an explicit desktop
 request. An explicit desktop request with an available LFB but missing payload
 MUST fail launch rather than silently qualify the stand-in. The existing
 64-byte bound remains: the 67-byte combination of `platform`, `safe` and
 `server` is invalid; safe E500 selectors MUST omit `server` and use automatic
-fallback selection. This suffix also requires boot-loader validation; adding
+fallback selection. The combined E500 + safe + server request is never
+needed because safe mode always runs the stand-in. This suffix also requires boot-loader validation; adding
 it only to the kernel cannot make an explicit selector bootable.
 
 The post-fault host observation uses the ordered key, relative-motion and
@@ -70,6 +71,55 @@ pixels in the original cursor's 8x16 footprint. A clock-only change MUST fail.
 It MUST delete passing captures after retaining these measurements. This is
 external observation, additional to guest presents/input counters and the LFB
 digest; it does not establish guest qualification by itself.
+
+The native controller MUST use production supervisor launch, grants and a new
+process group. Test-only desktop pacing cycles `bad-pointer`, `closed-peer`,
+`forged-fd`, `grant-fd`, `handler-fault` twenty times each. Expected signals are
+SIGPIPE for closed-peer and SIGSEGV for the other four. Rejection assertions
+precede the deliberate faults; an assertion exit cannot qualify a cycle. This
+matches [POSIX signal meanings](https://pubs.opengroup.org/onlinepubs/7908799/xsh/signal.h.html)
+and [wait status semantics](https://pubs.opengroup.org/onlinepubs/9699919799/functions/wait.html).
+
+Call 3's existing bounded ASCII summaries MUST identify the emitting process
+through the kernel task, never through a claimed PID. The desktop publishes
+an aligned anonymous control page explicitly; the controller validates its
+whole writable extent and writes only the declared command/generation words.
+The demo counts only matching PONGs for its pending serial. After 100 turns it
+pauses; a snapshot barrier follows the desktop's flushed replies and focus
+messages, and the demo reports its consumed generation. Only then are both
+object and process ledgers compared. Test loops sleep 1 ms (ordinary loops
+remain 10 ms), without lowering the 100 turns/100 ticks requirements.
+The desktop MUST publish each new victim PID before sending CONFIGURE, which
+can schedule that child and deliver its armed summary. Interaction summaries
+also MUST show both key edges, motion and both button edges consumed.
+
+| Record | Stand-in | Native desktop |
+| --- | --- | --- |
+| `payload` | Embedded ELF SHA-256 | Production `/bin/desktop` launch |
+| `identity`, `spaces` | PIDs and CR3 in identity | PIDs/pgids in identity, CR3 in spaces |
+| `victim` x100 | Existing modes 2–5, signal/status | Five named faults, PID/CR3/pgid, signal/status |
+| `progress` x100 | Result-page turns/ticks | PID-bound summary turns/ticks |
+| `restored` x100 | Object ledger equality | Object and process ledger equality |
+| `cycles`, `ledger` | 100, final equality | 100, final equality |
+| `display` | Existing before/after fallback counters | Interaction counters below |
+| `ARM action=post_fault_input` | Absent | Presents/input count/pixel digest |
+| `interaction stage=before/after` | Absent | Presents/input count/pixel digest; after `changed=1` |
+
+The runner MUST delay its pre-input capture until the test desktop has had
+an opportunity to repaint after ARM, then deliver the ordered stimulus. Its
+post-input capture MUST happen while the desktop is still live, following the
+interaction record and completed stimulus; a terminal without that observation
+MUST fail. The controller retains the desktop for 3000 ticks before teardown.
+The runner independently MUST verify the before/after guest counters and digest
+against ARM. Normal cases on T23, E500, min128, desktop-1998 and desktop-2002
+require native evidence; no-LFB and safe cases require stand-in evidence.
+
+Boot-time planning estimate (not QEMU evidence): 10,000 acknowledged turns
+with two 1 ms polling loops cost approximately 20 s of guest pacing, plus 100
+launch/fault/reap cycles, summary framing, full repaints and a 3 s observation
+window. Budget 45–120 s of host time under TCG `-icount shift=1,sleep=on`; the
+300 s boot deadline remains. The lead MUST measure this estimate on the
+canonical image; no hardware or TCG throughput is inferred from host fakes.
 
 **[F2]** The fixed probe registry MUST contain `elf-load`, `spawn-wait`,
 `fd-table`, `mmap`, `signals-fault`, `threads-wait`, `crash-isolation`,

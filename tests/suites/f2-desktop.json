@@ -23,7 +23,7 @@
       "id": "crash-isolation-normal-qemu-t23",
       "probe": "crash-isolation",
       "profile": "qemu-t23",
-      "selector": "f2:crash-isolation run={run_id}",
+      "selector": "f2:crash-isolation run={run_id} server=desktop",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -31,124 +31,201 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "desktop"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid",
+              "server_pgid",
+              "survivor_pgid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "desktop"
+            },
             "fields": {
-              "server": "desktop",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "pgid",
+              "kind",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "desktop"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
-              "cycles": {
-                "eq": 100
-              },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "redraws": {
-                "ge": 1
-              },
-              "post_fault_keys": {
-                "ge": 1
-              },
-              "post_fault_motion": {
-                "ge": 1
-              },
-              "post_fault_buttons": {
-                "ge": 2
-              },
-              "pid_changed": {
-                "eq": 0
-              },
-              "pixel_digest": {
-                "encoding": "hex",
-                "width": 8,
-                "ge": 1
               }
             },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restored",
+              "server": "desktop"
+            },
+            "fields": {
+              "equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "desktop"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "desktop"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "spaces",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
             "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
+              "server_cr3",
+              "survivor_cr3"
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "post_fault_input",
+              "server": "desktop"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
             ]
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "before"
             },
-            "combine": true,
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "after"
+            },
+            "exact_count": 1,
             "fields": {
-              "pages_delta": {
-                "eq": 0
-              },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
-                "eq": 0
+              "changed": {
+                "eq": 1
               }
             },
             "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
+              "presents",
+              "input_events",
+              "pixel_digest"
             ]
           }
         ]
       },
+      "desktop_screen": true,
       "actions": [
         {
           "type": "input",
           "after": {
-            "event": "READY"
+            "event": "ARM",
+            "action": "post_fault_input"
           },
-          "repeat": 10,
           "batches": [
             {
               "events": [
@@ -161,823 +238,55 @@
                       "data": "a"
                     }
                   }
-                },
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
                 {
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": 2
+                    "value": -160
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -1
+                    "value": 120
                   }
                 }
               ],
-              "pause_ms": 10
+              "pause_ms": 50
             },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
             {
               "events": [
                 {
                   "type": "btn",
                   "data": {
                     "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
                     "button": "left"
                   }
                 }
               ],
               "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
             },
             {
               "events": [
@@ -999,7 +308,7 @@
       "id": "crash-isolation-normal-qemu-e500",
       "probe": "crash-isolation",
       "profile": "qemu-e500",
-      "selector": "f2:crash-isolation run={run_id}",
+      "selector": "f2:crash-isolation run={run_id} server=desktop",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -1007,124 +316,201 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "desktop"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid",
+              "server_pgid",
+              "survivor_pgid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "desktop"
+            },
             "fields": {
-              "server": "desktop",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "pgid",
+              "kind",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "desktop"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
-              "cycles": {
-                "eq": 100
-              },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "redraws": {
-                "ge": 1
-              },
-              "post_fault_keys": {
-                "ge": 1
-              },
-              "post_fault_motion": {
-                "ge": 1
-              },
-              "post_fault_buttons": {
-                "ge": 2
-              },
-              "pid_changed": {
-                "eq": 0
-              },
-              "pixel_digest": {
-                "encoding": "hex",
-                "width": 8,
-                "ge": 1
               }
             },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restored",
+              "server": "desktop"
+            },
+            "fields": {
+              "equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "desktop"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "desktop"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "spaces",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
             "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
+              "server_cr3",
+              "survivor_cr3"
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "post_fault_input",
+              "server": "desktop"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
             ]
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "before"
             },
-            "combine": true,
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "after"
+            },
+            "exact_count": 1,
             "fields": {
-              "pages_delta": {
-                "eq": 0
-              },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
-                "eq": 0
+              "changed": {
+                "eq": 1
               }
             },
             "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
+              "presents",
+              "input_events",
+              "pixel_digest"
             ]
           }
         ]
       },
+      "desktop_screen": true,
       "actions": [
         {
           "type": "input",
           "after": {
-            "event": "READY"
+            "event": "ARM",
+            "action": "post_fault_input"
           },
-          "repeat": 10,
           "batches": [
             {
               "events": [
@@ -1137,823 +523,55 @@
                       "data": "a"
                     }
                   }
-                },
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
                 {
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": 2
+                    "value": -160
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -1
+                    "value": 120
                   }
                 }
               ],
-              "pause_ms": 10
+              "pause_ms": 50
             },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
             {
               "events": [
                 {
                   "type": "btn",
                   "data": {
                     "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
                     "button": "left"
                   }
                 }
               ],
               "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
             },
             {
               "events": [
@@ -1975,7 +593,7 @@
       "id": "crash-isolation-normal-qemu-min128",
       "probe": "crash-isolation",
       "profile": "qemu-min128",
-      "selector": "f2:crash-isolation run={run_id}",
+      "selector": "f2:crash-isolation run={run_id} server=desktop",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -1983,124 +601,486 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "desktop"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid",
+              "server_pgid",
+              "survivor_pgid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "desktop"
+            },
             "fields": {
-              "server": "desktop",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "pgid",
+              "kind",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "desktop"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
+              "unauthorized_access": {
+                "eq": 0
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restored",
+              "server": "desktop"
+            },
+            "fields": {
+              "equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "desktop"
+            },
+            "fields": {
               "cycles": {
                 "eq": 100
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "desktop"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "spaces",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_cr3",
+              "survivor_cr3"
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "post_fault_input",
+              "server": "desktop"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "changed": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          }
+        ]
+      },
+      "desktop_screen": true,
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -160
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 120
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crash-isolation-normal-qemu-desktop-2002",
+      "probe": "crash-isolation",
+      "profile": "qemu-desktop-2002",
+      "selector": "f2:crash-isolation run={run_id} server=desktop",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid",
+              "server_pgid",
+              "survivor_pgid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "desktop"
+            },
+            "fields": {
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "pgid",
+              "kind",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "desktop"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
+              "replies": {
+                "ge": 100
+              },
+              "ticks": {
+                "ge": 100
               },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "redraws": {
-                "ge": 1
-              },
-              "post_fault_keys": {
-                "ge": 1
-              },
-              "post_fault_motion": {
-                "ge": 1
-              },
-              "post_fault_buttons": {
-                "ge": 2
-              },
-              "pid_changed": {
-                "eq": 0
-              },
-              "pixel_digest": {
-                "encoding": "hex",
-                "width": 8,
-                "ge": 1
               }
             },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restored",
+              "server": "desktop"
+            },
+            "fields": {
+              "equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "desktop"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "desktop"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "spaces",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
             "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
+              "server_cr3",
+              "survivor_cr3"
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "post_fault_input",
+              "server": "desktop"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
             ]
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "before"
             },
-            "combine": true,
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "after"
+            },
+            "exact_count": 1,
             "fields": {
-              "pages_delta": {
-                "eq": 0
-              },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
-                "eq": 0
+              "changed": {
+                "eq": 1
               }
             },
             "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
+              "presents",
+              "input_events",
+              "pixel_digest"
             ]
           }
         ]
       },
+      "desktop_screen": true,
       "actions": [
         {
           "type": "input",
           "after": {
-            "event": "READY"
+            "event": "ARM",
+            "action": "post_fault_input"
           },
-          "repeat": 10,
           "batches": [
             {
               "events": [
@@ -2113,23 +1093,9 @@
                       "data": "a"
                     }
                   }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
                 }
               ],
-              "pause_ms": 10
+              "pause_ms": 50
             },
             {
               "events": [
@@ -2144,16 +1110,27 @@
                   }
                 }
               ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -160
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 120
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
             {
               "events": [
                 {
@@ -2164,7 +1141,7 @@
                   }
                 }
               ],
-              "pause_ms": 10
+              "pause_ms": 50
             },
             {
               "events": [
@@ -2179,13 +1156,216 @@
               "pause_ms": 50
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "id": "crash-isolation-normal-qemu-desktop-1998",
+      "probe": "crash-isolation",
+      "profile": "qemu-desktop-1998",
+      "selector": "f2:crash-isolation run={run_id} server=desktop",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid",
+              "server_pgid",
+              "survivor_pgid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "desktop"
+            },
+            "fields": {
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "pgid",
+              "kind",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "desktop"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
+              "replies": {
+                "ge": 100
+              },
+              "ticks": {
+                "ge": 100
+              },
+              "unauthorized_access": {
+                "eq": 0
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restored",
+              "server": "desktop"
+            },
+            "fields": {
+              "equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "desktop"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "desktop"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "spaces",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_cr3",
+              "survivor_cr3"
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "post_fault_input",
+              "server": "desktop"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "changed": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          }
+        ]
+      },
+      "desktop_screen": true,
+      "actions": [
         {
           "type": "input",
           "after": {
-            "event": "READY"
+            "event": "ARM",
+            "action": "post_fault_input"
           },
-          "repeat": 10,
           "batches": [
             {
               "events": [
@@ -2198,738 +1378,55 @@
                       "data": "a"
                     }
                   }
-                },
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 50
+            },
+            {
+              "events": [
                 {
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": 2
+                    "value": -160
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -1
+                    "value": 120
                   }
                 }
               ],
-              "pause_ms": 10
+              "pause_ms": 50
             },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
             {
               "events": [
                 {
                   "type": "btn",
                   "data": {
                     "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
                     "button": "left"
                   }
                 }
               ],
               "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
             },
             {
               "events": [
@@ -2951,7 +1448,7 @@
       "id": "crash-isolation-no-lfb-qemu-t23",
       "probe": "crash-isolation",
       "profile": "qemu-t23",
-      "selector": "f2:crash-isolation run={run_id}",
+      "selector": "f2:crash-isolation run={run_id} server=standin",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -2959,100 +1456,124 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "standin"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "standin"
+            },
             "fields": {
-              "server": "standin",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "standin"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
-              "cycles": {
-                "eq": 100
-              },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "console_works": {
-                "eq": 1
-              },
-              "display_errno": {
-                "eq": 19
               }
             },
-            "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
-            ]
+            "exact_count": 100,
+            "unique": "cycle"
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "restored",
+              "server": "standin"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
+              "equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "standin"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
               },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
+              "desktop_restarts": {
                 "eq": 0
               }
             },
-            "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
-            ]
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "standin"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
           }
         ]
       },
@@ -3064,7 +1585,7 @@
       "id": "crash-isolation-no-lfb-qemu-e500",
       "probe": "crash-isolation",
       "profile": "qemu-e500",
-      "selector": "f2:crash-isolation run={run_id}",
+      "selector": "f2:crash-isolation run={run_id} server=standin",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -3072,100 +1593,124 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "standin"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "standin"
+            },
             "fields": {
-              "server": "standin",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "standin"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
-              "cycles": {
-                "eq": 100
-              },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "console_works": {
-                "eq": 1
-              },
-              "display_errno": {
-                "eq": 19
               }
             },
-            "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
-            ]
+            "exact_count": 100,
+            "unique": "cycle"
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "restored",
+              "server": "standin"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
+              "equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "standin"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
               },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
+              "desktop_restarts": {
                 "eq": 0
               }
             },
-            "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
-            ]
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "standin"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
           }
         ]
       },
@@ -3177,7 +1722,7 @@
       "id": "crash-isolation-no-lfb-qemu-min128",
       "probe": "crash-isolation",
       "profile": "qemu-min128",
-      "selector": "f2:crash-isolation run={run_id}",
+      "selector": "f2:crash-isolation run={run_id} server=standin",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -3185,100 +1730,124 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "standin"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "standin"
+            },
             "fields": {
-              "server": "standin",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "standin"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
-              "cycles": {
-                "eq": 100
-              },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "console_works": {
-                "eq": 1
-              },
-              "display_errno": {
-                "eq": 19
               }
             },
-            "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
-            ]
+            "exact_count": 100,
+            "unique": "cycle"
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "restored",
+              "server": "standin"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
+              "equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "standin"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
               },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
+              "desktop_restarts": {
                 "eq": 0
               }
             },
-            "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
-            ]
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "standin"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
           }
         ]
       },
@@ -3290,7 +1859,7 @@
       "id": "crash-isolation-safe-qemu-t23",
       "probe": "crash-isolation",
       "profile": "qemu-t23",
-      "selector": "f2:crash-isolation run={run_id} safe=1",
+      "selector": "f2:crash-isolation run={run_id} safe=1 server=standin",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -3298,972 +1867,127 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "standin"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "standin"
+            },
             "fields": {
-              "server": "desktop",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "standin"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
-              "cycles": {
-                "eq": 100
-              },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "redraws": {
-                "ge": 1
-              },
-              "post_fault_keys": {
-                "ge": 1
-              },
-              "post_fault_motion": {
-                "ge": 1
-              },
-              "post_fault_buttons": {
-                "ge": 2
-              },
-              "pid_changed": {
-                "eq": 0
-              },
-              "pixel_digest": {
-                "encoding": "hex",
-                "width": 8,
-                "ge": 1
-              },
-              "safe_mode": {
-                "eq": 1
               }
             },
-            "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
-            ]
+            "exact_count": 100,
+            "unique": "cycle"
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "restored",
+              "server": "standin"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
+              "equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "standin"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
               },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
+              "desktop_restarts": {
                 "eq": 0
               }
             },
-            "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
-            ]
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "standin"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
           }
         ]
-      },
-      "actions": [
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": "crash-isolation-safe-qemu-e500",
@@ -4277,978 +2001,133 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "standin"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "standin"
+            },
             "fields": {
-              "server": "desktop",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "standin"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
-              "cycles": {
-                "eq": 100
-              },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "redraws": {
-                "ge": 1
-              },
-              "post_fault_keys": {
-                "ge": 1
-              },
-              "post_fault_motion": {
-                "ge": 1
-              },
-              "post_fault_buttons": {
-                "ge": 2
-              },
-              "pid_changed": {
-                "eq": 0
-              },
-              "pixel_digest": {
-                "encoding": "hex",
-                "width": 8,
-                "ge": 1
-              },
-              "safe_mode": {
-                "eq": 1
               }
             },
-            "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
-            ]
+            "exact_count": 100,
+            "unique": "cycle"
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "restored",
+              "server": "standin"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
+              "equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "standin"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
               },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
+              "desktop_restarts": {
                 "eq": 0
               }
             },
-            "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
-            ]
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "standin"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
           }
         ]
-      },
-      "actions": [
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": "crash-isolation-safe-qemu-min128",
       "probe": "crash-isolation",
       "profile": "qemu-min128",
-      "selector": "f2:crash-isolation run={run_id} safe=1",
+      "selector": "f2:crash-isolation run={run_id} safe=1 server=standin",
       "timeout": 300,
       "expected": {
         "terminal": "END",
@@ -5256,972 +2135,127 @@
           {
             "where": {
               "event": "DATA",
-              "group": "crash-isolation"
+              "case": "identity",
+              "server": "standin"
             },
-            "combine": true,
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "standin"
+            },
             "fields": {
-              "server": "desktop",
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "standin"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
               "replies": {
                 "ge": 100
               },
               "ticks": {
                 "ge": 100
               },
-              "cycles": {
-                "eq": 100
-              },
               "unauthorized_access": {
                 "eq": 0
               },
               "desktop_restarts": {
                 "eq": 0
-              },
-              "leaked": {
-                "eq": 0
-              },
-              "survivor_progress": {
-                "ge": 100
-              },
-              "redraws": {
-                "ge": 1
-              },
-              "post_fault_keys": {
-                "ge": 1
-              },
-              "post_fault_motion": {
-                "ge": 1
-              },
-              "post_fault_buttons": {
-                "ge": 2
-              },
-              "pid_changed": {
-                "eq": 0
-              },
-              "pixel_digest": {
-                "encoding": "hex",
-                "width": 8,
-                "ge": 1
-              },
-              "safe_mode": {
-                "eq": 1
               }
             },
-            "required_fields": [
-              "desktop_pid",
-              "survivor_pid",
-              "victim_pid",
-              "desktop_cr3",
-              "survivor_cr3",
-              "victim_cr3"
-            ]
+            "exact_count": 100,
+            "unique": "cycle"
           },
           {
             "where": {
               "event": "DATA",
-              "group": "resources"
+              "case": "restored",
+              "server": "standin"
             },
-            "combine": true,
             "fields": {
-              "pages_delta": {
-                "eq": 0
+              "equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "standin"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
               },
-              "backing_delta": {
-                "eq": 0
-              },
-              "kernel_allocations_delta": {
-                "eq": 0
-              },
-              "processes_delta": {
-                "eq": 0
-              },
-              "zombies_delta": {
-                "eq": 0
-              },
-              "threads_delta": {
-                "eq": 0
-              },
-              "mappings_delta": {
-                "eq": 0
-              },
-              "fds_delta": {
-                "eq": 0
-              },
-              "descriptions_delta": {
-                "eq": 0
-              },
-              "surfaces_delta": {
-                "eq": 0
-              },
-              "messages_delta": {
-                "eq": 0
-              },
-              "waiters_delta": {
-                "eq": 0
-              },
-              "leaked": {
+              "desktop_restarts": {
                 "eq": 0
               }
             },
-            "required_fields": [
-              "baseline",
-              "final",
-              "cache_accounted"
-            ]
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "standin"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
           }
         ]
-      },
-      "actions": [
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "repeat": 10,
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 2
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -1
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "a"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 10
-            }
-          ]
-        },
-        {
-          "type": "input",
-          "after": {
-            "event": "READY"
-          },
-          "batches": [
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": true,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 10
-            },
-            {
-              "events": [
-                {
-                  "type": "btn",
-                  "data": {
-                    "down": false,
-                    "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 50
-            }
-          ]
-        }
-      ]
+      }
     }
   ],
   "contract": "docs/design/f2-acceptance.md",

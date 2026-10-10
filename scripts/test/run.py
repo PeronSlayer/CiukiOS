@@ -33,6 +33,7 @@ def selector(request, source='menu', validated_fw_cfg=False):
     """Runner extension without altering the frozen F0/F1 loader model."""
     server = re.search(r' server=(desktop|standin)$',request) if isinstance(request,str) else None
     if not server:return base_selector(request,source,validated_fw_cfg)
+    if source != 'fw_cfg' or not validated_fw_cfg:raise ValueError('server requires validated QEMU fw_cfg')
     if not request.isascii() or len(request)>64:raise ValueError('selector must be at most 64 ASCII bytes')
     selected = base_selector(request[:server.start()],source,validated_fw_cfg)
     if selected['phase'] != 2 or selected['probe'] != 'crash-isolation':
@@ -393,6 +394,29 @@ def observe_desktop_screen(before, after, root=ROOT):
             'portrait_pixels_checked':6144,'cursor_changed_pixels':changed}
 
 
+def desktop_interaction(records):
+    """Cross-record checks bind the guest interaction to its stimulus ARM."""
+    def one(event, **fields):
+        rows=[r for r in records if r.get('event')==event and r.get('server')=='desktop'
+              and all(r.get(k)==v for k,v in fields.items())]
+        if len(rows)!=1:raise EvidenceError('missing/duplicate desktop interaction record')
+        return rows[0]
+    arm=one('ARM',action='post_fault_input')
+    before=one('DATA',case='interaction',stage='before')
+    after=one('DATA',case='interaction',stage='after')
+    try:
+        for key in ('presents','input_events','pixel_digest'):
+            if before[key]!=arm[key]:raise EvidenceError('desktop interaction baseline differs from ARM')
+        for key in ('presents','input_events'):
+            if int(after[key])<=int(before[key]):raise EvidenceError('desktop interaction counter did not increase')
+        if after['pixel_digest']==before['pixel_digest']:raise EvidenceError('desktop interaction digest did not change')
+        if int(after['keys'])<2 or int(after['motion'])<1 or int(after['buttons'])<2:
+            raise EvidenceError('desktop did not consume every input kind')
+    except (KeyError,ValueError) as error:raise EvidenceError('invalid desktop interaction fields') from error
+    return {'before':{k:before[k] for k in ('presents','input_events','pixel_digest')},
+            'after':{k:after[k] for k in ('presents','input_events','pixel_digest','keys','motion','buttons')}}
+
+
 class Host:
     """Production boundary; host tests substitute only this boundary."""
     def preflight(self,root): return res.preflight(root)
@@ -669,6 +693,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     pending=b'';panic_start=None;armed_stats=None;terminal_time=None
     screen_before = directory/'desktop-before.ppm'
     screen_after = directory/'desktop-after.ppm'
+    screen_armed_at = screen_interaction_at = None
     restart_performed=False;expected_resets=0
     try:
         if shared_overlay is None:
@@ -759,9 +784,18 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if case.get('desktop_screen') and qmp:
                 arms = [r for r in parser.records if r.get('event')=='ARM' and r.get('action')=='post_fault_input']
                 if len(arms)>1:raise EvidenceError('duplicate desktop interaction ARM')
-                if arms and not screen_before.exists():
+                if arms and screen_armed_at is None:screen_armed_at=now
+                if arms and 'desktop_screen' not in result and not screen_before.exists() and now-screen_armed_at>=.1:
                     qmp.command('screendump',{'filename':str(screen_before)})
-            cut=actions.step(parser,qmp,now)
+                interactions=[r for r in parser.records if r.get('case')=='interaction' and r.get('stage')=='after']
+                if interactions and screen_interaction_at is None:screen_interaction_at=now
+                if interactions and actions.complete and 'desktop_screen' not in result and now-screen_interaction_at>=.1:
+                    if not screen_before.exists():raise EvidenceError('desktop lacks pre-input screendump')
+                    qmp.command('screendump',{'filename':str(screen_after)})
+                    result['desktop_interaction']=desktop_interaction(parser.records)
+                    result['desktop_screen']=observe_desktop_screen(screen_before,screen_after)
+                    screen_before.unlink();screen_after.unlink()
+            cut=None if case.get('desktop_screen') and screen_armed_at is not None and not screen_before.exists() and 'desktop_screen' not in result else actions.step(parser,qmp,now)
             if cut:
                 parser.check(case['expected']);result['cut_point']=actions.observed[-1]
                 host.kill_scope(unit,'SIGKILL')
@@ -774,9 +808,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
                 if case.get('desktop_screen') and 'desktop_screen' not in result:
-                    if not screen_before.exists():raise EvidenceError('desktop lacks pre-input screendump')
-                    qmp.command('screendump',{'filename':str(screen_after)})
-                    result['desktop_screen']=observe_desktop_screen(screen_before,screen_after)
+                    raise EvidenceError('desktop lacks live post-input screendump')
                 if terminal_time is None:terminal_time=now
                 if parser.terminal['event']=='PANIC':
                     arms=[r for r in parser.records if r['event']=='ARM']

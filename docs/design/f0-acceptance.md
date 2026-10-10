@@ -85,11 +85,13 @@ destructive tests.
 
 **[F2, f2-12 grammar amendment]** The F0/F1 grammar above is unchanged.
 Only `f2:crash-isolation` gains a final optional `server=desktop|standin`
-key, after `platform=e500` and `safe=1` when present; duplicates, other values,
+key, after `platform=e500` and `safe=1` when present, through validated
+QEMU fw_cfg only; duplicates, other values,
 wrong order and other phases/probes MUST fail selection. Omission selects
 desktop for an available LFB and payload, otherwise stand-in; safe/text mode
 always selects stand-in. The 64-byte bound remains, so the 67-byte E500 safe
-selector with all three suffixes MUST be rejected (omit `server` there).
+selector with all three suffixes MUST be rejected. This combination is never
+needed: `safe=1` always runs the stand-in, so E500 safe selectors omit `server`.
 See [the f2-12 amendment](f2-acceptance.md#selection-and-evidence) for the
 screen-observation decision and primary QMP references. Boot-loader and kernel
 validation MUST agree before explicit server selectors can qualify a run.

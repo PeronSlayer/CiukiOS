@@ -68,6 +68,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         i += 7;
     }
     if (len - i == 15 && parsed.phase == 2 && !strncmp(parsed.probe, "crash-isolation", sizeof(parsed.probe))) {
+        if (!(boot_flags & CBI_F_SMBIOS_QEMU)) return false;
         if (!strncmp(s + i, " server=desktop", 15)) parsed.flags |= SELECT_SERVER_DESKTOP;
         else if (!strncmp(s + i, " server=standin", 15)) parsed.flags |= SELECT_SERVER_STANDIN;
         else return false;
