@@ -13,6 +13,8 @@ struct probe_def { const char *name; int (*fn)(void); };
     __attribute__((used, section(".f1probes"))) f1probe_##func = { id, func }
 
 extern const struct probe_def __f1probes_start[], __f1probes_end[];
+/* Controller-owned, hex-framed untrusted bytes; stream is stdout/stderr/report. */
+void probe_app_output(struct task *t, const char *stream, const void *bytes, uint32_t len);
 
 /* CIUKI_TEST v=1 run=<id> seq=<n> probe=<p> event=<e> [key=value ...] */
 void rec_set_run(const char *run8);

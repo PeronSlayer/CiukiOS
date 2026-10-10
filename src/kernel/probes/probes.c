@@ -12,6 +12,12 @@
 #include <ciuki/timing.h>
 #include <ciuki/work.h>
 #include <ciuki/abi.h>
+#include <ciuki/sha256.h>
+#include <ciuki/sync.h>
+#include <ciuki/process.h>
+
+/* Reuse process.h's existing CIUKI_F2_PROBE layout and registration macro. */
+extern const struct ciuki_f2_probe __f2probes_start[], __f2probes_end[];
 
 extern const uint8_t payload_start[], payload_end[];
 extern char probe_write_insn[], probe_write_insn_end[], probe_write_resume[];
@@ -768,10 +774,57 @@ static void probe_panic(void)
 /* ------------------------------------------------------------------ */
 /* selector and orchestration                                          */
 
+static char app_probe[24];
+static struct sha256_ctx app_digest;
+static uint64_t app_bytes;
+static struct kmutex app_lock;
+
+void probe_app_output(struct task *t, const char *stream, const void *bytes, uint32_t len)
+{
+    if (!app_probe[0])
+        return;
+    /* Never interpolate user text into the evidence grammar. Keep each frame
+     * below 240 bytes, even for maximum-width task IDs and byte offsets.
+     * SHA-256 incremental semantics: https://docs.python.org/3/library/hashlib.html
+     * (the guest uses the production FIPS 180-4 implementation).
+     */
+    if (strncmp(stream, "stdout", 7) && strncmp(stream, "stderr", 7) && strncmp(stream, "report", 7))
+        return;
+    const uint8_t *p = bytes;
+    struct proc_thread *thread = proc_thread_for(t);
+    uint32_t pid = thread ? thread->process->pid : 0;
+    uint32_t tid = thread ? thread->tid : t->id;
+    static const char hex[] = "0123456789abcdef";
+    kmutex_lock(&app_lock);
+    sha256_update(&app_digest, bytes, len);
+    for (uint32_t off = 0; off < len;) {
+        uint32_t n = len - off > 24 ? 24 : len - off;
+        char encoded[49];
+        for (uint32_t i = 0; i < n; i++) {
+            encoded[2*i] = hex[p[off+i] >> 4];
+            encoded[2*i+1] = hex[p[off+i] & 15];
+        }
+        encoded[2*n] = 0;
+        rec_emit(app_probe, "DATA", "group=app pid=%u tid=%u stream=%s offset=%llu bytes=%u data_hex=%s",
+                 pid, tid, stream, app_bytes, n, encoded);
+        off += n;
+        app_bytes += n;
+    }
+    struct sha256_ctx snapshot = app_digest;
+    uint8_t digest[32];
+    char encoded[65];
+    sha256_final(&snapshot, digest);
+    sha256_hex(digest, encoded);
+    rec_emit(app_probe, "DATA", "group=app_digest total_bytes=%llu sha256=%s", app_bytes, encoded);
+    kmutex_unlock(&app_lock);
+}
+
 void probe_user_report(struct task *t, const char *msg, uint32_t len)
 {
-    (void)len;
-    klog("[user %u report] %s", t->id, msg);
+    if (app_probe[0])
+        probe_app_output(t, "report", msg, len);
+    else
+        klog("[user %u report] %s", t->id, msg);
 }
 
 static const struct probe_def probes[] = {
@@ -788,10 +841,10 @@ struct probe_selection {
     uint32_t flags;
 };
 
-/* f[01]:<probe-id|all|core> run=<8-hex> [platform=e500] [safe=1] */
+/* f[012]:<probe-id> run=<8-hex> [platform=e500] [safe=1]; aliases only F0/F1. */
 static bool parse_selector(const char *s, unsigned len, struct probe_selection *selection)
 {
-    if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1') || s[2] != ':')
+    if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1' && s[1] != '2') || s[2] != ':')
         return false;
     for (unsigned j = 0; j < len; j++)
         if ((uint8_t)s[j] < 32 || (uint8_t)s[j] > 126)
@@ -811,8 +864,12 @@ static bool parse_selector(const char *s, unsigned len, struct probe_selection *
         "registry", "input", "input-fault", "framebuffer", "ata", "ata-fault",
         "partition", "fat-read", "fat-write", "cache", "mount-crash", "safe", "bootlog", "all", "core"
     };
-    const char *const *names = parsed.phase ? f1_names : f0_names;
-    unsigned count = parsed.phase ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
+    static const char *const f2_names[] = {
+        "elf-load", "spawn-wait", "fd-table", "mmap", "signals-fault",
+        "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
+    };
+    const char *const *names = parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
+    unsigned count = parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
     bool known = false;
     for (unsigned n = 0; n < count; n++)
         if (!strncmp(parsed.probe, names[n], sizeof(parsed.probe)))
@@ -885,6 +942,28 @@ void probes_main(void *arg)
          (g_boot.flags & CBI_F_INPUT_FORCED) ? "e500" : "native", (uint32_t)g_tsc_per_ms);
     bool all = !strncmp(probe, "all", 4);
     bool core = !strncmp(probe, "core", 5);     /* every probe but panic */
+    if (selection.phase == 2) {
+        unsigned installed = (unsigned)(__f2probes_end - __f2probes_start);
+        bool ran = false;
+        for (const struct ciuki_f2_probe *p = __f2probes_start; p < __f2probes_end; p++) {
+            if (!strncmp(probe, p->name, sizeof(selection.probe))) {
+                memcpy(app_probe, selection.probe, sizeof(app_probe));
+                sha256_init(&app_digest);
+                kmutex_init(&app_lock);
+                app_bytes = 0;
+                p->run();
+                app_probe[0] = 0;
+                ran = true;
+                break;
+            }
+        }
+        if (!ran) {
+            rec_emit(probe, "BEGIN", 0);
+            rec_emit(probe, "READY", "table=f2 installed=%u", installed);
+            rec_emit(probe, "ERROR", "status=not_run reason=missing_probe");
+        }
+        show_evidence_forever();
+    }
     if (selection.phase == 1) {
         unsigned installed = (unsigned)(__f1probes_end - __f1probes_start);
         bool ran = false;

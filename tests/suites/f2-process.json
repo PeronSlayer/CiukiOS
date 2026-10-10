@@ -1,0 +1,1220 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "prerequisites": [
+    "f0-smoke",
+    "f0-core",
+    "f0-panic",
+    "f0-runner",
+    "f1-input",
+    "f1-storage",
+    "f1-fat32",
+    "f1-safe"
+  ],
+  "operator_confirmation_cases": [
+    "uart-absent-qemu-t23",
+    "uart-absent-qemu-e500",
+    "uart-absent-qemu-min128"
+  ],
+  "cases": [
+    {
+      "id": "elf-load-qemu-t23",
+      "probe": "elf-load",
+      "profile": "qemu-t23",
+      "selector": "f2:elf-load run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "image"
+            },
+            "fields": {
+              "entry": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4194304
+              },
+              "file_bytes": {
+                "ge": 1
+              },
+              "load_bytes": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid",
+              "tls",
+              "argc"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reject"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "count": 25,
+            "unique": "index"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "elf-load"
+            },
+            "combine": true,
+            "fields": {
+              "boundary_accepted": {
+                "eq": 1
+              },
+              "over_boundary_rejected": {
+                "eq": 1
+              },
+              "pointer_errors": {
+                "eq": 0
+              },
+              "auxv_errors": {
+                "eq": 0
+              },
+              "x87_errors": {
+                "eq": 0
+              },
+              "published_on_error": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "elf-load-qemu-e500",
+      "probe": "elf-load",
+      "profile": "qemu-e500",
+      "selector": "f2:elf-load run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "image"
+            },
+            "fields": {
+              "entry": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4194304
+              },
+              "file_bytes": {
+                "ge": 1
+              },
+              "load_bytes": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid",
+              "tls",
+              "argc"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reject"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "count": 25,
+            "unique": "index"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "elf-load"
+            },
+            "combine": true,
+            "fields": {
+              "boundary_accepted": {
+                "eq": 1
+              },
+              "over_boundary_rejected": {
+                "eq": 1
+              },
+              "pointer_errors": {
+                "eq": 0
+              },
+              "auxv_errors": {
+                "eq": 0
+              },
+              "x87_errors": {
+                "eq": 0
+              },
+              "published_on_error": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "elf-load-qemu-min128",
+      "probe": "elf-load",
+      "profile": "qemu-min128",
+      "selector": "f2:elf-load run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "image"
+            },
+            "fields": {
+              "entry": {
+                "encoding": "hex",
+                "width": 8,
+                "eq": 4194304
+              },
+              "file_bytes": {
+                "ge": 1
+              },
+              "load_bytes": {
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entry"
+            },
+            "fields": {
+              "bss_register_errors": {
+                "eq": 0
+              },
+              "esp": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              },
+              "gs": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              }
+            },
+            "required_fields": [
+              "pid",
+              "tls",
+              "argc"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reject"
+            },
+            "fields": {
+              "expected": {
+                "encoding": "signed",
+                "eq": -8
+              },
+              "observed": {
+                "encoding": "signed",
+                "eq": "$expected"
+              }
+            },
+            "count": 25,
+            "unique": "index"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "elf-load"
+            },
+            "combine": true,
+            "fields": {
+              "boundary_accepted": {
+                "eq": 1
+              },
+              "over_boundary_rejected": {
+                "eq": 1
+              },
+              "pointer_errors": {
+                "eq": 0
+              },
+              "auxv_errors": {
+                "eq": 0
+              },
+              "x87_errors": {
+                "eq": 0
+              },
+              "published_on_error": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "spawn-wait-qemu-t23",
+      "probe": "spawn-wait",
+      "profile": "qemu-t23",
+      "selector": "f2:spawn-wait run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "bad_cycles": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "spawn-wait"
+            },
+            "combine": true,
+            "fields": {
+              "normal_status": {
+                "eq": 9472
+              },
+              "cycles": {
+                "eq": 100
+              },
+              "leaked": {
+                "eq": 0
+              },
+              "inheritance_errors": {
+                "eq": 0
+              },
+              "rollback_errors": {
+                "eq": 0
+              },
+              "double_reaps": {
+                "eq": 0
+              },
+              "orphan_errors": {
+                "eq": 0
+              },
+              "wnohang_live": {
+                "eq": 0
+              },
+              "invalid_status_preserved": {
+                "eq": 1
+              },
+              "private_backing": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "pid",
+              "ppid",
+              "pgid",
+              "fd_map",
+              "fault_signal",
+              "raw_vector"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "spawn-wait-qemu-e500",
+      "probe": "spawn-wait",
+      "profile": "qemu-e500",
+      "selector": "f2:spawn-wait run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "bad_cycles": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "spawn-wait"
+            },
+            "combine": true,
+            "fields": {
+              "normal_status": {
+                "eq": 9472
+              },
+              "cycles": {
+                "eq": 100
+              },
+              "leaked": {
+                "eq": 0
+              },
+              "inheritance_errors": {
+                "eq": 0
+              },
+              "rollback_errors": {
+                "eq": 0
+              },
+              "double_reaps": {
+                "eq": 0
+              },
+              "orphan_errors": {
+                "eq": 0
+              },
+              "wnohang_live": {
+                "eq": 0
+              },
+              "invalid_status_preserved": {
+                "eq": 1
+              },
+              "private_backing": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "pid",
+              "ppid",
+              "pgid",
+              "fd_map",
+              "fault_signal",
+              "raw_vector"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "spawn-wait-qemu-min128",
+      "probe": "spawn-wait",
+      "profile": "qemu-min128",
+      "selector": "f2:spawn-wait run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "bad_cycles": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "spawn-wait"
+            },
+            "combine": true,
+            "fields": {
+              "normal_status": {
+                "eq": 9472
+              },
+              "cycles": {
+                "eq": 100
+              },
+              "leaked": {
+                "eq": 0
+              },
+              "inheritance_errors": {
+                "eq": 0
+              },
+              "rollback_errors": {
+                "eq": 0
+              },
+              "double_reaps": {
+                "eq": 0
+              },
+              "orphan_errors": {
+                "eq": 0
+              },
+              "wnohang_live": {
+                "eq": 0
+              },
+              "invalid_status_preserved": {
+                "eq": 1
+              },
+              "private_backing": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "pid",
+              "ppid",
+              "pgid",
+              "fd_map",
+              "fault_signal",
+              "raw_vector"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "fd-table-qemu-t23",
+      "probe": "fd-table",
+      "profile": "qemu-t23",
+      "selector": "f2:fd-table run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fd-table"
+            },
+            "combine": true,
+            "fields": {
+              "fd_slots": {
+                "eq": 128
+              },
+              "emfile": {
+                "eq": 24
+              },
+              "leaked": {
+                "eq": 0
+              },
+              "offset_errors": {
+                "eq": 0
+              },
+              "append_errors": {
+                "eq": 0
+              },
+              "rename_errors": {
+                "eq": 0
+              },
+              "validation_side_effects": {
+                "eq": 0
+              },
+              "hash_errors": {
+                "eq": 0
+              },
+              "durable_reopen": {
+                "eq": 1
+              },
+              "seek_bytes": {
+                "ge": 4294967297
+              }
+            },
+            "required_fields": [
+              "directory_digest",
+              "identity",
+              "link_counts",
+              "flags",
+              "checker_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "fd-table-qemu-e500",
+      "probe": "fd-table",
+      "profile": "qemu-e500",
+      "selector": "f2:fd-table run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fd-table"
+            },
+            "combine": true,
+            "fields": {
+              "fd_slots": {
+                "eq": 128
+              },
+              "emfile": {
+                "eq": 24
+              },
+              "leaked": {
+                "eq": 0
+              },
+              "offset_errors": {
+                "eq": 0
+              },
+              "append_errors": {
+                "eq": 0
+              },
+              "rename_errors": {
+                "eq": 0
+              },
+              "validation_side_effects": {
+                "eq": 0
+              },
+              "hash_errors": {
+                "eq": 0
+              },
+              "durable_reopen": {
+                "eq": 1
+              },
+              "seek_bytes": {
+                "ge": 4294967297
+              }
+            },
+            "required_fields": [
+              "directory_digest",
+              "identity",
+              "link_counts",
+              "flags",
+              "checker_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "fd-table-qemu-min128",
+      "probe": "fd-table",
+      "profile": "qemu-min128",
+      "selector": "f2:fd-table run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fd-table"
+            },
+            "combine": true,
+            "fields": {
+              "fd_slots": {
+                "eq": 128
+              },
+              "emfile": {
+                "eq": 24
+              },
+              "leaked": {
+                "eq": 0
+              },
+              "offset_errors": {
+                "eq": 0
+              },
+              "append_errors": {
+                "eq": 0
+              },
+              "rename_errors": {
+                "eq": 0
+              },
+              "validation_side_effects": {
+                "eq": 0
+              },
+              "hash_errors": {
+                "eq": 0
+              },
+              "durable_reopen": {
+                "eq": 1
+              },
+              "seek_bytes": {
+                "ge": 4294967297
+              }
+            },
+            "required_fields": [
+              "directory_digest",
+              "identity",
+              "link_counts",
+              "flags",
+              "checker_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "contract": "docs/design/f2-acceptance.md",
+  "references": [
+    "https://www.qemu.org/docs/master/specs/fw_cfg.html",
+    "https://docs.python.org/3/library/hashlib.html"
+  ]
+}

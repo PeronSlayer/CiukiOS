@@ -1,0 +1,1656 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "prerequisites": [
+    "f0-smoke",
+    "f0-core",
+    "f0-panic",
+    "f0-runner",
+    "f1-input",
+    "f1-storage",
+    "f1-fat32",
+    "f1-safe",
+    "f2-process"
+  ],
+  "operator_confirmation_cases": [
+    "uart-absent-qemu-t23",
+    "uart-absent-qemu-e500",
+    "uart-absent-qemu-min128"
+  ],
+  "cases": [
+    {
+      "id": "mmap-qemu-t23",
+      "probe": "mmap",
+      "profile": "qemu-t23",
+      "selector": "f2:mmap run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "transition"
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "nx": {
+                "eq": 0
+              }
+            },
+            "exact_count": 16
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mmap"
+            },
+            "combine": true,
+            "fields": {
+              "transitions": {
+                "eq": 16
+              },
+              "nx": {
+                "eq": 0
+              },
+              "zero_errors": {
+                "eq": 0
+              },
+              "private_errors": {
+                "eq": 0
+              },
+              "preservation_errors": {
+                "eq": 0
+              },
+              "brk_errors": {
+                "eq": 0
+              },
+              "rollback_errors": {
+                "eq": 0
+              },
+              "pinned_changes": {
+                "eq": 0
+              },
+              "faults_local": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "ranges",
+              "rights",
+              "split_count",
+              "fault_address",
+              "surface_refs"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "mmap-qemu-e500",
+      "probe": "mmap",
+      "profile": "qemu-e500",
+      "selector": "f2:mmap run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "transition"
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "nx": {
+                "eq": 0
+              }
+            },
+            "exact_count": 16
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mmap"
+            },
+            "combine": true,
+            "fields": {
+              "transitions": {
+                "eq": 16
+              },
+              "nx": {
+                "eq": 0
+              },
+              "zero_errors": {
+                "eq": 0
+              },
+              "private_errors": {
+                "eq": 0
+              },
+              "preservation_errors": {
+                "eq": 0
+              },
+              "brk_errors": {
+                "eq": 0
+              },
+              "rollback_errors": {
+                "eq": 0
+              },
+              "pinned_changes": {
+                "eq": 0
+              },
+              "faults_local": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "ranges",
+              "rights",
+              "split_count",
+              "fault_address",
+              "surface_refs"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "mmap-qemu-min128",
+      "probe": "mmap",
+      "profile": "qemu-min128",
+      "selector": "f2:mmap run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "transition"
+            },
+            "fields": {
+              "observed": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "nx": {
+                "eq": 0
+              }
+            },
+            "exact_count": 16
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mmap"
+            },
+            "combine": true,
+            "fields": {
+              "transitions": {
+                "eq": 16
+              },
+              "nx": {
+                "eq": 0
+              },
+              "zero_errors": {
+                "eq": 0
+              },
+              "private_errors": {
+                "eq": 0
+              },
+              "preservation_errors": {
+                "eq": 0
+              },
+              "brk_errors": {
+                "eq": 0
+              },
+              "rollback_errors": {
+                "eq": 0
+              },
+              "pinned_changes": {
+                "eq": 0
+              },
+              "faults_local": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "ranges",
+              "rights",
+              "split_count",
+              "fault_address",
+              "surface_refs"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "signals-fault-qemu-t23",
+      "probe": "signals-fault",
+      "profile": "qemu-t23",
+      "selector": "f2:signals-fault run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "signals-fault"
+            },
+            "combine": true,
+            "fields": {
+              "corruption": {
+                "eq": 0
+              },
+              "fault_vectors": {
+                "eq": 6
+              },
+              "mask_errors": {
+                "eq": 0
+              },
+              "group_errors": {
+                "eq": 0
+              },
+              "thread_target_errors": {
+                "eq": 0
+              },
+              "survivor_progress": {
+                "ge": 100
+              }
+            },
+            "required_fields": [
+              "signal",
+              "vector",
+              "code",
+              "eip",
+              "cr2",
+              "pid",
+              "tid",
+              "x87_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "handler-blocking"
+            },
+            "fields": {
+              "max_depth": {
+                "eq": 1
+              },
+              "elapsed_ms": {
+                "ge": 20
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "ordering_errors": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "syscall-interruption"
+            },
+            "fields": {
+              "preissue_eintr": {
+                "eq": 1
+              },
+              "postissue_eintr": {
+                "eq": 1
+              },
+              "drain_eio": {
+                "eq": 1
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "partial_preserved": {
+                "eq": 1
+              },
+              "commit_completed": {
+                "eq": 1
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "signals-fault-qemu-e500",
+      "probe": "signals-fault",
+      "profile": "qemu-e500",
+      "selector": "f2:signals-fault run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "signals-fault"
+            },
+            "combine": true,
+            "fields": {
+              "corruption": {
+                "eq": 0
+              },
+              "fault_vectors": {
+                "eq": 6
+              },
+              "mask_errors": {
+                "eq": 0
+              },
+              "group_errors": {
+                "eq": 0
+              },
+              "thread_target_errors": {
+                "eq": 0
+              },
+              "survivor_progress": {
+                "ge": 100
+              }
+            },
+            "required_fields": [
+              "signal",
+              "vector",
+              "code",
+              "eip",
+              "cr2",
+              "pid",
+              "tid",
+              "x87_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "handler-blocking"
+            },
+            "fields": {
+              "max_depth": {
+                "eq": 1
+              },
+              "elapsed_ms": {
+                "ge": 20
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "ordering_errors": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "syscall-interruption"
+            },
+            "fields": {
+              "preissue_eintr": {
+                "eq": 1
+              },
+              "postissue_eintr": {
+                "eq": 1
+              },
+              "drain_eio": {
+                "eq": 1
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "partial_preserved": {
+                "eq": 1
+              },
+              "commit_completed": {
+                "eq": 1
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "signals-fault-qemu-min128",
+      "probe": "signals-fault",
+      "profile": "qemu-min128",
+      "selector": "f2:signals-fault run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "signals-fault"
+            },
+            "combine": true,
+            "fields": {
+              "corruption": {
+                "eq": 0
+              },
+              "fault_vectors": {
+                "eq": 6
+              },
+              "mask_errors": {
+                "eq": 0
+              },
+              "group_errors": {
+                "eq": 0
+              },
+              "thread_target_errors": {
+                "eq": 0
+              },
+              "survivor_progress": {
+                "ge": 100
+              }
+            },
+            "required_fields": [
+              "signal",
+              "vector",
+              "code",
+              "eip",
+              "cr2",
+              "pid",
+              "tid",
+              "x87_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "handler-blocking"
+            },
+            "fields": {
+              "max_depth": {
+                "eq": 1
+              },
+              "elapsed_ms": {
+                "ge": 20
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "ordering_errors": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "syscall-interruption"
+            },
+            "fields": {
+              "preissue_eintr": {
+                "eq": 1
+              },
+              "postissue_eintr": {
+                "eq": 1
+              },
+              "drain_eio": {
+                "eq": 1
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "partial_preserved": {
+                "eq": 1
+              },
+              "commit_completed": {
+                "eq": 1
+              },
+              "side_effects": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "threads-wait-qemu-t23",
+      "probe": "threads-wait",
+      "profile": "qemu-t23",
+      "selector": "f2:threads-wait run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "threads"
+            },
+            "fields": {
+              "threads": {
+                "eq": 8
+              },
+              "preemptions": {
+                "ge": 1000
+              },
+              "increments": {
+                "eq": 80000
+              },
+              "tokens": {
+                "eq": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "threads-wait"
+            },
+            "combine": true,
+            "fields": {
+              "once_count": {
+                "eq": 1
+              },
+              "loss": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "state_errors": {
+                "eq": 0
+              },
+              "destructor_passes": {
+                "le": 4
+              },
+              "mutex_eintr_exposed": {
+                "eq": 0
+              },
+              "mutex_retry_acquired": {
+                "eq": 1
+              },
+              "mismatch_errno": {
+                "eq": 11
+              },
+              "timeout_errno": {
+                "eq": 110
+              },
+              "cancel_errno": {
+                "eq": 125
+              },
+              "generation_errors": {
+                "eq": 0
+              },
+              "userspace_wakers_coordinated": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "deadline",
+              "observed_time",
+              "mapping_generations"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "threads-wait"
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "observed_time",
+                "op": "ge",
+                "right": "deadline"
+              }
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "threads-wait-qemu-e500",
+      "probe": "threads-wait",
+      "profile": "qemu-e500",
+      "selector": "f2:threads-wait run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "threads"
+            },
+            "fields": {
+              "threads": {
+                "eq": 8
+              },
+              "preemptions": {
+                "ge": 1000
+              },
+              "increments": {
+                "eq": 80000
+              },
+              "tokens": {
+                "eq": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "threads-wait"
+            },
+            "combine": true,
+            "fields": {
+              "once_count": {
+                "eq": 1
+              },
+              "loss": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "state_errors": {
+                "eq": 0
+              },
+              "destructor_passes": {
+                "le": 4
+              },
+              "mutex_eintr_exposed": {
+                "eq": 0
+              },
+              "mutex_retry_acquired": {
+                "eq": 1
+              },
+              "mismatch_errno": {
+                "eq": 11
+              },
+              "timeout_errno": {
+                "eq": 110
+              },
+              "cancel_errno": {
+                "eq": 125
+              },
+              "generation_errors": {
+                "eq": 0
+              },
+              "userspace_wakers_coordinated": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "deadline",
+              "observed_time",
+              "mapping_generations"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "threads-wait"
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "observed_time",
+                "op": "ge",
+                "right": "deadline"
+              }
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "threads-wait-qemu-min128",
+      "probe": "threads-wait",
+      "profile": "qemu-min128",
+      "selector": "f2:threads-wait run={run_id}",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "threads"
+            },
+            "fields": {
+              "threads": {
+                "eq": 8
+              },
+              "preemptions": {
+                "ge": 1000
+              },
+              "increments": {
+                "eq": 80000
+              },
+              "tokens": {
+                "eq": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "threads-wait"
+            },
+            "combine": true,
+            "fields": {
+              "once_count": {
+                "eq": 1
+              },
+              "loss": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "state_errors": {
+                "eq": 0
+              },
+              "destructor_passes": {
+                "le": 4
+              },
+              "mutex_eintr_exposed": {
+                "eq": 0
+              },
+              "mutex_retry_acquired": {
+                "eq": 1
+              },
+              "mismatch_errno": {
+                "eq": 11
+              },
+              "timeout_errno": {
+                "eq": 110
+              },
+              "cancel_errno": {
+                "eq": 125
+              },
+              "generation_errors": {
+                "eq": 0
+              },
+              "userspace_wakers_coordinated": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "deadline",
+              "observed_time",
+              "mapping_generations"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "threads-wait"
+            },
+            "combine": true,
+            "relations": [
+              {
+                "left": "observed_time",
+                "op": "ge",
+                "right": "deadline"
+              }
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "libc-smoke-qemu-t23",
+      "probe": "libc-smoke",
+      "profile": "qemu-t23",
+      "selector": "f2:libc-smoke run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "libc-smoke"
+            },
+            "combine": true,
+            "fields": {
+              "tests": {
+                "ge": 1
+              },
+              "failures": {
+                "eq": 0
+              },
+              "missing_cases": {
+                "eq": 0
+              },
+              "constructor_errors": {
+                "eq": 0
+              },
+              "console_errors": {
+                "eq": 0
+              },
+              "allocation_errors": {
+                "eq": 0
+              },
+              "clock_decreases": {
+                "eq": 0
+              },
+              "monotonic_reads": {
+                "eq": 10000
+              },
+              "sleep_ms": {
+                "ge": 20
+              },
+              "sleep_cpu_ticks": {
+                "le": 2
+              }
+            },
+            "required_fields": [
+              "sdk_hash",
+              "newlib_hash",
+              "elf_hash",
+              "stdout_hash",
+              "stderr_hash",
+              "coverage_bitmap",
+              "supported",
+              "excluded",
+              "clock_source",
+              "clock_resolution"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "libc-smoke-qemu-e500",
+      "probe": "libc-smoke",
+      "profile": "qemu-e500",
+      "selector": "f2:libc-smoke run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "libc-smoke"
+            },
+            "combine": true,
+            "fields": {
+              "tests": {
+                "ge": 1
+              },
+              "failures": {
+                "eq": 0
+              },
+              "missing_cases": {
+                "eq": 0
+              },
+              "constructor_errors": {
+                "eq": 0
+              },
+              "console_errors": {
+                "eq": 0
+              },
+              "allocation_errors": {
+                "eq": 0
+              },
+              "clock_decreases": {
+                "eq": 0
+              },
+              "monotonic_reads": {
+                "eq": 10000
+              },
+              "sleep_ms": {
+                "ge": 20
+              },
+              "sleep_cpu_ticks": {
+                "le": 2
+              }
+            },
+            "required_fields": [
+              "sdk_hash",
+              "newlib_hash",
+              "elf_hash",
+              "stdout_hash",
+              "stderr_hash",
+              "coverage_bitmap",
+              "supported",
+              "excluded",
+              "clock_source",
+              "clock_resolution"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "libc-smoke-qemu-min128",
+      "probe": "libc-smoke",
+      "profile": "qemu-min128",
+      "selector": "f2:libc-smoke run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "libc-smoke"
+            },
+            "combine": true,
+            "fields": {
+              "tests": {
+                "ge": 1
+              },
+              "failures": {
+                "eq": 0
+              },
+              "missing_cases": {
+                "eq": 0
+              },
+              "constructor_errors": {
+                "eq": 0
+              },
+              "console_errors": {
+                "eq": 0
+              },
+              "allocation_errors": {
+                "eq": 0
+              },
+              "clock_decreases": {
+                "eq": 0
+              },
+              "monotonic_reads": {
+                "eq": 10000
+              },
+              "sleep_ms": {
+                "ge": 20
+              },
+              "sleep_cpu_ticks": {
+                "le": 2
+              }
+            },
+            "required_fields": [
+              "sdk_hash",
+              "newlib_hash",
+              "elf_hash",
+              "stdout_hash",
+              "stderr_hash",
+              "coverage_bitmap",
+              "supported",
+              "excluded",
+              "clock_source",
+              "clock_resolution"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "contract": "docs/design/f2-acceptance.md",
+  "references": [
+    "https://www.qemu.org/docs/master/specs/fw_cfg.html",
+    "https://docs.python.org/3/library/hashlib.html"
+  ]
+}

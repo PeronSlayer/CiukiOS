@@ -18,12 +18,100 @@ import sys
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from evidence import Parser, EvidenceError
+from evidence import Parser, EvidenceError, f2_metadata
 from loader_model import selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
 
 ROOT=Path(__file__).resolve().parents[2]
+REGRESSION_SUITES = ('f0-smoke','f0-core','f0-panic','f0-runner',
+                     'f1-input','f1-storage','f1-fat32','f1-safe')
+F2_SUITES = ('f2-process','f2-runtime','f2-desktop','f2-app')
+
+
+def load_suite(name):
+    """Resolve runner aliases and prerequisites once, in declared order."""
+    names = REGRESSION_SUITES if name == 'all' else (*REGRESSION_SUITES, *F2_SUITES) if name == 'f2-all' else (name,)
+    suite = {'schema_version':1, 'image':'full', 'cases':[]}
+    seen = set(); confirmations = set()
+    def add(part_name, prerequisites=True):
+        if part_name in seen:return
+        part = load(ROOT/'tests/suites'/f'{part_name}.json')
+        if part.get('image') != 'full':raise res.Refusal('only canonical full HDD suites are supported')
+        if prerequisites:
+            for required in part.get('prerequisites',[]):add(required)
+        seen.add(part_name)
+        confirmations.update(part.get('operator_confirmation_cases',[]))
+        additions = expand_cases(part)
+        if part_name == 'f0-smoke':additions = [{**c, '_smoke':True} for c in additions]
+        suite['cases'].extend(additions)
+        # Preserve the existing physical import behavior: prerequisite physical
+        # gates remain separate, while alias and requested-suite imports apply.
+        if part_name in names:
+            for flag in ('host_tests','physical_import_required'):
+                if part.get(flag):suite[flag] = True
+            suite.setdefault('physical_cases',[]).extend(part.get('physical_cases',[]))
+    for part_name in names:add(part_name, name != 'all')
+    for case in suite['cases']:
+        if case.get('id') in confirmations:case['operator_confirmation'] = True
+    return suite
+
+
+def failed_prerequisite(case, result):
+    return result['outcome'] != 'pass' and not (
+        case.get('operator_confirmation') is True and result.get('operator_confirmation') is True)
+
+
+def record_f2_result(result, parser):
+    empty = f2_metadata([])
+    result.update({k:v for k,v in empty.items() if k != 'missing_fields'})
+    result['missing_f2_fields'] = empty['missing_fields']
+    result['application_output'] = parser.application.result()
+    metadata = f2_metadata(parser.records)
+    result.update({k:v for k,v in metadata.items() if k != 'missing_fields'})
+    result['missing_f2_fields'] = metadata['missing_fields']
+    result['application_output'] = parser.application.result()
+    result['payload_hash_comparisons'] = []
+    manifest_path = result['build_manifest'].get('path')
+    manifest = json.loads(Path(manifest_path).read_text()) if manifest_path != 'unknown' else {}
+    payloads = {p['path']:p['sha256'] for p in manifest.get('payloads',[])}
+    measured = []
+    for record in parser.records:
+        if record.get('event') == 'DATA' and record.get('group') == 'payload':
+            measured.append((record.get('path'), record.get('sha256')))
+    if isinstance(metadata['elf_hashes'],dict):measured.extend(metadata['elf_hashes'].items())
+    seen = set()
+    for path,actual in measured:
+        if path in seen:raise EvidenceError('duplicate guest-loaded payload hash: '+str(path))
+        seen.add(path)
+        expected = payloads.get(path)
+        match = bool(expected and isinstance(actual,str) and re.fullmatch('[0-9a-fA-F]{64}',actual) and actual.lower() == expected.lower())
+        result['payload_hash_comparisons'].append({'path':path,'guest_sha256':actual,
+                                                  'host_sha256':expected or 'unknown','match':match})
+        if not match:raise EvidenceError('guest-loaded payload hash differs from host manifest: '+str(path))
+    result['missing_payload_hashes'] = sorted(set(payloads)-{r['path'] for r in result['payload_hash_comparisons']})
+    if metadata['sdk_manifest_sha256'] != 'unknown' and manifest.get('sdk_manifest_sha256') != metadata['sdk_manifest_sha256']:
+        raise EvidenceError('guest SDK hash differs from host manifest')
+    archives = manifest.get('lua',{}).get('archives',{})
+    for field,archive in (('application_source_sha256','source'),('application_tests_sha256','tests')):
+        if metadata[field] != 'unknown' and metadata[field] != archives.get(archive,{}).get('sha256'):
+            raise EvidenceError('guest application provenance differs from host manifest: '+field)
+    if result['probe'] == 'app-gate' and result['outcome'] == 'pass':
+        if result['missing_f2_fields']:raise EvidenceError('missing application provenance/setup fields')
+        required = {'/bin/lua','/system/tests/ciuki-f2.lua'} | {p for p in payloads if p.startswith('/system/tests/lua-5.4.8-tests/')}
+        if required-seen:raise EvidenceError('missing guest-loaded application/test payload hashes')
+        if metadata['abi_version'] != '1' or metadata['application_wait_status'] != '0':
+            raise EvidenceError('application ABI or wait status mismatch')
+        if metadata['argv'] != ['lua','-e','_U=true','all.lua'] or metadata['cwd'] != '/system/tests/lua-5.4.8-tests':
+            raise EvidenceError('application argv/cwd mismatch')
+        environment = metadata['env']
+        if not isinstance(environment,dict) or any(environment.get(k)!=v for k,v in {'LC_ALL':'C','TZ':'UTC0','HOME':'/home','TMPDIR':'/tmp'}.items()):
+            raise EvidenceError('application environment mismatch')
+        fds = metadata['fd_setup']
+        if not isinstance(fds,dict) or fds.get('inherited') != [0,1,2] or fds.get('stdin') not in ('fixture','/dev/null') or any(fds.get(s)!='bounded' for s in ('stdout','stderr')):
+            raise EvidenceError('application fd setup mismatch')
+        if not parser.application.final_success_indication or parser.application.assertion_indications:
+            raise EvidenceError('upstream final output missing or assertion observed')
 
 
 def utc(): return datetime.now(timezone.utc).isoformat()
@@ -481,6 +569,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                   fixtures={'sha256':digest_json(case.get('fixtures',[])),'declared':case.get('fixtures',[])},
                   fault=case.get('fault'),cut_point=None,disk_cache_mode=case.get('disk_cache','writeback'),
                   checkers=[],durability_observations=[],patch_manifest=[],digests=[])
+    result['operator_confirmation'] = False
+    result['operator_confirmation_required'] = case.get('operator_confirmation',False)
     directory.mkdir(parents=True,exist_ok=False)
     launched=None
     process=qmp=cgroup=None;parser=Parser(run_id,case['probe']);fd=None;dirfd=None;logs=[]
@@ -524,16 +614,31 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 chunk=os.read(source,65536)
                 if not chunk:continue
                 target=serial if source==fd else stderr
-                remaining=res.LOG_CAP-target.tell()
-                target.write(chunk[:remaining]);target.flush()
-                if len(chunk)>remaining:raise EvidenceError('serial/stderr log cap reached')
                 if source==fd:
                     pending+=chunk
                     while b'\n' in pending:
-                        line,pending=pending.split(b'\n',1);parser.feed(line+b'\n')
+                        line,pending=pending.split(b'\n',1);line+=b'\n'
+                        try:record=parser.feed(line)
+                        except EvidenceError:
+                            # Retain the first malformed controller line for
+                            # diagnosis too; never silently repair its bytes.
+                            serial.write(line[:max(0,res.LOG_CAP-serial.tell())]);serial.flush()
+                            raise
+                        # Application frames are hashed/scanned in full and
+                        # retained as bounded head/tail in result.json. The
+                        # serial log budget is reserved for controller evidence.
+                        if not record or record.get('group') not in ('app','app_digest'):
+                            if serial.tell()+len(line)>res.LOG_CAP:raise EvidenceError('serial/stderr log cap reached')
+                            serial.write(line);serial.flush()
                         if parser.records and parser.records[-1]['event']=='ARM' and armed_stats is None and qmp:
                             armed_stats=writes(qmp.command('query-blockstats'));result['observed_blockstats_armed']=armed_stats
-                    if len(pending)>res.LOG_CAP:raise EvidenceError('unterminated serial line exceeds cap')
+                    if serial.tell()+len(pending)>res.LOG_CAP:
+                        serial.write(pending[:max(0,res.LOG_CAP-serial.tell())]);serial.flush()
+                        raise EvidenceError('unterminated serial line exceeds cap')
+                else:
+                    remaining=res.LOG_CAP-target.tell()
+                    target.write(chunk[:remaining]);target.flush()
+                    if len(chunk)>remaining:raise EvidenceError('serial/stderr log cap reached')
             if qmp is None and (directory/'q').exists():
                 qmp=host.connect_qmp(Path('/proc/self/fd')/str(dirfd)/'q',qlog)
                 version=qmp.greeting['QMP']['version']
@@ -556,7 +661,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if now>=deadline:
                 result['timeout']['occurred']=True;raise EvidenceError('host monotonic deadline exceeded')
             if parser.terminal and parser.terminal.get('status')=='not_run':
-                result['outcome']='not_run';raise EvidenceError('missing F1 probe: not_run')
+                result['outcome']='not_run';raise EvidenceError('missing phase probe: not_run')
             cut=actions.step(parser,qmp,now)
             if cut:
                 parser.check(case['expected']);result['cut_point']=actions.observed[-1]
@@ -599,6 +704,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 raise EvidenceError('QEMU exited before observation completed')
             if case.get('evidence_sink')=='screen' and now-launched>=case.get('screen_capture_after',10) and not (directory/'screen.ppm').exists() and qmp:
                 qmp.command('screendump',{'filename':str(directory/'screen.ppm')})
+                result['operator_confirmation'] = case.get('operator_confirmation') is True
                 raise EvidenceError('screen captured; serial-disabled subcase requires externally verified screen evidence')
         if case.get('boot_kind')=='restart':
             host_resets=sum(1 for e in qmp.events if e.get('event')=='RESET' and e.get('data',{}).get('reason')=='host-qmp-system-reset') if qmp else 0
@@ -636,6 +742,10 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         result['stimulus']['observed_sha256']=digest_json(actions.observed)
         result['durability_observations'].extend(r for r in parser.records if r.get('group') in ('durability','barrier','persisted'))
         result['observed']=parser.records
+        if request.startswith('f2:'):
+            try:record_f2_result(result,parser)
+            except (OSError,ValueError,RuntimeError) as e:
+                result['outcome']='fail';result['reason']=str(e)
         if result['outcome']=='pass' and (case.get('checks') or case.get('digests')):
             try:
                 if not result['cleanup']['clean']:raise EvidenceError('QEMU must stop before overlay export')
@@ -646,6 +756,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         result['image']['sha256_after']=sha(image)
         if result['image']['sha256_after']!=result['image']['sha256']:
             result['outcome']='fail';result['reason']='canonical image changed during run'
+        if not result['cleanup']['clean'] or result['reason'] != 'screen captured; serial-disabled subcase requires externally verified screen evidence':
+            result['operator_confirmation'] = False
         result['timing']={'host_monotonic_elapsed_seconds':time.monotonic()-launched if launched is not None else None,
                           'guest_domain':'icount' if profile.get('icount') else 'non-icount',
                           'guest_records':[r for r in parser.records if 'timing_domain' in r]}
@@ -781,22 +893,12 @@ def main(argv=None):
     options=ap.parse_args(argv)
     try:
         if not all(c.isalnum() or c in '-_' for c in options.suite):raise res.Refusal('invalid suite name')
-        if options.suite=='all':
-            names=['f0-smoke','f0-core','f0-panic','f0-runner','f1-input','f1-storage','f1-fat32','f1-safe']
-            suite={'schema_version':1,'image':'full','cases':[], 'host_tests':True}
-            for name in names:
-                part=load(ROOT/'tests/suites'/f'{name}.json')
-                if part.get('physical_import_required'):suite['physical_import_required']=True
-                suite.setdefault('physical_cases',[]).extend(part.get('physical_cases',[]))
-                additions=expand_cases(part)
-                if name=='f0-smoke':additions=[{**c,'_smoke':True} for c in additions]
-                suite['cases'].extend(additions)
-        else:suite=load(ROOT/'tests/suites'/f'{options.suite}.json')
+        suite=load_suite(options.suite)
         if suite.get('image')!='full':raise res.Refusal('only canonical full HDD suites are supported in F0')
         with res.ExclusiveLock(res.common_lock(ROOT)):
             Host().preflight(ROOT/'build/test-runs')
             host_evidence=None
-            if suite.get('host_tests') or options.suite.startswith('f1-'):
+            if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-')):
                 started=time.monotonic()
                 checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=180)
                 output=checked.stdout+checked.stderr
@@ -813,19 +915,12 @@ def main(argv=None):
             toolchain=json.loads((ROOT/'config/toolchain.json').read_text())
             firmware=find_firmware(executable)
             cases=expand_cases(suite);summary=[]
-            if options.suite.startswith('f1-'):
-                prerequisites=[]
-                for name in suite.get('prerequisites',[]):
-                    additions=expand_cases(load(ROOT/'tests/suites'/f'{name}.json'))
-                    if name=='f0-smoke':additions=[{**c,'_smoke':True} for c in additions]
-                    prerequisites.extend(additions)
-                cases=prerequisites+cases
             for index,case in enumerate(cases):
                 name=options.profile or case['profile']
                 if not all(c.isalnum() or c in '-_' for c in name):raise res.Refusal('invalid profile name')
                 profile=load(ROOT/'tests/profiles'/f'{name}.json')
                 if profile['machine']!=toolchain['qemu_machine']:raise res.Refusal('profile machine does not match pinned toolchain')
-                if case.get('selector','').startswith('f1:') and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1 evidence requires pinned icount profile')
+                if case.get('selector','').startswith(('f1:','f2:')) and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1/F2 evidence requires pinned icount profile')
                 if options.suite!='f0-smoke' and profile['accelerator']!='tcg' and not case.get('_smoke'):raise res.Refusal('CPU correctness evidence requires TCG')
                 result,directory=run_case(ROOT,options.suite,case,profile,image,executable,firmware,keep=options.keep)
                 if host_evidence is not None:
@@ -837,7 +932,7 @@ def main(argv=None):
                 checkpoint=ROOT/'build/test-runs'/options.suite/'summary.json'
                 checkpoint.write_text(json.dumps({'schema_version':1,'suite':options.suite,'cases':summary},indent=2)+'\n')
                 print(result['outcome'].upper()+': '+summary[-1]['case']+' — '+result['reason'],flush=True)
-                if result['outcome']!='pass':
+                if failed_prerequisite(case,result):
                     summary.extend({'case':c.get('id',c['probe']),'outcome':'not_run','reason':'prerequisite failed'} for c in cases[index+1:]);break
             if suite.get('physical_import_required'):
                 from physical import import_evidence

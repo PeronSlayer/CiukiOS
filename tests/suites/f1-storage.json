@@ -533,5 +533,10 @@
         "errno": 5
       }
     }
+  ],
+  "operator_confirmation_cases": [
+    "uart-absent-qemu-t23",
+    "uart-absent-qemu-e500",
+    "uart-absent-qemu-min128"
   ]
 }

@@ -6,15 +6,20 @@ F0_PROBES = ('boot', 'bootinfo', 'allocator', 'protection', 'isolation', 'preemp
 
 F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-fault',
              'partition', 'fat-read', 'fat-write', 'cache', 'mount-crash', 'safe', 'bootlog')
-PROBES = (*F0_PROBES, *F1_PROBES)
-SELECTOR_RE = r'f([01]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
+F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
+             'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
+PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES)
+SELECTOR_RE = r'f([012]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
 
 def selector(request, source='menu', validated_fw_cfg=False):
     if not isinstance(request, str) or not request.isascii() or len(request) > 64:
         raise ValueError('selector must be at most 64 ASCII bytes')
     match = re.fullmatch(SELECTOR_RE, request)
-    if not match or match[2] not in (*(F0_PROBES if match[1]=='0' else F1_PROBES), 'all', 'core'):
+    if not match:
+        raise ValueError('invalid selector grammar or probe')
+    names = (F0_PROBES, F1_PROBES, F2_PROBES)[int(match[1])]
+    if match[2] not in (*names, *(('all', 'core') if match[1] != '2' else ())):
         raise ValueError('invalid selector grammar or probe')
     forced = bool(match[4]); safe = bool(match[5])
     if (forced or safe) and not (source == 'fw_cfg' and validated_fw_cfg):

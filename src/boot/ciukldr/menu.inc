@@ -18,8 +18,13 @@ selector_validate:
     cmp byte [si+1], '0'
     je .prefix
     cmp byte [si+1], '1'
-    jne .bad
+    jne .try_f2
     mov bx, f1_probe_names
+    jmp .prefix
+.try_f2:
+    cmp byte [si+1], '2'
+    jne .bad
+    mov bx, f2_probe_names
 .prefix:
     cmp byte [si+2], ':'
     jne .bad
@@ -145,6 +150,8 @@ probe_names db 'all',0,'core',0,'boot',0,'bootinfo',0,'allocator',0,'protection'
 f1_probe_names db 'all',0,'core',0
     db 'registry',0,'input',0,'input-fault',0,'framebuffer',0,'ata',0,'ata-fault',0
     db 'partition',0,'fat-read',0,'fat-write',0,'cache',0,'mount-crash',0,'safe',0,'bootlog',0,0
+f2_probe_names db 'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'signals-fault',0
+    db 'threads-wait',0,'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
 selector_fw db 0

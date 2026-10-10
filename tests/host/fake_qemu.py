@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Scripted QEMU boundary for host tests; never executes an emulator."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import signal
@@ -47,6 +48,18 @@ def emit(items=None):
             line='CIUKI_TEST '+' '.join(f'{k}={v}' for k,v in record.items())
         serial.write(line.encode()+b'\n')
     if scenario.get('flood'):serial.write(b'x'*(4*1024*1024+65536))
+    if scenario.get('application_bytes') and items is None:
+        total=scenario['application_bytes'];digest=hashlib.sha256();offset=0
+        pattern=b'CIUKI_TEST event=END status=PASS\n'
+        while offset<total:
+            data=pattern[:min(24,total-offset)]
+            digest.update(data)
+            seq+=1
+            serial.write((f'CIUKI_TEST v=1 run={run_id} seq={seq:06d} probe={probe} event=DATA '
+                          f'group=app pid=7 tid=9 stream=stdout offset={offset} bytes={len(data)} data_hex={data.hex()}\n').encode())
+            offset+=len(data)
+        emit([{'event':'DATA','group':'app_digest','total_bytes':str(total),'sha256':digest.hexdigest()},
+              *scenario.get('after_application',[])])
 
 stream=conn.makefile('rb');started=False
 for raw in stream:
@@ -65,7 +78,7 @@ for raw in stream:
             # Real firmware answers a host reset with one hard reboot of its own.
             conn.sendall(('{"timestamp":{"seconds":%d,"microseconds":500000},"event":"RESET","data":{"guest":true,"reason":"guest-reset"}}\n'%int(time.time())).encode())
         started=True
-        if scenario.get('flood'):threading.Thread(target=emit,daemon=True).start()
+        if scenario.get('flood') or scenario.get('application_bytes'):threading.Thread(target=emit,daemon=True).start()
         else:emit()
     if cmd=='input-send-event':
         count=scenario.setdefault('received_input',0)+1;scenario['received_input']=count

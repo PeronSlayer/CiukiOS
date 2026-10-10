@@ -1,0 +1,551 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "prerequisites": [
+    "f0-smoke",
+    "f0-core",
+    "f0-panic",
+    "f0-runner",
+    "f1-input",
+    "f1-storage",
+    "f1-fat32",
+    "f1-safe",
+    "f2-process",
+    "f2-runtime",
+    "f2-desktop"
+  ],
+  "operator_confirmation_cases": [
+    "uart-absent-qemu-t23",
+    "uart-absent-qemu-e500",
+    "uart-absent-qemu-min128"
+  ],
+  "cases": [
+    {
+      "id": "app-gate-qemu-t23",
+      "probe": "app-gate",
+      "profile": "qemu-t23",
+      "selector": "f2:app-gate run={run_id}",
+      "timeout": 900,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "app-gate"
+            },
+            "combine": true,
+            "fields": {
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              },
+              "application_wait_status": {
+                "eq": 0
+              },
+              "survivor_progress": {
+                "ge": 100
+              },
+              "extra_skips": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "application",
+              "version",
+              "console_digest",
+              "heap_high_water",
+              "stack_high_water"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lua-basic"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "file-roundtrip"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "allocation"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "time-utc"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "console"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "app-gate-qemu-e500",
+      "probe": "app-gate",
+      "profile": "qemu-e500",
+      "selector": "f2:app-gate run={run_id}",
+      "timeout": 900,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "app-gate"
+            },
+            "combine": true,
+            "fields": {
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              },
+              "application_wait_status": {
+                "eq": 0
+              },
+              "survivor_progress": {
+                "ge": 100
+              },
+              "extra_skips": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "application",
+              "version",
+              "console_digest",
+              "heap_high_water",
+              "stack_high_water"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lua-basic"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "file-roundtrip"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "allocation"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "time-utc"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "console"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "app-gate-qemu-min128",
+      "probe": "app-gate",
+      "profile": "qemu-min128",
+      "selector": "f2:app-gate run={run_id}",
+      "timeout": 900,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "app-gate"
+            },
+            "combine": true,
+            "fields": {
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              },
+              "application_wait_status": {
+                "eq": 0
+              },
+              "survivor_progress": {
+                "ge": 100
+              },
+              "extra_skips": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "application",
+              "version",
+              "console_digest",
+              "heap_high_water",
+              "stack_high_water"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lua-basic"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "final_ok": {
+                "eq": 1
+              },
+              "assertion_failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "file-roundtrip"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "allocation"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "time-utc"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "console"
+            },
+            "fields": {
+              "exit": {
+                "eq": 0
+              },
+              "failures": {
+                "eq": 0
+              }
+            },
+            "combine": true
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "resources"
+            },
+            "combine": true,
+            "fields": {
+              "pages_delta": {
+                "eq": 0
+              },
+              "backing_delta": {
+                "eq": 0
+              },
+              "kernel_allocations_delta": {
+                "eq": 0
+              },
+              "processes_delta": {
+                "eq": 0
+              },
+              "zombies_delta": {
+                "eq": 0
+              },
+              "threads_delta": {
+                "eq": 0
+              },
+              "mappings_delta": {
+                "eq": 0
+              },
+              "fds_delta": {
+                "eq": 0
+              },
+              "descriptions_delta": {
+                "eq": 0
+              },
+              "surfaces_delta": {
+                "eq": 0
+              },
+              "messages_delta": {
+                "eq": 0
+              },
+              "waiters_delta": {
+                "eq": 0
+              },
+              "leaked": {
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "baseline",
+              "final",
+              "cache_accounted"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "contract": "docs/design/f2-acceptance.md",
+  "references": [
+    "https://www.qemu.org/docs/master/specs/fw_cfg.html",
+    "https://docs.python.org/3/library/hashlib.html"
+  ]
+}

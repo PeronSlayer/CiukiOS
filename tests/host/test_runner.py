@@ -1,4 +1,6 @@
 import fcntl
+import copy
+import hashlib
 import ctypes
 import json
 import io
@@ -19,10 +21,10 @@ from contextlib import contextmanager
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts/test'))
-from loader_model import selector, boot_options, F0_PROBES, F1_PROBES, SELECTOR_RE
+from loader_model import selector, boot_options, F0_PROBES, F1_PROBES, F2_PROBES, SELECTOR_RE
 import run as runner
 import resources as res
-from evidence import Parser,EvidenceError
+from evidence import Parser,EvidenceError,ApplicationCapture,f2_metadata,F2_FIELDS
 
 
 class FakeHost(runner.Host):
@@ -410,6 +412,8 @@ class RunnerTests(unittest.TestCase):
 #include <setjmp.h>
 #include <ciuki/boot_info.h>
 #include <ciuki/probe.h>
+#include <ciuki/process.h>
+#include <ciuki/sha256.h>
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))
 #define CIUKI_BUILD_ID "host"
 static struct ciuki_boot_info g_boot;
@@ -438,13 +442,24 @@ void rec_emit(const char *p,const char *event,const char *fmt,...) {
 }
 static void timing_calibrate(void) {}
 static void kwork_init(void) {}
-static void task_sleep_ms(unsigned n) { (void)n; longjmp(done,1); }
+void task_sleep_ms(unsigned n) { (void)n; longjmp(done,1); }
 static void klog(const char *fmt,...) { (void)fmt; }
 static __attribute__((noreturn)) void show_evidence_forever(void) { longjmp(done,1); }
 static const struct probe_def fixture_table[] = {{"input",f1},{"framebuffer",f1}};
 static const struct probe_def *table_end;
 #define __f1probes_start fixture_table
 #define __f1probes_end table_end
+static int calls2;
+static int f2(void) { calls2++; return failing; }
+static const struct ciuki_f2_probe fixture_f2[] = {{"elf-load",f2},{"spawn-wait",f2}};
+#define __f2probes_start fixture_f2
+#define __f2probes_end (fixture_f2+2)
+static char app_probe[24];
+static struct sha256_ctx app_digest;
+static struct kmutex app_lock;
+static volatile unsigned app_bytes;
+void sha256_init(struct sha256_ctx *p) { (void)p; }
+void kmutex_init(struct kmutex *p) { (void)p; }
 """
         wrappers="""
 int validate(const char *s,unsigned len,unsigned flags) {
@@ -459,9 +474,9 @@ int dispatch(const char *s,unsigned flags,unsigned count,int fail) {
     g_boot.flags=flags|CBI_F_TEST_REQUEST;
     g_boot.test_request_len=(uint16_t)strlen(s);
     memcpy(g_boot.test_request,s,g_boot.test_request_len);
-    table_end=fixture_table+count;calls0=calls1=0;evidence[0]=0;failing=fail;
+    table_end=fixture_table+count;calls0=calls1=calls2=0;evidence[0]=0;failing=fail;
     if (!setjmp(done)) probes_main(0);
-    return calls0*100+calls1;
+    return calls0*100+calls1+calls2*10000;
 }
 const char *records(void) { return evidence; }
 """
@@ -476,8 +491,8 @@ const char *records(void) { return evidence; }
         native.records.restype=ctypes.c_char_p
         # Boot flags use the real shared definitions (safe=bit 0, QEMU=bit 5, forced=bit 7).
         trusted=1|32|128
-        for phase,names in ((0,F0_PROBES),(1,F1_PROBES)):
-            for name in (*names,'all','core'):
+        for phase,names in ((0,F0_PROBES),(1,F1_PROBES),(2,F2_PROBES)):
+            for name in (*names, *(('all','core') if phase != 2 else ())):
                 text=(f'f{phase}:'+name+' run=12ab34cd').encode()
                 self.assertEqual(native.validate(text,len(text),0),phase+1)
                 self.assertEqual(native.records(),b'')
@@ -510,6 +525,14 @@ const char *records(void) { return evidence; }
             self.assertEqual(native.dispatch(f'f1:{name} run=12ab34cd'.encode(),0,0,0),0)
             self.assertIn(b'installed=0',native.records())
             self.assertIn(b'ERROR status=not_run reason=missing_probe',native.records())
+        for name in ('all','core','input','boot','unknown'):
+            text=f'f2:{name} run=12ab34cd'.encode()
+            self.assertEqual(native.validate(text,len(text),trusted),0)
+            self.assertEqual(native.dispatch(text,0,2,0),0)
+        self.assertEqual(native.dispatch(b'f2:elf-load run=12ab34cd',0,2,0),10000)
+        self.assertEqual(native.dispatch(b'f2:fd-table run=12ab34cd',0,2,0),0)
+        self.assertIn(b'fd-table READY table=f2 installed=2',native.records())
+        self.assertIn(b'fd-table ERROR status=not_run reason=missing_probe',native.records())
 
     def test_main_holds_shared_lock_for_host_prerequisite_and_boot(self):
         lock=self.root/'common.lock';directory=self.root/'build/test-runs/f1-input/12345678'
@@ -550,6 +573,56 @@ const char *records(void) { return evidence; }
             result,directory=self.run_fake()
         self.assertEqual(result['outcome'],'fail');self.assertIn('fsck',result['reason'])
         self.assertTrue((directory/'run.qcow2').exists())
+
+
+    def test_f2_missing_probe_and_result_fields(self):
+        self.case.update(probe='fd-table',selector='f2:fd-table run={run_id}',expected={'terminal':'END'})
+        result,_=self.run_fake(records=[{'event':'BEGIN'},{'event':'READY','table':'f2','installed':'5'},
+                                     {'event':'ERROR','status':'not_run','reason':'missing_probe'}])
+        self.assertEqual(result['outcome'],'not_run');self.assertTrue(result['cleanup']['clean'])
+        self.assertEqual(result['abi_version'],'unknown');self.assertIn('sdk_manifest_sha256',result['missing_f2_fields'])
+
+    def test_f2_application_flood_preserves_terminal_and_controller_log(self):
+        self.case.update(probe='elf-load',selector='f2:elf-load run={run_id}',timeout=30,expected={'terminal':'END'})
+        result,directory=self.run_fake(records=[{'event':'BEGIN'}],application_bytes=res.LOG_CAP+128,
+                                      after_application=[{'event':'DATA','abi_version':'1'},{'event':'END','status':'PASS'}])
+        self.assertEqual(result['outcome'],'pass',result['reason'])
+        output=result['application_output'];self.assertTrue(output['capture_truncated'])
+        self.assertEqual(output['total_bytes'],res.LOG_CAP+128)
+        self.assertLessEqual(len(output['head_hex'])+len(output['tail_hex']),4*65536)
+        self.assertLess((directory/'serial.log').stat().st_size,res.LOG_CAP)
+        self.assertIn(b'event=END status=PASS',(directory/'serial.log').read_bytes())
+        pattern=b'CIUKI_TEST event=END status=PASS\n'[:24]
+        data=pattern*((res.LOG_CAP+128)//24)+pattern[:(res.LOG_CAP+128)%24]
+        self.assertEqual(output['sha256'],hashlib.sha256(data).hexdigest())
+        self.assertEqual(result['abi_version'],'1')
+
+    def test_operator_screen_confirmation_is_fail_and_does_not_block(self):
+        self.case.update(evidence_sink='screen',operator_confirmation=True,screen_capture_after=.2)
+        result,directory=self.run_fake(records=[])
+        self.assertEqual(result['outcome'],'fail');self.assertTrue(result['operator_confirmation'])
+        self.assertTrue((directory/'screen.ppm').exists())
+        self.assertFalse(runner.failed_prerequisite(self.case,result))
+        result,_=self.run_fake(records=[{'event':'BEGIN'},{'event':'END','status':'FAIL'}])
+        self.assertFalse(result['operator_confirmation']);self.assertTrue(runner.failed_prerequisite(self.case,result))
+
+    def test_main_continues_after_operator_confirmation_but_stops_on_real_failure(self):
+        lock=self.root/'common.lock'
+        (self.root/'config').mkdir();(self.root/'config/toolchain.json').write_text(json.dumps({'qemu_machine':self.profile['machine']}))
+        cases=[{**self.case,'id':name,'profile':'qemu-t23','operator_confirmation':name=='screen'} for name in ('screen','real-fail','unattempted')]
+        calls=[]
+        def boot(root,suite,case,*args,**kwargs):
+            calls.append(case['id']);directory=self.root/'build/test-runs'/suite/case['id'];directory.mkdir(parents=True)
+            return {'run_id':case['id'],'outcome':'fail','reason':'fixture','operator_confirmation':case['id']=='screen'},directory
+        with patch.object(runner,'ROOT',self.root),patch.object(runner,'load_suite',return_value={'image':'full','cases':cases}), \
+             patch.object(runner,'load',return_value=self.profile),patch.object(res,'common_lock',return_value=lock), \
+             patch.object(runner.Host,'preflight',return_value=3*res.GIB),patch.object(runner,'run_case',side_effect=boot), \
+             patch.object(runner.shutil,'which',return_value='fake'),patch.object(runner,'find_firmware',return_value=self.firmware), \
+             patch('sys.stdout',new_callable=io.StringIO):
+            self.assertEqual(runner.main(['fixture','--image',str(self.image)]),1)
+        self.assertEqual(calls,['screen','real-fail'])
+        summary=json.loads((self.root/'build/test-runs/fixture/summary.json').read_text())
+        self.assertEqual([r['outcome'] for r in summary['cases']],['fail','fail','not_run'])
 
 
 class F1SelectorTests(unittest.TestCase):
@@ -665,3 +738,300 @@ class GroupedEvidenceTests(unittest.TestCase):
         for i,record in enumerate(['event=BEGIN','event=DATA group=boot errors=1','event=DATA group=boot errors=0','event=END status=PASS'],1):
             parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={i:06d} probe=boot {record}'.encode())
         with self.assertRaises(EvidenceError):parser.check({'terminal':'END','predicates':[{'where':{'event':'DATA','group':'boot'},'combine':True,'fields':{'errors':{'eq':0}}}]})
+
+class F2EvidenceTests(unittest.TestCase):
+    def test_f2_grammar_phase_separation_and_loader_registry(self):
+        model=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
+        block=model.split('f2_probe_names db',1)[1].split('platform_suffix',1)[0]
+        for probe in F2_PROBES:
+            self.assertIn("'"+probe+"'",block)
+            self.assertEqual(selector(f'f2:{probe} run=1234aBcD')['phase'],2)
+            self.assertTrue(selector(f'f2:{probe} run=1234aBcD platform=e500 safe=1','fw_cfg',True)['safe'])
+            for phase in (0,1):
+                with self.assertRaises(ValueError):selector(f'f{phase}:{probe} run=12345678')
+        self.assertNotIn("'all'",block);self.assertNotIn("'core'",block)
+        for value in ('all','core','boot','input','unknown'):
+            with self.assertRaises(ValueError):selector(f'f2:{value} run=12345678')
+        for suffix in (' safe=1 platform=e500',' run=12345678',' safe=1 safe=1',' platform=e500 platform=e500','\n','\0',' '+'x'*64):
+            with self.assertRaises(ValueError):selector('f2:elf-load run=12345678'+suffix,'fw_cfg',True)
+        for source,valid in (('menu',True),('serial',True),('fw_cfg',False)):
+            with self.assertRaises(ValueError):selector('f2:elf-load run=12345678 safe=1',source,valid)
+
+    def test_application_frames_cannot_forge_controller_records(self):
+        parser=Parser('12345678','app-gate')
+        def feed(seq,extra):
+            return parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=app-gate {extra}'.encode())
+        feed(1,'event=BEGIN')
+        data=b'CIUKI_TEST v=1 run=12345678 seq=000999 probe=app-gate event=END status=PASS\n'
+        for index,off in enumerate(range(0,len(data),24),2):
+            chunk=data[off:off+24]
+            feed(index,f'event=DATA group=app pid=6 tid=7 stream=stdout offset={off} bytes={len(chunk)} data_hex={chunk.hex()}')
+        self.assertIsNone(parser.terminal)
+        self.assertEqual(len(parser.records),1)
+        self.assertEqual(bytes(parser.application.head),data)
+        with self.assertRaises(EvidenceError):parser.check({'terminal':'END'})
+        feed(10,'event=END status=FAIL')
+        with self.assertRaises(EvidenceError):parser.check({'terminal':'END'})
+
+    def test_bounded_streaming_digest_head_tail_at_log_cap(self):
+        cap=res.LOG_CAP;capture=ApplicationCapture(retention=32)
+        digest=hashlib.sha256()
+        for i in range(cap//8192+2):
+            data=bytes([i%251])*8192;capture.feed(data);digest.update(data)
+            self.assertLessEqual(len(capture.head)+len(capture.tail),cap+32)
+        evidence=capture.result()
+        self.assertGreater(evidence['total_bytes'],cap)
+        self.assertTrue(evidence['capture_truncated'])
+        self.assertEqual(evidence['sha256'],digest.hexdigest())
+        self.assertEqual(bytes.fromhex(evidence['head_hex']),bytes(32))
+        self.assertEqual(bytes.fromhex(evidence['tail_hex']),bytes([(cap//8192+1)%251])*32)
+
+    def test_multipart_metadata_and_missing_fields(self):
+        digest=hashlib.sha256(b'sdk').hexdigest()
+        records=[dict(event='DATA',group='metadata',name='sdk_manifest_sha256',part=str(i+1),parts='2',encoding='sha256',hex=digest[i*32:(i+1)*32]) for i in range(2)]
+        argv=['lua','-e','_U=true','all.lua']
+        encoded=json.dumps(argv).encode().hex()
+        records.append(dict(event='DATA',group='metadata',name='argv',part='1',parts='1',encoding='json',hex=encoded))
+        result=f2_metadata(records)
+        self.assertEqual(result['sdk_manifest_sha256'],digest);self.assertEqual(result['argv'],argv)
+        self.assertEqual(result['abi_version'],'unknown');self.assertIn('abi_version',result['missing_fields'])
+        self.assertEqual(result['excluded_modes'],{'complete':'excluded_by_contract','internal':'excluded_by_contract'})
+        self.assertIn('sdk_manifest_sha256',f2_metadata(records[1:])['missing_fields'])
+        with self.assertRaises(EvidenceError):f2_metadata(records+[records[0]])
+        with self.assertRaises(EvidenceError):f2_metadata([dict(event='DATA',abi_version='1'),dict(event='DATA',abi_version='2')])
+        with self.assertRaises(EvidenceError):f2_metadata([dict(event='DATA',sdk_manifest_sha256='abc')])
+
+    def test_suite_matrix_deadlines_alias_and_prerequisites(self):
+        deadlines={'elf-load':180,'spawn-wait':180,'fd-table':300,'mmap':180,'signals-fault':180,'threads-wait':300,'libc-smoke':180,'crash-isolation':300,'app-gate':900}
+        probes=[]
+        for name in runner.F2_SUITES:
+            suite=runner.load(ROOT/'tests/suites'/f'{name}.json')
+            self.assertEqual(suite['prerequisites'][:8],list(runner.REGRESSION_SUITES))
+            for case in suite['cases']:
+                probes.append(case['probe']);self.assertEqual(case['timeout'],deadlines[case['probe']])
+                profile=runner.load(ROOT/'tests/profiles'/f"{case['profile']}.json")
+                args,text=runner.qemu_args('fake',profile,case,'12345678',ROOT/'build/run.qcow2',ROOT/'build/bios.bin')
+                self.assertEqual(selector(text,'fw_cfg',True)['phase'],2)
+                self.assertIn('shift=1,sleep=on',args)
+                runner.Actions(case.get('actions',[]))
+            for probe in {c['probe'] for c in suite['cases']}:
+                self.assertEqual({c['profile'] for c in suite['cases'] if c['probe']==probe},{'qemu-t23','qemu-e500','qemu-min128'})
+        self.assertEqual(set(probes),set(F2_PROBES))
+        suite=runner.load_suite('f2-all');cases=suite['cases']
+        first=next(i for i,c in enumerate(cases) if c['selector'].startswith('f2:'))
+        expected=[c for name in runner.F2_SUITES for c in runner.load(ROOT/'tests/suites'/f'{name}.json')['cases']]
+        self.assertEqual([c['id'] for c in cases[first:]],[c['id'] for c in expected])
+        self.assertEqual(len(cases[:first]),sum(len(runner.load(ROOT/'tests/suites'/f'{n}.json')['cases']) for n in runner.REGRESSION_SUITES))
+        for suite_name in ('f1-input','f1-storage','f1-fat32','f1-safe',*runner.F2_SUITES):
+            cases=runner.load_suite(suite_name)['cases']
+            confirmations=[c for c in cases if c.get('operator_confirmation')]
+            self.assertEqual(len(confirmations),3)
+            self.assertTrue(all(c['id'].startswith('uart-absent-') for c in confirmations))
+            for c in confirmations:
+                self.assertFalse(runner.failed_prerequisite(c,{'outcome':'fail','operator_confirmation':True}))
+                self.assertTrue(runner.failed_prerequisite(c,{'outcome':'fail','operator_confirmation':False}))
+                self.assertTrue(runner.failed_prerequisite({}, {'outcome':'fail','operator_confirmation':True}))
+
+    def test_all_f2_predicates_fabricated_success_and_each_violation(self):
+        # Exercise the actual JSON predicate declarations, splitting summaries
+        # into bounded controller records, rather than bypassing Parser.
+        def records_for(predicate):
+            matches=[]
+            for index in range(predicate.get('exact_count',predicate.get('count',1))):
+                record=dict(predicate.get('where',{}))
+                for key in predicate.get('required_fields',[]):record.setdefault(key,'1')
+                if predicate.get('unique'):record[predicate['unique']]=str(index)
+                for field,rule in predicate.get('fields',{}).items():
+                    if not isinstance(rule,dict):record[field]=str(rule);continue
+                    value=rule.get('eq',rule.get('ge',0))
+                    if isinstance(value,str) and value.startswith('$'):value=0
+                    record[field]=str(value)
+                for field,rule in predicate.get('fields',{}).items():
+                    if isinstance(rule,dict):
+                        for op in ('eq','ge','le'):
+                            value=rule.get(op)
+                            if isinstance(value,str) and value.startswith('$'):record[field]=record[value[1:]]
+                        if rule.get('encoding')=='hex':record[field]=f"{int(record[field]):0{rule.get('width',8)}x}"
+                for relation in predicate.get('relations',[]):
+                    record.setdefault(relation['right'],'1');record[relation['left']]=record[relation['right']]
+                matches.append(record)
+            return matches
+        def check(probe,predicate,records):
+            parser=Parser('12345678',probe);seq=0
+            def feed(record):
+                nonlocal seq
+                seq+=1;line='CIUKI_TEST '+ ' '.join(f'{k}={v}' for k,v in {'v':1,'run':'12345678','seq':f'{seq:06d}','probe':probe,**record}.items())
+                self.assertLessEqual(len(line),240);parser.feed(line.encode())
+            feed({'event':'BEGIN'})
+            for record in records:
+                if predicate.get('combine'):
+                    where=predicate['where']
+                    for key,value in record.items():
+                        if key not in where:feed({**where,key:value})
+                else:feed(record)
+            feed({'event':'END','status':'PASS'})
+            return parser.check({'terminal':'END','predicates':[predicate]})
+        for name in runner.F2_SUITES:
+            suite=runner.load(ROOT/'tests/suites'/f'{name}.json')
+            for case in suite['cases']:
+                for predicate in case['expected']['predicates']:
+                    with self.subTest(case=case['id'],predicate=predicate['where']):
+                        records=records_for(predicate)
+                        self.assertTrue(check(case['probe'],predicate,records))
+                        with self.assertRaises(EvidenceError):check(case['probe'],predicate,[])
+                        for field,rule in predicate.get('fields',{}).items():
+                            broken=copy.deepcopy(records)
+                            value=rule.get('eq',rule.get('ge')) if isinstance(rule,dict) else rule
+                            if isinstance(rule,dict):
+                                old=int(broken[0][field],16 if rule.get('encoding')=='hex' else 10)
+                                bad=rule['le']+1 if 'le' in rule else old-1 if 'ge' in rule else old+1
+                                broken[0][field]=f'{bad:08x}' if rule.get('encoding')=='hex' else str(bad)
+                            else:broken[0][field]='incorrect'
+                            with self.subTest(field=field),self.assertRaises(EvidenceError):check(case['probe'],predicate,broken)
+
+    def test_kernel_map_f2probes_within_rodata(self):
+        path=ROOT/'build/f0/VMM.map'
+        if not path.exists():self.skipTest('kernel map checked after the mandatory kernel build')
+        rows=path.read_text().splitlines()
+        def addr(name):return int(next(r.split()[0] for r in rows if name+' = .' in r),16)
+        start,end=addr('__f2probes_start'),addr('__f2probes_end')
+        self.assertLessEqual(addr('__rodata_start'),start);self.assertLessEqual(start,end)
+        self.assertLessEqual(end,addr('__rodata_end'))
+        sections=[r for r in rows if ':(.f2probes)' in r];self.assertTrue(sections)
+        for row in sections:
+            fields=row.split();self.assertGreaterEqual(int(fields[0],16),start)
+            self.assertLessEqual(int(fields[0],16)+int(fields[2],16),end)
+
+    def test_production_kernel_application_framing_and_digest(self):
+        source=(ROOT/'src/kernel/probes/probes.c').read_text()
+        first=source.index('static char app_probe[24]');last=source.index('static const struct probe_def probes[]',first)
+        scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            directory=Path(directory)
+            stubs=r'''
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <ciuki/task.h>
+#include <ciuki/process.h>
+#include <ciuki/probe.h>
+#include <ciuki/sync.h>
+#include <ciuki/sha256.h>
+static char evidence[8192];
+static unsigned seq;
+static struct process process = { .pid=7 };
+static struct proc_thread thread = { .tid=9, .process=&process };
+static struct task task = { .id=123 };
+struct proc_thread *proc_thread_for(const struct task *t) { (void)t; return &thread; }
+void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
+void kmutex_lock(struct kmutex *m) { (void)m; }
+void kmutex_unlock(struct kmutex *m) { (void)m; }
+static void klog(const char *fmt,...) {
+    va_list ap; va_start(ap,fmt); vsnprintf(evidence,sizeof(evidence),fmt,ap); va_end(ap);
+}
+void rec_emit(const char *probe,const char *event,const char *fmt,...) {
+    unsigned n=(unsigned)strlen(evidence);
+    n+=(unsigned)snprintf(evidence+n,sizeof(evidence)-n,"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s",++seq,probe,event);
+    if (fmt) {
+        n+=(unsigned)snprintf(evidence+n,sizeof(evidence)-n," ");
+        va_list ap; va_start(ap,fmt); vsnprintf(evidence+n,sizeof(evidence)-n,fmt,ap); va_end(ap);
+    }
+    strcat(evidence,"\n");
+}
+'''
+            wrapper=r'''
+void report(const char *msg,unsigned len,int active) {
+    evidence[0]=0;seq=0;
+    if (active) {
+        strcpy(app_probe,"app-gate");sha256_init(&app_digest);app_bytes=0;
+        rec_emit("app-gate","BEGIN",0);
+    } else app_probe[0]=0;
+    probe_user_report(&task,msg,len);
+}
+const char *records(void) { return evidence; }
+'''
+            harness=directory/'app.c';harness.write_text(stubs+source[first:last]+wrapper)
+            library=directory/'app.so'
+            compiled=subprocess.run(['clang','-shared','-fPIC','-std=c17','-Wall','-Wextra','-Werror','-I',str(ROOT/'src/kernel/include'),str(harness),str(ROOT/'src/kernel/lib/sha256.c'),'-o',str(library)],capture_output=True,text=True)
+            self.assertEqual(compiled.returncode,0,compiled.stderr)
+            native=ctypes.CDLL(str(library));native.report.argtypes=[ctypes.c_char_p,ctypes.c_uint,ctypes.c_int];native.records.restype=ctypes.c_char_p
+            text=b'CIUKI_TEST v=1 event=END status=PASS '*6
+            native.report(text,len(text),1)
+            parser=Parser('12345678','app-gate')
+            for line in native.records().splitlines():
+                self.assertLessEqual(len(line),240);parser.feed(line)
+            self.assertIsNone(parser.terminal)
+            self.assertEqual(bytes(parser.application.head),text)
+            self.assertEqual(parser.application.digest.hexdigest(),hashlib.sha256(text).hexdigest())
+            self.assertEqual(parser.application.result()['identities'],[{'pid':'7','tid':'9','stream':'report'}])
+            native.report(b'plain report',12,0)
+            self.assertEqual(native.records(),b'[user 123 report] plain report')
+
+    def test_f2_payload_manifest_comparison_rejects_mismatch(self):
+        scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            manifest=Path(directory)/'build-manifest.json'
+            digest=hashlib.sha256(b'elf').hexdigest()
+            manifest.write_text(json.dumps({'payloads':[{'path':'/bin/hello','sha256':digest}]}))
+            for actual,ok in ((digest,True),('0'*64,False)):
+                parser=Parser('12345678','elf-load')
+                for seq,extra in enumerate(('event=BEGIN',f'event=DATA group=payload path=/bin/hello sha256={actual}','event=END status=PASS'),1):
+                    parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=elf-load {extra}'.encode())
+                result={'build_manifest':{'path':str(manifest)},'probe':'elf-load','outcome':'pass'}
+                if ok:
+                    runner.record_f2_result(result,parser)
+                    self.assertTrue(result['payload_hash_comparisons'][0]['match'])
+                    self.assertEqual(result['missing_payload_hashes'],[])
+                else:
+                    with self.assertRaisesRegex(EvidenceError,'guest-loaded'):runner.record_f2_result(result,parser)
+
+    def test_app_result_requires_provenance_setup_wait_and_complete_output(self):
+        scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            directory=Path(directory);manifest=directory/'build-manifest.json';digest=hashlib.sha256(b'payload').hexdigest()
+            paths=('/bin/lua','/system/tests/ciuki-f2.lua','/system/tests/lua-5.4.8-tests/all.lua')
+            manifest.write_text(json.dumps({'sdk_manifest_sha256':digest,'payloads':[{'path':p,'sha256':digest} for p in paths],
+                                           'lua':{'archives':{'source':{'sha256':digest},'tests':{'sha256':digest}}}}))
+            metadata={field:'1' for field in F2_FIELDS}
+            metadata.update(sdk_manifest_sha256=digest,newlib_source_sha256=digest,newlib_patch_hashes={'patch':digest},
+                            application_source_sha256=digest,application_tests_sha256=digest,elf_hashes={'/bin/lua':digest},
+                            argv=['lua','-e','_U=true','all.lua'],env={'LC_ALL':'C','TZ':'UTC0','HOME':'/home','TMPDIR':'/tmp'},
+                            cwd='/system/tests/lua-5.4.8-tests',fd_setup={'inherited':[0,1,2],'stdin':'/dev/null','stdout':'bounded','stderr':'bounded'},
+                            application_wait_status='0',declared_exclusions=['_U'],resource_ledgers={'baseline':1,'final':1})
+            def parser_for(values,output=b'final OK !!!\n'):
+                parser=Parser('12345678','app-gate');seq=0
+                def feed(extra):
+                    nonlocal seq
+                    seq+=1;line=f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=app-gate '+extra
+                    self.assertLessEqual(len(line),240);parser.feed(line.encode())
+                feed('event=BEGIN')
+                for name,value in values.items():
+                    if isinstance(value,(dict,list)) or name=='cwd':
+                        encoding='utf8' if name=='cwd' else 'json'
+                        data=(value if encoding=='utf8' else json.dumps(value)).encode().hex()
+                        parts=[data[i:i+48] for i in range(0,len(data),48)]
+                        for i,part in enumerate(parts,1):feed(f'event=DATA group=metadata name={name} part={i} parts={len(parts)} encoding={encoding} hex={part}')
+                    else:feed(f'event=DATA {name}={value}')
+                for path in paths[1:]:feed(f'event=DATA group=payload path={path} sha256={digest}')
+                feed(f'event=DATA group=app pid=7 tid=9 stream=stdout offset=0 bytes={len(output)} data_hex={output.hex()}')
+                feed('event=END status=PASS');return parser
+            def result():return {'probe':'app-gate','outcome':'pass','build_manifest':{'path':str(manifest)}}
+            evidence=result();runner.record_f2_result(evidence,parser_for(metadata));self.assertEqual(evidence['missing_f2_fields'],[])
+            for field,value in (('application_wait_status','9472'),('abi_version','2'),('argv',['lua','all.lua']),
+                                ('env',{}),('cwd','/tmp'),('fd_setup',{'inherited':[0,1,2,3]})):
+                changed={**metadata,field:value}
+                with self.subTest(field=field),self.assertRaises(EvidenceError):runner.record_f2_result(result(),parser_for(changed))
+            for output in (b'no final indication',b'assertion failed!'):
+                with self.assertRaises(EvidenceError):runner.record_f2_result(result(),parser_for(metadata,output))
+            changed=dict(metadata);changed.pop('max_committed_pages')
+            with self.assertRaisesRegex(EvidenceError,'missing application'):runner.record_f2_result(result(),parser_for(changed))
+
+    def test_application_capture_keeps_complete_output_until_cap_and_scans_after(self):
+        capture=ApplicationCapture(retention=16,log_limit=128)
+        capture.feed(b'x'*128)
+        self.assertFalse(capture.result()['capture_truncated']);self.assertEqual(len(capture.head),128)
+        capture.feed(b'assertion fai');capture.feed(b'led! final ');capture.feed(b'OK !!!')
+        self.assertTrue(capture.result()['capture_truncated']);self.assertEqual(len(capture.head),16)
+        self.assertEqual(capture.assertion_indications,1);self.assertTrue(capture.final_success_indication)
