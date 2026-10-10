@@ -29,6 +29,9 @@ CRASH_ORPHAN_FSCK = ('fsck.fat 4.2 (2021-01-31)\n'
                      ' Automatically removing dirty bit.\n\n'
                      'Leaving filesystem unchanged.\n'
                      '{volume}: 69 files, 1465/130557 clusters\n')
+CRASH_RECOVERED_FSCK = CRASH_ORPHAN_FSCK.replace(
+    'Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.\n'
+    ' Automatically removing dirty bit.\n', '')
 sys.path.insert(0,str(ROOT/'scripts/test'))
 from loader_model import selector, boot_options, F0_PROBES, F1_PROBES, F2_PROBES, SELECTOR_RE
 import run as runner
@@ -1209,8 +1212,9 @@ class F1RecordTests(unittest.TestCase):
                 'case=partition disk=1 error=0',
                 f'case=mount drive=D error={error} reasons={reason} mode={"rw" if error else "ro"} lost=0 write_refusal={error or -30} writes=0',
                 'case=coverage fixtures=1 cut_selected=0 cut_reboot=0 checker=host_required',meta]
-        result['mount-crash-reboot']=['case=crash_reboot reasons=5 lost=0 scan_corrupt=0 checker=host_required writes=0',
-                                      'case=crash_refusal drive=C write_refusal=-30 writes=0',
+        result['mount-dirty'][1]='case=mount drive=D error=0 reasons=0 mode=rw lost=0 write_refusal=0 writes=7 recovered=1 refusals=0 reason=dirty_recovered'
+        result['mount-crash-reboot']=['case=crash_reboot reasons=0 lost=0 scan_corrupt=0 checker=host_required writes=4 recovered=1 mode=rw reason=dirty_recovered',
+                                      'case=crash_refusal drive=C write_refusal=0 writes=4 refusals=0',
                                       'case=coverage fixtures=0 cut_selected=1 cut_reboot=1 checker=host_required',meta]
         result['mount-crash-cut']=['event=ARM action=crash_cut marker=F109CUT.ARM workload=replace_rename bytes=8192',
                                  'case=cut index=1 barrier=0 action=write lba=2050 result=0 durable=1',
@@ -1244,12 +1248,14 @@ class F1RecordTests(unittest.TestCase):
                             record[field]='invalid'
                             with self.subTest(field=field),self.assertRaises(EvidenceError):broken.check(expected)
 
-    def test_crash_reboot_keeps_dirty_scan_and_write_refusal_strict(self):
+    def test_crash_reboot_keeps_recovery_scan_and_zero_refusals_strict(self):
         case=next(c for c in runner.load(ROOT/'tests/suites/f1-fat32.json')['cases'] if c['id']=='mount-crash-reboot')
         bodies=self.fat_fixtures()['mount-crash-reboot']
-        for before,after in [('reasons=5','reasons=1'),('reasons=5','reasons=37'),
+        for before,after in [('reasons=0','reasons=4'),('reasons=0','reasons=32'),
                              ('lost=0','lost=1'),('scan_corrupt=0','scan_corrupt=1'),
-                             ('write_refusal=-30','write_refusal=0'),('writes=0','writes=1')]:
+                             ('write_refusal=0','write_refusal=-30'),('writes=4','writes=0'),
+                             ('refusals=0','refusals=1'),('recovered=1','recovered=0'),
+                             ('mode=rw','mode=ro'),('reason=dirty_recovered','reason=mount')]:
             with self.subTest(field=before):
                 broken=[body.replace(before,after) for body in bodies]
                 with self.assertRaises(EvidenceError):self.records('mount-crash',broken).check(case['expected'])

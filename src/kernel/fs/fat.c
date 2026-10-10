@@ -62,6 +62,23 @@ static int set_cluster(struct fat_volume *v, uint32_t c, uint32_t value) {
     }
     return 0;
 }
+/* FAT[1] flags: Microsoft FAT specification section 4.2 (contract f1-26).
+ * Complete each copy's sector write and barrier before touching the next.
+ * A cut between copies remains detectable by the full-sector mount scan.
+ * Preserve the hard-error flag and FAT32's reserved upper nibble. */
+static int set_clean(struct fat_volume *v, bool clean) {
+    if (!cleanbit(v)) return 0;
+    unsigned n=v->type/8;
+    for (unsigned f=0;f<v->fats;f++) {
+        uint8_t b[4]; int e=fat_bytes(v,f,offset(v,1),b,n,false);
+        if (e) return write_error(v,e);
+        uint32_t x=n==4 ? fs_rd32(b) : fs_rd16(b);
+        x=clean ? x|cleanbit(v) : x&~cleanbit(v);
+        if (n==4) fs_wr32(b,x); else fs_wr16(b,(uint16_t)x);
+        if ((e=fat_bytes(v,f,offset(v,1),b,n,true)) || (e=barrier(v))) return e;
+    }
+    return 0;
+}
 static uint32_t cluster_sector(struct fat_volume *v, uint32_t c) { return v->data_sector+(c-2)*v->spc; }
 static int chain_at(struct fat_volume *v, uint32_t first, uint32_t index, uint32_t *out) {
     if (index>=v->clusters || !valid(v,first)) return corrupt(v);
@@ -632,23 +649,22 @@ int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *de
     if (e && e!=-FS_EUCLEAN) { v->mounted=false; return e; }
     if (v->ro_reasons) v->readonly=true;
     v->diagnostic=v->readonly ? "read-only; inspect ro_reasons" : "validated writable mount";
-    if (!v->readonly) {
-        v->writable_session=true;
-        if (cleanbit(v) && ((e=set_cluster(v,1,one&~cleanbit(v))) || (e=barrier(v)))) return e;
-    }
+    if (!v->readonly || (wr && v->ro_reasons==FAT_RO_DIRTY)) return fat_enable_write(v);
     return 0;
 }
 int fat_enable_write(struct fat_volume *v) {
     if (!v || !v->mounted) return -FS_EINVAL;
     int e=cache_error(v->cache,v->dev); if (e) return write_error(v,e);
-    if (!v->readonly) return 0;
+    if (!v->readonly && v->writable_session) return 0;
     if (!blkdev_durable(v->dev)) { v->ro_reasons|=FAT_RO_DURABILITY; return -FS_EROFS; }
-    if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DURABILITY)) return -FS_EROFS;
-    uint32_t one;
-    if ((e=fat_get_cluster(v,1,&one))) return e;
+    if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY)) return -FS_EROFS;
+    if (v->ro_reasons&FAT_RO_DIRTY) {
+        if ((e=set_clean(v,true))) return e;
+        v->ro_reasons&=~FAT_RO_DIRTY; v->dirty_recovered=true;
+    }
     v->ro_reasons=0; v->readonly=false; v->writable_session=true;
-    if (cleanbit(v) && ((e=set_cluster(v,1,one&~cleanbit(v))) || (e=barrier(v)))) return e;
-    v->diagnostic="read gate passed; writable";
+    if ((e=set_clean(v,false))) return e;
+    v->diagnostic=v->dirty_recovered ? "dirty_recovered" : "read gate passed; writable";
     return 0;
 }
 int fat_commit(struct fat_volume *v) {
@@ -660,8 +676,7 @@ int fat_commit(struct fat_volume *v) {
 int fat_unmount(struct fat_volume *v) {
     int e=fat_commit(v); if (e) return e;
     if (v->writable_session && !v->readonly && cleanbit(v)) {
-        uint32_t one; if ((e=fat_get_cluster(v,1,&one))) return e;
-        if ((e=set_cluster(v,1,one|cleanbit(v))) || (e=barrier(v))) return e;
+        if ((e=set_clean(v,true))) return e;
     }
     v->mounted=false; return 0;
 }

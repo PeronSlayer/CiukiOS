@@ -8,7 +8,7 @@ from resources import Refusal
 from fat_fixtures import geometry
 
 
-def classify_crash_checker(checked, files, patterns):
+def classify_crash_checker(checked, files, patterns, dirty=True):
     """Declare only empty files or their nonowning orphan LFN slots.
 
     Microsoft fatgen103 pp. 26-28: LFN slots precede their short owner and
@@ -22,10 +22,9 @@ def classify_crash_checker(checked, files, patterns):
     if len({path.casefold() for path in files}) != len(files):
         raise Refusal('duplicate interrupted file declaration')
     lines = [line for line in checked['output'].splitlines() if line.strip()]
-    dirty = 'Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.'
-    if checked['returncode'] != 1 or lines.count(dirty) != 1 or \
-            lines.count(' Automatically removing dirty bit.') != 1 or \
-            lines.count('Leaving filesystem unchanged.') != 1:
+    diagnostic = 'Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.'
+    if type(dirty) is not bool or lines.count(diagnostic) != int(dirty) or \
+            lines.count(' Automatically removing dirty bit.') != int(dirty):
         raise EvidenceError('undeclared crash dirty-bit outcome')
     names = {path[3:]: path for path in files}; orphans = set(); remaining = []
     i = 0
@@ -40,8 +39,36 @@ def classify_crash_checker(checked, files, patterns):
             remaining.append(lines[i]); i += 1
     if not patterns or any(not any(re.fullmatch(p, line) for p in patterns) for line in remaining):
         raise EvidenceError('unclassified interrupted filesystem discrepancy')
-    return {'dirty': True, 'files': [{'path': path, 'state': 'orphan-lfn' if path[3:] in orphans else 'empty-file'}
+    changes = bool(dirty or orphans)
+    if checked['returncode'] != int(changes) or lines.count('Leaving filesystem unchanged.') != int(changes):
+        raise EvidenceError('undeclared crash checker changes or mutating checker')
+    return {'dirty': dirty, 'files': [{'path': path, 'state': 'orphan-lfn' if path[3:] in orphans else 'empty-file'}
                                     for path in files]}
+
+
+def check_recovered_fixture(host, fixture, directory, reports):
+    """Check the raw disposable dirty fixture only after guest teardown."""
+    defect = fixture['corruption']
+    if defect['defect'] != 'dirty':raise EvidenceError('recovery checker requires dirty-only fixture')
+    with open(fixture['path'], 'rb') as stream:
+        g = geometry(stream.read(512)); width = g['kind']//8
+        if g != defect['geometry']:raise EvidenceError('recovery changed fixture geometry')
+        sectors = []
+        for copy, patch in enumerate(defect['patches']):
+            stream.seek((g['reserved']+copy*g['fat_sectors'])*512)
+            sector = stream.read(512); sectors.append(sector)
+            if len(sector) != 512 or sector[width:width*2].hex() != patch['before_hex']:
+                raise EvidenceError('recovered FAT[1] flags or reserved bits mismatch')
+        if len(sectors) != g['fats'] or sectors[0] != sectors[1]:
+            raise EvidenceError('recovered FAT copies diverge')
+    checked = host.checker(['fsck.fat', '-n', fixture['path']], directory)
+    reports.append({'kind': 'fsck.fat-recovered', **checked})
+    patterns = [r'fsck\.fat [0-9.]+ \([0-9-]+\)',
+                r'.*fixture-[0-9]+\.img: [0-9]+ files, [0-9]+/[0-9]+ clusters']
+    lines = [line for line in checked['output'].splitlines() if line.strip()]
+    if checked['returncode'] or not lines or any(not any(re.fullmatch(p, line) for p in patterns) for line in lines):
+        raise EvidenceError('recovered fixture is dirty or corrupt')
+    return {'recovered': True, 'copies_equal': True, 'checker': checked}
 
 
 def check_crash_files(host, volume, directory, classification, reports):

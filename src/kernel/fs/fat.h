@@ -26,7 +26,7 @@ struct fat_volume {
     uint32_t reserved, fat_sectors, root_sector, data_sector, clusters, root, root_entries;
     uint32_t free_clusters, next_free, ro_reasons, lost_clusters;
     uint16_t fsinfo, backup; uint8_t type, spc, fats, media, active_fat;
-    bool mounted, readonly, writable_session;
+    bool mounted, readonly, writable_session, dirty_recovered;
     const char *diagnostic;
     /* Read observations, possibly repeated by lookups; never on-disk counts. */
     uint32_t lfn_orphans, lfn_bad_checksum, lfn_invalid;
@@ -36,7 +36,8 @@ struct fat_volume {
  * requested RO always issues zero writes/flushes. why is retained in volume. */
 int fat_mount(struct fat_volume *, struct block_cache *, struct blkdev *, uint64_t start, uint64_t sectors, bool writable);
 /* f1-09: upgrade an already scanned RO mount; caller refreshes its view and
- * serializes against VFS. Never clears dirty/corruption/error reasons. */
+ * serializes against VFS. Recovers a scanned dirty-only volume durably;
+ * never clears corruption, copy-divergence or hardware-error reasons. */
 int fat_enable_write(struct fat_volume *);
 int fat_unmount(struct fat_volume *);
 int fat_commit(struct fat_volume *);

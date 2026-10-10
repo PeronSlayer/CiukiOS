@@ -153,16 +153,23 @@ This ordering preserves ownership and requires no driver change. For
 `mount-crash-reboot`, the declared workload outcomes are an empty
 `F109CUT.BIN` with no orphan diagnostic, or an absent `F109CUT.BIN` with
 exactly its orphan-LFN diagnostic paired with `Auto-deleting.`; the marker
-MUST remain empty, the dirty diagnostic MUST occur, and cross-links, lost
+MUST remain empty, the dirty diagnostic MUST occur on the boot-1 cut export,
+and cross-links, lost
 chains and every other discrepancy MUST fail. [dosfstools 4.2
 `lfn_check_orphaned()`](https://github.com/dosfstools/dosfstools/blob/v4.2/src/lfn.c#L483)
 proposes deleting only those slots; [`fsck.fat -n`](https://github.com/dosfstools/dosfstools/blob/v4.2/src/fsck.fat.c#L163)
 does not apply the deletion or dirty-bit removal and returns 1 for pending
 changes. Both boots MUST classify all checker output and independently
 verify the corresponding absent/empty file state through mtools; boot 2
-MUST reuse the unrepaired overlay, preserve the directory-sector digest and
-checker report, mount read-only with `lost=0`, `scan_corrupt=0`, and reject
-writes with `EROFS` and zero issued writes.
+MUST reuse the unrepaired overlay and preserve the directory-sector digest
+and classified absent/empty workload state. Per the owner's decision of
+2026-10-11 (f1-26), boot 2 MUST recover a dirty-only volume with `lost=0`,
+`scan_corrupt=0` and no FAT-copy divergence, open the usual read/write gate,
+and report `recovered=1`, `reason=dirty_recovered`, mode `rw` and zero write
+refusals. Its export after durable unmount MUST have no dirty diagnostic;
+the declared orphan-LFN diagnostic remains allowed and MUST NOT be repaired
+by the kernel. Both checker reports MUST agree on the workload state, with
+only the expected removal of the dirty diagnostic between boots.
 
 ## Mount, errors and corruption
 
@@ -170,13 +177,36 @@ writes with `EROFS` and zero issued writes.
   the declared type, root cluster inside the volume, FSInfo signatures, and
   the media byte in `FAT[0]` and the reserved-entry and flag encoding of
   `FAT[1]`. A failure refuses the mount and logs why.
-- A writable mount clears `ClnShutBitMask` (volume in use) and sets it again
-  only after a successful durable unmount. A volume found with
-  `ClnShutBitMask = 0` (not cleanly unmounted) or `HrdErrBitMask = 0`
-  (I/O errors recorded) is mounted read-only until a check passes (a kernel
-  checker arrives in F1 as a read-only scan; repair stays a host-side
-  `fsck.fat` step in F1). The FAT16 and FAT32 masks differ; FAT12 has
-  neither flag. The media byte in `FAT[0]` must match `BPB_Media`.
+- **[F1, f1-26 amendment; owner decision 2026-10-11]** The
+  [Microsoft FAT specification, section 4.2, p. 19](https://www.scs.stanford.edu/~zyedidia/docs/_other/fat.pdf)
+  defines `FAT[1]` masks: FAT16 `ClnShutBitMask=0x8000`,
+  `HrdErrBitMask=0x4000`; FAT32 `0x08000000`, `0x04000000`.
+  A set clean bit means clean shutdown; a set hard-error bit means no
+  recorded I/O error. Clearing the dirty indication therefore means
+  `FAT[1] |= ClnShutBitMask`, preserving the hardware-error bit and all
+  other bits, including FAT32's reserved upper nibble. The existing
+  `fat_mount()` compares complete FAT sectors and runs the bounded
+  ownership scan before `storage_enable_write()` opens the write gate.
+  A dirty-only volume MUST recover automatically when that scan reports
+  `lost=0`, no corruption and no FAT-copy divergence, and durability is
+  qualified. The initial requested read-only mount MUST issue zero writes
+  and flushes; recovery runs when the usual read gate permits write
+  enablement. Set the clean bit in copy 1, barrier, copy 2, barrier (or
+  the single copy and its barrier). These are sector writes through the
+  shared cache, with FLUSH CACHE or verified disabled device caching.
+  Only after all recovery barriers succeed may the driver remove the
+  dirty read-only reason and report `recovered=1`; activation records
+  `reason=dirty_recovered` in its `[storage]` line. Before writable use,
+  clear the clean bit again (`FAT[1] &= ~ClnShutBitMask`) for the new
+  session, with the same per-copy barriers. A successful durable unmount
+  sets it with that same order. A cut between copies leaves a detectable
+  mismatch: the next mount's existing divergence scan MUST retain
+  read-only mode rather than reconcile copies automatically. Lost
+  clusters, corruption, divergent copies, `HrdErrBitMask=0` (reason
+  `error-flag`), unqualified durability or any clearing write/barrier
+  failure MUST retain read-only handling. The hardware-error flag MUST
+  NEVER be cleared automatically; repairs stay a host-side `fsck.fat`
+  step. FAT12 has neither flag. `FAT[0]` must match `BPB_Media`.
 - Chain walks are bounded by the volume's cluster count, so a loop is
   detected instead of hanging.
 - A read error returns `EIO` to the caller. A failed issued ATA command ends
@@ -226,8 +256,11 @@ access to a shared mounted volume is refused (`dos-dpmi-contract.md`).
   ATA driver; host `fsck.fat -n` on the overlay afterwards.
 - F1 hardware: write a known file set on the T23 and E500, power-cycle, read
   it back on the laptop and on the host; checksums match.
-- F1 read-only paths: a dirty-bit image and a corrupted-BPB image mount
-  read-only and refuse, respectively, with logged reasons.
+- F1 mount paths: a consistent dirty-only image recovers after the read
+  gate and exports clean after durable unmount; dirty plus lost clusters,
+  corruption or FAT divergence and hardware-error flags stay read-only.
+  A corrupted BPB refuses mount. Recovery cuts between FAT copies MUST
+  be detected as divergence on the next mount, with logged reasons.
 
 ## Open questions
 

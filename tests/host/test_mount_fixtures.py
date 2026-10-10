@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import test_runner as existing
 import fat_fixtures
-from mount_fixtures import place_marker, classify_crash_checker, check_crash_files
+from mount_fixtures import place_marker, classify_crash_checker, check_crash_files, check_recovered_fixture
 import run as runner
 import resources as res
 
@@ -145,29 +145,136 @@ int main(int argc, char **argv)
             self.assertEqual(runner.sha(manifest['path']),manifest['sha256'])
 
 
+class DirtyRecoveryProbeTests(unittest.TestCase):
+    def test_recovery_checker_requires_clean_matching_flags_and_clean_fsck(self):
+        if not all(shutil.which(tool) for tool in ('mkfs.fat','mcopy','mdir','fsck.fat')):
+            self.skipTest('FAT fixture tools unavailable')
+        scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            directory=Path(directory);host=runner.Host()
+            fixture=host.fat_fixture({'fat_type':32,'seed':1,'corruption':'dirty'},directory,0)
+            with self.assertRaises(runner.EvidenceError):check_recovered_fixture(host,fixture,directory,[])
+            patches=fixture['corruption']['patches']
+            def write(raw_patch,data):
+                with open(fixture['path'],'r+b') as stream:
+                    stream.seek(raw_patch['sector']*512+raw_patch['offset']);stream.write(data)
+            for raw_patch in patches:write(raw_patch,bytes.fromhex(raw_patch['before_hex']))
+            self.assertTrue(check_recovered_fixture(host,fixture,directory,[])['recovered'])
+            for bad in (bytes.fromhex(patches[1]['after_hex']),
+                        (int.from_bytes(bytes.fromhex(patches[1]['before_hex']),'little')&~0x04000000).to_bytes(4,'little')):
+                write(patches[1],bad)
+                with self.assertRaises(runner.EvidenceError):check_recovered_fixture(host,fixture,directory,[])
+                write(patches[1],bytes.fromhex(patches[1]['before_hex']))
+            clean=host.checker(['fsck.fat','-n',fixture['path']],directory)
+            for diagnostic in ('Cross-linked clusters','Dirty bit is set.','FATs differ but appear to be intact.'):
+                with patch.object(host,'checker',return_value={**clean,'output':clean['output']+diagnostic+'\n'}), \
+                     self.assertRaises(runner.EvidenceError):check_recovered_fixture(host,fixture,directory,[])
+
+    def test_production_record_formatting_recovery_and_clean_exports(self):
+        if not all(shutil.which(tool) for tool in ('clang','mkfs.fat','mcopy','mdir','fsck.fat')):
+            self.skipTest('storage host harness tools unavailable')
+        scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            directory=Path(directory);host=runner.Host()
+            boot=host.fat_fixture({'fat_type':32,'seed':1},directory,0)
+            dirty=host.fat_fixture({'fat_type':32,'seed':1,'corruption':'dirty'},directory,1)
+            source=directory/'dirty-probe.c'
+            source.write_text(r'''
+#define main storage_regression_main
+#define rec_emit fixture_rec_emit
+#include "tests/host/fs/test_storage.c"
+#undef main
+#undef rec_emit
+static bool recording;
+static unsigned sequence;
+void rec_emit(const char *probe,const char *event,const char *fmt,...) {
+    char body[1024]; va_list ap; va_start(ap,fmt);
+    if(fmt) vsnprintf(body,sizeof(body),fmt,ap); else body[0]=0;
+    va_end(ap); fixture_rec_emit(probe,event,"%s",body);
+    if(recording) printf("CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s%s%s\n",
+                         ++sequence,probe,event,body[0] ? " " : "",body);
+}
+int main(int argc,char **argv) {
+    CHECK(argc==4); OK(fake_open(&media[0],argv[2]));
+    g_boot.flags=CBI_F_SMBIOS_QEMU;
+    struct storage *s;
+    if(!strcmp(argv[1],"dirty")) {
+        OK(fake_open(&media[2],argv[3])); s=start(); disk_init(2);
+        OK(storage_add_disk(s,1,&disks[2].dev)); host_mount_snapshot(s);
+        recording=true; OK(probe_mount_crash()); stop(s,true); fake_close(&media[2]);
+    } else {
+        baseline(); s=start(); OK(storage_enable_write(s,2));
+        int h=vfs_open(&table,"C:/F109CUT.ARM",VFS_WRITE|VFS_CREATE,0,0);
+        CHECK(h>=0); OK(vfs_close(&table,h)); stop(s,true);
+        s=start(); cut_probe_after_arm=true;
+        CHECK(probe_mount_crash()!=0 && media[0].cut);
+        cut_probe_after_arm=false; stop(s,false); fake_power_loss(&media[0]);
+        uint8_t before[512],after[512]; s=start();
+        uint32_t root=s->volumes[2].fat.data_sector;
+        OK(fake_raw_read(&media[0],root,before)); recording=true;
+        OK(probe_mount_crash()); OK(fake_raw_read(&media[0],root,after));
+        CHECK(!memcmp(before,after,512)); stop(s,true);
+    }
+    fake_close(&media[0]); return 0;
+}
+''')
+            sources=['fs/fs_port.c','fs/cache.c','fs/partition.c','fs/path.c','fs/fat.c','fs/vfs.c',
+                     'fs/mount.c','core/bootlog.c','drivers/blkpart.c','probes/fat_probes.c','lib/sha256.c','lib/fmt.c']
+            exe=directory/'dirty-probe'
+            env={**os.environ,'TMPDIR':str(directory),'ASAN_OPTIONS':'detect_leaks=0'}
+            built=subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+                '-DFS_HOST','-D_POSIX_C_SOURCE=200809L','-pthread','-I',str(ROOT),
+                '-I',str(ROOT/'src/kernel/include'),'-I',str(ROOT/'src/kernel/fs'),str(source),
+                *[str(ROOT/'src/kernel'/p) for p in sources],str(ROOT/'tests/host/fs/fake.c'),
+                str(ROOT/'tests/host/fs/scan.c'),'-o',str(exe)],capture_output=True,text=True,env=env,timeout=60)
+            self.assertEqual(built.returncode,0,built.stdout+built.stderr)
+            suite=runner.load(ROOT/'tests/suites/f1-fat32.json')
+            for mode,case_id in (('dirty','mount-dirty'),('crash','mount-crash-reboot')):
+                with self.subTest(mode=mode):
+                    ran=subprocess.run([str(exe),mode,boot['path'],dirty['path']],
+                                       capture_output=True,text=True,env=env,timeout=30)
+                    self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
+                    parser=runner.Parser('12345678','mount-crash')
+                    for line in ran.stdout.splitlines():
+                        if line.startswith('CIUKI_TEST '):parser.feed(line.encode())
+                    case=next(c for c in suite['cases'] if c['id']==case_id)
+                    self.assertTrue(parser.check(case['expected']))
+                    if mode=='dirty':
+                        self.assertTrue(check_recovered_fixture(host,dirty,directory,[])['copies_equal'])
+                    else:
+                        checked=host.checker(['fsck.fat','-n',boot['path']],directory)
+                        checked['output']=checked['output'].replace(boot['path'],str(directory/'check-volume.raw'))
+                        checks=case['boots'][1]['checks']
+                        classified=classify_crash_checker(checked,checks['interrupted_files'],checks['interrupted_patterns'],dirty=False)
+                        self.assertEqual(classified,{'dirty':False,'files':[{'path':'::/F109CUT.BIN','state':'orphan-lfn'}]})
+
+
 class CrashCheckerTests(unittest.TestCase):
     def setUp(self):
         self.case=next(c for c in runner.load(ROOT/'tests/suites/f1-fat32.json')['cases'] if c['id']=='mount-crash-reboot')
         self.output=existing.CRASH_ORPHAN_FSCK.format(volume='/ciuki/check-volume.raw')
 
-    def classify(self, output, returncode=1):
-        outcomes=[]
-        for boot in self.case['boots']:
-            checks=boot['checks']
-            self.assertEqual(checks['fsck_exit_codes'],[1])
-            self.assertEqual(checks['empty_files'],['::/F109CUT.ARM'])
-            outcomes.append(classify_crash_checker({'output':output,'returncode':returncode},
-                checks['interrupted_files'],checks['interrupted_patterns']))
-        self.assertEqual(outcomes[0],outcomes[1])
-        return outcomes[0]
+    def classify(self, output, returncode=1, dirty=True):
+        checks=self.case['boots'][0 if dirty else 1]['checks']
+        self.assertEqual(checks['dirty'],dirty)
+        self.assertEqual(checks['empty_files'],['::/F109CUT.ARM'])
+        return classify_crash_checker({'output':output,'returncode':returncode},
+            checks['interrupted_files'],checks['interrupted_patterns'],dirty)
 
     def test_captured_orphan_is_declared_for_both_boots(self):
         self.assertEqual(self.classify(self.output),
                          {'dirty':True,'files':[{'path':'::/F109CUT.BIN','state':'orphan-lfn'}]})
+        self.assertEqual(self.classify(existing.CRASH_RECOVERED_FSCK.format(volume='/ciuki/check-volume.raw'),dirty=False),
+                         {'dirty':False,'files':[{'path':'::/F109CUT.BIN','state':'orphan-lfn'}]})
 
     def test_empty_workload_remains_declared(self):
         output=self.output.replace('Orphaned long file name part "F109CUT.BIN"\n  Auto-deleting.\n','')
         self.assertEqual(self.classify(output)['files'],[{'path':'::/F109CUT.BIN','state':'empty-file'}])
+        clean=output.replace('Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.\n'
+                             ' Automatically removing dirty bit.\n','').replace('Leaving filesystem unchanged.\n','')
+        self.assertEqual(self.classify(clean,returncode=0,dirty=False),
+                         {'dirty':False,'files':[{'path':'::/F109CUT.BIN','state':'empty-file'}]})
 
     def test_orphan_attribution_and_every_other_diagnostic_are_strict(self):
         pair='Orphaned long file name part "F109CUT.BIN"\n  Auto-deleting.\n'
@@ -189,6 +296,11 @@ class CrashCheckerTests(unittest.TestCase):
         for returncode in (0,2):
             with self.subTest(returncode=returncode),self.assertRaises(runner.EvidenceError):
                 self.classify(self.output,returncode)
+        with self.assertRaises(runner.EvidenceError):self.classify(self.output,dirty=False)
+        recovered=existing.CRASH_RECOVERED_FSCK.format(volume='/ciuki/check-volume.raw')
+        for output in (recovered+'Cross-linked clusters\n',recovered+'FATs differ but appear to be intact.\n',
+                       recovered.replace('Leaving filesystem unchanged.\n',''),recovered+' Automatically removing dirty bit.\n'):
+            with self.subTest(output=output),self.assertRaises(runner.EvidenceError):self.classify(output,dirty=False)
 
     def test_listing_errors_and_directory_names_never_prove_absence(self):
         classification=self.classify(self.output)
@@ -387,17 +499,23 @@ class CrashRunnerTests(unittest.TestCase):
             order.append(args[0])
             output='F109CUT ARM'
             if '-n' in args:
+                boot=order.count('fsck.fat')-1
                 output='fsck.fat 4.2 (2021-01-31)\nDirty bit is set. Fs was not properly unmounted and some data may be corrupt.\n Automatically removing dirty bit.\nLeaving filesystem unchanged.\n'+str(directory/'check-volume.raw')+': 2 files, 1/100000 clusters\n'
                 if checker_output is not None:
-                    selected=checker_output[order.count('fsck.fat')-1] if isinstance(checker_output,list) else checker_output
+                    selected=checker_output[boot] if isinstance(checker_output,list) else checker_output
                     output=selected.format(volume=directory/'check-volume.raw')
+                if boot and not isinstance(checker_output,list):
+                    output=output.replace('Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.\n'
+                                          ' Automatically removing dirty bit.\n','')
+                    if 'Orphaned long file name part' not in output:output=output.replace('Leaving filesystem unchanged.\n','')
                 if bad_checker:output+='Cross-linked clusters\n'
             elif '-b' in args:
                 selected=checker_output[order.count('fsck.fat')-1] if isinstance(checker_output,list) else checker_output
                 files=['::/F109CUT.ARM']
                 if selected is None or 'Orphaned long file name part' not in selected:files.append('::/F109CUT.BIN')
                 output='\n'.join(files if listed_files is None else listed_files)+'\n'
-            return {'arguments':args,'returncode':1 if '-n' in args else 0,'output':output,'output_sha256':hashlib.sha256(output.encode()).hexdigest()}
+            changes='Dirty bit is set.' in output or 'Orphaned long file name part' in output
+            return {'arguments':args,'returncode':int(changes) if '-n' in args else 0,'output':output,'output_sha256':hashlib.sha256(output.encode()).hexdigest()}
         def digest(host,overlay,directory,lba,count,fmt):
             self.assertIsNotNone(host.process.poll());order.append('digest')
             return {'size':512,'sha256':('b' if bad_digest and order.count('digest')==2 else 'a')*64}
@@ -416,6 +534,8 @@ class CrashRunnerTests(unittest.TestCase):
         self.assertEqual(order[0],'marker');self.assertEqual(order.count('export'),2)
         self.assertEqual(result['crash_comparison']['index'],2)
         self.assertEqual(result['crash_comparison']['durable_sectors'],[1])
+        self.assertTrue(result['crash_comparison']['dirty_recovered'])
+        self.assertGreaterEqual(result['crash_comparison']['reboot_writes'],4)
         boots=result['reboot_sequence'];self.assertEqual(len({b['overlay'] for b in boots}),1)
         self.assertEqual(boots[0]['marker_manifest'][0]['file'],'F109CUT.ARM')
         self.assertEqual(boots[1]['marker_manifest'],[])
@@ -434,11 +554,11 @@ class CrashRunnerTests(unittest.TestCase):
         self.assertEqual(order.count('export'),2)
         boots=result['reboot_sequence'];self.assertEqual(len(boots),2)
         self.assertEqual(boots[0]['crash_overlay'],boots[1]['crash_overlay'])
-        for boot in boots:
+        for index,boot in enumerate(boots):
             report=next(r for r in boot['checkers'] if r['kind']=='fsck.fat')
             self.assertEqual(report['returncode'],1)
             self.assertEqual(report['interrupted_outcomes'],
-                             {'dirty':True,'files':[{'path':'::/F109CUT.BIN','state':'orphan-lfn'}]})
+                             {'dirty':index==0,'files':[{'path':'::/F109CUT.BIN','state':'orphan-lfn'}]})
             self.assertTrue(any(r.get('absent') for r in boot['checkers'] if r.get('path')=='::/F109CUT.BIN'))
         self.assertTrue(result['crash_comparison']['checkers_match'])
 
@@ -457,7 +577,7 @@ class CrashRunnerTests(unittest.TestCase):
                 self.assertTrue(Path(result['reboot_sequence'][0]['overlay']).exists())
 
     def test_changed_orphan_outcome_between_boots_fails(self):
-        empty=existing.CRASH_ORPHAN_FSCK.replace('Orphaned long file name part "F109CUT.BIN"\n  Auto-deleting.\n','')
+        empty=existing.CRASH_RECOVERED_FSCK.replace('Orphaned long file name part "F109CUT.BIN"\n  Auto-deleting.\n','').replace('Leaving filesystem unchanged.\n','')
         result,_,_=self.run_sequence(self.scenario(),checker_output=[existing.CRASH_ORPHAN_FSCK,empty])
         self.assertEqual(result['outcome'],'fail')
         self.assertEqual(result['unattempted_boots'],0)
