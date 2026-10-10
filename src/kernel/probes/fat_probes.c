@@ -15,6 +15,7 @@
 
 static struct vfs_table probe_table;
 static struct fat_entry entry;
+static struct fat_entry lookup_entry;
 static char walk_path[FS_PATH_BYTES];
 static struct { uint32_t directory, cursor; unsigned length; } walk[32];
 
@@ -88,7 +89,7 @@ static int digest_record(const char *probe, unsigned id, struct vfs_table *table
 static int list_volume(const char *probe, struct storage_volume *v, unsigned *id)
 {
     struct sha256_ctx listing; sha256_init(&listing);
-    unsigned depth = 0, entries = 0;
+    unsigned depth = 0, entries = 0, name_errors = 0, alias_errors = 0, size_errors = 0;
     walk_path[0] = (char)('A' + v->drive); walk_path[1] = ':'; walk_path[2] = '/'; walk_path[3] = 0;
     walk[0].directory = v->fat.type == 32 ? v->fat.root : 0; walk[0].cursor = 0; walk[0].length = 3;
     for (;;) {
@@ -96,6 +97,10 @@ static int list_volume(const char *probe, struct storage_volume *v, unsigned *id
         if (e == -FS_ENOENT) { if (!depth) break; depth--; continue; }
         if (e) return e;
         if (path_equal(entry.alias, ".") || path_equal(entry.alias, "..")) continue;
+        e = fat_lookup(&v->fat, walk[depth].directory, entry.name, &lookup_entry);
+        if (e || (strlen(entry.name) != strlen(lookup_entry.name) || memcmp(entry.name, lookup_entry.name, strlen(entry.name)))) name_errors++;
+        e = fat_lookup(&v->fat, walk[depth].directory, entry.alias, &lookup_entry);
+        if (e || (strlen(entry.alias) != strlen(lookup_entry.alias) || memcmp(entry.alias, lookup_entry.alias, strlen(entry.alias)))) alias_errors++;
         unsigned length = walk[depth].length, name = (unsigned)strlen(entry.name);
         if (length + name + 2 > sizeof(walk_path) || ++entries > 16384) return -FS_ENAMETOOLONG;
         memcpy(walk_path + length, entry.name, name + 1);
@@ -112,7 +117,8 @@ static int list_volume(const char *probe, struct storage_volume *v, unsigned *id
         if (!(entry.attr & FAT_ATTR_DIR)) {
             uint32_t bytes; char hex[65];
             e = storage_file_digest(&probe_table, walk_path, digest, &bytes);
-            if (e || bytes != entry.size) return e ? e : -FS_EIO;
+            if (e) return e;
+            if (bytes != entry.size) size_errors++;
             sha256_hex(digest, hex);
             rec_emit(probe, "DATA", "case=file id=%u size=%u sha256=%s", current, bytes, hex);
             int h = vfs_open(&probe_table, walk_path, VFS_READ, VFS_DENY_NONE, 0);
@@ -140,7 +146,9 @@ static int list_volume(const char *probe, struct storage_volume *v, unsigned *id
     }
     uint8_t digest[32]; char hex[65]; sha256_final(&listing, digest); sha256_hex(digest, hex);
     rec_emit(probe, "DATA", "case=list drive=%c entries=%u sha256=%s", 'A' + v->drive, entries, hex);
-    return 0;
+    rec_emit(probe, "DATA", "group=fat-read drive=%c fat_type=%u name_errors=%u alias_errors=%u size_errors=%u write_count=%llu chain_bounded=1",
+             'A' + v->drive, v->fat.type, name_errors, alias_errors, size_errors, v->writes);
+    return name_errors || alias_errors || size_errors ? -FS_EIO : 0;
 }
 int probe_fat_read(void)
 {
