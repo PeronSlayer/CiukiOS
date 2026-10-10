@@ -393,7 +393,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     if (!strcmp(event, "READY")) record_ready++;
     if (!strcmp(event, "END")) {
         if (!strcmp(extra, "status=PASS")) record_pass++;
-        else if (strstr(extra, "status=not_run")) record_deferred++;
+        else if (strstr(extra, "status=not_run") || strstr(extra, "status=NOT_RUN")) record_deferred++;
         else if (*expected_end && !strcmp(extra, expected_end)) record_fail++;
         else { printf("probe failure: %s\n", record); CHECK(false); }
     }
@@ -422,6 +422,13 @@ int udelay(uint32_t us)
 #include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/drivers/i8042.c"
 #include "../../src/kernel/drivers/fwinput_adapter.c"
+#include "../../src/kernel/probes/selector.c"
+static unsigned operator_prompts;
+static uint64_t operator_prompt_at;
+void console_operator_prompt(bool announce)
+{
+    if (announce) { operator_prompts++; operator_prompt_at=deadline_after_ms(0); }
+}
 #include "../../src/kernel/drivers/i8042_probe.c"
 
 int biosvm_selftest(struct biosvm_selftest_report *out)
@@ -1179,13 +1186,25 @@ static void test_probe_records(void)
     CHECK(probe_input() == 0 && !record_deferred && record_pass == 2);
     replay_input = false;
     CHECK(!hw.reads && !hw.writes && !pic_changes);
+    /* Sweep-only wait retains the first event and counts a complete replay.
+     * No event ends after 60 s, rather than entering the 120 s window. */
+    reset_native(); probes_operator_mode = true;
+    replay_input = true; replay_cycles = 0;
+    CHECK(probe_input() == 0 && replay_cycles == 100 && operator_prompts == 1);
+    replay_input = false;
+    reset_native();
+    unsigned skipped = record_deferred;
+    CHECK(probe_input() == -ECANCELED && record_deferred == skipped + 1);
+    CHECK(deadline_after_ms(0) - operator_prompt_at == 60000 && operator_prompts == 2);
+    CHECK(native.stats.active && !native.stats.quarantined);
+    probes_operator_mode = false;
     reset_native();
     select_fault("f1:input-fault run=12ab34cd");
     struct registry_stats before, after;
     registry_snapshot(&before);
     CHECK(probe_input_fault() == 0);
     registry_snapshot(&after);
-    CHECK(record_pass == 3 && !host_survivor && !fixture && !hw.reads && !hw.writes && !pic_changes);
+    CHECK(record_pass == 4 && !host_survivor && !fixture && !hw.reads && !hw.writes && !pic_changes);
     CHECK(before.claims == after.claims && before.live == after.live && before.quarantines == after.quarantines);
     for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
     printf("i8042 probe orchestration/records: PASS (%u records, maximum %zu bytes, native PASS/firmware PASS/fault PASS)\n",

@@ -95,6 +95,62 @@ class PhysicalImportTests(unittest.TestCase):
         self.assertEqual(result[1]['outcome'],'not_run')
         self.assertIn('independent',result[1]['reason'])
 
+    def operator_capture(self, probe, fail=False):
+        self.sweep_capture()
+        def record(p, seq, event, extra=''):
+            return f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe={p} event={event}{extra}\r\n'
+        banner='L:CPU signature=000006b1\r\nL:SELECT_SOURCE=cfg\r\nCiuki VMM F0 build 12ab34cd - CiukiOS\r\n'
+        subcase='stimulus' if probe=='input' else 'interaction'
+        server='' if probe=='input' else ' server=desktop'
+        raw=banner+record(probe,1,'BEGIN')
+        raw+=record(probe,2,'DATA',' case=setup result=0' if probe=='input' else ' case=cycles server=desktop cycles=100 desktop_restarts=0')
+        raw+=record(probe,3,'DATA',f'{server} subcase={subcase} status=not_run reason=operator_absent')
+        raw+=record(probe,4,'DATA',' case=lease active=1 quarantined=0' if probe=='input' else ' case=ledger objects_equal=1 processes_equal=1')
+        raw+=record(probe,5,'END',f'{server} status='+('FAIL reason=independent_failure' if fail else 'NOT_RUN reason=operator_absent'))
+        raw+=record(probe,6,'SWEEP',' step=0 result='+('fail' if fail else 'not_run reason=operator_absent'))
+        raw+=banner+record('boot',1,'BEGIN')+record('boot',2,'END',' status=PASS')
+        raw+=record('sweep',3,'SWEEP_END',f' passed=1 failed={int(fail)} not_run={int(not fail)}')
+        (self.capture/'f0.log').write_bytes(raw.encode())
+        return [{'id':p,'probe':p,'expected':{'terminal':'END','predicates':[]}} for p in (probe,'boot')]
+
+    def test_operator_absence_maps_to_confirmation_without_blocking_later_cases(self):
+        for probe in ('input','crash-isolation'):
+            cases=self.operator_capture(probe)
+            for confirmed in (False,True):
+                self.metadata['case_confirmations']={probe:confirmed}
+                (self.capture/'acquisition.json').write_text(json.dumps(self.metadata))
+                results=import_sweep(self.capture,self.hash,cases)
+                self.assertEqual([r['outcome'] for r in results],['not_run','pass'])
+                self.assertEqual(results[0]['reason'],'operator_absent')
+                self.assertTrue(results[0]['operator_confirmation_required'])
+                self.assertEqual(results[0]['operator_confirmation'],confirmed)
+                self.assertEqual(results[0]['not_run_subcases'],[{'subcase':'stimulus' if probe=='input' else 'interaction','reason':'operator_absent'}])
+                self.assertEqual(results[0]['observed'][1].get('case'),'setup' if probe=='input' else 'cycles')
+                self.assertEqual(results[0]['sweep_summary'][0]['not_run'],'1')
+
+    def test_operator_absence_does_not_hide_independent_failure(self):
+        for probe in ('input','crash-isolation'):
+            cases=self.operator_capture(probe,fail=True)
+            results=import_sweep(self.capture,self.hash,cases)
+            self.assertEqual(results[0]['outcome'],'fail')
+            self.assertTrue(results[0]['not_run_subcases'])
+            self.assertEqual(results[1]['outcome'],'not_run')
+            self.assertIn('prerequisite failed',results[1]['reason'])
+
+    def test_operator_records_reject_missing_wrong_duplicate_and_pass_subcases(self):
+        cases=self.operator_capture('input');path=self.capture/'f0.log';raw=path.read_bytes()
+        for before,after in ((b'subcase=stimulus',b'subcase=interaction'),
+                             (b'status=NOT_RUN reason=operator_absent',b'status=PASS'),
+                             (b'event=DATA subcase=stimulus status=not_run reason=operator_absent',b'event=DATA case=motion x=0'),
+                             (b'L:SELECT_SOURCE=cfg',b'L:SELECT_SOURCE=menu')):
+            path.write_bytes(raw.replace(before,after))
+            with self.subTest(before=before),self.assertRaises(EvidenceError):
+                import_sweep(self.capture,self.hash,cases)
+        duplicate=b'CIUKI_TEST v=1 run=12345678 seq=000004 probe=input event=DATA subcase=stimulus status=not_run reason=operator_absent\r\n'
+        path.write_bytes(raw.replace(b' seq=000004 probe=input',b' seq=000005 probe=input').replace(b' seq=000005 probe=input event=END',b' seq=000006 probe=input event=END').replace(b' seq=000006 probe=input event=SWEEP',b' seq=000007 probe=input event=SWEEP').replace(b'CIUKI_TEST v=1 run=12345678 seq=000005 probe=input event=DATA case=lease',duplicate+b'CIUKI_TEST v=1 run=12345678 seq=000005 probe=input event=DATA case=lease'))
+        with self.assertRaisesRegex(EvidenceError,'operator_absent subcase'):
+            import_sweep(self.capture,self.hash,cases)
+
     def test_real_t23_boot_boundaries(self):
         source=ROOT/'build/f1-28/t23-capture.log'
         if not source.exists(): self.skipTest('private hardware capture is local only')

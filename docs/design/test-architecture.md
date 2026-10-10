@@ -68,6 +68,24 @@ used copy-on-write. Earlier, `/tmp` (a 7.4 GiB tmpfs, that is RAM) filled with
 8. **Results are evidence only for the image they ran on.** `result.json`
    records the image SHA-256, git revision, QEMU version and profile.
 
+F1-31 operator waits apply only to cfg sweep boots, before the normal input
+stimulus or post-fault desktop interaction window: announce a screen/serial
+prompt, retain the first event, and wait at most 60 seconds. Absence produces
+a DATA subcase `status=not_run reason=operator_absent`, followed by
+`END status=NOT_RUN reason=operator_absent` only if the other checks passed;
+an independent failure retains END FAIL. SWEEP records count/reason and the
+physical importer preserves the subcase and operator-confirmation class
+without blocking later observations solely for operator absence. Research:
+QEMU's [input QMP API](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event)
+defines separate key/button down/up and relative motion events; comparison
+with i8042_probe.c, the desktop interaction and console.c confirms that the
+runner's existing ARM/stimulus sequence must remain unchanged, while a cfg
+sweep needs a first-event deadline and a prompt row refreshed through the
+existing console/presenter arbitration. The cfg desktop pixel digest excludes
+the prompt's first 16 pixel rows so the prompt cannot qualify as a desktop redraw.
+No input events are synthesized and
+no QEMU qualification or hardware success is inferred from the host tests.
+
 ## Migration
 
 The pre-cleanup test scripts were archived in

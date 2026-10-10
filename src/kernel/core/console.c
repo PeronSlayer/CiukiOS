@@ -171,6 +171,26 @@ bool console_init_lfb(void)
 
 void console_set_color(uint32_t f, uint32_t b) { fg = f; bg = b; }
 
+/* The desktop owns and repaints the LFB. Refresh just one prompt row through
+ * the existing console/presenter arbitration, without history scrolling or
+ * holding a framebuffer claim across the operator wait. Serial is announced
+ * once; retries only redraw the screen after an overlapping presentation. */
+void console_operator_prompt(bool announce)
+{
+    static const char message[] = "[operator] press A, move the pointer, click (60 s)";
+    if (announce) {
+        serial_write(message, sizeof(message) - 1);
+        serial_write("\n", 1);
+    }
+    if (con_kind == CON_NONE || !rows || !cols) return;
+    uint32_t flags = line_begin();
+    unsigned c = 0;
+    for (; c < cols && c < sizeof(message) - 1; c++)
+        draw_cell(c, 0, message[c]);
+    for (; c < cols; c++) draw_cell(c, 0, ' ');
+    line_end(flags);
+}
+
 void console_write(const char *s, size_t n)
 {
     if (con_kind == CON_NONE)
