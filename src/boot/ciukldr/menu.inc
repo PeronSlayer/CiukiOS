@@ -72,7 +72,7 @@ selector_validate:
     loop .hex
     cmp si, [selector_end]
     je .good
-    ; Optional fw_cfg-only suffixes, in order: " platform=e500", " safe=1".
+    ; Optional fw_cfg-only suffixes: platform, safe, F2 crash server.
     cmp byte [selector_fw], 1
     jne .bad
     mov ax, [selector_end]
@@ -95,12 +95,38 @@ selector_validate:
     mov ax, [selector_end]
     sub ax, si
     cmp ax, 7
-    jne .bad
+    jb .try_server
+    push si
     mov di, safe_suffix
     mov cx, 7
     repe cmpsb
-    jne .bad
+    pop di
+    jne .try_server_from_di
     mov byte [selector_safe], 1
+    cmp si, [selector_end]
+    je .good
+    jmp .try_server
+.try_server_from_di:
+    mov si, di
+.try_server:
+    mov ax, [selector_end]
+    sub ax, si
+    cmp ax, 15
+    jne .bad
+    ; BX still identifies the exact matched probe, not a text prefix.
+    cmp bx, f2_crash_name
+    jne .bad
+    push si
+    mov di, desktop_suffix
+    mov cx, 15
+    repe cmpsb
+    pop di
+    je .good
+    mov si, di
+    mov di, standin_suffix
+    mov cx, 15
+    repe cmpsb
+    jne .bad
 .good:
     mov si, [selector_start]
     mov cx, [selector_len]
@@ -151,9 +177,12 @@ f1_probe_names db 'all',0,'core',0
     db 'registry',0,'input',0,'input-fault',0,'framebuffer',0,'ata',0,'ata-fault',0
     db 'partition',0,'fat-read',0,'fat-write',0,'cache',0,'mount-crash',0,'safe',0,'bootlog',0,0
 f2_probe_names db 'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'signals-fault',0
-    db 'threads-wait',0,'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
+    db 'threads-wait',0
+f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
+desktop_suffix db ' server=desktop'
+standin_suffix db ' server=standin'
 selector_fw db 0
 selector_force db 0
 selector_safe db 0
