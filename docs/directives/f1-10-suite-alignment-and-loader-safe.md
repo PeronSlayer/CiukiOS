@@ -11,7 +11,9 @@
   only if a predicate feature is missing, `src/boot/ciukldr/menu.inc`,
   `scripts/test/loader_model.py` and `tests/host/test_loader_model.py`,
   `src/kernel/core/console.c` and `src/kernel/drivers/fbdev.c` (shared
-  presenter/console lock only), `src/kernel/include/ciuki/fbdev.h`.
+  presenter/console lock only), `src/kernel/include/ciuki/fbdev.h`,
+  `src/kernel/probes/probes.c` and a new `src/kernel/probes/selector.c`/`.h`
+  only for the test seam of point 4b, `scripts/test/run.py` for point 4a.
   Nothing else.
 
 ## What to do
@@ -43,6 +45,22 @@
    and the console skips drawing while a present of its rows is in
    progress (`fbdev` exposes `fbdev_console_region(rows)`); document the
    rule in `fbdev.h`. No change to the panic path's lock-free behaviour.
+
+4. **Two defects observed on 2026-10-11 (image `17524054…`)**: (a) the
+   `operator_confirmation_cases` lists of the f1/f2 suites do not cover the
+   F0 regression cases imported on every profile (`uart-absent-qemu-t23`,
+   `-qemu-e500`, `-qemu-min128`), so `f2-process` stopped all later cases
+   as `not_run`; make the rule match by probe/subcase (not by a hand-written
+   id list) so any imported operator-confirmation case never gates. (b)
+   `tests/host/test_runner.py::test_production_kernel_selector_names_and_phase_dispatch`
+   slices `probes.c` by string offsets and broke when f1-08 added the
+   `drivers_init` call and eight registered F1 probes; rebuild that test so
+   it compiles the parser/dispatch through a stable seam (for example a
+   small `probes_parse.c`/header split if needed, counted as a probes.c
+   edit limited to moving `parse_selector` and the dispatch loop into a
+   separately compilable unit without behaviour change) and asserts the
+   current probe tables from the linker map rather than from source text.
+   The runner's host prerequisite step must pass on the merged tree.
 
 ## Host tests (mandatory)
 
