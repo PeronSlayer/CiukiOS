@@ -1830,6 +1830,11 @@
   "contract": "docs/design/f2-acceptance.md",
   "references": [
     "https://www.qemu.org/docs/master/specs/fw_cfg.html",
-    "https://docs.python.org/3/library/hashlib.html"
-  ]
+    "https://docs.python.org/3/library/hashlib.html",
+    "https://pubs.opengroup.org/onlinepubs/9799919799/functions/nanosleep.html",
+    "https://pubs.opengroup.org/onlinepubs/9799919799/functions/wait.html",
+    "https://www.lua.org/tests/",
+    "https://www.lua.org/manual/5.4/manual.html#pdf-os.exit"
+  ],
+  "evidence_source": "No app-gate controller is registered in this source state and no app-gate.records was supplied. lua-basic is the contract-required controller result; stdout_cases are derived from apps/lua/ciuki-f2.lua. Provenance/setup/wait status remain independently enforced by record_f2_result. This suite cannot qualify app-gate until its controller exists."
 }

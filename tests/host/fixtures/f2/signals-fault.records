@@ -1,0 +1,212 @@
+CIUKI_TEST v=1 run=0704fc09 seq=000001 probe=signals-fault event=BEGIN
+CIUKI_TEST v=1 run=0704fc09 seq=000002 probe=signals-fault event=DATA case=image sha256=dd30d235d6a93f44897db741187bc46dd0eca9cd000b654351259849fb1d8939 payload=interim_nasm
+CIUKI_TEST v=1 run=0704fc09 seq=000003 probe=signals-fault event=DATA case=fault-repair part=observed index=1 signal=11 vector=14 code=1 error=00000004
+CIUKI_TEST v=1 run=0704fc09 seq=000004 probe=signals-fault event=DATA case=fault-repair part=expected index=1 signal=11 vector=14 code=1 error=00000004
+CIUKI_TEST v=1 run=0704fc09 seq=000005 probe=signals-fault event=DATA case=fault-repair part=addresses index=1 address=bfbff000 expected_addr=bfbff000 eip=004001db expected_eip=004001db
+CIUKI_TEST v=1 run=0704fc09 seq=000006 probe=signals-fault event=DATA case=fault-repair part=context index=1 pid=5 tid=4 mask=00000000 x87_digest=e8671897
+CIUKI_TEST v=1 run=0704fc09 seq=000007 probe=signals-fault event=DATA case=fault-repair part=observed index=2 signal=11 vector=14 code=2 error=00000007
+CIUKI_TEST v=1 run=0704fc09 seq=000008 probe=signals-fault event=DATA case=fault-repair part=expected index=2 signal=11 vector=14 code=2 error=00000007
+CIUKI_TEST v=1 run=0704fc09 seq=000009 probe=signals-fault event=DATA case=fault-repair part=addresses index=2 address=00400000 expected_addr=00400000 eip=0040023b expected_eip=0040023b
+CIUKI_TEST v=1 run=0704fc09 seq=000010 probe=signals-fault event=DATA case=fault-repair part=context index=2 pid=5 tid=4 mask=00000000 x87_digest=e8671897
+CIUKI_TEST v=1 run=0704fc09 seq=000011 probe=signals-fault event=DATA case=fault-repair part=observed index=3 signal=4 vector=6 code=1 error=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000012 probe=signals-fault event=DATA case=fault-repair part=expected index=3 signal=4 vector=6 code=1 error=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000013 probe=signals-fault event=DATA case=fault-repair part=addresses index=3 address=0040028d expected_addr=0040028d eip=0040028d expected_eip=0040028d
+CIUKI_TEST v=1 run=0704fc09 seq=000014 probe=signals-fault event=DATA case=fault-repair part=context index=3 pid=5 tid=4 mask=00000000 x87_digest=e8671897
+CIUKI_TEST v=1 run=0704fc09 seq=000015 probe=signals-fault event=DATA case=fault-repair part=observed index=4 signal=8 vector=0 code=1 error=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000016 probe=signals-fault event=DATA case=fault-repair part=expected index=4 signal=8 vector=0 code=1 error=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000017 probe=signals-fault event=DATA case=fault-repair part=addresses index=4 address=004002e3 expected_addr=004002e3 eip=004002e3 expected_eip=004002e3
+CIUKI_TEST v=1 run=0704fc09 seq=000018 probe=signals-fault event=DATA case=fault-repair part=context index=4 pid=5 tid=4 mask=00000000 x87_digest=e8671897
+CIUKI_TEST v=1 run=0704fc09 seq=000019 probe=signals-fault event=DATA case=fault-repair part=observed index=5 signal=11 vector=13 code=2 error=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000020 probe=signals-fault event=DATA case=fault-repair part=expected index=5 signal=11 vector=13 code=2 error=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000021 probe=signals-fault event=DATA case=fault-repair part=addresses index=5 address=00400330 expected_addr=00400330 eip=00400330 expected_eip=00400330
+CIUKI_TEST v=1 run=0704fc09 seq=000022 probe=signals-fault event=DATA case=fault-repair part=context index=5 pid=5 tid=4 mask=00000000 x87_digest=e8671897
+CIUKI_TEST v=1 run=0704fc09 seq=000023 probe=signals-fault event=DATA case=fault-repair part=observed index=6 signal=8 vector=16 code=7 error=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000024 probe=signals-fault event=DATA case=fault-repair part=expected index=6 signal=8 vector=16 code=7 error=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000025 probe=signals-fault event=DATA case=fault-repair part=addresses index=6 address=00400407 expected_addr=00400407 eip=00400407 expected_eip=00400407
+CIUKI_TEST v=1 run=0704fc09 seq=000026 probe=signals-fault event=DATA case=fault-repair part=context index=6 pid=5 tid=4 mask=00000000 x87_digest=e8671897
+CIUKI_TEST v=1 run=0704fc09 seq=000027 probe=signals-fault event=DATA case=fault-repair part=identity pid=5 tid=4 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000028 probe=signals-fault event=DATA case=fault-repair part=fault signal=8 vector=16 code=7 trap_error=00000000 address=00400407 eip=00400407
+CIUKI_TEST v=1 run=0704fc09 seq=000029 probe=signals-fault event=DATA case=fault-repair part=status expected=0 observed=512 raw_vector=16 corruption=2
+CIUKI_TEST v=1 run=0704fc09 seq=000030 probe=signals-fault event=DATA case=fault-repair part=handlers entries=6 returns=6 max_depth=1 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000031 probe=signals-fault event=DATA case=fault-repair part=sleep result=0 elapsed_ms=0 saved_eax=20000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000032 probe=signals-fault event=DATA case=fault-repair part=context mask=00000000 x87_digest=e8671897
+CIUKI_TEST v=1 run=0704fc09 seq=000033 probe=signals-fault event=DATA case=fault-repair survivor_pid=3 progress_before=0 progress_after=15599378 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000034 probe=signals-fault event=DATA case=mask-coalesce-group part=identity pid=6 tid=5 sender=6
+CIUKI_TEST v=1 run=0704fc09 seq=000035 probe=signals-fault event=DATA case=mask-coalesce-group part=fault signal=12 vector=0 code=0 trap_error=00000000 address=00000000 eip=0040059d
+CIUKI_TEST v=1 run=0704fc09 seq=000036 probe=signals-fault event=DATA case=mask-coalesce-group part=status expected=0 observed=0 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000037 probe=signals-fault event=DATA case=mask-coalesce-group part=handlers entries=2 returns=2 max_depth=1 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000038 probe=signals-fault event=DATA case=mask-coalesce-group part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000039 probe=signals-fault event=DATA case=mask-coalesce-group part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000040 probe=signals-fault event=DATA case=mask-coalesce-group survivor_pid=3 progress_before=15599378 progress_after=22034686 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000041 probe=signals-fault event=DATA case=default-fault part=identity pid=7 tid=0 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000042 probe=signals-fault event=DATA case=default-fault part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000043 probe=signals-fault event=DATA case=default-fault part=status expected=11 observed=11 raw_vector=14 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000044 probe=signals-fault event=DATA case=default-fault part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000045 probe=signals-fault event=DATA case=default-fault part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000046 probe=signals-fault event=DATA case=default-fault part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000047 probe=signals-fault event=DATA case=default-fault survivor_pid=3 progress_before=22034686 progress_after=26880070 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000048 probe=signals-fault event=DATA case=blocked-fault part=identity pid=8 tid=0 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000049 probe=signals-fault event=DATA case=blocked-fault part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000050 probe=signals-fault event=DATA case=blocked-fault part=status expected=11 observed=11 raw_vector=14 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000051 probe=signals-fault event=DATA case=blocked-fault part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000052 probe=signals-fault event=DATA case=blocked-fault part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000053 probe=signals-fault event=DATA case=blocked-fault part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000054 probe=signals-fault event=DATA case=blocked-fault survivor_pid=3 progress_before=26880070 progress_after=31722877 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000055 probe=signals-fault event=DATA case=ignored-fault part=identity pid=9 tid=0 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000056 probe=signals-fault event=DATA case=ignored-fault part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000057 probe=signals-fault event=DATA case=ignored-fault part=status expected=11 observed=11 raw_vector=14 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000058 probe=signals-fault event=DATA case=ignored-fault part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000059 probe=signals-fault event=DATA case=ignored-fault part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000060 probe=signals-fault event=DATA case=ignored-fault part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000061 probe=signals-fault event=DATA case=ignored-fault survivor_pid=3 progress_before=31722877 progress_after=36565400 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000062 probe=signals-fault event=DATA case=bad-stack part=identity pid=10 tid=0 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000063 probe=signals-fault event=DATA case=bad-stack part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000064 probe=signals-fault event=DATA case=bad-stack part=status expected=11 observed=11 raw_vector=14 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000065 probe=signals-fault event=DATA case=bad-stack part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000066 probe=signals-fault event=DATA case=bad-stack part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000067 probe=signals-fault event=DATA case=bad-stack part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000068 probe=signals-fault event=DATA case=bad-stack survivor_pid=3 progress_before=36565400 progress_after=41417594 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000069 probe=signals-fault event=DATA case=handler-fault part=identity pid=11 tid=0 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000070 probe=signals-fault event=DATA case=handler-fault part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000071 probe=signals-fault event=DATA case=handler-fault part=status expected=4 observed=4 raw_vector=6 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000072 probe=signals-fault event=DATA case=handler-fault part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000073 probe=signals-fault event=DATA case=handler-fault part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000074 probe=signals-fault event=DATA case=handler-fault part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000075 probe=signals-fault event=DATA case=handler-fault survivor_pid=3 progress_before=41417594 progress_after=46261154 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000076 probe=signals-fault event=DATA case=forged-token part=identity pid=12 tid=0 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000077 probe=signals-fault event=DATA case=forged-token part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000078 probe=signals-fault event=DATA case=forged-token part=status expected=11 observed=11 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000079 probe=signals-fault event=DATA case=forged-token part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000080 probe=signals-fault event=DATA case=forged-token part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000081 probe=signals-fault event=DATA case=forged-token part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000082 probe=signals-fault event=DATA case=forged-token survivor_pid=3 progress_before=46261154 progress_after=51106610 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000083 probe=signals-fault event=DATA case=inactive-sigreturn part=identity pid=13 tid=0 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000084 probe=signals-fault event=DATA case=inactive-sigreturn part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000085 probe=signals-fault event=DATA case=inactive-sigreturn part=status expected=11 observed=11 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000086 probe=signals-fault event=DATA case=inactive-sigreturn part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000087 probe=signals-fault event=DATA case=inactive-sigreturn part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000088 probe=signals-fault event=DATA case=inactive-sigreturn part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000089 probe=signals-fault event=DATA case=inactive-sigreturn survivor_pid=3 progress_before=51106610 progress_after=55921677 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000090 probe=signals-fault event=DATA case=sigkill part=inject pid=14 tid=13 signal=9 mask=00000000 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000091 probe=signals-fault event=DATA case=sigkill part=identity pid=14 tid=13 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000092 probe=signals-fault event=DATA case=sigkill part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000093 probe=signals-fault event=DATA case=sigkill part=status expected=9 observed=9 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000094 probe=signals-fault event=DATA case=sigkill part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000095 probe=signals-fault event=DATA case=sigkill part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000096 probe=signals-fault event=DATA case=sigkill part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000097 probe=signals-fault event=DATA case=sigkill survivor_pid=3 progress_before=55921677 progress_after=60782407 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000098 probe=signals-fault event=DATA case=handler-blocking part=inject pid=15 tid=14 signal=12 mask=00000200 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000099 probe=signals-fault event=DATA case=handler-blocking part=identity pid=15 tid=14 sender=15
+CIUKI_TEST v=1 run=0704fc09 seq=000100 probe=signals-fault event=DATA case=handler-blocking part=fault signal=12 vector=0 code=0 trap_error=00000000 address=00000000 eip=00400682
+CIUKI_TEST v=1 run=0704fc09 seq=000101 probe=signals-fault event=DATA case=handler-blocking part=status expected=0 observed=0 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000102 probe=signals-fault event=DATA case=handler-blocking part=handlers entries=2 returns=2 max_depth=1 order=3
+CIUKI_TEST v=1 run=0704fc09 seq=000103 probe=signals-fault event=DATA case=handler-blocking part=sleep result=0 elapsed_ms=72 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000104 probe=signals-fault event=DATA case=handler-blocking part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000105 probe=signals-fault event=DATA case=handler-blocking survivor_pid=3 progress_before=60782407 progress_after=68788068 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000106 probe=signals-fault event=DATA case=handler-blocking-term part=inject pid=16 tid=15 signal=15 mask=00000200 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000107 probe=signals-fault event=DATA case=handler-blocking-term part=identity pid=16 tid=15 sender=16
+CIUKI_TEST v=1 run=0704fc09 seq=000108 probe=signals-fault event=DATA case=handler-blocking-term part=fault signal=10 vector=0 code=0 trap_error=00000000 address=00000000 eip=00400682
+CIUKI_TEST v=1 run=0704fc09 seq=000109 probe=signals-fault event=DATA case=handler-blocking-term part=status expected=15 observed=15 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000110 probe=signals-fault event=DATA case=handler-blocking-term part=handlers entries=1 returns=0 max_depth=1 order=1
+CIUKI_TEST v=1 run=0704fc09 seq=000111 probe=signals-fault event=DATA case=handler-blocking-term part=sleep result=0 elapsed_ms=4294960959 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000112 probe=signals-fault event=DATA case=handler-blocking-term part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000113 probe=signals-fault event=DATA case=handler-blocking-term survivor_pid=3 progress_before=68788068 progress_after=75164873 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000114 probe=signals-fault event=DATA case=handler-blocking-kill part=inject pid=17 tid=16 signal=9 mask=00000200 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000115 probe=signals-fault event=DATA case=handler-blocking-kill part=identity pid=17 tid=16 sender=17
+CIUKI_TEST v=1 run=0704fc09 seq=000116 probe=signals-fault event=DATA case=handler-blocking-kill part=fault signal=10 vector=0 code=0 trap_error=00000000 address=00000000 eip=00400682
+CIUKI_TEST v=1 run=0704fc09 seq=000117 probe=signals-fault event=DATA case=handler-blocking-kill part=status expected=9 observed=9 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000118 probe=signals-fault event=DATA case=handler-blocking-kill part=handlers entries=1 returns=0 max_depth=1 order=1
+CIUKI_TEST v=1 run=0704fc09 seq=000119 probe=signals-fault event=DATA case=handler-blocking-kill part=sleep result=0 elapsed_ms=4294960591 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000120 probe=signals-fault event=DATA case=handler-blocking-kill part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000121 probe=signals-fault event=DATA case=handler-blocking-kill survivor_pid=3 progress_before=75164873 progress_after=79967622 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000122 probe=signals-fault event=DATA case=nanosleep-eintr part=inject pid=18 tid=17 signal=10 mask=00000000 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000123 probe=signals-fault event=DATA case=nanosleep-eintr part=identity pid=18 tid=17 sender=18
+CIUKI_TEST v=1 run=0704fc09 seq=000124 probe=signals-fault event=DATA case=nanosleep-eintr part=fault signal=10 vector=0 code=0 trap_error=00000000 address=00000000 eip=00400995
+CIUKI_TEST v=1 run=0704fc09 seq=000125 probe=signals-fault event=DATA case=nanosleep-eintr part=status expected=0 observed=512 raw_vector=0 corruption=2
+CIUKI_TEST v=1 run=0704fc09 seq=000126 probe=signals-fault event=DATA case=nanosleep-eintr part=handlers entries=1 returns=1 max_depth=1 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000127 probe=signals-fault event=DATA case=nanosleep-eintr part=sleep result=0 elapsed_ms=72 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000128 probe=signals-fault event=DATA case=nanosleep-eintr part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000129 probe=signals-fault event=DATA case=syscall-interruption syscall=nanosleep remainder_ns=0 handler_remainder_ns=0 result=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000130 probe=signals-fault event=DATA case=nanosleep-eintr survivor_pid=3 progress_before=79967622 progress_after=87980212 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000131 probe=signals-fault event=DATA case=thread-kill-target part=inject pid=19 tid=19 main_tid=18 signal=12 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000132 probe=signals-fault event=DATA case=thread-kill-target part=identity pid=19 tid=18 sender=19
+CIUKI_TEST v=1 run=0704fc09 seq=000133 probe=signals-fault event=DATA case=thread-kill-target part=fault signal=12 vector=0 code=0 trap_error=00000000 address=00000000 eip=00400907
+CIUKI_TEST v=1 run=0704fc09 seq=000134 probe=signals-fault event=DATA case=thread-kill-target part=status expected=0 observed=0 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000135 probe=signals-fault event=DATA case=thread-kill-target part=handlers entries=1 returns=1 max_depth=1 order=1
+CIUKI_TEST v=1 run=0704fc09 seq=000136 probe=signals-fault event=DATA case=thread-kill-target part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000137 probe=signals-fault event=DATA case=thread-kill-target part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000138 probe=signals-fault event=DATA case=thread-kill-target survivor_pid=3 progress_before=87980212 progress_after=97463549 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000139 probe=signals-fault event=DATA case=channel-eintr part=identity pid=20 tid=20 sender=0
+CIUKI_TEST v=1 run=0704fc09 seq=000140 probe=signals-fault event=DATA case=channel-eintr part=fault signal=0 vector=0 code=0 trap_error=00000000 address=00000000 eip=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000141 probe=signals-fault event=DATA case=channel-eintr part=status expected=0 observed=0 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000142 probe=signals-fault event=DATA case=channel-eintr part=handlers entries=0 returns=0 max_depth=0 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000143 probe=signals-fault event=DATA case=channel-eintr part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000144 probe=signals-fault event=DATA case=channel-eintr part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000145 probe=signals-fault event=DATA case=syscall-interruption syscall=channel_recv result=0 saved_eax=00000000 resumed_eax=00000000 releases=0 handler_completion=0
+CIUKI_TEST v=1 run=0704fc09 seq=000146 probe=signals-fault event=DATA case=channel-eintr survivor_pid=3 progress_before=97463549 progress_after=264141649 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000147 probe=signals-fault event=DATA case=close-deferred part=identity pid=21 tid=21 sender=21
+CIUKI_TEST v=1 run=0704fc09 seq=000148 probe=signals-fault event=DATA case=close-deferred part=fault signal=10 vector=0 code=0 trap_error=00000000 address=00000000 eip=004007c6
+CIUKI_TEST v=1 run=0704fc09 seq=000149 probe=signals-fault event=DATA case=close-deferred part=status expected=0 observed=0 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000150 probe=signals-fault event=DATA case=close-deferred part=handlers entries=1 returns=1 max_depth=1 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000151 probe=signals-fault event=DATA case=close-deferred part=sleep result=0 elapsed_ms=0 saved_eax=00000000 resumed_eax=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000152 probe=signals-fault event=DATA case=close-deferred part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000153 probe=signals-fault event=DATA case=syscall-interruption syscall=close result=0 saved_eax=00000000 resumed_eax=00000000 releases=1 handler_completion=1
+CIUKI_TEST v=1 run=0704fc09 seq=000154 probe=signals-fault event=DATA case=close-deferred survivor_pid=3 progress_before=264141649 progress_after=272097815 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000155 probe=signals-fault event=DATA case=dup2-deferred part=identity pid=22 tid=22 sender=22
+CIUKI_TEST v=1 run=0704fc09 seq=000156 probe=signals-fault event=DATA case=dup2-deferred part=fault signal=10 vector=0 code=0 trap_error=00000000 address=00000000 eip=00400835
+CIUKI_TEST v=1 run=0704fc09 seq=000157 probe=signals-fault event=DATA case=dup2-deferred part=status expected=0 observed=0 raw_vector=0 corruption=0
+CIUKI_TEST v=1 run=0704fc09 seq=000158 probe=signals-fault event=DATA case=dup2-deferred part=handlers entries=1 returns=1 max_depth=1 order=0
+CIUKI_TEST v=1 run=0704fc09 seq=000159 probe=signals-fault event=DATA case=dup2-deferred part=sleep result=8 elapsed_ms=0 saved_eax=00000008 resumed_eax=00000008
+CIUKI_TEST v=1 run=0704fc09 seq=000160 probe=signals-fault event=DATA case=dup2-deferred part=context mask=00000000 x87_digest=00000000
+CIUKI_TEST v=1 run=0704fc09 seq=000161 probe=signals-fault event=DATA case=syscall-interruption syscall=dup2 result=8 saved_eax=00000008 resumed_eax=00000008 releases=1 handler_completion=1
+CIUKI_TEST v=1 run=0704fc09 seq=000162 probe=signals-fault event=DATA case=dup2-deferred survivor_pid=3 progress_before=272097815 progress_after=280055098 alive=1
+CIUKI_TEST v=1 run=0704fc09 seq=000163 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=0 committed=0 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000164 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=0 committed=0 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000165 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=0 committed=0 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000166 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=0 committed=0 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000167 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=0 committed=1 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000168 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=0 committed=1 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000169 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=0 committed=1 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000170 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=0 committed=1 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000171 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=0 committed=0 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000172 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=0 committed=0 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000173 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=0 committed=0 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000174 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=0 committed=0 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000175 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=0 committed=1 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000176 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=0 committed=1 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000177 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=0 committed=1 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000178 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=0 committed=1 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000179 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=0 committed=0 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000180 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=0 committed=0 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000181 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=0 committed=0 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000182 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=0 committed=0 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000183 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=0 committed=1 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000184 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=0 committed=1 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000185 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=0 committed=1 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000186 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=0 committed=1 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000187 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=1 committed=0 issued=0 progress=0 expected=1 observed=1
+CIUKI_TEST v=1 run=0704fc09 seq=000188 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=1 committed=0 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000189 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=1 committed=0 issued=1 progress=0 expected=2 observed=2
+CIUKI_TEST v=1 run=0704fc09 seq=000190 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=1 committed=0 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000191 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=1 committed=1 issued=0 progress=0 expected=1 observed=1
+CIUKI_TEST v=1 run=0704fc09 seq=000192 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=1 committed=1 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000193 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=1 committed=1 issued=1 progress=0 expected=2 observed=2
+CIUKI_TEST v=1 run=0704fc09 seq=000194 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=0 caught=1 committed=1 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000195 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=1 committed=0 issued=0 progress=0 expected=1 observed=1
+CIUKI_TEST v=1 run=0704fc09 seq=000196 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=1 committed=0 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000197 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=1 committed=0 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000198 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=1 committed=0 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000199 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=1 committed=1 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000200 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=1 committed=1 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000201 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=1 committed=1 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000202 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=1 caught=1 committed=1 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000203 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=1 committed=0 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000204 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=1 committed=0 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000205 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=1 committed=0 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000206 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=1 committed=0 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000207 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=1 committed=1 issued=0 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000208 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=1 committed=1 issued=0 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000209 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=1 committed=1 issued=1 progress=0 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000210 probe=signals-fault event=DATA case=syscall-interruption layer=decision class=2 caught=1 committed=1 issued=1 progress=1 expected=0 observed=0
+CIUKI_TEST v=1 run=0704fc09 seq=000211 probe=signals-fault event=DATA case=syscall-interruption layer=decision rows=48 close=defer dup2=defer issued_read=drain partial=positive
+CIUKI_TEST v=1 run=0704fc09 seq=000212 probe=signals-fault event=END status=FAIL reason=signal_contract

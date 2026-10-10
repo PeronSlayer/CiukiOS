@@ -3,13 +3,6 @@
  * https://www.lua.org/manual/5.4/manual.html#pdf-os.clock . See the f2-15
  * host report for timing, capture and sampled-memory qualification limits.
  * SPDX-License-Identifier: GPL-2.0-only */
-#ifdef CIUKI_APP_GATE_REGISTRATION
-/* Standalone supervisor host fixtures do not link application controllers.
- * The canonical kernel supplies the strong definition below; the ELF table
- * test checks its nonzero function address as well as its final position. */
-extern int probe_f2_app_gate(void) __attribute__((weak));
-CIUKI_F2_PROBE("app-gate", probe_f2_app_gate);
-#else
 #include <ciuki/kernel.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/probe.h>
@@ -407,4 +400,4 @@ int probe_f2_app_gate(void)
     rec_emit(GATE_NAME,"END",pass ? "status=PASS" : "status=FAIL reason=application_contract");
     return pass ? 0 : 1;
 }
-#endif
+CIUKI_F2_PROBE("app-gate", probe_f2_app_gate);

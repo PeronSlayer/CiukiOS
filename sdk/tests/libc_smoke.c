@@ -42,6 +42,12 @@ __attribute__((constructor)) static void construct(void) { callback_order=1; }
 static void smoke_atexit(void) { CHECK(callback_order==2);callback_order=3;report("atexit"); }
 __attribute__((destructor)) static void destruct(void) { CHECK(callback_order==3);callback_order=4;report("destructor");if(failures)_exit(1); }
 static int64_t ns(const struct timespec *t) { return t->tv_sec*1000000000LL+t->tv_nsec; }
+static void clock_report(const char *name, const char *a, int64_t first, const char *b, int64_t second, const char *c, int64_t third) {
+    char record[CIUKI_PROBE_REPORT_MAX+1];
+    int n=snprintf(record,sizeof(record),"case=%s %s=%lld %s=%lld %s=%lld",name,
+                   a,(long long)first,b,(long long)second,c,(long long)third);
+    if(n<=0||n>CIUKI_PROBE_REPORT_MAX||ciuki_error(ciuki_raw_probe_report(CU_PTR(record),n,0,0,0,0)))_exit(126);
+}
 static uint32_t signal_start;
 static volatile sig_atomic_t caught;
 static void catch_signal(int signo) { if(signo==SIGUSR1)++caught; }
@@ -77,20 +83,25 @@ int main(void) {
     struct timespec previous,now;CHECK(!clock_gettime(CLOCK_MONOTONIC,&previous));unsigned decreases=0;
     for(unsigned i=0;i<10000;++i) { CHECK(!clock_gettime(CLOCK_MONOTONIC,&now));if(now.tv_sec<previous.tv_sec||(now.tv_sec==previous.tv_sec&&now.tv_nsec<previous.tv_nsec))++decreases;previous=now; }CHECK(!decreases);
     CHECK(!clock_gettime(CLOCK_REALTIME,&now));CHECK(!clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&now));CHECK(clock()>=0);CHECK(time(NULL)>=0);
+    struct timespec sleep20_start;CHECK(!clock_gettime(CLOCK_MONOTONIC,&sleep20_start));
     struct timespec request={0,20000000,0};CHECK(!nanosleep(&request,NULL));CHECK(!clock_gettime(CLOCK_MONOTONIC,&now));CHECK((now.tv_sec-previous.tv_sec)*1000000000LL+now.tv_nsec-previous.tv_nsec>=20000000);
+    clock_report("clock-monotonic","reads",10000,"decreases",decreases,"sleep_ns",ns(&now)-ns(&sleep20_start));
     CHECK(clock_gettime(-1,&now)==-1&&errno==EINVAL);CHECK(!clock_getres(CLOCK_MONOTONIC,&now)&&now.tv_nsec>0);
     struct timespec cpu_before,cpu_after,sleep_before,sleep_after;
     CHECK(!clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&cpu_before));CHECK(!clock_gettime(CLOCK_MONOTONIC,&sleep_before));
     do { CHECK(!clock_gettime(CLOCK_MONOTONIC,&sleep_after)); } while(ns(&sleep_after)-ns(&sleep_before)<20000000);
     CHECK(!clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&cpu_after));CHECK(ns(&cpu_after)>ns(&cpu_before));
+    int64_t busy_ns=ns(&cpu_after)-ns(&cpu_before);
     request.tv_nsec=100000000;CHECK(!nanosleep(&request,NULL));CHECK(!clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&cpu_before));
     CHECK(ns(&cpu_before)-ns(&cpu_after)<=2000000);
+    clock_report("clock-cpu","busy_ns",busy_ns,"sleep_cpu_ns",ns(&cpu_before)-ns(&cpu_after),"requested_sleep_ns",100000000);
     CHECK(signal(SIGUSR1,catch_signal)!=SIG_ERR);e=pthread_create(&thread,NULL,interrupt_sleep,(void *)(uintptr_t)pthread_self());CHECK(!e);
     if(!e) {
         __atomic_store_n(&signal_start,1,__ATOMIC_RELEASE);CHECK(ciuki_wake_word(&signal_start,1)>=0);
         request.tv_nsec=20000000;struct timespec remaining={0,0,0};int sleep_result=nanosleep(&request,&remaining);int sleep_errno=errno;
         CHECK(sleep_result==-1&&sleep_errno==EINTR&&ns(&remaining)>=0&&ns(&remaining)<=20000000);
         CHECK(!pthread_join(thread,&value)&&value==NULL);CHECK(caught==1);
+        clock_report("sleep-interrupt","result",sleep_result,"errno",sleep_errno,"remainder_ns",ns(&remaining));
     }
     CHECK(fork()==-1&&errno==ENOSYS);CHECK(vfork()==-1&&errno==ENOSYS);CHECK(_Fork()==-1&&errno==ENOSYS);CHECK(execv("/bin/x",NULL)==-1&&errno==ENOSYS);
     CHECK(system(NULL)==0);CHECK(system("x")==-1&&errno==ENOSYS);CHECK(popen("x","r")==NULL&&errno==ENOSYS);

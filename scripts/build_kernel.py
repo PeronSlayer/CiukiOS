@@ -196,6 +196,16 @@ def main() -> int:
         ))
     }
     objs.sort(key=lambda obj: f1_order.get(obj.stem, -1))
+    # The append-only F2 table follows its contract order. app-gate owns its
+    # registration in its own translation unit and is deliberately last.
+    f2_order = {
+        name: i for i, name in enumerate((
+            "probes_f2_probes_process", "probes_f2_probes_desktop",
+            "probes_f2_probes_files", "probes_f2_probes_signals",
+            "probes_f2_probes_app",
+        ))
+    }
+    objs.sort(key=lambda obj: f2_order.get(obj.stem, -1))
     run(["ld.lld", "-m", "elf_i386", "-T", str(SRC / "linker.ld"), "--no-undefined",
          "-Map", str(OUT / "VMM.map"), "-o", str(elf), *map(str, objs)])
     audit(elf)

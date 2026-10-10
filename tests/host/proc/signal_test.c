@@ -34,6 +34,7 @@ void fpu_reset_state(int sse) { CHECK(!sse); memset(hardware_fp, 0, sizeof(hardw
 #include "../../../src/kernel/core/fpu.c"
 #include "../../../src/kernel/proc/signal.c"
 #include "../../../src/kernel/proc/syscalls_signal.c"
+#include "../../../src/kernel/proc/clock.c"
 
 static uint8_t task_fp[CIUKI_THREAD_MAX][512];
 static struct proc_thread *signal_process(struct process *parent, struct process **p)
@@ -354,6 +355,55 @@ static void test_delivery(void)
     destroy_signal_process(p);
     puts("signal delivery: frame copy, handler wait no EINTR/nesting, deferred catcher, outside wait EINTR, sigreturn EAX PASS");
 }
+static bool sleep_slow_record;
+static uint64_t sleep_started;
+static void interrupt_sleep(void)
+{
+    CHECK(wait_target->task->state == T_BLOCKED);
+    /* The probe posts at ~10 ms, but its original serial record keeps the
+     * UP kernel running past the waiter's 20 ms deadline before dispatch. */
+    g_ticks = sleep_started + 10;
+    proc_signal_post(wait_target->process, wait_target, SIGUSR1, wait_target->process->pid);
+    CHECK(wait_target->task->state == T_READY);
+    if (sleep_slow_record) g_ticks += 50;
+}
+static void test_nanosleep_reporting(void)
+{
+    for (unsigned delayed = 0; delayed < 2; delayed++) {
+        struct process *p;
+        struct proc_thread *t = signal_process(proc_supervisor(), &p);
+        select_task(t); catch_signal(p, SIGUSR1);
+        uint32_t request_va = CIUKI_IMAGE_BASE + PAGE_SIZE + 64;
+        uint32_t remaining_va = request_va + sizeof(struct ciuki_timespec);
+        struct ciuki_timespec request = { .tv_nsec = 20000000 }, remaining;
+        CHECK(!ua_write(p->memory, request_va, &request, sizeof(request)));
+        wait_target = t; sleep_started = g_ticks; sleep_slow_record = delayed;
+        on_schedule = interrupt_sleep;
+        int result = file_nanosleep(request_va, remaining_va);
+        on_schedule = 0;
+        CHECK(result == (delayed ? 0 : -EINTR));
+        CHECK(!ua_read(p->memory, &remaining, remaining_va, sizeof(remaining)));
+        CHECK(!remaining.tv_sec && !remaining.reserved);
+        CHECK(remaining.tv_nsec == (delayed ? 0 : 10000000));
+        /* Mirror the dispatcher's completed-result assignment, then use
+         * production handler delivery and sigreturn, with no context edit. */
+        struct trap_frame tf = user_frame(t);
+        tf.eax = (uint32_t)result;
+        proc_signal_return_to_user(&tf);
+        CHECK(t->in_handler);
+        struct ciuki_signal_frame frame;
+        uint32_t address = tf.user_esp;
+        CHECK(!ua_read(p->memory, &frame, address, sizeof(frame)));
+        CHECK(frame.context.gregs[CIUKI_REG_EAX] == (uint32_t)result);
+        CHECK(!ua_read(p->memory, &remaining, remaining_va, sizeof(remaining)));
+        CHECK(remaining.tv_nsec == (delayed ? 0 : 10000000));
+        proc_signal_sigreturn(&tf, address);
+        CHECK(!t->in_handler && tf.eax == (uint32_t)result);
+        printf("signal nanosleep reporting: delay_ms=%u result=%d saved_eax=%08x resumed_eax=%08x remainder_ns=%d PASS\n",
+               delayed ? 50 : 0, result, frame.context.gregs[CIUKI_REG_EAX], tf.eax, remaining.tv_nsec);
+        destroy_signal_process(p);
+    }
+}
 static void test_syscalls(void)
 {
     struct process *p;
@@ -450,7 +500,7 @@ int main(int argc, char **argv)
     controller.state = T_RUNNING; g_current = &controller; proc_init();
     g_cpu_fxsr = true; fpu_init();
     test_pending(); test_frames(); test_fp(); test_fault_mapping(); test_decisions();
-    test_delivery(); test_syscalls(); test_fatal();
+    test_delivery(); test_nanosleep_reporting(); test_syscalls(); test_fatal();
     if (argc == 2) test_signal_payload(argv[1]);
     g_current = &controller;
     struct proc_ledger l; proc_snapshot(&l);

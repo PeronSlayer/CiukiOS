@@ -1,0 +1,33 @@
+CIUKI_TEST v=1 run=9d70e1c9 seq=000001 probe=libc-smoke event=BEGIN
+CIUKI_TEST v=1 run=9d70e1c9 seq=000002 probe=libc-smoke event=DATA case=write-gate expected=0 observed=0
+CIUKI_TEST v=1 run=9d70e1c9 seq=000003 probe=libc-smoke event=DATA case=launch pid=2 pgid=2 abi_version=1
+CIUKI_TEST v=1 run=9d70e1c9 seq=000004 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=0 bytes=24 data_hex=636173653d6c6962632d736d6f6b65207069643d32207469
+CIUKI_TEST v=1 run=9d70e1c9 seq=000005 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=24 bytes=24 data_hex=643d312065787065637465643d30206f627365727665643d
+CIUKI_TEST v=1 run=9d70e1c9 seq=000006 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=48 bytes=24 data_hex=3020636865636b733d3131323538206661696c757265733d
+CIUKI_TEST v=1 run=9d70e1c9 seq=000007 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=72 bytes=24 data_hex=3020686561705f7065616b3d3132323838207265656e745f
+CIUKI_TEST v=1 run=9d70e1c9 seq=000008 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=96 bytes=24 data_hex=62797465733d333136207463625f62797465733d3634206f
+CIUKI_TEST v=1 run=9d70e1c9 seq=000009 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=120 bytes=6 data_hex=726465723d32
+CIUKI_TEST v=1 run=9d70e1c9 seq=000010 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=126 bytes=24 data_hex=636173653d617465786974207069643d32207469643d3120
+CIUKI_TEST v=1 run=9d70e1c9 seq=000011 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=150 bytes=24 data_hex=65787065637465643d30206f627365727665643d30206368
+CIUKI_TEST v=1 run=9d70e1c9 seq=000012 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=174 bytes=24 data_hex=65636b733d3131323539206661696c757265733d30206865
+CIUKI_TEST v=1 run=9d70e1c9 seq=000013 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=198 bytes=24 data_hex=61705f7065616b3d3132323838207265656e745f62797465
+CIUKI_TEST v=1 run=9d70e1c9 seq=000014 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=222 bytes=24 data_hex=733d333136207463625f62797465733d3634206f72646572
+CIUKI_TEST v=1 run=9d70e1c9 seq=000015 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=246 bytes=2 data_hex=3d33
+CIUKI_TEST v=1 run=9d70e1c9 seq=000016 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=248 bytes=24 data_hex=636173653d64657374727563746f72207069643d32207469
+CIUKI_TEST v=1 run=9d70e1c9 seq=000017 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=272 bytes=24 data_hex=643d312065787065637465643d30206f627365727665643d
+CIUKI_TEST v=1 run=9d70e1c9 seq=000018 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=296 bytes=24 data_hex=3020636865636b733d3131323630206661696c757265733d
+CIUKI_TEST v=1 run=9d70e1c9 seq=000019 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=320 bytes=24 data_hex=3020686561705f7065616b3d3132323838207265656e745f
+CIUKI_TEST v=1 run=9d70e1c9 seq=000020 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=344 bytes=24 data_hex=62797465733d333136207463625f62797465733d3634206f
+CIUKI_TEST v=1 run=9d70e1c9 seq=000021 probe=libc-smoke event=DATA group=app pid=2 tid=1 stream=report offset=368 bytes=6 data_hex=726465723d34
+CIUKI_TEST v=1 run=9d70e1c9 seq=000022 probe=libc-smoke event=DATA group=libc-smoke checks=11260 failures=0 callback_order=4 report_stages=3 invalid_reports=0
+CIUKI_TEST v=1 run=9d70e1c9 seq=000023 probe=libc-smoke event=DATA case=wait pid=2 status=0 timeout=0
+CIUKI_TEST v=1 run=9d70e1c9 seq=000024 probe=libc-smoke event=DATA group=capture pid=2 stream=stdout bytes=36 truncated=0
+CIUKI_TEST v=1 run=9d70e1c9 seq=000025 probe=libc-smoke event=DATA group=capture_scan pid=2 stream=stdout final_ok=0 assertion_failures=0
+CIUKI_TEST v=1 run=9d70e1c9 seq=000026 probe=libc-smoke event=DATA group=capture_digest pid=2 stream=stdout sha256=d8afae6c01f9e5e2f0661ce763d88ce7a34d5344ec7a954702006ac4698f1911
+CIUKI_TEST v=1 run=9d70e1c9 seq=000027 probe=libc-smoke event=DATA group=app pid=2 tid=0 stream=stdout offset=0 bytes=24 data_hex=4369756b694f53206c69626320736d6f6b653a2034323934
+CIUKI_TEST v=1 run=9d70e1c9 seq=000028 probe=libc-smoke event=DATA group=app pid=2 tid=0 stream=stdout offset=24 bytes=12 data_hex=39363732393720312e32350a
+CIUKI_TEST v=1 run=9d70e1c9 seq=000029 probe=libc-smoke event=DATA group=capture pid=2 stream=stderr bytes=21 truncated=0
+CIUKI_TEST v=1 run=9d70e1c9 seq=000030 probe=libc-smoke event=DATA group=capture_scan pid=2 stream=stderr final_ok=0 assertion_failures=0
+CIUKI_TEST v=1 run=9d70e1c9 seq=000031 probe=libc-smoke event=DATA group=capture_digest pid=2 stream=stderr sha256=f5e84d0b99eb654fa16747dd4ae476e91cb18a3ff4ac261e9692456178d3dc4f
+CIUKI_TEST v=1 run=9d70e1c9 seq=000032 probe=libc-smoke event=DATA group=app pid=2 tid=0 stream=stderr offset=0 bytes=21 data_hex=4369756b694f532073746465727220736d6f6b650a
+CIUKI_TEST v=1 run=9d70e1c9 seq=000033 probe=libc-smoke event=END status=PASS
