@@ -135,13 +135,8 @@ class F2AlignmentTests(unittest.TestCase):
                     matches = [r for r in records if all(r.get(k) == str(v) for k, v in where.items())]
                     new = where.get('operation', where.get('case')) in added.get(probe, set())
                     missing_fixture = probe == 'fd-table' and (where.get('operation') in ('exdev', 'readonly') or where['event'] == 'ARM')
-                    signal_failure = probe == 'signals-fault' and (
-                        where.get('index') == 7 or
-                        where == {'event':'DATA','case':'fault-repair','part':'context'} or
-                        where.get('part') == 'status' and where.get('case') in ('fault-repair', 'nanosleep-eintr') or
-                        where.get('part') == 'handlers' and where.get('case') in ('fault-repair', 'channel-eintr') or
-                        where.get('part') == 'sleep' and where.get('case') == 'nanosleep-eintr' or
-                        where.get('syscall') in ('nanosleep', 'channel_recv'))
+                    # The signals-fault fixture is a passing capture (image c581dfe8, after f2-14).
+                    signal_failure = False
                     with self.subTest(where=where):
                         if new or missing_fixture or signal_failure:
                             with self.assertRaises(EvidenceError): data_projection(probe, records, predicate)
@@ -170,13 +165,9 @@ class F2AlignmentTests(unittest.TestCase):
                         replay(probe, records)
                 else:
                     parser = replay(probe, records)
-                    if probe == 'elf-load': self.assertTrue(parser.check(case['expected']))
+                    if probe in ('elf-load', 'signals-fault'): self.assertTrue(parser.check(case['expected']))
                     else:
                         with self.assertRaises(EvidenceError): parser.check(case['expected'])
-                    if probe == 'signals-fault':
-                        self.assertEqual(parser.terminal['status'], 'FAIL')
-                        with self.assertRaisesRegex(EvidenceError, 'kernel reported FAIL'):
-                            parser.check(case['expected'])
 
     def test_old_native_libc_frames_and_independent_stream_digests(self):
         case = next(c for c in cases() if c['probe'] == 'libc-smoke')
