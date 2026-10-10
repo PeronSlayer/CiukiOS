@@ -440,8 +440,7 @@ the dedicated f1-safe suites and safe-boot-cfg are unchanged.
 
 Additional contract conflict: the bootlog cold-reopen predicate requires the
 whole boot-volume write count to equal zero, while F1-28 mandates a durable
-cursor write before that same probe. The sweep preserves real write counters;
-it does not subtract cursor I/O or weaken the existing QEMU/import predicates.
+cursor write before that same probe. **[F1, f1-32 amendment]** The storage layer attributes the sweep's cursor writes (the `SYSTEM/BOOT.CFG` rewrite with its FAT gate, clean-mark and barrier I/O) to a separate ledger reset at storage setup; raw volume counters stay monotonic. Read probes capture every counter before BEGIN and reject any non-cursor increase through completion, reporting `writes_before_probe`, `writes_during`, `volume_writes` and `sweep_writes`. Bootlog qualification and cold reopen require zero non-cursor volume writes; the cursor write before the same probe is not a violation.
 Consequently the hardware cold-reopen import cannot pass that predicate until
 a reviewed contract distinguishes cursor persistence from workload writes.
 FAT write/read qualification and panic write baselines likewise must account

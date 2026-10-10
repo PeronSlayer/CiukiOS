@@ -907,6 +907,8 @@ static int sweep_checkpoint(struct storage *storage, const struct sweep_cursor *
     else ksnprintf(phase, sizeof(phase), "f%u", c->phase);
     ksnprintf(request, sizeof(request), "%s:sweep run=%s step=%u state=%08x",
               phase, c->run, c->step, c->state);
+    /* The storage helper retains raw writes and separately accounts cursor
+     * I/O; read probes capture their baselines only after this barrier. */
     return storage_boot_cfg(storage, request);
 }
 
