@@ -20,7 +20,7 @@ evidence and merges.
 | [f1-05-framebuffer-device](f1-05-framebuffer-device.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-10 |
 | [f2-00-posix-contract](f2-00-posix-contract.md) | F2 | gpt-6-astra / xhigh | contract approved and merged 2026-10-10 |
 | [f1-06-ata-pio](f1-06-ata-pio.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-10 |
-| [f1-07-bios-vm-firmware-input](f1-07-bios-vm-firmware-input.md) | F1 | gpt-6-astra / xhigh | in progress (relaunched 2026-10-11) |
+| [f1-07-bios-vm-firmware-input](f1-07-bios-vm-firmware-input.md) | F1 | gpt-6-astra / xhigh | partial delivery 2026-10-11 (65,900 host checks); completed by f1-07b |
 | [f1-08-runtime-integration](f1-08-runtime-integration.md) | F1 | gpt-6.1-sol / xhigh | written; starts after f1-03 and f1-07 |
 | [f1-09-storage-bringup](f1-09-storage-bringup.md) | F1 | gpt-6-astra / xhigh | written; starts after f1-03, f1-06 and f1-08 |
 | [f2-01-abi-header](f2-01-abi-header.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (687 layout checks) |
@@ -31,6 +31,7 @@ evidence and merges.
 | [f2-07-lua-port-and-payloads](f2-07-lua-port-and-payloads.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (50 payloads; host-reference suite OK) |
 | [f2-04-signals-and-faults](f2-04-signals-and-faults.md) | F2 | gpt-6-astra / xhigh | issued 2026-10-11 |
 | [f2-05-desktop-objects-and-supervisor](f2-05-desktop-objects-and-supervisor.md) | F2 | gpt-6-astra / xhigh | written; starts after f2-02, f2-04 and f1-08 |
+| [f1-07b-bios-vm-followup](f1-07b-bios-vm-followup.md) | F1 | gpt-6-astra / xhigh | issued 2026-10-11 |
 
 Planned next (F2, after f2-02): f2-04 signals and faults, f2-05 desktop
 objects and the bootstrap supervisor, f2-08 ring-3 desktop.

@@ -107,6 +107,12 @@ reserved. Firmware deadlines remain 100 ms for input/status and 500 ms setup.
 As illustrated by [SeaBIOS keyboard handling](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c),
 INT16 characters alone cannot establish key-release evidence: the qualified
 firmware event adapter MUST expose actual transitions without a second reader.
+Mechanism (lead decision 2026-10-11, directive f1-07b): the V86 monitor
+already emulates every trapped `IN` from ports `60h`/`64h` that the firmware
+ISR executes; it records the returned bytes (with the AUX status bit) into
+the raw set-1 decoder as a side effect of the single firmware read. The
+firmware remains the only controller reader; INT16 supplies text, the
+observed bytes supply make/break transitions.
 
 **[F1]** Both backends MUST deliver ordered key transitions, text, relative
 pointer motion and button transitions to one bounded kernel input queue, with

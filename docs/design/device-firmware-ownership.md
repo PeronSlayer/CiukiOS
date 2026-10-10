@@ -243,7 +243,14 @@ runtime BIOS dependency. [VBE 3.0, functions 00h–02h](https://www.cs.utexas.ed
 
 **[F1, before any runtime firmware]** Calls MUST execute in one serialized
 V86 BIOS VM with private stack, IVT/BDA working state, bounded buffers and
-explicit mappings of required reserved firmware memory. Ordinary DOS VMs MUST
+explicit mappings of required reserved firmware memory: the IVT/BDA page and
+the EBDA read-write, the firmware's own low workspace `C0000h–EFFFFh`
+read-write **inside the BIOS VM only** (SeaBIOS keeps MALLOC_UPPERMEMORY data
+and its extra stack there; real BIOSes shadow their data similarly; lead
+decision 2026-10-11), the system ROM `F0000h–FFFFFh` read-only, nothing else.
+Interrupts raised by firmware code inside the VM (for example INT 15h/4Fh from
+the keyboard ISR) reflect through the VM's IVT without consulting the
+allowlist, which governs kernel-initiated calls and the port policy. Ordinary DOS VMs MUST
 NOT invoke host firmware. IOPL stays zero; trapped I/O, CLI/STI and PIC/PIT
 access MUST preserve host preemption and physical EOI ownership. Firmware IRQ
 reflection uses virtual vectors; it MUST NOT remap the physical PIC. Privileged
