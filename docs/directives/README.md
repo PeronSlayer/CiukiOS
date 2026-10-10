@@ -36,7 +36,7 @@ evidence and merges.
 | [f1-10-suite-alignment-and-loader-safe](f1-10-suite-alignment-and-loader-safe.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (82 runner tests) |
 | [f1-11-activation-records](f1-11-activation-records.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11; F0 56/56 on image acd8af37 |
 | [f1-12-integration-followups](f1-12-integration-followups.md) | F1/F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (probe order per contract; 82 runner tests) |
-| [f1-13-boot-time-records](f1-13-boot-time-records.md) | F1 | gpt-6.1-sol / high | issued 2026-10-11 |
+| [f1-13-boot-time-records](f1-13-boot-time-records.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (runtime guard patch applied; supervisor framing allowed) |
 
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
