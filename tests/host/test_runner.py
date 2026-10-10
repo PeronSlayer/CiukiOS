@@ -415,12 +415,14 @@ class RunnerTests(unittest.TestCase):
         self.assertLessEqual(start,end)
         self.assertLessEqual(end,address('__rodata_end'))
         self.assertEqual(linked_probe_names(rows,1),[
-            'registry','input','input-fault','framebuffer','ata','ata-fault','partition','safe'])
+            'registry','input','input-fault','framebuffer','ata','ata-fault','partition',
+            'fat-read','fat-write','cache','mount-crash','safe','bootlog'])
         registrations=[line.split()[-1] for line in rows if ' f1probe_' in line]
         self.assertEqual(registrations,[
             'f1probe_probe_registry','f1probe_probe_input','f1probe_probe_input_fault',
             'f1probe_probe_framebuffer','f1probe_probe_ata','f1probe_probe_ata_fault',
-            'f1probe_probe_partition','f1probe_probe_safe'])
+            'f1probe_probe_partition','f1probe_probe_fat_read','f1probe_probe_fat_write',
+            'f1probe_probe_cache','f1probe_probe_mount_crash','f1probe_probe_safe','f1probe_probe_bootlog'])
         self.assertEqual(end-start,8*len(registrations))
         sections=[line for line in rows if ':(.f1probes)' in line]
         self.assertTrue(sections)
@@ -865,7 +867,7 @@ class F1RecordTests(unittest.TestCase):
             faults.extend([f'case={name} owner=fixture generation=1 error={error} elapsed_ms={elapsed} resends={resends} quarantined={quarantine} pending=0 resets=0 ok=1',
                            f'case={name} timing=scripted_ms controller_reads=7 controller_writes=3 physical_claims=0 keys={2 if name=="mixed_aux_key" else 0} x={2 if name=="mixed_aux_key" else 0} y={-1 if name=="mixed_aux_key" else 0}'])
         faults.extend(['case=malformed_packet resync=3 x=2 y=-1 ok=1',
-                       'case=queue_overflow overflow=134 drained=256 state_lost=1 resync_marked=1 ok=1'])
+                       'case=queue_overflow overflow=256 drained=135 state_lost=1 resync_marked=1 fresh=1 ok=1'])
         for name in ('missing_ack','bounded_resend','resend_exhausted','mixed_aux_key','malformed_packet','queue_overflow'):
             faults.append(f'case={name} survivor_ticks=110 survivor_progress=200 survivor_ok=1')
         inputs={}
@@ -1128,9 +1130,10 @@ class F2EvidenceTests(unittest.TestCase):
         self.assertLessEqual(addr('__rodata_start'),start);self.assertLessEqual(start,end)
         self.assertLessEqual(end,addr('__rodata_end'))
         self.assertEqual(linked_probe_names(rows,2),[
-            'elf-load','spawn-wait','mmap','threads-wait','signals-fault'])
+            'crash-isolation','libc-smoke','elf-load','spawn-wait','mmap','threads-wait','signals-fault'])
         registrations=[line.split()[-1] for line in rows if ' f2_registration_' in line]
         self.assertEqual(registrations,[
+            'f2_registration_probe_f2_crash_isolation','f2_registration_probe_f2_libc_smoke',
             'f2_registration_probe_f2_elf_load','f2_registration_probe_f2_spawn_wait',
             'f2_registration_probe_f2_mmap','f2_registration_probe_f2_threads_wait',
             'f2_registration_probe_f2_signals_fault'])

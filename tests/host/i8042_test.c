@@ -598,10 +598,18 @@ static void test_keyboard_and_mouse(void)
     struct input_event e;
     CHECK(i8042_fault_read(&e) && e.code == 0x148 && e.value == 1);
     CHECK(i8042_fault_read(&e) && e.code == 0x148 && e.value == 0);
-    feed(false, 0x1C); feed(false, 0x1C); /* typematic does not duplicate a transition */
+    feed(false, 0x1C); feed(false, 0x1C); /* repeat KEY and TEXT, only one down */
     feed(false, 0xF0); feed(false, 0x1C); feed(false, 0xF0); feed(false, 0x1C);
-    struct input_digest d = fixture_digest();
-    CHECK(d.characters == 1 && d.key_transitions == 2);
+    struct input_digest d;
+    input_digest_init(&d);
+    const unsigned types[] = { INPUT_KEY, INPUT_TEXT, INPUT_KEY, INPUT_TEXT, INPUT_KEY };
+    const int values[] = { 1, 0, 2, 0, 0 };
+    for (unsigned i = 0; i < ARRAY_SIZE(types); i++) {
+        CHECK(i8042_fault_read(&e) && e.type == types[i] && e.value == values[i]);
+        CHECK(e.code == (types[i] == INPUT_KEY ? INPUT_KEY_A : 'a') && !e.flags && !e.lost_count);
+        input_digest_add(&d, &e);
+    }
+    CHECK(!i8042_fault_read(&e) && d.characters == 2 && d.key_transitions == 2);
     i8042_fault_snapshot(0, &q);
     CHECK(q.repeats == 1 && q.duplicates == 1 && !q.keys_down);
     const uint8_t pause_bytes[] = { 0xE1, 0x14, 0x77, 0xE1, 0xF0, 0x14, 0xF0, 0x77 };
@@ -644,16 +652,53 @@ static void test_queue_and_stimulus(void)
     for (unsigned i = 0; i < 130; i++) { feed(false, 0x1C); feed(false, 0xF0); feed(false, 0x1C); }
     struct input_stats q;
     i8042_fault_snapshot(0, &q);
-    CHECK(q.pending == INPUT_CAPACITY && q.overflow == 130 * 3 - INPUT_CAPACITY && q.state_lost && !q.keys_down);
+    CHECK(q.pending == 135 && q.overflow == INPUT_CAPACITY && q.resync == 1 && q.state_lost && !q.keys_down);
     struct input_event e;
-    for (unsigned i = 0; i < INPUT_CAPACITY; i++) {
+    CHECK(i8042_fault_read(&e) && e.type == INPUT_RESYNC && e.sequence == 257 &&
+          e.lost_count == INPUT_CAPACITY && !e.value && e.flags == INPUT_F_RESYNC);
+    for (unsigned i = INPUT_CAPACITY; i < 130 * 3; i++) {
         CHECK(i8042_fault_read(&e));
-        CHECK(e.sequence == i + 1);
+        CHECK(e.sequence == i + 2 && !e.flags && !e.lost_count);
         CHECK(e.type == (i % 3 == 1 ? INPUT_TEXT : INPUT_KEY) && e.value == (i % 3 == 0));
     }
     CHECK(!i8042_fault_read(&e));
     feed(false, 0x1C);
-    CHECK(i8042_fault_read(&e) && e.sequence == 391 && (e.flags & INPUT_F_RESYNC));
+    CHECK(i8042_fault_read(&e) && e.sequence == 392 && e.type == INPUT_KEY && e.value == 1 && !e.flags);
+    CHECK(i8042_fault_read(&e) && e.type == INPUT_TEXT && e.sequence == 393 && !e.flags);
+    i8042_fault_end();
+
+    /* Overflow on motion snapshots all buttons from the triggering packet,
+     * even if a newer packet releases them before the consumer runs. */
+    begin_fixture(&b);
+    b.now = 77;
+    for (unsigned i = 0; i < INPUT_CAPACITY / 2; i++) {
+        feed(false, 0xE0); feed(false, 0x75);
+        feed(false, 0xE0); feed(false, 0xF0); feed(false, 0x75);
+    }
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.pending == INPUT_CAPACITY && !q.overflow);
+    feed(true, 0x0F); feed(true, 2); feed(true, 1);
+    feed(true, 0x08); feed(true, 0); feed(true, 0);
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.pending == 9 && q.overflow == INPUT_CAPACITY && q.resync == 1 && !q.buttons);
+    CHECK(i8042_fault_read(&e) && e.type == INPUT_RESYNC && e.value == 7 && e.lost_count == INPUT_CAPACITY);
+    CHECK(e.sequence == 257 && e.tick == 77 && e.source == INPUT_NATIVE && e.generation == fixture->stats.generation);
+    unsigned fresh = 0;
+    while (i8042_fault_read(&e)) { CHECK(!e.flags && !e.lost_count && e.sequence == 258 + fresh); fresh++; }
+    CHECK(fresh == 8);
+    /* Two full stale batches are counted cumulatively; the second marker
+     * replaces the first and no fresh triggering transition is dropped. */
+    for (unsigned i = 0; i < 260; i++) {
+        feed(false, 0xE0); feed(false, 0x75);
+        feed(false, 0xE0); feed(false, 0xF0); feed(false, 0x75);
+    }
+    i8042_fault_snapshot(0, &q);
+    CHECK(q.overflow == 3 * INPUT_CAPACITY && q.resync == 3 && q.pending == 10 && !q.keys_down);
+    CHECK(i8042_fault_read(&e) && e.type == INPUT_RESYNC && e.lost_count == 3 * INPUT_CAPACITY && !e.value);
+    uint64_t seq = e.sequence;
+    fresh = 0;
+    while (i8042_fault_read(&e)) { CHECK(!e.flags && e.type == INPUT_KEY && e.sequence == ++seq); fresh++; }
+    CHECK(fresh == 9);
     i8042_fault_end();
 
     begin_fixture(&b);
@@ -778,14 +823,25 @@ static void test_firmware_mapping(void)
     struct fwinput_event stale = { .type = FWINPUT_KEY, .code = INPUT_KEY_A, .value = 1 };
     input_firmware_event(&stale, saved + 1);
     CHECK(!input_read(&e));
+    fw_push(FWINPUT_KEY, INPUT_KEY_A, 1);
+    fw_push(FWINPUT_KEY, INPUT_KEY_A, 1);
+    fw_push(FWINPUT_TEXT, 0, 'a');
+    fw_push(FWINPUT_KEY, INPUT_KEY_A, 0);
+    CHECK(fwinput_adapter_step() == 4);
+    CHECK(input_read(&e) && e.type == INPUT_KEY && e.value == 1);
+    CHECK(input_read(&e) && e.type == INPUT_KEY && e.value == 2);
+    CHECK(input_read(&e) && e.type == INPUT_TEXT && e.code == 'a');
+    CHECK(input_read(&e) && e.type == INPUT_KEY && !e.value && !input_read(&e));
+    input_snapshot(&q); CHECK(q.repeats == 1 && !q.keys_down);
     fake_fw_loss = 7;
     fw_push(FWINPUT_RESYNC, 0, 0);
-    CHECK(fwinput_adapter_step() == 1 && input_read(&e) && e.type == INPUT_RESYNC && (e.flags & INPUT_F_RESYNC));
+    CHECK(fwinput_adapter_step() == 1 && input_read(&e) && e.type == INPUT_RESYNC &&
+          e.flags == INPUT_F_RESYNC && e.lost_count == 7);
     input_snapshot(&q);
     CHECK(q.overflow == 7 && q.resync == 1 && q.state_lost);
     fw_push(FWINPUT_KEY, INPUT_KEY_A, 1);
     fwinput_adapter_step();
-    CHECK(input_read(&e) && (e.flags & INPUT_F_RESYNC));
+    CHECK(input_read(&e) && e.type == INPUT_KEY && !e.flags && !e.lost_count);
     for (unsigned i = 0; i < 130; i++) {
         struct fwinput_event press = { .type = FWINPUT_KEY, .code = 0x148, .value = 1 };
         input_firmware_event(&press, saved);
@@ -793,7 +849,11 @@ static void test_firmware_mapping(void)
         input_firmware_event(&press, saved);
     }
     input_snapshot(&q);
-    CHECK(q.pending == INPUT_CAPACITY && q.overflow == 11);
+    CHECK(q.pending == 5 && q.overflow == 7 + INPUT_CAPACITY && q.resync == 2);
+    CHECK(input_read(&e) && e.type == INPUT_RESYNC && e.lost_count == 7 + INPUT_CAPACITY && !e.value);
+    unsigned fresh = 0;
+    while (input_read(&e)) { CHECK(e.type == INPUT_KEY && !e.flags && e.source == INPUT_FIRMWARE && e.generation == saved); fresh++; }
+    CHECK(fresh == 4);
     fake_fw_state = BIOSVM_DISABLED_BACKEND;
     CHECK(fwinput_adapter_init() == -V86_EIO);
     fwinput_adapter_step();

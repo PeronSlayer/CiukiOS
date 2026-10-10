@@ -283,14 +283,24 @@ int probe_input_fault(void)
         struct input_stats q;
         i8042_fault_snapshot(0, &q);
         struct input_event e;
-        unsigned drained = 0;
-        while (i8042_fault_read(&e)) drained++;
-        bool c_ok = q.overflow == 130 * 3 - INPUT_CAPACITY && q.pending == INPUT_CAPACITY &&
-                    q.state_lost && !q.keys_down && drained == INPUT_CAPACITY;
+        bool resync = i8042_fault_read(&e) && e.type == INPUT_RESYNC &&
+                      e.flags == INPUT_F_RESYNC && e.lost_count == INPUT_CAPACITY &&
+                      !e.value && e.sequence == 257;
+        unsigned drained = resync ? 1 : 0;
+        uint64_t sequence = 257;
+        bool fresh = true;
+        while (i8042_fault_read(&e)) {
+            drained++;
+            if (e.type == INPUT_RESYNC || e.flags || e.lost_count || e.sequence != ++sequence) fresh = false;
+        }
+        bool c_ok = q.overflow == INPUT_CAPACITY && q.pending == 135 && q.resync == 1 &&
+                    q.state_lost && !q.keys_down && drained == 135 && resync && fresh;
         i8042_fault_capture(0x01, 0x1C);
-        c_ok = c_ok && i8042_fault_read(&e) && (e.flags & INPUT_F_RESYNC) && e.sequence == 391;
-        rec_emit("input-fault", "DATA", "case=queue_overflow overflow=%llu drained=%u state_lost=%u resync_marked=%u ok=%u",
-                 q.overflow, drained, q.state_lost, !!(e.flags & INPUT_F_RESYNC), c_ok);
+        fresh = fresh && i8042_fault_read(&e) && e.type == INPUT_KEY && e.value == 1 &&
+                !e.flags && e.sequence == 392;
+        c_ok = c_ok && fresh;
+        rec_emit("input-fault", "DATA", "case=queue_overflow overflow=%llu drained=%u state_lost=%u resync_marked=%u fresh=%u ok=%u",
+                 q.overflow, drained, q.state_lost, resync, fresh, c_ok);
         i8042_fault_end();
         bool alive = survivor_progress(&survivor, "queue_overflow");
         ok = ok && c_ok && alive;

@@ -78,3 +78,7 @@ int probe_safe(void)
     return ok ? 0 : 1;
 }
 CIUKI_F1_PROBE("safe", probe_safe);
+
+/* Keep the final two registrations in the F1 acceptance-table order. */
+int probe_bootlog(void);
+CIUKI_F1_PROBE("bootlog", probe_bootlog);

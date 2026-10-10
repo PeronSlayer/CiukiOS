@@ -358,8 +358,8 @@ static void test_desktop_grants(void)
     input_events[2] = (struct input_event){ .type = INPUT_REL, .code = INPUT_X, .value = -12 };
     input_events[3] = (struct input_event){ .type = INPUT_REL, .code = INPUT_Y, .value = 13 };
     input_events[4] = (struct input_event){ .type = INPUT_BTN, .code = INPUT_RIGHT, .value = 1 };
-    input_events[5] = (struct input_event){ .type = INPUT_RESYNC };
-    input_status.buttons = 5;
+    input_events[5] = (struct input_event){ .type = INPUT_RESYNC, .value = 5, .lost_count = 256 };
+    input_status.buttons = 0; input_status.overflow = 999; /* later producer state */
     CHECK(grant_input_read(p, grants[1], 0, 6) == -EFAULT && !input_at);
     CHECK(grant_input_read(p, grants[1], BUFFER, 6) == 6);
     struct ciuki_input_event events[6]; CHECK(!ua_read(p->memory, events, BUFFER, sizeof(events)));
@@ -369,11 +369,21 @@ static void test_desktop_grants(void)
     CHECK(events[2].type == CIUKI_INPUT_MOTION && events[2].value == -12 && !events[2].value2);
     CHECK(events[3].value2 == 13 && !events[3].value && !events[3].code);
     CHECK(events[4].type == CIUKI_INPUT_BUTTON && events[4].code == 2 && events[4].value == 1);
-    CHECK(events[5].type == CIUKI_INPUT_RESYNC && events[5].value == 5);
-    input_status.overflow = 257; input_count = 6; input_at = 0;
-    CHECK(grant_input_read(p, grants[1], BUFFER, 6) == 1);
+    CHECK(events[5].type == CIUKI_INPUT_RESYNC && events[5].value == 5 && events[5].lost_count == 256);
+    input_events[0] = (struct input_event){ .type = INPUT_RESYNC, .value = 2, .lost_count = 512,
+        .sequence = 258, .tick = 456, .source = INPUT_FIRMWARE, .generation = 7 };
+    input_events[1] = (struct input_event){ .type = INPUT_KEY, .code = INPUT_KEY_A, .value = 1, .sequence = 259 };
+    input_events[2] = (struct input_event){ .type = INPUT_KEY, .code = INPUT_KEY_A, .value = 0, .sequence = 260 };
+    input_count = 3; input_at = 0;
+    CHECK(grant_input_read(p, grants[1], BUFFER, 2) == 2);
+    CHECK(!ua_read(p->memory, events, BUFFER, 2*sizeof(events[0])));
+    CHECK(events[0].type == CIUKI_INPUT_RESYNC && events[0].lost_count == 512 && events[0].value == 2);
+    CHECK(events[0].sequence == 258 && events[0].source == INPUT_FIRMWARE && events[0].generation == 7 &&
+          events[0].monotonic_ns == UINT64_C(456000000) && !events[0].code && !events[0].value2);
+    CHECK(events[1].type == CIUKI_INPUT_KEY && events[1].value == 1 && events[1].sequence == 259 && !events[1].lost_count);
+    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == 1 && input_at == 3);
     CHECK(!ua_read(p->memory, events, BUFFER, sizeof(events[0])));
-    CHECK(events[0].type == CIUKI_INPUT_RESYNC && events[0].lost_count == 257 && events[0].value == 5 && input_at == 6);
+    CHECK(events[0].type == CIUKI_INPUT_KEY && !events[0].value && events[0].sequence == 260);
     desktop_clean(p);
     puts("desktop grants: inheritance/transfer forbidden, duplication, authority, input conversion/RESYNC PASS");
 }

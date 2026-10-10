@@ -474,15 +474,18 @@
             "exact_count": 1,
             "fields": {
               "overflow": {
-                "eq": 134
+                "eq": 256
               },
               "drained": {
-                "eq": 256
+                "eq": 135
               },
               "state_lost": {
                 "eq": 1
               },
               "resync_marked": {
+                "eq": 1
+              },
+              "fresh": {
                 "eq": 1
               }
             }
@@ -3111,15 +3114,18 @@
             "exact_count": 1,
             "fields": {
               "overflow": {
-                "eq": 134
+                "eq": 256
               },
               "drained": {
-                "eq": 256
+                "eq": 135
               },
               "state_lost": {
                 "eq": 1
               },
               "resync_marked": {
+                "eq": 1
+              },
+              "fresh": {
                 "eq": 1
               }
             }
@@ -3483,15 +3489,18 @@
             "exact_count": 1,
             "fields": {
               "overflow": {
-                "eq": 134
+                "eq": 256
               },
               "drained": {
-                "eq": 256
+                "eq": 135
               },
               "state_lost": {
                 "eq": 1
               },
               "resync_marked": {
+                "eq": 1
+              },
+              "fresh": {
                 "eq": 1
               }
             }

@@ -58,7 +58,8 @@ static void stop(struct storage *s,bool clean) {
     vfs_table_destroy(&table); if(clean) OK(storage_shutdown(s)); storage_destroy(s);
 }
 static void baseline(void) {
-    struct storage *s=start(); OK(storage_enable_write(s,2)); OK(vfs_mkdir(&table,"C:/SYSTEM",0)); stop(s,true);
+    /* Model the image builder's SYSTEM directory, before mount's LOGS hook. */
+    struct storage *s=start(); OK(fat_enable_write(&s->volumes[2].fat)); OK(vfs_mkdir(&table,"C:/SYSTEM",0)); stop(s,true);
     media[0].reads=media[0].writes=media[0].flushes=media[0].events=0; media[0].undo_enabled=true;
 }
 static void reset(void) { fake_reset(&media[0]); bootlog_reset(); }
@@ -66,6 +67,8 @@ static void mount_tests(void) {
     struct storage *s=start(); struct storage_volume *v=storage_volume(s,2);
     CHECK(v && v->fat.type==32 && v->fat.readonly && v->read_gate && v->read_sequence && !v->writes && !media[0].writes && !media[0].flushes);
     CHECK(v->fat.ro_reasons==FAT_RO_REQUEST);
+    struct fat_entry directory;
+    CHECK(vfs_stat(&table,"C:/SYSTEM/LOGS",&directory)==-FS_ENOENT && !media[0].writes);
     uint8_t sector[512]; OK(cache_read(&s->cache,&v->io,0,sector)); unsigned reads=media[0].reads;
     disks[0].dev.quarantined=true;
     CHECK(cache_read(&s->cache,&v->io,0,sector)==-FS_EQUARANTINED && media[0].reads==reads);
@@ -76,7 +79,10 @@ static void mount_tests(void) {
     CHECK(storage_enable_write(s,2)==-FS_EROFS && !media[0].writes && v->fat.readonly);
     disks[0].dev.write_cache_state=BLKDEV_CACHE_DISABLED;
     OK(storage_enable_write(s,2)); CHECK(!v->fat.readonly && v->write_sequence>v->read_sequence);
+    OK(vfs_stat(&table,"C:/SYSTEM/LOGS",&directory)); CHECK(directory.attr&FAT_ATTR_DIR);
     CHECK(media[0].writes && !media[0].flushes);
+    unsigned directory_writes=media[0].writes;
+    OK(storage_enable_write(s,2)); CHECK(media[0].writes==directory_writes);
     uint32_t before=s->writer_ticks; OK(storage_writeback(s,fs_now_ms())); CHECK(s->writer_ticks==before+1);
     stop(s,true); reset();
     s=start(); v=storage_volume(s,2); OK(storage_enable_write(s,2));
@@ -101,6 +107,11 @@ static void mount_tests(void) {
         if(fault==1) CHECK(v->fat.ro_reasons&FAT_RO_COPIES);
         stop(s,false); reset();
     }
+    s=start(); OK(storage_enable_write(s,2)); OK(vfs_rmdir(&table,"C:/SYSTEM/LOGS"));
+    int h=vfs_open(&table,"C:/SYSTEM/LOGS",VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0); CHECK(h>=0); OK(vfs_close(&table,h));
+    CHECK(storage_enable_write(s,2)==-FS_ENOTDIR);
+    CHECK(bootlog_activate(&s->vfs,true,s->sequence)==-FS_ENOTDIR);
+    CHECK(bootlog_shutdown()==-FS_ENOTDIR); stop(s,true); reset();
     printf("PASS storage mounts: RO-first, gate/durability, refreshed quarantine/cache hits, dirty/divergent/BPB, writer hook\n");
 }
 static void log_tests(void) {
@@ -108,9 +119,14 @@ static void log_tests(void) {
     bootlog_capture("activation before mount\n",24); bootlog_snapshot(&st); CHECK(!st.writes && !st.storage_calls && st.queued==24);
     CHECK(bootlog_activate(&s->vfs,false,0)==-FS_EROFS); CHECK(!media[0].writes);
     OK(storage_enable_write(s,2)); OK(bootlog_activate(&s->vfs,true,s->sequence));
+    CHECK(BOOTLOG_LIMIT==131072 && !strcmp(BOOTLOG_PATH,"C:/SYSTEM/LOGS/BOOT.LOG"));
     char text[4096]; memset(text,'a',sizeof(text));
-    for(unsigned i=0;i<18;i++) { bootlog_capture(text,sizeof(text)); OK(bootlog_drain()); }
-    bootlog_snapshot(&st); CHECK(st.active && st.size<=BOOTLOG_LIMIT && st.rotations && st.first_write_sequence>st.qualification_sequence);
+    OK(bootlog_drain());
+    for(unsigned i=0;i<BOOTLOG_LIMIT/sizeof(text)-1;i++) { bootlog_capture(text,sizeof(text)); OK(bootlog_drain()); }
+    bootlog_capture(text,sizeof(text)-24); OK(bootlog_drain());
+    bootlog_snapshot(&st); CHECK(st.active && st.size==BOOTLOG_LIMIT && !st.rotations && st.first_write_sequence>st.qualification_sequence);
+    bootlog_capture("z",1); OK(bootlog_drain());
+    bootlog_snapshot(&st); CHECK(st.size==1 && st.rotations==1);
     OK(bootlog_shutdown()); uint8_t digest[32],again[32]; uint32_t size,size2;
     OK(storage_file_digest(&table,BOOTLOG_PATH,digest,&size)); CHECK(size<=BOOTLOG_LIMIT && size);
     stop(s,true); bootlog_reset();
@@ -123,7 +139,7 @@ static void log_tests(void) {
     for(unsigned i=0;i<5;i++) bootlog_capture(text,sizeof(text));
     bootlog_snapshot(&st); CHECK(st.queued==BOOTLOG_RAM && st.dropped==3*sizeof(text) && !st.storage_calls);
     OK(bootlog_shutdown()); bootlog_reset();
-    printf("PASS boot log: qualification/zero calls, 64KiB truncation ring, bounded RAM, durable reopen/append\n");
+    printf("PASS boot log: SYSTEM/LOGS after gate, 128KiB exact boundary/truncation, bounded RAM, durable reopen/append\n");
 }
 static void failure_tests(void) {
     for(unsigned fault=0;fault<2;fault++) {
