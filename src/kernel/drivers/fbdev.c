@@ -8,6 +8,41 @@
 static struct fb_device device;
 static struct kmutex presenter;
 static bool initialized;
+static unsigned console_rows;
+static unsigned drawing;
+enum { CONSOLE_BUSY = 1, PRESENT_BUSY = 2 };
+
+void fbdev_console_region(unsigned rows)
+{
+    __atomic_store_n(&console_rows, rows, __ATOMIC_RELEASE);
+}
+
+bool fbdev_console_begin(void)
+{
+    unsigned idle = 0;
+    return __atomic_compare_exchange_n(&drawing, &idle, CONSOLE_BUSY, false,
+                                       __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
+void fbdev_console_end(void)
+{
+    __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
+}
+
+static bool present_begin(const struct fb_device *d, const struct fb_rect *c)
+{
+    if (d != &device || (unsigned)c->y >= __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE))
+        return true;
+    unsigned idle = 0;
+    return __atomic_compare_exchange_n(&drawing, &idle, PRESENT_BUSY, false,
+                                       __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
+static void present_end(const struct fb_device *d, const struct fb_rect *c)
+{
+    if (d == &device && (unsigned)c->y < __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE))
+        __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
+}
 
 /* VESA VBE Core Functions 3.0 (1998-09-16), pp. 14, 30-31, 37-39:
  * https://www.cs.utexas.edu/~dahlin/Classes/UGOS/reading/vbe3.pdf
@@ -179,6 +214,8 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
     struct fb_rect c;
     if (!clip(d, r, &c))
         return 0;
+    if (!present_begin(d, &c))
+        return -EBUSY;
     uint32_t sx = (uint32_t)((int64_t)c.x - r->x), sy = (uint32_t)((int64_t)c.y - r->y);
     unsigned bytes = d->bpp / 8;
     for (int32_t y = 0; y < c.height; y++) {
@@ -190,6 +227,7 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
             pixel(dp + (uint32_t)x * bytes, bytes, pack(d, rgb));
         }
     }
+    present_end(d, &c);
     return 0;
 }
 
@@ -202,6 +240,8 @@ int fbdev_fill_to(const struct fb_device *d, const struct fb_rect *r, uint32_t c
     struct fb_rect c;
     if (!clip(d, r, &c))
         return 0;
+    if (!present_begin(d, &c))
+        return -EBUSY;
     unsigned bytes = d->bpp / 8;
     colour = pack(d, colour);
     for (int32_t y = 0; y < c.height; y++) {
@@ -209,6 +249,7 @@ int fbdev_fill_to(const struct fb_device *d, const struct fb_rect *r, uint32_t c
         for (int32_t x = 0; x < c.width; x++)
             pixel(dp + (uint32_t)x * bytes, bytes, colour);
     }
+    present_end(d, &c);
     return 0;
 }
 

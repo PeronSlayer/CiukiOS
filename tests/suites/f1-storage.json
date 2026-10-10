@@ -20,47 +20,71 @@
           {
             "where": {
               "event": "DATA",
-              "group": "ata"
+              "identified": "1"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "identity_match": {
-                "eq": 1
-              },
-              "capacity_match": {
-                "eq": 1
-              },
-              "invalid_commands": {
-                "eq": 0
-              },
-              "sector_bytes": {
-                "eq": 512
+              "generation": {
+                "ge": 1
               }
             }
           },
           {
             "where": {
               "event": "DATA",
-              "group": "metadata"
+              "sector_size": "512"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
-              "generation": {
-                "ge": 1
+              "capacity": {
+                "eq": 1048576
               },
-              "errors": {
-                "ge": 0
+              "bios_calls": {
+                "eq": 0
               },
-              "timing_domain": "icount"
+              "clock": "pit"
             }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "boundary_commands": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "range_result": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "zero_result": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "overflow_result": {
+                "encoding": "signed",
+                "eq": -22
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "lba": "0"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "lba": "2048"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "sha256"
+            ]
           }
         ]
       },
@@ -97,17 +121,15 @@
           {
             "where": {
               "event": "DATA",
-              "group": "partition"
+              "source": "real",
+              "result": "0"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "out_of_device_io": {
-                "eq": 0
-              },
-              "walk_bounded": {
+              "count": {
                 "eq": 1
               },
-              "partition_errors": {
+              "walk_count": {
                 "eq": 0
               }
             }
@@ -115,11 +137,19 @@
           {
             "where": {
               "event": "DATA",
-              "case": "primary"
+              "source": "real",
+              "partition": "1"
             },
             "exact_count": 1,
             "fields": {
-              "errors": {
+              "type": "0c",
+              "start": {
+                "eq": 2048
+              },
+              "length": {
+                "eq": 1046528
+              },
+              "logical": {
                 "eq": 0
               }
             }
@@ -127,109 +157,267 @@
           {
             "where": {
               "event": "DATA",
-              "case": "extended"
+              "fixture": "primary_extended",
+              "owner": "fixture"
             },
             "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "bad-signature"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "cycle"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "overflow"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "out-of-range"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "overlap"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "protective-gpt"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
             "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "primary_extended",
+              "matched": "1"
+            },
+            "exact_count": 1,
             "fields": {
-              "generation": {
-                "ge": 1
+              "result": {
+                "encoding": "signed",
+                "eq": 0
               },
-              "errors": {
-                "ge": 0
+              "expected": {
+                "encoding": "signed",
+                "eq": 0
               },
-              "timing_domain": "icount"
+              "outside": {
+                "eq": 0
+              },
+              "walk_count": {
+                "eq": 2
+              },
+              "accepted": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "loop",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "loop",
+              "matched": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -40
+              },
+              "expected": {
+                "encoding": "signed",
+                "eq": -40
+              },
+              "outside": {
+                "eq": 0
+              },
+              "walk_count": {
+                "le": 64
+              },
+              "accepted": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "overflow",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "overflow",
+              "matched": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "expected": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "outside": {
+                "eq": 0
+              },
+              "walk_count": {
+                "le": 64
+              },
+              "accepted": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "overlap",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "overlap",
+              "matched": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "expected": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "outside": {
+                "eq": 0
+              },
+              "walk_count": {
+                "le": 64
+              },
+              "accepted": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "protective_gpt",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "protective_gpt",
+              "matched": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -95
+              },
+              "expected": {
+                "encoding": "signed",
+                "eq": -95
+              },
+              "outside": {
+                "eq": 0
+              },
+              "walk_count": {
+                "le": 64
+              },
+              "accepted": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "signature",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "signature",
+              "matched": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "expected": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "outside": {
+                "eq": 0
+              },
+              "walk_count": {
+                "le": 64
+              },
+              "accepted": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "out_of_range",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fixture": "out_of_range",
+              "matched": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "expected": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "outside": {
+                "eq": 0
+              },
+              "walk_count": {
+                "le": 64
+              },
+              "accepted": {
+                "eq": 0
+              }
             }
           }
         ]
@@ -247,214 +435,371 @@
           {
             "where": {
               "event": "DATA",
-              "group": "ata-fault",
-              "subcase": "err"
+              "case": "err",
+              "owner": "fake-ata0"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "eio": {
-                "eq": 1
+              "result": {
+                "encoding": "signed",
+                "eq": -5
               },
-              "deadline_met": {
-                "eq": 1
-              },
-              "subsequent_commands": {
-                "eq": 0
-              },
-              "bios_calls": {
-                "eq": 0
-              },
-              "quarantine_retained": {
-                "eq": 1
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault",
-              "subcase": "df"
-            },
-            "combine": true,
-            "fields": {
-              "eio": {
-                "eq": 1
-              },
-              "deadline_met": {
-                "eq": 1
-              },
-              "subsequent_commands": {
-                "eq": 0
-              },
-              "bios_calls": {
-                "eq": 0
-              },
-              "quarantine_retained": {
-                "eq": 1
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault",
-              "subcase": "stuck-bsy"
-            },
-            "combine": true,
-            "fields": {
-              "eio": {
-                "eq": 1
-              },
-              "deadline_met": {
-                "eq": 1
-              },
-              "subsequent_commands": {
-                "eq": 0
-              },
-              "bios_calls": {
-                "eq": 0
-              },
-              "quarantine_retained": {
-                "eq": 1
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault",
-              "subcase": "stuck-drq"
-            },
-            "combine": true,
-            "fields": {
-              "eio": {
-                "eq": 1
-              },
-              "deadline_met": {
-                "eq": 1
-              },
-              "subsequent_commands": {
-                "eq": 0
-              },
-              "bios_calls": {
-                "eq": 0
-              },
-              "quarantine_retained": {
-                "eq": 1
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault",
-              "subcase": "missing-device"
-            },
-            "combine": true,
-            "fields": {
-              "eio": {
-                "eq": 1
-              },
-              "deadline_met": {
-                "eq": 1
-              },
-              "subsequent_commands": {
-                "eq": 0
-              },
-              "bios_calls": {
-                "eq": 0
-              },
-              "quarantine_retained": {
-                "eq": 1
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault",
-              "subcase": "identify"
-            },
-            "combine": true,
-            "fields": {
-              "eio": {
-                "eq": 1
-              },
-              "deadline_met": {
-                "eq": 1
-              },
-              "subsequent_commands": {
-                "eq": 0
-              },
-              "bios_calls": {
-                "eq": 0
-              },
-              "quarantine_retained": {
-                "eq": 1
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "ata-fault",
-              "subcase": "flush"
-            },
-            "combine": true,
-            "fields": {
-              "eio": {
-                "eq": 1
-              },
-              "deadline_met": {
-                "eq": 1
-              },
-              "subsequent_commands": {
-                "eq": 0
-              },
-              "bios_calls": {
-                "eq": 0
-              },
-              "quarantine_retained": {
-                "eq": 1
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
+              "issued": {
                 "ge": 1
               },
-              "errors": {
-                "ge": 0
-              },
-              "timing_domain": "icount"
+              "quarantined": {
+                "eq": 1
+              }
             }
           },
           {
             "where": {
               "event": "DATA",
-              "group": "ata-fault-summary"
+              "case": "err",
+              "clock": "scaled_pit"
             },
-            "combine": true,
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "deadline_ms",
+                "op": "ge",
+                "right": "elapsed_ms"
+              }
+            ],
+            "fields": {
+              "accepted": {
+                "eq": 1
+              },
+              "further_commands": {
+                "eq": 0
+              },
+              "next_result": {
+                "encoding": "signed",
+                "eq": -200
+              },
+              "deadline_ms": {
+                "eq": 30000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "df",
+              "owner": "fake-ata0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "issued": {
+                "ge": 1
+              },
+              "quarantined": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "df",
+              "clock": "scaled_pit"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "deadline_ms",
+                "op": "ge",
+                "right": "elapsed_ms"
+              }
+            ],
+            "fields": {
+              "accepted": {
+                "eq": 1
+              },
+              "further_commands": {
+                "eq": 0
+              },
+              "next_result": {
+                "encoding": "signed",
+                "eq": -200
+              },
+              "deadline_ms": {
+                "eq": 30000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bsy_stuck",
+              "owner": "fake-ata0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "issued": {
+                "ge": 1
+              },
+              "quarantined": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bsy_stuck",
+              "clock": "scaled_pit"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "deadline_ms",
+                "op": "ge",
+                "right": "elapsed_ms"
+              }
+            ],
+            "fields": {
+              "accepted": {
+                "eq": 1
+              },
+              "further_commands": {
+                "eq": 0
+              },
+              "next_result": {
+                "encoding": "signed",
+                "eq": -200
+              },
+              "deadline_ms": {
+                "eq": 30000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "drq_stuck",
+              "owner": "fake-ata0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "issued": {
+                "ge": 1
+              },
+              "quarantined": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "drq_stuck",
+              "clock": "scaled_pit"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "deadline_ms",
+                "op": "ge",
+                "right": "elapsed_ms"
+              }
+            ],
+            "fields": {
+              "accepted": {
+                "eq": 1
+              },
+              "further_commands": {
+                "eq": 0
+              },
+              "next_result": {
+                "encoding": "signed",
+                "eq": -200
+              },
+              "deadline_ms": {
+                "eq": 30000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing",
+              "owner": "fake-ata0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "issued": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing",
+              "clock": "scaled_pit"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "deadline_ms",
+                "op": "ge",
+                "right": "elapsed_ms"
+              }
+            ],
+            "fields": {
+              "accepted": {
+                "eq": 1
+              },
+              "further_commands": {
+                "eq": 0
+              },
+              "next_result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "deadline_ms": {
+                "eq": 30000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identify",
+              "owner": "fake-ata0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "issued": {
+                "ge": 1
+              },
+              "quarantined": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identify",
+              "clock": "scaled_pit"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "deadline_ms",
+                "op": "ge",
+                "right": "elapsed_ms"
+              }
+            ],
+            "fields": {
+              "accepted": {
+                "eq": 1
+              },
+              "further_commands": {
+                "eq": 0
+              },
+              "next_result": {
+                "encoding": "signed",
+                "eq": -200
+              },
+              "deadline_ms": {
+                "eq": 30000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "flush",
+              "owner": "fake-ata0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "issued": {
+                "ge": 1
+              },
+              "quarantined": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "flush",
+              "clock": "scaled_pit"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "deadline_ms",
+                "op": "ge",
+                "right": "elapsed_ms"
+              }
+            ],
+            "fields": {
+              "accepted": {
+                "eq": 1
+              },
+              "further_commands": {
+                "eq": 0
+              },
+              "next_result": {
+                "encoding": "signed",
+                "eq": -200
+              },
+              "deadline_ms": {
+                "eq": 60000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "bios_calls": "0"
+            },
+            "exact_count": 1,
             "fields": {
               "real_commands": {
                 "eq": 0
               },
-              "survivor_ticks": {
+              "survivor_samples": {
                 "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              },
+              "survivor_alive": {
+                "eq": 1
               }
             }
           }
@@ -498,31 +843,9 @@
               "lba": {
                 "eq": 1048575
               }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
-                "ge": 1
-              },
-              "errors": {
-                "ge": 0
-              },
-              "timing_domain": "icount"
-            }
+            "missing": "not_run",
+            "subcase": "blkdebug"
           }
         ]
       },
@@ -533,10 +856,5 @@
         "errno": 5
       }
     }
-  ],
-  "operator_confirmation_cases": [
-    "uart-absent-qemu-t23",
-    "uart-absent-qemu-e500",
-    "uart-absent-qemu-min128"
   ]
 }

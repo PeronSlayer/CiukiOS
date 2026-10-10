@@ -27,6 +27,13 @@ def selector(request, source='menu', validated_fw_cfg=False):
     return {'phase': int(match[1]), 'probe': match[2], 'run': match[3], 'platform': 'e500' if forced else None, 'safe': safe}
 
 
+def menu_choice(choice, safe=False):
+    """Normal leaves earlier positive sources intact; S adds safe mode."""
+    if choice.lower() not in ('n', 's'):
+        raise ValueError('invalid boot menu choice')
+    return safe or choice.lower() == 's'
+
+
 def boot_options(options, safe=False, serial=True):
     """BOOT.CFG exact tokens, spaces/line endings; positive safe sources persist."""
     if not isinstance(options,str) or not options.isascii() or len(options)>127:

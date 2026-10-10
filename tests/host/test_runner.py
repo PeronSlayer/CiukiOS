@@ -27,6 +27,28 @@ import resources as res
 from evidence import Parser,EvidenceError,ApplicationCapture,f2_metadata,F2_FIELDS
 
 
+def linked_probe_names(rows, phase):
+    """Read names at the production table bounds recorded by lld, without source slicing."""
+    def address(symbol):
+        return int(next(line.split()[0] for line in rows if symbol+' = .' in line),16)
+    elf=(ROOT/'build/f0/VMM.ELF').read_bytes()
+    phoff=struct.unpack_from('<I',elf,28)[0]
+    phsize,phcount=struct.unpack_from('<HH',elf,42)
+    segments=[struct.unpack_from('<8I',elf,phoff+i*phsize) for i in range(phcount)]
+    def read(va,size):
+        for kind,offset,base,physical,filesize,memory,flags,alignment in segments:
+            if kind==1 and base<=va and va+size<=base+filesize:
+                return elf[offset+va-base:offset+va-base+size]
+        raise AssertionError('probe table address outside file-backed load segments')
+    start,end=address(f'__f{phase}probes_start'),address(f'__f{phase}probes_end')
+    if (end-start)%8:raise AssertionError('invalid target probe table extent')
+    names=[]
+    for va in range(start,end,8):
+        pointer=struct.unpack('<I',read(va,4))[0]
+        names.append(read(pointer,24).split(b'\0',1)[0].decode('ascii'))
+    return names
+
+
 class FakeHost(runner.Host):
     """Uses real child processes/QMP/FIFO, with no systemd or QEMU invocation."""
     def __init__(self,cgroup,bad_limits=False):self.cgroup=cgroup;self.process=None;self.bad_limits=bad_limits
@@ -392,99 +414,178 @@ class RunnerTests(unittest.TestCase):
         self.assertLessEqual(address('__rodata_start'),start)
         self.assertLessEqual(start,end)
         self.assertLessEqual(end,address('__rodata_end'))
+        self.assertEqual(linked_probe_names(rows,1),[
+            'registry','input','input-fault','framebuffer','ata','ata-fault','partition','safe'])
+        registrations=[line.split()[-1] for line in rows if ' f1probe_' in line]
+        self.assertEqual(registrations,[
+            'f1probe_probe_registry','f1probe_probe_input','f1probe_probe_input_fault',
+            'f1probe_probe_framebuffer','f1probe_probe_ata','f1probe_probe_ata_fault',
+            'f1probe_probe_partition','f1probe_probe_safe'])
+        self.assertEqual(end-start,8*len(registrations))
         sections=[line for line in rows if ':(.f1probes)' in line]
         self.assertTrue(sections)
         for line in sections:
             columns=line.split();vma=int(columns[0],16);size=int(columns[2],16)
             self.assertGreaterEqual(vma,start);self.assertLessEqual(vma+size,end)
 
+    def test_console_presenter_heap_region_arbitration(self):
+        if not shutil.which('clang'):self.skipTest('host clang unavailable')
+        harness=self.root/'console_arbitration.c'
+        harness.write_text(r'''
+#define main framebuffer_fixture_main
+#include "tests/host/fbdev_test.c"
+#undef main
+#undef GUARD
+#define CIUKI_CPU_H
+#define P2V(p) ((void *)(uintptr_t)(p))
+static unsigned host_if = 0x200, irq_sections;
+static uint32_t irq_save(void) { unsigned old=host_if; host_if=0; irq_sections++; return old; }
+static void irq_restore(uint32_t flags) { host_if=flags; }
+const uint8_t font_cfn_regular[95+95*32] = { [95+('a'-32)*32+1] = 0x80 };
+static void *console_map(uint32_t phys,uint32_t size,bool uncached)
+{
+    CHECK(phys==g_boot.fb_phys && size==g_boot.fb_pitch*g_boot.fb_height && uncached);
+    return fake_lfb;
+}
+#define vmm_map_mmio console_map
+#define pack console_pack
+#include "src/kernel/core/console.c"
+#undef pack
+#undef vmm_map_mmio
+int main(void)
+{
+    enum { PITCH=80, HEIGHT=35, SIZE=PITCH*HEIGHT, GUARD=32 };
+    uint8_t *raw=malloc(SIZE+2*GUARD), *saved=malloc(SIZE);
+    CHECK(raw && saved);
+    memset(raw,0xA5,SIZE+2*GUARD);
+    fake_lfb=raw+GUARD;
+    boot_fixture(true);
+    g_boot.fb_height=HEIGHT;g_boot.fb_pitch=PITCH;
+    g_boot.vbe_mode_info[20]=HEIGHT;g_boot.vbe_mode_info[50]=PITCH;
+    reservation.end=g_boot.fb_phys+SIZE;
+    CHECK(fbdev_init()==0 && console_init_lfb());
+    CHECK(console_rows==32 && !drawing);
+    struct fb_rect owned={0,0,17,32}, below={0,32,17,3}, crossing={0,31,17,4};
+    uint32_t source[17*35];
+    for (unsigned i=0;i<17*35;i++) source[i]=0x123456;
+    struct fb_surface surface={source,17,35,17*4,sizeof(source)};
+    uint32_t flags=line_begin();
+    CHECK(host_if==0 && drawing==CONSOLE_BUSY);
+    memcpy(saved,fake_lfb,SIZE);
+    CHECK(fbdev_fill(&owned,0xFFFFFF)==-EBUSY);
+    CHECK(fbdev_present(&surface,&crossing)==-EBUSY);
+    CHECK(!memcmp(saved,fake_lfb,SIZE));
+    CHECK(fbdev_fill(&below,0xFFFFFF)==0);
+    CHECK(!memcmp(saved,fake_lfb,32*PITCH));
+    CHECK(fbdev_present(&surface,&below)==0);
+    CHECK(!memcmp(saved,fake_lfb,32*PITCH));
+    CHECK(drawing==CONSOLE_BUSY);
+    line_end(flags);
+    CHECK(host_if==0x200 && !drawing);
+    CHECK(fbdev_fill(&owned,0x010203)==0 && !drawing);
+    CHECK(fbdev_present(&surface,&owned)==0 && !drawing);
+    memcpy(saved,fake_lfb,SIZE);
+    /* Model the IRQ/panic preemption point after production present_begin. */
+    CHECK(present_begin(&device,&owned) && drawing==PRESENT_BUSY);
+    CHECK(!fbdev_console_begin());
+    console_write("a\n",2);
+    console_show_page(0,"a");
+    CHECK(!memcmp(saved,fake_lfb,SIZE));
+    CHECK(hist_count==1 && !strcmp(hist[0],"a") && drawing==PRESENT_BUSY);
+    present_end(&device,&owned);
+    console_show_page(0,"a");
+    CHECK(memcmp(saved,fake_lfb,32*PITCH)!=0 && !drawing);
+    CHECK(!memcmp(saved+32*PITCH,fake_lfb+32*PITCH,3*PITCH));
+    /* Invalid and empty operations must neither leave a claim nor write. */
+    struct fb_rect invalid={INT32_MAX,0,1,1}, empty={0,0,0,1};
+    CHECK(fbdev_fill(&invalid,0)==-EINVAL && !drawing);
+    CHECK(fbdev_present(&surface,&empty)==0 && !drawing);
+    host_if=0;console_write("a",1);CHECK(host_if==0 && !drawing);
+    CHECK(irq_sections>0 && locks==0);
+    for (unsigned i=0;i<GUARD;i++) CHECK(raw[i]==0xA5 && raw[GUARD+SIZE+i]==0xA5);
+    free(saved);free(raw);
+    printf("console/presenter arbitration: %u failures\n",failures);
+    return failures ? 1 : 0;
+}
+''')
+        binary=self.root/'console_arbitration'
+        checked=subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                                '-fsanitize=address,undefined','-I',str(ROOT),
+                                '-I',str(ROOT/'src/kernel/include'),str(harness),'-o',str(binary)],
+                               capture_output=True,text=True)
+        self.assertEqual(checked.returncode,0,checked.stderr)
+        checked=subprocess.run([str(binary)],capture_output=True,text=True,
+                               env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})
+        self.assertEqual(checked.returncode,0,checked.stdout+checked.stderr)
+
+    def test_missing_subcase_reaches_runner_as_not_run(self):
+        self.case.update(probe='input-fault',selector='f1:input-fault run={run_id}',expected={'terminal':'END',
+                             'not_run_subcases':[{'subcase':'firmware_overrun','reason':'missing_emitter'}]})
+        result,_=self.run_fake(records=[{'event':'BEGIN'},{'event':'END','status':'PASS'}])
+        self.assertEqual(result['outcome'],'not_run')
+        self.assertEqual(result['not_run_subcases'],self.case['expected']['not_run_subcases'])
+
+    def test_operator_confirmation_follows_probe_subcase_across_profiles(self):
+        case={'id':'renamed-import','probe':'panic','profile':'future-profile',
+              'evidence_sink':'screen','device_exceptions':{'serial':'none'}}
+        self.assertTrue(runner.operator_confirmation_case(case))
+        self.assertFalse(runner.failed_prerequisite(case,{'outcome':'fail','operator_confirmation':True}))
+        self.assertTrue(runner.failed_prerequisite(case,{'outcome':'fail','operator_confirmation':False}))
+        for altered in ({'probe':'boot'},{'evidence_sink':'serial'},{'device_exceptions':{}}):
+            self.assertFalse(runner.operator_confirmation_case({**case,**altered}))
+
     def test_production_kernel_selector_names_and_phase_dispatch(self):
         if not shutil.which('clang'):self.skipTest('host clang unavailable')
-        source=(ROOT/'src/kernel/probes/probes.c').read_text()
-        first=source.index('static const struct probe_def probes[]');last=source.index('\nstatic __attribute__',first)
-        harness=self.root/'selector.c'
-        stubs="""
-#include <stdbool.h>
-#include <stdint.h>
+        harness=self.root/'selector_harness.c'
+        harness.write_text("""
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
-#include <setjmp.h>
-#include <ciuki/boot_info.h>
-#include <ciuki/probe.h>
 #include <ciuki/process.h>
-#include <ciuki/sha256.h>
-#define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))
-#define CIUKI_BUILD_ID "host"
-static struct ciuki_boot_info g_boot;
-static uint64_t g_tsc_per_ms;
-static jmp_buf done;
+#include "selector.h"
 static char evidence[4096];
-static int calls0, calls1, failing;
+static int calls0, calls1, calls2, failing;
 static int f0(void) { calls0++; return failing; }
 static int f1(void) { calls1++; return failing; }
-#define probe_boot f0
-#define probe_bootinfo f0
-#define probe_allocator f0
-#define probe_protection f0
-#define probe_isolation f0
-#define probe_preempt f0
-#define probe_localfault f0
-#define probe_syslife f0
-#define probe_fpu f0
-static void probe_panic(void) { calls0++; }
-void rec_set_run(const char *s) { (void)s; }
+static int f2(void) { calls2++; return failing; }
+static void panic_probe(void) { calls0++; }
+static void app_begin(const struct probe_selection *s) { (void)s; }
+static void app_end(void) {}
+void klog(const char *fmt,...) { (void)fmt; }
 void rec_emit(const char *p,const char *event,const char *fmt,...) {
     unsigned n=(unsigned)strlen(evidence);
     n+=(unsigned)snprintf(evidence+n,sizeof(evidence)-n,"%s %s ",p,event);
     if (fmt) { va_list ap; va_start(ap,fmt); vsnprintf(evidence+n,sizeof(evidence)-n,fmt,ap); va_end(ap); }
     strcat(evidence,"\\n");
 }
-static void timing_calibrate(void) {}
-static void kwork_init(void) {}
-void task_sleep_ms(unsigned n) { (void)n; longjmp(done,1); }
-static void klog(const char *fmt,...) { (void)fmt; }
-static __attribute__((noreturn)) void show_evidence_forever(void) { longjmp(done,1); }
-static const struct probe_def fixture_table[] = {{"input",f1},{"framebuffer",f1}};
-static const struct probe_def *table_end;
-#define __f1probes_start fixture_table
-#define __f1probes_end table_end
-static int calls2;
-static int f2(void) { calls2++; return failing; }
+static const struct probe_def fixture_f0[] = {
+    {"boot",f0},{"bootinfo",f0},{"allocator",f0},{"protection",f0},{"isolation",f0},
+    {"preempt",f0},{"localfault",f0},{"syslife",f0},{"fpu",f0}
+};
+static const struct probe_def fixture_f1[] = {{"input",f1},{"framebuffer",f1}};
 static const struct ciuki_f2_probe fixture_f2[] = {{"elf-load",f2},{"spawn-wait",f2}};
-#define __f2probes_start fixture_f2
-#define __f2probes_end (fixture_f2+2)
-static char app_probe[24];
-static struct sha256_ctx app_digest;
-static struct kmutex app_lock;
-static volatile unsigned app_bytes;
-void sha256_init(struct sha256_ctx *p) { (void)p; }
-void kmutex_init(struct kmutex *p) { (void)p; }
-"""
-        wrappers="""
 int validate(const char *s,unsigned len,unsigned flags) {
     struct probe_selection selection;
-    g_boot.flags=flags;
     evidence[0]=0;
-    if (!parse_selector(s,len,&selection)) return 0;
-    return (int)selection.phase+1;
+    return probes_parse_selector(s,len,flags,&selection) ? (int)selection.phase+1 : 0;
 }
 int dispatch(const char *s,unsigned flags,unsigned count,int fail) {
-    memset(&g_boot,0,sizeof(g_boot));
-    g_boot.flags=flags|CBI_F_TEST_REQUEST;
-    g_boot.test_request_len=(uint16_t)strlen(s);
-    memcpy(g_boot.test_request,s,g_boot.test_request_len);
-    table_end=fixture_table+count;calls0=calls1=calls2=0;evidence[0]=0;failing=fail;
-    if (!setjmp(done)) probes_main(0);
+    calls0=calls1=calls2=0;evidence[0]=0;failing=fail;
+    struct probe_selection selection;
+    if (probes_parse_selector(s,(unsigned)strlen(s),flags,&selection)) {
+        const struct probe_tables tables = { fixture_f0, fixture_f1, 9, count, fixture_f2, 2 };
+        const struct probe_hooks hooks = { app_begin, app_end, panic_probe };
+        probes_dispatch(&selection,&tables,&hooks);
+    }
     return calls0*100+calls1+calls2*10000;
 }
 const char *records(void) { return evidence; }
-"""
-        # Compile the production parser and probes_main; only hardware/probe bodies are mocked.
-        harness.write_text(stubs+source[first:last]+'\n'+source[source.index('void probes_main(void *arg)'):]+wrappers)
+""")
         library=self.root/'selector.so'
-        compiled=subprocess.run(['clang','-shared','-fPIC','-std=c17','-Wall','-Werror','-I',str(ROOT/'src/kernel/include'),
-                                str(harness),'-o',str(library)],capture_output=True,text=True)
+        compiled=subprocess.run(['clang','-shared','-fPIC','-std=c17','-Wall','-Werror',
+                                '-I',str(ROOT/'src/kernel/include'),'-I',str(ROOT/'src/kernel/probes'),
+                                str(ROOT/'src/kernel/probes/selector.c'),str(harness),'-o',str(library)],
+                                capture_output=True,text=True)
         self.assertEqual(compiled.returncode,0,compiled.stderr)
         native=ctypes.CDLL(str(library));native.validate.argtypes=[ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint]
         native.dispatch.argtypes=[ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_int]
@@ -739,6 +840,135 @@ class GroupedEvidenceTests(unittest.TestCase):
             parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={i:06d} probe=boot {record}'.encode())
         with self.assertRaises(EvidenceError):parser.check({'terminal':'END','predicates':[{'where':{'event':'DATA','group':'boot'},'combine':True,'fields':{'errors':{'eq':0}}}]})
 
+class F1RecordTests(unittest.TestCase):
+    """Fabricated successful records in the production probes' actual formats."""
+    def records(self, probe, bodies, terminal='END', status='PASS'):
+        parser=Parser('12345678',probe)
+        records=['event=BEGIN',*['event=DATA '+b for b in bodies]]
+        records.append('event='+terminal+' status='+status)
+        for seq,record in enumerate(records,1):
+            parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe={probe} {record}'.encode())
+        return parser
+
+    def fixtures(self):
+        registry=[
+            'case=ledger cycles=100 live_before=12 live_after=12 claims=100 releases=100 device_writes=0 mappings=0 buffers=0 ok=1',
+            'case=resources buffers_allocated=100 buffers_freed=100 mappings=0 callbacks_pending=0 states=claimed,active,quiescing,released',
+            'case=quarantine owner=registry-quarantine other_owner=registry-retry generation=101 idle=-14 release=-22 retry=-22 retained=1 device_writes=0',
+            'case=shared_irq irq=11 boundary=production_shadow frame=synthetic physical_unmasks=0 device_writes=0 callbacks_a=2 callbacks_b=1003',
+            'case=stuck_irq owner=fixture-b generation=1 passes=1003 unclaimed=1000 quarantined=1 eois=1003 removed_a=1 masked=1 ok=1',
+            'group=registry cycles=100 claim_delta=0 mapping_delta=0 buffer_delta=0 conflict_writes=0 stale_writes=0 unknown_size_writes=0',
+            'group=registry quarantine_retained=1 second_claim_refused=1 irq_owner_errors=0',
+            'group=metadata subcase=lifecycle owner=registry-scratch generation=100 errors=0 gate=registry timing_domain=icount']
+        faults=[]
+        for name,error,elapsed,resends,quarantine in [('missing_ack',-110,200,0,1),('bounded_resend',0,2,2,0),('resend_exhausted',-71,2,2,1),('mixed_aux_key',0,0,0,0)]:
+            faults.extend([f'case={name} owner=fixture generation=1 error={error} elapsed_ms={elapsed} resends={resends} quarantined={quarantine} pending=0 resets=0 ok=1',
+                           f'case={name} timing=scripted_ms controller_reads=7 controller_writes=3 physical_claims=0 keys={2 if name=="mixed_aux_key" else 0} x={2 if name=="mixed_aux_key" else 0} y={-1 if name=="mixed_aux_key" else 0}'])
+        faults.extend(['case=malformed_packet resync=3 x=2 y=-1 ok=1',
+                       'case=queue_overflow overflow=134 drained=256 state_lost=1 resync_marked=1 ok=1'])
+        for name in ('missing_ack','bounded_resend','resend_exhausted','mixed_aux_key','malformed_packet','queue_overflow'):
+            faults.append(f'case={name} survivor_ticks=110 survivor_progress=200 survivor_ok=1')
+        inputs={}
+        for backend in ('native','firmware'):
+            inputs[backend]=[
+                f'case=counts backend={backend} generation=1 characters=100 key_transitions=200 button_transitions=20',
+                'case=motion x=200 y=-100 digest=12345678 text_digest=12345678 events=420',
+                'case=queue overflow=0 resync=0 duplicates=0 repeats=0 errors=0 stuck_keys=0 buttons=0 state_lost=0',
+                f'group=input backend={backend} text_count=100 key_transitions=200 button_transitions=20 motion_x=200 motion_y=-100',
+                'group=input loss=0 duplicates=0 stuck=0 owner_errors=0',
+                f'group=metadata subcase=stimulus owner={"firmware-input" if backend=="firmware" else "i8042"} generation=1 errors=0 gate=input timing_domain=icount',
+                f'case=lease backend={backend} generation=1 retained=1 active=1 quarantined=0']
+            if backend=='firmware':inputs[backend].append('case=lease backend=firmware persistent=1 key_releases=1 disabled=0 scan_bytes=200 aux_bytes=360')
+        framebuffer=[f'group=fixture bpp={bpp} pitch={pitch} digest=12345678 reference=12345678 guard_errors=0 errors=0'
+                     for bpp,pitch in ((24,51),(24,58),(32,68),(32,75))]
+        framebuffer.extend(['group=mode mode=0118 width=1024 height=768 bpp=32 pitch=4096 absent=0 owner=fbdev generation=1',
+                            'group=masks red=8:16 green=8:8 blue=8:0 reserved=8:24',
+                            'digest=12345678 guard_errors=0 errors=0 mode_calls=0 error=0 absent=0'])
+        ata=['owner=ata0 generation=1 unit=0 model=QEMU identified=1',
+             'capacity=1048576 sector_size=512 lba48=0 cache_state=1 flush=1 bios_calls=0 clock=pit',
+             'lba=0 sha256='+'a'*64,'lba=2048 sha256='+'b'*64,
+             'range_result=-22 zero_result=-22 overflow_result=-22 boundary_commands=0']
+        ata_fault=[]
+        for name in ('err','df','bsy_stuck','drq_stuck','missing','identify','flush'):
+            missing=name=='missing'
+            ata_fault.extend([f'case={name} owner=fake-ata0 generation=0 result={0 if missing else -5} issued={0 if missing else 1} status=41 error=04 quarantined={0 if missing else 1}',
+                              f'case={name} elapsed_ms=0 deadline_ms={60000 if name=="flush" else 30000} next_result={0 if missing else -200} further_commands=0 accepted=1 clock=scaled_pit'])
+        ata_fault.append('real_commands=0 bios_calls=0 survivor_samples=150 survivor_progress=300 survivor_alive=1')
+        partition=['source=real owner=ata0 generation=1 result=0 count=1 walk_count=0 clock=pit',
+                   'source=real partition=1 type=0c start=2048 length=1046528 logical=0']
+        for name,error in [('primary_extended',0),('loop',-40),('overflow',-22),('overlap',-22),('protective_gpt',-95),('signature',-22),('out_of_range',-22)]:
+            partition.extend([f'fixture={name} owner=fixture generation=0 sha256='+'c'*64,
+                              f'fixture={name} result={error} expected={error} walk_count={2 if not error else 0} reads=3 outside=0 accepted={int(not error)} matched=1'])
+        return {'registry':registry,'input-fault':faults,'input-qemu-t23':inputs['native'],
+                'input-qemu-e500':inputs['firmware'],'framebuffer':framebuffer,
+                'ata':ata,'ata-fault':ata_fault,'partition':partition}
+
+    def test_actual_f1_records_and_each_predicate_violation(self):
+        fixtures=self.fixtures()
+        for name in ('f1-input','f1-storage'):
+            for case in runner.load(ROOT/'tests/suites'/f'{name}.json')['cases']:
+                if case['id'] not in fixtures:continue
+                bodies=fixtures[case['id']]
+                with self.subTest(case=case['id']):
+                    self.assertTrue(self.records(case['probe'],bodies).check(case['expected']))
+                    for predicate in case['expected']['predicates']:
+                        for field in predicate.get('fields',{}):
+                            parser=self.records(case['probe'],bodies)
+                            matches=[r for r in parser.records if all(r.get(k)==str(v) for k,v in predicate['where'].items())]
+                            self.assertTrue(matches)
+                            matches[0][field]='invalid'
+                            with self.subTest(field=field),self.assertRaises(EvidenceError):parser.check(case['expected'])
+                    parser=self.records(case['probe'],bodies)
+                    parser.records=[r for r in parser.records if r.get('event')!='DATA']
+                    with self.assertRaises(EvidenceError):parser.check(case['expected'])
+
+    def test_framebuffer_absent_and_reference_mismatch(self):
+        case=next(c for c in runner.load(ROOT/'tests/suites/f1-input.json')['cases'] if c['id']=='framebuffer-no-lfb')
+        bodies=[b.replace('absent=0','absent=1').replace('generation=1','generation=0') for b in self.fixtures()['framebuffer']]
+        self.assertTrue(self.records('framebuffer',bodies).check(case['expected']))
+        bodies[0]=bodies[0].replace('reference=12345678','reference=87654321')
+        with self.assertRaises(EvidenceError):self.records('framebuffer',bodies).check(case['expected'])
+
+    def test_safe_record_sources_disabled_devices_and_order(self):
+        for case in runner.load(ROOT/'tests/suites/f1-safe.json')['cases']:
+            fw='fw-cfg' in case['id'] or 'boot-cfg' not in case['id']
+            backend='firmware' if case['profile']=='qemu-e500' else 'native'
+            absent=case['id']=='safe-no-lfb'
+            bodies=[f'case=option safe_mode=1 fw_cfg={int(fw)} boot_cfg={int(not fw)} menu=0 menu_inferred=0 boot_flags=00000061',
+                    'case=activation flag_sequence=1 framebuffer_sequence=2 input_sequence=3 ata_sequence=4 flag_before_activation=1 optional_activations=0',
+                    f'case=required console=1 console_mode={"text" if absent else "lfb"} input=1 backend={backend} active_resources=12 disk_log=unavailable',
+                    f'group=safe safe_mode=1 flag_before_activation=1 optional_activations=0 input_works=1 console_works=1 bios_retries=0 source={"fw-cfg" if fw else "boot-cfg"}',
+                    f'group=metadata subcase=required owner={"firmware-input" if backend=="firmware" else "i8042"} generation=1 errors=0 gate=safe timing_domain=icount']
+            bodies.extend(f'case=disabled device={dev} reason=safe_mode' for dev in ('audio','acceleration','network','dma','power','optional_firmware','ata'))
+            if absent:bodies.append('case=disabled device=framebuffer reason=no_lfb console=text')
+            parser=self.records('safe',bodies)
+            parser.records.insert(-1,dict(event='READY',console='1',input='1',optional_activations='0'))
+            with self.subTest(case=case['id']):
+                self.assertTrue(parser.check(case['expected']))
+                for field,value in [('optional_activations','1'),('input_sequence','1')]:
+                    broken=copy.copy(parser)
+                    broken.records=copy.deepcopy(parser.records)
+                    next(r for r in broken.records if r.get('case')=='activation')[field]=value
+                    with self.assertRaises(EvidenceError):broken.check(case['expected'])
+
+    def test_missing_firmware_blkdebug_and_fat_evidence_never_pass(self):
+        for case in runner.load(ROOT/'tests/suites/f1-input.json')['cases']:
+            if not case['expected'].get('not_run_subcases'):continue
+            parser=self.records('input-fault',self.fixtures()['input-fault'])
+            with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check(case['expected'])
+            self.assertEqual(parser.not_run_subcases,case['expected']['not_run_subcases'])
+        case=runner.load(ROOT/'tests/suites/f1-storage.json')['cases'][-1]
+        parser=self.records('ata',self.fixtures()['ata'])
+        with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check(case['expected'])
+        self.assertEqual(parser.not_run_subcases,[{'subcase':'blkdebug','reason':'missing_required_record'}])
+        # Installed-table ERROR is the actual format for every missing FAT/bootlog probe.
+        for case in runner.load(ROOT/'tests/suites/f1-fat32.json')['cases']:
+            parser=Parser('12345678',case['probe'])
+            for seq,body in enumerate(('event=BEGIN','event=READY table=f1 installed=8','event=ERROR status=not_run reason=missing_probe'),1):
+                parser.feed(f"CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe={case['probe']} {body}".encode())
+            self.assertEqual(parser.outcome,'not_run')
+            with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check(case['expected'])
+
 class F2EvidenceTests(unittest.TestCase):
     def test_f2_grammar_phase_separation_and_loader_registry(self):
         model=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
@@ -897,6 +1127,14 @@ class F2EvidenceTests(unittest.TestCase):
         start,end=addr('__f2probes_start'),addr('__f2probes_end')
         self.assertLessEqual(addr('__rodata_start'),start);self.assertLessEqual(start,end)
         self.assertLessEqual(end,addr('__rodata_end'))
+        self.assertEqual(linked_probe_names(rows,2),[
+            'elf-load','spawn-wait','mmap','threads-wait','signals-fault'])
+        registrations=[line.split()[-1] for line in rows if ' f2_registration_' in line]
+        self.assertEqual(registrations,[
+            'f2_registration_probe_f2_elf_load','f2_registration_probe_f2_spawn_wait',
+            'f2_registration_probe_f2_mmap','f2_registration_probe_f2_threads_wait',
+            'f2_registration_probe_f2_signals_fault'])
+        self.assertEqual(end-start,8*len(registrations))
         sections=[r for r in rows if ':(.f2probes)' in r];self.assertTrue(sections)
         for row in sections:
             fields=row.split();self.assertGreaterEqual(int(fields[0],16),start)

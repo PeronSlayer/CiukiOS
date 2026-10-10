@@ -300,7 +300,7 @@ boot_menu:
 .done:
     ret
 .normal:
-    and dword [B(flags)], ~CBI_F_SAFE_MODE
+    ; Normal declines to add safe mode; positive config/fw_cfg sources persist.
     ret
 .safe:
     or dword [B(flags)], CBI_F_SAFE_MODE
