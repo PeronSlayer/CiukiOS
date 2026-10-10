@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -22,7 +23,7 @@ if scenario.get('boot_records'):
     counter.write_text(str(boot+1))
     scenario['records']=scenario['boot_records'][boot]
 gates=scenario.get('boot_gates',[[]]*(boot+1))[boot]
-gate_index=0;gate_armed=False
+gate_index=0;gate_armed=False;gate_suspended=False;crash_arm_emitted=False;setup_writes=0
 selector=sys.argv[sys.argv.index('-fw_cfg')+1].split('string=',1)[1]
 run_id=selector.split('run=')[1][:8];probe=selector.split(':')[1].split()[0]
 Path('fake-arguments.json').write_text(json.dumps(sys.argv[1:]))
@@ -41,7 +42,7 @@ serial=None
 seq=0
 
 def emit(items=None):
-    global serial,seq
+    global serial,seq,crash_arm_emitted
     if serial is None:serial=open('serial.fifo','wb',buffering=0)
     for item in (scenario.get('records',[]) if items is None else items):
         seq+=1
@@ -49,6 +50,7 @@ def emit(items=None):
         else:
             record={'v':'1','run':run_id,'seq':f'{seq:06d}','probe':probe,**item}
             line='CIUKI_TEST '+' '.join(f'{k}={v}' for k,v in record.items())
+            if item.get('event')=='ARM' and item.get('action')=='crash_cut':crash_arm_emitted=True
         serial.write(line.encode()+b'\n')
     if scenario.get('flood'):serial.write(b'x'*(4*1024*1024+65536))
     if scenario.get('application_bytes') and items is None:
@@ -67,7 +69,9 @@ def emit(items=None):
 stream=conn.makefile('rb');started=False
 
 def suspend_gate():
-    emit(gates[gate_index])
+    global gate_armed,gate_suspended
+    assert gate_armed and not gate_suspended
+    gate_armed=False;gate_suspended=True
     print("blkdebug: Suspended request 'ciuki-write'",flush=True)
 
 for raw in stream:
@@ -76,13 +80,20 @@ for raw in stream:
     if cmd=='query-status':reply={'status':'running','running':True}
     elif cmd=='stop' and gates:raise AssertionError('QMP stop drains suspended requests')
     elif cmd=='human-monitor-command':
-        text=request['arguments']['command-line'];reply=''
-        if 'break pwritev ciuki-write' in text:gate_armed=True
-        elif 'resume ciuki-write' in text:
-            assert gate_armed, 'next breakpoint must precede resume'
-            gate_armed=False;gate_index+=1
+        target,text=shlex.split(request['arguments']['command-line'])[1:];reply=''
+        # A block node would create/drain a temporary backend in real HMP.
+        assert target=='ciuki-cut-drive', 'gate must target the persistent drive backend'
+        assert any('id=ciuki-cut-drive' in a for a in sys.argv), 'missing named drive backend'
+        if text=='break pwritev ciuki-write':
+            assert crash_arm_emitted, 'breakpoint must follow crash ARM and write-enable setup'
+            assert not gate_armed, 'breakpoints are one-shot'
+            gate_armed=True
+            if scenario.get('gate_qmp_timeout'):continue
+        elif text=='resume ciuki-write':
+            assert gate_armed and gate_suspended, 'next breakpoint must precede resume'
+            gate_suspended=False;gate_index+=1
         else:raise AssertionError(text)
-    elif cmd=='query-blockstats':reply=[{'device':'ide0','stats':{'wr_bytes':scenario.get('writes',0) if started else 0,'wr_operations':0,'flush_operations':0}}]
+    elif cmd=='query-blockstats':reply=[{'device':'ide0','stats':{'wr_bytes':scenario.get('writes',0)+setup_writes*512 if started else 0,'wr_operations':setup_writes,'flush_operations':0}}]
     elif cmd=='quit' and not scenario.get('ignore_quit'):
         Path('fake-stopped').touch()
         conn.sendall(json.dumps({'return':{},'id':request['id']}).encode()+b'\n');break
@@ -98,12 +109,19 @@ for raw in stream:
         started=True
         if gates and gate_index==0 and not scenario.get('gate_started'):
             scenario['gate_started']=True
-            assert gate_armed;gate_armed=False;suspend_gate()
+            assert not gate_armed, 'pre-ARM writes must run without a breakpoint'
+            setup_writes=scenario.get('setup_writes',5)
+            emit(gates[0])
+            # Host ARM receipt can lag writes. Exercise this race explicitly;
+            # completed traces precede the next pending request/suspension.
+            for _ in range(scenario.get('gate_arm_lag_writes',0)):
+                gate_index+=1;emit(gates[gate_index])
         elif gates:pass
         elif scenario.get('flood') or scenario.get('application_bytes'):threading.Thread(target=emit,daemon=True).start()
         else:emit()
-    if cmd=='human-monitor-command' and 'resume ciuki-write' in request['arguments']['command-line']:
-        if gate_index<len(gates):suspend_gate()
+    if cmd=='human-monitor-command' and gates:
+        if text=='resume ciuki-write' and gate_index<len(gates):emit(gates[gate_index])
+        if gate_index<len(gates) and not gate_suspended:suspend_gate()
     if cmd=='input-send-event':
         count=scenario.setdefault('received_input',0)+1;scenario['received_input']=count
         if count==scenario.get('finish_after_input'):
