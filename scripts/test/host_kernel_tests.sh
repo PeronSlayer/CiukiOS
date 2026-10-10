@@ -229,6 +229,29 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 # F2 native files use the same mkfs/mtools fixtures and fake block layer as
 # the independent F1 harness. Fail-closed integration gaps are reported by name.
 python3 "$root/tests/host/fs/fixtures.py"
+# F1 shutdown with F2's production bootstrap/path/fd namespace linked. Also
+# retain the weak-hook-only storage harness as a separate regression check.
+storage_sources=(
+    "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c"
+    "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c"
+    "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c"
+    "$root/src/kernel/fs/mount.c" "$root/src/kernel/core/bootlog.c"
+    "$root/src/kernel/drivers/blkpart.c" "$root/src/kernel/probes/fat_probes.c"
+    "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c"
+    "$root/tests/host/fs/fake.c" "$root/tests/host/fs/scan.c"
+)
+for storage_test in test_storage_namespace test_storage; do
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
+        -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
+        "${storage_sources[@]}" "$root/tests/host/fs/$storage_test.c" \
+        -o "$out/fs/$storage_test"
+    "$out/fs/$storage_test" "$out/fs/fat32.img" "$out/fs/fat12.img" "$out/fs/fat16.img"
+    # The storage fixture's baseline SYSTEM directory is intentionally
+    # durable; rebuild the small host fixtures before the next harness.
+    python3 "$root/tests/host/fs/fixtures.py"
+done
 nasm -f bin -I "$out/" "$root/tests/host/proc/files_payload.asm" -o "$out/files-payload.elf"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \

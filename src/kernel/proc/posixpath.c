@@ -18,6 +18,17 @@ static bool directory(const struct px_node *n)
 {
     return n->kind == PX_DIRECTORY || n->kind == PX_MNT || n->kind == PX_DEV;
 }
+/* A cwd retains its identity after detach, but cannot resolve through an
+ * expired mount, including . and ... Synthetic nodes belong to the lifetime
+ * of the system root without being volume-backed open descriptions. */
+static bool node_available(const struct px_node *n)
+{
+    if (!n || !n->linked) return false;
+    if (!n->volume) n = n->space->root;
+    return n && n->linked && n->volume && n->volume->mounted &&
+        n->space->vfs->volumes[n->drive] == n->volume &&
+        n->space->vfs->generation[n->drive] == n->generation;
+}
 static uint32_t volume_root(const struct fat_volume *v) { return v->type == 32 ? v->root : 0; }
 static struct px_namespace *space_find(struct vfs *v)
 {
@@ -223,6 +234,7 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
     if (err) return err;
     memset(out, 0, sizeof(*out));
     struct px_node *n = *path == '/' ? s->root : cwd ? cwd : s->root;
+    if (!node_available(n)) return -ENOENT;
     const char *p = path;
     out->trailing = path[strlen(path) - 1] == '/';
     while (*p) {
@@ -246,6 +258,7 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
                 return err;
             }
         }
+        if (!node_available(n)) return -ENOENT;
     }
     if (out->trailing && !directory(n)) return -ENOTDIR;
     out->node = n;
@@ -255,6 +268,7 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
 
 int px_getcwd_locked(struct px_node *n, char out[CIUKI_PATH_MAX])
 {
+    if (!node_available(n)) return -ENOENT;
     char backwards[CIUKI_PATH_MAX]; unsigned used = 0, count = 0;
     while (n != n->space->root) {
         if (++count > FS_PATH_CHARS || !n->linked) return -EIO;
@@ -262,6 +276,7 @@ int px_getcwd_locked(struct px_node *n, char out[CIUKI_PATH_MAX])
         if (used + length + 1 >= sizeof(backwards)) return -ENAMETOOLONG;
         for (unsigned i = length; i; i--) backwards[used++] = n->entry.name[i - 1];
         backwards[used++] = '/'; n = n->parent;
+        if (!node_available(n)) return -ENOENT;
     }
     if (!used) backwards[used++] = '/';
     for (unsigned i = 0; i < used; i++) out[i] = backwards[used - i - 1];
@@ -626,8 +641,11 @@ int px_legacy_closed(struct vfs *v, struct vfs_node *old)
 bool px_volume_busy(struct vfs *v, struct fat_volume *vol)
 {
     struct px_namespace *s = space_find(v); if (!s) return false;
-    for (struct px_node *n = s->nodes; n; n = n->next)
-        if (n->refs && (n->volume == vol || (!n->volume && vol == v->volumes[2]))) return true;
+    /* List membership lasts through final-close cleanup under this lock.
+     * fdtable may already have decremented references to zero while waiting
+     * for the lock; such a description must still block durable detach. */
+    for (struct file_description *d = s->descriptions; d; d = d->next)
+        if (d->node->volume == vol) return true;
     return false;
 }
 void px_volume_detached(struct vfs *v, unsigned drive)
