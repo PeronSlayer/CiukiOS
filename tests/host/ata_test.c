@@ -35,6 +35,8 @@ volatile uint64_t g_ticks;
 volatile bool g_need_resched;
 bool g_cpu_tsc;
 uint64_t g_tsc_per_ms;
+#include <ciuki/init.h>
+const struct activation_entry *drivers_mount_get(unsigned drive) { (void)drive; return 0; }
 struct ciuki_boot_info g_boot;
 
 static uint32_t read_eflags(void) { return flags; }

@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/storage.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/init.h>
 #ifndef FS_HOST
 #include <ciuki/ata.h>
-#include <ciuki/probe.h>
 #include <ciuki/work.h>
 #include <ciuki/sync.h>
 #endif
@@ -259,19 +259,24 @@ void storage_init(void)
         struct ata_device *dev = ata_device_get(slot / 2, slot % 2);
         if (!dev) continue;
         e = storage_add_disk(s, slot, &dev->block);
-        rec_emit("boot", "DATA", "group=storage disk=%u result=%d gate=read writes=0", slot, e);
+        drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_STORAGE,
+            .disk = slot, .error = e, .readonly = true, .reason = "disk_scan" });
     }
     for (unsigned d = 2; d < 26; d++) {
         struct storage_volume *v = storage_volume(s, d);
         if (!v) continue;
         if (!probe && !v->error) storage_enable_write(s, d);
-        rec_emit("boot", "DATA", "group=mount drive=%c disk=%u part=%u type=%u mode=%s reasons=%u error=%d read_seq=%u writes_before_gate=%llu",
-                 'A' + d, v->disk, v->partition, v->fat.type, v->fat.readonly ? "ro" : "rw",
-                 v->fat.ro_reasons, v->error, v->read_sequence, v->writes_before_gate);
+        drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_MOUNT,
+            .drive = d, .disk = v->disk, .partition = v->partition, .type = v->fat.type,
+            .readonly = v->fat.readonly, .reasons = v->fat.ro_reasons, .error = v->error,
+            .read_gate = v->read_gate, .read_sequence = v->read_sequence,
+            .writes = v->writes, .writes_before_gate = v->writes_before_gate,
+            .reason = "mount", .qualified = false });
     }
     /* The F1 boot-identity amendment accepts disk 0, primary partition 1
      * for CBI1. Loader fingerprints remain a boot-info v2 requirement. */
-    rec_emit("boot", "DATA", "group=storage_identity binding=disk0_partition1 qualified=0 reason=loader_fingerprints_absent");
+    drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_STORAGE_IDENTITY,
+        .disk = 0, .partition = 1, .readonly = true, .reason = "loader_fingerprints_absent" });
     if (!probe) {
         struct storage_volume *boot = storage_volume(s, 2);
         e = bootlog_activate(&s->vfs, boot && !boot->error && !boot->fat.readonly, s->sequence);

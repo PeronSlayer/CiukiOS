@@ -154,9 +154,29 @@ static int probe_boot(void)
     drivers_snapshot(&state);
     rec_emit("boot", "DATA", "group=activation_flag activation_seq=%u safe_mode=%u boot_flags=%08x",
              state.flag_sequence, state.safe, state.boot_flags);
-    unsigned devices = drivers_activation_count(), failures = 0;
-    for (unsigned i = 0; i < devices; i++) {
+    unsigned devices = 0, failures = 0;
+    for (unsigned i = 0; i < drivers_activation_count(); i++) {
         const struct activation_entry *e = drivers_activation_get(i);
+        if (e->kind == ACTIVATION_STORAGE) {
+            rec_emit("boot", "DATA", "group=storage disk=%u result=%d gate=read writes=%llu",
+                     e->disk, e->error, e->writes);
+            continue;
+        }
+        if (e->kind == ACTIVATION_MOUNT) {
+            rec_emit("boot", "DATA", "group=mount drive=%c disk=%u part=%u type=%u mode=%s reasons=%u error=%d read_seq=%u writes_before_gate=%llu",
+                     'A' + e->drive, e->disk, e->partition, e->type, e->readonly ? "ro" : "rw",
+                     e->reasons, e->error, e->read_sequence, e->writes_before_gate);
+            rec_emit("boot", "DATA", "group=storage drive=%c disk=%u part=%u gate=%s writes=%llu qualified=%u reason=%s",
+                     'A' + e->drive, e->disk, e->partition, e->read_gate ? "read" : "closed",
+                     e->writes, e->qualified, e->reason);
+            continue;
+        }
+        if (e->kind == ACTIVATION_STORAGE_IDENTITY) {
+            rec_emit("boot", "DATA", "group=storage_identity binding=disk0_partition1 qualified=%u reason=%s",
+                     e->qualified, e->reason);
+            continue;
+        }
+        devices++;
         if (!strncmp(e->result, "failed", 7)) failures++;
         if (!strncmp(e->device, "framebuffer", 12))
             rec_emit("boot", "DATA", "group=activation device=%s result=%s error=%d activation_seq=%u required=%u reason=%s",
@@ -168,8 +188,8 @@ static int probe_boot(void)
             rec_emit("boot", "DATA", "group=activation device=%s result=%s error=%d activation_seq=%u present=%u quarantined=%u reason=%s",
                      e->device, e->result, e->error, e->seq, e->present, e->quarantined, e->reason);
     }
-    rec_emit("boot", "DATA", "group=activation_summary devices=%u failures=%u optional_activations=%u",
-             devices, failures, state.optional_activations);
+    rec_emit("boot", "DATA", "group=activation_summary devices=%u failures=%u optional_activations=%u premature_records=%u",
+             devices, failures, state.optional_activations, rec_premature_records());
     rec_emit("boot", "DATA", "group=boot cpuid=%08x vendor=%s build_id=%s build_dirty=%u boot_drive=%08x ram_bytes=%llu usable_bytes=%llu",
              g_cpu_signature, g_cpu_vendor, CIUKI_BUILD_HEX8, CIUKI_BUILD_DIRTY, g_boot.boot_drive,
              installed_ram_bytes(), (uint64_t)pmm_total_usable() * PAGE_SIZE);

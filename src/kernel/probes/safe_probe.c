@@ -36,6 +36,13 @@ int probe_safe(void)
     rec_emit("safe", "DATA", "case=option safe_mode=%u fw_cfg=%u boot_cfg=%u menu=%u menu_inferred=%u boot_flags=%08x",
              state.safe, fw_cfg, config, menu, menu, state.boot_flags);
     bool ordered = drivers_activation_ordered();
+    unsigned mounts = 0;
+    uint64_t writes = 0;
+    for (unsigned i = 0; i < drivers_activation_count(); i++) {
+        const struct activation_entry *e = drivers_activation_get(i);
+        if (e->kind == ACTIVATION_MOUNT) { mounts++; writes += e->writes; }
+    }
+    rec_emit("safe", "DATA", "case=storage mounts=%u writes=%llu gate=%s", mounts, writes, mounts ? "mounted" : "closed");
     rec_emit("safe", "DATA", "case=activation flag_sequence=%u framebuffer_sequence=%u input_sequence=%u ata_sequence=%u flag_before_activation=%u optional_activations=%u",
              state.flag_sequence, state.fb_sequence, state.input_sequence, state.ata_sequence,
              ordered, state.optional_activations);
@@ -66,7 +73,7 @@ int probe_safe(void)
     rec_emit("safe", "DATA", "case=required console=%u console_mode=%s input=%u backend=%s active_resources=%u disk_log=unavailable",
              console, no_lfb ? "text" : "lfb", input_ok, state.firmware ? "firmware" : "native", owners);
     bool ok = state.safe && (g_boot.flags & CBI_F_SAFE_MODE) && ordered &&
-              !state.optional_activations && !state.ata_called && console && input_ok;
+              !state.optional_activations && !state.ata_called && !mounts && console && input_ok;
     rec_emit("safe", "DATA", "group=safe safe_mode=%u flag_before_activation=%u optional_activations=%u input_works=%u console_works=%u bios_retries=0 source=%s",
              state.safe, ordered, state.optional_activations, input_ok, console,
              fw_cfg ? "fw-cfg" : config ? "boot-cfg" : menu ? "menu" : "none");
