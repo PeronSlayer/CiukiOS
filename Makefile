@@ -1,6 +1,6 @@
 .PHONY: help build-full kernel image test-host qemu-test-full qemu-run-full clean \
         legacy-build-full legacy-build-full-cd legacy-qemu-run-full legacy-qemu-test-full \
-        fetch-costa fetch-network-stack sdk lua
+        fetch-costa fetch-network-stack sdk lua desktop
 
 # Heavy builds run in a capped scope (see AGENTS.md).
 CAP = systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=1G --
@@ -21,6 +21,7 @@ help:
 	@echo "  make build-full      - build the kernel and the canonical FAT32 image ($(IMAGE))"
 	@echo "  make sdk             - build/check the pinned offline F2 C SDK (SDK_ARGS=...)"
 	@echo "  make lua             - build/check pinned Lua and luac (LUA_ARGS=...)"
+	@echo "  make desktop         - build/check ring-3 desktop, demo and approved Ciuki portrait"
 	@echo "  make kernel          - build only $(KERNEL)"
 	@echo "  make image           - build only the image from the existing kernel"
 	@echo "  make test-host       - T0 host tests (kernel library, loader statics, runner, fixtures)"
@@ -34,6 +35,7 @@ help:
 # The image needs the kernel: keep the order explicit even under make -j.
 build-full: kernel
 	@$(MAKE) --no-print-directory lua
+	@$(MAKE) --no-print-directory desktop
 	@$(MAKE) --no-print-directory image
 
 sdk:
@@ -45,6 +47,10 @@ $(SDK_MANIFEST): $(SDK_INPUTS)
 # The Lua recipe checks input/output hashes and rebuilds only when changed.
 lua: $(SDK_MANIFEST)
 	@$(CAP) python3 apps/lua/build_lua.py $(LUA_ARGS)
+
+# Both recipes validate SDK/source/output hashes before accepting cached output.
+desktop: $(SDK_MANIFEST)
+	@$(CAP) python3 apps/desktop/build_desktop.py
 
 kernel:
 	@python3 scripts/build_kernel.py
