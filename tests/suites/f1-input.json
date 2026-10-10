@@ -3609,6 +3609,3414 @@
           }
         ]
       }
+    },
+    {
+      "id": "registry-qemu-desktop-1998",
+      "probe": "registry",
+      "profile": "qemu-desktop-1998",
+      "selector": "f1:registry run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "registry"
+            },
+            "combine": true,
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "claim_delta": {
+                "eq": 0
+              },
+              "mapping_delta": {
+                "eq": 0
+              },
+              "buffer_delta": {
+                "eq": 0
+              },
+              "conflict_writes": {
+                "eq": 0
+              },
+              "stale_writes": {
+                "eq": 0
+              },
+              "unknown_size_writes": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              },
+              "second_claim_refused": {
+                "eq": 1
+              },
+              "irq_owner_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "timing_domain": "icount"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "live_after",
+                "op": "eq",
+                "right": "live_before"
+              }
+            ],
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "claims": {
+                "eq": 100
+              },
+              "releases": {
+                "eq": 100
+              },
+              "device_writes": {
+                "eq": 0
+              },
+              "mappings": {
+                "eq": 0
+              },
+              "buffers": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resources"
+            },
+            "exact_count": 1,
+            "fields": {
+              "buffers_allocated": {
+                "eq": 100
+              },
+              "buffers_freed": {
+                "eq": 100
+              },
+              "mappings": {
+                "eq": 0
+              },
+              "callbacks_pending": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "quarantine"
+            },
+            "exact_count": 1,
+            "fields": {
+              "idle": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "release": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "retry": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "retained": {
+                "eq": 1
+              },
+              "device_writes": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "shared_irq"
+            },
+            "exact_count": 1,
+            "fields": {
+              "boundary": "production_shadow",
+              "physical_unmasks": {
+                "eq": 0
+              },
+              "device_writes": {
+                "eq": 0
+              },
+              "callbacks_a": {
+                "eq": 2
+              },
+              "callbacks_b": {
+                "eq": 1003
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "stuck_irq"
+            },
+            "exact_count": 1,
+            "fields": {
+              "passes": {
+                "eq": 1003
+              },
+              "unclaimed": {
+                "eq": 1000
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "eois": {
+                "eq": 1003
+              },
+              "removed_a": {
+                "eq": 1
+              },
+              "masked": {
+                "eq": 1
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "input-fault-qemu-desktop-1998",
+      "probe": "input-fault",
+      "profile": "qemu-desktop-1998",
+      "selector": "f1:input-fault run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing_ack",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -110
+              },
+              "elapsed_ms": {
+                "eq": 200
+              },
+              "resends": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "pending": {
+                "eq": 0
+              },
+              "resets": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing_ack",
+              "timing": "scripted_ms"
+            },
+            "exact_count": 1,
+            "fields": {
+              "physical_claims": {
+                "eq": 0
+              },
+              "controller_reads": {
+                "ge": 0
+              },
+              "controller_writes": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bounded_resend",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "elapsed_ms": {
+                "le": 200
+              },
+              "resends": {
+                "eq": 2
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "pending": {
+                "eq": 0
+              },
+              "resets": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bounded_resend",
+              "timing": "scripted_ms"
+            },
+            "exact_count": 1,
+            "fields": {
+              "physical_claims": {
+                "eq": 0
+              },
+              "controller_reads": {
+                "ge": 0
+              },
+              "controller_writes": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resend_exhausted",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -71
+              },
+              "elapsed_ms": {
+                "le": 200
+              },
+              "resends": {
+                "eq": 2
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "pending": {
+                "eq": 0
+              },
+              "resets": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resend_exhausted",
+              "timing": "scripted_ms"
+            },
+            "exact_count": 1,
+            "fields": {
+              "physical_claims": {
+                "eq": 0
+              },
+              "controller_reads": {
+                "ge": 0
+              },
+              "controller_writes": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixed_aux_key",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "elapsed_ms": {
+                "le": 200
+              },
+              "resends": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "pending": {
+                "eq": 0
+              },
+              "resets": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixed_aux_key",
+              "timing": "scripted_ms"
+            },
+            "exact_count": 1,
+            "fields": {
+              "physical_claims": {
+                "eq": 0
+              },
+              "controller_reads": {
+                "ge": 0
+              },
+              "controller_writes": {
+                "ge": 1
+              },
+              "keys": {
+                "eq": 2
+              },
+              "x": {
+                "encoding": "signed",
+                "eq": 2
+              },
+              "y": {
+                "encoding": "signed",
+                "eq": -1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed_packet",
+              "ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "resync": {
+                "eq": 3
+              },
+              "x": {
+                "encoding": "signed",
+                "eq": 2
+              },
+              "y": {
+                "encoding": "signed",
+                "eq": -1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "queue_overflow",
+              "ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "overflow": {
+                "eq": 256
+              },
+              "drained": {
+                "eq": 135
+              },
+              "state_lost": {
+                "eq": 1
+              },
+              "resync_marked": {
+                "eq": 1
+              },
+              "fresh": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing_ack",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bounded_resend",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resend_exhausted",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixed_aux_key",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed_packet",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "queue_overflow",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "input-qemu-desktop-1998",
+      "probe": "input",
+      "profile": "qemu-desktop-1998",
+      "selector": "f1:input run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "input"
+            },
+            "combine": true,
+            "fields": {
+              "text_count": {
+                "eq": 100
+              },
+              "key_transitions": {
+                "eq": 200
+              },
+              "button_transitions": {
+                "eq": 20
+              },
+              "motion_x": {
+                "eq": 200
+              },
+              "motion_y": {
+                "encoding": "signed",
+                "eq": -100
+              },
+              "loss": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "stuck": {
+                "eq": 0
+              },
+              "backend": "native",
+              "owner_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "timing_domain": "icount"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "queue"
+            },
+            "exact_count": 1,
+            "fields": {
+              "overflow": {
+                "eq": 0
+              },
+              "resync": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "repeats": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "stuck_keys": {
+                "eq": 0
+              },
+              "buttons": {
+                "eq": 0
+              },
+              "state_lost": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lease",
+              "retained": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "active": {
+                "eq": 1
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "backend": "native"
+            }
+          }
+        ]
+      },
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "framebuffer-qemu-desktop-1998",
+      "probe": "framebuffer",
+      "profile": "qemu-desktop-1998",
+      "selector": "f1:framebuffer run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fixture",
+              "bpp": "24",
+              "pitch": "51"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "digest": {
+                "encoding": "hex",
+                "eq": "$reference"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fixture",
+              "bpp": "24",
+              "pitch": "58"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "digest": {
+                "encoding": "hex",
+                "eq": "$reference"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fixture",
+              "bpp": "32",
+              "pitch": "68"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "digest": {
+                "encoding": "hex",
+                "eq": "$reference"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fixture",
+              "bpp": "32",
+              "pitch": "75"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "digest": {
+                "encoding": "hex",
+                "eq": "$reference"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mode"
+            },
+            "exact_count": 1,
+            "fields": {
+              "absent": {
+                "eq": 0
+              },
+              "owner": "fbdev",
+              "generation": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "masks"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "red",
+              "green",
+              "blue",
+              "reserved"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "mode_calls": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "absent": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "registry-qemu-desktop-2002",
+      "probe": "registry",
+      "profile": "qemu-desktop-2002",
+      "selector": "f1:registry run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "registry"
+            },
+            "combine": true,
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "claim_delta": {
+                "eq": 0
+              },
+              "mapping_delta": {
+                "eq": 0
+              },
+              "buffer_delta": {
+                "eq": 0
+              },
+              "conflict_writes": {
+                "eq": 0
+              },
+              "stale_writes": {
+                "eq": 0
+              },
+              "unknown_size_writes": {
+                "eq": 0
+              },
+              "quarantine_retained": {
+                "eq": 1
+              },
+              "second_claim_refused": {
+                "eq": 1
+              },
+              "irq_owner_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "timing_domain": "icount"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "live_after",
+                "op": "eq",
+                "right": "live_before"
+              }
+            ],
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "claims": {
+                "eq": 100
+              },
+              "releases": {
+                "eq": 100
+              },
+              "device_writes": {
+                "eq": 0
+              },
+              "mappings": {
+                "eq": 0
+              },
+              "buffers": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resources"
+            },
+            "exact_count": 1,
+            "fields": {
+              "buffers_allocated": {
+                "eq": 100
+              },
+              "buffers_freed": {
+                "eq": 100
+              },
+              "mappings": {
+                "eq": 0
+              },
+              "callbacks_pending": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "quarantine"
+            },
+            "exact_count": 1,
+            "fields": {
+              "idle": {
+                "encoding": "signed",
+                "eq": -14
+              },
+              "release": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "retry": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "retained": {
+                "eq": 1
+              },
+              "device_writes": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "shared_irq"
+            },
+            "exact_count": 1,
+            "fields": {
+              "boundary": "production_shadow",
+              "physical_unmasks": {
+                "eq": 0
+              },
+              "device_writes": {
+                "eq": 0
+              },
+              "callbacks_a": {
+                "eq": 2
+              },
+              "callbacks_b": {
+                "eq": 1003
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "stuck_irq"
+            },
+            "exact_count": 1,
+            "fields": {
+              "passes": {
+                "eq": 1003
+              },
+              "unclaimed": {
+                "eq": 1000
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "eois": {
+                "eq": 1003
+              },
+              "removed_a": {
+                "eq": 1
+              },
+              "masked": {
+                "eq": 1
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "input-fault-qemu-desktop-2002",
+      "probe": "input-fault",
+      "profile": "qemu-desktop-2002",
+      "selector": "f1:input-fault run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing_ack",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -110
+              },
+              "elapsed_ms": {
+                "eq": 200
+              },
+              "resends": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "pending": {
+                "eq": 0
+              },
+              "resets": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing_ack",
+              "timing": "scripted_ms"
+            },
+            "exact_count": 1,
+            "fields": {
+              "physical_claims": {
+                "eq": 0
+              },
+              "controller_reads": {
+                "ge": 0
+              },
+              "controller_writes": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bounded_resend",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "elapsed_ms": {
+                "le": 200
+              },
+              "resends": {
+                "eq": 2
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "pending": {
+                "eq": 0
+              },
+              "resets": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bounded_resend",
+              "timing": "scripted_ms"
+            },
+            "exact_count": 1,
+            "fields": {
+              "physical_claims": {
+                "eq": 0
+              },
+              "controller_reads": {
+                "ge": 0
+              },
+              "controller_writes": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resend_exhausted",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": -71
+              },
+              "elapsed_ms": {
+                "le": 200
+              },
+              "resends": {
+                "eq": 2
+              },
+              "quarantined": {
+                "eq": 1
+              },
+              "pending": {
+                "eq": 0
+              },
+              "resets": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resend_exhausted",
+              "timing": "scripted_ms"
+            },
+            "exact_count": 1,
+            "fields": {
+              "physical_claims": {
+                "eq": 0
+              },
+              "controller_reads": {
+                "ge": 0
+              },
+              "controller_writes": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixed_aux_key",
+              "owner": "fixture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "elapsed_ms": {
+                "le": 200
+              },
+              "resends": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "pending": {
+                "eq": 0
+              },
+              "resets": {
+                "eq": 0
+              },
+              "ok": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixed_aux_key",
+              "timing": "scripted_ms"
+            },
+            "exact_count": 1,
+            "fields": {
+              "physical_claims": {
+                "eq": 0
+              },
+              "controller_reads": {
+                "ge": 0
+              },
+              "controller_writes": {
+                "ge": 1
+              },
+              "keys": {
+                "eq": 2
+              },
+              "x": {
+                "encoding": "signed",
+                "eq": 2
+              },
+              "y": {
+                "encoding": "signed",
+                "eq": -1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed_packet",
+              "ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "resync": {
+                "eq": 3
+              },
+              "x": {
+                "encoding": "signed",
+                "eq": 2
+              },
+              "y": {
+                "encoding": "signed",
+                "eq": -1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "queue_overflow",
+              "ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "overflow": {
+                "eq": 256
+              },
+              "drained": {
+                "eq": 135
+              },
+              "state_lost": {
+                "eq": 1
+              },
+              "resync_marked": {
+                "eq": 1
+              },
+              "fresh": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "missing_ack",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "bounded_resend",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resend_exhausted",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixed_aux_key",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed_packet",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "queue_overflow",
+              "survivor_ok": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "survivor_ticks": {
+                "ge": 100
+              },
+              "survivor_progress": {
+                "ge": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "input-qemu-desktop-2002",
+      "probe": "input",
+      "profile": "qemu-desktop-2002",
+      "selector": "f1:input run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "input"
+            },
+            "combine": true,
+            "fields": {
+              "text_count": {
+                "eq": 100
+              },
+              "key_transitions": {
+                "eq": 200
+              },
+              "button_transitions": {
+                "eq": 20
+              },
+              "motion_x": {
+                "eq": 200
+              },
+              "motion_y": {
+                "encoding": "signed",
+                "eq": -100
+              },
+              "loss": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "stuck": {
+                "eq": 0
+              },
+              "backend": "native",
+              "owner_errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "timing_domain": "icount"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "queue"
+            },
+            "exact_count": 1,
+            "fields": {
+              "overflow": {
+                "eq": 0
+              },
+              "resync": {
+                "eq": 0
+              },
+              "duplicates": {
+                "eq": 0
+              },
+              "repeats": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "stuck_keys": {
+                "eq": 0
+              },
+              "buttons": {
+                "eq": 0
+              },
+              "state_lost": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lease",
+              "retained": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "active": {
+                "eq": 1
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "backend": "native"
+            }
+          }
+        ]
+      },
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "repeat": 10,
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 2
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -1
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 10
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "READY"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 10
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "framebuffer-qemu-desktop-2002",
+      "probe": "framebuffer",
+      "profile": "qemu-desktop-2002",
+      "selector": "f1:framebuffer run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fixture",
+              "bpp": "24",
+              "pitch": "51"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "digest": {
+                "encoding": "hex",
+                "eq": "$reference"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fixture",
+              "bpp": "24",
+              "pitch": "58"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "digest": {
+                "encoding": "hex",
+                "eq": "$reference"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fixture",
+              "bpp": "32",
+              "pitch": "68"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "digest": {
+                "encoding": "hex",
+                "eq": "$reference"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "fixture",
+              "bpp": "32",
+              "pitch": "75"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "digest": {
+                "encoding": "hex",
+                "eq": "$reference"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "mode"
+            },
+            "exact_count": 1,
+            "fields": {
+              "absent": {
+                "eq": 0
+              },
+              "owner": "fbdev",
+              "generation": {
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "masks"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "red",
+              "green",
+              "blue",
+              "reserved"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "mode_calls": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "guard_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "absent": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

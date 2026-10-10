@@ -11,6 +11,45 @@ F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES)
 SELECTOR_RE = r'f([012]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
+CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)'
+E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
+VBE_MINIMUM_ERROR = 'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer'
+
+
+def cpu_minimum(cpuid_present, max_basic_leaf=1, signature=0, features_edx=0):
+    """ID-bit probe precedes CPUID; leaf 1 CMOV is the instruction baseline.
+
+    Signature uses display family/model decoding, not a vendor whitelist.
+    The diagnostic values do not extend the frozen boot-info v1 ABI.
+    """
+    if not cpuid_present or max_basic_leaf < 1 or not features_edx & (1 << 15):
+        raise ValueError(CPU_MINIMUM_ERROR)
+    family = (signature >> 8) & 15
+    model = (signature >> 4) & 15
+    display_family = family + ((signature >> 20) & 255) if family == 15 else family
+    if family in (6, 15):
+        model |= ((signature >> 16) & 15) << 4
+    return {'signature': signature, 'family': display_family,
+            'model': model, 'stepping': signature & 15}
+
+
+def boot_minimum(cpu, entries, controller=None, complete=True, signature='SMAP'):
+    """Pre-disk gate: CPU, normalized E820, then VBE controller query.
+
+    No controller response preserves text/serial recovery. A successful query
+    with malformed signature or pre-2.0 version refuses before disk discovery.
+    LFB mode eligibility/readback remains the later video selection's job.
+    """
+    diagnostic = cpu_minimum(**cpu)
+    try:
+        memory = normalize_e820(entries, complete, signature)
+    except ValueError as error:
+        raise ValueError(E820_MINIMUM_ERROR) from error
+    responding = controller is not None and controller.get('query_ax', 0x4f) == 0x4f
+    if responding and (controller.get('signature') != 'VESA' or controller.get('version', 0) < 0x200):
+        raise ValueError(VBE_MINIMUM_ERROR)
+    return {'cpu': diagnostic, 'memory': memory, 'vbe_present': responding}
+
 
 def selector(request, source='menu', validated_fw_cfg=False):
     if not isinstance(request, str) or not request.isascii() or len(request) > 64:

@@ -1,3 +1,129 @@
+; Minimum checks precede disk discovery/loading and native i8042 access.
+; Intel/AMD CPUID: toggle EFLAGS.ID, restore flags, then query basic leaf 1.
+; No CPUID is executed until the ID test succeeds; FXSR/SSE are optional.
+cpu_minimum:
+    pushfd
+    pop eax
+    mov ecx, eax
+    xor eax, 1 << 21
+    push eax
+    popfd
+    pushfd
+    pop eax
+    push ecx
+    popfd
+    xor eax, ecx
+    test eax, 1 << 21
+    jz .bad
+    xor eax, eax
+    cpuid
+    cmp eax, 1
+    jb .bad
+    mov eax, 1
+    cpuid
+    mov [cpu_signature], eax
+    mov [cpu_features], edx
+    ; Diagnostics stay outside frozen ciuki_boot_info v1 reserved fields.
+    mov di, cpu_signature_text
+    call cpu_hex
+    mov eax, [cpu_signature]
+    mov ebx, eax
+    shr ebx, 8
+    and ebx, 15
+    mov edx, ebx
+    cmp ebx, 15
+    jne .family
+    shr eax, 20
+    and eax, 255
+    add edx, eax
+.family:
+    mov eax, edx
+    mov di, cpu_family_text
+    call cpu_hex
+    mov eax, [cpu_signature]
+    shr eax, 4
+    and eax, 15
+    cmp ebx, 6
+    je .extended_model
+    cmp ebx, 15
+    jne .model
+.extended_model:
+    mov edx, [cpu_signature]
+    shr edx, 12
+    and edx, 0xf0
+    or eax, edx
+.model:
+    mov di, cpu_model_text
+    call cpu_hex
+    mov eax, [cpu_signature]
+    and eax, 15
+    mov di, cpu_stepping_text
+    call cpu_hex
+    mov si, cpu_diagnostic
+    call print
+    test dword [cpu_features], 1 << 15
+    jz .bad
+    ret
+.bad:
+    mov si, cpu_error
+    jmp minimum_halt
+
+; EAX -> eight hexadecimal ASCII digits at DS:DI, preserving registers.
+cpu_hex:
+    pushad
+    mov cx, 8
+.digit:
+    rol eax, 4
+    mov bx, ax
+    and bx, 15
+    mov dl, [cpu_hex_digits+bx]
+    mov [di], dl
+    inc di
+    loop .digit
+    popad
+    ret
+cpu_signature dd 0
+cpu_features dd 0
+cpu_hex_digits db '0123456789abcdef'
+cpu_diagnostic db 'L:CPU signature='
+cpu_signature_text db '00000000 family='
+cpu_family_text db '00000000 model='
+cpu_model_text db '00000000 stepping='
+cpu_stepping_text db '00000000',13,10,0
+cpu_error db 'CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)',0
+
+; Query only, never modeset before BOOT.CFG/menu. A responding pre-2.0
+; controller is unsupported. An absent controller keeps the contract's
+; text/serial recovery path (including the -vga none regression cases).
+vbe_minimum:
+    mov dword [B(vbe_ctrl)], 'VBE2'
+    mov di, B(vbe_ctrl)
+    mov ax, 0x4f00
+    int 0x10
+    cmp ax, 0x004f
+    jne .absent
+    cmp dword [B(vbe_ctrl)], 'VESA'
+    jne .bad
+    cmp word [B(vbe_ctrl)+4], 0x0200
+    jb .bad
+    ret
+.absent:
+    ret
+.bad:
+    mov si, vbe_error
+    jmp minimum_halt
+vbe_error db 'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer',0
+
+; Minimum failures do not wait for a keyboard, retry firmware or access disk.
+minimum_halt:
+    call print
+    mov si, newline
+    call print
+    cli
+.halt:
+    hlt
+    jmp .halt
+
 ; Optional firmware discovery precedes all direct i8042 operations.
 platform_collect:
     mov ax, 0xb101

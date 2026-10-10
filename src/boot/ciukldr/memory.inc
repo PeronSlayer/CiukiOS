@@ -181,8 +181,8 @@ memory_collect:
     ret
 memory_error:
     mov si, map_error
-    jmp fatal
-map_error db 'L:E820',0
+    jmp minimum_halt
+map_error db 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)',0
 raw_count dw 0
 
 ; Sweep every 64-bit boundary. Non-RAM wins overlapping RAM; precedence

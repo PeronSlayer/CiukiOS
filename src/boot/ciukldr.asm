@@ -30,6 +30,10 @@ entry:
     mov dword [B(loader_start)], LOAD_BASE
     mov dword [B(loader_end)], LOAD_BASE+image_padded_end
     call uart_init
+    ; Reject minimum CPU/firmware failures before even EDD disk discovery.
+    call cpu_minimum
+    call memory_collect
+    call vbe_minimum
     call platform_collect
     call fwcfg_request
     test dword [B(flags)], CBI_F_INPUT_FORCED
@@ -39,7 +43,6 @@ entry:
     mov byte [B(input_policy)], 1
 .policy:
     call a20_enable
-    call memory_collect
     call fat_mount
     call config_read
     call boot_menu

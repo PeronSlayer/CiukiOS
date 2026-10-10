@@ -7,6 +7,7 @@
 - [Windows portable release](windows-portable-release.md)
 - [0.8.3 screenshots](screenshots/0.8.3/README.md)
 - [Test architecture](design/test-architecture.md)
+- [Generic PC hardware baseline and compatibility matrix](design/hardware-baseline.md)
 
 Ciuki VMM foundation contracts (approved 2026-10-09):
 

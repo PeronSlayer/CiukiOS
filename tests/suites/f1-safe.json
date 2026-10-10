@@ -1326,6 +1326,446 @@
       "device_exceptions": {
         "vga": "none"
       }
+    },
+    {
+      "id": "safe-fw-cfg-qemu-desktop-1998",
+      "probe": "safe",
+      "profile": "qemu-desktop-1998",
+      "selector": "f1:safe run={run_id} safe=1",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              },
+              "source": "fw-cfg"
+            }
+          },
+          {
+            "where": {
+              "event": "READY"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "timing_domain": "icount"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "activation"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "framebuffer_sequence",
+                "op": "ge",
+                "right": "flag_sequence",
+                "add": 1
+              },
+              {
+                "left": "input_sequence",
+                "op": "ge",
+                "right": "framebuffer_sequence",
+                "add": 1
+              },
+              {
+                "left": "ata_sequence",
+                "op": "ge",
+                "right": "input_sequence",
+                "add": 1
+              }
+            ],
+            "fields": {
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "required"
+            },
+            "exact_count": 1,
+            "fields": {
+              "console": {
+                "eq": 1
+              },
+              "input": {
+                "eq": 1
+              },
+              "disk_log": "unavailable",
+              "console_mode": "lfb"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "audio"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "acceleration"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "network"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "dma"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "power"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "optional_firmware"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "ata"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "option"
+            },
+            "exact_count": 1,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "fw_cfg": {
+                "eq": 1
+              },
+              "boot_cfg": {
+                "eq": 0
+              },
+              "menu": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "safe-fw-cfg-qemu-desktop-2002",
+      "probe": "safe",
+      "profile": "qemu-desktop-2002",
+      "selector": "f1:safe run={run_id} safe=1",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "safe"
+            },
+            "combine": true,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              },
+              "input_works": {
+                "eq": 1
+              },
+              "console_works": {
+                "eq": 1
+              },
+              "bios_retries": {
+                "eq": 0
+              },
+              "source": "fw-cfg"
+            }
+          },
+          {
+            "where": {
+              "event": "READY"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "combine": true,
+            "required_fields": [
+              "subcase",
+              "owner",
+              "generation",
+              "errors",
+              "gate",
+              "timing_domain"
+            ],
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "timing_domain": "icount"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "activation"
+            },
+            "exact_count": 1,
+            "relations": [
+              {
+                "left": "framebuffer_sequence",
+                "op": "ge",
+                "right": "flag_sequence",
+                "add": 1
+              },
+              {
+                "left": "input_sequence",
+                "op": "ge",
+                "right": "framebuffer_sequence",
+                "add": 1
+              },
+              {
+                "left": "ata_sequence",
+                "op": "ge",
+                "right": "input_sequence",
+                "add": 1
+              }
+            ],
+            "fields": {
+              "flag_before_activation": {
+                "eq": 1
+              },
+              "optional_activations": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "required"
+            },
+            "exact_count": 1,
+            "fields": {
+              "console": {
+                "eq": 1
+              },
+              "input": {
+                "eq": 1
+              },
+              "disk_log": "unavailable",
+              "console_mode": "lfb"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "audio"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "acceleration"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "network"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "dma"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "power"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "optional_firmware"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "disabled",
+              "device": "ata"
+            },
+            "exact_count": 1,
+            "fields": {
+              "reason": "safe_mode"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "option"
+            },
+            "exact_count": 1,
+            "fields": {
+              "safe_mode": {
+                "eq": 1
+              },
+              "fw_cfg": {
+                "eq": 1
+              },
+              "boot_cfg": {
+                "eq": 0
+              },
+              "menu": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
     }
   ],
   "physical_import_required": true,
