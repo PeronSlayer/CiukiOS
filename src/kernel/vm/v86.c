@@ -330,25 +330,39 @@ void v86_irq_raise(struct v86 *v, unsigned irq)
         v->pic[irq >> 3].irr |= 1u << (irq & 7);
 }
 
+int v86_irq_pending(const struct v86 *v)
+{
+    struct v86_pic master_pic = v->pic[0];
+    int slave = eligible(&v->pic[1]);
+    if (slave >= 0)
+        master_pic.irr |= 4;
+    else
+        master_pic.irr &= ~4u;
+    int master = eligible(&master_pic);
+    if (master < 0)
+        return -1;
+    return master == 2 ? slave + 8 : master;
+}
+
 int v86_irq_deliver(struct v86 *v, struct v86_frame *f)
 {
     if (!v->vif || v->shadow)
         return 0;
-    int slave = eligible(&v->pic[1]);
-    if (slave >= 0)
+    /* Preserve the modeled cascade bit exposed by guest IRR reads. */
+    if (eligible(&v->pic[1]) >= 0)
         v->pic[0].irr |= 4;
     else
         v->pic[0].irr &= ~4u;
-    int master = eligible(&v->pic[0]);
-    if (master < 0)
+    int irq = v86_irq_pending(v);
+    if (irq < 0)
         return 0;
-    uint8_t vector = master == 2 ? v->pic[1].base + (uint8_t)slave : v->pic[0].base + master;
+    uint8_t vector = v->pic[irq >> 3].base + (irq & 7);
     int rc = v86_reflect(v, f, vector);
     if (rc)
         return rc;
-    acknowledge(&v->pic[0], (unsigned)master);
-    if (master == 2)
-        acknowledge(&v->pic[1], (unsigned)slave);
+    acknowledge(&v->pic[0], irq >= 8 ? 2u : (unsigned)irq);
+    if (irq >= 8)
+        acknowledge(&v->pic[1], (unsigned)irq - 8);
     v->stats.reflected_irqs++;
     return 1;
 }

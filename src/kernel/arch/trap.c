@@ -47,9 +47,11 @@ static void handle_irq(struct trap_frame *tf)
         outb(0x20, 0x62);               /* acknowledge the master cascade only */
         return;
     }
+    biosvm_account_irq(irq, false, irq_handlers[irq] != 0);
     if (irq_handlers[irq])
         irq_handlers[irq](tf);
     pic_eoi(irq);
+    biosvm_account_irq(irq, true, irq_handlers[irq] != 0);
 }
 
 static bool try_expected(struct trap_frame *tf)

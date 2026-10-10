@@ -44,4 +44,6 @@ unsigned fwinput_poll(struct fwinput_event *out, unsigned max);
 bool fwinput_pending(void);
 void fwinput_stats(struct fwinput_stats *out);
 void fwinput_backend_state(struct fwinput_backend_state *out);
+/* Bounded diagnostics, called only by the firmware input probe's 10s timer. */
+void fwinput_adapter_log_delivery(void);
 #endif

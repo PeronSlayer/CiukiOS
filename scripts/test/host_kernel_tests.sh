@@ -71,7 +71,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
 
-# f1-18 does not authorize edits to i8042_test.c. Adapt its old adapter-only
+# f1-18/f1-19 do not authorize edits to i8042_test.c. Adapt its old adapter-only
 # fakes in build/host, preserving every input/probe count assertion. Its
 # relative production includes resolve identically from this generated file.
 python3 - "$root" "$out" <<'PY'
@@ -89,6 +89,7 @@ bool fwinput_pending(void)
 }
 uint64_t biosvm_input_reflections(void) { return 0; }
 void biosvm_set_input_wait(struct kwait *q) { CHECK(q != 0); }
+void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeof(*out)); }
 '''
 (out / "fwqueue_i8042_test.c").write_text(source)
 PY
