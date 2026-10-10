@@ -289,3 +289,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/fs/vfs.c" "$root/tests/host/fs/fake.c" \
     "$root/src/kernel/probes/f2_probes_files.c" -o "$out/files_test"
 "$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf"
+
+# F2 app controller: sanitized records/captures plus an exact 8 KiB guarded
+# stack regression, and negative controls for the stack and compiler guards.
+python3 -m unittest discover -s "$root/tests/host" -p test_app_gate.py
