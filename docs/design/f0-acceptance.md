@@ -83,6 +83,17 @@ When no request is present, boot MUST enter ordinary scaffold operation without
 destructive tests.
 `all` MUST execute in the order below, with panic last.
 
+**[F2, f2-12 grammar amendment]** The F0/F1 grammar above is unchanged.
+Only `f2:crash-isolation` gains a final optional `server=desktop|standin`
+key, after `platform=e500` and `safe=1` when present; duplicates, other values,
+wrong order and other phases/probes MUST fail selection. Omission selects
+desktop for an available LFB and payload, otherwise stand-in; safe/text mode
+always selects stand-in. The 64-byte bound remains, so the 67-byte E500 safe
+selector with all three suffixes MUST be rejected (omit `server` there).
+See [the f2-12 amendment](f2-acceptance.md#selection-and-evidence) for the
+screen-observation decision and primary QMP references. Boot-loader and kernel
+validation MUST agree before explicit server selectors can qualify a run.
+
 **[F0]** On QEMU the loader MUST verify signature `QEMU`, enumerate the file
 directory and read exactly `opt/it.alcybercloud.ciukios/test` using the bounded
 PIO interface. It MUST handle directory big-endian fields and item lengths;

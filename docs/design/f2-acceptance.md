@@ -46,8 +46,30 @@ implement this gate.
 selector grammar, at most 64 ASCII bytes:
 
 ```text
-f2:<probe-id> run=<8-hex-digit-id> [platform=e500] [safe=1]
+f2:<probe-id> run=<8-hex-digit-id> [platform=e500] [safe=1] [server=desktop|standin]
 ```
+
+**[F2, f2-12 amendment]** `server` MUST apply only to `crash-isolation`,
+occur last and appear at most once. Automatic selection MUST use the actual
+desktop when a qualified LFB and `/bin/desktop` are available. Safe mode and
+no-LFB operation MUST retain the stand-in, including with an explicit desktop
+request. An explicit desktop request with an available LFB but missing payload
+MUST fail launch rather than silently qualify the stand-in. The existing
+64-byte bound remains: the 67-byte combination of `platform`, `safe` and
+`server` is invalid; safe E500 selectors MUST omit `server` and use automatic
+fallback selection. This suffix also requires boot-loader validation; adding
+it only to the kernel cannot make an explicit selector bootable.
+
+The post-fault host observation uses the ordered key, relative-motion and
+button unions documented by the [QEMU input-send-event reference](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event)
+and binary PPM from [screendump](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-screendump).
+The runner MUST retain before/after PPM SHA-256, compare the upper-right 64x96
+unoccluded portrait region with `apps/desktop/convert_portrait.py` (the same
+pinned conversion as the portrait host test), and require at least 16 changed
+pixels in the original cursor's 8x16 footprint. A clock-only change MUST fail.
+It MUST delete passing captures after retaining these measurements. This is
+external observation, additional to guest presents/input counters and the LFB
+digest; it does not establish guest qualification by itself.
 
 **[F2]** The fixed probe registry MUST contain `elf-load`, `spawn-wait`,
 `fd-table`, `mmap`, `signals-fault`, `threads-wait`, `crash-isolation`,
