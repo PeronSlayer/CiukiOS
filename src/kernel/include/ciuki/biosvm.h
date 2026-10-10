@@ -4,6 +4,7 @@
 #define CIUKI_BIOSVM_H
 #include <ciuki/v86.h>
 struct task;
+struct kwait;
 
 #define BIOSVM_SCRATCH 0x10000u
 #define BIOSVM_STACK 0x11000u
@@ -36,6 +37,13 @@ void biosvm_set_input_service(void (*service)(void));
  * callback must not block, allocate or enter firmware. AUX stays callback-fed. */
 void biosvm_set_input_observer(void (*observer)(uint8_t status, uint8_t byte, bool keyboard_irq));
 unsigned biosvm_mouse_packets(uint8_t (*out)[3], unsigned max, unsigned *lost);
+/* Cheap mapped-memory checks, no firmware entry or controller reads. */
+bool biosvm_keyboard_pending(void);
+bool biosvm_mouse_pending(void);
+uint64_t biosvm_input_reflections(void);
+/* Persistent queue, published before starting its consumer. Reflection and
+ * completed input service wake it; conditions still decide whether to run. */
+void biosvm_set_input_wait(struct kwait *wait);
 
 /* V86-only arch/scheduler hooks. Defaults preserve every F0 frame/path. */
 void biosvm_trap(struct trap_frame *tf);

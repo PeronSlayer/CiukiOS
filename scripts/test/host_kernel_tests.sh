@@ -71,8 +71,29 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
 
+# f1-18 does not authorize edits to i8042_test.c. Adapt its old adapter-only
+# fakes in build/host, preserving every input/probe count assertion. Its
+# relative production includes resolve identically from this generated file.
+python3 - "$root" "$out" <<'PY'
+from pathlib import Path
+import sys
+root, out = map(Path, sys.argv[1:])
+source = (root / "tests/host/i8042_test.c").read_text()
+old = '!strcmp(name, "firmware-queue") && fn && !arg && prio == P_DEVICE'
+assert source.count(old) == 1
+source = source.replace(old, old.replace('P_DEVICE', 'P_INTERACTIVE'))
+source += '''
+bool fwinput_pending(void)
+{
+    return fw_count || fake_fw_state == BIOSVM_DISABLED_BACKEND;
+}
+uint64_t biosvm_input_reflections(void) { return 0; }
+void biosvm_set_input_wait(struct kwait *q) { CHECK(q != 0); }
+'''
+(out / "fwqueue_i8042_test.c").write_text(source)
+PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/i8042_test.c" -o "$out/i8042_test"
+    -I "$root/src/kernel/include" "$out/fwqueue_i8042_test.c" -o "$out/i8042_test"
 "$out/i8042_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -152,6 +173,19 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/v86_test.c" -o "$out/v86_test"
 "$out/v86_test"
+
+# F1 firmware queue: fake-time scheduler and the existing production VM fakes.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_test"
+"$out/fwqueue_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DFWQUEUE_FIRMWARE_TEST -I "$root/src/kernel/include" \
+    "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_firmware_test"
+"$out/fwqueue_firmware_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DFWQUEUE_SERVICE_TEST -I "$root/src/kernel/include" \
+    "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_service_test"
+"$out/fwqueue_service_test"
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.
