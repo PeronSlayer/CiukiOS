@@ -56,6 +56,24 @@ accounting could not attribute the growth.
 3. Suite predicates follow the records; host tests for the attribution and
    the teardown proof.
 
+## Scope amendments (lead, 2026-10-11, after Codex's part-1 report)
+
+Part 1 attributed `kernel_bytes_delta` to the retained identities and
+left `pages_delta=32` unattributed because the page allocator exports no
+ownership. Amendments:
+
+1. `src/kernel/core/kheap.c` and `src/kernel/include/ciuki/mm.h` are
+   allowed files for a read-only heap ledger (pages held by the heap's
+   class pools, bytes in use, peak), so the probe can attribute page growth
+   to the kernel heap pool, which keeps its pages for reuse by design.
+   Report `heap_pages_before/after` and attribute `pages_delta` to it; an
+   unattributed remainder stays a leak. If other owners remain (process
+   page tables of the finished Lua processes, ELF snapshot pages), prove
+   them with the existing ledgers or add the same kind of read-only
+   counter where they are allocated.
+2. The retained-identity release proof at namespace destruction is
+   accepted; volume detach expiring them is the documented rule.
+
 ## Acceptance by the lead
 
 Host tests; kernel build; on QEMU `app-gate-qemu-t23` ends `END
