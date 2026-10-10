@@ -15,7 +15,7 @@
  * https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/input/keyboard/atkbd.c
  * https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/input/mouse/psmouse-base.c
  * No upstream code is copied. Limits are Ciuki policy: the directive's
- * tighter 100 ms replies, 500 ms whole setup, two RESEND retries within
+ * 200 ms replies, 500 ms whole setup, two RESEND retries within
  * the original deadline. AA is one native activation self-test, followed
  * by reapplying config (some controllers reset it); no FF device reset,
  * output-port reset, retry-on-timeout or firmware/native fallback.
@@ -27,6 +27,9 @@
 #include <ciuki/sync.h>
 #include <ciuki/registry.h>
 #include <ciuki/i8042.h>
+#include <ciuki/fwinput.h>
+#include <ciuki/biosvm.h>
+#include <ciuki/init.h>
 
 #define DATA_PORT 0x60u
 #define STATUS_PORT 0x64u
@@ -44,7 +47,7 @@ struct input_queue {
     struct input_stats stats;
     uint64_t sequence;
     unsigned head, tail;
-    bool down[512], extended, breaking;
+    bool down[513], extended, breaking;
     uint8_t pause_pos, mouse_pos, packet[3];
 };
 struct controller {
@@ -63,46 +66,48 @@ struct poll_deadline { uint64_t end; unsigned polls; };
 static struct controller native;
 static struct controller *fixture;
 
-/* US unshifted letters/digits. Positions remain the raw hardware table;
- * text is a digest helper, not a fourth event type or a shifted text ABI. */
-static const char us[0x84] = {
-    [0x1C]='a', [0x32]='b', [0x21]='c', [0x23]='d', [0x24]='e', [0x2B]='f',
-    [0x34]='g', [0x33]='h', [0x43]='i', [0x3B]='j', [0x42]='k', [0x4B]='l',
-    [0x3A]='m', [0x31]='n', [0x44]='o', [0x4D]='p', [0x15]='q', [0x2D]='r',
-    [0x1B]='s', [0x2C]='t', [0x3C]='u', [0x2A]='v', [0x1D]='w', [0x22]='x',
-    [0x35]='y', [0x1A]='z', [0x45]='0', [0x16]='1', [0x1E]='2', [0x26]='3',
-    [0x25]='4', [0x2E]='5', [0x36]='6', [0x3D]='7', [0x3E]='8', [0x46]='9',
+/* Set-2 wire positions -> the public set-1 positions. Checked against
+ * Linux v6.12 atkbd_unxlate_table (source linked above), and SeaBIOS
+ * rel-1.16.3 kbd.c's set-1 table. No backend-specific public key codes. */
+static const uint8_t set1[0x84] = {
+    [0x01]=0x43, [0x03]=0x3F, [0x04]=0x3D, [0x05]=0x3B, [0x06]=0x3C,
+    [0x07]=0x58, [0x09]=0x44, [0x0A]=0x42, [0x0B]=0x40, [0x0C]=0x3E,
+    [0x0D]=0x0F, [0x0E]=0x29, [0x11]=0x38, [0x12]=0x2A, [0x14]=0x1D,
+    [0x15]=0x10, [0x16]=0x02, [0x1A]=0x2C, [0x1B]=0x1F, [0x1C]=0x1E,
+    [0x1D]=0x11, [0x1E]=0x03, [0x21]=0x2E, [0x22]=0x2D, [0x23]=0x20,
+    [0x24]=0x12, [0x25]=0x05, [0x26]=0x04, [0x29]=0x39, [0x2A]=0x2F,
+    [0x2B]=0x21, [0x2C]=0x14, [0x2D]=0x13, [0x2E]=0x06, [0x31]=0x31,
+    [0x32]=0x30, [0x33]=0x23, [0x34]=0x22, [0x35]=0x15, [0x36]=0x07,
+    [0x3A]=0x32, [0x3B]=0x24, [0x3C]=0x16, [0x3D]=0x08, [0x3E]=0x09,
+    [0x41]=0x33, [0x43]=0x17, [0x42]=0x25, [0x44]=0x18, [0x45]=0x0B,
+    [0x46]=0x0A, [0x49]=0x34, [0x4A]=0x35, [0x4B]=0x26, [0x4C]=0x27,
+    [0x4D]=0x19, [0x4E]=0x0C, [0x52]=0x28, [0x54]=0x1A, [0x55]=0x0D,
+    [0x58]=0x3A, [0x59]=0x36, [0x5A]=0x1C, [0x5B]=0x1B, [0x5D]=0x2B,
+    [0x61]=0x56, [0x66]=0x0E, [0x69]=0x4F, [0x6B]=0x4B, [0x6C]=0x47,
+    [0x70]=0x52, [0x71]=0x53, [0x72]=0x50, [0x73]=0x4C, [0x74]=0x4D,
+    [0x75]=0x48, [0x76]=0x01, [0x77]=0x45, [0x78]=0x57, [0x79]=0x4E,
+    [0x7A]=0x51, [0x7B]=0x4A, [0x7C]=0x37, [0x7D]=0x49, [0x7E]=0x46,
+    [0x83]=0x41,
 };
-
+static const uint8_t set1_e0[0x7E] = {
+    [0x11]=0x38, [0x14]=0x1D, [0x1F]=0x5B, [0x27]=0x5C, [0x2F]=0x5D,
+    [0x4A]=0x35, [0x5A]=0x1C, [0x69]=0x4F, [0x6B]=0x4B, [0x6C]=0x47,
+    [0x70]=0x52, [0x71]=0x53, [0x72]=0x50, [0x74]=0x4D, [0x75]=0x48,
+    [0x7A]=0x51, [0x7C]=0x37, [0x7D]=0x49,
+};
+/* Shared US unshifted text/digest helper, indexed only by public set 1. */
+static const char us[0x59] = {
+    [0x02]='1', [0x03]='2', [0x04]='3', [0x05]='4', [0x06]='5', [0x07]='6',
+    [0x08]='7', [0x09]='8', [0x0A]='9', [0x0B]='0', [0x0C]='-', [0x0D]='=',
+    [0x0E]='\b', [0x0F]='\t', [0x10]='q', [0x11]='w', [0x12]='e', [0x13]='r',
+    [0x14]='t', [0x15]='y', [0x16]='u', [0x17]='i', [0x18]='o', [0x19]='p',
+    [0x1A]='[', [0x1B]=']', [0x1C]='\r', [0x1E]='a', [0x1F]='s', [0x20]='d',
+    [0x21]='f', [0x22]='g', [0x23]='h', [0x24]='j', [0x25]='k', [0x26]='l',
+    [0x27]=';', [0x28]=39, [0x29]='`', [0x2B]=92, [0x2C]='z', [0x2D]='x',
+    [0x2E]='c', [0x2F]='v', [0x30]='b', [0x31]='n', [0x32]='m', [0x33]=',',
+    [0x34]='.', [0x35]='/', [0x39]=' ',
+};
 char input_unshifted(uint16_t code) { return code < sizeof(us) ? us[code] : 0; }
-
-static bool key_position(uint8_t b, bool extended)
-{
-    if (extended) {
-        switch (b) {
-        case 0x11: case 0x14: case 0x1F: case 0x27: case 0x2F: case 0x4A:
-        case 0x5A: case 0x69: case 0x6B: case 0x6C: case 0x70: case 0x71:
-        case 0x72: case 0x74: case 0x75: case 0x7A: case 0x7C: case 0x7D:
-            return true;
-        default: return false;
-        }
-    }
-    if (b < sizeof(us) && us[b])
-        return true;
-    switch (b) {
-    case 0x01: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07:
-    case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E:
-    case 0x11: case 0x12: case 0x14: case 0x29: case 0x41: case 0x49:
-    case 0x4A: case 0x4C: case 0x4E: case 0x52: case 0x54: case 0x55:
-    case 0x58: case 0x59: case 0x5A: case 0x5B: case 0x5D: case 0x61:
-    case 0x66: case 0x69: case 0x6B: case 0x6C: case 0x70: case 0x71:
-    case 0x72: case 0x73: case 0x74: case 0x75: case 0x76: case 0x77:
-    case 0x78: case 0x79: case 0x7A: case 0x7B: case 0x7C: case 0x7D:
-    case 0x7E: case 0x83:
-        return true;
-    default: return false;
-    }
-}
 
 /* All decoder/queue helpers below run under the caller's short irq_save.
  * One byte has constant work (at most five events), no allocation/logging,
@@ -117,7 +122,7 @@ static void enqueue(struct controller *c, uint16_t type, uint16_t code, int32_t 
         return;
     }
     q->ring[q->tail] = (struct input_event){ type, code, value, tick, seq,
-        c->stats.generation, INPUT_NATIVE, q->stats.state_lost ? INPUT_F_RESYNC : 0 };
+        c->stats.generation, c->stats.firmware ? INPUT_FIRMWARE : INPUT_NATIVE, q->stats.state_lost ? INPUT_F_RESYNC : 0 };
     q->tail = (q->tail + 1) % INPUT_CAPACITY;
     q->stats.pending++;
 }
@@ -134,6 +139,10 @@ static void key_transition(struct controller *c, uint16_t code, bool down, uint6
     if (down) q->stats.keys_down++;
     else q->stats.keys_down--;
     enqueue(c, INPUT_KEY, code, down, tick);
+    if (down && !c->stats.firmware) {
+        char ch = input_unshifted(code);
+        if (ch) enqueue(c, INPUT_TEXT, (uint8_t)ch, 0, tick);
+    }
 }
 
 static void keyboard_byte(struct controller *c, uint8_t b, uint64_t tick)
@@ -160,8 +169,10 @@ static void keyboard_byte(struct controller *c, uint8_t b, uint64_t tick)
     if (b == 0xE0) { q->extended = true; return; }
     if (b == 0xF0) { q->breaking = true; return; }
     /* Print Screen's E0 12 is a fake shift, not a key transition. */
-    if (key_position(b, q->extended))
-        key_transition(c, b | (q->extended ? 0x100u : 0), !q->breaking, tick);
+    uint16_t code = q->extended ? (b < sizeof(set1_e0) ? set1_e0[b] : 0) :
+                                  (b < sizeof(set1) ? set1[b] : 0);
+    if (code)
+        key_transition(c, code | (q->extended ? 0x100u : 0), !q->breaking, tick);
     else if (!(q->extended && b == 0x12))
         q->stats.resync++;
     q->extended = q->breaking = false;
@@ -235,11 +246,9 @@ void input_digest_add(struct input_digest *d, const struct input_event *e)
             d->hash = hash_byte(d->hash, (uint8_t)(fields[i] >> (8 * j)));
     if (e->type == INPUT_KEY) {
         d->key_transitions++;
-        char ch = e->value ? input_unshifted(e->code) : 0;
-        if (ch) {
-            d->characters++;
-            d->text_hash = hash_byte(d->text_hash, (uint8_t)ch);
-        }
+    } else if (e->type == INPUT_TEXT) {
+        d->characters++;
+        d->text_hash = hash_byte(d->text_hash, (uint8_t)e->code);
     } else if (e->type == INPUT_BTN) {
         d->button_transitions++;
     } else if (e->type == INPUT_REL) {
@@ -590,7 +599,9 @@ int i8042_init(void)
      * override. Check both BEFORE even changing PIC masks or claiming. */
     if (g_boot.input_policy == CBI_INPUT_FIRMWARE || (g_boot.flags & CBI_F_INPUT_FORCED)) {
         native.stats.firmware = true;
-        return -ENOSYS;
+        if (native.stats.quarantined || biosvm_backend_state() == BIOSVM_DISABLED_BACKEND)
+            return -I8042_EIO;
+        return native.stats.active ? 0 : -ENOSYS;
     }
     if (native.stats.quarantined) return -I8042_EIO;
     if (native.stats.active) return claims_active(&native) ? 0 : -EINVAL;
@@ -688,6 +699,7 @@ static bool idle_proof(int handle, gen_t generation)
 }
 int i8042_stop(gen_t generation)
 {
+    if (native.stats.firmware) return -ENOSYS; /* persistent BIOS lease */
     if (!native.stats.active || !gen_matches(native.stats.generation, generation)) return -EINVAL;
     if (!(read_eflags() & 0x200) || !g_current) return -EINVAL;
     kmutex_lock(&native.mutex);
@@ -738,14 +750,105 @@ void i8042_snapshot(struct i8042_stats *out)
     irq_restore(f);
 }
 
+/* Firmware bridge: one producer thread, same bounded queue, no controller
+ * access. Generation/source are immutable for the persistent BIOS lease. */
+bool input_firmware_begin(gen_t generation)
+{
+    if (!generation || (g_boot.input_policy != CBI_INPUT_FIRMWARE &&
+                        !(g_boot.flags & CBI_F_INPUT_FORCED))) return false;
+    uint32_t f = irq_save();
+    if (native.stats.quarantined || (native.stats.active && !native.stats.firmware)) {
+        irq_restore(f);
+        return false;
+    }
+    memset(&native.queue, 0, sizeof(native.queue));
+    native.stats.firmware = native.stats.active = true;
+    native.stats.generation = generation;
+    irq_restore(f);
+    return true;
+}
+
+void input_firmware_loss(uint64_t lost)
+{
+    uint32_t f = irq_save();
+    native.queue.stats.overflow += lost;
+    irq_restore(f);
+}
+
+void input_firmware_disable(gen_t generation)
+{
+    uint32_t f = irq_save();
+    if (native.stats.firmware && gen_matches(native.stats.generation, generation)) {
+        native.stats.quarantined = true;
+        native.stats.active = false;
+        native.stats.last_error = -I8042_EIO;
+    }
+    irq_restore(f);
+}
+
+void input_firmware_event(const struct fwinput_event *e, gen_t generation)
+{
+    if (!e) return;
+    uint32_t f = irq_save();
+    struct input_queue *q = &native.queue;
+    if (!native.stats.firmware || !native.stats.active ||
+        !gen_matches(native.stats.generation, generation)) {
+        irq_restore(f);
+        return;
+    }
+    switch (e->type) {
+    case FWINPUT_KEY:
+        if (e->code < ARRAY_SIZE(q->down) && (e->value == 0 || e->value == 1))
+            key_transition(&native, e->code, e->value != 0, e->tick);
+        else q->stats.errors++;
+        break;
+    case FWINPUT_TEXT:
+        if (e->value > 0 && e->value <= UINT16_MAX)
+            enqueue(&native, INPUT_TEXT, (uint16_t)e->value, 0, e->tick);
+        else q->stats.errors++;
+        break;
+    case FWINPUT_REL:
+        if (e->code <= FWINPUT_Y)
+            enqueue(&native, INPUT_REL, e->code == FWINPUT_X ? INPUT_X : INPUT_Y, e->value, e->tick);
+        else q->stats.errors++;
+        break;
+    case FWINPUT_BUTTON:
+        if (e->code < 3 && (e->value == 0 || e->value == 1)) {
+            unsigned mask = 1u << e->code;
+            if (!!(q->stats.buttons & mask) == !!e->value) q->stats.duplicates++;
+            else {
+                q->stats.buttons ^= mask;
+                enqueue(&native, INPUT_BTN, e->code, e->value, e->tick);
+            }
+        } else q->stats.errors++;
+        break;
+    case FWINPUT_RESYNC:
+        q->stats.resync++;
+        q->stats.state_lost = true;
+        q->stats.keys_down = q->stats.buttons = 0;
+        memset(q->down, 0, sizeof(q->down));
+        enqueue(&native, INPUT_RESYNC, 0, 0, e->tick);
+        break;
+    default: q->stats.errors++; break;
+    }
+    irq_restore(f);
+}
+
 static bool fault_selected(void)
 {
     if (!(g_boot.flags & CBI_F_TEST_REQUEST) || g_boot.test_request_len > CIUKI_TEST_REQ_MAX)
         return false;
     const char *s = g_boot.test_request;
-    const char prefix[] = "f1:input-fault run=";
-    unsigned n = sizeof(prefix) - 1;
-    if (g_boot.test_request_len < n + 8 || strncmp(s, prefix, n)) return false;
+    static const char *prefixes[] = { "f1:input-fault run=", "f1:core run=", "f1:all run=" };
+    unsigned n = 0;
+    for (unsigned i = 0; i < ARRAY_SIZE(prefixes); i++) {
+        unsigned length = (unsigned)strlen(prefixes[i]);
+        if (g_boot.test_request_len >= length + 8 && !strncmp(s, prefixes[i], length)) {
+            n = length;
+            break;
+        }
+    }
+    if (!n) return false;
     for (unsigned i = n; i < n + 8; i++)
         if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f') ||
               (s[i] >= 'A' && s[i] <= 'F'))) return false;

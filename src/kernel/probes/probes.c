@@ -11,6 +11,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/timing.h>
 #include <ciuki/work.h>
+#include <ciuki/init.h>
 #include <ciuki/abi.h>
 
 extern const uint8_t payload_start[], payload_end[];
@@ -866,6 +867,7 @@ void probes_main(void *arg)
     timing_calibrate();
     kwork_init();                        /* device worker, before any driver IRQ producer */
     if (!(g_boot.flags & CBI_F_TEST_REQUEST)) {
+        drivers_init();
         klog("Ciuki VMM F0 scaffold ready (no test request). Build %s.", CIUKI_BUILD_ID);
         for (;;)
             task_sleep_ms(60000);
@@ -881,6 +883,7 @@ void probes_main(void *arg)
     }
     const char *probe = selection.probe;
     rec_set_run(selection.run);
+    drivers_init();
     klog("[selector] probe=%s platform=%s tsc_khz=%u", probe,
          (g_boot.flags & CBI_F_INPUT_FORCED) ? "e500" : "native", (uint32_t)g_tsc_per_ms);
     bool all = !strncmp(probe, "all", 4);

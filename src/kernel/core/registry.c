@@ -9,6 +9,7 @@
 #include <ciuki/arch.h>
 #include <ciuki/work.h>
 #include <ciuki/timing.h>
+#include <ciuki/init.h>
 
 #define MAX_RES 64
 #define MAX_PCI 32
@@ -275,8 +276,9 @@ static void dma_init(void)
     }
 }
 
-void registry_init(void)
+__attribute__((no_stack_protector)) void registry_init(void)
 {
+    stackprot_init();                 /* before any scheduler/task stack exists */
     dma_init();
     nres = 0;
     npci = 0;
@@ -290,9 +292,7 @@ void registry_init(void)
         { 0xCF8, 0xD00, "pci" },
     };
     for (unsigned i = 0; i < ARRAY_SIZE(legacy); i++) {
-        int h = registry_claim(RES_PORT, legacy[i].s, legacy[i].e, legacy[i].o, false);
-        if (h >= 0)
-            res[h].state = RS_FIRMWARE;
+        claim(RES_PORT, legacy[i].s, legacy[i].e, legacy[i].o, false, RS_FIRMWARE);
     }
     registry_claim(RES_IRQ, 0, 1, "timer", false);
     registry_claim(RES_IRQ, 2, 3, "pic-cascade", false);
@@ -300,8 +300,8 @@ void registry_init(void)
     if (g_boot.uart_base)
         registry_claim(RES_PORT, g_boot.uart_base, g_boot.uart_base + 8, "uart", false);
     if (g_boot.fb_phys && !(g_boot.flags & CBI_F_TEXT_MODE))
-        registry_claim(RES_MMIO, g_boot.fb_phys, g_boot.fb_phys + g_boot.fb_pitch * g_boot.fb_height,
-                       "boot-framebuffer", false);
+        claim(RES_MMIO, g_boot.fb_phys, g_boot.fb_phys + g_boot.fb_pitch * g_boot.fb_height,
+              "boot-framebuffer", false, RS_FIRMWARE);
     /* PCI BIOS reported configuration mechanism #1 (AL bit 0). */
     if ((g_boot.pci_bios & 1) && ((g_boot.pci_bios >> 8) & 1))
         pci_scan();

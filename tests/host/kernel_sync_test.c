@@ -10,6 +10,8 @@
 #include <ciuki/sync.h>
 #include <ciuki/work.h>
 #include <ciuki/registry.h>
+#include <ciuki/init.h>
+#define SEL_KCODE 0x08
 
 static unsigned failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -42,6 +44,8 @@ static void irq_restore(uint32_t f) { flags = f; }
 static void outb(uint16_t port, uint8_t v) { (void)port; (void)v; writes++; }
 static void outl(uint16_t port, uint32_t v) { (void)port; (void)v; writes++; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
+void *kzalloc(size_t n) { return calloc(1, n); }
+void kfree(void *p) { free(p); }
 
 void klog(const char *fmt, ...)
 {
@@ -53,7 +57,10 @@ void klog(const char *fmt, ...)
 
 __attribute__((noreturn)) void panic(const char *fmt, ...)
 {
-    (void)fmt;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(last_log, sizeof(last_log), fmt, ap);
+    va_end(ap);
     if (expect_panic)
         longjmp(panic_env, 1);
     fprintf(stderr, "unexpected panic: %s\n", fmt);
@@ -99,7 +106,24 @@ void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); handlers[
 
 #include "../../src/kernel/core/sync.c"
 #include "../../src/kernel/core/work.c"
+#include "../../src/kernel/lib/stackprot.c"
 #include "../../src/kernel/core/registry.c"
+
+int kvsnprintf(char *buf, size_t size, const char *fmt, va_list ap) { return vsnprintf(buf, size, fmt, ap); }
+static unsigned probe_records;
+void rec_emit(const char *probe, const char *event, const char *fmt, ...)
+{
+    char extra[512] = {0};
+    va_list ap;
+    va_start(ap, fmt);
+    if (fmt) vsnprintf(extra, sizeof(extra), fmt, ap);
+    va_end(ap);
+    CHECK(55 + strlen(probe) + strlen(event) + strlen(extra) <= 240);
+    if (55 + strlen(probe) + strlen(event) + strlen(extra) > 240) printf("oversized %s %s %s\n", probe, event, extra);
+    if (!strcmp(event, "END")) CHECK(strstr(extra, "status=PASS"));
+    probe_records++;
+}
+#include "../../src/kernel/probes/registry_probe.c"
 
 static void current(unsigned n)
 {
@@ -140,6 +164,31 @@ static void release_active(int h)
     gen_t g = registry_get((unsigned)h)->generation;
     CHECK(registry_quiesce(h, g, idle_ok) == 0);
     CHECK(registry_release(h, g) == 0);
+}
+
+static void test_boot_reservations(void)
+{
+    g_boot.fb_phys = 0xE0000000u;
+    g_boot.fb_pitch = 2560;
+    g_boot.fb_height = 480;
+    registry_init();
+    unsigned input_ports = 0, framebuffers = 0;
+    for (unsigned i = 0; i < registry_count(); i++) {
+        const struct resource *r = registry_get(i);
+        if (!strcmp(r->owner, "input") || !strcmp(r->owner, "boot-framebuffer")) {
+            CHECK(r->state == RS_FIRMWARE);
+            if (!strcmp(r->owner, "input")) input_ports++;
+            else framebuffers++;
+            gen_t old = r->generation;
+            CHECK(!registry_claim_reserved((int)i, old, "boot-fixture"));
+            CHECK(r->state == RS_CLAIMED && r->generation != old);
+            CHECK(!registry_activate((int)i, r->generation));
+            release_active((int)i);
+        }
+    }
+    CHECK(input_ports == 2 && framebuffers == 1);
+    memset(&g_boot, 0, sizeof(g_boot));
+    printf("boot reservations: PASS (input/framebuffer firmware leases transfer with fresh generations)\n");
 }
 
 static void test_registry(void)
@@ -523,6 +572,35 @@ static void test_irq_chain(void)
     printf("kernel services IRQ: PASS (two owners, removal, 1000 passes, EOI, budget/overflow)\n");
 }
 
+static void test_stackprot(void)
+{
+    uintptr_t saved = __stack_chk_guard;
+    CHECK(saved && seeded);
+    g_ticks += 99;
+    stackprot_init();
+    CHECK(saved == __stack_chk_guard);
+    strcpy(g_current->name, "guard-test");
+    expect_panic = true;
+    if (!setjmp(panic_env)) { __stack_chk_fail(); }
+    expect_panic = false;
+    CHECK(strstr(last_log, "task=guard-test"));
+    printf("stack protector guard: PASS (nonzero, initialized once, task-name panic)\n");
+}
+static void test_registry_probe(void)
+{
+    struct registry_stats before, after;
+    registry_snapshot(&before);
+    g_cpu_tsc = true;
+    g_tsc_per_ms = 1ull << 40;
+    unsigned unmasked_before = unmasks;
+    CHECK(!probe_registry());
+    registry_snapshot(&after);
+    CHECK(after.live == before.live + 1 && after.claims - before.claims == 102 &&
+          after.releases - before.releases == 101 && after.quarantines - before.quarantines == 1);
+    CHECK(unmasks == unmasked_before && probe_records >= 8 && !fixture_pic.writes);
+    printf("registry probe: PASS (100 cycles, zero rejected writes, quarantine, production shadow IRQ/PIC)\n");
+}
+
 static void test_generation_exhaustion(void)
 {
     CHECK(!gen_matches(0, 0));
@@ -542,11 +620,14 @@ int main(void)
     for (unsigned i = 0; i < ARRAY_SIZE(tasks); i++)
         tasks[i] = (struct task){ .id = i + 1, .generation = 1, .state = T_RUNNING };
     current(0);
+    test_boot_reservations();
     test_registry();
+    test_stackprot();
     test_deadlines();
     test_sync();
     test_work();
     test_irq_chain();
+    test_registry_probe();
     test_generation_exhaustion();
     printf("kernel services: %s (%u failures)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;

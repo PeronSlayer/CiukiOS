@@ -128,6 +128,7 @@ void rec_emit(const char *name, const char *event, const char *fmt, ...)
 }
 
 #include "../../src/kernel/core/sync.c"
+#include "../../src/kernel/lib/stackprot.c"
 #include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/drivers/ata.c"
 #include "../../src/kernel/drivers/blkpart.c"

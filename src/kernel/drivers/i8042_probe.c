@@ -1,14 +1,17 @@
-/* F1 native input evidence; registration belongs to f1-03.
+/* F1 input evidence through the shared native/firmware queue.
  * Protocol references and production decisions are recorded in i8042.c.
  * Fault fixtures below never read/write physical ports or PIC/PIT state.
- * Firmware event/overrun/mediated-I/O qualification belongs to the later
- * BIOS service directive; the native fault PASS does not qualify firmware.
+ * Mediated-I/O fault evidence is supplied by biosvm_selftest (f1-07);
+ * the native fault PASS does not qualify those firmware fault cases.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/probe.h>
 #include <ciuki/i8042.h>
+#include <ciuki/init.h>
+#include <ciuki/fwinput.h>
+#include <ciuki/biosvm.h>
 
 static int input_verdict(const char *probe, bool ok, const char *reason)
 {
@@ -21,14 +24,16 @@ int probe_input(void)
 {
     rec_emit("input", "BEGIN", 0);
     int err = i8042_init();
-    if (err == -ENOSYS) {
-        rec_emit("input", "READY", "backend=firmware");
-        rec_emit("input", "DATA", "case=policy backend=firmware native_claims=0 controller_reads=0 firmware_service=pending");
-        rec_emit("input", "END", "status=not_run reason=firmware_service_pending");
-        return 2;                     /* no firmware qualification claimed */
+    bool firmware = g_boot.input_policy == CBI_INPUT_FIRMWARE || (g_boot.flags & CBI_F_INPUT_FORCED);
+    const char *backend = firmware ? "firmware" : "native";
+    if (firmware && err == -ENOSYS) err = fwinput_adapter_init();
+    struct fwinput_backend_state fw = { 0 };
+    if (firmware) {
+        fwinput_backend_state(&fw);
+        if (!err && (!fw.keyboard || !fw.mouse || !fw.key_releases || fw.disabled)) err = -ENOSYS;
     }
     if (err) {
-        rec_emit("input", "DATA", "case=setup backend=native error=%d", err);
+        rec_emit("input", "DATA", "case=setup backend=%s error=%d", backend, err);
         return input_verdict("input", false, "setup");
     }
     struct input_event event;
@@ -39,7 +44,7 @@ int probe_input(void)
     i8042_snapshot(&driver);
     struct input_digest d;
     input_digest_init(&d);
-    rec_emit("input", "READY", "backend=native");
+    rec_emit("input", "READY", "backend=%s", backend);
     rec_emit("input", "ARM", "keys=100 moves=100 buttons=10 x=2 y=-1 timeout_ms=120000 generation=%u",
              driver.generation);
     uint64_t end = deadline_after_ms(120000), quiet = deadline_after_ms(0);
@@ -60,23 +65,41 @@ int probe_input(void)
     /* Expected text digest is exactly 100 unshifted 'a' characters. */
     struct input_digest expected;
     input_digest_init(&expected);
-    struct input_event a = { .type = INPUT_KEY, .code = INPUT_KEY_A, .value = 1 };
+    struct input_event a = { .type = INPUT_TEXT, .code = 'a' };
     for (unsigned i = 0; i < 100; i++) input_digest_add(&expected, &a);
-    rec_emit("input", "DATA", "case=counts backend=native generation=%u characters=%llu key_transitions=%llu button_transitions=%llu",
-             driver.generation, d.characters, d.key_transitions, d.button_transitions);
+    rec_emit("input", "DATA", "case=counts backend=%s generation=%u characters=%llu key_transitions=%llu button_transitions=%llu",
+             backend, driver.generation, d.characters, d.key_transitions, d.button_transitions);
     rec_emit("input", "DATA", "case=motion x=%lld y=%lld digest=%08x text_digest=%08x events=%llu",
              d.x, d.y, d.hash, d.text_hash, d.events);
     rec_emit("input", "DATA", "case=queue overflow=%llu resync=%llu duplicates=%llu repeats=%llu errors=%llu stuck_keys=%u buttons=%u state_lost=%u",
              q.overflow - base.overflow, q.resync - base.resync, q.duplicates - base.duplicates,
              q.repeats - base.repeats, q.errors - base.errors, q.keys_down, q.buttons, q.state_lost);
+    rec_emit("input", "DATA", "group=input backend=%s text_count=%llu key_transitions=%llu button_transitions=%llu motion_x=%lld motion_y=%lld",
+             backend, d.characters, d.key_transitions, d.button_transitions, d.x, d.y);
+    rec_emit("input", "DATA", "group=input loss=%llu duplicates=%llu stuck=%u owner_errors=%u",
+             q.overflow - base.overflow, q.duplicates - base.duplicates,
+             q.keys_down + !!q.buttons, !driver.active || driver.quarantined);
+    rec_emit("input", "DATA", "group=metadata subcase=stimulus owner=%s generation=%u errors=%llu gate=input timing_domain=%s",
+             firmware ? "firmware-input" : "i8042", driver.generation, q.errors - base.errors,
+             (g_boot.flags & CBI_F_SMBIOS_QEMU) ? "icount" : "hardware");
     bool ok = complete && !base.keys_down && !base.buttons && !base.state_lost &&
               d.characters == 100 && d.text_hash == expected.text_hash && d.key_transitions == 200 &&
               d.button_transitions == 20 && d.x == 200 && d.y == -100 &&
               q.overflow == base.overflow && q.resync == base.resync && q.duplicates == base.duplicates &&
               q.repeats == base.repeats && q.errors == base.errors && !q.keys_down && !q.buttons && !q.pending;
-    err = i8042_stop(driver.generation);
-    rec_emit("input", "DATA", "case=quiesce error=%d generation=%u", err, driver.generation);
-    return input_verdict("input", ok && !err, "stimulus_or_quiescence");
+    if (firmware) {
+        struct fwinput_stats stats;
+        fwinput_stats(&stats);
+        fwinput_backend_state(&fw);
+        rec_emit("input", "DATA", "case=lease backend=firmware persistent=1 key_releases=%u disabled=%u scan_bytes=%llu aux_bytes=%llu",
+                 fw.key_releases, fw.disabled, stats.scan_bytes, stats.aux_bytes);
+        ok = ok && !fw.disabled && fw.key_releases;
+    }
+    /* Input remains the boot backend for the following safe probe and
+     * ordinary operation. Never tear down the firmware's persistent lease. */
+    rec_emit("input", "DATA", "case=lease backend=%s generation=%u retained=1 active=%u quarantined=%u",
+             backend, driver.generation, driver.active, driver.quarantined);
+    return input_verdict("input", ok, "stimulus_or_lease");
 }
 
 /* A bounded controller-boundary script. ACKs are published only after
@@ -198,7 +221,7 @@ int probe_input_fault(void)
         struct fault_bus bus = { .mode = cases[i].mode };
         int err = i8042_fault_begin(&fault_io, &bus);
         if (err) { ok = false; break; }
-        rec_emit("input-fault", "ARM", "case=%s boundary=scripted deadline_ms=100", cases[i].name);
+        rec_emit("input-fault", "ARM", "case=%s boundary=scripted deadline_ms=%u", cases[i].name, I8042_REPLY_MS);
         /* Mixed stream targets the keyboard: AUX packet bytes are never
          * guessed to be its ACK, while unsolicited key transitions survive. */
         err = i8042_fault_command(false, 0xF4);
@@ -212,7 +235,7 @@ int probe_input_fault(void)
         bool c_ok = err == cases[i].error && bus.sends == cases[i].sends &&
                     driver.resends == cases[i].resends && driver.last_elapsed_ms <= I8042_REPLY_MS &&
                     !driver.pending_command && !bus.resets && driver.quarantined == (err != 0);
-        if (cases[i].mode == FAULT_MISSING) c_ok = c_ok && driver.last_elapsed_ms == 100 && driver.timeouts == 1;
+        if (cases[i].mode == FAULT_MISSING) c_ok = c_ok && driver.last_elapsed_ms == I8042_REPLY_MS && driver.timeouts == 1;
         if (cases[i].mode == FAULT_MIXED)
             c_ok = c_ok && d.characters == 1 && d.key_transitions == 2 && d.x == 2 && d.y == -1 &&
                    !q.keys_down && !q.resync && !q.overflow;
@@ -262,9 +285,10 @@ int probe_input_fault(void)
         struct input_event e;
         unsigned drained = 0;
         while (i8042_fault_read(&e)) drained++;
-        bool c_ok = q.overflow == 4 && q.pending == INPUT_CAPACITY && q.state_lost && !q.keys_down && drained == INPUT_CAPACITY;
+        bool c_ok = q.overflow == 130 * 3 - INPUT_CAPACITY && q.pending == INPUT_CAPACITY &&
+                    q.state_lost && !q.keys_down && drained == INPUT_CAPACITY;
         i8042_fault_capture(0x01, 0x1C);
-        c_ok = c_ok && i8042_fault_read(&e) && (e.flags & INPUT_F_RESYNC) && e.sequence == 261;
+        c_ok = c_ok && i8042_fault_read(&e) && (e.flags & INPUT_F_RESYNC) && e.sequence == 391;
         rec_emit("input-fault", "DATA", "case=queue_overflow overflow=%llu drained=%u state_lost=%u resync_marked=%u ok=%u",
                  q.overflow, drained, q.state_lost, !!(e.flags & INPUT_F_RESYNC), c_ok);
         i8042_fault_end();
@@ -274,3 +298,6 @@ int probe_input_fault(void)
     survivor_finish(&survivor);
     return input_verdict("input-fault", ok, "fault_or_survivor");
 }
+
+CIUKI_F1_PROBE("input", probe_input);
+CIUKI_F1_PROBE("input-fault", probe_input_fault);
