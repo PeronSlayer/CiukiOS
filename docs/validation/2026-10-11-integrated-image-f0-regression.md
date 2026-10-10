@@ -71,3 +71,12 @@ the activation records after BEGIN (`[init]` klog lines, then
 `group=activation_flag`, `group=activation device=framebuffer|input|ata
 result=ready`). This is the first image on which the F0 gate passes with the
 F1 drivers started at boot.
+
+## Fifth image: `0e4261b5…` (commit `5a654a7`, f1-09 storage, f1-10, f2-05)
+
+Every F0 suite fails at once: `storage_init` emits `probe=boot event=DATA
+group=storage …` before the boot probe's BEGIN (same class as the f1-08
+defect). The drivers and the mount itself come up (`[init]` lines show
+framebuffer, input and ATA ready; the storage record reports the read gate).
+Directive f1-13 routes storage evidence through the activation ledger and adds
+a static guard against `rec_emit` outside probe files, plus a runtime counter.
