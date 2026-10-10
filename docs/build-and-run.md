@@ -119,7 +119,9 @@ verified, never inferred from the importer's current checkout.
 
 | Optional or conditional key | Value |
 | --- | --- |
-| `selector_source` | Multi-boot import defaults to `"cfg"`, single-probe import to `"menu"`. A sweep requires `"cfg"` and each recorded boot must retain `L:SELECT_SOURCE=cfg`. |
+| `selector_source` | Multi-boot import defaults to `"cfg"`, single-probe import to `"menu"`. A sweep requires `"cfg"`; damaged boot provenance follows the continuity rule below. |
+| `devices` | Optional object declaring the physical configuration, e.g. `{"vga":"none"}`. Every case `device_exceptions` key/value must match explicitly; an absent declaration does not prove an absent device. |
+| `machine_variants` | Optional object declaring matching case `fault` or `disk_cache` configuration. Values must match exactly, including all fields of a fault object. Never copy QEMU settings into acquisition metadata without physical evidence. |
 | `selectors` | Nonempty array of explicitly approved requests for historical mixed-run captures; replaces `selector`. |
 | `panic_observations` | Required to qualify each intentional panic: object keyed by the one-based boot number in the complete capture, e.g. `{"10":{"external_halt_seconds":10,"resumed":false}}`. Halt duration must be at least 5 seconds; `resumed:false` means no spontaneous execution resumed before the power-cycle. |
 | `external_halt_seconds`, `resumed` | Legacy single-panic observation, or sweep fallback when no per-boot entry exists. |
@@ -162,8 +164,37 @@ the loss count is at least the number of unusable records; no missing identity
 or sequence is invented. Such boots remain unqualified; duplicate/decreasing
 sequences and identifiable wrong identities refuse
 the acquisition. The anonymous host fixtures retain original controller,
-startup and console lines; unrelated diagnostic lines are omitted, and the
-historical fixture keeps only boots 1, 10 and 33.
+startup and console lines; the earlier fixtures omit unrelated diagnostic
+lines, and the historical fixture keeps only boots 1, 10 and 33. The local
+`77777777` fixture retains all 35 boots byte for byte; its ignored `f0.log`
+is not published, and the real-capture tests skip when the log is absent.
+
+An intact `L:SELECT_SOURCE=cfg` retains the existing provenance rule. A damaged
+value such as `fg`, or a damaged marker such as `L:ELECT_SOURCE=cfg`, qualifies
+only when the immediately previous verified sweep boot has the same run id
+and phase and the intact `probe=sweep event=BEGIN step=<n>` advances by exactly
+one. A repeated step qualifies only for the same two-boot probe (`fat-write`,
+`mount-crash`, `bootlog`) after its prior reboot/cut ARM. A completely missing
+line additionally requires a damaged controller record or a sequence gap
+starting at 1. Import retains `provenance: "damaged"`, the raw line and its
+hex bytes (null if absent), and `provenance_inferred_from: "sweep continuity"`
+in `boot_evidence`. Without continuity, that boot's results remain
+`not_run reason=provenance_damaged`. An intact alternate source (`menu`,
+`fw_cfg`, `none`), or a clean boot missing provenance, refuses the acquisition.
+Record loss still prevents qualification even when provenance is inferred.
+
+Cases requiring an undeclared or different physical device/machine variant
+are listed separately by `device_exceptions_not_applicable` and
+`not_run reason=device_exception_not_applicable:<key>=<value>` in the summary's
+case entries. For example, `video-fallback` requires `devices: {"vga":"none"}`;
+a T23 with an LFB does not satisfy its QEMU text-mode predicates. Matching
+acquisition declarations enable the unchanged predicates; they do not supply
+missing operator, disk or screen evidence. Inapplicable variants do not block
+later cases as failed prerequisites. Sources and implementation comparison:
+[QEMU invocation](https://www.qemu.org/docs/master/system/invocation.html)
+defines the VGA/serial absence and host block settings used by run.py;
+[Python bytes.splitlines](https://docs.python.org/3/library/stdtypes.html#bytes.splitlines)
+supports retaining the original damaged loader line bytes without text repair.
 
 The command imports only and writes one profile=physical summary at
 `build/test-runs/<suite>/summary.json`. Each case retains direct

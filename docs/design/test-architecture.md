@@ -138,6 +138,25 @@ serial alone. `--physical-capture` imports evidence without launching QEMU or
 requiring its executable. One summary retains later observations even when a
 failed prerequisite makes their qualification not_run.
 
+F1-35 physical import accepts damaged cfg provenance only through adjacent
+sweep boots with the same run/phase and a step increment of exactly one (or
+the repeated step of an armed two-boot probe); it records the raw line,
+`provenance: damaged` and `provenance_inferred_from: sweep continuity`.
+A missing line needs serial damage, including a damaged loader provenance
+marker, damaged records or an initial sequence gap. Without continuity the
+boot is `not_run reason=provenance_damaged`; an intact alternate source refuses
+the acquisition. QEMU-only device exceptions and machine variants require
+matching operator acquisition metadata, otherwise their cases are separately
+identified as `not_run reason=device_exception_not_applicable:<key>=<value>`
+without blocking later cases. Research: the official
+[QEMU invocation documentation](https://www.qemu.org/docs/master/system/invocation.html)
+defines `-vga none` as disabling VGA and `-serial none` as suppressing default
+serial devices, and blkdebug/cache options describe host block configuration.
+Comparison with run.py's command construction and the real T23 startup bytes
+therefore requires explicit physical configuration matching, unchanged
+predicates and byte-preserving provenance evidence, never an inferred device
+absence from a suite profile.
+
 
 Before either reset mechanism, a bounded UART drain waits for LSR bit 6
 (TEMT). The existing serial writer waits only for THRE (bit 5), so the final
