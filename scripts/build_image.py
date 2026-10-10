@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 import argparse
 import hashlib
+import importlib.util
 import errno
 import json
 import os
@@ -10,6 +11,7 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import zlib
 
@@ -19,6 +21,10 @@ PART_LBA = 2048
 IMAGE_BYTES = 512 * 1024 * 1024
 HEADER = struct.Struct("<4sHHIHH")
 DEFAULT_CONFIG = b"safe=0 serial=1\n"
+sys.dont_write_bytecode = True
+SDK = ROOT / "build/tools/ciuki-sdk"
+LUA = ROOT / "build/apps/lua"
+TEST_PATH = "/system/tests/lua-5.4.8-tests"
 
 
 def run(*args):
@@ -36,6 +42,75 @@ def sha256(path):
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def application_payloads():
+    """Validate the current SDK/Lua provenance before creating an image."""
+    spec = importlib.util.spec_from_file_location("build_lua", ROOT / "apps/lua/build_lua.py")
+    lua_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lua_build)
+    sdk = lua_build.validate_sdk()
+    manifest = json.loads((LUA / "manifest.json").read_text())
+    expected = {"archives": json.loads((ROOT / "config/sdk-pins.json").read_text())["lua"],
+                "sdk_manifest_sha256": sha256(SDK / "manifest.json"),
+                "app_sources": lua_build.inventory(ROOT / "apps/lua"),
+                "cflags": lua_build.CFLAGS,
+                "configuration": "generic; C89/Linux/POSIX/readline/dlopen off; int64/double"}
+    require(lua_build.current_build(expected), "missing/stale Lua payloads; run make lua")
+    inspect = lua_build.checker().inspect
+    sources = {"/bin/lua": LUA / "lua",
+               "/bin/hello": SDK / "tests/hello.elf",
+               "/bin/libc_smoke": SDK / "tests/libc_smoke.elf",
+               "/system/tests/ciuki-f2.lua": LUA / "ciuki-f2.lua",
+               "/system/licenses/lua-5.4.8.txt": LUA / "LUA-LICENSE.txt",
+               "/system/licenses/COPYING.NEWLIB": SDK / "licenses/COPYING.NEWLIB",
+               "/system/licenses/SDK-MIT.txt": SDK / "licenses/SDK-MIT.txt"}
+    for name in ("lua", "luac"):
+        require(inspect(LUA / name) == manifest["elf"][name], f"Lua ELF evidence: {name}")
+    for name in ("hello", "libc_smoke"):
+        actual = inspect(SDK / f"tests/{name}.elf")
+        recorded = sdk["test_evidence"][name]
+        require(all(actual[k] == recorded[k] for k in actual), f"SDK ELF evidence: {name}")
+    for name in manifest["test_files"]:
+        sources[f"{TEST_PATH}/{name}"] = LUA / "lua-5.4.8-tests" / name
+    directories = {"/bin", "/tmp", "/home", "/system", "/system/tests",
+                   "/system/licenses", TEST_PATH}
+    directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
+    metadata = {"sdk_manifest_sha256": expected["sdk_manifest_sha256"],
+                "lua": {"version": manifest["version"],
+                        "manifest_sha256": sha256(LUA / "manifest.json"),
+                        "archives": expected["archives"], "elf": manifest["elf"],
+                        "supplement_sha256": manifest["files"]["ciuki-f2.lua"],
+                        "upstream_mode": manifest["upstream_mode"], "patches": manifest["patches"]}}
+    return sources, directories, metadata
+
+
+def payload_records(sources):
+    return [{"path": name, "sha256": sha256(source), "size": source.stat().st_size}
+            for name, source in sorted(sources.items())]
+
+
+def populate_payloads(volume, sources, directories):
+    for directory in sorted(directories, key=lambda p: (p.count("/"), p)):
+        run("mmd", "-i", volume, "::" + directory)
+    for name, source in sorted(sources.items()):
+        run("mcopy", "-i", volume, source, "::" + name)
+
+
+def check_payloads(image, payloads, directories):
+    """Read every file from the final disk, rather than trusting the staging volume."""
+    volume = f"{image}@@{PART_LBA * SECTOR}"
+    for directory in sorted(directories):
+        subprocess.run(["mdir", "-i", volume, "::" + directory], cwd=ROOT,
+                       check=True, stdout=subprocess.DEVNULL)
+    for payload in payloads:
+        # mcopy's '-' destination writes raw file bytes to stdout without scratch copies.
+        data = subprocess.run(["mcopy", "-i", volume, "::" + payload["path"], "-"],
+                              cwd=ROOT, check=True, capture_output=True).stdout
+        require(len(data) == payload["size"], f"payload size: {payload['path']}")
+        require(hashlib.sha256(data).hexdigest() == payload["sha256"],
+                f"payload SHA-256: {payload['path']}")
+    print(f"T1 PASS: {len(payloads)} payloads read back with matching sizes/SHA-256; required directories")
 
 
 def prepare_loader(raw):
@@ -93,7 +168,7 @@ def check_image(image, volume):
 
 
 def build(kernel, out, boot_cfg):
-    for tool in ("nasm", "mkfs.fat", "mmd", "mcopy", "fsck.fat"):
+    for tool in ("nasm", "mkfs.fat", "mmd", "mdir", "mcopy", "fsck.fat"):
         if not shutil.which(tool):
             raise SystemExit(f"missing host tool: {tool}")
     if not kernel.is_file():
@@ -101,6 +176,7 @@ def build(kernel, out, boot_cfg):
     options = boot_cfg.read_bytes() if boot_cfg else DEFAULT_CONFIG
     if len(options) > 127 or b"\0" in options or any(c > 127 for c in options):
         raise SystemExit("BOOT.CFG must be <=127 ASCII bytes without NUL")
+    sources, directories, metadata = application_payloads()
     out.parent.mkdir(parents=True, exist_ok=True)
     # Large scratch files stay on disk beside the output, never in /tmp.
     with tempfile.TemporaryDirectory(prefix=".image-", dir=out.parent) as directory:
@@ -127,9 +203,9 @@ def build(kernel, out, boot_cfg):
         run("mkfs.fat", "--invariant", "-a", "-F", "32", "-S", "512", "-s", "8",
             "-f", "2", "-R", "32", "-b", "6", "-h", str(PART_LBA),
             "-n", "CIUKIOS", volume)
-        run("mmd", "-i", volume, "::/SYSTEM")
-        run("mcopy", "-i", volume, kernel, "::/SYSTEM/VMM.ELF")
-        run("mcopy", "-i", volume, cfg, "::/SYSTEM/BOOT.CFG")
+        sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
+        payloads = payload_records(sources)
+        populate_payloads(volume, sources, directories)
         # mtools updates the primary allocation hint but not its backup.
         with volume.open("r+b") as stream:
             stream.seek(SECTOR)
@@ -161,9 +237,10 @@ def build(kernel, out, boot_cfg):
                     data += len(block)
                 cursor = hole
         check_image(candidate, volume)
+        check_payloads(candidate, payloads, directories)
         os.replace(candidate, out)
     image_sha = sha256(out)
-    write_manifest(out, kernel, image_sha)
+    write_manifest(out, kernel, image_sha, payloads, metadata)
     print(f"SHA256 {image_sha}  {out}")
 
 
@@ -173,14 +250,14 @@ def git_identity():
         rev = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
                              capture_output=True, text=True, check=True).stdout.strip()
         dirty = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all",
-                                "--", "src", "scripts", "config", "tests", "Makefile"],
+                                "--", "src", "scripts", "sdk", "apps", "config", "tests", "Makefile"],
                                capture_output=True, text=True, check=True).stdout.strip()
         return rev, bool(dirty)
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown", "unknown"
 
 
-def write_manifest(image, kernel, image_sha):
+def write_manifest(image, kernel, image_sha, payloads, metadata):
     """build-manifest.json beside the image: read by scripts/test/run.py."""
     rev, dirty = git_identity()
     manifest = {
@@ -191,6 +268,8 @@ def write_manifest(image, kernel, image_sha):
         "image_sha256": image_sha,
         "kernel": str(kernel),
         "kernel_sha256": sha256(kernel),
+        "payloads": payloads,
+        **metadata,
     }
     (image.parent / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 

@@ -209,3 +209,108 @@ headers, linker script, compiler wrapper, test sources/checker and notices),
 `scripts/build_sdk.sh`, `Makefile`'s sdk target, `config/sdk-pins.json`, and this
 guide. The complete SDK file list and hashes are in `manifest.json:sdk_sources`.
 The lead owns the development diary entry and integration review.
+
+## Lua application build (f2-07)
+
+After building the SDK, build the pinned Lua archives offline:
+
+```sh
+make lua LUA_SOURCE_ARCHIVE=/path/to/lua-5.4.8.tar.gz \
+  LUA_TESTS_ARCHIVE=/path/to/lua-5.4.8-tests.tar.gz
+```
+
+`make build-full` orders kernel, SDK, Lua and image generation. SDK source,
+recipe, ABI and archive timestamps trigger the SDK build; Lua additionally
+checks hashes of the SDK manifest, archives, recipe, supplement and outputs.
+The default archive directory is `build/downloads/newlib/`. `SDK_ARCHIVE`,
+`SDK_ARGS`, `LUA_SOURCE_ARCHIVE`, `LUA_TESTS_ARCHIVE` and `LUA_ARGS` can select
+local inputs; neither recipe downloads. SDK, Lua and image recipes use the
+existing capped scope. Under the directive's sandbox exception the implementer
+runs `python3 apps/lua/build_lua.py --source-archive PATH --tests-archive PATH
+--jobs 2` directly. All scratch files remain in the worktree.
+
+Lua 5.4.8 uses upstream's generic configuration, 64-bit integers/double numbers,
+`LUA_COMPAT_5_3`, no C89/Linux/POSIX extension switches, readline or dlopen, and
+no source patches. Both Lua and luac pass `sdk/tests/check_sdk.py`'s static
+ELF32/three-LOAD/undefined-symbol and x87/SSE/MMX checks. The recipe records
+archive, SDK, upstream file, supplement and ELF hashes in
+`build/apps/lua/manifest.json`. The image builder rejects stale or edited
+payloads and records every image file in `build-manifest.json:payloads`, with
+mtools read-back T1 checks. See [the Lua port notes](../apps/lua/README.md)
+for the research sources, license locations and supplement output.
+
+The F2 controller must run these as separate guest processes, with only fd 0–2
+inherited, finite stdin, bounded stdout/stderr and a writable test overlay:
+
+```sh
+# cwd /system/tests/lua-5.4.8-tests
+# LC_ALL=C TZ=UTC0 HOME=/home TMPDIR=/tmp
+/bin/lua -e '_U=true' all.lua
+/bin/lua /system/tests/ciuki-f2.lua
+```
+
+Upstream `final OK !!!`, normal exit zero, and all four supplement case results
+are required. Only `_U`'s documented exclusions are permitted. Complete/internal
+test modes are `excluded_by_contract`. A native host build of the same sources
+running this portable suite is `host-reference` only; compilation, static image
+checks and host-reference results do not qualify the F2 application gate.
+
+## f2-07 host and static evidence
+
+The SDK prerequisite completed with `--jobs 2` in 17.807 seconds, including
+its mandatory host checks. Lua's final build and both SDK ELF inspections
+completed in 2.256 seconds. Neither archive nor upstream source/test file was
+patched. A second invocation reported unchanged input/output hashes without
+rebuilding.
+
+| Program | Text | Data | BSS | ELF bytes including debug | Page-rounded LOAD bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Lua | 300898 | 1952 | 2732 | 1598312 | 311296 |
+| luac | 193634 | 1856 | 1648 | 1199216 | 200704 |
+
+Lua ELF SHA-256:
+`6c06de1d07cee4ce3c0781edc4d1e77161e5c35eec71882240c2375b4918e20c`.
+luac ELF SHA-256:
+`b4abd86de5c0a808dd0e13f73a8e762560259fca3a56e8411cdf199993d306a5`.
+Supplement SHA-256:
+`fe909e6f7fca9a8421434dac2dd70a068bb8b849d071fdbdce890bd111744953`.
+
+`python3 -m unittest discover -s tests/host -p test_image_payloads.py -v`
+passed all five tests. They cover payload inventory/manifest completeness,
+actual FAT long-name and binary/empty-file read-back, rejection of missing,
+changed and wrong-sized files, archive path/link rejection, digest failure
+before replacing an existing build, and stale upstream-test rejection.
+
+The native **host-reference** build used the same pinned, unmodified Lua
+sources and generic int64/double/compatibility configuration. Its sole Lua test
+switch was `_U=true`. It exited zero with `final OK !!!`; its merged stdout/stderr
+was 7830 bytes, SHA-256
+`8ffd2ec845f9442f9c64a1e9771b453fbfd482e666b91ea52a6d0fce5b72f3ab`.
+No additional file-test skip was reported. The supplement also exited zero,
+with all four `ok=1` cases and the four console lines in the prescribed order;
+its merged output was 371 bytes, SHA-256
+`82dfb72d503a9cbfbdf7be099db0f0f981f7b6273de84fc4c6d5524f9708e331`.
+The compared final file's FNV-1a-32 checksum was `f6671c1c`.
+Because glibc hard-codes `/tmp` for tmpnam/tmpfile, a native-only interposer
+redirected those two libc calls into the worktree's temporary directory.
+It did not change Lua sources, configuration or skip flags, and is not part
+of the target port. Host-reference build/interposer scratch was removed.
+
+The static image check reused the lead's existing kernel ELF, SHA-256
+`f625c53cca29686c9d3a021164d9c3b64e7893f0b64873b13a5430eeb39471ed`.
+The 536870912-byte sparse image passed the existing MBR/FAT32/fsck/loader T1
+checks and all 50 file read-back checks. Its SHA-256 was
+`e20ab437314be83722a5cb512d1b2c1995620e030ea0618421c310a3793b67e8`.
+Its payloads are the three `/bin` programs, kernel and boot options, the Lua,
+newlib and SDK license notices, the supplement, and all 41 original upstream
+test files. Empty `/tmp`, `/home` and upstream `libs/P1` directories were also
+checked. The exact path/hash/size inventory is in `build-manifest.json`.
+Git identity was replaced with `unknown` only for this sandbox invocation,
+so no git command was executed. The production manifest recipe retains normal
+Git provenance and now includes SDK and application sources in its dirty check.
+
+No new f2-07 contract change is needed. The f2-06 public-header licensing issue
+documented above remains lead-owned. No QEMU, systemd scope, commit or push was
+run here. Clean capped `make build-full`, F0/F1 regression gates, F2 guest Lua
+evidence, resource measurements, diary entry and integration review remain
+lead-owned; these results establish host/static evidence only.
