@@ -113,8 +113,11 @@ class ImagePayloadTests(unittest.TestCase):
                 lua.build(archive, archive, 1)
         self.assertEqual(sentinel.read_bytes(), b"previous build")
 
-    @unittest.skipUnless((lua.OUT / "manifest.json").is_file(), "Lua SDK build not present")
     def test_built_payloads_match_complete_unmodified_archive_inventory(self):
+        for label, directory in (("Lua SDK", lua.OUT), ("SDK", image.SDK),
+                                 ("Desktop payload", image.DESKTOP)):
+            if not (directory / "manifest.json").is_file():
+                self.skipTest(f"{label} build not present")
         sources, directories, metadata = image.application_payloads()
         manifest = json.loads((lua.OUT / "manifest.json").read_text())
         expected = {image.TEST_PATH + "/" + n for n in manifest["test_files"]}
@@ -133,6 +136,24 @@ class ImagePayloadTests(unittest.TestCase):
                 image.application_payloads()
         finally:
             extra.unlink()
+
+    def test_unbuilt_payloads_skip_before_inventory_validation(self):
+        lua_out, sdk_out, desktop_out = (self.work / name for name in ("lua", "sdk", "desktop"))
+        for directory in (lua_out, sdk_out, desktop_out):
+            directory.mkdir()
+            (directory / "manifest.json").write_text("{}")
+        for label, directory in (("Lua SDK", lua_out), ("SDK", sdk_out),
+                                 ("Desktop payload", desktop_out)):
+            with self.subTest(payload=label):
+                manifest = directory / "manifest.json"
+                manifest.unlink()
+                with patch.object(lua, "OUT", lua_out), patch.object(image, "SDK", sdk_out), \
+                        patch.object(image, "DESKTOP", desktop_out), \
+                        patch.object(image, "application_payloads") as inventory:
+                    with self.assertRaisesRegex(unittest.SkipTest, f"{label} build not present"):
+                        self.test_built_payloads_match_complete_unmodified_archive_inventory()
+                    inventory.assert_not_called()
+                manifest.write_text("{}")
 
 
 if __name__ == "__main__":

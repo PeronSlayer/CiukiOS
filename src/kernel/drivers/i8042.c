@@ -64,6 +64,10 @@ struct controller {
 };
 struct poll_deadline { uint64_t end; unsigned polls; };
 static struct controller native;
+/* One runtime-selected fixture, separate from the native controller and
+ * its physical leases. Its queue exceeds kheap's 2040-byte payload limit;
+ * reserve private storage instead of making an impossible heap request. */
+static struct controller fixture_storage;
 static struct controller *fixture;
 
 /* Set-2 wire positions -> the public set-1 positions. Checked against
@@ -872,16 +876,38 @@ static bool fault_selected(void)
     return n == g_boot.test_request_len;
 }
 
+static int fault_refused(const char *reason, int err)
+{
+    klog("[i8042] fault_begin refused reason=%s error=%d", reason, err);
+    return err;
+}
+
 int i8042_fault_begin(const struct i8042_test_io *io, void *arg)
 {
-    if (!fault_selected()) return -ENOSYS;
-    if (!(read_eflags() & 0x200) || !g_current || fixture || !io || !io->read ||
-        !io->write || !io->now || !io->pause) return -EINVAL;
-    fixture = kzalloc(sizeof(*fixture));
-    if (!fixture) return -ENOMEM;
+    if (!fault_selected()) {
+        /* The loader supplies a byte count, not a terminated string. Keep
+         * diagnostics bounded even when the selector itself is invalid. */
+        char text[CIUKI_TEST_REQ_MAX + 1];
+        unsigned n = g_boot.test_request_len;
+        if (n > CIUKI_TEST_REQ_MAX) n = CIUKI_TEST_REQ_MAX;
+        memcpy(text, g_boot.test_request, n);
+        text[n] = 0;
+        klog("[i8042] fault_begin refused reason=selector error=%d selector='%s' length=%u flags=%08x",
+             -ENOSYS, text, g_boot.test_request_len, g_boot.flags);
+        return -ENOSYS;
+    }
+    if (!(read_eflags() & 0x200)) return fault_refused("interrupts_disabled", -EINVAL);
+    if (!g_current) return fault_refused("no_task", -EINVAL);
+    if (fixture) return fault_refused("fixture_present", -EINVAL);
+    if (!io || !io->read || !io->write || !io->now || !io->pause)
+        return fault_refused("callbacks", -EINVAL);
+    fixture = &fixture_storage;
     controller_init(fixture, io, arg);
     fixture->stats.generation = gen_alloc();
-    if (!fixture->stats.generation) { i8042_fault_end(); return -ENOSPC; }
+    if (!fixture->stats.generation) {
+        i8042_fault_end();
+        return fault_refused("generation", -ENOSPC);
+    }
     fixture->accepting = fixture->stats.active = true;
     return 0;
 }
@@ -917,6 +943,6 @@ void i8042_fault_end(void)
     if (!fixture) return;
     /* No callback survives the synchronous command. Fixtures never publish
      * IRQ/work producers and cannot alter/release a physical claim. */
-    kfree(fixture);
+    memset(fixture, 0, sizeof(*fixture));
     fixture = 0;
 }

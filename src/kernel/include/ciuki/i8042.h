@@ -37,7 +37,9 @@ int probe_input_fault(void);
  * claims/IRQs: callbacks MUST be fake I/O, never firmware or physical ports.
  * It exercises the same command engine, capture and queue as the native
  * backend. Begin requires the complete valid f1:input-fault selector.
- * End destroys the fixture; it cannot recover/reset the physical backend.
+ * A single fixture uses reserved private storage, independent of the small
+ * kernel heap and native activation. End clears that storage and callbacks;
+ * it cannot recover/reset the physical backend.
  * now returns nominal millisecond ticks; pause must return with IF=1 and
  * permit other tasks to run. Callback storage is pinned until end. */
 struct i8042_test_io {

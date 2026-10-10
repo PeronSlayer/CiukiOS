@@ -205,6 +205,13 @@ static bool survivor_progress(struct input_survivor *s, const char *name)
     return ok;
 }
 
+static int fault_begin_failed(struct input_survivor *s, int err)
+{
+    survivor_finish(s);
+    rec_emit("input-fault", "END", "status=FAIL reason=fault_begin:%d", err);
+    return 1;
+}
+
 int probe_input_fault(void)
 {
     rec_emit("input-fault", "BEGIN", 0);
@@ -220,7 +227,7 @@ int probe_input_fault(void)
     for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
         struct fault_bus bus = { .mode = cases[i].mode };
         int err = i8042_fault_begin(&fault_io, &bus);
-        if (err) { ok = false; break; }
+        if (err) return fault_begin_failed(&survivor, err);
         rec_emit("input-fault", "ARM", "case=%s boundary=scripted deadline_ms=%u", cases[i].name, I8042_REPLY_MS);
         /* Mixed stream targets the keyboard: AUX packet bytes are never
          * guessed to be its ACK, while unsolicited key transitions survive. */
@@ -255,7 +262,8 @@ int probe_input_fault(void)
         ok = ok && c_ok && alive;
     }
     struct fault_bus bus = { 0 };
-    if (i8042_fault_begin(&fault_io, &bus)) ok = false;
+    int err = i8042_fault_begin(&fault_io, &bus);
+    if (err) return fault_begin_failed(&survivor, err);
     else {
         rec_emit("input-fault", "ARM", "case=malformed_packet boundary=scripted");
         const uint8_t bytes[] = { 0x00, 0xC8, 0x00, 0x08, 0x02, 0x01 };
@@ -272,7 +280,8 @@ int probe_input_fault(void)
         bool alive = survivor_progress(&survivor, "malformed_packet");
         ok = ok && c_ok && alive;
     }
-    if (i8042_fault_begin(&fault_io, &bus)) ok = false;
+    err = i8042_fault_begin(&fault_io, &bus);
+    if (err) return fault_begin_failed(&survivor, err);
     else {
         rec_emit("input-fault", "ARM", "case=queue_overflow boundary=scripted capacity=256");
         for (unsigned i = 0; i < 130; i++) {

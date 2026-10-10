@@ -49,6 +49,9 @@ static uint32_t host_survivor_data;
 static bool replay_input;
 static unsigned replay_cycles, record_count, record_pass, record_deferred, record_ready;
 static size_t longest_record;
+static unsigned host_allocations;
+static char last_log[256], expected_end[128];
+static unsigned record_fail;
 static struct task host_task = { .state = T_RUNNING };
 struct task *g_current = &host_task;
 volatile uint64_t g_ticks;
@@ -163,9 +166,20 @@ void pic_unmask(unsigned irq)
     pic_changes++;
 }
 void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); host_handlers[irq] = h; }
-void klog(const char *fmt, ...) { (void)fmt; }
+void klog(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(last_log, sizeof(last_log), fmt, ap);
+    va_end(ap);
+}
 __attribute__((noreturn)) void panic(const char *fmt, ...) { fprintf(stderr, "panic: %s\n", fmt); exit(2); }
-void *kzalloc(size_t n) { return calloc(1, n); }
+void *kzalloc(size_t n)
+{
+    host_allocations++;
+    /* Match core/kheap.c's largest class, including its 8-byte header. */
+    return n <= 2048 - 8 ? calloc(1, n) : 0;
+}
 void kfree(void *p) { free(p); }
 void task_start(struct task *t) { t->state = T_READY; }
 void schedule(void) { CHECK(false); }   /* all tested command mutexes are uncontended */
@@ -308,6 +322,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     if (!strcmp(event, "END")) {
         if (!strcmp(extra, "status=PASS")) record_pass++;
         else if (strstr(extra, "status=not_run")) record_deferred++;
+        else if (*expected_end && !strcmp(extra, expected_end)) record_fail++;
         else { printf("probe failure: %s\n", record); CHECK(false); }
     }
 }
@@ -747,13 +762,43 @@ static void test_hook_selection(void)
         CHECK(i8042_fault_begin(&fake_io, &b) == -ENOSYS);
     }
     select_fault("f1:input-fault run=12ab34cd safe=1");
+    host_flags = 0;
+    CHECK(i8042_fault_begin(&fake_io, &b) == -EINVAL && strstr(last_log, "reason=interrupts_disabled"));
+    host_flags = 0x200;
+    g_current = 0;
+    CHECK(i8042_fault_begin(&fake_io, &b) == -EINVAL && strstr(last_log, "reason=no_task"));
+    g_current = &host_task;
+    CHECK(i8042_fault_begin(0, &b) == -EINVAL && strstr(last_log, "reason=callbacks"));
+    for (unsigned i = 0; i < 4; i++) {
+        struct i8042_test_io io = fake_io;
+        if (i == 0) io.read = 0;
+        if (i == 1) io.write = 0;
+        if (i == 2) io.now = 0;
+        if (i == 3) io.pause = 0;
+        CHECK(i8042_fault_begin(&io, &b) == -EINVAL && strstr(last_log, "reason=callbacks"));
+    }
+    gen_t saved_gen = last_gen;
+    last_gen = UINT32_MAX;
+    CHECK(i8042_fault_begin(&fake_io, &b) == -ENOSPC && !fixture && strstr(last_log, "reason=generation"));
+    last_gen = saved_gen;
     CHECK(i8042_fault_begin(&fake_io, &b) == 0);
-    CHECK(i8042_fault_begin(&fake_io, &b) == -EINVAL);
+    gen_t first = fixture->stats.generation;
+    CHECK(i8042_fault_begin(&fake_io, &b) == -EINVAL && strstr(last_log, "reason=fixture_present"));
+    CHECK(fixture->stats.generation == first);
     i8042_fault_end();
+    CHECK(!fixture_storage.io && !fixture_storage.io_arg && !fixture_storage.stats.generation);
     select_fault("f1:input-fault run=12ab34cd platform=e500 safe=1");
     g_boot.flags |= CBI_F_INPUT_FORCED;
     CHECK(i8042_fault_begin(&fake_io, &b) == 0);
+    CHECK(fixture->stats.generation > first && !fixture->queue.stats.pending);
     i8042_fault_end();
+    select_fault("f1:input-fault run=00000002");
+    g_boot.test_request_len++; /* a counted NUL is invalid, as in selector.c */
+    CHECK(i8042_fault_begin(&fake_io, &b) == -ENOSYS && strstr(last_log, "reason=selector") &&
+          strstr(last_log, "selector='f1:input-fault run=00000002'") && strstr(last_log, "length=28"));
+    memset(g_boot.test_request, 'X', sizeof(g_boot.test_request));
+    g_boot.test_request_len = CIUKI_TEST_REQ_MAX + 1;
+    CHECK(i8042_fault_begin(&fake_io, &b) == -ENOSYS && strstr(last_log, "length=65"));
     CHECK(!b.writes && !b.reads);
     printf("i8042 runtime fault-hook selection: PASS\n");
 }
@@ -785,6 +830,74 @@ static void test_probe_records(void)
     for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
     printf("i8042 probe orchestration/records: PASS (%u records, maximum %zu bytes, native PASS/firmware PASS/fault PASS)\n",
            record_count, longest_record);
+}
+
+static void test_native_fault_probe(void)
+{
+    reset_native();
+    /* menu.inc selector_accept copies the ASCII bytes; its length excludes
+     * the terminator. drivers_init activates native input before dispatch. */
+    static const char selector[] = "f1:input-fault run=00000002";
+    select_fault(selector);
+    CHECK(g_boot.test_request_len == sizeof(selector) - 1);
+    CHECK(i8042_init() == 0 && native.stats.active && claims_active(&native));
+    struct controller saved = native;
+    struct registry_stats before, after;
+    registry_snapshot(&before);
+    unsigned reads = hw.reads, writes = hw.writes, pic = pic_changes, passes = record_pass;
+    /* core/kheap.c: largest class is 2048 bytes, including an 8-byte header.
+     * An unrestricted libc calloc hid the guest's oversized fixture request. */
+    CHECK(sizeof(struct controller) > 2048 - 8 && !kzalloc(sizeof(struct controller)));
+    unsigned allocations = host_allocations;
+    CHECK(probe_input_fault() == 0);
+    CHECK(host_allocations == allocations);
+    registry_snapshot(&after);
+    CHECK(record_pass == passes + 1 && !fixture && !host_survivor);
+    CHECK(!memcmp(&native, &saved, sizeof(native)) && claims_active(&native));
+    CHECK(hw.reads == reads && hw.writes == writes && pic_changes == pic);
+    CHECK(before.claims == after.claims && before.live == after.live && before.quarantines == after.quarantines);
+    for (unsigned i = 0; i < ARRAY_SIZE(host_pages); i++) CHECK(!host_page_used[i]);
+    printf("i8042 native-active fault probe with kernel heap limit: %s (controller=%zu heap_max=2040)\n",
+           record_pass == passes + 1 ? "PASS" : "FAIL", sizeof(struct controller));
+}
+
+static void test_fault_probe_refusals(void)
+{
+    reset_native();
+    select_fault("f1:input-fault run=0bd02930");
+    CHECK(i8042_init() == 0);
+    struct controller saved = native;
+    unsigned reads = hw.reads, writes = hw.writes, pic = pic_changes;
+    for (unsigned i = 0; i < 3; i++) {
+        struct fake_bus b = { .pause_step = 1 };
+        gen_t saved_gen = last_gen;
+        int err;
+        if (i == 0) {
+            g_boot.flags &= ~CBI_F_TEST_REQUEST;
+            err = -ENOSYS;
+        } else if (i == 1) {
+            g_boot.flags |= CBI_F_TEST_REQUEST;
+            CHECK(i8042_fault_begin(&fake_io, &b) == 0);
+            err = -EINVAL;
+        } else {
+            last_gen = UINT32_MAX;
+            err = -ENOSPC;
+        }
+        snprintf(expected_end, sizeof(expected_end), "status=FAIL reason=fault_begin:%d", err);
+        unsigned failed = record_fail;
+        CHECK(probe_input_fault() == 1 && record_fail == failed + 1);
+        expected_end[0] = 0;
+        CHECK(!host_survivor);
+        for (unsigned j = 0; j < ARRAY_SIZE(host_pages); j++) CHECK(!host_page_used[j]);
+        /* Refusing a second begin must leave the first fixture intact. */
+        if (i == 1) CHECK(fixture && fixture->io_arg == &b && fixture->stats.active);
+        else CHECK(!fixture);
+        i8042_fault_end();
+        if (i == 2) last_gen = saved_gen;
+    }
+    CHECK(!memcmp(&native, &saved, sizeof(native)) && claims_active(&native));
+    CHECK(hw.reads == reads && hw.writes == writes && pic_changes == pic);
+    printf("i8042 fault refusal diagnostics/END errno/survivor cleanup: PASS\n");
 }
 
 static void test_firmware_mapping(void)
@@ -873,6 +986,8 @@ int main(void)
     test_keyboard_and_mouse();
     test_queue_and_stimulus();
     test_probe_records();
+    test_native_fault_probe();
+    test_fault_probe_refusals();
     test_firmware_mapping();
     i8042_fault_end();
     printf("i8042: %u checks, %u failures\n", checks, failures);
