@@ -97,3 +97,4 @@ Documenti di design, validazione, fonti esterne.
 | [Driver avviati al boot, storage FAT montato, oggetti del desktop, suite F1 allineate](2026-10-11-03-driver-al-boot-storage-desktop.md) | 11 ott | modifica |
 | [Prime sonde F1 superate nel guest; file POSIX, desktop e correzioni](2026-10-11-04-prime-sonde-f1-nel-guest.md) | 11 ott | modifica |
 | [Obiettivo hardware: anche i PC desktop assemblati, con un'unica immagine](2026-10-11-05-pc-generici.md) | 11 ott | decisione (scope hardware) |
+| [Chiusura di F1 e F2 su QEMU: un'immagine i686 per T23, E500 e PC assemblati](2026-10-11-06-chiusura-f1-f2-su-qemu.md) | 11 ott | modifica (integrazione) e analisi |
