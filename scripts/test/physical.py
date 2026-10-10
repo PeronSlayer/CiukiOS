@@ -127,6 +127,22 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
                 if r['event'] == 'SWEEP_END': summaries.append(r)
                 continue
             p = parsers.setdefault(r['probe'], ControllerParser(run, r['probe']))
+            if r['event'] == 'DATA' and r.get('reason') == 'operator_absent':
+                subcase = {'input': 'stimulus', 'crash-isolation': 'interaction'}.get(r['probe'])
+                if (not sweep or r.get('status') != 'not_run' or not subcase or
+                    r.get('subcase') != subcase or not p.started or p.terminal or
+                    getattr(p, 'operator_subcases', []) or
+                    (r['probe'] == 'crash-isolation' and r.get('server') != 'desktop')):
+                    raise EvidenceError('invalid operator_absent subcase')
+                p.operator_subcases = [{'subcase': subcase, 'reason': 'operator_absent'}]
+            if r['event'] == 'END' and r.get('status') == 'NOT_RUN' and r.get('reason') == 'operator_absent':
+                if not sweep or not p.started or p.terminal or not getattr(p, 'operator_subcases', []):
+                    raise EvidenceError('invalid operator_absent terminal')
+                p.records.append(r); p.terminal = r; p.outcome = 'not_run'
+                p.not_run_reason = 'operator_absent'
+                continue
+            if r['event'] == 'END' and getattr(p, 'operator_subcases', []) and r.get('status') != 'FAIL':
+                raise EvidenceError('operator_absent requires NOT_RUN or independent FAIL')
             if r['probe'] == 'fat-read' and r['event'] == 'ERROR' and r.get('status') == 'not_run' and r.get('reason') == 'fixtures_absent':
                 if fat_read_not_run or not p.started or p.terminal:
                     raise EvidenceError('duplicate or late fat-read fixtures_absent outcome')
@@ -172,6 +188,9 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
                   'outcome': 'not_run', 'reason': 'probe absent from capture',
                   'operator_confirmation': False}
         observations = groups.get(probe, [])
+        result['not_run_subcases'] = [s for _, p in observations for s in getattr(p, 'operator_subcases', [])]
+        operator_absent = bool(result['not_run_subcases'])
+        result['operator_confirmation_required'] = bool(operator_absent or case.get('operator_confirmation') or operator_confirmation_case(case))
         if observations:
             result['observed'] = [r for _, p in observations for r in p.records]
             result['boots'] = [n + 1 for n, _ in observations]
@@ -205,14 +224,16 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=()):
                         result['outcome'] = 'fail'; result['reason'] = str(e); break
                 if result['outcome'] == 'pass' and any(case.get(k) for k in ('checks', 'digests', 'crash_sequence', 'desktop_screen')):
                     result['outcome'] = 'not_run'; result['reason'] = 'independent disk/screen observation required'
-        if case.get('operator_confirmation') or operator_confirmation_case(case):
+        if result['operator_confirmation_required']:
             confirmed = metadata.get('case_confirmations', {}).get(result['case']) is True
             result['operator_confirmation'] = confirmed
-            if not confirmed:
+            if not confirmed and not operator_absent:
                 result['outcome'] = 'not_run'; result['reason'] = 'case requires operator confirmation'
         if blocked:
             result['outcome'] = 'not_run'; result['reason'] = 'prerequisite failed: ' + blocked
-        elif failed_prerequisite(case, result) and not (probe == 'fat-read' and result['reason'] == 'fixtures_absent'):
+        elif failed_prerequisite(case, result) and not (
+                probe == 'fat-read' and result['reason'] == 'fixtures_absent' or
+                result['outcome'] == 'not_run' and result['reason'] == 'operator_absent'):
             blocked = result['case']
         results.append(result)
     return results

@@ -12,6 +12,14 @@
 #include <ciuki/init.h>
 #include <ciuki/fwinput.h>
 #include <ciuki/biosvm.h>
+#include <ciuki/abi.h>
+
+extern bool probes_operator_mode;
+extern bool probes_operator_wait(bool (*)(void *), uint64_t (*)(uint32_t),
+                                void (*)(uint32_t), void (*)(bool), void *);
+extern void console_operator_prompt(bool);
+
+static bool operator_input_event(void *arg) { return input_read(arg); }
 
 static int input_verdict(const char *probe, bool ok, const char *reason)
 {
@@ -59,10 +67,17 @@ int probe_input(void)
     rec_emit("input", "READY", "backend=%s", backend);
     rec_emit("input", "ARM", "keys=100 moves=100 buttons=10 x=2 y=-1 timeout_ms=120000 generation=%u",
              driver.generation);
+    bool operator_absent = false;
+    if (probes_operator_mode) {
+        klog("[operator] input: 100 A press/release cycles, 100 moves, 10 left clicks; finish within 120 s after first event");
+        operator_absent = !probes_operator_wait(operator_input_event, deadline_after_ms,
+                                                task_sleep_ms, console_operator_prompt, &event);
+        if (!operator_absent) input_digest_add(&d, &event);
+    }
     uint64_t end = deadline_after_ms(120000), quiet = deadline_after_ms(0);
     uint64_t diagnostic_at = deadline_after_ms(10000);
     bool complete = false;
-    while (!deadline_passed(end)) {
+    while (!operator_absent && !deadline_passed(end)) {
         if (firmware && deadline_passed(diagnostic_at)) {
             fwinput_adapter_log_delivery();
             diagnostic_at = deadline_after_ms(10000);
@@ -79,6 +94,7 @@ int probe_input(void)
         task_sleep_ms(1);
     }
     input_snapshot(&q);
+    if (operator_absent) i8042_snapshot(&driver);
     /* Expected text digest is exactly 100 unshifted 'a' characters. */
     struct input_digest expected;
     input_digest_init(&expected);
@@ -99,6 +115,7 @@ int probe_input(void)
     rec_emit("input", "DATA", "group=metadata subcase=stimulus owner=%s generation=%u errors=%llu gate=input timing_domain=%s",
              firmware ? "firmware-input" : "i8042", driver.generation, q.errors - base.errors,
              (g_boot.flags & CBI_F_SMBIOS_QEMU) ? "icount" : "hardware");
+    bool lease_ok = driver.active && !driver.quarantined;
     bool ok = complete && !base.keys_down && !base.buttons && !base.state_lost &&
               d.characters == 100 && d.text_hash == expected.text_hash && d.key_transitions == 200 &&
               d.button_transitions == 20 && d.x == 200 && d.y == -100 &&
@@ -112,11 +129,21 @@ int probe_input(void)
         rec_emit("input", "DATA", "case=lease backend=firmware persistent=1 key_releases=%u disabled=%u scan_bytes=%llu aux_bytes=%llu",
                  fw.key_releases, fw.disabled, stats.scan_bytes, stats.aux_bytes);
         ok = ok && !fw.disabled && fw.key_releases;
+        lease_ok = lease_ok && !fw.disabled && fw.key_releases;
     }
     /* Input remains the boot backend for the following safe probe and
      * ordinary operation. Never tear down the firmware's persistent lease. */
     rec_emit("input", "DATA", "case=lease backend=%s generation=%u retained=1 active=%u quarantined=%u",
              backend, driver.generation, driver.active, driver.quarantined);
+    if (operator_absent) {
+        rec_emit("input", "DATA", "subcase=stimulus status=not_run reason=operator_absent");
+        if (!lease_ok || base.keys_down || base.buttons || base.state_lost ||
+            q.errors != base.errors || q.overflow != base.overflow || q.resync != base.resync ||
+            q.duplicates != base.duplicates || q.repeats != base.repeats)
+            return input_verdict("input", false, "lease_or_queue");
+        rec_emit("input", "END", "status=NOT_RUN reason=operator_absent");
+        return -ECANCELED;
+    }
     return input_verdict("input", ok, "stimulus_or_lease");
 }
 

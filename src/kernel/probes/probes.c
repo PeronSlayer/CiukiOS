@@ -31,6 +31,7 @@ extern char __text_start[];
 void probe_write_byte(uint32_t va);
 uint32_t probe_read_dword(uint32_t va);
 unsigned console_pages(void);
+extern bool probes_operator_mode;
 void console_show_page(unsigned page, const char *header);
 
 #define USER_DATA   0x00400000u
@@ -1010,8 +1011,9 @@ static __attribute__((noreturn)) void sweep_main(struct sweep_cursor cursor,
     if (result < 0) not_run++;
     else if (result) failed++;
     else passed++;
-    rec_emit(step.name, "SWEEP", "step=%u result=%s task=%s size=%u high_water=%u",
-             current, outcome, g_current->name, KSTACK_SIZE, task_stack_high_water(g_current));
+    rec_emit(step.name, "SWEEP", "step=%u result=%s%s task=%s size=%u high_water=%u",
+             current, outcome, result == -ECANCELED ? " reason=operator_absent" : "",
+             g_current->name, KSTACK_SIZE, task_stack_high_water(g_current));
     cursor.state = passed | (failed << 6) | (not_run << 12);
     e = sweep_checkpoint(storage, &cursor);
     if (e) sweep_stop(&step, current, e);
@@ -1061,6 +1063,9 @@ void probes_main(void *arg)
     const struct probe_hooks hooks = { app_begin, app_end, probe_panic };
     struct sweep_cursor cursor;
     bool sweep = sweep_parse(g_boot.test_request, g_boot.test_request_len, &cursor);
+    /* The loader admits sweep syntax only from BOOT.CFG (source=cfg).
+     * Ordinary menu/fw_cfg requests keep their existing stimulus paths. */
+    probes_operator_mode = sweep;
     if (sweep) {
         struct sweep_step step;
         if (sweep_at(cursor.phase, cursor.step, &tables, &step)) {

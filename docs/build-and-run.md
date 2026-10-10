@@ -80,6 +80,22 @@ panic at the end of an F0-only sweep requires this recovery boot for SWEEP_END.
 Do not edit step/state counters by hand. Completion removes only the probe line.
 Read-only cursor refusal leaves evidence on screen and does not reset.
 
+For the `input` and real-desktop `crash-isolation` steps, stay at the machine
+and watch for `[operator] press A, move the pointer, click (60 s)` on screen
+and serial. The first event must arrive within 60 seconds. For `input`, then
+complete the normal 120-second stimulus: 100 unshifted A press/release cycles,
+100 pointer moves and ten left-button press/release cycles. The probe retains
+its existing count/digest/motion checks; being present alone does not pass it.
+For the desktop interaction, press and release A, move the pointer and click
+and release the left button within its normal 15-second window; observe that
+the desktop redraws. With no first event, only `stimulus` or `interaction` is
+`status=not_run reason=operator_absent`; setup/lease, completed isolation cycles
+and cleanup keep their verdicts. The sweep counts the incomplete step as
+not_run and continues. Physical import preserves this reason and marks
+`operator_confirmation_required: true`; a case confirmation cannot turn an
+absent stimulus into a pass. Record real operator observations in
+`case_confirmations` and keep the existing independent screen/disk evidence.
+
 Place the serial bytes as `f0.log` beside `acquisition.json` in the capture
 folder. Record the verified write/readback hashes, embedded build id and all
 existing physical identity fields, `operator_confirmed: true`,
