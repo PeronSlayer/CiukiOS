@@ -1333,7 +1333,7 @@ class F1RecordTests(unittest.TestCase):
 class F2EvidenceTests(unittest.TestCase):
     def test_f2_grammar_phase_separation_and_loader_registry(self):
         model=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
-        block=model.split('f2_probe_names db',1)[1].split('platform_suffix',1)[0]
+        block=model.split('f2_probe_names:',1)[1].split('platform_suffix',1)[0]
         for probe in F2_PROBES:
             self.assertIn("'"+probe+"'",block)
             self.assertEqual(selector(f'f2:{probe} run=1234aBcD')['phase'],2)

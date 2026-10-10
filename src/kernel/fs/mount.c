@@ -6,6 +6,7 @@
 #include <ciuki/bootlog.h>
 #include <ciuki/init.h>
 #include <ciuki/vfs_hooks.h>
+#include <ciuki/reboot.h>
 #ifndef FS_HOST
 #include <ciuki/ata.h>
 #include <ciuki/work.h>
@@ -217,6 +218,72 @@ void storage_destroy(struct storage *s)
     vfs_destroy(&s->vfs); cache_destroy(&s->cache); s->ready = false;
 }
 struct storage *storage_get(void) { return &system_storage; }
+
+int storage_boot_cfg(struct storage *s, const char *request)
+{
+    /* Quiescent sweep task only. No general write gate, log directory or sink.
+     * Use the same volume/cache/barrier, including after a probe's shutdown. */
+    unsigned request_len = 0;
+    if (request) while (request_len <= 64 && request[request_len]) request_len++;
+    if (request_len > 64) return -FS_EINVAL;
+    for (unsigned i = 0; i < request_len; i++)
+        if ((uint8_t)request[i] < 32 || (uint8_t)request[i] > 126) return -FS_EINVAL;
+    struct storage_volume *v = storage_volume(s, 2);
+    if (!v || v->error || !v->read_gate || s->writer_error ||
+        !blkdev_durable(blkpart_device(&v->part))) return -FS_EROFS;
+    fs_lock_take(&s->vfs.lock);
+    bool mounted = v->fat.mounted, readonly = v->fat.readonly;
+    int e = 0;
+    if (!mounted) e = fat_mount(&v->fat, &s->cache, &v->io, 0, v->io.capacity, false);
+    struct fat_entry directory, file;
+    char original[128], output[128]; size_t done = 0;
+    unsigned used = 0, lines = 0;
+    if (!e) e = fat_lookup(&v->fat, v->fat.type == 32 ? v->fat.root : 0, "SYSTEM", &directory);
+    if (!e && !(directory.attr & FAT_ATTR_DIR)) e = -FS_ENOTDIR;
+    if (!e) e = fat_lookup(&v->fat, directory.first, "BOOT.CFG", &file);
+    if (!e && (file.attr & (FAT_ATTR_RO | FAT_ATTR_DIR) || file.size > 127)) e = -FS_EROFS;
+    if (!e && file.size) e = fat_read(&v->fat, &file, 0, original, file.size, &done);
+    if (!e && done != file.size) e = -FS_EIO;
+    if (!e) for (unsigned i = 0; i < file.size;) {
+        unsigned begin = i;
+        while (i < file.size && original[i] != '\n' && original[i] != '\r') i++;
+        unsigned end = i;
+        while (i < file.size && (original[i] == '\n' || original[i] == '\r')) i++;
+        unsigned token = begin;
+        while (token < end && original[token] == ' ') token++;
+        if (end - token >= 6 && !memcmp(original + token, "probe=", 6)) { lines++; continue; }
+        if (used + i - begin > 127) { e = -FS_EFBIG; break; }
+        memcpy(output + used, original + begin, i - begin); used += i - begin;
+    }
+    if (!e && lines > 1) e = -FS_EINVAL;
+    if (!e && request) {
+        if (used && output[used - 1] != '\n' && output[used - 1] != '\r') output[used++] = '\n';
+        if (used + request_len + 7 > 127) e = -FS_EFBIG;
+        else {
+            memcpy(output + used, "probe=", 6); used += 6;
+            memcpy(output + used, request, request_len); used += request_len;
+            output[used++] = '\n';
+        }
+    }
+    if (!e) e = fat_enable_write(&v->fat);
+    bool recovered = v->fat.dirty_recovered;
+    if (!e && used) {
+        e = fat_write(&v->fat, &file, 0, output, used, &done);
+        if (!e && done != used) e = -FS_EIO;
+    }
+    if (!e) e = fat_truncate(&v->fat, &file, used);
+    if (!e) e = fat_commit(&v->fat);
+    /* Restore a closed gate. Never set a clean flag following an I/O error. */
+    if (!e && (!mounted || readonly)) {
+        e = fat_unmount(&v->fat);
+        if (!e && mounted) e = fat_mount(&v->fat, &s->cache, &v->io, 0, v->io.capacity, false);
+        if (!e && mounted) v->fat.dirty_recovered = recovered;
+    } else if (e && readonly) {
+        v->fat.readonly = true;
+    }
+    fs_lock_drop(&s->vfs.lock);
+    return e;
+}
 
 bool storage_probe_readonly(const char *selector, unsigned length)
 {

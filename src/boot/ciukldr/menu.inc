@@ -3,6 +3,7 @@
 selector_validate:
     mov byte [selector_force], 0
     mov byte [selector_safe], 0
+    mov byte [selector_sweep], 0
     cmp cx, 64
     ja .bad
     cmp cx, 16
@@ -12,6 +13,14 @@ selector_validate:
     mov di, si
     add di, cx
     mov [selector_end], di
+    cmp dword [si], 'all:'
+    jne .phase
+    cmp byte [selector_fw], 2
+    jne .bad
+    mov bx, chain_probe_names
+    inc si
+    jmp .prefix
+.phase:
     cmp byte [si], 'f'
     jne .bad
     mov bx, probe_names
@@ -54,6 +63,19 @@ selector_validate:
     inc bx
     jmp .probe
 .probe_end:
+    cmp bx, chain_probe_names
+    je .sweep
+    cmp bx, f0_sweep_name
+    je .sweep
+    cmp bx, f1_sweep_name
+    je .sweep
+    cmp bx, f2_sweep_name
+    jne .run
+.sweep:
+    cmp byte [selector_fw], 2 ; sweeps enter only through BOOT.CFG
+    jne .bad
+    mov byte [selector_sweep], 1
+.run:
     mov ax, di
     add ax, 13 ; " run=" and exactly eight hex digits.
     cmp ax, [selector_end]
@@ -72,6 +94,8 @@ selector_validate:
     loop .hex
     cmp si, [selector_end]
     je .good
+    cmp byte [selector_sweep], 1
+    je .cursor
     ; Optional fw_cfg-only suffixes: platform, safe, F2 crash server.
     cmp byte [selector_fw], 1
     jne .bad
@@ -127,6 +151,66 @@ selector_validate:
     mov cx, 15
     repe cmpsb
     jne .bad
+    jmp .good
+.cursor:
+    mov ax, [selector_end]
+    sub ax, si
+    cmp ax, 7
+    jb .bad
+    cmp dword [si], ' ste'
+    jne .bad
+    cmp word [si+4], 'p='
+    jne .bad
+    add si, 6
+    xor dx, dx
+    xor cx, cx
+.decimal_step:
+    cmp si, [selector_end]
+    jae .step_end
+    mov al, [si]
+    cmp al, ' '
+    je .step_end
+    sub al, '0'
+    cmp al, 9
+    ja .bad
+    inc cx
+    cmp cx, 2
+    ja .bad
+    imul dx, 10
+    movzx ax, al
+    add dx, ax
+    inc si
+    jmp .decimal_step
+.step_end:
+    test cx, cx
+    jz .bad
+    cmp dx, 63
+    ja .bad
+    cmp si, [selector_end]
+    je .good
+    mov ax, [selector_end]
+    sub ax, si
+    cmp ax, 15 ; " state=" plus eight hex digits
+    jne .bad
+    cmp dword [si], ' sta'
+    jne .bad
+    cmp word [si+4], 'te'
+    jne .bad
+    cmp byte [si+6], '='
+    jne .bad
+    add si, 7
+    mov cx, 8
+    xor edx, edx
+.state_hex:
+    lodsb
+    call hex_digit
+    jc .bad
+    movzx eax, al
+    shl edx, 4
+    or edx, eax
+    loop .state_hex
+    cmp edx, 0x7ffff
+    ja .bad
 .good:
     mov si, [selector_start]
     mov cx, [selector_len]
@@ -170,13 +254,17 @@ selector_accept:
     or dword [B(flags)], CBI_F_INPUT_FORCED
 .done:
     ret
-probe_names db 'all',0,'core',0,'boot',0,'bootinfo',0,'allocator',0,'protection',0
+chain_probe_names db 'sweep',0,0
+probe_names:
+f0_sweep_name db 'sweep',0,'all',0,'core',0,'boot',0,'bootinfo',0,'allocator',0,'protection',0
     db 'isolation',0,'preempt',0,'localfault',0,'syslife',0,'panic',0
     db 'fpu',0,'runner',0,0
-f1_probe_names db 'all',0,'core',0
+f1_probe_names:
+f1_sweep_name db 'sweep',0,'all',0,'core',0
     db 'registry',0,'input',0,'input-fault',0,'framebuffer',0,'ata',0,'ata-fault',0
     db 'partition',0,'fat-read',0,'fat-write',0,'cache',0,'mount-crash',0,'safe',0,'bootlog',0,0
-f2_probe_names db 'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'signals-fault',0
+f2_probe_names:
+f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'signals-fault',0
     db 'threads-wait',0
 f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 platform_suffix db ' platform=e500'
@@ -186,6 +274,7 @@ standin_suffix db ' server=standin'
 selector_fw db 0
 selector_force db 0
 selector_safe db 0
+selector_sweep db 0
 selector_len dw 0
 selector_start dw 0
 selector_end dw 0
@@ -212,6 +301,58 @@ config_read:
 .token:
     cmp si, bp
     jae .done
+    mov ax, bp
+    sub ax, si
+    cmp ax, 6
+    jb .ordinary
+    cmp dword [si], 'prob'
+    jne .ordinary
+    cmp word [si+4], 'e='
+    jne .ordinary
+    mov bx, si
+.probe_boundary:
+    cmp bx, B(options)
+    je .probe_start
+    dec bx
+    cmp byte [bx], ' '
+    je .probe_boundary
+    cmp byte [bx], 13
+    je .probe_start
+    cmp byte [bx], 10
+    jne .invalid
+.probe_start:
+    cmp byte [cfg_seen], 0
+    jne .invalid
+    mov byte [cfg_seen], 1
+    add si, 6
+    mov di, si
+.probe_line:
+    cmp di, bp
+    jae .probe_validate
+    cmp byte [di], 13
+    je .probe_validate
+    cmp byte [di], 10
+    je .probe_validate
+    inc di
+    jmp .probe_line
+.probe_validate:
+    mov [cfg_next], di
+    mov cx, di
+    sub cx, si
+    ; A validated fw_cfg selector has priority; still reject malformed cfg.
+    push bp
+    mov byte [selector_fw], 2
+    call selector_validate
+    pop bp
+    jc .invalid
+    test dword [B(flags)], CBI_F_TEST_REQUEST
+    jnz .cfg_skipped
+    call selector_accept
+    mov byte [selector_source], 2
+.cfg_skipped:
+    mov si, [cfg_next]
+    jmp .token
+.ordinary:
     mov al, [si]
     cmp al, ' '
     je .space
@@ -296,10 +437,18 @@ config_read:
 .done:
     ret
 preferred_mode dw 0xffff
+cfg_seen db 0
+cfg_next dw 0
+selector_source db 0
 
 boot_menu:
     test dword [B(flags)], CBI_F_TEST_REQUEST
-    jnz .done ; Already validated in platform discovery, no second port read.
+    jz .menu
+    cmp byte [selector_source], 2
+    je .menu
+    mov byte [selector_source], 1 ; validated fw_cfg, no second port read
+    jmp .done
+.menu:
     mov si, menu_text
     call print
     mov bp, 55 ; At least three seconds at the BIOS 18.2 Hz rate.
@@ -327,17 +476,35 @@ boot_menu:
     call deadline_expired
     jnc .poll
 .done:
-    ret
+    mov si, source_menu
+    cmp byte [selector_source], 1
+    jne .cfg_source
+    mov si, source_fw
+    jmp print
+.cfg_source:
+    cmp byte [selector_source], 2
+    jne .print_source
+    mov si, source_cfg
+.print_source:
+    jmp print
 .normal:
     ; Normal declines to add safe mode; positive config/fw_cfg sources persist.
-    ret
+    call .cancel_cfg
+    jmp .done
 .safe:
+    call .cancel_cfg
     or dword [B(flags)], CBI_F_SAFE_MODE
+    jmp .done
+.cancel_cfg:
+    and dword [B(flags)], ~CBI_F_TEST_REQUEST
+    mov word [B(test_request_len)], 0
+    mov byte [selector_source], 0
     ret
 .log:
     xor dword [B(flags)], CBI_F_SERIAL_LOG
     jmp .deadline
 .probe:
+    call .cancel_cfg
     mov si, probe_prompt
     call print
     mov bp, 548 ; Thirty-second command-entry deadline.
@@ -384,11 +551,14 @@ boot_menu:
     call selector_validate
     jc .invalid
     call selector_accept
-    ret
+    jmp .done
 .invalid:
     mov si, selection_error
     call print
-    ret
+    jmp .done
+source_menu db 'L:SELECT_SOURCE=menu',13,10,0
+source_fw db 'L:SELECT_SOURCE=fw_cfg',13,10,0
+source_cfg db 'L:SELECT_SOURCE=cfg',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS: N Normal / S Safe mode / L Serial log / P Probe (3 s)',13,10,0
 probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0

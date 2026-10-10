@@ -127,14 +127,20 @@ canonical image; no hardware or TCG throughput is inferred from host fakes.
 oversized or malformed requests MUST report selection error and run no probe.
 F2 MUST have no kernel `all`/`core` alias; a runner alias MUST expand into
 individual boots in prerequisite order. Absent selection MUST boot the ordinary
-desktop without fault injection. F0 and F1 selectors MUST remain unchanged.
+desktop without fault injection. Existing F0/F1 selectors retain their grammar.
+F1-28 adds `f2:sweep` through BOOT.CFG only, beside the per-case suites. It
+traverses the production registry on hardware, retaining per-probe BEGIN/END
+and the same run id across reboots. `all:sweep` chains F0, F1 and F2. QEMU
+suites still use one boot per case; the sweep is hardware traversal evidence,
+and missing stimuli, exported-disk checkers and operator observations remain
+not_run. This alias does not add an F2 `all` or `core` alias.
 `platform=e500` and selector `safe=1` MUST remain validated-QEMU-only, through
 `opt/it.alcybercloud.ciukios/test`; physical selection MUST use the menu/bounded
-serial path and menu/BOOT.CFG safe mode. This retains the bounded
+serial path or a BOOT.CFG probe line, and menu/BOOT.CFG safe mode. This retains the bounded
 [QEMU fw_cfg](https://www.qemu.org/docs/master/specs/fw_cfg.html) interface.
 
 **[F2]** Evidence MUST retain `CIUKI_TEST v=1`, at most 240 bytes per ASCII
-record, unique keys, monotonic sequence numbers per run, decimal counters and
+record, unique keys, monotonic sequence numbers per boot (and one run id across sweep boots), decimal counters and
 fixed-width hexadecimal addresses. Each selected probe MUST emit exactly one
 BEGIN and one terminal END with status PASS/FAIL; READY/ARM MUST precede external
 stimuli. Missing, duplicate, contradictory or late terminal records MUST fail

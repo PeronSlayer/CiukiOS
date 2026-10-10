@@ -70,6 +70,15 @@ int main(void)
     CHECK(strstr(serial_lines[4], "run=abcdef01") && strstr(serial_lines[4], "event=BEGIN"));
     CHECK(lines == console_count);
     CHECK(captures == 4); /* warning and ordinary records; panic uses raw sinks */
+    rec_set_run("12345678");
+    rec_emit("sweep", "BEGIN", "phase=0 step=10");
+    rec_emit("panic", "SWEEP", "step=9 result=not_run reason=reset_before_completion");
+    rec_emit("sweep", "SWEEP_END", "passed=9 failed=0 not_run=1");
+    CHECK(rec_premature_records() == 4 && lines == 8 && captures == 7);
+    CHECK(strstr(serial_lines[5], "probe=sweep event=BEGIN"));
+    CHECK(strstr(serial_lines[6], "probe=panic event=SWEEP"));
+    CHECK(strstr(serial_lines[7], "event=SWEEP_END passed=9 failed=0 not_run=1"));
+    CHECK(lines == console_count);
     for (unsigned i = 0; i < lines; i++) CHECK(!strcmp(serial_lines[i], console_lines[i]));
     printf("record runtime guard: %s (%u failures; drops before run/BEGIN, one warning, identical sinks, panic bypass)\n",
            failures ? "FAIL" : "PASS", failures);

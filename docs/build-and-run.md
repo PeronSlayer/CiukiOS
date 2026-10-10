@@ -57,3 +57,46 @@ photographs. With an RS-232 to USB adapter and a null-modem cable on the
 laptop's serial port, `scripts/test/serial_capture.sh <run-id>` records
 COM1 (38400 8N1) into `legacy/local/physical/<run-id>/serial.log`; start
 it before power-on, then `f0:all run=<run-id>` also covers `panic`.
+
+
+### Unattended hardware sweep
+
+Before the single canonical build/write, supply a bounded BOOT.CFG containing
+ordinary options and this line (choose one eight-hex-digit run id):
+
+```text
+safe=0 serial=1
+probe=all:sweep run=12345678
+```
+
+Use the image builder's existing `--boot-cfg` argument; this changes runtime
+configuration, not build-time probe variants. Verify/write/read back that image
+once using the existing physical write procedure. Start the serial capture
+before power-on. No P entry is required; N/S can cancel the configured request
+in the three-second loader window. Normal steps and cold-reopen/cut steps reset
+automatically. After an intentional panic or hang, observe the halted screen
+for at least five seconds and power-cycle the machine. The cursor continues;
+panic at the end of an F0-only sweep requires this recovery boot for SWEEP_END.
+Do not edit step/state counters by hand. Completion removes only the probe line.
+Read-only cursor refusal leaves evidence on screen and does not reset.
+
+Place the serial bytes as `f0.log` beside `acquisition.json` in the capture
+folder. Record the verified write/readback hashes, embedded build id and all
+existing physical identity fields, `operator_confirmed: true`,
+`selector_source: "cfg"`, the initial selector, and per-boot
+`panic_observations` keyed by one-based boot number (external_halt_seconds,
+resumed=false means no spontaneous execution resumed before the power-cycle).
+Historical mixed-run captures may explicitly list approved `selectors`.
+Never infer an operator observation or checker result from the serial stream.
+Import once with:
+
+```bash
+python3 scripts/test/run.py f2-all --physical-capture legacy/local/physical/12345678
+```
+
+The command imports only and writes one profile=physical summary. Missing
+fixture/disk checker/screen/operator evidence remains not_run. The safe-mode
+cursor conflict is recorded in f1-acceptance.md; a sweep is not yet a substitute
+for the dedicated safe qualification. QEMU suites remain unchanged; the lead
+can run `python3 scripts/test/run.py sweep-smoke` to traverse F0 on one bounded,
+reused overlay under -no-reboot and recover its final panic.

@@ -122,7 +122,11 @@ request the system boots normally. The loader MUST, in this order:
    answers): Normal, Safe mode, Serial log on/off, and the probe selector
    defined in `f0-acceptance.md`. A QEMU test request was already collected
    in step 2 and is not read again; physical machines never get fw_cfg port
-   accesses. The validated UART base and divisor are passed to the kernel.
+   accesses. BOOT.CFG may also provide a selector line, automatically accepted
+   after this override window; N/S cancel the configured request (positive
+   safe-mode sources still persist). A validated fw_cfg request outranks cfg
+   and bypasses the menu. The loader emits L:SELECT_SOURCE=cfg|menu|fw_cfg.
+   The validated UART base and divisor are passed to the kernel.
 6. Select and set the video mode (below).
 7. Load `VMM.ELF`: require `ELFCLASS32`, `ELFDATA2LSB`, `ET_EXEC`, `EM_386`.
    For each `PT_LOAD` segment, the whole extent `[p_paddr, p_paddr + p_memsz)`
@@ -205,7 +209,7 @@ version is rejected; a later version is a new layout with its own size.
 | `0x05D` | `fb_red_size`, `fb_red_pos`, `fb_green_size`, `fb_green_pos`, `fb_blue_size`, `fb_blue_pos`, `fb_rsvd_size` | u8 × 7 | colour masks from step 6 |
 | `0x064` | `vbe_mode` | u16 | active mode number (`0` in text mode) |
 | `0x066` | `test_request_len` | u16 | `0`–`64` |
-| `0x068` | `test_request` | char × 64 | selector grammar of `f0-acceptance.md`, not NUL-terminated |
+| `0x068` | `test_request` | char × 64 | ordinary selector grammar of `f0-acceptance.md` plus the cfg-only sweep/cursor grammar above, not NUL-terminated |
 | `0x0A8` | `options` | char × 128 | `BOOT.CFG` options, NUL-terminated |
 | `0x128` | `edid` | u8 × 128 | valid only with flag bit 2 |
 | `0x1A8` | `edd` | u8 × 66 | `AH=48h` result for the boot drive |
@@ -213,6 +217,29 @@ version is rejected; a later version is a new layout with its own size.
 | `0x1F0` | `vbe_ctrl` | u8 × 512 | `4F00h` copy |
 | `0x3F0` | `vbe_mode_info` | u8 × 256 | `4F01h` copy of the active mode |
 | `0x4F0` | `e820` | 128 × 24 bytes | normalized map: base u64, length u64, type u32, ext u32 |
+
+### BOOT.CFG selector and cursor (F1-28)
+
+The file remains <=127 ASCII bytes without NUL; ordinary `safe`, `serial` and
+`mode` tokens retain their existing semantics. At most one `probe=` line is
+allowed. It occupies its entire line (CRLF or LF), without trailing spaces:
+
+```text
+probe=(f[012]:<probe|all|sweep>|all:sweep) run=<8hex> [step=<0..63> [state=<8hex>]]
+```
+
+`all` remains F0/F1 only. `step` and `state` are internal sweep cursor suffixes,
+invalid on ordinary probes. Sweeps enter only via BOOT.CFG, including QEMU
+(overlays); menu and fw_cfg retain their ordinary selector grammar. No cfg
+selector accepts `platform`, selector `safe=1`, or `server` suffixes.
+The request after `probe=` stays <=64 bytes. The optional state word preserves
+six-bit passed/failed/not_run counters in bits 0..5/6..11/12..17 and a pending
+completion bit 18. Reserved bits must be zero. Before a step, the durable
+cursor advances by one and provisionally counts it as not_run. Completion
+replaces that provisional count; a reset without completion retains not_run.
+This extra state is necessary for truthful totals after reset/panic, which
+cannot be recovered from an in-memory accumulator or a step number alone.
+No boot-info ABI bits or fields are added.
 
 ## Physical memory ownership
 

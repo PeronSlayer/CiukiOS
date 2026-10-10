@@ -337,6 +337,31 @@ static void mount_probe_tests(void) {
     stop(s,true); reset();
     printf("PASS mount-crash probe: dirty fixture recovery, ARM/write cut trace, cache-loss reboot recovery, independent copies crosslinks=0\n");
 }
+static void cfg_tests(void) {
+    extern int storage_boot_cfg(struct storage *, const char *);
+    struct storage *s=start(); OK(storage_enable_write(s,2));
+    const char original[]="safe=0 serial=1\nmode=0x0118\nprobe=f0:sweep run=12345678\n";
+    int h=vfs_open(&table,"C:/SYSTEM/BOOT.CFG",VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0); CHECK(h>=0);
+    size_t done; OK(vfs_write(&table,h,original,sizeof(original)-1,&done)); CHECK(done==sizeof(original)-1);
+    OK(vfs_close(&table,h)); vfs_table_destroy(&table); OK(storage_shutdown(s));
+    const char request[]="f1:sweep run=12345678 step=10 state=00001009";
+    OK(storage_boot_cfg(s,request)); CHECK(s->stopped && !s->volumes[2].fat.mounted);
+    storage_destroy(s); s=start();
+    char bytes[128]={0};
+    h=vfs_open(&table,"C:/SYSTEM/BOOT.CFG",VFS_READ,VFS_DENY_NONE,0); CHECK(h>=0);
+    OK(vfs_read(&table,h,bytes,127,&done)); OK(vfs_close(&table,h));
+    CHECK(strstr(bytes,request) && strstr(bytes,"safe=0 serial=1\nmode=0x0118\n"));
+    CHECK(s->volumes[2].fat.readonly);
+    unsigned flushes=media[0].flushes;
+    OK(storage_boot_cfg(s,NULL)); CHECK(media[0].flushes>flushes && s->volumes[2].fat.readonly);
+    memset(bytes,0,sizeof(bytes)); h=vfs_open(&table,"C:/SYSTEM/BOOT.CFG",VFS_READ,VFS_DENY_NONE,0); CHECK(h>=0);
+    OK(vfs_read(&table,h,bytes,127,&done)); OK(vfs_close(&table,h));
+    CHECK(!strstr(bytes,"probe=") && strstr(bytes,"mode=0x0118"));
+    unsigned writes=media[0].writes; disks[0].dev.quarantined=true;
+    CHECK(storage_boot_cfg(s,request)==-FS_EROFS); CHECK(media[0].writes==writes);
+    disks[0].dev.quarantined=false; stop(s,true); reset();
+    printf("PASS BOOT.CFG: durable cursor round trip after shutdown, preserve options, remove selector, closed/read-only gate\n");
+}
 static void probe_tests(void) {
     struct storage *s=start();
     for(unsigned i=1;i<3;i++) OK(storage_add_disk(s,i,&media[i].dev));
@@ -362,7 +387,7 @@ static void probe_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); log_tests(); failure_tests(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); log_tests(); failure_tests(); cfg_tests(); probe_tests(); mount_probe_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;
