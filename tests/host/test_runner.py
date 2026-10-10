@@ -1129,11 +1129,14 @@ class F2EvidenceTests(unittest.TestCase):
         start,end=addr('__f2probes_start'),addr('__f2probes_end')
         self.assertLessEqual(addr('__rodata_start'),start);self.assertLessEqual(start,end)
         self.assertLessEqual(end,addr('__rodata_end'))
+        # Registration order follows the linked source files (desktop, files,
+        # process, signals); app-gate has no CIUKI_F2_PROBE registration yet.
         self.assertEqual(linked_probe_names(rows,2),[
-            'crash-isolation','libc-smoke','elf-load','spawn-wait','mmap','threads-wait','signals-fault'])
+            'crash-isolation','libc-smoke','fd-table','elf-load','spawn-wait','mmap','threads-wait','signals-fault'])
         registrations=[line.split()[-1] for line in rows if ' f2_registration_' in line]
         self.assertEqual(registrations,[
             'f2_registration_probe_f2_crash_isolation','f2_registration_probe_f2_libc_smoke',
+            'f2_registration_probe_f2_fd_table',
             'f2_registration_probe_f2_elf_load','f2_registration_probe_f2_spawn_wait',
             'f2_registration_probe_f2_mmap','f2_registration_probe_f2_threads_wait',
             'f2_registration_probe_f2_signals_fault'])

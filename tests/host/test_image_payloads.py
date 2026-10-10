@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -44,12 +45,18 @@ class ImagePayloadTests(unittest.TestCase):
                                      "sha256": hashlib.sha256(a.read_bytes()).hexdigest(),
                                      "size": 65536})
         disk = self.work / "disk.img"
+        # The kernel build records its UTC epoch and binds it to the ELF hash;
+        # the image builder consumes that record rather than choosing a new time.
+        clock_record = {"utc_epoch": int(time.time()), "kernel_sha256": image.sha256(a)}
+        (self.work / "build-clock.json").write_text(json.dumps(clock_record, indent=2) + "\n")
         with patch.object(image, "git_identity", return_value=("unknown", "unknown")):
             image.write_manifest(disk, a, "image-hash", records, {"sdk_manifest_sha256": "sdk-hash"})
         manifest = json.loads((self.work / "build-manifest.json").read_text())
         self.assertEqual(manifest["payloads"], records)
         self.assertEqual(manifest["sdk_manifest_sha256"], "sdk-hash")
         self.assertEqual(manifest["image_sha256"], "image-hash")
+        self.assertEqual(manifest["build_epoch"], clock_record["utc_epoch"])
+        self.assertEqual(manifest["kernel_sha256"], clock_record["kernel_sha256"])
         self.assertEqual(image.IMAGE_BYTES, 512 * 1024 * 1024)
         self.assertEqual(image.PART_LBA, 2048)
 
