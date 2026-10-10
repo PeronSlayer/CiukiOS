@@ -85,6 +85,20 @@
 5. **No identity change.** The desktop's portrait, tagline and layout are
    not touched; the image keeps 53 payloads plus whatever the suite needs.
 
+## Scope amendments (lead, 2026-10-11, after Codex's part-1 report)
+
+1. `src/boot/ciukldr/menu.inc` is an allowed file: it accepts the optional
+   ` server=desktop` / ` server=standin` suffix after ` safe=1` with the
+   same fw_cfg-only rule as the other suffixes, within the T1 loader-size
+   limit.
+2. `apps/desktop` may extend its existing test loop so that, under its test
+   flag only, it cycles all five fault kinds with controller pacing;
+   identity assets, layout and copy stay untouched.
+3. The frozen 64-byte request bound stays. `platform=e500 safe=1 server=…`
+   (67 bytes) is rejected and never needed: `safe=1` always runs the
+   stand-in. The grammar amendment says so and a host test checks the
+   rejection.
+
 ## Host tests
 
 Selector key parsing; probe record formatting for both servers; the demo's
