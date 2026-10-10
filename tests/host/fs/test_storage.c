@@ -10,6 +10,7 @@
 #include "../storage_ledger_fixture.h"
 
 static unsigned checks, records, max_record;
+static unsigned fixture_present, fixture_absent;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr,"STORAGE line %d: %s\n",__LINE__,#x); exit(1); } } while (0)
 #define OK(x) CHECK((x)==0)
 struct ciuki_boot_info g_boot;
@@ -28,6 +29,13 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...) {
     if (length>max_record) max_record=length;
     if (length>240) fprintf(stderr,"oversized: %s %s %s (%u)\n",probe,event,line,length);
     CHECK(n>=0 && length<=240); records++;
+    if (!strcmp(probe,"fat-read") && !strcmp(event,"DATA") && !strncmp(line,"case=fixture ",13)) {
+        unsigned disk; char status[16];
+        CHECK(sscanf(line,"case=fixture disk=%u status=%15s",&disk,status)==2 && disk>0 && disk<STORAGE_DISKS);
+        CHECK(!strcmp(status,"present") || !strcmp(status,"absent"));
+        unsigned *mask=!strcmp(status,"present") ? &fixture_present : &fixture_absent;
+        CHECK(!((fixture_present|fixture_absent)&(1u<<disk))); *mask|=1u<<disk;
+    }
 }
 static int disk_read(struct blkdev *dev, uint64_t lba, uint32_t n, void *buf) {
     struct disk *d=dev->ctx; int e=blkdev_range(dev,lba,n); if(e) return e;
@@ -65,6 +73,55 @@ static void baseline(void) {
     media[0].reads=media[0].writes=media[0].flushes=media[0].events=0; media[0].undo_enabled=true;
 }
 static void reset(void) { fake_reset(&media[0]); bootlog_reset(); }
+static void superfloppy_tests(void) {
+    /* The generator's unwrapped FAT12/16 volumes use LBA zero directly. */
+    for(unsigned i=1;i<3;i++) {
+        struct fake *f=&media[i]; unsigned writes=f->writes, flushes=f->flushes;
+        struct storage *s=start(); OK(storage_add_disk(s,i,&f->dev));
+        struct storage_volume *v=storage_volume(s,3);
+        CHECK(v && !v->error && v->disk==i && !v->partition && !v->part.start);
+        CHECK(v->io.capacity==f->dev.capacity && v->fat.type==(i==1 ? 12 : 16));
+        CHECK(v->fat.readonly && v->read_gate && v->read_sequence && !v->writes_before_gate);
+        CHECK(f->writes==writes && f->flushes==flushes);
+        CHECK(storage_add_disk(s,i,&f->dev)==-FS_EINVAL);
+        stop(s,true); reset();
+        /* C: still requires the boot MBR, even with a valid FAT BPB. */
+        OK(storage_setup(s,0)); int e=storage_add_disk(s,0,&f->dev);
+        CHECK(e==0 || e==-FS_EINVAL);
+        CHECK(!storage_volume(s,2) && !storage_volume(s,3)); storage_destroy(s);
+    }
+    struct fake *f=&media[1]; f->undo_enabled=true;
+    uint8_t bpb[512],bad[512]; OK(fake_raw_read(f,0,bpb));
+    for(unsigned fault=0;fault<5;fault++) {
+        memcpy(bad,bpb,512);
+        if(!fault) memset(bad,0,512);                 /* neither MBR nor BPB */
+        if(fault==1) bad[13]=3;                     /* invalid cluster size */
+        if(fault==2) { fs_wr16(bad+19,0); fs_wr32(bad+32,(uint32_t)f->dev.capacity+1); }
+        if(fault==3) { bad[0]=0; }                 /* invalid jump */
+        if(fault==4) fs_wr16(bad+11,1024);           /* unsupported BPB sectors */
+        OK(fake_raw_write(f,0,bad));
+        struct storage *s=start(); int e=storage_add_disk(s,1,&f->dev);
+        struct storage_volume *v=storage_volume(s,3);
+        CHECK(e<0 || !v || (v->error && !v->fat.mounted));
+        if(!fault) CHECK(e==-FS_EINVAL && !v);
+        CHECK(!s->vfs.volumes[3] && !f->writes && !f->flushes);
+        stop(s,true); fake_reset(f); reset();
+    }
+    /* A valid MBR wins over a plausible BPB, including a bad EBR chain. */
+    for(unsigned layout=0;layout<3;layout++) {
+        memcpy(bad,bpb,512); memset(bad+446,0,64); bad[450]=layout==2 ? 5 : layout==1 ? 0xee : 0x83;
+        fs_wr32(bad+454,1); fs_wr32(bad+458,(uint32_t)f->dev.capacity-1);
+        OK(fake_raw_write(f,0,bad)); struct storage *s=start();
+        CHECK(storage_add_disk(s,1,&f->dev)==(layout==2 ? -FS_EINVAL : layout==1 ? -FS_EOPNOTSUPP : 0));
+        CHECK(!storage_volume(s,3) && !f->writes && !f->flushes);
+        stop(s,true); fake_reset(f); reset();
+    }
+    /* An issued read error must remain an error, with no fallback retry. */
+    f->fail_read=0; unsigned reads=f->reads; struct storage *s=start();
+    CHECK(storage_add_disk(s,1,&f->dev)==-FS_EIO && f->reads==reads+1);
+    CHECK(!storage_volume(s,3)); stop(s,true); fake_reset(f); reset();
+    printf("PASS superfloppy: FAT12/16 whole-disk RO mounts, boot MBR rule, invalid BPB/capacity/blank disk, no I/O retry\n");
+}
 static void mount_tests(void) {
     struct storage *s=start(); struct storage_volume *v=storage_volume(s,2);
     CHECK(v && v->fat.type==32 && v->fat.readonly && v->read_gate && v->read_sequence && !v->writes && !media[0].writes && !media[0].flushes);
@@ -175,12 +232,18 @@ static void mount_probe_tests(void) {
         OK(fake_raw_read(f,reserved+i*fat,sector)); fs_wr16(sector+2,fs_rd16(sector+2)&~0x8000u);
         OK(fake_raw_write(f,reserved+i*fat,sector));
     }
-    struct storage *s=start(); disk_init(2); OK(storage_add_disk(s,1,&disks[2].dev));
-    host_mount_snapshot(s);
-    OK(probe_mount_crash()); CHECK(!f->writes && !media[0].writes); stop(s,true); fake_reset(f); reset();
+    for(unsigned layout=0;layout<2;layout++) {
+        struct storage *s=start(); disk_init(2);
+        OK(storage_add_disk(s,1,layout ? &f->dev : &disks[2].dev));
+        CHECK(!s->volumes[3].read_gate && s->volumes[3].fat.ro_reasons&FAT_RO_DIRTY);
+        CHECK(storage_enable_write(s,3)==-FS_EROFS);
+        host_mount_snapshot(s);
+        OK(probe_mount_crash()); CHECK(!f->writes && !media[0].writes); stop(s,true); reset();
+    }
+    fake_reset(f);
     /* Driver failure stands in for termination at an issued sector, followed
      * by loss of all caches. Actual QEMU process termination remains T3. */
-    s=start(); OK(storage_enable_write(s,2));
+    struct storage *s=start(); OK(storage_enable_write(s,2));
     int h=vfs_open(&table,"C:/F109CUT.ARM",VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,0,0); CHECK(h>=0); OK(vfs_close(&table,h));
     stop(s,true);
     s=start(); media[0].cut_at=media[0].events+8;
@@ -194,11 +257,16 @@ static void mount_probe_tests(void) {
 }
 static void probe_tests(void) {
     struct storage *s=start();
-    for(unsigned i=1;i<3;i++) { disk_init(i); OK(storage_add_disk(s,i,&disks[i].dev)); }
+    for(unsigned i=1;i<3;i++) OK(storage_add_disk(s,i,&media[i].dev));
     host_mount_snapshot(s);
     CHECK(s->volumes[3].fat.type==12 && s->volumes[4].fat.type==16);
-    OK(probe_fat_read()); CHECK(!media[0].writes && !media[1].writes && !media[2].writes);
+    fixture_present=fixture_absent=0;
+    OK(probe_fat_read()); CHECK(fixture_present==6 && fixture_absent==8);
+    CHECK(!media[0].writes && !media[1].writes && !media[2].writes);
     stop(s,true); reset();
+    s=start(); fixture_present=fixture_absent=0;
+    OK(probe_fat_read()); CHECK(!fixture_present && fixture_absent==14);
+    CHECK(!media[0].writes); stop(s,true); reset();
     s=start(); bool reboot=true; OK(storage_write_workload(s,&table,&reboot)); CHECK(!reboot);
     stop(s,true); unsigned writes=media[0].writes;
     s=start(); OK(storage_write_workload(s,&table,&reboot)); CHECK(reboot && media[0].writes==writes);
@@ -212,7 +280,7 @@ static void probe_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); mount_tests(); log_tests(); failure_tests(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); log_tests(); failure_tests(); probe_tests(); mount_probe_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;

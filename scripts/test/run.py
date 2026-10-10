@@ -165,12 +165,22 @@ def expand_cases(suite):
     return expanded
 
 
+def fixture_disks(case):
+    # Manifest ordinals also cover nondisk fixtures; IDE connector numbers
+    # start after the boot disk and must agree with the kernel disk ledger.
+    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator')=='mkfs.fat']
+    if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
+    return list(zip(indices,range(1,len(indices)+1)))
+
+
 def prepare_fixtures(host,case,directory):
     manifests=[]
+    disks=dict(fixture_disks(case))
     for index,fixture in enumerate(case.get('fixtures',[])):
         item=dict(fixture)
         if fixture.get('generator')=='mkfs.fat':
             item.update(host.fat_fixture(fixture,directory,index))
+            item['ide_index']=disks[index]
         elif 'path' in fixture:
             path=(ROOT/fixture['path']).resolve()
             if not path.is_relative_to(ROOT) or not path.is_file():raise res.Refusal('fixture missing/outside worktree')
@@ -488,13 +498,8 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     args+=['-serial','none' if devices.get('serial')=='none' else 'file:serial.fifo']
     if profile.get('audio') and not devices.get('audio')=='none':
         args+=['-audiodev','none,id=silent','-device',profile['audio']+',audiodev=silent']
-    if case.get('fixtures'):
-        slot=1
-        for index,fixture in enumerate(case['fixtures']):
-            if fixture.get('generator')=='mkfs.fat':
-                if slot>3:raise res.Refusal('too many IDE fixture disks')
-                args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={slot},cache='+cache]
-                slot+=1
+    for index,disk in fixture_disks(case):
+        args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache]
     return args,request
 
 
