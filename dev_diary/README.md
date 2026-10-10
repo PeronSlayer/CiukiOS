@@ -101,3 +101,4 @@ Documenti di design, validazione, fonti esterne.
 | [Decisione: ripulitura automatica del bit dirty al mount, dopo la prima prova sul T23](2026-10-11-07-ripulitura-bit-dirty.md) | 11 ott | decisione (storage) e analisi hardware |
 | [Prove su hardware: ThinkPad T23, sweep automatico e difetti reali corretti](2026-10-11-08-prove-hardware-t23-sweep.md) | 11 ott | analisi hardware e modifica |
 | [Accelerazione: F3 e shell del desktop partono su QEMU in parallelo alla coda hardware di F0–F2](2026-10-11-09-accelerazione-f3-desktop.md) | 11 ott | decisione del proprietario e pianificazione |
+| [Contratto F4 approvato: audio, media, volumi condivisi, ottico e NTFS in sola lettura](2026-10-11-10-contratto-f4-approvato.md) | 11 ott | decisione (contratto di progetto) |
