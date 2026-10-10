@@ -189,3 +189,15 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/proc/desktop_test.c" \
     "$root/tests/host/proc/signal_legacy.c" "$root/src/kernel/lib/sha256.c" -o "$out/desktop_test"
 "$out/desktop_test" "$out/desktop-payload.elf"
+
+# F2 native files use the same mkfs/mtools fixtures and fake block layer as
+# the independent F1 harness. Fail-closed integration gaps are reported by name.
+python3 "$root/tests/host/fs/fixtures.py"
+nasm -f bin -I "$out/" "$root/tests/host/proc/files_payload.asm" -o "$out/files-payload.elf"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
+    "$root/tests/host/proc/files_test.c" "$root/tests/host/proc/signal_legacy.c" \
+    "$root/tests/host/proc/desktop_legacy.c" "$root/src/kernel/fs/fs_port.c" \
+    "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
+    "$root/src/kernel/fs/vfs.c" "$root/tests/host/fs/fake.c" -o "$out/files_test"
+"$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf"

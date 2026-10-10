@@ -3,6 +3,7 @@
  * non-preemptible in F0 (docs/design/execution-abi.md).
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/clock.h>
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
@@ -271,6 +272,7 @@ void schedule(void)
 
 void sched_tick(void)
 {
+    file_clock_tick();
     for (struct task *t = all_tasks; t; t = t->all_next) {
         if (t->state == T_BLOCKED && t->wake_tick && g_ticks >= t->wake_tick) {
             t->wake_tick = 0;

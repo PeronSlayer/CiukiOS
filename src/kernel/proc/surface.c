@@ -2,6 +2,8 @@
  * See execution-abi.md, Desktop surfaces, and build/f2-05/research.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+extern uint32_t file_description_count(void) __attribute__((weak));
+#define FILE_OBJECTS (file_description_count ? file_description_count() : 0)
 #include <ciuki/cpu.h>
 #include <ciuki/desktop.h>
 
@@ -34,7 +36,7 @@ static void description_release(struct proc_object *o)
 
 struct desktop_description *desktop_description_new(enum desktop_kind kind, uint32_t flags)
 {
-    if (desktop_objects.descriptions == CIUKI_OPEN_DESCRIPTION_MAX)
+    if (desktop_objects.descriptions + FILE_OBJECTS >= CIUKI_OPEN_DESCRIPTION_MAX)
         return 0;
     struct desktop_description *d = kzalloc(sizeof(*d));
     if (!d)
@@ -156,7 +158,7 @@ int surface_create(struct process *p, uint32_t width, uint32_t height, uint32_t 
         return -EOVERFLOW;
     int fd = desktop_fd_slot(p, 0);
     if (fd < 0) return fd;
-    if (desktop_objects.descriptions == CIUKI_OPEN_DESCRIPTION_MAX) return -ENFILE;
+    if (desktop_objects.descriptions + FILE_OBJECTS >= CIUKI_OPEN_DESCRIPTION_MAX) return -ENFILE;
     struct surface *s = kzalloc(sizeof(*s));
     if (!s) return -ENOMEM;
     s->info = (struct ciuki_surface_info){ sizeof(s->info), width, height,

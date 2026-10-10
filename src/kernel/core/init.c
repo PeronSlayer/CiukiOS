@@ -4,6 +4,8 @@
  * No error authorizes another backend or a retry of quarantined hardware.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/files.h>
+#include <ciuki/clock.h>
 #include <ciuki/init.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/i8042.h>
@@ -132,4 +134,7 @@ void drivers_init(void)
         .reason = state.safe ? "safe_mode" : "native_discovery", .error = state.ata_error,
         .tick = tick, .safe_flag_before = safe_flag_before, .present = storage, .quarantined = quarantine });
     storage_init();
+    file_clock_start(CIUKI_BUILD_EPOCH, true);
+    int native_files = files_bootstrap(&storage_get()->vfs);
+    if (native_files) klog("[files] initialization failed: %d", native_files);
 }

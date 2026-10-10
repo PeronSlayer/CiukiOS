@@ -2,6 +2,8 @@
  * bad buffers/full fd tables cannot consume a head message.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+extern uint32_t file_description_count(void) __attribute__((weak));
+#define FILE_OBJECTS (file_description_count ? file_description_count() : 0)
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
 
@@ -59,7 +61,7 @@ int channel_pair(struct process *p, int32_t fds[2])
     int a = desktop_fd_slot(p, 0);
     int b = a < 0 ? a : desktop_fd_slot(p, (unsigned)a + 1);
     if (b < 0) return -EMFILE;
-    if (desktop_objects.descriptions > CIUKI_OPEN_DESCRIPTION_MAX - 2) return -ENFILE;
+    if (desktop_objects.descriptions + FILE_OBJECTS > CIUKI_OPEN_DESCRIPTION_MAX - 2) return -ENFILE;
     struct channel *c = kzalloc(sizeof(*c));
     if (!c) return -ENOMEM;
     struct desktop_description *ends[2] = { 0 };

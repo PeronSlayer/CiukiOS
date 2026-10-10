@@ -6,6 +6,9 @@
 #endif
 static fs_calendar_clock calendar;
 void fs_set_calendar_clock(fs_calendar_clock clock) { calendar=clock; }
+bool fs_calendar_sample(uint16_t *date, uint16_t *time, uint8_t *tenths) {
+    return calendar && calendar(date,time,tenths);
+}
 void fs_timestamp(uint16_t *date, uint16_t *time, uint8_t *tenths) {
     if (calendar && calendar(date,time,tenths)) return;
     *date=0x21; *time=0; *tenths=0;

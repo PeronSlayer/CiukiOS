@@ -2,6 +2,8 @@
  * input consumes its single queue, never controller ports or firmware calls.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+extern uint32_t file_description_count(void) __attribute__((weak));
+#define FILE_OBJECTS (file_description_count ? file_description_count() : 0)
 #include <ciuki/cpu.h>
 #include <ciuki/desktop.h>
 #include <ciuki/i8042.h>
@@ -24,7 +26,7 @@ int grants_install(struct process *p, int32_t fds[2])
     if (!p || p == proc_supervisor() || !p->fds || grant_owner) return -EPERM;
     int a = desktop_fd_slot(p, 0), b = a < 0 ? a : desktop_fd_slot(p, (unsigned)a + 1);
     if (b < 0) return -EMFILE;
-    if (desktop_objects.descriptions > CIUKI_OPEN_DESCRIPTION_MAX - 2) return -ENFILE;
+    if (desktop_objects.descriptions + FILE_OBJECTS > CIUKI_OPEN_DESCRIPTION_MAX - 2) return -ENFILE;
     struct desktop_description *display = desktop_description_new(DESKTOP_DISPLAY, O_WRONLY);
     struct desktop_description *input = desktop_description_new(DESKTOP_INPUT, O_RDONLY);
     if (!display || !input) {

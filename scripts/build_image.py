@@ -279,6 +279,8 @@ def git_identity():
 def write_manifest(image, kernel, image_sha, payloads, metadata):
     """build-manifest.json beside the image: read by scripts/test/run.py."""
     rev, dirty = git_identity()
+    clock_record = json.loads((kernel.parent / "build-clock.json").read_text())
+    require(clock_record["kernel_sha256"] == sha256(kernel), "kernel build-clock hash")
     manifest = {
         "schema_version": 1,
         "git_revision": rev,
@@ -287,6 +289,7 @@ def write_manifest(image, kernel, image_sha, payloads, metadata):
         "image_sha256": image_sha,
         "kernel": str(kernel),
         "kernel_sha256": sha256(kernel),
+        "build_epoch": clock_record["utc_epoch"],
         "payloads": payloads,
         **metadata,
     }

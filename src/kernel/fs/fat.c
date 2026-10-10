@@ -1,6 +1,8 @@
 /* On-disk rules researched in fatgen103; see tests/host/fs/VALIDATION.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "fat.h"
+#include "../include/ciuki/fat_native.h"
+bool fat_native_ready(void) { return true; }
 static uint32_t mask(struct fat_volume *v) { return v->type==12 ? 0xfff : v->type==16 ? 0xffff : 0xfffffff; }
 static uint32_t cleanbit(struct fat_volume *v) { return v->type==16 ? 0x8000 : v->type==32 ? 0x8000000 : 0; }
 static uint32_t errorbit(struct fat_volume *v) { return cleanbit(v)>>1; }
@@ -8,6 +10,7 @@ static bool valid(struct fat_volume *v, uint32_t c) { return c>=2 && c<v->cluste
 static bool eoc(struct fat_volume *v, uint32_t c) { return c>=(mask(v)-7); }
 static int corrupt(struct fat_volume *v) { v->readonly=true; v->ro_reasons|=FAT_RO_CORRUPT; v->diagnostic="chain/directory corruption"; return -FS_EUCLEAN; }
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
+    if (file_read_cancelled && file_read_cancelled()) return -4; /* EINTR, before issuance */
     if (s>=v->sectors) return corrupt(v);
     int e=cache_read(v->cache,v->dev,v->start+s,b);
     return e ? (e==-FS_EQUARANTINED ? -FS_EIO : e) : 0;
@@ -154,6 +157,7 @@ int fat_lookup(struct fat_volume *v, uint32_t dir, const char *name, struct fat_
     return err;
 }
 static int update(struct fat_volume *v, const struct fat_entry *e) {
+    if (e->index==UINT32_MAX && !(e->attr&FAT_ATTR_DIR)) return 0; /* open-unlinked */
     uint8_t b[32]; int err=dir_read(v,e->parent,e->index,b); if (err) return write_error(v,err);
     encode_entry(v,b,e); if ((err=dir_write(v,e->parent,e->index,b))) return err;
     return barrier(v);
@@ -433,7 +437,7 @@ int fat_remove(struct fat_volume *v, struct fat_entry *file, bool directory) {
         while (!(e=fat_next(v,file->first,&i,&child))) if (!path_equal(child.alias,".") && !path_equal(child.alias,"..")) return -FS_ENOTEMPTY;
         if (e!=-FS_ENOENT) return e;
     }
-    if ((e=unlink_entry(v,file)) || (e=release_chain(v,file->first))) return e;
+    if ((file->index!=UINT32_MAX && (e=unlink_entry(v,file))) || (e=release_chain(v,file->first))) return e;
     return hints(v);
 }
 int fat_rename(struct fat_volume *v, struct fat_entry *file, uint32_t parent, const char *name) {
@@ -471,6 +475,56 @@ int fat_rename(struct fat_volume *v, struct fat_entry *file, uint32_t parent, co
     }
     if ((e=publish(v,&dest,u,n,alias))) return e;
     *file=dest; return hints(v);
+}
+/* Native replacement reserves alias and destination capacity before either
+ * name disappears. The single VFS lock hides intermediate successful states.
+ * On I/O failure the F1 write revocation/lost-chain policy still applies. */
+int fat_rename_replace(struct fat_volume *v, struct fat_entry *file,
+                       struct fat_entry *replacement, uint32_t parent,
+                       const char *name, bool retain_replacement) {
+    int e=writable(v); if (e) return e;
+    if (file->attr&FAT_ATTR_RO || (replacement && (replacement->attr&FAT_ATTR_RO))) return -FS_EACCES;
+    uint16_t u[256]; unsigned n;
+    if ((e=path_validate_name(name,u,&n))) return e;
+    struct fat_entry existing; e=fat_lookup(v,parent,name,&existing);
+    if (!e && !(existing.parent==file->parent && existing.index==file->index) &&
+        !(replacement && existing.parent==replacement->parent && existing.index==replacement->index)) return -FS_EEXIST;
+    if (e && e!=-FS_ENOENT) return e;
+    if (replacement) {
+        if (!!(file->attr&FAT_ATTR_DIR)!=!!(replacement->attr&FAT_ATTR_DIR))
+            return file->attr&FAT_ATTR_DIR ? -FS_ENOTDIR : -FS_EISDIR;
+        if (replacement->attr&FAT_ATTR_DIR) {
+            uint32_t cursor=0;
+            while (!(e=fat_next(v,replacement->first,&cursor,&existing)))
+                if (!path_equal(existing.name,".") && !path_equal(existing.name,"..")) return -FS_ENOTEMPTY;
+            if (e!=-FS_ENOENT) return e;
+        }
+    }
+    uint8_t alias[11]; if ((e=make_alias(v,parent,u,n,alias,file))) return e;
+    struct fat_entry dest=*file; dest.parent=parent; dest.lfn_count=(uint8_t)((n+12)/13);
+    if ((e=slots(v,parent,dest.lfn_count+1,&dest.lfn_index))) return e;
+    dest.index=dest.lfn_index+dest.lfn_count;
+    if (replacement) {
+        if ((e=unlink_entry(v,replacement))) return e;
+        replacement->index=UINT32_MAX;
+        if (!retain_replacement) {
+            uint32_t chain=replacement->first;
+            replacement->first=0; replacement->size=0;
+            if ((e=release_chain(v,chain))) return e;
+        }
+    }
+    if ((e=unlink_entry(v,file))) return e;
+    if ((file->attr&FAT_ATTR_DIR) && parent!=file->parent) {
+        uint8_t b[32]; if ((e=dir_read(v,file->first,1,b))) return e;
+        uint32_t first=(parent==v->root || !parent) ? 0 : parent;
+        fs_wr16(b+26,(uint16_t)first); fs_wr16(b+20,v->type==32 ? (uint16_t)(first>>16) : 0);
+        if ((e=dir_write(v,file->first,1,b)) || (e=barrier(v))) return e;
+    }
+    if ((e=publish(v,&dest,u,n,alias))) return e;
+    memcpy(dest.name,name,strlen(name)+1);
+    uint8_t raw[32]={0}; memcpy(raw,alias,11); alias_decode(raw,dest.alias);
+    *file=dest;
+    return hints(v);
 }
 int fat_set_metadata(struct fat_volume *v, struct fat_entry *file, uint8_t attr, const struct fat_times *times) {
     int e=writable(v); if (e) return e;
