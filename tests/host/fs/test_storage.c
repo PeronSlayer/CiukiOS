@@ -13,6 +13,11 @@ static unsigned checks, records, max_record;
 static unsigned fixture_present, fixture_absent;
 static unsigned fat_read_not_run, fat_read_terminal_not_run;
 static bool cut_probe_after_arm;
+static const char *stray_probe, *stray_record;
+static unsigned stray_drive = 2;
+static uint64_t writes_before_probe, writes_during, sweep_writes;
+extern uint64_t storage_sweep_writes(const struct storage_volume *);
+extern int storage_boot_cfg(struct storage *, const char *);
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr,"STORAGE line %d: %s\n",__LINE__,#x); exit(1); } } while (0)
 #define OK(x) CHECK((x)==0)
 struct ciuki_boot_info g_boot;
@@ -31,6 +36,22 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...) {
     if (length>max_record) max_record=length;
     if (length>240) fprintf(stderr,"oversized: %s %s %s (%u)\n",probe,event,line,length);
     CHECK(n>=0 && length<=240); records++;
+    if (stray_probe && !strcmp(probe,stray_probe) && fmt && strstr(line,stray_record)) {
+        /* An actual counted block write during the production read probe.
+         * Rewrite the same sector: the fixture content remains unchanged. */
+        stray_probe=0;
+        struct storage_volume *v=storage_volume(storage_get(),stray_drive);
+        uint8_t sector[512]; CHECK(v);
+        OK(v->io.read(&v->io,0,1,sector));
+        OK(v->io.write(&v->io,0,1,sector)); OK(v->io.flush(&v->io));
+    }
+    if (fmt && strstr(line,"case=write_accounting drive=C ")) {
+        unsigned long long before, during, total, cursor;
+        CHECK(sscanf(line,"case=write_accounting drive=C writes_before_probe=%llu writes_during=%llu volume_writes=%llu sweep_writes=%llu",
+                     &before,&during,&total,&cursor)==4);
+        writes_before_probe=before; writes_during=during; sweep_writes=cursor;
+        CHECK(total==before+during && cursor<=total);
+    }
     if (!strcmp(probe,"mount-crash") && !strcmp(event,"ARM") && cut_probe_after_arm) {
         media[0].cut_at=media[0].events+4;
     }
@@ -368,6 +389,70 @@ static void cfg_tests(void) {
     disks[0].dev.quarantined=false; stop(s,true); reset();
     printf("PASS BOOT.CFG: durable cursor round trip after shutdown, preserve options, remove selector, closed/read-only gate\n");
 }
+static void sweep_write_tests(void) {
+    struct storage *s=start(); OK(storage_enable_write(s,2));
+    int h=vfs_open(&table,"C:/SYSTEM/BOOT.CFG",VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0); CHECK(h>=0);
+    const char cfg[]="safe=0 serial=1\n"; size_t done;
+    OK(vfs_write(&table,h,cfg,sizeof(cfg)-1,&done)); OK(vfs_close(&table,h)); stop(s,true);
+    const char request[]="f1:sweep run=12345678 step=10 state=00001009";
+    for (unsigned fixtures=0;fixtures<2;fixtures++) for (unsigned stray=0;stray<2;stray++) {
+        s=start(); CHECK(!storage_sweep_writes(&s->volumes[2]));
+        if (fixtures) OK(storage_add_disk(s,1,&media[1].dev));
+        host_mount_snapshot(s);
+        OK(storage_boot_cfg(s,request));
+        uint64_t cursor=s->volumes[2].writes; CHECK(cursor && cursor==storage_sweep_writes(&s->volumes[2]));
+        CHECK(s->volumes[2].fat.readonly);
+        fixture_present=fixture_absent=fat_read_not_run=fat_read_terminal_not_run=0;
+        stray_probe=stray ? "fat-read" : 0; stray_record="case=fixture";
+        stray_drive=fixtures ? 3 : 2;
+        CHECK(probe_fat_read()==(stray ? 1 : 0)); CHECK(!stray_probe);
+        CHECK(writes_before_probe==cursor && writes_during==(!fixtures && stray) && sweep_writes==cursor);
+        CHECK(fat_read_terminal_not_run==(!fixtures && !stray));
+        if (!stray) CHECK(s->volumes[2].writes==cursor);
+        stop(s,true);
+    }
+    /* Capture/read activity before qualification must not hide a stray. */
+    s=start(); OK(storage_boot_cfg(s,request)); vfs_table_destroy(&table);
+    stray_probe="bootlog"; stray_record="case=capture"; stray_drive=2;
+    CHECK(probe_bootlog()==1 && !stray_probe);
+    CHECK(writes_during==1); OK(storage_shutdown(s)); storage_destroy(s); bootlog_reset();
+    /* The log's first write remains after qualification despite a cursor. */
+    s=start(); OK(storage_boot_cfg(s,request)); vfs_table_destroy(&table);
+    OK(probe_bootlog()); storage_destroy(s); bootlog_reset();
+    for (unsigned stray=0;stray<3;stray++) {
+        s=start(); OK(storage_boot_cfg(s,request));
+        uint64_t cursor=s->volumes[2].writes;
+        if (stray==2) {
+            /* A non-cursor write BEFORE the read baseline must also fail
+             * bootlog's zero non-cursor prequalification requirement. */
+            uint8_t sector[512]; struct storage_volume *v=&s->volumes[2];
+            OK(v->io.read(&v->io,0,1,sector)); OK(v->io.write(&v->io,0,1,sector)); OK(v->io.flush(&v->io));
+            /* A later checkpoint must not absorb that prior stray write. */
+            OK(storage_boot_cfg(s,request));
+            cursor=storage_sweep_writes(v); CHECK(v->writes==cursor+1);
+        }
+        stray_probe=stray==1 ? "bootlog" : 0; stray_record="case=file"; stray_drive=2;
+        vfs_table_destroy(&table); CHECK(probe_bootlog()==(stray ? 1 : 0)); CHECK(!stray_probe);
+        CHECK(writes_before_probe==cursor+(stray==2) && writes_during==(stray==1) && sweep_writes==cursor);
+        if (!s->stopped) OK(storage_shutdown(s));
+        storage_destroy(s); bootlog_reset();
+    }
+    /* A delayed workload sector must stay outside cursor attribution. */
+    s=start(); OK(storage_enable_write(s,2));
+    struct storage_volume *v=&s->volumes[2]; uint8_t sector[512];
+    OK(v->io.read(&v->io,0,1,sector));
+    OK(cache_write(&s->cache,&v->io,0,sector));
+    uint64_t prior=v->writes;
+    OK(storage_boot_cfg(s,request));
+    CHECK(v->writes-storage_sweep_writes(v)==prior+1); stop(s,true);
+    /* Count failed forwarded cursor attempts just like the raw counter. */
+    s=start(); v=&s->volumes[2]; media[0].fail_write=v->fat.reserved;
+    CHECK(storage_boot_cfg(s,request)==-FS_EIO);
+    CHECK(v->writes && v->writes==storage_sweep_writes(v));
+    vfs_table_destroy(&table); storage_destroy(s);
+    reset(); fake_reset(&media[1]);
+    printf("PASS sweep cursor accounting: FAT read PASS/fixtures_absent, bootlog cold reopen, real stray writes before/during rejected\n");
+}
 static void probe_tests(void) {
     struct storage *s=start();
     for(unsigned i=1;i<3;i++) OK(storage_add_disk(s,i,&media[i].dev));
@@ -395,7 +480,7 @@ static void probe_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); log_tests(); failure_tests(); cfg_tests(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); log_tests(); failure_tests(); cfg_tests(); sweep_write_tests(); probe_tests(); mount_probe_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;

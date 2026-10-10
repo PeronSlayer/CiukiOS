@@ -19,6 +19,26 @@ static struct fat_entry lookup_entry;
 static char walk_path[FS_PATH_BYTES];
 static struct { uint32_t directory, cursor; unsigned length; } walk[32];
 
+/* Internal canonical-storage ledger; no storage/VFS ABI extension. */
+extern uint64_t storage_sweep_writes(const struct storage_volume *);
+static void write_baseline(struct storage *s, uint64_t before[26])
+{
+    for (unsigned d = 2; d < 26; d++) before[d] = s->volumes[d].writes;
+}
+static int read_write_check(const char *probe, struct storage *s,
+                            const uint64_t before[26], bool cursor_only)
+{
+    int error = 0;
+    for (unsigned d = 2; d < 26; d++) {
+        struct storage_volume *v = storage_volume(s, d); if (!v) continue;
+        uint64_t cursor = storage_sweep_writes(v);
+        rec_emit(probe, "DATA", "case=write_accounting drive=%c writes_before_probe=%llu writes_during=%llu volume_writes=%llu sweep_writes=%llu",
+                 'A' + d, before[d], v->writes - before[d], v->writes, cursor);
+        if (v->writes != before[d] || (cursor_only && v->writes != cursor)) error = -FS_EIO;
+    }
+    return error;
+}
+
 /* Mount facts are the immutable boot snapshot; live counters below belong
  * to the selected workload and may change after it opens the write gate. */
 static void mount_records(const char *probe)
@@ -93,7 +113,7 @@ static int digest_record(const char *probe, unsigned id, struct vfs_table *table
     else rec_emit(probe, "DATA", "case=file id=%u size=%u sha256=%s", id, size, hex);
     return 0;
 }
-static int list_volume(const char *probe, struct storage_volume *v, unsigned *id)
+static int list_volume(const char *probe, struct storage_volume *v, unsigned *id, uint64_t before)
 {
     struct sha256_ctx listing; sha256_init(&listing);
     unsigned depth = 0, entries = 0, name_errors = 0, alias_errors = 0, size_errors = 0;
@@ -154,14 +174,14 @@ static int list_volume(const char *probe, struct storage_volume *v, unsigned *id
     uint8_t digest[32]; char hex[65]; sha256_final(&listing, digest); sha256_hex(digest, hex);
     rec_emit(probe, "DATA", "case=list drive=%c entries=%u sha256=%s", 'A' + v->drive, entries, hex);
     rec_emit(probe, "DATA", "group=fat-read drive=%c fat_type=%u name_errors=%u alias_errors=%u size_errors=%u write_count=%llu chain_bounded=1",
-             'A' + v->drive, v->fat.type, name_errors, alias_errors, size_errors, v->writes);
+             'A' + v->drive, v->fat.type, name_errors, alias_errors, size_errors, v->writes - before);
     return name_errors || alias_errors || size_errors ? -FS_EIO : 0;
 }
 int probe_fat_read(void)
 {
+    struct storage *s = storage_get(); uint64_t before[26]; write_baseline(s, before);
     const char *probe = "fat-read"; rec_emit(probe, "BEGIN", 0);
     mount_records(probe);
-    struct storage *s = storage_get();
     if (!s->ready || !s->vfs.volumes[2]) return finish(probe, -FS_ENOENT);
     int e = vfs_table_init(&s->vfs, &probe_table, 2); if (e) return finish(probe, e);
     e = vfs_stat(&probe_table, "C:/SYSTEM", &entry);
@@ -178,12 +198,11 @@ int probe_fat_read(void)
         if (!mount) { e = -FS_EIO; break; }
         rec_emit(probe, "DATA", "case=mount drive=%c disk=%u type=%u mode=%s reasons=%u writes=%llu read_gate=%u",
                  'A' + d, mount->disk, mount->type, mount->readonly ? "ro" : "rw", mount->reasons, mount->writes, mount->read_gate);
-        if (v->error || !v->fat.readonly || v->writes) { e = v->error ? v->error : -FS_EIO; break; }
+        if (v->error || !v->fat.readonly) { e = v->error ? v->error : -FS_EIO; break; }
         if (!fixtures) continue;
-        e = list_volume(probe, v, &id);
+        e = list_volume(probe, v, &id, before[d]);
         rec_emit(probe, "DATA", "case=lfn drive=%c orphan_observations=%u bad_checksum_observations=%u invalid_observations=%u handling=short_fallback",
                  'A' + d, v->fat.lfn_orphans, v->fat.lfn_bad_checksum, v->fat.lfn_invalid);
-        if (!e && v->writes) e = -FS_EIO;
     }
     uint16_t ucs[256]; unsigned length;
     int invalid = path_validate_name("bad*name", ucs, &length);
@@ -191,6 +210,8 @@ int probe_fat_read(void)
     rec_emit(probe, "DATA", "case=invalid_name invalid=%d unmappable=%d writes=0", invalid, unmappable);
     if (invalid != -FS_EINVAL || unmappable != -FS_EILSEQ) e = -FS_EIO;
     vfs_table_destroy(&probe_table);
+    int write_error = read_write_check(probe, s, before, false);
+    if (!e) e = write_error;
     if (!e && !fixtures) return finish_not_run(probe, "fixtures_absent");
     return finish(probe, e);
 }
@@ -665,9 +686,10 @@ static int log_marker(struct vfs_table *t, bool write)
 }
 int probe_bootlog(void)
 {
+    struct storage *s = storage_get(); uint64_t writes_before[26]; write_baseline(s, writes_before);
     const char *probe = "bootlog"; rec_emit(probe, "BEGIN", 0);
     mount_records(probe);
-    struct storage *s = storage_get(); struct bootlog_stats before, after;
+    struct bootlog_stats before, after;
     bootlog_snapshot(&before);
     rec_emit(probe, "DATA", "group=bootlog case=before prequalification_writes=%llu storage_calls=%llu queued=%u limit=%u",
              before.writes, before.storage_calls, before.queued, BOOTLOG_LIMIT);
@@ -688,13 +710,16 @@ int probe_bootlog(void)
     int e = vfs_table_init(&s->vfs, &probe_table, 2); if (e) return finish(probe, e);
     int found = vfs_stat(&probe_table, "C:/F109LOG.OK", &entry);
     if (found && found != -FS_ENOENT) { vfs_table_destroy(&probe_table); return finish(probe, found); }
+    /* Check immediately before the log gate, including all reads/capture
+     * since BEGIN. Cursor persistence alone is not log qualification. */
+    int prewrites = read_write_check(probe, s, writes_before, true);
+    if (prewrites) { vfs_table_destroy(&probe_table); return finish(probe, prewrites); }
     bool reboot = !found;
     if (reboot) {
         /* The runner compares the exact prior log digest, not a regenerated
          * expected log containing a different boot's activation records. */
         e = log_marker(&probe_table, false);
         if (!e) e = digest_record(probe, 0, &probe_table, BOOTLOG_PATH);
-        rec_emit(probe, "DATA", "case=cold_reboot writes=%llu result=%d", v->writes, e);
     } else {
         e = storage_enable_write(s, 2);
         if (!e) e = bootlog_activate(&s->vfs, true, s->sequence);
@@ -712,13 +737,21 @@ int probe_bootlog(void)
         e = vfs_stat(&probe_table, BOOTLOG_PATH, &entry);
         if (!e) log_bytes = entry.size;
     }
+    vfs_table_destroy(&probe_table);
+    if (!e) e = storage_sync();
+    if (reboot) {
+        int write_error = read_write_check(probe, s, writes_before, true);
+        if (!e) e = write_error;
+        /* Existing standalone predicates keep writes=0. Raw counters and
+         * the excluded cursor I/O are in the write_accounting records. */
+        rec_emit(probe, "DATA", "case=cold_reboot writes=%llu result=%d",
+                 v->writes - storage_sweep_writes(v), e);
+    }
     rec_emit(probe, "DATA", "case=qualification qualified_seq=%u first_log_write_seq=%u size=%u writes=%llu flush_result=%d",
              after.qualification_sequence, after.first_write_sequence, log_bytes, after.writes, e);
     rec_emit(probe, "DATA", "group=bootlog first_write_after_gate=%u log_bytes=%u reopen_errors=%u durable_flush=%u",
              !reboot && after.first_write_sequence > after.qualification_sequence,
              log_bytes, e != 0, !e);
-    vfs_table_destroy(&probe_table);
-    if (!e) e = storage_sync();
     if (!e && !reboot) rec_emit(probe, "ARM", "action=cold_reboot overlay=reuse marker=F109LOG.OK");
     /* No panic is invoked here. F0 panic evidence must be collected on its
      * own boot; storage_init suppresses writer/sink for every test selector. */
